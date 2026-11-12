@@ -58,6 +58,98 @@ describe('remote stream close settles the product turn', () => {
     expect(owner.observe({ type: 'done', source: 'codex', data: {} })).toBe(false);
   });
 
+  it.each([false, true])('matches Session done ownership after a dispatch-time prior idle/error (prior running=%s)', async priorRunning => {
+    const f = fixture();
+    try {
+      await f.session.send('first');
+      if (priorRunning) f.deliver({ t: 'event', event: { type: 'status', source: 'codex', data: { isRunning: true } } });
+      f.deliver({ t: 'event', event: { type: 'text', source: 'codex', data: { text: 'first progress' } } });
+      await vi.waitFor(() => expect(f.seen.some(e => e.type === 'text')).toBe(true));
+      f.deliver({ t: 'state', state: { turnRunning: false } });
+      f.invoke.mockImplementationOnce(async (args: unknown[]) => {
+        const request = args[0] as { callId: string };
+        f.deliver({ t: 'event', event: { type: 'status', source: 'codex', data: { isRunning: false } } });
+        f.deliver({ t: 'event', event: { type: 'error', source: 'codex', data: { isTerminal: true, message: 'prior failed' } } });
+        await new Promise<void>(resolve => setImmediate(resolve));
+        f.deliver({ t: 'result', callId: request.callId, ok: true });
+        return {};
+      });
+      expect(await f.session.send('second')).toMatchObject({ accepted: true });
+      expect(f.seen.filter(e => e.type === 'error')).toEqual([]);
+      f.deliver({ t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+      if (!priorRunning) {
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(f.session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'none' });
+        expect(f.controller.hasActiveTurn()).toBe(true);
+        f.deliver({ t: 'event', event: { type: 'text', source: 'codex', data: { text: 'second progress' } } });
+        f.deliver({ t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+      }
+      await vi.waitFor(() => expect(f.session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done', generation: 2 }));
+      expect(f.controller.hasActiveTurn()).toBe(false);
+      expect(f.controller.isQuiet()).toBe(true);
+      f.deliver({ t: 'closed', reason: 'ended' });
+      await f.finish();
+      expect(f.seen.filter(e => e.type === 'error')).toEqual([]);
+    } finally { await f.session.close(); }
+  });
+
+  it('keeps a third send unfinished when earlier sends drain delayed errors', async () => {
+    const f = fixture();
+    try {
+      await f.session.send('first');
+      f.deliver({ t: 'event', event: { type: 'text', source: 'codex', data: { text: 'first progress' } } });
+      await vi.waitFor(() => expect(f.seen.some(e => e.type === 'text')).toBe(true));
+      f.deliver({ t: 'state', state: { turnRunning: false } });
+      expect(await f.session.send('second')).toMatchObject({ accepted: true });
+      f.deliver({ t: 'event', event: { type: 'error', source: 'codex', data: { isTerminal: true, message: 'first late error' } } });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      f.deliver({ t: 'state', state: { turnRunning: false } });
+      f.invoke.mockImplementationOnce(async (args: unknown[]) => {
+        const request = args[0] as { callId: string };
+        f.deliver({ t: 'event', event: { type: 'status', source: 'codex', data: { isRunning: false } } });
+        f.deliver({ t: 'event', event: { type: 'error', source: 'codex', data: { isTerminal: true, message: 'second late error' } } });
+        await new Promise<void>(resolve => setImmediate(resolve));
+        f.deliver({ t: 'result', callId: request.callId, ok: true });
+        return {};
+      });
+      expect(await f.session.send('third')).toMatchObject({ accepted: true });
+      expect(f.seen.filter(e => e.type === 'error')).toEqual([]);
+      expect(f.controller.hasActiveTurn()).toBe(true);
+      f.deliver({ t: 'closed', reason: 'ended' });
+      await f.finish();
+      expect(f.seen.filter(e => e.type === 'error')).toEqual([
+        expect.objectContaining({ sessionTurnGeneration: 3, data: expect.objectContaining({ reason: 'remote_agent_closed' }) }),
+      ]);
+    } finally { await f.session.close(); }
+  });
+
+  it.each([false, true])('preserves a dispatch idle/error after the prior terminal error has settled (stopped=%s)', async stopped => {
+    const f = fixture();
+    try {
+      await f.session.send('first');
+      if (stopped) await f.session.abort();
+      f.deliver({ t: 'event', event: { type: 'error', source: 'codex', data: { isTerminal: true, message: 'prior failed' } } });
+      await vi.waitFor(() => expect(f.session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'error', generation: 1 }));
+      f.deliver({ t: 'event', event: { type: 'status', source: 'codex', data: { isRunning: false } } });
+      await vi.waitFor(() => expect(f.seen.some(e => e.type === 'status')).toBe(true));
+      f.invoke.mockImplementationOnce(async (args: unknown[]) => {
+        const request = args[0] as { callId: string };
+        f.deliver({ t: 'event', event: { type: 'status', source: 'codex', data: { isRunning: false } } });
+        f.deliver({ t: 'event', event: { type: 'error', source: 'codex', data: { isTerminal: true, message: 'new start failed' } } });
+        await new Promise<void>(resolve => setImmediate(resolve));
+        f.deliver({ t: 'result', callId: request.callId, ok: true });
+        return {};
+      });
+      expect(await f.session.send('second')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(f.session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'error', generation: 2 }));
+      expect(f.controller.hasActiveTurn()).toBe(false);
+      f.deliver({ t: 'closed', reason: 'ended' });
+      await f.finish();
+      expect(f.seen.filter(e => e.type === 'error').map(e => (e.data as { message: string }).message))
+        .toEqual(['prior failed', 'new start failed']);
+    } finally { await f.session.close(); }
+  });
+
   it('preserves a genuine accepted error after consuming the prior idle tail', async () => {
     const f = fixture();
     try {

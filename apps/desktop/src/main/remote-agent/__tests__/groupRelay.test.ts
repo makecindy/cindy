@@ -2265,23 +2265,38 @@ describe('provider group "switch to another computer" for shared users', () => {
     } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
   });
 
-  it.each([['local', false], ['local', true], ['member', false], ['member', true]] as const)(
-    'keeps a delayed prior error from hiding an interrupted new %s send (idle before send=%s)', async (placement, idleBefore) => {
+  it.each([
+    ['local', 'none'], ['local', 'before-send'], ['local', 'during-dispatch'],
+    ['member', 'none'], ['member', 'before-send'], ['member', 'during-dispatch'],
+  ] as const)(
+    'keeps a delayed prior error from hiding an interrupted new %s send (idle=%s)', async (placement, idlePhase) => {
+    let failureSeen = () => false;
+    const error = { type: 'error', source: 'claude-code', data: { isTerminal: true, message: 'prompt is too long' } } as AgentEvent;
+    const onSend = async (record: Started) => {
+      if (record.sends.length === 2 && idlePhase === 'during-dispatch') {
+        record.emit({ type: 'status', source: 'claude-code', data: { isRunning: false } } as AgentEvent);
+        record.emit(error);
+        // Both queued old events drain before the new send is accepted.
+        await waitFor(failureSeen);
+      }
+    };
     const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
-      { kind: 'member', ...MEMBER_STUDIO }], switchWorthy: failure => failure.reason === 'remote_agent_closed' });
+      { kind: 'member', ...MEMBER_STUDIO }], owner: { onSend }, mini: { onSend },
+      switchWorthy: failure => failure.reason === 'remote_agent_closed' });
     const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    failureSeen = () => guest.stream.some(item => item.t === 'event' && item.event.type === 'error');
     try {
       await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
       const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
       record.emit({ type: 'text', source: 'claude-code', data: { text: 'first progress' } } as AgentEvent);
       await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'text'));
-      if (idleBefore) {
+      if (idlePhase === 'before-send') {
         record.emit({ type: 'status', source: 'claude-code', data: { isRunning: false } } as AgentEvent);
         await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'status'));
       }
       await guest.client.call('send', [{ content: 'second', attachments: [] }, {}]);
-      record.emit({ type: 'error', source: 'claude-code', data: { isTerminal: true, message: 'prompt is too long' } } as AgentEvent);
-      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'error'));
+      if (idlePhase !== 'during-dispatch') record.emit(error);
+      await waitFor(failureSeen);
       record.end();
       await waitFor(() => guest.isClosed());
       expect(env.relay.noteRunFailure).toHaveBeenCalledOnce();
@@ -2291,12 +2306,79 @@ describe('provider group "switch to another computer" for shared users', () => {
     } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
   });
 
+  it.each(['local', 'member'] as const)('keeps a third %s send active across two delayed prior errors', async placement => {
+    let priorErrorsSeen = () => false;
+    const error = { type: 'error', source: 'codex', data: { isTerminal: true, message: 'prior failed' } } as AgentEvent;
+    const onSend = async (record: Started) => {
+      if (record.sends.length === 3) {
+        record.emit({ type: 'status', source: 'codex', data: { isRunning: false } } as AgentEvent);
+        record.emit(error);
+        await waitFor(priorErrorsSeen);
+      }
+    };
+    const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+      { kind: 'member', ...MEMBER_STUDIO }], owner: { onSend }, mini: { onSend },
+      switchWorthy: failure => failure.reason === 'remote_agent_closed' });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    priorErrorsSeen = () => guest.stream.filter(item => item.t === 'event' && item.event.type === 'error').length === 2;
+    try {
+      await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+      const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+      record.emit({ type: 'text', source: 'codex', data: { text: 'first progress' } } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'text'));
+      await guest.client.call('send', [{ content: 'second', attachments: [] }, {}]);
+      record.emit(error);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'error'));
+      await guest.client.call('send', [{ content: 'third', attachments: [] }, {}]);
+      record.end();
+      await waitFor(() => guest.isClosed());
+      expect(env.relay.noteRunFailure).toHaveBeenCalledOnce();
+      expect(env.relay.noteRunFailure.mock.calls[0][2]).toMatchObject({ reason: 'remote_agent_closed' });
+      expect(switchTokenIn(guest.stream)).toBeDefined();
+      expect(record.sends).toHaveLength(3);
+    } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+  });
+
+  it.each(['local', 'member'] as const)('settles result-only done after a queued prior idle/error on %s', async placement => {
+    let failureSeen = () => false;
+    const onSend = async (record: Started) => {
+      if (record.sends.length === 2) {
+        record.emit({ type: 'status', source: 'codex', data: { isRunning: false } } as AgentEvent);
+        record.emit({ type: 'error', source: 'codex', data: { isTerminal: true, message: 'prior failed' } } as AgentEvent);
+        await waitFor(failureSeen);
+      }
+    };
+    const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+      { kind: 'member', ...MEMBER_STUDIO }], owner: { onSend }, mini: { onSend },
+      switchWorthy: failure => failure.reason === 'remote_agent_closed' });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    failureSeen = () => guest.stream.some(item => item.t === 'event' && item.event.type === 'error');
+    try {
+      await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+      const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+      record.emit({ type: 'status', source: 'codex', data: { isRunning: true } } as AgentEvent);
+      record.emit({ type: 'text', source: 'codex', data: { text: 'first progress' } } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'text'));
+      await guest.client.call('send', [{ content: 'second', attachments: [] }, {}]);
+      record.emit({ type: 'done', source: 'codex', data: {} } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'done'));
+      record.end();
+      await waitFor(() => guest.isClosed());
+      expect(env.relay.noteRunFailure).not.toHaveBeenCalled();
+      expect(switchTokenIn(guest.stream)).toBeUndefined();
+      expect(record.sends).toHaveLength(2);
+    } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+  });
+
   it.each(['local', 'member'] as const)('preserves a genuine new %s request error during dispatch and after idle', async placement => {
-    for (const phase of ['dispatch', 'after-idle'] as const) {
+    for (const phase of ['dispatch', 'dispatch-after-error', 'dispatch-after-stop-error', 'after-idle'] as const) {
       let failureSeen = () => false;
       const error = { type: 'error', source: 'claude-code', data: { isTerminal: true, message: 'current request failed' } } as AgentEvent;
       const onSend = async (record: Started) => {
-        if (record.sends.length === 2 && phase === 'dispatch') {
+        if (record.sends.length === 2 && phase !== 'after-idle') {
+          if (phase === 'dispatch-after-error' || phase === 'dispatch-after-stop-error') {
+            record.emit({ type: 'status', source: 'claude-code', data: { isRunning: false } } as AgentEvent);
+          }
           record.emit(error);
           await waitFor(failureSeen);
         }
@@ -2304,12 +2386,19 @@ describe('provider group "switch to another computer" for shared users', () => {
       const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
         { kind: 'member', ...MEMBER_STUDIO }], owner: { onSend }, mini: { onSend }, switchWorthy: () => false });
       const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
-      failureSeen = () => guest.stream.some(item => item.t === 'event' && item.event.type === 'error');
+      failureSeen = () => guest.stream.some(item => item.t === 'event' && item.event.type === 'error'
+        && (item.event.data as { message?: string }).message === 'current request failed');
       try {
         await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
         const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
         record.emit({ type: 'text', source: 'claude-code', data: { text: 'first progress' } } as AgentEvent);
         await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'text'));
+        if (phase === 'dispatch-after-error' || phase === 'dispatch-after-stop-error') {
+          if (phase === 'dispatch-after-stop-error') await guest.client.call('abort', []);
+          record.emit({ type: 'error', source: 'claude-code', data: { isTerminal: true, message: 'prior failed' } } as AgentEvent);
+          record.emit({ type: 'status', source: 'claude-code', data: { isRunning: false } } as AgentEvent);
+          await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'status'));
+        }
         await guest.client.call('send', [{ content: 'second', attachments: [] }, {}]);
         if (phase === 'after-idle') {
           record.emit({ type: 'status', source: 'claude-code', data: { isRunning: false } } as AgentEvent);
@@ -2319,8 +2408,8 @@ describe('provider group "switch to another computer" for shared users', () => {
         await waitFor(failureSeen);
         record.end();
         await waitFor(() => guest.isClosed());
-        expect(env.relay.noteRunFailure).toHaveBeenCalledOnce();
-        expect(env.relay.noteRunFailure.mock.calls[0][2]).toMatchObject({ message: 'current request failed' });
+        expect(env.relay.noteRunFailure).toHaveBeenCalledTimes(phase === 'dispatch-after-error' || phase === 'dispatch-after-stop-error' ? 2 : 1);
+        expect(env.relay.noteRunFailure.mock.calls.at(-1)![2]).toMatchObject({ message: 'current request failed' });
         expect(switchTokenIn(guest.stream)).toBeUndefined();
         expect(record.sends).toHaveLength(2);
       } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
