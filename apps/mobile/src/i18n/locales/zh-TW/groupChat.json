@@ -171,7 +171,8 @@
     "capability": {
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
-      "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。"
+      "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。",
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，連接你的 Cindy 後才能讓 Cindy 替你工作（你的電腦上現在沒有在線的 Cindy）。"
     }
   },
   "plan": {
