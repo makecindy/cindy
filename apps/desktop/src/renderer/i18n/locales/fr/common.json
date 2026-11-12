@@ -11271,7 +11271,8 @@
         "capability": {
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} n’a pas pu exécuter cet outil : l’autorisation du groupe a expiré ou ne permet pas cette action. Le propriétaire de l’ami peut renouveler la demande dans ce groupe.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "L’autorisation de groupe de {{name}} n’a pas pu être vérifiée ; cet outil n’a donc pas été exécuté. Réessayez une fois la connexion rétablie.",
-          "ATTACHMENTS_UNAVAILABLE": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison d’un échec de téléchargement ou de la limite de pièces jointes. Renvoyez celles nécessaires à cette demande."
+          "ATTACHMENTS_UNAVAILABLE": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison d’un échec de téléchargement ou de la limite de pièces jointes. Renvoyez celles nécessaires à cette demande.",
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connectez votre Cindy pour que Cindy puisse travailler pour vous (aucun de vos Cindy n'est en ligne pour le moment)."
         }
       },
       "settings": {
@@ -11398,6 +11399,38 @@
           "failed": "Échec",
           "cancelled": "Annulée",
           "timed-out": "Délai dépassé"
+        },
+        "label": "Tâche",
+        "untitled": "Tâche sans titre",
+        "askedBy": "Demandée par {{requester}}",
+        "pr": "PR #{{number}}",
+        "open": "Ouvrir la tâche « {{title}} »",
+        "live": {
+          "running": "En cours",
+          "waiting": "En attente de réponse",
+          "idle": "Inactif",
+          "failed": "En erreur"
+        },
+        "othersSaid": "Ce que d'autres ont dit dans le fil"
+      },
+      "assistant": {
+        "groupRecent": "Messages récents du groupe",
+        "groupNew": "Nouveaux messages du groupe",
+        "threadRecent": "Messages récents du fil",
+        "threadNew": "Nouveaux messages du fil",
+        "replyingTo": "En réponse à « {{name}} » : {{text}}",
+        "earlierOmitted": "(Messages plus anciens omis)",
+        "actingFor": "{{name}} · pour {{person}}",
+        "checkout": {
+          "gitMissing": "(Cindy) Le projet {{repo}} du groupe n'est pas encore sur cet ordinateur : git n'est pas installé ici. {{guide}} Une fois installé, mentionnez à nouveau @Cindy et Cindy téléchargera le projet pour y travailler.",
+          "signInOpened": "(Cindy) Le projet {{repo}} du groupe n'est pas encore sur cet ordinateur : connectez d'abord votre compte GitHub. Cindy a ouvert la connexion GitHub sur cet ordinateur ; une fois connecté, mentionnez à nouveau @Cindy et le projet sera téléchargé.",
+          "signIn": "(Cindy) Le projet {{repo}} du groupe n'est pas encore sur cet ordinateur : connectez d'abord votre compte GitHub. Connectez-vous à GitHub dans Cindy sur cet ordinateur, puis mentionnez à nouveau @Cindy.",
+          "unavailable": "(Cindy) Le projet {{repo}} du groupe n'a pas pu être téléchargé sur cet ordinateur : votre compte GitHub n'y a peut-être pas accès, ou le réseau est indisponible. Vérifiez que vous pouvez ouvrir le dépôt sur GitHub, puis mentionnez à nouveau @Cindy.",
+          "installGit": {
+            "darwin": "Dans Terminal, exécutez xcode-select --install et suivez les instructions.",
+            "win32": "Téléchargez Git sur https://git-scm.com/download/win et installez-le avec les options par défaut.",
+            "linux": "Installez git avec le gestionnaire de paquets de votre système (par exemple sudo apt install git)."
+          }
         }
       },
       "files": {
@@ -11594,10 +11627,21 @@
           "accessTools": "Peut utiliser les outils et les informations",
           "replies": "Mode de réponse des amis",
           "replyModeMentionedNote": "Les amis restent silencieux, sauf si quelqu’un les @mentionne.",
+          "assistant": "Cindy du groupe",
+          "assistantHint": "Travaille sur l’ordinateur de la personne qui la @mentionne.",
+          "replyModeAssistant": "Cindy répond",
+          "replyModeAssistantNote": "La Cindy du groupe répond.",
           "work": "Répartitions du travail",
           "ownFolder": "Dossier propre au groupe",
-          "projectDirHint": "Emplacement où les amis travaillent lors d’une répartition du travail.",
+          "projectDirHint": "S’applique uniquement sur cet ordinateur.",
           "projectDirClearHint": "Utiliser plutôt le dossier propre au groupe",
+          "project": "Projet",
+          "projectCaption": "Les amis répondent et effectuent les répartitions du travail dans ce projet. Le dépôt est partagé avec le groupe ; le dossier reste sur cet ordinateur.",
+          "githubRepo": "Dépôt GitHub",
+          "githubRepoHint": "Saisissez owner/name. Les ordinateurs sans dossier choisi utilisent leur propre copie de ce projet ou en téléchargent une.",
+          "githubRepoSaveFailed": "Le dépôt n’a pas été enregistré. Vérifiez-le et réessayez.",
+          "projectFolder": "Dossier sur cet ordinateur",
+          "projectDirAutoHint": "Trouvé parmi vos projets à partir du dépôt.",
           "organizerHint": "Décide qui effectue chaque étape. Par défaut, le premier ami.",
           "autoContinueHint": "Si désactivé, chaque étape attend que vous continuiez.",
           "workCaption": "Avec un projet git, chaque répartition du travail dispose de sa propre branche, afin de ne pas modifier votre code. Le dossier du projet et les relais automatiques s’appliquent uniquement sur cet ordinateur.",
@@ -15306,6 +15350,8 @@
       "sessionSentNamed": "Envoyé par la session « {{name}} »",
       "sessionViewSource": "Voir la session source",
       "botSentNamed": "Envoyé par l’ami « {{name}} »",
+      "groupThreadSent": "Envoyé par « {{name}} » dans un fil de « {{group}} »",
+      "groupRequestSent": "Du groupe « {{group}} » · {{name}}",
       "orcaFromLead": "Message du Lead",
       "orcaFromWorker": "Message du Worker",
       "orcaFromWorkerBatch": "Rapport système : {{count}} résultats de Worker",
@@ -18815,6 +18861,7 @@
       "dingtalkBotDisconnectFailed": "Échec de la dissociation du bot DingTalk"
     },
     "errors": {
+      "piStartupCloudFile": "Un fichier d’instructions uniquement dans le cloud peut retarder le démarrage de Pi : {{path}}. Téléchargez ce fichier dans le Finder, attendez qu’il soit disponible en local, puis réessayez. Le délai dépassé peut avoir une autre cause.",
       "openFileFailed": "Impossible d'ouvrir le fichier dans le système",
       "emptyResponse": "Le modèle n'a renvoyé aucun contenu. Réessayez. Si le contexte est très long, changez de modèle.",
       "turnFailed": "La tâche a échoué (le modèle n'a fourni aucun détail sur l'erreur). Veuillez réessayer.",
@@ -20745,6 +20792,11 @@
     }
   },
   "pluginUi": {
+    "settings": "Réglages des plugins",
+    "save": "Enregistrer",
+    "settingsFailed": "Impossible de charger ou d’enregistrer les réglages du plugin. Rouvrez cette page.",
+    "invalidSetting": "Vérifiez que les valeurs signalées respectent les limites autorisées.",
+    "attachmentFailed": "Le plugin n’a pas pu traiter « {{name}} ». La pièce jointe d’origine est conservée.",
     "display": "Affichage",
     "original": "Original",
     "menu": "Vues et commandes du plugin",
