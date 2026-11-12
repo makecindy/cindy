@@ -44,9 +44,12 @@
 | 15 | 订阅 Fast 策略、价格档 | 桌面启动钩子第 ⑥⑩ 步 | 已对齐（m1-cp2b） | Host `start-options.test.mjs` | 无 |
 | 16 | 可选目录（账号过滤、订阅池投影） | `getDesktopSelectableCatalog` | 已对齐（m1-cp2c） | desktop `subscriptionPoolCatalog.test.ts`；Host `model-context.test.mjs` | 无 |
 | 17 | 共享项目 Skill 链接 | 桌面启动钩子第 ⑬ 步与 `onBeforeStart` | 已对齐（m1-cp3b）；会写工作目录，见第三节 | Host `start-options.test.mjs` | 无 |
-| 18 | /learn 捕获 | `learn-host/captureInvocation.ts` | 未做（5b，授权路径，单独提交） | — | 无 |
+| 18 | /learn 捕获 | `learn-host/captureInvocation.ts` | 未做（授权路径，单独提交）。排在 3c 之后：捕获只认 Cindy 内置的 learn Skill，Host 要先有 2b 才能列出它；授权的消费方 `start_skill_learning` 在 `cindy_helper` 里，见第 22 行 | — | 无 |
 | 19 | 引擎专有项（Claude、Codex、Pi 各一组） | maker-host 构造点 | 未做（第 8 步） | — | 无 |
 | 20 | 诊断：进程登记、cc-debug、出口路径事实 | maker-host 构造点 | 未做（第 7 步） | — | 无 |
+| 21 | 启动时清掉从终端继承的 Anthropic 凭据与端点变量 | `main/index.ts` `stripSensitiveAnthropicEnv` | 已对齐（m1-cp5b）：`main.ts` 第一个导入执行同一步，保留导入用的 Claude 配置目录 | Host `boot-env.test.mjs` | 无 |
+| 22 | Cindy 内置工具服务 | `mcp-integrations/mcp-providers.ts` `createLiziMcpProviders` | 未排期（待定归属）。Host 现在只有 browser、computer、cindy_memory 和插件网关；缺 cindy_helper、cindy_docs、cindy_lsp、cindy_ssh、cindy_scheduler、android、cindy_orca、飞书/微信/Slack/iMessage/Telegram 机器人和群聊记录。Host 任务看不到这些工具，但系统提示与能力路由仍会提到 cindy_helper | — | 无 |
+| 23 | 引擎运行时配置（`runtimeConfig`） | `maker-host/runtime-configs.ts`；`pi-host.ts` `buildDesktopPiRuntimeConfig` | 未做（提议排在 5b 之后）。Host 只传了 endpoint 和记忆开关；缺产品系统提示（Cindy 身份、业务归属、Skill 来源优先级、各引擎专属段）、回答呈现提示、`behaviorFlags`（Tool Search、工具链限核等）、代输入用的 `taskShellEnv`、压缩阈值、换模型时的上下文评估、子代理模型、记忆设置与 `userDataPath`、内置 ripgrep 路径。Host 任务因此不带 Cindy 的身份与回答格式说明 | — | 无 |
 
 ## 二、与桌面不同（已知差异）
 
