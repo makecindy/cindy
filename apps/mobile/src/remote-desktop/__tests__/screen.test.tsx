@@ -1365,19 +1365,22 @@ describe("remote desktop controls", () => {
       let finishOld!: () => void;
       let rejectNew!: (cause: Error) => void;
       let newAttempts = 0;
+      let newPipAuthorized = false;
       fixture.invoke.mockImplementation((...args) => {
         const req = args[2][0];
         if (req.op === "start")
           return Promise.resolve(original(...args)).then((result) => ({
             ...result, lease: "lease-2",
           }));
+        if (req.op === "presentation" && req.lease === "lease-2" && req.enabled)
+          newPipAuthorized = true;
         if (req.op === "presentation" && !req.enabled) {
           if (req.lease === "lease")
             return new Promise((resolve, reject) => {
               finishOld = () => outcome === "success"
                 ? resolve({}) : reject(new Error("DESKTOP_STOPPED"));
             });
-          if (++newAttempts === 1)
+          if (newPipAuthorized && ++newAttempts === 1)
             return new Promise((_resolve, reject) => { rejectNew = reject; });
         }
         return original(...args);
@@ -1389,8 +1392,14 @@ describe("remote desktop controls", () => {
       await act(async () => root.render(<RemoteDesktopScreen />));
       await browserPresentation("framePresented", { epoch: "lease-2" });
       await browserPresentation("pipCapability", { supported: true, epoch: "lease-2" });
+      // The saved option is already enabled. Turn it off, then on to enter
+      // browser PiP again; the first disable is not a fullscreen restoration.
       if (!button("smallWindow")) act(() => button("operations").click());
       await act(async () => button("smallWindow").click());
+      await act(async () => button("smallWindow").click());
+      expect(requests()).toContainEqual({
+        op: "presentation", lease: "lease-2", enabled: true,
+      });
       await browserPresentation("presentation", { active: true, epoch: "lease-2" });
       await browserPresentation("presentation", { active: false, epoch: "lease-2" });
       expect(newAttempts).toBe(1);
