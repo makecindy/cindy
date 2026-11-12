@@ -8,6 +8,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
+import { _electron } from 'playwright-core';
 import { runPlan } from './run.mjs';
 import { adhocPage } from './registry.mjs';
 import { parseOptions, variantsFor } from './options.mjs';
@@ -280,7 +282,21 @@ mountPage({
 // CSS pixel, and hidden windows could not capture a frame. Drive the real CLI
 // across sizes/themes and inspect PNG dimensions; existing failure tests do not
 // verify resizing. Dedicated Electron integration tier, not default unit tests.
-test('captures exact viewports and overviews in a hidden Electron window', async () => {
+test('captures exact viewports and overviews in a hidden Electron window', async (t) => {
+  // #10254: closeMs must include every process, not just the final cleanup.
+  // Measure real shutdowns at the process boundary; no artificial timing delay.
+  const shutdowns = [];
+  const launch = _electron.launch.bind(_electron);
+  t.mock.method(_electron, 'launch', async (options) => {
+    const runtime = await launch(options);
+    const close = runtime.close.bind(runtime);
+    t.mock.method(runtime, 'close', async () => {
+      const started = performance.now();
+      try { return await close(); }
+      finally { shutdowns.push(performance.now() - started); }
+    });
+    return runtime;
+  });
   const file = await entry('viewport', 'mountPage({ render: () => <div>Viewport ready</div> });');
   const options = parseOptions([
     '--entry',
@@ -350,6 +366,77 @@ test('captures exact viewports and overviews in a hidden Electron window', async
   assert.ok(summary.overviews.length);
   for (const overview of summary.overviews) assert.ok(existsSync(overview));
   assert.equal(summary.cleanup.scratchRemoved, true);
+  assert.ok(shutdowns.length > 1);
+  assert.ok(summary.timings.closeMs >= Math.floor(shutdowns.reduce((a, b) => a + b, 0)) - shutdowns.length,
+    'closeMs includes all real Electron shutdowns, allowing per-measurement rounding');
+});
+
+// #10254: previous interrupt tests only stopped an already-published runtime.
+// Hold the second real launch's result at the asynchronous process boundary;
+// runPlan must not finish/delete its profile while that owned process is pending.
+// Dedicated Electron E2E tier: the waits cover the runner's real settling grace.
+test('timeout and interrupt wait for an in-flight Electron relaunch', async (t) => {
+  for (const mode of ['interrupt', 'timeout']) {
+    const file = await entry(`relaunch-${mode}`, 'mountPage({ render: () => <div>Ready</div> });');
+    const options = parseOptions(['--entry', file, '--theme', 'all', '--json']);
+    const definition = adhocPage(file);
+    const controller = new AbortController();
+    const held = Promise.withResolvers();
+    const gate = Promise.withResolvers();
+    const runtimes = [];
+    const children = [];
+    let checks = 0;
+    definition.check = async () => {
+      checks++;
+      if (mode === 'timeout') options.timeout = 1000;
+    };
+    const launch = _electron.launch.bind(_electron);
+    const mocked = t.mock.method(_electron, 'launch', async (launchOptions) => {
+      const runtime = await launch(launchOptions);
+      runtimes.push(runtime);
+      children.push(runtime.process());
+      if (runtimes.length === 2) {
+        held.resolve(launchOptions.env.CINDY_UI_PROFILE);
+        await gate.promise;
+      }
+      return runtime;
+    });
+    const running = runPlan(
+      { pages: [{ definition, variants: variantsFor(definition, options) }] }, options, controller.signal,
+    );
+    try {
+      const profile = await Promise.race([
+        held.promise,
+        running.then(() => { throw new Error('run ended before the second launch'); }),
+      ]);
+      if (mode === 'interrupt') controller.abort(new Error('selftest interrupt during relaunch'));
+      const state = await Promise.race([
+        running.then(() => 'finished'),
+        delay(mode === 'interrupt' ? 2500 : 4500).then(() => 'pending'),
+      ]);
+      assert.equal(state, 'pending', 'cleanup waits for the owned in-flight launch');
+      assert.ok(existsSync(profile), 'the live process keeps its profile until shutdown');
+      gate.resolve();
+      const summary = await running;
+      assert.equal(summary.status, 'failed');
+      assert.equal(summary.variants.length, 2, 'no later variant or overview starts');
+      assert.equal(checks, 1, 'the abandoned launch cannot execute its scenario');
+      assert.equal(summary.cleanup.runtimeClosed, true);
+      assert.equal(summary.cleanup.scratchRemoved, true);
+      assert.equal(existsSync(profile), false);
+      for (const child of children) {
+        assert.ok(child.exitCode !== null || child.signalCode !== null, `Electron ${child.pid} exited`);
+      }
+      t.diagnostic(JSON.stringify({ mode, pids: children.map(child => child.pid), cleanup: summary.cleanup }));
+    } finally {
+      // The red regression must also close the real process it deliberately withheld.
+      controller.abort();
+      gate.resolve();
+      await running;
+      await Promise.all(runtimes.map(runtime => runtime.close().catch(() => {})));
+      mocked.mock.restore();
+    }
+  }
 });
 
 // Scenario-only controls (e.g. "Finish fixture") showed up in PR screenshots. Captures hide
