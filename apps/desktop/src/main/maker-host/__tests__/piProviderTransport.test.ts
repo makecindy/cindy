@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions';
+import { SseTranslator } from '@cindy/anthropic-responses-bridge';
 import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider, modelProtocolComparison, parseModelsListResponse, mergeDiscoveredRuntimeModels } from '@cindy/model-providers';
 import { probePiProvider, createPiProviderFetch, handlePiProviderRequest, hostCredentialEndpointAllowed, invocationModelRecord, nativeBridgeApiKey, NATIVE_ADAPTER_ERROR_BODY_LIMIT, NATIVE_BRIDGE_SESSION_HEADER, readBoundedResponseText } from '../pi-provider-transport.js';
 
@@ -13,6 +14,49 @@ const reply = [
 ].map(value => `data: ${JSON.stringify(value)}\n\n`).join('') + 'data: [DONE]\n\n';
 
 describe('Pi-owned transport for Cindy harnesses', () => {
+  // Native bridge regression: create_worker is a prefix of create_workers, so
+  // ChatSseTranslator defers its item until finish(). A reasoning-history item
+  // must not reuse that reserved output_index or Anthropic loses the tool call.
+  // Unit: real native adapter -> Responses SSE -> Anthropic SSE, fake fetch only;
+  // previous tests checked response.completed without consuming the second bridge.
+  it.each([
+    [true, false], [true, true], [false, false],
+  ])('preserves deferred native tool calls (prefix=%s, text=%s)', async (prefix, text) => {
+    const name = 'mcp__cindy_orca__create_worker';
+    const row = PROVIDER_MODEL_CATALOG.providers['opencode-go'].find(model => model.id === 'deepseek-v4.1-flash')!;
+    const upstream = [
+      { choices: [{ index: 0, delta: { role: 'assistant', reasoning_content: 'Plan' } }] },
+      ...(text ? [{ choices: [{ index: 0, delta: { content: 'Starting.' } }] }] : []),
+      { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'fixture-call', type: 'function',
+        function: { name, arguments: '{"label":"fixture"}' } }] } }] },
+      { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 12, completion_tokens: 5 } },
+    ].map(value => `data: ${JSON.stringify(value)}\n\n`).join('') + 'data: [DONE]\n\n';
+    const send = createPiProviderFetch({ row, providerId: 'opencode-go', apiKey: 'fixture-key',
+      fetchImpl: async () => new Response(upstream, { headers: { 'content-type': 'text/event-stream' } }) });
+    const response = await send('https://unused.invalid', { body: JSON.stringify({ model: row.id, stream: true,
+      input: 'fixture', tools: [name, ...(prefix ? [`${name}s`] : [])].map(tool => ({ type: 'function', name: tool,
+        parameters: { type: 'object', properties: { label: { type: 'string' } } } })),
+    }) });
+    const events = (await response.text()).split('\n').filter(line => line.startsWith('data: '))
+      .map(line => JSON.parse(line.slice(6)));
+    const translator = new SseTranslator(row.id);
+    const anthropic = events.flatMap(event => translator.push(event));
+    anthropic.push(...translator.finish());
+    const calls = anthropic.filter(event => event.event === 'content_block_start'
+      && (event.data.content_block as { type?: string })?.type === 'tool_use');
+    expect(calls.map(event => event.data.content_block)).toEqual([
+      expect.objectContaining({ type: 'tool_use', name, id: 'fixture-call' }),
+    ]);
+    const argumentsJson = anthropic.filter(event => event.event === 'content_block_delta'
+      && event.data.index === calls[0].data.index)
+      .map(event => (event.data.delta as { partial_json?: string })?.partial_json ?? '').join('');
+    expect(JSON.parse(argumentsJson)).toEqual({ label: 'fixture' });
+    expect(anthropic.find(event => event.event === 'message_delta')?.data.delta)
+      .toMatchObject({ stop_reason: 'tool_use' });
+    const indices = events.filter(event => event.type === 'response.output_item.added').map(event => event.output_index);
+    expect(new Set(indices).size).toBe(indices.length);
+  });
+
   // #9630 review, unit: a retained preset ID must not reintroduce the same
   // Messages extension through Claude/Codex's native bridge descriptor.
   it('keeps message-scoped effort out of an edited Anthropic preset bridge', () => {
