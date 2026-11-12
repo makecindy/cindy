@@ -11751,6 +11751,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     it.each([
       { format: 'provider code', message: 'Error running remote compact task: code: provider_invalid_request / 400', partial: false, completedOnly: false },
       { format: 'JSON code', message: 'Error running remote compact task: {"error":{"code":"400","message":"unsupported tool type"}}', partial: true, completedOnly: false },
+      { format: 'non-status number', message: 'Error running remote compact task: {"code":"400","message":"unsupported input containing 402 tokens"}', partial: false, completedOnly: false },
       { format: 'additional details', message: 'Error running remote compact task', additionalDetails: '{"error":{"code":"400"}}', partial: false, completedOnly: false },
       { format: 'completion without error notification', message: 'Error running remote compact task: code: provider_invalid_request / 400', partial: false, completedOnly: true },
     ])('recovers LiteLLM 400 from $format without replaying completed work', async ({ partial, completedOnly, ...sample }) => {
@@ -11787,6 +11788,8 @@ describe('CodexAgent MCP thread context hooks', () => {
       { message: '{"code":"400","message":"insufficient_quota"}' },
       { message: '{"code":"400","type":"insufficient_balance_error"}' },
       { message: 'code: provider_invalid_request / 400: insufficient_balance_error' },
+      { message: '{"code":"400","message":"402 Payment Required"}' },
+      { message: '{"code":"400","message":"upstream code: 402"}' },
       { message: '{"code":"400","type":"authentication_error"}' },
       { message: '{"code":"400"}', codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } } },
       { message: '{"code":"400"}', codexErrorInfo: { responseStreamDisconnected: {} } },

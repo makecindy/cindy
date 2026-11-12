@@ -11012,11 +11012,15 @@ assertRouteCurrent();
         ? info.httpConnectionFailed.httpStatusCode ?? textStatus
         : textStatus;
       const rejectedRequest = [400, 404, 405, 422, 500, 501, 502, 503].includes(httpStatus ?? 0);
+      // Match the existing provider quota contract: an outer 400 must not hide
+      // a contextual upstream payment status. Bare numbers are not statuses.
+      const paymentRequired = /(?:\b(?:http|status|code|error)\b[^0-9a-z]{0,10}402\b|\(\s*402\s*\)|\b402\s+payment\s+required\b)/i.test(text);
       const uncertainTransport = tag === 'responseStreamDisconnected' || tag === 'responseStreamConnectionFailed'
         || /timeout|timed out|ECONNRESET|ECONNREFUSED|ENOTFOUND|connection reset|network error|stream disconnected/i.test(text);
       return !uncertainTransport
         && !isAuthRelatedErrorMessage(text)
         && !matchesDeterministicUsageExhaustionText(text)
+        && !paymentRequired
         && ((rejectedRequest && !signals.usageLimit) || compactRateLimit)
         && !isRemoteCompactEncryptedContentError(text);
     };
