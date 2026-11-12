@@ -2214,7 +2214,16 @@
       },
       "sidebarAndPanels": "Barre latérale et panneaux",
       "themeLabel": "Thème",
+      "createTheme": {
+        "label": "Créer un thème",
+        "hint": "Décrivez un style ou ajoutez une image de référence pour personnaliser l’apparence de Cindy.",
+        "prompt": "Aide-moi à créer un paquet de thème Cindy à partager, avec aperçu et vérification. Le style que je souhaite est :",
+        "unavailable": "Le skill de création de thèmes est indisponible. Vérifiez s’il est activé dans les skills.",
+        "startFailed": "Impossible d’ouvrir la tâche de création de thème"
+      },
       "themeAriaLabel": "Sélection du thème",
+      "themeApplyFailed": "Impossible d’appliquer ce thème. L’apparence actuelle est conservée.",
+      "themeFontFailed": "Impossible de charger la police du thème. La police par défaut est utilisée.",
       "localBadge": "(Local)",
       "localThemes": {
         "title": "Thèmes locaux",
@@ -17160,6 +17169,9 @@
       },
       "pluginCreator": {
         "description": "Créer, modifier, déboguer et empaqueter des plugins Cindy, ou les publier sur demande."
+      },
+      "themeCreator": {
+        "description": "Créer et vérifier les couleurs, les ressources visuelles et les réglages d’apparence de Cindy."
       }
     },
     "common": {
@@ -18292,7 +18304,7 @@
     "exit": "Quitter le mode plan"
   },
   "globalDrop": {
-    "cindyHint": "Déposer pour installer le plugin",
+    "cindyHint": "Déposer pour importer le fichier Cindy",
     "cshareHint": "Déposer pour importer la session partagée"
   },
   "sessionShare": {
@@ -20435,6 +20447,13 @@
     "detail": "Demande de {{device}}\nMotif : {{purpose}}\n\nLes appareils de votre compte pourront contrôler cet ordinateur, exécuter des tâches et accéder aux fichiers. Ce réglage reste actif jusqu’à sa désactivation dans les paramètres.",
     "decline": "Pas maintenant",
     "enable": "Activer le contrôle à distance"
+  },
+  "cindyFiles": {
+    "unsupported": "Cette version ne prend pas en charge ce fichier. Mets Cindy à jour et réessaie.",
+    "invalid": "Ce fichier Cindy est invalide ou endommagé. Obtiens une nouvelle copie.",
+    "failed": "Impossible d’importer ce fichier. Réessaie.",
+    "themeInstalled": "Thème ajouté. Sélectionne-le dans les paramètres d’apparence.",
+    "refreshFailed": "Le thème est installé, mais la liste n’a pas pu être actualisée. Actualise-la dans les paramètres d’apparence."
   },
   "modelGroups": {
     "title": "Groupes de modèles",

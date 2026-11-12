@@ -2146,7 +2146,16 @@
       },
       "sidebarAndPanels": "侧边栏与面板",
       "themeLabel": "主题",
+      "createTheme": {
+        "label": "制作主题",
+        "hint": "描述风格或提供参考图，制作整套外观",
+        "prompt": "帮我制作一套可分享的 Cindy 主题包，预览并验证效果。我想要的风格是：",
+        "unavailable": "主题制作技能不可用，请在技能中检查是否启用",
+        "startFailed": "未能打开主题制作任务"
+      },
       "themeAriaLabel": "主题选择",
+      "themeApplyFailed": "无法应用此主题，当前外观已保留",
+      "themeFontFailed": "主题字体无法加载，已使用默认字体",
       "localBadge": "(本地)",
       "localThemes": {
         "title": "本地主题",
@@ -16939,6 +16948,9 @@
       },
       "pluginCreator": {
         "description": "创建、修改、调试和打包 Cindy 插件，也可按需发布。"
+      },
+      "themeCreator": {
+        "description": "制作并验证 Cindy 的配色、素材和外观设置。"
       }
     },
     "common": {
@@ -18057,7 +18069,7 @@
     "exit": "退出计划模式"
   },
   "globalDrop": {
-    "cindyHint": "松开安装插件",
+    "cindyHint": "松开导入 Cindy 文件",
     "cshareHint": "松开导入分享的任务"
   },
   "sessionShare": {
@@ -20176,6 +20188,13 @@
     "detail": "请求来自「{{device}}」\n用途：{{purpose}}\n\n开启后，同账号设备可以远程控制这台电脑，包括运行任务和访问文件。此设置持续有效，可随时在设置中关闭。",
     "decline": "暂不开启",
     "enable": "开启远程控制"
+  },
+  "cindyFiles": {
+    "unsupported": "当前版本不支持此文件，请更新 Cindy 后重试",
+    "invalid": "此 Cindy 文件无效或已损坏，请重新获取文件",
+    "failed": "未能导入此文件，请重试",
+    "themeInstalled": "主题已加入列表，请在外观设置中选择",
+    "refreshFailed": "主题已装入，但列表未能刷新，请在外观设置中刷新"
   },
   "modelGroups": {
     "title": "模型组",

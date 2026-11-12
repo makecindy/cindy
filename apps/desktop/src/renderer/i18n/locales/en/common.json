@@ -2176,7 +2176,16 @@
       },
       "sidebarAndPanels": "Sidebar & panels",
       "themeLabel": "Theme",
+      "createTheme": {
+        "label": "Create Theme",
+        "hint": "Describe a style or add a reference image to design Cindy’s appearance.",
+        "prompt": "Help me create a shareable Cindy theme package, with a preview and verification. The style I have in mind is:",
+        "unavailable": "The theme creation Skill is unavailable. Check whether it is enabled in Skills.",
+        "startFailed": "Could not open the theme creation task"
+      },
       "themeAriaLabel": "Theme selection",
+      "themeApplyFailed": "Couldn’t apply this theme. Your current appearance is unchanged.",
+      "themeFontFailed": "Couldn’t load the theme font. Using the default font.",
       "localBadge": "(Local)",
       "localThemes": {
         "title": "Local themes",
@@ -17006,6 +17015,9 @@
       },
       "pluginCreator": {
         "description": "Create, edit, debug, and package Cindy plugins, or publish them when requested."
+      },
+      "themeCreator": {
+        "description": "Create and verify Cindy colors, visual assets, and appearance settings."
       }
     },
     "common": {
@@ -18125,7 +18137,7 @@
     "exit": "Exit plan mode"
   },
   "globalDrop": {
-    "cindyHint": "Drop to install plugin",
+    "cindyHint": "Drop to import Cindy file",
     "cshareHint": "Drop to import shared session"
   },
   "sessionShare": {
@@ -20248,6 +20260,13 @@
     "detail": "Request from {{device}}\nPurpose: {{purpose}}\n\nEnabling this setting lets devices on your account control this computer, including running tasks and accessing files. It stays enabled until you turn it off in Settings.",
     "decline": "Not now",
     "enable": "Enable remote control"
+  },
+  "cindyFiles": {
+    "unsupported": "This version does not support this file. Update Cindy and try again.",
+    "invalid": "This Cindy file is invalid or damaged. Get a new copy.",
+    "failed": "Could not import this file. Try again.",
+    "themeInstalled": "Theme added. Select it in Appearance settings.",
+    "refreshFailed": "Theme installed, but the list could not refresh. Refresh it in Appearance settings."
   },
   "modelGroups": {
     "title": "Model groups",

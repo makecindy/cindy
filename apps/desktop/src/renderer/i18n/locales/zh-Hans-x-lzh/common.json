@@ -2146,7 +2146,16 @@
       },
       "sidebarAndPanels": "侧栏与面板",
       "themeLabel": "格调",
+      "createTheme": {
+        "label": "制格调",
+        "hint": "述风格或附参考图，以制整套外观",
+        "prompt": "为我制可分享之 Cindy 格调包，预览并验其效。所欲风格为：",
+        "unavailable": "制作格调之技艺不可用，请于技艺中检查是否启用",
+        "startFailed": "未能开启制作格调之差事"
+      },
       "themeAriaLabel": "择主题",
+      "themeApplyFailed": "主题未能施用，原有外观不改",
+      "themeFontFailed": "主题字体未能载入，仍用默认字体",
       "localBadge": "(此机)",
       "localThemes": {
         "title": "此机格调",
@@ -16939,6 +16948,9 @@
       },
       "pluginCreator": {
         "description": "立、修、调试并打包 Cindy 法器，亦可依需发布。"
+      },
+      "themeCreator": {
+        "description": "为 Cindy 制配色、图材与外观设定，并验之。"
       }
     },
     "common": {
@@ -18057,7 +18069,7 @@
     "exit": "出谋定模式"
   },
   "globalDrop": {
-    "cindyHint": "松手纳法器",
+    "cindyHint": "松手纳 Cindy 卷",
     "cshareHint": "松手纳所分享之差事"
   },
   "sessionShare": {
@@ -20176,6 +20188,13 @@
     "detail": "请求来自「{{device}}」\n所为：{{purpose}}\n\n启用后，同账号设备可远控此机，执行任务、访问文件。此设长效，可随时于设置中关闭。",
     "decline": "暂不开启",
     "enable": "开启远程控制"
+  },
+  "cindyFiles": {
+    "unsupported": "此版本不支援此卷，请更新 Cindy 后再试",
+    "invalid": "此 Cindy 卷无效或已损坏，请重新取得",
+    "failed": "此卷未能纳入，请再试",
+    "themeInstalled": "主题已入列，请于外观规制中选用",
+    "refreshFailed": "主题已装入，清单未能更新，请于外观规制中重新整理"
   },
   "modelGroups": {
     "title": "模型组",
