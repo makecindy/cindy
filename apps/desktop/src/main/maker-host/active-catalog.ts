@@ -407,16 +407,13 @@ function resolveXdPiGatewayServerModelApi(
     isCatalogPiGatewayModelRetired(piGatewayAuthorityCatalog, model.id)
   )
     return null;
+  // The account Gateway declares the execution route, independently of the model's
+  // native identity. This also runs on provider-share execution hosts in every region.
+  // Keep retirement/membership checks above this selection; absent declarations retain
+  // the existing catalog fallback for older Gateway responses.
+  const gatewayApi = model.perAgent?.pi?.wireProtocol;
+  if (isPiModelApi(gatewayApi)) return gatewayApi;
   const nativeApi = nativeApiForRoute('xd', model.id);
-  // Global Gemini Gateway exposes Responses even though Gemini's native API is Google.
-  // Honor that explicit execution route before native metadata selects an unavailable /v1beta
-  // entry point (#9288). Keep the native identity for presentation, and retain CN/dev, direct
-  // Google providers, and Gateway routes without this declaration on their existing policy.
-  if (
-    CURRENT_CINDY_REGION === 'global' &&
-    nativeApi === 'google-generative-ai' &&
-    model.perAgent?.pi?.wireProtocol === 'openai-responses'
-  ) return 'openai-responses';
   if (nativeApi) return nativeApi;
   const declared = piGatewayAuthorityCatalog
     ? resolveCatalogPiGatewayModelApi(piGatewayAuthorityCatalog, model.id)
@@ -459,8 +456,7 @@ function resolveXdPiGatewayHintModelApi(model: XdGatewayModelInfo): PiModelApi |
 }
 
 function resolveXdPiGatewayModelApi(model: XdGatewayModelInfo): PiModelApi | null {
-  // Except for the explicit Global Gemini Responses route handled above, retain source authority:
-  // Cindy Server downloaded Catalog > version-matched local Pi table > Cindy AI Gateway hint.
+  // Explicit Gateway routes take precedence; missing declarations retain catalog/local fallback.
   const catalogApi = resolveXdPiGatewayServerModelApi(model);
   if (catalogApi !== undefined) return catalogApi;
   const localApi = resolveBundledPiGatewayModelProfile(model.id)?.api;
@@ -489,7 +485,7 @@ export function resolveXdPiGatewayServerApi(modelId: string): PiModelApi | null 
   return resolveXdPiGatewayServerModelApi(gatewayModel);
 }
 
-/** Resolve only Cindy AI Gateway's last-priority protocol hint. */
+/** Read the protocol declared by the account Gateway, without catalog fallback. */
 export function resolveXdPiGatewayHintApi(modelId: string): PiModelApi | null | undefined {
   const normalized = modelId.replace(/\[1m\]$/, '');
   const gatewayModel = xdGatewayModels.find((model) => model.id === normalized);
@@ -497,7 +493,7 @@ export function resolveXdPiGatewayHintApi(modelId: string): PiModelApi | null | 
   return resolveXdPiGatewayHintModelApi(gatewayModel);
 }
 
-/** Resolve Pi API in Cindy Server > local Pi table > Cindy AI Gateway order. */
+/** Resolve the declared Gateway Pi API, falling back to catalog/local metadata when absent. */
 export function resolveXdPiGatewayApi(modelId: string): PiModelApi | null | undefined {
   const normalized = modelId.replace(/\[1m\]$/, '');
   const gatewayModel = xdGatewayModels.find((model) => model.id === normalized);

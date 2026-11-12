@@ -397,7 +397,7 @@ describe('XD 网关权威模型清单重建', () => {
     });
   });
 
-  it('按 Cindy Server > 本地 Pi 表 > Cindy AI Gateway 的顺序解析 API', () => {
+  it('网关显式协议优先于型号原生身份，缺声明才使用目录兜底', () => {
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as typeof BUNDLED_CATALOG;
     catalog.presets = [
       ...(catalog.presets ?? []),
@@ -469,22 +469,22 @@ describe('XD 网关权威模型清单重建', () => {
       },
     ]);
 
-    // Cindy Server beats both local Kimi Completions metadata and Gateway Responses.
-    expect(resolveXdPiGatewayApi('moonshot/kimi-k3')).toBe('anthropic-messages');
-    expect(resolveXdPiGatewayWireProtocol('moonshot/kimi-k3')).toBe('anthropic-messages');
-    // With no server declaration, the version-matched local table beats Gateway hints.
-    expect(resolveXdPiGatewayApi('claude-opus-5')).toBe('anthropic-messages');
-    expect(resolveXdPiGatewayApi('gpt-5.6-sol')).toBe('openai-responses');
+    // Execution follows the account Gateway even when native metadata differs.
+    expect(resolveXdPiGatewayApi('moonshot/kimi-k3')).toBe('openai-responses');
+    expect(resolveXdPiGatewayWireProtocol('moonshot/kimi-k3')).toBe('openai-responses');
+    // The local table cannot override an explicitly declared execution route.
+    expect(resolveXdPiGatewayApi('claude-opus-5')).toBe('openai-responses');
+    expect(resolveXdPiGatewayApi('gpt-5.6-sol')).toBe('anthropic-messages');
     expect(resolveXdPiGatewayApi('google/gemini-3.7-flash')).toBe('openai-responses');
     expect(resolveXdPiGatewayWireProtocol('google/gemini-3.7-flash')).toBe('openai-responses');
-    // Gateway is consulted only when both higher-priority sources are absent.
+    // Unknown model identities can still use an explicitly declared route.
     expect(resolveXdPiGatewayApi('future-unmapped-model')).toBe('openai-responses');
     expect(resolveXdPiGatewayApi('future-unsupported-api')).toBeNull();
     expect(resolveXdPiGatewayApi('gemini-3.6-flash')).toBeUndefined();
     expect(xdModels('pi')).toMatchObject([
-      { id: 'moonshot/kimi-k3', piApi: 'anthropic-messages' },
-      { id: 'claude-opus-5', piApi: 'anthropic-messages' },
-      { id: 'gpt-5.6-sol', piApi: 'openai-responses' },
+      { id: 'moonshot/kimi-k3', piApi: 'openai-responses' },
+      { id: 'claude-opus-5', piApi: 'openai-responses' },
+      { id: 'gpt-5.6-sol', piApi: 'anthropic-messages' },
       { id: 'google/gemini-3.7-flash', piApi: 'openai-responses' },
       { id: 'future-unmapped-model', piApi: 'openai-responses' },
       { id: 'future-unsupported-api' },
@@ -521,7 +521,7 @@ describe('XD 网关权威模型清单重建', () => {
     expect(xdModels('codex').map((model) => model.id)).toEqual(['moonshot/kimi-k3']);
   });
 
-  it('Cindy AI Gateway 只决定账号成员，不会覆盖高优先级 API 或凭其它 agent 擅自投影', () => {
+  it('Cindy AI Gateway 决定执行协议，但不能凭其它 agent 擅自投影', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([
       {
@@ -536,9 +536,9 @@ describe('XD 网关权威模型清单重建', () => {
       },
     ]);
 
-    expect(resolveXdPiGatewayApi('claude-opus-5')).toBe('anthropic-messages');
+    expect(resolveXdPiGatewayApi('claude-opus-5')).toBe('openai-responses');
     expect(resolveXdPiGatewayApi('google/gemini-3.6-flash')).toBeUndefined();
-    expect(xdModels('pi')).toMatchObject([{ id: 'claude-opus-5', piApi: 'anthropic-messages' }]);
+    expect(xdModels('pi')).toMatchObject([{ id: 'claude-opus-5', piApi: 'openai-responses' }]);
   });
 
   it('显式登记 efforts=[] 表示不可调,不合成 3 档;fast 显式 false 尊重', () => {
@@ -958,7 +958,7 @@ describe('gateway cross-harness defaults', () => {
     for (const agent of ['claude-code', 'codex'] as const) {
       expect(enabled(agent).sort()).toEqual(candidates.map(([id]) => id).sort());
     }
-    expect(xdModels('pi').every((model) => model.piApi === 'openai-completions')).toBe(true);
+    expect(xdModels('pi').every((model) => model.piApi === 'openai-responses')).toBe(true);
     setXdGatewayModels(
       live.map((model) => ({
         ...model,
@@ -975,7 +975,7 @@ describe('gateway cross-harness defaults', () => {
   });
 
   it.each([1, 2, 3] as const)(
-    'retains native identities with a sparse Server V%s catalog and uses the Global Gemini execution route',
+    'retains native identities with a sparse Server V%s catalog and uses the declared Gateway execution route',
     (schemaVersion) => {
       const next = structuredClone(BUNDLED_CATALOG);
       next.modelRegistry = { schemaVersion, updatedAt: '2099-02-01T00:00:00.000Z', models: [] };
@@ -1009,11 +1009,11 @@ describe('gateway cross-harness defaults', () => {
         const pi = xdModels('pi').find((m) => m.id === id)!;
         expect(pi).toMatchObject({
           nativeApi: api,
-          piApi: api === 'google-generative-ai' ? 'openai-responses' : api,
+          piApi: 'openai-responses',
           defaultEnabled: true,
           contextWindow: 123_456,
         });
-        expect(resolveXdPiGatewayApi(id)).toBe(api === 'google-generative-ai' ? 'openai-responses' : api);
+        expect(resolveXdPiGatewayApi(id)).toBe('openai-responses');
         // Native APIs stay local knowledge; the Gateway's own engine APIs are not local conversion.
         expect(xdModels('claude-code').find((m) => m.id === id)).toMatchObject({
           nativeApi: api,

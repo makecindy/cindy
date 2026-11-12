@@ -9,6 +9,11 @@ import path from 'node:path';
 
 import { BUNDLED_CATALOG, PROVIDER_MODEL_CATALOG, providerModelRecord, buildUserProvider, providerPresetOAuth, parseModelsListResponse, mergeDiscoveredRuntimeModels, type Catalog } from '@cindy/model-providers';
 
+const gatewayBuild = vi.hoisted(() => ({ region: 'global' as 'global' | 'cn' | 'dev' }));
+vi.mock('../../../shared/brandRegion.js', () => ({
+  get CURRENT_CINDY_REGION() { return gatewayBuild.region; },
+}));
+
 // Skill discovery is covered by managed-skills.test.ts, not this runtime/auth fixture.
 vi.mock('../managed-skills.js', () => ({
   listCindyManagedSkills: async () => [],
@@ -145,9 +150,12 @@ it('materializes a separate native ChatGPT provider for each independent account
   expect(account.models.map((model) => model.id)).toEqual(builtin.models.map((model) => model.id));
 });
 
-it.each(['google/gemini-3.8-flash', 'google/gemini-99-pro-preview'])(
-  'uses the Global Gateway Responses route for %s in local and remote Pi',
-  (id) => {
+it.each((['global', 'cn', 'dev'] as const).flatMap(region =>
+  ['google/gemini-4-argon', 'google/gemini-4-carbon', 'google/gemini-99-pro-preview'].map(id => ({ region, id })),
+))(
+  'uses $region Gateway Responses for $id in local and remote Pi',
+  ({ region, id }) => {
+    gatewayBuild.region = region;
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([{ id, agents: ['pi'], perAgent: { pi: { wireProtocol: 'openai-responses' } } }]);
     expect(resolvePiCindyGatewayModelApi('xd', id)).toBe('openai-responses');
@@ -246,6 +254,7 @@ it.each(['absent', 'compatible', 'other-api'] as const)(
 );
 
 afterEach(() => {
+  gatewayBuild.region = 'global';
   setActiveCatalog(BUNDLED_CATALOG);
   setDiscoveredCodexModels([]);
   setXdGatewayModels([]);
@@ -388,7 +397,7 @@ describe('CindyAI DeepSeek reasoning replay (#7296)', () => {
 });
 
 describe('resolvePiCindyGatewayModelApi', () => {
-  it('keeps a Registry-linked Cindy Server protocol above local and Gateway metadata', () => {
+  it('uses the declared Gateway route without inheriting compat from another protocol', () => {
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
     catalog.presets = [
       ...(catalog.presets ?? []),
@@ -433,11 +442,10 @@ describe('resolvePiCindyGatewayModelApi', () => {
     ]);
 
     expect(resolvePiCindyGatewayModelApi('xd', 'moonshot/kimi-k3')).toBe(
-      'anthropic-messages',
+      'openai-responses',
     );
     expect(resolvePiCindyGatewayModelSpec('xd', 'moonshot/kimi-k3')).toEqual({
-      api: 'anthropic-messages',
-      compat: { sendSessionAffinityHeaders: true },
+      api: 'openai-responses',
     });
   });
 
@@ -468,7 +476,7 @@ describe('resolvePiCindyGatewayModelApi', () => {
     }
   });
 
-  it('uses the exact local Pi API regardless of Gateway hints or selected BYOM provider', () => {
+  it('resolves declared Gateway routes independently of the selected provider argument', () => {
     setXdGatewayModels([
       {
         id: 'claude-opus-5',
@@ -483,19 +491,18 @@ describe('resolvePiCindyGatewayModelApi', () => {
     ]);
 
     expect(resolvePiCindyGatewayModelApi('third-party-byom', 'claude-opus-5')).toBe(
-      'anthropic-messages',
+      'openai-responses',
     );
     expect(resolvePiCindyGatewayModelApi('third-party-byom', 'gpt-5.6-sol')).toBe(
-      'openai-responses',
+      'anthropic-messages',
     );
   });
 
-  it('uses static client config, but never Desktop-probed metadata, for a remote Pi executable', () => {
+  it('uses static client config without a Gateway declaration for a remote Pi executable', () => {
     setXdGatewayModels([
       {
         id: 'moonshot/kimi-k3',
         agents: ['pi'],
-        perAgent: { pi: { wireProtocol: 'openai-responses' } },
       },
     ]);
 
@@ -513,27 +520,13 @@ describe('resolvePiCindyGatewayModelApi', () => {
     });
   });
 
-  it('keeps local Kimi Completions authoritative over the Gateway hint', () => {
-    setXdGatewayModels([
-      {
-        id: 'moonshot/kimi-k3',
-        agents: ['claude-code', 'codex', 'pi'],
-        perAgent: { pi: { wireProtocol: 'openai-responses' } },
-      },
-    ]);
-
-    expect(resolvePiCindyGatewayModelApi('xd', 'moonshot/kimi-k3')).toBe(
-      'openai-completions',
-    );
-    expect(resolvePiCindyGatewayModelSpec('xd', 'moonshot/kimi-k3')).toMatchObject({
-      api: 'openai-completions',
-      compat: {
-        maxTokensField: 'max_tokens',
-        thinkingFormat: 'openai',
-        requiresReasoningContentOnAssistantMessages: true,
-        deferredToolsMode: 'kimi',
-      },
-    });
+  it.each([false, true])('drops stale Kimi Chat compat when the Gateway selects Responses (remote=%s)', (remote) => {
+    setXdGatewayModels([{
+      id: 'moonshot/kimi-k3', agents: ['pi'],
+      perAgent: { pi: { wireProtocol: 'openai-responses' } },
+    }]);
+    expect(resolvePiCindyGatewayModelSpec('xd', 'moonshot/kimi-k3', { remote }))
+      .toEqual({ api: 'openai-responses' });
   });
 
   it.each([undefined, 'openai-completions'] as const)(

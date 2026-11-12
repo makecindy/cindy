@@ -1123,7 +1123,8 @@ export function resolvePiCindyGatewayModelApi(
   modelId: string,
   context?: { remote: boolean; runtimeBinaryPath?: string },
 ): PiModelApi | null | undefined {
-  // Gateway membership remains the account-availability gate, but its protocol is the last hint.
+  // Gateway membership remains the account-availability gate. The shared resolver honors
+  // its explicit execution protocol before catalog/local fallback.
   const gatewayApi = resolveXdPiGatewayHintApi(modelId);
   if (gatewayApi === undefined) return undefined;
   const serverApi = resolveXdPiGatewayServerApi(modelId);

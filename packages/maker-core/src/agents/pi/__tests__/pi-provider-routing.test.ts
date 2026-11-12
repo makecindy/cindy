@@ -3430,6 +3430,9 @@ describe("Pi provider-aware model routing", () => {
     ["anthropic-messages", "messages-model", undefined],
     ["openai-responses", "responses-model", "http://127.0.0.1:9988/v1"],
     ["openai-responses", "google/gemini-4-argon", "http://127.0.0.1:9988/v1"],
+    ["openai-responses", "google/gemini-4-carbon", "http://127.0.0.1:9988/v1"],
+    ["openai-responses", "google/gemini-4-argon", "http://127.0.0.1:9988/v1", true],
+    ["openai-responses", "google/gemini-4-carbon", "http://127.0.0.1:9988/v1", true],
     ["openai-completions", "moonshotai/kimi-k3", "http://127.0.0.1:9988/v1"],
     [
       "google-generative-ai",
@@ -3438,7 +3441,7 @@ describe("Pi provider-aware model routing", () => {
     ],
   ] as const)(
     "keeps provider cindy while emitting Gateway API %s",
-    async (api, modelId, baseUrl) => {
+    async (api, modelId, baseUrl, guest: boolean = false) => {
       const deps: AgentDeps = {
         auth: {
           getState: async () => ({
@@ -3492,6 +3495,13 @@ describe("Pi provider-aware model routing", () => {
         workingDir: cwd,
         model: modelId,
         providerId: "xd",
+        ...(guest ? { deviceHosted: {
+          workingDir: cwd, extraDirs: [], writableDirs: [],
+          platform: process.platform, shell: 'zsh', isGitRepo: false,
+          tunnelUrl: 'http://127.0.0.1:9/t/unused/', tunnelToken: 'fixture-token',
+          mcpServers: [], guest: true, guestHome: path.join(agentHome, 'guest'),
+          guestProvider: { providerId: 'xd', modelIds: [modelId], routeToken: 'fixture-route' },
+        } } : {}),
       });
 
       expect(
@@ -3526,7 +3536,7 @@ describe("Pi provider-aware model routing", () => {
       );
       expect(model).toMatchObject({ api });
       expect(model?.baseUrl).toBe(baseUrl);
-      if (api === "openai-responses" && modelId === "google/gemini-4-argon") {
+      if (api === "openai-responses" && modelId.startsWith("google/gemini-")) {
         expect(model?.headers).toBeUndefined();
       }
       if (api === "openai-completions") {
@@ -5484,6 +5494,42 @@ describe("Pi provider-aware model routing", () => {
     resolvePiGatewayModelApi: () => "anthropic-messages",
     resolvePiNativeProviders,
   });
+
+  it.each(['google/gemini-4-argon', 'google/gemini-4-carbon'])(
+    'refreshes an open Gateway session when only its declared protocol changes: %s',
+    async (modelId) => {
+      let api: 'google-generative-ai' | 'openai-responses' = 'google-generative-ai';
+      const deps = byomDeps(async () => ({ providers: [], env: {} }), [{
+        id: modelId, displayName: modelId, contextWindow: 200_000,
+        efforts: [], defaultEffort: null,
+      }]);
+      deps.resolvePiGatewayModelApi = () => api;
+      deps.resolvePiGatewayModelSpec = () => ({ api });
+      const handle = await new PiAgent(deps).startSession({
+        sessionId: 'gateway-protocol-refresh', workingDir: cwd,
+        model: modelId, providerId: 'xd',
+      });
+      const modelsFile = path.join(captured.env.PI_CODING_AGENT_DIR!, 'models.json');
+      const readModel = () => JSON.parse(readFileSync(modelsFile, 'utf8'))
+        .providers.cindy.models.find((model: { id: string }) => model.id === modelId);
+      try {
+        expect(readModel()).toMatchObject({ api: 'google-generative-ai', baseUrl: 'http://127.0.0.1:9/v1beta' });
+        api = 'openai-responses';
+        expect(await handle.previewModelSwitch?.(modelId, { providerId: 'xd' }))
+          .toMatchObject({ action: 'refresh' });
+        // Preview is read-only; the existing task changes route at the refresh boundary.
+        expect(readModel().api).toBe('google-generative-ai');
+        await handle.setModel!(modelId, { providerId: 'xd' });
+        expect(readModel()).toMatchObject({ api: 'openai-responses', baseUrl: 'http://127.0.0.1:9/v1' });
+        expect(readModel().headers).toBeUndefined();
+        expect(await handle.previewModelSwitch?.(modelId, { providerId: 'xd' }))
+          .toMatchObject({ action: 'hot' });
+        expect(captured.closes).toBe(0);
+      } finally {
+        await handle.close();
+      }
+    },
+  );
 
   it.each([
     { label: 'different live window', window: 400_000, action: 'rebuild' },

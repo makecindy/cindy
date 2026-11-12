@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG } from '@cindy/model-providers';
 import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 
@@ -17,7 +17,7 @@ import {
 
 const modelId = 'google/gemini-4-argon';
 
-function gatewayModel(wireProtocol?: 'openai-responses' | 'google-generative-ai') {
+function gatewayModel(wireProtocol?: 'openai-responses' | 'google-generative-ai' | 'openai-completions' | 'anthropic-messages') {
   return {
     id: modelId,
     name: 'Gemini',
@@ -34,8 +34,9 @@ afterEach(() => {
 });
 
 // Separate environment: mutable build-region mock checks Global/CN/dev without reloading modules.
-describe('Global Gemini Gateway execution protocol (#9288)', () => {
-  it.each(['google/gemini-4-argon', 'google/gemini-3.7-flash', 'gemini-3.8-flash'])(
+describe.each(['global', 'cn', 'dev'] as const)('%s Gateway execution protocol', (region) => {
+  beforeEach(() => { build.region = region; });
+  it.each(['google/gemini-4-argon', 'google/gemini-4-carbon', 'google/gemini-3.7-flash', 'gemini-3.8-flash'])(
     'uses the declared Responses route for %s without changing native model identity',
     (id) => {
       setActiveCatalog(BUNDLED_CATALOG);
@@ -52,12 +53,18 @@ describe('Global Gemini Gateway execution protocol (#9288)', () => {
     },
   );
 
-  it.each(['cn', 'dev'] as const)('preserves the %s Gateway execution policy', (region) => {
-    build.region = region;
-    setActiveCatalog(BUNDLED_CATALOG);
-    setXdGatewayModels([gatewayModel('openai-responses')]);
-    expect(resolveXdPiGatewayApi(modelId)).toBe('google-generative-ai');
-  });
+  it.each(['openai-responses', 'openai-completions', 'anthropic-messages', 'google-generative-ai'] as const)(
+    'refreshes an existing model to the explicit %s execution route', (api) => {
+      setActiveCatalog(BUNDLED_CATALOG);
+      setXdGatewayModels([gatewayModel('google-generative-ai')]);
+      expect(resolveXdPiGatewayApi(modelId)).toBe('google-generative-ai');
+      setXdGatewayModels([gatewayModel(api)]);
+      expect(resolveXdPiGatewayApi(modelId)).toBe(api);
+      expect(resolveXdPiGatewayServerApi(modelId)).toBe(api);
+      expect(getActiveCatalog().providers.find((p) => p.id === 'xd')?.models.pi?.[0])
+        .toMatchObject({ nativeApi: 'google-generative-ai', piApi: api });
+    },
+  );
 
   it.each([undefined, 'google-generative-ai'] as const)(
     'does not guess Responses when the Gateway declaration is %s',

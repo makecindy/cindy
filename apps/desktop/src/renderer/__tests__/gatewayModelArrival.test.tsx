@@ -98,9 +98,10 @@ it('lists downloaded Gateway models in settings and follows catalog defaults unt
   const existing = raw('deepseek/deepseek-current', 'Existing Model');
   download([existing]);
   await migrateModelVisibilityDefaults('arrival-test', 1, [snapshot()]);
-  // A known native family keeps its Pi API; Cindy AI serves Messages too, so Claude Code is not opt-in.
+  // Preserve the native family while executing the declared Gateway route.
+  // Cindy AI serves Messages too, so Claude Code is not opt-in.
   expect(snapshot().models.pi?.find((m) => m.id === existing.id)).toMatchObject({
-    nativeApi: 'openai-completions', piApi: 'openai-completions',
+    nativeApi: 'openai-completions', piApi: 'openai-responses',
   });
   expect(snapshot().models['claude-code']?.find((m) => m.id === existing.id)?.defaultEnabled).not.toBe(false);
   const view = render(<UnifiedModelList provider={snapshot()} />);
