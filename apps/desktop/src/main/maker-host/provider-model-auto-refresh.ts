@@ -266,7 +266,7 @@ export function createProviderModelRefreshCoordinator(
     async requestAutoRefresh(trigger, providerIds): Promise<void> {
       syncScope();
       const catalogRefresh = refreshCatalogAutomatically(trigger);
-      const customSourcesRefresh = providerIds ? undefined : deps.refreshCustomModelSources?.().catch(() => {
+      const customSourcesRefresh = providerIds && trigger !== 'startup' ? undefined : deps.refreshCustomModelSources?.().catch(() => {
         deps.log.warn('custom provider source refresh failed', { trigger });
       });
       let providers: ProviderView[];
