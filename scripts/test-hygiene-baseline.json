@@ -469,9 +469,6 @@
     "apps/desktop/src/preload/__tests__/appearanceSnapshot.test.ts": {
       "resetModules": 1
     },
-    "apps/desktop/src/preload/__tests__/browserCommentPreload.test.ts": {
-      "resetModules": 1
-    },
     "apps/desktop/src/preload/__tests__/ghostPanelMedia.test.ts": {
       "sourceReads": 1
     },

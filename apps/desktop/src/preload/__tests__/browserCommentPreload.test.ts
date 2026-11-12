@@ -13,6 +13,8 @@ import {
   type BrowserCommentCommandResult,
 } from '../../shared/browserComment';
 
+import '../browserCommentPreload';
+
 type IpcHandler = (event: unknown, payload: unknown) => void;
 
 const ipcMocks = vi.hoisted(() => ({
@@ -21,6 +23,7 @@ const ipcMocks = vi.hoisted(() => ({
 }));
 
 let latestOverlayShadow: ShadowRoot | null = null;
+const originalElementsFromPoint = Object.getOwnPropertyDescriptor(document, 'elementsFromPoint');
 
 vi.mock('electron', () => ({
   ipcRenderer: {
@@ -30,11 +33,6 @@ vi.mock('electron', () => ({
     sendToHost: ipcMocks.sendToHost,
   },
 }));
-
-async function loadPreload(): Promise<void> {
-  vi.resetModules();
-  await import('../browserCommentPreload');
-}
 
 function dispatchCommand(command: string, envelope: BrowserCommentCommandEnvelope): void {
   const handler = ipcMocks.listeners.get(command);
@@ -63,9 +61,9 @@ async function expectCommandResult(
 describe('browserCommentPreload command protocol', () => {
   beforeEach(() => {
     document.body.replaceChildren();
-    ipcMocks.listeners.clear();
     ipcMocks.sendToHost.mockReset();
     latestOverlayShadow = null;
+    window.getSelection()?.removeAllRanges();
     const attachShadow = Element.prototype.attachShadow;
     vi.spyOn(Element.prototype, 'attachShadow').mockImplementation(function (
       this: Element,
@@ -77,13 +75,22 @@ describe('browserCommentPreload command protocol', () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Keep the preload's IPC registration for the file, but dispose each mode
+    // through the same command used by the browser host before restoring spies.
+    dispatchCommand(BROWSER_COMMENT_EXIT_MODE_CHANNEL, { requestId: 'cleanup-mode' });
+    await expectCommandResult('cleanup-mode', true);
+    expect(latestOverlayShadow?.host.isConnected ?? false).toBe(false);
+    document.body.replaceChildren();
+    if (originalElementsFromPoint) {
+      Object.defineProperty(document, 'elementsFromPoint', originalElementsFromPoint);
+    } else {
+      Reflect.deleteProperty(document, 'elementsFromPoint');
+    }
     vi.restoreAllMocks();
   });
 
   it('acknowledges enter and exit only after the guest command succeeds', async () => {
-    await loadPreload();
-
     dispatchCommand(BROWSER_COMMENT_ENTER_MODE_CHANNEL, {
       requestId: 'enter-1',
       payload: { markerNumber: 1 },
@@ -101,8 +108,6 @@ describe('browserCommentPreload command protocol', () => {
   });
 
   it('rejects malformed enter commands instead of silently entering a divergent state', async () => {
-    await loadPreload();
-
     dispatchCommand(BROWSER_COMMENT_ENTER_MODE_CHANNEL, {
       requestId: 'enter-invalid',
       payload: { markerNumber: 0 },
@@ -114,8 +119,6 @@ describe('browserCommentPreload command protocol', () => {
   });
 
   it('rejects screenshot preparation when there is no pending marker', async () => {
-    await loadPreload();
-
     dispatchCommand(BROWSER_COMMENT_PREPARE_SCREENSHOT_CHANNEL, {
       requestId: 'prepare-without-pending',
       payload: { validMarkerNumbers: [] },
@@ -134,8 +137,6 @@ describe('browserCommentPreload command protocol', () => {
       configurable: true,
       value: vi.fn(() => [target]),
     });
-    await loadPreload();
-
     dispatchCommand(BROWSER_COMMENT_ENTER_MODE_CHANNEL, {
       requestId: 'enter-for-prepare',
       payload: { markerNumber: 1 },
@@ -181,7 +182,6 @@ describe('browserCommentPreload command protocol', () => {
       configurable: true,
       value: vi.fn(() => [target]),
     });
-    await loadPreload();
     dispatchCommand(BROWSER_COMMENT_ENTER_MODE_CHANNEL, {
       requestId: 'enter-without-stylesheet', payload: { markerNumber: 1 },
     });

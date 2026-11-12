@@ -1844,7 +1844,8 @@
       "about": "About",
       "imBot": "IM bots",
       "ghosts": "Plugins",
-      "cindyMake": "Cindy Make"
+      "cindyMake": "Cindy Make",
+      "modelGroups": "Model groups"
     },
     "sections": {
       "user": "User",
@@ -1888,6 +1889,15 @@
     },
     "remote": {
       "title": "Remote machines",
+      "hostKeyError": {
+        "missing": "SSH host key verification is not configured. Connection refused.",
+        "read": "Cindy could not read the trusted host keys: {{reason}}. Connection refused.",
+        "write": "Cindy could not save the trusted host key: {{reason}}. Connection refused.",
+        "mismatch": "The host key for {{host}} changed ({{fingerprint}}) and no longer matches the fingerprint previously trusted by Cindy. This may mean the server was reinstalled or a man-in-the-middle attack. Connection refused.",
+        "file": "Trusted host keys file:\n{{filePath}}",
+        "repair": "Cindy does not read ~/.ssh/known_hosts. The old fingerprint is stored in:\n{{filePath}}\nThe entry key is \"{{host}}\".\nIf you have verified that this change is trustworthy, quit Cindy, remove only this entry, keep the file and all other hosts, then reconnect. The new fingerprint will be saved on first connection. Do not delete the entire file.",
+        "verifyChange": "Verify the change with the server administrator before updating the trusted host key store."
+      },
       "footnote": "Phase A: SSH connection management only. Running agents on the remote arrives in a later update.",
       "viaAuth": "via {{label}}",
       "readOnlyFromSshConfig": "Connection details come from SSH configuration",
@@ -20109,5 +20119,132 @@
     "detail": "Request from {{device}}\nPurpose: {{purpose}}\n\nEnabling this setting lets devices on your account control this computer, including running tasks and accessing files. It stays enabled until you turn it off in Settings.",
     "decline": "Not now",
     "enable": "Enable remote control"
+  },
+  "modelGroups": {
+    "title": "Model groups",
+    "description": "Combine sources you already have under Model providers into one choice. Pick it under Model groups in the model picker and Cindy decides which source to use.",
+    "routes": "Routes",
+    "routesDescription": "A route holds several sources. Each new task picks one by the route's rule.",
+    "sourceCount_one": "{{count}} source",
+    "sourceCount_other": "{{count}} sources",
+    "strategy": {
+      "expiring": {
+        "title": "Expiring first",
+        "hint": "Uses subscription quota that is plentiful and about to reset first, so none is wasted. Sources without readable quota come after."
+      },
+      "order": {
+        "title": "In order",
+        "hint": "Moves to the next source only when the one above cannot be used."
+      },
+      "rotate": {
+        "title": "Rotate",
+        "hint": "Each new task goes to the next source, sharing the load evenly."
+      },
+      "cheapest": {
+        "title": "Cheapest",
+        "hint": "Uses subscriptions with quota left first, at no extra cost; the rest go from lowest to highest listed price, and sources without a price come last."
+      }
+    },
+    "picker": {
+      "empty": "No model groups yet. Combine a few sources into a route in Settings to pick it here.",
+      "manage": "Manage model groups"
+    },
+    "why": {
+      "expiringQuota": "{{left}}% of its quota is left and resets {{reset}}, so it goes first",
+      "expiring": "First by quota",
+      "order": "The first available source",
+      "rotate": "Picked by rotation",
+      "only": "The only one available now",
+      "soonest": "Every source is out of quota; this one recovers first",
+      "soonestUntil": "Every source is out of quota; this one recovers first ({{reset}})",
+      "standby": "Not picked this time",
+      "standbyQuota": "{{left}}% of its quota is left and does not reset until {{reset}}, so it is kept for later",
+      "off": "Off in this route",
+      "unavailable": "Not connected, or this model cannot be selected now",
+      "limited": "Out of quota",
+      "limitedUntil": "Out of quota until {{reset}}",
+      "tight": "Its 5-hour quota is almost full, so it is skipped for now",
+      "cheapest": "Lowest listed price",
+      "cheapestFree": "Subscription quota left, no extra cost",
+      "noVision": "The message has images and it cannot see images",
+      "exceptionImage": "The message has images, so only sources that can see images were considered",
+      "exceptionImageFallback": "The message has images, but no source can see images, so it picked as usual",
+      "exceptionHours": "During this time, it uses “{{name}}” instead",
+      "separator": "; "
+    },
+    "settings": {
+      "newRoute": "New route",
+      "newRouteName": "New route",
+      "routesEmpty": "No routes yet. Create one and add a few sources.",
+      "scopeNote": "Model groups apply to new tasks started on this computer. A source is chosen when the task starts and does not change during the task.",
+      "back": "Back to model groups",
+      "name": "Name",
+      "nameHint": "Shown in the model picker.",
+      "routeShownAs": "Shown under Model groups in the model picker.",
+      "pick": "Which one to use",
+      "effort": "Reasoning effort",
+      "effortUnset": "Not set",
+      "effortHint": "If the chosen model does not support this level, it runs at its own default.",
+      "sources": "Sources it can use",
+      "sourcesHint": "Different models can sit together. The task shows which one was used.",
+      "sourcesEmpty": "No sources yet. Add a connected model below.",
+      "sourcesFull": "A route can hold up to {{count}} sources.",
+      "addSource": "Add source",
+      "chooseModel": "Choose a model",
+      "notConnected": "Not connected",
+      "moveUp": "Move up",
+      "moveDown": "Move down",
+      "remove": "Remove from this route",
+      "useSource": "Let this route use {{name}}",
+      "try": {
+        "title": "Try it",
+        "hint": "See which source a new task would use right now. Nothing is sent and no quota is used.",
+        "run": "See the pick",
+        "picked": "Use this",
+        "standby": "Standby",
+        "skipped": "Skipped",
+        "unavailable": "No source in this route can be used right now. A new task will use the model you had selected."
+      },
+      "deleteRoute": "Delete this route",
+      "deleteRouteConfirmTitle": "Delete “{{name}}”?",
+      "deleteRouteConfirmDescription": "Time-of-day exceptions in other routes that switch to it are removed too. Tasks already started are not affected.",
+      "delete": "Delete",
+      "cancel": "Cancel",
+      "saveFailed": "Could not save. Try again.",
+      "exceptions": {
+        "title": "Exceptions",
+        "hint": "Checked before the pick rule, from top to bottom.",
+        "empty": "No exceptions yet. Every new task uses the pick rule above.",
+        "imageRule": "When the message has images, use only sources that can see images",
+        "hoursRule": "{{from}}–{{to}}: use “{{name}}” instead",
+        "remove": "Remove this exception",
+        "add": "Add an exception",
+        "choose": "Choose a situation",
+        "kindImage": "The message has images",
+        "kindHours": "A time of day",
+        "from": "From",
+        "to": "To",
+        "useRoute": "Use instead",
+        "addHours": "Add",
+        "sameHour": "Start and end cannot be the same time.",
+        "full": "Up to {{count}} exceptions.",
+        "needOtherRoute": "Create another route to switch to it by time of day."
+      }
+    },
+    "overview": {
+      "mapTitle": "How new tasks pick a model",
+      "mapDescription": "Left to right: the route a new task takes and the source it lands on. Click a route to change it.",
+      "columnSources": "Sources",
+      "columnEmpty": "None yet",
+      "openRoute": "Open route “{{name}}”",
+      "recentTitle": "Recent choices",
+      "recentEmpty": "No task has used a route yet.",
+      "keptOriginal": "Nothing in it was available, so the task kept the model you had chosen.",
+      "keptOriginalShort": "Kept your model",
+      "latest": "The path the latest task took"
+    },
+    "switchOffer": {
+      "action": "Continue with {{model}}"
+    }
   }
 }

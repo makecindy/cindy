@@ -1162,6 +1162,21 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     ).toBeNull();
   });
 
+  // model-groups.md §6.1：换来源继续只在用户点了、且真的换成了之后才走原有的重试；取消确认则什么都不动。
+  it.each([[true, 1], [false, 0]] as const)('retries through the existing path only after a model group switch applied=%s', async (applied, retries) => {
+    const retry = vi.fn();
+    const onSwitch = vi.fn(async () => applied);
+    render(<ErrorBanner error="usageLimitExceeded" retryText="retry this turn" onRetry={retry} agentKind="cc"
+      usageLimitWait={{ resumeAt: Date.now() + 60 * 60 * 1000 }} onCancelUsageLimitWait={vi.fn()}
+      usageLimitRecovery={{ resetAtMs: null, isAccountUsageLimit: true }}
+      modelGroupSwitch={{ label: 'modelGroups.switchOffer.action', onSwitch }} />);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'modelGroups.switchOffer.action' })));
+    expect(onSwitch).toHaveBeenCalledOnce();
+    expect(retry).toHaveBeenCalledTimes(retries);
+    if (retries) expect(retry).toHaveBeenCalledWith('retry this turn');
+    expect(screen.getByText('chat.errorBanner.usageLimitAutoContinueAt')).toBeTruthy();
+  });
+
   it('offers a confirmed reset at a local ChatGPT limit without retrying the turn', async () => {
     const key = '00000000-0000-4000-8000-000000000001';
     mocks.getCodexRateLimits.mockResolvedValue({
