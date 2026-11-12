@@ -1528,7 +1528,9 @@
       "subscriptionsUsed": "サブスクリプションはすべて使い切り",
       "waitReset": "サブスクリプションのリセット待ち",
       "sentence": "{{text}}。",
-      "joiner": "、"
+      "joiner": "、",
+      "magpie": "Magpie の上流クォータには余裕があります。",
+      "magpieHint": "Cindy 独自のアカウントは接続後ここに表示されます。"
     },
     "cell": {
       "payg": "従量",
@@ -1683,6 +1685,22 @@
       "plan": "サブスクリプション · 残りを取得できない",
       "subscription": "サブスクリプション · {{plan}} · {{windows}}",
       "onDevice": "{{name}} · {{subtitle}}"
+    },
+    "magpie": {
+      "manage": "Magpie · {{plan}}",
+      "cellSignIn": "サインインが必要",
+      "cellNoWindows": "ウィンドウなし",
+      "a11ySignIn": "{{name}}、上流アカウントのサインインが必要です",
+      "a11yNoWindows": "{{name}}、クォータウィンドウが報告されていません",
+      "detailSignIn": "上流はサインインが必要",
+      "detailNoWindows": "ウィンドウ未報告",
+      "factStale": "最終読み取り {{ago}}",
+      "factUpstream": "ゲートウェイが報告",
+      "windowResetsAt": "{{at}}にリセット",
+      "saySignIn": "この上流アカウントは再度サインインする必要があります。",
+      "saySignInSub": "Magpie で再接続してください。ゲートウェイが読み取れるようになると Cindy がクォータを再表示します。",
+      "sayNoWindows": "このアカウントのクォータウィンドウは報告されていません。",
+      "sayNoWindowsSub": "ゲートウェイがウィンドウに分割できない残高のみの可能性があります。"
     },
     "notify": {
       "lowTitle": "残りわずかです",
@@ -3481,6 +3499,21 @@
       }
     },
     "providers": {
+      "magpie": {
+        "sync": "モデルを同期",
+        "syncing": "同期中…",
+        "syncDone": "モデル一覧を同期しました",
+        "syncAdded": "同期しました（{{count}} 件追加）",
+        "syncFailed": "モデル一覧を同期できませんでした",
+        "syncChanged": "同期中に接続が変更されました。もう一度お試しください",
+        "status": {
+          "never": "モデル一覧はまだ同期されていません",
+          "refreshed": "モデル一覧を{{time}}に同期",
+          "stale": "モデル一覧が古い可能性があります · 最終同期 {{time}}",
+          "failed": "前回の同期に失敗（{{code}}） · {{time}} の一覧を表示中",
+          "failedNever": "モデル一覧の同期に失敗（{{code}}）"
+        }
+      },
       "llamacpp": {
         "ownedElsewhere": "モデルサービスは別の Cindy インスタンスで実行中です。モデルのダウンロードやコンテキストの変更はそちらで行うか、先にそのサービスを停止してください。",
         "primaryPick": "第一候補 · まず試す",

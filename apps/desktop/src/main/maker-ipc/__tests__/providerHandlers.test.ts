@@ -1258,6 +1258,73 @@ describe('provider:models-auto-refresh handler', () => {
   });
 });
 
+describe('provider Magpie sync handlers', () => {
+  const status = {
+    providerId: 'magpie',
+    lastAttemptAt: 10,
+    lastSuccessAt: 10,
+    failure: null,
+    stale: false,
+  };
+
+  it('guards the sender and forwards status / explicit sync by provider id', async () => {
+    const harness = new IpcHarness();
+    const assertTrustedSender = vi.fn();
+    const getMagpieModelSyncStatus = vi.fn(() => status);
+    const syncMagpieModelsNow = vi.fn(async () => ({ ok: true, status, added: 2 }));
+    registerProviderHandlers(
+      harness,
+      makeDeps({
+        assertTrustedSender,
+        getMagpieModelSyncStatus,
+        syncMagpieModelsNow,
+      }),
+    );
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MAGPIE_SYNC_STATUS, 'magpie'),
+    ).resolves.toEqual(status);
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MAGPIE_SYNC, 'magpie'),
+    ).resolves.toEqual({ ok: true, status, added: 2 });
+    expect(assertTrustedSender).toHaveBeenCalledTimes(2);
+    expect(getMagpieModelSyncStatus).toHaveBeenCalledWith('magpie');
+    expect(syncMagpieModelsNow).toHaveBeenCalledWith('magpie');
+  });
+
+  it('rejects invalid ids before touching Main state', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MAGPIE_SYNC, ''),
+    ).rejects.toThrow('[INVALID_PARAMS] providerId must be a non-empty string');
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MAGPIE_SYNC_STATUS, 7),
+    ).rejects.toThrow('[INVALID_PARAMS] providerId must be a non-empty string');
+  });
+
+  it('does not run when the trusted sender guard rejects', async () => {
+    const harness = new IpcHarness();
+    const syncMagpieModelsNow = vi.fn(async () => ({ ok: true, status, added: 0 }));
+    registerProviderHandlers(
+      harness,
+      makeDeps({
+        assertTrustedSender: () => {
+          throw new Error('[PERMISSION_DENIED] untrusted sender');
+        },
+        syncMagpieModelsNow,
+      }),
+    );
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MAGPIE_SYNC, 'magpie'),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(syncMagpieModelsNow).not.toHaveBeenCalled();
+  });
+});
+
 describe('provider OAuth sender boundary', () => {
   it.each([false, true])(
     'rejects all OAuth mutations before side effects (missing guard=%s)',

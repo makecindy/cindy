@@ -39,13 +39,19 @@ export function buildUsageWidgetSnapshot(
   const sources: MobileUsageWidgetSource[] = [];
   for (const cell of view.sources) {
     // Pay-as-you-go and unread sources have no level; the panel lists them as rows, not tubes.
+    // Magpie accounts are tubes like subscriptions, so the widget maps them to that kind
+    // (the small Swift widget only draws `subscription` rows); their logo stays a monogram.
     if (cell.kind === 'payg' || cell.fill === null) continue;
+    const widgetKind: MobileUsageWidgetSource['kind'] = cell.kind === 'balance' ? 'balance' : 'subscription';
+    // A Magpie account borrows a family mark on the desktop panel, but the widget's family
+    // logos imply Cindy's own subscription; leave it null so the widget draws the monogram.
+    const logo = cell.kind === 'magpie' ? null : logoOf.get(cell.logoSvg) ?? null;
     const detail = view.details[cell.id];
     sources.push({
       id: cell.id,
-      kind: cell.kind,
+      kind: widgetKind,
       name: cell.name,
-      logo: logoOf.get(cell.logoSvg) ?? null,
+      logo,
       monogram: [...cell.name.trim()][0]?.toUpperCase() ?? '?',
       value: cell.value,
       unit: cell.valueUnit,

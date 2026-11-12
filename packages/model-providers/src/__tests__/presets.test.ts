@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { BUNDLED_CATALOG, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForRegion } from '../catalog.js';
+import { MAGPIE_PRESET_ID } from '../magpie.js';
 import { mergeWithBundled } from '../source.js';
 import type { AgentKind, Catalog } from '../types.js';
 
@@ -875,7 +876,7 @@ describe('BUNDLED_CATALOG 首批预设自检', () => {
         const noAuthLocal = p.authMethod === 'none' && isLoopbackHttp;
         // Magpie deliberately uses API-key auth on its documented local gateway so
         // Usage can attribute calls to Cindy. Remote connections require a real key.
-        const magpieLocal = p.id === 'magpie' && p.authMethod !== 'none' && isLoopbackHttp;
+        const magpieLocal = p.id === MAGPIE_PRESET_ID && p.authMethod !== 'none' && isLoopbackHttp;
         expect(url.protocol === 'https:' || noAuthLocal || magpieLocal, `${p.id}: ${rt.baseUrl}`).toBe(true);
       }
     }

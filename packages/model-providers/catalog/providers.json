@@ -2395,20 +2395,24 @@
       "id": "magpie",
       "name": "Magpie",
       "docsUrl": "https://usemagpie.ai/docs/integrate",
+      "authMethod": "apiKey",
       "models": [],
       "runtimes": {
         "claude-code": {
           "baseUrl": "http://127.0.0.1:3425",
+          "modelsUrl": "http://127.0.0.1:3425/v1/models",
           "baseUrlEditable": true,
           "wireProtocol": "anthropic-messages"
         },
         "codex": {
           "baseUrl": "http://127.0.0.1:3425/v1",
+          "modelsUrl": "http://127.0.0.1:3425/v1/models",
           "baseUrlEditable": true,
           "wireProtocol": "openai-responses"
         },
         "pi": {
           "baseUrl": "http://127.0.0.1:3425/v1",
+          "modelsUrl": "http://127.0.0.1:3425/v1/models",
           "baseUrlEditable": true,
           "wireProtocol": "openai-chat"
         }

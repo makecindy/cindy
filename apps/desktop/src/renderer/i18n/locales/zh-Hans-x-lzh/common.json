@@ -1528,7 +1528,9 @@
       "subscriptionsUsed": "订阅皆尽",
       "waitReset": "待订阅重置",
       "sentence": "{{text}}。",
-      "joiner": "，"
+      "joiner": "，",
+      "magpie": "Magpie 上游尚有余量。",
+      "magpieHint": "Cindy 自有账号连上后亦显示于此。"
     },
     "cell": {
       "payg": "计量",
@@ -1683,6 +1685,22 @@
       "plan": "订阅 · 余量无从查",
       "subscription": "订阅 · {{plan}} · {{windows}}",
       "onDevice": "{{name}} · {{subtitle}}"
+    },
+    "magpie": {
+      "manage": "Magpie · {{plan}}",
+      "cellSignIn": "需登录",
+      "cellNoWindows": "无窗口",
+      "a11ySignIn": "{{name}}，上游账号需要登录",
+      "a11yNoWindows": "{{name}}，未上报配额窗口",
+      "detailSignIn": "上游需登录",
+      "detailNoWindows": "未上报窗口",
+      "factStale": "上次读取于 {{ago}}",
+      "factUpstream": "由网关上报",
+      "windowResetsAt": "{{at}}重置",
+      "saySignIn": "该上游账号需要重新登录。",
+      "saySignInSub": "请在 Magpie 中重新连接；网关能读取后 Cindy 会再次显示其配额。",
+      "sayNoWindows": "该账号未上报配额窗口。",
+      "sayNoWindowsSub": "它可能只有网关无法拆分为窗口的余额。"
     },
     "notify": {
       "lowTitle": "余量将尽",
@@ -3481,6 +3499,21 @@
       }
     },
     "providers": {
+      "magpie": {
+        "sync": "同步模型",
+        "syncing": "同步中…",
+        "syncDone": "模型清單已同步",
+        "syncAdded": "已同步，新增 {{count}} 個模型",
+        "syncFailed": "模型清單同步失敗",
+        "syncChanged": "同步期間連線被修改，請重試",
+        "status": {
+          "never": "模型清單尚未同步",
+          "refreshed": "模型清單同步於{{time}}",
+          "stale": "模型清單可能已過期 · 上次同步於{{time}}",
+          "failed": "上次同步失敗（{{code}}） · 目前顯示 {{time}} 的清單",
+          "failedNever": "模型清單同步失敗（{{code}}）"
+        }
+      },
       "llamacpp": {
         "ownedElsewhere": "模型服务方行于他一 Cindy 运行个体中。请于彼处取下模型或改上下文，或先止该运行个体之服务。",
         "primaryPick": "首荐 · 先试此",

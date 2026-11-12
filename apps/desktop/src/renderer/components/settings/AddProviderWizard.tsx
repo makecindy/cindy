@@ -1,7 +1,7 @@
 import { useFirstRunGuideConnectionDialog } from '@/features/first-run-guide/firstRunGuideStore';
 import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
 import { BUNDLED_CATALOG, providerSetupLink, providerPresetOAuth, providerPresetOAuthRuntimes, buildUserProvider, isMimoTokenPlanPreset } from '@cindy/model-providers';
-import { bindProviderPresetRuntime, providerEndpointBindings, bindProviderEndpoint } from '@cindy/model-providers';
+import { bindProviderPresetRuntime, providerEndpointBindings, bindProviderEndpoint, isMagpiePresetId, magpieModelForAgent } from '@cindy/model-providers';
 /**
  * AddProviderWizard —— 「添加供应商」三步向导(2026-07 模型供应商重构)。
  *
@@ -1098,7 +1098,18 @@ export function AddProviderWizard({
               ...(openHubsInventory ? { allowEmpty: true } : {}),
               apiKey: apiKey.trim() || null,
               ...(source.wireProtocol ? { wireProtocol: source.wireProtocol } : {}),
-              ...(rt.headers ? { headers: rt.headers } : {}),
+              ...(rt.headers || isMagpiePresetId(preset.id)
+                ? {
+                    headers: {
+                      ...(rt.headers ?? {}),
+                      // Static client identification only; Magpie accepts this and
+                      // uses no per-task headers here.
+                      ...(isMagpiePresetId(preset.id)
+                        ? { 'User-Agent': `Cindy/${window.electronAPI.appVersion}` }
+                        : {}),
+                    },
+                  }
+                : {}),
             });
             return {
               agent,
@@ -1157,9 +1168,19 @@ export function AddProviderWizard({
         const hasInterfaceProfiles = presetRouteHasInterfaceProfiles(preset, modelRegistry, runtimeRoute);
         for (const m of models) {
           const existing = next.get(m.id);
-          const candidate = presetModelCandidate(preset, agent, m, modelRegistry,
-            runtimeRoute,
-            route, preservePresetOwnership || (!!hasInterfaceProfiles && !!modelsUrl && sharedProtocolUrls.has(modelsUrl)));
+          // Magpie declares one catalog for three native APIs. Its entries carry
+          // `native_endpoints`; route each model to a path it actually serves instead
+          // of assuming every harness can use the runtime default.
+          const candidate: ProviderRuntimeModelConfig | undefined = isMagpiePresetId(preset.id)
+            ? magpieModelForAgent(
+                m,
+                agent,
+                presetRuntimeBaseUrl(preset, agent, presetBaseUrls),
+                preset.runtimes[agent]?.wireProtocol,
+              )
+            : presetModelCandidate(preset, agent, m, modelRegistry,
+                runtimeRoute,
+                route, preservePresetOwnership || (!!hasInterfaceProfiles && !!modelsUrl && sharedProtocolUrls.has(modelsUrl)));
           if (!candidate && !existing?.agents.includes(agent)) continue;
           if (existing) {
             const mergedAgents =

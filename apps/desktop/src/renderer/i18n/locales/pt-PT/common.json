@@ -1574,7 +1574,9 @@
       "subscriptionsUsed": "As subscrições estão esgotadas",
       "waitReset": "Aguarde a reposição das subscrições",
       "sentence": "{{text}}.",
-      "joiner": ", "
+      "joiner": ", ",
+      "magpie": "Os upstreams do Magpie têm quota.",
+      "magpieHint": "As contas próprias da Cindy aparecem após ligar."
     },
     "cell": {
       "payg": "API",
@@ -1739,6 +1741,22 @@
       "plan": "Subscrição · quantidade restante indisponível",
       "subscription": "Subscrição · {{plan}} · {{windows}}",
       "onDevice": "{{name}} · {{subtitle}}"
+    },
+    "magpie": {
+      "manage": "Magpie · {{plan}}",
+      "cellSignIn": "Requer início de sessão",
+      "cellNoWindows": "Sem janelas",
+      "a11ySignIn": "{{name}}, a conta upstream requer início de sessão",
+      "a11yNoWindows": "{{name}}, nenhuma janela de quota reportada",
+      "detailSignIn": "Upstream requer início de sessão",
+      "detailNoWindows": "Nenhuma janela reportada",
+      "factStale": "Última leitura {{ago}}",
+      "factUpstream": "Reportado pela gateway",
+      "windowResetsAt": "Reinicia {{at}}",
+      "saySignIn": "A conta upstream precisa de iniciar sessão novamente.",
+      "saySignInSub": "Reconecte-a no Magpie; a Cindy mostrará a quota novamente assim que a gateway a puder ler.",
+      "sayNoWindows": "Nenhuma janela de quota reportada para esta conta.",
+      "sayNoWindowsSub": "Pode ter apenas um saldo que a gateway não consegue dividir em janelas."
     },
     "notify": {
       "lowTitle": "A esgotar-se",
@@ -3571,6 +3589,21 @@
       }
     },
     "providers": {
+      "magpie": {
+        "sync": "Sincronizar modelos",
+        "syncing": "A sincronizar…",
+        "syncDone": "Lista de modelos sincronizada",
+        "syncAdded": "Sincronizado, {{count}} modelos adicionados",
+        "syncFailed": "Não foi possível sincronizar a lista de modelos",
+        "syncChanged": "A ligação mudou durante a sincronização. Tente novamente",
+        "status": {
+          "never": "Lista de modelos ainda não sincronizada",
+          "refreshed": "Lista de modelos sincronizada {{time}}",
+          "stale": "A lista de modelos pode estar desatualizada · última sincronização {{time}}",
+          "failed": "A última sincronização falhou ({{code}}) · a mostrar a lista de {{time}}",
+          "failedNever": "Falha ao sincronizar a lista de modelos ({{code}})"
+        }
+      },
       "llamacpp": {
         "ownedElsewhere": "O serviço de modelos está em execução noutra instância do Cindy. Descarregue modelos ou altere o contexto nessa instância, ou pare primeiro o respetivo serviço.",
         "primaryPick": "Escolha principal · experimente primeiro",

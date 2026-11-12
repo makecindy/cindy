@@ -26,6 +26,8 @@ export interface MenubarSettings {
   lowAlert: boolean;
   privacy: boolean;
   scope: MenubarUsageScope;
+  /** Magpie accounts at 100% used start hidden until the user shows them (like pay-as-you-go). */
+  hideFullMagpieAccounts: boolean;
 }
 
 export const DEFAULT_MENUBAR_SETTINGS: MenubarSettings = {
@@ -37,6 +39,7 @@ export const DEFAULT_MENUBAR_SETTINGS: MenubarSettings = {
   lowAlert: true,
   privacy: false,
   scope: 'all',
+  hideFullMagpieAccounts: true,
 };
 
 export type MenubarSettingsPatch = Partial<MenubarSettings>;
@@ -57,7 +60,7 @@ export type MenubarColor =
 
 export type MenubarLevel = 'normal' | 'warn' | 'error';
 
-export type MenubarSourceKind = 'subscription' | 'balance' | 'payg';
+export type MenubarSourceKind = 'subscription' | 'balance' | 'payg' | 'magpie';
 
 export interface MenubarSourceCell {
   id: string;
@@ -121,6 +124,11 @@ export interface MenubarDetail {
   /** Smaller numerals for multi-ring and balance details. */
   bigCompact: boolean;
   bigCaption: string;
+  /**
+   * The caption is longer than the ring's hole (a Magpie window name), so the helper draws
+   * it under the ring instead of inside, where it would be clipped by the inner circle.
+   */
+  bigCaptionOutside?: boolean;
   legend: { label: string; color: MenubarColor }[];
   sayPrimary: string;
   saySecondary: string | null;

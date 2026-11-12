@@ -10,6 +10,8 @@
 
 import {
   BUNDLED_CATALOG,
+  MAGPIE_LOOPBACK_ORIGIN,
+  MAGPIE_MODELS_URL,
   parseLocalModelCatalog,
   type LocalModelCatalog,
   type LocalCatalogModel,
@@ -34,8 +36,9 @@ export const LMSTUDIO_ANTHROPIC_BASE_URL = LMSTUDIO_LOOPBACK_ORIGIN;
 export const LLAMACPP_OPENAI_BASE_URL = 'http://127.0.0.1:8080/v1';
 export const VLLM_OPENAI_BASE_URL = 'http://127.0.0.1:8000/v1';
 export const LITELLM_OPENAI_BASE_URL = 'http://127.0.0.1:4000/v1';
+export { MAGPIE_LOOPBACK_ORIGIN, MAGPIE_MODELS_URL };
 
-export const LOCAL_CONNECT_PRESET_IDS = ['lmstudio'] as const;
+export const LOCAL_CONNECT_PRESET_IDS = ['lmstudio', 'magpie'] as const;
 export const LOCAL_ADVANCED_PRESET_IDS = ['llamacpp', 'vllm', 'litellm'] as const;
 
 const LOCAL_RUNTIME_BETA_IDS = new Set<string>([

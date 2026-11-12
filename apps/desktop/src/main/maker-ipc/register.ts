@@ -1317,6 +1317,14 @@ import {
   refreshProviderModelsManually,
   requestProviderModelAutoRefresh,
 } from '../maker-host/provider-model-auto-refresh.js';
+import {
+  configureMagpieModelSync,
+  getMagpieProviderSyncStatus,
+  requestMagpieModelAutoRefresh,
+  requestMagpieModelSyncAfterChange,
+  syncMagpieProviderNow,
+} from '../maker-host/magpie-model-sync.js';
+import { createMagpieSyncStatusStore } from '../maker-host/magpie-sync-status-store.js';
 import { setProviderUpstreamErrorBroadcaster } from '../maker-host/provider-upstream-error-observer.js';
 import {
   createClaudeAutoPermissionFallbackCoordinator,
@@ -1335,6 +1343,7 @@ import {
 import {
   revokeCodexAccountUltrafast,
   getCustomProvider,
+  listCustomProviders,
   mergeDiscoveredModelsIntoConfig,
   updateCustomProviderIfUnchanged,
 } from '../maker-host/custom-provider-store.js';
@@ -7708,6 +7717,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         refreshXai: refreshXaiModelsFromHttp,
         refreshXaiMedia: refreshXaiMediaModels,
       }),
+    refreshCustomSources: (trigger) => requestMagpieModelAutoRefresh(trigger),
+  });
+  // Magpie is a custom connection, not a built-in provider: its key lives in the
+  // same safeStorage slot and its model list in the same custom-provider row.
+  configureMagpieModelSync({
+    listConfigs: () => listCustomProviders(),
+    getConfig: (providerId) => getCustomProvider(providerId),
+    readKey: (providerId, agent) => readCustomProviderKey(providerId, agent),
+    fetchModels: (spec) => fetchProviderModels(spec),
+    updateConfigIfUnchanged: (providerId, expected, next) =>
+      updateCustomProviderIfUnchanged(providerId, expected, next),
+    refreshCatalog: () => refreshCustomProvidersIntoCatalog(),
+    broadcastChanged: () => broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {}),
+    getScopeKey: () => getActiveAppSession().generation,
+    appVersion: app.getVersion(),
+    statusStore: createMagpieSyncStatusStore(),
   });
   options.onProviderModelAutoRefreshConfigured();
 
@@ -7835,6 +7860,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     rediscoverModels: async () => null,
     refreshBuiltinModels: refreshProviderModelsManually,
     requestModelsAutoRefresh: requestProviderModelAutoRefresh,
+    getMagpieModelSyncStatus: getMagpieProviderSyncStatus,
+    syncMagpieModelsNow: syncMagpieProviderNow,
+    requestMagpieModelSyncAfterChange,
     scanLocalCli: () => scanLocalCliAuth(createLocalCliScanDeps()),
     // 「模型 / 供应商停用」override 写入(main 侧持久化,handler 写后广播 PROVIDER_CHANGED)。
     setModelsDisabled: (providerId, modelIds, disabled) =>

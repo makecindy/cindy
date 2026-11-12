@@ -27,6 +27,12 @@ export const PROVIDER_MODEL_FOREGROUND_BACKGROUND_THRESHOLD_MS = 15 * 60_000;
 export interface ProviderModelAutoRefreshDeps {
   listProviders(options: { allowSideEffects: true }): Promise<ProviderView[]>;
   refreshProvider(providerId: BuiltinRefreshableProviderId): Promise<void>;
+  /**
+   * Refresh connection-owned custom sources (currently Magpie). Runs beside the
+   * built-in refreshes so a local gateway never delays subscription discovery.
+   * The callback owns its cooldown and in-flight dedupe.
+   */
+  refreshCustomSources?: (trigger: ProviderModelAutoRefreshTrigger) => Promise<void>;
   /** Refresh the shared public Catalog independently of any provider connection state. */
   refreshCatalog?: () => Promise<void>;
   getScopeKey?: () => string | number;
@@ -296,10 +302,21 @@ export function createProviderModelRefreshCoordinator(
       // Public Catalog refreshes metadata; each connected account still refreshes its own
       // authoritative membership independently, including xAI `/user` → `/models`.
       const ids = requestedIds.filter((id) => connectedIds.has(id));
+      const customSources = deps.refreshCustomSources
+        ? Promise.resolve()
+            .then(() => deps.refreshCustomSources!(trigger))
+            .catch((error: unknown) => {
+              deps.log.warn('custom source model auto-refresh failed', {
+                trigger,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            })
+        : Promise.resolve();
       // 启动期无视冷却（见 `'startup'` trigger 注释）；in-flight 合并仍生效，所以并发的
       // 启动触发与手动刷新不会各起一次 codex app-server。
       const force = isForcedProviderModelAutoRefreshTrigger(trigger);
       const results = await Promise.allSettled(ids.map((id) => refresh(id, force)));
+      await customSources;
       results.forEach((result, index) => {
         if (result.status === 'fulfilled') return;
         deps.log.warn('provider model auto-refresh failed', {

@@ -9,7 +9,7 @@ import { opencodeGoUsageWindowMinutes } from '../../shared/opencodeGoUsage.js';
  * that fails only drops its own source; the rest of the panel still renders.
  */
 
-import { actualSourceIdForModel, type ProviderView } from '@cindy/model-providers';
+import { actualSourceIdForModel, isLoopbackProviderUrl, type ProviderView } from '@cindy/model-providers';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import { matchCodexBucketForModel } from '@cindy/maker-shared/codex-usage-buckets';
 import type {
@@ -20,16 +20,19 @@ import { isXaiWeeklyUsageCurrent } from '@cindy/maker-shared/subscription-usage'
 import { isSessionActivityRunning, type SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
 import type { MenubarModelUsage, MenubarUsageScope, MenubarUsageScopeData } from '../../shared/menubarQuota.js';
+import type { MagpieQuotaAccount } from '../../shared/magpieQuota.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
 import { formatModelShort } from '../../shared/usageModelLabel.js';
 import type { CodexAccountUsagePayload, RateLimitSnapshot, RateLimitWindow } from '../usageBroadcaster.js';
 import type { UsageHistoryPayload } from '../usage/usageHistory.js';
-import { familyLogo, MENUBAR_CINDY_LOGO, providerLogo } from './logos.js';
+import { isProviderLogoKind } from '@cindy/model-providers/branding';
+import { familyLogo, logoForKind, MENUBAR_CINDY_LOGO, providerLogo } from './logos.js';
 import {
   topModels,
   type MenubarBalanceInput,
   type MenubarHarness,
+  type MenubarMagpieInput,
   type MenubarPaygInput,
   type MenubarQuotaPeriod,
   type MenubarResetCredits,
@@ -85,6 +88,11 @@ export interface MenubarCollectDeps {
   readCodexResets?(providerId: string): Promise<MenubarResetCredits | null>;
   /** Subscriptions on the user's other computers, already read and mapped. */
   readRemoteSubscriptions?(): Promise<MenubarSubscriptionInput[]>;
+  /**
+   * Upstream accounts of one Magpie gateway, already mapped. Called only for a connected
+   * user provider routing to a loopback upstream; null means the gateway could not be read.
+   */
+  readMagpie?(providerId: string, origin: string): Promise<MagpieQuotaAccount[] | null>;
   /** Null when the account has no Cindy balance (organization accounts, signed out). */
   readBalance(): Promise<MenubarBalanceReading | null>;
   readUsage(scope: MenubarUsageScope): Promise<UsageHistoryPayload | null>;
@@ -123,40 +131,70 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
   const modelNames = modelDisplayNames(providers);
   const sources: MenubarSourceInput[] = [];
   if (balance) sources.push(balanceSource(balance));
-  const subscriptionReads = providers.map(async (provider): Promise<MenubarSourceInput | null> => {
-    if (!provider.connected || provider.suspended || provider.removed) return null;
+
+  // Magpie gate: only connected user providers routing to a loopback upstream are probed.
+  // One gateway read covers every upstream account; a provider whose accounts were read
+  // shows them instead of its pay-as-you-go row (one connection, one card).
+  const magpieByProvider = new Map<string, MenubarMagpieInput[]>();
+  const magpieGateways = new Map<string, ReturnType<typeof magpieGateProviders>>();
+  for (const entry of magpieGateProviders(providers).sort((left, right) => left.provider.id.localeCompare(right.provider.id))) {
+    const group = magpieGateways.get(entry.origin) ?? [];
+    group.push(entry);
+    magpieGateways.set(entry.origin, group);
+  }
+  if (deps.readMagpie) {
+    await Promise.all(
+      [...magpieGateways.values()].map(async ([entry, ...aliases]) => {
+        const accounts = await safe(
+          `magpie:${entry.provider.id}`,
+          () => deps.readMagpie!(entry.provider.id, entry.origin),
+          null,
+        );
+        if (accounts && accounts.length > 0) {
+          magpieByProvider.set(entry.provider.id, accounts.map((account) => magpieSource(account)));
+          for (const alias of aliases) magpieByProvider.set(alias.provider.id, []);
+        }
+      }),
+    );
+  }
+
+  const subscriptionReads = providers.map(async (provider): Promise<MenubarSourceInput[]> => {
+    if (!provider.connected || provider.suspended || provider.removed) return [];
+    // A Magpie connection whose upstream accounts were read shows those accounts; its own
+    // pay-as-you-go card would be a second card for the same connection.
+    const magpie = magpieByProvider.get(provider.id);
+    if (magpie) return magpie;
     const kind = providerWeeklyQuotaSource(provider);
     // A Codex account waiting to be reconnected stays in the list without numbers instead
     // of falling into the hidden pay-as-you-go group.
-    if (!kind && needsCodexReconnect(provider)) return codexSource(provider, null, deps.nowMs);
+    if (!kind && needsCodexReconnect(provider)) return [codexSource(provider, null, deps.nowMs)];
     if (kind === 'codex') {
       const [payload, resets] = await Promise.all([
         safe(`codex:${provider.id}`, () => deps.readCodex(provider.id), null),
         safe(`codex-resets:${provider.id}`, async () => (await deps.readCodexResets?.(provider.id)) ?? null, null),
       ]);
-      return { ...codexSource(provider, payload, deps.nowMs), resetCredits: resets };
+      return [{ ...codexSource(provider, payload, deps.nowMs), resetCredits: resets }];
     }
     if (kind === 'claude') {
       const snapshot = await safe(`claude:${provider.id}`, () => deps.readClaude(provider.id), null);
-      return claudeSource(provider, snapshot, deps.nowMs);
+      return [claudeSource(provider, snapshot, deps.nowMs)];
     }
     if (kind === 'kimi') {
       const result = await safe(`kimi:${provider.id}`, async () => await deps.readKimi?.(provider.id) ?? null, null);
-      return kimiSource(provider, result, deps.nowMs);
+      return [kimiSource(provider, result, deps.nowMs)];
     }
     if (kind === 'opencode-go') {
       const result = await safe(`opencode-go:${provider.id}`, async () => await deps.readOpenCodeGo?.(provider.id) ?? null, null);
-      return opencodeGoSource(provider, result, deps.nowMs);
+      return [opencodeGoSource(provider, result, deps.nowMs)];
     }
     if (kind === 'xai') {
       const snapshot = await safe(`xai:${provider.id}`, () => deps.readXai(provider.id), null);
-      return xaiSource(provider, snapshot, deps.nowMs);
+      return [xaiSource(provider, snapshot, deps.nowMs)];
     }
-    return paygSource(provider);
+    const payg = paygSource(provider);
+    return payg ? [payg] : [];
   });
-  for (const source of await Promise.all(subscriptionReads)) {
-    if (source) sources.push(source);
-  }
+  for (const group of await Promise.all(subscriptionReads)) sources.push(...group);
   sources.push(...distinctRemoteSubscriptions(sources, remote));
 
   const today = (allUsage ?? localUsage)?.todayKey ?? localDayKey(deps.nowMs);
@@ -171,8 +209,15 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
 
   const tasks = await collectTasks(deps, localUsage, today, safe);
   const consuming = consumingSourceIds(tasks, providers);
+  for (const [entry, ...aliases] of magpieGateways.values()) {
+    if (magpieByProvider.has(entry.provider.id) && aliases.some((alias) => consuming.has(alias.provider.id))) {
+      consuming.add(entry.provider.id);
+    }
+  }
   for (const source of sources) {
     if (consuming.has(source.id)) source.consuming = true;
+    // A task routed through the Magpie connection ripples on that gateway's accounts.
+    if (source.kind === 'magpie' && consuming.has(source.providerId)) source.consuming = true;
   }
 
   let updatedAtMs: number | null = null;
@@ -451,6 +496,69 @@ function needsCodexReconnect(provider: ProviderView): boolean {
     provider.auth.method === 'oauth' &&
     (provider.id === 'openai' || provider.auth.native === 'codex')
   );
+}
+
+/**
+ * Connected user providers that route at least one runtime to a loopback upstream — the
+ * structural gate for probing Magpie. No name heuristics: a non-Magpie loopback proxy costs
+ * one probe the reader memoizes. The origin is the first matching upstream's origin.
+ */
+export function magpieGateProviders(
+  providers: readonly ProviderView[],
+): { provider: ProviderView; origin: string }[] {
+  const gated: { provider: ProviderView; origin: string }[] = [];
+  for (const provider of providers) {
+    if (provider.source !== 'user' || !provider.connected || provider.suspended || provider.removed) continue;
+    const routing = provider.routing as Partial<Record<string, { upstream?: unknown }>> | undefined;
+    for (const descriptor of Object.values(routing ?? {})) {
+      const upstream = descriptor?.upstream;
+      if (!isLoopbackProviderUrl(upstream)) continue;
+      try {
+        gated.push({ provider, origin: new URL(upstream).origin });
+      } catch {
+        // A malformed upstream is the provider validator's concern; skip the probe.
+      }
+      break;
+    }
+  }
+  return gated;
+}
+
+/**
+ * Brand and logo for a Magpie upstream slug. Known families borrow their official mark;
+ * everything else gets a monogram of the slug, so Cindy never invents a brand it cannot
+ * verify. The slug is uppercased for display ("qwenwork" → "Qwenwork").
+ */
+function magpieBrand(provider: string): { brand: string; logoSvg: string } {
+  const slug = provider.toLowerCase();
+  if (slug === 'claude' || slug === 'anthropic') return { brand: 'Claude', logoSvg: familyLogo('claude') };
+  if (slug === 'codex' || slug === 'openai') return { brand: 'Codex', logoSvg: familyLogo('codex') };
+  if (slug === 'grok' || slug === 'xai') return { brand: 'Grok', logoSvg: familyLogo('grok') };
+  if (slug === 'kimi') return { brand: 'Kimi', logoSvg: familyLogo('kimi') };
+  const label = provider ? provider[0].toUpperCase() + provider.slice(1) : 'Magpie';
+  return { brand: label, logoSvg: logoForKind(isProviderLogoKind(slug) ? slug : null, label) };
+}
+
+/**
+ * A mapped Magpie account as a panel source. The account name is a handle, never the
+ * upstream email (which stays hashed into the id in the reader).
+ */
+export function magpieSource(account: MagpieQuotaAccount): MenubarMagpieInput {
+  const { brand, logoSvg } = magpieBrand(account.provider);
+  return {
+    kind: 'magpie',
+    id: account.id,
+    providerId: account.providerId,
+    logoSvg,
+    brand,
+    name: account.name,
+    plan: account.plan,
+    windows: account.windows,
+    balanceText: account.balanceText,
+    status: account.status,
+    observedAtMs: account.observedAtMs,
+    staleAtMs: account.staleAtMs,
+  };
 }
 
 export function paygSource(provider: ProviderView): MenubarPaygInput | null {
