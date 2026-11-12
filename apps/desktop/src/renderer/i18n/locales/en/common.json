@@ -2176,7 +2176,16 @@
       },
       "sidebarAndPanels": "Sidebar & panels",
       "themeLabel": "Theme",
+      "createTheme": {
+        "label": "Create Theme",
+        "hint": "Describe a style or add a reference image to design Cindy’s appearance.",
+        "prompt": "Help me create a shareable Cindy theme package, with a preview and verification. The style I have in mind is:",
+        "unavailable": "The theme creation Skill is unavailable. Check whether it is enabled in Skills.",
+        "startFailed": "Could not open the theme creation task"
+      },
       "themeAriaLabel": "Theme selection",
+      "themeApplyFailed": "Couldn’t apply this theme. Your current appearance is unchanged.",
+      "themeFontFailed": "Couldn’t load the theme font. Using the default font.",
       "localBadge": "(Local)",
       "localThemes": {
         "title": "Local themes",
@@ -16349,6 +16358,16 @@
             "recheck": "Check connection",
             "summary": "Manage GitHub repositories, issues, pull requests, and Actions.",
             "otherMethods": "Other connection methods"
+          },
+          "app": {
+            "title": "Repository events",
+            "description": "Connect the Cindy GitHub App to update followed PRs when reviews or CI change.",
+            "connected": "Connected as {{login}} · Repositories watched: {{count}}",
+            "missing": "Check App installation and access for: {{repositories}}",
+            "error": "Could not check the connection. Try again.",
+            "repositories": "Choose repositories",
+            "disconnect": "Disconnect events",
+            "connect": "Connect GitHub App"
           }
         },
         "unresolved": "Unresolved review threads: {{count}}",
@@ -17083,7 +17102,11 @@
             "payments": "Payments",
             "checkout": "Checkout",
             "invoices": "Invoices",
-            "subscriptions": "Subscriptions"
+            "subscriptions": "Subscriptions",
+            "reviewComments": "Review comments",
+            "reviewThreads": "Review threads",
+            "checkRuns": "Check runs",
+            "commitStatus": "Commit status"
           },
           "actions": {
             "all": "All changes",
@@ -17105,7 +17128,12 @@
             "failed": "Failed",
             "paid": "Paid"
           }
-        }
+        },
+        "repositoriesLabel": "Repositories",
+        "repositoriesHint": "Enter owner/repository, one per line. Only repositories authorized for this GitHub App can trigger the task.",
+        "repositoriesInvalid": "Enter 1–50 valid repository names in owner/repository format.",
+        "githubAppHint": "Connect GitHub App on the computer running this task and authorize these repositories. No separate Webhook URL or secret is needed.",
+        "githubAppPaused": "This task is paused. Events will not start it."
       },
       "trigger": {
         "label": "Trigger mode",
@@ -17919,6 +17947,9 @@
       },
       "pluginCreator": {
         "description": "Create, edit, debug, and package Cindy plugins, or publish them when requested."
+      },
+      "themeCreator": {
+        "description": "Create and verify Cindy colors, visual assets, and appearance settings."
       }
     },
     "common": {
@@ -19038,7 +19069,7 @@
     "exit": "Exit Plan Mode"
   },
   "globalDrop": {
-    "cindyHint": "Drop to install plugin",
+    "cindyHint": "Drop to import Cindy file",
     "cshareHint": "Drop to import shared session"
   },
   "sessionShare": {
@@ -21161,6 +21192,13 @@
     "detail": "Request from {{device}}\nPurpose: {{purpose}}\n\nEnabling this setting lets devices on your account control this computer, including running tasks and accessing files. It stays enabled until you turn it off in Settings.",
     "decline": "Not Now",
     "enable": "Enable Remote Control"
+  },
+  "cindyFiles": {
+    "unsupported": "This version does not support this file. Update Cindy and try again.",
+    "invalid": "This Cindy file is invalid or damaged. Get a new copy.",
+    "failed": "Could not import this file. Try again.",
+    "themeInstalled": "Theme added. Select it in Appearance settings.",
+    "refreshFailed": "Theme installed, but the list could not refresh. Refresh it in Appearance settings."
   },
   "modelGroups": {
     "title": "Model groups",
