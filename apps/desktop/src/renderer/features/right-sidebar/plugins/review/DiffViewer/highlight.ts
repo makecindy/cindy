@@ -1,4 +1,5 @@
 import type { DiffRenderRow } from './diffRows';
+import { detectRenderable } from '../../../../../lib/textPreview';
 
 export const HIGHLIGHT_MAX_LINE_LENGTH = 1000;
 export const HIGHLIGHT_MAX_DIFF_CHARS = 200_000;
@@ -82,7 +83,8 @@ export function languageFromPath(path: string): string {
     yaml: 'yaml',
     yml: 'yaml',
   };
-  return map[ext] ?? ext;
+  const renderable = detectRenderable(path);
+  return map[ext] ?? (renderable.kind === 'code' ? renderable.lang : ext);
 }
 
 export function shouldSkipHighlightLine(content: string): boolean {
