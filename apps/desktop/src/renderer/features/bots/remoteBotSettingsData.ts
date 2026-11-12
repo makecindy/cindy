@@ -137,7 +137,7 @@ export function parseRemoteBotSettings(
     !id(resource.revision, 1_024) ||
     !isText(resource.display?.title)
   )
-    throw new Error('Invalid teammate settings');
+    throw new Error('Invalid buddy settings');
   const actions = new Map<string, RemoteActionDescriptor>();
   if (Array.isArray(resource.actions) && resource.actions.length <= 256) {
     const duplicates = new Set<string>();
