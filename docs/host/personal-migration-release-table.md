@@ -41,7 +41,7 @@
 | 10 | 读图钩子、电脑操作防护、Bash 并发闸门 | `claudeHooks` | 未做（第 6 步） | — | 无 |
 | 11 | Codex 任务的记忆 | `apps/host/src/agent/memory.mjs:70` TODO | 未做（第 7 步）。m1-cp5c 起 Codex 的 `makerMemoryEnabled` 按用户设置读取，与桌面相同；第 7 步核实 Codex 经 MCP 桥实际拿到记忆工具 | — | 无 |
 | 12 | 本机附件 | `normalizeAttachments.ts` | 部分：Codex 本机路径有自动证据；Claude、Pi 与输入框粘贴路径未验证（第 9 步） | `codex-runtime.e2e.mjs` | 无 |
-| 13 | 用量与花费记录 | `maker-ipc/session*TurnUsage.ts` 与四个广播模块 | 未做（2e，M1 最后）。Host 期间不记录用量，事后补不回来，必须在迁移前完成 | — | 无 |
+| 13 | 用量与花费记录 | `maker-ipc/session*TurnUsage.ts` 与四个广播模块 | 未做（2e，M1 最后）。Host 期间不记录用量，事后补不回来，必须在迁移前完成。2e 的边界还包括：复核调用的用量（第二节）；Codex 作废后“需要恢复”的账号接口确认（桌面 `verifyRecoveryWithAccountRpc`，由用量读取发起），2e 完成时对照测试补上这一步 | — | 无 |
 | 14 | 账号与供应商就绪、provider 冻结、model interface | 桌面启动钩子第 ③④⑤ 步 | 已对齐（m1-cp2b，就绪检查方式见第二节） | Host `start-options.test.mjs` | 无 |
 | 15 | 订阅 Fast 策略、价格档 | 桌面启动钩子第 ⑥⑩ 步 | 已对齐（m1-cp2b） | Host `start-options.test.mjs` | 无 |
 | 16 | 可选目录（账号过滤、订阅池投影） | `getDesktopSelectableCatalog` | 已对齐（m1-cp2c） | desktop `subscriptionPoolCatalog.test.ts`；Host `model-context.test.mjs` | 无 |
@@ -78,10 +78,10 @@
 | 回环代理的入站凭据 | 代理现有的会话与受邀者检查 | 在同样的检查之外，Host 的回环代理要求入站凭据：Pi 会话 token、当前网关 key，或运行时发给自家 Claude Code 的密钥（每个运行时随机 32 字节，只在内存，经环境变量交给 CLI，owner 变更时更换）；其余一律 401，公开的占位常量不算凭据 | 多一道入站门。受邀者路由令牌也是合法入站凭据，Host 现在不接远程任务所以没放行；**M3 接远程任务时要加进放行名单**，否则受邀者请求会被挡掉。m1-cp9 起这三类放行保持不变：经 `ANTHROPIC_CUSTOM_HEADERS` 只认密钥的收紧，已验证主请求与子代理请求带头，分类器与 count_tokens 两类未能触发；第 4 步（m1-cp12）结论：这两类请求只在 Claude 订阅登录的任务里出现，验证需要真实的订阅登录（假登录在 macOS 上可能读写系统钥匙串），M1 内不做，保持三类放行 |
 | Codex 回环代理的入站凭据 | 代理现有的路由与受邀者守门 | 在同样的检查之外，Host 的 Codex 回环代理（主代理、各模式的控制面代理、自定义上下文与受邀者代理）要求入站凭据：本运行时发给自家 Codex 进程的令牌（每个运行时随机 32 字节，只在内存，经环境变量交给 Codex，启动参数里只有变量名，常量时间比较，转发前删掉，上游看不到）；其余一律 403，不回 401（Codex 把 401 当登录过期，会去刷新并作废登录）。任务自己的工具命令能读到这个变量；令牌只在本运行时的回环代理上有效，运行时关闭即失效 | 多一道入站门。受邀者任务的 Codex 也由 Host 本机拉起、同样带令牌，**M3 接远程任务时核对** |
 | 与系统 Codex 登录对账 | 已打包桌面（正式版与个人版，个人版是打包后安装的版本）读 `~/.codex/auth.json`；未打包桌面只认 Release profile 的登录，或用它的只读快照 | 安装版 Host 读 `~/.codex/auth.json`，与已打包桌面同一条路；源码运行（开发、测试、沙箱）一律不对账，识别不了按源码运行；测试只能用 `CINDY_HOST_TEST_SYSTEM_CODEX_AUTH` 给一个隔离 HOME 里的绝对路径，安装版忽略它 | 对应桌面“开发版不碰系统登录”；host-usage 沙箱里迁移带来的那条链接保持原样，不用它跑这部分 |
-| 作废后“需要恢复”的收口 | 用量读取里的账号接口调用成功后清除（`verifyRecoveryWithAccountRpc`） | Host 在 2e 之前没有这次调用；标注一直保留到在 Cindy 里显式登录 | 只是登录态上的标注，不挡任务；2e 接上用量读取时一起接 |
+| 作废后“需要恢复”的收口 | 用量读取里的账号接口调用成功后清除（`verifyRecoveryWithAccountRpc`） | Host 在 2e 之前没有这次调用，标注一直保留到在 Cindy 里显式登录。实际效果：用户在系统里重新登录之后，这份登录在 Host 上可用（读登录态为已登录、OAuth；任务启动拿到环境；订阅桥读到新令牌），只是带“需要恢复”的标注；maker-core 与 Host 都不因这个标注拦截任务 | 只是标注；2e 接上用量读取时一起接，见第 13 行（`codex-system-login.test.mjs`） |
 | 认领绑定之后的收口 | 重置 openai 模型自动刷新冷却、补拉 Codex 模型、让 Pi 环境失效（`setOnOAuthBindingClaimed`） | 只让 Pi 的 MCP 桥失效 | Host 没有前两套机制 |
 | 标记写不进时的进程内兜底 | 进程内继续抑制（`memoryOnlyInvalidatedSystemCredential`） | Host 每次读标记，不留进程内状态；标记写不进时走已有的撤销授权兜底 | 与桌面重启之后相同 |
-| 作废时没有凭据代次、凭据为共享系统登录 | 记 unknown 范围，不带指纹 | 用当前文件的指纹记 system-shared（24b 起的写法） | 已知差异，交审核决定是否对齐 |
+| 作废时没有凭据代次、凭据为共享系统登录 | 引擎上报（带上下文）时记 unknown 范围、不带被拒凭据的指纹；订阅桥上报（不带上下文）时按检测到的范围 | 相同（m1-cp14 起；之前用当前文件的指纹记 system-shared） | 无差（`hostCodexSystemLoginParity.test.ts` 两种上报） |
 | 客户端模式下两个进程同时对账 | 单进程 | 窗口进程本地读 Codex 登录态时（用量、供应商服务、Pi 鉴权）也会对账，与 Host 指向同一个 codex-home/auth.json。relink 是同一目标的原子 rename，两边最终形态一致；一边作废（删链接、写标记）时另一边同时重新链接，另一边内存里没有抑制，可能把链接建回来，但两边读登录态都按标记报作废 | 留给 M4 与交接任务一起处理 |
 | 代理的进程内登记在 owner 变更时 | 路由登记随 app 生命周期常驻 | 代理运行时关闭时，按它服务过的任务 id 清掉路由登记与后台活动；Pi 会话 token 用同一撤销函数 | Host 比桌面严：Host 跨 owner 长期运行，M2 还会把读路由登记的通道开出去 |
 | Pi 思考开关记忆（M2 之前） | 读渲染层镜像 | 镜像为空 | 用模型默认值 |
@@ -146,6 +146,8 @@
 | 通道清单重新生成（合并 main 后为 1466 个） | 在下一个确实需要的检查点提交，写明新增的 10 个通道及归类 |
 | 带界面的验证 | 用户已允许（隔离沙箱、复用 host-usage）；2e 之前客户端模式只做导航与读取 |
 | 测试纪律：会碰到 Codex 登录的运行 | host-usage 沙箱的 codex-home/auth.json 链着本机真实的 Codex 登录，Host 在那里走到 Codex、订阅桥或作废逻辑就可能经链接改写它。凡是会让这些跑起来的运行，一律用 HOME 隔离、假登录的 profile；host-usage 只做不触发这些路径的只读检查，拿不准就不用 |
+| 测试纪律：用发布构建跑 Host | 发布构建（带发布清单）会被认成安装版，与运行它的系统用户的 `~/.codex/auth.json` 对账、链接（与打包后的桌面在沙箱 profile 里的行为相同；m1-cp13 之前 Host 不读系统登录）。凡是用发布构建跑 Host 的测试（验证安装包、M4 的联合验收等），HOME 必须隔离 |
+| 移交交接任务：发布构建与系统 Codex 登录 | 上一行的情况由审核方在 M1 发布时通知交接任务 |
 | 负载下超时：`apps/desktop/src/main/maker-host/__tests__/authAdaptersImportPurity.test.ts` | main 上已有的测试，自带 20 秒超时。m1-cp6 把 cindy-brain、maker-host、plugin-market 三个目录一起跑时超时，单独跑 6 秒通过。不归本分支 |
 | 基线失败：`apps/desktop/src/main/maker-ipc/__tests__/botLifecycleService.test.ts` 10 项 | 报 `SqliteError: no such table: mcp_app_view_states`（`deleteDeletedSessionViewStates`）。对照方法：把本分支改过的桌面源码换回合并的 main 版本（7eaf7788de）、删掉新增模块后单跑该文件，同样 10 项失败，判为 main 上原有问题。合并 main 后若自行恢复，删掉这一行 |
 | 待定：随包插件在 Host 不标内置 | 桌面的 GhostManager 带 `isTrustedBundledId`（`resources/builtin-ghosts` 下 official、xd 两组种子的 id），根命名空间里的这些安装标 `builtin`；Host 的 `createHostGhostManager` 没有这个选项，任何安装都不标。后果：首方事实的内置官方分支在 Host 上不成立，随包插件按非内置判定（其 Skill 不标官方，依赖内置身份的首方特权被拒）。3c 之前就是这样；也因此 3c 的查找收紧在 Host 上实际只改变托管 Skill 清单。种子 id 从哪里来（Host 发布包不含 `builtin-ghosts`）需要方案，**迁移前必须有结论** |
