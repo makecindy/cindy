@@ -77,7 +77,7 @@ const { scope, services } = JSON.parse(result.content.find(item => item.type ===
 
 动态安装和开发迭代继续走现有 Forge 安装所选实例的流程，同版本更新亦可；不要经宿主工具入口管理其他插件。
 批准版本、启用状态和账号变化使旧调用失效。逻辑页退出和 Node Worker 显式停止走各自宿主的同一资源清理入口，
-释放网络连接、文件监听、终端和电脑观察/驱动连接；旧电脑快照不能用于新一轮操作。
+释放文件监听、终端和电脑观察/驱动连接；旧电脑快照不能用于新一轮操作。
 已注册的浏览器执行端继续由原 bridge 的 reconcile/prepareUpdate 接管，用户选择不被插件代码替代。
 持久数据仍按原卸载、换源和作品库规则处理；运行资源退出本身不删除 KV、凭证或作品。
 
@@ -107,7 +107,8 @@ const document = await cindy.host.call('cindy_docs', 'make_docx', {
 为本插件私有文件目录；文档不能用路径参数越界。需要读取产物字节时另声明 `fs:true`，
 通过 `cindy.fs({op:'read',root:'data',path:'documents/report.docx'})` 读取；不能从宿主内部路径获取其他数据。
 SSH 使用当前账号已配置的连接池，沿用原连接管理和风险确认，私钥或认证值不进入插件。
-每个执行 Host 必须已提供对应服务；Node Host 未装配浏览器、电脑、SSH 或文档时返回
+每个执行 Host 必须已提供对应服务；Node Host 复用已有 browser/computer 平台 provider，
+其连接、开关和输入门禁保持生效；未装配的 scheduler、SSH 和文档服务返回
 `UNSUPPORTED_CAPABILITY`，不会因 manifest 声明自行安装或启动第二套实现。
 
 媒体生成继续使用已有 `cindy.media` / 模型目录接口；当前没有独立媒体 MCP server，
@@ -228,7 +229,6 @@ Cindy 客户端在宿主对话框中回答；未连接支持确认的客户端�
 `history` 的本机查询与 `terminal` 已接通，其他组须以执行 Host 的工具目录和实际回执为准。
 Node Host 已提供的 `browser/computer` 平台 provider 同时接入 Agent 与插件入口，不另建浏览器或电脑实现。
 浏览器后端和电脑执行仍取决于原平台端口、已连接的客户端及开关；缺少桌面输入协调器时不能执行原生输入。
-已保存凭证的既有引用可由 Node Host 通过共享管理器注入，撤回来源后拒绝；建立引用仍只在可信 Desktop 详情页完成。
 需要定时任务时使用已提供调度器的执行宿主，不循环重试不支持结果。
 
 ## 完整历史与附件

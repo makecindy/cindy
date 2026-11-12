@@ -31,8 +31,6 @@ import {
 } from '../_generated/leaf/src/infra/net/ssrf.js';
 
 export { SsrFBlockedError } from '../_generated/leaf/src/infra/net/ssrf.js';
-export { isPrivateOrLoopbackIpAddress } from '../_generated/packages/net-policy/ip.js';
-export { isLoopbackHost } from './gateway-runtime.js';
 export type { LookupFn, SsrFPolicy } from '../_generated/leaf/src/infra/net/ssrf.js';
 
 export interface GuardedFetchOptions {

@@ -6,34 +6,19 @@
   HTTPS 地址，无需 `network` 字段。主机仍强制 URL、SSRF、超时、体积与
   重定向守门，但不会向未声明 host 注入任何 Host 托管凭证。
 - 脱离当前 Agent 调用的自主联网：声明 `network` 详单(§2)，只能访问
-  **白名单内的网络目标**。需要主机保险库凭证、OAuth 或动态连接时也必须
+  **白名单内的域名**。需要主机保险库凭证、OAuth 或动态连接时也必须
   显式声明，只有命中声明 host 才会注入。
 
-沙箱本身两种情况都零直连，请求统一由主机代发。
-
-`network.hosts` 中的普通域名和 `*.example.com` 只允许 HTTPS 默认端口，旧批准的范围不变。
-自定义端口、HTTP、本机和内网地址用精确 origin 声明，例如
-`"network": { "hosts": ["api.example.com", "https://api.example.com:8443", "http://127.0.0.1:8080"] }`。
-origin 只含协议、主机和端口，不带尾斜杠、路径、查询、片段、通配或内嵌凭证；IPv6 需方括号。
-新来源逐条进入安装/更新确认和详情页，跨协议或跨端口都算新增权限。Agent 的在途 callId
-不能免除这些声明，重定向每一跳也必须满足同样约束。
-
-自备 `source:'user'` 密钥的 `inject.hosts` 可精确引用完整 origin；旧域名注入不会扩到新端口。
-公网来源必须是 HTTPS/WSS。HTTP/WS 注入仅允许字面量私网/回环 IP、localhost 及其子域，且应处于可信网络。
-宿主按每一跳 URL 判断，不查 DNS；`http://gitlab.internal` 等内网主机名也须改用 HTTPS。
-Host 身份令牌和动态连接凭证继续只用于原 HTTPS 默认端口，不随新来源扩大。
-依赖此增量能力的包须检测请求结果；旧 Host 会拒绝新来源声明，不能靠改写为普通域名绕过。
-
-规则:
+沙箱本身两种情况都零直连，请求统一由主机代发。规则:
 
 ```js
 const r = await cindy.fetch({
-  url: 'https://api.example.com/v1/search?q=hello',  // 普通域名只允许 HTTPS:443；其它来源须精确声明
+  url: 'https://api.example.com/v1/search?q=hello',  // 仅 https、默认端口
   method: 'GET',            // 可选:GET(缺省)/ POST / PUT / PATCH / DELETE
   headers: { Accept: 'application/json' },  // 可选;Host/Cookie/Authorization 等由主机管,写了也不生效
   body: '{"q":"hello"}',    // 可选:仅 POST / PUT / PATCH / DELETE,≤256KB 文本
   timeoutMs: 30000,         // 可选:文本模式 1s–60s 缺省 30s;媒体模式 1s–300s 缺省 120s
-  as: 'text',               // 可选:'text'(缺省)/ 'media' / 'file' / 'library' / 'stream'
+  as: 'text',               // 可选:'text'(缺省)/ 'media'(响应是媒体,主机落仓,见下)
   label: '',                // 可选:仅媒体模式,入账备注/画廊 caption(≤200 字符)
   callId: msg.callId        // Agent tool-call 内务必带上，同时作为严格在途授权绑定
 });
@@ -380,61 +365,8 @@ maxConnections 收紧到 1–8);token ≤4096 字符。新连接添加成功时�
 
 其它硬边界:每个插件同时在途 4 个请求;媒体取件/上传共用全局串行闸,同时只
 处理一单(忙时返回结构化"正忙",稍后重试即可);重定向最多 3 跳且逐跳重验
-白名单。长任务可用下面的流式连接，或用"提交 + 轮询"两个工具拆开做;在一次
+白名单;不支持流式/WebSocket。长任务用"提交 + 轮询"两个工具拆开做;在一次
 tool-call 内轮询时记得定期发 tool-progress 心跳续命(见 §4"长任务续命")。
-
-## 4.7.1 流式 HTTP 与 WebSocket
-
-`cindy.fetch({as:'stream'})` 在响应头到达后立即返回 `{ok:true,status,headers,connectionId}`，
-只接收 UTF-8 文本（含 SSE/NDJSON）；媒体下载继续使用 `as:'media'` 或 Library。
-HTTP 的来源、逐跳守门与凭证注入沿用本章规则。WebSocket 使用完整 `ws://` 或 `wss://`
-origin 声明，例如 `network.hosts:["wss://stream.example.com"]`，不会从旧 HTTPS 域名批准推导，
-也不跟随握手重定向。沙箱本身仍不能直连。
-
-```js
-const stream = await cindy.fetch({url:'https://api.example.com/events', as:'stream', callId:msg.callId});
-if (!stream.ok) throw new Error(stream.message);
-let cursor = 0;
-try {
-  for (;;) {
-    const part = await cindy.network.read({connectionId:stream.connectionId, cursor, waitMs:20000});
-    if (!part.ok) throw new Error(part.message);
-    if (part.resetRequired) throw new Error('连接历史已出现缺口，请按服务协议恢复');
-    for (const event of part.events) {
-      if (event.type === 'error') throw new Error(event.errorCode);
-      if (event.type === 'text') consume(event.data);
-    }
-    cursor = part.nextCursor;
-    if (part.closed) break;
-  }
-} finally { await cindy.network.close({connectionId:stream.connectionId}); }
-
-const socket = await cindy.network.open({url:'wss://stream.example.com/events', protocols:['example-v1']});
-if (!socket.ok) throw new Error(socket.message);
-try {
-  await cindy.network.send({connectionId:socket.connectionId, data:'hello'});
-  // 同一 read 游标接口返回 text/binary/end/error；binary 的 data 是 base64。
-  const reply = await cindy.network.read({connectionId:socket.connectionId, cursor:0, waitMs:20000});
-} finally { await cindy.network.close({connectionId:socket.connectionId}); }
-```
-
-WebSocket 自备密钥须显式限定到该完整 origin，由 Host 代注入；Host 身份与其它插件的凭证
-不会交给它。`send({binary:true,data:'…base64…'})` 发二进制帧；单帧接收上限 64KiB，
-发送 data 上限 64KiB（文本 UTF-8 字节或 base64 字符）。这些帧是瞬时协议数据，
-需要成为用户素材的媒体仍须交给宿主媒体入库，不自建媒体仓。
-
-连接与普通请求共用每插件在途上限；已结束的连接在显式 close 前仍占一个位置。
-每连接保留最多 1MiB/256 条事件；每次 read 有界返回，`nextCursor` 可重复读取，
-旧游标落后于缓冲时明确 `resetRequired:true`。`waitMs` 为 0–20000，零表示立即取现有事件；
-没有事件不等于结束。`closed:true` 表示终态已到达且本次游标已读完保留事件。
-读取或发送续期 5 分钟空闲窗口，遗弃的连接会被回收。插件停用、重载、安装变化、
-账号切换或 Host 关闭释放连接；带在途 callId 的流随原调用结束/Stop 释放。
-连接 ID 只属于当前执行 Host 与原插件，不能跨插件或新安装代次使用；不自动重连或重放。
-恢复后由调用方持有游标续读，缓冲缺口必须按上游协议处理。
-
-Node Worker 同样提供 `cindy.fetch` / `cindy.network`，走同一宿主代发与凭证注入。
-Node 此入口仅使用已声明网络权限，不接受插件自报 callId 来借用任务授权。
-旧 Host 没有 `cindy.network` 时应明确提示能力不可用，不改成直连或扩大域名声明。
 
 ### Library 下载与上传
 
@@ -466,46 +398,3 @@ upload.library 与 upload.hashes 二选一，最多 4 个文件，单件 64 MiB�
 缺省仅当 `callId` 对应工具在 `mcpApps.ui.tools` 中对模型可见（`visibility` 含 `"model"` 或省略）时带；
 `mcpAppsManual: true` 强制带（如 `load_view` 要片段），`false` 不带。只发往已声明主机，跳到其它主机即删；
 自带的同名头被剥除。开发版（0.0.0）、Node 工作进程与旧版 Cindy 不带：后端缺头时用缓存手册，按 sha256 缓存与校验。
-
-## 4.7.2 使用已连接的 OAuth 账号
-
-保留现有 `source:'oauth'`、OAuth 服务端点、scope 和注入范围声明。用户可以在 Cindy
-自有的插件详情区选择已连接的同服务账号，再通过宿主原生确认授权使用，不必重新登录。
-插件页面和 Node 不能枚举其它插件的账号，也不能代答这次确认。
-
-可选来源只来自当前账号、当前电脑中已批准且启用的插件。authorize/token 端点须相同，
-注入头名和格式一致，消费目标不能超出原来源的注入范围，所需 scope 不能超出账号记录的
-授权范围快照（旧账号没有快照时按原来源的声明比较）。确认会列出来源与记录的 scope，
-服务端仍决定账号的实际访问权限；Host 不会在复用时自动缩小原账号权限。
-不触发额外 OAuth scope 申请，也不向消费插件授予原插件的 broker 资格。
-
-`/oauth` 仍返回本插件的账号列表；引用账号可带 `reused:true`，只含原有账号视图元数据。
-默认账号、`authAccount` 和断开接口照常使用。Host 只保存原账号引用，refresh token、
-client 凭证和 access token 不复制进消费插件；刷新与 401 作废均走原账号管理器。
-原来源停用、断开、撤销或声明不再匹配时引用失效，不能静默换账号；Host 在取得令牌后、
-实际派发前和每次流读取时复核引用，撤销后的上传准备或流续读会被终止。
-在 Cindy 自有详情区停止使用只移除本插件的引用，原连接保留；插件停用时也可解除引用。
-
-Node Worker 使用 `cindy.fetch` 让 Host 代注入。`node.secretBindings` 不能把引用账号的
-令牌取成明文，会返回 `HOST_INJECTION_REQUIRED`；不要要求用户复制原账号凭证到新插件。
-设置页只有自有账号、没有引用账号时，既有 OAuth 和 Node 显式绑定语义不变。
-账号选择在执行电脑的 Cindy 详情页完成，其他客户端和 Node 可消费已配置引用，不能自报来源
-建立引用。旧 Host 仍使用原 OAuth 流程，旧插件与旧账号无需迁移或重配。
-
-### 已保存的 PAT 和其它网络凭证
-
-普通 `network.secrets`（缺省来源或 `source:'user'`）也可在同一详情区选择已保存的密钥。
-来源可以是同账号、同电脑中已批准且启用插件的普通网络凭证、`source:'gh-cli'` 的已保存
-备用 PAT，或 `network.connections` 中某条连接的 PAT；不读取 gh CLI 当前登录 token、
-Cindy 平台密钥、模型供应商密钥、OAuth client 凭证或其它插件的 Node 专用凭证。
-
-注入头名、格式及 `exchange` 声明必须一致，目标注入范围不能超过来源范围；连接 PAT
-只适用于它自身的精确域名。复用仍须用户在可信详情区选择并通过宿主原生确认。
-选择会替换目标插件当前填写的密钥；只在原有加密凭证存储中保存 Host 私有引用，原始值
-留在来源，不复制给目标。`cindy.fetch`、流式请求与 WebSocket 经同一个 networkSlot 注入；
-来源改钥后下一次请求使用新值，停用、删除来源或声明不再匹配即停止使用，不静默换来源。
-
-Node Worker 应调用 `cindy.fetch`；将这类引用用于 `node.secretBindings` 会返回
-`HOST_INJECTION_REQUIRED`。停止使用只移除目标引用，原来源的密钥或连接保留；删除失败
-会明确返回失败。引用不能作为另一个引用的来源。旧插件、普通密钥和原有 OAuth 账号
-无需迁移或重配；手机端建立引用尚不支持，仍在执行电脑的 Cindy 详情页操作。
