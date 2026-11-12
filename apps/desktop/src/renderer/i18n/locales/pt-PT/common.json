@@ -17868,6 +17868,7 @@
       "dingtalkBotDisconnectFailed": "Falha ao remover a associação do bot do DingTalk"
     },
     "errors": {
+      "piStartupCloudFile": "Um ficheiro de instruções disponível apenas na nuvem pode estar a atrasar o arranque do Pi: {{path}}. Descarrega este ficheiro no Finder, espera até estar disponível localmente e tenta novamente. O tempo limite excedido pode ter outra causa.",
       "openFileFailed": "Não é possível abrir o ficheiro no sistema",
       "emptyResponse": "O modelo não devolveu conteúdo. Tente novamente. Se o contexto for muito longo, mude de modelo.",
       "turnFailed": "A tarefa falhou (o modelo não devolveu detalhes do erro) — tente novamente.",

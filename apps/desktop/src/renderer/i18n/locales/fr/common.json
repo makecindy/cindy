@@ -17868,6 +17868,7 @@
       "dingtalkBotDisconnectFailed": "Échec de la dissociation du bot DingTalk"
     },
     "errors": {
+      "piStartupCloudFile": "Un fichier d’instructions uniquement dans le cloud peut retarder le démarrage de Pi : {{path}}. Téléchargez ce fichier dans le Finder, attendez qu’il soit disponible en local, puis réessayez. Le délai dépassé peut avoir une autre cause.",
       "openFileFailed": "Impossible d'ouvrir le fichier dans le système",
       "emptyResponse": "Le modèle n'a renvoyé aucun contenu. Réessayez. Si le contexte est très long, changez de modèle.",
       "turnFailed": "La tâche a échoué (le modèle n'a fourni aucun détail sur l'erreur). Veuillez réessayer.",
