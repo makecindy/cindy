@@ -1,4 +1,5 @@
 import { expect, it } from 'vitest';
+import { isGhostHostUiSettingValue } from '@cindy/plugin-protocol';
 import { createAppSettingsService } from '../service';
 import { createPluginSettingsSections } from '../plugins';
 
@@ -28,4 +29,33 @@ it('shares plugin overrides with KV, isolates namesakes and resets only register
   current = false;
   await expect(invoke('update', { size: 16 })).rejects.toThrow('revoked');
   expect(values.get('local__example')).toEqual({ private: 'keep' });
+});
+
+// Unit, #9987: upgrading a registered constraint must not block an unrelated
+// settings save. The existing case has only valid saved values; size=30 exceeds
+// the new max=20. Keep private keys and valid overrides at the real service entry.
+it('drops invalid registered overrides before saving another setting after an upgrade', async () => {
+  let saved: Record<string, unknown> = { private: 'keep', size: 30, enabled: false, label: 'custom' };
+  const settings = [
+    { id: 'size', title: 'Size', type: 'number' as const, default: 12, max: 20 },
+    { id: 'enabled', title: 'Enabled', type: 'boolean' as const, default: false },
+    { id: 'label', title: 'Label', type: 'string' as const, default: '' },
+  ];
+  const service = createAppSettingsService(createPluginSettingsSections([
+    { instance: 'local__example', title: 'Example', settings, assertCurrent() {} },
+  ], {
+    read: () => saved,
+    write: (_instance, next) => {
+      // Same registered-value guard used by the existing KV write port.
+      if (settings.some(field => Object.hasOwn(next, field.id) && !isGhostHostUiSettingValue(field, next[field.id]))) {
+        throw new Error('Invalid registered setting');
+      }
+      saved = next;
+    },
+  }));
+  expect(await service({ operation: 'get', section: 'plugins.local__example' }, async () => {}))
+    .toMatchObject({ state: { value: { size: 12, enabled: false, label: 'custom' } } });
+  expect(await service({ operation: 'update', section: 'plugins.local__example', patch: { enabled: true } }, async () => {}))
+    .toMatchObject({ state: { value: { size: 12, enabled: true, label: 'custom' } } });
+  expect(saved).toEqual({ private: 'keep', enabled: true, label: 'custom' });
 });

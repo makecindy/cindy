@@ -5075,7 +5075,9 @@ export function ChatInput({
     ? pluginCompletionItems.map(item => ({ id: `plugin-completion:${item.instanceId}:${item.providerId}:${item.id}`,
       label: `${item.label} · ${item.source}`, searchText: trigger.query,
       canRun: () => canInsertPluginCompletion(trigger.from, trigger.query, '@', pluginCompletionKey),
-      run: () => { editor?.chain().focus().command(({ tr }) => { tr.insertText(item.insertText); return true; }).run(); },
+      run: () => { editor?.chain().focus().command(({ tr }) => {
+        tr.insertText(item.insertText, trigger.from, tr.selection.from); return true;
+      }).run(); },
     })) : [], [pluginCompletionItems, pluginCompletionKey, trigger.kind, editor]);
 
   const atResources = useMemo(
@@ -5543,6 +5545,11 @@ export function ChatInput({
         return;
       }
       if (!editor) return;
+      if (entry.action.id.startsWith('plugin-completion:')) {
+        entry.action.run();
+        closeAtPanel();
+        return;
+      }
       const range = resolveEffectiveAtRange();
       if (!range) return;
       // 打开面板下一级页面的动作不把焦点还给编辑器：TipTap 的 focus 延后执行，焦点落回

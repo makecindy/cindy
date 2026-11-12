@@ -134,7 +134,9 @@ const props = {
 // New completion contract through the real editor/selection entry. The panel is
 // replaced only to select a returned candidate. Existing parser/bridge tests do
 // not prove text insertion or that receiving a result leaves the draft untouched.
-it.each(['@', '/'] as const)('inserts %s provider text only after choosing it', async trigger => {
+// #9987, unit: a caret inside @ab|suffix must preserve suffix after completion;
+// the end-of-query cases did not exercise the built-in whole-word deletion path.
+it.each([['@', ''], ['/', ''], ['@', 'suffix'], ['/', 'suffix']] as const)('inserts %s provider text only after choosing it, preserving suffix "%s"', async (trigger, suffix) => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   h.showPluginChoices = true;
   const ghost: InstalledGhost = { enabled: true, uiCapabilityApproved: true, dir: '/fixture',
@@ -146,12 +148,12 @@ it.each(['@', '/'] as const)('inserts %s provider text only after choosing it', 
   ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); h.ghosts = [ghost];
   h.providerCall.mockResolvedValue({ structuredContent: { items: [{ id: 'one', label: 'Reference', insertText: '<b>plain</b>' }] } });
   render(<PluginUiProvider><ChatInput {...props} sessionId={`completion-${trigger}`} deviceLinkDeviceId={null} onSend={vi.fn()} /></PluginUiProvider>);
-  await act(async () => { h.editor!.commands.setContent(`<p>${trigger}ab</p>`); h.editor!.commands.setTextSelection(4); });
+  await act(async () => { h.editor!.commands.setContent(`<p>${trigger}ab${suffix}</p>`); h.editor!.commands.setTextSelection(4); });
   await act(() => vi.advanceTimersByTimeAsync(201));
   expect(h.providerCall).toHaveBeenCalledWith(`completion-${trigger}`, expect.objectContaining({ op: 'plugin-action', input: { trigger, query: 'ab' } }));
-  expect(h.editor!.getText()).toBe(`${trigger}ab`);
+  expect(h.editor!.getText()).toBe(`${trigger}ab${suffix}`);
   fireEvent.click(screen.getByRole('button', { name: 'Reference' }));
-  expect(h.editor!.getText()).toBe('<b>plain</b>');
+  expect(h.editor!.getText()).toBe(`<b>plain</b>${suffix}`);
   expect(h.editor!.getHTML()).not.toContain('<b>plain</b>');
 });
 

@@ -41,7 +41,11 @@ export function createPluginSettingsSections(entries: readonly PluginSettingsEnt
       },
       update(patch) {
         entry.assertCurrent();
-        const next = { ...store.read(entry.instance), ...patch };
+        const next = { ...store.read(entry.instance) };
+        for (const field of entry.settings) {
+          if (Object.hasOwn(next, field.id) && !isGhostHostUiSettingValue(field, next[field.id])) delete next[field.id];
+        }
+        Object.assign(next, patch);
         entry.assertCurrent();
         store.write(entry.instance, next);
       },
