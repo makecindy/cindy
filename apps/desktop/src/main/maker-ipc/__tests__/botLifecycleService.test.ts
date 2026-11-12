@@ -56,7 +56,7 @@ function createDatabase(): Database.Database {
     -- The real deletion transaction also cleans up view state for deleted tasks.
     CREATE TABLE messages (id TEXT PRIMARY KEY);
     CREATE TABLE mcp_app_view_states (
-      message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+      message_id TEXT PRIMARY KEY NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
       session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
       server_id TEXT NOT NULL, server_revision TEXT NOT NULL, plugin_instance TEXT,
       state_json TEXT NOT NULL, byte_length INTEGER NOT NULL
