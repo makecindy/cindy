@@ -16,6 +16,7 @@ import {
 import { androidInstaller } from './androidInstaller';
 import type { AndroidInstallState } from './androidInstallController';
 import { indeterminateSweepRange, presentAndroidUpdate, type AndroidUpdatePresentation } from './androidUpdatePresentation';
+import { androidUpdateSheetActionsStyle, androidUpdateSheetFrameWidth } from './androidUpdateSheetLayout';
 
 const APP_ICON = require('../../assets/update/app-icon.jpg');
 const APP_ICON_SIZE = 48;
@@ -89,6 +90,7 @@ function AndroidUpdateCard({ state }: { state: AndroidInstallState }) {
         { paddingBottom: nativeSheet ? spacing.lg : Math.max(insets.bottom, spacing.md) + spacing.sm },
         // Short windows (landscape, split screen): the details scroll and the actions stay reachable.
         { maxHeight: nativeSheet ? nativeSheet.height : viewport.height - insets.top },
+        { width: androidUpdateSheetFrameWidth(Boolean(nativeSheet), viewport.width) },
       ]}
       testID="update.android"
     >
@@ -146,7 +148,7 @@ function AndroidUpdateCard({ state }: { state: AndroidInstallState }) {
         </View>
       </ScrollView>
 
-      <View style={styles.actions}>
+      <View style={styles.actions} testID="update.android.actions">
         <MainWindowActionButton
           grow
           numberOfLines={0}
@@ -239,7 +241,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     alignSelf: 'stretch',
     paddingHorizontal: SHEET_HORIZONTAL_PADDING,
     paddingTop: spacing.sm,
-    width: '100%',
   },
   // Foldable panes and floating windows use the compatibility shell, which has no Material container.
   cardCompatible: {
@@ -304,7 +305,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   ready: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg },
   readyText: { color: colors.textSecondary, flex: 1, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-  actions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xl, width: '100%' },
+  actions: { ...androidUpdateSheetActionsStyle, flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xl },
   // Secondary actions in a paired row are filled chips without a stroke (same as CompanionCardButton).
   // Wrapped labels keep breathing room inside the pill and stay centered.
   actionButton: { paddingVertical: spacing.sm },
