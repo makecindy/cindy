@@ -51,7 +51,7 @@ vi.mock('../../appSessionState.js', async (importOriginal) => {
 
 type HostInvalidation = {
   invalidateHostCodexLogin(input: {
-    codexHome: string; reason: string; failedAccessToken?: string; credentialGeneration?: string | null;
+    codexHome: string; reason: string; credentialGeneration?: string | null;
     credentialAttribution?: 'unproven'; loginInProgress?: () => boolean; hostBound?: boolean;
     onInvalidated?: (credentialScope: string) => void;
   }): Promise<string>;
@@ -144,7 +144,7 @@ describe('Host and desktop invalidate the profile login the same way', () => {
     const hostRejected = currentCodexCredentialGeneration(byHost.authPath);
     const announced: string[] = [];
     await expect(host.invalidateHostCodexLogin({
-      codexHome: byHost.codexHome, reason: 'token_revoked', failedAccessToken: 'fixture-token-1',
+      codexHome: byHost.codexHome, reason: 'token_revoked',
       credentialGeneration: JSON.stringify(hostRejected), onInvalidated: scope => announced.push(scope),
     })).resolves.toBe('invalidated');
     expect(announced).toEqual(['instance-isolated']);
@@ -215,7 +215,7 @@ describe('Host and desktop invalidate the profile login the same way', () => {
 
   it('the desktop reads a Host invalidation, then its own login that replaces it', async () => {
     const p = profile();
-    await host.invalidateHostCodexLogin({ codexHome: p.codexHome, reason: 'token_revoked', failedAccessToken: 'fixture-token-1' });
+    await host.invalidateHostCodexLogin({ codexHome: p.codexHome, reason: 'token_revoked' });
       const adapter = new DesktopCodexAuthAdapter();
     await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
       authenticated: false, errorReason: 'token_revoked',

@@ -157,7 +157,7 @@ export function createHostCodexRuntime(options: {
     invalidatePiEnvironment: () => options.mcp.invalidatePiEnvironment(),
     publish, warn: (message, fields) => log.warn(message, fields),
   });
-  const invalidateNative = async (reason: string, context?: { providerId?: string; credentialGeneration?: string | null; credentialAttribution?: 'unproven'; failedAccessToken?: string }) => {
+  const invalidateNative = async (reason: string, context?: { providerId?: string; credentialGeneration?: string | null; credentialAttribution?: 'unproven' }) => {
     check();
     await invalidateHostCodexLogin({ codexHome: path.join(options.profileDir, 'codex-home'), systemAuthPath, reason, ...context,
       // The engine reports with a context; the subscription bridge reports without one.

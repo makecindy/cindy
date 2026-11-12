@@ -51,7 +51,7 @@ test('the rejected current login is marked, unbound and removed, then announced'
   const rejected = currentCodexCredentialGeneration(p.authPath);
   const steps = [];
   const result = await invalidateHostCodexLogin({
-    codexHome: p.codexHome, reason: 'token_revoked', failedAccessToken: 'fixture-token-1',
+    codexHome: p.codexHome, reason: 'token_revoked',
     credentialGeneration: JSON.stringify(rejected),
     disposeLocalHost: async () => {
       steps.push(['dispose', fs.existsSync(p.authPath), fs.existsSync(path.join(p.codexHome, 'models_cache.json'))]);
@@ -81,7 +81,6 @@ test('the rejected current login is marked, unbound and removed, then announced'
 
 test('a credential replaced before the failure arrived is left alone', async t => {
   for (const late of [
-    { failedAccessToken: 'fixture-token-old' },
     { credentialGeneration: JSON.stringify({ dev: '1', ino: '1', size: 1, mtimeMs: 1, sha256: 'f'.repeat(64) }) },
   ]) {
     const p = profile(t);
@@ -102,7 +101,7 @@ test('independent accounts and logged-out profiles change nothing', async t => {
   const before = fs.readFileSync(p.authPath, 'utf8');
   let called = false;
   const result = await invalidateHostCodexLogin({ codexHome: p.codexHome, reason: 'token_revoked',
-    providerId: 'openai-account-fixture', failedAccessToken: 'fixture-token-1',
+    providerId: 'openai-account-fixture',
     disposeLocalHost: async () => { called = true; }, onInvalidated: () => { called = true; } });
   assert.equal(result, 'not-native');
   assert.equal(called, false);
@@ -164,7 +163,7 @@ test('a late failure after an explicit disconnect does not reopen the sign-in pr
     'user_disconnected', p.authPath), true);
   const marker = fs.readFileSync(getCodexAuthInvalidationMarkerPath(p.codexHome), 'utf8');
   let called = false;
-  const result = await invalidateHostCodexLogin({ codexHome: p.codexHome, reason: 'token_revoked', failedAccessToken: 'fixture-token-1',
+  const result = await invalidateHostCodexLogin({ codexHome: p.codexHome, reason: 'token_revoked',
     onInvalidated: () => { called = true; } });
   assert.equal(result, 'stale');
   assert.equal(called, false);
@@ -176,7 +175,7 @@ test('an unwritable marker falls back to revoking the native authorization', asy
   // A non-empty directory where the marker belongs makes the atomic rename fail.
   fs.mkdirSync(path.join(getCodexAuthInvalidationMarkerPath(p.codexHome), 'occupied'), { recursive: true });
   let scope = null;
-  const result = await invalidateHostCodexLogin({ codexHome: p.codexHome, reason: 'token_revoked', failedAccessToken: 'fixture-token-1',
+  const result = await invalidateHostCodexLogin({ codexHome: p.codexHome, reason: 'token_revoked',
     onInvalidated: value => { scope = value; } });
   assert.equal(result, 'invalidated');
   assert.equal(scope, 'unknown');
@@ -198,7 +197,7 @@ test('a login linked to a file outside the profile: neither invalidation changes
       if (link === 'hard') fs.linkSync(target, p.authPath); else fs.symlinkSync(target, p.authPath);
       const before = { bytes: fs.readFileSync(target, 'utf8'), stat: fs.statSync(target) };
       const result = await invalidateHostCodexLogin({ codexHome: p.codexHome, reason: 'token_revoked',
-        ...(attribution === 'attributed' ? { failedAccessToken: 'linked-token' } : { credentialAttribution: 'unproven', loginInProgress: () => false }) });
+        ...(attribution === 'attributed' ? {} : { credentialAttribution: 'unproven', loginInProgress: () => false }) });
       assert.equal(result, attribution === 'attributed' ? 'invalidated' : 'unproven', `${link}/${attribution}`);
       const after = fs.statSync(target);
       assert.equal(fs.readFileSync(target, 'utf8'), before.bytes, `${link}/${attribution}: content`);
@@ -209,6 +208,30 @@ test('a login linked to a file outside the profile: neither invalidation changes
       assert.equal(fs.existsSync(p.authPath) || isLink(p.authPath), attribution === 'unattributed', `${link}/${attribution}: profile entry`);
     }
   }
+});
+
+// As the desktop's invalidate(reason, context): the Host's entry takes exactly the context
+// maker-core sends (AuthAdapter.invalidate), nothing the desktop does not receive.
+test('the Host invalidation takes only the context maker-core reports', async () => {
+  const { createRequire } = await import('node:module');
+  const { fileURLToPath } = await import('node:url');
+  const root = fileURLToPath(new URL('../../../../', import.meta.url));
+  const ts = createRequire(path.join(root, 'apps/desktop/package.json'))('typescript');
+  const source = rel => ts.createSourceFile(rel, fs.readFileSync(path.join(root, rel), 'utf8'), ts.ScriptTarget.ESNext, true);
+  const members = type => type && ts.isTypeLiteralNode(type) ? type.members.map(member => member.name.getText()).sort() : null;
+  let core = null;
+  let host = null;
+  const visit = node => {
+    if (ts.isMethodSignature(node) && node.name.getText() === 'invalidate' && node.parameters.length === 2) core = members(node.parameters[1].type);
+    if (ts.isVariableDeclaration(node) && node.name.getText() === 'invalidateNative' && node.initializer && ts.isArrowFunction(node.initializer)) {
+      host = members(node.initializer.parameters[1]?.type);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source('packages/maker-core/src/interfaces/auth-adapter.ts'));
+  visit(source('apps/host/src/agent/codex-runtime.ts'));
+  assert.deepEqual(core, ['credentialAttribution', 'credentialGeneration', 'providerId']);
+  assert.deepEqual(host, core);
 });
 
 test('HOME stays empty: the system Codex login is never read or written', () => {

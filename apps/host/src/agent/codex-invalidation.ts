@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { timingSafeEqual } from 'node:crypto';
 import {
   isDurableDisconnectMarker,
   readInvalidatedSystemCodexAuthMarker,
@@ -28,11 +27,6 @@ const markerSystemPath = (codexHome: string, systemAuthPath: string | null | und
 type CredentialScope = 'instance-isolated' | 'system-shared' | 'unknown';
 
 export type HostCodexInvalidationResult = 'invalidated' | 'stale' | 'unproven' | 'not-native' | 'failed';
-
-const sameToken = (a: string, b: string) => {
-  const x = Buffer.from(a), y = Buffer.from(b);
-  return x.length === y.length && timingSafeEqual(x, y);
-};
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -76,8 +70,6 @@ export async function invalidateHostCodexLogin(input: {
   reason: string;
   /** Independent accounts are invalidated through the account store, never here. */
   providerId?: string;
-  /** The access token the server rejected, when the caller has it. */
-  failedAccessToken?: string;
   /** maker-core's credential generation (JSON of the rejected auth.json fingerprint). */
   credentialGeneration?: string | null;
   credentialAttribution?: 'unproven';
@@ -99,11 +91,6 @@ export async function invalidateHostCodexLogin(input: {
   }
   const current = currentCodexCredentialGeneration(authPath);
   if (!current) return 'stale';
-  if (input.failedAccessToken !== undefined) {
-    let token: unknown;
-    try { token = JSON.parse(fs.readFileSync(authPath, 'utf8')).tokens?.access_token; } catch { token = undefined; }
-    if (typeof token !== 'string' || !sameToken(token, input.failedAccessToken)) return 'stale';
-  }
   // As the desktop (auth-adapters.ts invalidate): the generation the engine captured is compared
   // with the current file. A changed file identity proves an outside atomic replacement, and a
   // login in progress (the desktop's open login cancellation window) is still finalizing the
