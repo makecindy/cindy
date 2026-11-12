@@ -11757,6 +11757,9 @@ describe('CodexAgent MCP thread context hooks', () => {
       { format: 'contextual allowed status', message: 'Error running remote compact task: {"code":"400","status_code":422}', partial: false, completedOnly: false },
       { format: 'structured retry rejection', message: 'Error running remote compact task: {"code":"400"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 400 } }, partial: false, completedOnly: false },
       { format: 'structured retry rate limit', message: 'Error running remote compact task: {"code":"400"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } }, partial: false, completedOnly: false },
+      { format: 'nested allowed statuses', message: 'Error running remote compact task: {"code":"400","status":400,"cause":{"status_code":422}}', partial: false, completedOnly: false },
+      { format: 'nested retry rate limit', message: 'Error running remote compact task: {"code":"400","status":429,"cause":{"status_code":400}}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } }, partial: false, completedOnly: false },
+      { format: 'nested shared retry rate limit', message: 'Error running remote compact task: {"code":"400","cause":{"code":"429"},"message":"request rejected (429)"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } }, partial: false, completedOnly: false },
       { format: 'additional details', message: 'Error running remote compact task', additionalDetails: '{"error":{"code":"400"}}', partial: false, completedOnly: false },
       { format: 'completion without error notification', message: 'Error running remote compact task: code: provider_invalid_request / 400', partial: false, completedOnly: true },
     ])('recovers LiteLLM 400 from $format without replaying completed work', async ({ partial, completedOnly, ...sample }) => {
@@ -11801,6 +11804,15 @@ describe('CodexAgent MCP thread context hooks', () => {
       { message: '{"code":"400","message":"upstream status=504"}' },
       { message: '{"code":"400","status":408}' },
       { message: '{"code":"400","status":409}' },
+      { message: '{"code":"400","status":400,"cause":{"status_code":504}}' },
+      { message: '{"code":"400","status":400,"cause":{"status_code":409}}' },
+      { message: '{"code":"400","status":400,"cause":{"status_code":429}}' },
+      { message: '{"code":"400","message":"HTTP 400 wrapping upstream HTTP 504"}' },
+      { message: '{"code":"400","message":"HTTP 400 wrapping code: 529"}' },
+      { message: '{"code":"400","cause":{"code":"429","upstream":{"code":"529"}}}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } } },
+      { message: '{"code":"400","message":"request rejected (429); request rejected (529)"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } } },
+      { message: '{"code":"400","type":"billing_error"}' },
+      { message: '{"code":"400","message":"credit balance too low"}' },
       { message: '{"code":"400","type":"authentication_error"}' },
       { message: '{"code":"400","type":"unauthorized"}' },
       { message: '{"code":"400","message":"Unauthorized"}', codexErrorInfo: 'badRequest' },
@@ -11849,6 +11861,9 @@ describe('CodexAgent MCP thread context hooks', () => {
       { message: '{"code":"400","status_code":504}', codexErrorInfo: 'other' as const },
       { message: '{"code":"400"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 504 } } },
       { message: '{"code":"400","type":"unauthorized"}', codexErrorInfo: 'badRequest' as const },
+      { message: '{"code":"400","status":400,"cause":{"status_code":504}}', codexErrorInfo: 'other' as const },
+      { message: '{"code":"400","type":"billing_error"}', codexErrorInfo: 'other' as const },
+      { message: '{"code":"400","cause":{"code":"429","upstream":{"code":"529"}}}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } } },
     ])('rechecks a recorded summary recovery against the authoritative error: %j', async (error) => {
       const { host, handle, events } = await start();
       try {

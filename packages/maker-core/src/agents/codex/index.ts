@@ -11003,16 +11003,21 @@ assertRouteCurrent();
       const info = error?.codexErrorInfo;
       // The shared redaction helper deliberately extracts only auth/rate-limit
       // statuses. Parse Codex's explicit HTTP failure wording locally as well.
-      const statusMatch = /\b(?:HTTP(?:\/\d(?:\.\d)?)?(?:\s+status)?|(?:unexpected|last)\s+status(?:\s+code)?)\s*:?\s*(\d{3})\b/i.exec(text);
+      const explicitStatuses = Array.from(text.matchAll(/\b(?:HTTP(?:\/\d(?:\.\d)?)?(?:\s+status)?|(?:unexpected|last)\s+status(?:\s+code)?)\s*:?\s*(\d{3})\b/gi), match => Number(match[1]));
       // A status field describes the upstream result; the wrapper's code does
       // not. Use the shared signal extractor's boundaries, without limiting
       // contextual statuses to its auth/rate-limit subset.
-      const contextualStatusMatch = /(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?)["']?\s*(?:[:=]\s*)?["']?(\d{3})["']?(?=$|[\s,;:}\]])/i.exec(text);
-      const contextualStatus = contextualStatusMatch ? Number(contextualStatusMatch[1]) : undefined;
+      const contextualStatuses = Array.from(text.matchAll(/(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?)["']?\s*(?:[:=]\s*)?["']?(\d{3})["']?(?=$|[\s,;:}\]])/gi), match => Number(match[1]));
+      // The shared helper returns one routing signal. Recovery must consider
+      // every occurrence of its existing status fields and rejection phrase.
+      const sharedStatuses = [
+        ...Array.from(text.matchAll(/(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?|code)["']?\s*(?:[:=]\s*)?["']?(401|429|529)["']?(?=$|[\s,;:}\]])/gi), match => Number(match[1])),
+        ...Array.from(text.matchAll(/\brequest\s+rejected\s*\(\s*(401|429|529)\s*\)/gi), match => Number(match[1])),
+      ];
       // LiteLLM can carry the rejection only in its provider code or JSON code
       // field. Keep explicit HTTP/auth/rate-limit statuses authoritative.
       const liteLlmBadRequest = /\bcode\s*:\s*provider_invalid_request\s*\/\s*400\b|"code"\s*:\s*"400"/i.test(text);
-      const textStatus = statusMatch ? Number(statusMatch[1]) : signals.errorStatus ?? contextualStatus ?? (liteLlmBadRequest ? 400 : undefined);
+      const textStatus = explicitStatuses[0] ?? signals.errorStatus ?? contextualStatuses[0] ?? (liteLlmBadRequest ? 400 : undefined);
       // All HTTP-bearing wire variants carry the authoritative status, as in
       // the existing classifier; retry exhaustion is not necessarily a 429.
       const httpInfo: { httpStatusCode?: number | null } | undefined =
@@ -11020,7 +11025,13 @@ assertRouteCurrent();
           || tag === 'responseStreamConnectionFailed' || tag === 'responseStreamDisconnected'
           || tag === 'responseTooManyFailedAttempts') ? Object.values(info)[0] : undefined;
       const httpStatus = httpInfo?.httpStatusCode ?? textStatus;
-      const rejectedRequest = [400, 404, 405, 422, 500, 501, 502, 503].includes(httpStatus ?? 0);
+      const rejectionStatuses = [400, 404, 405, 422, 500, 501, 502, 503];
+      const rejectedRequest = rejectionStatuses.includes(httpStatus ?? 0);
+      // An outer rejection cannot hide a later disallowed upstream status.
+      const responseStatuses = [...explicitStatuses, ...contextualStatuses, ...sharedStatuses, httpStatus]
+        .filter((status): status is number => status !== undefined);
+      const disallowedStatus = responseStatuses.some(status => !rejectionStatuses.includes(status)
+        && !(status === 429 && compactRateLimit));
       // Match the existing provider quota contract: an outer 400 must not hide
       // a contextual upstream payment status. Bare numbers are not statuses.
       const paymentRequired = /(?:\b(?:http|status|code|error)\b[^0-9a-z]{0,10}402\b|\(\s*402\s*\)|\b402\s+payment\s+required\b)/i.test(text);
@@ -11030,13 +11041,17 @@ assertRouteCurrent();
       // A compact rejection is a provider failure, not a tool error. Preserve
       // the existing provider auth markers without widening the translator.
       const authenticationFailure = /invalid.{0,10}(api.?key|token)|authentication_error|unauthorized|api key not valid|令牌|鉴权失败/i.test(text);
+      // Billing depletion is terminal even when no generic quota marker exists.
+      const billingDepletion = /\b(?:insufficient_quota|billing_error|credit(?:s| balance)?\s+(?:depleted|exhausted|too low))\b/i.test(text);
       const uncertainTransport = tag === 'responseStreamDisconnected' || tag === 'responseStreamConnectionFailed'
-        || [contextualStatus, httpStatus].some(status => status === 408 || status === 504)
+        || responseStatuses.some(status => status === 408 || status === 504)
         || /timeout|timed out|ECONNRESET|ECONNREFUSED|ENOTFOUND|connection reset|network error|stream disconnected/i.test(text);
       return !uncertainTransport
+        && !disallowedStatus
         && !isAuthRelatedErrorMessage(text)
         && !authenticationFailure
         && !matchesDeterministicUsageExhaustionText(text)
+        && !billingDepletion
         && !paymentRequired
         && !forbiddenResponse
         && ((rejectedRequest && !signals.usageLimit) || compactRateLimit)
