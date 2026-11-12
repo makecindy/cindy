@@ -964,6 +964,8 @@ interface LayoutRootProps {
   sidebarExpansionReady?: boolean;
   /** The latest visibility change came from the sidebar toggle; session switches keep the window width. */
   rightTabsUserToggle?: boolean;
+  /** 侧栏当前所属的任务（全局为 ''）：就绪空档前后换任务时不当成用户开栏。 */
+  rightTabsSessionKey?: string;
 }
 
 export function LayoutRoot({
@@ -972,6 +974,7 @@ export function LayoutRoot({
   rightTabsCollapsed = false,
   sidebarExpansionReady = true,
   rightTabsUserToggle = true,
+  rightTabsSessionKey = '',
 }: LayoutRootProps = {}): ReactNode {
   // 幂等注册内置面板 —— 放组件体而非模块副作用:HMR / 测试 reset 后再渲染也能自愈。
   registerBuiltinPanels();
@@ -1014,6 +1017,7 @@ export function LayoutRoot({
         preferredWidth: entry.node.type === 'pane' ? entry.node.preferredWidth : undefined,
       }))),
     rightTabsUserToggle,
+    rightTabsSessionKey,
   );
   const rememberSidebarWidth = useRef<() => void>(() => undefined);
   rememberSidebarWidth.current = () => {

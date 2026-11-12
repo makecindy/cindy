@@ -144,3 +144,22 @@ it('keeps a programmatic reveal unexpanded across a route gap', async () => {
   expect(resize).not.toHaveBeenCalled();
   expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 800 });
 });
+
+// Bug: 就绪空档里换了任务（例如在设置页从系统岛跳到另一个任务），落到的那个任务的
+// 记忆状态不是用户这次要开栏，不能拉宽窗口；回到同一任务仍要重新展开。
+it('keeps the standalone width when a readiness gap lands on another task', async () => {
+  const resize = vi.fn(async (requested: number) => (requested > 0 ? 401 : 0));
+  window.electronAPI = { windowSidebarExpansion: resize } as never;
+  const { result, rerender } = renderHook(
+    ({ ready, session }) => useSidebarPresentation(root, false, ready, () => 400, true, session),
+    { initialProps: { ready: true, session: 'task-a' } },
+  );
+  await act(async () => undefined);
+  expect(resize).toHaveBeenCalledExactlyOnceWith(400);
+  await act(async () => { rerender({ ready: false, session: 'task-a' }); });
+  expect(resize).toHaveBeenLastCalledWith(0);
+  resize.mockClear();
+  await act(async () => { rerender({ ready: true, session: 'task-b' }); });
+  expect(resize).not.toHaveBeenCalled();
+  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 800 });
+});

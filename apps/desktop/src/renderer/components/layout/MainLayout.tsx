@@ -2036,6 +2036,7 @@ export function MainLayout() {
               suppressNonChatPanels={isSettingsRoute}
               sidebarExpansionReady={rightSidebarAvailable && rsbWindow.loaded && !rsbDetached && rightTabsRestored}
               rightTabsUserToggle={rightTabsUserToggle}
+              rightTabsSessionKey={rightSidebarSessionId ?? ''}
               rightTabsCollapsed={
                 !rightSidebarMounted || isRightSidebarCollapsed || rightSidebarForceCollapsed
               }
