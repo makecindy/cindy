@@ -97,6 +97,7 @@ vi.mock('../store.js', () => ({
 }));
 import {
   acquireSubscriptionAccount,
+  hasUnavailableSubscriptionPoolAccount,
   needsSubscriptionAccountHandoff as probeSubscriptionAccountHandoff,
   readSubscriptionPool,
   refreshSubscriptionPool,
@@ -758,6 +759,7 @@ describe('native account assignment on the executing computer', () => {
   it('re-reads a failed account snapshot instead of serving it for the whole success window', async () => {
     vi.useFakeTimers();
     try {
+      expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
       h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second')] };
       h.bindings.set('task:existing', { providerId: 'openai', accountId: 'second' });
       let cliReady = false;
@@ -768,6 +770,15 @@ describe('native account assignment on the executing computer', () => {
       });
       const send = () => acquireSubscriptionAccount('openai', 'gpt-6.1-sol', ['task:existing']);
       await expect(send()).rejects.toThrow('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE]');
+      // Cached evidence is for configured active accounts only. These pure
+      // projections do not trigger a CLI read or revive a disconnected pool.
+      expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(true);
+      h.pools.openai.disconnected = true;
+      expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+      delete h.pools.openai.disconnected;
+      h.pools.openai.accounts[1].paused = true;
+      expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
+      h.pools.openai.accounts[1].paused = false;
       // 窗口内仍复用失败快照：并发与连续重试不得反复 spawn 官方 CLI。
       await vi.advanceTimersByTimeAsync(1_000);
       await expect(send()).rejects.toThrow('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE]');
@@ -775,6 +786,7 @@ describe('native account assignment on the executing computer', () => {
       await vi.advanceTimersByTimeAsync(3_001);
       const lease = await send();
       expect(lease?.accountId).toBe('second');
+      expect(hasUnavailableSubscriptionPoolAccount('openai')).toBe(false);
       lease?.release();
     } finally { vi.useRealTimers(); }
   });

@@ -49,7 +49,7 @@
   `renderer/components/new-chat/SessionSubscriptionAccount.tsx` 与 `main/subscription-accounts/runtime.ts` 的
   `readSubscriptionSessionAccount`。
 - 任务账号读取临时失败时保留当前 owner 代次的已知结果；没有结果则隐藏其他账号并继续刷新，不能据此推断成默认账号。
-- 本机模型目录曾因 CLI 读取失败显示订阅来源未连接时，窗口重新聚焦、回到可见状态或恢复网络会重新读取；账号变更也触发目录刷新，避免账号已恢复而输入框仍沿用旧连接结论。复用原有目录联合刷新与代次保护，不新增轮询，不把单个订阅账号的故障升级为整个目录的错误。实现与回归见 `renderer/lib/localCatalogSnapshot.ts` 与 `renderer/__tests__/localCatalogSnapshot.test.ts`。
+- 本机模型目录因 CLI 临时读取失败显示订阅来源未连接时，Main 以可选的 `subscriptionReadUnavailable` 标记现有账号快照的失败证据。Renderer 复用原有有界恢复计时器、联合刷新与代次保护；即使没有新的窗口事件也会重读，持续失败时按原重试预算停止。重新聚焦、恢复可见或网络恢复可触发重读；未连接、主动断开、暂停或移除的来源不因此探测。隐藏时取消计时并停止恢复读取，卸载和 owner 切换后旧计时器失效。配置变化沿用既有 `maker.onProvidersChanged` 通知，不订阅包含额度、运行和租约变化的账号活动流；单个订阅账号故障不升级为整个目录错误。旧端缺少或忽略该标记，沿用原恢复行为，无新 IPC 通道或中转帧。实现与回归见 `renderer/lib/localCatalogSnapshot.ts`、`main/subscription-accounts/runtime.ts` 与 `renderer/__tests__/localCatalogSnapshot.test.ts`。
   同账号重新同步代次后重新读取。OpenAI 账号池中的 `chatgpt/` 桥接模型按去前缀的模型选择该账号原生额度桶，不把通用桶伪装成 WHAM。
 - Claude 历史定位（分叉、回退、导出、跨电脑转录复制和工作目录移动）按每个原生会话的账号绑定选择目录；新增账号缺失历史时不拿默认账号的同名文件替代。默认账号与未绑定的旧任务保持原有目录查找和恢复行为。
 - 选择发生在实际执行电脑的本机 Agent 入口；外层远程供应商组仅选择供应商/电脑，内部继续选择账号。账号身份、路径与凭证不传给组成员或访客。

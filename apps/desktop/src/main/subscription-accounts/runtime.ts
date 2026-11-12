@@ -474,6 +474,14 @@ export function hasConnectedSubscriptionPool(provider: SubscriptionProvider): bo
   const state = currentRuntime();
   return pool.accounts.some((a) => state.cache.get(keyOf(provider, a.id))?.auth.authenticated);
 }
+/** Cached read evidence only; disconnected/unconfigured/paused pools never request UI recovery. */
+export function hasUnavailableSubscriptionPoolAccount(provider: SubscriptionProvider): boolean {
+  const pool = readPool(provider);
+  if (!pool || pool.disconnected) return false;
+  const state = currentRuntime();
+  return pool.accounts.some(account => !account.paused
+    && state.cache.get(keyOf(provider, account.id))?.unavailable === true);
+}
 export async function disconnectSubscriptionPool(provider: SubscriptionProvider): Promise<void> {
   const pool = readPool(provider);
   if (!pool || pool.disconnected) return;
