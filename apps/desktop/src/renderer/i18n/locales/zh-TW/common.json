@@ -862,6 +862,7 @@
       "runningCount_other": "{{count}} 個任務執行中",
       "limitAria": "{{name}} 的並行上限",
       "limitOption_other": "同時 {{count}}",
+      "limitUnlimited": "不限制",
       "weightAria": "{{name}} 的權重",
       "weightOption": "權重 {{weight}}",
       "assignAria": "給 {{name}} 分配任務",
@@ -1813,7 +1814,8 @@
       "about": "關於",
       "imBot": "IM 機器人",
       "ghosts": "插件",
-      "cindyMake": "Cindy Make"
+      "cindyMake": "Cindy Make",
+      "modelGroups": "模型組"
     },
     "sections": {
       "user": "使用者",
@@ -1857,6 +1859,15 @@
     },
     "remote": {
       "title": "遠端機器",
+      "hostKeyError": {
+        "missing": "SSH 主機金鑰驗證尚未設定。連線已拒絕。",
+        "read": "Cindy 無法讀取已信任的主機金鑰：{{reason}}。連線已拒絕。",
+        "write": "Cindy 無法儲存已信任的主機金鑰：{{reason}}。連線已拒絕。",
+        "mismatch": "主機 {{host}} 的金鑰已變更（{{fingerprint}}），與 Cindy 先前信任的指紋不一致。這可能是伺服器重裝，也可能是中間人攻擊。連線已拒絕。",
+        "file": "主機金鑰信任檔案：\n{{filePath}}",
+        "repair": "Cindy 不讀取 ~/.ssh/known_hosts。舊指紋儲存在：\n{{filePath}}\n鍵名是 \"{{host}}\"。\n如果確認這次變更可信：先結束 Cindy，只刪除這個鍵，保留檔案與其他主機，再重新連線。新指紋會在首次連線時寫入。不要刪除整個檔案。",
+        "verifyChange": "請先向伺服器管理員核實金鑰變更，再更新主機金鑰信任記錄。"
+      },
       "footnote": "第一版僅支援 SSH 連線管理。在遠端執行 Agent 的能力將在後續版本中加入。",
       "viaAuth": "透過 {{label}} 認證",
       "readOnlyFromSshConfig": "連線資訊來自 SSH 設定",
@@ -2269,7 +2280,7 @@
         "desktopVisibilityHint": "透出 Cindy 後面的桌面與視窗，文字和控制項保持清晰。",
         "desktopBlurLabel": "桌面模糊",
         "desktopBlurHint": "模糊視窗後面的桌面，0 為關閉，數值越大越模糊。不支援強度調整的系統使用預設效果。",
-        "desktopBlurSwitchHint": "以 Windows 系統效果模糊視窗後面的桌面。需要 Windows 11 22H2 或更新版本。",
+        "desktopBlurSwitchHint": "以 Windows 系統效果模糊視窗後面的桌面。需要 Windows 11 22H2 或更新版本。關閉後需要重啟應用才能生效。",
         "blurLabel": "桌布模糊",
         "blurHint": "僅模糊桌布，0 為關閉。動態桌布開啟模糊後會增加顯示卡負載。",
         "motionLabel": "展示方式",
@@ -11677,6 +11688,8 @@
       "takeOverConflict": "{{name}} 已經換到「{{device}}」繼續了",
       "takeOverOffline": "連不上伺服器，暫時無法在這台電腦繼續",
       "takeOverFailed": "未能在這台電腦上接手 {{name}}",
+      "localCindyConflict": "接手的電腦上已有另一位 Cindy。請先在那位 Cindy 的設定中處理，或選擇其他主力電腦",
+      "localCindyConflictAction": "查看本機 Cindy 設定",
       "notEnabled": "目前的伺服器不支援更換主力電腦",
       "readOnlyNote": "這裡是雲端儲存的對話，只能檢視",
       "empty": "還沒有雲端對話",
@@ -14261,6 +14274,8 @@
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "這是舊版分享，開啟「僅使用 Agent-Net」後暫時無法使用。關閉這個開關就能繼續，也可以換成其他模型。",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型的可用帳號已達到用量上限。可改用其他模型，或等配額重置後繼續。",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "供應商組裡的電腦現在都不能執行這個任務：可能都離線、已暫停分配、正在冷卻，或沒有這個模型。可以到這個供應商的「遠端與分享」頁查看組內電腦。",
+      "REMOTE_AGENT_GROUP_FULL": "能執行這個任務的帳號或電腦都已達到並行上限。請等正在執行的任務結束，或在供應商設定中調高上限。",
+      "SUBSCRIPTION_ACCOUNTS_FULL": "能執行這個任務的帳號或電腦都已達到並行上限。請等正在執行的任務結束，或在供應商設定中調高上限。",
       "REMOTE_AGENT_DEVICE_LIMIT": "這台裝置保留的遠端任務數已達上限。可封存暫時不用的任務，或請遠端電腦的主人在「遠端與分享」中提高上限。",
       "REMOTE_AGENT_TOTAL_LIMIT": "遠端電腦保留的任務總數已達上限。請那台電腦的主人釋放暫時不用的任務，或在「遠端與分享」中提高上限。",
       "REMOTE_AGENT_RESUME_LOST": "之前在那台電腦上的對話沒能接上，Agent 會在沒有之前上下文的情況下繼續。",
@@ -19724,12 +19739,6 @@
       "from": "來自「{{name}}」的遷移",
       "closeChecklist": "關閉清單"
     },
-    "suggestion": {
-      "title": "用遷移助理從「{{name}}」遷移？",
-      "description": "可以把那台電腦上的插件、技能、設定和連線搬到這台電腦。需要在這台電腦上重新登入或授權的內容會列成清單。之後也可以在「設定 → 通用 → 遷移助理」中開啟。",
-      "confirm": "開啟遷移助理",
-      "later": "以後再說"
-    },
     "walkthrough": {
       "progress": "遷移清單 {{current}} / {{total}}",
       "open": "開啟",
@@ -19751,6 +19760,103 @@
         "allow": "允許",
         "deny": "拒絕"
       }
+    }
+  },
+  "firstRunGuide": {
+    "title": {
+      "new": "歡迎使用 Cindy",
+      "returning": "歡迎回來"
+    },
+    "stepsLabel": "引導步驟",
+    "close": "關閉引導",
+    "next": "下一步",
+    "skip": "略過",
+    "preparing": "正在準備…",
+    "steps": {
+      "legacy": "舊版資料",
+      "intro": "認識 Cindy",
+      "migration": "從舊電腦遷移",
+      "models": "連線模型",
+      "import": "匯入已有內容",
+      "finish": "完成"
+    },
+    "legacy": {
+      "title": "舊版本的資料已經帶過來了",
+      "body": "歷史任務、媒體檔案和 Agent 瀏覽器的登入狀態已遷到新版本，可以接著用。",
+      "note": "已授權的第三方金鑰與憑證不隨資料遷移，需要在設定中重新授權或填寫。"
+    },
+    "intro": {
+      "lead": "Cindy 是助你心想事成的 AI 助手。",
+      "work": {
+        "title": "把事情交給它做",
+        "body": "它在你的資料夾和應用程式裡直接完成工作，不只是回答問題。"
+      },
+      "connect": {
+        "title": "用你已有的模型和工具",
+        "body": "接上自己的訂閱或 API Key，插件和技能按需新增。"
+      },
+      "continue": {
+        "title": "在哪都能接著做",
+        "body": "在手機上發起、查看和繼續電腦上的任務。"
+      },
+      "start": "開始",
+      "next": "接下來"
+    },
+    "migration": {
+      "title": "把另一台電腦上的 Cindy 搬過來",
+      "body": "你的帳號下有一台電腦已經設定好了。遷移助理會把它的插件、技能、設定和連線複製到這台電腦；金鑰只在你在那台電腦上點「允許」後複製。",
+      "manualBody": "在另一台電腦上用過 Cindy 的話，遷移助理可以把它的插件、技能、設定和連線複製到這台電腦。",
+      "done": "已從「{{name}}」遷移",
+      "from": "舊電腦",
+      "to": "這台電腦"
+    },
+    "models": {
+      "title": "給 Cindy 接上模型",
+      "body": "下面兩種方式可以一起用。",
+      "cindy": {
+        "badge": "官方服務",
+        "body": "Cindy 官方提供的模型服務，登入後自帶，不需要開通。新帳號有免費贈送的餘額，用來試用；付費後幾乎所有模型都可以用，不付費時可用的模型範圍會受限。",
+        "active": "已包含在你的帳號裡，可以直接使用",
+        "freeBalance": "免費贈送的金額，歡迎試用"
+      },
+      "own": {
+        "title": "用你自己的方案",
+        "badge": "更加實惠",
+        "body": "已有 Claude、ChatGPT 等訂閱或 API Key？非常推薦接進來搭配使用，這樣體驗最好。",
+        "more": "其他供應商與 API Key",
+        "connected": "已連線"
+      }
+    },
+    "import": {
+      "title": "把這台電腦上已有的內容帶進來",
+      "body": "下面是在這台電腦的其他 AI 工具裡找到的內容。只讀取原始記錄，不會改動它們。",
+      "empty": "這台電腦上沒有找到可以匯入的內容。",
+      "tasksHeading": "任務",
+      "tasksHint": "勾選工具，把其中的任務接到 Cindy 接著做。",
+      "pick": "逐個挑選",
+      "started": "已開始在背景匯入，可在「設定 → 任務匯入」查看進度。",
+      "startFailed": "匯入沒有開始。可在「設定 → 任務匯入」重新匯入。",
+      "teammatesHeading": "夥伴",
+      "teammatesHint": "把其他工具裡的 Agent 連同記憶、技能和自動化匯入成夥伴。",
+      "importTeammate": "匯入成夥伴"
+    },
+    "finish": {
+      "title": "準備好了",
+      "legacy": "舊版本的資料已遷到新版本",
+      "modelReady": "模型已連線",
+      "modelMissing": "還沒有連線模型。新建任務時可以隨時連線。",
+      "importStarted": "其他工具的任務正在背景匯入",
+      "native": "你在 Claude Code、Codex 裡的技能和 MCP 可以直接使用，不需要匯入。",
+      "start": "開始第一個任務"
+    },
+    "resume": {
+      "label": "引導進行中 · {{step}}",
+      "back": "回到引導"
+    },
+    "settings": {
+      "title": "開始引導",
+      "description": "重新查看認識 Cindy、從舊電腦遷移、連線模型和匯入已有內容的引導。",
+      "open": "開啟引導"
     }
   },
   "forwardedRequest": {
@@ -19963,5 +20069,131 @@
     "detail": "請求來自「{{device}}」\n用途：{{purpose}}\n\n開啟後，同帳號裝置可以遠端控制這台電腦，包括執行任務和存取檔案。此設定持續有效，可隨時在設定中關閉。",
     "decline": "暫不開啟",
     "enable": "開啟遠端控制"
+  },
+  "modelGroups": {
+    "title": "模型組",
+    "description": "把模型供應商裡已有的幾個來源合成一個可選項。選模型時在「模型組」裡選它，由 Cindy 決定這次用哪個來源。",
+    "routes": "路線",
+    "routesDescription": "一條路線裡放幾個來源，開新任務時按選法挑一個。",
+    "sourceCount_other": "{{count}} 個來源",
+    "strategy": {
+      "expiring": {
+        "title": "快作廢的先用",
+        "hint": "剩得多又快重設的訂閱配額先用，不浪費；讀不到配額的來源排在後面。"
+      },
+      "order": {
+        "title": "按順序",
+        "hint": "排在前面的用不了，才用下一個。"
+      },
+      "rotate": {
+        "title": "輪流",
+        "hint": "每個新任務換下一個來源，平均分擔。"
+      },
+      "cheapest": {
+        "title": "最省錢",
+        "hint": "還有配額的訂閱先用，不另外花錢；其餘按標價從低到高，沒有標價的排在後面。"
+      }
+    },
+    "picker": {
+      "empty": "還沒有模型組。在設定裡把幾個來源合成一條路線，就能在這裡選它。",
+      "manage": "管理模型組"
+    },
+    "why": {
+      "expiringQuota": "還剩 {{left}}% 配額，{{reset}} 重設，先用它",
+      "expiring": "按配額排在最前",
+      "order": "排在最前面的可用來源",
+      "rotate": "這次輪到它",
+      "only": "現在只有它能用",
+      "soonest": "所有來源的配額都用完了，它最早恢復",
+      "soonestUntil": "所有來源的配額都用完了，它最早恢復（{{reset}}）",
+      "standby": "這次沒輪到",
+      "standbyQuota": "還剩 {{left}}% 配額，{{reset}} 才重設，先留著",
+      "off": "已在這條路線裡停用",
+      "unavailable": "沒有連線，或這個模型現在不可選",
+      "limited": "配額用完了",
+      "limitedUntil": "配額用完了，{{reset}} 恢復",
+      "tight": "5 小時配額快滿了，先不用",
+      "cheapest": "標價最低",
+      "cheapestFree": "訂閱還有配額，不另外花錢",
+      "noVision": "訊息裡有圖片，它看不了圖",
+      "exceptionImage": "訊息裡有圖片，只在能看圖的來源裡選",
+      "exceptionImageFallback": "訊息裡有圖片，但沒有能看圖的來源，照常選",
+      "exceptionHours": "這個時段改走「{{name}}」",
+      "separator": "；"
+    },
+    "settings": {
+      "newRoute": "新增路線",
+      "newRouteName": "新路線",
+      "routesEmpty": "還沒有路線。新增一條，把幾個來源放進去。",
+      "scopeNote": "模型組用於在這台電腦上開的新任務：開始時選定一個來源，任務進行中不會換。",
+      "back": "返回模型組",
+      "name": "名字",
+      "nameHint": "選模型時顯示這個名字。",
+      "routeShownAs": "選模型時在「模型組」裡顯示。",
+      "pick": "這次用哪個",
+      "effort": "推理強度",
+      "effortUnset": "不指定",
+      "effortHint": "選中的模型不支援這一檔時，按它的預設檔執行。",
+      "sources": "可以用的來源",
+      "sourcesHint": "可以放不同的模型；實際用了哪個會寫在任務裡。",
+      "sourcesEmpty": "還沒有來源。從下面加入已經連線的模型。",
+      "sourcesFull": "一條路線最多 {{count}} 個來源。",
+      "addSource": "新增來源",
+      "chooseModel": "選一個模型",
+      "notConnected": "沒有連線",
+      "moveUp": "上移",
+      "moveDown": "下移",
+      "remove": "移出這條路線",
+      "useSource": "讓這條路線使用 {{name}}",
+      "try": {
+        "title": "試一下",
+        "hint": "看看現在開新任務會用誰。不傳訊息，不花配額。",
+        "run": "看看會選誰",
+        "picked": "用它",
+        "standby": "備用",
+        "skipped": "跳過",
+        "unavailable": "這條路線裡現在沒有能用的來源，新任務會用你原來選的模型。"
+      },
+      "deleteRoute": "刪除這條路線",
+      "deleteRouteConfirmTitle": "刪除「{{name}}」？",
+      "deleteRouteConfirmDescription": "別的路線裡改走它的時段例外會一起刪除。已經開始的任務不受影響。",
+      "delete": "刪除",
+      "cancel": "取消",
+      "saveFailed": "沒有儲存成功，請重試。",
+      "exceptions": {
+        "title": "例外",
+        "hint": "按選法挑之前先看這些情況，從上到下。",
+        "empty": "還沒有例外，每個新任務都按上面的選法挑。",
+        "imageRule": "訊息裡有圖片時，只用能看圖的來源",
+        "hoursRule": "{{from}}–{{to}} 改走「{{name}}」",
+        "remove": "刪除這條例外",
+        "add": "新增例外",
+        "choose": "選擇一種情況",
+        "kindImage": "訊息裡有圖片",
+        "kindHours": "某個時段",
+        "from": "從",
+        "to": "到",
+        "useRoute": "改走",
+        "addHours": "新增",
+        "sameHour": "開始和結束不能是同一個時刻。",
+        "full": "最多 {{count}} 條例外。",
+        "needOtherRoute": "再建一條路線，才能按時段改走它。"
+      }
+    },
+    "overview": {
+      "mapTitle": "現在怎麼走",
+      "mapDescription": "從左到右：走哪條路線，最後落到哪個來源。點路線可以修改。",
+      "columnSources": "來源",
+      "columnEmpty": "還沒有",
+      "openRoute": "開啟路線「{{name}}」",
+      "recentTitle": "最近的選擇",
+      "recentEmpty": "還沒有任務用過路線。",
+      "keptOriginal": "裡面沒有現在能用的模型，沿用了原來選的模型。",
+      "keptOriginalShort": "沿用原來的模型",
+      "latest": "最近一次任務走的路"
+    },
+    "switchOffer": {
+      "action": "換到 {{model}} 繼續"
+    }
   }
 }
