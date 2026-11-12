@@ -589,7 +589,9 @@ describe('group timeline', () => {
     [true, 'fr', 'Tous', undefined], [false, 'fr', 'Tous', undefined],
     [true, 'de', 'Al', 'Alle Teammitglieder'],
     [true, 'fr', 'Tous', 'Tous les coéquipiers'],
-    [true, 'es', 'Todos', 'Todos los compañeros'],
+    // #10063: 'Todos' is the current humans-only broadcast label. Keep a
+    // word-boundary prefix of the legacy bot broadcast without using that reserved label.
+    [true, 'es', 'Todos los', 'Todos los compañeros'],
     [true, 'pt-PT', 'Tod', 'Todos os colegas'],
     [true, 'pt-BR', 'Tod', 'Todos os colegas'],
     [true, 'zh-Hans-x-lzh', '诸', '诸同僚'],
