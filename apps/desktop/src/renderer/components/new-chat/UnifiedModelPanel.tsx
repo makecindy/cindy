@@ -65,6 +65,7 @@ import {
   withMenuLabels,
 } from '@/components/ui/menu-row';
 import { ModelSourceUsageProvider } from './ModelSourceDetails';
+import { ModelPoolQuotaSummary } from './ModelPoolQuota';
 import type { ProviderGroupUsageOf, ProviderUsageScope } from './useProviderWeeklyQuota';
 import {
   anchorKey,
@@ -127,6 +128,8 @@ export interface UnifiedModelPanelProps {
   pinnedTop?: ReactNode;
   /** pinnedTop 当前有内容：搜索只命中它时不显示空结果。 */
   pinnedTopHasRows?: boolean;
+  /** 左侧栏「模型组」一格及其内容(新任务草稿才传)；不传就没有这一格。 */
+  modelGroupsView?: ReactNode;
   providers: readonly ProviderView[];
   /**
    * 供应商分组的显示顺序(设置 → 模型供应商的拖动序);缺省 = 目录首见序。
@@ -386,6 +389,7 @@ export interface UnifiedModelPanelProps {
 export function UnifiedModelPanel({
   pinnedTop,
   pinnedTopHasRows = false,
+  modelGroupsView,
   providers,
   providerOrder,
   agents,
@@ -580,11 +584,11 @@ export function UnifiedModelPanel({
 
   const localRailItems = remoteSources?.localRailItems;
   const remoteGroups = remoteSources?.groups;
+  const hasModelGroupsView = modelGroupsView !== undefined;
   const railItems = useMemo<UnifiedRailItem[]>(() => {
-    if (!localRailItems) return buildUnifiedRail(entries, undefined, providerOrder);
     // 远程 Agent:本机格按本机目录派生(此刻 entries 可能是某台电脑的目录),
     // 其后每台电脑一段远程供应商格。
-    return [
+    const items: UnifiedRailItem[] = !localRailItems ? buildUnifiedRail(entries, undefined, providerOrder) : [
       ...localRailItems,
       ...(remoteGroups ?? []).flatMap((group) =>
         group.providerIds.map((providerId) => ({
@@ -594,7 +598,11 @@ export function UnifiedModelPanel({
         })),
       ),
     ];
-  }, [entries, providerOrder, localRailItems, remoteGroups]);
+    if (!hasModelGroupsView) return items;
+    // 「模型组」紧跟「全部」：它和「全部」一样跨供应商，排在各供应商格之前。
+    const all = items.findIndex((item) => item.kind === 'all');
+    return [...items.slice(0, all + 1), { kind: 'model-groups' }, ...items.slice(all + 1)];
+  }, [entries, providerOrder, localRailItems, remoteGroups, hasModelGroupsView]);
   // rail 上的筛选目标消失(供应商断开 / 收藏清空)时回落「全部」,避免停在空视图。
   useEffect(() => {
     if (rail.kind === 'all') return;
@@ -1180,6 +1188,15 @@ export function UnifiedModelPanel({
         ? providerHeading(section.group.providerId)
         : '';
 
+  const quotaProviderOf = (section: (typeof sections)[number]): string | null => {
+    if (section.group?.type === 'provider') return section.group.providerId;
+    const first = section.rows[0];
+    if (!first || section.rows.some(row => row.agentDeviceId || row.entry.providerId !== first.entry.providerId)) return null;
+    if (sections.some(other => other.group?.type === 'provider' && other.group.providerId === first.entry.providerId)) return null;
+    const firstSourceSection = sections.find(other => other.rows.length > 0 && other.rows.every(row =>
+      !row.agentDeviceId && row.entry.providerId === first.entry.providerId));
+    return firstSourceSection === section ? first.entry.providerId : null;
+  };
   const rows = sections.flatMap((section) => section.rows);
   const hasRows = rows.length > 0;
 
@@ -1331,7 +1348,7 @@ export function UnifiedModelPanel({
         key={key}
         isolated
         providers={provider ? [provider] : NO_PROVIDERS}
-        scope={{ deviceId: rowDeviceId }}
+        scope={{ deviceId: rowDeviceId, taskId: rowDeviceId === providerUsage?.deviceId ? providerUsage.taskId : undefined }}
         {...(providerGroupUsage
           ? { groupUsageOf: (providerId: string) => providerGroupUsage(rowDeviceId, providerId) }
           : {})}
@@ -1488,7 +1505,9 @@ export function UnifiedModelPanel({
           )}
           {favoritesListDeviceId && remoteFavorites.error ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t(favoritesSyncFailureI18nKey(remoteFavorites.errorCode))}</div> : null}
           {pinnedTop && effectiveRail.kind === 'all' ? pinnedTop : null}
-          {remoteListPending ? (
+          {effectiveRail.kind === 'model-groups' ? (
+            modelGroupsView ?? null
+          ) : remoteListPending ? (
             remoteSources?.failure ?? (
               <div
                 role="status"
@@ -1520,11 +1539,13 @@ export function UnifiedModelPanel({
                     : {})}
                   // Shared menu group label (DESIGN §4 Menu text): 12px / 500 meta.
                   className={cn(
-                    'flex items-center gap-1.5 px-2.5 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta)]',
+                    'flex flex-wrap items-center gap-1.5 px-2.5 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta)]',
                     'pb-1 pt-2',
                   )}
                 >
                   <span className="truncate">{sectionLabel(section)}</span>
+                  {quotaProviderOf(section) && <ModelPoolQuotaSummary providerId={quotaProviderOf(section)!}/>}
+
                 </div>
                 {section.rows.map((row) => {
                   if (row.agentDeviceId) return renderDeviceFavoriteRow(row, false);

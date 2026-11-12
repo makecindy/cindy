@@ -1332,6 +1332,7 @@ describe('Pi package executable-code boundary', () => {
     const request = { action: 'set-enabled' as const, source, enabled: true };
     const grant = issuePiPackageMutationGrant(request);
 
+    // reset-modules: a second Main instance must not share the first instance's inspection cache or grants.
     vi.resetModules();
     const secondStore = await import('../pi-package-store.js');
     await fs.writeFile(
@@ -2107,14 +2108,25 @@ describe('Pi package executable-code boundary', () => {
 
     const store = await import('../pi-package-store.js');
     const snapshotRoot = path.join(runtime.userData, 'aggregate-package-budget');
-    const snapshot = await store.resolveManagedPiPackageResources({
-      snapshotRoot,
-      snapshotLimits: {
-        maxEntries: 7,
-        maxBytes: 1024 * 1024,
-        maxDurationMs: 10_000,
-      },
-    });
+    // 聚合上限的投影只留在内存（不落盘），listPiPackages 只能在 1 秒检查缓存内读到它；
+    // 缓存过期后的重新检查会按磁盘状态重置投影。慢速 Windows runner 上快照阶段会跨过
+    // 这 1 秒（#9850），所以固定时钟，让本用例只验证条目预算，不受耗时影响。
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+    let snapshot: Awaited<ReturnType<typeof store.resolveManagedPiPackageResources>>;
+    let listed: Awaited<ReturnType<typeof store.listPiPackages>>;
+    try {
+      snapshot = await store.resolveManagedPiPackageResources({
+        snapshotRoot,
+        snapshotLimits: {
+          maxEntries: 7,
+          maxBytes: 1024 * 1024,
+          maxDurationMs: 10_000,
+        },
+      });
+      listed = await store.listPiPackages();
+    } finally {
+      clock.mockRestore();
+    }
 
     expect(snapshot.skills).toEqual([
       expect.objectContaining({
@@ -2123,7 +2135,7 @@ describe('Pi package executable-code boundary', () => {
       }),
     ]);
     expect(snapshot.packageRoots).toEqual([path.join(snapshotRoot, '0')]);
-    await expect(store.listPiPackages()).resolves.toMatchObject({
+    expect(listed).toMatchObject({
       packages: [
         { enabled: true },
         { enabled: true, warning: 'inspection-limit' },
@@ -2146,6 +2158,7 @@ describe('Pi package executable-code boundary', () => {
       expect(state.snapshotUnavailablePackages).toEqual([]);
     }
 
+    // reset-modules: simulate a restart so only on-disk state survives; in-memory aggregate projections must not.
     vi.resetModules();
     const nextStore = await import('../pi-package-store.js');
     const recoveredRoot = path.join(runtime.userData, 'aggregate-package-recovered');
@@ -2240,6 +2253,7 @@ describe('Pi package executable-code boundary', () => {
 
     const replacementSource = 'npm:replacement-source-b';
     runtime.listOutput = `User packages:\n  ${replacementSource}\n    ${root}\n`;
+    // reset-modules: simulate a restart so only the persisted inspection-limit can be reused.
     vi.resetModules();
     const replacementStore = await import('../pi-package-store.js');
     await expect(replacementStore.listPiPackages()).resolves.toMatchObject({
@@ -2290,6 +2304,7 @@ describe('Pi package executable-code boundary', () => {
     delete state.snapshotUnavailablePackages[0]!.retryAfterEpochMs;
     await fs.writeFile(statePath, JSON.stringify(state));
 
+    // reset-modules: simulate the upgrade restart that reads a legacy v4 state file.
     vi.resetModules();
     const nextStore = await import('../pi-package-store.js');
     const recoveredRoot = path.join(runtime.userData, 'legacy-v4-recovered-snapshot');
@@ -2333,6 +2348,7 @@ describe('Pi package executable-code boundary', () => {
       return state.snapshotUnavailablePackages.some((entry) => entry.source === source);
     });
 
+    // reset-modules: simulate a restart so the reuse must come from the persisted negative cache.
     vi.resetModules();
     const manifestPath = path.join(root, 'package.json');
     const canonicalManifestPath = path.resolve(await fs.realpath(manifestPath));
@@ -2497,6 +2513,7 @@ describe('Pi package executable-code boundary', () => {
       '# Replaced installation\n',
     );
 
+    // reset-modules: simulate a restart so only the persisted inspection-limit can be reused.
     vi.resetModules();
     const replacementStore = await import('../pi-package-store.js');
     await expect(replacementStore.listPiPackages()).resolves.toMatchObject({
@@ -2563,6 +2580,7 @@ describe('Pi package executable-code boundary', () => {
           ? stableRootStat
           : originalStat(target, options as never)
       ));
+      // reset-modules: simulate a restart so only the persisted inspection-limit can be reused.
       vi.resetModules();
       const replacementStore = await import('../pi-package-store.js');
       const recoveredRoot = path.join(runtime.userData, 'mutated-installation-recovered-snapshot');
@@ -2822,6 +2840,7 @@ describe('Pi package executable-code boundary', () => {
     const firstStore = await import('../pi-package-store.js');
     await mutateAuthorized(firstStore, { action: 'set-enabled', source, enabled: true });
 
+    // reset-modules: a second Main instance shares userData and learns changes only through change tokens.
     vi.resetModules();
     const secondStore = await import('../pi-package-store.js');
     const secondListener = vi.fn();
@@ -3199,6 +3218,7 @@ describe('Pi package executable-code boundary', () => {
         });
         await expect(fs.stat(pendingFile)).rejects.toMatchObject({ code: 'ENOENT' });
 
+        // reset-modules: a peer Main instance must read the committed disable ledger from disk.
         vi.resetModules();
         const peerStore = await import('../pi-package-store.js');
         await expect(peerStore.listPiPackages()).resolves.toMatchObject({
@@ -3267,6 +3287,7 @@ describe('Pi package executable-code boundary', () => {
         });
         expect(JSON.parse(await fs.readFile(pendingFile, 'utf8'))).toEqual([source, pendingSibling]);
 
+        // reset-modules: a peer Main instance must read the pending enable ledger from disk.
         vi.resetModules();
         const peerStore = await import('../pi-package-store.js');
         await expect(peerStore.listPiPackages()).resolves.toMatchObject({
@@ -3317,6 +3338,7 @@ describe('Pi package executable-code boundary', () => {
     }
     let state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { disabledSources: string[] };
     expect(state.disabledSources).toEqual([source, sibling]);
+    // reset-modules: simulate a restart that recovers the disable ledger from disk.
     vi.resetModules();
     const recoveredStore = await import('../pi-package-store.js');
     await expect(recoveredStore.resolveManagedPiNativePackagePaths()).resolves.toEqual([root]);
@@ -4314,6 +4336,7 @@ describe('Pi package executable-code boundary', () => {
     const unsubscribe = firstStore.onPiPackagesChanged(listener);
     await new Promise((resolve) => setTimeout(resolve, 50));
 
+    // reset-modules: a second Main instance shares userData and learns changes only through change tokens.
     vi.resetModules();
     const secondStore = await import('../pi-package-store.js');
     await fs.writeFile(
@@ -4341,6 +4364,7 @@ describe('Pi package executable-code boundary', () => {
     const unsubscribe = firstStore.onPiPackagesChanged(listener);
     await new Promise((resolve) => setTimeout(resolve, 50));
 
+    // reset-modules: a second Main instance shares userData and learns changes only through change tokens.
     vi.resetModules();
     const secondStore = await import('../pi-package-store.js');
     try {
@@ -4395,11 +4419,24 @@ describe('Pi package executable-code boundary', () => {
       publishPeerRuntimeToken('before-replace');
       await waitForNotifications(1, 1_500);
 
-      await fs.rm(home, { recursive: true, force: true });
-      await fs.mkdir(home, { recursive: true });
-      // The first edge may arrive through events still queued on the old handle
-      // or through the fallback poll, depending on the platform.
-      publishPeerRuntimeToken('first-after-replace');
+      // On a loaded runner, token reads started by the old handle's events can
+      // finish after the directory is recreated and the next token is written,
+      // while the reattach attempt already failed on the missing directory.
+      // Hold those reads back so that ordering happens on every run.
+      const open = fs.open.bind(fs);
+      const slowTokenReads = vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+        if (String(args[0]).includes('change-token')) await new Promise((resolve) => setTimeout(resolve, 40));
+        return open(...args);
+      });
+      try {
+        await fs.rm(home, { recursive: true, force: true });
+        await fs.mkdir(home, { recursive: true });
+        // The first edge may arrive through events still queued on the old handle
+        // or through the fallback poll, depending on the platform.
+        publishPeerRuntimeToken('first-after-replace');
+      } finally {
+        slowTokenReads.mockRestore();
+      }
       await waitForNotifications(2, 5_000);
 
       // The watcher is reattached, so the next edge must not wait for the poll.
@@ -4434,6 +4471,7 @@ describe('Pi package executable-code boundary', () => {
       '',
     ].join('\n');
     const firstStore = await import('../pi-package-store.js');
+    // reset-modules: two independent Main instances must serialize through the shared lock.
     vi.resetModules();
     const secondStore = await import('../pi-package-store.js');
 
@@ -4462,6 +4500,7 @@ describe('Pi package executable-code boundary', () => {
       packages: [{ source }],
     });
 
+    // reset-modules: a second Main instance must not share the first instance's inspection cache.
     vi.resetModules();
     const secondStore = await import('../pi-package-store.js');
     runtime.listOutcomes = [
@@ -4506,6 +4545,7 @@ describe('Pi package executable-code boundary', () => {
       extensions: [path.join(canonicalRoot, 'extensions', 'index.ts')],
     });
 
+    // reset-modules: a second Main instance changes approvals behind the first instance's cache.
     vi.resetModules();
     const secondStore = await import('../pi-package-store.js');
     await fs.writeFile(

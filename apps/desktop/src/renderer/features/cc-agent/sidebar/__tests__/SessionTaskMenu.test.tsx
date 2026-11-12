@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { useRef, useState } from 'react';
+import { Profiler, useRef, useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -9,6 +9,8 @@ import { DropdownMenu, DropdownMenuItem, DropdownMenuTrigger } from '@/component
 import { SessionTaskMenu } from '../SessionTaskMenu';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
+import { __resetInstalledGhostsStoreForTest, readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
+import type { InstalledGhost } from '../../../../../shared/ghost';
 
 const state = vi.hoisted(() => ({
   host: vi.fn(),
@@ -21,10 +23,16 @@ const state = vi.hoisted(() => ({
   removeDevice: vi.fn(),
   writeClipboard: vi.fn(),
   setMuted: vi.fn(),
+  installed: [] as InstalledGhost[],
+  listGhosts: vi.fn(),
+  ghostsChanged: vi.fn(),
+  publishGhosts: null as null | ((value: { ghosts: InstalledGhost[] }) => void),
+  runtimePlugins: vi.fn(),
+  candidates: vi.fn(),
 }));
 vi.mock('../sessionNotificationMute', () => ({ setSessionNotificationsMuted: state.setMuted }));
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string, values?: { title: string; link: string }) => key === 'sharedTask.invitationMessage' ? `Join ${values?.title}\n${values?.link}\nOpen Cindy on mobile.` : key.startsWith('taskMigration.') ? key : key.split('.').at(-1) }),
+  useTranslation: () => ({ t: (key: string, values?: { title: string; link: string }) => key === 'sharedTask.invitationMessage' ? `Join ${values?.title}\n${values?.link}\nOpen Cindy on mobile.` : key === 'runtimePlugins.title' ? 'taskPlugins' : key.startsWith('taskMigration.') ? key : key.split('.').at(-1) }),
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   remoteProjectsStore: { removeDevice: state.removeDevice, getDeviceName: () => undefined },
@@ -81,7 +89,16 @@ async function openSharingSubmenu() {
   await screen.findByRole('menuitem', { name: 'manageMembers' });
 }
 beforeEach(() => {
+  __resetInstalledGhostsStoreForTest();
   vi.clearAllMocks();
+  state.installed = [{ manifest: { id: 'runtime', subscribe: { hooks: ['will-start-turn'] } } } as InstalledGhost];
+  state.listGhosts.mockImplementation(() => ({ ghosts: state.installed }));
+  state.ghostsChanged.mockImplementation(listener => {
+    state.publishGhosts = listener;
+    return () => { state.publishGhosts = null; };
+  });
+  state.runtimePlugins.mockResolvedValue({});
+  state.candidates.mockResolvedValue([]);
   setDataOwnerGeneration('owner');
   state.host.mockResolvedValue({ available: false, detail: null });
   state.account.mockImplementation(async ({ action, sharedTaskId }) => action === 'close' ? { closed: [sharedTaskId], failed: [] } : []);
@@ -91,10 +108,71 @@ beforeEach(() => {
   state.setMuted.mockResolvedValue(undefined);
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: state.writeClipboard } });
   Object.assign(window, {
-    electronAPI: { sharedTask: { host: state.host, account: state.account }, deviceLink: { openLink: state.openLink, closeLink: state.closeLink, invoke: state.invoke } },
+    electronAPI: { sharedTask: { host: state.host, account: state.account }, deviceLink: { openLink: state.openLink, closeLink: state.closeLink, invoke: state.invoke },
+      ghosts: { listSync: state.listGhosts, onChanged: state.ghostsChanged,
+        runtimePlugins: state.runtimePlugins, listControlPointCandidates: state.candidates } },
   });
 });
 afterEach(cleanup);
+
+// Unit, production menu/dialog: #9803 added an entry to every local task even
+// without a relevant plugin. A saved selection must remain clearable after uninstall.
+it('hides runtime plugins when no installed plugin declares a runtime control', () => {
+  state.installed = [];
+  render(<Harness />);
+  openMenu();
+  expect(screen.queryByRole('menuitem', { name: 'taskPlugins' })).toBeNull();
+  expect(labels()).toEqual(['pin', 'rename', 'muteNotifications', 'tags', 'copy', 'title',
+    'moveToProject', 'export', 'openInNewWindow', 'archived', 'delete']);
+});
+
+it('shows runtime plugins for a declared static fragment without runtime hooks', () => {
+  state.installed = [{ manifest: { id: 'prompt', systemPrompt: [
+    { id: 'style', text: 'Task instructions', scope: 'selected-task', order: 1 },
+  ] } } as InstalledGhost];
+  render(<Harness />);
+  openMenu();
+  expect(screen.getByRole('menuitem', { name: 'taskPlugins' })).toBeTruthy();
+});
+
+it('keeps an uninstalled runtime plugin selection visible and clearable', async () => {
+  state.installed = [];
+  state.runtimePlugins.mockResolvedValue({ 'will-compose-context': [{ pluginId: 'removed', onFailure: 'block' }] });
+  render(<Harness target={{ ...session, runtimePluginsSelected: true } as Session} />);
+  openMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'taskPlugins' }));
+  const selected = await screen.findByRole('checkbox', { name: 'unavailable' });
+  expect((selected as HTMLInputElement).checked).toBe(true);
+  fireEvent.click(selected);
+  fireEvent.click(screen.getByRole('button', { name: 'save' }));
+  await waitFor(() => expect(state.runtimePlugins).toHaveBeenLastCalledWith('task', { 'will-compose-context': [] }));
+});
+
+// Unit/performance: use the real window store and production closed menus. An
+// installed-list push must not create subscriptions or commits for 100 idle rows.
+it('does not subscribe or rerender closed menus when the installed list changes', () => {
+  state.installed = [];
+  const committed = vi.fn();
+  const props = { session, open: false, writeBlocked: false, returnFocus: () => {}, onRename: () => {},
+    onPin: () => {}, onArchive: () => {}, onUnarchive: () => {}, onDelete: () => {},
+    onOpenInNewWindow: () => {}, move: null, tags: null, copy: null, exportShare: null };
+  render(<Profiler id="rows" onRender={committed}>{Array.from({ length: 100 }, (_, index) =>
+    <SessionTaskMenu key={index} {...props} />)}</Profiler>);
+  expect(state.listGhosts).not.toHaveBeenCalled();
+  expect(state.ghostsChanged).not.toHaveBeenCalled();
+  expect(committed).toHaveBeenCalledTimes(1);
+  readInstalledGhostsSnapshot();
+  expect(state.listGhosts).toHaveBeenCalledTimes(1);
+  expect(state.ghostsChanged).toHaveBeenCalledTimes(1);
+  act(() => state.publishGhosts?.({ ghosts: [] }));
+  expect(committed).toHaveBeenCalledTimes(1);
+  render(<Harness />);
+  openMenu();
+  expect(screen.queryByRole('menuitem', { name: 'taskPlugins' })).toBeNull();
+  expect(committed).toHaveBeenCalledTimes(1);
+  expect(state.listGhosts).toHaveBeenCalledTimes(1);
+  expect(state.ghostsChanged).toHaveBeenCalledTimes(1);
+});
 
 it('loads only on open and groups task organization, sharing, viewing and removal in order', () => {
   render(<Harness />);
@@ -105,6 +183,7 @@ it('loads only on open and groups task organization, sharing, viewing and remova
     'rename',
     'muteNotifications',
     'tags',
+    'taskPlugins',
     'copy',
     'title',
     'moveToProject',
@@ -168,6 +247,7 @@ it('shows unpin without a branch entry even for a forked Pi task', () => {
     'rename',
     'muteNotifications',
     'tags',
+    'taskPlugins',
     'copy',
     'title',
     'moveToProject',
@@ -181,7 +261,7 @@ it('shows unpin without a branch entry even for a forked Pi task', () => {
 it('keeps restore and delete last for archived tasks and does not expose sharing', () => {
   render(<Harness target={{ ...session, status: 'archived' }} />);
   openMenu();
-  expect(labels()).toEqual(['rename', 'tags', 'copy', 'export', 'unarchive', 'delete']);
+  expect(labels()).toEqual(['rename', 'tags', 'taskPlugins', 'copy', 'export', 'unarchive', 'delete']);
 });
 
 it('shows only leave sharing for guests without disabled actions or separators', () => {
@@ -242,7 +322,7 @@ it('shows stop sharing for an active host and closes only after confirmation', a
   state.host.mockResolvedValue({ available: true, detail: { sharedTaskId: 'share', status: 'active' } });
   render(<Harness />); openMenu();
   await screen.findByRole('menuitem', { name: 'manageSharing' });
-  expect(labels()).toEqual(['pin', 'rename', 'muteNotifications', 'tags', 'copy', 'manageSharing', 'moveToProject', 'export', 'openInNewWindow', 'archived', 'delete']);
+  expect(labels()).toEqual(['pin', 'rename', 'muteNotifications', 'tags', 'taskPlugins', 'copy', 'manageSharing', 'moveToProject', 'export', 'openInNewWindow', 'archived', 'delete']);
   expect(screen.queryByRole('menuitem', { name: 'cancelSharing' })).toBeNull();
   await openSharingSubmenu();
   fireEvent.click(screen.getByRole('menuitem', { name: 'cancelSharing' }));

@@ -42,8 +42,10 @@ import {
 import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
 
 import { AgentActionRow } from './AgentActionRow';
+import type { PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 
 export interface AgentActionsBlockProps {
+  pluginUi: PluginUiMessageCandidates;
   renderItemKey?: string;
   toolCalls: ChatMessage[];
   /** clientId of tool_use → string content of its tool_result. */
@@ -62,6 +64,7 @@ export interface AgentActionsBlockProps {
 }
 
 export function AgentActionsBlock({
+  pluginUi,
   renderItemKey,
   toolCalls,
   resultMap,
@@ -159,6 +162,7 @@ export function AgentActionsBlock({
           >
             {toolCalls.map((msg) => (
               <AgentActionRow
+                pluginUi={pluginUi}
                 key={msg.clientId}
                 message={msg}
                 toolResult={resultMap.get(msg.clientId)}

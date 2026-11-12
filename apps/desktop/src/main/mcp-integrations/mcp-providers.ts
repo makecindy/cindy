@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
+import { gateBuiltinMcpProviders } from './provider-gate.js';
 import { createIMessageMcpServer } from './imessageMcpServer';
+import { searchGhostRuntimeMemories } from '../cindy-brain/index.js';
 import { getPiKernelManager } from '../agent-binaries/index.js';
 import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
 import { manageAppSettings } from '../app-settings/sections.js';
+import { importThemePackageFromTask } from '../local-themes/agent.js';
 import { manageAppModels } from '../app-settings/models.js';
 import { classifyOrigin } from '../input-handoff/originPolicy.js';
 import { inspectAppDefaultModel, changeAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
@@ -62,8 +65,8 @@ import { renderHtmlToPdf } from '../doc-tools/htmlPdfRenderer.js';
 import { writeDocsOutput } from '../doc-tools/docsOutputWriter.js';
 import { inspectPdf } from '../doc-tools/pdfInspector.js';
 import { getAndroidMcpDeps } from './android.js';
-import { getBrowserMcpDeps } from './browser.js';
-import { getComputerMcpDeps } from './computer.js';
+import { getBrowserMcpDeps } from './browser.desktop.js';
+import { getComputerMcpDeps } from './computer.desktop.js';
 import { feishuIm, wechatIm } from '../im';
 import { getBotFeishuTransport } from '../im/shared/botImConnectionRuntime';
 import { createFeishuTransportResolver } from './feishuTransportRouting';
@@ -114,9 +117,9 @@ import { createTaskDigestReader } from './taskDigest.js';
 import { createDesktopTaskDigestDeps } from './taskDigestHost.js';
 import { createTaskToolCallAuthorizer } from '../maker-ipc/taskToolCallAuthorizer.js';
 import { createDesktopTaskActionAuthorizer } from '../maker-ipc/taskActionHost.js';
-import { authorizeGroupTool } from '../maker-ipc/botGroupToolAuthorization.js';
+import { authorizeGroupTool, reportGroupTaskCreated } from '../maker-ipc/botGroupToolAuthorization.js';
 import { createSharedTaskTools } from './sharedTaskTools.js';
-import { assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';
+import { assertTaskActionCurrent, captureTaskActionSyncGuard } from '../maker-ipc/taskActionAuthorization.js';
 import {
   getSessionRowSnapshot,
   patchSessionMetaInDb,
@@ -128,9 +131,7 @@ import { isInputHandoffDisabledForSession } from '../input-handoff/botPolicy.js'
 import { readHandoffPicture } from '../input-handoff/pictureRef.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import type { PluginRegistry } from '../maker-host/plugins/plugin-registry.js';
-import { BUILTIN_LIZI_MCP_IDS, pluginIdForProviderName } from '../maker-host/plugins/builtin-plugins.js';
-import { isFrozenBuiltinPluginAllowed } from './codexBuiltinToolPolicy.js';
-import { GLOBAL_PLUGIN_IDS } from '../maker-host/plugins/types.js';
+import { BUILTIN_LIZI_MCP_IDS } from '../maker-host/plugins/builtin-plugins.js';
 import {
   readChatHistoryMessages,
   type ChatHistoryReaderDeps,
@@ -158,8 +159,8 @@ export interface DesktopMcpProvidersDeps {
   getAppVersion?: () => string;
   getMakerMemoryManager: () => MakerMemoryManager;
   lspPool: LspServerPool;
-  /** 按会话控制启用状态的 plugin registry。 */
-  pluginRegistry: PluginRegistry;
+  /** Current owner's registry; may be a getter, so do not capture it at construction. */
+  readonly pluginRegistry: PluginRegistry;
   /** Device-link transport stays host-injected so provider tests do not load Electron runtime services. */
   invokeRemote: (
     deviceId: string,
@@ -222,7 +223,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
   setSessionPathAuthorizer((request) =>
     authorizeDesktopSessionPath(request, deps.getLiveSessionGrantState),
   );
-  const { pluginRegistry } = deps;
   // 代输入 gates shared by window and picture handoffs: a current local task,
   // the service, and the teammate switch (unknown policy fails closed).
   const admitInputHandoff = async (context: { sessionId?: string; sessionInstanceId?: string }) => {
@@ -234,7 +234,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       return {
         ok: false as const,
         errorCode: 'DISABLED_BY_OWNER',
-        message: 'The owner turned off input handoff for this teammate. Tell the owner what is still needed instead.',
+        message: 'The user turned off input handoff for this buddy. Tell the user what is still needed instead.',
       };
     const row = await getSessionRowSnapshot(context.sessionId).catch(() => null);
     return { ok: true as const, service, sessionId: context.sessionId, requester: row?.title?.trim().slice(0, 120) };
@@ -404,12 +404,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         // Codex provider presence is the bridge-creation enablement snapshot.
         // Keep that snapshot for a busy turn when a disable refresh is deferred;
         // a successfully rebuilt bridge omits this provider via the outer gate.
-        context?.agentKind === 'codex' || pluginRegistry.isEnabled('android'),
+        context?.agentKind === 'codex' || deps.pluginRegistry.isEnabled('android'),
     }),
     browser: getBrowserMcpDeps(),
     computer: getComputerMcpDeps({
       isComputerUseEnabled: (context) =>
-        context?.agentKind === 'codex' || pluginRegistry.isEnabled('computer'),
+        context?.agentKind === 'codex' || deps.pluginRegistry.isEnabled('computer'),
     }),
     // lizi_feishu 已于 2026-07-16 摘壳:飞书能力(44 精品 + 123 只读直通)迁入
     // 内置意识 xd-feishu;2026-07-17 起授权切到意识 OAuth broker
@@ -654,6 +654,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     memory: {
       withAccountDataAccess,
       getManager: deps.getMakerMemoryManager,
+      searchProviders: searchGhostRuntimeMemories,
       beginWrite: (context) => {
         const saved = botLearningTracker.capture(botLearningTracker.learnsFrom(context?.sessionId, context?.memoryScopeKey));
         return receipt => saved({ ...receipt, kind: 'memory' });
@@ -1048,6 +1049,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             ...(['DELIVERY_UNKNOWN', 'CREATED_NOT_DELIVERED'].includes(result.errorCode)
               ? { recoverySessionId: qualifiedId, message: `${result.message} Recovery target_session_id: ${qualifiedId}. Do not repeat create.` } : {}) };
           const accepted = { ...result, targetSessionId: qualifiedId, targetDeviceId: device };
+          // Opened from a group: the group shows the task as a card (bot-group-chat.md §10).
+          reportGroupTaskCreated(dispatcherSessionId, { taskId: id, deviceId: device, title: title?.trim() || message.split('\n')[0].slice(0, 60) });
           if (recordCreation) {
             try { await (recordCreation as (sessionId: string) => Promise<void>)(qualifiedId); }
             catch { return { ...accepted, responsibilityRecorded: false }; }
@@ -1085,6 +1088,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               : {}),
             ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
           });
+          if (result.ok && result.wakeKind === 'created' && dispatcherSessionId)
+            reportGroupTaskCreated(dispatcherSessionId, { taskId: result.targetSessionId, deviceId: null,
+              title: title?.trim() || message.split('\n')[0].slice(0, 60) });
           if (result.ok && result.wakeKind === 'created' && recordCreation) {
             try { await recordCreation(result.targetSessionId); }
             catch { return { ...result, responsibilityRecorded: false }; }
@@ -1103,7 +1109,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         listAgents: async ({ callerSessionId }) => {
           if (isSessionSharedTaskActive(callerSessionId)) return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'Not available in a shared task' };
           const svc = tryGetBotDirectMessageService();
-          if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Teammate service is not ready' };
+          if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Buddy service is not ready' };
           return svc.listAgents(callerSessionId);
         },
       },
@@ -1153,7 +1159,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           const runtime = activeCompanionCloud();
           if (!runtime) return { ok: false, errorCode: 'NOT_ENABLED', message: 'Cloud companions are not available on this server' };
           const choices = await runtime.homeChoices(teammateId);
-          if (choices.reason === 'NOT_FOUND') return { ok: false, errorCode: 'NOT_FOUND', message: 'No such teammate in this account' };
+          if (choices.reason === 'NOT_FOUND') return { ok: false, errorCode: 'NOT_FOUND', message: 'No such buddy in this account' };
           return { ok: true, teammateId, mode: choices.mode, ...(choices.reason ? { reason: choices.reason } : {}),
             home: choices.homeDeviceId ? { deviceId: choices.homeDeviceId, name: choices.homeName ?? '', isSelf: choices.mode === 'local' } : null,
             choices: choices.targets.map(target => ({ deviceId: target.deviceId, name: target.name, isSelf: target.isSelf === true })) };
@@ -1163,7 +1169,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           if (!runtime) return { ok: false, errorCode: 'NOT_ENABLED', message: 'Cloud companions are not available on this server' };
           const result = await runtime.switchHome(teammateId, targetDeviceId, whenBusy ? { whenBusy } : undefined);
           return result.ok ? { ok: true, teammateId, homeDeviceId: targetDeviceId }
-            : { ok: false, errorCode: result.code, message: `The teammate did not move (${result.code})` };
+            : { ok: false, errorCode: result.code, message: `The buddy did not move (${result.code})` };
         },
       },
       botProfiles: {
@@ -1240,6 +1246,29 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             return { ok: false, errorCode: error instanceof PiKernelError ? error.reason : 'PI_RUNTIME_FAILED',
               message: 'Pi 操作未确认完成；请重新读取版本和状态。' };
           }
+        }),
+      },
+      themePackages: {
+        import: (context, filePath) => withAccountDataAccess(context.sessionId, async assertCurrent => {
+          const sessionId = context.sessionId;
+          if (!sessionId) throw new Error('Task caller unavailable');
+          const assertAction = captureTaskActionSyncGuard();
+          const assertCaller = async () => {
+            await assertCurrent();
+            await assertTaskActionCurrent();
+            if (!deps.isCurrentLocalSessionInstance?.(sessionId, context.sessionInstanceId)) throw new Error('Task instance changed');
+          };
+          return importThemePackageFromTask({ filePath, workingDir: context.workingDir ?? '' }, {
+            assertCurrent: assertCaller,
+            assertCurrentSync: () => {
+              assertAction?.();
+              if (!deps.isCurrentLocalSessionInstance?.(sessionId, context.sessionInstanceId)) throw new Error('Task instance changed');
+            },
+            authorizePath: absolutePath => authorizeDesktopSessionPath({
+              sessionId, sessionInstanceId: context.sessionInstanceId, workingDir: context.workingDir ?? '',
+              path: absolutePath, toolName: 'cindy_helper.import_theme_package', operation: 'read',
+            }, deps.getLiveSessionGrantState),
+          });
         }),
       },
       appSettings: {
@@ -1418,49 +1447,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
   // 用 plugin registry gate 包装每个 provider 的 isEnabled。
   // essential plugin 始终放行；非 essential plugin 按 project → user → default 判定。
   // provider name(如 'lizi_jira') 会先映射成用户可见的 plugin id(如 'jira')。
-  const gated: LiziMcpProvider[] = providers.map((p) => {
-    const originalIsEnabled = p.isEnabled;
-    const pluginId = pluginIdForProviderName(p.name);
-    const declaration = pluginRegistry.getPlugins().find((entry) => entry.id === pluginId);
-    return {
-      ...p,
-      capability: {
-        title: declaration?.name ?? p.name,
-        description: declaration?.description ?? '',
-        source: 'builtin' as const,
-      },
-      isEnabled: (ctx: LiziMcpSessionContext) => {
-        // Codex 与 Pi 的共享 app-server / bridge 在还没有 thread/workdir 的阶段构建
-        // MCP 工具清单。普通工具必须先全部注册，真正调用时由 HTTP bridge 按新会话
-        // 冻结的策略阻断；否则某个用户默认会错误地影响所有项目（空 workdir 快照被缓存后，
-        // 全局启用但项目停用的工具仍暴露、反向配置则永久缺席，codex review）。机器级工具
-        // 仍沿用现有 spawn-time gate + 环境重建语义。
-        const deferOrdinaryGate =
-          (ctx.agentKind === 'codex' || ctx.agentKind === 'pi')
-          && !ctx.workingDir
-          && !GLOBAL_PLUGIN_IDS.has(pluginId);
-        // Orca 工具面必须在会话生命周期内保持稳定：Claude query 不会在项目策略
-        // 动态启用后重建 MCP。创建入口仍由 Main 按调用时的项目策略 fail closed。
-        const keepOrcaProviderStable = pluginId === 'collab';
-        // Stable providers may ignore a live global/project toggle so an
-        // already-running ordinary task can recover, but a Bot Profile is an
-        // immutable per-runtime capability boundary and must always win.
-        if (!isFrozenBuiltinPluginAllowed(ctx.vendorOptions, pluginId)) {
-          return false;
-        }
-        // Plugin gate：registry 负责 essential / machine / project / user / default 判定。
-        if (
-          !keepOrcaProviderStable &&
-          !deferOrdinaryGate &&
-          !pluginRegistry.isEnabled(pluginId, ctx.workingDir)
-        ) {
-          return false;
-        }
-        // 继续走原 provider gate，例如 memory manager check、feishu bot source check。
-        return originalIsEnabled?.(ctx) ?? true;
-      },
-    };
-  });
+  const gated = gateBuiltinMcpProviders(providers, () => deps.pluginRegistry);
 
   // cindy:意识总机(cindy-tools;网关模式,
   // docs/dev-rules/plugin-security-and-authoring.md;2026-07-12 由 cindy_ghosts 更名——server 名进

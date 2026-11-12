@@ -6,7 +6,7 @@ import { findRemoteHistoryView } from '@/session/remoteHistoryView';
 import { createBackgroundConnection } from './backgroundConnection';
 import { invokeWithHistoryViewCapability } from './historyViewCapability';
 import { createRecoveryDiagnostics, settleMeasuredSnapshot, type RecoveryPhase } from './recoveryDiagnostics';
-import { confirmTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
+import { confirmTrackedSubscription, releaseTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
 import { AppState, Platform } from 'react-native';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { dispatchCredentialSwitchOutcome } from '@/session/credentialSwitchOutcome';
@@ -254,6 +254,11 @@ export interface DeviceLinkContextValue {
   /** Acquire before background grace ends; always release on settlement/cancellation. Hard deadline enforced by lifecycle. */
   beginBackgroundTransition?(): () => void;
   /**
+   * Keep (or bring back) the relay connection while the app is in the background, for one
+   * bounded action the person took from a notification. Returns the release; always call it.
+   */
+  holdBackgroundConnection?(): () => void;
+  /**
    * opts.preSend:在连接就绪并从 invoke 队列出队后、实际发送前的同步检查点。抛错即
    * 中止本次发送(错误原样上抛)。供写序敏感的调用方(patchHomeSession 的 isLatest
    * 屏障)把「过期即放弃」判定贴到实际发送点——重连或排队期间写可能被同字段新写
@@ -319,6 +324,11 @@ export function subscribeRemoteTaskTagsChanged(
   return () => {
     remoteTaskTagsChangedListeners.delete(listener);
   };
+}
+const remoteSubscriptionAccountsChangedListeners = new Set<(deviceId: string) => void>();
+export function subscribeRemoteSubscriptionAccountsChanged(listener: (deviceId: string) => void): () => void {
+  remoteSubscriptionAccountsChangedListeners.add(listener);
+  return () => { remoteSubscriptionAccountsChangedListeners.delete(listener); };
 }
 const remoteFavoritesChangedListeners = new Set<(deviceId: string) => void>();
 const remoteProjectAliasesChangedListeners = new Set<(deviceId: string) => void>();
@@ -537,6 +547,21 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     return () => {
       backgroundTransitions.current.delete(pending);
       settle();
+    };
+  }, []);
+  const backgroundConnectionRef = useRef<ReturnType<typeof createBackgroundConnection> | null>(null);
+  // Counted here, not on one connection: a press can arrive before sign-in has restored the
+  // client, and the client can be replaced while the press is being carried out.
+  const backgroundHoldsRef = useRef(0);
+  const holdBackgroundConnection = useCallback(() => {
+    backgroundHoldsRef.current += 1;
+    backgroundConnectionRef.current?.held();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      backgroundHoldsRef.current -= 1;
+      if (backgroundHoldsRef.current === 0) backgroundConnectionRef.current?.unheld();
     };
   }, []);
   // 每次后台释放都翻代。subscribe 即使跨 background→active 才收到 ACK,也只能在
@@ -780,9 +805,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     topics = sharedTaskTopics(deviceId, topics);
     const record = recoveryDiagnostics.get(client)?.capture(deviceId, connectionEpochFor(deviceId));
     await confirmTrackedSubscription({
+      share: { scope: client, deviceId },
       isCurrent: () => presenceAvailableByDeviceRef.current.get(deviceId) !== false && !backgroundReleaseInFlightRef.current
         && backgroundReleaseGenerationRef.current === releaseGeneration && clientRef.current === client,
-      generation: () => `${connectionEpochFor(deviceId)}:${remoteSubscribedTopicsRef.current.generation(deviceId)}`,
+      generation: () => `${releaseGeneration}:${connectionEpochFor(deviceId)}:${remoteSubscribedTopicsRef.current.generation(deviceId, topics)}`,
       missing: () => topicsMissingRemoteAck(remoteSubscribedTopicsRef.current, deviceId, topics)
         .filter((topic) => registryRef.current.hasTopic(deviceId, topic)),
       send: (toSend) => sendSubscribeWithAccessHandling(
@@ -1786,7 +1812,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       releaseTopics: releaseHeavyTopics,
       pendingTransitions: () => [...backgroundTransitions.current],
       stop: () => client.stop(),
-      connect: () => client.connectAllNow('appstate-active', {
+      isHeld: () => backgroundHoldsRef.current > 0,
+      // A tapped notification action is an explicit request too: it may leave the cooldown.
+      connect: (reason) => client.connectAllNow(reason === 'hold' ? 'notification-action' : 'appstate-active', {
         overrideCongestionCooldown: true,
         keepInFlightAttempt: true,
       }),
@@ -1795,6 +1823,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       suspendMs: BACKGROUND_SUSPEND_SUSPECT_MS,
       report: (event) => mobileDebugLog('debug', 'device-link', 'background lifecycle', event),
     });
+    backgroundConnectionRef.current = backgroundConnection;
     if (AppState.currentState) noteAppLifecycleState(AppState.currentState);
     let refreshNetworkState = () => {};
     const sub = AppState.addEventListener('change', (next) => {
@@ -1827,22 +1856,27 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
           }
         }
       }
-      if (next === 'background') {
-        diagnostics.background();
-        backgroundReleaseInFlightRef.current = true;
-        backgroundReleaseGenerationRef.current += 1;
-        suspendRemoteProjectAliases();
-        // App 生命周期暂停全部恢复执行，但各 peer 状态仍彼此独立；回前台统一
-        // 重新排队，旧代请求的迟到结果不会创建重试。
-        peerRecoverySchedulerRef.current?.pause();
-        // 立即释放重量级 session:<id> 订阅(趁 socket 还活着、iOS 尚未挂起 JS):
-        // 被控桌面以「有人订阅该会话流」为防打扰信号压制手机系统推送,锁屏/切后台
-        // 后若订阅残留(宽限窗、挂起延迟最长可拖到 server 60s 空闲清扫),恰好在
-        // 用户离开的瞬间完成的任务就永远收不到通知。只动远端订阅与 ack 簿记,
-        // registry 所有权保留 —— 回前台的 rehydrate 会因 ack 已清而重新订阅。
-        backgroundConnection.background();
-      }
+      if (next === 'background') enterBackground();
     });
+    function enterBackground() {
+      diagnostics.background();
+      backgroundReleaseInFlightRef.current = true;
+      backgroundReleaseGenerationRef.current += 1;
+      suspendRemoteProjectAliases();
+      // App 生命周期暂停全部恢复执行，但各 peer 状态仍彼此独立；回前台统一
+      // 重新排队，旧代请求的迟到结果不会创建重试。
+      peerRecoverySchedulerRef.current?.pause();
+      // 立即释放重量级 session:<id> 订阅(趁 socket 还活着、iOS 尚未挂起 JS):
+      // 被控桌面以「有人订阅该会话流」为防打扰信号压制手机系统推送,锁屏/切后台
+      // 后若订阅残留(宽限窗、挂起延迟最长可拖到 server 60s 空闲清扫),恰好在
+      // 用户离开的瞬间完成的任务就永远收不到通知。只动远端订阅与 ack 簿记,
+      // registry 所有权保留 —— 回前台的 rehydrate 会因 ack 已清而重新订阅。
+      backgroundConnection.background();
+    }
+    // 通知按钮会让 App 直接在后台启动,这时不会再收到「进入后台」事件。照后台处理:不订阅、
+    // 不恢复，宽限后断开(有按钮操作在进行时由它保持到做完)，否则连接会一直留在后台，
+    // 电脑还会以为手机在看任务而压掉推送。回到前台时由上面的 active 分支照常恢复。
+    if (AppState.currentState === 'background') enterBackground();
 
     // Loaded inside the authenticated lifecycle; old native builds keep their
     // existing heartbeat fallback if the optional runtime module is unavailable.
@@ -1905,6 +1939,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       networkSubscription?.remove();
       localNetworkStore.update();
       sub.remove();
+      if (backgroundConnectionRef.current === backgroundConnection) backgroundConnectionRef.current = null;
       backgroundConnection.dispose();
       backgroundTransitions.current.clear();
       offUnresponsive();
@@ -2060,17 +2095,20 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const staleUnheld = topics.filter((topic) =>
       isDeviceLinkTopic(topic) && !releasedSet.has(topic) && !registryRef.current.hasTopic(deviceId, topic));
     const toSend = normalizeDeviceLinkTopics([...new Set([...released, ...staleUnheld])]);
-    markRemoteTopicsUnsubscribed(remoteSubscribedTopicsRef.current, deviceId, toSend);
+    // A pending first ACK has no table entry yet. Fence it before releasing
+    // the last owner so a replacement cannot reuse the obsolete acquisition.
+    remoteSubscribedTopicsRef.current.release(deviceId, released);
     suspendRemoteProjectAliasesForReleasedTopics(deviceId, toSend);
     noteSessionLiveStreamsInterrupted(toSend);
     if (toSend.length === 0 || presenceAvailableByDeviceRef.current.get(deviceId) === false) return;
-    await sendUnsubscribe(
-      requireClient(clientRef.current),
-      deviceId,
-      toSend,
-      (topic) => presenceAvailableByDeviceRef.current.get(deviceId) !== false && !registryRef.current.hasTopic(deviceId, topic),
-    );
-  }, []);
+    const client = requireClient(clientRef.current);
+    await releaseTrackedSubscription({
+      share: { scope: client, deviceId }, topics: toSend,
+      generation: topic => `${backgroundReleaseGenerationRef.current}:${connectionEpochFor(deviceId)}:${remoteSubscribedTopicsRef.current.generation(deviceId, [topic])}`,
+      send: topics => sendUnsubscribe(client, deviceId, topics,
+        topic => clientRef.current === client && presenceAvailableByDeviceRef.current.get(deviceId) !== false && !registryRef.current.hasTopic(deviceId, topic)),
+    });
+  }, [connectionEpochFor]);
 
   const getPresenceAvailability = useCallback((deviceId: string): boolean | null => (
     isSharedTaskPeer(deviceId) ? clientRef.current?.isLinkReady(deviceId) ?? false
@@ -2092,6 +2130,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<DeviceLinkContextValue>(() => ({
     beginBackgroundTransition,
+    holdBackgroundConnection,
     status,
     sharedTaskAvailable,
     sharedTaskConnection,
@@ -2116,6 +2155,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     onRemoteResourceChanged: subscribeRemoteResourceChanged,
   }), [
     beginBackgroundTransition,
+    holdBackgroundConnection,
     closeLink,
     recoveringDeviceIds,
     connectionEpoch,
@@ -2213,6 +2253,10 @@ export function routeFrame(env: Envelope, handlers: RouteFrameHandlers = {}): vo
     );
     for (const listener of remoteTaskTagsChangedListeners)
       listener(env.src, (push.payload as { tags?: unknown })?.tags);
+  }
+  if (push.channel === 'subscription-accounts:changed') {
+    for (const listener of remoteSubscriptionAccountsChangedListeners) listener(env.src);
+    return;
   }
   if (push.channel === 'maker:model-favorites:changed') {
     for (const listener of remoteFavoritesChangedListeners) listener(env.src);

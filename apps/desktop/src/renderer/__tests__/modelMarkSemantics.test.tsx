@@ -16,6 +16,26 @@ function firstPath(ui: React.ReactNode): string | null {
 }
 
 describe('model mark semantics', () => {
+  // Unit: two visible provider marks must own their paint servers. Removing a
+  // hidden selector must not remove the gradient referenced by the composer.
+  it('keeps spectrum marks independent when another instance is removed', () => {
+    const marks = (showFirst: boolean) => <>
+      {showFirst && <ProviderMark key="selector" providerId="byok-test" logoKind="openai-spectrum" />}
+      <ModelIconMark key="composer" providerId="byok-test" logoKind="openai-spectrum" />
+    </>;
+    const view = render(marks(true));
+    const ids = [...view.container.querySelectorAll('linearGradient')].map(node => node.id);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+    for (const svg of view.container.querySelectorAll('svg')) {
+      expect(svg.querySelector('path[fill^="url"]')?.getAttribute('fill'))
+        .toBe(`url(#${svg.querySelector('linearGradient')?.id})`);
+    }
+    view.rerender(marks(false));
+    expect(view.container.querySelector('linearGradient')?.id).toBe(ids[1]);
+    expect(view.container.querySelector('path[fill^="url"]')?.getAttribute('fill')).toBe(`url(#${ids[1]})`);
+  });
+
   // User decision: use the existing themeable XD glyph only for host XD membership.
   // Unit: regression input is the same provider ID with personal vs XD presentation.
   it('preserves the original XD glyph and theme color while other identities use Cindy', () => {

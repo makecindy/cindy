@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
 
 import type { GhostPermissionItem } from '../../shared/ghost.js';
+import { permissionItemDetail } from '../../shared/ghostPermissionDetail.js';
 import {
   GHOST_INSTALL_CONSENT_TOOL_NAME,
   type GhostInstallConsentRequest,
@@ -27,10 +28,10 @@ export const GHOST_INSTALL_CONSENT_HOST_CONFIRMATION = 'plugin_install';
 
 type Translate = (key: string) => string;
 
-function interpolate(template: string, args: Record<string, string> | undefined): string {
+function interpolate(template: string, args: Record<string, unknown> | undefined): string {
   if (!args) return template;
   return template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (match, name: string) =>
-    Object.prototype.hasOwnProperty.call(args, name) ? args[name]! : match,
+    Object.prototype.hasOwnProperty.call(args, name) ? String(args[name]) : match,
   );
 }
 
@@ -74,7 +75,7 @@ function permissionLine(translate: Translate, item: GhostPermissionItem): string
   ];
   if (item.detailKey) {
     lines.push(
-      `  ${interpolate(translate(`settings.ghosts.perm.${item.detailKey}`), item.detailArgs)}`,
+      `  ${permissionItemDetail(item, (key, args) => interpolate(translate(key), args))}`,
     );
   }
   if (item.detail) {
@@ -173,7 +174,7 @@ export function createTaskInstallConsentPrompt(
   task: { sessionId: string; sessionInstanceId: string } | null,
   requestHostPermission: HostPermissionRequester | undefined,
 ): GhostInstallConsentPrompt {
-  return async (request) => {
+  const prompt: GhostInstallConsentPrompt = async (request) => {
     if (!task || !requestHostPermission) {
       throw new Error('Plugin install confirmation requires the calling task');
     }
@@ -198,4 +199,6 @@ export function createTaskInstallConsentPrompt(
       untrack();
     }
   };
+  prompt.hostUiCapabilityApproval = true;
+  return prompt;
 }

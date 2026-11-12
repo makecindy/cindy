@@ -3237,6 +3237,27 @@ it('keeps mixed OpenCode protocols and image inputs in the native Pi launch', ()
   expect(providers[0]?.models[3]).toMatchObject({ input: ['text', 'image'] });
 });
 
+// #9863, unit: ID-only Copilot Astra must reach the actual native launch descriptor
+// as Responses. The generic catalog audit below supplies an API and mirrors the source.
+it('launches Copilot Astra with Responses while preserving other model APIs', () => {
+  const { providers } = buildPiNativeProvidersFromConfigs([{
+    id: 'copilot-regression', name: 'Copilot', runtimes: { pi: {
+      baseUrl: 'https://api.individual.githubcopilot.com', wireProtocol: 'openai-chat',
+      models: ['gpt-6-astra', 'gpt-5.5', 'kimi-k3'].map(id => ({ id, name: id })),
+    } },
+  }], () => 'fixture-credential');
+  expect(providers).toHaveLength(1);
+  expect(providers[0].models.map(model => model.api ?? providers[0].api)).toEqual([
+    'openai-responses', 'openai-responses', 'openai-completions',
+  ]);
+  expect(providers[0].models[0].baseUrl ?? providers[0].baseUrl).toBe('https://api.individual.githubcopilot.com');
+  expect(providers[0].models[0]).toMatchObject({
+    thinkingLevelMap: { off: null, minimal: null, low: 'low', xhigh: 'xhigh', max: 'max' },
+    compat: { supportsOpenAIGrammarTools: true },
+  });
+  expect(providers[0].models[0].compat).not.toHaveProperty('supportsReasoningEffort');
+});
+
 it('carries every unambiguous portable catalog model into the Pi descriptor', () => {
   let checked = 0;
   for (const rows of Object.values(PROVIDER_MODEL_CATALOG.providers)) {
@@ -3364,7 +3385,9 @@ it('materializes a future GPT generation with inherited parameters in native Pi'
     { ...BUNDLED_CATALOG, providers: [provider] });
   expect(result.providers[0]).toMatchObject({ id: 'future-sub2api', baseUrl: 'https://relay.example/v1', api: 'openai-responses' });
   expect(result.providers[0]?.models[0]).toMatchObject({ id: 'gpt-9-sol',
-    contextWindow: 1050000, maxTokens: 128000, input: ['text', 'image'], reasoning: true,
+    // The newer API predecessor declares a 272K working window; a future ID
+    // must not inherit the Registry's exact-model 1M override.
+    contextWindow: 272000, maxTokens: 128000, input: ['text', 'image'], reasoning: true,
     thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high' } });
   expect(result.providers[0]?.models[0]?.cost).toBeUndefined();
 });

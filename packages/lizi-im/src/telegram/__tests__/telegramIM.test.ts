@@ -15,6 +15,7 @@ import { TelegramApiError, type TelegramApiClient, type TgUpdate } from '../api.
 import { encodeCallbackData, encodeMessageId } from '../codec.js';
 import { TelegramIM, type TelegramGroupWindowEntry } from '../index.js';
 import { PROCESSING_REACTION_POOL } from '../reactionPool.js';
+import { setTransportTextResolver } from '../../transportText.js';
 
 const BOT = { id: 999, is_bot: true, first_name: 'Cindy', username: 'my_cindy_bot' };
 const OWNER_ID = '111';
@@ -113,7 +114,11 @@ function createFakeApi(opts: { getMeError?: Error } = {}): FakeApi {
 }
 
 function createHost(tmpDir: string): { host: IMHost; broadcasts: unknown[]; secrets: Map<string, string>; handlers: Map<string, (p?: unknown) => Promise<unknown> | unknown> } {
-  const secrets = new Map<string, string>();
+  // Existing transport scenarios use a previously approved group. Admission regressions below
+  // start without this persisted grant and exercise actual updates/callbacks.
+  const secrets = new Map<string, string>([['telegram-group-admission-v1', JSON.stringify({
+    identity: '999:111', groups: { '-100200': { status: 'approved', token: 'fixture', title: 'Ops' } },
+  })]]);
   const broadcasts: unknown[] = [];
   const handlers = new Map<string, (p?: unknown) => Promise<unknown> | unknown>();
   const host: IMHost = {
@@ -386,6 +391,42 @@ describe('TelegramIM', () => {
       text: 'hi',
       messageId: '111|2',
     });
+  });
+
+  // 测试价值：真实 TelegramIM 入站入口；复现伙伴 guestDm=true 导致陌生私信进 Agent。
+  // 原有测试只有个人 bot 默认配置，未覆盖旧伙伴选项。最小输入为陌生人普通私信；
+  // unit tier，假 Bot API，不联网；同时保留主人私聊和群成员 @ 的可观察行为。
+  it('伙伴连接的旧 guestDm 选项不能放行陌生私信，主人和群成员仍可发言', async () => {
+    await im.dispose();
+    const legacyCompanionOptions = {
+      apiFactory: () => api,
+      secretKeyPrefix: 'bot-im:test:',
+      ipc: false,
+      guestDm: true,
+    };
+    ctx.secrets.set('bot-im:test:telegram-group-admission-v1', ctx.secrets.get('telegram-group-admission-v1')!);
+    im = new TelegramIM(ctx.host, legacyCompanionOptions);
+    const events: IMMessageEvent[] = [];
+    im.onMessage((event) => events.push(event));
+    await im.setConfig({ token: '999:secret-token-abcdefghijk', ownerUserId: OWNER_ID });
+
+    api.pushUpdates([
+      privateMessage('最近更新的有哪些项目', 222, 1),
+      privateMessage('还有吗', 222, 2),
+      privateMessage('/help', 222, 3),
+      privateMessage('主人私聊', 111, 4),
+      groupMessage({ text: '群成员提问', fromId: 222, messageId: 5, mentionBot: true }),
+    ]);
+    // 等正向消息被处理，避免以“暂时没收到事件”误判拒绝成功；不同 lane 不约定顺序。
+    await vi.waitFor(() => {
+      expect(events.some((event) => event.senderId === OWNER_ID)).toBe(true);
+      expect(events.some((event) => event.senderId === 'g/-100200')).toBe(true);
+    });
+    expect(events.map((event) => event.senderId).sort()).toEqual([OWNER_ID, 'g/-100200'].sort());
+    expect(events.find((event) => event.senderId === 'g/-100200')?.speaker?.isOwner).toBe(false);
+    const strangerReplies = api.calls.filter((call) => call.method === 'sendMessage' && call.params.chat_id === '222');
+    expect(strangerReplies).toHaveLength(1);
+    expect(strangerReplies[0].params.text).toContain('只响应主人本人的指令');
   });
 
   it('群里 owner 裸斜杠命令视为召唤(不带 @ 也进 slash); 成员裸命令仍静默', async () => {
@@ -3339,6 +3380,32 @@ describe('TelegramIM 宿主工具的 Bot API 直通', () => {
     );
   });
 
+  // Unit: keep localized membership notices when merging admission transport changes.
+  // The existing membership case checks routing, but not send-time locale or interpolation.
+  it('进退群通知经准入发送流程时仍现取文案并填充群信息', async () => {
+    let locale = 'en';
+    setTransportTextResolver((key, vars) => {
+      if (!key.endsWith('.groupJoined') && !key.endsWith('.groupLeft')) return null;
+      return `${locale}:${key}:${vars?.actor}:${vars?.title}:${vars?.chatId}`;
+    });
+    try {
+      await connect();
+      const joined = membershipUpdate({ updateId: 305, from: 'left', to: 'member' });
+      joined.my_chat_member!.from.id = Number(OWNER_ID);
+      api.pushUpdates([joined]);
+      await vi.waitFor(() => expect(api.calls.some((call) => call.method === 'sendMessage' &&
+        call.params.chat_id === OWNER_ID && call.params.text ===
+          'en:imBot.text.transport.telegram.groupJoined:Tom:Ops:-100200')).toBe(true));
+      locale = 'de';
+      api.pushUpdates([membershipUpdate({ updateId: 306, from: 'member', to: 'kicked' })]);
+      await vi.waitFor(() => expect(api.calls.some((call) => call.method === 'sendMessage' &&
+        call.params.chat_id === OWNER_ID && call.params.text ===
+          'de:imBot.text.transport.telegram.groupLeft:Tom:Ops:-100200')).toBe(true));
+    } finally {
+      setTransportTextResolver(null);
+    }
+  });
+
   it('群内升为管理员、私聊拉黑这类没有进出的变化不产生任何动作', async () => {
     const window: TelegramGroupWindowEntry[] = [];
     im.onGroupWindowMessage((e) => window.push(e));
@@ -3448,5 +3515,326 @@ describe('TelegramIM 宿主工具的 Bot API 直通', () => {
     expect(im.resolveSendTarget('111')).toEqual({ chat_id: '111' });
     expect(im.resolveSendTarget('g/-100200/9')).toEqual({ chat_id: '-100200', message_thread_id: 9 });
     expect(im.getBotApi()).not.toBeNull();
+  });
+});
+
+
+// 测试价值：真实 TelegramIM 轮询入口；2026-11-12 强制群准入规则。
+// 既有测试只覆盖已准入群的触发/媒体；最小失败输入是陌生人把 bot 加群后 @。
+// unit，内存 API/存储；覆盖批准身份、持久化、相册前置拦截、退群及换绑定用户。
+describe('TelegramIM mandatory group admission', () => {
+  const admissionKey = 'telegram-group-admission-v1';
+  function membership(updateId: number, actor = 222, joined = true): TgUpdate {
+    return { update_id: updateId, my_chat_member: {
+      chat: { id: -100200, type: 'supergroup', title: 'Ops' },
+      from: { id: actor, is_bot: false, first_name: 'Inviter' }, date: nowSec(),
+      old_chat_member: { status: joined ? 'left' : 'member', user: BOT },
+      new_chat_member: { status: joined ? 'member' : 'left', user: BOT },
+    } };
+  }
+  function approvalButton(): string {
+    const notice = api.calls.filter((c) => c.method === 'sendMessage' && c.params.reply_markup).at(-1);
+    return (notice!.params.reply_markup as { inline_keyboard: Array<Array<{ callback_data: string }>> }).inline_keyboard[0][0].callback_data;
+  }
+  function click(data: string, updateId: number, user = 111, chat = 111): TgUpdate {
+    return { update_id: updateId, callback_query: {
+      id: `approval-${updateId}`, from: { id: user, is_bot: false, first_name: 'User' }, data,
+      message: { message_id: 1234, date: nowSec(), chat: { id: chat, type: chat > 0 ? 'private' : 'supergroup' } },
+    } };
+  }
+  async function drained(updateId: number): Promise<void> {
+    await vi.waitFor(() => expect(api.calls.some((c) => c.method === 'getUpdates'
+      && Number(c.params.offset) > updateId)).toBe(true));
+  }
+  beforeEach(async () => {
+    ctx.secrets.delete(admissionKey);
+    await im.dispose();
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      behavior: () => ({ emojiReactions: 'off', replyQuoteGroup: 'off', replyQuoteDm: 'off', groupActivation: { '-100200': 'always' } }),
+    });
+    im.registerIpc();
+  });
+
+  it('陌生邀请和旧群：阻断普通/全响应/相册消息的数据面和模型，用户本人仍能使用', async () => {
+    const messages: IMMessageEvent[] = [];
+    const window: TelegramGroupWindowEntry[] = [];
+    im.onMessage((m) => messages.push(m));
+    im.onGroupWindowMessage((m) => window.push(m));
+    await connect();
+    const photo = groupMessage({ text: 'photo', fromId: 222, messageId: 401, mentionBot: true });
+    photo.message!.media_group_id = 'blocked-album';
+    photo.message!.photo = [{ file_id: 'private-file', file_unique_id: 'unique', width: 20, height: 20 }];
+
+    api.pushUpdates([
+      groupMessage({ text: 'old group', fromId: 222, messageId: 400, mentionBot: true }), photo,
+      groupMessage({ text: 'ambient', fromId: 222, messageId: 402 }),
+      groupMessage({ text: 'owner', fromId: 111, messageId: 403, mentionBot: true }),
+    ]);
+    await drained(403);
+    expect(messages).toHaveLength(1);
+    expect(messages[0].speaker?.isOwner).toBe(true);
+    expect(window.map((e) => e.messageId)).toEqual(['403']);
+    expect(api.calls.some((c) => c.method === 'getFile')).toBe(false);
+    expect(api.calls.filter((c) => c.method === 'sendMessage' && c.params.reply_markup)).toHaveLength(1);
+  });
+
+  it('仅绑定用户在私聊批准，重启后仍有效；重复按钮不改变结果', async () => {
+    await connect();
+    api.pushUpdates([membership(410)]);
+    await drained(410);
+    const button = approvalButton();
+    api.pushUpdates([click(button, 411, 222), click(button, 412, 111, -100200)]);
+    await drained(412);
+    expect(JSON.parse(ctx.secrets.get(admissionKey)!).groups['-100200'].status).toBe('pending');
+    api.pushUpdates([click(button, 413)]);
+    await drained(413);
+    expect(JSON.parse(ctx.secrets.get(admissionKey)!).groups['-100200'].status).toBe('approved');
+    api.pushUpdates([click(button.replace('ga:y:', 'ga:n:'), 414)]);
+    await drained(414);
+    expect(JSON.parse(ctx.secrets.get(admissionKey)!).groups['-100200'].status).toBe('approved');
+    await im.dispose();
+    api = createFakeApi();
+    im = new TelegramIM(ctx.host, { apiFactory: () => api });
+    const messages: IMMessageEvent[] = [];
+    im.onMessage((m) => messages.push(m));
+    await im.init();
+    api.pushUpdates([groupMessage({ text: 'approved after restart', fromId: 222, messageId: 415, mentionBot: true })]);
+    await drained(415);
+    expect(messages).toHaveLength(1);
+  });
+
+  it('用户自己邀请直接启用，退出再被别人邀请后旧授权失效', async () => {
+    const messages: IMMessageEvent[] = [];
+    im.onMessage((m) => messages.push(m));
+    await connect();
+    api.pushUpdates([membership(420, 111), groupMessage({ text: 'ok', fromId: 222, messageId: 421, mentionBot: true })]);
+    await drained(421);
+    expect(messages).toHaveLength(1);
+    api.pushUpdates([membership(422, 222, false), membership(423), groupMessage({ text: 'blocked', fromId: 222, messageId: 424, mentionBot: true })]);
+    await drained(424);
+    expect(messages).toHaveLength(1);
+    expect(JSON.parse(ctx.secrets.get(admissionKey)!).groups['-100200'].status).toBe('pending');
+  });
+
+  it('待批按钮跨重启可用，但退群重进后失效；拒绝后成员消息保持静默', async () => {
+    await connect();
+    api.pushUpdates([membership(430)]);
+    await drained(430);
+    const oldButton = approvalButton();
+    await im.dispose();
+    api = createFakeApi();
+    im = new TelegramIM(ctx.host, { apiFactory: () => api });
+    await im.init();
+    api.pushUpdates([click(oldButton, 431)]);
+    await drained(431);
+    expect(JSON.parse(ctx.secrets.get(admissionKey)!).groups['-100200'].status).toBe('approved');
+    api.pushUpdates([membership(432, 222, false), membership(433)]);
+    await drained(433);
+    api.pushUpdates([click(oldButton, 434)]);
+    await drained(434);
+    expect(JSON.parse(ctx.secrets.get(admissionKey)!).groups['-100200'].status).toBe('pending');
+    api.pushUpdates([click(approvalButton().replace('ga:y:', 'ga:n:'), 435)]);
+    await drained(435);
+    const before = api.calls.filter((c) => c.method === 'sendMessage').length;
+    api.pushUpdates([groupMessage({ text: 'no', fromId: 222, messageId: 436, mentionBot: true })]);
+    await drained(436);
+    expect(JSON.parse(ctx.secrets.get(admissionKey)!).groups['-100200'].status).toBe('denied');
+    expect(api.calls.filter((c) => c.method === 'sendMessage')).toHaveLength(before);
+  });
+
+  it('伙伴连接不能继承个人 bot 的批准，错误存储不放行', async () => {
+    ctx.secrets.set(admissionKey, JSON.stringify({ identity: '999:111', groups: {
+      '-100200': { status: 'approved', token: 'personal-only', title: 'Ops' },
+    } }));
+    ctx.secrets.set(`companion:${admissionKey}`, '{broken');
+    await im.dispose();
+    im = new TelegramIM(ctx.host, { apiFactory: () => api, secretKeyPrefix: 'companion:', ipc: false });
+    const messages: IMMessageEvent[] = [];
+    im.onMessage((m) => messages.push(m));
+    await im.setConfig({ token: '999:secret-token-abcdefghijk', ownerUserId: OWNER_ID });
+    api.pushUpdates([groupMessage({ text: 'blocked companion', fromId: 222, messageId: 437, mentionBot: true })]);
+    await drained(437);
+    expect(messages).toHaveLength(0);
+    expect(JSON.parse(ctx.secrets.get(`companion:${admissionKey}`)!).groups['-100200'].status).toBe('pending');
+  });
+
+  it('撤销无法写入或删除时停止轮询且不确认成员变更，重启后先重放撤销', async () => {
+    await connect();
+    api.pushUpdates([membership(450, 111)]);
+    await drained(450);
+    const write = ctx.host.secrets.write;
+    const remove = ctx.host.secrets.remove;
+    ctx.host.secrets.write = (key, value) => key === admissionKey ? false : write(key, value);
+    ctx.host.secrets.remove = (key) => { if (key !== admissionKey) remove(key); };
+    const revoked = membership(451, 222, false);
+    api.pushUpdates([revoked, membership(452), groupMessage({ text: 'must not run', fromId: 222, messageId: 453, mentionBot: true })]);
+    await vi.waitFor(() => expect(im.getStatus()).toMatchObject({ kind: 'error', code: 'secret-unavailable' }));
+    expect(api.calls.filter((c) => c.method === 'getUpdates').every((c) => Number(c.params.offset) <= 451)).toBe(true);
+    expect(ctx.secrets.get('telegram-updates-offset')).toBe('999:451');
+    expect(JSON.parse(ctx.secrets.get(admissionKey)!).groups['-100200'].status).toBe('approved');
+    ctx.host.secrets.write = write;
+    ctx.host.secrets.remove = remove;
+    await im.dispose();
+    api = createFakeApi();
+    im = new TelegramIM(ctx.host, { apiFactory: () => api });
+    const messages: IMMessageEvent[] = [];
+    im.onMessage((m) => messages.push(m));
+    // Telegram retains this batch because no request acknowledged offset > 451.
+    api.pushUpdates([revoked, membership(452), groupMessage({ text: 'old grant', fromId: 222, messageId: 453, mentionBot: true })]);
+    await im.init();
+    await drained(453);
+    expect(messages).toHaveLength(0);
+    expect(JSON.parse(ctx.secrets.get(admissionKey)!).groups['-100200'].status).toBe('pending');
+  });
+
+  it('同一实例换 Cindy 账号再 init，不继承相同 Telegram 身份的批准或按钮', async () => {
+    await connect();
+    api.pushUpdates([membership(460)]);
+    await drained(460);
+    const button = approvalButton();
+    api.pushUpdates([click(button, 461)]);
+    await drained(461);
+    await im.dispose();
+    ctx.secrets.delete(admissionKey); // Host has switched to another account's store.
+    await im.init();
+    api.pushUpdates([click(button, 462), groupMessage({ text: 'new account', fromId: 222, messageId: 463, mentionBot: true })]);
+    await drained(463);
+    expect(JSON.parse(ctx.secrets.get(admissionKey)!).groups['-100200'].status).toBe('pending');
+  });
+
+  it('解绑确认删除群批准后才清理凭证，删除失败仍显示错误', async () => {
+    await connect();
+    api.pushUpdates([membership(470, 111)]);
+    await drained(470);
+    const remove = ctx.host.secrets.remove;
+    ctx.host.secrets.remove = (key) => { if (key !== admissionKey) remove(key); };
+    await im.disconnect();
+    expect(im.getStatus()).toMatchObject({ kind: 'error', code: 'secret-unavailable' });
+    expect(ctx.secrets.has('telegram-bot-token')).toBe(true);
+    ctx.host.secrets.remove = remove;
+    await im.disconnect();
+    expect(im.getStatus().kind).toBe('idle');
+    expect(ctx.secrets.has(admissionKey)).toBe(false);
+    expect(ctx.secrets.has('telegram-bot-token')).toBe(false);
+  });
+
+  it('通知失败尊重 Telegram retry_after，不在 60 秒后提前重发', async () => {
+    const clock = vi.spyOn(Date, 'now');
+    const started = Date.now();
+    try {
+      clock.mockReturnValue(started);
+      await connect();
+      api.failNextCall('sendMessage', new TelegramApiError('sendMessage', 429, 'rate limited', 300));
+      api.pushUpdates([membership(480)]);
+      await drained(480);
+      const count = () => api.calls.filter((c) => c.method === 'sendMessage' && c.params.reply_markup).length;
+      expect(count()).toBe(1);
+      clock.mockReturnValue(started + 120_000);
+      api.pushUpdates([groupMessage({ text: 'wait', fromId: 222, messageId: 481, mentionBot: true })]);
+      await drained(481);
+      expect(count()).toBe(1);
+      clock.mockReturnValue(started + 300_000);
+      api.pushUpdates([groupMessage({ text: 'retry', fromId: 222, messageId: 482, mentionBot: true })]);
+      await drained(482);
+      expect(count()).toBe(2);
+    } finally { clock.mockRestore(); }
+  });
+
+  it('准入通知超时后释放聊天链，用户自己的消息仍可继续', async () => {
+    await connect();
+    const timeout = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeout.signal);
+    const original = api.call.bind(api);
+    let waiting = false;
+    api.call = async (name, params, signal) => {
+      if (name !== 'sendMessage' || !params?.reply_markup) return original(name, params, signal);
+      waiting = true;
+      return new Promise((_, reject) => signal?.addEventListener('abort', () => reject(new Error('timeout')), { once: true }));
+    };
+    const messages: IMMessageEvent[] = [];
+    im.onMessage((m) => messages.push(m));
+    try {
+      api.pushUpdates([groupMessage({ text: 'owner', fromId: 111, messageId: 483, mentionBot: true })]);
+      await vi.waitFor(() => expect(waiting).toBe(true));
+      expect(timeoutSpy).toHaveBeenCalledWith(4_500);
+      timeout.abort();
+      await drained(483);
+      await vi.waitFor(() => expect(messages).toHaveLength(1));
+      expect(messages[0].speaker?.isOwner).toBe(true);
+    } finally { timeoutSpy.mockRestore(); }
+  });
+
+  it.each(['sendMessage', 'answerCallbackQuery', 'editMessageText'])('dispose 取消挂起的准入 %s 请求并释放更新链', async (method) => {
+    await connect();
+    if (method !== 'sendMessage') {
+      api.pushUpdates([membership(490)]);
+      await drained(490);
+    }
+    const original = api.call.bind(api);
+    let captured: AbortSignal | undefined;
+    api.call = async (name, params, signal) => {
+      if (name !== method) return original(name, params, signal);
+      captured = signal;
+      return new Promise((_, reject) => {
+        if (signal?.aborted) reject(new Error('aborted'));
+        else signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      });
+    };
+    api.pushUpdates([method === 'sendMessage' ? membership(491) : click(approvalButton(), 491)]);
+    await vi.waitFor(() => expect(captured).toBeDefined());
+    await im.dispose();
+    expect(captured!.aborted).toBe(true);
+  });
+
+  // Round 3: awaiting the old unbounded membership notice stalled every chat.
+  // Real polling entry, unit tier; hanging notices must not hold the durable membership
+  // decision, owner DM delivery, next poll, or lifecycle cancellation in any branch.
+  it.each([
+    { name: '用户邀请', actor: 111, joined: true, expected: 'approved' },
+    { name: '他人邀请待批准', actor: 222, joined: true, expected: 'pending' },
+    { name: '移出群', actor: 222, joined: false, expected: 'denied' },
+  ])('$name 的通知挂起时，准入保存后仍继续轮询和派发用户私聊', async ({ actor, joined, expected }) => {
+    await connect();
+    const original = api.call.bind(api);
+    let noticeSignal: AbortSignal | undefined;
+    api.call = async (method, params, signal) => {
+      if (method !== 'sendMessage') return original(method, params, signal);
+      noticeSignal = signal;
+      return new Promise((_, reject) => {
+        if (signal?.aborted) reject(new Error('aborted'));
+        else signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      });
+    };
+    const messages: IMMessageEvent[] = [];
+    im.onMessage((m) => messages.push(m));
+    api.pushUpdates([membership(500, actor, joined), privateMessage('still here', 111, 501)]);
+    await vi.waitFor(() => expect(noticeSignal).toBeDefined());
+    await drained(501);
+    await vi.waitFor(() => expect(messages).toHaveLength(1));
+    expect(messages[0].senderId).toBe(OWNER_ID);
+    expect(JSON.parse(ctx.secrets.get(admissionKey)!).groups['-100200'].status).toBe(expected);
+    await im.dispose();
+    expect(noticeSignal!.aborted).toBe(true);
+  });
+
+  it('批准保存失败不放行，换绑定用户后旧批准和旧按钮均无效', async () => {
+    await connect();
+    api.pushUpdates([membership(440)]);
+    await drained(440);
+    const button = approvalButton();
+    const write = ctx.host.secrets.write;
+    ctx.host.secrets.write = (key, value) => key === admissionKey ? false : write(key, value);
+    api.pushUpdates([click(button, 441)]);
+    await drained(441);
+    expect(JSON.parse(ctx.secrets.get(admissionKey)!).groups['-100200'].status).toBe('pending');
+    ctx.host.secrets.write = write;
+    api.pushUpdates([click(button, 442)]);
+    await drained(442);
+    await ctx.handlers.get('telegramBot:set-config')!({ token: '999:secret-token-abcdefghijk', ownerUserId: '333' });
+    api.pushUpdates([click(button, 443, 333, 333), groupMessage({ text: 'no inherited access', fromId: 222, messageId: 444, mentionBot: true })]);
+    await drained(444);
+    expect(JSON.parse(ctx.secrets.get(admissionKey)!).identity).toBe('999:333');
+    expect(JSON.parse(ctx.secrets.get(admissionKey)!).groups['-100200'].status).toBe('pending');
   });
 });

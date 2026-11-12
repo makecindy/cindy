@@ -8,6 +8,14 @@ import {
 } from '@/lib/messageAutomationOrigin';
 
 describe('toMessageAutomationOrigin', () => {
+  // 回归：系统合批没有唯一发送方任务，不能跳转首个 Worker（unit）。
+  it.each([undefined, 'worker-1'])('keeps batch count without a single-worker link (%s)', senderSessionId => {
+    expect(toMessageAutomationOrigin({ kind: 'orca', senderLabel: 'A', senderSessionId,
+      autoBridge: true, autoBridgeBatchCount: 2 })).toEqual({
+      kind: 'session', orca: true, orcaAutoBridgeBatchCount: 2,
+    });
+  });
+
   it('keeps scheduler origins unchanged', () => {
     const origin = { kind: 'scheduler', scheduleId: 's1', scheduleName: 'Nightly', runId: 'r1' };
     expect(toMessageAutomationOrigin(origin)).toBe(origin);
@@ -44,6 +52,23 @@ describe('toMessageAutomationOrigin', () => {
       senderBotId: 'bot-1',
       senderBotName: 'Cindy',
     });
+  });
+
+  // bot-group-chat.md §10: a member's words from a task card's Thread have no sending task, yet
+  // must still name the speaker and group (not the redacted "another task" label).
+  it('keeps the speaker and group of words passed in from a task card Thread', () => {
+    const groupThread = { groupId: 'g1', groupName: 'Launch', speakerId: 'm1', speakerName: 'Ann' };
+    expect(toMessageAutomationOrigin({ kind: 'session', senderSessionId: '', displayText: 'hi',
+      senderBotId: 'bot-1', senderBotName: 'Cindy', groupThread })).toEqual({
+      kind: 'session', senderBotId: 'bot-1', senderBotName: 'Cindy', groupThread });
+  });
+
+  // bot-group-chat.md「群里的 Cindy」: a request to the group's Cindy has no sending task either; the
+  // bubble names the group and the speaker, as the model's [消息来源] does.
+  it('keeps the group and speaker of a request to the group Cindy', () => {
+    const groupRequest = { groupId: 'g1', groupName: 'Launch', speakerId: 'm1', speakerName: 'Chris' };
+    expect(toMessageAutomationOrigin({ kind: 'session', senderSessionId: '', displayText: 'hi', groupRequest }))
+      .toEqual({ kind: 'session', groupRequest });
   });
 
   it('links Orca messages to the sending session and keeps the sender role for the card title', () => {

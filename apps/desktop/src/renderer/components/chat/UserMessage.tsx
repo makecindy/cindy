@@ -1,3 +1,4 @@
+import '@/styles/chatContentDirection.css';
 import { BotChatQuoteInBubble } from '@/features/bots/BotChatQuoteViews';
 import { useBotChatQuote } from '@/features/bots/botChatQuoteContext';
 import { botReplyQuoteFor } from '@/features/bots/botDmQuote';
@@ -87,6 +88,7 @@ import { ChatImageView } from './ChatImageView';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox } from './ToolPayloadLightbox';
 import { MessageActionBar } from './MessageActionBar';
+import { renderPluginUiBody, type PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { shareSelectionStore } from './shareSelectionStore';
 import { ErrorMessageCard } from './ErrorMessageCard';
 import { useForkAtMessage, textToTiptapDoc } from './useForkAtMessage';
@@ -146,6 +148,7 @@ type UserImageItem =
   | { base64: string; mimeType: string; originalName?: string };
 
 interface UserMessageProps {
+  pluginUi: PluginUiMessageCandidates;
   /** Pending delivery uses the same bubble, with queue actions instead of history actions. */
   pendingActions?: ReactNode;
   pendingEditing?: boolean;
@@ -827,6 +830,7 @@ export function renderContent(
 // 老 UserImageItemView 已迁出,见 ChatImageView.tsx。
 
 export function UserMessage({
+  pluginUi,
   pendingActions,
   pendingEditing,
   pendingIndicator,
@@ -1247,12 +1251,15 @@ export function UserMessage({
 
   const orcaWorkerRole =
     automationOrigin?.kind === 'session' ? automationOrigin.orcaSenderLabel : undefined;
+  const orcaBatchCount = automationOrigin?.kind === 'session' ? automationOrigin.orcaAutoBridgeBatchCount : undefined;
   const orcaCardTitle =
-    orcaCommunication?.orcaSource === 'lead'
-      ? t('chat.userMessage.orcaFromLead')
-      : orcaWorkerRole
-        ? t('chat.userMessage.orcaFromWorkerNamed', { role: orcaWorkerRole })
-        : t('chat.userMessage.orcaFromWorker');
+    orcaBatchCount
+      ? t('chat.userMessage.orcaFromWorkerBatch', { count: orcaBatchCount })
+      : orcaCommunication?.orcaSource === 'lead'
+        ? t('chat.userMessage.orcaFromLead')
+        : orcaWorkerRole
+          ? t('chat.userMessage.orcaFromWorkerNamed', { role: orcaWorkerRole })
+          : t('chat.userMessage.orcaFromWorker');
 
   // 伙伴对话：其他任务转来的消息不占主人在右侧的位置，收成左侧一行来信，点开看全文
   // （2026-11-10 主人裁决；普通任务页不变）。
@@ -1276,6 +1283,7 @@ export function UserMessage({
   // Attachments belong to the user message independently of its visual shell.
   const messageActions = pendingActions ?? (
     <MessageActionBar
+      pluginUi={pluginUi}
       createdAt={createdAt}
       copyText={copyText}
       copyLinkText={messageDeepLink}
@@ -1357,6 +1365,7 @@ export function UserMessage({
         'flex w-full',
         orcaCommunication || hookSource || botLetter ? 'justify-start' : 'justify-end',
         bubbleActions && 'group/message',
+        simplifiedBotConversation && 'chat-bubble-layout',
         // 与伙伴回复的气泡对齐：头像 28px + 间距 10px。
         botLetter && 'group/letter pl-[38px]',
       )}
@@ -1432,7 +1441,7 @@ export function UserMessage({
               </button>
               {orcaExpanded && (
                 <div className="border-t border-[var(--msg-tool-card-border)] px-3 py-2">
-                  <pre data-selection-quote-body="" className="m-0 whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_2px)] leading-[calc(var(--app-code-font-size)_+_4px)] text-foreground">
+                  <pre data-selection-quote-body="" className="chat-content-text m-0 whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_2px)] leading-[calc(var(--app-code-font-size)_+_4px)] text-foreground">
                     {displayContent}
                   </pre>
                 </div>
@@ -1451,7 +1460,7 @@ export function UserMessage({
             />
             {letterExpanded && (
               <div className="flex w-full flex-col items-start gap-1.5 border-l-2 border-[var(--border-default)] pl-3">
-                <div className="w-full select-text whitespace-pre-wrap text-13 leading-5 text-[var(--text-secondary)] [overflow-wrap:anywhere]">
+                <div className="chat-content-text w-full select-text whitespace-pre-wrap text-13 leading-5 text-[var(--text-secondary)] [overflow-wrap:anywhere]">
                   {displayContent}
                 </div>
                 <BotTaskLetterOpen
@@ -1572,6 +1581,8 @@ export function UserMessage({
             无余文时气泡只剩标注行。 */}
                 {(inlineQuoteCount > 0 || displayBubbleBody.trim() || ghostChipDisplay || attachmentsInBubble) && (
                   <ChatBubble
+                    data-plugin-appearance-region
+                    data-plugin-appearance-speaker="user"
                     speaker="user"
                     // 只剩插件标注行的气泡:分享图会剥掉标注,整泡一起去掉,不留空壳。
                     // 伙伴私聊里附件也在气泡内,有附件就不是空壳。
@@ -1605,7 +1616,7 @@ export function UserMessage({
                         aria-hidden="true"
                         className={cn(
                           'invisible absolute inset-x-4 top-0 max-h-0 overflow-hidden',
-                          'whitespace-pre-wrap [overflow-wrap:anywhere]',
+                          'chat-content-text whitespace-pre-wrap [overflow-wrap:anywhere]',
                         )}
                       >
                         {collapseMeasureBody}
@@ -1615,7 +1626,7 @@ export function UserMessage({
                       <div
                         data-selection-quote-body=""
                         className={cn(
-                          'min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]',
+                          'chat-content-text min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]',
                           longMessageCollapsed &&
                             (isScheduledAutomation ? 'line-clamp-3' : 'line-clamp-10'),
                         )}
@@ -1690,10 +1701,13 @@ export function UserMessage({
                         )}
                       </div>
                     ) : displayBubbleBody.trim() ? (
+                      renderPluginUiBody(pluginUi.messageBody ? { position: 'message.body', role: 'user', sessionId,
+                        disabled: isRemoteFileOrigin(sessionFileCtx.origin), plugin: sourcePlugin?.pluginId,
+                        context: () => ({ message: { clientId: messageClientId, role: 'user', content } }) } : undefined,
                       <div
                         data-selection-quote-body=""
                         className={cn(
-                          'whitespace-pre-wrap [overflow-wrap:anywhere]',
+                          'chat-content-text whitespace-pre-wrap [overflow-wrap:anywhere]',
                           longMessageCollapsed &&
                             (isScheduledAutomation ? 'line-clamp-3' : 'line-clamp-10'),
                         )}
@@ -1751,6 +1765,7 @@ export function UserMessage({
                               bubbleAgentReferences,
                             )}
                       </div>
+                      )
                     ) : null}
                     {shouldCollapseLongMessage && (
                       <button

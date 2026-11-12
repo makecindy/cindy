@@ -190,10 +190,12 @@ import {
   buildBotGroupNotifyPayload,
   buildSessionNotifyPayload,
   type MobileSessionEventKind,
+  type PermissionAlert,
+  type QuestionAlert,
 } from './mobileNotify';
 import { createSubscriptionReplayScheduler, isPermanentSubscriptionReplayError } from './subscriptionReplayScheduler';
 import { getNotificationImageLabel, getSessionNotificationBody } from '../sessionNotificationCopy';
-import { deviceLinkApiFetch, officialDeviceLinkApiBase, resolveDeviceLinkApiBase } from './deviceLinkApi.js';
+import { deviceLinkApiFetch, officialDeviceLinkApiBase, resolveDeviceLinkApiBase } from './deviceLinkApi.desktop.js';
 import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
 import { currentRelayFrameAuth } from './selfHostedRelayFrameAuth.js';
 import { installAgentNetMediaRouting } from './agentNetMedia.js';
@@ -2603,6 +2605,12 @@ export function sendMobileSessionNotify(payload: {
   muteExempt?: boolean;
   /** Execution host for a remotely mirrored session. */
   remoteDeviceId?: string;
+  /** needs-reply only: one waiting tool permission the alert describes and can answer. */
+  permission?: PermissionAlert;
+  /** needs-reply only: the one question the agent is waiting on. */
+  question?: QuestionAlert;
+  /** The alert offers a text reply into this task. */
+  reply?: boolean;
 }): boolean {
   if (!client) return false;
   // 「消息免打扰」任务不推手机。放在这里而不是各调用方:代输入等旁路不经过
@@ -2636,6 +2644,9 @@ export function sendMobileSessionNotify(payload: {
       imageFallback: getNotificationImageLabel(),
       ...(payload.teammateBotId ? { teammateBotId: payload.teammateBotId } : {}),
       ...(payload.teammateAvatar ? { teammateAvatar: payload.teammateAvatar } : {}),
+      ...(payload.permission ? { permission: payload.permission } : {}),
+      ...(payload.question ? { question: payload.question } : {}),
+      ...(payload.reply ? { reply: true } : {}),
     }),
   );
   if (sent) {

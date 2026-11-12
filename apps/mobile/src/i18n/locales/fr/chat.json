@@ -91,7 +91,7 @@
       "ghPrCreate": "Créer une pull request",
       "ghPrEdit": "Modifier la pull request",
       "ghPrComment": "Commenter la pull request",
-      "ghPrReview": "Revue de la pull request",
+      "ghPrReview": "Relire la pull request",
       "ghPrMerge": "Fusionner la pull request",
       "ghPrClose": "Fermer la pull request",
       "ghPrReopen": "Rouvrir la pull request",
@@ -200,5 +200,13 @@
       }
     },
     "failed_many": "{{count}} appels ont échoué"
+  },
+  "subscriptionAccountError": {
+    "limited": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Attendez sa réinitialisation ou choisissez une autre source de modèles. Le compte n’est pas changé automatiquement.",
+    "limitedUntil": "Le compte avec abonnement utilisé par cette tâche a atteint sa limite d’utilisation. Réinitialisation prévue : {{resetAt}}. Attendez cette date ou choisissez une autre source de modèles. Le compte n’est pas changé automatiquement.",
+    "loginRequired": "Le compte avec abonnement utilisé par cette tâche nécessite une nouvelle connexion. Reconnectez-vous sur l’ordinateur qui exécute la tâche, puis réessayez.",
+    "signingIn": "La connexion au compte avec abonnement utilisé par cette tâche est en cours. Réessayez une fois la connexion terminée.",
+    "unavailable": "Le compte avec abonnement affecté à cette tâche ne peut pas être utilisé pour cette demande. Vérifiez le compte dans les paramètres du fournisseur de modèles sur l’ordinateur d’exécution, ou choisissez une autre source de modèles.",
+    "legacy": "Le compte avec abonnement affecté à cette tâche est indisponible. Vérifiez sa connexion et son utilisation sur l’ordinateur d’exécution, ou choisissez une autre source de modèles. Le compte n’est pas changé automatiquement."
   }
 }

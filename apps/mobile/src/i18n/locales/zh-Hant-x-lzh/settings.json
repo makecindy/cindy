@@ -57,7 +57,7 @@
     },
     "saveFailed": "顯示模式未能存，重啟後將復前設",
     "userBubble": {
-      "title": "吾訊氣泡之色",
+      "title": "君訊氣泡之色",
       "presets": "色",
       "default": "常例",
       "peach": "初稿",
@@ -152,8 +152,8 @@
     "title": "Beta 試行之途",
     "badge": "Beta",
     "description": "先受將發之用戶端更新。內容更新於下次察時取下，重啟 App 後生效。",
-    "saveFailed": "Beta 測試管道之設未能存",
-    "unavailable": "Beta 測試管道暫不可用，連不上 Beta 更新伺服器。"
+    "saveFailed": "Beta 試行之設未能存",
+    "unavailable": "Beta 試行之途暫不可用，連不上 Beta 更新伺服器。"
   },
   "notifications": {
     "sectionTitle": "告",
@@ -171,7 +171,11 @@
       "auto": "自動",
       "on": "常啟",
       "off": "關閉"
-    }
+    },
+    "actionReplyPlaceholder": "書覆",
+    "actionNotDelivered": "未達電腦，請啟 Cindy 處之。",
+    "actionReplyNotDelivered": "覆未發出，請啟 Cindy 再發：{{text}}",
+    "actionRequestEnded": "此請已決，或已逾期。"
   },
   "about": {
     "sectionTitle": "關於此手機",
@@ -329,7 +333,7 @@
       }
     },
     "enroll": {
-      "description": "請以平常語氣朗讀下列 {{clips}} 段文字。每段至多錄 {{seconds}} 秒，讀畢點選結束錄音。請於平日用語音輸入之處錄之，勿令他人同時說話。",
+      "description": "請以平常語氣朗讀下列 {{clips}} 段文字。每段至多錄 {{seconds}} 秒，讀畢點選「止錄」。請於平日用語音輸入之處錄之，勿令他人同時說話。",
       "step": "第 {{current}} / {{total}} 段",
       "record": "始朗讀",
       "stop": "止錄",
@@ -361,7 +365,7 @@
         "recording": "方錄"
       },
       "rerecordStep": "再錄第 {{index}} 段",
-      "readHint": "備妥即始朗讀，讀畢點選結束錄音。",
+      "readHint": "備妥即始朗讀，讀畢點選「止錄」。",
       "otherClipsKept": "他段之錄音皆存。"
     }
   },
@@ -397,7 +401,7 @@
     "reset": "復預設",
     "voiceKey": {
       "title": "語音鍵",
-      "hint": "長按此鍵始言，釋之則止，所言之字留於輸入框。於首頁長按，則逕開新務。若擇 A、B、L1、R1，則其本有之準、返、翻頁皆為所佔。",
+      "hint": "長按此鍵始言，釋之則止，所言之字留於輸入框。於首頁長按，則逕開新差事。若擇 A、B、L1、R1，則其本有之準、返、翻頁皆為所佔。",
       "capture": "按手把之鍵以設之",
       "capturing": "請按欲用之鍵…"
     },

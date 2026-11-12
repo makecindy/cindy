@@ -2860,6 +2860,28 @@ function renderExpandedConnection(...args: Parameters<typeof render>) {
   return result;
 }
 
+it.each([
+  ['minimaxVideos', 'minimax-videos'], ['openaiVideos', 'openai-videos'],
+] as const)('保存 %s 视频接口时保留模型，且与原 xAI 选项互斥', async (label, videoApi) => {
+  const initial: CustomProviderConfig = { id: 'video-connection', name: 'Video connection', auth: { method: 'none' },
+    runtimes: { pi: { baseUrl: 'http://127.0.0.1:1234/v1', wireProtocol: 'openai-chat', videoApi: 'xai-videos',
+      models: [{ id: 'MiniMax-H3', name: 'MiniMax-H3', mode: 'video_generation', modalities: { input: ['text', 'image'], output: ['video'] } }] } },
+  };
+  renderExpandedConnection(<ProviderConnectionDialog initial={initial} focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
+  await waitForInitialDialogFocus();
+  const xai = screen.getByRole('checkbox', { name: 'settings.providers.custom.fields.xaiVideos' }) as HTMLInputElement;
+  expect(xai.checked).toBe(true);
+  const chosen = screen.getByRole('checkbox', { name: `settings.providers.custom.fields.${label}` }) as HTMLInputElement;
+  fireEvent.click(chosen);
+  expect(chosen.checked).toBe(true);
+  expect(xai.checked).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+  await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+  const saved = customProviderMocks.updateCustomProvider.mock.calls[0][0] as CustomProviderConfig;
+  expect(saved.runtimes.pi?.videoApi).toBe(videoApi);
+  expect(saved.runtimes.pi?.models).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'MiniMax-H3', mode: 'video_generation' })]));
+});
+
 // Standard: connection fields remain usable while optional editors start closed.
 it('starts manual models and advanced fields closed without hiding model discovery', async () => {
   render(<ProviderConnectionDialog onSaved={vi.fn()} onClose={vi.fn()} />);

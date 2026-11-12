@@ -1,3 +1,4 @@
+import { deleteDeletedSessionViewStates, saveMcpAppViewState } from './mcpAppViewState.js';
 import { fastModeFromStorage, fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
 import { runPluginUsageTransaction } from './pluginUsageTx.js';
@@ -134,6 +135,8 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
       return sessionAgentSwitchFallback(db, txArgs);
     case 'context.rebuild':
       return contextRebuild(db, txArgs);
+    case 'mcpApps.viewState.save':
+      return saveMcpAppViewState(db, txArgs);
     case 'message.insert':
       return messageInsert(db, txArgs);
     case 'message.updateContent':
@@ -324,18 +327,27 @@ function expectOptionalFlag(value: unknown, name: string): boolean {
   return value;
 }
 
+/** Internal main → worker projection; omitted by older callers, preserving their singleton guard. */
+function inactiveCindyIds(value: unknown): Set<string> {
+  if (value === undefined) return new Set();
+  if (!Array.isArray(value)) throw invalidArgs('inactiveCindyIds must be a string array');
+  return new Set(value.map(id => expectString(id, 'inactiveCindyIds item')));
+}
+
 function botsCreateProfile(db: Database.Database, args: unknown): void {
   const p = asRecord(args, 'bots.createProfile args');
   const id = expectString(p.id, 'id');
   const now = expectNumber(p.now, 'now');
   const allowDuplicateName = expectOptionalFlag(p.allowDuplicateName, 'allowDuplicateName');
+  const inactive = inactiveCindyIds(p.inactiveCindyIds);
   db.transaction(() => {
     const config = JSON.parse(expectString(p.capabilitiesJson, 'capabilitiesJson'));
-    const rows = db.prepare(`SELECT p.id, p.display_name AS name, v.capabilities_json AS config, v.identity_source AS identity
+    const rows = db.prepare(`SELECT p.id, p.status, p.display_name AS name, v.capabilities_json AS config, v.identity_source AS identity
       FROM bot_profiles p JOIN bot_profile_versions v ON v.bot_id = p.id AND v.version = p.current_version
-      WHERE p.status != 'archived'`).all() as Array<{ id: string; name: string; config: string; identity: string }>;
+      WHERE p.status != 'archived'`).all() as Array<{ id: string; status: string; name: string; config: string; identity: string }>;
     if ((!allowDuplicateName && rows.some(row => normalizeBotName(row.name) === normalizeBotName(expectString(p.displayName, 'displayName')))) ||
-        (config.templateId === 'cindy' && rows.some(row => JSON.parse(row.config).templateId === 'cindy' || inferBotTemplatePresetId(row.identity) === 'cindy'))) {
+        (config.templateId === 'cindy' && rows.some(row => (row.status === 'deleting' || !inactive.has(row.id))
+          && (JSON.parse(row.config).templateId === 'cindy' || inferBotTemplatePresetId(row.identity) === 'cindy')))) {
       throw Object.assign(new Error('A matching companion already exists'), { code: 'ALREADY_EXISTS' });
     }
     db.prepare(`INSERT INTO bot_profiles
@@ -371,6 +383,7 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
   const expectedVersion = expectNumber(p.expectedCurrentVersion, 'expectedCurrentVersion');
   const now = expectNumber(p.now, 'now');
   const allowDuplicateName = expectOptionalFlag(p.allowDuplicateName, 'allowDuplicateName');
+  const inactive = inactiveCindyIds(p.inactiveCindyIds);
   const avatarRef = p.botAvatarRef === undefined
     ? null
     : asRecord(p.botAvatarRef, 'botAvatarRef');
@@ -394,7 +407,7 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
       throw Object.assign(new Error('Bot Profile 已被另一处更新，请刷新后重试'), { code: 'PRECONDITION_FAILED' });
     }
     if (p.expectedAvatar !== undefined && current.avatar !== expectString(p.expectedAvatar, 'expectedAvatar')) {
-      throw Object.assign(new Error('Teammate avatar changed during update'), { code: 'PRECONDITION_FAILED' });
+      throw Object.assign(new Error('Buddy avatar changed during update'), { code: 'PRECONDITION_FAILED' });
     }
     if (!allowDuplicateName && p.displayName !== undefined && normalizeBotName(expectString(p.displayName, 'displayName')) !== normalizeBotName(current.displayName)) {
       const name = normalizeBotName(expectString(p.displayName, 'displayName'));
@@ -429,17 +442,28 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
     if (permissionMode !== undefined && !['ask', 'auto', 'bypassPermissions'].includes(permissionMode)) {
       throw new Error('Invalid canonical permission mode');
     }
-    const latest = editsContent || permissionMode !== undefined || p.clearScheduledModelBaseline === true
+    const latest = editsContent || permissionMode !== undefined || p.clearScheduledModelBaseline === true || p.inactiveCindyIds !== undefined
       ? db.prepare('SELECT capabilities_json AS json, identity_source AS identity FROM bot_profile_versions WHERE bot_id = ? AND version = ?')
         .get(id, expectedVersion) as { json: string; identity: string } | undefined
       : undefined;
-    if ((editsContent || permissionMode !== undefined || p.clearScheduledModelBaseline === true) && !latest) {
+    if ((editsContent || permissionMode !== undefined || p.clearScheduledModelBaseline === true || p.inactiveCindyIds !== undefined) && !latest) {
       throw Object.assign(new Error('Bot profile version missing'), { code: 'PRECONDITION_FAILED' });
     }
     const latestConfig = latest ? asRecord(JSON.parse(latest.json), 'capabilities') : undefined;
     const nextConfig = editsContent
       ? asRecord(JSON.parse(expectString(p.capabilitiesJson, 'capabilitiesJson')), 'capabilities')
       : latestConfig ? { ...latestConfig } : undefined;
+    // A cloud restoration can reactivate an existing copy as well as create one. Do not
+    // race a new local Cindy into existence after the host's asynchronous preflight.
+    if (p.inactiveCindyIds !== undefined && nextConfig?.templateId === 'cindy') {
+      const others = db.prepare(`SELECT p.id, p.status, v.capabilities_json AS config, v.identity_source AS identity
+        FROM bot_profiles p JOIN bot_profile_versions v ON v.bot_id = p.id AND v.version = p.current_version
+        WHERE p.id != ? AND p.status != 'archived'`).all(id) as Array<{ id: string; status: string; config: string; identity: string }>;
+      if (others.some(row => (row.status === 'deleting' || !inactive.has(row.id))
+        && (JSON.parse(row.config).templateId === 'cindy' || inferBotTemplatePresetId(row.identity) === 'cindy'))) {
+        throw Object.assign(new Error('A matching companion already exists'), { code: 'ALREADY_EXISTS' });
+      }
+    }
     const permission = permissionMode === 'bypassPermissions' ? 'trusted' : permissionMode;
     if (nextConfig && latestConfig) {
       // Composer saves can change permissions in place without losing the version
@@ -862,19 +886,26 @@ function botsCreateGroupLane(db: Database.Database, args: BotGroupsCreateLaneArg
     if (!profile || profile.status !== 'active') {
       throw Object.assign(new Error('伙伴当前不可用'), { code: 'MEMBER_UNAVAILABLE' });
     }
-    const existing = db.prepare(`SELECT l.session_id AS sessionId FROM bot_session_links l
+    const existing = db.prepare(`SELECT l.session_id AS sessionId, s.working_dir AS workingDir FROM bot_session_links l
       INNER JOIN sessions s ON s.id = l.session_id
       WHERE l.bot_id = ? AND l.role = 'group' AND l.route_key = ? AND l.archived_at IS NULL
         AND s.source = 'bot' AND s.status = 'active'
-      LIMIT 1`).get(botId, routeKey) as { sessionId: string } | undefined;
-    if (existing) return { sessionId: existing.sessionId, created: false };
+      LIMIT 1`).get(botId, routeKey) as { sessionId: string; workingDir: string | null } | undefined;
+    const replace = existing && p.replaceOtherWorkingDir === true && existing.workingDir !== (s.workingDir ?? null);
+    if (existing && !replace) return { sessionId: existing.sessionId, created: false };
+    if (existing) {
+      // The group's project folder changed on this computer: the lane moves with it.
+      db.prepare('UPDATE bot_session_links SET archived_at = ? WHERE session_id = ?').run(createdAt, existing.sessionId);
+      db.prepare(`UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active'`)
+        .run(createdAt, existing.sessionId);
+    }
     insertBotSession(db, s);
     db.prepare(`INSERT INTO bot_session_links
       (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
       VALUES (?, ?, ?, ?, 'group', ?, ?, NULL)`)
       .run(`${botId}:${sessionId}`, botId, sessionId, profile.version, routeKey, createdAt);
     const permission = botsReconcileLanePermission(db, { sessionId });
-    return { sessionId, created: true,
+    return { sessionId, created: true, ...(existing ? { replacedSessionId: existing.sessionId } : {}),
       ...(permission.canonicalSessionId ? { permissionRepairCanonicalSessionId: permission.canonicalSessionId } : {}) };
   })();
 }
@@ -1269,6 +1300,8 @@ function botsDeleteProfile(
           .run(status, at, ...projectChanged);
       }
     }
+
+    deleteDeletedSessionViewStates(db, [...allSessionIds, ...projectChanged]);
 
     const hasMediaRefs = Boolean(db.prepare(
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'media_refs'",
@@ -1978,11 +2011,13 @@ function messageDelete(
     db.prepare("DELETE FROM messages WHERE role = 'context_rebuild' AND session_id = ?").run(
       sessionId,
     );
+    const deleteState = db.prepare('DELETE FROM mcp_app_view_states WHERE message_id = ?');
     const scrubTarget = db.prepare(
       "UPDATE messages SET role = 'message_tombstone', content = 'null', tool_use_id = NULL, agent_meta = NULL, agent_kind = NULL, rewind_at = ? WHERE id = ? AND session_id = ? AND client_id = ? AND role IN ('user', 'assistant', 'tool_use', 'tool_result', 'ask_user', 'plan_review', 'thinking', 'error') AND rewind_at IS NULL",
     );
     for (const target of targets) {
       const scrubbed = scrubTarget.run(updatedAt, target.id, sessionId, target.clientId);
+      deleteState.run(target.id);
       if (scrubbed.changes !== 1) {
         throw Object.assign(new Error(`Message 删除竞态: ${target.clientId}`), {
           code: 'PRECONDITION_FAILED',
@@ -2208,6 +2243,9 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
           RETURNING id AS sessionId, title, working_dir AS workingDir, workspace_kind AS workspaceKind,
             remote_host_id AS remoteHostId, source`).all(now, sessionId) as SessionsSetTerminalStatusResult['deletedSideChats']
       : [];
+    if (status === 'deleted') {
+      deleteDeletedSessionViewStates(db, [sessionId, ...deletedSideChats.map(child => child.sessionId)]);
+    }
     for (const child of deletedSideChats) {
       db.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, child.sessionId);
     }
@@ -3114,6 +3152,7 @@ function sessionImportShare(db: Database.Database, args: unknown): { messageCoun
       deleteReplacedSession.run(replacementUpdatedAt, replacedSession.id);
       db.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(replacementUpdatedAt, replacedSession.id);
     }
+    deleteDeletedSessionViewStates(db, replaceSessions.map(session => session.id));
     let messageCount = insertSessionWithMessages(session, messages);
     if (orca) {
       const team = asRecord(orca.team, 'orca.team');

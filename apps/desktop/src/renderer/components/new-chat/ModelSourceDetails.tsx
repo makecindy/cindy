@@ -20,6 +20,7 @@ import { CHATGPT_MODEL_PREFIX } from '../../../shared/subscriptionModels';
 import { RESET_PENDING_MAX_MS } from '../status/quotaResetRollup';
 import {
   providerWeeklyQuotaSource,
+  poolCodexBuckets,
   useProviderUsageSnapshots,
   type ProviderGroupUsage,
   type ProviderUsageScope,
@@ -28,7 +29,7 @@ import {
 import { QUOTA_TEXT_COLOR_CLASSES, quotaSeverity } from '../status/QuotaBar';
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { providerAccountLabel } from '@/lib/providerDisplayName';
-import { DraftClaudeAccountProvider, useDraftClaudeAccount } from './DraftClaudeAccount';
+import { ModelPickerAccountProvider, useModelPickerAccount } from './ModelPickerAccount';
 
 type SourceUsage = ProviderUsageSnapshots & {
   source: NonNullable<ProviderUsageSnapshots['source']>;
@@ -52,7 +53,11 @@ function SourceUsageProvider({
   children: ReactNode;
 }) {
   const parent = useContext(UsageContext);
-  const { source, codex, claude, xai, kimi, opencodeGo } = useProviderUsageSnapshots(provider, scope, { web: true });
+  const { source, codex, claude, xai, kimi, opencodeGo } = useProviderUsageSnapshots(
+    provider,
+    scope,
+    { web: true },
+  );
   const value = useMemo(() => {
     if (!source) return parent;
     const next = new Map(parent);
@@ -85,10 +90,17 @@ export function ModelSourceUsageProvider({
   const enabled = scope !== null && !isProviderShareAgentDeviceId(scope.deviceId);
   const deviceId = scope?.deviceId ?? null;
   const selfDeviceId = useOptionalAuthDeviceId();
-  const previewPool = enabled && !!scope?.previewSubscriptionPool &&
-    (deviceId === null || deviceId === selfDeviceId) &&
-    providers.some(provider => provider.id === 'anthropic' && provider.auth?.method === 'oauth' &&
-      providerWeeklyQuotaSource(provider) === 'claude' && !provider.subscriptionAccount?.reconnectRequired);
+  const accountProviders = (enabled ? providers : [])
+    .filter(
+      (provider) =>
+        (provider.id === 'anthropic' || provider.id === 'openai') &&
+        provider.auth?.method === 'oauth' &&
+        !provider.subscriptionAccount?.reconnectRequired,
+    )
+    .map((provider) => provider.id as 'anthropic' | 'openai');
+  // A shared directory has no private pool, but its rail may also contain an
+  // explicitly owned computer. Each rail boundary checks its own source.
+  const previewPool = scope !== null;
   useEffect(() => {
     if (!enabled) return;
     const timer = setInterval(() => setNowMs(Date.now()), 1000);
@@ -105,7 +117,8 @@ export function ModelSourceUsageProvider({
         const readerDeviceId =
           group?.kind === 'running' && group.usage ? group.usage.scope.deviceId : deviceId;
         const source = providerWeeklyQuotaSource(provider);
-        if (provider.auth?.method !== 'oauth' && source !== 'kimi' && source !== 'opencode-go') return content;
+        if (provider.auth?.method !== 'oauth' && source !== 'kimi' && source !== 'opencode-go')
+          return content;
         if (!source || provider.subscriptionAccount?.reconnectRequired) return content;
         return (
           <SourceUsageProvider
@@ -120,7 +133,12 @@ export function ModelSourceUsageProvider({
       }, children)
     : children;
   return (
-    <DraftClaudeAccountProvider enabled={previewPool}>
+    <ModelPickerAccountProvider
+      enabled={previewPool}
+      taskId={scope?.taskId}
+      providerIds={accountProviders}
+      deviceId={deviceId === selfDeviceId ? null : deviceId}
+    >
       <ClockContext.Provider value={nowMs}>
         {isolated ? (
           <UsageContext.Provider value={NO_USAGE}>{content}</UsageContext.Provider>
@@ -128,7 +146,7 @@ export function ModelSourceUsageProvider({
           content
         )}
       </ClockContext.Provider>
-    </DraftClaudeAccountProvider>
+    </ModelPickerAccountProvider>
   );
 }
 
@@ -148,35 +166,43 @@ function modelSourceQuota(
   windows: QuotaWindow[];
 } {
   if (!usage) return { plan: null, windows: [] };
-  if (usage.source === 'kimi') return {
-    plan: null,
-    windows: usage.kimi?.windows.map(w => ({
-      labelKey: `providerAccountUsage.kimi.${w.id}`,
-      usedPercent: w.usedPercent, resetsAt: w.resetsAt === null ? null : w.resetsAt / 1000, windowMinutes: kimiUsageWindowMinutes(w.id),
-    })) ?? [],
-  };
-  if (usage.source === 'opencode-go') return {
-    plan: null,
-    windows: usage.opencodeGo?.windows.map(window => ({
-      labelKey: window.id === 'rolling'
-        ? 'providerAccountUsage.kimi.limit_5h'
-        : window.id === 'weekly'
-          ? 'providerAccountUsage.kimi.limit_7d'
-          : 'providerAccountUsage.kimi.limit_month_total',
-      usedPercent: window.usedPercent,
-      resetsAt: window.resetsAt === null ? null : window.resetsAt / 1000,
-      windowMinutes: opencodeGoUsageWindowMinutes(window.id),
-    })) ?? [],
-  };
+  if (usage.source === 'kimi')
+    return {
+      plan: null,
+      windows:
+        usage.kimi?.windows.map((w) => ({
+          labelKey: `providerAccountUsage.kimi.${w.id}`,
+          usedPercent: w.usedPercent,
+          resetsAt: w.resetsAt === null ? null : w.resetsAt / 1000,
+          windowMinutes: kimiUsageWindowMinutes(w.id),
+        })) ?? [],
+    };
+  if (usage.source === 'opencode-go')
+    return {
+      plan: null,
+      windows:
+        usage.opencodeGo?.windows.map((window) => ({
+          labelKey:
+            window.id === 'rolling'
+              ? 'providerAccountUsage.kimi.limit_5h'
+              : window.id === 'weekly'
+                ? 'providerAccountUsage.kimi.limit_7d'
+                : 'providerAccountUsage.kimi.limit_month_total',
+          usedPercent: window.usedPercent,
+          resetsAt: window.resetsAt === null ? null : window.resetsAt / 1000,
+          windowMinutes: opencodeGoUsageWindowMinutes(window.id),
+        })) ?? [],
+    };
   if (usage.source === 'codex') {
     const data = usage.codex;
-    // ChatGPT bridge and Codex CLI consume different slots; never cross-fallback.
-    const bucket = modelId.startsWith(CHATGPT_MODEL_PREFIX)
+    // Mirror codexAccountUsageLimit: native pool bridges consume app-server
+    // buckets; legacy web bridges keep their independent WHAM slot.
+    const bucket = modelId.startsWith(CHATGPT_MODEL_PREFIX) && !data?.nativeAccountPool
       ? data?.web
-      : matchCodexBucketForModel(data?.buckets, modelId, nowMs);
+      : matchCodexBucketForModel(data?.buckets, data?.nativeAccountPool ? modelId.replace(/^chatgpt\//, '') : modelId, nowMs);
     return {
       plan: formatCodexPlanLabel(
-        modelId.startsWith(CHATGPT_MODEL_PREFIX)
+        modelId.startsWith(CHATGPT_MODEL_PREFIX) && !data?.nativeAccountPool
           ? bucket?.planType
           : (bucket?.planType ?? data?.planType),
       ),
@@ -211,6 +237,10 @@ function modelSourceQuota(
   };
 }
 
+export function useModelSourceUsage(providerId: string) { return useContext(UsageContext).get(providerId); }
+
+export function useModelSourceNow() { return useContext(ClockContext); }
+
 export function ModelSourceDetails({
   providerId,
   label,
@@ -225,19 +255,67 @@ export function ModelSourceDetails({
   const { t } = useTranslation();
   const usages = useContext(UsageContext);
   const nowMs = useContext(ClockContext);
-  const draftClaude = useDraftClaudeAccount(providerId);
+  const pickerAccount = useModelPickerAccount(providerId);
+  const poolParts = pickerAccount?.members?.map((account, index) => {
+    const view = modelSourceQuota(
+      {
+        source: providerId === 'openai' ? 'codex' : 'claude',
+        codex: {
+          buckets: poolCodexBuckets(account.usage),
+          planType: account.plan ?? null,
+          web: null,
+          nativeAccountPool: true,
+        },
+        claude: account.usage?.claude ?? null,
+        xai: null,
+      },
+      modelId,
+      nowMs,
+    );
+    const live = view.windows.filter(
+      (window) =>
+        Number.isFinite(window.usedPercent) &&
+        !(
+          typeof window.resetsAt === 'number' &&
+          window.resetsAt > 0 &&
+          window.resetsAt * 1000 <= nowMs
+        ),
+    );
+    const used = live.length ? Math.max(...live.map((window) => window.usedPercent)) : null;
+    const percent = used === null ? '—' : `${Math.round(100 - Math.max(0, Math.min(100, used)))}%`;
+    const name =
+      account.identity ?? t('providerGroup.member.accountFallback', { index: index + 1 });
+    const detail = live
+      .map((window) =>
+        [
+          t('quotaCard.remainingPercent', {
+            percent: Math.round(100 - Math.max(0, Math.min(100, window.usedPercent))),
+          }),
+          formatCompactTimeUntilReset(window.resetsAt, nowMs, t, window.windowMinutes),
+        ]
+          .filter(Boolean)
+          .join(' · '),
+      )
+      .join(' · ');
+    const memberPlan =
+      providerId === 'openai'
+        ? formatCodexPlanLabel(account.plan)
+        : formatClaudeSubscriptionPlanLabel(account.plan);
+    return { percent, title: [name, memberPlan, detail || '—'].filter(Boolean).join(' · ') };
+  });
   const quota = modelSourceQuota(usages.get(providerId), modelId, nowMs);
   const { windows } = quota;
-  const plan = draftClaude ? formatClaudeSubscriptionPlanLabel(draftClaude.plan) : quota.plan;
+  const plan = pickerAccount
+    ? providerId === 'openai'
+      ? formatCodexPlanLabel(pickerAccount.plan)
+      : formatClaudeSubscriptionPlanLabel(pickerAccount.plan)
+    : quota.plan;
   const parts = windows
     .filter((window) => Number.isFinite(window.usedPercent))
     .map((window) => {
-      const countdown = formatCompactTimeUntilReset(
-        window.resetsAt,
-        nowMs,
-        t,
-        window.windowMinutes,
-      ) ?? (window.labelKey ? t(window.labelKey) : null);
+      const countdown =
+        formatCompactTimeUntilReset(window.resetsAt, nowMs, t, window.windowMinutes) ??
+        (window.labelKey ? t(window.labelKey) : null);
       // Do not present the previous period's percentage as a fresh quota.
       const expired =
         typeof window.resetsAt === 'number' &&
@@ -265,12 +343,20 @@ export function ModelSourceDetails({
     (best, part) => (!best || part.used >= best.used ? part : best),
     undefined,
   );
-  const identity = draftClaude ? draftClaude.identity ?? t('subscriptionAccounts.unassigned') : accountIdentity;
+  const identity = poolParts?.length
+    ? undefined
+    : pickerAccount
+      ? (pickerAccount.identity ?? t('subscriptionAccounts.unassigned'))
+      : accountIdentity;
   const source = [providerAccountLabel(label, identity), plan].filter(Boolean).join(' · ');
   return (
     <div
       data-model-source-details
-      title={[source, ...parts.map((part) => part.title)].join(' · ')}
+      title={
+        poolParts?.length
+          ? [source, ...poolParts.map((part) => part.title)].join('\n')
+          : [source, ...parts.map((part) => part.title)].join(' · ')
+      }
       className="flex w-0 min-w-full items-center gap-1 whitespace-nowrap pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]"
     >
       <span className="min-w-0 truncate">{source}</span>
@@ -286,9 +372,7 @@ export function ModelSourceDetails({
             {tightest.percentage !== null && (
               <>
                 {' '}
-                <span
-                  className={QUOTA_TEXT_COLOR_CLASSES[quotaSeverity(tightest.used)]}
-                >
+                <span className={QUOTA_TEXT_COLOR_CLASSES[quotaSeverity(tightest.used)]}>
                   {tightest.percentage}
                 </span>
               </>

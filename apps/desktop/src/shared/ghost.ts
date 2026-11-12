@@ -1,9 +1,14 @@
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
 import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '@cindy/plugin-protocol';
+import { getPluginHostUi, hostUiApprovalSubjects, type GhostHostUi } from '@cindy/plugin-protocol';
+import { PLUGIN_APPEARANCE_FIELDS } from '@cindy/plugin-protocol/appearance';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-protocol';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-protocol';
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from '@cindy/plugin-protocol';
+export type { GhostModelRoute } from '@cindy/plugin-protocol';
+import type { GhostModelRoute } from '@cindy/plugin-protocol';
+import { parseGhostSystemPromptFragments, type GhostSystemPromptFragment, type GhostContextBlock, type GhostMemoryEntry } from '@cindy/plugin-protocol';
 import { parseMailReader } from '@cindy/maker-shared/mail-message';
 import { isPluginModelSelection, parsePluginAuthorizationRequest, type PluginAuthorizationRequest, type PluginAuthorizationResult, type PluginModelSelection } from '@cindy/device-link';
 import {
@@ -717,7 +722,7 @@ export type GhostMessageHook = (typeof GHOST_MESSAGE_HOOKS)[number];
 export const GHOST_CONTROL_POINT_FAILURE_ACTIONS = ['allow', 'skip', 'block'] as const;
 export type GhostControlPointFailureAction = (typeof GHOST_CONTROL_POINT_FAILURE_ACTIONS)[number];
 
-export type GhostControlPointAction = 'allow' | 'skip' | 'block' | 'route';
+export type GhostControlPointAction = 'allow' | 'skip' | 'block' | 'route' | 'transform' | 'context' | 'memories';
 
 export interface GhostControlPointSpec {
   /** 插件可返回的裁决(allow 恒可用)。route 只用于开新任务时选模型。 */
@@ -768,6 +773,38 @@ export const GHOST_CONTROL_POINTS = {
     labelKey: 'subscribeStartTask',
     detailKey: 'subscribeStartTaskDetail',
   },
+  'will-start-turn': {
+    actions: ['allow', 'route', 'skip', 'block'],
+    failureActions: ['allow', 'skip', 'block'],
+    defaultOnFailure: 'block',
+    timeoutMs: 1_000,
+    permissionKey: 'subscribe:hooks:start-turn',
+    labelKey: 'subscribeStartTurn',
+    detailKey: 'subscribeStartTurnDetail',
+  },
+  'will-model-request': {
+    actions: ['allow', 'route', 'transform', 'skip', 'block'],
+    failureActions: ['allow', 'skip', 'block'],
+    defaultOnFailure: 'block',
+    timeoutMs: 1_000,
+    permissionKey: 'subscribe:hooks:model-request',
+    labelKey: 'subscribeModelRequest',
+    detailKey: 'subscribeModelRequestDetail',
+  },
+  'will-compose-context': {
+    actions: ['allow', 'context', 'skip', 'block'], failureActions: ['allow', 'skip', 'block'],
+    defaultOnFailure: 'block', timeoutMs: 2_000, permissionKey: 'subscribe:hooks:compose-context',
+    labelKey: 'subscribeComposeContext', detailKey: 'subscribeComposeContextDetail',
+  },
+  'will-search-memory': {
+    actions: ['allow', 'memories'], failureActions: ['allow'],
+    defaultOnFailure: 'allow', timeoutMs: 1_500, permissionKey: 'subscribe:hooks:search-memory',
+    labelKey: 'subscribeSearchMemory', detailKey: 'subscribeSearchMemoryDetail',
+  },
+  'system-prompt': {
+    actions: ['allow'], failureActions: ['allow', 'skip', 'block'], defaultOnFailure: 'block', timeoutMs: 8_000,
+    permissionKey: 'system-prompt', labelKey: 'systemPrompt', detailKey: 'systemPromptDetail',
+  },
 } as const satisfies Record<string, GhostControlPointSpec>;
 export type GhostControlPointId = keyof typeof GHOST_CONTROL_POINTS;
 export const GHOST_CONTROL_POINT_IDS = Object.keys(GHOST_CONTROL_POINTS) as GhostControlPointId[];
@@ -782,8 +819,9 @@ export function declaredAutoApproveTools(manifest: Pick<GhostManifest, 'tools'>)
 }
 
 /** 插件 manifest 里声明且当前 Host 认识的控制节点。 */
-export function declaredGhostControlPoints(manifest: Pick<GhostManifest, 'subscribe'>): GhostControlPointId[] {
-  return (manifest.subscribe?.hooks ?? []).filter(isGhostControlPointId);
+export function declaredGhostControlPoints(manifest: Pick<GhostManifest, 'subscribe' | 'systemPrompt'>): GhostControlPointId[] {
+  const points = (manifest.subscribe?.hooks ?? []).filter((point): point is Exclude<GhostControlPointId, 'system-prompt'> => isGhostControlPointId(point) && point !== 'system-prompt');
+  return manifest.systemPrompt?.length ? [...points, 'system-prompt'] : points;
 }
 
 /** 某个已装插件在该控制节点上是否生效:声明 + 用户确认过。 */
@@ -1644,6 +1682,7 @@ export function isGhostSetupErrorCode(value: unknown): value is GhostSetupErrorC
 
 /** ghost.json 清单(不变量由 validateGhostManifest 保证)。 */
 export interface GhostManifest {
+  systemPrompt?: GhostSystemPromptFragment[];
   /** Optional MCP Apps resources and links to existing tools. */
   mcpApps?: unknown;
   /** Optional v3 extension, validated only when projecting homepage recommendations. */
@@ -1910,6 +1949,8 @@ export interface InstalledGhost {
   /** Independent Host consent for cross-task/companion target access. */
   targetCapabilityApproved?: true;
   uiCapabilityApproved?: true;
+  /** Exact Host UI permission projections shown by a supporting confirmation UI. */
+  approvedHostUi?: string[];
   /** Read-only remote management projection; never persisted as approval. */
   uiPromptSuppressed?: true;
   delegationCapabilityApproved?: true;
@@ -2191,6 +2232,46 @@ export function ghostPermissionProjectionKey(item: GhostPermissionItem): string 
   return JSON.stringify(ghostPermissionProjectionTuple(item));
 }
 
+export function ghostHostUiPermissionItems(manifest: GhostManifest): GhostPermissionItem[] {
+  const host = getPluginHostUi(manifest);
+  return host ? hostUiApprovalSubjects(host).map(subject => ({
+    key: `ui:host:${subject.key}`, kind: 'panel', labelKey: 'uiHost', detailKey: 'uiHostAccess',
+    detailArgs: { subject: subject.key, access: subject.detail },
+  })) : [];
+}
+
+export function ghostHostUiApprovalTokens(manifest: GhostManifest): string[] {
+  return ghostHostUiPermissionItems(manifest).map(ghostPermissionProjectionKey);
+}
+
+/** Receipt approval is independent of a declaration and of the original page grant. */
+export function getApprovedGhostHostUi(ghost: InstalledGhost): GhostHostUi | undefined {
+  if (ghost.approval.state !== 'approved') return;
+  const host = getPluginHostUi(ghost.manifest);
+  if (!host) return;
+  const approved = new Set(ghost.approvedHostUi ?? []);
+  const keys = new Set(ghostHostUiPermissionItems(ghost.manifest)
+    .filter(item => approved.has(ghostPermissionProjectionKey(item))).map(item => item.key));
+  if (!keys.size) return;
+  const has = (kind: string, id: string) => keys.has(`ui:host:${kind}:${id}`);
+  return {
+    views: (host.views ?? []).filter(view => has('view', view.id)),
+    contributions: (host.contributions ?? []).filter(item => has('contribution', item.id) && (!item.view || has('view', item.view))),
+    commands: (host.commands ?? []).filter(command => has('command', command.id) && (!command.view || has('view', command.view))),
+    capabilities: (host.capabilities ?? []).filter(capability => has('capability', capability)),
+    ...(host.settings ? { settings: host.settings.filter(field => has('setting', field.id)) } : {}),
+    ...(host.appearance || host.capabilities?.includes('appearance') ? { appearance: {
+      fields: (host.appearance?.fields ?? PLUGIN_APPEARANCE_FIELDS).filter(field => has('appearance', field)),
+      resources: (host.appearance?.resources ?? []).filter(resource => has('appearance-resource', resource.id)),
+    } } : {}),
+  };
+}
+
+export function ghostHostUiNeedsApproval(ghost: InstalledGhost): boolean {
+  const approved = new Set(ghost.approvedHostUi ?? []);
+  return ghostHostUiApprovalTokens(ghost.manifest).some(token => !approved.has(token));
+}
+
 export function ghostPermissionProjectionFingerprint(manifest: GhostManifest): string {
   return JSON.stringify(
     ghostPermissionItems(manifest)
@@ -2213,6 +2294,9 @@ export function ghostDeclaresHiddenTasks(manifest: Pick<GhostManifest, 'agent'> 
 
 export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionItem[] {
   const items: GhostPermissionItem[] = [];
+  items.push(...ghostHostUiPermissionItems(manifest));
+  if (manifest.systemPrompt?.length) items.push({ key: 'system-prompt', kind: 'subscribe',
+    labelKey: 'systemPrompt', detailKey: 'systemPromptDetail', detail: JSON.stringify(manifest.systemPrompt, null, 2) });
   if (pluginHasToolUi(manifest)) items.push({ key: 'ui:pages', kind: 'panel', labelKey: 'mcpUi',
     detailKey: 'uiPageAccess', detailArgs: {
       pages: (getPluginToolUi(manifest)?.resources ?? []).map(resource => resource.uri).sort().join(', ') || '—',
@@ -2648,6 +2732,7 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
         }
         // 控制节点逐点一项，key 来自目录：新增节点自动进确认清单，更新新增节点会被 diff 拦下复核。
         for (const point of declaredGhostControlPoints(manifest)) {
+          if (point === 'system-prompt') continue;
           const spec = GHOST_CONTROL_POINTS[point];
           hookItems.push({
             key: spec.permissionKey,
@@ -2908,9 +2993,14 @@ export function diffInstalledGhostPermissionItems(
     // Older Hosts preserved ui without granting page capabilities.
     const previous = {
       ...installed.manifest,
-      mcpApps: installed.uiCapabilityApproved === true ? installed.manifest.mcpApps : undefined,
+      mcpApps: installed.manifest.mcpApps && typeof installed.manifest.mcpApps === 'object'
+        ? { ...installed.manifest.mcpApps as object,
+          ui: installed.uiCapabilityApproved === true ? getPluginToolUi(installed.manifest) : undefined,
+          host: getApprovedGhostHostUi(installed) }
+        : undefined,
       // 同理：声明了但用户从没确认过的控制节点不算旧权限，更新时作为新增项复核。
       subscribe: withoutUnapprovedControlPoints(installed),
+      systemPrompt: installed.approvedControlPoints?.includes('system-prompt') ? installed.manifest.systemPrompt : undefined,
       tools: withoutUnapprovedAutoTools(installed),
     };
     const diff = diffGhostPermissionItems(previous, next);
@@ -3409,6 +3499,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'mcpApps',
   'routineEvents',
   'models',
+  'systemPrompt',
   'schemaVersion',
   'id',
   'name',
@@ -5569,6 +5660,11 @@ function validateGhostManifestInput(
   if (routineEvents === null) return { ok: false, reason: 'Invalid routineEvents declaration' };
   const models = raw.models === undefined ? undefined : parseGhostModelsNeeds(raw.models);
   if (models === null) return { ok: false, reason: 'models must be { "types": [...] } with unique type names' };
+  const systemPrompt = prepared.schemaVersion === 3 && raw.systemPrompt !== undefined
+    ? parseGhostSystemPromptFragments(raw.systemPrompt) : undefined;
+  if (raw.systemPrompt !== undefined && !systemPrompt && !preserveHistoricalParameterSize) {
+    return { ok: false, reason: 'systemPrompt 必须是 v3 静态片段数组，含唯一 id、text、整数 order、scope: selected-task' };
+  }
   let subscribe: GhostSubscribeNeeds | undefined;
   if (raw.subscribe !== undefined) {
     if (!isPlainObject(raw.subscribe)) {
@@ -6767,6 +6863,7 @@ function validateGhostManifestInput(
       ...(subscribe !== undefined ? { subscribe } : {}),
       ...(routineEvents !== undefined ? { routineEvents } : {}),
       ...(models !== undefined ? { models } : {}),
+      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(network !== undefined ? { network } : {}),
       ...(preview !== undefined ? { preview } : {}),
       ...(browserExtension !== undefined ? { browserExtension } : {}),
@@ -8921,16 +9018,6 @@ export interface GhostRoutineRunPointData {
   events: { id: string; type: string; sourceId?: string; occurredAt: number; subject?: string; data: Record<string, unknown> }[];
 }
 
-/** 模型路由(插件看到与回传的同一形状)。agentKind: cc = Claude Code。 */
-export interface GhostModelRoute {
-  /** Agent location relative to the task computer; omitted = local. */
-  agentDeviceId?: string;
-  agentKind: 'cc' | 'codex' | 'pi';
-  model: string;
-  providerId: string;
-  effort?: string;
-}
-
 /** 开新任务时(will-start-task)交给插件的数据：第一条消息与用户当前选的模型。不含本机路径。 */
 export interface GhostStartTaskPointData {
   /** 用户选中的、由本插件发布的模型 id。 */
@@ -8942,7 +9029,27 @@ export interface GhostStartTaskPointData {
   route: GhostModelRoute;
 }
 
-export type GhostControlPointData = GhostScheduleRunPointData | GhostRoutineRunPointData | GhostStartTaskPointData;
+export interface GhostRuntimePointData {
+  sessionId: string;
+  route: GhostModelRoute;
+  text?: string;
+  attachmentCount?: number;
+  /** Pi selects the native model before serialization, then processes its payload. */
+  phase?: 'select' | 'payload';
+  request?: Record<string, unknown>;
+}
+
+export const GHOST_MODEL_REQUEST_MAX_CHARS = 1_048_576;
+
+export interface GhostMemorySearchPointData {
+  sessionId: string;
+  query: string;
+  limit: number;
+  type?: 'user' | 'feedback' | 'project' | 'reference';
+}
+export interface GhostComposeContextPointData { sessionId: string; text: string }
+
+export type GhostControlPointData = GhostScheduleRunPointData | GhostRoutineRunPointData | GhostStartTaskPointData | GhostRuntimePointData | GhostMemorySearchPointData | GhostComposeContextPointData;
 
 /** 选择器里的一个插件模型(已按当前语言解析文案)。 */
 export interface GhostPickerModel {
@@ -8969,6 +9076,11 @@ export type GhostControlPointResult =
       failure: boolean;
     }
   | { action: 'route'; ghostId: string; ghostName: string; route: GhostModelRoute; reason: string };
+
+export type GhostRuntimeControlPointResult = GhostControlPointResult
+  | { action: 'context'; ghostId: string; ghostName: string; blocks: GhostContextBlock[] }
+  | { action: 'memories'; ghostId: string; ghostName: string; entries: GhostMemoryEntry[] }
+  | { action: 'transform'; ghostId: string; ghostName: string; request: Record<string, unknown> };
 
 
 /**
@@ -9106,7 +9218,11 @@ export type GhostPipeEventPush =
 export interface GhostPipeEventVerdict {
   type: 'event-verdict';
   hookId: string;
-  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route';
+  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route' | 'transform' | 'context' | 'memories';
+  blocks?: GhostContextBlock[];
+  entries?: GhostMemoryEntry[];
+  /** Provider request JSON body, only for will-model-request phase=payload. */
+  request?: Record<string, unknown>;
   /** route 时选定的模型(仅开新任务时)。 */
   route?: GhostModelRoute;
   /** block 时展示的理由。 */

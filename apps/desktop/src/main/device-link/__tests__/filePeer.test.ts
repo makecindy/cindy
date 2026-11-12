@@ -38,7 +38,7 @@ vi.mock('../../appSessionState', () => ({
   getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: 'cache-owner' }),
   activeOwnerScopeKey: () => 'cache-owner:0',
 }));
-vi.mock('../mediaTransfer', () => ({ removeRemote: vi.fn() }));
+vi.mock('../mediaTransfer.desktop', () => ({ removeRemote: vi.fn() }));
 vi.mock('../mediaFetch', () => ({ resolveAuthorizedMedia: mock.resolve }));
 vi.mock('../settings-store.desktop', () => ({ readDeviceLinkSettings: () => mock.settings }));
 vi.mock('../broadcast-tap', () => ({
@@ -688,6 +688,7 @@ describe('authorized file peer source', () => {
       attachments: true,
       largeAttachments: true,
       streamAttachments: true,
+      rangeReads: true,
       idleMs: 300_000,
       sessionBound: true,
     });
@@ -1111,6 +1112,21 @@ describe('authorized file peer source', () => {
     const { connection } = await connect();
     mock.resolve.mockResolvedValueOnce({ absPath: file, maxBytes: 4 });
     await expect(open(connection)).rejects.toThrow('SIZE');
+  });
+  // Unit: seek reads must return only the requested bytes and reject stale metadata.
+  it('serves a version-bound range through the existing file read endpoint', async () => {
+    const { connection } = await connect();
+    const initial = await open(connection);
+    await read(connection, initial.ticket, 0); await read(connection, initial.ticket, 5);
+    const request = { action: 'open', connection, url: 'xdt-file://test',
+      range: { start: 1, end: 3, version: initial.version } };
+    const part = await requestFilePeer('device-a', request) as { ticket: string; size: number };
+    expect(part.size).toBe(3);
+    expect(Buffer.from(await read(connection, part.ticket, 0), 'base64').toString()).toBe('ell');
+    expect(await read(connection, part.ticket, 3)).toBe('');
+    await expect(requestFilePeer('device-a', { ...request, range: { ...request.range, end: 5 } })).rejects.toThrow('CHANGED');
+    await writeFile(file, 'world');
+    await expect(requestFilePeer('device-a', request)).rejects.toThrow('CHANGED');
   });
   it('rejects changed files and subsequent reads on the stopped connection', async () => {
     const { connection } = await connect(),

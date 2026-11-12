@@ -50,6 +50,7 @@ export interface SchedulerHostRuntime<Deps extends SchedulerHostStartDeps> {
   onStarted(scheduler: Scheduler, deps: Deps, passive: boolean): void;
   /** Wraps the runner, e.g. to skip a teammate project's automations on a computer it was handed away from. */
   wrapRunner?(runner: ScheduleRunner): ScheduleRunner;
+  captureFireContext?: () => () => void;
   /** A real teammate project of this account: its automation files sync without the import prompt. */
   isOwnTeammateProject?(workingDir: string): Promise<boolean>;
   beforeReset(): Promise<void>;
@@ -96,10 +97,12 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
     const baseRunner: ScheduleRunner = {
       fire: (schedule, ctx) =>
         withScheduleLock(schedule.id, ctx.signal, async () => {
+          ctx.assertFireContext?.();
           // 所有定时任务(Agent / 脚本)的唯一入口：插件前置检查放在检查脚本、建任务之前。
           const stopped = deps.screenControlPoint
             ? await screenScheduleRun(deps.screenControlPoint, schedule, ctx, (errorMsg) => notifyPluginStop(schedule, ctx, errorMsg))
             : null;
+          ctx.assertFireContext?.();
           if (stopped) return stopped;
           return schedule.executionMode === 'script'
             ? scriptRunner.fire(schedule, ctx)
@@ -122,6 +125,7 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
     const scheduler = new Scheduler({
       storage,
       runner,
+      captureFireContext: runtime.captureFireContext,
       logger: deps.logger,
       passive,
       instanceId: `${process.pid}:${randomUUID()}`,
@@ -130,6 +134,7 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
       // agent 在对话里建任务时常把自己的 cwd 当 workingDir 传入 —— 引擎据此归一成
       // 对话任务,避免任务/会话错误归入项目分组。path.relative 同时兼容两端分隔符。
       resolvePreRunPlugin: deps.resolvePreRunPlugin,
+      validateModelSelection: (schedule, previous) => promptRunner.validateModelSelection(schedule, previous),
       isManagedWorkspaceDir: (dir) => {
         return runtime.dialogueWorkspaceRoots().some((root) => {
           const rel = path.relative(root, dir);

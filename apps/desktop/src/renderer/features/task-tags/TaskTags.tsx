@@ -189,7 +189,7 @@ export function TaskTagMenuSection({ session, onMore }: { session: Session; onMo
                   onBlur={() =>
                     setHighlightedId((current) => (current === tag.id ? null : current))
                   }
-                  className="group/tag flex h-7 w-6 shrink-0 items-center justify-center rounded-full focus-visible:outline disabled:opacity-40"
+                  className="group/tag flex h-7 w-6 shrink-0 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-40"
                   onClick={async () => {
                     setBusy(true);
                     setError('');
@@ -238,7 +238,7 @@ export function TaskTagMenuSection({ session, onMore }: { session: Session; onMo
           })}
           <button
             type="button"
-            className="group/tag flex h-7 w-6 shrink-0 items-center justify-center rounded-full focus-visible:outline disabled:opacity-40"
+            className="group/tag flex h-7 w-6 shrink-0 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-40"
             aria-label={t('taskTags.more')}
             title={t('taskTags.more')}
             disabled={
