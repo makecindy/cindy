@@ -14,6 +14,7 @@ import type {
   LspMcpDeps,
 } from './types.js';
 import { createFeishuBotMcpServer } from './cindy_feishuBotMcpServer.js';
+import type { ManagedFeishuCardHost } from './cindy_feishuManagedCards.js';
 import { createWechatMcpServer } from './cindy_wechatMcpServer.js';
 import { createSlackMcpGatewayServer } from './cindy_slackMcpServer.js';
 import { createSchedulerMcpServer } from './cindy_schedulerMcpServer.js';
@@ -30,6 +31,7 @@ import { createAndroidMcpServer } from './android/index.js';
 import { resolveLiziMcpSessionContext } from './session-context.js';
 
 export interface CreateLiziMcpProvidersOptions {
+  managedFeishuCards?: ManagedFeishuCardHost;
   /**
    * Optional allow-list. Omit to enable every MCP whose deps were supplied.
    */
@@ -245,6 +247,10 @@ export function createLiziMcpProviders(
         type: 'sdk',
         name: 'cindy_feishu_bot',
         instance: createFeishuBotMcpServer({
+          managedCards: opts.managedFeishuCards ? {
+            send: (card, requestId) => opts.managedFeishuCards!.send(card, requestId, resolveLiziMcpSessionContext(ctx)),
+            update: (messageId, card) => opts.managedFeishuCards!.update(messageId, card, resolveLiziMcpSessionContext(ctx)),
+          } : undefined,
           // 每个 host dep 都带上当前 tool-call 的 session:宿主据此选出这一轮真正要
           // 出站的 bot(个人设置页那份,或触发本轮的伙伴自有连接)。
           getChatId: async () => {

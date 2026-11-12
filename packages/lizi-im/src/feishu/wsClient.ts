@@ -54,6 +54,7 @@ import * as storage from './storage.js';
 import { parseIncoming } from './incomingContent.js';
 import { downloadAttachments } from './attachmentDownloader.js';
 import { parseCardAction } from './cardActionParser.js';
+import { receiveManagedCardAction } from './managedCards.js';
 import { encodeLaneUserId } from './codec.js';
 import {
   coordinateDualDelivery,
@@ -492,8 +493,10 @@ export async function start(
         }
       });
     },
-    'card.action.trigger': (data: unknown) => runInScope(scope, () => handleCardAction(data)),
-    'card.action.trigger_v1': (data: unknown) => runInScope(scope, () => handleCardAction(data)),
+    'card.action.trigger': (data: unknown) => runInScope(scope, () =>
+      isActiveConnection(startedGeneration, creds.appId) ? handleCardAction(data) : {}),
+    'card.action.trigger_v1': (data: unknown) => runInScope(scope, () =>
+      isActiveConnection(startedGeneration, creds.appId) ? handleCardAction(data) : {}),
   });
 
   const onStartFailure = bound((err: unknown) => {
@@ -1073,6 +1076,13 @@ async function handleCardAction(data: unknown): Promise<unknown> {
   }
   let parsedOk = false;
   try {
+    const generation = S().lifecycleGeneration;
+    const appId = S().currentBotAppId;
+    const managed = receiveManagedCardAction(data, () =>
+      appId !== null && isActiveConnection(generation, appId));
+    if (managed !== null) {
+      return managed ? { toast: { type: 'success', content: '已收到提交' } } : {};
+    }
     const event = parseCardAction({ raw: data });
     if (event) {
       // 群卡片的回调 senderId 归一成发卡 lane(与消息侧 /ctr 锁、接管 binding
@@ -1090,6 +1100,7 @@ async function handleCardAction(data: unknown): Promise<unknown> {
       // the client-side card action state. Dispatch on the next tick so the
       // toast response is settled first.
       setImmediate(() => {
+        if (!appId || !isActiveConnection(generation, appId)) return;
         feishuEvents.emit('cardAction', event);
       });
       parsedOk = true;

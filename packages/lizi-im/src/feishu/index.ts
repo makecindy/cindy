@@ -46,6 +46,7 @@ import {
   saveAndConnect,
 } from './ipc.js';
 import * as outbound from './outbound.js';
+import { sendManagedCard, updateManagedCard } from './managedCards.js';
 import * as streamingText from './streamingText.js';
 import { downloadAttachments, type DownloadResult } from './attachmentDownloader.js';
 import { parseIncoming, type AttachmentRef } from './incomingContent.js';
@@ -479,6 +480,14 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   }
 
   // ── outbound ────────────────────────────────────────────────────────────────
+
+  sendManagedCard(userId: string, card: Record<string, unknown>, requestId: string) {
+    return sendManagedCard(userId, card, requestId);
+  }
+
+  updateManagedCard(userId: string, messageId: string, card: Record<string, unknown>) {
+    return updateManagedCard(userId, messageId, card);
+  }
 
   /** Send a notification and retain the provider receipt for host-side reply routing. */
   sendNotification(userId: string, markdown: string): Promise<{ messageId: string; chatId?: string }> {

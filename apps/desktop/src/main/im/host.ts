@@ -71,6 +71,7 @@ import {
 import { fetchPublicImageBytes } from './publicImageFetch';
 import { buildPersonalBotCommandMenu } from './shared/botCommands';
 import { shouldAnnounceFeishuLifecycle } from './feishu/lifecycleAnnouncements';
+import { managedCardStorage } from './feishu/managedCardStorage';
 
 const log = createLogger('im/host');
 
@@ -82,6 +83,7 @@ function resolveManagedImageAbsPath(url: string): string {
 }
 
 const host: IMHost = {
+  managedCards: managedCardStorage,
   accountScope: imHostAccountScope,
   paths: {
     feishuMediaDir: path.join(app.getPath('userData'), 'cc-agent', 'feishu-media'),
