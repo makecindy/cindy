@@ -2487,9 +2487,15 @@ describe('换到供应商组那一项：由组选一台能用的电脑(provider-
     expect(pending.get('s1')).toBeUndefined();
   });
 
-  it.each(['lead', 'worker'])('协同任务 %s:组选回当前位置时按交接重建,不走需要点选窗口确认的原地换模型', async (orcaRole) => {
+  it.each(['lead', 'worker', 'remote-worker'])('协同任务 %s:组选回当前位置时按交接重建,不走需要点选窗口确认的原地换模型', async (role) => {
+    // PR #10230 unit: a remote Worker with null orcaRole must rebuild when
+    // its selected group returns to the current provider, clearing the intent.
+    const orcaRole = role === 'remote-worker' ? null : role;
+    const orcaRemoteLead = role === 'remote-worker'
+      ? JSON.stringify({ leadDeviceId: 'lead-device', leadSessionId: 'lead-1', workerLabel: 'worker' })
+      : null;
     const pending = createPendingAgentSwitchRegistry();
-    const row = makeRow({ agentKind: 'cc', model: 'claude-fable-5', providerId: 'xd', agentDeviceId: null, orcaRole });
+    const row = makeRow({ agentKind: 'cc', model: 'claude-fable-5', providerId: 'xd', agentDeviceId: null, orcaRole, orcaRemoteLead });
     const selectSameAgentModel = vi.fn(async () => ({ deferred: false }));
     const commitBinding = vi.fn(async () => undefined);
     const { deps } = makeDeps({
