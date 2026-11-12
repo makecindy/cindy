@@ -1194,14 +1194,8 @@ function EditingChip({
         'inline-flex items-center gap-1.5 rounded-full border px-2.5 h-7 text-12 font-medium',
         'shadow-[shadow:var(--shadow-menu)] backdrop-blur',
         showAmber
-          ? cn(
-              'border-amber-300/70 bg-amber-50/95 text-amber-800',
-              'dark:border-amber-700/60 dark:bg-amber-950/80 dark:text-amber-200',
-            )
-          : cn(
-              'border-[var(--cmd-palette-border)] bg-white/85 text-[var(--settings-section-desc)]',
-              'dark:bg-[#1f1f1e]/85',
-            ),
+          ? 'border-[var(--upgrade-banner-border)] bg-[color-mix(in_srgb,var(--cmd-palette-bg)_95%,transparent)] text-[var(--upgrade-banner-fg)]'
+          : 'border-[var(--cmd-palette-border)] bg-[color-mix(in_srgb,var(--cmd-palette-bg)_85%,transparent)] text-[var(--settings-section-desc)]',
       )}
     >
       {showSaving ? (
@@ -1211,7 +1205,7 @@ function EditingChip({
           aria-hidden
           className={cn(
             'inline-block size-1.5 rounded-full',
-            showAmber ? 'bg-amber-500 animate-pulse' : 'bg-[#22863a] animate-pulse',
+            showAmber ? 'bg-[var(--warning-fg)] animate-pulse' : 'bg-[var(--status-success)] animate-pulse',
           )}
         />
       )}
@@ -1243,15 +1237,14 @@ function CachedFileView({
   const { t } = useTranslation();
   const body = <CachedFileBody workdir={workdir} stat={stat} cachePath={cachePath} />;
   if (!stale) return body;
-  // stale 副本:顶部一条 amber 标注(配色沿用本文件 EditingChip 的 warning
-  // amber 系,语义豁免色),正文照常预览。
+  // stale 副本:顶部一条 amber 标注(与本文件 EditingChip 同用 upgrade-banner
+  // 警示 token,语义豁免色),正文照常预览。
   return (
     <div className="flex h-full w-full flex-col">
       <div
         className={cn(
           'shrink-0 border-b px-4 py-1.5 text-center text-12',
-          'border-amber-200/60 bg-amber-50/80 text-amber-800',
-          'dark:border-amber-800/50 dark:bg-amber-950/60 dark:text-amber-200',
+          'border-[var(--upgrade-banner-border)] bg-[var(--upgrade-banner-bg)] text-[var(--upgrade-banner-fg)]',
         )}
       >
         {t('ccAgent.workdirBrowse.fileBody.cachedStaleNotice')}
