@@ -43,6 +43,7 @@ import { replyArtifactAttachments, replyTextWithFiles } from './replyArtifacts.j
 import { mirrorColumns, readTurnImageUrls, visibleRows } from './turnImages.js';
 import type { CompanionCloudHost } from './runtime.js';
 import { createCompanionCloudState } from './state.js';
+import { CompanionProfileRepairError } from './profileRepair.js';
 import type { CompanionLog } from './types.js';
 import {
   COMPANION_AUTOMATION_PREFIX,
@@ -461,6 +462,19 @@ export function createCompanionCloudHost(input: {
       current, log: input.log,
     }),
     readValues: botId => readCompanionValues(botId, input.selfDeviceId?.() ?? null),
+    repairProfileSources: async (botId, fields, values, fence) => {
+      fence.assertCurrent();
+      const userDataDir = ownerScopedUserDataPath();
+      // Reuse the normal writer's profile-version CAS. Only the rejected fields are in the
+      // patch; later name/avatar/capability changes and all memory/skill files stay untouched.
+      await updateBotProfile({ id: botId, ...values }, undefined, async () => {
+        fence.assertCurrent();
+        const folder = await readBotProfileFolder(userDataDir, botId, { strict: true });
+        fence.assertCurrent();
+        if (fields.some(({ field, source }) => folder[field] !== source)) throw new CompanionProfileRepairError('changed');
+      });
+      fence.assertCurrent();
+    },
     hasLocalData: async botId => {
       const db = getDbClient().drizzle;
       return companionHasLocalData({

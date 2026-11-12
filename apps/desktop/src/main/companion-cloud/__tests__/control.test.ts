@@ -85,6 +85,93 @@ describe('private report recovery', () => {
 });
 
 describe('take over', () => {
+  // #10205 review, unit: the public repair action must not replay an old cloud snapshot
+  // over edits made on the current home after opening the draft. Previous coverage only
+  // repaired a missing local copy; a pending local memory/name edit is the minimal regression.
+  it('repairs only the rejected fields on the current home, preserving unsynced local edits', async () => {
+    const original = { ...MIA, soul: 'x'.repeat(12001) };
+    const t = setup({ home: 'desk', handler: route => route === '/preferences'
+      ? [{ key: 'companion.profile.v1', revision: 1, value: original },
+        { key: 'companion.memory.v1:note.md', revision: 1, value: { content: 'old cloud memory' } }]
+      : route === '/conversations' ? { id: ROOM } : route.includes('/messages?') ? [] : {} });
+    t.local.setProfile({ status: 'active', displayName: 'Mia', description: '' });
+    t.host.materializer!.backupProfileSource = vi.fn(async () => undefined);
+    const write = vi.fn(async () => undefined);
+    Object.assign(t.host, { repairProfileSources: write });
+    const opened = await t.runtime.repairProfile('bot_mia', { action: 'read' });
+    if (!opened.ok || !opened.draft) throw new Error('missing draft');
+    t.local.setProfile({ status: 'active', displayName: 'New local name', description: 'new local description' });
+    t.local.memories.set('note.md', 'new local memory');
+    t.local.skills.set('skill', 'new local skill');
+    expect(await t.runtime.repairProfile('bot_mia', { action: 'save', token: opened.draft.token,
+      values: { identitySource: 'corrected' } })).toEqual({ ok: true });
+    expect(write).toHaveBeenCalledWith('bot_mia', opened.draft.fields, { identitySource: 'corrected' }, expect.anything());
+    expect(await t.local.host.readProfile('bot_mia')).toMatchObject({ displayName: 'New local name', description: 'new local description' });
+    expect(t.local.memories.get('note.md')).toBe('new local memory');
+    expect(t.local.skills.get('skill')).toBe('new local skill');
+    expect(t.local.host.updateProfile).not.toHaveBeenCalled();
+    expect(t.local.host.rebuildContext).not.toHaveBeenCalled();
+    expect(t.state.isDemoted('bot_mia')).toBe(false);
+  });
+
+  // The correction must survive a failed history read and a runtime restart. The source
+  // version/home guards are still checked by the automatic restore, with no new polling loop.
+  it.each(['same-runtime', 'restart', 'explicit-retry', 'revision', 'home', 'account'] as const)('retains a pending correction across a transient failure (%s)', async scenario => {
+    vi.useFakeTimers();
+    try {
+      let profile = { ...MIA, soul: 'x'.repeat(12001) }, revision = 1, offline = true, current = true;
+      const handler: ApiHandler = (route, method, data) => {
+        if (route === '/preferences') {
+          if (method === 'POST') { profile = (data as { value: typeof profile }).value; return { revision: ++revision }; }
+          return [{ key: 'companion.profile.v1', revision, value: profile }];
+        }
+        if (route === '/actors') return t.actors;
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) { if (offline) throw new Error('ECONNRESET'); return []; }
+        return {};
+      };
+      let t = setup({ home: 'desk', handler, current: () => current });
+      const backup = vi.fn(async () => undefined);
+      t.host.materializer!.backupProfileSource = backup;
+      const opened = await t.runtime.repairProfile('bot_mia', { action: 'read' });
+      if (!opened.ok || !opened.draft) throw new Error('missing draft');
+      expect((await t.runtime.repairProfile('bot_mia', { action: 'save', token: opened.draft.token,
+        values: { identitySource: 'corrected' } })).ok).toBe(false);
+      expect(t.state.isDemoted('bot_mia')).toBe(true);
+      if (scenario === 'restart') {
+        const savedState = t.files.get('state.json');
+        t.runtime.dispose();
+        t = setup({ home: 'desk', handler, savedState });
+        t.host.materializer!.backupProfileSource = backup;
+      }
+      if (scenario === 'revision') revision++;
+      if (scenario === 'home') t.actors[0]!.homeDeviceId = 'other';
+      if (scenario === 'account') current = false;
+      vi.mocked(t.local.host.createProfile).mockClear(); vi.mocked(t.local.host.updateProfile).mockClear();
+      t.host.readValues = async () => [{ key: 'companion.profile.v1', value: { ...profile, soul: 'corrected' } }];
+      offline = false;
+      if (scenario === 'explicit-retry') expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+      else {
+        await vi.advanceTimersByTimeAsync(60_000);
+        t.runtime.reconcile([{ id: 'bot_mia', status: 'active' }]);
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      if (scenario === 'same-runtime' || scenario === 'restart' || scenario === 'explicit-retry') {
+        expect(t.state.isDemoted('bot_mia')).toBe(false);
+        expect(t.state.bot('bot_mia')?.profileCorrection).toBeDefined();
+        await t.runtime.syncNow();
+        expect(profile.soul).toBe('corrected');
+        expect(t.state.bot('bot_mia')?.profileCorrection).toBeUndefined();
+        expect(backup).toHaveBeenCalledOnce();
+      } else {
+        expect(t.state.isDemoted('bot_mia')).toBe(true);
+        expect(t.local.host.createProfile).not.toHaveBeenCalled();
+        expect(t.local.host.updateProfile).not.toHaveBeenCalled();
+        expect(profile.soul).toBe('x'.repeat(12001));
+      }
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
   // #10112, unit tier: the public recovery action must preserve the original and restore
   // only the rejected fields; neither the host writer nor the uploader was exercised by UI retry tests.
   it('repairs the rejected source, backs up its original and uploads the owner edit after restoring', async () => {

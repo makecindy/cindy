@@ -1101,6 +1101,31 @@ describe('Bot canonical Session lifecycle', () => {
   describe('cloud take-over next to a same-named local companion', () => {
     const names = () => h.sqlite!.prepare("SELECT id FROM bot_profiles WHERE display_name = 'Release Bot' ORDER BY id").pluck().all();
 
+    // #10205 review, DB tier: the real host must use a source-only versioned update on
+    // the current home. Runtime fakes cannot prove local-file conflict detection or preservation.
+    it.each(['identitySource', 'userContextSource'] as const)('edits only the rejected local %s and refuses a stale source', async field => {
+      const id = `repair-local-${field.toLowerCase()}`;
+      await invoke('local-db:bots:create', { id, name: 'Local name', description: 'Local description',
+        identitySource: 'Keep identity', userContextSource: 'Keep user context' });
+      const home = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), 'bots', id);
+      const file = join(home, field === 'identitySource' ? 'SOUL.md' : 'memories/USER.md');
+      const untouched = join(home, field === 'identitySource' ? 'memories/USER.md' : 'SOUL.md');
+      const kept = readFileSync(untouched, 'utf8');
+      const original = 'x'.repeat(12001);
+      writeFileSync(file, original);
+      const host = createCompanionCloudHost({ deliverToCanonical: async () => ({ ok: true }),
+        ensureCanonicalSession: async () => 'unused', rebuildContext: async () => 'rebuilt', listDevices: async () => [] });
+      const fields = [{ field, source: original, maxLength: 12000 }];
+      await host.repairProfileSources!(id, fields, { [field]: 'Owner correction' }, { assertCurrent() {} });
+      expect(readFileSync(file, 'utf8').trim()).toBe('Owner correction');
+      expect(readFileSync(untouched, 'utf8')).toBe(kept);
+      expect(await invoke('local-db:bots:get', id)).toMatchObject({ name: 'Local name', description: 'Local description' });
+      writeFileSync(file, 'New edit while the draft was open');
+      await expect(host.repairProfileSources!(id, fields, { [field]: 'Stale correction' }, { assertCurrent() {} }))
+        .rejects.toMatchObject({ reason: 'changed' });
+      expect(readFileSync(file, 'utf8')).toBe('New edit while the draft was open');
+    });
+
     // #10112: fakeLocal never ran readText's 12000-character boundary. DB tier:
     // real host creation/update and runtime recovery must agree, without losing text.
     it.each(['identitySource', 'userContextSource'] as const)('preserves the real source boundary through take-over: %s', async field => {
@@ -1138,6 +1163,8 @@ describe('Bot canonical Session lifecycle', () => {
           .rejects.toMatchObject({ code: 'INVALID_PARAMS', failure });
         expect(await invoke('local-db:bots:get', actor.externalId)).toEqual(original);
         expect(await runtime.takeOver(actor.externalId)).toEqual({ ok: false, code: 'FAILED', profileFailure: failure });
+        // This case exercises re-materialization of a handed-over copy, not in-place home editing.
+        state.update(actor.externalId, actor.id, entry => { entry.demoted = true; });
         const repair = await runtime.repairProfile(actor.externalId, { action: 'read' });
         if (!repair.ok || !repair.draft) throw new Error('Missing recovery editor');
         expect(repair.draft.fields[0]?.source).toBe(source);

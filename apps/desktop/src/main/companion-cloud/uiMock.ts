@@ -27,7 +27,7 @@ function enabled() {
 }
 
 /** Only the Chat Server transport is synthetic; profile validation, backup and restoration are real. */
-function createFixture(file: string, soul: string) {
+function createFixture(file: string, soul: string, failHistoryOnce: boolean) {
   const log = createLogger('companion-ui-mock');
   const actors: CompanionRuntimeActor[] = [{ id: ACTOR, kind: 'bot', externalId: BOT_ID, name: '资料恢复验收', homeDeviceId: SELF }];
   const rows = new Map<string, CompanionRow>([[PROFILE, { key: PROFILE, revision: 1,
@@ -52,8 +52,11 @@ function createFixture(file: string, soul: string) {
       if (key === PROFILE) fs.writeFileSync(file, JSON.stringify(row.value), 'utf8');
       result = row;
     } else if (route === '/conversations') result = { id: '10000000-0000-4000-8000-000000000001' };
-    else if (route.includes('/messages?')) result = [{ id: 'ui-mock-profile-message', seq: '1', authorId: 'ui-mock-human', origin: 'user',
-      createdAt: '2026-11-12T00:00:00.000Z', content: [{ type: 'text', text: '资料更正期间，原有消息仍可查看。' }] }];
+    else if (route.includes('/messages?')) {
+      if (failHistoryOnce) { failHistoryOnce = false; throw new Error('ECONNRESET'); }
+      result = [{ id: 'ui-mock-profile-message', seq: '1', authorId: 'ui-mock-human', origin: 'user',
+        createdAt: '2026-11-12T00:00:00.000Z', content: [{ type: 'text', text: '资料更正期间，原有消息仍可查看。' }] }];
+    }
     else if (route.endsWith('/messages/import')) result = {};
     else throw new Error('UNKNOWN_MOCK_ROUTE');
     return result as T;
@@ -94,7 +97,11 @@ function createFixture(file: string, soul: string) {
       demotedBotIds: runtime.state.isDemoted(BOT_ID) ? [BOT_ID] : [], actors: [{ id: ACTOR, externalId: BOT_ID, name: '资料恢复验收',
         avatar: null, homeDeviceId: SELF, homeDevice: { deviceId: SELF, name: 'Mock desktop', isSelf: true, online: true },
         ...(runtime.state.isDemoted(BOT_ID) ? { profileFailure: runtime.profileFailure(BOT_ID) ?? { field: 'identitySource' as const, maxLength: 12000 } } : {}) }] }),
-    takeOver: () => runtime.takeOver(BOT_ID),
+    async takeOver() {
+      const result = await runtime.takeOver(BOT_ID);
+      if (result.ok) await runtime.syncNow();
+      return result;
+    },
     async repairProfile(request: CompanionProfileRepairRequest) {
       const result = await runtime.repairProfile(BOT_ID, request);
       if (result.ok && request.action === 'save') await runtime.syncNow();
@@ -111,10 +118,13 @@ export function companionProfileUiMock() {
   if (fixture) return fixture;
   const file = path.join(app.getPath('userData'), 'ui-mock', 'companion-profile.json');
   let source: unknown;
+  let failHistoryOnce = false;
   try {
-    source = JSON.parse(fs.readFileSync(file, 'utf8')).soul;
+    const config = JSON.parse(fs.readFileSync(file, 'utf8'));
+    source = config.soul;
+    failHistoryOnce = config.failHistoryOnce === true;
   } catch { return undefined; }
   if (typeof source !== 'string') return undefined;
-  fixture = createFixture(file, source);
+  fixture = createFixture(file, source, failHistoryOnce);
   return fixture;
 }

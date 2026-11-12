@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { correctedProfile, profileRepairFields, profileRepairVersion, CompanionProfileRepairError, type ProfileCorrection } from './profileRepair.js';
 import type {
   CompanionProfileRepairRequest,
+  CompanionProfileRepairField,
   CompanionProfileRepairResult,
   CompanionCindyCopy,
   CompanionMergeResult,
@@ -22,7 +23,7 @@ import { BotProfileSourceTooLong, type BotProfileSourceFailure } from '../../sha
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import type { CompanionHomeRegistry } from './homes.js';
 import type { CompanionArrivalNotice } from './capabilities.js';
-import { assertCompanionIdentity, CompanionIdentityConflict, materializeCompanion, rebuildPending, type CompanionHistoryAttachment, type CompanionMaterializeHost, type CompanionMaterializeResult, type CompanionRoomDownload } from './materialize.js';
+import { assertCompanionIdentity, CompanionIdentityConflict, materializeCompanion, rebuildPending, type CompanionHistoryAttachment, type CompanionMaterializeHost, type CompanionMaterializeResult, type CompanionRoomDownload, type CompanionWriteFence } from './materialize.js';
 import { createCompanionMirror, type CompanionMediaUpload, type CompanionMirrorAttachment, type CompanionMirrorCursor, type CompanionMirrorRow } from './mirror.js';
 import { readAllRoomMessages, searchCompanionRooms, transcriptPageOf, type CompanionRoomSearchFilter, type CompanionRoomSearchResult } from './room.js';
 import { resolveCompanionSkillFiles } from './skillFiles.js';
@@ -53,6 +54,8 @@ export interface CompanionCloudHost {
   onLocalChange?: (listener: (botId: string) => void) => () => void;
   /** Local side of taking a companion over; absent disables take-over and auto-materialize. */
   materializer?: Omit<CompanionMaterializeHost, 'latestRows'>;
+  /** Current-home repair edits only the rejected sources, with a fresh local source/version check. */
+  repairProfileSources?: (botId: string, fields: CompanionProfileRepairField[], values: ProfileCorrection['values'], fence: CompanionWriteFence) => Promise<void>;
   /**
    * The companion now runs here (a take-over, a pull-down or an un-demotion completed): make it a
    * V2 teammate (a project) if it is not one yet. Idempotent; a failure is retried on the next arrival or start.
@@ -356,6 +359,14 @@ export function startCompanionCloud(input: {
   const uploads = loop(async only => {
     // A first-upgrade burst is spread over cycles; continue soon when the budget ran out.
     if (await uploader.syncAll(pick(only))) uploads.kick();
+    for (const bot of pick(only)) {
+      const entry = state.bot(bot.botId), restored = entry?.profileCorrection?.restored;
+      if (entry?.actorId === bot.actorId && restored && !entry.demoted
+        && ((entry.prefs[COMPANION_PROFILE_KEY]?.revision ?? 0) > restored.preference
+          || (entry.stored?.[COMPANION_PROFILE_KEY]?.revision ?? 0) > restored.store)) {
+        state.update(bot.botId, bot.actorId, next => { delete next.profileCorrection; });
+      }
+    }
   }, input.uploadIntervalMs ?? 60_000, 15_000);
   const mirrors = loop(async only => {
     for (const bot of pick(only)) {
@@ -468,17 +479,61 @@ export function startCompanionCloud(input: {
     if (!profile || !isCompanionProfileSnapshot(profile.value)) throw new Error('PROFILE_SNAPSHOT_MISSING');
     return correctedProfile(profile, correction);
   }
+  /** An active home already holds the current files. Replaying cloud data here would erase local edits. */
+  async function repairOwnProfile(actor: CompanionRuntimeActor, correction: ProfileCorrection & { actorId: string; home: string | null }) {
+    const botId = actor.externalId;
+    const repairFence: CompanionWriteFence = { ...fence, assertCurrent: () => {
+      fence.assertCurrent();
+      const current = actorOf(botId);
+      if (current?.id !== correction.actorId || current.homeDeviceId !== correction.home
+        || current.homeDeviceId !== input.selfDeviceId || state.isDemoted(botId) || installOwner(botId) !== 'mine') {
+        throw new CompanionProfileRepairError('changed');
+      }
+    } };
+    repairFence.assertCurrent();
+    const row = await readCompanionRestoreValue(input.api, store, actor.id, COMPANION_PROFILE_KEY);
+    repairFence.assertCurrent();
+    if (!row) throw new CompanionProfileRepairError('changed');
+    correctedProfile(row, correction);
+    if (!input.host.repairProfileSources || !input.host.materializer?.backupProfileSource) throw new CompanionProfileRepairError('backup');
+    // Confirm, never take ownership from a different installation during this in-place edit.
+    await claimInstall(actor, 'check', input.api);
+    repairFence.assertCurrent();
+    await input.api(`/actors/${actor.id}`, 'PATCH', { homeDeviceId: input.selfDeviceId, expectedHomeDeviceId: correction.home });
+    repairFence.assertCurrent();
+    try { await input.host.materializer.backupProfileSource(botId, row.value, repairFence); }
+    catch { repairFence.assertCurrent(); throw new CompanionProfileRepairError('backup'); }
+    await input.host.repairProfileSources(botId, profileRepairFields(row), correction.values, repairFence);
+    repairFence.assertCurrent();
+    profileFailures.delete(botId);
+    publish(); mirrors.kick(botId); uploads.kick(botId);
+    return { ok: true } as const;
+  }
   function materialize(actor: CompanionRuntimeActor, correction?: ProfileCorrection): Promise<CompanionMaterializeResult> {
     const materializer = input.host.materializer;
     if (!materializer) return Promise.reject(new Error('MATERIALIZE_UNAVAILABLE'));
     const botId = actor.externalId;
     const pending = materializing.get(botId);
     if (pending) return pending;
-    const run = materializeCompanion({ api: input.api, store, state, log: input.log, fence, correction, onDemoted: publish, host: { ...materializer, latestRows: input.host.latestRows },
+    const run = materializeCompanion({ api: input.api, store, state, log: input.log, fence, correction, onDemoted: publish, host: {
+      ...materializer, latestRows: input.host.latestRows,
+      ...(correction && materializer.backupProfileSource ? { backupProfileSource: async (id: string, value: unknown, writeFence: CompanionWriteFence) => {
+        const pending = state.bot(id)?.profileCorrection;
+        if (pending?.version === correction.version && pending.backedUp) return;
+        await materializer.backupProfileSource!(id, value, writeFence);
+        writeFence.assertCurrent();
+        state.update(id, actor.id, entry => { if (entry.profileCorrection?.version === correction.version) entry.profileCorrection.backedUp = true; });
+      } } : {}),
+    },
       ...(input.media ? { download: input.media.download } : {}),
       actor: { id: actor.id, externalId: botId, name: actor.name, avatar: actor.avatar ?? null },
       roomId: () => mirror.ensureRoom(botId, actor.id, actor.name) })
       .then(result => {
+        if (correction) state.update(botId, actor.id, entry => {
+          if (entry.profileCorrection?.version === correction.version) entry.profileCorrection.restored = {
+            preference: entry.prefs[COMPANION_PROFILE_KEY]?.revision ?? 0, store: entry.stored?.[COMPANION_PROFILE_KEY]?.revision ?? 0,
+          };
+        });
         // Arrived (taken over, pulled down or no longer demoted): a teammate still on V1 here
         // becomes a project now, not only at the next start. Never holds up the arrival.
         if (live() && input.host.upgradeArrived) {
@@ -572,12 +627,23 @@ export function startCompanionCloud(input: {
       identityConflicts.delete(botId);
       // The existing retry cadence reads only the profile until it is valid. Do not
       // reclaim the home/installation or replay all files for unchanged bad text.
-      if (profileFailures.get(botId)?.actorId === actorId) await checkProfileSources(actor);
+      const entry = state.bot(botId);
+      let correction = entry?.actorId === actorId && entry.profileCorrection && entry.profileCorrection.homeDeviceId === input.selfDeviceId
+        && !entry.profileCorrection.restored ? entry.profileCorrection : undefined;
+      if (correction) {
+        try { await checkProfileSources(actor, correction); }
+        catch (error) {
+          if (!(error instanceof CompanionProfileRepairError) || error.reason !== 'changed') throw error;
+          state.update(botId, actorId, next => { delete next.profileCorrection; });
+          correction = undefined;
+          await checkProfileSources(actor);
+        }
+      } else if (profileFailures.get(botId)?.actorId === actorId) await checkProfileSources(actor);
       fence.assertCurrent();
       await backgroundIdentityApi(`/actors/${actor.id}`, 'PATCH', { homeDeviceId: input.selfDeviceId, expectedHomeDeviceId: input.selfDeviceId });
       // Automatic: never take the companion from the other installation on this computer.
       if (await claimInstall(actor, 'handed', backgroundIdentityApi) !== 'mine') throw new Error('INSTALL_CLAIM_LOST');
-      return materialize(actor);
+      return materialize(actor, correction);
     })().then(result => {
       autoRetryAt.delete(botId);
       profileFailures.delete(botId);
@@ -795,6 +861,9 @@ export function startCompanionCloud(input: {
         // A local id may now refer to a different cloud actor. In particular, an old
         // retirement must never disable that replacement (state.update uses the same boundary).
         if (entry && entry.actorId !== actor.id) entry = state.update(botId, actor.id, () => undefined);
+        if (entry?.profileCorrection && (actor.disabled || actor.homeDeviceId !== entry.profileCorrection.homeDeviceId)) {
+          entry = state.update(botId, actor.id, next => { delete next.profileCorrection; });
+        }
         if (actor.disabled) {
           identityConflicts.delete(botId);
           if (entry?.retirePending) state.update(botId, actor.id, next => { delete next.retirePending; });
@@ -857,8 +926,15 @@ export function startCompanionCloud(input: {
         const draft = repairDrafts.get(botId);
         if (request?.action !== 'save' || !draft || request.token !== draft.token || actor.id !== draft.actorId
           || (actor.homeDeviceId ?? null) !== draft.home) throw new CompanionProfileRepairError('changed');
-        const result = await mirrors.exclusive(() => uploads.exclusive(() => runtime.takeOver(botId,
-          { version: draft.version, values: request.values, actorId: draft.actorId, home: draft.home })));
+        const result = await mirrors.exclusive(() => uploads.exclusive(async () => {
+          const correction = { version: draft.version, values: request.values, actorId: draft.actorId, home: draft.home };
+          const local = await input.host.materializer!.readProfile(botId);
+          fence.assertCurrent();
+          if (local?.status === 'active' && draft.home === input.selfDeviceId && !state.isDemoted(botId) && installOwner(botId) === 'mine') {
+            return repairOwnProfile(actor, correction);
+          }
+          return runtime.takeOver(botId, correction);
+        }));
         if (result.ok) repairDrafts.delete(botId);
         return result;
       } catch (error) { return actionFailure(error); }
@@ -876,6 +952,12 @@ export function startCompanionCloud(input: {
       }
       if (!actor) return homeActionFailure('takeOver', botId, new Error('COMPANION_NOT_FOUND'));
       const actorId = actor.id;
+      const pendingCorrection = state.bot(botId);
+      if (!correction && pendingCorrection?.actorId === actorId && pendingCorrection.profileCorrection
+        && !pendingCorrection.profileCorrection.restored && actor.homeDeviceId === input.selfDeviceId
+        && pendingCorrection.profileCorrection.homeDeviceId === actor.homeDeviceId) {
+        correction = { ...pendingCorrection.profileCorrection, actorId, home: actor.homeDeviceId };
+      }
       const assertRepairHome = () => {
         if (!correction) return;
         const current = actorOf(botId);
@@ -914,6 +996,15 @@ export function startCompanionCloud(input: {
         // Taking over from this installation also takes it from another install on the same device.
         demoteNow(actor);
         if (await claimInstall(actor, 'takeover', input.api) !== 'mine') return homeActionFailure('takeOver', botId, new Error('INSTALL_CLAIM_LOST'));
+        if (correction) {
+          const accepted = { homeDeviceId: self, version: correction.version,
+            values: Object.fromEntries(Object.entries(correction.values).map(([key, value]) => [key, value.trim()])) };
+          state.update(botId, actorId, entry => {
+            const previous = entry.profileCorrection;
+            entry.profileCorrection = { ...accepted, ...(previous?.version === accepted.version
+              && canonicalJson(previous.values) === canonicalJson(accepted.values) && previous.backedUp ? { backedUp: true } : {}) };
+          });
+        }
         await materialize(actor, correction);
         identityConflicts.delete(actor.externalId);
         profileFailures.delete(actor.externalId);
