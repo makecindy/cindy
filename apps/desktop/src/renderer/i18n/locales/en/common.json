@@ -1330,9 +1330,9 @@
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "This SSH task cannot switch Harness. Choose a model in its current Harness, or create a new SSH task with the Harness you need.",
     "MODEL_SELECTION_UNAVAILABLE": "The selected model is no longer available from its provider. Check the connection in Settings or choose another available model.",
     "HARNESS_SWITCH_NOT_READY": "The Harness switch is not ready. Check the error details and retry after the Harness is ready.",
-    "DEVICE_LINK_BUSY": "The remote computer is busy. Please try again shortly.",
-    "INVALID_PARAMS": "Invalid input. Please check and try again.",
-    "PRECONDITION_FAILED": "This action is unavailable in the current state. Please try again.",
+    "DEVICE_LINK_BUSY": "The remote computer is busy. Try again shortly.",
+    "INVALID_PARAMS": "Some input isn’t valid. Check it and try again.",
+    "PRECONDITION_FAILED": "This action isn’t available in the current state.",
     "PROVIDER_GROUP_CHANGED": "The provider group changed elsewhere, so this action was not applied. Review the latest settings and try again.",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "Model not switched: Cindy can’t verify how much context this task uses. Keep the current model or start a new task.",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "Model not switched: Cindy can’t verify the current model’s context window. Check the window setting for a custom model. If it can’t be changed, keep the current model or start a new task.",
@@ -1341,7 +1341,7 @@
     "MODEL_WINDOW_PROTECTION_UNAVAILABLE": "Model not switched: context protection is temporarily unavailable. Keep the current model or try again in a new task.",
     "MODEL_SWITCH_TASK_RUNNING": "Model not switched: this task is still running. Wait for the current response to finish, then try again.",
     "MODEL_WINDOW_PREPARATION_IN_PROGRESS": "Model not switched: Cindy is already preparing this task’s context. Wait for it to finish, then try again.",
-    "SESSION_RUNNING": "This session is currently running a task. Please try again shortly.",
+    "SESSION_RUNNING": "This session is still running. Try again after it finishes.",
     "PI_IMAGE_INPUT_UNSUPPORTED": "Image input is not enabled for the current Pi model. Switch to a model that supports images. For a custom model, enable “Supports image input” in provider settings, then start a new Pi task.",
     "CREDENTIAL_SWITCH_BUSY": "Another Codex task is still running, so this provider switch was not applied (the session keeps its previous provider). Try again after those tasks finish.",
     "PI_CATALOG_RELOAD_UNCONFIRMED": "Model catalog reload was not confirmed, so this task was stopped. Reopen the task and switch models again.",
@@ -1354,7 +1354,7 @@
     "REMOTE_PROVIDER_UNSUPPORTED": "This provider is not supported in SSH remote sessions — pick another source",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Remote tasks can't use a Claude subscription — pick a gateway or API key model",
     "DEVICE_LINK_DEVICE_UNRESPONSIVE": "The target device is not responding. Check the remote device and try again.",
-    "INTERNAL": "Operation failed. Please try again later.",
+    "INTERNAL": "The action couldn’t be completed.",
     "SSH_CONFIG_CONCURRENT_MODIFICATION": "The SSH configuration changed on disk. Reload it and try again.",
     "SSH_CONFIG_RELOAD_REQUIRED": "The SSH config was saved, but Cindy could not refresh it. Reload the SSH configuration.",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy cannot safely manage this SSH configuration. Reload it, then verify the Cindy ownership marker and that the host alias is unique.",
@@ -1376,7 +1376,7 @@
     "REMOTE_AGENT_SHARE_PAUSED": "Model not changed: the owner has paused this share for you. Pick another model.",
     "REMOTE_AGENT_SHARE_REMOVED": "Model not changed: this share is no longer available (the owner removed it or you left). Pick another model.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Model not changed: the shared provider is temporarily unavailable (the owner's computer is offline or sharing is turned off for now). Try again later or pick another model.",
-    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Model not changed: this is a legacy share and can't be used while \"Use Only Agent-Net\" is on. Turn that switch off or pick another model.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Model not changed: this is a legacy share and can't be used while “Use Only Agent-Net” is on. Turn that switch off or pick another model.",
     "SSH_HOST_KEY_MISMATCH": "SSH Host Key Changed",
     "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy cannot read the source attachment; the message was not sent. Save a copy to Downloads or another accessible folder, remove the original attachment, and add the copy using the attachment button before sending again."
   },
@@ -1393,7 +1393,7 @@
     "UPSTREAM_UNREACHABLE": "Cannot reach the endpoint. Check your network and the base URL",
     "TIMEOUT": "Connection timed out. Check your network and the base URL",
     "UNKNOWN": "Unknown error. Check the logs for details",
-    "upstreamToast": "Provider \"{{provider}}\" request failed: {{message}}"
+    "upstreamToast": "Provider “{{provider}}” request failed: {{message}}"
   },
   "appError": {
     "title": "Something went wrong",
@@ -6950,7 +6950,7 @@
       "hoursAgo": "{{count}} h ago",
       "daysAgo": "{{count}} d ago",
       "rename": "Rename",
-      "renameConfirm": "Confirm",
+      "renameConfirm": "Save name",
       "renameCancel": "Cancel",
       "delete": "Delete",
       "deleteTitle": "Delete “{{name}}”?",
@@ -7899,7 +7899,7 @@
           "multiple_other": "The organization removed {{count}} plugins. Their local copies and data on this device have been cleaned up."
         },
         "errors": {
-          "generic": "The plugin market operation failed. Please try again.",
+          "generic": "The plugin market action couldn’t be completed.",
           "invalidRequest": "The plugin request is invalid.",
           "notFound": "This plugin is no longer available. Refresh the market and try again.",
           "conflict": "Another installed or market plugin uses the same plugin ID.",
@@ -8293,7 +8293,91 @@
         "mcpAppOnly": "Page only",
         "uiPageAccess": "Pages: {{pages}}; domains: {{domains}}; tools available to pages: {{tools}}",
         "uiHost": "Provide interfaces and Host actions in Cindy",
-        "uiHostAccess": "{{subject}}: {{access}}"
+        "uiHostAccess": "{{subject}}: {{access}}",
+        "hostUi": {
+          "view": "Show a {{scope}} page using “{{name}}”",
+          "resource": "Use the {{kind}} resource “{{name}}”",
+          "contribution": "Show a {{kind}} in the {{position}}",
+          "command": "Provide a plugin command",
+          "namedAccess": "“{{name}}”: {{details}}",
+          "setting": "Provide a setting ({{type}})",
+          "settingTypes": {
+            "boolean": "On/off",
+            "string": "Text",
+            "number": "Number"
+          },
+          "minimum": "Minimum: {{value}}",
+          "maximum": "Maximum: {{value}}",
+          "maxLength": "Maximum characters: {{value}}",
+          "extensions": "Accepted file extensions: {{value}}",
+          "mimeTypes": "Accepted file types: {{value}}",
+          "trigger": "Completion prefix: {{value}}",
+          "openView": "Open page “{{name}}”",
+          "tool": "Run tool “{{name}}”",
+          "arguments": "Parameters: {{value}}",
+          "listValue": "List [{{value}}]",
+          "fieldsValue": "Fields ({{value}})",
+          "nullValue": "No value",
+          "shortcut": "Shortcut: {{value}}",
+          "popover": "Open beside the entry",
+          "roles": "For messages from: {{value}}",
+          "tools": "For tools: {{value}}",
+          "plugins": "For plugins: {{value}}",
+          "options": "Available values: {{value}}",
+          "yes": "Yes",
+          "no": "No",
+          "unavailable": "Permission details are unavailable",
+          "capabilities": {
+            "context": "Read the current task and selected text",
+            "draft": "Read and edit the message draft",
+            "appearance": "Change the declared appearance settings",
+            "visibility": "Show or hide the window and declared interface regions"
+          },
+          "fields": {
+            "uiFont": "Change the interface font",
+            "codeFont": "Change the code font",
+            "bodyFont": "Change the message font",
+            "wallpaper": "Change the wallpaper",
+            "theme": "Change message colors",
+            "reading": "Change reading width and line spacing",
+            "contentStyle": "Change message spacing and bubble styling"
+          },
+          "positions": {
+            "composer_toolbar": "input toolbar",
+            "session_header": "task header",
+            "statusbar": "status bar",
+            "message_actions": "message action bar",
+            "message_menu": "message menu",
+            "turn_footer": "reply footer",
+            "message_body": "message body",
+            "tool_body": "tool result",
+            "sidebar_navigation": "sidebar navigation",
+            "session_menu": "task menu",
+            "settings_section": "settings page",
+            "composer_completion": "input completion",
+            "composer_attachment": "attachment actions",
+            "sidebar_section": "sidebar section",
+            "window_titlebar": "window title bar"
+          },
+          "kinds": {
+            "button": "button",
+            "select": "selection list",
+            "status": "status text"
+          },
+          "scopes": {
+            "global": "Global",
+            "task": "Current-task"
+          },
+          "resources": {
+            "font": "font",
+            "image": "image",
+            "video": "video"
+          },
+          "speakers": {
+            "user": "User",
+            "assistant": "Assistant"
+          }
+        }
       },
       "connections": {
         "confirmTitle": "Add connection address",
@@ -8311,7 +8395,7 @@
         "brokerManualInstallNotAuthorized": "A locally installed .cindy package is not authorized to use the authorization broker. Install it from your organization’s plugin market.",
         "brokerRedirectPortRequired": "This plugin declares an authorization broker but does not declare redirectPort in the same OAuth configuration. Ask the author to add the field so the final authorization hop can return to the local listening port.",
         "sourceMissing": "The selected file could not be found",
-        "generic": "Operation failed. Please try again.",
+        "generic": "The plugin action couldn’t be completed.",
         "updateIdMismatch": "The selected file is plugin \"{{id}}\", which does not match this plugin \"{{expected}}\""
       },
       "detail": {
@@ -10142,7 +10226,7 @@
         "leaseExpired": "The remote changed after confirmation. Push was stopped; refresh and confirm again.",
         "noRemote": "This repository has no git remote configured, so it cannot be pushed.",
         "failedTitle": "Push failed",
-        "successToast": "Pushed successfully"
+        "successToast": "Commits pushed"
       },
       "changeStatus": {
         "renamed": "Renamed",
@@ -10730,6 +10814,7 @@
       "needsAttention": "Needs attention",
       "duplicate": "Duplicate buddy",
       "moreActions": "More actions for {{name}}",
+      "viewIcons": "Icons",
       "sectionExpand": "Expand buddies",
       "showLess": "Show less",
       "sectionCollapse": "Collapse buddies",
@@ -11327,7 +11412,7 @@
         "groupNew": "New messages in the group",
         "threadRecent": "Recent messages in the thread",
         "threadNew": "New messages in the thread",
-        "replyingTo": "Replying to \"{{name}}\": {{text}}",
+        "replyingTo": "Replying to “{{name}}”: {{text}}",
         "earlierOmitted": "(Earlier messages omitted)",
         "actingFor": "{{name}} · for {{person}}",
         "checkout": {
@@ -11743,7 +11828,7 @@
       "placeholder": "For example, help me practice English through everyday conversation and thoughtful corrections.",
       "generate": "Create buddy",
       "generating": "Shaping your buddy…",
-      "generationFailed": "Could not generate your buddy. Your idea is still here; please try again.",
+      "generationFailed": "Could not generate your buddy. Your idea is still here; try again.",
       "modelRequired": "Choose an available model above to continue.",
       "modelFollowsDefault": "Follows the default buddy model.",
       "modelForThisBot": "This selection applies only to this buddy.",
@@ -11944,9 +12029,9 @@
         "count": "{{count}} / {{limit}} characters",
         "over": "{{count}} characters over the limit. Shorten the text before saving.",
         "changed": "The profile or main computer has changed. Reload the profile before editing.",
-        "loadFailed": "Couldn’t read the profile. Please retry.",
+        "loadFailed": "Couldn’t read the profile. Try again.",
         "backupFailed": "Couldn’t back up the original profile; your correction has not been applied. Check available disk space and retry.",
-        "saveFailed": "The buddy has not been restored. Your edits are still here; please retry.",
+        "saveFailed": "The buddy has not been restored. Your edits are still here; try again.",
         "reload": "Reload Profile"
       }
     },
@@ -12151,7 +12236,7 @@
         "confirm": "Remove",
         "cancel": "Cancel",
         "failed": "Couldn’t remove it. Try again later.",
-        "ok": "OK"
+        "ok": "Close"
       },
       "officialX": {
         "bind": "Assign to this buddy",
@@ -12997,7 +13082,7 @@
       "sessionSenderFallback": "Another session",
       "pluginRowAria": "Queued message from plugin \"{{sender}}\"",
       "pluginSenderFallback": "Plugin",
-      "botRowAria": "Queued message from buddy \"{{sender}}\"",
+      "botRowAria": "Queued message from buddy “{{sender}}”",
       "dragAria": "Drag queued message {{index}} to reorder",
       "steerAction": "Steer",
       "steerRunningTip": "Steer this message into the running task without interrupting it; handled once the current action finishes",
@@ -13707,14 +13792,14 @@
       "switchingClaudeSubscription": "Switching to Claude.ai…",
       "claudeSubscriptionSwitchFailed": "Couldn’t switch to Claude.ai or retry this session: {{msg}}",
       "codexAppServerRetired": "The Codex service was restarted or replaced. The current request was interrupted; run it again.",
-      "codexAuthMissing": "Remote Codex hasn't been signed in yet (401 Unauthorized). Click \"Sync auth\" to push your local Codex credentials to the remote Cindy Codex home, then retry.",
+      "codexAuthMissing": "Remote Codex hasn't been signed in yet (401 Unauthorized). Click “Sync auth” to push your local Codex credentials to the remote Cindy Codex home, then retry.",
       "codexAuthMissingLocal": "The “{{provider}}” connection on this computer could not authenticate. Check its sign-in status in settings, then return to this task after restoring the connection.",
       "codexSessionExpired": "The OpenAI connection needs an update. Reconnect ChatGPT to continue; {{appName}} won’t sign your system Codex CLI out or ask you to reconnect other model sources.",
-      "codexAuthSynced": "Auth synced. Click \"Retry\" to resend.",
+      "codexAuthSynced": "Auth synced. Click “Retry” to resend.",
       "syncAuth": "Sync auth",
       "syncAuthSyncing": "Syncing…",
       "syncAuthTitle": "Push local Codex credentials to remote Cindy Codex home",
-      "syncAuthSuccess": "Synced — click \"Retry\" to resend",
+      "syncAuthSuccess": "Synced — click “Retry” to resend",
       "syncAuthFailed": "Sync failed: {{msg}}",
       "syncAuthDaemonRestartFailed": "Credentials pushed, but the old daemon did not restart — reconnect to the remote before retrying",
       "invalidEncryptedContent": "The current provider cannot read part of the history. Switch back to the original provider or continue in a new session.",
@@ -13728,13 +13813,13 @@
       "forkStripOversizedHistoryTitle": "Fork into a new task after removing oversized inline images",
       "codexSessionExpiredLogin": "Reconnect ChatGPT",
       "codexSessionReconnected": "ChatGPT is reconnected. Click “Retry” to continue.",
-      "networkUnreachable": "Network error: the service is temporarily unreachable. Click \"Retry\" to try again.",
+      "networkUnreachable": "Network error: the service is temporarily unreachable. Click “Retry” to try again.",
       "networkUnreachableNoRetry": "Network error: the service is temporarily unreachable.",
       "networkAutoRetrying": "Network error — retrying automatically…",
       "networkReconnecting": "Connection interrupted — reconnecting ({{attempt}}/{{maxAttempts}})…",
       "overloadRetrying": "The model service is busy — retrying automatically ({{attempt}}/{{maxAttempts}})…",
       "rateLimitRetrying": "Request rate limited — retrying automatically ({{attempt}}/{{maxAttempts}})…",
-      "overloadBusy": "The model service is busy — the upstream has no capacity right now. Click \"Retry\", or switch to another model.",
+      "overloadBusy": "The model service is busy — the upstream has no capacity right now. Click “Retry”, or switch to another model.",
       "overloadBusyNoRetry": "The model service is busy — the upstream has no capacity right now. Try again later, or switch to another model.",
       "streamInterrupted": "The model stream was interrupted. This is usually a temporary upstream issue — click Retry.",
       "streamInterruptedNoRetry": "The model stream was interrupted. This is usually a temporary upstream issue. Try again in a little while.",
@@ -14329,9 +14414,9 @@
       "sessionSent": "Sent by another session",
       "sessionSentNamed": "Sent by session \"{{name}}\"",
       "sessionViewSource": "View source session",
-      "botSentNamed": "Sent by buddy \"{{name}}\"",
-      "groupThreadSent": "Sent by \"{{name}}\" in a thread of \"{{group}}\"",
-      "groupRequestSent": "From group \"{{group}}\" · {{name}}",
+      "botSentNamed": "Sent by buddy “{{name}}”",
+      "groupThreadSent": "Sent by “{{name}}” in a thread of “{{group}}”",
+      "groupRequestSent": "From group “{{group}}” · {{name}}",
       "orcaFromLead": "Message from Lead",
       "orcaFromWorker": "Message from Worker",
       "orcaFromWorkerBatch": "System report: {{count}} Worker results",
@@ -14403,7 +14488,7 @@
         "sessionRunning": "The task did not stop in time — retry the rewind",
         "noLiveQuery": "The task runtime could not be restored, so rewind was not completed.",
         "noPriorAssistantCommit": "Please rewind from a question that follows an AI reply",
-        "commitGeneric": "Rewind failed, please retry",
+        "commitGeneric": "Rewind failed",
         "remoteNotSupported": "Remote Claude Code sessions do not support rewind yet"
       },
       "dialog": {
@@ -14480,7 +14565,7 @@
       "REMOTE_AGENT_SHARE_PAUSED": "The owner has paused this share for you, so these models can’t be used until it’s resumed. Switch to another model to continue.",
       "REMOTE_AGENT_SHARE_REMOVED": "This share is no longer available (the owner removed it or you left). Switch to another model to continue.",
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "The shared provider is temporarily unavailable. The owner's computer may be offline, or sharing is turned off for now. Try again later, or switch to another model to continue.",
-      "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "This is a legacy share, and it can't be used while \"Use Only Agent-Net\" is on. Turn that switch off to continue, or switch to another model.",
+      "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "This is a legacy share, and it can't be used while “Use Only Agent-Net” is on. Turn that switch off to continue, or switch to another model.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "The available accounts for this model have reached their usage limit. Switch models or continue when the quota resets.",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "No computer in the provider group can run this task right now. They may be offline, paused, cooling down, or missing this model. Check the group on this provider’s Remote & Sharing page.",
       "REMOTE_AGENT_GROUP_FULL": "Every account or computer that can run this task has reached its concurrency limit. Wait for a running task to finish, or raise the limit in the provider settings.",
@@ -15136,7 +15221,7 @@
         "title": "Delete session",
         "description": "Delete this session? This cannot be undone.",
         "dirtyWorktreeWarning": "This session's worktree has uncommitted changes; they will be saved as a git snapshot before deletion (the branch is kept and recoverable via git).",
-        "confirm": "Confirm",
+        "confirm": "Delete session",
         "cancel": "Cancel"
       },
       "confirmArchive": {
@@ -15149,7 +15234,7 @@
         "scheduleWarningMany_other": "{{count}} of these sessions have linked automations that will restore them when they run.",
         "scheduleName": "“{{name}}”",
         "scheduleNameSeparator": ", ",
-        "confirm": "Confirm",
+        "confirm": "Archive session",
         "cancel": "Cancel"
       },
       "dialogueAction": {
@@ -16630,7 +16715,7 @@
       "submitterLabel": "Submitter: {{name}}",
       "submitterFallback": "—",
       "cancel": "Cancel",
-      "submit": "Submit",
+      "submit": "Submit issue",
       "submitting": "Submitting…",
       "submitFailed": "Submit failed, please retry",
       "imageUploadFailed": "Image upload failed"
@@ -16726,7 +16811,7 @@
         "hintNumber": "#number",
         "noMatch": "No matching issues",
         "errorInvalidTarget": "That issue is itself a duplicate — pick its primary issue",
-        "errorGeneric": "Action failed, please retry"
+        "errorGeneric": "The action couldn’t be completed"
       },
       "listItemPrivateSuffix": " (private)"
     },
@@ -17315,7 +17400,7 @@
       "notFound": "This Skill no longer exists. Go back to the list and refresh",
       "managementApiUnavailable": "Hub management API is not ready. Please try again later",
       "invalidVisibility": "This organization does not support that visibility. Choose Public",
-      "default": "Operation failed. Please try again later"
+      "default": "The action couldn’t be completed."
     },
     "installPicker": {
       "title": "Choose install location",
@@ -18188,7 +18273,7 @@
       "LEARN_INVALID_STATE": "The proposal state has changed. Please refresh and try again.",
       "NOT_FOUND": "The learn task does not exist or has been cleaned up",
       "INVALID_PARAMS": "Invalid parameters",
-      "INTERNAL": "Internal error. Please try again later."
+      "INTERNAL": "Internal error. The action wasn’t completed."
     },
     "hub": {
       "learnButton": "Learn this skill",
@@ -19420,7 +19505,7 @@
         "public": "Submitted from your GitHub repository {{repository}} and visible to everyone.",
         "uiNote": "This change touches the interface. After submitting, add screenshots on GitHub and name the design guidelines it follows.",
         "dco": "I am submitting this change myself and sign the Developer Certificate of Origin (DCO) as {{name}} <{{email}}>.",
-        "submit": "Submit",
+        "submit": "Submit change",
         "update": "Update submission",
         "cancel": "Cancel",
         "close": "Close"
@@ -19635,7 +19720,7 @@
     "localPeersOnly": "Group messages can only target buddies on this device and account.",
     "ownerChanged": "The account changed. Please try again.",
     "invalidMessage": "The message or retry identifier is invalid.",
-    "privateUnavailable": "This buddy’s private chat is unavailable. Please try again later.",
+    "privateUnavailable": "This buddy’s private chat is unavailable. Try again later.",
     "idempotencyConflict": "This retry identifier was already used for a different message.",
     "privateUnconfirmed": "Private message delivery is unconfirmed. Retry with the same identifier.",
     "verificationUnavailable": "Group authorization could not be verified. Try again when the connection recovers."

@@ -5,11 +5,12 @@ import type { ViewInstance } from 'react-native';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ComponentProps } from 'react';
 import { AccessibilityInfo, BackHandler, findNodeHandle, Modal, Pressable, StyleSheet, View } from 'react-native';
 import Animated, {
-  cancelAnimation, Easing, runOnJS, useAnimatedReaction, useAnimatedStyle, useSharedValue, withTiming, type SharedValue,
+  cancelAnimation, Easing, runOnJS, useAnimatedReaction, useAnimatedStyle, useDerivedValue, useSharedValue, withTiming, type SharedValue,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { Gesture, GestureDetector, GestureHandlerRootView } from '@/platform/gestureHandler';
+import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { motionDuration, motionEasing } from '@/theme/tokens';
@@ -166,6 +167,7 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
   motion?: SessionListDrawerMotion;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const window = useAdaptiveWindow();
   const { colors } = useTheme();
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
@@ -366,11 +368,14 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
   }, [stretch]);
   // One live coordinate for the visible panel and both gesture boundaries.
   // Reading it at touch-down also covers interrupted opening/closing rebounds.
+  // Subscribe directly to the shared values. Reanimated does not discover
+  // mapper inputs hidden inside a captured callback's closure.
+  const panelOffset = useDerivedValue(() => persistent ? 0 : Math.max(-panelWidth,
+    Math.min(0, (progress.value - 1) * panelWidth + dragX.value)));
   const getEdgeLeft = useCallback(() => {
     'worklet';
-    return panelWidth + (persistent ? 0 : Math.max(-panelWidth,
-      Math.min(0, (progress.value - 1) * panelWidth + dragX.value)));
-  }, [dragX, panelWidth, persistent, progress]);
+    return panelWidth + panelOffset.value;
+  }, [panelOffset, panelWidth]);
   // The floating drawer's right edge resizes it without a visible grip. Its
   // gesture sits on the overlay, above both the panel and the dimmed area, so
   // taps near the edge still reach list rows and close the drawer.
@@ -478,7 +483,7 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
   const panelStyle = useAnimatedStyle(() => ({
     transform: [
       {
-        translateX: getEdgeLeft() - panelWidth,
+        translateX: panelOffset.value,
       },
     ],
   }));
@@ -552,7 +557,10 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
   return <>{retainedHome}
     {(!persistent && aboveSystemBar) || handoff ? <Modal key="floating" animationType="none" transparent visible onRequestClose={onClose}
       supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}>
-      <GestureHandlerRootView style={styles.window}>{overlay(!!handoff)}</GestureHandlerRootView>
+      {/* Modal's first Fabric layout can still carry the pre-unfold window
+          size. Use the same live geometry as the task, without waiting for the
+          modal controller's bounds callback or shrinking to that stale parent. */}
+      <GestureHandlerRootView style={[styles.window, { width: window.width, height: window.height }]}>{overlay(!!handoff)}</GestureHandlerRootView>
     </Modal> : null}
     {persistent || !aboveSystemBar ? <View key="column" pointerEvents="box-none" style={StyleSheet.absoluteFill}>{overlay()}</View> : null}
   </>;
@@ -569,5 +577,5 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     position: 'absolute', top: 0, bottom: 0, left: 0 },
   content: { flex: 1, minHeight: 0 },
   edge: { ...StyleSheet.absoluteFill },
-  window: { flex: 1 },
+  window: { flexGrow: 0, flexShrink: 0 },
 });

@@ -19,6 +19,19 @@
   "punctuationExempt": [
     "desktop:settings.help.qnaFeedbackBodyTemplate"
   ],
+  "englishCopyExempt": {
+    "en-straight-quote": [
+      "desktop:ccAgent.sidebar.newProjectDialog.nameInvalid",
+      "desktop:settings.appearance.font.previewSamples.terminal",
+      "desktop:settings.ghosts.market.sources.guide.manifestBody",
+      "desktop:settings.providers.import.formatAuth",
+      "desktop:settings.providers.import.formatBatch",
+      "desktop:settings.providers.import.formatEndpoint",
+      "desktop:settings.providers.import.formatIdentity",
+      "desktop:settings.providers.import.formatTargets",
+      "desktop:settings.remote.hostKeyError.repair"
+    ]
+  },
   "terms": [
     {
       "id": "accessories",

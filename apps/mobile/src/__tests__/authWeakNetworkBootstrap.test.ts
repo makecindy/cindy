@@ -217,8 +217,9 @@ describe('auth weak-network bootstrap', () => {
       healStart,
       authSource.indexOf('}, [accessToken, applyUser', healStart),
     );
+    // 必须是会抛错的严格读取:宽松读取把读取异常吞成 null,下面的异常分支就成了死代码。
     expect(healBody).toContain(
-      'storedSession = await readPersistedAuthSession();',
+      'storedSession = await readPersistedAuthSessionStrict();',
     );
     // 读取异常分支:只 scheduleNext,不 applyUser(null)
     const catchStart = healBody.indexOf(
@@ -234,6 +235,20 @@ describe('auth weak-network bootstrap', () => {
     // 成功读到空值才登出收敛
     expect(healBody).toContain('if (!storedSession) {');
     expect(healBody).toContain('applyUser(null);');
+  });
+
+  // credentials-and-local-storage.md「Mobile 登录凭证」/ notification-actions.md「后台与凭证」:
+  // 通知按钮让 JS 在锁屏时运行。此时钥匙串读不出登录凭证,refresh 若照旧返回 null,
+  // apiFetch 会走 terminateSession 清掉本机数据、自愈路径会 applyUser(null)——等于把人登出。
+  // AuthProvider 无法在单测里隔离出这条分支,保留静态契约:失效后果是锁屏点按钮导致登出。
+  it('锁屏读不到登录凭证时 refresh 报可重试失败,不返回「未登录」', () => {
+    const start = authSource.indexOf('reconcileMobileActiveAuthSession({');
+    const body = authSource.slice(start, authSource.indexOf('const persistedVault = reconciledAuth.vault;', start));
+    const lockedAt = body.indexOf("if (!(await isCredentialStoreReadable())) throw authCodeError('AUTH_STORAGE_LOCKED');");
+    expect(lockedAt).toBeGreaterThan(body.indexOf('if (!reconciledAuth) {'));
+    expect(body.indexOf('return null;', lockedAt)).toBeGreaterThan(lockedAt);
+    // 读不到的那一刻之前不能有无条件的 return null。
+    expect(body.slice(body.indexOf('if (!reconciledAuth) {'), lockedAt)).not.toContain('return null');
   });
 
   it('登出与凭证失效仍会清掉用户资料快照(applyUser(null))', () => {

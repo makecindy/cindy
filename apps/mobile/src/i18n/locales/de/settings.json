@@ -171,7 +171,11 @@
       "auto": "Automatisch",
       "on": "Immer an",
       "off": "Aus"
-    }
+    },
+    "actionReplyPlaceholder": "Antwort eingeben",
+    "actionNotDelivered": "Das ist nicht bei deinem Computer angekommen. Öffne Cindy, um zu antworten.",
+    "actionReplyNotDelivered": "Deine Antwort wurde nicht gesendet. Öffne Cindy, um sie erneut zu senden: {{text}}",
+    "actionRequestEnded": "Diese Anfrage wurde bereits beantwortet oder ist abgelaufen."
   },
   "about": {
     "sectionTitle": "Über dieses Smartphone",

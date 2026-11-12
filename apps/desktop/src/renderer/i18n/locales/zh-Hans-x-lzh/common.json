@@ -8221,6 +8221,90 @@
         "uiPageAccess": "页面：{{pages}}；网域：{{domains}}；页面可召之工具：{{tools}}",
         "uiHost": "于 Cindy 提供界面及宿主操作",
         "uiHostAccess": "{{subject}}：{{access}}",
+        "hostUi": {
+          "view": "显示{{scope}}页面，使用资源「{{name}}」",
+          "resource": "使用{{kind}}资源「{{name}}」",
+          "contribution": "在{{position}}显示{{kind}}",
+          "command": "提供法器命令",
+          "namedAccess": "「{{name}}」：{{details}}",
+          "setting": "提供设置项（{{type}}）",
+          "settingTypes": {
+            "boolean": "开关",
+            "string": "文本",
+            "number": "数字"
+          },
+          "minimum": "最小值：{{value}}",
+          "maximum": "最大值：{{value}}",
+          "maxLength": "最多字符数：{{value}}",
+          "extensions": "接收的文件后缀：{{value}}",
+          "mimeTypes": "接收的文件类型：{{value}}",
+          "trigger": "补全触发符：{{value}}",
+          "openView": "打开页面「{{name}}」",
+          "tool": "调用工具「{{name}}」",
+          "arguments": "参数：{{value}}",
+          "listValue": "列表 [{{value}}]",
+          "fieldsValue": "字段 ({{value}})",
+          "nullValue": "未设置",
+          "shortcut": "快捷键：{{value}}",
+          "popover": "在入口旁打开页面",
+          "roles": "适用消息来源：{{value}}",
+          "tools": "适用工具：{{value}}",
+          "plugins": "适用法器：{{value}}",
+          "options": "可选值：{{value}}",
+          "yes": "是",
+          "no": "否",
+          "unavailable": "暂时无法显示这项权限的详情",
+          "capabilities": {
+            "context": "读取当前任务和选中文字",
+            "draft": "读写输入框草稿",
+            "appearance": "修改已声明的外观设置",
+            "visibility": "显示或隐藏窗口及已声明的界面区域"
+          },
+          "fields": {
+            "uiFont": "修改界面字体",
+            "codeFont": "修改代码字体",
+            "bodyFont": "修改正文字体",
+            "wallpaper": "修改壁纸",
+            "theme": "修改消息配色",
+            "reading": "修改阅读宽度和行距",
+            "contentStyle": "修改消息间距和气泡样式"
+          },
+          "positions": {
+            "composer_toolbar": "输入框工具栏",
+            "session_header": "任务标题栏",
+            "statusbar": "状态栏",
+            "message_actions": "消息操作栏",
+            "message_menu": "消息更多菜单",
+            "turn_footer": "回复底部",
+            "message_body": "消息正文",
+            "tool_body": "工具结果",
+            "sidebar_navigation": "侧边导航栏",
+            "session_menu": "任务菜单",
+            "settings_section": "设置页面",
+            "composer_completion": "输入补全入口",
+            "composer_attachment": "附件操作区",
+            "sidebar_section": "侧栏内容区",
+            "window_titlebar": "窗口标题栏"
+          },
+          "kinds": {
+            "button": "按钮",
+            "select": "下拉选项",
+            "status": "状态文字"
+          },
+          "scopes": {
+            "global": "全局",
+            "task": "当前任务"
+          },
+          "resources": {
+            "font": "字体",
+            "image": "图片",
+            "video": "视频"
+          },
+          "speakers": {
+            "user": "用户",
+            "assistant": "助手"
+          }
+        },
         "subscribeRoutineRun": "可于君所择之同伴例行差事运行前行检",
         "subscribeRoutineRunDetail": "凡于「预检」择之之例行差事，每番触发必先询之。其可见差事之指令与触发事件之内容，可令此番略过或止之，不能代君准允。",
         "subscribeScheduleRun": "可于君所择之自动化运行前行检",
@@ -10685,6 +10769,7 @@
       "needsAttention": "待处置",
       "duplicate": "拷贝同伴",
       "moreActions": "{{name}} 之余事",
+      "viewIcons": "图标",
       "sectionExpand": "展同伴",
       "showLess": "收",
       "sectionCollapse": "收同伴",

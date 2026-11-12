@@ -8365,7 +8365,91 @@
         "mcpAppOnly": "Apenas a página",
         "uiPageAccess": "Páginas: {{pages}}; domínios: {{domains}}; ferramentas disponíveis para as páginas: {{tools}}",
         "uiHost": "Fornecer interfaces e ações do anfitrião no Cindy",
-        "uiHostAccess": "{{subject}}: {{access}}"
+        "uiHostAccess": "{{subject}}: {{access}}",
+        "hostUi": {
+          "view": "Mostrar uma página {{scope}} com «{{name}}»",
+          "resource": "Usar o recurso de {{kind}} «{{name}}»",
+          "contribution": "Mostrar um elemento do tipo {{kind}} em {{position}}",
+          "command": "Disponibilizar um comando do plugin",
+          "namedAccess": "“{{name}}”: {{details}}",
+          "setting": "Disponibilizar uma definição ({{type}})",
+          "settingTypes": {
+            "boolean": "Ativado/desativado",
+            "string": "Texto",
+            "number": "Número"
+          },
+          "minimum": "Mínimo: {{value}}",
+          "maximum": "Máximo: {{value}}",
+          "maxLength": "Máximo de caracteres: {{value}}",
+          "extensions": "Extensões de ficheiro permitidas: {{value}}",
+          "mimeTypes": "Tipos de ficheiro permitidos: {{value}}",
+          "trigger": "Prefixo de preenchimento automático: {{value}}",
+          "openView": "Abrir a página «{{name}}»",
+          "tool": "Executar a ferramenta «{{name}}»",
+          "arguments": "Parâmetros: {{value}}",
+          "listValue": "Lista [{{value}}]",
+          "fieldsValue": "Campos ({{value}})",
+          "nullValue": "Sem valor",
+          "shortcut": "Atalho: {{value}}",
+          "popover": "Abrir a página junto à entrada",
+          "roles": "Mensagens de: {{value}}",
+          "tools": "Ferramentas: {{value}}",
+          "plugins": "Plugins: {{value}}",
+          "options": "Valores disponíveis: {{value}}",
+          "yes": "Sim",
+          "no": "Não",
+          "unavailable": "Os detalhes desta permissão não estão disponíveis",
+          "capabilities": {
+            "context": "Ler a tarefa atual e o texto selecionado",
+            "draft": "Ler e editar o rascunho da mensagem",
+            "appearance": "Alterar as definições de aparência declaradas",
+            "visibility": "Mostrar ou ocultar a janela e as áreas de interface declaradas"
+          },
+          "fields": {
+            "uiFont": "Alterar o tipo de letra da interface",
+            "codeFont": "Alterar o tipo de letra do código",
+            "bodyFont": "Alterar o tipo de letra das mensagens",
+            "wallpaper": "Alterar a imagem de fundo",
+            "theme": "Alterar as cores das mensagens",
+            "reading": "Alterar a largura de leitura e o espaçamento entre linhas",
+            "contentStyle": "Alterar o espaçamento das mensagens e os balões"
+          },
+          "positions": {
+            "composer_toolbar": "barra de ferramentas de entrada",
+            "session_header": "cabeçalho da tarefa",
+            "statusbar": "barra de estado",
+            "message_actions": "barra de ações da mensagem",
+            "message_menu": "menu Mais da mensagem",
+            "turn_footer": "rodapé da resposta",
+            "message_body": "corpo da mensagem",
+            "tool_body": "resultado da ferramenta",
+            "sidebar_navigation": "navegação lateral",
+            "session_menu": "menu da tarefa",
+            "settings_section": "página de definições",
+            "composer_completion": "preenchimento automático",
+            "composer_attachment": "ações de anexos",
+            "sidebar_section": "secção lateral",
+            "window_titlebar": "barra de título da janela"
+          },
+          "kinds": {
+            "button": "botão",
+            "select": "lista de seleção",
+            "status": "texto de estado"
+          },
+          "scopes": {
+            "global": "global",
+            "task": "da tarefa atual"
+          },
+          "resources": {
+            "font": "tipo de letra",
+            "image": "imagem",
+            "video": "vídeo"
+          },
+          "speakers": {
+            "user": "Utilizador",
+            "assistant": "Assistente"
+          }
+        }
       },
       "connections": {
         "confirmTitle": "Adicionar endereço de ligação",
@@ -10814,6 +10898,7 @@
       "needsAttention": "Precisa de atenção",
       "duplicate": "Duplicar amigo",
       "moreActions": "Mais ações para {{name}}",
+      "viewIcons": "Ícones",
       "sectionExpand": "Expandir amigos",
       "showLess": "Mostrar menos",
       "sectionCollapse": "Recolher amigos",
