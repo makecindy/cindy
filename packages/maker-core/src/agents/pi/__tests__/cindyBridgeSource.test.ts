@@ -2480,7 +2480,7 @@ it('injects the parallel-vs-codemode split only when codemode is active', () => 
   expect(event.systemPromptOptions.promptGuidelines).toEqual([
     'base rule',
     'Put independent tool calls in the same message: Pi runs them in parallel and they cost one round trip.',
-    'For one or two small calls, call the tools directly instead of writing a codemode script.',
+    'A codemode script pays off when the calls are already known and their raw output needs filtering or cross-checking; when each result decides the next call, or for one or two small calls, issue the calls directly.',
   ]);
 
   // Runs without prompt options stay untouched instead of throwing.
