@@ -60,6 +60,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   private config: BlueBubblesConfig | null = null;
   private api: BlueBubblesApi | null = null;
   private receipts: BlueBubblesReceipts | null = null;
+  private editExcludedChats: ReadonlySet<string> | null = null;
   private readonly chats = new Map<string, BlueBubblesChat>();
   private generation = 0;
   private account: unknown | null = null;
@@ -182,6 +183,8 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     };
     expectedGeneration = await cleanup();
     if (!current()) throw new Error('BLUEBUBBLES_CONNECTION_CHANGED');
+    const excludedChats = new Set(previousConfig.chatGuids.filter(chat => !config.chatGuids.includes(chat)));
+    this.editExcludedChats = excludedChats;
     try {
       new BlueBubblesReceipts(this.options.storage, this.now()).activateChats(addedChats, this.now());
       // init disposes the previous generation, then starts a new one.
@@ -193,6 +196,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       }
     } catch {
       if (!current()) throw new Error('BLUEBUBBLES_CONNECTION_CHANGED');
+      this.editExcludedChats = null;
       expectedGeneration = await cleanup();
       if (current()) {
         for (const [key, value] of previous) {
@@ -202,6 +206,14 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
         await this.init();
       }
       throw new Error('BLUEBUBBLES_UPDATE_FAILED');
+    } finally {
+      if (this.editExcludedChats === excludedChats) this.editExcludedChats = null;
+    }
+    // The candidate is committed. Excluded receipts can now be finalized by the
+    // normal pump; a later ingress fault must not roll back an already saved edit.
+    if (excludedChats.size && current()) {
+      const generation = this.generation;
+      void this.pump(generation).catch(error => this.fail(generation, error));
     }
   }
 
@@ -497,6 +509,9 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           this.assertLive(generation);
           preparing = false;
           const chat = message.chats?.find(item => config.chatGuids.includes(item.guid));
+          // Until the edit commits, excluded chats still belong to the rollback
+          // configuration. Keep their durable pending facts available to rollback.
+          if (!chat && message.chats?.some(item => this.editExcludedChats?.has(item.guid))) continue;
           const sender = message.handle?.address?.toLowerCase();
           if (message.guid !== guid || message.isFromMe || !chat || !sender || message.handle?.service !== 'iMessage'
             || !Number.isFinite(message.dateCreated) || message.dateCreated < receipts.activatedAtFor(chat.guid)

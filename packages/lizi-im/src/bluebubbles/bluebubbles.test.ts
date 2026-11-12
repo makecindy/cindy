@@ -41,9 +41,10 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
     paths: { feishuMediaDir: 'unused' }, httpPostForm: async () => ({ status: 200, body: {} }),
   };
   const receiver = new LocalWebhookReceiver('127.0.0.1', 0);
+  const storage = { read: () => saved, write: (state: BlueBubblesState) => { saved = structuredClone(state); } };
   const im = new BlueBubblesIM(host, { secretPrefix: 'test-', api: () => api,
     receiver: () => receiver, resolvePeers: async () => ['127.0.0.1'], now: () => now,
-    storage: { read: () => saved, write: state => { saved = structuredClone(state); } } });
+    storage });
   connections.push(im);
   const received: IMMessageEvent[] = [];
   im.onMessage(event => { received.push(event); });
@@ -56,10 +57,42 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
   };
   const webhook = (guid: string, url = callbackUrl) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ type: 'new-message', data: { guid, text: 'forged payload', handle: { address: 'attacker' } } }) });
-  return { im, api, host, secrets, received, message, webhook, send, chat, otherChat, advance: (ms: number) => { now += ms; }, state: () => saved!, url: () => callbackUrl };
+  return { im, api, host, storage, secrets, received, message, webhook, send, chat, otherChat, advance: (ms: number) => { now += ms; }, state: () => saved!, url: () => callbackUrl };
 }
 
 describe('BlueBubbles local ingress', () => {
+  // Tier 1, PR #10241/r4556881876: a failed candidate edit used to permanently
+  // ignore excluded pending inputs before restoring the old chat allowlist.
+  it.each([false, true])('finalizes excluded pending receipts only after the edit commits (write fails: %s)', async failWrite => {
+    const f = await fixture(null, undefined, true);
+    const original = f.im.getEditableConfig();
+    f.message('excluded-pending', { chats: [f.otherChat], dateCreated: 1001 });
+    f.message('included-pending', { dateCreated: 1002 });
+    f.advance(100);
+    f.state().inbox['excluded-pending'] = { receivedAt: 1001, state: 'pending' };
+    f.state().inbox['included-pending'] = { receivedAt: 1002, state: 'pending' };
+    const write = f.storage.write;
+    let failed = false;
+    vi.spyOn(f.storage, 'write').mockImplementation(state => {
+      if (failWrite && !failed && state.inbox['included-pending']?.state === 'dispatching') {
+        failed = true;
+        throw new Error('receipt disk failure');
+      }
+      write(state);
+    });
+    const update = f.im.updateCredentials({ ...original, chatGuids: [f.chat.guid] });
+    if (failWrite) await expect(update).rejects.toThrow('BLUEBUBBLES_UPDATE_FAILED');
+    else await update;
+    await f.im.reconcile();
+    expect(failed).toBe(failWrite);
+    expect(f.im.getStatus().kind).toBe('connected');
+    expect(f.im.getEditableConfig().chatGuids).toEqual(failWrite ? original.chatGuids : [f.chat.guid]);
+    expect(f.state().inbox['excluded-pending'].state).toBe(failWrite ? 'accepted' : 'ignored');
+    expect(f.received.map(event => event.messageId)).toEqual(failWrite ? ['excluded-pending', 'included-pending'] : ['included-pending']);
+    await f.im.dispose(); await f.im.init();
+    expect(f.received).toHaveLength(failWrite ? 2 : 1);
+  });
+
   // Tier 1, PR #10241/r4552494796: adding a chat must not execute its old
   // requests, while existing chats still recover missed messages and receipts.
   it('persists a new chat activation boundary without resetting existing history', async () => {
