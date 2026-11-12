@@ -1814,7 +1814,8 @@
       "about": "關於",
       "imBot": "IM 機器人",
       "ghosts": "插件",
-      "cindyMake": "Cindy Make"
+      "cindyMake": "Cindy Make",
+      "modelGroups": "模型組"
     },
     "sections": {
       "user": "使用者",
@@ -20046,5 +20047,131 @@
     "detail": "請求來自「{{device}}」\n用途：{{purpose}}\n\n開啟後，同帳號裝置可以遠端控制這台電腦，包括執行任務和存取檔案。此設定持續有效，可隨時在設定中關閉。",
     "decline": "暫不開啟",
     "enable": "開啟遠端控制"
+  },
+  "modelGroups": {
+    "title": "模型組",
+    "description": "把模型供應商裡已有的幾個來源合成一個可選項。選模型時在「模型組」裡選它，由 Cindy 決定這次用哪個來源。",
+    "routes": "路線",
+    "routesDescription": "一條路線裡放幾個來源，開新任務時按選法挑一個。",
+    "sourceCount_other": "{{count}} 個來源",
+    "strategy": {
+      "expiring": {
+        "title": "快作廢的先用",
+        "hint": "剩得多又快重設的訂閱配額先用，不浪費；讀不到配額的來源排在後面。"
+      },
+      "order": {
+        "title": "按順序",
+        "hint": "排在前面的用不了，才用下一個。"
+      },
+      "rotate": {
+        "title": "輪流",
+        "hint": "每個新任務換下一個來源，平均分擔。"
+      },
+      "cheapest": {
+        "title": "最省錢",
+        "hint": "還有配額的訂閱先用，不另外花錢；其餘按標價從低到高，沒有標價的排在後面。"
+      }
+    },
+    "picker": {
+      "empty": "還沒有模型組。在設定裡把幾個來源合成一條路線，就能在這裡選它。",
+      "manage": "管理模型組"
+    },
+    "why": {
+      "expiringQuota": "還剩 {{left}}% 配額，{{reset}} 重設，先用它",
+      "expiring": "按配額排在最前",
+      "order": "排在最前面的可用來源",
+      "rotate": "這次輪到它",
+      "only": "現在只有它能用",
+      "soonest": "所有來源的配額都用完了，它最早恢復",
+      "soonestUntil": "所有來源的配額都用完了，它最早恢復（{{reset}}）",
+      "standby": "這次沒輪到",
+      "standbyQuota": "還剩 {{left}}% 配額，{{reset}} 才重設，先留著",
+      "off": "已在這條路線裡停用",
+      "unavailable": "沒有連線，或這個模型現在不可選",
+      "limited": "配額用完了",
+      "limitedUntil": "配額用完了，{{reset}} 恢復",
+      "tight": "5 小時配額快滿了，先不用",
+      "cheapest": "標價最低",
+      "cheapestFree": "訂閱還有配額，不另外花錢",
+      "noVision": "訊息裡有圖片，它看不了圖",
+      "exceptionImage": "訊息裡有圖片，只在能看圖的來源裡選",
+      "exceptionImageFallback": "訊息裡有圖片，但沒有能看圖的來源，照常選",
+      "exceptionHours": "這個時段改走「{{name}}」",
+      "separator": "；"
+    },
+    "settings": {
+      "newRoute": "新增路線",
+      "newRouteName": "新路線",
+      "routesEmpty": "還沒有路線。新增一條，把幾個來源放進去。",
+      "scopeNote": "模型組用於在這台電腦上開的新任務：開始時選定一個來源，任務進行中不會換。",
+      "back": "返回模型組",
+      "name": "名字",
+      "nameHint": "選模型時顯示這個名字。",
+      "routeShownAs": "選模型時在「模型組」裡顯示。",
+      "pick": "這次用哪個",
+      "effort": "推理強度",
+      "effortUnset": "不指定",
+      "effortHint": "選中的模型不支援這一檔時，按它的預設檔執行。",
+      "sources": "可以用的來源",
+      "sourcesHint": "可以放不同的模型；實際用了哪個會寫在任務裡。",
+      "sourcesEmpty": "還沒有來源。從下面加入已經連線的模型。",
+      "sourcesFull": "一條路線最多 {{count}} 個來源。",
+      "addSource": "新增來源",
+      "chooseModel": "選一個模型",
+      "notConnected": "沒有連線",
+      "moveUp": "上移",
+      "moveDown": "下移",
+      "remove": "移出這條路線",
+      "useSource": "讓這條路線使用 {{name}}",
+      "try": {
+        "title": "試一下",
+        "hint": "看看現在開新任務會用誰。不傳訊息，不花配額。",
+        "run": "看看會選誰",
+        "picked": "用它",
+        "standby": "備用",
+        "skipped": "跳過",
+        "unavailable": "這條路線裡現在沒有能用的來源，新任務會用你原來選的模型。"
+      },
+      "deleteRoute": "刪除這條路線",
+      "deleteRouteConfirmTitle": "刪除「{{name}}」？",
+      "deleteRouteConfirmDescription": "別的路線裡改走它的時段例外會一起刪除。已經開始的任務不受影響。",
+      "delete": "刪除",
+      "cancel": "取消",
+      "saveFailed": "沒有儲存成功，請重試。",
+      "exceptions": {
+        "title": "例外",
+        "hint": "按選法挑之前先看這些情況，從上到下。",
+        "empty": "還沒有例外，每個新任務都按上面的選法挑。",
+        "imageRule": "訊息裡有圖片時，只用能看圖的來源",
+        "hoursRule": "{{from}}–{{to}} 改走「{{name}}」",
+        "remove": "刪除這條例外",
+        "add": "新增例外",
+        "choose": "選擇一種情況",
+        "kindImage": "訊息裡有圖片",
+        "kindHours": "某個時段",
+        "from": "從",
+        "to": "到",
+        "useRoute": "改走",
+        "addHours": "新增",
+        "sameHour": "開始和結束不能是同一個時刻。",
+        "full": "最多 {{count}} 條例外。",
+        "needOtherRoute": "再建一條路線，才能按時段改走它。"
+      }
+    },
+    "overview": {
+      "mapTitle": "現在怎麼走",
+      "mapDescription": "從左到右：走哪條路線，最後落到哪個來源。點路線可以修改。",
+      "columnSources": "來源",
+      "columnEmpty": "還沒有",
+      "openRoute": "開啟路線「{{name}}」",
+      "recentTitle": "最近的選擇",
+      "recentEmpty": "還沒有任務用過路線。",
+      "keptOriginal": "裡面沒有現在能用的模型，沿用了原來選的模型。",
+      "keptOriginalShort": "沿用原來的模型",
+      "latest": "最近一次任務走的路"
+    },
+    "switchOffer": {
+      "action": "換到 {{model}} 繼續"
+    }
   }
 }
