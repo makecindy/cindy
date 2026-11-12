@@ -28,7 +28,7 @@
 | 3b | 能力路由（Claude 常量、Codex 工厂） | `capability-routing.ts`、`codexCapabilityRouting.ts` | 已对齐（m1-cp3b） | desktop `codexCapabilityRouting.test.ts`；Host `agent-graph.test.mjs` | 无 |
 | 3c | 引擎可用模型清单 | `catalog-to-descriptors.ts` `deriveAvailableModels` | 部分：刷新时机与桌面不同，见第二节 | Host `agent-graph.test.mjs`、`start-options.test.mjs` | 无 |
 | 3d | 工作目录禁用的插件 | 桌面启动钩子第 ⑮ 步 | 已对齐，不含伙伴工具集（M3） | Host `start-options.test.mjs` | 无 |
-| 4 | 自动复核、工具循环复核 | `auto-review-model-router.ts`、`oneShotCandidates.ts` | 未做（第 4 步，用户已选方案 A）。现状：Host 上 auto 任务里模型本会放行的操作改为人工确认，更安全但打断更多；工具循环只保留次数上限 | — | 无 |
+| 4 | 自动复核、工具循环复核 | `auto-review-model-router.ts` → `autoReviewModelRouterCore.ts`；`oneShotCandidates.ts` → `oneShotCandidatesCore.ts`；`auxiliary-model-settings-store.ts`、`resolveAuxiliaryModelChain.ts` → 各自的 core | 已对齐（m1-cp11a 拆分，m1-cp11b 接上；方案 A：审核方定，用户未反对）：Host 用桌面同一条复核模型链：先是专用候选（网关 `cindy/auto-review`、ChatGPT 复核、luna），之后是用户自定义的辅助模型链；工具循环复核走同一条辅助模型链。Claude 拿两个复核，Codex、Pi 拿自动复核，Maker 拿工具循环复核，键名与桌面相同。授权上下文用桌面同一个解析器，Auto 分类器失败的降级协调器已接。复核模型全部不可用时结果是询问；工具循环复核不可用时照桌面放行疑似循环、保留次数上限。与桌面的差别见第二节 | Host `auto-review.test.mjs`（接线；本机模拟网关上复核成功、自定义链兜底；5xx、key 被拒、连接失败、无 key 无订阅、答复没有裁决、裁决不在取值内、自定义链也失败、超时，一律询问；未设授权上下文不复核；工具循环停下与不可用时继续；分类器降级只切 Auto 的 Claude 任务）、`input-queue.test.mjs`（授权上下文）、`model-access.test.mjs`（网关端点读取与 Host 同步一致）；desktop `hostAutoReviewParity.test.ts`（同一模拟网关上两边的请求序列与结果相同，桌面接线照抄 index.ts，有源码形状断言）、`hostAuxiliaryModelChainParity.test.ts`、`hostReviewContextParity.test.ts`；`codex-runtime.e2e.mjs`（Codex 档位的复核经回环代理、带令牌） | 无 |
 | 5 | 视觉桥 | `vision-bridge/` | 未做（第 6 步） | — | 无 |
 | 6 | 快速模式 | Host 原有 `session-settings.mjs` | 已对齐；Fast 轴与 Pi 价格档同步（m1-cp2b） | Host `start-options.test.mjs`（含恢复任务读到 priority） | 无 |
 | 6b | Claude 按模型的思考档位 | `resolveModelEfforts` | 已对齐（m1-cp2a） | desktop `engineModelResolvers.test.ts` | 无 |
@@ -68,8 +68,11 @@
 | 订阅 Fast 策略 | 总有 | Host 没有 Codex 运行时时不设置 | Host 正常都有 Codex，实际无差 |
 | 没有 Codex 运行时时的订阅路线 | 总有订阅桥 | 订阅桥由 Codex 运行时建立；找不到 codex 可执行文件时，Claude 与 Pi 的 ChatGPT、SuperGrok 路线在本地明确拒绝（403 `subscription_route_unavailable`），不落到网关 | Host 正常都有 Codex，实际无差 |
 | Claude 认证在系统加密不可用时 | 返回 `no_encryption`（safeStorage） | 不做这一步：Host 的凭据在它自己的凭据库里 | 无对应情形 |
-| 自动复核（第 4 步之前） | 模型复核 | 退回人工确认 | 打断更多，不会更不安全 |
-| Auto 分类器失败的降级（第 4 步之前） | 代理观察到分类器失败后由协调器把该任务的复核切到 Cindy（register.ts） | 观察器照挂，不设协调器 | 经代理的会话 Auto 本来映射为 SDK 的 default，不用原生分类器；分类器请求失败时错误原样回给 CLI，不变成放行（`claude-proxy-runtime.test.mjs`）。第 4 步接上 |
+| 自动复核与工具循环复核 | 同一条复核模型链 | 同一条链，三处不同：1. Host 没有本机模型运行时（Ollama），这类候选失败后跳过；2. 旧版工具模型档位链（`getUtilityModelChainProfiles`）两条复核路径都读不到，Host 的端口直接报错并写明原因；辅助模型链的其他用户接到 Host 时，要换成真实实现；3. 自定义供应商 key 从 Host 凭据库读（与 Pi 鉴权同一实现），不含桌面安装型 BYOK 供应商的凭据 | 1、3 只在用户把这类模型放进自定义链时出现：该候选不可用，落到下一个，全部不可用就询问 |
+| 辅助模型设置文件 | 读 owner 目录的 `auxiliary-model-settings.json`；遇到旧格式会迁移、写回并写迁移标记；读不懂的文件删除 | 同一份代码读同一个文件，Host 不写也不删：两个旧命名空间判定恒为 false，旧格式只在内存里用迁移后的结果，不读未分 owner 的旧 voice 文件；读不懂的文件保留，同样按自动链处理 | 客户端模式下窗口进程与 Host 共用 owner 目录，窗口进程是这个文件唯一的写入方，避免跨进程先读后删、删掉用户刚存的设置。窗口进程重置设置的瞬间，Host 可能读到半截迁移标记，把旧 voice 文件里用户以前选过的链用一次，下次读取恢复；不会落到网关 |
+| 自动复核的授权上下文 | 插件委托任务按其登记的范围复核 | 同一个解析器；插件委托在 Host 上还没有投递，正在运行的输入一旦标成插件委托（包括客户端自选的 client id），就失败时关闭，复核变成询问 | 插件委托的授权上下文随 M2 或 M3 的投递一起接 |
+| Auto 分类器失败的降级 | 代理观察到分类器失败后，由协调器把该任务的复核切到 Cindy（register.ts） | 同一个协调器（m1-cp11b） | 无差 |
+| 复核调用的用量（2e 之前） | 记录 | 不记录 | Host 上复核调用的用量在 2e 之前不记录；2e 的边界表要把它算进去 |
 | 订阅余量（2e 之前） | 代理读订阅余量响应头，交给注入的 listener 落库并广播 | 观察器照挂，不设 listener | 不记录订阅余量；2e 接上 |
 | 回环代理的入站凭据 | 代理现有的会话与受邀者检查 | 在同样的检查之外，Host 的回环代理要求入站凭据：Pi 会话 token、当前网关 key，或运行时发给自家 Claude Code 的密钥（每个运行时随机 32 字节，只在内存，经环境变量交给 CLI，owner 变更时更换）；其余一律 401，公开的占位常量不算凭据 | 多一道入站门。受邀者路由令牌也是合法入站凭据，Host 现在不接远程任务所以没放行；**M3 接远程任务时要加进放行名单**，否则受邀者请求会被挡掉。m1-cp9 起这三类放行保持不变：经 `ANTHROPIC_CUSTOM_HEADERS` 只认密钥的收紧，已验证主请求与子代理请求带头，分类器与 count_tokens 两类未能触发；第 4 步接上原生分类器时用能触发分类器的流程重新验证，再决定是否收紧 |
 | Codex 回环代理的入站凭据 | 代理现有的路由与受邀者守门 | 在同样的检查之外，Host 的 Codex 回环代理（主代理、各模式的控制面代理、自定义上下文与受邀者代理）要求入站凭据：本运行时发给自家 Codex 进程的令牌（每个运行时随机 32 字节，只在内存，经环境变量交给 Codex，启动参数里只有变量名，常量时间比较，转发前删掉，上游看不到）；其余一律 403，不回 401（Codex 把 401 当登录过期，会去刷新并作废登录）。任务自己的工具命令能读到这个变量；令牌只在本运行时的回环代理上有效，运行时关闭即失效 | 多一道入站门。受邀者任务的 Codex 也由 Host 本机拉起、同样带令牌，**M3 接远程任务时核对** |
@@ -105,6 +108,14 @@
 | 官方 Codex Browser 插件的描述 | 系统 `~/.codex/config.toml` 的 `[plugins]`（共用启动配置里的 `prepareCodexBrowserCompanion`）；只读 config，不碰凭证 | 每次准备本机 Codex 进程的启动参数时 | M1 之前（Host 接入共用 Codex 启动配置时，m1-cp0 已有） |
 | 系统 Codex 登录（经链接） | 同上，迁移来的 profile 里经链接读系统那份登录 | 每次读 Codex 登录态与派发请求时 | 24b |
 | Claude Code 的配置与 Skill | `CLAUDE_CONFIG_DIR`，没设时 `~/.claude`（Claude 任务用 CLI 默认配置目录；/learn 捕获列 Skill 时也读这里） | 启动 Claude 任务、列 Skill 时 | m1-cp10 起用于 /learn 捕获 |
+
+### Host 在 profile 内与窗口进程共用的文件
+
+客户端模式下窗口进程与 Host 共用同一个 owner 目录。下表列出两边都会读、需要说明 Host 是否写入的文件。
+
+| 文件 | Host 是否写 | 原因 | 引入 |
+|---|---|---|---|
+| owner 目录的 `auxiliary-model-settings.json`、`auxiliary-model-settings-migration.json` | 不写、不删 | 见第二节「辅助模型设置文件」 | m1-cp11b |
 
 ## 四、移出 M1
 
