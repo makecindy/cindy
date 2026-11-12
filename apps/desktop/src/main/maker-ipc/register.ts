@@ -18649,12 +18649,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const createdAt = Date.now();
       void enqueueDurableWrite(`turn-model:${sessionId}:${clientId}`, async () => {
         if (!isDataOwnerBroadcastScopeCurrent(owner)) return;
-        const [input] = await db.select({ content: messages.content }).from(messages)
+        const [input] = await db.select({ content: messages.content, meta: messages.agentMeta }).from(messages)
           .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId),
             eq(messages.role, 'user'), isNull(messages.rewindAt))).limit(1);
-        // Hidden coordination/routine inputs must not leak a visible model boundary.
-        if (!input || input.content.startsWith(UI_ACTION_TRIGGER_PREFIX)) return;
+        if (!input) return;
         await recordTurnModelChange(current, {
+          input: { content: input.content, autoResume: isAutoResumeUserMessage(input.meta ? JSON.parse(input.meta) : null) },
           readPrevious: async () => {
             const [previous] = await db.select({ meta: messages.agentMeta }).from(messages)
               .innerJoin(sessions, eq(sessions.id, messages.sessionId))
