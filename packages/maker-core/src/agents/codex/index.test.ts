@@ -11755,12 +11755,14 @@ describe('CodexAgent MCP thread context hooks', () => {
       { format: 'non-status forbidden number', message: 'Error running remote compact task: {"code":"400","message":"unsupported input containing 403 tokens"}', partial: false, completedOnly: false },
       { format: 'non-status timeout number', message: 'Error running remote compact task: {"code":"400","message":"unsupported input containing 504 tokens"}', partial: false, completedOnly: false },
       { format: 'contextual allowed status', message: 'Error running remote compact task: {"code":"400","status_code":422}', partial: false, completedOnly: false },
+      { format: 'structured retry rejection', message: 'Error running remote compact task: {"code":"400"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 400 } }, partial: false, completedOnly: false },
+      { format: 'structured retry rate limit', message: 'Error running remote compact task: {"code":"400"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } }, partial: false, completedOnly: false },
       { format: 'additional details', message: 'Error running remote compact task', additionalDetails: '{"error":{"code":"400"}}', partial: false, completedOnly: false },
       { format: 'completion without error notification', message: 'Error running remote compact task: code: provider_invalid_request / 400', partial: false, completedOnly: true },
     ])('recovers LiteLLM 400 from $format without replaying completed work', async ({ partial, completedOnly, ...sample }) => {
       const { host, handle, events } = await start();
       const h = host.getThreadHandlers()!;
-      const error = { message: sample.message, additionalDetails: sample.additionalDetails, codexErrorInfo: 'other' as const };
+      const error = { message: sample.message, additionalDetails: sample.additionalDetails, codexErrorInfo: sample.codexErrorInfo ?? 'other' as const };
       try {
         if (partial) h.itemStarted!({ threadId: nativeId, turnId: 'turn-1',
           item: { id: 'existing-work', type: 'commandExecution', command: 'echo done', cwd: '/repo' } });
@@ -11801,6 +11803,12 @@ describe('CodexAgent MCP thread context hooks', () => {
       { message: '{"code":"400","status":409}' },
       { message: '{"code":"400","type":"authentication_error"}' },
       { message: '{"code":"400"}', codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } } },
+      { message: '{"code":"400"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 504 } } },
+      { message: '{"code":"400"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 403 } } },
+      { message: '{"code":"400"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 402 } } },
+      { message: '{"code":"400"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 401 } } },
+      { message: '{"code":"400"}', codexErrorInfo: { responseStreamConnectionFailed: { httpStatusCode: 400 } } },
+      { message: '{"code":"400"}', codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 400 } } },
       { message: '{"code":"400"}', codexErrorInfo: { responseStreamDisconnected: {} } },
       { message: '{"code":"400"}', codexErrorInfo: 'usageLimitExceeded' },
     ] as const)('keeps unsafe or non-status LiteLLM errors terminal: %j', async (sample) => {
@@ -11834,6 +11842,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       { message: '{"code":"400"}', codexErrorInfo: 'usageLimitExceeded' as const },
       { message: '{"code":"400","status":403}', codexErrorInfo: 'other' as const },
       { message: '{"code":"400","status_code":504}', codexErrorInfo: 'other' as const },
+      { message: '{"code":"400"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 504 } } },
     ])('rechecks a recorded summary recovery against the authoritative error: %j', async (error) => {
       const { host, handle, events } = await start();
       try {

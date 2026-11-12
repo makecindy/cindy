@@ -11013,9 +11013,13 @@ assertRouteCurrent();
       // field. Keep explicit HTTP/auth/rate-limit statuses authoritative.
       const liteLlmBadRequest = /\bcode\s*:\s*provider_invalid_request\s*\/\s*400\b|"code"\s*:\s*"400"/i.test(text);
       const textStatus = statusMatch ? Number(statusMatch[1]) : signals.errorStatus ?? contextualStatus ?? (liteLlmBadRequest ? 400 : undefined);
-      const httpStatus = info && typeof info === 'object' && 'httpConnectionFailed' in info
-        ? info.httpConnectionFailed.httpStatusCode ?? textStatus
-        : textStatus;
+      // All HTTP-bearing wire variants carry the authoritative status, as in
+      // the existing classifier; retry exhaustion is not necessarily a 429.
+      const httpInfo: { httpStatusCode?: number | null } | undefined =
+        info && typeof info === 'object' && (tag === 'httpConnectionFailed'
+          || tag === 'responseStreamConnectionFailed' || tag === 'responseStreamDisconnected'
+          || tag === 'responseTooManyFailedAttempts') ? Object.values(info)[0] : undefined;
+      const httpStatus = httpInfo?.httpStatusCode ?? textStatus;
       const rejectedRequest = [400, 404, 405, 422, 500, 501, 502, 503].includes(httpStatus ?? 0);
       // Match the existing provider quota contract: an outer 400 must not hide
       // a contextual upstream payment status. Bare numbers are not statuses.
@@ -11024,7 +11028,7 @@ assertRouteCurrent();
       // a forbidden upstream status must beat the wrapper's bad-request code.
       const forbiddenResponse = /(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?|code)["']?\s*(?:[:=]\s*)?["']?403["']?(?=$|[\s,;:}\]])|\brequest\s+rejected\s*\(\s*403\s*\)/i.test(text);
       const uncertainTransport = tag === 'responseStreamDisconnected' || tag === 'responseStreamConnectionFailed'
-        || [408, 504].includes(contextualStatus ?? httpStatus ?? 0)
+        || [contextualStatus, httpStatus].some(status => status === 408 || status === 504)
         || /timeout|timed out|ECONNRESET|ECONNREFUSED|ENOTFOUND|connection reset|network error|stream disconnected/i.test(text);
       return !uncertainTransport
         && !isAuthRelatedErrorMessage(text)
