@@ -8299,6 +8299,19 @@
           "resource": "Use the {{kind}} resource “{{name}}”",
           "contribution": "Show a {{kind}} in the {{position}}",
           "command": "Provide a plugin command",
+          "namedAccess": "“{{name}}”: {{details}}",
+          "setting": "Provide a setting ({{type}})",
+          "settingTypes": {
+            "boolean": "On/off",
+            "string": "Text",
+            "number": "Number"
+          },
+          "minimum": "Minimum: {{value}}",
+          "maximum": "Maximum: {{value}}",
+          "maxLength": "Maximum characters: {{value}}",
+          "extensions": "Accepted file extensions: {{value}}",
+          "mimeTypes": "Accepted file types: {{value}}",
+          "trigger": "Completion prefix: {{value}}",
           "openView": "Open page “{{name}}”",
           "tool": "Run tool “{{name}}”",
           "arguments": "Parameters: {{value}}",
@@ -8337,7 +8350,14 @@
             "message_menu": "message menu",
             "turn_footer": "reply footer",
             "message_body": "message body",
-            "tool_body": "tool result"
+            "tool_body": "tool result",
+            "sidebar_navigation": "sidebar navigation",
+            "session_menu": "task menu",
+            "settings_section": "settings page",
+            "composer_completion": "input completion",
+            "composer_attachment": "attachment actions",
+            "sidebar_section": "sidebar section",
+            "window_titlebar": "window title bar"
           },
           "kinds": {
             "button": "button",

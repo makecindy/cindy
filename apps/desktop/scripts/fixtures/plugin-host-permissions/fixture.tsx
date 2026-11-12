@@ -8,8 +8,10 @@ import type { GhostInstallConsentRequest } from '../../../src/shared/ghostInstal
 const manifest: GhostManifest = { schemaVersion: 3, id: 'task-board', name: 'Task Board', version: '1.0.0', kind: 'chip', entry: 'main.js',
   tools: [{ name: 'filter_items', description: 'Synthetic item filter' }], mcpApps: { ui: { resources: [{ uri: 'ui://task-board/page', file: 'ui/page.html' }], tools: {} },
     host: { views: [{ id: 'board', title: 'Task Board', scope: 'task', resourceUri: 'ui://task-board/page' }],
-      contributions: [{ id: 'open-board', title: 'Task Board', position: 'message.actions', view: 'board', match: { roles: ['assistant'] } }],
-      commands: [{ id: 'filter', title: 'Filter items', tool: 'filter_items', arguments: { tags: ['a', 'b'], done: false } }],
+      contributions: [{ id: 'attach', title: 'Filter files', position: 'composer.attachment', tool: 'filter_items',
+        arguments: { tags: ['a', 'b'], done: false }, accept: { extensions: ['.pdf'] } },
+      { id: 'complete', title: 'Complete items', position: 'composer.completion', tool: 'filter_items', trigger: '/' }],
+      settings: [{ id: 'limit', title: 'Limit', type: 'number', default: 0, min: 0, max: 10 }],
       capabilities: ['draft'] } } };
 const permissions = ghostHostUiPermissionItems(manifest);
 void mountPage({

@@ -8256,6 +8256,19 @@
           "resource": "使用{{kind}}资源「{{name}}」",
           "contribution": "在{{position}}显示{{kind}}",
           "command": "提供插件命令",
+          "namedAccess": "「{{name}}」：{{details}}",
+          "setting": "提供设置项（{{type}}）",
+          "settingTypes": {
+            "boolean": "开关",
+            "string": "文本",
+            "number": "数字"
+          },
+          "minimum": "最小值：{{value}}",
+          "maximum": "最大值：{{value}}",
+          "maxLength": "最多字符数：{{value}}",
+          "extensions": "接收的文件后缀：{{value}}",
+          "mimeTypes": "接收的文件类型：{{value}}",
+          "trigger": "补全触发符：{{value}}",
           "openView": "打开页面「{{name}}」",
           "tool": "调用工具「{{name}}」",
           "arguments": "参数：{{value}}",
@@ -8294,7 +8307,14 @@
             "message_menu": "消息更多菜单",
             "turn_footer": "回复底部",
             "message_body": "消息正文",
-            "tool_body": "工具结果"
+            "tool_body": "工具结果",
+            "sidebar_navigation": "侧边导航栏",
+            "session_menu": "任务菜单",
+            "settings_section": "设置页面",
+            "composer_completion": "输入补全入口",
+            "composer_attachment": "附件操作区",
+            "sidebar_section": "侧栏内容区",
+            "window_titlebar": "窗口标题栏"
           },
           "kinds": {
             "button": "按钮",

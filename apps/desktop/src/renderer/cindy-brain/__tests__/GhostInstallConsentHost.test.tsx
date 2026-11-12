@@ -2,6 +2,7 @@
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
+import { HOST_UI_POSITIONS, type GhostHostUi, type GhostHostUiSetting } from '@cindy/plugin-protocol';
 
 import type { GhostInstallConsentRequest } from '../../../shared/ghostInstallConsent';
 import { GhostInstallConsentContent, GhostInstallConsentHost } from '../GhostInstallConsentHost';
@@ -35,6 +36,26 @@ const HOST = {
   labelKey: 'networkHost',
   labelArgs: { host: 'upload.weather.test' },
 };
+
+// Use the real manifest projection so new supported fields cannot disappear in copy.
+function hostPermissionText(host: GhostHostUi, subject: string): string {
+  const manifest: GhostManifest = { schemaVersion: 3, id: 'board', name: 'Board', version: '1', kind: 'chip', entry: 'main.js',
+    tools: [{ name: 'refresh', description: 'Refresh items' }],
+    mcpApps: { ui: { resources: [{ uri: 'ui://board', file: 'page.html' }], tools: {} },
+      host: { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board', scope: 'global' }], ...host } } };
+  const tokens = ghostHostUiApprovalTokens(manifest);
+  const item = ghostHostUiPermissionItems(manifest).find(permission => permission.detailArgs?.subject === subject);
+  expect(item).toBeDefined();
+  const before = JSON.stringify(item);
+  const view = render(<GhostInstallConsentContent facts={{ kind: 'install', ghostId: 'board', name: 'Board', version: '1', permissions: [item!] }} />);
+  const text = view.container.textContent ?? '';
+  expect(text).not.toContain(subject);
+  expect(text).not.toMatch(/\{"|perm\.hostUi\./);
+  expect(JSON.stringify(item)).toBe(before);
+  expect(ghostHostUiApprovalTokens(manifest)).toEqual(tokens);
+  view.unmount();
+  return text;
+}
 
 describe('GhostInstallConsentHost', () => {
   let push: Push | undefined;
@@ -126,6 +147,61 @@ describe('GhostInstallConsentHost', () => {
       return text;
     });
     expect(new Set(texts).size).toBe(values.length);
+  });
+
+  it('explains every currently supported position without exposing translation keys', () => {
+    const texts = HOST_UI_POSITIONS.map(position => hostPermissionText({ contributions: [{ id: 'entry', title: 'Entry', position,
+      ...(position === 'composer.completion' ? { tool: 'refresh', trigger: '/' as const } :
+        position === 'composer.attachment' ? { tool: 'refresh', accept: { extensions: ['.pdf'] } } : { view: 'board' }),
+    }] }, 'contribution:entry'));
+    expect(new Set(texts).size).toBe(HOST_UI_POSITIONS.length);
+  });
+
+  it('distinguishes setting identities, types, bounds and available values', () => {
+    const common = { id: 'limit', title: 'Limit' };
+    const settings: GhostHostUiSetting[] = [
+      { ...common, type: 'number', default: 0, min: 0, max: 10 },
+      { ...common, type: 'number', default: 1, min: 1, max: 10 },
+      { ...common, type: 'number', default: 0, min: 0, max: 20 },
+      { ...common, id: 'other-limit', type: 'number', default: 0, min: 0, max: 10 },
+      { ...common, type: 'boolean', default: false },
+      { ...common, type: 'string', default: 'a', maxLength: 2 },
+      { ...common, type: 'string', default: 'a', maxLength: 3 },
+      { ...common, type: 'string', default: 'a', maxLength: 2, options: [{ label: 'A', value: 'a' }] },
+      { ...common, type: 'string', default: 'b', maxLength: 2, options: [{ label: 'B', value: 'b' }] },
+    ];
+    const texts = settings.map(field => hostPermissionText({ settings: [field] }, `setting:${field.id}`));
+    for (const text of texts) { expect(text).toContain('setting'); expect(text).not.toContain('command'); }
+    expect(texts[0]).toContain('Minimum: 0');
+    expect(texts[0]).toContain('Maximum: 10');
+    expect(texts[5]).toContain('Maximum characters: 2');
+    expect(new Set(texts).size).toBe(settings.length);
+  });
+
+  it('distinguishes attachment filters and completion prefixes', () => {
+    const filters = [{ extensions: ['.pdf'] }, { extensions: ['.txt'] },
+      { mimeTypes: ['application/pdf'] }, { mimeTypes: ['*/*'] },
+      { extensions: ['.pdf'], mimeTypes: ['application/pdf'] }, { extensions: ['.txt'], mimeTypes: ['application/pdf'] }];
+    const texts = filters.map(accept => hostPermissionText({ contributions: [{ id: 'attach', title: 'Attach',
+      position: 'composer.attachment', tool: 'refresh', accept }] }, 'contribution:attach'));
+    expect(new Set(texts).size).toBe(filters.length);
+    const prefixes = (['/', '@'] as const).map(trigger => hostPermissionText({ contributions: [{ id: 'complete', title: 'Complete',
+      position: 'composer.completion', tool: 'refresh', trigger }] }, 'contribution:complete'));
+    expect(prefixes[0]).not.toBe(prefixes[1]);
+    expect(prefixes[0]).toContain('Completion prefix: “/”');
+  });
+
+  it('keeps named approval subjects distinguishable when their targets are unchanged', () => {
+    for (const kind of ['view', 'command', 'contribution', 'appearance-resource']) {
+      const texts = ['first', 'second'].map(id => {
+        const host: GhostHostUi = kind === 'view' ? { views: [{ id, title: 'Same', resourceUri: 'ui://board', scope: 'global' }] } :
+          kind === 'command' ? { commands: [{ id, title: 'Same', tool: 'refresh' }] } :
+          kind === 'contribution' ? { contributions: [{ id, title: 'Same', position: 'message.actions', view: 'board' }] } :
+          { appearance: { fields: ['uiFont'], resources: [{ id, kind: 'font', path: 'font.ttf' }] } };
+        return hostPermissionText(host, `${kind}:${id}`);
+      });
+      expect(texts[0]).not.toBe(texts[1]);
+    }
   });
 
   it('shows the added permissions of an update and returns the answer to Main', async () => {

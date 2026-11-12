@@ -24,13 +24,15 @@ export function permissionItemDetail(item: GhostPermissionItem, t: (key: string,
     if (typeof input === 'boolean') return t(`${prefix}.${input ? 'yes' : 'no'}`);
     return input === null ? t(`${prefix}.nullValue`) : String(input);
   };
-  if (subject === 'view') return t(`${prefix}.view`, {
+  const named = (details: string) => t(`${prefix}.namedAccess`, { name: id, details });
+  if (subject === 'view') return named(t(`${prefix}.view`, {
     scope: t(`${prefix}.scopes.${detail.scope}`), name: detail.resource,
-  });
-  if (subject === 'appearance-resource') return t(`${prefix}.resource`, {
+  }));
+  if (subject === 'appearance-resource') return named(t(`${prefix}.resource`, {
     kind: t(`${prefix}.resources.${detail.kind}`), name: detail.path,
-  });
-  const parts = [subject === 'contribution' ? t(`${prefix}.contribution`, {
+  }));
+  const parts = [subject === 'setting' ? t(`${prefix}.setting`, { type: t(`${prefix}.settingTypes.${detail.type}`) }) :
+    subject === 'contribution' ? t(`${prefix}.contribution`, {
     kind: t(`${prefix}.kinds.${detail.kind}`),
     position: t(`${prefix}.positions.${String(detail.position).replace('.', '_')}`),
   }) : t(`${prefix}.command`)];
@@ -39,6 +41,16 @@ export function permissionItemDetail(item: GhostPermissionItem, t: (key: string,
   if (detail.arguments) parts.push(t(`${prefix}.arguments`, { value: value(detail.arguments) }));
   if (detail.shortcut) parts.push(t(`${prefix}.shortcut`, { value: detail.shortcut }));
   if (detail.presentation === 'popover') parts.push(t(`${prefix}.popover`));
+  if (subject === 'setting') {
+    for (const [field, label] of [['min', 'minimum'], ['max', 'maximum'], ['maxLength', 'maxLength']] as const) {
+      if (detail[field] !== undefined) parts.push(t(`${prefix}.${label}`, { value: value(detail[field]) }));
+    }
+  }
+  if (detail.trigger) parts.push(t(`${prefix}.trigger`, { value: value(detail.trigger) }));
+  const accept = detail.accept as Record<string, unknown> | undefined;
+  for (const field of ['extensions', 'mimeTypes'] as const) {
+    if (accept && Array.isArray(accept[field])) parts.push(t(`${prefix}.${field}`, { value: value(accept[field]) }));
+  }
   const match = detail.match as Record<string, unknown> | undefined;
   if (Array.isArray(match?.roles)) parts.push(t(`${prefix}.roles`, {
     value: match.roles.map(role => t(`${prefix}.speakers.${role}`)).join(', '),
@@ -47,5 +59,5 @@ export function permissionItemDetail(item: GhostPermissionItem, t: (key: string,
     if (match?.[kind]) parts.push(t(`${prefix}.${kind}`, { value: value(match[kind]) }));
   }
   if (detail.options) parts.push(t(`${prefix}.options`, { value: value(detail.options) }));
-  return parts.join(' · ');
+  return named(parts.join(' · '));
 }

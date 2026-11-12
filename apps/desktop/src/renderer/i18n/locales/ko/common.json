@@ -8256,6 +8256,19 @@
           "resource": "{{kind}} 리소스 “{{name}}” 사용",
           "contribution": "{{position}}에 {{kind}} 표시",
           "command": "플러그인 명령 제공",
+          "namedAccess": "“{{name}}”: {{details}}",
+          "setting": "설정 항목 제공({{type}})",
+          "settingTypes": {
+            "boolean": "켜기/끄기",
+            "string": "텍스트",
+            "number": "숫자"
+          },
+          "minimum": "최솟값: {{value}}",
+          "maximum": "최댓값: {{value}}",
+          "maxLength": "최대 문자 수: {{value}}",
+          "extensions": "허용된 파일 확장자: {{value}}",
+          "mimeTypes": "허용된 파일 형식: {{value}}",
+          "trigger": "자동 완성 접두사: {{value}}",
           "openView": "“{{name}}” 페이지 열기",
           "tool": "“{{name}}” 도구 실행",
           "arguments": "매개변수: {{value}}",
@@ -8294,7 +8307,14 @@
             "message_menu": "메시지 더보기 메뉴",
             "turn_footer": "답변 하단",
             "message_body": "메시지 본문",
-            "tool_body": "도구 결과"
+            "tool_body": "도구 결과",
+            "sidebar_navigation": "사이드바 탐색",
+            "session_menu": "작업 메뉴",
+            "settings_section": "설정 페이지",
+            "composer_completion": "입력 자동 완성",
+            "composer_attachment": "첨부 파일 작업",
+            "sidebar_section": "사이드바 콘텐츠",
+            "window_titlebar": "창 제목 표시줄"
           },
           "kinds": {
             "button": "버튼",

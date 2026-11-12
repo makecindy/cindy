@@ -8371,6 +8371,19 @@
           "resource": "Utiliser la ressource {{kind}} « {{name}} »",
           "contribution": "Afficher un élément {{kind}} dans la zone {{position}}",
           "command": "Fournir une commande de plugin",
+          "namedAccess": "« {{name}} » : {{details}}",
+          "setting": "Fournir un réglage ({{type}})",
+          "settingTypes": {
+            "boolean": "Activé/désactivé",
+            "string": "Texte",
+            "number": "Nombre"
+          },
+          "minimum": "Minimum : {{value}}",
+          "maximum": "Maximum : {{value}}",
+          "maxLength": "Nombre maximal de caractères : {{value}}",
+          "extensions": "Extensions de fichiers autorisées : {{value}}",
+          "mimeTypes": "Types de fichiers autorisés : {{value}}",
+          "trigger": "Préfixe de saisie semi-automatique : {{value}}",
           "openView": "Ouvrir la page « {{name}} »",
           "tool": "Exécuter l’outil « {{name}} »",
           "arguments": "Paramètres : {{value}}",
@@ -8409,7 +8422,14 @@
             "message_menu": "menu Plus du message",
             "turn_footer": "pied de la réponse",
             "message_body": "corps du message",
-            "tool_body": "résultat de l’outil"
+            "tool_body": "résultat de l’outil",
+            "sidebar_navigation": "navigation latérale",
+            "session_menu": "menu de la tâche",
+            "settings_section": "page des paramètres",
+            "composer_completion": "saisie semi-automatique",
+            "composer_attachment": "actions sur les pièces jointes",
+            "sidebar_section": "section latérale",
+            "window_titlebar": "barre de titre de la fenêtre"
           },
           "kinds": {
             "button": "bouton",

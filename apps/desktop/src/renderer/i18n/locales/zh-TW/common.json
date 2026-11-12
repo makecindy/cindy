@@ -8256,6 +8256,19 @@
           "resource": "使用{{kind}}資源「{{name}}」",
           "contribution": "在{{position}}顯示{{kind}}",
           "command": "提供插件命令",
+          "namedAccess": "「{{name}}」：{{details}}",
+          "setting": "提供設定項（{{type}}）",
+          "settingTypes": {
+            "boolean": "開關",
+            "string": "文字",
+            "number": "數字"
+          },
+          "minimum": "最小值：{{value}}",
+          "maximum": "最大值：{{value}}",
+          "maxLength": "最多字元數：{{value}}",
+          "extensions": "接受的副檔名：{{value}}",
+          "mimeTypes": "接受的檔案類型：{{value}}",
+          "trigger": "補全觸發字元：{{value}}",
           "openView": "開啟頁面「{{name}}」",
           "tool": "呼叫工具「{{name}}」",
           "arguments": "參數：{{value}}",
@@ -8294,7 +8307,14 @@
             "message_menu": "訊息更多選單",
             "turn_footer": "回覆底部",
             "message_body": "訊息正文",
-            "tool_body": "工具結果"
+            "tool_body": "工具結果",
+            "sidebar_navigation": "側邊導覽列",
+            "session_menu": "任務選單",
+            "settings_section": "設定頁面",
+            "composer_completion": "輸入補全入口",
+            "composer_attachment": "附件操作區",
+            "sidebar_section": "側欄內容區",
+            "window_titlebar": "視窗標題列"
           },
           "kinds": {
             "button": "按鈕",

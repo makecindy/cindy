@@ -8299,6 +8299,19 @@
           "resource": "{{kind}}-Ressource „{{name}}“ verwenden",
           "contribution": "{{kind}} in {{position}} anzeigen",
           "command": "Plugin-Befehl bereitstellen",
+          "namedAccess": "„{{name}}“: {{details}}",
+          "setting": "Einstellung bereitstellen ({{type}})",
+          "settingTypes": {
+            "boolean": "Ein/aus",
+            "string": "Text",
+            "number": "Zahl"
+          },
+          "minimum": "Minimum: {{value}}",
+          "maximum": "Maximum: {{value}}",
+          "maxLength": "Maximale Zeichenanzahl: {{value}}",
+          "extensions": "Erlaubte Dateiendungen: {{value}}",
+          "mimeTypes": "Erlaubte Dateitypen: {{value}}",
+          "trigger": "Präfix der Eingabevervollständigung: {{value}}",
           "openView": "Seite „{{name}}“ öffnen",
           "tool": "Werkzeug „{{name}}“ ausführen",
           "arguments": "Parameter: {{value}}",
@@ -8337,7 +8350,14 @@
             "message_menu": "Mehr-Menü der Nachricht",
             "turn_footer": "Antwortfuß",
             "message_body": "Nachrichtentext",
-            "tool_body": "Werkzeugergebnis"
+            "tool_body": "Werkzeugergebnis",
+            "sidebar_navigation": "Seitenleistennavigation",
+            "session_menu": "Aufgabenmenü",
+            "settings_section": "Einstellungsseite",
+            "composer_completion": "Eingabevervollständigung",
+            "composer_attachment": "Anhangaktionen",
+            "sidebar_section": "Seitenleistenbereich",
+            "window_titlebar": "Fenstertitelleiste"
           },
           "kinds": {
             "button": "Schaltfläche",

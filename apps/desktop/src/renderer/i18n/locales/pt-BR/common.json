@@ -8371,6 +8371,19 @@
           "resource": "Usar o recurso de {{kind}} “{{name}}”",
           "contribution": "Mostrar um elemento do tipo {{kind}} em {{position}}",
           "command": "Oferecer um comando do plugin",
+          "namedAccess": "“{{name}}”: {{details}}",
+          "setting": "Oferecer uma configuração ({{type}})",
+          "settingTypes": {
+            "boolean": "Ativado/desativado",
+            "string": "Texto",
+            "number": "Número"
+          },
+          "minimum": "Mínimo: {{value}}",
+          "maximum": "Máximo: {{value}}",
+          "maxLength": "Máximo de caracteres: {{value}}",
+          "extensions": "Extensões de arquivo permitidas: {{value}}",
+          "mimeTypes": "Tipos de arquivo permitidos: {{value}}",
+          "trigger": "Prefixo de preenchimento automático: {{value}}",
           "openView": "Abrir a página “{{name}}”",
           "tool": "Executar a ferramenta “{{name}}”",
           "arguments": "Parâmetros: {{value}}",
@@ -8409,7 +8422,14 @@
             "message_menu": "menu Mais da mensagem",
             "turn_footer": "rodapé da resposta",
             "message_body": "corpo da mensagem",
-            "tool_body": "resultado da ferramenta"
+            "tool_body": "resultado da ferramenta",
+            "sidebar_navigation": "navegação lateral",
+            "session_menu": "menu da tarefa",
+            "settings_section": "página de configurações",
+            "composer_completion": "preenchimento automático",
+            "composer_attachment": "ações de anexos",
+            "sidebar_section": "seção lateral",
+            "window_titlebar": "barra de título da janela"
           },
           "kinds": {
             "button": "botão",

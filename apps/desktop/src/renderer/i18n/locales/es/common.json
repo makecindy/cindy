@@ -8371,6 +8371,19 @@
           "resource": "Usar el recurso de {{kind}} «{{name}}»",
           "contribution": "Mostrar un elemento de tipo {{kind}} en {{position}}",
           "command": "Ofrecer un comando del complemento",
+          "namedAccess": "«{{name}}»: {{details}}",
+          "setting": "Ofrecer un ajuste ({{type}})",
+          "settingTypes": {
+            "boolean": "Activado/desactivado",
+            "string": "Texto",
+            "number": "Número"
+          },
+          "minimum": "Mínimo: {{value}}",
+          "maximum": "Máximo: {{value}}",
+          "maxLength": "Máximo de caracteres: {{value}}",
+          "extensions": "Extensiones de archivo permitidas: {{value}}",
+          "mimeTypes": "Tipos de archivo permitidos: {{value}}",
+          "trigger": "Prefijo de autocompletado: {{value}}",
           "openView": "Abrir la página «{{name}}»",
           "tool": "Ejecutar la herramienta «{{name}}»",
           "arguments": "Parámetros: {{value}}",
@@ -8409,7 +8422,14 @@
             "message_menu": "menú Más del mensaje",
             "turn_footer": "pie de la respuesta",
             "message_body": "cuerpo del mensaje",
-            "tool_body": "resultado de la herramienta"
+            "tool_body": "resultado de la herramienta",
+            "sidebar_navigation": "navegación lateral",
+            "session_menu": "menú de la tarea",
+            "settings_section": "página de ajustes",
+            "composer_completion": "autocompletado de entrada",
+            "composer_attachment": "acciones de adjuntos",
+            "sidebar_section": "sección lateral",
+            "window_titlebar": "barra de título de la ventana"
           },
           "kinds": {
             "button": "botón",
