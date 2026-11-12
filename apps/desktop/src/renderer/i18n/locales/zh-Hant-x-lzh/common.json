@@ -6737,7 +6737,106 @@
           "deviceLink": "Device Link"
         },
         "onlyEncrypted": "唯用 Agent-Net",
-        "onlyEncryptedHint": "啟之則舊版裝置及仍循舊路之分享不可用。預設關閉。"
+        "onlyEncryptedHint": "啟之則舊版裝置及仍循舊路之分享不可用。預設關閉。",
+        "peerSwitch": {
+          "row": {
+            "toAgentNet": "方轉 Agent-Net…",
+            "toDeviceLink": "方返 Device Link…"
+          },
+          "status": {
+            "toAgentNet": "方轉 Agent-Net",
+            "toDeviceLink": "方返 Device Link"
+          },
+          "reconnecting": "重連中",
+          "toAgentNet": "轉用 Agent-Net",
+          "toDeviceLink": "返用 Device Link",
+          "retry": "再試",
+          "hint": "轉之，則與彼之連接施端間加密。彼六十秒內未復連，則自返 Device Link。",
+          "steps": {
+            "request": {
+              "agentNet": "請彼啟 Agent-Net",
+              "deviceLink": "請彼閉 Agent-Net"
+            },
+            "reconnect": "彼重連",
+            "confirm": {
+              "agentNet": "候彼經 Agent-Net 復連",
+              "deviceLink": "候彼經 Device Link 復連"
+            },
+            "revert": "六十秒內未復連，方返 Device Link"
+          },
+          "closeHint": "可先閉此卡，成否另行告知。",
+          "reverted": "未成：六十秒內未經 Agent-Net 復連，已自返 Device Link。",
+          "unsupported": "彼之 Cindy 版舊，未能於此轉之。於彼機更新 Cindy 後再試。",
+          "done": {
+            "toAgentNet": "已轉 Agent-Net，連接施端間加密。",
+            "toDeviceLink": "已返 Device Link。"
+          },
+          "blocked": {
+            "mobile": "手機不受遠控，請於此手機自啟 Agent-Net。",
+            "peer-control-off": "彼未啟「許同帳號設備控制本機」，須於彼機轉之。",
+            "control-off": "此機已閉對彼之控制，啟之方可於此轉之。"
+          },
+          "toast": {
+            "toAgentNet": "「{{name}}」已轉 Agent-Net",
+            "toDeviceLink": "「{{name}}」已返 Device Link",
+            "reverted": "「{{name}}」未成，已自返 Device Link",
+            "unsupported": "「{{name}}」之 Cindy 版舊，未能遠轉",
+            "not-ready": "「{{name}}」今不能啟 Agent-Net",
+            "busy": "「{{name}}」方理他轉，稍後再試",
+            "failed": "「{{name}}」未能轉接",
+            "encryption-required": "須先於「{{name}}」解「唯用 Agent-Net」之限，乃可返",
+            "controller-encryption-required": "須先解本機「唯用 Agent-Net」之限，乃可使「{{name}}」返",
+            "agent-net-only-relay": "「{{name}}」之連線唯通 Agent-Net，不可返 Device Link"
+          },
+          "checking": "方詢彼能轉與否…",
+          "notReady": {
+            "not-signed-in": "彼未登 Cindy，登之方可啟 Agent-Net。",
+            "secure-storage": "彼機之系統安全存儲不可用，不能啟 Agent-Net。須於彼機處之。",
+            "relay-identity": "對方尚未設定此中轉之 Agent-Net 連線，須先於彼機設定。"
+          },
+          "batch": {
+            "toAgentNet": "盡轉 Agent-Net",
+            "toDeviceLink": "盡返 Device Link",
+            "confirmTitleAgentNet": "將此諸機轉用 Agent-Net 乎？",
+            "confirmTitleDeviceLink": "將此諸機返用 Device Link 乎？",
+            "ready": "可轉",
+            "checking": "詢問中",
+            "skipReason": {
+              "unsupported": "須更新 Cindy",
+              "not-ready": "今不能啟 Agent-Net",
+              "unreachable": "暫詢不至",
+              "encryption-required": "唯用 Agent-Net",
+              "controller-encryption-required": "本機唯用 Agent-Net",
+              "agent-net-only-relay": "網絡唯通 Agent-Net"
+            },
+            "canaryNote": "先轉首機，驗其復連，乃並轉其餘。各機六十秒內未復連者皆自返。",
+            "rollbackNote": "返後連線不復端到端加密。已選「唯用 Agent-Net」之機，須先於本機解此限。",
+            "run": "轉 {{count}} 機",
+            "cancel": "取消",
+            "close": "畢",
+            "state": {
+              "waiting": "候",
+              "running": "轉中",
+              "done": "已轉",
+              "reverted": "已自返",
+              "skipped": "未轉",
+              "failed": "未成"
+            },
+            "stopped": "首機未成，其餘未轉。",
+            "finished": "已轉 {{done}} 機",
+            "finishedWithRevert": "已轉 {{done}} 機，{{reverted}} 機未成"
+          },
+          "changedBy": {
+            "on": "「{{name}}」於 {{time}} 遠啟之",
+            "off": "「{{name}}」於 {{time}} 遠閉之"
+          },
+          "unreachable": "此次未詢至彼機，稍後再啟此卡試之。",
+          "encryptionRequired": "彼機已選「唯用 Agent-Net」。須先於彼機解此限，乃可返 Device Link。",
+          "disableBlocked": {
+            "controller-encryption-required": "本機已選「唯用 Agent-Net」。須先於本機解此限，乃可使彼機返 Device Link。",
+            "agent-net-only-relay": "此連線之網絡唯通 Agent-Net，不可返 Device Link。須先改用支援 Device Link 之線路。"
+          }
+        }
       }
     },
     "tina": {

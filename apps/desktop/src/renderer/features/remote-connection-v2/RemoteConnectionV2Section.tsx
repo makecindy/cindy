@@ -28,7 +28,9 @@ import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDev
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 
+import { remoteSwitchStore, startRemoteSwitch, type RemoteSwitchTarget } from './agentNetRemoteSwitch';
 import { RemoteConnectionTopology } from './RemoteConnectionTopology';
+import { RemoteSwitchBatch } from './RemoteSwitchBatch';
 import { buildTopology, type TopologyModel, type TopologyNode } from './topologyModel';
 import { relativeTime } from './topologyPresentation';
 import { usePeerLinks } from './usePeerLinks';
@@ -101,6 +103,7 @@ export function RemoteConnectionV2Section({
   const recent = useRecentPresence(true);
   const unresponsive = useSyncExternalStore(unresponsiveDevicesStore.subscribe, unresponsiveDevicesStore.getSnapshot);
   const [showOffline, setShowOffline] = useState(false);
+  const remoteSwitch = useSyncExternalStore(remoteSwitchStore.subscribe, remoteSwitchStore.getSnapshot);
 
   const relayName =
     relay.state?.mode === 'self-hosted' && relay.state.relay?.name
@@ -140,6 +143,17 @@ export function RemoteConnectionV2Section({
     });
   }, [t]);
 
+  const onSwitch = useCallback((node: TopologyNode, target: RemoteSwitchTarget) => {
+    void startRemoteSwitch(node.id, target).then((result) => {
+      const name = { name: node.name };
+      if (result === 'done') {
+        toast.success(t(target === 'agent-net' ? 'settings.remoteControl.v2.peerSwitch.toast.toAgentNet' : 'settings.remoteControl.v2.peerSwitch.toast.toDeviceLink', name));
+      } else {
+        toast.error(t(`settings.remoteControl.v2.peerSwitch.toast.${result}`, name));
+      }
+    });
+  }, [t]);
+
   const linkStatusText = t(`settings.devices.linkStatus.${s.linkStatus}`);
   const offlineToggleVisible = model.stats.offline >= 2;
 
@@ -147,7 +161,10 @@ export function RemoteConnectionV2Section({
     <>
       <section className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-12">
-          <span className="text-[var(--text-secondary)]">{statsLine(model, t)}</span>
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="text-[var(--text-secondary)]">{statsLine(model, t)}</span>
+            <RemoteSwitchBatch nodes={model.nodes} entries={remoteSwitch.entries} />
+          </span>
           <span className="flex items-center gap-1.5">
             {/* 与中转的连接:连着绿、出问题红、其它(连接中 / 已停)灰,和拓扑同一套颜色 */}
             <span
@@ -181,6 +198,8 @@ export function RemoteConnectionV2Section({
               focusDeviceId={focusDeviceId}
               focusRequestKey={deepLink.focusRequestKey}
               ready={s.devices !== null && peerLinks.takenAt > 0}
+              switches={remoteSwitch.entries}
+              onSwitch={onSwitch}
             />
           </div>
           {offlineToggleVisible ? (

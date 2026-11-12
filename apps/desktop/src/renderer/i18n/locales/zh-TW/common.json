@@ -6737,7 +6737,106 @@
           "deviceLink": "Device Link"
         },
         "onlyEncrypted": "僅使用 Agent-Net",
-        "onlyEncryptedHint": "開啟後，舊版裝置及仍使用舊連線的分享將無法使用。預設關閉。"
+        "onlyEncryptedHint": "開啟後，舊版裝置及仍使用舊連線的分享將無法使用。預設關閉。",
+        "peerSwitch": {
+          "row": {
+            "toAgentNet": "正在切到 Agent-Net…",
+            "toDeviceLink": "正在切回 Device Link…"
+          },
+          "status": {
+            "toAgentNet": "正在切到 Agent-Net",
+            "toDeviceLink": "正在切回 Device Link"
+          },
+          "reconnecting": "重新連線中",
+          "toAgentNet": "切到 Agent-Net",
+          "toDeviceLink": "切回 Device Link",
+          "retry": "重試",
+          "hint": "切換後，和它之間的連線會端對端加密。對方 60 秒內沒連回來會自動退回 Device Link。",
+          "steps": {
+            "request": {
+              "agentNet": "請對方開啟 Agent-Net",
+              "deviceLink": "請對方關閉 Agent-Net"
+            },
+            "reconnect": "對方重新連線",
+            "confirm": {
+              "agentNet": "等對方經 Agent-Net 連回來",
+              "deviceLink": "等對方經 Device Link 連回來"
+            },
+            "revert": "60 秒內沒連回來，正在退回 Device Link"
+          },
+          "closeHint": "可以先關掉這張卡片，結果會另外提示。",
+          "reverted": "沒切成：60 秒內沒有經 Agent-Net 連回來，已自動退回 Device Link。",
+          "unsupported": "對方的 Cindy 版本較舊，還不能在這裡切換。在那台電腦上更新 Cindy 後再試。",
+          "done": {
+            "toAgentNet": "已切到 Agent-Net，連線端對端加密。",
+            "toDeviceLink": "已切回 Device Link。"
+          },
+          "blocked": {
+            "mobile": "手機不接受遠端控制，請在這支手機上開啟 Agent-Net。",
+            "peer-control-off": "對方沒有開啟「允許同帳號裝置控制本機」，需要在那台電腦上切換。",
+            "control-off": "這台電腦關閉了對它的控制，開啟後才能在這裡切換。"
+          },
+          "toast": {
+            "toAgentNet": "「{{name}}」已切到 Agent-Net",
+            "toDeviceLink": "「{{name}}」已切回 Device Link",
+            "reverted": "「{{name}}」沒切成，已自動退回 Device Link",
+            "unsupported": "「{{name}}」的 Cindy 版本較舊，還不能遠端切換",
+            "not-ready": "「{{name}}」現在無法開啟 Agent-Net",
+            "busy": "「{{name}}」正在處理另一次切換，稍後再試",
+            "failed": "未能切換「{{name}}」的連線方式",
+            "encryption-required": "請先在「{{name}}」關閉「僅使用 Agent-Net」，再切回",
+            "controller-encryption-required": "請先關閉這台電腦的「僅使用 Agent-Net」，再把「{{name}}」切回",
+            "agent-net-only-relay": "「{{name}}」的連線僅支援 Agent-Net，無法切回 Device Link"
+          },
+          "checking": "正在確認對方能不能切換…",
+          "notReady": {
+            "not-signed-in": "對方沒有登入 Cindy，登入後才能開啟 Agent-Net。",
+            "secure-storage": "對方電腦的系統安全儲存無法使用，打不開 Agent-Net。需要在那台電腦上處理。",
+            "relay-identity": "對方尚未設定目前中轉的 Agent-Net 連線，請先在那台電腦上設定。"
+          },
+          "batch": {
+            "toAgentNet": "全部切到 Agent-Net",
+            "toDeviceLink": "全部切回 Device Link",
+            "confirmTitleAgentNet": "把這些電腦切到 Agent-Net？",
+            "confirmTitleDeviceLink": "把這些電腦切回 Device Link？",
+            "ready": "可以切換",
+            "checking": "確認中",
+            "skipReason": {
+              "unsupported": "需要更新 Cindy",
+              "not-ready": "現在打不開 Agent-Net",
+              "unreachable": "暫時問不到",
+              "encryption-required": "僅使用 Agent-Net",
+              "controller-encryption-required": "本機僅使用 Agent-Net",
+              "agent-net-only-relay": "網路僅支援 Agent-Net"
+            },
+            "canaryNote": "先切第一台，確認能連回來再同時切其餘的。每台 60 秒內沒連回來都會自己退回。",
+            "rollbackNote": "切回後連線不再端到端加密。開啟「僅使用 Agent-Net」的電腦，須先在那台電腦關閉此選項。",
+            "run": "切換 {{count}} 台",
+            "cancel": "取消",
+            "close": "完成",
+            "state": {
+              "waiting": "等待",
+              "running": "切換中",
+              "done": "已切換",
+              "reverted": "已自動退回",
+              "skipped": "未切換",
+              "failed": "未能切換"
+            },
+            "stopped": "第一台沒切成，其餘的沒有切換。",
+            "finished": "已切換 {{done}} 台",
+            "finishedWithRevert": "已切換 {{done}} 台，{{reverted}} 台未切換"
+          },
+          "changedBy": {
+            "on": "由「{{name}}」在 {{time}} 遠端開啟",
+            "off": "由「{{name}}」在 {{time}} 遠端關閉"
+          },
+          "unreachable": "這次沒問到那台電腦，稍後再開啟卡片試試。",
+          "encryptionRequired": "對方開啟了「僅使用 Agent-Net」。請先在那台電腦關閉此選項，再切回 Device Link。",
+          "disableBlocked": {
+            "controller-encryption-required": "這台電腦開啟了「僅使用 Agent-Net」。請先在這台電腦關閉此選項，才能把對方切回 Device Link。",
+            "agent-net-only-relay": "此連線使用僅支援 Agent-Net 的網路，無法切回 Device Link。請先改用支援 Device Link 的連線路線。"
+          }
+        }
       }
     },
     "tina": {

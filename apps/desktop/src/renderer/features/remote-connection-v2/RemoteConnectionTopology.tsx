@@ -24,10 +24,12 @@ import { useTranslation } from 'react-i18next';
 import { MonitorOff, Radio } from 'lucide-react';
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Spinner } from '@/components/ui/spinner';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { cn } from '@/lib/utils';
 import type { DeviceLinkLinkStatus } from '@/hooks/useDeviceLinkSettings';
 
+import type { RemoteSwitchEntry, RemoteSwitchTarget } from './agentNetRemoteSwitch';
 import { DeviceNodePopover, HubNodePopover } from './DeviceNodePopover';
 import { PlatformGlyph } from './PlatformGlyph';
 import { TopologyFlowLayer, type FlowLine } from './TopologyFlow';
@@ -66,6 +68,9 @@ export interface RemoteConnectionTopologyProps {
   focusRequestKey?: string | null;
   /** 首批数据(设备目录与第一份链路快照)是否都到了;到了之后图才算稳定,见 SETTLE_MS */
   ready?: boolean;
+  /** 远程切换连接方式(原型):各设备的切换状态与发起切换。 */
+  switches?: ReadonlyMap<string, RemoteSwitchEntry>;
+  onSwitch?: (node: TopologyNode, target: RemoteSwitchTarget) => void;
 }
 
 /**
@@ -240,6 +245,8 @@ export function RemoteConnectionTopology({
   focusDeviceId = null,
   focusRequestKey = null,
   ready = true,
+  switches,
+  onSwitch,
 }: RemoteConnectionTopologyProps) {
   const { t } = useTranslation();
   const reduced = useReducedMotion();
@@ -418,7 +425,13 @@ export function RemoteConnectionTopology({
       }
       const phone = node.isMobile;
       const sub = rowSubtitle(node, t);
-      const protocol = protocolLabel(node, t);
+      const switchEntry = switches?.get(node.id) ?? null;
+      // 对方切换后要重新连接:这段时间图块不再是「连着」的绿色，标志换成转圈；名字下面写正在切换。
+      const running = switchEntry?.kind === 'running' ? switchEntry : null;
+      const reconnecting = running !== null && running.step !== 'request';
+      const protocol = running
+        ? t(running.target === 'agent-net' ? 'settings.remoteControl.v2.peerSwitch.row.toAgentNet' : 'settings.remoteControl.v2.peerSwitch.row.toDeviceLink')
+        : protocolLabel(node, t);
       const description = [node.name, protocol, sub.text].filter(Boolean).join(' · ');
       pills.push(
         <LatencyPill
@@ -450,18 +463,28 @@ export function RemoteConnectionTopology({
                 data-form={phone ? 'phone' : undefined}
                 data-dim={node.status === 'offline' ? 'true' : undefined}
                 data-live={node.flow ? 'true' : undefined}
-                data-linked={node.status === 'direct' || node.status === 'relay' ? 'true' : undefined}
+                data-linked={!reconnecting && (node.status === 'direct' || node.status === 'relay') ? 'true' : undefined}
                 data-error={node.status === 'attention' ? 'true' : undefined}
               >
                 {phone ? <span className="rcv2-island" aria-hidden /> : null}
-                <PlatformGlyph platform={node.platform} isMobile={node.isMobile} size={phone ? 13 : 16} />
+                {reconnecting ? (
+                  <Spinner size={phone ? 12 : 15} aria-hidden />
+                ) : (
+                  <PlatformGlyph platform={node.platform} isMobile={node.isMobile} size={phone ? 13 : 16} />
+                )}
                 {/* 忙碌:右上角心动橙的呼吸小圆点,与侧栏「运行中」同一套(DESIGN.md §15.14) */}
                 {node.busy && node.status !== 'offline' ? <span className="rcv2-busy session-status-breathing" aria-hidden /> : null}
               </span>
             </button>
           </PopoverTrigger>
           <PopoverContent side={group.side === 1 ? 'right' : 'left'} align="center" className="w-64 p-3">
-            <DeviceNodePopover node={node} relayName={model.relay.name} onRemoteDesktop={onRemoteDesktop} />
+            <DeviceNodePopover
+              node={node}
+              relayName={model.relay.name}
+              onRemoteDesktop={onRemoteDesktop}
+              switchEntry={switchEntry}
+              onSwitch={onSwitch}
+            />
           </PopoverContent>
         </Popover>,
         <RowText

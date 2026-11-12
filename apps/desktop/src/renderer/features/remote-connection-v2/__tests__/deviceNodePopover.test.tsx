@@ -5,10 +5,10 @@
  * 远程桌面只给在线、能被控、两边都允许控制的电脑;忙碌的状态字是心动橙。改坏了拓扑卡片会重新长出配置,
  * 或者重新长出同页重复的管理入口(用户反馈 2026-11-12)。
  * 覆盖缺口:旧用例要求本机卡片提供管理按钮。最小失败输入:有本机连接信息的 HubNodePopover。
- * tier:unit(jsdom 组件)。单独运行实测耗时:3.36s。
+ * tier:unit(jsdom 组件)。实测耗时见本 PR 验证记录。
  */
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
@@ -16,6 +16,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 import { DeviceNodePopover, HubNodePopover } from '../DeviceNodePopover';
+import { RemoteSwitchBatch } from '../RemoteSwitchBatch';
 import type { TopologyModel, TopologyNode } from '../topologyModel';
 
 function node(partial: Partial<TopologyNode> = {}): TopologyNode {
@@ -43,7 +44,50 @@ function node(partial: Partial<TopologyNode> = {}): TopologyNode {
 
 const remoteDesktop = () => screen.queryByRole('button', { name: 'remoteDesktop.title' });
 
-afterEach(() => cleanup());
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+// 2026-11-12 用户裁决：单台与批量入口都须保留目标的仅加密选择。真实组件+状态探测，tier:unit。
+it.each([
+  ['strict-card', true, null, null, 'encryptionRequired'],
+  ['strict-controller-card', false, 'ENCRYPTION_REQUIRED', null, 'disableBlocked.controller-encryption-required'],
+  ['v2-relay-card', false, null, 'V2_ONLY_RELAY', 'disableBlocked.agent-net-only-relay'],
+] as const)('explains why %s cannot switch back from its device card', async (id, onlyEncrypted, controllerBlock, disableBlocked, key) => {
+  const command = vi.fn(async () => ({ state: {}, peer: { ok: true, controllerBlock, result: { enabled: true, onlyEncrypted, disableBlocked, blocked: null } } }));
+  vi.stubGlobal('electronAPI', { selfHostedRelay: { command } });
+  render(<DeviceNodePopover node={node({ id, encrypted: true })} relayName="Cindy" onRemoteDesktop={vi.fn()} onSwitch={vi.fn()} />);
+  expect(await screen.findByText('settings.remoteControl.v2.peerSwitch.' + key)).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'settings.remoteControl.v2.peerSwitch.toDeviceLink' })).toBeNull();
+});
+
+it('probes switch-back candidates and excludes the strict target before choosing the canary', async () => {
+  vi.useFakeTimers();
+  let disabled = false;
+  const command = vi.fn(async (input: { deviceId: string; request: { action: string } }) => {
+    if (input.request.action === 'set') disabled = true;
+    return { state: {}, peer: { ok: true, result: { enabled: !disabled, encrypted: !disabled, onlyEncrypted: input.deviceId === 'strict-batch', blocked: null, confirmWithinMs: null } } };
+  });
+  vi.stubGlobal('electronAPI', { selfHostedRelay: { command } });
+  render(<RemoteSwitchBatch nodes={[node({ id: 'strict-batch', encrypted: true }), node({ id: 'allowed-batch', encrypted: true })]} entries={new Map()} />);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.v2.peerSwitch.batch.toDeviceLink' })));
+  expect(screen.getByText('settings.remoteControl.v2.peerSwitch.batch.skipReason.encryption-required')).toBeTruthy();
+  expect(screen.getAllByText('settings.remoteControl.v2.peerSwitch.batch.ready')).toHaveLength(1);
+  expect(command.mock.calls.map(([input]) => input.request.action)).toEqual(['status', 'status']);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.v2.peerSwitch.batch.run' })));
+  await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+  expect(command.mock.calls.filter(([input]) => input.request.action === 'set').map(([input]) => input.deviceId)).toEqual(['allowed-batch']);
+  expect(screen.getByText('settings.remoteControl.v2.peerSwitch.batch.state.done')).toBeTruthy();
+});
+
+// #10095 discussion_r4546067865：最后一台候选进入切换状态后，已打开的进度浮层仍须保留。
+// 真实组件入口；现有设备卡片用例未覆盖批量浮层。最小输入：一台候选变成 running。tier:unit。
+it('keeps the open batch panel mounted when its last candidate starts switching', async () => {
+  const n = node({ id: 'batch-progress', encrypted: false });
+  const view = render(<RemoteSwitchBatch nodes={[n]} entries={new Map()} />);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.v2.peerSwitch.batch.toAgentNet' })));
+  expect(screen.getByText('settings.remoteControl.v2.peerSwitch.batch.confirmTitleAgentNet')).toBeTruthy();
+  view.rerender(<RemoteSwitchBatch nodes={[n]} entries={new Map([[n.id, { kind: 'running', target: 'agent-net', step: 'request' }]])} />);
+  expect(screen.getByText('settings.remoteControl.v2.peerSwitch.batch.confirmTitleAgentNet')).toBeTruthy();
+});
 
 describe('DeviceNodePopover', () => {
   // The UI must distinguish certified V2, legacy relay exposure and an old host's unknown status.
