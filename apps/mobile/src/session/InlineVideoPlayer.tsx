@@ -39,8 +39,12 @@ export function InlineVideoPlayer({ url, label, width, visible, resolve, onOpen 
     return () => { subscription.remove(); pending.current?.abort(); releaseSource.current?.(); };
   }, []);
   useEffect(() => {
-    if (!active) { pending.current?.abort(); pending.current = null; setLoading(false); }
-  }, [active]);
+    if (!active) {
+      pending.current?.abort(); pending.current = null; setLoading(false);
+      // A cancelled preparation must not hand an old play tap to a future source.
+      if (!source) setStarted(false);
+    }
+  }, [active, source]);
 
   const prepare = useCallback(async () => {
     if (pending.current) return;

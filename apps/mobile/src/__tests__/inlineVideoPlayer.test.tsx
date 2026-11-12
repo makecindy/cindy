@@ -98,15 +98,21 @@ it('keeps the gallery reachable after preview failure without an automatic retry
   expect(onOpen).toHaveBeenCalledOnce();
   expect(resolve).toHaveBeenCalledOnce();
 });
-it('keeps playback inline while loading and cancels a hidden row without accepting late media', async () => {
+it('cancels a hidden pending play and requires a fresh tap when the row returns', async () => {
   let finish!: (value: typeof result) => void;
-  const resolve = vi.fn((_media: unknown, _options: { signal: AbortSignal }) => new Promise(r => { finish = r; }));
+  const resolve = vi.fn().mockImplementationOnce((_media: unknown, _options: { signal: AbortSignal }) => new Promise(r => { finish = r; }))
+    .mockResolvedValue(result);
   render(resolve); await click();
   expect(onOpen).not.toHaveBeenCalled();
   render(resolve, false);
   expect(resolve.mock.calls[0][1].signal.aborted).toBe(true);
   await act(async () => finish(result));
   expect(container.querySelector('video')).toBeNull();
+  await act(async () => render(resolve));
+  expect(resolve).toHaveBeenCalledTimes(2);
+  expect(h.player).toMatchObject({ autoPlay: false, nativeControls: false });
+  await click();
+  expect(h.player).toMatchObject({ autoPlay: true, nativeControls: true });
 });
 it('rejects a non-video response and previews direct video without remote file access', async () => {
   const resolve = vi.fn().mockResolvedValue({ ...result, mimeType: 'text/html', previewable: false });
