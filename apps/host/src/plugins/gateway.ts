@@ -141,6 +141,9 @@ export function createHostPluginGateway(options: GatewayOptions) {
   };
   return {
     provider, host, modelContext: apps.mcpAppModelContext, appServerIds: apps.appServerIds,
+    /** The plugin roster section the desktop gives each engine (ghost.ts getGhostRosterPrompt).
+     * After an owner change it is empty instead of describing the previous owner's plugins. */
+    rosterPrompt: (ctx: { workingDir?: string }) => (runtime.current() ? gateway.getGhostRosterPrompt(ctx) : ''),
     async prepareMcpProviders(providers: McpProvider[]) {
       runtime.assertCurrent();
       custom.registerCustomMcpArrays(providers);

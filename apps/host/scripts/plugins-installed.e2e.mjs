@@ -121,6 +121,11 @@ try {
     const result = JSON.parse(wire.content.find(item => item.type === 'text').text);
     assert.equal(result.ok, true, JSON.stringify(result)); return result.result;
   };
+  // The roster the desktop gives each engine lists this installed plugin for a task's workdir.
+  const roster = gateway.rosterPrompt({ workingDir: profile });
+  assert.ok(roster.includes(`"id":"${result.ghost.manifest.id}"`), 'the Host plugin roster lists the installed plugin');
+  assert.equal(gateway.rosterPrompt({}), '', 'no workdir, no roster (as on the desktop)');
+  console.log('PASS Host plugin roster lists the installed plugin for a task workdir');
   const panel = await runtime.openPage(id, '/panel.html');
   assert.deepEqual(await panel.evaluate(async () => {
     const kv = await fetch('/kv', { method: 'PUT', body: JSON.stringify({ saved: 'before restart' }) });
