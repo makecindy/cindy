@@ -6781,7 +6781,8 @@
             "unsupported": "「{{name}}」の Cindy が古いため、リモートで切り替えできません",
             "not-ready": "「{{name}}」は現在 Agent-Net をオンにできません",
             "busy": "「{{name}}」は別の切り替えを処理中です。しばらくしてから再試行してください",
-            "failed": "「{{name}}」を切り替えられませんでした"
+            "failed": "「{{name}}」を切り替えられませんでした",
+            "encryption-required": "「{{name}}」で「Agent-Net のみ使用」を無効にしてから戻してください"
           },
           "checking": "切り替えできるか確認中…",
           "notReady": {
@@ -6799,10 +6800,11 @@
             "skipReason": {
               "unsupported": "Cindy の更新が必要",
               "not-ready": "現在 Agent-Net をオンにできません",
-              "unreachable": "現在応答なし"
+              "unreachable": "現在応答なし",
+              "encryption-required": "Agent-Net のみ使用"
             },
-            "canaryNote": "まず 1 台を切り替え、再接続を確認してから残りを同時に切り替えます。60 秒以内に再接続できない端末は自動で戻り、いつでもすべて Device Link に戻せます。",
-            "rollbackNote": "戻すと接続はエンドツーエンド暗号化されなくなります。その他の機能には影響しません。",
+            "canaryNote": "まず 1 台を切り替え、再接続を確認してから残りを同時に切り替えます。60 秒以内に再接続できない端末は自動で戻ります。",
+            "rollbackNote": "戻すと接続のエンドツーエンド暗号化がなくなります。「Agent-Net のみ使用」が有効な端末は、先にその端末で設定を無効にしてください。",
             "run": "{{count}} 台を切り替え",
             "cancel": "キャンセル",
             "close": "完了",
@@ -6822,7 +6824,8 @@
             "on": "「{{name}}」が {{time}} にリモートでオン",
             "off": "「{{name}}」が {{time}} にリモートでオフ"
           },
-          "unreachable": "今回はその端末に問い合わせできませんでした。しばらくしてからもう一度カードを開いてください。"
+          "unreachable": "今回はその端末に問い合わせできませんでした。しばらくしてからもう一度カードを開いてください。",
+          "encryptionRequired": "この端末は「Agent-Net のみ使用」が有効です。Device Link に戻す前に、その端末でこの設定を無効にしてください。"
         }
       }
     },

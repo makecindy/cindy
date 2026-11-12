@@ -6891,7 +6891,8 @@
             "unsupported": "«{{name}}» usa una versión antigua de Cindy y no se puede cambiar a distancia",
             "not-ready": "«{{name}}» no puede activar Agent-Net ahora",
             "busy": "«{{name}}» está procesando otro cambio. Inténtalo en un momento.",
-            "failed": "No se pudo cambiar la conexión de «{{name}}»."
+            "failed": "No se pudo cambiar la conexión de «{{name}}».",
+            "encryption-required": "Desactiva «Usar solo Agent-Net» en «{{name}}» antes de volver"
           },
           "checking": "Comprobando si puede cambiar…",
           "notReady": {
@@ -6909,10 +6910,11 @@
             "skipReason": {
               "unsupported": "Requiere actualizar Cindy",
               "not-ready": "No puede activar Agent-Net ahora",
-              "unreachable": "Sin respuesta ahora"
+              "unreachable": "Sin respuesta ahora",
+              "encryption-required": "Usar solo Agent-Net"
             },
-            "canaryNote": "Primero cambia un ordenador; el resto lo hace cuando este se reconecta. Cualquier ordenador que no se reconecte en 60 segundos vuelve por sí solo, y puedes volver todos a Device Link en cualquier momento.",
-            "rollbackNote": "Al volver, las conexiones dejan de tener cifrado de extremo a extremo. Todo lo demás sigue funcionando.",
+            "canaryNote": "Primero cambia un ordenador; el resto lo hace cuando este se reconecta. Cualquier ordenador que no se reconecte en 60 segundos vuelve por sí solo.",
+            "rollbackNote": "Al volver, la conexión deja de estar cifrada de extremo a extremo. Los ordenadores que usan solo Agent-Net deben desactivar primero esa restricción en el propio ordenador.",
             "run": "Cambiar {{count}}",
             "cancel": "Cancelar",
             "close": "Listo",
@@ -6932,7 +6934,8 @@
             "on": "Activado a distancia por «{{name}}» a las {{time}}",
             "off": "Desactivado a distancia por «{{name}}» a las {{time}}"
           },
-          "unreachable": "Esta vez no se pudo contactar con ese ordenador. Vuelve a abrir la tarjeta más tarde."
+          "unreachable": "Esta vez no se pudo contactar con ese ordenador. Vuelve a abrir la tarjeta más tarde.",
+          "encryptionRequired": "Este ordenador usa solo Agent-Net. Desactiva «Usar solo Agent-Net» en ese ordenador antes de volver a Device Link."
         }
       }
     },

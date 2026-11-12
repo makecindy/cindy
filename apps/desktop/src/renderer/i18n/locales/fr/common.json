@@ -6891,7 +6891,8 @@
             "unsupported": "« {{name}} » utilise une ancienne version de Cindy et ne peut pas être basculé à distance",
             "not-ready": "« {{name}} » ne peut pas activer Agent-Net pour le moment",
             "busy": "« {{name}} » traite un autre changement. Réessayez dans un instant.",
-            "failed": "Impossible de basculer « {{name}} »."
+            "failed": "Impossible de basculer « {{name}} ».",
+            "encryption-required": "Désactivez « Utiliser uniquement Agent-Net » sur « {{name}} » avant de revenir"
           },
           "checking": "Vérification de la possibilité de basculer…",
           "notReady": {
@@ -6909,10 +6910,11 @@
             "skipReason": {
               "unsupported": "Mise à jour de Cindy requise",
               "not-ready": "Agent-Net impossible pour le moment",
-              "unreachable": "Injoignable pour le moment"
+              "unreachable": "Injoignable pour le moment",
+              "encryption-required": "Utiliser uniquement Agent-Net"
             },
-            "canaryNote": "Un premier ordinateur bascule d’abord ; les autres suivent une fois qu’il est reconnecté. Tout ordinateur qui ne se reconnecte pas dans les 60 secondes revient de lui-même, et vous pouvez tout remettre sur Device Link à tout moment.",
-            "rollbackNote": "Après le retour, les connexions ne sont plus chiffrées de bout en bout. Le reste fonctionne normalement.",
+            "canaryNote": "Un premier ordinateur bascule d’abord ; les autres suivent une fois qu’il est reconnecté. Tout ordinateur qui ne se reconnecte pas dans les 60 secondes revient de lui-même.",
+            "rollbackNote": "Le retour supprime le chiffrement de bout en bout. Les ordinateurs qui utilisent uniquement Agent-Net doivent d’abord désactiver cette restriction localement.",
             "run": "Basculer {{count}}",
             "cancel": "Annuler",
             "close": "Terminé",
@@ -6932,7 +6934,8 @@
             "on": "Activé à distance par « {{name}} » à {{time}}",
             "off": "Désactivé à distance par « {{name}} » à {{time}}"
           },
-          "unreachable": "Impossible de joindre cet ordinateur cette fois. Rouvrez la carte plus tard."
+          "unreachable": "Impossible de joindre cet ordinateur cette fois. Rouvrez la carte plus tard.",
+          "encryptionRequired": "Cet ordinateur utilise uniquement Agent-Net. Désactivez « Utiliser uniquement Agent-Net » sur cet ordinateur avant de revenir à Device Link."
         }
       }
     },

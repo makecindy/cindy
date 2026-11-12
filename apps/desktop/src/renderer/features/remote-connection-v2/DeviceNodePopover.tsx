@@ -22,6 +22,7 @@ import {
   probePeer,
   remoteSwitchAvailability,
   remoteSwitchStore,
+  switchProbeKind,
   type PeerProbe,
   type RemoteSwitchEntry,
   type RemoteSwitchStep,
@@ -195,6 +196,9 @@ function useSwitchArea(
   }
   if (probe.kind === 'unsupported') return { body: hint(t('settings.remoteControl.v2.peerSwitch.unsupported')), action: null };
   if (probe.kind === 'unreachable') return { body: hint(t('settings.remoteControl.v2.peerSwitch.unreachable')), action: null };
+  if (switchProbeKind(probe, onAgentNet ? 'device-link' : 'agent-net') === 'encryption-required') {
+    return { body: hint(t('settings.remoteControl.v2.peerSwitch.encryptionRequired')), action: null };
+  }
   if (probe.kind === 'not-ready' && !onAgentNet) {
     return { body: hint(t(`settings.remoteControl.v2.peerSwitch.notReady.${probe.reason}`)), action: null };
   }

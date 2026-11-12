@@ -2,10 +2,10 @@
  * RemoteSwitchBatch —— 拓扑上方统计行里的「全部切到 Agent-Net」/「全部切回 Device Link」(原型)。
  * ---------------------------------------------------------------------------
  * 规则见 docs/product-rules/agent-net.md「远程切换其他电脑的连接方式」(2026-11-12 用户确认:批量可以加，但要确保能切回来):
- * - 只列出现在能发起切换的电脑；切到 Agent-Net 前先逐台问一次，旧版和打不开的写原因、不切。
+ * - 只列出现在能发起切换的电脑；两个方向都逐台问一次，旧版、打不开或本机选择仅加密的写原因、不切。
  * - 先切第一台，确认它经新方式连回来了再同时切其余的；第一台没切成就停下，其余保持原样。
  * - 每台的退回由对方自己判断(60 秒内没收到确认就退回)，这台电脑中途关掉也不会让对方卡在半路。
- * - 已经切过去的随时可以「全部切回 Device Link」。
+ * - 已经切过去的可以「全部切回 Device Link」；仅使用 Agent-Net 的电脑须先在那台电脑解除限制。
  */
 
 import { useEffect, useState, useSyncExternalStore } from 'react';
@@ -23,6 +23,7 @@ import {
   probePeer,
   remoteSwitchStore,
   startRemoteSwitch,
+  switchProbeKind,
   type RemoteSwitchEntry,
   type RemoteSwitchTarget,
 } from './agentNetRemoteSwitch';
@@ -59,17 +60,20 @@ function BatchPanel({
   const { t } = useTranslation();
   const probes = useSyncExternalStore(remoteSwitchStore.subscribe, selectProbes);
   const [run, setRun] = useState<Run | null>(null);
+  const [probed, setProbed] = useState(false);
   // 打开时冻结名单：切换途中设备的连接方式会变，名单不能跟着跳。
   const [list] = useState(() => candidates(nodes, entries, target));
 
-  // 切到 Agent-Net 前先逐台问一次(切回 Device Link 不需要:已经在用 Agent-Net 说明支持)。
+  // 两个方向都先问：切回也不能绕过目标电脑的「仅使用 Agent-Net」选择。
   useEffect(() => {
-    if (target === 'agent-net') for (const n of list) void probePeer(n.id);
-  }, [list, target]);
+    let active = true;
+    void Promise.all(list.map((n) => probePeer(n.id))).then(() => { if (active) setProbed(true); });
+    return () => { active = false; };
+  }, [list]);
 
-  const answer = (id: string) => (target === 'device-link' ? 'ready' : probes.get(id)?.kind ?? 'checking');
+  const answer = (id: string) => switchProbeKind(probes.get(id), target);
   const ready = list.filter((n) => answer(n.id) === 'ready');
-  const checking = list.some((n) => answer(n.id) === 'checking');
+  const checking = !probed || list.some((n) => answer(n.id) === 'checking');
 
   const start = async () => {
     const ids = ready.map((n) => n.id);
@@ -113,7 +117,7 @@ function BatchPanel({
     return (
       <li key={n.id} className="flex items-baseline justify-between gap-3 py-1 text-12">
         <span className={cn('min-w-0 truncate', a === 'ready' || a === 'checking' ? 'text-[var(--text-primary)]' : 'text-[var(--text-tertiary)]')}>{n.name}</span>
-        <span className="flex shrink-0 items-center gap-1.5 text-[var(--text-tertiary)]">
+        <span className="flex min-w-0 max-w-[65%] items-center gap-1.5 text-right text-[var(--text-tertiary)]">
           {a === 'checking' ? <Spinner size={11} aria-hidden /> : null}
           {text}
         </span>

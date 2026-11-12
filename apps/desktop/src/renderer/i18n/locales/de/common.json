@@ -6824,7 +6824,8 @@
             "unsupported": "„{{name}}“ nutzt eine ältere Cindy-Version und lässt sich nicht fernumschalten",
             "not-ready": "„{{name}}“ kann Agent-Net gerade nicht einschalten",
             "busy": "„{{name}}“ bearbeitet gerade einen anderen Wechsel. Versuche es gleich erneut.",
-            "failed": "„{{name}}“ konnte nicht umgeschaltet werden."
+            "failed": "„{{name}}“ konnte nicht umgeschaltet werden.",
+            "encryption-required": "Deaktiviere auf „{{name}}“ zuerst „Nur Agent-Net verwenden“"
           },
           "checking": "Prüfe, ob ein Wechsel möglich ist…",
           "notReady": {
@@ -6842,10 +6843,11 @@
             "skipReason": {
               "unsupported": "Cindy-Update nötig",
               "not-ready": "Agent-Net derzeit nicht möglich",
-              "unreachable": "Derzeit nicht erreichbar"
+              "unreachable": "Derzeit nicht erreichbar",
+              "encryption-required": "Nur Agent-Net verwenden"
             },
-            "canaryNote": "Zuerst wechselt ein Computer; die übrigen folgen, sobald er neu verbunden ist. Jeder Computer, der sich nicht innerhalb von 60 Sekunden neu verbindet, kehrt selbst zurück, und du kannst jederzeit alle zu Device Link zurückwechseln.",
-            "rollbackNote": "Danach sind die Verbindungen nicht mehr Ende-zu-Ende-verschlüsselt. Alles andere funktioniert weiter.",
+            "canaryNote": "Zuerst wechselt ein Computer; die übrigen folgen, sobald er neu verbunden ist. Jeder Computer, der sich nicht innerhalb von 60 Sekunden neu verbindet, kehrt selbst zurück.",
+            "rollbackNote": "Beim Zurückwechseln entfällt die Ende-zu-Ende-Verschlüsselung. Computer, die nur Agent-Net verwenden, müssen diese Einschränkung zuerst dort deaktivieren.",
             "run": "{{count}} wechseln",
             "cancel": "Abbrechen",
             "close": "Fertig",
@@ -6865,7 +6867,8 @@
             "on": "Per Fernzugriff eingeschaltet von „{{name}}“ um {{time}}",
             "off": "Per Fernzugriff ausgeschaltet von „{{name}}“ um {{time}}"
           },
-          "unreachable": "Der Computer war diesmal nicht erreichbar. Öffne die Karte später erneut."
+          "unreachable": "Der Computer war diesmal nicht erreichbar. Öffne die Karte später erneut.",
+          "encryptionRequired": "Dieser Computer verwendet nur Agent-Net. Deaktiviere dort „Nur Agent-Net verwenden“, bevor du zu Device Link zurückwechselst."
         }
       }
     },

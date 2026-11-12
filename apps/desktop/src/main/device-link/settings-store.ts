@@ -39,7 +39,7 @@ export interface DeviceLinkSettings {
   /** 同账号另一台电脑最近一次远程打开 / 关闭 Agent-Net(开关下面写「由谁在几点」);本机再改后清除。 */
   agentNetChangedBy?: { deviceId: string; deviceName: string; at: number; enabled: boolean } | null;
   /** 远程打开 Agent-Net 后等待确认的那一次;没确认前由被切的电脑自己兜底退回(agentNetRemoteSwitch.ts)。 */
-  agentNetPendingSwitch?: { switchId: string; controllerId: string; previous: boolean; deadlineAt: number; pid: number } | null;
+  agentNetPendingSwitch?: { switchId: string; controllerId: string; previous: boolean; deadlineAt: number; pid: number; restoring?: boolean } | null;
   /** Full desktop viewing/input is a separate, local opt-in. */
   remoteDesktopEnabled: boolean;
   remoteControlEnabled: boolean;
@@ -121,7 +121,8 @@ function normalizeAgentNetPendingSwitch(raw: unknown): DeviceLinkSettings['agent
   const r = raw as Record<string, unknown>;
   if (typeof r.switchId !== 'string' || typeof r.controllerId !== 'string' || typeof r.previous !== 'boolean'
     || typeof r.deadlineAt !== 'number' || typeof r.pid !== 'number') return null;
-  return { switchId: r.switchId, controllerId: r.controllerId, previous: r.previous, deadlineAt: r.deadlineAt, pid: r.pid };
+  return { switchId: r.switchId, controllerId: r.controllerId, previous: r.previous, deadlineAt: r.deadlineAt, pid: r.pid,
+    ...(r.restoring === true ? { restoring: true } : {}) };
 }
 
 function normalizeStringList(raw: unknown): string[] {

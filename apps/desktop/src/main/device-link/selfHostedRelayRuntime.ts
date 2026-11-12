@@ -1914,6 +1914,8 @@ async function execute(command: SelfHostedRelayCommand): Promise<CommandResult> 
   switch (command.type) {
     case 'set-agent-net-encryption': {
       const assertOwner = captureOwner();
+      // 本机的加密选择同样优先于已经接受、还未执行的远程切换。
+      await remoteSwitch?.onLocalChange(); assertOwner();
       await writeDeviceLinkSetting('agentNetOnlyEncrypted', command.enabled); assertOwner();
       restartDeviceLinkForRelayChange();
       return { state: getState() };

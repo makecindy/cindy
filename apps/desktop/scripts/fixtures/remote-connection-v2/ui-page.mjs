@@ -56,6 +56,11 @@ export default {
         await open('Work PC', 'card-switchable');
         await open('MacBook Air', 'card-outdated');
         await open('Spare PC', 'card-not-ready');
+        await page.getByRole('button', { name: /^Build Server/ }).click();
+        await page.getByText(await t('encryptionRequired'), { exact: true }).waitFor();
+        if (await page.getByRole('button', { name: await t('toDeviceLink'), exact: true }).count()) throw new Error('encrypted-only target offers a remote downgrade');
+        await ui.capture('card-encryption-required');
+        await page.keyboard.press('Escape');
         // 单台切换：点了先列三步；Home PC 的 Agent-Net 不通，期限过后显示已退回。
         await page.getByRole('button', { name: /^Home PC/ }).click();
         await page.getByRole('dialog').waitFor();
@@ -84,6 +89,7 @@ export default {
       await page.waitForTimeout(300);
       await page.getByRole('button', { name: await t('batch.toDeviceLink'), exact: true }).click();
       await page.getByRole('dialog').waitFor();
+      await page.getByText(await t('batch.skipReason.encryption-required'), { exact: true }).waitFor();
       await ui.capture('rollback-confirm');
       await page.keyboard.press('Escape');
       return;

@@ -10,7 +10,8 @@
  *   requester confirms over an end-to-end encrypted (Agent-Net) link before the deadline, the target
  *   goes back to its previous setting by itself. Turning it off needs no confirmation.
  * - `confirm` only succeeds for the pending switch of the same requester and only over Agent-Net.
- * - 「仅使用 Agent-Net」 is never changed remotely.
+ * - 「仅使用 Agent-Net」 is never changed remotely. While it is active, remote disabling is refused;
+ *   the person at the target must release that choice there first (owner decision 2026-11-12).
  *
  * The channel carries no new frame, capability bit or relay behaviour; relays (official and self-hosted)
  * forward it like any other invoke. Same-account only: shared-task guests and provider-share guests are
@@ -28,7 +29,7 @@ export type AgentNetSwitchRequest =
   | { action: 'set'; enabled: boolean; switchId: string }
   | { action: 'confirm'; switchId: string };
 
-/** Why the target cannot turn Agent-Net on right now (it can always turn it off). */
+/** Why the target cannot enable Agent-Net right now; disabling also respects onlyEncrypted. */
 export type AgentNetSwitchBlock = 'NOT_SIGNED_IN' | 'SECURE_STORAGE_UNAVAILABLE' | 'RELAY_IDENTITY_MISSING';
 
 export interface AgentNetSwitchStatus {
@@ -60,6 +61,7 @@ export interface AgentNetSwitchConfirmed {
 export type AgentNetSwitchErrorCode =
   | 'AGENT_NET_SWITCH_INVALID'
   | 'AGENT_NET_SWITCH_NOT_READY'
+  | 'AGENT_NET_SWITCH_ENCRYPTION_REQUIRED'
   | 'AGENT_NET_SWITCH_BUSY'
   | 'AGENT_NET_SWITCH_STALE'
   | 'AGENT_NET_SWITCH_NOT_ON_AGENT_NET'

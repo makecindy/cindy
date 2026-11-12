@@ -6781,7 +6781,8 @@
             "unsupported": "「{{name}}」之 Cindy 版旧，未能远转",
             "not-ready": "「{{name}}」今不能启 Agent-Net",
             "busy": "「{{name}}」方理他转，稍后再试",
-            "failed": "「{{name}}」未能转接"
+            "failed": "「{{name}}」未能转接",
+            "encryption-required": "须先于「{{name}}」解「唯用 Agent-Net」之限，乃可返"
           },
           "checking": "方询彼能转与否…",
           "notReady": {
@@ -6799,10 +6800,11 @@
             "skipReason": {
               "unsupported": "须更新 Cindy",
               "not-ready": "今不能启 Agent-Net",
-              "unreachable": "暂询不至"
+              "unreachable": "暂询不至",
+              "encryption-required": "唯用 Agent-Net"
             },
-            "canaryNote": "先转首机，验其复连，乃并转其余。各机六十秒内未复连者皆自返，此后亦可随时尽返 Device Link。",
-            "rollbackNote": "返后连接不复施端间加密，他功能无碍。",
+            "canaryNote": "先转首机，验其复连，乃并转其余。各机六十秒内未复连者皆自返。",
+            "rollbackNote": "返后连线不复端到端加密。已选「唯用 Agent-Net」之机，须先于本机解此限。",
             "run": "转 {{count}} 机",
             "cancel": "取消",
             "close": "毕",
@@ -6822,7 +6824,8 @@
             "on": "「{{name}}」于 {{time}} 远启之",
             "off": "「{{name}}」于 {{time}} 远闭之"
           },
-          "unreachable": "此次未询至彼机，稍后再启此卡试之。"
+          "unreachable": "此次未询至彼机，稍后再启此卡试之。",
+          "encryptionRequired": "彼机已选「唯用 Agent-Net」。须先于彼机解此限，乃可返 Device Link。"
         }
       }
     },

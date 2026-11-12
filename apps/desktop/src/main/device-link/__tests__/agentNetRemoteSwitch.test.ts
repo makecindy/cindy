@@ -18,12 +18,13 @@ import { APPLY_DELAY_MS, createAgentNetRemoteSwitch, type AgentNetPendingSwitch,
 const CONTROLLER = 'controller-device';
 const SWITCH = 'switch-0001';
 
-function setup(initial: { enabled?: boolean; pending?: AgentNetPendingSwitch; pid?: number } = {}) {
+function setup(initial: { enabled?: boolean; onlyEncrypted?: boolean; pending?: AgentNetPendingSwitch; pid?: number } = {}) {
   const settings: {
     agentNetEnabled: boolean;
+    agentNetOnlyEncrypted: boolean;
     agentNetChangedBy: AgentNetRemoteChange | null;
     agentNetPendingSwitch: AgentNetPendingSwitch | null;
-  } = { agentNetEnabled: initial.enabled ?? false, agentNetChangedBy: null, agentNetPendingSwitch: initial.pending ?? null };
+  } = { agentNetEnabled: initial.enabled ?? false, agentNetOnlyEncrypted: initial.onlyEncrypted ?? false, agentNetChangedBy: null, agentNetPendingSwitch: initial.pending ?? null };
   const agentNetLinks = new Set<string>();
   const alive = new Set<number>();
   let block: 'NOT_SIGNED_IN' | null = null;
@@ -48,6 +49,30 @@ beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); });
 
 describe('remote Agent-Net switch on the switched computer', () => {
+  // 2026-11-12 用户裁决：本机选择仅使用 Agent-Net 后，必须先在本机解除，远程关闭不能降级连接。
+  it('requires the target to release its encrypted-only choice before a remote disable', async () => {
+    const { service, settings, apply } = setup({ enabled: true, onlyEncrypted: true });
+    const disable = () => service.handle({ action: 'set', enabled: false, switchId: SWITCH }, CONTROLLER, 'Studio Mac');
+    await expect(disable()).rejects.toThrow('[AGENT_NET_SWITCH_ENCRYPTION_REQUIRED]');
+    await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS);
+    expect(apply).not.toHaveBeenCalled();
+    expect(settings).toMatchObject({ agentNetEnabled: true, agentNetOnlyEncrypted: true, agentNetPendingSwitch: null, agentNetChangedBy: null });
+    await service.onLocalChange();
+    settings.agentNetOnlyEncrypted = false;
+    await expect(disable()).resolves.toMatchObject({ enabled: false });
+    await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS);
+    expect(settings.agentNetEnabled).toBe(false);
+  });
+
+  it('rechecks the target encryption choice before an accepted delayed disable applies', async () => {
+    const { service, settings, apply } = setup({ enabled: true });
+    await service.handle({ action: 'set', enabled: false, switchId: SWITCH }, CONTROLLER, 'Studio Mac');
+    settings.agentNetOnlyEncrypted = true;
+    await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS);
+    expect(apply).not.toHaveBeenCalled();
+    expect(settings).toMatchObject({ agentNetEnabled: true, agentNetOnlyEncrypted: true, agentNetChangedBy: null });
+  });
+
   it('answers before switching, then goes back by itself when no confirmation arrives', async () => {
     const { settings, turnOn } = setup();
     await expect(turnOn()).resolves.toMatchObject({ switchId: SWITCH, enabled: true, confirmWithinMs: AGENT_NET_SWITCH_CONFIRM_MS });
@@ -105,6 +130,31 @@ describe('remote Agent-Net switch on the switched computer', () => {
     await expect(service.handle({ action: 'set', enabled: false, switchId: 'switch-0003' }, 'other', 'x')).resolves.toMatchObject({ confirmWithinMs: null });
     await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS + AGENT_NET_SWITCH_CONFIRM_MS);
     expect(settings).toMatchObject({ agentNetEnabled: false, agentNetPendingSwitch: null, agentNetChangedBy: null });
+  });
+
+  it('keeps recovery protection while an accepted disable has not yet undone a pending enable', async () => {
+    const original = setup();
+    await original.turnOn();
+    await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS);
+    await original.service.handle({ action: 'set', enabled: false, switchId: 'switch-disable' }, CONTROLLER, 'Studio Mac');
+    expect(original.settings.agentNetPendingSwitch).toMatchObject({ switchId: SWITCH, previous: false, restoring: true });
+    original.agentNetLinks.add(CONTROLLER);
+    await expect(original.service.handle({ action: 'confirm', switchId: SWITCH }, CONTROLLER, 'Studio Mac')).rejects.toThrow('[AGENT_NET_SWITCH_STALE]');
+    const restarted = setup({ enabled: true, pending: original.settings.agentNetPendingSwitch!, pid: 101 });
+    await restarted.service.recover();
+    expect(restarted.settings).toMatchObject({ agentNetEnabled: false, agentNetPendingSwitch: null });
+  });
+
+  it('retains the deadline when disabling an unconfirmed enable fails', async () => {
+    const { service, settings, turnOn, apply } = setup();
+    await turnOn();
+    await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS);
+    apply.mockResolvedValueOnce('START_FAILED');
+    await service.handle({ action: 'set', enabled: false, switchId: 'switch-disable' }, CONTROLLER, 'Studio Mac');
+    await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS);
+    expect(settings).toMatchObject({ agentNetEnabled: true, agentNetPendingSwitch: { switchId: SWITCH, restoring: true } });
+    await vi.advanceTimersByTimeAsync(AGENT_NET_SWITCH_CONFIRM_MS);
+    expect(settings).toMatchObject({ agentNetEnabled: false, agentNetPendingSwitch: null });
   });
 
   it('keeps the pending record if restoring the original setting is interrupted, so the next process can recover', async () => {

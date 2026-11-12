@@ -11,7 +11,8 @@
   `switchId` 由发起端生成（8–64 位字母数字、`_`、`-`）。
 - **status**：`{ version, enabled, onlyEncrypted, blocked, pending, encrypted? }`。`encrypted` 表示与请求电脑的实际链路，
   旧端可省略，不能从 `enabled` 推断。`blocked` 为 `NOT_SIGNED_IN` / `SECURE_STORAGE_UNAVAILABLE` /
-  `RELAY_IDENTITY_MISSING` / `null`，只说明现在能不能打开；关闭总是可以。当前中转缺少 Agent-Net 身份时明确拒绝，
+  `RELAY_IDENTITY_MISSING` / `null`，只说明现在能不能打开。`onlyEncrypted: true` 则禁止远程关闭，须先在目标电脑解除。
+  当前中转缺少 Agent-Net 身份时明确拒绝，
   本机中转的主人可沿原启用路径自动补身份。
 - **set**：先回答 `{ version, switchId, enabled, confirmWithinMs }`，再在 400ms 后走与本机开关相同的保存与重连路径。
   打开时 `confirmWithinMs` 为 60 秒：被控端在此期限内没有收到同一发起端经 Agent-Net（端到端加密链路）发来的
@@ -24,11 +25,17 @@
   关闭只有读到开关已关闭才算完成，超时为失败；本来已开启的目标也必须核实 `encrypted: true` 才算切到 Agent-Net。
   确认回包丢失导致重试返回 `STALE` 时补读一次实际链路；期限结束后同样补读一次，只在读到原状态时报告已退回，
   无法核实则报告切换未完成。两条补读不增加持续轮询。
-- **不远程改**「仅使用 Agent-Net」。
+- **不远程改**「仅使用 Agent-Net」。目标开启该限制时，`set(enabled: false)` 在改动任何待确认记录、归因或计时器前
+  返回 `[AGENT_NET_SWITCH_ENCRYPTION_REQUIRED]`；真正执行延迟关闭前再读一次，目标刚改为仅加密时也不降级。
+  发起端单台显示原因，批量在两个方向都先探测并排除受限目标；探测后状态变化仍由目标强制拦截。
+  本机修改该选择会取消未执行的远程切换（与本机修改总开关同样以人为准）。新错误码是追加项，旧发起端按失败处理，
+  不改帧格式与版本；旧目标的 `onlyEncrypted` 字段继续照常解析。
 - **持久化**：被控端把待确认记录与「由谁打开」写进 `device-link-settings.json` 的 `agentNetPendingSwitch` /
   `agentNetChangedBy`（只在发生过时出现，旧文件形状不变）。启动时记录它的进程已不在就直接退回；
   恢复原开关完成后才清除待确认记录，中途退出仍可继续恢复。本机的人改开关会清掉两条记录，并使打开、关闭两个方向
   尚未执行的远程操作失效；远程写操作和本机清理在同一队列串行执行。
+  待确认的打开被远程关闭取消时，记录先加可选 `restoring: true`，拒绝旧打开的迟到确认，并保留到实际关闭成功；
+  关闭失败仍按原期限恢复。尚未执行的旧回调由进程内代次取消，不靠提前删除恢复记录。旧记录缺少此字段时仍按等待确认处理。
 - **错误码**：都在 `IPC_ERROR` 的 message 里以 `[AGENT_NET_SWITCH_*]` 携带；`agentNetSwitchErrorCode()` 解析。
 
 **旧端与混用**：旧被控端没有这个通道，返回 `CHANNEL_NOT_ALLOWED`，发起端显示「需要更新 Cindy」，不靠版本号判断。

@@ -6891,7 +6891,8 @@
             "unsupported": "«{{name}}» utiliza uma versão antiga do Cindy e não pode ser alterado remotamente",
             "not-ready": "«{{name}}» não consegue ativar o Agent-Net agora",
             "busy": "«{{name}}» está a processar outra mudança. Tente novamente daqui a pouco.",
-            "failed": "Não foi possível mudar a ligação de «{{name}}»."
+            "failed": "Não foi possível mudar a ligação de «{{name}}».",
+            "encryption-required": "Desative «Usar apenas Agent-Net» em «{{name}}» antes de voltar"
           },
           "checking": "A verificar se pode mudar…",
           "notReady": {
@@ -6909,10 +6910,11 @@
             "skipReason": {
               "unsupported": "Requer atualização do Cindy",
               "not-ready": "Não pode ativar o Agent-Net agora",
-              "unreachable": "Sem resposta agora"
+              "unreachable": "Sem resposta agora",
+              "encryption-required": "Usar apenas Agent-Net"
             },
-            "canaryNote": "Primeiro muda um computador; os restantes seguem quando este voltar a ligar. Qualquer computador que não volte a ligar em 60 segundos regressa sozinho, e pode voltar todos para Device Link a qualquer momento.",
-            "rollbackNote": "Depois de regressar, as ligações deixam de ter encriptação ponto a ponto. O resto continua a funcionar.",
+            "canaryNote": "Primeiro muda um computador; os restantes seguem quando este voltar a ligar. Qualquer computador que não volte a ligar em 60 segundos regressa sozinho.",
+            "rollbackNote": "Ao voltar, a ligação deixa de ter encriptação ponto a ponto. Os computadores que usam apenas Agent-Net têm de desativar primeiro essa restrição no próprio computador.",
             "run": "Mudar {{count}}",
             "cancel": "Cancelar",
             "close": "Concluído",
@@ -6932,7 +6934,8 @@
             "on": "Ativado remotamente por «{{name}}» às {{time}}",
             "off": "Desativado remotamente por «{{name}}» às {{time}}"
           },
-          "unreachable": "Não foi possível contactar esse computador desta vez. Abra o cartão novamente mais tarde."
+          "unreachable": "Não foi possível contactar esse computador desta vez. Abra o cartão novamente mais tarde.",
+          "encryptionRequired": "Este computador usa apenas Agent-Net. Desative «Usar apenas Agent-Net» nesse computador antes de voltar para Device Link."
         }
       }
     },

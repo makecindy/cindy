@@ -6781,7 +6781,8 @@
             "unsupported": "「{{name}}」的 Cindy 版本較舊，還不能遠端切換",
             "not-ready": "「{{name}}」現在無法開啟 Agent-Net",
             "busy": "「{{name}}」正在處理另一次切換，稍後再試",
-            "failed": "未能切換「{{name}}」的連線方式"
+            "failed": "未能切換「{{name}}」的連線方式",
+            "encryption-required": "請先在「{{name}}」關閉「僅使用 Agent-Net」，再切回"
           },
           "checking": "正在確認對方能不能切換…",
           "notReady": {
@@ -6799,10 +6800,11 @@
             "skipReason": {
               "unsupported": "需要更新 Cindy",
               "not-ready": "現在打不開 Agent-Net",
-              "unreachable": "暫時問不到"
+              "unreachable": "暫時問不到",
+              "encryption-required": "僅使用 Agent-Net"
             },
-            "canaryNote": "先切第一台，確認能連回來再同時切其餘的。每台 60 秒內沒連回來都會自己退回，之後也隨時可以全部切回 Device Link。",
-            "rollbackNote": "切回後連線不再端對端加密，其他功能不受影響。",
+            "canaryNote": "先切第一台，確認能連回來再同時切其餘的。每台 60 秒內沒連回來都會自己退回。",
+            "rollbackNote": "切回後連線不再端到端加密。開啟「僅使用 Agent-Net」的電腦，須先在那台電腦關閉此選項。",
             "run": "切換 {{count}} 台",
             "cancel": "取消",
             "close": "完成",
@@ -6822,7 +6824,8 @@
             "on": "由「{{name}}」在 {{time}} 遠端開啟",
             "off": "由「{{name}}」在 {{time}} 遠端關閉"
           },
-          "unreachable": "這次沒問到那台電腦，稍後再開啟卡片試試。"
+          "unreachable": "這次沒問到那台電腦，稍後再開啟卡片試試。",
+          "encryptionRequired": "對方開啟了「僅使用 Agent-Net」。請先在那台電腦關閉此選項，再切回 Device Link。"
         }
       }
     },

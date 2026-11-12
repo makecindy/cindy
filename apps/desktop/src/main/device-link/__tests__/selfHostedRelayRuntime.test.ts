@@ -12,7 +12,7 @@
  * - 最小失败输入：挂起一次部署或退出请求，换账号，再让原请求完成；同一设备另起一把公钥来申请；
  *   同一邀请码下一真一假两条其他账号的申请；对方先拒绝再同意；主人电脑不回话 / 回过「收到」的两次同账号加入。
  * - tier：unit；SSH、存储、账号记录、中转 V2 接口和 Electron 为进程内 fake，无网络、磁盘或真实等待。
- * - 单文件实测：2.2 秒（22 例，测试体 59ms，Windows，含首次转译）。
+ * - 单文件实测：3.27 秒（23 例，测试体 66ms，Windows，含命令启动与转译）。
  */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { RelayConfig } from '../selfHostedRelayConfig';

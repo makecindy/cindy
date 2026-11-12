@@ -6,7 +6,7 @@
  * 远程桌面只给在线、能被控、两边都允许控制的电脑;忙碌的状态字是心动橙。改坏了拓扑卡片会重新长出配置,
  * 或者「管理设备…」定位错设备。
  * 覆盖缺口:卡片此前没有组件测试。最小失败输入:见各用例。
- * tier:unit(jsdom 组件)。实测耗时:<2s。
+ * tier:unit(jsdom 组件)。单文件命令实测 4.47s（12 例，Vitest 3.32s）。
  */
 
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -45,7 +45,35 @@ function node(partial: Partial<TopologyNode> = {}): TopologyNode {
 
 const remoteDesktop = () => screen.queryByRole('button', { name: 'remoteDesktop.title' });
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+// 2026-11-12 用户裁决：单台与批量入口都须保留目标的仅加密选择。真实组件+状态探测，tier:unit。
+it('explains why a strict target cannot switch back from its device card', async () => {
+  const command = vi.fn(async () => ({ state: {}, peer: { ok: true, result: { enabled: true, onlyEncrypted: true, blocked: null } } }));
+  vi.stubGlobal('electronAPI', { selfHostedRelay: { command } });
+  render(<DeviceNodePopover node={node({ id: 'strict-card', encrypted: true })} relayName="Cindy" onRemoteDesktop={vi.fn()} onSwitch={vi.fn()} />);
+  expect(await screen.findByText('settings.remoteControl.v2.peerSwitch.encryptionRequired')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'settings.remoteControl.v2.peerSwitch.toDeviceLink' })).toBeNull();
+});
+
+it('probes switch-back candidates and excludes the strict target before choosing the canary', async () => {
+  vi.useFakeTimers();
+  let disabled = false;
+  const command = vi.fn(async (input: { deviceId: string; request: { action: string } }) => {
+    if (input.request.action === 'set') disabled = true;
+    return { state: {}, peer: { ok: true, result: { enabled: !disabled, onlyEncrypted: input.deviceId === 'strict-batch', blocked: null, confirmWithinMs: null } } };
+  });
+  vi.stubGlobal('electronAPI', { selfHostedRelay: { command } });
+  render(<RemoteSwitchBatch nodes={[node({ id: 'strict-batch', encrypted: true }), node({ id: 'allowed-batch', encrypted: true })]} entries={new Map()} />);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.v2.peerSwitch.batch.toDeviceLink' })));
+  expect(screen.getByText('settings.remoteControl.v2.peerSwitch.batch.skipReason.encryption-required')).toBeTruthy();
+  expect(screen.getAllByText('settings.remoteControl.v2.peerSwitch.batch.ready')).toHaveLength(1);
+  expect(command.mock.calls.map(([input]) => input.request.action)).toEqual(['status', 'status']);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.v2.peerSwitch.batch.run' })));
+  await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+  expect(command.mock.calls.filter(([input]) => input.request.action === 'set').map(([input]) => input.deviceId)).toEqual(['allowed-batch']);
+  expect(screen.getByText('settings.remoteControl.v2.peerSwitch.batch.state.done')).toBeTruthy();
+});
 
 // #10095 discussion_r4546067865：最后一台候选进入切换状态后，已打开的进度浮层仍须保留。
 // 真实组件入口；现有设备卡片用例未覆盖批量浮层。最小输入：一台候选变成 running。tier:unit。

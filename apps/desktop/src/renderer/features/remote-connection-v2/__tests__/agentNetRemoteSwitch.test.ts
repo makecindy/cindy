@@ -14,6 +14,13 @@ beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe('remote Agent-Net switch result on the requesting computer', () => {
+  it('reports the target encryption restriction without retrying a rejected disable', async () => {
+    const command = vi.fn(async () => ({ state: {}, peer: { ok: false, code: 'IPC_ERROR', message: '[AGENT_NET_SWITCH_ENCRYPTION_REQUIRED] local choice' } }));
+    vi.stubGlobal('window', { setTimeout: globalThis.setTimeout, electronAPI: { selfHostedRelay: { command } } });
+    await expect(startRemoteSwitch('strict-target-reject', 'device-link')).resolves.toBe('encryption-required');
+    expect(command.mock.calls).toHaveLength(1);
+  });
+
   it.each(['still-enabled', 'unreachable'] as const)('does not report a completed switch-back when the target remains %s', async (failure) => {
     const command = vi.fn(async (input: SelfHostedRelayCommand) => {
       if (input.type !== 'peer-agent-net') throw new Error('unexpected command');
