@@ -38,6 +38,11 @@ import type { createHostClaudeProxyRuntime } from './claude-proxy-runtime.js';
 import { createHostModelContext } from './model-context.js';
 import { readDisabledSkillPaths } from '../../../desktop/src/main/skillhub/activationPreferences.js';
 import { createHostStartOptions } from './start-options.js';
+import { createBashConcurrencyHooks, mergeClaudeHooks } from '../../../desktop/src/main/maker-host/claude-hooks/bash-concurrency-hook.js';
+import { createReadImageHook } from '../../../desktop/src/main/maker-host/claude-hooks/read-image-hook.js';
+import { createDesktopInputShellGuardHooks } from '../../../desktop/src/main/maker-host/claude-hooks/desktop-input-shell-guard-hook.js';
+import { readAgentResourceSettings } from '../../../desktop/src/main/maker-host/agent-resource-settings-store.js';
+import { createCommandConcurrencyGate } from '../../../desktop/src/main/maker-host/command-concurrency-gate.js';
 import { captureKnownFileBefore, noteOpaqueTurnChange } from '../../../desktop/src/main/turn-change-set/store.js';
 import { readCodexHistoryHasProductPrompt, writeCodexHistoryHasProductPrompt } from '../../../desktop/src/main/maker-host/session-storage.js';
 import { buildPiRuntimeConfig, claudeUpstreamEndpoint, createAgentRuntimeConfigs } from '../../../desktop/src/main/maker-host/runtimeConfigsCore.js';
@@ -480,7 +485,22 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   }) : null;
   // Pi resolves against the full active catalog with the plain route resolver, as on the desktop.
   const piModelResolvers = createPiModelResolvers({ getCatalog: getActiveCatalog, resolveContextProviderId: resolveModelContextProviderId });
+  // The desktop's Claude hooks (maker-host/index.ts claudeHooks), from the same modules: the
+  // read-image resize, the Bash concurrency gate (one per runtime, as the desktop has one per
+  // Maker; its limit read from the agent resource settings at every admission) and the
+  // desktop-input shell guard while the computer plugin is enabled.
+  const commandConcurrencyGate = createCommandConcurrencyGate({
+    readMaxConcurrent: () => readAgentResourceSettings().maxConcurrentCommands,
+    log: LOGGER.child('command-gate'),
+  });
+  const claudeHooks = mergeClaudeHooks(
+    { PreToolUse: [{ matcher: 'Read', hooks: [createReadImageHook(LOGGER)] }] },
+    createBashConcurrencyHooks(commandConcurrencyGate, LOGGER),
+    // As the desktop's getPluginRegistry(): the owner's registry, read at each check.
+    createDesktopInputShellGuardHooks(() => createPluginRegistry().isEnabled('computer'), LOGGER),
+  );
   const agent = options.binaryPath ? new ClaudeCodeAgent({
+    claudeHooks,
     auth: createClaudeGatewayAuth(options.gateway, options.resolveProviderRoute, config.claudeNative, options.claudeProxy, config.grok),
     runtimeConfig: runtimeConfigs.buildClaudeRuntimeConfig(engineEndpoint),
     binaryPath: options.binaryPath,
