@@ -10637,6 +10637,15 @@
       "contents": "包含 SOUL.md、USER.md、system_prompt.md，以及 Skill 和記憶資料夾。模型、權限和連線仍由 Cindy 管理。",
       "open": "開啟資料夾",
       "openFailed": "無法開啟夥伴資料夾。",
+      "repository": {
+        "ready": "Git 已就緒",
+        "notReadyTitle": "Git 尚未就緒",
+        "needsIdentity": "請在這位夥伴所在電腦上開啟其資料夾，進入 workspace 子目錄，設定 Git 的 user.name 和 user.email 後重試。",
+        "notReady": "首次版本尚未儲存。請重試以完成 Git 初始化。",
+        "unavailable": "請在這位夥伴所在電腦上安裝 Git 後重試。",
+        "failed": "Git 未能讀取或儲存首次版本。請在這位夥伴所在電腦上檢查儲存庫後重試。",
+        "keepUsing": "你可以繼續使用夥伴。現有檔案和 Git 設定會保留。"
+      },
       "projectMode": {
         "memoryReviewName": "{{name}} · 整理記憶",
         "carryover": {

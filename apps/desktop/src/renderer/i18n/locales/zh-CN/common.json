@@ -10637,6 +10637,15 @@
       "contents": "包含 SOUL.md、USER.md、system_prompt.md，以及 Skill 和记忆文件夹。模型、权限和连接仍由 Cindy 管理。",
       "open": "打开文件夹",
       "openFailed": "无法打开伙伴文件夹。",
+      "repository": {
+        "ready": "Git 已就绪",
+        "notReadyTitle": "Git 尚未就绪",
+        "needsIdentity": "请在这位伙伴所在电脑上打开其文件夹，进入 workspace 子目录，配置 Git 的 user.name 和 user.email 后重试。",
+        "notReady": "首次版本尚未保存。请重试以完成 Git 初始化。",
+        "unavailable": "请在这位伙伴所在电脑上安装 Git 后重试。",
+        "failed": "Git 未能读取或保存首次版本。请在这位伙伴所在电脑上检查仓库后重试。",
+        "keepUsing": "你可以继续使用伙伴。现有文件和 Git 配置会保留。"
+      },
       "projectMode": {
         "memoryReviewName": "{{name}} · 整理记忆",
         "carryover": {

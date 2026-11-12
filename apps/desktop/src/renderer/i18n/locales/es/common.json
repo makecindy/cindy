@@ -10766,6 +10766,15 @@
       "contents": "Contiene SOUL.md, USER.md, system_prompt.md, skills/ y memories/. Cindy sigue administrando los modelos, permisos y conexiones.",
       "open": "Abrir carpeta",
       "openFailed": "No se pudo abrir la carpeta del amigo.",
+      "repository": {
+        "ready": "Git está listo",
+        "notReadyTitle": "Git aún no está listo",
+        "needsIdentity": "En el equipo de este Amigo, abre su carpeta y después la subcarpeta workspace. Configura user.name y user.email de Git allí y vuelve a intentarlo.",
+        "notReady": "No se ha guardado la primera versión. Vuelve a intentarlo para terminar de configurar Git.",
+        "unavailable": "Instala Git en el equipo de este Amigo y vuelve a intentarlo.",
+        "failed": "Git no pudo leer o guardar la primera versión. Revisa el repositorio en el equipo de este Amigo y vuelve a intentarlo.",
+        "keepUsing": "Puedes seguir usando tu Amigo. Se conservan los archivos y la configuración de Git existentes."
+      },
       "projectMode": {
         "memoryReviewName": "{{name}} · Ordenar memoria",
         "carryover": {

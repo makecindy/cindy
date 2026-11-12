@@ -10637,6 +10637,15 @@
       "contents": "內有 SOUL.md、USER.md、system_prompt.md，及 Skill 與記憶之卷匣。模型、權柄與連線仍由 Cindy 掌之。",
       "open": "啟卷匣",
       "openFailed": "不能啟同伴之卷匣。",
+      "repository": {
+        "ready": "Git 已備",
+        "notReadyTitle": "Git 尚未備",
+        "needsIdentity": "請於同伴所在電腦啟其資料夾，入 workspace 子目錄，設 Git 之 user.name 與 user.email 後再試。",
+        "notReady": "首版尚未存。請再試以完成 Git 初設。",
+        "unavailable": "請於同伴所在電腦安裝 Git 後再試。",
+        "failed": "Git 未能讀取或儲存首版。請於同伴所在電腦檢查儲存庫後再試。",
+        "keepUsing": "同伴仍可用。既有檔案與 Git 設定皆留存。"
+      },
       "projectMode": {
         "memoryReviewName": "{{name}} · 理記",
         "carryover": {
