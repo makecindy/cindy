@@ -49,10 +49,13 @@ vi.mock('@/session/NativeResidentHistory', async () => {
     get NativeTaskDrawerHost() { return native.sharedAvailable ? View : null; },
     get NativeHistorySlot() { return native.residentAvailable ? Slot : null; } };
 });
-vi.mock('@/session/SessionPaneDivider', () => ({ SessionPaneDivider: (props: any) => {
-  native.divider = props;
-  return <div data-testid="session.paneDivider" />;
-} }));
+vi.mock('@/session/SessionPaneDivider', () => {
+  const gesture = {};
+  return { useSessionPaneDivider: (props: any) => {
+    native.divider = props;
+    return { gesture, edge: props.enabled ? <div data-testid="session.paneDivider" /> : null };
+  } };
+});
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock("react-native", async () => {
   const { createElement } = await import("react");
@@ -546,7 +549,8 @@ describe('shared Home drawer host', () => {
     }
   });
   // User request 2026-11-06: the floating drawer's edge drags the shared width like the
-  // side column, without showing a grip. The handle is a sibling of the panel, never the close gesture's child.
+  // side column, without showing a grip. User decision 2026-11-12: its drag band sits
+  // on the overlay above the panel and dimmed area, so taps near the edge reach them.
   it('resizes the floating drawer from its edge and drops the handle when docked or closing', async () => {
     native.reduceMotion = false;
     const onResize = vi.fn();
@@ -555,15 +559,14 @@ describe('shared Home drawer host', () => {
     const divider = container.querySelector('[data-testid="session.paneDivider"]');
     expect(divider).not.toBeNull();
     expect(container.querySelector('[data-testid="sessionDrawer.panel"]')?.contains(divider)).toBe(false);
-    expect(native.divider).toMatchObject({ width: 320, left: 320, bounds: resize.bounds, grip: false });
+    expect(native.divider).toMatchObject({ enabled: true, width: 320, left: 320, bounds: resize.bounds });
     native.divider.onResize(480);
     expect(onResize).toHaveBeenCalledWith(480);
-    expect(divider?.parentElement?.getAttribute('data-pointer-events')).toBe('box-none');
     // Mid-exit the drawer is still mounted; its edge must not take a new drag.
     await act(async () => root.render(<SessionListDrawer {...props} resize={resize} open={false} />));
-    expect(container.querySelector('[data-testid="session.paneDivider"]')?.parentElement
-      ?.getAttribute('data-pointer-events')).toBe('none');
+    expect(native.divider.enabled).toBe(false);
     await act(async () => root.render(<SessionListDrawer {...props} resize={resize} persistent />));
+    expect(native.divider.enabled).toBe(false);
     expect(container.querySelector('[data-testid="session.paneDivider"]')).toBeNull();
   });
   // User request 2026-11-06 (revised): the edge only resizes, elastic past its bounds;

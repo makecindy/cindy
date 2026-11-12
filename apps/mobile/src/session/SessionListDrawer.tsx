@@ -15,7 +15,7 @@ import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { motionDuration, motionEasing } from '@/theme/tokens';
 import type { RemoteSessionListItem } from './sessionList';
 import { MobileHome } from './HomeSurface';
-import { SessionPaneDivider } from './SessionPaneDivider';
+import { useSessionPaneDivider } from './SessionPaneDivider';
 import { NativeHistoryHost, NativeHistorySlot, NativeTaskDrawerHost, taskDrawerHandoffAvailable } from './NativeResidentHistory';
 import { HomePresentationFocus } from './HomePresentationFocus';
 import { LocalHomeList } from './ResidentHomeList';
@@ -462,6 +462,17 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
   }));
 
 
+  // The floating drawer's right edge resizes it without a visible grip. Its
+  // gesture sits on the overlay, above both the panel and the dimmed area, so
+  // taps near the edge still reach list rows and close the drawer.
+  const edge = useSessionPaneDivider({
+    enabled: !persistent && open && !!resize, width, bounds: resize?.bounds ?? null,
+    left: panelWidth, top: topInset ?? insets.top, bottom: insets.bottom,
+    onResize: resize?.onResize ?? ignoreResize, elastic: { onStretch: stretchTo, onSettle: settleStretch },
+  });
+  // A handoff shell can render beside the live overlay; it needs its own detector gesture.
+  const idleEdgeGesture = useMemo(() => Gesture.Pan().enabled(false), []);
+
   // Remove a collapsed column in this render, before Home receives width=0.
   // The layout effect still settles motion and suppresses modal-close callbacks.
   const homeContent = <MobileHome newSessionActionRef={newSessionActionRef} width={shownWidth} currentSessionId={currentSessionId}
@@ -494,7 +505,8 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
         </View>
 
       </Animated.View>;
-  const overlay = (handoffShell = false) => <View accessibilityViewIsModal={mounted && !persistent} pointerEvents={handoffShell ? "none" : "auto"}
+  const overlay = (handoffShell = false) => <GestureDetector gesture={handoffShell ? idleEdgeGesture : edge.gesture}>
+  <View accessibilityViewIsModal={mounted && !persistent} pointerEvents={handoffShell ? "none" : "auto"}
     style={[styles.overlay, persistent && { width: panelWidth }]} testID="sessionDrawer.overlay">
     {!persistent ? <GestureDetector gesture={gestures.scrim}>
       <Animated.View style={[styles.scrim, scrimStyle]}>
@@ -504,15 +516,12 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
     </GestureDetector> : null}
     {persistent && retainHome && NativeTaskDrawerHost && !handoffShell ? panel(false)
       : <GestureDetector gesture={gestures.panel}>{panel(handoffShell)}</GestureDetector>}
-    {/* A sibling of the panel, so an edge drag never reaches the close gesture.
-        It rides the panel's slide and stops taking touches once closing. */}
-    {!persistent && resize ? <Animated.View pointerEvents={open ? 'box-none' : 'none'}
-      style={[styles.edge, panelStyle]}>
-      <SessionPaneDivider grip={false} nativeGesture={aboveSystemBar} width={width} bounds={resize.bounds} onResize={resize.onResize}
-        left={panelWidth} top={topInset ?? insets.top} bottom={insets.bottom}
-        elastic={{ onStretch: stretchTo, onSettle: settleStretch }} />
+    {/* The edge's accessibility element rides the panel's slide. */}
+    {edge.edge && !handoffShell ? <Animated.View pointerEvents="box-none" style={[styles.edge, panelStyle]}>
+      {edge.edge}
     </Animated.View> : null}
-  </View>;
+  </View>
+  </GestureDetector>;
   // Stable sibling keys preserve the old Modal and its slot while the column
   // mounts alongside it. Its transparent shell cannot cover the newly docked list.
   return <>{retainedHome}
@@ -524,6 +533,8 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
   </>;
 
 }
+
+function ignoreResize() {}
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   overlay: { ...StyleSheet.absoluteFill, zIndex: 40 },
