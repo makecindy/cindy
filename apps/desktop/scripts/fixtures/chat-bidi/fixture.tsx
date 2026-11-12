@@ -6,7 +6,7 @@ import { ChatInput } from '../../../src/renderer/components/new-chat/ChatInput';
 import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '../../../src/renderer/cindy-brain/PluginUiContributions';
 import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
 import { useAttachments } from '../../../src/renderer/hooks/useAttachments';
-import { UI_MOCK_BIDI_TASK, UI_MOCK_BIDI_TEXT, UI_MOCK_BIDI_MARKDOWN } from '../../../../../packages/maker-shared/src/uiMockBidi';
+import { UI_MOCK_BIDI_TASK, UI_MOCK_BIDI_TEXT, UI_MOCK_BIDI_MARKDOWN, UI_MOCK_BIDI_ORCA_MESSAGES } from '../../../../../packages/maker-shared/src/uiMockBidi';
 
 function Fixture({ composerOnly = false }: { composerOnly?: boolean }) {
   const [stream, setStream] = useState('...');
@@ -40,6 +40,13 @@ function SourceMessagesFixture() {
   </main>;
 }
 
+function OrcaMessagesFixture() {
+  return <main className="p-4 space-y-4" data-ui-page-subject>
+    {UI_MOCK_BIDI_ORCA_MESSAGES.map((message) => <UserMessage key={message.text}
+      pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} content={message.text} workingDir="" />)}
+  </main>;
+}
+
 void mountPage({
   route: '/bots/fixture-bidi',
   host: {
@@ -60,5 +67,6 @@ void mountPage({
     deviceLink: { onRemotePush: subscription('remote-push') },
     ghosts: { listSync: () => ({ ghosts: [] }) },
   },
-  render: (ctx) => ctx.case === 'sources' ? <SourceMessagesFixture /> : <Fixture composerOnly={ctx.case === 'lists'} />,
+  render: (ctx) => ctx.case === 'orca' ? <OrcaMessagesFixture />
+    : ctx.case === 'sources' ? <SourceMessagesFixture /> : <Fixture composerOnly={ctx.case === 'lists'} />,
 });

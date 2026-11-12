@@ -9,6 +9,11 @@ export const UI_MOCK_BIDI_TEXT = [
   '中文段落：文件 index.html，版本 123。',
 ].join('\n');
 
+export const UI_MOCK_BIDI_ORCA_MESSAGES = (['lead', 'worker'] as const).map((orcaSource) => ({
+  role: 'user' as const,
+  text: JSON.stringify({ orcaSource, content: UI_MOCK_BIDI_TEXT }),
+}));
+
 export const UI_MOCK_BIDI_MARKDOWN = [
   '# سلام، گزارش API 123',
   '',
@@ -52,5 +57,6 @@ export const UI_MOCK_BIDI_TASK: UiMockTask = {
     { role: 'user', text: UI_MOCK_BIDI_TEXT },
     { role: 'assistant', text: UI_MOCK_BIDI_MARKDOWN },
     { role: 'assistant', text: `\`\`\`cindy-ui\n${richSource}\n\`\`\`` },
+    ...UI_MOCK_BIDI_ORCA_MESSAGES,
   ],
 };

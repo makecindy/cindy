@@ -48,10 +48,39 @@ export default {
     default: { about: '#10114: independent RTL/LTR paragraphs, code, stream and editable text' },
     sources: { about: '#10188: expanded teammate letters and long IM message bodies retain paragraph direction and selection' },
     lists: { about: '#10188: typed/restored composer lists keep each marker beside its mixed-direction item' },
+    orca: { about: '#10188: expanded Lead/Worker messages retain per-paragraph direction and original text' },
   },
   async check(page, ui) {
     const rtl = 'سلام، فایل index.html با API 123 آماده است.';
     const english = 'English paragraph: API 123 and https://example.com/docs.';
+    if (ui.case === 'orca') {
+      // Orca bodies use a separate plain-text <pre>, not the normal bubble or
+      // Markdown renderer. A Persian-first line reproduces the layout bug.
+      // Existing messageLinkActions tests cover content, not browser geometry.
+      for (const role of ['Lead', 'Worker']) {
+        const toggle = page.getByRole('button', { name: await ui.t(`chat.userMessage.orcaFrom${role}`), exact: true });
+        await toggle.click();
+        const body = toggle.locator('..').locator('pre[data-selection-quote-body]');
+        for (const [text, side] of [[rtl, 'right'], [english, 'left'],
+          ['مرحبا، الإصدار API 123 جاهز.', 'right'], ['שלום, הקובץ index.html מוכן.', 'right'],
+          ['中文段落：文件 index.html，版本 123。', 'left']]) {
+          await aligned(body, text, side);
+        }
+        const original = await body.textContent();
+        const selected = await body.evaluate(e => {
+          const selection = window.getSelection(), range = document.createRange();
+          range.selectNodeContents(e); selection.removeAllRanges(); selection.addRange(range);
+          const text = selection.toString(); selection.removeAllRanges(); return text;
+        });
+        assert.equal(selected, original);
+        await toggle.focus(); await toggle.press('Enter');
+        await body.waitFor({ state: 'hidden' });
+        await toggle.press('Enter');
+        assert.equal(await body.textContent(), original);
+      }
+      await ui.capture('expanded');
+      return;
+    }
     if (ui.case === 'lists') {
       // Type through ChatInput's real input/key rules, then round-trip its own
       // clipboard serializer. jsdom cannot observe marker direction or clipping.
