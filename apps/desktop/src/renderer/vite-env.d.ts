@@ -1253,6 +1253,7 @@ interface ElectronAPI {
   accessibilitySupport: import('../shared/accessibilitySupport').AccessibilitySupportBridge;
   appPreferenceControl?: import('../shared/appPreferenceControl').AppPreferenceControlBridge;
   appearanceSettings: {
+    loadPluginFont?: (role: string) => Promise<{ family: string; bytes: ArrayBuffer }>;
     importWallpaper: () => Promise<import('../shared/appearanceSettings').AppearanceSettings | null>;
     ensureWallpaperVideo?: (id: import('../shared/appearanceSettings').WallpaperId) => Promise<string | null>;
     ensureWallpaperImage?: (id: import('../shared/appearanceSettings').WallpaperId) => Promise<string | null>;
@@ -1264,6 +1265,8 @@ interface ElectronAPI {
       patch: Partial<import('../shared/appearanceSettings').AppearanceSettings>,
     ) => Promise<import('../shared/appearanceSettings').AppearanceSettings>;
     reset: () => Promise<import('../shared/appearanceSettings').AppearanceSettings>;
+    selectTheme?: (selection: import('../shared/appearanceDefinition').ThemeSelection | null) => Promise<import('../shared/appearanceSettings').AppearanceSettings>;
+    resetFields?: (fields: string[]) => Promise<import('../shared/appearanceSettings').AppearanceSettings>;
     onChanged: (
       callback: (settings: import('../shared/appearanceSettings').AppearanceSettings) => void,
     ) => () => void;
@@ -1288,6 +1291,10 @@ interface ElectronAPI {
 
   /** 开屏卡住时上报一次启动门快照;main 校验字段后写进可上传的诊断日志。仅主窗 preload 提供。 */
   reportStartupGateStall?: (snapshot: StartupGateStallSnapshot) => void;
+
+  cindyFiles: {
+    open: (filePath: string) => Promise<import('../shared/cindyFile').CindyFileOpenResult>;
+  };
 
   localThemes: {
     listSync: () => LocalThemesResult;
@@ -1344,6 +1351,20 @@ interface ElectronAPI {
   };
 
   /** 意识仓库 —— 数据模型与校验见 shared/ghost.ts,main 端见 main/cindy-brain/。 */
+  /** 模型组：路线与模式的配置，以及把选中的一项解析成现在能用的具体模型。 */
+  modelGroups: {
+    get: () => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
+    set: (config: import('../shared/modelGroups').ModelGroupsConfig) => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
+    resolve: (request: import('../shared/modelGroups').ModelGroupResolveRequest) => Promise<import('../shared/modelGroups').ModelGroupResolveResult>;
+    decisions: () => Promise<import('../shared/modelGroupDecisions').ModelGroupDecision[]>;
+    bindSession: (request: {
+      sessionId: string;
+      selection: import('../shared/modelGroups').ModelGroupSelection;
+      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model'>;
+    }) => Promise<void>;
+    switchOffer: (request: { sessionId: string }) => Promise<import('../shared/modelGroups').ModelGroupSwitchOffer | null>;
+  },
+
   ghosts: {
     activateBrowser: (id: string) => Promise<{ ok: boolean }>;
     mailPreview: (sessionId: string, url: string, read: boolean, opened?: boolean, providerId?: string) => Promise<import('@cindy/maker-shared/mail-message').MailPreviewResult>;
@@ -4773,6 +4794,10 @@ interface ElectronAPI {
   gitContext: {
     readGithub: (method: import('@cindy/maker-shared').GithubReadMethod, args: unknown) => Promise<Record<string, unknown>>;
     githubSetupStatus: () => Promise<import('../shared/githubSetup').GithubSetupState>;
+    githubAppStatus: () => Promise<import('../shared/githubSetup').GithubAppConnectionState>;
+    connectGithubApp: () => Promise<void>;
+    installGithubApp: () => Promise<void>;
+    disconnectGithubApp: () => Promise<void>;
     checkCindyStar: () => Promise<boolean | null>;
     starCindy: () => Promise<boolean | null>;
     githubConnection: () => Promise<import('../shared/githubSetup').GithubConnectionState>;
@@ -5976,7 +6001,9 @@ interface ElectronAPI {
     /** 自定义供应商变更广播订阅（返回 off）。 */
     onProvidersChanged: (cb: () => void) => () => void;
 
-    mcpApps: (sessionId: string, input: unknown) => Promise<unknown>;
+    mcpApps: (sessionId: string | null, input: unknown) => Promise<unknown>;
+    onPluginUiAction: (callback: (input: unknown) => void) => () => void;
+    onPluginUiState: (callback: (input: { epoch: string; updates: import('../shared/pluginUi').PluginUiStateChange[] }) => void) => () => void;
     // 自定义 MCP 服务器配置 CRUD（可选 bearer token 另走通用 safeStorage IPC，不经这里）。
     listCustomMcpServers: (
       context?: import('../shared/customMcp').CustomMcpListContext,

@@ -24,6 +24,16 @@ open 结果沿用现有 invokeTransfer gzip 协商，自建中转继续透明转
 事件缺 generation 表示旧执行端，新查看端不按代次过滤、保持旧行为；旧查看端忽略该字段。完整换页隔离仍要求执行端和查看端均升级。
 
 标准 MCP Apps 使用 `io.modelcontextprotocol/ui` 扩展及官方 `2026-01-26` 协议。
+
+尚未发布的本机插件界面增量在 v3 `mcpApps.host` 声明视图、位置、命令和能力，仍引用
+`mcpApps.ui.resources` 并复用标准 AppBridge。`open-resource` 仅本机支持真正的无任务来源；
+原远程操作继续要求真实任务，不扩大 device-link allowlist、relay 或 Mobile 原生能力。
+receipt v2 新增可选 `approvedHostUi`，只承认当前 Host 理解且确认界面实际展示过的主体；
+旧 receipt、旧页面批准及旧提示界面不自动授予新宿主操作，原工具和页面批准继续可用。
+原生控件订阅/状态沿现有管子与本机用途受限 IPC，消息正文不新增落库前查询。
+`message.menu` 复用贡献项的显式批准和原动作执行；只接菜单动作，关闭的菜单不成为状态消费者。
+作者契约与兼容范围见[插件界面扩展](../../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-ui.md)。
+
 客户端新增独立 `maker:mcp-apps:v1` channel，复用 device-link 的同账号调用与错误协议，
 不改变已有 channel、relay 帧或服务端 schema；Mobile 原生承载与指纹影响见本节末尾。
 App 卡片是既有 assistant 消息 content 的可选 `mcpApp` 字段，且必须有 Main 写入的
@@ -63,3 +73,34 @@ HTML 资源模块增加独立 App 资源额度和内联承载视图，
 以不同来源隔离 proxy/App，并保留卸载后的有界 teardown；这改变 iOS/Android runtime
 fingerprint，须遵守 [冷更边界](../mobile-development.md#原生配置与-runtime-fingerprint冷更边界)。
 旧 Mobile binary 保留卡片文本并提示更新手机，不回退到同源或 opaque-origin srcdoc。
+
+
+## 单卡页面状态
+
+执行端增量接受 `cindy/view-state/set`，参数仅 `{state: JSON对象或null}`，整体替换。
+初始化成功且读取恢复值成功时，在 `hostCapabilities.experimental['cindy/view-state']`
+声明 `{version:1,maxBytes:65536,maxSessionBytes:1048576}`，仅在该次
+`hostContext['cindy/view-state']` 交还快照。查看端自报同名字段和未来标准viewState被剔除，
+环境更新不能覆盖；读取失败／超时不声明能力，不能让页面覆盖未见到的旧值。
+保存确认只在事务提交之后，单页一个在途批次及一个最新待写批次，最多32个未完成请求；
+合并请求共享提交结果，不自动重试。错误-32602为值或额度不合法，-32603为暂不可存，
+卡片／账号失效沿既有权限错误。只接受深度16／8192节点内JSON，拒绝本机resource_link，
+因此既有跨端本机文件隔离扫描不需放宽。状态只交该页，不进消息、模型或MCP服务端。
+
+状态在执行端账号库独立表持久化，按消息绑定任务、serverRevision及插件实例；读取不写库。
+删除消息整批清理、删除任务及旁聊同事务清理，账号库就绪一次补扫其它deleted任务；
+清空、rewind、归档、卸载保留。并发是后提交覆盖，既有开页不会收到更新广播。
+数据库沿用现有migration准入规则：已升级的库不能由不支持该migration的旧版程序打开；
+不能把跨端可选字段兼容当作数据库可降级，也不得删除migration或手改schema版本绕过准入。
+
+新增消息仍装进既有op:message，初始化响应仍走现有poll；remoteViews仅清理链接状态，
+不投影掉扩展字段。手机／远程查看无新增操作、白名单、资源模块或原生配置。
+新执行端+旧查看端按既有JSON透传可用；旧执行端不声明能力，新页面必须降级。
+自建中转继续透明转发已有加密invoke/invoke-result，不新增relay帧或服务端字段；
+官方／自建中转的手机和双控制端互通仍需实机验收，单元测试不能替代该验收。
+请求失败只影响本次保存，不关闭peer或共享relay、不发起后台重放；一台查看端静默不得影响另一台。
+执行端先升级即可使用原始请求；本次不供应任何新的JS／React辅助模块。
+
+实现：mcp-apps/viewState.ts、viewStateStore.ts、host.ts、service.ts；DB事务在
+localDb/worker/opHandlers/mcpAppViewState.ts，由文件worker与inline worker共用。
+回归：viewState.test.ts及localDb/client的tx.test.ts，覆盖回执、合并、读取失败、恢复与删除。

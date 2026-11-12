@@ -10,7 +10,8 @@ Skill both apply to the same piece of work:
 3. Explicitly selecting the downstream Skill does not waive the Cindy-side instructions.
 4. Skills that do not overlap remain available normally.
 
-Read the source from how the available-Skills listing already labels each Skill: entries the
-harness presents under a plugin, marketplace, or built-in namespace are downstream; the rest come
+Read the source from how the available-Skills listing already labels each Skill: a `cindy` or
+`cindy-plugin-*` namespace marks a Cindy-side Skill; entries the harness presents under any other
+plugin, marketplace, or built-in namespace are downstream; entries with no namespace come
 from Cindy's own sources. This is a source-level rule — when a listing gives no usable source
 label, treat the Skill as downstream and still run the applicable Cindy-side Skill first.

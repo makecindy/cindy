@@ -16,7 +16,7 @@ const { useCodexRuntimeRouteMock } = vi.hoisted(() => ({
 }));
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: { exists: () => false, language: 'en' } }),
   initReactI18next: { type: '3rdParty', init: () => undefined },
 }));
 

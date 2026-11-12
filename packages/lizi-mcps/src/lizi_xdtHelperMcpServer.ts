@@ -3,6 +3,7 @@ import { registerPiRuntimeTools, type PiRuntimeCallbacks } from './xdt-helper/pi
 import { createControlReader } from './xdt-helper/control-catalog.js';
 import { registerAppModelsTools, type AppModelsCallbacks } from './xdt-helper/app_models.js';
 import { registerAppSettingsTools, type AppSettingsCallbacks } from './xdt-helper/app_settings.js';
+import { registerThemePackageTool, type ThemePackageCallbacks } from './xdt-helper/theme_packages.js';
 import { registerGithubTools, type GithubToolCallbacks } from './xdt-helper/github.js';
 import { registerMcpSetupTool, type McpSetupCallback } from './xdt-helper/mcp_setup.js';
 import { registerSharedTaskTools, type SharedTaskToolCallback } from './xdt-helper/shared_task.js';
@@ -407,7 +408,7 @@ function registerBotMessagingEntries(
   if (!deps.botMessaging) return;
   if (deps.botMessaging.sendToUser) registry.register({
     name: 'send_to_user', category: 'bots',
-    description: 'From a group, send a private message to your owner in this same teammate’s main chat. Use when your owner explicitly asks for a private reply. The host resolves the recipient; this does not call yourself, wake another model, or message an arbitrary group member. Other members’ group tool grants do not authorize this action. In the main private chat, reply normally. Reuse idempotency_key when retrying the same message. A saved receipt does not mean the user has read it.',
+    description: 'From a group, send a private message to the account user in this same buddy’s main chat. Use when that user explicitly asks for a private reply. The host resolves the recipient; this does not call yourself, wake another model, or message an arbitrary group member. Other members’ group tool grants do not authorize this action. In the main private chat, reply normally. Reuse idempotency_key when retrying the same message. A saved receipt does not mean the user has read it.',
     inputShape: { message: z.string().trim().min(1).max(16000), idempotency_key: z.string().regex(/^[\w-]{8,100}$/) },
     handler: async ({ message, idempotency_key }) => {
       const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
@@ -419,7 +420,7 @@ function registerBotMessagingEntries(
   });
   if (deps.botMessaging.listAgents) registry.register({
     name: 'list_agents', category: 'bots',
-    description: 'Discover teammates on this device and other authorized devices. To talk to one, pass its session_id (its main chat; deviceId::sessionId on another computer) to send_to_session. Device names distinguish namesakes; unavailableDevices explains incomplete discovery. Do not guess IDs or poll.',
+    description: 'Discover buddies on this device and other authorized devices. To talk to one, pass its session_id (its main chat; deviceId::sessionId on another computer) to send_to_session. Device names distinguish namesakes; unavailableDevices explains incomplete discovery. Do not guess IDs or poll.',
     inputShape: {},
     handler: async () => {
       const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
@@ -531,6 +532,7 @@ export interface XdtHelperMcpDeps {
   /** The calling teammate's linked projects; the host resolves the teammate from the caller Session. */
   teammateProjects?: TeammateProjectsCallback;
   appSettings?: AppSettingsCallbacks;
+  themePackages?: ThemePackageCallbacks;
   piRuntime?: PiRuntimeCallbacks;
   modelSettings?: AppModelsCallbacks;
   appModels?: Pick<BotCapabilityCallbacks, 'models' | 'setDefaultModel'>;
@@ -800,6 +802,7 @@ export function createXdtHelperMcpServer(
   if (deps.modelSettings) registerAppModelsTools(registry, deps.modelSettings, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.piRuntime) registerPiRuntimeTools(registry, deps.piRuntime, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.appSettings) registerAppSettingsTools(registry, deps.appSettings, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.themePackages) registerThemePackageTool(registry, deps.themePackages, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.appModels && !sessionCtx.remoteHostId) registerAppDefaultModelTools(registry, {
     getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
     callbacks: deps.appModels, category: 'settings',

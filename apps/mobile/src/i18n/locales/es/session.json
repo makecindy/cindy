@@ -253,7 +253,7 @@
           "plugins": "Catálogo de complementos",
           "memoryRules": "Instrucciones de memoria",
           "memoryIndex": "Índice de memoria",
-          "profile": "Perfil del compañero",
+          "profile": "Perfil del amigo",
           "user": "Instrucciones del usuario",
           "directories": "Directorios adicionales",
           "native": "Instrucciones de Pi",
@@ -667,6 +667,8 @@
     "taskAlreadyCreated": "Esta tarea ya existe en la computadora. Sus mensajes guardados se reanudarán allí."
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_FULL": "Todas las cuentas o computadoras que pueden ejecutar esta tarea alcanzaron su límite de tareas simultáneas. Espera a que termine una tarea en curso o aumenta el límite en la configuración del proveedor.",
+    "SUBSCRIPTION_ACCOUNTS_FULL": "Todas las cuentas o computadoras que pueden ejecutar esta tarea alcanzaron su límite de tareas simultáneas. Espera a que termine una tarea en curso o aumenta el límite en la configuración del proveedor.",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarea SSH no puede cambiar a Harness. Elija un modelo en su Harness actual, o cree una nueva tarea SSH con el Harness que necesita.",
     "MODEL_SELECTION_UNAVAILABLE": "El modelo seleccionado ya no está disponible en su proveedor. Comprueba la conexión en Ajustes o elige otro modelo disponible.",
     "HARNESS_SWITCH_NOT_READY": "El interruptor Harness no está listo. Verifique los detalles del error y vuelva a intentarlo después de que el Harness esté listo.",

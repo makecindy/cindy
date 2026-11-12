@@ -1,4 +1,4 @@
-import { resolveCopilotAccountUrl } from './copilot-account-url.js';
+import { copilotModelsRequest, resolveCopilotAccountUrl } from './copilot-account-url.js';
 import { issueModelSourceSnapshot, modelSourceRequestSignature } from './model-source-snapshots.js';
 import { collectModelDiscoveryPages } from './model-discovery-pages.js';
 import { providerOAuthContract } from '@cindy/model-providers';
@@ -840,6 +840,8 @@ async function runGenericOAuthLogin(
  * 此时只追加 `/models`。自定义 OAuth 供应商靠这条推导免去用户手填发现端点。
  */
 function deriveModelsDiscoveryUrl(baseUrl: string): string {
+  const copilot = copilotModelsRequest(baseUrl);
+  if (copilot) return copilot.url;
   const url = new URL(baseUrl);
   url.hash = '';
   let pathname = url.pathname;
@@ -871,9 +873,11 @@ async function discoverGenericOAuthModels(
   if (!configuredUrl || !isCurrent()) return null;
   const token = readCachedGenericOAuthAccessToken(providerId, oauth);
   if (!token) return null;
-  const url = resolveCopilotAccountUrl(configuredUrl, token);
-  const headers: Record<string, string> = { authorization: `Bearer ${token}` };
-  if (agent === 'claude-code' && !isOpenRouterModelsUrl(url)) headers['anthropic-version'] = '2023-06-01';
+  const accountUrl = resolveCopilotAccountUrl(configuredUrl, token);
+  const copilot = copilotModelsRequest(accountUrl);
+  const url = copilot?.url ?? accountUrl;
+  const headers: Record<string, string> = { ...copilot?.headers, authorization: `Bearer ${token}` };
+  if (agent === 'claude-code' && !copilot && !isOpenRouterModelsUrl(url)) headers['anthropic-version'] = '2023-06-01';
   let res: Response;
   try {
     res = await io.fetchImpl(url, {

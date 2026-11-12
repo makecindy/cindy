@@ -32,6 +32,7 @@ export const CONTROL_CATALOG: readonly Control[] = [
   helper('devices.remote-consent', 'devices', '远程控制授权请求', '请求同账号在线电脑弹出本机确认窗口，由用户开启持续有效的远程控制设置。', ['request_remote_control'], ['远程控制', '授权', '弹窗', 'remote control', 'consent'], '使用 list_machines 的精确设备 ID；只有目标电脑返回 enabled 才能继续原操作。拒绝、超时或旧版无响应不代表同意。'),
   setting('application.preferences', 'application', '语言、主题与通知', '发送快捷键、链接打开方式、动效、消息导航和首页偏好。', 'preferences', ['language', 'theme', 'notification', '语言', '主题', '通知', '快捷键', '动效', '链接'], false),
   setting('appearance.wallpaper', 'appearance', '字体与内置壁纸', '字体、字号、窗口缩放、内置壁纸及效果；自定义图片导入另查 appearance.assets。', 'appearance', ['wallpaper', 'font', '壁纸', '背景', '字体', '字号', '缩放']),
+  helper('appearance.themes', 'appearance', '导入主题包', '将 .cindy 主题包导入当前 Cindy 并刷新主题列表；同 ID 更新。切换与回读用 application.preferences。', ['import_theme_package'], ['theme', '主题', '导入主题', '安装主题', '主题包', 'cindy'], '仅本机任务；沿用当前任务的文件权限，不安装插件、不自动切换主题。'),
   setting('projects.git-safety', 'projects', 'Git 安全快照', 'Git 自动快照开关。', 'git-safety', ['git', '快照']),
   setting('tasks.goal-defaults', 'tasks', '目标模式默认限制', '以后启动目标模式的轮数、token 预算与无进展限制。', 'goal-defaults', ['goal', '目标模式', '预算']),
   setting('runtimes.resources', 'runtimes-and-storage', '运行资源', '命令并发、进程优先级、工具链线程。', 'agent-resources', ['resource', '并发', '资源', '线程']),
@@ -52,11 +53,11 @@ export const CONTROL_CATALOG: readonly Control[] = [
   helper('tools.mcp', 'tools-and-extensions', '连接 MCP', '使用宿主的 MCP 配置表单。', ['request_mcp_setup'], ['mcp', '外部工具']),
   helper('tools.skills', 'tools-and-extensions', 'Skill 管理', '按当前宿主提供的 Skill 能力发现。', ['search_skills', 'start_skill_learning', 'publish_skill'], ['skill', '技能']),
   helper('runtimes.pi', 'runtimes-and-storage', 'Pi 托管运行环境', '读取版本、检查和安装托管 Pi；复用现有内核管理器。', ['get_pi_runtime', 'update_pi_runtime'], ['pi', '升级 pi', '更新 pi', '运行环境'], '更新不是改 JSON；正在运行的进程与后续任务使用版本分别报告。'),
-  helper('application.update', 'application', 'Cindy 应用更新', '检查并通过内置更新器安装。', ['check_app_update', 'install_app_update'], ['cindy 更新', 'cindy 升级', 'app update'], '安装沿用内置更新器确认，不下载替换当前宿主。'),
+  helper('application.update', 'application', 'Cindy 应用更新', '更新 Cindy 用 install_app_update，由宿主确认后通过内置更新器安装；check_app_update 仅检查版本。', ['check_app_update', 'install_app_update'], ['cindy 更新', 'cindy 升级', '更新 cindy', '升级 cindy', 'update cindy', 'upgrade cindy', 'app update'], '没有可安装更新或不支持安装时说明返回原因，不自行下载替换当前宿主。工具不可用时，在运行 Cindy 的电脑上使用设置中的“检查更新”。'),
   // Explicit gaps remain discoverable. Metadata must never imply a working mutation.
   ...[
     ['application.window', 'application', '窗口行为与开机启动', '唤醒、菜单栏、关闭窗口和激活点击', '窗口 开机 菜单栏 wake startup'],
-    ['appearance.assets', 'appearance', '自定义壁纸和主题导入', '自定义媒体与主题的导入管理', '自定义壁纸 壁纸图片 导入主题 custom wallpaper'],
+    ['appearance.assets', 'appearance', '自定义壁纸导入', '自定义壁纸媒体的导入管理；主题包见 appearance.themes', '自定义壁纸 壁纸图片 custom wallpaper'],
     ['groups.settings', 'groups-and-sharing', '群与共享设置', '群成员、分工、通知和共享权限', '群 共享 group sharing'],
     ['devices.remote-settings', 'devices', '远程控制与中转配置', '远控开关、中转服务和设备管理', '远程控制 中转 relay'],
     ['input.voice', 'media-and-input', '语音与输入设置', '麦克风、语言、词典、音效和配件', '语音 麦克风 词典 voice microphone'],
@@ -101,7 +102,7 @@ export function createControlReader(deps: Deps) {
     return { name, description: tool.description, ...(detail ? { inputSchema: z.toJSONSchema(z.strictObject(tool.inputShape)) } : {}) };
   }
   async function toolsFor(control: Control, detail: boolean, allowed: ReadonlySet<string>) {
-    if (deps.local?.() === false && (control.section || control.key === 'models.configuration' || control.key === 'runtimes.pi'))
+    if (deps.local?.() === false && (control.section || control.key === 'models.configuration' || control.key === 'runtimes.pi' || control.key === 'appearance.themes'))
       return { tools: [] as ToolInfo[], reason: 'requires_local_task' };
     if (!control.server) return { tools: [] as ToolInfo[], reason: 'not_exposed' };
     if (control.server === 'cindy_helper') {

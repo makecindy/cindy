@@ -172,3 +172,21 @@ export function withCreateSessionStderr(
     vendorOptions: { ...vendorOptions, onStderrLine },
   };
 }
+
+export function createSessionStderrOptions(log: { warn(message: string): void }) {
+  return function buildCreateOptsWithStderr(o: MakerSessionCreateOpts) {
+    // 把 vendor 子进程 stderr 引到主进程日志,否则 "process exited with code 1" 之类
+    // 的失败信息会被默默丢掉。renderer 仍可以通过 vendorOptions 自定义,这里只在缺省时兜底。
+    return withCreateSessionStderr(o, (agentKind, line) =>
+      log.warn(`[${agentKind}/stderr] ${line}`),
+    );
+  };
+}
+
+export function isSessionRunningError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const code = (err as { code?: unknown }).code;
+  if (code === 'SESSION_RUNNING') return true;
+  const message = (err as { message?: unknown }).message;
+  return typeof message === 'string' && message.startsWith('SESSION_RUNNING:');
+}

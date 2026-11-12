@@ -2,6 +2,8 @@
 import React from 'react';
 import { render, renderHook, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { modelAccountQuotaStatus, modelQuotaWarning } from '@/components/new-chat/modelAccountQuotaStatus';
+import { ModelPickerAccountProvider, useModelPickerAccount } from '@/components/new-chat/ModelPickerAccount';
 import { ModelPoolQuotaSummary } from '@/components/new-chat/ModelPoolQuota';
 import type { ProviderShareReceived } from '@cindy/device-link';
 import type { ProviderShareInsights } from '../../shared/providerShareInsights';
@@ -99,9 +101,13 @@ describe('provider weekly quota identity and windows', () => {
       id, identity: `${id}@example.test`, paused, status: 'ready', running: id === 'a' ? 4 : 0, limit: 4,
       usage: { claude: { sevenDay: { utilization: used } }, codex: { buckets: { codex: { secondary: { windowMinutes: 10080, usedPercent: used } } } } },
     });
-    const command = vi.fn().mockResolvedValue({ providerId, configured: true,
-      accounts: [account('a', 66), account('b', 20), account('paused', 1, true)] });
-    Object.assign(window, { electronAPI: { subscriptionAccounts: { command, onChanged: () => () => {} } } });
+    const pool = { providerId, configured: true,
+      accounts: [account('a', 66), account('b', 20), account('paused', 1, true)] };
+    const command = vi.fn().mockResolvedValue(pool);
+    let changed!: (event: { providerId: string }) => void;
+    Object.assign(window, { electronAPI: { subscriptionAccounts: { command,
+      onChanged: (listener: typeof changed) => { changed = listener; return () => {}; },
+    } } });
     const providers = [provider(providerId, { auth: { method: 'oauth', native: providerId === 'anthropic' ? 'claude' : 'codex' } })];
     const view = render(<ModelSourceUsageProvider providers={providers} scope={{ deviceId: null }}>
       <UnifiedModelRail items={[{ kind: 'provider', providerId }]} active={{ kind: 'all' }}
@@ -121,7 +127,122 @@ describe('provider weekly quota identity and windows', () => {
     expect(view.container.querySelector('[data-model-source-details]')?.getAttribute('title')).toContain('b@example.test');
     // Native pool bridges use the same account buckets as runtime admission.
     expect(view.container.querySelector('[data-model-source-details]')?.getAttribute('title')).toContain('34%');
+
+    // User-reported flicker / unit: existing tests only observed completed reads.
+    // Hold the next pool read open: the actual summary and rail must retain the
+    // previous snapshot, then replace it together, including during event bursts.
+    let resolve!: (value: typeof pool) => void;
+    command.mockImplementation(({ action }) => action === 'preview' ? Promise.resolve(pool)
+      : new Promise<typeof pool>(done => { resolve = done; }));
+    act(() => changed({ providerId }));
+    await act(async () => {});
+    expect(screen.getByRole('button', { name: 'subscriptionAccounts.quotaAverage' }).textContent).toBe('57%');
+    expect(button.querySelector('[data-weekly-remaining="57"]')).not.toBeNull();
+    const calls = command.mock.calls.length;
+    act(() => { changed({ providerId }); changed({ providerId }); });
+    expect(command).toHaveBeenCalledTimes(calls);
+    await act(async () => resolve({ ...pool, accounts: [account('a', 100), account('b', 100)] }));
+    // The superseded reply must not flash 0% before the queued read completes.
+    expect(screen.getByRole('button', { name: 'subscriptionAccounts.quotaAverage' }).textContent).toBe('57%');
+    await act(async () => resolve({ ...pool, accounts: [account('a', 70), account('b', 30)] }));
+    expect(screen.getByRole('button', { name: 'subscriptionAccounts.quotaAverage' }).textContent).toBe('50%');
+    expect(button.querySelector('[data-weekly-remaining="50"]')).not.toBeNull();
   });
+  // Retaining a snapshot is allowed only within its scope. Existing rail tests
+  // do not hold a pool read across a device/task/owner change (unit regression).
+  it.each(['device', 'task', 'owner'] as const)('hides retained quota after a %s change and rejects the old reply', async change => {
+    const pool = { providerId: 'anthropic', configured: true, accounts: [
+      { id: 'a', identity: 'a@example.test', paused: false, status: 'ready', running: 0, limit: 4,
+        usage: { claude: { sevenDay: { utilization: 22 } } } },
+    ] };
+    const command = vi.fn().mockResolvedValue(pool);
+    let resolveRemote: ((value: typeof pool) => void) | undefined;
+    Object.assign(window, { electronAPI: {
+      subscriptionAccounts: { command, onChanged: () => () => {} },
+      deviceLink: { invoke: vi.fn(() => new Promise<typeof pool>(done => { resolveRemote = done; })), onRemotePush: () => () => {} },
+    } });
+    function Account() {
+      const account = useModelPickerAccount('anthropic');
+      return <span>{account?.identity ?? 'unknown'}</span>;
+    }
+    const tree = (deviceId: string | null = null, taskId?: string) =>
+      <ModelPickerAccountProvider enabled providerIds={['anthropic']} deviceId={deviceId} taskId={taskId}>
+        <Account />
+      </ModelPickerAccountProvider>;
+    const view = render(tree());
+    await act(async () => {});
+    expect(view.container.textContent).toBe('a@example.test');
+    let resolve!: (value: typeof pool) => void;
+    command.mockImplementation(() => new Promise<typeof pool>(done => { resolve = done; }));
+    act(() => window.dispatchEvent(new Event('focus')));
+    expect(view.container.textContent).toBe('a@example.test');
+    const oldReply = resolve;
+    if (change === 'owner') setDataOwnerGeneration('quota-new-owner');
+    view.rerender(tree(change === 'device' ? 'other-device' : null, change === 'task' ? 'other-task' : undefined));
+    expect(view.container.textContent).toBe('unknown');
+    command.mockResolvedValue(pool);
+    await act(async () => oldReply(pool));
+    expect(view.container.textContent).toBe('unknown');
+    view.unmount();
+    await act(async () => { resolve(pool); resolveRemote?.({ ...pool, configured: false }); });
+  });
+
+  // Approved picker contract / unit: single accounts warn at 10%, pools only
+  // when all accounts are exhausted. Verify actual summary and rail together.
+  it.each([
+    { name: 'single low', used: [92], warning: 'quotaFiveHourRemaining' },
+    { name: 'legacy single low', used: [92], warning: 'quotaFiveHourRemaining', legacy: true },
+    { name: 'single exhausted', used: [100], warning: 'quotaRecoverIn' },
+    { name: 'partial pool', used: [100, 20], warning: null },
+    { name: 'all exhausted', used: [100, 100], warning: 'quotaRecoverIn' },
+    { name: 'unknown member', used: [100, NaN], warning: null },
+    { name: 'expired limit', used: [100], warning: 'resetPending', expired: true },
+    { name: 'unknown reset', used: [100], warning: 'quotaExhausted', unknown: true },
+  ])('$name', async ({ used, warning, expired, unknown, legacy }) => {
+    const providerId = 'anthropic';
+    const accounts = used.map((utilization, index) => ({
+      id: String(index), identity: `account-${index}`, paused: false, status: 'ready', running: 0, limit: 4,
+      usage: { claude: {
+        fiveHour: { utilization, resetsAt: unknown ? null : Date.now() / 1000 + (expired ? -1 : 1920) },
+        sevenDay: { utilization: 22, resetsAt: Date.now() / 1000 + 86400 * 6 },
+      } },
+    }));
+    if (legacy) reads.claude.mockReturnValue(accounts[0].usage.claude);
+    const command = vi.fn().mockResolvedValue({ providerId, configured: !legacy, accounts });
+    Object.assign(window, { electronAPI: { subscriptionAccounts: { command, onChanged: () => () => {} } } });
+    const providers = [provider(providerId, { auth: { method: 'oauth', native: 'claude' } })];
+    const view = render(<ModelSourceUsageProvider providers={providers} scope={{ deviceId: null }}>
+      <UnifiedModelRail items={[{ kind: 'provider', providerId }]} active={{ kind: 'all' }}
+        providers={providers} providerLabel={() => 'Provider'} onSelect={() => {}} providerUsage={{ deviceId: null }} />
+      <ModelPoolQuotaSummary providerId={providerId} />
+    </ModelSourceUsageProvider>);
+    await act(async () => {});
+    const summary = view.container.querySelector('[data-pool-quota-summary]')!;
+    expect(summary.textContent).toContain('78%');
+    const indicator = summary.querySelector('[data-quota-warning]');
+    if (warning) {
+      expect(indicator?.textContent).toContain(warning);
+      expect(view.container.querySelector('[data-rail-item] [data-quota-warning]')).not.toBeNull();
+    } else {
+      expect(indicator).toBeNull();
+      expect(view.container.querySelector('[data-rail-item] [data-quota-warning]')).toBeNull();
+    }
+  });
+
+  it('waits for every exhausted window on an account, then chooses the earliest recoverable account', () => {
+    const now = 1_800_000_000_000;
+    const status = (short: number, weekly: number) => modelAccountQuotaStatus('anthropic', { claude: {
+      fiveHour: { utilization: 100, resetsAt: now / 1000 + short },
+      sevenDay: { utilization: 100, resetsAt: now / 1000 + weekly },
+    } }, now);
+    expect(modelQuotaWarning([status(60, 3600), status(120, 1800)])).toMatchObject({ reset: now / 1000 + 1800 });
+    const codex = modelAccountQuotaStatus('openai', { codex: { credits: null, buckets: { codex: {
+      limitId: 'codex', limitName: null, updatedAt: now,
+      primary: { usedPercent: 92, windowMinutes: 300, resetsAt: now / 1000 + 60 }, secondary: null,
+    } } } }, now);
+    expect(modelQuotaWarning([codex])).toEqual({ kind: 'low', remaining: 8 });
+  });
+
   // #9711 / unit: rail and row must consume the same pool snapshot, not an
   // identity from B beside a weekly bar borrowed from paused default account A.
   it.each(['anthropic', 'openai'] as const)('shares %s candidate identity and quota across rail and rows without a per-entry opt-in', async (providerId) => {

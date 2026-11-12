@@ -2,8 +2,8 @@
 
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：新增或修改插件（`.cindy`）的运行时、沙箱、权限、能力声明、面板供片、
-> 网络／凭证／文件交接，插件作者可见的身份卡、管子协议、打包与编写手册，或批准状态、
-> 安装布局、指纹格式等**存量安装读得到的任何东西**之前
+> 网络／凭证／文件交接、插件市场分页读取、安装扫描、实例核对与使用统计，插件作者可见的
+> 身份卡、管子协议、打包与编写手册，或批准状态、安装布局、指纹格式等**存量安装读得到的任何东西**之前
 
 本文治理 Cindy 中运行的插件——以 `ghost.json` 为身份卡的 `.cindy` 包。它约束三件
 互为支撑的事：**运行时权限安全**（宿主如何隔离并授权插件）、**存量插件兼容**（升级
@@ -13,7 +13,8 @@
 媒体字节交接另见 [`media-storage-and-protocols.md`](media-storage-and-protocols.md)，插件在
 产品中的定位见 [`../product-rules/core-product-principles.md`](../product-rules/core-product-principles.md)。
 
-> **术语**：产品与对外措辞统一为「插件」，`.cindy` 即插件包；不再使用旧的概念称呼。
+> **术语**：产品与对外措辞统一为「插件」；以 `ghost.json` 为身份卡的 `.cindy` 是插件包。
+> `.cindy` 后缀也用于主题等文件类型，不能单凭后缀认作插件；不再使用旧的概念称呼。
 > 代码标识仍沿用历史 `Ghost` / `cindy-brain` 命名（目录 `cindy-brain/`、`GhostRuntime`、
 > `ghost.json`、`cindy-ghost://`、`ghost_forge_guide` 等），与产品术语「插件」指同一事物；
 > 引用代码时照实使用这些标识，不因措辞改写。
@@ -49,7 +50,23 @@ Desktop 本机、远程查看与 Mobile 的页面 CSP 始终保留 `form-action 
 
 ## 1. 插件形态与代码术语
 
-- `.cindy` 是以 `ghost.json` 为身份卡的插件包，现行唯一形态为 `kind: 'chip'`。
+- 插件 `.cindy` 包以 `ghost.json` 为身份卡，现行唯一形态为 `kind: 'chip'`。
+- 桌面文件导入先经 `main/cindy-files/` 识别类型：根或单层包装目录内有 `ghost.json`
+  时完整交回原插件安装／批准／更新流程，不要求旧包补字段、改包或重装。
+  其余包读取 `cindy.json` 的通用 `formatVersion` 与 `type`；当前支持版本 1/2 的
+  `theme`（`themes` 为包内 JSON 路径）。未知类型或格式版本明确提示当前版本不支持，
+  不降级交给插件解析器。v1 装载颜色／明暗家族／品牌图片；v2 另含字体、壁纸、
+  正文样式、密度与动效，全部为数据，不执行代码、不新增插件 kind、不申请插件能力。
+  主题选择经公共 AppearanceService 合成默认值，明确用户设置／已批准固定能力覆盖优先，
+  不因选择主题清空用户覆盖。主题与资源在用户主题目录
+  的 `.packages/<包字节 SHA-256>/` 中原子发布；安装记录按主题 ID 原子切换当前引用，
+  同 ID 默认更新完整主题与素材，运行时本地 ID／family 保持稳定，其他主题保留。
+  Agent 的 `import_theme_package` 复用该安装器与原任务文件／行动授权，刷新当前窗口的
+  主题列表并分别返回安装与刷新结果；选择仍走现有 preferences，不启动其他应用。
+  该工具拒绝插件包；插件不提供／注册主题，既有固定外观能力仍走原声明、批准与来源校验，
+  实际写入与主题复用同一个外观所有者和 Presenter。制作主题不另产伴随外观插件。
+  散装主题 JSON 保持原样，同 ID 导入包成为有效本地内容；制作契约见
+  `apps/desktop/resources/system-skills/cindy-theme-creator/references/package-format.md`。
 - 代码目录与运行时使用 `cindy-brain` / `Ghost` 命名，**不得重新引入已退役的 cartridge
   声明型兼容层**。
 - 插件 ID 或 `cindy-` / `filo-` / `xd-` 前缀不授予能力，也不阻止本地开发安装。
@@ -926,7 +943,36 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 
 这部分不改变 manifest、包格式、安装布局、批准权限、凭证或用户偏好，不涉及作者契约变更。
 
+### 5.4 插件读取与扫描预算
+
+插件市场、实例查找、使用统计和面板请求属于同一类本地读取，必须遵守
+`engineering-conventions.md` §8 的通用预算；本节只补插件特有边界。
+
+- Renderer 的市场分页只做 discovery；Main 按 owner／revision 复用同一份安装快照。分页、
+  来源切换和计数复用同一快照，不得每页调用 `readLocalInstallSnapshot` 或重建全量安装列表。
+- 精确实例键走 `findInstalledInstance`；只有无法精确匹配时才回退 `availableGhosts()`。
+  面板、协议 handler、点击／按键复核只读目标实例，不得为每次请求重扫其他插件。
+- 循环内不得调用带默认 `listMarketInstallations()` 参数的
+  `installedGhostMatchingMarketPlugin`；先取一次快照并传入。锁内需要复核单项时，用精确实例
+  查找，不要重新全量 list。
+- `ghosts:usage-summary` 只读；`bind` 只在安装、启动、首次使用或身份 revision 变化时
+  执行。统计卡片可见时轮询，隐藏时停止，前一次未完成不叠加。
+- 自定义来源发现必须有超时和部分结果；超时不能阻塞首屏。Library 用量扫描有熔断和条目
+  上限，面板投影不得为每条记录重扫全部文件。
+- 验收：翻 10 页 `GhostManager.list()` 1 次；精确实例查找 0 次；连续 summary 3 次写事务
+  0 次；40 次面板点击／按键复核不调用 `list()`。
+- 例外：安装、卸载、批准、切换账号后必须失效快照；首次打开详情的幂等 ensure 允许一次
+  绑定；启动窗口创建前的固定配置读取和一次性 CLI 不受请求预算约束。
+
 ## 6. 作者契约与编写手册同步
+
+插件界面扩展的作者入口为随包 `references/plugin-host-ui.md`，具名视图和原生入口仍共用
+MCP Apps，不能另建页面 SDK 或逐历史消息 render/query。`mcpApps.host` 新能力由 receipt 的
+可选 `approvedHostUi` 记录实际展示并批准的精确主体；页面原有批准不扩张为草稿/上下文等宿主权限。
+未知声明保留为数据，新增已知能力仍需批准；存量原工具与页面不要求重新确认。
+主窗、完整任务副窗和分离侧栏共用原 MCP Apps 页面承载。开页操作沿原主窗布局路由；
+草稿快照及修改交给实际承载编辑器的窗口，只有无编辑器的分离侧栏和弹出页签回到主窗。
+辅助窗口沿受限 preload 调用，不另挂一份编辑器宿主或复制草稿。
 
 内置 `cindy-plugin-creator` Skill 是 Agent 替用户编写插件的**统一手册与流程入口**，正本位于
 `apps/desktop/resources/system-skills/cindy-plugin-creator/`。`SKILL.md` 负责流程与按需阅读索引，
@@ -952,7 +998,10 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 调用按原章节号读取。不要在 TypeScript、工具描述或界面文案中另存一套编写流程。
 页面手册 `PAGE-GENERATION.md` 另以 `FORGE_PAGE_MANUAL` 导出，`ghost_forge_guide({section:"pages"})` 整份返回，
 不拼进 `FORGE_GUIDE`（手册自带 `## ` 小节，拼进去会被当成章节切开）。
-修改随包 Skill 字节时同步递增 `BUILT_IN_SKILLS_BUNDLE_VERSION`。改动其中的《Cindy MCP Apps 页面生成手册》
+修改随包 Skill 字节时，在 `apps/desktop/resources/system-skills/_versions/` 新增一个记录文件
+（版本号 = `BUILT_IN_SKILLS_BUNDLE_VERSION_BASE` + 记录数；不要把旧式 `BUILT_IN_SKILLS_BUNDLE_VERSION = N`
+常量加回来，门禁会阻断），规则见 [`credentials-and-local-storage.md`](credentials-and-local-storage.md)
+「Cindy 托管的预装技能」。改动其中的《Cindy MCP Apps 页面生成手册》
 （`PAGE-GENERATION.md`）时，还要在对应客户端上线前把新手册发布到各区域 CDN，用法与发版前检查见
 [`media-storage-and-protocols.md`](media-storage-and-protocols.md) 的《Cindy MCP Apps 页面生成手册》一条。
 手册 CDN 路径带客户端版本号与 sha256（`mcp-apps/manual/<版本号>/<sha256>.md`），发布脚本从打包产出的
