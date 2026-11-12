@@ -15563,6 +15563,16 @@
             "recheck": "Comprobar conexión",
             "summary": "Administra repositorios, issues, pull requests y Actions de GitHub.",
             "otherMethods": "Otros métodos de conexión"
+          },
+          "app": {
+            "title": "Eventos del repositorio",
+            "description": "Conecta la GitHub App de Cindy para actualizar los PR en seguimiento cuando cambien las revisiones o CI.",
+            "connected": "Conectado como {{login}} · Repositorios en seguimiento: {{count}}",
+            "missing": "Comprueba la instalación de la App y el acceso a: {{repositories}}",
+            "error": "No se pudo comprobar la conexión. Inténtalo de nuevo.",
+            "repositories": "Elegir repositorios",
+            "disconnect": "Desconectar eventos",
+            "connect": "Conectar GitHub App"
           }
         },
         "unresolved": "Hilos de revisión sin resolver: {{count}}",
@@ -16300,7 +16310,11 @@
             "payments": "Pagos",
             "checkout": "Finalización de compra",
             "invoices": "Facturas",
-            "subscriptions": "Suscripciones"
+            "subscriptions": "Suscripciones",
+            "reviewComments": "Comentarios de revisión",
+            "reviewThreads": "Conversaciones de revisión",
+            "checkRuns": "Ejecuciones de comprobación",
+            "commitStatus": "Estado del commit"
           },
           "actions": {
             "all": "Todos los cambios",
@@ -16322,7 +16336,12 @@
             "failed": "Fallo",
             "paid": "Pagado"
           }
-        }
+        },
+        "repositoriesLabel": "Repositorios",
+        "repositoriesHint": "Introduce owner/repository, uno por línea. Solo los repositorios autorizados para esta GitHub App pueden activar la tarea.",
+        "repositoriesInvalid": "Introduce entre 1 y 50 nombres de repositorio válidos con el formato owner/repository.",
+        "githubAppHint": "Conecta GitHub App en el ordenador que ejecuta esta tarea y autoriza estos repositorios. No se necesita una URL de Webhook ni un secreto aparte.",
+        "githubAppPaused": "Esta tarea está en pausa. Los eventos no la iniciarán."
       },
       "trigger": {
         "label": "Modo de activación",

@@ -15563,6 +15563,16 @@
             "recheck": "Vérifier la connexion",
             "summary": "Gérez les dépôts, issues, pull requests et Actions GitHub.",
             "otherMethods": "Autres méthodes de connexion"
+          },
+          "app": {
+            "title": "Événements des dépôts",
+            "description": "Connectez la GitHub App de Cindy pour actualiser les PR suivies lorsque les revues ou la CI changent.",
+            "connected": "Connecté en tant que {{login}} · Dépôts suivis : {{count}}",
+            "missing": "Vérifiez l’installation de l’App et les droits d’accès à : {{repositories}}",
+            "error": "Impossible de vérifier la connexion. Réessayez.",
+            "repositories": "Choisir les dépôts",
+            "disconnect": "Déconnecter les événements",
+            "connect": "Connecter GitHub App"
           }
         },
         "unresolved": "Fils de revue non résolus : {{count}}",
@@ -16300,7 +16310,11 @@
             "payments": "Paiements",
             "checkout": "Passage en caisse",
             "invoices": "Factures",
-            "subscriptions": "Abonnements"
+            "subscriptions": "Abonnements",
+            "reviewComments": "Commentaires de revue",
+            "reviewThreads": "Discussions de revue",
+            "checkRuns": "Exécutions de vérification",
+            "commitStatus": "État du commit"
           },
           "actions": {
             "all": "Tous les changements",
@@ -16322,7 +16336,12 @@
             "failed": "Échec",
             "paid": "Paiement effectué"
           }
-        }
+        },
+        "repositoriesLabel": "Dépôts",
+        "repositoriesHint": "Saisissez owner/repository, un par ligne. Seuls les dépôts autorisés pour cette GitHub App peuvent déclencher la tâche.",
+        "repositoriesInvalid": "Saisissez 1 à 50 noms de dépôts valides au format owner/repository.",
+        "githubAppHint": "Connectez GitHub App sur l’ordinateur qui exécute cette tâche et autorisez ces dépôts. Aucune URL Webhook ni clé secrète distincte n’est nécessaire.",
+        "githubAppPaused": "Cette tâche est en pause. Les événements ne la démarreront pas."
       },
       "trigger": {
         "label": "Mode de déclenchement",

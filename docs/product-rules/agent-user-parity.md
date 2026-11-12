@@ -294,3 +294,11 @@ Claude Code／Pi 的非阻塞澄清恢复独立的 `ask_user_question_async`；P
 本机确认框，用户直接点击开启，不必另找设置。工具发现为 `devices.remote-consent`，
 精确目标来自 `list_machines`。此入口只请求确认，不能远程改开关；原任务收到 enabled 后
 继续工作。未授权消息通道与普通远控命令分离，详情见 [机器能力](cindy-machines.md)。
+
+### GitHub App 自动任务（2026-11-11，测试）
+
+Desktop 来源选择与 `schedule_create/update` 共用 `source={preset:"github-app",repositories:["owner/repository"]}`
+和事件筛选；Agent 可按既有 `device` 选择运行电脑。连接账号仍在目标电脑的 GitHub 插件完成，工具不接收
+OAuth 代码、App 密钥或任务签名密钥。`schedule_get.webhookStatus` 返回接收状态，不伪造专属地址。
+旧执行端明确拒绝未知来源；旧控制端省略来源的编辑保持既有配置。手机当前保留／读取该配置，新增来源
+表单只在 Desktop；不把控制端本机的登录状态冒充运行电脑的连接状态。
