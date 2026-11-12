@@ -1926,6 +1926,15 @@
     },
     "remote": {
       "title": "Machines distantes",
+      "hostKeyError": {
+        "missing": "La vérification de la clé d'hôte SSH n'est pas configurée. Connexion refusée.",
+        "read": "Cindy n'a pas pu lire les clés d'hôte approuvées : {{reason}}. Connexion refusée.",
+        "write": "Cindy n'a pas pu enregistrer la clé d'hôte approuvée : {{reason}}. Connexion refusée.",
+        "mismatch": "La clé d'hôte de {{host}} a changé ({{fingerprint}}) et ne correspond plus à l'empreinte précédemment approuvée par Cindy. Le serveur a peut-être été réinstallé, ou il peut s'agir d'une attaque de l'homme du milieu. Connexion refusée.",
+        "file": "Fichier des clés d'hôte approuvées :\n{{filePath}}",
+        "repair": "Cindy ne lit pas ~/.ssh/known_hosts. L'ancienne empreinte est enregistrée dans :\n{{filePath}}\nLa clé de l'entrée est \"{{host}}\".\nSi vous avez vérifié que ce changement est fiable, quittez Cindy, supprimez uniquement cette entrée en conservant le fichier et tous les autres hôtes, puis reconnectez-vous. La nouvelle empreinte sera enregistrée lors de la première connexion. Ne supprimez pas le fichier entier.",
+        "verifyChange": "Vérifiez ce changement auprès de l'administrateur du serveur avant de mettre à jour le registre des clés d'hôte approuvées."
+      },
       "footnote": "Phase A : gestion des connexions SSH uniquement. L'exécution d'Agents sur la machine distante arrivera dans une prochaine mise à jour.",
       "viaAuth": "via {{label}}",
       "readOnlyFromSshConfig": "Les détails de connexion proviennent de la configuration SSH",
@@ -11801,6 +11810,8 @@
       "takeOverConflict": "{{name}} a déjà été déplacé vers « {{device}} »",
       "takeOverOffline": "Impossible de joindre le serveur, {{name}} ne peut donc pas continuer ici pour le moment",
       "takeOverFailed": "Impossible de reprendre {{name}} sur cet ordinateur",
+      "localCindyConflict": "L’ordinateur qui prend le relais a déjà une autre Cindy. Gérez-la dans ses réglages ou choisissez un autre ordinateur principal",
+      "localCindyConflictAction": "Ouvrir les réglages de la Cindy locale",
       "notEnabled": "Ce serveur ne permet pas de changer d'ordinateur principal",
       "readOnlyNote": "Cette conversation est enregistrée dans le cloud et est en lecture seule",
       "empty": "Aucune conversation dans le cloud pour le moment",

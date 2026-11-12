@@ -325,9 +325,12 @@ describe('terminateManagedChromePortOwner', () => {
   it('reports the port free when nothing holds it', async () => {
     // Nothing listens on that port, so the reclaim must succeed — otherwise a
     // launch is refused because of a browser that is already gone.
+    // Port 1, not a high port: it lies outside every OS's ephemeral range, so
+    // a parallel test's listen(0) cannot land on it (45997 once did on Linux
+    // CI), and Linux reserves it for root.
     await expect(terminateManagedChromePortOwner({
-      cdpHttpUrl: 'http://127.0.0.1:45997',
-      cdpPort: 45997,
+      cdpHttpUrl: 'http://127.0.0.1:1',
+      cdpPort: 1,
       userDataDir: '/managed/browser/Cindy/user-data',
     })).resolves.toBe(true);
   });

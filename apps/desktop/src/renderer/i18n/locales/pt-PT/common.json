@@ -1926,6 +1926,15 @@
     },
     "remote": {
       "title": "Máquinas remotas",
+      "hostKeyError": {
+        "missing": "A verificação da chave de anfitrião SSH não está configurada. Ligação recusada.",
+        "read": "A Cindy não conseguiu ler as chaves de anfitrião fidedignas: {{reason}}. Ligação recusada.",
+        "write": "A Cindy não conseguiu guardar a chave de anfitrião fidedigna: {{reason}}. Ligação recusada.",
+        "mismatch": "A chave de anfitrião de {{host}} mudou ({{fingerprint}}) e já não corresponde à impressão digital em que a Cindy confiava. Isto pode significar que o servidor foi reinstalado ou um ataque man-in-the-middle. Ligação recusada.",
+        "file": "Ficheiro de chaves de anfitrião fidedignas:\n{{filePath}}",
+        "repair": "A Cindy não lê ~/.ssh/known_hosts. A impressão digital antiga está guardada em:\n{{filePath}}\nA chave da entrada é \"{{host}}\".\nSe confirmou que esta alteração é fidedigna, feche a Cindy, remova apenas esta entrada, mantenha o ficheiro e todos os outros anfitriões e volte a ligar. A nova impressão digital será guardada na primeira ligação. Não elimine o ficheiro inteiro.",
+        "verifyChange": "Confirme a alteração com o administrador do servidor antes de atualizar o registo de chaves de anfitrião fidedignas."
+      },
       "footnote": "Fase A: apenas gestão de ligações SSH. A execução de Agents na máquina remota chegará numa atualização posterior.",
       "viaAuth": "via {{label}}",
       "readOnlyFromSshConfig": "Os detalhes da ligação provêm da configuração SSH",
@@ -11801,6 +11810,8 @@
       "takeOverConflict": "{{name}} já foi transferido para “{{device}}”",
       "takeOverOffline": "Não é possível contactar o servidor, pelo que {{name}} não pode continuar aqui neste momento",
       "takeOverFailed": "Não foi possível assumir a execução de {{name}} neste computador",
+      "localCindyConflict": "O computador que assume já tem outra Cindy. Gira essa Cindy nas definições dela ou escolha outro computador principal",
+      "localCindyConflictAction": "Abrir definições da Cindy local",
       "notEnabled": "Este servidor não permite alterar o computador principal",
       "readOnlyNote": "Esta conversa está guardada na nuvem e é só de leitura",
       "empty": "Ainda não há conversa na nuvem",

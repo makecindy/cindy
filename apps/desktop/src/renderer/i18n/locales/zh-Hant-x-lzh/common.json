@@ -1858,6 +1858,15 @@
     },
     "remote": {
       "title": "遠方之機",
+      "hostKeyError": {
+        "missing": "SSH 主機金鑰驗證尚未設定。連線已拒絕。",
+        "read": "Cindy 無法讀取已信任的主機金鑰：{{reason}}。連線已拒絕。",
+        "write": "Cindy 無法儲存已信任的主機金鑰：{{reason}}。連線已拒絕。",
+        "mismatch": "主機 {{host}} 的金鑰已變更（{{fingerprint}}），與 Cindy 先前信任的指紋不一致。這可能是伺服器重裝，也可能是中間人攻擊。連線已拒絕。",
+        "file": "主機金鑰信任檔案：\n{{filePath}}",
+        "repair": "Cindy 不讀取 ~/.ssh/known_hosts。舊指紋儲存在：\n{{filePath}}\n鍵名是 \"{{host}}\"。\n如果確認這次變更可信：先結束 Cindy，只刪除這個鍵，保留檔案與其他主機，再重新連線。新指紋會在首次連線時寫入。不要刪除整個檔案。",
+        "verifyChange": "請先向伺服器管理員核實金鑰變更，再更新主機金鑰信任記錄。"
+      },
       "footnote": "初版僅支援 SSH 連線管理；於遠端行 Agent 之能，將於後續版本增之。",
       "viaAuth": "經 {{label}} 認證",
       "readOnlyFromSshConfig": "連線資訊出自 SSH 設定",
@@ -11657,6 +11666,8 @@
       "takeOverConflict": "{{name}} 已移至「{{device}}」續行",
       "takeOverOffline": "連不上伺服器，暫不能於此機續之",
       "takeOverFailed": "未能於此機接手 {{name}}",
+      "localCindyConflict": "接手之機已有另一 Cindy。請於其設定中處置，或另擇主力電腦",
+      "localCindyConflictAction": "查看本機 Cindy 設定",
       "notEnabled": "今之伺服器不支援更換主機",
       "readOnlyNote": "此乃雲端所存之言談，僅可觀覽",
       "empty": "雲端寂寂，尚無言談",

@@ -1926,6 +1926,15 @@
     },
     "remote": {
       "title": "Máquinas remotas",
+      "hostKeyError": {
+        "missing": "La verificación de la clave de host SSH no está configurada. Conexión rechazada.",
+        "read": "Cindy no pudo leer las claves de host de confianza: {{reason}}. Conexión rechazada.",
+        "write": "Cindy no pudo guardar la clave de host de confianza: {{reason}}. Conexión rechazada.",
+        "mismatch": "La clave de host de {{host}} cambió ({{fingerprint}}) y ya no coincide con la huella digital en la que Cindy confiaba. Puede que el servidor se haya reinstalado o que se trate de un ataque de intermediario (man-in-the-middle). Conexión rechazada.",
+        "file": "Archivo de claves de host de confianza:\n{{filePath}}",
+        "repair": "Cindy no lee ~/.ssh/known_hosts. La huella digital anterior está guardada en:\n{{filePath}}\nLa clave de la entrada es \"{{host}}\".\nSi ya comprobó que este cambio es de confianza, cierre Cindy, elimine solo esta entrada, conserve el archivo y los demás hosts, y vuelva a conectarse. La nueva huella digital se guardará en la primera conexión. No elimine el archivo completo.",
+        "verifyChange": "Confirme el cambio con el administrador del servidor antes de actualizar el registro de claves de host de confianza."
+      },
       "footnote": "Fase A: solo administración de conexiones SSH. Una actualización posterior permitirá ejecutar Agents en la computadora remota.",
       "viaAuth": "vía {{label}}",
       "readOnlyFromSshConfig": "Los detalles de conexión provienen de la configuración SSH.",
@@ -11801,6 +11810,8 @@
       "takeOverConflict": "{{name}} ya se trasladó a “{{device}}”",
       "takeOverOffline": "No se puede conectar con el servidor, por lo que {{name}} no puede continuar aquí en este momento",
       "takeOverFailed": "No se pudo tomar el control de {{name}} en esta computadora",
+      "localCindyConflict": "La computadora que toma el relevo ya tiene otra Cindy. Adminístrala en sus ajustes o elige otra computadora principal",
+      "localCindyConflictAction": "Abrir ajustes de la Cindy local",
       "notEnabled": "Este servidor no admite cambiar la computadora principal",
       "readOnlyNote": "Esta conversación está guardada en la nube y es de solo lectura",
       "empty": "Aún no hay ninguna conversación en la nube",

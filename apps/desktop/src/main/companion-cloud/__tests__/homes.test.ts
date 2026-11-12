@@ -1,11 +1,22 @@
 import { describe, expect, it, vi } from 'vitest';
-import { companionSnapshot, createCompanionHomeRegistry, registerCompanionHomes } from '../homes.js';
+import { companionSnapshot, createCompanionHomeRegistry, inactiveCompanionCopyIds, registerCompanionHomes } from '../homes.js';
 import { fakeApi, rejection } from './fakes.js';
 
 const bot = (id: string, externalId: string, homeDeviceId: string | null) =>
   ({ id, kind: 'bot', externalId, name: externalId, homeDeviceId });
 
 describe('companion home registry', () => {
+  // #9960: only already shadowed copies with no local home can release the Cindy slot.
+  // Plain cloud absence, disabled cloud support and a pending local restoration are not proof.
+  it('distinguishes inactive old copies from a Cindy still reserved on this computer', () => {
+    const view = companionSnapshot({ enabled: true, selfDeviceId: 'self', humanActorId: 'human',
+      actors: [bot('remote', 'remote', 'other'), bot('local', 'local', 'self'), bot('pending', 'pending', null)],
+      demotedBotIds: ['orphan', 'remote', 'local', 'pending'] });
+    expect(inactiveCompanionCopyIds(view)).toEqual(['orphan', 'remote']);
+    expect(inactiveCompanionCopyIds({ ...view, demotedBotIds: [] })).toEqual([]);
+    expect(inactiveCompanionCopyIds({ ...view, enabled: false })).toEqual([]);
+    expect(inactiveCompanionCopyIds({ ...view, selfDeviceId: null })).toEqual([]);
+  });
   it('treats disabled, unhomed and own companions as home here', () => {
     const homes = createCompanionHomeRegistry();
     expect(homes.isHomeHere('a')).toBe(true);
