@@ -18,6 +18,9 @@ import {
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
+import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
+import { declaredGhostControlPoints } from '../../../../shared/ghost';
+import { isRuntimePluginPoint } from '../../../../shared/pluginRuntime';
 import { sharedTaskErrorKey } from '@/features/device-link/sharedTaskCompatibility';
 import {
   DropdownMenuContent,
@@ -205,6 +208,10 @@ function ActiveSessionTaskMenu({
   const archived = session.status === 'archived';
   const empty = isEmptyDraftSession(session);
   const ownerActionsBlocked = writeBlocked || guest;
+  const showRuntimePlugins = !session.deviceLinkDeviceId && (
+    session.runtimePluginsSelected === true || readInstalledGhostsSnapshot().some(ghost =>
+      declaredGhostControlPoints(ghost.manifest).some(isRuntimePluginPoint))
+  );
   const pluginActions = !guest && !session.deviceLinkDeviceId ? readPluginUiEntries('session.menu') : [];
   const item = (key: string, action: () => void, disabled = false) => (
     <DropdownMenuItem className={MENU_ITEM_CLASS} disabled={disabled} onSelect={action}>
@@ -254,7 +261,7 @@ function ActiveSessionTaskMenu({
               </DropdownMenuItem>
             )}
             {tags}
-            {!session.deviceLinkDeviceId && <DropdownMenuItem className={MENU_ITEM_CLASS}
+            {showRuntimePlugins && <DropdownMenuItem className={MENU_ITEM_CLASS}
               disabled={ownerActionsBlocked} onSelect={() => setDialog({ kind: 'runtime-plugins' })}>
               {t('runtimePlugins.title')}
             </DropdownMenuItem>}

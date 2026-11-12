@@ -6,8 +6,11 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { syncBuiltinESMExports } from 'node:module';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { setImmediate as nextTurn } from 'node:timers/promises';
+import { _electron } from 'playwright-core';
 import { runPlan } from './run.mjs';
 import { adhocPage } from './registry.mjs';
 import { parseOptions, variantsFor } from './options.mjs';
@@ -280,7 +283,21 @@ mountPage({
 // CSS pixel, and hidden windows could not capture a frame. Drive the real CLI
 // across sizes/themes and inspect PNG dimensions; existing failure tests do not
 // verify resizing. Dedicated Electron integration tier, not default unit tests.
-test('captures exact viewports and overviews in a hidden Electron window', async () => {
+test('captures exact viewports and overviews in a hidden Electron window', async (t) => {
+  // #10254: closeMs must include every process, not just the final cleanup.
+  // Measure real shutdowns at the process boundary; no artificial timing delay.
+  const shutdowns = [];
+  const launch = _electron.launch.bind(_electron);
+  t.mock.method(_electron, 'launch', async (options) => {
+    const runtime = await launch(options);
+    const close = runtime.close.bind(runtime);
+    t.mock.method(runtime, 'close', async () => {
+      const started = performance.now();
+      try { return await close(); }
+      finally { shutdowns.push(performance.now() - started); }
+    });
+    return runtime;
+  });
   const file = await entry('viewport', 'mountPage({ render: () => <div>Viewport ready</div> });');
   const options = parseOptions([
     '--entry',
@@ -296,11 +313,27 @@ test('captures exact viewports and overviews in a hidden Electron window', async
   const definition = adhocPage(file);
   // Integration regression: region capture changes CDP viewport size. It must not
   // leak into the next variant, even when a scenario fails after changing it.
+  // #10177's broad UI run also exposed context-wide clock/init-script leakage:
+  // a new Electron window alone cannot isolate later sandboxed mail/PR frames.
   definition.check = async (page, ui) => {
     if (ui.theme === 'light' && ui.viewport.width === 560) {
       await page.setViewportSize({ width: 700, height: 500 });
+      await page.clock.install({ time: 0 });
+      await page.context().addInitScript(() => { window.contextLeak = true; });
+      await page.evaluate(() => localStorage.setItem('context-leak', 'present'));
       throw new Error('intentional scenario failure after resizing');
     }
+    assert.equal(await page.evaluate(() => window.contextLeak), undefined);
+    assert.equal(await page.evaluate(() => localStorage.getItem('context-leak')), null);
+    assert.ok(Math.abs(await page.evaluate(() => Date.now()) - Date.now()) < 10000,
+      'the next variant uses the real clock');
+    await page.evaluate(() => {
+      const frame = document.createElement('iframe');
+      frame.setAttribute('sandbox', 'allow-same-origin');
+      frame.srcdoc = '<p>Sandbox ready</p>';
+      document.body.append(frame);
+    });
+    await page.frameLocator('iframe').getByText('Sandbox ready').waitFor();
     // Real HTML fullscreen must resolve on the isolated test origin. Media
     // permission remains denied; enabling fullscreen is not a general grant.
     await page.locator('#root').evaluate((el) => el.requestFullscreen());
@@ -334,6 +367,98 @@ test('captures exact viewports and overviews in a hidden Electron window', async
   assert.ok(summary.overviews.length);
   for (const overview of summary.overviews) assert.ok(existsSync(overview));
   assert.equal(summary.cleanup.scratchRemoved, true);
+  assert.ok(shutdowns.length > 1);
+  assert.ok(summary.timings.closeMs >= Math.floor(shutdowns.reduce((a, b) => a + b, 0)) - shutdowns.length,
+    'closeMs includes all real Electron shutdowns, allowing per-measurement rounding');
+});
+
+// #10254: previous interrupt tests only stopped an already-published runtime.
+// Hold the second real launch's result at the asynchronous process boundary;
+// runPlan must not finish/delete its profile while that owned process is pending.
+// Dedicated Electron E2E tier: a controlled Node clock advances timeout/settling
+// deadlines while process launch, IPC and filesystem cleanup remain real.
+test('timeout and interrupt wait for an in-flight Electron relaunch', async (t) => {
+  for (const mode of ['interrupt', 'timeout']) {
+    const file = await entry(`relaunch-${mode}`, 'mountPage({ render: () => <div>Ready</div> });');
+    const options = parseOptions(['--entry', file, '--theme', 'all', '--json']);
+    const definition = adhocPage(file);
+    const controller = new AbortController();
+    const held = Promise.withResolvers();
+    const gate = Promise.withResolvers();
+    const runtimes = [];
+    const children = [];
+    let clockActive = false;
+    const resetClock = () => {
+      if (!clockActive) return;
+      t.mock.timers.reset();
+      syncBuiltinESMExports();
+      clockActive = false;
+    };
+    let checks = 0;
+    definition.check = async () => {
+      checks++;
+      if (checks !== 1) return;
+      // The first variant already has a native deadline. Keep its cancellation
+      // working when the next variant switches to controlled numeric timer IDs.
+      const clearNative = globalThis.clearTimeout;
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+      clockActive = true;
+      syncBuiltinESMExports();
+      const clearControlled = globalThis.clearTimeout;
+      globalThis.clearTimeout = timer => typeof timer === 'object'
+        ? clearNative(timer) : clearControlled(timer);
+    };
+    const launch = _electron.launch.bind(_electron);
+    const mocked = t.mock.method(_electron, 'launch', async (launchOptions) => {
+      const runtime = await launch(launchOptions);
+      runtimes.push(runtime);
+      children.push(runtime.process());
+      if (runtimes.length === 2) {
+        held.resolve(launchOptions.env.CINDY_UI_PROFILE);
+        await gate.promise;
+      }
+      return runtime;
+    });
+    const running = runPlan(
+      { pages: [{ definition, variants: variantsFor(definition, options) }] }, options, controller.signal,
+    );
+    let finished = false;
+    void running.then(() => { finished = true; });
+    try {
+      const profile = await Promise.race([
+        held.promise,
+        running.then(() => { throw new Error('run ended before the second launch'); }),
+      ]);
+      if (mode === 'interrupt') controller.abort(new Error('selftest interrupt during relaunch'));
+      else t.mock.timers.tick(options.timeout);
+      await nextTurn();
+      t.mock.timers.tick(Math.min(options.timeout, 10000) + 2000);
+      await nextTurn();
+      assert.equal(finished, false, 'cleanup waits for the owned in-flight launch');
+      assert.ok(existsSync(profile), 'the live process keeps its profile until shutdown');
+      resetClock();
+      gate.resolve();
+      const summary = await running;
+      assert.equal(summary.status, 'failed');
+      assert.equal(summary.variants.length, 2, 'no later variant or overview starts');
+      assert.equal(checks, 1, 'the abandoned launch cannot execute its scenario');
+      assert.equal(summary.cleanup.runtimeClosed, true);
+      assert.equal(summary.cleanup.scratchRemoved, true);
+      assert.equal(existsSync(profile), false);
+      for (const child of children) {
+        assert.ok(child.exitCode !== null || child.signalCode !== null, `Electron ${child.pid} exited`);
+      }
+      t.diagnostic(JSON.stringify({ mode, pids: children.map(child => child.pid), cleanup: summary.cleanup }));
+    } finally {
+      // The red regression must also close the real process it deliberately withheld.
+      resetClock();
+      controller.abort();
+      gate.resolve();
+      await running;
+      await Promise.all(runtimes.map(runtime => runtime.close().catch(() => {})));
+      mocked.mock.restore();
+    }
+  }
 });
 
 // Scenario-only controls (e.g. "Finish fixture") showed up in PR screenshots. Captures hide

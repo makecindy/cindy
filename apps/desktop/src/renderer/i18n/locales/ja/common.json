@@ -8250,7 +8250,91 @@
         "mcpAppOnly": "ページ専用",
         "uiPageAccess": "ページ：{{pages}}、ドメイン：{{domains}}、ページから呼び出せるツール：{{tools}}",
         "uiHost": "Cindy に画面とホスト操作を追加",
-        "uiHostAccess": "{{subject}}: {{access}}"
+        "uiHostAccess": "{{subject}}: {{access}}",
+        "hostUi": {
+          "view": "リソース「{{name}}」で{{scope}}ページを表示する",
+          "resource": "{{kind}}リソース「{{name}}」を使用する",
+          "contribution": "{{position}}に{{kind}}を表示する",
+          "command": "プラグインのコマンドを提供する",
+          "namedAccess": "「{{name}}」：{{details}}",
+          "setting": "設定項目を提供（{{type}}）",
+          "settingTypes": {
+            "boolean": "オン／オフ",
+            "string": "テキスト",
+            "number": "数値"
+          },
+          "minimum": "最小値：{{value}}",
+          "maximum": "最大値：{{value}}",
+          "maxLength": "最大文字数：{{value}}",
+          "extensions": "許可する拡張子：{{value}}",
+          "mimeTypes": "許可するファイル形式：{{value}}",
+          "trigger": "補完の開始文字：{{value}}",
+          "openView": "ページ「{{name}}」を開く",
+          "tool": "ツール「{{name}}」を実行する",
+          "arguments": "パラメーター：{{value}}",
+          "listValue": "リスト [{{value}}]",
+          "fieldsValue": "項目 ({{value}})",
+          "nullValue": "値なし",
+          "shortcut": "ショートカット：{{value}}",
+          "popover": "入口の横にページを開く",
+          "roles": "対象のメッセージ送信者：{{value}}",
+          "tools": "対象のツール：{{value}}",
+          "plugins": "対象のプラグイン：{{value}}",
+          "options": "選択できる値：{{value}}",
+          "yes": "はい",
+          "no": "いいえ",
+          "unavailable": "この権限の詳細を表示できません",
+          "capabilities": {
+            "context": "現在のタスクと選択したテキストを読み取る",
+            "draft": "入力欄の下書きを読み書きする",
+            "appearance": "宣言された外観設定を変更する",
+            "visibility": "ウィンドウと宣言された画面領域を表示・非表示にする"
+          },
+          "fields": {
+            "uiFont": "画面のフォントを変更する",
+            "codeFont": "コードのフォントを変更する",
+            "bodyFont": "本文のフォントを変更する",
+            "wallpaper": "壁紙を変更する",
+            "theme": "メッセージの配色を変更する",
+            "reading": "本文の幅と行間を変更する",
+            "contentStyle": "メッセージの間隔と吹き出しを変更する"
+          },
+          "positions": {
+            "composer_toolbar": "入力欄のツールバー",
+            "session_header": "タスクのヘッダー",
+            "statusbar": "ステータスバー",
+            "message_actions": "メッセージの操作バー",
+            "message_menu": "メッセージのその他メニュー",
+            "turn_footer": "返信の下部",
+            "message_body": "メッセージの本文",
+            "tool_body": "ツールの結果",
+            "sidebar_navigation": "サイドバーナビゲーション",
+            "session_menu": "タスクメニュー",
+            "settings_section": "設定ページ",
+            "composer_completion": "入力補完",
+            "composer_attachment": "添付ファイルの操作",
+            "sidebar_section": "サイドバーのコンテンツ",
+            "window_titlebar": "ウィンドウのタイトルバー"
+          },
+          "kinds": {
+            "button": "ボタン",
+            "select": "選択リスト",
+            "status": "状態テキスト"
+          },
+          "scopes": {
+            "global": "グローバル",
+            "task": "現在のタスクの"
+          },
+          "resources": {
+            "font": "フォント",
+            "image": "画像",
+            "video": "動画"
+          },
+          "speakers": {
+            "user": "ユーザー",
+            "assistant": "アシスタント"
+          }
+        }
       },
       "connections": {
         "confirmTitle": "接続先の追加",
@@ -11822,6 +11906,8 @@
       "takeOverConflict": "{{name}} はすでに「{{device}}」に移っています",
       "takeOverOffline": "サーバーに接続できないため、今はこのパソコンで続けられません",
       "takeOverFailed": "このパソコンで {{name}} を引き継げませんでした",
+      "profileIdentityTooLong": "クラウドの人格情報が {{limit}} 文字を超えているため、引き継げません。内容を短くして同期した後、再試行してください。既存のデータは保持されています。",
+      "profileUserTooLong": "クラウドのユーザー情報が {{limit}} 文字を超えているため、引き継げません。内容を短くして同期した後、再試行してください。既存のデータは保持されています。",
       "localCindyConflict": "引き継ぎ先のコンピューターには別の Cindy がいます。その Cindy の設定で管理するか、別のメインコンピューターを選んでください",
       "localCindyConflictAction": "このコンピューターの Cindy の設定を開く",
       "notEnabled": "このサーバーはメインのパソコンの変更に対応していません",
@@ -11888,7 +11974,20 @@
       "transferred": "{{name}} を「{{device}}」に移しました",
       "transferConflict": "{{name}} のメインのパソコンはすでに変わっているため、移しませんでした",
       "transferOffline": "サーバーに接続できません。{{name}} は引き続きこのパソコンで動作します",
-      "transferFailed": "{{name}} を「{{device}}」に移せませんでした"
+      "transferFailed": "{{name}} を「{{device}}」に移せませんでした",
+      "repair": {
+        "action": "資料を編集して再試行",
+        "title": "仲間の資料を修正",
+        "description": "保存すると、このコンピューターで仲間を復元します。元の資料は先にこのコンピューターにバックアップされます。",
+        "save": "保存して復元",
+        "count": "{{count}} / {{limit}} 文字",
+        "over": "{{count}} 文字超過しています。短くしてから保存してください。",
+        "changed": "資料またはメインコンピューターが変更されました。再読み込みして修正してください。",
+        "loadFailed": "資料を読み込めませんでした。再試行してください。",
+        "backupFailed": "元の資料をバックアップできず、修正は適用されていません。ディスクの空き容量を確認して再試行してください。",
+        "saveFailed": "仲間はまだ復元されていません。編集内容はここに残っています。再試行してください。",
+        "reload": "再読み込み"
+      }
     },
     "market": {
       "heading": "仲間を探す",

@@ -8221,6 +8221,90 @@
         "uiPageAccess": "頁面：{{pages}}；網域：{{domains}}；頁面可召之工具：{{tools}}",
         "uiHost": "於 Cindy 提供介面及宿主操作",
         "uiHostAccess": "{{subject}}：{{access}}",
+        "hostUi": {
+          "view": "顯示{{scope}}頁面，使用資源「{{name}}」",
+          "resource": "使用{{kind}}資源「{{name}}」",
+          "contribution": "在{{position}}顯示{{kind}}",
+          "command": "提供法器命令",
+          "namedAccess": "「{{name}}」：{{details}}",
+          "setting": "提供設定項（{{type}}）",
+          "settingTypes": {
+            "boolean": "開關",
+            "string": "文字",
+            "number": "數字"
+          },
+          "minimum": "最小值：{{value}}",
+          "maximum": "最大值：{{value}}",
+          "maxLength": "最多字元數：{{value}}",
+          "extensions": "接受的副檔名：{{value}}",
+          "mimeTypes": "接受的檔案類型：{{value}}",
+          "trigger": "補全觸發字元：{{value}}",
+          "openView": "開啟頁面「{{name}}」",
+          "tool": "呼叫工具「{{name}}」",
+          "arguments": "參數：{{value}}",
+          "listValue": "清單 [{{value}}]",
+          "fieldsValue": "欄位 ({{value}})",
+          "nullValue": "未設定",
+          "shortcut": "快捷鍵：{{value}}",
+          "popover": "在入口旁開啟頁面",
+          "roles": "適用訊息來源：{{value}}",
+          "tools": "適用工具：{{value}}",
+          "plugins": "適用法器：{{value}}",
+          "options": "可選值：{{value}}",
+          "yes": "是",
+          "no": "否",
+          "unavailable": "暫時無法顯示這項權限的詳情",
+          "capabilities": {
+            "context": "讀取目前任務與選取文字",
+            "draft": "讀寫輸入框草稿",
+            "appearance": "修改已宣告的外觀設定",
+            "visibility": "顯示或隱藏視窗與已宣告的介面區域"
+          },
+          "fields": {
+            "uiFont": "修改介面字型",
+            "codeFont": "修改程式碼字型",
+            "bodyFont": "修改正文字型",
+            "wallpaper": "修改桌布",
+            "theme": "修改訊息配色",
+            "reading": "修改閱讀寬度與行距",
+            "contentStyle": "修改訊息間距與氣泡樣式"
+          },
+          "positions": {
+            "composer_toolbar": "輸入框工具列",
+            "session_header": "任務標題列",
+            "statusbar": "狀態列",
+            "message_actions": "訊息操作列",
+            "message_menu": "訊息更多選單",
+            "turn_footer": "回覆底部",
+            "message_body": "訊息正文",
+            "tool_body": "工具結果",
+            "sidebar_navigation": "側邊導覽列",
+            "session_menu": "任務選單",
+            "settings_section": "設定頁面",
+            "composer_completion": "輸入補全入口",
+            "composer_attachment": "附件操作區",
+            "sidebar_section": "側欄內容區",
+            "window_titlebar": "視窗標題列"
+          },
+          "kinds": {
+            "button": "按鈕",
+            "select": "下拉選項",
+            "status": "狀態文字"
+          },
+          "scopes": {
+            "global": "全域",
+            "task": "目前任務"
+          },
+          "resources": {
+            "font": "字型",
+            "image": "圖片",
+            "video": "影片"
+          },
+          "speakers": {
+            "user": "使用者",
+            "assistant": "助手"
+          }
+        },
         "subscribeRoutineRun": "可於君所擇之同伴例行差事運行前行檢",
         "subscribeRoutineRunDetail": "凡於「預檢」擇之之例行差事，每番觸發必先詢之。其可見差事之指令与觸發事件之內容，可令此番略過或止之，不能代君准允。",
         "subscribeScheduleRun": "可於君所擇之自動化運行前行檢",
@@ -11822,6 +11906,8 @@
       "takeOverConflict": "{{name}} 已移至「{{device}}」續行",
       "takeOverOffline": "連不上伺服器，暫不能於此機續之",
       "takeOverFailed": "未能於此機接手 {{name}}",
+      "profileIdentityTooLong": "雲端人格資料逾 {{limit}} 字元，未能接手。請縮短資料並同步後再試；原有資料皆存。",
+      "profileUserTooLong": "雲端使用者資料逾 {{limit}} 字元，未能接手。請縮短資料並同步後再試；原有資料皆存。",
       "localCindyConflict": "接手之機已有另一 Cindy。請於其設定中處置，或另擇主力電腦",
       "localCindyConflictAction": "查看本機 Cindy 設定",
       "notEnabled": "今之伺服器不支援更換主機",
@@ -11888,7 +11974,20 @@
       "transferred": "{{name}} 已交予「{{device}}」",
       "transferConflict": "{{name}} 之主機已變，此番未交",
       "transferOffline": "連不上伺服器，{{name}} 仍行於此機",
-      "transferFailed": "未能將 {{name}} 交予「{{device}}」"
+      "transferFailed": "未能將 {{name}} 交予「{{device}}」",
+      "repair": {
+        "action": "改資料再試",
+        "title": "更正夥伴資料",
+        "description": "存後於此機恢復夥伴，原資料先備份於此。",
+        "save": "存並恢復",
+        "count": "{{count}} / {{limit}} 字",
+        "over": "超 {{count}} 字，請刪簡後存。",
+        "changed": "資料或主力電腦已變，請重讀後更正。",
+        "loadFailed": "資料暫不可讀，請再試。",
+        "backupFailed": "原資料備份未成，更正未用。請查磁碟餘量後再試。",
+        "saveFailed": "夥伴未恢復，所改仍存於此，請稍後再試。",
+        "reload": "重新讀取"
+      }
     },
     "market": {
       "heading": "訪同伴",

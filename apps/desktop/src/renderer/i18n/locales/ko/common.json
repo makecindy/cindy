@@ -8250,7 +8250,91 @@
         "mcpAppOnly": "페이지 전용",
         "uiPageAccess": "페이지: {{pages}}; 도메인: {{domains}}; 페이지에서 호출할 수 있는 도구: {{tools}}",
         "uiHost": "Cindy에 인터페이스 및 호스트 작업 제공",
-        "uiHostAccess": "{{subject}}: {{access}}"
+        "uiHostAccess": "{{subject}}: {{access}}",
+        "hostUi": {
+          "view": "“{{name}}” 리소스로 {{scope}} 페이지 표시",
+          "resource": "{{kind}} 리소스 “{{name}}” 사용",
+          "contribution": "{{position}}에 {{kind}} 표시",
+          "command": "플러그인 명령 제공",
+          "namedAccess": "“{{name}}”: {{details}}",
+          "setting": "설정 항목 제공({{type}})",
+          "settingTypes": {
+            "boolean": "켜기/끄기",
+            "string": "텍스트",
+            "number": "숫자"
+          },
+          "minimum": "최솟값: {{value}}",
+          "maximum": "최댓값: {{value}}",
+          "maxLength": "최대 문자 수: {{value}}",
+          "extensions": "허용된 파일 확장자: {{value}}",
+          "mimeTypes": "허용된 파일 형식: {{value}}",
+          "trigger": "자동 완성 접두사: {{value}}",
+          "openView": "“{{name}}” 페이지 열기",
+          "tool": "“{{name}}” 도구 실행",
+          "arguments": "매개변수: {{value}}",
+          "listValue": "목록 [{{value}}]",
+          "fieldsValue": "필드 ({{value}})",
+          "nullValue": "값 없음",
+          "shortcut": "단축키: {{value}}",
+          "popover": "항목 옆에 페이지 열기",
+          "roles": "메시지 작성자: {{value}}",
+          "tools": "대상 도구: {{value}}",
+          "plugins": "대상 플러그인: {{value}}",
+          "options": "선택 가능한 값: {{value}}",
+          "yes": "예",
+          "no": "아니요",
+          "unavailable": "이 권한의 세부 정보를 표시할 수 없습니다",
+          "capabilities": {
+            "context": "현재 작업과 선택한 텍스트 읽기",
+            "draft": "입력창 초안 읽기 및 편집",
+            "appearance": "선언된 모양 설정 변경",
+            "visibility": "창 및 선언된 화면 영역 표시 또는 숨기기"
+          },
+          "fields": {
+            "uiFont": "화면 글꼴 변경",
+            "codeFont": "코드 글꼴 변경",
+            "bodyFont": "본문 글꼴 변경",
+            "wallpaper": "배경화면 변경",
+            "theme": "메시지 색상 변경",
+            "reading": "읽기 너비 및 줄 간격 변경",
+            "contentStyle": "메시지 간격 및 말풍선 모양 변경"
+          },
+          "positions": {
+            "composer_toolbar": "입력창 도구 모음",
+            "session_header": "작업 머리글",
+            "statusbar": "상태 표시줄",
+            "message_actions": "메시지 작업 모음",
+            "message_menu": "메시지 더보기 메뉴",
+            "turn_footer": "답변 하단",
+            "message_body": "메시지 본문",
+            "tool_body": "도구 결과",
+            "sidebar_navigation": "사이드바 탐색",
+            "session_menu": "작업 메뉴",
+            "settings_section": "설정 페이지",
+            "composer_completion": "입력 자동 완성",
+            "composer_attachment": "첨부 파일 작업",
+            "sidebar_section": "사이드바 콘텐츠",
+            "window_titlebar": "창 제목 표시줄"
+          },
+          "kinds": {
+            "button": "버튼",
+            "select": "선택 목록",
+            "status": "상태 텍스트"
+          },
+          "scopes": {
+            "global": "전역",
+            "task": "현재 작업"
+          },
+          "resources": {
+            "font": "글꼴",
+            "image": "이미지",
+            "video": "동영상"
+          },
+          "speakers": {
+            "user": "사용자",
+            "assistant": "어시스턴트"
+          }
+        }
       },
       "connections": {
         "confirmTitle": "연결 주소 추가",
@@ -11822,6 +11906,8 @@
       "takeOverConflict": "{{name}}은(는) 이미 '{{device}}'(으)로 옮겨졌습니다",
       "takeOverOffline": "서버에 연결할 수 없어 지금은 이 컴퓨터에서 계속할 수 없습니다",
       "takeOverFailed": "이 컴퓨터에서 {{name}}을(를) 이어받지 못했습니다",
+      "profileIdentityTooLong": "클라우드의 성격 정보가 {{limit}}자를 초과하여 가져올 수 없습니다. 내용을 줄이고 동기화한 후 다시 시도하세요. 기존 데이터는 보존되었습니다.",
+      "profileUserTooLong": "클라우드의 사용자 정보가 {{limit}}자를 초과하여 가져올 수 없습니다. 내용을 줄이고 동기화한 후 다시 시도하세요. 기존 데이터는 보존되었습니다.",
       "localCindyConflict": "인계받을 컴퓨터에 이미 다른 Cindy가 있습니다. 해당 Cindy의 설정에서 관리하거나 다른 주 컴퓨터를 선택하세요",
       "localCindyConflictAction": "이 컴퓨터의 Cindy 설정 열기",
       "notEnabled": "이 서버는 주 컴퓨터 변경을 지원하지 않습니다",
@@ -11888,7 +11974,20 @@
       "transferred": "{{name}}을(를) '{{device}}'(으)로 옮겼습니다",
       "transferConflict": "{{name}}의 주 컴퓨터가 이미 바뀌어 옮기지 않았습니다",
       "transferOffline": "서버에 연결할 수 없습니다. {{name}}은(는) 계속 이 컴퓨터에서 실행됩니다",
-      "transferFailed": "{{name}}을(를) '{{device}}'(으)로 옮기지 못했습니다"
+      "transferFailed": "{{name}}을(를) '{{device}}'(으)로 옮기지 못했습니다",
+      "repair": {
+        "action": "자료 수정 후 다시 시도",
+        "title": "동료 자료 수정",
+        "description": "저장하면 이 컴퓨터에서 동료를 복원합니다. 원본 자료는 먼저 이 컴퓨터에 백업됩니다.",
+        "save": "저장하고 복원",
+        "count": "{{count}} / {{limit}}자",
+        "over": "{{count}}자 초과했습니다. 내용을 줄인 후 저장하세요.",
+        "changed": "자료 또는 주 컴퓨터가 변경되었습니다. 다시 읽은 후 수정하세요.",
+        "loadFailed": "자료를 읽지 못했습니다. 다시 시도하세요.",
+        "backupFailed": "원본 자료를 백업하지 못해 수정 사항을 적용하지 않았습니다. 디스크 여유 공간을 확인하고 다시 시도하세요.",
+        "saveFailed": "동료가 아직 복원되지 않았습니다. 수정 내용은 여기에 남아 있습니다. 다시 시도하세요.",
+        "reload": "다시 읽기"
+      }
     },
     "market": {
       "heading": "동반자 찾기",

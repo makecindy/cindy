@@ -8365,7 +8365,91 @@
         "mcpAppOnly": "Somente página",
         "uiPageAccess": "Páginas: {{pages}}; domínios: {{domains}}; ferramentas disponíveis para as páginas: {{tools}}",
         "uiHost": "Fornecer interfaces e ações do host no Cindy",
-        "uiHostAccess": "{{subject}}: {{access}}"
+        "uiHostAccess": "{{subject}}: {{access}}",
+        "hostUi": {
+          "view": "Mostrar uma página {{scope}} com “{{name}}”",
+          "resource": "Usar o recurso de {{kind}} “{{name}}”",
+          "contribution": "Mostrar um elemento do tipo {{kind}} em {{position}}",
+          "command": "Oferecer um comando do plugin",
+          "namedAccess": "“{{name}}”: {{details}}",
+          "setting": "Oferecer uma configuração ({{type}})",
+          "settingTypes": {
+            "boolean": "Ativado/desativado",
+            "string": "Texto",
+            "number": "Número"
+          },
+          "minimum": "Mínimo: {{value}}",
+          "maximum": "Máximo: {{value}}",
+          "maxLength": "Máximo de caracteres: {{value}}",
+          "extensions": "Extensões de arquivo permitidas: {{value}}",
+          "mimeTypes": "Tipos de arquivo permitidos: {{value}}",
+          "trigger": "Prefixo de preenchimento automático: {{value}}",
+          "openView": "Abrir a página “{{name}}”",
+          "tool": "Executar a ferramenta “{{name}}”",
+          "arguments": "Parâmetros: {{value}}",
+          "listValue": "Lista [{{value}}]",
+          "fieldsValue": "Campos ({{value}})",
+          "nullValue": "Sem valor",
+          "shortcut": "Atalho: {{value}}",
+          "popover": "Abrir a página ao lado da entrada",
+          "roles": "Mensagens de: {{value}}",
+          "tools": "Ferramentas: {{value}}",
+          "plugins": "Plugins: {{value}}",
+          "options": "Valores disponíveis: {{value}}",
+          "yes": "Sim",
+          "no": "Não",
+          "unavailable": "Os detalhes desta permissão não estão disponíveis",
+          "capabilities": {
+            "context": "Ler a tarefa atual e o texto selecionado",
+            "draft": "Ler e editar o rascunho da mensagem",
+            "appearance": "Alterar as configurações de aparência declaradas",
+            "visibility": "Mostrar ou ocultar a janela e as áreas de interface declaradas"
+          },
+          "fields": {
+            "uiFont": "Alterar a fonte da interface",
+            "codeFont": "Alterar a fonte do código",
+            "bodyFont": "Alterar a fonte das mensagens",
+            "wallpaper": "Alterar o papel de parede",
+            "theme": "Alterar as cores das mensagens",
+            "reading": "Alterar a largura de leitura e o espaçamento entre linhas",
+            "contentStyle": "Alterar o espaçamento das mensagens e os balões"
+          },
+          "positions": {
+            "composer_toolbar": "barra de ferramentas de entrada",
+            "session_header": "cabeçalho da tarefa",
+            "statusbar": "barra de status",
+            "message_actions": "barra de ações da mensagem",
+            "message_menu": "menu Mais da mensagem",
+            "turn_footer": "rodapé da resposta",
+            "message_body": "corpo da mensagem",
+            "tool_body": "resultado da ferramenta",
+            "sidebar_navigation": "navegação lateral",
+            "session_menu": "menu da tarefa",
+            "settings_section": "página de configurações",
+            "composer_completion": "preenchimento automático",
+            "composer_attachment": "ações de anexos",
+            "sidebar_section": "seção lateral",
+            "window_titlebar": "barra de título da janela"
+          },
+          "kinds": {
+            "button": "botão",
+            "select": "lista de seleção",
+            "status": "texto de status"
+          },
+          "scopes": {
+            "global": "global",
+            "task": "da tarefa atual"
+          },
+          "resources": {
+            "font": "fonte",
+            "image": "imagem",
+            "video": "vídeo"
+          },
+          "speakers": {
+            "user": "Usuário",
+            "assistant": "Assistente"
+          }
+        }
       },
       "connections": {
         "confirmTitle": "Adicionar endereço de conexão",
@@ -11966,6 +12050,8 @@
       "takeOverConflict": "{{name}} já foi transferido para “{{device}}”",
       "takeOverOffline": "Não foi possível acessar o servidor, então {{name}} não pode continuar aqui agora",
       "takeOverFailed": "Não foi possível assumir {{name}} neste computador",
+      "profileIdentityTooLong": "A personalidade na nuvem excede {{limit}} caracteres e não pode ser restaurada. Encurte-a, sincronize-a e tente novamente. Os dados existentes foram preservados.",
+      "profileUserTooLong": "O contexto do usuário na nuvem excede {{limit}} caracteres e não pode ser restaurado. Encurte-o, sincronize-o e tente novamente. Os dados existentes foram preservados.",
       "localCindyConflict": "O computador que assume já tem outra Cindy. Gerencie essa Cindy nas configurações dela ou escolha outro computador principal",
       "localCindyConflictAction": "Abrir configurações da Cindy local",
       "notEnabled": "Este servidor não permite alterar o computador principal",
@@ -12032,7 +12118,20 @@
       "transferred": "{{name}} foi transferido para “{{device}}”",
       "transferConflict": "O computador principal de {{name}} já mudou, por isso a transferência não foi feita",
       "transferOffline": "Não foi possível acessar o servidor. {{name}} continua funcionando neste computador",
-      "transferFailed": "Não foi possível transferir {{name}} para “{{device}}”"
+      "transferFailed": "Não foi possível transferir {{name}} para “{{device}}”",
+      "repair": {
+        "action": "Editar perfil e tentar novamente",
+        "title": "Corrigir perfil do companheiro",
+        "description": "Ao salvar, este companheiro será restaurado neste computador. Uma cópia do perfil original será salva aqui primeiro.",
+        "save": "Salvar e restaurar",
+        "count": "{{count}} / {{limit}} caracteres",
+        "over": "{{count}} caracteres acima do limite. Reduza o texto antes de salvar.",
+        "changed": "O perfil ou o computador principal mudou. Recarregue o perfil antes de editar.",
+        "loadFailed": "Não foi possível ler o perfil. Tente novamente.",
+        "backupFailed": "Não foi possível salvar uma cópia do perfil original. A correção não foi aplicada. Verifique o espaço livre e tente novamente.",
+        "saveFailed": "O companheiro ainda não foi restaurado. Suas alterações continuam aqui; tente novamente.",
+        "reload": "Recarregar"
+      }
     },
     "market": {
       "heading": "Descobrir amigos",
