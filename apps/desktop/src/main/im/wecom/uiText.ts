@@ -56,6 +56,18 @@ export const ui = {
       `🙏 暂时无法处理这条消息：\n${entries.map((entry) => `• ${entry.label}`).join('\n')}`,
     unsupportedNotice: (entries: IMUnsupportedEntry[]) =>
       `ℹ️ 以下内容未能处理：\n${entries.map((entry) => `• ${entry.label}`).join('\n')}\n\n其它内容将继续处理。`,
+    deliveryNotice: ({ status, unresolved, retrying }: {
+      status: 'durable' | 'failed';
+      unresolved: number;
+      retrying: number;
+    }) => {
+      if (status === 'failed') {
+        return '⚠️ 本轮输出未能送达，请稍后重试。';
+      }
+      return retrying > 0
+        ? `⚠️ 有 ${unresolved} 项内容尚未确认送达，会在网络恢复后自动补发。`
+        : `⚠️ 有 ${unresolved} 项内容未确认送达，不会自动重发；若未收到请重新发送。`;
+    },
   },
   cards: {
     permission: {
