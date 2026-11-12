@@ -12,12 +12,15 @@ import type { ChatLiveTaskCardRecord } from './chatServerWorkspaces.js';
  *
  * - the card itself follows the task's title, state and pull request (the same message, edited);
  * - each turn that ends in the task posts its reply into the card's Thread, the task's window in
- *   the group;
- * - and a short result in the main group, as a quote-reply to the request that names who asked.
+ *   the group.
  *
- * A card posted inside a Thread cannot root one of its own: its replies go to that Thread, name
- * who asked, and nothing goes to the main group. Everything is posted as the teammate that opened
- * the task, once per turn end, and survives a restart: what is still to post is kept with the card.
+ * The host does not report a result for the task. When the task sends word back to the task that
+ * opened it (`send_to_session`), that task's teammate answers as it sees fit, and its answer goes
+ * where the request was, as a quote-reply to the request that names who asked.
+ *
+ * A card posted inside a Thread cannot root one of its own: its replies and that answer go to that
+ * Thread. Everything is posted as the teammate that opened the task, once per turn end, and
+ * survives a restart: what is still to post is kept with the card.
  */
 export interface GroupTaskCardsDeps {
   current: () => boolean;
@@ -34,8 +37,8 @@ export interface GroupTaskCardsDeps {
   refusal: (error: unknown) => { final: boolean; retryAt?: number; gone: boolean };
   /** The task on this computer: `state` undefined while it has none yet; null once the task is gone. */
   readTask?: (taskId: string) => Promise<{ title: string; state?: BotGroupLiveTaskState; prUrl?: string } | null>;
-  /** A long reply as 1–3 sentences for the main group; null when none came back in time. */
-  condense?: (reply: string) => Promise<string | null>;
+  /** The task that sent the input a turn answered, when another task on this computer did. */
+  inputSender: (sessionId: string, inputClientId: string) => Promise<string | null>;
   /** The reply a finished turn stored, when its terminal carries no text. */
   storedReply: (sessionId: string, messageClientId: string) => Promise<string | null>;
   labels: () => BotGroupLiveTaskCardLabels;
@@ -49,12 +52,8 @@ const FOLLOW_MS = 7 * 24 * 60 * 60_000;
 const STARTING_MS = 120_000;
 /** A message that could not reach the group is retried with backoff, then dropped. */
 const POST_ATTEMPTS = 8;
-/** A one-paragraph reply this short is its own result in the main group. */
-const SHORT_RESULT_CHARS = 140;
 /** Turn ends a card remembers, so the same end seen again posts nothing again. */
 const TURNS_KEPT = 20;
-/** Results a card waits to write at most; an older one still unwritten is dropped. */
-const PENDING_RESULTS_KEPT = 3;
 const MESSAGE_CHARS = 16_000;
 
 export function createGroupTaskCards(deps: GroupTaskCardsDeps) {
@@ -78,11 +77,12 @@ export function createGroupTaskCards(deps: GroupTaskCardsDeps) {
 
   /**
    * Posts the card of a task just opened from a group request. `quote` is that request, when it can
-   * still be read; `requesterId` whom the results name (null when they are no longer in the group).
+   * still be read; `requesterId` whom the answer names (null when they are no longer in the group);
+   * `openerTaskId` the task that opened it, whose answers to its word come back to the group.
    */
   async function post(card: {
     executionId: string; roomId: string; botId: string; threadRootId: string | null;
-    taskId: string; deviceId: string | null; title: string; requesterName: string; botName: string;
+    taskId: string; openerTaskId: string; deviceId: string | null; title: string; requesterName: string; botName: string;
     quote?: BotGroupQuoteView; requesterId: string | null;
   }) {
     if (!deps.current()) return;
@@ -96,7 +96,7 @@ export function createGroupTaskCards(deps: GroupTaskCardsDeps) {
       if (!deps.current() || typeof posted?.id !== 'string') return;
       const cards = deps.store().read();
       cards[posted.id] = { ...view, roomId: card.roomId, botId: card.botId, threadRootId: card.threadRootId, requesterId: card.requesterId,
-        ...(card.quote ? { quote: card.quote } : {}), revision: posted.revision ?? 1, createdAt: Date.now() };
+        openerTaskId: card.openerTaskId, ...(card.quote ? { quote: card.quote } : {}), revision: posted.revision ?? 1, createdAt: Date.now() };
       deps.store().save(cards);
       deps.changed(card.roomId);
     } catch (error) {
@@ -108,67 +108,63 @@ export function createGroupTaskCards(deps: GroupTaskCardsDeps) {
     }
   }
 
+  /** The reply a turn ended with, as the group may read it: empty when it said nothing for the group. */
+  async function replyOf(terminal: BotGroupLaneTerminal) {
+    let text = terminal.resultText;
+    if (terminal.outcome === 'done' && !text.trim() && terminal.resultMessageClientId)
+      text = (await deps.storedReply(terminal.sessionId, terminal.resultMessageClientId).catch(() => null)) ?? '';
+    return isBotGroupNoReplyText(text) ? '' : text.trim().slice(0, MESSAGE_CHARS);
+  }
+  /** Names one turn end: its input and reply (the error and the done that close one turn share both). */
+  const turnOf = (terminal: BotGroupLaneTerminal) => [terminal.activeInputClientId, terminal.resultMessageClientId].filter(Boolean).join(':');
+  const opOf = (kind: 'task-reply' | 'task-result', messageId: string, turn: string) =>
+    `${kind}:${messageId}:${createHash('sha256').update(turn).digest('hex').slice(0, 32)}`;
+
   /**
    * A turn ended in a task on this computer. `fromThread`: the turn was a group member's words from
-   * the card's Thread, whose answer the group already has there. Every end gives the card its line.
+   * the card's Thread, whose answer the group already has there.
    */
   async function noteTurn(terminal: BotGroupLaneTerminal, fromThread: boolean, replay = false) {
     if (!deps.current() || !terminal.sessionId) return;
+    if (!replay) await noteAnswer(terminal);
     const waiting = replay ? undefined : posting.get(terminal.sessionId);
     if (waiting) { waiting.push([{ ...terminal }, fromThread]); return; }
     const cards = Object.entries(deps.store().read()).filter(([, card]) => card.taskId === terminal.sessionId && mine(card));
     if (!cards.length) return;
-    let text = terminal.resultText;
-    if (terminal.outcome === 'done' && !text.trim() && terminal.resultMessageClientId)
-      text = (await deps.storedReply(terminal.sessionId, terminal.resultMessageClientId).catch(() => null)) ?? '';
-    text = isBotGroupNoReplyText(text) ? '' : text.trim().slice(0, MESSAGE_CHARS);
+    const text = await replyOf(terminal);
     const line = botGroupLiveTaskReplyLine(text);
-    // The turn's input and reply name its end; the error and the done that close one turn share both.
-    const turn = [terminal.activeInputClientId, terminal.resultMessageClientId].filter(Boolean).join(':');
-    const op = (kind: 'task-reply' | 'task-result', messageId: string) =>
-      `${kind}:${messageId}:${createHash('sha256').update(turn).digest('hex').slice(0, 32)}`;
-    const results: string[] = [];
+    const turn = turnOf(terminal);
     for (const [messageId] of cards) update(messageId, card => {
       if (turn && card.turns?.includes(turn)) return card;
+      // Every end gives the card its line; one that cannot be told apart from another is never posted.
       const next: ChatLiveTaskCardRecord = { ...card, lastLine: line || undefined };
-      // An end that cannot be told apart from another is never posted.
       if (!turn) return next;
       next.turns = [...(card.turns ?? []), turn].slice(-TURNS_KEPT);
-      if (fromThread || !text) return next;
-      next.outbox = [...(card.outbox ?? []), { op: op('task-reply', messageId), kind: 'reply', text }];
-      // Written down before the result is: a restart while it is being condensed still leaves it to do.
-      if (!card.threadRootId) {
-        next.pendingResults = [...(card.pendingResults ?? []), { op: op('task-result', messageId), text }].slice(-PENDING_RESULTS_KEPT);
-        results.push(messageId);
-      }
+      if (!fromThread && text) next.outbox = [...(card.outbox ?? []), { op: opOf('task-reply', messageId, turn), kind: 'reply', text }];
       return next;
     });
     void sync(true);
-    for (const messageId of results) await writeResults(messageId);
   }
 
-  /** Results being written on this computer now; a pass meanwhile leaves them to the writer. */
-  const writing = new Set<string>();
   /**
-   * The main-group result of each turn end still pending on a card: a short one-paragraph reply as
-   * it is, else its 1–3 condensed sentences, else the reply's first line. It joins the outbox under
-   * the operation recorded with the turn end, so it is posted once even if written again after a restart.
+   * The turn answered word a card's task sent back to the task that opened it: the answer is what
+   * the group hears of the result, where the request was. Saying nothing for the group posts nothing.
    */
-  async function writeResults(messageId: string) {
-    for (const pending of deps.store().read()[messageId]?.pendingResults ?? []) {
-      if (!deps.current() || writing.has(pending.op)) continue;
-      writing.add(pending.op);
-      try {
-        const text = pending.text;
-        const result = (text.length <= SHORT_RESULT_CHARS && !/\n\s*\n/.test(text) ? text
-          : (await deps.condense?.(text).catch(() => null))?.trim() || botGroupLiveTaskReplyLine(text)).slice(0, MESSAGE_CHARS);
-        update(messageId, card => ({ ...card,
-          pendingResults: card.pendingResults?.filter(item => item.op !== pending.op),
-          outbox: !result || card.outbox?.some(item => item.op === pending.op) ? card.outbox
-            : [...(card.outbox ?? []), { op: pending.op, kind: 'result', text: result }] }));
-      } finally { writing.delete(pending.op); }
-      void sync(true);
-    }
+  async function noteAnswer(terminal: BotGroupLaneTerminal) {
+    const cards = Object.entries(deps.store().read()).filter(([, card]) => card.openerTaskId === terminal.sessionId && mine(card));
+    const turn = turnOf(terminal);
+    if (!cards.length || !turn || !terminal.activeInputClientId) return;
+    const sender = await deps.inputSender(terminal.sessionId, terminal.activeInputClientId).catch(() => null);
+    const answered = cards.filter(([, card]) => card.taskId === sender);
+    if (!answered.length) return;
+    const text = await replyOf(terminal);
+    if (!text) return;
+    for (const [messageId] of answered) update(messageId, card => {
+      const op = opOf('task-result', messageId, turn);
+      return card.outbox?.some(item => item.op === op) || card.answers?.includes(op) ? card
+        : { ...card, answers: [...(card.answers ?? []), op].slice(-TURNS_KEPT), outbox: [...(card.outbox ?? []), { op, kind: 'result', text }] };
+    });
+    void sync(true);
   }
 
   /** Posts what a card's task left for the group, oldest first; the next waits while one is retried. */
@@ -178,14 +174,15 @@ export function createGroupTaskCards(deps: GroupTaskCardsDeps) {
       const item = card?.outbox?.[0];
       if (!deps.current() || !card || !item || Date.now() < (item.retryAt ?? 0)) return;
       const drop = (fresh: ChatLiveTaskCardRecord) => ({ ...fresh, outbox: fresh.outbox?.filter(other => other.op !== item.op) });
-      // The Thread holds the reply as it is. The message that tells the group about this turn end names
-      // who asked: the main-group result (a quote-reply to the request), or the reply of a card inside a Thread.
+      // The Thread holds each reply as it is. The answer goes where the request was (the main group, or
+      // the Thread the card sits in) as a quote-reply to the request that names who asked.
       const result = item.kind === 'result';
-      const names = (result || !!card.threadRootId) && !!card.requesterId;
+      const names = result && !!card.requesterId;
+      const threadRootId = result ? card.threadRootId : card.threadRootId ?? messageId;
       try {
         await deps.post(card.roomId, card.botId, {
           operationId: item.op, mentions: names ? [card.requesterId!] : [],
-          ...(result ? {} : { threadRootId: card.threadRootId ?? messageId }),
+          ...(threadRootId ? { threadRootId } : {}),
           content: [...(result && card.quote ? [buildBotGroupQuoteCard(card.quote)] : []),
             { type: 'text', text: names && card.requesterName ? `@${card.requesterName} ${item.text}` : item.text }],
         });
@@ -219,7 +216,6 @@ export function createGroupTaskCards(deps: GroupTaskCardsDeps) {
         if (!deps.current()) return;
         if (Date.now() - card.createdAt > FOLLOW_MS) { update(messageId, () => null); continue; }
         if (!mine(card)) continue;
-        if (card.pendingResults?.length) void writeResults(messageId).catch(warn('Group task result could not be written'));
         await postOutbox(messageId);
         const task = await deps.readTask(card.taskId).catch(() => undefined);
         if (task === undefined) continue;

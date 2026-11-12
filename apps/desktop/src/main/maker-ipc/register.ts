@@ -700,7 +700,6 @@ import { activeCompanionCloud } from '../companion-cloud/runtime.js';
 import { companionCloudView } from '../companion-cloud/view.js';
 import type { CompanionCloudActionResult, CompanionCloudFailureCode, CompanionHomeChoices, CompanionMergeResult, CompanionSwitchOptions } from '../../shared/companionCloud.js';
 import { createBotGroupPlanDecider } from './botGroupPlanDecider.js';
-import { createBotGroupTaskResultCondenser } from './botGroupTaskResult.js';
 import { botGroupMembersVisibleRemotely, registerBotGroupRemoteResourceProvider } from './botGroupRemoteResourceProvider.js';
 import { broadcastBotGroupRemoteResourceChanged } from './botGroupRemoteResourceInvalidation.js';
 import { getBotGroupStepNotificationBody, getInputHandoffNotificationBody } from '../sessionNotificationCopy.js';
@@ -13778,8 +13777,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const state = botGroupLiveTaskStateOfPhase(phase);
       return { title: row.title, ...(state ? { state } : {}), ...(pr ? { prUrl: pr.url } : {}) };
     },
-    // A card task's short result in the main group (bot-group-chat.md §10).
-    condenseTaskReply: createBotGroupTaskResultCondenser((prompt, opts) => requestUtilityText(maker, prompt, opts)),
     // A group's GitHub repository without a registered checkout gets Cindy's own.
     groupCheckouts: createDesktopGroupProjectCheckouts(log),
     // A group's GitHub repository picks this computer's checkout among the registered projects.

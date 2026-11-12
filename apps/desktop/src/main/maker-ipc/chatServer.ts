@@ -61,7 +61,7 @@ import {
   BOT_GROUP_ASSISTANT_AVATAR, BOT_GROUP_ASSISTANT_NAME, botGroupAssistantClientId, botGroupCardTaskClientId, readBotGroupAssistantNotice,
 } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal, BotGroupPreparedAttachments } from './botGroupChatService.js';
-import { readPersistedReplyText } from './botGroupChatService.js';
+import { readPersistedInputSenderTask, readPersistedReplyText } from './botGroupChatService.js';
 import { botGroupRuntimeFailureCode, botGroupRuntimeFailureDetail } from './botGroupRuntimeFailure.js';
 import { chatGroupMemberName, chatGroupOwnerName, botGroupExecutionFailureBatches, latestBotGroupMessage } from '@cindy/maker-shared/botGroupPresentation';
 import { createThreadProjection, isShareableThreadReply, threadPreviewAttachments, threadPreviewText } from './chatServerThreads.js';
@@ -2229,7 +2229,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     edit: (roomId, messageId, actorId, body) => api<{ revision?: number }>(`/conversations/${roomId}/messages/${id.parse(messageId)}`, 'PATCH', body, actorId),
     refusal: error => error instanceof ChatResponseError
       ? { final: !retryableResponse(error), retryAt: error.retryAt, gone: [403, 404, 409, 410].includes(error.status) } : { final: false, gone: false },
-    get readTask() { return deps.readGroupTaskStatus; }, get condense() { return deps.condenseTaskReply; }, storedReply: readPersistedReplyText,
+    get readTask() { return deps.readGroupTaskStatus; }, storedReply: readPersistedReplyText,
+    inputSender: (sessionId, clientId) => (deps.readInputSenderTask ?? readPersistedInputSenderTask)(sessionId, clientId),
     labels: () => ({ task: t('bots.groupChat.task.label'), untitled: t('bots.groupChat.task.untitled'),
       states: { running: t('bots.groupChat.task.live.running'), waiting: t('bots.groupChat.task.live.waiting'),
         idle: t('bots.groupChat.task.live.idle'), failed: t('bots.groupChat.task.live.failed') } }),
@@ -2237,8 +2238,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   });
   /**
    * A task opened during this group execution shows in the group as a card, posted as the
-   * execution's teammate where the request was (main group or Thread). Its results quote-reply
-   * that request and name who asked.
+   * execution's teammate where the request was (main group or Thread). What the teammate answers
+   * when that task sends word back quote-replies that request and names who asked.
    */
   async function postTaskCard(run: Running, s: Snapshot, threadRootId: string | undefined, task: { taskId: string; deviceId: string | null; title: string }) {
     const { execution } = run;
@@ -2247,7 +2248,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const name = (actorId?: string) => { const m = member(actorId); return m ? memberName(m, s.members) : ''; };
     const requester = member(execution.requester_id);
     const source = await readMessage(execution.conversation_id, execution.source_message_id).catch(() => undefined);
-    await taskCards.post({ ...task, executionId: execution.id, roomId: execution.conversation_id, botId: execution.bot_id,
+    await taskCards.post({ ...task, openerTaskId: run.sessionId, executionId: execution.id, roomId: execution.conversation_id, botId: execution.bot_id,
       threadRootId: threadRootId ?? null, requesterName: name(execution.requester_id),
       botName: name(execution.bot_id) || actors.find(actor => actor.id === execution.bot_id)?.name || '',
       requesterId: requester?.kind === 'human' && requester.state === 'joined' ? requester.id : null,

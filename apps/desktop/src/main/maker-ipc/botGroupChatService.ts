@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { messageSourceSenderFromMeta, parseSourceSessionTarget } from '@cindy/maker-shared/message-source';
 import path from 'node:path';
 
 import { and, asc, desc, eq, gt, inArray, lt, ne } from 'drizzle-orm';
@@ -203,11 +204,8 @@ export interface BotGroupChatServiceDeps {
    * when the task is gone (bot-group-chat.md §10).
    */
   readGroupTaskStatus?: (taskId: string) => Promise<{ title: string; state?: 'running' | 'waiting' | 'idle' | 'failed'; prUrl?: string } | null>;
-  /**
-   * A card task's reply condensed into its short result for the main group, by the auxiliary
-   * model; null when none came back in time (bot-group-chat.md §10).
-   */
-  condenseTaskReply?: (reply: string) => Promise<string | null>;
+  /** The task whose `send_to_session` a turn answered (bot-group-chat.md §10); defaults to the stored message. */
+  readInputSenderTask?: (sessionId: string, inputClientId: string) => Promise<string | null>;
   /** Registered project folders on this computer whose git `origin` is this GitHub repository. */
   findProjectDirsForRepo?: (repo: string) => Promise<string[]>;
   /**
@@ -601,6 +599,20 @@ export async function readPersistedReplyText(sessionId: string, messageClientId:
     .limit(1);
   const text = visibleMessageTextForConversationSearch('assistant', row?.content ?? '').trim();
   return text || null;
+}
+
+/** The task on this computer that sent a stored input to another task; null for any other sender. */
+export async function readPersistedInputSenderTask(sessionId: string, messageClientId: string): Promise<string | null> {
+  const [row] = await getDbClient()
+    .drizzle.select({ agentMeta: messages.agentMeta })
+    .from(messages)
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, messageClientId), eq(messages.role, 'user')))
+    .limit(1);
+  let meta: unknown = row?.agentMeta;
+  if (typeof meta === 'string') { try { meta = JSON.parse(meta); } catch { return null; } }
+  const sender = messageSourceSenderFromMeta(meta);
+  const target = sender?.kind === 'session' ? parseSourceSessionTarget(sender.sessionId) : null;
+  return target && !target.deviceId ? target.sessionId : null;
 }
 
 export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {

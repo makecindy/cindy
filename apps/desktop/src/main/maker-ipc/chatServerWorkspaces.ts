@@ -56,12 +56,10 @@ const liveTaskCard = z.object({
    */
   outbox: z.array(z.object({ op: z.string(), kind: z.enum(['reply', 'result']), text: z.string(),
     attempts: z.number().int().nonnegative().optional(), retryAt: z.number().optional() })).optional(),
-  /**
-   * Turn ends whose main-group result is still being written, with the reply it is written from:
-   * kept until the result joins the outbox, so a restart meanwhile still writes it, once, under
-   * the same operation.
-   */
-  pendingResults: z.array(z.object({ op: z.string(), text: z.string() })).optional(),
+  /** The task that opened this card's task: its answers to word the task sends back go to the group. */
+  openerTaskId: z.string().optional(),
+  /** Answers already handed to the outbox, so the same turn end seen again posts nothing again. */
+  answers: z.array(z.string()).optional(),
   /**
    * The newest message of the card's Thread the task has been told about: other members' words are
    * not delivered to the task, its owner's next words from the Thread carry what came after this.
