@@ -35,7 +35,7 @@
 | 6c | 思考开关写通道 | `register.ts` `SET_THINKING_ENABLED` | 未做（第 10 步） | — | 无 |
 | 6d | Pi 思考开关记忆 | `newMakerDefaultsCache.ts` | 部分：读取已接（m1-cp2b）；镜像由渲染层推送，客户端模式下推给窗口进程，Host 一直为空，要等 M2 的推送通道 | Host `start-options.test.mjs` | 无 |
 | 7 | 回合改动记录 | `turn-change-set/store.ts` | Host 现有的两类回合已对齐（m1-cp5e，m1-cp5f 补测）：队列里的用户回合与直发回合。写入：引擎侧写前捕获（Claude、Pi）、派发时开记录定锚点（`beginTurnChangeSetAtDispatch`）、事件流记 Codex 原生改动（`noteTurnDiffEvent`，远程标记与桌面同一表达式）。落盘：done 与终止性错误时 `finalizeTurnChangeSet`，判定按 `sessionEventPreparation.ts` 手写（非共用代码），四种终态都有测试。清理：未派发、绑定实例关闭、同一任务换实例、删除任务。桌面另有这些发起回合的路径各自带着开记录与撤销的成对调用，Host 上都还没有：send_to_session（`register.ts:12348-12382`）、hook（`hook-control/session-runner.ts:1638`、1655、1675）、IM（`im/shared/turnRunner.ts:1948`、1961、1985）、定时任务（`scheduler-host/runner.ts:2278`、2334、2360，经 `createAutomationUserTurnGitBaselineHooks`）、goal-host（`controller.ts:2540`、2550、2591）、learn-host（`controller.ts:600`）、Orca 直发（`orcaInterAgentDispatcher.ts:878`、892，`beginDirectTurnChangeSet`）。哪条路径接到 Host，必须带上自己的这一对；查看与撤销的界面入口随 M2 | Host `input-queue.test.mjs`（锚点落盘、四种终态、先后顺序、未派发清理、实例关闭与替换）；`agent-graph.test.mjs`（引擎侧） | 无 |
-| 7b | Git 保存点与文件回退 | `git-snapshot-host.ts` → `gitSnapshotHostCore.ts` | 部分（m1-cp5e）：保存点已接。派发前基线（队列钩子与直发钩子）、回合结束改后快照（`onTurnEnd`）、未派发撤回（`onTurnAbort`）、绑定实例关闭（`onSessionClosed`）、账号库就绪后的已删除任务引用对账，都与桌面同一份代码。未接：回退入口 `maker:rewind:preview`、`maker:rewind:commit` 随 M2 的界面通道一起接。标签：Host 上辅助模型调用未放开，标签一律用确定性兜底（如「改动 a.txt」）。停用裁决：`modelRouteGuardCore.ts` 已拆出、Host 未接（端口按「不可用」，失败时关闭），第 4 步必须连同等价的供应商视图一起接上；届时若决定不用，还原这次拆分 | Host `git-snapshot.test.mjs`（真实临时仓库）；`input-queue.test.mjs`（钩子顺序）；desktop `hostGitSnapshotChain.test.ts`（桌面建一轮、Host 接着建一轮：同一引用按序排列，尝试记录同一 owner 目录） | 无 |
+| 7b | Git 保存点与文件回退 | `git-snapshot-host.ts` → `gitSnapshotHostCore.ts` | 部分（m1-cp5e）：保存点已接。派发前基线（队列钩子与直发钩子）、回合结束改后快照（`onTurnEnd`）、未派发撤回（`onTurnAbort`）、绑定实例关闭（`onSessionClosed`）、账号库就绪后的已删除任务引用对账，都与桌面同一份代码。未接：回退入口 `maker:rewind:preview`、`maker:rewind:commit` 随 M2 的界面通道一起接。标签：桌面用引擎自己的一次性调用（`maker.oneShot`）起标签，派发前经路由守卫做停用裁决，守卫读桌面供应商服务的视图。Host 没有等价的视图，标签一律用确定性兜底（如「改动 a.txt」），不发付费请求；路由守卫端口按「不可用」。等价的供应商视图随 M2 的模型通道做，届时再拆路由守卫并接真实调用（m1-cp12 已把之前的拆分还原，`model-route-guard-live.ts` 与 main 相同） | Host `git-snapshot.test.mjs`（真实临时仓库）；`input-queue.test.mjs`（钩子顺序）；desktop `hostGitSnapshotChain.test.ts`（桌面建一轮、Host 接着建一轮：同一引用按序排列，尝试记录同一 owner 目录） | 无 |
 | 8 | 工作树租约 | `worktree/runtimeLeases.ts` | 未做（第 7 步） | — | 无 |
 | 9 | Codex 产品提示标记 | `maker-host/session-storage.ts` | 已对齐（m1-cp5a） | Host `agent-graph.test.mjs`；`codex-runtime.e2e.mjs` 数据库往返 | 无 |
 | 10 | 读图钩子、电脑操作防护、Bash 并发闸门 | `claudeHooks` | 未做（第 6 步） | — | 无 |
@@ -72,17 +72,17 @@
 | 辅助模型设置文件 | 读 owner 目录的 `auxiliary-model-settings.json`；遇到旧格式会迁移、写回并写迁移标记；读不懂的文件删除 | 同一份代码读同一个文件，Host 不写也不删：两个旧命名空间判定恒为 false，旧格式只在内存里用迁移后的结果，不读未分 owner 的旧 voice 文件；读不懂的文件保留，同样按自动链处理 | 客户端模式下窗口进程与 Host 共用 owner 目录，窗口进程是这个文件唯一的写入方，避免跨进程先读后删、删掉用户刚存的设置。窗口进程重置设置的瞬间，Host 可能读到半截迁移标记，把旧 voice 文件里用户以前选过的链用一次，下次读取恢复；不会落到网关 |
 | 自动复核的授权上下文 | 插件委托任务按其登记的范围复核 | 同一个解析器；插件委托在 Host 上还没有投递，正在运行的输入一旦标成插件委托（包括客户端自选的 client id），就失败时关闭，复核变成询问 | 插件委托的授权上下文随 M2 或 M3 的投递一起接 |
 | Auto 分类器失败的降级 | 代理观察到分类器失败后，由协调器把该任务的复核切到 Cindy（register.ts） | 同一个协调器（m1-cp11b） | 无差。未实测：原生分类器只在 Claude 订阅登录（oauth-bearer）的任务里出现，真实触发需要真实订阅登录；接线由 `auto-review.test.mjs` 覆盖 |
-| 安装型 BYOK 供应商的凭据 | `readCustomProviderKey` 先读安装型 BYOK 供应商的凭据，再读自定义供应商 key | Host 的 `providerConfig.readKey` 只读自定义供应商 key，不含安装型 BYOK 凭据 | 用这类供应商跑任务时 Host 缺 key；辅助模型链里放了这类模型时，该候选不可用（落到下一个，全部不可用就询问）。**迁移前必须对齐**；与等价供应商视图一起定，那边留给 M2 的模型通道就随之去 M2 |
+| 安装型 BYOK 供应商的凭据 | `readCustomProviderKey` 先读安装型 BYOK 供应商的凭据，再读自定义供应商 key | Host 的 `providerConfig.readKey` 只读自定义供应商 key，不含安装型 BYOK 凭据 | 用这类供应商跑任务时 Host 缺 key；辅助模型链里放了这类模型时，该候选不可用（落到下一个，全部不可用就询问）。**迁移前必须对齐**；随等价的供应商视图一起放在 M2 的模型通道 |
 | 复核调用的用量（2e 之前） | 记录 | 不记录 | Host 上复核调用的用量在 2e 之前不记录；2e 的边界表要把它算进去 |
 | 订阅余量（2e 之前） | 代理读订阅余量响应头，交给注入的 listener 落库并广播 | 观察器照挂，不设 listener | 不记录订阅余量；2e 接上 |
-| 回环代理的入站凭据 | 代理现有的会话与受邀者检查 | 在同样的检查之外，Host 的回环代理要求入站凭据：Pi 会话 token、当前网关 key，或运行时发给自家 Claude Code 的密钥（每个运行时随机 32 字节，只在内存，经环境变量交给 CLI，owner 变更时更换）；其余一律 401，公开的占位常量不算凭据 | 多一道入站门。受邀者路由令牌也是合法入站凭据，Host 现在不接远程任务所以没放行；**M3 接远程任务时要加进放行名单**，否则受邀者请求会被挡掉。m1-cp9 起这三类放行保持不变：经 `ANTHROPIC_CUSTOM_HEADERS` 只认密钥的收紧，已验证主请求与子代理请求带头，分类器与 count_tokens 两类未能触发；第 4 步接上原生分类器时用能触发分类器的流程重新验证，再决定是否收紧 |
+| 回环代理的入站凭据 | 代理现有的会话与受邀者检查 | 在同样的检查之外，Host 的回环代理要求入站凭据：Pi 会话 token、当前网关 key，或运行时发给自家 Claude Code 的密钥（每个运行时随机 32 字节，只在内存，经环境变量交给 CLI，owner 变更时更换）；其余一律 401，公开的占位常量不算凭据 | 多一道入站门。受邀者路由令牌也是合法入站凭据，Host 现在不接远程任务所以没放行；**M3 接远程任务时要加进放行名单**，否则受邀者请求会被挡掉。m1-cp9 起这三类放行保持不变：经 `ANTHROPIC_CUSTOM_HEADERS` 只认密钥的收紧，已验证主请求与子代理请求带头，分类器与 count_tokens 两类未能触发；第 4 步（m1-cp12）结论：这两类请求只在 Claude 订阅登录的任务里出现，验证需要真实的订阅登录（假登录在 macOS 上可能读写系统钥匙串），M1 内不做，保持三类放行 |
 | Codex 回环代理的入站凭据 | 代理现有的路由与受邀者守门 | 在同样的检查之外，Host 的 Codex 回环代理（主代理、各模式的控制面代理、自定义上下文与受邀者代理）要求入站凭据：本运行时发给自家 Codex 进程的令牌（每个运行时随机 32 字节，只在内存，经环境变量交给 Codex，启动参数里只有变量名，常量时间比较，转发前删掉，上游看不到）；其余一律 403，不回 401（Codex 把 401 当登录过期，会去刷新并作废登录）。任务自己的工具命令能读到这个变量；令牌只在本运行时的回环代理上有效，运行时关闭即失效 | 多一道入站门。受邀者任务的 Codex 也由 Host 本机拉起、同样带令牌，**M3 接远程任务时核对** |
 | 迁移来的共享 Codex 登录被服务端作废后（用户已决定，待做） | codex-home/auth.json 链到系统 Codex 登录、绑定为继承时，写 system-shared 标记（记系统文件指纹与恢复 owner） | 写实例隔离标记 | 1. 作废后报的凭据范围不同（system-shared 对 instance-isolated），引导不同；2. 用户在 ChatGPT App 重新登录后，桌面作废的会自动接回，Host 作废的不会，要在 Cindy 里显式登录；3. 无归属失效且是硬链接时，系统文件原子替换后 Host 的抑制一直有效，桌面的会放开；4. Host 自己不从系统重新链接，只有 Host 在跑时不会自动恢复。系统登录没变时两边都继续抑制；两边都不改外面那份文件。用户 2026-11-13 决定与桌面完全一样（原话「和桌面完全一样」）：绑定为继承时按桌面的 system-shared 分支写标记，Host 也像桌面一样从系统登录重新链接，用户在 ChatGPT App 或命令行重新登录后自动恢复；此前“Host 不读系统 `~/.codex`”的规则由这个决定取代。排在 m1-cp12 之后做，做之前现状保持 |
 | 代理的进程内登记在 owner 变更时 | 路由登记随 app 生命周期常驻 | 代理运行时关闭时，按它服务过的任务 id 清掉路由登记与后台活动；Pi 会话 token 用同一撤销函数 | Host 比桌面严：Host 跨 owner 长期运行，M2 还会把读路由登记的通道开出去 |
 | Pi 思考开关记忆（M2 之前） | 读渲染层镜像 | 镜像为空 | 用模型默认值 |
 | 用量记录（2e 之前） | 记录 | 不记录 | Host 期间的用量丢失；Host 侧 e2e 的「三张用量表行数」核对不适用 |
 | 删除任务 | 界面删除把任务标为 `status='deleted'`（软删除），启动后的对账据此删掉它的保存点引用；桌面不在删除时立即删引用（`sessions.ts:689-693`，不可逆） | Host 的 `deleteSession`（`/api/sessions/delete`）调 `OwnerSessionStorage.delete` 物理删行；对账不认行缺失，保存点引用留在用户仓库 | 已定：随 M2 的删除通道改为与桌面相同的软删除与同一组清理；届时硬删除要么改成同一语义，要么只留给不面向用户的用途并写明调用方，并核实硬删除是否会让删除状态同步不到云端与其他设备。**迁移前必须完成** |
-| 保存点标签的停用裁决 | 读桌面供应商服务（订阅池、`getDesktopSelectableBaseCatalog`、连接认领、Fast 投影） | Host 的 `publicViews` 用 `getActiveCatalog`、无订阅池与认领，两边视图不等价；Host 端口按「不可用」 | 标签走兜底，不发付费请求；`modelRouteGuardCore.ts` 已拆出、Host 未接，第 4 步连同等价视图接上，否则还原 |
+| 保存点标签的停用裁决 | 读桌面供应商服务（订阅池、`getDesktopSelectableBaseCatalog`、连接认领、Fast 投影） | Host 的 `publicViews` 用 `getActiveCatalog`、无订阅池与认领，两边视图不等价；Host 端口按「不可用」 | 标签走兜底，不发付费请求。等价的供应商视图随 M2 的模型通道做，届时再拆路由守卫、接真实调用；m1-cp12 已还原之前的拆分。安装型 BYOK 供应商的凭据挂在同一个 M2 事项下 |
 | 代输入（sudo、ssh、git 密码提示） | 任务的 shell 带代输入的 askpass 环境变量，提示转给用户 | 同一个 `taskShellEnv`，但 Host 不启动 askpass，返回空 | 这些提示在 Host 任务里照命令行默认行为失败，不会转给用户；随代输入一起补 |
 | 内置 ripgrep 的位置 | 打包版 `resources/tools/ripgrep`；开发时 `apps/ripgrep-bin/<平台>`（`pnpm install:ripgrep` 安装） | `hostRuntimeLayout().harnessRoot/ripgrep-bin/<平台>`：开发时就是同一个 `apps/ripgrep-bin/<平台>`；发布版是 `apps/host/scripts/build.mjs` 从 `apps/ripgrep-bin` 拷进 `resources/harnesses` 的同一个文件 | 同一个 rg 二进制；找不到时与桌面抛同一条错误（Pi 在构造时，Codex 在启动读 PATH 前缀时） |
 
@@ -128,7 +128,7 @@
 | Pi 包的安装与卸载 | M2 | 界面发起的写操作；运行只需读已安装的包 |
 | 本地模式下运行任务 | M2 | 要先定本机登录或 API key 的认领方式与模型隔离规则 |
 | 远程附件（OSS、点对点） | M3 | 手机远控的一部分 |
-| 桌面的 Claude 与 Codex 回环代理启用入站凭据检查 | M1 发布后单独一个改动 | 用户 2026-11-13 决定；M1 期间桌面行为不变 |
+| 桌面的 Claude 与 Codex 回环代理启用入站凭据检查 | M1 发布后单独一个改动 | 用户 2026-11-13 决定；M1 期间桌面行为不变。Claude 代理按三类放行，不要求只认密钥 |
 
 ## 五、待办与未完整运行的验证
 
