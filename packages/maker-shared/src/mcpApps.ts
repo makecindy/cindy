@@ -2,6 +2,11 @@
 export const MCP_APPS_INVOKE = 'maker:mcp-apps:v1';
 export const MCP_APP_CARD = 'mcp-app';
 export const MCP_APP_LINK_GRANT_MS = 30_000;
+/** An entry identity, not an arbitrary resource or a page-supplied permission. */
+export interface PluginUiSource {
+  instanceId: string;
+  viewId: string;
+}
 export interface McpAppLinkAuthorization {
   authorized: true;
   validForMs: number;

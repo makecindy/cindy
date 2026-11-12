@@ -237,7 +237,11 @@ export function useProviderWeeklyQuota(
   provider: ProviderView,
   scope: ProviderUsageScope,
 ): ProviderWeeklyQuota | null {
-  const { source, codex, claude, xai, kimi, opencodeGo } = useProviderUsageSnapshots(provider, scope);
+  return useWeeklyQuotaFromSnapshots(useProviderUsageSnapshots(provider, scope));
+}
+
+/** Reuse one account reader for the rail's bar and short-window warning. */
+export function useWeeklyQuotaFromSnapshots({ source, codex, claude, xai, kimi, opencodeGo }: ProviderUsageSnapshots): ProviderWeeklyQuota | null {
   const [nowMs, setNowMs] = useState(Date.now);
   // Local display clock only; fetching and cached-first updates remain in the
   // existing hooks. Hide expired windows even when the panel is left open.

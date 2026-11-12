@@ -328,7 +328,8 @@ interface StartingChildProcEntry {
 
 interface WorkerEntry {
   ghost: InstalledGhost;
-  hostToolIdentity: { dir: string; manifest: string; approvalRevision: string | undefined };
+  /** The approved install is stable; the manifest is a locale-dependent view. */
+  hostToolIdentity: { dir: string; approvalRevision: string | undefined };
   ownerScopeSnapshot: unknown;
   /** 本进程对应的入口(相对路径;主入口 = manifest.node.entry)。 */
   entryRel: string;
@@ -947,8 +948,7 @@ export class GhostNodeRuntimeBroker {
     const ghost = this.deps.getGhost(id);
     return !entry.stopping && this.workers.get(GhostNodeRuntimeBroker.keyOf(id, entry.entryRel)) === entry &&
       this.ownerScopeUsable(id, entry.ownerScopeSnapshot) && ghost?.enabled === true && ghost.dir === entry.hostToolIdentity.dir &&
-      ghost.approval?.state === 'approved' && ghost.approval.revision === entry.hostToolIdentity.approvalRevision &&
-      JSON.stringify(ghost.manifest) === entry.hostToolIdentity.manifest;
+      ghost.approval?.state === 'approved' && ghost.approval.revision === entry.hostToolIdentity.approvalRevision;
   }
 
   private async handleNetworkRequest(entry: WorkerEntry, message: Extract<GhostNodeChildToHostMessage, { type: 'network-request' }>) {
@@ -1721,7 +1721,7 @@ export class GhostNodeRuntimeBroker {
     attemptDiagnostic.pid = readChildDiagnosticPid();
     const entry: WorkerEntry = {
       ghost,
-      hostToolIdentity: { dir: ghost.dir, manifest: JSON.stringify(ghost.manifest),
+      hostToolIdentity: { dir: ghost.dir,
         approvalRevision: ghost.approval?.state === 'approved' ? ghost.approval.revision : undefined },
       ownerScopeSnapshot,
       entryRel,

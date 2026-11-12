@@ -71,6 +71,11 @@ Agent 新建普通独立任务（`send_to_session` create；伙伴专用的 `sta
 
 ## 现状台账
 
+Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含中英文更新／升级说法）
+可发现 `application.update`，详情列出当前任务实际可用的检查与安装操作。安装仍由本机宿主
+确认并执行；没有安装工具时明确列为缺失，并提示在运行 Cindy 的电脑上使用设置中的
+“检查更新”。步骤与不可用时的处理写在工具说明及回执，不再占用所有任务的 system prompt。
+
 「跨电脑」一列写 Agent 工具的现状，不是用户界面的现状。改动对应能力时把这张表写回去。
 
 | 对象     | 操作                                                       | 本机 | 跨电脑           |
@@ -99,7 +104,7 @@ Agent 新建普通独立任务（`send_to_session` create；伙伴专用的 `sta
 | 任务     | 看输入队列；编辑 / 撤回 / 调序自己发的排队消息；插话；停止 | 有   | 无               |
 | 任务     | 模型、推理强度、Fast                                       | 有   | 无               |
 | 任务     | `fork_session` 按指定消息分叉；`rewind_session` 恢复指定 user 消息前的历史与检查点 | 有（control，回退逐次确认；共用界面入口的屏障、锁与清理） | 有（既有 fork / rewind 通道，不自动重试） |
-| 任务     | `get_session_runtime` 读权限档；`set_session_runtime(permission_mode)` 复用界面权限提交与回滚 | 有（control；权限提高逐次确认，原任务权限判定保持） | 任务在目标电脑运行工具；不新增跨电脑设置入口 |
+| 任务     | `get_session_runtime` 读权限档；`set_session_runtime(permission_mode)` 复用界面权限提交与回滚 | 有（control；权限提高逐次确认；持有 admission 的任务修改自身权限含混合请求，在所有写入前返回 `UNSUPPORTED_CAPABILITY`，其余原判定保持） | 任务在目标电脑运行工具；不新增跨电脑设置入口 |
 | 任务     | 代用户确认权限或回答提问   | 无   | 无               |
 | 协同 / Worker | 单个 / 批量创建、指定已有目录、查询实际目录与自有 worktree | 有 | 有（运行设备；新建 worktree 仅本机） |
 | 协同 / Worker | Lead 使用远程供应商时派发跨设备 Worker；独立选择工作电脑与模型电脑 | 有 | 有（`execution_device_id` + `agent_device_id`；目录查询支持同一工作电脑范围） |

@@ -47,6 +47,8 @@ const archived = await cindy.host.call('cindy_helper', 'archive_sessions', {
 
 本入口仅支持表中服务的已声明组。插件管理（`ghost_*` 等）、主人代输入或 `ask_owner`、应用更新和反馈不开放。Node 子进程不提供此 API；应由声明的插件 Node 工作进程调用。
 
+其他 AI 工具历史的 `scan_importable_sessions`、`get_session_import_status`、`import_sessions` 对插件统一返回 `UNSUPPORTED_CAPABILITY`，即使已批准 `control` 或 `history`。扫描和状态查询会触发宿主既有的中断导入恢复，因此本入口不将它们作为只读查询开放；Agent 和设置页保留原行为。
+
 底层管子消息为 `{type:'host-tool-request',server,tool,args}`。身份由宿主从逻辑页或 Node 私有通道核验，不接受参数中的 `pluginId`、`sessionId` 或账号作为调用方身份。旧宿主和未提供此能力的执行宿主应按不支持处理。
 
 ## 查询执行宿主的能力
@@ -152,6 +154,7 @@ user 锚点复制它之前的历史；assistant 锚点复制至下一条 user �
 变更使用界面同一提交队列、运行时更新、持久化与失败回滚；不会由插件直接写权限设置。
 单独改权限保留模型和待生效路线；同时修改时先应用运行设置，成功后提交权限。`generation` 保护运行设置，权限仍按原队列提交，
 模型可能等到下一次发送生效；权限档字段不替代独立的 Plan 开关。
+持有任务操作授权（admission）的调用任务不能修改自身 `permission_mode`，包括同时修改模型的混合请求：写入任何字段前返回 `UNSUPPORTED_CAPABILITY`。插件没有任务身份，不受此自身限制；无 admission 的任务、修改其他任务及仅改模型的路径保持原行为。
 
 插件用 `send_to_session` 继续明确任务、或用 `steer_session({session_id,message})` 在本机插话时，宿主记录插件来源，
 不会借用任务身份，也不会继承别的任务权限档。收件任务继续使用它当前的权限与 Plan 状态，界面标签和模型来源说明同源。
@@ -221,6 +224,8 @@ Cindy 客户端在宿主对话框中回答；未连接支持确认的客户端�
 当前 Node Host 未装配生产调度器，`cindy_scheduler` 调用返回 MCP 错误
 `UNSUPPORTED_CAPABILITY`，说明当前执行环境不支持此宿主服务；不会创建另一套调度任务。
 `history` 的本机查询与 `terminal` 已接通，其他组须以执行 Host 的工具目录和实际回执为准。
+Node Host 已提供的 `browser/computer` 平台 provider 同时接入 Agent 与插件入口，不另建浏览器或电脑实现。
+浏览器后端和电脑执行仍取决于原平台端口、已连接的客户端及开关；缺少桌面输入协调器时不能执行原生输入。
 需要定时任务时使用已提供调度器的执行宿主，不循环重试不支持结果。
 
 ## 完整历史与附件

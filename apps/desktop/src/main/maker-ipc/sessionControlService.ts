@@ -7,7 +7,7 @@ import type {
   SessionGracefulStopResult,
   SessionTurnControlSnapshot,
 } from '@cindy/maker-core';
-import { assertTaskActionCurrent, bindTaskActionInput, combineInputGuards } from './taskActionAuthorization.js';
+import { assertTaskActionCurrent, bindTaskActionInput, combineInputGuards, hasTaskActionAuthorization } from './taskActionAuthorization.js';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
 import type {
@@ -73,7 +73,7 @@ export type SessionRuntimeSetResult =
       pendingMutation: PendingSessionRuntimeMutation | null;
       permissionMode?: PermissionMode;
     }
-  | Failure<'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE'>;
+  | Failure<'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE' | 'UNSUPPORTED_CAPABILITY'>;
 
 export interface SessionControlLiveSession {
   agentKind: AgentKind;
@@ -374,6 +374,10 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       if (params.beforeMutation) await params.beforeMutation();
       if (missing) return missing;
       if (params.patch.permissionMode !== undefined) {
+        if (hasTaskActionAuthorization(params.targetSessionId)) {
+          return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
+            message: 'An admitted task cannot change its own permission mode, including in a mixed runtime patch.' };
+        }
         if (!deps.setSessionPermissionMode) return { ok: false, errorCode: 'INVALID_ARGS', message: 'Permission control is unavailable.' };
         const beforeMutation = combineInputGuards(params.beforeMutation, assertTaskActionCurrent);
         const { permissionMode, ...runtimePatch } = params.patch;

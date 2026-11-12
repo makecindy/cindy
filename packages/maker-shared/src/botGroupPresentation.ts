@@ -247,6 +247,10 @@ export function currentBotGroupPlanStep(plan: BotGroupPlanView): BotGroupPlanSte
 export function botGroupPlanStepState(plan: BotGroupPlanView, step: BotGroupPlanStepView) {
   if (plan.kind === 'talk' && step.status === 'running' && plan.status === 'stopped') return 'stopped';
   if (plan.kind === 'talk' && step.status === 'running' && step.executionStatus === 'queued') return 'queued';
+  // A discussion turn that finished without publishing a message answered `NO_REPLY`, so the group
+  // shows nothing for it: it was skipped, not spoken. Only an explicit `null` counts — a host that
+  // does not report the field at all (legacy projection) keeps the plain done state.
+  if (plan.kind === 'talk' && step.status === 'done' && step.resultMessageId === null) return 'skipped';
   return step.status;
 }
 

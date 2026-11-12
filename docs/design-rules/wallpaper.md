@@ -51,7 +51,8 @@ and preview fallback; only manifest entries with video metadata offer motion. Do
 as a 3px bottom track inside the selected thumbnail (user choice, 2026-10-19), with no visible
 percentage or separate row. Its transform interpolates the precise byte ratio over
 the base motion tier, linearly for this transfer indicator to avoid restarting an
-ease-in/out on every progress sample; reduced motion updates immediately.
+ease-in/out on every progress sample (registered narrow exception, `DESIGN.md` §14.4);
+reduced motion updates immediately.
 It follows real transfer progress and disappears once ready;
 cache hits show the original directly. A failed tile shows a retry icon and supports click,
 Enter and Space to retry, preserving the grid's single Tab stop and selected border.
@@ -115,7 +116,9 @@ max(main area's veil, 90%). It drops that ineffective blur and keeps its divider
 backdrop, docked sidebar and peek drawer are unchanged.
 0% desktop transparency does not enter desktop-background mode on any platform: the
 window keeps its original backdrop (macOS HUD vibrancy with the frosted sidebar,
-Windows 11 Acrylic, otherwise opaque) until transparency is raised (#9424).
+Windows 11 22H2+ Acrylic, otherwise opaque) until transparency is raised (#9424).
+Electron applies Windows system backdrops only from build 22621, so earlier Windows 11
+builds keep the opaque backdrop rather than a translucent backing without its material.
 The controls reuse the visibility and blur overrides. On macOS, the own-window
 native addon applies `CGSSetWindowBackgroundBlurRadius` (0–20), with fixed vibrancy
 removed so it cannot obscure radius changes. Artwork clears this native radius.
@@ -132,7 +135,14 @@ theme-tinted frost rather than clear glass. Because that strength is fixed,
 the Windows desktop blur control is a Switch rather than a slider (artwork blur
 stays a slider); turning it on restores the last nonzero shared blur value;
 systems without a native material retain clear transparency. The hint describes
-system-default fallback where adjustable blur is unavailable. A successful native
+system-default fallback where adjustable blur is unavailable. On Windows 11 22H2+ a
+window is created transparent only when the last session ended on a clear desktop
+(blur off); otherwise it is a regular frameless window, because a transparent window
+carrying Acrylic flickers (2026-11-11; see the research document's Windows device
+finding). `transparent` is fixed at creation, so turning desktop blur off in a regular
+window keeps Acrylic until the next launch, and turning it on in a transparent window
+may flicker until then; the switch hint tells users to restart after turning it off.
+Systems without a system backdrop always create transparent windows. A successful native
 call alone is not visual acceptance; keep the research document's validation limits.
 Selecting artwork restores the image/video controls. Reset removes these overrides.
 While a window's opaque in-app wallpaper canvas is active, disable its covered
@@ -243,7 +253,8 @@ and permit retry. The download and cache contract is defined in
 Decode one local video
 per window, suspend playback while hidden/minimized, and use the original still for
 reduced motion or playback failure. Static / Dynamic switches crossfade the video
-over the retained high-resolution still using base/ease-move (200ms), starting
+over the retained high-resolution still using fast/ease-move (150ms, the same pair as the
+still-image crossfade; maintainer ruling D-11, 2026-11-11), starting
 only after playback is ready. Switching back to Static releases the video after
 the fade; rapid toggles reverse it without adding a decoder. Reduced motion
 bypasses the transition and releases the video immediately.

@@ -206,6 +206,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   调用方显式为插件实例与请求时 owner 快照，不绑定任务；组批准与共享风险规则的原生逐次确认替代任务权限档，执行前及返回前复核账号和安装版本，现有写入钩子同样复核。
   每次批准查询均重新读取和验证 receipt，不使用授权缓存或同步段去重。
   依赖当前任务的工具必须显式指定目标，缺省保留 `NO_SESSION_CONTEXT`；插件管理、主人代输入、应用更新、反馈不经此入口开放。
+  外部 AI 工具历史的 `scan_importable_sessions`、`get_session_import_status`、`import_sessions` 在共享 handler 中对插件返回 `UNSUPPORTED_CAPABILITY`，不进入扫描、状态或导入回调；前两者会触发既有中断导入恢复，不能作为纯读取开放。Agent 和设置页不变。
+  持有任务 admission 的调用任务修改自身 `permission_mode`（含混合运行设置请求）在任何写入前返回 `UNSUPPORTED_CAPABILITY`，不改写权限快照或放宽守卫；插件、修改其他任务、无 admission 及仅改模型保持原行为。
   作者契约见 [宿主工具调用](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。
   `browser/computer/ssh/docs` 直接复用相应现有 MCP server 的 validated handler；新组不改公共调用或调用方签名。
   browser recipe/切换用户浏览器/upload、电脑敏感输入与系统权限、SSH 认证和文档文件边界沿用原规则。
@@ -233,6 +235,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   确认载荷不进任务事件回放，不借用或伪造 Session；Node 仍按实际已装配 provider 报告能力。
   Node Host 当前不装配生产调度器；`cindy_scheduler` 返回 `UNSUPPORTED_CAPABILITY` 和执行环境不支持说明，
   不把未提供服务描述成暂未就绪，不另建插件调度实现。此入口不承担 Node Host 自身功能补齐。
+  Node Host 已有 browser/computer 平台 provider 的对象同时供 Agent 与插件使用；原客户端、后端、
+  电脑开关与输入协调器限制继续生效，不因插件批准而补齐缺失端口或另建执行器。
   `files` 组复用上述批准与详情重试。`pick({mode:'directory',access:'files'})` 的原生选择框列明
   读写、列举、删除与监听范围，成功后在原亲选目录存储中记录随机引用及目录 dev/ino；旧路径不补引用。
   `fs root:'picked'` 和 helper `file_request` 使用同一 FsSlot/file-browser-core，不借用任务身份；
@@ -1025,6 +1029,14 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 
 ## 6. 作者契约与编写手册同步
 
+插件界面扩展的作者入口为随包 `references/plugin-host-ui.md`，具名视图和原生入口仍共用
+MCP Apps，不能另建页面 SDK 或逐历史消息 render/query。`mcpApps.host` 新能力由 receipt 的
+可选 `approvedHostUi` 记录实际展示并批准的精确主体；页面原有批准不扩张为草稿/上下文等宿主权限。
+未知声明保留为数据，新增已知能力仍需批准；存量原工具与页面不要求重新确认。
+主窗、完整任务副窗和分离侧栏共用原 MCP Apps 页面承载。开页操作沿原主窗布局路由；
+草稿快照及修改交给实际承载编辑器的窗口，只有无编辑器的分离侧栏和弹出页签回到主窗。
+辅助窗口沿受限 preload 调用，不另挂一份编辑器宿主或复制草稿。
+
 内置 `cindy-plugin-creator` Skill 是 Agent 替用户编写插件的**统一手册与流程入口**，正本位于
 `apps/desktop/resources/system-skills/cindy-plugin-creator/`。`SKILL.md` 负责流程与按需阅读索引，
 `references/` 负责各章作者契约。创作流程以 §0a 的宿主版本与源码核验开头：先确认插件
@@ -1049,7 +1061,10 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 调用按原章节号读取。不要在 TypeScript、工具描述或界面文案中另存一套编写流程。
 页面手册 `PAGE-GENERATION.md` 另以 `FORGE_PAGE_MANUAL` 导出，`ghost_forge_guide({section:"pages"})` 整份返回，
 不拼进 `FORGE_GUIDE`（手册自带 `## ` 小节，拼进去会被当成章节切开）。
-修改随包 Skill 字节时同步递增 `BUILT_IN_SKILLS_BUNDLE_VERSION`。改动其中的《Cindy MCP Apps 页面生成手册》
+修改随包 Skill 字节时，在 `apps/desktop/resources/system-skills/_versions/` 新增一个记录文件
+（版本号 = `BUILT_IN_SKILLS_BUNDLE_VERSION_BASE` + 记录数；不要把旧式 `BUILT_IN_SKILLS_BUNDLE_VERSION = N`
+常量加回来，门禁会阻断），规则见 [`credentials-and-local-storage.md`](credentials-and-local-storage.md)
+「Cindy 托管的预装技能」。改动其中的《Cindy MCP Apps 页面生成手册》
 （`PAGE-GENERATION.md`）时，还要在对应客户端上线前把新手册发布到各区域 CDN，用法与发版前检查见
 [`media-storage-and-protocols.md`](media-storage-and-protocols.md) 的《Cindy MCP Apps 页面生成手册》一条。
 手册 CDN 路径带客户端版本号与 sha256（`mcp-apps/manual/<版本号>/<sha256>.md`），发布脚本从打包产出的

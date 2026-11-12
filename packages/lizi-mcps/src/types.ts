@@ -747,6 +747,7 @@ export type ComputerMcpToolName =
   | 'list_apps'
   | 'list_windows'
   | 'get_window_state'
+  | 'get_desktop_state'
   | 'verify_state'
   | 'click'
   | 'double_click'

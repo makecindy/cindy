@@ -5,6 +5,9 @@ receipt 同步段去重已撤回，存储、终端、亲选目录与流式分片
 不增加 AsyncResource、async hook 或 ALS。下文 renderer A/B 保留旧基线数据并明确标注。
 本轮性能修正之后补齐了已保存 PAT／网络凭证引用；手机端建立引用和 Node Host
 生产 scheduler/browser/computer/ssh/docs 装配不在交付范围内。
+预合 `209212431e` 后，Node Host 复用上游已装配的 browser/computer provider 对象接入插件入口；
+只把引用加入同一 provider 数组并使目录投影失效，不新增平台工厂、扫描或启动进程。
+下文启动与 renderer 数字仍为注明基线的历史样本，未重测此次上游平台装配。
 下表区分未使用时的路径、使用后的预算与尚未具备的能力，不把代码路径证据当作完整客户端实测。
 
 | 热点 | 未使用时的开销 | 使用后的上限 | 证据 | 结论 |

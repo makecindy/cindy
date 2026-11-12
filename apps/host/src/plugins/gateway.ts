@@ -118,16 +118,17 @@ export function createHostPluginGateway(options: GatewayOptions) {
       runtime.assertCurrent(); signal.throwIfAborted();
     };
     await assertCurrent();
-    const session = await options.restoreSession(grant.sessionId, assertCurrent);
+    const session = grant.sessionId === null ? undefined : await options.restoreSession(grant.sessionId, assertCurrent);
     await assertCurrent();
-    if (session.remoteHostId) throw new Error('MCP_APP_SESSION_UNAVAILABLE');
-    const deps = gateway.getCindyGhostsMcpDeps({ sessionId: session.id, sessionInstanceId: session.instanceId,
-      agentKind: session.agentKind, workingDir: session.workDir }, hostDeps, grant);
+    if (session?.remoteHostId) throw new Error('MCP_APP_SESSION_UNAVAILABLE');
+    const deps = gateway.getCindyGhostsMcpDeps(session ? { sessionId: session.id, sessionInstanceId: session.instanceId,
+      agentKind: session.agentKind, workingDir: session.workDir } : undefined, hostDeps, grant);
     const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal });
     await assertCurrent();
     return result.ok ? pluginAppResult(result.result) : { isError: true,
       content: [{ type: 'text', text: JSON.stringify(result) }] };
   });
+  gateway.setPageControlGhostProvider(() => runtime.browserExtensions.getPageControl()?.instanceId ?? null);
   const provider: LiziMcpProvider = {
     name: 'cindy',
     capability: { title: 'Plugins and media', description: 'Discover installed plugins, their tools, accounts and media capabilities.',
