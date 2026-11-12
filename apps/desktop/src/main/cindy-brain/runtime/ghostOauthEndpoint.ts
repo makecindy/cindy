@@ -71,7 +71,7 @@ export interface GhostOauthEndpointManager {
       assertCurrent?: () => void;
     },
   ): Promise<GhostOauthConnectResult>;
-  disconnectAccount(instanceKey: string, secretKey: string, accountId: string): void;
+  disconnectAccount(instanceKey: string, secretKey: string, accountId: string): boolean | void;
   setDefaultAccount(instanceKey: string, secretKey: string, accountId: string): boolean;
   /** 'unchanged' = 证据已在库未重写(调用方跳过广播);false = 无默认账号或写失败。 */
   reportInsufficientScopes(instanceKey: string,
@@ -353,7 +353,8 @@ export async function handleGhostOauthRequest(args: {
     const accountId = segments[2];
     if (!accountId) return { status: 404 };
     try {
-      await runMutation(() => manager.disconnectAccount(instanceKey, secretKey, accountId));
+      const removed = await runMutation(() => manager.disconnectAccount(instanceKey, secretKey, accountId));
+      if (removed === false) return { status: 500 };
       notifyChanged(secretKey);
       return { status: 204 };
     } catch (err) {

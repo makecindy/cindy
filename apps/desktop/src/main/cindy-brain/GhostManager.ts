@@ -3,6 +3,7 @@ import { MCP_APPS_MAX_BYTES } from '../mcp-apps/protocol.js';
 import { findFeatureRetirement } from '../../shared/featureRetirements.js';
 import { FeatureRetirementStore } from './featureRetirementStore.js';
 import { GhostNotificationIndex } from './ghostNotificationIndex.js';
+import { ghostDeclaredNetworkTransportRejection } from './networkOriginPolicy.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -3714,6 +3715,8 @@ export class GhostManager {
     if (!v.ok) {
       return { rejection: { code: 'file-invalid', reason: `清单不合格:${v.reason}` } };
     }
+    const transportError = ghostDeclaredNetworkTransportRejection(v.manifest);
+    if (transportError) return { rejection: { code: 'file-invalid', reason: `NETWORK_INSECURE_ORIGIN: ${transportError}` } };
     if (findFeatureRetirement(v.manifest)) {
       return {
         rejection: {
@@ -5056,6 +5059,8 @@ export class GhostManager {
     // v2 作者清单仍带 slots，进入运行时后则会被投影成直接能力字段。批准链只比较、
     // 持久化规范化结果，避免同一份 v2 清单因作者格式和运行时格式不同而被误判为扩权。
     const approvedManifest = expectedManifest.manifest;
+    const transportError = ghostDeclaredNetworkTransportRejection(approvedManifest);
+    if (transportError) throw Object.assign(new Error(transportError), { code: 'NETWORK_INSECURE_ORIGIN' });
     const localeResources = this.readApprovedLocaleResources(sourceDir, approvedManifest);
     const iconDataUrl = this.readInstalledIconDataUrl(sourceDir, approvedManifest) ?? undefined;
     const packageSha256 = await hashApprovedDirectory(sourceDir);

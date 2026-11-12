@@ -77,7 +77,7 @@ export type GhostConnectionUpsertResult =
 export function normalizeGhostConnectionHost(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const host = raw.trim().toLowerCase();
-  if (host.includes('*')) return null;
+  if (host.includes('*') || host.includes('://')) return null;
   if (!isValidGhostNetworkHostPattern(host)) return null;
   return host;
 }

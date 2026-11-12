@@ -221,7 +221,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   不执行工具且立即关闭；不关闭插件正在用的电脑连接。服务开关与本实例声明/批准现查，Node 未供应的服务明确不可用。
   该目录是投影，不持有服务实现、凭证、批准或插件管理权；不开放 ghost_* 写入口。
   服务依赖沿用 agent.hostTools，执行时查找当前 provider，不新增强依赖启动状态机或 setup 字段。
-  逻辑页和 Node Worker 显式退出共用各宿主已有资源清理入口；文件监听、终端和电脑连接由原服务释放。
+  逻辑页和 Node Worker 显式退出共用各宿主已有资源清理入口；网络、文件监听、终端和电脑连接由原服务释放。
   UI 的 stop/crash/update 同样销毁电脑连接与观察引用，不只覆盖 Node 停止。持久存储及浏览器 provider 继续由原所有者处理。
   `terminal` 复用 `main/terminal/PtyManager`，界面与 MCP 共用 `HostTerminalService` 的同一注册表；
   不另写插件进程实现。Host 核准的插件实例/安装代次或真实 Session 绑定作业 owner，id 不授予归属。
@@ -646,7 +646,22 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   明确 `resetRequired`；原调用结束或 Stop 即释放。UI 与 Node Host 接线均须提供相同的身份与取消语义。
   `data` 和 `save` 原行为、旧 manifest/receipt/批准保持不变。回归见 `fsSlot.test.ts`，作者用法见 §4.10。
 
-- 自主 network 只允许 manifest 白名单域名；凭证由主机保险库注入，**无明文读回**
+- 自主 network 只允许 manifest 白名单目标：既有域名模式只代表 HTTPS:443；`network.hosts`
+  可用完整 origin 精确声明自定义端口、HTTP、本机或内网地址，不能含路径、凭证、通配或查询。
+  来源逐条进入原安装/更新确认与详情展示，跨协议/端口不继承旧域名批准。`preview.hosts`
+  仍只接受原域名格式，本项不扩大页面导航/CSP。凭证只允许经 HTTPS/WSS 注入，没有明文例外。
+  所有 HTTP/WS 请求仅允许字面量私网/回环 IP、localhost 及其子域，不能携带 Host 注入的凭证；
+  公网与普通主机名明文来源拒绝。安装/更新和随包批准由 Desktop main 与 Node Host 共用的
+  GhostManager 提前校验声明，返回原结构化 file-invalid 或批准错误 NETWORK_INSECURE_ORIGIN。
+  plugin-protocol 的 manifest 解析保持零运行依赖，仅检查格式；真正强制边界在每次派发与每一跳，
+  同步复用现有 net-policy/loopback 分类器、不查 DNS。`http://gitlab.internal` 等内网主机名须 HTTPS。
+  既有域名凭证不扩到新端口；Host 身份令牌、动态连接和 Node 代发授权仍限原 HTTPS:443。
+  `as:'stream'` 返回 Host 持有的文本流连接；`network-request` 提供 WS 精确来源的
+  open/read/send/close。两者共用 `HostNetworkConnections` 的插件归属、非消费游标与有界缓冲，
+  缺口明确返回 resetRequired；不自动重放。Node 私有控制帧走同一网络入口，剥除自报 callId，
+  凭证只在 Host 注入；旧反向 JSON-RPC 规则不变。停用/重载/安装变化、账号切换与 Host 关闭
+  回收连接，带在途 callId 的文本流随调用释放；读取/发送续期 5 分钟空闲窗口。
+  凭证由主机保险库注入，**无明文读回**
   给沙箱。Agent 在途调用可凭严格 `callId` 访问未预声明的普通 HTTPS 地址，仍须通过
   主机 URL、SSRF、超时、体积与重定向守门。此途径不注入任何未在 manifest 中声明且
   未命中目标 host 的托管凭证。
@@ -663,6 +678,30 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   连接分类、用户名和来源，不返回响应原文。插件设置页只能读取 `hostAvailable`、
   `hostManagedSetup` 布尔与备用 PAT 的 `saved/tail` 状态。该来源
   不允许 `exchange` 或 `setup.requires` 引用。安装确认须说明它能使用本机 GitHub 账号的实际权限。
+- OAuth 已连接账号复用沿用现有 `source:'oauth'` 服务端点、scope 与注入范围声明，由
+  `GhostOauthAccountManager` 管理。只列当前 owner 下已批准、启用的来源，授权/token 端点必须相同，
+  注入头形态一致且目标范围不超出原来源，所需 scope 不超出账号授权范围快照（旧账号无快照时
+  按原来源声明比较，实际访问仍由服务端决定）。宿主原生确认不可由插件
+  代答；缺确认回调就拒绝复用。原 OAuth 账号记录只保存引用，不复制 refresh/client 凭证，
+  取得令牌后、实际派发前及每次流读取时重新核对来源与目标声明/安装代次；停用、断开、撤销或
+  范围不再匹配即拒绝后续派发/读取，上传准备期间撤销也不得继续带凭证派发。
+  broker 刷新仍以原来源插件身份执行，不向受用插件授予 broker 资格。401 作废走原来源缓存，
+  断开受用插件只删除该引用。复用结果只供宿主网络注入，`node.secretBindings` 返回
+  `HOST_INJECTION_REQUIRED`，不能借旧 Node 明文绑定读取所引用的账号令牌。旧账号存储保持原义。
+  Cindy 自有详情区通过 trusted-renderer-only 的账号目录与操作 IPC 办理选择/停止使用，
+  插件页面不能调用。停止使用在 OAuth 原变更锁内复读当前记录，停用插件也可撤销；
+  引用删除落库失败必须回失败，`/oauth` 同样不能返回 204 假称已断开。界面目录与请求结果
+  按 owner generation 丢弃，不能在切换账号后显示旧账号资料。
+- 已保存 PAT／普通网络凭证沿用同一可信详情区、原生确认和变更锁。目标仍声明普通
+  `network.secrets`；来源限当前 owner 已批准、启用插件的普通网络密钥、gh-cli 的已保存
+  备用 PAT 或某条 `network.connections` PAT。注入头／格式和 exchange 一致且流向不扩张；
+  不读取平台密钥、供应商密钥、gh CLI 当前 token 或 Node 专用凭证。`GhostSavedCredentialManager`
+  只在既有加密 vault 的派生键保存引用，原凭证位的非密钥标记本身不能授权，插件不能写入
+  Host 派生键伪造引用。选择会替换目标当前填写的密钥，原来源仍独立管理；普通密钥的热路径
+  不新增引用读取。注入和流续读复核两端安装／owner 与来源资格，禁止引用链；Node 明文绑定
+  返回 `HOST_INJECTION_REQUIRED`。停止使用不删除来源，删除落盘失败不得假称成功。
+  Node Host 通过同一个管理器解析既有引用并注入，来源撤回后拒绝后续请求；不在 Node Host 建立新引用或迁移凭证。
+  不新增 manifest 字段、凭证库、授权账本或跨调用批准缓存，手机端建立引用尚未开放。
 - `source: "oidc-token"` 是 Host 托管的短时 Cindy Connection JWT：只对当前企业
   Membership 生效。资格有两条默认基座：当前组织的 Plugin Market organization 安装记录仍有效、
   且安装目录 `ghost.json` 的 raw SHA（旧记录迁移前为集中 legacy digest）与记录一致；

@@ -166,7 +166,10 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   });
   const network = new GhostNetworkSlot({ getGhost, captureRequestGuard: guard,
     inFlightCallInfo: id => current() ? cards.inFlightCallInfoOf(id) : null,
+    getCallSignal: (id, callId) => dispatcher.getPendingCallSignal(id, callId) ?? undefined,
+    resolveWebSocketAgent: hostOutbound.createOutboundHttpAgent,
     readSecret: secret.readGhostSecret, getLoginEmail: options.getLoginEmail,
+    resolveSavedCredential: (id, key) => authorization.resolveSavedCredential(id, key),
     fetchImpl: (url, init) => hostOutbound.outboundFetch(url, { ...init, signal: AbortSignal.any([...(init?.signal ? [init.signal] : []), stopSignal.signal]) } as RequestInit),
     fetchPublicImpl: (url, init, before) => hostOutbound.guardedOutboundFetch(url, { ...init, signal: AbortSignal.any([...(init?.signal ? [init.signal] : []), stopSignal.signal]) } as RequestInit, before),
     readHandoffFile: (id, ref) => { assertCurrent(); return handoff.read(id, ref); },
@@ -226,19 +229,20 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   });
   const ownerScope = { capture: () => owner, isCurrent: (value: unknown) => value === owner && current(), isStable: (value: unknown) => value === owner && current() };
   const disposeRuntimeHostServices = (id: string) => {
-    fsSlot.disposePlugin(id); options.onPluginStopped?.(id);
+    network.disposeGhost(id); fsSlot.disposePlugin(id); options.onPluginStopped?.(id);
   };
   const node = createHostNodeRuntimeBroker(assets.nodeWorker!, { getGhost, ownerScope,
     hostToolRequest: options.hostToolRequest, onStopped: disposeRuntimeHostServices,
     readSecret: secret.readGhostSecret, secretSaved: secret.ghostSecretSaved,
     resolveOauthSecret: async (id, key, accountId) => {
       const decl = getGhost(id)?.manifest.network?.secrets?.find(item => item.key === key && item.source === 'oauth')?.oauth;
-      return decl ? authorization.oauth.getFreshAccessToken(id, key, decl, accountId)
-        : { ok: false, error: 'NO_ACCOUNT' };
+      if (!decl) return { ok: false, error: 'NO_ACCOUNT' };
+      return authorization.oauth.getNodeAccessToken(id, key, decl, accountId);
     },
     getCallSignal: (id, callId) => dispatcher.getPendingCallSignal(id, callId),
     getCallSessionId: (id, callId) => dispatcher.getPendingCallSessionId(id, callId),
     authenticatedFetch: (id, request, authorization, check, signal) => network.handleAuthenticatedNodeFetch(id, request, authorization, check, signal),
+    networkRequest: (id, request) => request.op === 'fetch' ? network.handleFetchRequest(id, request) : network.handleNetworkRequest(id, request),
     sendToGhost: (id, payload) => { void sandbox.deliver(id, payload); }, log,
   });
   const download = new PluginDownloadSlot({ getGhost, root: id => root('plugin-downloads', id), scope: () => owner,
@@ -247,6 +251,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   const pipe = createGhostExecutionPipe({ dispatcher: () => dispatcher,
     hostTools: options.hostToolRequest,
     fetch: (id, payload) => network.handleFetchRequest(id, payload), files: (id, payload, check) => fsSlot.handleFsRequest(id, payload, check),
+    network: (id, payload) => network.handleNetworkRequest(id, payload),
     library: (id, payload) => library.handleLibraryRequest(id, payload),
     download: (id, payload, check) => download.handle(id, payload, check),
     node: (id, payload, check) => download.withNodeDownloads(id, payload as Record<string, unknown>, request => node.handleRequest(id, request), check),
@@ -354,6 +359,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
         // Requests from old pages lose authority immediately, even if writing the
         // disabled receipt fails. Re-enabling is an explicit new transaction.
         suspended.add(key);
+        network.disposeGhost(key);
         browserExtensions.reconcile(options.manager.list().map(ghost => getGhost(installedGhostStoragePart(ghost)) ?? { ...ghost, enabled: false }));
         runtime.stop(key);
         await node.stopAndWait(key);
@@ -375,6 +381,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     fsSlot.disposeAll();
     const errors: unknown[] = [];
     const finish = async (work: () => Promise<unknown>) => { try { await work(); } catch (error) { errors.push(error); } };
+    await finish(() => network.disposeAll());
     await finish(() => browserExtensions.dispose());
     await finish(() => authorization.close());
     await finish(() => enableChanges);

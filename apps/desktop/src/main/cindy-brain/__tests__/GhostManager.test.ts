@@ -111,6 +111,48 @@ function goodManifest(id = 'hello'): Record<string, unknown> {
   };
 }
 
+// Unit: plaintext admission belongs to Host install/update, not the dependency-
+// free manifest parser. An invalid update must preserve the old approved install.
+it.each(['http://public.example:8080', 'ws://public.example:8080', 'http://gitlab.internal:8080'])
+  ('rejects plaintext origin %s at inspect, install and update before replacing old approval', async origin => {
+    const id = 'network-policy';
+    const safe = { ...goodManifest(id), slots: ['tool', 'network'], network: { hosts: ['api.example.com'] } };
+    const installed = await manager.install(await makeCindy('old.cindy', safe), { namespace: null });
+    if (!('ghost' in installed)) throw new Error('safe install fixture failed');
+    const approvalToken = ghostInstallApprovalToken(installed.ghost.approval);
+    const file = await makeCindy('unsafe.cindy', { ...safe, version: '2.0.0', network: { hosts: [origin] } });
+    const denied = { rejection: { code: 'file-invalid', reason: expect.stringContaining('NETWORK_INSECURE_ORIGIN') } };
+    expect(await manager.inspect(file)).toMatchObject(denied);
+    expect(await manager.install(file, { namespace: null })).toMatchObject(denied);
+    expect(await manager.update(file, { namespace: null, expectedInstalledApproval: approvalToken })).toMatchObject(denied);
+    const unchanged = manager.list().find(ghost => ghost.manifest.id === id)!;
+    expect(unchanged.enabled).toBe(true);
+    expect(unchanged.manifest.version).toBe('1.0.0');
+    expect(ghostInstallApprovalToken(unchanged.approval)).toBe(approvalToken);
+  });
+
+it.each(['http://10.0.0.5:8080', 'http://127.0.0.1:8080', 'ws://localhost:8080'])
+  ('accepts declared plaintext local origin %s through the actual Host installer', async origin => {
+    const manifest = { ...goodManifest(), slots: ['tool', 'network'], network: { hosts: [origin] } };
+    expect(await manager.install(await makeCindy('local.cindy', manifest), { namespace: null }))
+      .toMatchObject({ ghost: { enabled: true, manifest: { network: { hosts: [origin] } } } });
+  });
+
+// Approval is also reachable for immutable bundled sources without ZIP parse.
+it('rejects plaintext origin when minting a trusted bundled approval', async () => {
+  const raw = { ...goodManifest(), slots: ['tool', 'network'], network: { hosts: ['http://public.example:8080'] } };
+  const validated = validateGhostManifest(raw);
+  if (!validated.ok) throw new Error(validated.reason);
+  trustedBundledIds.add(validated.manifest.id);
+  const sourceDir = path.join(workDir, 'bundled-seeds', validated.manifest.id);
+  await fs.promises.mkdir(sourceDir, { recursive: true });
+  await fs.promises.writeFile(path.join(sourceDir, 'ghost.json'), JSON.stringify(raw));
+  await fs.promises.writeFile(path.join(sourceDir, 'main.js'), '// immutable bundled fixture');
+  await expect(manager.approveTrustedBundledInstall(validated.manifest, true, { sourceDir }))
+    .rejects.toMatchObject({ code: 'NETWORK_INSECURE_ORIGIN' });
+  expect(manager.list()).toEqual([]);
+});
+
 // Unit integration: the index must follow real install/enable/uninstall mutations
 // without another full-list broadcast; gateway-only fixtures cannot cover this.
 it('updates notification candidates through actual installation mutations', async () => {

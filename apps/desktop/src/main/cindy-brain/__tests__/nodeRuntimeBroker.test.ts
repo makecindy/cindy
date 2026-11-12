@@ -1936,6 +1936,18 @@ describe('nodeRuntimeBroker · 意外死亡诊断(2026-07-26)', () => {
     expect(message).not.toContain('old failure from initialization');
   });
 
+  it('keeps a reused saved credential out of Node bindings and requires Host injection', async () => {
+    const ghost = fakeGhost();
+    ghost.manifest.node!.secretBindings = [{ key: 'api_key', label: 'PAT', methods: ['slow'] }];
+    const spawnProcess = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({ getGhost: () => ghost,
+      readSecret: () => 'cindy:host-injected-saved-credential:v1', spawnProcess });
+    expect(await broker.handleRequest('node-ghost', rpcRequest('slow'))).toMatchObject({
+      ok: false, errorCode: 'HOST_INJECTION_REQUIRED',
+    });
+    expect(spawnProcess).not.toHaveBeenCalled();
+  });
+
   it('凭证值出现在 stderr 诊断行中时被脱敏', async () => {
     const ghost = fakeGhost();
     // secretBindings 绑定到所有方法(包括 slow)
@@ -2649,6 +2661,7 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     spawnChild?: () => FakeRawChild,
     autoSpawnChild = true,
     hostToolRequest?: GhostNodeRuntimeBrokerDeps['hostToolRequest'],
+    networkRequest?: GhostNodeRuntimeBrokerDeps['networkRequest'],
   ) {
     const worker = new FakeControlProcess((message) => {
       if (message.id !== undefined && typeof message.method === 'string') {
@@ -2659,6 +2672,7 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     const broker = new GhostNodeRuntimeBroker({
       getGhost: () => ghost,
       hostToolRequest,
+      networkRequest,
       spawnProcess: () => worker as unknown as NodeWorkerProcess,
       spawnChildProcess: (entryPath, _cwd, _ghostId, args) => {
         const child = spawnChild?.() ?? new FakeRawChild();
@@ -2730,7 +2744,9 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
 
   // Unit: independent Host calls are active work even without an Agent RPC.
   // Existing immediate replies missed native consent exceeding the 30s idle timeout.
-  it('keeps concurrent Host calls alive and resumes idle collection after success and failure', async () => {
+  // #9825 also bridges autonomous network requests; they must hold the same idle
+  // lifetime while awaiting a response, then release it on success and failure.
+  it.each(['tool', 'network'] as const)('keeps concurrent %s calls alive and resumes idle collection after success and failure', async kind => {
     vi.useFakeTimers();
     const ghost = childSpawnGhost();
     ghost.manifest.node!.idleTimeoutSeconds = 30;
@@ -2741,10 +2757,13 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     const result = { content: [{ type: 'text', text: 'saved' }] };
     const hostToolRequest = vi.fn().mockImplementationOnce(async () => { await first; return result; })
       .mockImplementationOnce(async () => { await second; });
-    const { broker, worker } = await bootWorker(ghost, undefined, true, hostToolRequest);
+    const { broker, worker } = await bootWorker(ghost, undefined, true,
+      kind === 'tool' ? hostToolRequest : undefined, kind === 'network' ? hostToolRequest : undefined);
     try {
       for (const reqId of ['first', 'second'])
-        worker.emitControl({ type: 'host-tool-request', reqId, server: 'cindy_helper', tool: 'list_sessions', args: {} });
+        worker.emitControl(kind === 'tool'
+          ? { type: 'host-tool-request', reqId, server: 'cindy_helper', tool: 'list_sessions', args: {} }
+          : { type: 'network-request', reqId, request: { op: 'fetch', url: 'https://example.com' } });
       expect(hostToolRequest).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(31_000);
       expect(worker.killed).toBe(false);
@@ -2755,11 +2774,52 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
       expect(worker.killed).toBe(false);
       reject(new Error('consent unavailable'));
       await vi.advanceTimersByTimeAsync(0);
-      expect(worker.lastOf('node-host-result')).toMatchObject({ reqId: 'second', result: { isError: true } });
+      expect(worker.lastOf('node-host-result')).toMatchObject(kind === 'tool'
+        ? { reqId: 'second', result: { isError: true } } : { reqId: 'second', ok: false });
       await vi.advanceTimersByTimeAsync(29_999);
       expect(worker.killed).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       expect(worker.killed).toBe(true);
+    } finally { broker.destroyAll(); }
+  });
+
+  // Unit, #9825 / 4546519914: the private parser's 128KiB frame cap discarded
+  // legal 256KiB bodies. Check actual broker dispatch, including JSON escaping.
+  it.each(['plain', 'escaped'] as const)('delivers a legal maximum %s network body through the private channel', async encoding => {
+    const ghost = childSpawnGhost();
+    ghost.approval = { state: 'approved', revision: 'r1' };
+    const body = (encoding === 'escaped' ? '\u0000' : 'x').repeat(256 * 1024);
+    const request = vi.fn(async (_id: string, payload: Record<string, unknown>) => ({ ok: true, length: String(payload.body).length }));
+    const { broker, worker } = await bootWorker(ghost, undefined, true, undefined, request);
+    try {
+      worker.emitControl({ type: 'network-request', reqId: 'body', request: { op: 'fetch', url: 'https://example.com', method: 'POST', body } });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(request).toHaveBeenCalledOnce();
+      expect(worker.lastOf('node-host-result')).toMatchObject({ reqId: 'body', ok: true, result: { length: body.length } });
+    } finally { broker.destroyAll(); }
+  });
+
+  // Tier 1: a worker must not borrow another Agent callId through network IPC;
+  // a replacement while a request is awaiting must fence its reply.
+  it.each([false, true])('binds private network requests to the worker installation: %s', async stale => {
+    const ghost = childSpawnGhost();
+    ghost.approval = { state: 'approved', revision: 'r1' };
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    const request = vi.fn(async (_id: string, payload: Record<string, unknown>) => {
+      expect(payload.callId).toBeUndefined();
+      await gate;
+      return { ok: true, connectionId: 'opaque' };
+    });
+    const { broker, worker } = await bootWorker(ghost, undefined, true, undefined, request);
+    try {
+      worker.emitControl({ type: 'network-request', reqId: 'host1', request: { op: 'fetch', url: 'https://example.com', callId: 'forged' } });
+      for (let i = 0; i < 8; i++) await Promise.resolve();
+      expect(request).toHaveBeenCalledOnce();
+      if (stale) ghost.approval = { state: 'approved', revision: 'r2' };
+      finish();
+      for (let i = 0; i < 8; i++) await Promise.resolve();
+      expect(worker.lastOf('node-host-result')).toMatchObject({ reqId: 'host1', ok: !stale });
     } finally { broker.destroyAll(); }
   });
 

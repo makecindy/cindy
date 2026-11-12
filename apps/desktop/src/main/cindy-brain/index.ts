@@ -443,6 +443,8 @@ import { handleGhostSecretsRequest } from './runtime/ghostSecretsEndpoint.js';
 import { handleGhostOauthRequest } from './runtime/ghostOauthEndpoint.js';
 import { handleGhostConnectionsRequest } from './runtime/ghostConnectionsEndpoint.js';
 import { GhostOauthAccountManager, type GhostOauthDecl } from './ghostOauthAccounts.js';
+import { GhostSavedCredentialManager } from './ghostSavedCredentials.js';
+import { isReusableSavedSecret, type GhostReusableOauthAccount } from '../../shared/pluginAccountReuse.js';
 import { withGhostOauthMutationLock } from './ghostOauthMutationLock.js';
 import { createGhostOauthOwnerReconciliationGate } from './ghostOauthOwnerReconciliation.js';
 import { cancelActiveGhostOauthFlow } from './ghostOauthFlow.js';
@@ -736,7 +738,7 @@ import {
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { isCatalogMediaModelVisible } from './mediaDisplayVisibility.js';
 import { readProviderOrder } from '../maker-host/provider-order-store.js';
-import { guardedOutboundFetch, outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
+import { guardedOutboundFetch, outboundFetch, createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
 import { getDesktopMcpToolApprovalPolicy, setGhostToolApprovalResolver } from '../maker-host/mcp-tool-approval-policy.js';
 import { createHostToolRuntime, disposePluginHostTools, hasPluginHostTools, reconcilePluginHostTools } from '../mcp-integrations/hostToolCaller.js';
 import { getDesktopHostTerminalService } from '../terminal/terminalService.desktop.js';
@@ -1469,6 +1471,7 @@ export async function interruptGhostCallsForAccountBoundary(): Promise<void> {
   abortAllGhostInstallConsentPrompts();
   runtimeSingleton?.destroyAll();
   fsSlotSingleton?.disposeAll();
+  await networkSlotSingleton?.disposeAll();
   resetNodeRuntimeBrokerForAccountBoundary();
   // Drain in-flight staging.release (tombstone/fsync) before tearing Library
   // sessions. Owner mutation leases stay held until each call unwinds; waiting
@@ -2343,6 +2346,7 @@ export function acceptPluginInvocation(id: string, invocationId: string): void {
 
 /** Both sandbox pages and Node workers release their Host-owned resources here. */
 function disposePluginRuntimeHostServices(id: string): void {
+  networkSlotSingleton?.disposeGhost(id);
   fsSlotSingleton?.disposePlugin(id);
   getDesktopHostTerminalService(false)?.disposePlugin(id);
   disposePluginHostTools(id);
@@ -2693,6 +2697,9 @@ export function getGhostNodeRuntimeBroker(): GhostNodeRuntimeBroker {
         getGhostNetworkSlot().handleAuthenticatedNodeFetch(ghostId, request, authorization, assertCurrent, signal),
       hostToolRequest: requestPluginHostToolCall,
       onStopped: disposePluginRuntimeHostServices,
+      networkRequest: (id, request) => request.op === 'fetch'
+        ? getGhostNetworkSlot().handleFetchRequest(id, request)
+        : getGhostNetworkSlot().handleNetworkRequest(id, request),
       resolveOauthSecret: async (ghostId, secretKey, accountId) => {
         const ghost = findGhostForInstanceId(ghostId);
         const source = ghost
@@ -2702,7 +2709,7 @@ export function getGhostNodeRuntimeBroker(): GhostNodeRuntimeBroker {
           : undefined;
         if (source?.source !== 'oauth' || !source.oauth)
           return { ok: false, error: 'INVALID_DECLARATION' };
-        return getGhostOauthAccountManager().getFreshAccessToken(
+        return getGhostOauthAccountManager().getNodeAccessToken(
           ghostId,
           secretKey,
           source.oauth,
@@ -6310,9 +6317,55 @@ export async function reconcileGhostOauthAccountsForActiveOwner(): Promise<boole
   });
 }
 
+function ghostReusableConnectionSource(instanceKey: string) {
+  if (isGhostBoundaryPending()) return null;
+  const ghost = findGhostForInstanceId(instanceKey);
+  return ghost?.enabled && ghost.approval?.state === 'approved' && isGhostAvailableForActiveSession(instanceKey)
+    ? { instanceKey, name: ghost.manifest.name, manifest: ghost.manifest } : null;
+}
+
+function ghostReusableConnectionSources() {
+  return isGhostBoundaryPending() ? [] : getGhostManager().list().flatMap(installed => {
+    const source = ghostReusableConnectionSource(installedGhostStoragePart(installed));
+    return source ? [source] : [];
+  });
+}
+
+async function confirmGhostAccountReuse(input: { instanceKey: string; secretKey: string; source: GhostReusableOauthAccount; hosts: string[] }): Promise<boolean> {
+  const owner = activeOwnerScopeKey();
+  const parent = getDeepLinkMainWindow();
+  const ghost = findGhostForInstanceId(input.instanceKey);
+  if (isGhostBoundaryPending() || !ghost || !parent || parent.isDestroyed() || !isTrustedAppRendererWindow(parent)) return false;
+  const safe = (value: string) => sanitizeGhostNoticeText(value).replace(/\n+/g, ' ').slice(0, 200);
+  const decision = await dialog.showMessageBox(parent, {
+    type: 'question', title: t('settings.ghosts.detail.reuseAccountTitle'),
+    message: t('settings.ghosts.detail.reuseAccountConfirmMessage')
+      .replaceAll('{{name}}', () => safe(ghost.manifest.name))
+      .replaceAll('{{account}}', () => safe(input.source.label ?? input.source.accountId))
+      .replaceAll('{{source}}', () => safe(input.source.pluginName)),
+    detail: t('settings.ghosts.detail.reuseAccountConfirmDetail')
+      .replaceAll('{{hosts}}', () => input.hosts.join(', '))
+      .replaceAll('{{scopes}}', () => input.source.scopes.join('\n') || t('settings.ghosts.detail.reuseAccountUnknownScopes')),
+    buttons: [t('settings.ghosts.detail.reuseAccountUse'), t('common.cancel')], defaultId: 1, cancelId: 1, noLink: true,
+  });
+  return decision.response === 0 && !isGhostBoundaryPending() && owner === activeOwnerScopeKey() && !parent.isDestroyed();
+}
+
+let ghostSavedCredentialManagerSingleton: GhostSavedCredentialManager | null = null;
+function getGhostSavedCredentialManager(): GhostSavedCredentialManager {
+  return ghostSavedCredentialManagerSingleton ??= new GhostSavedCredentialManager({
+    vault: { read: readGhostSecret, readStrict: readGhostSecretStrict, store: storeGhostSecret, remove: removeGhostSecret },
+    connections: getGhostConnectionManager(), connectionSources: ghostReusableConnectionSources, connectionSource: ghostReusableConnectionSource,
+    captureTarget: ghostInstallMutationTargetFor, confirm: confirmGhostAccountReuse,
+    withMutationLock: withActiveOwnerGhostOauthMutationLock,
+  });
+}
+
 function getGhostOauthAccountManager(): GhostOauthAccountManager {
   if (!ghostOauthManagerSingleton) {
     ghostOauthManagerSingleton = new GhostOauthAccountManager({
+      connectionSources: ghostReusableConnectionSources,
+      confirmAccountReuse: confirmGhostAccountReuse,
       vault: {
         read: (ghostId, storageKey) => readGhostSecret(ghostId, storageKey),
         readStrict: (ghostId, storageKey) => readGhostSecretStrict(ghostId, storageKey),
@@ -6745,6 +6798,8 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
   if (!networkSlotSingleton) {
     networkSlotSingleton = new GhostNetworkSlot({
       captureRequestGuard: captureGhostNetworkRequestGuard,
+      getCallSignal: (id, callId) => getGhostPipeDispatcher().getPendingCallSignal(id, callId) ?? undefined,
+      resolveWebSocketAgent: createOutboundHttpAgent,
       createTransferProgress: createGhostFileTransferProgress,
       saveLibraryStream: (id, input) => getGhostLibrarySlot().importStream(id, input),
       uploadFileSize: async (id, value, library) => {
@@ -6773,6 +6828,7 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
       inFlightCallInfo: (callId) => getGhostCardService().inFlightCallInfoOf(callId),
       mcpAppsManual: bundledMcpAppsManual,
       readSecret: (ghostId, secretKey) => readGhostSecret(ghostId, secretKey),
+      resolveSavedCredential: (ghostId, secretKey) => getGhostSavedCredentialManager().resolve(ghostId, secretKey),
       readGhCliToken: () => getSharedGhCliTokenSource().readToken(),
       // source:'login-email' 凭证的值来源:现读登录态(切号/登出下一单即生效)。
       getLoginEmail: () => getAuthState().user?.email ?? null,
@@ -9844,6 +9900,7 @@ export function registerGhostIpc(): void {
   const executionPipe = createGhostExecutionPipe({
     dispatcher: () => getGhostPipeDispatcher(),
     fetch: (id, payload) => getGhostNetworkSlot().handleFetchRequest(id, payload),
+    network: (id, payload) => getGhostNetworkSlot().handleNetworkRequest(id, payload),
     files: (id, payload, current) => getGhostFsSlot().handleFsRequest(id, payload, current),
     library: (id, payload) => getGhostLibrarySlot().handleLibraryRequest(id, payload),
     download: (id, payload, current) => pluginDownloads.handle(id, payload, current),
@@ -10460,6 +10517,70 @@ export function registerGhostIpc(): void {
   });
 
   // ── 配置就绪检查(使用前置门,判定与 handler 主体在 ghostSetupStatus.ts)──
+  ipcMain.handle('ghosts:reusable-accounts', (event, id: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof id !== 'string' || !isGhostInstanceId(id)) throwIpcError('INVALID_PARAMS', 'Invalid plugin instance');
+    requireGhostAvailableForActiveSession(id);
+    const ghost = findGhostForInstanceId(id);
+    if (!ghost) throwIpcError('NOT_FOUND', 'Plugin not found');
+    return (ghost.manifest.network?.secrets ?? []).flatMap(secret => {
+      if (isReusableSavedSecret(secret)) return [{ ...getGhostSavedCredentialManager().list(id, secret.key), label: secret.label }];
+      if (secret.source !== 'oauth' || !secret.oauth) return [];
+      const manager = getGhostOauthAccountManager();
+      return [{ key: secret.key, label: secret.label,
+        options: ghost.enabled && ghost.approval?.state === 'approved' ? manager.listReusableAccounts(id, secret.key, secret.oauth) : [],
+        accounts: manager.listAccounts(id, secret.key, secret.oauth).filter(account => account.reused)
+          .map(({ id, label, status }) => ({ id, label, status })),
+      }];
+    });
+  });
+  ipcMain.handle('ghosts:reuse-account', async (event, id: unknown, payload: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof id !== 'string' || !isGhostInstanceId(id) || !payload || typeof payload !== 'object' || Array.isArray(payload)) throwIpcError('INVALID_PARAMS', 'Invalid account reuse request');
+    requireGhostAvailableForActiveSession(id);
+    const request = payload as Record<string, unknown>;
+    const ghost = findGhostForInstanceId(id);
+    const secret = ghost?.manifest.network?.secrets?.find(item => item.key === request.secretKey);
+    if (!ghost || !secret) throwIpcError('NOT_FOUND', 'Credential declaration not found');
+    if (isReusableSavedSecret(secret)) {
+      const manager = getGhostSavedCredentialManager();
+      if (request.kind === 'disconnect' && typeof request.accountId === 'string') {
+        return withActiveOwnerGhostOauthMutationLock(id, () => {
+          const result = manager.disconnect(id, secret.key, request.accountId as string);
+          if (result.ok) getGhostSetupChangeBus().emit(id, { source: 'secret', ref: secret.key });
+          return result;
+        });
+      }
+      const source = request.source as Record<string, unknown> | null;
+      if (request.kind !== 'connect' || !source || typeof source !== 'object' || Array.isArray(source) ||
+          (source.kind !== 'secret' && source.kind !== 'connection') ||
+          !['instanceKey', 'secretKey', 'accountId'].every(key => typeof source[key] === 'string' && source[key].length > 0 && source[key].length <= 512)) throwIpcError('INVALID_PARAMS', 'Invalid saved credential reference');
+      if (!ghost.enabled || ghost.approval?.state !== 'approved') throwIpcError('PERMISSION_DENIED', 'Plugin is not enabled and approved');
+      const result = await manager.reuse(id, secret.key, { kind: source.kind,
+        instanceKey: source.instanceKey as string, secretKey: source.secretKey as string, accountId: source.accountId as string });
+      if (result.ok) getGhostSetupChangeBus().emit(id, { source: 'secret', ref: secret.key });
+      return result;
+    }
+    if (secret.source !== 'oauth' || !secret.oauth) throwIpcError('NOT_FOUND', 'OAuth declaration not found');
+    const manager = getGhostOauthAccountManager();
+    if (request.kind === 'disconnect' && typeof request.accountId === 'string') {
+      return withActiveOwnerGhostOauthMutationLock(id, () => {
+        const currentSecret = findGhostForInstanceId(id)?.manifest.network?.secrets?.find(item => item.source === 'oauth' && item.key === secret.key);
+        if (!currentSecret?.oauth || !manager.listAccounts(id, secret.key, currentSecret.oauth).some(account => account.id === request.accountId && account.reused)) throwIpcError('NOT_FOUND', 'Reused account not found');
+        if (!manager.disconnectAccount(id, secret.key, request.accountId as string)) return { ok: false, error: 'VAULT_WRITE_FAILED' };
+        getGhostSetupChangeBus().emit(id, { source: 'oauth', ref: secret.key });
+        return { ok: true };
+      });
+    }
+    const source = request.source as Record<string, unknown> | null;
+    if (request.kind !== 'connect' || !source || typeof source !== 'object' || Array.isArray(source) ||
+        !['instanceKey', 'secretKey', 'accountId'].every(key => typeof source[key] === 'string' && source[key].length > 0 && source[key].length <= 512)) throwIpcError('INVALID_PARAMS', 'Invalid account reference');
+    if (!ghost.enabled || ghost.approval?.state !== 'approved') throwIpcError('PERMISSION_DENIED', 'Plugin is not enabled and approved');
+    const result = await manager.reuseAccount(id, secret.key, secret.oauth, {
+      instanceKey: source.instanceKey as string, secretKey: source.secretKey as string, accountId: source.accountId as string,
+    });
+    return result.ok ? { ok: true } : { ok: false, error: result.error };
+  });
   // 插件页点「使用」时现查:清单推导需求(有 setup 声明按声明,无则启发式),
   // 逐项核对保险库 / OAuth 账号 / 连接 / kv。全同步毫秒级、不缓存、不唤沙箱;
   // oauth 判定用运行时清单(filo-google 的内置 client 是运行时注入的,读原始
