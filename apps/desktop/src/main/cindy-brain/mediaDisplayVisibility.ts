@@ -11,7 +11,9 @@ export function isCatalogMediaModelVisible(
 ): boolean {
   try {
     const provider = getActiveCatalog().providers.find((item) => item.id === providerId);
-    const agent = provider?.agents[0] ?? 'claude-code';
+    const mediaModel = provider?.imageModels?.find((model) => model.id === modelId)
+      ?? provider?.videoModels?.find((model) => model.id === modelId);
+    const agent = mediaModel?.sourceAgent ?? provider?.agents[0] ?? 'claude-code';
     return isModelVisible(
       getModelVisibilityOverride(agent, providerId, modelId),
       defaultEnabled,

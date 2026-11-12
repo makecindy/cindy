@@ -12,11 +12,14 @@ const endpoint = z.string().url().max(2048).refine(value => {
   } catch { return false; }
 }, 'Use a public endpoint without credentials, query or fragment');
 const interruptCodex = z.boolean().optional().describe('Only after the owner agrees to interrupt running local Codex work; call from Claude Code or Pi.');
-const connectionModel = z.strictObject({ id, name: z.string().min(1).max(256).optional() });
+const connectionModel = z.strictObject({ id, name: z.string().min(1).max(256).optional(),
+  mode: z.string().trim().min(1).max(128).optional().describe('Model category, e.g. chat, image_generation or video_generation. This does not enable an execution API.'),
+});
 const connectionRuntime = z.strictObject({
   baseUrl: endpoint, modelsUrl: endpoint.optional(),
   wireProtocol: z.enum(['anthropic-messages', 'openai-responses', 'openai-chat', 'google-generative-ai']),
-  supportsImageGeneration: z.boolean().optional(),
+  supportsImageGeneration: z.boolean().optional().describe('Codex Responses hosted image tool; separate from the standalone Images API.'),
+  imageApi: z.literal('openai-images').optional().describe('Explicit standalone Images API. setRuntime selects this runtime as the sole Images owner, clearing imageApi on other runtimes; omit when replacing a runtime to disable its Images API.'),
   models: z.array(connectionModel).max(2000),
 });
 export const providerConnectionChange = z.discriminatedUnion('action', [
