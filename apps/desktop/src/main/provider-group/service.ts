@@ -734,8 +734,12 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     if (!deps.readAccountSwitch) return null;
     const token = await withTimeout(deps.readAccountSwitch(sessionId).catch(() => null), PROVIDER_GROUP_ADOPT_TIMEOUT_MS);
     if (!token) return null;
-    const round = accountSwitches.get(sessionId);
-    if (round && deps.now() - round.at > PROVIDER_GROUP_TURN_WINDOW_MS) accountSwitches.delete(sessionId);
+    // Also release abandoned tasks' expired rounds while processing new failures; the service
+    // can outlive those tasks, so pruning only the current id would retain their account sets.
+    const now = deps.now();
+    for (const [id, round] of accountSwitches) {
+      if (now - round.at > PROVIDER_GROUP_TURN_WINDOW_MS) accountSwitches.delete(id);
+    }
     return accountSwitches.get(sessionId)?.accounts.has(token) ? null : token;
   }
 
