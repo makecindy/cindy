@@ -8250,7 +8250,68 @@
         "mcpAppOnly": "僅頁面可用",
         "uiPageAccess": "頁面：{{pages}}；網域：{{domains}}；頁面可呼叫的工具：{{tools}}",
         "uiHost": "在 Cindy 中提供介面與主機操作",
-        "uiHostAccess": "{{subject}}：{{access}}"
+        "uiHostAccess": "{{subject}}：{{access}}",
+        "hostUi": {
+          "view": "顯示{{scope}}頁面，使用資源「{{name}}」",
+          "resource": "使用{{kind}}資源「{{name}}」",
+          "contribution": "在{{position}}顯示{{kind}}",
+          "command": "提供插件命令",
+          "openView": "開啟頁面「{{name}}」",
+          "tool": "呼叫工具「{{name}}」",
+          "arguments": "參數：{{value}}",
+          "shortcut": "快捷鍵：{{value}}",
+          "popover": "在入口旁開啟頁面",
+          "roles": "適用訊息來源：{{value}}",
+          "tools": "適用工具：{{value}}",
+          "plugins": "適用插件：{{value}}",
+          "options": "可選值：{{value}}",
+          "yes": "是",
+          "no": "否",
+          "unavailable": "暫時無法顯示這項權限的詳情",
+          "capabilities": {
+            "context": "讀取目前任務與選取文字",
+            "draft": "讀寫輸入框草稿",
+            "appearance": "修改已宣告的外觀設定",
+            "visibility": "顯示或隱藏視窗與已宣告的介面區域"
+          },
+          "fields": {
+            "uiFont": "修改介面字型",
+            "codeFont": "修改程式碼字型",
+            "bodyFont": "修改正文字型",
+            "wallpaper": "修改桌布",
+            "theme": "修改訊息配色",
+            "reading": "修改閱讀寬度與行距",
+            "contentStyle": "修改訊息間距與氣泡樣式"
+          },
+          "positions": {
+            "composer_toolbar": "輸入框工具列",
+            "session_header": "任務標題列",
+            "statusbar": "狀態列",
+            "message_actions": "訊息操作列",
+            "message_menu": "訊息更多選單",
+            "turn_footer": "回覆底部",
+            "message_body": "訊息正文",
+            "tool_body": "工具結果"
+          },
+          "kinds": {
+            "button": "按鈕",
+            "select": "下拉選項",
+            "status": "狀態文字"
+          },
+          "scopes": {
+            "global": "全域",
+            "task": "目前任務"
+          },
+          "resources": {
+            "font": "字型",
+            "image": "圖片",
+            "video": "影片"
+          },
+          "speakers": {
+            "user": "使用者",
+            "assistant": "助手"
+          }
+        }
       },
       "connections": {
         "confirmTitle": "新增連線地址",

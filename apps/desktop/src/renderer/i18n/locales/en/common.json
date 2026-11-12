@@ -8293,7 +8293,68 @@
         "mcpAppOnly": "Page only",
         "uiPageAccess": "Pages: {{pages}}; domains: {{domains}}; tools available to pages: {{tools}}",
         "uiHost": "Provide interfaces and Host actions in Cindy",
-        "uiHostAccess": "{{subject}}: {{access}}"
+        "uiHostAccess": "{{subject}}: {{access}}",
+        "hostUi": {
+          "view": "Show a {{scope}} page using “{{name}}”",
+          "resource": "Use the {{kind}} resource “{{name}}”",
+          "contribution": "Show a {{kind}} in the {{position}}",
+          "command": "Provide a plugin command",
+          "openView": "Open page “{{name}}”",
+          "tool": "Run tool “{{name}}”",
+          "arguments": "Parameters: {{value}}",
+          "shortcut": "Shortcut: {{value}}",
+          "popover": "Open beside the entry",
+          "roles": "For messages from: {{value}}",
+          "tools": "For tools: {{value}}",
+          "plugins": "For plugins: {{value}}",
+          "options": "Available values: {{value}}",
+          "yes": "Yes",
+          "no": "No",
+          "unavailable": "Permission details are unavailable",
+          "capabilities": {
+            "context": "Read the current task and selected text",
+            "draft": "Read and edit the message draft",
+            "appearance": "Change the declared appearance settings",
+            "visibility": "Show or hide the window and declared interface regions"
+          },
+          "fields": {
+            "uiFont": "Change the interface font",
+            "codeFont": "Change the code font",
+            "bodyFont": "Change the message font",
+            "wallpaper": "Change the wallpaper",
+            "theme": "Change message colors",
+            "reading": "Change reading width and line spacing",
+            "contentStyle": "Change message spacing and bubble styling"
+          },
+          "positions": {
+            "composer_toolbar": "input toolbar",
+            "session_header": "task header",
+            "statusbar": "status bar",
+            "message_actions": "message action bar",
+            "message_menu": "message menu",
+            "turn_footer": "reply footer",
+            "message_body": "message body",
+            "tool_body": "tool result"
+          },
+          "kinds": {
+            "button": "button",
+            "select": "selection list",
+            "status": "status text"
+          },
+          "scopes": {
+            "global": "Global",
+            "task": "Current-task"
+          },
+          "resources": {
+            "font": "font",
+            "image": "image",
+            "video": "video"
+          },
+          "speakers": {
+            "user": "User",
+            "assistant": "Assistant"
+          }
+        }
       },
       "connections": {
         "confirmTitle": "Add connection address",

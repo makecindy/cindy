@@ -8250,7 +8250,68 @@
         "mcpAppOnly": "ページ専用",
         "uiPageAccess": "ページ：{{pages}}、ドメイン：{{domains}}、ページから呼び出せるツール：{{tools}}",
         "uiHost": "Cindy に画面とホスト操作を追加",
-        "uiHostAccess": "{{subject}}: {{access}}"
+        "uiHostAccess": "{{subject}}: {{access}}",
+        "hostUi": {
+          "view": "リソース「{{name}}」で{{scope}}ページを表示する",
+          "resource": "{{kind}}リソース「{{name}}」を使用する",
+          "contribution": "{{position}}に{{kind}}を表示する",
+          "command": "プラグインのコマンドを提供する",
+          "openView": "ページ「{{name}}」を開く",
+          "tool": "ツール「{{name}}」を実行する",
+          "arguments": "パラメーター：{{value}}",
+          "shortcut": "ショートカット：{{value}}",
+          "popover": "入口の横にページを開く",
+          "roles": "対象のメッセージ送信者：{{value}}",
+          "tools": "対象のツール：{{value}}",
+          "plugins": "対象のプラグイン：{{value}}",
+          "options": "選択できる値：{{value}}",
+          "yes": "はい",
+          "no": "いいえ",
+          "unavailable": "この権限の詳細を表示できません",
+          "capabilities": {
+            "context": "現在のタスクと選択したテキストを読み取る",
+            "draft": "入力欄の下書きを読み書きする",
+            "appearance": "宣言された外観設定を変更する",
+            "visibility": "ウィンドウと宣言された画面領域を表示・非表示にする"
+          },
+          "fields": {
+            "uiFont": "画面のフォントを変更する",
+            "codeFont": "コードのフォントを変更する",
+            "bodyFont": "本文のフォントを変更する",
+            "wallpaper": "壁紙を変更する",
+            "theme": "メッセージの配色を変更する",
+            "reading": "本文の幅と行間を変更する",
+            "contentStyle": "メッセージの間隔と吹き出しを変更する"
+          },
+          "positions": {
+            "composer_toolbar": "入力欄のツールバー",
+            "session_header": "タスクのヘッダー",
+            "statusbar": "ステータスバー",
+            "message_actions": "メッセージの操作バー",
+            "message_menu": "メッセージのその他メニュー",
+            "turn_footer": "返信の下部",
+            "message_body": "メッセージの本文",
+            "tool_body": "ツールの結果"
+          },
+          "kinds": {
+            "button": "ボタン",
+            "select": "選択リスト",
+            "status": "状態テキスト"
+          },
+          "scopes": {
+            "global": "グローバル",
+            "task": "現在のタスクの"
+          },
+          "resources": {
+            "font": "フォント",
+            "image": "画像",
+            "video": "動画"
+          },
+          "speakers": {
+            "user": "ユーザー",
+            "assistant": "アシスタント"
+          }
+        }
       },
       "connections": {
         "confirmTitle": "接続先の追加",
