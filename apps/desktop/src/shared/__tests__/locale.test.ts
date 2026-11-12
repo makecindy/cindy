@@ -3,6 +3,17 @@ import { describe, expect, it } from 'vitest';
 import { resolvePreferredSystemLocale, resolveSystemLocale } from '../locale';
 
 describe('desktop locale resolution', () => {
+  // CodeQL #436: POSIX suffix removal used an unanchored backtracking regex.
+  // Public locale resolution must keep encoding suffix support and reject internal
+  // line terminators; existing OS-tag tests covered neither input shape (unit).
+  it('strips POSIX codesets while keeping malformed multiline input invalid', () => {
+    expect(resolveSystemLocale(' ja_JP.UTF-8 ')).toBe('ja');
+    expect(resolveSystemLocale('pt_BR.UTF-8')).toBe('pt-BR');
+    for (const separator of ['\n', '\r', '\u2028', '\u2029']) {
+      expect(resolvePreferredSystemLocale([`ja_JP.${'.'.repeat(100)}${separator}invalid`, 'de-DE'])).toBe('de');
+    }
+  });
+
   it('routes simplified and traditional Chinese tags separately', () => {
     for (const tag of ['zh', 'zh-CN', 'zh-Hans', 'zh-Hans-HK', 'zh-SG']) {
       expect(resolveSystemLocale(tag), tag).toBe('zh-CN');

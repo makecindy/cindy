@@ -28,7 +28,12 @@ export type LocalePreference = SupportedLocale | 'system';
 export const DEFAULT_LOCALE: SupportedLocale = 'en';
 
 function normalizeLocaleTag(raw: string | undefined | null): string | null {
-  const tag = raw?.trim().replace(/_/g, '-').replace(/\..*$/, '');
+  const value = raw?.trim();
+  // Internal line breaks are invalid even inside a POSIX codeset suffix. Check
+  // before slicing so malformed input cannot become a supported language tag.
+  if (!value || /[\r\n\u2028\u2029]/u.test(value)) return null;
+  const codesetStart = value.indexOf('.');
+  const tag = (codesetStart < 0 ? value : value.slice(0, codesetStart)).replace(/_/g, '-');
   if (!tag) return null;
 
   try {
