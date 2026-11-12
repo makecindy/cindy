@@ -15,6 +15,7 @@ import { TelegramApiError, type TelegramApiClient, type TgUpdate } from '../api.
 import { encodeCallbackData, encodeMessageId } from '../codec.js';
 import { TelegramIM, type TelegramGroupWindowEntry } from '../index.js';
 import { PROCESSING_REACTION_POOL } from '../reactionPool.js';
+import { setTransportTextResolver } from '../../transportText.js';
 
 const BOT = { id: 999, is_bot: true, first_name: 'Cindy', username: 'my_cindy_bot' };
 const OWNER_ID = '111';
@@ -3377,6 +3378,32 @@ describe('TelegramIM 宿主工具的 Bot API 直通', () => {
     await vi.waitFor(() =>
       expect(api.calls.filter((c) => c.method === 'sendMessage').length).toBe(before + 2),
     );
+  });
+
+  // Unit: keep localized membership notices when merging admission transport changes.
+  // The existing membership case checks routing, but not send-time locale or interpolation.
+  it('进退群通知经准入发送流程时仍现取文案并填充群信息', async () => {
+    let locale = 'en';
+    setTransportTextResolver((key, vars) => {
+      if (!key.endsWith('.groupJoined') && !key.endsWith('.groupLeft')) return null;
+      return `${locale}:${key}:${vars?.actor}:${vars?.title}:${vars?.chatId}`;
+    });
+    try {
+      await connect();
+      const joined = membershipUpdate({ updateId: 305, from: 'left', to: 'member' });
+      joined.my_chat_member!.from.id = Number(OWNER_ID);
+      api.pushUpdates([joined]);
+      await vi.waitFor(() => expect(api.calls.some((call) => call.method === 'sendMessage' &&
+        call.params.chat_id === OWNER_ID && call.params.text ===
+          'en:imBot.text.transport.telegram.groupJoined:Tom:Ops:-100200')).toBe(true));
+      locale = 'de';
+      api.pushUpdates([membershipUpdate({ updateId: 306, from: 'member', to: 'kicked' })]);
+      await vi.waitFor(() => expect(api.calls.some((call) => call.method === 'sendMessage' &&
+        call.params.chat_id === OWNER_ID && call.params.text ===
+          'de:imBot.text.transport.telegram.groupLeft:Tom:Ops:-100200')).toBe(true));
+    } finally {
+      setTransportTextResolver(null);
+    }
   });
 
   it('群内升为管理员、私聊拉黑这类没有进出的变化不产生任何动作', async () => {

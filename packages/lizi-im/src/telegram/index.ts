@@ -75,6 +75,7 @@ import {
   pickExpressiveReaction,
 } from './reactionPool.js';
 import { startTelegramStreaming } from './streamingText.js';
+import { tt } from '../transportText.js';
 
 const TOKEN_SECRET_KEY = 'telegram-bot-token';
 const OWNER_USER_ID_SECRET_KEY = 'telegram-owner-user-id';
@@ -146,8 +147,10 @@ const TYPING_LOOP_MAX_MS = TELEGRAM_PERSONAL_CAPABILITIES.typingKeepaliveMaxMs;
 const LINK_PREVIEW_OPTIONS = {
   is_disabled: TELEGRAM_PERSONAL_CAPABILITIES.linkPreviewDisabled,
 } as const;
-const SECRET_WRITE_FAILED_REASON = '无法安全保存凭证(系统安全存储不可用)';
-const DEFAULT_EXPIRED_CARD_NOTICE = '卡片已过期';
+const secretWriteFailedReason = (): string =>
+  tt('imBot.text.transport.common.secretWriteFailed', '无法安全保存凭证(系统安全存储不可用)');
+const defaultExpiredCardNotice = (): string =>
+  tt('imBot.text.transport.common.cardExpired', '卡片已过期');
 
 /** 非 owner 显式召唤(私聊/群 @/reply)的礼貌回应 — per-user 冷却防刷屏。 */
 const STRANGER_NOTICE_COOLDOWN_MS = 60_000;
@@ -295,7 +298,8 @@ export const TELEGRAM_DEFAULT_BEHAVIOR: TelegramBehaviorConfig = {
 export interface TelegramIMOptions {
   /** cindy-media:// / xdt-image:// → 本地绝对路径(出站图片上传用)。 */
   resolveImageUrl?: (url: string) => string;
-  expiredCardNotice?: string;
+  /** Expired-card notice; a function is read at send time so it follows the current UI language. */
+  expiredCardNotice?: string | (() => string);
   ownerNoticeText?:
     | Partial<Record<OwnerNoticePhase, string>>
     | ((phase: OwnerNoticePhase) => string);
@@ -497,7 +501,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.resetLifetimeAbort();
     const tokenResult = this.secretReadResult(this.secretKey(TOKEN_SECRET_KEY));
     if (tokenResult.kind === 'error') {
-      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      this.setStatus({ kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
       return;
     }
     const token = tokenResult.kind === 'value' ? tokenResult.value.trim() : '';
@@ -510,7 +514,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // 用户特意让位给另一台设备的轮询又夺回来。零网络请求进 offline。
     const offlineFlagState = this.offlineFlagState();
     if (offlineFlagState === 'unknown') {
-      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      this.setStatus({ kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
       return;
     }
     if (offlineFlagState === 'set') {
@@ -536,12 +540,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // "未配置" → 设 idle 却不停轮询, 变成「UI 显示未配置、bot 还在收消息」。
     // 这条路径远程下线也会走(telegramRemoteControl 不做预检), 必须在这里兜住。
     if (!this.host.secrets.isAvailable()) {
-      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      this.setStatus({ kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
       return;
     }
     const tokenResult = this.secretReadResult(this.secretKey(TOKEN_SECRET_KEY));
     if (tokenResult.kind === 'error') {
-      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      this.setStatus({ kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
       return;
     }
     const token = tokenResult.kind === 'value' ? tokenResult.value.trim() : '';
@@ -553,7 +557,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // 已下线, 但重启就会自动上线回来抢另一台的轮询 —— 恰好毁掉下线的全部意义。
     // 宁可停在"没下线成功"的明确错误上, 也不留一个会自己复活的假下线。
     if (!this.host.secrets.write(this.secretKey(OFFLINE_SECRET_KEY), '1')) {
-      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      this.setStatus({ kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
       return;
     }
     // 换代先行: 在途 poll 循环据 configVersion 自行退出, 不会把下线状态覆盖回去。
@@ -571,7 +575,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   async goOnline(): Promise<boolean> {
     const tokenResult = this.secretReadResult(this.secretKey(TOKEN_SECRET_KEY));
     if (tokenResult.kind === 'error') {
-      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      this.setStatus({ kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
       return false;
     }
     const token = tokenResult.kind === 'value' ? tokenResult.value.trim() : '';
@@ -582,7 +586,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // 只有明确读到"不存在"才算删成功: 'unknown'(存储在 remove→read 窗口里失效)
     // 同样 fail closed, 否则删除失败会被当成成功放过。
     if (this.offlineFlagState() !== 'absent') {
-      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      this.setStatus({ kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
       return false;
     }
     if (!token) {
@@ -656,7 +660,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const ownerUserId =
       typeof config.ownerUserId === 'string' ? config.ownerUserId.trim() : '';
     if (!this.host.secrets.isAvailable()) {
-      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      this.setStatus({ kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
       return configResult();
     }
 
@@ -664,7 +668,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const previousTokenResult = this.secretReadResult(this.secretKey(TOKEN_SECRET_KEY));
     const previousOwnerResult = this.secretReadResult(this.secretKey(OWNER_USER_ID_SECRET_KEY));
     if (previousTokenResult.kind === 'error' || previousOwnerResult.kind === 'error') {
-      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      this.setStatus({ kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
       return configResult();
     }
     const previousToken =
@@ -683,7 +687,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         previousOwnerUserId,
         previousRuntimeOwnerUserId,
       );
-      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      this.setStatus({ kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
       return configResult();
     }
 
@@ -703,7 +707,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           previousOwnerUserId,
           previousRuntimeOwnerUserId,
         );
-        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+        this.setStatus({ kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
         return configResult();
       }
       const connected = await this.connect(token, false);
@@ -764,7 +768,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // Unbinding cannot succeed while a persisted group grant could survive it.
     if (!this.groupAdmission().clear()) {
       await this.stopPolling();
-      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      this.setStatus({ kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
       return { status: this.status };
     }
     this.ownerUserId = '';
@@ -810,7 +814,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       }
       const { online } = payload;
       if (!this.host.secrets.isAvailable()) {
-        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+        this.setStatus({ kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
         return { status: this.status };
       }
       if (online) {
@@ -1249,9 +1253,10 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     if (!this.ownerUserId || !api) return;
     const generation = this.configVersion;
     const signal = this.outboundAbortSignal();
+    const noticeVars = { actor, title, chatId: chat.id };
     const notice = isIn
-      ? `👥 我被「${actor}」加进了群「${title}」(chat_id: ${chat.id})。`
-      : `👥 我被「${actor}」移出了群「${title}」(chat_id: ${chat.id})。`;
+      ? tt('imBot.text.transport.telegram.groupJoined', '👥 我被「{{actor}}」加进了群「{{title}}」(chat_id: {{chatId}})。', noticeVars)
+      : tt('imBot.text.transport.telegram.groupLeft', '👥 我被「{{actor}}」移出了群「{{title}}」(chat_id: {{chatId}})。', noticeVars);
     // Only the durable decision above belongs to the global polling barrier.
     // Both admission requests and ordinary membership notices use the same bounded,
     // cancellable transport, and neither holds up later chats or disconnect.
@@ -1372,7 +1377,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const offlineFlagState = this.offlineFlagState();
     if (offlineFlagState !== 'absent') {
       if (offlineFlagState === 'unknown') {
-        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+        this.setStatus({ kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
       } else {
         this.botId = me.id;
         this.setStatus({ kind: 'offline', appId: String(me.id) });
@@ -1481,7 +1486,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         if (abort.signal.aborted || this.configVersion !== generation) return;
         if (err instanceof TelegramGroupAdmissionStorageError) {
           // Keep the last committed offset. Reconnecting replays this membership event.
-          this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+          this.setStatus({ kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
           abort.abort();
           return;
         }
@@ -1942,7 +1947,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       // ref 失效(重启丢内存 token / 被淘汰): 提示过期的同时把键盘清掉。
       // 只提示不清键盘, 按钮会一直留在原消息上 —— 看起来还能点, 点了只会再弹一次过期。
       answer({
-        text: this.opts.expiredCardNotice ?? DEFAULT_EXPIRED_CARD_NOTICE,
+        text: (typeof this.opts.expiredCardNotice === 'function' ? this.opts.expiredCardNotice() : this.opts.expiredCardNotice) ?? defaultExpiredCardNotice(),
         show_alert: true,
       });
       // 但**只有整张卡都失效**才清键盘: token 是逐个淘汰的, 同卡其它按钮可能还能用,
@@ -2686,7 +2691,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         );
       }
     }
-    this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+    this.setStatus({ kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
     return false;
   }
 
