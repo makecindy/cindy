@@ -36,7 +36,7 @@ interface DiffLine {
  * `+++` / `---` / `@@` hunk headers stay as `ctx` so they render in the
  * default text color (no red/green bleed onto file headers).
  */
-function parseDiffText(raw: string): DiffLine[] {
+export function parseDiffText(raw: string): DiffLine[] {
   // Trim leading/trailing blank lines so the block doesn't open or close on
   // an empty row — matches how fenced code blocks are usually authored.
   const lines = raw.replace(/^\n+|\n+$/g, '').split('\n');
