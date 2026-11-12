@@ -12226,7 +12226,7 @@
         "dismiss": "Ignorar",
         "dismissAria": "Ignorar la solicitud de {{who}}",
         "confirmOnHost": "Confirma la vinculación en {{device}}.",
-        "confirmOnHostUnnamed": "Confirma la vinculación en el ordenador donde se ejecuta este compañero.",
+        "confirmOnHostUnnamed": "Confirma la vinculación en el ordenador donde se ejecuta este amigo.",
         "confirm": {
           "title": "¿Hacer a {{who}} propietario?",
           "description": "Confirma solo si acabas de enviar un mensaje al bot desde tu propia cuenta de Telegram. Después, los mensajes del ID de Telegram {{userId}} se procesarán con los permisos propios de {{name}}, también en este ordenador.",

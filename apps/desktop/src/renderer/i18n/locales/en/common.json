@@ -12126,7 +12126,7 @@
         "dismiss": "Ignore",
         "dismissAria": "Ignore the request from {{who}}",
         "confirmOnHost": "Confirm pairing on {{device}}.",
-        "confirmOnHostUnnamed": "Confirm pairing on the computer this teammate runs on.",
+        "confirmOnHostUnnamed": "Confirm pairing on the computer this buddy runs on.",
         "confirm": {
           "title": "Make {{who}} the owner?",
           "description": "Only confirm if you just messaged the bot from your own Telegram account. After this, messages from Telegram ID {{userId}} run with {{name}}’s own permissions, including on this computer.",

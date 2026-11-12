@@ -12226,7 +12226,7 @@
         "dismiss": "Ignorar",
         "dismissAria": "Ignorar o pedido de {{who}}",
         "confirmOnHost": "Confirma o emparelhamento em {{device}}.",
-        "confirmOnHostUnnamed": "Confirma o emparelhamento no computador onde este colega é executado.",
+        "confirmOnHostUnnamed": "Confirma o emparelhamento no computador onde este amigo é executado.",
         "confirm": {
           "title": "Tornar {{who}} o proprietário?",
           "description": "Confirma apenas se acabaste de enviar uma mensagem ao bot a partir da tua própria conta do Telegram. Depois disso, as mensagens do ID do Telegram {{userId}} serão executadas com as permissões próprias de {{name}}, incluindo neste computador.",

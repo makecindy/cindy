@@ -12080,7 +12080,7 @@
         "dismiss": "無視",
         "dismissAria": "{{who}} のリクエストを無視",
         "confirmOnHost": "{{device}} でペアリングを承認してください。",
-        "confirmOnHostUnnamed": "このチームメイトが動いているコンピュータでペアリングを承認してください。",
+        "confirmOnHostUnnamed": "この仲間が動いているコンピュータでペアリングを承認してください。",
         "confirm": {
           "title": "{{who}} をオーナーにしますか？",
           "description": "ご自身の Telegram アカウントからボットにメッセージを送った直後の場合のみ承認してください。承認すると、Telegram ID {{userId}} からのメッセージは {{name}} 自身の権限で実行され、このコンピュータ上の操作も含まれます。",

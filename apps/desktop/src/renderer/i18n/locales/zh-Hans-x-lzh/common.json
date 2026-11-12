@@ -12080,7 +12080,7 @@
         "dismiss": "置之",
         "dismissAria": "置 {{who}} 之请",
         "confirmOnHost": "请于 {{device}} 确认配对。",
-        "confirmOnHostUnnamed": "请于此伙伴所运行之电脑确认配对。",
+        "confirmOnHostUnnamed": "请于此同伴所运行之电脑确认配对。",
         "confirm": {
           "title": "以 {{who}} 为主乎？",
           "description": "唯君方以自身 Telegram 账号致讯机器人，乃可确之。确后，来自 Telegram ID {{userId}} 之讯依 {{name}} 自身权柄行事，并及此机之事。",

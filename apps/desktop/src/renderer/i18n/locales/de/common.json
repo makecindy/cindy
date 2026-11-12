@@ -12126,7 +12126,7 @@
         "dismiss": "Ignorieren",
         "dismissAria": "Anfrage von {{who}} ignorieren",
         "confirmOnHost": "Bestätige die Kopplung auf {{device}}.",
-        "confirmOnHostUnnamed": "Bestätige die Kopplung auf dem Computer, auf dem dieses Teammitglied läuft.",
+        "confirmOnHostUnnamed": "Bestätige die Kopplung auf dem Computer, auf dem dieser Freund läuft.",
         "confirm": {
           "title": "{{who}} zum Besitzer machen?",
           "description": "Bestätige nur, wenn du dem Bot gerade von deinem eigenen Telegram-Konto geschrieben hast. Danach werden Nachrichten von der Telegram-ID {{userId}} mit den eigenen Berechtigungen von {{name}} verarbeitet – auch auf diesem Computer.",

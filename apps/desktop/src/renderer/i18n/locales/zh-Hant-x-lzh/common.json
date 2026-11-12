@@ -12080,7 +12080,7 @@
         "dismiss": "置之",
         "dismissAria": "置 {{who}} 之請",
         "confirmOnHost": "請於 {{device}} 確認配對。",
-        "confirmOnHostUnnamed": "請於此夥伴所運行之電腦確認配對。",
+        "confirmOnHostUnnamed": "請於此同伴所運行之電腦確認配對。",
         "confirm": {
           "title": "以 {{who}} 為主乎？",
           "description": "唯君方以自身 Telegram 帳號致訊機器人，乃可確之。確後，來自 Telegram ID {{userId}} 之訊依 {{name}} 自身權柄行事，並及此機之事。",

@@ -12080,7 +12080,7 @@
         "dismiss": "무시",
         "dismissAria": "{{who}} 님의 요청 무시",
         "confirmOnHost": "{{device}}에서 페어링을 승인하세요.",
-        "confirmOnHostUnnamed": "이 팀원이 실행 중인 컴퓨터에서 페어링을 승인하세요.",
+        "confirmOnHostUnnamed": "이 동반자가 실행 중인 컴퓨터에서 페어링을 승인하세요.",
         "confirm": {
           "title": "{{who}} 님을 소유자로 지정할까요?",
           "description": "방금 내 Telegram 계정으로 봇에 메시지를 보낸 경우에만 승인하세요. 승인하면 Telegram ID {{userId}}의 메시지는 이 컴퓨터에서의 작업을 포함해 {{name}}의 권한으로 실행됩니다.",
