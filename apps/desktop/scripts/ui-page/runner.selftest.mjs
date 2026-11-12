@@ -296,11 +296,27 @@ test('captures exact viewports and overviews in a hidden Electron window', async
   const definition = adhocPage(file);
   // Integration regression: region capture changes CDP viewport size. It must not
   // leak into the next variant, even when a scenario fails after changing it.
+  // #10177's broad UI run also exposed context-wide clock/init-script leakage:
+  // a new Electron window alone cannot isolate later sandboxed mail/PR frames.
   definition.check = async (page, ui) => {
     if (ui.theme === 'light' && ui.viewport.width === 560) {
       await page.setViewportSize({ width: 700, height: 500 });
+      await page.clock.install({ time: 0 });
+      await page.context().addInitScript(() => { window.contextLeak = true; });
+      await page.evaluate(() => localStorage.setItem('context-leak', 'present'));
       throw new Error('intentional scenario failure after resizing');
     }
+    assert.equal(await page.evaluate(() => window.contextLeak), undefined);
+    assert.equal(await page.evaluate(() => localStorage.getItem('context-leak')), null);
+    assert.ok(Math.abs(await page.evaluate(() => Date.now()) - Date.now()) < 10000,
+      'the next variant uses the real clock');
+    await page.evaluate(() => {
+      const frame = document.createElement('iframe');
+      frame.setAttribute('sandbox', 'allow-same-origin');
+      frame.srcdoc = '<p>Sandbox ready</p>';
+      document.body.append(frame);
+    });
+    await page.frameLocator('iframe').getByText('Sandbox ready').waitFor();
     // Real HTML fullscreen must resolve on the isolated test origin. Media
     // permission remains denied; enabling fullscreen is not a general grant.
     await page.locator('#root').evaluate((el) => el.requestFullscreen());

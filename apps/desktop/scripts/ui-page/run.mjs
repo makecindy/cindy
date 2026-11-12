@@ -277,7 +277,7 @@ export async function runPlan(plan, options, externalSignal) {
     }
   };
 
-  // The route handler serves whatever variant is current (Electron reuses one window).
+  // The Chromium route handler serves the current variant's in-memory bundle.
   const current = { bundle: null, context: null, blocked: [], overview: '' };
   const routePage = async (context) => {
     await context.route('**/*', (route) => {
@@ -347,7 +347,7 @@ export async function runPlan(plan, options, externalSignal) {
     }
     if (options.compare) summary.compare = { ref: options.compare };
 
-    await measure('launchMs', async () => {
+    const launchRuntime = (size) => measure('launchMs', async () => {
       if (options.engine === 'electron') {
         const env = Object.fromEntries(
           Object.entries(process.env).filter(([key]) =>
@@ -356,7 +356,6 @@ export async function runPlan(plan, options, externalSignal) {
             ),
           ),
         );
-        const first = plan.pages[0].variants[0].viewport;
         // Playwright's Electron launcher always installs signal handlers that exit(130) before
         // the CLI can write the summary and remove scratch data; the CLI owns interrupts instead.
         const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
@@ -370,11 +369,12 @@ export async function runPlan(plan, options, externalSignal) {
             CINDY_UI_PROFILE: path.join(scratch, 'profile'),
             CINDY_UI_BUNDLE_DIR: path.join(scratch, 'bundle'),
             CINDY_UI_EVIDENCE_DIR: evidence,
-            CINDY_UI_WIDTH: String(first.width),
-            CINDY_UI_HEIGHT: String(first.height),
+            CINDY_UI_WIDTH: String(size.width),
+            CINDY_UI_HEIGHT: String(size.height),
             CINDY_UI_PREVIEW: options.mode === 'preview' ? '1' : '0',
           },
         });
+        summary.cleanup.runtimeClosed = false;
         for (const name of signals)
           for (const listener of process.listeners(name))
             if (!ownListeners.get(name).includes(listener)) process.off(name, listener);
@@ -400,23 +400,20 @@ export async function runPlan(plan, options, externalSignal) {
         summary.versions = { chrome: browser.version(), executablePath };
       }
     });
+    await launchRuntime(plan.pages[0].variants[0].viewport);
 
     let usedElectronWindow = false;
     const freshElectronPage = async (size) => {
       if (usedElectronWindow) {
-        // A new target clears both Chromium emulation and Playwright's cached
-        // viewport/fullscreen state, even after a failed scenario. Reuse the same
-        // isolated process/session and the host's one secure window factory.
-        const ready = app.waitForEvent('window', { timeout: options.timeout });
-        await app.evaluate(({ app, BrowserWindow }, viewport) => {
-          const old = BrowserWindow.getAllWindows();
-          app.emit('ui-check:create-window', viewport);
-          for (const window of old) window.destroy();
-        }, size);
-        electronPage = await ready;
-        electronPage.on('requestfailed', (request) => {
-          if (new URL(request.url()).origin !== origin) current.blocked.push(request.url());
-        });
+        // Electron windows share Playwright's browser context. Replacing only
+        // the window leaves context clocks/init scripts installed, including in
+        // later sandboxed iframes. A fresh runtime isolates every variant, even
+        // after a failed scenario; bundles and evidence stay available on disk.
+        await measure('closeMs', stopRuntime);
+        app = undefined;
+        electronPage = undefined;
+        stopping = undefined;
+        await launchRuntime(size);
       }
       usedElectronWindow = true;
       // Windows may clamp a newly created native window to the display work area.
