@@ -872,9 +872,6 @@
     "apps/desktop/src/renderer/state/__tests__/agentIslandActivity.test.ts": {
       "resetModules": 1
     },
-    "apps/desktop/src/renderer/themes/__tests__/generatedEffortInitialization.test.ts": {
-      "resetModules": 1
-    },
     "apps/desktop/src/renderer/voice-input/__tests__/dictionaryLearningSettings.test.ts": {
       "resetModules": 1
     },
