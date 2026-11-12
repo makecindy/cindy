@@ -6,6 +6,7 @@ import { errorPayload, okPayload } from "./_payload.js";
 export interface ProjectManagementCallbacks {
   list(params: {
     callerSessionId: string;
+    device?: string;
     includeHidden: boolean;
     offset: number;
     limit: number;
@@ -81,22 +82,25 @@ export function registerProjectManagementTools(
     name: "list_projects",
     category: "control",
     description:
-      "List registered projects on the local Cindy host, including empty projects. Use the returned project_path to select an existing visible project when creating a task with send_to_session. working_dir is the same project directory for rename/remove operations. Returns directory_name, display alias, hidden state and whether the directory exists. Identify projects by path, not display name. Hidden projects are included by default; restore explicitly with create_project before selecting one. Also returns projects_root: where new project folders go on this computer (source=setting is the user's choice; inferred/default are suggestions, so confirm the location with the user before creating a folder there; exists=false means it has not been created yet). Use next_offset for pagination. Unlike list_workdirs, this is the project catalog, not task execution directory history. Unavailable from SSH tasks.",
+      "List registered projects on the selected Cindy computer (device; omitted means local), including empty projects. Use the returned project_path to select an existing visible project when creating a task with send_to_session. working_dir is the same project directory for rename/remove operations. Returns directory_name, display alias, hidden state and whether the directory exists. Identify projects by path, not display name. Hidden projects are included by default; restore explicitly with create_project before selecting one. Also returns projects_root: where new project folders go on this computer (source=setting is the user's choice; inferred/default are suggestions, so confirm the location with the user before creating a folder there; exists=false means it has not been created yet). Use next_offset for pagination. Unlike list_workdirs, this is the project catalog, not task execution directory history. Unavailable from SSH tasks.",
     inputShape: {
+      device: z.string().trim().min(1).max(128).optional().describe('查询哪台电脑的项目；取 list_machines 的 machines.computers[].deviceId，省略或 local 为本机。返回的项目路径只用于同一电脑。'),
       include_hidden: z.boolean().default(true),
       offset: z.number().int().min(0).default(0),
       limit: z.number().int().min(1).max(500).default(100),
     },
-    handler: ({ include_hidden, offset, limit }) =>
+    handler: ({ include_hidden, offset, limit, device }) =>
       call(
         (callerSessionId) =>
           deps.callbacks.list({
             callerSessionId,
+            ...(device !== undefined ? { device } : {}),
             includeHidden: include_hidden,
             offset,
             limit,
           }),
         (data) => ({
+          device: device ?? "local",
           projects: data.projects.map((row) => ({
             working_dir: row.workingDir,
             project_path: row.workingDir,

@@ -1,19 +1,26 @@
 /**
  * 测试价值
  * - 生产入口与可观察结果：注册后的 self-hosted-relay:command IPC；部署完成只保存记录、不切换线路，
- *   多台服务器各留一条记录，改名只改本机记录；账号切换后的迟到部署/退出响应不能改写新账号配置或覆盖新部署进度。
+ *   多台服务器各留一条记录，改名只改本机记录；账号切换后的迟到部署/退出响应不能改写新账号配置或覆盖新部署进度；
+ *   同账号设备经账号记录申请时，主人电脑只自动放行登记过的设备与公钥；分享给其他账号时只同意配对证明
+ *   对得上自己链接的申请，对方账号在中转上建自己的网络、被拒时删掉本机为它生成的秘密。
  * - Bug/规则依据：appSessionState.activeOwnerScopeKey 的异步账号边界；原部署回调跨 await 读取当前账号，
- *   会将旧账号的部署记录写入新账号，切换中转在等待退出旧中转时也有同样问题。
- * - 现有覆盖缺口：部署器测试只验证 SSH 步骤，没有经过运行时 IPC 与账号切换，故单独覆盖该模块。
- * - 最小失败输入：挂起一次部署或退出请求，换账号，再让原请求完成。
- * - tier：unit；SSH、存储和 Electron 为进程内 fake，无网络、磁盘或真实等待。
- * - 单文件实测：0.80 秒（17 例，测试体 35ms，Linux）。
+ *   会将旧账号的部署记录写入新账号，切换中转在等待退出旧中转时也有同样问题；
+ *   self-hosted-relay-plan.md §5.4（同账号免链接加入不能放行公钥被换掉的申请）、§5.5（中转不能替换对方的根公钥）。
+ * - 现有覆盖缺口：部署器测试只验证 SSH 步骤，没有经过运行时 IPC 与账号切换，故单独覆盖该模块；
+ *   中转内核的租户接口由 agent-net-relay 集成测试覆盖，这里只看运行时怎么用它们。
+ * - 最小失败输入：挂起一次部署或退出请求，换账号，再让原请求完成；同一设备另起一把公钥来申请；
+ *   同一邀请码下一真一假两条其他账号的申请；对方先拒绝再同意；主人电脑不回话 / 回过「收到」的两次同账号加入。
+ * - tier：unit；SSH、存储、账号记录、中转 V2 接口和 Electron 为进程内 fake，无网络、磁盘或真实等待。
+ * - 单文件实测：2.2 秒（22 例，测试体 59ms，Windows，含首次转译）。
  */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { RelayConfig } from '../selfHostedRelayConfig';
 import type { SelfHostedRelayCommand, SelfHostedRelayCommandResult } from '../../../shared/selfHostedRelay';
 import { RELAY_VERSION } from '../../../../../../packages/device-link-relay/src/version';
 import { RELAY_DEPLOY_STEPS } from '../../../shared/selfHostedRelay';
+import { resetClientEndpointsForTest } from '../../clientEndpointsService.js';
+import { TEST_CLIENT_ENDPOINTS } from '../../../test/vitest/clientEndpointsFixture.js';
 
 const h = vi.hoisted(() => ({
   owner: 'account-a',
@@ -29,6 +36,15 @@ const h = vi.hoisted(() => ({
   deploy: vi.fn(),
   uninstall: vi.fn(),
   startServer: vi.fn(),
+  onlyEncrypted: false,
+  /** 账号私有记录(Chat Server preferences)的进程内替身。 */
+  prefs: new Map<string, unknown>(),
+  /** 某个中转上的秘密(带 V2 身份或只走 V2 时);没有登记的按旧版凭证处理。 */
+  secrets: new Map<string, { credential: string; seed: string; agentNet?: unknown }>(),
+  /** 中转 V2 接口的替身:按「方法 路径」应答。 */
+  agentNet: vi.fn(async (_method: string, _path: string, _body?: unknown): Promise<unknown> => ({})),
+  createTenant: vi.fn(),
+  writeSecrets: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
@@ -45,7 +61,9 @@ vi.mock('../../appSessionState.js', () => ({
 vi.mock('../../authManager.js', () => ({
   getAuthState: () => ({ isAuthenticated: true }),
   getCurrentUserId: () => h.owner,
+  getCurrentMembershipDisplayName: () => (h.owner === 'account-a' ? 'Alice' : 'Bob'),
   getDeviceId: () => 'test-device',
+  getActiveAuthRealm: () => 'global',
   onAuthStateChange: (cb: () => void) => { h.authChanged = cb; },
 }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) }));
@@ -54,8 +72,17 @@ vi.mock('../../utils/ipcValidate.js', () => ({ throwIpcError: (code: string) => 
 vi.mock('../invoke-context.js', () => ({ getDeviceLinkInvokeContext: () => null }));
 vi.mock('../deviceName.js', () => ({ deviceName: () => 'Test computer' }));
 vi.mock('../providerShareApi.js', () => ({ providerShareLinkApp: () => 'cindy' }));
-vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ keepAwake: true }) }));
+vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ keepAwake: true, agentNetOnlyEncrypted: h.onlyEncrypted }),
+  writeDeviceLinkSetting: async (key: string, value: boolean) => { if (key === 'agentNetOnlyEncrypted') h.onlyEncrypted = value; },
+}));
 vi.mock('../selfHostedRelayFrameAuth.js', () => ({ refreshRelayCertificatesSoon: vi.fn() }));
+vi.mock('../relayAccountPreferences.js', () => ({
+  readAccountPreference: async (key: string) => ({ value: structuredClone(h.prefs.get(key) ?? null), revision: 0 }),
+  updateAccountPreference: async (key: string, update: (value: unknown) => unknown) => {
+    const next = update(structuredClone(h.prefs.get(key) ?? null));
+    if (next !== undefined) h.prefs.set(key, structuredClone(next));
+  },
+}));
 vi.mock('../index.js', () => ({
   broadcast: vi.fn(), getDeviceLinkConnectionIssue: () => null,
   restartDeviceLinkForRelayChange: h.restart, setKeepAwakeEnabled: vi.fn(),
@@ -74,18 +101,45 @@ vi.mock('../selfHostedRelayConfig.js', () => ({
     h.write(h.owner, structuredClone(value));
     h.config.set(h.owner, structuredClone(value));
   },
-  readRelaySecrets: () => ({ credential: 'fake-credential', seed: 'A'.repeat(43) }),
-  writeRelaySecrets: vi.fn(), deleteRelaySecrets: h.deleteSecrets,
+  readRelaySecrets: (relayId: string) => h.secrets.get(relayId) ?? { credential: 'fake-credential', seed: 'A'.repeat(43) },
+  writeRelaySecrets: h.writeSecrets, deleteRelaySecrets: h.deleteSecrets,
   activeSelfHostedRelay: () => {
     const active = h.config.get(h.owner)?.active;
-    return active ? { ...active, credential: 'fake-credential', signingSeed: 'A'.repeat(43) } : null;
+    const credential = active ? h.secrets.get(active.relayId)?.credential ?? 'fake-credential' : '';
+    return active ? { ...active, credential, signingSeed: 'A'.repeat(43) } : null;
   },
   activeRelayOrigin: () => h.config.get(h.owner)?.active?.origin ?? null,
   secureStorageAvailable: () => true, installSelfHostedRelayRouting: vi.fn(),
   relayDataPath: () => 'in-memory-relay-data',
+  readHostNotificationBridgeConfig: () => undefined,
 }));
 
-import { getState, registerSelfHostedRelayIpc } from '../selfHostedRelayRuntime';
+vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({
+  outboundFetch: (input: string, init?: RequestInit) => fetch(input, init),
+  createOutboundHttpAgent: async () => undefined,
+}));
+// V2 身份与证书签发有自己的测试(agentNetRuntime / agent-net-relay);这里只看运行时怎么用中转接口。
+vi.mock('../agentNetRuntime.js', () => ({
+  agentNetClientForRelay: (_relayId: string, base: string) => ({
+    base,
+    request: (method: string, path: string, body?: unknown) => h.agentNet(method, path, body),
+    directory: () => h.agentNet('GET', '/directory'),
+  }),
+  approveAgentNetMember: () => ({ certificate: 'member' }),
+  createAgentNetTenantRequest: h.createTenant,
+  isAgentNetActive: () => false,
+  ensureOwnerAgentNetBootstrap: vi.fn(),
+  memberAgentNetIdentity: vi.fn(),
+  memberAgentNetSecrets: vi.fn(),
+}));
+
+import {
+  buildRelayJoinLink, computeRelayPairProof, createRelayPairSecret, parseRelayAccountOffers, parseRelayJoinLink, relayAccountTag, relayPublicKeyOf,
+} from '@cindy/device-link';
+import { createTenantJoinRequest, generateIdentity } from '@cindy/agent-net-relay';
+import { generateKeyPairSync, randomUUID } from 'node:crypto';
+import { nodeRelayAuthCrypto } from '@cindy/device-link/node-relay-crypto';
+import { getState, notifyRelayAccountPreferenceChanged, registerSelfHostedRelayIpc } from '../selfHostedRelayRuntime';
 
 function emptyConfig(): RelayConfig {
   return { version: 2, active: null, host: { enabled: false, port: 47820, listenAll: false, externalUrl: null, relayId: null }, deployments: [] };
@@ -112,6 +166,12 @@ async function switchOwner(owner: string) {
 }
 
 beforeEach(async () => {
+  resetClientEndpointsForTest(TEST_CLIENT_ENDPOINTS);
+  h.onlyEncrypted = false;
+  h.prefs = new Map();
+  h.secrets = new Map();
+  h.agentNet.mockReset();
+  h.agentNet.mockResolvedValue({});
   vi.useFakeTimers();
   vi.clearAllMocks();
   h.owner = 'account-a';
@@ -126,6 +186,15 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 const deploymentOf = (owner = 'account-a', sshHostId = 'test-server') =>
   h.config.get(owner)!.deployments.find((deployment) => deployment.sshHostId === sshHostId);
+
+// Minimal privacy policy change must reach the host-owned preference and close compatibility routes.
+// Existing deployment tests did not exercise the new IPC command (unit tier, no network).
+it('commits the encrypted-only policy through the existing IPC and reconnects with the new rule', async () => {
+  const result = await command({ type: 'set-agent-net-encryption', enabled: true });
+  expect(result.error).toBeUndefined(); expect(result.state.agentNetOnlyEncrypted).toBe(true);
+  expect(h.restart).toHaveBeenCalledTimes(1);
+  expect((await command({ type: 'state' })).state.agentNetOnlyEncrypted).toBe(true);
+});
 
 // 用户 2026-10-30：部署是部署，切换要让用户自己切。原实现部署完成就改用新中转。
 // 最小输入：官方线路上部署一次，再显式 use-deployment。tier: unit。
@@ -217,16 +286,22 @@ it('reads the deployed relay status with the owner credential and rejects anothe
   await command(deployCommand);
   await vi.runAllTimersAsync();
   const relayId = deploymentOf()!.relayId;
-  const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-    relayId, devices: 3, online: 2, certificateExpiresAt: '2026-11-04T00:00:00.000Z',
-  })));
+  let features: string[] | null = ['tenants-v1'];
+  const fetchMock = vi.fn(async (url: string) => url.endsWith('/api/agent-net/info')
+    ? new Response(JSON.stringify({ features }), { status: features ? 200 : 404 })
+    : new Response(JSON.stringify({ relayId, devices: 3, online: 2, certificateExpiresAt: '2026-11-04T00:00:00.000Z' })));
   vi.stubGlobal('fetch', fetchMock);
   const status = await command({ type: 'deployment-status', relayId });
-  expect(status.deploymentStatus).toEqual({ online: true, devices: 3, onlineDevices: 2, certificateExpiresAt: '2026-11-04T00:00:00.000Z' });
+  expect(status.deploymentStatus).toEqual({
+    online: true, devices: 3, onlineDevices: 2, certificateExpiresAt: '2026-11-04T00:00:00.000Z', agentNet: true, tenants: true,
+  });
   expect(fetchMock).toHaveBeenCalledWith(
     'https://203.0.113.10/api/device-link/relay/admin/status',
     expect.objectContaining({ headers: { authorization: 'CindyRelay fake-credential' } }),
   );
+  // 只装了 Device Link 的旧中转：能力声明 404，详情里要能看出它不带 Agent-Net。
+  features = null;
+  expect((await command({ type: 'deployment-status', relayId })).deploymentStatus).toMatchObject({ online: true, agentNet: false, tenants: false });
   fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ relayId: 'another-relay', devices: 9 })));
   expect((await command({ type: 'deployment-status', relayId })).deploymentStatus).toEqual({ online: false });
 });
@@ -453,4 +528,208 @@ it('does not remove another account’s deployment after a delayed uninstall', a
   expect(h.write).not.toHaveBeenCalled();
   expect(h.deleteSecrets).not.toHaveBeenCalled();
   expect(getState().deployJob).toBeNull();
+});
+
+// 用户 2026-11-09:同账号设备不用链接、主人电脑自动放行——但只放行登记在账号里的那台设备、那把公钥。
+// 最小失败输入:中转上同时有登记过的申请和同一设备换了公钥的申请,后者必须留给主人处理。
+it('auto-approves only the device and key registered in the account and leaves others for the owner', async () => {
+  const relayId = '55555555-5555-4555-8555-555555555555';
+  const ownerPublicKey = relayPublicKeyOf(nodeRelayAuthCrypto, 'A'.repeat(43))!;
+  const phoneKey = relayPublicKeyOf(nodeRelayAuthCrypto, 'Q'.repeat(43))!;
+  const otherKey = relayPublicKeyOf(nodeRelayAuthCrypto, 'w'.repeat(43))!;
+  h.config.get('account-a')!.active = {
+    relayId, name: 'Home relay', baseUrl: 'https://203.0.113.10', role: 'owner', origin: 'server', deviceId: 'test-device', ownerPublicKey,
+  };
+  h.prefs.set('relay.join.v1', {
+    v: 1,
+    requests: { phone: { requestId: '66666666-6666-4666-8666-666666666666', deviceName: 'Phone', platform: 'ios', relayId,
+      ownerDeviceId: 'test-device', publicKey: phoneKey, createdAt: Date.now() } },
+    invites: {},
+  });
+  const registered = '77777777-7777-4777-8777-777777777777';
+  const swapped = '88888888-8888-4888-8888-888888888888';
+  let pairRequests: Array<Record<string, string>> = [];
+  const approved: string[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    const path = new URL(url).pathname;
+    if (path.endsWith('/relay/admin/join-codes')) return new Response(JSON.stringify({ code: 'J'.repeat(43) }));
+    if (path.endsWith('/relay/admin/pair-requests')) return new Response(JSON.stringify({ requests: pairRequests }));
+    const decision = /pair-requests\/([^/]+)\/approve$/.exec(path);
+    if (decision) {
+      approved.push(decision[1]);
+      pairRequests = pairRequests.filter((request) => request.requestId !== decision[1]);
+      return new Response('{}');
+    }
+    return new Response('{}', { status: 404 });
+  }));
+
+  notifyRelayAccountPreferenceChanged('relay.join.v1');
+  await vi.advanceTimersByTimeAsync(100);
+  const invite = (h.prefs.get('relay.join.v1') as { invites: Record<string, { link: string }> }).invites.phone;
+  const link = parseRelayJoinLink(invite.link)!;
+  expect(link.ownerPublicKey).toBe(ownerPublicKey);
+  // 先回过一声「收到」,之后换成了链接。
+  expect(h.prefs.get('relay.join.v1')).toMatchObject({ invites: { phone: { requestId: '66666666-6666-4666-8666-666666666666' } } });
+  expect((h.prefs.get('relay.join.v1') as { invites: Record<string, { pending?: true }> }).invites.phone.pending).toBeUndefined();
+
+  const proof = (publicKey: string) => computeRelayPairProof(nodeRelayAuthCrypto, link.pairSecret, { relayId, deviceId: 'phone', publicKey });
+  pairRequests = [
+    { requestId: registered, deviceId: 'phone', deviceName: 'Phone', verifyCode: '1111', publicKey: phoneKey, proof: proof(phoneKey) },
+    { requestId: swapped, deviceId: 'phone', deviceName: 'Phone', verifyCode: '2222', publicKey: otherKey, proof: proof(otherKey) },
+  ];
+  await vi.advanceTimersByTimeAsync(2_100);
+  expect(approved).toEqual([registered]);
+  expect(getState().pendingRequests.map((request) => request.requestId)).toEqual([swapped]);
+  await command({ type: 'use-official' });
+});
+
+// 用户 2026-11-09:中转可以分享给其他账号。中转替对方转交申请,可能把对方的根公钥换成自己的:
+// 主人电脑只同意配对证明对得上自己给出的那条链接的申请。最小失败输入:同一邀请码下一真一假两条申请。
+it('shares the relay with another account only for a request proven to come from its own link, and can stop sharing', async () => {
+  const relayId = '55555555-5555-4555-8555-555555555555';
+  h.config.get('account-a')!.active = {
+    relayId, name: 'Home relay', baseUrl: 'https://203.0.113.10', role: 'owner', origin: 'server', deviceId: 'test-device',
+    ownerPublicKey: relayPublicKeyOf(nodeRelayAuthCrypto, 'A'.repeat(43))!,
+  };
+  h.secrets.set(relayId, { credential: 'fake-credential', seed: 'A'.repeat(43), agentNet: {} });
+  const invite = 'T'.repeat(32);
+  let tenantRequests: unknown[] = [];
+  let tenants = [{ networkId: 'private:' + randomUUID(), accountName: 'Alice', devices: 2, online: true, createdAt: Date.now() }];
+  const calls: string[] = [];
+  h.agentNet.mockImplementation(async (method: string, path: string) => {
+    calls.push(`${method} ${path}`);
+    if (path === '/join-codes') return { joinCode: 'V'.repeat(32), expiresAt: Date.now() + 300_000 };
+    if (path === '/tenant-invites') return { inviteCode: invite, expiresAt: Date.now() + 300_000 };
+    if (path === '/join-requests') return { requests: [] };
+    if (path === '/tenant-requests') return { requests: tenantRequests };
+    if (path === '/tenants' && method === 'GET') return { tenants };
+    if (method === 'DELETE' && path.startsWith('/tenants/')) {
+      tenants = tenants.filter((tenant) => '/tenants/' + encodeURIComponent(tenant.networkId) !== path);
+      return { ok: true };
+    }
+    return {};
+  });
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    const path = new URL(url).pathname;
+    if (path === '/api/agent-net/info') return new Response(JSON.stringify({ features: ['tenants-v1'] }));
+    if (path.endsWith('/relay/admin/join-codes')) return new Response(JSON.stringify({ code: 'J'.repeat(43) }));
+    if (path.endsWith('/relay/admin/pair-requests')) return new Response(JSON.stringify({ requests: [] }));
+    return new Response('{}', { status: 404 });
+  }));
+
+  const shared = await command({ type: 'create-join-link', fresh: true });
+  expect(shared.state.joinLink?.otherAccounts).toBe(true);
+  const link = parseRelayJoinLink(shared.state.joinLink!.link)!;
+  expect(link).toMatchObject({ tenantCode: invite, ownerAccountTag: relayAccountTag(nodeRelayAuthCrypto, 'account-a') });
+  const ask = (pairingSecret: string) => createTenantJoinRequest({
+    root: generateKeyPairSync('ed25519').privateKey, identity: generateIdentity('bob-pc'), networkId: 'private:' + randomUUID(),
+    subject: 'account-b', name: 'Home relay', accountName: 'Bob', deviceName: 'Bob PC', inviteCode: invite, pairingSecret,
+  });
+  const genuine = ask(link.pairSecret);
+  const forged = ask('F'.repeat(43));
+  tenantRequests = [{ request: genuine, requestedAt: Date.now() }, { request: forged, requestedAt: Date.now() }];
+  await vi.advanceTimersByTimeAsync(2_100);
+  expect(getState().pendingRequests.map((request) => [request.requestId, request.accountName, request.verified])).toEqual([
+    ['tenant:' + genuine.requestId, 'Bob', true],
+    ['tenant:' + forged.requestId, 'Bob', false],
+  ]);
+  expect((await command({ type: 'decide', requestId: 'tenant:' + forged.requestId, approve: true })).error).toBe('PAIR_PROOF_INVALID');
+  expect(calls).not.toContain(`POST /tenant-requests/${forged.requestId}/approve`);
+  expect((await command({ type: 'decide', requestId: 'tenant:' + genuine.requestId, approve: true })).error).toBeUndefined();
+  expect(calls).toContain(`POST /tenant-requests/${genuine.requestId}/approve`);
+
+  await command({ type: 'refresh-account-relays' });
+  const alice = getState().tenants!.find((tenant) => tenant.accountName === 'Alice')!;
+  expect(alice).toMatchObject({ devices: 2, online: true });
+  await command({ type: 'revoke-tenant', tenantId: alice.tenantId });
+  expect(calls).toContain('DELETE /tenants/' + encodeURIComponent('private:' + alice.tenantId));
+  expect(getState().tenants).toEqual([]);
+  await command({ type: 'use-official' });
+});
+
+// 用户 2026-11-09:别人分享的中转,本账号在上面建自己的网络;本账号其他设备经账号目录看到它,一键加入。
+// 最小输入:打开对方的分享链接,对方先拒绝一次、再同意一次。被拒时本机为它生成的秘密要删掉。
+it('joins a relay shared by another account as its own network only after approval, and offers it to this account’s devices', async () => {
+  await switchOwner('account-b');
+  const link = buildRelayJoinLink({
+    baseUrl: 'https://203.0.113.10', code: 'J'.repeat(43), ownerPublicKey: relayPublicKeyOf(nodeRelayAuthCrypto, 'A'.repeat(43))!,
+    pairSecret: createRelayPairSecret(nodeRelayAuthCrypto), app: 'cindy', agentNetCode: 'V'.repeat(32),
+    tenantCode: 'T'.repeat(32), ownerAccountTag: relayAccountTag(nodeRelayAuthCrypto, 'account-a'), ownerName: 'Alice',
+  });
+  const networks: string[] = [];
+  h.createTenant.mockImplementation((networkId: string, _seed: string, input: { inviteCode: string }) => {
+    networks.push(networkId);
+    return { requestId: randomUUID(), inviteCode: input.inviteCode, pairingProof: 'P'.repeat(43) };
+  });
+  const statuses = ['rejected'];
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    const path = new URL(url).pathname;
+    if (path === '/api/device-link/relay/info') {
+      return new Response(JSON.stringify({ relayId: 'relay', name: 'Alice relay', protocolVersion: 1, features: ['pairing-v1', 'device-signatures-v1'] }));
+    }
+    if (path === '/api/agent-net/tenant-join') {
+      const body = JSON.parse(String(init?.body)) as { requestId: string };
+      return new Response(JSON.stringify({ requestId: body.requestId, pollToken: 'poll' }), { status: 202 });
+    }
+    if (path === '/api/agent-net/tenant-join/status') return new Response(JSON.stringify({ status: statuses.shift() ?? 'pending' }));
+    return new Response('{}', { status: 404 });
+  }));
+  h.agentNet.mockResolvedValue([]);
+
+  await command({ type: 'join', link });
+  await vi.advanceTimersByTimeAsync(2_100);
+  expect(getState().join).toMatchObject({ status: 'failed', error: 'REJECTED' });
+  expect(h.deleteSecrets).toHaveBeenCalledWith(networks[0]);
+  expect(h.config.get('account-b')!.active).toBeNull();
+
+  statuses.push('pending', 'approved');
+  await command({ type: 'join', link });
+  await vi.advanceTimersByTimeAsync(2_100);
+  expect(getState().join).toMatchObject({ status: 'waiting', relayName: 'Alice relay' });
+  await vi.advanceTimersByTimeAsync(2_100);
+  const networkId = networks[1];
+  expect(h.config.get('account-b')!.active).toMatchObject({
+    relayId: networkId, role: 'owner', origin: 'join', baseUrl: 'https://203.0.113.10', shared: { ownerName: 'Alice' },
+  });
+  expect(h.deleteSecrets).not.toHaveBeenCalledWith(networkId);
+  expect(getState().relay).toMatchObject({ role: 'owner', origin: 'join', shared: { ownerName: 'Alice' } });
+  await vi.advanceTimersByTimeAsync(100);
+  expect(parseRelayAccountOffers(h.prefs.get('relay.offers.v1'))).toEqual([
+    expect.objectContaining({ ownerDeviceId: 'test-device', relayId: networkId, kind: 'shared', sharedBy: 'Alice' }),
+  ]);
+
+  // 离开:这个网络从中转上删掉(本账号经它加入的设备一起断开),本机秘密也删掉。
+  h.secrets.set(networkId, { credential: '', seed: 'A'.repeat(43), agentNet: {} });
+  const calls: string[] = [];
+  h.agentNet.mockImplementation(async (method: string, path: string) => { calls.push(`${method} ${path}`); return {}; });
+  await command({ type: 'use-official' });
+  expect(calls).toContain('DELETE /tenants/' + encodeURIComponent('private:' + networkId));
+  expect(h.deleteSecrets).toHaveBeenCalledWith(networkId);
+});
+
+// 用户 2026-11-09:主人电脑不在线时尽早提示,不用等 45 秒。在线的主人电脑读到申请先回一声「收到」;
+// 最小输入:没人回话的一次加入(约 12 秒内报错),和回过「收到」、还在准备链接的一次(超过 12 秒仍在等)。
+it('reports an offline owner computer within seconds, but keeps waiting once that computer has acknowledged', async () => {
+  const relayId = '55555555-5555-4555-8555-555555555555';
+  h.prefs.set('relay.offers.v1', { v: 1, offers: { 'other-pc': {
+    ownerDeviceName: 'Other PC', relayId, name: 'Home relay', baseUrl: 'https://203.0.113.10',
+    ownerPublicKey: relayPublicKeyOf(nodeRelayAuthCrypto, 'A'.repeat(43))!, kind: 'server', updatedAt: Date.now(),
+  } } });
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => new URL(url).pathname === '/api/device-link/relay/info'
+    ? new Response(JSON.stringify({ relayId, name: 'Home relay', protocolVersion: 1, features: ['pairing-v1', 'device-signatures-v1'] }))
+    : new Response('{}', { status: 404 })));
+  await command({ type: 'refresh-account-relays' });
+
+  await command({ type: 'join-account-relay', ownerDeviceId: 'other-pc', relayId });
+  await vi.advanceTimersByTimeAsync(14_500);
+  expect(getState().join).toMatchObject({ status: 'failed', error: 'OWNER_UNAVAILABLE', accountRelayId: relayId });
+
+  await command({ type: 'join-account-relay', ownerDeviceId: 'other-pc', relayId });
+  await vi.advanceTimersByTimeAsync(100);
+  const board = h.prefs.get('relay.join.v1') as { v: 1; requests: Record<string, { requestId: string }>; invites: Record<string, unknown> };
+  board.invites['test-device'] = { requestId: board.requests['test-device'].requestId, relayId, pending: true, expiresAt: Date.now() + 600_000 };
+  await vi.advanceTimersByTimeAsync(14_500);
+  expect(getState().join).toMatchObject({ status: 'connecting', accountRelayId: relayId });
+  await vi.advanceTimersByTimeAsync(32_000);
+  expect(getState().join).toMatchObject({ status: 'failed', error: 'OWNER_UNAVAILABLE' });
 });

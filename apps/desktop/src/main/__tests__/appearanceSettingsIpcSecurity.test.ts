@@ -57,7 +57,8 @@ vi.mock('../appearance-settings-store.js', () => ({
   updateAppearanceSettingsAtomic: mocks.updateAppearanceSettingsAtomic,
 }));
 
-import { registerAppearanceSettingsIpc, installWindowZoomRestoration, __testing } from '../appearance-settings-ipc.js';
+import { registerAppearanceSettingsIpc, installWindowZoomRestoration, updateAppearanceFromSettings, __testing } from '../appearance-settings-ipc.js';
+import { pluginAppearanceRevision } from '../cindy-brain/pluginAppearanceRevision.js';
 import {
   normalizeAppearanceSettings,
   WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL,
@@ -75,6 +76,21 @@ const persisted = {
 };
 
 describe('appearance settings IPC authorization', () => {
+  // PR #9496: the legacy parameter format skipped ifRevision. Exercise the real
+  // settings owner with a newer value appearing while its atomic update waits. tier: unit.
+  it('rejects a stale plugin revision inside the original settings write lock', async () => {
+    const previous = normalizeAppearanceSettings({ uiSize: 15 });
+    const latest = normalizeAppearanceSettings({ uiSize: 20 });
+    mocks.readAppearanceSettings.mockReturnValue(previous);
+    mocks.updateAppearanceSettingsAtomic.mockImplementation(async updater => {
+      mocks.readAppearanceSettings.mockReturnValue(latest);
+      return { ...latest, ...updater(latest) };
+    });
+    await expect(updateAppearanceFromSettings({ uiSize: 18 }, { ifRevision: pluginAppearanceRevision(previous) }))
+      .rejects.toThrow('MCP_APP_APPEARANCE_CHANGED');
+    expect(mocks.writeAppearanceSettingsPatch).not.toHaveBeenCalled();
+    expect(mocks.readAppearanceSettings()).toEqual(latest);
+  });
   it('validates literal visibility and accepts null only to reset its override', () => {
     for (const wallpaperBlur of [0, 8, 20, null]) {
       expect(__testing.parsePatch({ wallpaperBlur })).toEqual({ wallpaperBlur });
@@ -92,6 +108,14 @@ describe('appearance settings IPC authorization', () => {
     expect(__testing.parsePatch({ wallpaperVisibility: -1 })).toEqual({ wallpaperVisibility: 0 });
     for (const wallpaperVisibility of ['0.5', true, NaN, Infinity, {}]) {
       expect(() => __testing.parsePatch({ wallpaperVisibility })).toThrow('INVALID_PARAMS');
+    }
+    for (const desktopVisibility of [0, 0.37, 1, null]) {
+      expect(__testing.parsePatch({ desktopVisibility })).toEqual({ desktopVisibility });
+    }
+    expect(__testing.parsePatch({ desktopVisibility: 2 })).toEqual({ desktopVisibility: 1 });
+    expect(__testing.parsePatch({ desktopVisibility: -1 })).toEqual({ desktopVisibility: 0 });
+    for (const desktopVisibility of ['0.5', true, NaN, Infinity, {}]) {
+      expect(() => __testing.parsePatch({ desktopVisibility })).toThrow('INVALID_PARAMS');
     }
   });
   it.each(['video', 'image'])(

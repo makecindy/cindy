@@ -41,7 +41,7 @@ describe('adaptive window regions', () => {
   // Unit: Duo resize request (2026-10-23). Existing tests cover fixed panes only;
   // dragging beyond either edge must not squeeze the list or message composer away.
   it('clamps manual column widths and reserves at least 400pt for the conversation', () => {
-    for (const [requested, expected] of [[100, 240], [360, 360], [900, 420]]) {
+    for (const [requested, expected] of [[100, 300], [360, 360], [900, 420]]) {
       const p = sessionPaneLayout(window(), requested);
       expect(p.sidebarWidth).toBe(expected);
       expect(p.detail.x + p.detail.width).toBe(840);

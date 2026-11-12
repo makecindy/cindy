@@ -27,11 +27,18 @@ function deps(): DiagnosticUploadDeps {
   };
 }
 describe("manual mobile diagnostic upload", () => {
-  it("uses desktop wire format and byte counts without credentials or unknown fields", async () => {
+  // A fixed random source must still distinguish regions in the result, tags, and records.
+  it.each([
+    ["global", "GLOBAL-2222-2222"],
+    ["cn", "CN-2222-2222"],
+    ["dev", "DEV-2222-2222"],
+  ])("%s uses a region-prefixed code and desktop wire format without credentials", async (region, uploadCode) => {
     const d = deps();
+    d.region = region;
+    d.rawTarget = JSON.stringify({ ...target, region });
     expect(await uploadDiagnosticSnapshot(d)).toEqual({
       kind: "uploaded",
-      uploadCode: "2222-2222",
+      uploadCode,
       count: 1,
     });
     const [url, init] = vi.mocked(d.fetch).mock.calls[0];
@@ -47,9 +54,9 @@ describe("manual mobile diagnostic upload", () => {
     expect(String(init.body)).not.toMatch(/secret|token|Authorization/);
     expect(init.credentials).toBe("omit");
     expect(init.redirect).toBe("error");
-    expect(JSON.parse(String(init.body)).__logs__[0].uploadCode).toBe(
-      "2222-2222",
-    );
+    const body = JSON.parse(String(init.body));
+    expect(body.__tags__).toMatchObject({ uploadCode, region });
+    expect(body.__logs__[0].uploadCode).toBe(uploadCode);
   });
   it.each([
     "",

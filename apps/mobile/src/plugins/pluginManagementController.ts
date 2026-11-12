@@ -1,4 +1,5 @@
 import { randomUUID } from 'expo-crypto';
+import type { PluginPromptDisplay } from './pluginPromptReads';
 import { subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { PluginManagementRequestError, pluginManagementErrorCode,
   type PluginManagementBegin, type PluginManagementClient } from './pluginManagementClient';
@@ -16,6 +17,8 @@ export interface PluginManagementState {
   errorCode: string | null;
 }
 export interface PluginManagementControllerOptions {
+  /** Optional shared chat hint. Never used by readSnapshot or mutation validation. */
+  readDisplay?: () => Promise<PluginPromptDisplay>;
   online?: boolean;
   onChange?: (state: PluginManagementState) => void;
   /** Testable identity source; production uses the existing Expo UUID implementation. */
@@ -74,6 +77,12 @@ export function createPluginManagementController(client: PluginManagementClient,
     if (disposed || !state.online || !client.isCurrent()) return;
     const token = epoch, sequence = ++refreshSequence;
     try {
+      if (options.readDisplay) {
+        const snapshotToken = ++snapshotSequence;
+        const display = await options.readDisplay();
+        if (current(token) && sequence === refreshSequence && snapshotToken === snapshotSequence) publish({ ...display, errorCode: null });
+        return;
+      }
       const capability = await client.capability();
       if (!current(token) || sequence !== refreshSequence) return;
       publish({ capability, errorCode: null, ...(capability === 'unsupported' ? { snapshot: null } : {}) });

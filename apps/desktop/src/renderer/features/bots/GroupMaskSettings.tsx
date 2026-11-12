@@ -13,7 +13,7 @@ import { Reply } from 'lucide-react';
 
 /** A setting row whose choice sits on the right, in the group settings' row look. */
 function SelectRow(props: SelectProps) {
-  return <SettingsRow wrap title={props.label} trailing={<Select {...props} className="h-8 max-w-[220px]" />} />;
+  return <SettingsRow wrap title={props.label} trailing={<Select {...props} size="compact" className="max-w-[220px]" />} />;
 }
 
 const key = (name: string) => `bots.groupChat.mask.${name}`;

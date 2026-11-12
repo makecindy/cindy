@@ -19,7 +19,7 @@ import {
   type WallpaperMotion,
   normalizeCustomWallpaperUrl,
   isCustomWallpaperVideo,
-  getWallpaperVisibility,
+  getBackgroundVisibility,
 } from '@/../shared/appearanceSettings';
 
 import { getBuiltinWallpaperBackground } from '@/lib/wallpaper';
@@ -33,9 +33,11 @@ export interface WallpaperSettings {
   wallpaperId: WallpaperId;
   wallpaperOverlay: number;
   wallpaperVisibility?: number | null;
+  desktopVisibility?: number | null;
   wallpaperBlur?: number | null;
   wallpaperMotion: WallpaperMotion;
   customWallpaperUrl?: string;
+  customWallpaperFallbackUrl?: string;
 }
 
 interface WallpaperSettingsContextValue extends WallpaperSettings {
@@ -45,8 +47,11 @@ interface WallpaperSettingsContextValue extends WallpaperSettings {
   downloadProgress: number;
   retryDownload: () => void;
   visibility: number;
+  /** Last nonzero saved blur; survives settings-section remounts (default 10). */
+  lastBlur: number;
   setWallpaper: (id: WallpaperId) => void;
   setVisibility: (value: number) => void;
+  previewVisibility: (value: number | null) => void;
   setBlur: (value: number) => void;
   previewBlur: (value: number | null) => void;
   setMotion: (value: WallpaperMotion) => void;
@@ -73,23 +78,38 @@ function pickWallpaperSettings(settings: AppearanceSettings): WallpaperSettings 
     wallpaperId: settings.wallpaperId,
     wallpaperOverlay: settings.wallpaperOverlay,
     wallpaperVisibility: settings.wallpaperVisibility,
+    desktopVisibility: settings.desktopVisibility,
     wallpaperBlur: settings.wallpaperBlur,
     wallpaperMotion: settings.wallpaperMotion,
     customWallpaperUrl: settings.customWallpaperUrl,
+    customWallpaperFallbackUrl: settings.customWallpaperFallbackUrl,
   };
 }
 
-export function WallpaperSettingsProvider({ children }: { children: ReactNode }) {
+/** `desktopBackground={false}` is for windows without the native backdrop bridge: with no
+ * wallpaper they keep their opaque themed canvas instead of mixing with a fixed window backing. */
+export function WallpaperSettingsProvider({
+  children,
+  desktopBackground = true,
+}: {
+  children: ReactNode;
+  desktopBackground?: boolean;
+}) {
   const [settings, setSettings] = useState<WallpaperSettings>(getInitialWallpaperSettings);
   const [blurPreview, setBlurPreview] = useState<number | null>(null);
+  const [visibilityPreview, setVisibilityPreview] = useState<number | null>(null);
   const [failedUrl, setFailedUrl] = useState('');
+  const lastBlurRef = useRef(10);
+  if (settings.wallpaperBlur) lastBlurRef.current = settings.wallpaperBlur;
   const onPlaybackFailure = useCallback(
     () => setFailedUrl(settings.customWallpaperUrl ?? ''),
     [settings.customWallpaperUrl],
   );
   const onPlaybackReady = useCallback(() => setFailedUrl(''), []);
   const isDark = useIsDarkMode();
-  const visibility = getWallpaperVisibility(settings, isDark);
+  const isDarkRef = useRef(isDark);
+  isDarkRef.current = isDark;
+  const visibility = visibilityPreview ?? getBackgroundVisibility(settings, isDark);
   const reducedMotion = useReducedMotion();
   const imageAsset = useWallpaperAsset(settings.wallpaperId, 'image', visibility > 0);
   const videoAsset = useWallpaperAsset(
@@ -111,7 +131,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
     settings.wallpaperId === 'custom'
       ? customUrl
         ? isCustomWallpaperVideo(customUrl)
-          ? 'none'
+          ? settings.customWallpaperFallbackUrl ? `url("${normalizeCustomWallpaperUrl(settings.customWallpaperFallbackUrl)}")` : 'none'
           : `url("${customUrl}")`
         : undefined
       : imageAsset.url
@@ -119,6 +139,9 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
         : getBuiltinWallpaperBackground(settings.wallpaperId);
   useWallpaperBackground({
     background,
+    // 0% keeps the original window backdrop (frosted sidebar over the theme material)
+    // until opt-in; above it, the sidebar tint follows the same transparency.
+    desktopBackground: desktopBackground && settings.wallpaperId === 'none' && visibility > 0,
     visibility,
     blur: blurPreview ?? settings.wallpaperBlur ?? 0,
     reducedMotion,
@@ -203,11 +226,24 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       });
   }, []);
 
-  const setWallpaper = useCallback((wallpaperId: WallpaperId) => patch({ wallpaperId }), [patch]);
+  const setWallpaper = useCallback((wallpaperId: WallpaperId) => {
+    setVisibilityPreview(null);
+    patch({ wallpaperId });
+  }, [patch]);
   const setVisibility = useCallback(
-    (value: number) => patch({ wallpaperVisibility: clampAppearanceWallpaperVisibility(value) }),
+    (value: number) => {
+      setVisibilityPreview(null);
+      const key = settingsRef.current.wallpaperId === 'none' ? 'desktopVisibility' : 'wallpaperVisibility';
+      patch({ [key]: clampAppearanceWallpaperVisibility(value) });
+    },
     [patch],
   );
+  const previewVisibility = useCallback((value: number | null) => {
+    const next = value === null ? null : clampAppearanceWallpaperVisibility(value);
+    // Keyboard commit precedes change in Radix. Read the optimistic committed
+    // value synchronously so a failed save cannot leave a stale preview behind.
+    setVisibilityPreview(next === getBackgroundVisibility(settingsRef.current, isDarkRef.current) ? null : next);
+  }, []);
   const setMotion = useCallback(
     (value: WallpaperMotion) => patch({ wallpaperMotion: value }),
     [patch],
@@ -224,18 +260,19 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
     // Radix keyboard input commits before its change callback. Do not recreate
     // a preview for the value already queued for saving (or the unchanged value).
     setBlurPreview(
-      settingsRef.current.wallpaperId === 'none' ||
-        blur === (settingsRef.current.wallpaperBlur ?? 0)
+      blur === (settingsRef.current.wallpaperBlur ?? 0)
         ? null
         : blur,
     );
   }, []);
   const resetWallpaper = useCallback(() => {
     setBlurPreview(null);
+    setVisibilityPreview(null);
     patch({
       wallpaperId: DEFAULT_APPEARANCE_SETTINGS.wallpaperId,
       wallpaperOverlay: DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay,
       wallpaperVisibility: null,
+      desktopVisibility: null,
       wallpaperBlur: null,
       wallpaperMotion: DEFAULT_APPEARANCE_SETTINGS.wallpaperMotion,
     });
@@ -246,6 +283,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       ...settings,
       wallpaperBlur: blurPreview ?? settings.wallpaperBlur,
       visibility,
+      lastBlur: lastBlurRef.current,
       playbackFailed: !!failedUrl && failedUrl === settings.customWallpaperUrl,
       downloadPending,
       downloadFailed,
@@ -253,6 +291,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       retryDownload,
       setWallpaper,
       setVisibility,
+      previewVisibility,
       setBlur,
       previewBlur,
       setMotion,
@@ -262,11 +301,13 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       resetWallpaper,
       setMotion,
       setVisibility,
+      previewVisibility,
       setBlur,
       previewBlur,
       blurPreview,
       setWallpaper,
       settings,
+      settings.wallpaperBlur,
       failedUrl,
       visibility,
       downloadPending,

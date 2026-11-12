@@ -10,8 +10,11 @@ import { useTranslation } from 'react-i18next';
 
 import { computeQuotaPace, type QuotaPace } from '@/lib/quotaPace';
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
 import {
   formatQuotaResetCountdown,
+  formatQuotaResetDuration,
   formatQuotaResetAt,
   type UsageCardAccount,
   type UsageCardWindow,
@@ -62,6 +65,20 @@ export interface QuotaHoverCardProps {
   dashboardButtonRef?: React.Ref<HTMLButtonElement>;
   nowMs?: number;
 }
+
+/**
+ * 嵌入态四列：标题 | 进度条 | 百分比 | 重置倒计时。窄宽度时标题与倒计时列可收缩截断(全文见
+ * title),进度条最小 48px,只有百分比保持完整宽度,整体不横向溢出。
+ */
+export const QUOTA_WINDOW_COLUMNS =
+  'grid-cols-[minmax(0,max-content)_minmax(48px,1fr)_max-content_minmax(0,max-content)]';
+
+/**
+ * 设置页连续列出多张嵌入卡(订阅多账号)时,外层用 QUOTA_WINDOW_COLUMNS 建网格并置 true:
+ * 卡片逐层以 subgrid 沿用外层四列,各卡进度条起止对齐,不再按各自的文字宽度定列宽。
+ */
+export const QuotaWindowSubgridContext = React.createContext(false);
+const SUBGRID_LAYER = 'grid grid-cols-subgrid [&>*]:col-span-full';
 
 const STALE_AFTER_MS = 5 * 60_000;
 /** 产品定档：±5 个百分点内视为正常节奏。 */
@@ -185,6 +202,12 @@ function WindowBlock({
   if (compact) {
     // 嵌入态(设置页)一行一个窗口:标题 | 进度条 | 百分比 | 重置倒计时,列宽由外层 grid 统一,
     // 各行进度条左右对齐。明细(绝对重置时间 / 节奏 / breakdown)只在悬浮卡里展示。
+    // 可见行省略重复的「剩余」「后重置」;进度条和重置说明的读屏文案仍保留完整语义。
+    const percentValue = new Intl.NumberFormat(locale, {
+      style: 'percent',
+      maximumFractionDigits: 0,
+    }).format(Math.round(showRemaining ? 100 - usedPercent : usedPercent) / 100);
+    const resetDuration = formatQuotaResetDuration(window.resetsAt, nowMs, t);
     return (
       <section
         data-testid="quota-window"
@@ -192,12 +215,21 @@ function WindowBlock({
       >
         {titleNode}
         {bar}
-        <span className="text-right font-medium text-[var(--text-primary)]">{percentText}</span>
+        <span title={percentText} className="text-right font-medium text-[var(--text-primary)]">
+          {percentValue}
+        </span>
         <span
           className="min-w-0 truncate text-right text-12 text-[var(--text-secondary)]"
           title={resetCountdown ?? undefined}
         >
-          {resetCountdown}
+          {resetDuration === null ? (
+            resetCountdown
+          ) : (
+            <>
+              <span aria-hidden="true">{resetDuration}</span>
+              <span className="sr-only">{resetCountdown}</span>
+            </>
+          )}
         </span>
       </section>
     );
@@ -438,6 +470,7 @@ export function QuotaHoverCard({
 }: QuotaHoverCardProps) {
   const { t, i18n } = useTranslation();
   const embedded = variant === 'embedded';
+  const subgrid = React.useContext(QuotaWindowSubgridContext) && embedded;
   // 测试可只注入 t；运行时再优先跟随应用当前语言格式化日期。
   const locale = i18n?.resolvedLanguage ?? i18n?.language;
   const {
@@ -473,7 +506,8 @@ export function QuotaHoverCard({
     <div
       data-testid="quota-hover-card"
       className={cn(
-        'flex select-none flex-col pb-2 text-13 leading-5 text-[var(--text-primary)]',
+        'select-none pb-2 text-13 leading-5 text-[var(--text-primary)]',
+        subgrid ? SUBGRID_LAYER : 'flex flex-col',
         variant === 'embedded'
           ? 'w-full min-w-0'
           : 'max-h-[min(calc(100vh-16px),var(--radix-popover-content-available-height,100vh))] max-w-[calc(100vw-16px)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]',
@@ -490,6 +524,7 @@ export function QuotaHoverCard({
         className={cn(
           'min-h-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
           !embedded && 'overflow-y-auto pt-[6px]',
+          subgrid && SUBGRID_LAYER,
         )}
       >
         {title && (!embedded || !hideIdentity) ? (
@@ -516,12 +551,13 @@ export function QuotaHoverCard({
         ) : null}
         {!embedded && title && (windows.length > 0 || emptyText) ? <CardDivider /> : null}
         {embedded && windowBlocks.length ? (
-          // 嵌入态各行是 subgrid,共用这里的四列:标题 | 进度条 | 百分比 | 重置倒计时。
-          // 窄宽度时标题与倒计时列可收缩截断(全文见 title),进度条最小 48px,只有百分比
-          // 保持完整宽度,整体不横向溢出。
+          // 嵌入态各行是 subgrid,共用这里(或外层共享网格)的四列。
           <div
             data-testid="quota-window-grid"
-            className="grid grid-cols-[minmax(0,max-content)_minmax(48px,1fr)_max-content_minmax(0,max-content)] gap-x-4 px-4 py-1"
+            className={cn(
+              'grid gap-x-4 px-4 py-1',
+              subgrid ? 'grid-cols-subgrid' : QUOTA_WINDOW_COLUMNS,
+            )}
           >
             {windowBlocks}
           </div>
@@ -531,7 +567,22 @@ export function QuotaHoverCard({
         {!embedded && windows.length === 0 && windowAction ? (
           <div className="flex justify-end px-4">{windowAction}</div>
         ) : null}
-        {emptyText ? (
+        {account.refreshFailure ? (
+          <ErrorNotice
+            role="status"
+            className="mx-4 my-2"
+            message={t('quotaCard.codexRefreshFailed')}
+            actions={
+              <Button
+                variant="secondary"
+                disabled={account.refreshFailure.retrying}
+                onClick={account.refreshFailure.retry}
+              >
+                {t(account.refreshFailure.retrying ? 'quotaCard.retryingQuota' : 'quotaCard.retryQuota')}
+              </Button>
+            }
+          />
+        ) : emptyText ? (
           <div className="px-4 py-2 text-[var(--text-secondary)]">{emptyText}</div>
         ) : null}
         {notices.map((notice, index) => (

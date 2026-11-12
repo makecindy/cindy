@@ -1,12 +1,10 @@
 {
   "progress": {
-    "stop": "Arrêter"
-  },
-  "work": {
-    "queued": "En attente {{count}}",
-    "active": "En cours {{count}}",
-    "expand": "Développer l’activité des coéquipiers",
-    "collapse": "Réduire l’activité des coéquipiers"
+    "stop": "Arrêter",
+    "stopMine": "Arrêter les miennes",
+    "stopAll": "Tout arrêter",
+    "stopAllHint": "Inclut les demandes des autres participants",
+    "step": "Étape {{step}}/{{total}}"
   },
   "title": "Conversations de groupe",
   "memberSeparator": ", ",
@@ -88,7 +86,8 @@
     "planDoneGeneric": "Répartition du travail terminée",
     "olderOnComputer": "Les messages précédents se trouvent sur votre ordinateur",
     "newMessages_many": "{{count}} nouveaux messages",
-    "planDone_many": "Les {{count}} étapes sont terminées"
+    "planDone_many": "Les {{count}} étapes sont terminées",
+    "endTalk": "Terminer"
   },
   "quote": {
     "label": "Citation de {{name}} : {{summary}}",
@@ -107,6 +106,13 @@
     "stepFailed": "{{name}} a rencontré un problème et n'a pas terminé cette étape",
     "stepTimeout": "{{name}} a mis trop de temps ; cette étape a donc été arrêtée",
     "stepUnavailable": "{{name}} est indisponible et ne peut pas réaliser cette étape",
+    "runtimeFailureReason": {
+      "unclaimed_timeout": {
+        "summary": "{{name}} n’a pas commencé le traitement dans le délai d’attente. Cette demande est terminée.",
+        "advice": "Demandez au propriétaire du partenaire de vérifier que Cindy fonctionne et que son ordinateur est connecté au réseau.",
+        "details": "Une fois Cindy et le réseau rétablis, renvoyez le message."
+      }
+    },
     "runtimeFailure": {
       "REMOTE_DEVICE_LIMIT": {
         "summary": "{{name}} ne peut pas répondre : l'appareil du coéquipier a atteint sa limite de sessions à distance.",
@@ -178,6 +184,8 @@
     "start": "Lancer le plan",
     "dismiss": "Ignorer le plan",
     "editHint": "Pour changer qui fait quoi, dites-le simplement",
+    "autoContinue": "Lancer automatiquement l'étape suivante",
+    "autoContinueSaveFailed": "Impossible d'enregistrer le passage entre étapes. Réessayez.",
     "autoNote": "Chaque étape terminée lance automatiquement la suivante.",
     "pauseNote": "Le travail se met en pause après chaque étape jusqu'à ce que vous cliquiez sur « Lancer l'étape suivante ».",
     "superseded": "Mis à jour",
@@ -330,7 +338,9 @@
     "groupDissolved": "Ce groupe a été dissous. Vous pouvez toujours lire l'historique disponible.",
     "lastOwner": "Transférez la propriété ou dissolvez ce groupe avant de le quitter.",
     "allBotsMentionDisabled": "Le propriétaire du groupe n’a pas encore activé @Tous les coéquipiers.",
-    "turnAlreadyStarted": "Ce coéquipier a déjà commencé et ne peut plus être ignoré"
+    "turnAlreadyStarted": "Ce coéquipier a déjà commencé et ne peut plus être ignoré",
+    "stopOwnershipUnknown": "Impossible d’arrêter une partie du travail, car son demandeur n’a pas pu être vérifié.",
+    "nothingToStop": "Il n’y a aucun travail en cours à arrêter."
   },
   "followUp": {
     "next": "Plan · Étape suivante",
@@ -632,5 +642,6 @@
     },
     "externalFormatError": "Rouvrez le lien complet du message d'origine."
   },
-  "memberCount_many": "{{count}} membres"
+  "memberCount_many": "{{count}} membres",
+  "waitingForOwner": "En attente de confirmation"
 }

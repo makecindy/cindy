@@ -184,7 +184,7 @@ export function GithubSetupDialog({
                       type="button"
                       onClick={() => void copyCode()}
                       aria-label={copyLabel}
-                      className="flex size-8 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
+                      className="flex size-8 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                     >
                       {copiedCode === state.userCode ? <Check size={16} /> : <Copy size={16} />}
                     </button>

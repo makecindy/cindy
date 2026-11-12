@@ -10,13 +10,14 @@ export default {
   entry: './group-settings-fixture.tsx',
   viewport: { width: 1040, height: 860 },
   real: 'BotGroupSettingsDrawer, ChatGroupSettings (群设置 | 成员, 群管理, 编辑群资料, 本群资料, 伙伴在本群), ChatGroupMembersTab, ChatGroupInviteMenu, ChatBotAccessField, ProfileEditDialog',
-  notCovered: 'Server writes (every chatServer.manage call is forbidden), the invite link dialog, AI 代答 (see group-mask), real accounts and mobile rendering',
+  notCovered: 'Server writes (every chatServer.manage call is forbidden), the invite link dialog, AI 代答 (see group-mask), full chat host/entry, real accounts and mobile rendering',
   stubs: {
     // 新建伙伴 opens the full roster; it is not part of these settings.
     'src/renderer/features/bots/BotRosterView': 'export const BotRosterView = () => null;',
   },
   cases: {
     default: { about: 'Owner: 群管理 with 解散, member menus, invite menu with both items', data: { role: 'owner' } },
+    dismissal: { about: 'Scrim and × close, nested layers stay isolated, Escape backs out of subpages, reopening clears route state', data: { role: 'owner' } },
     admin: { about: 'Admin: 群管理 without 解散, cannot manage the owner', data: { role: 'admin' } },
     member: { about: 'Member: no 群管理, read-only 群介绍, 邀请朋友 locked', data: { role: 'member' } },
     'member-no-about': { about: 'Member of a group without 群介绍: the section is hidden', data: { role: 'member', noAbout: true } },
@@ -31,6 +32,68 @@ export default {
     const dialog = page.getByRole('dialog');
     const invite = page.getByTestId('chat-group-invite');
     const manage = await row(page, await t('manage'));
+    if (ui.case === 'dismissal') {
+      const scrimPoint = { x: 80, y: 340 }; // Directly over the background action: detect click-through.
+      const clickScrim = () => page.mouse.click(scrimPoint.x, scrimPoint.y);
+      // Keyboard input has no Playwright actionability wait. Let Radix register/retire layers first.
+      const settleLayers = () => page.evaluate(() => new Promise(resolve => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }));
+      const closed = async () => {
+        await dialog.waitFor({ state: 'detached' });
+        assert.equal(await page.getByTestId('settings-route').textContent(), '');
+        assert.equal(await page.getByTestId('background-clicks').textContent(), '0');
+      };
+      const reopen = async () => {
+        await page.getByTestId('reopen-settings').click();
+        await dialog.waitFor();
+        assert.equal(await dialog.getByRole('button', { name: await t('back'), exact: true }).count(), 0);
+      };
+      await dialog.getByRole('heading', { name: await ui.t('bots.groupChat.settings.title'), exact: true }).click();
+      assert.equal(await dialog.count(), 1);
+      await invite.click();
+      const menu = page.getByTestId('chat-group-invite-menu');
+      await menu.getByRole('menuitem', { name: new RegExp(escape(await t('inviteBotsItem'))) }).click();
+      await menu.getByRole('menuitem', { name: '伙伴 1', exact: true }).waitFor();
+      await ui.capture('nested-menu');
+      await clickScrim();
+      await menu.waitFor({ state: 'detached' });
+      assert.equal(await dialog.count(), 1, 'dismissing the portaled menu must keep settings open');
+
+      await manage.click();
+      await (await row(page, await ui.t('bots.groupChat.lifecycle.dissolve'))).click();
+      const confirmation = page.getByRole('alertdialog');
+      await confirmation.waitFor();
+      await clickScrim();
+      assert.equal(await confirmation.count(), 1, 'confirmation scrim must not dismiss either layer');
+      assert.equal(await page.getByRole('dialog', { includeHidden: true }).count(), 1);
+      await ui.capture('nested-confirmation');
+      await confirmation.getByRole('button', { name: await ui.t('bots.cancel'), exact: true }).click();
+      await confirmation.waitFor({ state: 'detached' });
+      await settleLayers();
+      await page.keyboard.press('Escape');
+      await dialog.getByRole('button', { name: await t('back'), exact: true }).waitFor({ state: 'detached' });
+      assert.equal(await dialog.count(), 1, 'Escape from a subpage goes back, not out');
+
+      await manage.click();
+      await ui.capture('before-scrim');
+      await clickScrim();
+      await closed();
+      await ui.capture('after-scrim');
+      await reopen();
+      await manage.click();
+      await dialog.getByRole('button', { name: await ui.t('bots.close'), exact: true }).click();
+      await closed();
+      await reopen();
+      // The close button is auto-focused on open; leave its tooltip before testing drawer Escape.
+      await dialog.focus();
+      await settleLayers();
+      await page.keyboard.press('Escape');
+      await closed();
+      await reopen();
+      await ui.capture('reopened');
+      return;
+    }
     if (ui.case === 'default') {
       // Narrow drawer exception (DESIGN.md §4): 13px/500 names and section titles, rows at least 48px.
       const name = (await manage.evaluate((el) => {

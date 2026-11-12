@@ -6,7 +6,7 @@
 import { PluginRegistry } from './plugin-registry.js';
 import { SettingsReader } from './settings-reader.js';
 import { createLogger } from '../../logger.js';
-import { ownerScopedUserDataPath } from '../../appSessionState.js';
+import { ownerScopedPath as ownerScopedUserDataPath } from '../../ownerContext.js';
 
 let _registry: PluginRegistry | null = null;
 let _registryOwnerPath: string | null = null;

@@ -28,6 +28,7 @@ const authState = vi.hoisted(() => ({
   current: {
     user: { id: 'user-1' },
     dataOwnerId: 'user-1',
+    dataOwnerGeneration: 1,
     mode: 'cloud',
     logout: vi.fn().mockResolvedValue(undefined),
     exitLocalMode: vi.fn().mockResolvedValue(undefined),
@@ -105,6 +106,7 @@ describe('LocalDbGate 有限重试', () => {
     authState.current.user = { id: 'user-1' };
     authState.current.dataOwnerId = 'user-1';
     authState.current.mode = 'cloud';
+    authState.current.dataOwnerGeneration = 1;
   });
 
   afterEach(() => {
@@ -116,6 +118,24 @@ describe('LocalDbGate 有限重试', () => {
     stubElectronApi();
     renderGate();
     await flushAsync();
+    expect(screen.getByTestId('main-content')).toBeTruthy();
+  });
+
+  // unit：同一 owner 换代需重新等待 ensureReady；旧 pending 请求不能给新代次放行。
+  it('waits for the new generation and ignores a late result from the old one', async () => {
+    const api = stubElectronApi();
+    let finishOld!: (value: { ready: true }) => void;
+    let finishNew!: (value: { ready: true }) => void;
+    api.localDb.ensureReady
+      .mockReturnValueOnce(new Promise((resolve) => { finishOld = resolve; }))
+      .mockReturnValueOnce(new Promise((resolve) => { finishNew = resolve; }));
+    const view = renderGate();
+    authState.current.dataOwnerGeneration = 2;
+    view.rerender(gateTree());
+    await act(async () => { finishOld({ ready: true }); });
+    expect(api.localDb.ensureReady).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId('main-content')).toBeNull();
+    await act(async () => { finishNew({ ready: true }); });
     expect(screen.getByTestId('main-content')).toBeTruthy();
   });
 

@@ -81,8 +81,15 @@ cindy.onHostMessage(async function (msg) {
   下划线或连字符组成的任务 ID，不接受 query、hash、路径穿越或其它 Cindy 命令。
   宿主将它变成任务导航，鼠标点击、Enter 和空格均可打开；不会交给插件或 Agent，
   也不会用系统浏览器打开。手机版沿当前任务的原有任务链接导航入口处理。
-  此能力需包含该支持的新版 Desktop/Mobile；旧版本会保留文字但不能点击。
-  发布依赖此能力的插件前，先确认宿主已发布，并据实际 release 设置最低版本。
+  旧版本会保留文字但不能点击。需要兼容旧客户端时，使用带降级动作的按钮：
+  `<button data-ghost-action="open-task" data-ghost-session-link="cindy://session/<任务ID>">打开原任务</button>`。
+  新版 Desktop 和声明 `plugin-card-session-links` 的手机走原生导航，不派发插件动作；
+  旧 Desktop 会忽略新属性，旧手机由宿主投影为原来的 `open-task` 动作。
+  插件收到降级动作后，可通过已有的用户点击 Agent 入口仅请求显示正文 Markdown 任务链接；
+  不要将导航理解为开始任务或跟进。旧端因此会多一步点击，但入口保持可用。
+  新属性仅用于合法动作的 button，不与 prompt、submit 或模型选择器混用；
+  原生导航仍要求 `card.externalLinks`。禁用按钮不可导航。
+  有已验证的降级路径时不必为此增强抬高最低版本；没有降级时需等支持它的实际宿主 release。
 
 - **可放外部链接**(外链 v3,经宿主确认):写 `<a href="https://…">官网</a>`,或在
   任意可用标签上挂 `data-ghost-link="https://…"`(整块可点)。仅收**整串**

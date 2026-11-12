@@ -1,3 +1,5 @@
+import { TaskTagDots } from '@/features/task-tags/TaskTags';
+import { getSearchDraft, setSearchDraft, subscribeSearchDraft } from './conversationSearchDraft';
 import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/error-notice';
@@ -21,6 +23,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { NavigateFunction } from 'react-router-dom';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Spinner } from '@/components/ui/spinner';
@@ -195,7 +198,13 @@ export function useConversationSearch({
   // (两侧都过 conversationSearchTitle),所以它必须进请求 **和** effect 依赖:
   // 切语言后要重发一次搜索,否则下标还按旧语言的串算、高亮会错位。
   const unnamedLabel = t('ccAgent.common.unnamedSession');
-  const [query, setQuery] = useState('');
+  const query = useSyncExternalStore(subscribeSearchDraft, getSearchDraft);
+  const [active, setActive] = useState(false);
+  const resume = useCallback(() => setActive(true), []);
+  const setQuery = useCallback((next: string) => {
+    setSearchDraft(next);
+    setActive(true);
+  }, []);
   // 排序订阅共享偏好 store(持久化 + 跨实例同步),其余筛选每次回到默认
   // ——取舍与「为什么不是各自 useState」见 conversationSearchPrefs 的文件头。
   const sortBy = useSyncExternalStore(subscribeSearchSortBy, getSearchSortBy);
@@ -230,7 +239,7 @@ export function useConversationSearch({
   );
   const requestId = projectFilterRequest?.requestId ?? 0;
 
-  const trimmed = query.trim();
+  const trimmed = active ? query.trim() : '';
   void _allowedSessionIds;
   const selectedProjectSessionIds = useMemo(() => {
     if (lockedSessionGroup) return lockedSessionGroup.sessionIds;
@@ -360,7 +369,7 @@ export function useConversationSearch({
     setLockedProjectDeviceId(requestProjectDeviceId);
     setProjectSelection(requestProjectKey ? [requestProjectKey] : 'all');
     onProgrammaticOpen?.(); // popover:打开面板并上报托盘;内联:聚焦输入框
-    setQuery('');
+    setActive(true);
     setResponse(null);
     setStatus('idle');
     // 处理完即清零跨层请求:否则切到 rail(本组件卸载)再切回(重挂)时,本 effect 会在挂载
@@ -505,9 +514,9 @@ export function useConversationSearch({
     setSearchSortBy(next);
   }, []);
 
-  /** 清空 query / 结果 / 状态(popover 关闭时调用)。项目锁定保留。 */
-  const reset = useCallback(() => {
-    setQuery('');
+  /** 收起结果，保留输入和项目锁定；只有用户清空输入时才删除草稿。 */
+  const dismiss = useCallback(() => {
+    setActive(false);
     setResponse(null);
     setStatus('idle');
   }, []);
@@ -528,9 +537,9 @@ export function useConversationSearch({
   // machine scope releases it, just as leaving a locked project's machine does.
   useEffect(() => {
     if (!lockedSessionGroup || lockedSessionGroup.machineSelectionKey === machineSelectionKey) return;
-    reset();
+    dismiss();
     clearLock();
-  }, [lockedSessionGroup, machineSelectionKey, reset, clearLock]);
+  }, [lockedSessionGroup, machineSelectionKey, dismiss, clearLock]);
 
   /** 筛选面板「重置」:清空各筛选;有项目锁定时回落到锁定项目。 */
   const resetFilters = useCallback(() => {
@@ -553,7 +562,7 @@ export function useConversationSearch({
         const baseRoute = standardSessionRoute(item.session.id, remoteDeviceId);
         const hit = hitOverride ?? item.contentHit;
         // popover 形态:onResultChosen 关闭面板并通知托盘(SidebarActionBar 减 openChildCount),
-        // 其 reset() 会清空 query。内联展开态不传 onResultChosen——选中结果后**刻意保留 query**,
+        // 两种形态都保留 query。内联展开态不传 onResultChosen，
         // 结果 overlay 继续显示,用户可连续点开多条结果;只有点搜索区域以外才收起(见 conversationSearchContext)。
         onResultChosen?.();
         navigate(baseRoute, {
@@ -597,7 +606,8 @@ export function useConversationSearch({
     activeFilterCount,
     status,
     results,
-    reset,
+    dismiss,
+    resume,
     clearLock,
     resetFilters,
     handleSelect,
@@ -730,9 +740,9 @@ export function ConversationSearchBox({
   const [open, setOpen] = useState(defaultOpen);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // search.reset 在 search 声明后才拿得到,但 handleResultChosen 需先于 search 定义(要作为
+  // search.dismiss 在 search 声明后才拿得到,但 handleResultChosen 需先于 search 定义(要作为
   // 回调传入)——用 ref 转发,规避声明顺序的循环依赖。
-  const searchResetRef = useRef<() => void>(() => {});
+  const searchDismissRef = useRef<() => void>(() => {});
 
   const handleProgrammaticOpen = useCallback(() => {
     setOpen(true);
@@ -741,9 +751,8 @@ export function ConversationSearchBox({
   const handleResultChosen = useCallback(() => {
     setOpen(false);
     onOpenChange?.(false);
-    // 程序化关闭 popover 不经 handleOpenChange(Radix 受控 open 不回调),必须在此显式 reset,
-    // 否则去掉 handleSelect 的 setQuery('') 后,rail 选中结果重开 popover 会残留上次 query/结果。
-    searchResetRef.current();
+    // 程序化关闭也收起结果，保留草稿供下次打开继续搜索。
+    searchDismissRef.current();
   }, [onOpenChange]);
 
   const search = useConversationSearch({
@@ -757,7 +766,7 @@ export function ConversationSearchBox({
     onProgrammaticOpen: handleProgrammaticOpen,
     onResultChosen: handleResultChosen,
   });
-  searchResetRef.current = search.reset;
+  searchDismissRef.current = search.dismiss;
   useEffect(() => {
     const lockedProjectKey = search.lockedProjectKey;
     if (lockedProjectKey) {
@@ -774,7 +783,7 @@ export function ConversationSearchBox({
           machineSelection,
         })
       ) {
-        search.reset();
+        search.dismiss();
         search.clearLock();
       }
       return;
@@ -797,7 +806,7 @@ export function ConversationSearchBox({
     search.clearLock,
     search.lockedProjectKey,
     search.projectSelection,
-    search.reset,
+    search.dismiss,
     search.setProjectSelection,
   ]);
 
@@ -810,7 +819,8 @@ export function ConversationSearchBox({
     (next: boolean) => {
       setOpen(next);
       // Passive closes keep a project-menu lock; the global search trigger clears it explicitly.
-      if (!next) search.reset();
+      if (next) search.resume();
+      else search.dismiss();
       onOpenChange?.(next);
     },
     [onOpenChange, search],
@@ -848,6 +858,7 @@ export function ConversationSearchBox({
             <Search size={15} className="shrink-0 text-[var(--cmd-palette-item-icon)]" />
             <input
               ref={inputRef}
+              onFocus={search.resume}
               value={search.query}
               onChange={(event) => search.setQuery(event.target.value)}
               placeholder={t('ccAgent.search.placeholder')}
@@ -962,6 +973,7 @@ export function SearchFilterMenu({
           lockedProjectComparisonKey,
       ) ?? null
     : null;
+  const choosableProjects = allKnownProjects.filter((project) => !isTeammateProjectPath(project.workingDir));
   const lockedProjectLabel = lockedProject
     ? projectDisplayLabelWithMachine(lockedProject)
     : lockedProjectName;
@@ -1076,11 +1088,11 @@ export function SearchFilterMenu({
             <span className="truncate">{t('ccAgent.search.filter.allProjects')}</span>
             {projects === 'all' && <Check size={15} className="ml-auto shrink-0 text-[var(--text-primary)]" />}
           </DropdownMenuItem>
-          {allKnownProjects.length > 0 && (
+          {choosableProjects.length > 0 && (
             <DropdownMenuSeparator className="my-1 bg-[var(--cmd-palette-border)]" />
           )}
           <div className="max-h-[280px] overflow-y-auto">
-            {allKnownProjects.map((project) => {
+            {choosableProjects.map((project) => {
               const comparisonKey = projectKeyComparisonKey(project.projectKey, localPlatform);
               const selected = comparisonKey != null && (selectedProjects?.has(comparisonKey) ?? false);
               const remoteIdentity = getRemoteProjectMachineIdentity(project);
@@ -1279,8 +1291,13 @@ function SearchResultRow({
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--text-primary)]">
-                {highlightSegments(displayTitle, item.titleMatchIndices)}
+              <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1">
+                <span className="min-w-0 flex-[1_0_6rem] truncate text-13 font-medium text-[var(--text-primary)]">
+                  {highlightSegments(displayTitle, item.titleMatchIndices)}
+                </span>
+                <span className="max-w-full overflow-x-auto">
+                  <TaskTagDots tags={item.session.tags} />
+                </span>
               </span>
               <Tip text={sourceText} side="top" delay={150}>
                 <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-10 leading-none text-[var(--text-tertiary)]">

@@ -7,7 +7,6 @@ import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { ChevronDown, ChevronRight, Search } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
-import { BOT_SYSTEM_SKILL_IDS, isBotSystemSkillOn, type BotSystemSkillId } from '../../../shared/botSystemSkills';
 import { useBotTranslation } from './botPronounContext';
 import type { BotCapabilities, BotProfile } from './botStore';
 import type { BotCapabilityEntry as Entry, BotCapabilityKind as Kind } from './botSettingsTarget';
@@ -30,9 +29,8 @@ function folded(rows: Row[], open: boolean, searching: boolean) {
 }
 
 /**
- * The capability page (cindy-bots-runtime.md §6「伙伴技能分层」): the shared core, the system Skills this teammate
- * may turn off, its learned Skills, then shared references (Skills on this computer, built-in tools,
- * MCP) and permissions. References are edited per companion; installations and connections stay
+ * The capability page (cindy-bots-runtime.md §6「伙伴技能分层」): the shared core, its learned
+ * Skills, then shared references (Skills on this computer, built-in tools, MCP) and permissions. References are edited per companion; installations and connections stay
  * host-owned.
  */
 export function BotCapabilitySettings({
@@ -40,7 +38,6 @@ export function BotCapabilitySettings({
   capabilities,
   skills,
   onChange,
-  onSystemSkillChange,
   onInputHandoffChange,
   expanded,
   onConfigure,
@@ -53,7 +50,6 @@ export function BotCapabilitySettings({
   capabilities: BotCapabilities;
   skills: string[];
   onChange: (kind: Kind, values: string[]) => void;
-  onSystemSkillChange?: (id: BotSystemSkillId, on: boolean) => void;
   onInputHandoffChange?: (allowed: boolean) => void;
   /** The settings page's back button steps out of a Skill page first. */
   backRef?: MutableRefObject<(() => Promise<boolean>) | null>;
@@ -98,7 +94,7 @@ export function BotCapabilitySettings({
     setRevision((value) => value + 1);
   }, []);
 
-  // Same unsaved-changes question as routines and memory.
+  // Same unsaved-changes question as memory.
   const confirmDiscard = useCallback(async () => !editorDirtyRef.current?.() || confirm({
     presentation: 'standard',
     title: t('bots.capabilities.learned.unsavedTitle'),
@@ -176,8 +172,6 @@ export function BotCapabilitySettings({
         bot={bot}
         view={view}
         onView={setView}
-        systemSkillOn={(id) => isBotSystemSkillOn(capabilities, id)}
-        onSystemSkillChange={onSystemSkillChange}
         onLearnedChanged={refresh}
         editorDirtyRef={editorDirtyRef}
       />
@@ -213,11 +207,11 @@ export function BotCapabilitySettings({
     const shown: Row[] = rows
       .filter((item) => matches(item.id, item.name, item.description))
       .map((item) => {
-        const checked = personal ? item.available : selectedIds.includes(item.id);
+        const checked = personal || item.cindyOfficial ? item.available : selectedIds.includes(item.id);
         return {
           ...item,
           checked,
-          disabled: personal ? !target.skills || pendingSkill !== null : !canEdit || (!item.available && !checked),
+          disabled: item.cindyOfficial ? true : personal ? !target.skills || pendingSkill !== null : !canEdit || (!item.available && !checked),
         };
       });
     return { mode, canEdit, selectedIds, total: rows.length, rows: shown };
@@ -229,8 +223,11 @@ export function BotCapabilitySettings({
 
   const groups: ReactNode[] = [];
 
+  // V2: every session of the teammate has the tools, MCP and Skills an ordinary task here has,
+  // and its own Skills live in its project, so there is no core Skill and nothing to select.
+  const projectMode = capabilities.projectMode === true;
   // Core: always on, opens a read-only explanation.
-  if (matches(t('bots.capabilities.core.name'), t('bots.capabilities.core.hint'), 'teammate-guide')) {
+  if (!projectMode && matches(t('bots.capabilities.core.name'), t('bots.capabilities.core.hint'), 'teammate-guide')) {
     groups.push(
       <Group key="core" title={t('bots.capabilities.core.group')}>
         <ListRow
@@ -239,28 +236,6 @@ export function BotCapabilitySettings({
           onOpen={() => setView({ type: 'core' })}
           trailing={<span className="text-12 text-[var(--text-tertiary)]">{t('bots.capabilities.alwaysOn')}</span>}
         />
-      </Group>,
-    );
-  }
-
-  // System Skills: on unless this teammate turned one off.
-  const systemRows = BOT_SYSTEM_SKILL_IDS.filter((id) =>
-    matches(t(`bots.capabilities.system.items.${id}.name`), t(`bots.capabilities.system.items.${id}.hint`), id));
-  if (systemRows.length) {
-    const onCount = BOT_SYSTEM_SKILL_IDS.filter((id) => isBotSystemSkillOn(capabilities, id)).length;
-    groups.push(
-      <Group key="system" title={t('bots.capabilities.system.group')}
-        meta={t('bots.capabilities.system.meta', { on: onCount, total: BOT_SYSTEM_SKILL_IDS.length })}>
-        {systemRows.map((id) => {
-          const on = isBotSystemSkillOn(capabilities, id);
-          const name = t(`bots.capabilities.system.items.${id}.name`);
-          return (
-            <ListRow key={id} title={name} hint={t(`bots.capabilities.system.items.${id}.hint`)} dim={!on}
-              onOpen={() => setView({ type: 'system', id })}
-              control={<Switch aria-label={name} checked={on} disabled={!onSystemSkillChange}
-                onCheckedChange={(value) => onSystemSkillChange?.(id, value === true)} />} />
-          );
-        })}
       </Group>,
     );
   }
@@ -292,7 +267,7 @@ export function BotCapabilitySettings({
   }
 
   // Shared references: Skills on this computer, built-in tools, MCP.
-  for (const kind of ['skill', 'toolset', 'mcp'] as const) {
+  for (const kind of projectMode ? [] : ['skill', 'toolset', 'mcp'] as const) {
     const data = rowsOf(kind, false);
     if (!data.rows.length && (needle || !entries[kind])) continue;
     const key = `shared-${kind}`;
@@ -303,7 +278,7 @@ export function BotCapabilitySettings({
       : t('bots.capabilities.selectedMeta', { count: checkedCount, total: data.total });
     const row = (item: Row) => (
       <ListRow key={item.id} title={item.name} hint={item.description} dim={!item.available}
-        note={item.available ? undefined : (
+        note={item.cindyOfficial ? t('bots.capabilities.officialInherited') : item.available ? undefined : (
           <>
             {t(item.missing ? 'bots.capabilities.notOnThisComputer' : kind === 'toolset' ? 'bots.capabilities.notTurnedOn' : 'bots.capabilities.unavailableHint')}
             {kind === 'toolset' && !item.missing && onConfigure ? (

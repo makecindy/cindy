@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
+import { CompanionCindyConflictAction, useCompanionCindyConflictAction } from './CompanionCindyConflictAction';
 import { Button } from '@/components/ui/button';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
@@ -16,6 +17,7 @@ export function CompanionShadowBanner({ botId, name }: { botId: string; name: st
   const { t } = useTranslation();
   const navigate = useNavigate();
   const cloud = useCompanionCloud();
+  const conflict = useCompanionCindyConflictAction();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const actor = cloud.actors.find((candidate) => candidate.externalId === botId);
@@ -27,15 +29,18 @@ export function CompanionShadowBanner({ botId, name }: { botId: string; name: st
     if (!api || busy) return;
     setBusy(true);
     setError(null);
+    conflict.clear();
     const owner = getDataOwnerGeneration();
     try {
       const result = await api.takeOverCompanion(botId);
       if (!isDataOwnerGenerationCurrent(owner)) return;
       refreshCompanionCloud();
       if (result.ok) { await ensureBotProfilesLoaded(true).catch(() => undefined); return; }
+      conflict.report(result);
       if (result.code === 'HOME_CONFLICT') toast.info(t('bots.cloud.takeOverConflict', { name, device }));
       else setError(t(result.code === 'OFFLINE' ? 'bots.cloud.takeOverOffline' : result.code === 'NOT_ENABLED'
-        ? 'bots.cloud.notEnabled' : 'bots.cloud.takeOverFailed', { name }));
+        ? 'bots.cloud.notEnabled' : result.code === 'LOCAL_CINDY_CONFLICT'
+          ? 'bots.cloud.localCindyConflict' : 'bots.cloud.takeOverFailed', { name }));
     } catch {
       if (isDataOwnerGenerationCurrent(owner)) setError(t('bots.cloud.takeOverFailed', { name }));
     } finally {
@@ -49,12 +54,13 @@ export function CompanionShadowBanner({ botId, name }: { botId: string; name: st
       data-testid="companion-shadow-banner"
       className="mx-4 mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3"
     >
-      <div className="min-w-0 flex-1">
+      <div className={`min-w-0 flex-1${conflict.action ? ' basis-full' : ''}`}>
         <p className="text-14 font-medium text-[var(--text-primary)]">{t('bots.cloud.shadowTitle', { device })}</p>
         <p className="mt-0.5 text-12 text-[var(--text-secondary)]">
           {busy ? t('bots.cloud.takingOver', { name }) : error ?? t('bots.cloud.shadowHint')}
         </p>
       </div>
+      <CompanionCindyConflictAction action={conflict.action} />
       {home ? (
         <Button variant="secondary" size="md" type="button" disabled={busy}
           onClick={() => navigate(`/bots/remote/${encodeURIComponent(home)}/${encodeURIComponent(botId)}`)}>

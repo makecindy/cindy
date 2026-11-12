@@ -154,8 +154,6 @@ export interface PiExtraSpawnConfig {
     servers: PiMcpServerRef[];
     /** Bot-scoped memory is exposed as one typed Pi tool instead of nested discovery. */
     botMemoryFacade?: boolean;
-    /** Direct teammate tools left out because a system Skill is turned off; the helper also denies calls. */
-    deniedTools?: string[];
   } | null;
   /** 外部 MCP header 真值；只进 Pi 父进程 env，并在 bash spawn 边界剥离。 */
   mcpEnv?: Record<string, string>;
@@ -997,6 +995,13 @@ export interface AgentDeps {
     modelId: string,
   ) => number | null;
 
+  /** Output limit for this exact provider/model route. Missing retains native defaults;
+   * never resolve from the provider-deduplicated availableModels table. */
+  resolveModelMaxOutputTokens?: (
+    providerId: string | null | undefined,
+    modelId: string,
+  ) => number | null;
+
   /** Host-resolved model percentage. Hosts without a policy retain their runtime defaults. */
   resolveModelCompactionPct?: (
     providerId: string | null | undefined,
@@ -1385,6 +1390,12 @@ export interface AgentDeps {
       catalogModel: string;
       reasoningEffort?: ReasoningEffort | null;
     }>;
+    /**
+     * 本任务当前的思维深度。只在带了智能子代理路由时附上。
+     * 冷恢复登记路由时，session effort store 往往还没从数据库 hydrate；
+     * 空字符串是「这个模型不用推理」的哨兵，不得改成目录默认。
+     */
+    reasoningEffort?: Effort | '';
   }) => void;
 
   /** Desktop proxy observation of the model actually sent for one Codex child thread. */
@@ -1601,7 +1612,8 @@ export interface OneShotOptions {
   /** 输出 token 上限。默认 100 (起标题用); skillReview 这种大 prompt 应传 4096。 */
   maxTokens?: number;
   /**
-   * 模型 ID。不传时 agent 内部用各自默认 (Claude → claude-haiku-4-5, Codex → gpt-5.4-mini)。
+   * 模型 ID。不传时 agent 内部用各自默认: Claude → claude-haiku-4-5; Codex 不带 model,
+   * 由 app-server 按当前账号与配置选默认模型 (不写死型号, 型号下线后自动跟随)。
    * 仅当调用方对模型敏感时才传 (例如 skillReview 锁定 haiku 控制成本)。
    */
   model?: string;
@@ -1621,8 +1633,13 @@ export interface OneShotOptions {
    * provider dispatch. Returning false must fail closed without sending the
    * one-shot request (for example when the owning workflow was replaced while
    * the agent host was starting).
+   *
+   * `route.model` is the model the agent resolved for this dispatch, when it
+   * is known at that point. Codex reports it on the check between
+   * thread/start and turn/start, which is the only place a caller can see
+   * the server-chosen default model before the prompt is sent.
    */
-  beforeDispatch?: () => boolean | Promise<boolean>;
+  beforeDispatch?: (route?: { model?: string }) => boolean | Promise<boolean>;
 }
 
 /**
@@ -1763,6 +1780,34 @@ export interface BotRuntimeProfile {
   skillPolicy: BotRuntimeSkillPolicy;
   mcpPolicy: BotRuntimeMcpPolicy;
   toolsetPolicy: BotRuntimeToolsetPolicy;
+  /**
+   * Teammate V2 (project mode): the teammate is an ordinary project task with
+   * its identity layered on top. Context files, settings, Skills, MCP, memory
+   * and the host prompt are exactly those of an ordinary task in the same
+   * working directory; only the identity prompt and the teammate's own Skills
+   * are added. Without it the classic, isolated teammate runtime applies.
+   */
+  projectContext?: boolean;
+}
+
+/** The profile when the classic isolated teammate runtime applies; undefined for V2 and ordinary tasks. */
+export function isolatedBotProfile(profile: BotRuntimeProfile | undefined): BotRuntimeProfile | undefined {
+  return profile && !profile.projectContext ? profile : undefined;
+}
+
+/**
+ * Skill policy handed to the engines: the full allowlist for a classic teammate,
+ * only the teammate's own Skills for V2 (everything else loads as for any task).
+ */
+export function botRuntimeSkillPolicy(profile: BotRuntimeProfile | undefined): BotRuntimeSkillPolicy | undefined {
+  if (!profile) return undefined;
+  if (!profile.projectContext) return profile.skillPolicy;
+  const { ownSkills, ownSkillPluginRoots } = profile.skillPolicy;
+  return {
+    mode: 'inherit', configured: [], catalog: [],
+    ...(ownSkills ? { ownSkills } : {}),
+    ...(ownSkillPluginRoots ? { ownSkillPluginRoots } : {}),
+  };
 }
 
 /**
@@ -1909,7 +1954,10 @@ export interface LocalAgentClient {
   storageDirectory?: string;
 }
 
+export const TASK_SYSTEM_PROMPT = Symbol('cindy.task-system-prompt');
 export interface StartSessionOptions {
+  /** Host-owned task instructions, appended after the native fixed prompt. */
+  readonly [TASK_SYSTEM_PROMPT]?: string;
   [NATIVE_SUBSCRIPTION_ACCOUNT]?: NativeSubscriptionAccount;
   [LOCAL_AGENT_CLIENT]?: LocalAgentClient;
   /**
@@ -2042,6 +2090,11 @@ export interface StartSessionOptions {
    */
   makerMemoryScopeKey?: string;
   /**
+   * The host decided `makerMemoryEnabled` from the session owner's own switch (a teammate's memory
+   * setting), so an agent-level memory switch does not turn it off. Implied by a `bot:` scope.
+   */
+  makerMemorySwitchOwned?: boolean;
+  /**
    * Exact host-frozen memory bytes for this runtime start. When present the
    * harness must inject these bytes instead of re-reading MEMORY.md later in
    * startup, otherwise the persisted runtime snapshot and the actual prompt
@@ -2114,8 +2167,10 @@ export interface StartSessionOptions {
  * this proof. Main dispatchers attach it only after authenticating the source.
  */
 export const MAIN_OWNED_SEND_CONTEXT = Symbol('cindy.main-owned-send-context');
-/** Optional question replies must never be queued for a later execution. */
+/** Question replies preserve other pending questions; steer still rejects cross-generation delivery. */
 export const ASYNC_QUESTION_ANSWER = Symbol('cindy.async-question-answer');
+/** Host-classified ordinary user input only; absent on automation and question replies. Not an authorization grant. */
+export const SUPERSEDE_ASYNC_QUESTIONS = Symbol('cindy.supersede-async-questions');
 
 /** Call-local user content before Session replaces images with generated descriptions. */
 export const AUTO_REVIEW_SOURCE_CONTENT = Symbol('cindy.auto-review-source-content');
@@ -2158,9 +2213,32 @@ export interface MainOwnedSendContext {
  */
 export const PI_CACHE_RECOVERY_EXPECTATION = Symbol('pi-cache-recovery-expectation');
 
+/** Host-owned, call-local model request interception. Never accepted from wire options. */
+export { assembleSystemPromptSections, type SystemPromptSection } from './shared/system-prompt-sections.js';
+export const MODEL_REQUEST_CONTROL = Symbol('cindy.model-request-control');
+export interface ModelRequestRoute {
+  model: string;
+  providerId: string;
+  effort?: string;
+  fastMode?: boolean | 'ultrafast';
+}
+export interface ModelRequestInput extends ModelRequestRoute {
+  phase: 'select' | 'payload';
+  request?: Record<string, unknown>;
+  /** Host transport failed before plugin delivery; no partial request is exposed. */
+  failure?: 'request-too-large';
+}
+export type ModelRequestControl = (input: ModelRequestInput) => Promise<{
+  skip?: true;
+  route?: ModelRequestRoute;
+  request?: Record<string, unknown>;
+}>;
+
 export interface SendOptions {
+  readonly [MODEL_REQUEST_CONTROL]?: ModelRequestControl;
   readonly [PI_CACHE_RECOVERY_EXPECTATION]?: import('./pi/cache-compatibility.js').PiCacheCompatibility;
   readonly [ASYNC_QUESTION_ANSWER]?: true;
+  readonly [SUPERSEDE_ASYNC_QUESTIONS]?: true;
   readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
   readonly [AUTO_REVIEW_USER_INTENT]?: AutoReviewUserIntent;
   readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true;
@@ -2251,7 +2329,7 @@ export type TurnPermissionOrigin =
   | { kind: 'desktop' }
   | {
       kind: 'im';
-      channel: 'feishu' | 'discord' | 'slack' | 'wechat' | 'telegram' | 'dingtalk' | 'wecom';
+      channel: 'feishu' | 'discord' | 'slack' | 'wechat' | 'telegram' | 'dingtalk' | 'wecom' | 'imessage';
       taskId?: string;
     }
   | { kind: 'scheduler' }
@@ -2292,6 +2370,8 @@ export interface BackgroundTaskSnapshot {
   taskId: string;
   /** SDK task_type(local_bash / local_agent / local_workflow 等),缺失表示未知。 */
   taskType?: string;
+  /** 后台命令是工作还是长驻服务;与 agent_task_update 的同名字段同源,缺省按 work。 */
+  backgroundCommandKind?: 'work' | 'service';
   toolUseId?: string;
   title?: string;
   /**
@@ -2697,6 +2777,11 @@ export interface AgentSessionHandle {
    * 默认实现为 false (capability 缺失时 host 不该问)。
    */
   isTurnRunning?(): boolean;
+  /**
+   * 盘上项目资源相对运行时启动快照是否已漂移(仅原地加载项目资源的 pi 本地根任务实现,
+   * 其余 agent 恒缺省)。host 可据此回收运行时,让下次 spawn 重扫并重算资源 argv。
+   */
+  hasProjectResourceDrift?(): boolean;
   /** A provider-owned preparatory turn still precedes the accepted user input.
    * Host timeouts must not resume it with a generic CONTINUE. Read synchronously
    * before abort clears the provider's existing preparation state.
@@ -2821,8 +2906,8 @@ export abstract class BaseAgent {
   }
 
   /** Filter only the palette projection; management discovery retains disabled sources. */
-  filterActiveSkillCommands(result: ListAgentSkillsResult, remoteHostId?: string, snapshot?: readonly string[]): ListAgentSkillsResult {
-    const disabled = remoteHostId ? [] : snapshot ?? this.deps.getDisabledSkillPaths?.() ?? [];
+  filterActiveSkillCommands(result: ListAgentSkillsResult, remoteHostId?: string, snapshot?: readonly string[], current?: readonly string[]): ListAgentSkillsResult {
+    const disabled = remoteHostId ? [] : snapshot ?? current ?? this.deps.getDisabledSkillPaths?.() ?? [];
     if (disabled.length === 0) return result;
     return { ...result, skills: result.skills.filter((skill) => !skill.path || !(snapshot
       ? disabled.includes(canonicalSkillPath(skill.path)) : isSkillDisabled(skill.path, disabled))) };
@@ -2887,7 +2972,7 @@ export abstract class BaseAgent {
    * 各 agent 选自家最便宜的可用模型实现, 鉴权 / API 路径与 startSession 同源
    * (确保 OAuth-only 用户也能用):
    *   - Claude → sdkQuery + haiku-4-5 + maxTurns:1
-   *   - Codex  → Codex SDK startThread + gpt-5.4-mini
+   *   - Codex  → app-server 临时 thread, 默认模型由 app-server 决定
    * 调用方不关心用哪个模型, 只拿一个 string。
    *
    * 子类可选实现; 不实现时调到这里, 抛 NotSupportedError。

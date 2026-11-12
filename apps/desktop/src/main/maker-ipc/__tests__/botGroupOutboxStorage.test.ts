@@ -14,7 +14,7 @@ import type { BotGroupOutboxCommandRequest, BotGroupOutboxExecution, BotGroupOut
 vi.mock('../../appSessionState.js', () => ({ getActiveAppSession: () => ({ dataOwnerId: null, generation: 0 }),
   isAppSessionBoundaryPending: () => false, ownerScopedUserDataPath: () => '', onAppSessionInvalidated: () => () => {} }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: {} }) }));
-vi.mock('../../cindy-media/blobStore.js', () => ({ parseBlobUrl: () => null }));
+vi.mock('../../cindy-media/blobStore.desktop.js', () => ({ parseBlobUrl: () => null }));
 vi.mock('../../cindy-media/ledger.js', () => ({}));
 import * as atomic from '../../utils/atomicWriteFile.js';
 import { createBotGroupOutboxStorage } from '../botGroupOutboxStorage.js';

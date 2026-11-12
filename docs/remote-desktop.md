@@ -1,5 +1,24 @@
 # Remote desktop
 
+## Hidden capture/data host diagnostics
+
+`Desktop capture` is the hidden host used by desktop capture, files, direct peers,
+and recording. Its presence does not by itself mean a screen is being captured.
+App activation must target the registered main window, never the first entry from
+`BrowserWindow.getAllWindows()`. Provider-share receipt only queues the approval
+UI/notification; clicking the notification or opening an invitation activates main.
+
+For an unexpectedly visible host, local `main-*.log` entries under
+`desktop-capture:window` identify its mode, window ID/native handle and bounds.
+`js-call` entries include sanitized source positions for visibility/focus calls;
+`native-event` entries report Electron events and do **not** claim an originating
+call stack. A per-window budget caps these records at 32 plus a limit notice.
+Correlate them with `provider-share` approval receipt and notification lifecycle
+records (local sequence, `show` versus `click`) to investigate no-click reports.
+These diagnostics omit notification text, share links, credentials and absolute
+stack paths, and do not expand the log-upload allowlist. They observe visibility
+without hiding or destroying a host that may carry an active connection.
+
 ## Idle protection
 
 Desktop and Mobile expose **Disconnect and lock when idle** in the remote desktop
@@ -704,7 +723,7 @@ phone/network latency benchmark or a guarantee of 30/60 fps. Desktop types,
 related unit tests and native memory/bounds checks pass. Phone-side smoothness
 and packaged Linux startup still require validation.
 
-Other Linux Wayland environments (including XWayland applications) expose
+Other Linux Wayland environments expose
 one portal-selected surface. Electron's PipeWire source is not a physical monitor
 enumeration and may have an empty `display_id`; see the
 [Electron Linux caveat](https://www.electronjs.org/docs/latest/api/desktop-capturer#linux)
@@ -712,6 +731,18 @@ and [source contract](https://www.electronjs.org/docs/latest/api/structures/desk
 The host advertises one view-only display slot. Its initial 1280×720 geometry is a
 viewport placeholder; video/JPEG dimensions describe the selected surface. The
 existing viewer fallback supplies its localized display name.
+
+That path needs Electron itself on Wayland. Electron picks Ozone Wayland only when
+`XDG_SESSION_TYPE=wayland`, and `--ozone-platform` overrides that choice. Started
+from a shell without that variable inside a Wayland compositor, Cindy runs on XWayland.
+Capture then reads XWayland's root window, which holds no desktop pixels: viewers
+see a black screen with only the pointer and no portal request is made (#9712).
+Hyprland's native capture does not depend on Electron's backend. Otherwise, on the
+first video offer of each run, the host logs one `remote-desktop:display-backend`
+warning listing the Wayland signals it saw (`XDG_SESSION_TYPE=wayland`,
+`WAYLAND_DISPLAY` set, a `wayland-N` socket in the runtime directory). That exact
+scope is in the log-upload allowlist. The UI does not show this state, and the
+supported compositors are unchanged.
 
 A lease creates one isolated capture window and starts one system picker. Local
 consent may take up to two minutes, independently of each bounded video RPC.

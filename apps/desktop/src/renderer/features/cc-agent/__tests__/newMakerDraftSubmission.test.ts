@@ -215,6 +215,9 @@ async function submit(options: {
   const environment = {
     deviceDisplayName, dbToMakerAgentKind, askPluginModelRoute, writePluginModelRouteNote, modelCatalogKey,
     controlledModelRoute: { catalogHostDeviceId: options.catalogHostDeviceId },
+    // 这些用例都没选模型组：发送路径不解析、不写说明、不记绑定。
+    activeModelGroup: null, resolveModelGroup: async () => null, writeModelGroupRouteNote: noop,
+    bindModelGroupSession: noop, keptModelNameForGroupNote: () => '', i18n: { language: 'en' },
     activePluginModel: options.pluginRoute ? { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' } : null,
     ...draftEffort, getModel, reconcileInvocationEffort, recallAgentDeviceSelection, window,
     chatEligibleSourcesForModel,

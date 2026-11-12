@@ -1,6 +1,6 @@
 import { lstat } from 'node:fs/promises';
 import path from 'node:path';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { cindyMakeManager } from './manager.js';
 import { isCindyMakeManagedWorktreePath, makeSourceCheckoutPath, makeSourceRoot } from './sourcePaths.js';

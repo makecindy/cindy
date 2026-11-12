@@ -22,6 +22,13 @@ import { isRemoteSession, isRemoteSessionSticky } from '@/lib/makerTransport';
 export interface RunningBashTask {
   taskId: string;
   title?: string;
+  /** 长驻服务(本地预览服务、文件监听等);缺省是会自己结束的工作。 */
+  service?: boolean;
+}
+
+/** 状态栏文案用:仍在工作的后台命令数(不含长驻服务)。 */
+export function countWorkingBashTasks(tasks: readonly RunningBashTask[]): number {
+  return tasks.filter((task) => !task.service).length;
 }
 
 /**
@@ -42,6 +49,7 @@ export function listRunningClaudeBashTasks(
     out.set(update.taskId, {
       taskId: update.taskId,
       ...(update.title ? { title: update.title } : {}),
+      ...(update.backgroundCommandKind === 'service' ? { service: true } : {}),
     });
   }
   return [...out.values()];

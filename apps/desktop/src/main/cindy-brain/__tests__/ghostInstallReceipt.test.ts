@@ -369,6 +369,21 @@ describe('GhostInstallReceiptStore cleanup', () => {
 
   // Rule: approved control points persist across reads, keep only names this manifest still declares,
   // and an older receipt without the field stays approved with no control point granted.
+  // Unit: real receipt write/read dropped a static capability because it is
+  // declared outside subscribe.hooks. Installation must preserve that consent.
+  it('round trips approved static prompt fragments through the installation receipt', async () => {
+    const base = createSetupReceipt();
+    const fragments = [{ id: 'style', text: 'Static task instructions', order: 10, scope: 'selected-task' as const }];
+    const receipt = createGhostInstallReceipt({ ...base,
+      manifest: { ...base.manifest, schemaVersion: 3, minCindyVersion: '0.0.0', systemPrompt: fragments },
+      approvedControlPoints: ['system-prompt'],
+    });
+    await store.write(receipt);
+    expect(await store.readAsync('hello')).toMatchObject({ state: 'approved', receipt: {
+      manifest: { systemPrompt: fragments }, approvedControlPoints: ['system-prompt'],
+    } });
+  });
+
   it('round trips approved control points and keeps older receipts approved without them', async () => {
     const receipt = createSetupReceipt();
     receipt.manifest.subscribe = { hooks: ['will-routine-run', 'will-later-point'] as never };

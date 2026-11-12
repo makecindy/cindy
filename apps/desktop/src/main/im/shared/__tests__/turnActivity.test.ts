@@ -3,11 +3,13 @@ import { describe, expect, it } from 'vitest';
 
 import {
   applyStatusTokenRate,
+  buildActivityRecord,
   clearRunningIndicators,
   createTurnActivity,
   formatThinkingStep,
   formatToolStep,
   markActivityWriting,
+  MAX_RECORD_STEPS,
   MAX_VISIBLE_STEPS,
   pushThinkingStep,
   pushToolStep,
@@ -153,6 +155,49 @@ describe('rolling window and replay de-duplication', () => {
       'writing',
     ]);
     expect(JSON.parse(JSON.stringify(activity))).toEqual(activity);
+  });
+});
+
+// Rule: a finished turn keeps a reviewable record of every step, not just the five
+// rows the running preview shows (the IM final used to drop the process entirely).
+// Production entry: buildActivityRecord, consumed by turnRunner at turn completion.
+// Minimal input: more steps than the preview window, then more than the record cap.
+describe('buildActivityRecord — reviewable record after completion', () => {
+  it('lists every step in order, including rows that rolled out of the running preview', () => {
+    const activity = createTurnActivity(0);
+    pushThinkingStep(activity, { stage: 'final', blockId: 't1', text: '**先看**入口' });
+    for (let index = 1; index <= MAX_VISIBLE_STEPS + 1; index += 1) {
+      pushToolStep(activity, 'Grep', { pattern: `p${index}` }, `tool-${index}`);
+    }
+    setActivityNotice(activity, '上游过载, 正在自动重试');
+    setActivityTokenRate(activity, 120);
+
+    expect(buildActivityRecord(activity, 83_000)).toEqual({
+      title: `过程记录 · ${MAX_VISIBLE_STEPS + 2} 项 · 1m23s`,
+      lines: [
+        '✓ ✦ 先看入口',
+        ...Array.from({ length: MAX_VISIBLE_STEPS + 1 }, (_, index) => `✓ 搜索 p${index + 1}`),
+      ],
+    });
+  });
+
+  it('counts the earliest steps instead of listing them once the record is full', () => {
+    const activity = createTurnActivity(0);
+    for (let index = 1; index <= MAX_RECORD_STEPS + 3; index += 1) {
+      pushToolStep(activity, 'Grep', { pattern: `p${index}` }, `tool-${index}`);
+    }
+    const record = buildActivityRecord(activity, 1_000);
+    expect(record?.title).toBe(`过程记录 · ${MAX_RECORD_STEPS + 3} 项 · 1s`);
+    expect(record?.lines).toHaveLength(MAX_RECORD_STEPS + 1);
+    expect(record?.lines[0]).toBe('… 更早的 3 项未列出');
+    expect(record?.lines[1]).toBe('✓ 搜索 p4');
+    expect(record?.lines.at(-1)).toBe(`✓ 搜索 p${MAX_RECORD_STEPS + 3}`);
+  });
+
+  it('has no record for a text-only quick answer', () => {
+    const activity = createTurnActivity(0);
+    markActivityWriting(activity);
+    expect(buildActivityRecord(activity, 5_000)).toBeNull();
   });
 });
 

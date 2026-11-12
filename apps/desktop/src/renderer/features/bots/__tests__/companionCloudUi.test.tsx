@@ -32,7 +32,7 @@ vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({ useDeviceLink
 vi.mock('@/lib/toast', () => ({ toast: { info: h.toast, error: h.toast } }));
 
 import { CLOUD_ATTACHMENT_LOADS, CloudCompanionOfflineView } from '../CloudCompanionOfflineView';
-import { BotHomeComputerSetting, companionArrivedHere } from '../BotHomeComputerSetting';
+import { BotHomeComputerSetting, companionArrivedHere, useCompanionHomeSwitch } from '../BotHomeComputerSetting';
 import { resetCompanionCloudStoreForTests, useCompanionCloud } from '../companionCloudStore';
 import { cloudOnlyRemoteBots, cloudRemoteBots, isCloudCompanionRemote, withoutCloudCompanions, withoutShadowedBots } from '../companionCloudPresentation';
 import { BotConnectionStatus } from '../BotConnectionStatus';
@@ -61,6 +61,7 @@ beforeEach(() => {
   maker.onCompanionCloudChanged.mockImplementation(() => () => undefined);
   h.navigate.mockReset();
   h.toast.mockReset();
+  h.ensureLoaded.mockReset().mockResolvedValue([{ id: 'local-orphan', status: 'active' }]);
   Object.defineProperty(window, 'electronAPI', { configurable: true, writable: true, value: { maker } });
 });
 afterEach(() => { cleanup(); });
@@ -209,6 +210,73 @@ describe('CloudCompanionOfflineView', () => {
     expect(h.toast).toHaveBeenCalledWith('bots.cloud.takeOverConflict:{"name":"Mia","device":"Tablet"}');
   });
 
+  it('opens the absent local Cindy settings only when the user chooses to manage it', async () => {
+    resetCompanionCloudStoreForTests(snapshot('laptop'));
+    maker.getCompanionCloudState.mockResolvedValue(snapshot('laptop'));
+    maker.getCompanionTranscript.mockResolvedValue(page);
+    maker.takeOverCompanion.mockResolvedValue({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-orphan', conflictingDeviceId: 'desk' });
+    renderView();
+    fireEvent.click(screen.getByText('bots.cloud.continueHere'));
+    expect(await screen.findByText('bots.cloud.localCindyConflict:{"name":"Mia"}')).toBeTruthy();
+    expect(h.navigate).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.localCindyConflictAction' }));
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/local-orphan?settings=1'));
+  });
+
+  it.each([undefined, 'other-device'])('never opens a local same-ID copy for an unverified conflict source: %s', async conflictingDeviceId => {
+    resetCompanionCloudStoreForTests(snapshot('laptop'));
+    maker.getCompanionCloudState.mockResolvedValue(snapshot('laptop'));
+    maker.getCompanionTranscript.mockResolvedValue(page);
+    maker.takeOverCompanion.mockResolvedValue({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-orphan', conflictingDeviceId });
+    renderView();
+    fireEvent.click(screen.getByText('bots.cloud.continueHere'));
+    await screen.findByText('bots.cloud.localCindyConflict:{"name":"Mia"}');
+    expect(screen.queryByRole('button', { name: 'bots.cloud.localCindyConflictAction' })).toBeNull();
+    expect(h.navigate).not.toHaveBeenCalled();
+  });
+
+  // #9960: a demoted copy can still reserve this computer's singleton, but its settings
+  // are read-only in BotSettingsDrawer. Do not offer a route that cannot open that drawer.
+  it.each(['already demoted', 'demoted during profile read'])('respects settings eligibility when the conflict is %s', async boundary => {
+    const cloud = snapshot('laptop');
+    if (boundary === 'already demoted') cloud.demotedBotIds = ['local-orphan'];
+    resetCompanionCloudStoreForTests(cloud);
+    maker.getCompanionCloudState.mockResolvedValue(cloud);
+    maker.getCompanionTranscript.mockResolvedValue(page);
+    maker.takeOverCompanion.mockResolvedValue({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-orphan', conflictingDeviceId: 'desk' });
+    let finish!: (rows: Array<{ id: string; status: string }>) => void;
+    h.ensureLoaded.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    renderView();
+    fireEvent.click(screen.getByText('bots.cloud.continueHere'));
+    await screen.findByText('bots.cloud.localCindyConflict:{"name":"Mia"}');
+    if (boundary === 'already demoted') {
+      expect(screen.queryByRole('button', { name: 'bots.cloud.localCindyConflictAction' })).toBeNull();
+      expect(h.ensureLoaded).not.toHaveBeenCalled();
+    } else {
+      fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.localCindyConflictAction' }));
+      resetCompanionCloudStoreForTests({ ...cloud, demotedBotIds: ['local-orphan'] });
+      await act(async () => finish([{ id: 'local-orphan', status: 'active' }]));
+      expect(h.toast).toHaveBeenCalledWith('bots.lifecycle.actionFailed');
+    }
+    expect(h.navigate).not.toHaveBeenCalled();
+  });
+
+  it.each(['owner switch', 'unmount'])('ignores a delayed local profile read after %s', async boundary => {
+    resetCompanionCloudStoreForTests(snapshot('laptop'));
+    maker.getCompanionCloudState.mockResolvedValue(snapshot('laptop'));
+    maker.getCompanionTranscript.mockResolvedValue(page);
+    maker.takeOverCompanion.mockResolvedValue({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-orphan', conflictingDeviceId: 'desk' });
+    let finish!: (rows: Array<{ id: string; status: string }>) => void;
+    h.ensureLoaded.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const view = renderView();
+    fireEvent.click(screen.getByText('bots.cloud.continueHere'));
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.localCindyConflictAction' }));
+    if (boundary === 'unmount') view.unmount();
+    else h.owner = { dataOwnerId: 'next-owner', generation: h.owner.generation + 1 };
+    await act(async () => finish([{ id: 'local-orphan', status: 'active' }]));
+    expect(h.navigate).not.toHaveBeenCalled();
+  });
+
   it('explains a failed take-over inline and lets the user try again', async () => {
     maker.getCompanionTranscript.mockResolvedValue(page);
     maker.takeOverCompanion.mockResolvedValueOnce({ ok: false, code: 'OFFLINE' }).mockResolvedValueOnce({ ok: true });
@@ -281,6 +349,38 @@ describe('BotHomeComputerSetting', () => {
     show(snapshot('laptop'));
     openMenu();
     expect(await screen.findByText('bots.cloud.homeOutdated:{"name":"Mia","device":"Laptop"}')).toBeTruthy();
+  });
+
+  it('explains a local Cindy conflict when changing the main computer', async () => {
+    h.ensureLoaded.mockResolvedValue([{ id: 'local-orphan', status: 'active' }]);
+    maker.getCompanionHomeChoices.mockResolvedValue(local());
+    maker.switchCompanionHome.mockResolvedValue({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-orphan', conflictingDeviceId: 'desk' });
+    show(snapshot('desk'));
+    openMenu();
+    fireEvent.click(await screen.findByText('bots.cloud.switchTo:{"device":"Laptop"}'));
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.switchAction:{"device":"Laptop"}' }));
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'bots.cloud.localCindyConflict:{"name":"Mia","device":"Laptop"}');
+    expect(h.navigate).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.localCindyConflictAction' }));
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/local-orphan?settings=1'));
+  });
+
+  it('keeps the local settings action available in the glance popover’s failure toast', async () => {
+    resetCompanionCloudStoreForTests(snapshot('desk'));
+    maker.getCompanionCloudState.mockResolvedValue(snapshot('desk'));
+    h.ensureLoaded.mockResolvedValue([{ id: 'local-orphan', status: 'active' }]);
+    maker.switchCompanionHome.mockResolvedValue({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-orphan', conflictingDeviceId: 'desk' });
+    function GlanceSwitch() {
+      const state = useCompanionHomeSwitch(bot, 'toast');
+      return <button onClick={() => void state.confirm(laptop)}>Move Cindy</button>;
+    }
+    render(<GlanceSwitch />);
+    fireEvent.click(screen.getByText('Move Cindy'));
+    await waitFor(() => expect(h.toast).toHaveBeenCalled());
+    const options = h.toast.mock.calls.at(-1)?.[1];
+    expect(options.action.label).toBe('bots.cloud.localCindyConflictAction');
+    options.action.onClick();
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/local-orphan?settings=1'));
   });
 
   it('shows why a move did not happen', async () => {
@@ -357,6 +457,19 @@ describe('companionCloudStore', () => {
 });
 
 describe('CompanionShadowBanner', () => {
+  it('explains the local Cindy conflict on the shadowed copy', async () => {
+    const { CompanionShadowBanner } = await import('../CompanionShadowBanner');
+    resetCompanionCloudStoreForTests(snapshot('laptop'));
+    maker.getCompanionCloudState.mockResolvedValue(snapshot('laptop'));
+    maker.takeOverCompanion.mockResolvedValue({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-orphan', conflictingDeviceId: 'desk' });
+    render(<CompanionShadowBanner botId="mia" name="Mia" />);
+    fireEvent.click(screen.getByText('bots.cloud.continueHere'));
+    expect(await screen.findByText('bots.cloud.localCindyConflict:{"name":"Mia"}')).toBeTruthy();
+    expect(h.navigate).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.localCindyConflictAction' }));
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/local-orphan?settings=1'));
+  });
+
   it('opens the companion on its main computer or takes it over here', async () => {
     const { CompanionShadowBanner } = await import('../CompanionShadowBanner');
     resetCompanionCloudStoreForTests(snapshot('laptop'));

@@ -1,5 +1,6 @@
+import { useWindowWidth } from '@/platform/windowDimension';
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
-import { Pressable, StyleSheet, View, useWindowDimensions } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 import Animated, {
   interpolate,
   useAnimatedStyle,
@@ -50,7 +51,7 @@ export const SwipeableProjectHeader = memo(function SwipeableProjectHeader({
   const { t } = useTranslation();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
-  const { width } = useWindowDimensions();
+  const width = useWindowWidth();
   const methods = useRef<SwipeableMethods | null>(null);
   const translation = useRef<SharedValue<number> | null>(null);
   const rowKey = `project:${projectKey}`;

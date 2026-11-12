@@ -33,7 +33,7 @@ import { getClientEndpoint } from '../clientEndpointsService.js';
 import { onQuit } from '../lifecycle.js';
 import { putLocalFile } from '../plugin-publisher/putObject.js';
 import { PluginMarketLedger } from '../plugin-market/ledger.js';
-import { ServerApiError } from '../serverApiClient.js';
+import { ServerApiError } from '../serverApiClient.desktop.js';
 import { isIpcError, isIpcErrorCode } from '../../shared/ipc-errors.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { ContributionApi } from './api.js';
