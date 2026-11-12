@@ -5,10 +5,9 @@ import type { InboundAdmissionCtx, InboundRejection } from '@cindy/anthropic-com
 export const CODEX_PROXY_TOKEN_HEADER = 'x-cindy-proxy-token';
 /**
  * Its value reaches Codex only through this environment variable (named by
- * env_http_headers, so the command line carries the name, not the value). The name
- * contains TOKEN: Codex's default shell_environment_policy drops such variables from the
- * commands its tools run. A user configuration that turns those default excludes off
- * would expose it to those commands, which belong to the same task.
+ * env_http_headers, so the command line carries the name, not the value). The commands
+ * the task's own tools run can read it; the token is valid only on this runtime's
+ * loopback proxies and ends with the runtime.
  */
 export const CODEX_PROXY_TOKEN_ENV = 'CINDY_CODEX_PROXY_TOKEN';
 
