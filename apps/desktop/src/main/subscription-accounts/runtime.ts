@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { getCodexHome } from '../maker-host/codex-home-path.js';
@@ -183,6 +184,17 @@ function directoryFor(provider: SubscriptionProvider, id: string): string {
   return id === 'default' && legacyCodexDefault(provider)
     ? getCodexHome()
     : accountDirectory(provider, id);
+}
+/** Recover affinity from host-owned history metadata, never from pool order or quota.
+ * Retain removed aliases so an old task fails closed instead of switching accounts.
+ */
+export function codexSubscriptionAccountForHistoryHome(historyHome: string): string | undefined {
+  const pool = readPool('openai');
+  if (!pool) return;
+  const ids = new Set([...pool.accounts.map(a => a.id), ...Object.values(pool.legacyCodexAccounts ?? {})]);
+  const matches = [...ids].filter(id => path.resolve(directoryFor('openai', id)) === path.resolve(historyHome));
+  if (matches.length > 1) throw new Error('Codex history account is ambiguous');
+  return matches[0];
 }
 function updatePool(
   provider: SubscriptionProvider,

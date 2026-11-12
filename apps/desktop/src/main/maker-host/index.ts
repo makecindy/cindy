@@ -2123,6 +2123,7 @@ export function getMaker(): Maker {
       'claude-code': withSubscriptionAccounts(claudeAgent, desktopClaudeAuthAdapter),
       codex: withSubscriptionAccounts(codexAgent, {
         getState: desktopCodexAuthAdapter.getState.bind(desktopCodexAuthAdapter),
+        resolveCodexHistoryHome: async threadId => (await readCodexThreadStorageReadOnly(threadId))?.historyHome,
         resolveDefaultProvider: model => model ? resolveConnectedDefaultProviderIdForModel(model, 'codex') : null,
       }),
     };
