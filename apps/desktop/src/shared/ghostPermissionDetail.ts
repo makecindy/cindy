@@ -16,10 +16,13 @@ export function permissionItemDetail(item: GhostPermissionItem, t: (key: string,
     detail = parsed as Record<string, unknown>;
   } catch { return t(`${prefix}.unavailable`); }
   const value = (input: unknown): string => {
-    if (Array.isArray(input)) return input.map(value).join(', ');
-    if (input && typeof input === 'object') return Object.entries(input).map(([key, entry]) => `${key}: ${value(entry)}`).join('; ');
+    if (typeof input === 'string') return `“${JSON.stringify(input).slice(1, -1).replace(/[“”]/g, '\\$&')}”`;
+    if (Array.isArray(input)) return t(`${prefix}.listValue`, { value: input.map(value).join(', ') });
+    if (input && typeof input === 'object') return t(`${prefix}.fieldsValue`, {
+      value: Object.entries(input).map(([key, entry]) => `${value(key)}: ${value(entry)}`).join('; '),
+    });
     if (typeof input === 'boolean') return t(`${prefix}.${input ? 'yes' : 'no'}`);
-    return input === null ? '—' : String(input);
+    return input === null ? t(`${prefix}.nullValue`) : String(input);
   };
   if (subject === 'view') return t(`${prefix}.view`, {
     scope: t(`${prefix}.scopes.${detail.scope}`), name: detail.resource,

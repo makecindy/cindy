@@ -100,12 +100,32 @@ describe('GhostInstallConsentHost', () => {
     expect(view.container.textContent).not.toContain(subject);
     expect(view.container.textContent).not.toMatch(/\{"|"position"|perm\.hostUi\./);
     if (subject === 'command:refresh') {
-      expect(view.container.textContent).toContain('Parameters: filter: done: No');
+      expect(view.container.textContent).toContain('Parameters: Fields (“filter”: Fields (“done”: No))');
       expect(view.container.textContent).toContain('Shortcut: Mod+R');
     }
     if (subject === 'contribution:choose') {
-      for (const text of ['Assistant', 'refresh', 'board', 'all, open', 'Open beside the entry']) expect(view.container.textContent).toContain(text);
+      for (const text of ['Assistant', 'refresh', 'board', 'List [“all”, “open”]', 'Open beside the entry']) expect(view.container.textContent).toContain(text);
     }
+  });
+
+  // Tool arguments with different types must not look identical when approved.
+  it('preserves parameter types and grouping in the readable permission text', () => {
+    const values: unknown[] = [
+      ['a', 'b'], ['a, b'], 'a, b', { a: { b: 'c' } }, { 'a: b': 'c' }, null, '—',
+      [], {}, '', 1, '1', false, 'No', 'No value', 'List []', 'Fields ()',
+      ['a”, “b'], ['a\\”, “b'], ['a\n', 'b'], ['a\\n', 'b'], { 'a”; “b': 'c' },
+    ];
+    const texts = values.map(tags => {
+      const permissions = [{ key: 'ui:host:command:refresh', kind: 'panel' as const, labelKey: 'uiHost', detailKey: 'uiHostAccess',
+        detailArgs: { subject: 'command:refresh', access: JSON.stringify({ tool: 'refresh', arguments: { tags } }) } }];
+      const before = JSON.stringify(permissions);
+      const view = render(<GhostInstallConsentContent facts={{ kind: 'install', ghostId: 'board', name: 'Board', version: '1', permissions }} />);
+      const text = view.container.textContent;
+      expect(JSON.stringify(permissions)).toBe(before);
+      view.unmount();
+      return text;
+    });
+    expect(new Set(texts).size).toBe(values.length);
   });
 
   it('shows the added permissions of an update and returns the answer to Main', async () => {
