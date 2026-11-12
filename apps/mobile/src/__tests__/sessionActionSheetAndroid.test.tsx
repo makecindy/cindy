@@ -77,6 +77,11 @@ beforeEach(() => {
   native.hide.mockReset().mockResolvedValue();
   native.expand.mockReset().mockResolvedValue();
   native.mode = "light";
+  // Codex review #9634: hostProps / props 是 hoisted 单例,只在 RNHostView /
+  // ModalBottomSheet 渲染时写入。上一个用例渲染过、本用例还没渲染(或渲染没挂上)
+  // 时断言会读到陈旧值 —— 用例假过。每个用例从空值开始,断言只认本次渲染的值。
+  native.hostProps = null;
+  native.props = null;
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
