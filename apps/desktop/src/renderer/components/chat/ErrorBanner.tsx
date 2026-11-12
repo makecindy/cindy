@@ -32,10 +32,11 @@ import {
   isResponsesLiteParallelToolCallsError,
   isRemoteCompactEncryptedContentError,
   parseAgentErrorCode,
+  localizeSubscriptionAccountError,
   requiresAgentErrorConfigurationChange,
 } from '@cindy/maker-shared/error-redaction';
 import { chatRemoteErrorGuidanceKey } from '@/lib/autoReviewUnavailableGuidance';
-import { AlertCircle, Check, Split, Play, RotateCcw, RefreshCw, Timer, Wallet } from 'lucide-react';
+import { AlertCircle, ArrowRightLeft, Check, Split, Play, RotateCcw, RefreshCw, Timer, Wallet } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
@@ -92,6 +93,11 @@ interface ErrorBannerProps {
   usageLimitWait?: { resumeAt: number } | null;
   /** 取消自动继续(错误与重试保留)。 */
   onCancelUsageLimitWait?: () => void;
+  /**
+   * 撞配额时模型组提议换到同一条路线里的下一个来源(model-groups.md §6.1)。onSwitch 走选择器同一条换模型
+   * 路径，返回是否真的换成了；换成了再走本横幅原有的重试 / 继续。没有重试入口时不显示。
+   */
+  modelGroupSwitch?: { label: string; onSwitch: () => Promise<boolean> } | null;
   /** 已识别的账号用量限制及恢复时间；用于替换上游 429 JSON 为可读提示。 */
   usageLimitRecovery?: UsageLimitRecoveryHint | null;
   /** 当前 session 的 agent kind。codex 的 401 / Missing bearer 必须 hide Retry,
@@ -156,6 +162,7 @@ export function ErrorBanner({
   usageLimitWait,
   onCancelUsageLimitWait,
   usageLimitRecovery,
+  modelGroupSwitch,
   agentKind,
   remoteHostId,
   agentDeviceId,
@@ -459,6 +466,21 @@ export function ErrorBanner({
       setRetrying(false);
     }
   };
+  const [switchingModelGroupSource, setSwitchingModelGroupSource] = useState(false);
+  const handleModelGroupSwitch = async () => {
+    if (!modelGroupSwitch || switchingModelGroupSource || retryInFlight.current) return;
+    setSwitchingModelGroupSource(true);
+    let switched = false;
+    try {
+      switched = await modelGroupSwitch.onSwitch();
+    } catch {
+      // 换模型的路径自己会提示失败原因。
+    } finally {
+      setSwitchingModelGroupSource(false);
+    }
+    // 取消了确认或没换成：什么都不动，错误、等待与重试照旧。
+    if (switched) await handleRetry();
+  };
   const [switchingClaudeSubscription, setSwitchingClaudeSubscription] = useState(false);
   useEffect(() => {
     setSwitchingClaudeSubscription(false);
@@ -467,9 +489,13 @@ export function ErrorBanner({
   // hasSpecialGuidance: 是否命中下面任一「有专属可操作指引」的特殊分支。用一个在
   // else 兜底里翻转的标志, 而不是另写一遍条件取反，保证原始错误只在通用回退时展开。
   const sharedRecoveryReason = isCodexUsageLimitError ? undefined : sharedTaskRecoveryFor(error, agentDeviceId);
+  const subscriptionGuidance = localizeSubscriptionAccountError(error, t, i18n.resolvedLanguage ?? i18n.language);
   let displayError: string;
   let hasSpecialGuidance = true;
-  if (isResponsesLiteParallelToolCallsError(error)) {
+  if (subscriptionGuidance) {
+    displayError = subscriptionGuidance;
+    hasSpecialGuidance = false;
+  } else if (isResponsesLiteParallelToolCallsError(error)) {
     displayError = t('chat.errorBanner.requestFormatError');
   } else if (remoteGuidance && !localizedReasonError) {
     // The bracketed code is more specific than status words in its upstream
@@ -874,6 +900,21 @@ export function ErrorBanner({
               title={t('chat.errorBanner.usageLimitAutoContinueCancelTitle')}
             >
               {t('chat.errorBanner.usageLimitAutoContinueCancel')}
+            </Button>
+          )}
+          {modelGroupSwitch && retryAction && (
+            <Button
+              size="sm"
+              compact
+              type="button"
+              className="min-w-0 max-w-full shrink"
+              disabled={forkStripEncryptedRunning || retrying}
+              loading={switchingModelGroupSource}
+              onClick={() => void handleModelGroupSwitch()}
+              title={modelGroupSwitch.label}
+            >
+              <ArrowRightLeft size={12} className="shrink-0" />
+              <span className="min-w-0 truncate">{modelGroupSwitch.label}</span>
             </Button>
           )}
           {retryAction && (

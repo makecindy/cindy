@@ -39,6 +39,8 @@ import {
 } from './types.js';
 
 export interface RealProfileLaunchDeps {
+  /** Port assigned by the host for its isolated profile; never relocate implicitly. */
+  isolatedCdpPort?: number;
   isEnabled: () => boolean;
   getRuntimeDir: () => string;
   applyConfig: (opts: {
@@ -273,7 +275,7 @@ async function startWithSnapshot(
   const runtimeDir = deps.getRuntimeDir();
   const revertToIsolated = () => {
     if (runtimeDir) deps.cleanup(runtimeDir);
-    deps.applyConfig({ useRealProfile: false, cdpPort: MANAGED_CDP_PORT });
+    deps.applyConfig({ useRealProfile: false, cdpPort: deps.isolatedCdpPort ?? MANAGED_CDP_PORT });
     deps.setLastApplied(null);
     return inner.call(withActiveBrowserProfile(request, false));
   };

@@ -4,6 +4,7 @@ import type { IncomingMessage } from 'node:http';
 import { afterEach, expect, it, vi } from 'vitest';
 import { collectRecoverableBody } from './oversized-attachments.js';
 import { createAnthropicCompatProxy } from './server.js';
+import { closeTestConnections, fetchOverTestConnections as fetch } from './test-loopback-server.js';
 
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -12,7 +13,7 @@ vi.mock('node:fs/promises', async importOriginal => {
 const disk = vi.mocked(statfs);
 const reserve = 256 * 1024 * 1024;
 const free = (bytes: number) => ({ bavail: reserve + bytes, bsize: 1 }) as Awaited<ReturnType<typeof statfs>>;
-afterEach(() => { disk.mockReset(); });
+afterEach(async () => { disk.mockReset(); await closeTestConnections(); });
 const request = (chunks: Buffer[]) => Readable.from(chunks) as IncomingMessage;
 
 it('does not check disk or change normal requests on a full disk', async () => {

@@ -11,6 +11,7 @@ import { botLinkedProjectAccess } from '../../maker-ipc/botLinkedProjects.js';
 import { listBotSkillsForBot } from '../../maker-ipc/botSkillService.js';
 import { provisionDefaultBot } from '../../maker-ipc/botDefaultProvisioning.js';
 import { BOT_TEMPLATE_PRESET_AVATARS, CINDY_DEFAULT_IDENTITY } from '../../../shared/botTemplatePreset.js';
+import { companionHomes, inactiveCompanionCopyIds } from '../../companion-cloud/homes.js';
 import fs from 'node:fs/promises';
 import { chooseAvatarSource } from '../../profileEdit.js';
 import { toSdrAvatarImage } from '../../hdrAvatarToSdr.js';
@@ -2009,6 +2010,8 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
     identitySource,
     capabilitiesJson: safeJson(persistedCapabilities),
     ...(restored?.allowSameName === true ? { allowDuplicateName: true } : {}),
+    // Main-owned projection, never read from the renderer/model request body.
+    inactiveCindyIds: inactiveCompanionCopyIds(companionHomes.snapshot()),
     now,
   });
   guard?.onCommitted({ id, name, description });
@@ -2263,6 +2266,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
         ...(acceptsModelSelection ? { clearScheduledModelBaseline: true } : {}),
         ...(changesPermissions ? { canonicalPermissionMode: botSessionPermissionMode(normalizedNextConfig) } : {}),
         ...(restored?.allowSameName === true ? { allowDuplicateName: true } : {}),
+        ...(restored?.templateId === 'cindy' ? { inactiveCindyIds: inactiveCompanionCopyIds(companionHomes.snapshot()) } : {}),
         ...(patch.displayName !== undefined ? { displayName: patch.displayName } : {}),
         ...(patch.description !== undefined ? { description: patch.description } : {}),
         ...(patch.avatar !== undefined ? { avatar: patch.avatar } : {}),
@@ -2402,8 +2406,10 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
 }
 
 async function findExistingCindy(client: ReturnType<typeof getDbClient>) {
-  const rows = await client.drizzle.select({ id: botProfiles.id, config: botProfileVersions.capabilitiesJson, identity: botProfileVersions.identitySource }).from(botProfiles).innerJoin(botProfileVersions, and(eq(botProfileVersions.botId, botProfiles.id), eq(botProfileVersions.version, botProfiles.currentVersion))).where(ne(botProfiles.status, 'archived')).orderBy(botProfiles.createdAt);
-  const existing = rows.find(row => parseJson(row.config).templateId === 'cindy' || inferBotTemplatePresetId(row.identity) === 'cindy');
+  const rows = await client.drizzle.select({ id: botProfiles.id, status: botProfiles.status, config: botProfileVersions.capabilitiesJson, identity: botProfileVersions.identitySource }).from(botProfiles).innerJoin(botProfileVersions, and(eq(botProfileVersions.botId, botProfiles.id), eq(botProfileVersions.version, botProfiles.currentVersion))).where(ne(botProfiles.status, 'archived')).orderBy(botProfiles.createdAt);
+  const inactive = new Set(inactiveCompanionCopyIds(companionHomes.snapshot()));
+  const existing = rows.find(row => (row.status === 'deleting' || !inactive.has(row.id))
+    && (parseJson(row.config).templateId === 'cindy' || inferBotTemplatePresetId(row.identity) === 'cindy'));
   return existing ? readProfile(client, existing.id) : null;
 }
 

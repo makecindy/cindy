@@ -1,3 +1,4 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { useState } from 'react';
 import { mountPage } from '../../ui-page/harness';
 import { UserMessage } from '../../../src/renderer/components/chat/UserMessage';
@@ -82,7 +83,7 @@ void mountPage({
       ) : ctx.case === 'shared' ? (
         <>
           <p>Task</p>
-          <UserMessage
+          <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
             workingDir="/synthetic-preview"
             content={text}
             images={[{ url: long, originalName: 'task.png' }]}
@@ -113,7 +114,7 @@ void mountPage({
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8 }}>
               {kind === 'mixed' ? '图文混合' : '纯图片'}
             </p>
-            <UserMessage
+            <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
               workingDir="/synthetic-preview"
               simplifiedBotConversation
               content={kind === 'mixed' ? text : ''}

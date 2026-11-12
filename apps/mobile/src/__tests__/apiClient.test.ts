@@ -42,6 +42,15 @@ describe('apiFetchRaw', () => {
     current = false; finish({ handled: true, value: {} }); await rejected;
   });
 
+  // Unit: invitation shares carry account authorization and may not follow
+  // redirects. Existing API coverage checked headers/cache, not redirect policy.
+  it('passes an explicit redirect refusal to the native transport', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+    await apiFetchRaw('/api/shares', { baseUrl: 'https://share.example.invalid', redirect: 'error' });
+    expect(fetch.mock.calls[0]?.[1]).toMatchObject({ redirect: 'error' });
+  });
+
   it.each([
     { response: new Response('private response body'), logged: 'SyntaxError' },
     { response: { ok: true, status: 200,

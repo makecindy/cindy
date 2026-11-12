@@ -214,7 +214,7 @@ export function ScrollCaptureOverlay({ begin, token, bridge, onEdit }: {
       {(error || status !== 'scrollHint') && <p role="alert" className="absolute inset-x-0 top-0 bg-[var(--surface-elevated)] px-2 py-1 text-11 text-[var(--text-secondary)] pointer-events-none">{message}</p>}
     </aside>
     <div className="absolute flex items-center justify-center gap-1 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] pointer-events-auto" style={{ left: layout.actions.x, top: layout.actions.y, width: layout.actions.width, height: layout.actions.height }}>
-        {actions.map(({ key, label, Icon, run }) => <Tip key={key} text={label} side="top"><Button size="xs" variant={key === 'copy' ? 'cta' : 'secondary'} className="w-7 px-0" aria-label={label} disabled={busy} onClick={run}><Icon size={16} aria-hidden /></Button></Tip>)}
+        {actions.map(({ key, label, Icon, run }) => <Tip key={key} text={label} side="top"><Button size="sm" variant={key === 'copy' ? 'cta' : 'secondary'} className="w-7 px-0" aria-label={label} disabled={busy} onClick={run}><Icon size={16} aria-hidden /></Button></Tip>)}
     </div>
     <div className="absolute flex items-center justify-center pointer-events-auto" style={{ left: layout.auto.x, top: layout.auto.y, width: layout.auto.width, height: layout.auto.height }}>
       <Tip text={t('regionScreenshot.live.scrollHint')} side="top"><Button size="sm" variant="secondary" disabled={busy} onClick={() => void changeAutomatic(!automatic)}>{t(`regionScreenshot.live.${automatic ? 'stopScroll' : 'autoScroll'}`)}</Button></Tip>

@@ -200,6 +200,8 @@ const SCHEDULER_DDL = [
     )
   `,
   'CREATE INDEX idx_schedule_runs_schedule ON schedule_runs(schedule_id, fired_at)',
+  `CREATE INDEX idx_schedule_runs_unread_terminal ON schedule_runs(schedule_id, status, fired_at)
+    WHERE read_at IS NULL AND status IN ('success', 'failed', 'aborted', 'interrupted')`,
   `
     CREATE TABLE schedule_session_latest_runs (
       session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
@@ -630,6 +632,54 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(runs).toHaveLength(201);
     } finally {
       harness.close();
+    }
+  });
+
+  // #10011, DB tier: the existing cap test only checks returned rows. One extra
+  // eligible row must not have its hook parsed by listSidebarIndexRuns. Delegate
+  // the instrumented function to native SQLite so JSON semantics stay unchanged.
+  it('limits hook evaluation to the newest eligible unread runs across schedules', async () => {
+    const harness = createStorageHarness();
+    const nativeJson = new Database(':memory:');
+    try {
+      for (const [id, source] of [
+        ['public', 'user'], ['project', 'project'], ['legacy', 'user'], ['routine', 'bot'],
+      ] as const) {
+        await harness.storage.insert(baseSchedule({ id, source }));
+      }
+      harness.sqlite.prepare("UPDATE schedules SET source = NULL WHERE id = 'legacy'").run();
+      const insert = harness.sqlite.prepare(`INSERT INTO schedule_runs
+        (id, schedule_id, fired_at, status, read_at, pre_run_hook_result) VALUES (?, ?, ?, ?, ?, ?)`);
+      const runIds = Array.from({ length: 201 }, (_, i) => `bounded-${String(i).padStart(3, '0')}`);
+      const statuses = ['success', 'failed', 'aborted', 'interrupted'] as const;
+      harness.sqlite.transaction(() => {
+        for (const [i, id] of runIds.entries()) {
+          insert.run(id, ['public', 'project', 'legacy'][i % 3], Math.floor(i / 2),
+            statuses[i % 4], null, JSON.stringify({ runId: id, decision: 'allow' }));
+          // Newer private history must not consume the public 200-row budget.
+          insert.run(`routine-${i}`, 'routine', 1000 + i, 'success', null, null);
+        }
+        insert.run('read', 'public', 2000, 'success', 2001, null);
+        insert.run('skipped', 'public', 2002, 'skipped', null, null);
+      })();
+      const evaluatedHooks = new Set<string>();
+      const jsonValid = nativeJson.prepare<[string | null], { valid: number }>('SELECT json_valid(?) AS valid');
+      harness.sqlite.function('json_valid', { deterministic: true }, (value: string | null) => {
+        if (value !== null) evaluatedHooks.add(value);
+        return jsonValid.get(value)!.valid;
+      });
+
+      const runs = await harness.storage.listSidebarIndexRuns();
+      // Equal fired_at values at the cutoff are resolved by id, not insertion or
+      // schedule order. The returned unread rows remain oldest first.
+      expect(runs.map((run) => run.runId)).toEqual(runIds.slice(1));
+      expect(new Set(runs.map((run) => run.status))).toEqual(new Set(statuses));
+      expect(new Set(runs.map((run) => run.scheduleId))).toEqual(new Set(['public', 'project', 'legacy']));
+      expect(evaluatedHooks).toEqual(new Set(runIds.slice(1).map((runId) =>
+        JSON.stringify({ runId, decision: 'allow' }))));
+    } finally {
+      harness.close();
+      nativeJson.close();
     }
   });
 

@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useProviderShareWeeklyQuota } from '@/features/provider-share/useProviderShareWeeklyQuota';
-import { History, LayoutGrid, Star } from 'lucide-react';
+import { History, LayoutGrid, Star, Waypoints } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { ModelPickerAccountBoundary, useModelPickerAccount } from './ModelPickerAccount';
 import { ModelPoolQuotaDetails, useModelPoolQuota, type ModelPoolQuota } from './ModelPoolQuota';
@@ -152,6 +152,8 @@ export function UnifiedModelRail({
                   })
                 : item.kind === 'all'
                   ? t('newChat.modelSelector.unified.railAll')
+                  : item.kind === 'model-groups'
+                    ? t('modelGroups.title')
                   : item.kind === 'remote-provider'
                     ? (remoteSources?.labelOf(item.deviceId, item.providerId) ?? item.providerId)
                     : (remoteSources?.localProviderLabel ?? providerLabel)(item.providerId);
@@ -198,6 +200,8 @@ export function UnifiedModelRail({
                 <engineOption.Mark size={14} className="shrink-0" />
               ) : item.kind === 'all' ? (
                 <LayoutGrid size={16} />
+              ) : item.kind === 'model-groups' ? (
+                <Waypoints size={16} />
               ) : item.kind === 'provider' ? (
                 <ProviderRailMark providerId={item.providerId} providers={railProviders} />
               ) : item.kind === 'remote-provider' ? (

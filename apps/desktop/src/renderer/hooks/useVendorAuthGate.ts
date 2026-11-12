@@ -40,6 +40,7 @@ import {
 } from '@/hooks/useDeviceProviders';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import type { AgentKind } from '@/lib/ccAgent.types';
+import { resolveVoiceInputReadinessRecovery } from '@/voice-input/readinessRecovery';
 
 interface DialogCopy {
   title: string;
@@ -54,9 +55,6 @@ type SettingsTab = 'api-keys' | 'connections' | 'providers' | 'about';
 
 type CopyKey =
   | 'no-source'
-  | 'voice-api-key-unauth'
-  | 'voice-direct-api-key-unauth'
-  | 'codex-voice-unauth'
   | 'codex-binary-missing'
   | 'pi-binary-missing';
 
@@ -68,28 +66,6 @@ function buildCopy(t: (key: string) => string): Record<CopyKey, DialogCopy> {
       title: t('newChat.noProvider.title'),
       description: t('newChat.noProvider.description'),
       confirmText: t('newChat.noProvider.connect'),
-      cancelText: t('logic.confirm.cancel'),
-      settingsTab: 'providers',
-    },
-    'voice-api-key-unauth': {
-      title: t('logic.confirm.voiceApiKeyAuthTitle'),
-      description: t('logic.confirm.voiceApiKeyAuthDescription'),
-      confirmText: t('logic.confirm.goToSettings'),
-      cancelText: t('logic.confirm.cancel'),
-      settingsTab: 'providers',
-    },
-    'voice-direct-api-key-unauth': {
-      title: t('logic.confirm.voiceDirectApiKeyAuthTitle'),
-      description: t('logic.confirm.voiceDirectApiKeyAuthDescription'),
-      confirmText: t('logic.confirm.goToSettings'),
-      cancelText: t('logic.confirm.cancel'),
-      // 「工具密钥」页已下架(2026-07-13),直连 key 引导落到模型供应商页。
-      settingsTab: 'providers',
-    },
-    'codex-voice-unauth': {
-      title: t('logic.confirm.codexVoiceAuthTitle'),
-      description: t('logic.confirm.codexVoiceAuthDescription'),
-      confirmText: t('logic.confirm.goToSettings'),
       cancelText: t('logic.confirm.cancel'),
       settingsTab: 'providers',
     },
@@ -108,15 +84,6 @@ function buildCopy(t: (key: string) => string): Record<CopyKey, DialogCopy> {
       settingsTab: 'about',
     },
   };
-}
-
-export function pickVoiceInputDialogCopy(
-  copy: Record<CopyKey, DialogCopy>,
-  readiness: { auth: 'api-key' | 'codex'; settingsTab: SettingsTab },
-): DialogCopy {
-  if (readiness.auth === 'codex') return copy['codex-voice-unauth'];
-  if (readiness.settingsTab === 'providers') return copy['voice-api-key-unauth'];
-  return copy['voice-direct-api-key-unauth'];
 }
 
 function pickCopy(
@@ -252,18 +219,18 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
         const readiness = cached?.ok ? cached : await window.electronAPI.voiceInput.getReadiness();
         if (readiness.ok) return { proceed: true };
 
-        const dialogCopy = pickVoiceInputDialogCopy(copy, readiness);
+        const recovery = resolveVoiceInputReadinessRecovery(readiness, readiness.serviceMode);
         const ok = await confirm({
-          title: dialogCopy.title,
-          description: dialogCopy.description,
-          confirmText: dialogCopy.confirmText,
-          cancelText: dialogCopy.cancelText,
+          title: t('settings.voiceInput.title'),
+          description: t(recovery.messageKey),
+          confirmText: t('logic.confirm.goToSettings'),
+          cancelText: t('logic.confirm.cancel'),
           // 主操作("前往设置")是非破坏性的,默认焦点交给它,
           // 否则 Radix 默认聚焦 Cancel,会让"取消"天然带 focus ring。
           autoFocusConfirm: true,
         });
         if (ok) {
-          navigate(`/settings?tab=${readiness.settingsTab}`);
+          navigate(`/settings?tab=${recovery.settingsTab}`);
         }
         return { proceed: false };
       }

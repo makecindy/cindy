@@ -5957,7 +5957,9 @@ describe('codex proxy host', () => {
     });
   });
 
-  it('sanitizes ModelInput for gateway grok without an xAI subscription session', async () => {
+  // #9469: exercise the host's full transform chain, including the custom-tool
+  // adapter before ModelInput cleanup; earlier history fixtures contained no images.
+  it('sanitizes ModelInput for gateway grok and preserves Codex tool images', async () => {
     const host = await freshCodexProxyHost();
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
@@ -5971,6 +5973,7 @@ describe('codex proxy host', () => {
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
     let current: unknown = {
       model: 'x-ai/grok-4.5',
+      tools: [{ type: 'custom', name: 'exec', format: { type: 'text' } }],
       input: [
         { type: 'message', role: 'user', content: 'go' },
         {
@@ -5984,6 +5987,11 @@ describe('codex proxy host', () => {
           content: null,
           encrypted_content: 'BLOB',
         },
+        { type: 'custom_tool_call', name: 'exec', call_id: 'read_image', input: 'view_image()' },
+        { type: 'custom_tool_call_output', call_id: 'read_image', output: [
+          { type: 'input_text', text: 'Script completed' },
+          { type: 'input_image', image_url: 'data:image/png;base64,AA==' },
+        ] },
       ],
     };
     const ctx = {
@@ -6005,7 +6013,14 @@ describe('codex proxy host', () => {
         content: [{ type: 'output_text', text: '[collab /root]\ndone' }],
       },
       { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'BLOB' },
+      { type: 'function_call_output', call_id: 'read_image', output: [
+        { type: 'input_text', text: 'Script completed' },
+        { type: 'input_image', image_url: 'data:image/png;base64,AA==' },
+      ] },
     ]));
+    expect(input.filter(item => item.type === 'function_call')).toEqual([
+      expect.objectContaining({ call_id: 'read_image' }),
+    ]);
     expect(input.some((item) => item.type === 'agent_message')).toBe(false);
     expect(JSON.stringify(current)).not.toContain('"content":null');
     clearSessionProvider('session-gateway-grok');
