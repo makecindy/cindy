@@ -985,12 +985,12 @@ import {
 import { validateHandoffWorkingDir } from './handoffWorkingDir.js';
 import { registerProjectPluginPolicyHandlers } from './projectPluginPolicyHandlers.js';
 import { registerLocalModelHandlers } from '../local-model-runtime/ipc.js';
+import { beginTurnChangeSetAtDispatch } from '../turn-change-set/dispatchBoundary.js';
 import { ensureManagedOllamaReadyForSession } from '../local-model-runtime/preflight.js';
 import {
   TURN_CHANGE_SET_DETAIL_ID_LIMIT,
   TurnChangeSetActionError,
   applyTurnChangeSetAction,
-  beginTurnChangeSet,
   clearPendingTurnChangeSets,
   finalizeTurnChangeSet,
   getTurnChangeSets,
@@ -6594,22 +6594,8 @@ type SendToSessionDispatchSession = {
   send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult>;
 };
 
-/** Starts exact turn capture at the accepted, durable user-message boundary. */
-export async function beginTurnChangeSetAtDispatch(
-  session: SendToSessionDispatchSession,
-  anchorClientId: string,
-): Promise<void> {
-  await waitForTurnChangeSetSeal(session.id);
-  await finalizeTurnChangeSet(session.id, null, 'partial');
-  await waitForTurnChangeSetSeal(session.id);
-  await beginTurnChangeSet({
-    sessionId: session.id,
-    anchorClientId,
-    provider: session.agentKind,
-    cwd: session.workDir,
-    remote: session.remoteHostId !== null,
-  });
-}
+// Shared with the Node Host (turn-change-set/dispatchBoundary.ts).
+export { beginTurnChangeSetAtDispatch };
 
 async function confirmReviewExternalArtifacts(
   event: IpcMainInvokeEvent,

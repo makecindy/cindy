@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 vi.mock('electron', () => ({ app: { getPath: () => path.resolve('snapshot-profile') } }));
+import { configureUserDataDir } from '../userDataPath';
+// The snapshot host reads the injected profile root (main/userDataPath.ts), as Desktop startup sets it.
+configureUserDataDir(path.resolve('snapshot-profile'));
 
 import { createGitSnapshotCoordinator as createHost, type GitSnapshotCoordinatorHostDeps } from '../maker-host/git-snapshot-host';
 const journal = vi.hoisted(() => ({ generation: 1, record: vi.fn(async (_sessionId: string, anchor?: string) => ({ id: 'attempt-1', anchor })) }));
