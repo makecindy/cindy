@@ -11,7 +11,7 @@ import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { cn } from '@/lib/utils';
 import { COMPOSER_MENU_ROW, menuRowAttrs } from '@/components/ui/menu-row';
 import { providerDisplayName } from '@/lib/providerDisplayName';
-import { modelSupplierLabel } from '@cindy/model-providers';
+import { isCustomRoutedProvider, modelSupplierLabel } from '@cindy/model-providers';
 import type { Effort } from '@/lib/userPreferences.types';
 
 import { PriceFreeBadge, PriceTierMarks, type UnifiedRowPriceDisplay } from './priceTierMarks';
@@ -119,6 +119,8 @@ export function UnifiedModelRow({
   const displayName = localizedModelName(entry.displayName, t);
   const description = localizedModelDescription({ id: entry.modelId, group: entry.group }, t);
   const provider = providers.find((item) => item.id === entry.providerId);
+  const wireModelId = config.wireModelId ?? entry.modelId;
+  const showModelId = isCustomRoutedProvider(provider) && wireModelId !== displayName;
   // Read the effective engine's exact wire entry, never the recommended sibling's source.
   const source = entry.capabilities[config.agent]?.discoveredSource;
   const supplier = modelSupplierLabel(source);
@@ -142,7 +144,7 @@ export function UnifiedModelRow({
     configurationEnabled && config.effort ? ` · ${effortLabelOf(config.agent, config.effort)}` : ''
   }${configurationEnabled && config.fast ? ` · ${t(config.fast === 'ultrafast' ? 'newChat.modelSelector.speed.ultrafast' : 'newChat.modelSelector.speed.fast')}` : ''}`;
   const paymentRequiredActionLabel = paymentRequired
-    ? [displayName, paymentRequiredUnlockLabel ?? paymentRequiredLabel]
+    ? [displayName, showModelId ? wireModelId : null, paymentRequiredUnlockLabel ?? paymentRequiredLabel]
         .filter(Boolean)
         .join(' · ')
     : undefined;
@@ -350,6 +352,11 @@ export function UnifiedModelRow({
             还平白吃掉一列宽度);选中态语义由 aria-selected 承载。模型面板是输入框菜单
             「选中 = 勾 + 500」约定的唯一例外,2026-10-04 用户再次确认保留整行底色、不加勾。 */}
       </div>
+      {showModelId && !measurementOnly && (
+        <div className="w-0 min-w-full break-words pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)] [overflow-wrap:anywhere]">
+          {wireModelId}
+        </div>
+      )}
       {sourceLabel ? (
         // Source details use w-0/min-w-full and do not contribute intrinsic width.
         // Do not mount another quota-clock subscriber just to measure this row.

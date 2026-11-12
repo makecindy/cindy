@@ -8,7 +8,7 @@
     "notFound": "Este dispositivo não está mais na sua conta.",
     "deleteDevice": "Excluir dispositivo",
     "deleteTitle": "Excluir {{name}}?",
-    "deleteMessage": "Remova este dispositivo da sua conta e desconecte o acesso remoto. Suas sessões e arquivos serão mantidos. Entre novamente nesse dispositivo para adicioná-lo de novo.",
+    "deleteMessage": "Este dispositivo será removido da sua conta e o acesso remoto será desconectado. As sessões e os arquivos dele serão mantidos. Entre novamente nesse dispositivo para adicioná-lo de novo.",
     "deleteFailed": "Não foi possível excluir o dispositivo.",
     "deleteOnline": "Este servidor ainda não permite remover dispositivos online. Tente novamente após a atualização do serviço.",
     "deleteRejectedWhileOffline": "Não foi possível excluir o dispositivo: o servidor ainda o lista como online, embora apareça como offline aqui.",
@@ -105,8 +105,8 @@
       "sessionCount": "{{count}} sessões",
       "messageCount": "{{count}} mensagens",
       "status": {
-        "archived": "Arquivadas",
-        "deleted": "Excluído"
+        "archived": "Arquivada",
+        "deleted": "Excluída"
       },
       "preview": {
         "permission": "Aguardando permissão",
@@ -381,7 +381,7 @@
         "custom": "Manual"
       },
       "status": {
-        "active": "Ativo",
+        "active": "Ativas",
         "archived": "Arquivadas",
         "all": "Todas"
       },
@@ -391,7 +391,7 @@
       "filterAll": "Todas",
       "filterProjectsHeading": "Projetos",
       "filterAllProjects": "Todos os projetos",
-      "filterSelectedProjects": "{{count}} selecionadas",
+      "filterSelectedProjects": "{{count}} selecionados",
       "filterVendorHeading": "Harness",
       "filterVendor": {
         "all": "Todas",
@@ -426,7 +426,7 @@
       "filterTeammatesHeading": "Amigos",
       "filterAnySource": "Todas",
       "filterHideAllTeammates": "Ocultar tudo",
-      "filterSelectedTeammates": "{{count}} selecionadas"
+      "filterSelectedTeammates": "{{count}} selecionados"
     },
     "search": {
       "placeholder": "Buscar títulos ou conteúdo…",
@@ -441,14 +441,14 @@
         "agentHeading": "Agent",
         "lastActivityHeading": "Última atividade",
         "allProjects": "Todos os projetos",
-        "selectedProjects": "{{count}} selecionadas",
+        "selectedProjects": "{{count}} selecionados",
         "sort": {
           "relevance": "Relevância",
           "activityDesc": "Atividade mais recente",
           "activityAsc": "Atividade mais antiga"
         },
         "status": {
-          "active": "Ativo",
+          "active": "Ativas",
           "archived": "Arquivadas",
           "all": "Todas"
         },
@@ -495,7 +495,7 @@
       "nextRunMinutes": "Executa em {{count}} min",
       "nextRunHours": "Executa em {{count}} h",
       "nextRunDays": "Executa em {{count}} d",
-      "imminent": "Em execução em breve",
+      "imminent": "Executa em breve",
       "stopped": "Interrompido"
     }
   },
@@ -602,7 +602,7 @@
   "companions": {
     "section": {
       "showAll": "Mostrar tudo",
-      "showAllA11y": "Mostrar todas as {{count}}",
+      "showAllA11y": "Mostrar todos os {{count}}",
       "showLess": "Mostrar menos"
     },
     "noCreateHosts": "Nenhum computador compatível disponível. Abra o Cindy em um computador e entre com a mesma conta para criar um amigo.",
@@ -632,7 +632,7 @@
     "directUnavailable": "Esta conversa entre amigos não está mais disponível.",
     "unread": "Nova resposta",
     "status": {
-      "queued": "Primeiros passos",
+      "queued": "Iniciando",
       "running": "Em execução",
       "waiting": "Aguardando sua resposta",
       "completed": "Concluído",
@@ -879,7 +879,7 @@
     "offlineCount_other": "{{count}} offline",
     "showMore": "Mostrar mais",
     "showLess": "Mostrar menos",
-    "doneCount_one": "{{count}} concluídas",
+    "doneCount_one": "{{count}} concluída",
     "doneCount_other": "{{count}} concluídas",
     "checkMeta": "Buscar novas pendências nos e-mails e conversas conectados",
     "recentTasks": "Tarefas recentes",
@@ -910,9 +910,9 @@
     "homeTitle": "Computador principal",
     "moveTo": "Mover para “{{device}}”",
     "moveTitle": "Executar {{name}} em “{{device}}”?",
-    "moveDescription": "A partir de agora, {{name}} será executado em “{{device}}”, junto com o histórico de conversa. Diretórios de trabalho, conexões e arquivos locais permanecem nos computadores onde estão.",
+    "moveDescription": "A partir de agora, {{name}} será executado em “{{device}}”, e o histórico da conversa vai junto. Diretórios de trabalho, conexões e arquivos locais permanecem nos computadores onde estão.",
     "olderTarget": "Cindy antigo",
-    "olderTargetNote": "“{{device}}” executa uma versão antiga do Cindy, então {{name}} vai funcionar lá do jeito anterior: o histórico do chat continua sincronizado, mas as regras e automações do projeto não se aplicam lá.",
+    "olderTargetNote": "“{{device}}” executa uma versão antiga do Cindy, então {{name}} vai funcionar lá do jeito anterior: o histórico da conversa continua sincronizado, mas as regras e automações do projeto não se aplicam lá.",
     "moveAction": "Mover para “{{device}}”",
     "moving": "Movendo {{name}} para “{{device}}”…",
     "busyTitle": "{{name}} ainda está respondendo",

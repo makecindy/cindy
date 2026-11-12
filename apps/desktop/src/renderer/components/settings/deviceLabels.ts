@@ -2,6 +2,8 @@
  * deviceLabels —— 「远程连接」页设备文案的共用小函数(列表页与拓扑页同口径)。
  */
 
+import appI18n from 'i18next';
+
 type T = (key: string, options?: Record<string, unknown>) => string;
 
 export function platformLabel(platform: string | null): string {
@@ -33,5 +35,5 @@ export function relativeTime(iso: string | null, t: T, now = Date.now()): string
   if (diffHour < 24) return t('settings.devices.hoursAgo', { count: diffHour });
   const diffDay = Math.floor(diffHour / 24);
   if (diffDay < 7) return t('settings.devices.daysAgo', { count: diffDay });
-  return new Date(ts).toLocaleDateString();
+  return new Date(ts).toLocaleDateString(appI18n.language);
 }
