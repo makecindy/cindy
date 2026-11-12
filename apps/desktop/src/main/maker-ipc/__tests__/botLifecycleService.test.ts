@@ -53,6 +53,14 @@ function createDatabase(): Database.Database {
       working_dir TEXT,
       project_dir TEXT
     );
+    -- The real deletion transaction also cleans up view state for deleted tasks.
+    CREATE TABLE messages (id TEXT PRIMARY KEY);
+    CREATE TABLE mcp_app_view_states (
+      message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      server_id TEXT NOT NULL, server_revision TEXT NOT NULL, plugin_instance TEXT,
+      state_json TEXT NOT NULL, byte_length INTEGER NOT NULL
+    );
     -- Same columns as the real table: the Windows removal reads last_used_at.
     CREATE TABLE recent_workdirs (path TEXT PRIMARY KEY, last_used_at INTEGER NOT NULL DEFAULT 0);
     -- The real deletion transaction also cleans private per-card view state.
