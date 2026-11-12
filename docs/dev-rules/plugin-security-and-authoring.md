@@ -13,7 +13,8 @@
 媒体字节交接另见 [`media-storage-and-protocols.md`](media-storage-and-protocols.md)，插件在
 产品中的定位见 [`../product-rules/core-product-principles.md`](../product-rules/core-product-principles.md)。
 
-> **术语**：产品与对外措辞统一为「插件」，`.cindy` 即插件包；不再使用旧的概念称呼。
+> **术语**：产品与对外措辞统一为「插件」；以 `ghost.json` 为身份卡的 `.cindy` 是插件包。
+> `.cindy` 后缀也用于主题等文件类型，不能单凭后缀认作插件；不再使用旧的概念称呼。
 > 代码标识仍沿用历史 `Ghost` / `cindy-brain` 命名（目录 `cindy-brain/`、`GhostRuntime`、
 > `ghost.json`、`cindy-ghost://`、`ghost_forge_guide` 等），与产品术语「插件」指同一事物；
 > 引用代码时照实使用这些标识，不因措辞改写。
@@ -49,7 +50,23 @@ Desktop 本机、远程查看与 Mobile 的页面 CSP 始终保留 `form-action 
 
 ## 1. 插件形态与代码术语
 
-- `.cindy` 是以 `ghost.json` 为身份卡的插件包，现行唯一形态为 `kind: 'chip'`。
+- 插件 `.cindy` 包以 `ghost.json` 为身份卡，现行唯一形态为 `kind: 'chip'`。
+- 桌面文件导入先经 `main/cindy-files/` 识别类型：根或单层包装目录内有 `ghost.json`
+  时完整交回原插件安装／批准／更新流程，不要求旧包补字段、改包或重装。
+  其余包读取 `cindy.json` 的通用 `formatVersion` 与 `type`；当前支持版本 1/2 的
+  `theme`（`themes` 为包内 JSON 路径）。未知类型或格式版本明确提示当前版本不支持，
+  不降级交给插件解析器。v1 装载颜色／明暗家族／品牌图片；v2 另含字体、壁纸、
+  正文样式、密度与动效，全部为数据，不执行代码、不新增插件 kind、不申请插件能力。
+  主题选择经公共 AppearanceService 合成默认值，明确用户设置／已批准固定能力覆盖优先，
+  不因选择主题清空用户覆盖。主题与资源在用户主题目录
+  的 `.packages/<包字节 SHA-256>/` 中原子发布；安装记录按主题 ID 原子切换当前引用，
+  同 ID 默认更新完整主题与素材，运行时本地 ID／family 保持稳定，其他主题保留。
+  Agent 的 `import_theme_package` 复用该安装器与原任务文件／行动授权，刷新当前窗口的
+  主题列表并分别返回安装与刷新结果；选择仍走现有 preferences，不启动其他应用。
+  该工具拒绝插件包；插件不提供／注册主题，既有固定外观能力仍走原声明、批准与来源校验，
+  实际写入与主题复用同一个外观所有者和 Presenter。制作主题不另产伴随外观插件。
+  散装主题 JSON 保持原样，同 ID 导入包成为有效本地内容；制作契约见
+  `apps/desktop/resources/system-skills/cindy-theme-creator/references/package-format.md`。
 - 代码目录与运行时使用 `cindy-brain` / `Ghost` 命名，**不得重新引入已退役的 cartridge
   声明型兼容层**。
 - 插件 ID 或 `cindy-` / `filo-` / `xd-` 前缀不授予能力，也不阻止本地开发安装。
@@ -338,8 +355,9 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   进入原有新增权限比较；沿用 `approvedControlPoints` 中的 `system-prompt`，不新增授权账本。
   只读任务选中的插件，装配到既有固定前缀之后，未选时保持原提示词字节不变且不启动插件。
   Claude Code／Codex 复用现有任务级系统通道；本机／SSH Pi 通过宿主内部 Symbol 与既有会话
-  快照目录交给原生 `before_agent_start` 追加完整提示词尾部，环境只传路径并在读取后清除，
-  内容参与 SSH 启动指纹；设备托管 Pi 暂不支持。
+  快照目录交给原生 `before_agent_start` 追加完整提示词尾部。环境只传路径并在任务 Pi 进程内保留，
+  供 `switch_session` 重载扩展时读取；工具 shell 与独立子代理不继承该路径。片段文件沿用快照目录
+  的关闭／退出／启动失败清理，不写入历史；内容参与 SSH 启动指纹，设备托管 Pi 暂不支持。
   不可用时遵守任务指定的出错策略；变更片段后通过既有运行时关闭／恢复流程在下一次输入应用。
   历史插件曾携带不合法的同名未知字段时，只丢弃新能力，保留已装插件原有功能与批准状态。
 - 安装／更新确认只决定这次落位是否进行，不以弹窗点击作为运行期能力授权事实；

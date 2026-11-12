@@ -34,7 +34,7 @@ export function createRemoteProfileStore(deviceId: string, botId: string, accept
   const emit = () => listeners.forEach((listener) => listener());
   const adopt = (raw: unknown): BotProfile => {
     const next = normalizeDbProfile((raw as { profile?: unknown } | null)?.profile);
-    if (!next) throw createIpcError('INTERNAL', 'Invalid teammate profile');
+    if (!next) throw createIpcError('INTERNAL', 'Invalid buddy profile');
     // Re-reads that change nothing keep the same object so the pages do not reconcile for nothing.
     if (profile && JSON.stringify(profile) === JSON.stringify(next)) return profile;
     profile = next;
@@ -66,7 +66,7 @@ export function createRemoteProfileStore(deviceId: string, botId: string, accept
       const acceptSelection = acceptModelSelection && acceptsModelSelection;
       if (acceptModelSelection && !acceptsModelSelection && !botProfileModelSelectionChanged(
         { ...before.capabilities }, { ...before.capabilities, ...profilePatch.capabilities },
-      )) throw createIpcError('UNSUPPORTED_CAPABILITY', 'Update the teammate computer to reselect the configured model');
+      )) throw createIpcError('UNSUPPORTED_CAPABILITY', 'Update the buddy computer to reselect the configured model');
       const generation = ++writeGeneration;
       writing += 1;
       profile = { ...before, ...profilePatch, capabilities: { ...before.capabilities, ...profilePatch.capabilities } };
@@ -94,7 +94,7 @@ export function createRemoteProfileStore(deviceId: string, botId: string, accept
           saved += 1;
         }
         const next = normalizeDbProfile((raw as { profile?: unknown } | null)?.profile);
-        if (!next) throw createIpcError('INTERNAL', 'Invalid teammate profile');
+        if (!next) throw createIpcError('INTERNAL', 'Invalid buddy profile');
         // A newer write on this profile is closer to what the person wants now.
         if (generation === writeGeneration) {
           profile = next;
@@ -164,7 +164,7 @@ function pollWhileVisible<T>(read: () => Promise<T>, listener: (value: T) => voi
     clearInterval(timer);
   };
 }
-const hostOnly = () => Promise.reject(createIpcError('PRECONDITION_FAILED', 'This is done on the teammate’s computer'));
+const hostOnly = () => Promise.reject(createIpcError('PRECONDITION_FAILED', 'This is done on the buddy’s computer'));
 
 /** Pages the host can serve, from the operations it implements. */
 export function remoteBotSettingsPages(ops: ReadonlySet<BotSettingsOp>): Set<string> {

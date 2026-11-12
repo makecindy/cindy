@@ -2146,7 +2146,16 @@
       },
       "sidebarAndPanels": "侧边栏与面板",
       "themeLabel": "主题",
+      "createTheme": {
+        "label": "制作主题",
+        "hint": "描述风格或提供参考图，制作整套外观",
+        "prompt": "帮我制作一套可分享的 Cindy 主题包，预览并验证效果。我想要的风格是：",
+        "unavailable": "主题制作技能不可用，请在技能中检查是否启用",
+        "startFailed": "未能打开主题制作任务"
+      },
       "themeAriaLabel": "主题选择",
+      "themeApplyFailed": "无法应用此主题，当前外观已保留",
+      "themeFontFailed": "主题字体无法加载，已使用默认字体",
       "localBadge": "(本地)",
       "localThemes": {
         "title": "本地主题",
@@ -6664,6 +6673,7 @@
         "confirm": "撤销访问权限"
       },
       "v2": {
+        "sectionTitle": "实验性 Agent 网络",
         "switch": {
           "title": "Agent-Net (Beta)",
           "hint": "显示连接拓扑和最近活动。双方都开启并完成 Agent-Net 配对时使用加密连接，其它设备沿用原有连接。只影响这台电脑。"
@@ -13238,6 +13248,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "采用原文",
     "rateLimited": "语音请求过于频繁，请稍后重试。",
     "status": {
       "listening": "语音输入中",
@@ -13582,7 +13593,7 @@
       "claudeSubscriptionSwitchFailed": "无法切换到 Claude.ai 或重试当前任务：{{msg}}",
       "codexAppServerRetired": "Codex 服务已重启或更换；当前请求已中断，请重新运行。",
       "codexAuthMissing": "远端 Codex 还没同步登录态（401 Unauthorized）。点击右侧「同步登录态」把本机 Codex 凭证推到远端 Cindy Codex home，然后重试发送。",
-      "codexAuthMissingLocal": "Codex 凭证缺失或失效（401 Unauthorized）。请在 {{appName}} Settings → Codex 重新登录（登录后会自动重启 Codex app-server），或在终端跑 `codex login` + 在 Settings 切换一次鉴权模式来重启 app-server，然后新建任务再发。",
+      "codexAuthMissingLocal": "本机的「{{provider}}」连接未通过验证。请前往该连接的设置检查登录状态，修复后回到此任务继续。",
       "codexSessionExpired": "OpenAI 连接需要更新。重新连接 ChatGPT 后即可继续；{{appName}} 不会退出系统 Codex CLI，也不会要求你重新连接其他模型来源。",
       "codexAuthSynced": "登录态已同步，请点击「重试」重新发送。",
       "syncAuth": "同步登录态",
@@ -16940,6 +16951,9 @@
       },
       "pluginCreator": {
         "description": "创建、修改、调试和打包 Cindy 插件，也可按需发布。"
+      },
+      "themeCreator": {
+        "description": "制作并验证 Cindy 的配色、素材和外观设置。"
       }
     },
     "common": {
@@ -17681,11 +17695,14 @@
       "voiceDirectApiKeyAuthDescription": "语音输入当前使用直连供应商，需要先配置对应 API Key。是否前往「API Keys」添加？",
       "codexVoiceAuthTitle": "需要连接 ChatGPT",
       "codexVoiceAuthDescription": "语音输入需要使用已连接的 ChatGPT 账号调用 GPT 实时语音识别。当前账号尚未连接或需要更新，是否前往「模型供应商」连接 ChatGPT？",
+      "ccBinaryMissingTitle": "Claude Code 组件未就绪",
+      "ccBinaryMissingDescription": "Claude Code 组件尚未安装，暂时无法使用这个功能。连接网络后，前往「设置 → 关于」开始安装。",
       "codexBinaryMissingTitle": "Codex 组件未就绪",
       "codexBinaryMissingDescription": "Codex 组件尚未准备好，暂时无法使用这个功能。请稍后重试，或前往「模型供应商」检查 Codex 连接状态。",
       "piBinaryMissingTitle": "Pi 组件未就绪",
       "piBinaryMissingDescription": "Pi 组件尚未准备好，暂时无法使用这个功能。请稍后重试，或前往「设置 → 关于」管理或恢复 Pi。",
       "goToSettings": "前往设置",
+      "remoteCcBinaryMissingTitle": "远程电脑 Claude Code 组件未就绪",
       "remoteCodexBinaryMissingTitle": "远程电脑 Codex 组件未就绪",
       "remotePiBinaryMissingTitle": "远程电脑 Pi 组件未就绪",
       "remoteAuthDescription": "需要在远程设备「{{device}}」上完成配置后，才能在这里新建并运行任务。请在该设备上配置后重试。",
@@ -18058,7 +18075,7 @@
     "exit": "退出计划模式"
   },
   "globalDrop": {
-    "cindyHint": "松开安装插件",
+    "cindyHint": "松开导入 Cindy 文件",
     "cshareHint": "松开导入分享的任务"
   },
   "sessionShare": {
@@ -20177,6 +20194,13 @@
     "detail": "请求来自「{{device}}」\n用途：{{purpose}}\n\n开启后，同账号设备可以远程控制这台电脑，包括运行任务和访问文件。此设置持续有效，可随时在设置中关闭。",
     "decline": "暂不开启",
     "enable": "开启远程控制"
+  },
+  "cindyFiles": {
+    "unsupported": "当前版本不支持此文件，请更新 Cindy 后重试",
+    "invalid": "此 Cindy 文件无效或已损坏，请重新获取文件",
+    "failed": "未能导入此文件，请重试",
+    "themeInstalled": "主题已加入列表，请在外观设置中选择",
+    "refreshFailed": "主题已装入，但列表未能刷新，请在外观设置中刷新"
   },
   "modelGroups": {
     "title": "模型组",

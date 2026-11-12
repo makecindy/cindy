@@ -1,3 +1,4 @@
+import { deleteDeletedSessionViewStates, saveMcpAppViewState } from './mcpAppViewState.js';
 import { fastModeFromStorage, fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
 import { runPluginUsageTransaction } from './pluginUsageTx.js';
@@ -134,6 +135,8 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
       return sessionAgentSwitchFallback(db, txArgs);
     case 'context.rebuild':
       return contextRebuild(db, txArgs);
+    case 'mcpApps.viewState.save':
+      return saveMcpAppViewState(db, txArgs);
     case 'message.insert':
       return messageInsert(db, txArgs);
     case 'message.updateContent':
@@ -404,7 +407,7 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
       throw Object.assign(new Error('Bot Profile 已被另一处更新，请刷新后重试'), { code: 'PRECONDITION_FAILED' });
     }
     if (p.expectedAvatar !== undefined && current.avatar !== expectString(p.expectedAvatar, 'expectedAvatar')) {
-      throw Object.assign(new Error('Teammate avatar changed during update'), { code: 'PRECONDITION_FAILED' });
+      throw Object.assign(new Error('Buddy avatar changed during update'), { code: 'PRECONDITION_FAILED' });
     }
     if (!allowDuplicateName && p.displayName !== undefined && normalizeBotName(expectString(p.displayName, 'displayName')) !== normalizeBotName(current.displayName)) {
       const name = normalizeBotName(expectString(p.displayName, 'displayName'));
@@ -1291,6 +1294,8 @@ function botsDeleteProfile(
       }
     }
 
+    deleteDeletedSessionViewStates(db, [...allSessionIds, ...projectChanged]);
+
     const hasMediaRefs = Boolean(db.prepare(
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'media_refs'",
     ).get());
@@ -1999,11 +2004,13 @@ function messageDelete(
     db.prepare("DELETE FROM messages WHERE role = 'context_rebuild' AND session_id = ?").run(
       sessionId,
     );
+    const deleteState = db.prepare('DELETE FROM mcp_app_view_states WHERE message_id = ?');
     const scrubTarget = db.prepare(
       "UPDATE messages SET role = 'message_tombstone', content = 'null', tool_use_id = NULL, agent_meta = NULL, agent_kind = NULL, rewind_at = ? WHERE id = ? AND session_id = ? AND client_id = ? AND role IN ('user', 'assistant', 'tool_use', 'tool_result', 'ask_user', 'plan_review', 'thinking', 'error') AND rewind_at IS NULL",
     );
     for (const target of targets) {
       const scrubbed = scrubTarget.run(updatedAt, target.id, sessionId, target.clientId);
+      deleteState.run(target.id);
       if (scrubbed.changes !== 1) {
         throw Object.assign(new Error(`Message 删除竞态: ${target.clientId}`), {
           code: 'PRECONDITION_FAILED',
@@ -2229,6 +2236,9 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
           RETURNING id AS sessionId, title, working_dir AS workingDir, workspace_kind AS workspaceKind,
             remote_host_id AS remoteHostId, source`).all(now, sessionId) as SessionsSetTerminalStatusResult['deletedSideChats']
       : [];
+    if (status === 'deleted') {
+      deleteDeletedSessionViewStates(db, [sessionId, ...deletedSideChats.map(child => child.sessionId)]);
+    }
     for (const child of deletedSideChats) {
       db.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, child.sessionId);
     }
@@ -3135,6 +3145,7 @@ function sessionImportShare(db: Database.Database, args: unknown): { messageCoun
       deleteReplacedSession.run(replacementUpdatedAt, replacedSession.id);
       db.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(replacementUpdatedAt, replacedSession.id);
     }
+    deleteDeletedSessionViewStates(db, replaceSessions.map(session => session.id));
     let messageCount = insertSessionWithMessages(session, messages);
     if (orca) {
       const team = asRecord(orca.team, 'orca.team');
