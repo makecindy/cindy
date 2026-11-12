@@ -52,7 +52,7 @@
 | 21 | 启动时清掉从终端继承的 Anthropic 凭据与端点变量 | `main/index.ts` `stripSensitiveAnthropicEnv` | 已对齐（m1-cp5b）：`main.ts` 第一个导入执行同一步，保留导入用的 Claude 配置目录 | Host `boot-env.test.mjs` | 无 |
 | 22 | Cindy 内置工具服务 | `mcp-integrations/mcp-providers.ts` `createLiziMcpProviders` | 未做，归属已定：M1 做 cindy_helper 里任务相关的一组、cindy_lsp、cindy_ssh（排在 M1 靠后，动手前先交分组清单）；M2 做设置类、cindy_scheduler、cindy_docs、inputHandoff；M3 做伙伴、Orca、IM 机器人、群聊记录、android、sessionImport、远程任务状态。Host 现在只有 browser、computer、cindy_memory 和插件网关。系统提示与桌面逐字相同、不裁剪，所以在对应工具补齐之前，Host 任务会被提示引导去用尚不存在的工具；**这一行必须在开放迁移前清零** | — | 无 |
 | 23 | 引擎运行时配置（`runtimeConfig`） | `maker-host/runtime-configs.ts`；`pi-host.ts` `buildDesktopPiRuntimeConfig` → `runtimeConfigsCore.ts` | 已对齐（m1-cp5c）：产品系统提示、回答呈现提示、`behaviorFlags`、`taskShellEnv`、压缩阈值、换模型时的上下文评估、子代理模型、记忆设置（每次读取）、`userDataPath`、内置 ripgrep。Host 的 endpoint 仍是账号网关，见第 24 行；代输入的环境变量在 Host 上恒为空，见第二节 | desktop `hostRuntimeConfigParity.test.ts`：同一组输入分别走桌面装配与 Host 装配，逐字比较 systemPrompt、answerDeliveryPrompt，函数项按输入矩阵比较输出，允许不同的只有写死的 endpoint；Host `agent-graph.test.mjs`（含缺 ripgrep 时与桌面同样报错）；`codex-runtime.e2e.mjs` 断言真实 Codex 请求带产品提示 | 无 |
-| 24 | Claude 与 Pi 的本机兼容代理 | `maker-host/anthropic-compat-proxy-host.ts`（`getClaudeEndpoint`） | 未做（M1，排在 3c、7b 之后；动手前先交依赖清单）。Host 的 Claude 与 Pi 直连账号网关，相当于桌面代理没起来时的退路；代理负责的按模型路由与字段适配（给非 Claude 模型去掉 Anthropic 专有字段）在 Host 上没有。要求：只监听本机回环、与桌面同一模块；接上后说明 `maker:session-background-activity` 一族与 `maker:claude-session-route:get` 两个通道的状态在 Host 上有了，记入 M2 可接清单；它写的路由登记是 Claude 用量记录的来源之一，与 2e 的分工写清 | — | 无 |
+| 24 | Claude 与 Pi 的本机兼容代理 | `maker-host/anthropic-compat-proxy-host.ts` → `anthropicCompatProxyHostCore.ts`（`getClaudeEndpoint`） | 部分（24a）：Host 的 Claude 与 Pi 经同一模块的回环代理（只监听 127.0.0.1），按模型路由、字段适配与恢复规则与桌面相同；自定义供应商由直连改为经代理；Claude 认证按桌面适配器的分支；Pi 登记会话 token；任务的供应商与思考档位登记与桌面相同。缺口：订阅路线（ChatGPT、SuperGrok，Claude 与 Pi）在本地明确拒绝，等 24b 的订阅桥。`maker:session-background-activity` 一族与 `maker:claude-session-route:get` 的状态已在 Host 上具备，见第六节。与 2e 的分工：代理按桌面的时机写路由登记、挂子代理用量与余量观察器；读登记写用量表、注入余量 listener 归 2e。**迁移前必须完成**（24b） | Host `agent/claude-proxy-runtime.test.mjs`（入站门、占位常量、订阅拒绝、关闭清理、字段剥离、分类器失败）、`agent/native-auth.test.mjs`、`agent/agent-graph.test.mjs`、`scripts/claude-proxy.e2e.mjs`（真实 Claude Code，网关、自定义供应商、订阅拒绝）；桌面 `anthropicCompatProxyStartup.test.ts`、`anthropicCompatProxyInboundPort.test.ts`、`hostRuntimeConfigParity.test.ts`（例外清单为空）；包 `server-inbound-admission.test.ts` | 无 |
 | 25 | 全局 Skill 投影、内置 Skill 发布、Codex 账号 CODEX_HOME 准备 | `authBoundaryQuarantine.ts` 的 owner 提交协议；`auth-adapters.ts:555-572`（`ensureSharedGlobalSkills`、`prepareBuiltInSkills`）、`:1373`（`prepareCodexGlobalSkillsLinks`）、`:2494`（`prepareCodexAccountHome`） | 未做（M1，紧挨第 11 步，与 Host 的 owner 提交一起；动手前先交切断清单）。Host 的 owner 提交不写投影边界状态；Host 里没有 `ensureSharedGlobalSkills`、`prepareCodexGlobalSkillsLinks` 的引用；Codex 独立账号直接用 `nativeSubscriptionAccount.configDir`，没有托管 Skill 投影与规则拷贝。Codex 上的内置与插件 Skill、home 级 Skill 链接都等这一行。内置 Skill 发布：Host 只读桌面最后一次发布的快照（m1-cp6），自己不调 `prepareBuiltInSkills`；迁移后桌面不再运行，内置 Skill 必然不再更新，因此这一行要让 Host 按同一 owner 提交协议发布内置 Skill。**迁移前必须完成** | — | 无 |
 
 ## 二、与桌面不同（已知差异）
@@ -65,6 +65,10 @@
 | Fast 轴的初值 | bootstrap 时取任务行 | `prepareStartOptions` 取本次启动参数（来自任务行） | 效果相同 |
 | 订阅 Fast 策略 | 总有 | Host 没有 Codex 运行时时不设置 | Host 正常都有 Codex，实际无差 |
 | 自动复核（第 4 步之前） | 模型复核 | 退回人工确认 | 打断更多，不会更不安全 |
+| Auto 分类器失败的降级（第 4 步之前） | 代理观察到分类器失败后由协调器把该任务的复核切到 Cindy（register.ts） | 观察器照挂，不设协调器 | 经代理的会话 Auto 本来映射为 SDK 的 default，不用原生分类器；分类器请求失败时错误原样回给 CLI，不变成放行（`claude-proxy-runtime.test.mjs`）。第 4 步接上 |
+| 订阅余量（2e 之前） | 代理读订阅余量响应头，交给注入的 listener 落库并广播 | 观察器照挂，不设 listener | 不记录订阅余量；2e 接上 |
+| 回环代理的入站凭据 | 代理现有的会话与受邀者检查 | 在同样的检查之外，Host 的回环代理要求入站凭据：Pi 会话 token、当前网关 key，或运行时发给自家 Claude Code 的密钥（每个运行时随机 32 字节，只在内存，经环境变量交给 CLI，owner 变更时更换）；其余一律 401，公开的占位常量不算凭据 | 多一道入站门。受邀者路由令牌也是合法入站凭据，Host 现在不接远程任务所以没放行；**M3 接远程任务时要加进放行名单**，否则受邀者请求会被挡掉 |
+| 代理的进程内登记在 owner 变更时 | 路由登记随 app 生命周期常驻 | 代理运行时关闭时，按它服务过的任务 id 清掉路由登记与后台活动；Pi 会话 token 用同一撤销函数 | Host 比桌面严：Host 跨 owner 长期运行，M2 还会把读路由登记的通道开出去 |
 | Pi 思考开关记忆（M2 之前） | 读渲染层镜像 | 镜像为空 | 用模型默认值 |
 | 用量记录（2e 之前） | 记录 | 不记录 | Host 期间的用量丢失；Host 侧 e2e 的「三张用量表行数」核对不适用 |
 | 删除任务 | 界面删除把任务标为 `status='deleted'`（软删除），启动后的对账据此删掉它的保存点引用；桌面不在删除时立即删引用（`sessions.ts:689-693`，不可逆） | Host 的 `deleteSession`（`/api/sessions/delete`）调 `OwnerSessionStorage.delete` 物理删行；对账不认行缺失，保存点引用留在用户仓库 | 已定：随 M2 的删除通道改为与桌面相同的软删除与同一组清理；届时硬删除要么改成同一语义，要么只留给不面向用户的用途并写明调用方，并核实硬删除是否会让删除状态同步不到云端与其他设备。**迁移前必须完成** |
@@ -111,3 +115,10 @@
 | 待确认：gray-matter 在 Host 发布包里的形态 | 外置：`apps/host/scripts/build.mjs` 把所有第三方包设为外部依赖，按导入方位置解析后整包拷进发布目录的 `node_modules`（解析到仓库根 `node_modules/gray-matter`）。3c 之前已有 5 个导入方在 Host 的加载范围里（maker-core 的 customization-scanner、pinned-skill-invocation、memory/storage，桌面 skillhub/frontmatterValidation、cindy-brain/skillSlot），3c 没有新增依赖。证据用构建脚本原样截取的依赖插件对 `apps/host/src/main.ts` 跑 esbuild 得出（完整构建缺本机 Chromium） |
 | 待查：客户端模式下的两个 GhostManager | 窗口进程与 Host 共用同一份 owner 目录，两边是否都会构造 GhostManager 并各自跑中断恢复（`recoverInterruptedMutationsSync`），有没有跨进程互斥。既有情况，不挡 3c |
 | PR 正文须写：桌面提示前后哈希 | 重构前（7eaf7788de）与 m1-cp5c 之后，桌面三个引擎最终 systemPrompt / answerDeliveryPrompt 的 sha256 前 16 位相同：Claude `cb41d06b15ad7128` / `6084849accb05a45`，Codex 同 Claude（两份引擎补充提示目前为空），Pi `be3d281b8d83ea42` / `e6057c54763111fc`。结论：桌面提示前缀逐字节不变，缓存率不受影响 |
+
+## 六、M2 可接（状态已在 Host 上具备，只差通道）
+
+| 通道 | 状态来源 | 具备于 |
+|---|---|---|
+| `maker:session-background-activity`、`maker:session-background-activity:list`、推送 `maker:session-background-activity-changed` | `claude-session-background-activity.ts`，由回环代理的请求与响应观察写入，任务关闭时清 | 24a |
+| `maker:claude-session-route:get`、推送 `maker:claude-session-route-changed` | `claude-session-route-registry.ts`，由回环代理的路由决策写入 | 24a |
