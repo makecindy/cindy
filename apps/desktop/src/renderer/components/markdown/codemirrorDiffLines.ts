@@ -11,41 +11,17 @@
 
 import { type Extension, RangeSetBuilder, StateField, type Text } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView } from '@codemirror/view';
+import { classifyDiffLines } from './diffLineClassification';
 
 const addLine = Decoration.line({ class: 'cm-diff-add-line' });
 const delLine = Decoration.line({ class: 'cm-diff-del-line' });
 
-/** Outside a hunk, `+++` / `---` denote file headers. */
-function lineDecoration(text: string, inHunk: boolean): Decoration | null {
-  if (text.startsWith('+') && (inHunk || !text.startsWith('+++'))) return addLine;
-  if (text.startsWith('-') && (inHunk || !text.startsWith('---'))) return delLine;
-  return null;
-}
-
 function buildDecorations(doc: Text): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
-  let oldRemaining = 0;
-  let newRemaining = 0;
   let pos = 0;
-  for (const text of doc.iterLines()) {
-    const hunk = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/.exec(text);
-    if (hunk) {
-      oldRemaining = Number(hunk[1] ?? 1);
-      newRemaining = Number(hunk[2] ?? 1);
-    } else {
-      // Non-body metadata ends an incomplete hunk (for example a truncated
-      // patch followed by another file). No-newline markers consume no rows.
-      if (!/^[ +\\-]/.test(text)) oldRemaining = newRemaining = 0;
-      const inHunk = oldRemaining > 0 || newRemaining > 0;
-      const deco = lineDecoration(text, inHunk);
-      if (deco) builder.add(pos, pos, deco);
-      if (inHunk) {
-        if (text.startsWith('-') || text.startsWith(' '))
-          oldRemaining = Math.max(0, oldRemaining - 1);
-        if (text.startsWith('+') || text.startsWith(' '))
-          newRemaining = Math.max(0, newRemaining - 1);
-      }
-    }
+  for (const { text, type } of classifyDiffLines(doc.iterLines())) {
+    const deco = type === 'add' ? addLine : type === 'del' ? delLine : null;
+    if (deco) builder.add(pos, pos, deco);
     pos += text.length + 1;
   }
   return builder.finish();

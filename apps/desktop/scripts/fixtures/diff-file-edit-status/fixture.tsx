@@ -1,5 +1,6 @@
 import { useRef } from 'react';
 import { mountPage, subscription } from '../../ui-page/harness';
+import { MarkdownRenderer } from '../../../src/renderer/components/chat/MarkdownRenderer';
 import {
   FileBodyView,
   type FileBodyHandle,
@@ -14,6 +15,19 @@ const patch = [
   '+++counter;',
 ].join('\n');
 const code = Array.from({ length: 40 }, () => 'const counter = 0;').join('\n');
+const fencedPatch = [
+  '--- a/file', '+++ b/file', '@@ -1,2 +1 @@',
+  '---counter;', '----', '+++counter;',
+  '--- a/next', '+++ b/next',
+].join('\n');
+
+function FenceFixture({ language }: { language: 'diff' | 'patch' }) {
+  return (
+    <main className="p-4">
+      <MarkdownRenderer content={'```' + language + '\n' + fencedPatch + '\n```'} />
+    </main>
+  );
+}
 
 function Fixture({ diff }: { diff: boolean }) {
   const handle = useRef<FileBodyHandle>(null);
@@ -52,5 +66,7 @@ mountPage({
     // Hold an in-memory save open to observe the delayed saving status. No disk IO.
     fileBrowser: { writeFile: () => new Promise(() => {}) },
   }),
-  render: (ctx) => <Fixture diff={ctx.case === 'diff-scroll'} />,
+  render: (ctx) => ctx.case === 'patch-fence' || ctx.case === 'diff-fence'
+    ? <FenceFixture language={ctx.case === 'patch-fence' ? 'patch' : 'diff'} />
+    : <Fixture diff={ctx.case === 'diff-scroll'} />,
 });

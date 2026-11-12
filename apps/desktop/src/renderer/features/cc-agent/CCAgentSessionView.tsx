@@ -6462,7 +6462,7 @@ function CCAgentSessionContent({
                           className="shrink-0 rounded p-0.5 transition-colors hover:bg-foreground/10"
                           aria-label={t('common.dismiss', 'Dismiss')}
                         >
-                          <X size={10} className="text-[var(--error-fg)]/70" />
+                          <X size={10} className="text-[color-mix(in_srgb,var(--error-fg)_70%,transparent)]" />
                         </button>
                       </div>
                     </Tip>
