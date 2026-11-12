@@ -11040,11 +11040,13 @@ assertRouteCurrent();
       const forbiddenResponse = /(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?|code)["']?\s*(?:[:=]\s*)?["']?403["']?(?=$|[\s,;:}\]])|\brequest\s+rejected\s*\(\s*403\s*\)/i.test(text);
       // A compact rejection is a provider failure, not a tool error. Preserve
       // the existing provider auth markers without widening the translator.
-      const authenticationFailure = /invalid.{0,10}(api.?key|token)|authentication_error|unauthorized|api key not valid|令牌|鉴权失败/i.test(text);
+      const authenticationFailure = /invalid.{0,10}(api.?key|token)|authentication_error|unauthorized|\bpermission_error\b|api key not valid|令牌|鉴权失败/i.test(text);
       // Billing depletion is terminal even when no generic quota marker exists.
       const billingDepletion = /\b(?:insufficient_quota|billing_error|credit(?:s| balance)?\s+(?:depleted|exhausted|too low))\b/i.test(text);
       const uncertainTransport = tag === 'responseStreamDisconnected' || tag === 'responseStreamConnectionFailed'
         || responseStatuses.some(status => status === 408 || status === 504)
+        // Preserve the provider classifier's network/timeout code contract.
+        || /\b(?:ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ECONNRESET|EHOSTUNREACH|ENETUNREACH|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET|ETIMEDOUT|ABORT_ERR|TimeoutError|AbortError)\b/i.test(text)
         || /timeout|timed out|ECONNRESET|ECONNREFUSED|ENOTFOUND|connection reset|network error|stream disconnected/i.test(text);
       return !uncertainTransport
         && !disallowedStatus
