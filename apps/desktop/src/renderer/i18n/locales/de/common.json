@@ -19623,6 +19623,11 @@
     }
   },
   "pluginUi": {
+    "settings": "Plugin-Einstellungen",
+    "save": "Speichern",
+    "settingsFailed": "Die Plugin-Einstellungen konnten nicht geladen oder gespeichert werden. Öffne diese Seite erneut.",
+    "invalidSetting": "Prüfe die markierten Werte anhand der erlaubten Grenzen.",
+    "attachmentFailed": "Das Plugin konnte „{{name}}“ nicht verarbeiten. Der ursprüngliche Anhang bleibt erhalten.",
     "display": "Darstellung",
     "original": "Original",
     "menu": "Plugin-Ansichten und Befehle",
