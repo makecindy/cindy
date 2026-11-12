@@ -906,8 +906,8 @@ export function ScheduleFormDialog({
                               {t('scheduler.editor.fields.prompt')}
                             </span>
                           </div>
-                          <div className="flex h-[144px] flex-col overflow-hidden rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]">
-                            <div className="min-h-0 flex-1 p-4">
+                          <div className="flex flex-col overflow-hidden rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]">
+                            <div className="p-4">
                               <textarea
                                 value={form.prompt}
                                 onChange={(e) => {
@@ -916,7 +916,9 @@ export function ScheduleFormDialog({
                                 }}
                                 placeholder={t('scheduler.editor.promptDialog.promptPlaceholder')}
                                 className={cn(
-                                  'h-full w-full resize-none overflow-y-auto bg-transparent text-sm leading-[1.43] outline-none',
+                                  // Long prompts grow with their content and then scroll inside the
+                                  // field. The minimum still leaves the trigger row in the first view.
+                                  'block min-h-[120px] max-h-[min(320px,40vh)] w-full resize-none overflow-y-auto bg-transparent text-sm leading-[1.43] outline-none [field-sizing:content]',
                                   'text-[var(--settings-input-text)] placeholder-[var(--settings-input-placeholder)]',
                                   'select-text',
                                 )}

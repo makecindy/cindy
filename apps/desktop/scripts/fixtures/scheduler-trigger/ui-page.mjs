@@ -20,12 +20,25 @@ export default {
   },
   cases: { default: { about: 'Webhook → 手动 → 定时 → Webhook，弹窗及触发选择器不跳动' },
     create: { about: '新建表单使用相同的稳定切换布局' },
-    scrolled: { about: '小窗口滚动后切换触发方式，配置区收起不拉回滚动位置', viewport: { width: 780, height: 620 } } },
+    scrolled: { about: '小窗口滚动后切换触发方式，配置区收起不拉回滚动位置', viewport: { width: 780, height: 620 } },
+    'long-prompt': { about: '长提示词让输入框随内容增高，到上限后在框内滚动' } },
   async ready(page) {
     const label = await page.evaluate(() => window.__uiPage.t('scheduler.editor.webhook.eventPicker.choose'));
     await page.getByRole('button', { name: label, exact: true }).waitFor();
   },
   async check(page, ui) {
+    // Issue #10224: the prompt field was fixed at about three lines. Short prompts
+    // keep a usable minimum; long ones grow to a cap and then scroll inside the field.
+    const prompt = await page.locator('textarea').evaluate((el) => ({
+      height: el.getBoundingClientRect().height, clientHeight: el.clientHeight, scrollHeight: el.scrollHeight,
+    }));
+    console.log(`prompt field: ${JSON.stringify(prompt)}`);
+    assert.ok(prompt.height >= 119, `Prompt field is shorter than its minimum: ${JSON.stringify(prompt)}`);
+    if (ui.case === 'long-prompt') {
+      assert.ok(prompt.height >= 300 && prompt.scrollHeight > prompt.clientHeight,
+        `Long prompt did not grow to its cap and scroll inside: ${JSON.stringify(prompt)}`);
+      await ui.capture('long-prompt');
+    }
     // Regression: the previous centered, content-sized dialog shrank immediately
     // when Webhook fields unmounted, then grew while run settings expanded.
     // jsdom form tests cannot observe rendered geometry; sample actual paint frames.
