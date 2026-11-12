@@ -169,4 +169,21 @@ describe('the Host /learn capture decides as the desktop one', () => {
     for (const kind of ['claude-code', 'pi'] as const) expect(await both(`disabled ${kind}`, s(`d-${kind}`, kind), '/cindy:learn x')).toBeNull();
     await setCindySkillEnabled(descriptor.absolutePath, true);
   }, 60_000);
+
+  // The copy above is only evidence while it matches what the desktop passes.
+  it('copies the desktop dependencies exactly as register.ts passes them', () => {
+    const read = (file: string) => fs.readFileSync(file, 'utf8').replace(/\r\n?/g, '\n');
+    const between = (text: string, start: string, end: string) => {
+      const from = text.indexOf(start);
+      expect(from, start).toBeGreaterThanOrEqual(0);
+      const to = text.indexOf(end, from + start.length);
+      expect(to, end).toBeGreaterThan(from);
+      return text.slice(from + start.length, to).split('\n').map(line => line.trim()).filter(Boolean).join('\n');
+    };
+    const register = read(path.resolve(__dirname, '..', '..', 'maker-ipc', 'register.ts'));
+    const desktopDeps = between(register, 'captureCindyLearnInvocation: createCindyLearnInvocationCapture({', '\n    }),\n    createDbMessage:');
+    const copied = between(read(__filename), '  desktop = createCindyLearnInvocationCapture({', '\n  }) as Capture;');
+    expect(desktopDeps.length).toBeGreaterThan(0);
+    expect(copied).toBe(desktopDeps);
+  });
 });
