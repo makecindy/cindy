@@ -29,6 +29,7 @@ const runtime = vi.hoisted(() => ({
   installationScanComplete: true,
   onList: undefined as (() => void) | undefined,
   readBackgroundGhosts: undefined as (() => Promise<InstalledGhost[]>) | undefined,
+  findInstalledInstance: undefined as ((id: string) => InstalledGhost | undefined) | undefined,
   confirmLegacyLibraryReattach: vi.fn<(plugin: unknown) => Promise<boolean>>(async () => false),
   ghosts: [] as Array<{
     manifest: Record<string, unknown>;
@@ -131,6 +132,7 @@ vi.mock('../../cindy-brain/index.js', () => ({
         ? await runtime.readBackgroundGhosts() : this.list() as unknown as InstalledGhost[], registry: emptyPluginInstanceRegistry(), state: state() }) });
     },
     async listAsync() { return this.list(); },
+    findInstalledInstance: (id: string) => runtime.findInstalledInstance?.(id),
     resumePendingResidentsOffline: runtime.resumeOfflineResidents,
     reconcilePendingRootNamespaces: runtime.reconcilePendingRootNamespaces,
     list: () => {
@@ -257,6 +259,7 @@ import {
   type PluginMarketInstallationRecord,
 } from '../ledger';
 import {
+  installedGhostMatchingMarketPluginNow,
   organizationDefaultTakeoverEligibility,
   PluginMarketService,
   type PluginMarketInstallContext,
@@ -313,6 +316,7 @@ afterEach(() => {
   runtime.authIdentity = { membershipKind: 'org', orgId: 'org-1', orgSlug: 'acme' };
   runtime.authStateOverrides = {};
   runtime.readBackgroundGhosts = undefined;
+  runtime.findInstalledInstance = undefined;
   runtime.resumeOfflineResidents.mockClear();
   runtime.reconcilePendingRootNamespaces.mockReset();
   runtime.currentOrganization = null;
@@ -797,6 +801,22 @@ describe('same-release legacy organization source recovery', () => {
   });
 });
 
+it('finds canonical root and organization instance keys without listing', () => {
+  const root = { ...ghostEntry('hello'), namespace: null, dir: '/ghosts/_ns/_root/hello',
+    approval: { state: 'approved', revision: 'root-revision' } } as unknown as InstalledGhost;
+  const organization = { ...ghostEntry('hello'), namespace: 'acme', dir: '/ghosts/_ns/acme/hello',
+    approval: { state: 'approved', revision: 'org-revision' } } as unknown as InstalledGhost;
+  runtime.ghosts = [root, organization] as unknown as typeof runtime.ghosts;
+  runtime.findInstalledInstance = vi.fn((id: string) =>
+    id === '_root__hello' ? root : id === '_ns__acme__hello' ? organization : undefined);
+  runtime.listScans = 0;
+  expect(installedGhostMatchingMarketPluginNow({ ghostId: 'hello', namespace: null })).toBe(root);
+  expect(installedGhostMatchingMarketPluginNow({ ghostId: 'hello', namespace: 'acme' })).toBe(organization);
+  expect(runtime.findInstalledInstance).toHaveBeenCalledWith('_root__hello');
+  expect(runtime.findInstalledInstance).toHaveBeenCalledWith('_ns__acme__hello');
+  expect(runtime.listScans).toBe(0);
+});
+
 describe('PluginMarketService migration and defaultInstall', () => {
   // Unit: the three new read paths must not invoke the synchronous disk scanner.
   // A held worker snapshot also proves simultaneous readers share one pending scan.
@@ -871,6 +891,92 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(next.items[0]!.pluginId).not.toBe(first.items[0]!.pluginId);
     expect((await h.service.query({ query: 'Tool 29' })).items.map(item => item.ghostId)).toEqual(['tool-29']);
     expect(h.api.listAll).not.toHaveBeenCalled();
+  });
+
+  it('reuses one installation scan across sequential market pages', async () => {
+    const items = Array.from({ length: 30 }, (_, index) => summary({
+      id: 'c' + String(index).padStart(24, '0'),
+      ghostId: 'tool-' + index,
+      name: 'Tool ' + index,
+      namespace: null,
+    }));
+    const h = harness(items);
+    runtime.readBackgroundGhosts = vi.fn(async () => []);
+    let cursor: string | null = null;
+    for (let page = 0; page < 10; page += 1) {
+      const result = await h.service.query({ limit: 3, cursor });
+      cursor = result.nextCursor;
+    }
+    expect(runtime.readBackgroundGhosts).toHaveBeenCalledTimes(1);
+  });
+
+  it('rebuilds the installation context for a new query action', async () => {
+    const items = Array.from({ length: 6 }, (_, index) => summary({
+      id: 'c' + String(index).padStart(24, '0'),
+      ghostId: 'tool-' + index,
+      name: 'Tool ' + index,
+      namespace: null,
+    }));
+    const h = harness(items);
+    runtime.readBackgroundGhosts = vi.fn(async () => []);
+    await h.service.query({ limit: 2 });
+    await h.service.query({ limit: 2 });
+    expect(runtime.readBackgroundGhosts).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes a reused installation context after the TTL', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const items = Array.from({ length: 6 }, (_, index) => summary({
+        id: 'c' + String(index).padStart(24, '0'),
+        ghostId: 'tool-' + index,
+        name: 'Tool ' + index,
+        namespace: null,
+      }));
+      const h = harness(items);
+      runtime.readBackgroundGhosts = vi.fn(async () => []);
+      const first = await h.service.query({ limit: 2 });
+      await h.service.query({ limit: 2, cursor: first.nextCursor });
+      expect(runtime.readBackgroundGhosts).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(10 * 60 * 1_000 + 1);
+      await h.service.query({ limit: 2, cursor: first.nextCursor });
+      expect(runtime.readBackgroundGhosts).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rescans installation state after the installed identity changes', async () => {
+    const items = Array.from({ length: 6 }, (_, index) => summary({
+      id: 'c' + String(index).padStart(24, '0'),
+      ghostId: 'tool-' + index,
+      name: 'Tool ' + index,
+      namespace: null,
+    }));
+    const h = harness(items);
+    runtime.readBackgroundGhosts = vi.fn(async () => []);
+    await h.service.query({ limit: 3 });
+    expect(runtime.readBackgroundGhosts).toHaveBeenCalledTimes(1);
+    runtime.ghosts = [ghostEntry('tool-0')];
+    await h.service.query({ limit: 3 });
+    expect(runtime.readBackgroundGhosts).toHaveBeenCalledTimes(2);
+  });
+
+  it('hides counts instead of unbounded installed-count resolution', async () => {
+    const item = summary({ id: 'c000000000000000000000001', ghostId: 'tool-0', namespace: null });
+    const h = harness([item]);
+    (h.service as unknown as { countDeductionMaxBatches: number }).countDeductionMaxBatches = 1;
+    for (let index = 0; index < 101; index += 1) {
+      h.ledger.upsertInstallation(recordForTest({
+        ...item,
+        id: 'c' + String(index).padStart(24, '0'),
+        ghostId: 'installed-' + index,
+      }, { installed: true }));
+    }
+    const result = await h.service.query({ limit: 3, excludeInstalled: true });
+    expect(result.counts).toBeNull();
+    expect(h.api.resolve).not.toHaveBeenCalled();
   });
 
   it('keeps unavailable installed targets when a bounded maintenance batch fails', async () => {

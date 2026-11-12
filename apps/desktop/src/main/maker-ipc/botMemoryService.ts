@@ -156,7 +156,7 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
     botId: string,
   ): Promise<{ store: MakerMemoryStore; owner: BotMemoryOwner }> {
     const owner = await deps.readBot(botId);
-    if (!owner) throwIpcError('NOT_FOUND', 'Teammate not found');
+    if (!owner) throwIpcError('NOT_FOUND', 'Buddy not found');
     try {
       owner.assertCurrent?.();
       const store = await deps.getStore(owner.scopeKey ?? buildBotMemoryScopeKey(botId));
