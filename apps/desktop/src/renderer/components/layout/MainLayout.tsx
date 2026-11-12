@@ -1698,7 +1698,7 @@ export function MainLayout() {
   // Session/tool-pane declarations update Shell state during navigation. Keep
   // unrelated updates from invalidating the entire routed conversation again.
   const { settings: pluginSettings, sidebarSections: pluginSidebarSections,
-    titlebarEntries: pluginTitlebarEntries } = usePluginUiWindowCandidates();
+    titlebarEntries: pluginTitlebarEntries, onGhostsChanged: handleInstalledGhostsChange } = usePluginUiWindowCandidates();
   const outletContext = useMemo(() => ({
     sidebarWidth,
     pluginSettings,
@@ -1960,6 +1960,7 @@ export function MainLayout() {
               不再逐像素回灌 React；设置页接管时非 chat 面板统一歇业。 */}
           <TabGroupHostProvider value={tabGroupHost}>
             <LayoutRoot
+              onInstalledGhostsChange={handleInstalledGhostsChange}
               suppressNonChatPanels={isSettingsRoute}
               sidebarExpansionReady={rightSidebarAvailable && rsbWindow.loaded && !rsbDetached}
               rightTabsCollapsed={

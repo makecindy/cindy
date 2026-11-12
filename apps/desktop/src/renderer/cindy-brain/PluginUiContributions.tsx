@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isHostUiPosition, type GhostHostUiContribution, type GhostHostUiPosition } from '@cindy/plugin-protocol';
 import { getApprovedGhostHostUi, type InstalledGhost } from '../../shared/ghost';
@@ -143,11 +143,26 @@ function compiledDirectory(ghosts: readonly InstalledGhost[]) {
 }
 /** Read the existing owner projection; never subscribe once more at a placement. */
 export const readPluginUiEntries = (position: GhostHostUiPosition) => compiledDirectory(readInstalledGhostsSnapshot()).entries.get(position) ?? NO_ENTRIES;
-/** Window owners subscribe to the same cached roster; placements add no Context or IPC. */
-export function usePluginUiWindowCandidates() {
-  const { entries, settings } = compiledDirectory(useInstalledGhosts());
+function windowCandidates(ghosts: readonly InstalledGhost[]) {
+  const { entries, settings } = compiledDirectory(ghosts);
   return { settings, sidebarSections: entries.get('sidebar.section') ?? NO_ENTRIES,
     titlebarEntries: entries.get('window.titlebar') ?? NO_ENTRIES };
+}
+/** The existing panel owner feeds changes; the window root adds no subscription. */
+export function usePluginUiWindowCandidates() {
+  const [candidates, setCandidates] = useState(() => windowCandidates(readInstalledGhostsSnapshot()));
+  const current = useRef(candidates);
+  const onGhostsChanged = useCallback((ghosts: readonly InstalledGhost[]) => {
+    const next = windowCandidates(ghosts), previous = current.current;
+    if (previous.settings === next.settings && previous.sidebarSections === next.sidebarSections &&
+        previous.titlebarEntries === next.titlebarEntries) return;
+    // Broadcasts deserialize the entire roster. Compare only actual window
+    // candidates, so an unrelated plugin cannot invalidate the routed shell.
+    if (JSON.stringify(previous) === JSON.stringify(next)) return;
+    current.current = next;
+    setCandidates(next);
+  }, []);
+  return { ...candidates, onGhostsChanged };
 }
 export function usePluginUiComposerCandidates() {
   const directory = useContext(DirectoryContext);

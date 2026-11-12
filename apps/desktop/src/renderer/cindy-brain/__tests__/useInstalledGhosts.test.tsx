@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../shared/ghost';
 import { usePluginUiWindowCandidates } from '../PluginUiContributions';
+import { useGhostPanelsSync } from '../ghostPanels';
 import { useWorkdirDisabledGhostIds } from '../ghostWorkdirFilter';
 import {
   __resetInstalledGhostsStoreForTest,
@@ -66,13 +67,18 @@ afterEach(() => {
 
 // Unit, #9987: snapshot getters did not give their window owner a reactive
 // projection; old placement tests manually rerendered. Only ghosts:changed may
-// update this owner. Empty projections must also stay stable across roster pushes.
+// update this owner. The original panel owner already consumes those broadcasts;
+// a plain plugin must neither add a root subscription nor rerender the root.
+// Minimal input: an empty roster, then an ordinary plugin without host entries.
 it('updates window contributions on installation, revocation and disable without another IPC scan', () => {
   listSync.mockReturnValue({ ghosts: [] });
   const invoke = vi.fn();
   Object.assign(window.electronAPI, { maker: { mcpApps: invoke } });
-  const { result } = renderHook(() => usePluginUiWindowCandidates());
+  let renders = 0;
+  const { result } = renderHook(() => { renders++; return usePluginUiWindowCandidates(); });
   const empty = result.current;
+  act(() => changedCbs.forEach(callback => callback({ ghosts: [ghost('ordinary')] })));
+  expect(renders).toBe(1);
   const plugin: InstalledGhost = { ...ghost('window-extensions'), uiCapabilityApproved: true };
   plugin.manifest = { ...plugin.manifest, schemaVersion: 3, minCindyVersion: '0.1.61' };
   plugin.manifest.mcpApps = {
@@ -86,9 +92,18 @@ it('updates window contributions on installation, revocation and disable without
   };
   plugin.approvedHostUi = ghostHostUiApprovalTokens(plugin.manifest);
   act(() => changedCbs.forEach(callback => callback({ ghosts: [plugin] })));
+  expect(renders).toBe(1);
+  // A relevant change before LayoutRoot mounts must be caught from the cache
+  // when its pre-existing listener attaches; the root itself has no listener.
+  expect(onChanged).toHaveBeenCalledOnce();
+  renderHook(() => useGhostPanelsSync(result.current.onGhostsChanged));
   expect(result.current.settings.map(item => item.manifest.id)).toEqual(['window-extensions']);
   expect(result.current.sidebarSections.map(entry => entry.contribution.id)).toEqual(['section']);
   expect(result.current.titlebarEntries.map(entry => entry.contribution.id)).toEqual(['action']);
+  expect(renders).toBe(2);
+  // IPC creates fresh objects for the whole roster, including unchanged plugins.
+  act(() => changedCbs.forEach(callback => callback({ ghosts: [structuredClone(plugin), ghost('ordinary')] })));
+  expect(renders).toBe(2);
   for (const next of [{ ...plugin, approvedHostUi: [] }, { ...plugin, enabled: false }, ghost('ordinary')]) {
     act(() => changedCbs.forEach(callback => callback({ ghosts: [next] })));
     expect(result.current.settings).toBe(empty.settings);
@@ -96,7 +111,8 @@ it('updates window contributions on installation, revocation and disable without
     expect(result.current.titlebarEntries).toBe(empty.titlebarEntries);
   }
   expect(listSync).toHaveBeenCalledOnce();
-  expect(onChanged).toHaveBeenCalledOnce();
+  // One shared roster listener and the original panel owner; none at the root.
+  expect(onChanged).toHaveBeenCalledTimes(2);
   expect(invoke).not.toHaveBeenCalled();
 });
 
