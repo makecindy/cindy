@@ -1,7 +1,7 @@
 # Host 通道覆盖清单（脚本生成）
 
 > 由 `node scripts/host-channel-coverage.mjs` 生成，不要手工修改；行号只在 `--json` 输出里。
-> 生成时的源码提交：`3aae196f8b`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
+> 生成时的源码提交：`fa0061029d`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
 
 统计对象是桌面主进程（`apps/desktop/src/main`，不含测试）里所有 `ipcMain.handle/on`
 及其包装函数注册的通道；注册、调用次数和排行均按 `(kind, channel)` 区分。
