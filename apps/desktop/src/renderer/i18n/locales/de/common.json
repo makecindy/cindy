@@ -1888,6 +1888,15 @@
     },
     "remote": {
       "title": "Remote-Rechner",
+      "hostKeyError": {
+        "missing": "Die Prüfung des SSH-Hostschlüssels ist nicht eingerichtet. Verbindung abgelehnt.",
+        "read": "Cindy konnte die vertrauenswürdigen Hostschlüssel nicht lesen: {{reason}}. Verbindung abgelehnt.",
+        "write": "Cindy konnte den vertrauenswürdigen Hostschlüssel nicht speichern: {{reason}}. Verbindung abgelehnt.",
+        "mismatch": "Der Hostschlüssel für {{host}} hat sich geändert ({{fingerprint}}) und stimmt nicht mehr mit dem Fingerabdruck überein, dem Cindy bisher vertraut hat. Möglicherweise wurde der Server neu installiert, oder es handelt sich um einen Man-in-the-Middle-Angriff. Verbindung abgelehnt.",
+        "file": "Datei mit vertrauenswürdigen Hostschlüsseln:\n{{filePath}}",
+        "repair": "Cindy liest ~/.ssh/known_hosts nicht. Der alte Fingerabdruck ist gespeichert in:\n{{filePath}}\nDer Schlüssel des Eintrags lautet \"{{host}}\".\nWenn du geprüft hast, dass diese Änderung vertrauenswürdig ist, beende Cindy, entferne nur diesen Eintrag, behalte die Datei und alle anderen Hosts und verbinde dich dann erneut. Der neue Fingerabdruck wird bei der ersten Verbindung gespeichert. Lösche nicht die gesamte Datei.",
+        "verifyChange": "Prüfe die Änderung mit dem Serveradministrator, bevor du die vertrauenswürdigen Hostschlüssel aktualisierst."
+      },
       "footnote": "Phase A: nur SSH-Verbindungsverwaltung. Das Ausführen von Agents auf dem Remote-Rechner folgt in einem späteren Update.",
       "viaAuth": "über {{label}}",
       "readOnlyFromSshConfig": "Verbindungsdetails stammen aus der SSH-Konfiguration",
