@@ -10,7 +10,9 @@
  *   的另一个账号复用上一个账号的 store。
  * - 现有覆盖缺口: imOutbox.test.ts 只测 store/投递本身, 不测生命周期接线与账号切换。
  * - 最小失败输入: ① commit 失败后 dispose(idle) → 重启 flush 应补发；
- *   ② 同 bot 从账号 A 切到 B → B 的提交不能落进 A 的 store。
+ *   ② 同 bot 从账号 A 切到 B → B 的提交不能落进 A 的 store；
+ *   ③ 冷启动尚未 connected 就解绑 → 重新绑定同 bot 不得补发旧内容
+ *   (PR #10202 discussion_r4550049182；原解绑用例只覆盖已 commit 的热缓存)。
  * - tier: unit(临时目录 + fake timers + 内存 transport, 不发真实消息)。
  */
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -203,6 +205,41 @@ describe('channel outbox lifecycle', () => {
     // 旧记录不会复活。
     expect(sent).toHaveLength(1);
   });
+
+  it.each(['before-init', 'while-connecting'] as const)(
+    'drops cold-start records on unbind when wiring attaches %s',
+    async (attachWhen) => {
+      const previous = makeOutbox();
+      await previous.commit(output('turn-before-restart'));
+      previous.stop();
+      expect(readEntries()).toHaveLength(1);
+
+      // No commit/flush/connected in the new process. Credentials can load
+      // either before or after lifecycle wiring is installed.
+      if (attachWhen === 'before-init') holder.botId = '';
+      const restarted = makeOutbox();
+      const im = imStub();
+      attachOutboxLifecycle(im, restarted, () => !holder.botId);
+      if (attachWhen === 'before-init') {
+        holder.botId = 'bot-1';
+        im.emit('connecting');
+      }
+      // A plain disconnect/dispose must retain the same cold records and must
+      // not send them merely because lifecycle wiring now captures the scope.
+      im.emit('idle');
+      expect(readEntries()).toHaveLength(1);
+      expect(sent).toHaveLength(1);
+      holder.botId = '';
+      im.emit('idle');
+
+      holder.botId = 'bot-1';
+      expect(readEntries()).toHaveLength(0);
+      failDelivery = false;
+      vi.advanceTimersByTime(20_000);
+      await restarted.flush();
+      expect(sent).toHaveLength(1);
+    },
+  );
 
   it('never reuses the previous account store when the same bot switches account', async () => {
     const outbox = makeOutbox();

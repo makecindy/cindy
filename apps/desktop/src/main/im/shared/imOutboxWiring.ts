@@ -69,6 +69,8 @@ function ownerStoragePresent(): boolean {
 }
 
 export interface ChannelOutbox {
+  /** 记住当前账号 + bot 对应的 store, 不投递; 身份变化沿用旧记录作废语义。 */
+  bindCurrentScope(): void;
   /** 持久受理终稿并立即尝试投递; 返回值说明真实送达边界。 */
   commit(output: ImFinalOutput): Promise<ImOutboxCommitOutcome>;
   /** 连接恢复/启动时补发。 */
@@ -102,6 +104,9 @@ export function attachOutboxLifecycle(
   const unsubscribe =
     typeof im.onStatusChange === 'function'
       ? im.onStatusChange((status) => {
+          // init() 可能晚于接线: connecting 时凭证已加载, 此时就保存身份。
+          // 解绑的 idle 到来时 botId 已清空, 不能等 connected/首条终稿才建缓存。
+          outbox.bindCurrentScope();
           if (status.kind === 'connected') {
             void outbox.flush().catch(() => log.warn('im outbox flush failed'));
             return;
@@ -110,6 +115,7 @@ export function attachOutboxLifecycle(
           if (status.kind === 'idle' && isUnbound()) outbox.dropCurrentScope();
         })
       : () => undefined;
+  if (typeof im.onStatusChange === 'function') outbox.bindCurrentScope();
   if (im.getStatus?.().kind === 'connected') {
     void outbox.flush().catch(() => log.warn('im outbox flush failed'));
   }
@@ -187,6 +193,10 @@ export function createChannelOutbox(options: ChannelOutboxOptions): ChannelOutbo
   }
 
   return {
+    bindCurrentScope() {
+      // 新 store/delivery 惰性读取记录; 绑定不发消息、不安排重试。
+      resolve();
+    },
     async commit(output) {
       const delivery = resolve();
       if (!delivery) {
