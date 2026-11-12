@@ -175,10 +175,12 @@ Main 后台用当前保存的端点和凭证重新验证旧来源，不阻塞启
 恢复仅签发当前进程的展示标记，不登记设置页提交收据，避免占用或挤出尚待提交的发现。
 失败保留隐藏状态，后续加载须间隔至少五分钟且不早于上游 `Retry-After` 才重试，无定时轮询。
 同账号的 session generation 修复保留未到期冷却；账号、端点或凭证上下文变化不复用旧连接的期限。
+这也覆盖 generation 变化后才返回的 Retry-After 与 CAS 写入失败；迟到响应不得缩短已知期限。
 后续重试复用已有打开模型菜单、回到前台等自动刷新信号，与公共目录的三十分钟成功冷却独立；
 只重验证来源、不迁移或发布未变化的配置。启动时网关不可用也能在五分钟失败冷却后的信号上恢复。
 账号或凭证变化、配置编辑及删除会使旧结果失效；配置写入使用现有 CAS，成功后通过普通目录更新广播。
 CAS 成功后若目录重载失败，保留当前路由及该账号的待发布标记；后续提示重读当前配置再发布，不重复发现。
+CAS 等待期间发生同账号 generation 修复时，成功写入也登记待发布标记；旧代次不直接发布目录。
 实现及回归见 `modelSource.ts`、`model-source-snapshots.ts`、`model-source-revalidation.ts`、
 `providerCatalogRealmReload.test.ts`、`modelSourceSnapshots.test.ts` 和
 `renderer/__tests__/magpieModelSourceRow.test.tsx`。

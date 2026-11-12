@@ -389,8 +389,11 @@ describe('provider catalog realm reload', () => {
   // Standalone file: 7.49s on 2026-11-10 (1.57s tests; existing service imports dominate).
   // #9882: extend the real three-engine restart path to a failed post-CAS read;
   // the next hint must publish current persisted sources without rediscovery.
-  it.each([false, true])('restores saved Magpie sources with transient reload failure %s', async failReload => {
-    let saved: CustomProviderConfig = { id: `magpie-restart-${failReload}`, name: 'Magpie', auth: { method: 'none' }, runtimes: {} };
+  // Late CAS regression: repair the same owner while the write is pending,
+  // then verify a foreground hint publishes the saved labels without HTTP.
+  it.each(['normal', 'reload-failure', 'late-cas'] as const)('restores saved Magpie sources after %s', async scenario => {
+    const failReload = scenario === 'reload-failure';
+    let saved: CustomProviderConfig = { id: `magpie-restart-${scenario}`, name: 'Magpie', auth: { method: 'none' }, runtimes: {} };
     for (const agent of ['claude-code', 'codex', 'pi'] as const) {
       saved.runtimes[agent] = { baseUrl: 'http://127.0.0.1:3425/v1', modelsUrl: 'http://127.0.0.1:3425/v1/models', wireProtocol: 'openai-chat', models: [
         { id: 'deepseek/deepseek-v4-flash', name: 'My model', nameExplicit: true, contextWindow: 123456, defaultEnabled: false, opaqueModelId: true,
@@ -404,6 +407,7 @@ describe('provider catalog realm reload', () => {
     h.casUpdate.mockImplementation(async (_id, expected, next) => {
       if (JSON.stringify(expected) !== JSON.stringify(saved)) return false;
       saved = next as CustomProviderConfig;
+      if (scenario === 'late-cas') h.generation++;
       if (failReload) h.customProviderRead.mockRejectedValueOnce(new Error('transient reload read'));
       return true;
     });
@@ -413,6 +417,10 @@ describe('provider catalog realm reload', () => {
     ] }), { status: 200 }));
     try {
       await refreshCustomProvidersIntoCatalog();
+      if (scenario === 'late-cas') {
+        await vi.waitFor(() => expect(saved.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('DeepSeek'));
+        await refreshCustomProviderModelSources();
+      }
       if (failReload) {
         await vi.waitFor(() => expect(h.warn).toHaveBeenCalledWith('failed to reload recovered sources; retained current owner catalog snapshot'));
         expect(getActiveCatalog().providers.some(provider => provider.id === saved.id)).toBe(true);

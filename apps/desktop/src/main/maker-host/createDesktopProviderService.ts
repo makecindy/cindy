@@ -685,17 +685,23 @@ async function recoverCustomProviderModelSources(
   shouldApply: () => boolean,
 ): Promise<void> {
   const owner = getActiveAppSession();
+  const sameOwner = () => {
+    const current = getActiveAppSession();
+    return owner.mode === current.mode && owner.dataOwnerId === current.dataOwnerId;
+  };
   const isCurrent = () => {
     const current = getActiveAppSession();
-    return shouldApply() && owner.dataOwnerId === current.dataOwnerId && owner.generation === current.generation;
+    return shouldApply() && sameOwner() && owner.generation === current.generation;
   };
   // Keep startup/routing responsive. Successful revalidation reloads the latest
   // DB state through the usual catalog path and its existing change broadcast.
   await revalidateModelSources(configs, JSON.stringify([owner.dataOwnerId, owner.generation]), isCurrent,
     JSON.stringify([owner.mode, owner.dataOwnerId])).then(async changed => {
-    if (changed && isCurrent()) {
+    if (changed && sameOwner()) {
+      // A committed CAS still needs projection if its generation expired while
+      // awaiting SQLite. Store only owner identity; the next hint rereads the DB.
       pendingSourceProjection = { owner: JSON.stringify([owner.mode, owner.dataOwnerId]) };
-      await refreshCustomProvidersIntoCatalog(isCurrent, { preserveOnFailure: true });
+      if (isCurrent()) await refreshCustomProvidersIntoCatalog(isCurrent, { preserveOnFailure: true });
     }
   }).catch(() => {
     log.warn('custom provider model source recovery failed');

@@ -31,6 +31,7 @@ export function createModelSourceRevalidator(deps: ModelSourceRevalidationDeps) 
   // Deadlines contain no model data. Session generation invalidates writes and
   // in-flight reuse, but not a server cooldown for an unchanged owner/connection.
   const deadlines = new Map<string, { signature: string; retryAt: number }>();
+  let connections = new Map<string, string>();
   let activeOwner: string | undefined;
   const reads = new Map<string, {
     signature: string;
@@ -40,14 +41,15 @@ export function createModelSourceRevalidator(deps: ModelSourceRevalidationDeps) 
   let activeScope: string | undefined;
   return async (configs: readonly CustomProviderConfig[], scope: string, ownerIsCurrent: () => boolean, ownerKey = scope): Promise<boolean> => {
     if (!ownerIsCurrent()) return false;
-    if (activeOwner !== ownerKey) { deadlines.clear(); activeOwner = ownerKey; }
+    if (activeOwner !== ownerKey) { deadlines.clear(); connections = new Map(); activeOwner = ownerKey; }
     if (activeScope !== scope) { reads.clear(); activeScope = scope; }
     const ids = new Set(configs.map(config => config.id));
     for (const id of deadlines.keys()) if (!ids.has(id)) deadlines.delete(id);
+    for (const id of connections.keys()) if (!ids.has(id)) connections.delete(id);
+    const ownerConnections = connections;
     const results = await Promise.all(configs.map(async config => {
       const agents = AGENTS.filter(agent => config.runtimes[agent]?.models.some(model =>
         model.discoveredSource && !isCurrentModelSource(model.discoveredSource)));
-      if (!agents.length || deps.isMutating(config.id)) return false;
       const revision = deps.credentialRevision(config.id);
       const isCurrent = () => ownerIsCurrent() && !deps.isMutating(config.id)
         && revision === deps.credentialRevision(config.id);
@@ -61,6 +63,17 @@ export function createModelSourceRevalidator(deps: ModelSourceRevalidationDeps) 
       });
       const signature = modelSourceRequestSignature(JSON.stringify([scope, revision, config.auth, requests]), {});
       const deadlineSignature = modelSourceRequestSignature(JSON.stringify([ownerKey, revision, config.auth, requests]), {});
+      connections.set(config.id, deadlineSignature);
+      if (!agents.length || deps.isMutating(config.id)) return false;
+      const retainDeadline = (retryAt: number) => {
+        // Generation expiry does not revoke a same-connection cooldown. A
+        // changed owner/request does, and a late result must never shorten it.
+        if (connections !== ownerConnections || connections.get(config.id) !== deadlineSignature
+          || revision !== deps.credentialRevision(config.id) || deps.isMutating(config.id)) return;
+        const previous = deadlines.get(config.id);
+        deadlines.set(config.id, { signature: deadlineSignature, retryAt: Math.max(retryAt,
+          previous?.signature === deadlineSignature ? previous.retryAt : 0) });
+      };
       const deadline = deadlines.get(config.id);
       if (deadline && deadline.signature !== deadlineSignature) deadlines.delete(config.id);
       else if (deadline && deps.now() < deadline.retryAt) return false;
@@ -83,7 +96,7 @@ export function createModelSourceRevalidator(deps: ModelSourceRevalidationDeps) 
         void promise.then(rows => {
           if (rows.some(row => row.models === null)) {
             entry.retryAt = Math.max(deps.now() + FAILURE_RETRY_MS, retryAt);
-            if (isCurrent() && activeOwner === ownerKey) deadlines.set(config.id, { signature: deadlineSignature, retryAt: entry.retryAt });
+            retainDeadline(entry.retryAt);
           }
         });
       }
@@ -105,6 +118,7 @@ export function createModelSourceRevalidator(deps: ModelSourceRevalidationDeps) 
       // CAS also rejects edits/deletion while the request was in flight. The
       // ordinary store strips transient secure headers before writing SQLite.
       const saved = changed && isCurrent() && await deps.save(config.id, config, { ...config, runtimes });
+      if (!saved && changed) retainDeadline(deps.now() + FAILURE_RETRY_MS);
       if (reads.get(config.id) === read) {
         // Release successful results after CAS; keep only failed runtime markers
         // and their deadline. A CAS miss can retry discovery after the cooldown.

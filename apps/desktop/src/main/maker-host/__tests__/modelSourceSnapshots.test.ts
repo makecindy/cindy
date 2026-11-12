@@ -48,6 +48,60 @@ const savedGateway = (): CustomProviderConfig => ({
 });
 
 describe('model source automatic revalidation', () => {
+  // #9882 late Retry-After, unit: previous coverage completed the HTTP response
+  // before generation repair; this response arrives after the old scope expires.
+  it('preserves a late server deadline after same-owner generation repair', async () => {
+    const config = savedGateway();
+    let now = 0;
+    let current = true;
+    let reply!: (value: { retryAt: number }) => void;
+    const response = new Promise<{ retryAt: number }>(resolve => { reply = resolve; });
+    const fetchModels = vi.fn(async () => response);
+    const revalidate = createModelSourceRevalidator({ fetchModels, save: async () => false,
+      now: () => now, credentialRevision: () => 0, isMutating: () => false });
+    const first = revalidate([config], 'generation-1', () => current, 'owner-A');
+    await Promise.resolve(); await Promise.resolve();
+    expect(fetchModels).toHaveBeenCalledTimes(1);
+    current = false;
+    reply({ retryAt: 900_000 });
+    await first;
+    now = 300_000;
+    await revalidate([config], 'generation-2', () => true, 'owner-A');
+    expect(fetchModels).toHaveBeenCalledTimes(1);
+    now = 900_000;
+    await revalidate([config], 'generation-2', () => true, 'owner-A');
+    expect(fetchModels).toHaveBeenCalledTimes(2);
+  });
+
+  // Late results must neither replace the new connection's deadline nor shorten
+  // a longer deadline from the same connection's newer in-flight request.
+  it.each(['same', 'endpoint', 'credential', 'owner', 'deleted'] as const)(
+    'isolates late cooldown after %s context changes', async change => {
+      const config = savedGateway();
+      let now = 0; let revision = 0; let current = true;
+      let reply!: (value: { retryAt: number }) => void;
+      const pending = new Promise<{ retryAt: number }>(resolve => { reply = resolve; });
+      const fetchModels = vi.fn().mockImplementationOnce(() => pending).mockResolvedValue({ retryAt: 1_200_000 });
+      const revalidate = createModelSourceRevalidator({ fetchModels, save: async () => false,
+        now: () => now, credentialRevision: () => revision, isMutating: () => false });
+      const first = revalidate([config], 'generation-1', () => current, 'owner-A');
+      await Promise.resolve(); await Promise.resolve();
+      current = false;
+      if (change === 'endpoint') config.runtimes.pi!.baseUrl += '/new';
+      if (change === 'credential') revision++;
+      const owner = change === 'owner' ? 'owner-B' : 'owner-A';
+      await revalidate(change === 'deleted' ? [] : [config], 'generation-2', () => true, owner);
+      reply({ retryAt: change === 'same' ? 900_000 : 1_800_000 });
+      await first;
+      now = 900_000;
+      await revalidate(change === 'deleted' ? [] : [config], 'generation-3', () => true, owner);
+      expect(fetchModels).toHaveBeenCalledTimes(change === 'deleted' ? 1 : 2);
+      now = 1_200_000;
+      await revalidate([config], 'generation-3', () => true, owner);
+      expect(fetchModels).toHaveBeenCalledTimes(change === 'deleted' ? 2 : 3);
+    },
+  );
+
   // #9882, unit: generation repair must not erase server cooldown, whereas
   // real owner/credential/endpoint changes must not inherit another connection's deadline.
   it.each(['owner', 'credential', 'endpoint', 'deadline'] as const)('preserves repaired-owner cooldown until %s changes', async change => {
@@ -122,11 +176,13 @@ describe('model source automatic revalidation', () => {
     const fetchModels = vi.fn(async () => issue());
     const save = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     const revalidate = createModelSourceRevalidator({ fetchModels, save, now: () => now, credentialRevision: () => 0, isMutating: () => false });
-    expect(await revalidate([config], 'owner', () => true)).toBe(false);
-    expect(await revalidate([config], 'owner', () => true)).toBe(false);
+    expect(await revalidate([config], 'generation-1', () => true, 'owner')).toBe(false);
+    // A same-owner repair must not turn a failed SQLite write into another
+    // full HTTP discovery before the retry deadline.
+    expect(await revalidate([config], 'generation-2', () => true, 'owner')).toBe(false);
     expect(fetchModels).toHaveBeenCalledTimes(1);
     now = 300_000;
-    expect(await revalidate([config], 'owner', () => true)).toBe(true);
+    expect(await revalidate([config], 'generation-2', () => true, 'owner')).toBe(true);
     expect(fetchModels).toHaveBeenCalledTimes(2);
   });
 
