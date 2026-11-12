@@ -10,7 +10,10 @@ import { importPickedFiles } from './pickedFiles.js';
 import { mediaTypeForLibraryPath } from './runtime/ghostFiles.js';
 import { pluginUiPromptDeclined, pluginUiPromptSuppressed, deferPluginUiPrompt, declinePluginUiPrompt } from './pluginUiPreferences.js';
 import { ghostPermissionItems, ghostHostUiNeedsApproval, declaredGhostControlPoints } from '../../shared/ghost.js';
-import { refreshPluginApps } from '../mcp-integrations/plugin-app-registry.js';
+import { refreshPluginApps, listPluginHostUi, readPluginHostUi } from '../mcp-integrations/plugin-app-registry.js';
+import { configurePluginSettings } from '../app-settings/plugins.js';
+import { notifyAppSettingsChanged } from '../app-settings/changes.js';
+import { isGhostHostUiSettingValue } from '@cindy/plugin-protocol';
 import { revokePluginAppServers, stopPluginAppInstance } from '../mcp-apps/runtime.js';
 import { nativePluginUi, publishPluginUiControl } from '../mcp-apps/nativeRuntime.js';
 import { releasePluginUiRegions } from '../mcp-apps/visibility.js';
@@ -9376,8 +9379,27 @@ export function registerGhostIpc(): void {
   const ghostKv = createGhostKvStore({
     getRootDir: () => ownerScopedUserDataPath('ghost-kv'),
     log,
+    validate: (instance, value) => (readPluginHostUi(instance)?.host.settings ?? [])
+      .every(field => !Object.hasOwn(value, field.id) || isGhostHostUiSettingValue(field, value[field.id])),
+    onWrite: instance => {
+      if (readPluginHostUi(instance)?.host.settings?.length) notifyAppSettingsChanged(`plugins.${instance}`);
+    },
   });
   ghostSetupKvStore = ghostKv;
+  configurePluginSettings({
+    entries: () => [...listPluginHostUi()].flatMap(entry => entry.host.settings?.length ? [{
+      instance: entry.config.plugin!.instance, title: entry.ghost.manifest.name, settings: entry.host.settings,
+      assertCurrent: () => {
+        entry.config.plugin!.assertCurrent();
+        if (readPluginHostUi(entry.config.plugin!.instance) !== entry) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
+      },
+    }] : []),
+    read: instance => ghostKv.read(instance),
+    write: (instance, value) => {
+      ghostKv.write(instance, value);
+      getGhostSetupChangeBus().emit(instance, { source: 'kv' });
+    },
+  });
   const ghostInstalled = (ghostId: string): boolean => findGhostForInstanceId(ghostId) !== null;
   setGhostKvStore({
     captureTarget: ghostInstallMutationTargetFor,

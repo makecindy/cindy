@@ -13264,6 +13264,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "원문 사용",
     "rateLimited": "음성 요청이 너무 많습니다. 잠시 후 다시 시도하세요.",
     "status": {
       "listening": "음성 입력 중",
@@ -19567,6 +19568,11 @@
     }
   },
   "pluginUi": {
+    "settings": "플러그인 설정",
+    "save": "저장",
+    "settingsFailed": "플러그인 설정을 불러오거나 저장하지 못했습니다. 이 페이지를 다시 열어 주세요.",
+    "invalidSetting": "표시된 값이 허용 범위 안에 있는지 확인해 주세요.",
+    "attachmentFailed": "플러그인이 '{{name}}'을(를) 처리하지 못했습니다. 원본 첨부 파일은 유지됩니다.",
     "display": "표시 방식",
     "original": "원본",
     "menu": "플러그인 보기 및 명령",

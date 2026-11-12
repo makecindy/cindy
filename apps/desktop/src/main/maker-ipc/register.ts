@@ -2,7 +2,7 @@ import { needsSubscriptionAccountHandoff } from '../subscription-accounts/runtim
 import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
 import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
-import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, type AccountFailoverDeps } from '../subscription-accounts/failover.js';
+import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch, type AccountFailoverDeps } from '../subscription-accounts/failover.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
 import { createTaskRuntimePlugins } from './runtimePlugins.js';
 import { RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
@@ -1913,7 +1913,9 @@ const usageLimitAutoResume = new UsageLimitAutoResume({
   clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
   isEligible: isUsageLimitAutoResumeEligible,
   resolveResetAt: resolveSessionUsageResetAt,
-  canSwitchAccount: (sessionId) => canSwitchSubscriptionAccount(sessionId, getSessionRowSnapshotStrict),
+  // Same-account remote Agent tasks ask their executing computer (subscription-account-pools.md 账号间自动换号).
+  canSwitchAccount: (sessionId) =>
+    canSwitchSubscriptionAccount(sessionId, getSessionRowSnapshotStrict, remoteBackgroundInvoke),
   arm: (sessionId, token, resumeAt) =>
     agentInputCoordinatorHolder?.armUsageLimitWait(sessionId, token, resumeAt) ?? false,
   isCurrent: (sessionId, token) =>
@@ -11850,7 +11852,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ? coordinator.continueAfterProviderGroupRecovery(sessionId, token, info)
         : 'superseded';
     },
-    fallback: (sessionId, signals, token) => usageLimitAutoResume.onTurnError(sessionId, signals, token),
+    // 撞限／登录失效的只是那台电脑上的一个账号：账号池里另一个账号能接时可原地换号(由执行电脑判断)。
+    readAccountSwitch: (sessionId) =>
+      readSubscriptionAccountSwitch(sessionId, getSessionRowSnapshotStrict, remoteBackgroundInvoke),
+    fallback: (sessionId, signals, token, recovery) => usageLimitAutoResume.onTurnError(sessionId, signals, token, recovery),
     // 组内电脑的报错用那台机器的本地时间：不带时区的钟点不按本机时区理解。
     readResetAt: (signals) => readTurnUsageResetAt(signals, Date.now(), { localTimeZoneTrusted: false }),
     // 任务里选过「以后自动换」的换号(provider-groups.md §6.2「任务进行中换号」)。
@@ -19319,7 +19324,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (grant.sessionId === null) {
       // Explicitly taskless: never inherit an Agent's ambient authority or focused task.
       const deps = getCindyGhostsMcpDeps(undefined, {}, grant);
-      const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal });
+      const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal,
+        ...(grant.attachments ? { attachments: grant.attachments } : {}) });
       await grant.assertCurrent();
       assertOwner();
       return result.ok ? pluginAppResult(result.result) : { isError: true,
@@ -19344,7 +19350,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { ...snapshot, permissionMode: permissionModeOrAsk(snapshot.permissionMode), isCurrent: () => !snapshot.planModeEnabled && snapshot.permissionMode !== 'plan' && snapshot.isCurrent?.() === true };
       },
     }, grant);
-    const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal });
+    const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal,
+      ...(grant.attachments ? { attachments: grant.attachments } : {}) });
     await grant.assertCurrent();
     return result.ok ? pluginAppResult(result.result) : { isError: true,
       content: [{ type: 'text', text: JSON.stringify(result) }] };

@@ -13423,6 +13423,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "Utiliser le Texte Original",
     "rateLimited": "Trop de requêtes vocales. Patientez un instant, puis réessayez.",
     "status": {
       "listening": "Saisie vocale",
@@ -19813,6 +19814,11 @@
     }
   },
   "pluginUi": {
+    "settings": "Réglages des plugins",
+    "save": "Enregistrer",
+    "settingsFailed": "Impossible de charger ou d’enregistrer les réglages du plugin. Rouvrez cette page.",
+    "invalidSetting": "Vérifiez que les valeurs signalées respectent les limites autorisées.",
+    "attachmentFailed": "Le plugin n’a pas pu traiter « {{name}} ». La pièce jointe d’origine est conservée.",
     "display": "Affichage",
     "original": "Original",
     "menu": "Vues et commandes du plugin",

@@ -13264,6 +13264,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "原文を使う",
     "rateLimited": "音声リクエストが多すぎます。しばらく待ってから再試行してください。",
     "status": {
       "listening": "音声入力中",
@@ -19567,6 +19568,11 @@
     }
   },
   "pluginUi": {
+    "settings": "プラグイン設定",
+    "save": "保存",
+    "settingsFailed": "プラグイン設定を読み込むか保存できませんでした。このページを開き直してください。",
+    "invalidSetting": "強調表示された値が許容範囲内か確認してください。",
+    "attachmentFailed": "プラグインで「{{name}}」を処理できませんでした。元の添付ファイルは保持されます。",
     "display": "表示方法",
     "original": "元の表示",
     "menu": "プラグインのビューとコマンド",

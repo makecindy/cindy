@@ -2,6 +2,7 @@ import { FirstRunGuide } from '@/features/first-run-guide/FirstRunGuide';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { PerformanceTrace, openPerformanceTrace } from '@/components/performance-trace/PerformanceTrace';
 import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
+import { usePluginUiWindowCandidates, PluginUiSlotControls } from '@/cindy-brain/PluginUiContributions';
 import { installedGhostStoragePart, resolvePluginInstanceQuery } from '../../../shared/pluginIdentity';
 import { drainPendingDeepLinks } from '@/lib/pendingDeepLinks';
 import { ChatInviteHost, reportMalformedChatInvite, requestChatInvite } from '@/features/bots/ChatInviteHost';
@@ -1696,8 +1697,11 @@ export function MainLayout() {
 
   // Session/tool-pane declarations update Shell state during navigation. Keep
   // unrelated updates from invalidating the entire routed conversation again.
+  const { settings: pluginSettings, sidebarSections: pluginSidebarSections,
+    titlebarEntries: pluginTitlebarEntries, onGhostsChanged: handleInstalledGhostsChange } = usePluginUiWindowCandidates();
   const outletContext = useMemo(() => ({
     sidebarWidth,
+    pluginSettings,
     rightSidebarCollapsed: rsbDetached || isRightSidebarCollapsed,
     onToggleRightSidebar: handleOpenRightSidebar,
     rightSidebarSide,
@@ -1705,7 +1709,7 @@ export function MainLayout() {
     setRightSidebarSessionId: declareRightSidebarSessionId,
     setRightSidebarWorkdir,
   }), [
-    sidebarWidth, rsbDetached, isRightSidebarCollapsed, handleOpenRightSidebar,
+    sidebarWidth, pluginSettings, rsbDetached, isRightSidebarCollapsed, handleOpenRightSidebar,
     rightSidebarSide, declareRightSidebarSessionId, setRightSidebarWorkdir,
   ]);
 
@@ -1751,6 +1755,8 @@ export function MainLayout() {
                 spacer 卸载、aside 摘掉 fixed 落回流内 —— 两者矩形一致,交换无跳变。 */}
             {sidebarPeek.peekState === 'pinning' && <SidebarPinSpacer width={sidebarWidth} />}
             <Sidebar
+              pluginSections={pluginSidebarSections}
+              pluginSessionId={rightSidebarSessionId}
               isCollapsed={isSidebarCollapsed}
               // peek 抽屉恒以展开态呈现(预览完整列表),rail 视觉在 peek 期强制关闭。
               isRail={sidebarPeek.isPeekVisible ? false : isRailMode}
@@ -1834,7 +1840,11 @@ export function MainLayout() {
                   // mac:远程桌面入口落在顶栏右端,紧挨窗口右上角的右栏开关(右栏展开时
                   // 仍在聊天区顶栏右端)。Windows 走下方内容区 chip 栈。
                   trailing={
-                    isMac && remoteDesktopDeviceId ? (
+                    pluginTitlebarEntries.length > 0 ? <>
+                      <PluginUiSlotControls entries={pluginTitlebarEntries} sessionId={rightSidebarSessionId} appearance="titlebar" />
+                      {isMac && remoteDesktopDeviceId && <TaskRemoteDesktopButton key={remoteDesktopDeviceId}
+                        deviceId={remoteDesktopDeviceId} className={rightSidebarAvailable ? 'mr-1' : 'mr-2'} />}
+                    </> : isMac && remoteDesktopDeviceId ? (
                       <TaskRemoteDesktopButton
                         key={remoteDesktopDeviceId}
                         deviceId={remoteDesktopDeviceId}
@@ -1950,6 +1960,7 @@ export function MainLayout() {
               不再逐像素回灌 React；设置页接管时非 chat 面板统一歇业。 */}
           <TabGroupHostProvider value={tabGroupHost}>
             <LayoutRoot
+              onInstalledGhostsChange={handleInstalledGhostsChange}
               suppressNonChatPanels={isSettingsRoute}
               sidebarExpansionReady={rightSidebarAvailable && rsbWindow.loaded && !rsbDetached}
               rightTabsCollapsed={
