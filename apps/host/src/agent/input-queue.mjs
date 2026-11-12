@@ -459,6 +459,8 @@ export function createInputQueue(deps) {
       // This endpoint clears pending inputs, not persisted history. Only the
       // history service may advance the durable conversation clear boundary.
       clearSession: id => stop(id, { keepQueue: false }),
+      /** The running turn's accepted input, as the desktop's Auto-review context reads it. */
+      acceptedInputProvenance: id => coordinator.getAcceptedInputProvenance(id),
       async disposeSession(id) {
         stateFor(id).closed = true;
         await stop(id);

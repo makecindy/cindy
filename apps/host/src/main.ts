@@ -60,6 +60,7 @@ import { refreshHostSession } from './auth/refresh.mjs';
 import { configureHostOwner, readClaudeSubscriptionState } from './agent/claude-auth.mjs';
 import { attachAgentsToMakerMemory, createHostMemoryManager, createHostMemoryMcpProviders } from './agent/memory.mjs';
 import { createHostAgentGraph } from './agent/runtime.js';
+import { createHostReviewContextResolver } from './agent/review-context.js';
 import { createHostGitSnapshot, type HostGitSnapshot } from './agent/git-snapshot.js';
 import { removeTurnChangeSetsForSession } from '../../desktop/src/main/turn-change-set/store.js';
 import { removeSessionModelInterface } from '../../desktop/src/main/maker-host/session-model-interface.js';
@@ -717,6 +718,10 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       mcpProviders: await pluginGateway.prepareMcpProviders([...createHostMemoryMcpProviders(makerMemory), ...platformTools.providers, pluginGateway.provider]),
       userDataDir: dataDir,
     });
+    // The desktop's Auto-review authorization context (review-context.ts).
+    agentGraph.autoReview.setContextResolver(createHostReviewContextResolver({
+      acceptedInput: (id: string) => inputQueue.acceptedInputProvenance(id),
+    }));
     attachAgentsToMakerMemory(makerMemory, agentGraph.instances);
     gitSnapshot = createHostGitSnapshot(agentGraph.maker);
     agentAuth = createHostAgentAuth({ maker: agentGraph.maker, readApiKey: () => gateway?.credential ?? null,
