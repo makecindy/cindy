@@ -15,8 +15,9 @@ import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claud
 import { createMakerLogger } from '../../../desktop/src/main/maker-host/logger-adapter.js';
 import { readCodexLocalAuthState } from '../../../desktop/src/main/maker-host/codex-local-auth-state.js';
 import { readHostCodexInvalidation } from './codex-invalidation.js';
+import { isAnthropicWireModel } from '../../../desktop/src/main/maker-host/claude-gateway-config.js';
 import { createPiAuthAdapter } from '../../../desktop/src/main/maker-host/pi-auth.js';
-import { subscriptionAccountKind } from '../../../desktop/src/main/maker-host/subscription-account-kind.js';
+import { CLAUDE_ACCOUNT_RETIRED_REASON, subscriptionAccountKind } from '../../../desktop/src/main/maker-host/subscription-account-kind.js';
 import { getActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.js';
 import { deriveAvailableModels, refreshCatalogDerivedModels, resolveModelContextProviderId } from '../../../desktop/src/main/maker-host/catalog-to-descriptors.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from '../../../desktop/src/main/maker-host/capability-routing.js';
@@ -152,46 +153,97 @@ export function createClaudeSubscriptionAuth(gateway: HostGateway | null | undef
 
 /** The loopback proxy facts the Claude adapter reads (claude-proxy-runtime.ts). */
 type ClaudeProxyAuthView = Pick<ReturnType<typeof createHostClaudeProxyRuntime>, 'isReady' | 'inboundSecret'>;
+/** SuperGrok connection state, read for subscription accounts (desktop subscriptionAccountState). */
+type GrokLoginView = Pick<HostProviderConfig['grok'], 'hasGrokOAuthLogin' | 'grokAccountIdentity'>;
 
 /**
- * Claude through the loopback proxy, as the desktop Claude adapter decides
- * (auth-adapters.ts getState/getAuthEnv): gateway sessions carry the gateway key;
- * an explicit non-gateway source carries only a placeholder, and the proxy routes it
- * with that source's credential. The Host's placeholder is the proxy runtime's secret.
- * Subscription accounts other than Claude's own wait for the responses bridge (row 24b).
+ * Claude through the loopback proxy, branch for branch the desktop Claude adapter
+ * (auth-adapters.ts DesktopClaudeAuthAdapter getState/getAuthEnv): gateway sessions carry
+ * the gateway key; an explicit non-gateway source carries only a placeholder, and the
+ * proxy routes it with that source's credential. The Host's placeholder is the proxy
+ * runtime's secret. Claude subscription sessions use the CLI's own login. Subscription
+ * accounts route through the responses bridge (claude-proxy-runtime.ts).
+ * Not here, by design: the desktop's safeStorage check (the Host keeps its own
+ * credential store), shared Skill projection (release row 25) and the desktop-only
+ * legacy config migration.
  */
-function createClaudeProxyAuth(gateway: HostGateway | null | undefined, native: ReturnType<typeof createClaudeSubscriptionAuth>, proxy: ClaudeProxyAuthView) {
+function createClaudeProxyAuth(gateway: HostGateway | null | undefined, native: ReturnType<typeof createClaudeSubscriptionAuth>,
+  proxy: ClaudeProxyAuthView, cli?: HostProviderConfig['claudeNative'], grok?: GrokLoginView) {
+  const gatewayKey = () => gateway?.credential || null;
+  // The desktop's claudeNativeLoginState (CLAUDE_CLI_STATUS_MAX_AGE_MS = 60 s).
+  const nativeLoginState = async (): Promise<AuthState> => {
+    const login = cli && isNativeProviderAuthBound('anthropic') ? await cli.readClaudeCliLoginStatus({ maxAgeMs: 60_000 }) : null;
+    return login?.loggedIn
+      ? { authenticated: true, identity: 'Claude.ai · OAuth', authSource: 'oauth' }
+      : { authenticated: false, errorReason: 'no_oauth' };
+  };
+  const networkEnv = async () => (cli ? cli.claudeCliNetworkEnv() : {});
+  const servesModel = (model: string | undefined) => model === undefined || isAnthropicWireModel(model);
   return bindAuthOwner({
-    async getState(opts?: AuthAdapterOptions) {
-      if (opts?.providerId === 'anthropic' || opts?.credentialMode === 'oauth-bearer') return native.getState(opts);
-      if (opts?.providerId && subscriptionAccountKind(opts.providerId)) return { authenticated: false, errorReason: 'not_connected' };
+    async getState(opts?: AuthAdapterOptions): Promise<AuthState> {
+      if (opts?.nativeSubscriptionAccount && opts.providerId === 'openai' && !proxy.isReady())
+        return { authenticated: false, errorReason: 'proxy_not_ready' };
+      if (opts?.nativeSubscriptionAccount) return opts.nativeSubscriptionAccount.readState();
+      const kind = opts?.providerId ? subscriptionAccountKind(opts.providerId) : null;
+      if (opts?.providerId && kind) {
+        if (!proxy.isReady()) return { authenticated: false, errorReason: 'proxy_not_ready' };
+        // The desktop's subscriptionAccountState: SuperGrok accounts read their own login;
+        // independently added Claude accounts are retired.
+        if (kind === 'claude') return { authenticated: false, errorReason: CLAUDE_ACCOUNT_RETIRED_REASON, authSource: 'oauth' };
+        return { authenticated: grok?.hasGrokOAuthLogin(opts.providerId) ?? false,
+          identity: grok?.grokAccountIdentity(opts.providerId), authSource: 'oauth' };
+      }
       if (opts?.credentialMode === 'gateway-key') {
-        return gateway?.credential ? { authenticated: true, authSource: 'api-key', identity: 'Cindy gateway' }
+        return gatewayKey() ? { authenticated: true, identity: 'API Key · Cindy AI', authSource: 'api-key' }
           : { authenticated: false, errorReason: 'no_key' };
       }
       if (opts?.credentialMode === 'provider-oauth') {
         return proxy.isReady() ? { authenticated: true, identity: 'Provider · Proxy', authSource: 'api-key' }
           : { authenticated: false, errorReason: 'proxy_not_ready' };
       }
-      if (!gateway?.credential) return native.getState(opts);
-      return { authenticated: true, authSource: 'api-key', identity: 'Cindy gateway' };
+      if (opts?.credentialMode === 'oauth-bearer') return nativeLoginState();
+      if (gatewayKey()) return { authenticated: true };
+      const login = await nativeLoginState();
+      if (!login.authenticated) return { authenticated: false, errorReason: 'no_key' };
+      return servesModel(opts?.model) ? login : { authenticated: true };
     },
     triggerLogin: (options?: AuthLoginOptions) => native.triggerLogin(options),
     cancelLogin: () => native.cancelLogin(),
     logout: () => native.logout(),
     async getAuthEnv(opts?: AuthAdapterOptions): Promise<Record<string, string>> {
-      if (opts?.providerId === 'anthropic' || opts?.credentialMode === 'oauth-bearer') return native.getAuthEnv(opts);
-      if (opts?.providerId && subscriptionAccountKind(opts.providerId)) return {};
-      if (opts?.credentialMode === 'provider-oauth') return { ANTHROPIC_API_KEY: proxy.inboundSecret() };
-      return gateway?.credential ? { ANTHROPIC_API_KEY: gateway.credential } : {};
+      if (opts?.nativeSubscriptionAccount) {
+        const account = opts.nativeSubscriptionAccount;
+        account.assertCurrent();
+        return { ...(await networkEnv()), ...(!account.defaultProfile ? { CLAUDE_CONFIG_DIR: account.configDir } : {}) };
+      }
+      const env: Record<string, string> = {};
+      if (opts?.providerId && subscriptionAccountKind(opts.providerId) === 'claude') {
+        // A retired independent Claude account carries no credential.
+      } else if (opts?.credentialMode === 'gateway-key') {
+        const apiKey = gatewayKey();
+        if (apiKey) env.ANTHROPIC_API_KEY = apiKey;
+      } else if (opts?.credentialMode === 'provider-oauth') {
+        env.ANTHROPIC_API_KEY = proxy.inboundSecret();
+      } else if (opts?.credentialMode === 'oauth-bearer') {
+        Object.assign(env, await networkEnv());
+      } else {
+        const apiKey = gatewayKey();
+        if (apiKey) env.ANTHROPIC_API_KEY = apiKey;
+        else if (hasClaudeNativeLogin()) {
+          if (servesModel(opts?.model)) Object.assign(env, await networkEnv());
+          else env.ANTHROPIC_API_KEY = proxy.inboundSecret();
+        }
+      }
+      return env;
     },
   });
 }
 
 /** Gateway-key lane: the key is injected as ANTHROPIC_API_KEY for the CLI spawn. */
-export function createClaudeGatewayAuth(gateway: HostGateway | null | undefined, resolveRoute: HostProviderRouteResolver = missingRouteResolver, cli?: HostProviderConfig['claudeNative'], proxy?: ClaudeProxyAuthView | null) {
+export function createClaudeGatewayAuth(gateway: HostGateway | null | undefined, resolveRoute: HostProviderRouteResolver = missingRouteResolver, cli?: HostProviderConfig['claudeNative'], proxy?: ClaudeProxyAuthView | null,
+  grok?: GrokLoginView) {
   const native = createClaudeSubscriptionAuth(null, resolveRoute, cli);
-  if (proxy) return createClaudeProxyAuth(gateway, native, proxy);
+  if (proxy) return createClaudeProxyAuth(gateway, native, proxy, cli, grok);
   return bindAuthOwner({
     async getState(opts?: AuthAdapterOptions) {
       if (opts?.providerId === 'anthropic' || opts?.credentialMode === 'oauth-bearer') return native.getState(opts);
@@ -376,7 +428,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   // Pi resolves against the full active catalog with the plain route resolver, as on the desktop.
   const piModelResolvers = createPiModelResolvers({ getCatalog: getActiveCatalog, resolveContextProviderId: resolveModelContextProviderId });
   const agent = options.binaryPath ? new ClaudeCodeAgent({
-    auth: createClaudeGatewayAuth(options.gateway, options.resolveProviderRoute, config.claudeNative, options.claudeProxy),
+    auth: createClaudeGatewayAuth(options.gateway, options.resolveProviderRoute, config.claudeNative, options.claudeProxy, config.grok),
     runtimeConfig: runtimeConfigs.buildClaudeRuntimeConfig(engineEndpoint),
     binaryPath: options.binaryPath,
     logger: LOGGER,
