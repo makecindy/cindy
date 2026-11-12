@@ -452,6 +452,33 @@ describe('the Host reconciles with the system Codex login as the installed deskt
     expect(results[1]).toEqual(results[0]);
   });
 
+  // Without the spawn's credential generation nothing proves which shared file failed. The
+  // engine reports with a context (recorded as unknown); the subscription bridge without one.
+  for (const source of ['the engine, without a credential generation', 'the subscription bridge, without a context'] as const) {
+    it(`invalidating a shared system login reported by ${source}`, async () => {
+      const engine = source.startsWith('the engine');
+      const results: unknown[] = [];
+      for (const side of ['desktop', 'host'] as const) {
+        const f = fixture({ local: 'symlink', binding: 'shared' });
+        if (side === 'desktop') await new DesktopCodexAuthAdapter().invalidate('token_revoked', engine ? { providerId: 'openai' } : undefined);
+        else await hostInvalidation.invalidateHostCodexLogin({ codexHome: f.codexHome, systemAuthPath: f.systemAuth, reason: 'token_revoked',
+          ...(engine ? { hostBound: true, providerId: 'openai' } : {}) });
+        const marker = readInvalidatedSystemCodexAuthMarker(f.codexHome);
+        const shape = marker && { scope: marker.credentialScope ?? null, recoveryOwner: Boolean(marker.recoveryOwnerId), keys: Object.keys(marker).sort(),
+          system: [marker.dev, marker.ino].map(value => (value === 0 ? 0 : 'set')) };
+        const read = async () => outcome(f, side === 'desktop'
+          ? await new DesktopCodexAuthAdapter().getState({ credentialMode: 'oauth-bearer' })
+          : await createHostAuth(f.codexHome, f.systemAuth).getState({ credentialMode: 'oauth-bearer' }));
+        const after = await read();
+        f.systemRelogin();
+        const relogged = await read();
+        results.push({ shape, after, relogged: { ...relogged, systemUntouched: undefined } });
+      }
+      expect(results[1]).toEqual(results[0]);
+      expect((results[0] as { shape: { scope: string } }).shape.scope).toBe(engine ? 'unknown' : 'system-shared');
+    });
+  }
+
   // relinkSharedCodexAuth's failure results. On POSIX the swap is a single rename that never
   // removes the target first, so "recovered" and "lost" (myAuth gone after a failed swap) only
   // occur on Windows; the Host is not released on Windows in M1.

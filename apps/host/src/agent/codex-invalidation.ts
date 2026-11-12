@@ -66,6 +66,8 @@ export async function invalidateHostCodexLogin(input: {
   codexHome: string;
   /** The system login this runtime reconciles with (codex-system-login.ts); null when none. */
   systemAuthPath?: string | null;
+  /** Reported by the engine with its context, as the desktop's invalidate(reason, context). */
+  hostBound?: boolean;
   reason: string;
   /** Independent accounts are invalidated through the account store, never here. */
   providerId?: string;
@@ -106,12 +108,17 @@ export async function invalidateHostCodexLogin(input: {
   // As the desktop (auth-adapters.ts invalidate): the scope the credential has, and for a
   // shared system login the owner a renewed system login is restored to.
   const detectedScope = detectHostCodexCredentialScope(input.codexHome, input.systemAuthPath ?? null);
+  // As the desktop: an engine-reported invalidation of a shared system login without the spawn's
+  // credential generation cannot prove which file failed (the user may have logged in again in
+  // between), so it is recorded as unknown, without the invalidated fingerprint.
+  const ambiguousShared = input.hostBound === true && detectedScope === 'system-shared' && !input.credentialGeneration;
+  const markerScope: CredentialScope = ambiguousShared ? 'unknown' : detectedScope;
   const activeOwnerId = getActiveAppSession().dataOwnerId;
-  const recoveryOwnerId = detectedScope === 'system-shared' && activeOwnerId && isNativeProviderAuthBound('openai') ? activeOwnerId : undefined;
+  const recoveryOwnerId = markerScope === 'system-shared' && activeOwnerId && isNativeProviderAuthBound('openai') ? activeOwnerId : undefined;
   const committed = writeInvalidatedSystemCodexAuthMarker(input.codexHome, markerSystemPath(input.codexHome, input.systemAuthPath),
-    input.reason, authPath, detectedScope, recoveryOwnerId,
-    { dev: Number(current.dev), ino: Number(current.ino), size: current.size, mtimeMs: current.mtimeMs, sha256: current.sha256 });
-  let credentialScope: CredentialScope = detectedScope;
+    input.reason, authPath, markerScope, recoveryOwnerId, ambiguousShared ? undefined
+      : { dev: Number(current.dev), ino: Number(current.ino), size: current.size, mtimeMs: current.mtimeMs, sha256: current.sha256 });
+  let credentialScope: CredentialScope = markerScope;
   let fallbackCommitted = false;
   if (!committed) {
     // As on the desktop: the provider revocation becomes the coarser cross-restart boundary

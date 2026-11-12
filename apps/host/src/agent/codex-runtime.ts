@@ -148,6 +148,8 @@ export function createHostCodexRuntime(options: {
   const invalidateNative = async (reason: string, context?: { providerId?: string; credentialGeneration?: string | null; credentialAttribution?: 'unproven'; failedAccessToken?: string }) => {
     check();
     await invalidateHostCodexLogin({ codexHome: path.join(options.profileDir, 'codex-home'), systemAuthPath, reason, ...context,
+      // The engine reports with a context; the subscription bridge reports without one.
+      hostBound: context !== undefined,
       loginInProgress: () => options.config.codexAccounts.isCodexAccountLoginActive('openai'),
       // The desktop's invalidation runs logout(), whose cleanup calls onLogoutSuccess.
       disposeLocalHost: () => authBoundary.afterLogout(),
