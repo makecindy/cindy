@@ -13,6 +13,7 @@ public class XdtMobileRealtimeAudioModule: Module {
   private var engineStartedAt = 0.0
   private var isCapturing = false
   private var ownsAudioSession = false
+  private var previousRecordingHaptics: Bool?
   private var targetSampleRate = 16_000.0
   private var interruptionObserver: NSObjectProtocol?
   private var routeChangeObserver: NSObjectProtocol?
@@ -179,10 +180,13 @@ public class XdtMobileRealtimeAudioModule: Module {
     guard ownsAudioSession else { return }
     ownsAudioSession = false
     let session = AVAudioSession.sharedInstance()
+    let previousHaptics = previousRecordingHaptics
+    previousRecordingHaptics = nil
     // iOS may add mixWithOthers implicitly when duckOthers is requested.
     guard session.category == .playAndRecord, session.mode == .measurement,
           session.categoryOptions.subtracting(.mixWithOthers) == [.duckOthers, .defaultToSpeaker] else { return }
     try? session.setActive(false, options: .notifyOthersOnDeactivation)
+    if let previousHaptics { try? session.setAllowHapticsAndSystemSoundsDuringRecording(previousHaptics) }
   }
 
   // Must run on sessionStateQueue.
@@ -249,7 +253,17 @@ public class XdtMobileRealtimeAudioModule: Module {
       try session.setCategory(.playAndRecord, mode: .measurement, options: [.duckOthers, .defaultToSpeaker])
       // A preference, not a promise: report the actual period after activation.
       try? session.setPreferredIOBufferDuration(0.010)
-      try session.setActive(true)
+      let previousHaptics = session.allowHapticsAndSystemSoundsDuringRecording
+      // Voice prewarm/capture otherwise suppresses ALL UI haptics, including send.
+      // This changes neither category nor activation during capture; never play a start sound.
+      try? session.setAllowHapticsAndSystemSoundsDuringRecording(true)
+      do {
+        try session.setActive(true)
+      } catch {
+        try? session.setAllowHapticsAndSystemSoundsDuringRecording(previousHaptics)
+        throw error
+      }
+      previousRecordingHaptics = previousHaptics
       ownsAudioSession = true
     }
     sessionActivatedAt = Date().timeIntervalSince1970 * 1000

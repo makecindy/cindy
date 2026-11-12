@@ -1,3 +1,4 @@
+import { playHaptic } from '@/platform/haptics';
 import { parseSourceSessionTarget } from '@cindy/maker-shared/message-source';
 import { TaskArchiveUndoSlot } from '@/session/TaskArchiveUndoNotice';
 import { composerRowChrome } from '@/session/composerGeometry';
@@ -5759,6 +5760,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           onStateChanged: (next) => {
             // 旧 controller 的取消可晚于新启动完成,只允许本次启动交接 UI 状态。
             if (voiceStartupSeqRef.current !== startupSeq) return;
+            if (next === 'listening') playHaptic('commit');
             setVoiceState(next);
           },
           onError: (message) => {
@@ -7870,7 +7872,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           disabled={composerSendDisabled}
           hitSlop={COMPOSER_CONTROL_HIT_SLOP}
           onLayout={measureSendButtonTarget}
-          onPress={send}
+          onPress={() => { playHaptic('commit'); void send(); }}
           pressInFallback
           pressedStyle={styles.sendButtonPressed}
           style={[
