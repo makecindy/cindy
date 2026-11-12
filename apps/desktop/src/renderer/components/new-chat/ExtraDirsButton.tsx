@@ -60,7 +60,10 @@ export function ExtraDirsButton({
       panelAriaLabel={t('extraDirs.menuAria')}
       endBg="var(--cmd-palette-bg)"
       endBorderColor="var(--cmd-palette-border)"
-      wrapperClassName="shrink-0"
+      wrapperClassName={cn(
+        'max-w-full shrink',
+        count > 0 && hasReferenceDirs ? 'min-w-[36px]' : 'min-w-[30px]',
+      )}
       autoFocusTarget={autoFocusTarget}
       trigger={
         <Tip
@@ -85,7 +88,7 @@ export function ExtraDirsButton({
               open &&
                 'border-[var(--border-default)] bg-[var(--composer-pill-bg,#FCFCFC)] dark:bg-[var(--composer-pill-bg,#393838)]',
               count > 0 && hasReferenceDirs
-                ? 'min-w-max justify-center gap-1 px-2.5'
+                ? 'min-w-[36px] max-w-full shrink justify-center gap-1 overflow-hidden px-2.5'
                 : 'w-[30px] justify-center p-0',
             )}
             aria-label={t('extraDirs.menuAria')}
@@ -94,7 +97,7 @@ export function ExtraDirsButton({
             {count > 0 && hasReferenceDirs && (
               <span
                 className={cn(
-                  'font-normal tabular-nums',
+                  'min-w-0 truncate font-normal tabular-nums',
                   dense ? 'text-12' : 'text-13',
                 )}
               >

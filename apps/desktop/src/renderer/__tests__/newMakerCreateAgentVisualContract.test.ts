@@ -200,7 +200,7 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     // create-agent-focus-ring 专供键盘 focus-visible ring(PR#174 review 2026-07-20)。
     expect(chatInputSource).toContain('focus-within:border-[var(--chat-input-border-focus)]');
     expect(chatInputSource).not.toContain('focus-within:border-[var(--create-agent-focus-ring)]');
-    expect(chatInputSource).toContain("'min-w-0 flex-nowrap justify-between gap-2 overflow-hidden'");
+    expect(chatInputSource).toContain("'min-w-0 flex-nowrap gap-2 overflow-hidden'");
     const permissionSelectorIndex = chatInputSource.indexOf('<PermissionSelector');
     const middleToolbarSlotIndex = chatInputSource.indexOf('{middleToolbarSlot}');
     const modelSelectorIndex = chatInputSource.indexOf('<ModelSelector');
@@ -240,8 +240,9 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(modelSelectorSource).not.toContain('border-[var(--create-agent-control-border)]');
     expect(modelSelectorSource).toContain('border border-transparent bg-transparent');
     expect(modelSelectorSource).toContain("'h-[30px] max-w-full shrink overflow-hidden px-2.5'");
-    expect(modelSelectorSource).toContain("? 'w-[64px] min-w-[64px]'");
-    expect(modelSelectorSource).toContain("? 'w-[148px] min-w-[72px]'");
+    expect(modelSelectorSource).not.toContain('w-[64px]');
+    expect(modelSelectorSource).not.toContain('w-[148px]');
+    expect(modelSelectorSource).not.toContain('max-w-[108px]');
     expect(modelSelectorSource).not.toContain('w-[206px] min-w-[160px] max-w-[206px] shrink');
     expect(modelSelectorSource).not.toContain('max-w-[180px] truncate');
 
@@ -270,12 +271,10 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(colorsSource).toContain("'create-agent-control-icon'");
     expect(colorsSource).toContain("light: '#3C3F43'");
 
-    expect(chatInputSource).toContain("'min-w-0 flex-nowrap justify-between gap-2 overflow-hidden'");
-    expect(chatInputSource).toContain("'min-w-0 flex-nowrap justify-between gap-1 overflow-hidden'");
-    expect(chatInputSource).toContain("'flex min-w-0 shrink items-center gap-2'");
-    expect(chatInputSource).toContain("'flex min-w-0 shrink items-center justify-end gap-2'");
-    expect(chatInputSource).toContain("'flex min-w-0 shrink items-center gap-1'");
-    expect(chatInputSource).toContain("'flex min-w-0 shrink items-center justify-end gap-1'");
+    expect(chatInputSource).toContain("'min-w-0 flex-nowrap gap-2 overflow-hidden'");
+    expect(chatInputSource).toContain("'min-w-0 flex-nowrap gap-1 overflow-hidden'");
+    expect(chatInputSource).toContain('<div className="min-w-0 flex-1" aria-hidden="true" />');
+    expect(chatInputSource).toContain("allowToolbarWrap ? 'flex-[1_1_72px]' : 'shrink'");
     expect(chatInputSource).not.toContain("'contents'");
     expect(chatInputSource).not.toContain("grid-cols-[minmax(0,max-content)_minmax(0,1fr)]");
     expect(chatInputSource).not.toContain("isCreateAgentVariant ? 'flex-wrap gap-2' : 'min-w-0 gap-1'");

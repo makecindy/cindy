@@ -20,7 +20,6 @@ describe('composer narrow toolbar contract', () => {
       'isCreateAgentVariant &&\n    (narrowToolbar || (toolbarWidth != null && toolbarWidth < 600))',
     );
     expect(chatInputSource).toContain('compactToolbar={useNarrowToolbar}');
-    expect(chatInputSource).toContain('ultraCompactToolbar={useUltraCompactToolbar}');
     expect(chatInputSource).toContain('iconOnly={useUltraCompactToolbar}');
   });
 
@@ -29,8 +28,11 @@ describe('composer narrow toolbar contract', () => {
     expect(modelSelectorSource).toContain(
       'const isCompactToolbar = compactToolbar && !isFieldTrigger;',
     );
-    expect(modelSelectorSource).toContain("'w-[148px] min-w-[72px]'");
-    expect(modelSelectorSource).toContain("'w-[64px] min-w-[64px]'");
+    expect(modelSelectorSource).not.toContain('w-[148px]');
+    expect(modelSelectorSource).not.toContain('max-w-[108px]');
+    expect(chatInputSource).toContain('<div className="min-w-0 flex-1" aria-hidden="true" />');
+    expect(chatInputSource).toContain("allowToolbarWrap ? 'flex-[1_1_72px]' : 'shrink'");
+    expect(modelSelectorSource).not.toContain('ultraCompactToolbar');
     expect(modelSelectorSource).toContain('effortLabel && !isCompactToolbar');
     expect(permissionSelectorSource).toContain(
       'const isIconOnly = iconOnly && !isFieldTrigger;',
@@ -38,5 +40,6 @@ describe('composer narrow toolbar contract', () => {
     expect(permissionSelectorSource).toContain(
       "'h-[30px] w-[34px] min-w-[34px] justify-center px-0'",
     );
+    expect(permissionSelectorSource).toContain("isIconOnly ? 'min-w-[34px]' : 'min-w-[72px]'");
   });
 });

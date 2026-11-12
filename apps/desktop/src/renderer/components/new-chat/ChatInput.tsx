@@ -6830,6 +6830,10 @@ export function ChatInput({
   const useCompactMiddleToolbar =
     isCreateAgentVariant && (toolbarWidth == null ? narrowToolbar : toolbarWidth < 600);
   const useUltraCompactToolbar = useNarrowToolbar && (toolbarWidth == null || toolbarWidth < 420);
+  // 分屏输入区可能窄至约 260px；空间不足时允许工具行换行，保证固定操作可见。
+  const useTightToolbar = toolbarWidth != null && toolbarWidth < 320;
+  // 录音时语音按钮会展开显示计时，窄工具行也需要可换行的余地。
+  const allowToolbarWrap = useTightToolbar || (useNarrowToolbar && voiceInput.isBusy);
 
   return (
     <div className="relative flex w-full flex-col items-center gap-4" data-chat-input-root>
@@ -7259,274 +7263,256 @@ export function ChatInput({
                 // (同 sortable.css 侧栏行修过的 selection bleed),容器级禁选才挡得住。
                 'mt-[2px] flex select-none items-center',
                 useNarrowToolbar
-                  ? 'min-w-0 flex-nowrap justify-between gap-2 overflow-hidden'
+                  ? allowToolbarWrap
+                    ? useTightToolbar
+                      ? 'min-w-0 flex-wrap gap-x-0 gap-y-1'
+                      : 'min-w-0 flex-wrap gap-1'
+                    : 'min-w-0 flex-nowrap gap-1 overflow-hidden'
                   : effectiveCompactToolbar
                     ? isCreateAgentVariant
-                      ? 'min-w-0 flex-nowrap justify-between gap-2 overflow-hidden'
-                      : 'min-w-0 flex-nowrap justify-between gap-1 overflow-hidden'
-                    : 'justify-between',
+                      ? 'min-w-0 flex-nowrap gap-2 overflow-hidden'
+                      : 'min-w-0 flex-nowrap gap-1 overflow-hidden'
+                    : 'min-w-0 gap-2',
               )}
             >
-              <div
-                className={cn(
-                  useNarrowToolbar
-                    ? 'flex min-w-0 shrink-0 items-center gap-1'
-                    : effectiveCompactToolbar
-                      ? isCreateAgentVariant
-                        ? 'flex min-w-0 shrink items-center gap-2'
-                        : 'flex min-w-0 shrink items-center gap-1'
-                      : 'flex items-center gap-2',
-                  // create-agent 按 Figma 使用 hug-content pills;默认会话页仍保留左侧优先压缩。
-                )}
-              >
-                {localAttachmentPickerEnabled && (
-                  <input
-                    ref={suggestionFileInputRef}
-                    type="file"
-                    multiple
-                    disabled={composerMutationLocked}
-                    className="hidden"
-                    onChange={(event) => {
-                      const files = Array.from(event.currentTarget.files ?? []);
-                      event.currentTarget.value = '';
-                      if (files.length > 0) void addFiles(files);
-                    }}
-                  />
-                )}
-                {/* 「+」只负责合成打开统一建议面板；内容与输入 @ 完全共用。 */}
-                <ExtraDirsButton
-                  extraDirsCount={(extraDirs ?? []).length}
-                  hasReferenceDirs={!settingsLocked && onExtraDirsChange !== undefined}
-                  open={syntheticAtOpen}
-                  onOpenChange={handleComposerSuggestionOpenChange}
-                  autoFocusTarget={composerSuggestionFocusTarget}
-                  panel={
-                    <AtMentionPanel
-                      embedded
-                      query={atQuery}
-                      state={atState}
-                      entries={filteredAt}
-                      focusedIndex={atFocus}
-                      onFocusedIndexChange={setAtFocus}
-                      onSelect={handleComposerSuggestionSelect}
-                      onClose={closeAtPanel}
-                      onRetry={() => runAtScan(atQuery)}
-                      referenceDirs={
-                        !settingsLocked && onExtraDirsChange
-                          ? {
-                              dirs: extraDirs ?? [],
-                              onRemove: (path) => {
-                                void onExtraDirsChange(
-                                  (extraDirs ?? []).filter((item) => item !== path),
-                                );
-                              },
-                            }
-                          : null
-                      }
-                      maxHeight={paletteMaxHeight}
-                    />
-                  }
+              {localAttachmentPickerEnabled && (
+                <input
+                  ref={suggestionFileInputRef}
+                  type="file"
+                  multiple
                   disabled={composerMutationLocked}
-                  dense={effectiveDenseToolbar}
-                  visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
+                  className="hidden"
+                  onChange={(event) => {
+                    const files = Array.from(event.currentTarget.files ?? []);
+                    event.currentTarget.value = '';
+                    if (files.length > 0) void addFiles(files);
+                  }}
                 />
-                <PermissionSelector
-                  permissionMode={activePermissionMode}
-                  onPermissionModeChange={handlePermissionModeChange}
+              )}
+              {/* 「+」只负责合成打开统一建议面板；内容与输入 @ 完全共用。 */}
+              <ExtraDirsButton
+                extraDirsCount={(extraDirs ?? []).length}
+                hasReferenceDirs={!settingsLocked && onExtraDirsChange !== undefined}
+                open={syntheticAtOpen}
+                onOpenChange={handleComposerSuggestionOpenChange}
+                autoFocusTarget={composerSuggestionFocusTarget}
+                panel={
+                  <AtMentionPanel
+                    embedded
+                    query={atQuery}
+                    state={atState}
+                    entries={filteredAt}
+                    focusedIndex={atFocus}
+                    onFocusedIndexChange={setAtFocus}
+                    onSelect={handleComposerSuggestionSelect}
+                    onClose={closeAtPanel}
+                    onRetry={() => runAtScan(atQuery)}
+                    referenceDirs={
+                      !settingsLocked && onExtraDirsChange
+                        ? {
+                            dirs: extraDirs ?? [],
+                            onRemove: (path) => {
+                              void onExtraDirsChange(
+                                (extraDirs ?? []).filter((item) => item !== path),
+                              );
+                            },
+                          }
+                        : null
+                    }
+                    maxHeight={paletteMaxHeight}
+                  />
+                }
+                disabled={composerMutationLocked}
+                dense={effectiveDenseToolbar}
+                visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
+              />
+              <PermissionSelector
+                permissionMode={activePermissionMode}
+                onPermissionModeChange={handlePermissionModeChange}
+                vendorKey={vendorKey}
+                deviceId={deviceLinkDeviceId ?? undefined}
+                disabled={composerEditorLocked || settingsLocked}
+                dense={effectiveDenseToolbar}
+                iconOnly={useUltraCompactToolbar}
+                visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
+              />
+              {useNarrowToolbar && !useCompactMiddleToolbar && <>{middleToolbarSlot}</>}
+              {/* 空位先收缩，随后权限和模型各自分配剩余空间；固定动作不参与收缩。 */}
+              <div className="min-w-0 flex-1" aria-hidden="true" />
+              {(!useNarrowToolbar || useCompactMiddleToolbar) &&
+                (useCompactMiddleToolbar ? (
+                  (compactMiddleToolbarSlot ?? <>{middleToolbarSlot}</>)
+                ) : (
+                  <>{middleToolbarSlot}</>
+                ))}
+              <div
+                className={cn('min-w-[72px]', allowToolbarWrap ? 'flex-[1_1_72px]' : 'shrink')}
+              >
+                <ModelSelector
+                  modelId={activeModel}
+                  effort={activeEffort}
+                  onModelChange={handleModelChange}
+                  onEffortChange={handleEffortChange}
+                  // 意图期显示目标引擎下解析出的 fast(apply 时才落库),无意图走真实态。
+                  fastMode={agentSwitchIntent?.fastMode ?? fastMode}
+                  onFastModeChange={handleFastModeChange}
+                  modelMemory={modelMemory}
                   vendorKey={vendorKey}
+                  // 稳态只接受父层已加载的 session/runtime 身份；intent 存在时则明确标成
+                  // “下条消息”的目标。这样冷启动不猜 Claude Code，切换失败保留 intent
+                  // 供重试时也不会长期隐藏身份或把目标冒充为当前 Agent。
+                  agentIdentity={
+                    sessionId
+                      ? resolveModelSelectorAgentIdentity(
+                          runtimeAgentKind,
+                          agentSwitchIntent?.target,
+                        )
+                      : undefined
+                  }
+                  // session-agent-switch:已建会话提供显式两步引擎切换(列表顶部
+                  // Claude/Codex 分段,先选 Agent 再选模型)。device-link 远程会话同样
+                  // 支持(隧道到被控端执行,与手机端同一套 channel),入口按被控端能力位
+                  // 门控。草稿(无 sessionId)与 SSH 远程会话仍不传。
+                  agentSwitch={
+                    sessionId && vendorKey && !remoteHostId && sessionAgentSwitchSupported
+                      ? {
+                          currentVendor: vendorKey,
+                          confirmBrowseSwitch: confirmAgentBrowseSwitch,
+                          onSwitch: performAgentSwitch,
+                        }
+                      : undefined
+                  }
                   deviceId={deviceLinkDeviceId ?? undefined}
-                  disabled={composerEditorLocked || settingsLocked}
+                  // SSH 远程会话隐藏订阅直连模型(chatgpt/ / xai/):bridge 只挂在本地 compat-proxy,
+                  // 远程模式走 remoteEndpoint 不经翻译,选了必失败。
+                  excludeSubscriptionDirect={!!remoteHostId}
+                  // 同理隐藏 openai-chat 桥接的 Codex 供应商(DeepSeek / Kimi / GLM 等):
+                  // Responses→Chat 桥只挂在本地 codex-proxy,SSH 远程走 daemon 不经它。
+                  excludeChatBridgedCodex={!!remoteHostId}
                   dense={effectiveDenseToolbar}
-                  iconOnly={useUltraCompactToolbar}
+                  // 意图期显示用户在浏览态选中的来源(null = flat 退化行,跟随默认路由)。
+                  currentProviderId={activeProviderId}
+                  sourceDisconnected={selectedSourceDisconnected}
+                  // 断开来源回落到默认来源后,面板会高亮同模型的回落行;点击该行必须重新
+                  // 发出来源选择,把显示中的默认来源钉回会话的显式来源。
+                  reselectEmitsChange={selectedSourceDisconnected}
+                  // 已建会话按实际路由口径解析当前来源(含停用拷贝,跟真实扣费路由);
+                  // 草稿是新路由选择,保持准入口径(PR #744 review 第十轮)。
+                  actualRoute={!!sessionId}
+                  onProviderChange={handleProviderChange}
+                  onNavigateToProviders={handleNavigateToProviders}
+                  switching={remoteSwitchInFlight}
+                  disabled={
+                    disabled || settingsLocked || agentSendDispatchInFlight || agentSwitchInFlight
+                  }
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
+                  compactToolbar={useNarrowToolbar}
+                  composerWidth={toolbarWidth}
+                  // composer 工具条(含新建对话框 create-agent)统一走脱身上浮 morph;
+                  // settings/CreateWorker 不传该 prop → Radix 回退,不 morph。
+                  useMorphPopover
                 />
-                {useNarrowToolbar && !useCompactMiddleToolbar && <>{middleToolbarSlot}</>}
               </div>
               <div
                 className={cn(
                   useNarrowToolbar
-                    ? 'flex min-w-0 shrink items-center justify-end gap-1'
-                    : effectiveCompactToolbar
-                      ? isCreateAgentVariant
-                        ? 'flex min-w-0 shrink items-center justify-end gap-2'
-                        : 'flex min-w-0 shrink items-center justify-end gap-1'
-                      : 'flex items-center gap-2',
-                  // compact 模式下所有输入框工具行保持单行;权限 / 模型 pill 内部截断承压,
-                  // vendor tab 与圆形操作按钮保持固定宽,避免控件重叠或掉到第二行。
+                    ? 'flex shrink-0 items-center gap-1'
+                    : 'flex shrink-0 items-center gap-2',
+                  allowToolbarWrap && 'ml-auto',
                 )}
               >
-                {(!useNarrowToolbar || useCompactMiddleToolbar) &&
-                  (useCompactMiddleToolbar ? (
-                    (compactMiddleToolbarSlot ?? <>{middleToolbarSlot}</>)
-                  ) : (
-                    <>{middleToolbarSlot}</>
-                  ))}
-                <div className={useNarrowToolbar ? 'min-w-0 shrink' : undefined}>
-                  <ModelSelector
-                    modelId={activeModel}
-                    effort={activeEffort}
-                    onModelChange={handleModelChange}
-                    onEffortChange={handleEffortChange}
-                    // 意图期显示目标引擎下解析出的 fast(apply 时才落库),无意图走真实态。
-                    fastMode={agentSwitchIntent?.fastMode ?? fastMode}
-                    onFastModeChange={handleFastModeChange}
-                    modelMemory={modelMemory}
-                    vendorKey={vendorKey}
-                    // 稳态只接受父层已加载的 session/runtime 身份；intent 存在时则明确标成
-                    // “下条消息”的目标。这样冷启动不猜 Claude Code，切换失败保留 intent
-                    // 供重试时也不会长期隐藏身份或把目标冒充为当前 Agent。
-                    agentIdentity={
-                      sessionId
-                        ? resolveModelSelectorAgentIdentity(
-                            runtimeAgentKind,
-                            agentSwitchIntent?.target,
-                          )
-                        : undefined
-                    }
-                    // session-agent-switch:已建会话提供显式两步引擎切换(列表顶部
-                    // Claude/Codex 分段,先选 Agent 再选模型)。device-link 远程会话同样
-                    // 支持(隧道到被控端执行,与手机端同一套 channel),入口按被控端能力位
-                    // 门控。草稿(无 sessionId)与 SSH 远程会话仍不传。
-                    agentSwitch={
-                      sessionId && vendorKey && !remoteHostId && sessionAgentSwitchSupported
-                        ? {
-                            currentVendor: vendorKey,
-                            confirmBrowseSwitch: confirmAgentBrowseSwitch,
-                            onSwitch: performAgentSwitch,
-                          }
-                        : undefined
-                    }
-                    deviceId={deviceLinkDeviceId ?? undefined}
-                    // SSH 远程会话隐藏订阅直连模型(chatgpt/ / xai/):bridge 只挂在本地 compat-proxy,
-                    // 远程模式走 remoteEndpoint 不经翻译,选了必失败。
-                    excludeSubscriptionDirect={!!remoteHostId}
-                    // 同理隐藏 openai-chat 桥接的 Codex 供应商(DeepSeek / Kimi / GLM 等):
-                    // Responses→Chat 桥只挂在本地 codex-proxy,SSH 远程走 daemon 不经它。
-                    excludeChatBridgedCodex={!!remoteHostId}
-                    dense={effectiveDenseToolbar}
-                    // 意图期显示用户在浏览态选中的来源(null = flat 退化行,跟随默认路由)。
-                    currentProviderId={activeProviderId}
-                    sourceDisconnected={selectedSourceDisconnected}
-                    // 断开来源回落到默认来源后,面板会高亮同模型的回落行;点击该行必须重新
-                    // 发出来源选择,把显示中的默认来源钉回会话的显式来源。
-                    reselectEmitsChange={selectedSourceDisconnected}
-                    // 已建会话按实际路由口径解析当前来源(含停用拷贝,跟真实扣费路由);
-                    // 草稿是新路由选择,保持准入口径(PR #744 review 第十轮)。
-                    actualRoute={!!sessionId}
-                    onProviderChange={handleProviderChange}
-                    onNavigateToProviders={handleNavigateToProviders}
-                    switching={remoteSwitchInFlight}
-                    disabled={
-                      disabled || settingsLocked || agentSendDispatchInFlight || agentSwitchInFlight
-                    }
+                {/* 次槽 Stop 必须在语音按钮左边 —— 见 showSecondaryStop 定义处的
+               双槽语义与"语音按钮位置守恒"说明, 不要挪到语音与 Send 之间。 */}
+                {showSecondaryStop && (
+                  <SendButton
+                    disabled={false}
+                    onClick={handleStop}
+                    isStreaming
                     visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
-                    compactToolbar={useNarrowToolbar}
-                    ultraCompactToolbar={useUltraCompactToolbar}
-                    // composer 工具条(含新建对话框 create-agent)统一走脱身上浮 morph;
-                    // settings/CreateWorker 不传该 prop → Radix 回退,不 morph。
-                    useMorphPopover
                   />
-                </div>
-                <div
-                  className={
-                    useNarrowToolbar
-                      ? 'flex shrink-0 items-center gap-1'
-                      : 'flex items-center gap-2'
-                  }
+                )}
+                <VoiceInputButton
+                  state={voiceInput.state}
+                  // The surrounding controls stay locked during voice input, but
+                  // this control must remain enabled so the recording can stop.
+                  disabled={composerEditorLocked || !editor}
+                  shortcutLabel={voiceInputShortcutLabel}
+                  onStart={handleVoiceInputStart}
+                  onStop={handleVoiceInputPlainStop}
+                  onStopAndSend={handleClickSend}
+                  sendTargetRef={sendButtonRef}
+                  canReleaseToSend={canReleaseVoiceToSend}
+                  releaseToSendActive={voiceReleaseToSendActive}
+                  onReleaseToSendChange={setVoiceReleaseToSendActive}
+                  visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
+                  className={isCreateAgentVariant && !useNarrowToolbar ? 'ml-[7px]' : undefined}
+                />
+                {/* mousedown 吃掉默认行为:否则点发送会把焦点从 contenteditable
+                    挪到 button 上,发完光标就没了(接着打字要先点回输入框),
+                    推荐提示词的 Tab 也会因为编辑器失焦而落到原生焦点导航上。
+                    只压默认的「点击聚焦」,click 照常触发,键盘 Tab 聚焦不受影响。 */}
+                <span
+                  ref={sendButtonRef}
+                  className="inline-flex rounded-full"
+                  onMouseDown={(event) => {
+                    // 只在编辑器已聚焦时压默认聚焦:点发送会先把焦点从
+                    // contenteditable 挪到 button 上,发完光标就没了;
+                    // 编辑器未聚焦时保留按钮正常聚焦行为(可访问性)。
+                    if (editor?.isFocused) event.preventDefault();
+                  }}
                 >
-                  {/* 次槽 Stop 必须在语音按钮左边 —— 见 showSecondaryStop 定义处的
-                 双槽语义与"语音按钮位置守恒"说明, 不要挪到语音与 Send 之间。 */}
-                  {showSecondaryStop && (
+                  {mainSlotIsStop ? (
                     <SendButton
                       disabled={false}
                       onClick={handleStop}
                       isStreaming
                       visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                     />
+                  ) : (
+                    <Tip
+                      text={
+                        voiceReleaseToSendActive
+                          ? t('newChat.chatInput.voiceInput.releaseToSend')
+                          : voiceInput.isListening && !sendButtonDisabled
+                            ? `${t('newChat.chatInput.voiceInput.finishAndSend')} · ${composerSendShortcutLabel}`
+                            : showStopButton
+                              ? composerSendShortcutPreference === 'modifier-enter'
+                                ? t('newChat.sendButton.queueTooltipSendMode', {
+                                    shortcut: composerSendShortcutLabel,
+                                  })
+                                : t('newChat.sendButton.queueTooltip', {
+                                    shortcut: steerShortcutLabel,
+                                  })
+                              : !sendButtonDisabled
+                                ? `${t('newChat.sendButton.send')} · ${composerSendShortcutLabel}`
+                                : selectedSourceDisconnected
+                                  ? t('newChat.sourceDisconnected.sendBlocked')
+                                  : null
+                      }
+                      side="top"
+                      forceOpen={voiceReleaseToSendActive}
+                    >
+                      {/* Tip 的 trigger 放在稳定 wrapper 上，而不是 button 本身。
+                          disabled button 不会可靠地产生 hover/focus 事件；曾经因此让
+                          running 时“排队/快捷键插话”提示完全不出现。 */}
+                      <span className="inline-flex rounded-full">
+                        <SendButton
+                          disabled={sendButtonDisabled}
+                          highlighted={voiceReleaseToSendActive}
+                          visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
+                          ariaLabel={
+                            showStopButton
+                              ? t('newChat.sendButton.queue')
+                              : t('newChat.sendButton.send')
+                          }
+                          onClick={() => {
+                            void handleClickSend();
+                          }}
+                        />
+                      </span>
+                    </Tip>
                   )}
-                  <VoiceInputButton
-                    state={voiceInput.state}
-                    // The surrounding controls stay locked during voice input, but
-                    // this control must remain enabled so the recording can stop.
-                    disabled={composerEditorLocked || !editor}
-                    shortcutLabel={voiceInputShortcutLabel}
-                    onStart={handleVoiceInputStart}
-                    onStop={handleVoiceInputPlainStop}
-                    onStopAndSend={handleClickSend}
-                    sendTargetRef={sendButtonRef}
-                    canReleaseToSend={canReleaseVoiceToSend}
-                    releaseToSendActive={voiceReleaseToSendActive}
-                    onReleaseToSendChange={setVoiceReleaseToSendActive}
-                    visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
-                    className={isCreateAgentVariant && !useNarrowToolbar ? 'ml-[7px]' : undefined}
-                  />
-                  {/* mousedown 吃掉默认行为:否则点发送会把焦点从 contenteditable
-                      挪到 button 上,发完光标就没了(接着打字要先点回输入框),
-                      推荐提示词的 Tab 也会因为编辑器失焦而落到原生焦点导航上。
-                      只压默认的「点击聚焦」,click 照常触发,键盘 Tab 聚焦不受影响。 */}
-                  <span
-                    ref={sendButtonRef}
-                    className="inline-flex rounded-full"
-                    onMouseDown={(event) => {
-                      // 只在编辑器已聚焦时压默认聚焦:点发送会先把焦点从
-                      // contenteditable 挪到 button 上,发完光标就没了;
-                      // 编辑器未聚焦时保留按钮正常聚焦行为(可访问性)。
-                      if (editor?.isFocused) event.preventDefault();
-                    }}
-                  >
-                    {mainSlotIsStop ? (
-                      <SendButton
-                        disabled={false}
-                        onClick={handleStop}
-                        isStreaming
-                        visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
-                      />
-                    ) : (
-                      <Tip
-                        text={
-                          voiceReleaseToSendActive
-                            ? t('newChat.chatInput.voiceInput.releaseToSend')
-                            : voiceInput.isListening && !sendButtonDisabled
-                              ? `${t('newChat.chatInput.voiceInput.finishAndSend')} · ${composerSendShortcutLabel}`
-                              : showStopButton
-                                ? composerSendShortcutPreference === 'modifier-enter'
-                                  ? t('newChat.sendButton.queueTooltipSendMode', {
-                                      shortcut: composerSendShortcutLabel,
-                                    })
-                                  : t('newChat.sendButton.queueTooltip', {
-                                      shortcut: steerShortcutLabel,
-                                    })
-                                : !sendButtonDisabled
-                                  ? `${t('newChat.sendButton.send')} · ${composerSendShortcutLabel}`
-                                  : selectedSourceDisconnected
-                                    ? t('newChat.sourceDisconnected.sendBlocked')
-                                    : null
-                        }
-                        side="top"
-                        forceOpen={voiceReleaseToSendActive}
-                      >
-                        {/* Tip 的 trigger 放在稳定 wrapper 上，而不是 button 本身。
-                            disabled button 不会可靠地产生 hover/focus 事件；曾经因此让
-                            running 时“排队/快捷键插话”提示完全不出现。 */}
-                        <span className="inline-flex rounded-full">
-                          <SendButton
-                            disabled={sendButtonDisabled}
-                            highlighted={voiceReleaseToSendActive}
-                            visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
-                            ariaLabel={
-                              showStopButton
-                                ? t('newChat.sendButton.queue')
-                                : t('newChat.sendButton.send')
-                            }
-                            onClick={() => {
-                              void handleClickSend();
-                            }}
-                          />
-                        </span>
-                      </Tip>
-                    )}
-                  </span>
-                </div>
+                </span>
               </div>
             </div>
           </div>

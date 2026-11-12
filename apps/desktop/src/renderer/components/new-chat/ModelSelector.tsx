@@ -3,6 +3,7 @@ import {
   useState,
   useMemo,
   useEffect,
+  useLayoutEffect,
   useRef,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
@@ -616,10 +617,10 @@ interface ModelSelectorProps {
   disabled?: boolean;
   /** 窄容器下把 trigger 字号/高度各压一档,默认 false。 */
   dense?: boolean;
-  /** 窄 composer 的简略触发器:隐藏 effort / Fast 次要信息并限制模型名宽度。 */
+  /** 窄 composer 的简略触发器:隐藏 effort / Fast 次要信息，模型名按剩余空间收缩。 */
   compactToolbar?: boolean;
-  /** 极窄 composer 进一步隐藏模型文字，只保留模型图标和下拉箭头。 */
-  ultraCompactToolbar?: boolean;
+  /** composer 实测宽度变化时收起形变面板，避免分屏拖动后面板脱离触发器。 */
+  composerWidth?: number | null;
   /** Trigger presentation: toolbar keeps the compact chat pill; field renders a settings input-like control. */
   triggerVariant?: 'toolbar' | 'field';
   /** CREATE AGENT 首页按 Figma 185:2724 使用独立私有 token。 */
@@ -2380,7 +2381,7 @@ export function ModelSelector({
   disabled = false,
   dense = false,
   compactToolbar = false,
-  ultraCompactToolbar = false,
+  composerWidth,
   triggerVariant = 'toolbar',
   visualVariant = 'default',
   useMorphPopover = false,
@@ -2403,6 +2404,8 @@ export function ModelSelector({
   const [open, setOpen] = useState(false);
   const openRef = useRef(false);
   const [keepOpenForAgentConfirmation, setKeepOpenForAgentConfirmation] = useState(false);
+  const previousComposerWidthRef = useRef(composerWidth);
+  const resizedDuringAgentConfirmationRef = useRef(false);
   // 打开触发的那次模型发现是否仍在途(并发语义与理由见 useModelDiscoveryPending)。
   const discovery = useModelDiscoveryPending();
   const [showDiscoveryPending, setShowDiscoveryPending] = useState(false);
@@ -2463,6 +2466,20 @@ export function ModelSelector({
     [deviceId, disabled, discovery, resetDiscoveryPresentation],
   );
 
+  useLayoutEffect(() => {
+    const previousWidth = previousComposerWidthRef.current;
+    previousComposerWidthRef.current = composerWidth;
+    if (
+      previousWidth !== composerWidth &&
+      previousWidth != null &&
+      (openRef.current || keepOpenForAgentConfirmation)
+    ) {
+      resizedDuringAgentConfirmationRef.current = keepOpenForAgentConfirmation;
+      setKeepOpenForAgentConfirmation(false);
+      handleOpenChange(false);
+    }
+  }, [composerWidth, handleOpenChange, keepOpenForAgentConfirmation]);
+
   // AlertDialog 打开时会被 Popover 视作外部交互并请求关闭。Agent 分段确认期间
   // 强制保留已展开的模型面板；确认结束后把底层 open 恢复为 true，避免弹窗关闭
   // 时的焦点回落再次把面板收掉。模型行确认及其它消费者不经过这层包装。
@@ -2472,11 +2489,12 @@ export function ModelSelector({
     return {
       ...agentSwitch,
       confirmBrowseSwitch: async () => {
+        resizedDuringAgentConfirmationRef.current = false;
         setKeepOpenForAgentConfirmation(true);
         try {
           return await confirmBrowseSwitch();
         } finally {
-          setOpenWithoutAutoRefresh(true);
+          if (!resizedDuringAgentConfirmationRef.current) setOpenWithoutAutoRefresh(true);
           setKeepOpenForAgentConfirmation(false);
         }
       },
@@ -2692,7 +2710,6 @@ export function ModelSelector({
   // compact 是 composer 容器宽度状态，不是 create-agent 的视觉私有状态。
   // 正常会话在侧栏 + 浏览器 split-pane 下也必须让长模型名承担收缩。
   const isCompactToolbar = compactToolbar && !isFieldTrigger;
-  const isUltraCompactToolbar = ultraCompactToolbar && isCompactToolbar;
   const agentIdentityPrefix =
     agentIdentityLabel && !isCompactToolbar ? (
       <>
@@ -2749,12 +2766,8 @@ export function ModelSelector({
               // 裸态工具条(2026-07-22 用户定稿):默认无框,hover 才浮现胶囊外框。
               // create-agent(新建对话框)与会话内共用同一套裸态,不再分叉 —— 静息/hover 逐字一致。
               'h-[30px] max-w-full shrink overflow-hidden px-2.5',
-              // 窄态工具条:钳制唯一可收缩的模型入口，给语音 / 发送固定动作留足空间。
-              isUltraCompactToolbar
-                ? 'w-[64px] min-w-[64px]'
-                : isCompactToolbar
-                  ? 'w-[148px] min-w-[72px]'
-                  : 'min-w-[72px]',
+              // 按内容取宽，由工具行的剩余空间约束；不要用定宽提前截断模型名。
+              'min-w-[72px]',
               'border border-transparent bg-transparent',
               'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg,#FCFCFC)] dark:hover:bg-[var(--composer-pill-bg,#393838)]',
             ),
@@ -2780,13 +2793,9 @@ export function ModelSelector({
               isCreateAgentVariant
                 ? 'text-[var(--create-agent-control-text)]'
                 : 'text-[var(--text-primary)]',
-              isUltraCompactToolbar
-                ? 'hidden'
-                : isCompactToolbar
-                  ? 'max-w-[108px] truncate'
-                  : isCreateAgentVariant
-                    ? 'truncate'
-                    : cn('truncate', isFieldTrigger ? 'max-w-[260px]' : ''),
+              isCreateAgentVariant
+                ? 'truncate'
+                : cn('truncate', isFieldTrigger ? 'max-w-[260px]' : ''),
               isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
             )}
           >
@@ -2810,15 +2819,11 @@ export function ModelSelector({
           <span
             className={cn(
               'min-w-0 font-normal text-[var(--text-primary)]',
-              isUltraCompactToolbar
-                ? 'hidden'
-                : isCompactToolbar
-                  ? 'max-w-[108px] truncate'
-                  : isCreateAgentVariant
-                    ? 'truncate'
-                    : isFieldTrigger
-                      ? 'max-w-[260px] truncate'
-                      : 'truncate',
+              isCreateAgentVariant
+                ? 'truncate'
+                : isFieldTrigger
+                  ? 'max-w-[260px] truncate'
+                  : 'truncate',
               isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
             )}
           >
@@ -2870,15 +2875,11 @@ export function ModelSelector({
           <span
             className={cn(
               'min-w-0 font-normal',
-              isUltraCompactToolbar
-                ? 'hidden'
-                : isCompactToolbar
-                  ? 'max-w-[108px] truncate'
-                  : isCreateAgentVariant
-                    ? 'truncate'
-                    : isFieldTrigger
-                      ? 'max-w-[260px] truncate'
-                      : 'truncate',
+              isCreateAgentVariant
+                ? 'truncate'
+                : isFieldTrigger
+                  ? 'max-w-[260px] truncate'
+                  : 'truncate',
               !isBudget &&
                 (isCreateAgentVariant
                   ? 'text-[var(--create-agent-control-text)]'

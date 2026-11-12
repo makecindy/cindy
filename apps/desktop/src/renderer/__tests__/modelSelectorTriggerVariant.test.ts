@@ -839,7 +839,7 @@ describe('ModelSelector trigger variants', () => {
     expect(modelListMaxHeightForRows(100)).toBe(300);
   });
 
-  it('bounds the default-session trigger in narrow and ultra-narrow composers', () => {
+  it('keeps the model name available in compact composers', () => {
     const props = {
       modelId: 'claude-opus-4-8',
       effort: 'xhigh' as Effort,
@@ -848,31 +848,44 @@ describe('ModelSelector trigger variants', () => {
       vendorKey: 'cc' as const,
       compactToolbar: true,
     };
-    const view = render(React.createElement(ModelSelector, props));
+    render(React.createElement(ModelSelector, props));
 
-    let trigger = screen.getByRole('button', {
+    const trigger = screen.getByRole('button', {
       name: /Current: Opus 4\.8, effort: 超高/,
     });
-    expect(trigger.className).toContain('w-[148px]');
+    expect(trigger.className).not.toContain('w-[148px]');
+    expect(trigger.className).toContain('max-w-full');
     expect(trigger.className).toContain('min-w-[72px]');
     expect(within(trigger).getByText('Opus 4.8').className).toContain('truncate');
+    expect(within(trigger).getByText('Opus 4.8').className).not.toContain('max-w-[108px]');
     expect(trigger.textContent).not.toContain('超高');
 
-    view.rerender(
-      React.createElement(ModelSelector, {
-        ...props,
-        ultraCompactToolbar: true,
-      }),
-    );
-    trigger = screen.getByRole('button', {
-      name: /Current: Opus 4\.8, effort: 超高/,
-    });
-    expect(trigger.className).toContain('w-[64px]');
-    expect(trigger.className).toContain('min-w-[64px]');
-    expect(within(trigger).getByText('Opus 4.8').className).toContain('hidden');
-    // 可及名仍保留完整模型 + effort，视觉仅收起文字，不丢选择能力。
     expect(trigger.getAttribute('aria-label')).toContain('Opus 4.8');
     expect(trigger.getAttribute('aria-label')).toContain('超高');
+  });
+
+  it('closes the open model picker when its composer changes width', async () => {
+    const props = {
+      modelId: 'claude-opus-4-8',
+      effort: 'high' as Effort,
+      onModelChange: vi.fn(),
+      onEffortChange: vi.fn(),
+      vendorKey: 'cc' as const,
+      useMorphPopover: true,
+      composerWidth: 500,
+    };
+    const view = render(React.createElement(ModelSelector, props));
+    const trigger = screen.getByRole('button', { name: /Current: Opus 4\.8/ });
+
+    await act(async () => fireEvent.click(trigger));
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    view.rerender(React.createElement(ModelSelector, props));
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+
+    view.rerender(React.createElement(ModelSelector, { ...props, composerWidth: 450 }));
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    await act(async () => fireEvent.click(trigger));
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
   });
 
   it('keeps the session Agent explicit when Claude Code uses an OpenAI-branded model', () => {
@@ -2782,6 +2795,40 @@ describe('ModelSelector trigger variants', () => {
     await act(async () => resolveConfirmation(false));
     await waitFor(() => expect(screen.getByTestId('model-options-popover')).toBeTruthy());
     expect(screen.getByRole('tab', { name: /Claude/ }).getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('does not reopen a detached model panel after resizing during Agent confirmation', async () => {
+    let resolveConfirmation!: (confirmed: boolean) => void;
+    const confirmBrowseSwitch = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveConfirmation = resolve;
+        }),
+    );
+    const props = {
+      modelId: 'claude-opus-4-8',
+      effort: 'high' as Effort,
+      onModelChange: vi.fn(),
+      onEffortChange: vi.fn(),
+      vendorKey: 'cc' as const,
+      composerWidth: 500,
+      agentSwitch: { currentVendor: 'cc' as const, confirmBrowseSwitch, onSwitch: vi.fn() },
+    };
+    const view = render(React.createElement(ModelSelector, props));
+    const trigger = screen.getByRole('button', { name: /Current: Opus 4\.8/ });
+
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('tab', { name: /Codex/ }));
+    await waitFor(() => expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByTestId('mock-popover-dismiss'));
+    expect(screen.getByTestId('model-options-popover')).toBeTruthy();
+
+    view.rerender(React.createElement(ModelSelector, { ...props, composerWidth: 450 }));
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByTestId('model-options-popover')).toBeNull();
+    await act(async () => resolveConfirmation(false));
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByTestId('model-options-popover')).toBeNull();
   });
 
   it('shares inactive model presets across conversations while protecting an active model', () => {
