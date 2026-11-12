@@ -50,7 +50,8 @@ import { readTurnUsageResetAt } from '../../goal-host/usageLimit.js';
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService.js';
 import { bindHostedSessionProvider, hasHostedSessionModelAccess } from '../../maker-host/session-provider-store.js';
 import { hostedProviderOffersModel } from '../../maker-host/guest-provider-route-store.js';
-import { isOwnComputerModelUseEnabled, isRemoteProviderInvocationAllowed, isRemoteProviderOpenToOwnComputers } from '../../maker-host/remote-provider-access-store.js';
+import { isOwnComputerModelUseEnabled, isRemoteProviderInvocationAllowed } from '../../maker-host/remote-provider-access-store.js';
+import { ownComputersMayUseProvider } from '../../maker-host/own-computer-provider-access.js';
 import { createGuestProviderRouteBinder, guestProviderModelIds, resolveGuestProviderId, resolveSharedProviderId } from './providerAccess';
 import { createRemoteAgentHost, type GroupRelayLoad, type HostedStartInput, type RemoteAgentHost, type RunUsageRecord } from './runHost';
 import { reshareKeyForGuest } from './groupRelay.js';
@@ -146,21 +147,11 @@ function guestAccessForTask(controller: string, sessionId?: string) {
     : providerShareGuestAccess(controller);
 }
 
-/**
- * 自己的其他电脑能否用本机的这个供应商：逐个打开过的，或「远程连接」里打开了「让我的其他电脑用本机模型」。
- * 建了供应商组的供应商不随这个开关打开：组内选电脑仍按逐个供应商的「允许被远程调用」，否则会绕过组
- * 直接在组所在电脑上运行。
- */
-function ownComputersMayUse(providerId: string): boolean {
-  return isRemoteProviderInvocationAllowed(providerId)
-    || (isRemoteProviderOpenToOwnComputers(providerId) && !readProviderGroup(providerId));
-}
-
-/** 这个控制端能否用本机的供应商：受邀者看「允许被远程调用」；自己的其他电脑见 {@link ownComputersMayUse}。 */
+/** 这个控制端能否用本机的供应商：受邀者看「允许被远程调用」；自己的其他电脑见 {@link ownComputersMayUseProvider}。 */
 function providerOpenTo(controller: string, providerId: string): boolean {
   return isProviderSharePeer(controller)
     ? isRemoteProviderInvocationAllowed(providerId)
-    : ownComputersMayUse(providerId);
+    : ownComputersMayUseProvider(providerId);
 }
 
 /** 受邀者能用的供应商：分享的那一个，且本机仍开放「允许被远程调用」。 */
@@ -963,7 +954,7 @@ export function installRemoteAgentHost(options: {
       },
       isAllowed: (providerId, controller, model, sessionId) => {
         const access = isProviderSharePeer(controller) ? guestAccessForTask(controller, sessionId) : null;
-        return (isProviderSharePeer(controller) ? guestAllows(controller, providerId, sessionId) : ownComputersMayUse(providerId))
+        return (isProviderSharePeer(controller) ? guestAllows(controller, providerId, sessionId) : ownComputersMayUseProvider(providerId))
           && shareTaskModelAllowed(controller, model ?? '', sessionId)
           && remoteModelAccess.allows(providerId, model ?? '', access?.memberId)
           && (assertMemberBudget(providerId, model ?? '', access?.memberId), true);
