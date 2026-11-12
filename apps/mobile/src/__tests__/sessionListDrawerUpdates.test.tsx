@@ -1,3 +1,4 @@
+vi.mock('@/platform/AdaptiveWindowContext', () => ({ useAdaptiveWindow: () => native.window }));
 vi.mock('@/session/TaskDrawerPresentation', () => ({ useTaskDrawerPresentation: () => null, TaskDrawerPresentation: () => null }));
 vi.mock('@/session/SharedTaskList', () => ({ useSharedTaskList: () => null, SharedTaskListContent: () => null }));
 vi.mock('@/session/SessionOptionsExpoSheet', () => ({ SessionOptionsPresenter: () => null }));
@@ -11,9 +12,9 @@ import { rubberBand, SessionListDrawer, useSessionListDrawerMotion, useSessionLi
 import { SessionFloatingDrawer, SessionTaskDrawerProvider } from '@/session/SessionTaskDrawer';
 import { motionDuration } from '@/theme/tokens';
 import type { MobileHomeProps } from '@/session/HomeSurface';
-const native = vi.hoisted(() => ({ home: null as MobileHomeProps | null, widths: [] as number[], mounts: 0, unmounts: 0, instances: 0, residentAvailable: true, sharedAvailable: true, handoffAvailable: false, dock: null as (() => void) | null, activeEffects: 0, reduceMotion: true,
+const native = vi.hoisted(() => ({ window: { width: 669, height: 951 }, home: null as MobileHomeProps | null, widths: [] as number[], mounts: 0, unmounts: 0, instances: 0, residentAvailable: true, sharedAvailable: true, handoffAvailable: false, dock: null as (() => void) | null, activeEffects: 0, reduceMotion: true,
   attachedGestures: new Set<unknown>(), routeFocused: true, routeListeners: {} as Record<string, Set<() => void>>,
-  timings: [] as { to: number; config: { duration: number }; done?: (finished: boolean) => void }[], values: [] as { value: any }[], divider: null as any, pans: {} as Record<string, Record<string, (event?: any) => void>>, gesture: {} as Record<string, (event?: any) => void>, cancel: vi.fn() }));
+  timings: [] as { to: number; config: { duration: number }; done?: (finished: boolean) => void }[], values: [] as { value: any }[], divider: null as any, pans: {} as Record<string, Record<string, (...args: any[]) => void>>, gesture: {} as Record<string, (event?: any) => void>, cancel: vi.fn() }));
 vi.mock('@/session/HomeSurface', async () => {
   const { useCallback, useContext, useEffect, useState, useSyncExternalStore } = await import('react');
   const { NavigationContext } = await import('expo-router/react-navigation');
@@ -49,10 +50,14 @@ vi.mock('@/session/NativeResidentHistory', async () => {
     get NativeTaskDrawerHost() { return native.sharedAvailable ? View : null; },
     get NativeHistorySlot() { return native.residentAvailable ? Slot : null; } };
 });
-vi.mock('@/session/SessionPaneDivider', () => ({ SessionPaneDivider: (props: any) => {
-  native.divider = props;
-  return <div data-testid="session.paneDivider" />;
-} }));
+vi.mock('@/session/SessionPaneDivider', () => {
+  const gesture = {};
+  return { PaneEdgeInsetProvider: ({ children }: any) => children, usePaneEdgeInset: () => 0,
+    useSessionPaneDivider: (props: any) => {
+      native.divider = props;
+      return { gesture, edge: props.enabled ? <div data-testid="session.paneDivider" /> : null, rowInset: props.enabled ? 24 : 0 };
+    } };
+});
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock("react-native", async () => {
   const { createElement } = await import("react");
@@ -123,6 +128,7 @@ vi.mock("react-native-reanimated", async () => {
       if (!native.values.includes(ref.current)) native.values.push(ref.current);
       return ref.current;
     },
+    useDerivedValue: (read: () => unknown) => ({ get value() { return read(); } }),
     useAnimatedStyle: () => ({}),
     useAnimatedReaction: () => undefined,
     Easing: { bezier: () => undefined },
@@ -145,13 +151,18 @@ vi.mock("@/platform/gestureHandler", async () => {
     }, [gesture]);
     return children;
   },
-  GestureHandlerRootView: ({ children }: { children: ReactNode }) => children,
+  GestureHandlerRootView: ({ children, style }: { children: ReactNode; style: unknown }) => {
+    const geometry = Object.assign({}, ...[style].flat());
+    return <div data-testid="drawer.window" style={{ width: geometry.width, height: geometry.height }}>{children}</div>;
+  },
   Gesture: {
     // panel: activeOffsetX(-16); dimmed area: activeOffsetX([-16, 16]); task pull-out: activeOffsetX(16).
     Pan: () => {
-      const handlers: Record<string, (event?: any) => void> = {};
+      const handlers: Record<string, any> = {};
       const chain = {
         enabled: () => chain,
+        hitSlop: (slop: unknown) => { handlers.hitSlop = slop; return chain; },
+        onTouchesDown: (callback: (...args: any[]) => void) => { handlers.touchesDown = callback; return chain; },
         activeOffsetX: (offset: number | number[]) => {
           const kind = Array.isArray(offset) ? 'scrim' : offset < 0 ? 'panel' : 'open';
           if (kind === 'panel') native.gesture = handlers; else native.pans[kind] = handlers;
@@ -195,6 +206,7 @@ describe('shared Home drawer host', () => {
     onSelectSession: vi.fn(), runNavigation: vi.fn((action: () => void) => action()), open: true, width: 320 };
   beforeEach(() => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    native.window = { width: 669, height: 951 };
     native.home = null; native.widths = []; native.mounts = 0; native.unmounts = 0; native.instances = 0; native.residentAvailable = true; native.sharedAvailable = true; native.handoffAvailable = false; native.dock = null; native.activeEffects = 0;
     native.attachedGestures = new Set(); native.routeFocused = true; native.routeListeners = {};
     native.values = []; native.gesture = {}; native.divider = null; native.pans = {};
@@ -206,6 +218,30 @@ describe('shared Home drawer host', () => {
     container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
   });
   afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+  // Unit regression: the floating surface must cover the adaptive window on its
+  // first commit, including reopen after rotation; existing tests only checked
+  // that a Modal existed. Native frame timing remains a device-level check.
+  it('sizes the first floating frame from the live window, including reopen after rotation', async () => {
+    const render = (open: boolean) => root.render(<SessionListDrawer {...props} aboveSystemBar open={open} />);
+    await act(async () => render(true));
+    const window = () => container.querySelector<HTMLElement>('[data-testid="drawer.window"]')!;
+    expect([window().style.width, window().style.height]).toEqual(['669px', '951px']);
+    await act(async () => render(false));
+    native.window = { width: 951, height: 669 };
+    await act(async () => render(true));
+    expect([window().style.width, window().style.height]).toEqual(['951px', '669px']);
+  });
+  // Unit regression: publishing the same drawer controls must not rerender all
+  // Home rows. Existing lifetime tests caught remounts, not redundant renders.
+  it('does not rerender Home for unchanged drawer controls but applies changed width', async () => {
+    const render = (width = 320) => root.render(<SessionListDrawer {...props} width={width} />);
+    await act(async () => render());
+    const renders = native.widths.length;
+    await act(async () => render());
+    expect(native.widths).toHaveLength(renders);
+    await act(async () => render(400));
+    expect(native.home?.width).toBe(400);
+  });
   it('keeps the departing column mounted on blur and pauses its work', async () => {
     const render = (focused: boolean) => root.render(
       <SessionTaskDrawerProvider enabled focused={focused} windowHeight={900} topInset={0} floatingWidth={400}
@@ -546,7 +582,8 @@ describe('shared Home drawer host', () => {
     }
   });
   // User request 2026-11-06: the floating drawer's edge drags the shared width like the
-  // side column, without showing a grip. The handle is a sibling of the panel, never the close gesture's child.
+  // side column, without showing a grip. User decision 2026-11-12: its drag band sits
+  // on the overlay above the panel and dimmed area, so taps near the edge reach them.
   it('resizes the floating drawer from its edge and drops the handle when docked or closing', async () => {
     native.reduceMotion = false;
     const onResize = vi.fn();
@@ -555,15 +592,33 @@ describe('shared Home drawer host', () => {
     const divider = container.querySelector('[data-testid="session.paneDivider"]');
     expect(divider).not.toBeNull();
     expect(container.querySelector('[data-testid="sessionDrawer.panel"]')?.contains(divider)).toBe(false);
-    expect(native.divider).toMatchObject({ width: 320, left: 320, bounds: resize.bounds, grip: false });
+    expect(native.divider).toMatchObject({ enabled: true, width: 320, left: 320, bounds: resize.bounds });
     native.divider.onResize(480);
     expect(onResize).toHaveBeenCalledWith(480);
-    expect(divider?.parentElement?.getAttribute('data-pointer-events')).toBe('box-none');
+    // A coarse move can satisfy every recognizer at once and the deeper one wins:
+    // the close and dimmed-area gestures leave the edge's 24pt band to resizing.
+    expect(native.gesture.hitSlop).toEqual({ right: -24 });
+    const [progress, dragX] = native.values;
+    // PR #10153 / discussion_r4548014936, unit: the old test only covered fully
+    // open geometry. A half-open rebound must move both resize and scrim gates
+    // without a React render; otherwise visible scrim drags fall into a dead zone.
+    progress!.value = 0.75;
+    dragX!.value = -20;
+    expect(native.divider.getLeft()).toBe(220);
+    const fail = vi.fn();
+    native.pans.scrim.touchesDown({ allTouches: [{ x: 230 }] }, { fail });
+    expect(fail).toHaveBeenCalledOnce();
+    fail.mockClear();
+    native.pans.scrim.touchesDown({ allTouches: [{ x: 250 }] }, { fail });
+    expect(fail).not.toHaveBeenCalled();
+    // At the original edge there is now scrim, so it must remain draggable.
+    native.pans.scrim.touchesDown({ allTouches: [{ x: 320 }] }, { fail });
+    expect(fail).not.toHaveBeenCalled();
     // Mid-exit the drawer is still mounted; its edge must not take a new drag.
     await act(async () => root.render(<SessionListDrawer {...props} resize={resize} open={false} />));
-    expect(container.querySelector('[data-testid="session.paneDivider"]')?.parentElement
-      ?.getAttribute('data-pointer-events')).toBe('none');
+    expect(native.divider.enabled).toBe(false);
     await act(async () => root.render(<SessionListDrawer {...props} resize={resize} persistent />));
+    expect(native.divider.enabled).toBe(false);
     expect(container.querySelector('[data-testid="session.paneDivider"]')).toBeNull();
   });
   // User request 2026-11-06 (revised): the edge only resizes, elastic past its bounds;

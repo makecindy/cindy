@@ -106,7 +106,7 @@
     "runtimeFailureReason": {
       "unclaimed_timeout": {
         "summary": "{{name}}逾候未始處理，此請已終。",
-        "advice": "請夥伴之主查其電腦之 Cindy 運行與網路連線。",
+        "advice": "請同僚之主人察其機上 Cindy 是否運行、網路是否連線。",
         "details": "待 Cindy 與網路復常，請重遣訊。"
       }
     },
@@ -171,7 +171,8 @@
     "capability": {
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
-      "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。"
+      "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。",
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，連君之 Cindy，而後 Cindy 可代君行事（君之電腦今無在線之 Cindy）。"
     }
   },
   "plan": {
@@ -182,7 +183,7 @@
     "dismiss": "不必",
     "editHint": "欲易人或改步驟，直言之",
     "autoContinue": "一步既畢，自交次者",
-    "autoContinueSaveFailed": "分工交接未能存，請再試",
+    "autoContinueSaveFailed": "分職交接未能存，請再試",
     "autoNote": "一步既畢，自交次一位。",
     "pauseNote": "每畢一步即止，候君點「續」。",
     "superseded": "已更",
@@ -207,7 +208,7 @@
     "progressDone": "已畢 {{done}} / {{total}}",
     "allDone": "皆畢矣",
     "stepQueued": "待啟",
-    "stepExecuting": "行中",
+    "stepExecuting": "方行",
     "stepSkipped": "已略",
     "skippingTurn": "略過中…",
     "queueWaiting": "待君續行",
@@ -265,7 +266,7 @@
     "deleteConfirmTitle": "刪「{{name}}」乎？",
     "deleteFailed": "群議未能刪之，請稍後再試",
     "speakingMode": "發言之序",
-    "speakingModeAuto": "自定",
+    "speakingModeAuto": "自動",
     "speakingModeSequential": "一律輪言",
     "speakingModeAutoNote": "未 @ 人或 @所有夥伴時，首輪同時思之，而後輪言；@ 同伴則依提及之序輪言。",
     "speakingModeSequentialNote": "每次唯一位同伴發言，後言者得見前者之答。",
@@ -294,7 +295,7 @@
       "loading": "方讀群之設定…",
       "unavailable": "群之設定讀取未成，請再試"
     },
-    "allowMentionAllBots": "許 @所有夥伴",
+    "allowMentionAllBots": "許 @諸同僚",
     "allowMentionAllBotsHint": "唯群主可改。同伴或皆作覆，大群慎啟之。此開關不涉 AI 代答。",
     "notifications": {
       "title": "訊息告知",
@@ -302,9 +303,9 @@
       "mentions": "惟提及吾",
       "none": "不告",
       "allHint": "群訊及所關注話題之新答，皆告之。",
-      "mentionsHint": "提及吾或 @全體時告之，分職之進展仍告。",
+      "mentionsHint": "提及吾或 @眾人時告之，分職之進展仍告。",
       "noneHint": "止本群一切系統告知，未讀之訊仍存。",
-      "saving": "正存之…",
+      "saving": "方存…",
       "saveFailed": "告知之設未能存，請再試。"
     }
   },
@@ -320,7 +321,7 @@
     "attachmentUnavailable": "未能自手機取回附件，請察器之連線後再試。",
     "attachmentTooLarge": "附件逾 100 MB，請擇較小之卷。",
     "mediaUploadFailed": "附件未能上呈至群議服務，請稍後再試。",
-    "authRequired": "登門已失效，請於機上重新登入。",
+    "authRequired": "登門已失效，請於機上重新登門。",
     "chatUnavailable": "群議服務暫不能連線，請察網路後再試。",
     "importPending": "群之舊錄尚在同步，請稍後再試。",
     "requestTimeout": "所為之果尚未確認，請重新整理察之，再試。",
@@ -331,8 +332,8 @@
     "lifecycleUnavailable": "今之伺服器或機尚不支援此舉。",
     "groupDissolved": "群議已散，仍可觀有權存取之舊訊。",
     "lastOwner": "請先讓渡群主或解散群議，然後退出。",
-    "allBotsMentionDisabled": "群主未啟 @所有夥伴。",
-    "turnAlreadyStarted": "此同伴已啟，不可略過",
+    "allBotsMentionDisabled": "群主未啟 @諸同僚。",
+    "turnAlreadyStarted": "此同僚已啟，不可略過",
     "stopOwnershipUnknown": "部分工作未能停止：無從確認由誰發起",
     "nothingToStop": "目前無可停止之工作"
   },
@@ -373,7 +374,7 @@
   "thread": {
     "openFailed": "話題不能開啟，請再試。",
     "title": "話題",
-    "root": "原問",
+    "root": "原訊",
     "replies": "覆",
     "placeholder": "覆此話題…",
     "create": "立話題",
@@ -457,7 +458,7 @@
       "enabled": "已啟",
       "paused": "已讓",
       "off": "未啟",
-      "offline": "已離",
+      "offline": "離線",
       "waiting": "待觸發",
       "unbound": "未繫"
     },
@@ -535,7 +536,7 @@
     "paused": "已暫止",
     "accessNone": "唯主人可用",
     "accessChat": "唯群內交流",
-    "accessTools": "可用器具與資料",
+    "accessTools": "可用工具與資料",
     "replies": "同伴如何接話",
     "replyModeMentionedNote": "無人被 @ 時，同伴不接話。",
     "work": "分職",
@@ -597,7 +598,7 @@
   "invitation": {
     "join": "入群議",
     "joinDescription": "貼上邀請連結或邀請碼以續。",
-    "inviteLink": "邀約之鏈",
+    "inviteLink": "邀請連結",
     "pasteLink": "貼邀請連結",
     "invitedBy": "{{name}} 邀君加入",
     "accept": "應邀而入",
