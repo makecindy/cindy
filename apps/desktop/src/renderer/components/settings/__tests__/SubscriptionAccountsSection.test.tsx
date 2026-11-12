@@ -61,6 +61,27 @@ beforeEach(() => {
 });
 
 describe('SubscriptionAccountsSection usage', () => {
+  // Unit regression: done + background work previously rendered Idle. Check the
+  // real component's per-account status and refresh, including an older host's absent field.
+  it('shows waiting per account and returns to running or idle on refresh', async () => {
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
+      ...view, accounts: [{ ...view.accounts[0], waiting: 1 }, { ...view.accounts[1], running: 1 }],
+    });
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    await screen.findByText('subscriptionAccounts.waitingCount');
+    let rows = screen.getAllByTestId('subscription-account');
+    expect(within(rows[0]).getByText('subscriptionAccounts.waitingCount')).toBeTruthy();
+    expect(within(rows[0]).queryByText('providerGroup.member.status.idle')).toBeNull();
+    expect(within(rows[1]).getByText('providerGroup.member.runningCount')).toBeTruthy();
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
+      ...view, accounts: [{ ...view.accounts[0], running: 1, waiting: 0 }, view.accounts[1]],
+    });
+    fireEvent.focus(window);
+    await waitFor(() => expect(screen.queryByText('subscriptionAccounts.waitingCount')).toBeNull());
+    rows = screen.getAllByTestId('subscription-account');
+    expect(within(rows[0]).getByText('providerGroup.member.runningCount')).toBeTruthy();
+    expect(within(rows[1]).getByText('providerGroup.member.status.idle')).toBeTruthy();
+  });
   // #9517, unit: existing settings tests never exercised an account operation
   // failure. A serialized provider-auth error must show the recovery instruction.
   it('explains provider-managed authentication when account login fails', async () => {
@@ -142,6 +163,7 @@ describe('SubscriptionAccountsSection usage', () => {
     ['its identity is known', [{ ...unknown, identity: 'first@example.test' }]],
     ['another account exists', [unknown, view.accounts[1]]],
     ['a task still runs on it', [{ ...unknown, running: 1 }]],
+    ['a task waits for background work', [{ ...unknown, waiting: 1 }]],
   ])('keeps a signed-out default account when %s', async (_, accounts) => {
     vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view, accounts });
     render(<SubscriptionAccountsSection providerId="anthropic" />);

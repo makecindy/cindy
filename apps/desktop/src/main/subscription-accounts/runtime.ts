@@ -82,6 +82,7 @@ interface OwnerRuntime {
   cache: Map<string, AccountSnapshot>;
   flights: Map<string, Promise<AccountSnapshot>>;
   running: Map<string, Set<string>>;
+  waiting: Map<string, Set<string>>;
   /** Pending reassignments still require admission after an abandoned reservation expires. */
   pendingStarts: Map<string, { accountId: string; token: string; until: number }>;
   lastPicked: Map<SubscriptionProvider, string>;
@@ -118,6 +119,7 @@ function currentRuntime(): OwnerRuntime {
       cache: new Map(),
       flights: new Map(),
       running: new Map(),
+      waiting: new Map(),
       pendingStarts: new Map(),
       lastPicked: new Map(),
       logins: new Map(),
@@ -163,6 +165,10 @@ function persistCooling(state: OwnerRuntime): void {
     (cooling[key.slice(0, split)] ??= {})[key.slice(split + 1)] = scopes;
   }
   void writeSubscriptionAccountCooling(cooling);
+}
+function accountInUse(state: OwnerRuntime, provider: SubscriptionProvider, id: string): boolean {
+  const key = keyOf(provider, id);
+  return !!(state.running.get(key)?.size || state.waiting.get(key)?.size);
 }
 function accountCooling(state: OwnerRuntime, provider: SubscriptionProvider, id: string, model?: string): boolean {
   const key = keyOf(provider, id);
@@ -741,6 +747,7 @@ export async function readSubscriptionPool(
                   ? ('limited' as const)
                   : ('ready' as const),
         running: state.running.get(keyOf(provider, account.id))?.size ?? 0,
+        waiting: state.waiting.get(keyOf(provider, account.id))?.size ?? 0,
         ...(!pool.disconnected && info.auth.authenticated ? accountUsage(info.usage) : {}),
       };
     }),
@@ -805,7 +812,12 @@ export async function needsSubscriptionAccountHandoff(sessionId: string, row: {
   return true;
 }
 
-export interface SubscriptionAccountLease {
+export interface SubscriptionAccountActivity {
+  running(active: boolean): void;
+  waiting(active: boolean): void;
+  release(): void;
+}
+export interface SubscriptionAccountLease extends SubscriptionAccountActivity {
   account: NativeSubscriptionAccount;
   /** New turns must not reuse an account explicitly disabled by the user. */
   assertDispatchable(): void;
@@ -822,8 +834,45 @@ export interface SubscriptionAccountLease {
   bind(keys: string[]): Promise<void>;
   /** Transfer this reservation to a task until its next runtime takes over. */
   reserveForTask(taskId: string): void;
-  running(active: boolean): void;
-  release(): void;
+}
+/** Count a runtime without selecting credentials or creating persistent bindings. */
+function accountActivity(
+  state: OwnerRuntime,
+  provider: SubscriptionProvider,
+  accountId: string,
+) {
+  const token = randomUUID();
+  const key = keyOf(provider, accountId);
+  const active = state.running.get(key) ?? new Set<string>();
+  const waiting = state.waiting.get(key) ?? new Set<string>();
+  state.running.set(key, active);
+  state.waiting.set(key, waiting);
+  let released = false;
+  const update = (tokens: Set<string>, value: boolean) => {
+    const wasActive = tokens.has(token);
+    if (!released) {
+      if (value) tokens.add(token);
+      else tokens.delete(token);
+    }
+    if (wasActive !== tokens.has(token)) changed(provider);
+  };
+  return {
+    token,
+    get released() { return released; },
+    running: (value: boolean) => update(active, value),
+    waiting: (value: boolean) => update(waiting, value),
+    release: (preserveRunning = false) => {
+      released = true;
+      const wasRunning = !preserveRunning && active.delete(token);
+      const wasWaiting = waiting.delete(token);
+      if (wasRunning || wasWaiting) changed(provider);
+    },
+  };
+}
+
+/** Legacy Claude always uses the default CLI profile, even before a pool exists. */
+export function trackLegacyClaudeAccountActivity(): SubscriptionAccountActivity {
+  return accountActivity(currentRuntime(), 'anthropic', 'default');
 }
 /** Await status first; selection and reservation then happen in one synchronous segment. */
 export async function acquireSubscriptionAccount(
@@ -931,10 +980,10 @@ export async function acquireSubscriptionAccount(
     throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account cannot be used for this request');
   }
   if (options.dryRun) return null;
-  const token = randomUUID();
   const key = keyOf(provider, selected);
-  const active = state.running.get(key) ?? new Set<string>();
-  state.running.set(key, active);
+  const activity = accountActivity(state, provider, selected);
+  const { token } = activity;
+  const active = state.running.get(key)!;
   if (!control) {
     if (pending && pendingKey) {
       state.running.get(keyOf(provider, pending.accountId))?.delete(pending.token);
@@ -944,7 +993,6 @@ export async function acquireSubscriptionAccount(
     state.lastPicked.set(provider, selected);
     changed(provider);
   }
-  let released = false;
   let handedOff = false;
   let currentModel = model;
   const assertCurrent = (targetModel = currentModel, modelSwitch = false) => {
@@ -1064,7 +1112,7 @@ export async function acquireSubscriptionAccount(
     },
     reserveForTask: (taskId) => {
       assertCurrent();
-      if (released || control || readAccountBinding(`task:${taskId}`, provider)?.accountId !== selected)
+      if (activity.released || control || readAccountBinding(`task:${taskId}`, provider)?.accountId !== selected)
         throw new Error('Cannot transfer the subscription account reservation');
       const taskKey = keyOf(provider, `task:${taskId}`);
       const previous = state.pendingStarts.get(taskKey);
@@ -1073,20 +1121,10 @@ export async function acquireSubscriptionAccount(
       state.pendingStarts.set(taskKey, { accountId: selected, token, until: Date.now() + PROVIDER_GROUP_LOCAL_PROVISIONAL_MS });
       handedOff = true;
     },
-    running: (value) => {
-      const wasActive = active.has(token);
-      if (!released) {
-        if (value) active.add(token);
-        else active.delete(token);
-      }
-      if (wasActive !== active.has(token)) {
-        changed(provider);
-      }
-    },
-    release: () => {
-      released = true;
-      if (!handedOff && active.delete(token)) changed(provider);
-    },
+    running: activity.running,
+    waiting: activity.waiting,
+    // A handed-off startup reservation remains owned by pendingStarts.
+    release: () => activity.release(handedOff),
   };
 }
 
@@ -1127,7 +1165,7 @@ export async function runSubscriptionAccountCommand(
   } else if (command.action === 'remove') {
     if (command.accountId === 'default')
       throw new Error('The default CLI account cannot be removed');
-    if (state.running.get(keyOf(provider, command.accountId))?.size)
+    if (accountInUse(state, provider, command.accountId))
       throw new Error('Account is in use');
     if ([...state.logins.values()].some((login) => login.accountId === command.accountId))
       throw new Error('login_in_progress');
@@ -1155,7 +1193,7 @@ export async function runSubscriptionAccountCommand(
     // Native browser logins may share a callback port. Reserve before the first await.
     if ([...state.logins.keys()].some((key) => key.startsWith(provider + ':')))
       throw new Error('login_in_progress');
-    if (state.running.get(keyOf(provider, accountId))?.size) throw new Error('Account is in use');
+    if (accountInUse(state, provider, accountId)) throw new Error('Account is in use');
     const abort = new AbortController();
     const key = `${provider}:${command.loginKey}`;
     state.logins.set(key, { abort, accountId });
@@ -1179,7 +1217,7 @@ export async function runSubscriptionAccountCommand(
           accountId = 'default';
         }
         state.logins.set(key, { abort, accountId });
-        if (state.running.get(keyOf(provider, accountId))?.size)
+        if (accountInUse(state, provider, accountId))
           throw new Error('Account is in use');
       }
       if (adding) {

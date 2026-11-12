@@ -132,6 +132,10 @@ void mountPage({
       ],
     };
     // Nothing signed in yet: the host lists only the unbound CLI default slot.
+    if (ctx.case === 'waiting' || ctx.case === 'waiting-narrow') {
+      view.accounts[0].waiting = 1;
+      view.accounts[1].waiting = 1;
+    }
     if (ctx.case === 'empty')
       view = {
         providerId: 'anthropic',
@@ -192,7 +196,7 @@ void mountPage({
   render: (ctx) => (
     <main
       className="mx-auto w-full max-w-[680px] min-w-0"
-      style={ctx.case === 'narrow' || ctx.case === 'narrow-weight' ? { maxWidth: 320 } : undefined}
+      style={ctx.case === 'narrow' || ctx.case === 'narrow-weight' || ctx.case === 'waiting-narrow' ? { maxWidth: 320 } : undefined}
     >
       {ctx.case === 'provider-auth-preview' ? (
         <SubscriptionSignInChoices

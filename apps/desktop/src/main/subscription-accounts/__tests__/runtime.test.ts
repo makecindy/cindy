@@ -12,6 +12,8 @@ import {
   type AgentSessionHandle,
   type StartSessionOptions,
   type ForkSdkSessionOptions,
+  type AgentEvent,
+  type BackgroundTaskSnapshot,
 } from '@cindy/maker-core';
 const h = vi.hoisted(() => ({
   owner: 'owner-a:1',
@@ -1181,6 +1183,256 @@ describe('native account assignment on the executing computer', () => {
     expect(h.login).not.toHaveBeenCalled();
     expect(h.pools).toEqual({});
   });
+  // Unit regression: the settings default row exists before a pool does. Legacy
+  // Claude sends must count there without changing their original login route.
+  it('counts an existing Claude task before and after adding an account pool', async () => {
+    h.pools = {};
+    // Main now intercepts model switches for pooled accounts; legacy handles
+    // must still switch through the native handle without a lease (unit).
+    let currentModel = 'claude-sonnet-5-5';
+    let sentModel: string | undefined;
+    const usage = { type: 'account_usage', data: { fiveHour: { utilization: 10 } } };
+    const nativeHandle = {
+      id: 'legacy-claude',
+      send: vi.fn(async () => { sentModel = currentModel; }),
+      setModel: async (model: string) => { currentModel = model; },
+      close: vi.fn(async () => {}),
+      events: async function* () {
+        yield usage;
+        yield { type: 'session_id', data: {} };
+        yield { type: 'done', data: {} };
+      },
+    } as unknown as AgentSessionHandle;
+    const start = vi.fn(async () => nativeHandle);
+    const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: start } as unknown as BaseAgent);
+    const options = { providerId: 'anthropic', sessionId: 'legacy-task' } as StartSessionOptions;
+    const handle = await agent.startSession(options);
+    await handle.setModel!('claude-opus-5-5');
+    await handle.send({ type: 'user', content: 'hello' });
+    expect(sentModel).toBe('claude-opus-5-5');
+    expect(start).toHaveBeenCalledExactlyOnceWith(options);
+    expect(h.pools).toEqual({});
+    expect(h.bindings.size).toBe(0);
+    expect((await readSubscriptionPool('anthropic')).accounts[0].running).toBe(1);
+
+    h.pools.anthropic = { strategy: 'least', accounts: [account('default'), account('second')] };
+    const next = await acquireSubscriptionAccount('anthropic', undefined, []);
+    expect(next!.account.configDir).toBe('anthropic/second');
+    for await (const event of handle.events()) {
+      if (event.type === 'account_usage') expect(event).toBe(usage);
+    }
+    expect(h.bindings.size).toBe(0);
+    expect((await readSubscriptionPool('anthropic')).accounts.map((a) => a.running)).toEqual([0, 1]);
+    await handle.send({ type: 'user', content: 'continue' });
+    expect((await readSubscriptionPool('anthropic')).accounts[0].running).toBe(1);
+    await handle.close();
+    next!.release();
+    expect((await readSubscriptionPool('anthropic')).accounts.map((a) => a.running)).toEqual([0, 0]);
+  });
+  it('does not count a late legacy Claude startup against a new Cindy owner', async () => {
+    h.pools = {};
+    let markStarted!: () => void;
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
+    let resolveStart!: (handle: AgentSessionHandle) => void;
+    const agent = withSubscriptionAccounts({
+      kind: 'claude-code',
+      startSession: () => new Promise<AgentSessionHandle>((resolve) => { resolveStart = resolve; markStarted(); }),
+    } as unknown as BaseAgent);
+    const pending = agent.startSession({ providerId: 'anthropic' } as StartSessionOptions);
+    // Pool routing now resolves asynchronously before the native startup begins.
+    await started;
+    h.owner = 'another-owner';
+    resolveStart({
+      id: 'old-owner-thread',
+      send: async () => {},
+      close: async () => {},
+    } as unknown as AgentSessionHandle);
+    const handle = await pending;
+    await handle.send({ type: 'user', content: 'late' });
+    expect((await readSubscriptionPool('anthropic')).accounts[0].running).toBe(0);
+    await handle.close();
+  });
+  // Unit regression: foreground done previously made a task with background work
+  // look idle. Exercise the real wrapper/read/command entries across SDK wake gaps,
+  // two account identities, cancellation and old single-account installations.
+  it.each([false, true])('tracks background waiting independently of foreground load (pool=%s)', async (configured) => {
+    const accountId = configured ? 'second' : 'default';
+    if (!configured) h.pools = {};
+    else h.bindings.set('task:background-parent', { providerId: 'anthropic', accountId });
+    let tasks: BackgroundTaskSnapshot[] = [];
+    let pending = 0;
+    let continuationChanged: (() => void) | undefined;
+    const unsubscribe = vi.fn();
+    const events: AgentEvent[] = [];
+    const nativeHandle = {
+      id: 'background-native',
+      send: async () => {},
+      close: async () => {},
+      listBackgroundTasks: () => tasks,
+      countPendingWakeContinuations: () => pending,
+      onTurnContinuationChange: (listener: () => void) => {
+        continuationChanged = listener;
+        return unsubscribe;
+      },
+      stopBackgroundTask: async () => { tasks = []; },
+      events: async function* () { while (events.length) yield events.shift()!; },
+    } as unknown as AgentSessionHandle;
+    const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: async () => nativeHandle } as unknown as BaseAgent);
+    const handle = await agent.startSession({ providerId: 'anthropic', sessionId: 'background-parent' } as StartSessionOptions);
+    const emit = async (event: AgentEvent) => {
+      events.push(event);
+      for await (const _ of handle.events()) { /* consume through the production wrapper */ }
+    };
+    const state = async () => (await readSubscriptionPool('anthropic')).accounts.find(a => a.id === accountId)!;
+    await handle.send({ type: 'user', content: 'run checks' });
+    tasks = [{ taskId: 'one' }, { taskId: 'two' }];
+    await emit({ type: 'agent_task_update', data: { taskId: 'two', status: 'running' } });
+    expect(await state()).toMatchObject({ running: 1, waiting: 0 });
+    await emit({ type: 'done', data: {}, turnScope: 'background' });
+    expect(await state()).toMatchObject({ running: 1, waiting: 0 });
+    await emit({ type: 'done', data: {} });
+    expect(await state()).toMatchObject({ running: 0, waiting: 1 });
+    await expect(runSubscriptionAccountCommand({ action: 'login', providerId: 'anthropic', accountId, loginKey: 'waiting' })).rejects.toThrow('Account is in use');
+    if (configured) {
+      const pool = await readSubscriptionPool('anthropic');
+      expect(pool.accounts[0]).toMatchObject({ id: 'default', running: 0, waiting: 0 });
+      await expect(runSubscriptionAccountCommand({ action: 'remove', providerId: 'anthropic', accountId })).rejects.toThrow('Account is in use');
+      // A waiting task must not consume the account's sole foreground slot.
+      const next = await acquireSubscriptionAccount('anthropic', undefined, ['task:background-parent']);
+      expect(next!.account.configDir).toBe('anthropic/second');
+      expect(await state()).toMatchObject({ running: 1, waiting: 1 });
+      next!.release();
+    }
+    tasks = [];
+    pending = 1;
+    await emit({ type: 'agent_task_update', data: { taskId: 'two', status: 'completed' } });
+    expect(await state()).toMatchObject({ running: 0, waiting: 1 });
+    await emit({ type: 'status', data: { isRunning: true }, turnScope: 'background' });
+    expect(await state()).toMatchObject({ running: 0, waiting: 1 });
+    await emit({ type: 'status', data: { isRunning: true, providerInitiatedTurn: true } });
+    expect(await state()).toMatchObject({ running: 1, waiting: 0 });
+    pending = 0;
+    await emit({ type: 'done', data: {} });
+    expect(await state()).toMatchObject({ running: 0, waiting: 0 });
+    tasks = [{ taskId: 'dev-server', backgroundCommandKind: 'service' }];
+    await emit({ type: 'agent_task_update', data: { taskId: 'dev-server', status: 'running' } });
+    expect(await state()).toMatchObject({ running: 0, waiting: 0 });
+    tasks = [{ taskId: 'stoppable' }];
+    await emit({ type: 'agent_task_update', data: { taskId: 'stoppable', status: 'running' } });
+    expect(await state()).toMatchObject({ running: 0, waiting: 1 });
+    await handle.stopBackgroundTask!('stoppable');
+    expect(await state()).toMatchObject({ running: 0, waiting: 0 });
+    pending = 1;
+    continuationChanged!();
+    expect(await state()).toMatchObject({ running: 0, waiting: 1 });
+    pending = 0;
+    continuationChanged!();
+    expect(await state()).toMatchObject({ running: 0, waiting: 0 });
+    tasks = [{ taskId: 'remaining' }];
+    await emit({ type: 'agent_task_update', data: { taskId: 'remaining', status: 'running' } });
+    await handle.close();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    expect(await state()).toMatchObject({ running: 0, waiting: 0 });
+  });
+  // PR #9843: idle teardown, rewind and global Stop clear native work without an event or callback.
+  // Unit regression through the handle: EOF/rewind/abort must clear the waiting count and
+  // unblock account commands; event-driven completion above does not cover these paths.
+  it.each([[false, 'eof'], [true, 'eof'], [false, 'rewind'], [true, 'rewind'], [false, 'abort'], [true, 'abort']] as const)(
+    'clears stale waiting activity (pool=%s, completion=%s)', async (configured, completion) => {
+    const accountId = configured ? 'second' : 'default';
+    if (!configured) h.pools = {};
+    else h.bindings.set('task:idle-exit', { providerId: 'anthropic', accountId });
+    let tasks: BackgroundTaskSnapshot[] = [{ taskId: 'background-command' }];
+    let pending = completion === 'abort' ? 0 : 1;
+    const nativeHandle = {
+      id: 'idle-exit-native',
+      send: async () => {},
+      close: vi.fn(async () => {}),
+      abort: vi.fn(async () => { tasks = []; pending = 0; }),
+      commitRewindFiles: vi.fn(async () => { tasks = []; pending = 0; }),
+      listBackgroundTasks: () => tasks,
+      countPendingWakeContinuations: () => pending,
+      events: async function* () {
+        yield { type: 'done', data: {} };
+        // Match teardownDeadHandle: no final event after an idle CLI crash.
+        tasks = [];
+        pending = 0;
+      },
+    } as unknown as AgentSessionHandle;
+    const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: async () => nativeHandle } as unknown as BaseAgent);
+    const handle = await agent.startSession({ providerId: 'anthropic', sessionId: 'idle-exit' } as StartSessionOptions);
+    const state = async () => (await readSubscriptionPool('anthropic')).accounts.find(a => a.id === accountId)!;
+    await handle.send({ type: 'user', content: 'run checks' });
+    const events = handle.events()[Symbol.asyncIterator]();
+    expect((await events.next()).value).toMatchObject({ type: 'done' });
+    expect(await state()).toMatchObject({ running: 0, waiting: 1 });
+    if (completion === 'eof') {
+      expect((await events.next()).done).toBe(true);
+    } else if (completion === 'abort') {
+      // Global Stop timeout can clear local_bash without an event, callback or EOF.
+      await handle.abort();
+    } else {
+      // Rewind leaves the event stream open, unlike idle process exit.
+      await handle.commitRewindFiles!('user-turn', 'prior-assistant');
+    }
+    expect(nativeHandle.close).not.toHaveBeenCalled();
+    expect(await state()).toMatchObject({ running: 0, waiting: 0 });
+    await runSubscriptionAccountCommand({ action: 'login', providerId: 'anthropic', accountId, loginKey: 'after-idle-exit' });
+    expect(h.login).toHaveBeenCalledOnce();
+    if (configured) {
+      await runSubscriptionAccountCommand({ action: 'remove', providerId: 'anthropic', accountId });
+      expect((await readSubscriptionPool('anthropic')).accounts.some(a => a.id === accountId)).toBe(false);
+    }
+    await events.return?.();
+  });
+  // Global Stop acknowledgement must not release work still reported by the native
+  // handle; rejected stops and foreground turns retain account command protection.
+  it.each(['retained', 'rejected', 'foreground'] as const)('keeps account protection after abort when %s', async outcome => {
+    let tasks: BackgroundTaskSnapshot[] = [{ taskId: 'still-running' }];
+    const nativeHandle = {
+      id: 'abort-protection', send: async () => {}, close: async () => {},
+      listBackgroundTasks: () => tasks,
+      abort: async () => {
+        if (outcome === 'rejected') throw new Error('interrupt failed');
+        if (outcome === 'foreground') tasks = [];
+      },
+      events: async function* () { yield { type: 'done', data: {} }; },
+    } as unknown as AgentSessionHandle;
+    const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: async () => nativeHandle } as unknown as BaseAgent);
+    const handle = await agent.startSession({ providerId: 'anthropic' } as StartSessionOptions);
+    await handle.send({ type: 'user', content: 'run checks' });
+    if (outcome !== 'foreground') for await (const _event of handle.events()) { /* Finish only the foreground. */ }
+    if (outcome === 'rejected') await expect(handle.abort()).rejects.toThrow('interrupt failed');
+    else await handle.abort();
+    expect((await readSubscriptionPool('anthropic')).accounts[0]).toMatchObject(
+      outcome === 'foreground' ? { running: 1, waiting: 0 } : { running: 0, waiting: 1 },
+    );
+    await expect(runSubscriptionAccountCommand({ action: 'login', providerId: 'anthropic', accountId: 'default', loginKey: 'blocked-abort' }))
+      .rejects.toThrow('Account is in use');
+    await handle.close();
+  });
+  it.each([['anthropic', 'api'], ['api', 'anthropic']])(
+    'rebuilds the activity tracker when switching from %s to %s without a pool',
+    async (providerId, nextProviderId) => {
+      h.pools = {};
+      const setModel = vi.fn();
+      const agent = withSubscriptionAccounts({
+        kind: 'claude-code',
+        startSession: async () => ({
+          id: 'switching',
+          setModel,
+          requiresModelSwitchRebuild: async () => false,
+          previewModelSwitch: async () => ({ action: 'live' }),
+        }),
+      } as unknown as BaseAgent);
+      const handle = await agent.startSession({ providerId } as StartSessionOptions);
+      expect(await handle.requiresModelSwitchRebuild?.('model', { providerId })).toBe(false);
+      expect(await handle.requiresModelSwitchRebuild?.('model', { providerId: nextProviderId })).toBe(true);
+      expect(await handle.previewModelSwitch?.('model', { providerId: nextProviderId })).toMatchObject({ action: 'rebuild' });
+      await expect(handle.setModel?.('model', { providerId: nextProviderId })).rejects.toThrow('rebuilding');
+      expect(setModel).not.toHaveBeenCalled();
+    },
+  );
   it('keeps the authorized private Codex account after adding a second account fails, and then balances both after success', async () => {
     h.pools = {};
     h.shared = false;

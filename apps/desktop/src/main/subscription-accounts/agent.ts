@@ -20,6 +20,8 @@ import {
 import {
   acquireSubscriptionAccount,
   observeSubscriptionAccountUsage,
+  trackLegacyClaudeAccountActivity,
+  type SubscriptionAccountActivity,
   type SubscriptionAccountLease,
 } from './runtime.js';
 import { readAccountBinding, readPool, writeAccountBindings, readLegacyCodexAccountId } from './store.js';
@@ -95,27 +97,46 @@ function legacyConnectionAccount(providerId: string | null | undefined, keys: st
 }
 function wrapHandle(
   handle: AgentSessionHandle,
-  lease: SubscriptionAccountLease,
+  activity: SubscriptionAccountActivity,
   unregister: () => void,
-  model: string | undefined,
+  lease?: SubscriptionAccountLease,
+  model?: string,
 ): AgentSessionHandle {
   let cleanupPending = false;
+  // A pooled startup already owns its slot until its first turn completes.
+  let running = !!lease;
+  const syncActivity = () => {
+    // Count the parent task once, including the gap before its automatic continuation.
+    // Long-lived services alone do not mean Claude is waiting for work to finish.
+    const waiting = !running && (
+      (handle.listBackgroundTasks?.() ?? []).some(task => task.backgroundCommandKind !== 'service') ||
+      (handle.countPendingWakeContinuations?.() ?? 0) > 0
+    );
+    activity.running(running);
+    activity.waiting(waiting);
+  };
+  const unsubscribe = handle.onTurnContinuationChange?.(syncActivity);
+  syncActivity();
   return new Proxy(handle, {
     get(target, property) {
       if (property === 'send')
         return async (...args: Parameters<AgentSessionHandle['send']>) => {
           if (cleanupPending) throw new Error('Subscription account runtime is closing');
-          lease.assertDispatchable();
-          lease.running(true);
+          lease?.assertDispatchable();
+          running = true;
+          syncActivity();
           try {
             return await target.send(...args);
           } catch (error) {
-            lease.observeFailure(error, model, 'run');
-            if (!cleanupPending) lease.running(false);
+            lease?.observeFailure(error, model, 'run');
+            if (!cleanupPending) {
+              running = false;
+              syncActivity();
+            }
             throw error;
           }
         };
-      if (property === 'setModel' && target.setModel)
+      if (property === 'setModel' && target.setModel && lease)
         return async (...args: Parameters<NonNullable<AgentSessionHandle['setModel']>>) => {
           if (cleanupPending) throw new Error('Subscription account runtime is closing');
           return lease.changeModel(args[0], async () => {
@@ -131,26 +152,50 @@ function wrapHandle(
               // Closing the event queue is not proof that the process stopped.
               // Keep credentials protected through pending/failed close and any late events.
               cleanupPending = true;
-              lease.running(true);
+              running = true;
+              syncActivity();
               const result = await method.apply(target, args);
+              unsubscribe?.();
               unregister();
-              lease.release();
+              activity.release();
               return result;
             }
           : undefined;
       }
+      if (property === 'abort')
+        return async (...args: Parameters<AgentSessionHandle['abort']>) => {
+          const result = await target.abort(...args);
+          // Global Stop can retire the Query without a terminal event or EOF.
+          // Re-read native work; an interrupt acknowledgement alone proves no exit.
+          syncActivity();
+          return result;
+        };
+      if (property === 'stopBackgroundTask' && target.stopBackgroundTask)
+        return async (...args: Parameters<NonNullable<AgentSessionHandle['stopBackgroundTask']>>) => {
+          const result = await target.stopBackgroundTask!(...args);
+          syncActivity();
+          return result;
+        };
+      if (property === 'commitRewindFiles' && target.commitRewindFiles)
+        return async (...args: Parameters<NonNullable<AgentSessionHandle['commitRewindFiles']>>) => {
+          const result = await target.commitRewindFiles!(...args);
+          syncActivity();
+          return result;
+        };
       if (property === 'events')
         return async function* () {
           for await (const event of target.events()) {
-            if (event.type === 'account_usage')
+            if (lease && event.type === 'account_usage')
               observeSubscriptionAccountUsage(lease.account, event.data);
-            if (event.type === 'error' && isTerminalTurnEvent(event))
+            if (lease && event.type === 'error' && isTerminalTurnEvent(event))
               lease.observeFailure(event.data, model, 'run');
-            if (event.type === 'session_id') await lease.bind([`native:${target.id}`]);
-            if (isTerminalTurnEvent(event) && !cleanupPending) lease.running(false);
-            if (event.type === 'status' && (event.data as { isRunning?: boolean })?.isRunning)
-              lease.running(true);
-            yield event.type === 'account_usage'
+            if (lease && event.type === 'session_id') await lease.bind([`native:${target.id}`]);
+            if (event.turnScope !== 'background' && isTerminalTurnEvent(event) && !cleanupPending) running = false;
+            if (event.turnScope !== 'background' && event.type === 'status' &&
+                (event.data as { isRunning?: boolean })?.isRunning) running = true;
+            if (isTerminalTurnEvent(event) || event.type === 'status' || event.type === 'agent_task_update')
+              syncActivity();
+            yield lease && event.type === 'account_usage'
               ? {
                   ...event,
                   data: {
@@ -160,8 +205,11 @@ function wrapHandle(
                 }
               : event;
           }
-          // A consumer stopping (or a closed queue) does not establish runtime shutdown.
-          // close/detach owns final release; ordinary terminal events release only turn load.
+          // Idle teardown can clear native background work without a final event.
+          // Reconcile only at natural EOF, not when a consumer stops iterating.
+          // A closed queue does not prove process exit: keep close/detach protection
+          // and any foreground or native work still reported by the handle.
+          if (!cleanupPending) syncActivity();
         };
       const value = Reflect.get(target, property, target);
       return typeof value === 'function' ? value.bind(target) : value;
@@ -181,7 +229,9 @@ function guardAccountSwitch(
     const next = target?.providerId !== undefined ? target.providerId : providerId;
     if (next === providerId) return false;
     for (const id of [providerId, next]) {
-      if (await resolveSubscriptionPoolProvider(agent, { providerId: id, remoteHostId: initial.remoteHostId, model }, auth))
+      // Explicit legacy Claude is observed even before an account pool exists.
+      if ((!initial.remoteHostId && agent.kind === 'claude-code' && id === 'anthropic') ||
+          await resolveSubscriptionPoolProvider(agent, { providerId: id, remoteHostId: initial.remoteHostId, model }, auth))
         return true;
     }
     return false;
@@ -243,8 +293,15 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
         };
       if (property === 'startSession')
         return async (options: StartSessionOptions) => {
-          const startLegacy = async () =>
-            guardAccountSwitch(await target.startSession(options), target, options, auth);
+          const startLegacy = async () => {
+            const activity = !options.remoteHostId && target.kind === 'claude-code' && options.providerId?.trim() === 'anthropic'
+              ? trackLegacyClaudeAccountActivity()
+              : undefined;
+            const handle = await target.startSession(options);
+            // Observation preserves the legacy credential route and creates no pool.
+            const tracked = activity ? wrapHandle(handle, activity, () => {}) : handle;
+            return guardAccountSwitch(tracked, target, options, auth);
+          };
           const keys = [
             options.sessionId ? `task:${options.sessionId}` : '',
             options.resumeSessionId ? `native:${options.resumeSessionId}` : '',
@@ -300,7 +357,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
               });
               await current.bind([...keys, `native:${handle.id}`]);
               // Startup owns its slot until the first turn completes or the runtime closes.
-              return guardAccountSwitch(wrapHandle(handle, current, unregister, options.model), target, {
+              return guardAccountSwitch(wrapHandle(handle, current, unregister, current, options.model), target, {
                 ...options,
                 // Keep the effective native source for later switch checks even if
                 // the user's implicit default changes while this runtime is alive.

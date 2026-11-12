@@ -8,6 +8,8 @@ export default {
     'Real browser sign-in, credentials, native CLI processes or transport; fixture supplies account metadata only',
   cases: {
     default: { about: 'Three Claude accounts: provider card on the default row, a low weekly quota, a paused limited account' },
+    waiting: { about: 'Per-account foreground load and background waiting, with multiple tasks on one account' },
+    'waiting-narrow': { about: 'Background waiting remains readable at 320px', viewport: { width: 320, height: 1000 } },
     narrow: { about: '320-pixel content width without clipped account controls' },
     'narrow-weight': { about: '320-pixel content width with task limit, weight, assignment and account menu controls' },
     codex: { about: 'Codex accounts and weight strategy' },
@@ -46,6 +48,13 @@ export default {
       return;
     }
     assert.equal(await page.getByRole('switch').count(), 3);
+    if (ui.case.startsWith('waiting')) {
+      const rows = page.getByTestId('subscription-account');
+      assert.ok((await rows.nth(0).innerText()).includes(await ui.t('subscriptionAccounts.waitingCount', { count: 1 })));
+      assert.ok((await rows.nth(1).innerText()).includes(await ui.t('subscriptionAccounts.waitingCount', { count: 1 })));
+      assert.ok(!(await rows.nth(1).innerText()).includes(await ui.t('providerGroup.member.status.idle')));
+      await ui.capture('waiting');
+    }
     assert.equal(await page.getByRole('radiogroup', { name: await ui.t('subscriptionAccounts.strategy'), exact: true }).getAttribute('data-setting-id'), 'providers.subscriptionAccounts');
     // Every account's bars share one column, whatever each account's own labels and numbers are.
     const bars = await page.getByRole('progressbar').evaluateAll(elements =>

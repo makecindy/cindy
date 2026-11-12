@@ -20225,6 +20225,7 @@
     "lineNumbers": "Números de linha"
   },
   "subscriptionAccounts": {
+    "waitingCount": "Aguardando resultados em segundo plano: {{count}}",
     "unassigned": "Conta não atribuída",
     "boundUnavailable": "Conta indisponível",
     "providerManagedAuth": "O provedor atual do Codex não disponibiliza informações da conta do ChatGPT. Ao adicionar o provedor, selecione “$t(subscriptionAccounts.signIn.anotherAccount)” para usar uma pasta separada.",

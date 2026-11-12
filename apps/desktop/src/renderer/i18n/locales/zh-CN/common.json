@@ -19966,6 +19966,7 @@
     "lineNumbers": "行号"
   },
   "subscriptionAccounts": {
+    "waitingCount": "{{count}} 个任务等待后台结果",
     "unassigned": "账号待分配",
     "boundUnavailable": "账号已不可用",
     "providerManagedAuth": "Codex 当前供应商未提供 ChatGPT 账号信息。请在添加供应商时选择「$t(subscriptionAccounts.signIn.anotherAccount)」，使用独立目录",

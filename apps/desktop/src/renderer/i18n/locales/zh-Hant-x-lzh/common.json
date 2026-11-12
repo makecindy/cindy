@@ -19966,6 +19966,7 @@
     }
   },
   "subscriptionAccounts": {
+    "waitingCount": "{{count}} 項待背景結果",
     "unassigned": "帳號待定",
     "boundUnavailable": "帳號已不可用",
     "providerManagedAuth": "Codex 目前供方未提供 ChatGPT 帳號資訊。請於新增供方時選「$t(subscriptionAccounts.signIn.anotherAccount)」，另用獨立目錄",
