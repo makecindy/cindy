@@ -16,8 +16,10 @@
 官方 Device Link 服务端（独立仓）：校验 `action`，畸形时与 `sender` 一样只丢掉这一项、照常下发通知；
 合法时 APNs 负载增加 `aps.category`（`cindy.permission` / `cindy.reply` / `cindy.question.card`，系统据此显示 App
 登记的按钮）和顶层 `action` 原值。`question` 的选项列表有一项不合格时只丢选项（仍可文字回复），说明条数对不上时
-只丢说明；负载超过 4096 字节时先丢 `question` 与 `details`，按钮与通知本身保留。关闭了内容预览的设备不下发
+只丢说明；负载超过 4096 字节时先丢 `question` 与 `details`，仍超限则整组丢选项，保留文字回复；
+动作元数据本身仍放不下时降级普通通知，最终校验 UTF-8 字节数。关闭了内容预览的 APNs 设备不下发
 `permission` 与 `question`（没有正文就不能批准，选项按钮的文字就是被隐藏的内容），`reply` 保留。FCM 负载不变。
+直连 SSE 的预览关闭过滤仍待用户确认，见服务端 [#1365](https://github.com/xindong/cindy-server/pull/1365)。
 类别标识同时写在手机端 `notificationActionIds.ts`，是与已安装 App 的契约，不能改名。`cindy.question.card`
 由通知内容扩展展开成提问卡片，见产品规则。
 

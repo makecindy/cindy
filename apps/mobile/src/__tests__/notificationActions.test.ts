@@ -18,6 +18,8 @@ const work = vi.hoisted(() => ({ end: vi.fn() }));
 vi.mock('@/notifications/nativeNotifications', () => ({ default: native }));
 vi.mock('@/notifications/backgroundWork', () => ({ beginBackgroundWork: async () => ({ budgetMs: 5_000, end: work.end }) }));
 
+import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
+import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import { parseNotificationAction, performNotificationAction } from '@/notifications/notificationActions';
 import { handleNotificationActionResponse, setNotificationActionTransport } from '@/notifications/notificationActionRunner';
 
@@ -258,6 +260,56 @@ describe('handleNotificationActionResponse', () => {
     expect(reported()[1]).toEqual({ title: 'Fix login', body: 'settings.notifications.actionNotDelivered',
       data: { cindyActionResult: true, deepLink: route } });
     setNotificationActionTransport(null);
+  });
+
+  // #10113 review: existing deadline tests stopped only at method entry, before
+  // connection/queue waits and async plugin expansion. Unit, real maker adapter
+  // plus an in-memory send queue: timeout reports failure; releasing it sends zero writes.
+  it.each(['permission', 'question', 'reply', 'plugin-reply'] as const)('never sends a late %s after reporting the background deadline', async kind => {
+    vi.useFakeTimers();
+    native.scheduleNotificationAsync.mockClear();
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const sent: string[] = [];
+    const queued: string[] = [];
+    const waiting = kind === 'question'
+      ? [{ request: { kind: 'ask_user_question', requestId: 'q-1', questions: [{ question: 'Which?', options: ['A'], isOther: true }] } }]
+      : [pendingCommand];
+    setNotificationActionTransport({
+      holdConnection: () => () => {},
+      makerFor: (deviceId, preSend) => createMobileMakerTransport({ deviceId, invoke: (async (_device, channel, args) => {
+        const write = channel === 'maker:resolve-interaction' || channel === 'maker:input:enqueue';
+        if ((write && kind !== 'plugin-reply') || channel === 'ghosts:composer-list') {
+          queued.push(channel);
+          await blocked;
+        }
+        // DeviceLinkClient checks after queue admission, before creating a request.
+        preSend?.();
+        if (write) sent.push(channel);
+        if (channel === 'maker:get-pending-interactions') return waiting;
+        if (channel === 'local-db:sessions:get') return { id: 's1', workingDir: '/repo', agentKind: 'claude-code', model: 'm' };
+        if (channel === 'ghosts:composer-list') return [];
+        return { accepted: true };
+      }) as RemoteInvoke }),
+    });
+    try {
+      const payload = kind === 'permission' ? permission : { deepLink: route,
+        action: kind === 'question' ? { kind: 'question', requestId: 'q-1' } : { kind: 'reply' } };
+      handleNotificationActionResponse(response(kind === 'permission' ? 'approve' : 'reply', payload,
+        { userText: kind === 'plugin-reply' ? '$mail hello' : 'A' }, 100 + ['permission', 'question', 'reply', 'plugin-reply'].indexOf(kind)));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(queued).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(reported()).toHaveLength(1);
+      release();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(sent).toEqual([]);
+      expect(reported()).toHaveLength(1);
+    } finally {
+      release();
+      setNotificationActionTransport(null);
+      vi.useRealTimers();
+    }
   });
 
   it('reports a request that ended before the answer arrived, and a transport that breaks on the way', async () => {

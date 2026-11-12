@@ -24,7 +24,8 @@ import {
 const ACTION_BUDGET_MS = 25_000;
 
 export interface NotificationActionTransport {
-  makerFor(deviceId: string): MobileMakerTransport;
+  /** The guard must reach invoke's actual preSend check after connection/queue waits. */
+  makerFor(deviceId: string, preSend: () => void): MobileMakerTransport;
   /** Keep the relay connection in the background until the returned release is called. */
   holdConnection(): () => void;
 }
@@ -119,7 +120,9 @@ async function runNotificationAction(request: NotificationActionRequest): Promis
     try {
       return await Promise.race([
         // Starts no request after `until`; one already on its way may still land.
-        performNotificationAction(request, current.makerFor(request.deviceId), { until }),
+        performNotificationAction(request, current.makerFor(request.deviceId, () => {
+          if (Date.now() >= until) throw new Error('notification action deadline passed');
+        }), { until }),
         new Promise<NotificationActionOutcome>(resolve => { timer = setTimeout(() => resolve('failed'), Math.max(0, until - Date.now())); }),
       ]);
     } finally {

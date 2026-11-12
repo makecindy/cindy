@@ -11,7 +11,12 @@ export function NotificationActionBridge() {
   const { invoke, holdBackgroundConnection } = useDeviceLink();
   useEffect(() => {
     const transport: NotificationActionTransport = {
-      makerFor: deviceId => createMobileMakerTransport({ deviceId, invoke }),
+      makerFor: (deviceId, preSend) => createMobileMakerTransport({
+        deviceId,
+        // Preserve the deadline through async message expansion, connection
+        // recovery and invoke queue admission, right up to the actual send.
+        invoke: (target, channel, args) => invoke(target, channel, args, { preSend }),
+      }),
       holdConnection: () => holdBackgroundConnection?.() ?? (() => {}),
     };
     setNotificationActionTransport(transport);
