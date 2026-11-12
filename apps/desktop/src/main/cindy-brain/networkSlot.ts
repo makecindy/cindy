@@ -866,10 +866,12 @@ export class GhostNetworkSlot {
       if (p.protocols !== undefined && (!Array.isArray(p.protocols) || p.protocols.length > 16 ||
           p.protocols.some(protocol => typeof protocol !== 'string' || !/^[!#$%&'*+.^_`|~A-Za-z0-9-]{1,128}$/.test(protocol)) || new Set(p.protocols).size !== p.protocols.length)) throw new Error('NETWORK_INVALID_REQUEST');
       if ((this.inflight.get(instanceKey) ?? 0) + this.connections.count(instanceKey) >= GHOST_FETCH_INFLIGHT_LIMIT) throw new Error('NETWORK_CONNECTION_LIMIT');
-      const assertCurrent = this.captureGuard(instanceKey);
+      const hostGuard = this.captureGuard(instanceKey);
+      const credentialGuards: Array<() => void> = [];
+      const assertCurrent = () => { hostGuard(); for (const guard of credentialGuards) guard(); };
       assertCurrent();
       const inject = await this.injectSecrets(instanceKey, ghost.manifest.network.secrets ?? [], [], url,
-        ghost.manifest.network.hosts, parsed.headers);
+        ghost.manifest.network.hosts, parsed.headers, undefined, credentialGuards);
       assertCurrent();
       if (inject.error) return { ok: false, errorCode: 'NETWORK_CREDENTIAL_UNAVAILABLE', message: inject.error };
       const connectionId = await this.connections.openWebSocket(instanceKey, {

@@ -217,7 +217,9 @@ describe('host network connections', () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it('requires an exact WS origin, exchanges real frames, and closes on replacement', async () => {
+  // §4: the existing installation guard did not cover source-credential
+  // revocation after a WebSocket handshake. Both must stop later sends.
+  it.each(['installation', 'credential'] as const)('requires an exact WS origin, exchanges real frames, and closes on %s revocation', async boundary => {
     const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     await new Promise<void>(resolve => server.once('listening', resolve));
     const address = server.address();
@@ -231,8 +233,11 @@ describe('host network connections', () => {
     });
     const { slot } = makeSlot({
       getGhost: () => fakeGhost({ network: { hosts: [origin], secrets: [{ key: 'own', label: 'Own key', inject: { header: 'Authorization', format: 'Bearer {value}', hosts: [origin] } }] } }),
-      readSecret: () => 'host-only-key',
-      captureRequestGuard: () => () => { if (!current) throw new Error('installation changed'); },
+      readSecret: () => boundary === 'credential' ? GHOST_SAVED_CREDENTIAL_MARKER : 'host-only-key',
+      resolveSavedCredential: () => ({ value: 'host-only-key', assertCurrent: () => {
+        if (!current) throw new Error('CREDENTIAL_REFERENCE_CHANGED');
+      } }),
+      captureRequestGuard: () => () => { if (boundary === 'installation' && !current) throw new Error('installation changed'); },
     });
     try {
       expect(await slot.handleNetworkRequest('web-search', { op: 'open', url: 'ws://127.0.0.1:1/forbidden' })).toMatchObject({ ok: false });
