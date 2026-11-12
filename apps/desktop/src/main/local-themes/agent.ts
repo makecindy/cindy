@@ -9,6 +9,7 @@ import { classifyLocalAttachmentPath } from '../cindy-brain/ghostLocalPathGrant'
 import { inspectCindyFile } from '../cindy-files/reader';
 import { getLocalThemesDir, loadLocalThemesSync } from './loader';
 import { installThemePackage } from './packages';
+import { broadcastLocalThemes } from './register';
 
 /** A task reaches the same installer as file drops; it never opens another app. */
 export async function importThemePackageFromTask(
@@ -58,6 +59,8 @@ export async function importThemePackageFromTask(
     return { ok: false, errorCode: error.code === 'unsupported' ? 'UNSUPPORTED_CINDY_FILE' : 'INVALID_THEME_PACKAGE',
       message: error.code === 'unsupported' ? '当前版本不支持此文件，请更新 Cindy 后重试。' : '主题包无效，原有主题保持不变。' };
   }
+  await revalidate();
+  await broadcastLocalThemes();
   await revalidate();
   const themes = loadLocalThemesSync().themes.map(theme => ({ id: theme.id, name: theme.name, type: theme.type,
     themeFamily: theme.family ? `${theme.family}${LOCAL_THEME_SUFFIX}` : theme.id }));

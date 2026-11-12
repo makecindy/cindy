@@ -5,6 +5,7 @@ import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionS
 import { createLogger } from '../logger';
 import { getLocalThemesDir } from '../local-themes/loader';
 import { installThemePackage } from '../local-themes/packages';
+import { broadcastLocalThemes } from '../local-themes/register';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { inspectCindyFile } from './reader';
 
@@ -23,6 +24,8 @@ async function openCindyFile(filePath: unknown): Promise<CindyFileOpenResult> {
     assertCurrent();
     if (inspected.type === 'plugin') return { type: 'plugin' };
     const names = await installThemePackage(inspected, getLocalThemesDir(), assertCurrent);
+    assertCurrent();
+    await broadcastLocalThemes();
     assertCurrent();
     return { type: 'theme', names };
   } catch (error) {
