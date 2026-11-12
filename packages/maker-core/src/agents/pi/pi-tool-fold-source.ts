@@ -219,7 +219,15 @@ export default function (pi) {
         try { chars += JSON.stringify(calls[c2].arguments || {}).length; } catch (error) { /* ignore */ }
       }
       for (var r2 = 0; r2 < results.length; r2++) chars += textOf(results[r2].content).length;
-      trips.push({ start: index, end: indexes[indexes.length - 1], calls: calls, callCount: calls.length, chars: chars, hasImage: hasImage, results: results, indexes: indexes });
+      var sizes = Object.create(null);
+      for (var c3 = 0; c3 < calls.length; c3++) {
+        try { sizes[calls[c3].id] = JSON.stringify(calls[c3].arguments || {}).length; } catch (error) { sizes[calls[c3].id] = 0; }
+      }
+      for (var r3 = 0; r3 < results.length; r3++) {
+        var rid = String(results[r3].toolCallId);
+        sizes[rid] = (sizes[rid] || 0) + textOf(results[r3].content).length;
+      }
+      trips.push({ start: index, end: indexes[indexes.length - 1], calls: calls, callCount: calls.length, chars: chars, sizes: sizes, hasImage: hasImage, results: results, indexes: indexes });
     }
     return trips;
   }
@@ -353,9 +361,8 @@ export default function (pi) {
           resultMsg = message;
           var resultText = textOf(message.content);
           // Ingestion truncation appends exactly one marker and it is the last thing in
-          // the result. Only that full shape for this call id counts as a preview (plus the
-          // pre-id legacy shape from earlier experimental builds): a result that merely
-          // quotes the wording stays recoverable.
+          // the result. Only that full shape, naming this call id, counts as a preview: a
+          // result that merely quotes the wording stays recoverable.
           var marker = '[truncated ';
           var shape = /^\[truncated \d+ of \d+ chars; (.+)\]$/;
           var markerAt = resultText.indexOf(marker);
@@ -368,8 +375,7 @@ export default function (pi) {
               var tailText = tail ? tail[1] : '';
               var named = 'toolfold_read("' + key + '") returns the full text';
               var evictedNow = 'full text not retained (call "' + key + '"); re-run if needed';
-              if (endsText && (tailText === named || tailText === evictedNow
-                || tailText === 'full text not retained; re-run if needed')) truncatedPreview = markerBody;
+              if (endsText && (tailText === named || tailText === evictedNow)) truncatedPreview = markerBody;
             }
             markerAt = resultText.indexOf(marker, markerAt + 1);
           }
@@ -513,7 +519,7 @@ export default function (pi) {
         foldedSize = prunedSize;
       }
       for (var m = 0; m < candidates.length; m++) {
-        for (var mi = 0; mi < candidates[m].calls.length; mi++) markFolded(candidates[m].calls[mi].id, candidates[m].chars);
+        for (var mi = 0; mi < candidates[m].calls.length; mi++) markFolded(candidates[m].calls[mi].id, candidates[m].sizes[candidates[m].calls[mi].id] || 0);
       }
     }
 

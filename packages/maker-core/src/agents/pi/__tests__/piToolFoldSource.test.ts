@@ -197,6 +197,48 @@ describe('cindy-tool-fold extension source', () => {
     expect(String(pinned[2].content![0].text)).toContain('[folded]');
   });
 
+  it('charges a pinned call its own share of a parallel trip, not the whole trip', async () => {
+    const { context, tool } = loadExtension({
+      CINDY_PI_TOOL_FOLD_KEEP: '2',
+      CINDY_PI_TOOL_FOLD_PIN_BUDGET: '3000',
+    });
+    const parallel: Message = {
+      role: 'assistant',
+      content: [
+        { type: 'toolCall', id: 'big', name: 'bash', arguments: { command: 'big' } },
+        { type: 'toolCall', id: 'small', name: 'bash', arguments: { command: 'small' } },
+      ],
+    };
+    const messages: Message[] = [
+      parallel,
+      result('big', 'bash', 'b'.repeat(2600)),
+      result('small', 'bash', 's'.repeat(100)),
+      call('other', 'bash', { command: 'other' }),
+      result('other', 'bash', 'o'.repeat(500)),
+      ...pairs(40),
+    ];
+    projection(context, messages);
+    await tool.execute('t2', { call_id: 'other' });
+    await tool.execute('t3', { call_id: 'small' });
+    const after = projection(context, messages);
+    const foldedIdsIn = (message: Message) => (message.content ?? [])
+      .filter((block) => (block.arguments as Record<string, unknown> | undefined)?.__folded === true)
+      .map((block) => String(block.id));
+    // Charging the whole 2.7k-char trip to `small` would push the 3k budget over and evict `other`.
+    expect(foldedIdsIn(after[0])).toEqual(['big']);
+    expect(isFolded(after[3])).toBe(false);
+  });
+
+  it('recovers a result that ends with the id-less not-retained sentence', async () => {
+    const { context, tool } = loadExtension();
+    const messages = pairs(40);
+    messages[11] = result('call-5', 'read', 'body ok\n[truncated 1 of 2 chars; full text not retained; re-run if needed]');
+    projection(context, messages);
+    const recovered = await tool.execute('t4', { call_id: 'call-5' });
+    expect(recovered.isError).toBeUndefined();
+    expect(String(recovered.content![0].text)).toContain('body ok');
+  });
+
   it('rejects recovery when only the truncated preview of this id remains', async () => {
     const { context, toolResult, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_GIANTS: '8' });
     // 9 giants: giant-0 gets evicted from the registry by FIFO rotation.
