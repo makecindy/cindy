@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 import {
-  OWNERSHIP_RULES, SYNC_LOCAL_DOMAINS,
-  collectContractChannels, createConstResolver, createWindowApiScanner, classify, clientBehavior, isHostWork, isWindowClass,
+  HOST_IPC_ENTRIES_PREFIX, OWNERSHIP_RULES, SYNC_LOCAL_DOMAINS,
+  clientModeRegistrars, collectContractChannels, createConstResolver, createWindowApiScanner, classify, clientBehavior, isHostWork, isWindowClass,
   moduleGroup, owningFile, rankUsage, renderMarkdown, requireResolvedContract, summarize,
 } from '../host-channel-coverage.mjs';
 
@@ -37,8 +38,8 @@ test('renders code cells without splitting tables or changing literal characters
   }
 });
 const contract = new Set(['local-db:sessions:list']);
-const owner = (registration) => {
-  const { category, sub } = classify(registration, contract);
+const owner = (registration, within = contract) => {
+  const { category, sub } = classify(registration, within);
   return sub ? `${category}:${sub}` : category;
 };
 
@@ -58,6 +59,14 @@ test('B rules are final; A rules turn into two-phase C when the handler uses a w
   assert.match(both.reason, /自动化.*dialog/);
   assert.equal(owner({ channel: 'billing:get-balance', file: main('billing/index.ts'), gui: [] }), 'A');
   assert.equal(owner({ channel: 'odd:thing', file: main('odd.ts'), gui: ['shell'] }), 'C:two-phase');
+});
+
+test('Computer Use settings stay in the window; the agent browser belongs to the Host', () => {
+  assert.equal(owner({ channel: 'maker:computer:status', file: main('maker-ipc/register.ts'), gui: [] }), 'B');
+  const browser = classify({ channel: 'maker:browser:status', file: main('maker-ipc/register.ts'), gui: [] }, contract);
+  assert.deepEqual([browser.category, browser.basis], ['A', 'rule']);
+  assert.match(browser.reason, /Agent 浏览器/);
+  assert.ok(isHostWork(browser));
 });
 
 test('C buckets: backend, window-local, two-phase and special design', () => {
@@ -146,6 +155,29 @@ test('Host work is A plus backend and two-phase C, ranked by real calls', () => 
   assert.deepEqual(client.map((row) => [row.channel, row.count]), [['maker:schedule:list', 2]]);
 });
 
+test('Host work is ranked by domain: two-phase C joins its A domain, unlisted prefixes form one family', () => {
+  const at = (channel, file, extra = {}) => ({ channel, kind: 'invoke', file: main(file), line: 1, gui: [], ...extra });
+  const inventory = { registrations: [
+    at('maker:schedule:list', 'maker-ipc/register.ts'),
+    at('maker:schedule:export', 'maker-ipc/register.ts', { gui: ['dialog'] }),
+    at('odd:read', 'odd.ts'),
+    at('odd:open', 'other/odd.ts', { gui: ['shell'] }),
+    at('terminal:write', 'maker-ipc/register.ts'),
+    at('clipboard:copy-text', 'bootstrap-electron.ts'),
+  ], unresolved: [], contract: new Set() };
+  const entry = (count) => ({ kind: 'invoke', count, handled: count, missing: 0, unsupported: 0 });
+  const summary = summarize(inventory, { mode: 'embedded', channels: { 'maker:schedule:export': entry(3), 'odd:read': entry(4), 'terminal:write': entry(1) } });
+  assert.deepEqual(summary.families.map((f) => [f.domain, f.total, f.used, f.calls, f.groups]), [
+    ['未登记前缀', 2, 1, 4, [['odd', 1], ['other', 1]]],
+    ['自动化', 2, 1, 3, [['maker-ipc', 2]]],
+    [summary.rows.find((row) => row.channel === 'terminal:write').reason, 1, 1, 1, [['maker-ipc', 1]]],
+  ]);
+  assert.equal(summary.families.reduce((sum, f) => sum + f.total, 0), summary.hostWork.total);
+  const unsampled = summarize(inventory, null);
+  assert.deepEqual(unsampled.families.map((f) => [f.domain, f.total, f.used, f.calls]).slice(0, 2), [['未登记前缀', 2, null, null], ['自动化', 2, null, null]]);
+  assert.match(renderMarkdown(summary), /## 要 Host 做的：按领域排行[\s\S]*\| 1 \| 未登记前缀 \| 2 \| 1 \| 4 \| odd 1、other 1 \|/);
+});
+
 test('reports what a window-class channel does in client mode from the two handler snapshots', () => {
   const snapshot = (invoke, event = []) => ({ registered: { invoke, event } });
   const embedded = snapshot(['maker:computer:status', 'update-relaunch:blocking-summary', 'clipboard:copy-text'], ['maker:computer:drag']);
@@ -158,6 +190,50 @@ test('reports what a window-class channel does in client mode from the two handl
   assert.equal(clientBehavior(row('lazy:thing'), client, embedded), 'not-registered-either');
   assert.equal(clientBehavior(row('ghost-page:pick-model', 'invoke', { perWebContents: true }), client, embedded), 'per-webcontents');
   assert.equal(clientBehavior(row('clipboard:copy-text'), null, embedded), 'unknown');
+  // A registrar the client branch calls makes its channels local even when the snapshot predates it.
+  const registrars = new Set(['registerComputerUseIpc']);
+  const computer = row('maker:computer:status', 'invoke', { enclosing: 'registerComputerUseIpc' });
+  assert.equal(clientBehavior(computer, client, embedded), 'unsupported');
+  assert.equal(clientBehavior(computer, client, embedded, registrars), 'local-source');
+  assert.equal(clientBehavior(row('maker:computer:drag', 'event', { enclosing: 'registerComputerUseIpc' }), null, embedded, registrars), 'local-source');
+  assert.equal(clientBehavior(row('update-relaunch:blocking-summary', 'invoke', { enclosing: 'registerMakerIpc' }), client, embedded, registrars), 'no-handler');
+  assert.equal(clientBehavior(row('clipboard:copy-text', 'invoke', { enclosing: 'registerComputerUseIpc' }), client, embedded, registrars), 'local');
+});
+
+// The client branch is read from the real bootstrap, so a moved or renamed branch
+// stops generation instead of reporting every window-local registration as rejected.
+test('reads the registrars the client-mode branch calls from the real bootstrap', () => {
+  const root = fileURLToPath(new URL('../../', import.meta.url));
+  const ts = createRequire(path.join(root, 'apps/desktop/package.json'))('typescript');
+  const file = path.join(root, 'apps/desktop/src/main/bootstrap-electron.ts');
+  const sf = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.ESNext, true);
+  assert.ok(clientModeRegistrars(sf).has('registerComputerUseIpc'));
+  const moved = ts.createSourceFile('x.ts', [
+    'const registerMakerIpcsAfterSplash = async () => {',
+    '  if (makerIpcsRegistered) return;',
+    '  registerComputerUseIpc();',
+    '};',
+  ].join('\n'), ts.ScriptTarget.ESNext, true);
+  assert.throws(() => clientModeRegistrars(moved), /client-mode branch/);
+});
+
+test('every Host IPC registry entry resolves to a literal channel the contract can count', () => {
+  const root = fileURLToPath(new URL('../../', import.meta.url));
+  const ts = createRequire(path.join(root, 'apps/desktop/package.json'))('typescript');
+  const dir = path.join(root, HOST_IPC_ENTRIES_PREFIX);
+  const files = fs.readdirSync(dir).filter((name) => name.endsWith('.ts')).map((name) => path.join(dir, name));
+  const program = ts.createProgram(files, { noResolve: true, noLib: true, types: [], target: ts.ScriptTarget.ESNext });
+  const { constValues } = createConstResolver(program.getTypeChecker());
+  const values = [];
+  for (const file of files) {
+    const result = collectContractChannels(program.getSourceFile(file), 'channel', constValues);
+    assert.deepEqual(result.unresolved, [], file);
+    values.push(...result.values);
+  }
+  for (const channel of ['maker:session-background-tasks:list', 'maker:side-chat:list:v1']) {
+    assert.ok(values.includes(channel), `missing ${channel}`);
+    assert.equal(owner({ channel, file: main('maker-ipc/register.ts') }, new Set(values)), 'contract');
+  }
 });
 
 // Value: production analyzer output, PR #10047 Greptile P2 regressions.

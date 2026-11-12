@@ -149,12 +149,17 @@ export const PROXIED_CHANNELS: readonly ProxiedChannel[] = [
  * Takes `unknown` so the Electron `IpcMain` type is assignable; the shape is
  * validated by the first call.
  */
-export function claimProxiedChannels(ipcMain: unknown, log: (channel: string) => void): void {
+export function claimProxiedChannels(
+  ipcMain: unknown,
+  log: (channel: string) => void,
+  /** Channels routed through the Host's generic IPC route (host-ipc-proxy). */
+  routed: readonly string[] = [],
+): void {
   const target = ipcMain as {
     handle(channel: string, listener: (...args: never[]) => unknown): void;
     __originalHandle?: (channel: string, listener: (...args: never[]) => unknown) => void;
   };
-  const proxied = new Set(PROXIED_CHANNELS.map((entry) => entry.channel));
+  const proxied = new Set([...PROXIED_CHANNELS.map((entry) => entry.channel), ...routed]);
   const original = target.__originalHandle ?? target.handle.bind(target);
   target.__originalHandle = original;
 
