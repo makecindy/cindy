@@ -28,7 +28,7 @@ import { ConfirmDialogProvider } from './components/ui/confirm-dialog-provider';
 import { applyFontSettings, getInitialAppearanceSettings } from './hooks/useFontSettings';
 import { installAppearancePresenter, presentAppearance } from './appearance/AppearancePresenter';
 import { LocaleProvider, bootstrapInitialLocale } from './hooks/useLocale';
-import { followLocalThemeChanges, getInitialThemeVariant } from './hooks/useTheme';
+import { followLocalThemeChanges, followThemeSelectionChanges, getInitialThemeVariant } from './hooks/useTheme';
 import { WallpaperSettingsProvider } from './hooks/useWallpaperSettings';
 import { bootstrapLocalThemesSync } from './themes/local-themes';
 import { themeService } from './themes/theme-service';
@@ -39,7 +39,12 @@ document.documentElement.dataset.platform = window.electronAPI.platform;
 installHiddenAnimationGate();
 bootstrapLocalThemesSync();
 themeService.applyTheme(getInitialThemeVariant().theme);
-followLocalThemeChanges();
+const disposeLocalThemeChanges = followLocalThemeChanges();
+const disposeThemeSelectionChanges = followThemeSelectionChanges();
+import.meta.hot?.dispose(() => {
+  disposeLocalThemeChanges();
+  disposeThemeSelectionChanges();
+});
 const initialAppearance = getInitialAppearanceSettings();
 applyFontSettings(initialAppearance);
 // WallpaperSettingsProvider already follows this window's appearance snapshots.

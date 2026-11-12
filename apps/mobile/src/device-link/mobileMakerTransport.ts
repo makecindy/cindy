@@ -2,6 +2,7 @@ import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-for
 import {
   tryMobilePeerFile,
   peerMediaUri,
+  peerMediaPlayback,
   releasePeerMedia,
 } from "./peerFileRegistry";
 import { withTransientRemoteRetry } from "./remoteRetry";
@@ -1171,6 +1172,10 @@ export function createMobileMakerTransport({
             retain: async (result) => { await opts?.retainBackground?.(withDownload(result), fileIsCurrent); },
           },
           stream,
+          peerStream: opts?.playback && !isSharedTaskPeer(deviceId) ? async metadata => {
+            const { openPeerMediaStream } = await import("./peerMediaStream");
+            return openPeerMediaStream(deviceId, url, metadata, fileIsCurrent, opts?.signal);
+          } : undefined,
           inline: () => fetch(true),
           revalidate: () => fetch(true, true),
           inlineCache: opts?.thumbnail ? undefined : {
@@ -1190,6 +1195,8 @@ export function createMobileMakerTransport({
           peerResultIsTransient: true,
           isCurrent,
           discard: (result) => {
+            const playback = peerMediaPlayback(result);
+            if (playback) { void playback.close(); return; }
             const uri = peerMediaUri(result);
             if (uri) releasePeerMedia(uri);
             else if (

@@ -13311,6 +13311,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "用原文",
     "rateLimited": "声请过频，请稍候再试。",
     "status": {
       "listening": "方听声",
@@ -17697,6 +17698,7 @@
       "dingtalkBotDisconnectFailed": "钉钉机器人解绑未成"
     },
     "errors": {
+      "piStartupCloudFile": "发现仅在云端的指令文件：{{path}}。它可能使 Pi 启动等待。请在访达中下载该文件，确认已保存在本机后重试；超时也可能另有原因。",
       "openFileFailed": "无从于系统中启此卷",
       "emptyResponse": "模型无所答。请再试；上下文甚长者，亦可易一模型。",
       "turnFailed": "差事行之未成（模型未报谬误详情），请再试。",
@@ -19614,6 +19616,11 @@
     }
   },
   "pluginUi": {
+    "settings": "法器设定",
+    "save": "存定",
+    "settingsFailed": "法器设定未能读取或存定，请重开此页。",
+    "invalidSetting": "请核所标之值，勿逾允限。",
+    "attachmentFailed": "法器未能处理「{{name}}」，原附件仍存。",
     "display": "示法",
     "original": "原文",
     "menu": "法器页面与指令",

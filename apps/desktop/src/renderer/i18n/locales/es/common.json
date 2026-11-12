@@ -13470,6 +13470,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "Usar Texto Original",
     "rateLimited": "Demasiadas solicitudes de voz. Espere un momento y vuelva a intentarlo.",
     "status": {
       "listening": "Entrada de voz",
@@ -17930,6 +17931,7 @@
       "dingtalkBotDisconnectFailed": "No se pudo desvincular el bot de DingTalk"
     },
     "errors": {
+      "piStartupCloudFile": "Un archivo de instrucciones que solo está en la nube podría estar retrasando el inicio de Pi: {{path}}. Descarga este archivo en Finder, espera a que esté disponible localmente y vuelve a intentarlo. El tiempo de espera agotado podría tener otra causa.",
       "openFileFailed": "No se puede abrir el archivo en el sistema",
       "emptyResponse": "El modelo no devolvió contenido. Inténtalo de nuevo. Si el contexto es muy largo, cambia de modelo.",
       "turnFailed": "La tarea falló (el modelo no devolvió detalles del error); inténtalo de nuevo.",
@@ -19860,6 +19862,11 @@
     }
   },
   "pluginUi": {
+    "settings": "Ajustes de complementos",
+    "save": "Guardar",
+    "settingsFailed": "No se pudieron cargar o guardar los ajustes del complemento. Vuelve a abrir esta página.",
+    "invalidSetting": "Comprueba que los valores marcados estén dentro de los límites permitidos.",
+    "attachmentFailed": "El complemento no pudo procesar «{{name}}». Se conserva el archivo adjunto original.",
     "display": "Visualización",
     "original": "Original",
     "menu": "Vistas y comandos del complemento",

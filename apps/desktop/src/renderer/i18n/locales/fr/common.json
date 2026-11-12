@@ -13470,6 +13470,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "Utiliser le Texte Original",
     "rateLimited": "Trop de requêtes vocales. Patientez un instant, puis réessayez.",
     "status": {
       "listening": "Saisie vocale",
@@ -17930,6 +17931,7 @@
       "dingtalkBotDisconnectFailed": "Échec de la dissociation du bot DingTalk"
     },
     "errors": {
+      "piStartupCloudFile": "Un fichier d’instructions uniquement dans le cloud peut retarder le démarrage de Pi : {{path}}. Téléchargez ce fichier dans le Finder, attendez qu’il soit disponible en local, puis réessayez. Le délai dépassé peut avoir une autre cause.",
       "openFileFailed": "Impossible d'ouvrir le fichier dans le système",
       "emptyResponse": "Le modèle n'a renvoyé aucun contenu. Réessayez. Si le contexte est très long, changez de modèle.",
       "turnFailed": "La tâche a échoué (le modèle n'a fourni aucun détail sur l'erreur). Veuillez réessayer.",
@@ -19860,6 +19862,11 @@
     }
   },
   "pluginUi": {
+    "settings": "Réglages des plugins",
+    "save": "Enregistrer",
+    "settingsFailed": "Impossible de charger ou d’enregistrer les réglages du plugin. Rouvrez cette page.",
+    "invalidSetting": "Vérifiez que les valeurs signalées respectent les limites autorisées.",
+    "attachmentFailed": "Le plugin n’a pas pu traiter « {{name}} ». La pièce jointe d’origine est conservée.",
     "display": "Affichage",
     "original": "Original",
     "menu": "Vues et commandes du plugin",

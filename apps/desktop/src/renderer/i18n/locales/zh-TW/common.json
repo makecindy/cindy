@@ -13311,6 +13311,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "採用原文",
     "rateLimited": "語音請求過於頻繁，請稍後再試。",
     "status": {
       "listening": "語音輸入中",
@@ -17697,6 +17698,7 @@
       "dingtalkBotDisconnectFailed": "釘釘機器人解綁失敗"
     },
     "errors": {
+      "piStartupCloudFile": "發現僅在雲端的指令檔案：{{path}}。它可能使 Pi 啟動等待。請在 Finder 中下載該檔案，確認已儲存在本機後重試；逾時也可能另有原因。",
       "openFileFailed": "無法在系統中開啟檔案",
       "emptyResponse": "模型沒有返回內容。請重試。上下文很長時，也可以換一個模型。",
       "turnFailed": "任務執行失敗（模型未返回錯誤詳情），請重試。",
@@ -19614,6 +19616,11 @@
     }
   },
   "pluginUi": {
+    "settings": "插件設定",
+    "save": "儲存",
+    "settingsFailed": "無法讀取或儲存插件設定，請重新開啟此頁。",
+    "invalidSetting": "請檢查標示的值是否符合允許範圍。",
+    "attachmentFailed": "插件未能處理「{{name}}」，原附件已保留。",
     "display": "顯示方式",
     "original": "原文",
     "menu": "插件頁面與命令",

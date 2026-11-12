@@ -13311,6 +13311,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "采用原文",
     "rateLimited": "语音请求过于频繁，请稍后重试。",
     "status": {
       "listening": "语音输入中",
@@ -17697,6 +17698,7 @@
       "dingtalkBotDisconnectFailed": "钉钉机器人解绑失败"
     },
     "errors": {
+      "piStartupCloudFile": "发现仅在云端的指令文件：{{path}}。它可能使 Pi 启动等待。请在访达中下载该文件，确认已保存在本机后重试；超时也可能另有原因。",
       "openFileFailed": "无法在系统中打开文件",
       "emptyResponse": "模型没有返回内容。请重试。上下文很长时，也可以换一个模型。",
       "turnFailed": "任务执行失败（模型未返回错误详情），请重试。",
@@ -19614,6 +19616,11 @@
     }
   },
   "pluginUi": {
+    "settings": "插件设置",
+    "save": "保存",
+    "settingsFailed": "未能读取或保存插件设置，请重新打开此页再试。",
+    "invalidSetting": "请检查标记的值是否符合允许的范围。",
+    "attachmentFailed": "插件未能处理「{{name}}」，原附件已保留。",
     "display": "显示方式",
     "original": "原始内容",
     "menu": "插件视图与命令",
