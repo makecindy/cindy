@@ -1,5 +1,12 @@
 {
   "githubPrs": {
+    "status": {
+      "open": "Open",
+      "draft": "Draft",
+      "merged": "Merged",
+      "closed": "Closed"
+    },
+    "statusUnavailable": "Status not loaded yet",
     "title": "Manage PR Links",
     "hint": "Up to 3 in the header; pinned PRs appear first",
     "empty": "Paste a GitHub PR or GitLab MR URL to add it",
