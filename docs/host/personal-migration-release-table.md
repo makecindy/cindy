@@ -6,7 +6,7 @@
 
 状态口径：
 
-- **已对齐**：Host 与桌面用同一份代码或等价逻辑，有不带界面的自动验证；真实验证另列。
+- **已对齐**：Host 与桌面用同一份代码或等价逻辑，这条能力的写入、落盘、清理都已接上，有不带界面的自动验证；真实验证另列。只接了一部分时写「部分」，并列出没接的调用点。
 - **部分**：只对齐了一部分，缺口写在同一行。
 - **未做**：写明排在哪一步。
 - **移出 M1**：写明移到哪个里程碑和原因。
@@ -33,7 +33,7 @@
 | 6c | 思考开关写通道 | `register.ts` `SET_THINKING_ENABLED` | 未做（第 10 步） | — | 无 |
 | 6d | Pi 思考开关记忆 | `newMakerDefaultsCache.ts` | 部分：读取已接（m1-cp2b）；镜像由渲染层推送，客户端模式下推给窗口进程，Host 一直为空，要等 M2 的推送通道 | Host `start-options.test.mjs` | 无 |
 | 7 | 回合改动记录 | `turn-change-set/store.ts` | 部分（m1-cp5c 更正）：m1-cp5a 只接了引擎侧的写前捕获（Claude 与 Pi）。桌面在派发时开记录（`beginTurnChangeSetAtDispatch`）、从事件流记 Codex 的原生改动（`noteTurnDiffEvent`）、回合结束时落盘（`finalizeTurnChangeSet`）、未派发或关闭时清掉（`clearPendingTurnChangeSets`），Host 这四处都没接，捕获内容只留在内存里、不落盘。与 7b 同一批回合钩子一起补 | Host `agent-graph.test.mjs`（只覆盖引擎侧） | 无 |
-| 7b | Git 保存点与文件回退 | `git-snapshot-host.ts` | 未做（下一步，切断清单待审）。回退入口 `maker:rewind:preview`、`maker:rewind:commit` 在 Host 上没有注册，按约定随 M2 的界面通道一起接；这一步只接建保存点 | — | 无 |
+| 7b | Git 保存点与文件回退 | `git-snapshot-host.ts` | 未做（下一步，切断清单已确认，第 3 处用方案 A）。回退入口 `maker:rewind:preview`、`maker:rewind:commit` 在 Host 上没有注册，随 M2 的界面通道一起接；这一步只接建保存点。保存点标签在桌面是一次辅助模型调用；Host 上先只接停用裁决，标签用确定性的兜底标签，等第 4 步把辅助模型装配做成可共用后再走真实调用 | — | 无 |
 | 8 | 工作树租约 | `worktree/runtimeLeases.ts` | 未做（第 7 步） | — | 无 |
 | 9 | Codex 产品提示标记 | `maker-host/session-storage.ts` | 已对齐（m1-cp5a） | Host `agent-graph.test.mjs`；`codex-runtime.e2e.mjs` 数据库往返 | 无 |
 | 10 | 读图钩子、电脑操作防护、Bash 并发闸门 | `claudeHooks` | 未做（第 6 步） | — | 无 |
@@ -50,7 +50,7 @@
 | 21 | 启动时清掉从终端继承的 Anthropic 凭据与端点变量 | `main/index.ts` `stripSensitiveAnthropicEnv` | 已对齐（m1-cp5b）：`main.ts` 第一个导入执行同一步，保留导入用的 Claude 配置目录 | Host `boot-env.test.mjs` | 无 |
 | 22 | Cindy 内置工具服务 | `mcp-integrations/mcp-providers.ts` `createLiziMcpProviders` | 未做，归属已定：M1 做 cindy_helper 里任务相关的一组、cindy_lsp、cindy_ssh（排在 M1 靠后，动手前先交分组清单）；M2 做设置类、cindy_scheduler、cindy_docs、inputHandoff；M3 做伙伴、Orca、IM 机器人、群聊记录、android、sessionImport、远程任务状态。Host 现在只有 browser、computer、cindy_memory 和插件网关。系统提示与桌面逐字相同、不裁剪，所以在对应工具补齐之前，Host 任务会被提示引导去用尚不存在的工具；**这一行必须在开放迁移前清零** | — | 无 |
 | 23 | 引擎运行时配置（`runtimeConfig`） | `maker-host/runtime-configs.ts`；`pi-host.ts` `buildDesktopPiRuntimeConfig` → `runtimeConfigsCore.ts` | 已对齐（m1-cp5c）：产品系统提示、回答呈现提示、`behaviorFlags`、`taskShellEnv`、压缩阈值、换模型时的上下文评估、子代理模型、记忆设置（每次读取）、`userDataPath`、内置 ripgrep。Host 的 endpoint 仍是账号网关，见第 24 行；代输入的环境变量在 Host 上恒为空，见第二节 | desktop `hostRuntimeConfigParity.test.ts`：同一组输入分别走桌面装配与 Host 装配，逐字比较 systemPrompt、answerDeliveryPrompt，函数项按输入矩阵比较输出，允许不同的只有写死的 endpoint；Host `agent-graph.test.mjs`（含缺 ripgrep 时与桌面同样报错）；`codex-runtime.e2e.mjs` 断言真实 Codex 请求带产品提示 | 无 |
-| 24 | Claude 与 Pi 的本机兼容代理 | `maker-host/anthropic-compat-proxy-host.ts`（`getClaudeEndpoint`） | 未排期（待定归属）。Host 的 Claude 与 Pi 直连账号网关，相当于桌面代理没起来时的退路；代理负责的按模型路由与字段适配（给非 Claude 模型去掉 Anthropic 专有字段）在 Host 上没有 | — | 无 |
+| 24 | Claude 与 Pi 的本机兼容代理 | `maker-host/anthropic-compat-proxy-host.ts`（`getClaudeEndpoint`） | 未做（M1，排在 3c、7b 之后；动手前先交依赖清单）。Host 的 Claude 与 Pi 直连账号网关，相当于桌面代理没起来时的退路；代理负责的按模型路由与字段适配（给非 Claude 模型去掉 Anthropic 专有字段）在 Host 上没有。要求：只监听本机回环、与桌面同一模块；接上后说明 `maker:session-background-activity` 一族与 `maker:claude-session-route:get` 两个通道的状态在 Host 上有了，记入 M2 可接清单；它写的路由登记是 Claude 用量记录的来源之一，与 2e 的分工写清 | — | 无 |
 
 ## 二、与桌面不同（已知差异）
 
@@ -98,3 +98,5 @@
 | e2e 用量计数开关（只在测试里生效） | 第 9 步 |
 | 通道清单重新生成（合并 main 后为 1466 个） | 在下一个确实需要的检查点提交，写明新增的 10 个通道及归类 |
 | 带界面的验证 | 用户已允许（隔离沙箱、复用 host-usage）；2e 之前客户端模式只做导航与读取 |
+| 基线失败：`apps/desktop/src/main/maker-ipc/__tests__/botLifecycleService.test.ts` 10 项 | 报 `SqliteError: no such table: mcp_app_view_states`（`deleteDeletedSessionViewStates`）。对照方法：把本分支改过的桌面源码换回合并的 main 版本（7eaf7788de）、删掉新增模块后单跑该文件，同样 10 项失败，判为 main 上原有问题。合并 main 后若自行恢复，删掉这一行 |
+| PR 正文须写：桌面提示前后哈希 | 重构前（7eaf7788de）与 m1-cp5c 之后，桌面三个引擎最终 systemPrompt / answerDeliveryPrompt 的 sha256 前 16 位相同：Claude `cb41d06b15ad7128` / `6084849accb05a45`，Codex 同 Claude（两份引擎补充提示目前为空），Pi `be3d281b8d83ea42` / `e6057c54763111fc`。结论：桌面提示前缀逐字节不变，缓存率不受影响 |
