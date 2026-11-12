@@ -57,7 +57,7 @@ it('explains offline, unsupported hosts and logical failures instead of an empty
 // Review #7105: the real query catch previously erased UNSUPPORTED_CAPABILITY.
 // Empty ops did not exercise rejected transport promises. One rejected caps read is the failure input; unit tier.
 it.each([
-  Object.assign(new Error('Unknown teammate action'), { code: 'UNSUPPORTED_CAPABILITY' }),
+  Object.assign(new Error("Unknown buddy action"), { code: 'UNSUPPORTED_CAPABILITY' }),
   new Error('[UNSUPPORTED_CAPABILITY] Unknown teammate action'),
   Object.assign(new Error('Channel unavailable'), { code: 'CHANNEL_NOT_ALLOWED' }),
 ])('shows the upgrade hint when the host rejects the settings capability (%s)', async error => {

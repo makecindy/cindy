@@ -69,7 +69,7 @@ export function unlinkedTeammateProjectMemoryDir(workspace: string): string {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
-    if (linked) throw new MemoryError('not-ready', 'the teammate memory folder is a link; refusing to use it');
+    if (linked) throw new MemoryError('not-ready', 'the buddy memory folder is a link; refusing to use it');
   }
   return memory;
 }

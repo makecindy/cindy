@@ -452,7 +452,7 @@ export async function prepareBotProjectWorkspace(input: {
 
 /** One recognisable name for every teammate project, so it never reads like a same-named repo. */
 export function botProjectName(displayName: string): string {
-  return `Teammate ${displayName.trim()}`;
+  return `Buddy ${displayName.trim()}`;
 }
 
 /**
@@ -470,7 +470,8 @@ export async function nameBotProject(
   const projectKey = `local:${projectDir}`;
   const current = (await listProjectAliases().catch(() => []))
     .find((row) => row.projectKey === projectKey)?.alias?.trim() ?? '';
-  const replaceable = new Set(['', name, ...(previousName?.trim() ? [previousName.trim(), botProjectName(previousName)] : [])]);
+  const replaceable = new Set(['', name, `Teammate ${name}`,
+    ...(previousName?.trim() ? [previousName.trim(), botProjectName(previousName), `Teammate ${previousName.trim()}`] : [])]);
   if (!replaceable.has(current) || current === botProjectName(name)) return;
   await upsertProjectAlias(projectKey, botProjectName(name)).catch((error) => {
     log.warn('teammate project name failed', { botId, error: String(error) });

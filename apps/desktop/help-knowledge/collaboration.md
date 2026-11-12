@@ -8,7 +8,7 @@ Collaboration ("Collab") lets one session — the **lead** — bring in one or m
 
 **Turning it on:**
 
-- In a regular project or dialogue session, open the composer's **+** menu and choose **Collaboration**. You can also do this before sending the first message of a new session. Claude Code, Codex, and Pi sessions can lead, locally or over SSH. It isn't offered inside a worker or in a teammate chat.
+- In a regular project or dialogue session, open the composer's **+** menu and choose **Collaboration**. You can also do this before sending the first message of a new session. Claude Code, Codex, and Pi sessions can lead, locally or over SSH. It isn't offered inside a worker or in a buddy chat.
 - The **Start Collaboration** panel ("Bring in a Worker") sets up the first worker:
   - **Agent** (Claude Code, Codex, or Pi), **Model**, **Reasoning Effort**, an optional **Role Name** (just a label to tell workers apart), and an optional **Initial Task**.
   - **Permission Mode**: if you haven't chosen one before, it starts at **Full access** (skips routine approvals). You can choose **Auto-review** instead (safe work proceeds automatically; higher-risk actions may still be denied or need confirmation). Switching to Full access asks you to confirm first.

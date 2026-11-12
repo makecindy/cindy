@@ -811,8 +811,8 @@ describe('resolveModelDefaultContextWindow — settings defaults configure the s
             baseUrl: 'https://example.invalid/v1',
             models: [
               {
-                id: 'gpt-5.6-sol',
-                name: 'gpt-5.6-sol',
+                id: 'private-context-fixture',
+                name: 'private-context-fixture',
                 ...(solContextWindow !== undefined ? { contextWindow: solContextWindow } : {}),
               },
               { id: 'gpt-5.4-mini', name: 'gpt-5.4-mini' },
@@ -827,13 +827,13 @@ describe('resolveModelDefaultContextWindow — settings defaults configure the s
   it('用户显式填写的窗口返回该值', () => {
     const catalog = catalogWithCustom(1_050_000);
     expect(
-      resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.6-sol'),
+      resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'private-context-fixture'),
     ).toBe(1_050_000);
   });
 
   it('applies the displayed default for custom models without a saved override', () => {
     const catalog = catalogWithCustom();
-    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.6-sol')).toBe(200_000);
+    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'private-context-fixture')).toBe(500_000);
   });
 
   it('applies Gateway and subscription defaults independently for the same model id', () => {
@@ -844,16 +844,16 @@ describe('resolveModelDefaultContextWindow — settings defaults configure the s
       provider.models.codex = [{ ...model, contextWindow: window }];
       expect(resolveModelDefaultContextWindow(catalog, 'codex', id, model.id)).toBe(window);
     }
-    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.6-sol')).toBe(500_000);
+    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'private-context-fixture')).toBe(500_000);
     expect(resolveModelDefaultContextWindow(catalog, 'codex', 'xd', 'missing')).toBeNull();
     catalog.providers.find(p => p.id === 'xd')!.routing.codex!.disabled = true;
-    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'xd', 'gpt-5.6-sol')).toBeNull();
+    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'xd', 'private-context-fixture')).toBeNull();
   });
 
   it('没有 providerId 不注入', () => {
     const catalog = catalogWithCustom(1_050_000);
     expect(
-      resolveModelDefaultContextWindow(catalog, 'codex', null, 'gpt-5.6-sol'),
+      resolveModelDefaultContextWindow(catalog, 'codex', null, 'private-context-fixture'),
     ).toBeNull();
   });
 });

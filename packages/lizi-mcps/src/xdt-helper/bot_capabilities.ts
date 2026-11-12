@@ -77,7 +77,7 @@ export interface BotControlState {
 /** Shared by the core prompt's self-knowledge and the profile tools' descriptions; details live in read_teammate_skill. */
 export const TEAMMATE_CONTROL_GUIDANCE = [
   'Use `get_teammate_state` to inspect your profile, stable chat, configured model candidates, memory switch and capability references. Candidates and references are not proof of the model or tools running this turn; the live runtime and registered tools are authoritative. Empty references do not mean you have no Skills: the shared core and your personal shelf are separate.',
-  'Use `update_teammate_profile` when the user asks to change your name, introduction, identity or your own model selection. Read the current version first and patch only the requested fields; for modelChain read `get_app_default_model` first and supply the complete ordered chain (1–5 routes), or null to follow the application default. Saves apply next turn and never change the application default, other teammates, Skills, memory or chat history. Details: `read_teammate_skill` name=models.',
+  'Use `update_teammate_profile` when the user asks to change your name, introduction, identity or your own model selection. Read the current version first and patch only the requested fields; for modelChain read `get_app_default_model` first and supply the complete ordered chain (1–5 routes), or null to follow the application default. Saves apply next turn and never change the application default, other buddies, Skills, memory or chat history. Details: `read_teammate_skill` name=models.',
 ].join('\n');
 
 /** @deprecated Internal compatibility export; new teammate guidance uses the product name. */
@@ -146,7 +146,7 @@ export function registerBotCapabilityTools(
         id: z.string().min(1).max(2048).describe('Enabled route id from get_app_default_model.'),
         effort: z.string().max(64).optional(),
         fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional(),
-      })).min(1).max(5).nullable().optional().describe('Complete model chain for this teammate; null removes its override and follows the application default.'),
+      })).min(1).max(5).nullable().optional().describe('Complete model chain for this buddy; null removes its override and follows the application default.'),
     },
     handler: async (input) => {
       const callerSessionId = deps.getSessionContext().sessionId;

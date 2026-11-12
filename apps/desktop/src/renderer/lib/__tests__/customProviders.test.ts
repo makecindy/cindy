@@ -1,4 +1,4 @@
-import { buildUserProvider, BUNDLED_CATALOG } from '@cindy/model-providers';
+import { buildUserProvider, BUNDLED_CATALOG, DEFAULT_CUSTOM_CONTEXT_WINDOW } from '@cindy/model-providers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { customProviderSecretStorageKey } from '@/../shared/providerSecrets';
@@ -331,7 +331,7 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
       customProviderModelConfigFromCatalogModel({
         id: 'default-context',
         name: 'Default Context',
-        contextWindow: 200_000,
+        contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
       }),
     ).toEqual({
       id: 'default-context',
@@ -353,21 +353,34 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
     });
   });
 
-  it('preserves an explicit override equal to the current default (explicit flag wins)', () => {
-    // 用户显式填了 200000:值恰好等于当前默认,但显式覆盖必须在未来默认升级后
-    // 原样保留——不能靠等值推断丢掉字段(PR review P1)。
+  it.each([200_000, 500_000])('preserves an explicit %i override across default changes', contextWindow => {
     expect(
       customProviderModelConfigFromCatalogModel({
         id: 'pinned-default',
         name: 'Pinned',
-        contextWindow: 200_000,
+        contextWindow,
         contextWindowExplicit: true,
       }),
     ).toEqual({
       id: 'pinned-default',
       name: 'Pinned',
-      contextWindow: 200_000,
+      contextWindow,
     });
+  });
+
+  it.each(['claude-code', 'codex', 'pi'] as const)('keeps materialized defaults sparse through the %s edit round trip', agent => {
+    for (const contextWindow of [200_000, 500_000]) {
+      const model = { id: 'private-default', name: 'Private', contextWindow, contextWindowExplicit: false };
+      const saved = customProviderModelConfigFromCatalogModel(model, agent);
+      expect(saved).toEqual({ id: model.id, name: model.name });
+      const rebuilt = buildUserProvider({
+        id: 'round-trip', name: 'Round Trip',
+        runtimes: { [agent]: { baseUrl: 'https://private.example/v1', wireProtocol: 'openai-chat', models: [saved] } },
+      }).models[agent]![0];
+      expect(rebuilt.contextWindow).toBe(500_000);
+      expect(rebuilt.contextWindowExplicit).toBeUndefined();
+      expect(model.contextWindow).toBe(contextWindow);
+    }
   });
 
   it('preserves hidden defaults while round-tripping catalog models', () => {
@@ -375,7 +388,7 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
       customProviderModelConfigFromCatalogModel({
         id: 'discovered',
         name: 'Discovered',
-        contextWindow: 200_000,
+        contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
         defaultEnabled: false,
       }),
     ).toEqual({
@@ -390,7 +403,7 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
       customProviderModelConfigFromCatalogModel({
         id: 'vision-model',
         name: 'Vision Model',
-        contextWindow: 200_000,
+        contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
         supportsImageInput: true,
       }),
     ).toEqual({
@@ -405,7 +418,7 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
       customProviderModelConfigFromCatalogModel({
         id: 'glm-5.3',
         name: 'GLM-5.3',
-        contextWindow: 200_000,
+        contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
         route: {
           baseUrl: 'https://open.bigmodel.cn/api/v1',
           wireProtocol: 'openai-responses',
@@ -425,7 +438,7 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
     const catalogModel = {
       id: 'reasoner',
       name: 'Reasoner',
-      contextWindow: 200_000,
+      contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
       efforts: ['low', 'high', 'xhigh'] as CatalogModel['efforts'],
       defaultEffort: 'xhigh' as const,
     };
@@ -546,7 +559,7 @@ describe('providerViewToCustomProviderConfig', () => {
           {
             id: 'local-model',
             name: 'Local Model',
-            contextWindow: 200_000,
+            contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
             efforts: [],
             defaultEffort: null,
           },
@@ -592,7 +605,7 @@ describe('providerViewToCustomProviderConfig', () => {
           {
             id: 'glm-5.3',
             name: 'GLM-5.3',
-            contextWindow: 200_000,
+            contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
             efforts: [],
             defaultEffort: null,
             route: {
@@ -679,7 +692,7 @@ describe('providerViewToCustomProviderConfig', () => {
           {
             id: 'reasoner',
             name: 'Reasoner',
-            contextWindow: 200_000,
+            contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
             efforts: ['low', 'high', 'xhigh'],
             defaultEffort: 'high',
           },

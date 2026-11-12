@@ -3,7 +3,64 @@ import {
   normalizeRepeatedResponseToolCallIds,
   normalizeRepeatedResponseToolCallIdsFromBody,
   normalizeDeepSeekV41ToolHistory,
+  normalizeKimiToolHistory,
+  normalizeStrictGatewayHistory,
 } from '../../providers/history';
+import type { CompatibilityRoute } from '../../profiles';
+
+describe('Kimi route-scoped tool history', () => {
+  const route: CompatibilityRoute = { harness: 'codex', protocol: 'openai-chat', upstreamBase: 'https://api.kimi.com/coding/v1', model: 'k3', authMode: 'oauth' };
+  const call = { type: 'function_call', call_id: 'exec:83', name: 'read', arguments: '{}' };
+  const assistant = { type: 'message', role: 'assistant', content: 'Checking.' };
+  const output = { type: 'function_call_output', call_id: 'exec:83', output: 'value' };
+  // #10024, unit: production normalizer must preserve the complete payload while
+  // repairing adjacency. Existing DeepSeek cases only allow developer messages.
+  it('preserves parallel batches, reasoning, media and wire model without mutating input', () => {
+    const reasoning = { type: 'reasoning', summary: [{ type: 'summary_text', text: 'synthetic' }] };
+    const patch = { type: 'custom_tool_call', call_id: 'patch:1', name: 'apply_patch', input: 'patch' };
+    const media = { type: 'custom_tool_call_output', call_id: 'patch:1', output: [{ type: 'input_image', image_url: 'data:image/png;base64,AA==' }] };
+    const second = { ...call, call_id: 'exec:84' };
+    const secondOutput = { ...output, call_id: 'exec:84' };
+    const input = [reasoning, call, patch, media, assistant, output, second, assistant, secondOutput];
+    const body = { model: 'k3[1m]', input, reasoning: { effort: 'high' } };
+    const snapshot = structuredClone(body);
+    const normalized = normalizeKimiToolHistory(body, { ...route, model: body.model, authMode: 'api-key' });
+    expect(normalized).toEqual({ ...body, input: [reasoning, call, patch, media, output, assistant, second, secondOutput, assistant] });
+    expect(body).toEqual(snapshot);
+    expect(normalizeKimiToolHistory(normalized!, route)).toBeNull();
+    expect(normalizeStrictGatewayHistory(body)).toBeNull();
+  });
+
+  it.each([
+    { upstreamBase: 'https://api.openai.com/v1' },
+    { upstreamBase: 'https://api.kimi.com.evil.example/coding/v1' },
+    { upstreamBase: 'https://api.kimi.com/coding/v10' },
+    { upstreamBase: 'http://api.kimi.com/coding/v1' },
+    { model: 'other' },
+    { protocol: 'openai-responses' as const },
+    { harness: 'pi' as const },
+  ])('does not infer Kimi policy from a bare name or lookalike route: %j', override => {
+    expect(normalizeKimiToolHistory({ model: 'k3', input: [call, assistant, output] }, { ...route, ...override })).toBeNull();
+  });
+
+  it.each([
+    [call, output, assistant],
+    [call, assistant],
+    [call, assistant, { type: 'message', role: 'user', content: 'interrupt' }, output],
+    [call, assistant, { type: 'reasoning', summary: [] }, output],
+    [call, assistant, { type: 'message', role: 'developer', content: 'context' }, output],
+    [call, assistant, { ...output, type: 'custom_tool_call_output' }],
+    [call, assistant, { type: 'function_call_output', call_id: call.call_id }],
+    [call, assistant, output, { ...output }],
+    [call, { ...call }, assistant, output],
+    [call, assistant, { ...output, call_id: 'unrelated' }],
+  ])('leaves normal, incomplete, ambiguous and cross-boundary histories intact', (...input) => {
+    const body = { model: 'k3', input };
+    const snapshot = structuredClone(body);
+    expect(normalizeKimiToolHistory(body, route)).toBeNull();
+    expect(body).toEqual(snapshot);
+  });
+});
 
 describe('Responses tool history normalization', () => {
   // #7906: strict Responses providers reject repeated call IDs and duplicate outputs with a 400.

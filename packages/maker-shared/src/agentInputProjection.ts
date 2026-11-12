@@ -660,8 +660,8 @@ function formatReference(reference: AgentInputReference): string {
         : [
             "Host status: not refreshed. Do not invent availability or activity.",
           ]),
-      `Action: infer intent from the surrounding request. Answer status questions from Host status without sending a new message. To contact this teammate, call send_to_session once with ${snapshot?.mainSessionId ? `target_session_id ${quotedMetadata(snapshot.mainSessionId)} (its main chat)` : 'the session_id that list_agents returns for this Bot ID'}.`,
-      "Boundary: Do not blindly forward the surrounding user text. A teammate message only confirms delivery, not that any work is done.",
+      `Action: infer intent from the surrounding request. Answer status questions from Host status without sending a new message. To contact this buddy, call send_to_session once with ${snapshot?.mainSessionId ? `target_session_id ${quotedMetadata(snapshot.mainSessionId)} (its main chat)` : 'the session_id that list_agents returns for this Bot ID'}.`,
+      "Boundary: Do not blindly forward the surrounding user text. A buddy message only confirms delivery, not that any work is done.",
       '[/Referenced Cindy Bot]',
     ].join('\n');
   }

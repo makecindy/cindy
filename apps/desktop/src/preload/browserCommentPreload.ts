@@ -345,89 +345,95 @@ let state: OverlayState | null = null;
 
 // ── DOM 构建 ────────────────────────────────────────────────────────────────
 
+/** 页面 CSP 会拒绝 Shadow DOM 中的内联 <style>，但允许可信 preload 通过
+ * CSSOM 设置元素样式。所有浮层（含之后创建的标注）共用这些声明，不改网页 CSP。 */
+const OVERLAY_STYLES = {
+  blocker: `
+    position: fixed; inset: 0;
+    pointer-events: auto;
+    cursor: crosshair;
+    background: transparent;
+  `,
+  selection: `
+    position: fixed;
+    display: none;
+    pointer-events: none;
+    border: 2px solid ${ACCENT};
+    border-radius: 2px;
+    background: rgba(59, 130, 246, 0.08);
+    box-sizing: border-box;
+  `,
+  docLayer: `
+    position: fixed; left: 0; top: 0;
+    width: 0; height: 0;
+    overflow: visible;
+    pointer-events: none;
+    will-change: transform;
+  `,
+  marker: `
+    position: absolute;
+    pointer-events: none;
+    width: 22px; height: 22px;
+    margin: -11px 0 0 -11px;
+    border-radius: 50%;
+    background: ${ACCENT};
+    color: #fff;
+    /* 原为 font: 600 12px/22px … shorthand。拆分成 longhand 后必须显式补回
+       shorthand 的隐式重置:本样式注入第三方页面的 Shadow DOM,下列字体属性
+       全部可从宿主 host 继承(italic / small-caps 改字形,variation 的 wght 轴
+       可整体改粗细,feature/kerning/size-adjust 改字宽与实际字号),shorthand
+       时代它们被隐式归回初始值,拆分后需逐项手动锁死(红队评审二轮补全)。 */
+    font-style: normal;
+    font-variant: normal;
+    font-stretch: normal;
+    font-kerning: auto;
+    font-feature-settings: normal;
+    font-variation-settings: normal;
+    font-optical-sizing: auto;
+    font-size-adjust: none;
+    font-weight: 600;
+    font-size: 12px;
+    line-height: 22px;
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    text-align: center;
+    box-shadow: 0 0 0 2px #fff, 0 1px 4px rgba(0,0,0,0.35);
+  `,
+  regionBox: `
+    position: absolute;
+    pointer-events: none;
+    border: 2px solid ${ACCENT};
+    border-radius: 2px;
+    background: rgba(59, 130, 246, 0.08);
+    box-sizing: border-box;
+  `,
+  textBox: `
+    position: absolute;
+    pointer-events: none;
+    background: rgba(59, 130, 246, 0.28);
+    border-radius: 2px;
+  `,
+};
+
 function buildOverlay(markerNumber: number): OverlayState {
   const container = document.createElement('div');
   // 定位上下文 + 不参与页面布局。pointer-events 由内部各层自己控制。
   container.style.cssText = `position:fixed;inset:0;z-index:${Z_MAX};pointer-events:none;`;
   const shadow = container.attachShadow({ mode: 'closed' });
 
-  const style = document.createElement('style');
-  style.textContent = `
-    .blocker {
-      position: fixed; inset: 0;
-      pointer-events: auto;
-      cursor: crosshair;
-      background: transparent;
-    }
-    .highlight, .drag-rect {
-      position: fixed;
-      display: none;
-      pointer-events: none;
-      border: 2px solid ${ACCENT};
-      border-radius: 2px;
-      background: rgba(59, 130, 246, 0.08);
-      box-sizing: border-box;
-    }
-    .doc-layer {
-      position: fixed; left: 0; top: 0;
-      width: 0; height: 0;
-      overflow: visible;
-      pointer-events: none;
-      will-change: transform;
-    }
-    .marker {
-      position: absolute;
-      pointer-events: none;
-      width: 22px; height: 22px;
-      margin: -11px 0 0 -11px;
-      border-radius: 50%;
-      background: ${ACCENT};
-      color: #fff;
-      /* 原为 font: 600 12px/22px … shorthand。拆分成 longhand 后必须显式补回
-         shorthand 的隐式重置:本样式注入第三方页面的 Shadow DOM,下列字体属性
-         全部可从宿主 host 继承(italic / small-caps 改字形,variation 的 wght 轴
-         可整体改粗细,feature/kerning/size-adjust 改字宽与实际字号),shorthand
-         时代它们被隐式归回初始值,拆分后需逐项手动锁死(红队评审二轮补全)。 */
-      font-style: normal;
-      font-variant: normal;
-      font-stretch: normal;
-      font-kerning: auto;
-      font-feature-settings: normal;
-      font-variation-settings: normal;
-      font-optical-sizing: auto;
-      font-size-adjust: none;
-      font-weight: 600;
-      font-size: 12px;
-      line-height: 22px;
-      font-family: -apple-system, "Segoe UI", sans-serif;
-      text-align: center;
-      box-shadow: 0 0 0 2px #fff, 0 1px 4px rgba(0,0,0,0.35);
-    }
-    .region-box {
-      position: absolute;
-      pointer-events: none;
-      border: 2px solid ${ACCENT};
-      border-radius: 2px;
-      background: rgba(59, 130, 246, 0.08);
-      box-sizing: border-box;
-    }
-    .text-box {
-      position: absolute;
-      pointer-events: none;
-      background: rgba(59, 130, 246, 0.28);
-      border-radius: 2px;
-    }
-  `;
   const blocker = document.createElement('div');
   blocker.className = 'blocker';
+  blocker.style.cssText = OVERLAY_STYLES.blocker;
   const highlight = document.createElement('div');
   highlight.className = 'highlight';
+  highlight.style.cssText = OVERLAY_STYLES.selection;
   const dragRect = document.createElement('div');
   dragRect.className = 'drag-rect';
+  dragRect.style.cssText = OVERLAY_STYLES.selection;
   const docLayer = document.createElement('div');
   docLayer.className = 'doc-layer';
+  docLayer.style.cssText = OVERLAY_STYLES.docLayer;
 
-  shadow.append(style, blocker, highlight, dragRect, docLayer);
+  shadow.append(blocker, highlight, dragRect, docLayer);
   (document.documentElement ?? document.body).appendChild(container);
 
   return {
@@ -456,6 +462,7 @@ function placeMarker(docX: number, docY: number, num: number): HTMLDivElement {
   if (!state) throw new Error('no overlay');
   const marker = document.createElement('div');
   marker.className = 'marker';
+  marker.style.cssText = OVERLAY_STYLES.marker;
   marker.textContent = String(num);
   marker.style.left = `${docX}px`;
   marker.style.top = `${docY}px`;
@@ -471,6 +478,7 @@ function placeDocBox(
   if (!state) throw new Error('no overlay');
   const box = document.createElement('div');
   box.className = className;
+  box.style.cssText = className === 'region-box' ? OVERLAY_STYLES.regionBox : OVERLAY_STYLES.textBox;
   box.style.left = `${viewportRect.x + window.scrollX}px`;
   box.style.top = `${viewportRect.y + window.scrollY}px`;
   box.style.width = `${viewportRect.width}px`;

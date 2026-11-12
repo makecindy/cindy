@@ -24,7 +24,7 @@ import {
 } from '@cindy/model-providers';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, nativeBridgeApiKey, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
-import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody } from '@cindy/model-compat';
+import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody, normalizeKimiToolHistory } from '@cindy/model-compat';
 import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, normalizeDeepSeekV41ToolHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
 import { bearerAccessTokenFromHeaders } from './chatgpt-bridge-auth-invalidation.js';
 import { isAppSessionBoundaryPending } from '../appSessionState.js';
@@ -1284,7 +1284,7 @@ function createChatBridgeDecision(
   }, { logger: log, fetchImpl: outboundFetch });
   return {
     localHandler: ({ rawBody, parsedBody, ctx, res }) => {
-      const body = prepareLocalBridgeBody({
+      let body = prepareLocalBridgeBody({
         rawBody,
         parsedBody,
         instructions,
@@ -1304,6 +1304,19 @@ function createChatBridgeDecision(
       const selected = catalogSelected && modelWithInterface(catalogSelected, route.routing.modelInterface);
       const standard = selected?.api ? invocationModelRecord(selected, route.routing.upstream) : !route.routing.requestPath
         ? providerModelRecord(actualModel, route.routing.upstream, 'openai-chat') : undefined;
+      const upstream = standard
+        ? buildRouteDecision(route.routing, null, 'codex', route.apiKey, route.oauthToken)?.upstreamOverride ?? route.routing.upstream
+        : route.routing.upstream;
+      // localHandler bypasses the proxy transform chain. Match the final route
+      // (including a frozen child's model) before either Chat serializer runs.
+      const usesChat = standard ? standard.execution.pi.api === 'openai-completions' : route.routing.wireProtocol === 'openai-chat';
+      if (usesChat && isPlainObject(body) && ctx?.method === 'POST'
+        && ctx.url.split('?', 1)[0]?.replace(/\/+$/, '') === '/responses') {
+        body = normalizeKimiToolHistory(body, {
+          harness: 'codex', protocol: 'openai-chat', upstreamBase: upstream, model: actualModel,
+          authMode: route.routing.authStrategy === 'oauth-token' || route.routing.authStrategy === 'provider-oauth-header' ? 'oauth' : 'api-key',
+        }) ?? body;
+      }
       if (standard && isPlainObject(body)) {
         const nativeHeaders = overrideHeadersCaseInsensitive(withChatBridgeUserAgent(Object.fromEntries(Object.entries(headers).filter(([name]) =>
           !['authorization', 'x-api-key'].includes(name.toLowerCase())))), resolveConversationSessionHeaders(ctx?.headers));
@@ -1315,7 +1328,7 @@ function createChatBridgeDecision(
           supportsFastMode: selected?.supportsFastMode ?? standard.supportsFastMode,
         }, providerId,
           // Keep the catalog adapter while honoring the host assigned to this account.
-          upstream: buildRouteDecision(route.routing, null, 'codex', route.apiKey, route.oauthToken)?.upstreamOverride ?? route.routing.upstream,
+          upstream,
           apiKey: nativeBridgeApiKey(headers),
           headers: nativeHeaders,
           fetchImpl: async (url, init) => {

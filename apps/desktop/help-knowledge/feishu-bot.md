@@ -65,5 +65,5 @@ Without these permissions the bot still answers when @-ed, but without chat cont
 **Notes:**
 
 - **Used by another device** means this App ID is already connected on another device or Cindy instance (for example, running two Cindy builds at once). Unbind it on one side to clear the conflict.
-- A bot can live in only one place. You can also give a bot to a teammate from that teammate's **Messaging platforms** page. Choosing the bot already set up in Cindy moves it out of Settings > IM bots, and its chats continue with the teammate.
+- A bot can live in only one place. You can also give a bot to a buddy from that buddy's **Messaging platforms** page. Choosing the bot already set up in Cindy moves it out of Settings > IM bots, and its chats continue with the buddy.
 - Settings > IM bots also has an **Official** section (Slack, Telegram, and X through Cindy's official bots, no credentials needed). The **Personal** section also has Personal WeChat, WeCom, DingTalk, Discord, and Telegram bots. See the integrations topic.

@@ -10,13 +10,16 @@
  *   指向已删除或绕回来的路线时整条改道作废、按原路线选。
  * - 推理强度(§4)：用最后实际走的那条路线的；选中的模型不支持这一档时不带。旧版存下的模式与选中的模式读取时
  *   忽略，不报错。
+ * - 远程与分享来的来源(§3.1)：选中时结果带运行位置；位置不在名单里或读目录超时按不可用、换下一个；同一个连接 ID
+ *   在本机与另一台电脑上是两个来源，本机的额度不给另一台用；旧数据(没有位置)照常按本机，也不去读别处。
  * - tier：unit，纯函数与注入依赖。
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
 
 import {
+  modelGroupCandidateKey,
   normalizeModelGroupsConfig,
   sanitizeModelGroupSelection,
   type ModelGroupRoute,
@@ -25,7 +28,7 @@ import {
   type ModelGroupTraceQuota,
 } from '../../../shared/modelGroups.js';
 import { pickModelGroupCandidate, type ModelGroupCandidateFacts } from '../pick.js';
-import { createModelGroupResolver } from '../resolver.js';
+import { createModelGroupResolver, MODEL_GROUP_REMOTE_WAIT_MS, modelGroupQuotaKey } from '../resolver.js';
 
 const NOW = Date.UTC(2026, 10, 11, 4);
 const HOUR = 3_600_000;
@@ -265,5 +268,100 @@ describe('createModelGroupResolver', () => {
       { when: { type: 'hours', from: 22, to: 6 }, use: { type: 'route', routeId: 'r2' } },
     ]);
     expect(saved.routes[1]).toEqual({ id: 'r2', name: '省着用', strategy: 'cheapest', candidates: [] });
+  });
+});
+
+describe('createModelGroupResolver with sources on other computers', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  const view = (id: string, name: string) => ({
+    id, name, source: 'user', connected: true, agents: ['codex'], routing: { codex: { enabled: true } },
+    models: { codex: [{ id: 'gpt', name: 'GPT-5.6', mode: 'chat', efforts: ['low', 'high'] }] },
+  }) as unknown as ProviderView;
+  /** 本机的 a 与 dev-2 上同 ID 的 a，外加本机的 b。 */
+  const REMOTE = { agentKind: 'codex', providerId: 'a', model: 'gpt', agentDeviceId: 'dev-2' } as const;
+  const groups = (strategy: ModelGroupRoute['strategy'], candidates: ModelGroupRoute['candidates'], effort?: string): ModelGroupsConfig =>
+    ({ routes: [{ id: 'r1', name: '两台电脑', strategy, candidates, ...(effort ? { effort } : {}) }] });
+  const make = (config: ModelGroupsConfig, overrides: Partial<Parameters<typeof createModelGroupResolver>[0]> = {}) => {
+    const deps = {
+      config: () => config,
+      views: async () => [view('a', 'ChatGPT Pro'), view('b', 'API')],
+      agents: () => ['codex'],
+      harnessInstalled: async () => true,
+      quotaWindows: async () => new Map<string, ModelGroupTraceQuota[]>(),
+      scope: () => 'owner',
+      now: () => NOW,
+      locations: vi.fn(async () => ({ locations: [{ agentDeviceId: 'dev-2' }] })),
+      remoteViews: vi.fn(async () => ({ views: [view('a', 'Studio 上的 ChatGPT')], stale: false })),
+      ...overrides,
+    };
+    return { deps, resolver: createModelGroupResolver(deps) };
+  };
+  const selection = { type: 'route', id: 'r1' } as const;
+
+  it('runs the task where the picked source is, judged by that computer\'s catalog rather than local installs', async () => {
+    // 本机没装 Codex 也不影响另一台电脑上的来源；推理强度按那台的目录看支不支持。
+    const { resolver } = make(groups('order', [REMOTE, { agentKind: 'codex', providerId: 'b', model: 'gpt' }], 'high'),
+      { harnessInstalled: async (_agent, agentDeviceId) => agentDeviceId === 'dev-2' });
+    const result = await resolver.resolve({ selection });
+    expect(result).toMatchObject({
+      outcome: 'routed',
+      route: { agentKind: 'codex', providerId: 'a', model: 'gpt', agentDeviceId: 'dev-2', effort: 'high' },
+      sourceName: 'Studio 上的 ChatGPT',
+    });
+    expect(result.trace[0]).toMatchObject({ state: 'picked', agentDeviceId: 'dev-2' });
+    expect(result.trace[1]).toMatchObject({ why: 'unavailable' });
+    expect(result.trace[1]).not.toHaveProperty('agentDeviceId');
+  });
+
+  it.each([
+    ['the computer is not selectable now (offline or share revoked)', { locations: async () => ({ locations: [] }) }],
+    ['reading its catalog fails', { remoteViews: async () => { throw new Error('NOT_CONNECTED'); } }],
+    // 读失败时底层可能给回上次的目录(stale)；那份目录不说明那台现在能用。
+    ['only a stale copy of its catalog comes back', { remoteViews: async () => ({ views: [view('a', 'Studio 上的 ChatGPT')], stale: true }) }],
+    // 目录里列着模型，但那台没装对应引擎(与插件选路同一判断)；本机装没装不影响这一条。
+    ['its catalog lists the model but that computer has no engine installed', { harnessInstalled: async (_agent: string, agentDeviceId?: string) => !agentDeviceId }],
+  ] as const)('moves on when %s', async (_name, overrides) => {
+    const { resolver } = make(groups('order', [REMOTE, { agentKind: 'codex', providerId: 'b', model: 'gpt' }]), overrides);
+    const result = await resolver.resolve({ selection });
+    expect(result).toMatchObject({ outcome: 'routed', route: { providerId: 'b' } });
+    expect(result.outcome === 'routed' && 'agentDeviceId' in result.route).toBe(false);
+    expect(result.trace[0]).toMatchObject({ state: 'skipped', why: 'unavailable', agentDeviceId: 'dev-2' });
+  });
+
+  it('does not wait past the time limit for a computer that never answers, and keeps the user\'s model when nothing else is left', async () => {
+    vi.useFakeTimers();
+    const { resolver } = make(groups('order', [REMOTE]), { remoteViews: () => new Promise<{ views: ProviderView[]; stale: boolean }>(() => undefined) });
+    const pending = resolver.resolve({ selection });
+    await vi.advanceTimersByTimeAsync(MODEL_GROUP_REMOTE_WAIT_MS);
+    expect(await pending).toMatchObject({ outcome: 'unavailable', trace: [{ why: 'unavailable', agentDeviceId: 'dev-2' }] });
+  });
+
+  it('treats the same connection ID on two computers as two sources and never lends local quota to the remote one', async () => {
+    const local = { agentKind: 'codex', providerId: 'a', model: 'gpt' } as const;
+    const saved = normalizeModelGroupsConfig(groups('expiring', [local, REMOTE]));
+    expect(saved.routes[0].candidates).toEqual([local, REMOTE]);
+    // 本机的键与旧版一致，旧的轮流位置与任务记录照常对得上。
+    expect(modelGroupCandidateKey(local)).toBe('codex\u0000a\u0000gpt');
+    expect(modelGroupCandidateKey(REMOTE)).not.toBe(modelGroupCandidateKey(local));
+    // 本机 a 的周额度已用完；dev-2 上的 a 没有读数，不能因此也算用完。
+    const { resolver } = make(saved, { quotaWindows: async () => new Map([['a', [week(100, 30)]]]) });
+    const result = await resolver.resolve({ selection });
+    expect(result).toMatchObject({ outcome: 'routed', route: { agentDeviceId: 'dev-2' } });
+    expect(result.trace[0]).toMatchObject({ why: 'limited' });
+    expect(result.trace[1]).toMatchObject({ state: 'picked', quota: null });
+    // 那台电脑自己的读数按位置给它。
+    const own = make(saved, { quotaWindows: async () => new Map([['a', [week(100, 30)]], [modelGroupQuotaKey('dev-2', 'a'), [week(100, 10)]]]) });
+    expect((await own.resolver.resolve({ selection })).trace[1]).toMatchObject({ state: 'picked', why: 'soonest', limitedUntilMs: NOW + 10 * HOUR });
+  });
+
+  it('keeps a candidate saved without a location on this computer and reads nothing elsewhere', async () => {
+    const saved = normalizeModelGroupsConfig({ routes: [{ id: 'r1', name: '旧路线', strategy: 'order', candidates: [{ agentKind: 'codex', providerId: 'a', model: 'gpt' }] }] });
+    const { deps, resolver } = make(saved);
+    const result = await resolver.resolve({ selection });
+    expect(result).toMatchObject({ outcome: 'routed', route: { providerId: 'a' }, sourceName: 'ChatGPT Pro' });
+    expect(result.outcome === 'routed' && 'agentDeviceId' in result.route).toBe(false);
+    expect(deps.locations).not.toHaveBeenCalled();
+    expect(deps.remoteViews).not.toHaveBeenCalled();
   });
 });

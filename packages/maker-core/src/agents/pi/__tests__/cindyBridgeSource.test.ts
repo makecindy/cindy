@@ -36,7 +36,8 @@ it('strips Fast control paths from shell environments without mutating the runne
   const compiled = ts.transpileModule(source.slice(start, end) + '\nresult = withoutPiSecrets(input);', {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;
-  const input = { PATH: '/fixture/bin', CINDY_PI_MODEL_REQUEST_PREFS_FILE: '/fixture/prefs.json' };
+  const input = { PATH: '/fixture/bin', CINDY_PI_MODEL_REQUEST_PREFS_FILE: '/fixture/prefs.json',
+    CINDY_PI_TASK_SYSTEM_PROMPT_FILE: '/fixture/task-system-prompt.md' };
   const sandbox = {
     process: { env: {} }, input, result: undefined,
     PI_PACKAGE_MANAGEMENT_ENV: 'CINDY_PI_PACKAGE_MANAGEMENT',
@@ -47,6 +48,7 @@ it('strips Fast control paths from shell environments without mutating the runne
   runInNewContext(compiled, sandbox);
   expect(sandbox.result).toEqual({ PATH: '/fixture/bin' });
   expect(input.CINDY_PI_MODEL_REQUEST_PREFS_FILE).toBe('/fixture/prefs.json');
+  expect(input.CINDY_PI_TASK_SYSTEM_PROMPT_FILE).toBe('/fixture/task-system-prompt.md');
 });
 
 it('keeps text-only policy local and ordinary tools independent of host UI failures', async () => {

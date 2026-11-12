@@ -83,7 +83,7 @@ describe('remote session archive status', () => {
     ['IPC_ERROR', '[BACKPRESSURE] db worker RPC queue overloaded', 'REMOTE_RESULT_UNKNOWN'],
     ['IPC_ERROR', '[DEVICE_LINK_CONTROL_DISABLED] off', 'REMOTE_DISABLED'],
     ['IPC_ERROR', '[PRECONDITION_FAILED] 已删除的任务不能恢复或归档', 'PRECONDITION_FAILED'],
-    ['IPC_ERROR', '[PRECONDITION_FAILED] Bot task lifecycle is managed by teammate recovery and history controls', 'PRECONDITION_FAILED'],
+    ['IPC_ERROR', "[PRECONDITION_FAILED] Bot task lifecycle is managed by teammate recovery and history controls", 'PRECONDITION_FAILED'],
     ['IPC_ERROR', '[PRECONDITION_FAILED] Worktree is busy or its recovery record could not be saved', 'REMOTE_RESULT_UNKNOWN'],
     ['IPC_ERROR', '[NOT_FOUND] Session 不存在', 'NOT_FOUND'],
     ['IPC_ERROR', '[NOT_FOUND] Session does not exist', 'REMOTE_RESULT_UNKNOWN'],

@@ -1,6 +1,6 @@
 import { PluginUiEnablePrompt } from '@/components/new-chat/PluginUiEnablePrompt';
 import { askPluginModelRoute, usePluginModels, writePluginModelRouteNote } from './pluginModelRoute';
-import { bindModelGroupSession, resolveModelGroup, useModelGroups, writeModelGroupRouteNote } from '../model-groups/modelGroupsClient';
+import { bindModelGroupSession, modelGroupLocationNameFrom, resolveModelGroup, useModelGroups, writeModelGroupRouteNote } from '../model-groups/modelGroupsClient';
 import { findModelGroupRoute, type ModelGroupSelection } from '../../../shared/modelGroups';
 import type { GhostModelRoute, GhostPickerModel } from '../../../shared/ghost';
 import { deviceDisplayName } from '@/lib/deviceName';
@@ -1079,6 +1079,11 @@ export function NewMakerDraftRoute() {
     deviceLinkRemoteAgentSupported,
     effectiveAgentDeviceId,
   ]);
+  // 模型组选到另一台电脑或分享来的来源时，任务里那行说明写的位置名(与模型选择器远程那几行同名)。
+  const modelGroupLocationName = useMemo(
+    () => modelGroupLocationNameFrom([...selectableDevices, ...providerShareDevices]),
+    [selectableDevices, providerShareDevices],
+  );
   /**
    * 模型目录所在的电脑:Agent 在另一台电脑运行时是那台(模型、Agent 登录与可用引擎都以运行
    * Agent 的电脑为准);否则任务建到远程设备时是那台。本机任务为 undefined。
@@ -1129,16 +1134,18 @@ export function NewMakerDraftRoute() {
       : undefined,
     [pluginModelsAllowed, pluginModels, activePluginModel],
   );
-  // 模型组与插件模型同一个条件：只在本机新任务提供。记住的那一项后来被删掉时按没选处理。
-  const { config: modelGroupsConfig } = useModelGroups(pluginModelsAllowed);
+  // 模型组只在本机开的新任务提供(远程控制别的电脑、SSH、协同不提供)。草稿此刻选着在另一台电脑运行的模型也照样提供：
+  // 路线自己决定这次在哪台运行(model-groups.md §3.1)。记住的那一项后来被删掉时按没选处理。
+  const modelGroupsAllowed = !isDeviceLinkDraft && !effectiveRemoteHostId && draft.vendor !== 'orca';
+  const { config: modelGroupsConfig } = useModelGroups(modelGroupsAllowed);
   const activeModelGroup = useMemo(
-    () => (pluginModelsAllowed && !activePluginModel && findModelGroupRoute(modelGroupsConfig, draft.modelGroup)
+    () => (modelGroupsAllowed && !activePluginModel && findModelGroupRoute(modelGroupsConfig, draft.modelGroup)
       ? draft.modelGroup
       : null),
-    [pluginModelsAllowed, activePluginModel, modelGroupsConfig, draft.modelGroup],
+    [modelGroupsAllowed, activePluginModel, modelGroupsConfig, draft.modelGroup],
   );
   const modelGroupsProps = useMemo(
-    () => pluginModelsAllowed
+    () => modelGroupsAllowed
       ? {
           config: modelGroupsConfig,
           active: activeModelGroup,
@@ -1146,7 +1153,7 @@ export function NewMakerDraftRoute() {
           onManage: () => navigate('/settings?tab=model-groups'),
         }
       : undefined,
-    [pluginModelsAllowed, modelGroupsConfig, activeModelGroup, navigate],
+    [modelGroupsAllowed, modelGroupsConfig, activeModelGroup, navigate],
   );
   /** 组里没有能用的模型时，说明里写用户原来选的那个模型的显示名。 */
   const localProvidersForGroupNoteRef = useRef<ReturnType<typeof useProviders>['providers']>([]);
@@ -3849,6 +3856,10 @@ export function NewMakerDraftRoute() {
         return false;
       }
       const shouldEnableCollab = effectiveCollab.enabled && collabPolicyEligible && policyEnabled;
+      // 插件模型：发送那一帧的选择为准；插件给出的真实模型只用于这次新建，不改草稿里的默认模型。
+      const pluginModelAtSend = shouldEnableCollab ? null : activePluginModel;
+      // 模型组同理：按它选出的具体模型只用于这次新建。
+      const modelGroupAtSend = shouldEnableCollab || pluginModelAtSend ? null : activeModelGroup;
       // device-link 切设备后,capabilities/providers hook 可能还没 re-render 到新设备快照;
       // 此时 effectiveFastMode / supportsFastMode / sendProviderId 仍基于旧设备。
       // remoteDraftState 必须一起看:换设备时我们会把它打回 loading(防上一台的默认值串台),
@@ -3856,14 +3867,19 @@ export function NewMakerDraftRoute() {
       // maker:get-new-maker-defaults 还没回来时放行,于是提交的是 deviceLinkInitial 的 capability
       // 兜底值(model / effort / permission / provider),而不是那台设备自己保存的草稿值;
       // 会话一旦建出来,晚到的响应也修不回去了。
-      if (usesDeviceCatalog && remoteModelListStatus !== 'ready') {
-        if (remoteModelListStatus === 'error') {
-          toast.error(t('newChat.modelSelector.remoteLoadFailed'));
-        } else {
-          toast.warning(t('ccAgent.draft.deviceStillLoading'));
+      // 选了模型组时先选路：路线可能选到别处，只有沿用原模型时才要求草稿那台的目录就绪(见下方选路之后)。
+      const draftCatalogReady = () => {
+        if (usesDeviceCatalog && remoteModelListStatus !== 'ready') {
+          if (remoteModelListStatus === 'error') {
+            toast.error(t('newChat.modelSelector.remoteLoadFailed'));
+          } else {
+            toast.warning(t('ccAgent.draft.deviceStillLoading'));
+          }
+          return false;
         }
-        return false;
-      }
+        return true;
+      };
+      if (!modelGroupAtSend && !draftCatalogReady()) return false;
       if (isDeviceLinkDraft && remoteDraftState.status === 'error') {
         setRemoteDraftRetryEpoch((value) => value + 1);
         toast.error(t('ccAgent.draft.remoteDefaultsLoadFailed'));
@@ -3945,10 +3961,6 @@ export function NewMakerDraftRoute() {
         dataOwnerAtSend.dataOwnerId === dataOwnerId &&
         isDataOwnerGenerationCurrent(dataOwnerAtSend);
 
-      // 插件模型：发送那一帧的选择为准；插件给出的真实模型只用于这次新建，不改草稿里的默认模型。
-      const pluginModelAtSend = shouldEnableCollab ? null : activePluginModel;
-      // 模型组同理：按它选出的具体模型只用于这次新建。
-      const modelGroupAtSend = shouldEnableCollab || pluginModelAtSend ? null : activeModelGroup;
       const sendBaseRoute = { persistedAgentKind, model, submittedEffort, providerId, effectiveFastMode };
       markSendInFlight(true);
       // 已登记乐观标题预览的会话 id。交接链路(rehomeDraftAttachments / setPending /
@@ -3984,6 +3996,8 @@ export function NewMakerDraftRoute() {
           const routedTo: GhostModelRoute | null = pluginRoute?.outcome === 'routed'
             ? pluginRoute.route
             : modelGroupRoute?.outcome === 'routed' ? modelGroupRoute.route : null;
+          // 模型组没选出来源、沿用原模型时，原模型所在那台的目录照样要就绪(与上面没选模型组时同一检查)。
+          if (modelGroupAtSend && !routedTo && !draftCatalogReady()) return;
           const routeAgentDeviceId = routedTo ? routedTo.agentDeviceId : effectiveAgentDeviceId;
           const persistedAgentKind = routedTo?.agentKind ?? sendBaseRoute.persistedAgentKind;
           const authVendor = persistedAgentKind;
@@ -3994,7 +4008,7 @@ export function NewMakerDraftRoute() {
           const effectiveFastMode = routedTo ? false : sendBaseRoute.effectiveFastMode;
           const writePluginRouteNote = (sessionId: string) => {
             writePluginModelRouteNote(sessionId, pluginRoute);
-            writeModelGroupRouteNote(sessionId, modelGroupRoute, keptModelNameForGroupNote(sendBaseRoute.persistedAgentKind, sendBaseRoute.providerId, sendBaseRoute.model), t, i18n.resolvedLanguage ?? i18n.language);
+            writeModelGroupRouteNote(sessionId, modelGroupRoute, keptModelNameForGroupNote(sendBaseRoute.persistedAgentKind, sendBaseRoute.providerId, sendBaseRoute.model), t, i18n.resolvedLanguage ?? i18n.language, modelGroupLocationName);
             // 撞配额时据此提议换到同一条路线里的下一个来源(model-groups.md §6.1)。
             if (modelGroupAtSend && pluginRoute?.outcome !== 'routed') bindModelGroupSession(sessionId, modelGroupAtSend, modelGroupRoute);
           };
@@ -5079,6 +5093,7 @@ export function NewMakerDraftRoute() {
     [
       activePluginModel,
       activeModelGroup,
+      modelGroupLocationName,
       effectiveWorkingDir,
       effectiveRemoteHostId,
       isRemoteProjectDraft,
@@ -5229,14 +5244,20 @@ export function NewMakerDraftRoute() {
           }
         }
         const shouldEnableCollab = effectiveCollab.enabled && collabPolicyEligible && policyEnabled;
+        const goalPluginModel = shouldEnableCollab ? null : activePluginModel;
+        const goalModelGroup = shouldEnableCollab || goalPluginModel ? null : activeModelGroup;
         // 同 handleSend:remoteDraftState 未就绪时不得放行,否则提交 capability 兜底值而非该设备的
         // 草稿值(缓存已热时另两个 loading 会立刻为 false,拦不住)。
-        if (usesDeviceCatalog && remoteModelListStatus === 'error') {
-          throw new Error(t('newChat.modelSelector.remoteLoadFailed'));
-        }
-        if (isAgentDeviceDraft && remoteModelListStatus !== 'ready') {
-          throw new Error(t('ccAgent.draft.deviceStillLoading'));
-        }
+        // 选了模型组时先选路，沿用原模型时才查草稿那台的目录(见选路之后)。
+        const assertDraftCatalogReady = () => {
+          if (usesDeviceCatalog && remoteModelListStatus === 'error') {
+            throw new Error(t('newChat.modelSelector.remoteLoadFailed'));
+          }
+          if (isAgentDeviceDraft && remoteModelListStatus !== 'ready') {
+            throw new Error(t('ccAgent.draft.deviceStillLoading'));
+          }
+        };
+        if (!goalModelGroup) assertDraftCatalogReady();
         if (isDeviceLinkDraft && remoteDraftState.status === 'error') {
           setRemoteDraftRetryEpoch((value) => value + 1);
           throw new Error(t('ccAgent.draft.remoteDefaultsLoadFailed'));
@@ -5248,7 +5269,6 @@ export function NewMakerDraftRoute() {
           throw new Error(t('ccAgent.draft.deviceStillLoading'));
         }
         // 插件模型：与 handleSend 同一流程，目标文本就是这个任务的第一条消息。
-        const goalPluginModel = shouldEnableCollab ? null : activePluginModel;
         const pluginRoute = goalPluginModel
           ? await askPluginModelRoute(goalPluginModel, objective, 0, {
               agentKind: goalBaseRoute.persistedAgentKind,
@@ -5259,12 +5279,12 @@ export function NewMakerDraftRoute() {
           : null;
         if (goalPluginModel && !isCurrentDataOwner()) return;
         // 模型组：与 handleSend 同一流程。
-        const goalModelGroup = shouldEnableCollab || goalPluginModel ? null : activeModelGroup;
         const modelGroupRoute = goalModelGroup ? await resolveModelGroup(goalModelGroup, { hasImages: false }) : null;
         if (goalModelGroup && !isCurrentDataOwner()) return;
         const routedTo: GhostModelRoute | null = pluginRoute?.outcome === 'routed'
           ? pluginRoute.route
           : modelGroupRoute?.outcome === 'routed' ? modelGroupRoute.route : null;
+        if (goalModelGroup && !routedTo) assertDraftCatalogReady();
         const routeAgentDeviceId = routedTo ? routedTo.agentDeviceId : effectiveAgentDeviceId;
         const persistedAgentKind = routedTo?.agentKind ?? goalBaseRoute.persistedAgentKind;
         const authVendor = persistedAgentKind;
@@ -5707,7 +5727,7 @@ export function NewMakerDraftRoute() {
         try {
           await window.electronAPI.maker.setGoal({ sessionId: newSession.id, objective, limits });
           writePluginModelRouteNote(newSession.id, pluginRoute);
-          writeModelGroupRouteNote(newSession.id, modelGroupRoute, keptModelNameForGroupNote(goalBaseRoute.persistedAgentKind, goalBaseRoute.providerId, goalBaseRoute.model), t, i18n.resolvedLanguage ?? i18n.language);
+          writeModelGroupRouteNote(newSession.id, modelGroupRoute, keptModelNameForGroupNote(goalBaseRoute.persistedAgentKind, goalBaseRoute.providerId, goalBaseRoute.model), t, i18n.resolvedLanguage ?? i18n.language, modelGroupLocationName);
           if (goalModelGroup && pluginRoute?.outcome !== 'routed') bindModelGroupSession(newSession.id, goalModelGroup, modelGroupRoute);
           void dispatchDeferredUiAssignment(newSession.id, deferredUiAssignment).catch((err) => {
             log.error('[draft goal] deferred Worker assignment failed', err);
@@ -5773,6 +5793,7 @@ export function NewMakerDraftRoute() {
       vendorAuthGate,
       activePluginModel,
       activeModelGroup,
+      modelGroupLocationName,
       authVendor,
       effectiveDeviceLinkDeviceId,
       effectiveDeviceLinkDeviceName,

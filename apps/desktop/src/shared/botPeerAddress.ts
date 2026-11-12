@@ -9,6 +9,6 @@ export function parseBotPeerAddress(value: string): { deviceId: string; botId: s
 
 export function botPeerAddress(deviceId: string, botId: string): string {
   const address = `${deviceId}::${botId}`;
-  if (!parseBotPeerAddress(address)) throw new Error('Invalid teammate address');
+  if (!parseBotPeerAddress(address)) throw new Error('Invalid buddy address');
   return address;
 }

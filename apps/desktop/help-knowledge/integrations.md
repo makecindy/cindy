@@ -22,7 +22,7 @@ The IM bots page has two sections:
   - **Discord Bot** — your own bot token + your Discord user ID, for Discord DMs.
   - **Telegram Bot** — your own BotFather token + your Telegram user ID, for DMs and group chats.
 - Each channel has a **New Conversation Configuration** that picks the Agent and model for new conversations from that channel.
-- Teammates can also have their own bots on their **Messaging platforms** page. A bot can be connected in only one place.
+- Buddies can also have their own bots on their **Messaging platforms** page. A bot can be connected in only one place.
 
 **Accounts and tools (Plugins):**
 

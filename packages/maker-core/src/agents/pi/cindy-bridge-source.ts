@@ -189,6 +189,7 @@ const SECRET_ENV_NAMES = new Set<string>([
   'CINDY_PI_SECRET_ENV_NAMES',
   'CINDY_PI_PERMISSION_FILE',
   'CINDY_PI_MODEL_REQUEST_PREFS_FILE',
+  'CINDY_PI_TASK_SYSTEM_PROMPT_FILE',
   'CINDY_PI_FAST_MODELS',
   'CINDY_PI_TURN_TOOL_POLICY',
   PI_PACKAGE_MANAGEMENT_ENV,
@@ -4609,7 +4610,8 @@ export default async function cindyBridge(piApi: any) {
     : null;
   const pi = guestToolGate ? guestToolGate.pi : piApi;
   const taskSystemPromptFile = process.env.CINDY_PI_TASK_SYSTEM_PROMPT_FILE;
-  delete process.env.CINDY_PI_TASK_SYSTEM_PROMPT_FILE;
+  // switch_session reloads extensions. Keep the launch path in this Pi only;
+  // shell environments and independent subagents strip it before spawning.
   const taskSystemPrompt = taskSystemPromptFile ? readFileSync(taskSystemPromptFile, 'utf8') : '';
   if (taskSystemPrompt) pi.on('before_agent_start', (event: any) => ({
     systemPrompt: event.systemPrompt + '\n\n' + taskSystemPrompt,

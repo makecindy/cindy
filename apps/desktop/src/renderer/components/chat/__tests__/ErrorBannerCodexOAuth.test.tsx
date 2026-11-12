@@ -2,6 +2,7 @@
 
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 import { sharedTaskHostPeer } from '@cindy/device-link';
@@ -94,6 +95,34 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 describe('ErrorBanner OpenAI connection recovery', () => {
+  // PR #10049: ordinary OpenAI 401 recovery must unlock the original input only
+  // after the existing account probe verifies it, including after remounting.
+  it.each([false, true])('restores generic authentication retry after verification (remount=%s)', async remount => {
+    const retry = vi.fn();
+    mocks.getState.mockResolvedValue({ authenticated: false });
+    const banner = <MemoryRouter><ErrorBanner error="401 Unauthorized" agentKind="codex"
+      providerId="openai" retryText="original input" onRetry={retry} /></MemoryRouter>;
+    const view = render(banner);
+    await act(async () => {});
+    expect(screen.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
+    const verification = deferred<unknown>();
+    mocks.getCodexRateLimits.mockImplementationOnce(() => verification.promise);
+    const restored = { authenticated: true, authSource: 'oauth' as const };
+    mocks.getState.mockResolvedValue(restored);
+    if (remount) {
+      view.unmount();
+      render(banner);
+    } else {
+      await act(async () => emitCodexStateChanged(restored));
+    }
+    await waitFor(() => expect(mocks.getCodexRateLimits).toHaveBeenCalledOnce());
+    expect(screen.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
+    await act(async () => verification.resolve({ rateLimits: null }));
+    fireEvent.click(await screen.findByRole('button', { name: 'chat.errorBanner.retry' }));
+    expect(retry).toHaveBeenCalledExactlyOnceWith('original input');
+    expect(screen.getByText('chatgptAuthRecovery.recovered')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'logic.confirm.goToSettings' })).toBeNull();
+  });
   const streamClosed = 'stream disconnected before completion: stream closed before response.completed';
   it.each([undefined, 'controlled-device'])('offers manual recovery and keeps retry on device %s', async deviceLinkDeviceId => {
     const recover = vi.fn();

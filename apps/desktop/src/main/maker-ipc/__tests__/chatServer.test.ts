@@ -3941,7 +3941,7 @@ describe('Chat Server result delivery and refresh', () => {
             return new Promise(resolve => { finishSnapshot = () => resolve(targetSnapshot()); });
           }
           if (newMembers) return { body: { ...targetSnapshot().body,
-            members: [selfMember, { ...botMember, id: peerId, name: 'New teammate' }] } };
+            members: [selfMember, { ...botMember, id: peerId, name: "New buddy" }] } };
         }
         return base(route, method, data);
       });
@@ -3964,7 +3964,7 @@ describe('Chat Server result delivery and refresh', () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(routesSince(from)).toContain(`GET /conversations/${targetRoom}/snapshot`);
       expect(deps.decidePlan).toHaveBeenCalledWith(expect.objectContaining({
-        organizerName: 'New teammate', members: [{ botId: peerId, name: 'New teammate', description: '' }],
+        organizerName: "New buddy", members: [{ botId: peerId, name: "New buddy", description: '' }],
       }), expect.any(AbortSignal));
       finishList();
       await vi.advanceTimersByTimeAsync(0);

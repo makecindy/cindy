@@ -59,15 +59,25 @@ describe('nameBotProject', () => {
 
   it('gives the standard name, follows renames, and keeps a name the user chose', async () => {
     await nameBotProject('bot-1', '/w', 'Cindy');
-    expect(aliases.upsert).toHaveBeenLastCalledWith('local:/w', 'Teammate Cindy');
+    expect(aliases.upsert).toHaveBeenLastCalledWith('local:/w', 'Buddy Cindy');
 
     aliases.rows = [{ projectKey: 'local:/w', alias: 'Cindy' }];
     await nameBotProject('bot-1', '/w', 'Cindy');
-    expect(aliases.upsert).toHaveBeenLastCalledWith('local:/w', 'Teammate Cindy');
+    expect(aliases.upsert).toHaveBeenLastCalledWith('local:/w', 'Buddy Cindy');
 
     aliases.rows = [{ projectKey: 'local:/w', alias: 'Teammate Cindy' }];
     await nameBotProject('bot-1', '/w', 'Mimi', 'Cindy');
-    expect(aliases.upsert).toHaveBeenLastCalledWith('local:/w', 'Teammate Mimi');
+    expect(aliases.upsert).toHaveBeenLastCalledWith('local:/w', 'Buddy Mimi');
+
+    // An existing V2 default is renamed even when the buddy's own name did not change.
+    aliases.rows = [{ projectKey: 'local:/w', alias: 'Teammate Mimi' }];
+    await nameBotProject('bot-1', '/w', 'Mimi');
+    expect(aliases.upsert).toHaveBeenLastCalledWith('local:/w', 'Buddy Mimi');
+
+    aliases.upsert.mockClear();
+    aliases.rows = [{ projectKey: 'local:/w', alias: 'Buddy Mimi' }];
+    await nameBotProject('bot-1', '/w', 'Mimi');
+    expect(aliases.upsert).not.toHaveBeenCalled();
 
     aliases.upsert.mockClear();
     aliases.rows = [{ projectKey: 'local:/w', alias: 'My notes' }];

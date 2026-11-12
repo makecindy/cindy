@@ -479,16 +479,15 @@ export function useOwnedCodexLogin(): (
 
 export function useCodexAuth(options?: {
   enabled?: boolean;
-  /** 已经被会话错误证明失效，但 Main 的本地快照可能尚未带 marker。 */
+  /** 调用方已确认是本机共享 OpenAI 连接的认证错误；包括没有失效 marker 的普通 401。
+   * 只要求验证候选登录，不更改 Main 凭证或全局错误分类。 */
   recoveryHint?: {
     reason: string;
     credentialScope?: 'system-shared' | 'instance-isolated' | 'unknown';
   };
 }) {
   const enabled = options?.enabled ?? true;
-  const recoveryHintReason = isCodexOAuthReconnectRequired(options?.recoveryHint?.reason)
-    ? options?.recoveryHint?.reason
-    : undefined;
+  const recoveryHintReason = options?.recoveryHint?.reason || undefined;
   const recoveryHintCredentialScope = options?.recoveryHint?.credentialScope;
   const { t } = useTranslation();
   const [machine, setMachine] = useState<CodexAuthMachineState>(createInitialMachineState);

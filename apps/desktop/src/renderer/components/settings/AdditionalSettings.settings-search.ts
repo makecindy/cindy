@@ -107,7 +107,7 @@ export const additionalSettings = defineSettings({
     titleKey: 'bots.globalSettings.defaultModel',
     descriptionKey: 'bots.globalSettings.defaultModelHint',
     sectionKey: 'settings.sections.bots',
-    aliases: ['伙伴默认模型', 'teammate default model'],
+    aliases: ['伙伴默认模型', 'buddy default model'],
   },
   botReplyTarget: {
     id: 'general.botReplyTarget',

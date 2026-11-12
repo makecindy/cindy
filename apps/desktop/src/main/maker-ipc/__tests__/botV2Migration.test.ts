@@ -32,6 +32,7 @@ vi.mock('../botProjectMode.js', () => ({
   ensureBotProjectAutomations: vi.fn(async () => true),
   moveTeammateMemoryIntoProject: h.moveMemory,
   ensureTeammateTemplate: async () => false,
+  nameBotProject: async () => {},
 }));
 vi.mock('../botV1Routines.js', () => ({
   readV1RoutineSlice: async (_root: string, botId: string) => {

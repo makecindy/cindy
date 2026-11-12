@@ -90,7 +90,7 @@ it('rejects oversized aggregate, deeply nested and excessively numerous host dat
     Array.from({ length: 14 }).reduce<unknown>((value) => ({ value }), null),
   ])
     expect(() => parseRemoteBotSettings({ ...raw, extra }, raw.ref)).toThrow(
-      'Invalid teammate settings',
+      "Invalid buddy settings",
     );
 });
 it('filters malformed list identities and titles', () => {

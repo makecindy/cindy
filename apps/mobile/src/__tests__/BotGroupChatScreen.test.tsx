@@ -583,13 +583,25 @@ describe('group timeline', () => {
   // PR #8818 / component: the identity matcher cannot reject a complete foreign
   // broadcast if the real Timeline splits it at a shorter member name first.
   // French send parser + English Screen: @Tous is personal, the longer broadcast is not.
-  it.each([true, false])('keeps a French broadcast whole beside a shorter personal mention (own=%s)', async own => {
+  // #9990 / unit: renamed catalogs no longer contain sent historical labels.
+  // Real Screen -> Timeline must keep the full legacy mention styled and inert.
+  it.each([
+    [true, 'fr', 'Tous', undefined], [false, 'fr', 'Tous', undefined],
+    [true, 'de', 'Al', 'Alle Teammitglieder'],
+    [true, 'fr', 'Tous', 'Tous les coéquipiers'],
+    [true, 'es', 'Todos', 'Todos los compañeros'],
+    [true, 'pt-PT', 'Tod', 'Todos os colegas'],
+    [true, 'pt-BR', 'Tod', 'Todos os colegas'],
+    [true, 'zh-Hans-x-lzh', '诸', '诸同僚'],
+    [true, 'zh-Hant-x-lzh', '諸', '諸同僚'],
+    [true, 'en', 'Al', 'All teammates'],
+    [true, 'ko', '모든', '모든 동료'],
+  ] as const)('keeps a %s/%s broadcast whole beside %s (legacy=%s)', async (own, locale, name, legacyLabel) => {
     h.translate = (key, options) => i18n.t(key, { ...options, lng: 'en' });
-    const name = 'Tous';
-    const broadcastLabel = i18n.t('groupChat.mention.allBots', { lng: 'fr' });
+    const broadcastLabel = legacyLabel ?? i18n.t('groupChat.mention.allBots', { lng: locale });
     const content = `@${name} @${broadcastLabel}`;
     const mentions = resolveBotGroupMentions(content, { members: [{ botId: 'mimi', name }],
-      allLabels: [i18n.t('groupChat.mention.all', { lng: 'fr' })], allBotLabels: [broadcastLabel] });
+      allLabels: [i18n.t('groupChat.mention.all', { lng: locale })], allBotLabels: [broadcastLabel] });
     expect(mentions).toEqual({ all: false, allBots: true, botIds: ['mimi'] });
     const data = group({ serverBacked: true, messages: [message('prefix-broadcast', 1, {
       authorKind: 'user', isSelf: own, content, mentions,
@@ -599,10 +611,10 @@ describe('group timeline', () => {
     const spans = () => [...node.querySelectorAll('span')];
     const broadcast = spans().find(span => span.textContent === `@${broadcastLabel}`)!;
     expect(broadcast).toBeDefined();
-    expect(spans().filter(span => span.textContent === '@Tous')).toHaveLength(1);
+    expect(spans().filter(span => span.textContent === `@${name}`)).toHaveLength(1);
     await act(async () => broadcast.click());
     expect(byId('botGroup.mention.identity')).toBeNull();
-    await act(async () => spans().find(span => span.textContent === '@Tous')!.click());
+    await act(async () => spans().find(span => span.textContent === `@${name}`)!.click());
     expect(byId('botGroup.mention.identity')?.textContent).toContain(name);
     await click('botGroup.mention.identity.close');
     data.messages[0]!.mentions = { all: false, botIds: [] };

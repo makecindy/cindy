@@ -1142,7 +1142,7 @@ export async function duplicateBotProfile(id: string): Promise<BotProfile> {
     ? await window.electronAPI.readCachedImageAsBase64({ url: source.avatar })
     : undefined;
   assertCurrentOwner(owner);
-  if (avatarImage && !avatarImage.base64) throw new Error('Could not read teammate avatar');
+  if (avatarImage && !avatarImage.base64) throw new Error('Could not read buddy avatar');
   return addBotProfileAndWait({
     name: duplicateBotName(source.name),
     description: source.description,

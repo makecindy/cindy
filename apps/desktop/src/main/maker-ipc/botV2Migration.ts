@@ -25,11 +25,12 @@ import { t } from '../i18n.desktop.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { readBotSettingsProfile, setNewTeammateSetup, updateBotProfile } from '../localDb/ipc/bots.js';
 import { botProfiles } from '../localDb/schema.js';
+import { normalizeRecentWorkdirPath } from '../localDb/ipc/recentWorkdirsCore.js';
 import { createLogger } from '../logger.js';
 import { readEffectiveBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { botProfileDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
-import { ensureBotProjectAutomations, ensureTeammateTemplate, moveTeammateMemoryIntoProject, prepareBotProjectWorkspace } from './botProjectMode.js';
+import { ensureBotProjectAutomations, ensureTeammateTemplate, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from './botProjectMode.js';
 import { TEAMMATE_V2_RECEIPT_FILE, teammateWorkspaceDir } from './botProjectMemory.js';
 import { writeRoutineAutomations } from './botRoutineAutomations.js';
 import { readV1RoutineSlice, removeV1Routine } from './botV1Routines.js';
@@ -261,7 +262,12 @@ async function migrateTeammateOnce(botId: string, ownerRoot: string,
     // A build that still had the switch may have turned it off after the upgrade: V1 is gone.
     const upgraded = await readBotSettingsProfile(botId);
     // Upgraded before the starter template existed (or an older version of it): fill it in once.
-    if (await exists(workspace)) await ensureTeammateTemplate({ botId, displayName: upgraded.name, workspace });
+    if (await exists(workspace)) {
+      await ensureTeammateTemplate({ botId, displayName: upgraded.name, workspace });
+      assertCurrent();
+      const projectDir = normalizeRecentWorkdirPath(workspace);
+      if (projectDir) await nameBotProject(botId, projectDir, upgraded.name);
+    }
     if (!readBotProjectMode(upgraded.capabilities as unknown as Record<string, unknown>)) {
       await updateBotProfile({ id: botId, capabilities: { projectMode: true } });
     }
@@ -284,7 +290,7 @@ async function migrateTeammateOnce(botId: string, ownerRoot: string,
   const workingDir = await ensureBotWorkspaceDir(ownerRoot, botId, legacyUserDataDir);
   const archiveDir = path.join(home, ARCHIVE_DIR);
   const upgradeNotes = prepared.skippedSkillLinks.length > 0
-    ? [`Some skill content was not copied as it was (links leading outside a skill folder are not followed): ${prepared.skippedSkillLinks.join('; ')}. The originals stay in the teammate's skills folder.`]
+    ? [`Some skill content was not copied as it was (links leading outside a skill folder are not followed): ${prepared.skippedSkillLinks.join('; ')}. The originals stay in the buddy's skills folder.`]
     : [];
   const routineNotes = await migrateRoutines(botId, ownerRoot, workingDir, archiveDir, capabilities, assertCurrent, upgradeNotes);
   assertCurrent();

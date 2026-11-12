@@ -82,7 +82,7 @@ describe('Bot avatar profile transaction', () => {
   it('does not overwrite a user avatar replaced without a profile version change', () => {
     update({ avatar: '🚀', clearBotAvatarRefs: true });
     expect(() => update({ expectedAvatar: '🤖', botAvatarRef: { id: 'migration-ref', hash: HASH_B, createdAt: 3 } }))
-      .toThrow('Teammate avatar changed');
+      .toThrow('Buddy avatar changed');
     expect(db.prepare('SELECT avatar, current_version FROM bot_profiles').get()).toEqual({ avatar: '🚀', current_version: 1 });
     expect(db.prepare('SELECT * FROM media_refs').all()).toEqual([]);
   });
