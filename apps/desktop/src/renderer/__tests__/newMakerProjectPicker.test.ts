@@ -1754,7 +1754,10 @@ describe('Shared create project picker', () => {
     // 播种来源只有在**最终型号**上还能路由时才保留:播种型号被换成目录里的别的型号后,
     // 那个来源往往不提供新型号,显式带上它会让发送侧对着一个路由不出该型号的来源建任务。
     expect(body).toContain('const seedProviderId = resolveDraftProviderForModel(');
-    expect(body).toContain('deviceLinkInitial?.providerId,');
+    // 播种来源按**显式选择**(explicitDraftProviderId)取,不直接读 holder 里播进去的
+    // providerId:自动默认(applySuggestedDefaultTuple)也会把 providerId 落进快照,把它
+    // 当显式选择保留,首条消息会被钉在断连 / 失败的来源上(Codex review #9369 第十二轮)。
+    expect(body).toContain('explicitDraftProviderId,');
     expect(body).toContain('return seedProviderId || effectiveSourceIdForModel(');
   });
 
