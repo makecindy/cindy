@@ -35,6 +35,8 @@ export function createHostMcpRuntime(ports: { appServerIds(): string[]; getRemot
     prepareCodexMcp: codex.getCodexExtraSpawnConfig,
     /** Server names of the applied Codex MCP bridge (desktop capability routing reads the same). */
     getActiveCodexBridgeServerNames: codex.getActiveCodexBridgeServerNames,
+    /** Auth boundaries drop the Pi bridge built with the previous credentials (desktop: maker-host/index.ts). */
+    invalidatePiEnvironment: pi.invalidatePiEnvironment,
     async close() {
       const settled = await Promise.allSettled([codex.shutdownCodexEnvironment(), pi.shutdownPiEnvironment()]);
       const errors = settled.flatMap(result => result.status === 'rejected' ? [result.reason] : []);

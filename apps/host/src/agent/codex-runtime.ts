@@ -22,6 +22,8 @@ import { bearerKeyFromHeaders } from '../../../desktop/src/main/model-access/gat
 import { captureCodexLocalAuthPolicy } from '../../../desktop/src/main/maker-host/provider-route.js';
 import { registerCodexTextOnlyPolicy } from '../../../desktop/src/main/maker-host/codex-text-only-policy.js';
 import { createHostCodexCredentials } from './codex-credentials.js';
+import { invalidateHostCodexLogin } from './codex-invalidation.js';
+import { createLogger } from '../../../desktop/src/main/logger.js';
 import { createHostModelContext } from './model-context.js';
 import { hostOutbound, resolveHostOutboundProxy } from '../outbound.mjs';
 import type { createHostProviderConfig } from './provider-config.js';
@@ -35,6 +37,8 @@ export function createHostSubscriptionFastPolicies(availabilityPolicy: ReturnTyp
   const policies = createSubscriptionFastPolicies({ ...groups, ...bindings });
   return { policies, requestPolicy: createSubscriptionFastRequestPolicy(policies) };
 }
+
+const log = createLogger('host-codex-runtime');
 
 /** Same Codex proxy and spawn policy as desktop, assembled with owner-bound Node IO. */
 export function createHostCodexRuntime(options: {
@@ -74,6 +78,28 @@ export function createHostCodexRuntime(options: {
     ...createSilentEncryptedRetryStore({ getUserDataDir }), ...usage, ...routes,
     setAppliedCustomProviderRoutes: routes.setCodexAppliedCustomProviderRoutes,
   });
+  // Server-side invalidation of the profile's native login with the desktop's two hooks
+  // (maker-host/index.ts): onLogoutSuccess retires the local host and the proxy's injection,
+  // onInvalidatedBroadcast retires the host and tells the agents Codex is signed out.
+  let disposeLocalHost: ((reason: string) => Promise<void>) | null = null;
+  const invalidateNative = async (reason: string, context?: { providerId?: string; credentialGeneration?: string | null; credentialAttribution?: 'unproven'; failedAccessToken?: string }) => {
+    check();
+    await invalidateHostCodexLogin({ codexHome: path.join(options.profileDir, 'codex-home'), reason, ...context,
+      loginInProgress: () => options.config.codexAccounts.isCodexAccountLoginActive('openai'),
+      disposeLocalHost: async () => {
+        await disposeLocalHost?.(reason);
+        proxy.clearCodexProxyAuthInjection();
+        publish(MAKER_PUSH.CODEX_RUNTIME_ROUTE_CHANGED, readRoute());
+        options.mcp.invalidatePiEnvironment();
+      },
+      onInvalidated: async credentialScope => {
+        try { await disposeLocalHost?.(reason); } catch (error) {
+          log.warn('Codex invalidation host retirement failed', { error: error instanceof Error ? error.message : String(error) });
+        }
+        publish(MAKER_PUSH.AUTH_STATE_CHANGED, { agentKind: 'codex', authenticated: false, errorReason: reason, credentialScope });
+        options.mcp.invalidatePiEnvironment();
+      } });
+  };
   const readRoute = () => {
     check();
     return { authInjection: proxy.getCodexProxyAuthInjectionState() ?? (native.hasLogin() ? 'oauth-bearer' : 'env-key') };
@@ -115,6 +141,7 @@ export function createHostCodexRuntime(options: {
     },
   };
   return { deps, proxy, native, readRoute, modelContext, fastPolicies: policies, fastRequestPolicy: requestPolicy, closeSession: proxy.unregister,
+    invalidateNative, setLocalHostDisposer(handler: (reason: string) => Promise<void>) { disposeLocalHost = handler; },
     async close() { closed = true; await proxy.disposeCodexProxy(); },
   };
 }

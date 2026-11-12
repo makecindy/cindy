@@ -14,6 +14,7 @@ import type { AgentDeps, AgentKind, AuthAdapter, AuthAdapterOptions, AuthLoginOp
 import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claude-native-auth.ts';
 import { createMakerLogger } from '../../../desktop/src/main/maker-host/logger-adapter.js';
 import { readCodexLocalAuthState } from '../../../desktop/src/main/maker-host/codex-local-auth-state.js';
+import { readHostCodexInvalidation } from './codex-invalidation.js';
 import { createPiAuthAdapter } from '../../../desktop/src/main/maker-host/pi-auth.js';
 import { subscriptionAccountKind } from '../../../desktop/src/main/maker-host/subscription-account-kind.js';
 import { getActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.js';
@@ -224,11 +225,15 @@ export function createClaudeGatewayAuth(gateway: HostGateway | null | undefined,
  * invalidation rules. It never falls back to the system CLI authentication home.
  */
 export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined, resolveRoute: HostProviderRouteResolver | undefined, codexHome: string,
-  accounts?: HostProviderConfig['codexAccounts'], config?: HostProviderConfig) {
+  accounts?: HostProviderConfig['codexAccounts'], config?: HostProviderConfig,
+  /** Server-side invalidation of the native login (codex-runtime.ts invalidateNative). */
+  invalidate?: NonNullable<AuthAdapter['invalidate']>) {
   if (!codexHome || !path.isAbsolute(codexHome)) throw new Error('Codex requires an explicit isolated profile');
   const owner = activeOwnerScopeKey();
   const current = () => owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending();
   return bindAuthOwner({
+    // maker-core reports a server-rejected login here (codex/index.ts), as on the desktop.
+    ...(invalidate ? { invalidate } : {}),
     async getState(opts?: AuthAdapterOptions) {
       if (opts?.nativeSubscriptionAccount) return opts.nativeSubscriptionAccount.readState();
       if (opts?.providerId && !['xd', 'cindy', 'openai'].includes(opts.providerId)) {
@@ -246,6 +251,9 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
         ? { authenticated: true, authSource: 'api-key', identity: 'Cindy AI' }
         : { authenticated: false, errorReason: 'no_key' };
       if (opts?.credentialMode === 'gateway-key' || (['xd', 'cindy'] as Array<string | null | undefined>).includes(opts?.providerId)) return gatewayState;
+      // As the desktop's readState: a server-invalidated login reports why until it is replaced.
+      const invalidated = readHostCodexInvalidation(codexHome);
+      if (invalidated) return { authenticated: false, errorReason: invalidated.reason, credentialScope: invalidated.credentialScope };
       const native = isNativeProviderAuthBound('openai') ? await readCodexLocalAuthState(codexHome) : null;
       if (native?.authenticated && native.authSource === 'oauth') return native;
       if (opts?.providerId === 'openai' || opts?.credentialMode === 'oauth-bearer')
@@ -292,7 +300,12 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
 
 export function createHostAgentGraph(options: HostAgentGraphOptions) {
   const mcpProviders = options.mcpProviders ?? [];
-  const codexAuth = createCodexLocalCliAuth(options.gateway, options.resolveProviderRoute, path.join(options.userDataDir, 'codex-home'), options.providerConfig.codexAccounts, options.providerConfig);
+  const codexAuth = createCodexLocalCliAuth(options.gateway, options.resolveProviderRoute, path.join(options.userDataDir, 'codex-home'), options.providerConfig.codexAccounts, options.providerConfig,
+    options.codexRuntime ? (reason, context) => options.codexRuntime!.invalidateNative(reason, context) : undefined);
+  // The desktop retires its local Codex host when the login is invalidated (maker-host/index.ts).
+  options.codexRuntime?.setLocalHostDisposer(async reason => {
+    await codex?.forceDisposeLocalHostForAuthChange(`Codex credential invalidated: ${reason}`, { preserveExternalAuth: true });
+  });
   const config = options.providerConfig;
   const piAuth = bindAuthOwner(createPiAuthAdapter({
     subscriptionAccountKind,
