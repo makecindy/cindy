@@ -69,16 +69,15 @@ describe('Windows Acrylic resize backing contract', () => {
     );
   });
 
-  it('lets only the ordinary Acrylic sidebar show the creation-time backing', () => {
-    expect(globalsSource).toContain(
-      "[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-light']",
+  // #9623: the native backing alone cannot carry the sidebar tint. While a window is restored
+  // or another window is shown/hidden, DWM can drop it for a few frames and the sidebar flashes.
+  // Clearing `.sidebar-frost` under Acrylic is exactly that bug, so the tint must stay in CSS.
+  it('keeps the CSS sidebar tint on top of Acrylic', () => {
+    expect(globalsSource).not.toMatch(
+      /\[data-window-backdrop-material='acrylic'\][^{]*\.sidebar-frost[^{]*\{\s*background:\s*transparent;/,
     );
-    expect(globalsSource).toContain(
-      "[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-dark']",
-    );
-    expect(globalsSource).toContain('aside.bg-sidebar:not([data-sidebar-peek-drawer])');
     expect(globalsSource).toMatch(
-      /aside\.bg-sidebar:not\(\[data-sidebar-peek-drawer\]\)[\s\S]*?\{\s*background:\s*transparent;/,
+      /\[data-theme='cindy-light'\] aside\.bg-sidebar > \.sidebar-frost,\n\[data-theme='cindy-dark'\] aside\.bg-sidebar > \.sidebar-frost \{\n {2}background: var\(--surface-translucent-sidebar\);/,
     );
     expect(globalsSource).toMatch(
       /aside\.bg-sidebar\[data-sidebar-peek-drawer\][\s\S]*?background:\s*var\(--surface-translucent-sidebar\);[\s\S]*?backdrop-filter:\s*blur\(28px\);/,

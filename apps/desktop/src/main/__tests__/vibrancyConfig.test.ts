@@ -327,6 +327,22 @@ describe('Windows transparent window vs system backdrop', () => {
     expect(fitWindowsBackdropToWindow(opaque, false, win11)).toBe(opaque);
   });
 
+  // Regression (2026-11-12, 0.1.134): a window created transparent (last session ended on a
+  // clear desktop) got Acrylic back as soon as blur or 0% transparency was chosen, recreating
+  // the flickering transparent + Acrylic combination until the next launch.
+  it('never puts a system material on a transparent window mid-session', () => {
+    expect(fitWindowsBackdropToWindow(blurredDesktop, true, win11)).toEqual({
+      ...blurredDesktop,
+      backgroundMaterial: 'none',
+    });
+    expect(fitWindowsBackdropToWindow(acrylic, true, win11)).toEqual({
+      ...acrylic,
+      backgroundMaterial: 'none',
+      backgroundColor: '#00000000',
+    });
+    expect(fitWindowsBackdropToWindow(opaque, true, win11)).toBe(opaque);
+  });
+
   it('remembers which windows were created transparent', () => {
     const transparent = {} as BrowserWindow;
     const regular = {} as BrowserWindow;

@@ -87,7 +87,8 @@ function supportsWindowsSystemBackdrop(options?: ResolveVibrancyConfigOptions): 
   return build !== null && build >= WINDOWS_SYSTEM_BACKDROP_MIN_BUILD;
 }
 
-// Windows: a BrowserWindow created with `transparent: true` must not carry a system backdrop.
+// Windows: a BrowserWindow created with `transparent: true` must never carry a system backdrop,
+// neither at creation nor later through setBackgroundMaterial (fitWindowsBackdropToWindow).
 // Measured on Windows 11 build 26200 (2026-11-11): whenever any window on the desktop is shown
 // or hidden, DWM intermittently stops drawing what lies behind such a window, so the material
 // blurs nothing and the translucent sidebar flips to a flat dark fill. A regular frameless
@@ -124,16 +125,24 @@ export function resolveWindowsWindowTransparent(
 }
 
 /**
- * A regular window cannot be clear, so it keeps the frosted desktop until the next launch
- * creates a transparent one. A transparent window shows whatever is requested.
+ * `transparent` is fixed at creation, so a running window keeps the kind it was created as
+ * until the next launch:
+ * - A regular window cannot be clear, so it keeps the frosted desktop.
+ * - A transparent window never takes a system material (it would flicker). It stays
+ *   see-through without a material; the sidebar paints its own tint over the desktop
+ *   (globals.css), so it keeps its translucency instead of turning opaque.
  */
 export function fitWindowsBackdropToWindow(
   config: VibrancyConfig,
   windowIsTransparent: boolean,
   options?: ResolveVibrancyConfigOptions,
 ): VibrancyConfig {
-  if (windowIsTransparent || !needsWindowsTransparentWindow(config)) return config;
   if (!supportsWindowsSystemBackdrop(options)) return config;
+  if (windowIsTransparent) {
+    if (!config.backgroundMaterial || config.backgroundMaterial === 'none') return config;
+    return { ...config, backgroundColor: '#00000000', backgroundMaterial: 'none' };
+  }
+  if (!needsWindowsTransparentWindow(config)) return config;
   return { ...config, backgroundMaterial: 'acrylic' };
 }
 

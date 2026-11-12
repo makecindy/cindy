@@ -105,7 +105,7 @@ layers and saturation boost are removed, and it stays active in an inactive wind
 because the system tint read as a cooler, different hue than Cindy's surfaces. An
 unrecognized private layer layout is left untouched (system material fallback), and
 leaving desktop mode restores the untouched material. Windows has no regional
-material: its sidebar shares the whole-window Acrylic and only the tint rule applies.
+material: its sidebar shares the whole-window backdrop and only the tint rule applies.
 The peek
 drawer takes the main area's color (owner decision, 2026-11-10) but covers at least
 90%: it overlays app content, and CSS backdrop blur does not render in the transparent
@@ -139,9 +139,14 @@ system-default fallback where adjustable blur is unavailable. On Windows 11 22H2
 window is created transparent only when the last session ended on a clear desktop
 (blur off); otherwise it is a regular frameless window, because a transparent window
 carrying Acrylic flickers (2026-11-11; see the research document's Windows device
-finding). `transparent` is fixed at creation, so turning desktop blur off in a regular
-window keeps Acrylic until the next launch, and turning it on in a transparent window
-may flicker until then; the switch hint tells users to restart after turning it off.
+finding). `transparent` is fixed at creation and a transparent window never takes a
+system material, not even at runtime: turning desktop blur off in a regular window keeps
+Acrylic until the next launch, and turning it on (or returning to 0%) in a transparent
+window keeps it clear, without Acrylic, until then; the switch hint tells users to restart
+after switching. On every Windows backdrop the sidebar paints its own
+`surface-translucent-sidebar` tint in CSS instead of relying on the native backing: DWM
+can drop that backing for a few frames when a window is restored or another window is
+shown or hidden, and a sidebar tinted only by it flashes (#9623, 2026-11-12).
 Systems without a system backdrop always create transparent windows. A successful native
 call alone is not visual acceptance; keep the research document's validation limits.
 Selecting artwork restores the image/video controls. Reset removes these overrides.

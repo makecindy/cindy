@@ -2310,7 +2310,7 @@
         "desktopVisibilityHint": "Zeigt den Desktop und Fenster hinter Cindy. Text und Bedienelemente bleiben klar.",
         "desktopBlurLabel": "Desktop-Unschärfe",
         "desktopBlurHint": "Verwischt den Desktop hinter dem Fenster. 0 schaltet den Effekt aus, höhere Werte verstärken ihn. Systeme ohne einstellbare Stärke verwenden ihren Standardeffekt.",
-        "desktopBlurSwitchHint": "Verwischt den Desktop hinter dem Fenster mit dem Windows-Systemeffekt. Erfordert Windows 11 Version 22H2 oder neuer. Nach dem Ausschalten die App neu starten, damit die Änderung wirksam wird.",
+        "desktopBlurSwitchHint": "Verwischt den Desktop hinter dem Fenster mit dem Windows-Systemeffekt. Erfordert Windows 11 Version 22H2 oder neuer. Nach dem Ein- oder Ausschalten die App neu starten, damit die Änderung wirksam wird.",
         "blurLabel": "Unschärfe des Hintergrundbilds",
         "blurHint": "Nur das Hintergrundbild weichzeichnen. Zum Deaktivieren auf 0 setzen. Das Weichzeichnen animierter Hintergrundbilder erhöht die GPU-Auslastung.",
         "motionLabel": "Anzeige",
