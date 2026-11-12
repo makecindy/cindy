@@ -237,6 +237,8 @@ Primitive 与 Pattern 默认只绑定 semantic 角色。只有品牌表达、兼
 | Mobile 五档字色与占位字 | `textColorDiscipline.test.ts`（登记在 mobile guard 层）两条全仓扫描：文字色只能是五档中性色或已登记语义色；`placeholderTextColor` 只能是 `textPlaceholder`（登录画布除外） | 存量名单按次数登记、只许减少（共 17 次，逐条清单见证据文档第 3 节）：光标蓝与 `cta` 文字、额度 / 未读计数 / 错误状态色 / 警告 / 就绪 / 录制状态色被当作文字色、共享任务危险文字借用确认钮红、ContextSheet 占位字三级色，待设计裁决或有意可见 PR |
 | PR 设计依据检查 | `apps/mobile/src/**/*.tsx` 计入 UI 路径；设计依据按现行规范确切文件名（含 `mobile-design-guide`）且区分大小写，任意 `*-design.md` 不再误过；补 workflow ↔ 检查名 ↔ 脚本一致性测试 | 无存量 |
 
+2026-11-11 维护者裁决（A-15、A-07）：Toast 四色改走状态色 token，撤销上表续期的 Toast 豁免；composer 兜底色已从代码删除；两条记录移入 `scripts/hardcoded-color-exemptions.archive.json`。
+
 UI 路径与 design-inventory 共用唯一来源（§11）本批未做。行高 `leading-4/5/6` 是否随字号缩放尚未核实，未纳入。回退：撤回本批脚本、测试与豁免表改动即可，不影响 DS-7 / DS-10 既有接线；续期的 4 条豁免回退后恢复为过期前的放行行为。
 
 ### 阴影、渐变与失效写法门禁（2026-11-07）

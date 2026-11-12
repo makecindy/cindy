@@ -53,8 +53,26 @@ function createDatabase(): Database.Database {
       working_dir TEXT,
       project_dir TEXT
     );
+    -- The real deletion transaction also cleans up view state for deleted tasks.
+    CREATE TABLE messages (id TEXT PRIMARY KEY);
+    CREATE TABLE mcp_app_view_states (
+      message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      server_id TEXT NOT NULL, server_revision TEXT NOT NULL, plugin_instance TEXT,
+      state_json TEXT NOT NULL, byte_length INTEGER NOT NULL
+    );
     -- Same columns as the real table: the Windows removal reads last_used_at.
     CREATE TABLE recent_workdirs (path TEXT PRIMARY KEY, last_used_at INTEGER NOT NULL DEFAULT 0);
+    -- The real deletion transaction also cleans private per-card view state.
+    CREATE TABLE mcp_app_view_states (
+      message_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      server_id TEXT NOT NULL,
+      server_revision TEXT NOT NULL,
+      plugin_instance TEXT,
+      state_json TEXT NOT NULL,
+      byte_length INTEGER NOT NULL
+    );
     CREATE TABLE bot_profiles (
       id TEXT PRIMARY KEY,
       display_name TEXT NOT NULL,
@@ -92,6 +110,16 @@ function createDatabase(): Database.Database {
     CREATE TABLE bot_delegations (id TEXT PRIMARY KEY, requesting_bot_id TEXT, target_bot_id TEXT);
     CREATE TABLE bot_direct_message_threads (id TEXT PRIMARY KEY, bot_a_id TEXT, bot_b_id TEXT);
     CREATE TABLE bot_direct_messages (id TEXT PRIMARY KEY, sender_bot_id TEXT, recipient_bot_id TEXT);
+    -- The real deletion transaction also cleans up per-task MCP App state.
+    CREATE TABLE mcp_app_view_states (
+      message_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      server_id TEXT NOT NULL,
+      server_revision TEXT NOT NULL,
+      plugin_instance TEXT,
+      state_json TEXT NOT NULL,
+      byte_length INTEGER NOT NULL
+    );
     INSERT INTO bot_profiles (
       id, display_name, description, avatar, avatar_color, status,
       current_version, canonical_session_id, created_at, updated_at
@@ -411,6 +439,13 @@ describe('Bot lifecycle coordinator', () => {
   // Tier: behavior. Deleting a teammate left its project in the project list and the tasks in it
   // (automation runs, tasks it opened there) in the task list (2026-11-10).
   it('takes the teammate project and the tasks in it along when deleting', async () => {
+    // PR #10188 CI: the mocked callback hid a missing table in this in-memory
+    // fixture. Exercise the real transaction before checking persisted statuses.
+    deleteProfileAndDetachSessions.mockImplementation(async (botId, sessionIds, keepTaskHistory, projectSessionIds) => {
+      await runWorkerTx(sqlite, { name: 'bots.deleteProfile', args: {
+        botId, sessionIds, keepTaskHistory, projectSessionIds, at: 10,
+      } });
+    });
     const project = teammateWorkspaceDir(ownerScopedUserDataPath(), 'bot-1');
     sqlite.prepare('INSERT INTO sessions (id, source, status, updated_at, working_dir, project_dir) VALUES (?, ?, ?, 1, ?, ?)')
       .run('automation-run', 'scheduler', 'active', project, null);
@@ -428,6 +463,9 @@ describe('Bot lifecycle coordinator', () => {
       ['automation-run', 'opened-task']);
     expect(closeSession).toHaveBeenCalledWith('automation-run');
     expect(closeSession).not.toHaveBeenCalledWith('neighbour');
+    expect(row(sqlite, 'sessions', 'automation-run').status).toBe('deleted');
+    expect(row(sqlite, 'sessions', 'opened-task').status).toBe('deleted');
+    expect(row(sqlite, 'sessions', 'neighbour').status).toBe('active');
     expect(sqlite.prepare('SELECT path FROM recent_workdirs').pluck().all()).toEqual([listed[1]]);
     expect(result).toMatchObject({ status: 'deleted', affected: { sessions: 4 } });
   });
