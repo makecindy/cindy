@@ -67,6 +67,21 @@ describe('remote stream close settles the product turn', () => {
     } finally { await f.session.close(); }
   });
 
+  it('drains an interrupted send before a following runtime EOF clears its owner', async () => {
+    const f = fixture();
+    try {
+      await f.session.send('work');
+      f.controller.onInterrupted(f.restartRecovery);
+      f.controller.onClosed('ended', undefined, f.client.runId);
+      await f.finish();
+      expect(f.seen.filter(e => e.type === 'error')).toEqual([
+        expect.objectContaining({ data: expect.objectContaining({ reason: 'remote_agent_restarted', isTerminal: true }) }),
+      ]);
+      expect(f.seen.filter(e => e.type === 'done')).toHaveLength(1);
+      expect(f.restartRecovery).toHaveBeenCalledOnce();
+    } finally { await f.session.close(); }
+  });
+
   it.each(['done', 'provider-error', 'quota-error'])('preserves a queued current %s before provider restart', async terminal => {
     const f = fixture();
     try {

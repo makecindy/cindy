@@ -320,11 +320,14 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   const dispose = (finalEvent?: () => AgentEvent | undefined): Promise<void> => {
     if (disposal) return disposal;
     disposed = true;
-    sendOwnerOptions = undefined;
     activeTurn = false;
     state = { ...state, turnRunning: false, preparing: false };
     for (const projected of projection.flush()) queue.push(projected);
-    queue.end(finalEvent);
+    // Queued terminal decisions still need the last send owner while draining.
+    queue.end(() => {
+      try { return finalEvent?.(); }
+      finally { sendOwnerOptions = undefined; }
+    });
     // onClosed can start cleanup before close/detach reaches it. Every caller
     // must await the same result, including a failure, before releasing the owner.
     disposal = Promise.resolve().then(() => deps.dispose());
@@ -737,7 +740,9 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       for (const projected of projection.flush()) queue.push(projected);
       queue.push(() => {
         const observed = readSessionSendTerminalStatus(ownerOptions);
-        if (disposed || abortRequested || sendOwnerOptions !== ownerOptions
+        // Runtime EOF disposes resources; only an intentional teardown cancels
+        // the interrupted turn's queued outcome.
+        if (teardownRequested || abortRequested || sendOwnerOptions !== ownerOptions
           || wasAborted || observed === 'settled'
           || (observed === undefined && (!wasActive || wasTerminal))) return [];
         onUnsettled?.();
@@ -758,17 +763,16 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       const wasActive = activeTurn;
       const wasTerminal = terminalEventDelivered;
       const wasAborted = abortRequested;
-      const intentional = teardownRequested;
       const finalEvent = (): AgentEvent | undefined => {
         const observed = readSessionSendTerminalStatus(ownerOptions);
         const unfinished = !wasAborted && !abortRequested && (observed === 'unsettled' || (observed === undefined && wasActive));
         const settled = observed === 'settled' || (observed === undefined && wasTerminal);
         const normalClose = reason === 'closed' || reason === 'detached' || reason === 'ended';
         // Replacement cancels the old product turn; EOF by itself never completes it.
-        if (!intentional && unfinished && !settled && reason === 'superseded') {
+        if (!teardownRequested && unfinished && !settled && reason === 'superseded') {
           return markSessionSendTerminal(ownerOptions, { type: 'done', source: started.agentKind, data: { status: 'cancelled', reason,
             remoteCloseReason: reason, ...(runId ? { remoteRunId: runId } : {}) } });
-        } else if (!intentional && !wasAborted && !abortRequested && !settled && reason !== 'superseded'
+        } else if (!teardownRequested && !wasAborted && !abortRequested && !settled && reason !== 'superseded'
           && (unfinished || !normalClose)) {
           return markSessionSendTerminal(ownerOptions, {
             type: 'error',
