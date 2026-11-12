@@ -56,6 +56,8 @@ export interface HostAgentGraphOptions {
   onSessionClose?: (id: string) => unknown;
   isSessionInTurn?: (id: string) => boolean;
   wakeSession?: (id: string, reason: string) => void;
+  /** Applies the account's provider models to the active catalog before a task starts. */
+  ensureProviderCatalog?: () => Promise<unknown>;
 }
 
 export const LOGGER = createMakerLogger('maker');
@@ -255,6 +257,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   // The desktop start hook's steps that apply to a task the Host runs (start-options.ts).
   const startOptions = createHostStartOptions({
     modelContext, fastPolicies: options.codexRuntime?.fastPolicies ?? null, logger: LOGGER,
+    ensureProviderCatalog: options.ensureProviderCatalog,
   });
   const claudeModelResolvers = createClaudeModelResolvers({
     getCatalog: modelContext.getSelectableCatalog, resolveContextProviderId: modelContext.resolveContextProviderId,

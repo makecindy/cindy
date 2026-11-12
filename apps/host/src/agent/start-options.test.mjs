@@ -26,7 +26,7 @@ import { createSessionContextBudget } from '../../../desktop/src/main/maker-host
 import { readSessionContextWindowBudget } from '../../../desktop/src/main/maker-host/session-context-budget-store.ts';
 import { getActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.ts';
 
-function setup(t, ownerId) {
+function setup(t, ownerId, ensureProviderCatalog) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-start-options-'));
   t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
   configureHostOwner({ userDataDir: profile, ownerId });
@@ -41,7 +41,8 @@ function setup(t, ownerId) {
     },
   };
   const warnings = [];
-  const start = createHostStartOptions({ modelContext, fastPolicies, logger: { warn: (message) => warnings.push(message) } });
+  const start = createHostStartOptions({ modelContext, fastPolicies, ensureProviderCatalog,
+    logger: { warn: (message) => warnings.push(message) } });
   return { start, modelContext, policies, warnings };
 }
 
@@ -113,4 +114,27 @@ test('a start after the account changed is refused with the desktop marker', asy
     error => error.code === 'ACCOUNT_PROVIDER_NOT_READY' && /^ACCOUNT_PROVIDER_NOT_READY: /.test(error.message),
   );
   assert.equal(getSessionProvider('stale-task'), null);
+});
+
+test('a start waits for the account provider catalog before it freezes the provider', async t => {
+  const order = [];
+  const { start } = setup(t, 'start-options-catalog', async () => { order.push('catalog'); });
+  const opts = { agentKind: 'codex', providerId: 'openai', model: 'fixture-model' };
+  await start.prepareStartOptions('catalog-task', opts);
+  order.push(getSessionProvider('catalog-task'));
+  assert.deepEqual(order, ['catalog', 'openai']);
+});
+
+test('a start whose catalog refresh fails, or whose owner changes during it, is refused with the desktop marker', async t => {
+  const failing = setup(t, 'start-options-catalog-fail', async () => { throw new Error('PROVIDER_OWNER_CHANGED'); });
+  await assert.rejects(failing.start.prepareStartOptions('fail-task', { agentKind: 'codex', providerId: 'openai', model: 'm' }),
+    error => error.code === 'ACCOUNT_PROVIDER_NOT_READY');
+  assert.equal(getSessionProvider('fail-task'), null);
+
+  const switching = setup(t, 'start-options-catalog-switch', async () => {
+    configureHostOwner({ userDataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-start-options-c-')), ownerId: 'start-options-other-owner' });
+  });
+  await assert.rejects(switching.start.prepareStartOptions('switch-task', { agentKind: 'codex', providerId: 'openai', model: 'm' }),
+    error => error.code === 'ACCOUNT_PROVIDER_NOT_READY');
+  assert.equal(getSessionProvider('switch-task'), null);
 });

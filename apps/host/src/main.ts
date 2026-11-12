@@ -663,6 +663,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       mcpRuntime,
       isSessionInTurn: (id: string) => inputQueue.isTurnRunning(id),
       wakeSession: (id: string, reason: string) => inputQueue.wakeSession(id, reason),
+      // A task restored at startup waits for the account's models, as on the desktop.
+      ensureProviderCatalog: () => listProviders({ gateway: currentGateway(), ownerId: runtime.owner }),
       resolveProviderRoute: createProviderRouteResolver({
         catalog: () => listProviders({ gateway, ownerId }),
         store: await createCredentialStore({ userDataDir: dataDir }),

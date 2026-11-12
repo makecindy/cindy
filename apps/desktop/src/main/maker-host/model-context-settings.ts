@@ -19,10 +19,12 @@ export const resolveDesktopModelContextProviderId = createModelContextProviderRe
   hasCodexOAuthLogin: () => desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly(),
 });
 
+// Ports resolve at call time, not when this module loads.
 const desktopContextBudget = createSessionContextBudget({
-  resolveContextProviderId: resolveDesktopModelContextProviderId,
-  readSessionContextWindowBudget,
-  logger: desktopMakerLogger,
+  resolveContextProviderId: (catalog, agent, providerId, modelId) =>
+    resolveDesktopModelContextProviderId(catalog, agent, providerId, modelId),
+  readSessionContextWindowBudget: (sessionId) => readSessionContextWindowBudget(sessionId),
+  logger: { warn: (message, fields) => desktopMakerLogger.warn(message, fields) },
 });
 
 /** 该任务已保存的**原始**预算值（tokens）；null = 未自定义。口径见 sessionContextBudgetCore.ts。 */

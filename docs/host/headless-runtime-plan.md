@@ -1408,3 +1408,5 @@ cd apps/host && pnpm run test:ipc-route
   Maker 的键必须是 `AgentDeps`／`MakerDeps` 里有的键。
 - 已在 M1 第 1 步完成：`runtime.mjs` 改名为 `apps/host/src/agent/runtime.ts` 并受类型检查。只补类型、不改运行逻辑；
   对象字面量里写错的键由 tsc 拦下，展开进来的依赖包仍由上面那条守护管。
+- 以后可以收紧：`createCodexLocalCliAuth` 里的 `resolveRoute!(...)` 为保持原 JS 行为用了非空断言——缺少
+  resolver 时抛 TypeError，被外层 catch 成 `not_connected`。改成显式判空属于逻辑变更，M1 不做。

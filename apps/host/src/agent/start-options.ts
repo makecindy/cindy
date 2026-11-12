@@ -9,8 +9,10 @@
  * - worktree runtime lease, shared project Skill links and disabled plugin ids:
  *   later M1 steps;
  * - account-model discovery barrier: the desktop waits for its account provider
- *   discovery; the Host has no such task and reads its provider catalog on demand,
- *   so only the owner part of that check applies.
+ *   discovery (ensureCurrentAccountProviderReadiness). The Host's equivalent is its
+ *   provider catalog refresh, which applies the account's gateway models to the
+ *   active catalog; `ensureProviderCatalog` waits for it, so a task restored right
+ *   after startup does not resolve against an incomplete catalog.
  */
 
 import type { CreateSessionOptions } from '@cindy/maker-core';
@@ -34,6 +36,18 @@ export interface HostStartOptionsPorts {
   /** Subscription Fast policies of the Host's provider groups; absent without a Codex runtime. */
   fastPolicies?: Pick<ReturnType<typeof createSubscriptionFastPolicies>, 'createSubscriptionFastPolicy'> | null;
   logger: { warn(message: string, fields?: Record<string, unknown>): void };
+  /** Applies the account's provider models to the active catalog (Host listProviders). */
+  ensureProviderCatalog?: () => Promise<unknown>;
+}
+
+function providerNotReady(): Error {
+  return Object.assign(
+    new Error(
+      `${ACCOUNT_PROVIDER_NOT_READY_CODE}: account provider models are not ready `
+      + '(usually not signed in, or an account switch is in flight)',
+    ),
+    { code: ACCOUNT_PROVIDER_NOT_READY_CODE },
+  );
 }
 
 export function createHostStartOptions(ports: HostStartOptionsPorts) {
@@ -49,14 +63,13 @@ export function createHostStartOptions(ports: HostStartOptionsPorts) {
   async function prepareStartOptions(sessionId: string, opts: CreateSessionOptions): Promise<void> {
     // The desktop reports this when signed out or during an account switch; keep
     // its marker so callers can tell "sign in again" from a transient failure.
-    if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) {
-      throw Object.assign(
-        new Error(
-          `${ACCOUNT_PROVIDER_NOT_READY_CODE}: account provider models are not ready `
-          + '(usually not signed in, or an account switch is in flight)',
-        ),
-        { code: ACCOUNT_PROVIDER_NOT_READY_CODE },
-      );
+    const ownerCurrent = () => activeOwnerScopeKey() === owner && !isAppSessionBoundaryPending();
+    if (!ownerCurrent()) throw providerNotReady();
+    if (ports.ensureProviderCatalog) {
+      try { await ports.ensureProviderCatalog(); }
+      catch { throw providerNotReady(); }
+      // The desktop rechecks the owner after its wait; so does the Host.
+      if (!ownerCurrent()) throw providerNotReady();
     }
     // The dispatch boundary every creation path shares; providerId is final here.
     freezeSessionProviderAtStart(sessionId, opts.providerId);
