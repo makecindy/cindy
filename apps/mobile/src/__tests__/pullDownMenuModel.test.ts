@@ -8,7 +8,7 @@ describe("pull-down menu model", () => {
   it("turns inline groups into titled sections and keeps loose rows together", () => {
     const sections = buildPullDownMenuSections([
       { id: "all", title: "All" },
-      { id: "team", title: "Teammates" },
+      { id: "team", title: "Buddies" },
       {
         id: "group.sort",
         title: "Sort",
