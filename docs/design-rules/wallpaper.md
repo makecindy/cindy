@@ -115,7 +115,9 @@ max(main area's veil, 90%). It drops that ineffective blur and keeps its divider
 backdrop, docked sidebar and peek drawer are unchanged.
 0% desktop transparency does not enter desktop-background mode on any platform: the
 window keeps its original backdrop (macOS HUD vibrancy with the frosted sidebar,
-Windows 11 Acrylic, otherwise opaque) until transparency is raised (#9424).
+Windows 11 22H2+ Acrylic, otherwise opaque) until transparency is raised (#9424).
+Electron applies Windows system backdrops only from build 22621, so earlier Windows 11
+builds keep the opaque backdrop rather than a translucent backing without its material.
 The controls reuse the visibility and blur overrides. On macOS, the own-window
 native addon applies `CGSSetWindowBackgroundBlurRadius` (0–20), with fixed vibrancy
 removed so it cannot obscure radius changes. Artwork clears this native radius.

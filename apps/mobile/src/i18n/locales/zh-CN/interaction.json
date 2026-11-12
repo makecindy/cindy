@@ -193,6 +193,7 @@
     "fromLead": "来自 Lead 的消息",
     "fromWorkerNamed": "来自 Worker「{{role}}」的消息",
     "fromWorker": "来自 Worker 的消息",
+    "fromWorkerBatch": "系统回传的 {{count}} 条 Worker 结果",
     "emptyMessageBody": "（空消息）"
   },
   "contextSheet": {

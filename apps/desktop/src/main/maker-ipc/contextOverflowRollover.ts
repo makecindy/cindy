@@ -591,8 +591,9 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   prepareUnhealthySession(sessionId: string): Promise<boolean>;
   prepareNativeSessionRecovery(
     sessionId: string,
-    // null is an explicit Bot restart: keep its route, including before the first native handle.
-    target: NativeSessionRecoveryTarget | null,
+    // null is an explicit Bot restart. retain-route carries an ordinary task to a
+    // different subscription account without changing its model or replaying input.
+    target: NativeSessionRecoveryTarget | 'retain-route' | null,
     assertCanCommit: () => void,
     signal?: AbortSignal,
   ): Promise<void>;
@@ -1189,13 +1190,17 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   return {
     async prepareNativeSessionRecovery(sessionId, target, assertCanCommit, signal) {
       if (inFlight.has(sessionId)) throw new Error('Native session recovery is already in progress');
-      inFlight.set(sessionId, undefined);
+      const controller = target === 'retain-route' ? new AbortController() : undefined;
+      if (controller) signal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+      inFlight.set(sessionId, controller);
+      const assertReady = () => { signal?.throwIfAborted(); assertCanCommit(); };
       try {
         await deps.withCloseSuppressed(sessionId, async () => {
           await deps.drainPersistQueue();
           const row = await deps.getSessionRow(sessionId);
           if (!row || row.status === 'deleted' ||
-              (target ? (!row.sdkSessionId || row.remoteHostId) : (row.source !== 'bot' || row.status !== 'active'))) {
+              (target === 'retain-route' ? !!row.remoteHostId
+                : target ? (!row.sdkSessionId || row.remoteHostId) : (row.source !== 'bot' || row.status !== 'active'))) {
             throw new Error('Native session recovery source is unavailable');
           }
           const generation = deps.readPendingHandoffGeneration?.(sessionId);
@@ -1203,20 +1208,20 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           if (source.length === 0 && row.contextTokens !== 0) {
             throw new Error('Cindy history is unavailable for native session recovery');
           }
-          assertCanCommit();
+          assertReady();
           const live = deps.getLiveSession(sessionId);
-          if (target && live?.isTurnRunning()) {
-            throw new Error('Native session recovery cannot interrupt a running turn');
+          if (target && (live?.isTurnRunning() || (live?.listBackgroundTasks?.().length ?? 0) > 0)) {
+            throw new Error('Native session recovery cannot interrupt a running turn or background task');
           }
           // Manual restart closes the broken runtime without asking it to compact.
           if (live) await deps.closeSession(sessionId);
-          assertCanCommit();
+          assertReady();
           if (!target) {
             // Include any last output persisted while the old runtime was stopping.
             await deps.drainPersistQueue();
-            assertCanCommit();
+            assertReady();
             source = (await deps.listMessages(sessionId)).filter((message) => message.role !== 'error');
-            assertCanCommit();
+            assertReady();
           }
           // 显式重启(target=null)对伙伴的每段对话一视同仁: 主任务与 IM / 群专线按空闲间隔
           // 刷新同一口径写交接(isBotChatContext)。换路由恢复仍只认主任务。
@@ -1226,7 +1231,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
             toLabel: engineLabelForOverflow(row.agentKind),
             sessionId,
             reason: 'native-session-recovery',
-            includeToolResults: !target || isCanonicalBotContext(row),
+            includeToolResults: !target || target === 'retain-route' || isCanonicalBotContext(row),
             companion: companionChat,
             ...(await companionRecall(sessionId, companionChat)),
           });
@@ -1239,8 +1244,9 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
             sourceModel: row.model ?? null,
             sourceProviderId: row.providerId ?? null,
             expectedClearedAt: row.clearedAt,
-            ...(target ? { replacementRoute: { ...target, expectedSdkSessionId: row.sdkSessionId! } } : {}),
+            ...(target && target !== 'retain-route' ? { replacementRoute: { ...target, expectedSdkSessionId: row.sdkSessionId! } } : {}),
           }];
+          if (target === 'retain-route') assertReady();
           if (signal) commitArgs[3] = signal;
           await deps.commitRebuild(...commitArgs);
           deps.setPendingHandoff(sessionId, handoff, generation);

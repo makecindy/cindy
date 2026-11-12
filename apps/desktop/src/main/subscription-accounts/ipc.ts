@@ -15,6 +15,7 @@ import { executeSubscriptionAccountCommand } from './service.js';
 import {
   onSubscriptionAccountsChanged,
   readSubscriptionPoolUsage,
+  readSubscriptionPoolModelAvailability,
   readLegacySubscriptionPoolUsage,
   readSubscriptionSessionAccount,
   readSubscriptionSessionUsage,
@@ -30,12 +31,19 @@ export function registerSubscriptionAccountsIpc(): void {
   onSubscriptionAccountsChanged((providerId) =>
     broadcast('subscription-accounts:changed', { providerId }),
   );
-  ipcMain.handle('maker:subscription-pool:quota', async (event, providerId: unknown) => {
+  ipcMain.handle('maker:subscription-pool:quota', async (event, providerId: unknown, model?: unknown) => {
     const context = getDeviceLinkInvokeContext();
     if (context?.sharedTask) throwIpcError('PERMISSION_DENIED', 'Account quota requires the owner');
     if (!context) assertTrustedAppRendererEvent(event);
     if (!isSubscriptionProvider(providerId))
       throwIpcError('INVALID_PARAMS', 'Invalid subscription provider');
+    if (model !== undefined) {
+      if (typeof model !== 'string' || !model.trim() || model.length > 512)
+        throwIpcError('INVALID_PARAMS', 'Invalid subscription model');
+      return { providerId, model, available: await readSubscriptionPoolModelAvailability(providerId, model, {
+        remote: !!context,
+      }) };
+    }
     const usage = await readSubscriptionPoolUsage(providerId);
     return { providerId, pooled: usage !== undefined, usage: usage ?? null };
   });

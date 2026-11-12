@@ -5,12 +5,43 @@ import { BUNDLED_CATALOG, buildUserProvider, connectedProvidersForAgent, provide
 import { checkModelRoute } from '../model-route-guard.js';
 import { createProviderService, type ConnectionReadOptions } from '../provider-service.js';
 import { cindyAiAccountName, cindyAiAccountLogoKind } from '../../../shared/cindyAiPresentation.js';
+import { organizationProviderLogoKind } from '../../organizationProviderLogo.js';
 import type { XdOrgIdentity } from '../../../shared/xdOrg.js';
 
 /** 注入内置 bundled 目录作为「当前生效目录」(桌面端真实注入的是 active-catalog 的 getActiveCatalog)。 */
 const bundledCatalog = () => BUNDLED_CATALOG;
 
 describe('createProviderService', () => {
+  // Unit: the real list projection must brand only XD's exact enterprise provider,
+  // including mixed Auto/concrete model lists, and re-read membership after account changes.
+  it('projects enterprise branding from current membership without applying local display preferences', async () => {
+    let user: XdOrgIdentity | null = { membershipKind: 'org', orgSlug: 'xd', orgName: 'XD' };
+    const model = { id: 'byok-openai-codex/gpt-6.1-terra', name: 'Terra', contextWindow: 200000, efforts: [], defaultEffort: null };
+    const provider = { id: 'byok-test', name: 'Enterprise Codex', source: 'organization' as const,
+      auth: { method: 'none' as const }, agents: ['codex' as const, 'pi' as const], routing: {},
+      models: { codex: [{ ...model, id: 'auto/group' }], pi: [model] } };
+    const svc = createProviderService({
+      getCatalog: () => ({ version: 'test', providers: [provider,
+        { ...provider, id: 'byok-other', models: { codex: [{ ...model, id: 'byok-other/gpt' }] } },
+        { ...provider, id: 'user-test', source: 'user' as const },
+      ] }),
+      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
+      getOrganizationProviderLogoKind: p => organizationProviderLogoKind(p, user),
+      getProviderPresentation: () => ({ name: 'Stale local name', removed: true, logoKind: 'xd' }),
+    });
+    const read = () => svc.listProviders({ snapshotOnly: true });
+    const xd = await read();
+    expect(xd[0]).toMatchObject({ name: 'Enterprise Codex', logoKind: 'openai-spectrum' });
+    expect(xd[0].removed).not.toBe(true);
+    expect(xd.slice(1).map(p => p.logoKind)).toEqual([undefined, undefined]);
+    user = { membershipKind: 'org', orgSlug: 'other', orgName: 'XD' };
+    expect((await read())[0].logoKind).toBeUndefined();
+    user = null;
+    expect((await read())[0].logoKind).toBeUndefined();
+    user = { membershipKind: 'org', orgSlug: 'xd', orgName: 'Renamed' };
+    expect((await read())[0].logoKind).toBe('openai-spectrum');
+  });
+
   // #9501, unit: existing view tests never supply advanced-settings budgets.
   // One exact route with a 1M override must retain the 200k settings default,
   // expose 1M to Remote Agent selection, and follow defaults again after reset.

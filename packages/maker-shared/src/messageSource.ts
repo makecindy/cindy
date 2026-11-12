@@ -229,6 +229,17 @@ export interface MessageSourceIdEntry {
 }
 
 /**
+ * Orca 系统兜底回报批次的条数（>=2 才算批次）；非批次返回 undefined。
+ * 批次没有单一发送方：展示/投影层不得据此归属首个 Worker，senderSessionId 仅作 Host 团队授权证据。
+ */
+export function orcaAutoBridgeBatchCount(origin: unknown): number | undefined {
+  const record = asRecord(origin);
+  if (!record || record.kind !== 'orca' || record.autoBridge !== true) return undefined;
+  const count = record.autoBridgeBatchCount;
+  return typeof count === 'number' && Number.isSafeInteger(count) && count >= 2 ? count : undefined;
+}
+
+/**
  * 可见「谁发的」标签对应的 ID 列表——桌面悬停、手机长按、排队行共用，与标签同一优先级：
  * 插件 → 伙伴（伙伴 id + 来源任务 id）→ 任务 → Orca 发送方任务 → 自动化（Hook 不算）→ 共享成员。
  * 脱敏后没有 id 的来源返回空数组（标签保持静态）。设备 id 属另一维度，不在此列。
@@ -250,6 +261,8 @@ export function messageSourceIdEntries(meta: unknown): MessageSourceIdEntry[] {
   }
   const origin = asRecord(asRecord(meta)?.origin);
   if (origin?.kind === 'orca') {
+    // 批次没有单一发送方：不挂首个 Worker 的 id（授权证据另由 taskActionHost 消费）。
+    if (orcaAutoBridgeBatchCount(origin) !== undefined) return [];
     const sessionId = readString(origin, 'senderSessionId');
     return sessionId ? [{ kind: 'session', id: sessionId }] : [];
   }
