@@ -12,11 +12,14 @@
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
+import { createInstance } from 'i18next';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
 import { ProviderAccountUsageModule } from '../components/settings/ProviderAccountUsageModule';
+import en from '../i18n/locales/en/common.json';
+import zhCN from '../i18n/locales/zh-CN/common.json';
 
 const {
   providersState,
@@ -26,7 +29,9 @@ const {
   modelAccessState,
   apiKeyState,
   primaryActionState,
+  translationState,
 } = vi.hoisted(() => ({
+  translationState: { current: null as import('i18next').i18n | null },
   providersState: { providers: [] as unknown[], order: [] as string[] },
   authState: {
     mode: 'cloud' as 'cloud' | 'local' | 'signed-out',
@@ -52,7 +57,7 @@ const {
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (key: string) => translationState.current?.t(key) ?? key,
     i18n: { language: 'zh-CN', resolvedLanguage: 'zh-CN' },
   }),
 }));
@@ -214,6 +219,7 @@ function renderSection() {
 }
 
 beforeEach(() => {
+  translationState.current = null;
   providersState.order = [];
   providersState.providers = [makeXd()];
   authState.mode = 'cloud';
@@ -244,6 +250,31 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+});
+
+// PR #9894 / discussion_r4546802628, unit/jsdom: the real card and hook must
+// render readable copy for a transaction response. Existing tests return i18n
+// keys, which cannot catch a missing resource; use actual locale resources here.
+it.each([
+  ['deepseek', 'https://api.deepseek.com', 'zh-CN', '连接已变更，请刷新以获取配额。'],
+  ['glm', 'https://api.z.ai/api/coding/paas/v4', 'en', 'The connection changed. Refresh to retrieve its quota.'],
+  ['opencode-go', 'https://opencode.ai/zen/go/v1', 'zh-CN', '连接已变更，请刷新以获取配额。'],
+])('renders readable settings state for %s during connection updates', async (id, upstream, locale, message) => {
+  const translations = createInstance();
+  await translations.init({
+    lng: locale, fallbackLng: 'en', defaultNS: 'common',
+    resources: { en: { common: en }, 'zh-CN': { common: zhCN } },
+  });
+  translationState.current = translations;
+  Object.assign(window.electronAPI.maker, {
+    fetchProviderAccountUsage: vi.fn(async () => ({ status: 'unavailable', error: 'updating' })),
+  });
+  render(<ProviderAccountUsageModule provider={{
+    id, connected: true, auth: { method: 'apiKey' },
+    routing: { codex: { upstream, authStrategy: 'api-key-header' } },
+  } as ProviderView} />);
+  expect(await screen.findByText(message)).toBeTruthy();
+  expect(screen.getByTestId('provider-usage-module').textContent).not.toContain('providerAccountUsage.');
 });
 
 // PR #7031: settings and chip must both open the queried account's dashboard.

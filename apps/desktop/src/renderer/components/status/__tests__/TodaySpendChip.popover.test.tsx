@@ -2,6 +2,9 @@
 
 import { act, cleanup, fireEvent, render as renderUI, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createInstance } from 'i18next';
+import en from '../../../i18n/locales/en/common.json';
+import zhCN from '../../../i18n/locales/zh-CN/common.json';
 
 import type { ReactElement } from 'react';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
@@ -21,6 +24,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import type { ModelAccessCreditUsage } from '../../../../shared/modelAccess';
 
 const mocks = vi.hoisted(() => ({
+  translations: null as import('i18next').i18n | null,
   claudeSnapshot: null as ClaudeSubscriptionUsageSnapshot | null,
   codexSnapshot: null as RateLimitSnapshot | null,
   xaiSnapshot: null as XaiSubscriptionUsageSnapshot | null,
@@ -49,6 +53,7 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     i18n: { language: 'zh-CN', resolvedLanguage: 'zh-CN' },
     t: (key: string, options: Record<string, string | number> = {}) => {
+      if (mocks.translations) return mocks.translations.t(key, options);
       const templates: Record<string, string> = {
         'quotaCard.usageTitle': '用量明细',
         'quotaCard.staleData': '数据更新于 {{minutes}} 分钟前',
@@ -252,6 +257,7 @@ function openCardFromHover() {
 }
 
 beforeEach(() => {
+  mocks.translations = null;
   const history = new QuotaFullCelebrations();
   vi.spyOn(quotaFullCelebrations, 'observe').mockImplementation(history.observe.bind(history));
   vi.useFakeTimers();
@@ -288,6 +294,31 @@ afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.clearAllMocks();
+});
+
+// PR #9894 / discussion_r4546802628, unit/jsdom: existing mocks echo missing
+// keys, so they cannot distinguish readable copy from an internal key. Exercise
+// the real task card/hook with an updating IPC result and real locale resources.
+it.each([
+  ['deepseek', 'https://api.deepseek.com', 'en', 'The connection changed. Refresh to retrieve its quota.'],
+  ['glm', 'https://api.z.ai/api/coding/paas/v4', 'zh-CN', '连接已变更，请刷新以获取配额。'],
+  ['opencode-go', 'https://opencode.ai/zen/go/v1', 'en', 'The connection changed. Refresh to retrieve its quota.'],
+])('renders readable task account state for %s during connection updates', async (id, upstream, locale, message) => {
+  const translations = createInstance();
+  await translations.init({
+    lng: locale, fallbackLng: 'en', defaultNS: 'common',
+    resources: { en: { common: en }, 'zh-CN': { common: zhCN } },
+  });
+  mocks.translations = translations;
+  mocks.providers = [{
+    id, connected: true, auth: { method: 'apiKey' },
+    routing: { codex: { upstream, authStrategy: 'api-key-header' } },
+  } as ProviderView];
+  mocks.fetchProviderAccountUsage.mockResolvedValue({ status: 'unavailable', error: 'updating' });
+  await act(async () => { render(<TodaySpendChip vendorKey="codex" providerId={id} sessionId="updating-account" />); });
+  const { card } = openCardFromHover();
+  expect(within(card).getByText(message)).toBeTruthy();
+  expect(card.textContent).not.toContain('providerAccountUsage.');
 });
 
 // PR #9894 review: real component/hook, synthetic IPC, unit/jsdom. Existing

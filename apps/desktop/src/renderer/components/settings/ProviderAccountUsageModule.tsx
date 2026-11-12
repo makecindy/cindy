@@ -14,7 +14,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { ProviderView } from '@cindy/model-providers';
-import { PROVIDER_ACCOUNT_USAGE_AGENTS } from '../../../shared/providerAccountUsage';
+import { PROVIDER_ACCOUNT_USAGE_AGENTS, providerAccountUsageErrorKey } from '../../../shared/providerAccountUsage';
 
 import {
   getProviderAccountUsageDashboardUrlView,
@@ -61,7 +61,9 @@ export function ProviderAccountUsageModule({ provider }: { provider?: ProviderVi
   const snapshot = usage.result?.status === 'ready' ? usage.result.snapshot : null;
   const errorText =
     usage.result?.status === 'unavailable'
-      ? minimax ? t('providerAccountUsage.minimax.unavailable') : t(`providerAccountUsage.${kimi ? 'kimi.' : ''}error.${usage.result.error}`)
+      ? minimax
+        ? t('providerAccountUsage.minimax.unavailable')
+        : t(providerAccountUsageErrorKey(usage.result.error, kimi ? 'kimi' : 'generic'))
       : null;
   const account = minimax
     ? buildMiniMaxUsageCard(snapshot?.kind === 'minimax-plan-quota' ? snapshot : null, t)

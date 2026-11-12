@@ -145,7 +145,7 @@ import {
   hasDeepSeekOfficialRouteView,
   isZhipuCodingPlanProviderView,
 } from '@/lib/providerAccountUsageView';
-import { type ProviderAccountUsageSnapshot, type ZhipuCodingPlanQuotaSnapshot } from '../../../shared/providerAccountUsage';
+import { providerAccountUsageErrorKey, type ProviderAccountUsageSnapshot, type ZhipuCodingPlanQuotaSnapshot } from '../../../shared/providerAccountUsage';
 import {
   quotaLevelFromRemaining,
   quotaLevelFromSeverity,
@@ -1768,7 +1768,9 @@ export function TodaySpendChip({
               : buildClaudeUsageCard(claudeSubscriptionUsage, t);
       if ((usesKimiCodingForm || usesOpenCodeGoForm || usesMiniMaxPlanForm) && providerAccountUsage.result?.status === 'ready' && providerAccountUsage.result.stale) account.notices = [{ text: t('providerAccountUsage.kimi.stale'), tone: 'warn' }];
       if (usesProviderAccountUsageForm && providerAccountUsage.result?.status === 'unavailable') {
-        account.emptyText = usesMiniMaxPlanForm ? t('providerAccountUsage.minimax.unavailable') : t(`providerAccountUsage.${usesKimiCodingForm ? 'kimi.' : ''}error.${providerAccountUsage.result.error}`);
+        account.emptyText = usesMiniMaxPlanForm
+          ? t('providerAccountUsage.minimax.unavailable')
+          : t(providerAccountUsageErrorKey(providerAccountUsage.result.error, usesKimiCodingForm ? 'kimi' : 'generic'));
       }
       if (
         !usesProviderAccountUsageForm &&

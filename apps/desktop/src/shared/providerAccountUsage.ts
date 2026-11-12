@@ -85,6 +85,21 @@ export type ProviderAccountUsageError =
   | 'throttled'
   | 'unknown';
 
+/**
+ * 账户读取错误 → i18n 键。
+ *
+ * `scope` 决定供应商专属文案（Kimi 自成一类）。`updating`（连接变更事务进行中）
+ * 复用 Kimi 已有的那条文案：它只说「连接已变更，请刷新以获取配额」，不点名供应商，
+ * 对 DeepSeek / 智谱 / OpenCode Go 同样成立，避免缺口径时把内部键名显示给用户。
+ */
+export function providerAccountUsageErrorKey(
+  error: ProviderAccountUsageError,
+  scope: 'kimi' | 'generic',
+): string {
+  if (error === 'updating') return 'providerAccountUsage.kimi.error.updating';
+  return `providerAccountUsage.${scope === 'kimi' ? 'kimi.' : ''}error.${error}`;
+}
+
 export type ProviderAccountUsageResult = (
   /** 该供应商没有可读的账户余额 / 用量接口（renderer 不渲染模块）。 */
   | { status: 'unsupported' }
