@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 
-import type { IMMessageEvent, WecomIM } from '@cindy/im';
+import type { IMMessageEvent, ImFinalOutput, WecomIM } from '@cindy/im';
 import { decodeWecomLane } from '@cindy/im';
 
 import { captureImContext } from '../../../shared/imMessageSource';
@@ -74,14 +74,20 @@ export function buildWecomAdapter(
   options: WecomAdapterOptions = {},
 ): ImChannelAdapter {
   void options;
-  // 群 lane → 入站 contextId(窗口 provider 用); 出站终稿按同一身份入窗, 没见过入站的
-  // lane(后台轮次转播)回落到已连接的 bot id。
-  const laneBotIds = new Map<string, string>();
-  const botIdForLane = (userId: string): string => {
-    const known = laneBotIds.get(userId);
-    if (known) return known;
-    const status = wecomIm.getStatus();
-    return status.kind === 'connected' ? status.appId : '';
+  // 只把确认送达的回答入窗; 持久出箱补发与直发兜底共用稳定 turnId 判重。
+  const recordDelivered = async (output: ImFinalOutput, botId: string): Promise<void> => {
+    const chatId = groupChatIdOf(output.userId);
+    if (!chatId || !botId || output.terminal === 'error' || !output.text.trim()) return;
+    await WECOM_PERSONAL_GROUP_WINDOW.record({
+      botId,
+      chatId,
+      threadId: '',
+      messageId: `out:${output.turnId?.trim() || randomUUID()}`,
+      chatName: null,
+      author: { name: 'bot', isBot: true },
+      text: output.text,
+      sentAt: Date.now(),
+    }).catch(() => log.warn('wecom group window outbound record failed'));
   };
 
   // 终稿持久出箱: 连接恢复/重启后补发未完成项, 不重新调用 Agent。
@@ -94,6 +100,7 @@ export function buildWecomAdapter(
     transport: () => wecomIm,
     // 补发时按总仓地址重新解析媒体(媒体仓是内容寻址的; 地址失效则按失败处理)。
     resolveMediaUrl: (url: string) => wecomIm.resolveOutboundMediaUrl(url),
+    onDelivered: recordDelivered,
   });
   attachOutboxLifecycle(wecomIm, outbox, () => !wecomIm.getConfigState().botId);
   return {
@@ -107,36 +114,8 @@ export function buildWecomAdapter(
       beginReply: (userId, opts) => wecomIm.beginReply(userId, opts),
       prepareFinal: (output) => wecomIm.prepareFinal(output),
       deliverFinal: (output, plan, opts) => wecomIm.deliverFinal(output, plan, opts),
-      commitFinal: async (output) => {
-        // 先进持久出箱(逐副作用账本), 再尽力投递: 投递失败不会把“Agent 已完成”
-        // 报成执行失败; 返回值区分“已送达 / 已受理未送达 / 没发出去”。
-        const outcome = await outbox.commit(output);
-        // 群消息本地窗口(与 Telegram 同一张表): 机器人自己发出的终稿也入窗, 下次群里
-        // @ 时作为背景; 报错文案不入窗。入窗失败只告警, 不影响已发出的回复; 未确认
-        // 送达的终稿也不入窗(它不是已经发生过的对话)。
-        const chatId = groupChatIdOf(output.userId);
-        const botId = chatId ? botIdForLane(output.userId) : '';
-        if (
-          outcome.status !== 'sent' ||
-          !chatId ||
-          !botId ||
-          output.terminal === 'error' ||
-          !output.text.trim()
-        ) {
-          return outcome;
-        }
-        await WECOM_PERSONAL_GROUP_WINDOW.record({
-          botId,
-          chatId,
-          threadId: '',
-          messageId: `out:${randomUUID()}`,
-          chatName: null,
-          author: { name: 'bot', isBot: true },
-          text: output.text,
-          sentAt: Date.now(),
-        }).catch((err) => log.warn(`wecom group window outbound record failed: ${String(err)}`));
-        return outcome;
-      },
+      // 首次发送、补发与直发兜底都由出箱在确认送达后调用同一入窗回调。
+      commitFinal: (output) => outbox.commit(output),
     },
     config,
     ui,
@@ -197,12 +176,6 @@ export function buildWecomAdapter(
         };
       }
       const botId = event.contextId;
-      laneBotIds.delete(event.senderId);
-      laneBotIds.set(event.senderId, botId);
-      if (laneBotIds.size > 256) {
-        const oldest = laneBotIds.keys().next().value;
-        if (oldest !== undefined) laneBotIds.delete(oldest);
-      }
       // 窗口是尽力而为的背景: 入窗或拼装失败只告警, 本轮照常带引用块与正文。
       const assembly = await (async () => {
         await WECOM_PERSONAL_GROUP_WINDOW.record({

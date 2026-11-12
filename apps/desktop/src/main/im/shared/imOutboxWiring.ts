@@ -37,6 +37,8 @@ export interface ChannelOutboxOptions {
   transport: () => ImOutboxTransport | null;
   /** cindy-media 地址 → 绝对路径。 */
   resolveMediaUrl?: (url: string) => string | null;
+  /** 首次发送或补发全部确认成功后的幂等宿主记账。 */
+  onDelivered?: (output: ImFinalOutput, botId: string) => Promise<void>;
   /** 该目标是否仍属于当前连接(bot 未变)。 */
   isCurrentTarget?: (target: string) => boolean;
   /**
@@ -126,6 +128,29 @@ export function createChannelOutbox(options: ChannelOutboxOptions): ChannelOutbo
   /** 缓存按「账号代次 + bot」定位: 同 bot 换账号必须换 store。 */
   let cached: { key: string; delivery: ImOutboxDelivery } | null = null;
 
+  async function commitDirect(
+    transport: ImOutboxTransport,
+    output: ImFinalOutput,
+  ): Promise<ImOutboxCommitOutcome> {
+    const botId = options.botId().trim();
+    const accountScope = stableAccountScope();
+    const outcome: ImOutboxCommitOutcome = (await transport.commitFinal(output)) ?? {
+      status: 'sent', unresolved: 0, retrying: 0,
+    };
+    if (
+      outcome.status === 'sent' &&
+      options.botId().trim() === botId &&
+      stableAccountScope() === accountScope
+    ) {
+      try {
+        await options.onDelivered?.(output, botId);
+      } catch {
+        log.warn('im outbox direct delivery observer failed');
+      }
+    }
+    return outcome;
+  }
+
   function stopCached(clearRecords: boolean): void {
     if (!cached) return;
     cached.delivery.stop();
@@ -174,12 +199,13 @@ export function createChannelOutbox(options: ChannelOutboxOptions): ChannelOutbo
         return {
           prepareFinal: (output) => current.prepareFinal(output),
           deliverFinal: (output, plan, opts) => current.deliverFinal(output, plan, opts),
-          commitFinal: (output) => current.commitFinal(output),
+          commitFinal: (output) => commitDirect(current, output),
           // 连接状态能力必须透传: 出箱靠它区分“离线”与“投递失败”。
           ...(current.isConnected ? { isConnected: () => current.isConnected!() } : {}),
         };
       },
       ...(options.resolveMediaUrl ? { resolveMediaUrl: options.resolveMediaUrl } : {}),
+      ...(options.onDelivered ? { onDelivered: options.onDelivered } : {}),
       ...(options.isCurrentTarget
         ? {
             isCurrentTarget: (entry: { target: string }) =>
@@ -203,7 +229,7 @@ export function createChannelOutbox(options: ChannelOutboxOptions): ChannelOutbo
         // 没有 bot/账号上下文(例如还没连接): 走渠道原有直接投递语义。
         const transport = options.transport();
         if (!transport) throw new Error('IM transport unavailable');
-        return (await transport.commitFinal(output)) ?? { status: 'sent', unresolved: 0, retrying: 0 };
+        return commitDirect(transport, output);
       }
       return delivery.commit(output);
     },

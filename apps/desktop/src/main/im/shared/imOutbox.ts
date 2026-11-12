@@ -475,6 +475,8 @@ export interface ImOutboxDeliveryDeps {
   isCurrentTarget?(entry: ImOutboxEntry): boolean;
   /** host 媒体总仓地址 → 本机绝对路径(补发时重新解析)。 */
   resolveMediaUrl?(url: string): string | null;
+  /** 全部步骤确认送达后通知宿主(含重启补发); 宿主按 turnId 幂等记录。 */
+  onDelivered?(output: ImFinalOutput, botId: string): Promise<void>;
   log: { warn(message: string): void };
   now?: () => number;
   retryDelays?: number[];
@@ -713,7 +715,7 @@ export function createImOutboxDelivery(deps: ImOutboxDeliveryDeps): ImOutboxDeli
       (step) => step.state === 'pending' || step.state === 'failed',
     );
     if (queued.length === 0) {
-      finalizeEntry(entry, identity);
+      await finalizeEntry(entry, identity);
       return;
     }
     // 离线时一个字节都发不出去: 不消耗重试次数、不记录 inflight, 等连接恢复事件。
@@ -765,14 +767,26 @@ export function createImOutboxDelivery(deps: ImOutboxDeliveryDeps): ImOutboxDeli
       if (!persist(entry)) return;
     }
 
-    finalizeEntry(entry, identity);
+    await finalizeEntry(entry, identity);
   }
 
-  function finalizeEntry(entry: ImOutboxEntry, identity: IdentitySnapshot): void {
+  async function finalizeEntry(entry: ImOutboxEntry, identity: IdentitySnapshot): Promise<void> {
     if (!identityCurrent(identity)) return;
     if (entry.completedAt !== undefined) return;
     const { unresolved, retrying } = counts(entry);
     if (unresolved === 0) {
+      // 先通知宿主再落完成墓碑: 若进程在两者之间退出, 已确认 sent 的步骤不重发,
+      // 下次 flush 只重做这次幂等入窗。内容取自持久计划, 重启不依赖原轮次内存。
+      try {
+        await deps.onDelivered?.({
+          ...entryOutput(entry),
+          text: entry.steps.filter((step) => step.kind === 'text').map((step) => step.text ?? '').join('\n\n'),
+        }, entry.botId);
+      } catch {
+        // 群历史是尽力记录, 失败不能把已送达回答改成失败或导致重发。
+        deps.log.warn(`im outbox delivery observer failed (${deps.channel})`);
+      }
+      if (!identityCurrent(identity)) return;
       // 完成墓碑: 保留幂等凭据到 TTL, 不删记录 —— 否则同一轮还能被再发一次。
       entry.completedAt = now();
       entry.nextAttemptAt = entry.expiresAt;

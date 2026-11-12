@@ -22,6 +22,7 @@ import type { ImFinalDeliveryPlan, ImFinalDeliveryResult, ImFinalOutput } from '
 import {
   createImOutbox,
   createImOutboxDelivery,
+  type ImOutboxDeliveryDeps,
   type ImOutboxStore,
   type ImOutboxTransport,
 } from '../imOutbox';
@@ -88,6 +89,7 @@ function deliveryFor(args: {
   store: ImOutboxStore;
   transport: ImOutboxTransport;
   retryDelays?: number[];
+  onDelivered?: ImOutboxDeliveryDeps['onDelivered'];
 }) {
   return createImOutboxDelivery({
     channel: 'wecom',
@@ -98,6 +100,7 @@ function deliveryFor(args: {
     log,
     now: clock,
     ...(args.retryDelays ? { retryDelays: args.retryDelays } : {}),
+    ...(args.onDelivered ? { onDelivered: args.onDelivered } : {}),
   });
 }
 
@@ -287,6 +290,60 @@ describe('im outbox reliability', () => {
       expect(commitFinalCalls).toEqual([]);
       expect(outcome.status).toBe('failed');
     } finally {
+      tmp.cleanup();
+    }
+  });
+
+  // The new history observer is a separate side effect from remote delivery:
+  // checkpoint failure may replay its stable ID, but must never resend text.
+  // Unit: real store/delivery, injected checkpoint failure; adapter.test.ts covers
+  // the actual history unique key and next-question context.
+  it('replays the stable delivered notification after a failed tombstone without resending', async () => {
+    const tmp = tmpRoot();
+    let first: ReturnType<typeof deliveryFor> | undefined;
+    let restarted: ReturnType<typeof deliveryFor> | undefined;
+    try {
+      const store = createImOutbox({ channel: 'wecom', filePath: tmp.file, log, now: clock });
+      const onDelivered = vi.fn(async () => {});
+      const { transport, attempts } = recordingTransport(() => 'sent');
+      first = deliveryFor({
+        store: { ...store, upsert: (entry) => entry.completedAt === undefined && store.upsert(entry) },
+        transport, onDelivered,
+      });
+      await first.commit(output('history-checkpoint'));
+      expect(readSteps(tmp.file)).toMatchObject([{ id: 'text:0', state: 'sent' }]);
+      const reloaded = createImOutbox({ channel: 'wecom', filePath: tmp.file, log, now: clock });
+      restarted = deliveryFor({ store: reloaded, transport, onDelivered });
+      await restarted.flush();
+      expect(attempts).toHaveLength(1);
+      expect(onDelivered).toHaveBeenCalledTimes(2);
+      expect(onDelivered.mock.calls[0]).toEqual(onDelivered.mock.calls[1]);
+      expect(onDelivered).toHaveBeenLastCalledWith(expect.objectContaining({
+        turnId: 'history-checkpoint', userId: 'owner', text: 'answer',
+      }), 'bot-1');
+      expect(reloaded.listAll()[0]?.completedAt).toBeTypeOf('number');
+    } finally {
+      first?.stop();
+      restarted?.stop();
+      tmp.cleanup();
+    }
+  });
+
+  // History is best effort: a local observer failure must not report remote
+  // delivery as failed or schedule the same answer again.
+  it('keeps confirmed delivery successful when the history observer throws', async () => {
+    const tmp = tmpRoot();
+    let delivery: ReturnType<typeof deliveryFor> | undefined;
+    try {
+      const store = createImOutbox({ channel: 'wecom', filePath: tmp.file, log, now: clock });
+      const { transport, attempts } = recordingTransport(() => 'sent');
+      delivery = deliveryFor({ store, transport, onDelivered: async () => { throw new Error('history unavailable'); } });
+      expect(await delivery.commit(output('history-error'))).toMatchObject({ status: 'sent' });
+      await delivery.flush();
+      expect(attempts).toHaveLength(1);
+      expect(store.listAll()[0]?.completedAt).toBeTypeOf('number');
+    } finally {
+      delivery?.stop();
       tmp.cleanup();
     }
   });
