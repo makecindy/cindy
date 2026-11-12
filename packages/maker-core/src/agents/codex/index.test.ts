@@ -15,7 +15,7 @@ import { MANUAL_ABORT_RECOVERY_GRACE_MS, Session } from '../../session.js';
 import { withFastModePolicy } from '../shared/fast-mode-policy.js';
 import { AUTO_REVIEW_CONTINUATION_POLICY } from '../shared/continuation-policy.js';
 import { assembleSystemPromptSections } from '../shared/system-prompt-sections.js';
-import { Method, type TurnStartParams } from './app-server/protocol.js';
+import { Method, type CodexErrorInfo, type TurnStartParams } from './app-server/protocol.js';
 import type { Effort } from '../../types/common.js';
 import type { AppServerHost, ThreadEventHandlers } from './app-server/host.js';
 import {
@@ -11717,7 +11717,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     function compact(host: ReturnType<typeof installFakeHost>, turnId = 'turn-1') {
       host.getThreadHandlers()!.itemStarted!({ threadId: nativeId, turnId, item: { id: 'compact', type: 'contextCompaction' } });
     }
-    function fail(host: ReturnType<typeof installFakeHost>, turnId = 'turn-1', error = failure) {
+    function fail(host: ReturnType<typeof installFakeHost>, turnId = 'turn-1', error: { message: string; codexErrorInfo: CodexErrorInfo } = failure) {
       const h = host.getThreadHandlers()!;
       h.error!({ threadId: nativeId, turnId, willRetry: false, error });
       h.turnCompleted!({ threadId: nativeId, turn: { id: turnId, status: 'failed', error } });
@@ -11745,6 +11745,63 @@ describe('CodexAgent MCP thread context hooks', () => {
       await waitForExpectation(() => expect(handle.isTurnRunning?.()).toBe(false));
       expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(2);
       await handle.close();
+    });
+    // #6876: exercise the production adapter lifecycle, not a copied status regex.
+    // Existing HTTP-status cases miss LiteLLM's code field in message/details.
+    it.each([
+      { format: 'provider code', message: 'Error running remote compact task: code: provider_invalid_request / 400', partial: false, completedOnly: false },
+      { format: 'JSON code', message: 'Error running remote compact task: {"error":{"code":"400","message":"unsupported tool type"}}', partial: true, completedOnly: false },
+      { format: 'additional details', message: 'Error running remote compact task', additionalDetails: '{"error":{"code":"400"}}', partial: false, completedOnly: false },
+      { format: 'completion without error notification', message: 'Error running remote compact task: code: provider_invalid_request / 400', partial: false, completedOnly: true },
+    ])('recovers LiteLLM 400 from $format without replaying completed work', async ({ partial, completedOnly, ...sample }) => {
+      const { host, handle, events } = await start();
+      const h = host.getThreadHandlers()!;
+      const error = { message: sample.message, additionalDetails: sample.additionalDetails, codexErrorInfo: 'other' as const };
+      try {
+        if (partial) h.itemStarted!({ threadId: nativeId, turnId: 'turn-1',
+          item: { id: 'existing-work', type: 'commandExecution', command: 'echo done', cwd: '/repo' } });
+        compact(host);
+        if (!completedOnly) {
+          h.error!({ threadId: nativeId, turnId: 'turn-1', willRetry: false, error });
+          expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadFork)).toHaveLength(0);
+        }
+        h.turnCompleted!({ threadId: nativeId, turn: { id: 'turn-1', status: 'failed', error } });
+        await waitForExpectation(() => expect(handle.getCurrentTurnId?.()).toBe('turn-2'));
+        expect(host.request.mock.calls.find(([m]) => m === Method.ThreadFork)![1]).toMatchObject({
+          threadId: nativeId, modelProvider: 'cindy_summary', model: 'codex/gpt-6-astra',
+        });
+        expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)[1][1]).toMatchObject({
+          threadId: 'fork-thread-id', input: partial ? [] : [{ type: 'text', text: 'Finish my existing work.' }],
+        });
+        expect(events.some(e => e.type === 'error' && e.data.isTerminal)).toBe(false);
+        h.turnCompleted!({ threadId: 'fork-thread-id', turn: { id: 'turn-2', status: 'completed' } });
+        await waitForExpectation(() => expect(handle.isTurnRunning?.()).toBe(false));
+        expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadFork)).toHaveLength(1);
+      } finally { await handle.close(); }
+    });
+    it.each([
+      { message: 'code: provider_invalid_request / 4000' },
+      { message: '{"error":{"code":"400_invalid"}}' },
+      { message: 'code: provider_invalid_request / 400: request timed out' },
+      { message: 'code: provider_invalid_request / 400: invalid_encrypted_content' },
+      { message: '{"code":"400","message":"insufficient_quota"}' },
+      { message: '{"code":"400","type":"authentication_error"}' },
+      { message: '{"code":"400"}', codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } } },
+      { message: '{"code":"400"}', codexErrorInfo: { responseStreamDisconnected: {} } },
+      { message: '{"code":"400"}', codexErrorInfo: 'usageLimitExceeded' },
+    ] as const)('keeps unsafe or non-status LiteLLM errors terminal: %j', async (sample) => {
+      const { host, handle, events } = await start();
+      try {
+        compact(host);
+        fail(host, 'turn-1', {
+          message: `Error running remote compact task: ${sample.message}`,
+          codexErrorInfo: sample.codexErrorInfo ?? 'other',
+        });
+        await waitForExpectation(() => expect(events.some(e => e.type === 'error' && e.data.isTerminal)).toBe(true));
+        expect(handle.isTurnRunning?.()).toBe(false);
+        expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadFork)).toHaveLength(0);
+        expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(1);
+      } finally { await handle.close(); }
     });
     it.skipIf(process.platform !== 'win32')('inherits Review read tools on a history fork without sending start-only parameters', async () => {
       const workingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-review-fork-'));

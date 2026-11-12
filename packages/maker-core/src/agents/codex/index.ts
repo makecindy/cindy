@@ -11004,7 +11004,10 @@ assertRouteCurrent();
       // The shared redaction helper deliberately extracts only auth/rate-limit
       // statuses. Parse Codex's explicit HTTP failure wording locally as well.
       const statusMatch = /\b(?:HTTP(?:\/\d(?:\.\d)?)?(?:\s+status)?|(?:unexpected|last)\s+status(?:\s+code)?)\s*:?\s*(\d{3})\b/i.exec(text);
-      const textStatus = statusMatch ? Number(statusMatch[1]) : signals.errorStatus;
+      // LiteLLM can carry the rejection only in its provider code or JSON code
+      // field. Keep explicit HTTP/auth/rate-limit statuses authoritative.
+      const liteLlmBadRequest = /\bcode\s*:\s*provider_invalid_request\s*\/\s*400\b|"code"\s*:\s*"400"/i.test(text);
+      const textStatus = statusMatch ? Number(statusMatch[1]) : signals.errorStatus ?? (liteLlmBadRequest ? 400 : undefined);
       const httpStatus = info && typeof info === 'object' && 'httpConnectionFailed' in info
         ? info.httpConnectionFailed.httpStatusCode ?? textStatus
         : textStatus;
