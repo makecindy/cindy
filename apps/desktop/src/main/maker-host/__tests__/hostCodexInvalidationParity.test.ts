@@ -560,3 +560,39 @@ describe('an explicit disconnect', () => {
   });
 });
 
+
+/**
+ * The profile's auth.json already gone (an earlier invalidation removed it): the desktop does not
+ * skip a late failure, it re-asserts the invalidation with the new reason and announces it, unless
+ * a login in progress owns that gap (loginCleanupOwnsMissingCredential).
+ */
+describe('a late failure after the profile login is gone', () => {
+  for (const loginOpen of [false, true]) {
+    it(loginOpen ? 'during a login: nothing changes on either side' : 're-asserts the invalidation on both sides', async () => {
+      const runs: Record<string, unknown> = {};
+      for (const side of ['desktop', 'host'] as const) {
+        const p = profile();
+        const announced: string[] = [];
+        const generation = JSON.stringify(currentCodexCredentialGeneration(p.authPath));
+        if (side === 'desktop') {
+          const adapter = new DesktopCodexAuthAdapter();
+          await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({ authenticated: true });
+          await adapter.invalidate('token_revoked', { credentialGeneration: generation });
+          adapter.setOnInvalidatedBroadcast((_reason, scope) => { announced.push(scope); });
+          if (loginOpen) Object.assign(adapter as unknown as Record<string, unknown>, { pendingLogin: { cancelled: false }, loginCancellationOpen: true });
+          await adapter.invalidate('refresh_token_reused', { credentialGeneration: generation });
+        } else {
+          await host.invalidateHostCodexLogin({ codexHome: p.codexHome, reason: 'token_revoked', credentialGeneration: generation, hostBound: true });
+          await host.invalidateHostCodexLogin({ codexHome: p.codexHome, reason: 'refresh_token_reused', credentialGeneration: generation,
+            hostBound: true, loginInProgress: () => loginOpen, onInvalidated: scope => { announced.push(scope); } });
+        }
+        const marker = readInvalidatedSystemCodexAuthMarker(p.codexHome);
+        runs[side] = { announced, reason: marker?.reason ?? null, scope: marker?.credentialScope ?? null, authFile: fs.existsSync(p.authPath) };
+      }
+      expect(runs.host).toEqual(runs.desktop);
+      expect(runs.desktop).toEqual(loginOpen
+        ? { announced: [], reason: 'token_revoked', scope: 'instance-isolated', authFile: false }
+        : { announced: ['instance-isolated'], reason: 'refresh_token_reused', scope: 'instance-isolated', authFile: false });
+    });
+  }
+});

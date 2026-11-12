@@ -39,6 +39,19 @@ const loginWindowOpen = (input: { loginInProgress?: () => boolean }) => {
 };
 
 /**
+ * The desktop adapter's readCodexCredentialScope: the detected scope, else the last one known. The
+ * desktop keeps that in memory and, after a restart, restores it from the marker; the Host keeps
+ * no state and reads the marker, so a profile whose auth.json is gone keeps the scope its earlier
+ * invalidation recorded.
+ */
+function readHostCodexCredentialScope(codexHome: string, systemAuthPath: string | null | undefined): CredentialScope {
+  const detected = detectHostCodexCredentialScope(codexHome, systemAuthPath ?? null);
+  if (detected !== 'unknown') return detected;
+  const restored = restoreInvalidationStateOnStartup(codexHome, markerSystemPath(codexHome, systemAuthPath), path.join(codexHome, 'auth.json'));
+  return restored.credentialScope && restored.credentialScope !== 'unknown' ? restored.credentialScope : 'unknown';
+}
+
+/**
  * The desktop's commitExplicitCodexDisconnectBoundary for the profile's native login: the durable
  * disconnect marker over the current file. It stops the reconciliation with the system login and
  * suppresses that file until a new login replaces it; the file itself stays. Throws when the
@@ -117,14 +130,21 @@ export async function invalidateHostCodexLogin(input: {
     return 'stale';
   }
   const current = currentCodexCredentialGeneration(authPath);
-  if (!current) return 'stale';
+  const captured = parseCodexCredentialGeneration(input.credentialGeneration);
+  // As the desktop: the profile's file being gone is no reason to skip the invalidation (a late
+  // failure after an earlier invalidation re-asserts it), except while a login in progress owns
+  // that gap (the desktop's loginCleanupOwnsMissingCredential). After an explicit disconnect the
+  // durable marker above has already ended it.
+  if (captured && !current && loginWindowOpen(input)) {
+    log.info('ignoring stale Codex invalidation during login credential cleanup', { reason: input.reason });
+    return 'stale';
+  }
   // As the desktop (auth-adapters.ts invalidate): the generation the engine captured is compared
   // with the current file. A changed file identity proves an outside atomic replacement, and a
   // login in progress (the desktop's open login cancellation window) is still finalizing the
   // replacement it selected; either way the current credential is left alone.
-  const captured = parseCodexCredentialGeneration(input.credentialGeneration);
-  const contentChanged = Boolean(captured && captured.sha256 !== current.sha256);
-  const identityChanged = Boolean(contentChanged && captured && captured.ino !== '0' && current.ino !== '0'
+  const contentChanged = Boolean(captured && current && captured.sha256 !== current.sha256);
+  const identityChanged = Boolean(contentChanged && captured && current && captured.ino !== '0' && current.ino !== '0'
     && (captured.dev !== current.dev || captured.ino !== current.ino));
   if (contentChanged && (identityChanged || loginWindowOpen(input))) {
     log.info('ignoring stale Codex invalidation from an older credential generation', { reason: input.reason });
@@ -140,7 +160,7 @@ export async function invalidateHostCodexLogin(input: {
   // renewed system login is restored to. An engine-reported invalidation of a shared system
   // login without an invalidated fingerprint cannot prove which file failed (the user may have
   // logged in again in between), so it is recorded as unknown.
-  const detectedScope = detectHostCodexCredentialScope(input.codexHome, input.systemAuthPath ?? null);
+  const detectedScope = readHostCodexCredentialScope(input.codexHome, input.systemAuthPath);
   const markerScope: CredentialScope = input.hostBound === true && detectedScope === 'system-shared' && !invalidatedFingerprint
     ? 'unknown' : detectedScope;
   const activeOwnerId = getActiveAppSession().dataOwnerId;
@@ -241,7 +261,7 @@ async function invalidateUnattributed(input: Parameters<typeof invalidateHostCod
     log.info('ignoring unproven Codex invalidation while a tracked login is active', { reason: input.reason });
     return 'stale';
   }
-  const detectedScope = detectHostCodexCredentialScope(input.codexHome, input.systemAuthPath ?? null);
+  const detectedScope = readHostCodexCredentialScope(input.codexHome, input.systemAuthPath);
   const activeOwnerId = getActiveAppSession().dataOwnerId;
   const recoveryOwnerId = detectedScope === 'system-shared' && activeOwnerId && isNativeProviderAuthBound('openai') ? activeOwnerId : undefined;
   const committed = writeUnprovenCodexAuthSuppressionMarker(input.codexHome, markerSystemPath(input.codexHome, input.systemAuthPath),

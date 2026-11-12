@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { invalidateHostCodexLogin } from './codex-invalidation.ts';
+import { commitHostCodexDisconnectBoundary, invalidateHostCodexLogin } from './codex-invalidation.ts';
 import { createCodexLocalCliAuth } from './runtime.ts';
 import { configureHostOwner } from './claude-auth.mjs';
 import {
@@ -108,9 +108,11 @@ test('independent accounts and logged-out profiles change nothing', async t => {
   assert.equal(fs.readFileSync(p.authPath, 'utf8'), before);
   assert.equal(fs.existsSync(getCodexAuthInvalidationMarkerPath(p.codexHome)), false);
   assert.equal(isNativeProviderAuthBound('openai'), true);
-  fs.rmSync(p.authPath);
+  // Logged out: the Host's explicit disconnect left the durable marker (as the desktop's logout).
+  commitHostCodexDisconnectBoundary(p.codexHome, null);
+  const marker = fs.readFileSync(getCodexAuthInvalidationMarkerPath(p.codexHome), 'utf8');
   assert.equal(await invalidateHostCodexLogin({ codexHome: p.codexHome, reason: 'token_revoked' }), 'stale');
-  assert.equal(fs.existsSync(getCodexAuthInvalidationMarkerPath(p.codexHome)), false);
+  assert.equal(fs.readFileSync(getCodexAuthInvalidationMarkerPath(p.codexHome), 'utf8'), marker);
 });
 
 test('an unattributed failure suppresses the current login without touching it', async t => {
