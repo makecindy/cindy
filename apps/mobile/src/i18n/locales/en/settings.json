@@ -171,7 +171,11 @@
       "auto": "Automatic",
       "on": "Always on",
       "off": "Off"
-    }
+    },
+    "actionReplyPlaceholder": "Message",
+    "actionNotDelivered": "This didn’t reach your computer. Open Cindy to respond.",
+    "actionReplyNotDelivered": "Your reply wasn’t sent. Open Cindy to send it again: {{text}}",
+    "actionRequestEnded": "This request was already answered or has expired."
   },
   "about": {
     "sectionTitle": "About This Phone",

@@ -171,7 +171,11 @@
       "auto": "自动",
       "on": "始终开启",
       "off": "关闭"
-    }
+    },
+    "actionReplyPlaceholder": "输入回复",
+    "actionNotDelivered": "没有送到电脑，请打开 Cindy 处理。",
+    "actionReplyNotDelivered": "回复没有发出，请打开 Cindy 重新发送：{{text}}",
+    "actionRequestEnded": "这条请求已被处理或已过期。"
   },
   "about": {
     "sectionTitle": "关于这台手机",

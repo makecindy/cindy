@@ -165,6 +165,14 @@ App 已被系统终止时沿用正常冷启动行为，不额外承诺恢复已�
 首页 URL 使用扩展的 `CindyURLScheme`，保持 Global／CN／beta 安装身份；任务深链继续
 使用既有 payload 的 `url`，本地同步与服务端 APNs 更新共用这套呈现逻辑，无须更改推送协议。
 现有实时活动 payload 不含消息 ID，因此任务链接进入对应任务，不承诺精确定位某条消息。
+iOS 18 起同一活动另外声明 `.small` 尺寸，配对的 Apple Watch（watchOS 11+）在智能叠放里显示角色、
+任务标题、一行状态与计数；不声明时手表只拿到收起灵动岛的角色与计数，看不到是哪个任务。小尺寸只有
+两行：内容过期后第二行改为上次更新时间，不再显示旧状态；背景由系统提供，文字用系统前景样式，
+状态色沿用灵动岛色板。内容与隐私口径不变（截断标题、状态、计数，标题 `privacySensitive()`），
+不新增推送字段，手机收到的本地同步与 APNs 更新由系统转给手表。手表上点开只能看大图或回到 iPhone
+打开，不能直接操作任务。`.small` 的声明是 iOS 18 才有的配置修饰符，而组件包的 `body` 不能按系统版本
+分支，所以扩展入口 `CindyUsageWidgetsEntry` 按版本选择组件包：iOS 18+ 注册带小尺寸的
+`CindyAgentActivityGlanceWidget`，iOS 17 注册原 `CindyAgentActivityWidget`，两者共用同一份呈现代码。
 美术直接复用桌面角色目录中的 Cindy（手机版选定角色）：`node apps/mobile/scripts/export-agent-activity-artwork.mjs`
 调用桌面 helper 的 `--export-mascots`，导出含眼睛和姿态的三张静帧，并从桌面实时活动导出
 运行中橙／待处理青／完成绿的颜色目录；手机计数使用「待关注 · 运行中」，待关注包含等待操作和
@@ -218,6 +226,8 @@ PostgreSQL 的多电脑、版本、设备移除和活动 start/update/end 集成
 改变 Android 指纹（虽然没有新增 Android 功能），应随计划内双端原生发版交付；两端存量
 安装均需升级对应原生包才能继续接收新指纹的 OTA，PR 须按冷更边界写明原因、影响与发版节奏。
 原生验收需检查紧凑／展开／锁屏、浅深模式、点击任务定位、账号切换、后台过期和关闭实时活动。
+手表智能叠放需另用配对的 Apple Watch 真机（或已安装 watchOS runtime 的配对模拟器）检查运行中、
+待处理、完成与过期四种状态；只编译通过或只看 iPhone 锁屏不算手表验收。
 TypeScript 测试不能替代这些原生验收。`node apps/mobile/scripts/test-agent-activity-native.mjs`
 直接编译并执行生产 Codable 数据模型，验证旧 payload 解码、混合任务有效期和时间戳往返；
 测试仅替换 macOS 不可用的 ActivityKit 标记协议，不替代真实 iOS ActivityKit／界面验收。
@@ -633,6 +643,46 @@ Xcode 自动签名会以 entitlement 无法写入 profile 拒绝构建。
 Swift 源码和打包头像显式进入 fingerprint。首次发布需要原生新包和重新生成的签名配置；
 服务端须先支持可选发送者透传和 `aps.mutable-content = 1`，未升级双方保持普通推送。
 这不是 OTA 可独立交付的功能，仍受下述冷更审核门约束。
+
+### 通知按钮与后台作答
+
+规则与边界见[通知上的按钮](../product-rules/notification-actions.md)。按钮类别在 JS 里向系统登记
+（`registerNotificationActionCategories`，随界面语言重新登记），推送里的 `aps.category` 由服务端给出。
+用户点击后系统把响应交给后台的 App：`handleNotificationActionResponse` 先认领（同一次点击只执行一次，系统会向
+晚注册的监听和回前台时重放；认领键是「通知标识＋送达时间＋按了什么」，因为系统给同一任务的通知用同一个
+标识），再申请后台时间、等连接层就绪、为这一次操作保持连接。保持的计数放在 `DeviceLinkProvider` 上而不是
+某一个连接对象上：点击可能早于登录恢复出连接，连接也可能在操作途中被替换。
+
+连接恢复的故障半径三问：① 触发证据只有用户点了通知按钮且 App 不在前台；② 动作只是把本机自己的中转连接
+拉起并保持到这一次操作结束（上限 25 秒，系统给的时间更短则更短），不恢复任何订阅、不重置任何 peer，
+其它电脑与在途请求不受影响，释放时仍在后台就按原宽限逻辑断开；③ `mobilePushRecovery.test.ts` 覆盖宽限期内、
+宽限后已断开、多次重叠与回到前台四种情况，`notificationActions.test.ts` 覆盖连接未就绪时的有界等待。
+未做真机断网与弱网演练。
+
+`modules/cindy-background-work` 只包了 `UIApplication` 的后台任务：`begin` 返回系统剩余时间，到期回调
+自行归还。旧原生包没有这个模块时按 8 秒短预算执行，不申请后台时间。新原生模块、通知类别与凭证档位都要
+新 iOS 包；共享的指纹输入也会改变 Android 指纹，需随计划内双端原生发版交付。
+
+提问的选项按钮在展开通知时按 `action.options` 生成，类别名见 `notificationActionIds.ts`：
+
+- `plugins/with-notification-content.js` 生成 `CindyNotificationContent` 通知内容扩展（类别 `cindy.question.card`）：
+  长按展开时显示任务名、完整问题与选项说明（没有说明时不列选项），并把选项设为带编号图标的系统按钮；点击
+  转发给 App。扩展拿不到 App 的主题代码，字号行高与中性色照 `src/theme/tokens.ts` 和 Mobile 设计指南 §3 抄了
+  一份在 `NotificationViewController.swift` 里，改 token 时要同步。扩展只采用协议、不引用
+  框架符号，必须显式链接 `UserNotificationsUI`，否则启动即退出、展开后是一块空白。它的 Swift 源码目录登记在
+  `fingerprint.config.cjs`，不登记的话改了源码不会触发重新编译。新增的扩展 target 需要各构建线自己的签名。
+
+模拟器验证：`xcrun simctl push` 的测试推送**不经过通知服务扩展**（头像、分组等改写在模拟器里看不到）；
+通知内容扩展和按钮点击后的后台处理可以在模拟器里走通（mock 模式下电脑上没有这道题，预期收到「这条请求已被
+处理或已过期」；测试负载的深链不带 `deviceId` 时收到的是「没有送到电脑」）。展开通知要在主屏幕长按横幅；锁屏通知列表里的长按在模拟器的触摸
+注入下不触发展开。iOS 27.3 测试版运行时在横幅出现后画面不再刷新（界面树里按钮已出现、截图抓不到），
+截图用 27.0 运行时。27.0 运行时里任何带按钮的通知展开时都会先弹出系统键盘（「允许一次／拒绝」这种没有输入框的
+类别也一样，重启模拟器不消失），卡片的按钮就位后收起；这与按钮顺序、是否含「回复」无关，真机上是否出现未验证。
+内容扩展安装后第一次展开要冷启动约一秒半，期间卡片是空白、按钮只有「回复／打开任务」，之后的展开在一秒内。
+
+真机验收（单元测试不能代替）：锁屏长按通知出现按钮；提问通知出现选项按钮并能点选；Apple Watch 上出现按钮；App 挂起超过 1 小时后在
+锁屏点「拒绝」能送达；杀掉 App 且锁屏时点按钮得到「没有送到」提示、之后打开 App 登录状态完好；
+关闭内容预览后没有允许／拒绝；回复只发一次。
 
 ### 应用图标角标
 

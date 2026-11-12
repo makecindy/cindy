@@ -171,7 +171,11 @@
       "auto": "自動",
       "on": "始終開啟",
       "off": "關閉"
-    }
+    },
+    "actionReplyPlaceholder": "輸入回覆",
+    "actionNotDelivered": "沒有送到電腦，請打開 Cindy 處理。",
+    "actionReplyNotDelivered": "回覆沒有送出，請打開 Cindy 重新傳送：{{text}}",
+    "actionRequestEnded": "這項請求已被處理或已過期。"
   },
   "about": {
     "sectionTitle": "關於這臺手機",
