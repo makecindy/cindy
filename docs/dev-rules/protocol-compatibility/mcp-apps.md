@@ -24,6 +24,16 @@ open 结果沿用现有 invokeTransfer gzip 协商，自建中转继续透明转
 事件缺 generation 表示旧执行端，新查看端不按代次过滤、保持旧行为；旧查看端忽略该字段。完整换页隔离仍要求执行端和查看端均升级。
 
 标准 MCP Apps 使用 `io.modelcontextprotocol/ui` 扩展及官方 `2026-01-26` 协议。
+
+尚未发布的本机插件界面增量在 v3 `mcpApps.host` 声明视图、位置、命令和能力，仍引用
+`mcpApps.ui.resources` 并复用标准 AppBridge。`open-resource` 仅本机支持真正的无任务来源；
+原远程操作继续要求真实任务，不扩大 device-link allowlist、relay 或 Mobile 原生能力。
+receipt v2 新增可选 `approvedHostUi`，只承认当前 Host 理解且确认界面实际展示过的主体；
+旧 receipt、旧页面批准及旧提示界面不自动授予新宿主操作，原工具和页面批准继续可用。
+原生控件订阅/状态沿现有管子与本机用途受限 IPC，消息正文不新增落库前查询。
+`message.menu` 复用贡献项的显式批准和原动作执行；只接菜单动作，关闭的菜单不成为状态消费者。
+作者契约与兼容范围见[插件界面扩展](../../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-ui.md)。
+
 客户端新增独立 `maker:mcp-apps:v1` channel，复用 device-link 的同账号调用与错误协议，
 不改变已有 channel、relay 帧或服务端 schema；Mobile 原生承载与指纹影响见本节末尾。
 App 卡片是既有 assistant 消息 content 的可选 `mcpApp` 字段，且必须有 Main 写入的

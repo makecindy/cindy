@@ -21,7 +21,9 @@ import type { ProviderGroupRouter } from '../../provider-group/router';
 import { decideProviderGroupFailure } from '../../provider-group/failurePolicy';
 
 import { RemoteAgentPoller } from '../controller/poller';
-import { RemoteAgentRemoteError, RemoteAgentRunClient } from '../controller/runClient';
+import { RemoteAgentRemoteError, RemoteAgentRunClient, type RemoteAgentRunHandlers } from '../controller/runClient';
+import { createRemoteAgentHandle, parseStartedInfo } from '../controller/proxyHandle';
+import { ExecutorWorkspace } from '../executor/workspace';
 import { LineSplitter } from '../eventLog';
 import { relayConnId, relayKeyFor, reshareKeyFor, type RelayRunFailure } from '../host/groupRelay';
 import { createGuestProviderRouteBinder, resolveGuestProviderId } from '../host/providerAccess';
@@ -330,7 +332,7 @@ function runId(): string {
   return `11111111-1111-4111-8111-${String(runSeq).padStart(12, '0')}`;
 }
 
-async function openAsGuest(env: ReturnType<typeof setup>, guest: string, payload: Record<string, unknown>) {
+async function openAsGuest(env: ReturnType<typeof setup>, guest: string, payload: Record<string, unknown>, observer?: Partial<RemoteAgentRunHandlers>) {
   const poller = new RemoteAgentPoller(async (args) => jsonRoundTrip(await env.owner.handle(guest, jsonRoundTrip(args[0]))));
   let counter = 0;
   /** 受邀者按顺序收到的事件与状态。 */
@@ -338,14 +340,17 @@ async function openAsGuest(env: ReturnType<typeof setup>, guest: string, payload
   const client = new RemoteAgentRunClient(runId(), poller, {
     onEvent: (event) => {
       stream.push({ t: 'event', event: event as AgentEvent });
+      observer?.onEvent?.(event);
     },
     onState: (state) => {
       stream.push({ t: 'state', state });
+      observer?.onState?.(state);
     },
     onRequest: async () => ({ type: 'callback', value: undefined }),
     onWs: () => undefined,
-    onClosed: (reason) => {
+    onClosed: (reason, error, idleReclaimed) => {
       closedReason = reason;
+      observer?.onClosed?.(reason, error, idleReclaimed);
     },
   }, () => `22222222-2222-4222-8222-${String(++counter + runSeq * 100).padStart(12, '0')}`);
   let closedReason: string | null = null;
@@ -366,6 +371,57 @@ function switchTokenIn(stream: Awaited<ReturnType<typeof openAsGuest>>['stream']
 }
 
 describe('provider group relay for shared users', () => {
+  // #9985 unit: G's real proxy must retain an unfinished M -> O -> G close.
+  // Existing relay tests only observed closed frames, not the consuming handle.
+  // An unfinished EOF also follows the existing group failure policy (§6.1).
+  // This fixture has no backup: check availability, retain the close, never replay.
+  it('delivers a member EOF to the unfinished guest turn even after an idle snapshot', async () => {
+    let interrupt = false;
+    const env = setup({
+      mini: { onSend: record => { record.running = true; } },
+      intercept: async (device, request, forward) => {
+        const result = await forward();
+        if (device !== 'mini' || request.op !== 'poll' || !interrupt) return result;
+        interrupt = false;
+        const data = Buffer.from(JSON.stringify({ t: 'state', state: { turnRunning: false } }) + '\n');
+        return { runs: (request.runs as Array<{ runId: string; cursor: number }>).map(run => ({
+          ...run, cursor: run.cursor + data.length, data: data.toString('base64'), done: true,
+        })) };
+      },
+    });
+    let controller: ReturnType<typeof createRemoteAgentHandle> | undefined;
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }), {
+      onEvent: event => controller?.onEvent(event),
+      onState: state => controller?.onState(state),
+      onClosed: (reason, error) => controller?.onClosed(reason, error?.message, guest.client.runId),
+    });
+    controller = createRemoteAgentHandle({
+      client: guest.client, started: parseStartedInfo(guest.started, 'claude-code'),
+      workspace: new ExecutorWorkspace({ workingDir: root }),
+      recordApproval() {}, newId: runId, dispose: async () => undefined,
+    });
+    try {
+      await controller.handle.send({ type: 'user', content: 'work once' });
+      interrupt = true;
+      env.memberStarted.mini[0].emit({ type: 'status', source: 'claude-code', data: { status: 'wake-poll' } });
+      const seen: AgentEvent[] = [];
+      for await (const event of controller.handle.events()) seen.push(event);
+      expect(seen.filter(event => event.type === 'error')).toEqual([expect.objectContaining({
+        data: expect.objectContaining({ reason: 'remote_agent_closed', remoteCloseReason: 'ended', remoteRunId: guest.client.runId }),
+      })]);
+      expect(guest.closedReason()).toBe('ended');
+      expect(env.memberStarted.mini[0].sends).toHaveLength(1);
+      expect(env.relay.plan).toHaveBeenCalledTimes(2);
+      expect(env.relay.noteRunFailure).toHaveBeenCalledOnce();
+      expect(env.relay.noteRunFailure.mock.calls[0][2]).toMatchObject({ reason: 'remote_agent_closed' });
+      expect(switchTokenIn(guest.stream)).toBeUndefined();
+    } finally {
+      await controller.handle.close({ reason: 'navigation' });
+      await env.owner.dispose();
+      await Promise.all(Object.values(env.members).map(member => member.dispose()));
+    }
+  });
+
   const signedOutProvider: ProviderView = {
     id: 'shared-provider', name: 'Shared', source: 'builtin', auth: { method: 'none' },
     connected: false, agents: ['claude-code'],
@@ -2205,6 +2261,27 @@ describe('provider group "switch to another computer" for shared users', () => {
       await waitFor(() => guest.isClosed());
       expect(env.relay.noteRunFailure).toHaveBeenCalledOnce();
       expect(switchTokenIn(guest.stream)).toBeDefined();
+      expect(record.sends).toHaveLength(2);
+    } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+  });
+
+  it.each(['local', 'member'] as const)('accepts running then zero-output completion after an unsettled %s turn', async placement => {
+    const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+      { kind: 'member', ...MEMBER_STUDIO }] });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    try {
+      await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+      const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+      record.emit({ type: 'text', source: 'claude-code', data: { text: 'first progress' } } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'text'));
+      await guest.client.call('send', [{ content: 'second', attachments: [] }, {}]);
+      record.emit({ type: 'status', source: 'claude-code', data: { isRunning: true } } as AgentEvent);
+      record.emit({ type: 'done', source: 'claude-code', data: {} } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'done'));
+      record.end();
+      await waitFor(() => guest.isClosed());
+      expect(env.relay.noteRunFailure).not.toHaveBeenCalled();
+      expect(switchTokenIn(guest.stream)).toBeUndefined();
       expect(record.sends).toHaveLength(2);
     } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
   });

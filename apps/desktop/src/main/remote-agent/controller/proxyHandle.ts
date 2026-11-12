@@ -332,6 +332,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   const teardown = async (mode: 'close' | 'detach', opts?: AgentSessionTeardownOptions) => {
     // Mark intent before awaiting the remote ACK: its closed frame can arrive first.
     teardownRequested = true;
+    activeTurn = false;
     deps.cancelPendingConfirmations?.();
     const reason = opts?.reason ?? 'navigation';
     // 远端会话无项目资源启动快照,永不漂移,不存在资源回收关闭;资源刷新关闭由
@@ -735,9 +736,11 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       // the executor. The coordinator owns cancellation, provenance and continuation.
       queue.push({ type: 'done', source: started.agentKind, data: { reason: 'remote_agent_restarted' } });
     },
-    onClosed(reason, message, runId) {
+    onClosed(reason, message, runId = deps.client?.runId) {
       if (disposed) return;
       for (const projected of projection.flush()) queue.push(projected);
+      // Preserve upstream close-vs-RPC ordering: the queued terminal owns this send.
+      if (!teardownRequested && hasActiveProductTurn()) interruption += 1;
       const ownerOptions = sendOwnerOptions;
       const wasActive = activeTurn;
       const wasTerminal = terminalEventDelivered;

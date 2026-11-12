@@ -64,6 +64,25 @@ describe('remote stream close settles the product turn', () => {
     } finally { await f.session.close(); }
   });
 
+  it.each(['ended', 'error', 'superseded'])('preserves the close terminal while send awaits its RPC result (%s)', async reason => {
+    const f = fixture();
+    try {
+      f.invoke.mockImplementationOnce(async () => {
+        f.deliver({ t: 'closed', reason });
+        return {};
+      });
+      // EOF before the RPC acknowledgement cannot prove provider acceptance.
+      await expect(f.session.send('work')).rejects.toThrow('terminated before provider acceptance could be reconciled');
+      await f.finish();
+      expect(f.seen.filter(e => e.type === 'error')).toEqual(reason === 'superseded' ? [] : [
+        expect.objectContaining({ data: expect.objectContaining({ reason: 'remote_agent_closed',
+          remoteCloseReason: reason, remoteRunId: f.client.runId }) }),
+      ]);
+      if (reason === 'superseded') expect(f.seen).toContainEqual(expect.objectContaining({ type: 'done',
+        data: expect.objectContaining({ status: 'cancelled' }) }));
+    } finally { await f.session.close(); }
+  });
+
   it.each(['done', 'terminal-error', 'abort', 'close', 'superseded'])('does not add a remote failure after %s', async mode => {
     const f = fixture();
     try {
@@ -130,7 +149,7 @@ describe('remote stream close settles the product turn', () => {
     } finally { await f.session.close(); }
   });
 
-  it.each(['completed-prior', 'silent-stop'])('keeps a zero-output current done valid (%s)', async mode => {
+  it.each(['completed-prior', 'silent-stop', 'unsettled-prior'])('keeps a zero-output current done valid (%s)', async mode => {
     const f = fixture();
     try {
       await f.session.send('first');
@@ -142,6 +161,11 @@ describe('remote stream close settles the product turn', () => {
       }
       f.deliver({ t: 'state', state: { turnRunning: false } });
       expect(await f.session.send('second')).toMatchObject({ accepted: true });
+      if (mode === 'unsettled-prior') {
+        // The first running may release next() that was already waiting on N.
+        f.deliver({ t: 'event', event: { type: 'status', source: 'codex', data: { isRunning: true } } });
+        await vi.waitFor(() => expect(f.seen.some(e => e.type === 'status')).toBe(true));
+      }
       f.deliver({ t: 'event', event: { type: 'status', source: 'codex', data: { isRunning: true } } });
       f.deliver({ t: 'event', event: { type: 'done', source: 'codex',
         data: mode === 'silent-stop' ? { silentStop: true } : {} } });

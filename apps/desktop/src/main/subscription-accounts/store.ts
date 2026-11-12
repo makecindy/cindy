@@ -62,6 +62,7 @@ export function normalizePoolFile(raw: unknown): PoolFile {
           id: a.id,
           paused: a.paused === true,
           limit: Number.isInteger(a.limit) && a.limit >= 1 && a.limit <= 16 ? a.limit : 4,
+          ...(a.limitSet === true ? { limitSet: true as const } : {}),
           weight: Number.isInteger(a.weight) && a.weight >= 1 && a.weight <= 100 ? a.weight : 1,
         })),
     };

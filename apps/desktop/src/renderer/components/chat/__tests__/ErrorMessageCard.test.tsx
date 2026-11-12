@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: { exists: () => false, language: 'en' } }),
   initReactI18next: { type: '3rdParty', init: () => undefined },
 }));
 
@@ -18,6 +18,13 @@ const STREAM_RAW =
 afterEach(cleanup);
 
 describe('ErrorMessageCard', () => {
+  // Unit: a persisted startup failure must retain the same cause as the live banner.
+  it('shows the bound account limit with its reset time in history', () => {
+    render(<ErrorMessageCard message={"LAZY_CREATE_FAILED: [SUBSCRIPTION_ACCOUNT_LIMITED] diagnostic\nresetAtMs=1900000000000"} />);
+    expect(screen.getByText('chat.subscriptionAccountError.limitedUntil')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.replyFailed')).toBeNull();
+  });
+
   // Historical execution failures must offer the same diagnosis as live failures.
   it('offers diagnosis only after expanding a persisted execution error', () => {
     const onDiagnose = vi.fn();

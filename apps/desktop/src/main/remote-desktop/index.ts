@@ -1,4 +1,5 @@
 import {
+  app,
   desktopCapturer,
   ipcMain,
   nativeImage,
@@ -12,7 +13,9 @@ import {
   type DesktopCapturerSource,
 } from 'electron';
 import { randomUUID } from 'node:crypto';
+import { readdirSync } from 'node:fs';
 import { release as osRelease } from 'node:os';
+import { createLogger } from '../logger';
 import { loadDesktopIceServers } from './iceConfig';
 import { remoteCredentialHost } from './credentialHost';
 import {
@@ -55,6 +58,7 @@ import {
   WAYLAND_DISPLAY_ID,
   selectPortalSource,
   waylandDesktopSize,
+  xwaylandSessionEvidence,
 } from './waylandCapture';
 import { encodeDesktopFrame, encodeNativeRelayFrame } from './frame';
 import { transferDesktopClipboard, transferDesktopClipboardContent } from './clipboard';
@@ -176,6 +180,33 @@ const linuxMute = new LinuxDesktopMute();
 const linuxWindows = new LinuxWindowActions();
 const nativeWayland = () => wayland() && supportsHyprlandCapture();
 const portalWayland = () => wayland() && !nativeWayland();
+// #9712: diagnostics only. The logged facts are fixed labels and wayland-N socket names.
+const displayBackendLog = createLogger('remote-desktop:display-backend');
+let xwaylandChecked = false;
+function warnIfXWaylandCapture(): void {
+  // Hyprland's native screencopy talks to the compositor, not to XWayland's root window.
+  if (xwaylandChecked || process.platform !== 'linux' || nativeWayland()) return;
+  xwaylandChecked = true;
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.()}`);
+  } catch {
+    // No runtime dir: rely on the environment signals alone.
+  }
+  // Electron resolves the Ozone platform at startup and writes it back to its own switches.
+  const evidence = xwaylandSessionEvidence(
+    app.commandLine.getSwitchValue('ozone-platform'),
+    process.env,
+    entries,
+  );
+  if (!evidence.length) return;
+  displayBackendLog.warn(
+    `Electron is running on X11 (XWayland) inside a Wayland session (${evidence.join(', ')}). ` +
+      'Remote desktop capture will likely show a black screen with only the pointer. ' +
+      'Start Cindy from the Wayland session environment (XDG_SESSION_TYPE=wayland and ' +
+      'WAYLAND_DISPLAY set) or with --ozone-platform=wayland.',
+  );
+}
 // Privacy masks and the controlled-desktop overlay share one capture filter.
 let privacyExcluded: number[] = [];
 let overlayExcluded: number[] = [];
@@ -394,6 +425,7 @@ async function offer(
   if (pending || preparingOffer) throw new Error('DESKTOP_VIDEO_BUSY');
   if (remoteDesktop.liveScreen(lease.lease))
     return liveScreenOffer(lease, sdp, settings, attemptId);
+  warnIfXWaylandCapture();
   if (portalWayland()) {
     if (lease.display.id !== WAYLAND_DISPLAY_ID) throw new Error('DESKTOP_DISPLAY_MISSING');
     await ensurePortalCapture(lease.lease);

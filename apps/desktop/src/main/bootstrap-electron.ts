@@ -87,8 +87,13 @@ import {
   webContents,
 } from 'electron';
 import {
+  fitWindowsBackdropToWindow,
+  isWindowsTransparentWindow,
+  markWindowsTransparentWindow,
+  needsWindowsTransparentWindow,
   resolveVibrancyConfig,
   resolveWindowVibrancyConfig,
+  resolveWindowsWindowTransparent,
   setWindowDesktopBlur,
   setWindowWallpaperCovered,
 } from './vibrancyConfig';
@@ -99,6 +104,7 @@ import {
   parseWindowThemeVibrancyPayload,
   readWindowThemeSnapshot,
   writeWindowThemeSnapshot,
+  writeWindowTransparencyHint,
 } from './window-theme-mode-store';
 import {
   createWindowBackdropMaterialArgument,
@@ -488,11 +494,13 @@ import {
   startHostEventBridge,
   type HostDelegationConfig,
 } from './host-delegation';
+import { createIpcChannelUsage, registeredIpcChannels, tapIpcChannelUsage } from './ipcChannelUsage';
 import { hasRecentWorkdir, listRecentWorkdirs } from './localDb/ipc/recentWorkdirs';
 import { getActiveCatalog } from './maker-host/active-catalog';
 import { resolveSessionContextWindow } from '../shared/sessionContextWindow';
 import { resumeDeletedPiSubagentCleanup } from './localDb/ipc/sessions';
 import {
+  didMigrateLegacyDataForUser,
   registerLegacyMigrationIpc,
   runLegacyUserDataMigrationForUser,
 } from './legacyUserDataMigration';
@@ -659,7 +667,7 @@ import {
   seedDesktopScreenLocked,
   msSinceForeignDesktopInput,
   setPhysicalInputShielded,
-} from './mcp-integrations/computer.js';
+} from './mcp-integrations/computer.desktop.js';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { initCrashDiagnosisService } from './crash-diagnosis';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
@@ -835,7 +843,7 @@ import {
   setEnsureHostForBackend,
   setIsDetachedForBackend,
   setUserBrowserPageControlProvider,
-} from './mcp-integrations/browser.js';
+} from './mcp-integrations/browser.desktop.js';
 import { setPageControlGhostProvider } from './mcp-integrations/ghost.desktop.js';
 import { RsbWindowController } from './right-sidebar-window/controller.js';
 import { resolveRsbHostContextFromSession } from './right-sidebar-window/resolveHostContext.js';
@@ -850,7 +858,7 @@ import { SidebarTabWindowsController } from './sidebar-tab-window/controller.js'
 import { resolveWindowBoundsNearPoint } from './windowBounds.js';
 import { createSidebarTabWindow } from './sidebar-tab-window/window.js';
 import { registerSidebarTabWindowIpc } from './sidebar-tab-window/ipc.js';
-import { setRightSidebarTabsChangeBroadcaster } from './localDb/ipc/rightSidebarTabs.js';
+import { setRightSidebarTabsChangeBroadcaster } from './localDb/ipc/rightSidebarTabs.desktop.js';
 import {
   readRsbWindowSettings,
   resetRsbWindowSettingsForStartup,
@@ -1257,6 +1265,8 @@ import { runPluginStorageSmoke } from './smoke/pluginStorageSmoke.js';
 import { runComputerUseSmokeIfRequested } from './smoke/computerUseSmoke.js';
 import { getResolvedMainLocale, setMainClassicalStyle, setMainLocale, t } from './i18n.desktop.js';
 import { isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
+import { registerModelGroupDecisionIpc } from './model-groups/decisionIpc.js';
+import { registerModelGroupsIpc } from './model-groups/ipc.js';
 import { requireObject, requireString, throwIpcError } from './utils/ipcValidate.js';
 import { pickNativeAtResource } from './nativeAtResourcePicker.js';
 // Scheduler (Phase 3) — 启动单例需要 maker / localDb / mainWindow 都 ready，但
@@ -1292,6 +1302,8 @@ import { fetchHubSkillReference } from './learn-host/hubReference.js';
 import { registerLearnIpc, broadcastLearnEvent } from './learn-host/registerIpc.js';
 import { registerGoalHandlers, broadcastGoalStatus } from './maker-ipc/goal.js';
 import { createLogger as createSchedulerLogger } from './logger.js';
+// Keep opt-in platform dependencies after the existing desktop bootstrap imports.
+import { connectHostPlatformClient } from './host-platform/client.desktop.js';
 
 let makerProviderRefreshConfigured = false;
 
@@ -1312,6 +1324,9 @@ if (hostClientMode) {
   console.log('[bootstrap-electron] client mode requested at startup');
 }
 
+/** Source runs only: where to write IPC channel usage counts (see ipcChannelUsage.ts). */
+const ipcUsageReportFile = app.isPackaged ? undefined : process.env.CINDY_IPC_USAGE_FILE?.trim() || undefined;
+
 /** Client mode: the host owns every runtime channel; install its proxies now. */
 function installHostClientMode(): boolean {
   const delegation = hostDelegation();
@@ -1320,17 +1335,26 @@ function installHostClientMode(): boolean {
   // The host owns the profile's database too; a local open would be a second writer.
   setHostClientMode(true);
   const hostClient = createHostClient(delegation);
-  const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain });
+  const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain, assertTrusted: assertTrustedAppRendererEvent });
   // Registered outside the runtime block by other modules; drop those so the
   // host stays authoritative instead of throwing on a duplicate handler.
   claimProxiedChannels(ipcMain, (channel) => {
     console.log(`[bootstrap-electron] client mode keeps the host handler for ${channel}`);
   });
-  installUnsupportedMakerFallbacks({
-    ipcMain,
-    log: (channel) => {
-      console.log(`[bootstrap-electron] client mode unsupported maker fallback for ${channel}`);
-    },
+  const channelUsage = createIpcChannelUsage({
+    mode: 'client',
+    file: ipcUsageReportFile,
+    registered: ipcUsageReportFile ? () => registeredIpcChannels(ipcMain) : undefined,
+    log: (line) => console.log(`[bootstrap-electron] client mode ${line}`),
+  });
+  installUnsupportedMakerFallbacks({ ipcMain, usage: channelUsage });
+  app.once('before-quit', () => {
+    const unserved = channelUsage.topUnserved(30);
+    if (unserved.length) {
+      console.log(`[bootstrap-electron] client mode unserved channels: ${unserved
+        .map(([channel, entry]) => `${channel}=${entry.missing + entry.unsupported}`).join(', ')}`);
+    }
+    channelUsage.flush();
   });
   console.log(`[bootstrap-electron] client mode: delegating to ${delegation.baseUrl}`);
   console.log(`[bootstrap-electron] client mode proxies: ${installed.join(', ')}`);
@@ -1356,12 +1380,33 @@ function installHostClientMode(): boolean {
     }
   };
   let hostConnectionState: HostConnectionState | null = null;
+  let platformClient: ReturnType<typeof connectHostPlatformClient> | null = null;
+  let platformOwner: string | null = null;
+  let platformTransition = Promise.resolve();
+  const reconcilePlatformClient = () => {
+    // Older explicitly configured Hosts keep their HTTP/SSE behavior; platform
+    // control requires an instance pinned by the new launcher.
+    if (!delegation.instanceId) return Promise.resolve();
+    platformTransition = platformTransition.catch(() => {}).then(async () => {
+      const owner = authManager.getAuthState().isAuthenticated ? activeOwnerScopeKey() : null;
+      if (platformOwner === owner) return;
+      await platformClient?.close(); platformClient = null; platformOwner = null;
+      if (owner && owner === activeOwnerScopeKey() && authManager.getAuthState().isAuthenticated) {
+        platformClient = connectHostPlatformClient(delegation); platformOwner = owner;
+      }
+    });
+    return platformTransition;
+  };
   const eventBridge = startHostEventBridge({
     baseUrl: delegation.baseUrl,
     token: delegation.token,
+    instanceId: delegation.instanceId,
     beforeEvents: async (signal) => {
       const auth = await hostClient.request('/api/auth/state', null, signal) as authManager.AuthState;
-      if (!signal.aborted) authManager.receiveHostAuthState(auth);
+      if (!signal.aborted) {
+        authManager.receiveHostAuthState(auth);
+        await reconcilePlatformClient();
+      }
     },
     onConnectionState: (state) => {
       hostConnectionState = state;
@@ -1370,7 +1415,10 @@ function installHostClientMode(): boolean {
     onInputProjection: (payload) => sendToAllWindows('maker:input:projection', payload),
     onInteractionRequest: (payload) => sendToAllWindows('maker:interaction-request', payload),
     onInteractionDismissed: (payload) => sendToAllWindows('maker:interaction-dismissed', payload),
-    onAuthChanged: (payload) => authManager.receiveHostAuthState(payload as authManager.AuthState),
+    onAuthChanged: (payload) => {
+      authManager.receiveHostAuthState(payload as authManager.AuthState);
+      void reconcilePlatformClient().catch(() => console.warn('[host-platform] owner transition unavailable'));
+    },
     broadcast: (payload) => {
       sendToAllWindows(MAKER_PUSH.EVENT, payload);
     },
@@ -1405,6 +1453,7 @@ function installHostClientMode(): boolean {
     },
     onMessageDeleted: event => sendToAllWindows('local-db:messages:deleted', event),
     onErrorPersisted: event => sendToAllWindows('local-db:session:error-persisted', event),
+    onRightSidebarTabsChanged: event => sendToAllWindows('maker:right-sidebar-tabs:changed', event),
     onSubagentRunsChanged: event => sendToAllWindows('local-db:subagent-runs:changed', event),
     onProjectAliasesChanged: () => {
       sendToAllWindows('local-db:project-aliases:changed', {});
@@ -1428,6 +1477,16 @@ function installHostClientMode(): boolean {
 }
 
 if (hostClientMode) installHostClientMode();
+else if (ipcUsageReportFile) {
+  const channelUsage = createIpcChannelUsage({
+    mode: 'embedded',
+    file: ipcUsageReportFile,
+    registered: () => registeredIpcChannels(ipcMain),
+    log: (line) => console.log(`[bootstrap-electron] ${line}`),
+  });
+  tapIpcChannelUsage(ipcMain, channelUsage);
+  app.once('before-quit', () => channelUsage.flush());
+}
 
 let startPendingAccountProviderReadiness: { ownerId: string; start: () => void } | null = null;
 
@@ -4335,6 +4394,10 @@ const createWindow = () => {
     isDark,
     process.platform,
   );
+  // Windows: a transparent window flickers under a system backdrop (see vibrancyConfig).
+  const windowTransparent =
+    process.platform !== 'win32' ||
+    resolveWindowsWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow);
 
   // Window state persistence (F-WST-1): remembers position / size / maximized
   // / fullscreen across launches. Falls back to the defaults below on first
@@ -4415,7 +4478,7 @@ const createWindow = () => {
     autoHideMenuBar: true,
     show: false,
     backgroundColor: bgColor,
-    transparent: true,
+    transparent: windowTransparent,
     ...(process.platform === 'win32' && winBackdropConfig.backgroundMaterial
       ? {
           backgroundMaterial: winBackdropConfig.backgroundMaterial,
@@ -4447,6 +4510,7 @@ const createWindow = () => {
     },
   });
   markAppContentWindow(mainWindow);
+  if (process.platform === 'win32' && windowTransparent) markWindowsTransparentWindow(mainWindow);
   installWindowsTransparentTitleBar(mainWindow, () => {
     mainWindowMaximizeRecoveryController?.notifyUserUnmaximizeIntent();
   });
@@ -5163,7 +5227,14 @@ const registerIpcHandlers = () => {
   function applyWindowVibrancy(familyId: string, isDark: boolean): void {
     const win = mainWindowRef;
     if (!win || win.isDestroyed()) return;
-    const config = resolveWindowVibrancyConfig(win, familyId, isDark, process.platform);
+    const requested = resolveWindowVibrancyConfig(win, familyId, isDark, process.platform);
+    const config =
+      process.platform === 'win32'
+        ? fitWindowsBackdropToWindow(requested, isWindowsTransparentWindow(win))
+        : requested;
+    if (process.platform === 'win32') {
+      writeWindowTransparencyHint(needsWindowsTransparentWindow(requested));
+    }
 
     if (process.platform === 'win32' && config.backgroundMaterial) {
       win.setBackgroundMaterial(config.backgroundMaterial);
@@ -5387,6 +5458,8 @@ const registerIpcHandlers = () => {
     }
     return imDefaultSettingsWire(channel);
   });
+  registerModelGroupsIpc();
+  registerModelGroupDecisionIpc();
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_GET, async () => {
     return subagentModelSettingsWire();
   });
@@ -6583,7 +6656,7 @@ const registerIpcHandlers = () => {
             pendingCompletion = completion;
           },
         })
-        .finally(() => authCredentialRecovery.request());
+        .finally(() => { if (!hostClientMode) authCredentialRecovery.request(); });
       // 启动里程碑记在这里而不是 authManager.initialize() 体内:那个函数会被
       // authColdStartRecovery 测试按源码抽出单独执行。冷启动门超时先返回时,
       // 以后台完成的那次登录为准。
@@ -7703,6 +7776,7 @@ const registerIpcHandlers = () => {
       app.getPath('appData'),
     ),
     getMainWindow: () => mainWindowRef,
+    getLegacyMigrated: () => didMigrateLegacyDataForUser(authManager.getCurrentUserId()),
   });
   disposeSkillhubAutoSyncAuthListener = authManager.onAuthStateChange((state) => {
     if (!state.isAuthenticated) return;
@@ -9820,7 +9894,7 @@ app.on('ready', async () => {
   // 网关凭据自动下发:订阅登录态(登录后向 model-access-server 拉 endpoint +
   // 用户专属 key)+ 注册 model-access:* IPC。须在 initClientEndpoints 之后
   // (依赖 modelAccessApiBaseUrl 端点)、renderer auth:initialize 之前装订阅。
-  initModelAccess();
+  if (!hostClientMode) initModelAccess();
 
   initializeUpdatePresentationRecovery();
 
@@ -10557,7 +10631,7 @@ app.on('ready', async () => {
   }, 3_000);
   initUpdateService();
   // 在线人数心跳:App 启动即上报,内部走 deviceId / userId 兜底,登录前后都活
-  initHeartbeatService();
+  if (!hostClientMode) initHeartbeatService();
   // 设备互联(跨设备远程控制):登录后连 relay,登出即断;开关与设备列表 IPC 一并注册
   let updateRelaunchRemoteBusy = false;
   setUsageWidgetSnapshotReader(readUsageWidgetSnapshot);

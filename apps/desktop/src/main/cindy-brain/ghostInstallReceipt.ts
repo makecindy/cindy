@@ -20,6 +20,7 @@ import {
   GHOST_LOCALE_MAX_BYTES,
   GHOST_SKILL_MD_MAX_BYTES,
   declaredAutoApproveTools,
+  ghostHostUiApprovalTokens,
   declaredGhostControlPoints,
   ghostManifestToAuthorFormat,
   isValidGhostId,
@@ -131,6 +132,7 @@ export interface GhostInstallReceipt {
   taskCapabilityApproved?: true;
   targetCapabilityApproved?: true;
   uiCapabilityApproved?: true;
+  approvedHostUi?: string[];
   /** Host-only: historical archive UI entries were absent, non-regular or oversized. Canonical manifest stays intact. */
   unavailableUiResources?: true;
   delegationCapabilityApproved?: true;
@@ -1300,12 +1302,20 @@ function approvedControlPointsField(raw: unknown, manifest: GhostManifest): { ap
   return points.length > 0 ? { approvedControlPoints: points.sort() } : {};
 }
 
+function approvedHostUiField(raw: unknown, manifest: GhostManifest): { approvedHostUi?: string[] } {
+  if (!Array.isArray(raw)) return {};
+  const declared = new Set(ghostHostUiApprovalTokens(manifest));
+  const approvedHostUi = [...new Set(raw.filter((item): item is string => typeof item === 'string' && declared.has(item)))].sort();
+  return approvedHostUi.length ? { approvedHostUi } : {};
+}
+
 export function createGhostInstallReceipt(input: {
   simulatorPreviousRelId?: string;
   simulatorMarketRelease?: GhostInstallReceipt['simulatorMarketRelease'];
   taskCapabilityApproved?: true;
   targetCapabilityApproved?: true;
   uiCapabilityApproved?: true;
+  approvedHostUi?: readonly string[];
   /** Host-only: historical archive UI entries were absent, non-regular or oversized. Canonical manifest stays intact. */
   unavailableUiResources?: true;
   delegationCapabilityApproved?: true;
@@ -1349,6 +1359,7 @@ export function createGhostInstallReceipt(input: {
     ...(input.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
     ...(input.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
     ...approvedControlPointsField(input.approvedControlPoints, input.manifest),
+    ...approvedHostUiField(input.approvedHostUi, input.manifest),
     ...approvedAutoToolsField(input.approvedAutoTools, input.manifest),
     ...(input.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
     ...(input.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
@@ -1569,6 +1580,7 @@ function validateReceipt(
       ...(value.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
       ...(value.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
       ...approvedControlPointsField(value.approvedControlPoints, manifestResult.manifest),
+      ...approvedHostUiField(value.approvedHostUi, manifestResult.manifest),
       ...approvedAutoToolsField(value.approvedAutoTools, manifestResult.manifest),
       ...(value.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
       ...(value.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),

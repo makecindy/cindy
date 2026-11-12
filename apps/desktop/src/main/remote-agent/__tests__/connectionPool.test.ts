@@ -20,6 +20,7 @@ import {
 } from '../controller/connectionPool';
 import { hostRewritesResumeId, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
 import { ExecServerRelay } from '../controller/execServerRelay';
+import { RemoteAgentRunClient } from '../controller/runClient';
 import { decideProviderGroupFailure, providerGroupFailureSignals } from '../../provider-group/failurePolicy';
 import { RemoteExecutor } from '../executor/executor';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
@@ -616,6 +617,119 @@ afterEach(async () => {
 });
 
 describe('remote connection pool with a real host', () => {
+  // #9985 unit: the real proxy + Session must retain a premature transport close.
+  // Existing restart/idle tests never ended an unfinished turn with a normal close
+  // reason. An idle snapshot and background done are not foreground terminals.
+  it.each(['eof', 'closed', 'detached', 'ended', 'superseded'] as const)(
+    'preserves %s closing an unfinished turn without replaying the send', async close => {
+      let interrupt = false;
+      let closedRunId = '';
+      const reason = close === 'eof' ? 'ended' : close;
+      intercept = request => request.op !== 'poll' ? undefined : host.handle(CONTROLLER, request).then(result => {
+        if (!interrupt) return result;
+        interrupt = false;
+        return { runs: (request.runs as Array<{ runId: string; cursor: number }>).map(run => {
+          closedRunId = run.runId;
+          const items = [
+            { t: 'state', state: { turnRunning: false, preparing: false } },
+            { t: 'event', event: { type: 'done', source: 'claude-code', turnScope: 'background', data: {} } },
+            ...(close === 'eof' ? [] : [{ t: 'closed', reason, error: { code: 'AGENT_ERROR', message: 'provider stream ended early' } }]),
+          ];
+          const data = Buffer.from(items.map(item => JSON.stringify(item)).join('\n') + '\n');
+          return { ...run, cursor: run.cursor + data.length, data: data.toString('base64'), done: true };
+        }) };
+      });
+      const handle = await start(undefined);
+      const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+      const session = new Session({ id: 'premature-close', agentKind: 'claude-code', workDir: project,
+        handle, capabilities: {} as never, logger, turnStallMs: 0 });
+      const seen: AgentEvent[] = [];
+      session.onEvent(event => seen.push(event));
+      try {
+        const sending = session.send('hold').catch(() => undefined);
+        await vi.waitFor(() => expect(scenario.releaseHold).not.toBeNull());
+        interrupt = true;
+        await host.abortAll(); // Wake the real pending poll; inject only its transport input.
+        await sending;
+        if (close === 'superseded') {
+          // Replacement cancels the old turn; it is not a machine failure.
+          await vi.waitFor(() => expect(seen.some(event => event.type === 'done'
+            && (event.data as { status?: string })?.status === 'cancelled')).toBe(true));
+          expect(seen.filter(event => event.type === 'error')).toEqual([]);
+          const terminals = seen.filter(event => event.type === 'done' && event.turnScope !== 'background');
+          expect(terminals).toHaveLength(1);
+          expect(terminals[0].data).toMatchObject({ status: 'cancelled', reason,
+            remoteCloseReason: reason, remoteRunId: closedRunId });
+        } else {
+          await vi.waitFor(() => expect(seen.some(event => event.type === 'error')).toBe(true));
+          const errors = seen.filter(event => event.type === 'error');
+          expect(errors).toHaveLength(1);
+          expect(errors[0].data).toMatchObject({
+            reason: 'remote_agent_closed', isTerminal: true,
+            remoteCloseReason: reason, remoteRunId: closedRunId,
+            message: close === 'eof' ? expect.stringContaining('(ended)') : 'provider stream ended early',
+          });
+        }
+        expect(session.isTurnRunning()).toBe(false);
+        await expect(handle.send({ type: 'user', content: 'must not reconnect' })).rejects.toThrow();
+        expect(opens).toBe(1);
+        expect(scenario.calls.filter(call => call.method === 'send')).toHaveLength(1);
+      } finally {
+        scenario.releaseHold?.();
+        await session.close();
+      }
+    },
+  );
+
+  // #9985 review: abort ACK does not mean the remote turn has stopped. A late
+  // busy snapshot must not turn Stop into an error, or mask the next explicit send.
+  it.each([false, true])('retains Stop intent across a late busy snapshot, next turn: %s', async nextTurn => {
+    let interrupt = false;
+    intercept = request => request.op !== 'poll' ? undefined : host.handle(CONTROLLER, request).then(result => {
+      if (!interrupt) return result;
+      interrupt = false;
+      const data = Buffer.from([
+        { t: 'state', state: { turnRunning: true } },
+        { t: 'closed', reason: 'ended' },
+      ].map(item => JSON.stringify(item)).join('\n') + '\n');
+      return { runs: (request.runs as Array<{ runId: string; cursor: number }>).map(run => ({
+        ...run, cursor: run.cursor + data.length, data: data.toString('base64'), done: true,
+      })) };
+    });
+    const handle = await start(undefined);
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const session = new Session({ id: 'stop-late-busy', agentKind: 'claude-code', workDir: project,
+      handle, capabilities: {} as never, logger, turnStallMs: 0 });
+    const seen: AgentEvent[] = [];
+    session.onEvent(event => seen.push(event));
+    try {
+      let sending = session.send('hold').catch(() => undefined);
+      await vi.waitFor(() => expect(scenario.releaseHold).not.toBeNull());
+      await session.abort();
+      if (nextTurn) {
+        scenario.releaseHold?.();
+        await sending;
+        await vi.waitFor(() => expect(seen.some(event => event.type === 'done')).toBe(true));
+        scenario.releaseHold = null;
+        sending = session.send('hold').catch(() => undefined);
+        await vi.waitFor(() => expect(scenario.releaseHold).not.toBeNull());
+      }
+      interrupt = true;
+      await host.abortAll();
+      await sending;
+      await vi.waitFor(() => expect(session.getStatus()).toBe('closed'));
+      const errors = seen.filter(event => event.type === 'error');
+      expect(errors).toHaveLength(nextTurn ? 1 : 0);
+      if (nextTurn) expect(errors[0].data).toMatchObject({ reason: 'remote_agent_closed', remoteCloseReason: 'ended' });
+      else expect(seen.filter(event => event.type === 'done')).toEqual([expect.objectContaining({ data: expect.objectContaining({ status: 'cancelled' }) })]);
+      expect(scenario.calls.filter(call => call.method === 'send')).toHaveLength(nextTurn ? 2 : 1);
+      expect(opens).toBe(1);
+    } finally {
+      scenario.releaseHold?.();
+      await session.close();
+    }
+  });
+
   // R3 regression: a failed remote close used to leave a disposed handle in the
   // Maker with a permanently running turn. Fake time exercises the real 15s Stop
   // recovery without waiting; reconnect uses the original native conversation.
@@ -816,6 +930,12 @@ describe('remote connection pool with a real host', () => {
   });
 
   it.each(['missing', 'aborted', 'provider-restarting'] as const)('settles %s during the first turn once and reconnects the live Session', async reason => {
+    const clients: RemoteAgentRunClient[] = [];
+    const onData = RemoteAgentRunClient.prototype.onData;
+    const receive = vi.spyOn(RemoteAgentRunClient.prototype, 'onData').mockImplementation(function (this: RemoteAgentRunClient, data, done) {
+      if (!clients.includes(this)) clients.push(this);
+      onData.call(this, data, done);
+    });
     let interrupt = false;
     intercept = request => request.op !== 'poll' ? undefined : host.handle(CONTROLLER, request).then(result => {
       if (!interrupt) return result;
@@ -845,9 +965,16 @@ describe('remote connection pool with a real host', () => {
       await expect(session.send('continued')).resolves.toMatchObject({ accepted: true });
       await vi.waitFor(() => expect(seen.some(e => e.type === 'text' && textOf(e) === 'ok:continued')).toBe(true));
       expect(scenario.started.at(-1)?.options).toMatchObject({ resumeSessionId: id, planMode: true });
+      // #9985: a late superseded close belongs to the retired run, not its replacement.
+      expect(clients).toHaveLength(2);
+      clients[0].onData(Buffer.from(JSON.stringify({ t: 'closed', reason: 'superseded' }) + '\n'), true);
+      expect(seen.filter(e => e.type === 'error')).toHaveLength(1);
+      expect(scenario.calls.filter(call => call.method === 'send')).toHaveLength(2);
+      expect(opens).toBe(2);
     } finally {
       scenario.releaseHold?.();
       await session.close();
+      receive.mockRestore();
     }
   });
   // #6921 unit: startRemoteAgentSession must attempt every local cleanup and keep

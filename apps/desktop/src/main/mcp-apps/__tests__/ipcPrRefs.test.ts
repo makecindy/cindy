@@ -33,7 +33,7 @@ vi.mock('../host.js', () => ({
     constructor(deps: McpAppsHostDeps) { h.deps = deps; }
   },
 }));
-vi.mock('../runtime.js', () => ({ setMcpAppsHost: vi.fn(), readAppServer: vi.fn() }));
+vi.mock('../runtime.js', () => ({ setMcpAppsHost: vi.fn(), readAppServer: vi.fn(), replacePluginAppServers: vi.fn() }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({ getMcpAppRevisionKey: vi.fn() }));
 vi.mock('../sandboxProtocol.js', () => ({
   supplyMcpAppDocument: vi.fn(), removeMcpAppDocument: vi.fn(),

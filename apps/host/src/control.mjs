@@ -39,7 +39,9 @@ async function controlRequest(profile, endpoint, pathname, body) {
   const token = fs.readFileSync(path.join(profile, 'host-api-token'), 'utf8').trim();
   const response = await fetch(`${endpoint.baseUrl}${pathname}`, {
     method: body === undefined ? 'GET' : 'POST',
-    headers: { authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+    headers: { authorization: `Bearer ${token}`,
+      ...(endpoint.instanceId ? { 'x-cindy-host-instance': endpoint.instanceId } : {}),
+      ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     redirect: 'error', signal: AbortSignal.timeout(5_000),
   });
@@ -53,7 +55,9 @@ export async function readHostProcessStatus(profile) {
   try {
     const health = await controlRequest(profile, endpoint, '/health');
     if (endpoint.instanceId && health.instanceId !== endpoint.instanceId) throw new Error('Host endpoint belongs to another instance');
-    return { running: true, pid: endpoint.pid, baseUrl: endpoint.baseUrl, runtime: health.runtime, instanceId: health.instanceId };
+    if (health.clientProtocol === 1 && health.pid !== endpoint.pid) throw new Error('Host process identity changed');
+    return { running: true, pid: endpoint.pid, baseUrl: endpoint.baseUrl, runtime: health.runtime, instanceId: health.instanceId,
+      ...(health.clientProtocol === undefined ? {} : { clientProtocol: health.clientProtocol }) };
   } catch (error) {
     // An unresponsive service is not proof that its process has exited.
     return { running: null, pid: endpoint.pid, baseUrl: endpoint.baseUrl, error: error instanceof Error ? error.message : String(error) };
