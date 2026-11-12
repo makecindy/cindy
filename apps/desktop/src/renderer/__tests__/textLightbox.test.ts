@@ -35,8 +35,6 @@ import { detectRenderable, buildFence } from '../lib/textPreview';
 
 const sourcePath = resolve(__dirname, '..', 'components', 'chat', 'TextLightbox.tsx');
 const source = readFileSync(sourcePath, 'utf8');
-const colorsPath = resolve(__dirname, '..', 'themes', 'colors.ts');
-const colorsSource = readFileSync(colorsPath, 'utf8');
 const localePath = resolve(__dirname, '..', 'i18n', 'locales', 'zh-CN', 'common.json');
 const locale = JSON.parse(readFileSync(localePath, 'utf8')) as {
   chat: {
@@ -258,10 +256,11 @@ describe('TextLightbox — detectRenderable', () => {
     expect(detectRenderable('post.mdx')).toEqual({ kind: 'markdown' });
   });
 
-  it('routes common code extensions to highlighted code with the right hljs alias', () => {
+  it('routes common code extensions to highlighted code with the right language alias', () => {
     expect(detectRenderable('config.json')).toEqual({ kind: 'code', lang: 'json' });
     expect(detectRenderable('app.tsx')).toEqual({ kind: 'code', lang: 'typescript' });
     expect(detectRenderable('script.py')).toEqual({ kind: 'code', lang: 'python' });
+    expect(detectRenderable('Contract.sol')).toEqual({ kind: 'code', lang: 'solidity' });
     expect(detectRenderable('Main.go')).toEqual({ kind: 'code', lang: 'go' });
     // html/svg/vue all collapse to xml — that's how highlight.js's common
     // bundle ships them. Pin it so a refactor doesn't accidentally split them.

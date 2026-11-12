@@ -1,8 +1,9 @@
 /**
  * textPreview — shared rules for previewing text/code/markdown files.
  *
- * Two consumers:
+ * Consumers:
  *   - components/chat/TextLightbox.tsx (full-screen file lightbox)
+ *   - features/cc-agent/workdir-browse/FileBodyView.tsx (file browser)
  *   - features/skillhub/SkillhubDetailView.tsx (sibling files in skill folders)
  *
  * Keeping the extension → language map and fence builder here means adding a
@@ -14,17 +15,13 @@ import { categorizeByFilename, categorizeFile, extractExt } from './fileTypes';
 import { basename } from './utils';
 
 /**
- * Extension → highlight.js language alias.
+ * Extension → language alias.
  *
- * Drives the body renderer: anything in this map is wrapped in a fenced code
- * block and handed to MarkdownRenderer (which runs rehype-highlight). Anything
- * NOT in the map and NOT a markdown extension falls through to the plain
- * `<pre>` path — the safe default for .log/.csv/.txt/unknown files.
- *
- * Aliases (typescript/javascript, xml for html, etc.) are chosen to match the
- * languages bundled by `highlight.js/lib/common`, which is what rehype-highlight
- * loads by default. Adding a new entry here is the only change needed when we
- * want to support a new language.
+ * Drives the read-only editor in TextLightbox and sibling file previews. The
+ * editor's aliases must be registered by `codemirrorLanguages`; any alias also
+ * used by chat code blocks or the highlight worker needs its own highlighter
+ * registration there. Keeping file detection here does not imply every engine
+ * supports every language automatically.
  */
 export const EXT_TO_LANG: Record<string, string> = {
   json: 'json',
@@ -39,6 +36,7 @@ export const EXT_TO_LANG: Record<string, string> = {
   rb: 'ruby',
   go: 'go',
   rs: 'rust',
+  sol: 'solidity',
   java: 'java',
   kt: 'kotlin',
   swift: 'swift',
