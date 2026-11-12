@@ -52,7 +52,8 @@ vi.mock('@/session/useHomeMode', () => ({ useHomeMode: () => ({ mode: 'tasks' })
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
 vi.mock('@/session/sessionPaneLayout', () => ({ sessionPaneLayout: () => ({ persistent: true, detail: { x: 0 }, resizeBounds: null }) }));
 // Resize gestures have their own tests; this suite exercises the resident hosts.
-vi.mock('@/session/SessionPaneDivider', () => ({ useSessionPaneDivider: () => ({ gesture: {}, edge: null }) }));
+vi.mock('@/session/SessionPaneDivider', () => ({ useSessionPaneDivider: () => ({ gesture: {}, edge: null, rowInset: 0 }),
+  PaneEdgeInsetProvider: ({ children }: any) => children, usePaneEdgeInset: () => 0 }));
 vi.mock('@/platform/gestureHandler', () => ({ GestureDetector: ({ children }: any) => children }));
 vi.mock('@/session/remoteSessionStore', () => ({
   RemoteSessionStoreSubscriptionGate: ({ children, enabled }: { children: ReactNode; enabled: boolean }) =>

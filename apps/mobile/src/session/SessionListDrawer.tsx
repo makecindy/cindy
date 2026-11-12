@@ -15,7 +15,7 @@ import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { motionDuration, motionEasing } from '@/theme/tokens';
 import type { RemoteSessionListItem } from './sessionList';
 import { MobileHome } from './HomeSurface';
-import { useSessionPaneDivider } from './SessionPaneDivider';
+import { PaneEdgeInsetProvider, usePaneEdgeInset, useSessionPaneDivider } from './SessionPaneDivider';
 import { NativeHistoryHost, NativeHistorySlot, NativeTaskDrawerHost, taskDrawerHandoffAvailable } from './NativeResidentHistory';
 import { HomePresentationFocus } from './HomePresentationFocus';
 import { LocalHomeList } from './ResidentHomeList';
@@ -363,9 +363,18 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
   const settleStretch = useCallback(() => {
     stretch.value = withTiming(0, { duration: motionDuration.base, easing: Easing.bezier(...motionEasing.out) });
   }, [stretch]);
+  // The floating drawer's right edge resizes it without a visible grip. Its
+  // gesture sits on the overlay, above both the panel and the dimmed area, so
+  // taps near the edge still reach list rows and close the drawer.
+  const edge = useSessionPaneDivider({
+    enabled: !persistent && open && !!resize, width, bounds: resize?.bounds ?? null,
+    left: panelWidth, top: topInset ?? insets.top, bottom: insets.bottom,
+    onResize: resize?.onResize ?? ignoreResize, elastic: { onStretch: stretchTo, onSettle: settleStretch },
+  });
   // Where a rightward drag on the dimmed area becomes Home, and whether it has.
   const homeAt = useSharedValue(DRAWER_HOME_TRAVEL);
   const homeEntered = useSharedValue(false);
+  const edgeInset = edge.rowInset;
   const gestures = useMemo(() => {
     // A leftward drag slides the panel; released past a third (or flicked) it closes,
     // otherwise it returns from where the finger left it.
@@ -385,7 +394,10 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
       dragX.value = 0;
       progress.value = withTiming(1, { duration: motionDuration.fast * (1 - effective), easing: Easing.bezier(...motionEasing.move) });
     };
+    // Both leave the edge's drag band to resizing: on a coarse move all three
+    // can activate at once, and the deeper panel/dimmed area would win.
     const panel = Gesture.Pan().enabled(!persistent)
+      .hitSlop({ right: -edgeInset })
       // 与内部 SectionList 纵向滚动的协调全靠激活窗口收窄:
       // - 只认「向左」(关闭方向)为激活条件,向右 16pt 直接判失败——右拖不该抢任何手势;
       // - 纵向 16pt 先到即失败,滚动优先;斜向手势必须横向分量先赢才归抽屉。
@@ -410,6 +422,7 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
     // The dimmed area takes both directions: left slides the panel away like the
     // panel itself; right stretches the list and, a short way on, becomes Home.
     const scrim = Gesture.Pan().enabled(!persistent)
+      .hitSlop({ left: edgeInset ? -(panelWidth + edgeInset) : 0 })
       .activeOffsetX([-16, 16])
       .failOffsetY([-16, 16])
       .onStart((event) => {
@@ -445,7 +458,7 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
         settleSlide(event.translationX, event.velocityX);
       });
     return { panel, scrim };
-  }, [closeFromGesture, dragX, enterHome, home, homeAt, homeEntered, panelWidth, persistent, progress, stretch]);
+  }, [closeFromGesture, dragX, edgeInset, enterHome, home, homeAt, homeEntered, panelWidth, persistent, progress, stretch]);
 
   const scrimStyle = useAnimatedStyle(() => ({
     opacity: Math.max(0, Math.min(1, progress.value + dragX.value / panelWidth)),
@@ -462,22 +475,18 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
   }));
 
 
-  // The floating drawer's right edge resizes it without a visible grip. Its
-  // gesture sits on the overlay, above both the panel and the dimmed area, so
-  // taps near the edge still reach list rows and close the drawer.
-  const edge = useSessionPaneDivider({
-    enabled: !persistent && open && !!resize, width, bounds: resize?.bounds ?? null,
-    left: panelWidth, top: topInset ?? insets.top, bottom: insets.bottom,
-    onResize: resize?.onResize ?? ignoreResize, elastic: { onStretch: stretchTo, onSettle: settleStretch },
-  });
+  // A docked column sits beside the side-by-side edge, which publishes its own inset.
+  const residentEdgeInset = usePaneEdgeInset();
   // A handoff shell can render beside the live overlay; it needs its own detector gesture.
   const idleEdgeGesture = useMemo(() => Gesture.Pan().enabled(false), []);
 
   // Remove a collapsed column in this render, before Home receives width=0.
   // The layout effect still settles motion and suppresses modal-close callbacks.
-  const homeContent = <MobileHome newSessionActionRef={newSessionActionRef} width={shownWidth} currentSessionId={currentSessionId}
-    newSessionInSystemBar={newSessionInSystemBar} newSessionInHeader={!persistent}
-    onSelectSession={onSelectSession} runNavigation={runNavigation} />;
+  const homeContent = <PaneEdgeInsetProvider value={persistent ? residentEdgeInset : edge.rowInset}>
+    <MobileHome newSessionActionRef={newSessionActionRef} width={shownWidth} currentSessionId={currentSessionId}
+      newSessionInSystemBar={newSessionInSystemBar} newSessionInHeader={!persistent}
+      onSelectSession={onSelectSession} runNavigation={runNavigation} />
+  </PaneEdgeInsetProvider>;
   // The existing native host keeps Fabric ownership while its plain content
   // container docks into the Modal. A local focus boundary pauses background
   // work without hiding/recreating every native view on the next reveal.

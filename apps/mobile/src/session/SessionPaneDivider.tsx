@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
 import { PanResponder, StyleSheet, View } from 'react-native';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Gesture } from '@/platform/gestureHandler';
@@ -10,6 +10,16 @@ import { spacing } from '@/theme/tokens';
 export const PANE_DIVIDER_BAND = 48;
 /** Horizontal travel that claims the edge; vertical travel first lets lists scroll. */
 const ACTIVE_OFFSET = 8;
+
+/** How far the edge's drag band reaches into the task list beside it. Swipeable
+ * rows leave that strip to the edge (via hitSlop): when both recognize the same
+ * coarse move, the deeper row would otherwise win and a drag there would open
+ * row actions instead of resizing. 0 when no resizable edge is next to the list. */
+const PaneEdgeInsetContext = createContext(0);
+export const PaneEdgeInsetProvider = PaneEdgeInsetContext.Provider;
+export function usePaneEdgeInset() {
+  return useContext(PaneEdgeInsetContext);
+}
 
 type PaneResize = {
   /** Off while the edge is hidden, closing or not resizable. */
@@ -100,7 +110,7 @@ export function useSessionPaneDivider({ enabled, width, left, top, bottom, bound
       if (direction) onResize(Math.max(bounds.min, Math.min(bounds.max, width + direction * spacing.xl)));
     }}
     style={[styles.edge, { left: left - PANE_DIVIDER_BAND / 2, top, bottom }]} /> : null;
-  return { gesture, edge };
+  return { gesture, edge, rowInset: active ? PANE_DIVIDER_BAND / 2 : 0 };
 }
 
 const styles = StyleSheet.create({

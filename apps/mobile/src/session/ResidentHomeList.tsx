@@ -10,7 +10,7 @@ import { motionDuration } from '@/theme/tokens';
 import { GestureDetector } from '@/platform/gestureHandler';
 import { RemoteSessionStoreSubscriptionGate } from './remoteSessionStore';
 import { sessionPaneLayout } from './sessionPaneLayout';
-import { useSessionPaneDivider } from './SessionPaneDivider';
+import { PaneEdgeInsetProvider, useSessionPaneDivider } from './SessionPaneDivider';
 
 const PaneLayoutContext = createContext<ReturnType<typeof sessionPaneLayout> | null>(null);
 type SidebarWidthPreference = { width: number | null; setWidth(width: number): void };
@@ -104,6 +104,7 @@ export function ResidentHomeListProvider({ children }: { children: ReactNode }) 
   });
   return <SidebarWidthContext.Provider value={widthPreference}>
     <PaneLayoutContext.Provider value={paneLayout}><Context.Provider value={context}>
+    <PaneEdgeInsetProvider value={divider.rowInset}>
     <GestureDetector gesture={divider.gesture}>
     <View ref={host} collapsable={false} style={styles.root}>
       {children}
@@ -124,6 +125,7 @@ export function ResidentHomeListProvider({ children }: { children: ReactNode }) 
       {divider.edge}
     </View>
     </GestureDetector>
+    </PaneEdgeInsetProvider>
   </Context.Provider></PaneLayoutContext.Provider>
   </SidebarWidthContext.Provider>;
 }

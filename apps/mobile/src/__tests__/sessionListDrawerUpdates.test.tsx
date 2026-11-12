@@ -51,10 +51,11 @@ vi.mock('@/session/NativeResidentHistory', async () => {
 });
 vi.mock('@/session/SessionPaneDivider', () => {
   const gesture = {};
-  return { useSessionPaneDivider: (props: any) => {
-    native.divider = props;
-    return { gesture, edge: props.enabled ? <div data-testid="session.paneDivider" /> : null };
-  } };
+  return { PaneEdgeInsetProvider: ({ children }: any) => children, usePaneEdgeInset: () => 0,
+    useSessionPaneDivider: (props: any) => {
+      native.divider = props;
+      return { gesture, edge: props.enabled ? <div data-testid="session.paneDivider" /> : null, rowInset: props.enabled ? 24 : 0 };
+    } };
 });
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock("react-native", async () => {
@@ -152,9 +153,10 @@ vi.mock("@/platform/gestureHandler", async () => {
   Gesture: {
     // panel: activeOffsetX(-16); dimmed area: activeOffsetX([-16, 16]); task pull-out: activeOffsetX(16).
     Pan: () => {
-      const handlers: Record<string, (event?: any) => void> = {};
+      const handlers: Record<string, any> = {};
       const chain = {
         enabled: () => chain,
+        hitSlop: (slop: unknown) => { handlers.hitSlop = slop; return chain; },
         activeOffsetX: (offset: number | number[]) => {
           const kind = Array.isArray(offset) ? 'scrim' : offset < 0 ? 'panel' : 'open';
           if (kind === 'panel') native.gesture = handlers; else native.pans[kind] = handlers;
@@ -562,6 +564,10 @@ describe('shared Home drawer host', () => {
     expect(native.divider).toMatchObject({ enabled: true, width: 320, left: 320, bounds: resize.bounds });
     native.divider.onResize(480);
     expect(onResize).toHaveBeenCalledWith(480);
+    // A coarse move can satisfy every recognizer at once and the deeper one wins:
+    // the close and dimmed-area gestures leave the edge's 24pt band to resizing.
+    expect(native.gesture.hitSlop).toEqual({ right: -24 });
+    expect(native.pans.scrim.hitSlop).toEqual({ left: -(320 + 24) });
     // Mid-exit the drawer is still mounted; its edge must not take a new drag.
     await act(async () => root.render(<SessionListDrawer {...props} resize={resize} open={false} />));
     expect(native.divider.enabled).toBe(false);
