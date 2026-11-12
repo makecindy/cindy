@@ -2632,10 +2632,16 @@ function CCAgentSessionContent({
   // 换过去；之后不会自己再换。远程控制别的电脑、SSH 与伙伴对话不提供，条件与撞配额的换来源提议相同。
   const modelGroupsInTask = !!sessionId && !readOnly && !botChatIdentity && !remoteDeviceId && !session?.remoteHostId;
   const { config: modelGroupsConfig } = useModelGroups(modelGroupsInTask);
-  const taskLocation = session?.agentDeviceId ?? null;
+  // 已挂着「下一条消息换到另一台电脑」时，按那个即将生效的位置挑：换模型时会沿用它，两边必须是同一台。
+  const taskLocation = agentSwitchIntent && agentSwitchIntent.agentDeviceId !== undefined
+    ? agentSwitchIntent.agentDeviceId ?? null
+    : session?.agentDeviceId ?? null;
   const switchTaskByModelGroup = useCallback(async (selection: ModelGroupSelection) => {
     if (!sessionId) return;
+    // 选路期间切到了别的任务：换模型的入口已属于那个任务，这次作废，不动任何一个。
+    const navigationVersion = sessionNavigationVersionRef.current;
     const result = await resolveModelGroup(selection, undefined, { agentDeviceId: taskLocation });
+    if (sessionNavigationVersionRef.current !== navigationVersion) return;
     if (!result || result.outcome !== 'routed') {
       if (result) toast.warning(t('modelGroups.picker.switchUnavailable', { name: result.groupName }));
       return;
