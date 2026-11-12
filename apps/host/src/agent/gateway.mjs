@@ -36,10 +36,10 @@ export async function fetchGatewayCredentials({ sessionToken, region, request = 
 
 /**
  * @param {{userDataDir: string, ownerId: string, keyringApplication?: string}} options
- * @returns {Promise<{apiKey: string, endpoint: string} | null>}
+ * @returns {Promise<{credential: string, endpoint: string} | null>}
  */
 export async function readGatewayCredentials(options) {
-  const ownerKey = options.ownerKey ?? dataOwnerStorageKey(options.ownerId);
+  const ownerKey = dataOwnerStorageKey(options.ownerId);
   const recordPath = `${options.userDataDir}/owners/${ownerKey}/model-access-credentials.json`;
   let endpoint = null;
   try {

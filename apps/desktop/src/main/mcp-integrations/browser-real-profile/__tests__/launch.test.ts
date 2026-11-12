@@ -623,12 +623,13 @@ describe('wrapRuntimeWithRealProfile', () => {
     expect(started.message).toMatch(/headless/i);
   });
 
-  it('deletes the snapshot store when consent is off', async () => {
+  it.each([undefined, 24001])('deletes the snapshot with consent off and retains the assigned isolated port %s', async (isolatedCdpPort) => {
     const inner = fakeInner({ running: false, starts: 0 });
     const cleanup = vi.fn();
     const applyConfig = vi.fn();
     const wrapped = wrapRuntimeWithRealProfile(inner, {
       isEnabled: () => false,
+      isolatedCdpPort,
       getRuntimeDir: () => '/runtime',
       applyConfig,
       cleanup,
@@ -639,7 +640,7 @@ describe('wrapRuntimeWithRealProfile', () => {
     const started = await wrapped.call({ action: 'start' });
     expect(started.ok).toBe(true);
     expect(cleanup).toHaveBeenCalledWith('/runtime');
-    expect(applyConfig).toHaveBeenCalledWith({ useRealProfile: false, cdpPort: 18800 });
+    expect(applyConfig).toHaveBeenCalledWith({ useRealProfile: false, cdpPort: isolatedCdpPort ?? 18800 });
   });
 
   it('does not relocate isolated Cindy when leftover Chrome sits on 18800', async () => {

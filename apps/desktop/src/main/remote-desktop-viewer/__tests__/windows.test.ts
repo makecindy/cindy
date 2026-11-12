@@ -45,7 +45,7 @@ vi.mock('../preferences', () => ({
     ...patch,
   }),
 }));
-vi.mock('../../i18n', () => ({ t: (s: string) => s }));
+vi.mock('../../i18n.desktop', () => ({ t: (s: string) => s }));
 vi.mock('../../device-link/index', () => ({
   getSelfDeviceId: () => 'local',
   getDeviceLinkStatus: () => 'online',

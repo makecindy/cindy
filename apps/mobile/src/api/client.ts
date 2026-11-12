@@ -1,6 +1,7 @@
 import { i18n } from '@/i18n';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { selfHostedRelayAuthorizationFor } from '@/device-link/selfHostedRelayRouting';
+import { isAgentNetMediaReference } from '@cindy/agent-net-protocol';
 
 /** 自建中转的 401 统一成这个码:只表示中转凭证失效,不可刷新账号 token,也不触发账号退出。 */
 export const RELAY_CREDENTIAL_INVALID = 'RELAY_CREDENTIAL_INVALID';
@@ -28,6 +29,8 @@ export interface ApiFetchOptions {
   body?: unknown;
   timeoutMs?: number;
   cache?: 'no-store';
+  /** Sensitive share requests must not follow redirects to another origin. */
+  redirect?: 'error';
   /** Reject stale account-scoped work before transport or auth side effects. */
   assertCurrent?: () => void;
   /** Extra request headers (e.g. Chat Server's X-Chat-Actor); never overrides auth or content type. */
@@ -60,6 +63,14 @@ export async function apiFetchRaw<T>(
 ): Promise<T> {
   opts.assertCurrent?.();
   if (opts.signal?.aborted) throw requestAborted();
+  if (path.startsWith('/api/device-link/media') && typeof (opts.body as { key?: unknown })?.key === 'string'
+    && isAgentNetMediaReference((opts.body as { key: string }).key)) {
+    const { mobileAgentNetMediaRequest } = await import('@/device-link/agentNetMediaApi');
+    const { token: _accountToken, ...nativeOptions } = opts;
+    const result = await mobileAgentNetMediaRequest<T>(path, nativeOptions);
+    opts.assertCurrent?.();
+    if (result.handled) return result.value;
+  }
   // 自建中转(docs/self-hosted-relay-plan.md §5.3):按目标地址换成中转凭证,账号 token 不发过去。
   const relayAuth = selfHostedRelayAuthorizationFor(opts.baseUrl);
   if (relayAuth?.kind === 'blocked') {
@@ -92,6 +103,7 @@ export async function apiFetchRaw<T>(
         body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
         signal: controller?.signal ?? opts.signal,
         ...(opts.cache ? { cache: opts.cache } : {}),
+        ...(opts.redirect ? { redirect: opts.redirect } : {}),
       });
       let nextData: unknown = null;
       try {

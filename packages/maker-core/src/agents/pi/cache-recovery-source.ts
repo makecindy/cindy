@@ -305,7 +305,8 @@ function installCindyCacheRecovery(pi) {
     let data;
     try { data = JSON.parse(body); } catch { /* Opaque 400 bodies remain eligible. */ }
     for (let depth = 0; data && typeof data === 'object' && depth < 4; depth++) {
-      if (data.param != null && !fields.includes(data.param)) return;
+      // Gateways may leave param empty and identify the rejected field in message.
+      if (data.param != null && data.param !== '' && !fields.includes(data.param)) return;
       if (data.code === 'UNKNOWN_FIELD' && data.data?.field != null) {
         return fields.includes(data.data.field) ? 'explicit' : undefined;
       }

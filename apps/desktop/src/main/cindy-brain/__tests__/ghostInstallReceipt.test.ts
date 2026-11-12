@@ -338,6 +338,26 @@ describe('GhostInstallReceiptStore cleanup', () => {
     expect(saved).toEqual(raw);
   });
 
+  // Unit #9676 P1: exercise the real receipt reload, not only manifest parsing.
+  // Previously valid statusBar:false must keep the installed plugin enabled and
+  // approved with the same revision, trust and saved declaration, without repair.
+  it('keeps an old task-view receipt approved when statusBar was an unknown false value', async () => {
+    const original = createSetupReceipt();
+    await store.write(original);
+    const file = path.join(stateRoot, 'hello.json');
+    const raw = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+    raw.manifest.slots.push('task-view');
+    raw.manifest.taskView = { html: 'task.html', statusBar: false };
+    await fs.promises.writeFile(file, JSON.stringify(raw));
+    const loaded = store.read('hello');
+    expect(loaded.state).toBe('approved');
+    if (loaded.state !== 'approved') throw new Error('fixture not approved');
+    expect(loaded.receipt).toMatchObject({ revision: original.revision, enabled: true,
+      trust: original.trust, manifest: { taskView: raw.manifest.taskView } });
+    await store.write(loaded.receipt);
+    expect(store.read('hello')).toEqual(loaded);
+  });
+
   it('round trips independent target approval without inferring it from old tasks grants', async () => {
     const receipt = createSetupReceipt();
     receipt.manifest.agent = { tasks: true, targets: true };
@@ -369,6 +389,21 @@ describe('GhostInstallReceiptStore cleanup', () => {
 
   // Rule: approved control points persist across reads, keep only names this manifest still declares,
   // and an older receipt without the field stays approved with no control point granted.
+  // Unit: real receipt write/read dropped a static capability because it is
+  // declared outside subscribe.hooks. Installation must preserve that consent.
+  it('round trips approved static prompt fragments through the installation receipt', async () => {
+    const base = createSetupReceipt();
+    const fragments = [{ id: 'style', text: 'Static task instructions', order: 10, scope: 'selected-task' as const }];
+    const receipt = createGhostInstallReceipt({ ...base,
+      manifest: { ...base.manifest, schemaVersion: 3, minCindyVersion: '0.0.0', systemPrompt: fragments },
+      approvedControlPoints: ['system-prompt'],
+    });
+    await store.write(receipt);
+    expect(await store.readAsync('hello')).toMatchObject({ state: 'approved', receipt: {
+      manifest: { systemPrompt: fragments }, approvedControlPoints: ['system-prompt'],
+    } });
+  });
+
   it('round trips approved control points and keeps older receipts approved without them', async () => {
     const receipt = createSetupReceipt();
     receipt.manifest.subscribe = { hooks: ['will-routine-run', 'will-later-point'] as never };

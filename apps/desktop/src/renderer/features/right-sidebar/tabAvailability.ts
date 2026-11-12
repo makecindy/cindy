@@ -1,4 +1,5 @@
 import type { InstalledGhost } from '../../../shared/ghost';
+import { getApprovedGhostHostUi } from '../../../shared/ghost';
 import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
 import { FEATURE_RETIREMENTS } from '../../../shared/featureRetirements';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
@@ -33,6 +34,9 @@ function isUnavailablePluginView(
   const ghost = availability.pluginViewGhosts.find(
     (candidate) => installedGhostStoragePart(candidate) === instanceId,
   );
+  const viewId = (tab.state as PluginViewTabState | null)?.resourceViewId;
+  if (viewId) return !ghost || ghost.enabled === false || ghost.uiCapabilityApproved !== true ||
+    !getApprovedGhostHostUi(ghost)?.views?.some(view => view.id === viewId && view.scope !== 'task');
   return !ghost || !isGlobalTabCapableGhost(ghost);
 }
 
@@ -47,7 +51,10 @@ function isUnavailablePluginTask(
   const ghost = (availability.pluginTaskGhosts ?? availability.installedGhosts).find(
     (candidate) => installedGhostStoragePart(candidate) === instanceId,
   );
-  return !ghost || ghost.enabled === false || !ghost.manifest.taskView;
+  const viewId = (tab.state as { resourceViewId?: string } | null)?.resourceViewId;
+  return !ghost || ghost.enabled === false || (viewId
+    ? ghost.uiCapabilityApproved !== true || !getApprovedGhostHostUi(ghost)?.views?.some(view => view.id === viewId && view.scope === 'task')
+    : !ghost.manifest.taskView);
 }
 
 function retiredTab(

@@ -1,3 +1,5 @@
+import { readHostProcessStatus } from './control.mjs';
+import { getOrCreateHostDeviceId } from './auth/device-identity.mjs';
 /**
  * `cindy-host login` — complete the existing Cindy browser login from the host.
  *
@@ -7,7 +9,7 @@
 
 import { spawn } from 'node:child_process';
 
-import { createRequire } from 'node:module';
+
 
 import { CindyAuthClient } from '@cindy/auth-client';
 
@@ -16,8 +18,6 @@ import { runHostLogin } from './auth/login.mjs';
 import { createCredentialStore } from './credentials/store.mjs';
 import { resolveHostDataDir, resolveHostRegion } from './profile-path.mjs';
 
-// CommonJS package without ESM named exports; use the same entry Desktop loads.
-const { machineIdSync } = createRequire(import.meta.url)('node-machine-id');
 
 /** Open the system browser without blocking the login flow on its exit. */
 function openInSystemBrowser(url) {
@@ -50,28 +50,36 @@ export async function runLoginCommand(argv, io = {}) {
 
   const endpoints = readAuthEndpoints(region);
   const userDataDir = resolveHostDataDir();
+  const running = await readHostProcessStatus(userDataDir);
+  if (running.running !== false) throw new Error('Stop Cindy Host before changing its sign-in, then start it again.');
   const store = await createCredentialStore({
     userDataDir,
     keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
   });
 
+  const deviceId = getOrCreateHostDeviceId(userDataDir);
   const client = new CindyAuthClient({
     baseUrl: endpoints.authApiBaseUrl,
     region,
-    deviceId: machineIdSync(),
+    deviceId,
     clientType: 'desktop',
     fetch: (input, init) => globalThis.fetch(input, init),
   });
 
-  out('Opening the Cindy login page in your browser…');
+  const noOpen = argv.includes('--no-open') || (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY);
+  out(noOpen ? 'Open the following Cindy login page on a device with a browser.' : 'Opening the Cindy login page in your browser…');
   const result = await runHostLogin({
     client,
+    deviceId,
     store,
     region,
     hostedCallbackUrl: endpoints.authDesktopCallbackUrl,
     openBrowser: async (url) => {
       out(`If it does not open, visit:\n${url}`);
-      await openInSystemBrowser(url);
+      if (!noOpen) {
+        try { await openInSystemBrowser(url); }
+        catch { err('The browser could not open automatically. Open the link above; login is still waiting.'); }
+      }
     },
     method,
   });

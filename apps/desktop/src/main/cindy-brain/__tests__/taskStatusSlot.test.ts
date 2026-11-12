@@ -5,6 +5,7 @@ import type { InstalledGhost } from '../../../shared/ghost';
 import type { GhostTaskStatusRequest } from '../../../shared/ghostTaskStatus';
 import { createGhostTaskStatusHandler, GhostTaskStatusSlot } from '../taskStatusSlot';
 import type { IpcMainInvokeEvent } from 'electron';
+import { createGhostPageBridge } from '../../../shared/ghostPageBridge';
 
 function setup() {
   const ghost = {
@@ -114,7 +115,7 @@ it('re-queries after a wake that cancels the request synchronously', async () =>
   } as InstalledGhost;
   const send = vi.fn(() => true);
   const holder: { slot?: GhostTaskStatusSlot } = {};
-  const wake = vi.fn(async () => {
+  const wake = vi.fn(async () => true).mockImplementationOnce(async () => {
     holder.slot!.cancel('local-demo');
     return true;
   });
@@ -126,10 +127,12 @@ it('re-queries after a wake that cancels the request synchronously', async () =>
   });
   expect(await holder.slot.query('local-demo', 'task')).toBeNull();
   expect(send).not.toHaveBeenCalled();
-  void holder.slot.query('local-demo', 'task');
+  const retry = holder.slot.query('local-demo', 'task');
   await Promise.resolve();
   expect(wake).toHaveBeenCalledTimes(2);
   expect(send).toHaveBeenCalledTimes(1);
+  holder.slot.cancel('local-demo');
+  expect(await retry).toBeNull();
 });
 
 it('rejects oversized data and releases failed or timed-out requests', async () => {
@@ -249,4 +252,13 @@ it('projects the current local task route without task contents and rejects a ro
   s.send.mockClear();
   expect(await handler({} as IpcMainInvokeEvent, 'task')).toEqual([]);
   expect(s.send).not.toHaveBeenCalled();
+});
+
+// Unit merge regression: upstream moved preload APIs into the shared bridge.
+// The plugin-facing setStatus entry must still send the exact reply envelope.
+it('preserves the status reply API after the shared page bridge migration', async () => {
+  const send = vi.fn(async () => ({ ok: true }));
+  const bridge = createGhostPageBridge({ ping: async () => ({ ok: true, id: 'demo' }), send });
+  await expect(bridge.api.ui.setStatus({ requestId: 'r', label: '50%' })).resolves.toEqual({ ok: true });
+  expect(send).toHaveBeenCalledExactlyOnceWith({ type: 'task-status-result', requestId: 'r', label: '50%' });
 });

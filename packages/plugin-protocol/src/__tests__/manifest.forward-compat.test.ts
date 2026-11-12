@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateGhostManifest } from '../manifest.js';
+import { validateGhostManifest, validateStoredGhostManifest } from '../manifest.js';
 
 const base = {
   schemaVersion: 3, minCindyVersion: '0.1.0', id: 'future-declarations',
@@ -77,4 +77,16 @@ it('validates opt-in delegation while preserving unrelated future agent fields',
     expect(validateGhostManifest({ ...base, agent: invalid }).ok).toBe(false);
   }
   expect(validateGhostManifest({ ...base, agent: { tasks: true, targets: true } })).toMatchObject({ ok: true });
+});
+
+// Unit #9676 P1: persisted releases retain historical unknown fields; new
+// packages still reject malformed declarations. Existing new-package tests miss this.
+it.each([false, 'true', { future: true }])('round-trips historical statusBar %j without enabling it', (statusBar) => {
+  const raw = { ...base, taskView: { html: 'task.html', statusBar } };
+  expect(validateGhostManifest(raw).ok).toBe(false);
+  const result = validateStoredGhostManifest(raw);
+  expect(result).toMatchObject({ ok: true, manifest: { taskView: raw.taskView } });
+  if (!result.ok) return;
+  expect(result.manifest.taskView?.statusBar).not.toBe(true);
+  expect(validateStoredGhostManifest(result.manifest)).toEqual(result);
 });

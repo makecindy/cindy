@@ -8,6 +8,14 @@ import {
 } from '@/lib/messageAutomationOrigin';
 
 describe('toMessageAutomationOrigin', () => {
+  // 回归：系统合批没有唯一发送方任务，不能跳转首个 Worker（unit）。
+  it.each([undefined, 'worker-1'])('keeps batch count without a single-worker link (%s)', senderSessionId => {
+    expect(toMessageAutomationOrigin({ kind: 'orca', senderLabel: 'A', senderSessionId,
+      autoBridge: true, autoBridgeBatchCount: 2 })).toEqual({
+      kind: 'session', orca: true, orcaAutoBridgeBatchCount: 2,
+    });
+  });
+
   it('keeps scheduler origins unchanged', () => {
     const origin = { kind: 'scheduler', scheduleId: 's1', scheduleName: 'Nightly', runId: 'r1' };
     expect(toMessageAutomationOrigin(origin)).toBe(origin);

@@ -39,7 +39,7 @@ import { getClientEndpoint } from '../clientEndpointsService.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { deviceName } from '../device-link/deviceName.js';
-import { getResolvedMainLocale, mainStringKeysUnder, rawMainString } from '../i18n.js';
+import { getResolvedMainLocale, mainStringKeysUnder, rawMainString } from '../i18n.desktop.js';
 import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
 import { createLogger } from '../logger.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
@@ -53,7 +53,7 @@ import {
   triggerCodexAccountUsageRefresh,
   triggerXaiSubscriptionUsageRefresh,
 } from '../maker-ipc/usage.js';
-import { serverApiFetch } from '../serverApiClient.js';
+import { serverApiFetch } from '../serverApiClient.desktop.js';
 import { observeClaudeAccountUsage, readClaudeAccountUsageRevision, readClaudeAccountUsageSnapshot, triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { readUsageHistory, type UsageHistoryPayload } from '../usage/usageHistory.js';

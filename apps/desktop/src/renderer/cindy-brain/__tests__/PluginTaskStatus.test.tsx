@@ -17,9 +17,14 @@ const mocks = vi.hoisted(() => ({
     },
   ],
   disabled: new Set<string>(),
+  realPolicy: false,
 }));
 vi.mock('../useInstalledGhosts', () => ({ useInstalledGhosts: () => mocks.ghosts }));
-vi.mock('../ghostWorkdirFilter', () => ({ useWorkdirDisabledGhostIds: () => mocks.disabled }));
+vi.mock('../ghostWorkdirFilter', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../ghostWorkdirFilter')>();
+  return { ...actual, useWorkdirDisabledGhostIds: (...args: Parameters<typeof actual.useWorkdirDisabledGhostIds>) =>
+    mocks.realPolicy ? actual.useWorkdirDisabledGhostIds(...args) : mocks.disabled };
+});
 vi.mock('@/features/right-sidebar/lib/openPluginTaskTab', () => ({
   openPluginTaskTab: mocks.open,
 }));
@@ -32,6 +37,7 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   mocks.disabled.clear();
+  mocks.realPolicy = false;
   mocks.open.mockReset();
   mocks.ghosts = originalGhosts;
 });
@@ -138,4 +144,26 @@ it('hides the launcher when the sidebar belongs to another task', async () => {
   await act(async () => {});
   expect(request).not.toHaveBeenCalled();
   expect(screen.queryByRole('button')).toBeNull();
+});
+
+// Unit #9676 P2: real hook's transient null was hidden by the old policy mock.
+// A display-only roster update must not hide the launcher or restart its timer.
+it('keeps a workdir launcher stable across unrelated projections using the real policy hook', async () => {
+  vi.useFakeTimers();
+  mocks.realPolicy = true;
+  const request = vi.fn(async () => status('50%'));
+  bridge(request);
+  const policy = vi.fn(async () => ({ workdirKey: '/project', disabled: [] }));
+  Object.assign(window.electronAPI.ghosts, { workdirPrefs: policy });
+  const view = render(<PluginTaskStatus sessionId="one" workingDir="/project" />);
+  await act(async () => {});
+  expect(screen.getByRole('button').textContent).toBe('Demo: 50%');
+  mocks.ghosts = mocks.ghosts.map(g => ({ ...g }));
+  view.rerender(<PluginTaskStatus sessionId="one" workingDir="/project" />);
+  expect(screen.getByRole('button').textContent).toBe('Demo: 50%');
+  await act(async () => { await vi.advanceTimersByTimeAsync(29_000); });
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(policy).toHaveBeenCalledTimes(1);
+  await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+  expect(request).toHaveBeenCalledTimes(2);
 });

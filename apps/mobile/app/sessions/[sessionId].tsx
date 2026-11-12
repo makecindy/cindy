@@ -1,3 +1,4 @@
+import { parseSourceSessionTarget } from '@cindy/maker-shared/message-source';
 import { TaskArchiveUndoSlot } from '@/session/TaskArchiveUndoNotice';
 import { composerRowChrome } from '@/session/composerGeometry';
 import { ResizableComposerInputRow } from '@/session/ResizableComposerInputRow';
@@ -13,7 +14,6 @@ import { SessionQuickSendProvider } from '@/session/SessionQuickSendContext';
 import { incomingShareSlotOrder } from '@/session/mobileLocalAttachmentUpload';
 import { useIncomingShareComposer } from '@/session/useIncomingShareComposer';
 import { incomingShareDestination } from '@/session/incomingShare';
-import { CompanionFollowUpInvitation } from '@/session/CompanionFollowUpInvitation';
 import { ModelSpeedIcon } from '@/session/ModelSpeedIcon';
 import { useSessionHistorySearch } from '@/session/useSessionHistorySearch';
 import { useContentRecoveryDiagnostics } from '@/debug/useContentRecoveryDiagnostics';
@@ -396,7 +396,6 @@ import {
   replaceComposerTextRange,
   serializeComposerDocument,
   sessionLinkComposerNode,
-  todoReferenceComposerNode,
   slashCommandTextNode,
   textComposerDocument,
   displayComposerSlashRuntimeAliases,
@@ -419,7 +418,6 @@ import { QuoteCapsule } from '@/session/QuoteCapsule';
 import { formatQuotesForSend, stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
-import { confirmFullAccessChange } from '@/session/fullAccessConfirmation';
 import {
   confirmAgentLocationForPick,
   confirmMobileSessionAgentSwitch,
@@ -2716,8 +2714,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     ?? pendingCreationReason
     ?? (sessionOperationLayout.showQueue ? null : composerDisabledReason);
   // 代输入在伙伴对话里同样贴在输入框上方:它是一条入口,填写在原生表单里完成。
-  const companionInlineInteraction = companionChat && pending.length > 0 && !pendingInteractionFullHeight
-    && activePendingKind !== 'input_handoff';
+  const inlineFeedbackInteraction = activePendingKind === 'issue_confirm'
+    && activePendingInteraction?.request.remoteConfirmSupported === true
+    && !pendingInteractionBlocksComposer;
+  const companionInlineInteraction = inlineFeedbackInteraction || (companionChat && pending.length > 0 && !pendingInteractionFullHeight
+    && activePendingKind !== 'input_handoff');
   const showMessageHistory = companionInlineInteraction || sessionOperationLayout.messageHistoryMode === 'visible'
     || (sessionOperationLayout.messageHistoryMode === 'collapsed' && pendingHistoryExpanded);
   // 冷开即出壳:session 元信息还没回来,但不是真正不可用(离线/被撤销,看 remoteUnavailableReason)——
@@ -4950,6 +4951,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     () => historyView.snapshot.ready ? historyView.snapshot.nextCursor : oldestMessageCursor(latestMessagesRef.current),
     [messageStructureToken, historyView.snapshot],
   );
+  // Only an authoritative pending snapshot can distinguish a live question from
+  // an unanswered card left behind by a closed/restarted executor.
+  const pendingQuestionIds = useMemo(() => pendingInteractionsAuthoritative
+    ? new Set(pending.filter((item) => item.request.kind === 'ask_user_question')
+      .map((item) => String(item.request.requestId))) : undefined,
+  [pending, pendingInteractionsAuthoritative]);
   const streamingRenderPrefixRef = useRef<MobileStreamingRenderPrefixCache | null>(null);
   const renderWindow = useMemo(
     () => {
@@ -4966,19 +4973,20 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             renderOrphanTaskUpdates: makerTurnRunning,
             sessionId,
             sessionSource: currentSession?.source,
+            pendingQuestionIds,
           },
           prefixCache: streamingRenderPrefixRef,
           taskUpdates,
         },
         history: {
           view: historyView.view, snapshot: historyView.snapshot, messages: projectedMessages,
-          streaming: isMessageListStreaming, sessionId, sessionSource: currentSession?.source, taskUpdates,
+          streaming: isMessageListStreaming, sessionId, sessionSource: currentSession?.source, taskUpdates, pendingQuestionIds,
           pendingHandoff: handoff.pending, staleTail: handoff.tail, localUserClientIds,
         },
         forkOrigin, errorTailClientId, activeErrorClientId, previousRenderState: previousRenderItemsRef.current,
       });
     },
-    [optimisticUsers, currentSession?.source, localUserClientIds, renderMessageStructureToken, historyView.snapshot, historyView.view, handoff.pending, handoff.tail, errorTailClientId, activeErrorClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, projectedMessages, projectedMessageStructureChangedIndexes, sessionId, taskUpdates],
+    [pendingQuestionIds, optimisticUsers, currentSession?.source, localUserClientIds, renderMessageStructureToken, historyView.snapshot, historyView.view, handoff.pending, handoff.tail, errorTailClientId, activeErrorClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, projectedMessages, projectedMessageStructureChangedIndexes, sessionId, taskUpdates],
   );
   // Search, media and sharing only see durable user rows. Local user boundaries
   // still participate in grouping and in the message list below.
@@ -4987,7 +4995,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   [renderWindow.items, optimisticClientIds]);
   const renderItemsStructureKey = useMemo(
     () => ({}),
-    [optimisticUsers, historyView.snapshot, errorTailClientId, activeErrorClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, sessionId, taskUpdates],
+    [pendingQuestionIds, optimisticUsers, historyView.snapshot, errorTailClientId, activeErrorClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, sessionId, taskUpdates],
   );
   // Reconciliation must only use committed rows. Unlike the prefix cache above, a speculative
   // render-item baseline could leak rows from an abandoned render and destabilize tail memoization.
@@ -6296,9 +6304,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     openedCompanionSettings.current = sessionId;
     openCompanionSettings('capabilities');
   }, [routeCompanionSettings, sessionId, openCompanionSettings]);
-  const followUpScope = JSON.stringify([auth.accountGeneration, deviceId, sessionId]);
-  const [followUpEngaged, setFollowUpEngaged] = useState<string | null>(null);
-  useEffect(() => setFollowUpEngaged(null), [followUpScope]);
   const companionWorkingLabel = useCompanionWorkingLabel({ sessionId, deviceId, botId: companionDisplay?.ref.id ?? '',
     active: companionChat && showComposerActivity, messages, reconnectAttempt: remoteSessionRunStatus.reconnectAttempt });
   const companionAvatarData = companionDisplay?.display.avatar;
@@ -7423,7 +7428,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       // 取消归档属于任务本身,不属于页面:电脑已接收就要做,即使用户已离开这个页面。
       if (enqueueAccepted) void unarchiveSessionAfterSend(sessionId, deviceId, invoke);
       if (!sendScopeStillAlive()) return messageAccepted;
-      if (enqueueAccepted) setFollowUpEngaged(followUpScope);
       if (sessionAtSend.permissionMode === 'plan') {
         // 一次性语义(对齐桌面 PR#494 / 产品决策):计划模式只对本条消息生效,发送后
         // 自动恢复进入前的权限档;本条消息通常已按 plan 派发,切换只影响后续消息。
@@ -8833,14 +8837,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       : (runtimeOptions?.permissionOptions.find((option) => option.id !== 'plan')?.id ?? 'ask')
     : (currentSession?.permissionMode ?? 'ask');
   // 权限模式独立浮窗(2026-07-29 用户裁决,对齐 Codex 与新建页):composer 左侧图标钮
-  // 点开;选择走既有 confirmFullAccessChange + maker:set-permission-mode 链路。
+  // 点开;选择走既有 maker:set-permission-mode 链路。
   const displayPermissionLabel =
     runtimeOptions?.permissionOptions.find((option) => option.id === displayPermissionMode)?.label
       ?? displayPermissionMode;
   const selectSessionPermissionMode = useCallback((mode: string) => {
     void (async () => {
       if (!currentSession) return;
-      if (!(await confirmFullAccessChange(currentSession.permissionMode, mode))) return;
       await runControlAction(
         () => maker.setPermissionMode(sessionId, mode),
         { permissionMode: mode },
@@ -10060,12 +10063,20 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     router,
   ]);
 
-  // 「由任务「X」发送」来源标签:工具只在同一设备的任务之间投递,来源任务与当前任务同设备。
+  // 跨电脑来源按宿主记录的设备打开；无前缀的历史来源仍属于当前任务所在设备。
   const openOriginSession = useCallback((originSessionId: string) => {
-    if (!deviceId || !originSessionId || originSessionId === sessionId) return;
+    const target = parseSourceSessionTarget(originSessionId);
+    const targetDeviceId = target?.deviceId ?? deviceId;
+    if (!target || !targetDeviceId) return;
+    if (target.sessionId === sessionId && targetDeviceId === deviceId) return;
+    const targetDevice = remoteSessionStore.getDeviceIdentity().find((item) => item.deviceId === targetDeviceId);
     router.push({
       pathname: '/sessions/[sessionId]',
-      params: { sessionId: originSessionId, deviceId, deviceName },
+      params: {
+        sessionId: target.sessionId,
+        deviceId: targetDeviceId,
+        deviceName: targetDevice?.name ?? (targetDeviceId === deviceId ? deviceName : targetDeviceId),
+      },
     });
   }, [deviceId, deviceName, router, sessionId]);
 
@@ -10213,33 +10224,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     requestAnimationFrame(() => composerInputRef.current?.focus());
   }, [applyComposerDocument, canUseComposer, currentSession, deviceId, sessionId]);
 
-  // 伙伴近况里点一条待办：作为待办引用放进输入框，主人写一句话交代，伙伴按话更新它。
-  const quoteTodoInComposer = useCallback((todo: { id: string; title: string }) => {
-    if (!canUseComposer || !companionResource) return;
-    const node = todoReferenceComposerNode({ botId: companionResource.ref.id, todoId: todo.id, title: todo.title });
-    const editor = composerInputRef.current;
-    if (editor) editor.insertNode(node);
-    else applyComposerDocument(appendComposerNode(composerDocumentRef.current, node));
-    requestAnimationFrame(() => composerInputRef.current?.focus());
-  }, [applyComposerDocument, canUseComposer, companionResource]);
-
-  // 伙伴近况里的「帮我查查」：输入框空着就作为主人的一句话直接发出（与手动发送同一条路径，带来源设备）；
-  // 已有草稿或附件时不替主人连同草稿一起发，只把这句话放进输入框。
-  const askCompanionInComposer = useCallback((text: string) => {
-    if (!canUseComposer || !composerDraftHydrated) return;
-    const idle = !composerDocumentHasContent(composerDocumentRef.current)
-      && attachments.length === 0 && pendingUploads.length === 0 && !queueEditingRef.current;
-    if (idle && sendLatestRef.current) {
-      void sendLatestRef.current({ documentOverride: textComposerDocument(text) });
-      return;
-    }
-    const node = { type: 'text' as const, text: composerDocumentHasContent(composerDocumentRef.current) ? `\n${text}` : text };
-    const editor = composerInputRef.current;
-    if (editor) editor.insertNode(node);
-    else applyComposerDocument(appendComposerNode(composerDocumentRef.current, node));
-    requestAnimationFrame(() => composerInputRef.current?.focus());
-  }, [applyComposerDocument, attachments.length, canUseComposer, composerDraftHydrated, pendingUploads.length]);
-
   const deleteMessage = useCallback((clientId: string) => {
     if (!deviceId || messageActionBusy) return;
     // 运行中能否删由被控端判定:点停止后本地运行态可能晚于被控端收敛,
@@ -10351,9 +10335,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         settingsRequest={companionSettingsRequest?.sessionId === sessionId ? companionSettingsRequest : undefined}
         working={!!companionWorkingLabel}
         sessionId={sessionId ?? ''}
-        onQuoteTodo={quoteTodoInComposer}
-        onAskCompanion={askCompanionInComposer}
-        askCompanionReady={canUseComposer && composerDraftHydrated}
         onSearch={() => setSearchOpen(true)}
         onBack={goBackToHome} />
           )}
@@ -10780,13 +10761,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
               executionDevicesError={collab.workerForm.executionDevicesError}
               busy={collab.busy}
               customRoleMode={collab.workerForm.customRoleMode}
+              description={contextSheetView === 'collab' ? t('session.collab.enableHint') : null}
               error={collab.error}
               form={collab.workerForm.form}
               notice={contextSheetView === 'collab' ? collab.entryHint : null}
               onAgentChange={collab.workerForm.changeAgent}
               onChange={collab.workerForm.patch}
-              onCustomRoleModeChange={collab.workerForm.setCustomRoleMode}
               onPermissionChange={(mode) => void collab.workerForm.changePermission(mode)}
+              onRemoveRole={collab.workerForm.removeRole}
+              onSelectRole={collab.workerForm.selectRole}
+              roles={collab.workerForm.roles}
+              rolesEditable={collab.workerForm.rolesEditable}
               onPickModel={collab.workerForm.modelPicker.openPicker}
               onPickDirectory={collab.workerForm.directoryPicker.openPicker}
             />
@@ -10815,6 +10800,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         <MountOnFirstOpen open={modelSheetOpen && canConfigureSessionModel}>{() =>
               currentSession && canConfigureSessionModel && runtimeOptions && modelSheetSelection && modelSheetRuntimeOptions ? (
           <ModelPickerSheet
+            subscriptionTaskId={sessionId}
             unified={{
               currentSelection: { agentKind: sessionAgentKind, activeModelId: currentSession.model, selectedProviderId: currentSession.providerId ?? null, selectedEffort: currentSession.effort ?? '', selectedFastMode: currentSession.fastMode ?? false,
                     },
@@ -10950,7 +10936,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           />
         ) : null}</MountOnFirstOpen>
         {/* 权限模式独立浮窗(composer 权限图标钮点开)。两端同一语义:点选先关浮窗,关闭完成后
-            再走 confirmFullAccessChange + maker:set-permission-mode。 */}
+            再走 maker:set-permission-mode。 */}
         {currentSession && runtimeOptions ? (
           <NativePermissionSheet
             visible={permissionSheetOpen && canUseRemoteSessionControls}
@@ -11027,7 +11013,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                     remoteDeviceId={deviceId}
                     bottomOverlayHeight={bottomOverlayHeight}
                     renderScrollComponent={renderMessageScroll}
-                    contentBottomInset={companionInlineInteraction && !shareSelectionActive
+                    contentBottomInset={companionInlineInteraction && !inlineFeedbackInteraction && !shareSelectionActive
                       ? spacing.md
                       : nativeComposerFrameAvailable && sessionOperationLayout.composerSlot === 'editable' && !shareSelectionActive
                       ? bottomOverlayHeight > 0 ? bottomOverlayHeight : MOBILE_MESSAGE_LIST_BOTTOM_PADDING
@@ -11347,12 +11333,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             <View
               style={[
                 styles.pendingInteractionSurface,
-                pendingInteractionFullHeight
+                pendingInteractionFullHeight && activePendingKind !== 'issue_confirm'
                   ? {
-                    height: nativeShellLayout.pendingSurfaceExpandedHeight,
-                    maxHeight: nativeShellLayout.pendingSurfaceExpandedHeight,
+                    height: Math.min(nativeShellLayout.pendingSurfaceExpandedHeight, composerRegion.height),
+                    maxHeight: Math.min(nativeShellLayout.pendingSurfaceExpandedHeight, composerRegion.height),
                   }
-                  : { maxHeight: nativeShellLayout.pendingSurfaceMaxHeight },
+                  : { maxHeight: Math.min(nativeShellLayout.pendingSurfaceMaxHeight, composerRegion.height) },
               ]}
               testID="interaction.bottomSurface"
             >
@@ -11360,7 +11346,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 <View
                   style={[
                     styles.pendingInteractionFullContent,
-                    { height: nativeShellLayout.pendingSurfaceExpandedHeight },
+                    // The native control region can be shorter than the screen-derived
+                    // sheet height. Keep the pinned footer inside that clipping boundary.
+                    activePendingKind === 'issue_confirm'
+                      ? { flexGrow: 0, flexShrink: 1, maxHeight: Math.min(nativeShellLayout.pendingSurfaceMaxHeight, composerRegion.height) }
+                      : { height: Math.min(nativeShellLayout.pendingSurfaceExpandedHeight, composerRegion.height) },
                   ]}
                   testID="interaction.bottomScroll"
                 >
@@ -11371,7 +11361,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                     safeAreaBottomInset={insets.bottom}
                     collapse={pendingInteractionCollapse}
                     deviceId={deviceId}
-                    fillAvailableHeight
+                    fillAvailableHeight={activePendingKind !== 'issue_confirm'}
                     sessionId={sessionId}
                     interactions={pending}
                     activeRequestId={pendingInteractionActiveRequestId}
@@ -11452,13 +11442,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                     />
                   ) : null}
                 </View>
-              ) : null}
-              {companionChat && companionResource?.ref.id === 'cindy-default'
-                && companionResource.links.some(
-                          (link) => link.rel === 'conversation' && link.target.kind === 'session' && link.target.sessionId === sessionId)
-                && followUpEngaged === followUpScope && !remoteSessionRunning && !isSessionStreaming
-                && pending.length === 0 && !shareSelectionActive && !remoteUnavailableReason ? (
-                <CompanionFollowUpInvitation key={followUpScope} deviceId={deviceId} deviceName={deviceName} botId="cindy-default" />
               ) : null}
               {/* Desktop BotWorkingStatus: a teammate's paced public status stays above the composer,
                   also while the user reads older messages. Interactions carry their own panel. */}

@@ -125,12 +125,15 @@ export type ProviderBindingState =
 
 /** renderer 可见的 provider-neutral 绑定快照；不含任何 token/secret。 */
 export interface ProviderBindingView {
+  workingDevice?: { name: string | null; isCurrent: boolean };
   provider: HookProvider;
   state: ProviderBindingState;
   attemptId: string | null;
   bindingId: string | null;
   principalId: string | null;
   principalName: string | null;
+  tenantKey?: string | null;
+  tenantName?: string | null;
   scopeId: string | null;
   scopeName: string | null;
   connectUrl: string | null;
@@ -146,7 +149,19 @@ export interface ProviderBindingView {
 }
 
 /** provider-neutral(Telegram / X / 飞书)的独立设置与绑定视图。 */
+export interface FeishuAppView {
+  appId: string;
+  brand: 'feishu' | 'lark';
+  appType: 'self_built' | 'store';
+  botName: string | null;
+  /** Internal Cindy organization slug; not user-facing. */
+  organization: string | null;
+  /** Feishu company name; distinct from the Cindy organization. */
+  tenantName?: string | null;
+}
+
 export interface ProviderHookView {
+  applications?: FeishuAppView[];
   /** Local companion assignment, currently only used by the official X provider. */
   companionBotId?: string | null;
   enabled: boolean;
@@ -161,6 +176,9 @@ export interface ProviderHookView {
   /** Telegram 行为设置增量能力；旧 main 快照缺省时按 false。 */
   behaviorAvailable?: boolean;
   binding: ProviderBindingView | null;
+  /** Store-app identities; a binding attempt is shown separately in binding. */
+  bindings?: ProviderBindingView[];
+  multiBindAvailable?: boolean;
   /**
    * 派发任务时使用的默认工作目录别名(null = 内置「对话」伪目录)。
    *

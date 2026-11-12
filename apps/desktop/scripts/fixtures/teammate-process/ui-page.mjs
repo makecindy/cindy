@@ -240,8 +240,8 @@ export default {
     const journal = page.locator('[data-teammate-process]');
     await journal.waitFor();
     assert.equal(await journal.count(), 1, 'One disclosure owns all intermediate notes');
-    // Visible UI regression: process and reply each own a portrait; expansion
-    // must not repeat it in tool details. Hidden spacers failed this check.
+    // #8864 regression: process -> reply must retain a single visible portrait
+    // throughout completion and expansion, rather than splitting the turn visually.
     const processPortrait = journal.locator('xpath=../..').getByTestId('fixture-partner-avatar');
     assert.equal(await processPortrait.count(), 1);
     assert.equal(await processPortrait.isVisible(), true, 'The process portrait is visible');
@@ -286,7 +286,7 @@ export default {
       assert.equal(await heading.getAttribute('aria-expanded'), 'true', 'Keep inspected work open on completion');
     }
     await ui.capture('records');
-    assert.equal(await page.getByTestId('fixture-partner-avatar').count(), 2, 'Expanded process and final reply each have one portrait');
+    assert.equal(await page.getByTestId('fixture-partner-avatar').count(), 1, 'Process and final reply share one portrait');
     assert.equal(await processPortrait.isVisible(), true);
     await heading.click();
     assert.equal(await heading.getAttribute('aria-expanded'), 'false');

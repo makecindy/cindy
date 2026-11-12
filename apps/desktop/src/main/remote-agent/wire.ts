@@ -114,6 +114,8 @@ export interface RemoteAgentWireStartOptions {
   botProfileContextPrompt?: string;
   botUserProfilePrompt?: string;
   makerMemoryEnabled?: boolean;
+  /** 记忆开关由伙伴自己的设置决定；旧被控端解码时丢弃。 */
+  makerMemorySwitchOwned?: boolean;
   makerMemoryScopeKey?: string;
   makerMemoryIndexSnapshot?: string;
   /** 本机(任务所在电脑)的插件花名册段；旧控制端不带，旧被控端解码时丢弃。 */
@@ -327,7 +329,7 @@ const START_STRING_FIELDS = [
   'resumeSessionId',
 ] as const;
 const START_BOOL_FIELDS = [
-  'fastMode', 'thinkingEnabled', 'makerMemoryEnabled', 'planMode', 'codexHistoryHasProductPrompt',
+  'fastMode', 'thinkingEnabled', 'makerMemoryEnabled', 'makerMemorySwitchOwned', 'planMode', 'codexHistoryHasProductPrompt',
 ] as const;
 
 /** vendorOptions 里只有这些是可序列化、对另一台电脑有意义的。 */

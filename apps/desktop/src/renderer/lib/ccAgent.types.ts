@@ -79,6 +79,8 @@ export interface MessageSessionOrigin {
    * 「来自 Worker「role」的消息」；来源标签仍只在有 senderSessionId 时出现。
    */
   orcaSenderLabel?: string;
+  /** 系统合批总条数；不把整批归到首个 Worker。 */
+  orcaAutoBridgeBatchCount?: number;
   /** true = 由 Orca 落库来源（kind:'orca'）投影而来。 */
   orca?: true;
 }
@@ -93,7 +95,7 @@ export type MessageAutomationOrigin = MessageSchedulerOrigin | MessageSessionOri
 export type StoredMessageOrigin =
   | MessageSchedulerOrigin
   | (MessageSessionOrigin & { displayText?: string })
-  | { kind: 'orca'; senderLabel?: string; displayText?: string; senderSessionId?: string };
+  | { kind: 'orca'; senderLabel?: string; displayText?: string; senderSessionId?: string; autoBridge?: true; autoBridgeBatchCount?: number };
 
 /** 新任务「让插件选」的结果记录(第一条消息下方的一行说明)。 */
 export interface PluginModelRouteNote {
@@ -104,6 +106,8 @@ export interface PluginModelRouteNote {
   effort?: string;
   reason?: string;
   why?: 'no-opinion' | 'failed' | 'unavailable-route';
+  /** 这行说明来自用户的模型组而不是插件(pluginName 是路线的名字)；缺省 = 插件。 */
+  source?: 'model-group';
 }
 
 /**

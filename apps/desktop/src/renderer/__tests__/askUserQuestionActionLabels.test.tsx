@@ -73,7 +73,12 @@ describe('AskUserQuestionPrompt action labels', () => {
     })));
     const link = await view.findByRole('link', { name: 'notes.txt' });
     link.focus();
-    fireEvent.click(link);
+    // PR #9754 CI: the real editor's cold import can exceed the DOM wait's
+    // 1s budget on Windows. Finish loading before checking keyboard behavior.
+    await act(async () => {
+      fireEvent.click(link);
+      await import('../components/chat/TextLightbox');
+    });
     await waitFor(() => expect(document.querySelector('[data-text-lightbox-card]')).not.toBeNull());
     await view.findByRole('tooltip');
     vi.useFakeTimers();

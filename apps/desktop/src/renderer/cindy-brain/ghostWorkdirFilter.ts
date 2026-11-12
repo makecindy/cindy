@@ -51,21 +51,24 @@ export function useWorkdirDisabledGhostIds(
   ghosts: InstalledGhost[],
   enabled = true,
 ): Set<string> | null {
+  // Directory policy depends on installed identities, not OAuth/display projections.
+  const identities = JSON.stringify(ghosts.map(installedGhostStoragePart).sort());
+  const hasGhosts = ghosts.length > 0;
+  const owner = getDataOwnerGeneration();
   const [snapshot, setSnapshot] = useState<{
-    workdir: typeof workdir; ghosts: InstalledGhost[]; disabled: Set<string>;
+    workdir: typeof workdir; identities: string; owner: typeof owner; disabled: Set<string>;
   } | null>(null);
   useEffect(() => {
-    if (!enabled || !workdir?.trim() || ghosts.length === 0) return;
+    if (!enabled || !workdir?.trim() || !hasGhosts) return;
     let current = true;
     let workdirKey: string | undefined;
     let revision = 0;
     const refresh = () => {
-      const owner = getDataOwnerGeneration();
       const requested = ++revision;
       void Promise.resolve().then(() => window.electronAPI.ghosts.workdirPrefs(workdir)).then((policy) => {
         if (!current || requested !== revision || !isDataOwnerGenerationCurrent(owner)) return;
         workdirKey = policy.workdirKey;
-        setSnapshot({ workdir, ghosts, disabled: new Set(policy.disabled) });
+        setSnapshot({ workdir, identities, owner, disabled: new Set(policy.disabled) });
       }).catch(() => {
         // Unknown policy must not expose a previously enabled directory's commands.
         if (current && requested === revision && isDataOwnerGenerationCurrent(owner)) setSnapshot(null);
@@ -77,11 +80,11 @@ export function useWorkdirDisabledGhostIds(
       if (workdirKey === undefined) { refresh(); return; }
       if (workdirKey !== policy.workdirKey) return;
       revision++;
-      setSnapshot({ workdir, ghosts, disabled: new Set(policy.disabled) });
+      setSnapshot({ workdir, identities, owner, disabled: new Set(policy.disabled) });
     });
     refresh();
     return () => { current = false; unsubscribe?.(); };
-  }, [workdir, ghosts, enabled]);
+  }, [workdir, identities, hasGhosts, enabled, owner]);
   if (!enabled || !workdir?.trim() || ghosts.length === 0) return NO_DISABLED_GHOSTS;
-  return snapshot?.workdir === workdir && snapshot.ghosts === ghosts ? snapshot.disabled : null;
+  return snapshot?.workdir === workdir && snapshot.identities === identities && snapshot.owner === owner ? snapshot.disabled : null;
 }

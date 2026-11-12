@@ -5,11 +5,12 @@ import type { Session } from '@/lib/ccAgent.types';
 import { useProjectGroups } from '@/features/cc-agent/hooks/useProjectGroups';
 import i18n from '@/i18n';
 
-const registry = vi.hoisted(() => ({ hosts: [] as RemoteHostSnapshot[], bots: [] }));
+const registry = vi.hoisted(() => ({ hosts: [] as RemoteHostSnapshot[], bots: [] as unknown[] }));
 vi.mock('@/hooks/useRemoteSshHosts', () => ({ useRemoteSshHosts: () => registry.hosts }));
 vi.mock('@/features/bots/botStore', () => ({ useBotProfiles: () => registry.bots }));
 beforeEach(() => {
   registry.hosts = [];
+  registry.bots = [];
 });
 afterEach(cleanup);
 
@@ -39,6 +40,16 @@ it('preserves untouched enriched project nodes through row-only updates', () => 
   rerender({ rows: [updated, rows[1]] });
   expect(result.current.projects[0].sessions[0]).toBe(updated);
   expect(result.current.projects[1]).toBe(before[1]);
+});
+
+// Regression: a moved teammate lane (project kind) used to leave its project for a
+// separate avatar group in the task sidebar. Teammate ownership must not affect grouping.
+it('keeps a teammate-owned project task in its directory project', () => {
+  registry.bots = [{ id: 'bot-a', name: 'Shiba', avatar: '', avatarColor: '', sessions: [{ id: 'lane', role: 'canonical' }] }];
+  const { result } = renderHook(() => useProjectGroups([task('lane', { workingDir: '/workspace/shared' })]));
+  expect(result.current.projects.map((p) => [p.workingDir, p.sessions.map((s) => s.id)])).toEqual([
+    ['/workspace/shared', ['lane']],
+  ]);
 });
 
 it('refreshes SSH labels when only the registry changes', () => {

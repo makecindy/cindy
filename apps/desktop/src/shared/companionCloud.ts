@@ -47,14 +47,20 @@ export const EMPTY_COMPANION_CLOUD_SNAPSHOT: CompanionCloudSnapshot = Object.fre
 
 export type CompanionCloudFailureCode =
   | 'HOME_CONFLICT' | 'OFFLINE' | 'NOT_ENABLED' | 'FAILED' | 'TARGET_UNAVAILABLE' | 'BUSY'
+  /** A different, still effective local Cindy must be merged or moved explicitly. */
+  | 'LOCAL_CINDY_CONFLICT'
   /** The home runs a Cindy that cannot be asked from another computer; change it there. */
   | 'HOME_OUTDATED'
   /** The companion (one of the copies, for a merge) is paused: resume it first. */
-  | 'PAUSED';
+  | 'PAUSED'
+  /** The chosen computer runs a Cindy too old for a V2 teammate (a project): update it first. */
+  | 'TARGET_OUTDATED';
 
 export type CompanionCloudActionResult =
   | { ok: true }
-  | { ok: false; code: CompanionCloudFailureCode; homeDeviceId?: string | null };
+  | { ok: false; code: CompanionCloudFailureCode; homeDeviceId?: string | null;
+      /** Local identity conflict provenance; older/remote replies may omit it. Never a cleanup authorization. */
+      conflictingBotId?: string; conflictingDeviceId?: string | null };
 
 /**
  * What a move does while the companion is still working (a turn running or queued in any of
@@ -100,6 +106,8 @@ export interface CompanionTransferTarget {
   online: boolean;
   /** The computer asking (only in `CompanionHomeChoices`). */
   isSelf?: boolean;
+  /** Its Cindy cannot run a V2 teammate yet: shown, not selectable, until it is updated. */
+  outdated?: boolean;
 }
 
 /**

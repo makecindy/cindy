@@ -19,11 +19,11 @@
  *     debug,仅 queue-restore-failed 保留 info)。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AgentInputCoordinator } from '../agent-input-coordinator.js';
+import { AgentInputCoordinator } from '../agent-input-coordinator.desktop.js';
 import type {
   AgentInputCoordinatorDeps,
   AgentInputSendResult,
-} from '../agent-input-coordinator.js';
+} from '../agent-input-coordinator.desktop.js';
 import { DeferredCodexRestartService } from '../deferredCodexRestart.js';
 import { CodexCredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch.js';
 import {

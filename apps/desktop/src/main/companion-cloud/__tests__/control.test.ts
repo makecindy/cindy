@@ -25,7 +25,7 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
   readValues?: () => Promise<Array<{ key: string; value: unknown }>>; syncProfile?: (botId: string) => Promise<void>;
   turnActive?: () => boolean; homeLink?: CompanionCloudHost['homeLink']; stopBotTurns?: CompanionCloudHost['stopBotTurns'];
   canonicalSession?: CompanionCloudHost['canonicalSession']; paused?: (botId: string) => boolean; refreshForeground?: () => Promise<void>;
-  store?: Parameters<typeof startCompanionCloud>[0]['store']; savedState?: string }) {
+  store?: Parameters<typeof startCompanionCloud>[0]['store']; savedState?: string; upgradeArrived?: CompanionCloudHost['upgradeArrived'] }) {
   const actors: CompanionRuntimeActor[] = [{ id: 'actor-1', kind: 'bot', externalId: 'bot_mia', name: 'Mia', avatar: null, homeDeviceId: options.home }];
   const { api, calls } = fakeApi(options.handler ?? ((route, method) => {
     // The home has uploaded the profile snapshot a take-over builds from.
@@ -41,6 +41,7 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
   const refresh = vi.fn(async () => undefined);
   const publish = vi.fn();
   const onShadowChanged = vi.fn();
+  const log = { warn: vi.fn(), info: vi.fn() };
   const host: CompanionCloudHost = {
     homes: createCompanionHomeRegistry(), openState: () => state,
     readValues: options.readValues ?? (async () => options.values ?? [{ key: 'companion.profile.v1', value: { name: 'Mia' } }]),
@@ -52,14 +53,15 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
     ...(options.turnActive ? { isBotBusy: async () => options.turnActive!() } : {}),
     ...(options.homeLink ? { homeLink: options.homeLink } : {}),
     ...(options.stopBotTurns ? { stopBotTurns: options.stopBotTurns } : {}),
+    ...(options.upgradeArrived ? { upgradeArrived: options.upgradeArrived } : {}),
   };
   runtime = startCompanionCloud({ api, ...(options.backgroundIdentityApi ? { backgroundIdentity: {
     api: options.backgroundIdentityApi, isDeferred: options.identityDeferred ?? (() => false) } } : {}),
     store: options.store, host, endpoint: 'https://chat', humanActorId: 'human', selfDeviceId: 'desk', current: () => true,
     bots: () => actors.filter(a => a.homeDeviceId === 'desk' && !state.isDemoted(a.externalId)).map(a => ({ botId: a.externalId, actorId: a.id, name: a.name })),
-    actors: () => actors, refresh, refreshForeground: options.refreshForeground, publish, onShadowChanged, ...(options.syncProfile ? { syncProfile: options.syncProfile } : {}),
+    actors: () => actors, refresh, refreshForeground: options.refreshForeground, publish, onShadowChanged, log, ...(options.syncProfile ? { syncProfile: options.syncProfile } : {}),
     ...(options.paused ? { paused: options.paused } : {}) });
-  return { runtime, actors, calls, local, state, files, refresh, publish, onShadowChanged, host };
+  return { runtime, actors, calls, local, state, files, refresh, publish, onShadowChanged, host, log };
 }
 
 describe('private report recovery', () => {
@@ -92,7 +94,10 @@ describe('take over', () => {
       return {};
     } });
     t.local.host.findConflictingCindy = vi.fn(async () => 'local-cindy');
-    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED' });
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-cindy', conflictingDeviceId: 'desk' });
+    expect(t.log.warn).toHaveBeenCalledWith('Companion home change failed', {
+      action: 'takeOver', botId: 'bot_mia', code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-cindy',
+    });
     expect(t.calls.every(call => call.method === 'GET')).toBe(true);
     expect(t.actors[0]!.homeDeviceId).toBe('laptop');
     expect(t.local.host.createProfile).not.toHaveBeenCalled();
@@ -182,6 +187,19 @@ describe('take over', () => {
     expect(t.publish).toHaveBeenCalled();
   });
 
+  // Teammate V2 (cloud-companions.md §2.1): a teammate that arrives becomes a project right away,
+  // not only at the next start; a take-over that did not complete does not upgrade it.
+  it('upgrades the teammate to V2 once it arrived, and not when the take-over did not complete', async () => {
+    const upgradeArrived = vi.fn(async () => undefined);
+    const t = setup({ home: 'laptop', upgradeArrived });
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+    await vi.waitFor(() => expect(upgradeArrived).toHaveBeenCalledExactlyOnceWith('bot_mia'));
+    const failed = setup({ home: 'laptop', upgradeArrived: vi.fn(async () => undefined) });
+    vi.mocked(failed.local.host.createProfile).mockRejectedValueOnce(new Error('DISK_FULL'));
+    expect((await failed.runtime.takeOver('bot_mia')).ok).toBe(false);
+    expect(failed.host.upgradeArrived).not.toHaveBeenCalled();
+  });
+
   it('tells what depends on the hidden copies when this one is hidden and again when it is lifted', async () => {
     const t = setup({ home: 'laptop' });
     expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
@@ -198,6 +216,17 @@ describe('take over', () => {
     expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED' });
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
     expect(t.local.host.createProfile).not.toHaveBeenCalled();
+    expect(t.log.warn).toHaveBeenCalledWith('Companion home change failed', {
+      action: 'takeOver', botId: 'bot_mia', code: 'PROFILE_SNAPSHOT_MISSING',
+    });
+  });
+
+  it('does not copy an arbitrary failure message into explicit home-change logs', async () => {
+    const t = setup({ home: 'laptop', handler: () => { throw new Error('private response /some/account/file'); } });
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED' });
+    expect(t.log.warn).toHaveBeenCalledExactlyOnceWith('Companion home change failed', {
+      action: 'takeOver', botId: 'bot_mia', code: 'FAILED',
+    });
   });
 
   it('does not move the home for an incomplete profile snapshot', async () => {
@@ -465,6 +494,26 @@ describe('transfer', () => {
       const uploaded = t.calls.findIndex(call => call.route === '/companion-store/entry' && call.method === 'POST');
       expect(uploaded).toBeLessThan(t.calls.findIndex(call => call.method === 'PATCH'));
     } else expect(stored).toBeUndefined();
+  });
+
+  // Teammate V2 (cloud-companions.md §2.1 第 4 条, 2026-11-10 owner): a computer whose Cindy cannot run
+  // a V2 teammate (caps < 4) is listed as outdated, and still receives one, from here or asked elsewhere.
+  it('hands a V2 teammate to a computer that runs an older Cindy, listed as outdated', async () => {
+    const homeLink = { version: vi.fn(async (deviceId: string) => (deviceId === 'laptop' ? 3 : COMPANION_CLOUD_VERSION)),
+      targets: vi.fn(async () => []), handOver: vi.fn(async () => ({ ok: true as const })) };
+    const t = setup({ home: 'desk', devices: [device('laptop'), device('tablet')], homeLink });
+    expect(await t.runtime.transferTargets()).toEqual([
+      { deviceId: 'laptop', name: 'laptop', online: true, outdated: true },
+      { deviceId: 'tablet', name: 'tablet', online: true },
+    ]);
+    expect(await t.runtime.switchHome('bot_mia', 'laptop')).toEqual({ ok: true });
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(true);
+    expect(t.state.isDemoted('bot_mia')).toBe(true);
+    // Asked from another computer: the home hands it over.
+    const remote = setup({ home: 'laptop', devices: [device('laptop')], homeLink: { ...homeLink, version: vi.fn(async () => COMPANION_CLOUD_VERSION),
+      targets: vi.fn(async () => [{ deviceId: 'tablet', name: 'Tablet', online: true, outdated: true }]) } });
+    expect(await remote.runtime.switchHome('bot_mia', 'tablet')).toEqual({ ok: true });
+    expect(homeLink.handOver).toHaveBeenCalledOnce();
   });
 
   it('only transfers from the home computer', async () => {

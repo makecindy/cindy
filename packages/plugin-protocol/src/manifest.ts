@@ -3,6 +3,7 @@ import { validateWithStoredMcpApps, parseGhostMcpApps, type GhostMcpApps } from 
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from './secretCheck.js';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from './routineEvents.js';
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from './pluginModels.js';
+import { parseGhostSystemPromptFragments, type GhostSystemPromptFragment } from './runtimeContext.js';
 import { GHOST_LOCALES, type GhostLocale } from './locales.js';
 import { validateGhostReadmeDeclaration } from './readme.js';
 export { GHOST_LOCALES, type GhostLocale } from './locales.js';
@@ -423,7 +424,7 @@ export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
  * 在场,冷启动延迟不可接受),校验强制。
  */
 export const GHOST_SUBSCRIBE_HOOKS = ['will-user-message', 'will-assistant-message'] as const;
-export type GhostSubscribeHook = (typeof GHOST_SUBSCRIBE_HOOKS)[number];
+export type GhostSubscribeHook = (typeof GHOST_SUBSCRIBE_HOOKS)[number] | 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory';
 
 /**
  * 订阅槽详单(与 slots 含 'subscribe' 成对;有槽无详单允许装入但零事件——
@@ -899,6 +900,8 @@ export const GHOST_SETUP_KV_KEY_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 
 /** 已校验的 ghost.json 协议文档；Desktop 会再投影成无 slots 的运行时模型。 */
 export interface GhostManifest {
+  /** Static task-scoped system instructions, reviewed verbatim at install/update. */
+  systemPrompt?: GhostSystemPromptFragment[];
   /** Optional MCP Apps resources and links to existing tools. */
   mcpApps?: unknown;
   /** Host-owned mail editor; providers supply mailbox adapters only. */
@@ -1217,6 +1220,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'mcpApps',
   'routineEvents',
   'models',
+  'systemPrompt',
   'schemaVersion',
   'id',
   'name',
@@ -1410,14 +1414,14 @@ function dropEmptyLegacyCapabilitySlots(
 /** Historical persisted data only; new packages must use validateGhostManifest. */
 export function validateStoredGhostManifest(value: unknown):
   { ok: true; manifest: GhostManifest } | { ok: false; reason: string } {
-  return validateWithStoredMcpApps(value, raw => validateGhostManifestInput(raw, true));
+  return validateWithStoredMcpApps(value, raw => validateGhostManifestInput(raw, true, true));
 }
 
 export function validateGhostManifest(value: unknown): ManifestValidation {
   return validateGhostManifestInput(value, false);
 }
 
-function validateGhostManifestInput(value: unknown, preserveHistoricalParameterSize: boolean): ManifestValidation {
+function validateGhostManifestInput(value: unknown, preserveHistoricalParameterSize: boolean, preserveHistoricalStatusBar = false): ManifestValidation {
   const preparation = prepareGhostManifestForValidation(value);
   if (!preparation.ok) return preparation;
   const prepared = preparation.prepared;
@@ -1779,13 +1783,12 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
     if (!isSafeGhostRelativePath(raw.taskView.html)) {
       return { ok: false, reason: 'taskView.html 必填，且必须是安装目录内的安全相对路径' };
     }
-    // 状态栏入口是加档能力，只接受字面量 true；其它类型若当作未知字段放行，
-    // 会在装包成功后静默不显示入口。
-    if (raw.taskView.statusBar !== undefined && raw.taskView.statusBar !== true) {
+    // 新包严格校验；历史快照保留原来合法的未知字段，不把非 true 值授权为入口。
+    if (!preserveHistoricalStatusBar && raw.taskView.statusBar !== undefined && raw.taskView.statusBar !== true) {
       return { ok: false, reason: 'taskView.statusBar 只接受字面量 true' };
     }
     taskView = {
-      ...unknownDeclarationFields(raw.taskView, ['html', 'title', 'statusBar']),
+      ...unknownDeclarationFields(raw.taskView, preserveHistoricalStatusBar ? ['html', 'title'] : ['html', 'title', 'statusBar']),
       ...(raw.taskView.title !== undefined ? { title: raw.taskView.title } : {}),
       ...(raw.taskView.statusBar === true ? { statusBar: true as const } : {}),
       html: raw.taskView.html,
@@ -2084,6 +2087,11 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
   if (routineEvents === null) return { ok: false, reason: 'Invalid routineEvents declaration' };
   const models = raw.models === undefined ? undefined : parseGhostModelsNeeds(raw.models);
   if (models === null) return { ok: false, reason: 'models must be { "types": [...] } with unique type names' };
+  const systemPrompt = prepared.schemaVersion === 3 && raw.systemPrompt !== undefined
+    ? parseGhostSystemPromptFragments(raw.systemPrompt) : undefined;
+  if (raw.systemPrompt !== undefined && !systemPrompt && !preserveHistoricalParameterSize) {
+    return { ok: false, reason: 'systemPrompt 必须是 v3 静态片段数组，含唯一 id、text、整数 order、scope: selected-task' };
+  }
   let subscribe: GhostSubscribeNeeds | undefined;
   if (raw.subscribe !== undefined) {
     if (!isPlainObject(raw.subscribe)) {
@@ -3992,6 +4000,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(subscribe !== undefined ? { subscribe } : {}),
       ...(routineEvents !== undefined ? { routineEvents } : {}),
       ...(models !== undefined ? { models } : {}),
+      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(network !== undefined ? { network } : {}),
       ...(raw.command !== undefined ? { command: raw.command as string } : {}),
       ...(keywords !== undefined ? { keywords } : {}),

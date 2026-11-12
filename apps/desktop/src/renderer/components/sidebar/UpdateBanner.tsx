@@ -74,13 +74,22 @@ interface UpdateBannerProps {
    * 提供;未传时文字链整体不渲染。
    */
   onOpenVersionNotice?: (version: string) => void;
+  /**
+   * 状态进入安装前置条件错误时是否自动弹出提示。侧栏实例负责自动弹出；
+   * 浮窗副本关闭它，避免同一个提示叠开两次（点击操作触发的弹窗不受影响）。
+   */
+  autoOpenPrerequisiteDialogs?: boolean;
 }
 
 // 状态写法与 Button 的 variant 相同的修饰符才能替换它；只写 enabled:hover 优先级更低，不生效。
 export const UPDATE_BUTTON_TREATMENT =
   '[--button-face-bg:var(--update-btn-bg)] [--button-face-border:var(--update-btn-border)] text-[var(--update-btn-text)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--update-btn-hover)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-border:var(--update-btn-border)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--update-btn-pressed)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-border:var(--update-btn-border)]';
 
-export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerProps) {
+export function UpdateBanner({
+  isCollapsed,
+  onOpenVersionNotice,
+  autoOpenPrerequisiteDialogs = true,
+}: UpdateBannerProps) {
   const { status, version, errorCode } = useUpdateStatus();
   const { effectiveLocale } = useLocale();
   // 用户主动关闭态(仅本次进程内存,由 UserInfoSection 的火焰按钮唤回)。
@@ -138,20 +147,20 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   const isPreparing = status === 'superseding';
 
   useEffect(() => {
-    if (isLinuxInstallationUnsupported) setShowLinuxInstallationDialog(true);
-  }, [isLinuxInstallationUnsupported]);
+    if (autoOpenPrerequisiteDialogs && isLinuxInstallationUnsupported) setShowLinuxInstallationDialog(true);
+  }, [autoOpenPrerequisiteDialogs, isLinuxInstallationUnsupported]);
 
   useEffect(() => {
-    if (isWindowsRuntimeMissing) setShowWindowsRuntimeDialog(true);
-  }, [isWindowsRuntimeMissing]);
+    if (autoOpenPrerequisiteDialogs && isWindowsRuntimeMissing) setShowWindowsRuntimeDialog(true);
+  }, [autoOpenPrerequisiteDialogs, isWindowsRuntimeMissing]);
 
   useEffect(() => {
-    if (isSpawnFailed) setShowSpawnFailedDialog(true);
-  }, [isSpawnFailed]);
+    if (autoOpenPrerequisiteDialogs && isSpawnFailed) setShowSpawnFailedDialog(true);
+  }, [autoOpenPrerequisiteDialogs, isSpawnFailed]);
 
   useEffect(() => {
-    if (isTranslocated) setShowTranslocatedDialog(true);
-  }, [isTranslocated]);
+    if (autoOpenPrerequisiteDialogs && isTranslocated) setShowTranslocatedDialog(true);
+  }, [autoOpenPrerequisiteDialogs, isTranslocated]);
 
   // 一旦不再是 ready(如被 superseding 顶掉 / 出错),复位确认态,避免残留一个
   // 指向旧补丁的「仍要重启」;同时作废在飞的探针 —— 它的结论建立在「当前补丁可装」之上。
@@ -657,5 +666,28 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
         )}
       </div>
     </div>,
+  );
+}
+
+/** 原侧栏不可见时，显式请求的更新提醒仍在窗口左下角显示。 */
+export function FloatingUpdateBanner({
+  enabled,
+  ownsPrerequisiteDialogs = false,
+  onOpenVersionNotice,
+}: {
+  enabled: boolean;
+  /** 没有侧栏实例（设置页）时由浮窗负责自动弹出安装提示；否则交给侧栏，避免叠开两次。 */
+  ownsPrerequisiteDialogs?: boolean;
+} & Pick<UpdateBannerProps, 'onOpenVersionNotice'>) {
+  const { revealRequested, pinnedByUser, dismissed } = useUpdateBannerDismiss();
+  if (!enabled || (!revealRequested && (!pinnedByUser || dismissed))) return null;
+  return (
+    <div className="fixed bottom-4 left-4 z-50 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-sidebar-border bg-sidebar empty:hidden">
+      <UpdateBanner
+        isCollapsed={false}
+        onOpenVersionNotice={onOpenVersionNotice}
+        autoOpenPrerequisiteDialogs={ownsPrerequisiteDialogs}
+      />
+    </div>
   );
 }

@@ -14,6 +14,7 @@ import type { BotChatIdentity } from './BotSessionContentHeader';
 import { ThreadPanel, ThreadPanelRoot } from './ThreadPanel';
 import type { ThreadPanelResize } from './useThreadPanelResize';
 import { BotGroupTimelineItem } from './BotGroupTimelineItem';
+import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { botDmThreadReadKey, markBotRead } from './botReadState';
 
 /** The root message as the main chat has it loaded; null while it is not among the loaded rows. */
@@ -51,6 +52,7 @@ export function BotDmThreadPanel({ bot, rootSessionId, rootClientId, state, ment
   resize?: ThreadPanelResize;
 }) {
   const { t, i18n } = useTranslation();
+  const pluginUi = usePluginUiMessageCandidates();
   const root = useRootMessage(rootSessionId, rootClientId);
   const panelRef = useRef<HTMLElement>(null);
   const threadSessionId = state.kind === 'ready' ? state.sessionId : null;
@@ -88,6 +90,7 @@ export function BotDmThreadPanel({ bot, rootSessionId, rootClientId, state, ment
       {root ? (
         <section data-dm-thread-root="">
           <BotGroupTimelineItem
+            pluginUi={pluginUi}
             message={{
               id: root.clientId, sequence: 0, kind: 'message',
               authorKind: isBot ? 'bot' : 'user', authorBotId: isBot ? bot.id : null,
