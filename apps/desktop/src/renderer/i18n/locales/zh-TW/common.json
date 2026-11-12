@@ -6673,6 +6673,7 @@
         "confirm": "撤銷存取權限"
       },
       "v2": {
+        "sectionTitle": "實驗性 Agent 網路",
         "switch": {
           "title": "Agent-Net (Beta)",
           "hint": "顯示連線拓撲與最近活動。雙方都開啟並完成 Agent-Net 配對時使用加密連線，其他裝置沿用原有連線。只影響這臺電腦。"
@@ -10830,7 +10831,7 @@
       "defaultModel": "預設模型",
       "defaultModelHint": "僅用於夥伴，與新任務的模型選擇獨立。個別夥伴可以另選。",
       "title": "夥伴",
-      "description": "和夥伴有關的通用設定。個別夥伴的設定在{{pronoun}}自己的頁面裡。",
+      "description": "和夥伴有關的通用設定。單個夥伴的設定在{{pronoun}}自己的頁面裡。",
       "rosterNote": "預置陣容會隨版本更新。",
       "showReplyTarget": "顯示回覆對應的訊息",
       "showReplyTargetHint": "夥伴回覆上方標出它回的是你哪則訊息。較早的回覆不顯示。"
