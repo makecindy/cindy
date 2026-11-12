@@ -624,7 +624,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
 
   const renderRow = (message: BotGroupTimelineMessage, continued: boolean) => {
     const member = message.authorBotId ? memberById.get(message.authorBotId) : undefined;
-    const authorName = (member && message.authorKind !== 'system' ? botGroupMemberDisplayName(member) : '') || message.authorName || member?.name || '';
+    const authorName = (member && !member.assistant && message.authorKind !== 'system' ? botGroupMemberDisplayName(member) : '') || message.authorName || member?.name || '';
     const owned = message.authorKind === 'user' && message.isSelf === false ? botGroupOwnedBotNames(member, members).join(separator) : '';
     const shared = message.id !== root?.id && !message.pending ? sharedState(message.id) : null;
     const onReveal = shared?.shareId ? () => revealShare(shared.shareId!) : undefined;

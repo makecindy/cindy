@@ -60,7 +60,7 @@ import {
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
 import { BotGroupQuoteBlock } from './BotGroupQuote';
 import { BotGroupRuntimeFailureNotice } from './BotGroupRuntimeFailureNotice';
-import { BotGroupTaskCard } from './BotGroupTaskCard';
+import { BotGroupLiveTaskCard, BotGroupTaskCard } from './BotGroupTaskCard';
 import type { BotGroupTimelineMessage } from './BotGroupTimelineModel';
 import { ChatMessageHoverActions, ChatMessageReactions } from './ChatServerControls';
 
@@ -658,6 +658,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
                     <BotGroupTaskCard task={message.task} owned={botGroupTaskOwned(message.authorBotId, members)}
                       botId={message.authorBotId} />
                   ) : null}
+                  {!share && message.liveTask ? <BotGroupLiveTaskCard task={message.liveTask} /> : null}
                   {!share && <BotGroupMessageAttachments attachments={message.attachments ?? []} align="start" />}
                   <BotGroupHandoffFiles files={message.files ?? []} workDir={props.plan?.workDir ?? null} />
                 </>

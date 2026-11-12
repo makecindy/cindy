@@ -11271,7 +11271,8 @@
         "capability": {
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} n’a pas pu exécuter cet outil : l’autorisation du groupe a expiré ou ne permet pas cette action. Le propriétaire de l’ami peut renouveler la demande dans ce groupe.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "L’autorisation de groupe de {{name}} n’a pas pu être vérifiée ; cet outil n’a donc pas été exécuté. Réessayez une fois la connexion rétablie.",
-          "ATTACHMENTS_UNAVAILABLE": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison d’un échec de téléchargement ou de la limite de pièces jointes. Renvoyez celles nécessaires à cette demande."
+          "ATTACHMENTS_UNAVAILABLE": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison d’un échec de téléchargement ou de la limite de pièces jointes. Renvoyez celles nécessaires à cette demande.",
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connectez votre Cindy pour que Cindy puisse travailler pour vous (aucun de vos Cindy n'est en ligne pour le moment)."
         }
       },
       "settings": {
@@ -11398,6 +11399,38 @@
           "failed": "Échec",
           "cancelled": "Annulée",
           "timed-out": "Délai dépassé"
+        },
+        "label": "Tâche",
+        "untitled": "Tâche sans titre",
+        "askedBy": "Demandée par {{requester}}",
+        "pr": "PR #{{number}}",
+        "open": "Ouvrir la tâche « {{title}} »",
+        "live": {
+          "running": "En cours",
+          "waiting": "En attente de réponse",
+          "idle": "Inactif",
+          "failed": "En erreur"
+        },
+        "othersSaid": "Ce que d'autres ont dit dans le fil"
+      },
+      "assistant": {
+        "groupRecent": "Messages récents du groupe",
+        "groupNew": "Nouveaux messages du groupe",
+        "threadRecent": "Messages récents du fil",
+        "threadNew": "Nouveaux messages du fil",
+        "replyingTo": "En réponse à « {{name}} » : {{text}}",
+        "earlierOmitted": "(Messages plus anciens omis)",
+        "actingFor": "{{name}} · pour {{person}}",
+        "checkout": {
+          "gitMissing": "(Cindy) Le projet {{repo}} du groupe n'est pas encore sur cet ordinateur : git n'est pas installé ici. {{guide}} Une fois installé, mentionnez à nouveau @Cindy et Cindy téléchargera le projet pour y travailler.",
+          "signInOpened": "(Cindy) Le projet {{repo}} du groupe n'est pas encore sur cet ordinateur : connectez d'abord votre compte GitHub. Cindy a ouvert la connexion GitHub sur cet ordinateur ; une fois connecté, mentionnez à nouveau @Cindy et le projet sera téléchargé.",
+          "signIn": "(Cindy) Le projet {{repo}} du groupe n'est pas encore sur cet ordinateur : connectez d'abord votre compte GitHub. Connectez-vous à GitHub dans Cindy sur cet ordinateur, puis mentionnez à nouveau @Cindy.",
+          "unavailable": "(Cindy) Le projet {{repo}} du groupe n'a pas pu être téléchargé sur cet ordinateur : votre compte GitHub n'y a peut-être pas accès, ou le réseau est indisponible. Vérifiez que vous pouvez ouvrir le dépôt sur GitHub, puis mentionnez à nouveau @Cindy.",
+          "installGit": {
+            "darwin": "Dans Terminal, exécutez xcode-select --install et suivez les instructions.",
+            "win32": "Téléchargez Git sur https://git-scm.com/download/win et installez-le avec les options par défaut.",
+            "linux": "Installez git avec le gestionnaire de paquets de votre système (par exemple sudo apt install git)."
+          }
         }
       },
       "files": {
@@ -11594,10 +11627,21 @@
           "accessTools": "Peut utiliser les outils et les informations",
           "replies": "Mode de réponse des amis",
           "replyModeMentionedNote": "Les amis restent silencieux, sauf si quelqu’un les @mentionne.",
+          "assistant": "Cindy du groupe",
+          "assistantHint": "Travaille sur l’ordinateur de la personne qui la @mentionne.",
+          "replyModeAssistant": "Cindy répond",
+          "replyModeAssistantNote": "La Cindy du groupe répond.",
           "work": "Répartitions du travail",
           "ownFolder": "Dossier propre au groupe",
-          "projectDirHint": "Emplacement où les amis travaillent lors d’une répartition du travail.",
+          "projectDirHint": "S’applique uniquement sur cet ordinateur.",
           "projectDirClearHint": "Utiliser plutôt le dossier propre au groupe",
+          "project": "Projet",
+          "projectCaption": "Les amis répondent et effectuent les répartitions du travail dans ce projet. Le dépôt est partagé avec le groupe ; le dossier reste sur cet ordinateur.",
+          "githubRepo": "Dépôt GitHub",
+          "githubRepoHint": "Saisissez owner/name. Les ordinateurs sans dossier choisi utilisent leur propre copie de ce projet ou en téléchargent une.",
+          "githubRepoSaveFailed": "Le dépôt n’a pas été enregistré. Vérifiez-le et réessayez.",
+          "projectFolder": "Dossier sur cet ordinateur",
+          "projectDirAutoHint": "Trouvé parmi vos projets à partir du dépôt.",
           "organizerHint": "Décide qui effectue chaque étape. Par défaut, le premier ami.",
           "autoContinueHint": "Si désactivé, chaque étape attend que vous continuiez.",
           "workCaption": "Avec un projet git, chaque répartition du travail dispose de sa propre branche, afin de ne pas modifier votre code. Le dossier du projet et les relais automatiques s’appliquent uniquement sur cet ordinateur.",
@@ -11922,6 +11966,8 @@
       "takeOverConflict": "{{name}} a déjà été déplacé vers « {{device}} »",
       "takeOverOffline": "Impossible de joindre le serveur, {{name}} ne peut donc pas continuer ici pour le moment",
       "takeOverFailed": "Impossible de reprendre {{name}} sur cet ordinateur",
+      "profileIdentityTooLong": "La personnalité dans le cloud dépasse {{limit}} caractères et ne peut pas être restaurée. Raccourcissez-la, synchronisez-la, puis réessayez. Les données existantes sont conservées.",
+      "profileUserTooLong": "Le contexte utilisateur dans le cloud dépasse {{limit}} caractères et ne peut pas être restauré. Raccourcissez-le, synchronisez-le, puis réessayez. Les données existantes sont conservées.",
       "localCindyConflict": "L’ordinateur qui prend le relais a déjà une autre Cindy. Gérez-la dans ses réglages ou choisissez un autre ordinateur principal",
       "localCindyConflictAction": "Ouvrir les réglages de la Cindy locale",
       "notEnabled": "Ce serveur ne permet pas de changer d'ordinateur principal",
@@ -11988,7 +12034,20 @@
       "transferred": "{{name}} a été déplacé vers « {{device}} »",
       "transferConflict": "L'ordinateur principal de {{name}} a déjà changé, il n'a donc pas été déplacé",
       "transferOffline": "Impossible de joindre le serveur. {{name}} s'exécute toujours sur cet ordinateur",
-      "transferFailed": "Impossible de déplacer {{name}} vers « {{device}} »"
+      "transferFailed": "Impossible de déplacer {{name}} vers « {{device}} »",
+      "repair": {
+        "action": "Modifier et réessayer",
+        "title": "Corriger le profil du compagnon",
+        "description": "L’enregistrement restaure ce compagnon sur cet ordinateur. Le profil d’origine sera d’abord sauvegardé ici.",
+        "save": "Enregistrer et restaurer",
+        "count": "{{count}} / {{limit}} caractères",
+        "over": "{{count}} caractères en trop. Raccourcissez le texte avant d’enregistrer.",
+        "changed": "Le profil ou l’ordinateur principal a changé. Rechargez le profil avant de le corriger.",
+        "loadFailed": "Impossible de lire le profil. Réessayez.",
+        "backupFailed": "Impossible de sauvegarder le profil d’origine ; la correction n’a pas été appliquée. Vérifiez l’espace disque disponible et réessayez.",
+        "saveFailed": "Le compagnon n’est pas encore restauré. Vos modifications sont conservées ici ; réessayez.",
+        "reload": "Recharger"
+      }
     },
     "market": {
       "heading": "Découvrir des amis",
@@ -14359,6 +14418,8 @@
       "sessionSentNamed": "Envoyé par la session « {{name}} »",
       "sessionViewSource": "Voir la session source",
       "botSentNamed": "Envoyé par l’ami « {{name}} »",
+      "groupThreadSent": "Envoyé par « {{name}} » dans un fil de « {{group}} »",
+      "groupRequestSent": "Du groupe « {{group}} » · {{name}}",
       "orcaFromLead": "Message du Lead",
       "orcaFromWorker": "Message du Worker",
       "orcaFromWorkerBatch": "Rapport système : {{count}} résultats de Worker",
