@@ -150,7 +150,7 @@ function RemoteBotSessionGate() {
     return <Navigate to={`${standardSessionRoute(requestedSessionId)}?${query}`} state={location.state} replace />;
   }
   if (!requestedSessionId && recoveringHere.current && homeActor?.homeDeviceId === cloud.selfDeviceId
-    && !cloud.demotedBotIds.includes(botId!)) {
+    && !rejectedHere && !cloud.demotedBotIds.includes(botId!)) {
     return <Navigate to={`/bots/${encodeURIComponent(botId!)}`} replace />;
   }
   const offlineActor = !requestedSessionId && rejectedHere ? homeActor : cloudActor;

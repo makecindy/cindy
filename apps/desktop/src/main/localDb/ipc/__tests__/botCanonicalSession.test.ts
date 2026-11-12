@@ -1131,6 +1131,50 @@ describe('Bot canonical Session lifecycle', () => {
       expect(readFileSync(file, 'utf8')).toBe('New edit while the draft was open');
     });
 
+    // #10205 review, DB tier: the normal profile writer logs folder failures. The recovery
+    // action must not acknowledge them, and the same draft must retry a partially saved pair.
+    it.each(['identitySource', 'userContextSource'] as const)('keeps the repair draft after a failed %s file write and retries it', async field => {
+      const id = `repair-write-${field.toLowerCase()}`;
+      await invoke('local-db:bots:create', { id, name: 'Local name', identitySource: 'Old identity', userContextSource: 'Old user' });
+      await invoke('local-db:bots:update', { id, enabled: false });
+      const home = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), 'bots', id);
+      const files = { identitySource: join(home, 'SOUL.md'), userContextSource: join(home, 'memories', 'USER.md') };
+      const source = 'x'.repeat(12001);
+      for (const file of Object.values(files)) writeFileSync(file, source);
+      const actor = { id: 'repair-write-actor', kind: 'bot', externalId: id, name: 'Cloud name', homeDeviceId: 'self' };
+      const { api } = fakeApi(route => route === '/preferences' ? [{ key: 'companion.profile.v1', revision: 1,
+        value: { name: 'Cloud name', description: '', soul: source, user: source, systemPrompt: '' } }] : {});
+      const { state } = memoryState();
+      const host = createCompanionCloudHost({ deliverToCanonical: async () => ({ ok: true }),
+        ensureCanonicalSession: async () => 'unused', rebuildContext: async () => 'rebuilt', listDevices: async () => [] });
+      host.openState = () => state;
+      const runtime = startCompanionCloud({ api, host, endpoint: 'https://synthetic.invalid', humanActorId: 'human',
+        selfDeviceId: 'self', current: () => true, bots: () => [], actors: () => [actor], initialKick: false });
+      const rename = fsPromises.rename.bind(fsPromises);
+      let blocked = true;
+      const failure = vi.spyOn(fsPromises, 'rename').mockImplementation(async (from, to) => {
+        if (blocked && String(to).replaceAll('\\', '/').endsWith(`/bots/${id}/${field === 'identitySource' ? 'SOUL.md' : 'memories/USER.md'}`))
+          throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+        return rename(from, to);
+      });
+      try {
+        runtime.reconcile([{ id, status: 'paused' }]);
+        const opened = await runtime.repairProfile(id, { action: 'read' });
+        if (!opened.ok || !opened.draft) throw new Error('Missing repair draft');
+        const request = { action: 'save' as const, token: opened.draft.token,
+          values: { identitySource: 'Corrected identity', userContextSource: 'Corrected user' } };
+        expect(runtime.installConfirmed(id)).toBe(true);
+        expect(await runtime.repairProfile(id, request)).toEqual({ ok: false, code: 'FAILED' });
+        expect(readFileSync(files[field], 'utf8')).toBe(source);
+        blocked = false;
+        expect(await runtime.repairProfile(id, request)).toEqual({ ok: true });
+        for (const key of ['identitySource', 'userContextSource'] as const) expect(readFileSync(files[key], 'utf8')).toBe(request.values[key]);
+        expect((await host.readValues(id)).find(row => row.key === 'companion.profile.v1')?.value)
+          .toMatchObject({ soul: 'Corrected identity', user: 'Corrected user' });
+        expect(await invoke('local-db:bots:get', id)).toMatchObject({ name: 'Local name', status: 'paused' });
+      } finally { failure.mockRestore(); runtime.dispose(); }
+    });
+
     // #10112: fakeLocal never ran readText's 12000-character boundary. DB tier:
     // real host creation/update and runtime recovery must agree, without losing text.
     it.each(['identitySource', 'userContextSource'] as const)('preserves the real source boundary through take-over: %s', async field => {

@@ -95,15 +95,16 @@ beforeEach(() => {
 afterEach(cleanup);
 // #10112, unit tier: the former-home route must show the local failure rather
 // than spin forever; automatic recovery follows the completed home projection.
-it('shows a rejected local restore from the old home route and follows its recovery', async () => {
+it.each([true, false])('keeps rejected local source editing open until recovery (demoted: %s)', async demoted => {
   h.listed = false;
   const failure = { field: 'identitySource' as const, maxLength: 12000 };
-  h.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: ['writer'], actors: [
+  h.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: demoted ? ['writer'] : [], actors: [
     { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'desk', profileFailure: failure }] };
   const view = render(<RemoteBotSessionView />);
   await screen.findByText('cloud-offline-view');
   expect(h.cloudView).toHaveBeenLastCalledWith(expect.objectContaining({ botId: 'writer', profileFailure: failure }));
   expect(h.view).not.toHaveBeenCalled();
+  expect(h.navigate).not.toHaveBeenCalled();
   h.cloud = { ...h.cloud, demotedBotIds: [], actors: h.cloud.actors.map(({ profileFailure: _, ...actor }) => actor) };
   view.rerender(<RemoteBotSessionView />);
   expect(h.navigate).toHaveBeenLastCalledWith({ to: '/bots/writer', replace: true });

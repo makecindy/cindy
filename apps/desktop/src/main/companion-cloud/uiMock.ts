@@ -3,12 +3,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
 import { and, eq } from 'drizzle-orm';
-import { getActiveAppSession, LOCAL_DATA_OWNER_ID } from '../appSessionState.js';
+import { getActiveAppSession, LOCAL_DATA_OWNER_ID, ownerScopedUserDataPath } from '../appSessionState.js';
 import { isUiMockDataEnabled } from '../localDb/uiMockSeed.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { botProfiles, botSessionLinks, sessions } from '../localDb/schema.js';
 import { createLogger } from '../logger.js';
 import { ensureBotCanonicalSession } from '../maker-ipc/botCanonicalSessionEnsure.js';
+import { writeBotProfileFolder } from '../maker-ipc/botProfileFolder.js';
 import { createCompanionCloudHost } from './host.js';
 import { startCompanionCloud, type CompanionRuntimeActor } from './runtime.js';
 import type { CompanionApi } from './types.js';
@@ -27,7 +28,7 @@ function enabled() {
 }
 
 /** Only the Chat Server transport is synthetic; profile validation, backup and restoration are real. */
-function createFixture(file: string, soul: string, failHistoryOnce: boolean) {
+function createFixture(file: string, soul: string, failHistoryOnce: boolean, currentHome: boolean) {
   const log = createLogger('companion-ui-mock');
   const actors: CompanionRuntimeActor[] = [{ id: ACTOR, kind: 'bot', externalId: BOT_ID, name: '资料恢复验收', homeDeviceId: SELF }];
   const rows = new Map<string, CompanionRow>([[PROFILE, { key: PROFILE, revision: 1,
@@ -90,19 +91,36 @@ function createFixture(file: string, soul: string, failHistoryOnce: boolean) {
   const runtime = startCompanionCloud({ api, host, endpoint: 'https://ui-mock.invalid', humanActorId: 'ui-mock-human',
     selfDeviceId: SELF, current: enabled, actors: () => actors, initialKick: false, log,
     bots: () => runtime.state.isDemoted(BOT_ID) ? [] : [{ botId: BOT_ID, actorId: ACTOR, name: '资料恢复验收' }] });
-  runtime.state.update(BOT_ID, ACTOR, entry => { entry.demoted = true; });
+  runtime.state.update(BOT_ID, ACTOR, entry => { entry.demoted = !currentHome; });
+  let prepared: Promise<void> | undefined;
+  const prepareCurrentHome = () => prepared ??= (async () => {
+    if (!currentHome) return;
+    const fence = { assertCurrent() { if (!enabled()) throw new Error('OWNER_CHANGED'); } };
+    const local = host.materializer!;
+    if (!await local.readProfile(BOT_ID)) {
+      await local.createProfile({ id: BOT_ID, name: '资料恢复验收', description: '', identitySource: '', userContextSource: '', avatar: null }, fence);
+      await local.ensureCanonicalSession(BOT_ID, fence);
+      fence.assertCurrent();
+      // Simulate an existing home whose owner edited SOUL.md past the accepted limit.
+      await writeBotProfileFolder(ownerScopedUserDataPath(), BOT_ID, { identitySource: soul });
+    }
+    runtime.reconcile([{ id: BOT_ID, status: 'active' }]);
+  })();
   return {
     botId: BOT_ID,
     snapshot: (): CompanionCloudSnapshot => ({ enabled: true, selfDeviceId: SELF, humanActorId: 'ui-mock-human',
       demotedBotIds: runtime.state.isDemoted(BOT_ID) ? [BOT_ID] : [], actors: [{ id: ACTOR, externalId: BOT_ID, name: '资料恢复验收',
         avatar: null, homeDeviceId: SELF, homeDevice: { deviceId: SELF, name: 'Mock desktop', isSelf: true, online: true },
-        ...(runtime.state.isDemoted(BOT_ID) ? { profileFailure: runtime.profileFailure(BOT_ID) ?? { field: 'identitySource' as const, maxLength: 12000 } } : {}) }] }),
+        ...(runtime.state.isDemoted(BOT_ID) || (currentHome && String((rows.get(PROFILE)?.value as { soul?: unknown })?.soul ?? '').trim().length > 12000)
+          ? { profileFailure: runtime.profileFailure(BOT_ID) ?? { field: 'identitySource' as const, maxLength: 12000 } } : {}) }] }),
     async takeOver() {
+      await prepareCurrentHome();
       const result = await runtime.takeOver(BOT_ID);
       if (result.ok) await runtime.syncNow();
       return result;
     },
     async repairProfile(request: CompanionProfileRepairRequest) {
+      await prepareCurrentHome();
       const result = await runtime.repairProfile(BOT_ID, request);
       if (result.ok && request.action === 'save') await runtime.syncNow();
       return result;
@@ -119,12 +137,14 @@ export function companionProfileUiMock() {
   const file = path.join(app.getPath('userData'), 'ui-mock', 'companion-profile.json');
   let source: unknown;
   let failHistoryOnce = false;
+  let currentHome = false;
   try {
     const config = JSON.parse(fs.readFileSync(file, 'utf8'));
     source = config.soul;
     failHistoryOnce = config.failHistoryOnce === true;
+    currentHome = config.currentHome === true;
   } catch { return undefined; }
   if (typeof source !== 'string') return undefined;
-  fixture = createFixture(file, source, failHistoryOnce);
+  fixture = createFixture(file, source, failHistoryOnce, currentHome);
   return fixture;
 }

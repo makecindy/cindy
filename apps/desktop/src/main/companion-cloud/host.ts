@@ -465,14 +465,33 @@ export function createCompanionCloudHost(input: {
     repairProfileSources: async (botId, fields, values, fence) => {
       fence.assertCurrent();
       const userDataDir = ownerScopedUserDataPath();
-      // Reuse the normal writer's profile-version CAS. Only the rejected fields are in the
-      // patch; later name/avatar/capability changes and all memory/skill files stay untouched.
-      await updateBotProfile({ id: botId, ...values }, undefined, async () => {
+      const corrections = fields.map(({ field, source }) => {
+        const value = values[field];
+        if (typeof value !== 'string') throw new CompanionProfileRepairError('invalid');
+        return { field, source, value: value.trim() };
+      });
+      const readUnchanged = async () => {
         fence.assertCurrent();
         const folder = await readBotProfileFolder(userDataDir, botId, { strict: true });
         fence.assertCurrent();
-        if (fields.some(({ field, source }) => folder[field] !== source)) throw new CompanionProfileRepairError('changed');
-      });
+        // A failed save may already have written the other field. Accept only the original
+        // or this approved correction, never a newer edit made while the draft was open.
+        if (corrections.some(({ field, source, value }) => folder[field] !== source && folder[field] !== value))
+          throw new CompanionProfileRepairError('changed');
+        return folder;
+      };
+      // Reuse the normal writer's profile-version CAS. Only the rejected fields are in the
+      // patch; later name/avatar/capability changes and all memory/skill files stay untouched.
+      await updateBotProfile({ id: botId, ...values }, undefined, async () => { await readUnchanged(); });
+      const saved = await readUnchanged();
+      // The normal writer tolerates folder I/O errors after committing the DB. On retry its
+      // DB diff can be empty, so finish only the missing file writes and propagate any error.
+      const pending = corrections.filter(({ field, value }) => saved[field] !== value);
+      if (pending.length) {
+        await writeBotProfileFolder(userDataDir, botId, Object.fromEntries(pending.map(({ field, value }) => [field, value])));
+        const verified = await readUnchanged();
+        if (corrections.some(({ field, value }) => verified[field] !== value)) throw new Error('PROFILE_REPAIR_WRITE_FAILED');
+      }
       fence.assertCurrent();
     },
     hasLocalData: async botId => {
