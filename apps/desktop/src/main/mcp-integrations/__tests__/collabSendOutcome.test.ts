@@ -74,7 +74,7 @@ vi.mock('@cindy/mcps', () => ({
   }),
 }));
 
-vi.mock('../computer.js', () => ({ getComputerMcpDeps: vi.fn(() => ({})) }));
+vi.mock('../computer.desktop.js', () => ({ getComputerMcpDeps: vi.fn(() => ({})) }));
 vi.mock('../android.js', () => ({ getAndroidMcpDeps: vi.fn(() => ({})) }));
 
 vi.mock('../../maker-host/index.js', () => ({
@@ -144,7 +144,7 @@ import type { FeishuBotMcpHostDeps, XdtHelperMcpDeps } from '@cindy/mcps';
 import { beginAppSessionBoundary, commitVolatileAppSession, ownerScopedUserDataPath } from '../../appSessionState.js';
 import * as userDataPath from '../../userDataPath.js';
 import { createPluginRegistry, resetPluginRegistry } from '../../maker-host/plugins/index.js';
-import { getComputerMcpDeps } from '../computer.js';
+import { getComputerMcpDeps } from '../computer.desktop.js';
 import { getAndroidMcpDeps } from '../android.js';
 import {
   CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,

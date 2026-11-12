@@ -358,7 +358,8 @@ export function SubscriptionAccountsSection({
                           label={t('providerGroup.member.limitAria', { name })}
                           value={concurrencyLimitOptionValue(account)}
                           disabled={busy}
-                          className="h-8 w-[104px]"
+                          size="compact"
+                          width="xs"
                           options={CONCURRENCY_LIMIT_OPTIONS.map((value) => ({
                             value,
                             label:
@@ -381,7 +382,8 @@ export function SubscriptionAccountsSection({
                             label={t('providerGroup.member.weightAria', { name })}
                             value={String(account.weight)}
                             disabled={busy}
-                            className="h-8 w-[120px]"
+                            size="compact"
+                            width="xs"
                             options={[1, 2, 3, 5, 10, 20, 50, 100].map((weight) => ({
                               value: String(weight),
                               label: t('providerGroup.member.weightOption', { weight }),
