@@ -54,13 +54,13 @@ function projection(handler: Handler, messages: Message[]): Message[] {
 
 describe('cindy-tool-fold extension source', () => {
   it('leaves the transcript alone until the backlog reaches a batch', () => {
-    const { context } = loadExtension();
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
     // 10 pairs, newest 8 stay resident: backlog 2 is below MIN_PAIRS and below MIN_CHARS.
     expect(context({ messages: pairs(10) })).toBeUndefined();
   });
 
   it('folds the whole backlog at once, keeps the newest 8 pairs verbatim and names the recovery id', () => {
-    const { context } = loadExtension();
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
     const messages = pairs(40);
     const out = projection(context, messages);
     expect(out).toHaveLength(messages.length);
@@ -88,7 +88,7 @@ describe('cindy-tool-fold extension source', () => {
   });
 
   it('keeps folds sticky and does not rewrite them again until the next batch', () => {
-    const { context } = loadExtension();
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
     const first = projection(context, pairs(40));
     const firstFolded = String((first[0].content![0].arguments as Record<string, unknown>).summary);
     const firstSavings = JSON.stringify(first).length;

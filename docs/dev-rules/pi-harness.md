@@ -401,7 +401,7 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
    字节变化必须 restart。
    目前注入三份:Cindy-owned `cindy-bridge`(权限门 / MCP 桥)、`cindy-subagent`(子代理)、
    `cindy-tool-fold`(**实验功能,默认不注入** —— 设置 → 通用 → 实验性功能里显式打开后,之后
-   启动的 Pi Agent 会话才加载:在 `context` 钩子里把较老的「工具调用 + 结果」折成一行,只留最近 8 次
+   启动的 Pi Agent 会话才加载:在 `context` 钩子里把较老的「工具调用 + 结果」折成一行,只留最近 4 次
    原文;巨型结果在 `tool_result` 入库前截断;两者都可用 `toolfold_read` 取回原文,取回过的
    钉住到下一条用户消息或钉住预算耗尽(按最近取回时间戳 LRU)。折叠按批进行以保住前缀缓存,
    扩展自身另认 `CINDY_PI_TOOL_FOLD=off` 作进程内总闸;受邀者/Review/仅宿主工具会话因工具门不放行 `toolfold_read`

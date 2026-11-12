@@ -24,7 +24,7 @@
  *
  * 装载由宿主决定：实验开关「工具载荷折叠」默认关闭（设置 → 通用 → 实验功能），
  * 用户打开后，之后启动的 Pi 任务才加载这个扩展；扩展自身另认 CINDY_PI_TOOL_FOLD=off
- * （或 0）作进程内总闸。调参：CINDY_PI_TOOL_FOLD_KEEP（常驻条数，默认 8）、
+ * （或 0）作进程内总闸。调参：CINDY_PI_TOOL_FOLD_KEEP（常驻条数，默认 4）、
  * CINDY_PI_TOOL_FOLD_MIN_PAIRS（攒够多少条折一次，默认 32）、
  * CINDY_PI_TOOL_FOLD_MIN_CHARS（攒够多少字符折一次，默认 36000）、
  * CINDY_PI_TOOL_FOLD_PIN_BUDGET（钉住预算字符数，默认 64000）、
@@ -90,7 +90,7 @@ export default function (pi) {
     return value;
   }
 
-  var KEEP = intEnv('CINDY_PI_TOOL_FOLD_KEEP', 8, 1, 64);
+  var KEEP = intEnv('CINDY_PI_TOOL_FOLD_KEEP', 4, 1, 64);
   var MIN_PAIRS = intEnv('CINDY_PI_TOOL_FOLD_MIN_PAIRS', 32, 1, 512);
   var MIN_CHARS = intEnv('CINDY_PI_TOOL_FOLD_MIN_CHARS', 36000, 1, 1000000000);
   var PIN_BUDGET_CHARS = intEnv('CINDY_PI_TOOL_FOLD_PIN_BUDGET', 64000, 2000, 100000000);
