@@ -1798,7 +1798,8 @@
       "about": "Hakkında",
       "imBot": "Anlık mesajlaşma botları",
       "ghosts": "Eklentiler",
-      "cindyMake": "Cindy Make"
+      "cindyMake": "Cindy Make",
+      "modelGroups": "Model grupları"
     },
     "sections": {
       "user": "Kullanıcı",
@@ -20181,6 +20182,133 @@
       "title": "Başlangıç rehberi",
       "description": "Cindy ile tanışma, başka bir bilgisayardan aktarma, model bağlama ve mevcut çalışmaları getirme adımlarını tekrar görüntüleyin.",
       "open": "Rehberi aç"
+    }
+  },
+  "modelGroups": {
+    "title": "Model grupları",
+    "description": "Model sağlayıcıları altındaki mevcut kaynaklarınızı tek bir seçenekte birleştirin. Model seçicide Model Grupları altından bunu seçtiğinizde Cindy hangi kaynağın kullanılacağına karar verir.",
+    "routes": "Rotalar",
+    "routesDescription": "Bir rota birden fazla kaynak barındırır. Her yeni görev, rotanın kuralına göre birini seçer.",
+    "sourceCount_one": "{{count}} kaynak",
+    "sourceCount_other": "{{count}} kaynak",
+    "strategy": {
+      "expiring": {
+        "title": "Süresi önce dolan",
+        "hint": "Boşa gitmemesi için bol olan ve yakında sıfırlanacak abonelik kotasını önce kullanır. Okunabilir kotası olmayan kaynaklar sonraya kalır."
+      },
+      "order": {
+        "title": "Sırayla",
+        "hint": "Yalnızca yukarıdaki kaynak kullanılamadığında bir sonraki kaynağa geçer."
+      },
+      "rotate": {
+        "title": "Dönüşümlü",
+        "hint": "Yükü eşit paylaştırarak her yeni görevi bir sonraki kaynağa yönlendirir."
+      },
+      "cheapest": {
+        "title": "En ekonomik",
+        "hint": "Ek ücret olmadan önce kotası kalan abonelikleri kullanır; geri kalanlar liste fiyatına göre en düşükten en yükseğe sıralanır, fiyatı olmayan kaynaklar en sona kalır."
+      }
+    },
+    "picker": {
+      "empty": "Henüz model grubu yok. Burada seçebilmek için Ayarlar'da birkaç kaynağı bir rotada birleştirin.",
+      "manage": "Model gruplarını yönet"
+    },
+    "why": {
+      "expiringQuota": "Kotasının %{{left}} kadarı kaldı ve {{reset}} tarihinde sıfırlanıyor, bu yüzden ilk sırada kullanılır",
+      "expiring": "Kotaya göre ilk sırada",
+      "order": "Kullanılabilir ilk kaynak",
+      "rotate": "Dönüşümlü olarak seçildi",
+      "only": "Şu anda kullanılabilir tek kaynak",
+      "soonest": "Tüm kaynakların kotası bitti; ilk olarak bu kaynak yenileniyor",
+      "soonestUntil": "Tüm kaynakların kotası bitti; ilk olarak bu kaynak yenileniyor ({{reset}})",
+      "standby": "Bu kez seçilmedi",
+      "standbyQuota": "Kotasının %{{left}} kadarı kaldı ve {{reset}} tarihine kadar sıfırlanmıyor, bu yüzden sonraya saklandı",
+      "off": "Bu rotada kapalı",
+      "unavailable": "Bağlı değil veya bu model şu anda seçilemiyor",
+      "limited": "Kota bitti",
+      "limitedUntil": "{{reset}} tarihine kadar kota bitti",
+      "tight": "5 saatlik kotası neredeyse dolu, bu yüzden şimdilik atlandı",
+      "cheapest": "En düşük liste fiyatı",
+      "cheapestFree": "Abonelik kotası kaldı, ek ücret yok",
+      "noVision": "Mesajda görseller var ve bu kaynak görselleri göremiyor",
+      "exceptionImage": "Mesajda görseller var, bu yüzden yalnızca görselleri görebilen kaynaklar değerlendirildi",
+      "exceptionImageFallback": "Mesajda görseller var ancak hiçbir kaynak görselleri göremiyor, bu yüzden normal şekilde seçildi",
+      "exceptionHours": "Bu süre boyunca bunun yerine “{{name}}” kullanılır",
+      "separator": "; "
+    },
+    "settings": {
+      "newRoute": "Yeni rota",
+      "newRouteName": "Yeni rota",
+      "routesEmpty": "Henüz rota yok. Bir tane oluşturun ve birkaç kaynak ekleyin.",
+      "scopeNote": "Model grupları bu bilgisayarda başlatılan yeni görevler için geçerlidir. Bir kaynak görev başladığında seçilir ve görev sırasında değişmez.",
+      "back": "Model gruplarına dön",
+      "name": "Ad",
+      "nameHint": "Model seçicide gösterilir.",
+      "routeShownAs": "Model seçicide Model Grupları altında gösterilir.",
+      "pick": "Hangisi kullanılacak",
+      "effort": "Akıl yürütme yoğunluğu",
+      "effortUnset": "Ayarlanmadı",
+      "effortHint": "Seçilen model bu düzeyi desteklemiyorsa kendi varsayılanında çalışır.",
+      "sources": "Kullanabileceği kaynaklar",
+      "sourcesHint": "Farklı modeller bir arada bulunabilir. Görev, hangisinin kullanıldığını gösterir.",
+      "sourcesEmpty": "Henüz kaynak yok. Aşağıdan bağlı bir model ekleyin.",
+      "sourcesFull": "Bir rota en fazla {{count}} kaynak barındırabilir.",
+      "addSource": "Kaynak ekle",
+      "chooseModel": "Bir model seçin",
+      "notConnected": "Bağlı değil",
+      "moveUp": "Yukarı taşı",
+      "moveDown": "Aşağı taşı",
+      "remove": "Bu rotadan kaldır",
+      "useSource": "Bu rotanın {{name}} kaynağını kullanmasına izin ver",
+      "try": {
+        "title": "Dene",
+        "hint": "Yeni bir görevin şu anda hangi kaynağı kullanacağını görün. Hiçbir şey gönderilmez ve kota kullanılmaz.",
+        "run": "Seçimi gör",
+        "picked": "Bunu kullan",
+        "standby": "Hazırda beklemede",
+        "skipped": "Atlandı",
+        "unavailable": "Bu rotadaki hiçbir kaynak şu anda kullanılamıyor. Yeni bir görev önceden seçtiğiniz modeli kullanacaktır."
+      },
+      "deleteRoute": "Bu rotayı sil",
+      "deleteRouteConfirmTitle": "“{{name}}” silinsin mi?",
+      "deleteRouteConfirmDescription": "Diğer rotalardaki buna geçiş yapan günün saati istisnaları da kaldırılır. Başlatılmış görevler etkilenmez.",
+      "delete": "Sil",
+      "cancel": "İptal",
+      "saveFailed": "Kaydedilemedi. Tekrar deneyin.",
+      "exceptions": {
+        "title": "İstisnalar",
+        "hint": "Yukarıdan aşağıya doğru, seçim kuralından önce kontrol edilir.",
+        "empty": "Henüz istisna yok. Her yeni görev yukarıdaki seçim kuralını kullanır.",
+        "imageRule": "Mesajda görseller olduğunda yalnızca görselleri görebilen kaynakları kullan",
+        "hoursRule": "{{from}}–{{to}}: Bunun yerine “{{name}}” kullan",
+        "remove": "Bu istisnayı kaldır",
+        "add": "İstisna ekle",
+        "choose": "Bir durum seçin",
+        "kindImage": "Mesajda görseller var",
+        "kindHours": "Günün belirli bir saati",
+        "from": "Başlangıç",
+        "to": "Bitiş",
+        "useRoute": "Bunun yerine kullan",
+        "addHours": "Ekle",
+        "sameHour": "Başlangıç ve bitiş aynı saat olamaz.",
+        "full": "En fazla {{count}} istisna.",
+        "needOtherRoute": "Günün saatine göre geçiş yapmak için başka bir rota oluşturun."
+      }
+    },
+    "overview": {
+      "mapTitle": "Yeni görevlerin model seçme şekli",
+      "mapDescription": "Soldan sağa: Yeni bir görevin izlediği rota ve ulaştığı kaynak. Değiştirmek için bir rotaya tıklayın.",
+      "columnSources": "Kaynaklar",
+      "columnEmpty": "Henüz yok",
+      "openRoute": "“{{name}}” rotasını aç",
+      "recentTitle": "Son seçimler",
+      "recentEmpty": "Henüz hiçbir görev bir rota kullanmadı.",
+      "keptOriginal": "İçindeki hiçbir kaynak kullanılabilir değildi, bu yüzden görev seçtiğiniz modeli korudu.",
+      "keptOriginalShort": "Modelinizi korudu",
+      "latest": "Son görevin izlediği yol"
+    },
+    "switchOffer": {
+      "action": "{{model}} ile devam et"
     }
   }
 }
