@@ -134,6 +134,7 @@ describe('plugin Host tool entry', () => {
       } },
       isValidPluginInstallRelId, pluginInstallStoragePart,
       log: { info: noop, warn: noop }, disconnectRoutineSource: noop,
+      releasePluginUiRegions: noop, releasePluginAppearance: noop,
       pluginDeviceSync: { invalidate: noop }, getGhostPipeDispatcher: () => ({ onRuntimeState: noop }),
       networkSlotSingleton: null, fsSlotSingleton: null, getDesktopHostTerminalService: () => ({ disposePlugin: noop }),
       disposePluginHostTools, modelPickerSingleton: null, pluginInvocations: { invalidate: noop },
