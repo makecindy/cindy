@@ -115,7 +115,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
         socket.lan.start();
       }
       socket.directoryRefresh = setInterval(() => { void socket.refreshDirectory().catch(() => undefined); }, 6 * 60 * 60_000);
-      socket.directoryRefresh.unref?.();
+      (socket.directoryRefresh as unknown as { unref?: () => void }).unref?.();
       setTimeout(() => { if (!socket.closed) socket.emit('open'); }, 0);
       return socket;
     } catch (error) { socket.close(); throw error; }
@@ -304,7 +304,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       this.reconnect = null;
       void this.connectRelay().catch(() => this.scheduleReconnect());
     }, this.retryMs);
-    this.reconnect.unref?.(); this.retryMs = Math.min(15_000, this.retryMs * 2);
+    (this.reconnect as unknown as { unref?: () => void }).unref?.(); this.retryMs = Math.min(15_000, this.retryMs * 2);
   }
   send(text: string): void {
     if (this.closed) throw new Error('AGENT_NET_SOCKET_CLOSED');

@@ -289,11 +289,17 @@ export function parseAgentErrorCode(message: string): { code: string; fallback: 
   // `LAZY_CREATE_FAILED:` envelope. Keep accepting that wrapper here so the
   // renderer can still select the actionable remote-provider guidance instead
   // of collapsing the whole failure to the generic "reply failed" card.
-  const match = /(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?(?:LAZY_CREATE_FAILED:\s*)?\[([A-Z0-9_]+)\]\s*([\s\S]*)$/.exec(message);
+  const match = /(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?(?:(?:LAZY_CREATE_FAILED|REHYDRATE_FAILED):\s*)?\[([A-Z0-9_]+)\]\s*([\s\S]*)$/.exec(message);
   if (!match || (!/^REMOTE_[A-Z_]+$/.test(match[1]) && !AGENT_CHAT_ERROR_CODES.has(match[1]))) {
     return null;
   }
-  return { code: match[1], fallback: match[2] || message };
+  // Released guest hosts and Pi use INVALID for a specific native-history
+  // rejection. Refine only its presentation; keep the wire error and ownership
+  // check intact. Other INVALID errors must not suggest a history recovery.
+  const code = match[1] === 'REMOTE_AGENT_INVALID'
+    && /^this conversation cannot be resumed on this computer\.?$/i.test(match[2].trim())
+    ? 'REMOTE_AGENT_RESUME_UNAVAILABLE' : match[1];
+  return { code, fallback: match[2] || message };
 }
 
 /** Resending unchanged content cannot fix these explicit configuration failures. */
@@ -302,7 +308,8 @@ export function requiresAgentErrorConfigurationChange(message: string): boolean 
   return code === 'REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED'
     || code === 'REMOTE_COMPAT_MODE_UNSUPPORTED'
     || code === 'REMOTE_LOCAL_ONLY_PROVIDER'
-    || code === 'DEVICE_LINK_CONTROL_DISABLED';
+    || code === 'DEVICE_LINK_CONTROL_DISABLED'
+    || code === 'REMOTE_AGENT_RESUME_UNAVAILABLE';
 }
 
 /** Presentation only: startup failures must not be mistaken for a new retry policy.

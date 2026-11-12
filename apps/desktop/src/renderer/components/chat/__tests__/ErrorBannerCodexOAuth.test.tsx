@@ -76,7 +76,7 @@ function deferred<T>() {
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => key,
-    i18n: { language: 'en', exists: (key: string) => key === 'chat.remoteError.REMOTE_AGENT_GROUP_USAGE_LIMIT' },
+    i18n: { language: 'en', exists: (key: string) => ['chat.remoteError.REMOTE_AGENT_GROUP_USAGE_LIMIT', 'chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE'].includes(key) },
   }),
 }));
 
@@ -95,6 +95,24 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 describe('ErrorBanner OpenAI connection recovery', () => {
+  // #10187: both live and restored tail errors keep the existing recovery action
+  // and hide unchanged retry, even when the failed input has a retryText (unit).
+  it.each(['live', 'tail'] as const)('offers a route change for %s rejected shared history', surface => {
+    const raw = 'LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer';
+    const recover = vi.fn();
+    const retry = vi.fn();
+    render(surface === 'live'
+      ? <ErrorBanner error={raw} agentKind="codex" agentDeviceId="share:one" retryText="original"
+          onRetry={retry} onChooseComputer={recover} />
+      : <ErrorTailErrorBanner errorText={raw} agentKind="codex" agentDeviceId="share:one"
+          onContinue={retry} onDismiss={vi.fn()} onChooseComputer={recover} />);
+    expect(screen.getByText('chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'sharedTaskRecovery.choose' }));
+    expect(recover).toHaveBeenCalledOnce();
+    expect(retry).not.toHaveBeenCalled();
+  });
+
   // PR #10049: ordinary OpenAI 401 recovery must unlock the original input only
   // after the existing account probe verifies it, including after remounting.
   it.each([false, true])('restores generic authentication retry after verification (remount=%s)', async remount => {

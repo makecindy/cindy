@@ -11,6 +11,7 @@ import {
   redactSensitiveText,
   redactSensitiveTextDeep,
   parseAgentErrorCode,
+  requiresAgentErrorConfigurationChange,
   localizeSubscriptionAccountError,
 } from './errorRedaction.js';
 
@@ -398,5 +399,29 @@ describe('subscription account startup guidance', () => {
     expect(localizeSubscriptionAccountError('LAZY_CREATE_FAILED: The task subscription account requires login or quota reset', t)).toBe('chat.subscriptionAccountError.legacy');
     expect(localizeSubscriptionAccountError('An upstream diagnostic mentions quota reset', t)).toBeNull();
     expect(localizeSubscriptionAccountError('[REMOTE_FUTURE] quota reset', t)).toBeNull();
+  });
+});
+
+// #10187: released hosts reject an unowned native resume before starting an
+// Agent. Presentation must offer a route change, not an endless resend (unit).
+describe('remote native resume rejection', () => {
+  it.each([
+    '[REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer',
+    'LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer',
+    'REHYDRATE_FAILED: [REMOTE_AGENT_INVALID] This conversation cannot be resumed on this computer.',
+    "Error invoking remote method 'maker:send': Error: [IPC_ERROR] LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer",
+  ])('classifies the released-host error through %s', message => {
+    expect(parseAgentErrorCode(message)?.code).toBe('REMOTE_AGENT_RESUME_UNAVAILABLE');
+    expect(requiresAgentErrorConfigurationChange(message)).toBe(true);
+  });
+  it.each([
+    '[REMOTE_AGENT_INVALID] invalid remote agent request',
+    '[REMOTE_AGENT_INVALID] this shared task is not authorized on this computer',
+    '[REMOTE_AGENT_INVALID] this conversation cannot be forked on this computer',
+    '[REMOTE_AGENT_UNAVAILABLE] this conversation cannot be resumed on this computer',
+    'this conversation cannot be resumed on this computer',
+  ])('does not reinterpret a different rejection: %s', message => {
+    expect(parseAgentErrorCode(message)?.code).not.toBe('REMOTE_AGENT_RESUME_UNAVAILABLE');
+    expect(requiresAgentErrorConfigurationChange(message)).toBe(false);
   });
 });

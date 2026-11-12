@@ -453,7 +453,7 @@ export function ErrorBanner({
   });
   // 订阅套餐错误保留 Retry：用户重新连接 Anthropic 后可从当前错误卡片重试；
   // Gateway 错误则隐藏 Retry，改走切换到 Claude.ai 的明确恢复动作。
-  const hideRetry = isMemberBudgetPaused(error) ||
+  const hideRetry = remoteErrorCode === 'REMOTE_AGENT_RESUME_UNAVAILABLE' || isMemberBudgetPaused(error) ||
     isSilentStopExhausted ||
     isClaudeGatewayOpusPlanMismatch ||
     isGatewayProxyTokenInvalid ||
@@ -653,7 +653,9 @@ export function ErrorBanner({
     hasSpecialGuidance = false;
   }
   const showUnwrappedRaw = !hasSpecialGuidance || isResponsesLiteParallelToolCallsError(error);
-  if (sharedRecoveryReason) displayError = t(`sharedTaskRecovery.reason.${sharedRecoveryReason}`);
+  if (sharedRecoveryReason && remoteErrorCode !== 'REMOTE_AGENT_RESUME_UNAVAILABLE') {
+    displayError = t(`sharedTaskRecovery.reason.${sharedRecoveryReason}`);
+  }
   const canShowErrorDetails =
     isNetworkishError ||
     isOverloadError ||

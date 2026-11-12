@@ -195,7 +195,7 @@ export class AgentNetClient {
   async mediaResponse(id: string, range?: string, signal?: AbortSignal): Promise<Response> {
     const path = this.path('/media/' + encodeURIComponent(id));
     const deadline = new AbortController();
-    const timer = setTimeout(() => deadline.abort(), 30_000); timer.unref();
+    const timer = setTimeout(() => deadline.abort(), 30_000); (timer as unknown as { unref?: () => void }).unref?.();
     let response: Response;
     try { response = await (this.transport.fetch ?? fetch)(this.base + path, { headers: { authorization: this.header('GET', path), ...(range ? { range } : {}) }, redirect: 'error', signal: signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal }); }
     finally { clearTimeout(timer); }
@@ -204,7 +204,7 @@ export class AgentNetClient {
   }
   /** Native media reads are bounded ranges; retain their deadline until consumed. */
   async withMediaResponse<T>(id: string, range: string, consume: (response: Response) => Promise<T>, signal?: AbortSignal): Promise<T> {
-    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 60_000); timer.unref();
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 60_000); (timer as unknown as { unref?: () => void }).unref?.();
     try {
       const response = await this.mediaResponse(id, range, signal ? AbortSignal.any([signal, controller.signal]) : controller.signal);
       return await consume(response);
@@ -239,7 +239,7 @@ export function createDelegationApprover(client: AgentNetClient, assertCurrent: 
           const timer = setTimeout(() => {
             timers.delete(timer);
             if (!closed && latest.get(request.id) === request) { attempted.delete(key); pending.set(key, request); drain(); }
-          }, 1000); timer.unref(); timers.add(timer);
+          }, 1000); (timer as unknown as { unref?: () => void }).unref?.(); timers.add(timer);
         } else onError(error instanceof Error && /^[A-Z0-9_]{1,80}$/.test(error.message) ? error.message : 'SHARING_AUTHORIZATION_FAILED');
       }).finally(() => { running.delete(key); drain(); });
     }
@@ -287,7 +287,7 @@ export class AgentNetUplink extends EventEmitter {
     const uplink = new AgentNetUplink(ws);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { ws.terminate(); reject(new Error('AGENT_NET_HANDSHAKE_TIMEOUT')); }, 10_000);
-      timer.unref();
+      (timer as unknown as { unref?: () => void }).unref?.();
       let established = false;
       const fail = (error: Error) => { clearTimeout(timer); if (!established) reject(error); ws.terminate(); };
       ws.on('error', fail);

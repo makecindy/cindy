@@ -915,7 +915,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       }).catch(() => logger.error({}, 'agent-net state cleanup failed')).finally(() => { sweeping = false; });
     }
   }, 30_000);
-  sweep.unref();
+  (sweep as unknown as { unref?: () => void }).unref?.();
   const address = server.address() as AddressInfo;
   const publicHost = address.address === '::' ? '[::1]' : address.address === '0.0.0.0' ? '127.0.0.1' : isIP(address.address) === 6 ? '[' + address.address + ']' : address.address;
   let closeOperation: Promise<void> | undefined;
