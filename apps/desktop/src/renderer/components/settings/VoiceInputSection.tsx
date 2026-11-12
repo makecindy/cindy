@@ -78,6 +78,7 @@ import {
   validateVoiceInputCustomAsrWebsocketUrl,
 } from '../../../shared/voiceInputCustomAsr';
 import type { VoiceInputConnectionTestFailureReason } from '../../../shared/voiceInputConnectionTest';
+import appI18n from 'i18next';
 
 const log = createLogger('VoiceInputSection');
 // Recognition-language availability is independent of UI localization.
@@ -190,7 +191,7 @@ function formatHistoryTime(createdAt: number, locale: string): string {
       minute: '2-digit',
     }).format(new Date(createdAt));
   } catch {
-    return new Date(createdAt).toLocaleString();
+    return new Date(createdAt).toLocaleString(appI18n.language);
   }
 }
 
