@@ -107,6 +107,19 @@ export function onClaudeSessionRouteChange(listener: RouteChangeListener): () =>
   };
 }
 
+/**
+ * Drops everything recorded for one task: its route, its latest request id and any
+ * request routes not yet consumed. The Node Host calls it when its runtime closes;
+ * the desktop keeps routes for the app lifetime and does not call it.
+ */
+export function forgetClaudeSessionRoute(sessionId: string): void {
+  routes.delete(sessionId);
+  latestRequestIds.delete(sessionId);
+  for (const [reqId, route] of requestRoutes) {
+    if (route.sessionId === sessionId) requestRoutes.delete(reqId);
+  }
+}
+
 /** 测试隔离用。 */
 export function resetClaudeSessionRouteRegistryForTest(): void {
   routes.clear();
