@@ -139,6 +139,9 @@ export interface AnthropicCompatProxyHostPorts {
   resolveDesktopOutboundProxy: typeof import('./outbound-proxy-resolver.js').resolveDesktopOutboundProxy;
   claudeUpstreamEndpoint: typeof import('./runtime-configs.js').claudeUpstreamEndpoint;
   readSilentEncryptedRetrySettings: typeof import('./silent-encrypted-retry-store.js').readSilentEncryptedRetrySettings;
+  /** Optional inbound admission, checked before all routing (the Node Host requires inbound
+   * credentials on its loopback proxy). Not set: no check, as before. */
+  authorizeInbound?: import('@cindy/anthropic-compat-proxy').ProxyOptions['authorizeInbound'];
 }
 
 /** One loopback proxy with its routing, transforms, recovery rules and observers. */
@@ -1195,6 +1198,7 @@ async function ensureAnthropicCompatProxyReady(): Promise<void> {
       // 函数形态:model-access 凭据同步可能在 proxy 启动(splash)后才把 endpoint
       // 换成下发值;每请求现取才能保证与当前 key 同租户(proxy 内部按值 memoize)。
       upstream: () => claudeUpstreamEndpoint(),
+      ...(ports.authorizeInbound ? { authorizeInbound: ports.authorizeInbound } : {}),
       resolveWebSocketUpstream: resolvePiWebSocketUpstream,
       prepareWebSocketRequest: createPiWebSocketRequestPreparer(),
       webSocketTransforms: piWebSocketTransforms,
