@@ -579,16 +579,23 @@
     },
     {
       "id": "bot-market",
-      "status": "proposed",
-      "en": "Discover Teammates",
+      "status": "decided",
+      "en": "Discover Buddies",
       "translations": {
         "zh-CN": "发现伙伴",
         "zh-TW": "發現夥伴",
         "ja": "仲間を探す",
-        "ko": "동료 찾기"
+        "ko": "동반자 찾기",
+        "de": "Freunde entdecken",
+        "fr": "Découvrir des amis",
+        "es": "Descubrir amigos",
+        "pt-PT": "Descobrir amigos",
+        "pt-BR": "Descobrir amigos",
+        "zh-Hans-x-lzh": "访同伴",
+        "zh-Hant-x-lzh": "訪同伴"
       },
       "checkCase": false,
-      "note": "预制伙伴目录与邀请入口，仅 Desktop。入口菜单项与弹窗标题同用 bots.market.heading，不再另设英文品牌名 Bot Market；英文句中小写 teammates（Discover teammates 作动作时），作功能名保持 Discover Teammates。"
+      "note": "预制伙伴目录与邀请入口；使用 Buddy 对应的本地化产品术语。"
     },
     {
       "id": "bot-reply-post",
@@ -3783,16 +3790,65 @@
     },
     {
       "id": "teammate",
-      "status": "proposed",
-      "en": "Teammate",
+      "status": "decided",
+      "en": "Buddy",
       "translations": {
         "zh-CN": "伙伴",
         "zh-TW": "夥伴",
         "ja": "仲間",
-        "ko": "동료"
+        "ko": "동반자",
+        "de": "Freund",
+        "fr": "Ami",
+        "es": "Amigo",
+        "pt-PT": "Amigo",
+        "pt-BR": "Amigo",
+        "zh-Hans-x-lzh": "同伴",
+        "zh-Hant-x-lzh": "同伴"
       },
       "checkCase": false,
-      "note": "Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、自有记忆与技能、模型候选链，可以用 send_to_session 给其它任务和伙伴发消息或新开普通 Cindy 任务（2026-11-08 起 V2：伙伴 = 一个项目 + 它的任务 + 身份，伙伴私信已下线）。产品定位参照「AI teammates」，故取人称名词而非机器名词。英文用法分两层：功能名与复数用 Teammates（侧栏标题），句中单数用小写 teammate（`this teammate`、`Archive teammate`）——故 checkCase 为 false。**与 IM 平台机器人严格区分**：Telegram Bot / Discord Bot / 飞书 bot / 企业微信机器人 / @BotFather / bot token 指的是消息平台上的 bot 账号，仍写作 Bot / 机器人，不改成本词；判据是「这个词指的是 Cindy 里那个持久助手实体」才用本词。覆盖 desktop 的 bots.* 命名空间、sidebar.tabs.bots、newChat.atMention.bot 与 mobile 的 devices.json bots.*。先登记为 proposed：改名刚落地，等 UI 走查与产品评审后再定 decided，届时再决定是否把「Bot」登记为各语言的 forbidden 译法（现在不能登记——存量 IM 平台 bot 文案会被大面积误伤）。"
+      "note": "Cindy 的持久 AI 伙伴。英文单数 Buddy、复数 Buddies，句中小写；V2 默认项目名为 Buddy <名字>。其它语言按本表自然变格。内部 teammate/bot 标识保持兼容。Telegram Bot、Discord Bot 等平台机器人不使用本术语。",
+      "alsoAllowed": {
+        "fr": [
+          {
+            "text": "ami",
+            "when": "句中使用小写首字母。"
+          },
+          {
+            "text": "amis",
+            "when": "按语法使用复数形式。"
+          }
+        ],
+        "es": [
+          {
+            "text": "amigo",
+            "when": "句中使用小写首字母。"
+          },
+          {
+            "text": "amigos",
+            "when": "按语法使用复数形式。"
+          }
+        ],
+        "pt-PT": [
+          {
+            "text": "amigo",
+            "when": "句中使用小写首字母。"
+          },
+          {
+            "text": "amigos",
+            "when": "按语法使用复数形式。"
+          }
+        ],
+        "pt-BR": [
+          {
+            "text": "amigo",
+            "when": "句中使用小写首字母。"
+          },
+          {
+            "text": "amigos",
+            "when": "按语法使用复数形式。"
+          }
+        ]
+      }
     },
     {
       "id": "teammate-core-skill",

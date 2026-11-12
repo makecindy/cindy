@@ -517,7 +517,7 @@ export function buildMemberTurnPrompt(input: {
   const lines = [
     `[Cindy group chat "${input.groupName.replace(/["\\\r\n]/g, ' ')}"]`,
     `You are ${input.botName}, one participant in this group chat with the user (your owner)${
-      input.peerNames.length > 0 ? ` and your teammates ${input.peerNames.join(', ')}` : ''
+      input.peerNames.length > 0 ? ` and your buddies ${input.peerNames.join(', ')}` : ''
     }.`,
   ];
   if (input.mentioned === 'you') lines.push('The user mentioned you, so answer this time.');

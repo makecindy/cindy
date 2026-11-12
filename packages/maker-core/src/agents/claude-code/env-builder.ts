@@ -129,6 +129,7 @@ function serializeModelContextWindows(
  * - header 注入 (CUSTOM_HEADERS — 可塞 Authorization 直接覆盖 key)
  * - provider 切换 (Vertex / Bedrock / Foundry — 走另一套体系)
  * - 配置目录重定向 (CLAUDE_CONFIG_DIR — 让 CC 去读别处的 .credentials.json)
+ * - 凭证库定位 (CLAUDE_SECURESTORAGE_CONFIG_DIR — 让 CC 去读另一条钥匙串登录)
  *
  * 任何 host (desktop / 未来 server / CI) 都应该:
  * - boot 阶段调用 stripSensitiveAnthropicEnv() 清根上的 process.env (主防线)
@@ -162,6 +163,10 @@ export const SENSITIVE_ANTHROPIC_ENV_KEYS = [
   'ANTHROPIC_FOUNDRY_RESOURCE',
   // 配置目录重定向
   'CLAUDE_CONFIG_DIR',
+  // 凭证库定位:CLI 用它(而不是 CLAUDE_CONFIG_DIR)算钥匙串条目名。设了就盖过配置目录,
+  // 设成空串还会回到默认条目 —— 继承残留会让「供应商内订阅账号」的会话读到默认登录,
+  // 或让默认账号读到别人的登录。Cindy 从不写它。
+  'CLAUDE_SECURESTORAGE_CONFIG_DIR',
   // host 接管标记:非订阅会话由 buildClaudeEnv 显式写 '1';继承来的残留(终端里的 cc
   // 会话跑 dev)会让订阅会话的 CLI 不读自己的登录凭证,而 SDK merge 只能覆盖、删不掉。
   'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST',

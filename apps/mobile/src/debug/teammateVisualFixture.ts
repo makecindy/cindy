@@ -100,7 +100,7 @@ function visualSkillsPage(id: string, section: string | undefined) {
   ]);
   if (section === '_core') return page('核心技能', [
     { id: 'core', primitive: 'markdown', fallbackMarkdown: '所有伙伴共用 · 始终开启 · 随 Cindy 更新\n\n每位伙伴都以这项技能为基础，内容包括：\n· 任务：在对话里完成工作，需要时开启后台任务。\n· 伙伴：给其他伙伴发消息，一起协作。\n· 模型与工具：按你的要求更换模型，查找工作需要的工具和插件。\n· 记忆：记住你的偏好和纠正，按你的要求保存技能。\n· 了解自己：知道自己能做什么，按你的要求开关自己的能力。' },
-    { id: 'core-original', title: '原文', primitive: 'markdown', fallbackMarkdown: '# Cindy teammate guide\n\nYou are a teammate inside Cindy…' },
+    { id: 'core-original', title: '原文', primitive: 'markdown', fallbackMarkdown: '# Cindy buddy guide\n\nYou are a buddy inside Cindy…' },
   ]);
   return toggle('发布说明写法', '按团队格式整理每次发布的说明。', learnedSkillOn);
 }
@@ -155,8 +155,8 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
   }
   if (channel === REMOTE_RESOURCE_MANIFEST_CHANNEL) return {
     protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION,
-    collections: [{ id: TEAMMATES, resourceKind: 'bot', title: 'Teammates', placement: 'home-scope',
-      actions: [{ id: 'open-create', label: 'New teammate' }] },
+    collections: [{ id: TEAMMATES, resourceKind: 'bot', title: 'Buddies', placement: 'home-scope',
+      actions: [{ id: 'open-create', label: 'New buddy' }] },
       { id: BOT_GROUP_REMOTE_COLLECTION_ID, resourceKind: BOT_GROUP_REMOTE_RESOURCE_KIND, title: 'Groups', placement: 'home-scope' }],
   } satisfies RemoteResourceManifestResponse;
   const groupSwitch = groupSwitchVisualFixture(channel, args[0]);

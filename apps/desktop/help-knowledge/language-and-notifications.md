@@ -26,4 +26,4 @@ Settings > General controls the display language, desktop notifications, and a f
 
 - **App Behavior** — **Keep computer awake** (so background agents and scheduled tasks keep running), **Start at Login** (off by default), **Show remaining usage in the menu bar** (macOS), **When closing the main window** (Windows: Minimize to tray / Quit Cindy; Linux: Minimize window / Quit Cindy), and **Prevent Accidental Clicks When Returning** (macOS / Windows).
 - **Message input** — **Use ⌘↵ to send** (Ctrl+Enter on Windows / Linux). When it's off (the default), Enter sends and Shift+Enter inserts a new line.
-- General also holds your account info, Teammates, Collaboration limits, Agent Resource Usage, Git Safety, Pi extensions, Experimental, and Logout.
+- General also holds your account info, Buddies, Collaboration limits, Agent Resource Usage, Git Safety, Pi extensions, Experimental, and Logout.

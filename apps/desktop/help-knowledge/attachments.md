@@ -21,7 +21,7 @@ You can give the agent more than plain text.
   - **Files and folders** in the task's **working directory** (extra directories aren't scanned by the picker).
   - Agents defined in the project.
   - **Tasks** — type a keyword to find past tasks and reference them.
-  - **Teammates** — "Message or delegate" to one of your teammates.
+  - **Buddies** — "Message or delegate" to one of your buddies.
   - The current task's built-in **browser tabs** and open **app windows** on this computer (local tasks only).
   - **Plugin** commands and plugin resources.
 - Matching favors names that start with what you typed, then falls back to in-order fuzzy matching on names and paths.
