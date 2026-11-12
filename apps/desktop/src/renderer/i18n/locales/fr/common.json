@@ -8365,7 +8365,91 @@
         "mcpAppOnly": "Page uniquement",
         "uiPageAccess": "Pages : {{pages}} ; domaines : {{domains}} ; outils disponibles aux pages : {{tools}}",
         "uiHost": "Fournir des interfaces et des actions hôte dans Cindy",
-        "uiHostAccess": "{{subject}} : {{access}}"
+        "uiHostAccess": "{{subject}} : {{access}}",
+        "hostUi": {
+          "view": "Afficher une page {{scope}} avec « {{name}} »",
+          "resource": "Utiliser la ressource {{kind}} « {{name}} »",
+          "contribution": "Afficher un élément {{kind}} dans la zone {{position}}",
+          "command": "Fournir une commande de plugin",
+          "namedAccess": "« {{name}} » : {{details}}",
+          "setting": "Fournir un réglage ({{type}})",
+          "settingTypes": {
+            "boolean": "Activé/désactivé",
+            "string": "Texte",
+            "number": "Nombre"
+          },
+          "minimum": "Minimum : {{value}}",
+          "maximum": "Maximum : {{value}}",
+          "maxLength": "Nombre maximal de caractères : {{value}}",
+          "extensions": "Extensions de fichiers autorisées : {{value}}",
+          "mimeTypes": "Types de fichiers autorisés : {{value}}",
+          "trigger": "Préfixe de saisie semi-automatique : {{value}}",
+          "openView": "Ouvrir la page « {{name}} »",
+          "tool": "Exécuter l’outil « {{name}} »",
+          "arguments": "Paramètres : {{value}}",
+          "listValue": "Liste [{{value}}]",
+          "fieldsValue": "Champs ({{value}})",
+          "nullValue": "Aucune valeur",
+          "shortcut": "Raccourci : {{value}}",
+          "popover": "Ouvrir la page à côté de l’entrée",
+          "roles": "Messages de : {{value}}",
+          "tools": "Outils concernés : {{value}}",
+          "plugins": "Plugins concernés : {{value}}",
+          "options": "Valeurs disponibles : {{value}}",
+          "yes": "Oui",
+          "no": "Non",
+          "unavailable": "Les détails de cette autorisation sont indisponibles",
+          "capabilities": {
+            "context": "Lire la tâche actuelle et le texte sélectionné",
+            "draft": "Lire et modifier le brouillon du message",
+            "appearance": "Modifier les paramètres d’apparence déclarés",
+            "visibility": "Afficher ou masquer la fenêtre et les zones d’interface déclarées"
+          },
+          "fields": {
+            "uiFont": "Modifier la police de l’interface",
+            "codeFont": "Modifier la police du code",
+            "bodyFont": "Modifier la police des messages",
+            "wallpaper": "Modifier le fond d’écran",
+            "theme": "Modifier les couleurs des messages",
+            "reading": "Modifier la largeur de lecture et l’interligne",
+            "contentStyle": "Modifier l’espacement des messages et les bulles"
+          },
+          "positions": {
+            "composer_toolbar": "barre d’outils de saisie",
+            "session_header": "en-tête de la tâche",
+            "statusbar": "barre d’état",
+            "message_actions": "barre d’actions du message",
+            "message_menu": "menu Plus du message",
+            "turn_footer": "pied de la réponse",
+            "message_body": "corps du message",
+            "tool_body": "résultat de l’outil",
+            "sidebar_navigation": "navigation latérale",
+            "session_menu": "menu de la tâche",
+            "settings_section": "page des paramètres",
+            "composer_completion": "saisie semi-automatique",
+            "composer_attachment": "actions sur les pièces jointes",
+            "sidebar_section": "section latérale",
+            "window_titlebar": "barre de titre de la fenêtre"
+          },
+          "kinds": {
+            "button": "bouton",
+            "select": "liste de sélection",
+            "status": "texte d’état"
+          },
+          "scopes": {
+            "global": "globale",
+            "task": "de la tâche actuelle"
+          },
+          "resources": {
+            "font": "police",
+            "image": "image",
+            "video": "vidéo"
+          },
+          "speakers": {
+            "user": "Utilisateur",
+            "assistant": "Assistant"
+          }
+        }
       },
       "connections": {
         "confirmTitle": "Ajouter une adresse de connexion",

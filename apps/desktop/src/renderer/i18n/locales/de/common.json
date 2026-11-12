@@ -8293,7 +8293,91 @@
         "mcpAppOnly": "Nur Seite",
         "uiPageAccess": "Seiten: {{pages}}; Domains: {{domains}}; für Seiten verfügbare Tools: {{tools}}",
         "uiHost": "Oberflächen und Host-Aktionen in Cindy bereitstellen",
-        "uiHostAccess": "{{subject}}: {{access}}"
+        "uiHostAccess": "{{subject}}: {{access}}",
+        "hostUi": {
+          "view": "{{scope}} Seite mit „{{name}}“ anzeigen",
+          "resource": "{{kind}}-Ressource „{{name}}“ verwenden",
+          "contribution": "{{kind}} in {{position}} anzeigen",
+          "command": "Plugin-Befehl bereitstellen",
+          "namedAccess": "„{{name}}“: {{details}}",
+          "setting": "Einstellung bereitstellen ({{type}})",
+          "settingTypes": {
+            "boolean": "Ein/aus",
+            "string": "Text",
+            "number": "Zahl"
+          },
+          "minimum": "Minimum: {{value}}",
+          "maximum": "Maximum: {{value}}",
+          "maxLength": "Maximale Zeichenanzahl: {{value}}",
+          "extensions": "Erlaubte Dateiendungen: {{value}}",
+          "mimeTypes": "Erlaubte Dateitypen: {{value}}",
+          "trigger": "Präfix der Eingabevervollständigung: {{value}}",
+          "openView": "Seite „{{name}}“ öffnen",
+          "tool": "Werkzeug „{{name}}“ ausführen",
+          "arguments": "Parameter: {{value}}",
+          "listValue": "Liste [{{value}}]",
+          "fieldsValue": "Felder ({{value}})",
+          "nullValue": "Kein Wert",
+          "shortcut": "Tastenkürzel: {{value}}",
+          "popover": "Seite neben dem Eintrag öffnen",
+          "roles": "Nachrichten von: {{value}}",
+          "tools": "Für Werkzeuge: {{value}}",
+          "plugins": "Für Plugins: {{value}}",
+          "options": "Verfügbare Werte: {{value}}",
+          "yes": "Ja",
+          "no": "Nein",
+          "unavailable": "Berechtigungsdetails sind nicht verfügbar",
+          "capabilities": {
+            "context": "Aktuelle Aufgabe und ausgewählten Text lesen",
+            "draft": "Nachrichtenentwurf lesen und bearbeiten",
+            "appearance": "Deklarierte Darstellungseinstellungen ändern",
+            "visibility": "Fenster und deklarierte Oberflächenbereiche ein- oder ausblenden"
+          },
+          "fields": {
+            "uiFont": "Oberflächenschrift ändern",
+            "codeFont": "Codeschrift ändern",
+            "bodyFont": "Nachrichtenschrift ändern",
+            "wallpaper": "Hintergrundbild ändern",
+            "theme": "Nachrichtenfarben ändern",
+            "reading": "Lesebreite und Zeilenabstand ändern",
+            "contentStyle": "Nachrichtenabstand und Sprechblasen ändern"
+          },
+          "positions": {
+            "composer_toolbar": "Eingabe-Werkzeugleiste",
+            "session_header": "Aufgabenkopf",
+            "statusbar": "Statusleiste",
+            "message_actions": "Nachrichten-Aktionsleiste",
+            "message_menu": "Mehr-Menü der Nachricht",
+            "turn_footer": "Antwortfuß",
+            "message_body": "Nachrichtentext",
+            "tool_body": "Werkzeugergebnis",
+            "sidebar_navigation": "Seitenleistennavigation",
+            "session_menu": "Aufgabenmenü",
+            "settings_section": "Einstellungsseite",
+            "composer_completion": "Eingabevervollständigung",
+            "composer_attachment": "Anhangaktionen",
+            "sidebar_section": "Seitenleistenbereich",
+            "window_titlebar": "Fenstertitelleiste"
+          },
+          "kinds": {
+            "button": "Schaltfläche",
+            "select": "Auswahlliste",
+            "status": "Statustext"
+          },
+          "scopes": {
+            "global": "Globale",
+            "task": "Aufgabenbezogene"
+          },
+          "resources": {
+            "font": "Schrift",
+            "image": "Bild",
+            "video": "Video"
+          },
+          "speakers": {
+            "user": "Benutzer",
+            "assistant": "Assistent"
+          }
+        }
       },
       "connections": {
         "confirmTitle": "Verbindungsadresse hinzufügen",

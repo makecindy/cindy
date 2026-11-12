@@ -543,7 +543,7 @@
     "organizerHint": "Decides who does each step. Defaults to the first buddy.",
     "ownFolder": "Group's own folder",
     "archive": "Archive Group",
-    "unarchive": "Unarchive Group",
+    "unarchive": "Unarchive group",
     "archiveHint": "Archiving disables this group for all members, stopping new messages and buddy runs. History is kept. Search for the group to view its history or unarchive it.",
     "unarchiveHint": "Resume messages and companion activity.",
     "archiveRowHint": "Pauses the group for everyone; history is kept",
@@ -596,7 +596,7 @@
     "yourTeammate": "Your buddy"
   },
   "invitation": {
-    "join": "Join Group",
+    "join": "Join group",
     "joinDescription": "Paste an invitation link or code to continue.",
     "inviteLink": "Invitation link",
     "pasteLink": "Paste invitation link",

@@ -108,7 +108,7 @@
     "groupBadge_one": "Provider Group · {{count}} computer",
     "groupBadge_other": "Provider Group · {{count}} computers",
     "harness": "Harness",
-    "restoreRecommended": "Restore Recommended",
+    "restoreRecommended": "Restore recommended",
     "saveFailed": "Could not save. Try again.",
     "configure": "Configure",
     "syncFailed": "Favorites could not sync. Reopen the picker to retry; the remote computer may need an update.",

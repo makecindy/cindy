@@ -30,7 +30,7 @@ describe('Telegram control copy follows the interface language', () => {
       "🤷 Nothing is running right now, so `!stop` had nothing to stop. Call me again when there's something to halt.",
     );
     expect(telegramUiText.expiredCardNotice).toBe('This card has expired');
-    expect(ui.cards.plan.btnApprove).toBe('✅ Go Ahead');
+    expect(ui.cards.plan.btnApprove).toBe('✅ Go ahead');
   });
 
   it('fills placeholders and keeps code-side branching', () => {

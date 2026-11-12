@@ -8250,7 +8250,91 @@
         "mcpAppOnly": "페이지 전용",
         "uiPageAccess": "페이지: {{pages}}; 도메인: {{domains}}; 페이지에서 호출할 수 있는 도구: {{tools}}",
         "uiHost": "Cindy에 인터페이스 및 호스트 작업 제공",
-        "uiHostAccess": "{{subject}}: {{access}}"
+        "uiHostAccess": "{{subject}}: {{access}}",
+        "hostUi": {
+          "view": "“{{name}}” 리소스로 {{scope}} 페이지 표시",
+          "resource": "{{kind}} 리소스 “{{name}}” 사용",
+          "contribution": "{{position}}에 {{kind}} 표시",
+          "command": "플러그인 명령 제공",
+          "namedAccess": "“{{name}}”: {{details}}",
+          "setting": "설정 항목 제공({{type}})",
+          "settingTypes": {
+            "boolean": "켜기/끄기",
+            "string": "텍스트",
+            "number": "숫자"
+          },
+          "minimum": "최솟값: {{value}}",
+          "maximum": "최댓값: {{value}}",
+          "maxLength": "최대 문자 수: {{value}}",
+          "extensions": "허용된 파일 확장자: {{value}}",
+          "mimeTypes": "허용된 파일 형식: {{value}}",
+          "trigger": "자동 완성 접두사: {{value}}",
+          "openView": "“{{name}}” 페이지 열기",
+          "tool": "“{{name}}” 도구 실행",
+          "arguments": "매개변수: {{value}}",
+          "listValue": "목록 [{{value}}]",
+          "fieldsValue": "필드 ({{value}})",
+          "nullValue": "값 없음",
+          "shortcut": "단축키: {{value}}",
+          "popover": "항목 옆에 페이지 열기",
+          "roles": "메시지 작성자: {{value}}",
+          "tools": "대상 도구: {{value}}",
+          "plugins": "대상 플러그인: {{value}}",
+          "options": "선택 가능한 값: {{value}}",
+          "yes": "예",
+          "no": "아니요",
+          "unavailable": "이 권한의 세부 정보를 표시할 수 없습니다",
+          "capabilities": {
+            "context": "현재 작업과 선택한 텍스트 읽기",
+            "draft": "입력창 초안 읽기 및 편집",
+            "appearance": "선언된 모양 설정 변경",
+            "visibility": "창 및 선언된 화면 영역 표시 또는 숨기기"
+          },
+          "fields": {
+            "uiFont": "화면 글꼴 변경",
+            "codeFont": "코드 글꼴 변경",
+            "bodyFont": "본문 글꼴 변경",
+            "wallpaper": "배경화면 변경",
+            "theme": "메시지 색상 변경",
+            "reading": "읽기 너비 및 줄 간격 변경",
+            "contentStyle": "메시지 간격 및 말풍선 모양 변경"
+          },
+          "positions": {
+            "composer_toolbar": "입력창 도구 모음",
+            "session_header": "작업 머리글",
+            "statusbar": "상태 표시줄",
+            "message_actions": "메시지 작업 모음",
+            "message_menu": "메시지 더보기 메뉴",
+            "turn_footer": "답변 하단",
+            "message_body": "메시지 본문",
+            "tool_body": "도구 결과",
+            "sidebar_navigation": "사이드바 탐색",
+            "session_menu": "작업 메뉴",
+            "settings_section": "설정 페이지",
+            "composer_completion": "입력 자동 완성",
+            "composer_attachment": "첨부 파일 작업",
+            "sidebar_section": "사이드바 콘텐츠",
+            "window_titlebar": "창 제목 표시줄"
+          },
+          "kinds": {
+            "button": "버튼",
+            "select": "선택 목록",
+            "status": "상태 텍스트"
+          },
+          "scopes": {
+            "global": "전역",
+            "task": "현재 작업"
+          },
+          "resources": {
+            "font": "글꼴",
+            "image": "이미지",
+            "video": "동영상"
+          },
+          "speakers": {
+            "user": "사용자",
+            "assistant": "어시스턴트"
+          }
+        }
       },
       "connections": {
         "confirmTitle": "연결 주소 추가",

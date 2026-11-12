@@ -14,7 +14,7 @@ describe('Feishu control copy follows the interface language', () => {
     setMainLocale('en');
     expect(ui.slash.new).toBe("🌱 Fresh start — I've cleared our previous conversation. Let's begin again!");
     expect(ui.cards.control.btnExit).toBe('🚪 Exit');
-    expect(ui.cards.permission.btnAllowOnce).toBe('✅ Allow Once');
+    expect(ui.cards.permission.btnAllowOnce).toBe('✅ Allow once');
     expect(ui.slash.help).toContain('/exctr       End remote control and return to our DM');
   });
 

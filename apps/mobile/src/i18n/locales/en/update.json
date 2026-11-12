@@ -19,7 +19,7 @@
     "version": "Version {{version}}",
     "notesLabel": "What's New",
     "updateNow": "Update Now",
-    "permissionTitle": "Allow Cindy to Install Apps",
+    "permissionTitle": "Allow Cindy to install apps",
     "permissionBody": "Turn it on in system settings and come back. The update continues automatically.",
     "grantAndUpdate": "Allow & Update",
     "deniedTitle": "Installation Isn’t Allowed Yet",

@@ -26,7 +26,7 @@ describe('discord uiText locale', () => {
     expect(ui.cards.plan.title).toBe('📋 我打算这么干');
 
     setMainLocale('en');
-    expect(ui.cards.plan.title).toBe('📋 Here’s My Plan');
+    expect(ui.cards.plan.title).toBe('📋 Here’s my plan');
     expect(discordUiText.expiredCardNotice).toBe('This card has expired');
     expect(ui.cards.control.resolvedSessionPick('Fix login', 'web-app')).toBe(
       '🎯 You’re in: **Fix login** (web-app)\nYour messages now go straight to this session. Send `/exctr` anytime to leave.',
