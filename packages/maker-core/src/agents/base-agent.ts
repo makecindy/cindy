@@ -149,9 +149,14 @@ export interface PiMcpServerRef {
 
 /** pi spawn 附加配置:host 的 MCP HTTP bridge / 外部 HTTP MCP 出口。 */
 export interface PiExtraSpawnConfig {
+  /** Host-only callback; never serialized into tool results or transcripts. */
+  refreshMcpConfig?: (revision: number) => Promise<{ revision: number; config: PiExtraSpawnConfig | null } | null>;
+  configRevision?: number;
   mcpBridge?: {
     token: string;
     servers: PiMcpServerRef[];
+    configRevision?: number;
+    refreshSupported?: boolean;
     /** Bot-scoped memory is exposed as one typed Pi tool instead of nested discovery. */
     botMemoryFacade?: boolean;
   } | null;
@@ -2483,6 +2488,10 @@ export interface AgentSessionHandle {
    * the engine has no per-session MCP status entry.
    */
   readMcpServerTools?(serverName: string): Promise<AgentMcpServerToolsReport | null>;
+  /** Mount one newly saved host MCP in the existing local runtime, if supported.
+   * Never calls business tools, relaxes approvals, or replaces an existing connection.
+   */
+  mountMcpServer?(serverName: string): Promise<boolean>;
   /** Native session identity safe for resume; may retain an unaccepted fork's source. */
   readonly id: string;
   /** Transient native request identity; hosts must not persist it as a resume id. */

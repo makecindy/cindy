@@ -8756,6 +8756,10 @@
       }
     },
     "mcp": {
+      "setup": {
+        "loadFailed": "配置表未启，请重试。",
+        "savedDeliveryFailed": "配置已存，结果未达。请重试，无须复存。"
+      },
       "title": "外器",
       "subtitle": "接君自有之远程 MCP 服务器。HTTP / Streamable HTTP 服务器，Claude 与 Codex 皆可调用；SSE 仅支持 Claude。",
       "cancel": "罢",
@@ -8769,7 +8773,9 @@
       "dialog": {
         "createTitle": "增 MCP 服务器",
         "editTitle": "修 MCP 服务器",
-        "desc": "仅支持远程 http / sse 型 MCP。存后新开或重启之 Agent 差事即可调用，方行之 Agent 差事不受影响。",
+        "desc": "仅支持远程 http / sse 型 MCP。存后本差事即可调用；引擎原生工具之列，或须待下一轮或新差事方现。",
+                "matchNotice": "已有同端口之接通，存则更新此条。",
+                "createInstead": "改为另立一条",
         "teammateDesc": "仅支持远程 http / sse 型 MCP。存后同僚自纳为己用，于此言谈下一则讯息起即可用之，毋须新开差事。"
       },
       "fields": {
@@ -8802,7 +8808,7 @@
       },
       "deleteConfirm": {
         "title": "删 “{{name}}” 乎？",
-        "message": "删之，则新开或重启之 Agent 差事不再载此 MCP。",
+        "message": "删后本差事不复可调用此 MCP；引擎原生工具之列，将于下一轮或新差事中除之。",
         "confirm": "删"
       },
       "duplicates": {

@@ -5,6 +5,7 @@ import { registerAppModelsTools, type AppModelsCallbacks } from './xdt-helper/ap
 import { registerAppSettingsTools, type AppSettingsCallbacks } from './xdt-helper/app_settings.js';
 import { registerGithubTools, type GithubToolCallbacks } from './xdt-helper/github.js';
 import { registerMcpSetupTool, type McpSetupCallback } from './xdt-helper/mcp_setup.js';
+import { registerMcpGatewayTools, type McpGatewayCallback } from './xdt-helper/mcp_gateway.js';
 import { registerSharedTaskTools, type SharedTaskToolCallback } from './xdt-helper/shared_task.js';
 import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/session_tags.js';
 /**
@@ -190,6 +191,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   auth: [
     '本机窗口登录、保密输入与截图扫码（request_input_handoff）；',
     'MCP 设置表单（request_mcp_setup）；',
+    '保存后的固定入口（list_mcp_tools / call_mcp_tool，无需引擎热加载）；',
     'Grok 设备码登录、状态查询与取消（支持远程任务）。',
   ].join(''),
   control: [
@@ -545,6 +547,8 @@ export interface XdtHelperMcpDeps {
    */
   githubIssue?: SubmitGithubIssueDeps['submit'];
   mcpSetup?: McpSetupCallback;
+  /** Stable discovery/call entry; present only on hosts that can reach the saved server live. */
+  mcpGateway?: McpGatewayCallback;
   sharedTask?: SharedTaskToolCallback;
   /**
    * 当前 session 标题更新回调。host 注入后, control 类工具
@@ -740,7 +744,8 @@ export function createXdtHelperMcpServer(
     registerSetSessionRuntimeTool(registry, controlDeps);
   }
 
-  if (deps.mcpSetup) registerMcpSetupTool(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.mcpSetup);
+  if (deps.mcpGateway) registerMcpGatewayTools(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.mcpGateway);
+  if (deps.mcpSetup) registerMcpSetupTool(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.mcpSetup, !!deps.mcpGateway);
   if (deps.sharedTask) registerSharedTaskTools(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.sharedTask);
 
   // Feedback 类工具: 仅 host 注入了 githubIssue 回调时注册。

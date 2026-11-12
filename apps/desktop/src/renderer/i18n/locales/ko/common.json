@@ -8756,6 +8756,10 @@
       }
     },
     "mcp": {
+      "setup": {
+        "loadFailed": "설정 양식을 열지 못했습니다. 다시 시도하세요.",
+        "savedDeliveryFailed": "설정은 저장되었지만 결과를 전달하지 못했습니다. 다시 저장하지 말고 재시도하세요."
+      },
       "title": "외부 도구",
       "subtitle": "직접 만든 원격 MCP 서버를 연결합니다. HTTP / Streamable HTTP 서버는 Claude와 Codex 모두에서 사용 가능하며, SSE는 Claude 전용입니다.",
       "cancel": "취소",
@@ -8769,7 +8773,9 @@
       "dialog": {
         "createTitle": "MCP 서버 추가",
         "editTitle": "MCP 서버 편집",
-        "desc": "원격 http / sse 형식의 MCP만 지원합니다. 저장 후 새 세션에서 호출할 수 있으며 진행 중인 세션에는 영향을 주지 않습니다.",
+        "desc": "원격 http / sse 형식의 MCP만 지원합니다. 저장 후 현재 작업에서 바로 호출할 수 있으며, 엔진의 기본 도구 목록에는 다음 전송이나 새 세션에서 표시됩니다.",
+                "matchNotice": "같은 엔드포인트의 연결이 이미 있습니다. 저장하면 해당 항목이 업데이트됩니다.",
+                "createInstead": "새로 만들기",
         "teammateDesc": "원격 http / sse 형식의 MCP만 지원합니다. 저장하면 동료가 자신의 도구에 추가하고, 이 채팅의 다음 메시지부터 사용할 수 있습니다. 새 세션은 필요 없습니다."
       },
       "fields": {
@@ -8802,7 +8808,7 @@
       },
       "deleteConfirm": {
         "title": "\"{{name}}\"을(를) 삭제할까요?",
-        "message": "삭제하면 새 세션에서 이 MCP가 더 이상 로드되지 않습니다.",
+        "message": "삭제 후 현재 작업에서는 이 MCP를 호출할 수 없습니다. 엔진의 기본 도구 목록에서는 다음 전송이나 새 세션에서 제거됩니다.",
         "confirm": "삭제"
       },
       "duplicates": {

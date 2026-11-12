@@ -14,5 +14,8 @@ export interface McpSetupRequest {
 }
 
 export type McpSetupResult =
-  | { status: 'saved'; serverId: string }
-  | { status: 'cancelled' };
+  | { status: 'saved'; serverId: string; runtimeState?: string; runtimeReason?: 'status_unavailable' | 'check_failed'; toolCount?: number }
+  | { status: 'cancelled' }
+  | { status: 'interrupted' }
+  | { status: 'timed_out'; formPresented: boolean }
+  | { status: 'unavailable'; reason: 'request_in_progress' | 'presentation_failed' };

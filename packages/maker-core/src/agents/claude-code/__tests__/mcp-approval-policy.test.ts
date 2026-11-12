@@ -158,6 +158,7 @@ function createFakeQuery(
     setModel: vi.fn(async () => {}),
     applyFlagSettings: vi.fn(async () => {}),
     mcpServerStatus: vi.fn(async () => [...mcpServerStatuses]),
+    setMcpServers: vi.fn(async (_servers: unknown) => ({ added: [], removed: [], errors: {} })),
     interrupt: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
     rewindFiles: vi.fn(async () => ({ canRewind: false })),
@@ -266,6 +267,8 @@ async function startSession(
 
   return {
     agent,
+    deps,
+    fakeQuery,
     handle,
     canUseTool: queryOptions.canUseTool,
     hooks: queryOptions.hooks,
@@ -2132,4 +2135,40 @@ describe('remote sessions apply host-disabled built-in surfaces', () => {
     ).toEqual([{ serverName: 'claude.ai Claude Docs' }]);
     await handle.close();
   });
+});
+
+// Unit regression: a custom server saved during a running query was absent from
+// that query. The existing policy suite only covered names present at startup.
+// Keep the same query and original builtin instances, then exercise canUseTool
+// for the new name so installation cannot silently bypass its approval policy.
+it('mounts a newly saved server in the same query and retains normal approval', async () => {
+  const policy = vi.fn(() => 'prompt-each-time' as const);
+  const { handle, deps, fakeQuery, canUseTool, seen } = await startSession(policy);
+  try {
+    const initial = sdkMock.query.mock.calls.at(-1)![0].options.mcpServers;
+    deps.mcpProviders!.push(...createMcpProviders(['custom_example']));
+    expect(await handle.mountMcpServer!('custom_example')).toBe(true);
+    const installed = fakeQuery.setMcpServers.mock.calls[0][0] as Record<string, unknown>;
+    expect(installed.custom_example).toEqual({ type: 'stdio', command: 'true' });
+    expect(installed.cindy_browser).toBe(initial.cindy_browser);
+    expect(sdkMock.query).toHaveBeenCalledOnce();
+    expect(await canUseTool('mcp__custom_example__ping', {}, { toolUseID: 'new-server-ping' }))
+      .toMatchObject({ behavior: 'allow' });
+    expect(policy).toHaveBeenCalledWith(expect.objectContaining({ serverName: 'custom_example', toolName: 'ping' }));
+    expect(permissionRequests(seen)).toHaveLength(1);
+    expect(await handle.mountMcpServer!('custom_example')).toBe(true);
+    expect(fakeQuery.setMcpServers).toHaveBeenCalledOnce();
+    expect(await handle.mountMcpServer!('cindy_helper')).toBe(false);
+  } finally { await handle.close(); }
+});
+
+it('does not report a rejected dynamic mount as successful and allows retry', async () => {
+  const { handle, deps, fakeQuery } = await startSession();
+  try {
+    deps.mcpProviders!.push(...createMcpProviders(['custom_example']));
+    fakeQuery.setMcpServers.mockResolvedValueOnce({ added: [], removed: [], errors: { custom_example: 'test-only rejected' } });
+    expect(await handle.mountMcpServer!('custom_example')).toBe(false);
+    expect(await handle.mountMcpServer!('custom_example')).toBe(true);
+    expect(fakeQuery.setMcpServers).toHaveBeenCalledTimes(2);
+  } finally { await handle.close(); }
 });

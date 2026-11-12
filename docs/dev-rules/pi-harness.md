@@ -51,7 +51,7 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   并把用户显式配置的外部 HTTP / Streamable HTTP MCP 作为 direct remote server 装入；旧式
   SSE transport 不在此链支持（但 Streamable HTTP 的 SSE response framing 受支持）。外部 URL
   要求 HTTPS，只有明确 loopback endpoint 可用 HTTP；认证 header
-  真值仅经 Pi 父进程专用 env 传递，`CINDY_PI_MCP_BRIDGE` 只存 env 引用；这些 env 与描述符
+  启动时真值经 Pi 父进程专用 env 传递，`CINDY_PI_MCP_BRIDGE` 只存 env 引用；这些 env 与描述符
   都会在 bash spawn 边界剥离。bridge 并行执行外部 server 启动探测，每个 server 的
   `initialize + tools/list` 总预算为 10s（低于 Pi RPC 30s ready 门槛）；探测完成后实际工具
   调用保留 600s 长预算。SSE response 按 event 增量消费，不等待 server 关闭持续流。Pi 模型侧
@@ -67,8 +67,13 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   工具清单提醒（display:false 常驻上下文，只列仍存在且指纹仍匹配的工具），避免模型因压缩
   失忆而重跑 `cindy_mcp_list_tools`；这是提示卫生，不改变门的任何判定。Host 审批、策略与变更捕获仍使用真实
   `mcp__<server>__<tool>` identity 和真实参数，不能退化成对网关包装器授权。Claude Code 与
-  Codex 保持各自的直接 MCP 注册方式，不经过此 Pi 专属网关。配置新增、修改、禁用或删除对
-  下一新建/重启会话生效；旧活动会话保留启动时 generation 快照至 close。
+  Codex 保持各自的直接 MCP 注册方式，不经过此 Pi 专属网关。本机 Pi 在网关发现和调用前
+  按需检查宿主配置版本；未变化不重建连接，变化时同步服务目录和宿主的 MCP 身份集合。
+  版本沿用 environmentEpoch，配置和 token-only 保存都会触发失效；表单 saved 后的发现
+  能消费最后一次失效。旧 generation 的 lease 留到会话 close，保证已派发调用可收尾。
+  刷新通过内部 cindy:mcp-config RPC，连接凭证只保留在客户端内存，不进入模型工具结果、
+  日志、交互卡或全局 process.env。桥接未声明 refreshSupported 时保留旧协议行为。
+  第一阶段只对本机运行实例开放；SSH/设备托管实例保持启动快照，不尝试读取本机凭证。
   展示层通过共享 `parseMessageToolUse` 将网关调用还原为既有 MCP 工具名与参数；实时事件、
   Pi 分支历史和旧持久化消息共用此解析，保留 toolUseId，不改变 Pi 原生 transcript 或授权路径。
   MCP 请求接入 Pi 的取消信号；Bun fetch 的独立空闲计时关闭，由既有请求期限统一约束响应头与
@@ -78,8 +83,9 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   启动失败、传输断开、请求超时或已建立的 MCP session 返回 404 后，下一次定向发现／调用
   按服务重新 initialize + tools/list，复用既有启动期限；并发等待共享一次握手，取消只退出
   当前等待。恢复不自动重放 tools/call，不重启 Pi 或其它服务；新工具表替换旧表，定义改变
-  或删除时拒绝用旧定义继续调用。只恢复启动快照里的服务，不热加载配置变更。
-  工具批准按 toolCallId 绑定审批时的定义指纹；即使同批前面的发现已披露新定义，也不得
+  或删除时拒绝用旧定义继续调用。传输恢复只针对已登记服务；配置新增由版本刷新单独处理。
+  刷新并发合并，替换连接前撤销旧目录，连接后再次核对版本（最多三次，持续变更则明确失败）。
+  工具批准按 toolCallId 绑定审批时的定义指纹和连接代次；即使同批前面的发现已披露新定义，也不得
   沿用旧批准。SSE 在匹配响应前结束或失效时同样标记连接需恢复，不重放原操作。
 - **plan 模式**:自动挂载 Pi 分发包自带的 plan-mode 扩展，无需用户另装。UI 勾选是下一条
   消息的一次性意图，与原生运行态分开；`StartSessionOptions.planMode` 设置起始档，

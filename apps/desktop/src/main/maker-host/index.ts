@@ -1,6 +1,8 @@
 import { createCodexLocalModelSink } from './codexLocalModelSink.js';
 import { createCodexSpawnConfig, createCodexRoutingSignature } from './codexSpawnConfigCore.js';
 import { refreshCodexGatewayRuntime } from './codexGatewayRefresh.js';
+import { createLiveMcpGateway } from '../mcp-integrations/liveMcpGateway.js';
+import { CustomMcpProvider } from '../mcp-integrations/custom-mcp-provider.js';
 import { isReplacedCindyGatewayKey } from '../model-access/gatewayKeyRejection.js';
 import { refreshInstalledPluginApps } from '../cindy-brain/index.js';
 import { configureSessionModelInterfaceStorage, sessionModelInterface } from './session-model-interface.js';
@@ -1061,6 +1063,26 @@ export function getMaker(): Maker {
     });
 
     const makerMemoryProviderDeps = {
+      mcpGateway: createLiveMcpGateway({ resolve: (context, server) => {
+        const owner = activeOwnerScopeKey();
+        const session = context.sessionId ? _maker?.getSession(context.sessionId) : undefined;
+        const kind = context.agentKind;
+        if (!session || session.instanceId !== context.sessionInstanceId ||
+          (kind !== 'codex' && kind !== 'claude-code' && kind !== 'pi')) return null;
+        const provider = _mcpProviders[kind]?.find(candidate => candidate.name === server);
+        if (!(provider instanceof CustomMcpProvider)) return null;
+        const signature = provider.configSignature();
+        // The registry rebuilds every provider object on any custom-MCP save, so identity
+        // comparison would cancel in-flight calls when an unrelated server is added or
+        // edited. Compare this server's own configuration instead.
+        const isCurrent = () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner &&
+          _maker?.getSession(session.id) === session && session.getStatus() === 'active' &&
+          (() => {
+            const live = _mcpProviders[kind]?.find(candidate => candidate.name === server);
+            return live instanceof CustomMcpProvider && live.configSignature() === signature;
+          })();
+        return { isCurrent, signature: () => signature, create: ctx => provider.toClaudeSdkConfig(ctx) };
+      } }),
       runtimeCapabilities: async (context: import('@cindy/mcps').LiziMcpSessionContext, query: AgentCapabilityQuery) => {
         const session = context.sessionId ? _maker?.getSession(context.sessionId) : undefined;
         if (!session || (context.sessionInstanceId && session.instanceId !== context.sessionInstanceId))

@@ -8799,6 +8799,10 @@
       }
     },
     "mcp": {
+      "setup": {
+        "loadFailed": "Could not open the setup form. Try again.",
+        "savedDeliveryFailed": "Configuration saved, but the result could not be delivered. Retry without saving again."
+      },
       "title": "External tools",
       "subtitle": "Connect your own remote MCP servers. HTTP/Streamable HTTP servers work with both Claude and Codex; SSE is Claude-only.",
       "cancel": "Cancel",
@@ -8812,7 +8816,9 @@
       "dialog": {
         "createTitle": "Add MCP server",
         "editTitle": "Edit MCP server",
-        "desc": "Remote http / sse MCP only. New sessions can call it after saving; in-flight sessions are unaffected.",
+        "desc": "Remote http / sse MCP only. A saved server can be called from the current task right away; some engines add it to their native tool list on a later send or in a new session.",
+                "matchNotice": "A connection with this endpoint already exists; saving updates that entry.",
+                "createInstead": "Create a new one instead",
         "teammateDesc": "Remote http / sse MCP only. After saving, your teammate adds it to their tools and can use it from the next message in this chat, with no new session needed."
       },
       "fields": {
@@ -8845,7 +8851,7 @@
       },
       "deleteConfirm": {
         "title": "Delete \"{{name}}\"?",
-        "message": "New sessions will no longer load this MCP.",
+        "message": "After deletion the current task can no longer call this MCP; engines drop it from their native tool list on a later send or in a new session.",
         "confirm": "Delete"
       },
       "duplicates": {

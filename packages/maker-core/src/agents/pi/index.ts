@@ -326,6 +326,12 @@ const PI_API_KEY_ENV = 'CINDY_PI_API_KEY';
 const PI_SESSION_ID_ENV = 'CINDY_PI_SESSION_ID';
 const PI_SESSION_TOKEN_ENV = 'CINDY_PI_SESSION_TOKEN';
 const PI_MCP_BRIDGE_ENV = 'CINDY_PI_MCP_BRIDGE';
+/** A retired bridge generation may still serve calls already dispatched through the old
+ *  bridge; release it after this grace instead of holding it for the task's lifetime.
+ *  Each live generation keeps its custom-MCP facades registered with the App host, which
+ *  has a shared connection budget, so unbounded retention leaks capacity across tasks. */
+const PI_MCP_RETIRED_LEASE_GRACE_MS = 60_000;
+const PI_MCP_RETIRED_LEASE_LIMIT = 4;
 const PI_SECRET_ENV_NAMES_ENV = 'CINDY_PI_SECRET_ENV_NAMES';
 const PI_MANAGED_RG_PATH_ENV = 'CINDY_PI_MANAGED_RG_PATH';
 const PI_LEGACY_SUBAGENT_NODE_ENV = 'CINDY_PI_SUBAGENT_NODE';
@@ -3778,6 +3784,40 @@ export class PiAgent extends BaseAgent {
     let mcpBridge: PiExtraSpawnConfig['mcpBridge'] = null;
     let mcpEnv: PiExtraSpawnConfig['mcpEnv'] = {};
     let disposeSessionCtx: (() => void) | undefined;
+    let refreshMcpConfig: PiExtraSpawnConfig['refreshMcpConfig'];
+    /** Sessions retired by a config refresh, kept briefly for already-dispatched calls. */
+    const retiredSessionCtx: Array<{ dispose: () => void; timer: ReturnType<typeof setTimeout> }> = [];
+    const retireSessionCtx = (dispose: () => void) => {
+      const entry = { dispose, timer: undefined as unknown as ReturnType<typeof setTimeout> };
+      entry.timer = setTimeout(() => {
+        const index = retiredSessionCtx.indexOf(entry);
+        if (index >= 0) retiredSessionCtx.splice(index, 1);
+        try { dispose(); } catch { /* best-effort release */ }
+      }, PI_MCP_RETIRED_LEASE_GRACE_MS);
+      entry.timer.unref?.();
+      retiredSessionCtx.push(entry);
+      while (retiredSessionCtx.length > PI_MCP_RETIRED_LEASE_LIMIT) {
+        const oldest = retiredSessionCtx.shift();
+        if (!oldest) break;
+        clearTimeout(oldest.timer);
+        try { oldest.dispose(); } catch { /* best-effort release */ }
+      }
+    };
+    /** Release every retired generation now. Task teardown must not wait for a timer:
+     *  the bridge keeps accepting the old URL/token and holding shared connections. */
+    const disposeRetiredSessionCtx = (): void => {
+      while (retiredSessionCtx.length > 0) {
+        const entry = retiredSessionCtx.pop();
+        if (!entry) break;
+        clearTimeout(entry.timer);
+        try { entry.dispose(); } catch { /* best-effort release */ }
+      }
+    };
+    const disposeSessionState = (): void => {
+      try { disposeSessionCtx?.(); } catch { /* best-effort: cleanup failure must not mask the caller's error */ }
+      disposeSessionCtx = undefined;
+      disposeRetiredSessionCtx();
+    };
     const registeredMcpServerNames = new Set<string>();
     // 远端会话:host 可 gate 掉 in-process MCP bridge(loopback URL 远端够不到;
     // Phase 1 不桥 orca/memory/ghost)。外部 HTTP MCP 直连不受影响。
@@ -3821,8 +3861,10 @@ export class PiAgent extends BaseAgent {
           },
         );
         mcpBridge = extra?.mcpBridge ?? null;
+        if (mcpBridge && opts.remoteHostId) mcpBridge = { ...mcpBridge, refreshSupported: false };
         mcpEnv = extra?.mcpEnv ?? {};
         disposeSessionCtx = extra?.disposeSessionCtx;
+        refreshMcpConfig = extra?.refreshMcpConfig;
         // 归属判定只认本会话实际注册过的 server 名(见 shared/mcp-tool-target.ts:
         // 盲切 `__` 会让第三方 server 冒名顶替第一方信任表)。
         for (const server of mcpBridge?.servers ?? []) {
@@ -4027,12 +4069,7 @@ export class PiAgent extends BaseAgent {
           // Projection runs after config/runtime files and the MCP session route
           // exist, but before a handle owns their normal close path. Roll back
           // exactly that unpublished startup state before surfacing the failure.
-          try {
-            disposeSessionCtx?.();
-          } catch {
-            /* best-effort: cleanup failure must not mask package-state failure */
-          }
-          disposeSessionCtx = undefined;
+          disposeSessionState();
           cleanupConfigHome();
           cleanupRuntimeFiles();
           // Do not substitute Cindy's static analyzer as an allowlist or launch
@@ -4200,12 +4237,8 @@ export class PiAgent extends BaseAgent {
       }
       assertPiSpawnArgvFitsPlatform(args);
     } catch (error) {
-      try {
-        disposeSessionCtx?.();
-      } catch {
-        /* best-effort: cleanup failure must not mask Skill setup / argv failure */
-      }
-      disposeSessionCtx = undefined;
+      // Best-effort cleanup; failure here must not mask the Skill setup / argv failure.
+      disposeSessionState();
       await cleanupConfigHome();
       cleanupRuntimeFiles();
       throw error;
@@ -5345,6 +5378,9 @@ export class PiAgent extends BaseAgent {
       if (sessionContextDisposed) return;
       sessionContextDisposed = true;
       disposeSessionCtx?.();
+      // Task teardown must release retired generations too; their grace timers may never
+      // fire once this handle is gone, leaving MCP identities and transports registered.
+      disposeRetiredSessionCtx();
     };
     const disposeProxyRegistration = (): void => {
       if (!proxyRegistrationOwned) return;
@@ -5688,7 +5724,7 @@ export class PiAgent extends BaseAgent {
         ...Object.keys(authEnv),
         ...Object.keys(nativeEnv),
         ...Object.keys(mcpEnv),
-        ...(mcpBridge && mcpBridge.servers.length > 0 ? [PI_MCP_BRIDGE_ENV] : []),
+        ...(mcpBridge && (mcpBridge.servers.length > 0 || mcpBridge.refreshSupported === true) ? [PI_MCP_BRIDGE_ENV] : []),
         ...(hosted ? [DEVICE_HOSTED_PI_ENV] : []),
         // 子代理路由快照:虽然不是凭证,但它是**控制面** —— 一次获批的 bash 拿到路径就能改写
         // provider/model,让后续每次委派都打到攻击者选定的 endpoint(提示词与代码随之外泄)。
@@ -5767,7 +5803,7 @@ export class PiAgent extends BaseAgent {
         // 保留稳定 system/tool 前缀的长缓存。不支持的 provider 会忽略该选项；
         // 支持者（如 Anthropic）可避免较长会话在短 TTL 后重新计费。
         PI_CACHE_RETENTION: 'long',
-        ...(mcpBridge && mcpBridge.servers.length > 0 ? { [PI_MCP_BRIDGE_ENV]: JSON.stringify(mcpBridge) } : {}),
+        ...(mcpBridge && (mcpBridge.servers.length > 0 || mcpBridge.refreshSupported === true) ? { [PI_MCP_BRIDGE_ENV]: JSON.stringify(mcpBridge) } : {}),
         CINDY_LOCAL_HOST_TOOLS_ONLY: opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? '1' : '',
       };
       // 不继承宿主进程里碰巧存在的同名变量；Windows 环境键大小写不敏感，必须先清掉
@@ -5911,6 +5947,37 @@ export class PiAgent extends BaseAgent {
               textOnlyPolicyReady = false;
               return;
             }
+          }
+          // Private runtime RPC: no interaction, tool result, transcript or global env.
+          if (event.type === 'extension_ui_request' && event.method === 'input'
+              && event.title === 'cindy:mcp-config') {
+            const id = typeof event.id === 'string' ? event.id : '';
+            const alive = () => !closed && !piProcessExited && !proc.isClosed && !accountBoundaryTeardown;
+            void (async () => {
+              try {
+                const query = JSON.parse(typeof event.placeholder === 'string' ? event.placeholder : '{}');
+                if (!id || !alive() || !refreshMcpConfig || opts.remoteHostId || hosted
+                    || !Number.isSafeInteger(query.revision)) throw new Error('unavailable');
+                const update = await refreshMcpConfig(query.revision);
+                if (!alive()) { update?.config?.disposeSessionCtx?.(); return; }
+                if (update) {
+                  const oldDispose = disposeSessionCtx;
+                  const nextDispose = update.config?.disposeSessionCtx;
+                  disposeSessionCtx = nextDispose;
+                  // Release the previous generation once its dispatched calls have drained,
+                  // so repeated saves do not pile up App-host facades until close().
+                  if (oldDispose) retireSessionCtx(oldDispose);
+                  registeredMcpServerNames.clear();
+                  for (const server of update.config?.mcpBridge?.servers ?? []) registeredMcpServerNames.add(server.name);
+                }
+                proc.send({ type: 'extension_ui_response', id, value: JSON.stringify(update
+                  ? { revision: update.revision, bridge: update.config?.mcpBridge ?? { token: '', servers: [] }, env: update.config?.mcpEnv ?? {} }
+                  : { unchanged: true }) });
+              } catch {
+                if (id && alive()) proc.send({ type: 'extension_ui_response', id, cancelled: true });
+              }
+            })();
+            return;
           }
           if (event.type === 'extension_ui_request') {
             if (event.method === 'input' &&

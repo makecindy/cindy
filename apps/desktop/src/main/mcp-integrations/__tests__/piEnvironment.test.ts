@@ -1142,6 +1142,26 @@ describe('piEnvironment per-session identity', () => {
     }
   });
 
+  // Regression: previously a live Pi could only see additions after a new task.
+  // Existing generation tests intentionally kept old snapshots; this exercises the
+  // opt-in refresh callback, including token-only invalidation and no-change fast path.
+  it('refreshes an existing runtime snapshot after configuration invalidation', async () => {
+    const providers: McpProvider[] = [{ name: 'first', isEnabled: () => true,
+      toCodexMcpConfig: () => ({ type: 'http', url: 'https://first.example.test/mcp' }) }];
+    const initial = await getPiExtraSpawnConfig(providers, noopLogger());
+    expect(await initial!.refreshMcpConfig!(initial!.configRevision!)).toBeNull();
+    providers.push({ name: 'added', isEnabled: () => true,
+      toCodexMcpConfig: () => ({ type: 'http', url: 'https://added.example.test/mcp' }) });
+    invalidatePiEnvironment();
+    const update = await initial!.refreshMcpConfig!(initial!.configRevision!);
+    expect(update!.revision).toBeGreaterThan(initial!.configRevision!);
+    expect(update!.config!.mcpBridge!.servers.map(s => s.name)).toEqual(['first', 'added']);
+    expect(initial!.mcpBridge!.servers.map(s => s.name)).toEqual(['first']);
+    expect(await initial!.refreshMcpConfig!(update!.revision)).toBeNull();
+    update!.config!.disposeSessionCtx!();
+    initial!.disposeSessionCtx!();
+  });
+
   it('snapshots remote MCP lifecycle changes for new sessions while old leases keep their startup config', async () => {
     let enabled = true;
     let url = 'https://old.example.test/mcp';

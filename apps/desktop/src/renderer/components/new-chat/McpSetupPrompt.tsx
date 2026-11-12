@@ -3,9 +3,26 @@ import { useTranslation } from 'react-i18next';
 import { McpServerDialog } from '@/components/settings/McpServerDialog';
 import { listCustomMcpServers } from '@/lib/customMcpServers';
 import { toast } from '@/lib/toast';
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { Button } from '@/components/ui/button';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent, type DataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import type { McpSetupRequest } from '../../../shared/mcpSetup';
+import type { CustomMcpConfig } from '../../../shared/customMcp';
+
+/**
+ * Re-running setup for the same endpoint repairs that entry instead of forking `custom_x-2`.
+ * Matching stays strict: same endpoint, or (when the proposal carries no endpoint) same name.
+ * Several entries on one endpoint are the owner's own layout — never pick one for them.
+ */
+function findReusableServer(servers: CustomMcpConfig[], request: McpSetupRequest): CustomMcpConfig | null {
+  const normalize = (value: string | undefined) => (value ?? '').trim().replace(/\/+$/, '');
+  const url = normalize(request.proposal.url);
+  const name = normalize(request.proposal.name).toLowerCase();
+  const matches = servers.filter(server => (url
+    ? normalize(server.url) === url
+    : !!name && normalize(server.name).toLowerCase() === name));
+  return matches.length === 1 ? matches[0] : null;
+}
 
 /** Only public request metadata lives here; form values stay in McpServerDialog. */
 export function useMcpSetupRequest(sessionId: string | null, enabled: boolean): McpSetupRequest | null {
@@ -42,8 +59,11 @@ export function useMcpSetupRequest(sessionId: string | null, enabled: boolean): 
 
 export function McpSetupPrompt({ request, teammate }: { request: McpSetupRequest; teammate?: boolean }) {
   const { t } = useTranslation();
-  const [ids, setIds] = useState<string[] | null>(null);
+  const [servers, setServers] = useState<CustomMcpConfig[] | null>(null);
+  const [forceCreate, setForceCreate] = useState(false);
   const [failedResult, setFailedResult] = useState<{ serverId?: string } | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [finished, setFinished] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
@@ -67,29 +87,52 @@ export function McpSetupPrompt({ request, teammate }: { request: McpSetupRequest
   };
   useEffect(() => {
     let current = true;
-    void listCustomMcpServers().then(servers => {
-      if (current) setIds(servers.map(server => server.id));
+    setLoadFailed(false);
+    void listCustomMcpServers().then(list => {
+      if (current) setServers(list);
     }).catch(() => {
       if (!current) return;
-      toast.error(t('settings.mcp.toast.saveFailed'));
-      void finish();
+      setLoadFailed(true);
     });
     return () => { current = false; };
-  }, [request.requestId]);
+  }, [request.requestId, loadAttempt]);
+  useEffect(() => {
+    if (!servers || finished) return;
+    // A presentation acknowledgement never authorizes tools or settles the request.
+    void window.electronAPI.maker.resolveInteraction(request.requestId, {
+      kind: 'mcp_setup', status: 'presented',
+    }).catch(() => {});
+  }, [servers, request.requestId, finished]);
   if (finished) return null;
-  if (failedResult) return <section role="alert"
-    className="w-full min-w-0 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
-    <p className="text-13 text-[var(--text-primary)]">
-      {t(failedResult.serverId ? 'settings.mcp.toast.created' : 'settings.mcp.toast.saveFailed')}
-    </p>
-    <div className="mt-4 flex flex-wrap justify-end gap-2.5">
-      <Button variant="secondary" size="lg" palette="confirmation" disabled={submitting}
-        onClick={() => { void finish(); }}>{t('settings.mcp.cancel')}</Button>
+  if (loadFailed || failedResult) return <ErrorNotice role="alert"
+    message={t(loadFailed ? 'settings.mcp.setup.loadFailed' : failedResult?.serverId
+      ? 'settings.mcp.setup.savedDeliveryFailed' : 'settings.mcp.toast.saveFailed')}
+    actions={<>
+      {!failedResult?.serverId && <Button variant="secondary" size="lg" palette="confirmation" disabled={submitting}
+        onClick={() => { void finish(); }}>{t('settings.mcp.cancel')}</Button>}
       <Button variant="primary" size="lg" palette="confirmation" loading={submitting}
-        onClick={() => { void finish(failedResult.serverId); }}>{t('commonUi.retry')}</Button>
-    </div>
-  </section>;
-  if (!ids) return null;
-  return <McpServerDialog embedded teammate={teammate} proposal={request.proposal} existingIds={ids}
-    onSaved={serverId => { void finish(serverId); }} onClose={() => { void finish(); }} />;
+        onClick={() => {
+          if (loadFailed) setLoadAttempt(attempt => attempt + 1);
+          else void finish(failedResult?.serverId);
+        }}>{t('commonUi.retry')}</Button>
+    </>} />;
+  if (!servers) return <p role="status" className="text-13 text-[var(--text-secondary)]">{t('ccAgent.common.loading')}</p>;
+  // Re-running setup for the same endpoint must repair that entry, not fork a `custom_x-2`
+  // duplicate the owner then has to choose between. Same-endpoint duplicates stay possible on
+  // purpose: the owner can explicitly ask for a new entry instead.
+  const reusable = forceCreate ? null : findReusableServer(servers, request);
+  return <>
+    {reusable && <p className="text-13 text-[var(--text-secondary)]">
+      {t('settings.mcp.dialog.matchNotice')}{' '}
+      <Button variant="secondary" size="sm" onClick={() => setForceCreate(true)}>
+        {t('settings.mcp.dialog.createInstead')}
+      </Button>
+    </p>}
+    {/* Remount per target: the dialog seeds its fields (name, url, headers, stored token)
+        once on mount, so switching from repair to create must not carry the old entry over. */}
+    <McpServerDialog key={reusable ? reusable.id : 'create'} embedded teammate={teammate} proposal={request.proposal}
+      initial={reusable ?? undefined}
+      existingIds={servers.map(server => server.id)}
+      onSaved={serverId => { void finish(serverId); }} onClose={() => { void finish(); }} />
+  </>;
 }
