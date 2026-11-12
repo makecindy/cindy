@@ -1,3 +1,5 @@
+// Must stay first: removes inherited Anthropic credentials before other modules load.
+import './boot-env.js';
 import { reconcileDeletedTaskViewState } from '../../desktop/src/main/mcp-apps/viewStateStore.js';
 import { clientMigrationContract } from './client-migration-contract.mjs';
 import { createRightSidebarTabsService } from '../../desktop/src/main/localDb/ipc/rightSidebarTabs.js';
