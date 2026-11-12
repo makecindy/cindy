@@ -808,9 +808,10 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
               ? deps.pendingInteractionAlert?.(sessionId) : undefined;
             const permission = waiting?.permission;
             const question = permission ? undefined : waiting?.question;
-            // Each request alerts once, however close together two of them arrive.
-            const phoneEventId = permission ? `permission:${permission.requestId}`
-              : question ? `question:${question.requestId}` : mobileEventId;
+            // The renderer's event identity is shared by execution and mirror hosts.
+            // Local action availability must not change the UUID registered for retirement.
+            const phoneEventId = (kind === 'done' ? undefined : usableAlertEventId)
+              ?? (permission ? `permission:${permission.requestId}` : question ? `question:${question.requestId}` : mobileEventId);
             const accepted = sendMobileSessionNotify({
               sessionId, title: notificationTitle, kind, generation, ...(detail ? { detail } : {}),
               ...(fallbackBody ? { fallbackBody } : {}), ...(phoneEventId ? { eventId: phoneEventId } : {}),

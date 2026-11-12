@@ -12,6 +12,8 @@ export type NativeNotificationsApi = Pick<
   | 'addNotificationReceivedListener'
   | 'setBadgeCountAsync'
   | 'dismissAllNotificationsAsync'
+  | 'getPresentedNotificationsAsync'
+  | 'dismissNotificationAsync'
   | 'getPermissionsAsync'
   | 'requestPermissionsAsync'
   | 'getDevicePushTokenAsync'

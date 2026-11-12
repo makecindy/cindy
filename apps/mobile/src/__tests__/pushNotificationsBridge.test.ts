@@ -20,6 +20,7 @@ vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }),
 vi.mock('react-native', () => ({ AppState: { addEventListener: () => ({ remove() {} }) } }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => state.auth }));
 vi.mock('@/device-link/selfHostedRelay', () => ({ useSelfHostedRelay: () => null }));
+vi.mock('@/notifications/NotificationReconciliationBridge', () => ({ NotificationReconciliationBridge: () => null }));
 vi.mock('@/notifications/ChatBackgroundBridge', () => ({ ChatBackgroundBridge: () => null }));
 vi.mock('@/notifications/nativeNotifications', () => ({ default: {
   addPushTokenListener: (listener: typeof state.listener) => {
