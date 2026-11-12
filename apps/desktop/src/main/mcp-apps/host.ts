@@ -522,7 +522,9 @@ export class McpAppsHost {
       // Private restoration data is execution-host owned, including on the first open.
       delete context[VIEW_STATE_KEY];
       delete context.viewState;
-      const stateStorage = this.deps.viewState?.(owner, sessionId, clientId, record);
+      // Independently opened resources have no persisted card to own a snapshot.
+      const stateStorage = sessionId !== null && record
+        ? this.deps.viewState?.(owner, sessionId, clientId, record) : undefined;
       const capabilities = client.getServerCapabilities();
       const createBridge = (currentContext = context) => new AppBridge(
         null,
@@ -610,7 +612,7 @@ export class McpAppsHost {
         let restored: { value: unknown } | undefined;
         let stateAllowed = false;
         const writer = stateStorage ? new ViewStateWriter(snapshot => stateStorage.save(snapshot)) : undefined;
-        const pendingWriter = writer ? { owner, sessionId, clientId, writer } : undefined;
+        const pendingWriter = writer && sessionId !== null ? { owner, sessionId, clientId, writer } : undefined;
         view.initializeState = async id => {
           initializeId = id;
           restored = undefined;

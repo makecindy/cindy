@@ -20,7 +20,8 @@ function deferred() {
   const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-async function fixture() {
+async function fixture(resourceSessionId?: string | null) {
+  const sessionId = resourceSessionId === undefined ? 'task' : resourceSessionId;
   vi.useFakeTimers();
   vi.spyOn(AppBridge.prototype, 'teardownResource').mockResolvedValue({});
   const owner = {};
@@ -35,31 +36,52 @@ async function fixture() {
   let state: unknown = { version: 1, draft: 'private-draft' };
   const read = vi.fn(async () => state);
   const save = vi.fn(async (value: ViewStateSnapshot) => { state = value.json === null ? null : JSON.parse(value.json); });
+  const viewState = vi.fn(() => ({ read, save }));
   const host = new McpAppsHost({ owner: () => owner, config: () => config, connection: () => connection,
     readCard: async () => record, writeCard: async () => {}, authorizeTool: vi.fn(), sendMessage: vi.fn(),
-    viewState: () => ({ read, save }),
+    viewState,
   });
   hosts.push(host);
-  const open = () => host.open('device:test', 'task', 'card', { 'cindy/view-state': { forged: true }, viewState: 'forged' });
+  const context = { 'cindy/view-state': { forged: true }, viewState: 'forged' };
+  const open = () => resourceSessionId === undefined
+    ? host.open('device:test', 'task', 'card', context)
+    : host.openResource('device:test', sessionId, { id: 'resource', title: 'Resource', serverId: config.id,
+      serverRevision: record.serverRevision, resourceUri: record.resourceUri, assertCurrent() {} }, context);
   const doc = await open();
-  const dispatch = (viewId: string, id: number, method: string, params?: unknown) => host.dispatch('device:test', 'task', viewId,
+  const dispatch = (viewId: string, id: number, method: string, params?: unknown) => host.dispatch('device:test', sessionId, viewId,
     { jsonrpc: '2.0', id, method, params });
   const reply = async (viewId: string, id: number) => {
     await vi.advanceTimersByTimeAsync(0);
-    const events = await host.poll('device:test', 'task', viewId, 0);
+    const events = await host.poll('device:test', sessionId, viewId, 0);
     return events.map(e => e.message).find(m => m && 'id' in m && m.id === id) as
       { result?: Record<string, any>; error?: { code: number; data?: { code: string } } };
   };
   const initialize = async (viewId = doc.viewId, id = 1) => {
     await dispatch(viewId, id, 'ui/initialize', { protocolVersion: '2026-01-26', appInfo: { name: 'fixture', version: '1' }, appCapabilities: {} });
     const result = await reply(viewId, id);
-    await host.dispatch('device:test', 'task', viewId, { jsonrpc: '2.0', method: 'ui/notifications/initialized' });
+    await host.dispatch('device:test', sessionId, viewId, { jsonrpc: '2.0', method: 'ui/notifications/initialized' });
     await vi.advanceTimersByTimeAsync(0);
     return result;
   };
   const set = (id: number, value: unknown) => dispatch(doc.viewId, id, 'cindy/view-state/set', { state: value });
-  return { host, doc, open, initialize, dispatch, reply, set, read, save };
+  return { host, doc, open, initialize, dispatch, reply, set, read, save, viewState };
 }
+// Unit regression for the merged resource-view entry: no persisted card means no
+// persistence authority, even with a task ID. Existing card tests never open resources.
+// The minimum input is openResource -> initialize -> set; no DB or real wait needed.
+it.each([null, 'task'])('does not offer card state to an independent resource (session %s)', async sessionId => {
+  const f = await fixture(sessionId);
+  const init = await f.initialize();
+  expect(init.result?.protocolVersion).toBe('2026-01-26');
+  expect(init.result?.hostCapabilities.experimental?.['cindy/view-state']).toBeUndefined();
+  expect(init.result?.hostContext['cindy/view-state']).toBeUndefined();
+  expect(init.result?.hostContext.viewState).toBeUndefined();
+  await f.set(2, { draft: 'not a card' });
+  expect((await f.reply(f.doc.viewId, 2)).error?.code).toBe(-32601);
+  expect(f.viewState).not.toHaveBeenCalled();
+  expect(f.read).not.toHaveBeenCalled();
+  expect(f.save).not.toHaveBeenCalled();
+});
 it('restores only at initialize, persists only after set, and clears with null', async () => {
   const f = await fixture();
   const init = await f.initialize();
