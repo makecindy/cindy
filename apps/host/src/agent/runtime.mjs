@@ -243,7 +243,7 @@ export function createHostAgentGraph(options) {
   const pi = options.piBinaryPath
     ? new PiAgent({
         auth: piAuth,
-        prepareMcpBridge: options.mcpRuntime.preparePiMcpBridge,
+        ...options.mcpRuntime.piDeps,
         runtimeConfig: {
           get endpoint() { return options.gateway?.endpoint || undefined; },
         },
