@@ -2,7 +2,7 @@
  * RightSidebar Shell —— 右侧边栏外壳(与左侧 Sidebar 对称)。
  *
  * 职责:
- *   - 宽度 / 背景 / 折叠-展开 250ms 过渡动画
+ *   - 宽度 / 背景 / 折叠-展开 200ms 过渡动画
  *   - 朝聊天区一侧的 resize handle(拖动改宽,双击复位;边缘由 resizeEdge 决定,
  *     经典布局在左边缘,面板被布局树换到聊天区左侧时在右边缘)
  *
@@ -36,7 +36,7 @@ import { CHROME_ACTIONS_GEOMETRY } from './chromeActionsGeometry';
  * 设计原则:**动画只在用户主动 toggle 按钮**时跑;sessionId 切换 / 草稿切换 / init / 任何其它
  * isCollapsed prop 变化都**直接同步**不动画。toggle 按钮 onClick 时父层调用
  * `requestAnimateNextChange()` 主动 prime 一次,RightSidebar 看到这个标记后才让下一次 prop
- * 变化走 250ms 动画;不主动 prime → 默认无动画。
+ * 变化走 200ms 动画;不主动 prime → 默认无动画。
  *
  * 避免了之前用 ref / effect 推断"prop 变化是 toggle 还是 cascade"的脆弱逻辑(N+1/N+2 race、
  * sessionChanged 误判等)—— toggle 是事件源,理应由事件源显式声明动画意图。
@@ -119,13 +119,13 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
   // 变化(sessionId 切换 / 草稿切换 / init 等)默认都直接同步 displayCollapsed = isCollapsed,
   // 不动画(用户体验需求:切 session 应"瞬间生效"而不是"看着一栏慢慢展开/收起")。
   //
-  // 动画机制(保留原 250ms transition + rAF 滞后一帧切 displayCollapsed 的方案):
+  // 动画机制(保留原 200ms transition + rAF 滞后一帧切 displayCollapsed 的方案):
   //   1) MainLayout toggle 按钮 onClick → 调 requestAnimateNextChange() 设 animateNextRef=true
   //   2) MainLayout setIsRightSidebarCollapsed → prop 变化触发本 component useEffect
-  //   3) animateNextRef=true → 开 transition、下一帧切 displayCollapsed(width 滑过 250ms),reset ref
+  //   3) animateNextRef=true → 开 transition、下一帧切 displayCollapsed(width 滑过 200ms),reset ref
   //   4) animateNextRef=false(默认) → 直接同步 displayCollapsed = isCollapsed,无动画
   //
-  // 比例模式下窗口缩放只改 width、不翻 isCollapsed,故 transition 默认 off,避免 250ms ease
+  // 比例模式下窗口缩放只改 width、不翻 isCollapsed,故 transition 默认 off,避免 200ms ease
   // 造成"追不上窗口边缘"的橡皮筋滞后。
   const [displayCollapsed, setDisplayCollapsed] = useState(isCollapsed);
   const [animating, setAnimating] = useState(false);
@@ -159,7 +159,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
       setDisplayCollapsed(isCollapsed);
       return;
     }
-    // 显式 toggle 路径:走 250ms 动画。
+    // 显式 toggle 路径:走 200ms 动画。
     animateNextRef.current = false;
     const measuredWidth = asideRef.current?.getBoundingClientRect().width ?? 0;
     setAnimationWidthSnapshot(measuredWidth > 0 ? measuredWidth : widthRef.current);
@@ -205,7 +205,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
         // 侧边分割线由布局引擎统一绘制,aside 与内容层都不自画竖线。
         'relative flex flex-col bg-content-area',
         visibleAnimating &&
-          'transition-[width] duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:duration-0',
+          'transition-[width] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:duration-0',
         // maximize 态:用 flex-1 撑满 row 内 sidebar 之后的剩余空间,不传 fixed
         // width —— 否则普通态的引擎 pane width 在 main hidden 后仍会留下固定宽,
         // 无法接管全部剩余空间(2026-07-01 用户实测 bug:maximize 后文件树消失)。
@@ -220,7 +220,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
       aria-hidden={isCollapsed || undefined}
     >
       {/* 内容容器。稳态跟随 aside 实际宽(w-full),只有折叠 / 展开动画期间钉住开始
-          快照宽防 reflow —— aside 宽度 250ms 收到 0 时,本块保持展开宽度被
+          快照宽防 reflow —— aside 宽度 200ms 收到 0 时,本块保持展开宽度被
           overflow-hidden 裁切,TabBar / 内容区不会因瞬时变窄而抖动(规则 7)。
 
           Mac 端布局(46px 顶 chrome,行高随 #650 全局 50→46):

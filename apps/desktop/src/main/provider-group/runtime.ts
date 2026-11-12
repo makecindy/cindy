@@ -21,7 +21,7 @@ import {
 } from '../../shared/providerGroup.js';
 import { captureProviderShareGroupRecovery, getReceivedShares } from '../device-link/providerShareGuest.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
-import { remoteBackgroundInvoke, getDeviceLinkStatus, getRemoteLinkCloseEpoch, getSelfDeviceId, hasOfflineDirectPath } from '../device-link/index.js';
+import { onRemotePushChannel, remoteBackgroundInvoke, getDeviceLinkStatus, getRemoteLinkCloseEpoch, getSelfDeviceId, hasOfflineDirectPath } from '../device-link/index.js';
 import { captureProviderMetadataContinuityScope, isTemporaryProviderMetadataFailure } from '../device-link/providerMetadataContinuity.js';
 import { isMobilePlatform } from '../device-link/controllerPlatform.js';
 import { deviceName } from '../device-link/deviceName.js';
@@ -36,7 +36,7 @@ import { captureProviderManagementScope } from './managementScope.js';
 import { createProviderGroupRouter, type ProviderGroupRouter } from './router.js';
 import type { ProviderGroupRemoteGroups } from './service.js';
 import { readProviderGroup } from './store.js';
-import { readSubscriptionPoolUsage, readSubscriptionPoolModelAvailability } from '../subscription-accounts/runtime.js';
+import { onSubscriptionAccountsChanged, readSubscriptionPoolUsage, readSubscriptionPoolModelAvailability } from '../subscription-accounts/runtime.js';
 import { isSubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { createGroupContinuityClient } from './continuityClient.js';
 import { createProviderGroupUsageReader, providerGroupUsageSnapshot, providerGroupCodexUsageSnapshot, providerGroupCodexUsageFromReads, type ProviderGroupCodexUsageSnapshot } from './usage.js';
@@ -50,6 +50,7 @@ interface OwnerRuntime {
 }
 
 let current: OwnerRuntime | null = null;
+let accountPushSubscribed = false;
 let applicationLoadListener: ((sessionId: string) => void) | null = null;
 let isTurnRunning: (sessionId: string) => boolean = () => false;
 let localLoad: (() => Promise<ReadonlyMap<string, number>>) | null = null;
@@ -59,6 +60,16 @@ let codexUsageReader: ((providerId: string) => Promise<unknown>) | null = null;
 let codexRateLimitsReader: ((providerId: string) => Promise<unknown>) | null = null;
 
 function runtimeForActiveOwner(): OwnerRuntime {
+  if (!accountPushSubscribed) {
+    accountPushSubscribed = true;
+    onSubscriptionAccountsChanged(() => {
+      if (current?.owner === activeOwnerScopeKey()) current.directory.invalidate();
+    });
+    onRemotePushChannel((deviceId, channel) => {
+      if (channel === 'subscription-accounts:changed' && current?.owner === activeOwnerScopeKey())
+        current.directory.invalidate(deviceId);
+    });
+  }
   const owner = activeOwnerScopeKey();
   if (current?.owner === owner) return current;
   type PoolQuota = Awaited<ReturnType<typeof readSubscriptionPoolUsage>>;
@@ -171,7 +182,7 @@ function runtimeForActiveOwner(): OwnerRuntime {
       return mergeCodexUsage(account, limits);
     },
     peekCodexUsage: (member) => mergeCodexUsage(codexUsage.peek(member), codexLimits.peek(member)),
-    invalidateUsage: () => { usage.invalidate(); codexUsage.invalidate(); codexLimits.invalidate(); },
+    invalidateUsage: () => { poolQuotaReads.clear(); usage.invalidate(); codexUsage.invalidate(); codexLimits.invalidate(); },
     now: () => Date.now(),
     mono: () => performance.now(),
   });

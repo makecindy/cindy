@@ -39,3 +39,4 @@
 | 媒体模型资料与发布兼容 | [V4 全类型规范](../model-registry-v4-media.md) |
 | 文档成果、四格式与插件增强 | [文档工坊](document-workshop-quality.md) |
 | 新电脑迁移插件、技能、设置与经确认的密钥 | [迁移助理](new-device-setup-migration.md) |
+| 首次登录后的综合引导：认识 Cindy、迁移、连接模型、导入本机已有内容 | [开始引导](first-run-guide.md) |
