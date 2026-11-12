@@ -34,7 +34,6 @@ function ledger() {
 function attempt(operation: () => void) { try { operation(); } catch { log.warn('notification retirement storage unavailable'); } }
 export function trackMobileNotification(item: TrackedNotification): void { attempt(() => ledger().record(item)); }
 export function retireReadMobileNotifications(sessionId: string): void { attempt(() => ledger().read(sessionId)); }
-export function retireCancelledMobileQuestions(sessionId: string): void { attempt(() => ledger().cancelQuestions(sessionId)); }
 export function retireAnsweredMobileNotifications(sessionId: string, requestId: string): void { attempt(() => ledger().resolve(sessionId, requestId)); }
 export function mobileNotificationDismissalBatch(): string[] { return ledger().batch(); }
 export function acknowledgeMobileNotificationDismissals(ids: string[]): void { ledger().acknowledged(ids); }

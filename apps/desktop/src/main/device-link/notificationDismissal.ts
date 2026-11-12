@@ -46,9 +46,6 @@ export function createNotificationDismissalLedger(
     read(sessionId: string) {
       retire(item => item.sessionId === sessionId && item.kind !== 'needs-reply');
     },
-    cancelQuestions(sessionId: string) {
-      retire(item => item.sessionId === sessionId && item.kind === 'needs-reply');
-    },
     resolve(sessionId: string, requestId: string) {
       let changed = false;
       for (const item of pending.values()) {

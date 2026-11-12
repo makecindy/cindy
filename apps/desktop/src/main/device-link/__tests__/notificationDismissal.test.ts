@@ -36,8 +36,8 @@ it('retires one answered question while preserving a newer pending question', ()
   expect(ledger.batch()).toEqual(['first']);
   ledger.resolve('task', 'b');
   expect(ledger.batch()).toEqual(['first', 'second']);
-  ledger.record({ id: 'cancelled', sessionId: 'task', kind: 'needs-reply', requestIds: [] });
-  ledger.cancelQuestions('task');
+  ledger.record({ id: 'cancelled', sessionId: 'task', kind: 'needs-reply', requestIds: ['cancelled-request'] });
+  ledger.resolve('task', 'cancelled-request');
   ledger.record({ id: 'replacement', sessionId: 'task', kind: 'needs-reply', requestIds: ['c'] });
   expect(ledger.batch()).toEqual(['first', 'second', 'cancelled']);
 });

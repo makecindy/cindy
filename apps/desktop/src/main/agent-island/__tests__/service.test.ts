@@ -1,5 +1,6 @@
-import { retireReadMobileNotifications, retireAnsweredMobileNotifications, retireCancelledMobileQuestions } from '../../device-link/notificationDismissalHost';
-vi.mock('../../device-link/notificationDismissalHost', () => ({ retireReadMobileNotifications: vi.fn(), retireAnsweredMobileNotifications: vi.fn(), retireCancelledMobileQuestions: vi.fn() }));
+import { createNotificationDismissalLedger } from '../../device-link/notificationDismissal';
+import { retireReadMobileNotifications, retireAnsweredMobileNotifications } from '../../device-link/notificationDismissalHost';
+vi.mock('../../device-link/notificationDismissalHost', () => ({ retireReadMobileNotifications: vi.fn(), retireAnsweredMobileNotifications: vi.fn() }));
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -3560,7 +3561,6 @@ describe('AgentIslandService native publishing', () => {
     playSound.mockClear();
 
     service.handleSessionStopped('codex-stop');
-    expect(retireCancelledMobileQuestions).toHaveBeenCalledWith('codex-stop');
     service.handleAgentEvent(
       { sessionId: 'codex-stop', agentKind: 'codex' },
       cancelledDoneEvent(),
@@ -7635,4 +7635,27 @@ it.each([{ botTaskCoordination: true, botPrivateReply: false }, { botPrivateRepl
   expect(service.getSessionActivitySnapshot(meta.sessionId)?.attention).not.toBe(true);
   service.handleAgentEvent(meta, terminalErrorEvent('User action required'));
   expect(playSound).toHaveBeenCalledWith(customSound('error.wav'));
+});
+
+// Stop can preserve async questions. Exercise real retirement state through the
+// service hooks, retaining an async question after cancelling a synchronous one.
+it('preserves async pushes across Stop until their own settlement', async () => {
+  const { AgentIslandService } = await import('../service.js');
+  const ledger = createNotificationDismissalLedger({ pending: [], retired: [] }, () => {});
+  ledger.record({ id: 'sync', sessionId: 'stopped', kind: 'needs-reply', requestIds: ['sync-request'] });
+  ledger.record({ id: 'async', sessionId: 'stopped', kind: 'needs-reply', requestIds: ['async-request'] });
+  vi.mocked(retireAnsweredMobileNotifications).mockImplementation((session, request) => ledger.resolve(session, request));
+  vi.mocked(retireReadMobileNotifications).mockImplementation(session => ledger.read(session));
+  try {
+    const service = new AgentIslandService({ getMainWindow: () => null });
+    service.handleUserPrompt({ sessionId: 'stopped', agentKind: 'codex' }, 'work');
+    service.handleInteractionDismissed('stopped', 'sync-request');
+    service.handleSessionStopped('stopped');
+    expect(ledger.batch()).toEqual(['sync']);
+    service.handleInteractionDismissed('stopped', 'async-request');
+    expect(ledger.batch()).toEqual(['sync', 'async']);
+  } finally {
+    vi.mocked(retireAnsweredMobileNotifications).mockReset();
+    vi.mocked(retireReadMobileNotifications).mockReset();
+  }
 });

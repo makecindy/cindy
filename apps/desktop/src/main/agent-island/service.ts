@@ -1,4 +1,4 @@
-import { retireReadMobileNotifications, retireAnsweredMobileNotifications, retireCancelledMobileQuestions } from '../device-link/notificationDismissalHost.js';
+import { retireReadMobileNotifications, retireAnsweredMobileNotifications } from '../device-link/notificationDismissalHost.js';
 import { app, dialog, ipcMain, screen, BrowserWindow, type Display, type OpenDialogOptions } from 'electron';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -1601,7 +1601,6 @@ export class AgentIslandService {
    * completion card, unread attention, or completion sound behind.
    */
   handleSessionStopped(sessionId: string, providerTurnId: string | null = null): void {
-    retireCancelledMobileQuestions(sessionId);
     this.advanceInteractionEpoch(sessionId);
     this.stoppedProviderTurnIdBySession.delete(sessionId);
     if (providerTurnId) {
