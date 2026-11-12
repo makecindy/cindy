@@ -813,6 +813,13 @@ import {
   type PiIdleReleaseWatcher,
 } from './piIdleReleaseWatcher.js';
 import {
+  createCodexIdleReleaseWatcher,
+  codexIdleReleaseCandidateWhere,
+  codexIdleReleaseIdleSince,
+  DEFAULT_CODEX_IDLE_RELEASE_MINUTES,
+  type CodexIdleReleaseWatcher,
+} from './codexIdleReleaseWatcher.js';
+import {
   ackSessionTurnEndedDurable,
   hasAssistantProgressAfterMessage,
   getRecoveryContextSnapshot,
@@ -3278,6 +3285,8 @@ let idleReleaseWatcher: OrcaIdleReleaseWatcher | null = null;
 
 /** 模块级 pi 普通会话 idle watcher；与 Orca watcher 同一生命周期。 */
 let piIdleReleaseWatcher: PiIdleReleaseWatcher | null = null;
+/** 模块级 codex 普通会话 idle watcher；与 pi watcher 同一生命周期。 */
+let codexIdleReleaseWatcher: CodexIdleReleaseWatcher | null = null;
 let claudeIdleReleaseWatcher: ReturnType<typeof createClaudeIdleReleaseWatcher> | null = null;
 
 /**
@@ -3325,6 +3334,12 @@ export function stopOrcaIdleWatcher(): void {
 export function stopPiIdleReleaseWatcher(): void {
   piIdleReleaseWatcher?.stop();
   piIdleReleaseWatcher = null;
+}
+
+/** 停止 codex 普通会话 idle watcher (app quit 时调, maker 可能已 shutdown)。 */
+export function stopCodexIdleReleaseWatcher(): void {
+  codexIdleReleaseWatcher?.stop();
+  codexIdleReleaseWatcher = null;
 }
 
 function requireAgentKind(value: unknown): AgentKind {
@@ -16805,6 +16820,56 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     log,
   });
   piIdleReleaseWatcher.start();
+
+  // ─── codex 普通与插件会话 idle watcher ────────────────────────────────────
+  // 与 pi watcher 同构(agentKind='codex')；额外的 isCodexHostBusy 闸门覆盖
+  // codex 凭证切换与 deferred/gateway 软重启兑现窗口。共享 app-server 进程
+  // 随应用生命周期(host.ts 设计)，本 watcher 只释放会话的 thread 运行时。
+  codexIdleReleaseWatcher?.stop();
+  codexIdleReleaseWatcher = createCodexIdleReleaseWatcher({
+    readIdleReleaseMinutes: () => DEFAULT_CODEX_IDLE_RELEASE_MINUTES,
+    listCandidates: async (idleBeforeMs) => {
+      const idleSince = codexIdleReleaseIdleSince();
+      const rows = await getDbClient()
+        .drizzle
+        .select({ id: sessions.id, idleSinceMs: idleSince })
+        .from(sessions)
+        .where(and(codexIdleReleaseCandidateWhere(), sql`${idleSince} < ${idleBeforeMs}`));
+      return rows.map((row) => ({ id: row.id, idleSinceMs: Number(row.idleSinceMs) }));
+    },
+    readIdleSinceMs: async (sessionId) => {
+      const [row] = await getDbClient()
+        .drizzle
+        .select({ idleSinceMs: codexIdleReleaseIdleSince() })
+        .from(sessions)
+        .where(and(eq(sessions.id, sessionId), codexIdleReleaseCandidateWhere()))
+        .limit(1);
+      return row ? Number(row.idleSinceMs) : null;
+    },
+    getSession: (sessionId) => maker.getSession(sessionId) ?? null,
+    withSessionLock: withSendToSessionLock,
+    hasPendingInput: hasPendingIdleReleaseInput,
+    hasScheduledAutoResume: (sessionId) => {
+      const coordinator = agentInputCoordinatorHolder;
+      if (!coordinator) return false;
+      return (
+        coordinator.isAutoResumePending(sessionId) ||
+        coordinator.getAutoResumeAttemptToken(sessionId) !== null ||
+        coordinator.hasQueuedAutoResume(sessionId)
+      );
+    },
+    isCodexHostBusy: createDeferredRestartQueueGate({
+      hasPendingCredentialSwitchEntry: (sessionId) =>
+        pendingCredentialSwitchHolder?.has(sessionId) === true,
+      isSessionRestarting: (sessionId) =>
+        deferredCodexRestartHolder?.isSessionRestarting(sessionId) === true ||
+        gatewayCodexRestartHolder?.isSessionRestarting(sessionId) === true,
+    }),
+    now: Date.now,
+    timer: { setInterval, clearInterval },
+    log,
+  });
+  codexIdleReleaseWatcher.start();
 
   // Ordinary local Claude tasks retain their native resume identity and task
   // resources. Specialized owners (bots, Orca, Goals, remote agents) stay out.

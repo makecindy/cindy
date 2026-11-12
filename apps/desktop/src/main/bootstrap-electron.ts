@@ -880,6 +880,7 @@ import {
   stopOrcaIdleWatcher,
   applySessionContextWindowBudgetChange,
   stopPiIdleReleaseWatcher,
+  stopCodexIdleReleaseWatcher,
   setGoalClearObserver,
   setGoalDeferredResumeCancelObserver,
   setGoalIdleObserver,
@@ -10883,6 +10884,7 @@ onQuit('review-artifact-snapshots', cleanupActiveReviewArtifactSnapshots, 'async
 onQuit('lsp-pool', shutdownLspServerPool, 'async');
 onQuit('orca-idle-watcher', () => stopOrcaIdleWatcher(), 'sync');
 onQuit('pi-idle-release-watcher', () => stopPiIdleReleaseWatcher(), 'sync');
+onQuit('codex-idle-release-watcher', () => stopCodexIdleReleaseWatcher(), 'sync');
 onQuit('im', () => stopImConnection('quit'), 'async');
 // 轮 27 MEDIUM-3:pi-env 挪到 post-async —— 若与 shutdown-maker 同 async 并发,
 // bridge 可能在 session close 的 disposeSessionRegistrations(unregisterSessionCtx/
