@@ -47,6 +47,21 @@ afterEach(() => {
 });
 
 describe('AppShortcutStore', () => {
+  // 本需求：主动离开沿用 override 持久化与恢复语义，升级不能抢占已有改绑。
+  it('persists a manual-away binding and lets existing user bindings take its default', () => {
+    const store = makeStore();
+    expect(store.setOverride('toggle-sidebar', combo('KeyL', { ctrl: true, shift: true }))).toBeNull();
+    expect(store.getEffectiveMap().get('away-guard')).toEqual([]);
+    const custom = combo('KeyK', { ctrl: true, shift: true });
+    expect(store.setOverride('away-guard', custom)).toBeNull();
+    expect(makeStore().getEffectiveMap().get('away-guard')).toEqual([custom]);
+    expect(store.setOverride('away-guard', null)).toBeNull();
+    expect(makeStore().getEffectiveMap().get('away-guard')).toEqual([]);
+    store.clearOverride('away-guard');
+    expect(store.getOverrides()).not.toHaveProperty('away-guard');
+    expect(makeStore('win32').getEffectiveMap().has('away-guard')).toBe(false);
+  });
+
   it('returns registry defaults when no overrides exist', () => {
     const store = makeStore('darwin');
     expect(store.getEffectiveCombos('toggle-sidebar')).toEqual([

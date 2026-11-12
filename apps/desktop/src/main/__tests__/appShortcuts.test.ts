@@ -1,4 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+const shortcutBroadcast = vi.hoisted(() => vi.fn());
+vi.mock('electron', () => ({
+  app: { getPath: () => '' },
+  BrowserWindow: { getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: shortcutBroadcast } }] },
+  ipcMain: {},
+}));
+vi.mock('../app-shortcuts/AppShortcutStore.js', () => ({
+  APP_SHORTCUTS_FILE_NAME: 'unused.json',
+  AppShortcutStore: class { getOverrides() { return {}; } },
+}));
+import { setGlobalShortcutRegistrationFailures } from '../app-shortcuts';
 
 import {
   APP_SHORTCUT_DEFINITIONS,
@@ -420,5 +432,20 @@ describe('session history defaults', () => {
     const effective = getEffectiveAppShortcuts({}, 'darwin');
     expect(effective.get('session-history-back')).toEqual([combo('BracketLeft', { meta: true })]);
     expect(effective.get('session-history-forward')).toEqual([combo('BracketRight', { meta: true })]);
+  });
+});
+
+// 本需求引入第二个全局注册方；最小失败输入是截图注册失败后离开快捷键成功。
+// 从真实广播入口观察设置页收到的错误集合，旧的全量替换会丢掉截图失败提示。tier: unit。
+it('keeps each global registration failure until its own source clears it', () => {
+  setGlobalShortcutRegistrationFailures(['region-screenshot']);
+  setGlobalShortcutRegistrationFailures(['away-guard'], 'away-guard');
+  setGlobalShortcutRegistrationFailures([], 'away-guard');
+  expect(shortcutBroadcast).toHaveBeenLastCalledWith('app-shortcuts:changed', {
+    overrides: {}, globalFailures: ['region-screenshot'],
+  });
+  setGlobalShortcutRegistrationFailures([]);
+  expect(shortcutBroadcast).toHaveBeenLastCalledWith('app-shortcuts:changed', {
+    overrides: {}, globalFailures: [],
   });
 });

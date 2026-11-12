@@ -7394,6 +7394,10 @@
         "globalOccupied": "已被其他應用程式佔用，請換一個組合鍵"
       },
       "items": {
+        "away-guard": {
+          "label": "離開時繼續工作",
+          "description": "3 秒後遮住螢幕，讓工作在離開後繼續。本機輸入會觸發系統鎖定。需要 macOS 14 或更新版本。"
+        },
         "region-screenshot": {
           "label": "截圖",
           "description": "在任何應用程式中截圖，可以加上標註、釘選到螢幕，或交給 {{appName}} 處理"

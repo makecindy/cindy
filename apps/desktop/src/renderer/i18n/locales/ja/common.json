@@ -7394,6 +7394,10 @@
         "globalOccupied": "他のアプリで使用中です。別の組み合わせを選んでください"
       },
       "items": {
+        "away-guard": {
+          "label": "離席中も作業を続ける",
+          "description": "3 秒後に画面を覆い、離席中も作業を続けます。この Mac で入力すると画面がロックされます。macOS 14 以降。"
+        },
         "region-screenshot": {
           "label": "スクリーンショット",
           "description": "どのアプリでもスクリーンショットを撮り、注釈を付けたり、画面に固定したり、{{appName}} に送ったりできます"

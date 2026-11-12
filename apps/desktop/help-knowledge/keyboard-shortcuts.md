@@ -38,3 +38,11 @@ These also work but aren't shown on the page: Mod+1 … Mod+9 jump to the first 
 - **Xbox controller**, **PlayStation controller** (DualSense / DualShock), **Switch controller** (Switch Pro / Joy-Con), and **Generic controller** — scroll, talk, send, and switch tasks with a gamepad over USB or Bluetooth.
   - Turn on **Enable**; Cindy only listens while it's in the foreground.
   - Click a control to assign an action (a command, a skill, or **Voice input** — hold to talk, release to stop). A stick can **Scroll conversation** or use **Custom directions**. **Reset mapping** restores the defaults.
+
+### 离开时继续工作（macOS 14+）
+
+按 `Control+Shift+L`，3 秒后遮住本机所有屏幕，让工作在离开后继续。
+本机再次有键盘或鼠标输入时会触发系统锁屏，再用系统方式解锁。
+此操作没有“试试看”的两分钟时限，也不改变自动离开的开关或等待时间。
+首次使用须授予现有的辅助功能权限；缺少权限时不会遮屏。
+可在「设置 → 键盘快捷键」修改或清除该快捷键，恢复默认会删除自定义绑定。
