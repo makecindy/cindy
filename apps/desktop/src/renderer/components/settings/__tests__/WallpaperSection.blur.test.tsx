@@ -42,13 +42,7 @@ beforeEach(() => {
         saved = { ...saved, ...patch };
         changed(saved);
       })),
-      resetFields: (resetFields = vi.fn(async () => {
-        // These fixtures have no unrelated overrides: the Host's field reset
-        // returns its default snapshot, rather than writing null overrides.
-        saved = { ...DEFAULT_APPEARANCE_SETTINGS };
-        changed(saved);
-        return saved;
-      })),
+      resetFields: (resetFields = vi.fn()),
     },
   });
   saved = { ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'cindy-window', wallpaperBlur: 4 };
@@ -98,10 +92,10 @@ describe('wallpaper blur gesture persistence', () => {
     render(view());
     expect(visibility()).toBe('0.6');
     fireEvent.click(screen.getByRole('button', { name: 'settings.appearance.wallpaper.reset' }));
-    await waitFor(() => expect(resetFields).toHaveBeenCalledExactlyOnceWith(['wallpaper', 'desktopVisibility']));
-    expect(setPatch).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(setPatch).toHaveBeenCalledTimes(2));
+    expect(resetFields).not.toHaveBeenCalled();
     expect(visibility()).toBe('0');
-    expect(saved.desktopVisibility).toBeUndefined();
+    expect(saved.desktopVisibility).toBeNull();
   });
 
   // The real visibility slider used to save every pointer movement. Protect
@@ -165,8 +159,8 @@ describe('wallpaper blur gesture persistence', () => {
     expect(visibility()).toBe('0.4');
     pointer(visibilityTrack(), 'pointerdown', 80);
     fireEvent.click(screen.getByRole('button', { name: 'settings.appearance.wallpaper.reset' }));
-    await waitFor(() => expect(resetFields).toHaveBeenCalledExactlyOnceWith(['wallpaper', 'desktopVisibility']));
-    expect(setPatch).not.toHaveBeenCalled();
+    await waitFor(() => expect(setPatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ wallpaperVisibility: null })));
+    expect(resetFields).not.toHaveBeenCalled();
     expect(visibility()).not.toBe('0.8');
   });
   // Unit integration: zero visibility suspends rendering and interaction, but
@@ -244,8 +238,8 @@ describe('wallpaper blur gesture persistence', () => {
     render(view());
     pointer(track(), 'pointerdown', 80);
     fireEvent.click(screen.getByRole('button', { name: 'settings.appearance.wallpaper.reset' }));
-    await waitFor(() => expect(resetFields).toHaveBeenCalledExactlyOnceWith(['wallpaper', 'desktopVisibility']));
-    expect(setPatch).not.toHaveBeenCalled();
+    await waitFor(() => expect(setPatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ wallpaperBlur: null })));
+    expect(resetFields).not.toHaveBeenCalled();
     expect(blur()).toBe('');
     expect(screen.getByRole('slider', { name: 'settings.appearance.wallpaper.desktopBlurLabel' }).getAttribute('aria-valuenow')).toBe('0');
   });

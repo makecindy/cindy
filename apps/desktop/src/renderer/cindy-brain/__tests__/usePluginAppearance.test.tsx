@@ -24,6 +24,21 @@ function options() {
     current: () => true, applyFonts: applyFontSettings };
 }
 describe('plugin appearance renderer', () => {
+  // Unit: an async package failure that arrives after switching back must not
+  // report the obsolete selection as the current theme's failure.
+  it('discards a late package failure after returning to a builtin theme', async () => {
+    let reject!: (error: Error) => void;
+    const selectTheme = vi.fn().mockResolvedValue(normalizeAppearanceSettings({}));
+    selectTheme.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    window.electronAPI = { appearanceSettings: { selectTheme } } as never;
+    presentTheme({ id: 'late-local', name: 'Late', type: 'light', colors: {},
+      packageSha256: 'a'.repeat(64), appearance: { density: 0.9 } });
+    presentTheme({ id: 'default', name: 'Default', type: 'light', colors: {} });
+    await act(async () => { reject(new Error('Old resource failed')); await vi.dynamicImportSettled(); });
+    expect(themeFailureNotice).not.toHaveBeenCalled();
+    expect(selectTheme).toHaveBeenLastCalledWith(null);
+  });
+
   // Package-only startup contract, unit through the real presenter: restoration
   // failure logs without a toast; explicitly retrying that same family notifies.
   // Font decode tests below do not exercise selection rejection or readonly hosts.

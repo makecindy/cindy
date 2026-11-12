@@ -133,14 +133,20 @@ application path, plugin installers or a replacement app as a workaround.
 Selection contributes defaults through the same Host AppearanceService used by
 settings and approved plugin fixed writes. Explicit overrides win over the theme.
 Selecting/importing never silently erases existing custom fonts or wallpaper.
-The owner persists only overrides and selection, not copies of theme defaults.
+The owner persists only explicit overrides. Selection stays in Cindy's original
+renderer localStorage; it is not migrated to the Host. The package defaults are
+an in-memory projection, rebuilt only after that selection requests preparation.
+Colors and the user's original fonts/wallpaper display synchronously; package
+fonts and media prepare asynchronously without delaying window creation.
 
 If a theme field is masked, show which setting overrides it. Its existing
 **Restore default** removes that override and follows the active theme. Restoring
 one font size does not reset its family or other fonts. Do not clear all settings
 to apply one theme. Switching back restores inherited defaults, while explicit
 custom values remain; returning to a previous custom value needs that recorded
-value rather than reset.
+value rather than reset. Leaving a package removes its default layer and reveals
+the user's settings. Builtin and loose themes retain their existing reset behavior;
+resetting appearance never changes the selected mode or family.
 
 Installed content is immutable beneath `.packages/<archive SHA-256>/`. An atomic
 installation record selects the current document per authored ID. **Same ID
@@ -173,8 +179,11 @@ when an installed package with matching ID becomes effective.
 V1 (`formatVersion: 1`, `type: "theme"`, `themes`) remains supported for colors,
 mode pairing and brand images. V1 cannot carry `appearance` or `resources`; build
 v2 for those. New clients preserve old theme selection and explicit settings on
-upgrade; renderer localStorage selection is adopted once, with old bytes retained
-if saving fails. Runtime rendering does not keep writing a second selection.
+upgrade. Existing renderer localStorage, setters and storage-event synchronization
+remain authoritative, including rollback to older versions. No startup migration,
+dual write or persisted package projection is needed. Old projection fields are
+ignored if encountered. Loose JSON still ignores unknown `appearance` fields;
+strict appearance validation applies to new package documents.
 
 Unknown file types or newer versions show “This version does not support this
 file”; malformed known packages have a separate invalid-file result. Older v1

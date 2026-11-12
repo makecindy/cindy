@@ -30,8 +30,8 @@ An unavailable check stays explicit; it is not a reason to modify the Host.
 | Reading/styles | Real line height, width, gap, padding and radius; long content fits a narrow window. |
 | Density/motion | Requested spacing/duration changes, restoring neutral 1 does not compound scale. Theme motion 0 and OS Reduce motion both suppress animation; theme settings never override OS reduction. |
 | Priority | A pre-existing custom font/wallpaper remains after theme selection. Clear only its named override when desired, and verify it then follows the theme across mode changes. |
-| Restore | Prior selection or recorded custom values return without resetting unrelated settings. One font-size reset preserves family and other fonts. |
-| Persistence | When in scope, reopen the same profile and verify selection, resources and overrides before interacting. Upgrade without changes preserves current choices. |
+| Restore | Package → builtin/loose removes package defaults and reveals the user's original settings. Existing builtin/loose resets stay unchanged. One font-size reset preserves family and other fonts; resetting appearance preserves mode/family. |
+| Persistence | When in scope, reopen the same profile: colors and original settings appear first, then package resources load asynchronously. Wait for actual resource readiness before verifying. Existing localStorage choices survive upgrade and rollback without migration. |
 
 Inspect the screenshots, including focus/disabled/hover states where affected.
 File existence or a tool exit code alone is not visual verification. Code/editor
@@ -46,6 +46,9 @@ boundaries.
   install a plugin.
 - Saved settings are not proof of visible application. Inspect the actual view,
   loaded font and displayed media; record saved-only and failed states accurately.
+- A cold package restore failure retains selection and original settings, logs a
+  warning and shows no toast. Explicitly reselecting the same package reports the
+  rejection. Neither case should block the window or rewrite user preferences.
 - Explicit overrides can mask theme defaults. Report them instead of silently
   deleting preferences. Reset follows the current theme, while restoring previous
   custom values needs the actual recorded values. Do not overwrite later edits.

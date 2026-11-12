@@ -34,7 +34,7 @@ export const BUILT_IN_SKILLS_BUNDLE_VERSION_BASE = 107;
 /** Directory beside the bundled Skills holding one record file per bundle change. */
 export const BUILT_IN_SKILLS_VERSION_RECORDS_DIRECTORY = '_versions';
 const PLUGIN_CREATOR_FIRST_BUNDLE_VERSION = 13;
-const THEME_CREATOR_FIRST_BUNDLE_VERSION = 111;
+const THEME_CREATOR_FIRST_BUNDLE_VERSION = 112;
 
 export interface BuiltInSkillDescriptor {
   name: string;

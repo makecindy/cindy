@@ -18,8 +18,10 @@ export function presentTheme(theme: Theme, notifyFailure = true): void {
     familyId: theme.family ? `${theme.family}${LOCAL_THEME_SUFFIX}` : theme.id,
   } : undefined;
   if (!packageSelection && !previous) return;
-  void window.electronAPI?.appearanceSettings?.selectTheme?.(packageSelection ?? null)
+  const requested = packageSelection;
+  void window.electronAPI?.appearanceSettings?.selectTheme?.(requested ?? null)
     .catch(() => {
+      if (packageSelection !== requested) return;
       if (notifyFailure) notifyThemeAppearanceFailure();
       else window.electronAPI?.logToMain?.('warn', 'renderer/appearance', 'Theme package restore failed; saved selection retained');
     });

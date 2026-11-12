@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
 
-/** Read-only projection of the ThemeProvider's existing Host subscription. */
+/** Read-only package motion; builtin themes do not subscribe to Host settings. */
 export const AppearanceMotionContext = createContext(false);
 export const useAppearanceReducedMotion = () => useContext(AppearanceMotionContext);

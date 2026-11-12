@@ -52,7 +52,8 @@ Brand paths and manifest resources follow the package reference.
 ## Existing boundaries
 
 The current Desktop loader reads loose `~/.cindy/themes/*.json` and installed
-packages. Loose files are left unchanged; a shareable result should include its
+packages. Loose files are left unchanged and ignore unknown `appearance` fields;
+use a v2 package for the extended appearance. A shareable result should include its
 resources in a package rather than depend on absolute paths on one computer.
 Discover the actual target folder through Cindy before writing user themes there.
 Create editable source files in the task folder first.
