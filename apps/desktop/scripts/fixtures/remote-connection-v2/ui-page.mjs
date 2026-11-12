@@ -53,9 +53,11 @@ export default {
       await page.getByRole('dialog').waitFor();
       await ui.capture('popover');
       await page.keyboard.press('Escape');
-      // 这台电脑的卡:与中转的连接和「管理设备…」(定位到本机卡片)。
+      // 这台电脑的卡只展示连接信息;本机设置直接使用同页上方的卡片。
       await page.getByRole('button', { name: 'Studio Mac', exact: true }).click();
-      await page.getByRole('button', { name: await ui.t('settings.remoteControl.v2.popover.manage') }).waitFor();
+      const hubCard = page.getByRole('dialog');
+      await hubCard.getByText(await ui.t('settings.devices.linkStatus.online')).waitFor();
+      if (await hubCard.getByRole('button').count()) throw new Error('The hub card must not duplicate the device settings above it');
       await ui.capture('hub-card');
       await page.keyboard.press('Escape');
       // 要处理的设备:点开卡片,「状态」用红字写原因(没有单独的「需要处理」卡片)。
