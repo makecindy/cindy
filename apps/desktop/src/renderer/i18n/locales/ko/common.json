@@ -1344,7 +1344,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 설정은 저장되었지만 Cindy에서 새로 고치지 못했습니다. SSH 설정을 다시 불러오세요.",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy가 이 SSH 구성을 안전하게 관리할 수 없습니다. 다시 불러온 후 Cindy 소유권 표시와 호스트 별칭의 고유성을 확인하세요.",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy가 이 호스트의 일부 SSH 설정 규칙을 안전하게 재현할 수 없습니다. 터미널 SSH는 계속 작동할 수 있으니 Match, 조건부 Include, IdentityAgent, IdentitiesOnly 및 공개 키 설정을 확인하세요.",
-    "SSH_AGENT_UNAVAILABLE": "SSH Agent를 사용할 수 없습니다. SSH Agent를 시작하고 ssh-add로 해당 개인 키를 불러온 뒤 다시 시도하세요.",
+    "SSH_AGENT_UNAVAILABLE": "이 컴퓨터의 SSH 키 에이전트(ssh-agent)를 사용할 수 없습니다. 실행 중인지 확인하고 ssh-add -l로 필요한 키가 로드되었는지 확인하세요. 키 관리에서 문제 해결 안내를 볼 수 있습니다.",
     "SSH_HOST_PREFS_WRITE_FAILED": "호스트는 저장되었지만 표시 이름 또는 Agent Proxy 설정을 저장하지 못했습니다. 로컬 저장소 권한을 확인한 후 다시 시도하세요.",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "이 작업의 탭 한도에 도달했습니다. 일부 탭을 닫아 주세요",
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "탭 내용이 너무 커서 추가할 수 없습니다",
@@ -1871,6 +1871,7 @@
       "footnote": "Phase A 는 SSH 연결 관리만 지원합니다. 원격에서 에이전트 실행은 다음 업데이트에서 제공됩니다.",
       "viaAuth": "{{label}} 로 인증",
       "readOnlyFromSshConfig": "연결 정보는 SSH 설정에서 가져옵니다",
+      "importedAgentHint": "이 컴퓨터의 SSH 키 에이전트(ssh-agent)를 사용하며 IdentityFile 개인 키를 직접 읽지 않습니다. 터미널 ssh 연결에 성공해도 에이전트가 준비되었다는 뜻은 아닙니다.",
       "configWarning": "Cindy에서 일부 SSH 설정 규칙을 해석할 수 없습니다. 호스트 목록이나 연결 정보가 터미널 SSH와 다를 수 있습니다.",
       "configDiagnostic": {
         "io": "Cindy에서 SSH 설정을 읽을 수 없습니다. 마지막으로 정상적으로 불러온 호스트를 계속 표시합니다. 파일 권한을 확인한 후 다시 불러오세요.",
@@ -1968,7 +1969,7 @@
           "tryThis": "터미널에서 다음을 시도해 보세요",
           "close": "닫기",
           "fallbackTitle": "또는 agent 를 건너뛰기",
-          "fallbackBody": "호스트를 추가할 때 「Identity file」 인증으로 전환하면, {{appName}} 가 키 파일을 직접 ssh 에 전달하고 매 연결마다 암호를 입력받습니다. agent 가 필요 없습니다. 트레이드오프: 매 연결마다 암호 입력이 필요하지만 메모리에 키 캐시가 남지 않습니다(보안은 사용자 책임).",
+          "fallbackBody": "호스트를 추가할 때 \"Identity file\"을 선택할 수도 있습니다. {{appName}}이 ssh-agent 없이 개인 키를 프로세스 메모리로 읽습니다. 현재 암호화되지 않은 개인 키만 지원하며 연결 시 키 암호를 묻지 않습니다. 암호화된 키는 ssh-agent를 사용하세요.",
           "reason": {
             "agent_unavailable": "ssh-add 가 ssh-agent 에 도달할 수 없습니다(ssh-add 미설치, agent 미실행, 또는 SSH_AUTH_SOCK 미설정).",
             "bad_passphrase": "ssh-add 가 암호를 거부했습니다.",

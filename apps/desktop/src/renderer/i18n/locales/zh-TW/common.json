@@ -1340,7 +1340,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 設定已儲存，但 Cindy 重新整理失敗。請重新載入 SSH 設定。",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy 無法安全管理此 SSH 設定。請重新載入，並確認 Cindy 所有權標記存在且主機別名唯一。",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy 無法安全重現此主機的部分 SSH 設定規則。終端 SSH 仍可能成功；請檢查 Match、條件式 Include、IdentityAgent、IdentitiesOnly 與公開金鑰設定。",
-    "SSH_AGENT_UNAVAILABLE": "SSH Agent 目前無法使用。請啟動 SSH Agent，並用 ssh-add 載入對應私密金鑰後再試。",
+    "SSH_AGENT_UNAVAILABLE": "本機 SSH 金鑰代理程式（ssh-agent）無法使用。請確認代理程式已啟動，並用 ssh-add -l 檢查所需金鑰是否已載入；可在「管理金鑰」中查看疑難排解指引。",
     "SSH_HOST_PREFS_WRITE_FAILED": "主機仍已儲存，但顯示名稱或 Agent Proxy 設定未能儲存。請檢查本機儲存權限後再試。",
     "REMOTE_WORKDIR_INVALID": "遠端專案目錄無效，請重新選擇專案目錄。",
     "REMOTE_WORKDIR_NOT_FOUND": "遠端專案目錄不存在，請重新選擇專案目錄。",
@@ -1871,6 +1871,7 @@
       "footnote": "第一版僅支援 SSH 連線管理。在遠端執行 Agent 的能力將在後續版本中加入。",
       "viaAuth": "透過 {{label}} 認證",
       "readOnlyFromSshConfig": "連線資訊來自 SSH 設定",
+      "importedAgentHint": "使用本機 SSH 金鑰代理程式（ssh-agent），不會直接讀取 IdentityFile 私鑰。終端機 ssh 能連線，不代表代理程式已就緒。",
       "configWarning": "部分 SSH 設定規則 Cindy 無法解析，主機列表或連線資訊可能與終端 SSH 不一致。",
       "configDiagnostic": {
         "io": "Cindy 無法讀取 SSH 設定。這裡仍顯示上次成功讀取的主機；請檢查檔案權限，然後重新載入。",
@@ -1968,7 +1969,7 @@
           "tryThis": "在你的終端裡試一下這些命令",
           "close": "關閉",
           "fallbackTitle": "或者乾脆不走 agent",
-          "fallbackBody": "你可以在新增 host 時改用「Identity file」方式，{{appName}} 會把金鑰檔案直接交給 ssh，每次連線時由你輸入密碼。完全不依賴 agent。安全權衡：每次連線都要輸密碼，但記憶體裡也不會留任何金鑰快取，安全自負。",
+          "fallbackBody": "新增主機時也可選擇「Identity file」：{{appName}} 會將私鑰讀入程序記憶體，不依賴 ssh-agent。目前僅支援未加密的私鑰，不會在連線時詢問金鑰密碼；加密私鑰請透過 ssh-agent 使用。",
           "reason": {
             "agent_unavailable": "ssh-add 找不到可用的 ssh-agent(可能是 ssh-add 沒裝、agent 沒啟動，或 SSH_AUTH_SOCK 沒設定)。",
             "bad_passphrase": "ssh-add 拒絕了這個密碼。",

@@ -1340,7 +1340,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 配置已保存，但 Cindy 刷新失败。请重新加载 SSH 配置。",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy 无法安全管理此 SSH 配置。请重新加载，并确认 Cindy 所有权标记存在且主机别名唯一。",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy 无法安全复现此主机的部分 SSH 配置规则。终端 SSH 仍可能成功；请检查 Match、条件 Include、IdentityAgent、IdentitiesOnly 和公钥设置。",
-    "SSH_AGENT_UNAVAILABLE": "SSH Agent 当前不可用。请启动 SSH Agent，并用 ssh-add 加载对应私钥后重试。",
+    "SSH_AGENT_UNAVAILABLE": "本机 SSH 密钥代理（ssh-agent）不可用。请确认代理已启动，并用 ssh-add -l 检查所需密钥是否已加载；可在「管理密钥」中查看排查指引。",
     "SSH_HOST_PREFS_WRITE_FAILED": "主机仍已保存，但显示名称或 Agent Proxy 设置未能保存。请检查本地存储权限后重试。",
     "REMOTE_WORKDIR_INVALID": "远程项目目录无效，请重新选择项目目录。",
     "REMOTE_WORKDIR_NOT_FOUND": "远程项目目录不存在，请重新选择项目目录。",
@@ -1871,6 +1871,7 @@
       "footnote": "第一版仅支持 SSH 连接管理。在远端运行 Agent 的能力将在后续版本中加入。",
       "viaAuth": "通过 {{label}} 认证",
       "readOnlyFromSshConfig": "连接信息来自 SSH 配置",
+      "importedAgentHint": "使用本机 SSH 密钥代理（ssh-agent），不会直接读取 IdentityFile 私钥。终端 ssh 能连接，不代表代理已就绪。",
       "configWarning": "部分 SSH 配置规则 Cindy 无法解析，主机列表或连接信息可能与终端 SSH 不一致。",
       "configDiagnostic": {
         "io": "Cindy 无法读取 SSH 配置。这里仍显示上次成功读取的主机；请检查文件权限，然后重新加载。",
@@ -1968,7 +1969,7 @@
           "tryThis": "在你的终端里试一下这些命令",
           "close": "关闭",
           "fallbackTitle": "或者干脆不走 agent",
-          "fallbackBody": "你可以在添加 host 时改用「Identity file」方式，{{appName}} 会把密钥文件直接交给 ssh，每次连接时由你输入密码。完全不依赖 agent。安全权衡：每次连接都要输密码，但内存里也不会留任何密钥缓存，安全自负。",
+          "fallbackBody": "添加主机时也可选择「Identity file」：{{appName}} 会将私钥读入进程内存，不依赖 ssh-agent。目前仅支持未加密的私钥，不会在连接时询问密钥密码；加密私钥请通过 ssh-agent 使用。",
           "reason": {
             "agent_unavailable": "ssh-add 找不到可用的 ssh-agent(可能是 ssh-add 没装、agent 没启动，或 SSH_AUTH_SOCK 没设置)。",
             "bad_passphrase": "ssh-add 拒绝了这个密码。",

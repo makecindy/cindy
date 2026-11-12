@@ -1357,7 +1357,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "Die SSH-Konfiguration wurde gespeichert, aber Cindy konnte sie nicht aktualisieren. Lade die SSH-Konfiguration neu.",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy kann diese SSH-Konfiguration nicht sicher verwalten. Lade sie neu und prüfe dann die Cindy-Eigentumsmarkierung sowie die Eindeutigkeit des Host-Alias.",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy kann einige SSH-Konfigurationsregeln für diesen Host nicht sicher nachbilden. SSH im Terminal funktioniert möglicherweise weiterhin. Überprüfe Match, bedingte Include-Regeln, IdentityAgent, IdentitiesOnly und die Einstellungen für öffentliche Schlüssel.",
-    "SSH_AGENT_UNAVAILABLE": "Der SSH Agent ist nicht verfügbar. Starte ihn, lade den passenden privaten Schlüssel mit ssh-add und versuch es erneut.",
+    "SSH_AGENT_UNAVAILABLE": "Der lokale SSH-Schlüsselagent (ssh-agent) ist nicht verfügbar. Prüfe, ob er läuft und ob ssh-add -l den benötigten Schlüssel auflistet. Hinweise findest du unter Schlüssel verwalten.",
     "SSH_HOST_PREFS_WRITE_FAILED": "Der Host ist weiterhin gespeichert, aber sein Anzeigename oder seine Agent Proxy-Einstellungen konnten nicht gespeichert werden. Prüfe die lokalen Speicherberechtigungen und versuch es erneut.",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "Diese Aufgabe hat ihr Tab-Limit erreicht. Schließe zuerst einige Tabs",
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "Tab-Inhalt ist zu groß zum Hinzufügen",
@@ -1901,6 +1901,7 @@
       "footnote": "Phase A: nur SSH-Verbindungsverwaltung. Das Ausführen von Agents auf dem Remote-Rechner folgt in einem späteren Update.",
       "viaAuth": "über {{label}}",
       "readOnlyFromSshConfig": "Verbindungsdetails stammen aus der SSH-Konfiguration",
+      "importedAgentHint": "Verwendet den lokalen SSH-Schlüsselagenten (ssh-agent), ohne den privaten IdentityFile-Schlüssel direkt zu lesen. Eine erfolgreiche ssh-Verbindung im Terminal bedeutet nicht, dass der Agent bereit ist.",
       "configWarning": "Cindy kann einige SSH-Konfigurationsregeln nicht auswerten. Die Hostliste bzw. Verbindungsdetails können vom Terminal SSH abweichen.",
       "configDiagnostic": {
         "io": "Cindy konnte deine SSH-Konfiguration nicht lesen. Die zuletzt erfolgreich geladenen Hosts werden weiterhin angezeigt. Prüfe die Dateiberechtigungen und lade neu.",
@@ -1998,7 +1999,7 @@
           "tryThis": "In deinem Terminal versuchen",
           "close": "Schließen",
           "fallbackTitle": "Oder ssh-agent ganz überspringen",
-          "fallbackBody": "Du kannst diesen Host stattdessen mit der Authentifizierung „Identitätsdatei“ hinzufügen – {{appName}} übergibt die Schlüsseldatei direkt an ssh, und du wirst bei jeder Verbindung nach der Passphrase gefragt. Kein ssh-agent nötig. Sicherheitsabwägung: Eingabe der Passphrase bei jeder Verbindung, dafür kein Schlüssel-Cache im Arbeitsspeicher.",
+          "fallbackBody": "Beim Hinzufügen eines Hosts kannst du auch „Identity file“ wählen. {{appName}} liest den privaten Schlüssel ohne ssh-agent in den Prozessspeicher. Derzeit werden nur unverschlüsselte private Schlüssel unterstützt; beim Verbinden wird keine Passphrase abgefragt. Nutze ssh-agent für verschlüsselte Schlüssel.",
           "reason": {
             "agent_unavailable": "ssh-add konnte deinen ssh-agent nicht erreichen (Programm fehlt, ssh-agent läuft nicht oder SSH_AUTH_SOCK ist nicht gesetzt).",
             "bad_passphrase": "ssh-add hat die Passphrase abgelehnt.",

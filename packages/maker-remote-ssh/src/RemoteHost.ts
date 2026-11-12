@@ -39,6 +39,17 @@ export interface RemoteHostDeps {
   hostKeys?: HostKeyStore;
   /** Localized host-key diagnostics; the standalone package defaults to English. */
   formatHostKeyError?: (details: HostKeyErrorDetails) => string;
+  /** Local SSH key-agent diagnostics, shared by status rows and connect errors. */
+  formatAgentUnavailableError?: () => string;
+}
+
+function agentUnavailableError(cause: Error, format?: () => string): Error {
+  const message = format?.() ??
+    'The local SSH key agent (ssh-agent) is unavailable. Check that it is running and that ssh-add -l lists the required key, then retry. See Manage keys for troubleshooting.';
+  return Object.assign(new Error(message), {
+    code: 'SSH_AGENT_UNAVAILABLE',
+    cause,
+  });
 }
 
 export interface HostKeyErrorDetails {
@@ -374,6 +385,7 @@ export class RemoteHost {
   private readonly log: RemoteHostDeps['logger'];
   private readonly hostKeys?: HostKeyStore;
   private readonly formatHostKeyError?: RemoteHostDeps['formatHostKeyError'];
+  private readonly formatAgentUnavailableError?: RemoteHostDeps['formatAgentUnavailableError'];
   /**
    * Set by the host-key verifier when it rejects a connect, so onError can
    * surface an actionable message instead of ssh2's opaque handshake error.
@@ -395,6 +407,7 @@ export class RemoteHost {
     this.log = deps.logger;
     this.hostKeys = deps.hostKeys;
     this.formatHostKeyError = deps.formatHostKeyError;
+    this.formatAgentUnavailableError = deps.formatAgentUnavailableError;
   }
 
   get config(): HostConfig {
@@ -1248,13 +1261,16 @@ export class RemoteHost {
       auth = await resolveAuth(attemptConfig);
     } catch (err) {
       if (!isCurrentAttempt()) throw cancelledError();
-      const msg = (err as Error).message;
+      const authError = (err as { code?: string }).code === 'SSH_AGENT_UNAVAILABLE'
+        ? agentUnavailableError(err as Error, this.formatAgentUnavailableError)
+        : err;
+      const msg = (authError as Error).message;
       this.lastError = msg;
       // Keep the full error so concurrent connect() joiners can rethrow it
       // with its structured `.code` intact (see lastAuthError + connect()).
-      this.lastAuthError = err instanceof Error ? err : new Error(msg);
+      this.lastAuthError = authError instanceof Error ? authError : new Error(msg);
       this.setStatus('failed');
-      throw err;
+      throw authError;
     }
 
     // disconnect() may have run while local credentials were being resolved.
@@ -1299,6 +1315,7 @@ export class RemoteHost {
 
     await new Promise<void>((resolve, reject) => {
       let settled = false;
+      let agentError: Error | undefined;
 
       const onReady = () => {
         if (settled) return;
@@ -1329,6 +1346,9 @@ export class RemoteHost {
           return;
         }
         if (settled) {
+          // ssh2 may emit a generic authentication failure after its local
+          // agent error. Keep the actionable diagnosis for this failed attempt.
+          if (agentError) return;
           // Post-ready error — feed into reconnect path, not the connect promise.
           this.handlePostReadyError(err);
           return;
@@ -1339,17 +1359,24 @@ export class RemoteHost {
         // Otherwise swap opaque "All configured authentication methods failed"
         // for a hint pointing at ssh-copy-id / identity file. The host row
         // subtitle + connect-failure toast both surface this verbatim.
+        // ssh2 tags local agent initialization/signing errors itself. Do not
+        // infer this from message text, which may also come from the server.
+        agentError = !this.hostKeyError && (err as Error & { level?: string }).level === 'agent'
+          ? agentUnavailableError(err, this.formatAgentUnavailableError)
+          : undefined;
         this.lastError = this.hostKeyError
           ? this.hostKeyError
-          : isAuthFailure(err.message)
-            ? authFailureHint(attemptConfig)
-            : err.message;
+          : agentError
+            ? agentError.message
+            : isAuthFailure(err.message)
+              ? authFailureHint(attemptConfig)
+              : err.message;
         this.client = null;
         this.setStatus('failed');
         this.log.warn('ssh connect failed', { id: this.id, error: err.message });
         // Reject with the friendly message so IPC layer's toast also gets
         // the actionable copy (it pulls from `.message`).
-        const rejectErr = new Error(this.lastError);
+        const rejectErr = agentError ?? new Error(this.lastError);
         if (this.hostKeyMismatch) Object.assign(rejectErr, { code: 'SSH_HOST_KEY_MISMATCH' });
         // Preserve original for tests / debugging that key off message text.
         (rejectErr as Error & { cause?: unknown }).cause = err;
@@ -1374,6 +1401,9 @@ export class RemoteHost {
           return;
         }
         // Post-ready close — schedule reconnect unless user-initiated.
+        // A local agent failure has already failed this connect attempt; do
+        // not treat its subsequent close as a lost established connection.
+        if (agentError) return;
         this.handlePostReadyClose();
       };
 

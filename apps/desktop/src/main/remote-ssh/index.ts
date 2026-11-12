@@ -317,6 +317,7 @@ function getPool(): ConnectionPool {
       logger: poolLogger,
       hostKeys: getSharedHostKeyStore(),
       formatHostKeyError,
+      formatAgentUnavailableError: () => t('ipcError.SSH_AGENT_UNAVAILABLE'),
     });
   }
   return pool;
@@ -1454,7 +1455,12 @@ export function registerRemoteSshIpc(): void {
       if (host) broadcastStatus(host.snapshot());
     },
     createTunnelHost: (cfg) =>
-      new RemoteHost(cfg, { logger: poolLogger, hostKeys: getSharedHostKeyStore(), formatHostKeyError }),
+      new RemoteHost(cfg, {
+        logger: poolLogger,
+        hostKeys: getSharedHostKeyStore(),
+        formatHostKeyError,
+        formatAgentUnavailableError: () => t('ipcError.SSH_AGENT_UNAVAILABLE'),
+      }),
     getMainHost: (hostId) => getPool().get(hostId) ?? null,
   });
 

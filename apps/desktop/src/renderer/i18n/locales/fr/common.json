@@ -1375,7 +1375,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "La configuration SSH a été enregistrée, mais Cindy n'a pas pu l'actualiser. Rechargez la configuration SSH.",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy ne peut pas gérer cette configuration SSH en toute sécurité. Rechargez-la, puis vérifiez le marqueur de propriété Cindy et l'unicité de l'alias d'hôte.",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy ne peut pas reproduire en toute sécurité certaines règles de configuration SSH pour cet hôte. SSH peut encore fonctionner dans le terminal ; vérifiez les paramètres Match, Include conditionnel, IdentityAgent, IdentitiesOnly et de clé publique.",
-    "SSH_AGENT_UNAVAILABLE": "L'Agent SSH est indisponible. Démarrez-le, chargez la clé privée correspondante avec ssh-add, puis réessayez.",
+    "SSH_AGENT_UNAVAILABLE": "L’agent local de clés SSH (ssh-agent) est indisponible. Vérifiez qu’il fonctionne et que ssh-add -l affiche la clé requise. Consultez la gestion des clés pour le dépannage.",
     "SSH_HOST_PREFS_WRITE_FAILED": "L'hôte est toujours enregistré, mais son nom d'affichage ou ses paramètres Agent Proxy n'ont pas pu être enregistrés. Vérifiez les autorisations du stockage local et réessayez.",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "Cette tâche a atteint sa limite d'onglets. Fermez d'abord quelques onglets",
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "Le contenu de l'onglet est trop volumineux pour être ajouté",
@@ -1939,6 +1939,7 @@
       "footnote": "Phase A : gestion des connexions SSH uniquement. L'exécution d'Agents sur la machine distante arrivera dans une prochaine mise à jour.",
       "viaAuth": "via {{label}}",
       "readOnlyFromSshConfig": "Les détails de connexion proviennent de la configuration SSH",
+      "importedAgentHint": "Utilise l’agent local de clés SSH (ssh-agent), sans lire directement la clé privée IdentityFile. Une connexion ssh réussie dans le terminal ne garantit pas que l’agent est prêt.",
       "configWarning": "Cindy ne peut pas évaluer certaines règles de configuration SSH. La liste des hôtes ou les détails de connexion peuvent différer de SSH dans le terminal.",
       "configDiagnostic": {
         "io": "Cindy n'a pas pu lire votre configuration SSH. Les derniers hôtes chargés avec succès restent affichés. Vérifiez les autorisations du fichier et rechargez.",
@@ -2036,7 +2037,7 @@
           "tryThis": "Essayez ceci dans votre terminal",
           "close": "Fermer",
           "fallbackTitle": "Ou passez-vous complètement de l'Agent SSH",
-          "fallbackBody": "Vous pouvez plutôt ajouter cet hôte avec l'authentification « Fichier d'identité » : {{appName}} transmettra directement le fichier de clé à ssh et la phrase secrète vous sera demandée à chaque connexion. Aucun Agent SSH nécessaire. Compromis de sécurité : phrase secrète saisie à chaque connexion, mais aucune clé mise en cache en mémoire.",
+          "fallbackBody": "Vous pouvez aussi choisir « Identity file » lors de l’ajout d’un hôte. {{appName}} lit la clé privée dans la mémoire du processus sans ssh-agent. Seules les clés privées non chiffrées sont actuellement prises en charge ; aucune phrase secrète n’est demandée à la connexion. Utilisez ssh-agent pour les clés chiffrées.",
           "reason": {
             "agent_unavailable": "ssh-add n'a pas pu joindre votre ssh-agent (binaire absent, Agent non démarré ou SSH_AUTH_SOCK non défini).",
             "bad_passphrase": "ssh-add a refusé la phrase secrète.",

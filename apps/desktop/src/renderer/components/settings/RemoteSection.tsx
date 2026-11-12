@@ -186,6 +186,11 @@ function HostRow({
             {t('settings.remote.readOnlyFromSshConfig')}
           </span>
         )}
+        {!snap.config.managedByCindy && snap.config.authMethod === 'agent' && (
+          <span className="text-11 leading-relaxed" style={{ color: 'var(--settings-integration-subtitle)' }}>
+            {t('settings.remote.importedAgentHint')}
+          </span>
+        )}
       </div>
 
       <div className="flex items-center gap-2">

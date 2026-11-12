@@ -15,13 +15,25 @@ import { EventEmitter } from 'node:events';
 const KEY_FILE_NOT_FOUND_CODE = 'KEY_FILE_NOT_FOUND';
 
 class FakeClient extends EventEmitter {
-  connect(): void {}
+  connect(): void {
+    if (!h.connectError) return;
+    this.emit('error', h.connectError);
+    if ((h.connectError as Error & { level?: string }).level === 'agent') {
+      // ssh2 continues trying authentication after emitting its agent error,
+      // then emits a generic failure and closes the same connection.
+      this.emit('error', new Error('All configured authentication methods failed'));
+      this.emit('close');
+    }
+  }
   end(): void {
     this.emit('close');
   }
 }
 
-const h = vi.hoisted(() => ({ client: null as FakeClient | null }));
+const h = vi.hoisted(() => ({
+  client: null as FakeClient | null,
+  connectError: null as Error | null,
+}));
 
 vi.mock('ssh2', () => ({
   Client: vi.fn(() => {
@@ -41,6 +53,7 @@ vi.mock('../credentials.js', () => ({
 }));
 
 import { RemoteHost } from '../RemoteHost.js';
+import { resolveAuth } from '../credentials.js';
 import type { HostConfig } from '../types.js';
 
 const HOST_CONFIG: HostConfig = {
@@ -77,5 +90,42 @@ describe('RemoteHost concurrent connect preserves resolveAuth error code', () =>
         expect((r.reason as { code?: string }).code).toBe(KEY_FILE_NOT_FOUND_CODE);
       }
     }
+  });
+
+  // Test value: RemoteHost.connect() must retain local agent diagnostics in
+  // both the host row snapshot and concurrent IPC rejections. Existing tests
+  // only exercise preflight key-file failures, not ssh2's Windows pipe failure.
+  // Minimal regression input: ssh2 emits Error with level='agent'. Tier: unit,
+  // in-memory client; no real agent, network, credentials or service changes.
+  // Standalone run: 916 ms (Vitest), 4 tests.
+  it.each(['preflight', 'ssh2'] as const)('preserves %s local agent failure semantics and localized guidance for both callers', async (stage) => {
+    const cause = Object.assign(new Error('Failed to connect to agent'),
+      stage === 'ssh2' ? { level: 'agent' } : { code: 'SSH_AGENT_UNAVAILABLE' });
+    if (stage === 'preflight') vi.mocked(resolveAuth).mockRejectedValueOnce(cause);
+    else vi.mocked(resolveAuth).mockResolvedValueOnce({ agent: 'test-agent', label: 'agent' });
+    h.connectError = cause;
+    const guidance = '本机 SSH 密钥代理（ssh-agent）不可用。请检查 ssh-add -l。';
+    const host = new RemoteHost({ ...HOST_CONFIG, authMethod: 'agent' }, {
+      logger: noopLogger,
+      formatAgentUnavailableError: () => guidance,
+    });
+    const results = await Promise.allSettled([host.connect(), host.connect()]);
+    for (const result of results) {
+      expect(result).toMatchObject({
+        status: 'rejected',
+        reason: { code: 'SSH_AGENT_UNAVAILABLE', message: guidance, cause },
+      });
+    }
+    expect(host.snapshot()).toMatchObject({ status: 'failed', lastError: guidance });
+  });
+
+  it('does not treat message text from other SSH failures as a local agent failure', async () => {
+    vi.mocked(resolveAuth).mockResolvedValueOnce({ agent: 'test-agent', label: 'agent' });
+    h.connectError = new Error('Failed to connect to agent');
+    const host = new RemoteHost({ ...HOST_CONFIG, authMethod: 'agent' }, { logger: noopLogger });
+    const error = await host.connect().catch((err: unknown) => err);
+    expect(error).toMatchObject({ message: h.connectError.message });
+    expect(host.snapshot().lastError).toBe(h.connectError.message);
+    expect(error).not.toHaveProperty('code', 'SSH_AGENT_UNAVAILABLE');
   });
 });
