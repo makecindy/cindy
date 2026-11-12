@@ -97,6 +97,16 @@ describe('listAvailableMediaModels', () => {
     isCatalogMediaModelVisibleMock.mockReset().mockReturnValue(true);
   });
 
+  // Unit: declarations remain discoverable without eager Guide lookup or a
+  // Cindy AI account. The actual prepare resolves a Guide for the selected route.
+  it('lists custom declarations and exact source choices without reading Guides', async () => {
+    listProviderMediaModelsMock.mockReturnValue([{ id: 'unknown', name: 'Private', providerId: 'relay', mode: 'image_generation',
+      guideDriven: true, sourceAgents: ['codex', 'pi'], modalities: { input: ['text'], output: ['image'] } }]);
+    const result = await listExecutableMediaModels(['image.generate'], { skipGateway: true });
+    expect(result.models).toMatchObject([{ id: 'unknown', providerId: 'relay', guideDriven: true, sourceAgents: ['codex', 'pi'] }]);
+    expect(serverApiFetchMock).not.toHaveBeenCalled();
+  });
+
   // Unit contract: listAvailableMediaModels preserves the parsed summary and provider discount.
   // Existing fixtures had no pricing; minimal regression is a Gateway image with one summary.output quote.
   it('preserves the optional summary through media parsing and provider projection', async () => {
@@ -404,6 +414,12 @@ describe('listAvailableMediaModels', () => {
     await expect(
       listExecutableMediaModels(['image.generate'], { forceRefresh: true }),
     ).resolves.toMatchObject({ models: [{ id: modelId }] });
+    // Settings explicitly requests disabled entries so their controls can remain
+    // available; the ordinary media picker still excludes this provider.
+    readModelDisableOverridesMock.mockReturnValue({ disabledProviders: { xd: true } });
+    await expect(listExecutableMediaModels(['image.generate'], { includeDisabled: true }))
+      .resolves.toMatchObject({ models: [{ id: modelId }] });
+    readModelDisableOverridesMock.mockReturnValue({});
     resetExecutableMediaModelCache();
     isCatalogMediaModelVisibleMock.mockImplementation(
       (_providerId: string, id: string, _defaultEnabled?: boolean) => id !== modelId,

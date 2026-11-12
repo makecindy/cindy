@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import type { MediaCapability } from '@cindy/model-providers';
+import type { AgentKind, MediaCapability } from '@cindy/model-providers';
 import type { CindyMediaToolRequest } from 'cindy-tools';
 import type {
   MediaAsyncPollGuide,
@@ -26,6 +26,7 @@ import { reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejecti
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import {
   fetchMediaInvocationGuide,
+  getMediaGuide,
   listAvailableMediaModels,
   listExecutableMediaModels,
   MediaGuideCompatibilityError,
@@ -41,6 +42,7 @@ import {
   invokeProviderMedia,
   resolveProviderMediaModel,
   resolveProviderVideoConnection,
+  resolveProviderHttpConnection,
   type ProviderMediaRuntimeModel,
   type ProviderVideoConnection,
 } from './providerMediaRuntime.js';
@@ -74,6 +76,7 @@ interface MediaConnection {
   baseUrl: string;
   apiKey: string;
   pathPrefix?: string;
+  guideBasePath?: boolean;
   headers?: Record<string, string>;
   assertCurrent?(): void;
   beforeSubmit?(): void;
@@ -88,6 +91,7 @@ class MediaInvocationError extends Error {
     readonly code: string,
     message: string,
     readonly outcomeUnknown = false,
+    readonly httpStatus?: number,
   ) {
     super(message);
     this.name = 'MediaInvocationError';
@@ -188,18 +192,20 @@ function failure(
 }
 
 const GUIDE_FALLBACK_ACTIONS = [
+  'get_or_complete_media_guide',
+  'prepare_with_official_guide_if_outcome_known',
   'choose_another_model',
   'use_another_tool',
   'use_legacy_adapter_if_available',
 ] as const;
 
-function submissionOutcomeUnknown(message: string): Record<string, unknown> {
+function submissionOutcomeUnknown(message: string, httpStatus?: number): Record<string, unknown> {
   return failure('SUBMISSION_OUTCOME_UNKNOWN', message, false, {
     outcomeKnown: false,
+    ...(httpStatus !== undefined ? { http_status: httpStatus } : {}),
     allowedActions: [
       'wait_or_check_existing_task',
       'ask_user_before_new_submission',
-      'use_another_tool',
     ],
   });
 }
@@ -214,8 +220,10 @@ function isClientVideoInvocation(invocation: StoredMediaInvocation): boolean {
 
 async function resolveInvocationConnection(invocation: StoredMediaInvocation): Promise<MediaConnection> {
   const binding = invocation.guide.binding;
-  if (binding.executor !== 'provider-video') return resolveConnection(binding.providerId);
-  const connection = await resolveProviderVideoConnection(binding.providerId, invocation.modelId);
+  if (binding.executor !== 'provider-video' && binding.executor !== 'provider-http') return resolveConnection(binding.providerId);
+  const connection = await (binding.executor === 'provider-http'
+    ? resolveProviderHttpConnection(binding.providerId, invocation.modelId, invocation.capability, binding.sourceAgent)
+    : resolveProviderVideoConnection(binding.providerId, invocation.modelId));
   if (!connection || connection.revision !== binding.connectionRevision) {
     throw new MediaInvocationError('CONNECTION_CHANGED', '视频连接已改变，请恢复原连接后查询原任务；不要重新生成');
   }
@@ -225,11 +233,14 @@ async function resolveInvocationConnection(invocation: StoredMediaInvocation): P
   };
   assertCurrent();
   return {
-    ...connection, apiKey: '', pathPrefix: new URL(connection.baseUrl).pathname.replace(/\/+$/, ''), assertCurrent,
+    ...connection, apiKey: '', pathPrefix: new URL(connection.baseUrl).pathname.replace(/\/+$/, ''),
+    ...(binding.executor === 'provider-http' ? { guideBasePath: true } : {}), assertCurrent,
     beforeSubmit: () => {
       // Re-read executable membership after reference reads and the database claim.
       // Paid task polling/recovery remains independent of the model's enable switch.
-      if (!resolveProviderMediaModel(binding.providerId, invocation.modelId, invocation.capability)) {
+      const current = resolveProviderMediaModel(binding.providerId, invocation.modelId, invocation.capability);
+      if (!current || (binding.executor === 'provider-http' &&
+          !(current.sourceAgents ?? (current.sourceAgent ? [current.sourceAgent] : [])).includes(binding.sourceAgent))) {
         throw new MediaInvocationError('MODEL_NOT_AVAILABLE', '该模型或来源已停用或不再支持本次能力，本次生成未发出');
       }
     },
@@ -425,7 +436,22 @@ async function dispatchRequest(input: {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
   timeout.unref?.();
-  const url = requestUrl(input.connection.baseUrl, `${input.connection.pathPrefix ?? ''}${input.path}`);
+  const wirePath = input.path.replaceAll('{model}', encodeURIComponent(input.connection.requestModelId ?? input.modelId));
+  const prefix = input.connection.pathPrefix ?? '';
+  let relative = wirePath;
+  if (input.connection.guideBasePath) {
+    // A saved base may already include the API version described by an official
+    // Guide. Join overlapping path segments once, without changing the origin.
+    const baseSegments = prefix.split('/').filter(Boolean);
+    const guideSegments = relative.split('/').filter(Boolean);
+    for (let count = Math.min(baseSegments.length, guideSegments.length); count > 0; count--) {
+      if (baseSegments.slice(-count).join('/') === guideSegments.slice(0, count).join('/')) {
+        relative = '/' + guideSegments.slice(count).join('/');
+        break;
+      }
+    }
+  }
+  const url = requestUrl(input.connection.baseUrl, `${prefix}${relative}`);
   const startedAt = Date.now();
   const requestLog = {
     invocationId: input.invocationId,
@@ -513,11 +539,14 @@ async function dispatchRequest(input: {
           'SUBMISSION_OUTCOME_UNKNOWN',
           `上游返回 HTTP ${response.status}，无法确认任务是否已经创建；不要自动重提`,
           true,
+          response.status,
         );
       }
       throw new MediaInvocationError(
         'UPSTREAM_REJECTED',
         `上游返回 HTTP ${response.status}: ${message}`,
+        false,
+        response.status,
       );
     }
     try {
@@ -695,7 +724,7 @@ async function prepareRequestBody(
     throw new MediaInvocationError('REQUEST_INVALID', '请求 body 必须是 JSON 对象');
   }
   const output = expanded as Record<string, unknown>;
-  setObjectPath(output, guide.request.bodyModelPath, guide.modelId);
+  if (guide.request.bodyModelPath) setObjectPath(output, guide.request.bodyModelPath, guide.modelId);
   const bytes = Buffer.byteLength(JSON.stringify(output), 'utf8');
   if (bytes > guide.request.maxRequestBytes) {
     throw new MediaInvocationError(
@@ -1198,6 +1227,8 @@ async function prepareInvocation(
   providerId: string | undefined,
   modelId: string,
   capability: MediaCapability,
+  sourceAgent?: AgentKind,
+  guideSource: 'auto' | 'official' = 'auto',
 ): Promise<Record<string, unknown>> {
   const scope = currentAuthScope();
   const owner = scope.owner;
@@ -1237,6 +1268,7 @@ async function prepareInvocation(
   const resolvedModelId = model.id;
   let protocol = 'gateway';
   let binding: MediaInvocationBinding = { providerId: model.providerId, executor: 'gateway' };
+  let selectedGuide: ResolvedMediaInvocationGuide | undefined;
   if (model.providerId !== 'xd') {
     const providerModel = resolveProviderMediaModel(
       model.providerId,
@@ -1246,7 +1278,28 @@ async function prepareInvocation(
     if (!providerModel) {
       return failure('MODEL_NOT_AVAILABLE', '该第三方媒体模型或执行来源当前不可用');
     }
-    if (capability === 'image.generate' || capability === 'image.edit') {
+    if (providerModel.guideDriven) {
+      const candidates = providerModel.sourceAgents ?? (providerModel.sourceAgent ? [providerModel.sourceAgent] : []);
+      const agent = sourceAgent ?? providerModel.sourceAgent ?? (candidates.length === 1 ? candidates[0] : undefined);
+      if (!agent) return failure('CONNECTION_AMBIGUOUS', '这个型号有多个实际连接，请选择 source_agent 后再 prepare', false, { source_agents: candidates });
+      if (!candidates.includes(agent)) return failure('CONNECTION_UNAVAILABLE', '指定引擎没有这个媒体型号的可用连接');
+      const connection = await resolveProviderHttpConnection(model.providerId, resolvedModelId, capability, agent);
+      assertAuthScope(scope);
+      if (!connection) return failure('CONNECTION_UNAVAILABLE', '指定媒体连接的端点、鉴权或凭证未就绪；请通过模型连接工具处理');
+      let resolved: Awaited<ReturnType<typeof getMediaGuide>>;
+      try { resolved = await getMediaGuide({ providerId: model.providerId, agent, modelId: resolvedModelId }, guideSource); }
+      catch (error) {
+        if (error instanceof MediaGuideCompatibilityError) return failure(error.code, error.message, false, { outcomeKnown: true, allowedActions: GUIDE_FALLBACK_ACTIONS });
+        if (error instanceof ServerApiError) return failure('GUIDE_SERVICE_UNAVAILABLE', '公开调用说明暂时无法读取，请稍后重试；不要改用原始 HTTP', true, { outcomeKnown: true });
+        return failure('GUIDE_ACCESS_FAILED', '无法读取这个连接的 Guide，请通过 manage_media_guide 检查当前账号和定义', false, { outcomeKnown: true });
+      }
+      assertAuthScope(scope);
+      connection.assertCurrent();
+      if (!resolved) return failure('GUIDE_NOT_AVAILABLE', '没有适用 Guide。请通过 manage_media_guide 根据用户文档、cURL 或提示补齐，再重新 prepare', false,
+        { outcomeKnown: true, allowedActions: ['get_or_complete_media_guide'], target: { providerId: model.providerId, agent, modelId: resolvedModelId } });
+      selectedGuide = { modelId: resolvedModelId, guide: resolved.value };
+      binding = { providerId: model.providerId, executor: 'provider-http', connectionRevision: connection.revision, sourceAgent: agent, guideSource: resolved.source };
+    } else if (capability === 'image.generate' || capability === 'image.edit') {
       protocol = providerModel.imageProtocol ?? 'provider-images';
       binding = { providerId: model.providerId, executor: 'provider-image' };
     } else if (providerModel.videoProtocol) {
@@ -1264,7 +1317,7 @@ async function prepareInvocation(
   }
   let resolvedGuide: ResolvedMediaInvocationGuide;
   try {
-    resolvedGuide = await fetchMediaInvocationGuide(resolvedModelId, protocol);
+    resolvedGuide = selectedGuide ?? await fetchMediaInvocationGuide(resolvedModelId, protocol);
     assertAuthScope(scope);
   } catch (error) {
     if (error instanceof ServerApiError && error.code === 'MEDIA_INVOCATION_GUIDE_NOT_FOUND') {
@@ -1336,11 +1389,13 @@ async function prepareInvocation(
     model_name: model.name ?? model.id,
     capability,
     guide_revision: preparedGuide.revision,
+    guide_source: binding.executor === 'provider-http' ? binding.guideSource : 'official',
+    ...(binding.executor === 'provider-http' ? { source_agent: binding.sourceAgent } : {}),
     instructions: preparedGuide.instructions,
     input_schema: preparedGuide.inputSchema,
     example_body: preparedGuide.exampleBody,
     official_docs: preparedGuide.officialDocs,
-    guidance: '按 instructions/input_schema 组装 body；不要添加 model、endpoint、headers 或凭证。',
+    guidance: '按 instructions/input_schema 组装 body。调用和附件交接须走当前任务权限；不要添加 model、endpoint、headers 或凭证。Guide 已固定，换说明必须重新 prepare；pending、结果未知或已生成未交付时恢复原 invocation，不要重复生成。',
   };
 }
 
@@ -1451,7 +1506,7 @@ async function submitInvocation(
     }
     throw error;
   }
-  if (connection.requestModelId) {
+  if (connection.requestModelId && invocation.guide.request.bodyModelPath) {
     setObjectPath(requestBody, invocation.guide.request.bodyModelPath, connection.requestModelId);
   }
   const recordBilling = invocation.guide.binding.providerId === 'xd'
@@ -1537,6 +1592,7 @@ async function submitInvocation(
           );
         }
         connection.assertCurrent?.();
+        scope.assertSourceCurrent = connection.assertCurrent;
         assertAuthScope(scope, invocation.owner);
         return materializeSyncInvocation(
           { ...invocation, state: 'pending', responseJson },
@@ -1620,13 +1676,16 @@ async function submitInvocation(
         db,
       ).catch(() => false);
       if (expected) {
-        if (expected.outcomeUnknown) return submissionOutcomeUnknown(expected.message);
+        if (expected.outcomeUnknown) return submissionOutcomeUnknown(expected.message, expected.httpStatus);
         if (notSubmitted && restored) {
           return failure(expected.code, `${expected.message}；同一 invocation_id 可直接再次 request`, true, {
             outcomeKnown: true,
           });
         }
-        return failure(expected.code, expected.message, false, { outcomeKnown: true });
+        return failure(expected.code, expected.message, false, { outcomeKnown: true,
+          invocation_id: invocation.id,
+          ...(expected.httpStatus !== undefined ? { http_status: expected.httpStatus } : {}),
+        });
       }
       log.warn('media submission failed', {
         error: error instanceof Error ? error.message : String(error),
@@ -1703,7 +1762,7 @@ async function pollInvocation(
     return failure('INVOCATION_NOT_PENDING', `该 invocation 当前状态为 ${invocation.state}`);
   }
   const guide = invocation.guide.response.poll;
-  if (invocation.guide.binding.executor === 'provider-video') {
+  if (invocation.guide.binding.executor === 'provider-video' || invocation.guide.binding.executor === 'provider-http') {
     try {
       const connection = await resolveInvocationConnection(invocation);
       assertAuthScope(scope, invocation.owner);
@@ -1711,8 +1770,8 @@ async function pollInvocation(
       scope.taskContent = {
         connection: { baseUrl: connection.baseUrl, headers: connection.headers ?? {}, revision: invocation.guide.binding.connectionRevision, assertCurrent: () => assertAuthScope(scope, invocation.owner) },
         taskId: invocation.taskId,
-        contentPath: guide.contentPath,
-        ...(invocation.guide.binding.videoProtocol === 'openai-videos'
+        contentPath: guide.contentPath?.replaceAll('{model}', encodeURIComponent(connection.requestModelId ?? invocation.modelId)),
+        ...(invocation.guide.binding.executor === 'provider-video' && invocation.guide.binding.videoProtocol === 'openai-videos'
           ? { resultHosts: videoRelayResultHosts(connection.baseUrl) } : {}),
       };
     }
@@ -1903,6 +1962,7 @@ export async function callCindyMedia(
       const capability = request.capability as MediaCapability | undefined;
       const availability = await listExecutableMediaModels(
         capability ? [capability] : [],
+        { skipGateway: !getAppCapabilities().canUseCindyGateway },
       );
       if (availability.models.length === 0 && capability) {
         if (availability.candidateCount === 0) {
@@ -1929,6 +1989,7 @@ export async function callCindyMedia(
             : '当前没有带可用调用说明的模型支持该媒体能力。';
         return failure(errorCode, message, temporarilyUnavailable, {
           outcomeKnown: true,
+          unavailable: availability.unavailable,
           allowedActions: GUIDE_FALLBACK_ACTIONS,
         });
       }
@@ -1937,13 +1998,16 @@ export async function callCindyMedia(
         models: availability.models.map((model) => ({
           id: model.id,
           provider_id: model.providerId,
+          ...(model.sourceAgent ? { source_agent: model.sourceAgent } : {}),
+          ...(model.sourceAgents ? { source_agents: model.sourceAgents } : {}),
           ...(model.name ? { name: model.name } : {}),
           ...(model.mode ? { mode: model.mode } : {}),
         })),
         ...(availability.unavailable.length > 0
           ? {
               unavailable_model_count: availability.unavailable.length,
-              guidance: '部分模型当前不可执行；可使用返回的模型，或选择其他已授权工具。',
+              unavailable: availability.unavailable,
+              guidance: '部分模型当前不可执行；请按目标和原因处理连接、媒体声明或通过 manage_media_guide 补齐 Guide。',
             }
           : {}),
       };
@@ -1953,6 +2017,8 @@ export async function callCindyMedia(
         request.providerId,
         request.modelId,
         request.capability as MediaCapability,
+        request.sourceAgent,
+        request.guideSource,
       );
     }
     const invocation = await requireInvocation(request.invocationId);
@@ -1969,7 +2035,8 @@ export async function callCindyMedia(
       activeInvocations.delete(operationKey);
     }
   } catch (error) {
-    if (error instanceof MediaInvocationError || error instanceof MediaDownloadError) return failure(error.code, error.message);
+    if (error instanceof MediaInvocationError || error instanceof MediaDownloadError) return failure(error.code, error.message, false,
+      error instanceof MediaInvocationError && error.httpStatus !== undefined ? { http_status: error.httpStatus } : {});
     if (error instanceof MediaModelCatalogError) {
       log.warn('media model catalog rejected by current client', { detail: error.detail });
       return failure('MODEL_CATALOG_UNAVAILABLE', error.message, true, {

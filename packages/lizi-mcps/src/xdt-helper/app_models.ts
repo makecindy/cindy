@@ -12,11 +12,17 @@ const endpoint = z.string().url().max(2048).refine(value => {
   } catch { return false; }
 }, 'Use a public endpoint without credentials, query or fragment');
 const interruptCodex = z.boolean().optional().describe('Only after the owner agrees to interrupt running local Codex work; call from Claude Code or Pi.');
-const connectionModel = z.strictObject({ id, name: z.string().min(1).max(256).optional() });
+const connectionModel = z.strictObject({ id, name: z.string().min(1).max(256).optional(),
+  mode: z.enum(['chat', 'image_generation', 'video_generation']).optional().describe('媒体型号按用户资料显式声明；不根据品牌或型号名称猜测。Guide 可随后通过 manage_media_guide 补齐。'),
+  modalities: z.strictObject({ input: z.array(z.enum(['text', 'image', 'video', 'audio'])).min(1).max(4),
+    output: z.array(z.enum(['text', 'image', 'video', 'audio'])).min(1).max(4) }).optional().describe('实际输入/输出能力；图片编辑或图生视频须声明 image 输入。媒体能力独立于聊天图片输入和 supportsImageGeneration。'),
+});
 const connectionRuntime = z.strictObject({
   baseUrl: endpoint, modelsUrl: endpoint.optional(),
   wireProtocol: z.enum(['anthropic-messages', 'openai-responses', 'openai-chat', 'google-generative-ai']),
   supportsImageGeneration: z.boolean().optional(),
+  imageApi: z.literal('openai-images').optional(),
+  videoApi: z.enum(['xai-videos', 'minimax-videos', 'openai-videos']).optional(),
   models: z.array(connectionModel).max(2000),
 });
 export const providerConnectionChange = z.discriminatedUnion('action', [
@@ -35,6 +41,12 @@ export const providerConnectionChange = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('test'), providerId: id, agent }),
 ]);
 const target = z.strictObject({ providerId: id, agent: z.enum(['claude-code', 'codex', 'pi']), modelId: id });
+const guideEvidence = z.strictObject({ kind: z.enum(['documentation', 'curl', 'prompt']), reference: z.string().min(1).max(2048) });
+export const mediaGuideChange = z.discriminatedUnion('action', [
+  z.strictObject({ action: z.literal('get'), source: z.enum(['auto', 'official']).optional() }),
+  z.strictObject({ action: z.literal('validate'), guide: z.record(z.string(), z.unknown()) }),
+  z.strictObject({ action: z.literal('save'), guide: z.record(z.string(), z.unknown()), expectedRevision: z.string().min(1).max(128).nullable(), evidence: guideEvidence.optional() }),
+]);
 const quote = z.strictObject({ currency: z.enum(['USD', 'CNY']), inputPerMtok: z.number().nonnegative(),
   outputPerMtok: z.number().nonnegative(), cacheReadPerMtok: z.number().nonnegative().nullable().optional(),
   cacheCreatePerMtok: z.number().nonnegative().nullable().optional() });
@@ -61,6 +73,7 @@ export const appProviderChange = z.discriminatedUnion('action', [
     }) }),
 ]);
 export type AppModelsRequest =
+  | { operation: 'mediaGuide'; target: z.infer<typeof target>; change: z.infer<typeof mediaGuideChange> }
   | { operation: 'connection'; change: z.infer<typeof providerConnectionChange> }
   | { operation: 'list'; providerId?: string }
   | { operation: 'get'; target: z.infer<typeof target> }
@@ -91,6 +104,9 @@ export function registerAppModelsTools(registry: XdtHelperToolRegistry, callback
   registry.register({ name: 'get_model_configuration', category: 'settings',
     description: '读取某个供应商、引擎与模型的选择器显示开关、上下文窗口覆盖、压缩阈值、图片输入与价格覆盖。先从 list_model_providers 取准确身份。',
     inputShape: { target }, handler: input => invoke({ operation: 'get', ...input }) });
+  registry.register({ name: 'manage_media_guide', category: 'settings',
+    description: '按需获取或补齐指定 provider/引擎/model 的媒体调用 Guide。每次需要时 get：自定义优先，没有则官方；source=official 明确尝试官方说明，执行连接、账号与计费不变。缺失时根据用户给的文档链接、cURL、示例或提示生成声明式 HTTP Guide，缺关键资料再请用户协助；不要让用户编写 JSON。validate 只检查不调用；save 按现有任务权限保存，expectedRevision 使用 get 的 customRevision（首次为 null），资料来源如实填 evidence，不能伪造 officialDocs。保存后再次 get 自然生效；prepare 固定快照，换 Guide 重新 prepare。实际生成只能通过 cindy.media 并经过当前 Ask/Auto/完全访问权限及附件交接，不得用 shell/raw HTTP 绕过。只有真实媒体交付才算验证成功；pending、提交结果未知或已经生成但交付失败时恢复原 invocation，不能重复生成。Guide 不得含 host、凭证或执行脚本。',
+    inputShape: { target, change: mediaGuideChange }, handler: (input, signal) => invoke({ operation: 'mediaGuide', ...input }, signal) });
   registry.register({ name: 'set_model_configuration', category: 'settings',
     description: '修改用户指定模型的一项高级配置；visible 控制是否在选择器显示，不等于停用；value=null 删除该项覆盖并跟随默认，不影响其它配置。价格只影响本地用量估算，不改供应商实际账单。复用设置页校验与生效逻辑。',
     inputShape: { target, change: appModelConfiguration }, handler: input => invoke({ operation: 'set', ...input }) });

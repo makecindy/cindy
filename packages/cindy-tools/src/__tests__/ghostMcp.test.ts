@@ -1207,6 +1207,8 @@ describe("cindy · media MCP 边界", () => {
       action: "prepare",
       capability: "image.generate",
       provider_id: "openai",
+      source_agent: 'pi',
+      guide_source: 'official',
       model_id: "vendor/image-model",
     });
 
@@ -1214,6 +1216,8 @@ describe("cindy · media MCP 边界", () => {
       action: "prepare",
       capability: "image.generate",
       providerId: "openai",
+      sourceAgent: 'pi',
+      guideSource: 'official',
       modelId: "vendor/image-model",
     });
     expect(parsePayload(result)).toMatchObject({ ok: true, status: "prepared" });

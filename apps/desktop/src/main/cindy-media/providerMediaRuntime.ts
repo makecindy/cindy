@@ -1,4 +1,4 @@
-import type { MediaCapability, ProviderVideoApi } from '@cindy/model-providers';
+import type { AgentKind, MediaCapability, ProviderVideoApi } from '@cindy/model-providers';
 import type { ImageParameters, ImageProtocol } from './imageParameters.js';
 import { supportsMediaCapability } from './mediaCapabilities.js';
 
@@ -11,6 +11,9 @@ export interface ProviderMediaRuntimeModel {
   officialDocs?: string;
   imageProtocol?: ImageProtocol;
   videoProtocol?: ProviderVideoApi;
+  guideDriven?: boolean;
+  sourceAgent?: AgentKind;
+  sourceAgents?: AgentKind[];
 }
 
 export interface ProviderVideoConnection {
@@ -39,6 +42,9 @@ export type ProviderMediaRuntimeResult = {
 } | { url: string };
 
 interface ProviderMediaRuntime {
+  guideScope?(target: { providerId: string; agent: AgentKind; modelId: string }): string | null;
+  guideProtocol?(target: { providerId: string; agent: AgentKind; modelId: string }): string | undefined;
+  resolveHttpConnection?(providerId: string, modelId: string, capability: MediaCapability, agent: AgentKind): ProviderVideoConnection | null | Promise<ProviderVideoConnection | null>;
   listModels(): ProviderMediaRuntimeModel[];
   listVideoModels?(): ProviderMediaRuntimeModel[];
   /** Settings readiness; must include hidden models so the display switch stays togglable. */
@@ -50,6 +56,18 @@ interface ProviderMediaRuntime {
 
 let runtime: ProviderMediaRuntime | null = null;
 
+export function providerMediaGuideScope(target: { providerId: string; agent: AgentKind; modelId: string }): string | null {
+  return runtime?.guideScope?.(target) ?? null;
+}
+
+export function providerMediaGuideProtocol(target: { providerId: string; agent: AgentKind; modelId: string }): string | undefined {
+  return runtime?.guideProtocol?.(target);
+}
+
+export function resolveProviderHttpConnection(providerId: string, modelId: string, capability: MediaCapability, agent: AgentKind) {
+  return runtime?.resolveHttpConnection?.(providerId, modelId, capability, agent) ?? null;
+}
+
 export function configureProviderMediaRuntime(next: ProviderMediaRuntime): void {
   runtime = next;
 }
@@ -57,7 +75,7 @@ export function configureProviderMediaRuntime(next: ProviderMediaRuntime): void 
 export function listProviderMediaModels(): ProviderMediaRuntimeModel[] {
   return [
     ...(runtime?.listModels() ?? []),
-    ...(runtime?.listVideoModels?.().filter(model => model.videoProtocol) ?? []),
+    ...(runtime?.listVideoModels?.().filter(model => model.videoProtocol || model.guideDriven) ?? []),
   ];
 }
 

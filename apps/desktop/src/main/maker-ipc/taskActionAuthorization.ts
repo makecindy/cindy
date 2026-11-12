@@ -19,6 +19,7 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'set_model_configuration',
   'configure_model_provider',
   'configure_model_connection',
+  'manage_media_guide',
   'reset_app_settings',
   'update_session_queued_message',
   'cancel_session_queued_message',
@@ -125,7 +126,8 @@ export function createTaskActionAuthorizer(deps: {
         ? TASK_ACTION_TOOLS.has(call.tool) || HELPER_AUTOMATION_ACTION_TOOLS.has(call.tool)
         : call.server === 'cindy_scheduler' ? SCHEDULER_TASK_ACTION_TOOLS.has(call.tool)
         : call.server === 'cindy_orca' && ORCA_TASK_ACTION_TOOLS.has(call.tool);
-    if (!protectedAction || (call.tool === 'manage_session_prs' && (call.args as Record<string, unknown>)?.action === 'list')) return { ok: true };
+    if (!protectedAction || (call.tool === 'manage_session_prs' && (call.args as Record<string, unknown>)?.action === 'list') ||
+        (call.tool === 'manage_media_guide' && ['get', 'validate'].includes(String(((call.args as Record<string, unknown>)?.change as Record<string, unknown>)?.action)))) return { ok: true };
     const scope = await deps.capture(call);
     if (!scope) return { ok: true }; // ordinary user-delegated Agent task, unchanged
     if (!call.sessionId) return denied();

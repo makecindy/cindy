@@ -78,6 +78,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       'list_app_settings 列出当前已接通的分类和操作；get_app_settings 返回当前值与严格 schema；update_app_settings 只提交要改的字段；reset_app_settings 只对声明支持恢复默认的分类可用。结果说明仅本机及生效时点，不把保存成功说成所有在途任务都已切换。',
       'get_app_default_model / set_app_default_model 管新任务默认；list_model_providers 包含关闭的型号和完整供应商；get_model_configuration / set_model_configuration 管单模型高级参数；configure_model_provider 管名称、顺序、开关和重新发现。当前任务换模型继续使用 control 类的 set_session_runtime。',
       'configure_model_connection 直接添加 API 供应商、通过加密代输入填写密钥、获取与设置型号及测试已保存连接，无需 Computer Use。保存和实际推理验证分别返回；凭证只交给宿主，不进对话。',
+      '自带图片/视频模型先用 configure_model_connection 的 setModels/setRuntime 声明 mode 和 modalities；manage_media_guide 每次按需获取，自定义优先，官方后备。缺失时据用户资料生成并 validate/save，不存在加载或重载。实际生成仍用正式媒体工具并走当前任务权限，不能用 shell/raw HTTP 绕过；媒体交付前不宣称接入验证成功。',
       'SSH 使用 cindy_ssh 的 ssh_list_hosts / ssh_update_host / ssh_remove_host；改显示名只传 id 和 displayName，不用桌面点击，也不改系统 hostname。',
       '没有一个额外的“AI 全开”设置。已提供的操作沿用任务权限、账号归属及群成员/共享访客规则；缺接口不能靠提高权限获得。此入口不提供任意 IPC、文件键值写入、密钥回读或当前任务自行提权。需要账号登录、密钥或原生系统授权时，仍使用 Cindy 的安全输入和授权流程。',
     ].join(' '),

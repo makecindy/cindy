@@ -359,6 +359,8 @@ export type CindyMediaToolRequest =
       action: 'prepare';
       /** 精确执行来源；插件配置返回 providerId 时必须原样传入。 */
       providerId?: string;
+      sourceAgent?: 'claude-code' | 'codex' | 'pi';
+      guideSource?: 'auto' | 'official';
       modelId: string;
       capability: CindyMediaCapability;
     }

@@ -74,6 +74,16 @@ const input = (): AgentInputQueuedMessage => ({
 });
 
 describe('Host task action authorization', () => {
+  // Unit: Guide inspection cannot submit or save; save uses the same exact-call
+  // admission and revocation checks as every other model configuration write.
+  it('keeps Guide reads/validation read-only and admits saves through the task gate', async () => {
+    const h = fixture();
+    for (const action of ['get', 'validate']) expect(await withToolCallAuthority(h.authorize,
+      { ...call('manage_media_guide'), args: { change: { action } } }, async () => 'read')).toBe('read');
+    const write = vi.fn();
+    expect(await withToolCallAuthority(h.authorize, { ...call('manage_media_guide'), args: { change: { action: 'save' } } }, write)).toMatchObject({ isError: true });
+    expect(write).not.toHaveBeenCalled();
+  });
   it('permits observation and notification, but rejects every alternate task-write entrance before effects', async () => {
     const h = fixture();
     const queue: string[] = [];

@@ -1246,9 +1246,21 @@ it('discovers native app settings in all three harnesses and rejects invalid or 
       expect(models).not.toHaveBeenCalled();
       await call('configure_model_connection', { change: { action: 'presets' } });
       expect(models).toHaveBeenCalledExactlyOnceWith({ callerSessionId: 'settings-owner', operation: 'connection', change: { action: 'presets' } }, expect.any(AbortSignal));
+      // Unit, real MCP: unknown image/video models were rejected by the public
+      // connection schema, so agents could only repair them through SQLite.
+      const mediaChange = { action: 'setModels', providerId: 'relay', agent: 'pi', models: [
+        { id: 'new-image', mode: 'image_generation', modalities: { input: ['text', 'image'], output: ['image'] } },
+        { id: 'new-video', mode: 'video_generation', modalities: { input: ['text', 'image'], output: ['video'] } },
+      ] };
+      expect((await call('configure_model_connection', { change: mediaChange })).isError).not.toBe(true);
+      expect(models).toHaveBeenLastCalledWith({ callerSessionId: 'settings-owner', operation: 'connection', change: mediaChange }, expect.any(AbortSignal));
+      const guideTarget = { providerId: 'relay', agent: 'pi', modelId: 'new-image' };
+      await call('manage_media_guide', { target: guideTarget, change: { action: 'get' } });
+      expect(models).toHaveBeenLastCalledWith({ callerSessionId: 'settings-owner', operation: 'mediaGuide', target: guideTarget, change: { action: 'get' } }, expect.any(AbortSignal));
       restricted = true;
       expect(parsePayload(await call('configure_model_connection', { change: { action: 'presets' } })).ok).toBe(false);
-      expect(models).toHaveBeenCalledTimes(1);
+      expect(parsePayload(await call('manage_media_guide', { target: guideTarget, change: { action: 'save', guide: {}, expectedRevision: null } })).ok).toBe(false);
+      expect(models).toHaveBeenCalledTimes(3);
       expect(parsePayload(await call('update_app_settings', { section: 'appearance', patch: { uiSize: 17 } })).ok).toBe(false);
       expect(settings).toHaveBeenCalledTimes(1);
     } finally { await client.close(); await server.close(); }

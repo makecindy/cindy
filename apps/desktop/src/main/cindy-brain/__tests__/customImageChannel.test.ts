@@ -6,6 +6,7 @@ import { buildUserProvider, type Provider } from '@cindy/model-providers';
 import { createCustomImageChannel, registerCustomImageChannels } from '../customImageChannel.js';
 import { pruneDynamicImageChannels } from '../byokImageChannel.js';
 import { ImageChannelRegistry } from '../imageChannelRegistry.js';
+import { resolveCustomMediaConnection } from '../customMediaConnection.js';
 
 const MODEL = 'team/gpt-image-2.5-sunburst';
 const PNG = Buffer.from('89504e470d0a1a0a', 'hex');
@@ -83,6 +84,19 @@ function harness(initial = provider()) {
 }
 
 describe('standalone custom OpenAI Images', () => {
+  // Unit: Guide-driven routes use the existing connection auth boundary, without
+  // inventing /v1 or requiring the legacy imageApi opt-in.
+  it('resolves the exact declared runtime for a Guide without altering its API base', () => {
+    const source = provider('https://relay.example.invalid/custom/api');
+    delete source.routing.pi!.imageApi;
+    const readApiKey = vi.fn(() => 'test-owned-key');
+    const options = { getProvider: () => source, readApiKey, isOwnerBoundaryPending: () => false };
+    const connection = resolveCustomMediaConnection(options, MODEL, 'image', { guideDriven: true, agent: 'pi' });
+    expect(connection).toMatchObject({ agent: 'pi', baseUrl: 'https://relay.example.invalid/custom/api', headers: { authorization: 'Bearer test-owned-key' } });
+    expect(readApiKey).toHaveBeenCalledExactlyOnceWith('pi');
+    expect(resolveCustomMediaConnection(options, MODEL, 'image', { guideDriven: true, agent: 'codex' })).toBeNull();
+    expect(readApiKey).toHaveBeenCalledTimes(1);
+  });
   it('keeps URL-capable custom sources in Core but out of the legacy image channel', () => {
     const h = harness();
     const registry = new ImageChannelRegistry();

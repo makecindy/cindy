@@ -127,9 +127,11 @@ const D_MEDIA = [
   "查看图片供自己分析不等于把图片发给用户；用户要求查看成果时，应在回复中展示可交付图片，不能仅说「已发送」或只给本机路径。用户反馈打不开时，根据工具结果检查或重新导入已知原文件，不要反复发送同一失效地址；原文件不在上下文中时才询问文件来源。不得自行拼接 hash、冒用其它沙盒地址或把导入成功说成手机已经下载。",
   "生成新图片或视频时，插件负责场景语义和可选 UI，Core 负责模型调用与媒体交付。Agent 先调用插件工具，读取插件返回的普通 JSON，再自行调用本工具；不存在 mediaIntent 等保留结果格式，Host 也不会自动把插件结果转成本工具调用。",
   "如果插件需要消费最终结果，Agent 可在本工具成功后再调用插件声明的普通工具，并通过 ghost_call.attachments 显式交接；这不是生成请求的必经步骤。",
-  "模型存在性来自当前账号的 Model Access model group；list_models 只投影同时满足 Gateway modalities、Guide operation 与当前客户端协议支持度的可执行模型。",
+  "list_models 使用 Cindy AI 与用户自带连接共用的媒体目录，按媒体声明、Guide operation 与当前客户端支持度返回模型，并给出不可执行原因。自带模型不依赖开启 Cindy AI。",
   "媒体生成必须由当前 Agent 通过本工具发起；插件面板和插件沙箱代码不得直接提交生成请求。",
-  "插件已返回用户配置的 model_id/provider_id 时必须原样传给 prepare，再按目标 capability 走 prepare → request；provider_id 用于区分不同 Provider 下的同名模型。没有已配置模型时，先用 list_models 查询。Gateway 模型的 prepare 会由 Server 根据 model_id 返回 Guide，并在 Guide 不存在或不支持该 capability 时明确报错。",
+  "插件已返回用户配置的 model_id/provider_id 时原样传给 prepare；指定了 source_agent 时也须原样保留。同名多连接返回 CONNECTION_AMBIGUOUS 时请用户选择实际连接。每次 prepare 按需获取 Guide，自定义优先、官方后备，随后固定快照。缺失时用 cindy_helper.manage_media_guide 根据用户提供的文档、cURL 或提示 validate/save，不要求用户写 JSON，也没有加载/重载。",
+  "配置、验证调用和附件交接都走当前任务的 Ask/Auto/完全访问权限；不得用 shell/raw HTTP 或切换权限绕过。自定义契约被上游明确拒绝时，先核对参数，可用同一 provider/model/source_agent、guide_source=official 新 prepare 尝试官方；不暗换 host、凭证或计费账号，不循环后备。只有实际媒体交付才可报告接入验证成功。",
+  "根据返回的 HTTP 状态、脱敏错误和任务状态自行判断原因及下一步。鉴权、额度或限流问题按连接/账号的既有流程处理；接口契约不适配才考虑官方 Guide 或请用户补资料。Core 不替你做业务错误分类或自动重试。",
   "异步任务的 request 返回 pending 时，再按 recommended_poll_after_ms 调 poll；同步任务会直接返回 xdt_image_urls / xdt_video_urls。",
   "Core 图片完成结果由当前 Agent 控制呈现：在最终回复中用返回的受管地址只嵌入展示一次，不要同时重复口播或再次附同一图片。",
   "生成结果返回受管媒体地址和元数据，不会自动把图片送给模型。是否查看图片或视频由 Agent 按任务需要决定；需要查看时先用 resolve_local_path 取得路径，再使用已有的文件查看或分析工具。",
@@ -604,6 +606,8 @@ export async function handleMedia(
     capability?: CindyMediaCapability;
     url?: string;
     provider_id?: string;
+    source_agent?: 'claude-code' | 'codex' | 'pi';
+    guide_source?: 'auto' | 'official';
     model_id?: string;
     invocation_id?: string;
     body?: Record<string, unknown>;
@@ -664,6 +668,8 @@ export async function handleMedia(
       result = await deps.callMedia({
         action: "prepare",
         ...(input.provider_id ? { providerId: input.provider_id } : {}),
+        ...(input.source_agent ? { sourceAgent: input.source_agent } : {}),
+        ...(input.guide_source ? { guideSource: input.guide_source } : {}),
         modelId: input.model_id,
         capability: input.capability,
       });
@@ -1444,6 +1450,8 @@ export function createCindyGhostsMcpServer(
         .max(128)
         .optional()
         .describe("prepare 时可选；插件或 list_models 返回 provider_id 时必须原样传入，以区分同名模型的执行来源"),
+      source_agent: z.enum(['claude-code', 'codex', 'pi']).optional().describe('prepare 时指定实际连接；同名多连接时从 source_agents 中明确选择，不能按当前 Harness 猜密钥'),
+      guide_source: z.enum(['auto', 'official']).optional().describe('prepare 缺省自定义优先；official 只改用官方 Guide，不改变供应商和实际连接，仍走当前权限'),
       url: z
         .string()
         .max(4096)
