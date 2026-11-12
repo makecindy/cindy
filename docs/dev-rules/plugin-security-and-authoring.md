@@ -210,7 +210,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   持有任务 admission 的调用任务修改自身 `permission_mode`（含混合运行设置请求）在任何写入前返回 `UNSUPPORTED_CAPABILITY`，不改写权限快照或放宽守卫；插件、修改其他任务、无 admission 及仅改模型保持原行为。
   作者契约见 [宿主工具调用](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。
   原生任务包由 `history/export_session` 和 `control/import_session` 开放，均逐次确认，直接复用分享包导出与导入事务。
-  插件仅经本实例既有 handoff 收取与提交包，不接受或返回宿主路径；Agent 保留原生路径调用。
+  插件仅经本实例既有 handoff 收取与提交包，不接受或返回宿主路径；Agent 导出的显式 `output_path` 仅允许在本任务工作目录内，核对父目录和目标符号链接的真实位置，目录外移动交原生文件工具授权。不传路径时保留原生保存对话框，Agent 导入保留原生路径调用。
   加密包和未指定目录的项目包交原生导入向导，返回 `awaiting_user`，不能当成导入完成；工具不收密码。
 - `subscribe.topics` 的 `message` / `task-state` 独立展示和批准，receipt 可选 `approvedEventTopics` 只记录显式事实，不从旧未知声明推断。
   消息仅在持久化后通知，结构化附件使用不透明位置引用；附件读取只覆盖已有宿主授权的本机媒体和 grant / deposit / handoff 引用，复用既有账本和交接。历史 JSON 的 `files.path`、绝对路径、旧文件直读 URL 及跨电脑附件返回 `UNSUPPORTED_CAPABILITY`，不以消息形状授予文件读取权限，不新增可信来源表或确认流程。

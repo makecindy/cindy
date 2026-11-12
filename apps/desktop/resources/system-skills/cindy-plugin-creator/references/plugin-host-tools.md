@@ -138,7 +138,11 @@ const imported = await cindy.host.call('cindy_helper', 'import_session', {
 交出的文件，或本实例的导出结果。插件不能提交 `output_path`、`file_path` 或 `working_dir`，也不能借引用读取其他实例的文件。
 导入从既有 handoff 的同一安全句柄读取并核对原始 SHA-256，再把已核对字节交给原生解析器；副本被编辑后须重新交接。
 
-Agent 导出可传 `output_path`，缺省使用原生保存对话框；成功返回 `file_path`。Agent 导入传 `file_path`，
+Agent 导出的 `output_path` 只能位于调用任务的工作目录内，相对路径从该目录解析，也接受目录内的绝对路径。
+宿主核对工作目录和目标父目录的真实位置，拒绝 `..` 逃逸、目录外绝对路径以及父目录或目标符号链接的目录外逃逸，
+返回 `PERMISSION_DENIED`。需要放到目录外时，先导出，再用原生文件工具移动，由原生工具完成对应授权。
+不传 `output_path` 时仍使用原生保存对话框，可由主人保存到任意位置；无工作目录的任务只能使用该默认方式。
+成功返回 `file_path`。Agent 导入传 `file_path`，
 项目任务还可传 `working_dir` 和 `use_worktree`；相对路径按调用任务的本机工作目录解析，SSH 路径不支持。
 导入复用原生校验、事务、资源补偿和通知，默认不覆盖；`overwrite:true` 表示按原生规则替换冲突任务，须明确有此意图。
 

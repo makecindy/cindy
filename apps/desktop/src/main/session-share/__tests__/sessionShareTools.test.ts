@@ -71,6 +71,53 @@ describe('native package Host tools', () => {
     expect(f.handoff.import).not.toHaveBeenCalled();
     expect(f.handoff.open).not.toHaveBeenCalled();
   });
+  // Unit regression for #9979's export-path security review: native roundtrips
+  // do not cover an Agent-supplied destination escaping its task workdir. These
+  // public callbacks must reject the smallest absolute/traversal/symlink escape
+  // before the packer writes, while preserving valid paths and the native dialog.
+  it.each(['relative', 'absolute'] as const)('exports to a %s path inside the Agent workdir', async kind => {
+    const f = fixture(), workingDir = path.join(directory, 'workspace');
+    await fs.mkdir(workingDir);
+    const target = path.join(workingDir, 'task.cshare');
+    await fs.writeFile(target, 'previous');
+    const result = await f.callbacks.export({ sessionId: 'task', excludeMedia: false,
+      outputPath: kind === 'relative' ? 'task.cshare' : target }, { agentKind: 'codex', sessionId: 'caller', workingDir });
+    expect(result).toMatchObject({ ok: true, file_path: path.join(await fs.realpath(workingDir), 'task.cshare') });
+    expect(await fs.readFile(target, 'utf8')).toBe('package');
+    expect(f.ports.chooseExportPath).not.toHaveBeenCalled();
+  });
+  it.for(['absolute', 'parent traversal', 'symlink parent', 'symlink target'] as const)(
+    'rejects an Agent export escaping through %s before writing', async (kind, { skip }) => {
+      const f = fixture(), workingDir = path.join(directory, 'workspace'), outside = path.join(directory, 'workspace-sibling');
+      await Promise.all([fs.mkdir(workingDir), fs.mkdir(outside)]);
+      const target = path.join(outside, 'task.cshare');
+      await fs.writeFile(target, 'untouched');
+      let outputPath = kind === 'parent traversal' ? path.join('..', 'workspace-sibling', 'task.cshare') : target;
+      if (kind === 'symlink parent' || kind === 'symlink target') {
+        const link = path.join(workingDir, kind === 'symlink parent' ? 'linked' : 'linked.cshare');
+        try { await fs.symlink(kind === 'symlink parent' ? outside : target, link, kind === 'symlink parent' ? 'junction' : 'file'); }
+        catch (error) {
+          if (['EPERM', 'EACCES', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) { skip(); return; }
+          throw error;
+        }
+        outputPath = kind === 'symlink parent' ? path.join(link, 'task.cshare') : link;
+      }
+      const result = await f.callbacks.export({ sessionId: 'task', outputPath, excludeMedia: false },
+        { agentKind: 'codex', sessionId: 'caller', workingDir });
+      expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      if (!result.ok) expect(result.message).toContain('working directory');
+      expect(f.ports.exportShare).not.toHaveBeenCalled();
+      expect(await fs.readFile(target, 'utf8')).toBe('untouched');
+    });
+  it('keeps the native save dialog available without a workdir and rejects an explicit path', async () => {
+    const f = fixture(), context = { agentKind: 'codex', sessionId: 'caller', workingDir: '' };
+    expect(await f.callbacks.export({ sessionId: 'task', outputPath: 'task.cshare', excludeMedia: false }, context))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(f.ports.exportShare).not.toHaveBeenCalled();
+    expect(await f.callbacks.export({ sessionId: 'task', excludeMedia: false }, context))
+      .toMatchObject({ ok: true, file_path: path.join(directory, 'chosen.cshare') });
+    expect(await fs.readFile(path.join(directory, 'chosen.cshare'), 'utf8')).toBe('package');
+  });
   it('rejects expired or foreign handoff references before inspecting any file', async () => {
     const f = fixture(); f.handoff.open.mockResolvedValueOnce(null as never);
     expect(await f.callbacks.import({ attachmentRef: ref, overwrite: false, useWorktree: false }, plugin))

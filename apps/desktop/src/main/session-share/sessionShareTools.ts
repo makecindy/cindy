@@ -55,7 +55,29 @@ export function createSessionShareToolCallbacks(ports: {
         if (scope.pluginId) {
           temporary = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-task-export-')));
           targetPath = path.join(temporary, 'task.cshare');
-        } else targetPath = params.outputPath ? agentPath(context, params.outputPath) : await ports.chooseExportPath(params.sessionId);
+        } else if (params.outputPath) {
+          const requestedPath = agentPath(context, params.outputPath);
+          const [workingDir, parent] = await Promise.all([
+            fs.realpath(context.workingDir), fs.realpath(path.dirname(requestedPath)),
+          ]);
+          const insideWorkdir = (candidate: string) => {
+            const relative = path.relative(workingDir, candidate);
+            return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+          };
+          const denied = { ok: false as const, errorCode: 'PERMISSION_DENIED',
+            message: 'Task packages can only be exported inside the task working directory. Move the exported file with native file tools if needed.' };
+          if (!insideWorkdir(parent)) return denied;
+          // Bind the packer to the checked parent instead of following its original alias again.
+          targetPath = path.join(parent, path.basename(requestedPath));
+          const existing = await fs.lstat(targetPath).catch((error: NodeJS.ErrnoException) => {
+            if (error.code !== 'ENOENT') throw error;
+            return null;
+          });
+          if (existing?.isSymbolicLink()) {
+            const resolved = await fs.realpath(targetPath).catch(() => null);
+            if (!resolved || !insideWorkdir(resolved)) return denied;
+          }
+        } else targetPath = await ports.chooseExportPath(params.sessionId);
         scope.assertCurrent();
         if (!targetPath) return { ok: true, scope: 'local', status: 'canceled' };
         const result = await ports.exportShare({ sessionId: params.sessionId, targetPath, excludeMedia: params.excludeMedia });

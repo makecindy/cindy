@@ -218,7 +218,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
     '任务结果附带可直接引用的 sessionUrl，已知 id 要链接用 get_task_digest。',
     '伙伴目录、任务列表、搜索、读取聊天记录、任务摘要（get_task_digest）可跨电脑（device 参数 / deviceId::sessionId）；',
     '任务附件（read_session_attachment）仅支持已有宿主授权的本机媒体和交接引用，历史文件路径与跨电脑附件返回 UNSUPPORTED_CAPABILITY，只返回分块字节和引用，不返回宿主路径。',
-    '原生任务包导出（export_session）仅本机，逐次确认；Agent 沿用原生文件路径，插件只收到本实例 attachment_ref。',
+    '原生任务包导出（export_session）仅本机，逐次确认；Agent 的 output_path 只能在本任务工作目录内，目录外放置请在导出后用原生文件工具移动；不传路径则使用原生保存对话框。插件只收到本实例 attachment_ref。',
     '搜索还能查到主力电脑离线的伙伴的云端对话；',
     '其余本机。',
   ].join(''),

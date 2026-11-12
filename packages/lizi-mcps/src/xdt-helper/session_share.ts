@@ -17,7 +17,7 @@ export function registerSessionShareTools(registry: XdtHelperToolRegistry, deps:
 }): void {
   registry.register({
     name: 'export_session', category: 'history',
-    description: 'Export an explicit local task as a native .cshare package with history, available attachments and engine transcripts. Requires per-call approval. Agent calls may set output_path (relative to the task working directory); omitting it uses the native save dialog. Plugins receive an instance-bound attachment_ref and must not supply output_path. The package is unencrypted. Reports fidelity and missing content; a running task may not include its last turn. Remote tasks are unsupported.',
+    description: 'Export an explicit local task as a native .cshare package with history, available attachments and engine transcripts. Requires per-call approval. Agent output_path must stay inside this task’s working directory, including resolved symlink targets and parents; relative paths resolve from that directory. To place the file elsewhere, move it afterward with native file tools and their existing authorization. Omitting output_path uses the unrestricted native save dialog, including tasks without a working directory. Plugins receive an instance-bound attachment_ref and must not supply output_path. The package is unencrypted. Reports fidelity and missing content; a running task may not include its last turn. Remote tasks are unsupported.',
     inputShape: {
       session_id: z.string().min(1),
       output_path: z.string().min(1).optional(),
