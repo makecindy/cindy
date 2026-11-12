@@ -29,6 +29,7 @@ import type { createHostProviderConfig } from './provider-config.js';
 import type { createHostMcpRuntime } from './mcp-runtime.js';
 import type { createHostCodexRuntime } from './codex-runtime.js';
 import { createHostModelContext } from './model-context.js';
+import { readDisabledSkillPaths } from '../../../desktop/src/main/skillhub/activationPreferences.js';
 import { createHostStartOptions } from './start-options.js';
 
 type HostProviderConfig = ReturnType<typeof createHostProviderConfig>;
@@ -279,6 +280,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     binaryPath: options.binaryPath,
     logger: LOGGER,
     getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+    // Skills the user disabled in Cindy, from the profile's activation preferences.
+    getDisabledSkillPaths: readDisabledSkillPaths,
     ...claudeModelResolvers,
     ...(mcpProviders.length > 0 ? { mcpProviders } : {}),
     ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
@@ -289,6 +292,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         ...options.mcpRuntime.codexDeps,
         ...options.codexRuntime?.deps,
         ...codexModelResolvers,
+        getDisabledSkillPaths: readDisabledSkillPaths,
         runtimeConfig: {},
         binaryPath: options.codexBinaryPath,
         logger: LOGGER,
@@ -311,6 +315,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         resolvePiAgentHome: () => path.join(options.userDataDir, 'pi-agent-home'),
         resolvePiNativeProviders: () => options.providerConfig.piNativeProviders(),
         ...piModelResolvers,
+        getDisabledSkillPaths: readDisabledSkillPaths,
         ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
       })
     : null;

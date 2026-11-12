@@ -42,6 +42,7 @@ const endpoint = `http://127.0.0.1:${upstream.address().port}`;
 process.env.HTTP_PROXY = process.env.HTTPS_PROXY = process.env.ALL_PROXY = endpoint;
 process.env.NO_PROXY = '127.0.0.1,localhost';
 const { configureHostOwner } = await import('../src/agent/claude-auth.mjs');
+const { configureAppDataDir } = await import('../../desktop/src/main/userDataPath.ts');
 const { createHostProviderConfig } = await import('../src/agent/provider-config.ts');
 const { createHostModelAccess } = await import('../src/agent/model-access.ts');
 const { createHostCodexRuntime } = await import('../src/agent/codex-runtime.ts');
@@ -76,6 +77,8 @@ const handles = [];
 try {
   await fs.mkdir(profile, { recursive: true });
   configureHostOwner({ userDataDir: profile, ownerId });
+  // Host main injects the machine app-data root at startup (main.ts configureAppDataDir).
+  configureAppDataDir(path.join(root, 'app-data'));
   const layout = hostRuntimeLayout();
   const opened = await openOwnerDatabase({ userDataDir: profile, ownerId, isPackaged: false,
     drizzleDir: layout.drizzleDir, sqliteVecExtPath: layout.sqliteVecPath });
@@ -252,6 +255,8 @@ try {
   await config?.close();
   if (database) { clearCurrentDbClient(database); await database.dispose(); }
   configureHostOwner({ userDataDir: profile, ownerId: null });
+  // Evidence for reports: every model request went to this local fixture.
+  console.log(`fixture upstream requests: ${requests.length} (all to ${endpoint})`);
   upstream.closeAllConnections();
   await new Promise(resolve => upstream.close(resolve));
   await fs.rm(root, { recursive: true, force: true });

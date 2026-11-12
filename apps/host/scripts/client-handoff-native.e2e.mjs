@@ -223,6 +223,7 @@ process.env.HTTP_PROXY =
     endpoint;
 process.env.NO_PROXY = "127.0.0.1,localhost";
 const { configureHostOwner } = await import("../src/agent/claude-auth.mjs");
+const { configureAppDataDir } = await import("../../desktop/src/main/userDataPath.ts");
 const { createHostProviderConfig } =
   await import("../src/agent/provider-config.ts");
 const { createHostModelAccess } = await import("../src/agent/model-access.ts");
@@ -458,6 +459,8 @@ let browserFixture;
 try {
   await fs.mkdir(profile, { recursive: true });
   configureHostOwner({ userDataDir: profile, ownerId });
+  // Host main injects the machine app-data root at startup (main.ts configureAppDataDir).
+  configureAppDataDir(path.join(root, "app-data"));
   const layout = hostRuntimeLayout();
   const opened = await openOwnerDatabase({
     userDataDir: profile,

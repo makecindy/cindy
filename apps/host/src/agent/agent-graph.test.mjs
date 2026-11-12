@@ -124,3 +124,44 @@ test('every engine the Host assembles resolves per-model context the way the des
   // The desktop start hook's Host steps run for every start (start-options.ts, tested there).
   assert.equal(typeof graph.maker.lifecycleHooks?.prepareStartOptions, 'function');
 });
+
+/*
+ * 测试价值（第三条）
+ * - 可观察结果：Host 组装出的三个引擎读到的 getDisabledSkillPaths 返回用户在 Cindy 里禁用的 Skill。
+ * - 规则依据：桌面三个构造点都注入 readDisabledSkillPaths（maker-host/index.ts、pi-host.ts）；
+ *   Host 之前没有注入，用户在桌面禁用的 Skill 在 Host 任务里仍会被加载。
+ * - 最小失败输入：任一引擎缺这个依赖。
+ * - tier：unit（只构造实例，偏好写进临时 profile）。
+ */
+test('every engine the Host assembles skips the Skills the user disabled', async t => {
+  const { setCindySkillEnabled } = await import('../../../desktop/src/main/skillhub/activationPreferences.ts');
+  const { configureAppDataDir } = await import('../../../desktop/src/main/userDataPath.ts');
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-agent-graph-'));
+  t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
+  configureHostOwner({ userDataDir: profile, ownerId: 'agent-graph-skills' });
+  // Host main injects the machine app-data root at startup (main.ts configureAppDataDir).
+  configureAppDataDir(path.join(profile, 'app-data'));
+  const skill = path.join(profile, 'skills', 'fixture-skill');
+  fs.mkdirSync(skill, { recursive: true });
+  fs.writeFileSync(path.join(skill, 'SKILL.md'), '---\nname: fixture-skill\n---\n');
+  await setCindySkillEnabled(skill, false);
+  const mcp = createHostMcpRuntime({ appServerIds: () => [], getRemoteMcpBridgeToken: () => null });
+  t.after(() => mcp.close());
+  const graph = createHostAgentGraph({
+    userDataDir: profile, gateway: null,
+    binaryPath: path.join(profile, 'claude'), codexBinaryPath: path.join(profile, 'codex'), piBinaryPath: path.join(profile, 'pi'),
+    mcpRuntime: mcp, mcpProviders: [], storage: {},
+    providerConfig: {
+      grok: { hasGrokOAuthLogin: () => false, grokAccountIdentity: () => null },
+      list: async () => [], readKey: () => null,
+      oauth: { readCachedGenericOAuthAccessToken: () => null },
+      piNativeProviders: () => ({ providers: [], env: {} }),
+      codexAccounts: { setCodexAccountRetirement: () => {}, isCodexAccountProvider: () => false, codexAccountState: () => ({ authenticated: false }) },
+    },
+  });
+  const disabled = fs.realpathSync.native(skill);
+  for (const [kind, agent] of [['claude-code', graph.agent], ['codex', graph.codex], ['pi', graph.pi]]) {
+    assert.equal(typeof agent.deps.getDisabledSkillPaths, 'function', kind);
+    assert.ok(agent.deps.getDisabledSkillPaths().includes(disabled), `${kind} sees the disabled Skill`);
+  }
+});

@@ -2,7 +2,7 @@ import { builtInSkillsRoot, sharedBuiltInSkillsRoot } from '../maker-host/built-
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { app } from 'electron';
+import { getAppDataDir, getUserDataDir } from '../userDataPath';
 import { createLogger } from '../logger';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file';
 import {
@@ -25,14 +25,14 @@ export function skillActivationKey(source: string): string {
   if (path.basename(resolved).toLowerCase() === 'skill.md') resolved = path.dirname(resolved);
   resolved = canonicalBuiltInSkillActivationPath(
     resolved,
-    app.getPath('userData'),
-    app.getPath('appData'),
+    getUserDataDir(),
+    getAppDataDir(),
   );
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
 const store = createOverrideSettingsFile<SkillActivationPreferences>({
-  filePath: () => path.join(app.getPath('userData'), 'skillhub', 'activation-preferences.json'),
+  filePath: () => path.join(getUserDataDir(), 'skillhub', 'activation-preferences.json'),
   defaults: { disabledPaths: [] },
   normalize: (raw) => {
     const values = (raw as Partial<SkillActivationPreferences> | null)?.disabledPaths;
@@ -67,8 +67,8 @@ export function readDisabledSkillPaths(descriptors?: readonly BuiltInSkillDescri
   // isolated config directory in Desktop dev, so mirror the same user preference
   // to that runtime projection. Codex's own /skill-creator remains independent.
   for (const descriptor of descriptors ?? builtInSkillDescriptors(
-    app.getPath('userData'),
-    app.getPath('appData'),
+    getUserDataDir(),
+    getAppDataDir(),
   )) {
     if (value.disabledPaths.includes(skillActivationKey(descriptor.absolutePath))) {
       try {
@@ -99,15 +99,15 @@ export function isCindyLearnSkillEnabledForListing(descriptors: readonly { name:
   if (!descriptors.some((skill) => skill.name === BUILT_IN_LEARN_SKILL_NAME)) return false;
   const disabled = readDisabledSkillPathsForListing();
   return ![
-    path.join(builtInSkillsRoot(app.getPath('userData')), BUILT_IN_LEARN_SKILL_NAME),
-    path.join(sharedBuiltInSkillsRoot(app.getPath('appData')), BUILT_IN_LEARN_SKILL_NAME),
+    path.join(builtInSkillsRoot(getUserDataDir()), BUILT_IN_LEARN_SKILL_NAME),
+    path.join(sharedBuiltInSkillsRoot(getAppDataDir()), BUILT_IN_LEARN_SKILL_NAME),
   ].some((value) => disabled.includes(process.platform === 'win32' ? value.toLowerCase() : value));
 }
 
 export function isCindyLearnSkillEnabled(): boolean {
   const descriptor = builtInSkillDescriptors(
-    app.getPath('userData'),
-    app.getPath('appData'),
+    getUserDataDir(),
+    getAppDataDir(),
   ).find((skill) => skill.name === BUILT_IN_LEARN_SKILL_NAME);
   return descriptor ? isCindySkillEnabled(descriptor.absolutePath) : false;
 }
@@ -116,7 +116,7 @@ export function isCindyLearnSkillEnabled(): boolean {
 export function isCindyLearnSkillEnabledForCommandListing(): boolean {
   // Use the same active path as execution, without enumerating or hashing files.
   // A retired profile copy must not veto an explicitly reenabled shared copy.
-  const source = path.join(sharedBuiltInSkillsRoot(app.getPath('appData')), '.active', BUILT_IN_LEARN_SKILL_NAME);
+  const source = path.join(sharedBuiltInSkillsRoot(getAppDataDir()), '.active', BUILT_IN_LEARN_SKILL_NAME);
   return !readDisabledSkillPathsForListing().includes(skillActivationKey(source));
 }
 
