@@ -159,12 +159,7 @@ import {
 
 let retryPiRuntimeAfterNetworkRecovery: (() => void) | null = null;
 let disposePiRuntimeRecovery: (() => void) | null = null;
-// Official Linux binaries total hundreds of MB. Keep one shared deadline for
-// both downloads, but allow normal consumer connections to finish while the
-// splash displays real byte progress.
-const LINUX_AGENT_INSTALL_STARTUP_DEADLINE_MS = 5 * 60_000;
-// Pi 是可选能力。首启可以给它一小段时间从 CDN 准备，但网络异常时不能让
-// 整个 Cindy 一直停在启动页；到期后取消本次下载并禁用本次 Pi。
+// Background Pi recovery has a bounded download budget; startup only uses local assets.
 const PI_AGENT_INSTALL_STARTUP_DEADLINE_MS = 60_000;
 
 /** Preserve actionable saved-account failures across Electron serialization. */
@@ -303,11 +298,8 @@ import {
 } from './updateRelaunchSafety';
 import {
   prepare as binaryPrepare,
-  peekNeedsDownload as binaryPeekNeedsDownload,
-  broadcastResetForStep as binaryBroadcastResetForStep,
-  type AgentBinaryKind,
-  type PrepareResult,
 } from './agent-binaries';
+import { fetchManifest, getCachedManifest } from './manifestService.js';
 import { RendererBootGuard } from './renderer-boot-guard';
 import yaml from 'js-yaml';
 import matter from 'gray-matter';
@@ -494,6 +486,7 @@ import {
   startHostEventBridge,
   type HostDelegationConfig,
 } from './host-delegation';
+import { createIpcChannelUsage, registeredIpcChannels, tapIpcChannelUsage } from './ipcChannelUsage';
 import { hasRecentWorkdir, listRecentWorkdirs } from './localDb/ipc/recentWorkdirs';
 import { getActiveCatalog } from './maker-host/active-catalog';
 import { resolveSessionContextWindow } from '../shared/sessionContextWindow';
@@ -698,7 +691,7 @@ import { closeSharedTasksBeforeLogout } from './device-link/sharedTaskRuntime.js
 import { closeSharedTasksBeforeAccountHandover } from './device-link/sharedTaskAccountBoundary.js';
 import { registerSharedTaskIpc } from './device-link/sharedTaskIpc.js';
 import { registerProviderShareIpc } from './device-link/providerShareRuntime.js';
-import { registerSelfHostedRelayIpc } from './device-link/selfHostedRelayRuntime.js';
+import { agentNetSwitchRemoteHandler, registerSelfHostedRelayIpc } from './device-link/selfHostedRelayRuntime.js';
 import { registerProviderGroupIpc } from './provider-group/ipc.js';
 import { registerSubscriptionAccountsIpc } from './subscription-accounts/ipc.js';
 import { attachDefaultSubscriptionPool, disconnectSubscriptionPool } from './subscription-accounts/runtime.js';
@@ -711,6 +704,7 @@ import {
   setUsageWidgetSnapshotReader,
   pushSessionActivityToController,
   setSessionsSubscribedListener,
+  setAgentNetSwitchRemoteHandler,
 } from './device-link/dispatch.desktop';
 import {
   registerDeviceLinkIpc,
@@ -740,6 +734,7 @@ import { registerModelVisibilityOwnerClaimIpc } from './maker-host/model-visibil
 import { registerRemotePrecreatedWorktreeLedgerIpc } from './remotePrecreatedWorktreeLedger';
 import { registerTerminalHandlers } from './maker-ipc/terminal-handlers';
 import { registerLocalThemesIpc } from './local-themes/register';
+import { registerCindyFileIpc } from './cindy-files/register';
 import {
   registerRemoteSshIpc,
   disposeRemoteSshPool,
@@ -1230,7 +1225,6 @@ import {
   interruptGhostCallsForAccountBoundary,
   reconcileGhostOauthAccountsForActiveOwner,
   refreshGhostLocalization,
-  refreshPluginUsageBindings,
   registerGhostIpc,
   setRemotePluginManagementServices,
   runStableOwnerPostCommitTask,
@@ -1264,6 +1258,8 @@ import { runPluginStorageSmoke } from './smoke/pluginStorageSmoke.js';
 import { runComputerUseSmokeIfRequested } from './smoke/computerUseSmoke.js';
 import { getResolvedMainLocale, setMainClassicalStyle, setMainLocale, t } from './i18n.desktop.js';
 import { isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
+import { registerModelGroupDecisionIpc } from './model-groups/decisionIpc.js';
+import { registerModelGroupsIpc } from './model-groups/ipc.js';
 import { requireObject, requireString, throwIpcError } from './utils/ipcValidate.js';
 import { pickNativeAtResource } from './nativeAtResourcePicker.js';
 // Scheduler (Phase 3) — 启动单例需要 maker / localDb / mainWindow 都 ready，但
@@ -1321,6 +1317,9 @@ if (hostClientMode) {
   console.log('[bootstrap-electron] client mode requested at startup');
 }
 
+/** Source runs only: where to write IPC channel usage counts (see ipcChannelUsage.ts). */
+const ipcUsageReportFile = app.isPackaged ? undefined : process.env.CINDY_IPC_USAGE_FILE?.trim() || undefined;
+
 /** Client mode: the host owns every runtime channel; install its proxies now. */
 function installHostClientMode(): boolean {
   const delegation = hostDelegation();
@@ -1335,11 +1334,20 @@ function installHostClientMode(): boolean {
   claimProxiedChannels(ipcMain, (channel) => {
     console.log(`[bootstrap-electron] client mode keeps the host handler for ${channel}`);
   });
-  installUnsupportedMakerFallbacks({
-    ipcMain,
-    log: (channel) => {
-      console.log(`[bootstrap-electron] client mode unsupported maker fallback for ${channel}`);
-    },
+  const channelUsage = createIpcChannelUsage({
+    mode: 'client',
+    file: ipcUsageReportFile,
+    registered: ipcUsageReportFile ? () => registeredIpcChannels(ipcMain) : undefined,
+    log: (line) => console.log(`[bootstrap-electron] client mode ${line}`),
+  });
+  installUnsupportedMakerFallbacks({ ipcMain, usage: channelUsage });
+  app.once('before-quit', () => {
+    const unserved = channelUsage.topUnserved(30);
+    if (unserved.length) {
+      console.log(`[bootstrap-electron] client mode unserved channels: ${unserved
+        .map(([channel, entry]) => `${channel}=${entry.missing + entry.unsupported}`).join(', ')}`);
+    }
+    channelUsage.flush();
   });
   console.log(`[bootstrap-electron] client mode: delegating to ${delegation.baseUrl}`);
   console.log(`[bootstrap-electron] client mode proxies: ${installed.join(', ')}`);
@@ -1462,6 +1470,16 @@ function installHostClientMode(): boolean {
 }
 
 if (hostClientMode) installHostClientMode();
+else if (ipcUsageReportFile) {
+  const channelUsage = createIpcChannelUsage({
+    mode: 'embedded',
+    file: ipcUsageReportFile,
+    registered: () => registeredIpcChannels(ipcMain),
+    log: (line) => console.log(`[bootstrap-electron] ${line}`),
+  });
+  tapIpcChannelUsage(ipcMain, channelUsage);
+  app.once('before-quit', () => channelUsage.flush());
+}
 
 let startPendingAccountProviderReadiness: { ownerId: string; start: () => void } | null = null;
 
@@ -2980,7 +2998,6 @@ authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId 
   // Market and OAuth are owner-private follow-ups and stay behind this gate.
   if (dataOwnerId === null) return needsRetry ? 'failed' : 'completed';
   if (activeOwnerScopeKey() !== scopeKey || isAppSessionBoundaryPending()) return 'deferred';
-  await refreshPluginUsageBindings();
   let deferred = false;
   const marketOutcome = await marketPostCommitStep.run(scopeKey, async () => {
     if (!isCurrent()) return 'deferred';
@@ -5433,6 +5450,8 @@ const registerIpcHandlers = () => {
     }
     return imDefaultSettingsWire(channel);
   });
+  registerModelGroupsIpc();
+  registerModelGroupDecisionIpc();
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_GET, async () => {
     return subagentModelSettingsWire();
   });
@@ -6853,9 +6872,7 @@ const registerIpcHandlers = () => {
   // GitHub / GitLab PAT IPC 已于 2026-07-14 退役(GitHub 能力迁入内置意识
   // cindy-github,GitLab 能力迁入内置意识 cindy-gitlab)。
 
-  // Maker Core IPC 注册必须等 splash 把 claude/codex binary 都 provision 好之后再做 ——
-  // getMaker() 在构造期就读 binary path, 早于 splash 调用会抛错; 第一次 splash 成功后置 true,
-  // 后续 retry 走 check-environment 不重复注册 (重复 ipcMain.handle 会覆盖同名 handler)。
+  // Register local services after runtime discovery, even when no agent is installed.
   let makerIpcsRegistered = false;
   // Pi 是“本次启动可选”的能力：准备失败不阻塞主界面，交给 recovery 在网络恢复后
   // 重新走 managed prepare，并在成功后动态注册到当前 Maker。
@@ -6914,8 +6931,8 @@ const registerIpcHandlers = () => {
     // (见 anthropic-compat-proxy-host / anthropic-responses-bridge-host),纯内存懒装配,
     // 无独立 server、无启动 / 关停生命周期。
     await ensureAnthropicCompatProxyReady();
-    // Pi has settled before this function is called. Keep early plugin callers
-    // behind the catalog/proxy prerequisites as well as binary preparation.
+    // Local runtime discovery has settled. Keep early callers behind the
+    // catalog/proxy prerequisites, not behind optional engine downloads.
     makerStartupGate.complete();
     // codex proxy 两种 spawn 形态(oauth-bearer / env-key)都经它出口,首个 codex session spawn 时
     // 由 prepareCodexExtraSpawnConfig 懒启动(幂等);此处不再按全局开关 eager-start。
@@ -7140,119 +7157,25 @@ const registerIpcHandlers = () => {
     // 这里不再直启，避免 scheduler 在账号模型发现完成前抢先选路由。
   };
 
-  // Environment check IPC handler — 顺序检查 claude → codex → pi 三个 vendor binary。
-  // 提前 peekNeedsDownload 决定 (x/y) 标签：两个及以上需要下载时给 step/totalSteps，
-  // 否则不带标签（splash 显示单一 "唤醒 Cindy 中..." 文案）。
-  // pi 是可选实验 agent:清单无资产 / 下载失败都不算环境检查失败(失败不广播
-  // failed payload),本次不注册 pi。
+  // Discover local engines without making their availability an app-wide gate.
   ipcMain.handle('check-environment', async () => {
     // splash 首个 invoke = renderer 存活的强信号(与 renderer:log 双保险)。
     rendererBootGuard?.markAlive();
     const platform = process.platform as 'darwin' | 'win32' | 'linux';
-    // Packaged Linux may install both CLIs during one startup check. Share a
-    // single deadline so sequential fallback installs cannot each consume the
-    // full timeout.
-    const linuxInstallSignal =
-      platform === 'linux' && app.isPackaged
-        ? AbortSignal.timeout(LINUX_AGENT_INSTALL_STARTUP_DEADLINE_MS)
-        : undefined;
-
-    // ── Phase 0: peek 各 vendor 是否需要下载（决定 (x/y) 标签）────────────────
-    const needySteps: AgentBinaryKind[] = [];
-    for (const kind of ['claude-code', 'codex', 'pi'] as const) {
-      try {
-        if (await binaryPeekNeedsDownload(kind)) needySteps.push(kind);
-      } catch {
-        /* 保守: peek 失败按 false 处理，进入 prepare 内部错误流程 */
-      }
-    }
-    const isMultiDownload = needySteps.length >= 2;
-    const totalSteps = Math.min(needySteps.length, 3) as 2 | 3;
-    const stepOptsFor = (kind: AgentBinaryKind): { step?: 1 | 2 | 3; totalSteps?: 2 | 3 } =>
-      isMultiDownload && needySteps.includes(kind)
-        ? { step: (needySteps.indexOf(kind) + 1) as 1 | 2 | 3, totalSteps }
-        : {};
-    // 上一段真的发生过下载、且当前段也要下载时,先广播 reset payload 让 splash
-    // 进度条瞬间归零(不走 transition 动画),随后当前段从 0% 开始正常累加。
-    const resetBeforeSegment = (kind: AgentBinaryKind, anyPreviousDownloaded: boolean): void => {
-      const stepOpts = stepOptsFor(kind);
-      if (anyPreviousDownloaded && stepOpts.step && stepOpts.totalSteps) {
-        binaryBroadcastResetForStep(kind, stepOpts.step, stepOpts.totalSteps);
-      }
-    };
-
-    // ── Phase 1: claude 段 ───────────────────────────────────────────────────
-    let claudeRes: PrepareResult;
-    try {
-      claudeRes = await binaryPrepare('claude-code', {
-        ...stepOptsFor('claude-code'),
-        signal: linuxInstallSignal,
-      });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      return {
-        claudeCode: { status: 'failed' as const, error: message },
-        codex: { status: 'skipped' as const },
-        pi: { status: 'skipped' as const },
-        allPassed: false,
-        platform,
-      };
-    }
-
-    if (!claudeRes.ready || !claudeRes.path) {
-      return {
-        claudeCode: {
-          status: 'failed' as const,
-          error: claudeRes.error ?? 'Claude Code binary not available',
-        },
-        codex: { status: 'skipped' as const },
-        pi: { status: 'skipped' as const },
-        allPassed: false,
-        platform,
-      };
-    }
-
-    // setClaudeCodePath 已退役 —— agent-binaries.prepare() 成功时已写 lastReadyPath cache;
-    // 任何需要 claude binary 路径的地方一律走 getReadyBinaryPath('claude-code')。
-
-    // 启动时那次 CLI 登录态读取往往早于二进制就绪(读不到);就绪后补读一次,结果变化经
-    // onClaudeCliLoginStatusChange 广播,供应商页随之更新连接态。已有结果时是 no-op。
-    if (!isNativeProviderAuthRevoked('anthropic')) void readClaudeCliLoginStatus();
-
-    // ── Phase 2: codex 段 ────────────────────────────────────────────────────
-    resetBeforeSegment('codex', claudeRes.downloaded === true);
-
-    let codexRes: PrepareResult;
-    try {
-      codexRes = await binaryPrepare('codex', {
-        ...stepOptsFor('codex'),
-        signal: linuxInstallSignal,
-      });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      return {
-        claudeCode: { status: 'passed' as const, path: claudeRes.path },
-        codex: { status: 'failed' as const, error: message },
-        pi: { status: 'skipped' as const },
-        allPassed: false,
-        platform,
-      };
-    }
-
-    if (!codexRes.ready || !codexRes.path) {
-      return {
-        claudeCode: { status: 'passed' as const, path: claudeRes.path },
-        codex: { status: 'failed' as const, error: codexRes.error ?? 'Codex binary not available' },
-        pi: { status: 'skipped' as const },
-        allPassed: false,
-        platform,
-      };
-    }
+    // One bounded metadata request preserves adoption of already downloaded
+    // updates. No runtime download is allowed to hold startup.
+    if (app.isPackaged && !getCachedManifest()) await fetchManifest(2_500);
+    // Startup only inspects installed runtimes. Missing agents must not prevent
+    // settings, local history and other local tools from opening.
+    const localOptions = { localOnly: true, broadcastProgress: false, broadcastFailure: false };
+    const claudeRes = await binaryPrepare('claude-code', localOptions);
+    const codexRes = await binaryPrepare('codex', localOptions);
+    if (claudeRes.ready && !isNativeProviderAuthRevoked('anthropic')) void readClaudeCliLoginStatus();
 
     // ── Phase 2.5: bundled ripgrep(必需,codex spawn env 与 file-browser 搜索的
     // 硬依赖)──────────────────────────────────────────────────────────────
     // 探测已惰性化(import 不再触发,issue #1956),启动期 fail-fast 落在 splash
-    // 这里:缺失时与 claude/codex binary 缺失同一体验(splash failed + 可重试,
+    // 这里:随包资源损坏仍报错(splash failed + 可重试,
     // dev 补跑 pnpm install:ripgrep 后重试即过),而不是 import 期硬崩、也不是
     // maker:* IPC 静默不注册的降级启动。memoize 后此处探测近零成本。
     try {
@@ -7263,8 +7186,8 @@ const registerIpcHandlers = () => {
       // (补装指引在 message 里);与下方 pi 失败的 console.warn 同一既有惯例。
       console.error('[bootstrap-electron] bundled ripgrep check failed:', message);
       return {
-        claudeCode: { status: 'passed' as const, path: claudeRes.path },
-        codex: { status: 'passed' as const, path: codexRes.path },
+        claudeCode: { status: claudeRes.ready ? 'passed' as const : 'failed' as const, path: claudeRes.path },
+        codex: { status: codexRes.ready ? 'passed' as const : 'skipped' as const, path: codexRes.path },
         pi: { status: 'skipped' as const },
         ripgrep: { status: 'failed' as const, error: message },
         allPassed: false,
@@ -7275,37 +7198,29 @@ const registerIpcHandlers = () => {
     // ── Phase 3: pi 段（可选,失败不阻塞启动）──────────────────────────────────
     // broadcastFailure: false —— pi 下载失败不能把 splash 打进失败态;静默禁用
     // 本次 pi 注册，Claude Code / Codex 与 Cindy 本身仍照常可用。
-    // 只从 Pi 阶段开始计时，不能让前面的必需 binary 下载吃掉 Pi 自己的预算。
-    const piInstallSignal = app.isPackaged
-      ? AbortSignal.timeout(PI_AGENT_INSTALL_STARTUP_DEADLINE_MS)
-      : undefined;
-    resetBeforeSegment('pi', claudeRes.downloaded === true || codexRes.downloaded === true);
-
     const piInfo = await prepareOptionalPiRuntime({
       prepare: () =>
         binaryPrepare('pi', {
-          ...stepOptsFor('pi'),
-          broadcastFailure: false,
-          signal: piInstallSignal,
+          ...localOptions,
         }),
       // Before the first Maker exists, its constructor will pick up Pi. A false
       // result from an existing Maker must instead enable background recovery.
       register: () => getMakerIfReady() === null || registerPiAgentIfAvailable(),
     });
     if (piInfo.status === 'failed') {
-      piRuntimeRecovery.markUnavailable(piInfo.error);
+      piRuntimeRecovery.markUnavailable(piInfo.error === 'runtime_not_installed' ? 'manifest_failed' : piInfo.error);
       console.warn(
         `[bootstrap-electron] pi binary prepare failed (non-fatal, recovery scheduled): ${piInfo.error}`,
       );
     }
 
-    // Required binaries are ready and the first optional Pi attempt has settled.
+    // Local runtime discovery has settled; unavailable agents are repaired in the background.
     await registerMakerIpcsAfterSplash();
     startBinaryBackgroundUpdates();
 
     return {
-      claudeCode: { status: 'passed' as const, path: claudeRes.path },
-      codex: { status: 'passed' as const, path: codexRes.path },
+      claudeCode: { status: claudeRes.ready ? 'passed' as const : 'failed' as const, path: claudeRes.path },
+      codex: { status: codexRes.ready ? 'passed' as const : 'skipped' as const, path: codexRes.path },
       pi: piInfo,
       ripgrep: { status: 'passed' as const },
       allPassed: true,
@@ -10161,16 +10076,6 @@ app.on('ready', async () => {
           });
         });
       }
-      // 插件使用绑定只是辅助元数据：插件目录不可读（如 Windows EPERM）时不能让
-      // onReady 抛错——否则 ownerEnsureCoordinator 会丢弃已就绪的本地库并报
-      // DB_INIT_FAILED（#6870）。失败只记日志，由后续 post-commit 重试补齐。
-      try {
-        await refreshPluginUsageBindings();
-      } catch (error) {
-        dbClientLog.warn('plugin usage bindings refresh failed (non-fatal)', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
       checkDatabaseSizeWarningAtStartup();
       void restoreOrcaRemoteWorkersForCurrentOwner();
       startReadyWorktreeMaintenance();
@@ -10515,6 +10420,7 @@ app.on('ready', async () => {
       mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef.webContents : null,
   });
   registerLocalThemesIpc();
+  registerCindyFileIpc();
   registerVoiceInputIpc();
   registerGlobalVoiceInputIpc({
     getMainWindow: () => mainWindowRef,
@@ -10640,6 +10546,8 @@ app.on('ready', async () => {
   registerProviderShareIpc();
   // 自建中转服务(docs/self-hosted-relay-plan.md):本机中转与加入别的中转。
   registerSelfHostedRelayIpc();
+  // 同账号电脑远程切换这台电脑的 Agent-Net(docs/product-rules/agent-net.md「远程切换其他电脑的连接方式」)。
+  setAgentNetSwitchRemoteHandler(agentNetSwitchRemoteHandler());
   registerProviderGroupIpc({ reshare: providerGroupReshare });
   registerSubscriptionAccountsIpc();
   registerProviderGroupRemoteHandler({ onGroupChanged: () => providerGroupReshare.kick('group') });

@@ -64,6 +64,10 @@ P1／P2。按下表转换，**不要**把仓库口径的 P2 改写成评论里�
   按实际影响报告有证据的问题，并按第 2 节映射评论标签；P2 缺陷也要报告。
   指出触发条件、共享约束与用户影响，
   不以通用性能建议替代缺陷证据，不据此要求新增 CI 或统一限流机制。
+- **本地读取与轮询性能**：列表、分页、批量读取、插件扫描、缓存或轮询改动，按
+  `docs/dev-rules/engineering-conventions.md` §8 核对每个用户动作的 list/scan/IPC/写事务
+  次数、隐藏/离屏是否为 0、缓存 key 是否包含 owner/revision/query；插件市场与统计的
+  特有边界见 `docs/dev-rules/plugin-security-and-authoring.md` §5.4。
 - **凭证与本地存储**：凭证、令牌、授权文件是否写进了仓库或可能被 Git 跟踪的路径；
   用户数据落盘位置是否越界。见 `docs/dev-rules/credentials-and-local-storage.md`。
 - **Electron 进程边界**：renderer／preload／IPC／CSP／WebView／导航与特权能力的改动
