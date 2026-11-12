@@ -27,6 +27,8 @@ test.after(() => {
   fs.rmSync(emptyHome, { recursive: true, force: true });
 });
 
+const isLink = file => { try { return fs.lstatSync(file).isSymbolicLink(); } catch { return false; } };
+
 function profile(t, token = 'fixture-token-1') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'host-codex-invalidation-'));
   const codexHome = path.join(dir, 'codex-home');
@@ -181,6 +183,32 @@ test('an unwritable marker falls back to revoking the native authorization', asy
   assert.equal(isNativeProviderAuthRevoked('openai'), true);
   assert.equal(fs.existsSync(p.authPath), false);
   assert.equal((await p.auth.getState({ providerId: 'openai' })).authenticated, false);
+});
+
+test('a login linked to a file outside the profile: neither invalidation changes that file', async t => {
+  for (const link of ['hard', 'symbolic']) {
+    for (const attribution of ['attributed', 'unattributed']) {
+      const p = profile(t);
+      // A migrated profile: codex-home/auth.json is a link to a login kept elsewhere.
+      const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'host-codex-linked-login-'));
+      t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+      const target = path.join(outside, 'auth.json');
+      fs.writeFileSync(target, JSON.stringify({ tokens: { access_token: 'linked-token', account_id: 'fixture-workspace' } }), { mode: 0o600 });
+      fs.rmSync(p.authPath);
+      if (link === 'hard') fs.linkSync(target, p.authPath); else fs.symlinkSync(target, p.authPath);
+      const before = { bytes: fs.readFileSync(target, 'utf8'), stat: fs.statSync(target) };
+      const result = await invalidateHostCodexLogin({ codexHome: p.codexHome, reason: 'token_revoked',
+        ...(attribution === 'attributed' ? { failedAccessToken: 'linked-token' } : { credentialAttribution: 'unproven', loginInProgress: () => false }) });
+      assert.equal(result, attribution === 'attributed' ? 'invalidated' : 'unproven', `${link}/${attribution}`);
+      const after = fs.statSync(target);
+      assert.equal(fs.readFileSync(target, 'utf8'), before.bytes, `${link}/${attribution}: content`);
+      assert.equal(after.ino, before.stat.ino, `${link}/${attribution}: inode`);
+      assert.equal(after.mtimeMs, before.stat.mtimeMs, `${link}/${attribution}: modification time`);
+      assert.deepEqual(fs.readdirSync(outside), ['auth.json'], `${link}/${attribution}: nothing else written beside it`);
+      // Only the profile's own entry goes, and only for an attributed invalidation.
+      assert.equal(fs.existsSync(p.authPath) || isLink(p.authPath), attribution === 'unattributed', `${link}/${attribution}: profile entry`);
+    }
+  }
 });
 
 test('HOME stays empty: the system Codex login is never read or written', () => {
