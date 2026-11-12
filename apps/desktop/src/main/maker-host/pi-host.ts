@@ -3,7 +3,6 @@ import { buildPiNativeProvidersFromConfigs, piNativeKeyEnvVar, wireProtocolToPiA
 export { buildPiNativeProvidersFromConfigs, type PiBundledModelCatalog, type PiBundledModelInfo, piNativeKeyEnvVar, resolvePiBundledModelById } from './pi-native-catalog.js';
 import { modelWithInterface } from '@cindy/model-providers';
 import { sessionModelInterface } from './session-model-interface.js';
-import { PI_ANSWER_DELIVERY_PROMPT } from '@cindy/maker-shared/rich-answer-guide';
 import { listCindyManagedSkills } from './managed-skills.js';
 import { scanLocalCustomizations } from '../skillhub/customizationScanHost';
 import { resolveCompanionRuntimeEnvironment } from '../bot-import/runtime.js';
@@ -38,8 +37,6 @@ import path from 'node:path';
 import { app } from 'electron';
 
 import { createPiModelResolvers } from './engineModelResolvers.js';
-import { toolchainThreadCapEnv } from './toolchain-thread-cap.js';
-import { inputHandoffTaskShellEnv } from '../input-handoff/askpass/index.js';
 
 import {
   PiAgent,
@@ -102,19 +99,15 @@ import {
 import { hostCredentialEndpointAllowed } from './pi-provider-transport.js';
 import { hasGrokOAuthLogin } from './grok-oauth-login.desktop.js';
 import { isOpenAiSubscriptionProviderId } from './codex-account-auth.desktop.js';
-import hostSystemPrompt from './host-system-prompt.md?raw';
 import { withProviderAppAttribution } from './provider-app-attribution.js';
-import businessOwnershipPrompt from './business-ownership-prompt.md?raw';
-import piSystemPrompt from './pi-system-prompt.md?raw';
 import { createLogger } from '../logger.js';
-import { readMemorySettings } from './memory-settings-store.js';
-import { DEFAULT_MODEL_COMPACTION_PCT } from '../../shared/modelContextLimit.js';
 import { registerPiProxySession } from './pi-proxy-session-auth.js';
 import { derivePiProxySessionToken } from './pi-proxy-session-token.js';
 import {
   getDesktopMcpToolApprovalPolicy,
 } from './mcp-tool-approval-policy.js';
 import { getRipgrepBinaryPath, claudeUpstreamEndpoint } from './runtime-configs.js';
+import { buildPiRuntimeConfig } from './runtimeConfigsCore.js';
 import {
   getActiveCatalog,
   getLocalCatalogOverridesSnapshot,
@@ -712,58 +705,16 @@ export const desktopPiAuthAdapter: AuthAdapter = createPiAuthAdapter({ subscript
 
 // ── RuntimeConfig ────────────────────────────────────────────────────────────
 
-export function composePiSystemPrompt(hostPrompt: string, agentPrompt: string): string {
-  return [hostPrompt, agentPrompt]
-    .map((section) => section.trim())
-    .filter(Boolean)
-    .join('\n\n');
-}
+// Shared with the Node Host (runtimeConfigsCore.ts).
+export { composePiSystemPrompt } from './runtimeConfigsCore.js';
 
 function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
-  const ripgrepPath = getRipgrepBinaryPath();
-  const config: AgentRuntimeConfig = {
-    behaviorFlags: (ctx) => ctx.spawnMode === 'remote' ? {} : toolchainThreadCapEnv(),
-    // 代输入: sudo / ssh / git password prompts of this task go to the owner.
-    taskShellEnv: inputHandoffTaskShellEnv,
-    // 保留 host 共用身份段,再追加 Pi 专属行为段；maker-core 会整体追加到 Pi 原生 prompt。
-    systemPrompt: composePiSystemPrompt(`${hostSystemPrompt.trim()}\n\n${businessOwnershipPrompt.trim()}`, piSystemPrompt),
-    answerDeliveryPrompt: PI_ANSWER_DELIVERY_PROMPT,
-    // Pi 的 grep 以及 Cindy 覆盖的 find 都固定复用随 Desktop 校验、打包的 rg。
-    // 下发绝对路径而非 PATH，避免 Windows 从不受信工作目录优先命中同名 rg.exe。
-    managedExecutablePaths: { ripgrep: ripgrepPath },
+  return buildPiRuntimeConfig({
+    ripgrepPath: getRipgrepBinaryPath(),
     userDataPath: app.getPath('userData'),
-  };
-  Object.defineProperty(config, 'piAutoCompactThresholdPct', {
-    get: () => DEFAULT_MODEL_COMPACTION_PCT,
-    enumerable: true,
-    configurable: false,
+    endpoint: () => getClaudeEndpoint(),
+    remoteEndpoint: () => claudeUpstreamEndpoint(),
   });
-  Object.defineProperty(config, 'endpoint', {
-    get: () => getClaudeEndpoint(),
-    enumerable: true,
-    configurable: false,
-  });
-  // 远端会话专用:真上游网关端点(非本地 loopback compat proxy)。远端机器够不到
-  // 本机 127.0.0.1,必须直连网关 —— 与 CC 的 buildDesktopClaudeRuntimeConfig 对齐。
-  // 缺省会 fallback 到 endpoint(loopback),远端不可用 —— 但 writeModelsJson 的
-  // remote 分支显式读它,缺失时写 127.0.0.1:0 是 bug(见 R1/R2 审核);这里保证
-  // 恒有真上游。
-  Object.defineProperty(config, 'remoteEndpoint', {
-    get: () => claudeUpstreamEndpoint(),
-    enumerable: true,
-    configurable: false,
-  });
-  Object.defineProperties(config, {
-    memoryEnabled: {
-      get: () => readMemorySettings().pi,
-      enumerable: true,
-    },
-    makerMemoryEnabled: {
-      get: () => readMemorySettings().maker,
-      enumerable: true,
-    },
-  });
-  return config;
 }
 
 // ── 构造入口 ─────────────────────────────────────────────────────────────────
