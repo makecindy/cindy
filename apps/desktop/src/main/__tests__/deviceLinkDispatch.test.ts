@@ -942,15 +942,30 @@ describe('被控端控制链路生命周期', () => {
         .toMatchObject({ ok: true, result: { providers: [{ id: 'anthropic', remoteInvocationEnabled: true }] } });
       expect(await runInvoke('ctrl-no-models', { channel: 'maker:provider:list', args: [] }))
         .toMatchObject({ ok: true, result: { providers: [{ id: 'anthropic', remoteInvocationEnabled: false }] } });
-      // PR #10150 review: a provider with a group keeps its own switch, so group member selection is not bypassed.
+      // PR #10150 review: a provider with a group keeps its own switch, so group member selection is not bypassed;
+      // a provider opened by the switch still reports its running count, which other groups use as its load.
+      registry.register('maker:provider:list', () => ({
+        providers: [
+          { id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: false },
+          { id: 'openai', name: 'OpenAI', remoteInvocationEnabled: false },
+        ],
+      }));
       setProviderGroupRemoteHandler({
         handle: vi.fn(),
-        decorateProviderList: (result) => ({ ...(result as object), providers: (result as { providers: object[] }).providers
-          .map((provider) => ({ ...provider, group: { strategy: 'least', members: [] } })) }),
+        decorateProviderList: (result) => ({ ...(result as object), providers: (result as { providers: Record<string, unknown>[] }).providers
+          .map((provider) => ({
+            ...provider,
+            ...(provider.id === 'anthropic' ? { group: { strategy: 'least', members: [] } } : {}),
+            ...(provider.remoteInvocationEnabled === true ? { runningTurns: 2 } : {}),
+          })) }),
         sharedGroupSize: () => null,
       });
-      expect(await runInvoke('ctrl-borrow', { channel: 'maker:provider:list', args: [] }))
-        .toMatchObject({ ok: true, result: { providers: [{ id: 'anthropic', remoteInvocationEnabled: false }] } });
+      const listed = await runInvoke('ctrl-borrow', { channel: 'maker:provider:list', args: [] }) as { result: { providers: Record<string, unknown>[] } };
+      expect(listed.result.providers).toEqual([
+        expect.not.objectContaining({ runningTurns: expect.anything() }),
+        expect.objectContaining({ id: 'openai', remoteInvocationEnabled: true, runningTurns: 2 }),
+      ]);
+      expect(listed.result.providers[0]).toMatchObject({ id: 'anthropic', remoteInvocationEnabled: false });
     } finally { setRemoteAgentHandler(null); setProviderGroupRemoteHandler(null); }
   });
 

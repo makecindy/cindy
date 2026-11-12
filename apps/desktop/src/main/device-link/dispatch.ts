@@ -35,6 +35,7 @@ import {
   messageRecord,
   MESSAGE_BODY_FORMAT,
   PROVIDER_METADATA_TRUST_MS,
+  PROVIDER_RUNNING_TURNS_FIELD,
   readProviderMetadataContinuity,
 } from '@cindy/device-link';
 import type { requestFilePeer, stopFilePeers } from './filePeer';
@@ -4778,10 +4779,25 @@ async function runProviderShareInvoke(
   return projected.ok ? { ...result, result: projected.value } : projected;
 }
 
+type ProviderEntry = Record<string, unknown>;
+
+function mapProviderEntries(result: unknown, map: (entry: ProviderEntry) => ProviderEntry): unknown {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+  const value = result as { providers?: unknown };
+  if (!Array.isArray(value.providers)) return result;
+  return {
+    ...value,
+    providers: value.providers.map((provider) => provider && typeof provider === 'object' && !Array.isArray(provider)
+      ? map(provider as ProviderEntry)
+      : provider),
+  };
+}
+
 /**
- * 同账号电脑读本机目录时的「可远程调用」标记：
- * - 「远程连接」里打开了「让我的其他电脑用本机模型」：全部供应商都标成可用，建了供应商组的除外
- *   (组内选电脑仍按逐个供应商的开关，见 remote-agent host 的 ownComputersMayUse)；
+ * 同账号电脑读本机目录时的「可远程调用」标记，在补供应商组摘要与运行数之前算好，运行数才按实际开放情况给出
+ * (别处的组把这台电脑当组员时据此计负载)：
+ * - 「远程连接」里打开了「让我的其他电脑用本机模型」：全部供应商都标成可用(本机建了组的随后由
+ *   {@link restoreGroupedOwnComputerModelUse} 还原)；
  * - 这台电脑的「用本机模型」被单独关掉：一律不标(目录照常给，远程控制与手机仍要看全部供应商)。
  * 其余照「允许被远程调用」原值。分享来的受邀者另有投影，不经这里。
  */
@@ -4789,22 +4805,27 @@ function projectOwnComputerModelUse(src: string, result: unknown): unknown {
   const revoked = (readDeviceLinkSettings().modelUseRevokedControllers ?? []).includes(src);
   // 开关由远程 Agent 主机提供；主机没起来时本机也借不出模型，按关闭处理。
   if (!revoked && remoteAgentHandler?.ownComputerModelUseEnabled?.() !== true) return result;
-  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
-  const value = result as { providers?: unknown };
-  if (!Array.isArray(value.providers)) return result;
-  return {
-    ...value,
-    providers: value.providers.map((provider) => provider && typeof provider === 'object' && !Array.isArray(provider)
-      ? {
-          ...(provider as Record<string, unknown>),
-          remoteInvocationEnabled: revoked
-            ? false
-            : (provider as Record<string, unknown>).group
-              ? (provider as Record<string, unknown>).remoteInvocationEnabled
-              : true,
-        }
-      : provider),
-  };
+  return mapProviderEntries(result, (entry) => ({ ...entry, remoteInvocationEnabled: !revoked }));
+}
+
+/**
+ * 本机建了供应商组的供应商不随「让我的其他电脑用本机模型」打开(组内选电脑仍按逐个供应商的开关，见
+ * remote-agent host 的 ownComputersMayUse)：补完组摘要后，把这类供应商还原成原来的标记与运行数。
+ */
+function restoreGroupedOwnComputerModelUse(original: unknown, decorated: unknown): unknown {
+  const before = new Map<string, ProviderEntry>();
+  mapProviderEntries(original, (entry) => {
+    if (typeof entry.id === 'string') before.set(entry.id, entry);
+    return entry;
+  });
+  return mapProviderEntries(decorated, (entry) => {
+    if (!entry.group || typeof entry.id !== 'string') return entry;
+    const previous = before.get(entry.id);
+    if (!previous || previous.remoteInvocationEnabled === entry.remoteInvocationEnabled) return entry;
+    const restored: ProviderEntry = { ...entry, remoteInvocationEnabled: previous.remoteInvocationEnabled };
+    if (previous.remoteInvocationEnabled !== true) delete restored[PROVIDER_RUNNING_TURNS_FIELD];
+    return restored;
+  });
 }
 
 /**
@@ -5312,12 +5333,12 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
         isSameAccountController(src),
       ));
     // 供应商组摘要与运行数只给同账号电脑(受邀者与共享任务访客另有投影，这里不加，scrubSharedProvider 再兜一层)。
-    const grouped = payload.channel === 'maker:provider:list' && isSameAccountController(src) && providerGroupRemoteHandler
-      ? await providerGroupRemoteHandler.decorateProviderList(projected)
-      : projected;
-    const decorated = payload.channel === 'maker:provider:list' && isSameAccountController(src)
-      ? projectOwnComputerModelUse(src, grouped)
-      : grouped;
+    const ownList = payload.channel === 'maker:provider:list' && isSameAccountController(src);
+    const opened = ownList ? projectOwnComputerModelUse(src, projected) : projected;
+    const grouped = ownList && providerGroupRemoteHandler
+      ? await providerGroupRemoteHandler.decorateProviderList(opened)
+      : opened;
+    const decorated = ownList && opened !== projected ? restoreGroupedOwnComputerModelUse(projected, grouped) : grouped;
     if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)) throw new Error('[NOT_FOUND] Session does not exist');
     return { ok: true, result: decorated };
   } catch (err) {
