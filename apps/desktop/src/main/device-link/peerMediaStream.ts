@@ -29,10 +29,12 @@ export async function openRemotePeerMediaStream(device: string, url: string,
   };
   let first = await read(0, Math.min(metadata.size, FILE_PEER_RANGE_BYTES) - 1, signal);
   if (!first) return null;
+  let available = true;
   return { ...metadata, kind: 'peer-stream', ossKey: '',
-    isAvailable: () => current() && !signal?.aborted,
+    isAvailable: () => available && current() && !signal?.aborted,
     async serve(header, signal) {
       if (!current() || signal?.aborted) throw new Error('FILE_PEER_CANCELLED');
+      if (!available) throw new Error('FILE_PEER_UNAVAILABLE');
       const range = parseRangeHeader(header, metadata.size);
       const headers = { 'Content-Type': metadata.mimeType, 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store' };
       if (range?.kind === 'unsatisfiable') return new Response(null, { status: 416,
@@ -45,6 +47,7 @@ export async function openRemotePeerMediaStream(device: string, url: string,
         async pull(controller) {
           try {
             if (combined.aborted || !current()) throw new Error('FILE_PEER_CANCELLED');
+            if (!available) throw new Error('FILE_PEER_UNAVAILABLE');
             const to = Math.min(end, offset + FILE_PEER_RANGE_BYTES - 1);
             let bytes: Buffer | null;
             if (first && to < first.length) bytes = first.subarray(offset, to + 1);
@@ -53,7 +56,12 @@ export async function openRemotePeerMediaStream(device: string, url: string,
             if (combined.aborted || !current()) throw new Error('FILE_PEER_CANCELLED');
             controller.enqueue(bytes); offset = to + 1;
             if (offset > end) controller.close();
-          } catch (error) { controller.error(error); }
+          } catch (error) {
+            // A failed transport must be reprobed on reopen, allowing OSS fallback.
+            // Abandoning one response (e.g. seek) must not poison the shared reader.
+            if (!combined.aborted && current()) { available = false; first = null; }
+            controller.error(error);
+          }
         },
         cancel() { abort.abort(); },
       }, { highWaterMark: 0 });

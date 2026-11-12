@@ -334,3 +334,26 @@ it('reuses a versioned playback reader for seeks but replaces changed or revoked
     await expect(second.serve(null)).rejects.toThrow('FILE_PEER_CANCELLED');
   } finally { read.mockRestore(); invalidateFilePeerScopes(); }
 });
+
+// Unit: a cached reader used to survive a failed later range and permanently
+// bypass the still-working OSS fallback. Exercise reopen via the production entry.
+it('reprobes and falls back after a cached playback range fails', async () => {
+  invalidateFilePeerScopes();
+  const metadata = { ossKey: '', size: 2 * 1024 * 1024, mimeType: 'video/mp4', version: 'c'.repeat(64), transferRequired: true };
+  const uploaded = { ...metadata, ossKey: 'fallback/video.mp4' };
+  const invoke = vi.fn(async (_device, _channel, [request]) => ({ ok: true as const,
+    result: request.prepareOnly ? metadata : uploaded }));
+  rangePeer.mockResolvedValue(null).mockResolvedValueOnce({ path: '/first-block', dispose: async () => {} });
+  const read = vi.spyOn(fs, 'readFile').mockResolvedValue(Buffer.alloc(1024 * 1024));
+  const open = () => readRemoteDeviceFile('failed-range-device', 'xdt-video://session/failure.mp4', invoke, { stream: true, playback: true });
+  try {
+    const first = await open();
+    if (!('serve' in first)) throw new Error('expected peer stream');
+    const response = await first.serve('bytes=1048576-1048580');
+    await expect(response.arrayBuffer()).rejects.toThrow('FILE_PEER_UNAVAILABLE');
+    expect(first.isAvailable()).toBe(false);
+    expect(await open()).toEqual(uploaded);
+    expect(rangePeer).toHaveBeenCalledTimes(3); // probe, failed range, reopen probe
+    expect(invoke.mock.calls.filter(([, , [request]]) => !request.prepareOnly)).toHaveLength(1);
+  } finally { read.mockRestore(); invalidateFilePeerScopes(); }
+});

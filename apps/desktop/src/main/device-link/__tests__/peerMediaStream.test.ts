@@ -64,4 +64,5 @@ it('cancels the active file read when the player abandons its response', async (
   expect(signal.aborted).toBe(true);
   complete({ path: {}, dispose });
   await pending;
+  expect(stream.isAvailable()).toBe(true);
 });
