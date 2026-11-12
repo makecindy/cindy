@@ -10804,6 +10804,7 @@
       "needsAttention": "necesita atencion",
       "duplicate": "Duplicar compañero",
       "moreActions": "Otras acciones para {{name}}",
+      "viewIcons": "Iconos",
       "sectionExpand": "Expandir compañeros",
       "showLess": "Mostrar menos",
       "sectionCollapse": "Contraer compañeros",

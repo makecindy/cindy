@@ -10675,6 +10675,7 @@
       "needsAttention": "待处置",
       "duplicate": "拷贝同僚",
       "moreActions": "{{name}} 之余事",
+      "viewIcons": "图标",
       "sectionExpand": "展同僚",
       "showLess": "收",
       "sectionCollapse": "收同僚",

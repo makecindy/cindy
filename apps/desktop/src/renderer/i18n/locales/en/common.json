@@ -10720,6 +10720,7 @@
       "needsAttention": "Needs attention",
       "duplicate": "Duplicate teammate",
       "moreActions": "More actions for {{name}}",
+      "viewIcons": "Icons",
       "sectionExpand": "Expand teammates",
       "showLess": "Show less",
       "sectionCollapse": "Collapse teammates",

@@ -10720,6 +10720,7 @@
       "needsAttention": "Erfordert Aufmerksamkeit",
       "duplicate": "Teammitglied duplizieren",
       "moreActions": "Weitere Aktionen für {{name}}",
+      "viewIcons": "Symbole",
       "sectionExpand": "Teammitglieder ausklappen",
       "showLess": "Weniger anzeigen",
       "sectionCollapse": "Teammitglieder einklappen",
