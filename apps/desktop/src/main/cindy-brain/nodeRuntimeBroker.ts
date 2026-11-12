@@ -956,6 +956,7 @@ export class GhostNodeRuntimeBroker {
     try {
       if (!this.workerHostCurrent(entry) || !this.deps.networkRequest) throw new Error('NODE_HOST_UNAVAILABLE');
       if (entry.networkRequests >= 8) throw new Error('NODE_HOST_BUSY');
+      this.clearIdleTimer(entry);
       entry.networkRequests += 1;
       acquired = true;
       const result = await this.deps.networkRequest(GhostNodeRuntimeBroker.instanceId(entry.ghost), { ...message.request, callId: undefined });
@@ -963,7 +964,12 @@ export class GhostNodeRuntimeBroker {
       this.replyToWorker(entry, { type: 'node-host-result', reqId: message.reqId, ok: true, result });
     } catch {
       this.replyToWorker(entry, { type: 'node-host-result', reqId: message.reqId, ok: false });
-    } finally { if (acquired) entry.networkRequests -= 1; }
+    } finally {
+      if (acquired) {
+        entry.networkRequests -= 1;
+        this.scheduleIdleStop(entry);
+      }
+    }
   }
 
   private async handleHostToolRequest(entry: WorkerEntry, message: Extract<GhostNodeChildToHostMessage, { type: 'host-tool-request' }>) {
@@ -2443,7 +2449,7 @@ export class GhostNodeRuntimeBroker {
   private scheduleIdleStop(entry: WorkerEntry): void {
     const key = GhostNodeRuntimeBroker.keyOf(GhostNodeRuntimeBroker.instanceId(entry.ghost), entry.entryRel);
     if (this.workers.get(key) !== entry) return;
-    if (entry.ghost.manifest.node?.lifecycle === 'resident' || entry.pending.size > 0 || entry.hostToolRequests > 0) return;
+    if (entry.ghost.manifest.node?.lifecycle === 'resident' || entry.pending.size > 0 || entry.hostToolRequests > 0 || entry.networkRequests > 0) return;
     // 有代启子进程在世时不空闲回收——收 worker 会级联杀掉正在干活的代理。
     if (entry.children.size > 0) return;
     this.clearIdleTimer(entry);
