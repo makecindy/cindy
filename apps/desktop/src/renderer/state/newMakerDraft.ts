@@ -1392,4 +1392,15 @@ export function __resetForTest(): void {
   emit();
 }
 
+/**
+ * 测试用 —— 模拟 renderer 重新加载本模块(app 重启):丢弃全部内存态,按模块首次求值的
+ * 方式从 localStorage 恢复,不写盘、不通知。新增模块级状态时要在这里一并复位。
+ */
+export function __reloadForTest(): void {
+  activeDataOwnerId = null;
+  preferenceSyncFallback = null;
+  listeners.clear();
+  currentDraft = loadFromStorage();
+}
+
 export const __STORAGE_KEY = STORAGE_KEY;

@@ -34,7 +34,7 @@ import { applyCompanionRoutines } from './routines.js';
 import { applyProjectAutomations, applyProjectCarryover, applyProjectRules, mergeProjectRules, readProjectValues } from './project.js';
 import { backupTeammateProject, companionProjectIo, teammateStoreMemoryDirs, upgradeArrivedTeammate } from './projectHost.js';
 import { readTeammateMemories, readTeammateMemory, teammateMemoryDirs } from '../maker-ipc/botProjectMemory.js';
-import { companionHomes } from './homes.js';
+import { companionHomes, inactiveCompanionCopyIds } from './homes.js';
 import { createMcpServerNamesReader } from './mcpServerNames.js';
 import { companionHasLocalData } from './localData.js';
 import { companionCapabilitiesPatch, portableCompanionCapabilities, type CompanionArrivalNotice } from './capabilities.js';
@@ -65,15 +65,16 @@ function profileTemplateId(capabilitiesJson: string | null, identitySource: stri
   return inferBotTemplatePresetId(identitySource);
 }
 
-/** Same singleton predicate as the profile transaction, excluding only the exact cloud id. */
+/** Same effective-local singleton predicate as the profile transaction. */
 async function findConflictingCindy(botId: string): Promise<string | null> {
   const rows = await getDbClient().drizzle
-    .select({ id: botProfiles.id, config: botProfileVersions.capabilitiesJson, identity: botProfileVersions.identitySource })
+    .select({ id: botProfiles.id, status: botProfiles.status, config: botProfileVersions.capabilitiesJson, identity: botProfileVersions.identitySource })
     .from(botProfiles).innerJoin(botProfileVersions,
       and(eq(botProfileVersions.botId, botProfiles.id), eq(botProfileVersions.version, botProfiles.currentVersion)))
     .where(and(ne(botProfiles.id, botId), ne(botProfiles.status, 'archived')));
-  return rows.find(row => JSON.parse(row.config).templateId === 'cindy'
-    || inferBotTemplatePresetId(row.identity) === 'cindy')?.id ?? null;
+  const inactive = new Set(inactiveCompanionCopyIds(companionHomes.snapshot()));
+  return rows.find(row => (row.status === 'deleting' || !inactive.has(row.id))
+    && (JSON.parse(row.config).templateId === 'cindy' || inferBotTemplatePresetId(row.identity) === 'cindy'))?.id ?? null;
 }
 
 const readMcpServerNames = createMcpServerNamesReader(listCustomMcpServers, activeOwnerScopeKey);
@@ -229,13 +230,20 @@ function createMaterializer(input: {
       await assertCompanionIdentity({ findConflictingCindy }, id, templateId, fence);
       const restored = await restoreCloudAvatar(avatar, fence.signal);
       fence.assertCurrent();
-      await updateBotProfile({ id, name: name.slice(0, 200), enabled: true,
-        ...(description !== undefined ? { description } : {}),
-        ...(identitySource !== undefined ? { identitySource } : {}),
-        ...(userContextSource !== undefined ? { userContextSource } : {}),
-        ...('portable' in restored ? { avatar: restored.portable } : {}) }, undefined, undefined,
-      { templateId, replacesUnfinishedMeeting: true, allowSameName: true,
-        avatarFallback: 'portable' in restored ? restored.fallback === true : undefined });
+      try {
+        await updateBotProfile({ id, name: name.slice(0, 200), enabled: true,
+          ...(description !== undefined ? { description } : {}),
+          ...(identitySource !== undefined ? { identitySource } : {}),
+          ...(userContextSource !== undefined ? { userContextSource } : {}),
+          ...('portable' in restored ? { avatar: restored.portable } : {}) }, undefined, undefined,
+        { templateId, replacesUnfinishedMeeting: true, allowSameName: true,
+          avatarFallback: 'portable' in restored ? restored.fallback === true : undefined });
+      } catch (error) {
+        if ((error as { code?: unknown })?.code === 'ALREADY_EXISTS') {
+          await assertCompanionIdentity({ findConflictingCindy }, id, templateId, fence);
+        }
+        throw error;
+      }
       if ('imageBase64' in restored) {
         const image = decodeBotAvatarImage(restored.imageBase64);
         fence.assertCurrent();
