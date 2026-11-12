@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import { ghostNetworkHostPatternWithinCap, type GhostManifest } from '../../shared/ghost.js';
-import { GHOST_SAVED_CREDENTIAL_MARKER, isReusableSavedSecret,
+import { GHOST_SAVED_CREDENTIAL_MARKER, ghostSavedCredentialReferenceKey as referenceKey, isReusableSavedSecret,
   type GhostAccountReuseGroup, type GhostAccountReuseResult, type GhostSavedCredentialReference,
   type GhostReusableSavedCredential } from '../../shared/pluginAccountReuse.js';
 import type { GhostConnectionManager, GhostConnectionsVault } from './ghostConnections.js';
@@ -18,8 +18,6 @@ interface Deps {
   confirm(input: { instanceKey: string; secretKey: string; source: GhostReusableSavedCredential; hosts: string[] }): Promise<boolean>;
   withMutationLock<T>(id: string, task: () => T | Promise<T>): Promise<T>;
 }
-
-const referenceKey = (key: string) => `${key}-reused-credential`;
 
 /** Existing owner-scoped vault, source catalogue and native confirmation; no
  * credential copies or grant store. The ordinary key carries a non-secret

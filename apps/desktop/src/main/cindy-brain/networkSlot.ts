@@ -854,6 +854,14 @@ export class GhostNetworkSlot {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return { ok: false, errorCode: 'NETWORK_INVALID_REQUEST', message: '网络请求格式不合法' };
     const p = payload as Record<string, unknown>;
     if (p.op !== 'open') return this.connections.handle(instanceKey, p);
+    let reserved = false;
+    const releaseReservation = () => {
+      if (!reserved) return;
+      reserved = false;
+      const left = (this.inflight.get(instanceKey) ?? 1) - 1;
+      if (left <= 0) this.inflight.delete(instanceKey);
+      else this.inflight.set(instanceKey, left);
+    };
     try {
       if (typeof p.url !== 'string' || p.url.length > 2048) throw new Error('NETWORK_INVALID_REQUEST');
       const url = new URL(p.url);
@@ -869,6 +877,8 @@ export class GhostNetworkSlot {
       if (p.protocols !== undefined && (!Array.isArray(p.protocols) || p.protocols.length > 16 ||
           p.protocols.some(protocol => typeof protocol !== 'string' || !/^[!#$%&'*+.^_`|~A-Za-z0-9-]{1,128}$/.test(protocol)) || new Set(p.protocols).size !== p.protocols.length)) throw new Error('NETWORK_INVALID_REQUEST');
       if ((this.inflight.get(instanceKey) ?? 0) + this.connections.count(instanceKey) >= GHOST_FETCH_INFLIGHT_LIMIT) throw new Error('NETWORK_CONNECTION_LIMIT');
+      this.inflight.set(instanceKey, (this.inflight.get(instanceKey) ?? 0) + 1);
+      reserved = true;
       const hostGuard = this.captureGuard(instanceKey);
       const credentialGuards: Array<() => void> = [];
       const assertCurrent = () => { hostGuard(); for (const guard of credentialGuards) guard(); };
@@ -877,6 +887,9 @@ export class GhostNetworkSlot {
         ghost.manifest.network.hosts, parsed.headers, undefined, credentialGuards);
       assertCurrent();
       if (inject.error) return { ok: false, errorCode: 'NETWORK_CREDENTIAL_UNAVAILABLE', message: inject.error };
+      // openWebSocket creates its owned entry before its first await, so this
+      // synchronous transfer neither double-counts nor leaves a quota gap.
+      releaseReservation();
       const connectionId = await this.connections.openWebSocket(instanceKey, {
         url: url.toString(), headers: parsed.headers, protocols: p.protocols as string[] | undefined,
         agent: () => this.deps.resolveWebSocketAgent?.(url.toString()) ?? Promise.resolve(undefined), assertCurrent,
@@ -884,6 +897,8 @@ export class GhostNetworkSlot {
       return { ok: true, connectionId };
     } catch {
       return { ok: false, errorCode: 'NETWORK_CONNECTION_FAILED', message: '连接建立失败，请检查来源声明、连接状态与请求参数' };
+    } finally {
+      releaseReservation();
     }
   }
 

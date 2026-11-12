@@ -209,6 +209,78 @@ describe('saved credential Host injection', () => {
 // reconnect cursors, and revoke live sockets on an installation/owner boundary.
 // Existing buffered-fetch cases cannot observe these lifetime differences.
 describe('host network connections', () => {
+  // #10130 / 4547237937, unit: prior cases opened sockets serially and
+  // missed WS credential awaits racing three active HTTP requests for slot 4.
+  async function holdThreeHttp(overrides: Partial<NetworkSlotDeps> = {}) {
+    let finish!: (response: Response) => void;
+    const response = new Promise<Response>(resolve => { finish = resolve; });
+    let started!: () => void;
+    const allStarted = new Promise<void>(resolve => { started = resolve; });
+    let count = 0;
+    const h = makeSlot({
+      getGhost: () => fakeGhost({ network: { hosts: ['api.search.brave.com', 'wss://socket.example.test'],
+        secrets: [{ key: 'key', label: 'Socket key', inject: {
+          header: 'Authorization', format: 'Bearer {value}', hosts: ['wss://socket.example.test'],
+        } }] } }),
+      readSecret: () => 'synthetic-key',
+      fetchImpl: async () => { if (++count === 3) started(); return response; },
+      ...overrides,
+    });
+    const pending = Array.from({ length: 3 }, () => h.slot.handleFetchRequest('web-search', { url: BRAVE_URL }));
+    await allStarted;
+    return { slot: h.slot, async close() {
+      finish(fakeResponse());
+      await Promise.all(pending);
+      await h.slot.disposeAll();
+    } };
+  }
+
+  it('reserves the shared fourth slot before parallel WS credential awaits', async () => {
+    const open = vi.spyOn(HostNetworkConnections.prototype, 'openWebSocket').mockResolvedValue('opaque');
+    const h = await holdThreeHttp();
+    try {
+      const results = await Promise.all(Array.from({ length: 4 }, () => h.slot.handleNetworkRequest('web-search', {
+        op: 'open', url: 'wss://socket.example.test/events',
+      })));
+      expect(results.filter(result => result.ok)).toHaveLength(1);
+      expect(results.filter(result => !result.ok)).toHaveLength(3);
+      expect(open).toHaveBeenCalledOnce();
+    } finally { open.mockRestore(); await h.close(); }
+    expect(h.slot.hasInFlightRequests('web-search')).toBe(false);
+  });
+
+  it.each(['missing', 'credential-revoked', 'plugin-cancelled', 'owner-cancelled', 'handshake-failed'] as const)(
+    'releases the WS reservation after %s so a fresh request fits', async failure => {
+      let epoch = 0;
+      let missing = failure === 'missing';
+      const openWebSocket = HostNetworkConnections.prototype.openWebSocket;
+      const open = vi.spyOn(HostNetworkConnections.prototype, 'openWebSocket').mockResolvedValue('opaque');
+      if (failure === 'handshake-failed') open.mockImplementationOnce(function (this: HostNetworkConnections, owner, input) {
+        return openWebSocket.call(this, owner, { ...input, agent: async () => { throw new Error('NETWORK_WEBSOCKET_FAILED'); } });
+      });
+      const h = await holdThreeHttp({ readSecret: () => GHOST_SAVED_CREDENTIAL_MARKER,
+        resolveSavedCredential: () => {
+          const captured = epoch;
+          return missing ? null : { value: 'synthetic-key', assertCurrent: () => {
+            if (captured !== epoch) throw new Error('CREDENTIAL_REFERENCE_CHANGED');
+          } };
+        },
+      });
+      try {
+        const pending = h.slot.handleNetworkRequest('web-search', { op: 'open', url: 'wss://socket.example.test/events' });
+        if (failure === 'credential-revoked') epoch++;
+        if (failure === 'plugin-cancelled') h.slot.disposeGhost('web-search');
+        if (failure === 'owner-cancelled') await h.slot.disposeAll();
+        expect(await pending).toMatchObject({ ok: false });
+        expect(open).toHaveBeenCalledTimes(failure === 'handshake-failed' ? 1 : 0);
+        missing = false;
+        expect(await h.slot.handleNetworkRequest('web-search', { op: 'open', url: 'wss://socket.example.test/events' }))
+          .toMatchObject({ ok: true, connectionId: 'opaque' });
+      } finally { open.mockRestore(); await h.close(); }
+      expect(h.slot.hasInFlightRequests('web-search')).toBe(false);
+    },
+  );
+
   it('returns headers before EOF, reads UTF-8 incrementally, and retains cursors', async () => {
     let source!: ReadableStreamDefaultController<Uint8Array>;
     const body = new ReadableStream<Uint8Array>({ start(controller) { source = controller; } });

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { GhostManifest } from '../../../shared/ghost.js';
 import { GhostConnectionManager } from '../ghostConnections.js';
 import { GhostSavedCredentialManager } from '../ghostSavedCredentials.js';
+import { handleGhostSecretsRequest } from '../runtime/ghostSecretsEndpoint.js';
+import { GHOST_SAVED_CREDENTIAL_MARKER } from '../../../shared/pluginAccountReuse.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 
 const createReuseIpc = createGhostProductionCallbacks<{
@@ -45,6 +47,53 @@ function setup() {
 }
 
 describe('saved credential references', () => {
+  // #10130 / 4547237926 + 4547298763, unit: manager-only disconnect
+  // coverage missed ordinary /secrets replacement/deletion followed by marker replay.
+  it.each(['PUT', 'POST', 'DELETE'])('clears delegated access on ordinary %s and rejects marker replay', async method => {
+    const h = setup();
+    expect(await h.manager.reuse('target', 'token', h.ref)).toEqual({ ok: true });
+    const delegated = h.manager.resolve('target', 'token');
+    const request = (method: string, value?: string) => handleGhostSecretsRequest({
+      method, pathname: '/secrets/token', ghostId: 'target', userSecretKeys: ['token'],
+      readBodyText: async () => JSON.stringify({ value }),
+      vault: { ...h.vault, saved: (id, key) => h.vault.read(id, key) !== null, tail: () => null },
+    });
+    expect(await request(method, 'replacement-key')).toEqual({ status: 204 });
+    expect([...h.data].filter(([key]) => key.startsWith('target\0')).map(([, value]) => value))
+      .toEqual(method === 'DELETE' ? [] : ['replacement-key']);
+    expect(() => delegated?.assertCurrent()).toThrow('CREDENTIAL_REFERENCE_CHANGED');
+    for (const write of ['PUT', 'POST']) {
+      expect(await request(write, `  ${GHOST_SAVED_CREDENTIAL_MARKER}  `)).toEqual({ status: 400 });
+    }
+    expect(h.manager.resolve('target', 'token')).toBeNull();
+    expect(h.manager.list('target', 'token').accounts).toEqual([]);
+    expect(h.vault.read('target', 'token')).toBe(method === 'DELETE' ? null : 'replacement-key');
+    expect(h.vault.read('source', 'token')).toBe('private-source-token');
+  });
+
+  it('preserves delegated access if ordinary storage fails and leaves existing secret reads unchanged', async () => {
+    const h = setup();
+    expect(await h.manager.reuse('target', 'token', h.ref)).toEqual({ ok: true });
+    const vault = { ...h.vault, saved: (id: string, key: string) => h.vault.read(id, key) !== null,
+      tail: () => null, store: vi.fn(() => false) };
+    expect(await handleGhostSecretsRequest({ method: 'PUT', pathname: '/secrets/token',
+      ghostId: 'target', userSecretKeys: ['token'], readBodyText: async () => '{"value":"replacement"}', vault,
+    })).toEqual({ status: 500 });
+    expect(h.manager.resolve('target', 'token')?.value).toBe('private-source-token');
+    for (const value of ['legacy-ordinary-key', GHOST_SAVED_CREDENTIAL_MARKER]) {
+      h.vault.store('legacy', 'token', value);
+      const result = await handleGhostSecretsRequest({ method: 'GET', pathname: '/secrets',
+        ghostId: 'legacy', userSecretKeys: ['token'], readBodyText: vi.fn(), vault,
+      });
+      expect(result).toEqual({ status: 200, body: '[{"key":"token","saved":true}]' });
+      expect(await handleGhostSecretsRequest({ method: 'PUT', pathname: '/secrets/token',
+        ghostId: 'legacy', userSecretKeys: ['token'],
+        readBodyText: async () => JSON.stringify({ value: GHOST_SAVED_CREDENTIAL_MARKER }), vault,
+      })).toEqual({ status: 400 });
+      expect(h.vault.read('legacy', 'token')).toBe(value);
+    }
+  });
+
   it('allows only the trusted UI to bind an exact saved reference through production IPC', async () => {
     const h = setup();
     const ghost = { enabled: true, approval: { state: 'approved' }, manifest: h.target.manifest };

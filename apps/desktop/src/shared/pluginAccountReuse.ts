@@ -25,6 +25,8 @@ export interface GhostReusableSavedCredential extends GhostSavedCredentialRefere
 /** A marker alone grants nothing: only the Host can write the companion reference. */
 export const GHOST_SAVED_CREDENTIAL_MARKER = 'cindy:host-injected-saved-credential:v1';
 
+export const ghostSavedCredentialReferenceKey = (key: string) => `${key}-reused-credential`;
+
 export function isReusableSavedSecret(secret: { source?: string }): boolean {
   return secret.source === undefined || secret.source === 'user';
 }
