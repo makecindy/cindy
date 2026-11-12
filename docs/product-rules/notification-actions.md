@@ -96,9 +96,6 @@ Cindy 在后台执行。Android 的通知由 App 自己的接收器绘制，本�
 
 ## 尚未覆盖
 
-- 插件批准的身份核对待确认修复：当前仅校验工具与参数后缀，未绑定首行显示的插件身份。
-  相同工具参数的另一插件可能被误放行；评审见 [#10113](https://github.com/makecindy/cindy/pull/10113#discussion_r4546696008)。
-  建议把插件 ID 纳入可校验的完整操作正文，待用户确认通知文案变化后实施；此项未解决前不能视为可合并。
 - 自建中转没有手机推送，自然没有按钮。
 - Apple Watch 上提问通知只有「回复」和「打开任务」，没有选项按钮（手表不运行提问卡片的扩展）。
 - 提问卡片未在真机和真实推送下验证。
@@ -107,7 +104,7 @@ Cindy 在后台执行。Android 的通知由 App 自己的接收器绘制，本�
 - 真机上的后台时长、冷启动耗时、Apple Watch 的按钮呈现与 APNs 送达都需要签名安装包验证，单元测试不能代替。
 
 实现：电脑端 `apps/desktop/src/main/device-link/mobileNotify.ts`（`buildPermissionAlert`）、
-`maker-ipc/register.ts`（`pendingPermissionRequestForAlert`）；手机端 `apps/mobile/src/notifications/`
+`maker-ipc/register.ts`（`pendingRequestForAlert`）；手机端 `apps/mobile/src/notifications/`
 （`notificationActions.ts`、`notificationActionRunner.ts`、`lockedLaunchGate.ts`）、
 `plugins/notification-content/`（提问卡片）、
 `src/device-link/backgroundConnection.ts`（`hold`）、`modules/cindy-background-work`。
