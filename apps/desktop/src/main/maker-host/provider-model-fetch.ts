@@ -285,7 +285,8 @@ function networkErrorCode(err: unknown): string {
 }
 
 /** Count decoded stream bytes before buffering/parsing, including missing or false length headers. */
-async function readLimitedBody(res: Response, limit: number): Promise<string> {
+async function readLimitedBody(res: Response, limit: number, budget?: { remaining: number }): Promise<string> {
+  limit = Math.min(limit, budget?.remaining ?? Infinity);
   if (Number(res.headers.get('content-length')) > limit) {
     await res.body?.cancel().catch(() => undefined);
     throw new Error('models response exceeds byte limit');
@@ -299,6 +300,7 @@ async function readLimitedBody(res: Response, limit: number): Promise<string> {
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
+      if (budget) budget.remaining -= value.byteLength;
       if (total > limit) throw new Error('models response exceeds byte limit');
       chunks.push(value);
     }
@@ -352,6 +354,9 @@ async function fetchProviderModelsRequest(
   spec: ProviderModelsFetchSpec, fetchImpl: typeof fetch, request: ReturnType<typeof buildModelsFetchRequest>,
 ): Promise<ProviderModelsFetchResult> {
   const responseByteLimit = spec.responseByteLimit ?? (spec.requireComplete ? 8 * 1024 * 1024 : undefined);
+  // Strict recovery shares one decoded-byte allowance across the whole catalog,
+  // including auxiliary lists. Ordinary imports retain their per-page policy.
+  const budget = spec.requireComplete ? { remaining: responseByteLimit! } : undefined;
   const { url, init } = request;
   let retryAt: number | undefined;
   const captureRetryAfter = (response: Response) => {
@@ -383,7 +388,7 @@ async function fetchProviderModelsRequest(
     try {
       bodyText = responseByteLimit === undefined
         ? (await res.text()).slice(0, MAX_ERROR_BODY_BYTES)
-        : await readLimitedBody(res, Math.min(responseByteLimit, MAX_ERROR_BODY_BYTES));
+        : await readLimitedBody(res, Math.min(responseByteLimit, MAX_ERROR_BODY_BYTES), budget);
     } catch {
       /* 读体失败按空体分类 */
     }
@@ -394,7 +399,7 @@ async function fetchProviderModelsRequest(
   try {
     json = responseByteLimit === undefined
       ? await res.json()
-      : JSON.parse(await readLimitedBody(res, responseByteLimit));
+      : JSON.parse(await readLimitedBody(res, responseByteLimit, budget));
   } catch {
     return {
       ok: false,
@@ -406,9 +411,10 @@ async function fetchProviderModelsRequest(
   const pageDeadline = Date.now() + 30_000;
   const models = await collectModelDiscoveryPages(json, url, async nextUrl => {
     if (Date.now() >= pageDeadline) throw new Error('catalog deadline exceeded');
+    if (budget && budget.remaining <= 0) throw new Error('catalog byte budget exhausted');
     const page = await fetchImpl(nextUrl, { ...init, redirect: 'error', signal: AbortSignal.timeout(Math.max(1, Math.min(FETCH_TIMEOUT_MS, pageDeadline - Date.now()))) });
     if (!page.ok) { captureRetryAfter(page); await page.body?.cancel(); throw new Error('catalog page failed'); }
-    return JSON.parse(await readLimitedBody(page, responseByteLimit ?? 8 * 1024 * 1024));
+    return JSON.parse(await readLimitedBody(page, responseByteLimit ?? 8 * 1024 * 1024, budget));
   }, { requireComplete: spec.requireComplete });
   // These exact OpenAI-compatible catalog views can legitimately be empty. Keep
   // that success distinct in every consumer (wizard, edit and saved refresh),

@@ -60,6 +60,7 @@ function declaredReasoningEfforts(value: unknown, key: "effort" | "value") {
 export function parseModelsListResponse(
   json: unknown,
   sourceUrl?: string,
+  options: { requireValidEntries?: boolean } = {},
 ): DiscoveredModel[] | null {
   // OpenHubs can return HTTP 200 with a business error and an empty data array.
   // Such a failure must never clear the wizard's offline recommendations.
@@ -110,7 +111,19 @@ export function parseModelsListResponse(
                     ? (item as { model_id: string }).model_id
                     : google ? google.name.slice('models/'.length) : null
           : null;
-    if (!id || seen.has(id)) continue;
+    if (!id || !id.trim()) {
+      // Google explicitly lists non-chat models too; these are intentional
+      // exclusions, unlike malformed members silently dropped by best-effort import.
+      const filteredGoogle = id === null && item && typeof item === 'object'
+        && typeof (item as { name?: unknown }).name === 'string'
+        && /^models\/\S+/.test((item as { name: string }).name)
+        && Array.isArray(generationMethods) && generationMethods.length > 0
+        && generationMethods.every(method => typeof method === 'string' && method.length > 0)
+        && !generationMethods.includes('generateContent');
+      if (options.requireValidEntries && !filteredGoogle) return null;
+      if (!id) continue;
+    }
+    if (seen.has(id)) continue;
     seen.add(id);
     const rec =
       item && typeof item === "object"

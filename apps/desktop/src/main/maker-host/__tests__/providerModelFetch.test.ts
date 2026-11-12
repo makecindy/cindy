@@ -52,6 +52,33 @@ it.each(['https://api.individual.githubcopilot.com.evil.test', 'https://custom.e
 });
 
 describe('import discovery limits', () => {
+  // #9882, unit: real fetch + streamed pages. Per-page limits previously allowed
+  // arbitrarily large aggregate traffic up to the page-count cap. Small injected
+  // limits exercise exact exhaustion, multi-byte accounting and stream cancel.
+  it.each(['exhausted', 'overflow', 'within'] as const)('enforces aggregate recovery bytes: %s', async scenario => {
+    const first = JSON.stringify({ data: ['一'], next: '?page=2' });
+    const second = JSON.stringify({ data: ['二'] });
+    const bytes = Buffer.byteLength(first) + Buffer.byteLength(second);
+    const limit = scenario === 'exhausted' ? Buffer.byteLength(first) : scenario === 'overflow' ? bytes - 1 : bytes;
+    const cancel = vi.fn();
+    const fetcher = vi.fn(async () => {
+      if (fetcher.mock.calls.length === 1) return fakeResponse(200, first);
+      if (scenario !== 'overflow') return fakeResponse(200, second);
+      let sent = false;
+      return new Response(new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (sent) controller.close();
+          else { sent = true; controller.enqueue(new TextEncoder().encode(second)); }
+        }, cancel,
+      }, { highWaterMark: 0 }), { headers: { 'content-length': '1' } });
+    });
+    const result = await fetchProviderModels(spec({ requireComplete: true, allowEmpty: true, responseByteLimit: limit }), fetcher);
+    expect(result.ok).toBe(scenario === 'within');
+    expect(fetcher).toHaveBeenCalledTimes(scenario === 'exhausted' ? 1 : 2);
+    if (scenario === 'overflow') expect(cancel).toHaveBeenCalledOnce();
+    if (scenario === 'within') expect(result.models?.map(model => model.id)).toEqual(['一', '二']);
+  });
+
   // #9882, unit: real fetch entry shares identical background requests across
   // agents, but effective headers and ownership scopes still isolate credentials.
   it.each(['same', 'headers', 'scope'] as const)('shares background discovery with %s context', async difference => {

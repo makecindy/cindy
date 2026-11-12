@@ -297,7 +297,7 @@ describe('provider catalog realm reload', () => {
   // prior restart coverage only used a complete single-page response.
   // Latest review adds HTTP-200 business errors and unbounded first-page reads
   // to the same unit recovery/CAS preservation contract.
-  it.each(['later-page', 'business-error', 'oversized'] as const)('preserves saved Magpie sources on %s failure', async failure => {
+  it.each(['later-page', 'business-error', 'oversized', 'malformed-members', 'ambiguous-continuation'] as const)('preserves saved Magpie sources on %s failure', async failure => {
     const saved: CustomProviderConfig = { id: `magpie-partial-${failure}`, name: 'Magpie', auth: { method: 'none' }, runtimes: { pi: {
       baseUrl: 'http://127.0.0.1:3425/v1', modelsUrl: 'http://127.0.0.1:3425/v1/models', wireProtocol: 'openai-chat', models: [{
         id: 'b/foo', name: 'My model', discoveredSource: { kind: 'magpie', providerId: 'Saved', snapshotId: 'old:receipt' },
@@ -309,6 +309,8 @@ describe('provider catalog realm reload', () => {
     const cancel = vi.fn();
     h.outboundFetch.mockClear().mockImplementation(async url => {
       if (failure === 'business-error') return new Response(JSON.stringify({ error: 'unavailable', data: [] }));
+      if (failure === 'malformed-members') return new Response(JSON.stringify({ data: [{}] }));
+      if (failure === 'ambiguous-continuation') return new Response(JSON.stringify({ data: ['a/foo'], has_more: 1, last_id: 'a/foo' }));
       if (failure === 'oversized') return new Response(new ReadableStream<Uint8Array>({
         start(controller) { controller.enqueue(new Uint8Array(8 * 1024 * 1024 + 1)); }, cancel,
       }));

@@ -38,12 +38,14 @@ export async function collectModelDiscoveryPages(
   for (let count = 0; count < 100; count++) {
     // A successful HTTP status does not prove a complete, authoritative catalog.
     if (options.requireComplete && isBusinessError(page)) return null;
-    const parsed = parseModelsListResponse(page, endpoint);
+    const parsed = parseModelsListResponse(page, endpoint, { requireValidEntries: options.requireComplete });
     if (!parsed) return !options.requireComplete && models.size ? [...models.values()] : null;
     append(parsed);
     if (models.size >= 10_000) return options.requireComplete ? null : [...models.values()];
     if (!page || typeof page !== 'object' || Array.isArray(page)) { complete = true; break; }
     const data = page as Record<string, unknown>;
+    // Non-boolean continuation flags cannot establish an authoritative end.
+    if (options.requireComplete && data.has_more != null && typeof data.has_more !== 'boolean') return null;
     const next = new URL(current);
     const token = data.nextPageToken ?? data.next_page_token;
     const cursor = data.next_cursor;
@@ -78,7 +80,7 @@ export async function collectModelDiscoveryPages(
     try {
       const page = await fetchPage(speech.toString());
       if (options.requireComplete && isBusinessError(page)) return null;
-      const parsed = parseModelsListResponse(page, speech.toString());
+      const parsed = parseModelsListResponse(page, speech.toString(), { requireValidEntries: options.requireComplete });
       if (!parsed && options.requireComplete) return null;
       append((parsed ?? []).filter(model => model.discoveredMetadata?.mode === 'audio_speech'));
     } catch {
