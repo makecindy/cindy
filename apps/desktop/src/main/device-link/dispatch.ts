@@ -1188,17 +1188,7 @@ function projectInvokeResultForTunnel(
     rest.routing = projectRoutingForDisplay(p.routing);
     return rest;
   });
-  // A pool's remote switch does not imply the same per-model grant. Compare the
-  // projected, authorized models before hiding any individually offered source.
-  const pool = providers.find(provider => provider.id === 'openai' && provider.remoteInvocationEnabled === true);
-  const poolModels = pool ? remoteInvocationModels(pool as unknown as ProviderView).models : undefined;
-  for (const provider of providers) {
-    if (!provider.subscriptionPoolAlias) continue;
-    const models = remoteInvocationModels(provider as unknown as ProviderView).models;
-    const covered = poolModels && Object.entries(models ?? {}).every(([agent, rows]) =>
-      (rows ?? []).every(model => poolModels[agent as keyof typeof poolModels]?.some(candidate => candidate.id === model.id)));
-    if (!covered) delete provider.subscriptionPoolAlias;
-  }
+  foldSubscriptionPoolAliases(providers);
   // New hosts advertise the optional directory budget. Consumers deduct their
   // own read time once; an existing shorter upstream remainder wins. Older
   // controllers ignore this additive field.
@@ -1209,6 +1199,23 @@ function projectInvokeResultForTunnel(
     ...(Array.isArray(r.providerOrder) ? { providerOrder: normalizeProviderOrder(r.providerOrder) } : {}),
     providerContinuity: continuity ?? { stale: false, remainingMs: PROVIDER_METADATA_TRUST_MS },
   };
+}
+
+/**
+ * A pool's remote switch does not imply the same per-model grant. Compare the
+ * projected, authorized models before hiding any individually offered source.
+ * Mutates the projected entries in place.
+ */
+function foldSubscriptionPoolAliases(providers: Record<string, unknown>[]): void {
+  const pool = providers.find(provider => provider.id === 'openai' && provider.remoteInvocationEnabled === true);
+  const poolModels = pool ? remoteInvocationModels(pool as unknown as ProviderView).models : undefined;
+  for (const provider of providers) {
+    if (!provider.subscriptionPoolAlias) continue;
+    const models = remoteInvocationModels(provider as unknown as ProviderView).models;
+    const covered = poolModels && Object.entries(models ?? {}).every(([agent, rows]) =>
+      (rows ?? []).every(model => poolModels[agent as keyof typeof poolModels]?.some(candidate => candidate.id === model.id)));
+    if (!covered) delete provider.subscriptionPoolAlias;
+  }
 }
 
 /** 持有 client 的引用(转发 push 用);wireInboundDispatch 接入时设置。 */
@@ -4831,6 +4838,29 @@ function restoreGroupedOwnComputerModelUse(original: unknown, decorated: unknown
 }
 
 /**
+ * 账号池折叠旧 Codex 连接(subscriptionPoolAlias)要按最终的「可远程调用」判断：目录投影按原标记先折过一次，
+ * 新开关或逐台撤权改了标记后，从投影前的目录取回别名再折一次。否则账号池随新开关可用时，旧连接仍单独出现，
+ * 选择器出现重复入口，菜单栏还会为已在池里的账号多读一次配额。
+ */
+function refoldOwnComputerPoolAliases(source: unknown, final: unknown): unknown {
+  const aliases = new Map<string, unknown>();
+  mapProviderEntries(source, (entry) => {
+    if (typeof entry.id === 'string' && entry.subscriptionPoolAlias) aliases.set(entry.id, entry.subscriptionPoolAlias);
+    return entry;
+  });
+  if (aliases.size === 0) return final;
+  const restored = mapProviderEntries(final, (entry) => typeof entry.id === 'string' && aliases.has(entry.id)
+    ? { ...entry, subscriptionPoolAlias: aliases.get(entry.id) }
+    : entry);
+  const providers = (restored as { providers?: unknown }).providers;
+  if (Array.isArray(providers)) {
+    foldSubscriptionPoolAliases(providers.filter((entry): entry is Record<string, unknown> =>
+      !!entry && typeof entry === 'object' && !Array.isArray(entry)));
+  }
+  return restored;
+}
+
+/**
  * 同账号电脑的「用本机模型」被关掉：结束它在本机的远程 Agent 任务，并通知它重读目录。
  * 只匹配同账号控制端，分享来的受邀者另有撤权路径。
  */
@@ -5323,9 +5353,11 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     // 远程 set-* 回流:被控端 set-* runtime-only,补一次 DB 持久化 + 广播 patched,让控制端
     // 镜像收敛到被控端真相(取代控制端乐观覆盖)。本机会话不走这条(走 renderer update)。
     await timing.measure('persist', () => persistRemoteSetting(payload.channel, payload.args ?? [], result));
+    // 投影前的目录留给同账号目录在最终授权后重新折叠账号池别名。
+    let sessionProjected: unknown;
     const projected = await timing.measure('project', async () => projectInvokeResultForTunnel(
         payload.channel,
-        await projectRemoteSessionResult(payload.channel, result),
+        sessionProjected = await projectRemoteSessionResult(payload.channel, result),
         subscriptions.controllerSupports(
           src,
           CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
@@ -5340,7 +5372,9 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     const grouped = ownList && providerGroupRemoteHandler
       ? await providerGroupRemoteHandler.decorateProviderList(opened)
       : opened;
-    const decorated = ownList && opened !== projected ? restoreGroupedOwnComputerModelUse(projected, grouped) : grouped;
+    const decorated = ownList && opened !== projected
+      ? refoldOwnComputerPoolAliases(sessionProjected, restoreGroupedOwnComputerModelUse(projected, grouped))
+      : grouped;
     if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)) throw new Error('[NOT_FOUND] Session does not exist');
     return { ok: true, result: decorated };
   } catch (err) {
