@@ -166,13 +166,14 @@ function omitMarkdownInternalProps(props: Record<string, unknown>): Record<strin
 
 /**
  * Detect whether a `pre` child element is a `<code className="language-diff">`.
- * Matches both the canonical `language-diff` token and a bare `diff` class
- * for defensive parity.
+ * Matches the canonical `language-diff` / `language-patch` tokens and a bare
+ * `diff` / `patch` class for defensive parity — a ```patch fence is the same
+ * unified diff and renders identically (DESIGN.md §2 diff colours).
  */
 function isDiffCodeChild(child: ReactNode): boolean {
   if (!isValidElement(child)) return false;
   const className = (child.props as { className?: string })?.className ?? '';
-  return /\b(language-)?diff\b/.test(className);
+  return /\b(language-)?(diff|patch)\b/.test(className);
 }
 
 /**
@@ -591,7 +592,7 @@ const baseComponents: Components = {
   // simpler renderer there. See line ~310 for the implementation.
 
   pre({ children, ...props }) {
-    // Intercept ```diff fenced blocks before they fall through to highlight.js
+    // Intercept ```diff / ```patch fenced blocks before they fall through to highlight.js
     // — we render them with our own row/gutter/symbol layout (MarkdownDiffBlock)
     // so the visual matches the Edit-tool DiffView card and the GitHub red/green
     // tokens (`--diff-add-fg` / `--diff-del-fg`) get applied predictably.

@@ -95,6 +95,20 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 describe('ErrorBanner OpenAI connection recovery', () => {
+  // #9855, unit/jsdom: startup details used to hide the only actionable cloud
+  // file hint. Exercise the real ErrorBanner/ErrorNotice before expanding it.
+  it.each(['', 'LAZY_CREATE_FAILED: ', "Error invoking remote method 'send': Error: [IPC_ERROR] LAZY_CREATE_FAILED: "])(
+    'shows the Pi cloud-file recovery hint without expanding details through %s', (prefix) => {
+      const hint = 'Download ~/Desktop/AGENTS.md in Finder; this cloud-only file may delay Pi startup.';
+      const timeout = 'pi rpc timeout after 30000ms: set_thinking_level';
+      render(<ErrorBanner agentKind="pi" error={`${prefix}[PI_STARTUP_CLOUD_CONTEXT_FILE] ${hint}\n${timeout}`} onRetry={vi.fn()} />);
+      expect(screen.getByText(hint)).toBeDefined();
+      expect(screen.queryByText(timeout)).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.networkShowRaw' }));
+      expect(screen.getByText((text) => text.includes(timeout))).toBeDefined();
+    },
+  );
+
   // PR #10049: ordinary OpenAI 401 recovery must unlock the original input only
   // after the existing account probe verifies it, including after remounting.
   it.each([false, true])('restores generic authentication retry after verification (remount=%s)', async remount => {
