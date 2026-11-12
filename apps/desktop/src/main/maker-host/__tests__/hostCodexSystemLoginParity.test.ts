@@ -479,6 +479,36 @@ describe('the Host reconciles with the system Codex login as the installed deskt
     });
   }
 
+  // The shared file rewritten in place (same inode, new content) after the engine captured its
+  // generation: there is no invalidated fingerprint, so the engine's report is recorded as unknown
+  // and the marker suppresses the current file.
+  it('invalidating a shared system login rewritten in place since the spawn', async () => {
+    const results: unknown[] = [];
+    for (const side of ['desktop', 'host'] as const) {
+      const f = fixture({ local: 'symlink', binding: 'shared' });
+      const generation = JSON.stringify(currentCodexCredentialGeneration(f.authPath));
+      const ino = fs.statSync(f.systemAuth).ino;
+      fs.writeFileSync(f.systemAuth, authJson('system-token-1b', 'workspace-a'), { mode: 0o600 });
+      expect(fs.statSync(f.systemAuth).ino).toBe(ino);
+      const current = currentCodexCredentialGeneration(f.systemAuth)!;
+      if (side === 'desktop') await new DesktopCodexAuthAdapter().invalidate('token_revoked', { credentialGeneration: generation });
+      else await hostInvalidation.invalidateHostCodexLogin({ codexHome: f.codexHome, systemAuthPath: f.systemAuth, reason: 'token_revoked',
+        credentialGeneration: generation, hostBound: true, loginInProgress: () => false });
+      const marker = readInvalidatedSystemCodexAuthMarker(f.codexHome);
+      const shape = marker && { scope: marker.credentialScope ?? null, recoveryOwner: Boolean(marker.recoveryOwnerId), keys: Object.keys(marker).sort(),
+        suppresses: marker.localSha256 === current.sha256 ? 'current' : 'other' };
+      const read = async () => outcome(f, side === 'desktop'
+        ? await new DesktopCodexAuthAdapter().getState({ credentialMode: 'oauth-bearer' })
+        : await createHostAuth(f.codexHome, f.systemAuth).getState({ credentialMode: 'oauth-bearer' }));
+      const after = await read();
+      f.systemRelogin();
+      const relogged = await read();
+      results.push({ shape, after: { ...after, systemUntouched: undefined }, relogged: { ...relogged, systemUntouched: undefined } });
+    }
+    expect(results[1]).toEqual(results[0]);
+    expect(results[0]).toMatchObject({ shape: { scope: 'unknown', recoveryOwner: false, suppresses: 'current' } });
+  });
+
   // relinkSharedCodexAuth's failure results. On POSIX the swap is a single rename that never
   // removes the target first, so "recovered" and "lost" (myAuth gone after a failed swap) only
   // occur on Windows; the Host is not released on Windows in M1.

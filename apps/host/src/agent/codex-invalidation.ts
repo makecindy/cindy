@@ -9,7 +9,7 @@ import {
   writeInvalidatedSystemCodexAuthMarker,
   writeUnprovenCodexAuthSuppressionMarker,
 } from '../../../desktop/src/main/maker-host/codex-auth-invalidation.js';
-import { currentCodexCredentialGeneration } from '../../../desktop/src/main/maker-host/codexCredentialRead.js';
+import { currentCodexCredentialGeneration, parseCodexCredentialGeneration } from '../../../desktop/src/main/maker-host/codexCredentialRead.js';
 import { isNativeProviderAuthBound, isNativeProviderAuthRevoked, unbindNativeProviderAuth } from '../../../desktop/src/main/maker-host/nativeProviderAuthBinding.js';
 import { getActiveAppSession } from '../../../desktop/src/main/appSessionState.js';
 import { detectHostCodexCredentialScope } from './codex-system-login.js';
@@ -35,6 +35,11 @@ const sameToken = (a: string, b: string) => {
 };
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+/** Whether a login of the native connection is in progress; an unreadable answer counts as one. */
+const loginWindowOpen = (input: { loginInProgress?: () => boolean }) => {
+  try { return input.loginInProgress?.() ?? false; } catch { return true; }
+};
 
 /**
  * The invalidation the profile's marker still reports, as the desktop restores it on
@@ -99,25 +104,35 @@ export async function invalidateHostCodexLogin(input: {
     try { token = JSON.parse(fs.readFileSync(authPath, 'utf8')).tokens?.access_token; } catch { token = undefined; }
     if (typeof token !== 'string' || !sameToken(token, input.failedAccessToken)) return 'stale';
   }
-  if (input.credentialGeneration) {
-    let sha256: unknown;
-    try { sha256 = JSON.parse(input.credentialGeneration).sha256; } catch { sha256 = undefined; }
-    if (sha256 !== current.sha256) return 'stale';
+  // As the desktop (auth-adapters.ts invalidate): the generation the engine captured is compared
+  // with the current file. A changed file identity proves an outside atomic replacement, and a
+  // login in progress (the desktop's open login cancellation window) is still finalizing the
+  // replacement it selected; either way the current credential is left alone.
+  const captured = parseCodexCredentialGeneration(input.credentialGeneration);
+  const contentChanged = Boolean(captured && captured.sha256 !== current.sha256);
+  const identityChanged = Boolean(contentChanged && captured && captured.ino !== '0' && current.ino !== '0'
+    && (captured.dev !== current.dev || captured.ino !== current.ino));
+  if (contentChanged && (identityChanged || loginWindowOpen(input))) {
+    log.info('ignoring stale Codex invalidation from an older credential generation', { reason: input.reason });
+    return 'stale';
   }
   log.warn('codex auth invalidated', { reason: input.reason });
-  // As the desktop (auth-adapters.ts invalidate): the scope the credential has, and for a
-  // shared system login the owner a renewed system login is restored to.
+  // As the desktop: a rewrite in place (or a file without identity) is ambiguous, so the marker
+  // carries no invalidated fingerprint and suppresses the current file without attributing the
+  // rejected credential to it. Without a captured generation there is no fingerprint either.
+  const invalidatedFingerprint = contentChanged || !captured ? null
+    : { dev: Number(captured.dev), ino: Number(captured.ino), size: captured.size, mtimeMs: captured.mtimeMs, sha256: captured.sha256 };
+  // As the desktop: the scope the credential has, and for a shared system login the owner a
+  // renewed system login is restored to. An engine-reported invalidation of a shared system
+  // login without an invalidated fingerprint cannot prove which file failed (the user may have
+  // logged in again in between), so it is recorded as unknown.
   const detectedScope = detectHostCodexCredentialScope(input.codexHome, input.systemAuthPath ?? null);
-  // As the desktop: an engine-reported invalidation of a shared system login without the spawn's
-  // credential generation cannot prove which file failed (the user may have logged in again in
-  // between), so it is recorded as unknown, without the invalidated fingerprint.
-  const ambiguousShared = input.hostBound === true && detectedScope === 'system-shared' && !input.credentialGeneration;
-  const markerScope: CredentialScope = ambiguousShared ? 'unknown' : detectedScope;
+  const markerScope: CredentialScope = input.hostBound === true && detectedScope === 'system-shared' && !invalidatedFingerprint
+    ? 'unknown' : detectedScope;
   const activeOwnerId = getActiveAppSession().dataOwnerId;
   const recoveryOwnerId = markerScope === 'system-shared' && activeOwnerId && isNativeProviderAuthBound('openai') ? activeOwnerId : undefined;
   const committed = writeInvalidatedSystemCodexAuthMarker(input.codexHome, markerSystemPath(input.codexHome, input.systemAuthPath),
-    input.reason, authPath, markerScope, recoveryOwnerId, ambiguousShared ? undefined
-      : { dev: Number(current.dev), ino: Number(current.ino), size: current.size, mtimeMs: current.mtimeMs, sha256: current.sha256 });
+    input.reason, authPath, markerScope, recoveryOwnerId, invalidatedFingerprint ?? undefined);
   let credentialScope: CredentialScope = markerScope;
   let fallbackCommitted = false;
   if (!committed) {

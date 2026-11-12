@@ -52,7 +52,7 @@ vi.mock('../../appSessionState.js', async (importOriginal) => {
 type HostInvalidation = {
   invalidateHostCodexLogin(input: {
     codexHome: string; reason: string; failedAccessToken?: string; credentialGeneration?: string | null;
-    credentialAttribution?: 'unproven'; loginInProgress?: () => boolean;
+    credentialAttribution?: 'unproven'; loginInProgress?: () => boolean; hostBound?: boolean;
     onInvalidated?: (credentialScope: string) => void;
   }): Promise<string>;
 };
@@ -227,5 +227,101 @@ describe('Host and desktop invalidate the profile login the same way', () => {
     await expect(finishSuccessfulCodexLogin()).resolves.toMatchObject({ authenticated: true });
     await expect(createHostCodexAuth(p.codexHome).getState({ providerId: 'openai' }))
       .resolves.toMatchObject({ authenticated: true, authSource: 'oauth' });
+  });
+});
+
+/**
+ * The desktop's checks on the generation the engine captured (auth-adapters.ts invalidate):
+ * a different file identity is an outside atomic replacement and an open login cancellation
+ * window a login still finalizing its replacement, so the current file is left alone; a rewrite
+ * in place is ambiguous and suppresses the current file without the rejected fingerprint. The
+ * Host's counterpart of the open window is a login of the native connection in progress
+ * (loginInProgress, the account service's isCodexAccountLoginActive).
+ */
+describe('a failure reported for a generation the profile login no longer has', () => {
+  const token2 = () => JSON.stringify({ account: { email: 'fixture@example.test' }, tokens: { access_token: 'fixture-token-2', account_id: 'fixture-workspace' } });
+  const changes = {
+    /** The same file rewritten (a refresh written in place): same inode, new content. */
+    inPlace(p: ReturnType<typeof profile>) {
+      const before = fs.statSync(p.authPath).ino;
+      p.write('fixture-token-2');
+      expect(fs.statSync(p.authPath).ino).toBe(before);
+    },
+    /** A new file renamed over it (another login): new inode, new content. */
+    replaced(p: ReturnType<typeof profile>) {
+      const before = fs.statSync(p.authPath).ino;
+      const next = `${p.authPath}.next`;
+      fs.writeFileSync(next, token2(), { mode: 0o600 });
+      fs.renameSync(next, p.authPath);
+      expect(fs.statSync(p.authPath).ino).not.toBe(before);
+    },
+  };
+
+  /** Runs the scenario once per side, each on its own profile, and compares what each leaves. */
+  async function bothSides(change: keyof typeof changes, loginOpen: boolean) {
+    const sides: Record<string, unknown> = {};
+    const hostResults: string[] = [];
+    for (const side of ['desktop', 'host'] as const) {
+      const p = profile();
+      const adapter = new DesktopCodexAuthAdapter();
+      if (side === 'desktop') await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({ authenticated: true });
+      const generation = JSON.stringify(currentCodexCredentialGeneration(p.authPath));
+      changes[change](p);
+      const current = currentCodexCredentialGeneration(p.authPath)!;
+      const announced: string[] = [];
+      if (side === 'desktop') {
+        adapter.setOnInvalidatedBroadcast((_reason, scope) => { announced.push(scope); });
+        if (loginOpen) (adapter as unknown as { loginCancellationOpen: boolean }).loginCancellationOpen = true;
+        await adapter.invalidate('token_revoked', { credentialGeneration: generation });
+      } else {
+        hostResults.push(await host.invalidateHostCodexLogin({
+          codexHome: p.codexHome, reason: 'token_revoked', credentialGeneration: generation, hostBound: true,
+          loginInProgress: () => loginOpen, onInvalidated: scope => announced.push(scope),
+        }));
+      }
+      const marker = readInvalidatedSystemCodexAuthMarker(p.codexHome);
+      sides[side] = {
+        view: await desktopView(p), announced,
+        // The marker's own record of the credential it suppresses.
+        suppresses: marker ? (marker.localSha256 === current.sha256 ? 'current' : 'other') : null,
+        token: fs.existsSync(p.authPath) ? JSON.parse(fs.readFileSync(p.authPath, 'utf8')).tokens.access_token : null,
+      };
+    }
+    expect(sides.host).toEqual(sides.desktop);
+    return { outcome: sides.desktop, hostResult: hostResults[0] };
+  }
+
+  const untouched = {
+    view: {
+      oauthBearer: { authenticated: true, credentialScope: 'instance-isolated' },
+      marker: null, authFile: true, modelsCache: true, bound: true, revoked: false,
+    },
+    announced: [], suppresses: null, token: 'fixture-token-2',
+  };
+
+  it('a rewrite in place: a marker without the rejected fingerprint suppresses the current file', async () => {
+    const { outcome, hostResult } = await bothSides('inPlace', false);
+    expect(hostResult).toBe('invalidated');
+    expect(outcome).toMatchObject({
+      view: {
+        oauthBearer: { authenticated: false, errorReason: 'token_revoked', credentialScope: 'instance-isolated' },
+        accessToken: null,
+        marker: { reason: 'token_revoked', credentialScope: 'instance-isolated', system: [0, 0, 0, 0] },
+        authFile: false, modelsCache: false, bound: false, revoked: false,
+      },
+      announced: ['instance-isolated'], suppresses: 'current', token: null,
+    });
+  });
+
+  it('a replacement with a new inode is an older generation: nothing changes', async () => {
+    const { outcome, hostResult } = await bothSides('replaced', false);
+    expect(hostResult).toBe('stale');
+    expect(outcome).toMatchObject(untouched);
+  });
+
+  it('a rewrite in place while a login is in progress: nothing changes', async () => {
+    const { outcome, hostResult } = await bothSides('inPlace', true);
+    expect(hostResult).toBe('stale');
+    expect(outcome).toMatchObject(untouched);
   });
 });
