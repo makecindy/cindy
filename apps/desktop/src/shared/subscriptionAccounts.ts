@@ -125,10 +125,12 @@ export interface SubscriptionSessionAccount {
   usage?: SubscriptionAccountUsage;
   /**
    * Only for a `model` query on a newer host: the bound account cannot take that model now
-   * (remembered failure, exhausted trusted quota or signed out), so a fresh native session there
-   * moves to another account. Absent means usable or unknown; never set for paused accounts.
+   * (remembered failure, exhausted trusted quota or signed out). Replacement admission is reported
+   * separately by `switchAvailable`. Absent means usable or unknown; never set for paused accounts.
    */
   blocked?: true;
+  /** For a blocked account, whether the executor can actually select another account, including concurrency and route grants. */
+  switchAvailable?: boolean;
 }
 export type SubscriptionSessionAccountView =
   /** No pool, only the CLI default, or a pre-pool task: the provider's original readers apply. */
@@ -177,6 +179,8 @@ export function parseSubscriptionSessionAccountView(
         ? { usage: usage as SubscriptionAccountUsage }
         : {}),
       ...(account.blocked === true && account.paused !== true ? { blocked: true as const } : {}),
+      ...(account.blocked === true && account.paused !== true && typeof account.switchAvailable === 'boolean'
+        ? { switchAvailable: account.switchAvailable } : {}),
     },
   };
 }

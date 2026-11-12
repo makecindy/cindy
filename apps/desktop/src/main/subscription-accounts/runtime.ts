@@ -557,6 +557,7 @@ export async function readSubscriptionPoolModelAvailability(
 export async function readSubscriptionSessionAccount(
   provider: SubscriptionProvider,
   keys: { sessionId?: string; nativeSessionId?: string; model?: string },
+  options: { remote?: boolean } = {},
 ): Promise<SubscriptionSessionAccountView> {
   const state = currentRuntime();
   assertOwner(state);
@@ -601,6 +602,20 @@ export async function readSubscriptionSessionAccount(
   const blocked = keys.model !== undefined && !config.paused
     && !(provider === 'openai' && readLegacyCodexProviderId(config.id))
     && readSubscriptionAccountBlocked(provider, config.id, keys.model);
+  let switchAvailable = false;
+  if (blocked) {
+    try {
+      // Quota alone cannot authorize retiring native history: another account also needs an
+      // actual slot and the grants used by a fresh start. The probe reserves and binds nothing.
+      await acquireSubscriptionAccount(provider, keys.model, [], false, {
+        remote: options.remote === true, exclude: new Set([config.id]), dryRun: true,
+      });
+      switchAvailable = true;
+    } catch {
+      // A full/unreadable replacement keeps the original send path. Owner changes still reject.
+    }
+    assertOwner(state);
+  }
   return {
     providerId: provider,
     state: 'bound',
@@ -618,7 +633,7 @@ export async function readSubscriptionSessionAccount(
             ? 'limited'
             : 'ready',
       ...(info.auth.authenticated ? accountUsage(info.usage) : {}),
-      ...(blocked ? { blocked: true as const } : {}),
+      ...(blocked ? { blocked: true as const, switchAvailable } : {}),
     },
   };
 }
@@ -837,8 +852,9 @@ function taskSubscriptionProvider(row: RemoteTaskAccountRow): SubscriptionProvid
 /**
  * Same-account remote Agent: the executing computer owns the task's account binding, quota and new
  * route grants, so ask it through the existing owner-only reads. One `session` read per send (as
- * before); the pool read only follows when the bound account is paused or blocked. Older hosts
- * never report `blocked`, and a missing/old/failed reply never authorizes retiring native context.
+ * before); a blocked account includes the executor's actual replacement admission in that reply.
+ * The separate quota read remains only for the pre-existing paused-account recovery. Older hosts
+ * never report replacement admission, and a missing/old reply never authorizes retiring context.
  */
 async function readRemoteTaskAccount(
   provider: SubscriptionProvider,
@@ -857,7 +873,8 @@ async function readRemoteTaskAccount(
   if (view?.state !== 'bound') return null;
   const { number, paused } = view.account;
   const blocked = view.account.blocked === true;
-  if ((!paused && !blocked) || !row.model) return { number, paused, blocked, available: false };
+  if (!paused) return { number, paused, blocked, available: blocked && view.account.switchAvailable === true };
+  if (!row.model) return { number, paused, blocked, available: false };
   const availableReply = await invokeRemote(row.agentDeviceId, 'maker:subscription-pool:quota',
     [provider, row.model], { preSend });
   assertOwner(state);

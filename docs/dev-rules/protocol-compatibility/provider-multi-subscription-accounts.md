@@ -81,12 +81,15 @@ OpenAI 池快照增加可选 `nativeAccountPool` 标记，当前控制端让三�
 
 `session` 查询可选追加 `model`（非空字符串，最多 512 字符）。新版执行端在 `bound` 回包的 `account` 上可选追加
 `blocked: true`：绑定账号此刻接不了这个模型（记着该模型的真实失败、可信快照显示耗尽或已退出登录），且不是暂停账号或归并的
-旧独立连接；字段缺省表示可用或未知。新版控制端只在 `blocked: true` 且随后 `maker:subscription-pool:quota` 的
-`[providerId, model]` 精确回 `available: true` 时交接（重开原生会话，由执行端新开会话按池策略选号），否则照常发送；
-撞限后的立即续跑与供应商组的原地换账号用同一组证据。旧执行端忽略 `model`、从不回报 `blocked`，新控制端据此不交接，
+旧独立连接；字段缺省表示可用或未知。`blocked` 回包同时追加可选布尔字段 `switchAvailable`：执行端排除绑定账号后，
+按真实选号入口只读检查另一个账号的认证、模型额度／冷却、并发名额和新路线权限，不预约、不修改绑定；读不到时为 `false`，
+owner 变化仍拒绝。新版控制端只在 `blocked: true` 且 `switchAvailable: true` 时交接（重开原生会话，由执行端新开会话按池策略选号），
+否则照常发送，不为此再读一次池配额。撞限后的立即续跑与供应商组的原地换账号用同一组证据。
+旧执行端忽略 `model`、不回报这两个字段，新控制端据此不交接，
 行为与以前相同；旧控制端不发 `model`，新执行端不回报新字段。暂停交接沿用原判定。新增字段不含账号 id、身份、目录或凭证；
 原 `session` 回包仍只向同账号 owner 展示既有的账号身份与用量。
-发送前原有的那次 `session` 读取只是多带参数，池配额只在 `blocked` 时多读一次；沿用原 channel、owner 校验与在途 owner 栅栏，
+发送前仍只有原有的那次 `session` 读取，只多带模型并在执行端确认实际准入；暂停账号仍沿用原先的配额读取。
+沿用原 channel、owner 校验与在途 owner 栅栏，
 无新 channel、allowlist、能力位、帧或服务端字段，官方与自建中转按原 invoke 透传，无需升级。
 回归入口：`subscription-accounts/__tests__/runtime.test.ts`（执行端回报、控制端新旧回包、真实组服务 → 路由 → 账号池）。
 

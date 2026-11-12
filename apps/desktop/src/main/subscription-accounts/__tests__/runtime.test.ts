@@ -1249,7 +1249,7 @@ describe('native account assignment on the executing computer', () => {
     failed!.release();
     // The executing computer reports the same judgment to the controller only for a model query.
     expect(await readSubscriptionSessionAccount('anthropic', { sessionId: 'moved', model }))
-      .toMatchObject({ state: 'bound', account: { number: 1, blocked: true } });
+      .toMatchObject({ state: 'bound', account: { number: 1, blocked: true, switchAvailable: true } });
     expect(await readSubscriptionSessionAccount('anthropic', { sessionId: 'moved' })).not.toHaveProperty('account.blocked');
     const start = vi.fn(async () => ({ id: 'native-new', events: async function* () {}, send: vi.fn(), close: vi.fn() }) as unknown as AgentSessionHandle);
     const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: start } as unknown as BaseAgent);
@@ -1272,23 +1272,62 @@ describe('native account assignment on the executing computer', () => {
       sdkSessionId: 'remote-native', agentDeviceId: 'mac-mini' };
     const bound = (extra: object) => ({ ok: true, result: { providerId: 'anthropic', state: 'bound',
       account: { isDefault: true, number: 1, paused: false, status: 'ready', ...extra } } });
-    const pool = (available: boolean) => ({ ok: true, result: { providerId: 'anthropic', model: 'claude-sonnet', available } });
-    h.remote.mockResolvedValueOnce(bound({ blocked: true })).mockResolvedValueOnce(pool(true));
+    // The executor returns actual admission in the existing session read. A quota request would
+    // fail here: an optional replacement probe must not add a new timeout that blocks sending.
+    h.remote.mockImplementation(async (_device, channel) => {
+      if (channel !== 'maker:subscription-accounts') throw new Error('quota timeout');
+      return bound({ blocked: true, switchAvailable: true });
+    });
     expect(await needsSubscriptionAccountHandoff('t', row)).toBe(true);
     expect(h.remote.mock.calls[0][2]).toEqual([{ action: 'session', providerId: 'anthropic',
       nativeSessionId: 'remote-native', model: 'claude-sonnet' }]);
     // No other account there: the message still goes to the original account, the send is not failed.
-    h.remote.mockResolvedValueOnce(bound({ blocked: true })).mockResolvedValueOnce(pool(false));
+    h.remote.mockResolvedValueOnce(bound({ blocked: true, switchAvailable: false }));
     expect(await needsSubscriptionAccountHandoff('t', row)).toBe(false);
-    // An older host never reports `blocked`: one read as before, no pool read, no handoff.
-    h.remote.mockReset().mockResolvedValueOnce(bound({}));
-    expect(await needsSubscriptionAccountHandoff('t', row)).toBe(false);
-    expect(h.remote).toHaveBeenCalledTimes(1);
+    // Missing or malformed admission never authorizes retiring context, including older replies.
+    for (const extra of [{}, { blocked: true }, { blocked: true, switchAvailable: 'true' }]) {
+      h.remote.mockReset().mockResolvedValueOnce(bound(extra));
+      expect(await needsSubscriptionAccountHandoff('t', row)).toBe(false);
+      expect(h.remote).toHaveBeenCalledTimes(1);
+    }
     // A usage-limit failure continues at once on the same evidence; shared providers never move.
-    h.remote.mockResolvedValueOnce(bound({ blocked: true })).mockResolvedValueOnce(pool(true));
+    h.remote.mockResolvedValueOnce(bound({ blocked: true, switchAvailable: true }));
     expect(await canSwitchSubscriptionAccount('t', async () => row, h.remote)).toBe(true);
     expect(await canSwitchSubscriptionAccount('t', async () => ({ ...row, agentDeviceId: 'share:someone' }), h.remote)).toBe(false);
-    expect(h.remote).toHaveBeenCalledTimes(3);
+    expect(h.remote).toHaveBeenCalledTimes(2);
+    h.remote.mockImplementationOnce(async () => {
+      h.owner += '-changed';
+      return bound({ blocked: true, switchAvailable: true });
+    });
+    await expect(needsSubscriptionAccountHandoff('t', row)).rejects.toThrow('owner changed');
+  });
+  // PR #10152 review, unit: quota alone is not admission. The healthy replacement may already
+  // occupy its only slot; exercise executor selection and controller handoff together.
+  it('preserves a remote native session when every replacement account is full', async () => {
+    const model = 'claude-sonnet';
+    h.pools.anthropic!.accounts = [account('default'), { ...account('second'), limitSet: true }];
+    const failed = await acquireSubscriptionAccount('anthropic', model, []);
+    await failed!.bind(['task:remote-full', 'native:remote-full']);
+    failed!.observeFailure({ sdkError: 'rate_limit' }, model, 'run');
+    failed!.release();
+    const competing = await acquireSubscriptionAccount('anthropic', model, ['task:competing']);
+    const now = Date.now();
+    h.usage.mockResolvedValue({ claudeUsage: { updatedAt: now,
+      fiveHour: { utilization: 10, resetsAt: now / 1000 + 3600 },
+      sevenDay: { utilization: 20, resetsAt: now / 1000 + 86400 }, scoped: [] } });
+    h.remote.mockImplementation(async (_device, channel, args) => ({ ok: true,
+      result: channel === 'maker:subscription-accounts'
+        ? await readSubscriptionSessionAccount('anthropic', args[0] as { nativeSessionId: string; model: string })
+        : { providerId: 'anthropic', model, available: true },
+    }));
+    const row = { status: 'active', providerId: 'anthropic', agentKind: 'cc', model,
+      sdkSessionId: 'remote-full', agentDeviceId: 'other-computer' };
+    expect(await needsSubscriptionAccountHandoff('remote-full', row)).toBe(false);
+    expect(await canSwitchSubscriptionAccount('remote-full', async () => row, h.remote)).toBe(false);
+    competing!.release();
+    expect(await needsSubscriptionAccountHandoff('remote-full', row)).toBe(true);
+    expect(h.bindings.get('native:remote-full')?.accountId).toBe('default');
+    expect((await readSubscriptionPool('anthropic')).accounts.map(a => a.running)).toEqual([0, 0]);
   });
   // PR review: selection happens before any process exists, so Maker must release startup resources.
   it('classifies an unavailable pool as a stopped startup without calling the native agent', async () => {
