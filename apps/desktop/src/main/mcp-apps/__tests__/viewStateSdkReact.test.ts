@@ -1,9 +1,9 @@
 /// <reference path="../../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/cindy-ext-apps.d.ts" />
 // @vitest-environment jsdom
 import * as React from 'react';
-import { act, cleanup, renderHook } from '@testing-library/react';
+import { act, cleanup, render, renderHook } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { flushViewState } from '@cindy/ext-apps';
+import { createViewState, flushViewState } from '@cindy/ext-apps';
 import { createViewStateHooks } from '@cindy/ext-apps/react';
 const { useViewState } = createViewStateHooks(React);
 const initial = { version: 1, page: 1 };
@@ -24,7 +24,8 @@ it('first renders restored state under StrictMode without saving it', async () =
   await act(() => flushViewState(host)); expect(host.request).toHaveBeenCalledTimes(1);
   expect(hook.result.current[0].page).toBe(8);
 });
-it.each([false, true])('restores on connection unless the user has edited first (%s)', async edited => {
+it.each([[false, false], [true, false], [false, true], [true, true]])('restores on connection unless edited=%s (legacy=%s)', async (edited, legacy) => {
+  const { useViewState } = createViewStateHooks(legacy ? { ...React, useSyncExternalStore: undefined } : React);
   vi.useFakeTimers(); const host = app(); const renders: Array<[boolean, number]> = [];
   const hook = renderHook(({ connected }) => {
     const result = useViewState(connected ? host : null, initial);
@@ -88,4 +89,47 @@ it.each(['saved', 'in-flight'] as const)('remounts the latest %s draft without c
   });
   expect(host.request.mock.calls.at(-1)?.[0]).toMatchObject({ params: { state: { version: 1, page: 9 } } });
   expect(host.request).toHaveBeenCalledTimes(2);
+});
+
+// Tester regression / React unit: two live consumers must derive functional edits
+// from the same snapshot and repaint together. Single-hook/remount tests missed it.
+// Minimum input: A edits draft, B increments page; neither field may disappear.
+it.each(['native', 'legacy', 'unsupported'] as const)('shares live edits and subscriptions across hooks and JS (%s)', async mode => {
+  vi.useFakeTimers();
+  const host = app();
+  host.getHostContext = () => ({ 'cindy/view-state': { version: 1, page: 7, draft: '' } });
+  if (mode === 'unsupported') host.getHostCapabilities = () => ({ experimental: {} }) as ReturnType<typeof host.getHostCapabilities>;
+  const hooks = createViewStateHooks(mode === 'legacy' ? { ...React, useSyncExternalStore: undefined } : React);
+  const defaults = { version: 1, page: 1, draft: '' };
+  type Setter = (next: typeof defaults | ((previous: typeof defaults) => typeof defaults)) => void;
+  const setters: Record<string, Setter> = {};
+  function Editor({ name }: { name: string }) {
+    const [value, set] = hooks.useViewState(host, defaults);
+    setters[name] = set;
+    return React.createElement('output', { 'data-testid': name }, JSON.stringify(value));
+  }
+  const editors = (first: boolean) => React.createElement(React.StrictMode, null,
+    first ? React.createElement(Editor, { name: 'A', key: 'A' }) : null,
+    React.createElement(Editor, { name: 'B', key: 'B' }));
+  const view = render(editors(true));
+  const state = createViewState(host, defaults);
+  const confirm = () => mode === 'unsupported'
+    ? expect(flushViewState(host)).rejects.toThrow('VIEW_STATE_UNSUPPORTED') : flushViewState(host);
+  const page = mode === 'unsupported' ? 1 : 7;
+  const shown = (name: string) => JSON.parse(view.getByTestId(name).textContent!);
+  try {
+    await act(async () => { setters.A(s => ({ ...s, draft: 'user draft' })); await confirm(); });
+    expect(shown('B')).toEqual({ version: 1, page, draft: 'user draft' });
+    await act(async () => { setters.B(s => ({ ...s, page: s.page + 1 })); await confirm(); });
+    expect(state.get()).toEqual({ version: 1, page: page + 1, draft: 'user draft' });
+    expect(shown('A')).toEqual(state.get()); expect(shown('B')).toEqual(state.get());
+    if (mode !== 'unsupported') expect(host.request.mock.calls.at(-1)?.[0]).toMatchObject({ params: { state: state.get() } });
+    await act(async () => { state.set(s => ({ ...s, draft: 'JS edit' })); await confirm(); });
+    expect(shown('A')).toEqual(state.get()); expect(shown('B')).toEqual(state.get());
+    view.rerender(editors(false));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    await act(async () => { setters.B(s => ({ ...s, page: s.page + 1 })); await confirm(); });
+    expect(shown('B')).toEqual({ version: 1, page: page + 2, draft: 'JS edit' });
+    expect(host.request).toHaveBeenCalledTimes(mode === 'unsupported' ? 0 : 4);
+  } finally { view.unmount(); state.dispose(); }
 });

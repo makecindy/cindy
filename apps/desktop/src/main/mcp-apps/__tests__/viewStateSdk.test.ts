@@ -122,3 +122,27 @@ it('shares the current value and writer when createViewState is called again on 
   await flushViewState(f.app);
   expect(f.save.mock.calls).toEqual([[{ version: 1, page: 4 }], [{ version: 1, page: 5 }]]);
 });
+
+// Unit: the public shared store must notify local consumers even without host
+// capability; unsubscription must not stop another consumer or the writer.
+it.each([true, false])('publishes current local snapshots and removes only the cancelled subscription (supported %s)', async supported => {
+  const f = await fixture(null, supported);
+  const first: number[] = [], second: number[] = [];
+  const stopFirst = f.state.subscribe(() => first.push(f.state.get().page));
+  const stopSecond = f.state.subscribe(() => second.push(f.state.get().page));
+  expect(first).toEqual([]); expect(second).toEqual([]);
+  f.state.set({ version: 1, page: 2 });
+  f.state.set({ version: 1, page: 2 }); // Equal values do not notify or write twice.
+  stopFirst();
+  f.state.set(s => ({ ...s, page: s.page + 1 }));
+  expect(first).toEqual([2]); expect(second).toEqual([2, 3]);
+  if (supported) {
+    await f.state.flush(); expect(f.save.mock.calls).toEqual([[{ version: 1, page: 3 }]]);
+  } else {
+    await expect(f.state.flush()).rejects.toThrow('VIEW_STATE_UNSUPPORTED');
+    expect(f.save).not.toHaveBeenCalled();
+  }
+  f.state.dispose();
+  f.state.set({ version: 1, page: 4 });
+  expect(second).toEqual([2, 3]); stopSecond();
+});

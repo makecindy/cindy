@@ -364,6 +364,14 @@ function Editor({ app }) {
 ```
 
 同一 App 实例共用一份 controller 和最新页面状态，不与自行发送状态 RPC 混用。
+可以同时挂载多个 hook，它们订阅同一个值；函数式 setter 总是基于最新值计算，
+一个组件修改后其它组件也会更新，卸载一个组件不影响其它组件或在途保存。
+原生 JS 与 React 也可共用同一 App；模块可用时，JS 用 `state.subscribe(render)` 监听本页变化，
+回调中用 `state.get()` 读取，订阅返回取消函数；取消订阅不会 dispose 共享 controller。
+这是同一页面里的共享，不是跨设备或跨卡片实时同步。
+React 18 及以上使用作者传入的 `useSyncExternalStore`；最低支持 React 16.8，
+缺少该 API 时用订阅加提交后复查的传统 hooks 回退，只保证旧版非并发渲染；
+并发渲染必须使用 React 18+ 并传入完整的 React 实例。
 重复调用 createViewState 或组件卸载再挂载不会退回初始化快照，默认值和防抖设置沿用首次创建；
 组件卸载不取消已发出的保存，页面关闭时再 dispose。React setter 会同步交出最新值，
 同一事件中随后调用 flushViewState 会确认这份值，不需要 flushSync。

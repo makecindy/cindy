@@ -66,6 +66,7 @@ export function createViewState(app, initial, { debounceMs = 500 } = {}) {
     catch (error) { return { value: next, error }; }
   }
   let current = entry(value), timer, active, pending, disposed = false, listening = false;
+  const subscribers = new Set();
   function listen() {
     if (!listening) { globalThis.addEventListener?.('pagehide', controller.dispose, { once: true }); listening = true; }
   }
@@ -110,6 +111,10 @@ export function createViewState(app, initial, { debounceMs = 500 } = {}) {
   }
   const controller = {
     get: () => current.value,
+    subscribe(listener) {
+      if (!disposed) subscribers.add(listener);
+      return () => subscribers.delete(listener);
+    },
     set(next) {
       if (disposed) return;
       const value = typeof next === 'function' ? next(current.value) : next;
@@ -117,11 +122,13 @@ export function createViewState(app, initial, { debounceMs = 500 } = {}) {
       const item = entry(value);
       if (item.json !== undefined && item.json === current.json) return;
       current = item;
-      if (!route) return;
-      listen();
-      clearTimeout(timer);
-      if (pending) pending.item = current;
-      timer = setTimeout(() => { timer = undefined; void enqueue().catch(() => {}); }, delay);
+      if (route) {
+        listen();
+        clearTimeout(timer);
+        if (pending) pending.item = current;
+        timer = setTimeout(() => { timer = undefined; void enqueue().catch(() => {}); }, delay);
+      }
+      for (const listener of subscribers) listener();
     },
     flush() { clearTimeout(timer); timer = undefined; return enqueue(); },
     dispose() {
@@ -129,6 +136,7 @@ export function createViewState(app, initial, { debounceMs = 500 } = {}) {
       clearTimeout(timer);
       pending?.reject(failure('VIEW_STATE_DISPOSED'));
       pending = undefined;
+      subscribers.clear();
       if (controllers.get(app) === controller) controllers.delete(app);
       globalThis.removeEventListener?.('pagehide', controller.dispose);
     },

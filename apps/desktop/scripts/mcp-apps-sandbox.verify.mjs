@@ -332,9 +332,17 @@ try {
         const initial=await ready();
         assert.equal(initial.capabilities.experimental['cindy/view-state'].maxBytes,65536);
         assert.equal(initial.context['cindy/view-state'],null);
-        const saved={version:1,page:3,filter:'unread'};
+        let saved={version:1,page:3,filter:'unread'};
         assert.deepEqual(await inner().executeJavaScript('window.stateProbe.save('+JSON.stringify(saved)+')'),{});
         assert.deepEqual(savedState,saved,'success must follow storage commit');
+        if(helperMode==='react'){
+          stage='same button event edits then flushes';
+          await inner().executeJavaScript('window.stateProbe.sameEvent()');
+          saved={...saved,page:5};
+          assert.deepEqual(savedState,saved,'same-event flush must confirm both functional updates');
+          await wait(()=>inner().executeJavaScript('document.querySelector("output").textContent==='+JSON.stringify(JSON.stringify(saved))));
+          console.log('STATE_HELPER_SAME_EVENT_VERDICT=passed (button click, two updates, confirmed latest value)');
+        }
         stage='view state first render after remount';
         await reopen();
         const restored=await ready();
@@ -352,12 +360,12 @@ try {
           stage='helper unsupported host';
           const local={version:1,page:9,filter:'local'};
           assert.equal(await inner().executeJavaScript('stateProbe.save('+JSON.stringify(local)+').then(()=>false,()=>true)'),true);
-          assert.equal(await inner().executeJavaScript('document.querySelector("output").textContent'),JSON.stringify(local));
+          await wait(()=>inner().executeJavaScript('document.querySelector("output").textContent==='+JSON.stringify(JSON.stringify(local))));
           assert.deepEqual(savedState,saved);
           stage='helper missing on old viewer'; readFails=false;omitAddons=true;
           await reopen();const absent=await ready();assert.equal(absent.loaded,false);
           assert.equal(await inner().executeJavaScript('stateProbe.save('+JSON.stringify(local)+').then(()=>false,()=>true)'),true);
-          assert.equal(await inner().executeJavaScript('document.querySelector("output").textContent'),JSON.stringify(local));
+          await wait(()=>inner().executeJavaScript('document.querySelector("output").textContent==='+JSON.stringify(JSON.stringify(local))));
           assert.deepEqual(savedState,saved);
           omitAddons=false;
         }
