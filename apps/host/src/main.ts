@@ -59,6 +59,10 @@ import { refreshHostSession } from './auth/refresh.mjs';
 import { configureHostOwner, readClaudeSubscriptionState } from './agent/claude-auth.mjs';
 import { attachAgentsToMakerMemory, createHostMemoryManager, createHostMemoryMcpProviders } from './agent/memory.mjs';
 import { createHostAgentGraph } from './agent/runtime.js';
+import { createHostGitSnapshot, type HostGitSnapshot } from './agent/git-snapshot.js';
+import { clearPendingTurnChangeSets, removeTurnChangeSetsForSession } from '../../desktop/src/main/turn-change-set/store.js';
+import { removeSessionModelInterface } from '../../desktop/src/main/maker-host/session-model-interface.js';
+import { reconcileSavepointRefsForDeletedSessions } from '../../desktop/src/main/git-snapshot/savepointCleanup.js';
 import { createHostMcpRuntime } from './agent/mcp-runtime.js';
 import { createHostAgentAuth } from './agent/auth-service.js';
 import { createLogger, initLogger } from '../../desktop/src/main/logger.js';
@@ -410,6 +414,9 @@ function schedulePeriodicRefresh(): void {
 let claudeState: Record<string, unknown> | null = null;
 /** Real maker-core agents registered in this process. */
 let agentGraph: ReturnType<typeof createHostAgentGraph> | null = null;
+/** The desktop Git snapshot coordinator for this owner's tasks (agent/git-snapshot.ts). */
+let gitSnapshot: HostGitSnapshot | null = null;
+const hostLog = createLogger('host');
 let providerConfig: ReturnType<typeof createHostProviderConfig> | null = null;
 let codexRuntime: ReturnType<typeof createHostCodexRuntime> | null = null;
 let mcpRuntime: ReturnType<typeof createHostMcpRuntime> | null = null;
@@ -510,6 +517,10 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   closeStorage = async () => { clearCurrentDbClient(client); await client.dispose(); };
   configureProvisionalSessions(dataDir, { onSwept: sessionId => eventHub.publish({ type: 'session_changed', action: 'delete', sessionId }) });
   await sweepLeftoverProvisionalSessions();
+  // Desktop runs this repair once the account DB is ready (bootstrap-electron.ts):
+  // savepoint refs of tasks this DB marks deleted are removed from their repos.
+  void reconcileSavepointRefsForDeletedSessions().catch(error =>
+    hostLog.warn('savepoint reconcile postponed', { error: error instanceof Error ? error.message : String(error) }));
   runtime.owner = ownerId;
   runtime.storage = 'ready';
   delete runtime.detail;
@@ -663,7 +674,13 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       publish: (channel, payload) => eventHub.publish({ type: 'plugin_push', channel, payload }),
     });
     agentGraph = createHostAgentGraph({
-      onSessionClose: (id: string) => platformTools?.closeSession(id),
+      onSessionClose: (id: string) => {
+        // Desktop session close: drop the unfinished turn change record, then the
+        // snapshot coordinator's per-task state (register.ts disposers, cleanupClosedSessionRuntime).
+        clearPendingTurnChangeSets(id);
+        gitSnapshot?.onSessionClosed(id);
+        return platformTools?.closeSession(id);
+      },
       codexRuntime,
       providerConfig,
       mcpRuntime,
@@ -687,6 +704,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       userDataDir: dataDir,
     });
     attachAgentsToMakerMemory(makerMemory, agentGraph.instances);
+    gitSnapshot = createHostGitSnapshot(agentGraph.maker);
     agentAuth = createHostAgentAuth({ maker: agentGraph.maker, readApiKey: () => gateway?.credential ?? null,
       publish: (channel, payload) => eventHub.publish({ type: 'plugin_push', channel, payload }) });
     // Second step, now that the agents exist: turn their native memory off.
@@ -856,6 +874,7 @@ const inputQueue = createInputQueue({
     if (!agentGraph) throw new Error('agent runtime is not ready');
     return agentGraph.maker;
   },
+  getGitSnapshot: () => gitSnapshot,
   hub: eventHub,
   hasPendingCredentialSwitch: (id: string) => agentGraph?.gatewayRestart.isSessionRestarting(id) ?? false,
   onSessionSettled: () => agentGraph?.gatewayRestart.onSessionSettled(),
@@ -1276,6 +1295,12 @@ const serverDeps = {
     await inputQueue.disposeSession(sessionId);
     pendingAgentSwitches.delete(sessionId);
     await sessionStorage.delete(sessionId);
+    // Desktop cleanup for a deleted task (localDb/ipc/sessions.ts cleanupSessionTerminalArtifacts).
+    try { removeSessionModelInterface(sessionId); } catch (error) {
+      hostLog.warn('session interface snapshot cleanup failed', { sessionId, error: String(error) });
+    }
+    void removeTurnChangeSetsForSession(sessionId).catch(error =>
+      hostLog.warn('turn change-set cleanup failed', { sessionId, err: error instanceof Error ? error.message : String(error) }));
     forgetProvisionalSession(sessionId);
     eventHub.publish({ type: 'session_changed', action: 'delete', sessionId, status: 'deleted' });
     return { deleted: true, sessionId };
@@ -1517,6 +1542,7 @@ async function disposeOwnerRuntime(): Promise<void> {
     pluginGateway = null;
     pluginManager = null;
     agentGraph = null;
+    gitSnapshot = null;
     mcpRuntime = null;
     codexRuntime = null;
     providerConfig = null;

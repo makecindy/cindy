@@ -1619,3 +1619,80 @@ test('durable remote input retains authenticated provenance and strips forged pr
   assert.equal(item.origin, undefined);
   await h.queue.dispose();
 });
+
+/*
+ * 测试价值（回合钩子，第 7 行与第 7b 行）
+ * - 可观察结果：队列里的用户回合在用户行落库之后、派发给引擎之前开回合改动记录并调 Git 基线；
+ *   回合结束时改动记录带着这条用户消息的锚点落盘，Git 记改后快照；落库了却没派发的回合
+ *   清掉改动记录并撤回基线。
+ * - 规则依据：桌面 register.ts 的 AgentInputCoordinator 钩子（beforeDispatchUserTurn /
+ *   onUndispatchedUserTurn）、sessionEventPreparation.ts 的 finalize、sessionEventDelivery.ts
+ *   的 onTurnEnd。m1-cp5a 只接了引擎侧的写前捕获，改动记录因为没有锚点从不落盘。
+ * - 最小失败输入：不开记录（无锚点，不落盘）；基线早于落库或晚于派发；未派发不撤回。
+ * - tier：unit（假引擎，真实的改动记录存储与临时目录，不调模型）。
+ */
+test('a queued user turn opens its change record and Git baseline between the user row and dispatch, and closes both at done', async t => {
+  const { configureUserDataDir } = await import('../../../desktop/src/main/userDataPath.ts');
+  const { captureKnownFileBefore, waitForTurnChangeSetPersistence } = await import('../../../desktop/src/main/turn-change-set/store.ts');
+  const { turnChangeSetSessionDirectory } = await import('../../../desktop/src/main/turn-change-set/storagePaths.ts');
+  const profile = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-turn-change-'));
+  const workDir = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-turn-work-'));
+  t.after(() => { rmSync(profile, { recursive: true, force: true }); rmSync(workDir, { recursive: true, force: true }); });
+  configureUserDataDir(profile);
+  writeFileSync(path.join(workDir, 'a.txt'), 'one\n');
+  const calls = [];
+  let h;
+  const gitSnapshot = {
+    async onTurnStart(id) {
+      calls.push(['start', id, h.persisted.filter(row => row.role === 'user').length, h.maker.getSession(id)?.sent.length ?? 0]);
+    },
+    onTurnAbort(id) { calls.push(['abort', id]); },
+    async onTurnEnd(id) { calls.push(['end', id]); },
+    onSessionClosed() {},
+  };
+  h = createHarness({ getGitSnapshot: () => gitSnapshot,
+    readSession: async id => ({ id, status: 'active', agentKind: 'claude-code', model: 'stored-model',
+      workingDir: workDir, providerId: 'xd', permissionMode: 'ask', planModeEnabled: false }) });
+  await enqueue(h, 'task-change', { clientId: 'u-change', text: 'edit a.txt' });
+  // After the durable user row, before the engine received the message.
+  assert.deepEqual(calls, [['start', 'task-change', 1, 0]]);
+
+  // The engine's write hook captures the file before the write (turnChangeCapture).
+  await captureKnownFileBefore({ sessionId: 'task-change', provider: 'claude-code', cwd: workDir,
+    targetPath: path.join(workDir, 'a.txt') });
+  writeFileSync(path.join(workDir, 'a.txt'), 'two\n');
+  h.maker.getSession('task-change').emit({ type: 'done', data: {} });
+  await waitFor(() => calls.some(call => call[0] === 'end'));
+  await waitForTurnChangeSetPersistence();
+  const index = JSON.parse(readFileSync(path.join(turnChangeSetSessionDirectory(profile, 'task-change'), 'index.json'), 'utf8'));
+  assert.deepEqual(index.entries.map(entry => entry.anchorClientId), ['u-change']);
+  assert.deepEqual(calls.map(call => call[0]), ['start', 'end']);
+  await h.queue.dispose();
+});
+
+test('a durable user turn that is not dispatched drops its change record and Git baseline', async () => {
+  const calls = [];
+  const gitSnapshot = {
+    async onTurnStart(id) { calls.push(['start', id]); },
+    onTurnAbort(id) { calls.push(['abort', id]); },
+    async onTurnEnd(id) { calls.push(['end', id]); },
+    onSessionClosed() {},
+  };
+  const h = createHarness({ getGitSnapshot: () => gitSnapshot });
+  const create = h.maker.createSession;
+  h.maker.createSession = async opts => {
+    const session = await create(opts);
+    // The vendor refuses after the user row and the dispatch hooks ran.
+    session.send = async (_text, sendOpts = {}) => {
+      sendOpts.onTurnReserved?.(++session.generation);
+      await sendOpts.beforeProviderStart?.();
+      await sendOpts.onAccepted?.(sendOpts.signal);
+      return { accepted: false };
+    };
+    return session;
+  };
+  await h.queue.enqueue('s-undispatched', { clientId: 'never-dispatched', text: 'refused' });
+  await waitFor(() => calls.some(call => call[0] === 'abort'));
+  assert.deepEqual(calls, [['start', 's-undispatched'], ['abort', 's-undispatched']]);
+  await h.queue.dispose();
+});

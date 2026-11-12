@@ -15,6 +15,7 @@ import { assertHostTaskExecutionSupported, prepareHostUserMessage } from './send
 import { createHostEventPersistence } from './event-persistence.ts';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { isTerminalTurnErrorEvent } from '../../../desktop/src/main/maker-ipc/sessionTurnActivityTracker.ts';
+import { finalizeTurnChangeSet, noteTurnDiffEvent } from '../../../desktop/src/main/turn-change-set/store.ts';
 import { setSessionProvider, clearSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import { applyQueuedSessionSettings, rememberLiveSessionSettings } from './session-settings.mjs';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
@@ -101,8 +102,22 @@ export function createTurnExecutor(deps) {
           && event.sessionTurnGeneration !== turn.generation) return;
       }
       if (event.type === 'compact_boundary') wireNotes.reset(sessionId);
+      // Desktop records Codex's native turn diff from the event stream (register.ts)
+      // and closes the turn change record at the turn's end (sessionEventPreparation.ts).
+      noteTurnDiffEvent(sessionId, event, false);
+      if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) {
+        const rawTurn = event.data?.raw;
+        // Desktop settles a silent-stop done once its guard declines to resume
+        // (settleSilentStopDone); the Host has no auto-resume, so it settles now.
+        if (event.data?.silentStop === true) void finalizeTurnChangeSet(sessionId, null, 'complete');
+        else void finalizeTurnChangeSet(sessionId, typeof rawTurn?.id === 'string' ? rawTurn.id : null,
+          rawTurn && rawTurn.status !== 'completed' ? 'partial' : 'complete');
+      }
+      if (isTerminalTurnErrorEvent(event)) void finalizeTurnChangeSet(sessionId, null, 'partial');
       const stream = history.event(session, event);
       deps.hub.publish({ ...event, sessionId, event, ...stream, inputClientId: turn.clientId });
+      // Desktop takes the after-edit savepoint once the event is delivered (sessionEventDelivery.ts).
+      if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) void deps.getGitSnapshot?.()?.onTurnEnd(sessionId);
       if ((event.type === 'done' || isTerminalTurnErrorEvent(event))
         && event.turnScope !== 'background' && !isTurnContinuationBoundaryEvent(event)) {
         turn.terminalMeta = { sessionTurnGeneration: event.sessionTurnGeneration,
@@ -291,6 +306,10 @@ export function createTurnExecutor(deps) {
         }
       }) : undefined,
     readTaskSource: async id => (await readExecutionSession(id)).source ?? null,
+    // Desktop register.ts: a direct (non-queued) user turn takes the Git baseline
+    // before dispatch and drops it when the turn is not dispatched.
+    beforeDispatchDirectUserTurn: (id, signal) => deps.getGitSnapshot?.()?.onTurnStart(id, signal),
+    onUndispatchedDirectUserTurn: id => deps.getGitSnapshot?.()?.onTurnAbort(id),
     readHostDeviceIdentity: deps.readHostDeviceIdentity,
     planRepeatableWireNotes: (id, notes, options) => wireNotes.plan(id, notes, options),
     log,
