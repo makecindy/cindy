@@ -2,7 +2,7 @@
 import { act, type ReactNode } from 'react';
 import { readFileSync } from 'node:fs';
 import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
-import { remoteActionErrorI18nKey, unclassifiedAgentErrorI18nKey, requiresAgentErrorConfigurationChange } from '@/session/agentErrorI18n';
+import { localizeUnclassifiedAgentError, remoteActionErrorI18nKey, unclassifiedAgentErrorI18nKey, requiresAgentErrorConfigurationChange } from '@/session/agentErrorI18n';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
@@ -295,4 +295,24 @@ describe.each(SUPPORTED_LOCALES)('WeChat auto-review guidance in %s', locale => 
     expect(host.textContent).toContain(i18n.t(wechatKey));
     expect(host.textContent).not.toContain(i18n.t(genericKey));
   });
+});
+
+// Unit regression: both live and historical mobile errors share this presenter.
+it('localizes bound-account exhaustion and old ambiguous startup errors', async () => {
+  await i18n.changeLanguage('zh-CN');
+  const error = 'LAZY_CREATE_FAILED: [SUBSCRIPTION_ACCOUNT_LIMITED] diagnostic\nresetAtMs=1900000000000';
+  const text = localizeUnclassifiedAgentError(error);
+  expect(text).toContain('用量已达上限');
+  expect(text).toContain('不会自动换号');
+  expect(text).not.toContain('需要重新登录');
+  expect(text).not.toContain('resetAtMs=');
+  const [normalized] = normalizeRemoteMessages([row(error)]);
+  expect(normalized.body).toBe(text);
+  await act(async () => root.render(<InlineQueueSection
+    projection={{ error, errorRetryText: 'original' } as InputProjection}
+    busy={false} onRetryError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} />));
+  expect(host.textContent).toContain(text);
+  expect(host.textContent).not.toContain('LAZY_CREATE_FAILED');
+  expect(localizeUnclassifiedAgentError('LAZY_CREATE_FAILED: The task subscription account requires login or quota reset'))
+    .toBe(i18n.t('chat.subscriptionAccountError.legacy'));
 });

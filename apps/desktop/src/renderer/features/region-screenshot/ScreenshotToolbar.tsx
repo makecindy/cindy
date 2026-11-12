@@ -176,7 +176,7 @@ export const ScreenshotToolbar = forwardRef<HTMLDivElement, ScreenshotToolbarPro
         <Tip text={t('regionScreenshot.live.finish')} side="top" delay={300}>
           <Button
             variant="cta"
-            size="xs"
+            size="sm"
             className="ml-1 w-7 shrink-0 px-0"
             aria-label={t('regionScreenshot.live.finish')}
             onMouseDown={(event) => event.preventDefault()}

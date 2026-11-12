@@ -67,6 +67,7 @@ describe.each(['sidebar', 'resource'])('%s appearance startup', (kind) => {
       'ensureWallpaperImage',
       'ensureWallpaperVideo',
       'getSync',
+      'loadPluginFont',
       'onChanged',
       'onWallpaperDownloadProgress',
     ]);
@@ -129,5 +130,5 @@ describe.each(['sidebar', 'resource'])('%s appearance startup', (kind) => {
 
 it('keeps the default appearance snapshot free of download or mutation capabilities', async () => {
   const { createAppearanceSnapshotBridge } = await import('../appearanceSnapshot');
-  expect(Object.keys(createAppearanceSnapshotBridge()).sort()).toEqual(['getSync', 'onChanged']);
+  expect(Object.keys(createAppearanceSnapshotBridge()).sort()).toEqual(['getSync', 'loadPluginFont', 'onChanged']);
 });

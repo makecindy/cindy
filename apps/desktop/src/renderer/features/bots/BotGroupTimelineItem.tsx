@@ -288,6 +288,7 @@ export function BotGroupDateDivider({ timestamp, locale }: { timestamp: number; 
 // ---- The row ---------------------------------------------------------------------------
 
 export interface BotGroupTimelineItemProps {
+  pluginUi: import('@/cindy-brain/PluginUiContributions').PluginUiMessageCandidates;
   message: BotGroupTimelineMessage;
   /** Same author as the row above within five minutes: no avatar or name. */
   continued: boolean;
@@ -482,6 +483,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   const actions = message.kind === 'message' && props.showActions !== false ? (
     <div className={cn('contents', message.pending && 'invisible')} inert={message.pending || undefined} aria-hidden={message.pending || undefined}>
       <ChatMessageHoverActions
+        pluginUi={props.pluginUi}
         groupId={props.reactionGroupId}
         shareScope={shareScope}
         message={message}

@@ -62,6 +62,12 @@ const DUMP_SCAN_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 /** dump 清单最多列几个(按 mtime 降序),防日志刷屏。 */
 const DUMP_LIST_CAP = 10;
 
+/**
+ * Windows 结束会话(关机 / 重启 / 注销)时 lifecycle 写入的 shutdownReason。系统随后几秒内
+ * 就会终止进程,标记常停在 shutdown-begin;下次启动据此认作系统行为而非崩溃(issue #9600)。
+ */
+export const WINDOWS_SESSION_END_REASON = 'session-end';
+
 export type RunMarkerState = 'running' | 'shutdown-begin' | 'exited';
 
 /** 单个进程实例的运行标记(落盘 JSON 的完整 schema)。 */
@@ -404,6 +410,13 @@ function logPreviousRunReports(reports: PreviousRunReport[]): boolean {
         );
         break;
       case 'shutdown-incomplete': {
+        if (m!.shutdownReason === WINDOWS_SESSION_END_REASON) {
+          log.info(
+            `[exit-diagnosis] previous run ended with the Windows session (shutdown / restart / sign-out): ` +
+              `pid=${m!.pid} v=${m!.version} shutdownAt=${m!.shutdownAt ?? '?'} lastHeartbeatAt=${m!.heartbeatAt}`,
+          );
+          break;
+        }
         hadAbnormal = true;
         const disposersCompleted = m!.disposedAt ? 'yes' : 'no';
         const detail = m!.disposedAt

@@ -35,7 +35,9 @@
 | 供应商连接、状态、操作与用量 | [供应商设置](provider-settings.md) |
 | 跨账号供应商分享、申请、审批与管理 | [供应商分享](provider-sharing.md) |
 | 供应商组、选电脑策略、转发与用量 | [供应商组](provider-groups.md) |
+| 模型组：把已有来源合成路线与模式、新任务选来源 | [模型组](model-groups.md) |
 | 同一供应商内的 Claude / Codex 多订阅账号、目录与分配 | [供应商内的订阅账号](subscription-account-pools.md) |
 | 媒体模型资料与发布兼容 | [V4 全类型规范](../model-registry-v4-media.md) |
 | 文档成果、四格式与插件增强 | [文档工坊](document-workshop-quality.md) |
 | 新电脑迁移插件、技能、设置与经确认的密钥 | [迁移助理](new-device-setup-migration.md) |
+| 首次登录后的综合引导：认识 Cindy、迁移、连接模型、导入本机已有内容 | [开始引导](first-run-guide.md) |

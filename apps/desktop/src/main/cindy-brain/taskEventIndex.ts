@@ -88,15 +88,19 @@ function taskState(raw: Record<string, unknown>): Record<string, unknown> {
   return result;
 }
 
-/** Message text plus opaque attachment positions; never hand a Host file URL/path to a plugin. */
+/** Keep ordinary content; project Host attachments without their file URLs/paths. */
 function taskMessageContent(raw: unknown): unknown {
   let parsed = raw;
   if (typeof raw === 'string') { try { parsed = JSON.parse(raw); } catch { return raw; } }
-  if (Array.isArray(parsed)) return { text: parsed.filter(item => item?.type === 'text' && typeof item.text === 'string').map(item => item.text).join('\n') };
-  if (typeof parsed === 'string') return parsed;
-  if (!parsed || typeof parsed !== 'object') return '';
+  if (Array.isArray(parsed)) {
+    const blockTypes = ['text', 'image', 'image_url', 'file', 'document', 'thinking', 'redacted_thinking'];
+    if (!parsed.some(item => blockTypes.includes(item?.type))) return raw;
+    return { text: parsed.filter(item => item?.type === 'text' && typeof item.text === 'string').map(item => item.text).join('\n') };
+  }
+  if (!parsed || typeof parsed !== 'object') return raw;
   const record = parsed as Record<string, unknown>;
   const attachments = [...(Array.isArray(record.images) ? record.images : []), ...(Array.isArray(record.files) ? record.files : [])];
+  if (!attachments.length) return raw;
   return { ...(typeof record.text === 'string' ? { text: record.text } : {}),
     ...(attachments.length ? { attachments: attachments.map((value, attachment_index) => {
       const item = value && typeof value === 'object' ? value as Record<string, unknown> : {};

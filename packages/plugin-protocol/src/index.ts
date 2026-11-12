@@ -11,5 +11,7 @@ export * from './secretCheck.js';
 export * from './publicPresentation.js';
 export * from './localSharing.js';
 export * from './toolUi.js';
+export * from './hostUi.js';
+export * from './appearance.js';
 export * from './appCsp.js';
 export * from './readme.js';

@@ -83,6 +83,20 @@ export function isCompanionShadowed(botId: string): boolean {
   return companionHomes.isShadowed(botId);
 }
 
+/**
+ * Copies already barred from running here do not occupy the local Cindy singleton. Absence
+ * from the cloud alone proves nothing: a new local companion may not have registered yet.
+ * A shadowed copy homed here (including a pending/failed take-over or another installation)
+ * still reserves its identity. Keep this read-only; histories and profiles stay untouched.
+ */
+export function inactiveCompanionCopyIds(view: CompanionCloudSnapshot): string[] {
+  if (!view.enabled || !view.selfDeviceId) return [];
+  return view.demotedBotIds.filter(id => {
+    const actor = view.actors.find(candidate => candidate.externalId === id);
+    return !actor || (!!actor.homeDeviceId && actor.homeDeviceId !== view.selfDeviceId);
+  });
+}
+
 interface HomeActor { id: string; kind: string; externalId: string; homeDeviceId?: string | null; disabled?: boolean }
 
 /**

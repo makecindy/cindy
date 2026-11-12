@@ -724,7 +724,8 @@ function isWindowsSlashSwitch(value: string): boolean {
 export function registerDeepLinkProtocol(): void {
   // Packaged smoke runs use a disposable profile, but OS protocol ownership is
   // outside that profile and must remain with the installed desktop client.
-  if (!app.isPackaged || process.argv.includes('--smoke-test')) return;
+  if (!app.isPackaged || process.argv.includes('--smoke-test')
+    || process.argv.includes('--no-protocol-registration')) return;
 
   for (const scheme of DEEP_LINK_SCHEMES) {
     const registered = app.setAsDefaultProtocolClient(scheme);
