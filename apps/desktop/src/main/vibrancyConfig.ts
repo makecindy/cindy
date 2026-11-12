@@ -156,7 +156,19 @@ function resolveBackdropMaterial(): WindowsBackdropMaterial {
 
 function resolveWindowsBackdropColor(material: WindowsBackdropMaterial, isDark: boolean): string {
   if (material !== 'acrylic') return '#00000000';
-  return isDark ? CINDY_ACRYLIC_WINDOW_BACKING.dark : CINDY_ACRYLIC_WINDOW_BACKING.light;
+  return withZeroAlpha(
+    isDark ? CINDY_ACRYLIC_WINDOW_BACKING.dark : CINDY_ACRYLIC_WINDOW_BACKING.light,
+  );
+}
+
+/**
+ * The sidebar paints its 85% tint in CSS (globals.css), so the native backing must not add a
+ * second coat over Acrylic (two 85% layers cover 97.75% and hide the blur). Keep the tint's RGB:
+ * Electron also uses it as the Win32 class brush, which fills newly exposed area during a fast
+ * resize before Chromium paints; alpha 0 leaves the composed window without an extra layer.
+ */
+function withZeroAlpha(rgba: string): string {
+  return rgba.replace(/,\s*[\d.]+\s*\)$/, ', 0)');
 }
 
 export function resolveVibrancyConfig(
@@ -196,7 +208,8 @@ export function resolveVibrancyConfig(
       const backgroundMaterial = resolveBackdropMaterial();
       return {
         vibrancy: null,
-        // Acrylic 的原生 backing 直接带侧栏染色，左栏稳态不再重复叠 CSS tint。
+        // 侧栏染色只由 CSS 提供；原生 backing 保留同色 RGB（快速扩窗时的 Win32 窗口类刷子）、
+        // alpha 为 0，不再在 Acrylic 上叠第二层 85%。
         // live resize 全程保持同一材质；连续尺寸变化交给 Renderer 的 CSS 布局处理。
         backgroundColor: resolveWindowsBackdropColor(backgroundMaterial, isDark),
         backgroundMaterial,

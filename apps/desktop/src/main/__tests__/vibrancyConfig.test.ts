@@ -120,6 +120,8 @@ describe('E4D resolveVibrancyConfig(familyId→vibrancy/backgroundColor 映射)'
     }
   });
 
+  // PR #10104 review (2026-11-12): the sidebar tint now lives in CSS; a native backing that also
+  // carried 85% stacked two coats (97.75%) and hid the Acrylic blur. Keep only its RGB.
   it('win32 × Win11 × CINDY:默认 acrylic + 浅色侧栏 backing', () => {
     expect(
       resolveVibrancyConfig('cindy', false, 'win32', {
@@ -127,7 +129,7 @@ describe('E4D resolveVibrancyConfig(familyId→vibrancy/backgroundColor 映射)'
       }),
     ).toEqual({
       vibrancy: null,
-      backgroundColor: 'rgba(238, 238, 233, 0.85)',
+      backgroundColor: 'rgba(238, 238, 233, 0)',
       backgroundMaterial: 'acrylic',
     });
   });
@@ -139,7 +141,7 @@ describe('E4D resolveVibrancyConfig(familyId→vibrancy/backgroundColor 映射)'
       }),
     ).toEqual({
       vibrancy: null,
-      backgroundColor: 'rgba(5, 5, 5, 0.85)',
+      backgroundColor: 'rgba(5, 5, 5, 0)',
       backgroundMaterial: 'acrylic',
     });
   });
@@ -179,7 +181,7 @@ describe('E4D resolveVibrancyConfig(familyId→vibrancy/backgroundColor 映射)'
       }),
     ).toEqual({
       vibrancy: null,
-      backgroundColor: 'rgba(5, 5, 5, 0.85)',
+      backgroundColor: 'rgba(5, 5, 5, 0)',
       backgroundMaterial: 'acrylic',
     });
     // 走统一 logger.warn,不再是裸 console.warn;文案不再带 [main] 前缀(scope 由 logger 注入)

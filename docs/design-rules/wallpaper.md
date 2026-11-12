@@ -146,7 +146,8 @@ window keeps it clear, without Acrylic, until then; the switch hint tells users 
 after switching. On every Windows backdrop the sidebar paints its own
 `surface-translucent-sidebar` tint in CSS instead of relying on the native backing: DWM
 can drop that backing for a few frames when a window is restored or another window is
-shown or hidden, and a sidebar tinted only by it flashes (#9623, 2026-11-12).
+shown or hidden, and a sidebar tinted only by it flashes (#9623, 2026-11-12). The native
+backing keeps only the tint's RGB at alpha 0, so the tint is not applied twice.
 Systems without a system backdrop always create transparent windows. A successful native
 call alone is not visual acceptance; keep the research document's validation limits.
 Selecting artwork restores the image/video controls. Reset removes these overrides.
