@@ -4,7 +4,8 @@ import { reconcileDeletedTaskViewState } from '../../desktop/src/main/mcp-apps/v
 import { clientMigrationContract } from './client-migration-contract.mjs';
 import { createRightSidebarTabsService } from '../../desktop/src/main/localDb/ipc/rightSidebarTabs.js';
 import { createHostPlatformTools } from './platform/tools.js';
-import { createHostCodexRuntime } from './agent/codex-runtime.js';
+import { createHostCodexRuntime, createHostSubscriptionFastPolicies } from './agent/codex-runtime.js';
+import { createHostClaudeProxyRuntime } from './agent/claude-proxy-runtime.js';
 import { createAvailabilityPolicy } from '../../desktop/src/main/device-link/providerShareAvailabilityPolicyCore.js';
 import { configureWindowsAtomicRename } from '../../desktop/src/main/windowsAtomicRename.js';
 import { isDefinitiveRefreshError } from '../../desktop/src/main/authRefreshError.js';
@@ -419,6 +420,7 @@ let gitSnapshot: HostGitSnapshot | null = null;
 const hostLog = createLogger('host');
 let providerConfig: ReturnType<typeof createHostProviderConfig> | null = null;
 let codexRuntime: ReturnType<typeof createHostCodexRuntime> | null = null;
+let claudeProxy: ReturnType<typeof createHostClaudeProxyRuntime> | null = null;
 let mcpRuntime: ReturnType<typeof createHostMcpRuntime> | null = null;
 let agentAuth: ReturnType<typeof createHostAgentAuth> | null = null;
 const listProviders = createProviderCatalog({
@@ -673,9 +675,22 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       config: providerConfig, modelAccess: modelAccess!, availabilityPolicy: availabilityPolicy!, mcp: mcpRuntime,
       publish: (channel, payload) => eventHub.publish({ type: 'plugin_push', channel, payload }),
     });
+    if (claudeBinary || piBinary) {
+      claudeProxy = createHostClaudeProxyRuntime({ profileDir: dataDir,
+        gateway: () => modelAccess?.gateway ?? null,
+        fastRequestPolicy: codexRuntime?.fastRequestPolicy ?? createHostSubscriptionFastPolicies(availabilityPolicy!).requestPolicy,
+        isOpenAiSubscriptionProviderId: id => providerConfig?.codexAccounts.isOpenAiSubscriptionProviderId(id) ?? false,
+        resolveTaskId: sdkSessionId => agentGraph?.maker.listActiveSessions()
+          .find(session => session.requestSessionId === sdkSessionId)?.id ?? null,
+      });
+      // The desktop awaits the proxy before its first task (bootstrap-electron.ts); when it
+      // cannot start, the endpoint falls back to the upstream with a log, as there.
+      await claudeProxy.ready();
+    }
     agentGraph = createHostAgentGraph({
       onSessionClose: (id: string) => platformTools?.closeSession(id),
       codexRuntime,
+      claudeProxy,
       providerConfig,
       mcpRuntime,
       isSessionInTurn: (id: string) => inputQueue.isTurnRunning(id),
@@ -1524,6 +1539,7 @@ async function disposeOwnerRuntime(): Promise<void> {
     await attempt(() => inputQueue.dispose());
     await attempt(() => (agentGraph?.maker as { shutdown?: () => Promise<void> } | undefined)?.shutdown?.());
     await attempt(() => codexRuntime?.close());
+    await attempt(() => claudeProxy?.close());
     await attempt(() => mcpRuntime?.close());
     platformClient?.close(); platformClient = null;
     await attempt(() => platformTools?.close());
@@ -1542,6 +1558,7 @@ async function disposeOwnerRuntime(): Promise<void> {
     gitSnapshot = null;
     mcpRuntime = null;
     codexRuntime = null;
+    claudeProxy = null;
     providerConfig = null;
     agentAuth = null;
     modelAccess = null;

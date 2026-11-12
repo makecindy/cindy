@@ -17,6 +17,7 @@ import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-contin
 import { isTerminalTurnErrorEvent } from '../../../desktop/src/main/maker-ipc/sessionTurnActivityTracker.ts';
 import { clearPendingTurnChangeSets, finalizeTurnChangeSet, noteTurnDiffEvent } from '../../../desktop/src/main/turn-change-set/store.ts';
 import { setSessionProvider, clearSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
+import { setSessionEffort } from '../../../desktop/src/main/maker-host/session-effort-store.ts';
 import { applyQueuedSessionSettings, rememberLiveSessionSettings } from './session-settings.mjs';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
 
@@ -531,6 +532,8 @@ export function createTurnExecutor(deps) {
       histories.delete(id);
       wireNotes.reset(id);
       clearSessionProvider(id);
+      // The desktop session runtime cleanup clears the effort axis with the provider.
+      setSessionEffort(id, null);
       await deps.getMaker()?.closeSession?.(id);
       turns.delete(id);
     },

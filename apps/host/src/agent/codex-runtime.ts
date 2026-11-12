@@ -28,6 +28,14 @@ import type { createHostProviderConfig } from './provider-config.js';
 import type { createHostModelAccess } from './model-access.js';
 import type { createHostMcpRuntime } from './mcp-runtime.js';
 
+/** The subscription Fast policies for one owner, shared by the Codex and Claude proxies. */
+export function createHostSubscriptionFastPolicies(availabilityPolicy: ReturnType<typeof createAvailabilityPolicy>) {
+  const groups = createProviderGroupStore(availabilityPolicy);
+  const bindings = createProviderGroupBindings(groups);
+  const policies = createSubscriptionFastPolicies({ ...groups, ...bindings });
+  return { policies, requestPolicy: createSubscriptionFastRequestPolicy(policies) };
+}
+
 /** Same Codex proxy and spawn policy as desktop, assembled with owner-bound Node IO. */
 export function createHostCodexRuntime(options: {
   profileDir: string; binaryPath: string;
@@ -42,10 +50,7 @@ export function createHostCodexRuntime(options: {
   const current = () => !closed && owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending();
   const check = () => { if (!current()) throw new Error('CODEX_RUNTIME_OWNER_CHANGED'); };
   const publish = (channel: string, payload: unknown) => { if (current()) options.publish(channel, payload); };
-  const groups = createProviderGroupStore(options.availabilityPolicy);
-  const bindings = createProviderGroupBindings(groups);
-  const policies = createSubscriptionFastPolicies({ ...groups, ...bindings });
-  const requestPolicy = createSubscriptionFastRequestPolicy(policies);
+  const { policies, requestPolicy } = createHostSubscriptionFastPolicies(options.availabilityPolicy);
   const xai = createXaiAuthInvalidationHost(options.config.grok);
   const usage = createXaiRateLimitPublisher(publish);
   xai.setXaiAuthInvalidatedHandler(id => {
@@ -109,7 +114,7 @@ export function createHostCodexRuntime(options: {
       return { accessToken: auth.accessToken, chatgptAccountId: auth.accountId };
     },
   };
-  return { deps, proxy, native, readRoute, modelContext, fastPolicies: policies, closeSession: proxy.unregister,
+  return { deps, proxy, native, readRoute, modelContext, fastPolicies: policies, fastRequestPolicy: requestPolicy, closeSession: proxy.unregister,
     async close() { closed = true; await proxy.disposeCodexProxy(); },
   };
 }

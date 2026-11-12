@@ -31,6 +31,7 @@ import { isLocalSessionBusy } from '../../../desktop/src/main/maker-host/codex-c
 import type { createHostProviderConfig } from './provider-config.js';
 import type { createHostMcpRuntime } from './mcp-runtime.js';
 import type { createHostCodexRuntime } from './codex-runtime.js';
+import type { createHostClaudeProxyRuntime } from './claude-proxy-runtime.js';
 import { createHostModelContext } from './model-context.js';
 import { readDisabledSkillPaths } from '../../../desktop/src/main/skillhub/activationPreferences.js';
 import { createHostStartOptions } from './start-options.js';
@@ -53,6 +54,8 @@ export interface HostAgentGraphOptions {
   providerConfig: HostProviderConfig;
   mcpRuntime: ReturnType<typeof createHostMcpRuntime>;
   codexRuntime?: ReturnType<typeof createHostCodexRuntime> | null;
+  /** The Claude and Pi loopback proxy (claude-proxy-runtime.ts). Without it the engines reach the gateway directly. */
+  claudeProxy?: ReturnType<typeof createHostClaudeProxyRuntime> | null;
   storage: MakerDeps['storage'];
   gateway?: HostGateway | null;
   resolveProviderRoute?: HostProviderRouteResolver;
@@ -146,9 +149,48 @@ export function createClaudeSubscriptionAuth(gateway: HostGateway | null | undef
   });
 }
 
+/** The loopback proxy facts the Claude adapter reads (claude-proxy-runtime.ts). */
+type ClaudeProxyAuthView = Pick<ReturnType<typeof createHostClaudeProxyRuntime>, 'isReady' | 'inboundSecret'>;
+
+/**
+ * Claude through the loopback proxy, as the desktop Claude adapter decides
+ * (auth-adapters.ts getState/getAuthEnv): gateway sessions carry the gateway key;
+ * an explicit non-gateway source carries only a placeholder, and the proxy routes it
+ * with that source's credential. The Host's placeholder is the proxy runtime's secret.
+ * Subscription accounts other than Claude's own wait for the responses bridge (row 24b).
+ */
+function createClaudeProxyAuth(gateway: HostGateway | null | undefined, native: ReturnType<typeof createClaudeSubscriptionAuth>, proxy: ClaudeProxyAuthView) {
+  return bindAuthOwner({
+    async getState(opts?: AuthAdapterOptions) {
+      if (opts?.providerId === 'anthropic' || opts?.credentialMode === 'oauth-bearer') return native.getState(opts);
+      if (opts?.providerId && subscriptionAccountKind(opts.providerId)) return { authenticated: false, errorReason: 'not_connected' };
+      if (opts?.credentialMode === 'gateway-key') {
+        return gateway?.credential ? { authenticated: true, authSource: 'api-key', identity: 'Cindy gateway' }
+          : { authenticated: false, errorReason: 'no_key' };
+      }
+      if (opts?.credentialMode === 'provider-oauth') {
+        return proxy.isReady() ? { authenticated: true, identity: 'Provider · Proxy', authSource: 'api-key' }
+          : { authenticated: false, errorReason: 'proxy_not_ready' };
+      }
+      if (!gateway?.credential) return native.getState(opts);
+      return { authenticated: true, authSource: 'api-key', identity: 'Cindy gateway' };
+    },
+    triggerLogin: (options?: AuthLoginOptions) => native.triggerLogin(options),
+    cancelLogin: () => native.cancelLogin(),
+    logout: () => native.logout(),
+    async getAuthEnv(opts?: AuthAdapterOptions): Promise<Record<string, string>> {
+      if (opts?.providerId === 'anthropic' || opts?.credentialMode === 'oauth-bearer') return native.getAuthEnv(opts);
+      if (opts?.providerId && subscriptionAccountKind(opts.providerId)) return {};
+      if (opts?.credentialMode === 'provider-oauth') return { ANTHROPIC_API_KEY: proxy.inboundSecret() };
+      return gateway?.credential ? { ANTHROPIC_API_KEY: gateway.credential } : {};
+    },
+  });
+}
+
 /** Gateway-key lane: the key is injected as ANTHROPIC_API_KEY for the CLI spawn. */
-export function createClaudeGatewayAuth(gateway: HostGateway | null | undefined, resolveRoute: HostProviderRouteResolver = missingRouteResolver, cli?: HostProviderConfig['claudeNative']) {
+export function createClaudeGatewayAuth(gateway: HostGateway | null | undefined, resolveRoute: HostProviderRouteResolver = missingRouteResolver, cli?: HostProviderConfig['claudeNative'], proxy?: ClaudeProxyAuthView | null) {
   const native = createClaudeSubscriptionAuth(null, resolveRoute, cli);
+  if (proxy) return createClaudeProxyAuth(gateway, native, proxy);
   return bindAuthOwner({
     async getState(opts?: AuthAdapterOptions) {
       if (opts?.providerId === 'anthropic' || opts?.credentialMode === 'oauth-bearer') return native.getState(opts);
@@ -298,6 +340,10 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   });
   // Without an account gateway the Host keeps the endpoint unset, as before.
   const hostEndpoint = (() => options.gateway?.endpoint || undefined) as () => string;
+  // Claude and Pi reach the account through the loopback proxy, as on the desktop
+  // (getClaudeEndpoint: the proxy once ready, else the upstream).
+  const claudeProxy = options.claudeProxy;
+  const engineEndpoint = claudeProxy ? () => claudeProxy.endpoint() : hostEndpoint;
   const codexModelResolvers = codexBinaryPath ? createCodexModelResolvers({
     getCatalog: modelContext.getSelectableCatalog, resolveContextProviderId: modelContext.resolveContextProviderId,
     getCodexHome: () => path.join(options.userDataDir, 'codex-home'), getCodexBinaryPath: () => codexBinaryPath,
@@ -305,8 +351,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   // Pi resolves against the full active catalog with the plain route resolver, as on the desktop.
   const piModelResolvers = createPiModelResolvers({ getCatalog: getActiveCatalog, resolveContextProviderId: resolveModelContextProviderId });
   const agent = options.binaryPath ? new ClaudeCodeAgent({
-    auth: createClaudeGatewayAuth(options.gateway, options.resolveProviderRoute, config.claudeNative),
-    runtimeConfig: runtimeConfigs.buildClaudeRuntimeConfig(hostEndpoint),
+    auth: createClaudeGatewayAuth(options.gateway, options.resolveProviderRoute, config.claudeNative, options.claudeProxy),
+    runtimeConfig: runtimeConfigs.buildClaudeRuntimeConfig(engineEndpoint),
     binaryPath: options.binaryPath,
     logger: LOGGER,
     getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
@@ -350,7 +396,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         runtimeConfig: buildPiRuntimeConfig({
           ripgrepPath: runtimeConfigs.getRipgrepBinaryPath(),
           userDataPath: options.userDataDir,
-          endpoint: hostEndpoint,
+          endpoint: engineEndpoint,
           remoteEndpoint: () => claudeUpstreamEndpoint(),
         }),
         binaryPath: options.piBinaryPath,
@@ -358,6 +404,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
         mcpProviders,
         resolvePiAgentHome: () => path.join(options.userDataDir, 'pi-agent-home'),
+        // Pi's loopback requests carry a per-session token the proxy checks (pi-host.ts).
+        ...(claudeProxy ? { registerPiProxySession: claudeProxy.registerPiProxySession } : {}),
         resolvePiNativeProviders: () => options.providerConfig.piNativeProviders(),
         ...piModelResolvers,
         getDisabledSkillPaths: readDisabledSkillPaths,
@@ -393,6 +441,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
       },
       onClose: async id => {
       startOptions.onClose(id);
+      options.claudeProxy?.closeSession(id);
       try { await options.codexRuntime?.closeSession(id); }
       finally { await options.onSessionClose?.(id); }
     } },

@@ -25,7 +25,8 @@ import { createSessionContextBudget } from '../../../desktop/src/main/maker-host
 import { readSessionContextWindowBudget } from '../../../desktop/src/main/maker-host/session-context-budget-store.js';
 import { getThinkingEnabledFromMemory } from '../../../desktop/src/main/maker-host/newMakerDefaultsCache.js';
 import { clearUsagePricing, registerUsagePricing } from '../../../desktop/src/main/maker-host/model-usage-pricing.js';
-import { getSessionFastMode, setSessionFastMode } from '../../../desktop/src/main/maker-host/session-effort-store.js';
+import { getSessionFastMode, setSessionEffort, setSessionFastMode } from '../../../desktop/src/main/maker-host/session-effort-store.js';
+import { resolveCompatibleSessionRuntimeEffort } from '../../../desktop/src/main/maker-ipc/sessionRuntimeControl.js';
 import type { createSubscriptionFastPolicies } from '../../../desktop/src/main/maker-host/subscriptionFastPolicyCore.js';
 import { ownerScopedPath } from '../../../desktop/src/main/ownerContext.js';
 import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../../desktop/src/shared/accountProviderReadiness.js';
@@ -102,6 +103,11 @@ export function createHostStartOptions(ports: HostStartOptionsPorts) {
     // The desktop reads the session's Fast axis from this store; the Host starts it
     // from the options it is about to run and keeps it in step with later changes.
     setSessionFastMode(sessionId, opts.fastMode ?? false);
+    // The proxy's provider bridges read the task's effort from this store; the desktop
+    // hydrates it at start against the current model's capabilities (register.ts).
+    setSessionEffort(sessionId, interfaceModel
+      ? resolveCompatibleSessionRuntimeEffort(interfaceModel, (opts.effort ?? null) as Parameters<typeof resolveCompatibleSessionRuntimeEffort>[1])
+      : opts.effort ?? null);
     if (opts.agentKind === 'codex' || opts.agentKind === 'pi') {
       opts.resolveUsagePriceVariant = registerUsagePricing(sessionId);
     }
