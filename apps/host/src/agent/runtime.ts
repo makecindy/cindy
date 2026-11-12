@@ -43,6 +43,7 @@ import { createReadImageHook } from '../../../desktop/src/main/maker-host/claude
 import { createDesktopInputShellGuardHooks } from '../../../desktop/src/main/maker-host/claude-hooks/desktop-input-shell-guard-hook.js';
 import { readAgentResourceSettings } from '../../../desktop/src/main/maker-host/agent-resource-settings-store.js';
 import { createCommandConcurrencyGate } from '../../../desktop/src/main/maker-host/command-concurrency-gate.js';
+import { createHostVisionBridge, type VisionBridgeNotice } from './vision-bridge.js';
 import { captureKnownFileBefore, noteOpaqueTurnChange } from '../../../desktop/src/main/turn-change-set/store.js';
 import { readCodexHistoryHasProductPrompt, writeCodexHistoryHasProductPrompt } from '../../../desktop/src/main/maker-host/session-storage.js';
 import { buildPiRuntimeConfig, claudeUpstreamEndpoint, createAgentRuntimeConfigs } from '../../../desktop/src/main/maker-host/runtimeConfigsCore.js';
@@ -87,6 +88,8 @@ export interface HostAgentGraphOptions {
   getManagedSkills?: AgentDeps['getManagedSkills'];
   /** Directory holding the bundled harnesses, including `ripgrep-bin`. Defaults to the Host layout. */
   harnessRoot?: string;
+  /** The Host event hub, for the vision-bridge notices the desktop sends its windows. */
+  publishVisionBridgeNotice?: (notice: VisionBridgeNotice) => void;
   /** The account gateway's rejected-key report (model-access.ts), for the one-shot review requests. */
   reportGatewayKeyRejected?: (key: string) => void;
 }
@@ -499,6 +502,16 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     // As the desktop's getPluginRegistry(): the owner's registry, read at each check.
     createDesktopInputShellGuardHooks(() => createPluginRegistry().isEnabled('computer'), LOGGER),
   );
+  // The desktop's vision bridge (maker-host/index.ts): the Maker hook, the Pi env and, once Maker
+  // exists, the process-wide controller the loopback proxies read (vision-bridge.ts).
+  const visionBridge = createHostVisionBridge({
+    userDataDir: options.userDataDir,
+    getMaker: () => maker,
+    readCustomProviderKey: config.readKey,
+    readGatewayKey: () => options.gateway?.credential ?? null,
+    publish: notice => options.publishVisionBridgeNotice?.(notice),
+    logger: LOGGER,
+  });
   const agent = options.binaryPath ? new ClaudeCodeAgent({
     claudeHooks,
     auth: createClaudeGatewayAuth(options.gateway, options.resolveProviderRoute, config.claudeNative, options.claudeProxy, config.grok),
@@ -568,6 +581,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         turnChangeCapture: { beforeKnownFileWrite: captureKnownFileBefore, noteOpaqueWrite: noteOpaqueTurnChange },
         ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
         ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
+        // Only for Pi models the vision bridge targets (layer C), as on the desktop.
+        resolvePiVisionBridgeEnv: visionBridge.resolvePiVisionBridgeEnv,
       })
     : null;
   const agents = {
@@ -603,7 +618,9 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     // Pi and Codex sessions read the tool-loop reviewer from Maker, as on the desktop.
     toolLoopReviewer: autoReview.toolLoopReviewer,
     ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
+    visionBridge: visionBridge.hook,
   });
+  visionBridge.activate();
   // As the desktop (register.ts): when the loopback proxy sees Claude's native Auto classifier
   // fail, the task stays on Auto and its later approvals go to the Cindy reviewer above.
   // The latest graph owns the process-wide listener.
@@ -628,7 +645,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     onQueueGateReleased: createDeferredRestartSettledWake({ wakeSession: options.wakeSession ?? (() => {}) }),
     logger: LOGGER,
   });
-  return { maker, agent, codex, pi, gatewayRestart, capabilitiesByAgent, instances: agents, autoReview,
+  return { maker, agent, codex, pi, gatewayRestart, capabilitiesByAgent, instances: agents, autoReview, visionBridge,
     refreshModels: () => refreshCatalogDerivedModels(maker, modelContext.getSelectableCatalog()),
     agents: Object.keys(agents) as AgentKind[] };
 }

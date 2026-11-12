@@ -717,6 +717,9 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       gateway,
       makerMemory,
       reportGatewayKeyRejected: key => modelAccess?.reportRejectedKey(key),
+      // Vision-bridge notices, which the desktop sends its windows; the client maps them to
+      // MAKER_PUSH.EVENT (device-link.ts) and they are not persisted.
+      publishVisionBridgeNotice: notice => eventHub.publish(notice),
       mcpProviders: await pluginGateway.prepareMcpProviders([...createHostMemoryMcpProviders(makerMemory), ...platformTools.providers, pluginGateway.provider]),
       userDataDir: dataDir,
     });
@@ -1547,6 +1550,8 @@ async function disposeOwnerRuntime(): Promise<void> {
     platformClient?.close();
     await attempt(() => inputQueue.dispose());
     await attempt(() => (agentGraph?.maker as { shutdown?: () => Promise<void> } | undefined)?.shutdown?.());
+    // As the desktop's teardown: the process-wide vision-bridge controller and key reader go.
+    await attempt(() => agentGraph?.visionBridge.close());
     await attempt(() => codexRuntime?.close());
     await attempt(() => claudeProxy?.close());
     await attempt(() => mcpRuntime?.close());
