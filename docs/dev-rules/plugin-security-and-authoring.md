@@ -2,7 +2,7 @@
 
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：新增或修改插件（`.cindy`）的运行时、沙箱、权限、能力声明、面板供片、
-> 网络／凭证／文件交接、插件市场分页读取、安装扫描、实例核对与使用统计，插件作者可见的
+> 网络／凭证／文件交接、插件市场分页读取、安装扫描、实例核对、使用统计与远程插件状态读取，插件作者可见的
 > 身份卡、管子协议、打包与编写手册，或批准状态、安装布局、指纹格式等**存量安装读得到的任何东西**之前
 
 本文治理 Cindy 中运行的插件——以 `ghost.json` 为身份卡的 `.cindy` 包。它约束三件
@@ -946,13 +946,23 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 
 ### 5.4 插件读取与扫描预算
 
-插件市场、实例查找、使用统计和面板请求属于同一类本地读取，必须遵守
-`engineering-conventions.md` §8 的通用预算；本节只补插件特有边界。
+插件市场、实例查找、使用统计、面板请求，以及远程查看端读取插件状态，属于同一类读取，
+必须遵守 `engineering-conventions.md` §8 的通用规则；本节只补插件特有边界。
 
 - Renderer 的市场分页只做 discovery；Main 按 owner／revision 复用同一份安装快照。分页、
-  来源切换和计数复用同一快照，不得每页调用 `readLocalInstallSnapshot` 或重建全量安装列表。
-- 精确实例键走 `findInstalledInstance`；只有无法精确匹配时才回退 `availableGhosts()`。
-  面板、协议 handler、点击／按键复核只读目标实例，不得为每次请求重扫其他插件。
+  来源切换和计数复用同一快照，后续页不得重新做全量安装扫描或重建全量安装列表；这份复用
+  由 `readLocalInstallSnapshot` 负责，调用方不另起扫描。
+- 远程输入框的插件页面待确认提示：对端支持 `management:ui-consent` 时走这个轻量查询，只取
+  待确认项，不读带图标的 `management:snapshot`；旧主机未声明该 action 时按能力协商回退
+  snapshot，但仍按电脑共用、合并读取。协议见
+  [远程输入框的轻量插件授权查询](protocol-compatibility/remote-composer-plugin-grant-query.md)。
+  插件变化通知（`collectionId: "plugins"`）也包括角标变化，收到通知不代表批准状态变了；
+  监听插件变化的组件按 `engineering-conventions.md` §8.6 过滤、合并刷新。
+- 精确实例键走 `findInstalledInstance`。它返回 undefined 也可能只是注册表缓存还答不上来：
+  这时最多回退一次 `list()`，再按同一实例键精确匹配，回退后仍找不到才判不存在；不得改按
+  名字搜索 `availableGhosts()`，也不得转到同名的其他副本（页面工具调用见 #9936）。
+  面板、协议 handler、点击／按键复核只读目标实例，不得为每次请求重扫其他插件；本身要看全部
+  插件才能回答的查询（例如有没有插件待确认），尽量复用已有结果，不为每次请求重新全量扫描。
 - 循环内不得调用带默认 `listMarketInstallations()` 参数的
   `installedGhostMatchingMarketPlugin`；先取一次快照并传入。锁内需要复核单项时，用精确实例
   查找，不要重新全量 list。
@@ -960,8 +970,10 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
   执行。统计卡片可见时轮询，隐藏时停止，前一次未完成不叠加。
 - 自定义来源发现必须有超时和部分结果；超时不能阻塞首屏。Library 用量扫描有熔断和条目
   上限，面板投影不得为每条记录重扫全部文件。
-- 验收：翻 10 页 `GhostManager.list()` 1 次；精确实例查找 0 次；连续 summary 3 次写事务
-  0 次；40 次面板点击／按键复核不调用 `list()`。
+- 验收：翻 10 页 `GhostManager.list()` 1 次；精确实例查找在缓存命中时 `list()` 0 次、缓存
+  答不上来时最多 1 次（`ghostWorkdirGate.test.ts`）；连续 summary 3 次写事务
+  0 次；40 次面板点击／按键复核不调用 `list()`；非插件类通知不触发插件状态读取；两个远程
+  输入框在同一合并窗口内收到 45 条插件通知，状态读取共 2 次（含挂载时 1 次）。
 - 例外：安装、卸载、批准、切换账号后必须失效快照；首次打开详情的幂等 ensure 允许一次
   绑定；启动窗口创建前的固定配置读取和一次性 CLI 不受请求预算约束。
 
