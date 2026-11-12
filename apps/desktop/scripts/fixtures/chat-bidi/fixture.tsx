@@ -8,10 +8,11 @@ import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData
 import { useAttachments } from '../../../src/renderer/hooks/useAttachments';
 import { UI_MOCK_BIDI_TASK, UI_MOCK_BIDI_TEXT, UI_MOCK_BIDI_MARKDOWN } from '../../../../../packages/maker-shared/src/uiMockBidi';
 
-function Fixture() {
+function Fixture({ composerOnly = false }: { composerOnly?: boolean }) {
   const [stream, setStream] = useState('...');
   const attachments = useAttachments('fixture-bidi');
   return <main className="p-4 space-y-4" data-ui-page-subject>
+    {!composerOnly && <>
     <section data-testid="user"><UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
       content={UI_MOCK_BIDI_TEXT} workingDir="" simplifiedBotConversation /></section>
     <section data-testid="markdown"><MarkdownRenderer content={UI_MOCK_BIDI_MARKDOWN} workingDir="" allowPrivilegedLinks={false} /></section>
@@ -19,6 +20,7 @@ function Fixture() {
       workingDir="" renderRichAnswers allowPrivilegedLinks={false} /></section>
     <section data-testid="stream"><MarkdownRenderer content={stream} workingDir="" isStreaming allowPrivilegedLinks={false} /></section>
     <button data-ui-page-control data-testid="stream-next" onClick={() => setStream('... سلام API 123.\n\nEnglish 456.')}>Append stream</button>
+    </>}
     <ChatInput sessionId="fixture-bidi" initialWorkingDir="" runtimeAgentKind="codex" vendorKey="codex"
       attachmentState={attachments}
       initialModel="fixture-chat" initialProviderId="openai" hideRuntimeControls showFolderPicker={false}
@@ -58,5 +60,5 @@ void mountPage({
     deviceLink: { onRemotePush: subscription('remote-push') },
     ghosts: { listSync: () => ({ ghosts: [] }) },
   },
-  render: (ctx) => ctx.case === 'sources' ? <SourceMessagesFixture /> : <Fixture />,
+  render: (ctx) => ctx.case === 'sources' ? <SourceMessagesFixture /> : <Fixture composerOnly={ctx.case === 'lists'} />,
 });

@@ -47,10 +47,67 @@ export default {
   cases: {
     default: { about: '#10114: independent RTL/LTR paragraphs, code, stream and editable text' },
     sources: { about: '#10188: expanded teammate letters and long IM message bodies retain paragraph direction and selection' },
+    lists: { about: '#10188: typed/restored composer lists keep each marker beside its mixed-direction item' },
   },
   async check(page, ui) {
     const rtl = 'سلام، فایل index.html با API 123 آماده است.';
     const english = 'English paragraph: API 123 and https://example.com/docs.';
+    if (ui.case === 'lists') {
+      // Type through ChatInput's real input/key rules, then round-trip its own
+      // clipboard serializer. jsdom cannot observe marker direction or clipping.
+      const editor = page.locator('.ProseMirror');
+      const texts = [rtl, english, 'مرحبا، الإصدار API 123 جاهز.', 'שלום, הקובץ index.html מוכן.'];
+      for (const [prefix, tag] of [['99. ', 'ol'], ['- ', 'ul']]) {
+        await editor.fill('');
+        await editor.pressSequentially(prefix);
+        for (const [index, text] of texts.entries()) {
+          if (index) await editor.press('Shift+Enter');
+          await page.keyboard.insertText(text);
+        }
+        const items = editor.locator(`${tag} > li`);
+        assert.equal(await items.count(), texts.length);
+        const checkItems = async () => { for (const [index, text] of texts.entries()) {
+          const item = items.nth(index), side = index === 1 ? 'left' : 'right';
+          await aligned(item.locator('p').first(), text, side);
+          const layout = await item.evaluate(e => {
+            const style = getComputedStyle(e), list = e.parentElement.getBoundingClientRect(), box = e.getBoundingClientRect();
+            return { direction: style.direction, leftSpace: box.left - list.left, rightSpace: list.right - box.right, fontSize: parseFloat(style.fontSize) };
+          });
+          assert.equal(layout.direction, side === 'right' ? 'rtl' : 'ltr', `marker direction for ${text}`);
+          assert.ok(layout[side === 'right' ? 'rightSpace' : 'leftSpace'] >= layout.fontSize,
+            `marker must have room on its item's starting side: ${JSON.stringify(layout)}`);
+        } };
+        await checkItems();
+        await ui.capture(tag);
+        await editor.press('ControlOrMeta+A');
+        const copied = await editor.evaluate(e => {
+          const data = new DataTransfer();
+          e.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData: data }));
+          return data.getData('text/plain');
+        });
+        assert.equal(copied, texts.map((text, index) => `${tag === 'ol' ? `${99 + index}.` : '-'} ${text}`).join('\n'));
+        await editor.press('Backspace');
+        await editor.evaluate((e, text) => {
+          const data = new DataTransfer(); data.setData('text/plain', text);
+          e.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }));
+        }, copied);
+        assert.equal(await editor.locator(`${tag} > li`).count(), texts.length);
+        await checkItems();
+        await editor.focus();
+        await items.first().locator('p').evaluate(async e => {
+          const range = document.createRange(), selection = window.getSelection();
+          range.setStart(e.firstChild, 0); range.collapse(true);
+          selection.removeAllRanges(); selection.addRange(range);
+          // Let the editor observe the browser selection before native typing.
+          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        });
+        await page.keyboard.insertText('English ');
+        assert.ok((await items.first().textContent()).startsWith('English '));
+        assert.equal(await items.first().evaluate(e => getComputedStyle(e).direction), 'ltr');
+      }
+      await ui.capture('restored');
+      return;
+    }
     if (ui.case === 'sources') {
       // These real UserMessage branches bypass the ordinary bubble. One mixed
       // paragraph pair reproduces the missing direction; long IM text also
