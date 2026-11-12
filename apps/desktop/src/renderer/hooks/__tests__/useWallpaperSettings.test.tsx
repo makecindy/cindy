@@ -7,6 +7,7 @@ import { DEFAULT_APPEARANCE_SETTINGS } from '@/../shared/appearanceSettings';
 import type { WallpaperDownloadProgress } from '@/../shared/appearanceSettings';
 import manifest from '@/../shared/wallpaper-video-manifest.json';
 import { getBuiltinWallpaperBackground } from '@/lib/wallpaper';
+import { useReducedMotion } from '../useReducedMotion';
 
 function Controls() {
   const settings = useWallpaperSettings();
@@ -43,6 +44,35 @@ afterEach(() => {
 });
 
 describe('application wallpaper lifecycle', () => {
+  // Detached roots have no ThemeProvider. Reuse their real wallpaper snapshot
+  // subscription: motion=0 must stop video loading and reach child consumers.
+  it('follows package motion through the detached window existing subscription', async () => {
+    const initial = { ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'cindy-window' as const,
+      wallpaperMotion: 'dynamic' as const, motion: 0 };
+    let changed!: (value: typeof initial) => void;
+    const unsubscribe = vi.fn(), ensureVideo = vi.fn().mockResolvedValue(null);
+    const onChanged = vi.fn(listener => { changed = listener; return unsubscribe; });
+    vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
+    vi.stubGlobal('electronAPI', { appearanceSettings: {
+      getSync: () => initial, onChanged, ensureWallpaperVideo: ensureVideo,
+      ensureWallpaperImage: vi.fn().mockResolvedValue(null),
+    } });
+    function Motion() { return <span data-testid="reduced">{String(useReducedMotion())}</span>; }
+    const { unmount } = render(<WallpaperSettingsProvider desktopBackground={false}><Motion /></WallpaperSettingsProvider>);
+    await act(async () => {});
+    expect(screen.getByTestId('reduced').textContent).toBe('true');
+    expect(ensureVideo).not.toHaveBeenCalled();
+    expect(document.querySelector('video')).toBeNull();
+    act(() => changed({ ...initial, motion: 1 }));
+    expect(screen.getByTestId('reduced').textContent).toBe('false');
+    await waitFor(() => expect(ensureVideo).toHaveBeenCalledExactlyOnceWith('cindy-window'));
+    act(() => changed(initial));
+    expect(screen.getByTestId('reduced').textContent).toBe('true');
+    expect(onChanged).toHaveBeenCalledOnce();
+    unmount();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
   // #8591: A -> B must show B's preview immediately, then its decoded original.
   // Existing coverage required retaining A instead. Minimal input: two selections
   // with out-of-order image downloads; unit tier, real provider and canvas.

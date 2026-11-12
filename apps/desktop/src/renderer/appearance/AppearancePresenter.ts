@@ -7,22 +7,37 @@ import { SCALABLE_APPEARANCE_TOKENS } from '../styles/generated/token-mappings';
 import { LOCAL_THEME_SUFFIX } from '../../shared/local-themes';
 import type { ThemeSelection } from '../../shared/appearanceDefinition';
 
-let packageSelection: ThemeSelection | undefined;
+let packageSelection: { value: ThemeSelection; rollback?: () => void } | undefined;
 
 /** Preserve synchronous palette application; only packages prepare extra defaults. */
-export function presentTheme(theme: Theme, notifyFailure = true): void {
-  themeService.applyTheme(theme);
+export function presentTheme(theme: Theme, notifyFailure = true, rollbackSelection?: () => void, prepare = true): void {
   const previous = packageSelection;
-  packageSelection = theme.packageSha256 && theme.appearance ? {
+  const value: ThemeSelection | undefined = theme.packageSha256 && theme.appearance ? {
     mode: theme.type,
     familyId: theme.family ? `${theme.family}${LOCAL_THEME_SUFFIX}` : theme.id,
   } : undefined;
+  const previousTheme = value && notifyFailure && prepare ? themeService.getCurrentTheme() : null;
+  themeService.applyTheme(theme);
+  packageSelection = value ? { value } : undefined;
+  if (!prepare) return; // Reverting a rejected preparation leaves the Host's previous defaults intact.
   if (!packageSelection && !previous) return;
+  const bridge = window.electronAPI?.appearanceSettings;
+  if (!bridge?.selectTheme) return;
   const requested = packageSelection;
-  void window.electronAPI?.appearanceSettings?.selectTheme?.(requested ?? null)
+  if (requested && notifyFailure) {
+    // Rapid, unconfirmed choices share one undo point. Release it on success;
+    // localStorage remains the selection owner, never a persisted rollback log.
+    requested.rollback = previous?.rollback ?? (() => {
+      packageSelection = previous;
+      if (rollbackSelection) rollbackSelection();
+      else if (previousTheme) themeService.applyTheme(previousTheme);
+    });
+  }
+  void bridge.selectTheme(value ?? null)
+    .then(() => { if (requested && packageSelection === requested) delete requested.rollback; })
     .catch(() => {
       if (packageSelection !== requested) return;
-      if (notifyFailure) notifyThemeAppearanceFailure();
+      if (notifyFailure) { requested?.rollback?.(); notifyThemeAppearanceFailure(); }
       else window.electronAPI?.logToMain?.('warn', 'renderer/appearance', 'Theme package restore failed; saved selection retained');
     });
 }

@@ -28,9 +28,11 @@ import { WallpaperVideo } from '@/components/layout/WallpaperVideo';
 import { useWallpaperAsset } from './useWallpaperAsset';
 import { useWallpaperBackground } from './useWallpaperBackground';
 import { useReducedMotion } from './useReducedMotion';
+import { AppearanceMotionContext } from '../appearance/AppearanceMotionContext';
 
 export interface WallpaperSettings {
   customizedKeys?: readonly string[];
+  motion?: number;
   wallpaperId: WallpaperId;
   wallpaperOverlay: number;
   wallpaperVisibility?: number | null;
@@ -77,6 +79,7 @@ function getInitialWallpaperSettings(): WallpaperSettings {
 function pickWallpaperSettings(settings: AppearanceSettings): WallpaperSettings {
   return {
     ...(settings.customizedKeys ? { customizedKeys: settings.customizedKeys } : {}),
+    ...(settings.motion !== 1 ? { motion: settings.motion } : {}),
     wallpaperId: settings.wallpaperId,
     wallpaperOverlay: settings.wallpaperOverlay,
     wallpaperVisibility: settings.wallpaperVisibility,
@@ -114,7 +117,7 @@ export function WallpaperSettingsProvider({
   const isDarkRef = useRef(isDark);
   isDarkRef.current = isDark;
   const visibility = visibilityPreview ?? getBackgroundVisibility(settings, isDark);
-  const reducedMotion = useReducedMotion();
+  const reducedMotion = useReducedMotion() || settings.motion === 0;
   const imageAsset = useWallpaperAsset(settings.wallpaperId, 'image', visibility > 0);
   const videoAsset = useWallpaperAsset(
     settings.wallpaperId,
@@ -336,19 +339,21 @@ export function WallpaperSettingsProvider({
   );
 
   return (
-    <WallpaperSettingsContext.Provider value={value}>
-      {visibility > 0 && (
-        <WallpaperVideo
-          wallpaperId={settings.wallpaperId}
-          motion={settings.wallpaperMotion}
-          customWallpaperUrl={settings.customWallpaperUrl}
-          officialVideoUrl={videoAsset.url}
-          onFailure={onPlaybackFailure}
-          onReady={onPlaybackReady}
-        />
-      )}
-      {children}
-    </WallpaperSettingsContext.Provider>
+    <AppearanceMotionContext.Provider value={reducedMotion}>
+      <WallpaperSettingsContext.Provider value={value}>
+        {visibility > 0 && (
+          <WallpaperVideo
+            wallpaperId={settings.wallpaperId}
+            motion={settings.wallpaperMotion}
+            customWallpaperUrl={settings.customWallpaperUrl}
+            officialVideoUrl={videoAsset.url}
+            onFailure={onPlaybackFailure}
+            onReady={onPlaybackReady}
+          />
+        )}
+        {children}
+      </WallpaperSettingsContext.Provider>
+    </AppearanceMotionContext.Provider>
   );
 }
 

@@ -27,6 +27,8 @@ import {
 } from '../useTheme';
 
 const applyVibrancyMock = vi.fn();
+vi.mock('../../lib/toast', () => ({ toast: { error: vi.fn() } }));
+vi.mock('../../i18n', () => ({ default: { t: (key: string) => key } }));
 let systemPrefersDark = false;
 
 // jsdom 无 matchMedia,ThemeProvider 初始化与 system 模式需要它。
@@ -142,6 +144,67 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     expect(localStorage.getItem('theme.familyId')).toBe('loose-local');
     unmount();
   });
+
+  // Real selectors/storage/palette: a rejected package must restore the last
+  // accepted choice even if earlier rejected requests have already completed.
+  // Capture only the in-flight undo point; no persisted selection or migration.
+  it.each(['builtin', 'absent', 'package', 'mode', 'rapid', 'accepted'])(
+    'restores the original selection and palette after package rejection (%s)', async scenario => {
+      vi.mocked(themeService.applyTheme).mockRestore();
+      const packaged = (family: string, type: 'light' | 'dark') => ({
+        id: `${family}-${type}-local`, family, name: family, type, colors: { surface: '#fafafa' },
+        packageSha256: 'a'.repeat(64), appearance: { density: 0.9 },
+      });
+      let previousFamily = scenario === 'builtin' ? 'default' : scenario === 'absent' ? 'cindy' : 'kept-local';
+      if (scenario !== 'absent') {
+        localStorage.setItem('theme', 'system');
+        localStorage.setItem('theme.familyId', previousFamily);
+      }
+      let stored = [localStorage.getItem('theme'), localStorage.getItem('theme.familyId')];
+      const selectTheme = vi.fn().mockResolvedValue(DEFAULT_APPEARANCE_SETTINGS);
+      Object.assign(window.electronAPI, { localThemes: {
+        listSync: () => ({ success: true, themes: ['kept', 'broken', 'newer'].flatMap(family =>
+          [packaged(family, 'light'), packaged(family, 'dark')]), diagnostics: [] }),
+        onChanged: () => () => {},
+      }, appearanceSettings: { getSync: () => DEFAULT_APPEARANCE_SETTINGS,
+        onChanged: () => () => {}, selectTheme } });
+      bootstrapLocalThemesSync();
+      const { result, unmount } = renderHook(() => useTheme(), { wrapper });
+      await act(async () => {});
+      if (scenario === 'accepted') {
+        await act(async () => { result.current.setFamily('newer-local'); });
+        previousFamily = 'newer-local';
+        stored = [localStorage.getItem('theme'), localStorage.getItem('theme.familyId')];
+      }
+      const previousTheme = themeService.getCurrentTheme();
+      const acceptedCalls = selectTheme.mock.calls.length;
+      const rejects: Array<(reason: Error) => void> = [];
+      selectTheme.mockImplementation((selection: unknown) => selection === null
+        ? Promise.resolve(DEFAULT_APPEARANCE_SETTINGS)
+        : new Promise((_resolve, reject) => { rejects.push(reject); }));
+      act(() => {
+        if (scenario === 'mode') result.current.setTheme('dark');
+        else result.current.setFamily('broken-local');
+      });
+      if (scenario === 'rapid') {
+        act(() => { result.current.setTheme('dark'); result.current.setFamily('newer-local'); });
+        await act(async () => { for (const reject of rejects.slice(0, -1)) reject(new Error('Superseded')); });
+        expect(result.current.familyId).toBe('newer-local');
+      }
+      const requests = rejects.length;
+      await act(async () => { rejects.at(-1)!(new Error('Invalid resource')); await vi.dynamicImportSettled(); });
+      expect(result.current.familyId).toBe(previousFamily);
+      expect(result.current.theme).toBe('system');
+      expect([localStorage.getItem('theme'), localStorage.getItem('theme.familyId')]).toEqual(stored);
+      expect(themeService.getCurrentTheme()).toBe(previousTheme);
+      expect(document.documentElement.dataset.theme).toBe(previousTheme!.id);
+      expect(selectTheme).toHaveBeenCalledTimes(acceptedCalls + requests);
+      selectTheme.mockResolvedValue(DEFAULT_APPEARANCE_SETTINGS);
+      act(() => result.current.setFamily('default'));
+      await act(async () => {});
+      unmount();
+    },
+  );
 
   it('把应用主题模式同步给 main 作为下次 Windows 创建期 backing 镜像', () => {
     localStorage.setItem('theme', 'dark');

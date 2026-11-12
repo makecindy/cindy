@@ -128,7 +128,7 @@ function disableTransitionsTemporarily(): void {
   });
 }
 
-export function applyThemeClass(theme: Theme, force = false): void {
+export function applyThemeClass(theme: Theme, force = false, rollback?: () => void, prepare = true): void {
   const root = document.documentElement;
   const wasDark = root.classList.contains('dark');
   // 首启亮色门激活期间(pre-login 会话)一律按亮色解析——ThemeProvider 挂载
@@ -144,7 +144,7 @@ export function applyThemeClass(theme: Theme, force = false): void {
     disableTransitionsTemporarily();
   }
 
-  presentTheme(nextTheme);
+  presentTheme(nextTheme, true, rollback, prepare);
 }
 
 /** 无 ThemeProvider 的窗口用。 */
@@ -282,19 +282,37 @@ export function ThemeProvider({
     applyThemeClass(getStoredTheme(), true);
   }), []);
 
+  const capturePackageRollback = useCallback((family: ReturnType<typeof tryGetFamily>) => {
+    if (![family?.light, family?.dark].some(variant => variant?.packageSha256 && variant.appearance)) return;
+    const previousMode = getStoredTheme(), previousFamily = getStoredFamilyId();
+    let storedMode: string | null = null, storedFamily: string | null = null;
+    try { storedMode = localStorage.getItem(STORAGE_KEY); storedFamily = localStorage.getItem(FAMILY_KEY); } catch { /* unavailable */ }
+    return () => {
+      setThemeState(previousMode); setFamilyIdState(previousFamily);
+      try {
+        if (storedMode === null) localStorage.removeItem(STORAGE_KEY); else localStorage.setItem(STORAGE_KEY, storedMode);
+        if (storedFamily === null) localStorage.removeItem(FAMILY_KEY); else localStorage.setItem(FAMILY_KEY, storedFamily);
+      } catch { /* localStorage may be unavailable */ }
+      applyThemeClass(previousMode, true, undefined, false);
+    };
+  }, []);
+
   const setTheme = useCallback((next: Theme) => {
+    const rollback = capturePackageRollback(tryGetFamily(familyId));
     setThemeState(next);
     try {
       localStorage.setItem(STORAGE_KEY, next);
     } catch {
       // localStorage may be unavailable
     }
-    applyThemeClass(next);
-  }, []);
+    applyThemeClass(next, false, rollback);
+  }, [capturePackageRollback, familyId]);
 
   const setFamily = useCallback(
     (next: string) => {
-      if (!tryGetFamily(next)) return;
+      const family = tryGetFamily(next);
+      if (!family) return;
+      const rollback = capturePackageRollback(family);
       setFamilyIdState(next);
       try {
         localStorage.setItem(FAMILY_KEY, next);
@@ -302,9 +320,9 @@ export function ThemeProvider({
         // localStorage may be unavailable
       }
       // 本地主题可在 ID 不变时刷新配置，必须重新 apply 才会更新 CSS 与品牌素材订阅者。
-      applyThemeClass(theme, true);
+      applyThemeClass(theme, true, rollback);
     },
-    [theme],
+    [capturePackageRollback, theme],
   );
 
   // setFamily / setTheme 各自已经调过 applyThemeClass; 这个 effect 只处理
