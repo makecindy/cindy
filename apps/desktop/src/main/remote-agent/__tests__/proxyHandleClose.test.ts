@@ -47,6 +47,26 @@ function fixture(agentKind: 'codex' | 'claude-code' = 'codex') {
 }
 
 describe('remote stream close settles the product turn', () => {
+  it.each(['provider-restarting', 'error'])('does not recover when Stop follows a queued foreground event (%s)', async reason => {
+    const f = fixture();
+    let stop: Promise<unknown> | undefined;
+    f.session.onEvent(event => {
+      if (event.type === 'text') stop = f.session.abort().catch(() => undefined);
+    });
+    try {
+      await f.session.send('work');
+      f.client.onData(Buffer.from([
+        JSON.stringify({ t: 'event', event: { type: 'text', source: 'codex', data: { text: 'queued body' } } }),
+        JSON.stringify({ t: 'closed', reason }), '',
+      ].join('\n')), false);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      await stop;
+      expect(f.restartRecovery).not.toHaveBeenCalled();
+      expect(f.seen.filter(e => e.type === 'error')).toEqual([]);
+      expect(f.controller.hasActiveTurn()).toBe(false);
+    } finally { await f.session.close(); }
+  });
+
   it.each(['done', 'provider-error', 'quota-error'])('preserves a queued current %s before provider restart', async terminal => {
     const f = fixture();
     try {

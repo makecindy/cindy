@@ -737,7 +737,8 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       for (const projected of projection.flush()) queue.push(projected);
       queue.push(() => {
         const observed = readSessionSendTerminalStatus(ownerOptions);
-        if (wasAborted || observed === 'settled'
+        if (disposed || abortRequested || sendOwnerOptions !== ownerOptions
+          || wasAborted || observed === 'settled'
           || (observed === undefined && (!wasActive || wasTerminal))) return [];
         onUnsettled?.();
         if (sendOwnerOptions === ownerOptions) terminalEventDelivered = true;
@@ -760,14 +761,14 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       const intentional = teardownRequested;
       const finalEvent = (): AgentEvent | undefined => {
         const observed = readSessionSendTerminalStatus(ownerOptions);
-        const unfinished = !wasAborted && (observed === 'unsettled' || (observed === undefined && wasActive));
+        const unfinished = !wasAborted && !abortRequested && (observed === 'unsettled' || (observed === undefined && wasActive));
         const settled = observed === 'settled' || (observed === undefined && wasTerminal);
         const normalClose = reason === 'closed' || reason === 'detached' || reason === 'ended';
         // Replacement cancels the old product turn; EOF by itself never completes it.
         if (!intentional && unfinished && !settled && reason === 'superseded') {
           return markSessionSendTerminal(ownerOptions, { type: 'done', source: started.agentKind, data: { status: 'cancelled', reason,
             remoteCloseReason: reason, ...(runId ? { remoteRunId: runId } : {}) } });
-        } else if (!intentional && !settled && reason !== 'superseded'
+        } else if (!intentional && !wasAborted && !abortRequested && !settled && reason !== 'superseded'
           && (unfinished || !normalClose)) {
           return markSessionSendTerminal(ownerOptions, {
             type: 'error',
