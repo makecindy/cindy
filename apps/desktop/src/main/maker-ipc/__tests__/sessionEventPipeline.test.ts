@@ -1093,6 +1093,47 @@ describe('production Session event pipeline', () => {
     },
   );
 
+  // #10198 (unit): end-of-turn coverage missed native compaction inside a live
+  // turn. The public pipeline must publish first, then persist the live runtime
+  // snapshot; replay must never write an older boundary's watermark back.
+  it('records the current Pi snapshot at compaction without settling active work', async () => {
+    const h = harness();
+    const snapshot = { contextTokens: 46703, contextWindow: 272000 };
+    h.handle.getUsageSnapshot = () => snapshot as never;
+    h.emit(event('status', { isRunning: true }, { source: 'pi' }));
+    effects.calls.length = 0;
+    const boundary = event('compact_boundary', { postTokens: 46703 }, { source: 'pi' });
+    h.emit(boundary);
+    ordered('broadcast', 'recordSessionContextSnapshot');
+    expect(effects.fn('recordSessionContextSnapshot')).toHaveBeenLastCalledWith('task', 46703, 272000);
+    expect(h.activity.isSessionInTurn('task')).toBe(true);
+    expect(h.deps.notifyGoalIdleAfterTurnSettled).not.toHaveBeenCalled();
+    snapshot.contextTokens = 58000;
+    h.emit(boundary);
+    expect(effects.fn('recordSessionContextSnapshot')).toHaveBeenLastCalledWith('task', 58000, 272000);
+    h.emit(event('tool_use', { toolUseId: 'after-compact', toolName: 'read', input: {} }, { source: 'pi' }));
+    expect(effects.fn('onToolUseEvent')).toHaveBeenCalled();
+    expect(h.activity.isSessionInTurn('task')).toBe(true);
+    await h.dispose();
+  });
+
+  it.each([
+    ['missing', undefined, {}],
+    ['NaN', NaN, {}],
+    ['negative', -1, {}],
+    ['infinite', Infinity, {}],
+    ['old generation', 46703, { sessionTurnGeneration: -1 }],
+    ['old instance', 46703, { sessionInstanceId: 'retired-instance' }],
+    ['background', 46703, { turnScope: 'background' as const }],
+  ])('does not persist a %s compaction over active work', async (_label, postTokens, scope) => {
+    const h = harness();
+    h.handle.getUsageSnapshot = () => ({ contextTokens: 46703, contextWindow: 272000 }) as never;
+    h.emit(event('status', { isRunning: true }, { source: 'pi' }));
+    h.emit(event('compact_boundary', { postTokens }, { source: 'pi', ...scope }));
+    expect(effects.fn('recordSessionContextSnapshot')).not.toHaveBeenCalled();
+    await h.dispose();
+  });
+
   it.each([
     ['xd', 1],
     [null, 1],

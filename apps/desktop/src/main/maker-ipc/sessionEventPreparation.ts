@@ -320,6 +320,22 @@ export function prepareSessionEvent(
   // Claude / Codex 同形 (usageTracker.snapshot() 两边都给 contextTokens / contextWindow),
   // 不按 source 分支 —— 之前漏接 codex 导致重启后圆环归零。
   let pendingContextSnapshot: { contextTokens: number; contextWindow: number } | null = null;
+  if (event.type === 'compact_boundary' && event.source === 'pi') {
+    const postTokens = (event.data as { postTokens?: unknown } | null)?.postTokens;
+    const isCurrent = (event.sessionInstanceId === undefined || event.sessionInstanceId === session.instanceId)
+      && (event.sessionTurnGeneration === undefined || event.sessionTurnGeneration === session.getTurnGeneration());
+    if (isCurrent && typeof postTokens === 'number' && Number.isFinite(postTokens) && postTokens >= 0
+      && !(event.turnScope === 'background' && deps.sessionTurnActivityTracker.isSessionInTurn(session.id))) {
+      // Read the existing synchronous runtime snapshot, not catalog capacity or
+      // a possibly replayed boundary's old value. Pi updates it before enqueueing
+      // the boundary; newer provider usage wins if it has already arrived.
+      const snapshot = session.getUsageSnapshot();
+      pendingContextSnapshot = {
+        contextTokens: snapshot.contextTokens,
+        contextWindow: snapshot.contextWindow,
+      };
+    }
+  }
   let pendingCodexAccountUsageSnapshot: unknown | null = null;
   let shouldMarkTurnStatusIdleAfterBroadcast = false;
   let shouldMarkTurnTerminalIdleAfterBroadcast = false;
