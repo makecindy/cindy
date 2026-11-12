@@ -13866,7 +13866,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           const { teammateWorkspaceDir } = await import('./botProjectMemory.js');
           await getProjectAutomationLoader().deleteProjectSchedules(teammateWorkspaceDir(ownerRoot, botId));
         })
-        .catch((error: unknown) => log.warn('teammate project automations not removed', { error: error instanceof Error ? error.message.slice(0, 80) : 'UNKNOWN' }));
+        .catch((error: unknown) => log.warn('buddy project automations not removed', { error: error instanceof Error ? error.message.slice(0, 80) : 'UNKNOWN' }));
       assertOwner();
       await finishCompanionEnvironmentRemoval(ownerRoot, botId, assertOwner);
     },
@@ -14170,7 +14170,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // Older controllers still offer a stop chip on old task cards; nothing runs through them any more.
   ipcMain.handle(MAKER_INVOKE.BOT_DELEGATION_CANCEL, async (event) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
-    return { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Teammate background tasks were retired' };
+    return { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Buddy background tasks were retired' };
   });
   const captureSessionOwner = () => {
     const owner = getCurrentDbClientSnapshot();
@@ -20428,12 +20428,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       // Teammate-to-teammate messages left in a queue from before V2 have no sender to answer.
       if (restoredFromSnapshot && item.clientId.startsWith('bot-dm:')) {
-        throw new AcceptedCallbackDispatchCancelled('Teammate direct messages were retired');
+        throw new AcceptedCallbackDispatchCancelled('Buddy direct messages were retired');
       }
       // Likewise a V1 background task's queued start / follow-up: nothing would deliver its result,
       // and a task its teammate had paused must not start by itself.
       if (restoredFromSnapshot && /^bot-delegation-(?:start|resume|unpause|interject):/.test(item.clientId)) {
-        throw new AcceptedCallbackDispatchCancelled('Teammate background tasks were retired');
+        throw new AcceptedCallbackDispatchCancelled('Buddy background tasks were retired');
       }
       // 已派发 → 该项不会再走 discard,释放 scheduler 的 discard 监听防泄漏。
       schedulerQueuedPromptDiscardWatchers.delete(item.clientId);
