@@ -98,7 +98,7 @@ vi.mock('../BotDeleteDialog', () => ({
 import { TeammatesSection } from '../TeammatesSection';
 import { BotConnectionStatus } from '../BotConnectionStatus';
 import { markBotRead, resetBotReadStateForTests } from '../botReadState';
-import { readTeammatesSectionCollapsed, writeTeammatesViewMode } from '../teammatesSectionPrefs';
+import { readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed, writeTeammatesViewMode } from '../teammatesSectionPrefs';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 interface BotFixture {
@@ -569,6 +569,41 @@ describe('TeammatesSection header', () => {
       const more = screen.getByRole('button', { name: 'bots.list.sectionExpand · +2' });
       fireEvent.click(more);
       expect(header().getAttribute('aria-expanded')).toBe('true');
+    } finally {
+      globalThis.ResizeObserver = original;
+    }
+  });
+
+  // Unit regression: the real section must measure each newly mounted icon row.
+  // Existing capacity coverage starts with a mounted row; six read buddies and an
+  // initially collapsed section reproduce the missing +N entry after expansion.
+  it('measures icon rows after empty states and list-mode remounts', async () => {
+    const original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe() { this.callback([{ contentRect: { width: 216 } } as ResizeObserverEntry], this as unknown as ResizeObserver); }
+      disconnect() {}
+      unobserve() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      mocks.profiles = Array.from({ length: 6 }, (_, index) => bot({ id: `bot-${index}`, name: `Mate ${index}` }));
+      writeTeammatesViewMode('fixture-owner', 'icons');
+      writeTeammatesSectionCollapsed('fixture-owner', true);
+      const view = await renderSidebar();
+      expect(screen.queryByRole('button', { name: 'Mate 0' })).toBeNull();
+      fireEvent.click(header());
+      expect(screen.getByRole('button', { name: 'bots.list.sectionExpand · +2' })).not.toBeNull();
+      // +N replaces the icon row with the list; switching back must measure again.
+      fireEvent.click(screen.getByRole('button', { name: 'bots.list.sectionExpand · +2' }));
+      fireEvent.keyDown(screen.getByRole('button', { name: 'ccAgent.sidebar.viewStyle' }), { key: 'Enter' });
+      fireEvent.click(screen.getByRole('menuitem', { name: 'bots.list.viewIcons' }));
+      expect(screen.getByRole('button', { name: 'bots.list.sectionExpand · +2' })).not.toBeNull();
+      // The roster can also become empty and return without changing view mode.
+      mocks.profiles = [];
+      view.rerender(<TeammatesSection />);
+      mocks.profiles = Array.from({ length: 6 }, (_, index) => bot({ id: `bot-${index}`, name: `Mate ${index}` }));
+      view.rerender(<TeammatesSection />);
+      expect(screen.getByRole('button', { name: 'bots.list.sectionExpand · +2' })).not.toBeNull();
     } finally {
       globalThis.ResizeObserver = original;
     }

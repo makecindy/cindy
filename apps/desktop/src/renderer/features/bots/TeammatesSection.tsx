@@ -3,7 +3,7 @@ import { aggregateTeammateStatus } from '@cindy/maker-shared/teammate-status';
 import { localTeammateStatus, remoteTeammateStatus, groupTeammateStatus } from './teammateRosterStatus';
 import { BotGenerationLabel } from './BotGenerationLabel';
 import { botRosterLabel } from '../../../shared/botCreation';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import {
   Check,
   LayoutGrid,
@@ -94,18 +94,18 @@ const CHAT_PREVIEW_LIMIT = 5;
  * 展开时的图标模式只占一行:按宽度计算头像容量(含末尾「+N」)。
  * 尚未测量(宽度 0,如首帧或测试环境)时不截断。
  */
-function useAvatarRowCapacity(ref: RefObject<HTMLDivElement | null>, active: boolean): number {
+function useAvatarRowCapacity(element: HTMLDivElement | null): number {
   const [width, setWidth] = useState(0);
-  // 切入图标模式后挂上观察。
+  // 跟随实际 DOM 挂载；空提醒、列表模式或空 roster 都会卸载头像行。
   useEffect(() => {
-    const element = active ? ref.current : null;
+    setWidth(0);
     if (!element || typeof ResizeObserver === 'undefined') return undefined;
     const observer = new ResizeObserver((entries) => {
       setWidth(Math.floor(entries[0]?.contentRect.width ?? 0));
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [ref, active]);
+  }, [element]);
   return width > 0 ? Math.max(1, Math.floor((width + 4) / AVATAR_SLOT_PX)) : Number.POSITIVE_INFINITY;
 }
 
@@ -139,8 +139,8 @@ export function TeammatesSection() {
     writeTeammatesViewMode(dataOwnerId, mode);
   };
   const [showAllChats, setShowAllChats] = useState(false);
-  const avatarRowRef = useRef<HTMLDivElement>(null);
-  const avatarCapacity = useAvatarRowCapacity(avatarRowRef, viewMode === 'icons');
+  const [avatarRowElement, setAvatarRowElement] = useState<HTMLDivElement | null>(null);
+  const avatarCapacity = useAvatarRowCapacity(avatarRowElement);
   useEffect(() => {
     setCollapsed(readTeammatesSectionCollapsed(dataOwnerId));
     setViewMode(readTeammatesViewMode(dataOwnerId));
@@ -573,7 +573,7 @@ export function TeammatesSection() {
 
       {viewMode === 'icons' && iconChats.length > 0 ? (
         // 收起时所有待处理头像换行展示，不藏进 +N。
-        <div ref={avatarRowRef} className={cn('flex items-center gap-1 py-1 pr-0 pl-[22px]', collapsed ? 'flex-wrap' : 'flex-nowrap overflow-hidden')}>
+        <div ref={setAvatarRowElement} className={cn('flex items-center gap-1 py-1 pr-0 pl-[22px]', collapsed ? 'flex-wrap' : 'flex-nowrap overflow-hidden')}>
           {(() => {
             const entries = iconChats.map((entry) => {
               const key = entry.kind === 'group' ? `group:${entry.group.id}`
