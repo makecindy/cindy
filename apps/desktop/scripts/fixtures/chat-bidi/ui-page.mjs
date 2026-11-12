@@ -86,7 +86,10 @@ export default {
       // clipboard serializer. jsdom cannot observe marker direction or clipping.
       const editor = page.locator('.ProseMirror');
       const texts = [rtl, english, 'مرحبا، الإصدار API 123 جاهز.', 'שלום, הקובץ index.html מוכן.'];
-      for (const [prefix, tag] of [['99. ', 'ol'], ['- ', 'ul']]) {
+      const decimalSpaces = [];
+      for (const [prefix, tag, marker, start] of [
+        ['99. ', 'ol', '. ', 99], ['2. ', 'ol', '. ', 2], ['2、', 'ol', '、', 2], ['- ', 'ul', '- ', 0],
+      ]) {
         await editor.fill('');
         await editor.pressSequentially(prefix);
         for (const [index, text] of texts.entries()) {
@@ -98,23 +101,40 @@ export default {
         const checkItems = async () => { for (const [index, text] of texts.entries()) {
           const item = items.nth(index), side = index === 1 ? 'left' : 'right';
           await aligned(item.locator('p').first(), text, side);
-          const layout = await item.evaluate(e => {
+          const layout = await item.evaluate((e, { ordinal, marker }) => {
             const style = getComputedStyle(e), list = e.parentElement.getBoundingClientRect(), box = e.getBoundingClientRect();
-            return { direction: style.direction, leftSpace: box.left - list.left, rightSpace: list.right - box.right, fontSize: parseFloat(style.fontSize) };
-          });
+            const markerStyle = getComputedStyle(e, '::marker');
+            const canvas = document.createElement('canvas').getContext('2d');
+            canvas.font = `${markerStyle.fontWeight} ${markerStyle.fontSize} ${markerStyle.fontFamily}`;
+            return { direction: style.direction, leftSpace: box.left - list.left, rightSpace: list.right - box.right,
+              fontSize: parseFloat(style.fontSize),
+              markerWidth: canvas.measureText(`${ordinal}${marker}`).width,
+              decimalWidth: canvas.measureText(`${ordinal}. `).width };
+          }, { ordinal: start + index, marker });
           assert.equal(layout.direction, side === 'right' ? 'rtl' : 'ltr', `marker direction for ${text}`);
-          assert.ok(layout[side === 'right' ? 'rightSpace' : 'leftSpace'] >= layout.fontSize,
+          const space = layout[side === 'right' ? 'rightSpace' : 'leftSpace'];
+          assert.ok(space >= layout.fontSize,
             `marker must have room on its item's starting side: ${JSON.stringify(layout)}`);
+          if (marker === '. ' && start === 2) decimalSpaces[index] = space;
+          if (marker === '、') {
+            // #10188 CI regression: the old jsdom test inspected which CSS rule
+            // contained a formula. Observe actual ChatInput geometry instead.
+            // Minimal CJK input "2、" must fit its full-width glyph and ordinal;
+            // deleting that extra space must fail even when selectors move.
+            assert.ok(space >= layout.markerWidth, `CJK marker must fit: ${JSON.stringify(layout)}`);
+            assert.ok(space - decimalSpaces[index] >= layout.markerWidth - layout.decimalWidth,
+              `CJK marker needs additional room beyond the same ordinal: ${JSON.stringify(layout)}`);
+          }
         } };
         await checkItems();
-        await ui.capture(tag);
+        await ui.capture(marker === '、' ? 'cjk' : `${tag}-${start}`);
         await editor.press('ControlOrMeta+A');
         const copied = await editor.evaluate(e => {
           const data = new DataTransfer();
           e.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData: data }));
           return data.getData('text/plain');
         });
-        assert.equal(copied, texts.map((text, index) => `${tag === 'ol' ? `${99 + index}.` : '-'} ${text}`).join('\n'));
+        assert.equal(copied, texts.map((text, index) => `${tag === 'ol' ? start + index : ''}${marker}${text}`).join('\n'));
         await editor.press('Backspace');
         await editor.evaluate((e, text) => {
           const data = new DataTransfer(); data.setData('text/plain', text);
