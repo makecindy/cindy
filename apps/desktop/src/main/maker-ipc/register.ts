@@ -6969,14 +6969,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
   setSessionRuntimeProjector((session) => {
     const baseline = parseScheduledModelBaseline(session.scheduledModelBaseline);
-    if (baseline) return projectScheduledPreferences(session.id, baseline);
-    return projectSessionRuntimeControl(session.id, {
+    const projection = baseline ? projectScheduledPreferences(session.id, baseline) : projectSessionRuntimeControl(session.id, {
       agentKind: dbToMakerAgentKind(session.agentKind),
       model: session.model,
       providerId: session.providerId?.trim() || null,
       effort: session.effort as SessionRuntimeProfile['effort'],
       fastMode: session.fastMode,
     });
+    return { ...projection, runtimePluginsSelected: !!readRuntimePluginSettings(session.id) };
   });
   setSessionRuntimeCleanup((sessionId) => {
     // 任务在另一台电脑上还没启动完：让那台停下，不再迟到地启动、跑完这一轮。
@@ -18488,6 +18488,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     if (!isDataOwnerBroadcastScopeCurrent(owner)) throwIpcError('PRECONDITION_FAILED', 'Account changed');
     await writeRuntimePluginSettings(sessionId, settings);
+    if (!isDataOwnerBroadcastScopeCurrent(owner)) throwIpcError('PRECONDITION_FAILED', 'Account changed');
+    broadcastSessionPatched(sessionId, { runtimePluginsSelected: !!readRuntimePluginSettings(sessionId) });
     return readRuntimePluginSettings(sessionId) ?? {};
   });
 
