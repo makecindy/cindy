@@ -1625,6 +1625,45 @@ describe('Chat Server result delivery and refresh', () => {
     else expect(deliveries()[0][2]).not.toHaveProperty('mentions');
   });
 
+  // bot-group-chat.md §4.0 (#10009 review): during a rolling deploy or after a rollback, `/me` can
+  // promise groupTeammateMentions while the replica taking `complete` still validates the strict old
+  // body and refuses `mentions` with 400 INVALID_INPUT; the whole reply was then lost. Unit: real
+  // settle path; the refused body stored nothing, so the same operation goes once more without
+  // `mentions`, and the next reply on this connection no longer names teammates.
+  it('posts a reply without its mentions when the server refuses the field', async () => {
+    deps.log = { warn: vi.fn() };
+    const luna = '20000000-0000-4000-8000-000000000002';
+    const nextExecution = { ...execution, id: '40000000-0000-4000-8000-000000000002' };
+    const members = [
+      { id: botId, kind: 'bot', name: 'Bot', displayName: 'Bot', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'chat', accessRevision: 1, avatar: null },
+      { id: luna, kind: 'bot', name: 'Luna', displayName: 'Luna', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'chat', accessRevision: 1, avatar: null },
+    ];
+    let queued = false;
+    fixture.handle.mockImplementation((route, _method, body) => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupTeammateMentions: 1 } } };
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: [], cursor: '1' } };
+      if (body?.action === 'complete' && 'mentions' in body) return { status: 400, body: { error: { code: 'INVALID_INPUT', details: [{ path: [], code: 'unrecognized_keys' }] } } };
+      if (route === '/executions/claim' && queued) { queued = false; return { body: { execution: nextExecution } }; }
+      return response(route);
+    });
+    await start();
+    await service.settleLaneTurn({ ...terminal, resultText: '@Luna can you review this?' });
+    expect(deliveries()).toHaveLength(2);
+    expect(deliveries()[0][2].mentions).toEqual([luna]);
+    expect(deliveries()[1][2]).not.toHaveProperty('mentions');
+    expect(deliveries()[1][2]).toMatchObject({ operationId: deliveries()[0][2].operationId,
+      content: expect.arrayContaining([{ type: 'text', text: '@Luna can you review this?' }]) });
+    expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail')).toHaveLength(0);
+    queued = true;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(deps.dispatch).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(deps.dispatch).mock.calls[1][0].message.includes('write @ and its name')).toBe(false);
+    await service.settleLaneTurn({ ...terminal, resultText: '@Luna one more thing' });
+    expect(deliveries()).toHaveLength(3);
+    expect(deliveries()[2][2]).toMatchObject({ operationId: `chat:${nextExecution.id}:${nextExecution.epoch}:complete` });
+    expect(deliveries()[2][2]).not.toHaveProperty('mentions');
+  });
+
   // bot-group-chat.md §10: a task the teammate opens during a group execution shows as its card,
   // and this computer edits that same message as the task's status changes; no progress messages.
   it('posts a task card for a task opened from the group and keeps it in step with the task', async () => {

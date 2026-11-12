@@ -2544,11 +2544,23 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    *
    * Only the settlement request is judged here: a later `plans`/`snapshot` read that fails must not
    * be mistaken for a refused reply and turn a published answer into a failure.
+   *
+   * Before that, a server without teammate mentions (a replica not yet updated during a deploy, or
+   * a rollback) refuses the unknown `mentions` field at validation, where nothing is stored: the
+   * same operation is sent once more without it, so the reply is posted and wakes nobody. Once the
+   * server accepts a body without `mentions`, replies stop naming teammates until `/me` is read again.
    */
   async function settleRun(run: Running, action: string, pending: Settlement) {
     const payload = pending.payload!;
     const attempt = () => updateExecution(run, action, payload).then(() => null, (error: unknown) => error);
-    const refusal = await attempt();
+    let refusal = await attempt();
+    if (action === 'complete' && 'mentions' in payload && invalidInput(refusal)) {
+      deps.log?.warn('Group reply mentions refused', { groupId: run.execution.conversation_id,
+        ...chatErrorDiagnostic(refusal), ...refusalDetails(refusal) });
+      delete payload.mentions;
+      refusal = await attempt();
+      if (!invalidInput(refusal) && (!refusal || refusal instanceof ChatResponseError)) supportsTeammateMentions = false;
+    }
     if (!refusal) return;
     if (!contentRefusal(action, refusal)) throw refusal;
     reportRefusal(run, action, refusal, payload.content, 1);
@@ -2560,6 +2572,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // second refusal must not be paired with the first attempt's block shapes.
     reportRefusal(run, action, retried, payload.content, 2);
     throw new SettlementRefused(retried);
+  }
+  /** The server's request validation refused the body (its schema errors are 400 `INVALID_INPUT`). */
+  function invalidInput(error: unknown): error is ChatResponseError {
+    return error instanceof ChatResponseError && error.status === 400 && error.message === 'INVALID_INPUT';
   }
   /** A 4xx the server means as "this content will never be accepted": not auth, permissions or the lease. */
   function contentRefusal(action: string, error: unknown): error is ChatResponseError {
