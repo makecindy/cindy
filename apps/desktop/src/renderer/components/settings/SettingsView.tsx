@@ -708,10 +708,11 @@ function SettingsViewContent() {
                 aria-labelledby="settings-tab-remote-control"
               >
                 <section aria-label={t(localAgentSettings.connections.sectionKey)}>
-                  {/* 远程连接的页面标题在 RemoteControlSection 里，本机应用连接是它下面的分区。 */}
+                  {/* 本机应用连接排在 SSH 之后，Agent-Net 设置卡片保持在整页最底部。 */}
                   <SettingsPageScope>
-                    <RemoteControlSection />
-                    <LocalAgentSection />
+                    <RemoteControlSection>
+                      <LocalAgentSection />
+                    </RemoteControlSection>
                   </SettingsPageScope>
                 </section>
               </div>

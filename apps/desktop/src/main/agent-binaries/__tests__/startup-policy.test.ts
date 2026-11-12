@@ -170,10 +170,23 @@ describe('shared startup policy through the real binary preparation chain', () =
 
   it.each(['darwin', 'win32', 'linux'] as const)('reuses managed runtimes by default on %s after fetching manifest', async (platform) => {
     await reloadBinaries(platform);
+    // Unit regression for fresh offline Windows/macOS/Linux: neither missing
+    // nor installed engines may issue a CDN request during local discovery.
     for (const kind of ['claude-code', 'codex', 'pi'] as const) {
+      await expect(binaries.prepare(kind, { ...quiet, localOnly: true })).resolves.toMatchObject({ ready: false });
       const binaryPath = installManaged(kind);
+      await expect(binaries.prepare(kind, { ...quiet, localOnly: true })).resolves.toMatchObject({ ready: true, path: binaryPath });
+    }
+    expect(mocks.fetchManifest).not.toHaveBeenCalled();
+    for (const kind of ['claude-code', 'codex', 'pi'] as const) {
+      const binaryPath = binaries.getReadyBinaryPath(kind);
       await expect(binaries.peekNeedsDownload(kind)).resolves.toBe(false);
       await expect(binaries.prepare(kind, quiet)).resolves.toMatchObject({ ready: true, path: binaryPath });
+    }
+    if (platform === 'linux') {
+      const newer = writeExecutable(path.join(tempRoot, 'offline-system-claude'), newerStableVersion(PINNED_CLAUDE_VERSION));
+      mocks.systemCommands.set('claude', newer);
+      await expect(binaries.prepare('claude-code', { ...quiet, localOnly: true })).resolves.toMatchObject({ ready: true, path: newer });
     }
     expect(mocks.fetchManifest).toHaveBeenCalled();
     expect(mocks.download).not.toHaveBeenCalled();
@@ -288,10 +301,18 @@ describe('explicit Pi selection on startup', () => {
     mocks.remoteManifest = null;
     await expect(binaries.prepare('pi', quiet)).resolves.toMatchObject({ ready: false, error: 'manifest_failed' });
     expect(binaries.getReadyBinaryPath('pi')).toBeUndefined();
+    // Offline startup must honor selected.json even with a higher leftover.
+    // Normal prepare above still validates the online installation manifest;
+    // local startup must neither fetch it nor disable the selected runtime.
+    mocks.fetchManifest.mockClear();
+    await expect(binaries.prepare('pi', { ...quiet, localOnly: true }))
+      .resolves.toMatchObject({ ready: true, path: selected, downloaded: false });
+    expect(binaries.getReadyBinaryPath('pi')).toBe(selected);
+    expect(mocks.fetchManifest).not.toHaveBeenCalled();
     mocks.remoteManifest = releaseManifest();
     await expect(binaries.prepare('pi', quiet)).resolves.toMatchObject({ ready: true, path: selected });
     fs.unlinkSync(selected);
-    await expect(binaries.prepare('pi', quiet)).resolves.toMatchObject({ ready: false, error: 'pi_selection_invalid' });
+    await expect(binaries.prepare('pi', { ...quiet, localOnly: true })).resolves.toMatchObject({ ready: false, error: 'pi_selection_invalid' });
     expect(binaries.getReadyBinaryPath('pi')).toBeUndefined();
   });
 });

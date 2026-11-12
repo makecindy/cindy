@@ -90,6 +90,31 @@ beforeEach(() => {
  * newer archive (or one failed/corrupt archive). Tier: unit, no external IO.
  */
 describe('background downloads handed to the existing installer', () => {
+  // Offline startup regression: unlike the update tests, CDN must never be
+  // consulted, with a verified install, no install, or an unverified file. Unit.
+  it.each(['verified', 'missing', 'unverified'] as const)('local startup with %s runtime never requests the network', async state => {
+    const binaryPath = state === 'missing' ? undefined : installLocal('1.0.0', state === 'verified');
+    mocks.fetchManifest.mockImplementation(() => new Promise(() => {}));
+    const result = await createBinaryProvisioner(config).prepare({ localOnly: true });
+    expect(result.ready).toBe(state === 'verified');
+    if (state === 'verified') expect(result.binaryPath).toBe(binaryPath);
+    else expect(result.error).toBe('runtime_not_installed');
+    expect(mocks.fetchManifest).not.toHaveBeenCalled();
+    expect(mocks.download).not.toHaveBeenCalled();
+  });
+
+  it('adopts an already downloaded update during local startup without fetching', async () => {
+    installLocal('1.0.0');
+    const provisioner = createBinaryProvisioner(config);
+    await provisioner.prefetch({ manifest: { app: {} } as never });
+    mocks.getCachedManifest.mockReturnValue({ app: {} });
+    const result = await provisioner.prepare({ localOnly: true });
+    expect(result.binaryPath).toContain(asset.version);
+    expect(fs.readFileSync(result.binaryPath, 'utf8')).toBe('runtime');
+    expect(mocks.fetchManifest).not.toHaveBeenCalled();
+    expect(mocks.download).not.toHaveBeenCalled();
+  });
+
   it('keeps the running install during prefetch and installs the verified cache on restart without HTTP', async () => {
     const oldPath = installLocal('1.0.0');
     const provisioner = createBinaryProvisioner(config);

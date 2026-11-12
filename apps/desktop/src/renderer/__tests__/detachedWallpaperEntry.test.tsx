@@ -26,9 +26,9 @@ vi.mock('../hooks/useTheme', () => ({
   followLocalThemeChanges: vi.fn(),
   getInitialThemeVariant: () => ({ theme: 'test' }),
 }));
-vi.mock('../hooks/useFontSettings', () => ({
+vi.mock('../hooks/useFontSettings', async (original) => ({
+  ...await original<typeof import('../hooks/useFontSettings')>(),
   applyFontSettings: vi.fn(),
-  getInitialFontSettings: vi.fn(),
 }));
 vi.mock('../hooks/useLocale', () => ({
   bootstrapInitialLocale: vi.fn(),

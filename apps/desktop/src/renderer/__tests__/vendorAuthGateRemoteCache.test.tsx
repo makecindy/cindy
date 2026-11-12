@@ -19,9 +19,16 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => k
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm }),
 }));
-vi.mock('@/hooks/useVendorReadiness', () => ({
-  useVendorReadiness: () => ({ revalidate }),
-}));
+// Most cases isolate the gate; `realReadiness` runs the production readiness hook.
+let realReadiness = false;
+vi.mock('@/hooks/useVendorReadiness', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/hooks/useVendorReadiness')>();
+  return {
+    ...actual,
+    useVendorReadiness: (vendor: 'cc' | 'codex' | 'pi') =>
+      realReadiness ? actual.useVendorReadiness(vendor) : { revalidate },
+  };
+});
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   remoteProjectsStore: { getDeviceName: () => 'Mac mini' },
 }));
@@ -62,6 +69,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  realReadiness = false;
   vi.unstubAllGlobals();
   invoke.mockClear();
   confirm.mockClear();
@@ -222,6 +230,32 @@ describe('useVendorAuthGate 本机恢复引导', () => {
     });
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe('useVendorAuthGate 本机运行时轴', () => {
+  // PR #9983 Greptile P1 / unit: an offline install may lack local Claude Code.
+  // SSH tasks run the remote runtime, so only local tasks may be blocked by it.
+  it('SSH 任务不被本机缺失的 Claude Code 拦截，本机任务引导到关于页', async () => {
+    realReadiness = true;
+    const getStatus = vi.fn(async () => ({ binaryReady: false, authReady: true }));
+    vi.stubGlobal('electronAPI', {
+      deviceLink: { invoke },
+      maker: { agent: { getStatus }, listProviders: async () => ({ providers: [provider({})] }) },
+    });
+    const { result } = renderHook(() => useVendorAuthGate());
+    await vi.waitFor(() => expect(getStatus).toHaveBeenCalledTimes(3));
+    getStatus.mockClear();
+
+    await expect(result.current.checkAndConfirm('cc', { remoteHostId: 'ssh-host' }))
+      .resolves.toEqual({ proceed: true });
+    expect(getStatus).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+
+    await expect(result.current.checkAndConfirm('cc')).resolves.toEqual({ proceed: false });
+    expect(getStatus).toHaveBeenCalledExactlyOnceWith('claude-code');
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ title: 'logic.confirm.ccBinaryMissingTitle' }));
+    expect(navigate).toHaveBeenCalledExactlyOnceWith('/settings?tab=about');
   });
 });
 

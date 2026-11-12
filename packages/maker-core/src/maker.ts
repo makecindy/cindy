@@ -1970,10 +1970,17 @@ export class Maker {
     if (!agent) {
       return { binaryReady: false, binaryPath: null, authReady: false };
     }
+    // A host may resolve the runtime lazily; a missing install is a status, not an IPC error.
+    let binaryPath: string | null = null;
+    try {
+      binaryPath = agent.getBinaryPath() || null;
+    } catch {
+      binaryPath = null;
+    }
     const auth = await agent.getAuthState();
     return {
-      binaryReady: !!agent.getBinaryPath(),
-      binaryPath: agent.getBinaryPath(),
+      binaryReady: binaryPath !== null,
+      binaryPath,
       authReady: auth.authenticated,
       identity: auth.identity,
     };

@@ -278,7 +278,7 @@
       "resetModules": 1
     },
     "apps/desktop/src/main/maker-host/__tests__/piBinaryDistribution.test.ts": {
-      "sourceReads": 8
+      "sourceReads": 6
     },
     "apps/desktop/src/main/maker-host/__tests__/piNativeAdapterRuntime.test.ts": {
       "realWaits": 1

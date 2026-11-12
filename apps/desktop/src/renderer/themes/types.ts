@@ -1,4 +1,5 @@
 import type { ImageVisibleBounds } from '../../shared/imageVisibleBounds';
+import type { AppearanceDefinition } from '../../shared/appearanceDefinition';
 
 export type ColorIdentifier = string;
 export type ColorValue = string;
@@ -39,4 +40,7 @@ export interface Theme {
   colors: Partial<Record<ColorIdentifier, ColorValue>>;
   /** 新建对话页的方形 icon + 横向 logo；两项缺省时分别回退打包默认素材。 */
   brand?: ThemeBrand;
+  /** Optional package metadata; built-in and loose themes retain their original shape. */
+  packageSha256?: string;
+  appearance?: AppearanceDefinition;
 }

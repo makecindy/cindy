@@ -2176,7 +2176,16 @@
       },
       "sidebarAndPanels": "Seitenleiste und Bereiche",
       "themeLabel": "Design",
+      "createTheme": {
+        "label": "Design erstellen",
+        "hint": "Beschreibe einen Stil oder füge ein Referenzbild hinzu, um Cindys Erscheinungsbild zu gestalten.",
+        "prompt": "Hilf mir, ein teilbares Cindy-Themenpaket mit Vorschau und Prüfung zu erstellen. Mein gewünschter Stil:",
+        "unavailable": "Der Skill zum Erstellen von Designs ist nicht verfügbar. Prüfe unter Skills, ob er aktiviert ist.",
+        "startFailed": "Die Aufgabe zum Erstellen eines Designs konnte nicht geöffnet werden"
+      },
       "themeAriaLabel": "Designauswahl",
+      "themeApplyFailed": "Das Design konnte nicht angewendet werden. Das bisherige Erscheinungsbild bleibt erhalten.",
+      "themeFontFailed": "Die Designschrift konnte nicht geladen werden. Die Standardschrift wird verwendet.",
       "localBadge": "(Lokal)",
       "localThemes": {
         "title": "Lokale Designs",
@@ -6707,6 +6716,7 @@
         "confirm": "Zugriff widerrufen"
       },
       "v2": {
+        "sectionTitle": "Experimentelles Agent-Netzwerk",
         "switch": {
           "title": "Agent-Net (Beta)",
           "hint": "Zeigt die Verbindungstopologie und die letzte Aktivität. Verbindungen sind verschlüsselt, wenn Agent-Net auf beiden Geräten aktiviert ist und die Geräte über Agent-Net gekoppelt wurden. Andere Geräte verwenden die bisherige Verbindung. Gilt nur für diesen Computer."
@@ -17006,6 +17016,9 @@
       },
       "pluginCreator": {
         "description": "Erstelle, bearbeite, debugge und packe Cindy-Plugins oder veröffentliche sie auf Wunsch."
+      },
+      "themeCreator": {
+        "description": "Cindys Farben, Bildmaterial und Darstellungseinstellungen erstellen und prüfen."
       }
     },
     "common": {
@@ -17747,11 +17760,14 @@
       "voiceDirectApiKeyAuthDescription": "Der aktuelle Anbieter für Spracheingabe benötigt einen direkten API-Schlüssel. Unter API-Schlüssel hinzufügen, um die Spracheingabe zu starten?",
       "codexVoiceAuthTitle": "ChatGPT-Verbindung erforderlich",
       "codexVoiceAuthDescription": "Die Spracheingabe verwendet ein verbundenes ChatGPT-Konto für die GPT-Echtzeit-Spracherkennung. Das Konto ist nicht verbunden oder muss aktualisiert werden. Modellanbieter öffnen, um ChatGPT zu verbinden?",
+      "ccBinaryMissingTitle": "Claude Code-Komponente nicht bereit",
+      "ccBinaryMissingDescription": "Die Claude Code-Komponente ist noch nicht installiert, daher ist diese Funktion nicht verfügbar. Verbinde dich mit dem Netzwerk und öffne dann Einstellungen → Info, um sie zu installieren.",
       "codexBinaryMissingTitle": "Codex-Komponente nicht bereit",
       "codexBinaryMissingDescription": "Die Codex-Komponente ist noch nicht bereit, daher ist diese Funktion nicht verfügbar. Versuche es später erneut oder prüfe die Codex-Verbindung unter Einstellungen → Anbieter.",
       "piBinaryMissingTitle": "Pi-Komponente nicht bereit",
       "piBinaryMissingDescription": "Die Pi-Komponente ist noch nicht bereit, daher ist diese Funktion nicht verfügbar. Versuche es später erneut oder öffne Einstellungen → Info, um Pi zu verwalten oder wiederherzustellen.",
       "goToSettings": "Einstellungen öffnen",
+      "remoteCcBinaryMissingTitle": "Claude Code-Komponente auf dem Remote-Gerät nicht bereit",
       "remoteCodexBinaryMissingTitle": "Codex-Komponente auf dem Remote-Gerät nicht bereit",
       "remotePiBinaryMissingTitle": "Pi-Komponente auf dem Remote-Gerät nicht bereit",
       "remoteAuthDescription": "Du musst die Einrichtung auf dem Remote-Gerät „{{device}}“ abschließen, bevor du hier eine Sitzung starten kannst. Richte es auf diesem Gerät ein und versuche es erneut.",
@@ -18125,7 +18141,7 @@
     "exit": "Planmodus beenden"
   },
   "globalDrop": {
-    "cindyHint": "Zum Installieren des Plugins ablegen",
+    "cindyHint": "Zum Importieren der Cindy-Datei ablegen",
     "cshareHint": "Zum Importieren der geteilten Sitzung ablegen"
   },
   "sessionShare": {
@@ -20248,6 +20264,13 @@
     "detail": "Anfrage von {{device}}\nZweck: {{purpose}}\n\nGeräte Ihres Kontos können diesen Computer steuern, Aufgaben ausführen und auf Dateien zugreifen. Die Einstellung bleibt aktiv, bis Sie sie in den Einstellungen deaktivieren.",
     "decline": "Jetzt nicht",
     "enable": "Fernsteuerung aktivieren"
+  },
+  "cindyFiles": {
+    "unsupported": "Diese Version unterstützt diese Datei nicht. Aktualisiere Cindy und versuche es erneut.",
+    "invalid": "Diese Cindy-Datei ist ungültig oder beschädigt. Lade sie erneut herunter.",
+    "failed": "Diese Datei konnte nicht importiert werden. Versuche es erneut.",
+    "themeInstalled": "Theme hinzugefügt. Wähle es in den Darstellungseinstellungen aus.",
+    "refreshFailed": "Das Theme wurde installiert, aber die Liste konnte nicht aktualisiert werden. Aktualisiere sie in den Darstellungseinstellungen."
   },
   "modelGroups": {
     "title": "Modellgruppen",

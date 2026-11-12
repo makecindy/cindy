@@ -2146,7 +2146,16 @@
       },
       "sidebarAndPanels": "サイドバーとパネル",
       "themeLabel": "テーマ",
+      "createTheme": {
+        "label": "テーマを作成",
+        "hint": "スタイルや参考画像をもとに Cindy の外観を作成します",
+        "prompt": "共有できる Cindy テーマパッケージを、プレビューと検証付きで作成してください。希望するスタイル：",
+        "unavailable": "テーマ作成スキルを利用できません。スキルで有効になっているか確認してください",
+        "startFailed": "テーマ作成タスクを開けませんでした"
+      },
       "themeAriaLabel": "テーマの選択",
+      "themeApplyFailed": "このテーマを適用できませんでした。現在の外観は変更されていません。",
+      "themeFontFailed": "テーマのフォントを読み込めませんでした。既定のフォントを使用しています。",
       "localBadge": "(ローカル)",
       "localThemes": {
         "title": "ローカルテーマ",
@@ -6664,6 +6673,7 @@
         "confirm": "アクセス権を撤回"
       },
       "v2": {
+        "sectionTitle": "実験的な Agent ネットワーク",
         "switch": {
           "title": "Agent-Net (Beta)",
           "hint": "接続トポロジーと最近のアクティビティを表示します。両方のデバイスで Agent-Net を有効にし、Agent-Net でペアリング済みの場合は暗号化接続を使用します。他のデバイスは従来の接続を使用します。このコンピューターだけに適用されます。"
@@ -16939,6 +16949,9 @@
       },
       "pluginCreator": {
         "description": "Cindy のプラグインを作成・編集・デバッグ・パッケージ化し、必要に応じて公開します。"
+      },
+      "themeCreator": {
+        "description": "Cindy の配色、画像素材、外観設定を作成・検証します。"
       }
     },
     "common": {
@@ -17680,11 +17693,14 @@
       "voiceDirectApiKeyAuthDescription": "現在の音声入力プロバイダーには直接接続用の API Key が必要です。API Keys で追加しますか？",
       "codexVoiceAuthTitle": "ChatGPT への接続が必要です",
       "codexVoiceAuthDescription": "音声入力は、接続済みの ChatGPT アカウントで GPT リアルタイム音声認識を使用します。アカウントが未接続か、接続の更新が必要です。モデルプロバイダーを開いて ChatGPT に接続しますか？",
+      "ccBinaryMissingTitle": "Claude Code コンポーネントの準備ができていません",
+      "ccBinaryMissingDescription": "Claude Code コンポーネントがまだインストールされていないため、この機能は使用できません。ネットワークに接続してから「設定 → 情報」を開くと、インストールが始まります。",
       "codexBinaryMissingTitle": "Codex コンポーネントの準備ができていません",
       "codexBinaryMissingDescription": "Codex コンポーネントの準備がまだできていないため、この機能は使用できません。しばらくしてから再試行するか、「設定 → プロバイダー」で Codex の接続状態を確認してください。",
       "piBinaryMissingTitle": "Pi コンポーネントの準備ができていません",
       "piBinaryMissingDescription": "Pi コンポーネントの準備がまだできていないため、この機能は使用できません。しばらくしてから再試行するか、「設定 → 情報」で Pi を管理または復元してください。",
       "goToSettings": "設定を開く",
+      "remoteCcBinaryMissingTitle": "リモートデバイスの Claude Code コンポーネントが未準備です",
       "remoteCodexBinaryMissingTitle": "リモートデバイスの Codex コンポーネントが未準備です",
       "remotePiBinaryMissingTitle": "リモートデバイスの Pi コンポーネントが未準備です",
       "remoteAuthDescription": "リモートデバイス「{{device}}」で設定を完了してから、ここでセッションを開始できます。そのデバイスで設定してから再試行してください。",
@@ -18057,7 +18073,7 @@
     "exit": "計画モードを終了"
   },
   "globalDrop": {
-    "cindyHint": "ドロップしてプラグインをインストール",
+    "cindyHint": "ドロップして Cindy ファイルをインポート",
     "cshareHint": "ドロップして共有セッションをインポート"
   },
   "sessionShare": {
@@ -20176,6 +20192,13 @@
     "detail": "要求元：{{device}}\n目的：{{purpose}}\n\n有効にすると、同じアカウントのデバイスからタスクの実行やファイルへのアクセスなど、このコンピューターを操作できます。設定で無効にするまで有効です。",
     "decline": "今はしない",
     "enable": "リモート操作を有効にする"
+  },
+  "cindyFiles": {
+    "unsupported": "このバージョンではこのファイルに対応していません。Cindy を更新して再試行してください",
+    "invalid": "この Cindy ファイルは無効か破損しています。ファイルを再取得してください",
+    "failed": "ファイルをインポートできませんでした。再試行してください",
+    "themeInstalled": "テーマを追加しました。外観設定で選択してください",
+    "refreshFailed": "テーマはインストールされましたが、一覧を更新できませんでした。外観設定で更新してください"
   },
   "modelGroups": {
     "title": "モデルグループ",

@@ -353,9 +353,9 @@ export async function prepare(
     try {
       const manager = getPiKernelManager();
       if (manager.hasSelection()) {
-        // Preserve the existing packaged offline policy; an explicit selection only
-        // changes version arbitration, not whether startup requires a manifest.
-        if (app.isPackaged && !await fetchManifest(undefined, opts.signal).catch(() => null)) {
+        // Local startup honors explicit version selection without contacting CDN.
+        // Normal installation keeps the existing manifest validation path.
+        if (!opts.localOnly && app.isPackaged && !await fetchManifest(undefined, opts.signal).catch(() => null)) {
           lastReadyPath.delete('pi');
           return { ready: false, error: 'manifest_failed', downloaded: false };
         }
@@ -385,6 +385,28 @@ export async function prepare(
       return { ready: true, path: devPath, downloaded: false };
     }
     return { ready: false, error: `${kind} dev binary not found for ${getPlatformKey()}`, downloaded: false };
+  }
+
+  if (opts.localOnly) {
+    const local = await getBase(kind).prepare({ localOnly: true, signal: opts.signal });
+    let localPath = local.ready ? local.binaryPath : null;
+    if (process.platform === 'linux' && kind !== 'pi') {
+      const fallback = await findUsableLinuxRuntimeFallbackBinary(kind, opts.signal);
+      if (fallback && fallback !== localPath) {
+        const fallbackVersion = await probeBinaryVersion(fallback, opts.signal);
+        const managedVersion = localPath && await probeBinaryVersion(localPath, opts.signal);
+        // A cached update must not downgrade a usable system/private runtime.
+        // Unknown versions preserve that runtime, as in the normal installer.
+        if (!managedVersion || !fallbackVersion || isBinaryVersionNotOlder(fallbackVersion, managedVersion)) {
+          localPath = fallback;
+        }
+      }
+    }
+    if (localPath) {
+      lastReadyPath.set(kind, localPath);
+      return { ready: true, path: localPath, downloaded: false };
+    }
+    return { ready: false, error: local.error ?? 'runtime_not_installed', downloaded: false };
   }
 
   opts = { ...opts, checkForUpdates: resolveUpdateCheck(kind, opts.checkForUpdates) };

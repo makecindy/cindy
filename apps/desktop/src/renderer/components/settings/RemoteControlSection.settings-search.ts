@@ -36,7 +36,7 @@ export const remoteControlSettings = defineSettings({
     targetId: 'settings-search-target-remote-v2',
     titleKey: 'settings.remoteControl.v2.switch.title',
     descriptionKey: 'settings.remoteControl.v2.switch.hint',
-    sectionKey: 'settings.sections.remoteControl',
+    sectionKey: 'settings.remoteControl.v2.sectionTitle',
     aliases: ['Agent-Net', 'agent net', 'device-link', 'topology', 'new connection', '拓扑', '新版连接', '连接拓扑'],
   },
   onlyEncrypted: {
@@ -47,7 +47,7 @@ export const remoteControlSettings = defineSettings({
     fallbackTargetId: 'settings-search-target-remote-v2',
     titleKey: 'settings.remoteControl.v2.onlyEncrypted',
     descriptionKey: 'settings.remoteControl.v2.onlyEncryptedHint',
-    sectionKey: 'settings.sections.remoteControl',
+    sectionKey: 'settings.remoteControl.v2.sectionTitle',
     aliases: ['Agent-Net only', 'encrypted connections', '仅使用 Agent-Net', '加密连接'],
   },
   ssh: {

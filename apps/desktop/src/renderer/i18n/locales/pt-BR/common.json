@@ -2214,7 +2214,16 @@
       },
       "sidebarAndPanels": "Barra lateral e painéis",
       "themeLabel": "Tema",
+      "createTheme": {
+        "label": "Criar tema",
+        "hint": "Descreva um estilo ou adicione uma imagem de referência para personalizar a aparência do Cindy.",
+        "prompt": "Ajude-me a criar um pacote de tema do Cindy para compartilhar, com prévia e verificação. O estilo que quero é:",
+        "unavailable": "A Skill de criação de temas não está disponível. Verifique nas Skills se ela está ativada.",
+        "startFailed": "Não foi possível abrir a tarefa de criação de tema"
+      },
       "themeAriaLabel": "Seleção de tema",
+      "themeApplyFailed": "Não foi possível aplicar o tema. A aparência atual foi mantida.",
+      "themeFontFailed": "Não foi possível carregar a fonte do tema. A fonte padrão está em uso.",
       "localBadge": "(Local)",
       "localThemes": {
         "title": "Temas locais",
@@ -6774,6 +6783,7 @@
         "confirm": "Revogar acesso"
       },
       "v2": {
+        "sectionTitle": "Rede experimental de Agent",
         "switch": {
           "title": "Agent-Net (Beta)",
           "hint": "Mostra a topologia das conexões e a atividade recente. A conexão é criptografada quando os dois dispositivos ativam o Agent-Net e foram pareados pelo Agent-Net. Os demais dispositivos usam a conexão habitual. Aplica-se apenas a este computador."
@@ -17160,6 +17170,9 @@
       },
       "pluginCreator": {
         "description": "Crie, edite, depure e empacote plugins do Cindy ou publique-os quando solicitado."
+      },
+      "themeCreator": {
+        "description": "Crie e verifique as cores, os recursos visuais e as configurações de aparência do Cindy."
       }
     },
     "common": {
@@ -17913,11 +17926,14 @@
       "voiceDirectApiKeyAuthDescription": "O provedor de entrada de voz atual exige uma chave de API direta. Adicioná-la em Chaves de API para iniciar a entrada de voz?",
       "codexVoiceAuthTitle": "Conexão com o ChatGPT necessária",
       "codexVoiceAuthDescription": "A entrada de voz usa uma conta ChatGPT conectada para reconhecimento de fala em tempo real com GPT. A conta não está conectada ou precisa de atualização. Abrir Provedores de modelos para conectar o ChatGPT?",
+      "ccBinaryMissingTitle": "Componente do Claude Code não está pronto",
+      "ccBinaryMissingDescription": "O componente do Claude Code ainda não está instalado, então este recurso não pode ser usado. Conecte-se à rede e abra Configurações → Sobre para instalá-lo.",
       "codexBinaryMissingTitle": "Componente do Codex não está pronto",
       "codexBinaryMissingDescription": "O componente do Codex ainda não está pronto, então este recurso não pode ser usado. Tente novamente mais tarde ou verifique a conexão do Codex em Configurações → Provedores.",
       "piBinaryMissingTitle": "Componente do Pi não está pronto",
       "piBinaryMissingDescription": "O componente do Pi ainda não está pronto, então este recurso não pode ser usado. Tente novamente mais tarde ou abra Configurações → Sobre para gerenciar ou restaurar o Pi.",
       "goToSettings": "Abrir configurações",
+      "remoteCcBinaryMissingTitle": "Componente do Claude Code não está pronto no dispositivo remoto",
       "remoteCodexBinaryMissingTitle": "Componente do Codex não está pronto no dispositivo remoto",
       "remotePiBinaryMissingTitle": "Componente do Pi não está pronto no dispositivo remoto",
       "remoteAuthDescription": "Você precisa concluir a configuração no dispositivo remoto \"{{device}}\" antes de iniciar uma sessão aqui. Configure-o nesse dispositivo e tente novamente.",
@@ -18292,7 +18308,7 @@
     "exit": "Sair do modo de planejamento"
   },
   "globalDrop": {
-    "cindyHint": "Solte para instalar o plugin",
+    "cindyHint": "Solte para importar o arquivo do Cindy",
     "cshareHint": "Solte para importar a sessão compartilhada"
   },
   "sessionShare": {
@@ -20435,6 +20451,13 @@
     "detail": "Solicitação de {{device}}\nFinalidade: {{purpose}}\n\nOs dispositivos da sua conta poderão controlar este computador, executar tarefas e acessar arquivos. A opção permanece ativa até você desativá-la nas configurações.",
     "decline": "Agora não",
     "enable": "Ativar controle remoto"
+  },
+  "cindyFiles": {
+    "unsupported": "Esta versão não oferece suporte a este arquivo. Atualize o Cindy e tente novamente.",
+    "invalid": "Este arquivo do Cindy é inválido ou está danificado. Obtenha uma nova cópia.",
+    "failed": "Não foi possível importar este arquivo. Tente novamente.",
+    "themeInstalled": "Tema adicionado. Selecione-o nas configurações de aparência.",
+    "refreshFailed": "O tema foi instalado, mas não foi possível atualizar a lista. Atualize-a nas configurações de aparência."
   },
   "modelGroups": {
     "title": "Grupos de modelos",
