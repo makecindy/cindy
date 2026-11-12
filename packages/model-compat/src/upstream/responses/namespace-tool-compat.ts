@@ -107,6 +107,48 @@ type NamespaceRewritePlan = {
 /** Two distinct logical tools would occupy one wire name; the caller maps this to a 400. */
 export class NamespaceToolCollisionError extends Error {}
 
+/**
+ * A bare declaration is stored under the reserved group's identity, which is also what its own
+ * flattened form would claim. Only that form may be displaced by a rename: two namespace children
+ * that flatten to one wire name are a genuine declaration ambiguity — their dotted spellings alias
+ * each other — and keep failing closed.
+ */
+function isBareDeclarationIdentity(identity: string): boolean {
+  return identity.startsWith(`${BUILTIN_FUNCTIONS_NAMESPACE}\u0000`);
+}
+
+/**
+ * Upper bound for the disambiguating suffix. A catalog still colliding after this many candidates
+ * is malformed rather than merely unlucky, and the request keeps failing closed.
+ */
+const MAX_WIRE_NAME_SUFFIX = 64;
+
+/**
+ * Pick a wire name for a namespace child whose flattened form a bare declaration already claims.
+ *
+ * Codex emits both shapes when one of its own code-mode tools is spelled like a namespace child:
+ * the flat declaration `collaboration__followup_task` alongside the group `collaboration` holding
+ * `followup_task`. These are distinct logical tools, so one of them has to move. Failing the
+ * request costs the entire turn — the strict gateway rejects the request, not the single tool —
+ * while renaming the child keeps both reachable.
+ *
+ * Renaming stays request-local: `aliases` maps the new wire name back to `{namespace, name}`, so
+ * replay and response restoration are unchanged, and the renamed entry is authorized by
+ * `tool_choice` through exactly the same path as an unrenamed one.
+ */
+function allocateLoweredWireName(
+  wireOwners: ReadonlyMap<string, string>,
+  preferred: string,
+): string {
+  for (let suffix = 2; suffix <= MAX_WIRE_NAME_SUFFIX; suffix += 1) {
+    const candidate = `${preferred}_${suffix}`;
+    if (!wireOwners.has(candidate)) return candidate;
+  }
+  throw new NamespaceToolCollisionError(
+    `namespace tool wire-name collision for "${preferred}"; no free disambiguated name`,
+  );
+}
+
 function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
   const aliases = new Map<string, RoutedNamespaceToolIdentity>();
   const bareWireNames = new Set<string>();
@@ -134,15 +176,26 @@ function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
       for (const child of parsed.children) {
         const childName = child.name as string;
         const identity = loweredIdentity(parsed.namespace, childName);
-        const wireName = loweredWireName(parsed.namespace, childName);
-        const owner = wireOwners.get(wireName);
-        if (owner !== undefined && owner !== identity) {
-          throw new NamespaceToolCollisionError(
-            `namespace tool wire-name collision for "${wireName}"; rename one of the colliding tools`,
-          );
+        // The same logical tool can be declared in several containers; it keeps the wire name it
+        // was already given so replay and selectors agree no matter which container is rewritten.
+        const known = identities.get(identity);
+        let wireName: string;
+        if (known !== undefined) {
+          wireName = known;
+        } else {
+          const preferred = loweredWireName(parsed.namespace, childName);
+          const owner = wireOwners.get(preferred);
+          if (owner !== undefined && owner !== identity && !isBareDeclarationIdentity(owner)) {
+            throw new NamespaceToolCollisionError(
+              `namespace tool wire-name collision for "${preferred}"; rename one of the colliding tools`,
+            );
+          }
+          wireName = owner === undefined || owner === identity
+            ? preferred
+            : allocateLoweredWireName(wireOwners, preferred);
+          wireOwners.set(wireName, identity);
+          identities.set(identity, wireName);
         }
-        wireOwners.set(wireName, identity);
-        identities.set(identity, wireName);
         addSelector(selectors, wireName, wireName);
         addSelector(selectors, `${parsed.namespace}.${childName}`, wireName);
         addSelector(selectors, childName, wireName);
