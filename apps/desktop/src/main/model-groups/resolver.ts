@@ -31,7 +31,11 @@ export interface ModelGroupResolverDeps {
   views(): Promise<ProviderView[]>;
   /** 本机可用的引擎。 */
   agents(): readonly string[];
-  harnessInstalled(agent: string): Promise<boolean>;
+  /**
+   * 引擎是否就绪：本机看本机安装；传了 agentDeviceId 时看那台电脑(与插件选路同一判断，读不到时按就绪)。
+   * 目录里列着模型不代表那台装了对应引擎。
+   */
+  harnessInstalled(agent: string, agentDeviceId?: string): Promise<boolean>;
   /**
    * 各订阅来源当前的额度窗口，键是 modelGroupQuotaKey：本机的按供应商连接 ID，别的电脑上的再加那台的设备 id。
    * 本机连接的额度不会拿去给别的电脑上同 ID 的连接用。
@@ -77,6 +81,8 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T> {
     new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('model group remote read timed out')), ms); }),
   ]).finally(() => clearTimeout(timer));
 }
+
+const remoteHarnessKey = (agentDeviceId: string, agent: AgentKind) => `${agentDeviceId}\u0000${agent}`;
 
 /** 一个候选所在位置的目录：本机目录与本机可用的引擎，或那个位置允许远程调用的目录。 */
 interface Catalog { views: ProviderView[]; agents: readonly string[] }
@@ -136,7 +142,19 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     const read = <T>(start: (() => Promise<T>) | null): Promise<T | null> =>
       (start ? within(Promise.resolve().then(start), wait).catch(() => null) : Promise.resolve(null));
     const { locations, remoteViews } = deps;
+    // 别的位置上的引擎看那台自己的状态，不看本机装没装；与目录同时读、同一时限，读不到按就绪(那台执行时还会再拦)。
+    const harness = new Map<string, Promise<boolean>>();
+    for (const candidate of route.candidates) {
+      if (!candidate.agentDeviceId || candidate.off) continue;
+      const agent = agentOf(candidate.agentKind);
+      const key = remoteHarnessKey(candidate.agentDeviceId, agent);
+      const agentDeviceId = candidate.agentDeviceId;
+      if (!harness.has(key)) {
+        harness.set(key, within(Promise.resolve().then(() => deps.harnessInstalled(agent, agentDeviceId)), wait).catch(() => true));
+      }
+    }
     return {
+      harness,
       locations: read(locations ? () => locations() : null),
       views: new Map(ids.map((id) => [id, read(remoteViews
         ? () => remoteViews(id).then((catalog) => (catalog.stale ? null : catalog.views))
@@ -153,7 +171,6 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     const installed = new Map<string, boolean>();
     for (const candidate of route.candidates) {
       const agent = agentOf(candidate.agentKind);
-      // 远程位置上的引擎是否就绪由那里的目录决定，不看本机装没装。
       if (!candidate.agentDeviceId && !installed.has(agent)) installed.set(agent, await deps.harnessInstalled(agent));
     }
     const locations = remote ? await remote.locations : null;
@@ -181,7 +198,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
             localAgents: () => agents,
             locations: async () => locations,
             remoteViews: async () => remoteViews,
-          })
+          }) && (await remote?.harness.get(remoteHarnessKey(agentDeviceId, agent))) !== false
         : installed.get(agent) === true && isPluginModelPickerRouteAvailable(exact, views, agents);
       return {
         available,

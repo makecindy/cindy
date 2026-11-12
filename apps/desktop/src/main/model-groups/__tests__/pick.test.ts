@@ -302,7 +302,7 @@ describe('createModelGroupResolver with sources on other computers', () => {
   it('runs the task where the picked source is, judged by that computer\'s catalog rather than local installs', async () => {
     // 本机没装 Codex 也不影响另一台电脑上的来源；推理强度按那台的目录看支不支持。
     const { resolver } = make(groups('order', [REMOTE, { agentKind: 'codex', providerId: 'b', model: 'gpt' }], 'high'),
-      { harnessInstalled: async () => false });
+      { harnessInstalled: async (_agent, agentDeviceId) => agentDeviceId === 'dev-2' });
     const result = await resolver.resolve({ selection });
     expect(result).toMatchObject({
       outcome: 'routed',
@@ -319,6 +319,8 @@ describe('createModelGroupResolver with sources on other computers', () => {
     ['reading its catalog fails', { remoteViews: async () => { throw new Error('NOT_CONNECTED'); } }],
     // 读失败时底层可能给回上次的目录(stale)；那份目录不说明那台现在能用。
     ['only a stale copy of its catalog comes back', { remoteViews: async () => ({ views: [view('a', 'Studio 上的 ChatGPT')], stale: true }) }],
+    // 目录里列着模型，但那台没装对应引擎(与插件选路同一判断)；本机装没装不影响这一条。
+    ['its catalog lists the model but that computer has no engine installed', { harnessInstalled: async (_agent: string, agentDeviceId?: string) => !agentDeviceId }],
   ] as const)('moves on when %s', async (_name, overrides) => {
     const { resolver } = make(groups('order', [REMOTE, { agentKind: 'codex', providerId: 'b', model: 'gpt' }]), overrides);
     const result = await resolver.resolve({ selection });

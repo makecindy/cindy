@@ -62,7 +62,12 @@ const resolver = createModelGroupResolver({
   config: readModelGroupsConfig,
   views: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
   agents: getPluginModelPickerAgents,
-  harnessInstalled: (agent) => isPluginRouteHarnessInstalled(agent),
+  // 别的电脑上的引擎问那台的 maker:agent:status，与插件选路同一判断。
+  harnessInstalled: (agent, agentDeviceId) => isPluginRouteHarnessInstalled(agent, agentDeviceId, async (deviceId, name) => {
+    const result = await remoteBackgroundInvoke(deviceId, 'maker:agent:status', [name]);
+    if (!result.ok) throw new Error(result.error?.message ?? 'Remote agent status unavailable');
+    return result.result as { binaryReady?: boolean } | null | undefined;
+  }),
   quotaWindows,
   // 其他电脑与分享来的来源：与插件卡片里的远程模型同一份位置名单与同一条目录读取。
   locations: readWorkerAgentLocations,
