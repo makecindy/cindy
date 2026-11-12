@@ -100,6 +100,8 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   2026-11-07 起，用户显式添加的[供应商内订阅账号](../product-rules/subscription-account-pools.md)
   使用官方多账号方式：只在该账号的 CLI 子进程设置 `CLAUDE_CONFIG_DIR=~/.claude-cindy-<owner摘要>-<随机id>`，
   登录、状态、用量、任务及分叉始终使用同一目录。目录不含邮箱，不接受外部传入路径。
+  Cindy 从不设置 `CLAUDE_SECURESTORAGE_CONFIG_DIR`，并在启动与每次调起 CLI 时剥掉继承值：
+  CLI 用它（优先于 `CLAUDE_CONFIG_DIR`）决定读哪条钥匙串登录，空值会退回默认登录。
   SSH 远端的配置目录仍由远端 cc-manager 自己管理，不在此列。
   只有 Claude.ai 订阅账号的 OAuth 登录算「Claude 订阅」；CLI 用 Console 账号、API Key、
   apiKeyHelper、中转 token 或第三方云登录时按 `not_a_subscription` 处理，也不替用户改 CLI 的登录。
@@ -298,6 +300,8 @@ relay 原有 60 秒主动续期节流保持不变。
 | 浏览器大结果补读 | MCP 工具会话内存中保留最近四份原始 JSON，每份最多 200 万字符；不落盘、不上传，关闭会话后释放。`readResult` 只能读当前会话生成的引用，沿用原页面实际 profile 的代输入读取限制；切换后端、stop 或读取受保护页面时清除。工具复用宿主现有生命周期与后端对象引用，在下一次访问及异步预检后核对，包括设置/其它任务切换、切走再切回和嵌入后端恢复；切换中的动作仍报告真实结果，但不缓存原文或保存试跑凭证。超过上限明确截断，不能声称完整原文已保存。 |
 | 自建中转服务（Desktop） | `owners/<owner-key>/device-link-relay/`：`config.json` 只存选择、本机中转设置与服务器部署记录（地址、中转 ID、主人公钥，不含秘密）；`secrets/<中转ID>.enc` 是本机在该中转上的设备凭证与 Ed25519 签名私钥（本机当主人时即主人密钥），经 safeStorage 加密，Linux 只有 basic_text 时拒绝保存；第 1 版的 `credential.enc` / `owner-credential.enc` 读到旧配置时删除；`host/` 是本机运行中转时的数据（`relay-state.json` 只存各设备凭证的 SHA-256 与档案，0600 原子写入；`media/` 为设备间中转的文件，创建 24 小时后清理）。全部按账号隔离，账号作用域未提交时不读写。见 `device-link/selfHostedRelayConfig.ts`、`packages/device-link-relay` 与 [方案](../self-hosted-relay-plan.md) |
 | 自动化任务 Webhook | `owners/<账号>/schedule-webhooks/`：`state.json` 存本机端口、排队事件所属的本机路由 ID、固定元数据和 24 小时投递回执，不含请求正文和密钥；`secrets/<路由 ID>.enc` 存开发版本机入口的 safeStorage 加密签名密钥；`remote-identities.json` 只存任务 ID 与本机触发路由 ID 的对应关系，不含云端 URL 或密钥，创建请求前落盘、云端删除确认后清除，离线关闭时保留以防重启复用旧地址。宿主创建时固定账号目录，队列、身份与密钥的读写及清理始终使用该目录，停止后的迟到操作不得改用新账号目录。均为 0600 原子写入；触发条件关闭或任务删除时清理本机队列与密钥，启动时补清孤儿文件。加密不可用时生成密钥明确报错，不回退明文；启动不访问钥匙串，首个事件才解密。见 `scheduler-host/webhook/index.ts` 与 `__tests__/host.test.ts` |
+| 模型组 | `owners/<账号>/model-groups.json` 只存用户建的路线与模式（名字、引用的供应商连接 ID 与模型、选法、例外），全部删除即删文件；`owners/<账号>/model-group-decisions.json` 存最近 50 次选择（组名、模型、来源、推理强度、原因、当时的配额与时间），不含消息、任务标题、账号或凭证，原子写入，损坏按空读取，登录前不读写。见 `main/model-groups/store.ts`、`decisionLog.ts`。 |
+| 模型组任务记录 | `owners/<账号>/model-group-session-bindings.json` 按任务 id 记这个任务来自哪条路线或模式（组的 id）以及正在用的候选（引擎 + 供应商连接 ID + 模型），最多保留最新 2000 条；撞配额时据此提议换来源。不含消息、任务标题、账号或凭证，原子写入，损坏按空读取，登录前不读写。见 `main/model-groups/sessionBindings.ts`。 |
 | 自建中转服务（Mobile） | AsyncStorage `cindy.mobile.self-hosted-relay.v2.<账号>` 只存选择（中转地址、名称、主人公钥、本机设备 ID），不含秘密；设备凭证与 Ed25519 签名私钥合存为 `expo-secure-store` 的 `cindy.selfHostedRelay.credential.v2.<账号哈希>`，仅本机、解锁后可读。没有签名私钥的 v1 记录不再使用，读到时尽力删除。见 `apps/mobile/src/device-link/selfHostedRelay.ts` |
 | 自建中转服务（用户服务器） | 「部署到我的服务器」经 SSH 写入用户自己的服务器：`/opt/cindy-relay`（Node 运行环境与 `relay.mjs`）、`/var/lib/cindy-relay`（属 `cindy-relay` 系统用户、0700：设备凭证哈希与证书档案、Let's Encrypt 账户密钥、0600 原子发布的 `tls/material.json` 证书与 TLS 私钥、`status.json`）、`/etc/systemd/system/cindy-relay.service`。旧分立 PEM 文件仅在密钥配对且未过期时兼容读取；续期提交失败保留上一完整代次。主人凭证明文与主人私钥从不离开主人电脑；卸载前核对中转 ID 和主人公钥，匹配才删除。见 `device-link/selfHostedRelayDeploy.ts` |
 | 本机应用 Agent 授权 | `owners/<owner-key>/local-agent/grants.json`，仅含令牌 SHA-256、自报应用资料、账号范围和按授权归属的原生恢复绑定，不存令牌明文、供应商凭据或消息。复用原子写入与恢复 helper；profile 根 `local-agent/host.lock` 复用跨进程锁，保证一个发现端点和写入者。开发连接码从当前服务内存按需生成，不新增公共实例登记或短码映射文件。临时输入与新授权的 Codex 运行历史在同一 owner 下的 `local-agent/clients/<grant-hash>/`；撤权同时关闭执行及工具入口，不允许跨授权恢复。协议与旧版兼容见 [本机应用接入](../local-agent-api.md) |

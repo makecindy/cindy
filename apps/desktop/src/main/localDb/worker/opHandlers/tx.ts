@@ -327,18 +327,27 @@ function expectOptionalFlag(value: unknown, name: string): boolean {
   return value;
 }
 
+/** Internal main → worker projection; omitted by older callers, preserving their singleton guard. */
+function inactiveCindyIds(value: unknown): Set<string> {
+  if (value === undefined) return new Set();
+  if (!Array.isArray(value)) throw invalidArgs('inactiveCindyIds must be a string array');
+  return new Set(value.map(id => expectString(id, 'inactiveCindyIds item')));
+}
+
 function botsCreateProfile(db: Database.Database, args: unknown): void {
   const p = asRecord(args, 'bots.createProfile args');
   const id = expectString(p.id, 'id');
   const now = expectNumber(p.now, 'now');
   const allowDuplicateName = expectOptionalFlag(p.allowDuplicateName, 'allowDuplicateName');
+  const inactive = inactiveCindyIds(p.inactiveCindyIds);
   db.transaction(() => {
     const config = JSON.parse(expectString(p.capabilitiesJson, 'capabilitiesJson'));
-    const rows = db.prepare(`SELECT p.id, p.display_name AS name, v.capabilities_json AS config, v.identity_source AS identity
+    const rows = db.prepare(`SELECT p.id, p.status, p.display_name AS name, v.capabilities_json AS config, v.identity_source AS identity
       FROM bot_profiles p JOIN bot_profile_versions v ON v.bot_id = p.id AND v.version = p.current_version
-      WHERE p.status != 'archived'`).all() as Array<{ id: string; name: string; config: string; identity: string }>;
+      WHERE p.status != 'archived'`).all() as Array<{ id: string; status: string; name: string; config: string; identity: string }>;
     if ((!allowDuplicateName && rows.some(row => normalizeBotName(row.name) === normalizeBotName(expectString(p.displayName, 'displayName')))) ||
-        (config.templateId === 'cindy' && rows.some(row => JSON.parse(row.config).templateId === 'cindy' || inferBotTemplatePresetId(row.identity) === 'cindy'))) {
+        (config.templateId === 'cindy' && rows.some(row => (row.status === 'deleting' || !inactive.has(row.id))
+          && (JSON.parse(row.config).templateId === 'cindy' || inferBotTemplatePresetId(row.identity) === 'cindy')))) {
       throw Object.assign(new Error('A matching companion already exists'), { code: 'ALREADY_EXISTS' });
     }
     db.prepare(`INSERT INTO bot_profiles
@@ -374,6 +383,7 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
   const expectedVersion = expectNumber(p.expectedCurrentVersion, 'expectedCurrentVersion');
   const now = expectNumber(p.now, 'now');
   const allowDuplicateName = expectOptionalFlag(p.allowDuplicateName, 'allowDuplicateName');
+  const inactive = inactiveCindyIds(p.inactiveCindyIds);
   const avatarRef = p.botAvatarRef === undefined
     ? null
     : asRecord(p.botAvatarRef, 'botAvatarRef');
@@ -432,17 +442,28 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
     if (permissionMode !== undefined && !['ask', 'auto', 'bypassPermissions'].includes(permissionMode)) {
       throw new Error('Invalid canonical permission mode');
     }
-    const latest = editsContent || permissionMode !== undefined || p.clearScheduledModelBaseline === true
+    const latest = editsContent || permissionMode !== undefined || p.clearScheduledModelBaseline === true || p.inactiveCindyIds !== undefined
       ? db.prepare('SELECT capabilities_json AS json, identity_source AS identity FROM bot_profile_versions WHERE bot_id = ? AND version = ?')
         .get(id, expectedVersion) as { json: string; identity: string } | undefined
       : undefined;
-    if ((editsContent || permissionMode !== undefined || p.clearScheduledModelBaseline === true) && !latest) {
+    if ((editsContent || permissionMode !== undefined || p.clearScheduledModelBaseline === true || p.inactiveCindyIds !== undefined) && !latest) {
       throw Object.assign(new Error('Bot profile version missing'), { code: 'PRECONDITION_FAILED' });
     }
     const latestConfig = latest ? asRecord(JSON.parse(latest.json), 'capabilities') : undefined;
     const nextConfig = editsContent
       ? asRecord(JSON.parse(expectString(p.capabilitiesJson, 'capabilitiesJson')), 'capabilities')
       : latestConfig ? { ...latestConfig } : undefined;
+    // A cloud restoration can reactivate an existing copy as well as create one. Do not
+    // race a new local Cindy into existence after the host's asynchronous preflight.
+    if (p.inactiveCindyIds !== undefined && nextConfig?.templateId === 'cindy') {
+      const others = db.prepare(`SELECT p.id, p.status, v.capabilities_json AS config, v.identity_source AS identity
+        FROM bot_profiles p JOIN bot_profile_versions v ON v.bot_id = p.id AND v.version = p.current_version
+        WHERE p.id != ? AND p.status != 'archived'`).all(id) as Array<{ id: string; status: string; config: string; identity: string }>;
+      if (others.some(row => (row.status === 'deleting' || !inactive.has(row.id))
+        && (JSON.parse(row.config).templateId === 'cindy' || inferBotTemplatePresetId(row.identity) === 'cindy'))) {
+        throw Object.assign(new Error('A matching companion already exists'), { code: 'ALREADY_EXISTS' });
+      }
+    }
     const permission = permissionMode === 'bypassPermissions' ? 'trusted' : permissionMode;
     if (nextConfig && latestConfig) {
       // Composer saves can change permissions in place without losing the version
