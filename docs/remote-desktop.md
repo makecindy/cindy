@@ -620,7 +620,18 @@ On macOS, a drag without `delivery_mode` uses `background` when the driver
 advertises that parameter. A background refusal is returned without an automatic
 foreground retry. Explicit `foreground` remains available, but agents must
 coordinate desktop use with the person before requesting it. Legacy drivers
-without the parameter retain their native behavior. Background delivery itself
+without the parameter retain their native behavior. Before each foreground
+primitive (including each text chunk), Cindy requires at least three seconds of
+system input inactivity, or its existing active away-cover input shield. It does
+not subtract Agent input from that clock: a person moving the mouse during or
+just after a CUA action is indistinguishable from synthetic input. A failed or
+invalid idle probe also refuses foreground delivery with `USER_INPUT_ACTIVE`;
+background operations remain available. This can pause consecutive foreground
+actions or stop typing after a completed prefix; it never automatically replays
+that prefix. Presence detection retains its separate Agent-event heuristic.
+This is a dispatch-boundary guard, not native cancellation: an action already
+inside CUA may finish, and physical input during that action cannot yet stop it.
+Background delivery itself
 does not guarantee focus isolation: the driver may temporarily change application
 or window focus. Cindy does not currently verify restoration of the original
 focused window or text field, and does not force focus back after an action.

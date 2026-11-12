@@ -1,5 +1,12 @@
 {
   "githubPrs": {
+    "status": {
+      "open": "열림",
+      "draft": "초안",
+      "merged": "병합됨",
+      "closed": "닫힘"
+    },
+    "statusUnavailable": "아직 상태 정보가 없습니다",
     "title": "PR 링크 관리",
     "hint": "상단에 최대 3개 표시하며 고정한 PR이 먼저 표시됩니다",
     "empty": "GitHub PR 또는 GitLab MR 링크를 붙여넣어 추가하세요",

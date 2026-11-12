@@ -260,6 +260,7 @@ export function VoiceInputOverlay() {
   const draftTextRef = useRef('');
   const finalTextRef = useRef('');
   const rawTranscriptTextRef = useRef('');
+  const useOriginalTextRef = useRef<string | null>(null);
   const pendingPasteTextRef = useRef('');
   const historyEntryIdRef = useRef<string | null>(null);
   const sentAudioMsRef = useRef(0);
@@ -338,6 +339,7 @@ export function VoiceInputOverlay() {
     draftTextRef.current = '';
     finalTextRef.current = '';
     rawTranscriptTextRef.current = '';
+    useOriginalTextRef.current = null;
     pendingPasteTextRef.current = '';
     historyEntryIdRef.current = null;
     terminalOutcomeRef.current = 'success';
@@ -820,6 +822,7 @@ export function VoiceInputOverlay() {
     draftTextRef.current = '';
     finalTextRef.current = '';
     rawTranscriptTextRef.current = '';
+    useOriginalTextRef.current = null;
     pendingPasteTextRef.current = '';
     historyEntryIdRef.current = null;
     sentAudioMsRef.current = 0;
@@ -1208,6 +1211,23 @@ export function VoiceInputOverlay() {
       });
   }, [resetHiddenOverlaySession, showPasteFailure]);
 
+  const useOriginalAndPaste = useCallback(() => {
+    const runId = ownedRunIdRef.current;
+    const text = rawTranscriptTextRef.current.trim();
+    if (stateRef.current !== 'refining' || !runId || !text || cancelRequestedRef.current) return;
+
+    // Keep the existing stop/paste handoff as the only paste owner. Detach this
+    // run before releasing it so late refinement events cannot replace the
+    // explicitly chosen original, even if cancelling the provider is slow.
+    useOriginalTextRef.current = text;
+    ownedRunIdRef.current = null;
+    stateRef.current = 'done';
+    resolveDoneWaiters();
+    void window.electronAPI.voiceInput.cancel({ runId }).catch((cancelError) => {
+      log.warn('could not cancel refinement after choosing original text', cancelError);
+    });
+  }, [resolveDoneWaiters]);
+
   const stopAndPaste = useCallback(async () => {
     if (closingRef.current) return;
     closingRef.current = true;
@@ -1300,7 +1320,7 @@ export function VoiceInputOverlay() {
       return;
     }
 
-    const text = (finalTextRef.current || draftTextRef.current).trim();
+    const text = (useOriginalTextRef.current ?? (finalTextRef.current || draftTextRef.current)).trim();
     if (!text) {
       stateRef.current = 'done';
       commitUsageStats();
@@ -1668,7 +1688,22 @@ export function VoiceInputOverlay() {
             <span className="min-w-0 truncate text-12">{t('voiceInputOverlay.speakerFiltered')}</span>
           )}
           <div className="ml-auto flex items-center gap-1">
-            {!hasBlockingError && !hasPasteError && !hasPermissionPrompt && (
+            {state === 'refining' && !hasBlockingError && !hasPasteError && !hasPermissionPrompt ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                compact
+                tabIndex={-1}
+                onFocus={preventOverlayButtonFocus}
+                onPointerDown={(event) => {
+                  beginOverlayButtonAction(event);
+                  useOriginalAndPaste();
+                }}
+                onClick={suppressOverlayButtonClick}
+              >
+                {t('voiceInputOverlay.useOriginal')}
+              </Button>
+            ) : !hasBlockingError && !hasPasteError && !hasPermissionPrompt && (
               <Tip text={submitTooltip} side="bottom" delay={150} disabled={actionTipsDisabled}>
                 <button
                   type="button"

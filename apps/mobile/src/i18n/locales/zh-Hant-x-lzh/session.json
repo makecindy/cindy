@@ -1,5 +1,12 @@
 {
   "githubPrs": {
+    "status": {
+      "open": "開放",
+      "draft": "草",
+      "merged": "已併",
+      "closed": "已闔"
+    },
+    "statusUnavailable": "尚未取狀態",
     "title": "掌 PR 連結",
     "hint": "頂列至多示 3 個，固定之 PR 居先",
     "empty": "貼 GitHub PR 或 GitLab MR 連結即可增之",

@@ -14228,6 +14228,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "Originaltext Verwenden",
     "rateLimited": "Zu viele Sprachanfragen. Warte kurz und versuche es erneut.",
     "status": {
       "listening": "Spracheingabe",
