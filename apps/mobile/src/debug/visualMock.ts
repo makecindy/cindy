@@ -796,6 +796,7 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
     message(sessionId, 'fixture-read', 'tool_use', { toolName: 'Read', input: { file_path: '/repo/tasks.md' }, toolUseId: 'fixture-read' }, -65000),
     message(sessionId, 'fixture-read-result', 'tool_result', 'Error: file not found', -64000, { toolUseId: 'fixture-read' }),
     message(sessionId, 'fixture-note2', 'assistant', '刚才的读取没有完成。我会保留已有记录，换一种方式继续核对。', -60000, { agentMeta: { assistantPhase: 'commentary' } }),
+    message(sessionId, 'fixture-model-switch', 'agent_switch', { fromAgentKind: 'pi', toAgentKind: 'codex', fromModel: 'quota-test', toModel: 'gpt-6.1-sol' }, -55000),
     message(sessionId, 'fixture-second-work', 'thinking', { text: '继续核对当前状态', durationMs: 1000 }, -50000),
     message(sessionId, 'fixture-search', 'tool_use', { toolName: 'Grep', input: { pattern: 'task', path: '/repo' }, toolUseId: 'fixture-search' }, -45000),
     message(sessionId, 'fixture-search-result', 'tool_result', 'Found task records', -44000, { toolUseId: 'fixture-search' }),
