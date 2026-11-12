@@ -251,8 +251,8 @@ export default function (pi) {
     return { role: 'toolResult', toolCallId: result.toolCallId, toolName: result.toolName, isError: result.isError, content: [{ type: 'text', text: summary }] };
   }
 
-  function allFolded(unit) {
-    for (var i = 0; i < unit.calls.length; i++) if (!isFoldedCall(unit.calls[i])) return false;
+  function allFolded(trip) {
+    for (var i = 0; i < trip.calls.length; i++) if (foldedIds[String(trip.calls[i].id)] === undefined) return false;
     return true;
   }
 
