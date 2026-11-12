@@ -1392,8 +1392,8 @@ export function translatePiEvent(
       const postTokens = result?.estimatedTokensAfter;
       const hasCurrentSnapshot = belongsToCurrentTurn
         && typeof postTokens === 'number' && Number.isFinite(postTokens) && postTokens >= 0;
-      // Update before publication: the host snapshots the live runtime at this
-      // boundary. Unknown/invalid values and old idle work preserve newer usage.
+      // Update before publication so the following status carries this snapshot.
+      // Unknown/invalid values and old idle work preserve newer usage.
       if (hasCurrentSnapshot) ctx.contextTokens = postTokens;
       queue.push({
         type: 'compact_boundary',

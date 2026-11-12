@@ -313,29 +313,13 @@ export function prepareSessionEvent(
     }
     return;
   }
-  // turn 结束的 status event (isRunning=false + status='Done') 携带 endSnapshot。
+  // Terminal status and confirmed Pi compaction status carry their own snapshot.
   // contextTokens / contextWindow 的持久化统一在 main 端做，避免多 window 竞写；
   // 但不能挡在 EVENT broadcast 前面，否则 final/done 已到 main 后还会被同步 SQLite
   // 和 usage 广播拖住。这里先记录待写快照，广播后再执行。
   // Claude / Codex 同形 (usageTracker.snapshot() 两边都给 contextTokens / contextWindow),
-  // 不按 source 分支 —— 之前漏接 codex 导致重启后圆环归零。
+  // 终态不按 source 分支 —— 之前漏接 codex 导致重启后圆环归零。
   let pendingContextSnapshot: { contextTokens: number; contextWindow: number } | null = null;
-  if (event.type === 'compact_boundary' && event.source === 'pi') {
-    const postTokens = (event.data as { postTokens?: unknown } | null)?.postTokens;
-    const isCurrent = (event.sessionInstanceId === undefined || event.sessionInstanceId === session.instanceId)
-      && (event.sessionTurnGeneration === undefined || event.sessionTurnGeneration === session.getTurnGeneration());
-    if (isCurrent && typeof postTokens === 'number' && Number.isFinite(postTokens) && postTokens >= 0
-      && !(event.turnScope === 'background' && deps.sessionTurnActivityTracker.isSessionInTurn(session.id))) {
-      // Read the existing synchronous runtime snapshot, not catalog capacity or
-      // a possibly replayed boundary's old value. Pi updates it before enqueueing
-      // the boundary; newer provider usage wins if it has already arrived.
-      const snapshot = session.getUsageSnapshot();
-      pendingContextSnapshot = {
-        contextTokens: snapshot.contextTokens,
-        contextWindow: snapshot.contextWindow,
-      };
-    }
-  }
   let pendingCodexAccountUsageSnapshot: unknown | null = null;
   let shouldMarkTurnStatusIdleAfterBroadcast = false;
   let shouldMarkTurnTerminalIdleAfterBroadcast = false;
@@ -360,7 +344,17 @@ export function prepareSessionEvent(
       status?: string;
       contextTokens?: number;
       contextWindow?: number;
+      contextSnapshotAuthoritative?: boolean;
     };
+    // Remote event and state records can arrive in different poll chunks. Use
+    // the confirmed status payload, never the proxy cache at compact_boundary.
+    // A replayed boundary alone therefore cannot write an older watermark.
+    const isCompactionSnapshot = event.source === 'pi' && data.isRunning === true
+      && data.contextSnapshotAuthoritative === true && event.turnScope !== 'background'
+      && (event.sessionInstanceId === undefined || event.sessionInstanceId === session.instanceId)
+      && (event.sessionTurnGeneration === undefined || event.sessionTurnGeneration === session.getTurnGeneration())
+      && typeof data.contextTokens === 'number' && Number.isFinite(data.contextTokens) && data.contextTokens >= 0
+      && typeof data.contextWindow === 'number' && Number.isFinite(data.contextWindow) && data.contextWindow > 0;
     // Idle compact / late background work may still send isRunning for UI
     // copy. It must not latch the product turn tracker or idle bookkeeping.
     if (data.isRunning === true && event.turnScope !== 'background') {
@@ -430,8 +424,7 @@ export function prepareSessionEvent(
       shouldMarkTurnStatusIdleAfterBroadcast = true;
     }
     if (
-      data.isRunning === false &&
-      data.status === 'Done' &&
+      (isCompactionSnapshot || (data.isRunning === false && data.status === 'Done')) &&
       typeof data.contextTokens === 'number'
     ) {
       pendingContextSnapshot = {
