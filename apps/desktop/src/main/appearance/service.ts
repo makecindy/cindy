@@ -123,8 +123,7 @@ export class AppearanceService {
   }
   async reset(): Promise<AppearanceSettings> {
     ++this.selectionGeneration;
-    await this.deps.store.updateAtomic(current => ({
-      ...Object.fromEntries(current.customizedKeys.map(key => [key, undefined])),
+    await this.deps.store.resetAtomic(current => ({
       // Retain completion of the migration; never re-adopt stale localStorage.
       ...(current.value.themeSelection ? { themeSelection: { ...DEFAULT_THEME_SELECTION } } : {}),
     }));

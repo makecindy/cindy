@@ -21,6 +21,7 @@ import {
   readAppearanceSettingsState,
   writeAppearanceSettingsPatch,
   migrateAppearanceThemeSelection,
+  resetAppearanceSettings,
   appearanceService,
   updateAppearanceSettingsAtomic,
   readSelectedThemeFont,
@@ -123,6 +124,21 @@ describe('terminal appearance overrides', () => {
     await expect(migrateAppearanceThemeSelection({ mode: 'dark', familyId: 'default' })).rejects.toThrow();
     expect(fs.readFileSync(file, 'utf8')).toBe('{broken');
     expect(readAppearanceSettingsState().value.themeSelection).toBeUndefined();
+  });
+
+  // Reset recovery existed before the theme owner. Ordinary writes/migration
+  // must preserve bad files, while an explicit reset must restore writability.
+  // Unit, real public settings entry and disk; warm cache models external damage.
+  it.each(['malformed', 'oversized'] as const)('recovers %s appearance settings through explicit reset', async kind => {
+    const file = path.join(fixture.userData, 'appearance-settings.json');
+    fs.writeFileSync(file, JSON.stringify({ themeSelection: { mode: 'dark', familyId: 'cindy' }, uiSize: 18 }));
+    expect(readAppearanceSettingsState().value.uiSize).toBe(18);
+    fs.writeFileSync(file, kind === 'malformed' ? '{broken' : ' '.repeat(16 * 1024 + 1));
+    expect(await resetAppearanceSettings()).toMatchObject({ uiSize: 14, wallpaperId: 'none' });
+    expect(fs.existsSync(file)).toBe(false);
+    await writeAppearanceSettingsPatch({ uiSize: 17 });
+    expect(readAppearanceSettingsState().value.uiSize).toBe(17);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ uiSize: 17 });
   });
 
   // End-to-end Host ownership, unit with real overrides/ZIP: themes supply
