@@ -17,6 +17,8 @@ import { readCodexLocalAuthState } from '../../../desktop/src/main/maker-host/co
 import { createPiAuthAdapter } from '../../../desktop/src/main/maker-host/pi-auth.js';
 import { subscriptionAccountKind } from '../../../desktop/src/main/maker-host/subscription-account-kind.js';
 import { getActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.js';
+import { resolveModelContextProviderId } from '../../../desktop/src/main/maker-host/catalog-to-descriptors.js';
+import { createClaudeModelResolvers, createCodexModelResolvers, createPiModelResolvers } from '../../../desktop/src/main/maker-host/engineModelResolvers.js';
 import { isNativeProviderAuthBound, bindNativeProviderAuth, unbindNativeProviderAuth } from '../../../desktop/src/main/maker-host/nativeProviderAuthBinding.js';
 
 import { GatewayCodexRestartService } from '../../../desktop/src/main/maker-ipc/gatewayCodexRestart.js';
@@ -26,6 +28,7 @@ import { isLocalSessionBusy } from '../../../desktop/src/main/maker-host/codex-c
 import type { createHostProviderConfig } from './provider-config.js';
 import type { createHostMcpRuntime } from './mcp-runtime.js';
 import type { createHostCodexRuntime } from './codex-runtime.js';
+import { createHostModelContext } from './model-context.js';
 
 type HostProviderConfig = ReturnType<typeof createHostProviderConfig>;
 
@@ -243,6 +246,20 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     readCachedGenericOAuthAccessToken: config.oauth.readCachedGenericOAuthAccessToken,
     readClaudeApiKey: () => options.gateway?.credential ?? null,
   }));
+  // The same per-model resolvers the desktop gives each engine (engineModelResolvers.ts).
+  const modelContext = options.codexRuntime?.modelContext ?? createHostModelContext({
+    readGatewayKey: () => options.gateway?.credential || null, hasCodexOAuthLogin: () => false,
+  });
+  const claudeModelResolvers = createClaudeModelResolvers({
+    getCatalog: modelContext.getSelectableCatalog, resolveContextProviderId: modelContext.resolveContextProviderId,
+  });
+  const codexBinaryPath = options.codexBinaryPath;
+  const codexModelResolvers = codexBinaryPath ? createCodexModelResolvers({
+    getCatalog: modelContext.getSelectableCatalog, resolveContextProviderId: modelContext.resolveContextProviderId,
+    getCodexHome: () => path.join(options.userDataDir, 'codex-home'), getCodexBinaryPath: () => codexBinaryPath,
+  }) : null;
+  // Pi resolves against the full active catalog with the plain route resolver, as on the desktop.
+  const piModelResolvers = createPiModelResolvers({ getCatalog: getActiveCatalog, resolveContextProviderId: resolveModelContextProviderId });
   const agent = options.binaryPath ? new ClaudeCodeAgent({
     auth: createClaudeGatewayAuth(options.gateway, options.resolveProviderRoute, config.claudeNative),
     runtimeConfig: {
@@ -253,6 +270,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     binaryPath: options.binaryPath,
     logger: LOGGER,
     getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+    ...claudeModelResolvers,
     ...(mcpProviders.length > 0 ? { mcpProviders } : {}),
     ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
   }) : null;
@@ -261,6 +279,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         auth: codexAuth,
         ...options.mcpRuntime.codexDeps,
         ...options.codexRuntime?.deps,
+        ...codexModelResolvers,
         runtimeConfig: {},
         binaryPath: options.codexBinaryPath,
         logger: LOGGER,
@@ -282,6 +301,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         mcpProviders,
         resolvePiAgentHome: () => path.join(options.userDataDir, 'pi-agent-home'),
         resolvePiNativeProviders: () => options.providerConfig.piNativeProviders(),
+        ...piModelResolvers,
         ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
       })
     : null;

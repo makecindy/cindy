@@ -1,6 +1,4 @@
 import { createCodexLocalModelSink } from '../../../desktop/src/main/maker-host/codexLocalModelSink.js';
-import { resolveModelDefaultContextWindow } from '../../../desktop/src/main/maker-host/catalog-to-descriptors.js';
-import { readModelContextLimit } from '../../../desktop/src/main/maker-host/model-context-limit-store.js';
 import { hostBlobStore, hostMediaIngest, hostMediaJournal } from '../media-store.js';
 import { MAKER_PUSH } from '../../../desktop/src/main/maker-ipc/channels.js';
 import path from 'node:path';
@@ -20,14 +18,11 @@ import type { createAvailabilityPolicy } from '../../../desktop/src/main/device-
 import { buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM } from '../../../desktop/src/main/maker-host/codex-gateway-config.js';
 import * as routes from '../../../desktop/src/main/maker-host/codex-custom-provider-route.js';
 import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from '../../../desktop/src/main/maker-host/subscription-account-kind.js';
-import { getActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.js';
-import { filterLegacyGptContextProfiles } from '../../../desktop/src/main/maker-host/legacy-context-profiles.js';
-import { createModelContextProviderResolver } from '../../../desktop/src/main/maker-host/modelContextProvider.js';
-import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claude-native-auth.js';
 import { bearerKeyFromHeaders } from '../../../desktop/src/main/model-access/gatewayKeyRejectionCore.js';
 import { captureCodexLocalAuthPolicy } from '../../../desktop/src/main/maker-host/provider-route.js';
 import { registerCodexTextOnlyPolicy } from '../../../desktop/src/main/maker-host/codex-text-only-policy.js';
 import { createHostCodexCredentials } from './codex-credentials.js';
+import { createHostModelContext } from './model-context.js';
 import { hostOutbound, resolveHostOutboundProxy } from '../outbound.mjs';
 import type { createHostProviderConfig } from './provider-config.js';
 import type { createHostModelAccess } from './model-access.js';
@@ -78,9 +73,7 @@ export function createHostCodexRuntime(options: {
     check();
     return { authInjection: proxy.getCodexProxyAuthInjectionState() ?? (native.hasLogin() ? 'oauth-bearer' : 'env-key') };
   };
-  const contextProvider = createModelContextProviderResolver({
-    readGatewayKey: credential, hasClaudeNativeLogin, hasCodexOAuthLogin: native.hasLogin,
-  });
+  const modelContext = createHostModelContext({ readGatewayKey: credential, hasCodexOAuthLogin: native.hasLogin, check });
   const prepare = createCodexSpawnConfig({
     binaryPath: options.binaryPath, proxy,
     getCodexHome: () => { check(); return path.join(options.profileDir, 'codex-home'); },
@@ -89,8 +82,8 @@ export function createHostCodexRuntime(options: {
     readClaudeApiKey: credential, isReplacedCindyGatewayKey: options.modelAccess.isReplacedKey,
     hasCodexOAuthLogin: async () => native.hasLogin(),
     listProviders: () => options.config.publicViews(Boolean(credential())),
-    getDesktopSelectableCatalog: () => { check(); return filterLegacyGptContextProfiles(getActiveCatalog()); },
-    resolveDesktopModelContextProviderId: contextProvider,
+    getDesktopSelectableCatalog: modelContext.getSelectableCatalog,
+    resolveDesktopModelContextProviderId: modelContext.resolveContextProviderId,
     readSubagentOAuth: native.readForDispatch,
     prepareRemote: async () => { throw new Error('SSH Codex transport is not configured in this Host'); },
   });
@@ -99,12 +92,6 @@ export function createHostCodexRuntime(options: {
     disableCodexPluginRuntime: true,
     onCodexLocalModelsListed: createCodexLocalModelSink(options.config.list),
     resolveCodexSubagentRoutingSignature: createCodexRoutingSignature(() => options.config.publicViews(Boolean(credential()))),
-    resolveCodexThreadContextWindow: (providerId, modelId) => {
-      check(); const catalog = filterLegacyGptContextProfiles(getActiveCatalog());
-      const source = contextProvider(catalog, 'codex', providerId, modelId);
-      return (source ? readModelContextLimit('codex', source, modelId) : null)
-        ?? resolveModelDefaultContextWindow(catalog, 'codex', source, modelId);
-    },
     resolveCodexLocalAuthPolicy: captureCodexLocalAuthPolicy,
     isCodexAccountProvider: id => id !== 'openai' && options.config.codexAccounts.isCodexAccountProvider(id),
     isolateCodexAccountSessions: true,
@@ -121,7 +108,7 @@ export function createHostCodexRuntime(options: {
       return { accessToken: auth.accessToken, chatgptAccountId: auth.accountId };
     },
   };
-  return { deps, proxy, native, readRoute, closeSession: proxy.unregister,
+  return { deps, proxy, native, readRoute, modelContext, closeSession: proxy.unregister,
     async close() { closed = true; await proxy.disposeCodexProxy(); },
   };
 }

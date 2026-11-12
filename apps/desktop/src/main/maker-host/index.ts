@@ -45,7 +45,6 @@ import { refreshCustomProvidersIntoCatalog } from './createDesktopProviderServic
 import { hasCodexApiConnections, setCodexApiModelProbe } from './codex-api-model-capabilities.js';
 import { acquireWorktreeRuntimeLease, releaseWorktreeRuntimeLease, type WorktreeRuntimeLease } from '../worktree/runtimeLeases';
 import { assertPrecreatedSessionNotCancelled } from '../worktree/precreatedCancellation';
-import { readCodexContextWindowInfo } from './codex-context-window.js';
 import { app, BrowserWindow } from 'electron';
 import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
@@ -226,12 +225,9 @@ import {
   refreshCatalogDerivedModels,
   resolvePiRuntimeModelDescriptor,
   resolvePiGatewayDescriptorProviderId,
-  resolveVerifiedContextWindow,
-  resolveModelDefaultContextWindow,
-  resolveModelMaxOutputTokens,
 } from './catalog-to-descriptors.js';
-import { readModelContextLimit, resolveModelCompactionPct } from './model-context-limit-store.js';
-import { resolveDesktopModelContextProviderId, resolveDesktopModelEfforts, readStoredSessionContextWindowBudget, resolveConfiguredContextWindow, applySessionContextWindowBudgetToCreateOpts } from './model-context-settings.js';
+import { resolveDesktopModelContextProviderId, readStoredSessionContextWindowBudget, resolveConfiguredContextWindow, applySessionContextWindowBudgetToCreateOpts } from './model-context-settings.js';
+import { createClaudeModelResolvers, createCodexModelResolvers } from './engineModelResolvers.js';
 import {
   prepareCodexCustomContextCatalog,
   prepareCodexGuestModelCatalog,
@@ -1500,26 +1496,10 @@ export function getMaker(): Maker {
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'claude-code'),
       },
-      resolveModelContextLimit: (providerId, modelId) => {
-        const catalog = getDesktopSelectableCatalog();
-        const source = resolveDesktopModelContextProviderId(catalog, 'claude-code', providerId, modelId);
-        return source ? readModelContextLimit('claude-code', source, modelId)
-          ?? resolveModelDefaultContextWindow(catalog, 'claude-code', source, modelId) : null;
-      },
-      resolveModelMaxOutputTokens: (providerId, modelId) => {
-        const catalog = getDesktopSelectableCatalog();
-        const source = resolveDesktopModelContextProviderId(catalog, 'claude-code', providerId, modelId);
-        return resolveModelMaxOutputTokens(catalog, 'claude-code', source, modelId);
-      },
-      resolveModelCompactionPct: (providerId, modelId) => {
-        const source = resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId);
-        return resolveModelCompactionPct(getDesktopSelectableCatalog(), 'claude-code', source, modelId);
-      },
-      resolveVerifiedContextWindow: (providerId, modelId) =>
-        resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'claude-code',
-          resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId), modelId),
-      resolveModelEfforts: (providerId, modelId) =>
-        resolveDesktopModelEfforts(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId),
+      ...createClaudeModelResolvers({
+        getCatalog: getDesktopSelectableCatalog,
+        resolveContextProviderId: resolveDesktopModelContextProviderId,
+      }),
       // SDK PreToolUse / PostToolUse 等 in-process hook 注入点。host 自己定义 hook
       // 实现 (./claude-hooks/*.ts), maker-core 不感知具体逻辑。
       //
@@ -1833,21 +1813,14 @@ export function getMaker(): Maker {
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'codex'),
       },
-      // Resolve settings by the actual provider route. Model specifications never
-      // overwrite a native usage report; explicit settings configure the CLI itself.
-      resolveModelContextLimit: (providerId, modelId) => {
-        const source = resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'codex', providerId, modelId);
-        return source ? readModelContextLimit('codex', source, modelId) : null;
-      },
-      resolveModelCompactionPct: (providerId, modelId) => {
-        const source = resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'codex', providerId, modelId);
-        return resolveModelCompactionPct(getDesktopSelectableCatalog(), 'codex', source, modelId);
-      },
-      resolveVerifiedContextWindow: (providerId, modelId) =>
-        resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'codex',
-          resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'codex', providerId, modelId), modelId),
-      resolveCodexContextWindowInfo: (modelId, config, reportedUsableWindow, codexHome) =>
-        readCodexContextWindowInfo({ codexHome: codexHome ?? getCodexHome(), binaryPath: codexPath(), modelId, config, reportedUsableWindow }),
+      // Context limit, compaction, verified window and both Codex context-window
+      // resolvers: shared with the Node Host (engineModelResolvers.ts).
+      ...createCodexModelResolvers({
+        getCatalog: getDesktopSelectableCatalog,
+        resolveContextProviderId: resolveDesktopModelContextProviderId,
+        getCodexHome,
+        getCodexBinaryPath: codexPath,
+      }),
       prepareCodexHostToolCatalog: async (modelId, contextWindow) => {
         let catalog = await readNativeCodexCatalog(codexPath(), getCodexHome());
         if (!findCodexCatalogModel(catalog, modelId)) catalog.models.push(nativeCodexFallbackModel(modelId));
@@ -1868,13 +1841,6 @@ export function getMaker(): Maker {
         return target;
       },
       resolveCodexLocalAuthPolicy: captureCodexLocalAuthPolicy,
-      resolveCodexThreadContextWindow: (providerId, modelId) => {
-        const source = resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'codex', providerId, modelId);
-        const override = source ? readModelContextLimit('codex', source, modelId) : null;
-        return override ?? resolveModelDefaultContextWindow(
-          getDesktopSelectableCatalog(), 'codex', source, modelId,
-        );
-      },
       isCodexAccountProvider,
       isolateCodexAccountSessions: true,
       onCodexLocalModelsListed: createCodexLocalModelSink(refreshCustomProvidersIntoCatalog),

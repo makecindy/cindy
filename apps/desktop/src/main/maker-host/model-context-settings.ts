@@ -9,6 +9,7 @@ import { hasClaudeNativeLogin } from './claude-native-auth.js';
 import { gatewayDefaultRouteDecision } from './provider-route.js';
 import { resolveModelContextProviderId, resolveVerifiedContextWindow } from './catalog-to-descriptors.js';
 import { readModelContextLimit } from './model-context-limit-store.js';
+import { resolveRouteModelEfforts } from './routeModelEfforts.js';
 import { resolveRouteContextWindowBounds } from '../../shared/sessionContextWindow.js';
 import type { SessionContextWindowBounds } from '../../shared/sessionContextWindowBounds.js';
 
@@ -173,10 +174,7 @@ export function resolveDesktopModelEfforts(
   providerId: string | null | undefined,
   modelId: string,
 ): readonly Effort[] | null {
-  const source = resolveDesktopModelContextProviderId(catalog, agent, providerId, modelId);
-  if (!source) return null;
-  return catalog.providers.find((provider) => provider.id === source)
-    ?.models[agent]?.find((model) => model.id === modelId)?.efforts ?? null;
+  return resolveRouteModelEfforts(resolveDesktopModelContextProviderId, catalog, agent, providerId, modelId);
 }
 
 /** Working budgets can tighten history protection, but never raise its verified ceiling. */

@@ -55,3 +55,70 @@ test('the PiAgent the Host assembles gets the MCP bridge under the key it reads,
   await graph.pi.deps.preparePiExtraSpawnConfig([], ctx);
   assert.deepEqual(ctx.vendorOptions, { cindyRuntimeMcpServerNames: [] });
 });
+
+/*
+ * 测试价值（第二条）
+ * - 可观察结果：Host 组装出的三个引擎实例上，maker-core 读取的按模型解析依赖（上下文上限、输出上限、
+ *   核实窗口、思考档位、Codex 线程窗口）存在，且对目录里的真实模型给出目录声明的值。
+ * - 规则依据：桌面三个构造点一直注入这些依赖（maker-host/index.ts、pi-host.ts，现经
+ *   engineModelResolvers.ts）；Host 之前一个都没给，Claude 与 Pi 用引擎默认窗口，压缩时机与桌面不同。
+ * - 最小失败输入：任一引擎缺这些依赖（旧装配）。
+ * - tier：unit（只构造实例，不起子进程、不调模型）。
+ */
+test('every engine the Host assembles resolves per-model context the way the desktop does', async t => {
+  const { getActiveCatalog } = await import('../../../desktop/src/main/maker-host/active-catalog.ts');
+  const { filterLegacyGptContextProfiles } = await import('../../../desktop/src/main/maker-host/legacy-context-profiles.ts');
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-agent-graph-'));
+  t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
+  configureHostOwner({ userDataDir: profile, ownerId: 'agent-graph-resolvers' });
+  const mcp = createHostMcpRuntime({ appServerIds: () => [], getRemoteMcpBridgeToken: () => null });
+  t.after(() => mcp.close());
+  const graph = createHostAgentGraph({
+    userDataDir: profile,
+    gateway: null,
+    // Never spawned: the test only reads the constructed agents' dependencies.
+    binaryPath: path.join(profile, 'claude'),
+    codexBinaryPath: path.join(profile, 'codex'),
+    piBinaryPath: path.join(profile, 'pi'),
+    mcpRuntime: mcp,
+    mcpProviders: [],
+    storage: {},
+    providerConfig: {
+      grok: { hasGrokOAuthLogin: () => false, grokAccountIdentity: () => null },
+      list: async () => [],
+      readKey: () => null,
+      oauth: { readCachedGenericOAuthAccessToken: () => null },
+      piNativeProviders: () => ({ providers: [], env: {} }),
+      codexAccounts: { setCodexAccountRetirement: () => {}, isCodexAccountProvider: () => false },
+    },
+  });
+  const catalog = filterLegacyGptContextProfiles(getActiveCatalog());
+  const routed = (agent) => {
+    for (const provider of catalog.providers) {
+      if (provider.routing[agent]?.disabled === true) continue;
+      const model = (provider.models[agent] ?? []).find(entry => Number.isSafeInteger(entry.contextWindow) && entry.contextWindow > 0);
+      if (model) return { providerId: provider.id, model };
+    }
+    return null;
+  };
+  for (const [kind, agent] of [['claude-code', graph.agent], ['codex', graph.codex]]) {
+    const deps = agent.deps;
+    for (const key of ['resolveModelContextLimit', 'resolveModelCompactionPct', 'resolveVerifiedContextWindow']) {
+      assert.equal(typeof deps[key], 'function', `${kind} ${key}`);
+    }
+    const target = routed(kind);
+    assert.ok(target, `the catalog routes a ${kind} model`);
+    if (kind === 'claude-code') {
+      assert.equal(deps.resolveModelContextLimit(target.providerId, target.model.id), target.model.contextWindow);
+      assert.equal(typeof deps.resolveModelMaxOutputTokens, 'function');
+      assert.equal(typeof deps.resolveModelEfforts, 'function');
+    } else {
+      // Codex: the CLI limit is only an explicit setting; the thread window falls back to the catalog.
+      assert.equal(deps.resolveModelContextLimit(target.providerId, target.model.id), null);
+      assert.equal(deps.resolveCodexThreadContextWindow(target.providerId, target.model.id), target.model.contextWindow);
+      assert.equal(typeof deps.resolveCodexContextWindowInfo, 'function');
+    }
+  }
+  assert.equal(typeof graph.pi.deps.resolveModelContextLimit, 'function');
+  assert.equal(typeof graph.pi.deps.resolveModelCompactionPct, 'function');
+});

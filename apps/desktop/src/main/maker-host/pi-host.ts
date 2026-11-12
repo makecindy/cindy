@@ -37,7 +37,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { app } from 'electron';
 
-import { readModelContextLimit, resolveModelCompactionPct } from './model-context-limit-store.js';
+import { createPiModelResolvers } from './engineModelResolvers.js';
 import { toolchainThreadCapEnv } from './toolchain-thread-cap.js';
 import { inputHandoffTaskShellEnv } from '../input-handoff/askpass/index.js';
 
@@ -126,7 +126,7 @@ import {
   resolveBundledPiGatewayModelProfile,
 } from './pi-gateway-model-catalog.js';
 import { isExclusiveXaiModelId } from '../../shared/subscriptionModels.js';
-import { resolvePiRuntimeModelDescriptor, resolveModelDefaultContextWindow, resolveModelContextProviderId } from './catalog-to-descriptors.js';
+import { resolvePiRuntimeModelDescriptor, resolveModelContextProviderId } from './catalog-to-descriptors.js';
 import { readPiNativeCompatOverride } from './pi-native-compat-overrides-store.js';
 import {
   resolveManagedPiNativePackagePaths,
@@ -1404,16 +1404,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
       readPiNativeCompatOverride(providerId, modelId, routeKey),
     getManagedSkills: listCindyManagedSkills,
     scanLocalCustomizations,
-    resolveModelContextLimit: (providerId, modelId) => {
-      const catalog = getActiveCatalog();
-      const source = resolveModelContextProviderId(catalog, 'pi', providerId, modelId);
-      return source ? readModelContextLimit('pi', source, modelId)
-        ?? resolveModelDefaultContextWindow(catalog, 'pi', source, modelId) : null;
-    },
-    resolveModelCompactionPct: (providerId, modelId) => {
-      const source = resolveModelContextProviderId(getActiveCatalog(), 'pi', providerId, modelId);
-      return resolveModelCompactionPct(getActiveCatalog(), 'pi', source, modelId);
-    },
+    ...createPiModelResolvers({ getCatalog: getActiveCatalog, resolveContextProviderId: resolveModelContextProviderId }),
     auth: desktopPiAuthAdapter,
     runtimeConfig: buildDesktopPiRuntimeConfig(),
     get binaryPath() { return resolvePiBinaryPath() ?? binaryPath; },

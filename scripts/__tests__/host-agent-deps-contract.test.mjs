@@ -73,7 +73,9 @@ function constructorKeys(sf, ctor) {
 }
 
 // The spread bundles are built in TypeScript as Pick/Partial<AgentDeps>, so their keys are type checked there.
-const TYPED_SPREADS = new Set(['options.mcpRuntime.codexDeps', 'options.codexRuntime?.deps', 'options.mcpRuntime.piDeps']);
+// The per-model resolver bundles come from engineModelResolvers.ts, typed as Required<Pick<AgentDeps, ...>>.
+const TYPED_SPREADS = new Set(['options.mcpRuntime.codexDeps', 'options.codexRuntime?.deps', 'options.mcpRuntime.piDeps',
+  'claudeModelResolvers', 'codexModelResolvers', 'piModelResolvers']);
 
 test('every key the Host hands an engine or Maker exists in the maker-core dependency types', () => {
   const runtime = parse('apps/host/src/agent/runtime.ts');
