@@ -54,6 +54,11 @@ export function setPreserveUnreadableSettingsFilesByDefault(preserve: boolean): 
   preserveUnreadableFilesByDefault = preserve;
 }
 
+/** The same default, for the settings files read outside createOverrideSettingsFile. */
+export function isPreservingUnreadableSettingsFilesByDefault(): boolean {
+  return preserveUnreadableFilesByDefault;
+}
+
 /**
  * Atomic mutations use the ordinary/advisory lock tier and still require the
  * lock to be held. `scopeKey` guards owner/session drift separately; neither
