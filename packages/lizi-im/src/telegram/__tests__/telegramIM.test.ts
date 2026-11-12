@@ -3760,6 +3760,37 @@ describe('TelegramIM mandatory group admission', () => {
     expect(captured!.aborted).toBe(true);
   });
 
+  // Round 3: awaiting the old unbounded membership notice stalled every chat.
+  // Real polling entry, unit tier; hanging notices must not hold the durable membership
+  // decision, owner DM delivery, next poll, or lifecycle cancellation in any branch.
+  it.each([
+    { name: '用户邀请', actor: 111, joined: true, expected: 'approved' },
+    { name: '他人邀请待批准', actor: 222, joined: true, expected: 'pending' },
+    { name: '移出群', actor: 222, joined: false, expected: 'denied' },
+  ])('$name 的通知挂起时，准入保存后仍继续轮询和派发用户私聊', async ({ actor, joined, expected }) => {
+    await connect();
+    const original = api.call.bind(api);
+    let noticeSignal: AbortSignal | undefined;
+    api.call = async (method, params, signal) => {
+      if (method !== 'sendMessage') return original(method, params, signal);
+      noticeSignal = signal;
+      return new Promise((_, reject) => {
+        if (signal?.aborted) reject(new Error('aborted'));
+        else signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      });
+    };
+    const messages: IMMessageEvent[] = [];
+    im.onMessage((m) => messages.push(m));
+    api.pushUpdates([membership(500, actor, joined), privateMessage('still here', 111, 501)]);
+    await vi.waitFor(() => expect(noticeSignal).toBeDefined());
+    await drained(501);
+    await vi.waitFor(() => expect(messages).toHaveLength(1));
+    expect(messages[0].senderId).toBe(OWNER_ID);
+    expect(JSON.parse(ctx.secrets.get(admissionKey)!).groups['-100200'].status).toBe(expected);
+    await im.dispose();
+    expect(noticeSignal!.aborted).toBe(true);
+  });
+
   it('批准保存失败不放行，换绑定用户后旧批准和旧按钮均无效', async () => {
     await connect();
     api.pushUpdates([membership(440)]);

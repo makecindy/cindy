@@ -133,6 +133,19 @@ export class TelegramGroupAdmission {
     );
   }
 
+  notifyMembership(
+    api: TelegramApiClient,
+    text: string,
+    signal: AbortSignal,
+  ): Promise<unknown> {
+    return this.call(
+      api,
+      'sendMessage',
+      { chat_id: this.ownerId, text },
+      signal,
+    );
+  }
+
   async request(
     chat: TgChat,
     api: TelegramApiClient,

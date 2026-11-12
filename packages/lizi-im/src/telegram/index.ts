@@ -1220,13 +1220,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * 清单与上下文都知道这件事), 并私聊告知主人 —— 主人不在群里时也能知道 bot 去了哪。
    * 私聊里的拉黑 / 解除拉黑不处理(没有可见动作)。
    */
-  private async handleMyChatMember(change: TgChatMemberUpdated, updateId: number): Promise<void> {
+  private handleMyChatMember(change: TgChatMemberUpdated, updateId: number): void {
     const chat = change.chat;
     if (chat.type !== 'group' && chat.type !== 'supergroup') return;
     const wasIn = isChatMemberPresent(change.old_chat_member.status);
     const isIn = isChatMemberPresent(change.new_chat_member.status);
     if (wasIn === isIn) return;
-    this.groupAdmission().membership(
+    const admission = this.groupAdmission();
+    admission.membership(
       chat, isIn, String(change.from.id) === this.ownerUserId, updateId,
       `${displayNameOf(change.from)} (${change.from.id})`,
     );
@@ -1244,20 +1245,24 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       text,
       sentAt: change.date * 1000,
     });
-    if (!this.ownerUserId || !this.api) return;
-    if (isIn && !this.groupAdmission().allows(chat.id)) {
-      await this.requestGroupAdmission(chat);
-      return;
-    }
+    const api = this.api;
+    if (!this.ownerUserId || !api) return;
+    const generation = this.configVersion;
+    const signal = this.outboundAbortSignal();
     const notice = isIn
       ? `👥 我被「${actor}」加进了群「${title}」(chat_id: ${chat.id})。`
       : `👥 我被「${actor}」移出了群「${title}」(chat_id: ${chat.id})。`;
-    try {
-      await this.sendPlainChunked(this.ownerUserId, notice);
-    } catch (err) {
+    // Only the durable decision above belongs to the global polling barrier.
+    // Both admission requests and ordinary membership notices use the same bounded,
+    // cancellable transport, and neither holds up later chats or disconnect.
+    const notification = isIn && !admission.allows(chat.id)
+      ? admission.request(chat, api, () => !this.disposing && generation === this.configVersion, signal)
+      : admission.notifyMembership(api, notice, signal);
+    void notification.catch((err) => {
+      if (signal.aborted) return;
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn(`telegram membership notice failed: ${msg}`);
-    }
+    });
   }
 
   async reactToMessage(messageId: string, emoji: string): Promise<string | null> {
@@ -1558,7 +1563,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       return;
     }
     if (update.my_chat_member) {
-      await this.handleMyChatMember(update.my_chat_member, update.update_id);
+      this.handleMyChatMember(update.my_chat_member, update.update_id);
       return;
     }
     const m = update.message;
