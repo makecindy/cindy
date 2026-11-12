@@ -83,6 +83,10 @@ const PLUGINS = {
   organization: { id: 'skill-fixture', namespace: 'acme', market: 'organization', oidc: true },
 } as const;
 
+// Each case installs four plugins and loads both plugin graphs; the parallel
+// desktop pool can make the cold transform alone take tens of seconds.
+const PARITY_TIMEOUT_MS = 120_000;
+
 const ORG_USER = { id: 'user_1', email: 'member@example.com', membershipKind: 'org', orgId: 'org_1', orgSlug: 'acme' } as User;
 
 describe('plugin identity and managed Skills: desktop production functions and the Node Host read the same', () => {
@@ -210,7 +214,7 @@ describe('plugin identity and managed Skills: desktop production functions and t
       [`cindy-plugin-${parts.accountOfficial}:demo`]: true,
       [`cindy-plugin-${parts.organization}:demo`]: false,
     });
-  }, 60_000);
+  }, PARITY_TIMEOUT_MS);
 
   it('with account services unavailable (local mode, nobody signed in)', async () => {
     const { summary, skills, parts } = await compare('local', null);
@@ -228,5 +232,5 @@ describe('plugin identity and managed Skills: desktop production functions and t
       accountOfficial: { facts: 'ready', verified: true, broker: false, audience: false },
       organization: { facts: 'ready', verified: false, broker: false, audience: false },
     });
-  }, 60_000);
+  }, PARITY_TIMEOUT_MS);
 });

@@ -107,6 +107,8 @@ describe('Host runtime config parity with the desktop assembly', () => {
   let desktop: { claude: Config; codex: Config; pi: Config };
   let host: { claude: Config; codex: Config; pi: Config };
 
+  // Both assemblies load the full engine graphs; under the parallel desktop pool
+  // a cold transform takes far longer than the 10 s default hook timeout.
   beforeAll(async () => {
     const { commitVolatileAppSession } = await import('../../appSessionState.js');
     commitVolatileAppSession('local');
@@ -157,7 +159,7 @@ describe('Host runtime config parity with the desktop assembly', () => {
       codex: (graph.codex as unknown as { deps: { runtimeConfig: Config } }).deps.runtimeConfig,
       pi: (graph.pi as unknown as { deps: { runtimeConfig: Config } }).deps.runtimeConfig,
     };
-  });
+  }, 120_000);
 
   afterAll(() => rmSync(root, { recursive: true, force: true }));
 
