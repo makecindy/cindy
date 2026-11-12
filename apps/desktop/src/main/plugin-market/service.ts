@@ -1380,13 +1380,23 @@ export class PluginMarketService {
             log.warn('plugin market installed count deduction skipped', { installedTargets: targets.length });
           } else {
             const deducted = new Set<string>();
-            for (let offset = 0; offset < targets.length; offset += 100) {
-              const result = await this.api.resolve(targets.slice(offset, offset + 100), query || undefined);
-              assertCurrent();
-              for (const row of result.results) if (row.status === 'available' && row.matchesQuery && !deducted.has(row.plugin.id)
-                && isInstalled(this.toItem(row.plugin, local))) {
-                deducted.add(row.plugin.id);
-                queryCounts[row.plugin.scope]--; queryCounts.all--;
+            const deduct = (plugin: VisiblePluginSummary) => {
+              if (!deducted.has(plugin.id) && isInstalled(this.toItem(plugin, local))) {
+                deducted.add(plugin.id);
+                queryCounts[plugin.scope]--; queryCounts.all--;
+              }
+            };
+            if (page.legacyQueryPlugins) {
+              // The legacy page already contains every query match across sources.
+              // Reuse it only for this request; resolving each batch would reread it.
+              const installedIds = new Set(targets.map(target => target.pluginId));
+              for (const plugin of page.legacyQueryPlugins) if (installedIds.has(plugin.id)
+                && (owner.mode === 'cloud' || plugin.scope === 'public')) deduct(plugin);
+            } else {
+              for (let offset = 0; offset < targets.length; offset += 100) {
+                const result = await this.api.resolve(targets.slice(offset, offset + 100), query || undefined);
+                assertCurrent();
+                for (const row of result.results) if (row.status === 'available' && row.matchesQuery) deduct(row.plugin);
               }
             }
             if (Object.values(queryCounts).some(value => value < 0)) throwIpcError('PLUGIN_LIST_CHANGED', 'Plugin query changed while counting installed matches');

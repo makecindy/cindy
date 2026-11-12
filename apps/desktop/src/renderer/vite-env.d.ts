@@ -5794,6 +5794,7 @@ interface ElectronAPI {
     ) => () => void;
     getCompanionCloudState: () => Promise<import('../shared/companionCloud').CompanionCloudSnapshot>;
     takeOverCompanion: (botId: string) => Promise<import('../shared/companionCloud').CompanionCloudActionResult>;
+    repairCompanionProfile: (botId: string, request: import('../shared/companionCloud').CompanionProfileRepairRequest) => Promise<import('../shared/companionCloud').CompanionProfileRepairResult>;
     switchCompanionHome: (botId: string, targetDeviceId: string, options?: import('../shared/companionCloud').CompanionSwitchOptions) => Promise<import('../shared/companionCloud').CompanionCloudActionResult>;
     getCompanionTranscript: (botId: string, before?: string) => Promise<import('../shared/companionCloud').CompanionTranscriptPage>;
     getCompanionHomeChoices: (botId: string) => Promise<import('../shared/companionCloud').CompanionHomeChoices>;
