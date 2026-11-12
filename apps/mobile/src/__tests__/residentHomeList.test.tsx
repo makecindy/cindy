@@ -83,7 +83,7 @@ vi.mock('react-native', async () => {
     }),
   };
 });
-vi.mock('react-native-reanimated', () => ({ default: { View: ({ children, pointerEvents, style }: any) =>
+vi.mock('react-native-reanimated', () => ({ runOnJS: (fn: unknown) => fn, default: { View: ({ children, pointerEvents, style }: any) =>
   <div data-host data-pointer={pointerEvents} data-opacity={Object.assign({}, ...[style].flat()).opacity}>{children}</div> } }));
 const roots: ReturnType<typeof createRoot>[] = [];
 it('keeps a native-docked drawer list local when the surrounding pane changes width', () => {
