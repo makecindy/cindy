@@ -47,6 +47,16 @@ function OrcaMessagesFixture() {
   </main>;
 }
 
+function HookContextFixture() {
+  return <main className="p-4" data-ui-page-subject>
+    <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} content="Context layout" workingDir=""
+      hookSource={{ im: 'feishu', contentFormat: 'user-text', userText: 'Context layout',
+        threadContext: [{ author: 'Alex', text: UI_MOCK_BIDI_TEXT }],
+        contextSnapshot: { replyContext: UI_MOCK_BIDI_TEXT, replyMessageCount: 1,
+          groupContext: UI_MOCK_BIDI_TEXT, groupMessageCount: 1 } }} />
+  </main>;
+}
+
 void mountPage({
   route: '/bots/fixture-bidi',
   host: {
@@ -67,6 +77,6 @@ void mountPage({
     deviceLink: { onRemotePush: subscription('remote-push') },
     ghosts: { listSync: () => ({ ghosts: [] }) },
   },
-  render: (ctx) => ctx.case === 'orca' ? <OrcaMessagesFixture />
+  render: (ctx) => ctx.case === 'context' ? <HookContextFixture /> : ctx.case === 'orca' ? <OrcaMessagesFixture />
     : ctx.case === 'sources' ? <SourceMessagesFixture /> : <Fixture composerOnly={ctx.case === 'lists'} />,
 });

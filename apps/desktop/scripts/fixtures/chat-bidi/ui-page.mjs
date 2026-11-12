@@ -49,10 +49,41 @@ export default {
     sources: { about: '#10188: expanded teammate letters and long IM message bodies retain paragraph direction and selection' },
     lists: { about: '#10188: typed/restored composer lists keep each marker beside its mixed-direction item' },
     orca: { about: '#10188: expanded Lead/Worker messages retain per-paragraph direction and original text' },
+    context: { about: '#10188: attached IM replies, thread messages and group background retain paragraph direction' },
   },
   async check(page, ui) {
     const rtl = 'سلام، فایل index.html با API 123 آماده است.';
     const english = 'English paragraph: API 123 and https://example.com/docs.';
+    if (ui.case === 'context') {
+      // The real UserMessage -> HookTaskCard disclosure renders three distinct
+      // context leaves. jsdom covers their text/counts, but cannot detect this
+      // layout regression: a Persian-first context line remains left-aligned.
+      const toggle = page.getByRole('button', { name: await ui.t('chat.threadContext.attachedContextCount', { count: 3 }), exact: true });
+      await toggle.click();
+      const replies = page.getByRole('region', { name: await ui.t('chat.threadContext.referencedMessages', { count: 2 }), exact: true });
+      const group = page.getByRole('region', { name: await ui.t('chat.threadContext.groupBackgroundCount', { count: 1 }), exact: true });
+      const bodies = [replies.locator(':scope > div').nth(0), replies.locator(':scope > div').nth(1), group.locator(':scope > div')];
+      const originals = [];
+      for (const [index, body] of bodies.entries()) {
+        await aligned(body, index === 1 ? `[Alex] ${rtl}` : rtl, 'right');
+        for (const [text, side] of [[english, 'left'], ['مرحبا، الإصدار API 123 جاهز.', 'right'],
+          ['שלום, הקובץ index.html מוכן.', 'right'], ['中文段落：文件 index.html，版本 123。', 'left']]) {
+          await aligned(body, text, side);
+        }
+        const original = await body.textContent(); originals.push(original);
+        assert.equal(await body.evaluate(e => {
+          const selection = window.getSelection(), range = document.createRange();
+          range.selectNodeContents(e); selection.removeAllRanges(); selection.addRange(range);
+          const text = selection.toString(); selection.removeAllRanges(); return text;
+        }), original);
+      }
+      await ui.capture('context');
+      await toggle.focus(); await toggle.press('Enter');
+      await replies.waitFor({ state: 'hidden' }); await group.waitFor({ state: 'hidden' });
+      await toggle.press('Enter');
+      for (const [index, body] of bodies.entries()) assert.equal(await body.textContent(), originals[index]);
+      return;
+    }
     if (ui.case === 'orca') {
       // Orca bodies use a separate plain-text <pre>, not the normal bubble or
       // Markdown renderer. A Persian-first line reproduces the layout bug.
