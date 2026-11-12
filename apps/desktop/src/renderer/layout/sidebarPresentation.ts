@@ -29,7 +29,9 @@ export function useSidebarPresentation(
   const everReady = useRef(false);
   /** 当前这次展开是否由我们占用了窗口宽度（启动恢复 / 用户开栏）。 */
   const ownsWidth = useRef(false);
-  /** 离开就绪区间时的状态；null = 还没经历过就绪区间（首次挂载）。 */
+  /** 最近一次就绪渲染所属的任务；设置页接管会先清空 sessionKey，不能拿空档里的值。 */
+  const lastReadySession = useRef(sessionKey);
+  /** 离开就绪区间时的快照；null = 还没经历过就绪区间（首次挂载）。 */
   const beforeGap = useRef<{ ownsWidth: boolean; sessionKey: string } | null>(null);
   const generation = useRef(0);
   const frame = useRef<number | null>(null);
@@ -39,8 +41,13 @@ export function useSidebarPresentation(
   useLayoutEffect(() => {
     const wasCollapsed = previous.current;
     previous.current = ready ? collapsed : null;
-    if (ready) everReady.current = true;
-    else if (everReady.current) beforeGap.current = { ownsWidth: ownsWidth.current, sessionKey };
+    if (ready) {
+      everReady.current = true;
+      lastReadySession.current = sessionKey;
+    } else if (everReady.current && beforeGap.current === null) {
+      // 只在空档的第一次记快照：设置页接管会先清 sessionKey，之后的值已不代表原任务。
+      beforeGap.current = { ownsWidth: ownsWidth.current, sessionKey: lastReadySession.current };
+    }
     if (ready && wasCollapsed === collapsed) return;
     const id = ++generation.current;
     if (frame.current !== null) cancelAnimationFrame(frame.current);
@@ -52,9 +59,10 @@ export function useSidebarPresentation(
     // 路由离开（设置页接管等）前侧栏是程序打开的，窗口本来就没变宽；回来后也不能
     // 把它当成用户开栏去拉宽窗口——否则一次设置页往返就把自动展示变成手点开栏。
     // 空档里换到了别的任务（系统岛 / 通知跳转）同理：那是那个任务的记忆状态，
-    // 不是用户这次要开栏，窗口保持用户选的宽度。
+    // 不是用户这次要开栏。只有用户直接点名要开（userToggle）才照常展开。
     const gap = beforeGap.current;
-    const relanded = openingFromMount && gap !== null && (gap.ownsWidth === false || gap.sessionKey !== sessionKey);
+    const relanded = openingFromMount && !userResize.current && gap !== null
+      && (gap.ownsWidth === false || gap.sessionKey !== sessionKey);
     if (ready && wasCollapsed === null) beforeGap.current = null;
     // A session switch restores that task's remembered visibility. Only the user's own
     // toggle may resize the native window; navigation keeps the width the user chose.
@@ -114,6 +122,7 @@ export function useSidebarPresentation(
     previous.current = null;
     everReady.current = false;
     beforeGap.current = null;
+    lastReadySession.current = sessionKey;
     ownsWidth.current = false;
   }, []);
   return presentation;
