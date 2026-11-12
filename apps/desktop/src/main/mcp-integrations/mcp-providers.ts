@@ -117,7 +117,7 @@ import { createTaskDigestReader } from './taskDigest.js';
 import { createDesktopTaskDigestDeps } from './taskDigestHost.js';
 import { createTaskToolCallAuthorizer } from '../maker-ipc/taskToolCallAuthorizer.js';
 import { createDesktopTaskActionAuthorizer } from '../maker-ipc/taskActionHost.js';
-import { authorizeGroupTool } from '../maker-ipc/botGroupToolAuthorization.js';
+import { authorizeGroupTool, reportGroupTaskCreated } from '../maker-ipc/botGroupToolAuthorization.js';
 import { createSharedTaskTools } from './sharedTaskTools.js';
 import { assertTaskActionCurrent, captureTaskActionSyncGuard } from '../maker-ipc/taskActionAuthorization.js';
 import {
@@ -1049,6 +1049,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             ...(['DELIVERY_UNKNOWN', 'CREATED_NOT_DELIVERED'].includes(result.errorCode)
               ? { recoverySessionId: qualifiedId, message: `${result.message} Recovery target_session_id: ${qualifiedId}. Do not repeat create.` } : {}) };
           const accepted = { ...result, targetSessionId: qualifiedId, targetDeviceId: device };
+          // Opened from a group: the group shows the task as a card (bot-group-chat.md §10).
+          reportGroupTaskCreated(dispatcherSessionId, { taskId: id, deviceId: device, title: title?.trim() || message.split('\n')[0].slice(0, 60) });
           if (recordCreation) {
             try { await (recordCreation as (sessionId: string) => Promise<void>)(qualifiedId); }
             catch { return { ...accepted, responsibilityRecorded: false }; }
@@ -1086,6 +1088,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               : {}),
             ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
           });
+          if (result.ok && result.wakeKind === 'created' && dispatcherSessionId)
+            reportGroupTaskCreated(dispatcherSessionId, { taskId: result.targetSessionId, deviceId: null,
+              title: title?.trim() || message.split('\n')[0].slice(0, 60) });
           if (result.ok && result.wakeKind === 'created' && recordCreation) {
             try { await recordCreation(result.targetSessionId); }
             catch { return { ...result, responsibilityRecorded: false }; }
