@@ -67,6 +67,9 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
   `maker:setup-transfer` 协议、计划与应用规则或一次性配置清单，或新增一类可迁移的设置前，必须先读
   `docs/product-rules/new-device-setup-migration.md`：密钥只在原电脑的人允许后一次性加密复制，
   OAuth 登录与私钥不复制，写入只走本机原有安装器与设置存储，不覆盖本机已改过的设置。
+- 修改开始引导（首次登录后的综合引导）的出现条件、步骤与顺序、各步骤复用的能力，或它与旧版数据
+  迁移的衔接前，必须先读 `docs/product-rules/first-run-guide.md`：引导只发现和带路、不代做，
+  Global 与中国大陆版流程一致，旧版数据迁移的区域边界是数据归属、不得顺手放开。
 - 修改共享任务、跨账号访客邀请、共享上下文或共享成员权限前，必须先读
   `docs/product-rules/shared-task-mode.md`；复用 device-link，同账号远控行为不变。
 - 修改 IM 工具授权、来源消息、多端确认或暂停期间的确认回执，或新增 IM 渠道前，

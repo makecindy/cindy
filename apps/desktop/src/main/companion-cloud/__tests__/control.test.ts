@@ -41,6 +41,7 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
   const refresh = vi.fn(async () => undefined);
   const publish = vi.fn();
   const onShadowChanged = vi.fn();
+  const log = { warn: vi.fn(), info: vi.fn() };
   const host: CompanionCloudHost = {
     homes: createCompanionHomeRegistry(), openState: () => state,
     readValues: options.readValues ?? (async () => options.values ?? [{ key: 'companion.profile.v1', value: { name: 'Mia' } }]),
@@ -58,9 +59,9 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
     api: options.backgroundIdentityApi, isDeferred: options.identityDeferred ?? (() => false) } } : {}),
     store: options.store, host, endpoint: 'https://chat', humanActorId: 'human', selfDeviceId: 'desk', current: () => true,
     bots: () => actors.filter(a => a.homeDeviceId === 'desk' && !state.isDemoted(a.externalId)).map(a => ({ botId: a.externalId, actorId: a.id, name: a.name })),
-    actors: () => actors, refresh, refreshForeground: options.refreshForeground, publish, onShadowChanged, ...(options.syncProfile ? { syncProfile: options.syncProfile } : {}),
+    actors: () => actors, refresh, refreshForeground: options.refreshForeground, publish, onShadowChanged, log, ...(options.syncProfile ? { syncProfile: options.syncProfile } : {}),
     ...(options.paused ? { paused: options.paused } : {}) });
-  return { runtime, actors, calls, local, state, files, refresh, publish, onShadowChanged, host };
+  return { runtime, actors, calls, local, state, files, refresh, publish, onShadowChanged, host, log };
 }
 
 describe('private report recovery', () => {
@@ -93,7 +94,10 @@ describe('take over', () => {
       return {};
     } });
     t.local.host.findConflictingCindy = vi.fn(async () => 'local-cindy');
-    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED' });
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-cindy', conflictingDeviceId: 'desk' });
+    expect(t.log.warn).toHaveBeenCalledWith('Companion home change failed', {
+      action: 'takeOver', botId: 'bot_mia', code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-cindy',
+    });
     expect(t.calls.every(call => call.method === 'GET')).toBe(true);
     expect(t.actors[0]!.homeDeviceId).toBe('laptop');
     expect(t.local.host.createProfile).not.toHaveBeenCalled();
@@ -212,6 +216,17 @@ describe('take over', () => {
     expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED' });
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
     expect(t.local.host.createProfile).not.toHaveBeenCalled();
+    expect(t.log.warn).toHaveBeenCalledWith('Companion home change failed', {
+      action: 'takeOver', botId: 'bot_mia', code: 'PROFILE_SNAPSHOT_MISSING',
+    });
+  });
+
+  it('does not copy an arbitrary failure message into explicit home-change logs', async () => {
+    const t = setup({ home: 'laptop', handler: () => { throw new Error('private response /some/account/file'); } });
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED' });
+    expect(t.log.warn).toHaveBeenCalledExactlyOnceWith('Companion home change failed', {
+      action: 'takeOver', botId: 'bot_mia', code: 'FAILED',
+    });
   });
 
   it('does not move the home for an incomplete profile snapshot', async () => {

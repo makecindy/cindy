@@ -653,10 +653,6 @@
     "apps/desktop/src/renderer/__tests__/morphPopover.test.tsx": {
       "realWaits": 1
     },
-    "apps/desktop/src/renderer/__tests__/newMakerDraft.test.ts": {
-      "resetModules": 54,
-      "realWaits": 1
-    },
     "apps/desktop/src/renderer/__tests__/newMakerDraftRemoteHost.test.ts": {
       "resetModules": 6
     },
