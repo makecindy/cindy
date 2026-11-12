@@ -178,6 +178,7 @@ describe('market management copy and errors', () => {
     expect(fieldsSource).toContain('contentLocale:');
     expect(fieldsSource).toContain('tags: categorySlugs');
     expect(fieldsSource).not.toContain('authorTagSlugs:');
+    expect(editorSource).toContain('isSkillhubContentLocale');
   });
 
   it('keeps the confirm provider in the main App tree so AuthProvider has a stable context during HMR', () => {

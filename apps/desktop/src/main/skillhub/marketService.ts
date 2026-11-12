@@ -6,6 +6,7 @@ import { assertSkillhubVisibilityAllowed, assertSkillhubWriteAllowed } from './i
 import { registryService } from './registry';
 import { createLogger } from '../logger';
 import { skillhubCatalogKey, withSkillhubCatalogScope, type SkillhubCatalogScope } from '../../shared/skillhubCatalog';
+import type { SkillhubContentLocale } from '../../shared/locale.js';
 
 const SKILLHUB_SYNC_BATCH_SIZE = 100;
 const HUB_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
@@ -69,7 +70,7 @@ export interface UpdatePublishedFields {
   summary?: string;
   description?: string;
   tags?: string[];
-  contentLocale?: 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko';
+  contentLocale?: SkillhubContentLocale;
   visibility?: 'private' | 'shared' | 'public';
   /** 归属统一参数:团队 slug / od- 部门 id;null = 收回到个人 */
   teamSlug?: string | null;
