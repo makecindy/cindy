@@ -942,7 +942,16 @@ describe('被控端控制链路生命周期', () => {
         .toMatchObject({ ok: true, result: { providers: [{ id: 'anthropic', remoteInvocationEnabled: true }] } });
       expect(await runInvoke('ctrl-no-models', { channel: 'maker:provider:list', args: [] }))
         .toMatchObject({ ok: true, result: { providers: [{ id: 'anthropic', remoteInvocationEnabled: false }] } });
-    } finally { setRemoteAgentHandler(null); }
+      // PR #10150 review: a provider with a group keeps its own switch, so group member selection is not bypassed.
+      setProviderGroupRemoteHandler({
+        handle: vi.fn(),
+        decorateProviderList: (result) => ({ ...(result as object), providers: (result as { providers: object[] }).providers
+          .map((provider) => ({ ...provider, group: { strategy: 'least', members: [] } })) }),
+        sharedGroupSize: () => null,
+      });
+      expect(await runInvoke('ctrl-borrow', { channel: 'maker:provider:list', args: [] }))
+        .toMatchObject({ ok: true, result: { providers: [{ id: 'anthropic', remoteInvocationEnabled: false }] } });
+    } finally { setRemoteAgentHandler(null); setProviderGroupRemoteHandler(null); }
   });
 
   it('link-open capability controls whether provider projection includes new logo kinds', async () => {

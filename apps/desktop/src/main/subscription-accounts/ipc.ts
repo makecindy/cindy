@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { isProviderSharePeer } from '@cindy/device-link';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
@@ -42,6 +43,7 @@ export function registerSubscriptionAccountsIpc(): void {
         throwIpcError('INVALID_PARAMS', 'Invalid subscription model');
       return { providerId, model, available: await readSubscriptionPoolModelAvailability(providerId, model, {
         remote: !!context,
+        ownComputer: !!context && !context.sharedTask && !isProviderSharePeer(context.controllerDeviceId),
       }) };
     }
     const usage = await readSubscriptionPoolUsage(providerId);

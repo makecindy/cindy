@@ -147,13 +147,20 @@ function guestAccessForTask(controller: string, sessionId?: string) {
 }
 
 /**
- * 这个控制端能否用本机的供应商：受邀者看「允许被远程调用」；自己的其他电脑还可以经「远程连接」里的
- * 「让我的其他电脑用本机模型」使用全部供应商。
+ * 自己的其他电脑能否用本机的这个供应商：逐个打开过的，或「远程连接」里打开了「让我的其他电脑用本机模型」。
+ * 建了供应商组的供应商不随这个开关打开：组内选电脑仍按逐个供应商的「允许被远程调用」，否则会绕过组
+ * 直接在组所在电脑上运行。
  */
+function ownComputersMayUse(providerId: string): boolean {
+  return isRemoteProviderInvocationAllowed(providerId)
+    || (isRemoteProviderOpenToOwnComputers(providerId) && !readProviderGroup(providerId));
+}
+
+/** 这个控制端能否用本机的供应商：受邀者看「允许被远程调用」；自己的其他电脑见 {@link ownComputersMayUse}。 */
 function providerOpenTo(controller: string, providerId: string): boolean {
   return isProviderSharePeer(controller)
     ? isRemoteProviderInvocationAllowed(providerId)
-    : isRemoteProviderOpenToOwnComputers(providerId);
+    : ownComputersMayUse(providerId);
 }
 
 /** 受邀者能用的供应商：分享的那一个，且本机仍开放「允许被远程调用」。 */
@@ -956,7 +963,7 @@ export function installRemoteAgentHost(options: {
       },
       isAllowed: (providerId, controller, model, sessionId) => {
         const access = isProviderSharePeer(controller) ? guestAccessForTask(controller, sessionId) : null;
-        return (isProviderSharePeer(controller) ? guestAllows(controller, providerId, sessionId) : isRemoteProviderOpenToOwnComputers(providerId))
+        return (isProviderSharePeer(controller) ? guestAllows(controller, providerId, sessionId) : ownComputersMayUse(providerId))
           && shareTaskModelAllowed(controller, model ?? '', sessionId)
           && remoteModelAccess.allows(providerId, model ?? '', access?.memberId)
           && (assertMemberBudget(providerId, model ?? '', access?.memberId), true);

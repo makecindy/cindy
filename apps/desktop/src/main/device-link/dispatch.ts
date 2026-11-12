@@ -4780,7 +4780,8 @@ async function runProviderShareInvoke(
 
 /**
  * 同账号电脑读本机目录时的「可远程调用」标记：
- * - 「远程连接」里打开了「让我的其他电脑用本机模型」：全部供应商都标成可用；
+ * - 「远程连接」里打开了「让我的其他电脑用本机模型」：全部供应商都标成可用，建了供应商组的除外
+ *   (组内选电脑仍按逐个供应商的开关，见 remote-agent host 的 ownComputersMayUse)；
  * - 这台电脑的「用本机模型」被单独关掉：一律不标(目录照常给，远程控制与手机仍要看全部供应商)。
  * 其余照「允许被远程调用」原值。分享来的受邀者另有投影，不经这里。
  */
@@ -4794,7 +4795,14 @@ function projectOwnComputerModelUse(src: string, result: unknown): unknown {
   return {
     ...value,
     providers: value.providers.map((provider) => provider && typeof provider === 'object' && !Array.isArray(provider)
-      ? { ...(provider as Record<string, unknown>), remoteInvocationEnabled: !revoked }
+      ? {
+          ...(provider as Record<string, unknown>),
+          remoteInvocationEnabled: revoked
+            ? false
+            : (provider as Record<string, unknown>).group
+              ? (provider as Record<string, unknown>).remoteInvocationEnabled
+              : true,
+        }
       : provider),
   };
 }
