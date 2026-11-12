@@ -50,6 +50,7 @@ export function languageFromPath(path: string): string {
   const map: Record<string, string> = {
     cjs: 'javascript',
     css: 'css',
+    cshtml: 'xml',
     go: 'go',
     h: 'cpp',
     hpp: 'cpp',
@@ -67,6 +68,7 @@ export function languageFromPath(path: string): string {
     mjs: 'javascript',
     mm: 'objectivec',
     py: 'python',
+    razor: 'xml',
     rb: 'ruby',
     rs: 'rust',
     scss: 'scss',

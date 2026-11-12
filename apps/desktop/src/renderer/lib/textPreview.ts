@@ -72,6 +72,9 @@ export const EXT_TO_LANG: Record<string, string> = {
   xml: 'xml',
   html: 'xml',
   htm: 'xml',
+  // Razor markup uses the existing XML highlighter; embedded C# is plain text.
+  razor: 'xml',
+  cshtml: 'xml',
   svg: 'xml',
   vue: 'xml',
   svelte: 'xml',

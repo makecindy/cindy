@@ -31,7 +31,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { formatBytes } from '../components/chat/formatBytes';
-import { detectRenderable, buildFence } from '../lib/textPreview';
+import { detectRenderable, buildFence, isTextPreviewSupported } from '../lib/textPreview';
+import { getCodeMirrorLanguage } from '../components/markdown/codemirrorLanguages';
+import { EditorState } from '@codemirror/state';
+import { syntaxTree } from '@codemirror/language';
 
 const sourcePath = resolve(__dirname, '..', 'components', 'chat', 'TextLightbox.tsx');
 const source = readFileSync(sourcePath, 'utf8');
@@ -252,6 +255,23 @@ describe('TextLightbox — formatBytes', () => {
 // ── detectRenderable — file-type dispatch ──────────────────────────────────
 
 describe('TextLightbox — detectRenderable', () => {
+  // Regression: Razor files fell through to plain text. Exercise the preview
+  // dispatch and its real editor parser; existing cases only covered web files.
+  it.each(['ErrorPage.razor', 'Index.CSHTML'])('highlights Razor markup in %s', (path) => {
+    expect(isTextPreviewSupported(path)).toBe(true);
+    const renderable = detectRenderable(path);
+    expect(renderable.kind).toBe('code');
+    if (renderable.kind !== 'code') throw new Error('Expected code preview');
+    const language = getCodeMirrorLanguage(renderable.lang);
+    expect(language).not.toBeNull();
+    const state = EditorState.create({
+      doc: '@page "/error"\n<PageTitle class="title">Error</PageTitle>',
+      extensions: language ? [language] : [],
+    });
+    expect(syntaxTree(state).toString()).toContain('TagName');
+    expect(syntaxTree(state).toString()).toContain('AttributeValue');
+  });
+
   it('routes Markdown extensions to the rich-text renderer', () => {
     expect(detectRenderable('/x/README.md')).toEqual({ kind: 'markdown' });
     expect(detectRenderable('a/b/notes.MARKDOWN')).toEqual({ kind: 'markdown' });

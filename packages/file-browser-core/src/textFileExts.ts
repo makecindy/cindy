@@ -33,7 +33,7 @@ export const SUPPORTED_TEXT_EXTS = new Set<string>([
   '.sh', '.bash', '.zsh', '.fish', '.ps1', '.psm1', '.bat', '.cmd',
   // Web / markup
   '.html', '.htm', '.xhtml', '.css', '.scss', '.sass', '.less', '.styl',
-  '.vue', '.svelte', '.astro', '.svg',
+  '.vue', '.svelte', '.astro', '.svg', '.razor', '.cshtml',
   // Data / config
   '.json', '.json5', '.jsonc', '.jsonl', '.ndjson', '.geojson',
   '.yaml', '.yml', '.xml', '.toml', '.ini', '.conf', '.cfg', '.properties',
