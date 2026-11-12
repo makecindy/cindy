@@ -844,17 +844,50 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(h.api.resolve).toHaveBeenCalled();
   });
 
-  it('returns a continuation without scanning later pages of installed search matches', async () => {
+  it.each(['', 'Tool'])('returns a continuation without scanning later pages of installed matches for query "%s"', async query => {
     const items = Array.from({ length: 30 }, (_, index) => summary({
       id: `c${String(index).padStart(24, '0')}`, ghostId: `tool-${index}`, name: `Tool ${index}`, namespace: null,
     }));
     const h = harness(items);
     runtime.ghosts = items.map(item => ({ ...ghostEntry(item.ghostId), namespace: null }));
     for (const item of items) h.ledger.upsertInstallation(recordForTest(item, { installed: true }));
-    const first = await h.service.query({ query: 'Tool', limit: 10, excludeInstalled: true, counts: false });
+    const first = await h.service.query({ query, limit: 10, excludeInstalled: true, counts: false });
     expect(first.items).toEqual([]);
     expect(first.nextCursor).not.toBeNull();
     expect(h.api.catalog).toHaveBeenCalledTimes(1);
+    expect(h.api.resolve).not.toHaveBeenCalled();
+  });
+
+  // Unit: the market must show and count only uninstalled matches, keeping source
+  // conflicts. Previous paging fixtures covered empty installed pages without counts.
+  // A current install, an update, an uninstalled item and an unmanaged conflict are
+  // the minimum distinct states; count-free paging must not repeat ID verification.
+  it('counts uninstalled market matches through bounded ID verification and retains source conflicts', async () => {
+    const items = Array.from({ length: 4 }, (_, index) => summary({
+      id: `c${String(index).padStart(24, '0')}`, ghostId: `tool-${index}`, name: `Tool ${index}`, namespace: null,
+    }));
+    const h = harness(items);
+    runtime.ghosts = [items[0]!, items[1]!, items[3]!].map(item => ({ ...ghostEntry(item.ghostId), namespace: null }));
+    h.ledger.upsertInstallation(recordForTest(items[0]!, { namespace: null }));
+    h.ledger.upsertInstallation(recordForTest(items[1]!, { namespace: null, releaseId: 'older-release' }));
+
+    const first = await h.service.query({ limit: 10, excludeInstalled: true });
+    expect(first.items.map(item => [item.ghostId, item.installState])).toEqual([
+      ['tool-2', 'not-installed'], ['tool-3', 'conflict'],
+    ]);
+    expect(first.counts).toMatchObject({ all: 2, public: 2 });
+    expect(h.api.resolve).toHaveBeenCalledExactlyOnceWith([
+      { key: items[0]!.id, pluginId: items[0]!.id },
+      { key: items[1]!.id, pluginId: items[1]!.id },
+    ], undefined);
+
+    const searched = await h.service.query({ query: 'Tool 2', limit: 10, excludeInstalled: true });
+    expect(searched.items.map(item => item.ghostId)).toEqual(['tool-2']);
+    expect(searched.counts).toMatchObject({ all: 1, public: 1 });
+    expect(h.api.resolve).toHaveBeenLastCalledWith(expect.any(Array), 'Tool 2');
+    await h.service.query({ limit: 10, excludeInstalled: true, counts: false });
+    expect(h.api.resolve).toHaveBeenCalledTimes(2);
+    expect(h.api.listAll).not.toHaveBeenCalled();
   });
 
   // unit：v7.5 首屏只读一页，搜索覆盖未加载项；原 snapshot 用例不能证明不追全量目录。
