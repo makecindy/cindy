@@ -49,7 +49,7 @@ void mountPage({
     onLogUploadSettingsChange: subscription('logUpload'),
     ccSetDebugNet: read(undefined),
     localThemes: { list: read({ success: true, themes: [] }), listSync: () => ({ success: true, themes: [] }) },
-    appShortcuts: { getState: async () => ({ platform: ctx.platform, overrides: {}, globalFailures: [] }), onChanged: subscription('shortcuts') },
+    appShortcuts: { getState: () => ({ platform: ctx.platform, overrides: {}, globalFailures: [] }), onChanged: subscription('shortcuts') },
     localDb: {
       orcaWorkflows: { getCollaborationSettings: read({ workerSoftLimit: 4, workerHardLimit: 16, isCustomized: false }) },
       sessions: { list: read([]) },
