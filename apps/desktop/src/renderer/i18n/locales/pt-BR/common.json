@@ -13406,6 +13406,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "Usar Texto Original",
     "rateLimited": "Muitas solicitações de voz. Aguarde um momento e tente novamente.",
     "status": {
       "listening": "Entrada por voz",
