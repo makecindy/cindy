@@ -499,6 +499,7 @@ import { getActiveCatalog } from './maker-host/active-catalog';
 import { resolveSessionContextWindow } from '../shared/sessionContextWindow';
 import { resumeDeletedPiSubagentCleanup } from './localDb/ipc/sessions';
 import {
+  didMigrateLegacyDataForUser,
   registerLegacyMigrationIpc,
   runLegacyUserDataMigrationForUser,
 } from './legacyUserDataMigration';
@@ -665,7 +666,7 @@ import {
   seedDesktopScreenLocked,
   msSinceForeignDesktopInput,
   setPhysicalInputShielded,
-} from './mcp-integrations/computer.js';
+} from './mcp-integrations/computer.desktop.js';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { initCrashDiagnosisService } from './crash-diagnosis';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
@@ -841,7 +842,7 @@ import {
   setEnsureHostForBackend,
   setIsDetachedForBackend,
   setUserBrowserPageControlProvider,
-} from './mcp-integrations/browser.js';
+} from './mcp-integrations/browser.desktop.js';
 import { setPageControlGhostProvider } from './mcp-integrations/ghost.desktop.js';
 import { RsbWindowController } from './right-sidebar-window/controller.js';
 import { resolveRsbHostContextFromSession } from './right-sidebar-window/resolveHostContext.js';
@@ -856,7 +857,7 @@ import { SidebarTabWindowsController } from './sidebar-tab-window/controller.js'
 import { resolveWindowBoundsNearPoint } from './windowBounds.js';
 import { createSidebarTabWindow } from './sidebar-tab-window/window.js';
 import { registerSidebarTabWindowIpc } from './sidebar-tab-window/ipc.js';
-import { setRightSidebarTabsChangeBroadcaster } from './localDb/ipc/rightSidebarTabs.js';
+import { setRightSidebarTabsChangeBroadcaster } from './localDb/ipc/rightSidebarTabs.desktop.js';
 import {
   readRsbWindowSettings,
   resetRsbWindowSettingsForStartup,
@@ -1298,6 +1299,8 @@ import { fetchHubSkillReference } from './learn-host/hubReference.js';
 import { registerLearnIpc, broadcastLearnEvent } from './learn-host/registerIpc.js';
 import { registerGoalHandlers, broadcastGoalStatus } from './maker-ipc/goal.js';
 import { createLogger as createSchedulerLogger } from './logger.js';
+// Keep opt-in platform dependencies after the existing desktop bootstrap imports.
+import { connectHostPlatformClient } from './host-platform/client.desktop.js';
 
 let makerProviderRefreshConfigured = false;
 
@@ -1326,7 +1329,7 @@ function installHostClientMode(): boolean {
   // The host owns the profile's database too; a local open would be a second writer.
   setHostClientMode(true);
   const hostClient = createHostClient(delegation);
-  const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain });
+  const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain, assertTrusted: assertTrustedAppRendererEvent });
   // Registered outside the runtime block by other modules; drop those so the
   // host stays authoritative instead of throwing on a duplicate handler.
   claimProxiedChannels(ipcMain, (channel) => {
@@ -1362,12 +1365,33 @@ function installHostClientMode(): boolean {
     }
   };
   let hostConnectionState: HostConnectionState | null = null;
+  let platformClient: ReturnType<typeof connectHostPlatformClient> | null = null;
+  let platformOwner: string | null = null;
+  let platformTransition = Promise.resolve();
+  const reconcilePlatformClient = () => {
+    // Older explicitly configured Hosts keep their HTTP/SSE behavior; platform
+    // control requires an instance pinned by the new launcher.
+    if (!delegation.instanceId) return Promise.resolve();
+    platformTransition = platformTransition.catch(() => {}).then(async () => {
+      const owner = authManager.getAuthState().isAuthenticated ? activeOwnerScopeKey() : null;
+      if (platformOwner === owner) return;
+      await platformClient?.close(); platformClient = null; platformOwner = null;
+      if (owner && owner === activeOwnerScopeKey() && authManager.getAuthState().isAuthenticated) {
+        platformClient = connectHostPlatformClient(delegation); platformOwner = owner;
+      }
+    });
+    return platformTransition;
+  };
   const eventBridge = startHostEventBridge({
     baseUrl: delegation.baseUrl,
     token: delegation.token,
+    instanceId: delegation.instanceId,
     beforeEvents: async (signal) => {
       const auth = await hostClient.request('/api/auth/state', null, signal) as authManager.AuthState;
-      if (!signal.aborted) authManager.receiveHostAuthState(auth);
+      if (!signal.aborted) {
+        authManager.receiveHostAuthState(auth);
+        await reconcilePlatformClient();
+      }
     },
     onConnectionState: (state) => {
       hostConnectionState = state;
@@ -1376,7 +1400,10 @@ function installHostClientMode(): boolean {
     onInputProjection: (payload) => sendToAllWindows('maker:input:projection', payload),
     onInteractionRequest: (payload) => sendToAllWindows('maker:interaction-request', payload),
     onInteractionDismissed: (payload) => sendToAllWindows('maker:interaction-dismissed', payload),
-    onAuthChanged: (payload) => authManager.receiveHostAuthState(payload as authManager.AuthState),
+    onAuthChanged: (payload) => {
+      authManager.receiveHostAuthState(payload as authManager.AuthState);
+      void reconcilePlatformClient().catch(() => console.warn('[host-platform] owner transition unavailable'));
+    },
     broadcast: (payload) => {
       sendToAllWindows(MAKER_PUSH.EVENT, payload);
     },
@@ -1411,6 +1438,7 @@ function installHostClientMode(): boolean {
     },
     onMessageDeleted: event => sendToAllWindows('local-db:messages:deleted', event),
     onErrorPersisted: event => sendToAllWindows('local-db:session:error-persisted', event),
+    onRightSidebarTabsChanged: event => sendToAllWindows('maker:right-sidebar-tabs:changed', event),
     onSubagentRunsChanged: event => sendToAllWindows('local-db:subagent-runs:changed', event),
     onProjectAliasesChanged: () => {
       sendToAllWindows('local-db:project-aliases:changed', {});
@@ -6601,7 +6629,7 @@ const registerIpcHandlers = () => {
             pendingCompletion = completion;
           },
         })
-        .finally(() => authCredentialRecovery.request());
+        .finally(() => { if (!hostClientMode) authCredentialRecovery.request(); });
       // 启动里程碑记在这里而不是 authManager.initialize() 体内:那个函数会被
       // authColdStartRecovery 测试按源码抽出单独执行。冷启动门超时先返回时,
       // 以后台完成的那次登录为准。
@@ -7721,6 +7749,7 @@ const registerIpcHandlers = () => {
       app.getPath('appData'),
     ),
     getMainWindow: () => mainWindowRef,
+    getLegacyMigrated: () => didMigrateLegacyDataForUser(authManager.getCurrentUserId()),
   });
   disposeSkillhubAutoSyncAuthListener = authManager.onAuthStateChange((state) => {
     if (!state.isAuthenticated) return;
@@ -9838,7 +9867,7 @@ app.on('ready', async () => {
   // 网关凭据自动下发:订阅登录态(登录后向 model-access-server 拉 endpoint +
   // 用户专属 key)+ 注册 model-access:* IPC。须在 initClientEndpoints 之后
   // (依赖 modelAccessApiBaseUrl 端点)、renderer auth:initialize 之前装订阅。
-  initModelAccess();
+  if (!hostClientMode) initModelAccess();
 
   initializeUpdatePresentationRecovery();
 
@@ -10575,7 +10604,7 @@ app.on('ready', async () => {
   }, 3_000);
   initUpdateService();
   // 在线人数心跳:App 启动即上报,内部走 deviceId / userId 兜底,登录前后都活
-  initHeartbeatService();
+  if (!hostClientMode) initHeartbeatService();
   // 设备互联(跨设备远程控制):登录后连 relay,登出即断;开关与设备列表 IPC 一并注册
   let updateRelaunchRemoteBusy = false;
   setUsageWidgetSnapshotReader(readUsageWidgetSnapshot);
