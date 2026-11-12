@@ -169,6 +169,11 @@ export interface BotGroupMemberView {
   guestAccess?: 'none' | 'chat' | 'tools';
   accessRevision?: number;
   actorKind?: 'human' | 'bot' | 'integration';
+  /**
+   * The group's own Cindy (servers with `groupAssistant`): one per group, nobody's companion. It
+   * answers on the computer of whoever asks it (bot-group-chat.md「群里的 Cindy」).
+   */
+  assistant?: boolean;
   isSelf?: boolean;
   botId: string;
   name: string;
@@ -580,6 +585,10 @@ export interface BotGroupSummary {
   supportsGroupProject?: boolean;
   /** The group's shared project (a GitHub repository); null when none is set. */
   project?: { kind: 'github'; repo: string } | null;
+  /** The server gives each group its own Cindy (`groupAssistant`); absent on older servers/hosts. */
+  supportsGroupAssistant?: boolean;
+  /** The group's Cindy is on (group management 「群里的 Cindy」); only with `supportsGroupAssistant`. */
+  assistantEnabled?: boolean;
   /**
    * Server groups: 分工 you start here go on to the next step by themselves instead of waiting
    * for 继续 (§7.4). Kept on this computer like the project folder; absent where unsupported.
@@ -861,6 +870,15 @@ export const BOT_GROUP_CLIENT_ID = {
     `${BOT_GROUP_CLIENT_ID_PREFIX}${groupId}:plan:${planId}:${position}:${turnId}`,
 } as const;
 
+/** The group's own Cindy is called Cindy in every language, with Cindy's own artwork. */
+export const BOT_GROUP_ASSISTANT_NAME = 'Cindy';
+export const BOT_GROUP_ASSISTANT_AVATAR = 'cindy://avatar/preset/cindy';
+/**
+ * A request to the group's Cindy, delivered as an ordinary visible message into this computer's
+ * group task. Deliberately not a `bot-group:` ID: those mark hidden lane turns and private replies.
+ */
+export const botGroupAssistantClientId = (executionId: string, epoch: number) => `group-cindy:${executionId}:${epoch}`;
+
 export function isBotGroupClientId(clientId: string | null | undefined): boolean {
   return typeof clientId === 'string' && clientId.startsWith(BOT_GROUP_CLIENT_ID_PREFIX);
 }
@@ -973,7 +991,7 @@ export interface ChatInvitePreview {
 export type ChatGroupAction =
   | { type: 'read'; messageId: string; conversationKind?: 'direct' }
   | { type: 'notifications'; mode: ChatGroupNotificationMode }
-  | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean }
+  | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean; assistant?: boolean }
   | { type: 'nickname'; actorId: string; nickname: string | null }
   | { type: 'avatar'; actorId: string; avatar: { type: 'keep' | 'reset' } | { type: 'set'; data: Uint8Array; mimeType: string } }
   | { type: 'member'; actorId: string; action: 'invite' | 'leave' | 'remove' | 'ban' | 'unban' | 'role'; role?: 'admin' | 'member' }

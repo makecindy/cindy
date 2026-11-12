@@ -75,6 +75,37 @@ export function chatServerTaskCards(endpoint: string, actorId: string, current: 
   };
 }
 
+const assistantSession = z.object({
+  /** The group's ordinary task on this computer, and the project folder it was opened in (null: 「对话」). */
+  sessionId: z.string().min(1), projectDir: z.string().nullable(),
+  /**
+   * The group's newest message already delivered into the task, per conversation (`main` or a
+   * Thread's root ID): the next request carries only what came after it. Sequences stay strings.
+   */
+  deliveredSeq: z.record(z.string(), z.string().regex(/^\d+$/)).optional(),
+});
+export type ChatAssistantSessionRecord = z.infer<typeof assistantSession>;
+/**
+ * The group's Cindy on this computer (bot-group-chat.md「群里的 Cindy」): one ordinary visible task
+ * per group, by room ID. Local only; another computer of the same account keeps its own.
+ */
+export function chatServerAssistantSessions(endpoint: string, actorId: string, current: () => boolean) {
+  const file = ownerScopedUserDataPath('chat-workspace-settings', createHash('sha256').update(`${endpoint}\n${actorId}`).digest('hex'), 'group-cindy-sessions.json');
+  const check = () => { if (!current()) throw new Error('OWNER_CHANGED'); };
+  return {
+    read(): Record<string, ChatAssistantSessionRecord> {
+      check(); const raw = readAtomicFileSync(file);
+      if (!raw) return {};
+      const parsed = z.record(z.string(), assistantSession).safeParse(JSON.parse(raw));
+      return parsed.success ? parsed.data : {};
+    },
+    save(value: Record<string, ChatAssistantSessionRecord>) {
+      check(); mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+      atomicWriteFileSync(file, JSON.stringify(value));
+    },
+  };
+}
+
 /** `owner/name` of a GitHub remote URL (HTTPS, SSH or scp form), or null for any other remote. */
 export function githubRepositoryOfRemote(url: string): string | null {
   const match = /^(?:https?:\/\/(?:[^@/\s]+@)?github\.com\/|ssh:\/\/git@github\.com(?::\d+)?\/|git@github\.com:)([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/i

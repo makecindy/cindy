@@ -63,6 +63,14 @@ describe('toMessageAutomationOrigin', () => {
       kind: 'session', senderBotId: 'bot-1', senderBotName: 'Cindy', groupThread });
   });
 
+  // bot-group-chat.md「群里的 Cindy」: a request to the group's Cindy has no sending task either; the
+  // bubble names the group and the speaker, as the model's [消息来源] does.
+  it('keeps the group and speaker of a request to the group Cindy', () => {
+    const groupRequest = { groupId: 'g1', groupName: 'Launch', speakerId: 'm1', speakerName: 'Chris' };
+    expect(toMessageAutomationOrigin({ kind: 'session', senderSessionId: '', displayText: 'hi', groupRequest }))
+      .toEqual({ kind: 'session', groupRequest });
+  });
+
   it('links Orca messages to the sending session and keeps the sender role for the card title', () => {
     expect(
       toMessageAutomationOrigin({ kind: 'orca', senderLabel: 'Lead', senderSessionId: 'lead-1' }),

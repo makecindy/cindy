@@ -11300,6 +11300,14 @@
           "failed": "Com erro"
         }
       },
+      "assistant": {
+        "groupRecent": "Mensagens recentes do grupo",
+        "groupNew": "Mensagens novas do grupo",
+        "threadRecent": "Mensagens recentes do tópico",
+        "threadNew": "Mensagens novas do tópico",
+        "replyingTo": "Em resposta a \"{{name}}\": {{text}}",
+        "earlierOmitted": "(Mensagens anteriores omitidas)"
+      },
       "files": {
         "openFailed": "Não foi possível abrir o ficheiro. Pode ter sido movido ou eliminado.",
         "untitled": "Anexo",
@@ -14269,6 +14277,7 @@
       "sessionViewSource": "Ver sessão de origem",
       "botSentNamed": "Enviado pelo colega \"{{name}}\"",
       "groupThreadSent": "Enviado por \"{{name}}\" num tópico de \"{{group}}\"",
+      "groupRequestSent": "Do grupo \"{{group}}\" · {{name}}",
       "orcaFromLead": "Mensagem do Lead",
       "orcaFromWorker": "Mensagem do Worker",
       "orcaFromWorkerBatch": "Relatório do sistema: {{count}} resultados de Worker",

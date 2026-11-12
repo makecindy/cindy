@@ -13691,7 +13691,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { ok: false as const, errorCode: 'LANE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error) };
       }
     },
-    dispatch: ({ targetSessionId, message, persistedContent, autoReviewUserText, origin, clientId, attachments, toolsDisabled, onQueued, onAccepted }) =>
+    dispatch: ({ targetSessionId, message, persistedContent, autoReviewUserText, origin, clientId, attachments, toolsDisabled, resumeWithStoredPermissionMode, onQueued, onAccepted }) =>
       dispatchBotSessionMessage({
         targetSessionId,
         message,
@@ -13700,6 +13700,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ...(origin ? { origin } : {}),
         clientId,
         toolsDisabled,
+        ...(resumeWithStoredPermissionMode ? { resumeWithStoredPermissionMode } : {}),
         onQueued,
         // Same attachment shape as a task message: images by their media address, files by path.
         ...(attachments && attachments.length > 0
@@ -13737,6 +13738,29 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           : { ok: false as const, message: '这个文件夹不能用作项目文件夹' };
       } catch {
         return { ok: false as const, message: '项目文件夹不存在' };
+      }
+    },
+    // The group's Cindy (bot-group-chat.md「群里的 Cindy」): one ordinary visible task per group, opened
+    // like a new task of this user's (new-task model and permission), titled with the group's name.
+    ensureGroupAssistantSession: async ({ sessionId, title, projectDir }) => {
+      try {
+        if (sessionId) {
+          const [row] = await getDbClient().drizzle.select({ status: sessions.status })
+            .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+          if (row?.status === 'active') return { ok: true as const, sessionId, created: false };
+        }
+        const route = getSelectedNewMakerRoute(activeOwnerScopeKey());
+        const agentKind = route ? (route.harness === 'claude' ? 'claude-code' : route.harness) : undefined;
+        const { row } = await openSession({ body: {
+          title, projectDir, workspaceKind: projectDir ? 'project' : 'dialogue', workingDir: projectDir ?? undefined,
+          ...(route && agentKind ? { agentKind: agentKind === 'claude-code' ? 'cc' as const : agentKind, model: route.model,
+            providerId: route.providerId, effort: route.effort || '', fastMode: route.fastMode } : {}),
+          permissionMode: permissionModeOrAsk(agentKind ? getRemoteNewMakerDefaults(agentKind).permissionMode : undefined),
+        } });
+        broadcastSessionCreated(row.id);
+        return { ok: true as const, sessionId: row.id, created: true };
+      } catch (error) {
+        return { ok: false as const, errorCode: 'LANE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error) };
       }
     },
     // A group task card follows its task (bot-group-chat.md §10): title, live phase and recorded PR.

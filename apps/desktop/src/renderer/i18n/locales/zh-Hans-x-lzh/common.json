@@ -11164,6 +11164,14 @@
           "failed": "有误"
         }
       },
+      "assistant": {
+        "groupRecent": "群中近言",
+        "groupNew": "群中新言",
+        "threadRecent": "话题近言",
+        "threadNew": "话题新言",
+        "replyingTo": "答「{{name}}」：{{text}}",
+        "earlierOmitted": "（更早之言略之）"
+      },
       "files": {
         "openFailed": "卷未能启，或已移动或删除",
         "untitled": "附卷",
@@ -14115,6 +14123,7 @@
       "sessionViewSource": "观来源差事",
       "botSentNamed": "同僚「{{name}}」所遣",
       "groupThreadSent": "「{{name}}」于群聊「{{group}}」之话题所遣",
+      "groupRequestSent": "自群「{{group}}」· {{name}}",
       "orcaFromLead": "Lead 之讯",
       "orcaFromWorker": "Worker 之讯",
       "orcaFromWorkerBatch": "系统所报 Worker 结果凡 {{count}}",

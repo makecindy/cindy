@@ -11300,6 +11300,14 @@
           "failed": "Con error"
         }
       },
+      "assistant": {
+        "groupRecent": "Mensajes recientes del grupo",
+        "groupNew": "Mensajes nuevos del grupo",
+        "threadRecent": "Mensajes recientes del hilo",
+        "threadNew": "Mensajes nuevos del hilo",
+        "replyingTo": "En respuesta a \"{{name}}\": {{text}}",
+        "earlierOmitted": "(Mensajes anteriores omitidos)"
+      },
       "files": {
         "openFailed": "No se pudo abrir el archivo. Es posible que se haya movido o eliminado.",
         "untitled": "Adjunto",
@@ -14269,6 +14277,7 @@
       "sessionViewSource": "Ver sesión de origen",
       "botSentNamed": "Enviado por el compañero \"{{name}}\"",
       "groupThreadSent": "Enviado por \"{{name}}\" en un hilo de \"{{group}}\"",
+      "groupRequestSent": "Del grupo \"{{group}}\" · {{name}}",
       "orcaFromLead": "Mensaje de Lead",
       "orcaFromWorker": "Mensaje de Worker",
       "orcaFromWorkerBatch": "Informe del sistema: {{count}} resultados de Worker",

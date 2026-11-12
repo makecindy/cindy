@@ -11164,6 +11164,14 @@
           "failed": "出錯了"
         }
       },
+      "assistant": {
+        "groupRecent": "群裡最近的訊息",
+        "groupNew": "群裡的新訊息",
+        "threadRecent": "話題裡最近的訊息",
+        "threadNew": "話題裡的新訊息",
+        "replyingTo": "回覆「{{name}}」：{{text}}",
+        "earlierOmitted": "（更早的訊息略去）"
+      },
       "files": {
         "openFailed": "檔案沒能開啟，可能已被移動或刪除",
         "untitled": "附件",
@@ -14123,6 +14131,7 @@
       "sessionViewSource": "檢視來源任務",
       "botSentNamed": "由夥伴「{{name}}」傳送",
       "groupThreadSent": "由「{{name}}」在群聊「{{group}}」的話題裡傳送",
+      "groupRequestSent": "來自群「{{group}}」· {{name}}",
       "orcaFromLead": "來自 Lead 的訊息",
       "orcaFromWorker": "來自 Worker 的訊息",
       "orcaFromWorkerBatch": "系統回傳的 {{count}} 條 Worker 結果",

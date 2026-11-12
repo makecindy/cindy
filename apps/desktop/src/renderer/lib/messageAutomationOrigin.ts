@@ -3,7 +3,7 @@ import type {
   MessageSchedulerOrigin,
   StoredMessageOrigin,
 } from '@/lib/ccAgent.types';
-import { readMessageSourceGroupThread } from '@cindy/maker-shared/message-source';
+import { readMessageSourceGroupRequest, readMessageSourceGroupThread } from '@cindy/maker-shared/message-source';
 
 /**
  * 把落库的 agentMeta.origin 投影成气泡来源标签。
@@ -37,6 +37,9 @@ export function toMessageAutomationOrigin(origin: unknown): MessageAutomationOri
   const senderBotId = readNonEmptyString(value.senderBotId);
   const senderBotName = readNonEmptyString(value.senderBotName);
   // A group member's words from a task card's Thread: no sending task, the speaker is the source.
+  // A request to the group's Cindy: the owner in the group is the source, there is no sending task.
+  const groupRequest = readMessageSourceGroupRequest(value);
+  if (groupRequest) return { kind: 'session', groupRequest };
   const groupThread = readMessageSourceGroupThread(value);
   if (groupThread) {
     return { kind: 'session', groupThread, ...(senderBotId ? { senderBotId, ...(senderBotName ? { senderBotName } : {}) } : {}) };

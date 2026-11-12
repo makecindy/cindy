@@ -159,9 +159,18 @@ export interface BotGroupChatServiceDeps {
     clientId: string;
     attachments?: BotGroupAttachment[];
     toolsDisabled?: boolean;
+    /** An ordinary task that is not running starts with the permission it was opened with, never bypass. */
+    resumeWithStoredPermissionMode?: boolean;
     onQueued?: (clientId: string) => Promise<void>;
     onAccepted: () => void | Promise<void>;
   }) => Promise<DispatchResult>;
+  /**
+   * The group's Cindy on this computer (bot-group-chat.md「群里的 Cindy」): the given task when it is
+   * still usable, else a new ordinary visible task titled with the group's name, under the project
+   * folder (`projectDir`) or under 「对话」 (null), with this user's new-task model and permission.
+   */
+  ensureGroupAssistantSession?: (input: { sessionId?: string; title: string; projectDir: string | null }) =>
+    Promise<{ ok: true; sessionId: string; created: boolean } | { ok: false; errorCode: string; message: string }>;
   /**
    * Turns a composer's attachments into stored ones (bot-group-chat.md §3.1): images end up
    * in the media store under this group, files stay where they are on this computer or, from

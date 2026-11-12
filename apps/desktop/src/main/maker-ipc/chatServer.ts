@@ -1,4 +1,4 @@
-import { createChatWorkPolling, createWorkRequestGate, WorkRequestDeferred } from './chatWorkPolling.js';
+import { createChatWorkPolling, createWorkRequestGate, WorkRequestDeferred, type WorkActor } from './chatWorkPolling.js';
 import { teammateChatActivity } from '@cindy/maker-shared/teammate-status';
 import { prepareChatReplyFiles } from './chatServerReplyFiles.js';
 import type { ChatUploadAttachment } from './chatServerMedia.js';
@@ -26,7 +26,7 @@ import { chatInviteShareBase, createChatInviteShare, notifyChatInviteRevoked, re
 import { createChatMedia } from './chatServerMedia.js';
 import { mergeChatReplyAttachments } from './chatServerReplyAttachments.js';
 import { prepareChatReplyImages } from './chatServerReplyImages.js';
-import { chatServerTaskCards, chatServerWorkspaces, type ChatLiveTaskCardRecord } from './chatServerWorkspaces.js';
+import { chatServerAssistantSessions, chatServerTaskCards, chatServerWorkspaces, type ChatAssistantSessionRecord, type ChatLiveTaskCardRecord } from './chatServerWorkspaces.js';
 import { buildPlanStepBrief, draftPlanSteps, type PlanStepDraft } from './botGroupDivision.js';
 import { botGroupMentionAudience, resolveBotGroupMentions, splitBotGroupRelaySteps, type BotGroupMentionMember } from '@cindy/maker-shared/botGroupMentions';
 import { chatMigrationReceipts } from './chatMigrationReceipts.js';
@@ -55,11 +55,12 @@ import {
   botGroupQuoteAttachmentName, botGroupQuoteExcerpt, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupQuote, readBotGroupQuoteCard, type BotGroupQuoteView,
   readBotGroupTaskCard, readBotGroupLiveTaskCard, buildBotGroupLiveTaskCard, botGroupLiveTaskReplyLine, type BotGroupLiveTaskView, botGroupMessageSummaryText, botGroupProcessCard, readBotGroupProcessCard,
   readBotGroupCapabilityNotice, buildBotGroupCapabilityNotice, type BotGroupCapabilityNoticeCode,
+  BOT_GROUP_ASSISTANT_AVATAR, BOT_GROUP_ASSISTANT_NAME, botGroupAssistantClientId,
 } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal, BotGroupPreparedAttachments } from './botGroupChatService.js';
 import { readPersistedReplyText } from './botGroupChatService.js';
 import { botGroupRuntimeFailureCode, botGroupRuntimeFailureDetail } from './botGroupRuntimeFailure.js';
-import { chatGroupMemberName as memberName, chatGroupOwnerName, botGroupExecutionFailureBatches, latestBotGroupMessage } from '@cindy/maker-shared/botGroupPresentation';
+import { chatGroupMemberName, chatGroupOwnerName, botGroupExecutionFailureBatches, latestBotGroupMessage } from '@cindy/maker-shared/botGroupPresentation';
 import { createThreadProjection, isShareableThreadReply, threadPreviewAttachments, threadPreviewText } from './chatServerThreads.js';
 import { companionSnapshot, registerCompanionHomes } from '../companion-cloud/homes.js';
 import { startCompanionCloud, type CompanionCloudRuntime } from '../companion-cloud/runtime.js';
@@ -73,7 +74,9 @@ import { isGithubRepository } from '../../shared/cindyMakePersonalRemote.js';
 interface Actor { id: string; kind: string; externalId: string; name: string; avatar?: string | null; avatarSource?: string | null; homeDeviceId?: string | null; disabled?: boolean }
 interface Member { id: string; kind: 'human' | 'bot' | 'integration'; name: string; state: string; role: 'owner' | 'admin' | 'member' | 'guest';
   displayName: string; avatar: string | null; groupAvatar?: string | null; defaultAvatarUrl?: string | null; nickname: string | null; ownerActorId: string; ownerName: string;
-  guestAccess: 'none' | 'chat' | 'tools'; accessRevision: number }
+  guestAccess: 'none' | 'chat' | 'tools'; accessRevision: number;
+  /** The group's own Cindy (servers with `groupAssistant`), nobody's companion. */
+  assistant?: boolean }
 interface Message {
   maskAttribution?: BotGroupMessageView['maskAttribution'];
   id: string; seq: string; authorId: string; replyCount?: number; reactions?: Array<{ emoji: string; count: number; me: boolean }>; author: { kind: string; name: string };
@@ -87,6 +90,8 @@ interface Room {
   allow_mention_all_bots?: boolean; created_at: string; updated_at: string; revision: number; archived: boolean; dissolved_at?: string | null; organizer_id?: string | null; kind?: string;
   /** The group's shared project (servers with `groupProject`); each computer keeps its own folder. */
   project?: { kind: 'github'; repo: string } | null;
+  /** The group's own Cindy is on (servers with `groupAssistant`); absent means on. */
+  assistant?: boolean;
 }
 /**
  * `reads`: this reader's read position per Thread (`thread_key` = root ID, `main` for the main timeline); older servers omit it.
@@ -145,6 +150,11 @@ interface Running {
   inTask?: boolean;
   /** Other teammates this reply may name with @ (servers with groupTeammateMentions). */
   mentionable?: BotGroupMentionMember[];
+  /**
+   * A request to the group's Cindy, delivered into this computer's ordinary group task (always with
+   * `inTask`: the task is the user's own, so only this input settles it and the group never stops it).
+   */
+  assistant?: true;
   releaseToolAuthority?: () => void;
   capabilityNotices?: Map<BotGroupCapabilityNoticeCode, Promise<void>>;
 }
@@ -289,6 +299,10 @@ const MAIN_GROUP_CONTEXT_MESSAGES = 12;
 const MAIN_GROUP_CONTEXT_CHARS = 600;
 /** The answer right before a queue turn, as much as a 分工 step's hand-off note (botGroupDivision). */
 const PREVIOUS_ANSWER_CHARS = 2000;
+/** A request to the group's Cindy carries at most this many of the group's newest messages. */
+const ASSISTANT_CONTEXT_MESSAGES = 20;
+/** Threads whose delivered position the group's task remembers, besides the main group. */
+const ASSISTANT_THREADS_KEPT = 20;
 function mainGroupContext<V extends { text: string }>(messages: Message[], view: (m: Message) => V) {
   const recent = messages.slice(-MAIN_GROUP_CONTEXT_MESSAGES).map(m => {
     const v = view(m);
@@ -493,6 +507,18 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let supportsGroupProject = false;
   /** A reply's @ wakes the teammates it names (capability groupTeammateMentions). */
   let supportsTeammateMentions = false;
+  /**
+   * Every group has its own Cindy (capability groupAssistant): one server-wide actor that this
+   * computer runs only for requests its own account made (bot-group-chat.md「群里的 Cindy」).
+   */
+  let assistantActorId: string | null = null;
+  const isAssistant = (m: { id: string; kind: string; assistant?: boolean }) => m.kind === 'bot'
+    && (m.assistant === true || (!!assistantActorId && m.id === assistantActorId));
+  /** A teammate someone owns: anyone but the group's own Cindy. */
+  const isCompanion = (m: { id: string; kind: string; assistant?: boolean }) => m.kind === 'bot' && !isAssistant(m);
+  const assistantSessions = () => chatServerAssistantSessions(config.baseUrl, selfId, current);
+  /** Group-scoped names: a companion carries its owner's name; the group's own Cindy is just Cindy. */
+  const memberName = (m: Member, members: readonly Member[]) => isAssistant(m) ? BOT_GROUP_ASSISTANT_NAME : chatGroupMemberName(m, members);
   // Registered project folders whose origin is a repository, briefly cached: settings reads and
   // every group reply resolve the folder, and each lookup reads the git remotes of local projects.
   // A found folder is kept for minutes; a miss only briefly, counted from when the lookup ends, so
@@ -1022,6 +1048,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       singleSpeaker = me.capabilities?.groupSingleSpeaker === 1;
       supportsGroupProject = (me.capabilities as { groupProject?: number } | undefined)?.groupProject === 1;
       supportsTeammateMentions = (me.capabilities as { groupTeammateMentions?: number } | undefined)?.groupTeammateMentions === 1;
+      const assistant = (me.capabilities as { groupAssistant?: number } | undefined)?.groupAssistant === 1
+        ? (me as { groupAssistantActorId?: unknown }).groupAssistantActorId : undefined;
+      assistantActorId = typeof assistant === 'string' && id.safeParse(assistant).success ? assistant : null;
       // The read-only probe covers ordinary and member-joined queues only. AI reply work and
       // digests are found by the idle mask claim, so a server offering them keeps idle claims.
       const probing = me.capabilities?.workAvailabilityVersion === 1 && !personalMask;
@@ -1061,7 +1090,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       profileFailures = failures;
       registeredAt = Date.now();
       registrationFailures = 0; registrationRetryAt = 0;
-      const key = JSON.stringify([selfId, actors.map(a => [a.id, a.kind, a.externalId, a.name, a.avatar ?? null]),
+      const key = JSON.stringify([selfId, assistantActorId, actors.map(a => [a.id, a.kind, a.externalId, a.name, a.avatar ?? null]),
         profiles.map(p => [p.id, p.status, p.displayName, p.avatar, p.avatarColor])]);
       if (key !== registryKey) {
         const replaced = registryKey !== '';
@@ -1269,6 +1298,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
                 for (const hint of change.data.work) {
                   if (!id.safeParse(hint?.botId).success || !id.safeParse(hint?.conversationId).success) continue;
                   noteUnresolvedWork(hint.botId, hint.conversationId);
+                  // The group's Cindy has no actor of ours: a notice for it just looks for work now.
+                  if (hint.botId === assistantActorId) { targets.push(hint.botId); continue; }
                   const bot = actors.find(actor => actor.id === hint.botId);
                   if (!bot || !claimable(bot)) continue;
                   const hints = queuedHints.get(bot.id) ?? new Map<string, WorkHint>();
@@ -1939,6 +1970,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       teammateActivity: teammateChatActivity({ executions, plans: serverPlans, planning: !!deciding,
         archived: s.room.archived, lastMessageAt: last ? Date.parse(last.createdAt) : 0 }),
       members: s.members.filter(m => m.state === 'joined').map(m => {
+        // The group's own Cindy: plain 「Cindy」 with Cindy's artwork, nobody's companion.
+        if (isAssistant(m)) return { botId: m.id, actorId: m.id, actorKind: 'bot' as const, assistant: true, isSelf: false, role: m.role,
+          nickname: null, displayName: BOT_GROUP_ASSISTANT_NAME, isOwned: false, avatarUrl: null, name: BOT_GROUP_ASSISTANT_NAME,
+          avatar: BOT_GROUP_ASSISTANT_AVATAR, avatarColor: 'violet', status: 'active' as const };
         const p = localBot(m.id);
         return { botId: p?.id ?? m.id, actorId: m.id, actorKind: m.kind, isSelf: m.id === selfId,
           role: m.role, nickname: m.nickname, groupAvatar: m.groupAvatar ?? null, defaultAvatarUrl: m.defaultAvatarUrl ?? null, displayName: m.displayName, ownerActorId: m.ownerActorId, ownerName: m.kind === 'bot' && !direct ? chatGroupOwnerName(m, ownerMembers) : m.ownerName,
@@ -1948,8 +1983,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           ...(m.ownerActorId === selfId && m.kind === 'bot' ? { homeDeviceId: actors.find(a => a.id === m.id)?.homeDeviceId ?? null } : {}),
           avatarUrl: m.avatar?.startsWith('https://') ? m.avatar : null,
           name: memberName(m, ownerMembers), avatar: m.groupAvatar ? '' : p?.avatar ?? (m.avatar?.startsWith('https://') ? '' : m.avatar) ?? '', avatarColor: p?.avatarColor ?? 'violet', status: p?.status ?? 'active' };
-      }), organizerBotId: direct ? null : ((id?: string) => id ? localBot(id)?.id ?? id : null)(s.room.organizer_id ?? s.members.find(m => m.kind === 'bot' && m.state === 'joined')?.id), projectDir: folder.dir, ...(folder.dir && folder.auto ? { projectDirAuto: true } : {}),
+      }), organizerBotId: direct ? null : ((id?: string) => id ? localBot(id)?.id ?? id : null)(s.room.organizer_id ?? s.members.find(m => isCompanion(m) && m.state === 'joined')?.id), projectDir: folder.dir, ...(folder.dir && folder.auto ? { projectDirAuto: true } : {}),
       ...(!direct && supportsGroupProject ? { supportsGroupProject: true, project: s.room.project ?? null } : {}),
+      ...(!direct && assistantActorId ? { supportsGroupAssistant: true, assistantEnabled: s.room.assistant !== false } : {}),
       // Only servers that tell a 分工 from a queue (kind) can hand one on by itself.
       ...(singleSpeaker ? { autoContinue: workspace?.autoContinue === true } : {}), lastMessage: last && lastView ? {
         isSelf: lastView.isSelf, authorKind: lastView.authorKind, authorName: lastView.authorName, noticeCode: lastView.noticeCode,
@@ -2055,7 +2091,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   }
   async function decideArrangement(s: Snapshot, sourceId: string, text: string, forced: boolean, attachments: BotGroupAttachment[], intent: PlanIntent, quote: BotGroupQuoteView | null = null) {
     if (!current() || planIntents.get(s.room.id) !== intent) return;
-    const members = s.members.filter(m => m.kind === 'bot' && m.state === 'joined' && (!localBot(m.id) || localBot(m.id)?.status === 'active') && (m.ownerActorId === selfId || m.guestAccess !== 'none'));
+    const members = s.members.filter(m => isCompanion(m) && m.state === 'joined' && (!localBot(m.id) || localBot(m.id)?.status === 'active') && (m.ownerActorId === selfId || m.guestAccess !== 'none'));
     const organizer = members.find(m => m.id === s.room.organizer_id) ?? members[0];
     if (!organizer || !deps.decidePlan) {
       // Nobody can arrange it: release the request now, or every later send would wait for a card that never comes.
@@ -2113,7 +2149,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   }
   /** Steps a 分工 request wrote out (§7.0), as teammates this account may give work to. */
   function writtenPlanSteps(s: Snapshot, text: string, picked: string[]): PlanStepDraft[] | null {
-    const bots = s.members.filter(m => m.kind === 'bot' && m.state === 'joined');
+    const bots = s.members.filter(m => isCompanion(m) && m.state === 'joined');
     const written = splitBotGroupRelaySteps(text, { allLabels: [],
       members: bots.map(m => ({ botId: m.id, name: memberName(m, s.members), displayName: m.name, nickname: m.nickname })) });
     // A picked teammate whose name no longer reads in the text (renamed meanwhile) would silently
@@ -2128,7 +2164,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   async function openWrittenPlan(s: Snapshot, sourceId: string, request: string, steps: PlanStepDraft[], intent: PlanIntent) {
     if (!current() || planIntents.get(s.room.id) !== intent) return;
     // The organizer settings show: the chosen one, else the first companion.
-    const shown = s.room.organizer_id ?? s.members.find(m => m.kind === 'bot' && m.state === 'joined')?.id;
+    const shown = s.room.organizer_id ?? s.members.find(m => isCompanion(m) && m.state === 'joined')?.id;
     const organizerId = steps.some(step => step.botId === shown) ? shown! : steps[0]!.botId;
     let plan: ServerPlan;
     try {
@@ -2157,7 +2193,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const notices = run.capabilityNotices ??= new Map();
     const existing = notices.get(code);
     if (existing) return existing;
-    const name = actors.find(actor => actor.id === run.execution.bot_id)?.name ?? '';
+    const name = run.assistant ? BOT_GROUP_ASSISTANT_NAME : actors.find(actor => actor.id === run.execution.bot_id)?.name ?? '';
     // Freeze the server operation ID and payload for bounded retries, even after this turn ends.
     const payload = {
       operationId: `capability:${run.execution.id}:${run.execution.epoch}:${code}`,
@@ -2403,6 +2439,16 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // Recheck metadata and the execution lease at the tool or file-delivery boundary.
     // Group administrators cannot grant access to someone else's companion.
     try {
+      if (run.assistant) {
+        // The group's Cindy runs only for its requester's own account, while it is in the group.
+        const members = await api<Member[]>(`/conversations/${execution.conversation_id}/members`);
+        assertCurrent();
+        if (execution.requester_id !== selfId || !members.some(m => m.id === execution.bot_id && m.state === 'joined' && isAssistant(m))
+          || !members.some(m => m.id === selfId && m.state === 'joined')) throw new GroupToolAuthorizationError();
+        await updateExecution(run, 'heartbeat');
+        assertCurrent();
+        return;
+      }
       if (execution.mask_owner_id) {
         // The bound companion need not be a member. Recheck the owner's personal
         // grant and let the mask lease fence takeover, downgrade and home changes.
@@ -2805,7 +2851,164 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       throw error;
     }
   }
+  /**
+   * The group's Cindy on this computer (bot-group-chat.md「群里的 Cindy」, 2026-11-12): one ordinary
+   * visible task per group, under the group's project folder when this computer has it, else under
+   * 「对话」. A folder found or changed later opens a new task next time; the old one stays.
+   * One lookup per group at a time, so two requests arriving together share the same task.
+   */
+  const assistantSessionLookups = new Map<string, Promise<ChatAssistantSessionRecord>>();
+  function groupAssistantSession(room: Room): Promise<ChatAssistantSessionRecord> {
+    const previous = assistantSessionLookups.get(room.id) ?? Promise.resolve(undefined);
+    const lookup = previous.catch(() => undefined).then(async () => {
+      if (!deps.ensureGroupAssistantSession) throw new Error('MEMBER_UNAVAILABLE');
+      const folder = await groupProjectFolder(room);
+      const checked = folder.dir && deps.validateProjectDir ? await deps.validateProjectDir(folder.dir).catch(() => null) : null;
+      // A found folder that went away is looked up again next time; the task goes under 「对话」 now.
+      if (folder.dir && !checked?.ok && folder.auto && room.project?.kind === 'github') repositoryFolders.delete(room.project.repo.toLowerCase());
+      const projectDir = checked?.ok ? checked.dir : null;
+      const saved = assistantSessions().read()[room.id];
+      const ensured = await deps.ensureGroupAssistantSession({
+        ...(saved && saved.projectDir === projectDir ? { sessionId: saved.sessionId } : {}), title: room.name, projectDir });
+      if (!ensured.ok) throw new Error(botGroupRuntimeFailureCode({ code: ensured.errorCode, message: ensured.message }));
+      if (!current()) throw new Error('OWNER_CHANGED');
+      const all = assistantSessions().read();
+      const record: ChatAssistantSessionRecord = all[room.id]?.sessionId === ensured.sessionId ? all[room.id]! : { sessionId: ensured.sessionId, projectDir };
+      all[room.id] = record;
+      assistantSessions().save(all);
+      return record;
+    });
+    assistantSessionLookups.set(room.id, lookup);
+    void lookup.catch(() => undefined).finally(() => { if (assistantSessionLookups.get(room.id) === lookup) assistantSessionLookups.delete(room.id); });
+    return lookup;
+  }
+  /** Delivered up to `seq` in this conversation of the group's task; the next request carries only newer messages. */
+  function noteAssistantDelivery(roomId: string, sessionId: string, scope: string, seq: string) {
+    if (!current()) return;
+    const all = assistantSessions().read();
+    const record = all[roomId];
+    if (record?.sessionId !== sessionId) return;
+    const delivered = { ...record.deliveredSeq };
+    if (delivered[scope] !== undefined && BigInt(delivered[scope]!) >= BigInt(seq)) return;
+    delete delivered[scope];
+    delivered[scope] = seq;
+    // The main group and the latest Threads; an older Thread starts over with its recent messages.
+    const threads = Object.keys(delivered).filter(key => key !== 'main');
+    for (const key of threads.slice(0, Math.max(0, threads.length - ASSISTANT_THREADS_KEPT))) delete delivered[key];
+    all[roomId] = { ...record, deliveredSeq: delivered };
+    assistantSessions().save(all);
+  }
+  /**
+   * What a request to the group's Cindy carries besides the requester's words: the messages of its
+   * conversation (main group or its Thread) since the last request delivered into the task — the
+   * recent ones on the first — newest last and bounded, each on one shortened line, plus the message
+   * it replies to. This task's own answers are already in it and are left out.
+   */
+  async function assistantRequestContext(s: Snapshot, source: Message, sessionId: string, delivered: string | undefined) {
+    const threadRootId = source.threadRootId;
+    const page = await api<Message[]>(`/conversations/${s.room.id}/messages?${threadRootId ? `threadRootId=${id.parse(threadRootId)}` : 'all=true'}&limit=50&before=${BigInt(source.seq)}`);
+    const ownAnswer = (m: Message) => m.content.some(block => {
+      const ref = readBotGroupProcessCard(block);
+      return ref?.sessionId === sessionId && (!ref.deviceId || ref.deviceId === selfDeviceId);
+    });
+    const newer = (m: Message) => delivered === undefined || BigInt(m.seq) > BigInt(delivered);
+    const messages = page.filter(m => (threadRootId ? m.threadRootId === threadRootId : !m.threadRootId)
+      && m.id !== source.id && !m.deleted && m.origin !== 'system' && newer(m) && !ownAnswer(m));
+    // A Thread's first request starts from the post the Thread discusses.
+    if (threadRootId && delivered === undefined) {
+      const root = await readMessage(s.room.id, threadRootId);
+      if (root && !root.deleted && !messages.some(m => m.id === root.id)) messages.push(root);
+    }
+    messages.sort((a, b) => BigInt(a.seq) < BigInt(b.seq) ? -1 : BigInt(a.seq) > BigInt(b.seq) ? 1 : 0);
+    const name = (m: Message) => { const member = s.members.find(candidate => candidate.id === m.authorId); return member ? memberName(member, s.members) : m.author.name; };
+    const line = (who: string, text: string) => `${who}：${text.length > MAIN_GROUP_CONTEXT_CHARS ? `${text.slice(0, MAIN_GROUP_CONTEXT_CHARS)}…` : text}`;
+    const lines = messages.slice(-ASSISTANT_CONTEXT_MESSAGES).flatMap(m => {
+      const text = bodyText(m).replace(/\s+/g, ' ').trim();
+      return text ? [line(name(m), text)] : [];
+    });
+    const quote = readBotGroupQuote(source.content);
+    return {
+      heading: t(threadRootId ? delivered === undefined ? 'bots.groupChat.assistant.threadRecent' : 'bots.groupChat.assistant.threadNew'
+        : delivered === undefined ? 'bots.groupChat.assistant.groupRecent' : 'bots.groupChat.assistant.groupNew'),
+      lines, omitted: messages.length > ASSISTANT_CONTEXT_MESSAGES,
+      ...(quote?.excerpt ? { replyingTo: t('bots.groupChat.assistant.replyingTo')
+        .replaceAll('{{name}}', () => quote.authorName).replaceAll('{{text}}', () => quote.excerpt) } : {}),
+    };
+  }
+  /**
+   * A request to the group's Cindy (bot-group-chat.md「群里的 Cindy」, 2026-11-12). It runs only on
+   * the requester's own computer — the server hands it to no one else — with the requester's own
+   * logins, model and permission: it is one ordinary visible message in this computer's group task,
+   * the owner's own request, like an owner message to their bot in an IM channel. The task's turn for
+   * this exact input is the reply (`inTask`): its end completes the execution, and nothing from the
+   * group ever stops the task. Blockers (permission, login, questions) are handled in the task; the
+   * group shows 「处理中」 under the lease meanwhile. Tasks it opens show as cards, as from a lane.
+   */
+  async function runAssistantExecution(execution: Execution, lane?: string) {
+    if (running.has(execution.id)) return;
+    const run: Running = { execution, sessionId: '', clientId: botGroupAssistantClientId(execution.id, execution.epoch), accepted: false,
+      started: Date.now(), lane, inTask: true, assistant: true, context: { kind: 'message' } };
+    running.set(execution.id, run);
+    resolveLane(run);
+    try {
+      z.object({ access_mode: z.enum(['owner', 'chat', 'tools']), access_revision: z.number().int().positive() }).parse(execution);
+      // Never another member's request: it would run with this computer's logins (2026-11-12).
+      if (execution.requester_id !== selfId) throw new Error('MEMBER_UNAVAILABLE');
+      if (!ordinaryExecution(execution) || execution.plan_id || execution.mask_owner_id || execution.mask_kind) throw new Error('INVALID_EXECUTION_TRIGGER');
+      const roomId = execution.conversation_id;
+      const sourceRead = readMessage(roomId, execution.source_message_id);
+      sourceRead.catch(() => undefined);
+      const s = await readSnapshot(roomId);
+      if (!isGroupRoom(s.room)) throw new Error('INVALID_EXECUTION_TRIGGER');
+      subscribe(roomId, s.cursor);
+      const source = await sourceRead;
+      if (!source || source.deleted || source.origin === 'system') throw new Error('INVALID_EXECUTION_TRIGGER');
+      await validateExecutionAuthority(run);
+      if (!current() || running.get(execution.id) !== run) throw new Error('STALE_EXECUTOR');
+      const record = await groupAssistantSession(s.room);
+      const sessionId = record.sessionId;
+      const threadRootId = source.threadRootId ?? undefined;
+      const scope = threadRootId ?? 'main';
+      const context = await assistantRequestContext(s, source, sessionId, record.deliveredSeq?.[scope]);
+      // The request's own files go with it, like a task message's.
+      const mediaIds = source.content.flatMap(block => block.type === 'media' && block.mediaId ? [block.mediaId] : []).slice(0, BOT_GROUP_ATTACHMENTS_MAX);
+      const downloads = await settleBounded(mediaIds, TURN_DOWNLOAD_CONCURRENCY, mediaId => media.download(roomId, id.parse(mediaId)));
+      const attachments = downloads.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
+      if (attachments.length < mediaIds.length) void postCapabilityNotice(run, 'ATTACHMENTS_UNAVAILABLE', threadRootId);
+      if (!current() || running.get(execution.id) !== run) throw new Error('STALE_EXECUTOR');
+      run.sessionId = sessionId;
+      run.releaseToolAuthority = registerGroupToolAuthority(sessionId, {
+        botId: execution.bot_id, mode: 'owner', sourceGroup: { groupId: s.room.id, name: s.room.name },
+        isCurrent: () => current() && running.get(execution.id) === run && !run.settlement,
+        validate: () => validateExecutionAuthority(run),
+        onTaskCreated: task => void postTaskCard(run, s, threadRootId, task),
+      });
+      const words = bodyText(source).trim();
+      // The context is part of the visible message, under its own heading (no hidden envelope).
+      const background = [...(context.replyingTo ? [context.replyingTo] : []), ...(context.omitted ? [t('bots.groupChat.assistant.earlierOmitted')] : []), ...context.lines];
+      const message = context.lines.length || context.replyingTo ? `${words}\n\n${context.heading}\n${background.join('\n')}` : words;
+      const self = s.members.find(m => m.id === selfId);
+      const dispatched = await deps.dispatch({ targetSessionId: sessionId, clientId: run.clientId, message, persistedContent: message,
+        // The requester's own words are the request this turn speaks for; the group's messages are background.
+        autoReviewUserText: { kind: 'agent-request', request: { sessionId, clientId: run.clientId, plainBody: true, delegatedText: words } },
+        origin: { kind: 'session', senderSessionId: '', displayText: message,
+          groupRequest: { groupId: s.room.id, groupName: s.room.name, speakerId: selfId, speakerName: self ? memberName(self, s.members) : source.author.name } },
+        ...(attachments.length ? { attachments } : {}),
+        resumeWithStoredPermissionMode: true,
+        onAccepted: async () => {
+          if (!current() || running.get(execution.id) !== run) throw new Error('STALE_EXECUTOR');
+          run.accepted = true;
+        } });
+      if (!dispatched.ok) throw new Error(botGroupRuntimeFailureCode({ code: dispatched.errorCode, message: dispatched.message }));
+      noteAssistantDelivery(roomId, sessionId, scope, source.seq);
+      changed(roomId);
+    } catch (error) {
+      await settleExecution(run, { sessionId: run.sessionId, activeInputClientId: run.clientId,
+        outcome: 'error', resultText: '', failureCode: botGroupRuntimeFailureCode(error) }, true);
+    }
+  }
   async function runExecution(execution: Execution, lane?: string) {
+    if (assistantActorId && execution.bot_id === assistantActorId) return runAssistantExecution(execution, lane);
     const bot = localBot(execution.bot_id);
     if (!bot) {
       // The server handed out work this computer cannot resolve to a companion. Without this line
@@ -3274,7 +3477,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   function queuedForThisDevice(change: unknown) {
     const value = change as { type?: unknown; data?: { status?: unknown; botId?: unknown } } | null;
     return value?.type === 'execution.changed' && value.data?.status === 'queued'
-      && (typeof value.data.botId !== 'string' || ownedActiveBot(value.data.botId));
+      && (typeof value.data.botId !== 'string' || ownedActiveBot(value.data.botId) || value.data.botId === assistantActorId);
   }
   /**
    * Work the server announced for a companion this installation cannot resolve to a local profile.
@@ -3334,7 +3537,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // Parallel claims may see another companion's downgrade; each judges the request it sent.
     const withEvents = memberJoinedClaims;
     try {
-      if (personalMask && !executionId) {
+      // The group's Cindy never answers in AI reply mode and has no member-joined work.
+      const assistant = !!assistantActorId && actorId === assistantActorId;
+      if (personalMask && !executionId && !assistant) {
         const masked = await workApi<{execution: Execution | null; privateReportId?: string}>('/mask/executions/claim','POST',{operationId:randomUUID(),executorId,...(personalMaskTools ? {accessPolicyVersion:1} : {})},actorId);
         // Reconcile the last durable private report after a crash between server
         // completion and local import. Import is idempotent and retries on failure.
@@ -3347,7 +3552,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         }
         if (masked.execution) return masked.execution;
       }
-      return (await workApi<{ execution: Execution | null }>('/executions/claim', 'POST', { ...payload, ...(withEvents ? { memberJoinedVersion: 1 } : {}) }, actorId)).execution;
+      return (await workApi<{ execution: Execution | null }>('/executions/claim', 'POST', { ...payload, ...(withEvents && !assistant ? { memberJoinedVersion: 1 } : {}) }, actorId)).execution;
     } catch (error) {
       if (!withEvents || !(error instanceof ChatResponseError) || error.status !== 400 || error.message !== 'INVALID_INPUT') throw error;
       memberJoinedClaims = false;
@@ -3380,7 +3585,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         for (const [key, hint] of observed) retireHint(key, hint);
         continue;
       }
-      const queued = rows.filter(row => row.bot_id === actorId && row.status === 'queued')
+      // The group's Cindy runs here only for this account's own requests; others' are not ours to claim.
+      const queued = rows.filter(row => row.bot_id === actorId && row.status === 'queued'
+        && (actorId !== assistantActorId || row.requester_id === selfId))
         .sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? '') || a.id.localeCompare(b.id));
       // A notice is dropped once its work is no longer queued, or once it waits behind a turn in
       // its own conversation (that room is re-read anyway). A failed read or claim keeps it for the next pass.
@@ -3408,12 +3615,21 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const availabilityResponse = z.object({ items: z.array(z.object({ botId: id, pending: z.boolean(), enabled: z.boolean() })).max(128) });
   const workPolling = createChatWorkPolling<Execution>({
     current, gate: workGate, errorInfo: workError,
-    actors: () => (localProfilesRead === localProfilesRevision
-      ? actors.filter(actor => claimable(actor) && !disabledUntilRead.has(actor.id)) : []).map(actor => {
-      const runs = runsOf(actor.id);
-      for (const run of runs) resolveLane(run);
-      return { id: actor.id, busy: runs.length > 0, ready: runs.every(run => run.lane) };
-    }),
+    actors: () => {
+      const work: WorkActor[] = (localProfilesRead === localProfilesRevision
+        ? actors.filter(actor => claimable(actor) && !disabledUntilRead.has(actor.id)) : []).map(actor => {
+        const runs = runsOf(actor.id);
+        for (const run of runs) resolveLane(run);
+        return { id: actor.id, busy: runs.length > 0, ready: runs.every(run => run.lane) };
+      });
+      // The group's Cindy: the server hands this computer only its own account's requests to it.
+      if (assistantActorId && selfId) {
+        const runs = runsOf(assistantActorId);
+        for (const run of runs) resolveLane(run);
+        work.push({ id: assistantActorId, busy: runs.length > 0, ready: runs.every(run => run.lane), unprobed: true });
+      }
+      return work;
+    },
     canProbe: () => workAvailability,
     longIdle: () => workNotifications && connected,
     probe: async ids => {
@@ -3646,7 +3862,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const action = z.discriminatedUnion('type', [
         z.object({ type: z.literal('read'), messageId: id, conversationKind: z.literal('direct').optional() }).strict(),
         z.object({ type: z.literal('notifications'), mode: z.enum(['all', 'mentions', 'none']) }).strict(),
-        z.object({ type: z.literal('update'), name: z.string().trim().min(1).max(40), topic: z.string().max(250), description: z.string().max(2000), responseMode: z.enum(['all', 'mentioned']).optional(), speakingMode: z.enum(['auto', 'sequential']).optional(), allowMentionAllBots: z.boolean().optional(), expectedRevision: z.number().int().positive() }).strict(),
+        z.object({ type: z.literal('update'), name: z.string().trim().min(1).max(40), topic: z.string().max(250), description: z.string().max(2000), responseMode: z.enum(['all', 'mentioned']).optional(), speakingMode: z.enum(['auto', 'sequential']).optional(), allowMentionAllBots: z.boolean().optional(), assistant: z.boolean().optional(), expectedRevision: z.number().int().positive() }).strict(),
         actorAction.extend({ type: z.literal('avatar'), avatar: z.discriminatedUnion('type', [
           z.object({ type: z.literal('keep') }).strict(), z.object({ type: z.literal('reset') }).strict(),
           z.object({ type: z.literal('set'), data: z.instanceof(Uint8Array), mimeType: z.string() }).strict(),
@@ -3722,6 +3938,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const { type, ...payload } = action;
       const route = type === 'update' || type === 'archive' ? '' : type === 'member' ? '/members' : type === 'botAccess' ? '/bot-access' : `/${type}`;
       if (action.type === 'update' && action.allowMentionAllBots !== undefined && !supportsMentionAudiences) throw new Error('CHAT_UNAVAILABLE');
+      if (action.type === 'update' && action.assistant !== undefined && !assistantActorId) throw new Error('CHAT_UNAVAILABLE');
       const asManager = type === 'update' || type === 'archive' || type === 'transfer' || (type === 'member' && !['leave', 'invite'].includes(action.action));
       const s = await groupSnapshot(target);
       if (action.type === 'transfer') {
@@ -4151,6 +4368,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (result.ok && current()) {
           sendReceipts.set(key, result);
           if (sendReceipts.size > 128) sendReceipts.delete(sendReceipts.keys().next().value!);
+          // A request to the group's Cindy runs here, on the requester's computer: look for it now.
+          if (assistantActorId && !identity.data.conversationKind) triggerClaim([assistantActorId]);
         }
         return result;
       }).finally(() => pendingSends.delete(key));
@@ -4280,7 +4499,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const i = z.object({ groupId: id, botIds: z.array(z.string()).max(6), addOnly: z.boolean().optional() }).parse(input);
       const room = await resolveGroup(i.groupId); await register('foreground'); const s = await groupSnapshot(room);
       const selected = i.botIds.map(bot => actors.find(a => a.externalId === bot)?.id ?? id.parse(bot));
-      for (const m of s.members.filter(m => !i.addOnly && m.kind === 'bot' && m.state === 'joined' && !selected.includes(m.id)))
+      // The group's own Cindy is not a picked teammate: 「群里的 Cindy」 in group management turns it off.
+      for (const m of s.members.filter(m => !i.addOnly && isCompanion(m) && m.state === 'joined' && !selected.includes(m.id)))
         await api(`/conversations/${room}/members`, 'POST', { operationId: randomUUID(), actorId: m.id, action: 'remove' }, managementActor(s));
       for (const actorId of selected.filter(bot => !s.members.some(m => m.id === bot && m.state === 'joined')))
         await api(`/conversations/${room}/members`, 'POST', { operationId: randomUUID(), actorId, action: 'invite' }, managementActor(s));

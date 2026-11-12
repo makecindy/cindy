@@ -144,6 +144,23 @@ export function AutomationOriginBadge({
 
   if (!hasAutomationOriginBadge(automationOrigin)) return null;
 
+  // A request to the group's Cindy (bot-group-chat.md「群里的 Cindy」): which group and who, as the
+  // model's [消息来源] says. The speaker is this computer's owner.
+  const groupRequest = automationOrigin.kind === 'session' ? automationOrigin.groupRequest : undefined;
+  if (groupRequest) {
+    return (
+      <MessageSourceLabelShell
+        kind="group-request"
+        icon={<MessageSquare size={11} strokeWidth={1.75} aria-hidden className="shrink-0" />}
+        label={t('chat.userMessage.groupRequestSent', {
+          name: groupRequest.speakerName ?? groupRequest.speakerId,
+          group: groupRequest.groupName ?? groupRequest.groupId,
+        })}
+        tooltip={joinSourceTooltip([t('chat.userMessage.sourceIds.member', { id: groupRequest.speakerId })])}
+      />
+    );
+  }
+
   // A group member's words a teammate passed in from the Thread under this task's card
   // (bot-group-chat.md §10): who said them and where, as the model's [消息来源] says.
   const groupThread = automationOrigin.kind === 'session' ? automationOrigin.groupThread : undefined;

@@ -11164,6 +11164,14 @@
           "failed": "出错了"
         }
       },
+      "assistant": {
+        "groupRecent": "群里最近的消息",
+        "groupNew": "群里的新消息",
+        "threadRecent": "话题里最近的消息",
+        "threadNew": "话题里的新消息",
+        "replyingTo": "回复「{{name}}」：{{text}}",
+        "earlierOmitted": "（更早的消息略去）"
+      },
       "files": {
         "openFailed": "文件没能打开，可能已被移动或删除",
         "untitled": "附件",
@@ -14124,6 +14132,7 @@
       "sessionViewSource": "查看来源任务",
       "botSentNamed": "由伙伴「{{name}}」发送",
       "groupThreadSent": "由「{{name}}」在群聊「{{group}}」的话题里发送",
+      "groupRequestSent": "来自群「{{group}}」· {{name}}",
       "orcaFromLead": "来自 Lead 的消息",
       "orcaFromWorker": "来自 Worker 的消息",
       "orcaFromWorkerBatch": "系统回传的 {{count}} 条 Worker 结果",

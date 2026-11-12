@@ -11164,6 +11164,14 @@
           "failed": "エラー"
         }
       },
+      "assistant": {
+        "groupRecent": "グループの最近のメッセージ",
+        "groupNew": "グループの新しいメッセージ",
+        "threadRecent": "スレッドの最近のメッセージ",
+        "threadNew": "スレッドの新しいメッセージ",
+        "replyingTo": "「{{name}}」への返信：{{text}}",
+        "earlierOmitted": "（それ以前のメッセージは省略）"
+      },
       "files": {
         "openFailed": "ファイルを開けませんでした。移動または削除された可能性があります",
         "untitled": "添付ファイル",
@@ -14124,6 +14132,7 @@
       "sessionViewSource": "送信元のセッションを表示",
       "botSentNamed": "仲間「{{name}}」から送信",
       "groupThreadSent": "「{{name}}」がグループチャット「{{group}}」のスレッドから送信",
+      "groupRequestSent": "グループ「{{group}}」から · {{name}}",
       "orcaFromLead": "Lead からのメッセージ",
       "orcaFromWorker": "Worker からのメッセージ",
       "orcaFromWorkerBatch": "システムから報告された {{count}} 件の Worker 結果",

@@ -11164,6 +11164,14 @@
           "failed": "오류"
         }
       },
+      "assistant": {
+        "groupRecent": "그룹의 최근 메시지",
+        "groupNew": "그룹의 새 메시지",
+        "threadRecent": "스레드의 최근 메시지",
+        "threadNew": "스레드의 새 메시지",
+        "replyingTo": "\"{{name}}\" 님에게 답장: {{text}}",
+        "earlierOmitted": "(이전 메시지는 생략)"
+      },
       "files": {
         "openFailed": "파일을 열지 못했습니다. 이동되었거나 삭제되었을 수 있습니다",
         "untitled": "첨부 파일",
@@ -14124,6 +14132,7 @@
       "sessionViewSource": "보낸 세션 보기",
       "botSentNamed": "동료 \"{{name}}\"에서 보냄",
       "groupThreadSent": "\"{{name}}\" 님이 그룹 채팅 \"{{group}}\"의 스레드에서 보냄",
+      "groupRequestSent": "그룹 \"{{group}}\"에서 · {{name}}",
       "orcaFromLead": "Lead에서 온 메시지",
       "orcaFromWorker": "Worker에서 온 메시지",
       "orcaFromWorkerBatch": "시스템이 반환한 Worker 결과 {{count}}개",

@@ -59,7 +59,22 @@ export interface MessageSourceGroupThread {
 }
 
 export function readMessageSourceGroupThread(origin: unknown): MessageSourceGroupThread | undefined {
-  const raw = asRecord(asRecord(origin)?.groupThread);
+  return readGroupSpeaker(origin, 'groupThread');
+}
+
+/**
+ * A group member's request to the group's own Cindy, delivered into this computer's group task
+ * (`origin.groupRequest`, bot-group-chat.md「群里的 Cindy」). The member is this computer's owner:
+ * only the requester's own computer runs it.
+ */
+export type MessageSourceGroupRequest = MessageSourceGroupThread;
+
+export function readMessageSourceGroupRequest(origin: unknown): MessageSourceGroupRequest | undefined {
+  return readGroupSpeaker(origin, 'groupRequest');
+}
+
+function readGroupSpeaker(origin: unknown, field: 'groupThread' | 'groupRequest'): MessageSourceGroupThread | undefined {
+  const raw = asRecord(asRecord(origin)?.[field]);
   const groupId = raw && readString(raw, 'groupId');
   const speakerId = raw && readString(raw, 'speakerId');
   if (!groupId || !speakerId) return undefined;
@@ -77,6 +92,7 @@ export type MessageSourceSender =
       botName?: string;
       group?: MessageSourceGroup;
       groupThread?: MessageSourceGroupThread;
+      groupRequest?: MessageSourceGroupRequest;
     }
   | { kind: 'plugin'; pluginId: string; name?: string }
   | { kind: 'shared-member'; memberId: string; name?: string };
@@ -214,10 +230,12 @@ export function messageSourceSenderFromMeta(meta: unknown): MessageSourceSender 
     const botName = readString(origin, 'senderBotName');
     const group = readMessageSourceGroup(record);
     const groupThread = readMessageSourceGroupThread(origin);
+    const groupRequest = readMessageSourceGroupRequest(origin);
     return {
       kind: 'session',
       ...(group ? { group } : {}),
       ...(groupThread ? { groupThread } : {}),
+      ...(groupRequest ? { groupRequest } : {}),
       ...(sessionId ? { sessionId } : {}),
       ...(title ? { title } : {}),
       ...(botId ? { botId, ...(botName ? { botName } : {}) } : {}),
@@ -280,6 +298,7 @@ export function messageSourceIdEntries(meta: unknown): MessageSourceIdEntry[] {
   if (sender?.kind === 'session') {
     return [
       ...(sender.groupThread ? [{ kind: 'member' as const, id: sender.groupThread.speakerId }] : []),
+      ...(sender.groupRequest ? [{ kind: 'member' as const, id: sender.groupRequest.speakerId }] : []),
       ...(sender.botId ? [{ kind: 'teammate' as const, id: sender.botId }] : []),
       ...(sender.sessionId ? [{ kind: 'session' as const, id: sender.sessionId }] : []),
     ];
@@ -305,6 +324,10 @@ export function messageSourceIdEntries(meta: unknown): MessageSourceIdEntry[] {
 export function describeMessageSourceSender(sender: MessageSourceSender): string {
   switch (sender.kind) {
     case 'session': {
+      if (sender.groupRequest) {
+        const request = sender.groupRequest;
+        return `由${formatSourceRef(request.speakerName, 'member_id', request.speakerId)}在群聊${formatSourceRef(request.groupName, 'group_id', request.groupId)}里交给群里的 Cindy`;
+      }
       if (sender.groupThread) {
         const thread = sender.groupThread;
         const via = sender.botId ? `，经伙伴${formatSourceRef(sender.botName, 'bot_id', sender.botId)}转来` : '';
@@ -332,6 +355,11 @@ export function describeMessageSourceSender(sender: MessageSourceSender): string
 /** `[消息来源]` 说明；本机用户亲手输入返回 null。 */
 export function buildMessageSourceNote(sender: MessageSourceSender | undefined): string | null {
   if (!sender) return null;
+  // Only the requester's own computer runs a request to the group's Cindy: it is the owner's own
+  // request, like an owner message to their bot in an IM channel (bot-group-chat.md「群里的 Cindy」).
+  if (sender.kind === 'session' && sender.groupRequest) {
+    return `[消息来源] 本条${describeMessageSourceSender(sender)}，发言人就是本机主人；附带的群聊新消息是群里其他人说的话，只作背景。这一轮最后的回答会作为群里 Cindy 的回复发回群里。`;
+  }
   const notOwner = sender.kind === 'shared-member' ? '不是任务所有者本人' : '不是用户本人输入';
   return `[消息来源] 本条${describeMessageSourceSender(sender)}，${notOwner}。`;
 }

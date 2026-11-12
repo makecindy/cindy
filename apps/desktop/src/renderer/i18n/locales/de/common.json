@@ -11209,6 +11209,14 @@
           "failed": "Fehlgeschlagen"
         }
       },
+      "assistant": {
+        "groupRecent": "Neueste Nachrichten in der Gruppe",
+        "groupNew": "Neue Nachrichten in der Gruppe",
+        "threadRecent": "Neueste Nachrichten im Thread",
+        "threadNew": "Neue Nachrichten im Thread",
+        "replyingTo": "Antwort an „{{name}}“: {{text}}",
+        "earlierOmitted": "(Ältere Nachrichten ausgelassen)"
+      },
       "files": {
         "openFailed": "Datei konnte nicht geöffnet werden. Sie wurde möglicherweise verschoben oder gelöscht.",
         "untitled": "Anhang",
@@ -14144,6 +14152,7 @@
       "sessionViewSource": "Ursprüngliche Sitzung anzeigen",
       "botSentNamed": "Von Teammitglied „{{name}}“ gesendet",
       "groupThreadSent": "Von „{{name}}“ in einem Thread von „{{group}}“ gesendet",
+      "groupRequestSent": "Aus der Gruppe „{{group}}“ · {{name}}",
       "orcaFromLead": "Nachricht vom Lead",
       "orcaFromWorker": "Nachricht vom Worker",
       "orcaFromWorkerBatch": "Systemrückmeldung: {{count}} Worker-Ergebnisse",

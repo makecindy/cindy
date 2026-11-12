@@ -1,5 +1,12 @@
 /** Discovery may be batched. Lease acquisition stays an independent operation per actor. */
-export interface WorkActor { id: string; busy: boolean; ready: boolean }
+export interface WorkActor {
+  id: string; busy: boolean; ready: boolean;
+  /**
+   * Never in a read-only probe (the availability read covers only the account's own companions):
+   * claimed directly, and while notices arrive an empty claim waits up to 30 seconds.
+   */
+  unprobed?: boolean;
+}
 export interface WorkAvailability { botId: string; pending: boolean; enabled: boolean }
 export interface WorkError { status?: number; retryAt?: number }
 
@@ -71,11 +78,12 @@ export function createChatWorkPolling<E>(deps: {
     timerAt = at;
     timer = setTimeout(() => { timer = undefined; timerAt = Infinity; pump(); }, Math.max(0, at - Date.now()));
   }
-  function idle(id: string, revision: number, provenEmpty: boolean) {
+  function idle(id: string, revision: number, provenEmpty: boolean, unprobed = false) {
     const value = state(id);
     if (value.revision !== revision) return;
     value.misses = Math.min(value.misses + 1, 6);
-    value.next = Date.now() + Math.min(2_000 * 2 ** (value.misses - 1), provenEmpty && deps.longIdle() ? 60_000 : 15_000) + Math.random() * 1000;
+    const longest = !deps.longIdle() ? 15_000 : provenEmpty ? 60_000 : unprobed ? 30_000 : 15_000;
+    value.next = Date.now() + Math.min(2_000 * 2 ** (value.misses - 1), longest) + Math.random() * 1000;
     if (provenEmpty) deps.empty(id);
   }
   function failed(id: string, error: unknown, phase: 'probe' | 'claim' | 'scan') {
@@ -104,7 +112,7 @@ export function createChatWorkPolling<E>(deps: {
         if (execution) {
           value.misses = 0; value.next = 0;
           deps.accept(execution); // independent response; no sibling barrier
-        } else idle(actor.id, revision, false);
+        } else idle(actor.id, revision, false, actor.unprobed === true);
       }
       if (current()) { value.actionFailures = 0; value.actionAfter = 0; }
     })().catch(error => { if (current()) failed(actor.id, error, phase); })
@@ -146,7 +154,7 @@ export function createChatWorkPolling<E>(deps: {
         nextWake = Math.min(nextWake, Math.max(value.wakeAt, value.actionAfter)); continue;
       }
       if (Date.now() < value.actionAfter || (!value.direct && Date.now() < value.next)) continue;
-      if (actor.busy || value.direct || !deps.canProbe()) act(actor);
+      if (actor.busy || value.direct || !deps.canProbe() || actor.unprobed) act(actor);
       else if (!probing.has(actor.id) && Date.now() >= value.probeAfter) candidates.push(actor.id);
     }
     for (let offset = 0; probes < 4 && offset < candidates.length; offset += 128) probe(candidates.slice(offset, offset + 128));

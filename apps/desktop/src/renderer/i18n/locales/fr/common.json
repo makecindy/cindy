@@ -11300,6 +11300,14 @@
           "failed": "En erreur"
         }
       },
+      "assistant": {
+        "groupRecent": "Messages récents du groupe",
+        "groupNew": "Nouveaux messages du groupe",
+        "threadRecent": "Messages récents du fil",
+        "threadNew": "Nouveaux messages du fil",
+        "replyingTo": "En réponse à « {{name}} » : {{text}}",
+        "earlierOmitted": "(Messages plus anciens omis)"
+      },
       "files": {
         "openFailed": "Impossible d'ouvrir le fichier. Il a peut-être été déplacé ou supprimé.",
         "untitled": "Pièce jointe",
@@ -14269,6 +14277,7 @@
       "sessionViewSource": "Voir la session source",
       "botSentNamed": "Envoyé par le coéquipier « {{name}} »",
       "groupThreadSent": "Envoyé par « {{name}} » dans un fil de « {{group}} »",
+      "groupRequestSent": "Du groupe « {{group}} » · {{name}}",
       "orcaFromLead": "Message du Lead",
       "orcaFromWorker": "Message du Worker",
       "orcaFromWorkerBatch": "Rapport système : {{count}} résultats de Worker",

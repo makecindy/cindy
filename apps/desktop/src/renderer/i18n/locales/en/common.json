@@ -11209,6 +11209,14 @@
           "failed": "Failed"
         }
       },
+      "assistant": {
+        "groupRecent": "Recent messages in the group",
+        "groupNew": "New messages in the group",
+        "threadRecent": "Recent messages in the thread",
+        "threadNew": "New messages in the thread",
+        "replyingTo": "Replying to \"{{name}}\": {{text}}",
+        "earlierOmitted": "(Earlier messages omitted)"
+      },
       "files": {
         "openFailed": "Couldn’t open the file. It may have been moved or deleted.",
         "untitled": "Attachment",
@@ -14181,6 +14189,7 @@
       "sessionViewSource": "View source session",
       "botSentNamed": "Sent by teammate \"{{name}}\"",
       "groupThreadSent": "Sent by \"{{name}}\" in a thread of \"{{group}}\"",
+      "groupRequestSent": "From group \"{{group}}\" · {{name}}",
       "orcaFromLead": "Message from Lead",
       "orcaFromWorker": "Message from Worker",
       "orcaFromWorkerBatch": "System report: {{count}} Worker results",
