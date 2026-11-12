@@ -3,6 +3,8 @@ import http from 'node:http';
 import { OLLAMA_LOOPBACK_ORIGIN } from '../../shared/localModelRuntime.js';
 
 export const OLLAMA_PROBE_TIMEOUT_MS = 1_500;
+/** Ollama's documented default when a model does not set `num_ctx`. */
+export const OLLAMA_DEFAULT_CONTEXT_LENGTH = 4_096;
 
 export interface OllamaVersionInfo {
   version: string;
@@ -16,6 +18,7 @@ export interface OllamaTag {
 
 export interface OllamaShowInfo {
   contextLength?: number;
+  contextLengthMax?: number;
   capabilities?: string[];
   requires?: string;
 }
@@ -176,6 +179,8 @@ export async function fetchOllamaShow(
   }
   const body = (await response.json()) as {
     model_info?: Record<string, unknown>;
+    parameters?: unknown;
+    modelfile?: unknown;
     details?: { context_length?: number };
     capabilities?: unknown;
     requires?: unknown;
@@ -185,19 +190,25 @@ export async function fetchOllamaShow(
     : undefined;
   const requires = typeof body.requires === 'string' ? body.requires : undefined;
   const fromDetails = body.details?.context_length;
-  let contextLength: number | undefined;
-  if (typeof fromDetails === 'number' && fromDetails > 0) {
-    contextLength = fromDetails;
-  } else {
-    for (const [key, value] of Object.entries(body.model_info ?? {})) {
-      if (key.endsWith('.context_length') && typeof value === 'number' && value > 0) {
-        contextLength = value;
-        break;
-      }
+  let contextLengthMax: number | undefined;
+  if (typeof fromDetails === 'number' && fromDetails > 0) contextLengthMax = fromDetails;
+  for (const [key, value] of Object.entries(body.model_info ?? {})) {
+    if (key.endsWith('.context_length') && typeof value === 'number' && value > 0) {
+      contextLengthMax = Math.max(contextLengthMax ?? 0, value);
     }
   }
+
+  const parameterText = [body.parameters, body.modelfile]
+    .filter((value): value is string => typeof value === 'string')
+    .join('\n');
+  const numCtxMatch = /(?:^|\n)\s*(?:parameter\s+)?num_ctx\s+(\d+)(?:\s|$)/im.exec(parameterText);
+  const configuredContextLength = numCtxMatch ? Number(numCtxMatch[1]) : undefined;
+  const contextLength = configuredContextLength && configuredContextLength > 0
+    ? configuredContextLength
+    : Math.min(OLLAMA_DEFAULT_CONTEXT_LENGTH, contextLengthMax ?? OLLAMA_DEFAULT_CONTEXT_LENGTH);
   return {
-    ...(contextLength ? { contextLength } : {}),
+    contextLength,
+    ...(contextLengthMax ? { contextLengthMax } : {}),
     ...(capabilities ? { capabilities } : {}),
     ...(requires ? { requires } : {}),
   };

@@ -245,4 +245,11 @@ describe('local model display names', () => {
   ])('formats %s without changing its execution ID', (id, name) => {
     expect(toPlainRuntimeModel(id)).toMatchObject({ id, name });
   });
+
+  it('keeps the configured working window separate from the model maximum', () => {
+    expect(toPlainRuntimeModel('qwen3:latest', 32_768, 1_048_576)).toMatchObject({
+      contextWindow: 32_768,
+      contextWindowMax: 1_048_576,
+    });
+  });
 });

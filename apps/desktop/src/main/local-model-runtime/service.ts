@@ -869,11 +869,13 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
   async function describePulledModel(name: string) {
     const probed = await probeStatus();
     let contextLength: number | undefined;
+    let contextLengthMax: number | undefined;
     let capabilities: string[] | undefined;
     let requires: string | undefined;
     try {
       const show = await fetchOllamaShow(fetchImpl, name);
       contextLength = show.contextLength;
+      contextLengthMax = show.contextLengthMax;
       capabilities = show.capabilities;
       requires = show.requires;
     } catch {
@@ -881,8 +883,8 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
     }
     const curated = findCuratedOllamaModel(name, deps.getLocalCatalog?.());
     const model = isCuratedQwen38Tag(name)
-      ? toQwenRuntimeModel(name, contextLength)
-      : toPlainRuntimeModel(name, contextLength);
+      ? toQwenRuntimeModel(name, contextLength, contextLengthMax)
+      : toPlainRuntimeModel(name, contextLength, contextLengthMax);
     if (curated) model.name = curated.name;
     return {
       model,

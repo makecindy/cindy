@@ -113,22 +113,27 @@ function localModelDisplayName(name: string, savedName?: string, nameExplicit?: 
 export function toPlainRuntimeModel(
   name: string,
   contextLength?: number,
+  contextLengthMax?: number,
 ): ProviderRuntimeModelConfig {
   return {
     id: name,
     name: localModelDisplayName(name),
     reasoning: false,
     ...(contextLength && contextLength > 0 ? { contextWindow: contextLength } : {}),
+    ...(contextLengthMax && contextLengthMax > 0 && contextLengthMax >= (contextLength ?? 0)
+      ? { contextWindowMax: contextLengthMax }
+      : {}),
   };
 }
 
 export function toQwenRuntimeModel(
   name: string,
   contextLength?: number,
+  contextLengthMax?: number,
 ): ProviderRuntimeModelConfig {
   const contextWindow = contextLength && contextLength > 0 ? contextLength : 32_768;
   return {
-    ...toPlainRuntimeModel(name, contextWindow),
+    ...toPlainRuntimeModel(name, contextWindow, contextLengthMax),
     supportsImageInput: true,
     reasoning: true,
     reasoningEfforts: ['xhigh'],
@@ -151,6 +156,7 @@ function toAgentModel(
     name: named.name,
     ...(named.nameExplicit !== undefined ? { nameExplicit: named.nameExplicit } : {}),
     ...(named.contextWindow ? { contextWindow: named.contextWindow } : {}),
+    ...(named.contextWindowMax ? { contextWindowMax: named.contextWindowMax } : {}),
     ...(named.supportsImageInput ? { supportsImageInput: true } : {}),
     ...(named.reasoning
       ? {
