@@ -157,7 +157,11 @@ export async function loadHomeSessionPr(
   // (已合并 / 已关闭不该退回中性图标);换了 PR 才没有可沿用的状态。
   const previousRows = previous ? [previous, ...(previous.additional ?? [])] : [];
   const selected = includeRelated && Array.isArray(refs)
-    ? (refs as SessionPrRef[]).filter(item => latestPrRef([item]) !== null).sort((a, b) => b.lastSeenAt - a.lastSeenAt).slice(0, MAX_STATUS_QUERIES)
+    ? (refs as SessionPrRef[]).filter(item => latestPrRef([item]) !== null)
+      // Match the desktop header: explicit pins and order precede recency.
+      .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)
+        || (b.priority ?? 0) - (a.priority ?? 0) || b.lastSeenAt - a.lastSeenAt)
+      .slice(0, MAX_STATUS_QUERIES)
     : [ref];
   const build = (statuses: unknown): HomeSessionPrInfo => {
     const rows = selected.map(item => {

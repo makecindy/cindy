@@ -481,6 +481,12 @@ it('loads the bounded PR list for glance and retains each known title through lo
   const result = await loadHomeSessionPr(invoke, 'd', 's', null, true);
   expect([result, ...result!.additional!].map(row => row!.ref.prNumber)).toEqual([4, 3, 2]);
   expect(result!.status).toMatchObject({ title: 'Actual PR 4' });
+  // Unit regression: a newer mention must not evict the explicitly pinned PR
+  // from the task menu's bounded list. The single-PR home row keeps recency.
+  Object.assign(refs[0], { pinned: true });
+  const pinned = await loadHomeSessionPr(invoke, 'd', 's', null, true);
+  expect([pinned, ...pinned!.additional!].map(row => row!.ref.prNumber)).toEqual([1, 4, 3]);
+  expect((await loadHomeSessionPr(invoke, 'd', 's'))!.ref.prNumber).toBe(4);
   invoke.mockImplementation(async (_device: string, channel: string) => { if (channel.endsWith('list')) return refs; throw new Error('offline'); });
-  expect(await loadHomeSessionPr(invoke, 'd', 's', result, true)).toEqual(result);
+  expect(await loadHomeSessionPr(invoke, 'd', 's', pinned, true)).toEqual(pinned);
 });

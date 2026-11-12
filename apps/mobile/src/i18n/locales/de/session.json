@@ -1,5 +1,12 @@
 {
   "githubPrs": {
+    "status": {
+      "open": "Offen",
+      "draft": "Entwurf",
+      "merged": "Zusammengeführt",
+      "closed": "Geschlossen"
+    },
+    "statusUnavailable": "Status noch nicht geladen",
     "title": "PR-Links verwalten",
     "hint": "Bis zu 3 in der Kopfzeile; angeheftete PRs erscheinen zuerst",
     "empty": "Füge zum Hinzufügen einen GitHub-PR- oder GitLab-MR-Link ein",
