@@ -1840,7 +1840,16 @@ export function NewMakerDraftRoute() {
   // 记住这次对运行 Agent 的电脑的选择(仅本次运行)，切走再切回时恢复。
   useEffect(() => {
     if (isAgentDeviceDraft && effectiveAgentDeviceId && dlSel) {
-      rememberAgentDeviceSelection(effectiveAgentDeviceId, capabilityAgentKind, dlSel);
+      // 标记跟着「控制端动过这份草稿」走:自动播种 / holder 同步落进 holder 的那条不是
+      // 用户选的,如实记 false —— 否则下一次渲染会把它当显式来源钉死(Codex review #9369)。
+      // 选择器 handler 都在 setDlSel 前把 dlRuntimeTouchedRef 置位,effect 读到的就是本次
+      // 变更的来源;播种 effect 反而会把 ref 清零。
+      rememberAgentDeviceSelection(
+        effectiveAgentDeviceId,
+        capabilityAgentKind,
+        dlSel,
+        dlRuntimeTouchedRef.current,
+      );
     }
   }, [isAgentDeviceDraft, effectiveAgentDeviceId, capabilityAgentKind, dlSel]);
 
@@ -1877,23 +1886,20 @@ export function NewMakerDraftRoute() {
     // 当场选的。选择记忆要等 effect 才写进外部 Map,这里不跟着 dlSel 走的话会永远停在
     // 播种时的旧值 —— 刚选的那家赶不上下一次渲染,校准再把它改回去(Codex review #9369)。
     if (dlRuntimeTouchedRef.current) return dlSel?.providerId ?? null;
-    if (effectiveAgentDeviceId) {
-      // agent-device:本机为那台电脑记下的那次选择。rememberAgentDeviceSelection 只在
-      // 真实选择落进 holder 后写入,天然只含显式选择。
-      return (
-        recallAgentDeviceSelection(effectiveAgentDeviceId, capabilityAgentKind)?.providerId ?? null
-      );
-    }
-    // 被控端快照里的 providerId 不一定来自用户:自动默认也会把建议的那家落进快照
-    // (applySuggestedDefaultTuple,不经用户手)。快照明确说「用户没选过模型」
-    // (modelChosenByUser === false)时那家就是自动默认,不当显式选择钉死 —— 它断连 /
-    // 清单失败时让位给目录里健康的那家,别把首条消息钉在发不出去的来源上;旧被控端
-    // 没有这个标记(undefined),与 shouldReseedDeviceLinkDraftDefaults 同一口径保守保留
-    // (Codex review #9369)。
+    // 静止状态下看快照:被控端草稿快照(remoteDraftState)或 agent-device 的本机记忆
+    // (deviceDraftDefaults 对 agent-device 就是 recall)里的 providerId 都不一定来自用户。
+    // · 自动默认会把建议的那家落进被控端快照(applySuggestedDefaultTuple,不经用户手),
+    //   快照的 modelChosenByUser === false 标着「用户没选过」;
+    // · agent-device 的记忆由上面的 effect 写入,标记跟着 dlRuntimeTouchedRef 走 —— 自动
+    //   播种 / holder 同步写进来的那条同样是 false,不会被提升成显式来源(Codex review
+    //   #9369 第十三轮)。
+    // 标记为 false 时那家是自动默认,不当显式选择钉死 —— 它断连 / 清单失败时让位给目录里
+    // 健康的那家,首条消息不钉在发不出去的来源上;旧被控端没有这个标记(undefined),与
+    // shouldReseedDeviceLinkDraftDefaults 同一口径保守保留。
     return deviceDraftDefaults?.modelChosenByUser === false
       ? null
       : deviceDraftDefaults?.providerId ?? null;
-  }, [dlSel, effectiveAgentDeviceId, capabilityAgentKind, deviceDraftDefaults]);
+  }, [dlSel, deviceDraftDefaults]);
 
   // 选中模型 + effort:device-link 用镜像 holder(deviceLinkInitial,被控端草稿值已按 capabilities
   // 校准);本地草稿用 chatPrefs(逐字节不变)。device-link 在 holder seed 完成前(等隧道 / 能力)
@@ -2619,6 +2625,11 @@ export function NewMakerDraftRoute() {
       providerId,
       modelId,
       agentKind: capabilityAgentKind,
+      // 档位也要过闸:resolveFastSupported 只在 fastMode === 'ultrafast' 时查
+      // supportsUltrafastMode,不把当前档位传进去,一个只支持普通 Fast 的最终来源会放行
+      // ultrafast,effectiveFastMode 原样保留、显示与提交都带着不支持的档位(Codex review
+      // #9369)。本地路径 draftInitialFastMode 恒为 false,走普通 Fast 分支,行为不变。
+      fastMode: draftInitialFastMode,
     });
   }, [
     usesDeviceCatalog,
@@ -2626,6 +2637,7 @@ export function NewMakerDraftRoute() {
     targetSelectableProviders,
     draftInitialModel,
     draftInitialProviderId,
+    draftInitialFastMode,
     effectiveSourceId,
     calibratedDraftModel,
     catalogDeviceId,

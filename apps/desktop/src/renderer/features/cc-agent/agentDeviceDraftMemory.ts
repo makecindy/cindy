@@ -22,10 +22,15 @@ export function rememberAgentDeviceSelection(
   deviceId: string,
   agentKind: string,
   selection: DeviceLinkDraftSelection,
+  // 只有用户当场选过(控制端动过这份草稿)才算显式选择。自动播种 / holder 同步写进来的
+  // 那条要如实记 false:否则它会被下游当成显式来源钉死,断连 / 清单失败时不让位给目录
+  // 里健康的那家,首条消息对着发不出去的来源发出(Codex review #9369)。默认 true 保持
+  // 「调用方在真实选择后写入」的旧语义。
+  modelChosenByUser = true,
 ): void {
   memory.set(key(deviceId, agentKind), {
     model: selection.model,
-    modelChosenByUser: true,
+    modelChosenByUser,
     effort: selection.effort,
     fastMode: selection.fastMode,
     providerId: selection.providerId,

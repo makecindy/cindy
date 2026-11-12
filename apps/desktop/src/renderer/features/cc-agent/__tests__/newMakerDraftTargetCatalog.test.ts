@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { Effort, ProviderView } from '@cindy/model-providers';
 import { chatEligibleSourcesForModel, effectiveSourceIdForModel, getModel, isModelSelectableForNewRoute, reconcileInvocationEffort } from '@cindy/model-providers';
-import { isDeviceModelVisible } from '@/lib/providerModels';
+import { isDeviceModelVisible, resolveFastSupported } from '@/lib/providerModels';
 import type { RemoteProjectTarget } from '@/components/new-chat/AddRemoteProjectDialog';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { parseDeviceProvidersPayload } from '@/hooks/useDeviceProviders';
@@ -885,7 +885,7 @@ describe('the source follows the final model', () => {
 
   it('derives Fast from the final model and source', () => {
     const providers = [sourceProvider('good', 'shared-model'), sourceProvider('stale', 'other-model')];
-    const resolveFastSupported = vi.fn(() => true);
+    const resolveFastSupportedSpy = vi.fn(() => true);
     const supportsFast = callback<() => boolean>('supportsFastMode', {
       usesDeviceCatalog: true,
       dlSel: { providerId: 'stale', model: 'other-model' },
@@ -893,6 +893,7 @@ describe('the source follows the final model', () => {
       targetSelectableProviders: selectableProviders(providers),
       draftInitialModel: 'shared-model',
       draftInitialProviderId: 'good',
+      draftInitialFastMode: false,
       effectiveSourceId: null,
       calibratedDraftModel: 'shared-model',
       catalogDeviceId: 'device-1',
@@ -901,40 +902,84 @@ describe('the source follows the final model', () => {
       capabilities: null,
       capabilityAgentKind: 'pi',
       resolveDraftFastProviderId,
-      resolveFastSupported,
+      resolveFastSupported: resolveFastSupportedSpy,
     });
     expect(supportsFast()).toBe(true);
     // Fast 是 per-provider 能力:判定必须落在最终那一对上,而不是播种那一代。
-    expect(resolveFastSupported).toHaveBeenCalledWith(
+    expect(resolveFastSupportedSpy).toHaveBeenCalledWith(
       expect.objectContaining({ providerId: 'good', modelId: 'shared-model' }),
     );
+  });
+
+  // Codex review #9369 第十三轮:resolveFastSupported 只在 fastMode === 'ultrafast' 时查
+  // supportsUltrafastMode —— 判定不带档位,一个只支持普通 Fast 的最终来源会放行
+  // ultrafast,effectiveFastMode 原样保留、显示与提交都带着不支持的档位。
+  it('clears an ultrafast preset the final source cannot run', () => {
+    const codexFast = {
+      id: 'good', name: 'good', source: 'user', connected: true,
+      agents: ['codex'], auth: { method: 'none' },
+      routing: { codex: { upstream: 'https://provider.invalid', authStrategy: 'none' } },
+      models: { codex: [{
+        id: 'shared-model', name: 'Shared model', contextWindow: 200_000,
+        efforts: ['high'], defaultEffort: 'high', effortsUnknown: false,
+        supportsFastMode: true, // 普通 Fast 支持;没有 supportsUltrafastMode。
+      }] },
+    } as ProviderView;
+    const capabilities = {
+      hasFastMode: true,
+      availableModels: [{
+        id: 'shared-model', displayName: 'Shared model', contextWindow: 200_000,
+        efforts: ['high'], defaultEffort: 'high', supportsFastMode: true,
+      }],
+      effortLevels: [{ id: 'high', displayName: 'High' }],
+      permissionModes: [{ id: 'default', displayName: 'Default' }],
+    };
+    const compileSupports = (fastMode: boolean | 'ultrafast') =>
+      callback<() => boolean>('supportsFastMode', {
+        usesDeviceCatalog: true,
+        dlSel: { providerId: 'good', model: 'shared-model' },
+        agentCatalogProviders: [codexFast],
+        targetSelectableProviders: [codexFast],
+        draftInitialModel: 'shared-model',
+        draftInitialProviderId: 'good',
+        draftInitialFastMode: fastMode,
+        effectiveSourceId: null,
+        calibratedDraftModel: 'shared-model',
+        catalogDeviceId: 'device-1',
+        deviceProviders: [codexFast],
+        draftLocalProviders: [],
+        capabilities,
+        capabilityAgentKind: 'codex',
+        resolveDraftFastProviderId,
+        resolveFastSupported,
+      })();
+    // 不带档位判定(旧行为)会放行:普通 Fast 支持 → true。
+    // 带上当前档位后,ultrafast 在缺 supportsUltrafastMode 的来源上必须被清掉。
+    expect(compileSupports('ultrafast')).toBe(false);
+    // 普通档位不受影响:同一个来源的普通 Fast 照旧可用。
+    expect(compileSupports(false)).toBe(true);
   });
 });
 
 /**
  * 「用户明确选过哪一家来源」的判定本身(Codex review #9369)。
  *
- * 快照里的 providerId 不一定来自用户:自动默认(applySuggestedDefaultTuple)也会把建议的
- * 那家写进去;反过来,控制端当场的实时选择要立刻生效 —— 选择记忆要等 effect 才落进
- * 外部 Map,判定不跟着 holder 走的话,刚选的那家赶不上下一次渲染。
+ * 快照 / agent-device 记忆里的 providerId 不一定来自用户:自动默认
+ * (applySuggestedDefaultTuple)与自动播种都会把那家写进去;反过来,控制端当场的实时选择
+ * 要立刻生效 —— 选择记忆要等 effect 才落进外部 Map,判定不跟着 holder 走的话,刚选的
+ * 那家赶不上下一次渲染。对 agent-device,deviceDraftDefaults 就是那份记忆
+ * (recall),标记由 remember effect 按「控制端动过这份草稿」如实写入。
  */
 describe('the explicit source is the user\'s own choice', () => {
   function explicitPin(bindings: {
     touched?: boolean;
     dlSel?: { providerId: string | null } | null;
-    agentDevice?: string | null;
-    recallProviderId?: string | null;
+    /** 快照 / agent-device 记忆(agent-device 下 deviceDraftDefaults 即 recall)。 */
     snapshot?: RemoteDraftDefaults | null;
   }): string | null {
     return callback<() => string | null>('explicitDraftProviderId', {
       dlRuntimeTouchedRef: { current: bindings.touched ?? false },
       dlSel: bindings.dlSel ?? null,
-      effectiveAgentDeviceId: bindings.agentDevice ?? null,
-      capabilityAgentKind: 'pi',
-      recallAgentDeviceSelection: () =>
-        bindings.recallProviderId
-          ? { model: 'shared-model', providerId: bindings.recallProviderId }
-          : null,
       deviceDraftDefaults: bindings.snapshot ?? null,
     })();
   }
@@ -945,8 +990,6 @@ describe('the explicit source is the user\'s own choice', () => {
     expect(explicitPin({
       touched: true,
       dlSel: { providerId: 'just-chosen' },
-      agentDevice: 'dev-1',
-      recallProviderId: 'stale-recall',
       snapshot: { model: 'shared-model', providerId: 'snapshot', modelChosenByUser: true },
     })).toBe('just-chosen');
   });
@@ -969,6 +1012,34 @@ describe('the explicit source is the user\'s own choice', () => {
     expect(explicitPin({
       snapshot: { model: 'shared-model', providerId: 'legacy' },
     })).toBe('legacy');
+  });
+});
+
+/**
+ * agent-device 的选择记忆必须如实区分「自动播种 / holder 同步」与「用户当场选的」
+ * (Codex review #9369 第十三轮):标记写成 true,自动来的那家会被下游当显式来源钉死。
+ */
+describe('the agent-device memory records the choice marker honestly', () => {
+  function rememberFlag(touched: boolean): boolean | undefined {
+    const spy = vi.fn();
+    effect('标记跟着「控制端动过这份草稿」走', {
+      isAgentDeviceDraft: true,
+      effectiveAgentDeviceId: 'dev-1',
+      capabilityAgentKind: 'pi',
+      dlSel: { model: 'shared-model', providerId: 'seeded', effort: null, fastMode: false },
+      dlRuntimeTouchedRef: { current: touched },
+      rememberAgentDeviceSelection: spy,
+    })();
+    expect(spy).toHaveBeenCalledTimes(1);
+    return spy.mock.calls[0]?.[3];
+  }
+
+  it('marks an untouched automatic seed as not user-chosen', () => {
+    expect(rememberFlag(false)).toBe(false);
+  });
+
+  it('marks a selection the user just made as user-chosen', () => {
+    expect(rememberFlag(true)).toBe(true);
   });
 });
 
