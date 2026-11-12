@@ -5043,37 +5043,35 @@ export default async function cindyBridge(piApi: any) {
   registerCindyHostedTools(pi, bashTool, applyCindyBashTimeoutParams);
 
   // ── 权限门 ────────────────────────────────────────────────────────────────
-  // 第二道闸:同回合内对同一 gh run view 数字 run-id 的第三次起拦截。重复盯同一个 run 是
-  // 纯等待步(实测 81% 的 gh run view 是重复盯梢),工具描述的指路是软引导,这里是硬提醒;
-  // reason 只指路不惩罚,模型改用后台命令即正常继续。锚定到命令边界并只认数字 id:
-  // --log 排障读取不算盯梢,heredoc/commit message 等引文里的字样不算,URL 形态不归桶
-  // (宁漏不误拦:block 是硬打断,误伤代价远大于漏拦)。回合号防残留:agent_end 偶发不触
-  // 发时,下一回合回合号变化即重置计数,不误伤新回合的首次查看。
-  const ghRunViewRepeatCounts: Map<string, { turn: number; count: number }> = new Map();
-  let ghRunViewTurnSeq = 0;
+  // 第二道闸:同回合内完全重复的 shell 命令第三次起拦截。轮询等待的形态千变万化
+  // (gh run view / gh pr checks / sleep 60 && gh run view / curl …)，不做命令语义
+  // 解析——规范化空白后逐字相等即视为同一命令：一模一样的命令跑第三遍几乎必然
+  // 是等待循环，reason 指路后台命令，并给非轮询场景留出口(措辞微调即可通行)。
+  // 宁漏不误拦:block 是硬打断，误伤代价远大于漏拦。回合号防残留：agent_end 偶发
+  // 不触发时，下一回合回合号变化即重置计数。
+  const repeatCallCounts: Map<string, { turn: number; count: number }> = new Map();
+  let repeatCallTurnSeq = 0;
   pi.on('before_agent_start', () => {
-    ghRunViewTurnSeq += 1;
+    repeatCallTurnSeq += 1;
   });
-  function cindyGhRunViewGate(toolName: string, command: unknown, turnSeq: number) {
+  function cindyRepeatCallGate(toolName: string, command: unknown, turnSeq: number) {
     if (toolName !== 'bash' && toolName !== 'powershell') return undefined;
     if (typeof command !== 'string') return undefined;
-    if (/\s--log\b/.test(command)) return undefined;
-    const match = /(?:^|[;&|])\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)?gh\s+run\s+view\s+(\d{5,})\b/.exec(command);
-    if (!match) return undefined;
-    const runId = match[1];
-    const entry = ghRunViewRepeatCounts.get(runId);
+    const key = command.replace(/\s+/g, ' ').trim();
+    if (key.length === 0) return undefined;
+    const entry = repeatCallCounts.get(key);
     if (!entry || entry.turn !== turnSeq) {
-      ghRunViewRepeatCounts.set(runId, { turn: turnSeq, count: 1 });
+      repeatCallCounts.set(key, { turn: turnSeq, count: 1 });
       return undefined;
     }
     entry.count += 1;
     if (entry.count <= 2) return undefined;
     return {
       block: true,
-      reason: 'Repeated gh run view polling of the same run. Hand the wait to the background instead: cindy_mcp_call_tool({server:"cindy_helper", tool:"call_tool", args:{name:"run_command_background", args:{command:"gh run watch <run-id> --exit-status"}}}) returns immediately, the host reports the exit code and log tail when CI finishes, and the turn can end.',
+      reason: 'This exact command already ran twice in this turn; running it again is polling, not progress. Hand the wait to the background instead: cindy_mcp_call_tool({server:"cindy_helper", tool:"call_tool", args:{name:"run_command_background", args:{command:"gh run watch <run-id> --exit-status"}}}) returns immediately and the host reports the exit code and log tail when the command finishes, so ending the turn is enough. If this call is genuinely not polling, rephrase the command slightly and it will go through.',
     };
   }
-  pi.on('tool_call', (event: any) => cindyGhRunViewGate(event.toolName, event.input && event.input.command, ghRunViewTurnSeq));
+  pi.on('tool_call', (event: any) => cindyRepeatCallGate(event.toolName, event.input && event.input.command, repeatCallTurnSeq));
   pi.on('tool_call', async (event: any, ctx: any) => {
     if (guestToolGate && guestToolGate.blocks(event.toolName)) {
       return { block: true, reason: 'This tool is not available in a task that uses a shared provider.' };

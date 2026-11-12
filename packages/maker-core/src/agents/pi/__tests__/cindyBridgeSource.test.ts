@@ -3000,9 +3000,9 @@ describe('background command discovery', () => {
     expect(CINDY_BG_CMD_HINT).toContain('gh run view');
   });
 
-  it('blocks the third same-turn gh run view of one run id via the registered handler, resets per turn, and ignores non-polling shapes', () => {
+  it('blocks the third same-turn identical shell call via the registered handler, resets per turn, and never parses command semantics', () => {
     const source = CINDY_BRIDGE_EXTENSION_SOURCE;
-    const start = source.indexOf('const ghRunViewRepeatCounts');
+    const start = source.indexOf('const repeatCallCounts');
     const end = source.indexOf("pi.on('tool_call', async", start);
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
@@ -3013,37 +3013,33 @@ describe('background command discovery', () => {
     sandbox.pi = { on: (name: string, fn: (event?: any) => any) => sandbox.callbacks.push([name, fn]) };
     runInNewContext(compiled + '\nresult = { onToolCall: callbacks[1][1], bumpTurn: callbacks[0][1] };', sandbox);
     expect(sandbox.callbacks.map(([name]: string) => name)).toEqual(['before_agent_start', 'tool_call']);
-    // 走注册链路:handler 自己读闭包里的回合号,这里不手工传参,防止接线回归假绿。
+    // 走注册链路:handler 自己读闭包里的回合号，这里不手工传参，防止接线回归假绿。
     const onToolCall = sandbox.result.onToolCall as (event: any) => any;
     const bumpTurn = sandbox.result.bumpTurn as () => void;
-    const view = (id: string) => `gh run view ${id}`;
-    const run = (cmd: string) => onToolCall({ toolName: 'bash', input: { command: cmd } });
-    // 同回合:第 1、2 次放行(状态、日志两步是合理的),第 3 次起拦截。
-    expect(run(view('12345678'))).toBeUndefined();
-    expect(run(view('12345678'))).toBeUndefined();
-    const third = run(view('12345678'));
+    const run = (cmd: string, toolName = 'bash') => onToolCall({ toolName, input: { command: cmd } });
+    // 同回合:同一命令第 1、2 次放行(状态、日志两步是合理的)，第 3 次起拦截。
+    expect(run('gh run watch 12345678 --exit-status')).toBeUndefined();
+    expect(run('gh run watch 12345678 --exit-status')).toBeUndefined();
+    const third = run('gh run watch 12345678 --exit-status');
     expect(third && third.block).toBe(true);
     expect(third.reason).toContain('run_command_background');
     expect(third.reason).toContain('cindy_mcp_call_tool');
-    // 第 4 次仍拦(回合内持续),换 run id 不受影响。
-    expect(run(view('12345678'))?.block).toBe(true);
-    expect(run(view('99999999'))).toBeUndefined();
-    // 回合切换:同一 run id 重新从第 1 次放行计数(bumpTurn 真实生效才可能放行)。
+    // 误伤自愈口:reason 指明措辞微调即可通行。
+    expect(third.reason).toContain('rephrase');
+    // 第 4 次仍拦(回合内持续)；空白差异规范化后逐字相等，同样算重复轮询。
+    expect(run('gh run watch 12345678 --exit-status')?.block).toBe(true);
+    expect(run('gh run watch  12345678  --exit-status ')?.block).toBe(true);
+    // 命令内容不同即另立计数，互不影响；轮询形态不限于 gh run view。
+    expect(run('gh run view 12345678')).toBeUndefined();
+    expect(run('sleep 60 && gh run view 12345678')).toBeUndefined();
+    expect(run('gh pr checks 7846')).toBeUndefined();
+    // 回合切换:同一命令重新从第 1 次放行计数(bumpTurn 真实生效才可能放行)。
     bumpTurn();
-    expect(run(view('12345678'))).toBeUndefined();
-    // powershell 同样覆盖;其它命令与非 shell 工具不过闸。
-    const runPs = (cmd: string) => onToolCall({ toolName: 'powershell', input: { command: cmd } });
-    expect(runPs(view('55555555'))).toBeUndefined();
-    expect(onToolCall({ toolName: 'bash', input: { command: 'gh pr view 7846' } })).toBeUndefined();
-    expect(onToolCall({ toolName: 'read', input: { command: view('55555555') } })).toBeUndefined();
+    expect(run('gh run watch 12345678 --exit-status')).toBeUndefined();
+    // powershell 同样覆盖;其它工具、空命令不过闸。
+    expect(run('Get-Content log.txt', 'powershell')).toBeUndefined();
+    expect(onToolCall({ toolName: 'read', input: { command: 'x' } })).toBeUndefined();
     expect(onToolCall({ toolName: 'bash', input: {} })).toBeUndefined();
-    // 宁漏不误拦:日志排障、引文里的字样、flag 形态、URL 形态都不计数。
-    expect(run('gh run view 12345678 --log')).toBeUndefined();
-    expect(run('gh run view 12345678 --log-failed')).toBeUndefined();
-    expect(run('git commit -m "see gh run view 12345678"')).toBeUndefined();
-    expect(run("grep 'gh run view 12345678' notes.md")).toBeUndefined();
-    expect(run('gh run view --log')).toBeUndefined();
-    expect(run('gh run view --repo o/r 12345678')).toBeUndefined();
-    expect(run('gh run view https://github.com/o/r/actions/runs/12345678')).toBeUndefined();
+    expect(run('   ')).toBeUndefined();
   });
 });
