@@ -822,6 +822,7 @@ import {
   createCodexIdleReleaseWatcher,
   codexIdleReleaseCandidateWhere,
   codexIdleReleaseIdleSince,
+  createCodexIdleReleaseClose,
   DEFAULT_CODEX_IDLE_RELEASE_MINUTES,
   type CodexIdleReleaseWatcher,
 } from './codexIdleReleaseWatcher.js';
@@ -16921,6 +16922,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         deferredCodexRestartHolder?.isSessionRestarting(sessionId) === true ||
         gatewayCodexRestartHolder?.isSessionRestarting(sessionId) === true,
     }),
+    // 走 Maker 的 runtime-refresh 关闭路径：直接 session.close() 会按 unexpected
+    // 处理并删掉用户之后仍要读的暂存附件（Claude 回收路径同口径）。
+    close: createCodexIdleReleaseClose(() => maker, withRehydrateCloseSuppressed),
     now: Date.now,
     timer: { setInterval, clearInterval },
     log,
