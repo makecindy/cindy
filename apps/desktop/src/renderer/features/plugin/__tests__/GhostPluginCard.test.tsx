@@ -584,12 +584,12 @@ describe('MarketPluginCard', () => {
       item={{ ...marketPlugin, downloadStatistics: { requestCount: '9007199254740993' } }}
       busy={false} onSelect={vi.fn()} onIconLoadError={vi.fn()} />);
     expect(screen.getByText('settings.ghosts.market.publisherKind.official')).toBeTruthy();
-    expect(screen.getByText('9,007,199,254,740,993 settings.ghosts.usage.downloadsValue')).toBeTruthy();
+    expect(screen.getByRole('group', { name: '9,007,199,254,740,993 settings.ghosts.usage.downloadsValue' }).textContent).toBe('9007199254.7M');
     rerender(<MarketPluginCard compact item={{ ...marketPlugin, publisherKind: 'personal', author: 'Private contributor' }}
       busy={false} onSelect={vi.fn()} onIconLoadError={vi.fn()} />);
     expect(screen.getByText('settings.ghosts.market.publisherKind.community')).toBeTruthy();
     expect(screen.queryByText(/Private contributor/)).toBeNull();
-    expect(screen.queryByText(/settings.ghosts.usage.downloadsValue/)).toBeNull();
+    expect(screen.queryByRole('group', { name: /settings.ghosts.usage.downloadsValue/ })).toBeNull();
   });
 
   it.each([
@@ -712,7 +712,7 @@ describe('MarketPluginCard', () => {
       />,
     );
     const metadata = screen.getByText('settings.ghosts.page.origin.public').parentElement;
-    expect(metadata?.textContent).toBe('settings.ghosts.page.origin.public·Cindy·12,480 settings.ghosts.usage.downloadsValue');
+    expect(metadata?.textContent).toBe('settings.ghosts.page.origin.public·Cindy·12.4k');
     expect(screen.queryByText('v1.3.11')).toBeNull();
     expect(screen.queryByText('google-calendar')).toBeNull();
     expect(container.querySelector('button button')).toBeNull();
@@ -726,7 +726,7 @@ describe('MarketPluginCard', () => {
       marketItem={{ ...marketPlugin, downloadStatistics: { requestCount: '0' } }}
       onPrimary={vi.fn()} onManage={vi.fn()}
     />);
-    expect(screen.getByText('0 settings.ghosts.usage.downloadsValue')).toBeTruthy();
+    expect(screen.getByRole('group', { name: '0 settings.ghosts.usage.downloadsValue' }).textContent).toBe('0');
     expect(screen.getByText('settings.ghosts.page.oauthAuthorizationExpired')).toBeTruthy();
     expect(screen.queryByText('v1.0.0')).toBeNull();
   });
