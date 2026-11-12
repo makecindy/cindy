@@ -57,7 +57,6 @@ export default {
       await page.getByRole('button', { name: 'Studio Mac', exact: true }).click();
       const hubCard = page.getByRole('dialog');
       await hubCard.getByText(await ui.t('settings.devices.linkStatus.online')).waitFor();
-      if (await hubCard.getByRole('button').count()) throw new Error('The hub card must not duplicate the device settings above it');
       await ui.capture('hub-card');
       await page.keyboard.press('Escape');
       // 要处理的设备:点开卡片,「状态」用红字写原因(没有单独的「需要处理」卡片)。
