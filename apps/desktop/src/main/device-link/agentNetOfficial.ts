@@ -44,7 +44,13 @@ function client(base: string, secrets: RelaySecrets): AgentNetClient | null {
   });
 }
 export function currentOfficialAgentNetClient(): AgentNetClient | null {
-  if (!getCurrentUserId() || isAppSessionBoundaryPending() || activeSelfHostedRelay()) return null;
+  return isAppSessionBoundaryPending() ? null : outgoingOfficialAgentNetClient();
+}
+/** Account-handover close only: the boundary is pending but the outgoing owner
+ * has not been replaced yet. The caller must verify the outgoing scope is still
+ * current and capture the client synchronously, before the owner commit. */
+export function outgoingOfficialAgentNetClient(): AgentNetClient | null {
+  if (!getCurrentUserId() || activeSelfHostedRelay()) return null;
   const base = officialAgentNetBase(); if (!base) return null;
   const stored = readRelaySecrets(officialAgentNetSlot(base)); return stored ? client(base, stored) : null;
 }
