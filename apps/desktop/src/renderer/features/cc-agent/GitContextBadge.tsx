@@ -522,7 +522,9 @@ function PrChip({
                 className="-mt-1.5 shrink-0"
                 onClick={async () => {
                   try {
-                    await window.electronAPI.copyTextToClipboard({ text: sessionPrUrl(prRef) });
+                    // PR/MR URLs are rendered locally, like the task/link copy actions;
+                    // the native IPC only accepts text previously issued by Main.
+                    await navigator.clipboard.writeText(sessionPrUrl(prRef));
                     toast.success(t('ccAgent.sidebar.deepLink.copied'));
                   } catch {
                     toast.error(t('ccAgent.sidebar.deepLink.copyFailed'));
