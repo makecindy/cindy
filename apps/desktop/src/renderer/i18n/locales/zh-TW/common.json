@@ -19597,6 +19597,11 @@
     }
   },
   "pluginUi": {
+    "settings": "插件設定",
+    "save": "儲存",
+    "settingsFailed": "無法讀取或儲存插件設定，請重新開啟此頁。",
+    "invalidSetting": "請檢查標示的值是否符合允許範圍。",
+    "attachmentFailed": "插件未能處理「{{name}}」，原附件已保留。",
     "display": "顯示方式",
     "original": "原文",
     "menu": "插件頁面與命令",
