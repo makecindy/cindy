@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -265,7 +265,8 @@ describe("WecomIM routing and ownership", () => {
     });
   });
 
-  it("turns host-resolved file attachments into file steps (and rejects escaping ones)", async () => {
+  // PR #10202: the Host returns canonical paths, including under symlink/junction workdirs.
+  it.each([false, true])("turns host-resolved file attachments into file steps (linked root=%s)", async (linkedRoot) => {
     const { host, secrets } = createHost();
     secrets.set("wecom-owner-user-id", "owner");
     const client = new FakeClient();
@@ -278,14 +279,16 @@ describe("WecomIM routing and ownership", () => {
     await mkdir(outsideDir, { recursive: true });
     await writeFile(filePath, "IMBOT-FILE-OK");
     await writeFile(outsidePath, "secret");
+    const rootLink = join(outsideDir, "workdir");
+    if (linkedRoot) await symlink(dir, rootLink, "junction");
     try {
       await im.init();
       const plan = await im.prepareFinal({
         userId: "owner",
         text: "已创建文件。\n下载 imbot-live.txt",
         terminal: "done",
-        fileAbsPaths: [filePath, outsidePath],
-        allowedFileRoots: [dir],
+        fileAbsPaths: [await realpath(filePath), outsidePath],
+        allowedFileRoots: [linkedRoot ? rootLink : dir],
       });
       // 宿主解析过的文件成为独立 file step; 越界的直接丢弃并写进正文提示。
       expect(plan.steps.filter((step) => step.kind === "file")).toEqual([

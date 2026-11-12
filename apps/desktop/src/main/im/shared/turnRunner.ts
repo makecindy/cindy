@@ -3192,16 +3192,19 @@ export function createTurnRunner(
   }
 
   /** Project only the outbound copy; persistence keeps the original component events. */
-  function composeOutboundBody(source: string, final: boolean): string {
+  function composeOutboundBody(source: string, final: boolean, publicProgress = false): string {
     let body = unlinkLocalFileLinks(stripInternalWebCitations(richAnswerText(source)));
     // Card channels patch the live body; a machine-local image path must not show before finalize imports it.
-    if (!final && output.kind === 'rich-card' && body.includes('![')) {
+    if (!final && (output.kind === 'rich-card' || publicProgress) && body.includes('![')) {
       const local = new Map(
         taskImageReferences(body)
           .filter((ref) => localTaskImagePath(ref.url))
           .map((ref) => [ref.url, ref.url] as const),
       );
       if (local.size > 0) body = rewriteTaskImageReferences(body, local, 'alt');
+    }
+    if (publicProgress) {
+      body = transformXdtRefs(body, { image: (ref) => ref.alt, file: (ref) => ref.alt });
     }
     // A partial component can legitimately project to nothing. Never fall back
     // to its protocol source; wait while streaming and explain an unreadable final.
@@ -3956,7 +3959,7 @@ export function createTurnRunner(
         if (closed || !turn.progressHandle || turn.done) return;
         turn.progressHandle.replace({
           stage: renderPublicStage(turn.presenter.activity, Date.now()),
-          body: composeOutboundBody(turn.presenter.wholeText(), false),
+          body: composeOutboundBody(turn.presenter.wholeText(), false, true),
         });
       },
       async finalize(finalText: string) {
@@ -4223,7 +4226,12 @@ export function createTurnRunner(
 
   async function materializeTurnLocalImages(state: SessionState, turn: TurnState): Promise<void> {
     if (turn.allowedFileRoots.length === 0) return;
-    const projectedBody = composeOutboundBody(turn.presenter.wholeText(), true);
+    // Keep file targets in the chunked driver's source until final attachment
+    // collection. Only the outbound view may unlink them; image materialization
+    // writes its result back to the presenter and must not discard sibling files.
+    const projectedBody = output.kind === 'chunked-text'
+      ? stripInternalWebCitations(richAnswerText(turn.presenter.wholeText()))
+      : composeOutboundBody(turn.presenter.wholeText(), true);
     if (!projectedBody.includes('![')) return;
     try {
       if (output.kind === 'rich-card') {

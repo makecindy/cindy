@@ -14,8 +14,9 @@ function isPathWithin(base: string, target: string): boolean {
 }
 
 /**
- * Resolve a model-authored attachment only when both its lexical path and
- * canonical target stay under a host-approved root. Returning the canonical
+ * Resolve an attachment only when its lexical path is under an approved root
+ * (original or canonical form) and its canonical target stays under that root.
+ * Returning the canonical
  * path keeps the later stat/read on the same symlink-resolved target.
  */
 export async function resolveAllowedOutboundFile(
@@ -27,12 +28,12 @@ export async function resolveAllowedOutboundFile(
   for (const root of allowedRoots) {
     if (!root.trim()) continue;
     const rootAbs = path.resolve(root);
-    if (!isPathWithin(rootAbs, targetAbs)) continue;
     try {
-      const [rootReal, targetReal] = await Promise.all([
-        realpath(rootAbs),
-        realpath(targetAbs),
-      ]);
+      const rootReal = await realpath(rootAbs);
+      // Host collection returns realpath; a symlink/junction workdir may still
+      // be lexical here. Accept either spelling, not arbitrary outside aliases.
+      if (!isPathWithin(rootAbs, targetAbs) && !isPathWithin(rootReal, targetAbs)) continue;
+      const targetReal = await realpath(targetAbs);
       if (isPathWithin(rootReal, targetReal)) return targetReal;
     } catch {
       // Missing, unreadable, or cyclic paths fail closed.

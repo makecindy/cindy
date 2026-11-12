@@ -3295,11 +3295,15 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
   // 真机缺陷(2026-11-12): 回答里的相对文件链接只被投影成纯文本, 对方什么也收不到。
   // 宿主必须在**任务工作目录**下解析并校验后交给文件通道, 不能要求模型改用 xdt-file。
-  it('resolves relative local file links into host-approved file attachments', async () => {
+  // PR #10202: image materialization must not erase a sibling file link before collection.
+  it.each([false, true])('resolves relative local file links into host-approved file attachments (image=%s)', async (withImage) => {
     const workDir = mkdtempSync(path.join(tmpdir(), 'cindy-turn-files-'));
     const outsideDir = mkdtempSync(path.join(tmpdir(), 'cindy-turn-outside-'));
     writeFileSync(path.join(workDir, 'imbot-live.txt'), 'IMBOT-FILE-OK');
     writeFileSync(path.join(outsideDir, 'secret.txt'), 'secret');
+    if (withImage) mocks.materializeLocalMarkdownImages.mockImplementation(async ({ text }) => ({
+      absPaths: [], text: text.replace('![图](chart.png)', '图'),
+    }));
     // 让本轮拿到的会话行使用临时工作目录: 相对文件链接必须以它(而不是进程 cwd)
     // 为基准。三条取行路径都指向同一行, 不依赖具体路由分支。
     const tempRow = {
@@ -3350,6 +3354,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
             '[下载 imbot-live.txt](imbot-live.txt)',
             '[越界](../../' + path.basename(outsideDir) + '/secret.txt)',
             '[外部文档](https://example.com/report.pdf)',
+            ...(withImage ? ['![图](chart.png)'] : []),
           ].join('\n'),
           isFinal: true,
         },
@@ -3363,6 +3368,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       // 正文保留用户能看懂的文件说明, 但不再把本机链接目标发给对方。
       expect(payload.text).toContain('下载 imbot-live.txt');
       expect(payload.text).not.toContain('](imbot-live.txt)');
+      if (withImage) expect(mocks.materializeLocalMarkdownImages).toHaveBeenCalledOnce();
     } finally {
       fakeAdapter.output = previousOutput;
       if (previousPrepare) {
@@ -3374,6 +3380,34 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       else mocks.peekSessionById.mockReset();
       rmSync(workDir, { recursive: true, force: true });
       rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  // PR #10202: the optional public progress surface must not expose attachment
+  // targets before final delivery; rich-card tests do not exercise this driver.
+  it('keeps local and managed attachment targets out of chunked public progress', async () => {
+    const previousOutput = fakeAdapter.output;
+    const replace = vi.fn();
+    fakeAdapter.output = {
+      kind: 'chunked-text',
+      im: mocks.feishuIm as unknown as ChannelIM,
+      beginReply: vi.fn(async () => ({ replace, close: vi.fn(async () => {}) })),
+      commitFinal: vi.fn(async () => undefined),
+    };
+    try {
+      const h = setupSession(async () => ({ accepted: true }));
+      await runDefaultTurn();
+      h.emit({ type: 'text', data: {
+        text: '预览 ![图](/private/project/chart.png) [报告](xdt-file:///private/project/report.pdf) ![托管图](cindy-media://images/demo.png) [网站](https://example.com)',
+        isFinal: false,
+      } });
+      await waitForAssertion(() => expect(replace).toHaveBeenCalledWith(expect.objectContaining({
+        body: '预览 图 报告 托管图 [网站](https://example.com)',
+      })));
+      h.emit({ type: 'done', data: {} });
+      await flushMicrotasks();
+    } finally {
+      fakeAdapter.output = previousOutput;
     }
   });
 
