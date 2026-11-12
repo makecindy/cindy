@@ -276,7 +276,7 @@ export function createImSessionRepo(
       return {
         id: row.id,
         agentKind: toCoreAgentKind(row.agentKind),
-        workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId),
+        workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId, userId),
         model: row.model,
         effort: row.effort,
         permissionMode: row.permissionMode,
@@ -355,7 +355,7 @@ export function createImSessionRepo(
       return {
         id: row.id,
         agentKind: toCoreAgentKind(row.agentKind),
-        workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId),
+        workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId, userId),
         model: row.model,
         effort: row.effort,
         permissionMode: row.permissionMode,
@@ -394,7 +394,7 @@ export function createImSessionRepo(
     async prepareNewSession(botContextId, userId, scopeKey, providerSnapshot) {
       const assertAccount = captureChannelAccount();
       const id = ns.sessionIdFor(botContextId, userId, scopeKey);
-      const workingDir = ns.ensureWorkingDir(botContextId);
+      const workingDir = ns.ensureWorkingDir(botContextId, userId);
       const row = rowFromDefaults(
         id,
         workingDir,

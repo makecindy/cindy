@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from '@/lib/toast';
 import type { SubscriptionPoolView } from '../../../../shared/subscriptionAccounts';
@@ -9,7 +9,9 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     i18n: { language: 'en', resolvedLanguage: 'en' },
     t: (key: string, options: Record<string, unknown> = {}) =>
-      key === 'quotaCard.modelWeeklyLabel' ? `${String(options.model)} weekly` : key,
+      key === 'quotaCard.modelWeeklyLabel' ? `${String(options.model)} weekly`
+        : key === 'subscriptionAccounts.loginExpiresInDays' ? `Expires in about ${options.days} days`
+          : key === 'subscriptionAccounts.loginAccountAria' ? `Sign in again to ${options.name}` : key,
   }),
 }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
@@ -32,6 +34,7 @@ const view: SubscriptionPoolView = {
       id: 'cindy-owner-second',
       paused: false,
       limit: 4,
+      limitSet: true,
       weight: 1,
       directory: '/home/.claude-second',
       status: 'ready',
@@ -60,6 +63,64 @@ beforeEach(() => {
 });
 
 describe('SubscriptionAccountsSection usage', () => {
+  // Unit: independent expiry dates and the inline renewal target are observable
+  // through the real component; existing tests only exercised the overflow menu.
+  it('shows each account expiry and renews only the account clicked', async () => {
+    let current = { ...view, accounts: view.accounts.map((account, i) => ({
+      ...account, loginExpiresAt: new Date(Date.now() + (i === 0 ? 18 : 3) * 86_400_000).toISOString(),
+    })) };
+    const command = vi.mocked(window.electronAPI.subscriptionAccounts.command).mockImplementation(async request => {
+      if (request.action === 'login') current = { ...current, accounts: current.accounts.map(account =>
+        account.id === request.accountId ? { ...account, loginExpiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() } : account) };
+      return current;
+    });
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    const rows = await screen.findAllByTestId('subscription-account');
+    expect(within(rows[0]).getByText('Expires in about 18 days')).toBeTruthy();
+    expect(within(rows[1]).getByText('Expires in about 3 days')).toBeTruthy();
+    expect(within(rows[0]).queryByRole('button', { name: 'Sign in again to first@example.test' })).toBeNull();
+    fireEvent.click(within(rows[1]).getByRole('button', { name: 'Sign in again to second@example.test' }));
+    await screen.findByText('Expires in about 30 days');
+    expect(command).toHaveBeenCalledWith({ action: 'login', providerId: 'anthropic', accountId: 'cindy-owner-second', loginKey: expect.any(String) });
+    expect(within(rows[0]).getByText('Expires in about 18 days')).toBeTruthy();
+  });
+  it('keeps a past estimate connected, disables renewal while busy, and tolerates older hosts', async () => {
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
+      ...view, accounts: [{ ...view.accounts[0], loginExpiresAt: '2020-01-01T00:00:00Z', running: 1 }, view.accounts[1]],
+    });
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    await screen.findByText('subscriptionAccounts.loginMayHaveExpired');
+    expect(screen.queryByText('subscriptionAccounts.signedOut')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Sign in again to first@example.test' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByText('subscriptionAccounts.loginExpiryUnknown')).toBeTruthy();
+  });
+  it.each([
+    ['SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH', 'loginIdentityMismatch'],
+    ['SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN', 'loginIdentityUnknown'],
+  ])('explains %s instead of claiming renewal succeeded', async (code, message) => {
+    const error = vi.spyOn(toast, 'error').mockImplementation(() => '');
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockImplementation(async request => {
+      if (request.action === 'login') throw new Error(`[${code}] Sign in again`);
+      return { ...view, accounts: [{ ...view.accounts[0], status: 'signed-out', authIssue: 'claude-account-mismatch' }] };
+    });
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in again to first@example.test' }));
+    await waitFor(() => expect(error).toHaveBeenCalledWith(`subscriptionAccounts.${message}`));
+    expect(screen.getByText('subscriptionAccounts.loginIdentityMismatchStatus')).toBeTruthy();
+  });
+  // #9517, unit: existing settings tests never exercised an account operation
+  // failure. A serialized provider-auth error must show the recovery instruction.
+  it('explains provider-managed authentication when account login fails', async () => {
+    const error = vi.spyOn(toast, 'error').mockImplementation(() => '');
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockImplementation(async command => {
+      if (command.action === 'add') throw new Error('[SUBSCRIPTION_CODEX_PROVIDER_AUTH] Account unavailable');
+      return { ...view, providerId: 'openai' };
+    });
+    render(<SubscriptionAccountsSection providerId="openai" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'subscriptionAccounts.add' }));
+    await waitFor(() => expect(error).toHaveBeenCalledWith('subscriptionAccounts.providerManagedAuth'));
+  });
+
   it('keeps the provider card on the default account and shows every window of added accounts', async () => {
     render(
       <SubscriptionAccountsSection
@@ -104,6 +165,56 @@ describe('SubscriptionAccountsSection usage', () => {
     const trigger = await screen.findByRole('button', { name: 'providerGroup.member.moreAria' });
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: 'mouse' });
     expect(await screen.findByRole('menuitem', { name: label })).toBeTruthy();
+  });
+  // Regression: with nothing signed in, the CLI default slot showed as "Account 1 · Needs sign-in"
+  // with a strategy picker, limit and switch, as if an account existed.
+  it('lists no account and no strategy before anything signs in', async () => {
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
+      ...view,
+      configured: false,
+      accounts: [{ ...view.accounts[0], identity: undefined, status: 'signed-out' }],
+    });
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    // The loading spinner goes once the read lands.
+    await vi.waitFor(() => expect(document.querySelector('.animate-spinner')).toBeNull());
+    expect(screen.queryAllByTestId('subscription-account')).toHaveLength(0);
+    expect(screen.queryByRole('radiogroup')).toBeNull();
+    expect(screen.queryByRole('switch')).toBeNull();
+    expect(screen.queryByText('1')).toBeNull();
+    expect(screen.getByRole('button', { name: 'subscriptionAccounts.add' })).toBeTruthy();
+  });
+  // An account that needs signing in again is still an account: known, busy, or beside another.
+  const unknown = { ...view.accounts[0], identity: undefined, status: 'signed-out' as const };
+  it.each([
+    ['its identity is known', [{ ...unknown, identity: 'first@example.test' }]],
+    ['another account exists', [unknown, view.accounts[1]]],
+    ['a task still runs on it', [{ ...unknown, running: 1 }]],
+  ])('keeps a signed-out default account when %s', async (_, accounts) => {
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view, accounts });
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    expect(await screen.findAllByTestId('subscription-account')).toHaveLength(accounts.length);
+  });
+  it('shows the strategy only when there are accounts to choose between', async () => {
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
+      ...view,
+      strategy: 'weight',
+      accounts: [view.accounts[0]],
+    });
+    const { unmount } = render(<SubscriptionAccountsSection providerId="anthropic" />);
+    expect(await screen.findAllByTestId('subscription-account')).toHaveLength(1);
+    expect(screen.queryByRole('radiogroup')).toBeNull();
+    expect(screen.queryByLabelText('providerGroup.member.weightAria')).toBeNull();
+    expect(screen.getByLabelText('providerGroup.member.limitAria')).toBeTruthy();
+    unmount();
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view, strategy: 'weight' });
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    expect(await screen.findByRole('radiogroup', { name: 'subscriptionAccounts.strategy' })).toBeTruthy();
+    expect(screen.getAllByLabelText('providerGroup.member.weightAria')).toHaveLength(2);
+    // 2026-11-11: an unset (legacy default 4) limit reads as unlimited; a chosen limit shows its number.
+    const [first, second] = screen.getAllByTestId('subscription-account');
+    expect(within(first).getByText('providerGroup.member.limitUnlimited')).toBeTruthy();
+    expect(within(second).getByText('providerGroup.member.limitOption')).toBeTruthy();
+    expect(within(second).queryByText('providerGroup.member.limitUnlimited')).toBeNull();
   });
   // The folder path used to be an always-visible disclosure under every account; it is now a menu action.
   it('opens the account folder from the account menu and reports a failure', async () => {

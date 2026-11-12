@@ -37,6 +37,7 @@ vi.mock('react-i18next', () => ({
       if (key === 'quotaCard.timeAndRateValue')
         return `${options.duration} 速度：${options.rate} token/秒`;
       if (key === 'todaySpend.sessionCostLabel') return `本任务 ${options.cost}`;
+      if (key === 'todaySpend.codex.sessionTokensLine') return `本任务 Token ${options.tokens}`;
       if (key === 'todaySpend.tooltip.sessionUsed') return `本任务已用 ${options.cost}`;
       if (key === 'todaySpend.codex.sessionValueLabel') return `本任务价值 ${options.cost}`;
       if (key === 'quotaCard.costLine') return `本轮消耗：${options.cost}`;
@@ -91,6 +92,37 @@ function weeklyAtProgress(utilization: number, progress: number) {
 }
 
 describe('QuotaHoverCard', () => {
+  // F13 unit: a failed quota read must replace the waiting copy, retain usable
+  // counters, and expose a working retry action (not covered by quota warnings).
+  it('shows a retryable read failure without clearing the other usage sections', () => {
+    const retry = vi.fn();
+    const account = {
+      windows: [],
+      emptyText: 'Waiting for quota',
+      refreshFailure: { retry, retrying: false },
+    };
+    const props = {
+      account,
+      sessionUsage: { tokensText: '5,678' },
+      turnUsage: { totalTokensText: '1,234' },
+    };
+    const view = render(<UsageCard {...props} />);
+    expect(screen.queryByText('Waiting for quota')).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('quotaCard.codexRefreshFailed');
+    expect(screen.getByTestId('quota-session-usage').textContent).toContain('5,678');
+    expect(screen.getByTestId('quota-turn-usage').textContent).toContain('1,234');
+    fireEvent.click(screen.getByRole('button', { name: 'quotaCard.retryQuota' }));
+    expect(retry).toHaveBeenCalledTimes(1);
+    view.rerender(<UsageCard {...props} account={{ ...account, refreshFailure: { retry, retrying: true } }} />);
+    const busyButton = screen.getByRole('button', { name: 'quotaCard.retryingQuota' }) as HTMLButtonElement;
+    expect(busyButton.disabled).toBe(true);
+    fireEvent.click(busyButton);
+    expect(retry).toHaveBeenCalledTimes(1);
+    view.rerender(<UsageCard {...props} account={{ windows: [] }} />);
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'quotaCard.retryQuota' })).toBeNull();
+  });
+
   it.each([undefined, null, 0, NaN, Infinity, 1e20])(
     'renders embedded windows without a reset time (reset=%s)',
     (resetsAt) => {

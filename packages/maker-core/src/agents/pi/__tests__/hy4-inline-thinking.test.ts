@@ -166,6 +166,64 @@ describe('HY4 inline reasoning through Pi production adapters', () => {
     disposePiTranslateContext(h.ctx);
   });
 
+  it.each([
+    { name: 'start metadata without deltas', startModel: 'tencent/hy4', partialModel: undefined, stream: false },
+    { name: 'start metadata with model-less deltas', startModel: 'tencent/hy4', partialModel: undefined, stream: true },
+    { name: 'model first reported by a partial', startModel: undefined, partialModel: 'tencent/hy4', stream: true },
+  ])('retains $name when the final response omits its model', ({ startModel, partialModel, stream }) => {
+    const h = harness();
+    try {
+      h.send({ type: 'message_start', message: { role: 'assistant', model: startModel } });
+      if (stream) {
+        h.send({ type: 'message_update', assistantMessageEvent: {
+          type: 'text_delta', contentIndex: 0, delta: thought, partial: { model: partialModel },
+        } });
+        h.send({ type: 'message_update', assistantMessageEvent: {
+          type: 'text_delta', contentIndex: 0, delta: marker + answer, partial: {},
+        } });
+      }
+      const message = { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: thought + marker + answer }] };
+      h.send({ type: 'message_end', message });
+      h.send({ type: 'agent_settled' });
+      expect(h.texts().at(-1)?.text).toBe(answer);
+      expect(h.events.find(event => event.type === 'done')?.data).toMatchObject({ result: answer });
+      expect(h.thoughts().filter(event => event.stage === 'final').map(event => event.text)).toEqual([thought]);
+      if (stream) expect(h.texts().filter(event => !event.isFinal).map(event => event.text).join('')).toBe(answer);
+      expect(message).not.toHaveProperty('model');
+      expect(message.content).toEqual([{ type: 'text', text: thought + marker + answer }]);
+    } finally {
+      disposePiTranslateContext(h.ctx);
+    }
+  });
+
+  it.each(['native reasoning', 'reported other model', 'no model in this message'])(
+    'preserves literal answer tags with a missing final model fallback control: %s', control => {
+      const h = harness();
+      const literal = 'literal' + marker + answer;
+      try {
+        h.start();
+        if (control === 'no model in this message') {
+          h.end(thought + marker + answer);
+          h.events.length = 0;
+          h.send({ type: 'message_start', message: { role: 'assistant' } });
+        }
+        const content = control === 'native reasoning'
+          ? [{ type: 'thinking', thinking: thought, thinkingSignature: 'reasoning_content' }, { type: 'text', text: literal }]
+          : [{ type: 'text', text: literal }];
+        h.send({ type: 'message_end', message: {
+          role: 'assistant', stopReason: 'stop', content,
+          ...(control === 'reported other model' ? { model: 'other-model' } : {}),
+        } });
+        h.send({ type: 'agent_settled' });
+        expect(h.texts().at(-1)?.text).toBe(literal);
+        expect(h.events.find(event => event.type === 'done')?.data).toMatchObject({ result: literal });
+        expect(h.thoughts()).toEqual([]);
+      } finally {
+        disposePiTranslateContext(h.ctx);
+      }
+    },
+  );
+
   it('isolates text indexes and preserves native thinking and tool calls', () => {
     const h = harness();
     h.start();

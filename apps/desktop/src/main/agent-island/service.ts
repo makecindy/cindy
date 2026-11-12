@@ -103,7 +103,7 @@ import {
   type AgentIslandCompanionIdentity,
 } from './companionIdentity.js';
 import { createLogger } from '../logger.js';
-import { t, tCount } from '../i18n.js';
+import { t, tCount } from '../i18n.desktop.js';
 import { isAppContentWindow, isFocusedAppContentWindow } from '../windowFocusClassifier.js';
 import {
   acknowledgeAgentIslandSessionRead,
@@ -232,7 +232,6 @@ interface AgentIslandUserPromptDebugMeta {
 }
 
 export interface AgentIslandServiceDeps {
-  isCompletionHandledByTeammate?: (sessionId: string) => Promise<boolean>;
   getMainWindow: () => BrowserWindow | null;
   nativeHost?: AgentIslandNativeRenderer;
   /** macOS Live Activity mirror of the island state; production passes one on macOS. */
@@ -498,7 +497,7 @@ export class AgentIslandService {
   constructor(private readonly deps: AgentIslandServiceDeps) {
     this.sessionActivityRelay = new SessionActivityRelay((payload) => {
       tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, payload);
-    }, { isCompletionHandledByTeammate: deps.isCompletionHandledByTeammate });
+    });
     // lazy t() 闭包跟随 locale 运行时切换,注入一次即可(strings 仍每次 publish 重建)。
     setAgentIslandToolWording(this.state, createLocalizedToolRowWording());
     this.layoutPreferencesByDisplayId = readAgentIslandLayoutPreferences();
@@ -1055,10 +1054,6 @@ export class AgentIslandService {
     });
   }
 
-  waitForCompletionNotification(sessionId: string): Promise<boolean> | undefined {
-    return this.sessionActivityRelay.waitForCompletionNotification(sessionId);
-  }
-
   resetRuntimeState(): void {
     this.clearPublishTimer();
     this.clearStreamingPreviewPublishTimer();
@@ -1231,9 +1226,6 @@ export class AgentIslandService {
       }
     }
     const suppressCompletionAttention = this.isCompletionEventSilenced(hydrated.sessionId, event);
-    if (isCompletionDoneEvent(event) && event.type === 'status') {
-      this.sessionActivityRelay.awaitCompletionTerminal(hydrated.sessionId);
-    }
     const changed = applyAgentIslandEvent(this.state, hydrated, event, now, {
       suppressCompletionAttention,
       // Direct IM sends bypass handleUserPrompt. Running preserves unread in the
@@ -1249,9 +1241,6 @@ export class AgentIslandService {
     });
     if (suppressCompletionAttention) {
       this.mutedCompletionSoundSessionIds.add(hydrated.sessionId);
-    }
-    if (isCompletionDoneEvent(event) && event.type === 'done') {
-      this.sessionActivityRelay.completeTerminal(hydrated.sessionId);
     }
     if (!changed) return;
     this.ensureMetadata(hydrated.sessionId);

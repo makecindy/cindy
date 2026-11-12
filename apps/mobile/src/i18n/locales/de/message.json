@@ -36,7 +36,7 @@
     "automationOriginNamed": "Gesendet von Automatisierungsaufgabe „{{name}}“",
     "automationOrigin": "Gesendet von einer Automatisierungsaufgabe",
     "sessionOriginNamed": "Gesendet von Sitzung „{{name}}“",
-    "botOriginNamed": "Gesendet von Teammitglied „{{name}}“",
+    "botOriginNamed": "Gesendet von Freund „{{name}}“",
     "sessionOrigin": "Von einer anderen Sitzung gesendet",
     "openSessionOrigin": "Öffnet die Ursprungssitzung",
     "sourceDeviceMobileNamed": "Gesendet von Smartphone „{{name}}“",
@@ -45,7 +45,7 @@
     "sourceDeviceDesktop": "Gesendet von einem Computer",
     "sourceDeviceId": "Geräte-ID: {{id}}",
     "sourceSessionId": "Sitzungs-ID: {{id}}",
-    "sourceTeammateId": "Teammitglied-ID: {{id}}",
+    "sourceTeammateId": "Freund-ID: {{id}}",
     "sourceAutomationId": "Automatisierungs-ID: {{id}}",
     "sourcePluginId": "Plugin-ID: {{id}}",
     "sourceMemberId": "Mitglieds-ID: {{id}}",
@@ -64,7 +64,8 @@
       "discord": "Discord",
       "wechat": "WeChat",
       "wecom": "WeCom",
-      "dingtalk": "DingTalk"
+      "dingtalk": "DingTalk",
+      "imessage": "iMessage"
     },
     "modelMismatch": "Dieser Durchgang wurde von {{actual}} statt vom ausgewählten {{selected}} beantwortet (vorübergehende serverseitige Herabstufung)",
     "copyStateCopying": "Wird kopiert",

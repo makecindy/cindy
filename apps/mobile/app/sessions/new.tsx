@@ -678,6 +678,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     // Worker 默认跟任务(Lead)的 Agent 所在电脑。
     leadAgentDeviceId: remoteAgentPick?.deviceId ?? null,
     agentLocationSelectable: workerAgentLocationSupported,
+    // 任务还没建：没有可审查、可测试的工作，内置角色不带出自带的首条任务。
+    leadHasWork: false,
   });
   const collabTarget = useMemo(() => ({
     orcaRole: null,
@@ -2474,11 +2476,10 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     setPermissionSheetOpen(true);
   }, []);
 
-  // 选权限档(独立选择器与模型浮窗共用同一语义):Full access 升级先过确认弹层,
+  // 用户直接选权限档即生效(独立选择器与模型浮窗共用同一语义),
   // 非 plan 档写 per-agent 记忆(内存 + 落盘;对齐桌面 lastByVendor)。
   const selectPermissionMode = useCallback((mode: string) => {
     void (async () => {
-      if (!(await confirmFullAccessChange(draft.permissionMode, mode))) return;
       patchDraft({ permissionMode: mode });
       if (mode === 'plan') return; // 老被控端兼容档,不入记忆
       // 同步进本地 state:本次会话内切走再切回也能拿到最新记忆(落盘不回写 state)。
@@ -5766,9 +5767,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
             label={t('session.collab.draftSubmit')}
             onPress={() => {
               // 与桌面新建任务一样:确认协同草稿即记住这次的 Worker 选择。
-              collabForm.remember(collabForm.form);
+              collabForm.remember(collabForm.submission);
               collabDraftTargetRef.current = collabTargetKey;
-              setCollabDraft(collabForm.form);
+              setCollabDraft(collabForm.submission);
               setContextSheetView('main');
               setContextSheetOpen(false);
             }}
@@ -5875,12 +5876,16 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               executionDevicesError={collabForm.executionDevicesError}
               busy={creating}
               customRoleMode={collabForm.customRoleMode}
+              description={t('session.collab.enableHint')}
               form={collabForm.form}
               notice={orcaCollabEntryHint(collabEntryStatus)}
               onAgentChange={collabForm.changeAgent}
               onChange={collabForm.patch}
-              onCustomRoleModeChange={collabForm.setCustomRoleMode}
               onPermissionChange={(mode) => void collabForm.changePermission(mode)}
+              onRemoveRole={collabForm.removeRole}
+              onSelectRole={collabForm.selectRole}
+              roles={collabForm.roles}
+              rolesEditable={collabForm.rolesEditable}
               onPickModel={collabForm.modelPicker.openPicker}
               onPickDirectory={collabForm.directoryPicker.openPicker}
             />

@@ -1005,7 +1005,7 @@ describe('TeammatesSection rows', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
     const view = render(<UnreadSync />);
-    mocks.profiles = [bot({ id: 'bot-2', name: 'New teammate' })];
+    mocks.profiles = [bot({ id: 'bot-2', name: "New buddy" })];
     view.rerender(<UnreadSync />);
     mocks.refreshBotProfiles.mockClear();
     act(() => {

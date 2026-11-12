@@ -17,7 +17,8 @@ import type { CompanionBotState, CompanionCloudState } from './state.js';
 import { readCompanionRows, storedValueHash, type CompanionStore } from './store.js';
 import { errorCode, isTransientAttachmentFailure, type CompanionApi, type CompanionLog } from './types.js';
 import {
-  COMPANION_CAPABILITIES_KEY, COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_TODO_PREFIX,
+  COMPANION_AUTOMATION_PREFIX, COMPANION_CAPABILITIES_KEY, COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_PROJECT_CARRYOVER_KEY,
+  COMPANION_PROJECT_RULES_KEY, COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_TODO_PREFIX,
   COMPANION_WORKBENCH_KEY, TOMBSTONE_HASH, isCompanionProfileSnapshot, valueHash,
 } from './uploader.js';
 
@@ -70,15 +71,38 @@ export interface CompanionMaterializeHost {
   /** Make a restored skill's folder hold these files. `fetch` gives a file's local path; null when it is gone for good. Returns the files that did not arrive. */
   applySkillFiles?: (botId: string, slug: string, files: BotSkillFile[], fetch: (file: BotSkillFile) => Promise<string | null>,
     options: { removeOthers: boolean; keep?: string[] }, fence: CompanionWriteFence) => Promise<string[]>;
-  /** The companion's todos from the cloud replace the same ids here; `remove` ids are deleted. */
-  applyTodos?: (botId: string, items: unknown[], remove: string[], fence: CompanionWriteFence) => Promise<void>;
-  /** Its routines from the cloud are created or updated with their ids; `remove` ids are deleted. */
+  /**
+   * Routines an older (V1) computer uploaded become automations of the teammate's project, once per
+   * routine id; `remove` lists their tombstones (not applied, see host.ts).
+   */
   applyRoutines?: (botId: string, routines: unknown[], remove: string[], fence: CompanionWriteFence) => Promise<void>;
   /**
    * Its workbench folders and portable judgments join this computer's, or with `replace` take their
    * place (`null`: the companion has none).
    */
   applyWorkbench?: (botId: string, value: unknown, fence: CompanionWriteFence, options?: { replace?: boolean }) => Promise<void>;
+  /**
+   * A V2 teammate's project rules (`companion.project-rules.v1`) become its project's `AGENTS.md`
+   * (the teammate becomes a project first). Unchanged rules write nothing.
+   */
+  applyProjectRules?: (botId: string, content: string, fence: CompanionWriteFence) => Promise<void>;
+  /**
+   * The project's automations (`companion.automation.v1:<configId>`): each value is upserted by its
+   * config id with its paused state, a tombstone (`value: null`) removes it.
+   */
+  applyAutomations?: (botId: string, rows: Array<{ id: string; value: unknown }>, fence: CompanionWriteFence) => Promise<void>;
+  /**
+   * Merging a copy: its project rules are added to this teammate's own under a heading naming
+   * where they came from; rules already included write nothing.
+   */
+  mergeProjectRules?: (botId: string, from: string, content: string, fence: CompanionWriteFence) => Promise<void>;
+  /** The project's unfinished V1 work (`companion.project-carryover.v1`) becomes its `CARRYOVER.md`. */
+  applyProjectCarryover?: (botId: string, content: string, fence: CompanionWriteFence) => Promise<void>;
+  /**
+   * Todos a computer still on V1 uploaded: the open ones join the project's `CARRYOVER.md` (once),
+   * like a local upgrade carries them. Teammates no longer keep todos.
+   */
+  applyLegacyTodos?: (botId: string, todos: unknown[], fence: CompanionWriteFence) => Promise<void>;
   ensureCanonicalSession: (botId: string, fence: CompanionWriteFence) => Promise<string>;
   /**
    * Local rows created at or after `fromMs`, including rewound and deleted ones (`removed`):
@@ -308,12 +332,12 @@ export async function materializeCompanion(input: {
     });
   }
 
-  // Todos, routines and the workbench move with the companion: applied in one batch each (the
-  // cloud wins; a routine tombstone removes it here). A todo is deleted by marking it (the mark
-  // travels as a value); its tombstone only means it left the travelling window (closed long ago),
-  // so this computer keeps its own copy.
+  // Routines an older computer uploaded move with the companion, applied in one batch. Teammates no
+  // longer keep todos: an older computer's open ones become unfinished work in the project.
+  const applyTodos = host.applyLegacyTodos;
   const batches = [
-    { prefix: COMPANION_TODO_PREFIX, kind: 'todo', run: host.applyTodos, removes: false },
+    { prefix: COMPANION_TODO_PREFIX, kind: 'todo', removes: false,
+      run: applyTodos ? (id: string, values: unknown[], _removed: string[], writeFence: CompanionWriteFence) => applyTodos(id, values, writeFence) : undefined },
     { prefix: COMPANION_ROUTINE_PREFIX, kind: 'routine', run: host.applyRoutines, removes: true },
   ] as const;
   for (const batch of batches) {
@@ -324,6 +348,33 @@ export async function materializeCompanion(input: {
       const removed = batch.removes ? rows.flatMap(([key, row]) => (row.value === null ? [key.slice(batch.prefix.length)] : [])) : [];
       await step(() => batch.run!(botId, values, removed, fence));
       for (const [key, row] of rows) applied.set(key, { hash: row.value === null ? TOMBSTONE_HASH : valueHash(row.value), revision: row.revision });
+    });
+  }
+  // A V2 teammate's project setup, after its memories and skills: the project (made here first when
+  // needed) takes them over. Older homes upload neither key: the project keeps what it has.
+  const rulesRow = prefs.get(COMPANION_PROJECT_RULES_KEY);
+  const rules = rulesRow ? text(record(rulesRow.value)?.content) : undefined;
+  if (rulesRow && host.applyProjectRules && (rules !== undefined || rulesRow.value === null)) {
+    await apply('project-rules', async () => {
+      // Removed on the home is not removed here: a project always keeps its rules file.
+      if (rules !== undefined) await step(() => host.applyProjectRules!(botId, rules, fence));
+      applied.set(COMPANION_PROJECT_RULES_KEY, { hash: rulesRow.value === null ? TOMBSTONE_HASH : valueHash(rulesRow.value), revision: rulesRow.revision });
+    });
+  }
+  const carryoverRow = prefs.get(COMPANION_PROJECT_CARRYOVER_KEY);
+  const carryover = carryoverRow ? text(record(carryoverRow.value)?.content) : undefined;
+  if (carryoverRow && host.applyProjectCarryover && (carryover !== undefined || carryoverRow.value === null)) {
+    await apply('project-carryover', async () => {
+      // Removed on the home is not removed here: the owner may still need it.
+      if (carryover !== undefined) await step(() => host.applyProjectCarryover!(botId, carryover, fence));
+      applied.set(COMPANION_PROJECT_CARRYOVER_KEY, { hash: carryoverRow.value === null ? TOMBSTONE_HASH : valueHash(carryoverRow.value), revision: carryoverRow.revision });
+    });
+  }
+  const automationRows = [...prefs].filter(([key]) => key.startsWith(COMPANION_AUTOMATION_PREFIX));
+  if (automationRows.length && host.applyAutomations) {
+    await apply('automation', async () => {
+      await step(() => host.applyAutomations!(botId, automationRows.map(([key, row]) => ({ id: key.slice(COMPANION_AUTOMATION_PREFIX.length), value: row.value })), fence));
+      for (const [key, row] of automationRows) applied.set(key, { hash: row.value === null ? TOMBSTONE_HASH : valueHash(row.value), revision: row.revision });
     });
   }
   // A workbench this computer synced before is the cloud's from back then: the cloud replaces it, so

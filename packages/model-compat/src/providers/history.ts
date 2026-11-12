@@ -1,6 +1,7 @@
 /** Cindy provider policies, consolidated from codex-proxy-host. Route selection stays in the host. */
 import { isPlainObject } from "../object";
 import { stripEmptyResponseMessage } from "./seed";
+import { resolveProviderCompatibilityProfile, type CompatibilityRoute } from '../profiles';
 
 export const STRICT_GATEWAY_TOOL_HISTORY_MODELS = new Set([
   'moonshot/kimi-k3',
@@ -12,6 +13,124 @@ export const STRICT_GATEWAY_TOOL_HISTORY_MODELS = new Set([
 export const RESPONSE_TOOL_CALL_TYPES = new Set(['function_call', 'custom_tool_call']);
 
 export const RESPONSE_TOOL_OUTPUT_TYPES = new Set(['function_call_output', 'custom_tool_call_output']);
+
+export type DeepSeekToolHistoryResult =
+  | { kind: 'unchanged' }
+  | { kind: 'invalid' }
+  | { kind: 'normalized'; body: Record<string, unknown> };
+
+/**
+ * Complete an interleaved tool batch before developer messages for the verified
+ * DeepSeek V4.1 Responses route. The host owns route selection and error delivery.
+ * No item, field, reasoning content or media is altered; conversation boundaries
+ * and incomplete or ambiguous batches are never crossed or guessed.
+ */
+export function normalizeDeepSeekV41ToolHistory(
+  body: Record<string, unknown>,
+): DeepSeekToolHistoryResult {
+  return normalizeInterleavedToolHistory(body, 'developer');
+}
+
+/** Kimi's bare model IDs are eligible only on its actual Chat endpoint. */
+export function normalizeKimiToolHistory(
+  body: Record<string, unknown>,
+  route: CompatibilityRoute,
+): Record<string, unknown> | null {
+  if (route.harness !== 'codex' || route.protocol !== 'openai-chat'
+    || (route.model !== 'k3' && route.model !== 'k3[1m]')) return null;
+  const profile = resolveProviderCompatibilityProfile(route);
+  if (profile?.id !== 'kimi' && profile?.id !== 'kimi-code') return null;
+  const result = normalizeInterleavedToolHistory(body, 'assistant');
+  // Incomplete/ambiguous histories remain intact for the upstream to validate.
+  // Never synthesize a result or borrow one across a user/reasoning boundary.
+  return result.kind === 'normalized' ? result.body : null;
+}
+
+function normalizeInterleavedToolHistory(
+  body: Record<string, unknown>,
+  displacedRole: 'developer' | 'assistant',
+): DeepSeekToolHistoryResult {
+  if (!Array.isArray(body.input)) return { kind: 'unchanged' };
+  const input: unknown[] = body.input;
+  const outputTypes = new Map<string, string>([
+    ['function_call', 'function_call_output'],
+    ['custom_tool_call', 'custom_tool_call_output'],
+  ]);
+  const counts = new Map<unknown, { calls: number; outputs: number }>();
+  for (const item of input) {
+    if (!isPlainObject(item) || typeof item.type !== 'string') continue;
+    const isCall = outputTypes.has(item.type);
+    const isOutput = RESPONSE_TOOL_OUTPUT_TYPES.has(item.type);
+    if (!isCall && !isOutput) continue;
+    const count = counts.get(item.call_id) ?? { calls: 0, outputs: 0 };
+    if (isCall) count.calls += 1;
+    else count.outputs += 1;
+    counts.set(item.call_id, count);
+  }
+
+  const normalized: unknown[] = [];
+  let changed = false;
+  for (let index = 0; index < input.length;) {
+    const first = input[index];
+    if (!isPlainObject(first) || typeof first.type !== 'string' || !outputTypes.has(first.type)) {
+      normalized.push(first);
+      index += 1;
+      continue;
+    }
+    const start = index;
+    const calls = new Map<unknown, Record<string, unknown>>();
+    while (index < input.length) {
+      const item = input[index];
+      if (!isPlainObject(item) || typeof item.type !== 'string' || !outputTypes.has(item.type)) break;
+      calls.set(item.call_id, item);
+      index += 1;
+    }
+    const endCalls = index;
+    const pending = new Set(calls.keys());
+    const outputs: Record<string, unknown>[] = [];
+    const messages: Record<string, unknown>[] = [];
+    let cursor = endCalls;
+    while (cursor < input.length && pending.size > 0) {
+      const item = input[cursor];
+      if (!isPlainObject(item)) break;
+      if (item.role === displacedRole && (item.type === 'message' || item.type === undefined)) {
+        messages.push(item);
+      } else {
+        const call = calls.get(item.call_id);
+        if (
+          !call || !pending.has(item.call_id) || typeof call.type !== 'string' ||
+          outputTypes.get(call.type) !== item.type
+        ) break;
+        outputs.push(item);
+        pending.delete(item.call_id);
+      }
+      cursor += 1;
+    }
+    if (messages.length === 0) {
+      normalized.push(...input.slice(start, endCalls));
+      continue;
+    }
+    if (pending.size > 0) return { kind: 'invalid' };
+    for (const callId of calls.keys()) {
+      const count = counts.get(callId);
+      if (typeof callId !== 'string' || callId.length === 0 || count?.calls !== 1 || count.outputs !== 1) {
+        return { kind: 'invalid' };
+      }
+    }
+    for (const output of outputs) {
+      const call = calls.get(output.call_id)!;
+      if (
+        !Object.hasOwn(output, 'output') ||
+        (Object.hasOwn(output, 'name') && output.name !== call.name) ||
+        (Object.hasOwn(output, 'namespace') && output.namespace !== call.namespace)
+      ) return { kind: 'invalid' };
+    }
+    normalized.push(...input.slice(start, endCalls), ...outputs, ...messages);
+    index = cursor;
+    changed = true;
+  }
+  return changed ? { kind: 'normalized', body: { ...body, input: normalized } } : { kind: 'unchanged' };
+}
 
 export function responseToolCallId(item: unknown, output: boolean): string | null {
   if (!isPlainObject(item)) return null;

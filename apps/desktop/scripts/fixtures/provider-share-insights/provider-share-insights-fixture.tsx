@@ -7,6 +7,20 @@ import type {
 } from '../../../src/shared/providerShareInsights';
 import type { ProviderShareReceived } from '@cindy/device-link';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimitsView } from '../../../src/shared/remoteAgentLimits';
+import type { ProviderGroupConfig, ProviderGroupView } from '../../../src/shared/providerGroup';
+
+const ownerGroupConfig: ProviderGroupConfig = {
+  strategy: 'least', autoSwitch: true, allowFast: true,
+  members: [
+    { key: 'local', kind: 'local', agentDeviceId: null, providerId: 'xd', label: 'Mac mini', limit: 10, weight: 1, paused: false },
+    { key: 'device:work-pc:xd', kind: 'device', agentDeviceId: 'work-pc', providerId: 'xd', label: 'Work PC', limit: 10, weight: 1, paused: false },
+  ],
+};
+const ownerGroup: ProviderGroupView = {
+  providerId: 'xd',
+  config: ownerGroupConfig,
+  members: ownerGroupConfig.members.map(member => ({ ...member, state: 'available', running: 1, appVersion: '0.1.130' })),
+};
 
 const now = Date.parse('2026-10-19T12:00:00Z');
 const share: ProviderShareReceived = {
@@ -237,7 +251,15 @@ void mountPage({
         onControlTargetChanged: subscription('controlTarget'),
       },
       providerGroup: {
-        command: async (cmd: { action: string }) => (cmd.action === 'list' ? {} : null),
+        command: async (cmd: { action: string; request?: { action: string; command: Parameters<typeof command>[0] } }) => {
+          if (cmd.action === 'remote-manage' && cmd.request) {
+            if (cmd.request.action === 'manage-share') return command(cmd.request.command);
+            if (cmd.request.action === 'manage-group' && cmd.request.command.action === 'get') return ownerGroup;
+          }
+          if (cmd.action === 'list') return ctx.case.startsWith('owner') ? { xd: ownerGroup.config } : {};
+          if (cmd.action === 'get') return ctx.case.startsWith('owner') ? ownerGroup : { providerId: 'xd', config: null, members: [] };
+          return forbid(`providerGroup.${cmd.action}`)();
+        },
         onChanged: subscription('groupChanged'),
       },
       providerShare: {
@@ -253,12 +275,15 @@ void mountPage({
         <p className="shrink-0 px-5 py-2 text-12 text-[var(--text-secondary)]">
           UI fixture · 测试数据 · Test data
         </p>
-        {ctx.case === 'owner' ? (
+        {ctx.case.startsWith('owner') ? (
           <div className="min-h-0 flex-1 overflow-auto px-5 pb-5">
             <ProviderShareManagePage
               providerId="xd"
               providerName="Cindy AI"
               providerIcon={<span>C</span>}
+              deviceId={ctx.case === 'owner-remote' ? 'fixture-host' : undefined}
+              deviceName={ctx.case === 'owner-remote' ? 'Remote Mac' : undefined}
+              initialGroup={ownerGroupConfig}
               gate="on"
               onBack={() => {}}
             />

@@ -36,7 +36,7 @@
     "automationOriginNamed": "Envoyé par la tâche d'automatisation « {{name}} »",
     "automationOrigin": "Envoyé par une tâche d'automatisation",
     "sessionOriginNamed": "Envoyé par la session « {{name}} »",
-    "botOriginNamed": "Envoyé par le coéquipier « {{name}} »",
+    "botOriginNamed": "Envoyé par l’ami « {{name}} »",
     "sessionOrigin": "Envoyé par une autre session",
     "openSessionOrigin": "Ouvre la session source",
     "sourceDeviceMobileNamed": "Envoyé depuis le téléphone « {{name}} »",
@@ -45,7 +45,7 @@
     "sourceDeviceDesktop": "Envoyé depuis un ordinateur",
     "sourceDeviceId": "ID de l'appareil : {{id}}",
     "sourceSessionId": "ID de session : {{id}}",
-    "sourceTeammateId": "ID du coéquipier : {{id}}",
+    "sourceTeammateId": "ID de l’ami : {{id}}",
     "sourceAutomationId": "ID de l'automatisation : {{id}}",
     "sourcePluginId": "ID du plugin : {{id}}",
     "sourceMemberId": "ID du membre : {{id}}",
@@ -64,7 +64,8 @@
       "discord": "Discord",
       "wechat": "WeChat",
       "wecom": "WeCom",
-      "dingtalk": "DingTalk"
+      "dingtalk": "DingTalk",
+      "imessage": "iMessage"
     },
     "modelMismatch": "Ce tour a été traité par {{actual}} au lieu du modèle sélectionné {{selected}} (rétrogradation temporaire côté serveur)",
     "copyStateCopying": "Copie en cours",

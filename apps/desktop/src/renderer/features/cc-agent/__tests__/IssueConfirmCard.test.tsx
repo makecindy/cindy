@@ -1,393 +1,288 @@
 // @vitest-environment jsdom
-
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { useState } from 'react';
+// Tier: unit. Actual card decisions and saved drafts; Markdown layout is covered by ui:check.
+// Dash's redesign replaces the old checkbox/form with preview -> edit -> preview -> public submit.
+// Minimal regression: Cmd+Enter while editing must return to review without publishing.
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-
 import { IssueConfirmCard } from '../IssueConfirmCard';
 import { clearIssueConfirmDraftsForSession } from '@/lib/issueConfirmDraftStore';
 import type { PendingIssueConfirm } from '@/lib/makerChatStore';
 
-const { tMock } = vi.hoisted(() => ({
-  tMock: vi.fn((key: string) => key),
-}));
-
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: tMock,
-    i18n: { language: 'zh-CN' },
-  }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'zh-CN' } }),
 }));
-
-const initialPending: PendingIssueConfirm = {
-  requestId: 'issue-request-a',
-  draft: {
-    title: '原始标题',
-    body: '原始正文',
-    type: 'bug',
-  },
+vi.mock('@/components/chat/MarkdownRenderer', () => ({
+  MarkdownRenderer: ({ content }: { content: string }) => <p>{content}</p>,
+}));
+const pending: PendingIssueConfirm = {
+  requestId: 'issue-a',
+  draft: { title: '原始标题', body: '原始正文', type: 'bug' },
   env: {
-    appVersion: '0.1.18',
-    platform: 'win32',
-    arch: 'x64',
-    osVersion: '10.0',
+    appVersion: '1',
+    platform: 'darwin',
+    arch: 'arm64',
+    osVersion: 'macOS',
     harness: 'Codex',
-    modelId: 'gpt-5.6',
+    modelId: 'test',
+    region: 'cn',
   },
-  submissionIdentity: {
-    kind: 'platform',
-    login: 'cindy-issue',
-  },
+  submissionIdentity: { kind: 'platform', login: 'cindy-bot' },
   githubUserIdentity: { kind: 'github-user', login: 'tester' },
   suggestedPublicName: '当前昵称',
 };
-
-const platformPending: PendingIssueConfirm = {
-  ...initialPending,
-  githubUserIdentity: undefined,
-};
-
-const legacyGithubPending: PendingIssueConfirm = {
-  ...initialPending,
-  requestId: 'issue-request-legacy-github',
-  submissionIdentity: { kind: 'github-user', login: 'legacy-user' },
-  githubUserIdentity: undefined,
-  suggestedPublicName: undefined,
-};
-
-function Harness() {
-  const [visible, setVisible] = useState(true);
-
-  return (
-    <>
-      <button type="button" onClick={() => setVisible((current) => !current)}>
-        switch session
-      </button>
-      {visible ? (
-        <IssueConfirmCard sessionId="session-a" pending={initialPending} onRespond={vi.fn()} />
-      ) : null}
-    </>
+const button = (key: string) =>
+  screen.getByRole('button', { name: new RegExp(`issueAgent.confirm.${key}`) });
+const edit = () => fireEvent.click(button('edit'));
+const done = () =>
+  fireEvent.click(
+    screen.getAllByRole('button', { name: 'issueAgent.confirm.doneEditing' }).at(-1)!,
   );
-}
-
-function confirmPublicContent() {
-  fireEvent.click(screen.getByRole('checkbox', { name: 'issueAgent.confirm.privacyConfirm' }));
-}
-
+const identity = () => fireEvent.click(screen.getByText('issueAgent.confirm.identitySettings'));
 afterEach(() => {
   cleanup();
-  tMock.mockClear();
-  clearIssueConfirmDraftsForSession('session-a');
-  clearIssueConfirmDraftsForSession('session-b');
+  clearIssueConfirmDraftsForSession('a');
+  clearIssueConfirmDraftsForSession('b');
 });
 
-describe('IssueConfirmCard environment metadata', () => {
-  it('把完整 OS 版本、Harness 和 Model ID 交给确认卡文案', () => {
-    render(<IssueConfirmCard sessionId="session-a" pending={initialPending} onRespond={vi.fn()} />);
-
-    expect(tMock).toHaveBeenCalledWith('issueAgent.confirm.envLine', {
-      appVersion: '0.1.18',
-      platform: 'win32',
-      arch: 'x64',
-      osVersion: '10.0',
+describe('feedback preview and publication', () => {
+  // PR #9764: a window listener let editing A publish preview B in split view.
+  // Existing single-card coverage missed ownership. Real cards + focused DOM key
+  // events must return only A to preview, then publish/cancel only the focused card.
+  it.each(['ctrlKey', 'metaKey'] as const)(
+    'scopes %s shortcuts to the focused split-view card',
+    (modifier) => {
+      const respondA = vi.fn();
+      const respondB = vi.fn();
+      render(
+        <>
+          <section aria-label="pane A">
+            <IssueConfirmCard sessionId="a" pending={pending} onRespond={respondA} />
+          </section>
+          <section aria-label="pane B">
+            <IssueConfirmCard
+              sessionId="b"
+              pending={{ ...pending, requestId: 'issue-b' }}
+              onRespond={respondB}
+            />
+          </section>
+          <input aria-label="other composer" />
+        </>,
+      );
+      const paneA = within(screen.getByRole('region', { name: 'pane A' }));
+      const paneB = within(screen.getByRole('region', { name: 'pane B' }));
+      fireEvent.click(paneA.getByRole('button', { name: 'issueAgent.confirm.edit' }));
+      const body = paneA.getByLabelText('issueAgent.confirm.bodyLabel');
+      body.focus();
+      fireEvent.keyDown(body, { key: 'Enter', [modifier]: true });
+      expect(respondA).not.toHaveBeenCalled();
+      expect(respondB).not.toHaveBeenCalled();
+      expect(paneA.getByRole('heading', { name: '原始标题' })).not.toBeNull();
+      fireEvent.keyDown(document.activeElement!, { key: 'Enter', [modifier]: true });
+      expect(respondA).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ confirmed: true }),
+      );
+      expect(respondB).not.toHaveBeenCalled();
+      const otherComposer = screen.getByRole('textbox', { name: 'other composer' });
+      otherComposer.focus();
+      fireEvent.keyDown(otherComposer, { key: 'Escape' });
+      fireEvent.keyDown(otherComposer, { key: 'Enter', [modifier]: true });
+      expect(respondA).toHaveBeenCalledTimes(1);
+      expect(respondB).not.toHaveBeenCalled();
+      const submitB = paneB.getByRole('button', { name: 'issueAgent.confirm.publicSubmit' });
+      submitB.focus();
+      fireEvent.keyDown(submitB, { key: 'Escape' });
+      expect(respondB).toHaveBeenCalledExactlyOnceWith({ confirmed: false });
+      expect(respondA).toHaveBeenCalledTimes(1);
+    },
+  );
+  it('shows a reviewable draft and publishes only through the explicit public action', () => {
+    const onRespond = vi.fn();
+    render(<IssueConfirmCard sessionId="a" pending={pending} onRespond={onRespond} />);
+    expect(screen.getByRole('heading', { name: '原始标题' })).not.toBeNull();
+    expect(screen.getByText('原始正文')).not.toBeNull();
+    expect(screen.queryByLabelText('issueAgent.confirm.titleLabel')).toBeNull();
+    expect(screen.getByText('issueAgent.confirm.identitySettings').closest('details')!.open).toBe(
+      false,
+    );
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.getByText('issueAgent.confirm.publicationNotice')).not.toBeNull();
+    expect(onRespond).not.toHaveBeenCalled();
+    fireEvent.click(button('publicSubmit'));
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith({
+      confirmed: true,
+      ...pending.draft,
+      submissionIdentity: pending.submissionIdentity,
+      publicName: '当前昵称',
       uiLanguage: 'zh-CN',
     });
-    expect(tMock).toHaveBeenCalledWith('issueAgent.confirm.runtimeLine', {
-      harness: 'Codex',
-      modelId: 'gpt-5.6',
-    });
-    expect(screen.getByText('issueAgent.confirm.runtimeLine').className).toContain(
-      '[overflow-wrap:anywhere]',
-    );
   });
-
-  it('兼容旧 Main 未提供 runtime metadata 的确认卡', () => {
-    render(
-      <IssueConfirmCard
-        sessionId="session-a"
-        pending={{
-          ...initialPending,
-          requestId: 'issue-request-old-main',
-          env: {
-            appVersion: '0.1.18',
-            platform: 'win32',
-            arch: 'x64',
-            osVersion: '10.0',
-          },
-        }}
-        onRespond={vi.fn()}
-      />,
-    );
-
-    expect(tMock).not.toHaveBeenCalledWith('issueAgent.confirm.runtimeLine', expect.anything());
-  });
-});
-
-describe('IssueConfirmCard draft persistence', () => {
-  it('restores title, body and type after a session-switch remount', () => {
-    render(<Harness />);
-
+  it('returns edited content to preview before keyboard publication', () => {
+    const onRespond = vi.fn();
+    render(<IssueConfirmCard sessionId="a" pending={pending} onRespond={onRespond} />);
+    edit();
     fireEvent.change(screen.getByLabelText('issueAgent.confirm.titleLabel'), {
-      target: { value: '编辑后的标题' },
+      target: { value: ' 已修改 ' },
     });
     fireEvent.change(screen.getByLabelText('issueAgent.confirm.bodyLabel'), {
-      target: { value: '编辑后的正文' },
+      target: { value: ' 新正文 ' },
     });
     fireEvent.click(screen.getByRole('radio', { name: 'issueAgent.confirm.typeFeature' }));
-
-    fireEvent.click(screen.getByRole('button', { name: 'switch session' }));
-    expect(screen.queryByLabelText('issueAgent.confirm.titleLabel')).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'switch session' }));
-    expect((screen.getByLabelText('issueAgent.confirm.titleLabel') as HTMLInputElement).value).toBe(
-      '编辑后的标题',
+    expect(screen.queryByRole('button', { name: /publicSubmit/ })).toBeNull();
+    const body = screen.getByLabelText('issueAgent.confirm.bodyLabel');
+    body.focus();
+    fireEvent.keyDown(body, { key: 'Enter', metaKey: true });
+    expect(onRespond).not.toHaveBeenCalled();
+    expect(screen.getByRole('heading', { name: '已修改' })).not.toBeNull();
+    fireEvent.keyDown(document.activeElement!, { key: 'Enter', metaKey: true, repeat: true });
+    expect(onRespond).not.toHaveBeenCalled();
+    fireEvent.keyDown(document.activeElement!, { key: 'Enter', metaKey: true });
+    expect(onRespond).toHaveBeenCalledWith(
+      expect.objectContaining({ title: '已修改', body: '新正文', type: 'feature' }),
     );
+  });
+  it('Escape leaves editing first; cancellation never needs a valid draft', () => {
+    const onRespond = vi.fn();
+    render(<IssueConfirmCard sessionId="a" pending={pending} onRespond={onRespond} />);
+    edit();
+    fireEvent.change(screen.getByLabelText('issueAgent.confirm.titleLabel'), {
+      target: { value: '' },
+    });
+    const title = screen.getByLabelText('issueAgent.confirm.titleLabel');
+    title.focus();
+    fireEvent.keyDown(title, { key: 'Escape' });
+    expect(onRespond).not.toHaveBeenCalled();
+    expect((button('publicSubmit') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith({ confirmed: false });
+  });
+  it('restores edits after remount and isolates both request and session', () => {
+    const view = (sessionId: string, requestId: string) => (
+      <IssueConfirmCard
+        key={`${sessionId}:${requestId}`}
+        sessionId={sessionId}
+        pending={{ ...pending, requestId }}
+        onRespond={vi.fn()}
+      />
+    );
+    const { rerender } = render(view('a', 'one'));
+    edit();
+    fireEvent.change(screen.getByLabelText('issueAgent.confirm.titleLabel'), {
+      target: { value: '已修改' },
+    });
+    fireEvent.change(screen.getByLabelText('issueAgent.confirm.bodyLabel'), {
+      target: { value: '已补充正文' },
+    });
+    fireEvent.click(screen.getByRole('radio', { name: 'issueAgent.confirm.typeFeature' }));
+    identity();
+    fireEvent.change(screen.getByLabelText('issueAgent.confirm.publicNameLabel'), {
+      target: { value: '新昵称' },
+    });
+    for (const [session, request] of [
+      ['b', 'one'],
+      ['a', 'two'],
+    ]) {
+      rerender(view(session, request));
+      expect(screen.getByRole('heading', { name: '原始标题' })).not.toBeNull();
+    }
+    rerender(view('a', 'one'));
+    expect(screen.getByRole('heading', { name: '已修改' })).not.toBeNull();
+    expect(screen.getByText('已补充正文')).not.toBeNull();
+    identity();
     expect(
-      (screen.getByLabelText('issueAgent.confirm.bodyLabel') as HTMLTextAreaElement).value,
-    ).toBe('编辑后的正文');
+      (screen.getByLabelText('issueAgent.confirm.publicNameLabel') as HTMLInputElement).value,
+    ).toBe('新昵称');
+    edit();
     expect(
       screen
         .getByRole('radio', { name: 'issueAgent.confirm.typeFeature' })
         .getAttribute('aria-checked'),
     ).toBe('true');
+    done();
   });
-
-  it('isolates drafts by both sessionId and requestId', () => {
-    const onRespond = vi.fn();
-    const { rerender } = render(
-      <IssueConfirmCard
-        key="session-a:issue-request-a"
-        sessionId="session-a"
-        pending={initialPending}
-        onRespond={onRespond}
-      />,
-    );
-
-    fireEvent.change(screen.getByLabelText('issueAgent.confirm.titleLabel'), {
-      target: { value: '会话 A 的编辑' },
-    });
-
-    rerender(
-      <IssueConfirmCard
-        key="session-b:issue-request-a"
-        sessionId="session-b"
-        pending={initialPending}
-        onRespond={onRespond}
-      />,
-    );
-    expect((screen.getByLabelText('issueAgent.confirm.titleLabel') as HTMLInputElement).value).toBe(
-      '原始标题',
-    );
-
-    rerender(
-      <IssueConfirmCard
-        key="session-a:issue-request-b"
-        sessionId="session-a"
-        pending={{ ...initialPending, requestId: 'issue-request-b' }}
-        onRespond={onRespond}
-      />,
-    );
-    expect((screen.getByLabelText('issueAgent.confirm.titleLabel') as HTMLInputElement).value).toBe(
-      '原始标题',
-    );
-
-    rerender(
-      <IssueConfirmCard
-        key="session-a:issue-request-a"
-        sessionId="session-a"
-        pending={initialPending}
-        onRespond={onRespond}
-      />,
-    );
-    expect((screen.getByLabelText('issueAgent.confirm.titleLabel') as HTMLInputElement).value).toBe(
-      '会话 A 的编辑',
-    );
-  });
-
-  it('restores the platform public name after a session-switch remount', () => {
-    function PlatformHarness() {
-      const [visible, setVisible] = useState(true);
-      return (
-        <>
-          <button type="button" onClick={() => setVisible((current) => !current)}>
-            switch platform session
-          </button>
-          {visible ? (
-            <IssueConfirmCard sessionId="session-a" pending={platformPending} onRespond={vi.fn()} />
-          ) : null}
-        </>
-      );
-    }
-
-    render(<PlatformHarness />);
-    fireEvent.change(screen.getByLabelText('issueAgent.confirm.publicNameLabel'), {
-      target: { value: '编辑后的昵称' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'switch platform session' }));
-    fireEvent.click(screen.getByRole('button', { name: 'switch platform session' }));
-    expect(
-      (screen.getByLabelText('issueAgent.confirm.publicNameLabel') as HTMLInputElement).value,
-    ).toBe('编辑后的昵称');
+  it('keeps system details available without requiring them to be expanded', () => {
+    render(<IssueConfirmCard sessionId="a" pending={pending} onRespond={vi.fn()} />);
+    const summary = screen.getByText('issueAgent.confirm.environment');
+    expect(summary.closest('details')!.open).toBe(false);
+    fireEvent.click(summary);
+    expect(summary.closest('details')!.open).toBe(true);
+    expect(screen.getByText('issueAgent.confirm.runtimeLine')).not.toBeNull();
+    expect(screen.getByText('issueAgent.confirm.regionLine')).not.toBeNull();
   });
 });
 
-describe('IssueConfirmCard submission identity', () => {
-  it('defaults to the platform bot and offers a verified GitHub account as an extra option', () => {
+describe('public identity', () => {
+  it('offers the connected GitHub account and omits platform attribution for it', () => {
     const onRespond = vi.fn();
-    render(
-      <IssueConfirmCard sessionId="session-a" pending={initialPending} onRespond={onRespond} />,
-    );
-
-    expect(
-      screen
-        .getByRole('button', { name: 'issueAgent.confirm.identityPlatform' })
-        .getAttribute('aria-pressed'),
-    ).toBe('true');
-    expect(screen.getByText('issueAgent.confirm.privacyHint')).not.toBeNull();
-    expect(screen.getByText('issueAgent.confirm.identityPlatformHint')).not.toBeNull();
-    expect(screen.getByLabelText('issueAgent.confirm.publicNameLabel')).not.toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'issueAgent.confirm.identityGithubUser' }));
-    expect(screen.getByText('issueAgent.confirm.identityGithubUserHint')).not.toBeNull();
+    render(<IssueConfirmCard sessionId="a" pending={pending} onRespond={onRespond} />);
+    identity();
+    fireEvent.click(button('identityGithubUser'));
     expect(screen.queryByLabelText('issueAgent.confirm.publicNameLabel')).toBeNull();
-    confirmPublicContent();
-    fireEvent.click(screen.getByRole('button', { name: /issueAgent\.confirm\.submit/ }));
+    fireEvent.click(button('publicSubmit'));
     expect(onRespond).toHaveBeenCalledWith(
-      expect.objectContaining({
-        confirmed: true,
-        submissionIdentity: { kind: 'github-user', login: 'tester' },
-      }),
+      expect.objectContaining({ submissionIdentity: pending.githubUserIdentity }),
     );
+    expect(onRespond.mock.calls[0][0]).not.toHaveProperty('publicName');
   });
-
-  it('does not show a GitHub account option when none is currently available', () => {
+  it('does not offer an unavailable account', () => {
     render(
-      <IssueConfirmCard sessionId="session-a" pending={platformPending} onRespond={vi.fn()} />,
+      <IssueConfirmCard
+        sessionId="a"
+        pending={{ ...pending, githubUserIdentity: undefined }}
+        onRespond={vi.fn()}
+      />,
     );
-    expect(
-      screen.getByRole('button', { name: 'issueAgent.confirm.identityPlatform' }),
-    ).not.toBeNull();
+    identity();
     expect(
       screen.queryByRole('button', { name: 'issueAgent.confirm.identityGithubUser' }),
     ).toBeNull();
   });
-
-  it('keeps an old-Main GitHub identity fixed instead of dropping or mislabeling the card', () => {
+  it('honors an old host that fixed the GitHub identity', () => {
     const onRespond = vi.fn();
     render(
       <IssueConfirmCard
-        sessionId="session-a"
-        pending={legacyGithubPending}
+        sessionId="a"
+        pending={{
+          ...pending,
+          submissionIdentity: { kind: 'github-user', login: 'legacy' },
+          githubUserIdentity: undefined,
+        }}
         onRespond={onRespond}
       />,
     );
-
-    expect(
-      screen
-        .getByRole('button', { name: 'issueAgent.confirm.identityGithubUser' })
-        .getAttribute('aria-pressed'),
-    ).toBe('true');
+    identity();
     expect(
       screen.queryByRole('button', { name: 'issueAgent.confirm.identityPlatform' }),
     ).toBeNull();
-    expect(screen.getByText('issueAgent.confirm.identityGithubUserHint')).not.toBeNull();
-    expect(screen.queryByLabelText('issueAgent.confirm.publicNameLabel')).toBeNull();
-
-    confirmPublicContent();
-    fireEvent.click(screen.getByRole('button', { name: /issueAgent\.confirm\.submit/ }));
-    expect(onRespond).toHaveBeenCalledWith({
-      confirmed: true,
-      title: '原始标题',
-      body: '原始正文',
-      type: 'bug',
-      submissionIdentity: { kind: 'github-user', login: 'legacy-user' },
-      uiLanguage: 'zh-CN',
-    });
-  });
-
-  it('platform publishing submits the edited public name', () => {
-    const onRespond = vi.fn();
-    render(
-      <IssueConfirmCard sessionId="session-a" pending={platformPending} onRespond={onRespond} />,
-    );
-    const input = screen.getByLabelText('issueAgent.confirm.publicNameLabel') as HTMLInputElement;
-    expect(input.value).toBe('当前昵称');
-    fireEvent.change(input, { target: { value: '  公开昵称  ' } });
-    confirmPublicContent();
-    fireEvent.click(screen.getByRole('button', { name: /issueAgent\.confirm\.submit/ }));
+    fireEvent.click(button('publicSubmit'));
     expect(onRespond).toHaveBeenCalledWith(
-      expect.objectContaining({
-        confirmed: true,
-        submissionIdentity: { kind: 'platform', login: 'cindy-issue' },
-        publicName: '公开昵称',
-      }),
+      expect.objectContaining({ submissionIdentity: { kind: 'github-user', login: 'legacy' } }),
     );
   });
-
-  it('platform publishing can switch to the localized anonymous attribution', () => {
+  it.each(['', 'name\u0001'])(
+    'blocks invalid attribution %j and allows anonymous recovery',
+    (invalid) => {
+      const onRespond = vi.fn();
+      render(<IssueConfirmCard sessionId="a" pending={pending} onRespond={onRespond} />);
+      identity();
+      fireEvent.change(screen.getByLabelText('issueAgent.confirm.publicNameLabel'), {
+        target: { value: invalid },
+      });
+      expect((button('publicSubmit') as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(button('useAnonymous'));
+      fireEvent.click(button('publicSubmit'));
+      expect(onRespond).toHaveBeenCalledWith(
+        expect.objectContaining({ publicName: 'issueAgent.confirm.anonymous' }),
+      );
+    },
+  );
+  it('submits a trimmed custom public name', () => {
     const onRespond = vi.fn();
-    render(
-      <IssueConfirmCard
-        sessionId="session-a"
-        pending={{ ...platformPending, requestId: 'issue-request-anonymous' }}
-        onRespond={onRespond}
-      />,
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'issueAgent.confirm.useAnonymous' }));
-    expect(
-      (screen.getByLabelText('issueAgent.confirm.publicNameLabel') as HTMLInputElement).value,
-    ).toBe('issueAgent.confirm.anonymous');
-    confirmPublicContent();
-    fireEvent.click(screen.getByRole('button', { name: /issueAgent\.confirm\.submit/ }));
-    expect(onRespond).toHaveBeenCalledWith(
-      expect.objectContaining({
-        confirmed: true,
-        submissionIdentity: { kind: 'platform', login: 'cindy-issue' },
-        publicName: 'issueAgent.confirm.anonymous',
-      }),
-    );
-  });
-
-  it('platform publishing rejects empty public names and constrains the input', () => {
-    render(
-      <IssueConfirmCard
-        sessionId="session-a"
-        pending={{ ...platformPending, requestId: 'issue-request-invalid' }}
-        onRespond={vi.fn()}
-      />,
-    );
-    const input = screen.getByLabelText('issueAgent.confirm.publicNameLabel');
-    const submit = screen.getByRole('button', { name: /issueAgent\.confirm\.submit/ });
-    fireEvent.change(input, { target: { value: '' } });
-    expect((submit as HTMLButtonElement).disabled).toBe(true);
-    expect((input as HTMLInputElement).type).toBe('text');
-    expect((input as HTMLInputElement).maxLength).toBe(100);
-  });
-
-  it('requires explicit public-content confirmation and resets it after edits', () => {
-    const onRespond = vi.fn();
-    render(
-      <IssueConfirmCard sessionId="session-a" pending={platformPending} onRespond={onRespond} />,
-    );
-
-    const submit = screen.getByRole('button', { name: /issueAgent\.confirm\.submit/ });
-    const confirmation = screen.getByRole('checkbox', {
-      name: 'issueAgent.confirm.privacyConfirm',
+    render(<IssueConfirmCard sessionId="a" pending={pending} onRespond={onRespond} />);
+    identity();
+    fireEvent.change(screen.getByLabelText('issueAgent.confirm.publicNameLabel'), {
+      target: { value: '  公开昵称  ' },
     });
-    expect((submit as HTMLButtonElement).disabled).toBe(true);
-    expect((confirmation as HTMLInputElement).checked).toBe(false);
-
-    confirmPublicContent();
-    expect((submit as HTMLButtonElement).disabled).toBe(false);
-
-    fireEvent.change(screen.getByLabelText('issueAgent.confirm.bodyLabel'), {
-      target: { value: '重新编辑后的正文' },
-    });
-    expect((confirmation as HTMLInputElement).checked).toBe(false);
-    expect((submit as HTMLButtonElement).disabled).toBe(true);
-
-    confirmPublicContent();
-    fireEvent.click(submit);
-    expect(onRespond).toHaveBeenCalledWith(expect.objectContaining({ body: '重新编辑后的正文' }));
+    fireEvent.click(button('publicSubmit'));
+    expect(onRespond).toHaveBeenCalledWith(expect.objectContaining({ publicName: '公开昵称' }));
   });
 });

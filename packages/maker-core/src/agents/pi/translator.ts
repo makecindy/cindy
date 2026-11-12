@@ -34,7 +34,7 @@ import {
 import type { AgentEvent, AgentTaskUpdateEventData, UsageSnapshot } from '../../types/index.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
 import { attachLiveGeneration } from '../shared/live-generation-snapshot.js';
-import { TokenSpeedMeter } from '../shared/token-speed.js';
+import { CalibratedTokenSpeedMeter, estimateWordTokens } from '../shared/calibrated-token-speed.js';
 import { RequestUsageTracker, type UsageSegment } from '../shared/usage-tracker.js';
 import {
   UPSTREAM_OVERLOAD_REASON,
@@ -221,8 +221,8 @@ export interface PiTranslateContext {
   terminalAssistantErrorEmitted: boolean;
   /** 整轮 wall-clock 起点；只用于诊断，不参与 TPS。 */
   turnWallClockStartedAt: number;
-  /** Live tok/s shown in the status bar (Pi extension algorithm). */
-  tokenSpeed: TokenSpeedMeter;
+  /** Live tok/s shown in the status bar: the stream, corrected by each message's reported usage. */
+  tokenSpeed: CalibratedTokenSpeedMeter;
   /** Last running status text, reused by speed-only refreshes. */
   lastRunningStatus: string;
   generationDurationMs: number;
@@ -302,7 +302,8 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     finalAssistantText: '',
     finalAssistantStopReason: null,
     turnWallClockStartedAt: 0,
-    tokenSpeed: new TokenSpeedMeter(),
+    // Pi providers mostly stream thinking in full: count it as streamed until usage says otherwise.
+    tokenSpeed: new CalibratedTokenSpeedMeter({ estimate: estimateWordTokens, thinkingScale: 1 }),
     lastRunningStatus: 'Working…',
     generationDurationMs: 0,
     generationOpenAt: 0,
@@ -694,9 +695,9 @@ function applyDelegatedUsage(
   if (delta.output > 0) ctx.generationTimingReliable = false;
 }
 
-function assistantTextOf(message: PiAssistantMessage): string {
+function assistantTextOf(message: PiAssistantMessage, model = message.model): string {
   const parts: string[] = [];
-  for (const block of hy4ContentBlocks(message.model, message.content)) {
+  for (const block of hy4ContentBlocks(model, message.content)) {
     if (block.type === 'text' && typeof block.text === 'string') {
       const visible = stripInternalWebCitations(block.text);
       if (visible.length > 0) parts.push(visible);
@@ -890,10 +891,8 @@ export function translatePiEvent(
       const bridgedPriceVariant = priceVariantFromServiceTier(message?.usage?.service_tier);
       ctx.pendingPriceVariants.push(bridgedPriceVariant ?? ctx.getPriceVariant?.() ?? 'standard');
       startPiGenerationHeartbeat(ctx);
-      const startAt = typeof message?.timestamp === 'number' && Number.isFinite(message.timestamp) && message.timestamp > 0
-        ? message.timestamp
-        : Date.now();
-      ctx.tokenSpeed.start(startAt);
+      // The speed clock runs from the first streamed block, not from here: the wait for
+      // the first byte is not generation.
       // Activity may advance before usage; the rate retains the last completed sample.
       pushStatus(queue, ctx, 'Working…', true);
       return;
@@ -949,7 +948,9 @@ export function translatePiEvent(
         outputTokens: message.usage?.output, reasoningTokens: message.usage?.reasoning,
       });
       // Final-only events and retries use the same split as the live stream.
-      if (isHy4Model(message.model) && !hasNativePiReasoning(message.content)) {
+      // RPC snapshots may omit the model reported earlier in this message.
+      const effectiveModel = message.model ?? ctx.inlineThinkingModel;
+      if (isHy4Model(effectiveModel) && !hasNativePiReasoning(message.content)) {
         for (const [index, block] of (message.content ?? []).entries()) {
           if (block.type !== 'text' || typeof block.text !== 'string') continue;
           const split = splitHy4InlineThinking(block.text, true);
@@ -958,7 +959,7 @@ export function translatePiEvent(
           }
         }
       }
-      const fullText = assistantTextOf(message);
+      const fullText = assistantTextOf(message, effectiveModel);
       if (fullText.length > 0 || message.content?.some((block) => block.type === 'thinking' || block.type === 'toolCall')) ctx.cacheRecoveryHasOutput = true;
       ctx.finalAssistantStopReason = typeof message.stopReason === 'string'
         ? message.stopReason
@@ -1015,7 +1016,8 @@ export function translatePiEvent(
         // The calibrated value holds the whole turn (every reported message plus
         // every estimated one), so a later retry cannot drop earlier estimates.
         const targetTokens = ctx.turnMainOutput + ctx.unreportedEstimatedOutput;
-        ctx.tokenSpeed.syncOutputTokens(targetTokens);
+        ctx.tokenSpeed.settle(targetTokens, Date.now(), message.usage.reasoning,
+          messageDurationMs > 0 ? messageDurationMs : undefined);
         ctx.lastCalibratedTokens = targetTokens;
       } else {
         // A message without output usage means `turnMainOutput` no longer covers
@@ -1454,7 +1456,7 @@ export function translatePiEvent(
   }
 }
 
-/** Mirrors pi-token-speed's message_update handlers. */
+/** Feeds the parent model's stream to the speed meter. */
 function observePiTokenSpeed(
   delta: Record<string, unknown>,
   queue: AsyncQueue<AgentEvent>,
@@ -1465,12 +1467,13 @@ function observePiTokenSpeed(
     case 'text_start':
     case 'thinking_start':
     case 'toolcall_start':
-      ctx.tokenSpeed.start();
+      ctx.tokenSpeed.start(Date.now(), delta.type === 'thinking_start' ? 'thinking' : 'visible');
       return;
     case 'toolcall_delta':
     case 'text_delta':
     case 'thinking_delta':
-      if (typeof delta.delta === 'string' && ctx.tokenSpeed.recordDelta(delta.delta)) {
+      if (typeof delta.delta === 'string' &&
+        ctx.tokenSpeed.recordDelta(delta.delta, Date.now(), delta.type === 'thinking_delta' ? 'thinking' : 'visible')) {
         pushStatus(queue, ctx, ctx.lastRunningStatus, true);
       }
       return;
@@ -1487,13 +1490,14 @@ function handleAssistantDelta(
 ): void {
   const contentIndex = typeof delta.contentIndex === 'number' ? delta.contentIndex : 0;
   const partial = delta.partial as { model?: string; content?: unknown } | undefined;
+  ctx.inlineThinkingModel = partial?.model ?? ctx.inlineThinkingModel;
   if (hasNativePiReasoning(partial?.content)) ctx.inlineThinkingNative = true;
 
   switch (delta.type) {
     case 'text_delta': {
       if (typeof delta.delta === 'string' && delta.delta.length > 0) {
         let text = delta.delta;
-        if (isHy4Model(partial?.model ?? ctx.inlineThinkingModel) && !ctx.inlineThinkingNative) {
+        if (isHy4Model(ctx.inlineThinkingModel) && !ctx.inlineThinkingNative) {
           const state = ctx.inlineThinkingByIndex.get(contentIndex)
             ?? { pending: '', candidateTail: '', released: false, thinkingEmitted: false };
           ctx.inlineThinkingByIndex.set(contentIndex, state);

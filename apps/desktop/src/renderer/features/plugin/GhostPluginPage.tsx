@@ -74,7 +74,8 @@ import {
 } from '@/lib/composerDraftStore';
 import { getDraft as getWorkspaceDraft, resetDraftWorkspaceTargets } from '@/state/newMakerDraft';
 import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
-import { installGhostFromFile, pickAndUpdateGhost } from '@/cindy-brain/installFlow';
+import { pickAndUpdateGhost } from '@/cindy-brain/installFlow';
+import { importCindyFile } from '@/cindy-brain/importCindyFile';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn, basename } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
@@ -1241,15 +1242,16 @@ function LocalGhostPluginPage({
   const handleInstall = useCallback(async () => {
     const picked = await window.electronAPI.ghosts.pickFile().catch(() => null);
     if (!picked || 'canceled' in picked) return;
-    await installGhostFromFile(picked.filePath, {
+    await importCindyFile(picked.filePath, {
       t,
+      openThemes: () => navigate('/settings?tab=appearance'),
       // 已在插件页:tab 型插件安装后原地打开面板。
       openPluginPanel: (instanceId) => {
         setSelectedId(null);
         setOpenPanelId(instanceId);
       },
     });
-  }, [t]);
+  }, [navigate, t]);
 
   const handleRetryLegacyRecovery = useCallback(async () => {
     legacyRecoveryStatusRequestRef.current += 1;
@@ -2582,7 +2584,7 @@ export function GhostPluginCard({
           {item.retirement?.unread ? (
             <AttentionDot tone="awaiting" size={6} className="mt-px" />
           ) : unread ? (
-            <AttentionDot breathing size={6} className="mt-px" />
+            <AttentionDot size={6} className="mt-px" />
           ) : null}
         </span>
         <span

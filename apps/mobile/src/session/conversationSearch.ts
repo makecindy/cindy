@@ -30,6 +30,7 @@ import {
 } from '@cindy/maker-shared/session-list';
 import type { DeviceAccessState } from '@cindy/maker-shared/device-list';
 import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
@@ -281,6 +282,7 @@ function sessionToSearchSummary(
   return {
     id: session.id,
     title: session.title,
+    tags: session.tags,
     workingDir: session.workingDir,
     projectDir: session.projectDir,
     workspaceKind: session.workspaceKind,
@@ -341,6 +343,7 @@ export function toSearchListItem(
   const stamped = cached
     ? {
         ...cached,
+        tags: item.session.tags ?? cached.tags,
         canonicalDeviceId: deviceId ?? cached.canonicalDeviceId,
         deviceLinkDeviceId: deviceId,
         deviceLinkDeviceName: item.session.deviceLinkDeviceName ?? cached.deviceLinkDeviceName,
@@ -348,6 +351,7 @@ export function toSearchListItem(
     : {
         id: item.session.id,
         title: item.session.title,
+        tags: item.session.tags,
         workingDir: item.session.workingDir,
         projectDir: item.session.projectDir,
         workspaceKind: item.session.workspaceKind,
@@ -507,7 +511,7 @@ export function listConversationSearchProjects(
     const deviceId = session.canonicalDeviceId ?? session.deviceLinkDeviceId;
     if (!deviceId) continue;
     const workingDir = stripTrailingPathSeparators((session.projectDir ?? session.workingDir)?.trim() ?? '');
-    if (!workingDir) continue;
+    if (!workingDir || isTeammateProjectPath(workingDir)) continue;
     const dirKey = collapseWorktreeDirForGrouping(workingDir) ?? workingDir;
     const key = `${deviceId}:${dirKey}`;
     const group = groupedSessions.get(key) ?? [];

@@ -254,6 +254,21 @@ export function WebhookTriggerPanel({ schedule }: { schedule: Schedule }) {
     ),
   );
 
+  if (source?.preset === 'github-app') {
+    const state = !status ? 'common.loading'
+      : schedule.status !== 'active' ? 'scheduler.editor.webhook.githubAppPaused'
+      : status.receiver === 'signed-out' ? 'scheduler.webhook.signedOut'
+      : status.connected ? 'scheduler.webhook.waitingEvent' : 'scheduler.editor.webhook.githubAppHint';
+    return <section className="mt-4 space-y-2 border-y border-[var(--border-default)] py-4 text-12 leading-relaxed text-[var(--text-secondary)]">
+      <h3 className="text-13 font-medium text-[var(--text-primary)]">GitHub App</h3>
+      <p role="status">{t(state)}</p>
+      <p className="break-words">{source.repositories.join(', ')}</p>
+      <p>{schedule.webhookTrigger?.events?.map(event => eventLabels.get(event) ?? event).join(', ')
+        || t('scheduler.editor.webhook.eventPicker.all')}</p>
+      {status?.lastReceivedAt ? <p>{t('scheduler.webhook.lastReceived', { time: new Date(status.lastReceivedAt).toLocaleString() })}</p> : null}
+    </section>;
+  }
+
   return (
     <section className="mt-4 border-y border-[var(--border-default)] py-4 text-12 leading-relaxed text-[var(--text-secondary)]">
       <div className="flex items-start justify-between gap-3">

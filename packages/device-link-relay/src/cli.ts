@@ -27,7 +27,7 @@ import { manageNginx } from './nginx';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 
-const BOOLEAN_FLAGS = new Set(['trust-proxy', 'ipv6', 'existing-certificate']);
+const BOOLEAN_FLAGS = new Set(['trust-proxy', 'ipv6', 'existing-certificate', 'tls-at-ingress']);
 /** 首次申请证书失败后的重试间隔(Let's Encrypt 对同一名字每小时只允许几次失败验证)。 */
 const ACME_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000, 30 * 60_000, 60 * 60_000];
 /** 只是连不上 CA(不算失败验证、不占配额)时更快重试,部署等待的几分钟里能多试几次。 */
@@ -180,7 +180,7 @@ async function main(): Promise<void> {
       dataDir,
       host,
       port,
-      tls: material ? { cert: material.cert, key: material.key } : certPath && keyPath ? await readTlsFiles(certPath, keyPath) : undefined,
+      tls: material && !flags.has('tls-at-ingress') ? { cert: material.cert, key: material.key } : certPath && keyPath ? await readTlsFiles(certPath, keyPath) : undefined,
       publicUrl: flags.get('public-url'),
       trustProxyHeaders: flags.has('trust-proxy'),
       logger: stderrLogger,
@@ -196,7 +196,7 @@ async function main(): Promise<void> {
           .obtain()
           .then((next) => {
             material = next;
-            handle.updateTls({ cert: next.cert, key: next.key });
+            if (!flags.has('tls-at-ingress')) handle.updateTls({ cert: next.cert, key: next.key });
           })
           .catch(() => {
             // 已记录;旧证书仍有效时下个小时再试。

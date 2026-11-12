@@ -16,7 +16,7 @@
 
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { FastMode } from '@cindy/maker-shared';
 import { MemoryRouter } from 'react-router-dom';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
@@ -34,6 +34,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
   useTranslation: () => ({
     t: (key: string, options?: Record<string, string>) => {
       const table: Record<string, string> = {
+        'quotaCard.remainingPercent': `剩余 ${options?.percent}%`,
+        'quotaCard.resetIn': `${options?.duration}后重置`,
         'modelDescriptions.coding': '用于编写代码、排查错误与改进程序。',
         'settings.providers.anthropic.title': 'Anthropic',
         'settings.providers.openai.title': 'OpenAI',
@@ -348,6 +350,12 @@ async function openFlyoutForRow(row: HTMLElement): Promise<HTMLElement> {
 }
 
 beforeEach(() => {
+  vi.stubGlobal('electronAPI', {
+    subscriptionAccounts: {
+      command: vi.fn(async ({ providerId }) => ({ providerId, configured: false, accounts: [] })),
+      onChanged: () => () => {},
+    },
+  });
   keyPresence.available = true;
   keyPresence.canReadKey = true;
   onProviderChange.mockClear();
@@ -778,6 +786,11 @@ describe('模型浮层上下文按目录来源隔离', () => {
     } } },
     { name: '被控电脑', props: { deviceId: 'other' } },
   ])('$name 的窗口与引擎切换只使用来源目录', async ({ props }) => {
+    // 同账号的另一台电脑：本机也有同名供应商时左栏只列一处，这里是用户把它们改成「运行于」那台。
+    if (props.remoteAgent?.selectedDeviceId === 'other') {
+      providersRef.providers = (localProviders as ProviderView[]).map((provider) => ({ ...provider, runLocation: 'other' }));
+      onTestFinished(() => { providersRef.providers = localProviders; });
+    }
     renderPanel(props);
     const claude = await openRowFlyout('Opus 5');
     expect(within(claude).getByText(/上下文 1M/)).toBeTruthy();
@@ -953,9 +966,10 @@ describe('统一面板 · 会话内形态', () => {
     expect(other?.className).not.toContain('bg-sidebar-item-hover');
   });
 
-  it('收藏置顶但不选中，推荐当前值优先并移除下方空供应商组', () => {
+  it('收藏置顶但不选中，推荐当前值优先并移除下方空供应商组', async () => {
     const uid = addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' });
     renderPanel({ actualRoute: true, sessionEngineFilter, currentProviderId: 'xd', modelId: 'gpt-5.5', selectedFavoriteUid: uid });
+    await act(async () => {});
     const list = screen.getByRole('listbox');
     const groups = within(list).getAllByRole('group');
     expect(groups[0].getAttribute('aria-label')).toBe('收藏');
@@ -3715,8 +3729,9 @@ describe('统一面板 · 合并行与 wire id', () => {
     expect(getEffort.mock.calls).not.toContainEqual(['claude-code', 'openai', 'gpt-5.6']);
   });
 
-  it('全部模型保留来源，Cindy AI 在原描述行显示供应商', () => {
+  it('全部模型保留来源，Cindy AI 在原描述行显示供应商', async () => {
     renderPanel();
+    await act(async () => {});
     const row = rowFor('GPT-5.6');
     expect(row.textContent).not.toContain('A very long English');
     expect(row.querySelector('[data-model-source-details]')?.textContent).toBe('OpenAI');
@@ -3736,7 +3751,7 @@ describe('统一面板 · 合并行与 wire id', () => {
     { providerId: 'openai', modelName: 'GPT-5.6', accountField: 'openAiAccount', named: true },
     { providerId: 'anthropic', modelName: 'Opus 5', accountField: 'subscriptionAccount', named: false },
     { providerId: 'anthropic', modelName: 'Opus 5', accountField: 'subscriptionAccount', named: true },
-  ])('全部和收藏显示识别出的账号，不重复已有账号名：$providerId / $named', ({ providerId, modelName, accountField, named }) => {
+  ])('全部和收藏显示识别出的账号，不重复已有账号名：$providerId / $named', async ({ providerId, modelName, accountField, named }) => {
     const original = providersRef.providers;
     const identity = 'recognized@example.test';
     providersRef.providers = original.map((value) => {
@@ -3749,6 +3764,7 @@ describe('统一面板 · 合并行与 wire id', () => {
     });
     try {
       renderPanel();
+      await act(async () => {});
       expect(rowFor(modelName).querySelector('[data-model-source-details]')?.textContent).toBe(`工作账号 · ${identity}`);
       fireEvent.click(within(rowFor(modelName)).getByRole('button', { name: '存为收藏' }));
       fireEvent.click(document.querySelector('[data-rail-item="favorites"]')!);
@@ -3758,8 +3774,9 @@ describe('统一面板 · 合并行与 wire id', () => {
     }
   });
 
-  it('收藏保持来源第二行，单供应商分栏在原描述行显示供应商', () => {
+  it('收藏保持来源第二行，单供应商分栏在原描述行显示供应商', async () => {
     renderPanel();
+    await act(async () => {});
     fireEvent.click(within(rowFor('GPT-5.6')).getByRole('button', { name: '存为收藏' }));
     fireEvent.click(document.querySelector('[data-rail-item="favorites"]')!);
     expect(rowFor('GPT-5.6').querySelector('[data-model-source-details]')?.textContent).toBe('OpenAI');
@@ -4491,7 +4508,6 @@ vi.mock('@/features/bots/botStore', () => ({ getEffectiveBotModelSettings: () =>
 }) }));
 vi.mock('@/features/bots/botPronounContext', () => ({ useBotTranslation: () => ({ t: (key: string) => key }) }));
 import { BotModelChainEditor } from '@/features/bots/BotModelChainEditor';
-import { BotTaskModelEditor } from '@/features/bots/BotTaskModelEditor';
 
 describe('teammate settings selected location catalog', () => {
   const originalProviders = providersRef.providers;
@@ -4517,14 +4533,12 @@ describe('teammate settings selected location catalog', () => {
     workerCapabilities.byAgent = {};
   });
 
-  it.each(['primary', 'backup', 'task'] as const)('shows shared-only Gemini and Terra in the %s picker', async (position) => {
+  it.each(['primary', 'backup'] as const)('shows shared-only Gemini and Terra in the %s picker', async (position) => {
     for (const model of models) {
       const route = { harness: 'codex' as const, providerId: 'xd', model: model.id,
         effort: 'high', fastMode: false, agentDeviceId: share };
       const local = { ...route, agentDeviceId: null, model: 'gpt-5.5' };
-      const view = render(position === 'task'
-        ? <BotTaskModelEditor value={route} onChange={vi.fn()} />
-        : <BotModelChainEditor value={position === 'backup' ? [local, route] : [route]} onChange={vi.fn()} />);
+      const view = render(<BotModelChainEditor value={position === 'backup' ? [local, route] : [route]} onChange={vi.fn()} />);
       const picker = view.container.querySelectorAll('button[aria-haspopup="listbox"]')[position === 'backup' ? 1 : 0]!;
       expect(picker.textContent).toContain(model.name);
       expect(picker.textContent).not.toContain('settings.auxiliaryModels.unavailable');
@@ -5101,4 +5115,39 @@ describe('verified DeepSeek aliases in the actual model panel', () => {
     await act(async () => { fireEvent.click(rowFor('DeepSeek V4.1 Flash')); });
     expect(change).toHaveBeenCalledWith('direct-ds', 'deepseek-v4-flash', expect.any(String), false);
   });
+});
+
+// Integration: chosen design C has one source average, and inspecting a reset
+// reminder must never select a model or allocate an account. Existing cases had
+// only an unconfigured pool; this uses two logged-in accounts in the real panel.
+it('shows one account-pool overview and opens reset details without changing the model', async () => {
+  const onModelChange = vi.fn();
+  const command = vi.fn(async ({providerId}: {providerId:string}) => ({
+    providerId,configured:providerId==='anthropic',accounts:providerId==='anthropic' ? [
+      {id:'a',identity:'first@example.test',paused:false,status:'ready',running:0,limit:4,
+        usage:{claude:{sevenDay:{utilization:66,resetsAt:Date.now()/1000+3*86400}}}},
+      {id:'b',identity:'soon@example.test',paused:false,status:'ready',running:0,limit:4,
+        usage:{claude:{sevenDay:{utilization:20,resetsAt:Date.now()/1000+6*3600}}}},
+    ] : [],
+  }));
+  Object.assign(window.electronAPI.subscriptionAccounts,{command});
+  const view = renderPanel({onModelChange});
+  await act(async()=>{});
+  fireEvent.click(document.querySelector('[data-rail-item="provider:anthropic"]')!);
+  await act(async()=>{});
+  expect(view.container.querySelectorAll('[data-pool-quota-summary]')).toHaveLength(1);
+  const summary=view.container.querySelector('[data-pool-quota-summary]')!;
+  expect(summary.textContent).toContain('57%');
+  expect(summary.textContent).not.toContain('subscriptionAccounts.quotaAverage');
+  expect(view.container.querySelector('[data-weekly-remaining="57"]')).not.toBeNull();
+  expect(summary.textContent).toMatch(/80%.*6h/);
+  expect(summary.querySelector('[data-pool-reset-time]')?.className).toContain('quota-bar-warn');
+  expect(summary.getAttribute('aria-label')).toContain('后重置');
+  expect(summary.textContent).not.toContain('subscriptionAccounts.quotaResetSoon');
+  expect(summary.getAttribute('aria-label')).toContain('subscriptionAccounts.quotaResetSoon');
+  expect(view.container.querySelector('[data-model-source-details]')?.textContent ?? '').not.toContain('%');
+  fireEvent.click(summary);
+  expect(screen.getByRole('tooltip').textContent).toContain('soon@example.test');
+  expect(onModelChange).not.toHaveBeenCalled();
+  expect(command.mock.calls.every(([value])=>['preview','read'].includes((value as any).action))).toBe(true);
 });

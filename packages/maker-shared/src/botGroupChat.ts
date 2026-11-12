@@ -276,7 +276,14 @@ export function botGroupThreadShareOperationId(messageId: string): string {
 
 export function buildBotGroupThreadShareCard(input: { messageId: string; threadRootId: string; authorName: string; text: string }) {
   const text = input.text.replace(/\s+/g, ' ').trim();
-  const clipped = text.length > THREAD_SHARE_FALLBACK_TEXT_MAX ? `${text.slice(0, THREAD_SHARE_FALLBACK_TEXT_MAX)}…` : text;
+  let clipped = text;
+  if (text.length > THREAD_SHARE_FALLBACK_TEXT_MAX) {
+    let end = THREAD_SHARE_FALLBACK_TEXT_MAX;
+    // Never split a surrogate pair (emoji and other astral characters are two UTF-16 units).
+    const high = text.charCodeAt(end - 1);
+    if (high >= 0xd800 && high <= 0xdbff) end -= 1;
+    clipped = `${text.slice(0, end)}…`;
+  }
   const author = input.authorName.trim() || '…';
   return {
     type: 'card' as const, namespace: BOT_GROUP_THREAD_SHARE_NAMESPACE, schemaRevision: THREAD_SHARE_REVISION,
@@ -451,6 +458,8 @@ export interface BotGroupPlanView {
    * A choice of the computer that made it, not shared chat state; absent where unsupported.
    */
   autoContinue?: boolean;
+  /** Remote host can change its local handoff setting for this open work plan. Absent on older hosts. */
+  canSetAutoContinue?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -537,6 +546,8 @@ export interface BotGroupSummary {
   canInvite?: boolean;
   /** Server groups: an owner or admin may also stop everyone's work, not only their own. */
   canStopAll?: boolean;
+  /** Explicit host/client support for stop scope; older hosts ignore scope and must not offer all. */
+  supportsScopedStop?: boolean;
   /**
    * Server groups whose server gives each request one teammate (the lead when nobody is named)
    * and arranges turns itself; no speaking modes (bot-group-chat.md §4).
@@ -799,6 +810,7 @@ export type BotGroupRemoteActionId =
   | 'plan-dismiss'
   | 'plan-continue'
   | 'plan-retry'
+  | 'plan-auto-continue'
   | 'plan-edit';
 
 /**

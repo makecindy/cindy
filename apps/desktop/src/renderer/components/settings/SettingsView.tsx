@@ -39,6 +39,7 @@ import { UserProfileCard } from './UserProfileCard';
 import { NotificationSection } from './NotificationSection';
 import { WindowBehaviorSection } from './WindowBehaviorSection';
 import { ComposerSendShortcutSection } from './ComposerSendShortcutSection';
+import { DefaultNewTaskWorkingDirSection } from './DefaultNewTaskWorkingDirSection';
 import { LanguageSection } from './LanguageSection';
 import { LogoutSection } from './LogoutSection';
 import { ImBotSection, isImBotSettingsGroup, type ImBotSettingsGroup } from './ImBotSection';
@@ -51,6 +52,7 @@ import { HelpAssistantPanel } from './HelpAssistantPanel';
 import { NewChatDefaultPermissionSection } from './NewChatDefaultPermissionSection';
 import { AgentResourceSection } from './AgentResourceSection';
 import { CollaborationSection } from './CollaborationSection';
+import { FirstRunGuideSection } from './FirstRunGuideSection';
 import { SetupMigrationSection } from './SetupMigrationSection';
 import { useAuth } from '@/contexts/AuthContext';
 import { useLocale } from '@/hooks/useLocale';
@@ -74,6 +76,7 @@ const SubagentModelSection = lazy(() => import('./SubagentModelSection').then(mo
 const AuxiliaryModelSection = lazy(() => import('./AuxiliaryModelSection').then(module => ({ default: module.AuxiliaryModelSection })));
 const VisionBridgeSection = lazy(() => import('./VisionBridgeSection').then(module => ({ default: module.VisionBridgeSection })));
 const ProvidersSection = lazy(() => import('./ProvidersSection').then(module => ({ default: module.ProvidersSection })));
+const ModelGroupsSection = lazy(() => import('./ModelGroupsSection').then(module => ({ default: module.ModelGroupsSection })));
 const McpServersSection = lazy(() => import('./McpServersSection').then(module => ({ default: module.McpServersSection })));
 const RemoteControlSection = lazy(() => import('./RemoteControlSection').then(module => ({ default: module.RemoteControlSection })));
 const LocalAgentSection = lazy(() => import('./LocalAgentSection').then(module => ({ default: module.LocalAgentSection })));
@@ -451,11 +454,6 @@ function SettingsViewContent() {
                       <UserProfileCard />
                     </section>
 
-                    {/* Section — 新电脑设置：从同账号另一台电脑迁移，并保留一次性配置清单。 */}
-                    <section id="settings-setup-migration" className="py-[18px]" aria-label={t('setupMigration.settings.title')}>
-                      <SetupMigrationSection />
-                    </section>
-
                     {/* Section — Language (py 18) */}
                     <section id={generalSettings.language.targetId} className="py-[18px]" aria-label={t(generalSettings.language.titleKey)}>
                       <LanguageSection />
@@ -489,6 +487,14 @@ function SettingsViewContent() {
                       aria-label={t(generalSettings.composer.titleKey)}
                     >
                       <ComposerSendShortcutSection />
+                    </section>
+
+                    <section
+                      id={generalSettings.defaultNewTaskWorkingDir.targetId}
+                      className="py-[18px]"
+                      aria-label={t(generalSettings.defaultNewTaskWorkingDir.titleKey)}
+                    >
+                      <DefaultNewTaskWorkingDirSection ownerId={dataOwnerId} />
                     </section>
 
                     {/* Section — 伙伴（功能级设置：怎么提醒你 + 带走/接回一个伙伴）。
@@ -541,6 +547,16 @@ function SettingsViewContent() {
                           />
                         </SettingsCard>
                       </SettingsSection>
+                    </section>
+
+                    {/* Section — 开始引导：首次登录后自动出现一次，这里可以重新打开。 */}
+                    <section id={generalSettings.firstRunGuide.targetId} className="py-[18px]" aria-label={t(generalSettings.firstRunGuide.titleKey)}>
+                      <FirstRunGuideSection />
+                    </section>
+
+                    {/* Section — 迁移助理：首次登录时由开始引导按需带出，这里只留靠后的常驻入口与一次性配置清单。 */}
+                    <section id="settings-setup-migration" className="py-[18px]" aria-label={t('setupMigration.settings.title')}>
+                      <SetupMigrationSection />
                     </section>
 
                     {/* Section — Experimental (py 18). */}
@@ -663,6 +679,12 @@ function SettingsViewContent() {
               </div>
             )}
 
+            {activeTab === 'model-groups' && (
+              <div role="tabpanel" id="settings-panel-model-groups" aria-labelledby="settings-tab-model-groups">
+                <ModelGroupsSection />
+              </div>
+            )}
+
             {activeTab === 'providers' && (
               <div
                 role="tabpanel"
@@ -686,10 +708,11 @@ function SettingsViewContent() {
                 aria-labelledby="settings-tab-remote-control"
               >
                 <section aria-label={t(localAgentSettings.connections.sectionKey)}>
-                  {/* 远程连接的页面标题在 RemoteControlSection 里，本机应用连接是它下面的分区。 */}
+                  {/* 本机应用连接排在 SSH 之后，Agent-Net 设置卡片保持在整页最底部。 */}
                   <SettingsPageScope>
-                    <RemoteControlSection />
-                    <LocalAgentSection />
+                    <RemoteControlSection>
+                      <LocalAgentSection />
+                    </RemoteControlSection>
                   </SettingsPageScope>
                 </section>
               </div>

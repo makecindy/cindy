@@ -113,7 +113,7 @@ function commandContainsPath(command, candidatePath) {
     const before = normalizedCommand[index - 1];
     const after = normalizedCommand[index + normalizedPath.length];
     const start = before === undefined || /\s|["'=]/.test(before);
-    const end = after === undefined || after === '/' || after === '"' || after === "'";
+    const end = after === undefined || /\s/.test(after) || after === '/' || after === '"' || after === "'";
     if (start && end) return true;
     index = normalizedCommand.indexOf(normalizedPath, index + 1);
   }
@@ -142,7 +142,8 @@ function repositoryWorktrees(cwd = rootDir) {
 }
 
 function extractArgumentPath(command, name) {
-  const match = command.match(new RegExp(`--${name}=(.*?)(?=\\s--[A-Za-z0-9-]+=|\\s--[A-Za-z0-9-]+\\s|$)`));
+  // Windows Crashpad puts /prefetch:N between the profile path and --switches.
+  const match = command.match(new RegExp(`--${name}=(.*?)(?=\\s--[A-Za-z0-9-]+=|\\s--[A-Za-z0-9-]+\\s|\\s/prefetch:\\d+(?:\\s|$)|$)`));
   return match?.[1]?.replace(/^['"]|['"]$/g, '') ?? null;
 }
 
@@ -189,24 +190,40 @@ function inferPassive(commands) {
     /(?:^|\s)--passive(?:\s|$)/.test(command));
 }
 
+function isPersonalRuntimeForCheckout(command, checkout) {
+  const desktop = path.join(checkout, 'apps', 'desktop');
+  if (!commandContainsPath(command, desktop)) return false;
+  try {
+    const { runtime } = JSON.parse(fs.readFileSync(path.join(desktop, 'resources', 'personal-native.json'), 'utf8'));
+    if (!runtime || typeof runtime.directory !== 'string' || !path.isAbsolute(runtime.directory)
+      || typeof runtime.key !== 'string' || !runtime.key
+      || typeof runtime.digest !== 'string' || !runtime.digest) return false;
+    // Match the main executable, not a path mentioned in an unrelated argument.
+    const executable = command.match(/^["']?(.+?\.app)[/\\]Contents[/\\]MacOS[/\\]Electron["']?(?:\s|$)/i);
+    if (!executable) return false;
+    const projectArg = command.slice(executable[0].length).replace(/^["']/, '').replaceAll('\\', '/').toLowerCase();
+    const projectPath = normalize(desktop);
+    if (!projectArg.startsWith(projectPath) || !/^(?:\s|["']|$)/.test(projectArg.slice(projectPath.length))) return false;
+    const app = executable[1];
+    if (normalize(app) === normalize(path.join(runtime.directory, 'Cindy.app'))) return true;
+    const installed = JSON.parse(fs.readFileSync(app + '.personal-install.json', 'utf8'));
+    return installed.key === runtime.key && installed.digest === runtime.digest;
+  } catch {
+    // Missing or invalid receipts do not establish ownership of a shared shell.
+    return false;
+  }
+}
+
 /** Identify Electron main processes and renderer readiness without trusting stale marker files. */
 export function identifyDesktopProcesses(processes, worktrees) {
   const byPid = new Map(processes.map((item) => [item.pid, item]));
   const result = [];
   for (const worktree of worktrees) {
     const electronRoot = path.join(worktree.rootDir, 'node_modules', 'electron');
-    const native = readJson(path.join(worktree.rootDir, 'apps/desktop/resources/personal-native.json'));
-    const sharedExecutable = typeof native?.runtime?.directory === 'string'
-      ? path.join(native.runtime.directory, 'Cindy.app/Contents/MacOS/Electron') : null;
     for (const proc of processes) {
-      const fixedMatch = /^(\/.*?\.app)\/Contents\/MacOS\/Electron /.exec(proc.command);
-      const installed = fixedMatch ? readJson(fixedMatch[1] + '.personal-install.json') : null;
-      const fixedRuntime = installed && typeof installed.key === 'string' && installed.key === native?.runtime?.key
-        && installed.digest === native?.runtime?.digest;
       if (
-        !(commandContainsPath(proc.command, electronRoot) || sharedExecutable &&
-          (proc.command.startsWith(sharedExecutable + ' ') || fixedRuntime) &&
-          commandContainsPath(proc.command, path.join(worktree.rootDir, 'apps/desktop'))) ||
+        (!commandContainsPath(proc.command, electronRoot)
+          && !isPersonalRuntimeForCheckout(proc.command, worktree.rootDir)) ||
         proc.command.includes('--type=') ||
         proc.command.includes('crashpad_handler')
       ) continue;
