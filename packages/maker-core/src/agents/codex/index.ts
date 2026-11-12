@@ -11015,12 +11015,16 @@ assertRouteCurrent();
       // Match the existing provider quota contract: an outer 400 must not hide
       // a contextual upstream payment status. Bare numbers are not statuses.
       const paymentRequired = /(?:\b(?:http|status|code|error)\b[^0-9a-z]{0,10}402\b|\(\s*402\s*\)|\b402\s+payment\s+required\b)/i.test(text);
+      // As with the shared signal extractor, require a field/phrase boundary:
+      // a forbidden upstream status must beat the wrapper's bad-request code.
+      const forbiddenResponse = /(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?|code)["']?\s*(?:[:=]\s*)?["']?403["']?(?=$|[\s,;:}\]])|\brequest\s+rejected\s*\(\s*403\s*\)/i.test(text);
       const uncertainTransport = tag === 'responseStreamDisconnected' || tag === 'responseStreamConnectionFailed'
         || /timeout|timed out|ECONNRESET|ECONNREFUSED|ENOTFOUND|connection reset|network error|stream disconnected/i.test(text);
       return !uncertainTransport
         && !isAuthRelatedErrorMessage(text)
         && !matchesDeterministicUsageExhaustionText(text)
         && !paymentRequired
+        && !forbiddenResponse
         && ((rejectedRequest && !signals.usageLimit) || compactRateLimit)
         && !isRemoteCompactEncryptedContentError(text);
     };
