@@ -991,7 +991,7 @@ it('keeps the acknowledged subscription across refresh and connection checks', a
     refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {},
     onBatch: async () => {}, onGithubPrs: async () => {} });
   const follow = (number: number) => ({ ...schedule('follow'), webhookTrigger: undefined, recurring: true,
-    executionMode: 'script', scriptConfig: { command: `node follow.mjs https://github.com/example/project/pull/${number}`, capabilities: [] } }) as Schedule;
+    preRunHook: { command: `node gate.mjs https://github.com/example/project/pull/${number}` } }) as Schedule;
   try {
     await remote.sync([follow(1)]);
     await vi.waitFor(() => expect(remote.githubEventsHealthy('https://github.com/example/project/pull/1')).toBe(true));
@@ -1021,7 +1021,7 @@ it('keeps ordinary Webhooks and connection status usable while a GitHub batch is
   const url = 'https://github.com/example/project/pull/1';
   try {
     await remote.sync([schedule('app', ['issues'], { preset: 'github-app', repositories: ['other/project'] }), schedule('ordinary'), { ...schedule('follow'), webhookTrigger: undefined, recurring: true,
-      executionMode: 'script', scriptConfig: { command: `node follow.mjs ${url}`, capabilities: [] } }]);
+      preRunHook: { command: `node gate.mjs ${url}` } }]);
     await vi.waitFor(() => expect(remote.githubEventsHealthy(url)).toBe(true));
     server.push({ batchId: 'slow-github', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 0,
       events: [{ deliveryId: 'comment', event: 'issue_comment', repository: 'example/project', number: 1, receivedAt: 1 }] });

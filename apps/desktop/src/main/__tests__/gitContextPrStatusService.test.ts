@@ -17,6 +17,7 @@ import {
 import type { GhCliTokenReadResult } from '../git-context/ghCliTokenSource';
 import { fetchPrSummary, summarizeChecks } from '../git-context/prSummary';
 import { PrFollowWatch, prStatusSignature } from '../git-context/prFollowWatch';
+import { followedGithubPrs } from '../scheduler-host/webhook/github';
 import { cachedGithubPrHeads, refreshGithubPrEvents } from '../git-context/githubPrEvents';
 import type { GithubClient } from '@cindy/github-client';
 
@@ -866,16 +867,15 @@ describe('PR follow watch', () => {
     expect(runNow).toHaveBeenCalledTimes(1);
   });
 
-  // A script-only follower had no preRunHook and missed App comments entirely. Busy peers must
+  // Explicit PR pre-run checks keep their existing event wakeup. Busy peers must
   // recover without another GitHub read, and must not rerun siblings that already handled the bell.
-  it('wakes script-only follows after capacity returns without repeating an already handled sibling', async () => {
+  it('wakes gated follows after capacity returns without repeating an already handled sibling', async () => {
     vi.useFakeTimers();
     let busy = true;
     const url = 'https://github.com/example/project/pull/85';
     const runNow = vi.fn<(id: string) => Promise<null>>(async () => null);
     const watch = new PrFollowWatch({
       listActive: async () => ['first', 'busy', 'paused', 'explicit-app'].map(id => schedule(id, url, {
-        preRunHook: undefined, executionMode: 'script', scriptConfig: { command: `node follow.mjs ${url}` },
         status: id === 'paused' ? 'paused' : 'active',
         webhookTrigger: id === 'explicit-app' ? { source: { preset: 'github-app', repositories: ['example/project'] } } : undefined,
       })),
@@ -890,6 +890,43 @@ describe('PR follow watch', () => {
       expect(runNow.mock.calls.map(call => call[0])).toEqual(['first', 'busy']);
       await vi.advanceTimersByTimeAsync(120_000);
       expect(runNow).toHaveBeenCalledTimes(2);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  // PR #9378 security review: a PR URL in an ordinary script is not event consent.
+  // Unit: subscription discovery + real comment/status wakeups, including deferred work;
+  // the previous script-only happy path did not distinguish consent from incidental URLs.
+  it('does not subscribe or wake ordinary scripts that only mention a PR URL', async () => {
+    vi.useFakeTimers();
+    const url = 'https://github.com/makecindy/cindy/pull/85';
+    let tasks = [schedule('ordinary', url, {
+      preRunHook: undefined, executionMode: 'script', scriptConfig: { command: `node report.mjs ${url}` },
+    })];
+    const runNow = vi.fn(async () => null);
+    let capacity = false;
+    const watch = new PrFollowWatch({ listActive: async () => tasks,
+      inflight: () => 0, hasCapacity: () => capacity, autoRunAllowed: () => true, runNow });
+    const ok = (headSha: string) => ({ ok: true, status: 'open', prNumber: 85, headSha }) as never;
+    try {
+      expect(followedGithubPrs(tasks)).toEqual([]);
+      await watch.notify(url);
+      watch.observe(Q, ok('old'));
+      watch.observe(Q, ok('new'));
+      await vi.advanceTimersByTimeAsync(5_000);
+      capacity = true;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runNow).not.toHaveBeenCalled();
+
+      // Removing a genuine follower's gate while it waits must also revoke its wakeup.
+      capacity = false;
+      tasks = [schedule('ordinary', url)];
+      expect(followedGithubPrs(tasks)).toEqual([url]);
+      await watch.notify(url);
+      tasks = [schedule('ordinary', url, { preRunHook: undefined,
+        executionMode: 'script', scriptConfig: { command: `node report.mjs ${url}` } })];
+      capacity = true;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runNow).not.toHaveBeenCalled();
     } finally { vi.clearAllTimers(); vi.useRealTimers(); }
   });
 

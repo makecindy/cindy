@@ -5,7 +5,7 @@
  * 查 GitHub。宿主这边本来就为标题栏、侧栏、卡片状态位定时刷新 PR 状态(PrStatusService);
  * 这一份刷新看到某个 PR 变了(提交、检查、评论线程、合并状态、审批、合并/关闭)时,
  * 把引用这个 PR 的定时任务马上跑一轮,前置检查 stdin 里带 `trigger`,检查据此跳过自己的
- * 节奏与探测直接完整读取。宿主识别前置检查或脚本任务命令中的 PR 链接,不解释跟进规则,
+ * 节奏与探测直接完整读取。宿主只识别前置检查中的 PR 链接,不把脚本正文当作事件授权,
  * GitLab MR 同样适用。
  *
  * 约束:
@@ -72,10 +72,9 @@ export function watchesPr(schedule: Schedule, url: string): boolean {
   return new RegExp(`${escapeRegExp(url)}(?![0-9])`, 'i').test(command);
 }
 
-/** Script automations keep the follow-up command in their task body, not a pre-run hook. */
+/** Only a configured pre-run check opts into implicit PR follow-up; script bodies are not consent. */
 export function prFollowCommand(schedule: Schedule): string {
-  return [schedule.preRunHook?.command, schedule.executionMode === 'script' ? schedule.scriptConfig?.command : undefined]
-    .filter(Boolean).join('\n');
+  return schedule.preRunHook?.command ?? '';
 }
 
 export class PrFollowWatch {
