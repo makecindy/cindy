@@ -67,6 +67,13 @@ describe('Bot group lane transactions', () => {
         remote_host_id TEXT, agent_device_id TEXT, provider_id TEXT, source TEXT NOT NULL, created_at INTEGER,
         updated_at INTEGER NOT NULL
       );
+      CREATE TABLE messages (id TEXT PRIMARY KEY);
+      CREATE TABLE mcp_app_view_states (
+        message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        server_id TEXT NOT NULL, server_revision TEXT NOT NULL, plugin_instance TEXT,
+        state_json TEXT NOT NULL, byte_length INTEGER NOT NULL
+      );
       CREATE TABLE bot_session_links (
         id TEXT PRIMARY KEY,
         bot_id TEXT NOT NULL REFERENCES bot_profiles(id) ON DELETE CASCADE,

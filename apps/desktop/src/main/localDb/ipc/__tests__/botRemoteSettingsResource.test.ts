@@ -127,7 +127,7 @@ describe('opaque teammate settings actions', () => {
     const paused = await f.get();
     expect(paused.blocks!.some(block => block.id === 'restart')).toBe(false);
     const resume = paused.actions!.find(action => action.id === actionId(paused, 'resume'))!;
-    expect(resume.confirmation?.title).toMatchObject({ fallback: 'Resume Teammate' });
+    expect(resume.confirmation?.title).toMatchObject({ fallback: "Resume Buddy" });
     expect(resume.confirmation?.body).not.toEqual(restart.confirmation?.body);
     expect(resume.confirmation?.body).toMatchObject({ translations: { 'zh-CN': expect.stringContaining('恢复后伙伴重新接收消息') } });
     for (const locale of ['zh-CN', 'zh-TW', 'ja', 'ko']) expect((resume.confirmation?.body as { translations: Record<string, string> }).translations[locale]).toBeTruthy();
