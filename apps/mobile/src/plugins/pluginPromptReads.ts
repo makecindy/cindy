@@ -44,23 +44,33 @@ export function createPluginPromptReads(invoke: PluginManagementInvoke, isCurren
           let result!: PluginPromptDisplay;
           for (;;) {
             if (!isCurrent() || reads.get(deviceId) !== read) throw new Error('PLUGIN_MANAGEMENT_STALE');
-            const capabilities = await client.capabilities();
-            const capability = capabilities.snapshot || capabilities.uiConsent ? 'supported' : 'unsupported';
-            const uiConsent = capabilities.uiConsent ? parsePluginUiConsent(await client.uiConsent()) : undefined;
-            const snapshot = !uiConsent && capability === 'supported' ? await client.snapshot() : null;
-            if (!isCurrent() || reads.get(deviceId) !== read) throw new Error('PLUGIN_MANAGEMENT_STALE');
-            subscriptions.set(deviceId, subscriptionAtStart === subscriptionIdentity(deviceId) ? subscriptionAtStart : null);
-            result = { capability, ...(uiConsent ? { uiConsent } : {}), snapshot: snapshot ? { ...snapshot,
-              ghosts: snapshot.ghosts.filter(plugin => pluginNeedsUiApproval(plugin) && !plugin.uiPromptSuppressed),
-              market: { items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] },
-            } : null };
+            // Notifications received during the debounce window are covered by this read.
+            dirty.delete(deviceId);
+            try {
+              const capabilities = await client.capabilities();
+              const capability = capabilities.snapshot || capabilities.uiConsent ? 'supported' : 'unsupported';
+              const uiConsent = capabilities.uiConsent ? parsePluginUiConsent(await client.uiConsent()) : undefined;
+              const snapshot = !uiConsent && capability === 'supported' ? await client.snapshot() : null;
+              if (!isCurrent() || reads.get(deviceId) !== read) throw new Error('PLUGIN_MANAGEMENT_STALE');
+              subscriptions.set(deviceId, subscriptionAtStart === subscriptionIdentity(deviceId) ? subscriptionAtStart : null);
+              result = { capability, ...(uiConsent ? { uiConsent } : {}), snapshot: snapshot ? { ...snapshot,
+                ghosts: snapshot.ghosts.filter(plugin => pluginNeedsUiApproval(plugin) && !plugin.uiPromptSuppressed),
+                market: { items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] },
+              } : null };
+            } catch (error) {
+              if (!client.isCurrent()) throw error;
+              const refreshQueued = dirty.get(deviceId) === true;
+              dirty.set(deviceId, true);
+              // A queued notification earns one follow-up; failure alone never retries.
+              if (!refreshQueued) throw error;
+            }
             if (!dirty.get(deviceId)) break;
             dirty.delete(deviceId);
             await new Promise(resolve => setTimeout(resolve, 250));
           }
           completedAt.set(deviceId, Date.now());
           return result;
-        } finally { loading.delete(deviceId); }
+        } finally { if (reads.get(deviceId) === read) loading.delete(deviceId); }
       });
       loading.set(deviceId, true);
       reads.set(deviceId, read);

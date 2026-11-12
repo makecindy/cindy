@@ -6,6 +6,7 @@ import { createRoot } from 'react-dom/client';
 import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { createPluginManagementClient, type PluginManagementInvoke } from '@/plugins/pluginManagementClient';
 import { createPluginPromptReads } from '@/plugins/pluginPromptReads';
+import { pluginUiApprovalNotice } from '@/plugins/pluginUiApprovalNotice';
 import { PluginPromptReadsProvider, usePluginPromptReads } from '@/plugins/PluginPromptReadsContext';
 import { createPluginManagementController } from '@/plugins/pluginManagementController';
 import { isBoundedPluginResponse, parsePluginManagementDetail, parsePluginManagementReceipt,
@@ -536,4 +537,126 @@ it('retains an actionable UI hint while excluding suppressed, approved and unrel
   expect(display.snapshot?.ghosts).toEqual([needsUi]);
   expect(display.snapshot?.uiCapabilityApproval).toBe(true);
   expect(display.snapshot?.market.items).toEqual([]);
+});
+
+// PR #10206 review regressions, unit: real reader/controller/notice entries.
+// Existing tests missed changed consent revisions, distinct notifications during
+// debounce/failure, old-generation cleanup and unsupported proactive prompts.
+// Only transport is controlled; fake timers expose requests and final UI outcomes.
+describe('plugin hint review regressions', () => {
+  const needsUi: ManagedPlugin = { ...plugin, manifest: { ...plugin.manifest, tools: [{ name: 'run' }],
+    mcpApps: { ui: { resources: [{ uri: 'ui://run', file: 'page.html' }], tools: { run: {} } } } } };
+  const consent = { version: 1 as const, uiCapabilityApproval: true as const, item: {
+    instanceKey: plugin.instanceKey, name: plugin.manifest.name,
+    approvalToken: 'approved:12345678-1234-4123-8123-123456789abc',
+  } };
+  function compactHost() {
+    const h = host(() => receipt('succeeded'));
+    const invoke: PluginManagementInvoke = async (id, channel, args, options) => {
+      options?.preSend?.();
+      if (channel.endsWith(':manifest')) return { collections: [{ id: 'plugins', actions: [
+        { id: 'management:snapshot' }, { id: 'management:ui-consent' },
+      ] }] } as never;
+      if ((args?.[0] as Envelope)?.actionId === 'management:ui-consent') return { result: consent } as never;
+      return h.invoke(id, channel, args, options);
+    };
+    const client = createPluginManagementClient({ deviceId: 'host-1', invoke });
+    const reads = createPluginPromptReads(invoke, () => true);
+    const c = createPluginManagementController(client, { readDisplay: () => reads.read('host-1'), createOperationId: () => 'operation-1' });
+    controllers.push(c);
+    return { ...h, c };
+  }
+  it.each(['approveUiFromConsent', 'deferUiFromConsent'] as const)(
+    'keeps the displayed approval revision for %s', async action => {
+      vi.useFakeTimers();
+      const h = compactHost(); await h.c.refresh();
+      const displayed = h.c.getState().uiConsent!.item!;
+      h.setFacts({ ...snapshot([{ ...needsUi, approval: { state: 'approved', revision: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' } }]), uiCapabilityApproval: true });
+      await h.c[action](displayed);
+      expect(h.requests.filter(r => r.actionId === 'management:begin')).toHaveLength(0);
+      expect(h.c.getState()).toMatchObject({ outcome: 'failed', errorCode: 'PLUGIN_INSTALL_CHANGED' });
+      h.setFacts({ ...snapshot([needsUi]), uiCapabilityApproval: true });
+      await h.c[action](displayed);
+      expect(h.requests.filter(r => r.actionId === 'management:begin')).toEqual([
+        expect.objectContaining({ resourceRef: expect.objectContaining({ id: displayed.instanceKey }),
+          input: expect.objectContaining({ expectedInstalledApproval: displayed.approvalToken }) }),
+      ]);
+    },
+  );
+  it.each([{ queued: false, retryFails: false }, { queued: true, retryFails: false }, { queued: true, retryFails: true }])(
+    'consumes a notification queued during a failed read ($queued, retryFails=$retryFails)', async ({ queued, retryFails }) => {
+    vi.useFakeTimers();
+    const h = host(); const pending = deferred<unknown>(); let calls = 0;
+    const invoke: PluginManagementInvoke = async (id, channel, args, options) => {
+      if (!channel.endsWith(':manifest')) {
+        calls++;
+        if (calls === 1) return await pending.promise as never;
+        // The one notification allows one follow-up, not an automatic retry loop.
+        if (retryFails) throw new Error('READ_FAILED');
+      }
+      return h.invoke(id, channel, args, options);
+    };
+    const reads = createPluginPromptReads(invoke, () => true);
+    const result = reads.read('host-1').catch(error => error);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toBe(1);
+    if (queued) { reads.invalidate('host-1', {}); void reads.read('host-1').catch(() => {}); }
+    pending.reject(new Error('READ_FAILED'));
+    await vi.advanceTimersByTimeAsync(250);
+    expect(calls).toBe(queued ? 2 : 1);
+    expect(await result).toMatchObject(queued && !retryFails ? { capability: 'supported' } : { message: 'READ_FAILED' });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls).toBe(queued ? 2 : 1);
+  });
+  it('consumes distinct notifications received inside the same debounce window', async () => {
+    vi.useFakeTimers();
+    const h = host(); const reads = createPluginPromptReads(h.invoke, () => true);
+    await reads.read('host-1');
+    reads.invalidate('host-1', {}); const result = reads.read('host-1');
+    await vi.advanceTimersByTimeAsync(100);
+    reads.invalidate('host-1', {}); void reads.read('host-1');
+    await vi.advanceTimersByTimeAsync(1000); await result;
+    expect(h.requests.map(r => r.actionId)).toEqual(['management:snapshot', 'management:snapshot']);
+  });
+  it('does not let an old read clear a new connection generation in-flight read', async () => {
+    vi.useFakeTimers();
+    const h = host(); const old = deferred<unknown>(), fresh = deferred<unknown>(); let calls = 0;
+    const invoke: PluginManagementInvoke = async (id, channel, args, options) => {
+      if (!channel.endsWith(':manifest')) {
+        calls++;
+        if (calls === 1) return await old.promise as never;
+        if (calls === 2) return await fresh.promise as never;
+      }
+      return h.invoke(id, channel, args, options);
+    };
+    const reads = createPluginPromptReads(invoke, () => true);
+    const first = reads.read('host-1').catch(error => error);
+    await vi.advanceTimersByTimeAsync(0);
+    reads.invalidate();
+    const second = reads.read('host-1').catch(error => error);
+    await vi.advanceTimersByTimeAsync(250);
+    old.resolve({ result: snapshot() });
+    expect(await first).toMatchObject({ message: 'PLUGIN_MANAGEMENT_STALE' });
+    const third = reads.read('host-1').catch(error => error);
+    await vi.advanceTimersByTimeAsync(0);
+    fresh.resolve({ result: snapshot() });
+    const results = await Promise.all([second, third]);
+    expect(calls).toBe(2);
+    expect(results).toEqual([expect.objectContaining({ capability: 'supported' }), expect.objectContaining({ capability: 'supported' })]);
+  });
+  it.each(['unsupported', 'snapshot', 'ui-consent'] as const)(
+    'requires UI approval capability for proactive hints (%s)', async source => {
+      vi.useFakeTimers();
+      const h = host(); h.setFacts({ ...snapshot([needsUi]), ...(source === 'snapshot' ? { uiCapabilityApproval: true as const } : {}) });
+      const c = controller(h.client); await c.refresh();
+      const state = source === 'ui-consent' ? { ...c.getState(), snapshot: null, uiConsent: consent } : c.getState();
+      const target = source === 'ui-consent' ? consent.item : needsUi;
+      const notice = pluginUiApprovalNotice(target, state, c, key => key, true);
+      if (source === 'unsupported') {
+        expect(notice).toBeUndefined();
+        // The explicit settings view retains its existing update-Host explanation.
+        expect(pluginUiApprovalNotice(target, state, c, key => key)?.detail).toBe('plugins.uiApproval.updateHost');
+      } else expect(notice?.actions).toHaveLength(2);
+    },
+  );
 });

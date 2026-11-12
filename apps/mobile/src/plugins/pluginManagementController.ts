@@ -121,9 +121,9 @@ export function createPluginManagementController(client: PluginManagementClient,
       }
       const snapshot = await readSnapshot(token);
       if (!current(token)) return;
-      if (!receiver && installed && 'instanceKey' in installed) {
+      if (!receiver && installed && !('manifest' in installed)) {
         receiver = snapshot.ghosts.find(g => g.instanceKey === installed.instanceKey);
-        if (!receiver) throw new Error('PLUGIN_INSTALL_CHANGED');
+        if (!receiver || pluginApprovalToken(receiver) !== installed.approvalToken) throw new Error('PLUGIN_INSTALL_CHANGED');
         request = { ...intent, installed: receiver } as BeginIntent;
       }
       if (!receiverCurrent(snapshot)) throw new Error('PLUGIN_INSTALL_CHANGED');

@@ -11,8 +11,8 @@ export function pluginUiApprovalNotice(
   proactive = false,
 ): PluginNoticeProps | undefined {
   if (!plugin || !state || !controller || ('manifest' in plugin && !pluginNeedsUiApproval(plugin))) return;
-  if (proactive && ('manifest' in plugin ? plugin.uiPromptSuppressed : false)) return;
   const supported = state.snapshot?.uiCapabilityApproval === true || state.uiConsent?.uiCapabilityApproval === true;
+  if (proactive && (!supported || ('manifest' in plugin && plugin.uiPromptSuppressed))) return;
   const pending = state.busy || ['running', 'confirmation', 'unknown'].includes(state.outcome);
   return {
     testID: 'plugins.uiApproval',
