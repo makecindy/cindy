@@ -9,11 +9,33 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SelfHostedRelayCommand } from '../../../../shared/selfHostedRelay';
 import { startRemoteSwitch } from '../agentNetRemoteSwitch';
+import { createAgentNetRemoteSwitch, type AgentNetPendingSwitch } from '../../../../main/device-link/agentNetRemoteSwitch';
 
 beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe('remote Agent-Net switch result on the requesting computer', () => {
+  // 实际目标的期限包括先回答后切换的延迟；10ms 往返会使重试落在旧等待余量的边界。
+  it('waits for the target recovery deadline before reporting a failed encrypted reconnection', async () => {
+    const settings = { agentNetEnabled: false, agentNetPendingSwitch: null as AgentNetPendingSwitch | null };
+    const service = createAgentNetRemoteSwitch({ readSettings: () => settings,
+      writeChangedBy: async () => {}, writePending: async (p) => { settings.agentNetPendingSwitch = p; },
+      readiness: () => null, apply: async (enabled) => { settings.agentNetEnabled = enabled; return null; },
+      linkIsAgentNet: () => false, now: () => Date.now(), pid: 100, isProcessAlive: () => false,
+      log: { info: () => {}, warn: () => {} } });
+    const command = vi.fn(async (input: SelfHostedRelayCommand) => {
+      if (input.type !== 'peer-agent-net') throw new Error('unexpected command');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      try { return { state: {}, peer: { ok: true, result: await service.handle(input.request, 'controller', 'Other computer') } }; }
+      catch (error) { return { state: {}, peer: { ok: false, code: 'IPC_ERROR', message: (error as Error).message } }; }
+    });
+    vi.stubGlobal('window', { setTimeout: globalThis.setTimeout, electronAPI: { selfHostedRelay: { command } } });
+    const result = startRemoteSwitch('deadline-with-latency', 'agent-net');
+    await vi.advanceTimersByTimeAsync(65_000);
+    await expect(result).resolves.toBe('reverted');
+    expect(settings).toMatchObject({ agentNetEnabled: false, agentNetPendingSwitch: null });
+  });
+
   // 独立审查 #10095：V2-only 网络即使保存 enabled=false，实际链路仍为 Agent-Net，不得报切回成功。
   it('does not treat a disabled flag on an encrypted connection as a completed Device Link switch', async () => {
     const command = vi.fn(async (input: SelfHostedRelayCommand) => ({ state: {}, peer: { ok: true, result:

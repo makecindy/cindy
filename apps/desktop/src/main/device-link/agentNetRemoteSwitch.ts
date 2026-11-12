@@ -43,7 +43,7 @@ export interface AgentNetPendingSwitch {
   deadlineAt: number;
   /** 记录这次切换的进程；它不在了就没人能确认，启动时直接退回。 */
   pid: number;
-  /** 已接受取消，原来的打开不能再被确认；保留记录直到实际恢复。 */
+  /** 已开始恢复原设置，不能再确认原来的打开；保留记录直到实际恢复。 */
   restoring?: boolean;
 }
 
@@ -72,6 +72,8 @@ export interface AgentNetRemoteSwitchPorts {
 
 /** 回答先离开这台电脑，再重启连接。 */
 export const APPLY_DELAY_MS = 400;
+/** 一次恢复的额外重试，避免短暂中转故障留下无人处理的 pending；不是持续轮询。 */
+const RESTORE_RETRY_DELAYS_MS = [1_000, 3_000, 10_000];
 
 export class AgentNetSwitchError extends Error {
   constructor(readonly code: AgentNetSwitchErrorCode, detail: string) {
@@ -124,20 +126,32 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
   }
 
   /** 没等到确认：回到原来的设置。已确认、已被本机改过或已被新的切换取代时什么都不做。 */
-  function revert(switchId: string, reason: 'deadline' | 'interrupted'): Promise<void> {
+  function revert(switchId: string, reason: 'deadline' | 'interrupted', attempt = 0): Promise<void> {
     return serially(async () => {
       const pending = ports.readSettings().agentNetPendingSwitch;
       if (!pending || pending.switchId !== switchId) return;
+      const epoch = localChangeEpoch;
       clearDeadline();
       log.warn('remote agent-net switch was not confirmed; going back', { reason, previous: pending.previous });
-      const error = await ports.apply(pending.previous);
-      if (error) {
-        log.warn('going back after an unconfirmed remote agent-net switch failed', { error });
-        return;
+      let error: string | null;
+      try {
+        // 恢复已开始后，迟到的确认不能取消恢复（包括下一次重试）。
+        if (!pending.restoring) await ports.writePending({ ...pending, restoring: true });
+        error = await ports.apply(pending.previous);
+        if (!error) {
+          if (ports.readSettings().agentNetPendingSwitch?.switchId !== switchId) return;
+          // 恢复完成后再清记录；中途退出，下次启动仍能继续恢复。
+          await ports.writeChangedBy(null);
+          await ports.writePending(null);
+          return;
+        }
+      } catch {
+        error = 'RECOVERY_INTERRUPTED';
       }
-      // 恢复完成后再清记录；中途退出，下次启动仍能继续恢复。
-      await ports.writeChangedBy(null);
-      await ports.writePending(null);
+      log.warn('going back after an unconfirmed remote agent-net switch failed', { error, attempt });
+      if (epoch !== localChangeEpoch || ports.readSettings().agentNetPendingSwitch?.switchId !== switchId) return;
+      const delay = RESTORE_RETRY_DELAYS_MS[attempt];
+      if (delay !== undefined) deadlineTimer = later(() => void revert(switchId, reason, attempt + 1), delay);
     });
   }
 
@@ -178,6 +192,7 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
       if (block) throw new AgentNetSwitchError('AGENT_NET_SWITCH_NOT_READY', block);
     }
     const now = ports.now();
+    let confirmBy: number | null = null;
     if (enabled) {
       const next: AgentNetPendingSwitch = {
         switchId,
@@ -186,6 +201,7 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
         deadlineAt: now + APPLY_DELAY_MS + AGENT_NET_SWITCH_CONFIRM_MS,
         pid: ports.pid,
       };
+      confirmBy = next.deadlineAt;
       await ports.writePending(next);
       armDeadline(next);
     }
@@ -223,20 +239,21 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
       }
       await ports.writeChangedBy(null);
     }), APPLY_DELAY_MS);
-    return { version: AGENT_NET_SWITCH_VERSION, switchId, enabled, confirmWithinMs: enabled ? AGENT_NET_SWITCH_CONFIRM_MS : null };
+    // 与重发回答相同，返回实际剩余期限；发起端才不会在目标的 400ms 延迟窗口之前判定恢复失败。
+    return { version: AGENT_NET_SWITCH_VERSION, switchId, enabled, confirmWithinMs: confirmBy === null ? null : Math.max(0, confirmBy - ports.now()) };
   }
 
   async function confirm(switchId: string, controllerId: string): Promise<AgentNetSwitchConfirmed> {
     const pending = ports.readSettings().agentNetPendingSwitch;
-    if (!pending || pending.restoring || pending.switchId !== switchId || pending.controllerId !== controllerId) {
+    if (!pending || pending.restoring || ports.now() >= pending.deadlineAt || pending.switchId !== switchId || pending.controllerId !== controllerId) {
       throw new AgentNetSwitchError('AGENT_NET_SWITCH_STALE', 'no matching remote switch is waiting');
     }
     // 只有经 Agent-Net 真的连回来才算数；对方还在重连时会稍后重试。
     if (!ports.linkIsAgentNet(controllerId)) {
       throw new AgentNetSwitchError('AGENT_NET_SWITCH_NOT_ON_AGENT_NET', 'confirmation must arrive over Agent-Net');
     }
-    clearDeadline();
     await ports.writePending(null);
+    clearDeadline();
     log.info('remote agent-net switch confirmed');
     return { version: AGENT_NET_SWITCH_VERSION, switchId, confirmed: true };
   }

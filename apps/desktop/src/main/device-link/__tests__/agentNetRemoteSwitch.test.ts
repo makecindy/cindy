@@ -29,10 +29,11 @@ function setup(initial: { enabled?: boolean; onlyEncrypted?: boolean; relayOnly?
   const alive = new Set<number>();
   let block: 'NOT_SIGNED_IN' | null = null;
   const apply = vi.fn(async (enabled: boolean): Promise<string | null> => { settings.agentNetEnabled = enabled; return null; });
+  const writePending = vi.fn(async (value: AgentNetPendingSwitch | null) => { settings.agentNetPendingSwitch = value; });
   const service = createAgentNetRemoteSwitch({
     readSettings: () => settings,
     writeChangedBy: async (value) => { settings.agentNetChangedBy = value; },
-    writePending: async (value) => { settings.agentNetPendingSwitch = value; },
+    writePending,
     readiness: () => block,
     disableBlock: () => initial.relayOnly ? 'V2_ONLY_RELAY' : null,
     apply,
@@ -43,7 +44,7 @@ function setup(initial: { enabled?: boolean; onlyEncrypted?: boolean; relayOnly?
     log: { info: () => undefined, warn: () => undefined },
   });
   const turnOn = () => service.handle({ action: 'set', enabled: true, switchId: SWITCH }, CONTROLLER, 'Studio Mac');
-  return { service, settings, agentNetLinks, alive, apply, blockWith: (value: 'NOT_SIGNED_IN') => { block = value; }, turnOn };
+  return { service, settings, agentNetLinks, alive, apply, writePending, blockWith: (value: 'NOT_SIGNED_IN') => { block = value; }, turnOn };
 }
 
 beforeEach(() => { vi.useFakeTimers(); });
@@ -86,7 +87,7 @@ describe('remote Agent-Net switch on the switched computer', () => {
 
   it('answers before switching, then goes back by itself when no confirmation arrives', async () => {
     const { settings, turnOn } = setup();
-    await expect(turnOn()).resolves.toMatchObject({ switchId: SWITCH, enabled: true, confirmWithinMs: AGENT_NET_SWITCH_CONFIRM_MS });
+    await expect(turnOn()).resolves.toMatchObject({ switchId: SWITCH, enabled: true, confirmWithinMs: AGENT_NET_SWITCH_CONFIRM_MS + APPLY_DELAY_MS });
     // 回答时还没切：切换会重启承载回答的连接。
     expect(settings.agentNetEnabled).toBe(false);
     expect(settings.agentNetChangedBy).toMatchObject({ deviceId: CONTROLLER, deviceName: 'Studio Mac', enabled: true });
@@ -96,7 +97,7 @@ describe('remote Agent-Net switch on the switched computer', () => {
     expect(settings).toMatchObject({ agentNetEnabled: false, agentNetPendingSwitch: null, agentNetChangedBy: null });
   });
 
-  it('only counts a confirmation from the same computer over Agent-Net', async () => {
+  it('only counts a confirmation from the same computer over Agent-Net before its deadline', async () => {
     const { service, settings, agentNetLinks, turnOn } = setup();
     await turnOn();
     await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS);
@@ -109,6 +110,21 @@ describe('remote Agent-Net switch on the switched computer', () => {
     expect(settings).toMatchObject({ agentNetEnabled: true, agentNetPendingSwitch: null });
     // 「由谁打开」保留到本机再改。
     expect(settings.agentNetChangedBy).toMatchObject({ enabled: true });
+    // 计时回调被队列/启动工作推迟时，过期记录也不能接受确认。
+    const expired = setup({ enabled: true, pending: { switchId: SWITCH, controllerId: CONTROLLER, previous: false, deadlineAt: Date.now() - 1, pid: 100 } });
+    expired.agentNetLinks.add(CONTROLLER);
+    await expect(expired.service.handle({ action: 'confirm', switchId: SWITCH }, CONTROLLER, 'Studio Mac')).rejects.toThrow('[AGENT_NET_SWITCH_STALE]');
+  });
+
+  it('retains the recovery timer when saving the confirmation temporarily fails', async () => {
+    const { service, settings, agentNetLinks, turnOn, writePending } = setup();
+    await turnOn();
+    await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS);
+    agentNetLinks.add(CONTROLLER);
+    writePending.mockRejectedValueOnce(new Error('temporary settings write failure'));
+    await expect(service.handle({ action: 'confirm', switchId: SWITCH }, CONTROLLER, 'Studio Mac')).rejects.toThrow('temporary settings write failure');
+    await vi.advanceTimersByTimeAsync(AGENT_NET_SWITCH_CONFIRM_MS);
+    expect(settings).toMatchObject({ agentNetEnabled: false, agentNetPendingSwitch: null });
   });
 
   it('lets the person at the computer win while a remote switch waits', async () => {
@@ -178,6 +194,31 @@ describe('remote Agent-Net switch on the switched computer', () => {
     const restarted = setup({ enabled: true, pending: original.settings.agentNetPendingSwitch!, pid: 101 });
     await restarted.service.recover();
     expect(restarted.settings).toMatchObject({ agentNetEnabled: false, agentNetPendingSwitch: null });
+  });
+
+  // #10095 discussion_r4546598399：一次恢复失败不能留下只有重启才能重试的 pending。
+  it('retries a failed automatic restore and rejects late confirmation while restoring', async () => {
+    const { service, settings, turnOn, apply, agentNetLinks } = setup();
+    await turnOn();
+    await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS);
+    apply.mockResolvedValueOnce('START_FAILED');
+    await vi.advanceTimersByTimeAsync(AGENT_NET_SWITCH_CONFIRM_MS);
+    expect(settings).toMatchObject({ agentNetEnabled: true, agentNetPendingSwitch: { restoring: true } });
+    agentNetLinks.add(CONTROLLER);
+    await expect(service.handle({ action: 'confirm', switchId: SWITCH }, CONTROLLER, 'Studio Mac')).rejects.toThrow('[AGENT_NET_SWITCH_STALE]');
+    await vi.advanceTimersToNextTimerAsync();
+    expect(settings).toMatchObject({ agentNetEnabled: false, agentNetPendingSwitch: null });
+  });
+
+  it('stops automatic retries after a persistent restore failure without losing the recovery record', async () => {
+    const { settings, turnOn, apply } = setup();
+    await turnOn();
+    await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS);
+    apply.mockResolvedValue('START_FAILED');
+    await vi.runAllTimersAsync();
+    expect(settings).toMatchObject({ agentNetEnabled: true, agentNetPendingSwitch: { restoring: true } });
+    expect(apply.mock.calls.filter(([enabled]) => !enabled).length).toBeGreaterThan(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('goes back on start-up when the process that waited for confirmation is gone', async () => {
