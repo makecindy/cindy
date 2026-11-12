@@ -1,3 +1,4 @@
+import '@/styles/chatContentDirection.css';
 import { BotChatQuoteInBubble } from '@/features/bots/BotChatQuoteViews';
 import { useBotChatQuote } from '@/features/bots/botChatQuoteContext';
 import { botReplyQuoteFor } from '@/features/bots/botDmQuote';
@@ -1615,7 +1616,7 @@ export function UserMessage({
                         aria-hidden="true"
                         className={cn(
                           'invisible absolute inset-x-4 top-0 max-h-0 overflow-hidden',
-                          'whitespace-pre-wrap [overflow-wrap:anywhere]',
+                          'chat-content-text whitespace-pre-wrap [overflow-wrap:anywhere]',
                         )}
                       >
                         {collapseMeasureBody}
@@ -1625,7 +1626,7 @@ export function UserMessage({
                       <div
                         data-selection-quote-body=""
                         className={cn(
-                          'min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]',
+                          'chat-content-text min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]',
                           longMessageCollapsed &&
                             (isScheduledAutomation ? 'line-clamp-3' : 'line-clamp-10'),
                         )}
@@ -1706,7 +1707,7 @@ export function UserMessage({
                       <div
                         data-selection-quote-body=""
                         className={cn(
-                          'whitespace-pre-wrap [overflow-wrap:anywhere]',
+                          'chat-content-text whitespace-pre-wrap [overflow-wrap:anywhere]',
                           longMessageCollapsed &&
                             (isScheduledAutomation ? 'line-clamp-3' : 'line-clamp-10'),
                         )}
