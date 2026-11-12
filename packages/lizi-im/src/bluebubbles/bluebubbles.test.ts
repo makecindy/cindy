@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { IMHost, IMMessageEvent } from '../types.js';
 import { LocalWebhookReceiver } from '../localWebhook.js';
 import { BlueBubblesApi, BLUEBUBBLES_MAX_BYTES, type BlueBubblesMessage } from './api.js';
-import { BlueBubblesIM } from './index.js';
+import { BLUEBUBBLES_SECRET_KEYS, BlueBubblesIM } from './index.js';
 import { UnsupportedInboundMediaError } from '../inboundKind.js';
 import { BlueBubblesReceipts, type BlueBubblesState } from './state.js';
 
@@ -35,6 +35,7 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
     ...(media ? { media } : {}),
     ...(files ? { files } : {}),
     secrets: { read: key => secrets.get(key) ?? null, write: (key, value) => { secrets.set(key, value); return true; },
+      readResult: key => secrets.has(key) ? { kind: 'value', value: secrets.get(key)! } : { kind: 'missing' },
       remove: key => { secrets.delete(key); }, isAvailable: () => true },
     ipc: { handle() {}, broadcast() {}, throwIpcError(_code, message): never { throw new Error(message); } },
     paths: { feishuMediaDir: 'unused' }, httpPostForm: async () => ({ status: 200, body: {} }),
@@ -55,10 +56,33 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
   };
   const webhook = (guid: string, url = callbackUrl) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ type: 'new-message', data: { guid, text: 'forged payload', handle: { address: 'attacker' } } }) });
-  return { im, api, secrets, received, message, webhook, send, chat, otherChat, advance: (ms: number) => { now += ms; }, state: () => saved!, url: () => callbackUrl };
+  return { im, api, host, secrets, received, message, webhook, send, chat, otherChat, advance: (ms: number) => { now += ms; }, state: () => saved!, url: () => callbackUrl };
 }
 
 describe('BlueBubbles local ingress', () => {
+  // Tier 1, PR #10241/r4552243405: an unreadable saved key must not become a
+  // missing-key rollback entry. Abort through the production edit entry point.
+  it.each([...BLUEBUBBLES_SECRET_KEYS, 'unsupported-host'])('keeps the live connection and secrets intact when snapshotting %s fails', async key => {
+    const f = await fixture();
+    const previous = new Map(f.secrets);
+    const config = f.im.getEditableConfig();
+    const dispose = vi.spyOn(f.im, 'dispose');
+    const write = vi.spyOn(f.host.secrets, 'write');
+    const remove = vi.spyOn(f.host.secrets, 'remove');
+    if (key === 'unsupported-host') delete f.host.secrets.readResult;
+    else {
+      const read = f.host.secrets.readResult!;
+      f.host.secrets.readResult = name => name === `test-${key}` ? { kind: 'error' } : read(name);
+    }
+    await expect(f.im.updateCredentials({ ...config, password: 'replacement-test-only' })).rejects.toThrow('BLUEBUBBLES_SECRET_UNAVAILABLE');
+    expect(dispose).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+    expect(f.api.unregisterWebhook).not.toHaveBeenCalled();
+    expect(f.secrets).toEqual(previous);
+    expect(f.im.getStatus().kind).toBe('connected');
+  });
+
   // Tier 1: editing an existing connection must retain secrets/receipts and recover a failed reconnect.
   it('updates settings without resetting credentials or receipts, and restores settings on failure', async () => {
     const f = await fixture();

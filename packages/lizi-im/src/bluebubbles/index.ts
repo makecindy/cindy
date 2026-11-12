@@ -159,8 +159,12 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
 
   async updateCredentials(input: BlueBubblesConfig & { password?: string }): Promise<void> {
     const config = parseBlueBubblesConfig(input);
-    const previous = BLUEBUBBLES_SECRET_KEYS.map(key => [key, this.host.secrets.read(this.key(key))] as const);
-    const password = input.password || this.host.secrets.read(this.key('bluebubbles-password'));
+    const previous = BLUEBUBBLES_SECRET_KEYS.map(key => {
+      const result = this.host.secrets.readResult?.(this.key(key)) ?? { kind: 'error' as const };
+      if (result.kind === 'error') throw new Error('BLUEBUBBLES_SECRET_UNAVAILABLE');
+      return [key, result.kind === 'value' ? result.value : null] as const;
+    });
+    const password = input.password || previous.find(([key]) => key === 'bluebubbles-password')?.[1];
     if (!password || password.length > 4096 || !this.host.secrets.isAvailable()) throw new Error('BLUEBUBBLES_SECRET_UNAVAILABLE');
     const account = this.host.accountScope?.capture();
     let expectedGeneration = this.generation;

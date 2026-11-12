@@ -593,6 +593,7 @@ describe('bot im connection runtime', () => {
     let storage!: ReturnType<typeof blueBubblesStateStorage>;
     const host: IMHost = {
       secrets: { read: key => h.secrets.get(key) ?? null, write: (key, value) => { h.secrets.set(key, value); return true; },
+        readResult: key => h.secrets.has(key) ? { kind: 'value', value: h.secrets.get(key)! } : { kind: 'missing' },
         remove: key => { h.secrets.delete(key); }, isAvailable: () => true },
       ipc: { handle() {}, broadcast() {}, throwIpcError(_code, message): never { throw new Error(message); } },
       paths: { feishuMediaDir: h.root }, httpPostForm: async () => ({ status: 200, body: {} }),
