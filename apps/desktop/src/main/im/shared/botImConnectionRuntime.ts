@@ -615,11 +615,15 @@ export function getBotIMessageConfig(id: string) {
   } catch { throwIpcError('PRECONDITION_FAILED', 'BLUEBUBBLES_CONFIG_MISSING'); }
 }
 
-export function updateBotIMessageConfig(id: string, input: unknown): Promise<BotImConnectionListPayload> {
-  const run = addQueue.then(async () => {
-    const record = readBotImConnection(id);
-    if (!record || record.channel !== 'imessage') throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
-    return withBotProfileLocks([record.botId], async () => {
+export async function updateBotIMessageConfig(id: string, input: unknown): Promise<BotImConnectionListPayload> {
+  const connection = readBotImConnection(id);
+  if (!connection || connection.channel !== 'imessage') throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
+  // Import already holds the profile lock when it enters addQueue. Keep the
+  // same order here so a waiting edit cannot block that import's queued add.
+  return withBotProfileLocks([connection.botId], () => {
+    const run = addQueue.then(async () => {
+      const record = readBotImConnection(id);
+      if (!record || record.channel !== 'imessage' || record.botId !== connection.botId) throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
       if (await readBotProfileStatus(record.botId) !== 'active') throwIpcError('PRECONDITION_FAILED', 'BOT_INACTIVE');
       const previous = getBotIMessageConfig(id);
       const p = (input ?? {}) as Record<string, unknown>;
@@ -637,9 +641,9 @@ export function updateBotIMessageConfig(id: string, input: unknown): Promise<Bot
       finally { broadcastChanged(); }
       return buildBotImConnectionListPayload();
     });
+    addQueue = run.catch(() => undefined);
+    return run;
   });
-  addQueue = run.catch(() => undefined);
-  return run;
 }
 
 /** 伙伴页「群聊」小节: 已知群 + 每群参与模式(仅 @ / 全响应)。 */

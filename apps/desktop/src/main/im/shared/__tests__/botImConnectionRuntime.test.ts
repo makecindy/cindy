@@ -758,6 +758,35 @@ describe('bot im connection runtime', () => {
     expect(removed.connections).toEqual([]);
   });
 
+  // Tier 1, PR #10241/r4557400252: real edit/add entries and the import profile
+  // lock must make progress in lock -> queue order, without timer-based sleeps.
+  it('does not hold the connection queue while waiting for an import profile lock', async () => {
+    const record = await addBotImConnectionRecord({ botId: 'bot-mia', channel: 'imessage' });
+    const config = { serverUrl: 'http://127.0.0.1:1234', ownerAddress: 'owner@example.test',
+      chatGuids: ['any;-;owner@example.test'], listenHost: '127.0.0.1', listenPort: 18747 };
+    h.secrets.set(`${secretKeyPrefixFor(record.id)}bluebubbles-config`, JSON.stringify(config));
+    let release!: () => void, entered!: () => void;
+    const locked = new Promise<void>(resolve => { entered = resolve; });
+    const resumeImport = new Promise<void>(resolve => { release = resolve; });
+    const importing = withBotProfileLocks(['bot-mia'], async () => {
+      entered();
+      await resumeImport;
+      return addBotImConnection({ botId: 'bot-mia', channel: 'telegram',
+        token: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ', ownerUserId: '4242' });
+    });
+    await locked;
+    // Invalid input is sufficient: validation must still run after the lock and
+    // queue, and the failed edit must not poison either one for later connections.
+    const editing = expect(updateBotIMessageConfig(record.id, { ...config, listenPort: 1 })).rejects.toThrow('BLUEBUBBLES_INVALID_CONFIG');
+    await new Promise<void>(resolve => setImmediate(resolve));
+    release();
+    const [imported] = await Promise.all([importing, editing]);
+    expect(imported.connection.botId).toBe('bot-mia');
+    const next = await addBotImConnection({ botId: 'bot-other', channel: 'telegram',
+      token: '654321:ZYXWVUTSRQPONMLKJIHGFEDCBA', ownerUserId: '4242' });
+    expect(next.connection.botId).toBe('bot-other');
+  });
+
   // #6492 r4318509719, unit: existing cleanup tests miss an initially unbound
   // teammate being deleted during transport drain. Use the real binding/store
   // entry and the same profile lock as botLifecycleService, with controlled gates.
