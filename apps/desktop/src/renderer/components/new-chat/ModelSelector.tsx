@@ -4,6 +4,7 @@ import { SpeedIcon } from './SpeedIcon';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { DisplayPricingDetails } from '@/components/DisplayPricingDetails';
 import { Button } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/spinner';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
 import { localizedModelName, matchesModelName } from '@/lib/modelDisplayNames';
 import {
@@ -3676,6 +3677,16 @@ function ModelSelectorContentView({
           {localCatalogNotice && <div className="shrink-0 p-2">{localCatalogNotice}</div>}
           {sshCodexNotice && <div className="shrink-0 p-2">{sshCodexNotice}</div>}
           <UnifiedModelPanel
+            {...(!deviceId && !providersOverride && localProviders.loading && !localProviders.error && providers.length === 0
+              ? {
+                  catalogNotice: (
+                    <div role="status" className="flex items-center justify-center gap-1.5 px-3 py-6 text-13 text-[var(--text-tertiary)]">
+                      <Spinner size={14} />
+                      {t('newChat.modelSelector.trigger.loading')}
+                    </div>
+                  ),
+                }
+              : {})}
             {...(pluginModels || (modelGroups && query.trim()) ? {
               // 搜索时模型组里命中的行也列在最上方；不搜索时它们只在「模型组」一格里。
               pinnedTop: (

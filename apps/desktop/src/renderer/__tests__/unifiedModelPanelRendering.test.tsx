@@ -25,6 +25,7 @@ import { useTransientModelPickerPreferences } from '@/components/new-chat/modelP
 import { PluginModelPickerDialog } from '@/cindy-brain/PluginModelPickerHost';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
 import type { ProviderView } from '@cindy/model-providers';
+import type { LocalCatalogFailure } from '@/lib/localCatalogLoadState';
 
 /** 统一面板发起的深度写入带上「面板已串行」标记(见 ModelSelector 的 onEffortChangeLive)。 */
 const FROM_PANEL = { serializedByPanel: true };
@@ -105,6 +106,9 @@ vi.mock('@/hooks/useModelPricing', () => ({
 }));
 
 const providersRef = vi.hoisted(() => ({
+  loading: false,
+  error: null as LocalCatalogFailure | null,
+  refetch: vi.fn(async () => true),
   providers: [
     {
       id: 'anthropic',
@@ -208,7 +212,10 @@ const providersRef = vi.hoisted(() => ({
 }));
 
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({ providers: providersRef.providers, providerOrder: [] }),
+  useProviders: () => ({
+    providers: providersRef.providers, providerOrder: [], loading: providersRef.loading,
+    error: providersRef.error, loadFailed: !!providersRef.error, refetch: providersRef.refetch,
+  }),
 }));
 const remoteProvidersRef = vi.hoisted(() => ({ providers: [] as unknown[] }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
@@ -4568,6 +4575,88 @@ describe('teammate settings selected location catalog', () => {
 });
 
 describe('Teammate settings with the real model picker', () => {
+  // #10207, unit: existing picker tests only supplied ready catalogs. A missing local
+  // snapshot must show loading, then update the open picker without rewriting the
+  // saved route. The real BotModelChainEditor -> ModelRouteSelector -> ModelSelector
+  // -> UnifiedModelPanel path runs here; only the catalog input is controlled.
+  it('shows a pending local catalog and updates the open teammate picker when it becomes ready', async () => {
+    const readyProviders = providersRef.providers;
+    const route = { harness: 'codex' as const, providerId: 'xd', model: 'gpt-5.5', effort: 'high', fastMode: false };
+    const change = vi.fn();
+    providersRef.providers = [];
+    providersRef.loading = true;
+    onTestFinished(() => { providersRef.providers = readyProviders; providersRef.loading = false; });
+    const view = render(<BotModelChainEditor value={[route]} onChange={change} />);
+    const picker = view.container.querySelector('button[aria-haspopup="listbox"]')!;
+    fireEvent.click(picker);
+    expect((await screen.findByRole('status')).textContent).toContain('newChat.modelSelector.trigger.loading');
+    expect(screen.queryByText('无匹配模型')).toBeNull();
+    expect(change).not.toHaveBeenCalled();
+
+    providersRef.providers = readyProviders;
+    providersRef.loading = false;
+    view.rerender(<BotModelChainEditor value={[route]} onChange={change} />);
+    expect(picker.textContent).toContain('GPT-5.5');
+    expect(screen.queryByText('newChat.modelSelector.trigger.loading')).toBeNull();
+    expect(rowFor('GPT-5.5')).toBeTruthy();
+    expect(change).not.toHaveBeenCalled();
+
+    // The same mounted picker loses its usable snapshot on an owner switch.
+    providersRef.providers = [];
+    providersRef.loading = true;
+    view.rerender(<BotModelChainEditor value={[route]} onChange={change} />);
+    expect(screen.getByRole('status').textContent).toContain('newChat.modelSelector.trigger.loading');
+    expect(screen.queryByText('GPT-5.6')).toBeNull();
+    providersRef.providers = readyProviders;
+    providersRef.loading = false;
+    view.rerender(<BotModelChainEditor value={[route]} onChange={change} />);
+    await act(async () => { fireEvent.click(within(rowFor('GPT-5.6')).getByText('GPT-5.6')); });
+    expect(change).toHaveBeenLastCalledWith([expect.objectContaining({ providerId: 'openai', model: 'gpt-5.6' })]);
+  });
+
+  it('keeps a successful empty local catalog distinct from an initial failure and retry', async () => {
+    const readyProviders = providersRef.providers;
+    providersRef.providers = [];
+    onTestFinished(() => {
+      providersRef.providers = readyProviders;
+      providersRef.loading = false;
+      providersRef.error = null;
+      providersRef.refetch.mockClear();
+    });
+    const route = { harness: 'codex' as const, providerId: 'xd', model: 'gpt-5.5', effort: 'high', fastMode: false };
+    const change = vi.fn();
+    const view = render(<BotModelChainEditor value={[route]} onChange={change} />);
+    fireEvent.click(view.container.querySelector('button[aria-haspopup="listbox"]')!);
+    expect(await screen.findByText('无匹配模型')).toBeTruthy();
+    expect(screen.queryByRole('status')).toBeNull();
+
+    providersRef.loading = true;
+    providersRef.error = { reason: 'owner-pending' };
+    view.rerender(<BotModelChainEditor value={[route]} onChange={change} />);
+    expect(screen.getByRole('status').textContent).toContain('settings.providers.catalogRecovery.pending');
+    expect(screen.queryByText('无匹配模型')).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'settings.providers.catalogRecovery.retry' })); });
+    expect(providersRef.refetch).toHaveBeenCalledOnce();
+
+    providersRef.error = null;
+    providersRef.loading = false;
+    providersRef.providers = readyProviders;
+    view.rerender(<BotModelChainEditor value={[route]} onChange={change} />);
+    expect(rowFor('GPT-5.5')).toBeTruthy();
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(change).not.toHaveBeenCalled();
+  });
+
+  it('keeps the healthy local catalog selectable when another model source is offline', async () => {
+    const select = vi.fn();
+    renderPanel({ unifiedPanel: true, onUnifiedSelect: select,
+      remoteAgent: { devices: [{ deviceId: 'offline-computer', name: 'Offline computer' }], selectedDeviceId: null },
+    });
+    expect(screen.queryByText('newChat.modelSelector.trigger.loading')).toBeNull();
+    await act(async () => { fireEvent.click(within(rowFor('GPT-5.5')).getByText('GPT-5.5')); });
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'xd', modelId: 'gpt-5.5' }));
+  });
+
   it('opens the real config and saves the selected source, harness, effort and Fast as one route', async () => {
     const change = vi.fn();
     function Editor() {

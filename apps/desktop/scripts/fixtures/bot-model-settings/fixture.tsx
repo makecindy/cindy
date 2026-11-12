@@ -23,7 +23,7 @@ const isSharedCase = ctx.case.startsWith('shared-');
 function Fixture() {
   const { t } = useTranslation();
   const primary = isSharedCase ? { ...unknown, agentDeviceId: 'share:fixture', effort: 'high' }
-    : ctx.case === 'available' ? { ...unknown, model: model.id, effort: 'high' } : unknown;
+    : ctx.case === 'available' || ctx.case === 'loading' ? { ...unknown, model: model.id, effort: 'high' } : unknown;
   const [routes, setRoutes] = useState<BotModelRoute[]>([primary,
     ...Array.from({ length: ctx.case === 'four-backups' ? 4 : 1 }, (_, i) => ({ ...(isSharedCase ? primary : unknown),
       model: isSharedCase ? sharedModels[1]!.id
@@ -42,8 +42,10 @@ void mountPage({
     const owner = getDataOwnerGeneration();
     const localProvider = ctx.case === 'shared-same-id' ? { ...provider,
       models: { codex: sharedModels.map(entry => ({ ...entry, name: `Local ${entry.name}`, efforts: ['low'], defaultEffort: 'low' })) } } : provider;
-    commitProvidersSnapshot(beginProvidersRefresh(), { dataOwnerId: owner.dataOwnerId,
+    const commitCatalog = () => commitProvidersSnapshot(beginProvidersRefresh(), { dataOwnerId: owner.dataOwnerId,
       ownerGeneration: owner.generation, providers: [localProvider], providerOrder: ['openai'] });
+    if (ctx.case === 'loading') window.addEventListener('fixture:catalog-ready', commitCatalog, { once: true });
+    else commitCatalog();
     const capabilities = (shared: boolean) => ({
       hasFastMode: false,
       availableModels: (shared ? sharedModels : [model]).map(entry => ({ ...entry, displayName: entry.name })),
