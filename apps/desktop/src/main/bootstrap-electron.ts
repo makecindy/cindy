@@ -2797,13 +2797,15 @@ const resourceUsageWindowController = new ResourceUsageWindowController({
   },
 });
 registerResourceUsageWindowIpc({ controller: resourceUsageWindowController });
-const remoteDesktopViewerWindows = new RemoteDesktopViewerWindows((sender) =>
-  isResourceUsageOpenSender({
-    sender,
-    mainWindow: mainWindowRef,
-    senderWindow: BrowserWindow.fromWebContents(sender),
-    isSecondaryAppWindow,
-  }),
+const remoteDesktopViewerWindows = new RemoteDesktopViewerWindows(
+  (sender) =>
+    isResourceUsageOpenSender({
+      sender,
+      mainWindow: mainWindowRef,
+      senderWindow: BrowserWindow.fromWebContents(sender),
+      isSecondaryAppWindow,
+    }),
+  (sender) => !!mainWindowRef && !mainWindowRef.isDestroyed() && mainWindowRef.webContents === sender,
 );
 remoteDesktopViewerWindows.register(pluginLiveScreenViews);
 

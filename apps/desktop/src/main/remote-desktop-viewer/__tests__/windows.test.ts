@@ -553,3 +553,51 @@ it.each(['lock-screen', 'suspend', 'reset'])(
     views.endAll();
   },
 );
+
+// Regression #9950/r4550280442: HOST IPC previously let any trusted secondary
+// replace the relay. Existing boundary tests called setHost directly and missed
+// window registration. Unit integration: real service + two app-window senders;
+// main keeps both pending and live opens when a secondary registers/closes.
+it.each(['pending', 'live'] as const)(
+  'keeps the designated relay host when a secondary registers during %s open',
+  async (phase) => {
+    const main = Object.assign(new EventEmitter(), { isDestroyed: () => false, send: vi.fn() });
+    const secondary = Object.assign(new EventEmitter(), { isDestroyed: () => false, send: vi.fn() });
+    const views = new PluginLiveScreenViews({ available: () => true, identity: () => 'sim' });
+    manager = new RemoteDesktopViewerWindows(() => true, (sender) => sender === (main as never));
+    manager.register(views);
+    const register = (sender: unknown) => fixture.handlers.get(LIVE_SCREEN_RELAY.HOST)!({ sender });
+    const open = () => views.handle('sim', { op: 'open', deviceId: 'remote', id: 'phone' });
+    let finish!: (value: unknown) => void;
+    let began!: () => void;
+    const started = new Promise<void>((resolve) => { began = resolve; });
+    views.connect({
+      selfDeviceId: () => 'local',
+      invoke: async (_device, request) => {
+        if (request.op === 'capabilities') return { version: 1, enabled: true, liveScreens: true };
+        began();
+        return new Promise((resolve) => { finish = resolve; });
+      },
+    });
+    try {
+      register(secondary);
+      register(main);
+      const opening = open();
+      await started;
+      if (phase === 'pending') register(secondary);
+      finish({ screens: [{ plugin: 'sim', pluginIdentity: 'sim', pluginName: 'Simulator',
+        id: 'phone', name: 'Phone', platform: 'ios', state: 'running', taskIds: [] }] });
+      const opened = await opening;
+      expect(opened).toMatchObject({ ok: true });
+      if (phase === 'live') register(secondary);
+      secondary.emit('destroyed');
+      expect(await open()).toEqual(opened);
+      expect(main.send.mock.calls.filter(([channel]) => channel === LIVE_SCREEN_RELAY.START)).toHaveLength(1);
+      expect(secondary.send).not.toHaveBeenCalled();
+      main.emit('did-start-navigation', {}, 'about:blank', false, true);
+      expect(await open()).toEqual({ ok: false, errorCode: 'HOST_NOT_READY' });
+      register(main);
+      expect(await open()).toMatchObject({ ok: true });
+    } finally { views.endAll(); }
+  },
+);

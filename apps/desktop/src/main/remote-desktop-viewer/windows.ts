@@ -134,7 +134,10 @@ export class RemoteDesktopViewerWindows {
     ice: loadDesktopIceServers,
   });
   private locale: SupportedLocale | null = null;
-  constructor(private readonly isOpenSender: (sender: WebContents) => boolean) {}
+  constructor(
+    private readonly isOpenSender: (sender: WebContents) => boolean,
+    private readonly isRelayHost: (sender: WebContents) => boolean = isOpenSender,
+  ) {}
   prewarm(): void {
     // Remote desktop needs a Cindy account, so local and signed-out profiles
     // never keep a spare shell. A persisted cloud intent still prewarms while
@@ -368,7 +371,9 @@ export class RemoteDesktopViewerWindows {
       });
       ipcMain.handle(LIVE_SCREEN_RELAY.HOST, (event) => {
         assertTrustedAppRendererEvent(event);
-        pluginViews.setHost(event.sender);
+        // Secondary task windows mount the same relay bridge. Only the
+        // designated main window may own it, including after a reload.
+        if (this.isRelayHost(event.sender)) pluginViews.setHost(event.sender);
       });
       ipcMain.on(LIVE_SCREEN_RELAY.STATE, (event, relayId, state) =>
         pluginViews.state(event.sender, relayId, state),
