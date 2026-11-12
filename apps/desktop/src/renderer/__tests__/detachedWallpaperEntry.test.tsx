@@ -182,9 +182,9 @@ it.each(['sidebar'] as const)(
       );
       expect(document.documentElement.dataset.wallpaperActive).toBe(family === 'paper-local' ? 'true' : undefined);
       expect(document.documentElement.dataset.cindyReducedMotion).toBe(family === 'paper-local' ? 'true' : undefined);
-      expect(document.querySelector('style[data-cindy-appearance]')?.textContent ?? '').toContain(
-        family === 'paper-local' ? '--space-4:0.9rem' : '',
-      );
+      const appearanceCss = document.querySelector('style[data-cindy-appearance]')?.textContent ?? '';
+      if (family === 'paper-local') expect(appearanceCss).toContain('--space-4:0.9rem');
+      else expect(appearanceCss).toBe('');
     }
     expect(getSync).toHaveBeenCalledTimes(reads);
   },
