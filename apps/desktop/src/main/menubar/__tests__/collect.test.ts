@@ -225,22 +225,31 @@ describe('collectMenubarInputs', () => {
     expect(collected.sources.map((source) => source.id)).toEqual(['openai', 'other']);
   });
 
-  it('keeps Claude pool identities and per-model windows attached to their account', async () => {
-    const collected = await collectMenubarInputs(deps({
-      listProviders: async () => [provider({ id: 'anthropic' })],
-      readSubscriptionPool: async () => ({ ...pool, providerId: 'anthropic', accounts: pool.accounts.map((account, index) => ({
-        ...account, plan: index ? 'max_20x' : 'pro', usage: { claude: {
-          updatedAt: NOW, subscriptionType: index ? 'max_20x' : 'pro',
+  // #10204 review, unit: quota-only plan metadata was overwritten with null.
+  // Prior fixtures supplied the same plan in both places and missed this loss.
+  it.each(['local', 'remote'])('keeps Claude pool plans and per-model windows attached to their account on %s', async location => {
+    const claudePool: SubscriptionPoolView = {
+      ...pool, providerId: 'anthropic', accounts: pool.accounts.map((account, index) => ({
+        ...account, plan: index ? 'max_20x' : undefined, usage: { claude: {
+          updatedAt: NOW, subscriptionType: 'pro',
           fiveHour: { utilization: index ? 25 : 80, resetsAt: nowSec + 3600 },
           sevenDay: { utilization: index ? 35 : 90, resetsAt: nowSec + 86_400 },
           scoped: [{ modelDisplayName: 'Sonnet', utilization: index ? 40 : 95, resetsAt: nowSec + 86_400 }],
         } },
-      })) }),
+      })),
+    };
+    const remote = location === 'remote'
+      ? (await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: claudePool }), [], 'anthropic'))).sources : [];
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => location === 'local' ? [provider({ id: 'anthropic' })] : [],
+      readSubscriptionPool: async () => claudePool,
+      readRemoteSubscriptions: async () => remote,
     }));
+    const prefix = location === 'remote' ? 'remote:peer:' : '';
     expect(collected.sources).toMatchObject([
-      { id: 'anthropic', account: 'default@example.com', plan: 'Pro',
+      { id: `${prefix}anthropic`, account: 'default@example.com', plan: 'Pro',
         windows: [{ usedPercent: 80 }, { usedPercent: 90 }, { label: 'Sonnet', usedPercent: 95 }] },
-      { id: 'anthropic:account:extra', account: 'extra@example.com', plan: 'Max 20x',
+      { id: `${prefix}anthropic:account:extra`, account: 'extra@example.com', plan: 'Max 20x',
         windows: [{ usedPercent: 25 }, { usedPercent: 35 }, { label: 'Sonnet', usedPercent: 40 }] },
     ]);
   });

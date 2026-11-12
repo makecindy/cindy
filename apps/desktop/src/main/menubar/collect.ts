@@ -431,7 +431,7 @@ export function subscriptionPoolSources(provider: ProviderView, pool: Subscripti
       ...source,
       id: account.id === 'default' ? provider.id : `${provider.id}:account:${account.id}`,
       account: identity,
-      plan: planLabel(account.plan),
+      plan: planLabel(account.plan) ?? source.plan,
       accountKeys: [...(source.accountKeys ?? []), ...(identity ? [`${source.family}:identity:${identity.toLowerCase()}`] : [])],
       pooled: true,
       consuming: account.running > 0,
