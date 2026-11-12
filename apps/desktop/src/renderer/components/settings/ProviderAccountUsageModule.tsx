@@ -34,7 +34,7 @@ export function ProviderAccountUsageModule({ provider }: { provider?: ProviderVi
   const opencodeGo = isOpenCodeGoProviderView(provider);
   const minimax = isMiniMaxPlanProvider(provider);
   const minimaxAgent = minimax ? PROVIDER_ACCOUNT_USAGE_AGENTS.find(agent => isMiniMaxPlanProvider(provider, agent)) : undefined;
-  const usage = useProviderAccountUsage(deepSeek || zhipu || kimi || opencodeGo || minimax ? provider : undefined, minimaxAgent);
+  const usage = useProviderAccountUsage(deepSeek || zhipu || kimi || opencodeGo || minimax ? provider : undefined);
   const dashboardUrl = usage.result?.dashboardUrl ?? getProviderAccountUsageDashboardUrlView(provider, minimaxAgent);
   if (!deepSeek && !zhipu && !kimi && !opencodeGo && !minimax) return null;
   const snapshot = usage.result?.status === 'ready' ? usage.result.snapshot : null;

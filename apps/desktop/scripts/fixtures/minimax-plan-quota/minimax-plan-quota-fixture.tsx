@@ -7,7 +7,10 @@ import { parseMiniMaxPlanUsage } from '../../../src/shared/minimaxPlanUsage';
 const provider = {
   id: 'minimax-fixture', name: 'MiniMax', source: 'user', connected: true,
   auth: { method: 'apiKey' }, access: { kind: 'api' },
-  routing: { codex: { upstream: 'https://api.minimaxi.com/v1' } },
+  routing: {
+    'claude-code': { upstream: 'https://api.kimi.com/coding' },
+    codex: { upstream: 'https://api.minimaxi.com/v1' },
+  },
 } as ProviderView;
 
 void mountPage({

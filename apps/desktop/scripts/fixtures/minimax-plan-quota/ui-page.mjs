@@ -4,7 +4,10 @@ import organizationQuota from '../organization-quota/ui-page.mjs';
 const provider = {
   id: 'minimax-fixture', name: 'MiniMax', source: 'user', connected: true,
   auth: { method: 'apiKey' }, access: { kind: 'api' },
-  routing: { codex: { upstream: 'https://api.minimaxi.com/v1' } },
+  routing: {
+    'claude-code': { upstream: 'https://api.kimi.com/coding' },
+    codex: { upstream: 'https://api.minimaxi.com/v1' },
+  },
 };
 
 export default {
@@ -19,7 +22,7 @@ export default {
     'src/renderer/hooks/useClaudeAccountUsage': 'export const useClaudeAccountUsage = () => null;',
   },
   cases: {
-    default: { about: '5-hour and weekly plan allowance; no fabricated monthly quota', data: {} },
+    default: { about: 'Mixed Kimi/MiniMax connection: show the Codex task plan, never the Kimi account', data: {} },
     stale: { about: 'Keep labelled previous quota but hide stale task summary', data: { stale: true } },
     boosted: { about: 'A 135% boosted weekly allowance is shown as a value, not a negative-used meter', data: { boosted: true } },
     unavailable: { about: 'Rejected credentials show a readable state and refresh action', data: { error: true } },

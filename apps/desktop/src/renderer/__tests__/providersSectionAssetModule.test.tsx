@@ -291,13 +291,15 @@ it('shows MiniMax plan windows and refreshes the matching runtime in a mixed con
     },
   } as ProviderView} />);
   await screen.findByText('MiniMax');
-  await waitFor(() => expect(fetchUsage).toHaveBeenCalledWith({ providerId: 'plan-copy', agent: 'codex', forceRefresh: false }));
+  // Main owns credential availability; settings must allow it to choose a keyed
+  // MiniMax route instead of pinning the first URL-matching runtime.
+  await waitFor(() => expect(fetchUsage).toHaveBeenCalledWith({ providerId: 'plan-copy', forceRefresh: false }));
   expect(screen.getByText('providerAccountUsage.kimi.limit_5h')).toBeTruthy();
   expect(screen.getByText('providerAccountUsage.kimi.limit_7d')).toBeTruthy();
   const refresh = screen.getByRole('button', { name: 'providerAccountUsage.kimi.refresh' });
   await waitFor(() => expect(refresh.hasAttribute('disabled')).toBe(false));
   fireEvent.click(refresh);
-  await waitFor(() => expect(fetchUsage).toHaveBeenLastCalledWith({ providerId: 'plan-copy', agent: 'codex', forceRefresh: true }));
+  await waitFor(() => expect(fetchUsage).toHaveBeenLastCalledWith({ providerId: 'plan-copy', forceRefresh: true }));
 });
 
 it('keeps the manual refresh action after the first OpenCode Go quota snapshot', async () => {

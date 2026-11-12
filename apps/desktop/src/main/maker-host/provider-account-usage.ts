@@ -153,17 +153,23 @@ interface CacheRecord {
   lastAttemptAt: number;
   lastError?: ProviderAccountUsageError;
   retryAt: number;
+  /** MiniMax survives unrelated provider broadcasts, but never an account edit. */
+  isCurrent?: () => boolean;
 }
 
 const cache = new Map<string, CacheRecord>();
 let kimiRevision = 0;
 let kimiMutationEpoch = 0;
-const kimiIdentities = new Map<string, { identity: string | null; revision: number }>();
+const kimiIdentities = new Map<string, { identity: string | null; revision: number; miniMaxCurrent?: () => boolean }>();
 /** Provider edits/login/logout revoke pending quota reads, even when a token is later reused. */
 export function invalidateKimiAccountUsage(): void {
   kimiMutationEpoch += 1;
-  kimiIdentities.clear();
-  for (const key of cache.keys()) if (key.includes(':kimi-coding-quota-v1:') || key.includes(':minimax-plan-quota-v1:')) cache.delete(key);
+  for (const [scope, identity] of kimiIdentities) {
+    if (!identity.miniMaxCurrent?.()) kimiIdentities.delete(scope);
+  }
+  for (const [key, record] of cache) {
+    if (key.includes(':kimi-coding-quota-v1:') || record.isCurrent?.() === false) cache.delete(key);
+  }
 }
 const kimiInFlight = new Map<string, Promise<ProviderAccountUsageResult>>();
 
@@ -230,7 +236,11 @@ export function resolveProviderAccountUsage(
   // 指定 agent 时只认领该 runtime：同一供应商各引擎可用不同账户的独立密钥，
   // 会话查询必须对准当前会话实际路由的账户。
   const agents = agent ? [agent] : PROVIDER_ACCOUNT_USAGE_AGENTS;
+  // Settings displays MiniMax when present. Choose its first keyed route here,
+  // where credentials are available, and never fall through to another vendor.
+  const miniMaxSettings = !agent && isMiniMaxPlanProvider(provider);
   for (const agent of agents) {
+    if (miniMaxSettings && !isMiniMaxPlanProvider(provider, agent)) continue;
     const upstream = provider.routing[agent]?.upstream;
     if (!upstream || provider.routing[agent]?.disabled) continue;
     let url: URL;
@@ -463,12 +473,20 @@ export async function readProviderAccountUsage(
   const ownerStamp = ownerStampReader();
   const provider = providerReader(request.providerId);
   const kimi = isKimiCodingProvider(provider, request.agent);
-  const guardedQuota = kimi || isMiniMaxPlanProvider(provider, request.agent);
+  const minimax = isMiniMaxPlanProvider(provider, request.agent);
+  const guardedQuota = kimi || minimax;
   const scope = `${ownerStamp.dataOwnerId}:${ownerStamp.generation}:${request.providerId}:${request.agent ?? ''}`;
   const epoch = kimiMutationEpoch;
-  const config = JSON.stringify(provider);
+  // Names, models and unrelated routes do not change this MiniMax account.
+  // Keep auth/route/removal changes in the fence, including absent->present ABA.
+  const configOf = (value: typeof provider) => JSON.stringify(minimax ? [
+    value?.auth,
+    (request.agent ? [request.agent] : PROVIDER_ACCOUNT_USAGE_AGENTS).map(agent =>
+      isMiniMaxPlanProvider(value, agent) ? [agent, value?.routing[agent]] : [agent, null]),
+  ] : value);
+  const config = configOf(provider);
   const ownerCurrent = () => JSON.stringify(ownerStampReader()) === JSON.stringify(ownerStamp)
-    && JSON.stringify(providerReader(request.providerId)) === config;
+    && configOf(providerReader(request.providerId)) === config;
   if (kimi && provider?.auth.method === 'oauth') {
     try { await prepareOAuth(request.providerId); }
     catch {
@@ -485,6 +503,7 @@ export async function readProviderAccountUsage(
   const generation = kimiIdentities.get(scope);
   const current = () => !guardedQuota || (ownerCurrent() && kimiIdentities.get(scope) === generation
     && JSON.stringify(resolveProviderAccountUsage(request.providerId, request.agent)) === JSON.stringify(resolution));
+  if (minimax && generation) generation.miniMaxCurrent = current;
   if (!resolution) {
     // 没认领到官方端点，或 key 读不到。区分「本来就没有接口」与「有接口但 key 缺失」。
     if (providerAccountUsageSupported(request.providerId)) {
@@ -519,6 +538,10 @@ async function readResolvedAccountUsage(
   const cacheKey = `${ownerStamp.dataOwnerId ?? 'local'}:${ownerStamp.generation}:${request.providerId}:${resolution.integrationId}:${resolution.endpoint}:${resolution.agent}:${keyFingerprint}:${revision}`;
   const now = accountUsageNow();
   const record = cache.get(cacheKey);
+  const save = (value: CacheRecord) => cache.set(cacheKey, {
+    ...value,
+    ...(resolution.integrationId === 'minimax-plan-quota-v1' ? { isCurrent: current } : {}),
+  });
   const structuredQuota = resolution.integrationId === 'kimi-coding-quota-v1'
     || resolution.integrationId === 'minimax-plan-quota-v1'
     || resolution.integrationId === 'opencode-go-quota-v1';
@@ -566,7 +589,7 @@ async function readResolvedAccountUsage(
         ? await fetchZhipuCodingPlanQuota(resolution)
         : await fetchDeepSeekBalance(resolution);
     if (!current()) return { status: 'unavailable', error: 'updating' };
-    cache.set(cacheKey, {
+    save({
       snapshot,
       expiresAt: Math.min(accountUsageNow() + CACHE_TTL_MS, ...(snapshot.kind === 'kimi-coding-quota' || snapshot.kind === 'minimax-plan-quota'
         ? snapshot.windows.flatMap(window => window.resetsAt !== null && window.resetsAt > accountUsageNow() ? [window.resetsAt] : [])
@@ -581,7 +604,7 @@ async function readResolvedAccountUsage(
     if (!current()) return { status: 'unavailable', error: 'updating' };
     const code = err instanceof AccountUsageRequestError ? err.code : 'unknown';
     if (structuredQuota && code === 'auth') {
-      cache.set(cacheKey, { expiresAt: 0, lastAttemptAt: now, lastError: code, retryAt: 0 });
+      save({ expiresAt: 0, lastAttemptAt: now, lastError: code, retryAt: 0 });
       return { status: 'unavailable', error: code };
     }
     log.warn(
@@ -614,7 +637,7 @@ async function readResolvedAccountUsage(
       }
       return { status: 'unavailable', error: waiting ? 'throttled' : error ?? code, ...(waiting ? { retryAt } : {}) };
     }
-    cache.set(cacheKey, {
+    save({
       snapshot: record?.snapshot,
       expiresAt: record?.expiresAt ?? 0,
       lastAttemptAt: now,

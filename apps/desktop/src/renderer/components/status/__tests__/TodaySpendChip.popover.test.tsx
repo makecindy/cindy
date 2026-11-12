@@ -290,6 +290,41 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+// PR #9894 review: real component/hook, synthetic IPC, unit/jsdom. Existing
+// popover tests covered subscriptions, not mixed Kimi/MiniMax routing or a
+// MiniMax countdown while the popover stays closed. Fake time avoids real waits.
+it.each([true, false])('shows the task MiniMax account and advances its closed countdown (mixed Kimi=%s)', async mixed => {
+  vi.setSystemTime(new Date('2026-11-12T00:00:00Z'));
+  mocks.providers = [{
+    id: 'mixed-minimax', connected: true, auth: { method: 'apiKey' },
+    routing: {
+      ...(mixed ? { 'claude-code': { upstream: 'https://api.kimi.com/coding', authStrategy: 'api-key-header' } } : {}),
+      codex: { upstream: 'https://api.minimaxi.com/v1', authStrategy: 'api-key-header' },
+    },
+  } as ProviderView];
+  mocks.fetchProviderAccountUsage.mockResolvedValue({
+    status: 'ready', stale: false, agent: 'codex',
+    snapshot: { kind: 'minimax-plan-quota', fetchedAt: Date.now(), noPlan: false,
+      weeklyUnlimited: false, boostedWeeklyRemainingPercent: null,
+      windows: [{ id: 'rolling', model: null, usedPercent: 20, resetsAt: Date.now() + 180_000 }],
+    },
+  });
+  await act(async () => { render(<TodaySpendChip vendorKey="codex" providerId="mixed-minimax" sessionId="minimax" />); });
+  const trigger = screen.getByTestId('task-usage-trigger');
+  expect(trigger.textContent).toContain('80%');
+  const before = trigger.textContent;
+  expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+  await act(async () => { vi.advanceTimersByTime(61_000); });
+  expect(trigger.textContent).not.toBe(before);
+  expect(trigger.textContent).toContain('80%');
+  fireEvent.mouseEnter(trigger);
+  await act(async () => { vi.advanceTimersByTime(300); });
+  const card = screen.getByTestId('quota-hover-card');
+  expect(within(card).getByText('MiniMax')).toBeTruthy();
+  expect(within(card).queryByText('Kimi Code')).toBeNull();
+  expect(mocks.fetchProviderAccountUsage).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'mixed-minimax', agent: 'codex' }));
+});
+
 // PR #7031: replace the brittle three-route source regex with actual navigation.
 // Unit/jsdom: each selected provider has its own observable URL; gateway stays local.
 it.each<{

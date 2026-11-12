@@ -33,15 +33,15 @@ const ZHIPU_CODING_PREFIXES = [
   'https://api.z.ai/api/coding/',
 ];
 
-function routingUpstreams(provider: ProviderView | undefined | null): string[] {
-  return Object.values(provider?.routing ?? {}).map(
+function routingUpstreams(provider: ProviderView | undefined | null, agent?: AgentKind): string[] {
+  return (agent ? [provider?.routing?.[agent]].filter(route => route && !route.disabled) : Object.values(provider?.routing ?? {})).map(
     (route) => (route as { upstream?: string } | undefined)?.upstream ?? '',
   );
 }
 
 /** 任一 runtime 是否指向官方 DeepSeek 端点。 */
-export function hasDeepSeekOfficialRouteView(provider: ProviderView | undefined | null): boolean {
-  return routingUpstreams(provider).some((upstream) => {
+export function hasDeepSeekOfficialRouteView(provider: ProviderView | undefined | null, agent?: AgentKind): boolean {
+  return routingUpstreams(provider, agent).some((upstream) => {
     if (!upstream) return false;
     try {
       const url = new URL(upstream);
@@ -53,12 +53,12 @@ export function hasDeepSeekOfficialRouteView(provider: ProviderView | undefined 
 }
 
 /** 是否智谱 GLM Coding Plan 接入（CN 与 Global，/api/anthropic 或 /api/coding/*）；按量付费不算。 */
-export function isZhipuCodingPlanProviderView(provider: ProviderView | undefined | null): boolean {
+export function isZhipuCodingPlanProviderView(provider: ProviderView | undefined | null, agent?: AgentKind): boolean {
   if (!provider) return false;
-  if (provider.id === 'zhipu-coding-plan-cn' || provider.id === 'zai-coding-plan-global') {
+  if (!agent && (provider.id === 'zhipu-coding-plan-cn' || provider.id === 'zai-coding-plan-global')) {
     return true;
   }
-  return routingUpstreams(provider).some(
+  return routingUpstreams(provider, agent).some(
     (upstream) =>
       ZHIPU_ANTHROPIC_BASES.includes(upstream)
       || ZHIPU_CODING_PREFIXES.some((prefix) => upstream.startsWith(prefix)),

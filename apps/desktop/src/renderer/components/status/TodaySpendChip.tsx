@@ -1040,27 +1040,21 @@ export function TodaySpendChip({
   // 远程会话不读本机账户快照 —— 额度事实在远端:SSH 用 remoteHostId 判,device-link 与
   // 远程 Agent 用 isDeviceLinkRemote 判(任一成立即远程,turn 消耗的是远端账号的额度)。
   const isAnyRemoteSession = Boolean(remoteHostId) || isDeviceLinkRemote;
+  // All quota forms use the same task runtime, including mixed-vendor connections.
+  const providerAccountAgent: AgentKind | undefined =
+    vendorKey === 'cc' ? 'claude-code' : vendorKey === 'codex' ? 'codex' : vendorKey === 'pi' ? 'pi' : undefined;
   // API Key 计费供应商（DeepSeek 余额 / 智谱 Coding Plan 额度）：只认本机会话且显式选中
   // 该供应商的形态；额度事实在本机账户，远程会话不借用（口径同订阅形态）。
   const usesDeepSeekAccountForm =
-    !isAnyRemoteSession && Boolean(hasDeepSeekOfficialRouteView(selectedQuotaProvider));
+    !isAnyRemoteSession && Boolean(hasDeepSeekOfficialRouteView(selectedQuotaProvider, providerAccountAgent));
   const usesZhipuCodingPlanForm =
-    !isAnyRemoteSession && Boolean(isZhipuCodingPlanProviderView(selectedQuotaProvider));
-  const usesKimiCodingForm = !remoteHostId && !accountUnreadable && isKimiCodingProviderView(selectedQuotaProvider);
-  const usesOpenCodeGoForm = !remoteHostId && !accountUnreadable && isOpenCodeGoProviderView(selectedQuotaProvider);
-  const usesMiniMaxPlanForm = !isAnyRemoteSession && isMiniMaxPlanProvider(selectedQuotaProvider,
-    vendorKey === 'cc' ? 'claude-code' : vendorKey === 'codex' ? 'codex' : vendorKey === 'pi' ? 'pi' : undefined);
+    !isAnyRemoteSession && Boolean(isZhipuCodingPlanProviderView(selectedQuotaProvider, providerAccountAgent));
+  const usesKimiCodingForm = !remoteHostId && !accountUnreadable && isKimiCodingProviderView(selectedQuotaProvider, providerAccountAgent);
+  const usesOpenCodeGoForm = !remoteHostId && !accountUnreadable && isOpenCodeGoProviderView(selectedQuotaProvider, providerAccountAgent);
+  const usesMiniMaxPlanForm = !isAnyRemoteSession && isMiniMaxPlanProvider(selectedQuotaProvider, providerAccountAgent);
   const usesProviderAccountUsageForm = usesDeepSeekAccountForm || usesZhipuCodingPlanForm || usesKimiCodingForm || usesOpenCodeGoForm || usesMiniMaxPlanForm;
   // 会话所在引擎 → 查询用 runtime：同一供应商各引擎可用不同账户的独立密钥，
   // 余额/配额必须对准当前会话实际路由的账户（vendorKey 缺省 = 默认路由，不传）。
-  const providerAccountAgent: AgentKind | undefined =
-    vendorKey === 'cc'
-      ? 'claude-code'
-      : vendorKey === 'codex'
-        ? 'codex'
-        : vendorKey === 'pi'
-          ? 'pi'
-          : undefined;
   const providerAccountUsage = useProviderAccountUsage(
     usesProviderAccountUsageForm && providerAccountAgent ? selectedQuotaProvider : undefined,
     providerAccountAgent,
@@ -1607,6 +1601,7 @@ export function TodaySpendChip({
       && !isClaudeSubscription
       && !usesZhipuCodingPlanForm
       && !usesKimiCodingForm
+      && !usesMiniMaxPlanForm
       && !quotaPopoverOpen
     ) {
       return undefined;
@@ -1622,6 +1617,7 @@ export function TodaySpendChip({
     isClaudeSubscription,
     usesZhipuCodingPlanForm,
     usesKimiCodingForm,
+    usesMiniMaxPlanForm,
     quotaPopoverOpen,
     windowLabelNowMs,
     chipResetsAtMsList,

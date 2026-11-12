@@ -836,6 +836,60 @@ describe('MiniMax subscription quota', () => {
   afterEach(resetProviderAccountUsageForTest);
   const read = (forceRefresh = false) => readProviderAccountUsage({ providerId: current.id, agent: 'codex', forceRefresh });
 
+  // PR #9894 review: unit regression through the real reader. Previous tests
+  // pinned Codex and never exercised settings' implicit route or edit broadcasts.
+  // A missing first-route key must not hide a later MiniMax key or borrow DeepSeek.
+  it.each(['https://api.minimaxi.com/anthropic', 'https://api.deepseek.com'])('selects a keyed MiniMax route for settings without borrowing %s credentials', async upstream => {
+    current.routing['claude-code'] = { upstream, authStrategy: 'api-key-header' };
+    setAccountUsageKeyReader((_id, agent) => agent === 'codex' ? key : upstream.includes('deepseek') ? 'synthetic-deepseek-key' : null);
+    const result = await readProviderAccountUsage({ providerId: current.id });
+    expect(result).toMatchObject({ status: 'ready', agent: 'codex', snapshot: { kind: 'minimax-plan-quota' } });
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith('https://www.minimaxi.com/v1/token_plan/remains', expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: `Bearer ${key}` }),
+    }));
+    key = '';
+    expect(await readProviderAccountUsage({ providerId: current.id })).toMatchObject({ status: 'unavailable', error: 'no-credentials' });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps cached quota and its stale fallback across unrelated edits and display-only renames', async () => {
+    await read();
+    invalidateKimiAccountUsage(); // Another provider was edited.
+    await read();
+    current.name = 'Renamed subscription';
+    invalidateKimiAccountUsage();
+    await read();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    nowMs += 300_001;
+    fetcher.mockRejectedValueOnce(new Error('synthetic connection failure'));
+    expect(await read()).toMatchObject({ status: 'ready', stale: true, snapshot: { kind: 'minimax-plan-quota' } });
+  });
+
+  it('keeps an in-flight read across a rename but revokes it after key removal and restoration', async () => {
+    let complete!: (response: Response) => void;
+    fetcher.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    const first = read();
+    current.name = 'Renamed while loading';
+    invalidateKimiAccountUsage();
+    const second = read();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    complete(jsonRes(payload));
+    expect(await first).toMatchObject({ status: 'ready' });
+    expect(await second).toMatchObject({ status: 'ready' });
+    nowMs += 300_001;
+    fetcher.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    const oldAccount = read();
+    const previousKey = key;
+    key = '';
+    invalidateKimiAccountUsage();
+    key = previousKey;
+    invalidateKimiAccountUsage();
+    complete(jsonRes(payload));
+    expect(await oldAccount).toMatchObject({ status: 'unavailable', error: 'updating' });
+    expect(await read()).toMatchObject({ status: 'ready', stale: false });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
   it('queries only the region-pinned official endpoint and reuses successful reads', async () => {
     expect(await read()).toMatchObject({ status: 'ready', stale: false, snapshot: {
       kind: 'minimax-plan-quota', windows: [{ id: 'rolling', usedPercent: 20 }, { id: 'weekly', usedPercent: 45 }],
