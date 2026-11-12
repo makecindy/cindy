@@ -801,7 +801,7 @@ function VoiceInputPermissionBadge({
   const children = granted ? (
     <>
       <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-section-title)]">
-        <Check size={10} strokeWidth={2.4} className="text-emerald-600 dark:text-emerald-300" />
+        <Check size={10} strokeWidth={2.4} className="text-[var(--status-success)]" />
       </span>
       {labelText}
     </>

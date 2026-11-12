@@ -77,7 +77,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, query, scop
         // A slow count must not fan out more obsolete searches while the user types.
         if (!alive.current || cacheRef.current !== current) return;
         const page = await loader.current({ query: query.trim().slice(0, 100), scope,
-          cursor: current.cursors.get(index), limit: PLUGIN_PAGE_SIZE, excludeInstalled: !!query.trim(),
+          cursor: current.cursors.get(index), limit: PLUGIN_PAGE_SIZE, excludeInstalled: true,
           counts: index === 0 && current.counts === null });
         if (!alive.current || cacheRef.current !== current) return;
         current.pages.delete(index);
