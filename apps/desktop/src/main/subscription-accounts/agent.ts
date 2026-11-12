@@ -85,8 +85,28 @@ export async function resolveSubscriptionPoolProvider(
   assertOwnerCurrent(owner);
   return provider && readPool(provider) ? provider : null;
 }
-async function historicalCodexAccount(threadId: string, auth?: SubscriptionAccountRouting): Promise<string | undefined> {
+/** Existing native history proves its login independently of the old default auth.
+ * Share this gate between resume and fork so implicit routes keep the same boundaries.
+ */
+async function historicalCodexAccount(
+  agent: Pick<BaseAgent, 'kind'>,
+  options: SubscriptionRouteOptions,
+  threadId: string | undefined,
+  keys: string[],
+  auth?: SubscriptionAccountRouting,
+): Promise<string | undefined> {
+  const requested = options.providerId?.trim() || null;
+  if (agent.kind !== 'codex' || options.remoteHostId || !threadId || !readPool('openai') ||
+      (requested && requested !== 'openai')) return;
   const owner = activeOwnerScopeKey();
+  if (!requested) {
+    if (resolveAgentCredentialMode({ agentKind: 'codex', model: options.model })) return;
+    const source = await auth?.resolveDefaultProvider?.(options.model);
+    assertOwnerCurrent(owner);
+    if (source && source !== 'openai') return;
+  }
+  const binding = keys.map(key => readAccountBinding(key, 'openai')).find(Boolean);
+  if (binding) return binding.accountId;
   const home = await auth?.resolveCodexHistoryHome?.(threadId);
   assertOwnerCurrent(owner);
   return home ? codexSubscriptionAccountForHistoryHome(home) : undefined;
@@ -261,15 +281,15 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
           let provider: SubscriptionProvider | null = null;
           let imported: string | undefined;
           try {
-            provider = await resolveSubscriptionPoolProvider(target, options, auth);
+            imported = await historicalCodexAccount(target, options, options.resumeSessionId, keys, auth);
+            provider = imported ? 'openai' : await resolveSubscriptionPoolProvider(target, options, auth);
             if (!provider) return startLegacy();
             const resolved = provider;
-            imported = legacyConnectionAccount(options.providerId?.trim(), keys, target.kind);
+            imported ??= legacyConnectionAccount(options.providerId?.trim(), keys, target.kind);
             if (!imported && options.resumeSessionId && !keys.some((key) => readAccountBinding(key, resolved))) {
               if (provider === 'openai') {
-                imported = target.kind === 'codex' ? await historicalCodexAccount(options.resumeSessionId, auth) : undefined;
                 // Unknown private homes retain their legacy route; never pick another account.
-                if (!imported) return startLegacy();
+                return startLegacy();
               } else await writeAccountBindings(keys, provider, 'default');
             }
           } catch (error) {
@@ -349,14 +369,14 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
         };
       if (property === 'forkSdkSession')
         return async (options: ForkSdkSessionOptions) => {
-          const provider = await resolveSubscriptionPoolProvider(target, options, auth);
-          if (!provider) return target.forkSdkSession(options);
           const key = `native:${options.sourceSdkSessionId}`;
-          let imported = legacyConnectionAccount(options.providerId?.trim(), [key], target.kind);
+          let imported = await historicalCodexAccount(target, options, options.sourceSdkSessionId, [key], auth);
+          const provider = imported ? 'openai' : await resolveSubscriptionPoolProvider(target, options, auth);
+          if (!provider) return target.forkSdkSession(options);
+          imported ??= legacyConnectionAccount(options.providerId?.trim(), [key], target.kind);
           if (!imported && !readAccountBinding(key, provider)) {
             if (provider === 'openai') {
-              imported = target.kind === 'codex' ? await historicalCodexAccount(options.sourceSdkSessionId, auth) : undefined;
-              if (!imported) return target.forkSdkSession(options);
+              return target.forkSdkSession(options);
             } else await writeAccountBindings([key], provider, 'default');
           }
           const lease = await acquireSubscriptionAccount(provider, options.model, [key], true, { accountId: imported, resuming: true });
