@@ -6926,7 +6926,7 @@
       "ownModelAccess": {
         "title": "Let my other computers use this computer’s models",
         "hint": "When on, your other computers can use the providers on this computer. The Agent runs here, using this computer’s sign-in and quota. Nothing is shared with other people.",
-        "writeFailed": "Couldn't save this setting. Please try again."
+        "writeFailed": "Couldn't save this setting. Try again."
       },
       "keepAwake": "Keep computer awake",
       "keepAwakeHint": "When enabled, this machine won't go to sleep, so background agents and scheduled tasks keep running (you can still turn off the display or lock the screen).",
