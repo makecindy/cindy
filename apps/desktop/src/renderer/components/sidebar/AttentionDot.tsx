@@ -16,15 +16,9 @@
  *   running 不走本组件:橙(Thinking Orange)专职表达"正在跑"(vendor mark 呼吸 /
  *   spinner),不再用于任何"完成"语义。不用黑/前景色。
  *
- *   形态(两种,按语义选):
- *     • 呼吸(breathing=true):单条会话"有需要你关注的未读结果"的提醒点——卡片
- *       任务完成未读、rail 瓷砖未读。复用 `.session-card-dot` 的 session-card-pulse
- *       关键帧(prefers-reduced-motion 下自动停),用呼吸吸引注意。
- *       该关键帧是**常驻循环动画**,按 DESIGN.md §14.4 只动 ::after 光环的
- *       transform / opacity(compositor-only)——多张未读卡长期同屏时不会持续重绘。
- *       改这段动画前先读那条红线,别退回 box-shadow / width 之类会触发绘制的属性。
- *     • 静态(breathing=false,默认):聚合入口/常驻类未读徽标——如自动化入口(🕐)
- *       的未读小点。不动,低打扰。
+ *   形态:静态圆点,不做循环动画(2026-11-11 维护者裁决 D-06:插件页未读点原为
+ *   session-card-pulse 呼吸脉冲,是全应用唯一一处,改为与其他未读点一致的静态点)。
+ *   需要表达"正在跑"时用 vendor mark 呼吸 / spinner,不要给本组件加回循环动画。
  *
  *   尺寸:`size`(px),默认 6;按宿主大小微调(rail 瓷砖 5、tab/图标钮 6 等)。
  *   定位:本组件只画圆点,绝对定位/偏移由调用方经 `className`(如
@@ -48,8 +42,6 @@ const TONE_BG: Record<DotTone, string> = {
 };
 
 export interface AttentionDotProps {
-  /** true → 呼吸(live 活动态);false(默认)→ 静态(settled 未读/完成)。 */
-  breathing?: boolean;
   /** 直径(px),默认 6。 */
   size?: number;
   /** 语义色:done(绿,默认)/ awaiting(TapTap 蓝)/ error(红)/ info(信息蓝,新功能入口提示,非会话状态)。 */
@@ -58,7 +50,7 @@ export interface AttentionDotProps {
   className?: string;
 }
 
-export function AttentionDot({ breathing = false, size = 6, tone = 'done', className }: AttentionDotProps) {
+export function AttentionDot({ size = 6, tone = 'done', className }: AttentionDotProps) {
   return (
     <span
       aria-hidden
@@ -66,7 +58,6 @@ export function AttentionDot({ breathing = false, size = 6, tone = 'done', class
       className={cn(
         'shrink-0 rounded-full',
         TONE_BG[tone],
-        breathing && 'session-card-dot',
         className,
       )}
     />
