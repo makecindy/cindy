@@ -126,7 +126,7 @@ import {
   clearProviderShareRequestQuiet,
   ensureProviderSharePeerKnown,
   getProviderShareHostSnapshot,
-  getProviderShareHostLoadedSnapshot,
+  getProviderShareHostCompleteSnapshot,
   onProviderShareHostChanged,
   getProviderShareQuietRequestIds,
   getProviderShareWatchedRequests,
@@ -369,8 +369,9 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
   const stopAccess = onRemoteProviderAccessChanged(queueAvailabilityPublish);
   const stopSettings = onDeviceLinkSettingChanged(key => { if (key === 'remoteControlEnabled') queueAvailabilityPublish(); });
   // 撤回 11-10 的默认开放：等拿到本账号完整的分享快照，那段时间里用户建过分享的供应商补记为打开。
+  // 补记只做一次，有分享服务暂时读不到时不做，等下一次完整读取。
   const migrateAccessDefault = () => {
-    const loaded = getProviderShareHostLoadedSnapshot();
+    const loaded = getProviderShareHostCompleteSnapshot();
     if (loaded) void keepSharedProvidersOpen(new Set(loaded.map((share) => share.providerId)))
       .catch((error) => log.warn('remote provider access default revert failed', { error: String(error) }));
   };
