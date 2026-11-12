@@ -334,6 +334,23 @@ async function snapshot(
             ...(auth.authenticated ? { errorReason: 'account_mismatch' } : {}),
           };
         }
+        if (provider === 'anthropic') {
+          assertOwner(state);
+          const confirmedIdentity = auth.authenticated ? auth.identity?.trim() : undefined;
+          const saved = readPool(provider)?.accounts.find((account) => account.id === id);
+          if (confirmedIdentity && confirmedIdentity.length <= 320
+            && saved && saved.lastConfirmedIdentity !== confirmedIdentity) {
+            await updatePool(provider, (pool) => {
+              assertOwner(state);
+              return { ...pool, accounts: pool.accounts.map((account) => account.id === id
+                && (!account.reloginIdentity || account.reloginIdentity.toLowerCase() === confirmedIdentity.toLowerCase())
+                ? { ...account, lastConfirmedIdentity: confirmedIdentity } : account) };
+            });
+            assertOwner(state);
+          } else if (!auth.authenticated && !auth.identity && saved?.lastConfirmedIdentity) {
+            auth = { ...auth, identity: saved.lastConfirmedIdentity };
+          }
+        }
         const invalidated = state.invalidated.get(key);
         if (provider === 'openai' && invalidated && auth.authenticated) {
           const current = await readNativeCodexTokens(directory);
@@ -396,8 +413,9 @@ async function snapshot(
             : eventDuringRead && usage === latest?.usage ? latest?.usageAt : Date.now(),
         };
       } catch {
-        const identity = provider === 'anthropic'
-          ? readPool(provider)?.accounts.find((account) => account.id === id)?.reloginIdentity : undefined;
+        const account = provider === 'anthropic'
+          ? readPool(provider)?.accounts.find((account) => account.id === id) : undefined;
+        const identity = account?.reloginIdentity ?? account?.lastConfirmedIdentity;
         result = { auth: { authenticated: false, ...(identity ? { identity } : {}) }, unavailable: true, at: Date.now() };
       }
     }
@@ -750,8 +768,9 @@ export async function readSubscriptionPool(
         Date.now(),
         provider === 'openai' ? 'codex' : 'claude-code',
       );
+      const { lastConfirmedIdentity: _lastIdentity, reloginIdentity: _renewalIdentity, ...visibleAccount } = account;
       return {
-        ...account,
+        ...visibleAccount,
         directory: directoryFor(provider, account.id),
         ...(account.id === 'default' && legacyCodexDefault(provider) ? { legacy: true } : {}),
         identity: info.auth.identity,
@@ -840,7 +859,7 @@ export async function needsSubscriptionAccountHandoff(sessionId: string, row: {
 
 export interface SubscriptionAccountLease {
   account: NativeSubscriptionAccount;
-  /** New turns must not reuse an account explicitly disabled by the user. */
+  /** New turns must not reuse a disabled, renewing or unverified account. */
   assertDispatchable(): void;
   /** Pool account id (not the owner-scoped capability id). */
   accountId: string;
@@ -997,8 +1016,17 @@ export async function acquireSubscriptionAccount(
   return {
     assertDispatchable: () => {
       assertCurrent();
-      if (readPool(provider)?.accounts.find(a => a.id === selected)?.paused)
+      const account = readPool(provider)?.accounts.find(a => a.id === selected);
+      if (account?.paused)
         throw new Error('The task subscription account is disabled; retry to switch accounts');
+      if ([...state.logins].some(([key, login]) => key.startsWith(provider + ':') && login.accountId === selected))
+        throw new Error('[SUBSCRIPTION_ACCOUNT_SIGNING_IN] The task subscription account is signing in');
+      if (provider === 'anthropic' && account?.reloginIdentity) {
+        const confirmed = state.cache.get(keyOf(provider, selected));
+        if (!confirmed?.auth.authenticated
+          || confirmed.auth.identity?.trim().toLowerCase() !== account.reloginIdentity.toLowerCase())
+          throw new Error('[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The task subscription account requires login');
+      }
     },
     accountId: selected,
     pinned: pinned !== undefined,
@@ -1253,11 +1281,14 @@ export async function runSubscriptionAccountCommand(
       if (currentAuth?.errorReason === 'codex_provider_managed_auth')
         throw new Error('codex_provider_managed_auth');
       // Derive identity on the execution computer; the caller only supplies the account ID.
+      const savedAccount = readPool(provider)?.accounts.find((account) => account.id === accountId);
       const expectedEmail = renewClaude
-        ? initial?.accounts.find((account) => account.id === accountId)?.reloginIdentity
+        ? savedAccount?.reloginIdentity
+          ?? savedAccount?.lastConfirmedIdentity
           ?? state.cache.get(keyOf(provider, accountId))?.auth.identity
           ?? currentAuth?.identity
         : undefined;
+      if (renewClaude && !expectedEmail?.trim()) throw new Error('account_identity_unknown');
       if (expectedEmail) {
         await updatePool(provider, (pool) => ({
           ...pool,

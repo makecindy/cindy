@@ -152,7 +152,9 @@ export function SubscriptionAccountsSection({
             ? 'subscriptionAccounts.providerManagedAuth'
             : code === 'SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH'
               ? 'subscriptionAccounts.loginIdentityMismatch'
-              : 'subscriptionAccounts.failed',
+              : code === 'SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN'
+                ? 'subscriptionAccounts.loginIdentityUnknown'
+                : 'subscriptionAccounts.failed',
         ));
       await refresh();
     } finally {

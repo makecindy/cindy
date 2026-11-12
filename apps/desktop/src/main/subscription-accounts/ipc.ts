@@ -76,6 +76,11 @@ export function registerSubscriptionAccountsIpc(): void {
           'SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH',
           'Sign in again with the selected Claude account',
         );
+      if (reason === 'account_identity_unknown')
+        throwIpcError(
+          'SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN',
+          'The selected Claude account identity could not be confirmed',
+        );
       throwIpcError(
         reason === 'login_cancelled'
           ? 'SUBSCRIPTION_LOGIN_CANCELLED'

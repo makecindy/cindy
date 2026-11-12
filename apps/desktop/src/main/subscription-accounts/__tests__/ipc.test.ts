@@ -198,13 +198,17 @@ describe('subscription management boundary', () => {
 
   // Standard: a wrong browser account must survive IPC as an actionable error,
   // and its original identity guard must survive metadata normalization/restart.
-  it('preserves Claude renewal recovery metadata and its owner-facing error', async () => {
-    const account = { id: 'default', paused: false, limit: 4, weight: 1, reloginIdentity: 'original@example.test' };
+  it.each([
+    ['account_mismatch', 'SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH'],
+    ['account_identity_unknown', 'SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN'],
+  ])('preserves Claude identity metadata and the owner-facing %s error', async (reason, code) => {
+    const account = { id: 'default', paused: false, limit: 4, weight: 1,
+      reloginIdentity: 'original@example.test', lastConfirmedIdentity: 'original@example.test' };
     const normalized = normalizePoolFile({ pools: { anthropic: { strategy: 'least', accounts: [account] } } });
     expect(normalized.pools.anthropic?.accounts[0]).toEqual(account);
-    h.execute.mockRejectedValue(new Error('account_mismatch'));
+    h.execute.mockRejectedValue(new Error(reason));
     const error = await invoke({ action: 'login', providerId: 'anthropic', accountId: 'default', loginKey: 'renew' }).catch(error => error);
-    expect(mapIpcErrorToI18nKey(error)).toBe('ipcError.SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH');
+    expect(mapIpcErrorToI18nKey(error)).toBe(`ipcError.${code}`);
   });
 
   // #9517, unit: CLI provider-managed auth must survive the real handler and

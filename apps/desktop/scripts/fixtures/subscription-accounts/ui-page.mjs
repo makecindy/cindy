@@ -9,6 +9,7 @@ export default {
   cases: {
     expiry: { about: 'Login expiry and the selected-account renewal action, before interaction' },
     'expiry-narrow': { about: 'Login expiry and renewal at 320-pixel content width, before interaction' },
+    'identity-unknown': { about: 'A stale account row explains how to reconnect when the executor cannot confirm the original identity' },
     default: { about: 'Three Claude accounts: independent 18-day, 3-day and unknown login expiry, per-account renewal and aligned usage' },
     'expiry-past': { about: 'A past CLI estimate warns but does not mark the account signed out' },
     narrow: { about: '320-pixel content width without clipped account controls' },
@@ -30,6 +31,14 @@ export default {
     }
     await page.getByTestId('subscription-accounts').waitFor();
     assert.equal(await page.locator('main').evaluate(element => element.scrollWidth <= element.clientWidth), true);
+    if (ui.case === 'identity-unknown') {
+      await page.getByTestId('subscription-account').nth(1).getByRole('button', {
+        name: await ui.t('subscriptionAccounts.loginAccountAria', { name: 'long.work.account@research.example.com' }), exact: true,
+      }).click();
+      await page.getByText(await ui.t('subscriptionAccounts.loginIdentityUnknown'), { exact: true }).waitFor();
+      await ui.capture('identity-unknown');
+      return;
+    }
     if (ui.case === 'provider-auth') {
       await page.getByRole('button', { name: await ui.t('subscriptionAccounts.add'), exact: true }).click();
       await page.getByText(await ui.t('subscriptionAccounts.providerManagedAuth'), { exact: true }).waitFor();

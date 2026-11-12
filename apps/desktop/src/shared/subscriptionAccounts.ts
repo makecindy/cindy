@@ -8,6 +8,8 @@ export const DEFAULT_ACCOUNT_USAGE_SCOPE = 'default-subscription-account';
 export type SubscriptionProvider = 'anthropic' | 'openai';
 export interface SubscriptionAccountConfig {
   id: string;
+  /** Last identity confirmed by the official CLI, retained across logout/restart. No credentials. */
+  lastConfirmedIdentity?: string;
   /** Owner-local recovery guard for an explicitly requested Claude re-login. No credentials. */
   reloginIdentity?: string;
   paused: boolean;
@@ -48,7 +50,7 @@ export interface SubscriptionAccountUsage {
     credits: { hasCredits: boolean; unlimited: boolean; balance: string | null } | null;
   };
 }
-export interface SubscriptionAccountView extends SubscriptionAccountConfig {
+export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig, 'lastConfirmedIdentity' | 'reloginIdentity'> {
   legacy?: boolean;
   identity?: string;
   plan?: string;

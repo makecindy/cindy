@@ -94,15 +94,18 @@ describe('SubscriptionAccountsSection usage', () => {
     expect(screen.getByRole('button', { name: 'Sign in again to first@example.test' }).hasAttribute('disabled')).toBe(true);
     expect(screen.getByText('subscriptionAccounts.loginExpiryUnknown')).toBeTruthy();
   });
-  it('explains a wrong browser account instead of claiming renewal succeeded', async () => {
+  it.each([
+    ['SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH', 'loginIdentityMismatch'],
+    ['SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN', 'loginIdentityUnknown'],
+  ])('explains %s instead of claiming renewal succeeded', async (code, message) => {
     const error = vi.spyOn(toast, 'error').mockImplementation(() => '');
     vi.mocked(window.electronAPI.subscriptionAccounts.command).mockImplementation(async request => {
-      if (request.action === 'login') throw new Error('[SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH] Sign in again');
+      if (request.action === 'login') throw new Error(`[${code}] Sign in again`);
       return { ...view, accounts: [{ ...view.accounts[0], status: 'signed-out', authIssue: 'claude-account-mismatch' }] };
     });
     render(<SubscriptionAccountsSection providerId="anthropic" />);
     fireEvent.click(await screen.findByRole('button', { name: 'Sign in again to first@example.test' }));
-    await waitFor(() => expect(error).toHaveBeenCalledWith('subscriptionAccounts.loginIdentityMismatch'));
+    await waitFor(() => expect(error).toHaveBeenCalledWith(`subscriptionAccounts.${message}`));
     expect(screen.getByText('subscriptionAccounts.loginIdentityMismatchStatus')).toBeTruthy();
   });
   // #9517, unit: existing settings tests never exercised an account operation

@@ -1312,6 +1312,7 @@
     "handoffWindow": "대리 입력 · {{app}}"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "이 SSH 작업에서는 Harness를 전환할 수 없습니다. 현재 Harness의 모델을 선택하거나 필요한 Harness로 새 SSH 작업을 만드세요.",
     "MODEL_SELECTION_UNAVAILABLE": "선택한 제공자의 모델을 더 이상 사용할 수 없습니다. 설정에서 연결을 확인하거나 사용 가능한 모델을 다시 선택하세요.",
@@ -19968,6 +19969,7 @@
     "lineNumbers": "줄 번호"
   },
   "subscriptionAccounts": {
+    "loginIdentityUnknown": "이 계정의 기존 정보를 확인할 수 없습니다. 계정 추가를 통해 새로 연결하세요.",
     "loginExpiresInDays": "약 {{days}}일 후 로그인 만료",
     "loginExpiresSoon": "로그인이 곧 만료됩니다",
     "loginMayHaveExpired": "로그인이 만료되었을 수 있습니다",

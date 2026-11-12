@@ -1312,6 +1312,7 @@
     "handoffWindow": "代理入力 · {{app}}"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "この SSH タスクでは Harness を切り替えられません。現在の Harness のモデルを選ぶか、必要な Harness で新しい SSH タスクを作成してください。",
     "MODEL_SELECTION_UNAVAILABLE": "選択したプロバイダーのモデルは利用できなくなりました。設定で接続を確認するか、利用可能なモデルを選び直してください。",
@@ -19968,6 +19969,7 @@
     "lineNumbers": "行番号"
   },
   "subscriptionAccounts": {
+    "loginIdentityUnknown": "このアカウントの元の情報を確認できません。「アカウントを追加」から新しく接続してください。",
     "loginExpiresInDays": "ログインは約 {{days}} 日後に期限切れ",
     "loginExpiresSoon": "ログインの有効期限が近づいています",
     "loginMayHaveExpired": "ログインの期限が切れた可能性があります",

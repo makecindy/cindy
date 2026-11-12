@@ -1312,6 +1312,7 @@
     "handoffWindow": "代輸入 · {{app}}"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任務暫不支援切換 Harness。請選擇目前 Harness 下的模型，或使用所需 Harness 建立新的 SSH 任務。",
     "MODEL_SELECTION_UNAVAILABLE": "所選模型在該供應商下已無法使用。請在設定中檢查連線，或重新選擇可用模型。",
@@ -19968,6 +19969,7 @@
     "lineNumbers": "行號"
   },
   "subscriptionAccounts": {
+    "loginIdentityUnknown": "無法確認此帳號的原身分，請透過「新增帳號」重新連線",
     "loginExpiresInDays": "登入預計 {{days}} 天後到期",
     "loginExpiresSoon": "登入即將到期",
     "loginMayHaveExpired": "登入可能已到期",

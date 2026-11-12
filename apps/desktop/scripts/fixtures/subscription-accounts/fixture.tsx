@@ -175,6 +175,8 @@ void mountPage({
             throw new Error(
               '[SUBSCRIPTION_CODEX_PROVIDER_AUTH] The active Codex provider does not expose a ChatGPT account',
             );
+          if (ctx.case === 'identity-unknown' && command.action === 'login')
+            throw new Error('[SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN] Account identity is unknown');
           if (command.action === 'configure')
             view = {
               ...view,

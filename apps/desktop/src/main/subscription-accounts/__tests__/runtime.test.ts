@@ -156,6 +156,98 @@ describe('Claude account renewal', () => {
   const firstExpiry = '2030-02-01T00:00:00.000Z';
   const secondExpiry = '2030-01-05T00:00:00.000Z';
   const renewedExpiry = '2030-02-05T00:00:00.000Z';
+  // PR #10086 / Greptile, standard: the existing failure/restart test saved
+  // identity only after renewal started. A normal logout before restarting
+  // lost that identity and allowed a different browser account into the slot.
+  it('keeps the last confirmed identity across logout and restart before renewal', async () => {
+    let secondIdentity: string | undefined = 'second@example.test';
+    h.read.mockImplementation(async (_provider, directory) => ({
+      authenticated: directory === 'anthropic/default' || !!secondIdentity,
+      identity: directory === 'anthropic/default' ? 'first@example.test' : secondIdentity,
+    }));
+    await readSubscriptionPool('anthropic');
+    secondIdentity = undefined;
+    h.owner = 'owner-a:' + ++generation;
+    expect((await readSubscriptionPool('anthropic')).accounts[1]).toMatchObject({
+      status: 'signed-out', identity: 'second@example.test',
+    });
+    h.login.mockImplementationOnce(async () => { secondIdentity = 'wrong@example.test'; });
+    await expect(runSubscriptionAccountCommand({ action: 'login', providerId: 'anthropic', accountId: 'second', loginKey: 'after-restart' }))
+      .rejects.toThrow('account_mismatch');
+    expect(h.login).toHaveBeenCalledExactlyOnceWith('anthropic', 'anthropic/second', expect.any(AbortSignal),
+      { renew: true, expectedEmail: 'second@example.test' });
+    expect(h.clearCooling).not.toHaveBeenCalled();
+    expect((await readSubscriptionPool('anthropic')).accounts[1].status).toBe('signed-out');
+  });
+
+  it('refuses renewal with no known identity before changing the CLI profile', async () => {
+    h.read.mockResolvedValue({ authenticated: false });
+    await expect(runSubscriptionAccountCommand({ action: 'login', providerId: 'anthropic', accountId: 'second', loginKey: 'unknown' }))
+      .rejects.toThrow('account_identity_unknown');
+    expect(h.login).not.toHaveBeenCalled();
+    expect(h.clearCooling).not.toHaveBeenCalled();
+  });
+
+  // Standard: identity persistence adds a write after the auth await. A late
+  // CLI response from the previous owner must not update the new owner's pool.
+  it('does not save a late CLI identity after the owner changes', async () => {
+    h.pools.anthropic!.accounts = [account('default')];
+    let finish!: (auth: { authenticated: boolean; identity: string }) => void;
+    h.read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const pending = readSubscriptionPool('anthropic');
+    await vi.waitFor(() => expect(h.read).toHaveBeenCalledOnce());
+    h.owner = 'different-owner:' + ++generation;
+    h.pools.anthropic = { strategy: 'least', accounts: [account('default')] };
+    finish({ authenticated: true, identity: 'previous-owner@example.test' });
+    await expect(pending).rejects.toThrow('owner changed');
+    expect(h.pools.anthropic.accounts[0]).not.toHaveProperty('lastConfirmedIdentity');
+  });
+
+  // Standard, independent PR #10086 review: snapshot guards covered new leases,
+  // but an idle live handle could send through a profile being renewed or left
+  // on the wrong identity. Exercise the real wrapper, not its guard in isolation.
+  it.each(['account_mismatch', 'login_cancelled'])('protects an existing handle during renewal and after %s', async reason => {
+    h.pools.anthropic!.accounts = [account('second')];
+    let identity = 'second@example.test';
+    h.read.mockImplementation(async () => ({ authenticated: true, identity }));
+    const nativeSend = vi.fn(async () => {});
+    const handle = await withSubscriptionAccounts({
+      kind: 'claude-code', startSession: async () => ({
+        id: 'existing', send: nativeSend, close: async () => {},
+        events: async function* () { yield { type: 'done', data: {} }; },
+      }),
+    } as unknown as BaseAgent).startSession({ providerId: 'anthropic', sessionId: 'existing' } as StartSessionOptions);
+    for await (const event of handle.events()) expect(event.type).toBe('done');
+    let finish!: () => void;
+    h.login.mockImplementationOnce(async () => {
+      await new Promise<void>(resolve => { finish = resolve; });
+      if (reason === 'account_mismatch') identity = 'wrong@example.test';
+      throw new Error(reason);
+    });
+    const renewal = runSubscriptionAccountCommand({ action: 'login', providerId: 'anthropic', accountId: 'second', loginKey: 'existing-renewal' });
+    await vi.waitFor(() => expect(h.login).toHaveBeenCalledOnce());
+    await expect(handle.send({ type: 'user', content: 'during renewal' })).rejects.toThrow('SUBSCRIPTION_ACCOUNT_SIGNING_IN');
+    finish();
+    await expect(renewal).rejects.toThrow(reason);
+    await readSubscriptionPool('anthropic');
+    if (reason === 'account_mismatch') {
+      await expect(handle.send({ type: 'user', content: 'after wrong login' })).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED');
+      expect(nativeSend).not.toHaveBeenCalled();
+    } else {
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 31_000);
+      try {
+        await handle.send({ type: 'user', content: 'original identity confirmed after cancellation' });
+        expect(nativeSend).toHaveBeenCalledOnce();
+        for await (const event of handle.events()) expect(event.type).toBe('done');
+      } finally { clock.mockRestore(); }
+    }
+    h.login.mockImplementationOnce(async () => { identity = 'second@example.test'; });
+    await runSubscriptionAccountCommand({ action: 'login', providerId: 'anthropic', accountId: 'second', loginKey: 'restore' });
+    await handle.send({ type: 'user', content: 'original account restored' });
+    expect(nativeSend).toHaveBeenCalledTimes(reason === 'account_mismatch' ? 1 : 2);
+    await handle.close();
+  });
+
   it('renews only the selected account and keeps the other expiry and settings', async () => {
     let renewed = false;
     h.read.mockImplementation(async (_provider, directory) => ({
