@@ -503,6 +503,11 @@ async function addBotImConnectionNow(
   }
   let live: LiveInstance;
   try {
+    // New iMessage connections need an identity independent of the editable URL.
+    // Existing records retain their saved identity so their lanes stay reachable.
+    if (input.channel === 'imessage') {
+      record = (await updateBotImConnectionRecord(record.id, { botContextId: `imessage-${record.id}` })) ?? record;
+    }
     live = instantiate(record);
   } catch (err) {
     await removeBotImConnectionRecord(record.id);

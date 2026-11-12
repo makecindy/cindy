@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { once } from 'node:events';
+import { createHash } from 'node:crypto';
 import { BlueBubblesIM, LocalWebhookReceiver, type IMHost } from '@cindy/im';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -105,6 +106,7 @@ import {
 } from '../botImConnectionRuntime';
 import { addBotImConnectionRecord, listBotImConnections, secretKeyPrefixFor } from '../botImConnectionStore';
 import * as connectionStore from '../botImConnectionStore';
+import { companionConnectionRouteKeyPrefix } from '../imBotBindingRoute';
 import { blueBubblesStateStorage } from '../../imessage/storage';
 import { __testing as laneTesting } from '../botImLaneRuntime';
 import { withBotProfileLocks } from '../../../maker-ipc/botProfileLock';
@@ -600,6 +602,7 @@ describe('bot im connection runtime', () => {
       create: record => {
         storage = blueBubblesStateStorage(record.id);
         transport = new BlueBubblesIM(host, { secretPrefix: secretKeyPrefixFor(record.id), storage,
+          contextId: () => connectionStore.readBotImConnection(record.id)?.botContextId ?? null,
           receiver: () => new LocalWebhookReceiver('127.0.0.1', 0), resolvePeers: async () => ['127.0.0.1'], now: () => now });
         transport.onMessage(event => { event.delivery!.awaitPersistence(); event.delivery!.accept(); });
         return { kind: 'imessage', im: transport, orchestrator: fakeOrchestrator() as never };
@@ -625,9 +628,14 @@ describe('bot im connection runtime', () => {
         expect(storage.read()!.inbox['first-add-message'].state).toBe('accepted');
         expect(transport.getStatus().kind).toBe('connected');
         expect(listBotImConnections()[0]?.id).toBe(result.connection.id);
+        expect(listBotImConnections()[0]?.botContextId).toBe(`imessage-${result.connection.id}`);
+        // Tier 1, PR #10241/r4552139485: simulate a pre-edit legacy connection
+        // whose persisted identity is the hash of A; editing A -> B must retain it.
+        const legacyContextId = createHash('sha256').update(origin).digest('hex').slice(0, 24);
+        await connectionStore.updateBotImConnectionRecord(result.connection.id, { botContextId: legacyContextId });
         const config = getBotIMessageConfig(result.connection.id);
         expect(config).not.toHaveProperty('password');
-        const updated = await updateBotIMessageConfig(result.connection.id, { ...config, password: '', listenPort: 18748 });
+        const updated = await updateBotIMessageConfig(result.connection.id, { ...config, serverUrl: origin.replace('127.0.0.1', 'localhost'), password: '', listenPort: 18748 });
         expect(updated.connections[0]?.id).toBe(result.connection.id);
         expect(updated.connections[0]?.botId).toBe('bot-mia');
         expect(getBotIMessageConfig(result.connection.id).listenPort).toBe(18748);
@@ -636,7 +644,21 @@ describe('bot im connection runtime', () => {
         await expect(updateBotIMessageConfig(result.connection.id, { ...config, listenPort: 1 })).rejects.toThrow(/INVALID_PARAMS/);
         expect(getBotIMessageConfig(result.connection.id).listenPort).toBe(18748);
         expect(h.archiveCalls).toEqual([]);
-
+        expect(updated.connections[0]?.botContextId).toBe(legacyContextId);
+        // Re-adding A for another companion must not reuse the legacy lane prefix.
+        const originalTransport = transport;
+        const second = await addBotImConnection({ botId: 'bot-other', channel: 'imessage', ...config, password: 'test-only' });
+        expect(second.connection.botContextId).toBe(`imessage-${second.connection.id}`);
+        expect(second.connection.botContextId).not.toBe(legacyContextId);
+        await removeBotImConnection(second.connection.id);
+        expect(h.archiveCalls).toEqual([{ routeKeyPrefix: companionConnectionRouteKeyPrefix('imessage', second.connection.botContextId!) }]);
+        expect(connectionStore.readBotImConnection(result.connection.id)?.botContextId).toBe(legacyContextId);
+        expect(originalTransport.getStatus().kind).toBe('connected');
+        // Reopen the retained connection from disk, preserving its existing identity.
+        await stopBotImConnections();
+        await startBotImConnections();
+        expect(transport.botContextId).toBe(legacyContextId);
+        expect(transport.getStatus().kind).toBe('connected');
       }
     } finally {
       await stopBotImConnections();
