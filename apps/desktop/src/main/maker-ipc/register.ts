@@ -7511,6 +7511,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 所在电脑。v0.1.104–v0.1.110 的 host 会以 UNSUPPORTED_CAPABILITY 拒绝这类换位置，缺省 false
       // 时控制端不提供。
       supportsOrcaAgentRelocation: true,
+      // 新控制端只有看到此位，才对这台电脑上的运行设备 Worker(Lead 在另一台电脑)列出其他电脑与
+      // 分享、允许换 Agent 所在电脑。更早的 host 会以 UNSUPPORTED_CAPABILITY 拒绝，缺省 false 时不提供。
+      supportsOrcaRemoteWorkerAgentRelocation: true,
       // 调度更新支持 intervalMs:null 的显式清空表达(IPC 入口归一化成引擎的
       // 「带 key 的 undefined」)。旧 desktop 缺省为 false——旧引擎会把 null 当
       // 已设间隔算出 now+null 立即触发,mobile 必须据此回退旧 wire 形态(省略
