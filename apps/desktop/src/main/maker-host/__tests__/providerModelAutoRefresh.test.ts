@@ -34,7 +34,7 @@ function deferred(): {
 }
 
 describe('provider model auto-refresh coordinator', () => {
-  it('restores custom supplier labels on list hints independently of builtin discovery', async () => {
+  it('restores custom supplier labels on scoped startup and list hints', async () => {
     const recovery = deferred();
     const refreshCustomModelSources = vi.fn(() => recovery.promise);
     const refreshProvider = vi.fn(async () => undefined);
@@ -43,7 +43,7 @@ describe('provider model auto-refresh coordinator', () => {
       listProviders: async () => [view('openai', true)],
       refreshProvider, refreshCustomModelSources, now: () => 1_000, log,
     });
-    const started = coordinator.requestAutoRefresh('startup');
+    const started = coordinator.requestAutoRefresh('startup', ['xd', 'openai', 'xai']);
     await vi.waitFor(() => expect(refreshProvider).toHaveBeenCalledWith('openai'));
     expect(refreshCustomModelSources).toHaveBeenCalledOnce();
     recovery.reject(new Error('offline'));
