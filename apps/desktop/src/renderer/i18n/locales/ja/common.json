@@ -1312,6 +1312,8 @@
     "handoffWindow": "代理入力 · {{app}}"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
+    "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "この SSH タスクでは Harness を切り替えられません。現在の Harness のモデルを選ぶか、必要な Harness で新しい SSH タスクを作成してください。",
     "MODEL_SELECTION_UNAVAILABLE": "選択したモデルは、そのプロバイダーで利用できなくなりました。設定で接続を確認するか、利用可能なモデルを選び直してください。",
     "HARNESS_SWITCH_NOT_READY": "Harness の切り替えが完了していません。エラーの詳細を確認し、Harness の準備ができてから再試行してください。",
@@ -20891,6 +20893,15 @@
     "lineNumbers": "行番号"
   },
   "subscriptionAccounts": {
+    "loginIdentityUnknown": "このアカウントの元の情報を確認できません。「アカウントを追加」から新しく接続してください。",
+    "loginExpiresInDays": "ログインは約 {{days}} 日後に期限切れ",
+    "loginExpiresSoon": "ログインの有効期限が近づいています",
+    "loginMayHaveExpired": "ログインの期限が切れた可能性があります",
+    "loginExpiryUnknown": "ログインの有効期限は不明",
+    "loginExpiryDetail": "有効期限の目安：{{date}}。Claude による推定のため、それより前に無効になる場合があります。",
+    "loginAccountAria": "{{name}} に再ログイン",
+    "loginIdentityMismatchStatus": "ログインアカウントが異なります",
+    "loginIdentityMismatch": "選択したアカウントとは別のアカウントにログインしました。もう一度ログインし、この行に表示されているアカウントを選択してください。",
     "unassigned": "アカウント未割り当て",
     "boundUnavailable": "アカウントを利用できません",
     "providerManagedAuth": "現在の Codex プロバイダーでは ChatGPT アカウント情報を取得できません。プロバイダーの追加時に「$t(subscriptionAccounts.signIn.anotherAccount)」を選ぶと、別のフォルダーを使用できます。",

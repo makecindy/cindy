@@ -1343,6 +1343,8 @@
     "idleMinutes_many": "{{count}} minutos"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
+    "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarefa SSH não pode trocar de Harness. Escolha um modelo no Harness atual ou crie uma nova tarefa SSH com o Harness necessário.",
     "MODEL_SELECTION_UNAVAILABLE": "O modelo selecionado não está mais disponível no provedor. Verifique a conexão em Configurações ou escolha outro modelo disponível.",
     "HARNESS_SWITCH_NOT_READY": "A troca de Harness não está pronta. Verifique os detalhes do erro e tente novamente quando o Harness estiver pronto.",
@@ -21174,6 +21176,15 @@
     "lineNumbers": "Números de linha"
   },
   "subscriptionAccounts": {
+    "loginIdentityUnknown": "Não foi possível confirmar a identidade original desta conta. Use Adicionar conta para conectar uma nova conta.",
+    "loginExpiresInDays": "O login expira em cerca de {{days}} dias",
+    "loginExpiresSoon": "O login expira em breve",
+    "loginMayHaveExpired": "O login pode ter expirado",
+    "loginExpiryUnknown": "Validade do login desconhecida",
+    "loginExpiryDetail": "Validade estimada: {{date}}. Esta estimativa é fornecida pelo Claude; o login pode expirar antes.",
+    "loginAccountAria": "Entrar novamente em {{name}}",
+    "loginIdentityMismatchStatus": "A conta não corresponde",
+    "loginIdentityMismatch": "Você entrou em outra conta. Entre novamente e escolha a conta exibida nesta linha.",
     "unassigned": "Conta não atribuída",
     "boundUnavailable": "Conta indisponível",
     "providerManagedAuth": "O provedor atual do Codex não disponibiliza informações da conta do ChatGPT. Ao adicionar o provedor, selecione “$t(subscriptionAccounts.signIn.anotherAccount)” para usar uma pasta separada.",

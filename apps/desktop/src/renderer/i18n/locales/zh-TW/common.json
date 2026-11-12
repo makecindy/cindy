@@ -1312,6 +1312,8 @@
     "handoffWindow": "代輸入 · {{app}}"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
+    "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任務暫不支援切換 Harness。請選擇目前 Harness 下的模型，或使用所需 Harness 建立新的 SSH 任務。",
     "MODEL_SELECTION_UNAVAILABLE": "所選模型在該供應商下已無法使用。請在設定中檢查連線，或重新選擇可用模型。",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切換。請查看錯誤詳細資訊，待 Harness 就緒後重試。",
@@ -20891,6 +20893,15 @@
     "lineNumbers": "行號"
   },
   "subscriptionAccounts": {
+    "loginIdentityUnknown": "無法確認此帳號的原身分，請透過「新增帳號」重新連線",
+    "loginExpiresInDays": "登入預計 {{days}} 天後到期",
+    "loginExpiresSoon": "登入即將到期",
+    "loginMayHaveExpired": "登入可能已到期",
+    "loginExpiryUnknown": "登入到期時間未知",
+    "loginExpiryDetail": "預計到期：{{date}}。這是 Claude 提供的估計時間，登入可能提早失效。",
+    "loginAccountAria": "重新登入 {{name}}",
+    "loginIdentityMismatchStatus": "登入帳號不符",
+    "loginIdentityMismatch": "登入的帳號與所選帳號不一致。請重新登入，選擇列表中的這個帳號。",
     "unassigned": "帳號待分配",
     "boundUnavailable": "帳號已無法使用",
     "providerManagedAuth": "Codex 目前的供應商未提供 ChatGPT 帳號資訊。請在新增供應商時選擇「$t(subscriptionAccounts.signIn.anotherAccount)」，使用獨立目錄。",
