@@ -5,6 +5,8 @@ vi.mock('@/session/SessionProjectMoveSheet', () => ({
 }));
 vi.mock('@/session/TaskTags', () => ({ TaskTagsPanel: () => null }));
 vi.mock('@/session/SessionPrLinks', () => ({ SessionPrLinks: () => null }));
+vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 0 }) }));
+vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: vi.fn(async () => null) } }));
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
@@ -16,11 +18,23 @@ import { i18n } from "@/i18n";
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { SessionMenuPrLinks } from '@/session/SessionMenuPrLinks';
 import type { HomeSessionPrInfo } from '@/session/homeSessionPrStore';
+import { __testing as prStoreTesting } from '@/session/homeSessionPrStore';
 
 const prFixture = vi.hoisted(() => ({ value: null as HomeSessionPrInfo | null, openURL: vi.fn(async (_url: string) => {}) }));
-vi.mock('@/session/HomeSessionInfoMeta', () => ({
-  useHomeSessionPr: (_device: string, _session: string, enabled: boolean) => enabled ? prFixture.value : null,
-}));
+vi.mock('@/device-link/DeviceLinkContext', () => {
+  const link = {
+    status: 'online', connectionEpoch: 0, getPresenceAvailability: () => true,
+    invoke: vi.fn(async (_device: string, channel: string) => {
+      const rows = prFixture.value ? [prFixture.value, ...(prFixture.value.additional ?? [])] : [];
+      return channel.endsWith(':list') ? rows.map(row => row.ref) : rows.flatMap(row => row.status ? [row.status] : []);
+    }),
+  };
+  return { useDeviceLink: () => link };
+});
+vi.mock('@/session/remoteSessionStore', () => {
+  const visibility = { isActive: () => true, onResume: () => () => {} };
+  return { useRemoteSessionStoreVisibility: () => visibility, useRemoteSessionUsage: () => ({}) };
+});
 
 vi.mock("react-native", async () => {
   const { createElement } = await import("react");
@@ -43,6 +57,7 @@ vi.mock("react-native", async () => {
     ActivityIndicator: () => null,
     Alert: { alert: vi.fn() },
     Linking: { openURL: prFixture.openURL },
+    AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) },
     Animated: {
       Value: class {
         setValue() {}
@@ -119,6 +134,7 @@ vi.mock("@/session/messageActions", () => ({ writeClipboardText: vi.fn(), format
 it('opens linked PRs and MRs from the primary menu with status labels and handles open failures', async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   await i18n.changeLanguage('en');
+  prStoreTesting.reset();
   const ref = { id: 'pr', sessionId: 'a', owner: 'team', repo: 'app', prNumber: 12, firstSeenAt: 1, lastSeenAt: 1, url: '' };
   prFixture.value = {
     ref,
@@ -146,6 +162,37 @@ it('opens linked PRs and MRs from the primary menu with status labels and handle
   } finally {
     await act(async () => root.unmount());
     prFixture.value = null;
+    prStoreTesting.reset();
+  }
+});
+
+// Unit: #10106 originally reused a fresh cache after details-page edits. Render
+// the real menu and PR hook, change the remote association reply while hidden,
+// then reopen inside the cache TTL; the old link must be replaced immediately.
+it('shows edited associations when returning from details to the primary menu', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  await i18n.changeLanguage('en');
+  prStoreTesting.reset();
+  const ref = { id: 'old', sessionId: 's', owner: 'team', repo: 'app', prNumber: 7, firstSeenAt: 1, lastSeenAt: 1, url: '' };
+  prFixture.value = { ref, status: null };
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<SessionMenuPrLinks deviceId="d" sessionId="s" visible />));
+    expect(host.textContent).toContain('team/app #7');
+    await act(async () => root.render(<SessionMenuPrLinks deviceId="d" sessionId="s" visible={false} />));
+    prFixture.value = { ref: { ...ref, id: 'new', prNumber: 8, pinned: true }, status: null };
+    await act(async () => root.render(<SessionMenuPrLinks deviceId="d" sessionId="s" visible />));
+    expect(host.textContent).toContain('team/app #8');
+    expect(host.textContent).not.toContain('team/app #7');
+    await act(async () => root.render(<SessionMenuPrLinks deviceId="d" sessionId="s" visible={false} />));
+    prFixture.value = null;
+    await act(async () => root.render(<SessionMenuPrLinks deviceId="d" sessionId="s" visible />));
+    expect(host.textContent).toBe('');
+  } finally {
+    await act(async () => root.unmount());
+    prFixture.value = null;
+    prStoreTesting.reset();
   }
 });
 

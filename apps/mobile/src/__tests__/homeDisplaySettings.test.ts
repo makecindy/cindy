@@ -19,6 +19,7 @@ import { reorderVisibleProjectByDropIndex } from '@/session/homeProjectOrder';
 import {
   __testing as prStoreTesting,
   clearHomeSessionPrCache,
+  expireHomeSessionPr,
   homeSessionPrCacheKey,
   hydrateHomeSessionPr,
   latestPrRef,
@@ -26,6 +27,7 @@ import {
   readHomeSessionPr,
   refreshHomeSessionPr,
   subscribeHomeSessionPr,
+  type HomeSessionPrInfo,
 } from '@/session/homeSessionPrStore';
 
 const storage = vi.hoisted(() => new Map<string, string>());
@@ -399,6 +401,46 @@ describe('home PR cache', () => {
     expect(refreshHomeSessionPr('k', load, { now: 35_000, refreshKey: 'b', eventful: true })).toBe(0);
     await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(3));
     expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  // Unit regression for #10106: after a details-page edit, a menu reopened
+  // 1ms after its last read must replace the old associations. Existing cache
+  // tests only covered timed refreshes, not explicit menu invalidation.
+  it('reloads edited menu associations immediately and rejects pre-edit reads', async () => {
+    vi.useFakeTimers();
+    try {
+      const key = homeSessionPrCacheKey('0', 'd', 's', true);
+      const ref = { id: '1', sessionId: 's', owner: 'a', repo: 'r', prNumber: 7, url: '', firstSeenAt: 1, lastSeenAt: 1 };
+      let refs: HomeSessionPrInfo['ref'][] = [ref];
+      const invoke = vi.fn(async (_device: string, channel: string) => channel.endsWith(':list') ? refs : []);
+      const load = vi.fn((previous: HomeSessionPrInfo | null) => loadHomeSessionPr(invoke as never, 'd', 's', previous, true));
+      refreshHomeSessionPr(key, load, { now: 1_000 });
+      await vi.runAllTimersAsync();
+      expect(readHomeSessionPr(key)?.ref.prNumber).toBe(7);
+
+      refs = [{ ...ref, id: '2', prNumber: 8, pinned: true }];
+      refreshHomeSessionPr(key, load, { now: 1_001 });
+      expect(load).toHaveBeenCalledTimes(1); // Ordinary reopen would keep the old PR.
+      expireHomeSessionPr(key);
+      expect(readHomeSessionPr(key)?.ref.prNumber).toBe(7); // No blank flash while loading.
+      refreshHomeSessionPr(key, load, { now: 1_001 });
+      await vi.runAllTimersAsync();
+      expect(readHomeSessionPr(key)?.ref.prNumber).toBe(8);
+
+      const stale = readHomeSessionPr(key);
+      let finishOld!: (value: HomeSessionPrInfo | null) => void;
+      refreshHomeSessionPr(key, () => new Promise(resolve => { finishOld = resolve; }), { now: 92_000 });
+      refs = [];
+      expireHomeSessionPr(key);
+      refreshHomeSessionPr(key, load, { now: 92_001 });
+      await vi.runAllTimersAsync();
+      expect(readHomeSessionPr(key)).toBeNull();
+      finishOld(stale);
+      await vi.runAllTimersAsync();
+      expect(readHomeSessionPr(key)).toBeNull(); // Removed PR cannot be restored by an old read.
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps the last known status of the same PR when the status lookup fails', async () => {

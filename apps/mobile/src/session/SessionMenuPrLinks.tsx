@@ -1,12 +1,13 @@
-import { useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import { Linking, Pressable, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { prNumberLabel, sessionPrUrl } from '@cindy/maker-shared';
 import { Text } from '@/components/AppText';
+import { useAuth } from '@/auth/AuthContext';
 import { iconSize, iconStroke, useThemedStyles, useTheme, type ThemeColors } from '@/theme';
 import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { useHomeSessionPr } from './HomeSessionInfoMeta';
-import type { HomeSessionPrInfo } from './homeSessionPrStore';
+import { expireHomeSessionPr, homeSessionPrCacheKey, type HomeSessionPrInfo } from './homeSessionPrStore';
 import { prStatusVisual } from './prStatusVisual';
 
 /** The task menu shares the home/glance cache and only refreshes while visible. */
@@ -21,6 +22,13 @@ export function SessionMenuPrLinks({
   updatedAt?: string;
   visible: boolean;
 }) {
+  const { accountGeneration } = useAuth();
+  const cacheKey = homeSessionPrCacheKey(String(accountGeneration), deviceId, sessionId, true);
+  // Expire before useHomeSessionPr's passive refresh, including menu → details
+  // → menu within the ordinary 90-second cache and 10-second debounce windows.
+  useLayoutEffect(() => {
+    if (visible) expireHomeSessionPr(cacheKey);
+  }, [cacheKey, visible]);
   const pr = useHomeSessionPr(deviceId, sessionId, visible, updatedAt, true, true);
   const styles = useThemedStyles(makeStyles);
   if (!pr) return null;

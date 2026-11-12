@@ -66,6 +66,15 @@ export function readHomeSessionPr(key: string): HomeSessionPrInfo | null {
   return entries.get(key)?.value ?? null;
 }
 
+/** Opening the task menu must see association edits made in its details page. */
+export function expireHomeSessionPr(key: string): void {
+  const entry = entries.get(key);
+  if (!entry) return;
+  // Keep known statuses during the refresh, but detach any older in-flight read
+  // so it cannot restore references removed while the menu was hidden.
+  entries.set(key, { ...entry, fetchedAt: Number.NEGATIVE_INFINITY, inflight: false });
+}
+
 export function subscribeHomeSessionPr(key: string, listener: () => void): () => void {
   let set = listeners.get(key);
   if (!set) {
