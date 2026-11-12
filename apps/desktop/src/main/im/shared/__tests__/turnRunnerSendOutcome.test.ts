@@ -3,7 +3,8 @@
  * 工厂化改写)— 断言逐条保留, 用 feishu 真实文案包 + 假 adapter 注入, 行为契约
  * 与重构前一致(characterization)。
  */
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -3364,7 +3365,9 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       await vi.waitFor(() => expect(commitFinal).toHaveBeenCalledTimes(1));
       const payload = commitFinal.mock.calls[0]![0];
       // 只有工作目录内、真实存在的文件成为附件; 越界与外部 URL 不是附件。
-      expect(payload.fileAbsPaths).toEqual([realpathSync(path.join(workDir, 'imbot-live.txt'))]);
+      // The production resolver uses fs.promises.realpath. On Windows its
+      // expanded path differs from realpathSync's preserved 8.3 spelling.
+      expect(payload.fileAbsPaths).toEqual([await realpath(path.join(workDir, 'imbot-live.txt'))]);
       // 正文保留用户能看懂的文件说明, 但不再把本机链接目标发给对方。
       expect(payload.text).toContain('下载 imbot-live.txt');
       expect(payload.text).not.toContain('](imbot-live.txt)');
@@ -3462,7 +3465,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       h.emit({ type: 'done', data: {} });
       await vi.waitFor(() => expect(commitFinal).toHaveBeenCalledTimes(1));
       const payload = commitFinal.mock.calls[0]![0];
-      expect(payload.fileAbsPaths).toEqual([realpathSync(path.join(workDir, 'imbot-live.txt'))]);
+      expect(payload.fileAbsPaths).toEqual([await realpath(path.join(workDir, 'imbot-live.txt'))]);
       // 渠道侧会拿这份根再校验一次文件步; 必须与正常 finalize 一致。
       expect(payload.allowedFileRoots).toEqual([workDir]);
     } finally {
