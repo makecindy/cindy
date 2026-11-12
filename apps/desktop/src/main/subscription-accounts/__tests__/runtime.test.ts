@@ -99,6 +99,7 @@ import {
   acquireSubscriptionAccount,
   needsSubscriptionAccountHandoff as probeSubscriptionAccountHandoff,
   readSubscriptionPool,
+  refreshSubscriptionPool,
   disconnectSubscriptionPool,
   readSubscriptionPoolUsage,
   readSubscriptionPoolModelAvailability,
@@ -123,6 +124,7 @@ import { createProviderGroupService, type ProviderGroupSessionRow } from '../../
 import type { ProviderGroupBinding } from '../../provider-group/bindings.js';
 import { normalizeProviderGroupConfig } from '../../../shared/providerGroup.js';
 import type { ProviderView } from '@cindy/model-providers';
+import { subscriptionPoolSources } from '../../menubar/collect.js';
 const account = (id: string) => ({ id, paused: false, limit: 1, weight: 1 });
 let generation = 0;
 beforeEach(() => {
@@ -301,6 +303,65 @@ describe('Claude account renewal', () => {
     expect(retried.accounts[1]).toMatchObject({ status: 'ready', identity: 'second@example.test' });
     expect(retried.accounts[1].authIssue).toBeUndefined();
     expect(h.pools.anthropic?.accounts[1].reloginIdentity).toBeUndefined();
+  });
+});
+
+// #10110 review, unit: the overview refresh must cross the real runtime cache.
+// Earlier tests replaced the pool DTO, hiding the 30s/180s cache and lost legacy
+// plan. Minimal inputs: cached quota then an upstream change; legacy auth without plan.
+describe('quota overview account reads', () => {
+  it('refreshes after an older account read already in flight instead of joining its stale result', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default')] };
+    const quota = (used: number) => ({ codexUsage: { appServerBuckets: { codex: { primary: null,
+      secondary: { usedPercent: used, windowMinutes: 10_080, resetsAt: Date.now() / 1000 + 3600 },
+    } } } });
+    let finish!: (value: ReturnType<typeof quota>) => void;
+    h.usage.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const normal = readSubscriptionPool('openai');
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    h.usage.mockResolvedValue(quota(70));
+    const refresh = refreshSubscriptionPool('openai', true);
+    finish(quota(20));
+    await normal;
+    expect((await refresh).accounts[0].usage?.codex?.buckets.codex.secondary?.usedPercent).toBe(70);
+    expect(h.usage).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['anthropic', 'openai'] as const)('refreshes cached %s quota and coalesces concurrent refreshes', async provider => {
+    h.pools[provider] = { strategy: 'least', accounts: [account('default')] };
+    const quota = (used: number) => provider === 'anthropic'
+      ? { claudeUsage: { sevenDay: { utilization: used, resetsAt: Date.now() / 1000 + 3600 } } }
+      : { codexUsage: { appServerBuckets: { codex: { primary: null, secondary: {
+          usedPercent: used, windowMinutes: 10_080, resetsAt: Date.now() / 1000 + 3600,
+        } } } } };
+    h.usage.mockResolvedValue(quota(20));
+    await readSubscriptionPool(provider);
+    const count = h.usage.mock.calls.length;
+    h.usage.mockResolvedValue(quota(70));
+    await readSubscriptionPool(provider);
+    expect(h.usage).toHaveBeenCalledTimes(count);
+    const [first, second] = await Promise.all([
+      refreshSubscriptionPool(provider, true), refreshSubscriptionPool(provider, true),
+    ]);
+    const used = (view: typeof first) => provider === 'anthropic'
+      ? view.accounts[0].usage?.claude?.sevenDay?.utilization
+      : view.accounts[0].usage?.codex?.buckets.codex.secondary?.usedPercent;
+    expect([used(first), used(second)]).toEqual([70, 70]);
+    expect(h.usage).toHaveBeenCalledTimes(count + 1);
+    expect(used(await readSubscriptionPool(provider))).toBe(70);
+  });
+
+  it('keeps the legacy default plan from its own quota in the menu bar', async () => {
+    h.pools.openai = { strategy: 'least', legacyCodexDefault: true, accounts: [account('default')] };
+    h.usage.mockResolvedValue({ codexPlan: 'pro', codexUsage: { appServerBuckets: { codex: {
+      primary: null, secondary: { usedPercent: 40, windowMinutes: 10_080, resetsAt: Date.now() / 1000 + 3600 },
+    } } } });
+    const view = await readSubscriptionPool('openai');
+    expect(subscriptionPoolSources({ id: 'openai' } as ProviderView, view, Date.now())).toMatchObject([
+      { account: 'original@example.com', plan: 'Pro', windows: [{ usedPercent: 40 }] },
+    ]);
+    expect(h.usage).toHaveBeenCalledWith('openai', '/existing-cindy/codex-home');
+    expect(h.read).not.toHaveBeenCalled();
   });
 });
 

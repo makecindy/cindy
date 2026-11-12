@@ -11154,7 +11154,8 @@
         "capability": {
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
-          "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。"
+          "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。",
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，連君之 Cindy，而後 Cindy 可代君行事（君之電腦今無在線之 Cindy）。"
         }
       },
       "settings": {
@@ -11279,6 +11280,38 @@
           "failed": "未成",
           "cancelled": "已罷",
           "timed-out": "逾時矣"
+        },
+        "label": "事",
+        "untitled": "無題之事",
+        "askedBy": "{{requester}} 所託",
+        "pr": "PR #{{number}}",
+        "open": "啟「{{title}}」之事",
+        "live": {
+          "running": "方行",
+          "waiting": "待復",
+          "idle": "閒",
+          "failed": "有誤"
+        },
+        "othersSaid": "話題中他人之言"
+      },
+      "assistant": {
+        "groupRecent": "群中近言",
+        "groupNew": "群中新言",
+        "threadRecent": "話題近言",
+        "threadNew": "話題新言",
+        "replyingTo": "答「{{name}}」：{{text}}",
+        "earlierOmitted": "（更早之言略之）",
+        "actingFor": "{{name}} · 代 {{person}}",
+        "checkout": {
+          "gitMissing": "（Cindy）此群之項目 {{repo}} 未至此機：此機未裝 git。{{guide}}裝畢，再 @Cindy，Cindy 自取項目而治之。",
+          "signInOpened": "（Cindy）此群之項目 {{repo}} 未至此機：須先連君之 GitHub。Cindy 已於此機啟 GitHub 登入，登畢再 @Cindy，Cindy 自取項目。",
+          "signIn": "（Cindy）此群之項目 {{repo}} 未至此機：須先連君之 GitHub。請於此機之 Cindy 登 GitHub，而後再 @Cindy。",
+          "unavailable": "（Cindy）此群之項目 {{repo}} 未能取至此機：君之 GitHub 或無此庫之權，或網路不通。能於 GitHub 啟此庫，再 @Cindy。",
+          "installGit": {
+            "darwin": "於「終端機」行 xcode-select --install，循其示而裝。",
+            "win32": "自 https://git-scm.com/download/win 取 Git 而裝，皆從其預設。",
+            "linux": "以系統之套件管理裝 git（如 sudo apt install git）。"
+          }
         }
       },
       "files": {
@@ -11471,10 +11504,21 @@
           "accessTools": "可用器與資",
           "replies": "同伴如何接話",
           "replyModeMentionedNote": "不 @ 人時，同伴不接話。",
+          "assistant": "群中 Cindy",
+          "assistantHint": "誰 @ 之，即於其人之電腦行事。",
+          "replyModeAssistant": "Cindy 答之",
+          "replyModeAssistantNote": "群中 Cindy 答之。",
           "work": "分職",
           "ownFolder": "群自有之卷匣",
-          "projectDirHint": "分工時，同伴於此勞作。",
+          "projectDirHint": "唯此機有效。",
           "projectDirClearHint": "改用群自有之卷匣",
+          "project": "案",
+          "projectCaption": "同僚於群中應答、分工，皆於此案行之。庫為全群所共，資料夾唯存此機。",
+          "githubRepo": "GitHub 庫",
+          "githubRepoHint": "書 owner/name。未擇資料夾之機，用本機此案；無之，則自取一份。",
+          "githubRepoSaveFailed": "庫未存，請察而再試。",
+          "projectFolder": "此機之資料夾",
+          "projectDirAutoHint": "依庫自尋之本機案。",
           "organizerHint": "排定誰行何步；預設為首位同伴。",
           "autoContinueHint": "停之，則每步皆候君點「續」。",
           "workCaption": "擇 git 專案時，每次分工皆開新分支，不動君手中之程式碼。案之卷匣與自動交接僅於此機生效。",
@@ -14222,6 +14266,8 @@
       "sessionSentNamed": "差事「{{name}}」所遣",
       "sessionViewSource": "觀來源差事",
       "botSentNamed": "同伴「{{name}}」所遣",
+      "groupThreadSent": "「{{name}}」於群聊「{{group}}」之話題所遣",
+      "groupRequestSent": "自群「{{group}}」· {{name}}",
       "orcaFromLead": "Lead 之訊",
       "orcaFromWorker": "Worker 之訊",
       "orcaFromWorkerBatch": "系統所報 Worker 結果凡 {{count}}",

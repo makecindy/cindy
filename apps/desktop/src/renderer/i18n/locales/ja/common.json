@@ -11154,7 +11154,8 @@
         "capability": {
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} のツールは実行されませんでした。グループの許可が失効しているか、この操作が許可されていません。仲間の所有者がこのグループで改めて依頼してください。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}} のグループでの許可を確認できず、ツールは実行されませんでした。接続が回復してから再試行してください。",
-          "ATTACHMENTS_UNAVAILABLE": "ダウンロードの失敗または添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。"
+          "ATTACHMENTS_UNAVAILABLE": "ダウンロードの失敗または添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}} さん、Cindy に代わりに作業してもらうには、あなたの Cindy を接続してください（現在オンラインの Cindy がありません）。"
         }
       },
       "settings": {
@@ -11279,6 +11280,38 @@
           "failed": "失敗",
           "cancelled": "キャンセル済み",
           "timed-out": "タイムアウト"
+        },
+        "label": "タスク",
+        "untitled": "無題のタスク",
+        "askedBy": "{{requester}} の依頼",
+        "pr": "PR #{{number}}",
+        "open": "タスク「{{title}}」を開く",
+        "live": {
+          "running": "進行中",
+          "waiting": "返信待ち",
+          "idle": "待機中",
+          "failed": "エラー"
+        },
+        "othersSaid": "スレッドでの他の人の発言"
+      },
+      "assistant": {
+        "groupRecent": "グループの最近のメッセージ",
+        "groupNew": "グループの新しいメッセージ",
+        "threadRecent": "スレッドの最近のメッセージ",
+        "threadNew": "スレッドの新しいメッセージ",
+        "replyingTo": "「{{name}}」への返信：{{text}}",
+        "earlierOmitted": "（それ以前のメッセージは省略）",
+        "actingFor": "{{name}} · {{person}} の代わり",
+        "checkout": {
+          "gitMissing": "（Cindy）このグループのプロジェクト {{repo}} はまだこのコンピュータにありません：git がインストールされていません。{{guide}}インストール後にもう一度 @Cindy すると、Cindy がプロジェクトをダウンロードしてその中で作業します。",
+          "signInOpened": "（Cindy）このグループのプロジェクト {{repo}} はまだこのコンピュータにありません：先に GitHub アカウントを接続してください。Cindy がこのコンピュータで GitHub のサインインを開きました。サインイン後にもう一度 @Cindy すると、プロジェクトを自動でダウンロードします。",
+          "signIn": "（Cindy）このグループのプロジェクト {{repo}} はまだこのコンピュータにありません：先に GitHub アカウントを接続してください。このコンピュータの Cindy で GitHub にサインインしてから、もう一度 @Cindy してください。",
+          "unavailable": "（Cindy）このグループのプロジェクト {{repo}} をこのコンピュータにダウンロードできませんでした：GitHub アカウントにこのリポジトリの権限がないか、ネットワークに接続できません。GitHub でリポジトリを開けることを確認してから、もう一度 @Cindy してください。",
+          "installGit": {
+            "darwin": "「ターミナル」で xcode-select --install を実行し、案内に従ってインストールしてください。",
+            "win32": "https://git-scm.com/download/win から Git をダウンロードし、既定の設定でインストールしてください。",
+            "linux": "システムのパッケージマネージャーで git をインストールしてください（例：sudo apt install git）。"
+          }
         }
       },
       "files": {
@@ -11482,10 +11515,21 @@
           "accessTools": "ツールと情報を利用可",
           "replies": "仲間の返信",
           "replyModeMentionedNote": "@ されない限り、仲間は返信しません。",
+          "assistant": "グループの Cindy",
+          "assistantHint": "@ した人のパソコンで動きます。",
+          "replyModeAssistant": "Cindy が返信",
+          "replyModeAssistantNote": "グループの Cindy が返信します。",
           "work": "役割分担",
           "ownFolder": "グループ専用フォルダ",
-          "projectDirHint": "役割分担のとき、仲間がここで作業します。",
+          "projectDirHint": "このコンピュータでのみ有効です。",
           "projectDirClearHint": "グループ専用フォルダに戻します",
+          "project": "プロジェクト",
+          "projectCaption": "仲間はグループでの返信も役割分担もこのプロジェクトで行います。リポジトリはグループで共有され、フォルダはこのコンピュータにだけ保存されます。",
+          "githubRepo": "GitHub リポジトリ",
+          "githubRepoHint": "owner/name の形式で入力します。フォルダを選んでいないコンピュータは、自分の中のこのプロジェクトを使い、なければダウンロードします。",
+          "githubRepoSaveFailed": "リポジトリを保存できませんでした。確認してもう一度お試しください。",
+          "projectFolder": "このコンピュータのフォルダ",
+          "projectDirAutoHint": "リポジトリから自動で見つけたプロジェクトです。",
           "organizerHint": "誰がどのステップを担当するかを決めます。既定は最初の仲間です。",
           "autoContinueHint": "オフのときは、各ステップで「続ける」を押すまで待ちます。",
           "workCaption": "git プロジェクトを選ぶと、役割分担ごとに新しいブランチを作るので手元のコードには触れません。プロジェクトフォルダと自動の引き継ぎは、このコンピュータでのみ有効です。",
@@ -14231,6 +14275,8 @@
       "sessionSentNamed": "セッション「{{name}}」から送信",
       "sessionViewSource": "送信元のセッションを表示",
       "botSentNamed": "仲間「{{name}}」から送信",
+      "groupThreadSent": "「{{name}}」がグループチャット「{{group}}」のスレッドから送信",
+      "groupRequestSent": "グループ「{{group}}」から · {{name}}",
       "orcaFromLead": "Lead からのメッセージ",
       "orcaFromWorker": "Worker からのメッセージ",
       "orcaFromWorkerBatch": "システムから報告された {{count}} 件の Worker 結果",

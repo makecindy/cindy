@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { messageSourceSenderFromMeta, parseSourceSessionTarget } from '@cindy/maker-shared/message-source';
 import path from 'node:path';
 
 import { and, asc, desc, eq, gt, inArray, lt, ne } from 'drizzle-orm';
@@ -16,6 +17,7 @@ import {
   messages,
 } from '../localDb/schema.js';
 import { UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
+import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
 import {
   buildPlanStepBrief,
@@ -90,7 +92,7 @@ type DispatchResult =
   | { ok: true; targetSessionId: string; wakeKind: string }
   | { ok: false; errorCode: string; message: string };
 
-type LaneResult = { ok: true; sessionId: string } | { ok: false; errorCode: string; message: string };
+type LaneResult = { ok: true; sessionId: string; replacedSessionId?: string } | { ok: false; errorCode: string; message: string };
 
 interface TurnExecution {
   instanceId: string;
@@ -138,6 +140,8 @@ export interface BotGroupChatServiceDeps {
     threadRootId?: string;
     talkPlanId?: string;
     personalDigest?: boolean;
+    /** The group's project folder on this computer; a V2 teammate's replies work there (§7.5). */
+    projectDir?: string;
   }) => Promise<LaneResult>;
   /** Live native context identity; absent/unknown means background must be restored. */
   readLaneContext?: (sessionId: string) => { key: string; contextTokens: number } | null;
@@ -146,14 +150,28 @@ export interface BotGroupChatServiceDeps {
     targetSessionId: string;
     message: string;
     persistedContent: string;
-    /** Exact owner-authored text verified by the live server execution, never the group envelope. */
-    autoReviewUserText?: string;
+    /**
+     * Exact owner-authored text verified by the live server execution, never the group envelope;
+     * a receipt when the words go into a task card's task (owner words carry `delegatedText`).
+     */
+    autoReviewUserText?: AgentInputQueuedMessage['autoReviewUserText'];
+    /** Host-stamped source of words going into a task card's task (the speaker and the group). */
+    origin?: AgentInputQueuedMessage['origin'];
     clientId: string;
     attachments?: BotGroupAttachment[];
     toolsDisabled?: boolean;
+    /** An ordinary task that is not running starts with the permission it was opened with, never bypass. */
+    resumeWithStoredPermissionMode?: boolean;
     onQueued?: (clientId: string) => Promise<void>;
     onAccepted: () => void | Promise<void>;
   }) => Promise<DispatchResult>;
+  /**
+   * The group's Cindy on this computer (bot-group-chat.md「群里的 Cindy」): the given task when it is
+   * still usable, else a new ordinary visible task titled with the group's name, under the project
+   * folder (`projectDir`) or under 「对话」 (null), with this user's new-task model and permission.
+   */
+  ensureGroupAssistantSession?: (input: { sessionId?: string; title: string; projectDir: string | null }) =>
+    Promise<{ ok: true; sessionId: string; created: boolean } | { ok: false; errorCode: string; message: string }>;
   /**
    * Turns a composer's attachments into stored ones (bot-group-chat.md §3.1): images end up
    * in the media store under this group, files stay where they are on this computer or, from
@@ -181,6 +199,20 @@ export interface BotGroupChatServiceDeps {
   workDir?: Pick<BotGroupWorkDir, 'prepare' | 'snapshot' | 'changedFiles' | 'trashGroupFolder'>;
   /** Existing local directory usable as a 项目文件夹 (same rules as new-task projects). */
   validateProjectDir?: (dir: string) => Promise<{ ok: true; dir: string } | { ok: false; message: string }>;
+  /**
+   * A task this computer runs, for its group card: title, state and recorded pull request; null
+   * when the task is gone (bot-group-chat.md §10).
+   */
+  readGroupTaskStatus?: (taskId: string) => Promise<{ title: string; state?: 'running' | 'waiting' | 'idle' | 'failed'; prUrl?: string } | null>;
+  /** The task whose `send_to_session` a turn answered (bot-group-chat.md §10); defaults to the stored message. */
+  readInputSenderTask?: (sessionId: string, inputClientId: string) => Promise<string | null>;
+  /** Registered project folders on this computer whose git `origin` is this GitHub repository. */
+  findProjectDirsForRepo?: (repo: string) => Promise<string[]>;
+  /**
+   * Cindy's own checkouts of a group's GitHub repository (`groupProjectCheckout.ts`): cloned on
+   * first need when no registered project is that repository, fast-forwarded when clean.
+   */
+  groupCheckouts?: Pick<import('./groupProjectCheckout.js').GroupProjectCheckouts, 'ensure' | 'sync' | 'isManaged'>;
   /**
    * A 分工 step stopped for the user: finished (继续, or the whole plan is done) or not
    * finished (重试). Phones are notified from here (bot-group-chat.md §8.3).
@@ -567,6 +599,20 @@ export async function readPersistedReplyText(sessionId: string, messageClientId:
     .limit(1);
   const text = visibleMessageTextForConversationSearch('assistant', row?.content ?? '').trim();
   return text || null;
+}
+
+/** The task on this computer that sent a stored input to another task; null for any other sender. */
+export async function readPersistedInputSenderTask(sessionId: string, messageClientId: string): Promise<string | null> {
+  const [row] = await getDbClient()
+    .drizzle.select({ agentMeta: messages.agentMeta })
+    .from(messages)
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, messageClientId), eq(messages.role, 'user')))
+    .limit(1);
+  let meta: unknown = row?.agentMeta;
+  if (typeof meta === 'string') { try { meta = JSON.parse(meta); } catch { return null; } }
+  const sender = messageSourceSenderFromMeta(meta);
+  const target = sender?.kind === 'session' ? parseSourceSessionTarget(sender.sessionId) : null;
+  return target && !target.deviceId ? target.sessionId : null;
 }
 
 export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
