@@ -60,6 +60,9 @@ export function normalizePoolFile(raw: unknown): PoolFile {
         .slice(0, MAX_SUBSCRIPTION_ACCOUNTS)
         .map((a) => ({
           id: a.id,
+          ...(provider === 'anthropic' && typeof a.lastConfirmedIdentity === 'string' && a.lastConfirmedIdentity.trim()
+            && a.lastConfirmedIdentity.length <= 320
+            ? { lastConfirmedIdentity: a.lastConfirmedIdentity.trim() } : {}),
           ...(provider === 'anthropic' && typeof a.reloginIdentity === 'string' && a.reloginIdentity.trim()
             && a.reloginIdentity.length <= 320
             ? { reloginIdentity: a.reloginIdentity.trim() } : {}),

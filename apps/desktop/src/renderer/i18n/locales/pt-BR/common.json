@@ -1343,6 +1343,7 @@
     "idleMinutes_many": "{{count}} minutos"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarefa SSH não pode trocar de Harness. Escolha um modelo no Harness atual ou crie uma nova tarefa SSH com o Harness necessário.",
     "MODEL_SELECTION_UNAVAILABLE": "O modelo selecionado não está mais disponível no provedor. Verifique a conexão em Configurações ou escolha outro modelo disponível.",
@@ -20227,6 +20228,7 @@
     "lineNumbers": "Números de linha"
   },
   "subscriptionAccounts": {
+    "loginIdentityUnknown": "Não foi possível confirmar a identidade original desta conta. Use Adicionar conta para conectar uma nova conta.",
     "loginExpiresInDays": "O login expira em cerca de {{days}} dias",
     "loginExpiresSoon": "O login expira em breve",
     "loginMayHaveExpired": "O login pode ter expirado",

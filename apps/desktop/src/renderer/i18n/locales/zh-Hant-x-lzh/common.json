@@ -1312,6 +1312,7 @@
     "handoffWindow": "代書 · {{app}}"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暫不支援易 Harness。請擇今 Harness 下之模型，或以所需 Harness 新立 SSH 差事。",
     "MODEL_SELECTION_UNAVAILABLE": "所擇模型於此供方下已不可用。請於規制中察連線，或另擇可用之模型。",
@@ -19968,6 +19969,7 @@
     }
   },
   "subscriptionAccounts": {
+    "loginIdentityUnknown": "無法確認此帳號的原身分，請透過「新增帳號」重新連線",
     "loginExpiresInDays": "登入約 {{days}} 日後期滿",
     "loginExpiresSoon": "登入將屆期",
     "loginMayHaveExpired": "登入或已期滿",

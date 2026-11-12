@@ -1325,6 +1325,7 @@
     "handoffWindow": "Input handoff · {{app}}"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
     "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "This SSH task cannot switch Harness. Choose a model in its current Harness, or create a new SSH task with the Harness you need.",
     "MODEL_SELECTION_UNAVAILABLE": "The selected model is no longer available from its provider. Check the connection in Settings or choose another available model.",
@@ -20040,6 +20041,7 @@
     "lineNumbers": "Line numbers"
   },
   "subscriptionAccounts": {
+    "loginIdentityUnknown": "The original identity of this account is unknown. Use Add Account to connect a new account.",
     "loginExpiresInDays": "Sign-in expires in about {{days}} days",
     "loginExpiresSoon": "Sign-in expires soon",
     "loginMayHaveExpired": "Sign-in may have expired",
