@@ -1,4 +1,5 @@
 import { findRemoteHistoryView } from '@/session/remoteHistoryViews';
+import { pluginPreviewFixture } from './pluginPreviewFixture';
 import { groupExecutionVisualFixture } from './groupExecutionVisualFixture';
 import { attachmentPreviewFixture } from "./attachmentPreviewFixture";
 import { githubPrVisualFixture } from './githubPrVisualFixture';
@@ -369,6 +370,8 @@ async function visualMockInvoke<T = unknown>(
     return { accepted: true } as T;
   }
   const realData = await loadVisualRealDataSnapshot();
+  const previewResult = realData ? undefined : pluginPreviewFixture(channel, args);
+  if (previewResult !== undefined) return previewResult as T;
   const mailResult = realData ? undefined : (mailVisualFixture(channel, args) ?? mailDraftCardFixture(channel, args));
   if (mailResult !== undefined) return mailResult as T;
   const pluginResult = realData ? undefined : pluginVisualFixture(channel, args);
