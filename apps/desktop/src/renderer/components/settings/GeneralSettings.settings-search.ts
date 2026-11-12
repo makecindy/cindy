@@ -17,6 +17,14 @@ export const generalSettings = defineSettings({
     titleKey: 'settings.sections.user',
     sectionKey: 'settings.sections.user',
   },
+  firstRunGuide: {
+    id: 'general.firstRunGuide',
+    tab: 'general',
+    targetId: 'settings-first-run-guide',
+    titleKey: 'firstRunGuide.settings.title',
+    sectionKey: 'firstRunGuide.settings.title',
+    aliases: ['guide', 'onboarding', 'get started', 'welcome', '引导', '新手', '开始使用'],
+  },
   setupMigration: {
     id: 'general.setupMigration',
     tab: 'general',

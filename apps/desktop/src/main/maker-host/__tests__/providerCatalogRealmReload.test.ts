@@ -47,6 +47,10 @@ vi.mock('../../subscription-accounts/store.js', async (importOriginal) => {
     migrateLegacyCodexAccounts: h.migrateLegacy,
   };
 });
+vi.mock('../../subscription-accounts/runtime.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../subscription-accounts/runtime.js')>();
+  return { ...actual, hasConnectedSubscriptionPool: () => Boolean(h.pool && !h.pool.disconnected) };
+});
 vi.mock('../codex-account-auth.desktop.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../codex-account-auth.desktop.js')>();
   return { ...actual, codexAccountState: (id: string) => ({ authenticated: h.legacyLoggedIn.has(id) }) };
@@ -224,6 +228,7 @@ import {
   type CustomProviderConfig,
   XAI_API_CUSTOM_PROVIDER_ID,
 } from '@cindy/model-providers';
+import { resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection.js';
 import { deriveCindyMediaConfig } from '../../cindy-brain/cindyMediaCatalog.js';
 import { getProviderSecretStore } from '../../secrets/providerSecretStore.js';
 import {
@@ -270,6 +275,8 @@ function activeMarker(): string | undefined {
 describe('provider catalog realm reload', () => {
   // Upgrade 2026-11-11, standard: real loader/view wiring must import only native
   // Codex connections and keep their model membership under the canonical supplier.
+  // Regression: the picker was covered but explicit/lazy full-catalog reads used by
+  // scheduled admission dropped imported-only models and rejected the saved route.
   it('projects imported model membership under OpenAI while retaining compatibility routes', async () => {
     const previous = getActiveCatalog();
     h.pool = { strategy: 'least', accounts: [{ id: 'imported', paused: false, limit: 4, weight: 1 }],
@@ -292,8 +299,33 @@ describe('provider catalog realm reload', () => {
       expect(catalog.providers.find(provider => provider.id === 'openai')?.models.codex?.some(model => model.id === 'gpt-migration-fixture')).toBe(true);
       expect(catalog.providers.some(provider => provider.id === 'legacy-imported')).toBe(true);
       expect(catalog.providers.some(provider => provider.id === 'migration-api')).toBe(true);
-      h.pool.accounts[0].paused = true;
-      expect(getDesktopSelectableCatalog().providers.find(provider => provider.id === 'openai')?.models.codex?.some(model => model.id === 'gpt-migration-fixture')).not.toBe(true);
+      const selection = { agentKind: 'codex' as const, providerId: 'openai',
+        model: 'gpt-migration-fixture', effort: null, fastMode: false };
+      const service = getDesktopProviderService({ allowSideEffects: false });
+      const readRoutes = () => Promise.all([
+        service.listProviders({ snapshotOnly: true }),
+        service.listProviders({ snapshotOnly: true, catalog: getActiveCatalog() }),
+        service.listProviders({ snapshotOnly: true, getCatalog: getActiveCatalog }),
+      ]);
+      for (const views of await readRoutes()) {
+        expect(resolveScheduledModelSelection(selection, views)).toMatchObject({
+          model: selection.model, providerId: 'openai', agentKind: 'codex',
+        });
+        expect(() => resolveScheduledModelSelection({ ...selection, model: 'api-fixture' }, views))
+          .toThrow('MODEL_SELECTION_UNAVAILABLE');
+      }
+      // Projection must not mutate the raw catalog or retain membership after pause/sign-out.
+      expect(getActiveCatalog().providers.find(provider => provider.id === 'openai')?.models.codex?.some(model => model.id === selection.model)).not.toBe(true);
+      for (const unavailable of ['paused', 'signed-out', 'disconnected'] as const) {
+        h.pool.accounts[0].paused = unavailable === 'paused';
+        h.pool.disconnected = unavailable === 'disconnected';
+        if (unavailable === 'signed-out') h.legacyLoggedIn.clear();
+        else h.legacyLoggedIn.add('legacy-imported');
+        expect(getDesktopSelectableCatalog().providers.find(provider => provider.id === 'openai')?.models.codex?.some(model => model.id === selection.model)).not.toBe(true);
+        for (const views of await readRoutes()) {
+          expect(() => resolveScheduledModelSelection(selection, views)).toThrow('MODEL_SELECTION_UNAVAILABLE');
+        }
+      }
     } finally {
       h.pool = null;
       h.legacyLoggedIn.clear();

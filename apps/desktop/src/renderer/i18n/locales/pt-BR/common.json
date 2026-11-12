@@ -880,6 +880,7 @@
       "limitAria": "Limite de tarefas de {{name}}",
       "limitOption_one": "Até {{count}}",
       "limitOption_other": "Até {{count}}",
+      "limitUnlimited": "Sem limite",
       "weightAria": "Peso de {{name}}",
       "weightOption": "Peso {{weight}}",
       "assignAria": "Atribuir tarefas a {{name}}",
@@ -1342,6 +1343,8 @@
     "idleMinutes_many": "{{count}} minutos"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
+    "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarefa SSH não pode trocar de Harness. Escolha um modelo no Harness atual ou crie uma nova tarefa SSH com o Harness necessário.",
     "MODEL_SELECTION_UNAVAILABLE": "O modelo selecionado não está mais disponível no provedor. Verifique a conexão em Configurações ou escolha outro modelo disponível.",
     "HARNESS_SWITCH_NOT_READY": "A troca de Harness não está pronta. Verifique os detalhes do erro e tente novamente quando o Harness estiver pronto.",
@@ -1881,7 +1884,8 @@
       "about": "Sobre",
       "imBot": "Bots de mensagens",
       "ghosts": "Plugins",
-      "cindyMake": "Cindy Make"
+      "cindyMake": "Cindy Make",
+      "modelGroups": "Grupos de modelos"
     },
     "sections": {
       "user": "Usuário",
@@ -1925,6 +1929,15 @@
     },
     "remote": {
       "title": "Máquinas remotas",
+      "hostKeyError": {
+        "missing": "A verificação da chave de host SSH não está configurada. Conexão recusada.",
+        "read": "Cindy não conseguiu ler as chaves de host confiáveis: {{reason}}. Conexão recusada.",
+        "write": "Cindy não conseguiu salvar a chave de host confiável: {{reason}}. Conexão recusada.",
+        "mismatch": "A chave de host de {{host}} mudou ({{fingerprint}}) e não corresponde mais à impressão digital em que Cindy confiava. Isso pode significar que o servidor foi reinstalado ou um ataque man-in-the-middle. Conexão recusada.",
+        "file": "Arquivo de chaves de host confiáveis:\n{{filePath}}",
+        "repair": "Cindy não lê ~/.ssh/known_hosts. A impressão digital antiga está armazenada em:\n{{filePath}}\nA chave da entrada é \"{{host}}\".\nSe você confirmou que esta alteração é confiável, feche Cindy, remova apenas esta entrada, mantenha o arquivo e todos os outros hosts e conecte-se novamente. A nova impressão digital será salva na primeira conexão. Não exclua o arquivo inteiro.",
+        "verifyChange": "Confirme a alteração com o administrador do servidor antes de atualizar o registro de chaves de host confiáveis."
+      },
       "footnote": "Fase A: apenas gerenciamento de conexões SSH. A execução de agents na máquina remota chegará em uma atualização futura.",
       "viaAuth": "via {{label}}",
       "readOnlyFromSshConfig": "Os detalhes da conexão vêm da configuração SSH",
@@ -2337,7 +2350,7 @@
         "desktopVisibilityHint": "Mostra a área de trabalho e as janelas atrás da Cindy. Textos e controles permanecem nítidos.",
         "desktopBlurLabel": "Desfoque da área de trabalho",
         "desktopBlurHint": "Desfoca a área de trabalho atrás da janela. 0 desativa; valores maiores aumentam o desfoque. Sistemas sem ajuste de intensidade usam o efeito padrão.",
-        "desktopBlurSwitchHint": "Desfoca a área de trabalho atrás da janela com o efeito do sistema do Windows. Requer o Windows 11 versão 22H2 ou posterior.",
+        "desktopBlurSwitchHint": "Desfoca a área de trabalho atrás da janela com o efeito do sistema do Windows. Requer o Windows 11 versão 22H2 ou posterior. Depois de desativar, reinicie o app para aplicar a alteração.",
         "blurLabel": "Desfoque do papel de parede",
         "blurHint": "Desfoque apenas o papel de parede. Defina como 0 para desativar. Desfocar papéis de parede animados aumenta o uso da GPU.",
         "motionLabel": "Exibição",
@@ -11800,6 +11813,8 @@
       "takeOverConflict": "{{name}} já foi transferido para “{{device}}”",
       "takeOverOffline": "Não foi possível acessar o servidor, então {{name}} não pode continuar aqui agora",
       "takeOverFailed": "Não foi possível assumir {{name}} neste computador",
+      "localCindyConflict": "O computador que assume já tem outra Cindy. Gerencie essa Cindy nas configurações dela ou escolha outro computador principal",
+      "localCindyConflictAction": "Abrir configurações da Cindy local",
       "notEnabled": "Este servidor não permite alterar o computador principal",
       "readOnlyNote": "Esta conversa está salva na nuvem e é somente leitura",
       "empty": "Ainda não há conversa na nuvem",
@@ -14385,6 +14400,8 @@
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Este é um compartilhamento antigo e não pode ser usado enquanto \"Usar apenas Agent-Net\" estiver ativado. Desative essa opção para continuar ou troque para outro modelo.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "As contas disponíveis para este modelo atingiram o limite de uso. Troque de modelo ou continue quando a cota for renovada.",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "Nenhum computador no grupo de provedores pode executar esta tarefa agora. Eles podem estar offline, pausados, em intervalo de espera ou sem este modelo. Verifique o grupo na página Acesso remoto e compartilhamento deste provedor.",
+      "REMOTE_AGENT_GROUP_FULL": "Todas as contas ou computadores que podem executar esta tarefa atingiram o limite de tarefas simultâneas. Aguarde uma tarefa em andamento terminar ou aumente o limite nas configurações do provedor.",
+      "SUBSCRIPTION_ACCOUNTS_FULL": "Todas as contas ou computadores que podem executar esta tarefa atingiram o limite de tarefas simultâneas. Aguarde uma tarefa em andamento terminar ou aumente o limite nas configurações do provedor.",
       "REMOTE_AGENT_DEVICE_LIMIT": "Este dispositivo atingiu o limite de sessões remotas. Arquive sessões não utilizadas ou peça ao proprietário do provedor para aumentar o limite em Acesso remoto e compartilhamento.",
       "REMOTE_AGENT_TOTAL_LIMIT": "O computador do provedor atingiu o limite total de sessões remotas. Peça ao proprietário para liberar sessões não utilizadas ou aumentar o limite em Acesso remoto e compartilhamento.",
       "REMOTE_AGENT_RESUME_LOST": "Não foi possível reconectar a conversa anterior no outro computador, então o Agent continua sem esse contexto.",
@@ -14629,6 +14646,14 @@
       "replied": "respondeu",
       "toggle": "Mostrar ou ocultar a resposta de “{{title}}”",
       "openTask": "Abrir tarefa"
+    },
+    "subscriptionAccountError": {
+      "limited": "A conta de assinatura desta tarefa atingiu o limite de uso. Aguarde a redefinição ou escolha outra origem de modelos. A conta não muda automaticamente.",
+      "limitedUntil": "A conta de assinatura desta tarefa atingiu o limite de uso. Redefinição prevista: {{resetAt}}. Aguarde até lá ou escolha outra origem de modelos. A conta não muda automaticamente.",
+      "loginRequired": "A conta de assinatura desta tarefa exige um novo login. Entre novamente no computador que executa a tarefa e tente de novo.",
+      "signingIn": "O login na conta de assinatura desta tarefa está em andamento. Tente de novo quando terminar.",
+      "unavailable": "A conta de assinatura atribuída a esta tarefa não pode ser usada nesta solicitação. Verifique a conta nas configurações do provedor de modelos no computador que executa a tarefa ou escolha outra origem de modelos.",
+      "legacy": "A conta de assinatura atribuída a esta tarefa não está disponível. Verifique o login e o uso no computador que executa a tarefa ou escolha outra origem de modelos. A conta não muda automaticamente."
     }
   },
   "ccAgent": {
@@ -19953,12 +19978,6 @@
       "from": "Transferido de “{{name}}”",
       "closeChecklist": "Fechar lista"
     },
-    "suggestion": {
-      "title": "Usar o assistente de migração para transferir de “{{name}}”?",
-      "description": "Você pode configurar este computador com os plugins, habilidades, configurações e conexões do outro. Tudo o que precisar de um novo login ou permissão aqui fica listado para você. Você também pode abri-lo depois em Configurações → Geral → Assistente de migração.",
-      "confirm": "Abrir o assistente de migração",
-      "later": "Agora não"
-    },
     "walkthrough": {
       "progress": "Lista de configuração {{current}} / {{total}}",
       "open": "Abrir",
@@ -19980,6 +19999,103 @@
         "allow": "Permitir",
         "deny": "Recusar"
       }
+    }
+  },
+  "firstRunGuide": {
+    "title": {
+      "new": "Boas-vindas ao Cindy",
+      "returning": "Que bom ter você de volta"
+    },
+    "stepsLabel": "Etapas do guia",
+    "close": "Fechar o guia",
+    "next": "Avançar",
+    "skip": "Pular",
+    "preparing": "Preparando…",
+    "steps": {
+      "legacy": "Dados anteriores",
+      "intro": "Conheça o Cindy",
+      "migration": "Migrar",
+      "models": "Conectar um modelo",
+      "import": "Trazer o que você já tem",
+      "finish": "Concluído"
+    },
+    "legacy": {
+      "title": "Seus dados da versão anterior já estão aqui",
+      "body": "As sessões anteriores, os arquivos de mídia e os logins do navegador do Agent foram movidos para esta versão e estão prontos para uso.",
+      "note": "As chaves e credenciais de terceiros que você autorizou não são movidas com os dados. Autorize ou informe-as novamente nas Configurações."
+    },
+    "intro": {
+      "lead": "O Cindy é o assistente de IA que ajuda você a tornar realidade o que tem em mente.",
+      "work": {
+        "title": "Deixe o trabalho com ele",
+        "body": "Ele trabalha diretamente nas suas pastas e aplicativos, em vez de apenas responder a perguntas."
+      },
+      "connect": {
+        "title": "Use os modelos e as ferramentas que você já tem",
+        "body": "Conecte sua própria assinatura ou chave de API e adicione plugins e Skills quando precisar."
+      },
+      "continue": {
+        "title": "Continue de qualquer lugar",
+        "body": "Pelo celular, inicie, acompanhe e continue as sessões do seu computador."
+      },
+      "start": "Começar",
+      "next": "A seguir"
+    },
+    "migration": {
+      "title": "Traga o Cindy do seu outro computador",
+      "body": "Outro computador da sua conta já está configurado. O Assistente de migração copia os plugins, Skills, configurações e conexões dele para este computador; as chaves só são copiadas depois que você escolher Permitir naquele computador.",
+      "manualBody": "Se você já usou o Cindy em outro computador, o Assistente de migração pode copiar os plugins, Skills, configurações e conexões dele para este computador.",
+      "done": "Migrado de “{{name}}”",
+      "from": "Computador antigo",
+      "to": "Este computador"
+    },
+    "models": {
+      "title": "Dê um modelo ao Cindy",
+      "body": "Você pode usar as duas opções juntas.",
+      "cindy": {
+        "badge": "Serviço oficial",
+        "body": "O serviço de modelos oferecido pelo Cindy. Ele já vem com a sua conta, sem nada para ativar. Contas novas recebem um saldo gratuito para experimentar; depois de pagar, quase todos os modelos ficam disponíveis, e sem pagar a gama de modelos é menor.",
+        "active": "Incluído na sua conta e pronto para usar",
+        "freeBalance": "Valor gratuito de presente: fique à vontade para experimentar"
+      },
+      "own": {
+        "title": "Use seu próprio plano",
+        "badge": "Mais em conta",
+        "body": "Já tem uma assinatura do Claude ou do ChatGPT, ou uma chave de API? Recomendamos muito conectá-la e usá-la junto com o Cindy AI para ter a melhor experiência.",
+        "more": "Outros provedores e chaves de API",
+        "connected": "Conectado"
+      }
+    },
+    "import": {
+      "title": "Traga o que já está neste computador",
+      "body": "Isto é o que o Cindy encontrou em outras ferramentas de IA neste computador. O Cindy apenas lê os originais e nunca os altera.",
+      "empty": "Nada para importar foi encontrado neste computador.",
+      "tasksHeading": "Sessões",
+      "tasksHint": "Selecione ferramentas para trazer as sessões delas para o Cindy e continuar trabalhando.",
+      "pick": "Escolher uma a uma",
+      "started": "A importação começou em segundo plano. Acompanhe o progresso em Configurações → Importação de sessões.",
+      "startFailed": "A importação não começou. Importe novamente em Configurações → Importação de sessões.",
+      "teammatesHeading": "Colegas",
+      "teammatesHint": "Importe um Agent de outra ferramenta como colega, com a memória, as Skills e as automações dele.",
+      "importTeammate": "Importar como colega"
+    },
+    "finish": {
+      "title": "Tudo pronto",
+      "legacy": "Os dados da versão anterior foram movidos para esta versão",
+      "modelReady": "Há um modelo conectado",
+      "modelMissing": "Nenhum modelo está conectado ainda. Você pode conectar um quando iniciar uma sessão.",
+      "importStarted": "As sessões de outras ferramentas estão sendo importadas em segundo plano",
+      "native": "Suas Skills e seus servidores MCP do Claude Code e do Codex funcionam aqui diretamente; não há nada para importar.",
+      "start": "Iniciar sua primeira sessão"
+    },
+    "resume": {
+      "label": "Guia em andamento · {{step}}",
+      "back": "Voltar ao guia"
+    },
+    "settings": {
+      "title": "Guia de introdução",
+      "description": "Veja novamente como conhecer o Cindy, migrar de outro computador, conectar um modelo e trazer o que você já tem.",
+      "open": "Abrir o guia"
     }
   },
   "forwardedRequest": {
@@ -20112,6 +20228,15 @@
     "lineNumbers": "Números de linha"
   },
   "subscriptionAccounts": {
+    "loginIdentityUnknown": "Não foi possível confirmar a identidade original desta conta. Use Adicionar conta para conectar uma nova conta.",
+    "loginExpiresInDays": "O login expira em cerca de {{days}} dias",
+    "loginExpiresSoon": "O login expira em breve",
+    "loginMayHaveExpired": "O login pode ter expirado",
+    "loginExpiryUnknown": "Validade do login desconhecida",
+    "loginExpiryDetail": "Validade estimada: {{date}}. Esta estimativa é fornecida pelo Claude; o login pode expirar antes.",
+    "loginAccountAria": "Entrar novamente em {{name}}",
+    "loginIdentityMismatchStatus": "A conta não corresponde",
+    "loginIdentityMismatch": "Você entrou em outra conta. Entre novamente e escolha a conta exibida nesta linha.",
     "unassigned": "Conta não atribuída",
     "boundUnavailable": "Conta indisponível",
     "providerManagedAuth": "O provedor atual do Codex não disponibiliza informações da conta do ChatGPT. Ao adicionar o provedor, selecione “$t(subscriptionAccounts.signIn.anotherAccount)” para usar uma pasta separada.",
@@ -20192,5 +20317,133 @@
     "detail": "Solicitação de {{device}}\nFinalidade: {{purpose}}\n\nOs dispositivos da sua conta poderão controlar este computador, executar tarefas e acessar arquivos. A opção permanece ativa até você desativá-la nas configurações.",
     "decline": "Agora não",
     "enable": "Ativar controle remoto"
+  },
+  "modelGroups": {
+    "title": "Grupos de modelos",
+    "description": "Combine várias fontes que já tem em Provedores em uma única opção. Escolha-a em “Grupos de modelos” no seletor de modelos e a Cindy decide qual fonte usar.",
+    "routes": "Rotas",
+    "routesDescription": "Uma rota contém várias fontes. Cada nova tarefa escolhe uma segundo a regra da rota.",
+    "sourceCount_one": "{{count}} fonte",
+    "sourceCount_many": "{{count}} fontes",
+    "sourceCount_other": "{{count}} fontes",
+    "strategy": {
+      "expiring": {
+        "title": "Primeiro o que expira",
+        "hint": "Usa primeiro a cota de assinatura que mais sobra e que está prestes a ser redefinida, para não a desperdiçar. As fontes sem cota legível ficam para depois."
+      },
+      "order": {
+        "title": "Por ordem",
+        "hint": "Só passa à fonte seguinte quando a anterior não pode ser usada."
+      },
+      "rotate": {
+        "title": "Em rodízio",
+        "hint": "Cada nova tarefa passa à fonte seguinte e reparte a carga."
+      },
+      "cheapest": {
+        "title": "O mais barato",
+        "hint": "Usa primeiro as assinaturas com cota disponível, sem custo adicional; o restante segue do menor para o maior preço de tabela, e as fontes sem preço ficam por último."
+      }
+    },
+    "picker": {
+      "empty": "Ainda não há grupos de modelos. Combine várias fontes em uma rota nas Configurações para a escolher aqui.",
+      "manage": "Gerenciar grupos de modelos"
+    },
+    "why": {
+      "expiringQuota": "Restam {{left}}% da cota, redefinida a {{reset}}, por isso vai primeiro",
+      "expiring": "Primeira pela cota",
+      "order": "A primeira fonte disponível",
+      "rotate": "Desta vez é a vez dela",
+      "only": "A única disponível agora",
+      "soonest": "Todas as fontes esgotaram a cota; esta recupera primeiro",
+      "soonestUntil": "Todas as fontes esgotaram a cota; esta recupera primeiro ({{reset}})",
+      "standby": "Desta vez não é a vez dela",
+      "standbyQuota": "Restam {{left}}% da cota, redefinida só a {{reset}}, por isso fica reservada",
+      "off": "Desativada nesta rota",
+      "unavailable": "Sem conexão, ou este modelo não pode ser escolhido agora",
+      "limited": "Cota esgotada",
+      "limitedUntil": "Cota esgotada até {{reset}}",
+      "tight": "A cota de 5 horas está quase cheia, por isso é ignorada por agora",
+      "cheapest": "Menor preço de tabela",
+      "cheapestFree": "Ainda há cota de assinatura, sem custo adicional",
+      "noVision": "A mensagem tem imagens e esta fonte não consegue vê-las",
+      "exceptionImage": "A mensagem tem imagens, então só foram consideradas as fontes que conseguem vê-las",
+      "exceptionImageFallback": "A mensagem tem imagens, mas nenhuma fonte consegue vê-las, então escolheu como de costume",
+      "exceptionHours": "Neste horário usa “{{name}}”",
+      "separator": "; "
+    },
+    "settings": {
+      "newRoute": "Nova rota",
+      "newRouteName": "Nova rota",
+      "routesEmpty": "Ainda não há rotas. Crie uma e adicione várias fontes.",
+      "scopeNote": "Os grupos de modelos aplicam-se às novas tarefas iniciadas neste computador. A fonte é escolhida no início e não muda durante a tarefa.",
+      "back": "Voltar aos grupos de modelos",
+      "name": "Nome",
+      "nameHint": "Aparece no seletor de modelos.",
+      "routeShownAs": "Aparece em “Grupos de modelos” no seletor de modelos.",
+      "pick": "Qual usar",
+      "effort": "Esforço de raciocínio",
+      "effortUnset": "Não definido",
+      "effortHint": "Se o modelo escolhido não oferecer suporte a este nível, roda com o seu padrão.",
+      "sources": "Fontes que pode usar",
+      "sourcesHint": "Podem coexistir modelos diferentes. A tarefa indica qual foi usado.",
+      "sourcesEmpty": "Ainda não há fontes. Adicione abaixo um modelo conectado.",
+      "sourcesFull": "Uma rota aceita até {{count}} fontes.",
+      "addSource": "Adicionar fonte",
+      "chooseModel": "Escolher um modelo",
+      "notConnected": "Sem conexão",
+      "moveUp": "Mover para cima",
+      "moveDown": "Mover para baixo",
+      "remove": "Remover desta rota",
+      "useSource": "Permitir que esta rota use {{name}}",
+      "try": {
+        "title": "Experimentar",
+        "hint": "Veja qual fonte uma nova tarefa usaria agora. Nada é enviado e não se gasta cota.",
+        "run": "Ver a escolha",
+        "picked": "Usar esta",
+        "standby": "De reserva",
+        "skipped": "Ignorada",
+        "unavailable": "Nenhuma fonte desta rota pode ser usada agora. Uma nova tarefa usará o modelo que tinha selecionado."
+      },
+      "deleteRoute": "Excluir esta rota",
+      "deleteRouteConfirmTitle": "Excluir “{{name}}”?",
+      "deleteRouteConfirmDescription": "As exceções por horário de outras rotas que mudam para ela também são excluídas. As tarefas já iniciadas não são afetadas.",
+      "delete": "Excluir",
+      "cancel": "Cancelar",
+      "saveFailed": "Não foi possível salvar. Tente novamente.",
+      "exceptions": {
+        "title": "Exceções",
+        "hint": "Verificadas antes da regra de escolha, de cima para baixo.",
+        "empty": "Ainda não há exceções. Cada nova tarefa segue a regra de escolha acima.",
+        "imageRule": "Quando a mensagem tiver imagens, usar apenas fontes que consigam vê-las",
+        "hoursRule": "{{from}}–{{to}}: usar “{{name}}”",
+        "remove": "Remover esta exceção",
+        "add": "Adicionar uma exceção",
+        "choose": "Escolher uma situação",
+        "kindImage": "A mensagem tem imagens",
+        "kindHours": "Um horário",
+        "from": "De",
+        "to": "Até",
+        "useRoute": "Usar no lugar",
+        "addHours": "Adicionar",
+        "sameHour": "O início e o fim não podem ser a mesma hora.",
+        "full": "Até {{count}} exceções.",
+        "needOtherRoute": "Crie outra rota para poder mudar para ela por horário."
+      }
+    },
+    "overview": {
+      "mapTitle": "Como as novas tarefas escolhem um modelo",
+      "mapDescription": "Da esquerda para a direita: a rota que segue e a fonte em que termina. Clique em uma rota para alterá-la.",
+      "columnSources": "Fontes",
+      "columnEmpty": "Nenhum ainda",
+      "openRoute": "Abrir a rota “{{name}}”",
+      "recentTitle": "Escolhas recentes",
+      "recentEmpty": "Nenhuma tarefa usou uma rota ainda.",
+      "keptOriginal": "Não havia nenhum modelo disponível, então a tarefa manteve o modelo que você tinha escolhido.",
+      "keptOriginalShort": "Seu modelo foi mantido",
+      "latest": "O caminho que a última tarefa seguiu"
+    },
+    "switchOffer": {
+      "action": "Continuar com {{model}}"
+    }
   }
 }

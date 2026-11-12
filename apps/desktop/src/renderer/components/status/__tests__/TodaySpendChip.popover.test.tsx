@@ -11,7 +11,7 @@ function render(ui: ReactElement) {
   return renderUI(ui, { wrapper: ConfirmDialogProvider });
 }
 
-import type { ClaudeSubscriptionUsageSnapshot } from '../../../../shared/claudeSubscriptionUsage';
+import { mergeClaudeSubscriptionUsageSnapshot, parseClaudeSdkRateLimitInfo, type ClaudeSubscriptionUsageSnapshot } from '../../../../shared/claudeSubscriptionUsage';
 import type { RateLimitSnapshot } from '@/hooks/useAccountUsage';
 import type { XaiSubscriptionUsageSnapshot } from '../../../../shared/xaiSubscriptionUsage';
 import type { ClaudeAccountUsageSnapshot } from '@/hooks/useClaudeAccountUsage';
@@ -647,6 +647,49 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(trigger.querySelector('[class*="quota-bar-warn"]')?.textContent).toBe('25%');
     const { card } = openCardFromHover();
     expect(within(card).getByText('已触发套餐限额')).toBeTruthy();
+  });
+
+  // Regression: an account-wide rejection caused by Fable must not label an Opus task limited.
+  // Existing coverage only exercised allowed_warning; this uses the real chip (unit/jsdom).
+  it.each(['five_hour', 'seven_day'])('旧 %s 事件后分模型拒绝仍跟随当前模型', (oldClaim) => {
+    const now = Date.now();
+    const endpoint: ClaudeSubscriptionUsageSnapshot = {
+      source: 'oauth-endpoint', updatedAt: now,
+      fiveHour: { utilization: 52 }, sevenDay: { utilization: 61 },
+      scoped: [{ modelDisplayName: 'Fable', utilization: 100 }],
+    };
+    const previous = mergeClaudeSubscriptionUsageSnapshot(endpoint, parseClaudeSdkRateLimitInfo({
+      status: 'allowed', rateLimitType: oldClaim, utilization: oldClaim === 'five_hour' ? 0.52 : 0.61,
+    }, now + 1)!);
+    mocks.claudeSnapshot = mergeClaudeSubscriptionUsageSnapshot(previous, parseClaudeSdkRateLimitInfo({
+      status: 'rejected', rateLimitType: 'seven_day_overage_included',
+    }, now + 2)!);
+    const props = { vendorKey: 'cc' as const, providerId: 'anthropic', sessionId: 'session-1' };
+    const { rerender } = render(<TodaySpendChip {...props} modelId="claude-opus-5-5" />);
+    const trigger = screen.getByTestId('task-usage-trigger');
+    expect(trigger.textContent).not.toContain('暂时受限');
+    expect(trigger.textContent).toContain('5h 剩余 48%');
+    expect(trigger.textContent).toContain('周限 剩余 39%');
+    rerender(<TodaySpendChip {...props} modelId="claude-fable-5[1m]" />);
+    expect(trigger.textContent).toContain('暂时受限');
+    rerender(<TodaySpendChip {...props} modelId="claude-opus-5-5" />);
+    expect(trigger.textContent).not.toContain('暂时受限');
+  });
+
+  it.each([
+    { fiveHour: { utilization: 100 } },
+    { sevenDay: { utilization: 100 } },
+    { representativeClaim: 'five_hour' },
+    { representativeClaim: 'seven_day' },
+  ])('其它模型用满时仍显示公共窗口的拒绝：%j', (sharedLimit) => {
+    mocks.claudeSnapshot = {
+      source: 'unified-headers', rateLimitStatus: 'rejected',
+      fiveHour: { utilization: 52 }, sevenDay: { utilization: 61 },
+      scoped: [{ modelDisplayName: 'Fable', utilization: 100 }],
+      ...sharedLimit,
+    };
+    renderClaudeSubscriptionChip();
+    expect(screen.getByTestId('task-usage-trigger').textContent).toContain('暂时受限');
   });
 
   it('显示吃紧的总周额度，恢复后收起，分模型额度和价值不继承颜色', () => {

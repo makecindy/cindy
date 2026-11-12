@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  USAGE_LIMIT_ACCOUNT_SWITCH_DELAY_MS,
   USAGE_LIMIT_MAX_CONSECUTIVE_RESUMES,
   USAGE_LIMIT_RESUME_BUFFER_MS,
   UsageLimitAutoResume,
@@ -207,6 +208,25 @@ describe('UsageLimitAutoResume', () => {
       maxAttempts: USAGE_LIMIT_MAX_CONSECUTIVE_RESUMES,
       sessionTotal: 0,
     });
+  });
+
+  // Unit, 2026-11-11: another account of the same provider can take the task now (provider group
+  // §6.1 switches at once). Minimal input: an account limit with a switchable pool; then a group-verified
+  // limit, which already covers every member and keeps waiting for the reset.
+  it('continues almost at once when another subscription account can take the task', async () => {
+    const h = harness({ canSwitchAccount: vi.fn(async () => true) });
+    h.guard.onTurnError('s1', LIMIT);
+    await h.flush();
+    expect(h.deps.resolveResetAt).not.toHaveBeenCalled();
+    expect(h.deps.arm).toHaveBeenCalledWith('s1', 1, NOW + USAGE_LIMIT_ACCOUNT_SWITCH_DELAY_MS);
+    await h.fireLast();
+    expect(h.deps.continueSession).toHaveBeenCalledTimes(1);
+
+    const group = harness({ canSwitchAccount: vi.fn(async () => true) });
+    group.guard.onTurnError('s1', { ...LIMIT, providerGroupUsageLimit: { resetAtMs: RESET_AT } });
+    await group.flush();
+    expect(group.deps.canSwitchAccount).not.toHaveBeenCalled();
+    expect(group.deps.arm).toHaveBeenCalledWith('s1', 1, RESET_AT + USAGE_LIMIT_RESUME_BUFFER_MS);
   });
 
   it('does not wait without a usable reset time or for an ineligible session', async () => {
