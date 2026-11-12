@@ -1133,3 +1133,126 @@ CI 的三类测试位置问题同时修正：模型对账/手机说明 guard 指
 `/tmp/cindy-9963-r1-host-types.log`、`/tmp/cindy-9963-r1-desktop-types-final.log`、
 `/tmp/cindy-9963-r1-hygiene.log`。插件授权单文件运行 5.64 秒（24 项，执行 77 毫秒）；
 没有增加测试基线额度，也没有新增源码文本断言。
+
+## 第 0 批：通道覆盖度量（2026-11-12）
+
+后续各批按真实使用排序，不靠估计。两份结果都由脚本生成：
+
+- **全量清单** [`channel-coverage.md`](channel-coverage.md)，由
+  `node scripts/host-channel-coverage.mjs` 生成。用 TypeScript 类型检查器解析桌面主进程
+  每个 `ipcMain.handle/on` 及包装函数的通道名（字面量、常量对象、模板字符串、
+  `as const` 循环、`Object.entries` 处理器表、透传参数的包装函数），0 处未解析。
+  清单只写文件不写行号（行号在 `--json` 输出里），避免一合并就过期；也不加“清单必须
+  最新”的 CI，这个仓每天有大量 PR 动 IPC。
+- **真实使用**：`--mock` 界面夹具（隔离沙箱 `host-usage`，没有登录 Cindy 账号）里用
+  `apps/desktop/scripts/host-client-usage-tour.mjs` 走一遍 25 个夹具任务、20 个设置页、
+  10 个主页面并新建任务发送一次，主进程按 `CINDY_IPC_USAGE_FILE` 计数（仅源码运行）。
+  这是旧版脚本的历史采样；当前巡检只导航读取，不填入或发送消息。两份证据未重录，
+  不代表当前只导航版本的采样。
+  报告存为 [`evidence/channel-usage-mock-tour.json`](evidence/channel-usage-mock-tour.json)，
+  清单脚本默认读它排序。这一轮共调用 253 个通道（1862 次）。
+- **更正（2026-11-12）：这次采样调用了真实模型。** 之前写的“免登录本地数据”“没有使用
+  真实账号”不实。沙箱启动时自动沿用了这台电脑上的命令行登录（订阅）：`codex-home/auth.json`
+  是指向本机 `~/.codex/auth.json` 的链接，Claude 沿用钥匙串里 Claude Code 的登录，
+  沙箱 `native-provider-auth.json` 里两家的来源都是 `native-harness-inherited`。
+  沙箱库 `daily_model_usage` 的记录：
+  - Codex `gpt-6.1-sol`：两次“发送一次”各跑了一个回合（2026-11-11 12:43、13:16 UTC），
+    合计输入 34,170、输出 376、读缓存 101,248 个 token。
+  - Claude：沙箱启动约 11 秒后伙伴自动写邀请问候，早于巡检连上。Opus 5.5 输入 2、输出 195、
+    读缓存 13,279、写缓存 18,890；Haiku 5.5 输入 2,005、输出 18。
+  - 按参考价估算约 0.24 美元，用的是订阅额度，不是 API 密钥计费。
+
+  当时没有核实启动进程的环境变量，也没有检查沙箱里的模型登录来源。`--mock` 与隔离
+  profile 都挡不住这种沿用，只把 `HOME` 指到临时目录也不够（钥匙串不随 `HOME` 变）。
+  本机 `~/.codex/auth.json` 最后修改时间早于沙箱创建，沙箱运行期间没有经这个链接写入。
+  在启动前的模型隔离有硬性保证之前，不再启动带界面的沙箱。
+- **计数格式**：计数报告从 v2 起按 `(kind, channel)` 分别记 invoke 与 event。上面两份证据
+  是 v2 之前录的旧格式，没有重录，脚本按每条记录的 `kind` 读取。旧格式只按通道名记数，同名的
+  invoke 与 event 混在一条里，事后拆不开，需要分开时只能重新采样。今天同名的只有
+  `ghosts:workdir-prefs` 一对（同步事件 S·镜像 + 异步调用 A），两份证据里都没有它的调用，
+  所以排行与 133 个（722 次）不受影响。
+
+**归属**（主进程共 1456 个通道；规则表见清单「归属规则」，正本是脚本的 `OWNERSHIP_RULES`）：
+
+| 分类 | 含义 | 通道数 |
+| --- | --- | ---: |
+| 已代理 | 合同 75、客户端模式自有 2 | 77 |
+| A | 必须由后台处理：读写后台持有的数据或运行状态 | 912 |
+| B | 永久留在窗口：窗口外壳、对话框／剪贴板／系统外壳／通知、截屏录屏与远程桌面、电脑控制与浏览器、输入设备与语音、安装包更新与诊断 | 353 |
+| W | 窗口本地设置：侧栏设置与项目顺序，窗口直接读写同一份 profile | 6 |
+| S | 同步通道（处理函数给 `event.returnValue` 赋值，AST 自动识别）：S·本地 8（界面设置与登录首帧提示，窗口本地读 profile）；S·镜像 6（`ghosts:*`，数据归 Host） | 14 |
+| R | 回执通道：主进程向界面要数据、界面回执（`model-favorites:host-*`、`setup-migration:host-*`、`app-preferences:reply`） | 6 |
+| C | C-后台 32（终端、任务范围文件操作）、C-两段式 41（选择框／访达／确认框后写后台）、C-窗口本地 11（本窗口选择的本机文件、进程监视）、C-专项设计 4（`input-handoff:*`、`device-link:invoke`） | 88 |
+
+依赖判定：A 领域的处理函数及其调用的两层桌面源码函数（含参数默认值，不含被调函数里的嵌套回调）
+若用到窗口 API（对话框、系统外壳、剪贴板、`BrowserWindow.fromWebContents` 等），改判 C-两段式；
+未登记前缀同理，否则判 A。发送方校验（`src/main/security/`）与发给某个窗口的推送不算窗口 API。
+扫描从参数默认值起算后，唯一改判的是 `git-review:open-file`：A（git 与工作树）→ C-两段式
+（`openReviewFile` 第 4 个参数默认值是 `shell.openPath`）。它在 A 与 C-两段式之间移动，原口径 990 不变。
+
+**总口径：真正要 Host 做的 = A + C-后台 + C-两段式 = 912 + 32 + 41 = 985**；夹具巡检实际调用到
+其中 **132 个（709 次）**，这是“还差多少”的下限，巡检没有覆盖真实模型回合、附件、新建自动化、
+Orca、伙伴与 IM、远程执行。S 与 R 已从 A 中单列，C-窗口本地与 C-专项设计不计入。后续各批的
+范围与“还差多少”以此为准。
+
+合入包含 #9991 的 main `8f1869c46f` 后重生成：总数 1456，已登记合同通道 75，A 912，Host 待接 985。证据未重录；旧采样在新归属下覆盖 132 个待接通道（709 次），原来的 133 个（722 次）是合入前口径。Windows 路径统一后，真实 `openReviewFile` 回归同时覆盖斜杠与反斜杠路径。
+
+合同一侧的通道名改为全部静态解析：#9991 用 `Object.entries(HOST_BROWSER_SETTINGS_ACTIONS).map(([action]) => …)` 生成的 8 个 `browser-backend:*` 写法是模板字符串，脚本原先读不出就悄悄跳过，把它们误列为 B（窗口本地）。现在脚本能解析这种写法；任何解析不出的合同通道名都会让生成直接失败，不再跳过。改判的只有这 8 个（B → 已代理，巡检调用 2 次），合同 67 → 75、B 361 → 353、窗口类 386 → 378，Host 待接 985 不变。
+
+**窗口类在客户端模式下**（窗口类 = B + W + S·本地 + C-窗口本地，共 378；对照客户端模式登录页
+[`evidence/channel-usage-client-login.json`](evidence/channel-usage-client-login.json) 与普通模式
+巡检后两份主进程处理者快照）：已注册 **364**；未注册 **12**——`maker:computer:*` 10 个与
+`maker:browser:*` 2 个，只在客户端模式跳过的 `registerMakerIpcsAfterSplash` → `registerMakerIpc`
+里注册，今天返回 `UNSUPPORTED_CAPABILITY`（拖拽开始是事件，无人监听）。**未实现**；#9991 不接，
+归本任务第 1a 批：#9991 合并后，把这 12 个注册拆成客户端模式也会调用的函数。另 2 个插件页面通道
+注册在 `webContents.ipc` 上，快照不覆盖。
+
+**剩余项（本批记录，不在本批处理）**：
+
+- `update-relaunch:blocking-activity` / `blocking-summary`（“现在重启会打断哪些任务”）是 Host
+  持有的运行状态，归 A 的“升级与交接”领域；它注册在客户端模式跳过的
+  `registerMakerIpcsAfterSplash` 里，今天返回 `No handler registered`。客户端模式下的答案取决于
+  交接合同，**归交接任务留在原工作区的升级流程**，不归本计划的各批。
+- **Host 没有免账号本地模式**：桌面有 `auth:enter-local`，Host 只有云端账号一种登录态，所以
+  隔离 profile 里客户端模式窗口停在登录页，无法在不碰真实凭证的情况下做完整客户端验收。
+- **S·镜像 6 个**（`ghosts:recommendations`、`unread`、`recent-usage`、`builtin-status`、
+  `errand-prefs`、`workdir-prefs`）需要“窗口缓存镜像”
+  （Host 经事件流推送，窗口同步回答缓存）或把界面改成异步，是一个单独的小设计，放进插件那一
+  小批，不混进 1a。S·本地 8 个由窗口本地读同一份 profile；其中
+  `auth:has-persisted-session-hint-sync` 只在第一帧之前读存量会话标记，登录状态本身仍以 Host 为准。
+- **R 回执通道 6 个**：数据在界面本地存储，Host 要用需经窗口往返一次，先标出来，不排期。
+- **C-专项设计 4 个**涉及“用户填写的值只交给宿主执行”和远程控制派发的安全边界，先读
+  `docs/product-rules/input-handoff.md`，方案出来前不动。
+- 启动时同步被丢（见下文“巡检顺带发现”）是既有问题，另开小修复。
+
+**为什么排行用普通模式而不是客户端模式**：Host 只有云端账号一种登录态，没有桌面的
+免账号本地模式；隔离 profile 里没有登录 Cindy 账号，窗口以客户端模式启动后停在登录页，
+而真实登录会动到钥匙串凭证。所以客户端模式只实测了启动与登录页：隔离 Host（新沙箱
+`host-client`）+ 客户端模式开发窗口，页面落在 `#/login`，唯一一次未接调用
+`maker:remote-ssh:cc-mgr-list-pending-upgrades` 返回 `UNSUPPORTED_CAPABILITY` 并计入报告，
+之后桌面再注册 `maker:*` 通道没有出现“重复注册”错误。两种模式的渲染层相同，未接通道在
+客户端模式下没有处理者，所以普通模式的调用集合就是客户端模式会落空的集合。
+`host-client` 沙箱当时同样没有检查模型登录来源，用完已删除，无法事后核对；那次没有发送
+任务，Host 也没有登录、没有数据 owner。
+
+**修掉的客户端模式缺陷**：Electron 42 在 invoke 时先查 `_invokeHandlers.has(channel)`，
+查不到直接回“No handler registered”，根本不会走到 `get()`。原兜底只改写了 `get()`，
+单测直接调 `get()` 所以一直是绿的，实际客户端模式下未接的 `maker:*` 从来没有返回过
+`UNSUPPORTED_CAPABILITY`（隔离 Electron 42.11.12 探针复现）。现在同时应答 `has()`，
+并用注册守卫区分“invoke 查询”和“`handle()` 注册前的查询”，否则后注册的 `maker:*`
+通道会被误判为重复注册而中断后续注册。真实 Electron 探针与实机客户端窗口都已验证。
+非 `maker:*` 的未接通道仍保持 Electron 原错误，只计数。
+
+**巡检顺带发现**（普通模式也存在，未在本批修改）：`maker:sync-worker-creation-prefs`
+（两轮巡检均为一半左右，最近一轮 5 次里 3 次）与 `maker:sync-provider-model-memory`（1 次）
+在主进程注册监听之前就由渲染层发出，这几次同步被丢弃；`host-client:observe` 只在客户端
+模式有监听，普通模式发出属预期。
+
+重新测量：`CINDY_IPC_USAGE_FILE=<文件> XDT_CDP_PORT=9333 pnpm restart:desktop:remote --
+--mock --isolated=host-usage`，再跑巡检脚本（`--cdp=… --profile=<沙箱目录>`，只接受开发
+实例登记为隔离沙箱的进程），把报告覆盖到 `evidence/channel-usage-mock-tour.json`。客户端
+模式快照：在新的空沙箱目录上用 `CINDY_HOST_DATA_DIR=<沙箱> CINDY_HOST_PORT=0` 启动 Host，
+再用 `CINDY_HOST_API=<Host 地址> CINDY_IPC_USAGE_FILE=<文件> pnpm restart:desktop:remote --
+--isolated=<同名沙箱>` 启动窗口，停在登录页后取报告覆盖到
+`evidence/channel-usage-client-login.json`。两份报告都带写入时的主进程处理者快照，最后重新
+生成清单。restart 脚本为此转发 `CINDY_IPC_USAGE_FILE` 与 `CINDY_HOST_API` 两个变量。
