@@ -17,6 +17,7 @@ import path from 'node:path';
 import { configureHostOwner } from './claude-auth.mjs';
 import { createHostModelContext } from './model-context.ts';
 import { createHostStartOptions } from './start-options.ts';
+import { storedSessionOptions } from './input-queue.mjs';
 import { getSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import { getSessionFastMode, setSessionFastMode } from '../../../desktop/src/main/maker-host/session-effort-store.ts';
 import { setThinkingEnabledInMemory } from '../../../desktop/src/main/maker-host/newMakerDefaultsCache.ts';
@@ -151,4 +152,16 @@ test('a start refreshes the model lists after the catalog wait and passes the di
   assert.equal(opts.vendorOptions.kept, true);
   // The workdir's disabled plugins (none here), set for every engine as on the desktop.
   assert.deepEqual(opts.vendorOptions[CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY], []);
+});
+
+/*
+ * 一个运行中开过快速模式的任务被恢复时，创建参数取自任务行（input-queue.mjs storedSessionOptions，
+ * 发送、恢复、续接三条路径共用）。若这条映射丢了 fastMode，Pi 的价格档会被改回 standard。
+ */
+test('a task restored with Fast saved on its row starts on the priority price tier', async t => {
+  const { start } = setup(t, 'start-options-restore-fast');
+  const opts = storedSessionOptions({ agentKind: 'pi', model: 'fixture-model', providerId: 'fixture-provider', fastMode: true });
+  assert.equal(opts.fastMode, true);
+  await start.prepareStartOptions('restored-pi-task', opts);
+  assert.equal(opts.getPriceVariant(), 'priority');
 });

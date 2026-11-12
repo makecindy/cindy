@@ -13,7 +13,8 @@ import { createLogger } from '../../../desktop/src/main/logger.ts';
 
 const attachmentLog = createLogger('host-attachments');
 
-function storedSessionOptions(stored) {
+/** Create options for every start from a stored task row (send, restore, resume). */
+export function storedSessionOptions(stored) {
   return { agentKind: makerKind(stored.agentKind), model: stored.model || '',
     workingDir: stored.workingDir || '', effort: stored.effort || undefined,
     permissionMode: stored.permissionMode || undefined, providerId: stored.providerId ?? undefined,
