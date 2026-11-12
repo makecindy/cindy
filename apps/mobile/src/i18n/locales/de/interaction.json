@@ -29,6 +29,13 @@
       "description": "Vollzugriff deaktiviert die Sandbox des Arbeitsbereichs und überspringt routinemäßige Genehmigungen. {{appName}} kann ohne Rückfrage Dateien außerhalb des Arbeitsbereichs ändern und Netzwerkbefehle ausführen. Integrierte Vorgänge mit hohem Risiko erfordern weiterhin eine Bestätigung.",
       "confirm": "Vollzugriff aktivieren",
       "cancel": "Aktuelle Berechtigungen beibehalten"
+    },
+    "description": {
+      "default": "Du genehmigst Aktionen bei Bedarf.",
+      "acceptEdits": "Dateiänderungen sind direkt erlaubt; andere Aktionen genehmigst du bei Bedarf.",
+      "auto": "Ein KI-Modell genehmigt Aktionen. Das kann zusätzliche Wartezeit erfordern; bei Bedarf bestätigst du.",
+      "bypass": "Routineaktionen sind direkt erlaubt, einschließlich Dateien außerhalb des Arbeitsbereichs und Netzwerkbefehlen.",
+      "plan": "Analysiert und plant, ohne Dateien zu ändern."
     }
   },
   "planMode": {
@@ -186,6 +193,7 @@
     "fromLead": "Nachricht vom Lead",
     "fromWorkerNamed": "Nachricht von Worker „{{role}}“",
     "fromWorker": "Nachricht vom Worker",
+    "fromWorkerBatch": "Systemrückmeldung: {{count}} Worker-Ergebnisse",
     "emptyMessageBody": "(Leere Nachricht)"
   },
   "contextSheet": {

@@ -26,6 +26,31 @@ function fakeResponse(status: number, body: string): Response {
   return new Response(body, { status, headers: { 'content-type': 'application/json' } });
 }
 
+// Unit regression: real fetch entry, legacy saved /v1/models plus three inference
+// protocols. Prior account tests passed an already-correct /models URL and missed this.
+it.each(['claude-code', 'codex', 'pi'] as const)('discovers Copilot models independently of the %s inference API', async agent => {
+  const result = await fetchProviderModels(spec({ agent,
+    baseUrl: 'https://api.enterprise.githubcopilot.com',
+    modelsUrl: 'https://api.enterprise.githubcopilot.com/v1/models',
+    wireProtocol: agent === 'claude-code' ? 'anthropic-messages' : agent === 'codex' ? 'openai-responses' : 'openai-chat',
+  }), async (url, init) => {
+    expect(String(url)).toBe('https://api.enterprise.githubcopilot.com/models');
+    const headers = new Headers(init?.headers);
+    expect(headers.get('copilot-integration-id')).toBe('vscode-chat');
+    expect(headers.get('authorization')).toBe('Bearer sk-test');
+    expect(headers.has('x-api-key')).toBe(false);
+    expect(headers.has('anthropic-version')).toBe(false);
+    return fakeResponse(200, '{"data":[{"id":"future-account-model"}]}');
+  });
+  expect(result).toMatchObject({ ok: true, models: [{ id: 'future-account-model' }] });
+});
+
+it.each(['https://api.individual.githubcopilot.com.evil.test', 'https://custom.example'])('keeps custom discovery semantics at %s', baseUrl => {
+  const request = buildModelsFetchRequest(spec({ baseUrl }));
+  expect(request.url).toBe(`${baseUrl}/v1/models`);
+  expect(new Headers(request.init.headers).has('copilot-integration-id')).toBe(false);
+});
+
 describe('import discovery limits', () => {
   // #9101 review regression: three identical Chat runtimes must perform one
   // HTTP read, while each consumer still issues its own agent-bound receipt.

@@ -35,8 +35,11 @@ export default {
   viewport: { width: 1280, height: 800 },
   real: 'BotGroupChatView (timeline, composer, send button, header registration), ControlledBanner, ContentHeader shell, Markdown, theme, fonts and translations',
   notCovered:
-    'Account sign-in, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, plans and attachment IO; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
+    'Account sign-in, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
   cases: {
+    'plan-read-talk': { about: '#9398: delayed plan details never flash an organizer or missing bubble; talk is independent', data: { ...base, sidebar: false, messages: 1, planRead: 'talk' } },
+    'plan-read-work': { about: '#9398: delayed work details preserve the selected organizer', data: { ...base, sidebar: false, messages: 1, planRead: 'work' } },
+    'plan-read-missing': { about: '#9398: a confirmed missing plan has a neutral visible fallback', data: { ...base, sidebar: false, messages: 1, planRead: 'missing' } },
     'share-pending': {
       about: 'Pending topic copy appears in the main chat while the host receipt is unresolved',
       data: { ...base, bubbles: true, threadPanel: true, sharePending: true },
@@ -177,6 +180,38 @@ export default {
   },
   async check(page, ui) {
     const definition = this.cases[ui.case];
+    if (definition.data.planRead) {
+      const missing = page.getByText(await ui.t('bots.groupChat.plan.missing'), { exact: true });
+      const organizer = page.getByText(await ui.t('bots.groupChat.organizer'), { exact: true });
+      await page.evaluate(() => window.dispatchEvent(new Event('fixture-plan-hold')));
+      await ui.emit('botGroupChanged', { groupId: 'fixture-group', change: 'messages', historyRevision: 'fixture-live', messages: [
+        { id: 'p1-card', sequence: 2, kind: 'plan', planId: 'p1', authorKind: 'user', authorBotId: null,
+          authorName: 'You', content: '', mentions: { all: false, botIds: [] }, noticeCode: null, files: [], attachments: [], createdAt: 1700000000000 },
+        { id: 'ordinary-delta', sequence: 10, kind: 'message', planId: null, authorKind: 'bot', authorBotId: 'a',
+          authorName: 'Aster', content: '普通消息无需等待安排详情。', mentions: { all: false, botIds: [] }, noticeCode: null, files: [], attachments: [], createdAt: 1700000000000 },
+      ] });
+      await page.getByText('普通消息无需等待安排详情。', { exact: true }).waitFor();
+      await ui.capture('details-pending');
+      assert.equal(await missing.count(), 0);
+      assert.equal(await organizer.count(), 0);
+      await page.evaluate(() => window.dispatchEvent(new Event('fixture-plan-ready')));
+      if (definition.data.planRead === 'missing') {
+        await missing.waitFor();
+        assert.equal(await organizer.count(), 0);
+        assert.equal(await missing.locator('xpath=ancestor::article').count(), 0);
+      } else if (definition.data.planRead === 'talk') {
+        const card = page.getByTestId('bot-group-arrangement');
+        await card.waitFor();
+        assert.equal(await organizer.count(), 0);
+        assert.equal(await card.locator('xpath=ancestor::article').count(), 0);
+      } else {
+        await organizer.waitFor();
+        assert.match(await organizer.locator('..').innerText(), /Nova/);
+      }
+      if (definition.data.planRead !== 'missing') assert.equal(await missing.count(), 0);
+      await ui.capture('details-settled');
+      return;
+    }
     if (definition.data.processRecord) {
       const journal = page.locator('[data-teammate-process]');
       await page.getByText('任务与 PR 的进展已整理，以下是需要跟进的事项。').waitFor();
@@ -634,9 +669,12 @@ export default {
         const bar = document.querySelector(`${row} [data-bot-group-message-actions]`).getBoundingClientRect();
         const bubble = document.querySelector(`${row} [data-testid="bot-group-bubble"]`).getBoundingClientRect();
         const timeline = document.querySelector('[data-testid="bot-group-timeline"]').getBoundingClientRect();
-        return { gap: bar.left - bubble.right, inside: bar.right <= timeline.right };
+        const narrow = document.querySelector(`${row} .chat-bubble-layout`).getBoundingClientRect().width <= 480;
+        return { gap: bar.left - bubble.right, inside: bar.right <= timeline.right, narrow,
+          below: bar.top > bubble.top && bar.left >= bubble.left && bar.right <= bubble.right };
       }, row);
-      assert.ok(geometry.gap >= 0 && geometry.gap <= 32, `toolbar sits beside the bubble (gap ${geometry.gap}px)`);
+      assert.ok(geometry.narrow ? geometry.below : geometry.gap >= 0 && geometry.gap <= 32,
+        `toolbar stays below narrow content or beside wide content: ${JSON.stringify(geometry)}`);
       assert.ok(geometry.inside, 'toolbar stays inside the timeline');
       assert.ok(await toolbar.isVisible());
       // Reactions wider than a short message's text stay over its own bubble and inside the timeline.
@@ -648,12 +686,14 @@ export default {
         const bar = document.querySelector(`${row} [data-bot-group-message-actions]`).getBoundingClientRect();
         const timeline = document.querySelector('[data-testid="bot-group-timeline"]').getBoundingClientRect();
         return { id, left: corner.left - bubble.left, right: corner.right - bubble.right, inside: corner.left >= timeline.left && corner.right <= timeline.right,
+          narrow: document.querySelector(`${row} .chat-bubble-layout`).getBoundingClientRect().width <= 480,
           toolbarTop: bar.top - bubble.top, wrapped: corner.height > reactions.firstElementChild.getBoundingClientRect().height };
       }));
       for (const c of corners) {
         assert.ok(c.inside, `${c.id} reactions stay inside the timeline`);
         assert.ok(c.left >= -12 && c.right <= 12, `${c.id} reactions stay over the bubble (${c.left}, ${c.right})`);
-        assert.ok(Math.abs(c.toolbarTop) <= 1, `${c.id} toolbar aligns with bubble top (${c.toolbarTop}px)`);
+        assert.ok(c.narrow ? c.toolbarTop > 0 : Math.abs(c.toolbarTop) <= 1,
+          `${c.id} toolbar follows the available content width (${c.toolbarTop}px)`);
         if (ui.case === 'bubbles-wrapped') assert.ok(c.wrapped, `${c.id} exercises multiple reaction rows`);
       }
       // r4324819612: the opposite of the long-root case — the entry is wider

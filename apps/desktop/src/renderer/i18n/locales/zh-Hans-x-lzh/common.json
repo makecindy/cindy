@@ -1,4 +1,12 @@
 {
+  "runtimePlugins": {
+    "save": "存之",
+    "promptUnsupported": "此 Pi 所在之处不支持系统提示词片段。",
+    "title": "差事法器",
+    "description": "为此差事择法器，改动自下条消息生效。",
+    "unsupported": "逐次请求前处置仅本机 Pi 可用，此差事引擎不支持。",
+    "failed": "设置未能读取或保存，请重开此页再试。"
+  },
   "sharedTaskRecovery": {
     "title": "无法在原电脑上恢复任务",
     "description": "可以选择其他电脑或供应商，通过上下文交接继续。原消息保留，但切换不会迁移原电脑上的完整运行状态。",
@@ -2261,6 +2269,7 @@
         "desktopVisibilityHint": "透见 Cindy 后之桌面与窗口，文字控件仍清晰。",
         "desktopBlurLabel": "桌面模糊",
         "desktopBlurHint": "模糊窗后桌面；0 则关闭，值愈大则愈朦胧。系统若不可调，仍用预设之效。",
+        "desktopBlurSwitchHint": "以 Windows 系统之效模糊窗后桌面；须 Windows 11 22H2 或更新之版。",
         "blurLabel": "壁纸朦胧",
         "blurHint": "仅朦胧壁纸，0 为阖。动态壁纸启朦胧则增显卡之负。",
         "motionLabel": "展示之式",
@@ -3587,6 +3596,36 @@
           "invalid": "此设不能先览，请察其设或重择卷",
           "skipped": "已略；再纳须重择卷",
           "authorizationPending": "连接已增，请于供方之设中完成授权"
+        },
+        "local": {
+          "title": "自本机应用导入",
+          "note": "只读此机已存 API 配置，不改来源应用。Claude Code 仅读用户级 settings.json（含 CLAUDE_CONFIG_DIR），不读 shell 环境变量、项目或托管设置。",
+          "review": "审阅并导入（{{count}}）",
+          "scanning": "正读取所存配置…",
+          "empty": "未见所存 API 配置。",
+          "failed": "读取未竟，请重试。",
+          "edit": "编辑",
+          "editFailed": "请核地址、协议与密钥，再试。",
+          "editNote": "密钥留空则沿用已读凭据；改地址或协议，须另填密钥。",
+          "name": "显示名称",
+          "baseUrl": "基础 URL",
+          "protocol": "接口协议",
+          "chooseProtocol": "请选择协议",
+          "apiKey": "API 密钥",
+          "keepKey": "留空则沿用已读密钥",
+          "missingUrl": "须填地址",
+          "status": {
+            "missing": "未见配置",
+            "readFailed": "读取不成，请核权限或重试",
+            "invalid": "格式未识，请核验或编辑配置",
+            "limit": "已逾读取上限，此来源未读全",
+            "unsupported": "此配置不可自动导入。不执行命令或 apiKeyHelper，请手动添加 API 配置。",
+            "needsInput": "配置尚待补全",
+            "changed": "来源已变，请重新扫描",
+            "duplicate": "相同连接已存"
+          },
+          "rescan": "重新扫描",
+          "sourceDisabled": "来源应用中已关闭"
         }
       },
       "order": {
@@ -3746,6 +3785,10 @@
           "openaiImagesHint": "以此连接之地址与 API Key 呼 /images/generations 与 /images/edits。启之，则此连接为供方唯一之图连接。所缺模型可手增 ID，再于模型详情中宣其图之能。",
           "xaiVideos": "用 xAI 兼容影界面",
           "xaiVideosHint": "以此连接之地址与 API Key 递交、查找影之差事。启之，则此连接为供方唯一之影连接。所缺模型可手增 ID，再于模型详情中宣其影之能。",
+          "minimaxVideos": "用 MiniMax 兼容影界面",
+          "minimaxVideosHint": "以此连接之地址与 API Key 递交、查找 MiniMax 影之差事（如 MiniMax-H3）。每供方仅可用一种影界面。所缺模型可手增 ID，再于模型详情中宣其影之能。",
+          "openaiVideos": "用 OpenAI 兼容影界面（/v1/videos）",
+          "openaiVideosHint": "以此连接之地址与 API Key，循 tu-zi 等诸中转所用之 POST /v1/videos 式递交、查找影之差事，MiniMax-H3 等模型亦可由此用之。每供方仅可用一种影界面。所缺模型可手增 ID，再于模型详情中宣其影之能。",
           "runtimeSupportsImageGeneration": "支持图之生成与编辑",
           "runtimeSupportsImageGenerationHelpLabel": "详图之生成与编辑支持",
           "runtimeSupportsImageGenerationConditionTitle": "适用之条",
@@ -6584,8 +6627,27 @@
             "copied": "关联码已录",
             "hint": "或于飞书中将关联码私遣予 Cindy 机器人"
           },
+          "linkedAccounts": "已系账号：{{count}}",
+          "connectionTenant": "所属企业：{{tenant}}",
           "setWorkingDevice": "设为工作电脑",
-          "workingDeviceSet": "已设为工作电脑"
+          "workingDeviceSet": "已设为工作电脑",
+          "appType": {
+            "self_built": "组织自建应用",
+            "store": "商店应用"
+          },
+          "linkedBotsSummary": "已联机器人 {{bots}} · 飞书账号 {{accounts}}",
+          "chooseBot": "择机器人以联，可并用多者。",
+          "connectBot": "联此机器人",
+          "linkAnotherAccount": "另联飞书账号",
+          "botFallback": "Cindy 机器人",
+          "bridgeTitle": "飞书机器人",
+          "bridgeDescription": "机器人惟转飞书之讯于 Cindy。各飞书账号之讯，交其工作电脑处理；差事依机器人与飞书账号各立。",
+          "settingsTitle": "工作目录与模型",
+          "settingsDescription": "属尔之 Cindy 账号与此台电脑，不随机器人或飞书账号而易：诸飞书机器人共用一份。工作目录清单亦与他渠道共用。",
+          "workingDeviceLabel": "工作电脑：{{name}}",
+          "workingDeviceThisComputer": "本机",
+          "workingDeviceUnknown": "工作电脑尚未同步",
+          "workingDeviceUnnamed": "未命名电脑"
         }
       },
       "summary": {
@@ -8047,12 +8109,24 @@
         "mcpUiDomains": "页面可连之网域：{{domains}}",
         "mcpAppOnly": "唯页面可用",
         "uiPageAccess": "页面：{{pages}}；网域：{{domains}}；页面可召之工具：{{tools}}",
+        "uiHost": "于 Cindy 提供界面及宿主操作",
+        "uiHostAccess": "{{subject}}：{{access}}",
         "subscribeRoutineRun": "可于君所择之同僚例行差事运行前行检",
         "subscribeRoutineRunDetail": "凡于「预检」择之之例行差事，每番触发必先询之。其可见差事之指令与触发事件之内容，可令此番略过或止之，不能代君准允。",
         "subscribeScheduleRun": "可于君所择之自动化运行前行检",
         "subscribeScheduleRunDetail": "凡于「预检」择之之自动化，运行前必先询之。其可见此自动化之名与指令，可令此番略过或止之，不能代君准允。",
+        "systemPrompt": "可为所选差事补系统提示词",
+        "systemPromptDetail": "下列静文唯入所选差事，置 Cindy 固定提示词之后；次序与引擎之域依包中所载。改动自下条消息生效，有误依差事所设处置。",
+        "subscribeComposeContext": "可于所选差事答前补资料",
+        "subscribeComposeContextDetail": "唯所选差事交其当前消息。所返为参阅之材，不入系统提示词，不作主人授权；有误依差事所设处置。",
+        "subscribeSearchMemory": "可为所选差事供记忆",
+        "subscribeSearchMemoryDetail": "于既有 memory_search 合入全文，署法器之名。须先启记忆检索；唯交所选差事之查询，法器失误则留 Cindy 原果。",
+        "subscribeStartTurn": "可于所选差事每次回复前择模型",
+        "subscribeStartTurnDetail": "仅在差事选用此法器时，彼可阅本条消息，择已连之模型、思之深浅及 Fast。出错依差事所设处理，不得代君批准操作。",
+        "subscribeModelRequest": "可处理所选差事之每次模型请求",
+        "subscribeModelRequestDetail": "仅在差事选用此法器时，彼可阅并调整模型请求之内容、模型及参数。现仅支持本机 Pi；出错依差事所设处理，不含连接凭证。",
         "subscribeStartTask": "可为新差事择模型",
-        "subscribeStartTaskDetail": "新任务择其所供之模型时，彼阅首条消息，于汝已连之模型中择一。唯择一次，任务中途不易模型。"
+        "subscribeStartTaskDetail": "新任务择其所供之模型时，彼阅首条消息，于汝已连之模型中择一。此节唯于首条消息发出前行一次。"
       },
       "connections": {
         "confirmTitle": "增连接地址",
@@ -9285,6 +9359,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "ChatGPT 配额更新未成，请重读。其余用量仍存",
+    "retryQuota": "重读配额",
+    "retryingQuota": "正读配额…",
     "usageCritical": "耗用颇高",
     "usageWarning": "耗用偏高",
     "usageTitle": "耗用明细",
@@ -11715,7 +11792,7 @@
       "remove": "除",
       "removeAria": "除 {{platform}}",
       "empty": "增君已有之机器人，或于下方接个人微信，{{name}} 即于彼处回复。",
-      "externalNote": "凡遣讯予此机器人者，皆与 {{name}} 言谈。君之讯依 {{name}} 之权柄行事；他人各有一条隐藏差事，权柄受限。",
+      "externalNote": "Telegram 与飞书/Lark 既绑定，私讯惟受主人。群讯依各平台参与之设，工具循 {{name}} 之权柄。差事虽分，资料与记忆共用。",
       "sharedMemoryNote": "{{name}} 将合用此处与他处言谈之信息。欲隔记忆，请换一同僚。",
       "groups": {
         "title": "诸群",
@@ -12585,47 +12662,47 @@
         "claude-code": {
           "ask": {
             "label": "预设权柄",
-            "description": "许于工作区内读写；需更高权柄、联网或访问工作区外路径时，再询问君。"
+            "description": "操作须批者，由君裁可。"
           },
           "acceptEdits": {
             "label": "许修改",
-            "description": "自动接受卷之修改请求，以减反复确认；涉更高风险之命令或权柄，仍依底层权柄策略处理。"
+            "description": "编辑文件径许，余事按需请君裁可。"
           },
           "auto": {
             "label": "自审",
-            "description": "许于工作区内读写，并自动审批提权请求；高风险之举或遭拒或须确认。可减打断，然有误判之险。"
+            "description": "操作由 AI 模型裁可，审之或须多候；必要时仍请君确认。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "许修改任意卷并运行联网命令，不再确认。风险最高，仅宜可信之差事，慎之。"
+            "description": "常规操作径许，可访工作区外文件、联网执行命令。"
           }
         },
         "codex": {
           "ask": {
             "label": "预设权柄",
-            "description": "许于工作区内读写；需更高权柄、联网或访问工作区外路径时，再询问君。"
+            "description": "操作须批者，由君裁可。"
           },
           "auto": {
             "label": "自审",
-            "description": "于受保护之工作区沙箱内自动运行命令；需越沙箱边界之举交自动审查器判之，高风险之举或遭拒或须确认。"
+            "description": "操作由 AI 模型裁可，审之或须多候；必要时仍请君确认。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "许修改任意卷并运行联网命令，不再确认。风险最高，仅宜可信之差事，慎之。"
+            "description": "常规操作径许，可访工作区外文件、联网执行命令。"
           }
         },
         "pi": {
           "ask": {
             "label": "预设权柄",
-            "description": "唯读器具直接运行；写卷、跑命令与 MCP 器具，每次皆询问。"
+            "description": "操作须批者，由君裁可。"
           },
           "auto": {
             "label": "自审",
-            "description": "工作区内写卷与安全命令自动运行；越界之写、危险命令与 MCP 器具仍将询问。"
+            "description": "操作由 AI 模型裁可，审之或须多候；必要时仍请君确认。"
           },
           "bypassPermissions": {
             "label": "完全访问",
-            "description": "许修改任意卷并运行联网命令，不再确认。风险最高，仅宜可信之差事，慎之。"
+            "description": "常规操作径许，可访工作区外文件、联网执行命令。"
           }
         }
       }
@@ -13490,8 +13567,8 @@
       "dismissTitle": "阖往昔未成之示"
     },
     "worktreeRestoreBanner": {
-      "text": "此差事之 worktree 已被收回（目录不存）。",
-      "textPendingSnapshot": "此差事有一份未施之更改快照。",
+      "text": "此差事之 worktree「{{name}}」已被收回（目录不存）。",
+      "textPendingSnapshot": "此差事之 worktree「{{name}}」有一份未施之更改快照。",
       "restoreAction": "复 worktree",
       "applySnapshotAction": "复更改",
       "restoring": "方复…",
@@ -14017,6 +14094,7 @@
       "botSentNamed": "同僚「{{name}}」所遣",
       "orcaFromLead": "Lead 之讯",
       "orcaFromWorker": "Worker 之讯",
+      "orcaFromWorkerBatch": "系统所报 Worker 结果凡 {{count}}",
       "orcaFromWorkerNamed": "Worker「{{role}}」之讯",
       "hookChannelFrom": "自 {{channel}} 来",
       "deviceSentMobileNamed": "自手机「{{name}}」所遣",
@@ -14083,7 +14161,7 @@
       "errors": {
         "noPriorAssistantPreview": "请于 AI 答复之后所问处 rewind（此前无 assistant 之答）",
         "sessionRunning": "候差事止息逾时，请再回退",
-        "noLiveQuery": "Agent 会话未启——请先遣一讯（纵一句\"ok\"亦可）令 SDK 起，再 rewind",
+        "noLiveQuery": "任务未能复启，回退未成。",
         "noPriorAssistantCommit": "请于 AI 答复之后所问处 rewind",
         "commitGeneric": "rewind 未成，请再试",
         "remoteNotSupported": "远方 Claude Code 差事暂不支持 rewind"
@@ -14362,6 +14440,14 @@
       "replied": "覆书",
       "toggle": "启闭「{{title}}」之覆书",
       "openTask": "启差事"
+    },
+    "subscriptionAccountError": {
+      "limited": "此差事所用订阅账号，用量已尽。可待用量重设后再试，或另选模型来源。此差事仍系原账号，不自动更换。",
+      "limitedUntil": "此差事所用订阅账号，用量已尽，预计 {{resetAt}} 重设。可待重设后再试，或另选模型来源。此差事仍系原账号，不自动更换。",
+      "loginRequired": "此差事所用订阅账号需要重新登录。请在执行差事的电脑上重新登录该账号，再重试。",
+      "signingIn": "此差事所用订阅账号正在登录，请完成登录后重试。",
+      "unavailable": "此差事所系订阅账号，无法用于本次请求。请于执行差事的电脑检查模型供方的账号设置，或另选模型来源。",
+      "legacy": "此差事所系订阅账号，暂不可用。请于执行差事的电脑检查登录与用量，或另选模型来源。此差事不自动更换账号。"
     }
   },
   "ccAgent": {
@@ -19324,6 +19410,12 @@
       "restore": "复预设"
     }
   },
+  "pluginUi": {
+    "display": "示法",
+    "original": "原文",
+    "menu": "法器页面与指令",
+    "actionFailed": "此法器操作未成，请重试。"
+  },
   "mcpApps": {
     "sharedTaskReadOnly": "此卡唯差事之主可操作。",
     "retry": "重载",
@@ -19782,6 +19874,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "账号待定",
+    "boundUnavailable": "账号已不可用",
     "providerManagedAuth": "Codex 目前供方未提供 ChatGPT 账号资讯。请于新增供方时选「$t(subscriptionAccounts.signIn.anotherAccount)」，另用独立目录",
     "signIn": {
       "checking": "正察本机账号…",
@@ -19809,7 +19902,16 @@
     "openDirectory": "启账号目录",
     "openDirectoryFailed": "账号目录未能启，或已移或已删。",
     "loginAgain": "重登",
-    "login": "登录"
+    "login": "登录",
+    "quotaRecoverIn": "{{duration}}后复",
+    "quotaExhausted": "额度已尽",
+    "quotaFiveHourRemaining": "五小时余 {{percent}}%",
+    "quotaFiveHourExhausted": "五小时额度已尽",
+    "quotaAverage": "平均余量 {{percent}}%",
+    "quotaUpdating": "余量待新",
+    "quotaResetSoon": "将重置",
+    "quotaAverageHint": "周限额 · 诸账号等权均值",
+    "quotaResetHint": "依今耗速，重置或尚有余：距二十四时以内示黄，六时以内示红。"
   },
   "sessionNotify": {
     "finished": "此务此轮已毕，终答如下：",

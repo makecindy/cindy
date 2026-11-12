@@ -12,12 +12,17 @@
  *
  * Usage:
  *   node --import tsx scripts/eval-browser-tasks.mjs --live --baseline-ref origin/main \
- *     [--model claude-sonnet-5-5] [--repeats 3] [--only form,vault] [--variants A,C] [--parallel 3]
+ *     [--model claude-sonnet-5-5] [--effort medium] [--repeats 3] [--only form,vault] [--variants A,C] [--parallel 3]
+ *     --effort is passed to the CLI as its reasoning effort; without it the CLI default applies.
+ *     --real-sites adds eight read tasks on public websites (GitHub, crates.io, PyPI, Hacker News search,
+ *     Tailscale docs, Apple support, Wikipedia). Their answers are fetched from the sites' public APIs and
+ *     pages right before the runs. They need the network, depend on what those sites serve that day and
+ *     can be refused by a site; treat a failure there as a reason to look, not as a regression by itself.
  *   node --import tsx scripts/eval-browser-tasks.mjs --check
  *     No model and no usage: drives batch and cdp through the MCP entry on the same real browser and
  *     fixture pages, and fails if a result is wrong. Run it after touching either action.
  *   node --import tsx scripts/eval-browser-tasks.mjs --serve
- *     Only serves the fixture pages and prints their address, one run id and its answers, for trying
+ *     Only serves the fixture pages and prints their address, one run id, its prompts and answers, for trying
  *     the sidebar and "My browser" by hand from a running Cindy. /__state?run=<id> shows what the
  *     pages recorded.
  *
@@ -38,9 +43,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const { values } = parseArgs({ options: {
   live: { type: 'boolean' }, mcp: { type: 'boolean' }, check: { type: 'boolean' }, serve: { type: 'boolean' },
-  'baseline-ref': { type: 'string' }, model: { type: 'string', default: 'claude-sonnet-5-5' },
+  'baseline-ref': { type: 'string' }, model: { type: 'string', default: 'claude-sonnet-5-5' }, effort: { type: 'string' },
   repeats: { type: 'string', default: '3' }, only: { type: 'string' },
   variants: { type: 'string', default: 'A,C' }, parallel: { type: 'string', default: '3' },
+  'real-sites': { type: 'boolean' },
   variant: { type: 'string' }, 'runtime-dir': { type: 'string' }, trace: { type: 'string' }, 'cdp-port': { type: 'string' },
 } });
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -150,6 +156,10 @@ function newRun() {
     settings: { receipt: token('RCPT'), saved: null },
     support: token('SUP'),
     extensions: Object.fromEntries(PEOPLE.map((name) => [name, String(randomInt(2000, 9999))])),
+    late: token('LOT'),
+    spinner: token('DOCK'),
+    manual: { days: randomInt(31, 400) },
+    status: token('BUILD'),
   };
   runs.set(id, state);
   return state;
@@ -258,6 +268,38 @@ const r=await fetch('/settings/save?${q}',{method:'POST',body:JSON.stringify(bod
       return send(page('Help center', `<p>Your support panel is embedded below.</p><iframe title="Support panel" src="http://localhost:${ports.frame}/panel?${q}" width="480" height="160"></iframe>`));
     case '/panel':
       return send(page('Support panel', `<p>Support code: <strong>${state.support}</strong></p>`));
+    // Pages that are read, not operated. `late` is empty until its data arrives (a page rendered from
+    // scripts, like crates.io); `spinner` shows a placeholder meanwhile (like a search page before its
+    // results); `manual` is longer than one read returns; `status.json` is not HTML at all.
+    case '/late':
+      return send(page('Dispatch board', `<main id="app"></main><script>document.querySelector('h1').hidden=true;
+setTimeout(async()=>{const d=await (await fetch('/late/data?${q}')).json();document.querySelector('h1').hidden=false;
+document.getElementById('app').innerHTML='<p>Next outbound lot: <strong>'+d.lot+'</strong></p><p>Carrier pickup at 16:30. Dock 4 is closed for maintenance.</p>';},900);</script>`));
+    case '/late/data':
+      return send(JSON.stringify({ lot: state.late }), 'application/json');
+    case '/spinner':
+      return send(page('Dock assignments', `<main id="app"><p>Loading assignments…</p></main><script>
+setTimeout(async()=>{const d=await (await fetch('/spinner/data?${q}')).json();
+document.getElementById('app').innerHTML='<p>Inbound truck 7 is assigned to <strong>'+d.dock+'</strong>.</p><p>Assignments refresh every hour.</p>';},1200);</script>`));
+    case '/spinner/data':
+      return send(JSON.stringify({ dock: state.spinner }), 'application/json');
+    case '/manual': {
+      const filler = 'Operators confirm each handover in the shift log before leaving the floor. Deviations are reported to the duty lead, who decides whether the line pauses. Checklists are reviewed weekly and revised when a step no longer matches the equipment in use. ';
+      const names = ['Scope', 'Roles', 'Access', 'Shifts', 'Handover', 'Labelling', 'Storage', 'Cleaning', 'Incidents', 'Audits', 'Training', 'Visitors',
+        'Equipment', 'Calibration', 'Waste', 'Alarms', 'Evacuation', 'First aid', 'Deliveries', 'Returns', 'Quarantine', 'Sampling', 'Records', 'Retention',
+        'Disposal', 'Suppliers', 'Complaints', 'Changes', 'Reviews', 'Contacts'];
+      return send(page('Operations manual', names.map((name, index) => `<section><h2>${index + 1}. ${name}</h2><p>${filler.repeat(2)}${
+        name === 'Retention' ? `Shift logs and inspection records are retained for ${state.manual.days} days, then destroyed. ` : ''}${filler}</p></section>`).join('')));
+    }
+    case '/status.json':
+      return send(JSON.stringify({ service: 'dispatch', healthy: true, build: state.status, regions: ['eu', 'us', 'apac'] }, null, 2), 'application/json');
+    // A cross-site iframe that runs a worker: what a reCAPTCHA widget leaves behind on a real page.
+    case '/desk':
+      return send(page('Service desk', `<p>The desk widget is embedded below.</p><iframe title="Desk widget" src="http://localhost:${ports.frame}/desk-panel?${q}" width="480" height="120"></iframe>`));
+    case '/desk-panel':
+      return send(page('Desk widget', `<p id="status">starting</p><script>const worker=new Worker('/desk-worker.js?${q}');worker.onmessage=()=>{document.getElementById('status').textContent='worker ready';};</script>`));
+    case '/desk-worker.js':
+      return send('postMessage(1);setInterval(()=>{},1000);', 'text/javascript');
     case '/directory':
       return send(page('Staff directory', `<label>Search by surname <input id="q" type="search" placeholder="Type at least 2 letters"></label><ul id="hits"></ul>
 <script>document.getElementById('q').addEventListener('input',async(e)=>{const v=e.target.value.trim();const list=document.getElementById('hits');
@@ -280,6 +322,70 @@ const servers = [createHttpServer((req, res) => handle(req, res, ports).catch(()
 ports.main = await listen(servers[0]);
 ports.frame = await listen(servers[1]);
 const base = `http://127.0.0.1:${ports.main}`;
+
+/**
+ * Read tasks on public websites, only with --real-sites. The expected answers come from each site's own
+ * public API or page, fetched now, so a task is never judged against a value that has since changed. A
+ * task whose answer cannot be established is left out and named, rather than run and judged by guesswork.
+ */
+async function realSiteTasks() {
+  if (!values['real-sites'] || values.check || values.serve || values.mcp) return [];
+  const get = async (url, as = 'json') => {
+    const response = await fetch(url, { headers: { 'User-Agent': 'cindy-browser-eval' }, signal: AbortSignal.timeout(20_000) });
+    if (!response.ok) throw new Error(`${response.status} for ${url}`);
+    return as === 'json' ? response.json() : response.text();
+  };
+  const version = (tag) => (String(tag).match(/\d+(?:\.\d+)+/) ?? [String(tag)])[0];
+  const cells = (row) => [...row.matchAll(/<t[dh][^>]*>(.*?)<\/t[dh]>/gs)]
+    .map((cell) => cell[1].replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&#160;/g, ' ').replace(/\s+/g, ' ').trim());
+  const repos = ['cli/cli', 'astral-sh/uv', 'denoland/deno', 'oven-sh/bun'];
+  const candidates = [
+    { id: 'gh-releases', prompt: '用浏览器查这四个 GitHub 仓库各自最新 release 的版本号：cli/cli、astral-sh/uv、denoland/deno、oven-sh/bun（看各自的 /releases/latest 页面），列给我。',
+      truth: async () => Promise.all(repos.map(async (name) => version((await get(`https://api.github.com/repos/${name}/releases/latest`)).tag_name))),
+      check: (versions, final) => versions.every((item) => final.includes(item)) },
+    { id: 'gh-pr', prompt: '在 GitHub 的 cli/cli 仓库里，找出标题包含 attestation 的已合并 PR 中创建时间最早的一个，告诉我它的编号和标题。',
+      truth: async () => String((await get('https://api.github.com/search/issues?q=repo:cli/cli+is:pr+is:merged+attestation+in:title&sort=created&order=asc&per_page=1')).items[0].number),
+      check: (number, final) => new RegExp(`(^|\\D)${number}(\\D|$)`).test(final) },
+    { id: 'crates', prompt: '打开 https://crates.io/crates/serde ，告诉我 serde 当前的最新版本号。',
+      truth: async () => (await get('https://crates.io/api/v1/crates/serde')).crate.max_stable_version,
+      check: (latest, final) => final.includes(latest) },
+    { id: 'pypi', prompt: '打开 https://pypi.org/project/requests/ ，告诉我 requests 当前的最新版本号和它的发布日期。',
+      truth: async () => (await get('https://pypi.org/pypi/requests/json')).info.version,
+      check: (latest, final) => final.includes(latest) },
+    { id: 'hn', prompt: '用 Hacker News 搜索（https://hn.algolia.com）找到 Dropbox 当年发的帖子 "My YC app: Dropbox - Throw away your USB drive"，告诉我发帖人的用户名和这个帖子的得分（points）。',
+      truth: async () => (await get('https://hn.algolia.com/api/v1/items/8863')).author,
+      check: (author, final) => final.toLowerCase().includes(String(author).toLowerCase()) },
+    { id: 'tailscale', prompt: '从 Tailscale 文档首页 https://tailscale.com/kb 出发，找到 tailscale up 命令的说明页，告诉我 --netfilter-mode 支持哪几个取值、默认值是什么。',
+      truth: async () => { if (!(await get('https://tailscale.com/kb/1241/tailscale-up', 'text')).includes('nodivert')) throw new Error('the page no longer names nodivert'); return 'nodivert'; },
+      check: (value, final) => final.includes(value) },
+    { id: 'apple', prompt: '打开 https://support.apple.com/en-us/100100 （Apple security releases），告诉我表格里最新的一条（第一行）是哪个更新、发布日期是哪天。',
+      truth: async () => {
+        const row = [...(await get('https://support.apple.com/en-us/100100', 'text')).matchAll(/<tr[^>]*>(.*?)<\/tr>/gs)][1][1];
+        const versions = cells(row)[0].match(/\d+(?:\.\d+)+/g);
+        if (!versions?.length) throw new Error('no version in the first row');
+        return versions;
+      },
+      check: (versions, final) => versions.every((item) => final.includes(item)) },
+    { id: 'wiki', prompt: '打开 https://en.wikipedia.org/wiki/List_of_tallest_buildings ，在 "Tallest buildings in the world" 那张排名表里，排第 14 的建筑叫什么、有多高（米）？',
+      truth: async () => {
+        const rows = [...(await get('https://en.wikipedia.org/wiki/List_of_tallest_buildings', 'text')).matchAll(/<tr[^>]*>(.*?)<\/tr>/gs)].map((row) => cells(row[1]));
+        const row = rows.find((item) => item[0] === '14' && /^[\d.,]+$/.test(item[2] ?? ''));
+        if (!row) throw new Error('rank 14 not found');
+        return row[2];
+      },
+      check: (metres, final) => final.includes(metres) },
+  ];
+  const tasks = [];
+  for (const candidate of candidates) {
+    try {
+      const truth = await candidate.truth();
+      tasks.push({ id: candidate.id, focus: 'real-site', prompt: () => candidate.prompt, check: (_state, final) => candidate.check(truth, final), truth });
+    } catch (error) {
+      console.error(`real-site task ${candidate.id} left out: its answer could not be established (${error?.message ?? error})`);
+    }
+  }
+  return tasks;
+}
 
 /** What each task asks and how it is judged. `sequence` marks the paths this change targets; the rest are controls. */
 const TASKS = [
@@ -312,13 +418,29 @@ const TASKS = [
   { id: 'directory', focus: 'control',
     prompt: (s) => `打开 ${base}/directory?run=${s.id} ，在通讯录里搜索 Okafor，告诉我这个人的分机号。`,
     check: (s, final) => final.includes(s.extensions.Okafor) },
+  // Reading (2026-11-12): added after a comparison on real sites showed what the tasks above cannot,
+  // because their pages are complete the moment they are opened.
+  { id: 'late', focus: 'read',
+    prompt: (s) => `打开 ${base}/late?run=${s.id} ，告诉我看板上显示的下一个出库批次号。`,
+    check: (s, final) => final.includes(s.late) },
+  { id: 'spinner', focus: 'read',
+    prompt: (s) => `打开 ${base}/spinner?run=${s.id} ，告诉我 7 号进货车被分配到哪个月台。`,
+    check: (s, final) => final.includes(s.spinner) },
+  { id: 'manual', focus: 'read',
+    prompt: (s) => `读 ${base}/manual?run=${s.id} 这份操作手册，告诉我“Retention”一节规定记录保留多少天。`,
+    check: (s, final) => new RegExp(`(^|\\D)${s.manual.days}(\\D|$)`).test(final) },
+  { id: 'status', focus: 'read',
+    prompt: (s) => `读 ${base}/status.json?run=${s.id} ，告诉我其中的 build 号。`,
+    check: (s, final) => final.includes(s.status) },
+  ...await realSiteTasks(),
 ].filter((task) => !values.only || values.only.split(',').includes(task.id));
 if (!TASKS.length) throw new Error('No tasks selected');
 
 if (values.serve) {
   const state = newRun();
-  console.log(JSON.stringify({ base, run: state.id, pages: ['form', 'catalog', 'orders', 'report', 'settings', 'vault', 'badge', 'embed', 'directory']
-    .map((name) => `${base}/${name}?run=${state.id}`), state: `${base}/__state?run=${state.id}`, answers: state }, null, 2));
+  console.log(JSON.stringify({ base, run: state.id, pages: ['form', 'catalog', 'orders', 'report', 'settings', 'vault', 'badge', 'embed', 'directory', 'late', 'spinner', 'manual', 'status.json']
+    .map((name) => `${base}/${name}?run=${state.id}`), state: `${base}/__state?run=${state.id}`,
+    prompts: Object.fromEntries(TASKS.map((task) => [task.id, task.prompt(state)])), answers: state }, null, 2));
   await new Promise(() => {});
 }
 
@@ -400,6 +522,37 @@ if (values.check) {
     ] });
     const navigated = readFileSync(trace, 'utf8').split('\n').slice(before - 1).some((line) => line.includes('"navigate"'));
     expect('batch stops at a failed step and runs nothing after it', stopped.ok === false && stopped.failedStep === 0 && stopped.completed === 0 && !navigated, stopped);
+
+    // navigate, after a cross-site iframe that runs a worker has gone away with the page before it. With
+    // playwright-core < 1.63 the navigation guard waits forever on that worker's session and the call never
+    // returns (packages/browser-control-runtime/upstream/MAINTAINING.md §4 #15).
+    const within = (call, ms) => Promise.race([call, new Promise((resolve) => setTimeout(() => resolve(null), ms))]);
+    const desk = await browser({ action: 'open', url: `${base}/desk?run=${state.id}` });
+    const widget = await browser({ action: 'batch', targetId: desk.data.targetId, steps: [
+      { action: 'act', request: { kind: 'wait', timeMs: 800 } }, { action: 'snapshot' },
+    ] });
+    expect('the embedded widget started its worker', widget.ok && JSON.stringify(widget.steps[1]).includes('worker ready'), widget);
+    const hops = [];
+    for (const name of ['report', 'desk', 'report', 'desk']) {
+      hops.push(await within(browser({ action: 'navigate', targetId: desk.data.targetId, url: `${base}/${name}?run=${state.id}` }), 15_000));
+      if (name === 'desk') await browser({ action: 'act', targetId: desk.data.targetId, request: { kind: 'wait', timeMs: 800 } });
+    }
+    expect('navigate returns after a cross-site iframe with a worker is gone', hops.every((hop) => hop?.ok === true), hops);
+
+    // read: the text of pages that are not ready, or not HTML, the moment they are opened.
+    const late = await browser({ action: 'read', url: `${base}/late?run=${state.id}` });
+    expect('read waits for a page that is empty until its data arrives', late.ok && late.pages[0].text.includes(state.late), late);
+    const several = await browser({ action: 'read', pages: [`${base}/status.json?run=${state.id}`, `${base}/report?run=${state.id}`, `${base}/late?run=${state.id}`] });
+    expect('read returns several pages in the order asked, a JSON document as its text', several.ok && several.pages.length === 3
+      && several.pages[0].text.includes(state.status) && several.pages[1].text.includes('Quarterly report') && several.pages[2].text.includes(state.late), several);
+    const manual = await browser({ action: 'read', url: `${base}/manual?run=${state.id}`, keep: true });
+    const first = manual.pages?.[0];
+    const rest = first?.truncated ? await browser({ action: 'read', targetId: first.targetId, offset: first.nextOffset, maxChars: 20000 }) : null;
+    expect('read cuts a long page and reads on from nextOffset', manual.ok && first.truncated === true && !first.text.includes('are retained for')
+      && rest?.pages?.[0]?.text.includes(`are retained for ${state.manual.days} days`) === true, { first: { ...first, text: first?.text?.slice(0, 80) }, rest: rest?.pages?.[0]?.text?.slice(0, 80) });
+    const left = await browser({ action: 'tabs' });
+    const open = (left.data?.tabs ?? []).map((tab) => tab.url);
+    expect('read closes the tabs it opened and leaves a kept one', !open.some((url) => /\/(late|status\.json|report)\?/.test(url)) && open.some((url) => url.includes('/manual?')), open);
   } catch (error) {
     failures.push({ name: 'check crashed', detail: String(error?.stack ?? error) });
   } finally {
@@ -411,11 +564,13 @@ if (values.check) {
   process.exit(failures.length ? 1 : 0);
 }
 const baselineSha = execFileSync('git', ['rev-parse', values['baseline-ref']], { cwd: root, encoding: 'utf8' }).trim();
-const manifest = { kind: 'live-model-real-browser-fixture-pages', model: values.model, repeats, variants, baselineRef: values['baseline-ref'], baselineSha,
+const manifest = { kind: 'live-model-real-browser-fixture-pages', model: values.model, effort: values.effort ?? null, repeats, variants, baselineRef: values['baseline-ref'], baselineSha,
   head: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
   dirty: execFileSync('git', ['status', '--porcelain', '--', browserDir], { cwd: root, encoding: 'utf8' }).split('\n').filter(Boolean),
   tasks: TASKS.map((task) => ({ id: task.id, focus: task.focus })),
-  limitations: ['Dedicated-browser runtime only; sidebar and My browser are not exercised.', 'Fixture pages, not real sites.',
+  realSites: Object.fromEntries(TASKS.filter((task) => task.focus === 'real-site').map((task) => [task.id, task.truth])),
+  limitations: ['Dedicated-browser runtime only; sidebar and My browser are not exercised.',
+    values['real-sites'] ? 'Real-site tasks depend on what those sites served during this run and on a fresh, signed-out headless browser.' : 'Fixture pages, not real sites.',
     'Claude Code print mode with only the browser tools; not a full Cindy session.'] };
 await fs.writeFile(path.join(out, 'manifest.json'), JSON.stringify(manifest, null, 2));
 console.log(JSON.stringify({ outputDir: out, ...manifest, tasks: manifest.tasks.map((task) => task.id) }));
@@ -432,7 +587,7 @@ async function runOne(task, variant, repetition) {
     fileURLToPath(import.meta.url), '--mcp', '--variant', variant, '--baseline-ref', baselineSha, '--runtime-dir', path.join(dir, 'runtime'),
     '--trace', trace, '--cdp-port', String(await freePort())] } } }));
   const started = Date.now();
-  const child = spawn('claude', ['-p', task.prompt(state), '--output-format', 'stream-json', '--verbose', '--model', values.model,
+  const child = spawn('claude', ['-p', task.prompt(state), '--output-format', 'stream-json', '--verbose', '--model', values.model, ...(values.effort ? ['--effort', values.effort] : []),
     '--system-prompt', SYSTEM, '--tools', '', '--strict-mcp-config', '--mcp-config', config,
     '--allowedTools', 'mcp__cindy_browser__list_tools', 'mcp__cindy_browser__call_tool',
     '--no-session-persistence', '--setting-sources', 'project', '--max-turns', '40'],

@@ -29,6 +29,13 @@
       "description": "El acceso completo desactiva el espacio aislado del espacio de trabajo y omite las aprobaciones de rutina. {{appName}} puede modificar archivos fuera del espacio de trabajo y ejecutar comandos de red sin preguntar; Las operaciones incorporadas de alto riesgo aún requerirán confirmación.",
       "confirm": "Habilitar acceso completo",
       "cancel": "Mantener los permisos actuales"
+    },
+    "description": {
+      "default": "Tú apruebas las acciones cuando es necesario.",
+      "acceptEdits": "Las ediciones de archivos se permiten directamente; tú apruebas otras acciones cuando es necesario.",
+      "auto": "Un modelo de IA aprueba las acciones, lo que puede requerir más espera; tú confirmas cuando es necesario.",
+      "bypass": "Las acciones habituales se permiten directamente, incluidos archivos fuera del espacio de trabajo y comandos de red.",
+      "plan": "Analiza y planifica sin modificar archivos."
     }
   },
   "planMode": {
@@ -186,6 +193,7 @@
     "fromLead": "Mensaje de Lead",
     "fromWorkerNamed": "Mensaje de Worker “{{role}}”",
     "fromWorker": "Mensaje de Worker",
+    "fromWorkerBatch": "Informe del sistema: {{count}} resultados de Worker",
     "emptyMessageBody": "(Mensaje vacío)"
   },
   "contextSheet": {

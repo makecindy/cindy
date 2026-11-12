@@ -122,6 +122,7 @@ import {
   type ProviderLogoRouting,
 } from '@cindy/model-providers/branding';
 import { isModelVisible } from '@cindy/model-providers/sections';
+import { remoteInvocationModels, type ProviderView } from '@cindy/model-providers';
 import type { app } from 'electron';
 import type { remoteDesktop, requestRemoteDesktop } from '../remote-desktop';
 import type { remoteCredentialHost } from '../remote-desktop/credentialHost';
@@ -1046,6 +1047,7 @@ function projectInvokeResultForTunnel(
   result: unknown,
   supportsFullLogoKinds = false,
   args: readonly unknown[] = [],
+  sameAccountController = false,
 ): unknown {
   result = encodeModelSpeedPayload(channel, result);
   // Opt-in only: legacy/desktop controllers still receive complete runtime capabilities.
@@ -1126,9 +1128,14 @@ function projectInvokeResultForTunnel(
     if (typeof p.remoteInvocationEnabled === 'boolean') rest.remoteInvocationEnabled = p.remoteInvocationEnabled;
     // 「运行于」是这台电脑自己的偏好，不给其他电脑。
     delete rest.runLocation;
-    // Only the host's narrow Cindy AI identity override may supersede brand inference.
+    // Only narrow host overrides may supersede brand inference: Cindy AI's identity glyph and,
+    // for this account's own devices only, the enterprise artwork set by the main process
+    // (organizationProviderLogo.ts). Shared-task guests and provider-share guests are other
+    // accounts; the artwork would reveal the owner's organization.
     const logoKind = p.id === 'xd' && p.logoKind === 'xd'
       ? 'xd'
+      : sameAccountController && p.source === 'organization' && p.logoKind === 'openai-spectrum'
+      ? 'openai-spectrum'
       : typeof p.id === 'string'
         ? resolveProviderLogoKind(p.id, p.routing as ProviderLogoRouting | undefined)
         : null;
@@ -1164,6 +1171,17 @@ function projectInvokeResultForTunnel(
     rest.routing = projectRoutingForDisplay(p.routing);
     return rest;
   });
+  // A pool's remote switch does not imply the same per-model grant. Compare the
+  // projected, authorized models before hiding any individually offered source.
+  const pool = providers.find(provider => provider.id === 'openai' && provider.remoteInvocationEnabled === true);
+  const poolModels = pool ? remoteInvocationModels(pool as unknown as ProviderView).models : undefined;
+  for (const provider of providers) {
+    if (!provider.subscriptionPoolAlias) continue;
+    const models = remoteInvocationModels(provider as unknown as ProviderView).models;
+    const covered = poolModels && Object.entries(models ?? {}).every(([agent, rows]) =>
+      (rows ?? []).every(model => poolModels[agent as keyof typeof poolModels]?.some(candidate => candidate.id === model.id)));
+    if (!covered) delete provider.subscriptionPoolAlias;
+  }
   // New hosts advertise the optional directory budget. Consumers deduct their
   // own read time once; an existing shorter upstream remainder wins. Older
   // controllers ignore this additive field.
@@ -5243,6 +5261,7 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
         )
         || listingCapabilities.includes(CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2),
         args,
+        isSameAccountController(src),
       ));
     // 供应商组摘要与运行数只给同账号电脑(受邀者与共享任务访客另有投影，这里不加，scrubSharedProvider 再兜一层)。
     const grouped = payload.channel === 'maker:provider:list' && isSameAccountController(src) && providerGroupRemoteHandler
