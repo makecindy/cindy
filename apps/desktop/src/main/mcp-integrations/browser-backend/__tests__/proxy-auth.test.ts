@@ -11,8 +11,10 @@ import {
   closeAdoptedManagedBrowser,
   commandLineHasArgumentValue,
   commandLineHasExactArgument,
+  readWindowsProcessCommandLine,
   terminateManagedChromePortOwner,
   waitForCdpPortFree,
+  type ManagedChromeCommandRunner,
 } from '../proxy-auth.js';
 
 interface CdpCommand {
@@ -286,6 +288,61 @@ describe('commandLineHasArgumentValue', () => {
   it('rejects a missing option', () => {
     expect(commandLineHasArgumentValue('chrome --headless', '--user-data-dir', dir)).toBe(false);
   });
+
+  it('matches a Unicode profile path, quoted or bare, as its own value', () => {
+    // Windows profiles may live under non-ASCII paths; the identity proof must
+    // still recognise them so the teardown is not skipped for that user.
+    const unicodeDir = 'C:\\用户\\Cindy 数据\\user-data';
+    expect(commandLineHasArgumentValue(
+      `chrome --user-data-dir="${unicodeDir}" --remote-debugging-port=18800`,
+      '--user-data-dir',
+      unicodeDir,
+    )).toBe(true);
+    expect(commandLineHasArgumentValue(
+      `chrome --user-data-dir=${unicodeDir} --remote-debugging-port=18800`,
+      '--user-data-dir',
+      unicodeDir,
+    )).toBe(true);
+    expect(commandLineHasArgumentValue(
+      `chrome --user-data-dir="${unicodeDir}-backup"`,
+      '--user-data-dir',
+      unicodeDir,
+    )).toBe(false);
+  });
+});
+
+describe('readWindowsProcessCommandLine', () => {
+  it('pins the PowerShell console to UTF-8 so Unicode profile paths survive identity matching', async () => {
+    // OutputEncoding is the encoding the console WRITES with. Without the pin,
+    // a non-UTF-8 system code page mojibakes the profile path, the exact
+    // identity comparison fails, and the teardown never runs for that user.
+    const unicodeDir = 'C:\\用户\\Cindy 数据\\user-data';
+    const runCommand = vi.fn<ManagedChromeCommandRunner>(async () => ({
+      stdout: `chrome.exe --user-data-dir="${unicodeDir}" --remote-debugging-port=18800\r\n`,
+    }));
+    const commandLine = await readWindowsProcessCommandLine(4321, runCommand);
+    expect(commandLine).toContain(unicodeDir);
+    const script = runCommand.mock.calls[0]?.[1].join(' ') ?? '';
+    expect(script).toContain('[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)');
+    // The full proof this decode feeds: both arguments still match.
+    expect(commandLineHasArgumentValue(
+      commandLine!,
+      '--user-data-dir',
+      unicodeDir,
+    )).toBe(true);
+    expect(commandLineHasArgumentValue(
+      commandLine!,
+      '--remote-debugging-port',
+      '18800',
+    )).toBe(true);
+  });
+
+  it('returns null when the query fails so callers never signal an unproven pid', async () => {
+    const runCommand = vi.fn<ManagedChromeCommandRunner>(async () => {
+      throw new Error('query failed');
+    });
+    await expect(readWindowsProcessCommandLine(4321, runCommand)).resolves.toBeNull();
+  });
 });
 
 describe('waitForCdpPortFree', () => {
@@ -325,9 +382,12 @@ describe('terminateManagedChromePortOwner', () => {
   it('reports the port free when nothing holds it', async () => {
     // Nothing listens on that port, so the reclaim must succeed — otherwise a
     // launch is refused because of a browser that is already gone.
+    // Port 1, not a high port: it lies outside every OS's ephemeral range, so
+    // a parallel test's listen(0) cannot land on it (45997 once did on Linux
+    // CI), and Linux reserves it for root.
     await expect(terminateManagedChromePortOwner({
-      cdpHttpUrl: 'http://127.0.0.1:45997',
-      cdpPort: 45997,
+      cdpHttpUrl: 'http://127.0.0.1:1',
+      cdpPort: 1,
       userDataDir: '/managed/browser/Cindy/user-data',
     })).resolves.toBe(true);
   });
