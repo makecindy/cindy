@@ -1827,6 +1827,27 @@ describe('shared startup lease budget', () => {
     await resumed.close();
   });
 
+  it('reconnects after a queued done and idle reclaim arrive in one poll', async () => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    const session = new Session({ id: 'historical', agentKind: 'codex', workDir: project,
+      handle, capabilities: {} as never, logger: historyLogger as never, turnStallMs: 0 });
+    try {
+      expect(await session.send('first')).toMatchObject({ accepted: true });
+      const run = [...f.runs.values()].at(-1)!;
+      run.onData(Buffer.from([
+        JSON.stringify({ t: 'event', event: { type: 'done', source: 'codex', data: {} } }),
+        JSON.stringify({ t: 'closed', reason: 'closed', idleReclaimed: true }), '',
+      ].join('\n')), false);
+      await flush();
+      expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done', generation: 1 });
+      expect(f.disposed).toEqual([]);
+      expect(await session.send('second')).toMatchObject({ accepted: true });
+      expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
+      expect(f.disposed).toEqual([]);
+    } finally { await session.close(); }
+  });
+
   it.each([false, true])('preserves a live run close receipt through the real starter (idle reclaim=%s)', async idleReclaimed => {
     const f = fixture(); f.state.ready = true;
     const handle = await f.open('historical');

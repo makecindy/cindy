@@ -48,6 +48,60 @@ function fixture(agentKind: 'codex' | 'claude-code' = 'codex') {
 }
 
 describe('remote stream close settles the product turn', () => {
+  it('keeps an observed error fence across a late ordinary running snapshot', () => {
+    const owner = new RemoteTurnTerminalOwnership();
+    owner.beginSend(false, 'first');
+    owner.acceptSend('first');
+    expect(owner.observe({ type: 'error', source: 'codex', data: { isTerminal: true, message: 'first failed' } })).toBe(true);
+    owner.observe({ type: 'status', source: 'codex', data: { isRunning: true } });
+    owner.beginSend(false, 'second');
+    expect(owner.observe({ type: 'done', source: 'codex', data: {} })).toBe(false);
+  });
+
+  it('preserves a genuine accepted error after consuming the prior idle tail', async () => {
+    const f = fixture();
+    try {
+      await f.session.send('first');
+      f.deliver({ t: 'event', event: { type: 'text', source: 'codex', data: { text: 'first progress' } } });
+      await vi.waitFor(() => expect(f.seen.some(e => e.type === 'text')).toBe(true));
+      f.deliver({ t: 'state', state: { turnRunning: false } });
+      expect(await f.session.send('second')).toMatchObject({ accepted: true });
+      f.deliver({ t: 'event', event: { type: 'status', source: 'codex', data: { isRunning: false } } });
+      // Session consumes this as N's idle tail without fanning it out to N+1.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      f.deliver({ t: 'event', event: { type: 'error', source: 'codex', data: { isTerminal: true, message: 'second failed' } } });
+      await vi.waitFor(() => expect(f.session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'error', generation: 2 }));
+      expect(f.controller.hasActiveTurn()).toBe(false);
+      f.deliver({ t: 'closed', reason: 'ended' });
+      await f.finish();
+      expect(f.seen.filter(e => e.type === 'error')).toEqual([
+        expect.objectContaining({ data: expect.objectContaining({ message: 'second failed' }) }),
+      ]);
+    } finally { await f.session.close(); }
+  });
+
+  it('does not adopt a prior error when idle was consumed before the new send', async () => {
+    const f = fixture();
+    try {
+      await f.session.send('first');
+      f.deliver({ t: 'event', event: { type: 'text', source: 'codex', data: { text: 'first progress' } } });
+      await vi.waitFor(() => expect(f.seen.some(e => e.type === 'text')).toBe(true));
+      f.deliver({ t: 'event', event: { type: 'status', source: 'codex', data: { isRunning: false } } });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      f.deliver({ t: 'state', state: { turnRunning: false } });
+      expect(await f.session.send('second')).toMatchObject({ accepted: true });
+      f.deliver({ t: 'event', event: { type: 'error', source: 'codex', data: { isTerminal: true, message: 'prior failed' } } });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(f.seen.filter(e => e.type === 'error')).toEqual([]);
+      f.deliver({ t: 'closed', reason: 'ended' });
+      await f.finish();
+      expect(f.seen.filter(e => e.type === 'error')).toEqual([
+        expect.objectContaining({ data: expect.objectContaining({ reason: 'remote_agent_closed' }) }),
+      ]);
+      expect(f.session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'error', generation: 2 });
+    } finally { await f.session.close(); }
+  });
+
   it('keeps the prior-error tail fence only until its own send is accepted', () => {
     const owner = new RemoteTurnTerminalOwnership();
     const error: AgentEvent = { type: 'error', source: 'codex', data: { isTerminal: true, message: 'prior failure' } };
@@ -69,6 +123,11 @@ describe('remote stream close settles the product turn', () => {
     owner.beginSend(true, 'fifth');
     owner.acceptSend('fifth');
     expect(owner.observe(done)).toBe(false);
+    owner.observe({ type: 'text', source: 'codex', data: { text: 'unfinished prior' } });
+    owner.observe({ type: 'status', source: 'codex', data: { isRunning: false } });
+    owner.beginSend(true, 'sixth');
+    owner.acceptSend('sixth');
+    expect(owner.observe(error)).toBe(false);
   });
 
   it('becomes quiet after an accepted result-only done following a terminal error', async () => {

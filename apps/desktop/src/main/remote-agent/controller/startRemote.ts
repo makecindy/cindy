@@ -712,7 +712,6 @@ async function prepareAndStartRemoteAgentSession(
           closedEarly = { reason, message: error?.message };
           return;
         }
-        active = null;
         deps.onTaskGrantRenewable?.(false);
         // 对方按闲置收回了它的 Agent 进程(它只收回不忙的任务)：与连接池让出名额一样，本机部分与对话都留着，
         // 要它干活时带原来的会话 id 连回。
@@ -721,6 +720,26 @@ async function prepareAndStartRemoteAgentSession(
         // Such an old host may reconnect after a user disconnect (toggle-off still
         // refuses access). New hosts send controller-disconnected for user actions.
         const restart = reason === 'missing' || reason === 'provider-restarting' || reason === 'aborted';
+        if (!restart && idleReclaimed && controller?.hasActiveTurn()) {
+          // Reuse the release barrier: even a non-send RPC must wait until the
+          // queued product terminal settles before it reconnects this handle.
+          linkState = 'releasing';
+          let finishRelease!: () => void;
+          const pendingRelease = new Promise<void>(resolve => { finishRelease = resolve; });
+          releasing = pendingRelease;
+          controller.onIdleReclaimed(unfinished => {
+            if (active === client && linkState === 'releasing') {
+              active = null;
+              relay?.reset();
+              linkState = unfinished ? 'closed' : 'released';
+              if (unfinished) controller?.onClosed(reason, error?.message, client.runId);
+            }
+            if (releasing === pendingRelease) releasing = null;
+            finishRelease();
+          });
+          return;
+        }
+        active = null;
         if ((restart || (idleReclaimed && !controller?.hasActiveTurn())) && controller) {
           relay?.reset();
           linkState = 'released';

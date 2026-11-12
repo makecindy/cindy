@@ -265,6 +265,8 @@ export interface RemoteAgentHandleController {
   onClosed(reason: string, message?: string, runId?: string): void;
   /** Supplier process disappeared; keep the local executor and let host recovery own the next send. */
   onInterrupted(onUnsettled?: () => void): void;
+  /** Decide idle reclaim only after the owning Session consumes queued events. */
+  onIdleReclaimed(onDrained: (unfinished: boolean) => void): void;
   hasActiveTurn(): boolean;
   /**
    * 本机自己发起的确认(不是 Agent 发来的)：走与 Agent 确认同一个确认卡通道，桌面、手机远控与 IM 都能
@@ -725,6 +727,14 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       return true;
     },
     hasActiveTurn: hasActiveProductTurn,
+    onIdleReclaimed(onDrained) {
+      if (disposed) { onDrained(false); return; }
+      const ownerOptions = sendOwnerOptions;
+      queue.push(() => {
+        onDrained(!teardownRequested && !disposed && sendOwnerOptions === ownerOptions && hasActiveProductTurn());
+        return [];
+      });
+    },
     onInterrupted(onUnsettled) {
       if (disposed) return;
       const ownerOptions = sendOwnerOptions;

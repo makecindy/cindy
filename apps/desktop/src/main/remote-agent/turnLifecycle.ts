@@ -22,7 +22,7 @@ export function startsRemoteProductTurn(event: AgentEvent): boolean {
 export class RemoteTurnTerminalOwnership {
   private generation = 0;
   private priorGeneration: number | null = null;
-  private terminalKind: 'done' | 'error' | null = null;
+  private terminalKind: 'done' | 'error' | 'idle' | null = null;
   private priorError = false;
   private dispatchId: string | undefined;
 
@@ -42,20 +42,35 @@ export class RemoteTurnTerminalOwnership {
     if (this.dispatchId !== dispatchId) return;
     if (this.priorError) this.priorGeneration = null;
     this.priorError = false;
+    this.dispatchId = undefined;
   }
 
   observe(event: AgentEvent): boolean {
     if (event.turnScope === 'background') return false;
     if (startsRemoteProductTurn(event)) {
       this.priorGeneration = null;
+      this.terminalKind = null;
     }
     const data = event.data as { isRunning?: unknown; silentStop?: unknown } | null;
     if (event.type === 'status' && !event.agentMeta?.parentUuid && data?.isRunning === true) {
       this.priorGeneration = null;
+      if (this.terminalKind === 'idle') this.terminalKind = null;
+    }
+    if (event.type === 'status' && !event.agentMeta?.parentUuid && data?.isRunning === false
+      && this.terminalKind !== 'done' && this.terminalKind !== 'error') {
+      this.terminalKind = 'idle';
     }
     if (event.type !== 'done' && !isTerminalAgentErrorEvent(event)) return false;
     if (event.type === 'done' && data?.silentStop !== true && this.priorGeneration !== null) {
       this.priorGeneration = null;
+      return false;
+    }
+    // Before any new progress or idle, the consumer may still be waiting on N.
+    // Keep its first delayed error off accepted N+1, but not dispatch-time start
+    // failures or an accepted result-only error after the idle tail was consumed.
+    if (event.type === 'error' && this.priorGeneration !== null
+      && this.dispatchId === undefined && this.terminalKind === null) {
+      this.terminalKind = 'error';
       return false;
     }
     this.terminalKind = event.type === 'done' ? 'done' : 'error';

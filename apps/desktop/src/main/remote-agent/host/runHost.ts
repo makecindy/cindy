@@ -1818,12 +1818,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       for await (const event of handle.events()) {
         if (run.closing) break;
         if (!run.abortRequested && startsRemoteProductTurn(event)) run.activeTurn = true;
-        if ((run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).observe(event)) {
+        const currentTerminal = (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).observe(event);
+        if (currentTerminal) {
           run.activeTurn = false;
           run.abortRequested = false;
         }
         meterRunUsage(run, handle.model, event);
-        const failure = relayRunFailureOf(event);
+        const failure = currentTerminal ? relayRunFailureOf(event) : null;
         if (failure && isAccountUsageLimitError(failure)) {
           groupTurnFailed = true;
           await deliverQuotaFailure(run, localGroupMember(run.providerId ?? ''), failure, handle.model, () => {
@@ -2283,10 +2284,11 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
               relay: relayKeyFor(run.controller),
             });
           };
-          const failure = relayRunFailureOf(event);
           const typed = event as AgentEvent;
           if (!run.abortRequested && startsRemoteProductTurn(typed)) run.activeTurn = true;
-          if ((run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).observe(typed)) {
+          const currentTerminal = (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).observe(typed);
+          const failure = currentTerminal ? relayRunFailureOf(event) : null;
+          if (currentTerminal) {
             run.activeTurn = false;
             run.abortRequested = false;
           }
