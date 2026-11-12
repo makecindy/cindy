@@ -285,6 +285,8 @@ export function getDesktopMcpToolApprovalPolicy(
       return 'prompt-each-time';
     }
     const action = progressive ? innerName : toolName;
+    // A stable discovery entry must never launder external calls through helper trust.
+    if (action === 'call_mcp_tool') return 'prompt-each-time';
     // Use the normal runtime permission flow once: Full Access bypasses approval,
     // Auto reviews the call, and Ask requests confirmation. Host guards retain scope checks.
     if (action && TASK_ACTION_TOOLS.has(action)) return 'prompt-each-time';

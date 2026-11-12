@@ -161,6 +161,30 @@ function releaseGeneration(started: StartedPiBridge): void {
  * server URL(带/不带 `?session=`)并做对应的身份注册。
  */
 async function getPiExtraSpawnConfig(
+  providers: McpProvider[], logger: MakerLogger, sessionCtx?: PiExtraSpawnConfigContext,
+): Promise<PiExtraSpawnConfig | null> {
+  // Discard builds racing a save; do not publish mixed generations.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const revision = environmentEpoch;
+    const config = await buildPiExtraSpawnConfig(providers, logger, sessionCtx);
+    if (revision !== environmentEpoch) { config?.disposeSessionCtx?.(); continue; }
+    if (!config) return null;
+    config.configRevision = revision;
+    if (config.mcpBridge) {
+      config.mcpBridge.configRevision = revision;
+      config.mcpBridge.refreshSupported = true;
+    }
+    config.refreshMcpConfig = async (knownRevision) => {
+      if (knownRevision === environmentEpoch) return null;
+      const next = await getPiExtraSpawnConfig(providers, logger, sessionCtx);
+      return { revision: next?.configRevision ?? environmentEpoch, config: next };
+    };
+    return config;
+  }
+  throw new Error('Pi MCP configuration changed during assembly');
+}
+
+async function buildPiExtraSpawnConfig(
   providers: McpProvider[],
   logger: MakerLogger,
   sessionCtx?: PiExtraSpawnConfigContext,
@@ -170,7 +194,7 @@ async function getPiExtraSpawnConfig(
   const started = await ensureBridge(providers, logger);
   if (!started) return null;
   // JS 同步段内完成“确认未退役 + 加 lease”，invalidate 不会插进中间。
-  if (started.retired) return getPiExtraSpawnConfig(providers, logger, sessionCtx);
+  if (started.retired) return buildPiExtraSpawnConfig(providers, logger, sessionCtx);
   started.refs += 1;
 
   const { bridge, serverNames, remoteServers, mcpEnv } = started;

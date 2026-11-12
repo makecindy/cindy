@@ -1,5 +1,30 @@
 # 跨端协议兼容
 
+## MCP 配置表单回执（2026-11-09，未发布）
+
+本机受信 Desktop 的现有 mcp_setup interaction 增加非终态 presented 回执；仅表示
+表单组件已挂载，不证明用户看见或读过，不授予工具权限。旧主进程拒绝未知回执时，新界面仍可填写。
+保存与用户主动取消的旧结构不变；超时返回 timed_out/formPresented，任务停止或账号失效返回
+interrupted，广播失败或不同配置请求冲突返回 unavailable/reason。不再把这些情况写成取消。
+保存结果可追加 runtimeState / toolCount，仅取当前任务引擎的观察；不可读时为 unverified，
+并附 status_unavailable 或 check_failed 原因；不等于未配置或连接失败，也不等于业务 ping 通过。
+旧消费者须按未知状态处理，不能当作成功或取消；非 connected 时回执另附 hint 说明这一点。
+
+此入口仍限本机父任务，不向远程、手机或共享访客开放凭证表单；无新增 channel、allowlist、
+Device Link 帧、relay 或服务端依赖。账号切换前后的检查沿用原任务实例与 owner 绑定。
+故障半径：表单加载失败只显示本表单重试；保存回执失败只重送结果、不重复写凭证；运行时检查失败
+保留已保存事实，不重启其它任务、不重放用户消息。Claude Code 仅在原本地 Query 增挂新保存的
+自定义服务，复用其它 MCP 实例；Pi 在发现与调用入口按配置版本刷新。
+
+三引擎新增固定 helper 入口 list_mcp_tools / call_mcp_tool。保存回执仅在宿主支持该入口时
+追加 next 指引；原生工具列表未挂载不妨碍通过该入口继续。每次按本机当前根任务、实例、账号、
+实时 custom provider 和冻结能力白名单检查范围，经原 MCP Apps facade 连接，不返回凭证。
+call_mcp_tool 按每次调用审批，参数保留真实 server/tool/arguments，不继承 helper 的免审批信任。
+Codex 不使用全局 reload，也不重启共享进程；旧宿主未提供 gateway 时不返回 next。
+对话内表单命中同端点（或同名）条目时更新该条目，并保留显式「改为新建一条」入口。
+2026-11-10 三引擎（Codex / Claude Code / Pi）真实界面同日验收通过：保存后同一轮完成
+list_mcp_tools → call_mcp_tool ping，无需“继续”、新任务或 worker。
+
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：修改插件分发来源边界、device-link 协议／relay／隧道 payload／IPC
 > allowlist，或任何改动客户端与服务端之间 wire protocol 的地方之前

@@ -4,6 +4,7 @@ import { MessageStream } from '../../../src/renderer/components/chat/MessageStre
 import { AppFrame, mountPage } from '../../ui-page/harness';
 
 let rejectResult = false;
+let reuseServers: Array<{ id: string; name: string; url: string; transport: 'http'; headers: Record<string, string> }> = [];
 void mountPage({
   route: '/cc-agent/mcp-form-fixture',
   host: {
@@ -13,7 +14,7 @@ void mountPage({
     onAuthStateChange: () => () => {},
     authHasPersistedSessionHintSync: () => false,
     maker: {
-      listCustomMcpServers: async () => ({ servers: [] }),
+      listCustomMcpServers: async () => ({ servers: reuseServers }),
       createCustomMcpServer: async () => ({ ok: true }),
       refreshCustomMcpCodex: async () => ({ ok: true }),
       resolveInteraction: async () => {
@@ -27,7 +28,15 @@ void mountPage({
   },
   render: context => {
     rejectResult = context.case === 'result-error';
-    const request = { kind: 'mcp_setup' as const, requestId: 'mcp-form-fixture', proposal: {} };
+    const reuse = context.case === 'reuse';
+    reuseServers = reuse
+      ? [{ id: 'custom_example', name: 'Example', url: 'https://example.test/mcp', transport: 'http', headers: {} }]
+      : [];
+    const request = {
+      kind: 'mcp_setup' as const,
+      requestId: 'mcp-form-fixture',
+      proposal: reuse ? { name: 'Example', url: 'https://example.test/mcp', transport: 'http' as const } : {},
+    };
     const form = <McpSetupPrompt request={request} />;
     if (context.case === 'layout') return <AppFrame>
       <div className="relative min-h-0 flex-1" data-ui-mcp-layout>

@@ -1888,6 +1888,12 @@ export class Session {
     return this.handle.getContextUsage();
   }
 
+  /** Add a newly saved host MCP without starting another turn, if supported. */
+  async mountMcpServer(serverName: string): Promise<boolean> {
+    this.ensureActive();
+    return await this.handle.mountMcpServer?.(serverName) ?? false;
+  }
+
   /**
    * The engine's own view of one MCP server in this session. Null when the
    * engine has no per-session MCP status entry; never starts or calls a server.

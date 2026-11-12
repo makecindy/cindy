@@ -8797,6 +8797,10 @@
       }
     },
     "mcp": {
+      "setup": {
+        "loadFailed": "Das Einrichtungsformular konnte nicht geöffnet werden. Bitte erneut versuchen.",
+        "savedDeliveryFailed": "Die Konfiguration wurde gespeichert, aber das Ergebnis konnte nicht übermittelt werden. Ohne erneutes Speichern wiederholen."
+      },
       "title": "Externe Tools",
       "subtitle": "Verbinde deine eigenen Remote-MCP-Server. HTTP/Streamable HTTP-Server funktionieren mit Claude und Codex; SSE nur mit Claude.",
       "cancel": "Abbrechen",
@@ -8810,7 +8814,9 @@
       "dialog": {
         "createTitle": "MCP-Server hinzufügen",
         "editTitle": "MCP-Server bearbeiten",
-        "desc": "Nur Remote-MCP über http / sse. Neue Sitzungen können ihn nach dem Speichern aufrufen; laufende Sitzungen bleiben unverändert.",
+        "desc": "Nur Remote-MCP über http / sse. Ein gespeicherter Server ist im aktuellen Task sofort aufrufbar; manche Engines übernehmen ihn erst beim nächsten Senden oder in einer neuen Sitzung in ihre native Werkzeugliste.",
+                "matchNotice": "Für diesen Endpunkt besteht bereits eine Verbindung; Speichern aktualisiert sie.",
+                "createInstead": "Stattdessen neu anlegen",
         "teammateDesc": "Nur Remote-MCP über http / sse. Nach dem Speichern fügt dein Teammitglied ihn seinen Werkzeugen hinzu und kann ihn ab der nächsten Nachricht in diesem Chat nutzen; eine neue Sitzung ist nicht nötig."
       },
       "fields": {
@@ -8843,7 +8849,7 @@
       },
       "deleteConfirm": {
         "title": "„{{name}}“ löschen?",
-        "message": "Neue Sitzungen laden diesen MCP nicht mehr.",
+        "message": "Nach dem Löschen kann der aktuelle Task diesen MCP nicht mehr aufrufen; Engines entfernen ihn beim nächsten Senden oder in einer neuen Sitzung aus ihrer nativen Werkzeugliste.",
         "confirm": "Löschen"
       },
       "duplicates": {
