@@ -11,6 +11,7 @@
 
 import type { KimiCodingUsageSnapshot } from './kimiCodingUsage';
 import type { OpenCodeGoUsageSnapshot } from './opencodeGoUsage';
+import type { MiniMaxPlanUsageSnapshot } from './minimaxPlanUsage';
 
 import type { AgentKind } from '@cindy/model-providers';
 
@@ -21,7 +22,8 @@ export interface ProviderAccountUsageRequest {
   /**
    * 会话所在引擎（输入框 chip 传入）：同一供应商各引擎可用独立密钥（不同账户），
    * 传入后只读该引擎路由的 key，余额/配额才能对准当前会话用的账户。缺省
-   * （设置页供应商级视图）按 claude-code → codex → pi 取第一个指向官方端点的密钥。
+   * （设置页供应商级视图）按 claude-code → codex → pi 取第一个指向官方端点的密钥；
+   * 含 MiniMax 的设置卡限定在 MiniMax 路线内选择，不借用其它供应商的密钥。
    */
   agent?: AgentKind;
 }
@@ -46,7 +48,8 @@ export type ProviderAccountUsageSnapshot =
   | DeepSeekAccountUsageSnapshot
   | ZhipuCodingPlanQuotaSnapshot
   | KimiCodingUsageSnapshot
-  | OpenCodeGoUsageSnapshot;
+  | OpenCodeGoUsageSnapshot
+  | MiniMaxPlanUsageSnapshot;
 
 /** 智谱 GLM Coding Plan 一个计费窗口的已用比例与重置时间。 */
 export interface ZhipuCodingPlanWindow {
@@ -81,6 +84,21 @@ export type ProviderAccountUsageError =
   | 'invalid-response'
   | 'throttled'
   | 'unknown';
+
+/**
+ * 账户读取错误 → i18n 键。
+ *
+ * `scope` 决定供应商专属文案（Kimi 自成一类）。`updating`（连接变更事务进行中）
+ * 复用 Kimi 已有的那条文案：它只说「连接已变更，请刷新以获取配额」，不点名供应商，
+ * 对 DeepSeek / 智谱 / OpenCode Go 同样成立，避免缺口径时把内部键名显示给用户。
+ */
+export function providerAccountUsageErrorKey(
+  error: ProviderAccountUsageError,
+  scope: 'kimi' | 'generic',
+): string {
+  if (error === 'updating') return 'providerAccountUsage.kimi.error.updating';
+  return `providerAccountUsage.${scope === 'kimi' ? 'kimi.' : ''}error.${error}`;
+}
 
 export type ProviderAccountUsageResult = (
   /** 该供应商没有可读的账户余额 / 用量接口（renderer 不渲染模块）。 */
@@ -122,6 +140,12 @@ export function getProviderAccountUsageDashboardUrl(upstream: string): string | 
         return 'https://z.ai/manage-apikey/coding-plan/personal/my-plan';
       case 'https://opencode.ai':
         return 'https://opencode.ai/console';
+      case 'https://api.minimaxi.com':
+      case 'https://www.minimaxi.com':
+        return 'https://platform.minimaxi.com/subscribe/token-plan';
+      case 'https://api.minimax.io':
+      case 'https://www.minimax.io':
+        return 'https://platform.minimax.io/subscribe/token-plan';
     }
   } catch {
     // 未配置或非法地址没有对应的官方看板。

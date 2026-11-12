@@ -10,13 +10,16 @@
  *   4. 正常态版面上不出现「重试 / 重新获取凭据 / 轮换密钥」这类按钮 —— 它们退进「···」菜单。
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
+import { createInstance } from 'i18next';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
 import { ProviderAccountUsageModule } from '../components/settings/ProviderAccountUsageModule';
+import en from '../i18n/locales/en/common.json';
+import zhCN from '../i18n/locales/zh-CN/common.json';
 
 const {
   providersState,
@@ -26,7 +29,9 @@ const {
   modelAccessState,
   apiKeyState,
   primaryActionState,
+  translationState,
 } = vi.hoisted(() => ({
+  translationState: { current: null as import('i18next').i18n | null },
   providersState: { providers: [] as unknown[], order: [] as string[] },
   authState: {
     mode: 'cloud' as 'cloud' | 'local' | 'signed-out',
@@ -52,7 +57,7 @@ const {
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (key: string) => translationState.current?.t(key) ?? key,
     i18n: { language: 'zh-CN', resolvedLanguage: 'zh-CN' },
   }),
 }));
@@ -214,6 +219,7 @@ function renderSection() {
 }
 
 beforeEach(() => {
+  translationState.current = null;
   providersState.order = [];
   providersState.providers = [makeXd()];
   authState.mode = 'cloud';
@@ -246,6 +252,31 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+// PR #9894 / discussion_r4546802628, unit/jsdom: the real card and hook must
+// render readable copy for a transaction response. Existing tests return i18n
+// keys, which cannot catch a missing resource; use actual locale resources here.
+it.each([
+  ['deepseek', 'https://api.deepseek.com', 'zh-CN', '连接已变更，请刷新以获取配额。'],
+  ['glm', 'https://api.z.ai/api/coding/paas/v4', 'en', 'The connection changed. Refresh to retrieve its quota.'],
+  ['opencode-go', 'https://opencode.ai/zen/go/v1', 'zh-CN', '连接已变更，请刷新以获取配额。'],
+])('renders readable settings state for %s during connection updates', async (id, upstream, locale, message) => {
+  const translations = createInstance();
+  await translations.init({
+    lng: locale, fallbackLng: 'en', defaultNS: 'common',
+    resources: { en: { common: en }, 'zh-CN': { common: zhCN } },
+  });
+  translationState.current = translations;
+  Object.assign(window.electronAPI.maker, {
+    fetchProviderAccountUsage: vi.fn(async () => ({ status: 'unavailable', error: 'updating' })),
+  });
+  render(<ProviderAccountUsageModule provider={{
+    id, connected: true, auth: { method: 'apiKey' },
+    routing: { codex: { upstream, authStrategy: 'api-key-header' } },
+  } as ProviderView} />);
+  expect(await screen.findByText(message)).toBeTruthy();
+  expect(screen.getByTestId('provider-usage-module').textContent).not.toContain('providerAccountUsage.');
+});
+
 // PR #7031: settings and chip must both open the queried account's dashboard.
 // Unit/jsdom, a CN-first configuration whose usable key belongs to Global/Pi.
 it.each(['ready', 'unavailable'])('uses the queried dashboard in the settings card (%s)', async (status) => {
@@ -267,6 +298,91 @@ it.each(['ready', 'unavailable'])('uses the queried dashboard in the settings ca
   await screen.findByText(status === 'ready' ? 'Pi' : 'providerAccountUsage.error.auth');
   fireEvent.click(screen.getByRole('button', { name: 'providerAccountUsage.zhipuCodingPlan.usage' }));
   expect(window.electronAPI.openExternal).toHaveBeenCalledExactlyOnceWith(dashboardUrl);
+});
+
+// #9879; unit UI: old settings render no MiniMax module. Exercise the real
+// hook/card with an IPC fixture; ensure the selected runtime is not a mixed
+// connection's unrelated account. No real credentials or network are used.
+it('shows MiniMax plan windows and refreshes the matching runtime in a mixed connection', async () => {
+  const fetchUsage = vi.fn(async () => ({
+    status: 'ready', stale: false, agent: 'codex',
+    snapshot: { kind: 'minimax-plan-quota', fetchedAt: Date.now(), noPlan: false,
+      weeklyUnlimited: false, boostedWeeklyRemainingPercent: null,
+      windows: [
+        { id: 'rolling', model: null, usedPercent: 20, resetsAt: null },
+        { id: 'weekly', model: null, usedPercent: 45, resetsAt: null },
+      ] },
+  }));
+  Object.assign(window.electronAPI.maker, { fetchProviderAccountUsage: fetchUsage });
+  render(<ProviderAccountUsageModule provider={{
+    id: 'plan-copy', connected: true, auth: { method: 'apiKey' },
+    routing: {
+      'claude-code': { upstream: 'https://api.deepseek.com', authStrategy: 'api-key-header' },
+      codex: { upstream: 'https://api.minimaxi.com/v1', authStrategy: 'api-key-header' },
+    },
+  } as ProviderView} />);
+  await screen.findByText('MiniMax');
+  // 设置页必须点名 MiniMax 路线，让 Main 只用那条路线自己的密钥；
+  // 缺省 agent 的其它调用方仍按路线顺序读（混合连接的 Kimi 配额不被改判）。
+  await waitFor(() => expect(fetchUsage).toHaveBeenCalledWith({ providerId: 'plan-copy', forceRefresh: false, agent: 'codex' }));
+  expect(screen.getByText('providerAccountUsage.kimi.limit_5h')).toBeTruthy();
+  expect(screen.getByText('providerAccountUsage.kimi.limit_7d')).toBeTruthy();
+  const refresh = screen.getByRole('button', { name: 'providerAccountUsage.kimi.refresh' });
+  await waitFor(() => expect(refresh.hasAttribute('disabled')).toBe(false));
+  fireEvent.click(refresh);
+  await waitFor(() => expect(fetchUsage).toHaveBeenLastCalledWith({ providerId: 'plan-copy', forceRefresh: true, agent: 'codex' }));
+});
+
+// PR #9894 review: MiniMax 路线各自属于不同引擎的账户。第一条路线没有密钥时，
+// 设置页要换下一条 MiniMax 路线继续读，而不是借用其它引擎或其它供应商的密钥。
+it('falls back to the next MiniMax route when the first one has no key', async () => {
+  const fetchUsage = vi.fn(async (input: { agent?: string }) => (input.agent === 'claude-code'
+    ? { status: 'unavailable', error: 'no-credentials' }
+    : {
+      status: 'ready', stale: false, agent: 'codex',
+      snapshot: { kind: 'minimax-plan-quota', fetchedAt: Date.now(), noPlan: false,
+        weeklyUnlimited: false, boostedWeeklyRemainingPercent: null,
+        windows: [{ id: 'rolling', model: null, usedPercent: 20, resetsAt: null }] },
+    }));
+  Object.assign(window.electronAPI.maker, { fetchProviderAccountUsage: fetchUsage });
+  render(<ProviderAccountUsageModule provider={{
+    id: 'two-minimax-routes', connected: true, auth: { method: 'apiKey' },
+    routing: {
+      'claude-code': { upstream: 'https://api.minimaxi.com/anthropic', authStrategy: 'api-key-header' },
+      codex: { upstream: 'https://api.minimaxi.com/v1', authStrategy: 'api-key-header' },
+    },
+  } as ProviderView} />);
+  await screen.findByText('MiniMax');
+  await waitFor(() => expect(fetchUsage).toHaveBeenCalledWith({ providerId: 'two-minimax-routes', forceRefresh: false, agent: 'codex' }));
+  expect(screen.getByText('providerAccountUsage.kimi.limit_5h')).toBeTruthy();
+});
+
+// PR #9894 / r4547969506, unit UI: keep the real card/hook mounted after
+// fallback. Existing cases only mounted once, missing same-ID reconnection and
+// credential broadcasts that restore the first route's own account.
+it.each(['reconnect', 'credential-broadcast'])('restarts MiniMax route selection after %s', async change => {
+  const listeners = new Set<() => void>();
+  let firstAvailable = false;
+  const fetchUsage = vi.fn(async (input: { agent?: string }) => !firstAvailable && input.agent === 'claude-code'
+    ? { status: 'unavailable', error: 'no-credentials' }
+    : { status: 'ready', stale: false, agent: input.agent,
+      snapshot: { kind: 'minimax-plan-quota', fetchedAt: Date.now(), noPlan: false,
+        weeklyUnlimited: false, boostedWeeklyRemainingPercent: null,
+        windows: [{ id: 'rolling', model: null, usedPercent: input.agent === 'claude-code' ? 12 : 78, resetsAt: null }] } });
+  Object.assign(window.electronAPI.maker, { fetchProviderAccountUsage: fetchUsage,
+    onProvidersChanged: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; } });
+  const source = { id: 'reconnected-plan', connected: true, auth: { method: 'apiKey' }, routing: {
+    'claude-code': { upstream: 'https://api.minimaxi.com/anthropic', authStrategy: 'api-key-header' },
+    codex: { upstream: 'https://api.minimaxi.com/v1', authStrategy: 'api-key-header' },
+  } } as ProviderView;
+  const view = render(<ProviderAccountUsageModule provider={source} />);
+  await screen.findByText('22%');
+  if (change === 'reconnect') view.rerender(<ProviderAccountUsageModule provider={{ ...source, connected: false }} />);
+  firstAvailable = true;
+  if (change === 'reconnect') view.rerender(<ProviderAccountUsageModule provider={{ ...source, connected: true }} />);
+  else await act(async () => { for (const listener of [...listeners]) listener(); });
+  await screen.findByText('88%');
+  expect(fetchUsage).toHaveBeenLastCalledWith({ providerId: source.id, agent: 'claude-code', forceRefresh: false });
 });
 
 it('keeps the manual refresh action after the first OpenCode Go quota snapshot', async () => {

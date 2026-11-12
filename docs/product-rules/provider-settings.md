@@ -89,6 +89,20 @@ Kimi Code 使用官方 `/coding/v1/usages` 查询，支持现有 OAuth 登录及
 
 ## 5. 实现与验证边界
 
+MiniMax 的本机 API Key 连接复用账户用量卡，按实际官方接入地址区分中国大陆与 Global，
+只向对应官方站点的 `/v1/token_plan/remains` 查询。设置页与本机任务用量卡显示接口返回的
+5 小时和周额度；优先读取剩余百分比，兼容计数为 `0/0` 的时间型套餐，不把缺失数据当作
+零消耗。月度数据不从套餐价格、账期或周窗口推算，卡片明确提示该接口未提供月度用量。
+旧式型号独立额度按各窗口选择最紧张的一条，并保留型号名称；无限额度不画成 100% 剩余，
+周加成超过 100% 时单列真实剩余比例，不转换成负消耗。连接、引擎、密钥与 owner 代次隔离，
+同身份并发请求合并，认证拒绝清掉旧快照，普通网络失败标注上次结果。此适配不新增远程或
+手机查询通道，不借用控制端同名连接的凭证，也不改变撞限额后的等待与自动继续行为。
+
+接口与字段依据 [MiniMax 官方套餐说明](https://platform.minimax.io/subscribe/token-plan) 和
+[官方 CLI 的类型及百分比解释](https://github.com/MiniMax-AI/cli/blob/ae29aae57b05c2140c7ea6aba0a852763ffe7859/src/types/api.ts)，
+实现见 `shared/minimaxPlanUsage.ts`、`maker-host/provider-account-usage.ts`；回归见
+`minimaxPlanUsage.test.ts`、`provider-account-usage.test.ts` 与 `providersSectionAssetModule.test.tsx`。
+
 Agent 配置入口（2026-11-07）：`configure_model_connection` 可读取当前预设，用预设或显式
 引擎端点添加 API 连接，或添加免密 loopback 服务。密钥不接受工具参数，经原有加密代输入交给
 Main，再走设置页的同一创建／更新事务与凭证存储。`setKey` 更换已存连接指定引擎的密钥；

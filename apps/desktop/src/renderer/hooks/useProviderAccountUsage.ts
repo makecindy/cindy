@@ -16,6 +16,7 @@ import { isDeviceLinkRemotePushCurrent } from '../lib/remoteDataOwnerPushFence';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '../contexts/dataOwnerGeneration';
 import { isKimiCodingProviderView } from '../../shared/kimiCodingUsage';
 import { isOpenCodeGoProviderView } from '../../shared/opencodeGoUsage';
+import { isMiniMaxPlanProvider } from '../../shared/minimaxPlanUsage';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { AgentKind, ProviderView } from '@cindy/model-providers';
@@ -96,16 +97,21 @@ export function useProviderAccountUsage(
   provider: ProviderView | undefined,
   agent?: AgentKind,
   deviceId: string | null = null,
-  options: { live?: boolean; active?: boolean; refreshEpoch?: number } = {},
+  options: { live?: boolean; active?: boolean; refreshEpoch?: number; onCredentialsChanged?: () => void } = {},
 ): ProviderAccountUsageState {
   const live = options.live === true;
   const active = !live || options.active !== false;
   const refreshEpoch = live ? options.refreshEpoch : undefined;
+  // Route-probing callers must restart before this hook reloads the changed account.
+  const credentialsChanged = useRef(options.onCredentialsChanged);
+  credentialsChanged.current = options.onCredentialsChanged;
   const owner = getDataOwnerGeneration();
   const [revision, setRevision] = useState(0);
   const kimi = isKimiCodingProviderView(provider, agent);
   const opencodeGo = isOpenCodeGoProviderView(provider, agent);
-  const structuredQuota = kimi || opencodeGo;
+  // MiniMax is a local account read; never borrow this computer's key for a remote route.
+  const minimax = !deviceId && isMiniMaxPlanProvider(provider, agent);
+  const structuredQuota = kimi || opencodeGo || minimax;
   const supported =
     !!provider && !provider.removed && !provider.suspended && (!structuredQuota || provider.connected) &&
     (!deviceId?.startsWith('share:')) &&
@@ -231,6 +237,7 @@ export function useProviderAccountUsage(
     const changed = () => {
       lifecycle.liveRefreshes.clear();
       requestId.current += 1;
+      credentialsChanged.current?.();
       setRevision(value => value + 1);
     };
     if (deviceId) return window.electronAPI.deviceLink.onRemotePush?.((push, stamp) => {

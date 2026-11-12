@@ -1,8 +1,10 @@
 import { useProviderAccountUsage } from '@/hooks/useProviderAccountUsage';
-import type { KimiCodingUsageSnapshot } from '../../../shared/kimiCodingUsage';
-import type { OpenCodeGoUsageSnapshot } from '../../../shared/opencodeGoUsage';
+import { isKimiCodingProviderView, type KimiCodingUsageSnapshot } from '../../../shared/kimiCodingUsage';
+import { isOpenCodeGoProviderView, type OpenCodeGoUsageSnapshot } from '../../../shared/opencodeGoUsage';
+import { PROVIDER_ACCOUNT_USAGE_AGENTS } from '../../../shared/providerAccountUsage';
 import { useEffect, useMemo, useState } from 'react';
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import type { SubscriptionAccountUsage } from '../../../shared/subscriptionAccounts';
 import { useModelPickerAccount, type ModelPickerAccountInfo } from './ModelPickerAccount';
 import type { ProviderView } from '@cindy/model-providers';
@@ -192,11 +194,31 @@ export function useProviderUsageSnapshots(
     undefined,
     provider.id,
   );
+  // Quota-specific views must pin their product's route even when an earlier
+  // runtime belongs to MiniMax or another vendor. Probe only matching runtimes
+  // on missing credentials, without changing the generic reader's route order.
+  const quotaAgents = PROVIDER_ACCOUNT_USAGE_AGENTS.filter(agent => source === 'kimi'
+    ? isKimiCodingProviderView(provider, agent)
+    : source === 'opencode-go' && isOpenCodeGoProviderView(provider, agent));
+  const quotaIdentity = JSON.stringify([
+    getDataOwnerGeneration(), provider.id, provider.connected, source, remoteDeviceId, quotaAgents, provider.auth, provider.routing,
+  ]);
+  const [quotaProbe, setQuotaProbe] = useState({ identity: quotaIdentity, index: 0 });
+  const quotaIndex = quotaProbe.identity === quotaIdentity ? quotaProbe.index : 0;
   const accountUsage = useProviderAccountUsage(
     source === 'kimi' || source === 'opencode-go' ? provider : undefined,
-    undefined,
+    quotaAgents[Math.min(quotaIndex, quotaAgents.length - 1)],
     remoteDeviceId,
+    { onCredentialsChanged: () => setQuotaProbe({ identity: quotaIdentity, index: 0 }) },
   );
+  useEffect(() => {
+    setQuotaProbe(previous => previous.identity === quotaIdentity ? previous : { identity: quotaIdentity, index: 0 });
+  }, [quotaIdentity]);
+  useEffect(() => {
+    if (accountUsage.result?.status !== 'unavailable' || accountUsage.result.error !== 'no-credentials'
+      || quotaIndex + 1 >= quotaAgents.length) return;
+    setQuotaProbe({ identity: quotaIdentity, index: quotaIndex + 1 });
+  }, [accountUsage.result, quotaIdentity, quotaIndex, quotaAgents.length]);
   const localClaude = useClaudeSubscriptionUsage(local && source === 'claude' && !pickerAccount, provider.id);
   const localXai = useXaiSubscriptionUsage(local && source === 'xai', provider.id);
   const remoteCodex = useRemoteCodexAccountUsage(

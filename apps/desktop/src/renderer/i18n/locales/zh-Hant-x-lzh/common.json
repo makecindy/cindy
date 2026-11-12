@@ -77,6 +77,13 @@
       "invalid-response": "供方回報之餘資資料不可辨，請稍後再試。",
       "throttled": "餘資方纔已重察，請稍後再試。",
       "unknown": "Cindy 不能載供方餘資，請稍後再試。"
+    },
+    "minimax": {
+      "usage": "啟 MiniMax 控制臺",
+      "unavailable": "暫不能讀 MiniMax 方案用量，請核訂閱金鑰，或稍後重整。",
+      "windowsInfo": "惟列介面所返額度週期；此介面未供月度用量。",
+      "noPlan": "此金鑰無可用方案額度，請於 MiniMax 控制臺核訂閱。",
+      "weeklyUnlimited": "每週額度無上限。"
     }
   },
   "localAgent": {

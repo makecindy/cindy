@@ -1,5 +1,7 @@
 import { isKimiCodingProviderView, kimiUsageWindowMinutes } from '../../../shared/kimiCodingUsage';
 import { isOpenCodeGoProviderView, opencodeGoUsageWindowMinutes } from '../../../shared/opencodeGoUsage';
+import { isMiniMaxPlanProvider } from '../../../shared/minimaxPlanUsage';
+import { buildMiniMaxUsageCard } from './usageCardModel';
 import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
 import { CodexResetCredits } from './CodexResetCredits';
 import {
@@ -143,7 +145,7 @@ import {
   hasDeepSeekOfficialRouteView,
   isZhipuCodingPlanProviderView,
 } from '@/lib/providerAccountUsageView';
-import { type ProviderAccountUsageSnapshot, type ZhipuCodingPlanQuotaSnapshot } from '../../../shared/providerAccountUsage';
+import { providerAccountUsageErrorKey, type ProviderAccountUsageSnapshot, type ZhipuCodingPlanQuotaSnapshot } from '../../../shared/providerAccountUsage';
 import {
   quotaLevelFromRemaining,
   quotaLevelFromSeverity,
@@ -1059,25 +1061,21 @@ export function TodaySpendChip({
   // 远程会话不读本机账户快照 —— 额度事实在远端:SSH 用 remoteHostId 判,device-link 与
   // 远程 Agent 用 isDeviceLinkRemote 判(任一成立即远程,turn 消耗的是远端账号的额度)。
   const isAnyRemoteSession = Boolean(remoteHostId) || isDeviceLinkRemote;
+  // All quota forms use the same task runtime, including mixed-vendor connections.
+  const providerAccountAgent: AgentKind | undefined =
+    vendorKey === 'cc' ? 'claude-code' : vendorKey === 'codex' ? 'codex' : vendorKey === 'pi' ? 'pi' : undefined;
   // API Key 计费供应商（DeepSeek 余额 / 智谱 Coding Plan 额度）：只认本机会话且显式选中
   // 该供应商的形态；额度事实在本机账户，远程会话不借用（口径同订阅形态）。
   const usesDeepSeekAccountForm =
-    !isAnyRemoteSession && Boolean(hasDeepSeekOfficialRouteView(selectedQuotaProvider));
+    !isAnyRemoteSession && Boolean(hasDeepSeekOfficialRouteView(selectedQuotaProvider, providerAccountAgent));
   const usesZhipuCodingPlanForm =
-    !isAnyRemoteSession && Boolean(isZhipuCodingPlanProviderView(selectedQuotaProvider));
-  const usesKimiCodingForm = !remoteHostId && !accountUnreadable && isKimiCodingProviderView(selectedQuotaProvider);
-  const usesOpenCodeGoForm = !remoteHostId && !accountUnreadable && isOpenCodeGoProviderView(selectedQuotaProvider);
-  const usesProviderAccountUsageForm = usesDeepSeekAccountForm || usesZhipuCodingPlanForm || usesKimiCodingForm || usesOpenCodeGoForm;
+    !isAnyRemoteSession && Boolean(isZhipuCodingPlanProviderView(selectedQuotaProvider, providerAccountAgent));
+  const usesKimiCodingForm = !remoteHostId && !accountUnreadable && isKimiCodingProviderView(selectedQuotaProvider, providerAccountAgent);
+  const usesOpenCodeGoForm = !remoteHostId && !accountUnreadable && isOpenCodeGoProviderView(selectedQuotaProvider, providerAccountAgent);
+  const usesMiniMaxPlanForm = !isAnyRemoteSession && isMiniMaxPlanProvider(selectedQuotaProvider, providerAccountAgent);
+  const usesProviderAccountUsageForm = usesDeepSeekAccountForm || usesZhipuCodingPlanForm || usesKimiCodingForm || usesOpenCodeGoForm || usesMiniMaxPlanForm;
   // 会话所在引擎 → 查询用 runtime：同一供应商各引擎可用不同账户的独立密钥，
   // 余额/配额必须对准当前会话实际路由的账户（vendorKey 缺省 = 默认路由，不传）。
-  const providerAccountAgent: AgentKind | undefined =
-    vendorKey === 'cc'
-      ? 'claude-code'
-      : vendorKey === 'codex'
-        ? 'codex'
-        : vendorKey === 'pi'
-          ? 'pi'
-          : undefined;
   const providerAccountUsage = useProviderAccountUsage(
     usesProviderAccountUsageForm && providerAccountAgent ? selectedQuotaProvider : undefined,
     providerAccountAgent,
@@ -1499,6 +1497,8 @@ export function TodaySpendChip({
           ? t('todaySpend.openClaudeUsage')
           : usesKimiCodingForm
             ? t('providerAccountUsage.kimi.usage')
+            : usesMiniMaxPlanForm
+            ? t('providerAccountUsage.minimax.usage')
             : usesDeepSeekAccountForm
             ? t('providerAccountUsage.openDashboard')
             : usesZhipuCodingPlanForm
@@ -1519,6 +1519,18 @@ export function TodaySpendChip({
         label: w.id === 'limit_month_total' || w.id === 'limit_month_code'
           ? t(`providerAccountUsage.kimi.${w.id}`)
           : formatCompactTimeUntilReset(w.resetsAt === null ? null : w.resetsAt / 1000, windowLabelNowMs, t, kimiUsageWindowMinutes(w.id)) ?? t(`providerAccountUsage.kimi.${w.id}`),
+        remainingPercent: 100 - w.usedPercent,
+        resetsAtMs: w.resetsAt,
+        resetPending: isResetPending(w.resetsAt, windowLabelNowMs),
+        level: quotaLevelFromUsed(w.usedPercent),
+      })) : [])
+    : usesMiniMaxPlanForm
+    // MiniMax 旧式响应按型号给独立额度：紧凑摘要必须带上型号归属，
+    // 否则另一型号的额度会被读成当前任务的额度。
+    ? (providerAccountSnapshot?.kind === 'minimax-plan-quota' && providerAccountUsage.result?.status === 'ready' && !providerAccountUsage.result.stale
+      ? providerAccountSnapshot.windows.map(w => ({
+        key: w.id,
+        label: [w.model, formatCompactTimeUntilReset(w.resetsAt === null ? null : w.resetsAt / 1000, windowLabelNowMs, t, opencodeGoUsageWindowMinutes(w.id)) ?? t(w.id === 'rolling' ? 'providerAccountUsage.kimi.limit_5h' : 'providerAccountUsage.kimi.limit_7d')].filter(Boolean).join(' · '),
         remainingPercent: 100 - w.usedPercent,
         resetsAtMs: w.resetsAt,
         resetPending: isResetPending(w.resetsAt, windowLabelNowMs),
@@ -1655,6 +1667,7 @@ export function TodaySpendChip({
       && !isClaudeSubscription
       && !usesZhipuCodingPlanForm
       && !usesKimiCodingForm
+      && !usesMiniMaxPlanForm
       && !quotaPopoverOpen
     ) {
       return undefined;
@@ -1670,6 +1683,7 @@ export function TodaySpendChip({
     isClaudeSubscription,
     usesZhipuCodingPlanForm,
     usesKimiCodingForm,
+    usesMiniMaxPlanForm,
     quotaPopoverOpen,
     windowLabelNowMs,
     chipResetsAtMsList,
@@ -1771,13 +1785,15 @@ export function TodaySpendChip({
       chipSegments.length > 0 ? (
         renderSegmentedLabel(chipSegments, isClaudeSubscription)
       ) : (
-        <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>
+        <span className="tabular-nums opacity-60">{usesMiniMaxPlanForm ? t('quotaCard.noWindows') : DEFAULT_MONEY_SYMBOL}</span>
       );
     // SSH 远程(remoteHostId)没有账号快照镜像,只显示价值估算;device-link 远程的
     // accountUsage / xai / claude 快照均已在上方切到被控端镜像,与本机同一套卡片渲染。
     if (!remoteHostId) {
       account = usesKimiCodingForm
         ? buildKimiUsageCard(providerAccountSnapshot?.kind === 'kimi-coding-quota' ? providerAccountSnapshot : null, t)
+        : usesMiniMaxPlanForm
+        ? buildMiniMaxUsageCard(providerAccountSnapshot?.kind === 'minimax-plan-quota' ? providerAccountSnapshot : null, t)
         : usesOpenCodeGoForm
         ? buildOpenCodeGoUsageCard(providerAccountSnapshot?.kind === 'opencode-go-quota' ? providerAccountSnapshot : null, t)
         : usesCodexQuotaForm
@@ -1804,9 +1820,11 @@ export function TodaySpendChip({
                   t,
                 )
               : buildClaudeUsageCard(claudeSubscriptionUsage, t);
-      if ((usesKimiCodingForm || usesOpenCodeGoForm) && providerAccountUsage.result?.status === 'ready' && providerAccountUsage.result.stale) account.notices = [{ text: t('providerAccountUsage.kimi.stale'), tone: 'warn' }];
+      if ((usesKimiCodingForm || usesOpenCodeGoForm || usesMiniMaxPlanForm) && providerAccountUsage.result?.status === 'ready' && providerAccountUsage.result.stale) account.notices = [{ text: t('providerAccountUsage.kimi.stale'), tone: 'warn' }];
       if (usesProviderAccountUsageForm && providerAccountUsage.result?.status === 'unavailable') {
-        account.emptyText = t(`providerAccountUsage.${usesKimiCodingForm ? 'kimi.' : ''}error.${providerAccountUsage.result.error}`);
+        account.emptyText = usesMiniMaxPlanForm
+          ? t('providerAccountUsage.minimax.unavailable')
+          : t(providerAccountUsageErrorKey(providerAccountUsage.result.error, usesKimiCodingForm ? 'kimi' : 'generic'));
       }
       if (
         !usesProviderAccountUsageForm &&

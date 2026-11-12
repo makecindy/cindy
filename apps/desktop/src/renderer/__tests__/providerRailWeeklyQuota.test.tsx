@@ -9,7 +9,14 @@ import type { ProviderShareReceived } from '@cindy/device-link';
 import type { ProviderShareInsights } from '../../shared/providerShareInsights';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { ProviderShareQuotaViewingContext, useProviderShareQuotaViewing } from '@/features/provider-share/useProviderShareWeeklyQuota';
-import type { ProviderView } from '@cindy/model-providers';
+import type { Provider, ProviderView } from '@cindy/model-providers';
+import {
+  readProviderAccountUsage,
+  resetProviderAccountUsageForTest,
+  setAccountUsageFetch,
+  setAccountUsageKeyReader,
+  setAccountUsageProviderReader,
+} from '../../main/maker-host/provider-account-usage';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 
 // Account generations are driven explicitly below; no full auth host is needed.
@@ -62,6 +69,7 @@ import {
   weeklyQuota,
   providerWeeklyQuotaSource,
   useProviderWeeklyQuota,
+  useProviderUsageSnapshots,
 } from '@/components/new-chat/useProviderWeeklyQuota';
 
 const provider = (id: string, extra: Partial<ProviderView> = {}): ProviderView => ({
@@ -294,15 +302,100 @@ describe('provider weekly quota identity and windows', () => {
     try {
       await act(async () => {});
       expect(hook.result.current?.usedPercent).toBe(30);
-      expect(local).toHaveBeenCalledExactlyOnceWith({ providerId: 'kimi-self', forceRefresh: false });
+      expect(local).toHaveBeenCalledExactlyOnceWith({ providerId: 'kimi-self', agent: 'pi', forceRefresh: false });
       expect(remote).not.toHaveBeenCalled();
       hook.rerender({ deviceId: 'other-b' });
       await act(async () => {});
       expect(hook.result.current?.usedPercent).toBe(60);
-      expect(remote).toHaveBeenCalledExactlyOnceWith('other-b', 'maker:usage:kimi-coding', [{ providerId: 'kimi-self', forceRefresh: false }]);
+      expect(remote).toHaveBeenCalledExactlyOnceWith('other-b', 'maker:usage:kimi-coding', [{ providerId: 'kimi-self', agent: 'pi', forceRefresh: false }]);
       expect(local).toHaveBeenCalledTimes(1);
     } finally { hook.unmount(); vi.unstubAllGlobals(); }
   });
+  // PR #9894 / r4547661748, unit/jsdom: the old IPC fixture always returned Kimi,
+  // hiding the reverse mixed-route regression. Run the real renderer hooks AND
+  // main reader with in-memory keys/fetch. Minimal failure: Claude Code=MiniMax,
+  // Codex=Kimi; neither the weekly bar nor model-details windows may disappear.
+  it.each([
+    { source: 'kimi', reverse: false, missing: 'none', expected: 'codex' },
+    { source: 'kimi', reverse: true, missing: 'none', expected: 'claude-code' },
+    { source: 'opencode-go', reverse: false, missing: 'none', expected: 'codex' },
+    { source: 'kimi', reverse: false, missing: 'first', expected: 'pi' },
+    { source: 'kimi', reverse: false, missing: 'all', expected: null },
+  ] as const)('keeps $source quota on its own routes (reverse=$reverse, missing=$missing)', async ({ source, reverse, missing, expected }) => {
+    reads.codex.mockReturnValue({ snapshot: null });
+    resetProviderAccountUsageForTest();
+    const upstream = source === 'kimi' ? 'https://api.kimi.com/coding/v1' : 'https://opencode.ai/zen/go/v1';
+    const mixed = provider('mixed-kimi-minimax', { auth: { method: 'apiKey' },
+      routing: {
+        'claude-code': { upstream: reverse ? upstream : 'https://api.minimaxi.com/v1', authStrategy: 'api-key-header' },
+        codex: { upstream: reverse ? 'https://api.minimaxi.com/v1' : upstream, authStrategy: 'api-key-header' },
+        ...(missing !== 'none' ? { pi: { upstream, authStrategy: 'api-key-header' as const } } : {}),
+      } });
+    setAccountUsageProviderReader(() => mixed as unknown as Provider);
+    setAccountUsageKeyReader((_id, agent) => {
+      const quotaRoute = agent !== 'claude-code';
+      if (!reverse && quotaRoute && (missing === 'all' || (missing === 'first' && agent === 'codex'))) return null;
+      return `synthetic-${agent}-key`;
+    });
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify(
+      source === 'kimi'
+        ? { usages: { limit_7d: { used_ratio: 0.3 } } }
+        : { usage: { weekly: { percent: 30, status: 'ok' } } },
+    )));
+    setAccountUsageFetch(fetcher);
+    const local = vi.fn(readProviderAccountUsage);
+    vi.stubGlobal('electronAPI', { maker: { fetchProviderAccountUsage: local }, deviceLink: { invoke: vi.fn() } });
+    const hook = renderHook(() => ({
+      weekly: useProviderWeeklyQuota(mixed, { deviceId: null }),
+      details: useProviderUsageSnapshots(mixed, { deviceId: null }),
+    }));
+    try {
+      await act(async () => {});
+      expect(hook.result.current.weekly?.usedPercent ?? null).toBe(expected === null ? null : 30);
+      const details = source === 'kimi' ? hook.result.current.details.kimi : hook.result.current.details.opencodeGo;
+      expect(details?.windows[0]?.usedPercent ?? null).toBe(expected === null ? null : 30);
+      if (expected === null) expect(fetcher).not.toHaveBeenCalled();
+      else {
+        expect(local).toHaveBeenCalledWith({ providerId: mixed.id, agent: expected, forceRefresh: false });
+        for (const [endpoint, init] of fetcher.mock.calls) {
+          expect(endpoint).toBe(source === 'kimi' ? 'https://api.kimi.com/coding/v1/usages' : 'https://opencode.ai/zen/go/v1/usage');
+          expect(init?.headers).toEqual(expect.objectContaining({ Authorization: `Bearer synthetic-${expected}-key` }));
+        }
+        expect(fetcher).toHaveBeenCalled();
+      }
+    } finally { hook.unmount(); vi.unstubAllGlobals(); resetProviderAccountUsageForTest(); }
+  });
+
+  // PR #9894 / r4548166968, unit: real picker and account hooks. A key-only
+  // broadcast leaves the ProviderView unchanged, but must restore the first
+  // matching Kimi account instead of continuing to display the fallback's quota.
+  it('restarts Kimi route probing on a credential-only broadcast without remounting', async () => {
+    reads.codex.mockReturnValue({ snapshot: null });
+    const listeners = new Set<() => void>();
+    let firstAvailable = false;
+    const read = vi.fn(async (input: { agent?: string }) => !firstAvailable && input.agent === 'claude-code'
+      ? { status: 'unavailable', error: 'no-credentials' }
+      : { status: 'ready', stale: false,
+        snapshot: { kind: 'kimi-coding-quota', fetchedAt: Date.now(), windows: [
+          { id: 'limit_7d', usedPercent: input.agent === 'claude-code' ? 12 : 78, resetsAt: null },
+        ] } });
+    vi.stubGlobal('electronAPI', { maker: { fetchProviderAccountUsage: read,
+      onProvidersChanged: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; } } });
+    const source = provider('key-only-kimi', { auth: { method: 'apiKey' }, routing: {
+      'claude-code': { upstream: 'https://api.kimi.com/coding/v1', authStrategy: 'api-key-header' },
+      codex: { upstream: 'https://api.kimi.com/coding/v1', authStrategy: 'api-key-header' },
+    } });
+    const hook = renderHook(() => useProviderWeeklyQuota(source, { deviceId: null }));
+    try {
+      await act(async () => {});
+      expect(hook.result.current?.usedPercent).toBe(78);
+      firstAvailable = true;
+      await act(async () => { for (const listener of [...listeners]) listener(); });
+      expect(hook.result.current?.usedPercent).toBe(12);
+      expect(read).toHaveBeenLastCalledWith({ providerId: source.id, agent: 'claude-code', forceRefresh: false });
+    } finally { hook.unmount(); vi.unstubAllGlobals(); }
+  });
+
   it('selects only the weekly generic bucket, not the latest promotion or short window', () => {
     const data = snapshot(79);
     expect(codexWeeklyQuota(localCodexQuotaView(data), Date.now())?.usedPercent).toBe(79);

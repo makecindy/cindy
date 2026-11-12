@@ -77,6 +77,13 @@
       "invalid-response": "The provider returned unreadable balance data. Retry later.",
       "throttled": "The balance was just refreshed. Retry a bit later.",
       "unknown": "Cindy cannot load the provider balance. Retry later."
+    },
+    "minimax": {
+      "usage": "Open MiniMax console",
+      "unavailable": "MiniMax plan usage is unavailable. Check your subscription key or refresh later.",
+      "windowsInfo": "Only reported quota windows are shown. Monthly usage is not provided by this API.",
+      "noPlan": "This key has no available plan quota. Check your subscription in the MiniMax console.",
+      "weeklyUnlimited": "The weekly quota has no limit."
     }
   },
   "localAgent": {

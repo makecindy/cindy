@@ -2,6 +2,9 @@
 
 import { act, cleanup, fireEvent, render as renderUI, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createInstance } from 'i18next';
+import en from '../../../i18n/locales/en/common.json';
+import zhCN from '../../../i18n/locales/zh-CN/common.json';
 
 import type { ReactElement } from 'react';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
@@ -21,6 +24,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import type { ModelAccessCreditUsage } from '../../../../shared/modelAccess';
 
 const mocks = vi.hoisted(() => ({
+  translations: null as import('i18next').i18n | null,
   claudeSnapshot: null as ClaudeSubscriptionUsageSnapshot | null,
   codexSnapshot: null as RateLimitSnapshot | null,
   xaiSnapshot: null as XaiSubscriptionUsageSnapshot | null,
@@ -51,6 +55,7 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     i18n: { language: 'zh-CN', resolvedLanguage: 'zh-CN' },
     t: (key: string, options: Record<string, string | number> = {}) => {
+      if (mocks.translations) return mocks.translations.t(key, options);
       const templates: Record<string, string> = {
         'quotaCard.usageTitle': '用量明细',
         'quotaCard.staleData': '数据更新于 {{minutes}} 分钟前',
@@ -256,6 +261,7 @@ function openCardFromHover() {
 }
 
 beforeEach(() => {
+  mocks.translations = null;
   const history = new QuotaFullCelebrations();
   vi.spyOn(quotaFullCelebrations, 'observe').mockImplementation(history.observe.bind(history));
   vi.useFakeTimers();
@@ -296,7 +302,89 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-// PR #7031: replace the brittle three-route source regex with actual navigation.
+// PR #9894 / discussion_r4546802628, unit/jsdom: existing mocks echo missing
+// keys, so they cannot distinguish readable copy from an internal key. Exercise
+// the real task card/hook with an updating IPC result and real locale resources.
+it.each([
+  ['deepseek', 'https://api.deepseek.com', 'en', 'The connection changed. Refresh to retrieve its quota.'],
+  ['glm', 'https://api.z.ai/api/coding/paas/v4', 'zh-CN', '连接已变更，请刷新以获取配额。'],
+  ['opencode-go', 'https://opencode.ai/zen/go/v1', 'en', 'The connection changed. Refresh to retrieve its quota.'],
+])('renders readable task account state for %s during connection updates', async (id, upstream, locale, message) => {
+  const translations = createInstance();
+  await translations.init({
+    lng: locale, fallbackLng: 'en', defaultNS: 'common',
+    resources: { en: { common: en }, 'zh-CN': { common: zhCN } },
+  });
+  mocks.translations = translations;
+  mocks.providers = [{
+    id, connected: true, auth: { method: 'apiKey' },
+    routing: { codex: { upstream, authStrategy: 'api-key-header' } },
+  } as ProviderView];
+  mocks.fetchProviderAccountUsage.mockResolvedValue({ status: 'unavailable', error: 'updating' });
+  await act(async () => { render(<TodaySpendChip vendorKey="codex" providerId={id} sessionId="updating-account" />); });
+  const { card } = openCardFromHover();
+  expect(within(card).getByText(message)).toBeTruthy();
+  expect(card.textContent).not.toContain('providerAccountUsage.');
+});
+
+// PR #9894 review: real component/hook, synthetic IPC, unit/jsdom. Existing
+// popover tests covered subscriptions, not mixed Kimi/MiniMax routing or a
+// MiniMax countdown while the popover stays closed. Fake time avoids real waits.
+it.each([true, false])('shows the task MiniMax account and advances its closed countdown (mixed Kimi=%s)', async mixed => {
+  vi.setSystemTime(new Date('2026-11-12T00:00:00Z'));
+  mocks.providers = [{
+    id: 'mixed-minimax', connected: true, auth: { method: 'apiKey' },
+    routing: {
+      ...(mixed ? { 'claude-code': { upstream: 'https://api.kimi.com/coding', authStrategy: 'api-key-header' } } : {}),
+      codex: { upstream: 'https://api.minimaxi.com/v1', authStrategy: 'api-key-header' },
+    },
+  } as ProviderView];
+  mocks.fetchProviderAccountUsage.mockResolvedValue({
+    status: 'ready', stale: false, agent: 'codex',
+    snapshot: { kind: 'minimax-plan-quota', fetchedAt: Date.now(), noPlan: false,
+      weeklyUnlimited: false, boostedWeeklyRemainingPercent: null,
+      windows: [{ id: 'rolling', model: null, usedPercent: 20, resetsAt: Date.now() + 180_000 }],
+    },
+  });
+  await act(async () => { render(<TodaySpendChip vendorKey="codex" providerId="mixed-minimax" sessionId="minimax" />); });
+  const trigger = screen.getByTestId('task-usage-trigger');
+  expect(trigger.textContent).toContain('80%');
+  const before = trigger.textContent;
+  expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+  await act(async () => { vi.advanceTimersByTime(61_000); });
+  expect(trigger.textContent).not.toBe(before);
+  expect(trigger.textContent).toContain('80%');
+  fireEvent.mouseEnter(trigger);
+  await act(async () => { vi.advanceTimersByTime(300); });
+  const card = screen.getByTestId('quota-hover-card');
+  expect(within(card).getByText('MiniMax')).toBeTruthy();
+  expect(within(card).queryByText('Kimi Code')).toBeNull();
+  expect(mocks.fetchProviderAccountUsage).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'mixed-minimax', agent: 'codex' }));
+});
+
+// PR #9894 review: MiniMax legacy responses report per-model pools. The compact
+// summary must keep the model attribution, or another model's quota reads as this
+// task's own quota.
+it('keeps the MiniMax model attribution in the compact summary', async () => {
+  vi.setSystemTime(new Date('2026-11-12T00:00:00Z'));
+  mocks.providers = [{
+    id: 'model-minimax', connected: true, auth: { method: 'apiKey' },
+    routing: { codex: { upstream: 'https://api.minimaxi.com/v1', authStrategy: 'api-key-header' } },
+  } as ProviderView];
+  mocks.fetchProviderAccountUsage.mockResolvedValue({
+    status: 'ready', stale: false, agent: 'codex',
+    snapshot: { kind: 'minimax-plan-quota', fetchedAt: Date.now(), noPlan: false,
+      weeklyUnlimited: false, boostedWeeklyRemainingPercent: null,
+      windows: [{ id: 'rolling', model: 'MiniMax-M2.5', usedPercent: 70, resetsAt: Date.now() + 180_000 }],
+    },
+  });
+  await act(async () => { render(<TodaySpendChip vendorKey="codex" providerId="model-minimax" sessionId="minimax-model" />); });
+  const trigger = screen.getByTestId('task-usage-trigger');
+  expect(trigger.textContent).toContain('MiniMax-M2.5');
+  expect(trigger.textContent).toContain('30%');
+});
+
+
 // Unit/jsdom: each selected provider has its own observable URL; gateway stays local.
 it.each<{
   vendorKey: 'cc' | 'codex' | 'pi';

@@ -18,6 +18,7 @@ import {
   setAccountUsageNow,
   setAccountUsageOwnerStampReader,
   setAccountUsageProviderReader,
+  setAccountUsageRouteStateReader,
 } from '../provider-account-usage.js';
 
 const OPENCODE_GO_USAGE = {
@@ -653,6 +654,32 @@ describe('Kimi Code subscription quota', () => {
   afterEach(resetProviderAccountUsageForTest);
   const read = (forceRefresh = false) => readKimiCodingAccountUsage({ providerId: 'kimi-custom', forceRefresh });
 
+  // PR #9894 / r4547969519, unit: real settings and picker request shapes.
+  // Prior Kimi cases used only implicit reads, hiding duplicated dispatch and
+  // a second engine-specific cache bypassing the same account's Retry-After.
+  it('shares Kimi in-flight reads, cache and Retry-After across settings and picker aliases', async () => {
+    const implicit = () => readProviderAccountUsage({ providerId: current.id });
+    const explicit = (forceRefresh = false) => readProviderAccountUsage({ providerId: current.id, agent: 'pi', forceRefresh });
+    let finish!: (value: Response) => void;
+    fetcher.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const first = implicit();
+    const second = explicit();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    finish(jsonRes(payload));
+    expect(await first).toMatchObject({ status: 'ready', agent: 'pi' });
+    expect(await second).toMatchObject({ status: 'ready', agent: 'pi' });
+    await explicit();
+    await implicit();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    nowMs += 300_001;
+    fetcher.mockResolvedValueOnce(jsonRes({}, 429, { 'Retry-After': '3600' }));
+    const limited = await implicit();
+    expect(limited).toMatchObject({ status: 'ready', stale: true, error: 'rate-limited' });
+    nowMs += 16_000;
+    expect(await explicit(true)).toMatchObject({ status: 'ready', stale: true, error: 'rate-limited', retryAt: expect.any(Number) });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   // PR #7721: the dedicated remote/menu-bar reader must not return another
   // integration when a mixed provider's earlier runtime points to DeepSeek.
   it('pins implicit reads to Kimi and preserves explicit runtime selection', async () => {
@@ -805,6 +832,208 @@ describe('OpenCode Go subscription quota', () => {
     await read();
     nowMs += 300_001;
     fetcher.mockResolvedValueOnce(jsonRes({}, 401));
+    expect(await read(true)).toMatchObject({ status: 'unavailable', error: 'auth' });
+  });
+});
+
+// #9879; unit through the production account reader: fixed credential destination,
+// cached/coalesced reads and stale-identity rejection were not covered for MiniMax.
+describe('MiniMax subscription quota', () => {
+  let current: Provider;
+  let key: string;
+  const payload = { base_resp: { status_code: 0 }, model_remains: [{
+    model_name: 'general', current_interval_total_count: 0, current_interval_usage_count: 0,
+    current_interval_remaining_percent: 80, current_weekly_remaining_percent: 55,
+  }] };
+  const fetcher = vi.fn<typeof fetch>();
+  beforeEach(() => {
+    resetProviderAccountUsageForTest();
+    nowMs = 1_000_000;
+    key = 'synthetic-minimax-subscription-key';
+    current = mkProvider({ id: 'minimax-copy', routing: {
+      codex: { upstream: 'https://api.minimaxi.com/v1', authStrategy: 'api-key-header' },
+    } });
+    setAccountUsageProviderReader(() => current);
+    setAccountUsageKeyReader(() => key);
+    setAccountUsageOwnerStampReader(() => ({ dataOwnerId: 'fixture', generation: 1 }));
+    setAccountUsageNow(() => nowMs);
+    fetcher.mockReset().mockImplementation(async () => jsonRes(payload));
+    setAccountUsageFetch(fetcher);
+  });
+  afterEach(resetProviderAccountUsageForTest);
+  const read = (forceRefresh = false) => readProviderAccountUsage({ providerId: current.id, agent: 'codex', forceRefresh });
+
+  // PR #9894 follow-up: unit, real reader with synthetic host ports. Previous
+  // cases did not enter a config/secret transaction or mix implicit/explicit reads.
+  // Dispatch must stop before credentials are read, and aliases share Retry-After.
+  it('does not read credentials or send quota while a route transaction is pending', async () => {
+    setAccountUsageRouteStateReader(() => ({ inProgress: true, revision: 0 }));
+    const keys = vi.fn(() => 'synthetic-staged-proxy-key');
+    setAccountUsageKeyReader(keys);
+    expect(await read()).toEqual({ status: 'unavailable', error: 'updating' });
+    expect(keys).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the transaction before dispatch and rejects an old response after a committed transaction', async () => {
+    let state = { inProgress: false, revision: 0 };
+    setAccountUsageRouteStateReader(() => state);
+    setAccountUsageKeyReader(() => { state = { inProgress: true, revision: 0 }; return key; });
+    expect(await read()).toEqual({ status: 'unavailable', error: 'updating' });
+    expect(fetcher).not.toHaveBeenCalled();
+    state = { inProgress: false, revision: 0 };
+    setAccountUsageKeyReader(() => key);
+    let complete!: (response: Response) => void;
+    fetcher.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    const old = read();
+    state = { inProgress: false, revision: 1 };
+    complete(jsonRes(payload));
+    expect(await old).toMatchObject({ status: 'unavailable', error: 'updating' });
+    expect(await read()).toMatchObject({ status: 'ready' });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('shares in-flight quota, cache and Retry-After between implicit and explicit reads of the same route', async () => {
+    const implicit = () => readProviderAccountUsage({ providerId: current.id });
+    let complete!: (response: Response) => void;
+    fetcher.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    const first = implicit();
+    const second = read();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    complete(jsonRes(payload));
+    expect(await first).toMatchObject({ status: 'ready' });
+    expect(await second).toMatchObject({ status: 'ready' });
+    await read();
+    await implicit();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    nowMs += 300_001;
+    fetcher.mockResolvedValueOnce(jsonRes({}, 429, { 'Retry-After': '3600' }));
+    expect(await implicit()).toMatchObject({ status: 'ready', stale: true, error: 'rate-limited' });
+    nowMs += 16_000;
+    expect(await read(true)).toMatchObject({ status: 'ready', stale: true, error: 'rate-limited', retryAt: expect.any(Number) });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  // PR #9894 review: unit regression through the real reader. Previous tests
+  // pinned Codex and never exercised the settings route choice or edit broadcasts.
+  // An explicit MiniMax route must read that route's own key and never borrow
+  // another vendor's credential.
+  it.each(['https://api.minimaxi.com/anthropic', 'https://api.deepseek.com'])('reads the requested MiniMax route without borrowing %s credentials', async upstream => {
+    current.routing['claude-code'] = { upstream, authStrategy: 'api-key-header' };
+    setAccountUsageKeyReader((_id, agent) => agent === 'codex' ? key : upstream.includes('deepseek') ? 'synthetic-deepseek-key' : null);
+    const result = await readProviderAccountUsage({ providerId: current.id, agent: 'codex' });
+    expect(result).toMatchObject({ status: 'ready', agent: 'codex', snapshot: { kind: 'minimax-plan-quota' } });
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith('https://www.minimaxi.com/v1/token_plan/remains', expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: `Bearer ${key}` }),
+    }));
+    key = '';
+    expect(await readProviderAccountUsage({ providerId: current.id, agent: 'codex' })).toMatchObject({ status: 'unavailable', error: 'no-credentials' });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  // PR #9894 review: an omitted agent must keep the route order for every caller.
+  // A mixed connection (Claude Code=Kimi, Codex=MiniMax) still reads Kimi for the
+  // provider rail and model details; MiniMax is read only when its route is asked for.
+  it('keeps the Kimi route for callers that omit the agent and reads MiniMax only when asked', async () => {
+    current.routing['claude-code'] = { upstream: 'https://api.kimi.com/coding', authStrategy: 'api-key-header' };
+    setAccountUsageKeyReader((_id, agent) => agent === 'codex' ? key : 'synthetic-kimi-key');
+    expect(resolveProviderAccountUsage(current.id)).toMatchObject({
+      integrationId: 'kimi-coding-quota-v1', agent: 'claude-code',
+    });
+    expect(resolveProviderAccountUsage(current.id, 'codex')).toMatchObject({
+      integrationId: 'minimax-plan-quota-v1', agent: 'codex',
+    });
+    fetcher.mockResolvedValue(jsonRes({
+      usages: { limit_5h: { used_ratio: 0.23, reset_time: '2026-11-12T00:00:00Z' } },
+    }));
+    expect(await readProviderAccountUsage({ providerId: current.id })).toMatchObject({
+      status: 'ready', agent: 'claude-code', snapshot: { kind: 'kimi-coding-quota' },
+    });
+  });
+
+  it('keeps cached quota and its stale fallback across unrelated edits and display-only renames', async () => {
+    await read();
+    invalidateKimiAccountUsage(); // Another provider was edited.
+    await read();
+    current.name = 'Renamed subscription';
+    setAccountUsageRouteStateReader(() => ({ inProgress: false, revision: 1 }));
+    invalidateKimiAccountUsage();
+    await read();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    nowMs += 300_001;
+    fetcher.mockRejectedValueOnce(new Error('synthetic connection failure'));
+    expect(await read()).toMatchObject({ status: 'ready', stale: true, snapshot: { kind: 'minimax-plan-quota' } });
+  });
+
+  it('keeps an in-flight read across a rename but revokes it after key removal and restoration', async () => {
+    let complete!: (response: Response) => void;
+    fetcher.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    const first = read();
+    current.name = 'Renamed while loading';
+    invalidateKimiAccountUsage();
+    const second = read();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    complete(jsonRes(payload));
+    expect(await first).toMatchObject({ status: 'ready' });
+    expect(await second).toMatchObject({ status: 'ready' });
+    nowMs += 300_001;
+    fetcher.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    const oldAccount = read();
+    const previousKey = key;
+    key = '';
+    invalidateKimiAccountUsage();
+    key = previousKey;
+    invalidateKimiAccountUsage();
+    complete(jsonRes(payload));
+    expect(await oldAccount).toMatchObject({ status: 'unavailable', error: 'updating' });
+    expect(await read()).toMatchObject({ status: 'ready', stale: false });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it('queries only the region-pinned official endpoint and reuses successful reads', async () => {
+    expect(await read()).toMatchObject({ status: 'ready', stale: false, snapshot: {
+      kind: 'minimax-plan-quota', windows: [{ id: 'rolling', usedPercent: 20 }, { id: 'weekly', usedPercent: 45 }],
+    } });
+    expect(fetcher).toHaveBeenCalledWith('https://www.minimaxi.com/v1/token_plan/remains', expect.objectContaining({
+      redirect: 'error', headers: expect.objectContaining({ Authorization: `Bearer ${key}` }),
+    }));
+    await read();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    current.routing.codex!.upstream = 'https://api.minimax.io/anthropic';
+    await read();
+    expect(fetcher).toHaveBeenLastCalledWith('https://www.minimax.io/v1/token_plan/remains', expect.anything());
+  });
+
+  it('does not query through copied proxy or disabled routes', async () => {
+    current.routing.codex!.upstream = 'https://proxy.example/v1';
+    expect(await read()).toEqual({ status: 'unsupported' });
+    current.routing.codex!.upstream = 'https://api.minimaxi.com/v1';
+    current.routing.codex!.disabled = true;
+    await read();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('coalesces pending reads and discards an account response after its key changes', async () => {
+    let complete!: (response: Response) => void;
+    fetcher.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    const first = read();
+    const second = read();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    key = 'synthetic-other-account-key';
+    complete(jsonRes(payload));
+    expect(await first).toMatchObject({ status: 'unavailable', error: 'updating' });
+    expect(await second).toMatchObject({ status: 'unavailable', error: 'updating' });
+    expect(await read()).toMatchObject({ status: 'ready', stale: false });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([401, 200])('marks retained data stale on network failure and clears rejected credentials (HTTP %s)', async status => {
+    await read();
+    nowMs += 300_001;
+    fetcher.mockRejectedValueOnce(new Error('synthetic connection failure'));
+    expect(await read()).toMatchObject({ status: 'ready', stale: true, error: 'network' });
+    nowMs += 15_001;
+    fetcher.mockResolvedValueOnce(jsonRes(status === 200 ? { base_resp: { status_code: 1004 } } : {}, status));
     expect(await read(true)).toMatchObject({ status: 'unavailable', error: 'auth' });
   });
 });

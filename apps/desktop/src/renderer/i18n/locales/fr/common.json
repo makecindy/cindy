@@ -77,6 +77,13 @@
       "invalid-response": "Le fournisseur a renvoyé des données de solde illisibles. Réessayez plus tard.",
       "throttled": "Le solde vient d'être actualisé. Réessayez un peu plus tard.",
       "unknown": "Cindy ne parvient pas à charger le solde du fournisseur. Réessayez plus tard."
+    },
+    "minimax": {
+      "usage": "Ouvrir la console MiniMax",
+      "unavailable": "L’utilisation du forfait MiniMax est indisponible. Vérifiez votre clé d’abonnement ou actualisez plus tard.",
+      "windowsInfo": "Seules les périodes de quota renvoyées sont affichées. Cette API ne fournit pas l’utilisation mensuelle.",
+      "noPlan": "Cette clé n’a aucun quota de forfait disponible. Vérifiez votre abonnement dans la console MiniMax.",
+      "weeklyUnlimited": "Le quota hebdomadaire n’a pas de limite."
     }
   },
   "localAgent": {

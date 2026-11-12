@@ -32,6 +32,7 @@ import {
 } from '../../shared/providerAccountUsage.js';
 import { isKimiCodingProvider, kimiCodingUsageEndpoint, parseKimiCodingUsage } from '../../shared/kimiCodingUsage.js';
 import { isOpenCodeGoProvider, parseOpenCodeGoUsage } from '../../shared/opencodeGoUsage.js';
+import { minimaxPlanUsageEndpoint, MiniMaxPlanUsageError, parseMiniMaxPlanUsage } from '../../shared/minimaxPlanUsage.js';
 import { createMakerLogger } from './logger-adapter.js';
 
 const log = createMakerLogger('provider-account-usage');
@@ -44,6 +45,10 @@ const MAX_RETRY_AFTER_MS = 60 * 60_000;
 
 /** 官方账户接口清单。端点是唯一事实源，不从目录 / 用户配置推导。 */
 const INTEGRATIONS = {
+  'minimax-plan-quota-v1': {
+    origins: ['https://api.minimaxi.com', 'https://api.minimax.io'],
+    endpointFor: (origin: string) => minimaxPlanUsageEndpoint(origin)!,
+  },
   'kimi-coding-quota-v1': { origins: ['https://api.kimi.com', 'https://api.kimi.ai'], pathPrefixes: ['/coding'], endpointFor: (origin: string) => `${origin}/coding/v1/usages` },
   'opencode-go-quota-v1': {
     origins: ['https://opencode.ai'],
@@ -102,6 +107,7 @@ export interface ProviderAccountUsageResolution {
 type ProviderReader = (providerId: string) => Provider | undefined;
 type KeyReader = (providerId: string, agent: AgentKind) => string | null;
 type OwnerStampReader = () => { dataOwnerId: string | null; generation: number };
+type RouteStateReader = (providerId: string) => { inProgress: boolean; revision: number };
 
 let oauthReader: KeyReader = () => null;
 let prepareOAuth: (providerId: string) => Promise<void> = async () => {};
@@ -113,7 +119,13 @@ export function setAccountUsageOAuthReader(read: KeyReader, prepare: typeof prep
 let providerReader: ProviderReader = () => undefined;
 let keyReader: KeyReader = () => null;
 let ownerStampReader: OwnerStampReader = () => ({ dataOwnerId: null, generation: 0 });
+let routeStateReader: RouteStateReader = () => ({ inProgress: false, revision: 0 });
 let fetchImpl: typeof fetch = globalThis.fetch;
+
+/** Host injects the existing provider transaction fence without loading its routing graph. */
+export function setAccountUsageRouteStateReader(reader: RouteStateReader): void {
+  routeStateReader = reader;
+}
 
 /** host 注册期接通真实目录读取（active-catalog）。 */
 export function setAccountUsageProviderReader(reader: ProviderReader): void {
@@ -148,17 +160,23 @@ interface CacheRecord {
   lastAttemptAt: number;
   lastError?: ProviderAccountUsageError;
   retryAt: number;
+  /** MiniMax survives unrelated provider broadcasts, but never an account edit. */
+  isCurrent?: () => boolean;
 }
 
 const cache = new Map<string, CacheRecord>();
 let kimiRevision = 0;
 let kimiMutationEpoch = 0;
-const kimiIdentities = new Map<string, { identity: string | null; revision: number }>();
+const kimiIdentities = new Map<string, { identity: string | null; revision: number; miniMaxCurrent?: () => boolean }>();
 /** Provider edits/login/logout revoke pending quota reads, even when a token is later reused. */
 export function invalidateKimiAccountUsage(): void {
   kimiMutationEpoch += 1;
-  kimiIdentities.clear();
-  for (const key of cache.keys()) if (key.includes(':kimi-coding-quota-v1:')) cache.delete(key);
+  for (const [scope, identity] of kimiIdentities) {
+    if (!identity.miniMaxCurrent?.()) kimiIdentities.delete(scope);
+  }
+  for (const [key, record] of cache) {
+    if (key.includes(':kimi-coding-quota-v1:') || record.isCurrent?.() === false) cache.delete(key);
+  }
 }
 const kimiInFlight = new Map<string, Promise<ProviderAccountUsageResult>>();
 
@@ -215,6 +233,11 @@ export function parseDeepSeekAccountUsage(
  * 认领规则：apiKey 鉴权 + 某 runtime 的 baseUrl 与官方端点同域且路径匹配。
  * https 之外一律不认领（规则同 provider-route 的上游判定，不做子串包含）。
  * 智谱只认领 Coding Plan 接入路径，按量付费（/api/paas）同域也不认领。
+ *
+ * 缺省 agent 按 claude-code → codex → pi 取第一条能读出密钥的路线：调用方若要某个
+ * 供应商的套餐，就显式传入那条路线的 agent（例如设置页的 MiniMax 卡）。这里不按
+ * 供应商类型改写缺省语义 —— 混合连接（同一连接同时配 Kimi 与 MiniMax）的供应商周配额
+ * 仍读 Kimi，不会被整体改判成 MiniMax。
  */
 export function resolveProviderAccountUsage(
   providerId: string,
@@ -242,6 +265,7 @@ export function resolveProviderAccountUsage(
     ][]) {
       if (!integration.origins.includes(origin)) continue;
       if (integrationId === 'kimi-coding-quota-v1' && !kimiCodingUsageEndpoint(upstream)) continue;
+      if (integrationId === 'minimax-plan-quota-v1' && !minimaxPlanUsageEndpoint(upstream)) continue;
       if (provider.auth.method === 'oauth' && integrationId !== 'kimi-coding-quota-v1') continue;
       if (
         integration.pathPrefixes
@@ -283,6 +307,7 @@ function matchesAnyIntegration(upstream: string): boolean {
   return Object.values(INTEGRATIONS).some((integration) => {
     const view = integration as IntegrationView;
     if (!view.origins.includes(url.origin)) return false;
+    if (view.origins.includes('https://api.minimaxi.com')) return minimaxPlanUsageEndpoint(upstream) !== null;
     if (view.origins.includes('https://api.kimi.com')) return kimiCodingUsageEndpoint(upstream) !== null;
     if (view.pathPrefixes) {
       return view.pathPrefixes.some((p) => url.pathname === p || url.pathname.startsWith(p));
@@ -397,7 +422,8 @@ async function fetchAccountJson<T>(
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
     const headers: Record<string, string> = { Authorization: authorization };
-    if (resolution.integrationId === 'opencode-go-quota-v1') headers.Accept = 'application/json';
+    if (resolution.integrationId === 'opencode-go-quota-v1' || resolution.integrationId === 'minimax-plan-quota-v1') headers.Accept = 'application/json';
+    if (resolution.integrationId === 'minimax-plan-quota-v1') headers['Content-Type'] = 'application/json';
     if (resolution.integrationId === 'zhipu-coding-plan-quota-v1') {
       // 与社区工具（cc-switch）实测口径一致：要求 JSON + 英文文案，响应 msg 语言稳定。
       headers['Content-Type'] = 'application/json';
@@ -433,7 +459,8 @@ async function fetchAccountJson<T>(
     }
     try {
       return parse(payload, accountUsageNow());
-    } catch {
+    } catch (error) {
+      if (error instanceof MiniMaxPlanUsageError) throw new AccountUsageRequestError(error.code);
       throw new AccountUsageRequestError('invalid-response');
     }
   } catch (err) {
@@ -451,43 +478,68 @@ async function fetchAccountJson<T>(
 export async function readProviderAccountUsage(
   request: ProviderAccountUsageRequest,
 ): Promise<ProviderAccountUsageResult> {
+  const routeState = routeStateReader(request.providerId);
+  if (routeState.inProgress) return { status: 'unavailable', error: 'updating' };
+  const dispatchCurrent = () => {
+    const latest = routeStateReader(request.providerId);
+    return !latest.inProgress && latest.revision === routeState.revision;
+  };
   const ownerStamp = ownerStampReader();
   const provider = providerReader(request.providerId);
   const kimi = isKimiCodingProvider(provider, request.agent);
-  const scope = `${ownerStamp.dataOwnerId}:${ownerStamp.generation}:${request.providerId}:${request.agent ?? ''}`;
   const epoch = kimiMutationEpoch;
-  const config = JSON.stringify(provider);
-  const ownerCurrent = () => JSON.stringify(ownerStampReader()) === JSON.stringify(ownerStamp)
-    && JSON.stringify(providerReader(request.providerId)) === config;
   if (kimi && provider?.auth.method === 'oauth') {
+    const before = JSON.stringify(provider);
     try { await prepareOAuth(request.providerId); }
     catch {
-      kimiIdentities.delete(scope);
+      kimiIdentities.delete(`${ownerStamp.dataOwnerId}:${ownerStamp.generation}:${request.providerId}:${request.agent ?? ''}`);
       return { status: 'unavailable', error: 'auth' };
     }
-    if (!ownerCurrent() || epoch !== kimiMutationEpoch) return { status: 'unavailable', error: 'updating' };
+    if (!dispatchCurrent() || epoch !== kimiMutationEpoch
+      || JSON.stringify(ownerStampReader()) !== JSON.stringify(ownerStamp)
+      || JSON.stringify(providerReader(request.providerId)) !== before) {
+      return { status: 'unavailable', error: 'updating' };
+    }
   }
   const resolution = resolveProviderAccountUsage(request.providerId, request.agent);
+  if (!dispatchCurrent()) return { status: 'unavailable', error: 'updating' };
+  const minimax = resolution?.integrationId === 'minimax-plan-quota-v1';
+  // Implicit settings and explicit picker/task reads of one quota route must share
+  // identity, cache, in-flight work and upstream Retry-After.
+  const quotaRequest = minimax || resolution?.integrationId === 'kimi-coding-quota-v1'
+    ? { ...request, agent: resolution.agent } : request;
+  const guardedQuota = kimi || minimax;
+  const scope = `${ownerStamp.dataOwnerId}:${ownerStamp.generation}:${request.providerId}:${quotaRequest.agent ?? ''}`;
+  // Transaction revisions fence dispatch/results. Presentation-only edits must
+  // not invalidate the reusable cache of the selected MiniMax account.
+  const configOf = (value: typeof provider) => JSON.stringify(minimax ? [
+    value?.auth, value?.routing[quotaRequest.agent!],
+  ] : value);
+  const config = configOf(provider);
+  const ownerCurrent = () => JSON.stringify(ownerStampReader()) === JSON.stringify(ownerStamp)
+    && configOf(providerReader(request.providerId)) === config;
   const identity = resolution ? createHash('sha256').update(JSON.stringify([config, resolution])).digest('hex') : null;
-  if (kimi && kimiIdentities.get(scope)?.identity !== identity) {
+  if (guardedQuota && kimiIdentities.get(scope)?.identity !== identity) {
     kimiIdentities.set(scope, { identity, revision: ++kimiRevision });
   }
   const generation = kimiIdentities.get(scope);
-  const current = () => !kimi || (ownerCurrent() && kimiIdentities.get(scope) === generation
-    && JSON.stringify(resolveProviderAccountUsage(request.providerId, request.agent)) === JSON.stringify(resolution));
+  const accountCurrent = () => !guardedQuota || (ownerCurrent() && kimiIdentities.get(scope) === generation
+    && JSON.stringify(resolveProviderAccountUsage(request.providerId, quotaRequest.agent)) === JSON.stringify(resolution));
+  const current = () => dispatchCurrent() && accountCurrent();
+  if (minimax && generation) generation.miniMaxCurrent = accountCurrent;
   if (!resolution) {
-    // 没认领到官方端点，或 key 读不到。区分「本来就没有接口」与「有接口但 key 缺失」。
     if (providerAccountUsageSupported(request.providerId)) {
       return { status: 'unavailable', error: 'no-credentials' };
     }
     return { status: 'unsupported' };
   }
-  const run = () => readResolvedAccountUsage(request, resolution, ownerStamp, current, kimi ? String(generation?.revision) : '');
-  const flightKey = `${scope}:${identity}:${generation?.revision}`;
-  let pending = kimi ? kimiInFlight.get(flightKey) : undefined;
+  const run = () => readResolvedAccountUsage(quotaRequest, resolution, ownerStamp, current,
+    guardedQuota ? String(generation?.revision) : '', accountCurrent);
+  const flightKey = `${scope}:${identity}:${generation?.revision}:${routeState.revision}`;
+  let pending = guardedQuota ? kimiInFlight.get(flightKey) : undefined;
   if (!pending) {
     pending = run();
-    if (kimi) {
+    if (guardedQuota) {
       kimiInFlight.set(flightKey, pending);
       void pending.finally(() => { if (kimiInFlight.get(flightKey) === pending) kimiInFlight.delete(flightKey); });
     }
@@ -503,13 +555,19 @@ async function readResolvedAccountUsage(
   ownerStamp: ReturnType<OwnerStampReader>,
   current: () => boolean,
   revision: string,
+  cacheCurrent: () => boolean,
 ): Promise<ProviderAccountUsageResult> {
   // 缓存键含凭证指纹：同一供应商下换 key（不同账户）后旧账户快照绝不复用。
   const keyFingerprint = createHash('sha256').update(resolution.key).digest('hex').slice(0, 12);
   const cacheKey = `${ownerStamp.dataOwnerId ?? 'local'}:${ownerStamp.generation}:${request.providerId}:${resolution.integrationId}:${resolution.endpoint}:${resolution.agent}:${keyFingerprint}:${revision}`;
   const now = accountUsageNow();
   const record = cache.get(cacheKey);
+  const save = (value: CacheRecord) => cache.set(cacheKey, {
+    ...value,
+    ...(resolution.integrationId === 'minimax-plan-quota-v1' ? { isCurrent: cacheCurrent } : {}),
+  });
   const structuredQuota = resolution.integrationId === 'kimi-coding-quota-v1'
+    || resolution.integrationId === 'minimax-plan-quota-v1'
     || resolution.integrationId === 'opencode-go-quota-v1';
   if (structuredQuota && record?.lastError && now - record.lastAttemptAt < MIN_MANUAL_REFRESH_INTERVAL_MS) {
     return record.snapshot ? { status: 'ready', snapshot: record.snapshot, stale: true, error: record.lastError, agent: resolution.agent } : { status: 'unavailable', error: record.lastError };
@@ -543,9 +601,12 @@ async function readResolvedAccountUsage(
   ) {
     return { status: 'ready', snapshot: record.snapshot, stale: false, agent: resolution.agent };
   }
+  if (!current()) return { status: 'unavailable', error: 'updating' };
   try {
     const snapshot =
-      resolution.integrationId === 'kimi-coding-quota-v1'
+      resolution.integrationId === 'minimax-plan-quota-v1'
+        ? await fetchAccountJson(resolution, `Bearer ${resolution.key}`, parseMiniMaxPlanUsage)
+        : resolution.integrationId === 'kimi-coding-quota-v1'
         ? await fetchAccountJson(resolution, `Bearer ${resolution.key}`, parseKimiCodingUsage)
         : resolution.integrationId === 'opencode-go-quota-v1'
         ? await fetchAccountJson(resolution, `Bearer ${resolution.key}`, parseOpenCodeGoUsage)
@@ -553,9 +614,9 @@ async function readResolvedAccountUsage(
         ? await fetchZhipuCodingPlanQuota(resolution)
         : await fetchDeepSeekBalance(resolution);
     if (!current()) return { status: 'unavailable', error: 'updating' };
-    cache.set(cacheKey, {
+    save({
       snapshot,
-      expiresAt: Math.min(accountUsageNow() + CACHE_TTL_MS, ...(snapshot.kind === 'kimi-coding-quota'
+      expiresAt: Math.min(accountUsageNow() + CACHE_TTL_MS, ...(snapshot.kind === 'kimi-coding-quota' || snapshot.kind === 'minimax-plan-quota'
         ? snapshot.windows.flatMap(window => window.resetsAt !== null && window.resetsAt > accountUsageNow() ? [window.resetsAt] : [])
         : snapshot.kind === 'opencode-go-quota'
           ? snapshot.windows.flatMap(window => window.resetsAt !== null && window.resetsAt > accountUsageNow() ? [window.resetsAt] : [])
@@ -568,7 +629,7 @@ async function readResolvedAccountUsage(
     if (!current()) return { status: 'unavailable', error: 'updating' };
     const code = err instanceof AccountUsageRequestError ? err.code : 'unknown';
     if (structuredQuota && code === 'auth') {
-      cache.set(cacheKey, { expiresAt: 0, lastAttemptAt: now, lastError: code, retryAt: 0 });
+      save({ expiresAt: 0, lastAttemptAt: now, lastError: code, retryAt: 0 });
       return { status: 'unavailable', error: code };
     }
     log.warn(
@@ -601,7 +662,7 @@ async function readResolvedAccountUsage(
       }
       return { status: 'unavailable', error: waiting ? 'throttled' : error ?? code, ...(waiting ? { retryAt } : {}) };
     }
-    cache.set(cacheKey, {
+    save({
       snapshot: record?.snapshot,
       expiresAt: record?.expiresAt ?? 0,
       lastAttemptAt: now,
@@ -633,6 +694,7 @@ export function resetProviderAccountUsageForTest(): void {
   providerReader = () => undefined;
   keyReader = () => null;
   ownerStampReader = () => ({ dataOwnerId: null, generation: 0 });
+  routeStateReader = () => ({ inProgress: false, revision: 0 });
   fetchImpl = globalThis.fetch;
   accountUsageNow = Date.now;
 }

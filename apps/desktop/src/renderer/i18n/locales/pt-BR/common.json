@@ -77,6 +77,13 @@
       "invalid-response": "O provedor retornou dados de saldo ilegíveis. Tente novamente mais tarde.",
       "throttled": "O saldo acabou de ser atualizado. Tente novamente daqui a pouco.",
       "unknown": "O Cindy não consegue carregar o saldo do provedor. Tente novamente mais tarde."
+    },
+    "minimax": {
+      "usage": "Abrir o console MiniMax",
+      "unavailable": "O uso do plano MiniMax está indisponível. Verifique sua chave de assinatura ou atualize mais tarde.",
+      "windowsInfo": "São exibidos apenas os períodos de cota retornados. Esta API não fornece o uso mensal.",
+      "noPlan": "Esta chave não tem cota disponível do plano. Verifique sua assinatura no console MiniMax.",
+      "weeklyUnlimited": "A cota semanal não tem limite."
     }
   },
   "localAgent": {

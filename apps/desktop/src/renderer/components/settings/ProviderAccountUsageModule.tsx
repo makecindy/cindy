@@ -9,19 +9,23 @@
 
 import { isKimiCodingProviderView } from '../../../shared/kimiCodingUsage';
 import { isOpenCodeGoProviderView } from '../../../shared/opencodeGoUsage';
+import { isMiniMaxPlanProvider } from '../../../shared/minimaxPlanUsage';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { ProviderView } from '@cindy/model-providers';
+import { PROVIDER_ACCOUNT_USAGE_AGENTS, providerAccountUsageErrorKey } from '../../../shared/providerAccountUsage';
 
 import {
   getProviderAccountUsageDashboardUrlView,
   hasDeepSeekOfficialRouteView,
   isZhipuCodingPlanProviderView,
 } from '../../lib/providerAccountUsageView';
+import { getDataOwnerGeneration } from '../../contexts/dataOwnerGeneration';
 import { useProviderAccountUsage } from '../../hooks/useProviderAccountUsage';
 import { Button } from '../ui/button';
 import { QuotaHoverCard } from '../status/QuotaHoverCard';
-import { buildDeepSeekUsageCard, buildZhipuUsageCard, buildKimiUsageCard, buildOpenCodeGoUsageCard } from '../status/usageCardModel';
+import { buildDeepSeekUsageCard, buildZhipuUsageCard, buildKimiUsageCard, buildOpenCodeGoUsageCard, buildMiniMaxUsageCard } from '../status/usageCardModel';
 
 export function ProviderAccountUsageModule({ provider }: { provider?: ProviderView }) {
   const { t, i18n } = useTranslation();
@@ -30,15 +34,47 @@ export function ProviderAccountUsageModule({ provider }: { provider?: ProviderVi
   const zhipu = isZhipuCodingPlanProviderView(provider);
   const kimi = isKimiCodingProviderView(provider);
   const opencodeGo = isOpenCodeGoProviderView(provider);
-  const usage = useProviderAccountUsage(deepSeek || zhipu || kimi || opencodeGo ? provider : undefined);
-  const dashboardUrl = usage.result?.dashboardUrl ?? getProviderAccountUsageDashboardUrlView(provider);
-  if (!deepSeek && !zhipu && !kimi && !opencodeGo) return null;
+  const minimax = isMiniMaxPlanProvider(provider);
+  // MiniMax 的每条路线属于各自引擎的账户：设置页按顺序逐条读，第一条有密钥的为准，
+  // 不借用其它引擎或其它供应商的密钥。其它供应商仍按缺省 agent 的路线顺序读。
+  const minimaxAgents = useMemo(
+    () => (minimax ? PROVIDER_ACCOUNT_USAGE_AGENTS.filter(agent => isMiniMaxPlanProvider(provider, agent)) : []),
+    [minimax, provider],
+  );
+  const minimaxIdentity = JSON.stringify([
+    getDataOwnerGeneration(), provider?.id, provider?.connected, provider?.auth, provider?.routing,
+  ]);
+  const [probe, setProbe] = useState({ identity: minimaxIdentity, index: 0 });
+  const minimaxProbe = probe.identity === minimaxIdentity ? probe.index : 0;
+  const minimaxAgent = minimaxAgents[Math.min(minimaxProbe, minimaxAgents.length - 1)];
+  const usage = useProviderAccountUsage(
+    deepSeek || zhipu || kimi || opencodeGo || minimax ? provider : undefined,
+    minimax ? minimaxAgent : undefined,
+    null,
+    { onCredentialsChanged: () => setProbe({ identity: minimaxIdentity, index: 0 }) },
+  );
+  useEffect(() => {
+    // 同一连接重连或改配置也必须重新选择第一条路线。
+    setProbe(previous => previous.identity === minimaxIdentity ? previous : { identity: minimaxIdentity, index: 0 });
+  }, [minimaxIdentity]);
+  useEffect(() => {
+    // 当前 MiniMax 路线没有密钥：换下一条 MiniMax 路线继续试，不跨供应商借密钥。
+    if (!minimax || usage.result?.status !== 'unavailable' || usage.result.error !== 'no-credentials') return;
+    if (minimaxProbe + 1 >= minimaxAgents.length) return;
+    setProbe({ identity: minimaxIdentity, index: minimaxProbe + 1 });
+  }, [minimax, usage.result, minimaxProbe, minimaxAgents.length, minimaxIdentity]);
+  const dashboardUrl = usage.result?.dashboardUrl ?? getProviderAccountUsageDashboardUrlView(provider, minimaxAgent);
+  if (!deepSeek && !zhipu && !kimi && !opencodeGo && !minimax) return null;
   const snapshot = usage.result?.status === 'ready' ? usage.result.snapshot : null;
   const errorText =
     usage.result?.status === 'unavailable'
-      ? t(`providerAccountUsage.${kimi ? 'kimi.' : ''}error.${usage.result.error}`)
+      ? minimax
+        ? t('providerAccountUsage.minimax.unavailable')
+        : t(providerAccountUsageErrorKey(usage.result.error, kimi ? 'kimi' : 'generic'))
       : null;
-  const account = kimi
+  const account = minimax
+    ? buildMiniMaxUsageCard(snapshot?.kind === 'minimax-plan-quota' ? snapshot : null, t)
+    : kimi
     ? buildKimiUsageCard(snapshot?.kind === 'kimi-coding-quota' ? snapshot : null, t)
     : opencodeGo
     ? buildOpenCodeGoUsageCard(snapshot?.kind === 'opencode-go-quota' ? snapshot : null, t)
@@ -56,7 +92,7 @@ export function ProviderAccountUsageModule({ provider }: { provider?: ProviderVi
           : 'Pi';
   }
 
-  if ((kimi || opencodeGo) && usage.result?.status === 'ready' && usage.result.stale) {
+  if ((kimi || opencodeGo || minimax) && usage.result?.status === 'ready' && usage.result.stale) {
     account.notices = [{ text: t('providerAccountUsage.kimi.stale'), tone: 'warn' }];
   }
 
@@ -69,10 +105,10 @@ export function ProviderAccountUsageModule({ provider }: { provider?: ProviderVi
       <QuotaHoverCard
         variant="embedded"
         account={account}
-        dashboardLabel={opencodeGo ? undefined : kimi ? t('providerAccountUsage.kimi.usage') : deepSeek ? t('providerAccountUsage.openDashboard') : t('providerAccountUsage.zhipuCodingPlan.usage')}
+        dashboardLabel={opencodeGo ? undefined : minimax ? t('providerAccountUsage.minimax.usage') : kimi ? t('providerAccountUsage.kimi.usage') : deepSeek ? t('providerAccountUsage.openDashboard') : t('providerAccountUsage.zhipuCodingPlan.usage')}
         onOpenDashboard={!opencodeGo && dashboardUrl ? () => void window.electronAPI.openExternal(dashboardUrl) : undefined}
       >
-        {(kimi || opencodeGo) && <div className="px-4 pb-2"><Button variant="secondary" tone="quiet" size="sm" disabled={usage.busy} onClick={usage.refresh}>{t('providerAccountUsage.kimi.refresh')}</Button></div>}
+        {(kimi || opencodeGo || minimax) && <div className="px-4 pb-2"><Button variant="secondary" tone="quiet" size="sm" disabled={usage.busy} onClick={usage.refresh}>{t('providerAccountUsage.kimi.refresh')}</Button></div>}
       </QuotaHoverCard>
     </div>
   );

@@ -1298,6 +1298,7 @@ import { testProviderConnection } from '../maker-host/provider-diagnostics.js';
 import {
   readProviderAccountUsage,
   setAccountUsageKeyReader,
+  setAccountUsageRouteStateReader,
   setAccountUsageOAuthReader,
   invalidateKimiAccountUsage,
   setAccountUsageFetch,
@@ -1308,6 +1309,8 @@ import { fetchProviderModels, fetchSavedOAuthProviderModels } from '../maker-hos
 import { detectProviderDeployment } from '../maker-host/provider-detection.js';
 import {
   beginProviderRouteMutation,
+  isProviderRouteMutationInProgress,
+  getProviderRouteCredentialRevision,
   setPendingCredentialSwitchReader,
 } from '../maker-host/provider-route.js';
 import { refreshXaiModelsFromHttp } from '../maker-host/model-discovery/xai.js';
@@ -7732,6 +7735,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   setAccountUsageProviderReader((providerId) =>
     getActiveCatalog().providers.find((p) => p.id === providerId));
   setAccountUsageKeyReader((providerId, agent) => readCustomProviderKey(providerId, agent));
+  setAccountUsageRouteStateReader((providerId) => ({
+    inProgress: isProviderRouteMutationInProgress(providerId),
+    revision: getProviderRouteCredentialRevision(providerId),
+  }));
   setAccountUsageFetch(outboundFetch);
   setAccountUsageOAuthReader(
     (id) => readCachedGenericOAuthAccessToken(storedCustomProviderId(id), undefined),
