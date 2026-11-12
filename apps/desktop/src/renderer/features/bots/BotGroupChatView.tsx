@@ -1,4 +1,5 @@
 import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
+import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { useProcessDisclosureScroll } from './useProcessDisclosureScroll';
 import { RemoveChatFromListButton } from './RemoveChatFromListButton';
 import { ChatInviteDialog } from './ChatInviteDialog';
@@ -74,6 +75,7 @@ import { botGroupQuoteFromMessage, isBotGroupMessageQuotable, resolveBotGroupQuo
 import { useRegisterContentHeader } from '../feature-context';
 import { BotGroupAvatarStack } from './BotGroupAvatars';
 import { botGroupAttachmentScope, refreshPendingBotGroupAttachments } from './botGroupAttachments';
+import { BOT_GROUP_BOT_BROADCAST_LABELS } from './BotGroupMentionCard';
 import { BotGroupComposer } from './BotGroupComposer';
 import { BotGroupThreadHint } from './BotGroupThreadHint';
 import { findThreadMessageElement, flashThreadTarget } from './BotGroupThreadViews';
@@ -222,6 +224,7 @@ export function BotGroupChatView() {
 }
 
 function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boolean }) {
+  const pluginUi = usePluginUiMessageCandidates();
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
   const controlledBy = useControlledBy();
@@ -588,7 +591,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const allLabel = t('bots.groupChat.mention.all');
   const allBotsLabel = t('bots.groupChat.mention.allBots');
   const mentionLabels = useMemo(
-    () => [allLabel, allBotsLabel, ...members.flatMap((member) => [member.name, botGroupMemberDisplayName(member), member.nickname || member.displayName || member.name])],
+    () => [allLabel, allBotsLabel, ...BOT_GROUP_BOT_BROADCAST_LABELS, ...members.flatMap((member) => [member.name, botGroupMemberDisplayName(member), member.nickname || member.displayName || member.name])],
     [allLabel, allBotsLabel, members],
   );
 
@@ -1423,7 +1426,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             const identity = isPlanCard ? organizer : member;
             const authorName = isPlanCard
               ? (organizer ? botGroupMemberDisplayName(organizer) : plan?.organizerName ?? '')
-              : (member && message.authorKind !== 'system' ? botGroupMemberDisplayName(member) : '') || message.authorName || member?.name || '';
+              : (member && !member.assistant && message.authorKind !== 'system' ? botGroupMemberDisplayName(member) : '') || message.authorName || member?.name || '';
             const owned = !isPlanCard && message.authorKind === 'user' && message.isSelf === false
               ? botGroupOwnedBotNames(member, members).join(separator) : '';
             const isOpenPlanCard = isPlanCard && openPlan !== null && openPlan.id === message.planId;
@@ -1432,6 +1435,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
               <Fragment key={adoptedKeysRef.current.get(message.id) ?? message.id}>
                 {rowLayout?.dateDivider != null ? <BotGroupDateDivider timestamp={rowLayout.dateDivider} locale={locale} /> : null}
                 <BotGroupTimelineItem
+                  pluginUi={pluginUi}
                   message={message}
                   continued={rowLayout?.continued ?? false}
                   authorName={authorName}

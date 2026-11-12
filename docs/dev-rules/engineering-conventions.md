@@ -2,9 +2,9 @@
 
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：新增或修改 Desktop 日志、IPC 错误处理、main 侧业务逻辑与测试、
-> 跨平台（macOS／Windows）相关行为、任何 UI 文案的 i18n 落地，新增／修改动画与
-> 界面加载时序等渲染性能相关行为，或新增一处每个功能都要来登记的列表、台账、注册表、
-> 版本号之前
+> 客户端本地读取／扫描、缓存与轮询性能、跨平台（macOS／Windows）相关行为、任何 UI 文案
+> 的 i18n 落地，新增／修改动画与界面加载时序等渲染性能相关行为，或新增一处每个功能都要
+> 来登记的列表、台账、注册表、版本号之前
 
 本文收拢一组适用于整个客户端的通用工程约束。IPC 的安全与授权边界另见
 [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)，
@@ -271,24 +271,29 @@ PR 门禁必须在 Windows 上用多个并行分片（当前为 4 个）完整�
   各组内按 id）。
 - **两级状态**：`decided` 违反即阻断 CI；`proposed` 只告警，用于承载「已知不一致但
   尚未拍板」的术语——让清单可见可讨论，而不是靠脚本替产品做裁决。
-- **三类规则**：禁用译法、保留英文术语的大小写形态、zh-CN 半角标点与三语省略号。
+- **四类规则**：禁用译法、保留英文术语的大小写形态、zh-CN 半角标点与三语省略号，
+  以及只查 en 的写法规则（DESIGN.md §11.1 / §11.2：不写 Please、不用 successfully、
+  正文不用直引号、按钮不用无宾的 Confirm / OK / Submit）。
   标点规则的适用范围由现状数据定，不靠直觉——例如日文 UI 惯例本就用半角冒号，
   ja 不套用中文的全角规则。
 - **存量**：`i18n/glossary-baseline.json` 冻结引入时的既有违规，**只减不增**；修好一条
   就从账上删一条，已修复却仍挂账会报错。新增违规一律阻断。
 - **误报处理**：guard 已剥离 `{{插值}}`、URL、文件名，并把连字符视作词边界
   （`ssh-agent` 不会被判成产品 `Agent`）。仍需放行时用 `exempt`——完整路径精确匹配，
-  或以 `.` 结尾的子树前缀；同形异义必须在 `note` 里写明理由。
+  或以 `.` 结尾的子树前缀；同形异义必须在 `note` 里写明理由。英文写法规则另用
+  `englishCopyExempt`：按规则名分组、只收精确 key，唯一用途是必须原样展示的格式字面量
+  （JSON 示例、非法字符清单、终端命令）；文案不再命中时报豁免失效。
 - **门禁**：
   - `pnpm check:i18n` 校验 key 结构——缺 key、孤儿 key、跨 locale 类型冲突报错阻断；
     空值与“与默认语言完全相同”只发警告。跨语言常驻表 `crossLocaleStrings.generated.json`
     与各 locale 不一致时同样阻断，按提示运行 `node scripts/i18n-cross-locale.mjs` 重新生成。
-  - `pnpm check:i18n-glossary` 校验译文术语与标点，并检查 `GLOSSARY.md` 是否与术语表同步。
+  - `pnpm check:i18n-glossary` 校验译文术语、标点与英文写法，并检查 `GLOSSARY.md` 是否与术语表同步。
   - 两者互补：前者管「key 齐不齐」，后者管「词译得一不一致」，谁也替代不了谁。改
     i18n 后两个都要跑（CI 已强制）。
 - **影子 catalog**：有几批不走 i18next 的手写多语 catalog，根脚本只扫 locale JSON、扫不到
   这些 `.ts`。它们由 vitest 直接 import 运行时对象覆盖，复用
-  `scripts/shared/glossary-rules.mjs` 的同一套判定，随 `test:unit` 阻断：
+  `scripts/shared/glossary-rules.mjs` 的同一套判定（含英文写法规则，各自的既有问题按命中次数与文案摘要
+  冻结在测试内的清单里、只减不增），随 `test:unit` 阻断：
   - mobile：`src/auth/loginMessages.ts`、`src/session/newSessionMessages.ts`、
     `src/session/fullAccessConfirmationCopy.ts`（Full access 高风险权限提示）→
     `apps/mobile/src/__tests__/shadowCatalogGlossary.test.ts`
@@ -377,7 +382,80 @@ PR 门禁必须在 Windows 上用多个并行分片（当前为 4 个）完整�
   时用 DevTools Performance 实测，以数据为准。弹窗按钮 loading 等秒级瞬态存量不强制
   改，新代码一律照此。
 
-## 8. 不制造共享追加点
+## 8. 客户端数据读取与扫描性能
+
+本节约束 Main／Renderer 在用户可见路径上的本地数据读取、扫描、缓存和轮询。网络请求、
+订阅、重试与共享通道压力见 [`server-channel-review.md`](server-channel-review.md)；
+插件市场、实例查找和使用统计的专用边界见
+[`plugin-security-and-authoring.md`](plugin-security-and-authoring.md) §5.4；
+渲染动画与加载时序见 §7。本节只约束新增和正在修改的代码，不要求专项重构存量。
+
+### 8.1 一次用户动作只取一次快照
+
+- 一次打开页面、一轮刷新或一次搜索是一个动作；同一动作内后续分页、来源切换和计数
+  投影复用同一份安装快照。一次分页请求不得单独触发新的全量安装扫描。
+- 安装、卸载、批准、切换账号或 owner／revision 变化后必须失效重取；不得把旧快照继续
+  用于新动作。
+- 精确实例键走 `findInstalledInstance` 等单实例入口；只有无法精确匹配时才回退全量列表。
+- 禁止在循环里调用带默认全量参数的查找函数，或逐条调用 `findAvailableGhost`。
+- 验收：翻 10 页断言 `GhostManager.list()` 1 次；100 条记录循环断言 `list()` 1 次；
+  精确实例查找断言 `list()` 0 次。
+
+### 8.2 读路径和轮询路径禁止写
+
+- 禁止在 `summary`、`get`、`list`、轮询、可见性恢复等读路径里执行持久化写（`bind`、
+  migration、UPDATE、INSERT）或全量重建持久状态。
+- 绑定和迁移只在安装、启动、首次使用或身份 revision 变化时执行；首次打开详情或首次工具
+  调用的幂等 ensure 允许一次，后续轮询不得重复写。
+- 验收：连续调用 summary 3 次断言写事务 0 次；revision 不变时断言不再写；切账号后旧
+  handle 不复活。
+
+### 8.3 隐藏、离屏、卸载后 0 请求、0 定时器
+
+- 组件不可见时不得发首页请求或继续轮询；`setInterval` 必须判断 `visible`／
+  `document.visibilityState`；卸载后必须清理定时器、监听、订阅和在途请求。
+- 后台下载、任务执行等明确的后台工作有独立生命周期和停止条件，不借用 UI 轮询。
+- 验收：隐藏渲染断言加载函数 0 调用；卸载后触发计时器断言无回调；恢复可见只读一次。
+
+### 8.4 分页、并发、缓存必须有界且 key 完整
+
+- 禁止无界 cursor 追页、按用户数据量无界 `Promise.all`、单槽缓存承接多账号／多供应商／
+  多查询、无上限 Map／数组长期增长。
+- 缓存 key 至少包含 owner／revision／query／scope（或 provider），有 TTL 或显式失效；
+  批量请求有单次批数和总批数上限。
+- 验收：多账号或多 provider 交替轮询断言各自命中；切账号断言不读旧缓存；1000 条输入
+  断言并发不超过设定上限。
+
+### 8.5 热路径禁止同步 I/O 和 `sendSync`
+
+- 禁止在 IPC handler、Renderer 列表行、聊天行渲染路径里新增 `fs.*Sync`、
+  `getGhostManager().list()` 或 `ipcRenderer.sendSync`。
+- 允许启动窗口创建前的小型固定配置读取和一次性 CLI；窗口级首帧缓存只允许整个窗口加载
+  一次，并由 `ghosts:changed` 推送刷新，不得每行组件重复调用。
+- 验收：精确查找测试断言 `list()` 0 次；列表渲染测试断言每行不再 `listSync`；改动文件
+  grep 不到新增同步 I/O。
+
+### 8.6 预算与例外
+
+- 预算：单次市场分页 1 页服务器数据；单次安装扫描 1 次／浏览或刷新代次；磁盘扫描并发
+  不超过现有实现的 4 路；批量 resolve 单批 ≤100 且总批数有上限，超限返回
+  `counts: null`，不继续无界请求；统计类轮询默认 15 秒（分享申请等有时效要求的
+  可保持 5 秒）；操作回执 1–1.2 秒且仅操作进行中；列表载荷只含 UI 字段，不含 icon／完整 manifest／base64。
+- 预算为基线，改数字必须附测量证据；不得因存量代码未达标阻断无关改动。
+- 例外必须可定位：小型固定配置、一次性 CLI、固定小数组并行、纯本地短计时器、明确的
+  后台任务，以及首帧窗口缓存。例外要在代码或 PR 写清原因、边界和验证方式。
+
+验收对照（文件只表示起点；未覆盖的断言在实现 PR 中补，不能把文件存在当作已验证）：
+
+| 规则 | 测试／检查 |
+| --- | --- |
+| 8.1 一次快照 | `plugin-market/__tests__/service.test.ts`、`PluginCatalogBrowser.test.tsx` |
+| 8.2 读路径不写 | `plugin-usage/__tests__/ipc.test.ts`、`service.test.ts` |
+| 8.3 可见性 | `PluginCatalogBrowser.test.tsx`、`PluginUsageCard.test.tsx` |
+| 8.4 缓存与并发 | `providerShareInsights.test.ts`、`providerShareInsightsFlow.test.tsx` |
+| 8.5 同步 I/O | `useInstalledGhosts.test.tsx`、精确查找测试 |
+
+## 9. 不制造共享追加点
 
 合并冲突的主要成因不是文件大，而是许多 PR 改同一行，或都往同一个位置插入。两个 PR 各改
 一个大文件的不同区域可以自动合并；各往同一处加一行则必然冲突。这类冲突没有语义分歧，
@@ -430,6 +508,8 @@ PR 门禁必须在 Windows 上用多个并行分片（当前为 4 个）完整�
    响应 `prefers-reduced-motion`？界面切换是否无跳变／空白帧、未引入不必要的 loading 态？
 9. 是否新增了每个功能都要改同一行、或都往同一位置追加的登记点（列表开头／末尾、手动
    递增的版本号、单行数组）？是否改成一项一个文件、按键排序或从内容推导？
+10. 本次改动每个用户动作会触发几次 `list()`／扫描／IPC／写事务？隐藏／卸载后是否为 0？
+11. 缓存 key 是否包含 owner／revision／query／provider，是否有 TTL／失效路径？
 
 验证按 [`desktop-development.md`](desktop-development.md) 的分层选择：改 TypeScript 至少跑相关
 类型检查与定向测试；改 i18n 跑 `pnpm check:i18n` 与 `pnpm check:i18n-glossary`；跨模块或

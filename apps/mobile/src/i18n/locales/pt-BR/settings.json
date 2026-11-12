@@ -171,7 +171,11 @@
       "auto": "Automático",
       "on": "Sempre ativadas",
       "off": "Desativadas"
-    }
+    },
+    "actionReplyPlaceholder": "Digite uma resposta",
+    "actionNotDelivered": "Isso não chegou ao seu computador. Abra o Cindy para responder.",
+    "actionReplyNotDelivered": "Sua resposta não foi enviada. Abra o Cindy para enviá-la novamente: {{text}}",
+    "actionRequestEnded": "Esta solicitação já foi respondida ou expirou."
   },
   "about": {
     "sectionTitle": "Sobre este celular",

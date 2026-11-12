@@ -563,7 +563,7 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   模型可直接撤回回执里的题，不必先 list。Codex 只保留原生入口，MCP 按请求时的 harness 隐藏共享异步提问并拒绝这类调用；
   `Session` 也按实际引擎拒绝 Codex 调用共享入口，防止陈旧上下文创建第二套待回答状态。
   根代理可用直接工具 `manage_user_questions` 列出当前未答题并带原因逐题撤回，
-  不适用于同步题或审批。工具描述提醒收尾前审查仍有价值的问题；不新增全局系统规则，
+  不适用于同步题或审批。工具描述提醒收尾前审查仍有价值的问题；撤题不新增全局系统规则（提问带选项的共用规则见第 4 节），
   不把 done／超时视为答案或撤回。正在提交的答案优先，撤回只结束卡片并留下原因；
   当前已编辑草稿允许用户显式补充，沿用原任务输入事务；选项转为可编辑文本，撤回后只留
   补充发送与关闭，原因限制 200 字符。未答失效的题在历史保留题干和「未回答」，不再丢失上下文。
@@ -893,6 +893,33 @@ event loop（`AsyncQueue`）与 translator 是**每事件／每 token 都过一�
 不许用“看着没问题／应该不影响”代替实测。
 
 ## 4. system prompt 改动门禁
+
+### 共用规则与引擎补充
+
+Desktop 的产品共用正文在 `apps/desktop/src/main/maker-host/host-system-prompt.md`，
+包括面向用户的计划写法和提问尽量带选项，三种引擎都加载。引擎补充只承载实际工具调用、Skill 清单标注
+差异或原生提示词缺口；不要为相同产品规则维护多份文本。`claude-system-prompt.md` 与
+`codex-system-prompt.md` 当前留空，保留加载入口；`pi-system-prompt.md` 保留语言、文件工具
+和 MCP 网关调用说明。Skill 来源优先级仍仅注入 Claude/Codex；Pi 的精简回答协议仍单独维护。
+
+这些内容均追加到引擎原生提示词，不替换原生规则。回归入口为 `runtimeConfigs.test.ts`、
+`piRosterAssembly.test.ts` 与 Headless 的 `prompt-parity.test.ts`。
+
+提交与 PR 的 Cindy 署名约定由 GitHub 插件的 PR Skill 按需提供，不再作为所有任务的常驻
+规则；未加载该 Skill 的独立提交不保证带 Cindy 署名。Cindy 更新步骤由 `cindy_helper`
+工具目录、`app_update` 工具说明与回执提供，普通任务通过共用的工具发现入口查找。
+不要为了特定工作流的操作细节重新扩大 system prompt。
+
+**提问尽量带选项（2026-11-12）。** 共用正文的「Questions for the user」只有一段：能预判答案就给
+可点选的选项，等用户做完一件事时一个选项（如「Done, continue」）也够，只有开放式答案才不带选项。
+依据是 2026-11-10 至 11-12 本机 38 条提问：带选项的 32 条里 26 条一点即答，6 条改走自填；不带选项
+的 6 条全部来自 Codex 原生 `request_user_input_async`，其中 4 条被空着关掉。Codex 原生工具说明由上游
+提供，Cindy 无法修改，且这是三种引擎一致的产品规则，所以放在共用正文而不是工具说明或引擎补充里；
+各工具允许的选项个数仍以各自 schema 为准（Codex 0.166 的异步提问允许单个选项）。手机端对应的卡片
+行为见 `apps/mobile/src/session/usePendingQuestionScroll.ts`：纯填空题不自动弹出键盘，输入时停在
+回答框而不是卡片末尾，题目保持可见。
+
+### 修改确认与验证
 
 **任何人都不得擅自修改 Cindy 的 system prompt；需要改动必须先与仓库维护者讨论
 确认后才能动手。** 未经确认的 system prompt 改动一律不许提 PR 或直推。

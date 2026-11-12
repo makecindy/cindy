@@ -120,7 +120,7 @@ export function UploadLogsActionRow({
           </p>
           {inDialog ? (
             <details className={descriptionClassName}>
-              <summary className="w-fit cursor-pointer underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]">
+              <summary className="w-fit cursor-pointer underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
                 {t('logSupport.uploadDetails')}
               </summary>
               <p className="mt-2">{t('settings.about.logUpload.scopeDescription')}</p>

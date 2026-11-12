@@ -35,6 +35,27 @@ import {
 } from '../globalTabs';
 import { __resetTabGroupsForTest, getTabGroup, setTabGroup } from '../tabGroups';
 
+// 新具名页面必须保留启动参数、同一页面再次打开仅更新参数；旧存档测试未覆盖具名资源。
+it('keeps named resource input across reopening and persisted projection', () => {
+  const first = addGlobalPluginTab('planner', { resourceViewId: 'board', resourceInput: { filter: 'one' } })!;
+  const next = addGlobalPluginTab('planner', { resourceViewId: 'board', resourceInput: { filter: 'two' } })!;
+  addGlobalPluginTab('planner', { resourceViewId: 'settings' });
+  expect(next.id).toBe(first.id);
+  expect(getGlobalTabs()).toHaveLength(2);
+  expect(sanitizeGlobalTabsSnapshot(getGlobalTabsSnapshot()).tabs[0].state).toMatchObject({ resourceInput: { filter: 'two' } });
+});
+
+// #9496 discussion_r4533414901：省略 input 重开应清空旧参数；已有用例只覆盖显式更新。
+// unit：经真实页签入口验证复用身份与持久化；最小输入为 { filter: 'one' } 后不传 input。
+it('clears omitted input when reopening a named global page', () => {
+  const first = addGlobalPluginTab('planner', { resourceViewId: 'board', resourceInput: { filter: 'one' } })!;
+  const reopened = addGlobalPluginTab('planner', { resourceViewId: 'board' })!;
+  expect(reopened.id).toBe(first.id);
+  expect(getGlobalTabs()).toHaveLength(1);
+  __resetGlobalTabsForTest();
+  expect(getGlobalTabs()[0].state).toEqual({ instanceId: 'planner', resourceViewId: 'board', resourceInput: {} });
+});
+
 beforeEach(() => {
   window.localStorage.clear();
   __resetGlobalTabsForTest();

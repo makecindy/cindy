@@ -1,5 +1,6 @@
 /**
- * Window-local open state of the new-computer setup dialog. Settings and the checklist open the same dialog; nothing here is persisted.
+ * Window-local open state of the new-computer setup dialog. Settings, the first sign-in check
+ * and the checklist open the same dialog; nothing here is persisted.
  */
 import { useSyncExternalStore } from 'react';
 

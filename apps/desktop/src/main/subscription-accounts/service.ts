@@ -48,7 +48,10 @@ export async function executeSubscriptionAccountCommand(command: SubscriptionAcc
         .refreshAgentLocalModels('codex', { credentialMode: 'oauth-bearer' })
         .catch(() => {});
   }
-  if (command.action !== 'read' && command.action !== 'preview' && command.action !== 'cancel')
+  if (command.action !== 'read' && command.action !== 'preview' && command.action !== 'cancel') {
+    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
+      throw new Error('Subscription accounts changed');
     refreshSelectableModelsAndBroadcast({ providerId: command.providerId });
+  }
   return result;
 }

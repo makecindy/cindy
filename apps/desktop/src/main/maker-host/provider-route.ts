@@ -411,10 +411,10 @@ function buildRouteDecisionBase(
       if (routing.upstream && oauthToken) {
         decision.upstreamOverride = resolveCopilotAccountUrl(routing.upstream, oauthToken);
       }
-      // cc 子进程可能带 x-api-key（gateway-spawn 的网关 key）——发往 OAuth 上游必须抹掉，
-      // 防泄漏 + 防按 x-api-key 优先鉴权的端点拿错钥匙。合并描述符自带的 headerDelete。
+      // Anthropic 协议客户端会带 x-api-key（CC 网关 key / Pi 占位 key）。OAuth 路由
+      // 必须删除它，避免上游优先校验错误的 key 而忽略有效 Bearer。保留描述符的删除项。
       const del = new Set(routing.headerDelete ?? []);
-      if (agent === 'claude-code') del.add('x-api-key');
+      if (agent === 'claude-code' || agent === 'pi') del.add('x-api-key');
       // codex 子进程带 OpenAI 账号元数据头——oauth-token 上游一定是第三方,整组抹掉(见常量注释)。
       if (agent === 'codex') for (const h of CODEX_ACCOUNT_HEADERS) del.add(h);
       if (del.size > 0) decision.headerDelete = [...del];
@@ -1025,6 +1025,16 @@ async function connectedDefaultProviderForModel(
   const defaultId = actualSourceIdForModel(providers, null, modelId, agent);
   const provider = eligible.find((candidate) => candidate.id === defaultId);
   return provider ? { kind: 'provider', provider } : { kind: 'none' };
+}
+
+/** Account bootstrap and the implicit bridge must resolve the same connected source. */
+export async function resolveConnectedDefaultProviderIdForModel(
+  modelId: string,
+  agent: AgentKind,
+): Promise<string | null> {
+  const source = await connectedDefaultProviderForModel(modelId.replace(/\[1m\]$/, ''), agent);
+  if (source.kind === 'ambiguous') throw new Error('Model source is ambiguous; select a provider');
+  return source.kind === 'provider' ? source.provider.id : null;
 }
 
 /**

@@ -32,7 +32,7 @@ vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({ useDeviceLink
 vi.mock('@/lib/toast', () => ({ toast: { info: h.toast, error: h.toast } }));
 
 import { CLOUD_ATTACHMENT_LOADS, CloudCompanionOfflineView } from '../CloudCompanionOfflineView';
-import { BotHomeComputerSetting, companionArrivedHere } from '../BotHomeComputerSetting';
+import { BotHomeComputerSetting, companionArrivedHere, useCompanionHomeSwitch } from '../BotHomeComputerSetting';
 import { resetCompanionCloudStoreForTests, useCompanionCloud } from '../companionCloudStore';
 import { cloudOnlyRemoteBots, cloudRemoteBots, isCloudCompanionRemote, withoutCloudCompanions, withoutShadowedBots } from '../companionCloudPresentation';
 import { BotConnectionStatus } from '../BotConnectionStatus';
@@ -44,6 +44,7 @@ const maker = {
   getCompanionTranscript: vi.fn(),
   getCompanionAttachment: vi.fn(),
   takeOverCompanion: vi.fn(),
+  repairCompanionProfile: vi.fn(),
   getCompanionHomeChoices: vi.fn(),
   switchCompanionHome: vi.fn(),
 };
@@ -61,6 +62,7 @@ beforeEach(() => {
   maker.onCompanionCloudChanged.mockImplementation(() => () => undefined);
   h.navigate.mockReset();
   h.toast.mockReset();
+  h.ensureLoaded.mockReset().mockResolvedValue([{ id: 'local-orphan', status: 'active' }]);
   Object.defineProperty(window, 'electronAPI', { configurable: true, writable: true, value: { maker } });
 });
 afterEach(() => { cleanup(); });
@@ -77,6 +79,18 @@ it('renders the saved cloud transcript before the remote read and preserves it o
 });
 
 describe('presentation helpers', () => {
+  // #10112, unit tier: a rejected shadow must have a recovery entry, never a runnable copy.
+  it('retains a read-only entry for a rejected local restore, then removes it on recovery', () => {
+    const cloud = snapshot('desk');
+    cloud.demotedBotIds = ['mia'];
+    cloud.actors[0]!.profileFailure = { field: 'identitySource', maxLength: 12000 };
+    expect(withoutShadowedBots([{ id: 'mia' }], cloud)).toEqual([]);
+    expect(cloudRemoteBots(cloud, [])).toMatchObject([{ id: 'mia', deviceId: 'desk', online: false, sessionId: null }]);
+    delete cloud.actors[0]!.profileFailure;
+    cloud.demotedBotIds = [];
+    expect(cloudRemoteBots(cloud, [])).toEqual([]);
+    expect(withoutShadowedBots([{ id: 'mia' }], cloud)).toEqual([{ id: 'mia' }]);
+  });
   it('hides demoted copies and adds unseen cloud homes as offline rows', () => {
     const cloud = { ...snapshot('laptop'), demotedBotIds: ['mia'] };
     expect(withoutShadowedBots([{ id: 'mia' }, { id: 'ada' }], cloud)).toEqual([{ id: 'ada' }]);
@@ -124,6 +138,72 @@ describe('presentation helpers', () => {
 });
 
 describe('CloudCompanionOfflineView', () => {
+  // #10112, integration tier: enter through the failed companion, edit the complete
+  // 12001-character source, retain edits on a failed save, then return to the recovered buddy.
+  it('corrects the rejected profile through its real form and preserves edits when saving fails', async () => {
+    maker.getCompanionTranscript.mockResolvedValue({ messages: [] });
+    const source = 'x'.repeat(12001);
+    maker.repairCompanionProfile.mockResolvedValueOnce({ ok: true, draft: { token: 'draft', fields: [
+      { field: 'identitySource', source, maxLength: 12000 },
+    ] } }).mockResolvedValueOnce({ ok: false, code: 'FAILED', profileRepairError: 'backup' }).mockResolvedValueOnce({ ok: true });
+    render(<CloudCompanionOfflineView botId="mia" deviceId="desk" name="Mia" deviceName="Desk"
+      profileFailure={{ field: 'identitySource', maxLength: 12000 }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.repair.action' }));
+    const field = await screen.findByRole('textbox', { name: 'bots.profile.personality' });
+    expect((field as HTMLTextAreaElement).value).toBe(source);
+    const save = screen.getByRole('button', { name: 'bots.cloud.repair.save' });
+    expect(save.hasAttribute('disabled')).toBe(true);
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+    fireEvent.change(field, { target: { value: 'y'.repeat(12000) } });
+    expect(save.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(save);
+    expect(await screen.findByText('bots.cloud.repair.backupFailed')).toBeTruthy();
+    expect((field as HTMLTextAreaElement).value).toBe('y'.repeat(12000));
+    expect(h.navigate).not.toHaveBeenCalled();
+    fireEvent.click(save);
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/mia'));
+    expect(maker.repairCompanionProfile).toHaveBeenLastCalledWith('mia', { action: 'save', token: 'draft', values: { identitySource: 'y'.repeat(12000) } });
+  });
+
+  it('requires a new draft after the home changes and ignores a load from a previous account', async () => {
+    maker.getCompanionTranscript.mockResolvedValue({ messages: [] });
+    maker.repairCompanionProfile.mockResolvedValueOnce({ ok: true, draft: { token: 'old', fields: [
+      { field: 'identitySource', source: 'x'.repeat(12001), maxLength: 12000 },
+    ] } }).mockResolvedValueOnce({ ok: false, code: 'HOME_CONFLICT' });
+    render(<CloudCompanionOfflineView botId="mia" deviceId="desk" name="Mia" deviceName="Desk"
+      profileFailure={{ field: 'identitySource', maxLength: 12000 }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.repair.action' }));
+    const field = await screen.findByRole('textbox');
+    fireEvent.change(field, { target: { value: 'my edit' } });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.repair.save' }));
+    expect(await screen.findByText('bots.cloud.repair.changed')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'bots.cloud.repair.save' }).hasAttribute('disabled')).toBe(true);
+    let resolve!: (value: unknown) => void;
+    maker.repairCompanionProfile.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.repair.reload' }));
+    h.owner = { dataOwnerId: 'other', generation: h.owner.generation + 1 };
+    await act(async () => resolve({ ok: true, draft: { token: 'obsolete', fields: [{ field: 'identitySource', source: 'private old account text', maxLength: 12000 }] } }));
+    expect(screen.queryByDisplayValue('private old account text')).toBeNull();
+    expect(h.navigate).not.toHaveBeenCalled();
+  });
+
+  // #10112, integration tier: actual error UI and retry API; an unchanged source
+  // stays visible, a corrected source returns to the local companion.
+  it('shows the permanent source rejection and retries without losing the cloud conversation', async () => {
+    const failure = { field: 'identitySource' as const, maxLength: 12000 };
+    maker.getCompanionTranscript.mockResolvedValue({ messages: [{ id: 'kept', seq: '1', role: 'user', text: 'Keep this conversation', createdAt: 1 }] });
+    maker.takeOverCompanion.mockResolvedValueOnce({ ok: false, code: 'FAILED', profileFailure: failure }).mockResolvedValueOnce({ ok: true });
+    render(<CloudCompanionOfflineView botId="mia" deviceId="desk" name="Mia" deviceName="Desk" profileFailure={failure} />);
+    expect(await screen.findByText('Keep this conversation')).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toContain('bots.cloud.profileIdentityTooLong');
+    fireEvent.click(screen.getByRole('button', { name: 'bots.retry' }));
+    await waitFor(() => expect(maker.takeOverCompanion).toHaveBeenCalledTimes(1));
+    expect(h.navigate).not.toHaveBeenCalled();
+    expect(screen.getByText('Keep this conversation')).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'bots.retry' }).hasAttribute('disabled')).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.retry' }));
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/mia'));
+  });
   const page = { messages: [
     { id: 'm1', seq: '1', role: 'user', text: 'hello', createdAt: 1 },
     { id: 'm2', seq: '2', role: 'assistant', text: 'hi there', createdAt: 2 },
@@ -209,6 +289,74 @@ describe('CloudCompanionOfflineView', () => {
     expect(h.toast).toHaveBeenCalledWith('bots.cloud.takeOverConflict:{"name":"Mia","device":"Tablet"}');
   });
 
+  it.each([false, true])('opens the absent local Cindy settings only when chosen (profile recovery: %s)', async recovering => {
+    resetCompanionCloudStoreForTests(snapshot('laptop'));
+    maker.getCompanionCloudState.mockResolvedValue(snapshot('laptop'));
+    maker.getCompanionTranscript.mockResolvedValue(page);
+    maker.takeOverCompanion.mockResolvedValue({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-orphan', conflictingDeviceId: 'desk' });
+    render(<CloudCompanionOfflineView botId="mia" deviceId="laptop" name="Mia" deviceName="Laptop"
+      profileFailure={recovering ? { field: 'identitySource', maxLength: 12000 } : undefined} />);
+    fireEvent.click(screen.getByText(recovering ? 'bots.retry' : 'bots.cloud.continueHere'));
+    expect(await screen.findByText('bots.cloud.localCindyConflict:{"name":"Mia"}')).toBeTruthy();
+    expect(h.navigate).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.localCindyConflictAction' }));
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/local-orphan?settings=1'));
+  });
+
+  it.each([undefined, 'other-device'])('never opens a local same-ID copy for an unverified conflict source: %s', async conflictingDeviceId => {
+    resetCompanionCloudStoreForTests(snapshot('laptop'));
+    maker.getCompanionCloudState.mockResolvedValue(snapshot('laptop'));
+    maker.getCompanionTranscript.mockResolvedValue(page);
+    maker.takeOverCompanion.mockResolvedValue({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-orphan', conflictingDeviceId });
+    renderView();
+    fireEvent.click(screen.getByText('bots.cloud.continueHere'));
+    await screen.findByText('bots.cloud.localCindyConflict:{"name":"Mia"}');
+    expect(screen.queryByRole('button', { name: 'bots.cloud.localCindyConflictAction' })).toBeNull();
+    expect(h.navigate).not.toHaveBeenCalled();
+  });
+
+  // #9960: a demoted copy can still reserve this computer's singleton, but its settings
+  // are read-only in BotSettingsDrawer. Do not offer a route that cannot open that drawer.
+  it.each(['already demoted', 'demoted during profile read'])('respects settings eligibility when the conflict is %s', async boundary => {
+    const cloud = snapshot('laptop');
+    if (boundary === 'already demoted') cloud.demotedBotIds = ['local-orphan'];
+    resetCompanionCloudStoreForTests(cloud);
+    maker.getCompanionCloudState.mockResolvedValue(cloud);
+    maker.getCompanionTranscript.mockResolvedValue(page);
+    maker.takeOverCompanion.mockResolvedValue({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-orphan', conflictingDeviceId: 'desk' });
+    let finish!: (rows: Array<{ id: string; status: string }>) => void;
+    h.ensureLoaded.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    renderView();
+    fireEvent.click(screen.getByText('bots.cloud.continueHere'));
+    await screen.findByText('bots.cloud.localCindyConflict:{"name":"Mia"}');
+    if (boundary === 'already demoted') {
+      expect(screen.queryByRole('button', { name: 'bots.cloud.localCindyConflictAction' })).toBeNull();
+      expect(h.ensureLoaded).not.toHaveBeenCalled();
+    } else {
+      fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.localCindyConflictAction' }));
+      resetCompanionCloudStoreForTests({ ...cloud, demotedBotIds: ['local-orphan'] });
+      await act(async () => finish([{ id: 'local-orphan', status: 'active' }]));
+      expect(h.toast).toHaveBeenCalledWith('bots.lifecycle.actionFailed');
+    }
+    expect(h.navigate).not.toHaveBeenCalled();
+  });
+
+  it.each(['owner switch', 'unmount'])('ignores a delayed local profile read after %s', async boundary => {
+    resetCompanionCloudStoreForTests(snapshot('laptop'));
+    maker.getCompanionCloudState.mockResolvedValue(snapshot('laptop'));
+    maker.getCompanionTranscript.mockResolvedValue(page);
+    maker.takeOverCompanion.mockResolvedValue({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-orphan', conflictingDeviceId: 'desk' });
+    let finish!: (rows: Array<{ id: string; status: string }>) => void;
+    h.ensureLoaded.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const view = renderView();
+    fireEvent.click(screen.getByText('bots.cloud.continueHere'));
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.localCindyConflictAction' }));
+    if (boundary === 'unmount') view.unmount();
+    else h.owner = { dataOwnerId: 'next-owner', generation: h.owner.generation + 1 };
+    await act(async () => finish([{ id: 'local-orphan', status: 'active' }]));
+    expect(h.navigate).not.toHaveBeenCalled();
+  });
+
   it('explains a failed take-over inline and lets the user try again', async () => {
     maker.getCompanionTranscript.mockResolvedValue(page);
     maker.takeOverCompanion.mockResolvedValueOnce({ ok: false, code: 'OFFLINE' }).mockResolvedValueOnce({ ok: true });
@@ -256,11 +404,15 @@ describe('BotHomeComputerSetting', () => {
     expect(maker.getCompanionHomeChoices).toHaveBeenCalledWith('mia');
   });
 
-  it('shows where a companion homed on another computer runs, and moves it to this one', async () => {
+  it.each([false, true])('ends the arrival wait on this computer (profile rejected: %s)', async rejected => {
     maker.getCompanionHomeChoices.mockResolvedValue({ homeDeviceId: 'laptop', mode: 'remote',
       targets: [{ deviceId: 'desk', name: 'Desk', online: true, isSelf: true }, { deviceId: 'tablet', name: 'Tablet', online: true, isSelf: false }] });
     maker.switchCompanionHome.mockResolvedValue({ ok: true });
     const arrived = snapshot('desk');
+    if (rejected) {
+      arrived.demotedBotIds = ['mia'];
+      arrived.actors[0]!.profileFailure = { field: 'identitySource', maxLength: 12000 };
+    }
     show(snapshot('laptop'));
     expect(screen.getByText('Laptop')).toBeTruthy();
     openMenu();
@@ -272,7 +424,8 @@ describe('BotHomeComputerSetting', () => {
       return [{ id: 'mia', status: 'active' }];
     });
     fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.switchAction:{"device":"bots.cloud.thisComputer"}' }));
-    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/mia'));
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith(rejected ? '/bots/remote/desk/mia' : '/bots/mia'));
+    if (rejected) expect(screen.getByRole('alert').textContent).toContain('bots.cloud.profileIdentityTooLong');
     expect(maker.switchCompanionHome).toHaveBeenCalledWith('mia', 'desk', undefined);
   });
 
@@ -281,6 +434,38 @@ describe('BotHomeComputerSetting', () => {
     show(snapshot('laptop'));
     openMenu();
     expect(await screen.findByText('bots.cloud.homeOutdated:{"name":"Mia","device":"Laptop"}')).toBeTruthy();
+  });
+
+  it('explains a local Cindy conflict when changing the main computer', async () => {
+    h.ensureLoaded.mockResolvedValue([{ id: 'local-orphan', status: 'active' }]);
+    maker.getCompanionHomeChoices.mockResolvedValue(local());
+    maker.switchCompanionHome.mockResolvedValue({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-orphan', conflictingDeviceId: 'desk' });
+    show(snapshot('desk'));
+    openMenu();
+    fireEvent.click(await screen.findByText('bots.cloud.switchTo:{"device":"Laptop"}'));
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.switchAction:{"device":"Laptop"}' }));
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'bots.cloud.localCindyConflict:{"name":"Mia","device":"Laptop"}');
+    expect(h.navigate).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.localCindyConflictAction' }));
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/local-orphan?settings=1'));
+  });
+
+  it('keeps the local settings action available in the glance popover’s failure toast', async () => {
+    resetCompanionCloudStoreForTests(snapshot('desk'));
+    maker.getCompanionCloudState.mockResolvedValue(snapshot('desk'));
+    h.ensureLoaded.mockResolvedValue([{ id: 'local-orphan', status: 'active' }]);
+    maker.switchCompanionHome.mockResolvedValue({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-orphan', conflictingDeviceId: 'desk' });
+    function GlanceSwitch() {
+      const state = useCompanionHomeSwitch(bot, 'toast');
+      return <button onClick={() => void state.confirm(laptop)}>Move Cindy</button>;
+    }
+    render(<GlanceSwitch />);
+    fireEvent.click(screen.getByText('Move Cindy'));
+    await waitFor(() => expect(h.toast).toHaveBeenCalled());
+    const options = h.toast.mock.calls.at(-1)?.[1];
+    expect(options.action.label).toBe('bots.cloud.localCindyConflictAction');
+    options.action.onClick();
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/local-orphan?settings=1'));
   });
 
   it('shows why a move did not happen', async () => {
@@ -357,6 +542,19 @@ describe('companionCloudStore', () => {
 });
 
 describe('CompanionShadowBanner', () => {
+  it('explains the local Cindy conflict on the shadowed copy', async () => {
+    const { CompanionShadowBanner } = await import('../CompanionShadowBanner');
+    resetCompanionCloudStoreForTests(snapshot('laptop'));
+    maker.getCompanionCloudState.mockResolvedValue(snapshot('laptop'));
+    maker.takeOverCompanion.mockResolvedValue({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-orphan', conflictingDeviceId: 'desk' });
+    render(<CompanionShadowBanner botId="mia" name="Mia" />);
+    fireEvent.click(screen.getByText('bots.cloud.continueHere'));
+    expect(await screen.findByText('bots.cloud.localCindyConflict:{"name":"Mia"}')).toBeTruthy();
+    expect(h.navigate).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.localCindyConflictAction' }));
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/local-orphan?settings=1'));
+  });
+
   it('opens the companion on its main computer or takes it over here', async () => {
     const { CompanionShadowBanner } = await import('../CompanionShadowBanner');
     resetCompanionCloudStoreForTests(snapshot('laptop'));

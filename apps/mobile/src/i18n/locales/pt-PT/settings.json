@@ -171,7 +171,11 @@
       "auto": "Automático",
       "on": "Sempre ativas",
       "off": "Desativadas"
-    }
+    },
+    "actionReplyPlaceholder": "Escreva uma resposta",
+    "actionNotDelivered": "Isto não chegou ao seu computador. Abra a Cindy para responder.",
+    "actionReplyNotDelivered": "A sua resposta não foi enviada. Abra a Cindy para a enviar novamente: {{text}}",
+    "actionRequestEnded": "Este pedido já foi respondido ou expirou."
   },
   "about": {
     "sectionTitle": "Acerca deste telemóvel",

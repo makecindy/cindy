@@ -29,7 +29,7 @@ import { app, net } from 'electron';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
-import { hasConnectedSubscriptionPool, refreshSubscriptionPool } from '../subscription-accounts/runtime.js';
+import { hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, refreshSubscriptionPool } from '../subscription-accounts/runtime.js';
 import { readPool, migrateLegacyCodexAccounts, readLegacyCodexAccountId } from '../subscription-accounts/store.js';
 import {
   BUNDLED_CATALOG,
@@ -357,7 +357,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
     return Promise.resolve(activeCatalog);
   }
   if (!activeInflight) {
-    const source = buildSource();
+    const source = { ...buildSource(), remoteBudgetMs: 2_500 };
     const sourceKey = catalogSourceKey(source);
     // 首次加载时顺手清掉旧版磁盘缓存孤儿（fire-and-forget，每进程一次）。
     void cleanupLegacyCatalogCache();
@@ -842,9 +842,17 @@ let singleton: ProviderService | null = null;
  * Cindy account session keeps the full active catalog.
  */
 export function getDesktopSelectableCatalog(): Catalog {
-  const catalog = filterProviderCatalogForAccount(filterLegacyGptContextProfiles(getActiveCatalog()), {
+  return projectSubscriptionPoolCatalog(getDesktopSelectableBaseCatalog());
+}
+
+function getDesktopSelectableBaseCatalog(): Catalog {
+  return filterProviderCatalogForAccount(filterLegacyGptContextProfiles(getActiveCatalog()), {
     canUseCindyGateway: getAppCapabilities().canUseCindyGateway,
   });
+}
+
+/** Apply account membership to both selectable and full routing snapshots. */
+function projectSubscriptionPoolCatalog(catalog: Catalog): Catalog {
   const pool = readPool('openai');
   const aliases = pool?.legacyCodexAccounts;
   if (!aliases || pool.disconnected) return catalog;
@@ -908,7 +916,8 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
         logoKind: getCindyAiProviderLogoKind(),
       };
     },
-    getCatalog: getDesktopSelectableCatalog,
+    getCatalog: getDesktopSelectableBaseCatalog,
+    projectCatalog: projectSubscriptionPoolCatalog,
     connection: {
       xd: () => getAppCapabilities().canUseCindyGateway && readClaudeApiKey() != null,
       // Claude/Codex 是原生 Harness，可继承本机 CLI 凭证；xAI 是下游 provider，
@@ -965,6 +974,8 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
     genericOAuthConnected: (providerId) => hasGenericOAuthLogin(storedCustomProviderId(providerId)),
     codexAccountConnected: (providerId) => codexAccountState(providerId).authenticated,
     subscriptionAccountConnected: (providerId) => subscriptionAccountState(providerId).authenticated,
+    subscriptionReadUnavailable: (providerId) => (providerId === 'openai' || providerId === 'anthropic')
+      && hasUnavailableSubscriptionPoolAccount(providerId),
     subscriptionAccountInfo: async (providerId) => {
       if (providerId === 'anthropic') {
         const login = await readClaudeNativeLogin();

@@ -37,6 +37,7 @@ import {
   resolveSessionRouteDecision,
   resolveFrozenProviderRouteDecision,
   resolveImplicitLocalBridgeRoute,
+  resolveConnectedDefaultProviderIdForModel,
   inferProviderIdForModel,
   isUserProviderSession,
   setCustomProviderKeyReader,
@@ -285,6 +286,22 @@ describe('Pi per-model protocol routing', () => {
 });
 
 describe('implicit local bridge resume routing', () => {
+  // PR #9998 review, unit: catalog uniqueness is not the connected default.
+  // Two connected custom sources sharing one model used to be mistaken for OpenAI.
+  it('uses the same connected default for account selection and an implicit Codex bridge', async () => {
+    setCustomProviders(['account-a', 'account-b'].map(id => buildUserProvider({
+      id, name: id, auth: { method: 'apiKey' }, runtimes: { codex: {
+        baseUrl: `https://${id}.example.test/v1`, wireProtocol: 'openai-chat',
+        models: [{ id: 'shared-custom-model', name: 'Shared Custom Model' }],
+      } },
+    })));
+    setProviderViewsReader(async () => buildRegistry(getActiveCatalog(), { 'account-a': true, 'account-b': true }, {}));
+    try {
+      expect(inferProviderIdForModel('shared-custom-model', 'codex')).toBeNull();
+      await expect(resolveConnectedDefaultProviderIdForModel('shared-custom-model', 'codex')).resolves.toBe('account-a');
+      expect((await resolveImplicitLocalBridgeRoute('shared-custom-model', 'codex'))?.providerId).toBe('account-a');
+    } finally { setCustomProviders([]); }
+  });
   it('never resolves a Codex session to the Claude subscription, even for a retired Claude model', async () => {
     setAnthropicDiscoveredModels([
       {
@@ -399,6 +416,23 @@ describe('pi: provider-aware Anthropic wire routing', () => {
       headerOverride: { 'x-api-key': KEY, authorization: `Bearer ${KEY}` },
     });
   });
+
+  it.each(['anthropic-messages', 'openai-chat', 'openai-responses'] as const)(
+    'removes the Pi placeholder API key when injecting generic OAuth over %s',
+    (wireProtocol) => {
+      const decision = buildRouteDecision({
+        upstream: 'https://api.kimi.com/coding',
+        authStrategy: 'oauth-token',
+        wireProtocol,
+        headerDelete: ['x-test-private'],
+      }, null, 'pi', null, 'test-kimi-oauth-token');
+      expect(decision).toMatchObject({
+        upstreamOverride: 'https://api.kimi.com/coding',
+        headerOverride: { authorization: 'Bearer test-kimi-oauth-token' },
+        headerDelete: ['x-test-private', 'x-api-key'],
+      });
+    },
+  );
 
   it('Pi 会话选 Claude 订阅 → 无路由(不注入 host OAuth,调用方本地拒绝)', async () => {
     setSessionProvider('s-pi', 'anthropic');
