@@ -20,3 +20,4 @@
   不将复制来源值作为降级。Node 绑定仍返回 `HOST_INJECTION_REQUIRED`。选择替换目标原密钥，
   来源仍独立管理；停止使用只删除目标引用，持久化失败返回 `VAULT_WRITE_FAILED`。
   手机端建立这类引用尚不支持，调用既有引用不扩大凭证与账号边界。
+  Node Host 用同一 `GhostSavedCredentialManager` 和既有 owner vault/connections 解析并注入，来源撤回即拒绝；不新增引用创建、存储或迁移流程。

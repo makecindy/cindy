@@ -98,3 +98,22 @@ it('allows the Host media deadline to finish while retaining a bounded bridge ti
     expect(await missing).toBe('NODE_HOST_OPERATION_FAILED');
   } finally { vi.useRealTimers(); }
 });
+
+// Unit, #9825 / 4546519914: malformed private frames were silently dropped by
+// the broker. Reject over-budget frames before IPC or pending-slot allocation.
+it('rejects an oversized network frame immediately without sending or retaining a request', async () => {
+  vi.useFakeTimers();
+  try {
+    const sent: any[] = [];
+    const client = new NodeHostServicesClient(new NodeRequestScopes(), value => sent.push(value));
+    const rejected = client.network({ op: 'fetch', url: 'https://example.test', body: 'x'.repeat(3 * 1024 * 1024) }).catch(error => error.message);
+    expect(sent).toHaveLength(0);
+    await expect(rejected).resolves.toBe('NETWORK_INVALID_REQUEST');
+    for (let i = 0; i < 8; i++) {
+      const pending = client.network({ op: 'close', connectionId: 'closed' });
+      client.reply({ reqId: sent.at(-1).reqId, ok: true, result: { ok: true } });
+      await expect(pending).resolves.toEqual({ ok: true });
+    }
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+});

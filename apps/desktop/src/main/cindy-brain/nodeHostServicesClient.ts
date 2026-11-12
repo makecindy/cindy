@@ -1,5 +1,5 @@
 import type { NodeRequestScopes } from './nodeRequestScope.js';
-import { GHOST_FETCH_MEDIA_TIMEOUT_MAX_MS, GHOST_FETCH_TIMEOUT_MAX_MS } from '../../shared/ghost.js';
+import { GHOST_FETCH_MEDIA_TIMEOUT_MAX_MS, GHOST_FETCH_TIMEOUT_MAX_MS, GHOST_NODE_NETWORK_REQUEST_MAX_CHARS } from '../../shared/ghost.js';
 
 /** Bootstrap-private upload channel. No secret travels through stdout. */
 export class NodeHostServicesClient {
@@ -23,6 +23,9 @@ export class NodeHostServicesClient {
     return this.request('host-tool-request', { server, tool, args });
   }
   network(request: Record<string, unknown>): Promise<unknown> {
+    try {
+      if (JSON.stringify(request).length > GHOST_NODE_NETWORK_REQUEST_MAX_CHARS) throw new Error();
+    } catch { return Promise.reject(new Error('NETWORK_INVALID_REQUEST')); }
     // The Host applies each fetch's real deadline, including media/upload IO.
     // This transport fallback must allow that maximum plus the existing 60s
     // bridge budget for preparation/cleanup and delivery of its final receipt.

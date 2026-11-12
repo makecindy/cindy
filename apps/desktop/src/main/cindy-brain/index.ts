@@ -2374,7 +2374,7 @@ export function getGhostRuntime(): GhostRuntime {
         // 崩溃/熄灯时把该意识名下的在途工具调用收掉(结构化失败给 agent)。
         getGhostPipeDispatcher().onRuntimeState(storagePart, state);
         if (state !== 'running') {
-          disposePluginRuntimeHostServices(storagePart);
+          if (state !== 'starting') disposePluginRuntimeHostServices(storagePart);
           modelPickerSingleton?.cancel(storagePart);
           pluginInvocations.invalidate(storagePart);
           invocationRuntimeGenerations.set(storagePart, (invocationRuntimeGenerations.get(storagePart) ?? 0) + 1);

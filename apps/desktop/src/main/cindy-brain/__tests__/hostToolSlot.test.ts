@@ -20,6 +20,10 @@ const uiPipe = createGhostProductionCallbacks<{
 const lifecycle = createGhostProductionCallbacks<{ getGhostRuntime(): GhostRuntime }>({
   functions: ['getGhostRuntime', 'disposePluginRuntimeHostServices'], initialize: 'let runtimeSingleton = null;',
 });
+const hostLifecycle = createGhostProductionCallbacks<{ runtime: GhostRuntime }>({
+  source: new URL('../../../../../host/src/plugins/runtime.ts', import.meta.url),
+  variables: ['disposeRuntimeHostServices', 'runtime'],
+});
 
 // Test value: the production gateway must preserve raw tool results and enforce §1.2/§3
 // approval and owner/install fences for a caller without a Session. Existing taskSlot tests
@@ -120,7 +124,13 @@ describe('plugin Host tool entry', () => {
   // Item 28, unit: the real sandbox lifecycle and production exit callback must
   // close the native service scope. Node stop coverage missed the logic-page
   // stop/crash/update path added for computer connections in item 26.
-  it.each(['stop', 'crash', 'update'] as const)('releases an old computer connection after logic-page %s', async action => {
+  // #9825 review: resident Node resources can predate the first logic page.
+  // Prior stop/crash/update coverage opened connections only after starting.
+  // Execute both production callbacks with the real GhostRuntime transitions.
+  it.each([
+    ['desktop', 'stop'], ['desktop', 'crash'], ['desktop', 'update'],
+    ['host', 'stop'], ['host', 'crash'], ['host', 'update'],
+  ] as const)('%s keeps an existing connection while starting, then releases it after logic-page %s', async (environment, action) => {
     const owner = { dataOwnerId: 'owner', ownerGeneration: 31 };
     const caller = { ...owner, kind: 'plugin' as const, pluginId: 'dashboard' };
     setHostToolProviders([{ name: 'cindy_computer', toClaudeSdkConfig: () => null, toHostTools: () => {
@@ -132,7 +142,7 @@ describe('plugin Host tool entry', () => {
     } }], owner);
     const handles: Array<SandboxHandle & { gone(): void }> = [];
     const noop = () => {};
-    const api = lifecycle({ GhostRuntime,
+    const deps = { GhostRuntime,
       electronSandboxAdapter: { create() {
         let onGone: ((details: { reason: string }) => void) | null = null;
         const handle = { load: async () => {}, destroy: noop, onGone: (fn: (details: { reason: string }) => void) => { onGone = fn; },
@@ -146,12 +156,18 @@ describe('plugin Host tool entry', () => {
       networkSlotSingleton: null, fsSlotSingleton: null, getDesktopHostTerminalService: () => ({ disposePlugin: noop }),
       disposePluginHostTools, modelPickerSingleton: null, pluginInvocations: { invalidate: noop },
       invocationRuntimeGenerations: new Map(), broadcastGhostRuntimeStates: noop,
-    });
-    const runtime = api.getGhostRuntime(), ghost = fixture().ghost;
+    };
+    const runtime = environment === 'desktop' ? lifecycle(deps).getGhostRuntime() : hostLifecycle({
+      GhostRuntime, sandbox: { adapter: deps.electronSandboxAdapter }, log: deps.log,
+      network: { disposeGhost: noop }, fsSlot: { disposePlugin: noop },
+      options: { publish: noop, onPluginStopped: disposePluginHostTools }, dispatcher: { onRuntimeState: noop },
+    }).runtime;
+    const ghost = fixture().ghost;
     try {
-      await runtime.spawn(ghost);
       const old = createHostToolRuntime('cindy_computer', caller)!;
       expect((await old.call('status')).content[0]).toMatchObject({ text: '1' });
+      await runtime.spawn(ghost);
+      expect((await old.call('status')).content[0]).toMatchObject({ text: '2' });
       if (action === 'stop') runtime.stop('dashboard');
       if (action === 'crash') handles.at(-1)!.gone();
       if (action === 'update') await runtime.spawn({ ...ghost, manifest: { ...ghost.manifest, version: '2.0.0' }, approval: { state: 'approved', revision: 'r2' } });

@@ -129,7 +129,12 @@ export function createLiziMcpProviders(
         getRuntime: () => {
           const inner = baseDeps.getRuntime();
           return { call: req => {
-            const sessionId = resolveLiziMcpSessionContext(ctx).sessionId;
+            const context = resolveLiziMcpSessionContext(ctx);
+            if (context.hostCaller?.kind === 'plugin' && baseDeps.getBackendKind?.() === 'rsb-webview') {
+              return Promise.resolve({ ok: false, action: req.action, errorCode: 'BROWSER_RUNTIME_ACTION_FAILED' as const,
+                message: 'Plugins do not support the sidebar browser because they have no task-owned tabs. Use the dedicated browser or your browser.' });
+            }
+            const sessionId = context.sessionId;
             return inner.call(sessionId ? { ...req, __mcpSessionId: sessionId } as typeof req : req);
           } };
         },

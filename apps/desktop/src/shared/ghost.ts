@@ -415,7 +415,7 @@ export function parseGhostNodeChildToHostMessage(raw: unknown): GhostNodeChildTo
   if (m.type === 'network-request') {
     if (Object.keys(m).sort().join(',') !== 'reqId,request,type' || !isChildId(m.reqId) ||
         !m.request || typeof m.request !== 'object' || Array.isArray(m.request)) return null;
-    try { if (JSON.stringify(m.request).length > 128 * 1024) return null; } catch { return null; }
+    try { if (JSON.stringify(m.request).length > GHOST_NODE_NETWORK_REQUEST_MAX_CHARS) return null; } catch { return null; }
     return { type: m.type, reqId: m.reqId, request: m.request as Record<string, unknown> };
   }
   if (m.type === 'host-tool-request') {
@@ -9314,6 +9314,8 @@ export type GhostFetchMethod = (typeof GHOST_FETCH_METHODS)[number];
 
 /** 请求体上限(UTF-8 字节)。 */
 export const GHOST_FETCH_BODY_MAX_BYTES = 256 * 1024;
+/** Private network frame: legal text body (up to 6x JSON escaping) plus metadata. */
+export const GHOST_NODE_NETWORK_REQUEST_MAX_CHARS = 2 * 1024 * 1024;
 /** 响应体上限(超限截断并标 truncated;2026-07-21 由 1MB 放宽到 50MB,Jira 等大 JSON 不再被截)。 */
 export const GHOST_FETCH_RESPONSE_MAX_BYTES = 50 * 1024 * 1024;
 /** 超时缺省/下限/上限(毫秒;越界 clamp 不拒单)。 */

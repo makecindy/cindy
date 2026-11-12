@@ -11,6 +11,7 @@ import { WebSocketServer } from 'ws';
 import { afterAll, describe, it, expect, vi } from 'vitest';
 
 import { GhostNetworkSlot, type NetworkSlotDeps } from '../networkSlot';
+import { HostNetworkConnections } from '../networkConnections';
 import { createMcpAppsManualResolver } from '../mcpAppsManualHeaders';
 import { GHOST_SAVED_CREDENTIAL_MARKER } from '../../../shared/pluginAccountReuse';
 import {
@@ -146,6 +147,38 @@ const BRAVE_URL = 'https://api.search.brave.com/res/v1/web/search?q=hi';
 // §4: saved credentials may only be injected by the Host; the existing direct
 // key cases cannot observe reference revocation or the unused-path IO budget.
 describe('saved credential Host injection', () => {
+  // Unit, #9825 / 4546557311: exact-origin consent did not prevent ordinary
+  // keys from crossing public cleartext links. Exercise the injection entry;
+  // mock only the final WS socket transport, never send a real credential.
+  it.each([
+    ['http://8.8.8.8:8080', false], ['ws://8.8.8.8:8080', false],
+    ['http://10.0.0.5:8080', true], ['ws://127.0.0.1:8080', true],
+    ['http://gitlab.internal:8080', false], ['http://127.attacker.example:8080', false],
+    ['http://localhost:8080', true], ['http://api.localhost:8080', true],
+    ['http://[fd00::1]:8080', true], ['https://api.example.com:8443', true], ['wss://api.example.com:8443', true],
+  ] as const)('injects a user key into %s only when the origin transport is allowed (%s)', async (origin, allowed) => {
+    const open = vi.spyOn(HostNetworkConnections.prototype, 'openWebSocket').mockResolvedValue('opaque');
+    const h = makeSlot({
+      getGhost: () => fakeGhost({ network: { hosts: [origin], secrets: [{ key: 'key', label: 'Own',
+        inject: { header: 'Authorization', format: 'Bearer {value}', hosts: [origin] } }] } }),
+      readSecret: vi.fn(() => 'synthetic-host-only-key'),
+    });
+    try {
+      const webSocket = origin.startsWith('ws');
+      const result = webSocket ? await h.slot.handleNetworkRequest('web-search', { op: 'open', url: origin + '/api' })
+        : await h.slot.handleFetchRequest('web-search', { url: origin + '/api' });
+      expect(result).toMatchObject({ ok: allowed });
+      if (allowed) {
+        const init = webSocket ? open.mock.calls[0]?.[1] : h.fetchImpl.mock.calls[0]?.[1];
+        expect(init).toMatchObject({ headers: { Authorization: 'Bearer synthetic-host-only-key' } });
+      } else {
+        expect(open).not.toHaveBeenCalled();
+        expect(h.fetchImpl).not.toHaveBeenCalled();
+        expect(h.readSecret).not.toHaveBeenCalled();
+      }
+    } finally { open.mockRestore(); await h.slot.disposeAll(); }
+  });
+
   it('resolves a reference inside the Host and rechecks it before returning', async () => {
     let valid = true;
     const assertCurrent = () => { if (!valid) throw new Error('CREDENTIAL_REFERENCE_CHANGED'); };

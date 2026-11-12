@@ -15,6 +15,9 @@ receipt 同步段去重已撤回，存储、终端、亲选目录与流式分片
 
 | 热点 | 未使用时的开销 | 使用后的上限 | 证据 | 结论 |
 | --- | --- | --- | --- | --- |
+| 凭证传输来源校验 | 不请求网络就不运行；HTTPS/WSS 同步短路，不调用地址分类器。 | 仅命中注入声明的明文 origin 调用现有私网/回环判定，不查 DNS、不建缓存或 timer。 | `networkSlot.test.ts` 的 `injects a user key into %s only when the origin transport is allowed`，覆盖公网 HTTP/WS 拒绝、私网 HTTP 与回环 WS 注入、内网主机名和伪回环域名拒绝。 | 公网凭证只走 TLS；私网字面量与 localhost 保留原能力，内网主机名须 HTTPS。 |
+| Node 既有凭证引用 | `resolveSavedCredential` 只在引用标记命中时调用；管理器在该方法内懒构造。普通密钥不解析引用、不扫描来源。 | 同一管理器沿用 vault/connections 与两端 owner/install 复核；每次实时读取，不新增存储、订阅或迁移。 | Node `plugins.test.mjs` 的 `Host assembly injects an existing saved credential and rejects its revoked source` 执行实际 Host 装配函数，进程/数据库边界注入；源码 `plugins/authorization.ts:resolveSavedCredential`。 | 原来源仍管理密钥，Node 只消费既有引用；结果不返回凭证明文。 |
+| 逻辑页首次启动 | 没有状态变更就不运行回调。新增资源释放同步排除 `starting/running`，不创建资源。 | 仅沿既有退出态释放网络、文件、终端与电脑资源；没有新定时器。 | `hostToolSlot.test.ts` 的 Desktop/Host × stop/crash/update 矩阵，从真实 `GhostRuntime` 启动前已有连接开始。 | 常驻 Node 资源跨逻辑页启动保持，停止/崩溃/更新仍释放；原模型与任务调用失效路径不变。 |
 | Desktop 启动与服务登记 | 登记只保存 provider 引用；不构建 MCP runtime、不探测 enablement、不关闭异步 runtime。普通终端输出不进入新增 ring。 | 首次查询才生成目录；目录在 provider 更换时失效。 | `hostServiceCatalog.test.ts` 的 `does not construct or probe unused providers and caches metadata until replacement`；`ptyManager.test.ts` 的 `does not retain or measure UI output when no managed reader was requested`。 | 已修复两处未使用路径回退。存在静态模块求值和少量对象分配，未测完整 Desktop 冷启动时间。 |
 | Node Host 启动 | provider 工厂未被目录登记调用；装配后的新增活跃资源为 0，无 PTY 启动。 | 实际调用才生成 MCP server；终端按需 spawn。 | 隔离生产装配 0.78 ms；`resourcesBefore/After/AfterClose` 均 `[]`，见原始 JSON；`HostTerminalService` 构造函数仅建立 manager / sink / map。 | 无新增定时器、连接或子进程的代码路径与隔离资源证据；不代表完整 Host 启动耗时。 |
 | Node browser / computer 插件入口 | 复用上游为 Agent 创建的 provider，仅登记对象引用。未声明组的调用在第一个 `await` 和运行时工厂之前同步拒绝，不进行 provider 查找、enablement 探测、审批或确认；没有调用时不进入 gateway。 | 仅允许已声明且获批准的插件调用；沿用客户端、电脑开关、输入协调器与调用身份门禁。原生 worker 由上游 `beforeCall` 懒建，停用沿用原清理路径；不新建平台实现或资源预算。 | `apps/host/src/main.ts:655–665`；`hostServiceCatalog.ts:21–26`；`hostToolSlot.ts:47–58`；`hostToolCaller.ts:122–129`。`hostToolSlot.test.ts` 的 `rejects undeclared %s before constructing its runtime` 覆盖 browser/computer/docs，断言拒绝且工厂、审批、确认与执行均为 0；Node `tools.test.mjs` 的共享 provider 与 lazy worker 回归。 | 未声明时没有新增 provider 热路径工作；启动仍有两个引用登记与 dirty 标记，不宣称绝对零分配。平台工厂原由上游 Agent 装配，不在插件入口重复运行；完整启动/CPU 未重测。 |
@@ -37,6 +40,9 @@ Node 私有桥最多保留 8 个待决请求。`fetch` 的传输兜底为宿主�
 宿主工具调用一样计入 Worker 活跃工作；成功或失败后才恢复空闲回收。
 回归为 `nodeHostServicesClient.test.ts` 的 90 秒媒体回执与 360 秒兜底，
 以及 `nodeRuntimeBroker.test.ts` 的并发 network 成功/失败后回收矩阵，均用假时钟。
+请求序列化最多 2,097,152 个 JSON 字符（不是 2 MiB 字节承诺），容纳合法 256 KiB 正文的
+JSON 转义及元数据。超限在 Worker 发 IPC、分配 pending 和 timer 前以 `NETWORK_INVALID_REQUEST` 拒绝；
+Host parser 保留同一上限。回归通过生产 broker 投递最大正文与全转义正文，另验证超限不发送、不占 pending。
 
 ## 已修复的回退
 

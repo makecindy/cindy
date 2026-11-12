@@ -22,6 +22,7 @@ Node Host 未装配的服务返回 MCP `UNSUPPORTED_CAPABILITY`，附当前执�
 Desktop 原有暂未就绪场景仍返回 `HOST_NOT_READY`。不新增调用字段，也不改变旧宿主返回值。
 Node Host 已注册的 browser/computer 平台 provider 同时供两种调用方使用，保留原后端、客户端
 与输入协调器的可用性错误；provider 已注册不代表其全部桌面操作已在无界面环境可用。
+插件调用选中 `rsb-webview` 时返回既有 `BROWSER_RUNTIME_ACTION_FAILED`，不借界面焦点归属；专用浏览器、我的浏览器及原 Agent/UI 不变。
 
 `storage` 增量复用相同组批准与 `storage_request` 工具通道，支持 providers/targets/call/share；
 不新增管子、device-link 或 relay 字段。跨插件只交付原 handoff 副本，同账号本机、同组织且身份已确认，

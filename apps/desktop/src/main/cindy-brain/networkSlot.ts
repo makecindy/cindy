@@ -25,6 +25,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Agent } from 'node:http';
+import { isPrivateOrLoopbackIpAddress, isLoopbackHost } from '@cindy/browser-control-runtime/ssrf-runtime';
 import { HostNetworkConnections } from './networkConnections.js';
 import { GHOST_SAVED_CREDENTIAL_MARKER } from '../../shared/pluginAccountReuse.js';
 
@@ -1855,6 +1856,10 @@ export class GhostNetworkSlot {
       if (!scope.some(pattern => ghostNetworkTargetMatches(pattern, target))) continue;
       // New origins can carry explicitly scoped user keys, never widen Host identity tokens.
       if (!defaultTls && secret.source !== undefined && secret.source !== 'user') continue;
+      if (target.protocol !== 'https:' && target.protocol !== 'wss:' &&
+          !isPrivateOrLoopbackIpAddress(hostname) && !isLoopbackHost(hostname)) {
+        return { error: '公网或主机名来源必须使用 HTTPS/WSS 才能注入自备密钥', usedExchange, oauthInjected, connectionInjected };
+      }
       const resolved = await this.resolveSecretValue(instanceKey, secret, hostname, authAccount);
       if ('error' in resolved) {
         return { error: resolved.error, usedExchange, oauthInjected, connectionInjected };

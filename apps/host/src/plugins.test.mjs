@@ -13,6 +13,10 @@ import { WebSocketServer } from 'ws';
 import { createPluginControlPipe } from '../../desktop/src/main/cindy-brain/nodeRuntimePipe.ts';
 import { GhostNetworkSlot } from '../../desktop/src/main/cindy-brain/networkSlot.ts';
 import { GhostOauthAccountManager } from '../../desktop/src/main/cindy-brain/ghostOauthAccounts.ts';
+import { GhostSavedCredentialManager } from '../../desktop/src/main/cindy-brain/ghostSavedCredentials.ts';
+import { GhostConnectionManager } from '../../desktop/src/main/cindy-brain/ghostConnections.ts';
+import { GHOST_SAVED_CREDENTIAL_MARKER } from '../../desktop/src/shared/pluginAccountReuse.ts';
+import { installedGhostMutationTargetToken, installedGhostStoragePart } from '../../desktop/src/shared/pluginIdentity.ts';
 import { createHostNodeRuntimeBroker } from './plugins/node-process.ts';
 import { HostTerminalService } from '../../desktop/src/main/terminal/hostTerminalService.ts';
 import { GhostFsSlot } from '../../desktop/src/main/cindy-brain/fsSlot.ts';
@@ -28,6 +32,69 @@ import { setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main
 
 import { dataOwnerStorageKey } from '../../desktop/src/main/dataOwnerPath.ts';
 import { listInstalledPlugins } from './plugins.mjs';
+
+// Load each production assembly once. Unrelated UI/database/process services
+// are boundaries; credential selection, its source guard and network are real.
+const credentialAssembly = await Promise.all(['authorization', 'runtime'].map(async name => {
+  const output = await build({ entryPoints: [fileURLToPath(new URL(`./plugins/${name}.ts`, import.meta.url))],
+    bundle: false, write: false, platform: 'node', format: 'cjs', target: 'node22', logLevel: 'silent' });
+  return new Function('require', 'module', 'exports', output.outputFiles[0].text);
+}));
+
+// Unit, #9825 / 4546519908: manager-only tests missed the standalone Host's
+// absent resolver wiring. Start the real Host factory on existing reference
+// records; assert the outgoing header, then revoke the source through its vault.
+test('Host assembly injects an existing saved credential and rejects its revoked source', async () => {
+  const records = new Map([
+    ['source:token', 'synthetic-source-only-pat'], ['target:token', GHOST_SAVED_CREDENTIAL_MARKER],
+    ['target:token-reused-credential', JSON.stringify({ kind: 'secret', instanceKey: 'source', secretKey: 'token', accountId: 'saved' })],
+  ]);
+  const secret = {
+    readGhostSecret: (id, key) => records.get(id + ':' + key) ?? null,
+    readGhostSecretStrict: (id, key) => records.get(id + ':' + key) ?? null,
+    storeGhostSecret: (id, key, value) => { records.set(id + ':' + key, value); return true; },
+    removeGhostSecret: (id, key) => records.delete(id + ':' + key), readGhostSecretTail: () => null,
+  };
+  const ghosts = ['source', 'target'].map(id => ({ enabled: true, dir: `/fixture/${id}`,
+    approval: { state: 'approved', revision: 'saved-reference-fixture' },
+    manifest: { id, name: id, version: '1.0.0', network: { hosts: ['api.example.test'],
+      secrets: [{ key: 'token', label: 'PAT', inject: { header: 'Authorization', format: 'Bearer {value}' } }] } } }));
+  const requests = [];
+  const noop = () => {};
+  const imports = new Proxy({
+    GhostSavedCredentialManager, GhostConnectionManager, GhostNetworkSlot,
+    installedGhostMutationTargetToken, installedGhostStoragePart,
+    activeOwnerScopeKey: () => 'owner:1', isAppSessionBoundaryPending: () => false,
+    createLogger: () => ({ warn: noop, info: noop }), hostRuntimeLayout: () => ({ packaged: false }),
+    createHostPluginSecrets: () => secret, createHostPluginIdentity: () => ({}),
+    createHeadlessPluginSandbox: () => ({ adapter: {}, deliver: noop }),
+    hostBlobStore: {}, hostOutbound: { outboundFetch: async (_url, init) => {
+      requests.push(init); return Response.json({ accepted: true });
+    } },
+  }, { get: (target, name) => name in target ? target[name] : /^[A-Z]/.test(String(name)) ? class {} : () => ({}) });
+  const load = compiled => {
+    const module = { exports: {} };
+    compiled(name => name === 'node:module' ? { createRequire: () => ({ resolve: () => '/fixture/sqlite' }) }
+      : name.startsWith('node:') ? createRequire(import.meta.url)(name) : imports, module, module.exports);
+    return module.exports;
+  };
+  imports.createHostPluginAuthorization = load(credentialAssembly[0]).createHostPluginAuthorization;
+  const api = await load(credentialAssembly[1]).createHostPluginRuntime({
+    profileDir: '/fixture/host', ownerId: 'owner', credentials: {}, getLoginEmail: () => null,
+    manager: { list: () => ghosts, findInstalledInstance: id => ghosts.find(ghost => ghost.manifest.id === id) },
+    publish: noop, assets: { nodeWorker: '/fixture/worker', close: noop },
+  });
+  try {
+    const result = await api.network.handleFetchRequest('target', { url: 'https://api.example.test/account' });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(requests[0].headers.Authorization, 'Bearer synthetic-source-only-pat');
+    assert.equal(JSON.stringify(result).includes('synthetic-source-only-pat'), false);
+    api.secret.removeGhostSecret('source', 'token');
+    const revoked = await api.network.handleFetchRequest('target', { url: 'https://api.example.test/account' });
+    assert.equal(revoked.ok, false);
+    assert.equal(requests.length, 1);
+  } finally { await api.network.disposeAll(); }
+});
 
 // Rebase #9496 onto #9621: execute the real gateway's registered page-tool
 // callback with process/database boundaries injected. A null task must not be

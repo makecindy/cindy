@@ -2783,6 +2783,22 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     } finally { broker.destroyAll(); }
   });
 
+  // Unit, #9825 / 4546519914: the private parser's 128KiB frame cap discarded
+  // legal 256KiB bodies. Check actual broker dispatch, including JSON escaping.
+  it.each(['plain', 'escaped'] as const)('delivers a legal maximum %s network body through the private channel', async encoding => {
+    const ghost = childSpawnGhost();
+    ghost.approval = { state: 'approved', revision: 'r1' };
+    const body = (encoding === 'escaped' ? '\u0000' : 'x').repeat(256 * 1024);
+    const request = vi.fn(async (_id: string, payload: Record<string, unknown>) => ({ ok: true, length: String(payload.body).length }));
+    const { broker, worker } = await bootWorker(ghost, undefined, true, undefined, request);
+    try {
+      worker.emitControl({ type: 'network-request', reqId: 'body', request: { op: 'fetch', url: 'https://example.com', method: 'POST', body } });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(request).toHaveBeenCalledOnce();
+      expect(worker.lastOf('node-host-result')).toMatchObject({ reqId: 'body', ok: true, result: { length: body.length } });
+    } finally { broker.destroyAll(); }
+  });
+
   // Tier 1: a worker must not borrow another Agent callId through network IPC;
   // a replacement while a request is awaiting must fence its reply.
   it.each([false, true])('binds private network requests to the worker installation: %s', async stale => {

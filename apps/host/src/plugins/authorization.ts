@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { GhostOauthAccountManager } from '../../../desktop/src/main/cindy-brain/ghostOauthAccounts.js';
 import { GhostConnectionManager } from '../../../desktop/src/main/cindy-brain/ghostConnections.js';
+import { GhostSavedCredentialManager } from '../../../desktop/src/main/cindy-brain/ghostSavedCredentials.js';
 import { GhostSetupChangeBus } from '../../../desktop/src/main/cindy-brain/ghostSetupChangeBus.js';
 import { GhostSetupCoordinator } from '../../../desktop/src/main/cindy-brain/ghostSetupCoordinator.js';
 import { GhostSetupInteractionBridge } from '../../../desktop/src/main/cindy-brain/ghostSetupInteractionBridge.js';
@@ -68,13 +69,18 @@ export function createHostPluginAuthorization(options: {
       assertCurrent(); return task();
     });
   }
+  const connectionSource = (id: string) => {
+    const ghost = current() ? getGhost(id) : null;
+    return ghost?.enabled && ghost.approval?.state === 'approved'
+      ? { instanceKey: id, name: ghost.manifest.name, manifest: ghost.manifest } : null;
+  };
+  const connectionSources = () => !current() ? [] : options.list().flatMap(installed => {
+    const instanceKey = installedGhostStoragePart(installed);
+    const source = connectionSource(instanceKey);
+    return source ? [source] : [];
+  });
   const oauth = new GhostOauthAccountManager({
-    connectionSources: () => !current() ? [] : options.list().flatMap(installed => {
-      const instanceKey = installedGhostStoragePart(installed);
-      const ghost = getGhost(instanceKey);
-      return ghost?.enabled && ghost.approval?.state === 'approved'
-        ? [{ instanceKey, name: ghost.manifest.name, manifest: ghost.manifest }] : [];
-    }),
+    connectionSources,
     vault: { read: secret.readGhostSecret, readStrict: secret.readGhostSecretStrict,
       store: secret.storeGhostSecret, remove: secret.removeGhostSecret },
     fetchImpl: (url, init) => hostOutbound.outboundFetch(url, { ...init,
@@ -165,9 +171,20 @@ export function createHostPluginAuthorization(options: {
     timeoutMessage: () => i18n.t('newChat.pluginSetup.timeout'),
     cancelledMessage: () => i18n.t('newChat.pluginSetup.cancelled'), logger: log,
   });
+  let savedCredentials: GhostSavedCredentialManager | undefined;
   return {
     oauth, connections, connectionTokens, changes, target, assess, bridge, coordinator, withMutationLock, i18n,
     changed,
+    resolveSavedCredential(id: string, key: string) {
+      savedCredentials ??= new GhostSavedCredentialManager({
+        vault: { read: secret.readGhostSecret, readStrict: secret.readGhostSecretStrict,
+          store: secret.storeGhostSecret, remove: secret.removeGhostSecret },
+        connections, connectionSources, connectionSource, captureTarget: target,
+        // Creating references remains a trusted Desktop-only action.
+        confirm: async () => false, withMutationLock,
+      });
+      return savedCredentials.resolve(id, key);
+    },
     bindConnection(args: { ghostId: string; actionId: string; onCommitted(): void }) {
       const ghost = getGhost(args.ghostId); if (!ghost) return null;
       const id = installedGhostStoragePart(ghost);

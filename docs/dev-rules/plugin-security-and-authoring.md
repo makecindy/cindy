@@ -206,6 +206,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   调用方显式为插件实例与请求时 owner 快照，不绑定任务；组批准与共享风险规则的原生逐次确认替代任务权限档，执行前及返回前复核账号和安装版本，现有写入钩子同样复核。
   每次批准查询均重新读取和验证 receipt，不使用授权缓存或同步段去重。
   依赖当前任务的工具必须显式指定目标，缺省保留 `NO_SESSION_CONTEXT`；插件管理、主人代输入、应用更新、反馈不经此入口开放。
+  浏览器插件调用没有任务归属：选中 `rsb-webview` 时返回现有结构化错误 `BROWSER_RUNTIME_ACTION_FAILED`，
+  明确说明不支持侧边栏浏览器，不回退到界面焦点、不伪造任务或新建归属；专用浏览器、我的浏览器与原 Agent/UI 行为保持。
   外部 AI 工具历史的 `scan_importable_sessions`、`get_session_import_status`、`import_sessions` 在共享 handler 中对插件返回 `UNSUPPORTED_CAPABILITY`，不进入扫描、状态或导入回调；前两者会触发既有中断导入恢复，不能作为纯读取开放。Agent 和设置页不变。
   持有任务 admission 的调用任务修改自身 `permission_mode`（含混合运行设置请求）在任何写入前返回 `UNSUPPORTED_CAPABILITY`，不改写权限快照或放宽守卫；插件、修改其他任务、无 admission 及仅改模型保持原行为。
   作者契约见 [宿主工具调用](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。
@@ -647,8 +649,10 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 - 自主 network 只允许 manifest 白名单目标：既有域名模式只代表 HTTPS:443；`network.hosts`
   可用完整 origin 精确声明自定义端口、HTTP、本机或内网地址，不能含路径、凭证、通配或查询。
   来源逐条进入原安装/更新确认与详情展示，跨协议/端口不继承旧域名批准。`preview.hosts`
-  仍只接受原域名格式，本项不扩大页面导航/CSP。自备密钥可按完整 origin 注入，既有域名凭证
-  不扩到新端口；Host 身份令牌、动态连接和 Node 代发授权仍限原 HTTPS:443。
+  仍只接受原域名格式，本项不扩大页面导航/CSP。自备密钥按完整 origin 注入，公网必须使用 HTTPS/WSS；
+  HTTP/WS 只允许字面量私网/回环 IP、localhost 及其子域。注入点按当前每一跳 URL 复用现有 net-policy
+  与 loopback 判定，不查 DNS；`http://gitlab.internal` 等主机名不会被认作私网，必须使用 HTTPS。
+  允许内网明文不等于链路加密，只适用于可信网络。既有域名凭证不扩到新端口；Host 身份令牌、动态连接和 Node 代发授权仍限原 HTTPS:443。
   `as:'stream'` 返回 Host 持有的文本流连接；`network-request` 提供 WS 精确来源的
   open/read/send/close。两者共用 `HostNetworkConnections` 的插件归属、非消费游标与有界缓冲，
   缺口明确返回 resetRequired；不自动重放。Node 私有控制帧走同一网络入口，剥除自报 callId，
@@ -693,6 +697,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   Host 派生键伪造引用。选择会替换目标当前填写的密钥，原来源仍独立管理；普通密钥的热路径
   不新增引用读取。注入和流续读复核两端安装／owner 与来源资格，禁止引用链；Node 明文绑定
   返回 `HOST_INJECTION_REQUIRED`。停止使用不删除来源，删除落盘失败不得假称成功。
+  Node Host 通过同一个管理器解析既有引用并注入，来源撤回后拒绝后续请求；不在 Node Host 建立新引用或迁移凭证。
   不新增 manifest 字段、凭证库、授权账本或跨调用批准缓存，手机端建立引用尚未开放。
 - `source: "oidc-token"` 是 Host 托管的短时 Cindy Connection JWT：只对当前企业
   Membership 生效。资格有两条默认基座：当前组织的 Plugin Market organization 安装记录仍有效、

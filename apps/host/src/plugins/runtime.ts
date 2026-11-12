@@ -169,6 +169,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     getCallSignal: (id, callId) => dispatcher.getPendingCallSignal(id, callId) ?? undefined,
     resolveWebSocketAgent: hostOutbound.createOutboundHttpAgent,
     readSecret: secret.readGhostSecret, getLoginEmail: options.getLoginEmail,
+    resolveSavedCredential: (id, key) => authorization.resolveSavedCredential(id, key),
     fetchImpl: (url, init) => hostOutbound.outboundFetch(url, { ...init, signal: AbortSignal.any([...(init?.signal ? [init.signal] : []), stopSignal.signal]) } as RequestInit),
     fetchPublicImpl: (url, init, before) => hostOutbound.guardedOutboundFetch(url, { ...init, signal: AbortSignal.any([...(init?.signal ? [init.signal] : []), stopSignal.signal]) } as RequestInit, before),
     readHandoffFile: (id, ref) => { assertCurrent(); return handoff.read(id, ref); },
@@ -319,7 +320,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   });
   const runtime = new GhostRuntime({ adapter: sandbox.adapter, log,
     onStateChanged: (id, state) => {
-      if (state !== 'running') disposeRuntimeHostServices(id);
+      if (state !== 'running' && state !== 'starting') disposeRuntimeHostServices(id);
       dispatcher?.onRuntimeState(id, state); options.publish('ghosts:runtime-changed', { states: runtime.listStates() });
     } });
   const dispatcher = new GhostPipeDispatcher({ getGhost, runtimeStateOf: id => runtime.stateOf(id),
