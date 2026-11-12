@@ -6844,7 +6844,94 @@
           "deviceLink": "Device Link"
         },
         "onlyEncrypted": "Usar apenas Agent-Net",
-        "onlyEncryptedHint": "Dispositivos antigos e compartilhamentos que usam a conexão anterior ficarão indisponíveis. Desativado por padrão."
+        "onlyEncryptedHint": "Dispositivos antigos e compartilhamentos que usam a conexão anterior ficarão indisponíveis. Desativado por padrão.",
+        "peerSwitch": {
+          "row": {
+            "toAgentNet": "Mudando para Agent-Net…",
+            "toDeviceLink": "Voltando para Device Link…"
+          },
+          "status": {
+            "toAgentNet": "Mudando para Agent-Net",
+            "toDeviceLink": "Voltando para Device Link"
+          },
+          "reconnecting": "Reconectando",
+          "toAgentNet": "Mudar para Agent-Net",
+          "toDeviceLink": "Voltar para Device Link",
+          "retry": "Tentar de novo",
+          "hint": "A conexão com este dispositivo passa a ter criptografia de ponta a ponta. Se ele não reconectar em 60 segundos, volta para Device Link.",
+          "steps": {
+            "request": {
+              "agentNet": "Pedindo para ativar o Agent-Net",
+              "deviceLink": "Pedindo para desativar o Agent-Net"
+            },
+            "reconnect": "Reconectando",
+            "confirm": {
+              "agentNet": "Aguardando reconexão pelo Agent-Net",
+              "deviceLink": "Aguardando reconexão pelo Device Link"
+            },
+            "revert": "Sem reconexão em 60 segundos, voltando para Device Link"
+          },
+          "closeHint": "Você pode fechar este cartão; o resultado será avisado.",
+          "reverted": "Não mudou: não reconectou pelo Agent-Net em 60 segundos, então voltou para Device Link.",
+          "unsupported": "Ele usa uma versão antiga do Cindy que não pode ser alterada daqui. Atualize o Cindy naquele computador e tente de novo.",
+          "done": {
+            "toAgentNet": "Mudou para Agent-Net. A conexão tem criptografia de ponta a ponta.",
+            "toDeviceLink": "Voltou para Device Link."
+          },
+          "blocked": {
+            "mobile": "Celulares não aceitam controle remoto. Ative o Agent-Net no próprio celular.",
+            "peer-control-off": "Ele não permite controle pelos dispositivos da sua conta. Mude naquele computador.",
+            "control-off": "Você desativou o controle dele neste computador. Ative para mudar daqui."
+          },
+          "toast": {
+            "toAgentNet": "“{{name}}” mudou para Agent-Net",
+            "toDeviceLink": "“{{name}}” voltou para Device Link",
+            "reverted": "“{{name}}” não mudou e voltou para Device Link",
+            "unsupported": "“{{name}}” usa uma versão antiga do Cindy e não pode ser alterado remotamente",
+            "not-ready": "“{{name}}” não consegue ativar o Agent-Net agora",
+            "busy": "“{{name}}” está processando outra mudança. Tente de novo em instantes.",
+            "failed": "Não foi possível contatar “{{name}}”. Tente de novo em instantes."
+          },
+          "checking": "Verificando se ele pode mudar…",
+          "notReady": {
+            "not-signed-in": "Ele não está conectado ao Cindy. Poderá ativar o Agent-Net após entrar.",
+            "secure-storage": "O armazenamento seguro não está disponível naquele computador, então o Agent-Net não pode ser ativado. Resolva naquele computador."
+          },
+          "batch": {
+            "toAgentNet": "Mudar todos para Agent-Net",
+            "toDeviceLink": "Voltar todos para Device Link",
+            "confirmTitleAgentNet": "Mudar estes computadores para Agent-Net?",
+            "confirmTitleDeviceLink": "Voltar estes computadores para Device Link?",
+            "ready": "Pronto",
+            "checking": "Verificando",
+            "skipReason": {
+              "unsupported": "Precisa atualizar o Cindy",
+              "not-ready": "Não pode ativar o Agent-Net agora",
+              "unreachable": "Sem resposta agora"
+            },
+            "canaryNote": "Primeiro um computador muda; os demais seguem quando ele reconectar. Qualquer computador que não reconectar em 60 segundos volta sozinho, e você pode voltar todos para Device Link a qualquer momento.",
+            "rollbackNote": "Depois de voltar, as conexões deixam de ter criptografia de ponta a ponta. O resto continua funcionando.",
+            "run": "Mudar {{count}}",
+            "cancel": "Cancelar",
+            "close": "Concluído",
+            "state": {
+              "waiting": "Aguardando",
+              "running": "Mudando",
+              "done": "Mudou",
+              "reverted": "Voltou",
+              "skipped": "Não mudou",
+              "failed": "Sem contato"
+            },
+            "stopped": "O primeiro computador não mudou, então os demais ficaram como estavam.",
+            "finished": "{{done}} mudaram",
+            "finishedWithRevert": "{{done}} mudaram, {{reverted}} voltaram"
+          },
+          "changedBy": {
+            "on": "Ativado remotamente por “{{name}}” às {{time}}",
+            "off": "Desativado remotamente por “{{name}}” às {{time}}"
+          },
+          "unreachable": "Não foi possível contatar esse computador desta vez. Abra o cartão de novo mais tarde."
+        }
       }
     },
     "tina": {

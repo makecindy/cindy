@@ -6734,7 +6734,94 @@
           "deviceLink": "Device Link"
         },
         "onlyEncrypted": "仅使用 Agent-Net",
-        "onlyEncryptedHint": "开启后，旧版设备和仍使用旧连接的分享将无法使用。默认关闭。"
+        "onlyEncryptedHint": "开启后，旧版设备和仍使用旧连接的分享将无法使用。默认关闭。",
+        "peerSwitch": {
+          "row": {
+            "toAgentNet": "正在切到 Agent-Net…",
+            "toDeviceLink": "正在切回 Device Link…"
+          },
+          "status": {
+            "toAgentNet": "正在切到 Agent-Net",
+            "toDeviceLink": "正在切回 Device Link"
+          },
+          "reconnecting": "重新连接中",
+          "toAgentNet": "切到 Agent-Net",
+          "toDeviceLink": "切回 Device Link",
+          "retry": "重试",
+          "hint": "切换后，和它之间的连接端到端加密。对方 60 秒内没连回来会自动退回 Device Link。",
+          "steps": {
+            "request": {
+              "agentNet": "请对方打开 Agent-Net",
+              "deviceLink": "请对方关闭 Agent-Net"
+            },
+            "reconnect": "对方重新连接",
+            "confirm": {
+              "agentNet": "等对方经 Agent-Net 连回来",
+              "deviceLink": "等对方经 Device Link 连回来"
+            },
+            "revert": "60 秒内没连回来，正在退回 Device Link"
+          },
+          "closeHint": "可以先关掉这张卡片，结果会另外提示。",
+          "reverted": "没切成：60 秒内没有经 Agent-Net 连回来，已自动退回 Device Link。",
+          "unsupported": "对方的 Cindy 版本较旧，还不能在这里切换。在那台电脑上更新 Cindy 后再试。",
+          "done": {
+            "toAgentNet": "已切到 Agent-Net，连接端到端加密。",
+            "toDeviceLink": "已切回 Device Link。"
+          },
+          "blocked": {
+            "mobile": "手机不接受远程控制，请在这台手机上打开 Agent-Net。",
+            "peer-control-off": "对方没有打开「允许同账号设备控制本机」，需要在那台电脑上切换。",
+            "control-off": "这台电脑关闭了对它的控制，打开后才能在这里切换。"
+          },
+          "toast": {
+            "toAgentNet": "「{{name}}」已切到 Agent-Net",
+            "toDeviceLink": "「{{name}}」已切回 Device Link",
+            "reverted": "「{{name}}」没切成，已自动退回 Device Link",
+            "unsupported": "「{{name}}」的 Cindy 版本较旧，还不能远程切换",
+            "not-ready": "「{{name}}」现在打不开 Agent-Net",
+            "busy": "「{{name}}」正在处理另一次切换，稍后再试",
+            "failed": "没能联系上「{{name}}」，稍后再试"
+          },
+          "checking": "正在确认对方能不能切换…",
+          "notReady": {
+            "not-signed-in": "对方没有登录 Cindy，登录后才能打开 Agent-Net。",
+            "secure-storage": "对方电脑的系统安全存储不可用，打不开 Agent-Net。需要在那台电脑上处理。"
+          },
+          "batch": {
+            "toAgentNet": "全部切到 Agent-Net",
+            "toDeviceLink": "全部切回 Device Link",
+            "confirmTitleAgentNet": "把这些电脑切到 Agent-Net？",
+            "confirmTitleDeviceLink": "把这些电脑切回 Device Link？",
+            "ready": "可以切换",
+            "checking": "确认中",
+            "skipReason": {
+              "unsupported": "需要更新 Cindy",
+              "not-ready": "现在打不开 Agent-Net",
+              "unreachable": "暂时问不到"
+            },
+            "canaryNote": "先切第一台，确认能连回来再同时切其余的。每台 60 秒内没连回来都会自己退回，之后也随时可以全部切回 Device Link。",
+            "rollbackNote": "切回后连接不再端到端加密，其它功能不受影响。",
+            "run": "切换 {{count}} 台",
+            "cancel": "取消",
+            "close": "完成",
+            "state": {
+              "waiting": "等待",
+              "running": "切换中",
+              "done": "已切换",
+              "reverted": "已自动退回",
+              "skipped": "未切换",
+              "failed": "没联系上"
+            },
+            "stopped": "第一台没切成，其余的没有切换。",
+            "finished": "已切换 {{done}} 台",
+            "finishedWithRevert": "已切换 {{done}} 台，{{reverted}} 台没切成已自动退回"
+          },
+          "changedBy": {
+            "on": "由「{{name}}」在 {{time}} 远程打开",
+            "off": "由「{{name}}」在 {{time}} 远程关闭"
+          },
+          "unreachable": "这次没问到那台电脑，稍后再打开卡片试试。"
+        }
       }
     },
     "tina": {

@@ -6777,7 +6777,94 @@
           "deviceLink": "Device Link"
         },
         "onlyEncrypted": "Use Only Agent-Net",
-        "onlyEncryptedHint": "Older devices and shares still using the older connection will be unavailable. Off by default."
+        "onlyEncryptedHint": "Older devices and shares still using the older connection will be unavailable. Off by default.",
+        "peerSwitch": {
+          "row": {
+            "toAgentNet": "Switching to Agent-Net…",
+            "toDeviceLink": "Switching to Device Link…"
+          },
+          "status": {
+            "toAgentNet": "Switching to Agent-Net",
+            "toDeviceLink": "Switching to Device Link"
+          },
+          "reconnecting": "Reconnecting",
+          "toAgentNet": "Switch to Agent-Net",
+          "toDeviceLink": "Switch to Device Link",
+          "retry": "Try again",
+          "hint": "The connection to it becomes end-to-end encrypted. If it does not reconnect within 60 seconds, it goes back to Device Link.",
+          "steps": {
+            "request": {
+              "agentNet": "Asking it to turn on Agent-Net",
+              "deviceLink": "Asking it to turn off Agent-Net"
+            },
+            "reconnect": "Reconnecting",
+            "confirm": {
+              "agentNet": "Waiting for it to reconnect over Agent-Net",
+              "deviceLink": "Waiting for it to reconnect over Device Link"
+            },
+            "revert": "No reconnection within 60 seconds, going back to Device Link"
+          },
+          "closeHint": "You can close this card; you will be told how it went.",
+          "reverted": "Not switched: it did not reconnect over Agent-Net within 60 seconds, so it went back to Device Link.",
+          "unsupported": "It runs an older Cindy that cannot be switched from here. Update Cindy on that computer and try again.",
+          "done": {
+            "toAgentNet": "Switched to Agent-Net. The connection is end-to-end encrypted.",
+            "toDeviceLink": "Switched back to Device Link."
+          },
+          "blocked": {
+            "mobile": "Phones cannot be controlled remotely. Turn on Agent-Net on the phone itself.",
+            "peer-control-off": "It has not allowed control from devices on your account. Switch it on that computer.",
+            "control-off": "You turned off control of it on this computer. Turn it on to switch from here."
+          },
+          "toast": {
+            "toAgentNet": "“{{name}}” switched to Agent-Net",
+            "toDeviceLink": "“{{name}}” switched back to Device Link",
+            "reverted": "“{{name}}” did not switch and went back to Device Link",
+            "unsupported": "“{{name}}” runs an older Cindy and cannot be switched remotely",
+            "not-ready": "“{{name}}” cannot turn on Agent-Net right now",
+            "busy": "“{{name}}” is handling another switch. Try again shortly.",
+            "failed": "Could not reach “{{name}}”. Try again shortly."
+          },
+          "checking": "Checking whether it can switch…",
+          "notReady": {
+            "not-signed-in": "It is not signed in to Cindy. It can turn on Agent-Net after signing in.",
+            "secure-storage": "Secure storage is unavailable on that computer, so Agent-Net cannot be turned on. Fix it on that computer."
+          },
+          "batch": {
+            "toAgentNet": "Switch all to Agent-Net",
+            "toDeviceLink": "Switch all back to Device Link",
+            "confirmTitleAgentNet": "Switch these computers to Agent-Net?",
+            "confirmTitleDeviceLink": "Switch these computers back to Device Link?",
+            "ready": "Ready",
+            "checking": "Checking",
+            "skipReason": {
+              "unsupported": "Needs a Cindy update",
+              "not-ready": "Cannot turn on Agent-Net now",
+              "unreachable": "Not reachable now"
+            },
+            "canaryNote": "The first computer switches first; the rest follow once it reconnects. Any computer that does not reconnect within 60 seconds goes back on its own, and you can switch them all back to Device Link at any time.",
+            "rollbackNote": "After switching back, connections are no longer end-to-end encrypted. Everything else keeps working.",
+            "run": "Switch {{count}}",
+            "cancel": "Cancel",
+            "close": "Done",
+            "state": {
+              "waiting": "Waiting",
+              "running": "Switching",
+              "done": "Switched",
+              "reverted": "Went back",
+              "skipped": "Not switched",
+              "failed": "Not reached"
+            },
+            "stopped": "The first computer did not switch, so the rest were left as they were.",
+            "finished": "{{done}} switched",
+            "finishedWithRevert": "{{done}} switched, {{reverted}} went back"
+          },
+          "changedBy": {
+            "on": "Turned on remotely by “{{name}}” at {{time}}",
+            "off": "Turned off remotely by “{{name}}” at {{time}}"
+          },
+          "unreachable": "Could not reach that computer this time. Open the card again later."
+        }
       }
     },
     "tina": {

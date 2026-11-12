@@ -6777,7 +6777,94 @@
           "deviceLink": "Device Link"
         },
         "onlyEncrypted": "Nur Agent-Net verwenden",
-        "onlyEncryptedHint": "Ältere Geräte und Freigaben über die bisherige Verbindung sind dann nicht verfügbar. Standardmäßig deaktiviert."
+        "onlyEncryptedHint": "Ältere Geräte und Freigaben über die bisherige Verbindung sind dann nicht verfügbar. Standardmäßig deaktiviert.",
+        "peerSwitch": {
+          "row": {
+            "toAgentNet": "Wechsel zu Agent-Net…",
+            "toDeviceLink": "Wechsel zu Device Link…"
+          },
+          "status": {
+            "toAgentNet": "Wechselt zu Agent-Net",
+            "toDeviceLink": "Wechselt zu Device Link"
+          },
+          "reconnecting": "Verbindet neu",
+          "toAgentNet": "Zu Agent-Net wechseln",
+          "toDeviceLink": "Zu Device Link zurück",
+          "retry": "Erneut versuchen",
+          "hint": "Die Verbindung zu diesem Gerät wird Ende-zu-Ende-verschlüsselt. Verbindet es sich nicht innerhalb von 60 Sekunden neu, kehrt es zu Device Link zurück.",
+          "steps": {
+            "request": {
+              "agentNet": "Bitte um Einschalten von Agent-Net",
+              "deviceLink": "Bitte um Ausschalten von Agent-Net"
+            },
+            "reconnect": "Gerät verbindet sich neu",
+            "confirm": {
+              "agentNet": "Warten auf Neuverbindung über Agent-Net",
+              "deviceLink": "Warten auf Neuverbindung über Device Link"
+            },
+            "revert": "Keine Neuverbindung in 60 Sekunden, Rückkehr zu Device Link"
+          },
+          "closeHint": "Du kannst diese Karte schließen; das Ergebnis wird dir angezeigt.",
+          "reverted": "Nicht gewechselt: Keine Neuverbindung über Agent-Net innerhalb von 60 Sekunden, daher zurück zu Device Link.",
+          "unsupported": "Auf diesem Gerät läuft eine ältere Cindy-Version, die sich hier nicht umschalten lässt. Aktualisiere Cindy dort und versuche es erneut.",
+          "done": {
+            "toAgentNet": "Zu Agent-Net gewechselt. Die Verbindung ist Ende-zu-Ende-verschlüsselt.",
+            "toDeviceLink": "Zurück zu Device Link gewechselt."
+          },
+          "blocked": {
+            "mobile": "Smartphones lassen sich nicht fernsteuern. Schalte Agent-Net direkt auf dem Smartphone ein.",
+            "peer-control-off": "Das Gerät erlaubt keine Steuerung durch Geräte deines Kontos. Wechsle direkt auf diesem Computer.",
+            "control-off": "Du hast die Steuerung dieses Geräts auf diesem Computer deaktiviert. Aktiviere sie, um hier zu wechseln."
+          },
+          "toast": {
+            "toAgentNet": "„{{name}}“ zu Agent-Net gewechselt",
+            "toDeviceLink": "„{{name}}“ zurück zu Device Link gewechselt",
+            "reverted": "„{{name}}“ nicht gewechselt, zurück zu Device Link",
+            "unsupported": "„{{name}}“ nutzt eine ältere Cindy-Version und lässt sich nicht fernumschalten",
+            "not-ready": "„{{name}}“ kann Agent-Net gerade nicht einschalten",
+            "busy": "„{{name}}“ bearbeitet gerade einen anderen Wechsel. Versuche es gleich erneut.",
+            "failed": "„{{name}}“ nicht erreichbar. Versuche es gleich erneut."
+          },
+          "checking": "Prüfe, ob ein Wechsel möglich ist…",
+          "notReady": {
+            "not-signed-in": "Das Gerät ist nicht bei Cindy angemeldet. Nach der Anmeldung kann es Agent-Net einschalten.",
+            "secure-storage": "Der sichere Speicher ist auf diesem Computer nicht verfügbar, daher lässt sich Agent-Net nicht einschalten. Behebe das dort."
+          },
+          "batch": {
+            "toAgentNet": "Alle zu Agent-Net",
+            "toDeviceLink": "Alle zurück zu Device Link",
+            "confirmTitleAgentNet": "Diese Computer zu Agent-Net wechseln?",
+            "confirmTitleDeviceLink": "Diese Computer zurück zu Device Link wechseln?",
+            "ready": "Bereit",
+            "checking": "Wird geprüft",
+            "skipReason": {
+              "unsupported": "Cindy-Update nötig",
+              "not-ready": "Agent-Net derzeit nicht möglich",
+              "unreachable": "Derzeit nicht erreichbar"
+            },
+            "canaryNote": "Zuerst wechselt ein Computer; die übrigen folgen, sobald er neu verbunden ist. Jeder Computer, der sich nicht innerhalb von 60 Sekunden neu verbindet, kehrt selbst zurück, und du kannst jederzeit alle zu Device Link zurückwechseln.",
+            "rollbackNote": "Danach sind die Verbindungen nicht mehr Ende-zu-Ende-verschlüsselt. Alles andere funktioniert weiter.",
+            "run": "{{count}} wechseln",
+            "cancel": "Abbrechen",
+            "close": "Fertig",
+            "state": {
+              "waiting": "Wartet",
+              "running": "Wechselt",
+              "done": "Gewechselt",
+              "reverted": "Zurückgekehrt",
+              "skipped": "Nicht gewechselt",
+              "failed": "Nicht erreicht"
+            },
+            "stopped": "Der erste Computer konnte nicht wechseln, die übrigen bleiben unverändert.",
+            "finished": "{{done}} gewechselt",
+            "finishedWithRevert": "{{done}} gewechselt, {{reverted}} zurückgekehrt"
+          },
+          "changedBy": {
+            "on": "Per Fernzugriff eingeschaltet von „{{name}}“ um {{time}}",
+            "off": "Per Fernzugriff ausgeschaltet von „{{name}}“ um {{time}}"
+          },
+          "unreachable": "Der Computer war diesmal nicht erreichbar. Öffne die Karte später erneut."
+        }
       }
     },
     "tina": {
