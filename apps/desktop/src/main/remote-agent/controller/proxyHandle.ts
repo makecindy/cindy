@@ -94,12 +94,12 @@ export function parseStartedInfo(value: Record<string, unknown>, kind: AgentKind
 
 /** 单消费者事件队列。 */
 class EventQueue implements AsyncIterable<AgentEvent> {
-  private readonly items: AgentEvent[] = [];
+  private readonly items: Array<AgentEvent | (() => AgentEvent[])> = [];
   private waiter: (() => void) | null = null;
   private ended = false;
   private finalEvent: (() => AgentEvent | undefined) | undefined;
 
-  push(event: AgentEvent): void {
+  push(event: AgentEvent | (() => AgentEvent[])): void {
     if (this.ended) return;
     this.items.push(event);
     this.waiter?.();
@@ -116,7 +116,9 @@ class EventQueue implements AsyncIterable<AgentEvent> {
   async *[Symbol.asyncIterator](): AsyncIterator<AgentEvent> {
     for (;;) {
       if (this.items.length) {
-        yield this.items.shift()!;
+        const item = this.items.shift()!;
+        if (typeof item === 'function') yield* item();
+        else yield item;
         continue;
       }
       if (this.ended) {
@@ -262,7 +264,7 @@ export interface RemoteAgentHandleController {
   onRequest(request: RemoteAgentReverseRequest): Promise<RemoteAgentReply> | null;
   onClosed(reason: string, message?: string, runId?: string): void;
   /** Supplier process disappeared; keep the local executor and let host recovery own the next send. */
-  onInterrupted(): void;
+  onInterrupted(onUnsettled?: () => void): void;
   hasActiveTurn(): boolean;
   /**
    * 本机自己发起的确认(不是 Agent 发来的)：走与 Agent 确认同一个确认卡通道，桌面、手机远控与 IM 都能
@@ -719,22 +721,32 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       return true;
     },
     hasActiveTurn: hasActiveProductTurn,
-    onInterrupted() {
+    onInterrupted(onUnsettled) {
       if (disposed) return;
+      const ownerOptions = sendOwnerOptions;
+      const wasActive = activeTurn;
+      const wasTerminal = terminalEventDelivered;
+      const wasAborted = abortRequested;
       const running = hasActiveProductTurn();
       activeTurn = false;
       state = { ...state, turnRunning: false, preparing: false };
       if (!running) return;
+      // Preserve close-vs-send RPC ordering, but let Session first attribute the
+      // provider events from this poll. A queued terminal may already own it.
       interruption += 1;
-      terminalEventDelivered = true;
       for (const projected of projection.flush()) queue.push(projected);
-      queue.push(markSessionSendTerminal(sendOwnerOptions, { type: 'error', source: started.agentKind, data: {
-        message: '[REMOTE_AGENT_UNAVAILABLE] The provider process stopped; reconnecting to the original conversation.',
-        reason: 'remote_agent_restarted', isTerminal: true,
-      } }));
-      // Drain the failed provider turn without ending the event iterator or disposing
-      // the executor. The coordinator owns cancellation, provenance and continuation.
-      queue.push({ type: 'done', source: started.agentKind, data: { reason: 'remote_agent_restarted' } });
+      queue.push(() => {
+        const observed = readSessionSendTerminalStatus(ownerOptions);
+        if (wasAborted || observed === 'settled'
+          || (observed === undefined && (!wasActive || wasTerminal))) return [];
+        onUnsettled?.();
+        if (sendOwnerOptions === ownerOptions) terminalEventDelivered = true;
+        // Keep the iterator/executor live: the coordinator owns continuation.
+        return [markSessionSendTerminal(ownerOptions, { type: 'error', source: started.agentKind, data: {
+          message: '[REMOTE_AGENT_UNAVAILABLE] The provider process stopped; reconnecting to the original conversation.',
+          reason: 'remote_agent_restarted', isTerminal: true,
+        } }), { type: 'done', source: started.agentKind, data: { reason: 'remote_agent_restarted' } }];
+      });
     },
     onClosed(reason, message, runId = deps.client?.runId) {
       if (disposed) return;

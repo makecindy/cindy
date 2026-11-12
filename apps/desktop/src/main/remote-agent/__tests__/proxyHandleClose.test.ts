@@ -10,6 +10,7 @@ import { ExecutorWorkspace } from '../executor/workspace';
 
 function fixture(agentKind: 'codex' | 'claude-code' = 'codex') {
   let controller!: RemoteAgentHandleController;
+  const restartRecovery = vi.fn();
   const deliver = (item: unknown) => client.onData(Buffer.from(JSON.stringify(item) + '\n'), false);
   const invoke = vi.fn(async (args: unknown[]) => {
     const request = args[0] as { op: string; callId: string };
@@ -21,7 +22,10 @@ function fixture(agentKind: 'codex' | 'claude-code' = 'codex') {
     invoke, unregister: vi.fn(),
   } as unknown as RemoteAgentPoller, {
     onEvent: event => controller.onEvent(event), onState: state => controller.onState(state),
-    onClosed: (reason, error) => controller.onClosed(reason, error?.message, client.runId),
+    onClosed: (reason, error) => {
+      if (reason === 'provider-restarting') controller.onInterrupted(restartRecovery);
+      else controller.onClosed(reason, error?.message, client.runId);
+    },
     onRequest: async () => ({ type: 'callback' }), onWs() {},
   }, randomUUID);
   const dispose = vi.fn(async () => undefined);
@@ -39,10 +43,50 @@ function fixture(agentKind: 'codex' | 'claude-code' = 'codex') {
     await vi.waitFor(() => expect(session.getStatus()).toBe('closed'));
     await session.close();
   };
-  return { controller, client, session, seen, deliver, finish, dispose, invoke };
+  return { controller, client, session, seen, deliver, finish, dispose, invoke, restartRecovery };
 }
 
 describe('remote stream close settles the product turn', () => {
+  it.each(['done', 'provider-error', 'quota-error'])('preserves a queued current %s before provider restart', async terminal => {
+    const f = fixture();
+    try {
+      await f.session.send('work');
+      const event: AgentEvent = terminal === 'done'
+        ? { type: 'done', source: 'codex', data: { status: 'completed' } }
+        : { type: 'error', source: 'codex', data: { message: 'original provider detail', reason: terminal,
+          isTerminal: true, ...(terminal === 'quota-error' ? { resetAt: 1234567890 } : {}) } };
+      // One poll payload: no iterator turn between the terminal and restart.
+      f.client.onData(Buffer.from([JSON.stringify({ t: 'event', event }),
+        JSON.stringify({ t: 'closed', reason: 'provider-restarting' }), ''].join('\n')), false);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(f.seen.filter(e => e.type === 'error')).toEqual(terminal === 'done' ? [] : [expect.objectContaining({ data: event.data })]);
+      expect(f.seen.filter(e => e.type === 'done')).toHaveLength(terminal === 'done' ? 1 : 0);
+      expect(f.session.getObservedCurrentTurnTerminal().kind).toBe(terminal === 'done' ? 'done' : 'error');
+      expect(f.dispose).not.toHaveBeenCalled();
+      expect(f.restartRecovery).not.toHaveBeenCalled();
+    } finally { await f.session.close(); }
+  });
+
+  it.each(['none', 'done', 'error'])('keeps restart failure for the new send after prior %s', async tail => {
+    const f = fixture();
+    try {
+      await f.session.send('first');
+      f.deliver({ t: 'event', event: { type: 'text', source: 'codex', data: { text: 'first progress' } } });
+      await vi.waitFor(() => expect(f.seen.some(e => e.type === 'text')).toBe(true));
+      f.deliver({ t: 'state', state: { turnRunning: false } });
+      expect(await f.session.send('second')).toMatchObject({ accepted: true });
+      if (tail !== 'none') f.deliver({ t: 'event', event: { type: tail, source: 'codex',
+        data: { reason: 'prior tail', ...(tail === 'error' ? { message: 'old failure', isTerminal: true } : {}) } } });
+      f.deliver({ t: 'closed', reason: 'provider-restarting' });
+      await vi.waitFor(() => expect(f.seen.filter(e => e.type === 'error')).toEqual([
+        expect.objectContaining({ data: expect.objectContaining({ reason: 'remote_agent_restarted', isTerminal: true }) }),
+      ]));
+      expect(f.session.getObservedCurrentTurnTerminal()).toMatchObject({ generation: 2, kind: 'error' });
+      expect(f.dispose).not.toHaveBeenCalled();
+      expect(f.restartRecovery).toHaveBeenCalledOnce();
+    } finally { await f.session.close(); }
+  });
+
   it.each(['ended', 'closed', 'detached'])('preserves %s instead of inventing an event loop crash', async reason => {
     const f = fixture();
     try {

@@ -728,11 +728,10 @@ async function prepareAndStartRemoteAgentSession(
           if (restart) {
             // A first turn may already have changed local files before its first done.
             // Resume the native conversation, never replay the original request.
-            if (controller.hasActiveTurn()) {
+            controller.onInterrupted(() => {
               hasHistory = true;
               restartResumeRequired = true;
-            }
-            controller.onInterrupted();
+            });
           }
           return;
         }
