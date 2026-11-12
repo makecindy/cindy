@@ -13247,6 +13247,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "採用原文",
     "rateLimited": "語音請求過於頻繁，請稍後再試。",
     "status": {
       "listening": "語音輸入中",
