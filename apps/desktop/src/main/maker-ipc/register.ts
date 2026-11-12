@@ -1245,7 +1245,7 @@ import {
 import { UsageLimitAutoResume } from './usageLimitAutoResume.js';
 import { createUsageLimitRecoveryStore, type SavedUsageLimitWait } from './usageLimitRecoveryStore.js';
 import { type MakerSessionCreateOpts, createSessionStderrOptions, isSessionRunningError } from './sessionRequest.js';
-import { createScheduledSessionBootstrap } from './scheduledSessionBootstrap.js';
+import { createScheduledSessionBootstrap, type ScheduledSessionBootstrap } from './scheduledSessionBootstrap.js';
 import { persistAndHydrateSessionProvider } from './sessionProviderBootstrap.js';
 import { registerMakerSessionSendHandler } from './sessionSendHandler.js';
 import {
@@ -4738,13 +4738,13 @@ let pendingAgentSwitchApplyHolder:
   ) => Promise<{ release: () => void; selection?: ScheduledModelSelection }>) | null = null;
 let cancelPendingAgentSwitchHolder: ((sessionId: string) => void) | null = null;
 let prepareScheduledModelPreferencesHolder: ((sessionId: string, override: boolean) => Promise<void>) | null = null;
-let scheduledSessionBootstrapHolder: ((options: Parameters<Maker['createSession']>[0], signal?: AbortSignal) => ReturnType<Maker['createSession']>) | null = null;
+let scheduledSessionBootstrapHolder: ScheduledSessionBootstrap | null = null;
 let recordDispatchedModelHolder: ((sessionId: string, clientId: string) => void) | null = null;
 
 /** Automations use the same startup/allocation boundary as ordinary tasks. */
-export function bootstrapScheduledSession(options: Parameters<Maker['createSession']>[0], signal?: AbortSignal): ReturnType<Maker['createSession']> {
+export function bootstrapScheduledSession(options: Parameters<Maker['createSession']>[0], signal?: AbortSignal, assertOwner?: () => void): ReturnType<Maker['createSession']> {
   if (!scheduledSessionBootstrapHolder) throw new Error('Scheduled session startup is not initialized');
-  return scheduledSessionBootstrapHolder(options, signal);
+  return scheduledSessionBootstrapHolder(options, signal, assertOwner);
 }
 
 export function recordDispatchedModel(sessionId: string, clientId: string): void {

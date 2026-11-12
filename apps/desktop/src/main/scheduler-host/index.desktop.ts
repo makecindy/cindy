@@ -38,6 +38,7 @@ import {
 } from '../maker-ipc/register.js';
 import { DrizzleScheduleStorage } from './storage.desktop';
 import { MakerScheduleRunner } from './runner.desktop';
+import { captureScheduledOwnerGuard } from '../maker-ipc/scheduledSessionBootstrap.js';
 import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
 import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
 import { ScriptScheduleRunner } from './script-runner.desktop';
@@ -76,6 +77,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
     const promptRunner = new MakerScheduleRunner({
       maker: deps.maker,
       bootstrapSession: bootstrapScheduledSession,
+      captureOwnerGuard: captureScheduledOwnerGuard,
       getDb: deps.getDb,
       notifier,
       logger: deps.logger,

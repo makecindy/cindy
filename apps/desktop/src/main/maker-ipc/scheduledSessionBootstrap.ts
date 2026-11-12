@@ -8,7 +8,7 @@
  * time is therefore stale for the whole process, and every automation then fails with
  * "Scheduled session owner changed" until the app restarts.
  *
- * Taking the snapshot here still catches a real owner switch: `assertAccess` is called
+ * The runner takes the snapshot at fire entry. It catches a real owner switch: `assertAccess` is called
  * between the awaits inside the bootstrap, so an account switch mid-creation aborts.
  * Account switches that go through authManager's owner commit also tear the scheduler
  * down and abort in-flight fires, so this guard covers one bootstrap window. Volatile
@@ -37,18 +37,25 @@ export type ScheduledSessionStarter = (
 export type ScheduledSessionBootstrap = (
   options: CreateOpts,
   signal?: AbortSignal,
+  assertOwner?: () => void,
 ) => CreateResult;
+
+export function captureScheduledOwnerGuard(): () => void {
+  const ownerScope = captureDataOwnerBroadcastScope();
+  return () => {
+    if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) {
+      throw new Error('Scheduled session owner changed');
+    }
+  };
+}
 
 export function createScheduledSessionBootstrap(
   bootstrapSession: ScheduledSessionStarter,
 ): ScheduledSessionBootstrap {
-  return async (createOpts, signal) => {
-    const ownerScope = captureDataOwnerBroadcastScope();
+  return async (createOpts, signal, assertOwner = captureScheduledOwnerGuard()) => {
     const assertCurrent = () => {
       signal?.throwIfAborted();
-      if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) {
-        throw new Error('Scheduled session owner changed');
-      }
+      assertOwner();
     };
     assertCurrent();
     const prepared: CreateOpts = { ...createOpts };

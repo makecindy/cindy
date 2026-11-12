@@ -16,7 +16,7 @@ vi.mock('../../maker-host/override-settings-file.js', () => ({
 }));
 
 import { commitActiveAppSession } from '../../appSessionState.js';
-import { createScheduledSessionBootstrap } from '../scheduledSessionBootstrap.js';
+import { captureScheduledOwnerGuard, createScheduledSessionBootstrap } from '../scheduledSessionBootstrap.js';
 
 type Starter = Parameters<typeof createScheduledSessionBootstrap>[0];
 
@@ -51,6 +51,17 @@ describe('createScheduledSessionBootstrap', () => {
     commitActiveAppSession('cloud', 'owner-b');
     await expect(bootstrap(createOpts())).resolves.toEqual({ id: 'session-1' });
     expect(starter).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects an owner change between fire entry and session startup', async () => {
+    const starter = starterOk();
+    const bootstrap = createScheduledSessionBootstrap(starter);
+    commitActiveAppSession('cloud', 'owner-a');
+    const assertOwner = captureScheduledOwnerGuard();
+    commitActiveAppSession('cloud', 'owner-b');
+
+    await expect(bootstrap(createOpts(), undefined, assertOwner)).rejects.toThrow('Scheduled session owner changed');
+    expect(starter).not.toHaveBeenCalled();
   });
 
   it('fails closed when the owner switches while the bootstrap is in flight', async () => {
