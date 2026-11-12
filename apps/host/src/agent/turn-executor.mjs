@@ -12,6 +12,7 @@ import { createWireNoteMemory } from '../../../desktop/src/main/maker-ipc/wireNo
 import { createLogger } from '../../../desktop/src/main/logger.ts';
 import { DEFAULT_CLASSICAL_REPLY_STYLE } from '@cindy/maker-shared/classical-reply';
 import { assertHostTaskExecutionSupported, prepareHostUserMessage } from './send-preflight.ts';
+import { createHostLearnInvocationCapture } from './learn-capture.ts';
 import { createHostEventPersistence } from './event-persistence.ts';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { isTerminalTurnErrorEvent } from '../../../desktop/src/main/maker-ipc/sessionTurnActivityTracker.ts';
@@ -259,6 +260,8 @@ export function createTurnExecutor(deps) {
     // Runtime creation updates an existing task; it does not create another row.
     broadcastSessionCreated: id => deps.hub.publish({ type: 'session_changed', sessionId: id }),
     prepareSendUserMessage: deps.prepareUserMessage ?? prepareHostUserMessage,
+    // The trusted /learn Skill of a persisted user turn, as on the desktop (learn-capture.ts).
+    captureCindyLearnInvocation: deps.captureCindyLearnInvocation ?? createHostLearnInvocationCapture({ getMaker: deps.getMaker }),
     createDbMessage: async (id, message, options) => {
       const history = historyFor(id);
       await history.drain();
