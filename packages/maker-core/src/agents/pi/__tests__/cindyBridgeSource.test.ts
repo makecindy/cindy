@@ -28,6 +28,13 @@ import {
   CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS,
   CINDY_PI_BASH_MAX_TIMEOUT_SECONDS,
 } from '../cindy-bridge-source.js';
+import { CINDY_TOOL_FOLD_EXTENSION_SOURCE } from '../pi-tool-fold-source.js';
+
+it('publishes the text-only turn flag the tool-fold extension reads', () => {
+  const key = "Symbol.for('cindy.pi.textOnlyTurn')";
+  expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(key);
+  expect(CINDY_TOOL_FOLD_EXTENSION_SOURCE).toContain(key);
+});
 
 it('strips Fast control paths from shell environments without mutating the runner environment', () => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;

@@ -264,6 +264,10 @@ export default function (pi) {
     return true;
   }
 
+  function textOnlyTurnActive() {
+    try { return globalThis[Symbol.for('cindy.pi.textOnlyTurn')] === true; } catch (err) { return false; }
+  }
+
   function foldable(id) {
     return foldedIds[id] !== undefined && !pinned.has(id);
   }
@@ -460,6 +464,9 @@ export default function (pi) {
   pi.on('context', function (event) {
     var messages = event && Array.isArray(event.messages) ? event.messages : null;
     if (!messages || messages.length === 0) return undefined;
+    // Host text-only turns block every tool, toolfold_read included. Leave the history
+    // unfolded for that request so the model never sees a summary it cannot expand.
+    if (textOnlyTurnActive()) return undefined;
 
     // Turn boundary: pins live until the next user message (a compaction resets the
     // count too, which is fine — compaction drops the pinned entries anyway).

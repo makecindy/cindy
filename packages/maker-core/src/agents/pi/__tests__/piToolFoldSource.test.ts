@@ -171,6 +171,21 @@ describe('cindy-tool-fold extension source', () => {
     expect(String(recovered.content![0].text)).toContain('body ok');
   });
 
+  it('leaves folded history unfolded on host text-only turns', () => {
+    const flag = Symbol.for('cindy.pi.textOnlyTurn');
+    const { context } = loadExtension();
+    const messages = pairs(40);
+    expect(projection(context, messages).some(isFolded)).toBe(true);
+    (globalThis as Record<symbol, unknown>)[flag] = true;
+    try {
+      // Every tool is blocked on these turns, so the summary must not replace the result.
+      expect(projection(context, messages).some(isFolded)).toBe(false);
+    } finally {
+      delete (globalThis as Record<symbol, unknown>)[flag];
+    }
+    expect(projection(context, messages).some(isFolded)).toBe(true);
+  });
+
   it('keeps a pinned call verbatim while its parallel siblings stay folded', async () => {
     const { context, tool } = loadExtension();
     const trip: Message = {
