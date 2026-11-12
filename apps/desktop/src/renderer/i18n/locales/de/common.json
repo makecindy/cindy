@@ -1325,6 +1325,7 @@
     "handoffWindow": "Eingabeübergabe · {{app}}"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Bei dieser SSH-Aufgabe lässt sich der Harness nicht wechseln. Wähle ein Modell im aktuellen Harness oder erstelle eine neue SSH-Aufgabe mit dem benötigten Harness.",
     "MODEL_SELECTION_UNAVAILABLE": "Das ausgewählte Modell ist bei seinem Anbieter nicht mehr verfügbar. Prüfe die Verbindung in den Einstellungen oder wähle ein anderes verfügbares Modell.",
     "HARNESS_SWITCH_NOT_READY": "Der Harness-Wechsel ist noch nicht bereit. Prüfe die Fehlerdetails und versuche es erneut, sobald der Harness bereit ist.",
@@ -20039,6 +20040,14 @@
     "lineNumbers": "Zeilennummern"
   },
   "subscriptionAccounts": {
+    "loginExpiresInDays": "Anmeldung läuft in etwa {{days}} Tagen ab",
+    "loginExpiresSoon": "Anmeldung läuft bald ab",
+    "loginMayHaveExpired": "Anmeldung möglicherweise abgelaufen",
+    "loginExpiryUnknown": "Ablauf der Anmeldung unbekannt",
+    "loginExpiryDetail": "Voraussichtlicher Ablauf: {{date}}. Dies ist eine Schätzung von Claude; die Anmeldung kann früher ablaufen.",
+    "loginAccountAria": "Erneut bei {{name}} anmelden",
+    "loginIdentityMismatchStatus": "Angemeldetes Konto stimmt nicht überein",
+    "loginIdentityMismatch": "Du hast dich mit einem anderen Konto angemeldet. Melde dich erneut mit dem Konto in dieser Zeile an.",
     "unassigned": "Konto nicht zugewiesen",
     "boundUnavailable": "Konto nicht verfügbar",
     "providerManagedAuth": "Der aktuelle Codex-Anbieter stellt keine ChatGPT-Kontoinformationen bereit. Wähle beim Hinzufügen des Anbieters „$t(subscriptionAccounts.signIn.anotherAccount)“, um einen separaten Ordner zu verwenden.",

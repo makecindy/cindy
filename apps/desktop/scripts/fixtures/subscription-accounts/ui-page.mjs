@@ -7,7 +7,10 @@ export default {
   notCovered:
     'Real browser sign-in, credentials, native CLI processes or transport; fixture supplies account metadata only',
   cases: {
-    default: { about: 'Three Claude accounts: provider card on the default row, a low weekly quota, a paused limited account' },
+    expiry: { about: 'Login expiry and the selected-account renewal action, before interaction' },
+    'expiry-narrow': { about: 'Login expiry and renewal at 320-pixel content width, before interaction' },
+    default: { about: 'Three Claude accounts: independent 18-day, 3-day and unknown login expiry, per-account renewal and aligned usage' },
+    'expiry-past': { about: 'A past CLI estimate warns but does not mark the account signed out' },
     narrow: { about: '320-pixel content width without clipped account controls' },
     'narrow-weight': { about: '320-pixel content width with task limit, weight, assignment and account menu controls' },
     codex: { about: 'Codex accounts and weight strategy' },
@@ -56,6 +59,19 @@ export default {
     );
     assert.equal(bars.length, ui.case === 'codex' || ui.case === 'narrow-weight' ? 6 : 8);
     assert.deepEqual([...new Set(bars)], [bars[0]]);
+    if (['default', 'narrow', 'expiry-past', 'expiry', 'expiry-narrow'].includes(ui.case)) {
+      const rows = page.getByTestId('subscription-account');
+      await rows.nth(0).getByText(await ui.t('subscriptionAccounts.loginExpiresInDays', { days: 18 }), { exact: true }).waitFor();
+      await rows.nth(1).getByText(await ui.t(ui.case === 'expiry-past'
+        ? 'subscriptionAccounts.loginMayHaveExpired' : 'subscriptionAccounts.loginExpiresInDays', { days: 3 }), { exact: true }).waitFor();
+      await rows.nth(2).getByText(await ui.t('subscriptionAccounts.loginExpiryUnknown'), { exact: true }).waitFor();
+      await ui.capture('expiry');
+      if (ui.case === 'expiry' || ui.case === 'expiry-narrow') return;
+      await rows.nth(1).getByRole('button', { name: await ui.t('subscriptionAccounts.loginAccountAria', { name: 'long.work.account@research.example.com' }), exact: true }).click();
+      await rows.nth(1).getByText(await ui.t('subscriptionAccounts.loginExpiresInDays', { days: 30 }), { exact: true }).waitFor();
+      await rows.nth(0).getByText(await ui.t('subscriptionAccounts.loginExpiresInDays', { days: 18 }), { exact: true }).waitFor();
+      await ui.capture('renewed');
+    }
     await page.getByRole('button', { name: await ui.t('providerGroup.member.moreAria', { name: 'alex@example.com' }) }).click();
     await page.getByRole('menuitem', { name: await ui.t('subscriptionAccounts.openDirectory') }).waitFor();
     await ui.capture('menu');

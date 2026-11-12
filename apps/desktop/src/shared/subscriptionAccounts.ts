@@ -8,6 +8,8 @@ export const DEFAULT_ACCOUNT_USAGE_SCOPE = 'default-subscription-account';
 export type SubscriptionProvider = 'anthropic' | 'openai';
 export interface SubscriptionAccountConfig {
   id: string;
+  /** Owner-local recovery guard for an explicitly requested Claude re-login. No credentials. */
+  reloginIdentity?: string;
   paused: boolean;
   /** Stored value; the enforced limit comes from effectiveConcurrencyLimit (unset = unlimited). */
   limit: number;
@@ -50,10 +52,12 @@ export interface SubscriptionAccountView extends SubscriptionAccountConfig {
   legacy?: boolean;
   identity?: string;
   plan?: string;
+  /** Advisory ISO date reported by this account's official CLI; older hosts omit it. */
+  loginExpiresAt?: string;
   directory: string;
   status: 'ready' | 'signed-out' | 'unavailable' | 'limited';
   /** Advisory diagnosis only; absent on older hosts. Never includes CLI output. */
-  authIssue?: 'codex-provider-managed-auth';
+  authIssue?: 'codex-provider-managed-auth' | 'claude-account-mismatch';
   running: number;
   usage?: SubscriptionAccountUsage;
 }
