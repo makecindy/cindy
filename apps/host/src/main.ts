@@ -683,6 +683,9 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       // A task restored at startup waits for the account's models, as on the desktop.
       ensureProviderCatalog: () => listProviders({ gateway: currentGateway(), ownerId: runtime.owner }),
       getGhostRosterPrompt: pluginGateway.rosterPrompt,
+      // Built-in and approved plugin Skills, as the desktop gives all three engines
+      // (listCindyManagedSkills). Codex's Skill projection is release table row 25.
+      getManagedSkills: pluginGateway.managedSkills,
       resolveProviderRoute: createProviderRouteResolver({
         catalog: () => listProviders({ gateway, ownerId }),
         store: await createCredentialStore({ userDataDir: dataDir }),

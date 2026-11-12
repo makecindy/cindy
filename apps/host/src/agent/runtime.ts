@@ -68,6 +68,10 @@ export interface HostAgentGraphOptions {
   ensureProviderCatalog?: () => Promise<unknown>;
   /** The plugin roster section from the Host plugin gateway. */
   getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
+  /** Built-in and approved plugin Skills (Desktop listCindyManagedSkills). All three engines get
+   * it as on the desktop; Codex only reads it to switch off its own copy when the computer that
+   * runs the task supplies managed Skills. Codex's Skill projection itself is release row 25. */
+  getManagedSkills?: AgentDeps['getManagedSkills'];
   /** Directory holding the bundled harnesses, including `ripgrep-bin`. Defaults to the Host layout. */
   harnessRoot?: string;
 }
@@ -309,6 +313,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     // Skills the user disabled in Cindy, from the profile's activation preferences.
     getDisabledSkillPaths: readDisabledSkillPaths,
     ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
+    ...(options.getManagedSkills ? { getManagedSkills: options.getManagedSkills } : {}),
     capabilityRouting: DESKTOP_CAPABILITY_ROUTING_POLICY,
     capabilityAdditions: availableModels('claude-code'),
     // The turn change record the desktop keeps for Claude and Pi (turn-change-set/store.ts).
@@ -324,6 +329,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         ...options.codexRuntime?.deps,
         ...codexModelResolvers,
         getDisabledSkillPaths: readDisabledSkillPaths,
+        ...(options.getManagedSkills ? { getManagedSkills: options.getManagedSkills } : {}),
         // A getter, as on the desktop: evaluated after the MCP bridge is prepared.
         get capabilityRouting() { return codexCapabilityRouting.capabilityRouting(); },
         resolveCapabilityRouting: codexCapabilityRouting.resolveCapabilityRouting,
@@ -356,6 +362,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         ...piModelResolvers,
         getDisabledSkillPaths: readDisabledSkillPaths,
         capabilityAdditions: availableModels('pi'),
+        ...(options.getManagedSkills ? { getManagedSkills: options.getManagedSkills } : {}),
         turnChangeCapture: { beforeKnownFileWrite: captureKnownFileBefore, noteOpaqueWrite: noteOpaqueTurnChange },
         ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
         ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),

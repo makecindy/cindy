@@ -163,13 +163,14 @@ test('every engine the Host assembles resolves per-model context the way the des
 /*
  * 测试价值（第三条）
  * - 可观察结果：Host 组装出的三个引擎读到的 getDisabledSkillPaths 返回用户在 Cindy 里禁用的 Skill，
- *   getGhostRosterPrompt 是 Host 插件网关给的花名册。
+ *   getGhostRosterPrompt 是 Host 插件网关给的花名册；getManagedSkills 是 Host 插件网关给的托管
+ *   Skill 清单（内置与插件提供，放行表第 2b 行），三个引擎拿到的是同一个函数。
  * - 规则依据：桌面三个构造点都注入 readDisabledSkillPaths（maker-host/index.ts、pi-host.ts）；
  *   Host 之前没有注入，用户在桌面禁用的 Skill 在 Host 任务里仍会被加载。
  * - 最小失败输入：任一引擎缺这个依赖。
  * - tier：unit（只构造实例，偏好写进临时 profile）。
  */
-test('every engine the Host assembles skips the Skills the user disabled and gets the plugin roster', async t => {
+test('every engine the Host assembles skips the Skills the user disabled and gets the plugin roster and managed Skills', async t => {
   const { setCindySkillEnabled } = await import('../../../desktop/src/main/skillhub/activationPreferences.ts');
   const { configureAppDataDir } = await import('../../../desktop/src/main/userDataPath.ts');
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-agent-graph-'));
@@ -184,8 +185,10 @@ test('every engine the Host assembles skips the Skills the user disabled and get
   const mcp = createHostMcpRuntime({ appServerIds: () => [], getRemoteMcpBridgeToken: () => null });
   t.after(() => mcp.close());
   const rosterPrompt = ({ workingDir }) => `roster for ${workingDir}`;
+  const managedSkills = async () => [];
   const graph = createHostAgentGraph({
     userDataDir: profile, harnessRoot: fixtureHarnessRoot(profile), gateway: null, getGhostRosterPrompt: rosterPrompt,
+    getManagedSkills: managedSkills,
     binaryPath: path.join(profile, 'claude'), codexBinaryPath: path.join(profile, 'codex'), piBinaryPath: path.join(profile, 'pi'),
     mcpRuntime: mcp, mcpProviders: [], storage: {},
     providerConfig: {
@@ -202,6 +205,8 @@ test('every engine the Host assembles skips the Skills the user disabled and get
     assert.ok(agent.deps.getDisabledSkillPaths().includes(disabled), `${kind} sees the disabled Skill`);
     // The desktop gives all three engines the plugin roster (maker-host/index.ts, pi-host.ts).
     assert.equal(agent.deps.getGhostRosterPrompt, rosterPrompt, `${kind} plugin roster`);
+    // The desktop gives all three engines listCindyManagedSkills (maker-host/index.ts, pi-host.ts).
+    assert.equal(agent.deps.getManagedSkills, managedSkills, `${kind} managed Skills`);
   }
 });
 
