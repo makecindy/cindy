@@ -6673,6 +6673,7 @@
         "confirm": "액세스 권한 철회"
       },
       "v2": {
+        "sectionTitle": "실험용 Agent 네트워크",
         "switch": {
           "title": "Agent-Net (Beta)",
           "hint": "연결 토폴로지와 최근 활동을 표시합니다. 양쪽 기기에서 Agent-Net을 켜고 Agent-Net 페어링을 완료하면 암호화된 연결을 사용합니다. 다른 기기는 기존 연결을 사용합니다. 이 컴퓨터에만 적용됩니다."

@@ -6716,6 +6716,7 @@
         "confirm": "Revoke access"
       },
       "v2": {
+        "sectionTitle": "Experimental Agent network",
         "switch": {
           "title": "Agent-Net (Beta)",
           "hint": "Shows the connection topology and recent activity. Connections are encrypted when both devices enable Agent-Net and have paired through Agent-Net. Other devices use the existing connection. Applies only to this computer."

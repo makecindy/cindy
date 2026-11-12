@@ -6673,6 +6673,7 @@
         "confirm": "撤銷訪問權限"
       },
       "v2": {
+        "sectionTitle": "實驗性 Agent 網路",
         "switch": {
           "title": "Agent-Net (Beta)",
           "hint": "顯示連線拓撲與最近活動。雙方都開啟並完成 Agent-Net 配對時使用加密連線，其他裝置沿用原有連線。只影響這臺電腦。"
