@@ -29,6 +29,8 @@ export interface ProviderModelAutoRefreshDeps {
   refreshProvider(providerId: BuiltinRefreshableProviderId): Promise<void>;
   /** Refresh the shared public Catalog independently of any provider connection state. */
   refreshCatalog?: () => Promise<void>;
+  /** Revalidate persisted gateway supplier labels without replacing model membership. */
+  refreshCustomModelSources?: () => Promise<void>;
   getScopeKey?: () => string | number;
   now(): number;
   log: Pick<Logger, 'debug' | 'warn'>;
@@ -264,6 +266,9 @@ export function createProviderModelRefreshCoordinator(
     async requestAutoRefresh(trigger, providerIds): Promise<void> {
       syncScope();
       const catalogRefresh = refreshCatalogAutomatically(trigger);
+      const customSourcesRefresh = providerIds ? undefined : deps.refreshCustomModelSources?.().catch(() => {
+        deps.log.warn('custom provider source refresh failed', { trigger });
+      });
       let providers: ProviderView[];
       try {
         providers = await deps.listProviders({ allowSideEffects: true });
@@ -272,7 +277,7 @@ export function createProviderModelRefreshCoordinator(
           trigger,
           error: err instanceof Error ? err.message : String(err),
         });
-        await catalogRefresh;
+        await Promise.all([catalogRefresh, customSourcesRefresh]);
         return;
       }
 
@@ -311,6 +316,7 @@ export function createProviderModelRefreshCoordinator(
               : String(result.reason),
         });
       });
+      await customSourcesRefresh;
     },
 
     async refreshManually(providerId): Promise<void> {

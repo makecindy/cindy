@@ -32,9 +32,12 @@ export function issueModelSourceSnapshot(
 /** A boot marker is only a display freshness check, never write authorization.
  * Old persisted labels cannot prove the credential transaction survived a crash.
  * Keep wire identity and raw persistence; re-discovery restores display provenance. */
+export function isCurrentModelSource(source: DiscoveredModelSource | undefined): boolean {
+  return !source || source.snapshotId?.startsWith(sourceEpoch + ':') === true;
+}
+
 export function projectCurrentModelSources(provider: Provider): Provider {
-  const current = (source: DiscoveredModelSource | undefined) =>
-    !source || source.snapshotId?.startsWith(`${sourceEpoch}:`) === true;
+  const current = isCurrentModelSource;
   if (Object.values(provider.models).every(models => models?.every(model =>
     current(model.discoveredSource) && current(model.userModelConfig?.discoveredSource)) !== false)) return provider;
   return { ...provider, models: Object.fromEntries(Object.entries(provider.models).map(([agent, models]) => [

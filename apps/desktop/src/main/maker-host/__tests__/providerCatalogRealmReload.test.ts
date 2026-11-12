@@ -27,6 +27,9 @@ const h = vi.hoisted(() => ({
     resolve: (result: unknown) => void;
   }>,
   customProviderRead: vi.fn(),
+  sourceFetch: vi.fn<typeof fetch>(async () => { throw new Error('offline'); }),
+  credentialRevision: 0,
+  routeMutation: false,
   casUpdate: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => true),
   migrateManaged: vi.fn<(config?: unknown) => unknown>(() => null),
   getGrokAccessToken: vi.fn(),
@@ -162,7 +165,8 @@ vi.mock('../grok-oauth-login.desktop.js', () => ({
   recoverGrokAuthAfterRejection: h.recoverGrokAuthAfterRejection,
   resetGrokOAuthMemoryCache: () => undefined,
 }));
-vi.mock('../generic-oauth.desktop.js', () => ({
+vi.mock('../generic-oauth.desktop.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../generic-oauth.desktop.js')>(),
   configureGenericOAuth: () => undefined,
   hasGenericOAuthLogin: () => false,
   readCachedGenericOAuthAccessToken: () => null,
@@ -180,10 +184,11 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
   addProviderSecretsClearedListener: (listener: () => void) => h.secretsClearedListeners.add(listener),
 }));
 vi.mock('../outbound-fetch.desktop.js', () => ({
-  outboundFetch: vi.fn(async () => { throw new Error('offline'); }),
+  outboundFetch: h.sourceFetch,
 }));
 vi.mock('../provider-route.js', () => ({
-  getProviderRouteCredentialRevision: () => 0,
+  getProviderRouteCredentialRevision: () => h.credentialRevision,
+  isProviderRouteMutationInProgress: () => h.routeMutation,
   setCustomProviderHeaderReader: () => undefined,
   setCustomProviderKeyReader: () => undefined,
   setOAuthTokenReader: () => undefined,
@@ -246,6 +251,7 @@ import {
   getDesktopProviderService,
   refreshActiveCatalogFromSource,
   refreshCustomProvidersIntoCatalog,
+  refreshCustomProviderModelSources,
   reloadActiveCatalogForEndpointChange,
   syncLocalCatalogOverridesIntoActiveCatalog,
 } from '../createDesktopProviderService.js';
@@ -273,6 +279,62 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  // Regression: startup discarded old-boot supplier labels but never rediscovered
+  // custom connections. Exercise the production refresh + catalog projection.
+  it.each(['success', 'owner', 'credential', 'mutation', 'cas'] as const)(
+    'restores supplier labels without publishing a stale %s result', async outcome => {
+      let config: CustomProviderConfig = { id: 'source-restore', name: 'Gateway', auth: { method: 'none' },
+        runtimes: { pi: { baseUrl: 'http://127.0.0.1:43210/v1', wireProtocol: 'openai-chat', models: [
+          { id: 'supplier/model', name: 'My name', discoveredSource: {
+            kind: 'magpie', providerId: 'supplier', label: 'Model · Supplier', snapshotId: 'old-boot:receipt',
+          } },
+        ] } } };
+      const owner = h.owner;
+      const previous = getActiveCatalog();
+      let respond!: (response: Response) => void;
+      h.sourceFetch.mockImplementationOnce(() => new Promise(resolve => { respond = resolve; }));
+      h.customProviderRead.mockResolvedValue([config]);
+      h.casUpdate.mockImplementation(async (_id, _expected, next) => {
+        if (outcome === 'cas') return false;
+        config = next as CustomProviderConfig;
+        h.customProviderRead.mockResolvedValue([config]);
+        return true;
+      });
+      h.casUpdate.mockClear();
+      try {
+        setCustomProviders([buildUserProvider(config)]);
+        const model = () => getActiveCatalog().providers.find(provider => provider.id === config.id)?.models.pi?.[0];
+        expect(model()?.discoveredSource).toBeUndefined();
+        const first = refreshCustomProviderModelSources();
+        expect(refreshCustomProviderModelSources()).toBe(first);
+        await vi.waitFor(() => expect(respond).toBeTypeOf('function'));
+        if (outcome === 'owner') h.owner = 'another-owner';
+        if (outcome === 'credential') h.credentialRevision++;
+        if (outcome === 'mutation') h.routeMutation = true;
+        respond(new Response(JSON.stringify({ data: [{ id: 'supplier/model', owned_by: 'supplier', magpie_label: 'Model · Supplier' }] })));
+        await first;
+        if (outcome === 'success') {
+          expect(h.casUpdate).toHaveBeenCalledOnce();
+          expect(model()).toMatchObject({ name: 'My name', discoveredSource: { providerId: 'supplier' } });
+          await refreshCustomProviderModelSources();
+          expect(h.sourceFetch).toHaveBeenCalledOnce();
+        } else {
+          expect(model()?.discoveredSource).toBeUndefined();
+          expect(h.casUpdate).toHaveBeenCalledTimes(outcome === 'cas' ? 1 : 0);
+        }
+      } finally {
+        h.owner = owner;
+        h.credentialRevision = 0;
+        h.routeMutation = false;
+        h.sourceFetch.mockReset().mockRejectedValue(new Error('offline'));
+        h.casUpdate.mockReset().mockResolvedValue(true);
+        h.customProviderRead.mockReset();
+        setCustomProviders([]);
+        setActiveCatalog(previous);
+      }
+    },
+  );
+
   // Upgrade 2026-11-11, standard: real loader/view wiring must import only native
   // Codex connections and keep their model membership under the canonical supplier.
   // Regression: the picker was covered but explicit/lazy full-catalog reads used by
