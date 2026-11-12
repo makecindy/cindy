@@ -66,6 +66,7 @@ describe('BlueBubbles local ingress', () => {
   it.each([false, true])('finalizes excluded pending receipts only after the edit commits (write fails: %s)', async failWrite => {
     const f = await fixture(null, undefined, true);
     const original = f.im.getEditableConfig();
+    const originalCursor = f.state().cursors[f.chat.guid];
     f.message('excluded-pending', { chats: [f.otherChat], dateCreated: 1001 });
     f.message('included-pending', { dateCreated: 1002 });
     f.advance(100);
@@ -74,7 +75,7 @@ describe('BlueBubbles local ingress', () => {
     const write = f.storage.write;
     let failed = false;
     vi.spyOn(f.storage, 'write').mockImplementation(state => {
-      if (failWrite && !failed && state.inbox['included-pending']?.state === 'dispatching') {
+      if (failWrite && !failed && state.cursors[f.chat.guid] > originalCursor) {
         failed = true;
         throw new Error('receipt disk failure');
       }
@@ -91,6 +92,47 @@ describe('BlueBubbles local ingress', () => {
     expect(f.received.map(event => event.messageId)).toEqual(failWrite ? ['excluded-pending', 'included-pending'] : ['included-pending']);
     await f.im.dispose(); await f.im.init();
     expect(f.received).toHaveLength(failWrite ? 2 : 1);
+  });
+
+  // Tier 1, PR #10241/r4557073972: owner reclassification must not consume a
+  // command until the candidate is committed, even with an unchanged allowlist.
+  it.each([false, true])('dispatches owner commands only after the edit settles (recovery write fails: %s)', async failWrite => {
+    const f = await fixture();
+    const original = f.im.getEditableConfig();
+    const originalCursor = f.state().cursors[f.chat.guid];
+    for (const [id, time] of [['owner-new', 1001], ['owner-stop', 1002]] as const) {
+      f.message(id, { text: id === 'owner-new' ? '/new' : '/stop', dateCreated: time });
+      f.state().inbox[id] = { receivedAt: time, state: 'pending' };
+    }
+    f.advance(100);
+    let inCandidate = false, failed = false;
+    const candidateDeliveries: IMMessageEvent[] = [];
+    f.im.onMessage(event => { if (inCandidate) candidateDeliveries.push(event); });
+    const save = f.im.saveCredentials.bind(f.im);
+    vi.spyOn(f.im, 'saveCredentials').mockImplementation(async input => {
+      inCandidate = true;
+      try { await save(input); } finally { inCandidate = false; }
+    });
+    const write = f.storage.write;
+    vi.spyOn(f.storage, 'write').mockImplementation(state => {
+      if (failWrite && !failed && state.cursors[f.chat.guid] > originalCursor) {
+        failed = true; throw new Error('receipt disk failure');
+      }
+      write(state);
+    });
+    const update = f.im.updateCredentials({ ...original, ownerAddress: 'replacement@example.test' });
+    if (failWrite) await expect(update).rejects.toThrow('BLUEBUBBLES_UPDATE_FAILED');
+    else await update;
+    await f.im.reconcile();
+    expect(candidateDeliveries).toEqual([]);
+    expect(failed).toBe(failWrite);
+    expect(f.im.getStatus().kind).toBe('connected');
+    expect(f.im.getEditableConfig().ownerAddress).toBe(failWrite ? original.ownerAddress : 'replacement@example.test');
+    expect(f.received.map(event => [event.messageId, event.speaker?.isOwner])).toEqual([
+      ['owner-new', failWrite], ['owner-stop', failWrite],
+    ]);
+    await f.im.dispose(); await f.im.init();
+    expect(f.received).toHaveLength(2);
   });
 
   // Tier 1, PR #10241/r4552494796: adding a chat must not execute its old
