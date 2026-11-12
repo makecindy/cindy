@@ -1,6 +1,7 @@
 /// <reference path="../../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/cindy-ext-apps.d.ts" />
 // @vitest-environment jsdom
 import * as React from 'react';
+import { createRoot } from 'react-dom/client';
 import { act, cleanup, render, renderHook } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createViewState, flushViewState } from '@cindy/ext-apps';
@@ -12,6 +13,68 @@ function app() {
     getHostContext: () => ({ 'cindy/view-state': { version: 1, page: 7 } }), request: vi.fn(async (_request: unknown, _schema: unknown) => ({})) };
 }
 afterEach(() => { cleanup(); vi.useRealTimers(); });
+// Review regression / React DOM unit: a suspended transition has rendered B but
+// still shows A. Sequential rerenders cannot detect writes redirected by that
+// uncommitted render. A=7, B=70; edit the visible button before resolving B.
+it.each(['resume', 'discard'] as const)('keeps committed editors isolated while a transition suspends (%s)', async outcome => {
+  vi.useFakeTimers();
+  const a = app(), b = app();
+  b.getHostContext = () => ({ 'cindy/view-state': { version: 1, page: 70 } });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let blocked = true, attempted = false;
+  let select!: React.Dispatch<React.SetStateAction<ReturnType<typeof app>>>;
+  let saved: Promise<void> | undefined;
+  function Editor({ host }: { host: ReturnType<typeof app> }) {
+    const [value, set] = useViewState(host, initial);
+    if (host === b && blocked) { attempted = true; throw gate; }
+    return React.createElement('button', { onClick: () => {
+      set(s => ({ ...s, page: s.page + 1 }));
+      saved = flushViewState(host);
+    } }, `${host === a ? 'A' : 'B'}:${value.page}`);
+  }
+  function Page() {
+    const [host, setHost] = React.useState(a);
+    select = setHost;
+    return React.createElement(React.Suspense, { fallback: 'loading' }, React.createElement(Editor, { host }));
+  }
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => { root.render(React.createElement(Page)); });
+    expect(container.textContent).toBe('A:7');
+    await act(async () => { React.startTransition(() => select(b)); });
+    expect(attempted).toBe(true);
+    expect(container.textContent).toBe('A:7');
+    await act(async () => { container.querySelector('button')!.click(); await saved; });
+    await act(() => vi.advanceTimersByTimeAsync(500));
+    expect(a.request).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ params: { state: { version: 1, page: 8 } } }), expect.anything());
+    expect(b.request).not.toHaveBeenCalled();
+    expect(container.textContent).toBe('A:8');
+    if (outcome === 'discard') await act(async () => { select(a); });
+    await act(async () => { blocked = false; release(); await gate; });
+    expect(container.textContent).toBe(outcome === 'resume' ? 'B:70' : 'A:8');
+    await act(() => vi.advanceTimersByTimeAsync(500));
+    expect(b.request).not.toHaveBeenCalled();
+    await act(async () => { container.querySelector('button')!.click(); await saved; });
+    if (outcome === 'resume') {
+      expect(container.textContent).toBe('B:71');
+      expect(b.request).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ params: { state: { version: 1, page: 71 } } }), expect.anything());
+      expect(a.request).toHaveBeenCalledTimes(1);
+    } else {
+      expect(container.textContent).toBe('A:9');
+      expect(a.request).toHaveBeenCalledTimes(2);
+      expect(b.request).not.toHaveBeenCalled();
+    }
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove();
+    createViewState(a, initial).dispose(); createViewState(b, initial).dispose();
+  }
+});
 // React unit tier: actual hook renders and StrictMode lifecycle; core RPC tests cannot
 // catch first-paint defaults, overwritten pre-connect edits or duplicate effect writes.
 it('first renders restored state under StrictMode without saving it', async () => {

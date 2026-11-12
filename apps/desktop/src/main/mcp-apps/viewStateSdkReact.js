@@ -36,19 +36,23 @@ export function createViewStateHooks({ useState, useRef, useEffect, useCallback,
   });
   function useViewState(app, initial, options) {
     const defaults = useRef(initial);
-    const slot = useRef();
-    if (!slot.current || slot.current.app !== app) {
-      const previous = slot.current;
+    const makeSlot = previous => {
       // Only edits made without an App can cross the connection boundary.
       // Connected drafts and their dirty flag remain owned by the previous App.
       const seed = previous?.app === null && previous.edited ? previous.controller.get() : undefined;
       const controller = app ? createViewState(app, defaults.current, options) : disconnected(seed ?? defaults.current);
-      slot.current = { app, controller, seed: app ? seed : undefined, mounts: 0, edited: seed !== undefined };
+      return { app, controller, seed: app ? seed : undefined, mounts: 0, edited: seed !== undefined };
+    };
+    const [slot, setSlot] = useState(() => makeSlot(undefined));
+    let current = slot;
+    if (slot.app !== app) {
+      // React owns this render's candidate: a suspended/discarded render cannot
+      // replace the slot still used by the committed editor's event handlers.
+      current = makeSlot(slot);
+      setSlot(current);
     }
-    const current = slot.current;
     const value = useStore(current.controller.subscribe, current.controller.get, current.controller.get);
     const set = useCallback(next => {
-      const current = slot.current;
       if (current.seed !== undefined) {
         const seed = current.seed; current.seed = undefined;
         current.controller.set(seed);
@@ -58,7 +62,7 @@ export function createViewStateHooks({ useState, useRef, useEffect, useCallback,
       // then notifies all JS/React subscribers before a same-event flush can run.
       current.controller.set(next);
       current.edited ||= !Object.is(before, current.controller.get());
-    }, []);
+    }, [current]);
     const visible = current.seed ?? value;
     useEffect(() => {
       // Preserve pre-connect edits without a default-state paint or a render-time write.
