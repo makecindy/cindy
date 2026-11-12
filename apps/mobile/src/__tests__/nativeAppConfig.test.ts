@@ -61,8 +61,11 @@ describe('mobile native app config', () => {
     expect(Object.keys(ios.localesMap).sort()).toEqual(['de', 'en', 'es', 'fr', 'ja', 'ko', 'pt-BR', 'pt-PT', 'tr', 'zh-Hans', 'zh-Hant']);
     expect(ios.localesMap.fr.NSCameraUsageDescription).toContain('Cindy');
     expect(ios.localesMap['pt-PT'].NSPhotoLibraryUsageDescription).not.toBe(ios.localesMap.en.NSPhotoLibraryUsageDescription);
+    expect(ios.localesMap.tr.NSLocalNetworkUsageDescription).toBe(
+      'Cindy, doğrudan bağlanabilmeleri için bu ağdaki eşleştirilmiş cihazlarınızı bulur.',
+    );
     for (const copy of Object.values(ios.localesMap) as Record<string, string>[]) {
-      for (const key of ['NSCameraUsageDescription', 'NSMicrophoneUsageDescription', 'NSPhotoLibraryUsageDescription']) {
+      for (const key of ['NSCameraUsageDescription', 'NSMicrophoneUsageDescription', 'NSPhotoLibraryUsageDescription', 'NSLocalNetworkUsageDescription']) {
         expect(copy[key]?.trim()).toBeTruthy();
       }
     }
