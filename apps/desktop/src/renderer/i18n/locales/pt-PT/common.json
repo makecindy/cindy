@@ -11527,7 +11527,7 @@
           "project": "Projeto",
           "projectCaption": "Os colegas respondem e fazem as divisões do trabalho neste projeto. O repositório é partilhado com o grupo; a pasta fica neste computador.",
           "githubRepo": "Repositório do GitHub",
-          "githubRepoHint": "Introduza owner/name. Os computadores sem pasta escolhida encontram a sua própria cópia deste projeto.",
+          "githubRepoHint": "Introduza owner/name. Os computadores sem pasta escolhida usam a sua própria cópia deste projeto ou transferem uma.",
           "githubRepoSaveFailed": "O repositório não foi guardado. Verifique e tente novamente.",
           "projectFolder": "Pasta neste computador",
           "projectDirAutoHint": "Encontrada entre os seus projetos a partir do repositório.",

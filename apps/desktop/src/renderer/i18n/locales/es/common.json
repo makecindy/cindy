@@ -11527,7 +11527,7 @@
           "project": "Proyecto",
           "projectCaption": "Los compañeros responden y hacen los repartos de trabajo en este proyecto. El repositorio se comparte con el grupo; la carpeta se queda en este ordenador.",
           "githubRepo": "Repositorio de GitHub",
-          "githubRepoHint": "Escribe owner/name. Los ordenadores sin carpeta elegida encuentran su propia copia de este proyecto.",
+          "githubRepoHint": "Escribe owner/name. Los ordenadores sin carpeta elegida usan su propia copia de este proyecto o descargan una.",
           "githubRepoSaveFailed": "No se guardó el repositorio. Revísalo e inténtalo de nuevo.",
           "projectFolder": "Carpeta en este ordenador",
           "projectDirAutoHint": "Encontrada entre tus proyectos a partir del repositorio.",

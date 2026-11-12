@@ -11527,7 +11527,7 @@
           "project": "Projet",
           "projectCaption": "Les coéquipiers répondent et effectuent les répartitions du travail dans ce projet. Le dépôt est partagé avec le groupe ; le dossier reste sur cet ordinateur.",
           "githubRepo": "Dépôt GitHub",
-          "githubRepoHint": "Saisissez owner/name. Les ordinateurs sans dossier choisi retrouvent leur propre copie de ce projet.",
+          "githubRepoHint": "Saisissez owner/name. Les ordinateurs sans dossier choisi utilisent leur propre copie de ce projet ou en téléchargent une.",
           "githubRepoSaveFailed": "Le dépôt n’a pas été enregistré. Vérifiez-le et réessayez.",
           "projectFolder": "Dossier sur cet ordinateur",
           "projectDirAutoHint": "Trouvé parmi vos projets à partir du dépôt.",

@@ -11398,7 +11398,7 @@
           "project": "專案",
           "projectCaption": "夥伴在群裡回覆和分工都在這個專案裡做。儲存庫全群共用，資料夾只存在這台電腦上。",
           "githubRepo": "GitHub 儲存庫",
-          "githubRepoHint": "填 owner/name。沒選資料夾的電腦會自動找到本機的這個專案。",
+          "githubRepoHint": "填 owner/name。沒選資料夾的電腦會用本機的這個專案，沒有就自動下載一份。",
           "githubRepoSaveFailed": "儲存庫沒有儲存，請檢查後再試。",
           "projectFolder": "這台電腦上的資料夾",
           "projectDirAutoHint": "依儲存庫自動找到的本機專案。",

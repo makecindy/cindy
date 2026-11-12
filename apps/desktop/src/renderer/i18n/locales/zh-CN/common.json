@@ -11398,7 +11398,7 @@
           "project": "项目",
           "projectCaption": "伙伴在群里回复和分工都在这个项目里做。仓库全群共享，文件夹只存在这台电脑上。",
           "githubRepo": "GitHub 仓库",
-          "githubRepoHint": "填 owner/name。没选文件夹的电脑会自动找到本机的这个项目。",
+          "githubRepoHint": "填 owner/name。没选文件夹的电脑会用本机的这个项目，没有就自动下载一份。",
           "githubRepoSaveFailed": "仓库没有保存，请检查后再试。",
           "projectFolder": "这台电脑上的文件夹",
           "projectDirAutoHint": "按仓库自动找到的本机项目。",

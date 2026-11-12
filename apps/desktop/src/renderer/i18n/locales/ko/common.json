@@ -11398,7 +11398,7 @@
           "project": "프로젝트",
           "projectCaption": "동료는 그룹에서 답장하거나 역할을 분담할 때 이 프로젝트에서 작업해요. 저장소는 그룹 전체가 공유하고, 폴더는 이 컴퓨터에만 저장돼요.",
           "githubRepo": "GitHub 저장소",
-          "githubRepoHint": "owner/name 형식으로 입력하세요. 폴더를 고르지 않은 컴퓨터는 그 컴퓨터의 이 프로젝트를 자동으로 찾아요.",
+          "githubRepoHint": "owner/name 형식으로 입력하세요. 폴더를 고르지 않은 컴퓨터는 그 컴퓨터의 이 프로젝트를 쓰고, 없으면 내려받아요.",
           "githubRepoSaveFailed": "저장소를 저장하지 못했어요. 확인 후 다시 시도하세요.",
           "projectFolder": "이 컴퓨터의 폴더",
           "projectDirAutoHint": "저장소로 자동으로 찾은 프로젝트예요.",

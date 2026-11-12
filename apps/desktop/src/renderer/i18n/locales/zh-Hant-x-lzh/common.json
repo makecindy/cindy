@@ -11387,7 +11387,7 @@
           "project": "案",
           "projectCaption": "同僚於群中應答、分工，皆於此案行之。庫為全群所共，資料夾唯存此機。",
           "githubRepo": "GitHub 庫",
-          "githubRepoHint": "書 owner/name。未擇資料夾之機，自尋本機此案。",
+          "githubRepoHint": "書 owner/name。未擇資料夾之機，用本機此案；無之，則自取一份。",
           "githubRepoSaveFailed": "庫未存，請察而再試。",
           "projectFolder": "此機之資料夾",
           "projectDirAutoHint": "依庫自尋之本機案。",
