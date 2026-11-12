@@ -1873,11 +1873,27 @@ export function NewMakerDraftRoute() {
   // 计费路径(provider-sharing §5.3)。没有明确选择时是 null:那时发现失败的来源不配当
   // 默认值,按健康口径剔掉。
   const explicitDraftProviderId = useMemo<string | null>(() => {
-    const remembered = effectiveAgentDeviceId
-      ? recallAgentDeviceSelection(effectiveAgentDeviceId, capabilityAgentKind)?.providerId ?? null
-      : null;
-    return remembered ?? deviceDraftDefaults?.providerId ?? null;
-  }, [effectiveAgentDeviceId, capabilityAgentKind, deviceDraftDefaults]);
+    // 本次运行里用户动过这份草稿(选模型 / 选来源 / 统一选择器):holder 里的那家就是他
+    // 当场选的。选择记忆要等 effect 才写进外部 Map,这里不跟着 dlSel 走的话会永远停在
+    // 播种时的旧值 —— 刚选的那家赶不上下一次渲染,校准再把它改回去(Codex review #9369)。
+    if (dlRuntimeTouchedRef.current) return dlSel?.providerId ?? null;
+    if (effectiveAgentDeviceId) {
+      // agent-device:本机为那台电脑记下的那次选择。rememberAgentDeviceSelection 只在
+      // 真实选择落进 holder 后写入,天然只含显式选择。
+      return (
+        recallAgentDeviceSelection(effectiveAgentDeviceId, capabilityAgentKind)?.providerId ?? null
+      );
+    }
+    // 被控端快照里的 providerId 不一定来自用户:自动默认也会把建议的那家落进快照
+    // (applySuggestedDefaultTuple,不经用户手)。快照明确说「用户没选过模型」
+    // (modelChosenByUser === false)时那家就是自动默认,不当显式选择钉死 —— 它断连 /
+    // 清单失败时让位给目录里健康的那家,别把首条消息钉在发不出去的来源上;旧被控端
+    // 没有这个标记(undefined),与 shouldReseedDeviceLinkDraftDefaults 同一口径保守保留
+    // (Codex review #9369)。
+    return deviceDraftDefaults?.modelChosenByUser === false
+      ? null
+      : deviceDraftDefaults?.providerId ?? null;
+  }, [dlSel, effectiveAgentDeviceId, capabilityAgentKind, deviceDraftDefaults]);
 
   // 选中模型 + effort:device-link 用镜像 holder(deviceLinkInitial,被控端草稿值已按 capabilities
   // 校准);本地草稿用 chatPrefs(逐字节不变)。device-link 在 holder seed 完成前(等隧道 / 能力)
@@ -1892,7 +1908,7 @@ export function NewMakerDraftRoute() {
     // 来源 —— 那个型号在目标目录里路由不出去时,选择器里一行都命中不了、胶囊整个空着
     // (Codex review #9369)。目录还在读 / 老被控端只有拍平 capabilities 时,不知道目标开放
     // 了哪些来源,先按播种值显示,不闪本机模型。
-    const seedRoutable = chatEligibleSourcesForModel(
+    const seedSources = chatEligibleSourcesForModel(
       // 清单发现失败的来源(unauthorized / regionBlocked 这类确定性失败)手里握的是**上次
       // 成功**的陈旧清单:把它算进「播种型号还能路由」,种子就会盖过下面那份健康校准,
       // 首条消息对着一个发不出去的来源建任务(Codex review #9369)。与本机自动路径
@@ -1905,7 +1921,22 @@ export function NewMakerDraftRoute() {
       filterHealthyDraftProviders(targetSelectableProviders, explicitDraftProviderId),
       deviceLinkInitial.model,
       capabilityAgentKind,
-    ).length > 0;
+    );
+    // 用户**明确选过**的那家只是暂时断连 / 被暂停时,上面的可路由检查会把它整个剔掉,
+    // 种子随之被丢、校准成另一家的型号,holder 同步再把他选的那一对永久改写 —— 断线 /
+    // 暂停是连接状态,不是「这家不提供这个型号」。目录只要不能证明那家不提供播种型号
+    // (条目还在且未停用,与 resolveDraftProviderForModel 同一口径),就保留这一对:
+    // Send 按选定来源报不可用,而不是静默换账号 / 计费路径(provider-sharing §5.3,
+    // Codex review #9369)。
+    const seedRoutable =
+      seedSources.length > 0 ||
+      (explicitDraftProviderId != null &&
+        resolveDraftProviderForModel(
+          explicitDraftProviderId,
+          deviceLinkInitial.model,
+          targetSelectableProviders,
+          capabilityAgentKind,
+        ) != null);
     if (deviceProvidersLoading || deviceProvidersUnsupported || seedRoutable) {
       return { model: deviceLinkInitial.model, effort: deviceLinkInitial.effort };
     }
@@ -2368,8 +2399,13 @@ export function NewMakerDraftRoute() {
     // 播种来源只有在**最终型号**上确实可路由时才保留:播种型号不可路由、被换成目录
     // 里的别的型号之后,那个来源可能根本不提供新型号 —— 显式带上它,发送侧会对着一个
     // 路由不出该型号的来源建任务,首条消息必然失败(Codex review #9369)。
+    // 这里信的是**用户明确选过**的那一家(explicitDraftProviderId:控制端当场的选择,
+    // 或被控端快照里标记为用户选过的那家),不是 holder 里碰巧播进去的那家 —— 自动
+    // 默认(applySuggestedDefaultTuple)也会把 providerId 落进快照,把它当显式选择保留,
+    // 它断连 / 清单失败时首条消息就被钉在发不出去的来源上,而不是让位给目录里健康的
+    // 那家(Codex review #9369)。
     const seedProviderId = resolveDraftProviderForModel(
-      deviceLinkInitial?.providerId,
+      explicitDraftProviderId,
       draftInitialModel,
       targetSelectableProviders,
       capabilityAgentKind,
@@ -2384,7 +2420,7 @@ export function NewMakerDraftRoute() {
     usesDeviceCatalog,
     localProviderIdForDraft,
     targetSelectableProviders,
-    deviceLinkInitial?.providerId,
+    explicitDraftProviderId,
     draftInitialProviderId,
     draftInitialModel,
     capabilityAgentKind,

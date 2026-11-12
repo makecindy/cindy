@@ -642,6 +642,7 @@ describe('new task model falls back when the seeded model is empty', () => {
         capabilityAgentKind: 'pi',
         chatEligibleSourcesForModel,
         filterHealthyDraftProviders,
+        resolveDraftProviderForModel,
         explicitDraftProviderId: options.pinnedProviderId ?? null,
         deviceProvidersLoading: false,
         deviceProvidersUnsupported: false,
@@ -751,6 +752,21 @@ describe('new task model falls back when the seeded model is empty', () => {
     })).toEqual({ model: 'seeded-model', effort: 'high' });
   });
 
+  // Codex review #9369:同一条修法的另一半 —— 显式选的那家**暂时断连 / 被暂停**时,
+  // 可路由检查(只看已连接来源)会把它剔掉;播种型号如果只有它提供,种子就被整个丢掉、
+  // 校准成另一家的型号,holder 同步再把他选的那一对永久改写。断线是连接状态,不是
+  // 「这家不提供这个型号」:保留种子,Send 按选定来源报不可用,而不是静默换账号
+  // (provider-sharing §5.3)。
+  it('keeps the seed when the explicitly chosen source is offline', () => {
+    const offline = { ...providerWithEfforts('chosen', ['seeded-model'], ['high']), connected: false };
+    const healthy = providerWithEfforts('healthy-source', ['shared-model'], ['medium']);
+    expect(initialModel({
+      deviceLinkInitial: { model: 'seeded-model', effort: 'high' },
+      providers: [offline, healthy],
+      pinnedProviderId: 'chosen',
+    })).toEqual({ model: 'seeded-model', effort: 'high' });
+  });
+
   // Codex review #9369: the local effort pref is not validated against the target model —
   // a local high would sit in the pill next to a medium-only target model until send.
   it('re-resolves the local effort pref against the target model', () => {
@@ -797,6 +813,7 @@ describe('the source follows the final model', () => {
       usesDeviceCatalog: true,
       localProviderIdForDraft: null,
       deviceLinkInitial: { providerId: 'stale' },
+      explicitDraftProviderId: 'stale',
       draftInitialModel: 'shared-model',
       agentCatalogProviders: providers,
       targetSelectableProviders: selectableProviders(providers),
@@ -815,6 +832,7 @@ describe('the source follows the final model', () => {
       usesDeviceCatalog: true,
       localProviderIdForDraft: null,
       deviceLinkInitial: { providerId: 'chosen' },
+      explicitDraftProviderId: 'chosen',
       draftInitialModel: 'shared-model',
       agentCatalogProviders: [],
       targetSelectableProviders: selectableProviders([]),
@@ -831,6 +849,7 @@ describe('the source follows the final model', () => {
       usesDeviceCatalog: true,
       localProviderIdForDraft: null,
       deviceLinkInitial: { providerId: 'chosen' },
+      explicitDraftProviderId: 'chosen',
       draftInitialModel: 'shared-model',
       agentCatalogProviders: [offline, sourceProvider('other', 'shared-model')],
       targetSelectableProviders: selectableProviders([offline, sourceProvider('other', 'shared-model')]),
@@ -840,6 +859,28 @@ describe('the source follows the final model', () => {
       effectiveSourceIdForModel,
     });
     expect(pickFromOfflineCatalog()).toBe('chosen');
+  });
+
+  // Codex review #9369:自动默认也会把 providerId 落进被控端快照(applySuggestedDefaultTuple,
+  // modelChosenByUser === false)—— 那家不是用户选的,不能按「显式选择保留」的口径把它
+  // 钉在提交身份上:它断连 / 清单失败时让位给目录里健康的那家,首条消息才不会发不出去。
+  it('yields an automatically seeded source to a healthy source', () => {
+    const auto = { ...sourceProvider('auto', 'shared-model'), connected: false };
+    const healthy = sourceProvider('good', 'shared-model');
+    const pick = callback<() => string | null>('chatInitialProviderId', {
+      usesDeviceCatalog: true,
+      localProviderIdForDraft: null,
+      deviceLinkInitial: { providerId: 'auto' },
+      explicitDraftProviderId: null,
+      draftInitialModel: 'shared-model',
+      agentCatalogProviders: [auto, healthy],
+      targetSelectableProviders: selectableProviders([auto, healthy]),
+      capabilityAgentKind: 'pi',
+      draftInitialProviderId: 'good',
+      resolveDraftProviderForModel,
+      effectiveSourceIdForModel,
+    });
+    expect(pick()).toBe('good');
   });
 
   it('derives Fast from the final model and source', () => {
@@ -867,6 +908,67 @@ describe('the source follows the final model', () => {
     expect(resolveFastSupported).toHaveBeenCalledWith(
       expect.objectContaining({ providerId: 'good', modelId: 'shared-model' }),
     );
+  });
+});
+
+/**
+ * 「用户明确选过哪一家来源」的判定本身(Codex review #9369)。
+ *
+ * 快照里的 providerId 不一定来自用户:自动默认(applySuggestedDefaultTuple)也会把建议的
+ * 那家写进去;反过来,控制端当场的实时选择要立刻生效 —— 选择记忆要等 effect 才落进
+ * 外部 Map,判定不跟着 holder 走的话,刚选的那家赶不上下一次渲染。
+ */
+describe('the explicit source is the user\'s own choice', () => {
+  function explicitPin(bindings: {
+    touched?: boolean;
+    dlSel?: { providerId: string | null } | null;
+    agentDevice?: string | null;
+    recallProviderId?: string | null;
+    snapshot?: RemoteDraftDefaults | null;
+  }): string | null {
+    return callback<() => string | null>('explicitDraftProviderId', {
+      dlRuntimeTouchedRef: { current: bindings.touched ?? false },
+      dlSel: bindings.dlSel ?? null,
+      effectiveAgentDeviceId: bindings.agentDevice ?? null,
+      capabilityAgentKind: 'pi',
+      recallAgentDeviceSelection: () =>
+        bindings.recallProviderId
+          ? { model: 'shared-model', providerId: bindings.recallProviderId }
+          : null,
+      deviceDraftDefaults: bindings.snapshot ?? null,
+    })();
+  }
+
+  it('keeps the live selection the user just made', () => {
+    // 选择记忆要等 effect 才写进外部 Map:判定只读记忆的话,会停在播种时的旧值,
+    // 刚选的那家又被健康校准改回去。
+    expect(explicitPin({
+      touched: true,
+      dlSel: { providerId: 'just-chosen' },
+      agentDevice: 'dev-1',
+      recallProviderId: 'stale-recall',
+      snapshot: { model: 'shared-model', providerId: 'snapshot', modelChosenByUser: true },
+    })).toBe('just-chosen');
+  });
+
+  it('does not pin an automatically seeded provider', () => {
+    expect(explicitPin({
+      snapshot: { model: 'shared-model', providerId: 'auto', modelChosenByUser: false },
+    })).toBeNull();
+  });
+
+  it('pins the provider the remote says the user chose', () => {
+    expect(explicitPin({
+      snapshot: { model: 'shared-model', providerId: 'chosen', modelChosenByUser: true },
+    })).toBe('chosen');
+  });
+
+  it('keeps an old host\'s snapshot provider', () => {
+    // 旧被控端没有 modelChosenByUser 标记(undefined):无法证明那家不是用户选的,
+    // 与 shouldReseedDeviceLinkDraftDefaults 同一口径保守保留。
+    expect(explicitPin({
+      snapshot: { model: 'shared-model', providerId: 'legacy' },
+    })).toBe('legacy');
   });
 });
 
