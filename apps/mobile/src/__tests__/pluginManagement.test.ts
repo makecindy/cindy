@@ -1,14 +1,30 @@
+// @vitest-environment jsdom
 import { sharedTaskHostPeer, providerShareHostPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, createElement } from 'react';
+import { createRoot } from 'react-dom/client';
 import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { createPluginManagementClient, type PluginManagementInvoke } from '@/plugins/pluginManagementClient';
 import { createPluginPromptReads } from '@/plugins/pluginPromptReads';
+import { PluginPromptReadsProvider, usePluginPromptReads } from '@/plugins/PluginPromptReadsContext';
 import { createPluginManagementController } from '@/plugins/pluginManagementController';
 import { isBoundedPluginResponse, parsePluginManagementDetail, parsePluginManagementReceipt,
   parsePluginManagementSnapshot, marketItemMatchesPlugin, pluginNeedsUiApproval, type ManagedPlugin,
   parsePluginUiConsent, type ManagedMarketDetail, type PluginManagementReceipt, type PluginManagementSnapshot } from '@/plugins/pluginManagementTypes';
 
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'operation-1' }));
+const appState = vi.hoisted(() => ({ currentState: 'active', listeners: new Set<(state: string) => void>() }));
+const promptLink = vi.hoisted(() => ({ invoke: vi.fn(), connectionEpoch: 0, presenceVersion: 0,
+  status: 'online', onRemoteResourceChanged: vi.fn(() => () => undefined), getSubscriptionIdentity: vi.fn(() => 0) }));
+vi.mock('react-native', () => ({ AppState: {
+  get currentState() { return appState.currentState; },
+  addEventListener: (_event: string, listener: (state: string) => void) => {
+    appState.listeners.add(listener); return { remove: () => appState.listeners.delete(listener) };
+  },
+} }));
+vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1 }) }));
+vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => promptLink }));
+vi.mock('@/device-link/revokedDevicesStore', () => ({ useRevokedDevices: () => null }));
 
 /* 测试价值
  * 生产入口：mobile management client/controller；观察 Host 请求、确认、未知结果与当前设备事实。
@@ -357,6 +373,39 @@ it.each([null, 'legacy', [], { ui: { resources: [{ uri: 'ui://run', file: '../pa
 // Production readers/controllers, real protocol envelopes: switches previously downloaded
 // the complete plugin market for every chat hint. Display reuse must never authorize a write.
 describe('shared chat plugin hints', () => {
+  // Unit: the provider's AppState listener controls remote hint reads. Reader-only
+  // tests miss this branch: background → inactive must reuse, active must refresh.
+  it('only invalidates the provider cache when AppState returns to active', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    const h = host(); promptLink.invoke.mockImplementation(h.invoke);
+    appState.currentState = 'active';
+    let reads: ReturnType<typeof createPluginPromptReads> | null = null;
+    function Probe() { reads = usePluginPromptReads(); return null; }
+    const root = createRoot(document.createElement('div'));
+    try {
+      await act(async () => { root.render(createElement(PluginPromptReadsProvider, { children: createElement(Probe) })); });
+      await reads!.read('host-1');
+      expect(h.requests).toHaveLength(1);
+      for (const next of ['background', 'inactive', 'active']) {
+        act(() => {
+          appState.currentState = next;
+          appState.listeners.forEach(listener => listener(next));
+        });
+        // A lifecycle event invalidates lazily; no read is sent without a consumer.
+        expect(h.requests).toHaveLength(1);
+        const read = reads!.read('host-1');
+        await vi.advanceTimersByTimeAsync(250);
+        await read;
+        expect(h.requests).toHaveLength(next === 'active' ? 2 : 1);
+      }
+    } finally {
+      act(() => root.unmount());
+      vi.unstubAllGlobals();
+      appState.currentState = 'active';
+      promptLink.invoke.mockReset();
+    }
+  });
   it('uses the lightweight consent action when the Host advertises it', async () => {
     const requests: Envelope[] = [];
     const invoke = vi.fn(async (_id: string, channel: string, args?: unknown[]) => {
