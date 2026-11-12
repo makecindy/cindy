@@ -7,8 +7,8 @@
  *   （behaviorFlags、taskShellEnv、换模型评估、子代理模型）按输入矩阵比较输出。
  * - 规则依据：Host 任务必须带与桌面相同的 Cindy 系统提示与运行开关
  *   （docs/host/personal-migration-release-table.md 第 23 行）；提示词只改装配方，不改文字。
- * - 允许不同的字段写死在 ALLOWED_DIFFERENCES：只有 endpoint（桌面指向本机兼容代理，
- *   Host 直连账号网关，见放行表第 24 行）。多出任何一项差异，或任一方多出／缺少字段，即失败。
+ * - 允许不同的字段写死在 ALLOWED_DIFFERENCES，现在为空：两边的 Claude 与 Pi 都指向本机兼容
+ *   代理（放行表第 24 行）。出现任何一项差异，或任一方多出／缺少字段，即失败。
  * - tier：unit（只构造实例、读配置，不起子进程、不调模型）。
  */
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -42,8 +42,10 @@ vi.mock('../../agent-binaries/index.js', () => ({
   getCachedBinaryStatus: () => ({ binaryReady: false }),
 }));
 
-/** The only field allowed to differ, with the reason recorded in the release table. */
-const ALLOWED_DIFFERENCES = new Set(['endpoint']);
+/** Fields allowed to differ, each with its reason in the release table. None since row 24. */
+const ALLOWED_DIFFERENCES = new Set<string>();
+/** Both sides' loopback proxy endpoint in this test (desktop mock above, Host proxy view below). */
+const PROXY_ENDPOINT = 'http://127.0.0.1:9';
 
 type Config = AgentRuntimeConfig & Record<PropertyKey, unknown>;
 
@@ -138,6 +140,9 @@ describe('Host runtime config parity with the desktop assembly', () => {
       binaryPath: path.join(root, 'claude'),
       codexBinaryPath: path.join(root, 'codex'),
       piBinaryPath: path.join(root, 'pi'),
+      // The Host's loopback proxy (claude-proxy-runtime.ts), reduced to what the graph reads.
+      claudeProxy: { endpoint: () => PROXY_ENDPOINT, isReady: () => true, inboundSecret: () => 'fixture-secret',
+        registerPiProxySession: () => () => {}, closeSession() {} },
       mcpRuntime: { codexDeps: {}, piDeps: {}, getActiveCodexBridgeServerNames: () => [] } as never,
       mcpProviders: [],
       storage: {} as never,
@@ -197,11 +202,11 @@ describe('Host runtime config parity with the desktop assembly', () => {
     compare('pi', desktop.pi, host.pi);
   });
 
-  it('the endpoint difference is exactly the gateway-versus-compat-proxy one', () => {
-    expect(desktop.claude.endpoint).toBe('http://127.0.0.1:9');
-    expect(host.claude.endpoint).toBe('https://gateway.test/v1');
-    expect(desktop.pi.endpoint).toBe('http://127.0.0.1:9');
-    expect(host.pi.endpoint).toBe('https://gateway.test/v1');
+  it('Claude and Pi reach the loopback proxy on both sides, never the gateway directly', () => {
+    for (const config of [desktop.claude, host.claude, desktop.pi, host.pi]) {
+      expect(config.endpoint).toBe(PROXY_ENDPOINT);
+      expect(new URL(String(config.endpoint)).hostname).toBe('127.0.0.1');
+    }
     expect('endpoint' in desktop.codex).toBe(false);
     expect('endpoint' in host.codex).toBe(false);
   });

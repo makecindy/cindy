@@ -326,3 +326,38 @@ test('without the bundled ripgrep the Host fails the way the desktop does', asyn
   const graph = createHostAgentGraph({ ...base, codexBinaryPath: path.join(profile, 'codex') });
   assert.throws(() => graph.codex.deps.runtimeConfig.pathPrepends, { message });
 });
+
+/*
+ * 测试价值（放行表第 24 行，24a）
+ * - 可观察结果：给了回环代理时，Host 组装的 Claude 与 Pi 的 runtimeConfig.endpoint 是代理的
+ *   端点（随代理就绪状态现取），Pi 拿到登记会话 token 的函数，与桌面 pi-host.ts 相同。
+ * - 最小失败输入：仍把网关地址交给引擎；Pi 不登记 token（经代理的请求全部 401）。
+ * - tier：unit（只构造实例）。
+ */
+test('with the loopback proxy, Claude and Pi use its endpoint and Pi registers its session tokens', async t => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-agent-graph-proxy-'));
+  t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
+  configureHostOwner({ userDataDir: profile, ownerId: 'agent-graph-proxy' });
+  const mcp = createHostMcpRuntime({ appServerIds: () => [], getRemoteMcpBridgeToken: () => null });
+  t.after(() => mcp.close());
+  let endpoint = 'https://gateway.test/v1';
+  const registerPiProxySession = () => () => {};
+  const claudeProxy = { endpoint: () => endpoint, isReady: () => true, inboundSecret: () => 'secret', registerPiProxySession, closeSession() {} };
+  const graph = createHostAgentGraph({
+    userDataDir: profile, harnessRoot: fixtureHarnessRoot(profile), claudeProxy,
+    gateway: { endpoint: 'https://gateway.test/v1', credential: 'fixture-key' },
+    binaryPath: path.join(profile, 'claude'), piBinaryPath: path.join(profile, 'pi'),
+    mcpRuntime: mcp, mcpProviders: [], storage: {},
+    providerConfig: {
+      grok: { hasGrokOAuthLogin: () => false, grokAccountIdentity: () => null },
+      list: async () => [], readKey: () => null,
+      oauth: { readCachedGenericOAuthAccessToken: () => null },
+      piNativeProviders: () => ({ providers: [], env: {} }),
+      codexAccounts: { setCodexAccountRetirement: () => {}, isCodexAccountProvider: () => false, codexAccountState: () => ({ authenticated: false }) },
+    },
+  });
+  endpoint = 'http://127.0.0.1:43210';
+  assert.equal(graph.agent.deps.runtimeConfig.endpoint, endpoint);
+  assert.equal(graph.pi.deps.runtimeConfig.endpoint, endpoint);
+  assert.equal(graph.pi.deps.registerPiProxySession, registerPiProxySession);
+});

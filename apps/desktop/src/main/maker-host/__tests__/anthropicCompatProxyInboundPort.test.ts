@@ -32,7 +32,7 @@ const ports = (): AnthropicCompatProxyHostPorts => ({
   getPiNativeSubscriptionHandler: () => async () => {},
   getResponsesBridgeHandler: () => null,
   subscriptionRequestAllowsFast: () => false,
-  withSubscriptionFastRequestPolicy: decision => decision,
+  withSubscriptionFastRequestPolicy: (decision: unknown) => decision,
   resolveDesktopOutboundProxy: async () => null,
   claudeUpstreamEndpoint: () => 'http://127.0.0.1:2',
   readSilentEncryptedRetrySettings: () => ({ enabled: false }),
