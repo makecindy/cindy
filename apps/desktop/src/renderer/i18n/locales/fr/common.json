@@ -8278,6 +8278,7 @@
         "mainViewDetail": "Son ouverture affiche la vue principale dans le bac à sable du plugin et ne donne accès ni aux fichiers, ni au réseau, ni aux identifiants.",
         "taskView": "Page de tâche « {{title}} » · s'ouvre dans la barre latérale de la tâche",
         "taskViewDetail": "L'onglet suit la tâche et s'ouvre dans le bac à sable du plugin ; il ne donne accès ni aux fichiers, ni au réseau, ni aux identifiants.",
+        "taskViewStatusDetail": "Affiche l’état en bas de la tâche et reçoit son moteur, son identifiant de connexion et son identifiant de modèle. Un clic ouvre son onglet isolé. Aucun contenu de message, point de terminaison ni identifiant secret n’est partagé.",
         "code": "Code exécutable",
         "codeDetail": "S'exécute dans un bac à sable isolé, sans accès à vos fichiers ni au réseau.",
         "resident": "Toujours actif (démarre à l'activation et conserve un processus en arrière-plan même au repos)",

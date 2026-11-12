@@ -8278,6 +8278,7 @@
         "mainViewDetail": "Al abrirlo, se muestra la vista principal en la zona de pruebas del complemento y no otorga acceso a archivos, redes o credenciales.",
         "taskView": "Página de tarea “{{title}}” · se abre en la barra lateral de la tarea",
         "taskViewDetail": "La pestaña sigue a la tarea y se abre en el entorno aislado del complemento; no otorga acceso a archivos, redes ni credenciales.",
+        "taskViewStatusDetail": "Muestra el estado al pie de la tarea y recibe el motor, el ID de conexión y el ID de modelo actuales. Al hacer clic abre su pestaña en el entorno aislado. No se comparten mensajes, endpoints ni credenciales.",
         "code": "código ejecutable",
         "codeDetail": "Se ejecuta en una zona de pruebas aislada sin acceso a sus archivos o red.",
         "resident": "Siempre activo (se inicia cuando está habilitado, mantiene un proceso en segundo plano incluso cuando está inactivo)",

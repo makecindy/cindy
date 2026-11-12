@@ -197,6 +197,8 @@ export interface GhostMainViewDecl {
 
 /** 跟对话的任务页:页签存在各任务的右侧栏里,随任务切换;页面经查询参数 `session` 得知所在任务。 */
 export interface GhostTaskViewDecl {
+  /** Native task status launcher for this page (Desktop). */
+  statusBar?: true;
   /** 页签标题；缺省回退插件 name。 */
   title?: string;
   /** 任务页入口（安装目录内安全相对路径）。 */
@@ -1412,14 +1414,14 @@ function dropEmptyLegacyCapabilitySlots(
 /** Historical persisted data only; new packages must use validateGhostManifest. */
 export function validateStoredGhostManifest(value: unknown):
   { ok: true; manifest: GhostManifest } | { ok: false; reason: string } {
-  return validateWithStoredMcpApps(value, raw => validateGhostManifestInput(raw, true));
+  return validateWithStoredMcpApps(value, raw => validateGhostManifestInput(raw, true, true));
 }
 
 export function validateGhostManifest(value: unknown): ManifestValidation {
   return validateGhostManifestInput(value, false);
 }
 
-function validateGhostManifestInput(value: unknown, preserveHistoricalParameterSize: boolean): ManifestValidation {
+function validateGhostManifestInput(value: unknown, preserveHistoricalParameterSize: boolean, preserveHistoricalStatusBar = false): ManifestValidation {
   const preparation = prepareGhostManifestForValidation(value);
   if (!preparation.ok) return preparation;
   const prepared = preparation.prepared;
@@ -1781,9 +1783,14 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
     if (!isSafeGhostRelativePath(raw.taskView.html)) {
       return { ok: false, reason: 'taskView.html 必填，且必须是安装目录内的安全相对路径' };
     }
+    // 新包严格校验；历史快照保留原来合法的未知字段，不把非 true 值授权为入口。
+    if (!preserveHistoricalStatusBar && raw.taskView.statusBar !== undefined && raw.taskView.statusBar !== true) {
+      return { ok: false, reason: 'taskView.statusBar 只接受字面量 true' };
+    }
     taskView = {
-      ...unknownDeclarationFields(raw.taskView, ['html', 'title']),
+      ...unknownDeclarationFields(raw.taskView, preserveHistoricalStatusBar ? ['html', 'title'] : ['html', 'title', 'statusBar']),
       ...(raw.taskView.title !== undefined ? { title: raw.taskView.title } : {}),
+      ...(raw.taskView.statusBar === true ? { statusBar: true as const } : {}),
       html: raw.taskView.html,
     };
   }

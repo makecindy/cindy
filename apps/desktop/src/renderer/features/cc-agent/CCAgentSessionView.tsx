@@ -192,6 +192,7 @@ import { useSessionBinding } from '@/hooks/useSessionBinding';
 import { useVendorAuthGate } from '@/hooks/useVendorAuthGate';
 import { useProviders } from '@/hooks/useProviders';
 import { useAuth } from '@/contexts/AuthContext';
+import { PluginTaskStatus } from '@/cindy-brain/PluginTaskStatus';
 import { notifySharedTaskEnded } from '@/features/device-link/SharedTaskEndedNotice';
 import {
   getDataOwnerGeneration,
@@ -6492,6 +6493,14 @@ function CCAgentSessionContent({
                     </WorkingDirectoryTip>
                   )}
 
+                  {sessionId && viewVisible && !readOnly && !remoteDeviceId && !session?.remoteHostId && (
+                    <PluginTaskStatus
+                      sessionId={sessionId}
+                      workingDir={session?.workingDir}
+                      routeKey={JSON.stringify([session?.agentKind, session?.providerId, session?.model, session?.agentDeviceId])}
+                      sidebarTargetSessionId={sidebarTargetSessionId}
+                    />
+                  )}
                   {hasPluginStatusbar && (
                     <div className="min-w-0 flex-1 overflow-x-auto">
                       <div className="w-max">

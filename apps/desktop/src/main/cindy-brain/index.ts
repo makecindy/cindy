@@ -550,6 +550,7 @@ import {
   abortAllGhostInstallConsentPrompts,
   assertGhostInstallConsent,
   confirmedTaskCapability,
+  confirmedTaskStatusCapability,
   confirmedAutoTools,
   confirmedControlPoints,
   confirmedUiCapability,
@@ -709,6 +710,8 @@ import { resolveOneshotCatalogModel } from '../utility-model/textOneshotPinOptio
 import { hasOneshotProviderCredential } from '../utility-model/oneshotProviderUsability.js';
 import { readGhostCindyInflightLimit, relocateGhostCindyPrefs } from './cindyPrefsStore.js';
 import { createGhostComposerListHandler } from './ghostComposerIpc.js';
+import { createGhostTaskStatusHandler, GhostTaskStatusSlot } from './taskStatusSlot.js';
+import { GHOST_TASK_STATUS_CHANNEL } from '../../shared/ghostTaskStatus.js';
 import { createGhostDisplayListHandler } from './ghostDisplayListIpc.js';
 import { GHOST_COMPOSER_LIST_CHANNEL } from '../../shared/ghostComposer.js';
 import {
@@ -2374,6 +2377,7 @@ export function getGhostRuntime(): GhostRuntime {
         log.info('ghost runtime state', { id, state });
         if (['off', 'stopping', 'crashed', 'fused'].includes(state)) {
           pluginDeviceSync.invalidate(storagePart);
+          taskStatusSlotSingleton?.cancel(storagePart);
           releasePluginUiRegions(storagePart);
           releasePluginAppearance(storagePart);
         }
@@ -4314,6 +4318,7 @@ export function createWindowGhostInstallConsentPrompt(
     );
   };
   prompt.hostUiCapabilityApproval = true;
+  prompt.taskStatusCapabilityApproval = true;
   return prompt;
 }
 
@@ -4777,6 +4782,21 @@ export function getGhostPreviewSlot(): GhostPreviewSlot {
     });
   }
   return previewSlotSingleton;
+}
+
+let taskStatusSlotSingleton: GhostTaskStatusSlot | null = null;
+
+function getGhostTaskStatusSlot(): GhostTaskStatusSlot {
+  return taskStatusSlotSingleton ??= new GhostTaskStatusSlot({
+    getGhost: findGhostForInstanceId,
+    ownerScope: activeOwnerScopeKey,
+    wake: async (ghost) => {
+      const runtime = getGhostRuntime();
+      const started = await runtime.spawn(ghost);
+      return started.ok && await runtime.waitUntilRunning(installedGhostStoragePart(ghost));
+    },
+    send: sendToGhostLogic,
+  });
 }
 
 let taskViewSlotSingleton: GhostTaskViewSlot | null = null;
@@ -7831,6 +7851,7 @@ async function installAndDockLocked(
   const result = await manager.install(lizFilePath, {
     manifestSource: opts.manifestSource,
     taskCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest),
+    taskStatusCapabilityApproved: confirmedTaskStatusCapability(opts.consent.decision, installedBefore, opts.consent.manifest),
     targetCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'targets'),
     uiCapabilityApproved: confirmedUiCapability(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedHostUi: confirmedHostUiPermissions(opts.consent.decision, installedBefore, opts.consent.manifest),
@@ -8031,6 +8052,7 @@ async function updateLocalGhostPackageLocked(
           manager.update(cindyFilePath, {
           manifestSource,
           taskCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest),
+          taskStatusCapabilityApproved: confirmedTaskStatusCapability(consent, previousGhost, inspected.manifest),
           targetCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'targets'),
           uiCapabilityApproved: confirmedUiCapability(consent, previousGhost, inspected.manifest),
           approvedHostUi: confirmedHostUiPermissions(consent, previousGhost, inspected.manifest),
@@ -8621,6 +8643,7 @@ async function installOrUpdateMarketGhostPackageLocked(
         manager.update(cindyFilePath, {
           manifestSource: expected.pendingMarketRecord?.source === 'market' ? 'stored-release' : undefined,
           taskCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest),
+          taskStatusCapabilityApproved: confirmedTaskStatusCapability(expected.consent, installed, inspected.manifest),
           targetCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'targets'),
           uiCapabilityApproved: confirmedUiCapability(expected.consent, installed, inspected.manifest),
           approvedHostUi: confirmedHostUiPermissions(expected.consent, installed, inspected.manifest),
@@ -9846,6 +9869,7 @@ export function registerGhostIpc(): void {
     const coreResult = executionPipe(id, payload, () => !event.sender.isDestroyed() && ghostIdForLogicWebContents(event.sender.id) === id);
     if (coreResult !== undefined) return coreResult;
     const type = (payload as { type?: unknown } | null)?.type;
+    if (type === 'task-status-result') return getGhostTaskStatusSlot().reply(id, payload);
     if (type === 'ui-state-update') return publishPluginUiControl(id, payload);
     if (type === 'recommendations-update') {
       const ghost = findGhostForInstanceId(id);
@@ -10351,6 +10375,18 @@ export function registerGhostIpc(): void {
   ipcMain.on('ghosts:list', (event) => {
     event.returnValue = displayList();
   });
+  ipcMain.handle(GHOST_TASK_STATUS_CHANNEL, createGhostTaskStatusHandler({
+    authorize: (event) => {
+      // Task pages are local-only; remote/shared callers cannot wake owner plugins.
+      if (getDeviceLinkInvokeContext()) throwIpcError('PERMISSION_DENIED', 'Local task UI only');
+      assertTrustedAppRendererEvent(event);
+    },
+    scope: () => isAppSessionBoundaryPending() ? null : activeOwnerScopeKey(),
+    session: getSessionRowSnapshot,
+    list: availableGhosts,
+    disabled: isGhostDisabledForWorkdir,
+    slot: getGhostTaskStatusSlot(),
+  }));
   ipcMain.handle(GHOST_COMPOSER_LIST_CHANNEL, createGhostComposerListHandler({
     list: availableGhosts,
     disabledIds: listDisabledGhostIdsForWorkdir,

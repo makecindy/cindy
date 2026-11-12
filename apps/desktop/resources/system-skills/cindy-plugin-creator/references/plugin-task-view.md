@@ -54,6 +54,40 @@
 - 远程任务(工作目录在另一台电脑)不显示本机插件的任务页;插件停用、卸载或不再声明
   taskView 时,已有任务页页签自动隐藏。
 
+### 任务页的原生底栏状态
+
+需要在任务输入框下显示简短状态时，在已有任务页声明中增加
+
+    "taskView": { "html": "task.html", "title": "Usage", "statusBar": true }
+
+此入口与任务页一样仅用于本机 Desktop 任务；SSH、设备互联任务与手机不展示控制端的
+本机插件状态。已有 taskView、panel 与旧宿主的入口不受影响。旧宿主不认识此字段时
+不显示底栏；逻辑页应检查新 API 是否存在，不要把字段被保留误认为宿主已支持。
+
+此入口会接收任务与模型标识，需要用户在支持此能力的安装／更新确认中明确批准。
+历史宿主保留的 statusBar 声明不自动取得该权限；原任务页继续可用。
+宿主在可见任务中约每 30 秒请求一次状态，按需唤醒已启用、声明并获准本入口的插件。
+逻辑页通过原有 onHostMessage 接收 { type: 'task-status', requestId, sessionId, modelRoute }，
+调用 cindy.ui.setStatus({ requestId, label, tooltip? }) 回答。
+例如在该消息分支中，先从插件自己的数据源计算状态，再执行：
+
+    if (typeof cindy.ui?.setStatus === 'function') {
+      await cindy.ui.setStatus({ requestId: msg.requestId, label: '50%', tooltip: 'Remaining quota' });
+    }
+
+- label 最长 80 字符，tooltip 最长 2048 字符，均为纯文字；宿主移除控制字符。
+- 回执为 { ok: boolean }。只能回答本实例当前待处理的 requestId，8 秒内未回答、
+  重复回答、停用、卸载、安装版本或用户已切换时，旧回答不会显示；可自行返回空 label，
+  此时按钮只显示插件名称。插件应在 label 或 tooltip 中明确标识自己的缓存数据。
+- 宿主始终绘制插件名称，点击只打开该插件在当前任务中的已有任务页。
+  不支持注入 HTML、执行任意动作或替换宿主内置状态。
+- 消息提供任务标识与宿主从当前实例读取的 modelRoute: { agentKind, providerId, model }；
+  缺省值为 null。providerId 是 Cindy 的连接 ID，model 是上游模型 ID，二者不能互相代替；
+  不提供消息正文、工作目录、端点、账号或凭证，不增加文件、网络或凭证权限。
+  插件直接使用此投影，不扫描宿主私有数据库。远程引擎任务不向控制端本机插件投递。
+  等待期间模型路由发生变化时，旧回执不会显示；同任务不同路由的请求分别处理。
+- 此接口用于状态读取；不要在收到刷新请求时创建任务或产生其它用户操作。
+
 ### 4.22.1 在手机上查看与操作设备画面(liveScreen 能力)
 
 提供设备画面的插件(模拟器、真机镜像)可以让用户在手机上全屏查看并直接触控。声明

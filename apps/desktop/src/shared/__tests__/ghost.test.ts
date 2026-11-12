@@ -2516,6 +2516,16 @@ describe('ghost · panel.position 校验', () => {
     expect(ok).toMatchObject({ ok: true, manifest: { taskView: { title: '模拟器', html: 'task.html' } } });
     if (!ok.ok) throw new Error('expected a valid manifest');
     expect(ghostWebviewEntryPaths(ok.manifest)).toContain('/task.html');
+    // unit: enabling route-aware status must disclose the added model context during review.
+    const status = validateGhostManifest(withTask({ title: '模拟器', html: 'task.html', statusBar: true }));
+    expect(status).toMatchObject({ ok: true, manifest: { taskView: { statusBar: true } } });
+    if (status.ok) expect(diffGhostPermissionItems(ok.manifest, status.manifest).added).toEqual([
+      expect.objectContaining({ key: 'task-view', detailKey: 'taskViewStatusDetail' }),
+    ]);
+    // unit: statusBar 是只认字面量 true 的加档开关；错误类型不能当未知字段放行,
+    // 否则装包成功但入口静默不出现。
+    expect(validateGhostManifest(withTask({ html: 'task.html', statusBar: 'true' })).ok).toBe(false);
+    expect(validateGhostManifest(withTask({ html: 'task.html', statusBar: false })).ok).toBe(false);
     expect(diffGhostPermissionItems({ ...ok.manifest, taskView: undefined }, ok.manifest).added).toEqual([
       expect.objectContaining({ key: 'task-view', kind: 'task-view', labelKey: 'taskView' }),
     ]);

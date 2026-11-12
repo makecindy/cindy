@@ -797,6 +797,16 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 
 ## 5. 存量插件兼容：升级必须无感（红线）
 
+任务底栏的 metadata 通道以 receipt 的 taskStatusCapabilityApproved 为独立批准事实；
+旧 receipt 即使保留了 taskView.statusBar: true 也不自动获权，既有任务页继续可用。
+安装／更新的权限差异排除未批准的历史声明，只有支持此能力的确认入口才能记下新批准；
+同实例更新保留仍声明的批准，移除声明或换源不继承。
+
+`taskView.statusBar` 在新包入口只接受字面量 `true`。历史市场 release、已装 manifest 与
+normalized receipt 曾把它作为未知字段保存，因此兼容读取必须保留非 `true` 旧值，
+不能让整个插件消失；权限说明只识别字面量 `true`，运行时还须核对独立批准。
+两端 manifest forward-compat 测试覆盖新包拒绝、旧值往返和不扩权。
+
 `tools[].parameters` 的 16KB 约束：新包入口 `validateGhostManifest` 按 JSON 序列化后的
 UTF-8 字节计量；历史市场 release 入口 `validateStoredGhostManifest` 和已装快照入口
 `validateInstalledGhostManifest` 保留原 UTF-16 长度上限 16,384。市场详情解析与

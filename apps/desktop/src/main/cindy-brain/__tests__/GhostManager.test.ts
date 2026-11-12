@@ -612,6 +612,28 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
     expect(result).not.toHaveProperty('ghost.delegationCapabilityApproved');
   });
 
+  it('keeps historical task pages working while recording status consent only for the same declared installation', async () => {
+    const manifest = { ...goodManifest(), minCindyVersion: '0.1.61', slots: ['tool', 'task-view'], taskView: { html: 'task.html', statusBar: true } };
+    const files = { 'main.js': '// plugin', 'task.html': '<p>Task</p>' };
+    const pkg = await makeCindy('status.cindy', manifest, files);
+    await manager.install(pkg);
+    const old = manager.list()[0]!;
+    expect(old.approval.state).toBe('approved');
+    expect(old.manifest.taskView?.html).toBe('task.html');
+    expect(old.taskStatusCapabilityApproved).toBeUndefined();
+    const update = await makeCindy('status-approved.cindy', { ...manifest, version: '1.0.1' }, files);
+    await manager.update(update, { expectedInstalledApproval: ghostInstallApprovalToken(old.approval), taskStatusCapabilityApproved: true });
+    const approved = manager.list()[0]!;
+    expect(approved.taskStatusCapabilityApproved).toBe(true);
+    const unchanged = await makeCindy('status-next.cindy', { ...manifest, version: '1.0.2' }, files);
+    await manager.update(unchanged, { expectedInstalledApproval: ghostInstallApprovalToken(approved.approval) });
+    expect(manager.list()[0]?.taskStatusCapabilityApproved).toBe(true);
+    const removed = await makeCindy('status-removed.cindy', { ...manifest, version: '1.0.3', taskView: { html: 'task.html' } }, files);
+    await manager.update(removed, { expectedInstalledApproval: ghostInstallApprovalToken(manager.list()[0]!.approval) });
+    expect(manager.list()[0]?.taskStatusCapabilityApproved).toBeUndefined();
+    expect(manager.list()[0]?.manifest.taskView?.html).toBe('task.html');
+  });
+
   it('approves observe without tasks and preserves it only while the same instance still declares it', async () => {
     const manifest = { ...goodManifest(), slots: ['tool', 'agent'], agent: { observe: true } };
     const pkg = await makeCindy('observe.cindy', manifest, { 'main.js': '// plugin' });

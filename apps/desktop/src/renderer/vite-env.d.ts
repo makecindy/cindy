@@ -1375,6 +1375,7 @@ interface ElectronAPI {
     recommendationsSync: () => import('../shared/homePluginRecommendations').HomePluginRecommendationsSnapshot;
     /** 首帧同步拉取已装清单(规则 7:意识面板与内置面板同帧注册,无跳变)。 */
     listSync: () => { ghosts: import('../shared/ghost').InstalledGhost[] };
+    taskStatus: (sessionId: string) => Promise<import('../shared/ghostTaskStatus').GhostTaskStatus[]>;
     onForgeOidcInstallConfirmRequest: (
       callback: (payload: {
         requestId: string;

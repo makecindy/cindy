@@ -8278,6 +8278,7 @@
         "mainViewDetail": "Ao abri-la, é apresentada a vista principal na sandbox do plugin, sem conceder acesso a ficheiros, rede ou credenciais.",
         "taskView": "Página de tarefa “{{title}}” · abre na barra lateral da tarefa",
         "taskViewDetail": "O separador acompanha a tarefa e abre no ambiente isolado do plugin; não concede acesso a ficheiros, rede ou credenciais.",
+        "taskViewStatusDetail": "Mostra o estado no rodapé da tarefa e recebe o motor, o ID da ligação e o ID do modelo atuais. Um clique abre o seu separador isolado. Não partilha mensagens, endpoints nem credenciais.",
         "code": "Código executável",
         "codeDetail": "É executado numa sandbox isolada, sem acesso aos seus ficheiros ou à rede.",
         "resident": "Sempre ativo (inicia ao ativar e mantém um processo em segundo plano mesmo quando inativo)",

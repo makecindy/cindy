@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateGhostManifest, ghostPermissionItems } from '../ghost.js';
+import { validateGhostManifest, validateStoredGhostManifest, validateInstalledGhostManifest, validateNormalizedGhostManifest, ghostPermissionItems } from '../ghost.js';
 
 const base = {
   schemaVersion: 3, minCindyVersion: '0.1.0', id: 'future-declarations',
@@ -73,4 +73,19 @@ it('unknown declarations never become permission items', () => {
   expect(result.ok).toBe(true);
   if (!result.ok) return;
   expect(ghostPermissionItems(result.manifest).filter((item) => item.kind === 'cindy' || item.key.includes('future'))).toEqual([]);
+});
+
+// Unit #9676 P1: historical statusBar was a valid unknown field. New-package
+// tests miss receipt/normalized upgrades; preserve data without granting access.
+it.each([false, 'true', { future: true }])('preserves historical statusBar %j without enabling it', (statusBar) => {
+  const raw = { ...base, taskView: { html: 'task.html', statusBar } };
+  expect(validateGhostManifest(raw).ok).toBe(false);
+  for (const validate of [validateStoredGhostManifest, validateInstalledGhostManifest]) {
+    const result = validate(raw);
+    expect(result).toMatchObject({ ok: true, manifest: { taskView: raw.taskView } });
+    if (!result.ok) continue;
+    expect(result.manifest.taskView?.statusBar).not.toBe(true);
+    expect(validateNormalizedGhostManifest(result.manifest)).toEqual(result);
+    expect(ghostPermissionItems(result.manifest).some(item => item.detailKey === 'taskViewStatusDetail')).toBe(false);
+  }
 });

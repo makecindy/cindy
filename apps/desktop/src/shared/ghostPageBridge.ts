@@ -62,6 +62,8 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
     return result;
   },
   ui: {
+    setStatus: (reply: import('./ghostTaskStatus').GhostTaskStatusReply): Promise<{ ok: boolean }> =>
+      ports.send({ ...reply, type: 'task-status-result' }),
     hasConsumers: hasUiConsumers,
     updateContribution: (id: string, build: () => PluginUiControlState, target?: PluginUiTarget): Promise<{ ok: true; observed: boolean }> => {
       if (!hasUiConsumers(id, target)) return Promise.resolve({ ok: true, observed: false });

@@ -38,6 +38,19 @@ function installed(
 }
 
 describe('plugin install consent', () => {
+  // Old Hosts preserved statusBar as an unknown field without disclosing task metadata.
+  it('requires new status consent for historical declarations while retaining the task page', () => {
+    const next = manifest({ taskView: { html: 'task.html', statusBar: true } });
+    const old = installed(next);
+    expect(evaluateGhostInstallConsent(old, next)).toMatchObject({ kind: 'update',
+      added: [expect.objectContaining({ key: 'task-view', detailKey: 'taskViewStatusDetail' })],
+      removed: [expect.objectContaining({ key: 'task-view', detailKey: 'taskViewDetail' })],
+    });
+    expect(old.manifest.taskView).toEqual({ html: 'task.html', statusBar: true });
+    expect(evaluateGhostInstallConsent({ ...old, taskStatusCapabilityApproved: true }, next)).toBeNull();
+    expect(evaluateGhostInstallConsent(old, manifest({ taskView: { html: 'task.html' } }))).toBeNull();
+  });
+
   // Static system text is itself reviewed capability content: changing it must
   // trigger update consent, even when the capability name stays the same.
   it('shows static system fragments and asks again when their content changes', () => {

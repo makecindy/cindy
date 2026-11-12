@@ -130,6 +130,7 @@ export interface GhostInstallReceipt {
   simulatorMarketRelease?: { pluginId: string; releaseId: string; previousPackageSha256: string };
   /** Explicit Host confirmation; absent on older receipts, never inferred from manifest. */
   taskCapabilityApproved?: true;
+  taskStatusCapabilityApproved?: true;
   targetCapabilityApproved?: true;
   uiCapabilityApproved?: true;
   approvedHostUi?: string[];
@@ -1313,6 +1314,7 @@ export function createGhostInstallReceipt(input: {
   simulatorPreviousRelId?: string;
   simulatorMarketRelease?: GhostInstallReceipt['simulatorMarketRelease'];
   taskCapabilityApproved?: true;
+  taskStatusCapabilityApproved?: true;
   targetCapabilityApproved?: true;
   uiCapabilityApproved?: true;
   approvedHostUi?: readonly string[];
@@ -1356,6 +1358,7 @@ export function createGhostInstallReceipt(input: {
     ...(input.unavailableUiResources === true ? { unavailableUiResources: true as const } : {}),
     ...(input.uiCapabilityApproved === true ? { uiCapabilityApproved: true as const } : {}),
     ...(input.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
+    ...(input.taskStatusCapabilityApproved === true && input.manifest.taskView?.statusBar === true ? { taskStatusCapabilityApproved: true as const } : {}),
     ...(input.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
     ...(input.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
     ...approvedControlPointsField(input.approvedControlPoints, input.manifest),
@@ -1577,6 +1580,7 @@ function validateReceipt(
       ...(value.unavailableUiResources === true ? { unavailableUiResources: true as const } : {}),
       ...(value.uiCapabilityApproved === true ? { uiCapabilityApproved: true as const } : {}),
       ...(value.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
+      ...(value.taskStatusCapabilityApproved === true && manifestResult.manifest.taskView?.statusBar === true ? { taskStatusCapabilityApproved: true as const } : {}),
       ...(value.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
       ...(value.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
       ...approvedControlPointsField(value.approvedControlPoints, manifestResult.manifest),
