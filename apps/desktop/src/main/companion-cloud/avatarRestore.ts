@@ -50,7 +50,7 @@ export async function restoreCloudAvatar(avatar: string | null, signal?: AbortSi
     return portable === avatar ? { portable } : { portable, fallback: true };
   }
   try {
-    const { buffer } = await fetchPublicImageBytes(avatar, BOT_AVATAR_MAX_BYTES, undefined, { signal, timeoutMs: AVATAR_FETCH_TIMEOUT_MS });
+    const { buffer } = await fetchPublicImageBytes(avatar, BOT_AVATAR_MAX_BYTES, undefined, { signal, timeoutMs: AVATAR_FETCH_TIMEOUT_MS, allowProxyFakeIp: true });
     validateBotAvatarBuffer(Buffer.from(buffer));
     return { imageBase64: Buffer.from(buffer).toString('base64') };
   } catch (error) {
