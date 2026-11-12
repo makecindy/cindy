@@ -38,6 +38,53 @@ import {
 } from '../../../shared/voiceInputRefinerProfiles.js';
 
 describe('RealtimeAsrWebSocketProvider helpers', () => {
+  // Protocol regression: final text is not semantic completion. Qwen's explicit
+  // VAD stop supplies audio timing; manual OpenAI commit supplies no such clock.
+  // Existing loopback fixture verifies both without real ASR or microphone use.
+  it.each(['openai-transcription-manual', 'qwen-asr-server-vad'] as const)(
+    'preserves ordered segments and distinct endpoint evidence for %s', async (protocolProfile) => {
+    const server = new WebSocketServer({ port: 0 });
+    let socket: WebSocket | undefined;
+    let provider: RealtimeAsrWebSocketProvider | undefined;
+    server.on('connection', (connected) => {
+      socket = connected;
+      connected.on('message', (data) => {
+        if (JSON.parse(data.toString()).type === 'session.update') connected.send(JSON.stringify({ type: 'session.updated' }));
+      });
+    });
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected local test server address.');
+      provider = new RealtimeAsrWebSocketProvider({ accessTokenProvider: async () => 'test-key', realtimeUrl: `ws://127.0.0.1:${address.port}/v1/realtime`, model: 'gpt-realtime-whisper', protocolProfile });
+      const segment = vi.fn(); provider.onSegment(segment); provider.onEvent(() => {});
+      await provider.start();
+      provider.appendAudio(new Int16Array(16 * 2_000).buffer);
+      const acoustic = protocolProfile === 'qwen-asr-server-vad';
+      expect(provider.endpointing).toBe(acoustic ? 'acoustic' : 'manual');
+      for (const event of [
+        ...(acoustic ? [{ type: 'input_audio_buffer.speech_stopped', item_id: 'a', audio_end_ms: 800 }] : []),
+        { type: 'input_audio_buffer.committed', item_id: 'a' },
+        ...(acoustic ? [{ type: 'input_audio_buffer.speech_stopped', item_id: 'b', audio_end_ms: 1_700 }] : []),
+        { type: 'input_audio_buffer.committed', item_id: 'b' },
+        { type: 'conversation.item.input_audio_transcription.completed', item_id: 'b', transcript: 'second' },
+        { type: 'conversation.item.input_audio_transcription.completed', item_id: 'a', transcript: 'first' },
+      ]) socket!.send(JSON.stringify(event));
+      await waitFor(() => segment.mock.calls.length === 4);
+      expect(segment.mock.calls.map(([value]) => value)).toEqual([
+        { id: 'a', order: 0, text: '', final: false },
+        { id: 'b', order: 1, text: '', final: false },
+        { id: 'b', order: 1, text: 'second', final: true,
+          ...(acoustic ? { turnEnd: 'acoustic', audioEndMs: 1_700 } : { turnEnd: 'manual' }) },
+        { id: 'a', order: 0, text: 'first', final: true,
+          ...(acoustic ? { turnEnd: 'acoustic', audioEndMs: 800 } : { turnEnd: 'manual' }) },
+      ]);
+    } finally {
+      await provider?.stop(); socket?.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it('resamples 16 kHz PCM16 audio to OpenAI realtime 24 kHz PCM16', () => {
     const input = Buffer.alloc(4);
     input.writeInt16LE(0, 0);
@@ -147,6 +194,21 @@ describe('RealtimeAsrWebSocketProvider helpers', () => {
       cachedTokens: 500_000,
       completionTokens: 100_000,
     })).toBeCloseTo(0.57, 8);
+
+    const knownCatalogProfile = getVoiceInputRefinerProfile(
+      'cat:openai:codex:gpt-5.4-mini' as Parameters<typeof getVoiceInputRefinerProfile>[0],
+    );
+    expect(knownCatalogProfile.pricing).toEqual(defaultProfile.pricing);
+    expect(estimateVoiceInputRefinerCostUsd(knownCatalogProfile, {
+      promptTokens: 1_000_000,
+      cachedTokens: 500_000,
+      completionTokens: 100_000,
+    })).toBeCloseTo(0.57, 8);
+
+    const unknownCatalogProfile = getVoiceInputRefinerProfile(
+      'cat:xd:codex:deepseek/deepseek-v4-flash' as Parameters<typeof getVoiceInputRefinerProfile>[0],
+    );
+    expect(unknownCatalogProfile.pricing).toBeUndefined();
   });
 
   it('uses provider-specific fallback error messages when upstream omits one', () => {
@@ -304,6 +366,43 @@ describe('RealtimeAsrWebSocketProvider helpers', () => {
       await expect(provider.start()).rejects.toThrow(
         `Realtime ASR handshake failed: HTTP 403 Forbidden (127.0.0.1:${address.port}/v1/realtime)`,
       );
+    } finally {
+      await provider?.stop();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it.each([
+    [401, 1],
+    [403, 0],
+  ] as const)('reports the sent token on handshake HTTP %s only when unauthorized', async (status, reports) => {
+    const server = new WebSocketServer({
+      port: 0,
+      verifyClient(_info, done) {
+        done(false, status, 'Rejected');
+      },
+    });
+    let provider: RealtimeAsrWebSocketProvider | undefined;
+    const onAuthorizationRejected = vi.fn();
+
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected local test server address.');
+
+      provider = new RealtimeAsrWebSocketProvider({
+        accessTokenProvider: async () => 'gateway-key-sent',
+        realtimeUrl: `ws://127.0.0.1:${address.port}/v1/realtime`,
+        model: 'gpt-realtime-whisper',
+        providerKind: 'litellm-gpt-realtime-whisper',
+        connectTimeoutMs: 2_000,
+        onAuthorizationRejected,
+      });
+      provider.onEvent(() => {});
+
+      await expect(provider.start()).rejects.toThrow(`HTTP ${status}`);
+      expect(onAuthorizationRejected).toHaveBeenCalledTimes(reports);
+      if (reports > 0) expect(onAuthorizationRejected).toHaveBeenCalledWith('gateway-key-sent');
     } finally {
       await provider?.stop();
       await new Promise<void>((resolve) => server.close(() => resolve()));

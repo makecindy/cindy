@@ -34,6 +34,21 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** Collect system/developer messages in order and emit a single leading system message. */
+export function coalesceLeadingSystemMessages(messages: ChatMessage[]): ChatMessage[] {
+  const systems: string[] = [];
+  const rest: ChatMessage[] = [];
+  for (const message of messages) {
+    if (message.role === 'system' || message.role === 'developer') {
+      if (message.content) systems.push(message.content);
+      continue;
+    }
+    rest.push(message);
+  }
+  if (systems.length === 0) return messages;
+  return [{ role: 'system', content: systems.join('\n\n') }, ...rest];
+}
+
 function cloneToolCallExtraContent(value: unknown): ChatToolCallExtraContent | undefined {
   if (!isPlainObject(value)) return undefined;
   const { google, ...rest } = value;
@@ -137,6 +152,30 @@ function mediaPart(
     return audioPart(part);
   }
   return undefined;
+}
+
+/**
+ * 只含合法元数据且 content 为 null 的 assistant 历史项。
+ *
+ * Codex 在历史回放里会把「上一轮只有工具调用、没有正文」的产物写成
+ * `{ type: 'message', role: 'assistant', content: null }`。messageContent 对既非字符串
+ * 也非数组的 content 一律抛 unsupported_feature,于是这条无害的历史项会让后续每一轮
+ * 续聊都被拒(#9344)。Anthropic 桥接已在 #6676 对同一形状做跳过,这里对齐。
+ */
+function isEmptyAssistantMessageWithSupportedMetadata(item: Record<string, unknown>): boolean {
+  if (item.role !== 'assistant' || item.content !== null) return false;
+  if (item.type !== undefined && item.type !== 'message') return false;
+  if (['id', 'status', 'phase'].some((fieldName) => (
+    item[fieldName] !== undefined && typeof item[fieldName] !== 'string'
+  ))) return false;
+  return Object.keys(item).every((fieldName) => (
+    fieldName === 'type'
+    || fieldName === 'id'
+    || fieldName === 'role'
+    || fieldName === 'content'
+    || fieldName === 'status'
+    || fieldName === 'phase'
+  ));
 }
 
 function messageContent(
@@ -353,6 +392,10 @@ function agentMessageText(item: Record<string, unknown>, itemIndex: number): str
       throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content.${part.type}`);
     }
     body = parts.join('\n');
+  } else if (item.content === null || item.content === undefined) {
+    // 无正文的协作消息没有可翻译的内容(Codex 回放里会出现 content: null),
+    // 按「空内容」降级,而不是把整单判成 unsupported_feature 让会话卡死(#9344)。
+    body = '';
   } else {
     throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
   }
@@ -576,6 +619,8 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
     const record = item as Record<string, unknown>;
 
     if ('role' in item && typeof item.role === 'string') {
+      // 只有工具调用、没有正文的 assistant 历史项整条跳过(#9344,与 Anthropic 桥接 #6676 对齐)。
+      if (isEmptyAssistantMessageWithSupportedMetadata(record)) continue;
       const content = messageContent(
         item as Extract<ResponsesInputItem, { role: string }>,
         index,
@@ -635,6 +680,25 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
     if (item.type === 'reasoning') {
       if (opts.reasoningHistoryField === 'reasoning_content') {
         pendingReasoning += reasoningText(item);
+      }
+      continue;
+    }
+
+    if (item.type === 'web_search_call') {
+      if (
+        record.status !== 'completed'
+        || !isPlainObject(record.action)
+        || typeof record.action.type !== 'string'
+        || !record.action.type.trim()
+      ) throw new UnsupportedResponsesFeatureError("input item 'web_search_call'");
+      const message: ChatMessage = {
+        role: 'assistant',
+        content: '[completed web search]\n' + JSON.stringify(record.action),
+      };
+      if ((assistant?.tool_calls?.length ?? 0) > 0 || pendingToolCalls.length > 0) {
+        deferredBarriers.push(message);
+      } else {
+        pushBarrier(message);
       }
       continue;
     }
@@ -924,6 +988,10 @@ export function translateResponsesRequestWithContext(
         throw new UnsupportedResponsesFeatureError(`instructions[${index}].${part.type}`);
       }).join('');
     if (instructions) messages.unshift({ role: developerRole, content: instructions });
+  }
+  if (capabilities.systemMessagePolicy === 'coalesce-leading') {
+    const coalesced = coalesceLeadingSystemMessages(messages);
+    messages.splice(0, messages.length, ...coalesced);
   }
 
   const request: ChatCompletionsRequest = {

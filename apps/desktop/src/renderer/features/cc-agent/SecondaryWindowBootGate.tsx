@@ -19,10 +19,10 @@
  * 渲染中性占位(content-area 底色),不出现空白帧。bootSession 缺失时回落 /cc-agent。
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { getBootDeviceId, getBootSessionId } from '@/lib/secondaryWindow';
+import { getBootDeviceId, getBootSessionId, getBootMessageClientId } from '@/lib/secondaryWindow';
 import { getSessionFor } from '@/lib/makerTransport';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
@@ -32,13 +32,7 @@ const log = createLogger('SecondaryWindowBootGate');
 
 export function SecondaryWindowBootGate() {
   const navigate = useNavigate();
-  // 只 boot 一次:StrictMode(dev)下 effect 跑两次,ref 守住避免重复解析 / 跳转。
-  const hasBootedRef = useRef(false);
-
   useEffect(() => {
-    if (hasBootedRef.current) return;
-    hasBootedRef.current = true;
-
     const bootSessionId = getBootSessionId();
     if (!bootSessionId) {
       // 异常进入(直接打开 /cc-agent/boot 而无 bootSession)→ 回落默认入口。
@@ -48,6 +42,7 @@ export function SecondaryWindowBootGate() {
 
     let cancelled = false;
     const bootDeviceId = getBootDeviceId();
+    const messageClientId = getBootMessageClientId();
     void (async () => {
       if (!bootDeviceId) return resolveSessionRoute(bootSessionId);
 
@@ -56,14 +51,29 @@ export function SecondaryWindowBootGate() {
       // the secondary window's remote mirror has not hydrated yet.
       remoteProjectsStore.pinSessionOrigin(bootDeviceId, bootSessionId);
       const mirroredSession = remoteProjectsStore
-        .getMergedRemoteSessions()
+        .getVisibleMergedRemoteSessions()
         .find((session) => session.id === bootSessionId);
       const remoteSession = mirroredSession ?? (await getSessionFor(bootSessionId));
       return resolveSessionRoute(bootSessionId, remoteSession);
     })()
       .then((target) => {
         if (cancelled) return;
-        navigate(target, { replace: true });
+        navigate(target, {
+          replace: true,
+          ...(messageClientId
+            ? {
+                state: {
+                  searchJump: {
+                    kind: 'conversation-search',
+                    sessionId: bootSessionId,
+                    messageId: messageClientId,
+                    messageIdKind: 'clientId',
+                    messageClientId,
+                  },
+                },
+              }
+            : {}),
+        });
       })
       .catch((err) => {
         log.warn('failed to resolve boot session route, falling back to /cc-agent', {

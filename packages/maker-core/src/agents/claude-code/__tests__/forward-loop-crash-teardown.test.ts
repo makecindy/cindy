@@ -11,7 +11,11 @@
  * 覆盖:
  *  - turn 进行中流崩溃 → error(sdk_stream_crashed) + status Done + done 收尾,
  *    事件流结束, 后续 send 报 input queue closed
- *  - turn 已被 translator 正常收尾后流崩溃（事故原型）→ 不双发 done, 事件流结束
+ *  - turn 已被 translator 正常收尾后流崩溃（事故原型）→ 不双发 done,
+ *    空闲态崩溃不再上报终态错误 (#8831)
+ *  - 成功轮次完成后进程被外部强杀（#8831 退出时 reap-claude-children 原型）
+ *    → 无终态错误、无额外 done, 只回收死句柄
+ *  - 续跑终态已入队未派发时流崩溃 → 不补发同一轮的第二个 done / error
  *  - 流自然结束（U2 远端 daemon 突死路径）→ 行为回归不变（helper 重构等价性）
  */
 import { promises as fs } from 'node:fs';
@@ -147,7 +151,7 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
-async function startCrashableSession() {
+async function startCrashableSession(opts?: { collect?: boolean }) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
   const workingDir = await makeTempDir();
@@ -179,12 +183,16 @@ async function startCrashableSession() {
   });
 
   // 先起 collector 再触发流事件：eventQueue 被 end 后迭代自然结束。
+  // collect:false 时把消费节奏交给测试 —— 需要把事件留在「已入队未派发」窗口的
+  // 用例(续跑终态在途时进程死亡)必须自己驱动 handle.events() 迭代器。
   const events: AgentEvent[] = [];
-  const collected = (async () => {
-    for await (const ev of handle.events()) {
-      events.push(ev);
-    }
-  })();
+  const collected = opts?.collect === false
+    ? Promise.resolve()
+    : (async () => {
+        for await (const ev of handle.events()) {
+          events.push(ev);
+        }
+      })();
 
   return { agent, handle, stream, fakeQuery, events, collected };
 }
@@ -269,13 +277,120 @@ describe('ClaudeCodeAgent forward loop crash teardown', () => {
     expect(doneEvents).toHaveLength(1);
     expect((doneEvents[0]?.data as { reason?: string }).reason).not.toBe('sdk_stream_crashed');
 
-    // 崩溃本身仍要结构化上报。
+    // 轮次已收尾后进程死亡不再有终态错误上报（#8831: 空闲会话被强杀时派发
+    // sdk_stream_crashed 会落伪造的 role:'error' 记录, 重启误读成「上轮未完成」）。
+    // 轮次自身的失败事件由 translator 在 result 阶段已派发, 不随崩溃重复。
     expect(
       events.some((e) => e.type === 'error' && (e.data as { reason?: string }).reason === 'sdk_stream_crashed'),
-    ).toBe(true);
+    ).toBe(false);
 
     // handle 死透, 不再吞消息。
     await expect(handle.send({ type: 'user', content: 'follow-up' })).rejects.toThrow(/input queue is closed/i);
+  });
+
+  it('idle process kill after a completed turn emits no terminal error (#8831)', async () => {
+    const { handle, stream, events, collected } = await startCrashableSession();
+
+    await handle.send({ type: 'user', content: 'hello' });
+
+    // #8831 事故原型: 轮次正常完成后 claude.exe 驻留; 退出 Cindy 时
+    // reap-claude-children 把空闲进程 taskkill, SDK 流抛错。
+    stream.emit({
+      type: 'result',
+      is_error: false,
+      subtype: 'success',
+      result: 'ok',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+    stream.fail(new Error('Claude Code process exited with code 1'));
+    await withTimeout(collected, 'event stream should end after idle kill teardown');
+
+    // 没有任何轮次可被终结: 不得派发终态错误(否则落库成伪造的「上轮失败」记录)。
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
+    const doneEvents = events.filter((e) => e.type === 'done');
+    expect(doneEvents).toHaveLength(1);
+    expect((doneEvents[0]?.data as { reason?: string }).reason).not.toBe('sdk_stream_crashed');
+
+    // handle 死透: 事件流已结束, 后续 send 立刻失败而不是进黑洞排队。
+    expect(handle.isTurnRunning?.()).toBe(false);
+    await expect(handle.send({ type: 'user', content: 'follow-up' })).rejects.toThrow(/input queue is closed/i);
+  });
+
+  it('does not re-emit a queued continuation terminal when the stream dies mid-dispatch', async () => {
+    // PR#8843 复核: 续跑取消边界(turn_continuation_cancelled)已入队、Session
+    // 尚未消费时, pendingContinuationTerminalBoundaries > 0 会让 busy 判据
+    // 把轮次误当「仍在执行」, emitTurnBoundary 补发同一轮的第二个 done →
+    // 监听方与 onTerminal 收两次结束通知。最小失败输入: 后台 wake 任务 +
+    // result 铸 awaiting claim + task_notification(stopped) 推取消边界 +
+    // 消费停在该 done 处 + 流崩溃。
+    const { handle, stream } = await startCrashableSession({ collect: false });
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const events: AgentEvent[] = [];
+    const pullNext = async (): Promise<boolean> => {
+      const step = await iterator.next();
+      if (step.done) return true;
+      events.push(step.value);
+      return false;
+    };
+
+    await handle.send({ type: 'user', content: 'kick off background work' });
+    stream.emit({
+      type: 'system',
+      subtype: 'task_started',
+      task_id: 'bg-1',
+      task_type: 'local_agent',
+      tool_use_id: 'toolu-bg',
+      description: 'background work',
+    });
+    // 本轮收尾: done 铸 awaiting continuation claim(后台 wake 任务仍 running)。
+    stream.emit({
+      type: 'result',
+      is_error: false,
+      subtype: 'success',
+      result: 'ok',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+    });
+    // 后台任务停止 → 取消续跑 → 同步推入 turn_continuation_cancelled 终态边界。
+    stream.emit({
+      type: 'system',
+      subtype: 'task_notification',
+      task_id: 'bg-1',
+      status: 'stopped',
+    });
+
+    // 消费到第二个 done(取消边界)为止并停住: 终态留在「已入队未派发」窗口
+    // (生成器挂在 yield 处, releaseEventAccounting 尚未跑, pending 仍为 1)。
+    while (events.filter((e) => e.type === 'done').length < 2) {
+      if (await pullNext()) throw new Error('stream ended before cancelled-continuation done');
+    }
+    expect(handle.isTurnRunning?.()).toBe(true);
+
+    // 进程此刻被杀: 终态已在路上,不得再补 error/done。
+    stream.fail(new Error('Claude Code process exited with code 1'));
+    // 先让 crash 分支在「boundary 未派发」窗口内完成快照,再恢复消费 —— 下一次
+    // pull 会触发 releaseEventAccounting 把 pending 清零,次序颠倒就变成另一个
+    // 交错(等价于终态已交付后崩溃)。
+    await new Promise((r) => setTimeout(r, 0));
+    await withTimeout(
+      (async () => {
+        while (!(await pullNext())) { /* drain teardown tail */ }
+      })(),
+      'event stream should end after mid-dispatch crash teardown',
+    );
+
+    expect(events.filter((e) => e.type === 'done')).toHaveLength(2);
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
+    expect(handle.isTurnRunning?.()).toBe(false);
+    // 取消边界的 query 重建 tombstone 让下一次 send 走替换-query 受理路径 —
+    // 断言它确实被受理(而非吞进死队列),验证崩溃收尾没有留下不可恢复状态。
+    await handle.send({ type: 'user', content: 'follow-up' });
   });
 
   it('natural stream end without result keeps the U2 remote-daemon teardown behavior', async () => {

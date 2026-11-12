@@ -2,7 +2,19 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { test } from 'node:test';
 
-import { resolveEasBuildProfileEnv } from '../check-endpoint-literals.mjs';
+import { resolveEasBuildProfileEnv, validatePublishedChatEndpoint } from '../check-endpoint-literals.mjs';
+
+test('生产端点清单的群聊地址不能漏发或携带凭据', () => {
+  for (const file of ['endpoint.json', 'endpoint.global.json']) {
+    const manifest = JSON.parse(fs.readFileSync(new URL(`../../config/${file}`, import.meta.url), 'utf8'));
+    assert.doesNotThrow(() => validatePublishedChatEndpoint(manifest));
+    const missing = { ...manifest }; delete missing.chatApiBaseUrl;
+    assert.throws(() => validatePublishedChatEndpoint(missing), /chatApiBaseUrl/);
+  }
+  for (const url of ['', 'http://chat.example.invalid', 'https://secret@chat.example.invalid', 'https://chat.example.invalid?key=secret']) {
+    assert.throws(() => validatePublishedChatEndpoint({ chatApiBaseUrl: url }), /chatApiBaseUrl/);
+  }
+});
 
 test('提交的 EAS build profiles 不包含生产端点 env（含 extends）', () => {
   const eas = JSON.parse(

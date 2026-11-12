@@ -1,0 +1,14 @@
+{
+  "site": "www.taptap.cn",
+  "aliases": [
+    "taptap",
+    "taptap.cn"
+  ],
+  "auth": "公开游戏资料，无需登录。",
+  "recipes": [
+    "taptap-game"
+  ],
+  "notes": "读取中国站官方详情页的结构化游戏资料；appId 来自 /app/<id>。不自动下载或购买。评分及更新日期采用网站公开元数据。",
+  "source": "Cindy",
+  "verifiedAt": "2026-10-23"
+}

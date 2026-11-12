@@ -1,7 +1,11 @@
+import type { AskQuestion } from '@cindy/maker-shared/interaction';
+
 export interface AskUserDraft {
   answers: Record<string, string>;
   currentIndex: number;
   customInput: string;
+  /** 保存草稿时的问题内容;同一 requestId 的问题变了,旧草稿不再恢复。 */
+  questionsIdentity?: string;
   selectedLabels: string[];
   showCustomInput: boolean;
 }
@@ -14,10 +18,46 @@ export interface PlanReviewDraft {
 
 const askUserDrafts = new Map<string, AskUserDraft>();
 const planReviewDrafts = new Map<string, PlanReviewDraft>();
+export interface IssueConfirmDraft {
+  title: string;
+  body: string;
+  type: 'bug' | 'feature';
+  publicName: string;
+  identityKind: 'platform' | 'github-user';
+}
+const issueConfirmDrafts = new Map<string, IssueConfirmDraft>();
+export function readIssueConfirmDraft(id: string): IssueConfirmDraft | undefined {
+  const draft = issueConfirmDrafts.get(id);
+  return draft && { ...draft };
+}
+export function saveIssueConfirmDraft(id: string, draft: IssueConfirmDraft): void {
+  issueConfirmDrafts.set(id, { ...draft });
+}
+export function clearIssueConfirmDraft(id: string): void {
+  issueConfirmDrafts.delete(id);
+}
 
 export function readAskUserDraft(requestId: string): AskUserDraft | null {
   const draft = askUserDrafts.get(requestId);
   return draft ? cloneDraft(draft) : null;
+}
+
+/** 与桌面 AskUserQuestionPrompt 同口径的问题内容标识(字段顺序固定,缺省 options 等同空)。 */
+export function askQuestionsIdentity(questions: AskQuestion[]): string {
+  return JSON.stringify(questions.map((question) => [
+    question.id,
+    question.question,
+    question.header,
+    question.multiSelect,
+    question.answerConstraints,
+    (question.options ?? []).map((option) => [option.label, option.description]),
+  ]));
+}
+
+/** 只返回与当前问题内容一致的草稿:同一 requestId 的问题变了,旧草稿视为不存在。 */
+export function readAskUserDraftFor(requestId: string, questionsIdentity: string): AskUserDraft | null {
+  const draft = readAskUserDraft(requestId);
+  return draft?.questionsIdentity === questionsIdentity ? draft : null;
 }
 
 export function saveAskUserDraft(requestId: string, draft: AskUserDraft): void {
@@ -46,6 +86,7 @@ export function clearPlanReviewDraft(requestId: string): void {
 export function clearAllInteractionDrafts(): void {
   askUserDrafts.clear();
   planReviewDrafts.clear();
+  issueConfirmDrafts.clear();
 }
 
 function cloneDraft(draft: AskUserDraft): AskUserDraft {
@@ -53,6 +94,7 @@ function cloneDraft(draft: AskUserDraft): AskUserDraft {
     answers: { ...draft.answers },
     currentIndex: Math.max(0, Math.floor(draft.currentIndex)),
     customInput: draft.customInput,
+    ...(draft.questionsIdentity !== undefined ? { questionsIdentity: draft.questionsIdentity } : {}),
     selectedLabels: [...draft.selectedLabels],
     showCustomInput: draft.showCustomInput,
   };

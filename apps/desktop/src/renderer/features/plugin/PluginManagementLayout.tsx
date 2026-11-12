@@ -1,18 +1,17 @@
 /**
- * Shared list-page shell for the Plugin and Skill product surfaces.
- *
- * Inputs: active tab, shared search state, optional labels with tab-derived defaults, and actions.
- * Outputs: one width, focus-order-aligned adaptive toolbar, scrolling frame, and transitions.
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ * Shared Plugin / Skill catalog shell. Settings intercepts tab navigation via
+ * `onSelectTab` to keep the embedded catalog inside Settings.
  */
 
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Search, X } from 'lucide-react';
+import { Info, Search, TriangleAlert, X } from 'lucide-react';
 
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
+import { PluginDevicePicker, type CatalogDeviceControl } from './PluginDevicePicker';
 import './plugin-motion.css';
 
 interface PluginManagementLayoutProps {
@@ -23,6 +22,9 @@ interface PluginManagementLayoutProps {
   searchPlaceholder?: string;
   clearSearchLabel?: string;
   headerActions?: ReactNode;
+  showPrimaryTabs?: boolean;
+  embedded?: boolean;
+  onSelectTab?: (tab: 'plugins' | 'skills') => void;
 }
 
 interface PluginManagementHeaderProps {
@@ -32,6 +34,8 @@ interface PluginManagementHeaderProps {
   onQueryChange?: (query: string) => void;
   searchPlaceholder?: string;
   clearSearchLabel?: string;
+  showPrimaryTabs?: boolean;
+  onSelectTab?: (tab: 'plugins' | 'skills') => void;
 }
 
 interface PluginManagementPageProps {
@@ -72,15 +76,25 @@ export function PluginManagementLayout({
   searchPlaceholder,
   clearSearchLabel,
   headerActions,
+  showPrimaryTabs = true,
+  embedded = false,
+  onSelectTab,
 }: PluginManagementLayoutProps) {
   return (
-    <div className="plugin-management-layout-root plugin-motion-root flex h-full min-h-0 w-full flex-col bg-[var(--surface)]">
+    <div
+      className={cn(
+        'app-wallpaper-surface plugin-management-layout-root plugin-motion-root flex h-full min-h-0 w-full flex-col',
+        embedded ? 'bg-transparent' : 'bg-[var(--surface)]',
+      )}
+    >
       <PluginManagementHeader
         activeTab={activeTab}
         query={query}
         onQueryChange={onQueryChange}
         searchPlaceholder={searchPlaceholder}
         clearSearchLabel={clearSearchLabel}
+        showPrimaryTabs={showPrimaryTabs}
+        onSelectTab={onSelectTab}
       >
         {headerActions}
       </PluginManagementHeader>
@@ -97,11 +111,15 @@ export function PluginManagementHeader({
   onQueryChange,
   searchPlaceholder,
   clearSearchLabel,
+  showPrimaryTabs = true,
+  onSelectTab,
 }: PluginManagementHeaderProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const frameRef = useRef<HTMLDivElement | null>(null);
   const [stacked, setStacked] = useState(false);
+  const composingRef = useRef(false);
+  const [compositionQuery, setCompositionQuery] = useState<string | null>(null);
   const searchable = query !== undefined && onQueryChange !== undefined;
   const searchInputId = `plugin-management-${activeTab}-search`;
   const resolvedSearchPlaceholder =
@@ -125,31 +143,28 @@ export function PluginManagementHeader({
     return () => observer.disconnect();
   }, []);
 
-  const tabs = (
-    <div
+  const tabs = showPrimaryTabs ? (
+    <SegmentedControl
       key="plugin-management-tabs"
-      className="plugin-motion-tabs inline-flex shrink-0 rounded-full border p-0.5 backdrop-blur-md"
+      className="plugin-motion-tabs shrink-0"
       role="tablist"
       aria-label={t('sidebar.horizontalTabbarAria')}
-      style={{
-        ...WINDOW_NO_DRAG_STYLE,
-        background: 'color-mix(in srgb, var(--surface-chip) 62%, transparent)',
-        borderColor: 'color-mix(in srgb, var(--border-default) 52%, transparent)',
-        boxShadow: 'inset 0 1px 0 color-mix(in srgb, var(--surface-elevated) 24%, transparent)',
-      }}
-    >
-      <TabButton
-        active={activeTab === 'plugins'}
-        label={t('settings.ghosts.title')}
-        onClick={() => navigate('/plugins')}
-      />
-      <TabButton
-        active={activeTab === 'skills'}
-        label={t('skillhub.home.title')}
-        onClick={() => navigate('/skillhub/local')}
-      />
-    </div>
-  );
+      style={WINDOW_NO_DRAG_STYLE}
+      height={38}
+      optionHeight={32}
+      optionClassName="plugin-management-tab min-w-[88px] px-4 text-13"
+      value={activeTab}
+      onValueChange={(tab) =>
+        onSelectTab
+          ? onSelectTab(tab)
+          : navigate(tab === 'plugins' ? '/plugins' : '/skillhub/local')
+      }
+      options={[
+        { value: 'plugins', label: t('settings.ghosts.title') },
+        { value: 'skills', label: t('skillhub.home.title') },
+      ]}
+    />
+  ) : null;
 
   const tools =
     searchable || children ? (
@@ -181,11 +196,35 @@ export function PluginManagementHeader({
               id={searchInputId}
               type="text"
               inputMode="search"
-              value={query}
-              onChange={(event) => onQueryChange(event.target.value)}
+              value={compositionQuery ?? query}
+              onCompositionStart={(event) => {
+                composingRef.current = true;
+                setCompositionQuery(event.currentTarget.value);
+              }}
+              onCompositionEnd={(event) => {
+                composingRef.current = false;
+                setCompositionQuery(null);
+                onQueryChange(event.currentTarget.value);
+              }}
+              onChange={(event) => {
+                // Skill search updates router state; keep IME drafts local until committed.
+                if (composingRef.current) {
+                  setCompositionQuery(event.target.value);
+                } else {
+                  onQueryChange(event.target.value);
+                }
+              }}
               onKeyDown={(event) => {
-                if (event.nativeEvent.isComposing) return;
                 if (event.key !== 'Escape') return;
+                if (composingRef.current || event.nativeEvent.isComposing) {
+                  // Keep Settings from blurring the field; IME still handles Escape.
+                  event.stopPropagation();
+                  return;
+                }
+                // 认领这一下 Esc：外层（设置页）不再接着失焦或退出。
+                event.preventDefault();
+                // 按住不放的自动连发不算新的一下：清空后不能接着失焦。
+                if (event.repeat) return;
                 if (query) {
                   onQueryChange('');
                 } else {
@@ -249,30 +288,110 @@ export function PluginManagementPage({ children, className }: PluginManagementPa
   );
 }
 
-function TabButton({
-  active,
-  label,
-  onClick,
+export function CatalogTargetControls({
+  computer,
+  project,
+  projectLabel,
 }: {
-  active: boolean;
-  label: string;
-  onClick: () => void;
+  computer?: CatalogDeviceControl;
+  project?: ReactNode;
+  projectLabel?: string;
+}) {
+  const { t } = useTranslation();
+  if (!computer && !project) return null;
+  return (
+    <div
+      role="group"
+      aria-label={t('settings.ghosts.scopePicker.management')}
+      data-catalog-region="target"
+      className="min-w-0 max-w-full"
+      style={WINDOW_NO_DRAG_STYLE}
+    >
+      <PluginDevicePicker
+        {...(computer ?? {
+          selected: null,
+          onSelect: () => {},
+          directory: { candidates: [], target: undefined, online: true, relayOnline: false },
+        })}
+        projectMenu={project}
+        projectLabel={projectLabel}
+      />
+    </div>
+  );
+}
+
+export function InstalledCatalogHeader({
+  title,
+  count,
+  controls,
+}: {
+  title: string;
+  count?: number;
+  controls?: ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
+    <header
+      className="mb-4 flex flex-wrap items-center justify-between gap-3"
+      data-catalog-region="installed"
+    >
+      <div className="flex items-baseline gap-2">
+        <h2 className="text-20 font-medium leading-6 text-[var(--text-primary)]">{title}</h2>
+        {count !== undefined ? (
+          <span className="text-13 tabular-nums text-[var(--text-tertiary)]">{count}</span>
+        ) : null}
+      </div>
+      {controls ? (
+        <div
+          className="flex min-w-0 max-w-full flex-wrap items-center gap-2"
+          style={WINDOW_NO_DRAG_STYLE}
+        >
+          {controls}
+        </div>
+      ) : null}
+    </header>
+  );
+}
+
+export function CatalogManagementNotice({
+  title,
+  children,
+  action,
+  warning = false,
+  className,
+}: {
+  title: string;
+  children: ReactNode;
+  action?: ReactNode;
+  warning?: boolean;
+  className?: string;
+}) {
+  const Icon = warning ? TriangleAlert : Info;
+  return (
+    <div
+      role="status"
+      data-catalog-region="notice"
       className={cn(
-        'plugin-management-tab h-8 min-w-[88px] select-none rounded-full border border-transparent px-4 text-13 font-medium transition-colors',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-        active
-          ? 'plugin-motion-selected text-[var(--text-primary)]'
-          : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
+        'mb-4 flex flex-wrap items-start justify-between gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-chip)] px-4 py-3',
+        className,
       )}
     >
-      {label}
-    </button>
+      <div className="flex min-w-0 flex-1 basis-60 items-start gap-2.5">
+        <Icon
+          size={16}
+          aria-hidden="true"
+          className={cn(
+            'mt-0.5 shrink-0',
+            warning ? 'text-[var(--warning-fg)]' : 'text-[var(--text-secondary)]',
+          )}
+        />
+        <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+          <p className="text-13 font-medium leading-5 text-[var(--text-primary)]">{title}</p>
+          <div className="mt-0.5 text-13 leading-5 text-[var(--text-secondary)]">{children}</div>
+        </div>
+      </div>
+      {action ? (
+        <div className="ml-auto flex shrink-0 flex-wrap items-center gap-2">{action}</div>
+      ) : null}
+    </div>
   );
 }

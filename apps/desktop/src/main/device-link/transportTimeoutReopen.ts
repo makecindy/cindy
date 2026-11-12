@@ -15,6 +15,10 @@
 type Timer = ReturnType<typeof setTimeout>;
 
 export interface TransportTimeoutReopenDeps {
+  /** Local view invalidation, including another reset while reopen is already pending. */
+  onReset?(deviceId: string): void;
+  /** Notify only a still-current, authorized successful recovery. */
+  onReopened?(deviceId: string): void;
   /** 重开链路(通常是 openRemoteLink;自带同 device in-flight 去重)。 */
   reopen(deviceId: string): Promise<unknown>;
   /** 返回 true 则终止该设备的循环(撤权 / client 不在 / 待命态 / relay 离线)。 */
@@ -37,6 +41,8 @@ export interface TransportTimeoutReopenLoop {
   cancel(deviceId: string): void;
   /** 终止全部循环(relay 断开 / 停机)。 */
   dispose(): void;
+  /** 只终止匹配设备的循环:某条连接断开时,另一条连接上的 peer 不受影响。 */
+  disposeWhere(matches: (deviceId: string) => boolean): void;
   /** 测试观察点:该设备是否有循环在跑。 */
   isActive(deviceId: string): boolean;
 }
@@ -153,7 +159,9 @@ export function createTransportTimeoutReopenLoop(
         // link-accept 已达成:被控端 sendLinkAccept 会清扫陈旧前缀并重放 live
         // pending,双向续传由传输层接管,循环使命完成。仅限本代:晚到的
         // 旧代成功不得关掉新一代正在进行的恢复。
+        if (!isCurrent(deviceId, entry)) return;
         finishEntry(deviceId, entry);
+        if (!deps.shouldAbort(deviceId)) deps.onReopened?.(deviceId);
       },
       (err) => {
         if (!isCurrent(deviceId, entry)) return; // 被 cancel/dispose 或已换代
@@ -172,6 +180,7 @@ export function createTransportTimeoutReopenLoop(
 
   return {
     trigger(deviceId: string): void {
+      deps.onReset?.(deviceId);
       if (entries.has(deviceId)) return;
       const entry: ReopenEntry = { timer: null };
       entries.set(deviceId, entry);
@@ -182,6 +191,9 @@ export function createTransportTimeoutReopenLoop(
     },
     dispose(): void {
       for (const deviceId of [...entries.keys()]) removeCurrent(deviceId);
+    },
+    disposeWhere(matches: (deviceId: string) => boolean): void {
+      for (const deviceId of [...entries.keys()]) if (matches(deviceId)) removeCurrent(deviceId);
     },
     isActive(deviceId: string): boolean {
       return entries.has(deviceId);

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Logger } from '../../interfaces/logger.js';
-import { AutoCompactController } from './auto-compact-controller.js';
+import { AutoCompactController, isDeterministicHostCompactFailure } from './auto-compact-controller.js';
 
 const noopLogger: Logger = {
   trace: () => {},
@@ -13,12 +13,16 @@ const noopLogger: Logger = {
   child: () => noopLogger,
 };
 
-function makeController(getThresholdPct: () => number | undefined): AutoCompactController {
+function makeController(
+  getThresholdPct: () => number | undefined,
+  compactWhenFull?: boolean,
+): AutoCompactController {
   return new AutoCompactController({
     logger: noopLogger,
     workdir: '/tmp/project',
     agentKind: 'claude-code',
     getThresholdPct,
+    compactWhenFull,
   });
 }
 
@@ -132,5 +136,59 @@ describe('AutoCompactController', () => {
 
     threshold = 75;
     expect(controller.shouldCompactNow()).toBe(true);
+  });
+
+  it('still compacts at 99% of the window', () => {
+    const controller = makeController(() => 75);
+
+    controller.onUsageUpdate(198, 200);
+
+    expect(controller.shouldCompactNow()).toBe(true);
+  });
+
+  it('does not compact when occupancy is already full', () => {
+    const controller = makeController(() => 75);
+
+    controller.onUsageUpdate(200, 200);
+
+    expect(controller.shouldCompactNow()).toBe(false);
+  });
+
+  it('still compacts a full window when compactWhenFull is set', () => {
+    const controller = makeController(() => 75, true);
+
+    controller.onUsageUpdate(200, 200);
+
+    expect(controller.shouldCompactNow()).toBe(true);
+  });
+
+  it('does not compact after a deterministic host compact failure is latched', () => {
+    const controller = makeController(() => 75);
+
+    controller.onUsageUpdate(160, 200);
+    expect(controller.shouldCompactNow()).toBe(true);
+
+    controller.markNeedsRollover('empty-summary');
+    expect(controller.needsRollover()).toBe(true);
+    expect(controller.shouldCompactNow()).toBe(false);
+  });
+});
+
+describe('isDeterministicHostCompactFailure', () => {
+  it('recognizes empty summaries and compact-origin invalid requests', () => {
+    expect(isDeterministicHostCompactFailure('Error during compaction: summarization produced empty response')).toBe(true);
+    expect(
+      isDeterministicHostCompactFailure(
+        'Error during compaction: API Error: 400 litellm.BadRequestError: XaiException - {"error":{"message":"Upstream error: 400","type":"invalid_request_error"}}',
+      ),
+    ).toBe(true);
+    expect(isDeterministicHostCompactFailure('pi compact failed: invalid_request_error')).toBe(true);
+  });
+
+  it('does not treat network, auth, or ordinary empty responses as compact failure', () => {
+    expect(isDeterministicHostCompactFailure('The model returned an empty response')).toBe(false);
+    expect(isDeterministicHostCompactFailure('Error during compaction: 401 unauthorized')).toBe(false);
+    expect(isDeterministicHostCompactFailure('Error during compaction: Rate limit exceeded')).toBe(false);
+    expect(isDeterministicHostCompactFailure('API Error: 400 invalid_request_error')).toBe(false);
   });
 });

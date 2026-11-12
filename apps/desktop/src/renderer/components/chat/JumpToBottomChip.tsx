@@ -15,7 +15,7 @@
  *   - h-8 / px-3 py-1.5 / rounded-full
  *   - text-12 font-medium
  *   - icon size=14,**放在文字前**(与 NewMessageIndicator 一致)
- *   - shadow-md / 同色 token (--content-area / --msg-tool-card-border / --msg-tool-text)
+ *   - --shadow-menu / 同色 token (--content-area / --msg-tool-card-border / --msg-tool-text)
  *
  * 与 NewMessageIndicator 的关系:
  *   两者都在底部居中。NewMessageIndicator 是有未读时的"消息计数",信息密度
@@ -24,6 +24,7 @@
  */
 
 import { ArrowDown } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 
@@ -42,6 +43,7 @@ export function JumpToBottomChip({
   onClick,
   bottomOffset,
 }: JumpToBottomChipProps) {
+  const { t } = useTranslation();
   return (
     <div
       aria-live="polite"
@@ -57,26 +59,26 @@ export function JumpToBottomChip({
     >
       <button
         type="button"
-        aria-label="跳到底部"
+        aria-label={t('chat.jumpToBottom')}
         onClick={onClick}
         className={cn(
           // 与 NewMessageIndicator 同款 pill 外形 (h-8 / px-3 py-1.5)
           'flex h-8 items-center gap-1.5 rounded-full px-3 py-1.5',
           'border border-[var(--msg-tool-card-border)]',
-          'bg-[hsl(var(--content-area))] shadow-md',
+          'bg-[hsl(var(--content-area))] shadow-[shadow:var(--shadow-menu)]',
           'text-12 font-medium leading-none text-[var(--msg-tool-text)]',
           'transition-colors duration-150 ease-out',
           // hover:用项目通用 list-item hover token(与 SlashCommandPalette /
-          // ModelSelector 等同源)。不用 content-area + alpha,alpha 会让下方
-          // 文字透过来。
-          'hover:bg-[var(--cmd-palette-item-hover)] active:scale-[0.98]',
+          // ModelSelector 等同源)。该 token 可能带 alpha,所以叠在实色底之上,
+          // 不替换 background-color,否则悬浮在正文上时下方文字会透过来。
+          'hover:[background-image:linear-gradient(var(--cmd-palette-item-hover),var(--cmd-palette-item-hover))] active:scale-[0.98]',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]',
         )}
       >
         <ArrowDown size={14} className="shrink-0" />
         {/* translate-y-[0.5px]:leading-none + 中文字符相对 icon 视觉中心偏上,
             微调 0.5px 下移让"跳到底部"和向下箭头的视觉中线对齐。 */}
-        <span className="translate-y-[0.5px]">跳到底部</span>
+        <span className="translate-y-[0.5px]">{t('chat.jumpToBottom')}</span>
       </button>
     </div>
   );

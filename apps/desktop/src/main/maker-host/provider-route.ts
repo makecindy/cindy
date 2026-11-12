@@ -1,3 +1,5 @@
+import { resolveCopilotAccountUrl } from './copilot-account-url.js';
+import { withProviderAppAttribution } from './provider-app-attribution.js';
 /**
  * provider-route —— 把 catalog 的 `RoutingDescriptor` 翻译成 loopback proxy 的 `RoutingDecision`,
  * 并据 per-session 选定的供应商解析本会话的路由。
@@ -21,17 +23,28 @@
 
 import {
   actualSourceIdForModel,
+  modelWithInterface,
+  chatEligibleSourcesForModel,
+  isExclusiveXaiModelId,
+  isCodexGatewayWireModel,
+  resolvePiModelRoute,
   runtimeCustomProviderId,
   storedCustomProviderId,
+  stripCodexGatewayWirePrefix,
+  XAI_MODEL_PREFIX,
   type AgentKind,
   type Provider,
+  type ProviderSource,
   type ProviderView,
   type RoutingDescriptor,
+  isCustomRoutedProvider,
 } from '@cindy/model-providers';
 import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
 
 import { getActiveCatalog, isXdCodexAnthropicBridgeModel } from './active-catalog.js';
 import { getAppCapabilities } from '../appCapabilities.js';
+import { sessionModelInterface, assertModelInterfaceAvailable } from './session-model-interface.js';
+import { routeLookupModelId } from './claude-model-id.js';
 import { getSessionProvider } from './session-provider-store.js';
 
 /**
@@ -46,11 +59,29 @@ import { getSessionProvider } from './session-provider-store.js';
  */
 type CustomProviderKeyReader = (providerId: string, agent: AgentKind) => string | null;
 let customProviderKeyReader: CustomProviderKeyReader = () => null;
+type CustomProviderHeaderReader = (
+  providerId: string,
+  agent: AgentKind,
+) => Record<string, string> | null;
+let customProviderHeaderReader: CustomProviderHeaderReader = () => null;
 const providerRouteMutationCounts = new Map<string, number>();
+const providerRouteCredentialRevisions = new Map<string, number>();
+let nextProviderRouteCredentialRevision = 1;
+const providerRouteMutationWaiters = new Map<string, Set<() => void>>();
+
+export type ProviderRouteMutationRelease = (() => void) & {
+  /** Publish the new non-sensitive route/capability/credential dispatch generation. */
+  commit(): void;
+};
 
 /** host 启动期接通真实 safeStorage 读取（按 `provider_key_<id>_<agent>`，per-runtime 独立密钥）。 */
 export function setCustomProviderKeyReader(reader: CustomProviderKeyReader): void {
   customProviderKeyReader = reader;
+}
+
+/** Host-side secure header reader. Header values never enter Provider route snapshots. */
+export function setCustomProviderHeaderReader(reader: CustomProviderHeaderReader): void {
+  customProviderHeaderReader = reader;
 }
 
 /**
@@ -60,20 +91,42 @@ export function setCustomProviderKeyReader(reader: CustomProviderKeyReader): voi
  * endpoint 与新 key（或新 endpoint 与旧 key）拼成一次上游请求。计数使排队的多窗口
  * mutation 之间不会短暂恢复路由。
  */
-export function beginProviderRouteMutation(providerId: string): () => void {
+export function beginProviderRouteMutation(providerId: string): ProviderRouteMutationRelease {
   providerId = runtimeCustomProviderId(providerId);
+  const revision = nextProviderRouteCredentialRevision++;
   providerRouteMutationCounts.set(
     providerId,
     (providerRouteMutationCounts.get(providerId) ?? 0) + 1,
   );
   let finished = false;
-  return () => {
+  let committed = false;
+  const finish = (() => {
     if (finished) return;
     finished = true;
     const remaining = (providerRouteMutationCounts.get(providerId) ?? 1) - 1;
-    if (remaining <= 0) providerRouteMutationCounts.delete(providerId);
+    if (remaining <= 0) {
+      providerRouteMutationCounts.delete(providerId);
+      const waiters = providerRouteMutationWaiters.get(providerId);
+      providerRouteMutationWaiters.delete(providerId);
+      for (const resolve of waiters ?? []) resolve();
+    }
     else providerRouteMutationCounts.set(providerId, remaining);
+  }) as ProviderRouteMutationRelease;
+  finish.commit = () => {
+    if (finished || committed) return;
+    committed = true;
+    providerRouteCredentialRevisions.set(providerId, revision);
   };
+  return finish;
+}
+
+/**
+ * Non-sensitive request-dispatch generation for Provider routing, capabilities and credentials.
+ * Kept for the process lifetime (including after delete) so deleting and recreating the same id
+ * cannot make an old Host snapshot valid again.
+ */
+export function getProviderRouteCredentialRevision(providerId: string): number {
+  return providerRouteCredentialRevisions.get(runtimeCustomProviderId(providerId)) ?? 0;
 }
 
 export function isProviderRouteMutationInProgress(providerId: string): boolean {
@@ -141,13 +194,15 @@ export function readProviderOAuthToken(
 const MISSING_PROVIDER_OAUTH_TOKEN = 'xdt-missing-provider-oauth-token';
 
 /**
- * Codex 子进程(ChatGPT OAuth spawn)随请求携带的 OpenAI 账号/会话元数据头。
- * 发往第三方上游前必须整组抹掉:既是隐私(账号 id 泄漏给别家),也防上游把不认识的
- * OpenAI 头当非法请求拒掉。内置 xai 走目录条目的 headerDelete 声明同一组;自定义
- * OAuth 供应商的目录条目(buildUserProvider)不带 headerDelete,由 oauth-token 分支
- * 在代码层兜底(非 ChatGPT spawn 下这些头不存在,删除为 no-op,无副作用)。
+ * Codex 子进程可能携带的 OpenAI 账号/会话元数据头及客户端标识。
+ * originator 在 API Key 模式下也存在，并不只来自 ChatGPT OAuth spawn。
+ * 发往第三方上游默认整组抹掉，避免账号信息泄漏和上游拒绝不认识的头；内置 xai
+ * 由目录 headerDelete 声明，自定义供应商由代码兜底。企业下发的 BYOK API Key 路由
+ * 仅在转发路径固定发送 originator: cindy，让下发 endpoint 的网关能按 Cindy 客户端放行。
+ * 恢复的线程可能保留外部客户端的 originator，不能直接放行原值；其余三项仍删除。
  */
 const CODEX_ACCOUNT_HEADERS = ['chatgpt-account-id', 'openai-beta', 'originator', 'session_id'];
+const CINDY_CODEX_ORIGINATOR = 'cindy';
 /** 无鉴权上游永远不能收到 agent 子进程自带的订阅凭证。 */
 const CLIENT_AUTH_HEADERS = ['authorization', 'x-api-key'];
 /** 缺少自定义供应商 key 时覆盖 CLI 凭证的哑值：目标上游应 401，但绝不收到订阅 token。 */
@@ -288,7 +343,33 @@ function hasHeader(headers: Record<string, string> | undefined, expectedName: st
  * （cc=`x-api-key`，codex=`authorization: Bearer`）。内置三家不传 / 忽略。
  * `oauthToken` 仅 `oauth-token` 策略（描述符驱动的通用 OAuth 供应商）使用。
  */
-export function buildRouteDecision(
+export function buildRouteDecision(...args: Parameters<typeof buildRouteDecisionBase>): RoutingDecision | null {
+  const decision = buildRouteDecisionBase(...args);
+  if (decision && !decision.localHandler) {
+    const headers = withProviderAppAttribution(decision.upstreamOverride ?? args[0].upstream,
+      decision.headerOverride, {}, decision.headerDelete);
+    if (Object.keys(headers).length > 0) decision.headerOverride = headers;
+  }
+  const selected = args[0].modelInterface;
+  if (!decision || !selected || decision.localHandler) return decision;
+  return { ...decision, compatibilityProfiles: selected.compatibility,
+    transformRequestBody: rewriteRequestBodyModel(selected.wireModelId),
+  };
+}
+
+/** Rewrites the JSON body's model right before forwarding; non-JSON bodies pass through. */
+export function rewriteRequestBodyModel(model: string): NonNullable<RoutingDecision['transformRequestBody']> {
+  return (body) => {
+    let parsed: unknown;
+    try { parsed = JSON.parse(body.toString('utf8')); } catch { return { body }; }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { body };
+    const object = parsed as Record<string, unknown>;
+    if (typeof object.model === 'string') object.model = model;
+    return { body: Buffer.from(JSON.stringify(parsed)) };
+  };
+}
+
+function buildRouteDecisionBase(
   routing: RoutingDescriptor,
   gatewayKey: string | null,
   agent: AgentKind,
@@ -311,9 +392,7 @@ export function buildRouteDecision(
       const headerOverride = withoutClientAuthHeaders(routing.headerOverride);
       return {
         upstreamOverride: routing.upstream,
-        ...(Object.keys(headerOverride).length > 0
-          ? { headerOverride }
-          : {}),
+        ...(Object.keys(headerOverride).length > 0 ? { headerOverride } : {}),
         headerDelete: [...headerDelete],
       };
     }
@@ -329,6 +408,9 @@ export function buildRouteDecision(
       };
       const decision: RoutingDecision = { headerOverride };
       if (routing.upstream) decision.upstreamOverride = routing.upstream;
+      if (routing.upstream && oauthToken) {
+        decision.upstreamOverride = resolveCopilotAccountUrl(routing.upstream, oauthToken);
+      }
       // cc 子进程可能带 x-api-key（gateway-spawn 的网关 key）——发往 OAuth 上游必须抹掉，
       // 防泄漏 + 防按 x-api-key 优先鉴权的端点拿错钥匙。合并描述符自带的 headerDelete。
       const del = new Set(routing.headerDelete ?? []);
@@ -379,9 +461,10 @@ export function buildRouteDecision(
       const hasLegacyAuthorization = hasHeader(routing.headerOverride, 'authorization');
       const hasLegacyApiKey = hasHeader(routing.headerOverride, 'x-api-key');
       const hasLegacyCredential = hasLegacyAuthorization || hasLegacyApiKey;
-      const headerOverride = apiKey || !hasLegacyCredential
-        ? withoutClientAuthHeaders(routing.headerOverride)
-        : normalizeLegacyClientAuthHeaders(routing.headerOverride);
+      const headerOverride =
+        apiKey || !hasLegacyCredential
+          ? withoutClientAuthHeaders(routing.headerOverride)
+          : normalizeLegacyClientAuthHeaders(routing.headerOverride);
       if (apiKey) {
         if (agent !== 'codex') {
           // cc 子进程在 oauth-spawn 下会带订阅的 `authorization: Bearer <Claude token>`——必须连它一起
@@ -404,11 +487,16 @@ export function buildRouteDecision(
           headerOverride['x-api-key'] = MISSING_CUSTOM_PROVIDER_API_KEY;
         }
       }
+      const forceCindyOriginator = agent === 'codex' && routing.forceCindyCodexOriginator === true;
+      if (forceCindyOriginator) headerOverride.originator = CINDY_CODEX_ORIGINATOR;
       const decision: RoutingDecision = {};
       if (Object.keys(headerOverride).length > 0) decision.headerOverride = headerOverride;
       if (routing.upstream) decision.upstreamOverride = routing.upstream;
       const headerDelete = new Set(routing.headerDelete ?? []);
-      if (agent === 'codex') for (const name of CODEX_ACCOUNT_HEADERS) headerDelete.add(name);
+      if (agent === 'codex') for (const name of CODEX_ACCOUNT_HEADERS) {
+        if (name === 'originator' && forceCindyOriginator) continue;
+        headerDelete.add(name);
+      }
       if (headerDelete.size > 0) decision.headerDelete = [...headerDelete];
       // 自定义供应商必有 upstream → 实际总返回 decision；全空时 passthrough。
       return decision.headerOverride || decision.upstreamOverride || decision.headerDelete
@@ -448,11 +536,18 @@ export function gatewayDefaultRouteDecision(
  * 未声明 = universal(网关 / Anthropic 直连 / 自定义供应商,上游本身能服务任意模型);
  * wireModel 为空 = 控制面请求(如 codex `GET /models`,无 body.model),不受范围限制。
  */
-function routingServesWireModel(routing: RoutingDescriptor, wireModel: string | undefined): boolean {
+function routingServesWireModel(
+  routing: RoutingDescriptor,
+  wireModel: string | undefined,
+): boolean {
   if (routing.disabled) return false;
   if (!routing.modelPrefixes?.length) return true;
   if (!wireModel) return true;
-  return routing.modelPrefixes.some((prefix) => wireModel.startsWith(prefix));
+  return routing.modelPrefixes.some(
+    (prefix) =>
+      wireModel.startsWith(prefix)
+      || (prefix === XAI_MODEL_PREFIX && isExclusiveXaiModelId(wireModel)),
+  );
 }
 
 /**
@@ -461,27 +556,61 @@ function routingServesWireModel(routing: RoutingDescriptor, wireModel: string | 
  * Model Access v3 已给每个 Agent 明确限定 wire protocol；XD 不在客户端做模型级协议
  * fallback。自定义 provider 的兼容 bridge 仍由它自己的 routing descriptor 表达。
  */
-function providerRoutingForModel(
+export function providerRoutingForModel(
   provider: Provider,
   agent: AgentKind,
   wireModel: string | undefined,
 ): RoutingDescriptor | null {
   const routing = provider.routing[agent];
   if (!routing) return null;
-  const modelRoute = wireModel
-    ? provider.models[agent]?.find((model) => model.id === wireModel)?.route
+  const model = wireModel
+    ? provider.models[agent]?.find((candidate) => candidate.id === wireModel)
     : undefined;
-  if (!modelRoute) return routing;
+  if (model?.interfaceUnavailable) throw new Error('MODEL_INTERFACE_UNAVAILABLE');
+  const modelRoute = model?.route;
+  const piRoute =
+    agent === 'pi'
+      ? resolvePiModelRoute(model, {
+          baseUrl: routing.upstream,
+          wireProtocol: routing.wireProtocol,
+        })
+      : undefined;
+  if (agent === 'pi' && piRoute === null) return null;
+  if (
+    !modelRoute &&
+    (agent !== 'pi' ||
+      (piRoute?.baseUrl === routing.upstream && piRoute.wireProtocol === routing.wireProtocol))
+  )
+    return routing;
 
   // 鉴权、固定 headers 与模型 namespace 门继续继承 provider/runtime；请求路径不能在
   // 协议切换后误继承旧 runtime 的路径，只有模型覆盖显式声明时才带回。
-  const { requestPath: _runtimeRequestPath, ...inherited } = routing;
+  const inherited = { ...routing };
+  delete inherited.requestPath;
   return {
     ...inherited,
-    upstream: modelRoute.baseUrl,
-    wireProtocol: modelRoute.wireProtocol,
-    ...(modelRoute.requestPath ? { requestPath: modelRoute.requestPath } : {}),
+    ...(model?.selectedInterface ? { modelInterface: model.selectedInterface } : {}),
+    upstream: agent === 'pi' ? piRoute!.baseUrl : modelRoute!.baseUrl,
+    wireProtocol: agent === 'pi' ? piRoute!.wireProtocol : modelRoute!.wireProtocol,
+    ...(agent === 'pi'
+      ? piRoute!.requestPath
+        ? { requestPath: piRoute!.requestPath }
+        : {}
+      : modelRoute?.requestPath
+        ? { requestPath: modelRoute.requestPath }
+        : {}),
   };
+}
+
+/** Pin only the model transport. Live credentials, provider disable and namespace
+ * restrictions still come from the current connection. */
+export function sessionProviderRoutingForModel(sessionId: string, provider: Provider, agent: AgentKind, wireModel?: string): RoutingDescriptor | null {
+  const model = provider.models[agent]?.find(m => m.id === wireModel);
+  const selected = model && sessionModelInterface(sessionId, provider.id, agent, model, getActiveCatalog().modelRegistry);
+  const pinned = selected ? { ...provider, models: { ...provider.models,
+    [agent]: provider.models[agent]?.map(m => m.id === wireModel ? modelWithInterface(m, selected) : m),
+  } } : provider;
+  return providerRoutingForModel(pinned, agent, wireModel);
 }
 
 /**
@@ -529,20 +658,87 @@ export function getSessionRoutingDescriptor(
   if (!providerId) return null;
   if (isProviderRouteMutationInProgress(providerId)) return null;
   const provider = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
+  const routing = provider ? sessionProviderRoutingForModel(sessionId, provider, agent, wireModel) : null;
+  if (!routing || !routingServesWireModel(routing, wireModel)) return null;
+  return routing;
+}
+
+/** Resolve routing metadata directly from a provider id without consulting session state. */
+export function getProviderRoutingDescriptor(
+  providerId: string | null | undefined,
+  agent: AgentKind,
+  wireModel?: string,
+): RoutingDescriptor | null {
+  const id = providerId?.trim();
+  if (!id || isProviderRouteMutationInProgress(id)) return null;
+  if (id === 'xd' && !getAppCapabilities().canUseCindyGateway) return null;
+  const provider = getActiveCatalog().providers.find((candidate) => candidate.id === id);
   const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
   if (!routing || !routingServesWireModel(routing, wireModel)) return null;
   return routing;
 }
 
+/** Choose process isolation from routing metadata without loading any credentials. */
+export async function captureCodexLocalAuthPolicy(
+  providerId: string | null | undefined,
+  modelId: string,
+  signal?: AbortSignal,
+): Promise<{ policy: 'isolated' | 'legacy-shared'; isCurrent: () => boolean }> {
+  // With an inferred source the transaction may temporarily remove the model
+  // from the catalog. Wait before inference, rather than freezing an unknown route.
+  while (true) {
+    signal?.throwIfAborted();
+    const pending = providerId
+      ? [runtimeCustomProviderId(providerId)].filter(isProviderRouteMutationInProgress)
+      : [...providerRouteMutationCounts.keys()];
+    if (pending.length === 0) break;
+    await Promise.all(pending.map((id) => new Promise<void>((resolve, reject) => {
+      const waiters = providerRouteMutationWaiters.get(id) ?? new Set<() => void>();
+      const done = () => {
+        signal?.removeEventListener('abort', cancel);
+        waiters.delete(done);
+        if (waiters.size === 0) providerRouteMutationWaiters.delete(id);
+        resolve();
+      };
+      const cancel = () => {
+        signal?.removeEventListener('abort', cancel);
+        waiters.delete(done);
+        if (waiters.size === 0) providerRouteMutationWaiters.delete(id);
+        reject(signal?.reason);
+      };
+      signal?.addEventListener('abort', cancel, { once: true });
+      waiters.add(done);
+      providerRouteMutationWaiters.set(id, waiters);
+    })));
+  }
+  const source = providerId ?? inferProviderIdForModel(modelId, 'codex');
+  const routing = getProviderRoutingDescriptor(source, 'codex', modelId);
+  // Keep legacy reuse for third-party OAuth and unknown routes. This
+  // is compatibility policy, not a claim that they need official Codex OAuth.
+  const revision = nextProviderRouteCredentialRevision;
+  return {
+    policy: routing?.authStrategy === 'api-key-header' || routing?.authStrategy === 'gateway-key'
+      ? 'isolated' : 'legacy-shared',
+    isCurrent: () => revision === nextProviderRouteCredentialRevision,
+  };
+}
+
+export async function resolveCodexLocalAuthPolicy(
+  providerId: string | null | undefined,
+  modelId: string,
+): Promise<'isolated' | 'legacy-shared'> {
+  return (await captureCodexLocalAuthPolicy(providerId, modelId)).policy;
+}
+
 export interface ResolvedSessionRoute {
   providerId: string;
-  providerSource: 'builtin' | 'user';
+  providerSource: ProviderSource;
   routing: RoutingDescriptor;
   apiKey: string | null;
   oauthToken: string | null;
 }
 
-async function resolveProviderRouteById(
+export async function resolveProviderRouteById(
   providerId: string,
   agent: AgentKind,
   wireModel?: string,
@@ -572,22 +768,30 @@ export async function resolveSessionRoute(
 ): Promise<ResolvedSessionRoute | null> {
   const providerId = getSessionProvider(sessionId);
   if (!providerId) return null;
-  return resolveProviderRouteById(providerId, agent, wireModel);
+  if (isProviderRouteMutationInProgress(providerId)) return null;
+  const provider = getActiveCatalog().providers.find(p => p.id === providerId);
+  const routing = provider ? sessionProviderRoutingForModel(sessionId, provider, agent, wireModel) : null;
+  if (!provider || !routing || !routingServesWireModel(routing, wireModel)) return null;
+  return { providerId, providerSource: provider.source, routing,
+    ...await readProviderRouteCredentials(provider, routing, agent) };
 }
 
 /** Build outbound headers for an already resolved local protocol handler. */
-export function buildLocalHandlerHeaders(route: ResolvedSessionRoute, agent: AgentKind): {
+export function buildLocalHandlerHeaders(
+  route: ResolvedSessionRoute,
+  agent: AgentKind,
+): {
   headers: Record<string, string>;
   headerDelete: string[];
 } {
   const hostManagedAuth =
-    route.routing.authStrategy === 'none'
-    || route.routing.authStrategy === 'api-key-header'
-    || route.routing.authStrategy === 'oauth-token'
-    || route.routing.authStrategy === 'provider-oauth-header';
-  const headers: Record<string, string> = hostManagedAuth
+    route.routing.authStrategy === 'none' ||
+    route.routing.authStrategy === 'api-key-header' ||
+    route.routing.authStrategy === 'oauth-token' ||
+    route.routing.authStrategy === 'provider-oauth-header';
+  const headers: Record<string, string> = withProviderAppAttribution(route.routing.upstream, hostManagedAuth
     ? withoutClientAuthHeaders(route.routing.headerOverride)
-    : { ...(route.routing.headerOverride ?? {}) };
+    : { ...(route.routing.headerOverride ?? {}) }, {}, route.routing.headerDelete);
   const headerDelete = new Set(route.routing.headerDelete ?? []);
   switch (route.routing.authStrategy) {
     case 'none':
@@ -595,12 +799,7 @@ export function buildLocalHandlerHeaders(route: ResolvedSessionRoute, agent: Age
       break;
     case 'api-key-header':
       {
-        const decision = buildRouteDecision(
-          route.routing,
-          null,
-          agent,
-          route.apiKey,
-        );
+        const decision = buildRouteDecision(route.routing, null, agent, route.apiKey);
         Object.assign(headers, decision?.headerOverride ?? {});
         for (const name of decision?.headerDelete ?? []) headerDelete.add(name);
       }
@@ -634,14 +833,14 @@ export interface ResolvedProviderRouteDecision {
  * 自定义 key、两种 OAuth 策略的读取器与容错)是同一份逻辑,分写会漂移。
  */
 async function readProviderRouteCredentials(
-  provider: { id: string; source: 'builtin' | 'user' },
+  provider: Pick<Provider, 'id' | 'source'>,
   routing: RoutingDescriptor,
   agent: AgentKind,
 ): Promise<{ apiKey: string | null; oauthToken: string | null }> {
   const credentialProviderId =
-    provider.source === 'user' ? storedCustomProviderId(provider.id) : provider.id;
+    isCustomRoutedProvider(provider) ? storedCustomProviderId(provider.id) : provider.id;
   const apiKey =
-    provider.source === 'user' ? customProviderKeyReader(credentialProviderId, agent) : null;
+    isCustomRoutedProvider(provider) ? customProviderKeyReader(credentialProviderId, agent) : null;
   let oauthToken: string | null = null;
   if (routing.authStrategy === 'oauth-token') {
     oauthToken = oauthTokenReader(credentialProviderId);
@@ -667,19 +866,77 @@ export async function resolveProviderRouteDecision(
   providerId: string | null | undefined,
   agent: AgentKind,
   gatewayKey: string | null,
+  wireModel?: string,
+  sessionId?: string,
 ): Promise<ResolvedProviderRouteDecision | null> {
   const id = providerId?.trim() || null;
   if (!id) return null;
   if (isProviderRouteMutationInProgress(id)) return null;
   if (id === 'xd' && !getAppCapabilities().canUseCindyGateway) return null;
   const provider = getActiveCatalog().providers.find((p) => p.id === id);
-  const routing = provider?.routing[agent];
-  if (!provider || !routing) return null;
+  const routing = provider ? (sessionId ? sessionProviderRoutingForModel(sessionId, provider, agent, wireModel) : providerRoutingForModel(provider, agent, wireModel)) : null;
+  if (!provider || !routing || !routingServesWireModel(routing, wireModel)) return null;
   const { apiKey, oauthToken } = await readProviderRouteCredentials(provider, routing, agent);
+  const decision = buildRouteDecision(routing, gatewayKey, agent, apiKey, oauthToken);
   return {
     providerId: id,
     routing,
-    decision: buildRouteDecision(routing, gatewayKey, agent, apiKey, oauthToken),
+    decision: decision && wireModel && routing.requestPath
+      ? { ...decision, pathOverride: routing.requestPath }
+      : decision,
+  };
+}
+
+/**
+ * Resolve a route descriptor frozen with a Codex Host spawn snapshot.
+ * Provider existence and credentials remain live safety boundaries: deleting the
+ * Provider or removing its credential fails closed instead of falling through.
+ */
+export async function resolveFrozenProviderRouteDecision(
+  providerId: string,
+  routing: RoutingDescriptor,
+  credentialRevision: number,
+  agent: AgentKind,
+  gatewayKey: string | null,
+  wireModel?: string,
+): Promise<ResolvedProviderRouteDecision | null> {
+  const id = providerId.trim();
+  if (!id || isProviderRouteMutationInProgress(id)) return null;
+  if (getProviderRouteCredentialRevision(id) !== credentialRevision) return null;
+  const provider = getActiveCatalog().providers.find((candidate) => candidate.id === id);
+  if (!provider || !isCustomRoutedProvider(provider) || !provider.agents.includes(agent)) return null;
+  if (!routingServesWireModel(routing, wireModel)) return null;
+  if (routing.modelInterface && wireModel) assertModelInterfaceAvailable(routing.modelInterface, wireModel, getActiveCatalog().modelRegistry);
+  const { apiKey, oauthToken } = await readProviderRouteCredentials(provider, routing, agent);
+  // Header overrides are user-owned configuration. Organization routes use only the trusted
+  // directory descriptor and managed credential, even if stale local data shares an id.
+  const customHeaders = provider.source === 'user'
+    ? customProviderHeaderReader(storedCustomProviderId(provider.id), agent)
+    : null;
+  // A provider-OAuth reader may await refresh. Recheck both guards after the credential read so a
+  // concurrent endpoint/key/token mutation can only yield the old coherent decision or fail closed.
+  if (
+    isProviderRouteMutationInProgress(id) ||
+    getProviderRouteCredentialRevision(id) !== credentialRevision
+  ) {
+    return null;
+  }
+  const hasCustomHeaders = Boolean(customHeaders && Object.keys(customHeaders).length > 0);
+  if (routing.headerOverrideState && !hasCustomHeaders) return null;
+  const requestRouting = hasCustomHeaders ? { ...routing, headerOverride: customHeaders! } : routing;
+  const decision = buildRouteDecision(requestRouting, gatewayKey, agent, apiKey, oauthToken);
+  const dispatchGenerationValid = (): boolean => {
+    if (isProviderRouteMutationInProgress(id)) return false;
+    if (getProviderRouteCredentialRevision(id) !== credentialRevision) return false;
+    return getActiveCatalog().providers.some(
+      (candidate) =>
+        candidate.id === id && isCustomRoutedProvider(candidate) && candidate.agents.includes(agent),
+    );
+  };
+  return {
+    providerId: id,
+    routing,
+    decision: decision ? { ...decision, dispatchGenerationValid } : decision,
   };
 }
 
@@ -697,16 +954,16 @@ export function resolveSessionRouteDecision(
   }
   if (providerId === 'xd' && !getAppCapabilities().canUseCindyGateway) return null;
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
-  const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
+  const routing = provider ? sessionProviderRoutingForModel(sessionId, provider, agent, wireModel) : null;
   if (!routing) return null;
   if (routing.disabled) return disabledProviderRouteDecision(providerId);
   if (pendingDecision) return pendingDecision;
   if (!routingServesWireModel(routing, wireModel)) return null;
   // 自定义供应商：resolve 时按 provider_key_<id>_<agent> 读出该 runtime 的 API key 注入鉴权头（不在 catalog）。
   const credentialProviderId =
-    provider?.source === 'user' ? storedCustomProviderId(providerId) : providerId;
+    isCustomRoutedProvider(provider) ? storedCustomProviderId(providerId) : providerId;
   const apiKey =
-    provider?.source === 'user' ? customProviderKeyReader(credentialProviderId, agent) : null;
+    isCustomRoutedProvider(provider) ? customProviderKeyReader(credentialProviderId, agent) : null;
   const withRequestPath = (decision: RoutingDecision | null): RoutingDecision | null =>
     decision && wireModel && routing.requestPath
       ? { ...decision, pathOverride: routing.requestPath }
@@ -733,30 +990,75 @@ export function resolveSessionRouteDecision(
 }
 
 function providersForModel(modelId: string, agent: AgentKind) {
-  return getActiveCatalog().providers.filter((provider) =>
-    !isProviderRouteMutationInProgress(provider.id) &&
-    (provider.id !== 'xd' || getAppCapabilities().canUseCindyGateway) &&
-    provider.agents.includes(agent) &&
-    Boolean(provider.routing[agent] && !provider.routing[agent]?.disabled) &&
-    (provider.models[agent] ?? []).some((model) => model.id === modelId),
+  return getActiveCatalog().providers.filter(
+    (provider) =>
+      !isProviderRouteMutationInProgress(provider.id) &&
+      (provider.id !== 'xd' || getAppCapabilities().canUseCindyGateway) &&
+      provider.agents.includes(agent) &&
+      Boolean(provider.routing[agent] && !provider.routing[agent]?.disabled) &&
+      (provider.models[agent] ?? []).some((model) => model.id === modelId),
   );
 }
 
-async function connectedDefaultProviderForModel(modelId: string, agent: AgentKind) {
+type ConnectedDefaultProviderResolution =
+  | { kind: 'provider'; provider: ProviderView }
+  | { kind: 'ambiguous' }
+  | { kind: 'none' };
+
+async function connectedDefaultProviderForModel(
+  modelId: string,
+  agent: AgentKind,
+): Promise<ConnectedDefaultProviderResolution> {
   const providers = await providerViewsReader();
+  const eligible = chatEligibleSourcesForModel(providers, modelId, agent, {
+    includeDisabled: true,
+  });
+  // Claude Code can emit its first request before the selected Provider is
+  // bound to the session. If more than one connected source exposes the same
+  // bare model id, choosing the native default/first source would risk sending
+  // that prompt to a Provider the user did not select. Fail closed until the
+  // session binding arrives; Codex retains its established native-default
+  // semantics because its implicit bridge is also used for explicit prefixes.
+  if (agent === 'claude-code' && eligible.length > 1) return { kind: 'ambiguous' };
   // This runs while dispatching an already-created implicit-source session. Admission for new
   // sessions/model switches happened earlier; keep its retired/disabled source usable for resume.
   const defaultId = actualSourceIdForModel(providers, null, modelId, agent);
-  return providers.find((provider) => provider.id === defaultId) ?? null;
+  const provider = eligible.find((candidate) => candidate.id === defaultId);
+  return provider ? { kind: 'provider', provider } : { kind: 'none' };
+}
+
+/** Account bootstrap and the implicit bridge must resolve the same connected source. */
+export async function resolveConnectedDefaultProviderIdForModel(
+  modelId: string,
+  agent: AgentKind,
+): Promise<string | null> {
+  const source = await connectedDefaultProviderForModel(modelId.replace(/\[1m\]$/, ''), agent);
+  if (source.kind === 'ambiguous') throw new Error('Model source is ambiguous; select a provider');
+  return source.kind === 'provider' ? source.provider.id : null;
+}
+
+/**
+ * 隐式 bridge 的 wire 判定口径:目录条目未显式声明 wireProtocol 时按 agent 原生缺省
+ * 推断(claude-code=anthropic-messages,codex=openai-responses;与 resolveVisionBackendRoute
+ * 的缺省推断同源)。claude-code 的用户 Anthropic 兼容上游(如智谱)在目录里就是该 agent
+ * 的缺省 wire,buildUserProvider 按约定省略该字段 —— 不做缺省推断,这些来源会被整体
+ * 排除在隐式路由之外,裸 catalog id(如 glm-5.3)只能落默认网关吃 LiteLLM 模型校验层
+ * 的 400(Invalid model name)。
+ */
+function implicitBridgeWire(
+  routing: RoutingDescriptor | null,
+  agent: AgentKind,
+): RoutingDescriptor['wireProtocol'] {
+  if (routing?.wireProtocol) return routing.wireProtocol;
+  if (agent === 'claude-code') return 'anthropic-messages';
+  if (agent === 'codex') return 'openai-responses';
+  return undefined;
 }
 
 function hasImplicitLocalBridgeCandidate(modelId: string, agent: AgentKind): boolean {
   return providersForModel(modelId, agent).some((provider) => {
-    const routing = providerRoutingForModel(provider, agent, modelId);
-    return (
-      routing?.wireProtocol === 'openai-chat'
-      || routing?.wireProtocol === 'anthropic-messages'
-    );
+    const wire = implicitBridgeWire(providerRoutingForModel(provider, agent, modelId), agent);
+    return wire === 'openai-chat' || wire === 'anthropic-messages' || wire === 'google-generative-ai' || (agent === 'claude-code' && wire === 'openai-responses');
   });
 }
 
@@ -773,6 +1075,37 @@ export function inferProviderIdForModel(modelId: string, agent: AgentKind): stri
   return uniqueProviderForModel(modelId, agent)?.id ?? null;
 }
 
+export type ImplicitLocalBridgeRouteResolution =
+  | { kind: 'route'; route: ResolvedSessionRoute }
+  | { kind: 'ambiguous' }
+  | { kind: 'none' };
+
+/**
+ * Resolve an implicit bridge route while preserving the distinction between
+ * no connected source and multiple connected sources. Claude Code callers
+ * must refuse the latter until the session's explicit Provider binding arrives.
+ */
+export async function resolveImplicitLocalBridgeRouteResolution(
+  modelId: string,
+  agent: AgentKind,
+): Promise<ImplicitLocalBridgeRouteResolution> {
+  const catalogModelId = modelId.replace(/\[1m\]$/, '');
+  if (!hasImplicitLocalBridgeCandidate(catalogModelId, agent)) {
+    return { kind: 'none' };
+  }
+  const source = await connectedDefaultProviderForModel(catalogModelId, agent);
+  if (source.kind !== 'provider') return source;
+  // cc sends `foo[1m]` for a 1M window while the Provider lists `foo` (and its own route)
+  const lookupModelId = agent === 'claude-code' ? routeLookupModelId(source.provider, modelId) : modelId;
+  const routing = providerRoutingForModel(source.provider, agent, lookupModelId);
+  const wire = implicitBridgeWire(routing, agent);
+  if (wire !== 'openai-chat' && wire !== 'anthropic-messages' && wire !== 'google-generative-ai' && !(agent === 'claude-code' && wire === 'openai-responses')) {
+    return { kind: 'none' };
+  }
+  const route = await resolveProviderRouteById(source.provider.id, agent, lookupModelId);
+  return route ? { kind: 'route', route } : { kind: 'none' };
+}
+
 /**
  * 隐式本地 bridge 来源：会话未显式选 Provider 时，按模型选择器相同的原生默认来源
  * 解析 Provider；只有最终来源明确声明 Chat / Anthropic Messages wire 才接管。
@@ -784,24 +1117,9 @@ export function resolveImplicitLocalBridgeRoute(
   modelId: string,
   agent: AgentKind,
 ): Promise<ResolvedSessionRoute | null> {
-  const catalogModelId = modelId.replace(/\[1m\]$/, '');
-  // Most Codex requests are native OpenAI Responses and do not need provider
-  // connection resolution. Keep credential-store reads off that hot path; only
-  // bridge-capable catalog models need the live connected-provider snapshot.
-  if (!hasImplicitLocalBridgeCandidate(catalogModelId, agent)) {
-    return Promise.resolve(null);
-  }
-  return connectedDefaultProviderForModel(catalogModelId, agent).then((provider) => {
-    if (!provider) return null;
-    const routing = providerRoutingForModel(provider, agent, modelId);
-    if (
-      routing?.wireProtocol !== 'openai-chat'
-      && routing?.wireProtocol !== 'anthropic-messages'
-    ) {
-      return null;
-    }
-    return resolveProviderRouteById(provider.id, agent, modelId);
-  });
+  return resolveImplicitLocalBridgeRouteResolution(modelId, agent).then((resolution) =>
+    resolution.kind === 'route' ? resolution.route : null,
+  );
 }
 
 /**
@@ -817,11 +1135,9 @@ export function resolveImplicitProviderOAuthRouteDecision(
   const provider = uniqueProviderForModel(modelId, agent);
   const routing = provider?.routing[agent];
   if (!provider || !routing || routing.authStrategy !== 'provider-oauth-header') return null;
-  const apiKey = provider.source === 'user' ? customProviderKeyReader(provider.id, agent) : null;
+  const apiKey = isCustomRoutedProvider(provider) ? customProviderKeyReader(provider.id, agent) : null;
   const withRequestPath = (decision: RoutingDecision | null): RoutingDecision | null =>
-    decision && routing.requestPath
-      ? { ...decision, pathOverride: routing.requestPath }
-      : decision;
+    decision && routing.requestPath ? { ...decision, pathOverride: routing.requestPath } : decision;
   return Promise.resolve(providerOAuthTokenReader(provider.id, agent))
     .then((token) => withRequestPath(buildRouteDecision(routing, gatewayKey, agent, apiKey, token)))
     .catch(() => withRequestPath(buildRouteDecision(routing, gatewayKey, agent, apiKey, null)));
@@ -840,21 +1156,21 @@ export function resolveProviderOAuthControlRouteDecision(
   const providers = getActiveCatalog().providers.filter((provider) => {
     const routing = provider.routing[agent];
     return (
-      !isProviderRouteMutationInProgress(provider.id)
-      && provider.agents.includes(agent)
-      && routing?.authStrategy === 'provider-oauth-header'
+      !isProviderRouteMutationInProgress(provider.id) &&
+      provider.agents.includes(agent) &&
+      routing?.authStrategy === 'provider-oauth-header' &&
       // Session-less Codex control requests use the OpenAI control-plane
       // protocol. Local inference bridges (Chat / Anthropic Messages) obtain
       // their model lists through Cindy's provider discovery and must not
       // compete for transparent GET /models routing.
-      && (routing.wireProtocol === undefined || routing.wireProtocol === 'openai-responses')
+      (routing.wireProtocol === undefined || routing.wireProtocol === 'openai-responses')
     );
   });
   if (providers.length !== 1) return null;
   const provider = providers[0];
   const routing = provider.routing[agent];
   if (!routing) return null;
-  const apiKey = provider.source === 'user' ? customProviderKeyReader(provider.id, agent) : null;
+  const apiKey = isCustomRoutedProvider(provider) ? customProviderKeyReader(provider.id, agent) : null;
   return Promise.resolve(providerOAuthTokenReader(provider.id, agent))
     .then((token) => buildRouteDecision(routing, gatewayKey, agent, apiKey, token))
     .catch(() => buildRouteDecision(routing, gatewayKey, agent, apiKey, null));
@@ -878,6 +1194,16 @@ function rewriteModelIdForProvider(
   const rewritten = model.slice(stripPrefix.length);
   if (!rewritten) return null;
   return { ...body, model: rewritten };
+}
+
+/** Apply a provider's model rewrite to a request body without session lookup. */
+export function rewriteProviderModelIdInBody(
+  providerId: string | null | undefined,
+  agent: AgentKind,
+  body: unknown,
+): Record<string, unknown> | null {
+  if (!isPlainObject(body)) return null;
+  return rewriteModelIdForProvider(providerId?.trim() || null, agent, body);
 }
 
 /**
@@ -909,23 +1235,23 @@ export function rewriteImplicitModelIdForRoute(
 }
 
 /**
- * 该会话是否显式选了**自定义(user)供应商**。
+ * 该会话是否显式选了需要 Host 自行注入凭证的供应商（个人自定义或企业下发）。
  * codex 路由用：env-key 注入态默认全量走网关、per-session 无意义（内置三家保持该旧行为），
- * 但自定义供应商必须按其 baseUrl + 用户 key 路由，故对 user 供应商放行 per-session 解析。
+ * 但这两类供应商必须按各自 baseUrl + key 路由，故放行 per-session 解析。
  */
 export function isUserProviderSession(sessionId: string): boolean {
   return getUserProviderIdForSession(sessionId) !== null;
 }
 
 /**
- * 该会话显式选定的**自定义(user)供应商 id**；非 user 供应商 / 未选 → null。
+ * 该会话显式选定的自定义路由供应商 id；其他供应商 / 未选 → null。
  * 上游错误观察器（provider-upstream-error-observer）用它把 4xx/5xx 归属到具体自定义供应商。
  */
 export function getUserProviderIdForSession(sessionId: string): string | null {
   const providerId = getSessionProvider(sessionId);
   if (!providerId) return null;
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
-  return provider?.source === 'user' ? providerId : null;
+  return isCustomRoutedProvider(provider) ? providerId : null;
 }
 
 /** 该会话是否使用 host/proxy 注入供应商鉴权的路由策略(provider-oauth-header / oauth-token)。 */
@@ -956,12 +1282,12 @@ export function isHostInjectedAuthSession(sessionId: string, agent: AgentKind): 
 /** 按模型选视觉后端的 agent 面：模型前缀显式指面，否则按 provider.models 归属，最后回退。 */
 function pickVisionAgent(provider: Provider, modelId: string): AgentKind | null {
   // XD 投影给 Codex 的模型本质是 Claude-wire（仅 claude-code 面、无 codex 原生），
-  // `codex/` 只是路由前缀：即使带 `codex/` 前缀也必须走 claude-code 面 / Messages，
+  // `openai-codex/` / `codex/` 只是路由前缀：即使带这些前缀也必须走 claude-code 面 / Messages，
   // 否则误走 Responses 被上游拒（rebase 后 pickVisionAgent 先按前缀选 codex 面）。
   if (provider.id === 'xd' && isXdCodexAnthropicBridgeModel(modelId)) {
     if (provider.routing['claude-code']) return 'claude-code';
   }
-  if (modelId.startsWith('codex/') && provider.routing.codex) return 'codex';
+  if (isCodexGatewayWireModel(modelId) && provider.routing.codex) return 'codex';
   if (
     (modelId.startsWith('claude-') || modelId.startsWith('anthropic/')) &&
     provider.routing['claude-code']
@@ -980,6 +1306,17 @@ function pickVisionAgent(provider: Provider, modelId: string): AgentKind | null 
   return null;
 }
 
+/**
+ * provider 在某 runtime 由哪个目录预设创建（预设身份随模型投影带出，用户改地址后仍保留）。
+ * 视觉/探测这类直连路径用它识别「从 OpenCode Go 预设创建、但运行时 id 或地址已改」的连接。
+ */
+export function providerRuntimeCatalogPresetId(
+  provider: Provider,
+  agent: AgentKind,
+): string | undefined {
+  return (provider.models[agent] ?? []).find((model) => model.catalogPresetId)?.catalogPresetId;
+}
+
 export function resolveVisionBackendRoute(
   providerId: string,
   modelId: string,
@@ -993,35 +1330,52 @@ export function resolveVisionBackendRoute(
   /** 路由指定的额外请求头（headerOverride 去掉客户端凭证头后）。视觉桥直连需要它们
    *  （如 anthropic-version / x-api-key / 自定义 provider 头），否则后端会拒请求（P1）。 */
   headers: Record<string, string>;
+  /** 该 runtime 的目录预设身份（如 'opencode-go'）：直连路径据此补会话头。 */
+  catalogPresetId?: string;
 } | null {
   if (isProviderRouteMutationInProgress(providerId)) return null;
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
   if (!provider) return null;
-  // 按模型选 agent 面：模型前缀显式指面（codex/ → codex；claude- / anthropic/ → claude-code），
+  // 按模型选 agent 面：模型前缀显式指面（openai-codex/、codex/ → codex；claude- / anthropic/ → claude-code），
   // 否则按 provider.models 归属，最后回退第一个声明 routing 的 agent。对齐视觉桥旧 pickAgent。
   const agent = pickVisionAgent(provider, modelId);
   if (!agent) return null;
   const routing = providerRoutingForModel(provider, agent, modelId);
   if (!routing || routing.disabled) return null;
+  const catalogPresetId = providerRuntimeCatalogPresetId(provider, agent);
 
   // 转发上游前还原 model id（对齐 rewriteModelIdForProvider）。
-  // XD 投影给 Codex 的模型走 Claude Messages 面时，`codex/` 是路由前缀不是后端真实模型名，
+  // XD 投影给 Codex 的模型走 Claude Messages 面时，折扣前缀不是后端真实模型名，
   // 必须剥掉（否则上游 /v1/messages 收到 model:'codex/...' 404）。剥到目录裸 id。
-  let model = modelId;
+  let model = routing.modelInterface?.wireModelId ?? modelId;
   if (provider.id === 'xd' && isXdCodexAnthropicBridgeModel(modelId)) {
-    model = modelId.replace(/^codex\//, '').replace(/\[1m\]$/, '');
+    model = stripCodexGatewayWirePrefix(modelId).replace(/\[1m\]$/, '');
   }
   const stripPrefix = routing.modelIdRewrite?.stripPrefix;
   if (stripPrefix && model.startsWith(stripPrefix)) {
     model = model.slice(stripPrefix.length);
   }
 
-  // 缺省 wireProtocol 按 agent 面推断（对齐 user-provider defaultWireProtocol）。
+  // Claude/Codex 保留各自原生前门的历史缺省；Pi 是后来加入的自适应 runtime，
+  // 缺声明不能猜成 Chat，否则视觉工具会把图片与凭证发往错误协议端点。
+  if (agent === 'pi' && routing.wireProtocol === undefined) return null;
+  // This HTTP-only helper has no Google serializer; native Pi handles images itself.
+  if (routing.wireProtocol === 'google-generative-ai') return null;
   const wireProtocol: 'anthropic-messages' | 'openai-responses' | 'openai-chat' =
-    routing.wireProtocol ?? (agent === 'claude-code' ? 'anthropic-messages' : agent === 'codex' ? 'openai-responses' : 'openai-chat');
+    routing.wireProtocol ??
+    (agent === 'claude-code'
+      ? 'anthropic-messages'
+      : agent === 'codex'
+        ? 'openai-responses'
+        : 'openai-chat');
   // 缺省请求路径按协议推断（对齐上游标准路径）。
   const requestPath =
-    routing.requestPath ?? (wireProtocol === 'anthropic-messages' ? '/v1/messages' : wireProtocol === 'openai-responses' ? '/responses' : '/chat/completions');
+    routing.requestPath ??
+    (wireProtocol === 'anthropic-messages'
+      ? '/v1/messages'
+      : wireProtocol === 'openai-responses'
+        ? '/responses'
+        : '/chat/completions');
 
   let upstream: string;
   let authorization: string | null;
@@ -1030,10 +1384,11 @@ export function resolveVisionBackendRoute(
       if (!gatewayEndpoint) return null; // 网关不可用
       const key = gatewayKeyReader();
       if (!key) return null; // 无网关 key 可换
-      // codex 面网关上游含 /v1（对齐 buildCodexGatewayBaseUrl：`<endpoint>/v1` 拼 /responses
-      // 得 /v1/responses）；claude-code/pi 面不含（claudeUpstreamEndpoint 直接拼 /v1/messages）。
+      // 网关 base 由最终协议决定，而不是由承载它的 agent 决定：Responses 的标准路径
+      // 是 `<endpoint>/v1/responses`，Messages 则由裸 endpoint 拼 `/v1/messages`。Pi 可按模型
+      // 在两种协议间切换，因此若按 agent 判断会把 Pi Responses 错送到 `<endpoint>/responses`。
       upstream =
-        agent === 'codex'
+        wireProtocol === 'openai-responses'
           ? `${gatewayEndpoint.replace(/\/+$/, '')}/v1`
           : gatewayEndpoint.replace(/\/$/, '');
       authorization = `Bearer ${key}`;
@@ -1068,7 +1423,7 @@ export function resolveVisionBackendRoute(
   }
   // 路由额外头（headerOverride 去掉客户端凭证头）：anthropic-version / x-api-key /
   // 自定义 provider 头等。视觉桥直连不发 proxy，需自己带上，否则后端可能 400/拒绝。
-  const headers = withoutClientAuthHeaders(routing.headerOverride);
+  const headers = withProviderAppAttribution(upstream, withoutClientAuthHeaders(routing.headerOverride), {}, routing.headerDelete);
   // 对齐 buildRouteDecision 的凭证头形状（claude-code/pi 面 = Anthropic Messages 风格，
   // 后端按 x-api-key 鉴权，只带 Authorization: Bearer 会被拒；codex 面 = OpenAI 式按
   // Bearer 鉴权）。x-api-key 不是「客户端凭证头」，是路由要求的鉴权形状，须补进额外头。
@@ -1082,7 +1437,10 @@ export function resolveVisionBackendRoute(
       // 后端按 x-api-key 鉴权须补 x-api-key；codex 面（OpenAI 式）按 Bearer 鉴权（已由
       // authorization 字段下发），不补 x-api-key。
       if (agent !== 'codex') headers['x-api-key'] = key;
-    } else if (hasHeader(routing.headerOverride, 'authorization') || hasHeader(routing.headerOverride, 'x-api-key')) {
+    } else if (
+      hasHeader(routing.headerOverride, 'authorization') ||
+      hasHeader(routing.headerOverride, 'x-api-key')
+    ) {
       // legacy 凭证（safeStorage 无 key，凭证仍在 headerOverride）：无论哪个 agent 面都
       // 并入 headers 下发（codex 面 legacy Authorization-only / x-api-key-only 同样适用，
       // 否则视觉请求 401 但普通请求正常——codex P1）。与 authorization=null 分支配套。
@@ -1095,7 +1453,7 @@ export function resolveVisionBackendRoute(
     const key = gatewayKeyReader();
     if (key) headers['x-api-key'] = key;
   }
-  return { upstream, requestPath, wireProtocol, model, authorization, headers };
+  return { upstream, requestPath, wireProtocol, model, authorization, headers, ...(catalogPresetId ? { catalogPresetId } : {}) };
 }
 
 /** 当前生效的 XD 网关 key（host 注入；默认空）。 */

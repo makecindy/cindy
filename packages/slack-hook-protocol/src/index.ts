@@ -16,6 +16,11 @@ export {
   makeTaskAck,
   makeTurnEnd,
   makeTurnDelivery,
+  makeXMediaAbort,
+  makeXMediaAppend,
+  makeXMediaFinalize,
+  makeXMediaInit,
+  makeXMediaResult,
   makeTurnProgress,
   makeMessageOp,
   makeMessageOpResult,
@@ -27,6 +32,8 @@ export {
   makeProviderBindStart,
   makeProviderBindCancel,
   makeProviderBindRevoke,
+  makeProviderBindSelect,
+  makeProviderBindSelection,
   makeProviderBindUpdate,
   makeProviderBindState,
   makeQueryRequest,
@@ -45,6 +52,7 @@ export {
   makeProviderBehaviorGet,
   makeProviderBehaviorSet,
   makeProviderBehaviorState,
+  makeProviderCommandsSet,
   makeToolRequest,
   makeToolResponse,
   makeGroupMessage,
@@ -52,3 +60,5 @@ export {
   serializeHookMessage,
   type HelloInput,
 } from './build';
+
+export * from './channelHistory';

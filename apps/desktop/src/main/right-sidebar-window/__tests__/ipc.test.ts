@@ -12,6 +12,7 @@ vi.mock('electron', () => {
     },
   };
 });
+vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
 
 import { ipcMain, type BrowserWindow } from 'electron';
 
@@ -21,7 +22,9 @@ import type { RsbWindowController } from '../controller.js';
 
 type RsbWindowControllerMock = RsbWindowController & {
   getState: ReturnType<typeof vi.fn>;
+  getContext: ReturnType<typeof vi.fn>;
   getSidebarWebContents: ReturnType<typeof vi.fn>;
+  getVisibleSidebarWebContents: ReturnType<typeof vi.fn>;
   routeCommand: ReturnType<typeof vi.fn>;
 };
 
@@ -33,6 +36,7 @@ function makeController() {
     setDetached: vi.fn(),
     getContext: vi.fn(),
     getSidebarWebContents: vi.fn(),
+    getVisibleSidebarWebContents: vi.fn(),
     markReady: vi.fn(),
     markRendererReady: vi.fn(),
     markPresentationReady: vi.fn(),
@@ -70,7 +74,35 @@ beforeEach(() => {
 });
 
 describe('right-sidebar-window IPC', () => {
-  it('forwards the optional device-link origin in window context', () => {
+  // Global named views have no task binding; reject extra task identity and
+  // preserve the resource payload through the real IPC validator. tier: unit.
+  it('routes global plugin views without inventing a task scope', async () => {
+    const controller = makeController(); const { handler, mainWebContents } = registerController(controller);
+    const command = { type: 'open-plugin-view', instanceId: 'planner', resourceViewId: 'board', resourceInput: { selected: 'one' } };
+    await handler({ sender: mainWebContents }, { command, allowOpen: true });
+    expect(controller.routeCommand).toHaveBeenCalledWith({ command, allowOpen: true });
+    for (const patch of [{ sessionId: 'wrong-task' }, { resourceViewId: '../bad' }, { resourceInput: [] }])
+      await expect(handler({ sender: mainWebContents }, { command: { ...command, ...patch }, allowOpen: true })).rejects.toThrow();
+  });
+  // 具名视图必须进入已有分离侧栏路由，不能在 Main 校验时丢失目标或启动参数。
+  it('preserves a named plugin resource in the original window command', async () => {
+    const controller = makeController();
+    const { handler, mainWebContents } = registerController(controller);
+    const command = { type: 'open-plugin-task', sessionId: 's1', instanceId: 'planner', resourceViewId: 'board', resourceInput: { filter: 'open' } };
+    await handler({ sender: mainWebContents }, { command, allowOpen: true });
+    expect(controller.routeCommand).toHaveBeenCalledWith({ command, allowOpen: true });
+    await expect(handler({ sender: mainWebContents }, { command: { ...command, resourceInput: [] }, allowOpen: true })).rejects.toThrow();
+  });
+  // The mail card gesture must survive detached-window routing without mail content.
+  it('routes a mail card by ID and rejects malformed card references', async () => {
+    const controller = makeController();
+    const { handler, mainWebContents } = registerController(controller);
+    const command = { type: 'open-mail-card', sessionId: 's1', callId: 'card-1' };
+    await handler({ sender: mainWebContents }, { command, allowOpen: true });
+    expect(controller.routeCommand).toHaveBeenCalledWith({ command, allowOpen: true });
+    await expect(handler({ sender: mainWebContents }, { command: { ...command, callId: '' }, allowOpen: true })).rejects.toThrow(/callId/);
+  });
+  it('forwards the optional device-link origin, Subagents eligibility and Bot identity', () => {
     const controller = makeController();
     const { mainWebContents } = registerController(controller);
     const setContextCall = (ipcMain.on as ReturnType<typeof vi.fn>).mock.calls.find(
@@ -88,6 +120,8 @@ describe('right-sidebar-window IPC', () => {
         workdir: '/remote/workdir',
         remoteHostId: null,
         deviceLinkDeviceId: 'device-1',
+        subagentsAvailable: true,
+        botOwner: { botId: 'bot-1', canonical: false },
         available: true,
       },
     );
@@ -97,6 +131,69 @@ describe('right-sidebar-window IPC', () => {
       workdir: '/remote/workdir',
       remoteHostId: null,
       deviceLinkDeviceId: 'device-1',
+      subagentsAvailable: true,
+      botOwner: { botId: 'bot-1', canonical: false },
+      available: true,
+    });
+  });
+
+  it('drops oversized setContext strings before they reach the controller', () => {
+    const controller = makeController();
+    const { mainWebContents } = registerController(controller);
+    const setContextCall = (ipcMain.on as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([channel]) => channel === MAKER_SEND.RSB_WINDOW_SET_CONTEXT,
+    );
+    const setContext = setContextCall?.[1] as
+      | ((event: { sender: unknown }, payload: unknown) => void)
+      | undefined;
+    if (!setContext) throw new Error('RSB_WINDOW_SET_CONTEXT handler not registered');
+
+    setContext(
+      { sender: mainWebContents },
+      {
+        sessionId: 'x'.repeat(129),
+        workdir: '/workspace',
+        remoteHostId: null,
+        available: true,
+      },
+    );
+    setContext(
+      { sender: mainWebContents },
+      {
+        sessionId: 's1',
+        workdir: `/${'a'.repeat(4096)}`,
+        remoteHostId: null,
+        available: true,
+      },
+    );
+    expect(controller.setContext).not.toHaveBeenCalled();
+  });
+
+  it('preserves unknown Subagents eligibility so cold Pi restore cannot auto-collapse', () => {
+    const controller = makeController();
+    const { mainWebContents } = registerController(controller);
+    const setContextCall = (ipcMain.on as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([channel]) => channel === MAKER_SEND.RSB_WINDOW_SET_CONTEXT,
+    );
+    const setContext = setContextCall?.[1] as
+      | ((event: { sender: unknown }, payload: unknown) => void)
+      | undefined;
+    if (!setContext) throw new Error('RSB_WINDOW_SET_CONTEXT handler not registered');
+
+    setContext(
+      { sender: mainWebContents },
+      {
+        sessionId: 's1',
+        workdir: '/workspace',
+        remoteHostId: null,
+        available: true,
+      },
+    );
+
+    expect(controller.setContext).toHaveBeenCalledWith({
+      sessionId: 's1',
+      workdir: '/workspace',
+      remoteHostId: null,
       available: true,
     });
   });
@@ -361,7 +458,13 @@ describe('right-sidebar-window IPC', () => {
         { sender: { id: 2 } },
         { command: { type: 'open-terminal', sessionId: '' }, allowOpen: true },
       ),
-    ).rejects.toThrow(/command.sessionId required/);
+    ).rejects.toThrow(/command.sessionId must be a 1–128 character string/);
+    await expect(
+      handler(
+        { sender: { id: 2 } },
+        { command: { type: 'open-terminal', sessionId: 'x'.repeat(129) }, allowOpen: true },
+      ),
+    ).rejects.toThrow(/1–128/);
   });
 
   it('forwards userInitiated when present and omits it when absent', async () => {
@@ -445,22 +548,34 @@ describe('right-sidebar-window IPC', () => {
 
   it('open payload:缺省/空 = 用户手势;显式 false 透传;野值拒绝', async () => {
     const controller = makeController();
-    registerController(controller);
+    const { mainWebContents } = registerController(controller);
     const handlers = (
       ipcMain as unknown as { __handlers: Map<string, (e: unknown, p: unknown) => unknown> }
     ).__handlers;
     const open = handlers.get(MAKER_INVOKE.RSB_WINDOW_OPEN);
     if (!open) throw new Error('RSB_WINDOW_OPEN handler not registered');
+    const mainEvent = { sender: mainWebContents };
 
-    open({}, undefined);
-    open({}, {});
-    open({}, { userInitiated: false });
+    open(mainEvent, undefined);
+    open(mainEvent, {});
+    open(mainEvent, { userInitiated: false });
+    open(mainEvent, { userInitiated: false, sessionId: 'agent-session' });
 
     expect(controller.open).toHaveBeenNthCalledWith(1, { userInitiated: true });
     expect(controller.open).toHaveBeenNthCalledWith(2, { userInitiated: true });
     expect(controller.open).toHaveBeenNthCalledWith(3, { userInitiated: false });
+    expect(controller.open).toHaveBeenNthCalledWith(4, {
+      userInitiated: false,
+      sessionId: 'agent-session',
+    });
 
-    expect(() => open({}, { userInitiated: 1 })).toThrow(/options.userInitiated/);
+    expect(() => open(mainEvent, { userInitiated: 1 })).toThrow(/options.userInitiated/);
+    expect(() => open(mainEvent, { sessionId: '' })).toThrow(/options.sessionId/);
+    expect(() => open(mainEvent, { sessionId: 'x'.repeat(129) })).toThrow(/1–128/);
+
+    (controller.open as ReturnType<typeof vi.fn>).mockClear();
+    open({ sender: { id: 99 } }, { userInitiated: false, sessionId: 'other-session' });
+    expect(controller.open).not.toHaveBeenCalled();
   });
 
   it('accepts a memory-only tab handoff only from the detached sidebar sender', () => {

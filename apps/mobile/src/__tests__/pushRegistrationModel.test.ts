@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildPushTokenRegistrationBody,
+  notificationRecoveryRoute,
   parseNotificationDeepLink,
   parseNotificationResponseDeepLink,
   resolvePushAppVariant,
@@ -15,9 +16,18 @@ describe('resolvePushAppVariant', () => {
 });
 
 describe('buildPushTokenRegistrationBody', () => {
-  it('组装 iOS APNs 注册 body;dev build 走 sandbox,release 走 prod', () => {
+  it('rejects unknown iOS environments but leaves Android FCM independent', () => {
+    for (const apnsEnvironment of [null, undefined, '', 'sandbox', 'invalid']) {
+      expect(() => buildPushTokenRegistrationBody({ token: 'token', region: 'global', apnsEnvironment }))
+        .toThrow('unknown APNs');
+    }
+    expect(buildPushTokenRegistrationBody({ token: 'token', region: 'global', platform: 'android' }))
+      .toEqual({ token: 'token', platform: 'android', provider: 'fcm', appVariant: 'global' });
+  });
+
+  it('组装 iOS APNs 注册 body;按签名环境选择 sandbox/prod', () => {
     expect(
-      buildPushTokenRegistrationBody({ token: ' abc123 ', region: 'cn', isDevBuild: true }),
+      buildPushTokenRegistrationBody({ token: ' abc123 ', region: 'cn', apnsEnvironment: 'development' }),
     ).toEqual({
       token: 'abc123',
       platform: 'ios',
@@ -26,15 +36,15 @@ describe('buildPushTokenRegistrationBody', () => {
       apnsEnv: 'sandbox',
     });
     expect(
-      buildPushTokenRegistrationBody({ token: 'abc123', region: 'global', isDevBuild: false }),
+      buildPushTokenRegistrationBody({ token: 'abc123', region: 'global', apnsEnvironment: 'production' }),
     ).toMatchObject({ appVariant: 'global', apnsEnv: 'prod' });
     expect(
-      buildPushTokenRegistrationBody({ token: 'dev-token', region: 'dev', isDevBuild: true }),
+      buildPushTokenRegistrationBody({ token: 'dev-token', region: 'dev', apnsEnvironment: 'development' }),
     ).toMatchObject({ appVariant: 'cn', apnsEnv: 'sandbox' });
   });
 
   it('空 token 返回 null', () => {
-    expect(buildPushTokenRegistrationBody({ token: '   ', region: 'cn', isDevBuild: true })).toBeNull();
+    expect(buildPushTokenRegistrationBody({ token: '   ', region: 'cn', apnsEnvironment: 'development' })).toBeNull();
   });
 });
 
@@ -53,8 +63,32 @@ describe('parseNotificationDeepLink', () => {
     ['绝对 URL', { deepLink: 'https://evil.example/sessions/x' }],
     ['嵌入 scheme', { deepLink: '/sessions/x://evil' }],
     ['协议相对', { deepLink: '//evil.example/sessions/x' }],
+    ['群聊缺 deviceId', { deepLink: '/companions/groups/g-1' }],
+    ['群聊 deviceId 为空', { deepLink: '/companions/groups/g-1?deviceId=' }],
+    ['群聊多余参数', { deepLink: '/companions/groups/g-1?deviceId=d-1&next=/settings' }],
+    ['群聊重复 deviceId', { deepLink: '/companions/groups/g-1?deviceId=d-1&deviceId=d-2' }],
+    ['群聊多段路径', { deepLink: '/companions/groups/g-1/x?deviceId=d-1' }],
+    ['群聊片段', { deepLink: '/companions/groups/g-1?deviceId=d-1#x' }],
+    ['群聊未编码 id', { deepLink: '/companions/groups/g 1?deviceId=d-1' }],
+    ['群聊坏编码', { deepLink: '/companions/groups/%E0%A4%A?deviceId=d-1' }],
+    ['群聊控制字符', { deepLink: '/companions/groups/g%0A1?deviceId=d-1' }],
+    ['群聊嵌入 scheme', { deepLink: '/companions/groups/g-1?deviceId=https://evil' }],
+    ['群聊空 id', { deepLink: '/companions/groups/?deviceId=d-1' }],
+    ['其它伙伴路径', { deepLink: '/companions/direct/t-1?deviceId=d-1' }],
   ])('拒绝:%s', (_label, input) => {
     expect(parseNotificationDeepLink(input)).toBeNull();
+  });
+
+  it('接受分工提醒的群聊深链,并按规范编码重建', () => {
+    expect(parseNotificationDeepLink({ deepLink: '/companions/groups/g-1?deviceId=d-1' }))
+      .toBe('/companions/groups/g-1?deviceId=d-1');
+    expect(parseNotificationDeepLink({ deepLink: `/companions/groups/${encodeURIComponent('群 1')}?deviceId=${encodeURIComponent('mac:1')}` }))
+      .toBe(`/companions/groups/${encodeURIComponent('群 1')}?deviceId=${encodeURIComponent('mac:1')}`);
+  });
+
+  it('群聊深链经通知点击恢复路由后仍带着 deviceId', () => {
+    const link = parseNotificationDeepLink({ deepLink: '/companions/groups/g-1?deviceId=d-1' })!;
+    expect(notificationRecoveryRoute(link, 'id:n-1')).toBe('/companions/groups/g-1?deviceId=d-1&notificationResponse=id%3An-1');
   });
 });
 

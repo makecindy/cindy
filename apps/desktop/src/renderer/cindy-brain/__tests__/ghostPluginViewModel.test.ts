@@ -7,10 +7,11 @@ import { describe, expect, it } from 'vitest';
 
 import type { GhostManifest, InstalledGhost } from '../../../shared/ghost';
 import type { PluginMarketItem } from '../../../shared/pluginMarket';
+import { LEGACY_SCAFFOLD_ICON_SHA256 } from '../../features/plugin/__tests__/fixtures/legacyScaffoldIcon';
 import {
   filterGhostPluginItems,
   ghostFallbackIconKind,
-  ghostPanelOwnerKey,
+  ghostWebviewOwnerKey,
   ghostPrimaryAction,
   marketPresentationForInstalledGhost,
   nextOpenPanelIdForOwner,
@@ -33,7 +34,7 @@ function manifest(overrides: Partial<GhostManifest> = {}): GhostManifest {
     whenToUse: 'When the user needs media generation.',
     kind: 'chip',
     entry: 'main.js',
-    slots: ['tool', 'network', 'card'],
+    card: {},
     tools: [
       { name: 'submit_gen_image', description: 'Generate an image.' },
       { name: 'download_file', description: 'Download a file.' },
@@ -104,6 +105,7 @@ describe('ghostPluginViewModel', () => {
     const items = [
       {
         id: 'xd-mivo',
+        ghostId: 'xd-mivo',
         name: 'XD Mivo',
         description: 'media',
         version: '1',
@@ -112,10 +114,12 @@ describe('ghostPluginViewModel', () => {
         approvalState: 'approved',
         builtin: false,
         tabPanel: false,
-        hostCapability: null,
-      },
+        hasMainView: false,
+        mainViewTitle: null,
+            },
       {
         id: 'lizi-mivo',
+        ghostId: 'lizi-mivo',
         name: 'Lizi Mivo',
         description: 'media',
         version: '1',
@@ -124,10 +128,12 @@ describe('ghostPluginViewModel', () => {
         approvalState: 'approved',
         builtin: false,
         tabPanel: false,
-        hostCapability: null,
-      },
+        hasMainView: false,
+        mainViewTitle: null,
+            },
       {
         id: 'slack',
+        ghostId: 'slack',
         name: 'Cindy Slack',
         description: 'messages',
         version: '1',
@@ -136,8 +142,9 @@ describe('ghostPluginViewModel', () => {
         approvalState: 'approved',
         builtin: false,
         tabPanel: false,
-        hostCapability: null,
-      },
+        hasMainView: false,
+        mainViewTitle: null,
+            },
     ] satisfies GhostPluginListItem[];
 
     const searched = filterGhostPluginItems(items, 'miv');
@@ -219,33 +226,49 @@ describe('ghostPluginViewModel', () => {
     });
   });
 
+  it('uses the physical storage part as the instance id', () => {
+    const item = toGhostPluginListItem(
+      installed({
+        manifest: manifest({ id: 'helper' }),
+        namespace: 'acme',
+        dir: '/tmp/cindy-brain/_ns/acme/helper',
+      }),
+    );
+    expect(item).toMatchObject({
+      id: '_ns__acme__helper',
+      ghostId: 'helper',
+    });
+  });
+
   it('maps install-record facts onto the list item', () => {
     const item = toGhostPluginListItem(installed());
 
     expect(item).toMatchObject({
       id: 'xd-mivo',
+      ghostId: 'xd-mivo',
       name: 'XD Mivo',
       enabled: true,
       canUse: true,
-      hostCapability: null,
-      version: '1.5.10',
+          version: '1.5.10',
     });
   });
 
-  it('projects the iOS Simulator slot as an explicit Host capability action', () => {
+  it('projects main-view metadata without overriding the existing panel action', () => {
     const item = toGhostPluginListItem(
       installed({
+        enabled: false,
+        approval: { state: 'invalid' },
         manifest: manifest({
-          command: undefined,
-          slots: ['skill', 'ios-simulator'],
-          tools: undefined,
-          network: undefined,
+          slots: ['main-view', 'panel'],
+          minCindyVersion: '1.2.3',
+          mainView: { html: 'main-view.html', title: 'Workspace' },
+          panel: { html: 'panel.html', position: 'tab' },
         }),
       }),
     );
 
-    expect(item.hostCapability).toBe('ios-simulator');
-    expect(ghostPrimaryAction(item)).toBe('capability');
+    expect(item).toMatchObject({ hasMainView: true, mainViewTitle: 'Workspace', enabled: false });
+    expect(ghostPrimaryAction(item)).toBe('panel');
   });
 
   it('overlays exact installed market presentation without changing runtime facts', () => {
@@ -265,7 +288,7 @@ describe('ghostPluginViewModel', () => {
       canUse: true,
     });
     const detail = toGhostPluginDetail(ghost, presentation);
-    expect(detail.author).toBe('Xindong Design');
+    expect(detail.author).toBeNull();
     expect(detail.permissions.map((item) => item.kind)).toEqual([
       'network',
       'network',
@@ -283,6 +306,20 @@ describe('ghostPluginViewModel', () => {
 
     expect(presentation).not.toBeNull();
     expect(toGhostPluginListItem(ghost, presentation)).not.toHaveProperty('iconDataUrl');
+  });
+
+  // 已装版本也会采用市场 URL；旧占位 PNG 必须与缺图走同一显示分支。Tier: unit。
+  it('treats the historical scaffold icon hash as an absent installed market icon', () => {
+    const ghost = installed({ iconDataUrl: 'data:image/png;base64,LOCAL' });
+    const item = marketItem();
+    const presentation = marketPresentationForInstalledGhost(
+      ghost,
+      { ...item, icon: { ...item.icon!, sha256: LEGACY_SCAFFOLD_ICON_SHA256 } },
+    );
+
+    expect(presentation).not.toBeNull();
+    expect(toGhostPluginListItem(ghost, presentation)).not.toHaveProperty('iconDataUrl');
+    expect(toGhostPluginDetail(ghost, presentation)).not.toHaveProperty('iconDataUrl');
   });
 
   it('uses the installed package icon for an exact Git market mapping', () => {
@@ -339,15 +376,15 @@ describe('ghostPluginViewModel', () => {
     expect(
       toGhostPluginListItem(installed({ approval: { state: 'legacy-unapproved' } })).approvalState,
     ).toBe('legacy-unapproved');
-    expect(
-      toGhostPluginDetail(installed({ approval: { state: 'invalid' } })).approvalState,
-    ).toBe('invalid');
+    expect(toGhostPluginDetail(installed({ approval: { state: 'invalid' } })).approvalState).toBe(
+      'invalid',
+    );
   });
 
   it('derives detail permissions and runtime declarations from the manifest', () => {
     const detail = toGhostPluginDetail(installed());
 
-    expect(detail.contents).toEqual(['code', 'slotTool', 'slotNetwork', 'slotCard']);
+    expect(detail.contents).toEqual(['code', 'slotTool', 'slotCard', 'slotNetwork']);
     expect(detail.tools.map((tool) => tool.name)).toEqual(['submit_gen_image', 'download_file']);
     expect(detail.panelMinWidth).toBeNull();
     expect(detail.installDir).toBe('/tmp/cindy-brain/xd-mivo');
@@ -373,7 +410,7 @@ describe('ghostPluginViewModel', () => {
           tools: undefined,
           network: undefined,
           command: undefined,
-          slots: ['tool'],
+          card: undefined,
         }),
       }),
     );
@@ -389,7 +426,6 @@ describe('ghostPluginViewModel', () => {
     const detail = toGhostPluginDetail(
       installed({
         manifest: manifest({
-          slots: ['panel', 'cindy'],
           panel: { html: 'panel.html', minWidth: 360 },
           cindy: { image: ['generate', 'edit'], video: ['generate'] },
         }),
@@ -401,28 +437,28 @@ describe('ghostPluginViewModel', () => {
   });
 });
 
-describe('plugin panel owner isolation', () => {
-  it('gives each data owner its own panel host key and stays stable within one', () => {
-    const cloudA = ghostPanelOwnerKey('cloud', 'owner-a');
-    const cloudB = ghostPanelOwnerKey('cloud', 'owner-b');
-    const local = ghostPanelOwnerKey('local', null);
+describe('plugin webview owner isolation', () => {
+  it('gives each data owner its own webview host key and stays stable within one', () => {
+    const cloudA = ghostWebviewOwnerKey('cloud', 'owner-a');
+    const cloudB = ghostWebviewOwnerKey('cloud', 'owner-b');
+    const local = ghostWebviewOwnerKey('local', null);
 
     // 账号 A 与 B 即便装了同 id / 同版本 / 同入口的插件,宿主 key 也必须不同——
     // 否则 React 复用同一 webview 实例,A 的 DOM 与内存态会留在 B 面前。
     expect(new Set([cloudA, cloudB, local]).size).toBe(3);
     // 同一身份内稳定,不会无谓重挂面板。
-    expect(ghostPanelOwnerKey('cloud', 'owner-a')).toBe(cloudA);
+    expect(ghostWebviewOwnerKey('cloud', 'owner-a')).toBe(cloudA);
   });
 
   it('closes an open panel when the data owner changes, keeps it otherwise', () => {
-    const a = ghostPanelOwnerKey('cloud', 'owner-a');
-    const b = ghostPanelOwnerKey('cloud', 'owner-b');
+    const a = ghostWebviewOwnerKey('cloud', 'owner-a');
+    const b = ghostWebviewOwnerKey('cloud', 'owner-b');
 
     // A 打开着面板 → 切到 B:必须关掉,不许因为 B 也装了同 id 的插件就留着。
     expect(nextOpenPanelIdForOwner(a, b, 'ghost-shared')).toBeNull();
     // 云 → 本地同样算换身份。
     expect(
-      nextOpenPanelIdForOwner(a, ghostPanelOwnerKey('local', null), 'ghost-shared'),
+      nextOpenPanelIdForOwner(a, ghostWebviewOwnerKey('local', null), 'ghost-shared'),
     ).toBeNull();
     // 身份没变则原样保留(别把用户正在用的面板关掉)。
     expect(nextOpenPanelIdForOwner(a, a, 'ghost-shared')).toBe('ghost-shared');

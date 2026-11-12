@@ -246,10 +246,10 @@ describe('PermissionSelector triggerVariant', () => {
     expect(fieldPanel.closest('[data-morph-side]')).toBeNull();
     const popperWrapper = fieldPanel.closest('[data-radix-popper-content-wrapper]');
     expect(popperWrapper).not.toBeNull();
-    // DESIGN.md §4:下拉面板无阴影(分离感来自层色/描边)。共享 PopoverContent 默认
-    // shadow-md,field 面板必须显式压掉(codex review 2026-07-25)。
+    // DESIGN.md §4:下拉面板带登记的浮层阴影(2026-11-07 用户裁决,取代曾压掉阴影的旧规则)。
     const content = popperWrapper?.firstElementChild as HTMLElement;
-    expect(content.className).toContain('shadow-none');
+    expect(content.className).toContain('shadow-[shadow:var(--shadow-menu)]');
+    expect(content.className).not.toContain('shadow-none');
     expect(screen.getAllByRole('option')).toHaveLength(4);
   });
 
@@ -311,11 +311,15 @@ describe('PermissionSelector triggerVariant', () => {
     expect(screen.getByRole('button', { name: '权限模式 · chat:默认权限' })).toBeTruthy();
   });
 
-  it('field 形态选中危险档时只染文字,不改底色', () => {
-    renderSelector({ triggerVariant: 'field', permissionMode: 'bypassPermissions' });
-    const cls = getTrigger().className;
-    expect(cls).toContain('text-[var(--perm-bypass-selected-text)]');
-    // 底仍是输入面,不因危险档换底色
-    expect(cls).toContain('bg-[var(--settings-input-bg)]');
+  // 用户要求切换前直接看到差别，不再依赖悬停提示；复用真实选择器验证。
+  it('shows every mode description before selection', async () => {
+    renderSelector({ triggerVariant: 'field' });
+    fireEvent.click(getTrigger());
+    await screen.findByRole('listbox');
+    for (const mode of PERMISSION_MODES) {
+      const option = screen.getByRole('option', { name: mode.displayName });
+      expect(option.textContent).toContain(mode.description);
+      expect(option.getAttribute('aria-description')).toBe(mode.description);
+    }
   });
 });

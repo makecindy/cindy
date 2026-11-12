@@ -9,10 +9,20 @@
 | [README.md](./README.md) | 索引 | — | `docs/` 文档目录 | — |
 | [product-rules/README.md](./product-rules/README.md) | 产品规则索引 | authoritative | Cindy 产品行为、体验与边界 | — |
 | [core-product-principles.md](./product-rules/core-product-principles.md) | 产品原则 | authoritative | Cindy Core、Agent、Skill、插件与多端产品边界 | — |
+| [im-message-presentation.md](./product-rules/im-message-presentation.md) | 产品契约 | authoritative | IM 入站上下文、快照计数与 App 完成提醒 | — |
+| [goal-mode.md](./product-rules/goal-mode.md) | 产品契约 | authoritative | 目标运行中的补充消息、停止与手机 `/goal` | — |
 | [design-rules/README.md](./design-rules/README.md) | 设计规则索引 | authoritative | Cindy UI 视觉、交互与内容设计 | — |
 | [design-rules/DESIGN.md](design-rules/DESIGN.md) | 设计规范 | authoritative | Desktop 与 Mobile 的视觉语言、Token、组件和交互约定 | — |
 | [dev-rules/README.md](./dev-rules/README.md) | 开发规则索引 | authoritative | Cindy 客户端工程规则 | — |
+| [DSH harness 接入计划](./plans/dsh-harness-integration.md) | 接入提案与证据入口 | 参考 | 第四种 Agent 的现状、F0–F11 依赖与验收条件；尚未实现 | — |
 | [environment-setup.md](./dev-rules/environment-setup.md) | 开发环境 | authoritative | 公共依赖、submodule 与首次安装 | — |
+| [model-catalog-maintenance.md](./dev-rules/model-catalog-maintenance.md) | 模型配置与下发入口 | authoritative | 架构、配置层级、修改位置、代码导航与发布验收 | — |
+| [model-metadata-precedence.md](./product-rules/model-metadata-precedence.md) | 模型资料合同 | authoritative | 继承、用户覆盖、多账号与成员语义 | — |
+| [local-model-selection.md](./product-rules/local-model-selection.md) | 本地模型规则 | authoritative | 包装、硬件、候选和推荐 | — |
+| [model-registry-v4-media.md](./model-registry-v4-media.md) | 媒体模型合同 | authoritative | 全类型资料与发布兼容条件 | — |
+| [model-catalog-runtime.md](./dev-rules/model-catalog-runtime.md) | 模型运行细则 | authoritative | 窗口、压缩、原生缓存与显示 | — |
+| [model-catalog.md](./examples/model-catalog.md) | 模型配置示例 | 参考 | 可校验的最小配置和维护场景 | — |
+| [model-catalog-history.md](./model-catalog-history.md) | 模型历史记录 | 参考 | 旧型号取舍与迁移记录，不代表当前发布状态 | — |
 | [desktop-development.md](./dev-rules/desktop-development.md) | Desktop 开发规则 | authoritative | Desktop 启动、重启与验证 | — |
 | [electron-security-and-process-boundaries.md](./dev-rules/electron-security-and-process-boundaries.md) | Electron 安全规则 | authoritative | Renderer、preload、BrowserWindow、WebView、IPC、CSP 与进程边界 | — |
 | [credentials-and-local-storage.md](./dev-rules/credentials-and-local-storage.md) | 本地数据安全规则 | authoritative | 凭证、用户持久数据、临时文件与测试目录 | — |
@@ -21,16 +31,17 @@
 | [mobile-development.md](./dev-rules/mobile-development.md) | Mobile 开发规则 | authoritative | Mobile 模拟器、验证与专项入口 | — |
 | [orca-team-architecture.md](./dev-rules/orca-team-architecture.md) | 契约/规范 | authoritative | `apps/desktop` 的 `maker-ipc/orca*` 服务 + `mcp-integrations` codex MCP、`packages/lizi-mcps` 的 `orca`、`packages/orca-workflow`、`packages/maker-core` 的 codex MCP context | — |
 | [maker-core-and-agent-behavior.md](./dev-rules/maker-core-and-agent-behavior.md) | maker-core 规则 | authoritative | `packages/maker-core` 的 Agent 编排、prompt 组装、translator、model 映射、缓存率/性能/准确性指标与 system prompt 门禁 | — |
-| [plugin-security-and-authoring.md](./dev-rules/plugin-security-and-authoring.md) | 插件安全规则 | authoritative | 插件（`.cindy`）运行时沙箱、权限 slot、网络/凭证/资源交接、存量插件向下兼容与无感升级、作者契约与编写手册同步 | — |
+| [plugin-security-and-authoring.md](./dev-rules/plugin-security-and-authoring.md) | 插件安全规则 | authoritative | 插件（`.cindy`）运行时沙箱、直接能力声明、网络/凭证/资源交接、存量插件向下兼容与无感升级、作者契约与编写手册同步 | — |
 | [cindy-updater.md](./dev-rules/cindy-updater.md) | 更新器规则 | authoritative | 客户端自动更新链路（`cindy-updater` + Electron 更新服务）的 owner 确认门禁 | — |
 | [engineering-conventions.md](./dev-rules/engineering-conventions.md) | 通用工程规范 | authoritative | Desktop 日志、IPC 错误协议、main 侧测试、跨平台双端兼容与 UI 文案 i18n | — |
 | [log-upload-and-redaction.md](./dev-rules/log-upload-and-redaction.md) | 日志上报规则 | authoritative | 客户端日志采集/脱敏/上报：记录边界不变量、来源白名单方向、标记代次与原子清除、区域绑定与崩溃时序 | — |
 | [protocol-compatibility.md](./dev-rules/protocol-compatibility.md) | 跨端协议规则 | authoritative | 两仓本地协议包、device-link relay 层与 wire protocol 兼容 | — |
-| [architecture-invariants.md](./dev-rules/architecture-invariants.md) | 架构不变量 | authoritative | package 解耦、main 静态依赖、主界面布局树（`layoutTree`/`LayoutStore`/panel registry） | — |
+| [architecture-invariants.md](./dev-rules/architecture-invariants.md) | 架构原则与不变量 | authoritative | 能力与界面解耦、多端事实、用户偏好、main 静态依赖与布局树 | — |
 | [configuration-and-overrides.md](./dev-rules/configuration-and-overrides.md) | 配置契约 | authoritative | 配置可见性分层、默认值+override 分离、迁移与恢复默认语义 | — |
 | [remote-and-mobile-adaptation.md](./dev-rules/remote-and-mobile-adaptation.md) | 远程/手机版门禁 | authoritative | SSH 远程工作区、device-link allowlist、`apps/mobile` 入口与功能类 PR 三选一门禁 | — |
-| [development-workflow.md](./dev-rules/development-workflow.md) | 开发工作流 | authoritative | worktree dogfooding 契约、提 PR/直推 main 门禁、Review P0/P1/P2 口径 | — |
+| [development-workflow.md](./dev-rules/development-workflow.md) | 开发工作流 | authoritative | worktree dogfooding 契约、提 PR/直推 main 门禁、Review P0/P1/P2 口径、项目知识归属 | — |
 | [plugin-setup-runtime.md](./plugin-setup-runtime.md) | 技术设计 | 参考 | `ghost_list` / `ghost_info` / `ghost_call` 插件配置前置检查、Ask-shell Setup 卡片、配置变更回调与原调用恢复 | — |
+| [remote-plugin-oauth.md](./remote-plugin-oauth.md) | 客户端契约 | 参考 | 远程设备插件 OAuth 事务、Desktop 回调桥、任务授权指引及兼容边界 | — |
 | [desktop-login-hosted-callback.md](./desktop-login-hosted-callback.md) | 跨仓契约 | 参考 | Desktop 系统浏览器登录的托管回调链路：auth-server 路由契约、结果页模板交付、灰度开关与回滚 | — |
 | [auth-realm-routing.md](./auth-realm-routing.md) | 跨仓契约 | 参考 | 组织 SSO 双区域发现、会话区域持久化与 token 消费端点路由 | — |
 | [client-log-upload-requirements.md](./client-log-upload-requirements.md) | 需求文档 | 参考 | Desktop 客户端日志上报（手动 + 崩溃自动）的目标、数据边界、同意闸与可靠性要求 | — |

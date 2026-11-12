@@ -10,6 +10,8 @@
  * wordmark 辨识度高);单色为默认,彩色按场景显式启用。
  */
 
+import { CLAUDE_CODE_MARK_PATH } from '../../../shared/brandMarkPaths';
+
 interface ClaudeMarkProps {
   size?: number;
   className?: string;
@@ -30,7 +32,7 @@ export function ClaudeMark({ size = 14, className, variant = 'mono' }: ClaudeMar
         fill={variant === 'brand' ? '#d97757' : 'currentColor'}
         fillRule="evenodd"
         clipRule="evenodd"
-        d="M20.998 10.949H24v3.102h-3v3.028h-1.487V20H18v-2.921h-1.487V20H15v-2.921H9V20H7.488v-2.921H6V20H4.487v-2.921H3V14.05H0v-3.1h3V5h17.998zM6 10.949h1.488V8.102H6zm10.51 0H18V8.102h-1.49z"
+        d={CLAUDE_CODE_MARK_PATH}
       />
     </svg>
   );

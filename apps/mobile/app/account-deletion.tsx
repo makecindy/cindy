@@ -22,9 +22,14 @@ import { loginText } from '@/auth/loginMessages';
 import { Text, TextInput } from '@/components/AppText';
 import {
   MainWindowActionButton,
-  ScreenHeader,
 } from '@/components/MobilePrimitives';
+import {
+  SimpleStackHeader,
+  simpleScrollInsetProps,
+  simpleScrollScreenSafeAreaEdges,
+} from '@/platform/chrome';
 import { goBackGuarded } from '@/utils/backGuard';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import {
   fontWeight,
@@ -108,8 +113,9 @@ export default function AccountDeletionScreen() {
 
   const available = availability?.available;
   return (
-    <SafeAreaView style={styles.safeArea} testID="accountDeletion.screen">
-      <ScreenHeader
+    <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="accountDeletion.screen">
+      <SimpleStackHeader
+        scrollEdge
         backTestID="accountDeletion.backButton"
         onBack={() => goBackGuarded(router)}
         title={loginText('accountDeletionScreenTitle')}
@@ -120,6 +126,7 @@ export default function AccountDeletionScreen() {
         style={styles.flex}
       >
         <ScrollView
+          {...simpleScrollInsetProps}
           contentContainerStyle={styles.content}
           keyboardShouldPersistTaps="handled"
           testID="accountDeletion.scroll"
@@ -159,7 +166,7 @@ export default function AccountDeletionScreen() {
                   }
                   onSubmitEditing={() => void confirm()}
                   placeholder={loginText('codePlaceholder')}
-                  placeholderTextColor={colors.textTertiary}
+                  placeholderTextColor={colors.textPlaceholder}
                   returnKeyType="done"
                   style={styles.codeInput}
                   testID="accountDeletion.codeInput"
@@ -334,6 +341,7 @@ const makeStyles = (colors: ThemeColors) =>
     cardTitle: {
       color: colors.textPrimary,
       fontSize: typeScale.title,
+      lineHeight: lineHeight.title,
       fontWeight: fontWeight.semibold,
     },
     body: {
@@ -411,5 +419,5 @@ const makeStyles = (colors: ThemeColors) =>
       backgroundColor: colors.cta,
       borderColor: colors.cta,
     },
-    pressed: { opacity: 0.6 },
+    pressed: mobileInteractionStyles.pressed,
   });

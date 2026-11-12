@@ -1,3 +1,4 @@
+import { CLAUDE_QUOTA_STATE_READ } from '../../shared/claudeQuotaState';
 /**
  * maker:usage:* IPC 的纯 handler body。
  *
@@ -11,9 +12,14 @@ import type {
   MobileCodexRateLimitsResult,
 } from '@cindy/maker-shared/device-link-contract';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
+import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage.js';
 import type { ClaudeAccountUsageSnapshot } from '../usage/claudeAccountUsage.js';
 import type { ModelPricingMap } from '../usage/modelPricing.js';
 import type { UsageHistoryPayload, UsageHistoryReadOptions } from '../usage/usageHistory.js';
+import {
+  parseUsageDeviceRowsRequest,
+  type UsageDeviceRowsResponse,
+} from '../usage/usageDeviceRows.js';
 import type { AgentTodayUsage, RateLimitSnapshot } from '../usageBroadcaster.js';
 import { CodexRateLimitResetRejectedError } from '../usage/codexRateLimitReset.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate.js';
@@ -25,13 +31,22 @@ export interface LegacyUsdModelPrice {
   outputUsdPerMtok: number;
   cacheReadUsdPerMtok?: number;
   cacheCreateUsdPerMtok?: number;
+  /** Gateway 折扣比例 0..1;旧控制端忽略。计费金额 = 原价 × (1 - costDiscount)。 */
+  costDiscount?: number;
 }
 
 export type LegacyUsdModelPricingMap = Record<string, LegacyUsdModelPrice>;
 
+function normalizedCostDiscount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 1
+    ? value
+    : undefined;
+}
+
 /**
  * device-link v1 兼容投影。旧控制端只能表达扁平 USD 价格，因此只投影真实 USD quote；
  * CNY 不能反算或写进 *Usd，旧端按既有“无价隐藏”语义降级。
+ * costDiscount 是 append-only：新控制端用来算折后价，旧端忽略未知字段。
  */
 export function toLegacyUsdModelPricing(
   pricing: ModelPricingMap | null,
@@ -39,6 +54,7 @@ export function toLegacyUsdModelPricing(
   const out: LegacyUsdModelPricingMap = {};
   for (const [modelId, quote] of Object.entries(pricing?.xd ?? {})) {
     if (quote.currency !== 'USD') continue;
+    const costDiscount = normalizedCostDiscount(quote.costDiscount);
     out[modelId] = {
       inputUsdPerMtok: quote.inputPerMtok,
       outputUsdPerMtok: quote.outputPerMtok,
@@ -48,6 +64,7 @@ export function toLegacyUsdModelPricing(
       ...(quote.cacheCreatePerMtok !== undefined
         ? { cacheCreateUsdPerMtok: quote.cacheCreatePerMtok }
         : {}),
+      ...(costDiscount !== undefined ? { costDiscount } : {}),
     };
   }
   return Object.keys(out).length > 0 ? out : null;
@@ -55,17 +72,26 @@ export function toLegacyUsdModelPricing(
 
 /** usage handler 需要的 host-level 查询与刷新能力。 */
 export interface MakerUsageHandlerDeps {
+  readClaudeAccountQuotaClear?(): { quotaState: 'unlimited' | 'invalidated' } | null;
   readAgentTodayUsage(agentKind: AgentKind): Promise<AgentTodayUsage>;
-  readCodexAccountUsageSnapshot(): Promise<RateLimitSnapshot | null>;
-  readCodexRateLimits(): Promise<MobileCodexRateLimitsResult>;
-  consumeCodexRateLimitReset(idempotencyKey: string): Promise<MobileCodexRateLimitResetResult>;
-  readClaudeSubscriptionUsageSnapshot(): Promise<ClaudeSubscriptionUsageSnapshot | null>;
+  readCodexAccountUsageSnapshot(providerId?: string): Promise<RateLimitSnapshot | null>;
+  setCodexResetAutoUse?(patch: Record<string, unknown> | null, accountKey: string, providerId?: string): Promise<MobileCodexRateLimitsResult>;
+  readCodexRateLimits(providerId?: string): Promise<MobileCodexRateLimitsResult>;
+  consumeCodexRateLimitReset(idempotencyKey: string, providerId?: string): Promise<MobileCodexRateLimitResetResult>;
+  readClaudeSubscriptionUsageSnapshot(providerId?: string): Promise<ClaudeSubscriptionUsageSnapshot | null>;
+  readXaiSubscriptionUsageSnapshot(providerId?: string): Promise<XaiSubscriptionUsageSnapshot | null>;
+  /**
+   * 用量历史会读取完整的 sessions 表，必须在任何参数解析或 DB 查询前确认
+   * 请求来自受信任的主页面 renderer。
+   */
+  assertTrustedSender(event: unknown): void;
   readClaudeAccountUsageSnapshot(): ClaudeAccountUsageSnapshot | null;
   triggerClaudeAccountUsageRefresh(force: boolean): Promise<void>;
   readModelPricing(): Promise<ModelPricingMap | null>;
   readReferenceModelPricing(): ModelPricingMap;
   readUsageHistory(opts?: UsageHistoryReadOptions): Promise<UsageHistoryPayload>;
   emptyUsageHistory(): UsageHistoryPayload;
+  readUsageDeviceRows(request: { sinceDay: string | null }): Promise<UsageDeviceRowsResponse>;
 }
 
 export function registerMakerUsageHandlers(
@@ -76,22 +102,28 @@ export function registerMakerUsageHandlers(
     return await deps.readAgentTodayUsage(requireString(agentKind, 'agentKind') as AgentKind);
   });
 
-  registry.handle(MAKER_INVOKE.USAGE_ACCOUNT, async (_e, agentKind: unknown) => {
+  registry.handle(MAKER_INVOKE.USAGE_ACCOUNT, async (_e, agentKind: unknown, providerId?: unknown) => {
     const kind = requireString(agentKind, 'agentKind');
-    if (kind === 'codex') return await deps.readCodexAccountUsageSnapshot();
+    if (kind === 'codex') {
+      const id = providerId === undefined ? undefined : requireString(providerId, 'providerId');
+      const snapshot = await deps.readCodexAccountUsageSnapshot(id);
+      return snapshot && id && id !== 'openai' ? { ...snapshot, providerId: id } : snapshot;
+    }
     if (kind === 'claude-code') {
-      // warm-start: 没有 snapshot 时触发一次强制刷新；本次仍按当前 snapshot 返回。
-      if (deps.readClaudeAccountUsageSnapshot() === null) {
-        void deps.triggerClaudeAccountUsageRefresh(true);
-      }
-      return deps.readClaudeAccountUsageSnapshot();
+      // Both first load and explicit refresh must reach the existing owner-scoped fetcher.
+      // Cached reads retain its throttle; an empty cache gets the existing warm-start path.
+      await deps.triggerClaudeAccountUsageRefresh(
+        deps.readClaudeAccountUsageSnapshot() === null && deps.readClaudeAccountQuotaClear?.()?.quotaState !== 'unlimited',
+      );
+      return deps.readClaudeAccountUsageSnapshot()
+        ?? (providerId === CLAUDE_QUOTA_STATE_READ ? deps.readClaudeAccountQuotaClear?.() ?? null : null);
     }
     return null;
   });
 
-  registry.handle(MAKER_INVOKE.USAGE_CODEX_RATE_LIMITS, async () => {
+  registry.handle(MAKER_INVOKE.USAGE_CODEX_RATE_LIMITS, async (_e, providerId?: unknown) => {
     try {
-      return await deps.readCodexRateLimits();
+      return await deps.readCodexRateLimits(providerId === undefined ? undefined : requireString(providerId, 'providerId'));
     } catch (err) {
       if (err instanceof CodexRateLimitResetRejectedError) {
         throwIpcError('PRECONDITION_FAILED', `${err.reason}: ${err.message}`);
@@ -102,13 +134,13 @@ export function registerMakerUsageHandlers(
 
   registry.handle(
     MAKER_INVOKE.USAGE_CODEX_RATE_LIMIT_RESET,
-    async (_e, idempotencyKey: unknown) => {
+    async (_e, idempotencyKey: unknown, providerId?: unknown) => {
       const key = requireString(idempotencyKey, 'idempotencyKey');
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(key)) {
         throwIpcError('INVALID_PARAMS', 'idempotencyKey must be a UUID');
       }
       try {
-        return await deps.consumeCodexRateLimitReset(key);
+        return await (providerId === undefined ? deps.consumeCodexRateLimitReset(key) : deps.consumeCodexRateLimitReset(key, requireString(providerId, 'providerId')));
       } catch (err) {
         if (err instanceof CodexRateLimitResetRejectedError) {
           throwIpcError('PRECONDITION_FAILED', `${err.reason}: ${err.message}`);
@@ -118,9 +150,25 @@ export function registerMakerUsageHandlers(
     },
   );
 
+  registry.handle(MAKER_INVOKE.USAGE_CODEX_RESET_AUTO_USE, async (_event, patch: unknown, accountKey: unknown, providerId?: unknown) => {
+    if (patch !== null && (!patch || typeof patch !== 'object' || Array.isArray(patch)
+      || Object.keys(patch).some(key => !['enabled', 'lowQuota', 'minimumDays', 'expiring', 'expiryMinutes'].includes(key)))) {
+      throwIpcError('INVALID_PARAMS', 'Invalid reset settings');
+    }
+    if (!deps.setCodexResetAutoUse) throwIpcError('UNSUPPORTED_CAPABILITY', 'Automatic reset settings unavailable');
+    return deps.setCodexResetAutoUse(patch as Record<string, unknown> | null,
+      requireString(accountKey, 'accountKey'), providerId === undefined ? undefined : requireString(providerId, 'providerId'));
+  });
+
   // Claude 订阅账号余量 (5h/周/分模型窗口) — cached-first, 内部按需后台刷新。
-  registry.handle(MAKER_INVOKE.USAGE_CLAUDE_SUBSCRIPTION, async () => {
-    return await deps.readClaudeSubscriptionUsageSnapshot();
+  registry.handle(MAKER_INVOKE.USAGE_CLAUDE_SUBSCRIPTION, async (event, providerId) => {
+    if (providerId !== undefined) deps.assertTrustedSender?.(event);
+    return await deps.readClaudeSubscriptionUsageSnapshot(providerId === undefined ? undefined : requireString(providerId, 'providerId'));
+  });
+
+  registry.handle(MAKER_INVOKE.USAGE_XAI_SUBSCRIPTION, async (event, providerId) => {
+    deps.assertTrustedSender?.(event);
+    return await deps.readXaiSubscriptionUsageSnapshot(providerId === undefined ? undefined : requireString(providerId, 'providerId'));
   });
 
   // device-link v1:保留旧扁平 USD 形状，不能把 CNY 伪装成 *Usd。
@@ -139,12 +187,39 @@ export function registerMakerUsageHandlers(
 
   // 用量历史聚合 (首页仪表盘) — 查询型 handler, DB 出错回退空 payload 让
   // renderer 正常渲染空态 (与同文件其它 usage 读取的 fallback-data 口径一致)。
-  registry.handle(MAKER_INVOKE.USAGE_HISTORY, async (_e, opts: unknown) => {
-    const raw = (opts ?? {}) as { days?: unknown; forceRefresh?: unknown };
-    const days = typeof raw.days === 'number' && Number.isFinite(raw.days) ? raw.days : undefined;
+  registry.handle(MAKER_INVOKE.USAGE_HISTORY, async (event, opts: unknown) => {
+    deps.assertTrustedSender(event);
+    const raw = (opts ?? {}) as {
+      days?: unknown;
+      modelDays?: unknown;
+      device?: unknown;
+      includeTasks?: unknown;
+      forceRefresh?: unknown;
+    };
+    const days =
+      raw.days === 'all'
+        ? ('all' as const)
+        : typeof raw.days === 'number' && Number.isFinite(raw.days)
+          ? raw.days
+          : undefined;
+    const modelDays =
+      raw.modelDays === 'all'
+        ? ('all' as const)
+        : typeof raw.modelDays === 'number' && Number.isFinite(raw.modelDays)
+          ? raw.modelDays
+          : undefined;
     const forceRefresh = raw.forceRefresh === true;
+    const device =
+      raw.device === 'all' || raw.device === 'local'
+        ? raw.device
+        : typeof raw.device === 'string' && raw.device.length > 0 && raw.device.length <= 128
+          ? raw.device
+          : undefined;
     const readOpts = {
       ...(days === undefined ? {} : { days }),
+      ...(modelDays === undefined ? {} : { modelDays }),
+      ...(device === undefined ? {} : { device }),
+      ...(raw.includeTasks === true ? { includeTasks: true } : {}),
       ...(forceRefresh ? { forceRefresh: true } : {}),
     };
     try {
@@ -152,5 +227,13 @@ export function registerMakerUsageHandlers(
     } catch {
       return deps.emptyUsageHistory();
     }
+  });
+
+  // 跨设备用量合并的被控端读取 (只读, 无 sender 依赖、无 UI 副作用):
+  // 数据真相在本机库里, 由同账号其它电脑经 device-link allowlist 调用。
+  registry.handle(MAKER_INVOKE.USAGE_DEVICE_ROWS, async (_e, request: unknown) => {
+    const parsed = parseUsageDeviceRowsRequest(request);
+    if (!parsed) throwIpcError('INVALID_PARAMS', 'sinceDay must be YYYY-MM-DD');
+    return await deps.readUsageDeviceRows(parsed);
   });
 }

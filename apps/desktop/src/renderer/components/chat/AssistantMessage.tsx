@@ -1,3 +1,15 @@
+import { BotChatReplyTarget } from '@/features/bots/BotChatQuoteViews';
+import { BotStartedTasksFooter, type BotStartedTask } from './BotStartedTasks';
+import { useBotChatQuote } from '@/features/bots/botChatQuoteContext';
+import { botReplyQuoteFor } from '@/features/bots/botDmQuote';
+import { hasRichAnswer, richAnswerText } from '@cindy/maker-shared/rich-answer';
+import { BotLearningFooter } from '@/features/bots/BotLearningFooter';
+import { BotStarterOptions } from '@/features/bots/BotStarterOptions';
+import { stripStarterOptionList } from '../../../shared/botStarterOptions';
+import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCard';
+import { BotDmThreadPreview } from '@/features/bots/BotDmThreadPreview';
+import { useBotDmThreadForMessage } from '@/features/bots/botDmThreadsContext';
+import { botTaskResultKey, type BotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 /**
  * AssistantMessage
  * ---------------------------------------------------------------------------
@@ -36,12 +48,13 @@
  *   直到 finally — 那个体验更差, 没有借鉴。
  */
 
+import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from './ChatBubble';
 import { memo, useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2, TriangleAlert } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatModelShortLabel } from '@/lib/modelShortLabel';
-import { stripGoalVerdictBlock } from '@/lib/goalVerdict';
+import { stripGoalVerdictBlock } from '@cindy/maker-shared/goal-verdict';
 import { getGhostCardEntry, subscribeGhostCards } from '@/cindy-brain/ghostCardStore';
 import { GhostToolCard } from './GhostToolCard';
 import type { KnownLocalFileRef } from '@/lib/localPathResolver';
@@ -55,7 +68,9 @@ import { buildSessionMessageDeepLink } from '@/lib/deepLink';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { insertSessionLinkIntoComposer } from '@/lib/composerActionsBus';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { handleAssistantCopy } from '@/lib/assistantSelectionCopy';
 import { MessageActionBar } from './MessageActionBar';
+import { PluginUiSlot, renderPluginUiBody, type PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { shareSelectionStore } from './shareSelectionStore';
 import { useForkAtMessage } from './useForkAtMessage';
 import { useDeleteMessage } from './useDeleteMessage';
@@ -118,6 +133,7 @@ const StreamingBody = memo(function StreamingBody({
   currentSessionId,
   currentSessionTitle,
   streamFadeKey,
+  allowPrivilegedLinks,
 }: {
   workingDir: string;
   content: string;
@@ -125,6 +141,7 @@ const StreamingBody = memo(function StreamingBody({
   currentSessionId?: string;
   currentSessionTitle?: string | null;
   streamFadeKey?: string;
+  allowPrivilegedLinks: boolean;
 }) {
   const { committedText, pendingLine } = useMemo(
     () => splitAtLastNewline(content),
@@ -134,6 +151,7 @@ const StreamingBody = memo(function StreamingBody({
     <>
       {committedText && (
         <MarkdownRenderer
+            renderRichAnswers
           workingDir={workingDir}
           content={committedText}
           isStreaming
@@ -141,6 +159,7 @@ const StreamingBody = memo(function StreamingBody({
           localFileRefs={localFileRefs}
           currentSessionId={currentSessionId}
           currentSessionTitle={currentSessionTitle}
+          allowPrivilegedLinks={allowPrivilegedLinks}
         />
       )}
       {pendingLine && (
@@ -151,9 +170,18 @@ const StreamingBody = memo(function StreamingBody({
 });
 
 interface AssistantMessageProps {
+  pluginUi: PluginUiMessageCandidates;
   /** F1 transit: pass through to MarkdownRenderer for local-path resolution
    *  in markdown links. Stable per-session; doesn't trigger extra renders. */
   workingDir: string;
+  /**
+   * Whether this content may reach privileged link targets (`file:` and Cindy
+   * deep links) on *this* machine. False for anything whose author is another
+   * machine — a device-link or SSH task — where `workingDir` names a path the
+   * control side does not own. Default true keeps every existing caller,
+   * which renders local sessions, exactly as it was.
+   */
+  allowPrivilegedLinks?: boolean;
   localFileRefs?: readonly KnownLocalFileRef[];
   currentSessionId?: string;
   currentSessionTitle?: string | null;
@@ -165,6 +193,8 @@ interface AssistantMessageProps {
    *  IPC takes (sessionId, clientId) to locate the fork point. When omitted,
    *  the Fork button is not rendered. */
   messageClientId?: string;
+  /** The owner message this reply answers; shown above the bubble when the setting is on. */
+  replyToClientId?: string;
   /** Owning agent kind — gates Fork icon visibility via capabilities,
    *  same scheme as UserMessage. */
   agentKind?: RendererAgentKind;
@@ -179,6 +209,16 @@ interface AssistantMessageProps {
    *  的收尾 assistant 正文传 true —— 任务执行过程中的中间句不挂 bar(bar 即使
    *  opacity-0 也占 24px 布局高度,每句都挂会拉散消息流)。默认 false。 */
   showActionBar?: boolean;
+  /** 伙伴对话使用常显、无费用、无 Fork 的轻量消息操作栏。 */
+  simplifiedBotConversation?: boolean;
+  failedSamplingAttempt?: boolean;
+  botLearning?: unknown;
+  /** Market opening: starter choices rendered as buttons; hidden once the user has written in this task. */
+  botStarterOptions?: string[];
+  starterOptionsLocked?: boolean;
+  botTaskResults?: BotCollaborationMeta[];
+  /** Teammate chat: tasks this reply started, shown at the foot of its bubble. */
+  botStartedTasks?: readonly BotStartedTask[];
   /** Per-turn 费用 (USD) — 仅该轮最后一条 assistant 有值, action bar 时间旁显示。 */
   turnMoney?: RegionalMoney;
   turnCostUsd?: number;
@@ -200,19 +240,29 @@ interface AssistantMessageProps {
 }
 
 export const AssistantMessage = memo(function AssistantMessage({
+  pluginUi,
   workingDir,
+  allowPrivilegedLinks = true,
   localFileRefs,
   currentSessionId,
   currentSessionTitle,
   content,
+  failedSamplingAttempt,
   isStreaming,
   createdAt,
   messageClientId,
+  replyToClientId,
   agentKind,
   remoteHostId,
   forkBlocked,
   sessionRunning,
   showActionBar = false,
+  simplifiedBotConversation = false,
+  botTaskResults,
+  botStartedTasks,
+  botLearning,
+  botStarterOptions,
+  starterOptionsLocked,
   turnMoney,
   turnCostUsd,
   turnCostIsEstimate,
@@ -247,7 +297,9 @@ export const AssistantMessage = memo(function AssistantMessage({
     currentSessionId ? originDeviceId(sessionFileOrigin) : undefined,
   );
   const isRemote = Boolean(remoteHostId);
-  const forkSupported = !isRemote && (!agentKind || (capabilities?.fork?.supported ?? true));
+  const sharedGuest = isSharedTaskPeer(originDeviceId(sessionFileOrigin) ?? '');
+  const forkSupported =
+    !isRemote && (!agentKind || (capabilities?.fork?.supported ?? true));
   const handleFork = useForkAtMessage({
     sessionId: currentSessionId,
     messageClientId,
@@ -278,74 +330,138 @@ export const AssistantMessage = memo(function AssistantMessage({
         : undefined,
     [currentSessionId, messageClientId],
   );
+  // 伙伴私聊里「回复」是引用回复:引用块等在输入框上方(cindy-bots-runtime.md「私聊引用回复」)。
+  const botQuote = useBotChatQuote(simplifiedBotConversation ? currentSessionId : undefined);
   const handleAddToChat = useCallback(() => {
+    if (botQuote && messageClientId) {
+      const quote = botReplyQuoteFor({ clientId: messageClientId, role: 'assistant', content });
+      if (quote) botQuote.quote(quote);
+      return;
+    }
     if (!currentSessionId || !messageDeepLink) return;
     insertSessionLinkIntoComposer({
       targetSessionId: currentSessionId,
       href: messageDeepLink,
     });
-  }, [currentSessionId, messageDeepLink]);
+  }, [botQuote, content, currentSessionId, messageClientId, messageDeepLink]);
 
   // /goal:隐藏助手输出末尾由 goal 协议要求模型吐出的裁决 JSON 块(仅显示层剥离,
   // 原文仍保留在 DB / transcript)。pattern:末尾的 ```json {...goal_status...} ``` 围栏块。
-  const displayContent = stripGoalVerdictBlock(content);
+  const displayContent = stripStarterOptionList(stripGoalVerdictBlock(content), botStarterOptions ?? []);
   const streamFadeKey = messageClientId
     ? `${currentSessionId ?? ''}\u0000${messageClientId}`
     : undefined;
 
+  // Empty streaming starts stay chrome-free until there is something to read.
+  const botBubble = simplifiedBotConversation
+    && Boolean(content.trim() || failedSamplingAttempt || ghostRenderCard);
+  // 私聊话题：只有本机伙伴主对话里的消息能开话题（cindy-bots-runtime.md「私聊话题」）。
+  const dmThread = useBotDmThreadForMessage(simplifiedBotConversation && !sharedGuest ? currentSessionId : undefined, messageClientId);
+
+  const actionBar = !isStreaming && showActionBar ? (
+    <MessageActionBar
+      pluginUi={pluginUi}
+      sessionId={currentSessionId}
+      clientId={messageClientId}
+      createdAt={createdAt}
+      copyText={richAnswerText(content)}
+      copyLinkText={messageDeepLink}
+      align="left"
+      hovered={hovered}
+      simplifiedBotConversation={simplifiedBotConversation}
+      readAloudMessage={simplifiedBotConversation && !ghostReplyPending && currentSessionId && messageClientId
+        ? { sessionId: currentSessionId, messageId: messageClientId }
+        : undefined}
+      companionFooter={botBubble}
+      replyAction={dmThread && botBubble ? {
+        onClick: dmThread.open,
+        label: dmThread.thread
+          ? t('bots.groupChat.server.openTopic', { count: dmThread.thread.replyCount })
+          : t('bots.groupChat.server.startTopic'),
+      } : undefined}
+      onFork={!sharedGuest && canFork ? handleFork : undefined}
+      onAddToChat={messageDeepLink ? handleAddToChat : undefined}
+      onShareAsImage={handleShareAsImage}
+      onDelete={!sharedGuest && currentSessionId && messageClientId ? handleDelete : undefined}
+      turnMoney={turnMoney}
+      turnCostUsd={turnCostUsd}
+      turnCostIsEstimate={turnCostIsEstimate}
+      userTurnMoney={userTurnMoney}
+      userTurnCostUsd={userTurnCostUsd}
+      userTurnCostIsEstimate={userTurnCostIsEstimate}
+      turnUsageDetails={userTurnUsageDetails ?? turnUsageDetails}
+    />
+  ) : null;
+
   return (
     <div
-      className="flex w-full flex-col items-start gap-1.5"
+      data-selection-quote-scope=""
+      className={cn('flex w-full flex-col items-start gap-1.5', botBubble && 'group/message chat-bubble-layout')}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      onCopy={handleAssistantCopy}
     >
-      <div
-        className={cn(
-          // min-w-0: flex item 默认 min-width: auto 会被 <pre> 的固有宽度撑爆，
-          // 导致代码块溢出消息流右边界。加上 min-w-0 让 w-full 真正生效，
-          // <pre> 的 overflow-x-auto 才能正常接管横向滚动。
-          'w-full min-w-0',
-          'text-15 font-normal leading-[1.6]',
-          'text-[var(--msg-assistant-text)]',
-        )}
+      <ChatBubble
+        data-plugin-appearance-region
+        data-plugin-appearance-speaker="assistant"
+        bare={!botBubble}
+        {...(botBubble ? { 'data-bot-reply-bubble': '' } : {})}
+        className={botBubble ? cn(CHAT_BUBBLE_COLUMN_CLASS, hasRichAnswer(content) ? 'w-full' : 'w-fit') : undefined}
       >
-        {ghostRenderCard && messageClientId && !showOriginal ? (
-          // 出口钩子自绘:意识卡片替换气泡(净化后的静态 HTML,沙箱 iframe)。
-          // 复用 GhostToolCard(自带主机身份头 + 主题注入 + 沙箱),turn 级无
-          // 工具名/参数,running 恒 false(turn 已结束)。
-          <GhostToolCard
-            callId={messageClientId}
-            ghostId={ghostRenderCard.ghostId}
-            toolName=""
-            toolInput={undefined}
-            html={ghostRenderCard.html}
-            height={ghostRenderCard.height}
-            running={false}
-            sessionId={currentSessionId}
-          />
-        ) : isStreaming && USE_LINE_COMMIT_STREAMING ? (
-          <StreamingBody
-            workingDir={workingDir}
-            content={displayContent}
-            localFileRefs={localFileRefs}
-            currentSessionId={currentSessionId}
-            currentSessionTitle={currentSessionTitle}
-            streamFadeKey={streamFadeKey}
-          />
-        ) : (
-          // 默认分支 (USE_LINE_COMMIT_STREAMING=false) + 非 streaming 都走完整
-          // MarkdownRenderer。isStreaming 透传 — true 时 MarkdownRenderer 内部启用
-          // 100ms throttle, false 时无节流, 行为和该文件性能优化前完全一致。
-          <MarkdownRenderer
-            workingDir={workingDir}
-            content={displayContent}
-            isStreaming={isStreaming}
-            streamFadeKey={streamFadeKey}
-            localFileRefs={localFileRefs}
-            currentSessionId={currentSessionId}
-            currentSessionTitle={currentSessionTitle}
-          />
+        {botBubble && botQuote && messageClientId ? (
+          <BotChatReplyTarget message={{ clientId: messageClientId, replyToClientId }} context={botQuote} />
+        ) : null}
+        {failedSamplingAttempt && (
+          <div className="mb-1 text-13 font-normal leading-[1.384615]" style={{ color: 'var(--text-secondary)' }}>
+            {t('chat.failedSamplingAttempt')}
+          </div>
         )}
+        <div data-selection-quote-body="" className="contents">
+          {renderPluginUiBody(pluginUi.messageBody ? { position: 'message.body', role: 'assistant', sessionId: currentSessionId,
+            disabled: !!ghostRenderCard || !!remoteHostId,
+            context: () => ({ message: { clientId: messageClientId, role: 'assistant', content, isStreaming } }) } : undefined,
+          ghostRenderCard && messageClientId && !showOriginal ? (
+            // 出口钩子自绘:意识卡片替换气泡(净化后的静态 HTML,沙箱 iframe)。
+            // 复用 GhostToolCard(自带主机身份头 + 主题注入 + 沙箱),turn 级无
+            // 工具名/参数,running 恒 false(turn 已结束)。
+            <GhostToolCard
+              callId={messageClientId}
+              ghostId={ghostRenderCard.ghostId}
+              toolName=""
+              toolInput={undefined}
+              html={ghostRenderCard.html}
+              height={ghostRenderCard.height}
+              running={false}
+              sessionId={currentSessionId}
+            />
+          ) : isStreaming && USE_LINE_COMMIT_STREAMING && !hasRichAnswer(content) ? (
+            <StreamingBody
+              workingDir={workingDir}
+              content={displayContent}
+              localFileRefs={localFileRefs}
+              currentSessionId={currentSessionId}
+              currentSessionTitle={currentSessionTitle}
+              streamFadeKey={streamFadeKey}
+              allowPrivilegedLinks={allowPrivilegedLinks}
+            />
+          ) : (
+            // 默认分支 (USE_LINE_COMMIT_STREAMING=false) + 非 streaming 都走完整
+            // MarkdownRenderer。isStreaming 透传 — true 时 MarkdownRenderer 内部启用
+            // 100ms throttle, false 时无节流, 行为和该文件性能优化前完全一致。
+            <MarkdownRenderer
+              renderRichAnswers
+              workingDir={workingDir}
+              content={displayContent}
+              isStreaming={isStreaming}
+              streamFadeKey={streamFadeKey}
+              localFileRefs={localFileRefs}
+              currentSessionId={currentSessionId}
+              currentSessionTitle={currentSessionTitle}
+              allowPrivilegedLinks={allowPrivilegedLinks}
+            />
+          ))}
+        </div>
+        {pluginUi.turnFooter && !isStreaming && showActionBar && <PluginUiSlot position="turn.footer" sessionId={currentSessionId} clientId={messageClientId} role="assistant" />}
         {/* 自绘卡在场:提供原文 ↔ 意识卡片切换(信任边界,主机绘制,始终可切回原文)。 */}
         {ghostRenderCard && (
           <button
@@ -371,6 +487,9 @@ export const AssistantMessage = memo(function AssistantMessage({
             shared/modelMismatch.ts)。常显不随 hover —— 用户需要在不悬停的情况
             下知道这轮不是自己选的模型回答的;icon 用 warning 语义色(token 豁免
             簇),文字保持 tertiary 灰阶,不喧宾夺主。 */}
+        {botBubble && botStartedTasks?.length ? (
+          <BotStartedTasksFooter tasks={botStartedTasks} hostSessionId={currentSessionId} />
+        ) : null}
         {modelMismatch && (
           <div className="mt-1 flex items-center gap-1.5 text-11" style={{ color: 'var(--text-tertiary)' }}>
             <TriangleAlert size={11} style={{ color: 'var(--warning-fg)' }} aria-hidden />
@@ -380,29 +499,25 @@ export const AssistantMessage = memo(function AssistantMessage({
             })}
           </div>
         )}
-      </div>
+      </ChatBubble>
+      {botBubble && actionBar}
+      {dmThread?.thread && !isStreaming ? (
+        <BotDmThreadPreview thread={dmThread.thread} bot={dmThread.bot} unread={dmThread.unread} onOpen={dmThread.open} />
+      ) : null}
+      {simplifiedBotConversation && !isStreaming && content.trim() && botStarterOptions?.length
+        ? <BotStarterOptions options={botStarterOptions} locked={starterOptionsLocked === true} /> : null}
+      {simplifiedBotConversation && !isStreaming && content.trim() && <BotLearningFooter receipts={botLearning} />}
+      {simplifiedBotConversation && !isStreaming && botTaskResults?.length ? (
+        <div className="w-full max-w-[560px] min-w-0" data-bot-task-results>
+          {botTaskResults.map(card => <BotSessionTaskResultCard key={botTaskResultKey(card)}
+            data={{ ...card }} sessionId={currentSessionId} attached />)}
+        </div>
+      ) : null}
       {/* Streaming → bar not mounted at all (V1.2 验收 "流式期间不挂载");
-          非 turn 收尾正文(showActionBar=false)同样不挂,消息流保持紧凑 */}
-      {!isStreaming && showActionBar && (
-        <MessageActionBar
-          createdAt={createdAt}
-          copyText={content}
-          copyLinkText={messageDeepLink}
-          align="left"
-          hovered={hovered}
-          onFork={canFork ? handleFork : undefined}
-          onAddToChat={messageDeepLink ? handleAddToChat : undefined}
-          onShareAsImage={handleShareAsImage}
-          onDelete={currentSessionId && messageClientId ? handleDelete : undefined}
-          turnMoney={turnMoney}
-          turnCostUsd={turnCostUsd}
-          turnCostIsEstimate={turnCostIsEstimate}
-          userTurnMoney={userTurnMoney}
-          userTurnCostUsd={userTurnCostUsd}
-          userTurnCostIsEstimate={userTurnCostIsEstimate}
-          turnUsageDetails={userTurnUsageDetails ?? turnUsageDetails}
-        />
-      )}
+          非 turn 收尾正文(showActionBar=false)同样不挂,消息流保持紧凑。
+          伙伴私聊的操作栏已紧跟气泡显示；普通任务保持原位置。 */}
+      {!botBubble && actionBar}
     </div>
   );
 });
+import { isSharedTaskPeer } from '@cindy/device-link';

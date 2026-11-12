@@ -5,10 +5,11 @@ import {
   accountDeletionChallengeSchema,
   accountDeletionStatusSchema,
   accountMembershipSchema,
+  accountTokenPairSchema,
   authRegionSchema,
   desktopAuthorizationPollSchema,
-  loginMethodSchema,
   loginOutcomeSchema,
+  recognizeLoginMethods,
   meResponseSchema,
   providerConfigSchema,
   ssoOrgDiscoverySchema,
@@ -18,6 +19,7 @@ import {
   type AccountDeletionChallenge,
   type AccountDeletionStatus,
   type AccountMembership,
+  type AccountTokenPair,
   type AuthMe,
   type AuthTokenPair,
   type AuthRegion,
@@ -33,6 +35,7 @@ import {
 export interface AuthFetchResponse {
   ok: boolean;
   status: number;
+  headers?: { get(name: string): string | null };
   json(): Promise<unknown>;
 }
 
@@ -54,18 +57,106 @@ export interface AuthClientOptions {
   locale?: string;
   fetch: AuthFetch;
   timeoutMs?: number;
+  /** Original failure before UI mapping; JSON syntax errors omit body excerpts. Adapters redact logs. */
+  onRequestError?: (path: string, status: number, error: unknown) => void;
 }
 
-/** Structured auth-server failure preserved across platform adapters. */
+/**
+ * Structured auth-server failure preserved across platform adapters.
+ * `code` stays the stable client category (a 429 is always RATE_LIMITED).
+ * `serverCode` is the server's own error code when the body named one, so a
+ * daily-quota refusal stays distinguishable from a short retry window.
+ * `requestId` is only a correlation id safe to log; it is never a credential.
+ */
 export class AuthApiError extends Error {
   constructor(
     public readonly code: string,
     public readonly statusCode: number,
     message: string,
+    public readonly retryAt?: number,
+    public readonly serverCode?: string,
+    public readonly requestId?: string,
   ) {
     super(message);
     this.name = "AuthApiError";
   }
+}
+
+const REQUEST_ID_HEADERS = ["x-request-id", "x-litellm-call-id"] as const;
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+/** Phone-shaped values are not correlation ids, even when the charset whitelist accepts them. */
+const PHONE_SHAPED_REQUEST_ID =
+  /^(?:\+\d{1,3}[\s.-]?)?(?:\d[\s.-]?){6,14}\d$/;
+/**
+ * Secrets that announce themselves with a hyphen or underscore prefix
+ * (sk- / pk- / gh*_ / github_pat_ / xox*-). Safe to apply to both correlation
+ * ids and server error codes.
+ */
+const SECRET_PREFIX =
+  /^(?:sk-|pk-|rk-|ak-|gh[pousr]_|github_pat_|xox[baprs]-)/i;
+/**
+ * Bare credential words. Case-insensitive, so "Token" also matches
+ * TOKEN_EXPIRED. Correlation ids may be a pasted token; server error codes
+ * must not use this rule, or login keeps treating an expired ticket as a
+ * generic AUTH_REQUEST_FAILED.
+ */
+const CREDENTIAL_WORD_PREFIX =
+  /^(?:Bearer|Basic|Token)(?:\s|sk-|pk-|[A-Za-z0-9._:-]{8,})/i;
+
+/** Character-safe correlation ids only. Phone numbers and credential shapes count as absent. */
+function logSafeRequestId(value: string): string | undefined {
+  if (!REQUEST_ID_PATTERN.test(value)) return undefined;
+  if (PHONE_SHAPED_REQUEST_ID.test(value)) return undefined;
+  if (SECRET_PREFIX.test(value) || CREDENTIAL_WORD_PREFIX.test(value)) {
+    return undefined;
+  }
+  return value;
+}
+
+/**
+ * Server error codes keep the charset/length whitelist, and still drop phone
+ * numbers and hyphen/underscore secrets. They do not use Bearer/Basic/Token.
+ */
+function logSafeServerErrorCode(value: string): string | undefined {
+  if (!REQUEST_ID_PATTERN.test(value)) return undefined;
+  if (PHONE_SHAPED_REQUEST_ID.test(value)) return undefined;
+  if (SECRET_PREFIX.test(value)) return undefined;
+  return value;
+}
+
+/** A correlation id from response headers, or undefined when absent or unsafe to keep. */
+export function authRequestId(
+  response: Pick<AuthFetchResponse, "headers">,
+): string | undefined {
+  for (const name of REQUEST_ID_HEADERS) {
+    const value = response.headers?.get(name)?.trim();
+    if (!value) continue;
+    const safe = logSafeRequestId(value);
+    if (safe) return safe;
+  }
+  return undefined;
+}
+
+/** Accept Retry-After seconds or HTTP-date; never invent a cooldown. */
+export function retryAfterDeadline(response: Pick<AuthFetchResponse, "headers">): number | undefined {
+  const value = response.headers?.get("retry-after")?.trim();
+  if (!value) return undefined;
+  const now = Date.now();
+  let deadline: number;
+  if (/^\d+$/.test(value)) {
+    deadline = now + Number(value) * 1000;
+  } else {
+    // Date.parse also accepts ambiguous numbers; HTTP dates must name a month.
+    if (!/[A-Za-z]{3}/.test(value)) return undefined;
+    const date = Date.parse(value);
+    const serverDate = Date.parse(response.headers?.get("date") ?? "");
+    deadline = Number.isFinite(serverDate)
+      ? now + Math.max(0, date - serverDate)
+      : date;
+  }
+  return Number.isSafeInteger(deadline) && deadline >= 0 && deadline <= 8.64e15
+    ? Math.max(now, deadline)
+    : undefined;
 }
 
 /**
@@ -81,6 +172,14 @@ const errorResponseSchema = z.object({
   code: z.string().optional(),
   message: z.string().optional(),
 });
+
+function serverErrorCode(data: unknown): string | undefined {
+  const parsed = errorResponseSchema.safeParse(data);
+  const code = parsed.success
+    ? (parsed.data.error?.code ?? parsed.data.code)
+    : undefined;
+  return code && logSafeServerErrorCode(code) ? code : undefined;
+}
 
 /** Platform-neutral REST client. It never persists or logs credentials. */
 export class CindyAuthClient {
@@ -114,10 +213,28 @@ export class CindyAuthClient {
   async discover(email: string): Promise<LoginMethod[]> {
     const result = await this.request(
       "/api/auth/discovery",
-      z.object({ methods: z.array(loginMethodSchema) }),
+      z.object({ methods: z.array(z.unknown()) }),
       { email },
     );
-    return result.methods;
+    let methods: LoginMethod[];
+    try {
+      methods = recognizeLoginMethods(result.methods);
+    } catch {
+      throw new AuthApiError(
+        "INVALID_RESPONSE",
+        200,
+        "Authentication server returned a malformed known login method",
+      );
+    }
+    // 列表非空却没有一项能识别：仍按契约漂移失败，避免空 method-choice 假成功。
+    if (result.methods.length > 0 && methods.length === 0) {
+      throw new AuthApiError(
+        "INVALID_RESPONSE",
+        200,
+        "Authentication server returned no recognized login methods",
+      );
+    }
+    return methods;
   }
 
   /** 企业 SSO 入口：组织 ID、slug 或已验证域名 → 已启用的 SSO 连接。 */
@@ -148,11 +265,17 @@ export class CindyAuthClient {
     return discovery;
   }
 
-  async requestCode(kind: VerificationKind, identifier: string): Promise<void> {
-    const body =
-      kind === "email"
-        ? { email: identifier, locale: this.options.locale }
-        : { phone: identifier, locale: this.options.locale };
+  async requestCode(
+    kind: VerificationKind,
+    identifier: string,
+    options: { captchaToken?: string } = {},
+  ): Promise<void> {
+    const body = {
+      ...(kind === "email" ? { email: identifier } : { phone: identifier }),
+      locale: this.options.locale,
+      // 仅有值时携带：旧 auth-server 的 zod 会忽略未知字段，但保持最小请求面。
+      ...(options.captchaToken ? { captchaToken: options.captchaToken } : {}),
+    };
     await this.request(
       `/api/auth/${kind}/request-code`,
       z.object({ status: z.literal("sent") }),
@@ -214,10 +337,12 @@ export class CindyAuthClient {
       "/api/auth/desktop/callback/poll",
       desktopAuthorizationPollSchema,
       { pollSecret, deviceId: this.options.deviceId },
-      { timeoutMs: DESKTOP_AUTHORIZATION_POLL_TIMEOUT_MS, signal: options.signal },
+      {
+        timeoutMs: DESKTOP_AUTHORIZATION_POLL_TIMEOUT_MS,
+        signal: options.signal,
+      },
     );
   }
-
 
   exchangeNativeSocial(
     provider: SocialProvider,
@@ -311,6 +436,24 @@ export class CindyAuthClient {
       "/api/auth/account/exchange",
       tokenPairSchema,
       { membershipId },
+      { token: accountToken },
+    );
+  }
+
+  refreshAccount(accountRefreshToken: string): Promise<AccountTokenPair> {
+    return this.request(
+      "/api/auth/account/refresh",
+      accountTokenPairSchema,
+      { accountRefreshToken, deviceId: this.options.deviceId },
+      { timeoutMs: 0 },
+    );
+  }
+
+  async logoutAccount(accountToken: string): Promise<void> {
+    await this.request(
+      "/api/auth/account/logout",
+      z.object({ status: z.literal("ok") }),
+      {},
       { token: accountToken },
     );
   }
@@ -464,47 +607,92 @@ export class CindyAuthClient {
           ...(timeoutMs > 0 || external ? { signal: controller.signal } : {}),
         });
       } catch (error) {
+        this.logRequestError(path, 0, error);
         throw this.describeTransportFailure(error, external);
       }
 
+      const retryAt =
+        response.status === 429 ? retryAfterDeadline(response) : undefined;
+      const requestId = authRequestId(response);
       let data: unknown;
       try {
         data = await response.json();
       } catch (error) {
+        this.logRequestError(path, response.status, error);
         // body 读取同样可能因取消/超时中断,此时按传输失败归类而不是"响应非法 JSON"
         if (error instanceof Error && error.name === "AbortError") {
           throw this.describeTransportFailure(error, external);
+        }
+        if (response.status === 429) {
+          throw new AuthApiError(
+            "RATE_LIMITED",
+            429,
+            "Too many requests",
+            retryAt,
+            undefined,
+            requestId,
+          );
         }
         throw new AuthApiError(
           "INVALID_RESPONSE",
           response.status,
           "Authentication server returned invalid JSON",
+          undefined,
+          undefined,
+          requestId,
         );
       }
       if (!response.ok) {
         const parsed = errorResponseSchema.safeParse(data);
-        const code = parsed.success
-          ? (parsed.data.error?.code ?? parsed.data.code ?? "AUTH_REQUEST_FAILED")
-          : "AUTH_REQUEST_FAILED";
+        const serverCode = serverErrorCode(data);
+        const code =
+          response.status === 429
+            ? "RATE_LIMITED"
+            : serverCode ?? "AUTH_REQUEST_FAILED";
         const message = parsed.success
           ? (parsed.data.error?.message ??
             parsed.data.message ??
             "Authentication request failed")
           : "Authentication request failed";
-        throw new AuthApiError(code, response.status, message);
+        throw new AuthApiError(
+          code,
+          response.status,
+          message,
+          retryAt,
+          response.status === 429 ? serverCode : undefined,
+          requestId,
+        );
       }
       const parsed = schema.safeParse(data);
       if (!parsed.success) {
+        this.logRequestError(path, response.status, parsed.error);
+        // A 200 with the wrong shape is still the same request. Keep the id
+        // already taken from the headers so the failure log can be matched.
         throw new AuthApiError(
           "INVALID_RESPONSE",
           response.status,
           "Authentication server response did not match the client contract",
+          undefined,
+          undefined,
+          requestId,
         );
       }
       return parsed.data;
     } finally {
       if (timer !== undefined) clearTimeout(timer);
       external?.removeEventListener("abort", forwardAbort);
+    }
+  }
+
+  private logRequestError(path: string, status: number, error: unknown): void {
+    try {
+      // JSON SyntaxError messages/stacks can include the response body.
+      const detail = error && typeof error === "object" && "name" in error && error.name === "SyntaxError"
+        ? "SyntaxError"
+        : error;
+      this.options.onRequestError?.(path, status, detail);
+    } catch {
+      // A logging failure cannot affect auth, retries or rotated credentials.
     }
   }
 

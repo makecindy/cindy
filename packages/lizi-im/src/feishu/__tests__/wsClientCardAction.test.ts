@@ -66,6 +66,7 @@ vi.doMock('../outbound.js', () => ({
   bindClient: mocks.bindClient,
   unbindClient: mocks.unbindClient,
   getBoundClient: mocks.getBoundClient,
+  getAccountEpoch: () => 1,
   sendText: mocks.sendText,
   replyText: mocks.replyText,
   openThread: mocks.openThread,
@@ -85,7 +86,8 @@ vi.doMock('../storage.js', () => ({
   readOwnerOpenId: mocks.readOwnerOpenId,
 }));
 
-vi.doMock('../moduleScope.js', () => ({
+vi.doMock('../moduleScope.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../moduleScope.js')>()),
   getLog: () => mocks.log,
 }));
 

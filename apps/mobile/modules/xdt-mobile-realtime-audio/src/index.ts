@@ -16,7 +16,11 @@ export type XdtMobileAudioErrorEvent = {
 };
 
 export type XdtMobileRealtimeAudioModule = {
-  start(options?: { sampleRate?: number; bufferSize?: number }): Promise<void>;
+  start(options?: { sampleRate?: number; bufferSize?: number }): Promise<{
+    inputPortTypes: string[];
+    inputSampleRate: number;
+    inputChannels: number;
+  } | void>;
   stop(): Promise<void>;
   prewarm(): Promise<void>;
 };

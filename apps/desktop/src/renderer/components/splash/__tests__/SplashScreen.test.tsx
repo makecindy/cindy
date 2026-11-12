@@ -4,8 +4,9 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DbSlimmingStartupProgress } from '../../../../shared/localDbMaintenance';
 
 /**
  * SplashScreen wave4 统一面板版测试(implementation-plan Step 3b WHAT1/WHAT3)。
@@ -19,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   splash: {
     phase: 'splash_checking' as string,
+    isReturningSession: false,
     isDownloading: false,
     downloadProgress: 0,
     downloadInfo: { progress: 0 } as {
@@ -44,6 +46,10 @@ const mocks = vi.hoisted(() => ({
   },
   env: { step: undefined as 1 | 2 | undefined, totalSteps: undefined as 2 | undefined },
   coverHeld: false,
+  handoff: {
+    reportSplashExited: vi.fn(),
+    reportSplashExitCompleted: vi.fn(),
+  },
 }));
 
 vi.mock('react-i18next', () => ({
@@ -79,6 +85,10 @@ vi.mock('@/contexts/AppShellCoverContext', () => ({
   useAppShellCover: () => ({ coverHeld: mocks.coverHeld, reportLocalDbGate: () => {} }),
 }));
 
+vi.mock('@/contexts/LoginHandoffContext', () => ({
+  useLoginHandoff: () => mocks.handoff,
+}));
+
 vi.mock('@/components/title-bar/WindowControls', () => ({
   WindowControls: () => <div data-testid="window-controls" />,
 }));
@@ -96,6 +106,42 @@ function setPhase(phase: string) {
 function renderSplash(phase: string) {
   setPhase(phase);
   return render(<SplashScreen />);
+}
+
+function installDatabaseCleanupApi(
+  progress: DbSlimmingStartupProgress,
+  cancelStartup = vi.fn(async () => ({ cancelled: true })),
+) {
+  let listener: ((next: DbSlimmingStartupProgress | null) => void) | null = null;
+  (
+    window as unknown as {
+      electronAPI: {
+        platform: string;
+        localDb: {
+          maintenance: {
+            getStartupProgress: () => Promise<DbSlimmingStartupProgress | null>;
+            cancelStartup: () => Promise<{ cancelled: boolean }>;
+            onStartupProgress: (
+              callback: (next: DbSlimmingStartupProgress | null) => void,
+            ) => () => void;
+          };
+        };
+      };
+    }
+  ).electronAPI = {
+    platform: 'win32',
+    localDb: {
+      maintenance: {
+        getStartupProgress: vi.fn(async () => progress),
+        cancelStartup,
+        onStartupProgress: vi.fn((callback) => {
+          listener = callback;
+          return vi.fn();
+        }),
+      },
+    },
+  };
+  return { cancelStartup, emit: (next: DbSlimmingStartupProgress | null) => listener?.(next) };
 }
 
 function panel(): HTMLElement {
@@ -131,6 +177,7 @@ beforeEach(() => {
   mocks.splash.downloadProgress = 0;
   mocks.splash.downloadInfo = { progress: 0 };
   mocks.splash.resetSignal = 0;
+  mocks.splash.isReturningSession = false;
   mocks.coverHeld = false;
   setPhase('splash_checking');
   document.documentElement.removeAttribute('data-splash-active');
@@ -188,6 +235,67 @@ describe('SplashScreen wave4 统一面板', () => {
     expect(stats.textContent).toContain('24.8 MB');
     expect(stats.textContent).toContain('65.3 MB');
   });
+
+  // #9564: existing cases only supplied integers. Exercise the real component's
+  // visible label with Linux fallback telemetry; keep the underlying bar precise.
+  it.each(['splash_downloading', 'splash_updating'])(
+    '%s: rounds fractional percentage text without changing transfer details',
+    (phase) => {
+      mocks.splash.downloadProgress = 8.181846572494996;
+      mocks.splash.downloadInfo = {
+        progress: 8.181846572494996,
+        speed: '411.2 KB/s',
+        downloaded: '8.5 MB',
+        total: '103.5 MB',
+      };
+      renderSplash(phase);
+
+      const stats = screen.getByTestId('splash-progress-stats');
+      expect(stats.textContent).toBe('8%·411.2 KB/s·8.5 MB / 103.5 MB');
+      expect(parseFloat(screen.getByTestId('splash-progress-fill').style.width)).toBeCloseTo(
+        8.181846572494996,
+        4,
+      );
+    },
+  );
+
+  it.each<[number, string]>([
+    [0, '0%'],
+    [38, '38%'],
+    [100, '100%'],
+    [-1, '0%'],
+    [101, '100%'],
+    [Number.NaN, '0%'],
+    [Number.POSITIVE_INFINITY, '0%'],
+  ])('keeps percentage text finite and bounded for %s', (progress, label) => {
+    mocks.splash.downloadProgress = progress;
+    renderSplash('splash_downloading');
+    expect(screen.getByTestId('splash-progress-stats').textContent).toBe(label);
+  });
+
+  // PR #9566: rounding 99.5 must not announce completion before the transfer does.
+  it.each(['splash_downloading', 'splash_updating'])(
+    '%s: reserves 100 percent for completed progress',
+    (phase) => {
+      mocks.splash.downloadProgress = 99.5;
+      const { rerender } = renderSplash(phase);
+
+      for (const [progress, label] of [
+        [99.5, '99%'],
+        [99.999, '99%'],
+        [100, '100%'],
+      ] as const) {
+        mocks.splash.downloadProgress = progress;
+        rerender(<SplashScreen />);
+
+        expect(screen.getByTestId('splash-progress-stats').textContent).toBe(label);
+        expect(parseFloat(screen.getByTestId('splash-progress-fill').style.width)).toBeCloseTo(
+          progress,
+          4,
+        );
+      }
+    },
+  );
 
   it('update_done:统一面板 + 现网 updateDone 文案 + spinner(379:607 样式)', () => {
     renderSplash('splash_update_done');
@@ -323,6 +431,26 @@ describe('SplashScreen wave4 统一面板', () => {
       'spawnFailed.title',
       'spawnFailed.description',
       'spawnFailed.confirm',
+      'databaseCleanup.title',
+      'databaseCleanup.progressLabel',
+      'databaseCleanup.phase.preparing',
+      'databaseCleanup.phase.backingUp',
+      'databaseCleanup.phase.copying',
+      'databaseCleanup.phase.cleaning',
+      'databaseCleanup.phase.compacting',
+      'databaseCleanup.phase.verifying',
+      'databaseCleanup.phase.finalizing',
+      'databaseCleanup.phase.cancelling',
+      'databaseCleanup.elapsedAndRemaining',
+      'databaseCleanup.elapsedFinalizing',
+      'databaseCleanup.duration.seconds',
+      'databaseCleanup.duration.minutes',
+      'databaseCleanup.cancelAction',
+      'databaseCleanup.cancellingAction',
+      'databaseCleanup.finalizingAction',
+      'databaseCleanup.cancelHint',
+      'databaseCleanup.cancellingHint',
+      'databaseCleanup.finalizingHint',
     ];
     for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
       const json = JSON.parse(
@@ -347,6 +475,14 @@ describe('SplashScreen wave4 统一面板', () => {
     expect(root.getAttribute('style') ?? '').not.toContain('background');
     expect(root.getAttribute('style')).toContain('--splash-fade-duration');
     expect(root.className).toContain('opacity-100');
+  });
+
+  it('已有会话返回启动用标准较短过渡，首启仍保留 splash 淡出时长', () => {
+    mocks.splash.isReturningSession = true;
+    const { container } = renderSplash('splash_checking');
+    expect((container.firstElementChild as HTMLElement).style.transition).toContain(
+      'var(--motion-enter)',
+    );
   });
 
   it('marks the document as splash-active only before fade out', () => {
@@ -391,6 +527,28 @@ describe('SplashScreen wave4 统一面板', () => {
     expect(screen.getByTestId('splash-root').className).toContain('opacity-0');
   });
 
+  it('等待 Splash 淡出层完成并可卸载后才上报退场完成', () => {
+    vi.useFakeTimers();
+    try {
+      mocks.coverHeld = true;
+      const view = renderSplash('splash_done');
+      expect(mocks.handoff.reportSplashExitCompleted).not.toHaveBeenCalled();
+
+      mocks.coverHeld = false;
+      view.rerender(<SplashScreen />);
+      expect(mocks.handoff.reportSplashExitCompleted).not.toHaveBeenCalled();
+
+      act(() => vi.advanceTimersByTime(499));
+      expect(mocks.handoff.reportSplashExitCompleted).not.toHaveBeenCalled();
+
+      act(() => vi.advanceTimersByTime(1));
+      expect(mocks.handoff.reportSplashExitCompleted).toHaveBeenCalledTimes(1);
+      expect(view.container.firstElementChild).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reduced-motion 下 cover 放行立即卸载,不留 500ms 透明遮罩', () => {
     window.matchMedia = vi.fn().mockImplementation((query: string) => ({
       matches: String(query).includes('prefers-reduced-motion'),
@@ -407,5 +565,95 @@ describe('SplashScreen wave4 统一面板', () => {
     mocks.coverHeld = false;
     view.rerender(<SplashScreen />);
     expect(view.container.firstElementChild).toBeNull();
+  });
+
+  it('淡出期间开启 reduced-motion 时释放淡出锁并完成卸载', () => {
+    vi.useFakeTimers();
+    const previousMatchMedia = window.matchMedia;
+    let reducedMotion = false;
+    const listeners = new Set<(event: MediaQueryListEvent) => void>();
+    const mediaQuery = {
+      get matches() {
+        return reducedMotion;
+      },
+      media: '(prefers-reduced-motion: reduce)',
+      addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
+        listeners.add(listener);
+      },
+      removeEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
+        listeners.delete(listener);
+      },
+      addListener: (listener: (event: MediaQueryListEvent) => void) => listeners.add(listener),
+      removeListener: (listener: (event: MediaQueryListEvent) => void) =>
+        listeners.delete(listener),
+      dispatchEvent: () => false,
+    } as unknown as MediaQueryList;
+    window.matchMedia = vi.fn(() => mediaQuery) as unknown as typeof window.matchMedia;
+
+    try {
+      mocks.coverHeld = true;
+      const view = renderSplash('splash_done');
+      mocks.coverHeld = false;
+      view.rerender(<SplashScreen />);
+      expect(screen.getByTestId('splash-root').className).toContain('opacity-0');
+      expect(mocks.handoff.reportSplashExitCompleted).not.toHaveBeenCalled();
+
+      reducedMotion = true;
+      act(() => {
+        for (const listener of listeners) listener({ matches: true } as MediaQueryListEvent);
+      });
+
+      expect(mocks.handoff.reportSplashExitCompleted).toHaveBeenCalledTimes(1);
+      expect(view.container.firstElementChild).toBeNull();
+    } finally {
+      window.matchMedia = previousMatchMedia;
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows startup database cleanup progress, time estimate, and a safe cancel action', async () => {
+    const progress: DbSlimmingStartupProgress = {
+      requestId: 'request-1',
+      phase: 'compacting',
+      progress: 72,
+      cancellable: true,
+      startedAt: Date.now() - 5_000,
+      updatedAt: Date.now(),
+      estimatedTotalMs: 15_000,
+    };
+    const api = installDatabaseCleanupApi(progress);
+    mocks.coverHeld = true;
+    renderSplash('splash_done');
+
+    expect(await screen.findByText('splash.databaseCleanup.title')).toBeTruthy();
+    expect(screen.getByText('splash.databaseCleanup.phase.compacting · 72%')).toBeTruthy();
+    expect(screen.getByTestId('database-cleanup-progress-fill').style.width).toBe('72%');
+    expect(screen.getByTestId('database-cleanup-time').textContent).toBe(
+      'splash.databaseCleanup.elapsedAndRemaining',
+    );
+    expect(screen.queryByTestId('window-controls')).toBeNull();
+    fireEvent.click(screen.getByTestId('database-cleanup-cancel'));
+    await waitFor(() => expect(api.cancelStartup).toHaveBeenCalledTimes(1));
+  });
+
+  it('disables cancellation while the compacted database is being installed', async () => {
+    installDatabaseCleanupApi({
+      requestId: 'request-1',
+      phase: 'finalizing',
+      progress: 96,
+      cancellable: false,
+      startedAt: Date.now() - 5_000,
+      updatedAt: Date.now(),
+      estimatedTotalMs: 6_000,
+    });
+    mocks.coverHeld = true;
+    renderSplash('splash_done');
+
+    const cancel = await screen.findByTestId('database-cleanup-cancel');
+    expect((cancel as HTMLButtonElement).disabled).toBe(true);
+    expect(cancel.textContent).toBe('splash.databaseCleanup.finalizingAction');
+    expect(screen.getByTestId('database-cleanup-safety-hint').textContent).toBe(
+      'splash.databaseCleanup.finalizingHint',
+    );
   });
 });

@@ -1,3 +1,4 @@
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import type { Session } from '@/lib/ccAgent.types';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -21,11 +22,13 @@ function toMs(iso: string | null | undefined): number {
   return Number.isFinite(t) ? t : 0;
 }
 
+export function sessionCreatedMs(session: Session): number {
+  return toMs(session.createdAt);
+}
+
 export function sessionActivityMs(session: Session): number {
-  // 以 userSendAt（用户最近一次按下发送）为主键排序：agent 回复 / /clear 等
-  // 只 bump updatedAt 的路径不再重排列表。userSendAt == null 时回落到 updatedAt，
-  // 兼容 touchUserSendInDb 失败的 scheduler fire 与从未发送过的草稿会话（历史存量）。
-  return session.userSendAt != null ? toMs(session.userSendAt) : toMs(session.updatedAt);
+  // 日期分组与组内排序共用换手时钟，旧端或旧数据保留真人发送时间回退。
+  return toMs(getSessionListActivityAt(session));
 }
 
 function startOfLocalDay(date: Date): Date {
@@ -39,10 +42,15 @@ function localDayKey(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+function localDayOrdinal(date: Date): number {
+  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / DAY_MS;
+}
+
 function classifyActivityDate(activity: Date, now: Date): Pick<DateSessionGroup, 'kind' | 'dayKey' | 'date'> {
   const todayStart = startOfLocalDay(now);
   const activityStart = startOfLocalDay(activity);
-  const diffDays = Math.floor((todayStart.getTime() - activityStart.getTime()) / DAY_MS);
+  // 日历日差不能除以本地午夜的真实毫秒长度；DST 开始日只有 23 小时。
+  const diffDays = localDayOrdinal(now) - localDayOrdinal(activity);
 
   if (diffDays <= 0) {
     return { kind: 'today', dayKey: localDayKey(todayStart), date: todayStart };
@@ -59,8 +67,7 @@ function classifyActivityDate(activity: Date, now: Date): Pick<DateSessionGroup,
 /**
  * Group sidebar sessions by recent local activity date.
  *
- * Sessions are sorted by sessionActivityMs（userSendAt ?? updatedAt）——以用户最近
- * 一次按下发送为主键，userSendAt 为空的会话（scheduler fire / 草稿）回落到 updatedAt。
+ * Sessions are sorted by sessionActivityMs（lastActivityAt ?? userSendAt ?? updatedAt）。
  */
 export function groupSessionsByActivityDate(
   sessions: readonly Session[],

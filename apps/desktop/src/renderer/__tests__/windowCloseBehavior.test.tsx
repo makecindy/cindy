@@ -9,6 +9,14 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
+it('auxiliary close overrides do not require the main-window behavior bridge', () => {
+  const close = vi.fn();
+  Object.defineProperty(window, 'electronAPI', { configurable:true, value:{platform:'win32'} });
+  render(<WindowControls onClose={close} />);
+  fireEvent.click(screen.getByRole('button', {name:'titleBar.close'}));
+  expect(close).toHaveBeenCalledOnce();
+});
+
 function installWindowsApi(closeBehavior: 'quit' | 'tray' | null) {
   let closeBehaviorRequested: (() => void) | null = null;
   const getWindowsCloseBehavior = vi.fn(async () => closeBehavior);
@@ -47,11 +55,95 @@ function installWindowsApi(closeBehavior: 'quit' | 'tray' | null) {
   };
 }
 
+function installLinuxApi(closeBehavior: 'quit' | 'minimize' | null) {
+  let closeBehaviorRequested: (() => void) | null = null;
+  const getLinuxCloseBehavior = vi.fn(async () => closeBehavior);
+  const setLinuxCloseBehavior = vi.fn(async (behavior: 'quit' | 'minimize') => behavior);
+  const onLinuxCloseBehaviorRequested = vi.fn((callback: () => void) => {
+    closeBehaviorRequested = callback;
+    return vi.fn();
+  });
+  const notifyLinuxCloseBehaviorPromptShown = vi.fn();
+  const anySessionInTurn = vi.fn(async () => false);
+  const windowClose = vi.fn();
+  const windowMinimize = vi.fn();
+  Object.defineProperty(window, 'electronAPI', {
+    configurable: true,
+    value: {
+      platform: 'linux',
+      windowBehavior: {
+        getLinuxCloseBehavior,
+        setLinuxCloseBehavior,
+        onLinuxCloseBehaviorRequested,
+        notifyLinuxCloseBehaviorPromptShown,
+      },
+      anySessionInTurn,
+      windowClose,
+      windowMinimize,
+      windowMaximize: vi.fn(),
+    } as unknown as Window['electronAPI'],
+  });
+  return {
+    getLinuxCloseBehavior,
+    setLinuxCloseBehavior,
+    onLinuxCloseBehaviorRequested,
+    notifyLinuxCloseBehaviorPromptShown,
+    anySessionInTurn,
+    windowClose,
+    windowMinimize,
+    requestCloseBehavior: () => closeBehaviorRequested?.(),
+  };
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   window.history.replaceState({}, '', '/');
   delete (window as Partial<Window>).electronAPI;
+});
+
+describe.each(['win32', 'linux'] as const)('%s close prompt dismissal', (platform) => {
+  it.each(['button', 'escape'] as const)('cancels via %s without saving or closing, and can reopen', async (method) => {
+    const api = platform === 'win32' ? installWindowsApi(null) : installLinuxApi(null);
+    render(<WindowControls />);
+    act(() => api.requestCloseBehavior());
+    await screen.findByRole('alertdialog');
+
+    if (method === 'button') {
+      fireEvent.click(screen.getByRole('button', { name: 'common.dismiss' }));
+    } else {
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape', code: 'Escape' });
+    }
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    const setBehavior = 'setWindowsCloseBehavior' in api ? api.setWindowsCloseBehavior : api.setLinuxCloseBehavior;
+    expect(setBehavior).not.toHaveBeenCalled();
+    expect(api.windowClose).not.toHaveBeenCalled();
+    expect(window.electronAPI.windowMinimize).not.toHaveBeenCalled();
+    expect(api.anySessionInTurn).not.toHaveBeenCalled();
+    act(() => api.requestCloseBehavior());
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+  });
+
+  it('keeps the prompt open while saving and permits dismissal after a failed save', async () => {
+    const api = platform === 'win32' ? installWindowsApi(null) : installLinuxApi(null);
+    let rejectSave!: (error: Error) => void;
+    const setBehavior = 'setWindowsCloseBehavior' in api ? api.setWindowsCloseBehavior : api.setLinuxCloseBehavior;
+    setBehavior.mockImplementation(() => new Promise<never>((_resolve, reject) => { rejectSave = reject; }));
+    render(<WindowControls />);
+    act(() => api.requestCloseBehavior());
+    await screen.findByRole('alertdialog');
+    fireEvent.click(screen.getByRole('button', { name: 'settings.windowBehavior.closeBehavior.quit' }));
+    const dismiss = screen.getByRole('button', { name: 'common.dismiss' }) as HTMLButtonElement;
+    expect(dismiss.disabled).toBe(true);
+    fireEvent.click(dismiss);
+    fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape' });
+    expect(screen.getByRole('alertdialog')).toBeTruthy();
+    await act(async () => rejectSave(new Error('failed')));
+    fireEvent.click(screen.getByRole('button', { name: 'common.dismiss' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(api.windowClose).not.toHaveBeenCalled();
+  });
 });
 
 describe('Windows close behavior', () => {
@@ -157,5 +249,57 @@ describe('Windows close behavior', () => {
     act(() => api.requestCloseBehavior());
 
     expect(api.notifyWindowsCloseBehaviorPromptShown).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('Linux close behavior', () => {
+  it('minimizes immediately when the saved behavior is minimize', async () => {
+    const api = installLinuxApi('minimize');
+    render(<WindowControls />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'titleBar.close' }));
+
+    await waitFor(() => expect(api.windowMinimize).toHaveBeenCalledTimes(1));
+    expect(api.getLinuxCloseBehavior).toHaveBeenCalledTimes(1);
+    expect(api.anySessionInTurn).not.toHaveBeenCalled();
+    expect(api.windowClose).not.toHaveBeenCalled();
+  });
+
+  it('uses the Cindy dialog for the first close and persists the minimize choice', async () => {
+    const api = installLinuxApi(null);
+    render(<WindowControls />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'titleBar.close' }));
+
+    expect(await screen.findByText('settings.windowBehavior.closePrompt.title')).toBeTruthy();
+    expect(screen.getByText('settings.windowBehavior.closePrompt.linuxDetail')).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.windowBehavior.closeBehavior.minimize' }),
+    );
+
+    await waitFor(() => expect(api.setLinuxCloseBehavior).toHaveBeenCalledWith('minimize'));
+    await waitFor(() => expect(api.windowMinimize).toHaveBeenCalledTimes(1));
+    expect(api.anySessionInTurn).not.toHaveBeenCalled();
+  });
+
+  it('keeps the existing quit protection flow when quit is selected', async () => {
+    const api = installLinuxApi('quit');
+    render(<WindowControls />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'titleBar.close' }));
+
+    await waitFor(() => expect(api.windowClose).toHaveBeenCalledTimes(1));
+    expect(api.anySessionInTurn).toHaveBeenCalledTimes(1);
+    expect(api.windowMinimize).not.toHaveBeenCalled();
+  });
+
+  it('opens the same dialog for a native Linux close request', async () => {
+    const api = installLinuxApi(null);
+    render(<WindowControls />);
+
+    act(() => api.requestCloseBehavior());
+
+    expect(await screen.findByText('settings.windowBehavior.closePrompt.title')).toBeTruthy();
+    await waitFor(() => expect(api.notifyLinuxCloseBehaviorPromptShown).toHaveBeenCalledOnce());
   });
 });

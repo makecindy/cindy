@@ -1,14 +1,21 @@
 # 开发工作流：worktree、提 PR 与 Review
 
 > **状态**：权威开发规则（authoritative）
-> **读取时机**：在 Cindy 内嵌的 worktree 会话里工作、准备提交或直推、或做 code review
-> 之前
+> **读取时机**：在 Cindy 内嵌的 worktree 会话里工作、准备提交或直推、做 code review，
+> 或决定开发中得到的知识该写到哪里、整理与迁移规则文档之前
 
-本文细化根 [`../../AGENTS.md`](../../AGENTS.md) 的「通用工作流程」「Git 与交付」两节，补上
-worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径，不重复根文件已有的通用
-流程。
+本文是仓库交付约定的正本，维护 worktree 会话契约、DCO、提交验证、直推 `main` 的
+额外门禁、review 严重度口径、项目知识归属与文档整理原则；根 [AGENTS.md](../../AGENTS.md)
+保留关键约束与阅读入口。提交、push 和 PR 的时机由用户或宿主工作流决定，本文不额外授权外部写操作。
+自动审阅是建议性检查，口径与修改入口见 [REVIEW.md](../../REVIEW.md)，不替代人工 review
+或 CI 门禁。
 
 ## 1. Dogfooding：在本仓 worktree 会话里工作
+
+Cindy 创建或重建托管 worktree 时，会尽力向 Git 本地 `info/exclude` 追加所用托管目录的
+根级排除规则，避免基础仓库的未跟踪扫描进入这些目录。保留已有规则，不修改项目
+`.gitignore`，不影响已跟踪文件；写入失败不阻止创建或恢复。不扫描、排除任意第三方目录。
+实现见 `apps/desktop/src/main/worktree/managedWorktreeExclude.ts`。
 
 如果你是 Cindy 内嵌的 agent，且 cwd 位于 `<baseRepo>/.cindy-worktrees/<name>`（或迁移前的
 `.xdt-worktrees/<name>`）下（会话级 git worktree），遵守以下契约：
@@ -19,11 +26,16 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
   命令超时）。
 - **你的编辑对运行中的 app 无效**：Vite HMR 只 watch 启动 dev 实例的那个 checkout，
   worktree 下的改动既不热更也不随重启生效。「改了没反应」不是 bug。开发过程中的增量验证在本
-  worktree 内跑 `pnpm --filter desktop typecheck` / 定向 `vitest run`；**提交前仍须通过
-  第 2 节的提交前测试门禁**。需要运行时验证时 commit + push 后交用户（你无法重启宿主）。
+  worktree 内跑 `pnpm --filter desktop typecheck` / 定向 `vitest run`；**提交前仍须完成
+  第 2 节的提交前验证**。需要运行时验证时，在本 worktree 用
+  `pnpm restart:desktop:remote -- --isolated=@worktree` 起一个属于本 worktree 的独立实例
+  （不会停掉宿主，也不与其他 checkout 抢默认 `dev` 沙箱），成功以
+  `DESKTOP_DEV_VERDICT=ready` 为准，细则见 [`desktop-development.md`](desktop-development.md)。
 - **宿主 app 日志不在你的 cwd 下**：dev 日志在启动 checkout（通常是 baseRepo）的
   `apps/desktop/logs/`，读日志时拼 baseRepo 的绝对路径。
-- **结束前必须 commit**：会话被删除或归档时脏 worktree 会先存内容快照再删目录。**PR
+- **会话结束与工作区保留**：是否 commit 由用户或宿主工作流决定，不能仅因会话结束
+  强制提交。会话被删除或归档时脏 worktree 会先把改动和新文件存进 Git 快照再删目录；
+  被 `.gitignore` 忽略的文件（依赖、构建产物）和 worktree 内克隆／初始化的嵌套仓库不保留。**PR
   merged／closed 不等于 Cindy 会话已结束**：只要 owning session 仍 active，任何外部 Git
   cleanup 都必须跳过该 `.cindy-worktrees` / `.xdt-worktrees` 目录与本地 `cindy/*` / `xdt/*` 分支，交给
   用户显式归档／删除会话时回收；禁止手动 `git worktree remove` 造成 active session 的 cwd
@@ -33,6 +45,24 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
   （re-optimize），提醒用户即可，不要误诊为自己的代码问题。
 
 ## 2. 提 PR 与直推 `main`
+
+### 托管 worktree 不可用时的任务连续性
+
+本机任务发送前优先按原分支和快照恢复托管 worktree。仅在确认目录缺失、且成功枚举
+Git 引用后确认原分支不存在时，使用当前 owner 的
+托管对话目录继续运行，保留数据库里的项目工作目录和 worktree 绑定；备用目录按任务 ID
+与原工作目录的哈希定位。重启后重新优先恢复原 worktree；仍失败则复用同一备用目录，
+不搬运或删除其中的文件。DB / Git 临时错误、绑定不匹配与快照冲突保留原目录重试，
+不登记备用目录。同一运行期不自动切回。明确换到另一工作目录时不复用旧绑定
+的备用目录。原地重建普通目录的现有行为保持不变，不把失败的 Git
+worktree 建成空目录或自动切到项目根继续修改代码。
+
+恢复说明随本轮消息传给 Agent，明确原路径、文件未恢复和当前运行位置；消息被接受
+之后才消费说明。SSH 不使用本机备用目录；设备互联和手机沿用被控 Desktop 的发送链。
+实现见 `apps/desktop/src/main/maker-ipc/workingDirectoryRecovery.ts` 与 `register.ts`，
+回归见 `workingDirectoryRecovery.test.ts` 和 `makerSendTransaction.test.ts`。
+
+### 提交门禁
 
 - 本仓默认 **PR-first**：代码和文档通常从非默认分支通过 PR 进入 `main`；直推 `main` 只由
   具备 bypass 权限的维护者明确选择，并执行本节的额外门禁。
@@ -55,46 +85,51 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
   - 提交前自查用 `pnpm check:dco`（`scripts/check-dco.mjs`，范围 `merge-base..head`）。
     它的判定刻意对齐 App 但**不识别 remediation commit**：本地通过则 App 必过，反之不然。
     改这个脚本时不要放宽 name／邮箱比对，否则会出现「本地绿、PR 红」。
+  - 自动 review 沙箱中的平台合成 HEAD 不属于真实 PR 提交；对它运行本地 DCO 检查的失败
+    不构成缺签证据。以 PR 的 DCO App check 与真实提交范围（`origin/main..PR head`）为准。
   - 漏签不要重新造一份提交：用 `git commit --amend -s --no-edit` 或
     `git rebase --signoff <base>` 补签后 `git push --force-with-lease`。
-- **提交前测试门禁（硬性要求）**：无论是提 PR 还是直接 commit，提交前都必须在本地跑完
-  仓库根 `pnpm test:unit:related`（只跑这次改动能影响到的单测），并对本次改动涉及的每个
-  package 跑 `pnpm --filter <包名> run --if-present typecheck`（`<包名>` 用该 package 在
-  `package.json` 里的 `name`，如 `desktop`、`@cindy/maker-core`；没有 `typecheck`
-  script 的 package 该步自动跳过），全部通过后才允许提交；任何一项失败都不得提交，
-  必须先修复。worktree 会话内的 commit 同样适用。唯一例外是**防丢数据的兜底保存**：
-  宿主删除／归档会话时自动存的内容快照（见第 1 节），以及会话必须收尾、测试却来不及
-  修好时的收尾 commit——后者 commit message 必须标注 `WIP`，且在门禁通过前不得
-  push、不得提 PR。
-  - **相关单测怎么选**：`test:unit:related` 看相对 `main` 的已提交、已暂存、未暂存和未跟踪
-    文件。同一包里用 Vitest `related` 只跑会引用这些文件的测试；改了会被别的包依赖的公共
-    包源码时，依赖方跑该包自己的整包单测。只改文档等非代码文件则跳过 workspace 单测。
-    改到测试调度（`scripts/test-workspaces*`、`scripts/test-related.mjs`、
-    `scripts/test-gate-lock.mjs`）、`package.json`、`pnpm-lock.yaml`、
-    `pnpm-workspace.yaml`、各包 `vitest.config.*`、单测 CI 工作流，或算不出 git 基准时，
-    打印原因并退回全量 `pnpm test:unit`。批量改产品术语仍须全量，因为有测试直接锁中文文案。
-    GitHub CI 不受此影响，仍跑完整 `pnpm test:unit`。
-  - **完整单测的外层超时**：默认相关门禁通常比全仓短，但一旦退回全量，`pnpm test:unit`
-    正常执行仍可能超过数分钟。调用全量门禁的 agent／自动化工具不得使用 120 秒或更短的
-    绝对超时；未知当前耗时时，外层兜底超时至少设为 15 分钟。工具支持后台运行或 yielded
-    process handle 时优先使用该模式并短轮询进度，不要因为调用端停止等待就误判失败、杀掉
-    仍在正常运行的测试或重复启动一轮。Vitest 的单测试例超时仍由各 package 配置控制，不受
-    这条外层约束影响。
-  - **workspace 有界并行**：`test-workspaces.mjs` 默认最多并行
-    `min(4, os.availableParallelism())` 个普通 workspace；每个普通 Vitest workspace 只使用
-    1 个 worker。Mobile 使用完整的 4-worker 配额；Desktop 使用基准验证过的单池最多
-    8-worker 配额，低于 8 CPU 时按 `os.availableParallelism()` 自动下调。重型 workspace
-    必须独占执行，避免外层并发与内部 worker 池相乘。
-    排查并发相关问题时可用
-    `pnpm test:unit -- --workspace-concurrency=1` 临时退回 workspace 串行；该参数只改变
-    workspace 调度，不减少测试覆盖。
-  - **跨 worktree 重型门禁串行**：本地运行 `unit`、`all`、`db`、`git-integration`
-    tier 时，`test-workspaces.mjs` 会按 Git common-dir 获取同仓共享的 loopback TCP 锁；
-    同一 clone 的后到进程会打印持有者 PID、tier 与 worktree 路径并排队，不同 clone
-    互不影响。`guard` tier 和 CI／GitHub Actions 不参与。等待超过 15 分钟以退出码 `75`
-    结束，表示测试尚未运行，不得当作测试失败排查；排队是正常状态，不要 kill 后重跑。
-    只有明确确认资源足够且需要有意重叠时，才可追加 `--no-lock` 作为逃生口。
-- **在门禁之上按风险追加验证**：跨模块、高风险或基础设施改动追加更广泛验证（如仓库根
+- **提交前验证**：提交前完成与改动影响面匹配的测试，并对涉及的每个 package 运行
+  `pnpm --filter <包名> run --if-present typecheck`。默认可用仓库根
+  `pnpm test:unit:related` 选测；已经完成等效的定向测试与类型检查时，无须为每次 commit
+  再跑一遍整仓。文档改动运行 `pnpm check:dev-docs` 等适用检查即可，不要求无关业务单测。
+  - **验证目标与本机执行方式分开**：用户或宿主决定本机资源预算、并发、执行时机和是否
+    跨任务排队。仓库默认值不能覆盖这些选择，也不授权启动额外测试进程、终止其它任务或
+    把一次机器过载经验升级为所有贡献者的固定限制。
+  - **如实记录结果**：本次改动导致的失败须修复；既有或环境故障说明证据、影响和未完成项，
+    不伪造通过、不删除或放宽有效断言。需要保存未完成工作时可作 WIP commit。完整测试与
+    远端必需检查仍由 CI 和合并规则保障，本地定向验证不能冒充完整 CI 通过。
+  - **相关单测怎么选**：`test:unit:related` 优先使用 `upstream` 默认分支（含
+    `upstream/main` / `upstream/master`），其次 `origin` 默认分支，最后才回退本地
+    `main` / `master`，避免落后的个人 fork 扩大测试范围；运行前应先更新目标分支引用。
+    选测包含已提交、已暂存、未暂存和未跟踪文件。同一包源码通过 Vitest `related` 选测；
+    公共包源码变化时，依赖方跑整包单测。包内 `package.json`、Vitest 配置或删除文件时，
+    对所属包及受影响依赖方跑整包；说明性文档不触发根级 runner 或业务单测。
+    `i18n/GLOSSARY.md` 与 `docs/legal/notices/` 是有内容断言的生成产物，仍运行根级
+    runner 验证，不能仅因扩展名是 Markdown／文本而跳过。
+    测试调度脚本、根依赖清单／锁文件、workspace 配置、根 Vitest 配置或无法确定 Git 基准
+    时仍保守选择完整单测；普通 workflow 变化只触发根级 runner 校验。
+    若选测范围超出本机预算，按真实影响面执行并记录定向验证，把完整门禁交给 CI，
+    不因选测器的保守回退强制占满本机。
+  - **单次运行的并发默认值**：workspace runner 默认最多并行
+    `min(4, os.availableParallelism())` 个普通 workspace，每个普通 Vitest workspace
+    使用 1 个 worker；Mobile 使用 4 个 worker，Desktop 最多 8 个且随可用 CPU 下调。
+    重型 workspace 在本次 runner 内独占；这些边界不限制其它 session。
+    可用 `--workspace-concurrency=1` 调低同一次运行的 workspace 并发；需要不同 worker
+    配额时，可直接调用目标包 Vitest 的 `--maxWorkers` 参数。
+  - **跨 worktree 排队默认关闭**：只有主动传 `--lock` 的本地重型测试命令才参与同仓共享
+    loopback TCP 锁。`--no-lock` 保留兼容，不能与 `--lock` 同时使用。直接运行 Desktop
+    Vitest 也不再隐式加第二层锁。选择排队后，等待超过 15 分钟以退出码 `75` 结束，表示
+    测试尚未执行；`guard` 和 CI 不参与。锁只协调同样选择 `--lock` 的进程，不能管理
+    未选择排队的任务；有意统一预算时由使用者或宿主协调各入口。
+  - **Agent 环境变量**：workspace runner 启动测试前清掉 Agent 终端可能带着、会改变测试结果
+    但不属于被测代码的变量（`NODE_ENV`、`NODE_DEBUG`、`CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL`、
+    `CINDY_INPUT_HANDOFF_ROUTE`），并在输出里列出清掉了哪些。新发现同类变量时加进
+    `scripts/test-workspaces.mjs` 的 `AGENT_ENV_TEST_POLLUTANTS`，不要只在对话里口头排除。
+  - **长测试调用**：耗时不确定的检查优先后台运行并保留进度。工具结束等待不等于测试失败，
+    不因等待时间较长重复启动或终止仍在正常运行的测试；外层超时按选定范围和本机情况设置。
+    输出较长时写进日志文件再读取定位失败项，不因终端截断而整轮重跑。
+- **按风险追加验证**：跨模块、高风险或基础设施改动追加更广泛验证（如仓库根
   `pnpm test:all`），**最终以 CI 门禁为准**。不得通过 skip、删除或弱化测试制造通过；
   PR「怎么验证的」一节必须**如实**填写，没跑不许写已跑。
 - **直推 `main` 的额外门禁**：push 前由独立 reviewer 对最终 diff 做一次对抗性 review，对照
@@ -105,8 +140,53 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
 
 对照 `docs/` 下各规则与 `.github/PULL_REQUEST_TEMPLATE.md`（以现行内容为准，不凭记忆）：
 
+- **核对受影响的文档**：改动改变已有行为时，结合实现和测试核对对应权威文档中的旧结论；
+  发现冲突就在本次改动中修正，并在相关说明旁链接实现或测试，便于后续核对。不涉及文档
+  变化的 PR 无需修改文档，也无需另写经验总结。
+- **经验回写到已有依据**：纠正和排障发现说明错误或不完整时修原文；说明正确但入口遗漏时
+  补入口或触发条件；能自动验证的问题优先补回归测试。一次环境故障不默认升级为长期规则。
+
 - **P0**（不改不能合）：红线／崩溃／数据丢失／跨平台失效／安全。
 - **P1**（本次必须修但不阻断流程）：明显 bug／规范违反／影响面没处理干净。
 - **P2**（可选优化 / 风格偏好）：不报。
 
 发现 P0／P1 必须先修复再合入或推送。
+
+## 4. 项目知识放在哪里
+
+另一位贡献者，或另一台机器上的 Agent，接手时需要知道的信息，默认属于仓库。仓库是这些信息
+的维护入口；个人记忆、全局 Skill 和聊天可以指向它，不能是唯一存放处。本节只针对开发过程中
+的工作知识，与 Cindy 产品自身的记忆功能无关。
+
+| 信息 | 维护位置 |
+| --- | --- |
+| 实现约束、固定输入、自动判定 | 代码、配置与测试；能机判的同时落到 lint、测试或契约脚本 |
+| 工程规则、环境与工具链的坑、排错结论 | `docs/dev-rules/` 对应专题；单模块的放嵌套 `AGENTS.md`；根 `AGENTS.md` 只留触发条件 |
+| 产品行为裁决与理由 | `docs/product-rules/` 对应专题；跨专题的放 `core-product-principles.md` |
+| 视觉、交互裁决与理由 | `docs/design-rules/`；带日期的取舍记进 `design-decision-log.md` |
+| 已发生的回归、复现与验证证据 | 对应测试；任务体验类归 `docs/dev-rules/session-regressions.md`；大图和录屏挂到 issue 或 PR |
+| 未完成的改进 | issue 或计划文档，写明缺口与验收条件，不只记在个人待办 |
+| 个人目录、设备标识、账号偏好、凭据、私聊原文 | 本地；仓库只放脱敏后的结论 |
+
+从聊天或本机排错里提炼时，去掉身份、绝对路径和凭据，保留可复现条件、根因、处理办法、验证
+范围与仓库入口。写入前对照代码和现有文档核实现状，不把已经过期的个人记忆原样搬进来。同一条
+规则只在一处维护正文，其他位置引用。
+
+本节回答「写到哪里」，不新增「每个 PR 都要写文档」的义务：是否需要回写仍按第 3 节「核对受影响
+的文档」「经验回写到已有依据」判断。
+
+## 5. 文档的信息与组织
+
+文档只保留 Cindy 特有、无法从通用知识得知的信息：选择及其原因、实现约定、具体行为与参数、
+边界、例外、历史裁决和现状差距。精确契约必须写出，不能只写成哲学。
+
+整理只改排列、索引和位置，不丢失、不弱化信息：原则解释取舍，专题保存细则，索引写清场景；
+每项信息一个正本，动手前必须知道的约束在入口提醒。迁移时核对去向，保留条件、例外、强度
+和读取时机，并更新引用。代码和测试验证契约，不替代说明。
+
+常识可以省略，重复可以合并。排障得出的产品特有知识要保留，不因只发生过一次就删，也不
+自动扩大为通用规则。信息过时或矛盾时，核实并注明被哪项决定取代；目标与现状的差距明确
+标注，不为迁就现状改写承诺。
+
+根 `AGENTS.md` 每个任务都会完整加载。一句话放进去要同时满足：影响大多数任务；在知道该读
+哪份专题之前就需要；链接不能替代。其余放对应正文，根文件只留触发条件与硬约束。

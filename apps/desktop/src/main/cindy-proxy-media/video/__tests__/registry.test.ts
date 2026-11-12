@@ -80,6 +80,20 @@ describe('VideoProviderRegistry', () => {
     expect(resolved.internalModel).toBe('fp-fast');
   });
 
+  it('keeps catalog provider identity when aliases collide across sources', () => {
+    const r = new VideoProviderRegistry();
+    r.register(
+      makeFakeProvider({
+        id: 'gateway-video',
+        aliases: [{ alias: 'shared/video-model', internalModel: 'gateway-model' }],
+      }),
+      'xd',
+    );
+
+    expect(r.hasAlias('shared/video-model', 'xd')).toBe(true);
+    expect(r.hasAlias('shared/video-model', 'third-party')).toBe(false);
+  });
+
   it('throws on unknown alias', () => {
     const r = new VideoProviderRegistry();
     r.register(

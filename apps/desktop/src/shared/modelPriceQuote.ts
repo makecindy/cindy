@@ -1,6 +1,7 @@
 import {
   resolveModelReferencePrice,
   type AgentKind,
+  type CatalogModel,
   type ModelRegistry,
 } from '@cindy/model-providers';
 
@@ -10,7 +11,11 @@ import {
   type ModelPricingCatalog,
   type MoneyCurrency,
 } from './regionalMoney.js';
-import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from './subscriptionModels.js';
+import {
+  CHATGPT_MODEL_PREFIX,
+  exclusiveXaiCatalogModelId,
+  XAI_MODEL_PREFIX,
+} from './subscriptionModels.js';
 
 function isNonNegativeFinite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
@@ -26,8 +31,37 @@ function normalizedCostDiscount(value: unknown): number | undefined {
     : undefined;
 }
 
+/** Catalog display prices for platform and enterprise Gateway models; quotes retain list prices. */
+export function effectiveGatewayModelCost(model: Pick<ModelAccessGatewayModel,
+  'inputCostPerToken' | 'outputCostPerToken' | 'cacheReadInputTokenCost' |
+  'cacheCreationInputTokenCost' | 'costDiscount'>): CatalogModel['cost'] | undefined {
+  const input = model.inputCostPerToken;
+  const output = model.outputCostPerToken;
+  if (
+    typeof input !== 'number' ||
+    !Number.isFinite(input) ||
+    input < 0 ||
+    typeof output !== 'number' ||
+    !Number.isFinite(output) ||
+    output < 0
+  ) {
+    return undefined;
+  }
+  const discount = normalizedCostDiscount(model.costDiscount) ?? 0;
+  const multiplier = 1 - discount;
+  const cacheRead = perMtok(model.cacheReadInputTokenCost);
+  const cacheWrite = perMtok(model.cacheCreationInputTokenCost);
+  return {
+    input: input * 1_000_000 * multiplier,
+    output: output * 1_000_000 * multiplier,
+    ...(cacheRead !== undefined ? { cacheRead: cacheRead * multiplier } : {}),
+    ...(cacheWrite !== undefined ? { cacheWrite: cacheWrite * multiplier } : {}),
+  };
+}
+
 function gatewayInputTokenPriceBands(
   model: ModelAccessGatewayModel,
+  includeThresholdBaseline = false,
 ): ModelPriceQuote['inputTokenPriceBands'] {
   const explicit = model.tieredPricing
     ?.map((tier) => {
@@ -74,7 +108,50 @@ function gatewayInputTokenPriceBands(
       tier.outputPerMtok !== undefined ||
       tier.cacheReadPerMtok !== undefined,
   );
-  return thresholdBands.length > 0 ? thresholdBands : undefined;
+  if (thresholdBands.length === 0) return undefined;
+  // Reference quotes require complete ranges. Only legacy threshold fields omit
+  // the baseline; explicit tier tables above must keep their declared coverage.
+  return includeThresholdBaseline ? [{
+    minInputTokens: 0,
+    maxInputTokens: thresholdBands[0].minInputTokens,
+    inputPerMtok: perMtok(model.inputCostPerToken),
+    outputPerMtok: perMtok(model.outputCostPerToken),
+    cacheReadPerMtok: perMtok(model.cacheReadInputTokenCost),
+    cacheCreatePerMtok: perMtok(model.cacheCreationInputTokenCost),
+  }, ...thresholdBands] : thresholdBands;
+}
+
+function gatewayPriorityInputTokenPriceBands(
+  model: ModelAccessGatewayModel,
+  includeThresholdBaseline = false,
+): ModelPriceQuote['inputTokenPriceBands'] {
+  const thresholdBands = [
+    {
+      minInputTokens: 200_001,
+      inputPerMtok: perMtok(model.inputCostPerTokenAbove200kTokensPriority),
+      outputPerMtok: perMtok(model.outputCostPerTokenAbove200kTokensPriority),
+      cacheReadPerMtok: perMtok(model.cacheReadInputTokenCostAbove200kTokensPriority),
+    },
+    {
+      minInputTokens: 272_001,
+      inputPerMtok: perMtok(model.inputCostPerTokenAbove272kTokensPriority),
+      outputPerMtok: perMtok(model.outputCostPerTokenAbove272kTokensPriority),
+      cacheReadPerMtok: perMtok(model.cacheReadInputTokenCostAbove272kTokensPriority),
+    },
+  ].filter(
+    (tier) =>
+      tier.inputPerMtok !== undefined ||
+      tier.outputPerMtok !== undefined ||
+      tier.cacheReadPerMtok !== undefined,
+  );
+  if (thresholdBands.length === 0) return undefined;
+  return includeThresholdBaseline ? [{
+    minInputTokens: 0,
+    maxInputTokens: thresholdBands[0].minInputTokens,
+    inputPerMtok: perMtok(model.inputCostPerTokenPriority),
+    outputPerMtok: perMtok(model.outputCostPerTokenPriority),
+    cacheReadPerMtok: perMtok(model.cacheReadInputTokenCostPriority),
+  }, ...thresholdBands] : thresholdBands;
 }
 
 /** 该条目是否会产生报价(与币种无关;目录币种裁决与覆盖率统计共用此判定)。 */
@@ -93,6 +170,7 @@ export function gatewayModelPriceQuote(
   model: ModelAccessGatewayModel,
   fallbackCurrency: MoneyCurrency,
   fallbackIsInferred = false,
+  options: { allowFreeModel?: boolean; includeThresholdBaseline?: boolean } = {},
 ): ModelPriceQuote | undefined {
   const modelId = model.id.trim();
   const inputPerMtok = perMtok(model.inputCostPerToken);
@@ -102,7 +180,12 @@ export function gatewayModelPriceQuote(
   }
   const cacheReadPerMtok = perMtok(model.cacheReadInputTokenCost);
   const cacheCreatePerMtok = perMtok(model.cacheCreationInputTokenCost);
+  const priorityInputPerMtok = perMtok(model.inputCostPerTokenPriority);
+  const priorityOutputPerMtok = perMtok(model.outputCostPerTokenPriority);
+  const priorityCacheReadPerMtok = perMtok(model.cacheReadInputTokenCostPriority);
+  const priorityInputTokenPriceBands = gatewayPriorityInputTokenPriceBands(model, options.includeThresholdBaseline);
   if (
+    !options.allowFreeModel &&
     inputPerMtok === 0 &&
     outputPerMtok === 0 &&
     (cacheReadPerMtok === undefined || cacheReadPerMtok === 0) &&
@@ -113,7 +196,7 @@ export function gatewayModelPriceQuote(
   // quote 保留标准价供模型选择器展示原价；所有 Gateway 模型统一把
   // costDiscount 带入计费计算，CatalogModel.cost 继续承载折后展示价。
   const costDiscount = normalizedCostDiscount(model.costDiscount);
-  const inputTokenPriceBands = gatewayInputTokenPriceBands(model);
+  const inputTokenPriceBands = gatewayInputTokenPriceBands(model, options.includeThresholdBaseline);
   const declaredCurrency = model.currency;
   return {
     providerId: 'xd',
@@ -125,6 +208,25 @@ export function gatewayModelPriceQuote(
     outputPerMtok,
     ...(cacheReadPerMtok !== undefined ? { cacheReadPerMtok } : {}),
     ...(cacheCreatePerMtok !== undefined ? { cacheCreatePerMtok } : {}),
+    ...(priorityInputPerMtok !== undefined ||
+    priorityOutputPerMtok !== undefined ||
+    priorityCacheReadPerMtok !== undefined ||
+    priorityInputTokenPriceBands
+      ? {
+          priority: {
+            ...(priorityInputPerMtok !== undefined ? { inputPerMtok: priorityInputPerMtok } : {}),
+            ...(priorityOutputPerMtok !== undefined
+              ? { outputPerMtok: priorityOutputPerMtok }
+              : {}),
+            ...(priorityCacheReadPerMtok !== undefined
+              ? { cacheReadPerMtok: priorityCacheReadPerMtok }
+              : {}),
+            ...(priorityInputTokenPriceBands
+              ? { inputTokenPriceBands: priorityInputTokenPriceBands }
+              : {}),
+          },
+        }
+      : {}),
     ...(inputTokenPriceBands ? { inputTokenPriceBands } : {}),
     ...(costDiscount !== undefined ? { costDiscount } : {}),
     ...(!declaredCurrency && fallbackIsInferred ? { currencyInferred: true } : {}),
@@ -175,6 +277,7 @@ function referenceQuote(
     outputPerMtok: number;
     cacheReadPerMtok?: number;
     cacheCreatePerMtok?: number;
+    cacheCreate1hPerMtok?: number;
     inputTokenPriceBands?: ModelPriceQuote['inputTokenPriceBands'];
   },
 ): ModelPriceQuote {
@@ -195,16 +298,47 @@ function referencePriceCalendarDate(value: string | Date | undefined): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** Selects a dated provider reference tariff, optionally for a specific agent/input size. */
+interface ReferencePriceOptions {
+  officialOnly?: boolean;
+  agent?: AgentKind;
+  inputTokens?: number;
+  at?: string | Date;
+  variant?: 'standard' | 'priority' | 'batch' | 'fast';
+}
+
 export function providerReferencePriceQuote(
   providerId: string,
   modelId: string,
   registry: ModelRegistry | null | undefined,
-  options: {
-    agent?: AgentKind;
-    inputTokens?: number;
-    at?: string | Date;
-    variant?: 'standard' | 'priority' | 'batch' | 'fast';
-  } = {},
+  options: ReferencePriceOptions = {},
+): ModelPriceQuote | undefined {
+  const quote = referencePriceQuoteForVariant(providerId, modelId, registry, options);
+  if (!quote || (options.variant ?? 'standard') !== 'standard') return quote;
+  // Usage segments call Fast "priority". Keep the standard quote for display,
+  // and project the independently declared Fast tariff for the cost calculator.
+  const fast =
+    referencePriceQuoteForVariant(providerId, modelId, registry, { ...options, variant: 'fast' }) ??
+    referencePriceQuoteForVariant(providerId, modelId, registry, { ...options, variant: 'priority' });
+  if (!fast || fast.currency !== quote.currency) return quote;
+  const {
+    inputPerMtok, outputPerMtok, cacheReadPerMtok, cacheCreatePerMtok, cacheCreate1hPerMtok,
+    inputTokenPriceBands,
+  } = fast;
+  return {
+    ...quote,
+    priority: {
+      inputPerMtok, outputPerMtok, cacheReadPerMtok, cacheCreatePerMtok, cacheCreate1hPerMtok,
+      inputTokenPriceBands,
+    },
+  };
+}
+
+function referencePriceQuoteForVariant(
+  providerId: string,
+  modelId: string,
+  registry: ModelRegistry | null | undefined,
+  options: ReferencePriceOptions = {},
 ): ModelPriceQuote | undefined {
   // 参考价 registry 的 agent 维度只有 claude-code / codex;Pi(动态 BYOM,按 provider/模型
   // 路由)在此按 agent 无关的参考价解析 —— pi 一律降级为 undefined 传给协议函数。
@@ -215,7 +349,7 @@ export function providerReferencePriceQuote(
   if (!resolved) return undefined;
   const day = referencePriceCalendarDate(options.at);
   const variant = options.variant ?? 'standard';
-  const inputTokenPriceBands = resolved.route.referencePrices
+  const inputTokenPriceBands = resolved.prices
     ?.filter(
       (price) =>
         price.variant === variant &&
@@ -236,6 +370,9 @@ export function providerReferencePriceQuote(
       ...(price.cacheWritePerMtok !== undefined
         ? { cacheCreatePerMtok: price.cacheWritePerMtok }
         : {}),
+      ...(price.cacheWrite1hPerMtok !== undefined
+        ? { cacheCreate1hPerMtok: price.cacheWrite1hPerMtok }
+        : {}),
     }))
     .sort((a, b) => a.minInputTokens - b.minInputTokens);
   return referenceQuote(providerId, modelId, {
@@ -248,14 +385,19 @@ export function providerReferencePriceQuote(
     ...(resolved.price.cacheWritePerMtok !== undefined
       ? { cacheCreatePerMtok: resolved.price.cacheWritePerMtok }
       : {}),
+    ...(resolved.price.cacheWrite1hPerMtok !== undefined
+      ? { cacheCreate1hPerMtok: resolved.price.cacheWrite1hPerMtok }
+      : {}),
     ...(inputTokenPriceBands && inputTokenPriceBands.length > 0
       ? { inputTokenPriceBands }
       : {}),
   });
 }
 
+/** `at` 解析某一天生效的路由参考价(历史用量估价)；省略为今天。 */
 export function registryPricingCatalog(
   registry: ModelRegistry | null | undefined,
+  at?: string | Date,
 ): ModelPricingCatalog {
   const catalog: ModelPricingCatalog = {};
   if (!registry) return catalog;
@@ -264,7 +406,7 @@ export function registryPricingCatalog(
       // XD/Cindy AI 的售价只认登录账号对应的 Gateway /models 响应。公共 registry
       // 只提供用户自带 API/OAuth 的参考价，绝不能在 Gateway 离线时伪装成 XD 售价。
       if (route.providerId === 'xd') continue;
-      const quote = providerReferencePriceQuote(route.providerId, route.modelId, registry);
+      const quote = providerReferencePriceQuote(route.providerId, route.modelId, registry, { at });
       if (!quote) continue;
       (catalog[route.providerId] ??= {})[route.modelId] = quote;
     }
@@ -339,11 +481,12 @@ export function subscriptionDirectPriceQuote(
   agent?: AgentKind,
   at?: string | Date,
 ): ModelPriceQuote | undefined {
+  const routedId = exclusiveXaiCatalogModelId(modelId) ?? modelId;
   let quote: ModelPriceQuote | undefined;
-  if (modelId.startsWith(CHATGPT_MODEL_PREFIX)) {
-    quote = providerReferencePriceQuote('openai', modelId, registry, { agent, at });
-  } else if (modelId.startsWith(XAI_MODEL_PREFIX)) {
-    quote = providerReferencePriceQuote('xai', modelId, registry, { agent, at });
+  if (routedId.startsWith(CHATGPT_MODEL_PREFIX)) {
+    quote = providerReferencePriceQuote('openai', routedId, registry, { agent, at, officialOnly: true });
+  } else if (routedId.startsWith(XAI_MODEL_PREFIX)) {
+    quote = providerReferencePriceQuote('xai', routedId, registry, { agent, at, officialOnly: true });
   }
   return quote
     ? {

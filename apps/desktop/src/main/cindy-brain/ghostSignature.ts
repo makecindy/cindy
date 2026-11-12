@@ -14,12 +14,16 @@ import crypto from 'node:crypto';
 
 import JSZip from 'jszip';
 
+import { authorDeclaredNamespaceReason } from '@cindy/plugin-protocol';
 import {
   GHOST_MANIFEST_FILE,
   type GhostManifest,
   type GhostTrustInfo,
   validateGhostManifest,
 } from '../../shared/ghost.js';
+import {
+  unixPermissionsForRepackedEntry,
+} from './ghostZipPermissions.js';
 
 export const GHOST_SIGNATURE_FILE = 'cindy-signatures.json';
 export const MAX_SIGNATURE_FILE_BYTES = 64 * 1024;
@@ -394,6 +398,17 @@ export interface SignGhostPackageOptions {
   privateKey: crypto.KeyLike;
 }
 
+/**
+ * Signing and review regenerate the ZIP central directory. Pin sanitized UNIX
+ * modes first so those pipeline steps do not erase Forge/export executable
+ * bits or propagate special/file-type bits from an untrusted input package.
+ */
+function preserveSafeUnixPermissionsForRepack(zip: JSZip): void {
+  for (const entry of Object.values(zip.files)) {
+    entry.unixPermissions = unixPermissionsForRepackedEntry(entry.unixPermissions, entry.dir);
+  }
+}
+
 /** 发布流水线使用：给一个未签名/重签的 .cindy Buffer 添加 Ed25519 发布者签名。 */
 export async function signGhostPackage(
   packageBuffer: Buffer,
@@ -404,7 +419,10 @@ export async function signGhostPackage(
   zip.remove(`${prefix}${GHOST_SIGNATURE_FILE}`);
   const manifestEntry = zip.file(`${prefix}${GHOST_MANIFEST_FILE}`);
   if (!manifestEntry) throw new Error(`缺少 ${GHOST_MANIFEST_FILE}`);
-  const validation = validateGhostManifest(JSON.parse(await manifestEntry.async('text')));
+  const rawManifest = JSON.parse(await manifestEntry.async('text'));
+  const reservedNamespace = authorDeclaredNamespaceReason(rawManifest);
+  if (reservedNamespace) throw new Error(reservedNamespace);
+  const validation = validateGhostManifest(rawManifest);
   if (!validation.ok) throw new Error(validation.reason);
   if (!options.publisherName.trim() || options.publisherName.length > 64) {
     throw new Error('publisherName 必须是 1–64 字符');
@@ -429,7 +447,8 @@ export async function signGhostPackage(
     },
   };
   zip.file(`${prefix}${GHOST_SIGNATURE_FILE}`, `${JSON.stringify(document, null, 2)}\n`);
-  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  preserveSafeUnixPermissionsForRepack(zip);
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE', platform: 'UNIX' });
 }
 
 export interface ReviewGhostPackageOptions {
@@ -446,7 +465,10 @@ export async function reviewGhostPackage(
   const manifestEntry = zip.file(`${prefix}${GHOST_MANIFEST_FILE}`);
   const signatureEntry = zip.file(`${prefix}${GHOST_SIGNATURE_FILE}`);
   if (!manifestEntry || !signatureEntry) throw new Error('审核前必须已有发布者签名');
-  const validation = validateGhostManifest(JSON.parse(await manifestEntry.async('text')));
+  const rawManifest = JSON.parse(await manifestEntry.async('text'));
+  const reservedNamespace = authorDeclaredNamespaceReason(rawManifest);
+  if (reservedNamespace) throw new Error(reservedNamespace);
+  const validation = validateGhostManifest(rawManifest);
   if (!validation.ok) throw new Error(validation.reason);
   const verified = await verifyGhostZipSignatures(zip, prefix, validation.manifest);
   if (!verified.ok || !verified.document) {
@@ -465,7 +487,8 @@ export async function reviewGhostPackage(
     },
   };
   zip.file(`${prefix}${GHOST_SIGNATURE_FILE}`, `${JSON.stringify(document, null, 2)}\n`);
-  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  preserveSafeUnixPermissionsForRepack(zip);
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE', platform: 'UNIX' });
 }
 
 function detectSingleTopFolderPrefix(names: string[]): string {

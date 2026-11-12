@@ -1,16 +1,25 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Hand,
   CodeXml,
   ClipboardList,
   Sparkles,
-  TriangleAlert,
+  LockOpen,
   ChevronDown,
   Check,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
+import { currentFocusedRow } from '@/components/ui/dropdown-menu-highlight';
+import {
+  COMPOSER_MENU_ROW,
+  MenuHighlightLayer,
+  menuPanelAttrs,
+  menuRowAttrs,
+  useMenuPanel,
+  withMenuLabels,
+} from '@/components/ui/menu-row';
 import { MorphPopover } from '@/components/ui/morph-popover';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip } from '@/components/ui/tooltip';
@@ -22,6 +31,8 @@ import {
 import type { PermissionMode } from '@/lib/userPreferences.types';
 
 interface PermissionSelectorProps {
+  /** Optional Host task action, mounted only while the menu is visible. */
+  footer?: ReactNode;
   permissionMode: PermissionMode;
   onPermissionModeChange: (mode: PermissionMode) => void;
   vendorKey?: 'cc' | 'codex' | 'pi';
@@ -42,6 +53,12 @@ interface PermissionSelectorProps {
    */
   triggerVariant?: 'chip' | 'field';
   /**
+   * chip 形态的弹层:默认是 composer 的容器形变(MorphPopover)。模态弹窗里要传 false ——
+   * 形变面板挂在弹窗之外,会被模态层挡住点击;改用锚定的 Radix Popover,trigger 外观不变。
+   * 与 ModelSelector 的同名开关同一用途。field 形态恒为 Radix,不受它影响。
+   */
+  useMorphPopover?: boolean;
+  /**
    * 可及名上下文前缀(如「权限模式 · chat」)。多实例同屏(IM 目录偏好逐行一个)时
    * 前置到 trigger 的 aria-label,行与行才能被读屏区分 —— 与
    * VendorSegmentedSwitcher.ariaLabel 同一动机;单实例的 composer 不传,行为不变。
@@ -51,6 +68,8 @@ interface PermissionSelectorProps {
   disabledModes?: Partial<Record<PermissionMode, string>>;
   /** Restrict the shared picker to a smaller product-approved subset. */
   allowedModes?: readonly PermissionMode[];
+  /** Show a retained legacy value honestly instead of presenting the first available mode as selected. */
+  fallbackModeLabel?: string;
 }
 
 /**
@@ -63,7 +82,7 @@ const PERMISSION_ICONS: Record<string, typeof Hand> = {
   acceptEdits: CodeXml,
   plan: ClipboardList,
   auto: Sparkles,
-  bypassPermissions: TriangleAlert,
+  bypassPermissions: LockOpen,
 };
 
 function vendorKeyToAgentKind(v: 'cc' | 'codex' | 'pi'): AgentKind {
@@ -78,12 +97,6 @@ function normalizeMode(mode: PermissionMode, options: PermissionModeDescriptor[]
   return options[0]?.id ?? mode;
 }
 
-function getModeTone(mode: PermissionMode): 'auto' | 'bypassPermissions' | null {
-  if (mode === 'auto') return 'auto';
-  if (mode === 'bypassPermissions') return 'bypassPermissions';
-  return null;
-}
-
 /**
  * 权限模式选择器 —— 容器形变(MorphPopover)试点组件。
  * 弹层不再是 Radix Popover 浮层,而是从 trigger chip 原位生长(docs/design-rules/cindy-design-system.md §14.4
@@ -96,9 +109,10 @@ function getModeTone(mode: PermissionMode): 'auto' | 'bypassPermissions' | null 
  *     翻转 —— 与 ModelSelector 的 field 形态同一原语;morph 只在打开时测一次 fixed
  *     几何,设置页的滚动列里会脱锚),供「IM 机器人 → 工作目录映射」等设置卡片与
  *     ModelSelector 的 field trigger 并排成套。权限模式的可选项、Codex 归一化、
- *     危险档配色只此一份,设置页不得再私搭一套下拉。
+ *     中性呈现只此一份,设置页不得再私搭一套下拉。
  */
 export function PermissionSelector({
+  footer,
   permissionMode,
   onPermissionModeChange,
   vendorKey = 'cc',
@@ -108,14 +122,21 @@ export function PermissionSelector({
   iconOnly = false,
   visualVariant = 'default',
   triggerVariant = 'chip',
+  useMorphPopover = true,
   ariaContext,
   disabledModes,
   allowedModes,
+  fallbackModeLabel,
 }: PermissionSelectorProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [focusedOptionId, setFocusedOptionId] = useState<string | null>(null);
   const selectedOptionRef = useRef<HTMLButtonElement>(null);
+  // The panel's glide highlight follows keyboard focus; MorphPopover owns the width.
+  const listRef = useMenuPanel<HTMLDivElement>(undefined, {
+    lockWidth: false,
+    options: { current: currentFocusedRow },
+  });
   const agentKind = vendorKeyToAgentKind(vendorKey);
   // device-link:deviceId 非空 → 权限档从被控端读(本地会话 undefined,行为不变)。
   const { capabilities } = useAgentCapabilities(agentKind, deviceId);
@@ -124,10 +145,9 @@ export function PermissionSelector({
     (option) => allowedModes === undefined || allowedModes.includes(option.id),
   );
   const effectiveMode =
-    options.length > 0 ? normalizeMode(permissionMode, options) : permissionMode;
+    options.length > 0 && !fallbackModeLabel ? normalizeMode(permissionMode, options) : permissionMode;
   const current = options.find((o) => o.id === effectiveMode);
   const TriggerIcon = PERMISSION_ICONS[effectiveMode] ?? Hand;
-  const triggerTone = getModeTone(effectiveMode);
   const labelOf = (option: PermissionModeDescriptor | undefined, fallbackId: string) => {
     const id = option?.id ?? fallbackId;
     return t(`newChat.permissionSelector.modes.${agentKind}.${id}.label`, {
@@ -140,10 +160,12 @@ export function PermissionSelector({
       defaultValue: option?.description ?? '',
     });
   };
-  const triggerLabel = labelOf(current, effectiveMode);
+  const triggerLabel = !current && fallbackModeLabel ? fallbackModeLabel : labelOf(current, effectiveMode);
   const triggerDescription = descriptionOf(current, effectiveMode);
   const isCreateAgentVariant = visualVariant === 'create-agent';
   const isFieldTrigger = triggerVariant === 'field';
+  // 走 Radix Popover 的两种情况:设置页字段,以及模态弹窗里的 chip。
+  const anchoredPopover = isFieldTrigger || !useMorphPopover;
   const previousOptionsLengthRef = useRef(options.length);
   // 窄态工具条:权限语义由 tooltip + aria-label 保留，视觉收成固定宽图标。
   // 普通会话在侧栏 + 浏览器 split-pane 下同样会变窄，不能只处理 create-agent。
@@ -202,7 +224,7 @@ export function PermissionSelector({
   );
 
   // trigger 与选项列表在 chip(Morph)/ field(Radix)两个弹层原语间共用 —— 权限语义、
-  // 归一化、危险档配色只此一份,分叉的只有弹层壳。
+  // 归一化、中性呈现只此一份,分叉的只有弹层壳。
   const triggerButton = (
         <Tip
           text={triggerDescription}
@@ -212,8 +234,8 @@ export function PermissionSelector({
           <button
             type="button"
             disabled={disabled}
-            // field 走 Radix Popover,开合交给 PopoverTrigger;chip 的 morph 自管点击。
-            onClick={isFieldTrigger ? undefined : () => setOpen((prev) => (disabled ? false : !prev))}
+            // Radix Popover 的开合交给 PopoverTrigger;chip 的 morph 自管点击。
+            onClick={anchoredPopover ? undefined : () => setOpen((prev) => (disabled ? false : !prev))}
             aria-expanded={open && !disabled}
             aria-haspopup="listbox"
             className={cn(
@@ -236,9 +258,6 @@ export function PermissionSelector({
                     'border border-transparent bg-transparent text-[var(--text-primary)]',
                     'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg,#FCFCFC)] dark:hover:bg-[var(--composer-pill-bg,#393838)]',
                   ),
-              // 危险档只染文字,不改底色 —— field / chip 两形态同规则。
-              triggerTone === 'auto' && 'text-[var(--perm-auto-selected-text)]',
-              triggerTone === 'bypassPermissions' && 'text-[var(--perm-bypass-selected-text)]',
               disabled && 'pointer-events-none opacity-50',
             )}
             aria-label={
@@ -254,9 +273,11 @@ export function PermissionSelector({
 
   const optionsList = (
       <div
+        ref={listRef}
         role="listbox"
         aria-label={t('newChat.permissionSelector.listAria')}
-        className="flex flex-col gap-0.5"
+        {...menuPanelAttrs}
+        className="relative flex flex-col gap-0.5"
         onKeyDown={(event) => {
           if (
             event.key !== 'ArrowDown' &&
@@ -295,21 +316,16 @@ export function PermissionSelector({
           nextOption.focus({ preventScroll: true });
         }}
       >
+        <MenuHighlightLayer />
         {options.map((option) => {
           const Icon = PERMISSION_ICONS[option.id] ?? Hand;
           const isSelected = effectiveMode === option.id;
-          const selectedTone = isSelected ? getModeTone(option.id) : null;
           const label = labelOf(option, option.id);
           const description = descriptionOf(option, option.id);
           const disabledReason = disabledModes?.[option.id];
           return (
-            <Tip
-              key={option.id}
-              text={disabledReason ?? description}
-              side="right"
-              contentClassName="max-w-[280px] whitespace-normal break-words text-left"
-            >
               <button
+                key={option.id}
                 type="button"
                 ref={isSelected ? selectedOptionRef : undefined}
                 // MorphPopover 打开后优先聚焦当前选中项；否则会聚焦列表首项，
@@ -322,49 +338,43 @@ export function PermissionSelector({
                   onPermissionModeChange(option.id);
                   setOpen(false);
                 }}
+                aria-label={label}
+                aria-description={disabledReason ?? description}
                 role="option"
                 aria-selected={isSelected}
                 data-permission-mode={option.id}
                 tabIndex={(focusedOptionId ?? effectiveMode) === option.id ? 0 : -1}
+                {...menuRowAttrs({ checked: isSelected, disabled: Boolean(disabledReason) })}
                 className={cn(
-                  'flex w-full items-center gap-3 rounded-[8px] px-3 py-2',
-                  'transition-colors',
-                  'hover:bg-[var(--model-item-hover)]',
-                  // 选中底与 hover 统一到 --model-item-hover,和模型/+ 菜单一致(危险档的
-                  // 橙/蓝仍只染文字,不改底色);原 --perm-item-selected-bg 在 cindy 面板上隐形。
-                  isSelected && 'bg-[var(--model-item-hover)]',
-                  selectedTone === 'auto' && 'text-[var(--perm-auto-selected-text)]',
-                  selectedTone === 'bypassPermissions' &&
-                    'text-[var(--perm-bypass-selected-text)]',
-                  disabledReason && 'cursor-not-allowed opacity-45 hover:bg-transparent',
+                  // Shared menu row (DESIGN §4 Composer dropdown rows): the panel's glide
+                  // highlight, no own hover / selected fill; the chosen row is the check
+                  // and 500; all modes use neutral text.
+                  COMPOSER_MENU_ROW,
+                  'flex w-full items-center gap-3 px-3 py-2',
+                  disabledReason && 'cursor-not-allowed opacity-45',
                 )}
               >
-                <Icon
-                  size={17}
-                  className={cn(
-                    'shrink-0',
-                    selectedTone ? 'text-current' : 'text-[var(--model-item-text)]',
-                  )}
-                />
-                <span
-                  className={cn(
-                    'min-w-0 flex-1 truncate text-left text-14 font-medium',
-                    selectedTone ? 'text-current' : 'text-[var(--model-item-text)]',
-                  )}
-                >
-                  {label}
-                </span>
-                {isSelected && (
-                  <Check
-                    size={13}
-                    className={cn(
-                      'shrink-0',
-                      selectedTone ? 'text-current' : 'text-[var(--model-item-check)]',
+                {withMenuLabels(
+                  <>
+                    <Icon size={17} className="shrink-0" />
+                    <span className="min-w-0 flex-1 text-left">
+                      <span className="block">{label}</span>
+                      <span className="mt-1 block whitespace-normal text-12 font-normal leading-relaxed text-[var(--text-secondary)]">
+                        {disabledReason ?? description}
+                      </span>
+                    </span>
+                    {isSelected && (
+                      <Check
+                        size={13}
+                        className={cn(
+                          'shrink-0',
+                          'text-[var(--text-secondary)]',
+                        )}
+                      />
                     )}
-                  />
+                  </>,
                 )}
               </button>
-            </Tip>
           );
         })}
       </div>
@@ -374,13 +384,14 @@ export function PermissionSelector({
   // 与 ModelSelector 的 field 形态同一原语。容器形变(MorphPopover)是 composer 专属
   // 类目(design-rules §14.4),且它只在打开时测一次 fixed 几何,设置页的 overflow-y
   // 滚动列里面板会脱锚(2026-07 review 实锤),settings 一律走 Radix。
-  if (isFieldTrigger) {
+  if (anchoredPopover) {
     return (
       <Popover open={open && !disabled} onOpenChange={(next) => setOpen(disabled ? false : next)}>
         <PopoverTrigger asChild>{triggerButton}</PopoverTrigger>
         <PopoverContent
           side="bottom"
-          align="end"
+          // chip 在工具条左端:面板左缘对齐它;字段形态与 trigger 等宽,对齐哪边都一样。
+          align={isFieldTrigger ? 'end' : 'start'}
           sideOffset={4}
           collisionPadding={8}
           onOpenAutoFocus={(event) => {
@@ -392,18 +403,22 @@ export function PermissionSelector({
             }
           }}
           className={cn(
-            // 面板宽度绑定 trigger 宽度(DESIGN.md §Select & Dropdown: 不许比触发它的
+            // 字段形态:面板宽度绑定 trigger 宽度(DESIGN.md §Select & Dropdown: 不许比触发它的
             // 控件更宽或更窄;Radix 语义即 --radix-popover-trigger-width)。行内容自带
             // truncate,窄字段下文案省略号收尾,描述仍有行级 tooltip 兜底。
-            'w-[var(--radix-popover-trigger-width)] rounded-[12px] p-2',
+            // chip 形态:trigger 比菜单窄,面板用与 composer 形变面板相同的 300px。
+            isFieldTrigger
+              ? 'w-[var(--radix-popover-trigger-width)]'
+              : 'w-[300px] max-w-[calc(100vw-16px)]',
+            // 多行说明会让菜单变高: 高度受可用空间限制, 超出时内部滚动。
+            'max-h-[var(--radix-popover-content-available-height)] overflow-y-auto',
+            'rounded-[12px] p-2',
             'bg-[var(--model-dropdown-bg)]',
             'border border-[var(--model-dropdown-border)]',
-            // 共享 PopoverContent 自带 shadow-md;DESIGN.md §4 面板无阴影(分离感来自
-            // 层色/描边),显式压掉。
-            'shadow-none',
           )}
         >
           {optionsList}
+          {open && !disabled ? footer : null}
         </PopoverContent>
       </Popover>
     );
@@ -423,6 +438,7 @@ export function PermissionSelector({
       trigger={triggerButton}
     >
       {optionsList}
+      {open && !disabled ? footer : null}
     </MorphPopover>
   );
 }

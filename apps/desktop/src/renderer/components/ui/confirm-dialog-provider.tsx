@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 
 export interface ConfirmOptions {
+  presentation?: 'standard';
   title: string;
   description?: string;
   /** 可选的标题与正文样式；仅调用方显式传入时生效。 */
@@ -35,6 +36,14 @@ export interface ConfirmOptions {
    * 破坏性确认(删除/重置等)请保持默认。
    */
   autoFocusConfirm?: boolean;
+  /** 逐字输入 expected 才可确认；由 ConfirmDialog 持有本轮输入状态。 */
+  requireTypedConfirmation?: {
+    expected: string;
+    label: ReactNode;
+    placeholder?: string;
+  };
+  /** 允许确认正文与富内容被框选复制。 */
+  contentSelectable?: boolean;
 }
 
 const DONT_SHOW_AGAIN_PREFIX = 'confirm-dialog.skip:';
@@ -265,6 +274,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
       {children}
       {currentItem && (
         <ConfirmDialog
+          presentation={currentItem.options.presentation}
           open={open}
           onOpenChange={handleOpenChange}
           title={currentItem.options.title}
@@ -282,6 +292,8 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
           showCancel={currentItem.options.showCancel}
           tertiaryText={currentItem.options.tertiaryText}
           autoFocusConfirm={currentItem.options.autoFocusConfirm}
+          requireTypedConfirmation={currentItem.options.requireTypedConfirmation}
+          contentSelectable={currentItem.options.contentSelectable}
           dontShowAgainLabel={
             currentItem.options.dontShowAgainKey
               ? currentItem.options.dontShowAgainLabel ?? '下次不再提示'
@@ -302,4 +314,13 @@ export function useConfirmDialog(): ConfirmDialogContextValue {
     throw new Error('useConfirmDialog must be used within ConfirmDialogProvider');
   }
   return context;
+}
+
+/**
+ * 可选读取全局确认框。仅供既能独立渲染、又能挂在完整应用壳内的复用组件使用：
+ * 正式窗口都由 ConfirmDialogProvider 提供共享弹窗；Story / 单测等裸渲染环境返回 null，
+ * 避免为了展示一个纯列表就强制复制整套应用 Provider。
+ */
+export function useOptionalConfirmDialog(): ConfirmDialogContextValue | null {
+  return useContext(ConfirmDialogContext);
 }

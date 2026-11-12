@@ -1,4 +1,5 @@
 import type { AgentKind } from '@cindy/maker-core';
+import { normalizeOrcaWorkerLabel, normalizeOrcaWorkerRole } from '@cindy/maker-shared/orca-team';
 
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
@@ -7,7 +8,15 @@ import type {
   CollabDispatchQueuedOutcome,
   CollabDispatchSuccessOutcome,
 } from './collabSendOutcome.js';
+import { AcceptedCallbackDispatchCancelled } from './acceptedCallbackRunner.js';
 import { rebuildQueuedOrcaLeadMessage } from './orcaInterAgentDispatcher.js';
+import { isOrcaCollaborationMessage } from './orcaQueueNote.js';
+import {
+  createSessionQueueControlService,
+  type QueuedSteerFallbackReason,
+  type QueuedSteerOutcome,
+} from './sessionQueueControl.js';
+import type { OrcaSteerFallbackReason } from './orcaInterAgentDispatcher.js';
 
 /**
  * OrcaTeamService 只接管已存在 worker 的派活、释放、归档与 auto-bridge。
@@ -34,7 +43,7 @@ export interface OrcaWorkerRecordSnapshot {
     model: string;
     effort: string | null;
     permissionMode: string;
-    fastMode: boolean;
+    fastMode: boolean | 'ultrafast';
   };
 }
 
@@ -48,24 +57,22 @@ export interface OrcaWorkerLinkSnapshot {
 
 /** send_to_worker 对外允许暴露的错误码，内部 host-send code 必须在 service 边界归一。 */
 export type SendToWorkerFailureCode =
-  | 'NOT_FOUND'
-  | 'ARCHIVED'
-  | 'DELETED'
-  | 'BUSY'
-  | 'AGENT_NOT_READY'
-  | 'INVALID_ARGS'
-  | 'INTERNAL';
+  'NOT_FOUND' | 'ARCHIVED' | 'DELETED' | 'BUSY' | 'AGENT_NOT_READY' | 'INVALID_ARGS' | 'INTERNAL';
 
 /** provider / IPC 共享的 send_to_worker 结果；worker 派活不允许创建新 session。 */
 export type SendToWorkerResult =
   | {
       ok: true;
       agentKind: AgentKind;
-      wakeKind: 'resumed' | 'already-active' | 'queued';
+      wakeKind: 'resumed' | 'already-active' | 'queued' | 'steered';
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
       /** wakeKind='queued' 时回传:排队消息的可寻址句柄,供 lead 后续查看/修改/撤回。 */
       queuedMessageId?: string;
+      /** 请求插话却进了队列时的原因。 */
+      steerFallbackReason?: OrcaSteerFallbackReason;
+      /** 这次派发取代的、Lead 还没读到的该 Worker 异常终止回报；已从 Lead 队列撤下。 */
+      supersededFailureNotices?: WithdrawnFailureNotice[];
     }
   | {
       ok: false;
@@ -73,16 +80,34 @@ export type SendToWorkerResult =
       message: string;
     };
 
+export type WorkerInterruptStopOutcome =
+  'requested' | 'waiting-for-safe-point' | 'no-active-turn' | 'unconfirmed' | 'unsupported';
+
+export type InterruptWorkerResult =
+  | {
+      ok: true;
+      agentKind: AgentKind;
+      queuedMessageId: string;
+      stopOutcome: WorkerInterruptStopOutcome;
+      queuePaused: boolean;
+      /** 同 SendToWorkerResult.supersededFailureNotices。 */
+      supersededFailureNotices?: WithdrawnFailureNotice[];
+    }
+  | { ok: false; errorCode: SendToWorkerFailureCode; message: string };
+
 /** 底层派发只暴露 dispatch/queue 结果；service 根据派发前 live 状态映射 wakeKind。 */
 export type DispatchWorkerMessageResult =
   | {
       ok: true;
-      mode: 'dispatched' | 'queued';
+      mode: 'dispatched' | 'queued' | 'steered';
+      /** Accepting runtime locally; remote delivery reports the execution device's Agent at enqueue. */
+      agentKind?: AgentKind;
       /** 底层 dispatcher 为该消息生成的 clientId;queued 模式下即队列内寻址句柄。 */
       clientId: string;
       dispatchOutcome: CollabDispatchSuccessOutcome | CollabDispatchQueuedOutcome;
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
+      steerFallbackReason?: OrcaSteerFallbackReason;
     }
   | {
       ok: false;
@@ -93,6 +118,8 @@ export type DispatchWorkerMessageResult =
 export interface DispatchWorkerTaskParams {
   targetSessionId: string;
   message: string;
+  /** 可选, 随首条任务发给 worker 的本机图片绝对路径; 仅本机 worker。 */
+  imagePaths?: string[];
   dispatchMeta: {
     source: string;
     context: string;
@@ -106,7 +133,7 @@ export type DispatchWorkerTaskResult =
       queued?: false;
       dispatchOutcome: CollabDispatchSuccessOutcome;
       agentKind: AgentKind;
-      wakeKind: 'resumed' | 'already-active';
+      wakeKind: 'resumed' | 'already-active' | 'steered';
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
     }
@@ -120,6 +147,7 @@ export type DispatchWorkerTaskResult =
       targetLastUserSendAt: string | null;
       /** 排队消息的可寻址句柄(coordinator 队列内的 clientId)。 */
       queuedMessageId: string;
+      steerFallbackReason?: OrcaSteerFallbackReason;
     }
   | {
       dispatched: false;
@@ -128,14 +156,58 @@ export type DispatchWorkerTaskResult =
     };
 
 /** 简单生命周期操作的 domain result，供 IPC 与 MCP adapter 各自翻译。 */
-export type OrcaOkResult = { ok: true; workerId?: string } | { ok: false; errorCode: string; message: string };
+export type OrcaOkResult =
+  | { ok: true; workerId?: string; /** 归档时一并撤下的、Lead 还没读到的异常终止回报条数。 */ withdrawnFailureNotices?: number }
+  | { ok: false; errorCode: string; message: string };
+
+/** Worker 异常终止自动回报的固定开头；撤下过期回报时按它识别。 */
+export const ORCA_AUTO_BRIDGE_FAILURE_HEADER = '[Auto-bridged: worker 异常终止]';
+
+/** 回执里带回的异常终止回报正文上限；完整内容仍在 Worker 自己的任务里。 */
+const MAX_WITHDRAWN_FAILURE_NOTICE_TEXT = 1200;
+
+/** Lead 队列里一条因 Lead 已对该 Worker 采取行动而撤下的异常终止回报。 */
+export interface WithdrawnFailureNotice {
+  queuedMessageId: string;
+  text: string;
+}
+
+/**
+ * 附在异常终止回报末尾的宿主说明：Worker 出错后原样保留，可以原地继续或先换模型。
+ * 2026-11-10 现场：五个 Worker 撞上用量上限后被全部归档重建，丢了上下文，还撞上名字冲突。
+ */
+export function buildWorkerFailureRecoveryNote(workerSessionId: string): string {
+  return (
+    '(Host note: this Worker is kept as it is: its conversation, working directory and uncommitted changes ' +
+    `are intact, and its status is now error. To retry or continue, send_to_worker to the same worker (session_id: ${workerSessionId}). ` +
+    'If the cause is a usage limit or an unavailable model, first move it to another model with the cindy_helper tools ' +
+    'get_session_runtime and set_session_runtime on that session_id (not available for a Worker running on another computer), ' +
+    'then send_to_worker. Archiving it and creating a replacement starts over without this context.)'
+  );
+}
+
+/** update_worker 的 domain result：worker 展示角色名与 team 内唯一 label。 */
+export type UpdateWorkerResult =
+  | { ok: true; workerId: string; role: string; label: string | null }
+  | {
+      ok: false;
+      errorCode:
+        | 'WORKER_NOT_FOUND'
+        | 'INVALID_PARAMS'
+        | 'DUPLICATE_LABEL'
+        | 'WORKER_STATE_CHANGED'
+        | 'INTERNAL';
+      message: string;
+    };
 
 /** worker 排队消息控制(list/update/cancel)对外暴露的失败码。 */
 export type WorkerQueuedMessageFailureCode =
   | 'WORKER_NOT_FOUND'
   | 'QUEUED_MESSAGE_NOT_FOUND'
   | 'NOT_LEAD_MESSAGE'
+  | 'NOT_ORCA_MESSAGE'
   | 'MESSAGE_CONSUMING'
+  | 'QUEUE_CHANGED'
   | 'INVALID_ARGS'
   | 'INTERNAL';
 
@@ -148,7 +220,8 @@ export type WorkerQueuedMessageFailureCode =
 export interface WorkerQueuedMessageSnapshot {
   queuedMessageId: string;
   position: number;
-  source: 'lead' | 'user' | 'scheduler';
+  /** worker = Lead 自己队列里的 Worker 回报;lead = worker 队列里 Lead 发的消息。 */
+  source: 'lead' | 'worker' | 'user' | 'scheduler';
   content: string;
   /** true = 该条正在 steering 投递中,不可修改 / 撤回。 */
   consuming: boolean;
@@ -159,60 +232,246 @@ export type WorkerQueuedMessageControlResult =
   | { ok: true; workerId: string; queuedMessageId: string }
   | { ok: false; errorCode: WorkerQueuedMessageFailureCode; message: string };
 
+type WorkerQueuedMessageFailure = { ok: false; errorCode: WorkerQueuedMessageFailureCode; message: string };
+
+/** workerId=null 表示操作的是 Lead 自己的输入队列。 */
+export type SteerWorkerQueuedMessageResult =
+  | {
+      ok: true;
+      workerId: string | null;
+      queuedMessageId: string;
+      delivery: 'steered' | 'queued';
+      reason?: QueuedSteerFallbackReason;
+    }
+  | WorkerQueuedMessageFailure;
+
+export type MoveWorkerQueuedMessageResult =
+  | { ok: true; workerId: string | null; queuedMessageId: string; position: number }
+  | WorkerQueuedMessageFailure;
+
 export type ListWorkerQueuedMessagesResult =
-  | { ok: true; workerId: string; workerSessionId: string; messages: WorkerQueuedMessageSnapshot[] }
+  | {
+      ok: true;
+      /** null = Lead 自己的输入队列。 */
+      workerId: string | null;
+      workerSessionId: string;
+      status: OrcaWorkerStatus | 'lead';
+      isWorking: boolean;
+      willQueue: boolean;
+      queuePaused: boolean;
+      messages: WorkerQueuedMessageSnapshot[];
+    }
   | { ok: false; errorCode: 'WORKER_NOT_FOUND' | 'INTERNAL'; message: string };
+
+export type MergeWorkerQueuedMessagesResult =
+  | {
+      ok: true;
+      workerId: string;
+      queuedMessageId: string;
+      messages: WorkerQueuedMessageSnapshot[];
+    }
+  | {
+      ok: false;
+      errorCode: WorkerQueuedMessageFailureCode;
+      message: string;
+      messages?: WorkerQueuedMessageSnapshot[];
+    };
+
+/** How the Lead took an accepted Worker report; queued reports can still be withdrawn. */
+export interface WorkerReportReceipt {
+  delivered: boolean;
+  queuedMessageId?: string;
+}
+
+export type WorkerReportWithdrawalStanding = 'covered' | 'last' | 'other-assignment' | 'untracked';
 
 /** worker turn 终止后由 register.ts 的事件 adapter 回调 service。 */
 export interface WorkerTerminalTurnParams {
   sessionId: string;
   status: 'done' | 'error';
   finalText: string;
+  /** Provider/session diagnostic used when an error turn has no assistant output. */
+  diagnostic?: string;
+  capture?: WorkerTerminalTurnCapture;
 }
 
 /** INPUT_STOP / ABORT_SESSION 记录的手动中断快照，用来让 terminal handler 静默收尾。 */
 export interface OrcaManualInterruptSnapshot {
+  markedAt: number;
   reason: string;
+}
+
+export interface WorkerTerminalTurnCapture {
+  sessionId: string;
+  manualInterrupt: OrcaManualInterruptSnapshot | null;
+  /** Opaque identity of the auto-bridge state that belongs to the ending turn. */
+  autoBridgeIdentity: object | null;
+  runtime?: { getTurnGeneration?(): number } | null;
+  turnGeneration?: number;
+}
+
+export interface OrcaDeliveryPermissionBaseline {
+  mode: string;
+  planEnabled: boolean;
+}
+
+export interface OrcaDeliverySessionRowSnapshot {
+  status: string;
+  clearedAt: number | null;
+  permissionMode: string;
+  planModeEnabled: boolean;
+}
+
+export interface OrcaDeliveryLiveSnapshot {
+  stablePermissionModeState: { mode: string | null } | null;
+  stablePlanModeState: { enabled: boolean } | null;
+}
+
+export type OrcaDeliveryVerdict = 'ok' | 'task-gone' | 'permissions-changing' | 'permissions-changed';
+
+/**
+ * Baselines captured at admission, each tagged with the source it belongs to: a resumed runtime
+ * can run a permission mode the persisted row does not carry, so they must never be shared.
+ */
+export function captureOrcaDeliveryBaselines(input: {
+  row: OrcaDeliverySessionRowSnapshot | null;
+  live: OrcaDeliveryLiveSnapshot | null;
+}): {
+  clearedAtAtCapture: number | null;
+  persistedAtCapture: OrcaDeliveryPermissionBaseline | null;
+  liveAtCapture: OrcaDeliveryPermissionBaseline | null;
+} {
+  const livePermission = input.live?.stablePermissionModeState;
+  const livePlan = input.live?.stablePlanModeState;
+  return {
+    clearedAtAtCapture: input.row?.clearedAt ?? null,
+    persistedAtCapture: input.row
+      ? { mode: input.row.permissionMode, planEnabled: input.row.planModeEnabled }
+      : null,
+    liveAtCapture: livePermission?.mode && livePlan
+      ? { mode: livePermission.mode, planEnabled: livePlan.enabled }
+      : null,
+  };
+}
+
+/**
+ * Delivery-scope decision for a dispatch accepted after the caller's turn ended.
+ * Durable facts only, and each permission baseline is compared against its own source: a resumed
+ * runtime may run a mode the persisted row does not carry, so mixing baselines cancels valid work.
+ */
+export function evaluateOrcaDeliveryScope(input: {
+  /** Cleared boundary captured at admission (`null` when the row was already missing). */
+  clearedAtAtCapture: number | null;
+  persistedAtCapture: OrcaDeliveryPermissionBaseline | null;
+  liveAtCapture: OrcaDeliveryPermissionBaseline | null;
+  row: OrcaDeliverySessionRowSnapshot | null;
+  live: OrcaDeliveryLiveSnapshot | null;
+}): OrcaDeliveryVerdict {
+  const { row, live } = input;
+  // Archived is reversible sidebar storage (it does not end the team), so only deletion and a
+  // new clear boundary revoke a queued dispatch. Pinned by the unit case for `archived`.
+  if (!row || row.status === 'deleted' || row.clearedAt !== input.clearedAtAtCapture) return 'task-gone';
+  if (live) {
+    const permission = live.stablePermissionModeState;
+    const plan = live.stablePlanModeState;
+    // A permission/Plan switch in flight is a live revocation: never start work on the old one.
+    if (!permission?.mode || !plan) return 'permissions-changing';
+    if (!input.liveAtCapture
+      || permission.mode !== input.liveAtCapture.mode
+      || plan.enabled !== input.liveAtCapture.planEnabled) return 'permissions-changed';
+    return 'ok';
+  }
+  // A released runtime is not a revocation by itself, but the row is then the only authority.
+  if (!input.persistedAtCapture
+    || row.permissionMode !== input.persistedAtCapture.mode
+    || row.planModeEnabled !== input.persistedAtCapture.planEnabled) return 'permissions-changed';
+  return 'ok';
 }
 
 /** service 的 I/O 边界。register.ts 只负责把 DB、Maker、IPC broadcast 作为依赖组合进来。 */
 export interface OrcaTeamServiceDeps {
+  captureControlAuthority?(leadSessionId: string): Promise<() => Promise<void>>;
+  /**
+   * Delivery-scope authority for callbacks that may settle after the caller's turn ended
+   * (queued acceptance, terminal-time retries). Round-scoped authority is already expired there.
+   */
+  captureDeliveryAuthority?(leadSessionId: string): Promise<() => Promise<void>>;
   getWorkerLinkBySessionId(workerSessionId: string): Promise<OrcaWorkerLinkSnapshot | null>;
   getWorkerLinkByWorkerId(workerId: string): Promise<OrcaWorkerLinkSnapshot | null>;
   listWorkersByLead(leadSessionId: string): Promise<OrcaWorkerRecordSnapshot[]>;
-  getLiveSession(sessionId: string): { isTurnRunning(): boolean } | null;
-  resumeWorkerSession(worker: OrcaWorkerRecordSnapshot, link: OrcaWorkerLinkSnapshot): Promise<void>;
+  getLiveSession(sessionId: string): { isTurnRunning(): boolean; getTurnGeneration?(): number } | null;
+  resumeWorkerSession(
+    worker: OrcaWorkerRecordSnapshot,
+    link: OrcaWorkerLinkSnapshot,
+  ): Promise<void>;
+  /** 修订 worker 的 role/label；label 唯一性由 store 的唯一索引把关。 */
+  updateWorkerIdentity: (input: {
+    workerId: string;
+    role: string;
+    label: string | null;
+    previousRole: string;
+    previousLabel: string | null;
+  }) => Promise<{ ok: true } | { ok: false; errorCode: 'NOT_FOUND' | 'DUPLICATE_LABEL' }>;
+  /** 取消该 worker session 尚未落地的后台唤醒（focus 预热）；释放 runtime 前调用。 */
+  cancelWorkerResume?(sessionId: string): void;
   updateWorkerStatus(workerId: string, status: OrcaWorkerStatus): Promise<void>;
   markWorkerIdle(workerId: string): Promise<void>;
   markWorkerIdleIfStatus(workerId: string, expectedStatus: 'done'): Promise<boolean>;
   restoreWorkerDoneIfIdle(workerId: string): Promise<boolean>;
-  /** Stop Host-owned work (for example iOS builds) before archiving this worker task. */
-  cancelWorkerSessionOperations(sessionId: string): Promise<void>;
-  closeWorkerSession(sessionId: string): Promise<void>;
+  closeWorkerSession(sessionId: string, beforeClose?: () => Promise<void>): Promise<void>;
   /** 与 Session.send reservation 原子互斥；false 表示 direct send/turn 已先取得会话。 */
-  closeWorkerSessionIfIdle(sessionId: string): Promise<boolean>;
+  closeWorkerSessionIfIdle(sessionId: string, sendLockHeld?: boolean): Promise<boolean>;
   /** pending / dispatch-boundary / recovery 输入任一存在时返回 true。 */
   hasPendingWorkerInput(sessionId: string): Promise<boolean>;
   /** send_to_session 的恢复/直发锁覆盖 bootstrap 到 Session.send reservation 的窗口。 */
   hasSendToSessionLock(sessionId: string): boolean;
-  archiveWorkerSession(sessionId: string): Promise<void>;
+  withSessionSendLock<T>(sessionId: string, operation: () => Promise<T>): Promise<T>;
+  archiveWorkerSession(sessionId: string, beforeMutation?: () => Promise<void>): Promise<void>;
   getManualInterrupt(sessionId: string): OrcaManualInterruptSnapshot | null;
   clearManualInterrupt(sessionId: string): void;
+  restoreManualInterrupt(sessionId: string, snapshot: OrcaManualInterruptSnapshot): void;
   /** 归档后清理手动中断跟踪，避免 stale mark 影响后续同 id 恢复。 */
   forgetWorkerSession?(sessionId: string): void;
   broadcastOrcaWorkerChanged(leadSessionId: string): void;
+  /** The Lead's last outstanding worker report was delivered or discarded. */
+  onLeadWorkerReportsSettled?(leadSessionId: string): void;
   dispatchWorkerMessage(params: {
     targetSessionId: string;
     message: string;
     workerId: string;
+    delivery?: 'queue' | 'steer';
+    imagePaths?: string[];
     dispatchMeta: {
       source: string;
       context: string;
     };
     onAccepted?: () => void | Promise<void>;
     onAcceptedRollback?: () => void | Promise<void>;
+    onAcceptedCommit?: () => void | Promise<void>;
   }): Promise<DispatchWorkerMessageResult>;
-  sendAutoBridgeToLead(leadSessionId: string, message: string, workerId: string): Promise<{ accepted: boolean }>;
+  reserveWorkerMessage(params: {
+    targetSessionId: string;
+    message: string;
+    workerId: string;
+    dispatchMeta: { source: string; context: string };
+    beforeReserve?: () => Promise<void>;
+    /** 同步发起停止；远端适配器等待返回票据，本机仍在 drain 调度前同步调用。 */
+    onReserved?: () => void | Promise<void>;
+    onAccepted?: () => void | Promise<void>;
+    onAcceptedRollback?: () => void | Promise<void>;
+    onAcceptedCommit?: () => void | Promise<void>;
+  }): Promise<DispatchWorkerMessageResult>;
+  requestWorkerInterrupt(sessionId: string): Promise<{
+    stopOutcome: WorkerInterruptStopOutcome;
+    queuePaused: boolean;
+  }>;
+  /** Synchronous coordinator projection used when the stop adapter cannot return a result. */
+  getWorkerQueuePaused(sessionId: string): boolean;
+  sendAutoBridgeToLead(
+    leadSessionId: string,
+    message: string,
+    workerId: string,
+  ): Promise<{ accepted: boolean }>;
   /**
    * 读取目标 session 输入队列的当前快照(pendingQueue + steering 中的 clientId)。
    * 实现方(register.ts)须先 ensureQueueRestored 再读,保证崩溃恢复条目可见。
@@ -220,11 +479,28 @@ export interface OrcaTeamServiceDeps {
   getSessionQueueSnapshot(sessionId: string): Promise<{
     pendingQueue: AgentInputQueuedMessage[];
     steeringClientIds: string[];
+    consumingClientIds: string[];
+    /** Full visible queue, including pre-dispatch active/direct-steering rows. */
+    inspectionMessages?: WorkerQueuedMessageSnapshot[];
+    isWorking: boolean;
+    willQueue: boolean;
+    queuePaused: boolean;
   }>;
+  /** Strict restore gate for atomic merge; false means no mutation is allowed. */
+  ensureWorkerQueueRestored(sessionId: string): Promise<boolean>;
   /** 从队列移除一条排队消息;实现方必须走 coordinator.remove(带 discard settle)。返回是否真的移除。 */
-  removeQueuedMessage(sessionId: string, clientId: string): boolean;
+  removeQueuedMessage(sessionId: string, clientId: string, expected?: AgentInputQueuedMessage): boolean;
   /** 整条替换一条排队消息(同 clientId 原位替换);steering / 已派发返回 false。 */
-  replaceQueuedMessage(sessionId: string, clientId: string, next: AgentInputQueuedMessage): boolean;
+  replaceQueuedMessage(sessionId: string, clientId: string, next: AgentInputQueuedMessage, expected?: AgentInputQueuedMessage): boolean;
+  steerStoredQueuedMessage(sessionId: string, clientId: string): Promise<QueuedSteerOutcome>;
+  moveQueuedMessage(sessionId: string, clientId: string, position: number): number | null | 'locked';
+  mergeQueuedMessages(
+    sessionId: string,
+    clientIds: readonly string[],
+    buildReplacement: (
+      targets: readonly AgentInputQueuedMessage[],
+    ) => AgentInputQueuedMessage | null,
+  ): boolean;
   log: {
     info(message: string, fields?: Record<string, unknown>): void;
     warn(message: string, fields?: Record<string, unknown>): void;
@@ -234,17 +510,40 @@ export interface OrcaTeamServiceDeps {
 /** Orca worker 生命周期服务。错误以结构化 result 返回，IPC adapter 再转 throwIpcError。 */
 export interface OrcaTeamService {
   /** 可信内部路径：只供 lifecycle / host 对已解析 worker 派活，不做外部 caller 校验。 */
-  dispatchWorkerTask(params: DispatchWorkerTaskParams): Promise<DispatchWorkerTaskResult>;
+  dispatchWorkerTask(params: DispatchWorkerTaskParams, assertCurrent?: () => Promise<void>): Promise<DispatchWorkerTaskResult>;
   /** 外部调用边界：按 caller lead 校验 worker 可见性。内部可信派活请用 dispatchWorkerTask。 */
-  sendToWorker(params: { callerLeadSessionId: string; targetSessionId: string; message: string }): Promise<SendToWorkerResult>;
+  sendToWorker(params: {
+    callerLeadSessionId: string;
+    targetSessionId: string;
+    message: string;
+    delivery?: 'queue' | 'steer';
+  }, assertCurrent?: () => Promise<void>): Promise<SendToWorkerResult>;
+  /** Sole public entry for replacing the active worker turn. */
+  interruptWorker(params: {
+    callerLeadSessionId: string;
+    targetSessionId: string;
+    message: string;
+  }): Promise<InterruptWorkerResult>;
   /** 外部调用边界：按 caller lead 校验 worker 可见性。 */
-  idleWorker(params: { callerLeadSessionId: string; workerId: string; expectedStatus?: 'done' }): Promise<OrcaOkResult>;
+  idleWorker(params: {
+    callerLeadSessionId: string;
+    workerId: string;
+    expectedStatus?: 'done';
+  }, opts?: { deferredRetry?: boolean; assertCurrent?: () => Promise<void>; assertDeliveryCurrent?: () => Promise<void> }): Promise<OrcaOkResult>;
   /** 外部调用边界：按 caller lead 校验 worker 可见性。 */
-  archiveWorker(params: { callerLeadSessionId: string; workerId: string }): Promise<OrcaOkResult>;
+  archiveWorker(params: { callerLeadSessionId: string; workerId: string; onlyIfIdle?: boolean; beforeArchive?: () => Promise<void> }): Promise<OrcaOkResult>;
+  /** 外部调用边界：修改 worker 的展示角色名(role)与 team 内唯一标识(label)，不改执行单元本身。 */
+  updateWorker(params: {
+    callerLeadSessionId: string;
+    workerId: string;
+    role?: string;
+    label?: string;
+  }): Promise<UpdateWorkerResult>;
   /** 外部调用边界：列出目标 worker 输入队列中的排队消息(lead 自己的条目含正文)。 */
+  /** workerRef 省略时读取 Lead 自己的输入队列(Worker 回报在 Lead 忙时排在这里)。 */
   listWorkerQueuedMessages(params: {
     callerLeadSessionId: string;
-    workerRef: string;
+    workerRef?: string;
   }): Promise<ListWorkerQueuedMessagesResult>;
   /** 外部调用边界：修改一条尚未派发的 lead 排队消息(整条正文替换,按原派发格式重建)。 */
   updateWorkerQueuedMessage(params: {
@@ -259,18 +558,83 @@ export interface OrcaTeamService {
     workerRef: string;
     queuedMessageId: string;
   }): Promise<WorkerQueuedMessageControlResult>;
+  mergeWorkerQueuedMessages(params: {
+    callerLeadSessionId: string;
+    workerRef: string;
+    queuedMessageIds: string[];
+    message: string;
+  }): Promise<MergeWorkerQueuedMessagesResult>;
+  /** 把一条 Orca 排队消息插进目标当前 turn;workerRef 省略时作用于 Lead 自己的队列。 */
+  steerWorkerQueuedMessage(params: {
+    callerLeadSessionId: string;
+    workerRef?: string;
+    queuedMessageId: string;
+  }): Promise<SteerWorkerQueuedMessageResult>;
+  moveWorkerQueuedMessage(params: {
+    callerLeadSessionId: string;
+    workerRef?: string;
+    queuedMessageId: string;
+    position: number;
+  }): Promise<MoveWorkerQueuedMessageResult>;
   captureWorkerText(sessionId: string, text: string, opts?: { isFinal?: boolean }): void;
   clearAutoBridgeState(sessionId: string): void;
+  /**
+   * The receipt says how an accepted report was taken: delivered to the Lead now (direct send or
+   * same-turn steer) or waiting in the Lead's queue under `queuedMessageId`. It only feeds
+   * `workerReportWithdrawalStanding`.
+   */
+  captureLocalWorkerReport(
+    sessionId: string,
+  ): (accepted: boolean, receipt?: WorkerReportReceipt) => Promise<void>;
+  /**
+   * What withdrawing this queued report would do to the Worker's current assignment. Accepting a
+   * report (even into the queue) settles the duty to report, so nothing is auto-bridged later:
+   * - `covered`: the assignment has another accepted report, queued or already read;
+   * - `last`: it is the assignment's only report — withdrawing it leaves the Lead uninformed;
+   * - `other-assignment`: it belongs to an earlier assignment; the current one still reports;
+   * - `untracked`: no Lead assignment is running (direct user turn, or state lost on restart).
+   */
+  workerReportWithdrawalStanding(
+    sessionId: string,
+    queuedMessageId: string,
+  ): WorkerReportWithdrawalStanding;
+  /** A queued report left the Lead's queue undelivered (withdrawn, merged away, Stop, clear). */
+  forgetWorkerQueuedReports(sessionId: string, queuedMessageIds: readonly string[]): void;
+  /**
+   * A merge kept `queuedMessageId` in place of reports that belonged to the current assignment:
+   * it now carries that assignment's report. No-op without a running assignment.
+   */
+  adoptWorkerQueuedReport(sessionId: string, queuedMessageId: string): void;
+  /** Execution-device settlement retains its existing durable done semantics. */
+  settleReportedWorker(
+    capture: WorkerTerminalTurnCapture,
+    commit?: (markWorkerDone: boolean) => Promise<boolean>,
+  ): Promise<void>;
+  /** True while an accepted worker task still owes this Lead its report. */
+  hasPendingWorkerReports(leadSessionId: string): boolean;
+  restoreWorkerPendingReport(sessionId: string, input: { workerId: string; leadSessionId: string }): void;
   handleWorkerTurnStarted(sessionId: string): Promise<void>;
+  captureWorkerTerminalTurn(sessionId: string): WorkerTerminalTurnCapture;
+  /** Synchronous product boundary; never call for a suppressed vendor terminal. */
+  noteWorkerProductTerminal(capture: WorkerTerminalTurnCapture | undefined): void;
   handleWorkerTerminalTurn(params: WorkerTerminalTurnParams): Promise<void>;
 }
 
-/** ready/inFlight/version 共同保证极速 terminal 与重派活不会重复 bridge 或删错状态。 */
+/** ready/inFlight 与对象身份共同保证极速 terminal 与重派活不会重复 bridge 或删错状态。 */
 interface AutoBridgeState {
-  pending: true;
+  pending: boolean;
+  /** Reports of this assignment that reached the Lead directly or by same-turn steer. */
+  deliveredReports: number;
+  /**
+   * Reports of this assignment accepted into the Lead's queue. An id stays after the Lead
+   * drains it (that is a delivery) and is dropped only when the report is discarded undelivered.
+   */
+  queuedReportIds: Set<string>;
+  reportsInFlight: Set<Promise<void>>;
+  terminalObserved: boolean;
+  productTerminal?: Pick<WorkerTerminalTurnCapture, 'runtime' | 'turnGeneration'>;
   ready: boolean;
   inFlight: boolean;
-  version: number;
   workerId: string;
   leadSessionId: string;
   capturedText: string;
@@ -278,6 +642,7 @@ interface AutoBridgeState {
   deferred?: {
     status: 'done' | 'error';
     finalText: string;
+    diagnostic?: string;
   };
 }
 
@@ -301,12 +666,78 @@ export function findFocusTargetWorker<
 
 export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamService {
   const autoBridge = new Map<string, AutoBridgeState>();
+  const queueControl = createSessionQueueControlService({
+    getSnapshot: async (sessionId) => {
+      const snapshot = await deps.getSessionQueueSnapshot(sessionId);
+      return {
+        pendingQueue: snapshot.pendingQueue,
+        consumingClientIds: snapshot.consumingClientIds,
+      };
+    },
+    replaceQueuedMessage: deps.replaceQueuedMessage,
+    removeQueuedMessage: deps.removeQueuedMessage,
+    steerQueuedMessage: deps.steerStoredQueuedMessage,
+    moveQueuedMessage: deps.moveQueuedMessage,
+  });
   /** Per-worker transition tails serialize dispatch reservations against implicit done acknowledgement. */
   const workerTransitionTails = new Map<string, Promise<void>>();
+  /**
+   * Per-worker identity tails serialize rename read-modify-write；否则 UI 改 role 与 Lead 改 label
+   * 并发的两个请求会各自基于同一份旧快照回写完整 role+label，后者静默覆盖前者。
+   */
+  const workerIdentityTails = new Map<string, Promise<void>>();
   /** Active dispatch count stays positive from pre-resume reservation through host dispatch settlement. */
   const activeWorkerDispatches = new Map<string, number>();
+  type ProvisionalDispatchSettlement =
+    | { outcome: 'committed' }
+    | {
+        outcome: 'rolled-back';
+        /** Manual identity that owns the restored previous terminal after rollback. */
+        manualInterrupt: OrcaManualInterruptSnapshot | null;
+      };
+  interface ProvisionalDispatchState {
+    currentPending: AutoBridgeState;
+    previousPendingIdentity: AutoBridgeState | null;
+    previousManualInterrupt: OrcaManualInterruptSnapshot | null;
+    settlement: Promise<ProvisionalDispatchSettlement>;
+    resolveSettlement: (settlement: ProvisionalDispatchSettlement) => void;
+  }
+  /** accepted is provisional until the queued item crosses the vendor dispatch boundary. */
+  const provisionalDispatches = new Map<string, ProvisionalDispatchState>();
+  /**
+   * (#3153) done 确认被「同 turn 仍在收尾」拒绝(active turn / send in progress)时登记,
+   * 在该 turn 的 terminal 边界重试一次。fire-once:重试前即消费,不因重试失败重登记——
+   * 下一次 done 广播仍会走 renderer 的可见性 ack 路径。done 的产品语义是
+   * 「保持到用户看到为止」,所以只在 renderer 已尝试过确认时补收口,不做无条件自动 ack。
+   */
+  const deferredDoneAcknowledgements = new Map<string, { assertDeliveryCurrent?: () => Promise<void> }>();
+  const deferDoneAcknowledgement = (workerId: string, assertDeliveryCurrent?: () => Promise<void>) => {
+    // An independent UI acknowledgement must not acquire a model caller's guard.
+    if (!deferredDoneAcknowledgements.has(workerId) || deferredDoneAcknowledgements.get(workerId)?.assertDeliveryCurrent) {
+      deferredDoneAcknowledgements.set(workerId, { assertDeliveryCurrent });
+    }
+  };
 
-  async function withWorkerTransition<T>(workerId: string, operation: () => Promise<T>): Promise<T> {
+  /**
+   * Deferred retries run at a later terminal boundary, where the issuing turn's guard is gone.
+   * A failed snapshot capture keeps the existing guard rather than failing the call.
+   */
+  const captureDeferredAuthority = async (
+    leadSessionId: string,
+    opts?: { assertCurrent?: () => Promise<void>; assertDeliveryCurrent?: () => Promise<void> },
+  ): Promise<(() => Promise<void>) | undefined> => {
+    // An independent UI acknowledgement carries no caller authority: it must keep the
+    // no-credential semantics, otherwise a later permission change strands the worker on done.
+    if (!opts?.assertCurrent && !opts?.assertDeliveryCurrent) return undefined;
+    return opts.assertDeliveryCurrent
+      ?? await deps.captureDeliveryAuthority?.(leadSessionId).catch(() => undefined)
+      ?? opts.assertCurrent;
+  };
+
+  async function withWorkerTransition<T>(
+    workerId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
     const previous = workerTransitionTails.get(workerId) ?? Promise.resolve();
     let release!: () => void;
     const current = new Promise<void>((resolve) => {
@@ -338,13 +769,18 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     });
   }
 
-  function setPending(sessionId: string, input: { workerId: string; leadSessionId: string }): AutoBridgeState {
-    const previous = autoBridge.get(sessionId);
+  function setPending(
+    sessionId: string,
+    input: { workerId: string; leadSessionId: string },
+  ): AutoBridgeState {
     const state: AutoBridgeState = {
       pending: true,
+      deliveredReports: 0,
+      queuedReportIds: new Set(),
+      reportsInFlight: new Set(),
+      terminalObserved: false,
       ready: false,
       inFlight: false,
-      version: (previous?.version ?? 0) + 1,
       workerId: input.workerId,
       leadSessionId: input.leadSessionId,
       capturedText: '',
@@ -354,9 +790,44 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     return state;
   }
 
-  function clearRuntimeState(sessionId: string): void {
+  function hasPendingWorkerReports(leadSessionId: string): boolean {
+    for (const state of autoBridge.values()) {
+      if (state.pending && state.leadSessionId === leadSessionId) return true;
+    }
+    return false;
+  }
+
+  function settlePendingReport(state: AutoBridgeState): void {
+    if (!state.pending) return;
+    state.pending = false;
+    state.deferred = undefined;
+    state.retryAfterRejectedDelivery = false;
+    if (hasPendingWorkerReports(state.leadSessionId)) return;
+    try {
+      deps.onLeadWorkerReportsSettled?.(state.leadSessionId);
+    } catch (err) {
+      deps.log.warn('orca lead report settle listener failed', {
+        leadSessionId: state.leadSessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  function deletePendingReport(sessionId: string): void {
+    const removed = autoBridge.get(sessionId);
+    if (!removed) return;
     autoBridge.delete(sessionId);
+    settlePendingReport(removed);
+  }
+
+  function clearRuntimeState(sessionId: string): void {
+    deletePendingReport(sessionId);
     deps.clearManualInterrupt(sessionId);
+    const provisional = provisionalDispatches.get(sessionId);
+    if (provisional) {
+      provisionalDispatches.delete(sessionId);
+      provisional.resolveSettlement({ outcome: 'committed' });
+    }
   }
 
   function rollbackPending(
@@ -367,8 +838,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     if (autoBridge.get(sessionId) !== current) return false;
     if (previous) {
       autoBridge.set(sessionId, previous);
+      settlePendingReport(current);
     } else {
-      autoBridge.delete(sessionId);
+      deletePendingReport(sessionId);
     }
     return true;
   }
@@ -378,54 +850,136 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     current.ready = true;
     const deferred = current.deferred;
     current.deferred = undefined;
-    if (deferred) {
-      await bridgeWorkerCompletion(sessionId, deferred);
-    }
+    if (deferred) await bridgeWorkerCompletion(sessionId, deferred, current);
   }
 
   async function bridgeWorkerCompletion(
     sessionId: string,
-    turn: { status: 'done' | 'error'; finalText: string },
+    turn: { status: 'done' | 'error'; finalText: string; diagnostic?: string },
+    state: AutoBridgeState | undefined,
   ): Promise<'accepted' | 'deferred' | 'rejected' | 'skipped'> {
-    const state = autoBridge.get(sessionId);
     if (!state) return 'skipped';
-    if (!state.ready) {
-      state.deferred = turn;
-      return 'deferred';
-    }
-    if (state.inFlight) return 'skipped';
-
-    state.inFlight = true;
-    state.retryAfterRejectedDelivery = false;
-    const version = state.version;
-    const finalText = turn.finalText || (state.capturedText.trim().length > 0 ? state.capturedText.trim() : '(no output captured)');
-    const header = turn.status === 'error'
-      ? '[Auto-bridged: worker 异常终止]'
-      : '[Auto-bridged: worker 完成但未调 send_to_lead]';
-    const bridgeText = `${header}\n\n${finalText}`;
-    try {
-      const result = await deps.sendAutoBridgeToLead(state.leadSessionId, bridgeText, state.workerId);
-      const latest = autoBridge.get(sessionId);
-      if (latest !== state || latest.version !== version) return 'skipped';
-      if (result.accepted) {
-        autoBridge.delete(sessionId);
-        return 'accepted';
-      }
-      latest.inFlight = false;
-      latest.retryAfterRejectedDelivery = true;
-      return 'rejected';
-    } catch (err) {
-      const latest = autoBridge.get(sessionId);
-      if (latest === state && latest.version === version) {
-        latest.inFlight = false;
-        latest.retryAfterRejectedDelivery = true;
-      }
-      deps.log.warn('orca auto-bridge failed', {
-        sessionId,
-        err: err instanceof Error ? err.message : String(err),
+    // A manual report may be awaiting host acceptance. Never hold the transition lock
+    // across delivery: Lead acceptance can immediately dispatch another Worker turn.
+    for (;;) {
+      while (state.reportsInFlight.size) await Promise.all([...state.reportsInFlight]);
+      const decision = await withWorkerTransition(state.workerId, async () => {
+        if (autoBridge.get(sessionId) !== state || !state.pending) return 'skipped' as const;
+        // A report can begin while this transition is queued behind another mutation.
+        if (state.reportsInFlight.size) return 'wait' as const;
+        if (!state.ready) {
+          state.deferred = turn;
+          return 'deferred' as const;
+        }
+        if (state.inFlight) return 'skipped' as const;
+        state.inFlight = true;
+        state.retryAfterRejectedDelivery = false;
+        return 'send' as const;
       });
-      return 'rejected';
+      if (decision === 'wait') continue;
+      if (decision !== 'send') return decision;
+      break;
     }
+    const finalText = turn.finalText.trim() || state.capturedText.trim()
+      || turn.diagnostic?.trim() || '(no output captured)';
+    const report = turn.status === 'error'
+      ? `${ORCA_AUTO_BRIDGE_FAILURE_HEADER}\n\n${finalText}\n\n${buildWorkerFailureRecoveryNote(sessionId)}`
+      : `[Auto-bridged: worker 已完成，系统自动回传结果]\n\n${finalText}`;
+    let accepted = false;
+    try {
+      accepted = (await deps.sendAutoBridgeToLead(
+        state.leadSessionId, report, state.workerId,
+      )).accepted;
+    } catch (err) {
+      deps.log.warn('orca auto-bridge failed', {
+        sessionId, err: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return withWorkerTransition(state.workerId, async () => {
+      if (autoBridge.get(sessionId) !== state) return 'skipped';
+      state.inFlight = false;
+      if (accepted || !state.pending) {
+        deletePendingReport(sessionId);
+        return accepted ? 'accepted' : 'skipped';
+      }
+      state.retryAfterRejectedDelivery = true;
+      return 'rejected';
+    });
+  }
+
+  /**
+   * 该 Worker 排在 Lead 队列里、Lead 还没读到的异常终止自动回报。只认宿主生成的固定开头，
+   * Worker 自己写的回报（成果、提问）不在此列；正在投递的不动。
+   */
+  async function listQueuedFailureNotices(
+    leadSessionId: string,
+    workerSessionId: string,
+  ): Promise<AgentInputQueuedMessage[]> {
+    const snapshot = await deps.getSessionQueueSnapshot(leadSessionId);
+    const busy = new Set([...snapshot.consumingClientIds, ...snapshot.steeringClientIds]);
+    return snapshot.pendingQueue.filter((item) =>
+      !busy.has(item.clientId)
+      && isOrcaCollaborationMessage(item)
+      && item.origin.senderSessionId === workerSessionId
+      && (item.origin.displayText ?? '').startsWith(ORCA_AUTO_BRIDGE_FAILURE_HEADER));
+  }
+
+  /**
+   * Lead 已经对这个 Worker 采取了行动（归档，或重新派活），它此前那次异常终止的回报就过期了：
+   * 留在队列里只会在之后单独唤醒 Lead 一轮，让它再确认一次「这条已处理」。撤下走 coordinator
+   * 的 remove（与 Stop 清队列同一条结清路径），正文由调用方写进本次操作的回执，Lead 不丢信息。
+   * 读队列或撤下失败只记日志：这是清理，不能让已经成立的归档或派发变成失败。
+   */
+  async function withdrawQueuedFailureNotices(
+    leadSessionId: string,
+    workerSessionId: string,
+    only?: readonly AgentInputQueuedMessage[],
+  ): Promise<WithdrawnFailureNotice[]> {
+    try {
+      const candidates = only ?? await listQueuedFailureNotices(leadSessionId, workerSessionId);
+      const withdrawn: WithdrawnFailureNotice[] = [];
+      for (const item of candidates) {
+        if (!deps.removeQueuedMessage(leadSessionId, item.clientId, item)) continue;
+        withdrawn.push({
+          queuedMessageId: item.clientId,
+          text: ((item.origin?.kind === 'orca' ? item.origin.displayText : undefined) ?? item.text)
+            .slice(0, MAX_WITHDRAWN_FAILURE_NOTICE_TEXT),
+        });
+      }
+      if (withdrawn.length > 0) {
+        deps.log.info('orca withdrew superseded worker failure notices', {
+          leadSessionId, workerSessionId, count: withdrawn.length,
+        });
+      }
+      return withdrawn;
+    } catch (err) {
+      deps.log.warn('orca failed to withdraw superseded worker failure notices', {
+        leadSessionId, workerSessionId, err: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
+  }
+
+  function captureWorkerTerminalTurn(sessionId: string): WorkerTerminalTurnCapture {
+    const runtime = deps.getLiveSession(sessionId);
+    return {
+      sessionId,
+      manualInterrupt: deps.getManualInterrupt(sessionId),
+      autoBridgeIdentity: autoBridge.get(sessionId) ?? null,
+      ...(runtime?.getTurnGeneration ? { runtime, turnGeneration: runtime.getTurnGeneration() } : {}),
+    };
+  }
+
+  function noteWorkerProductTerminal(capture: WorkerTerminalTurnCapture | undefined): void {
+    if (!capture?.runtime) return;
+    const current = autoBridge.get(capture.sessionId);
+    const previous = provisionalDispatches.get(capture.sessionId)?.previousPendingIdentity;
+    const state = current === capture.autoBridgeIdentity ? current
+      : previous === capture.autoBridgeIdentity ? previous : undefined;
+    if (!state) return;
+    // Auto-resume can advance the vendor generation within one product turn. Only
+    // its unsuppressed terminal closes report ownership, before queued user B starts.
+    state.productTerminal ??= { runtime: capture.runtime, turnGeneration: capture.turnGeneration };
   }
 
   function uniqueWorkers(workers: OrcaWorkerRecordSnapshot[]): OrcaWorkerRecordSnapshot[] {
@@ -439,15 +993,18 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
   async function resolveWorkerRef(
     callerLeadSessionId: string,
     ref: string,
-  ): Promise<{
-    ok: true;
-    link: OrcaWorkerLinkSnapshot;
-    worker: OrcaWorkerRecordSnapshot;
-  } | {
-    ok: false;
-    errorCode: 'NOT_FOUND' | 'INTERNAL';
-    message: string;
-  }> {
+  ): Promise<
+    | {
+        ok: true;
+        link: OrcaWorkerLinkSnapshot;
+        worker: OrcaWorkerRecordSnapshot;
+      }
+    | {
+        ok: false;
+        errorCode: 'NOT_FOUND' | 'INTERNAL';
+        message: string;
+      }
+  > {
     // worker_id 与 session_id 都当 opaque token 精确匹配，只在 caller 自己的 worker 列表内解析。
     const workers = await deps.listWorkersByLead(callerLeadSessionId);
     const matches = uniqueWorkers([
@@ -493,20 +1050,35 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     previousStatus: OrcaWorkerStatus;
     currentPending: AutoBridgeState | undefined;
     previousPending: AutoBridgeState | undefined;
-  }): Promise<void> {
-    if (!params.currentPending) return;
-    const didRollbackPending = rollbackPending(params.sessionId, params.currentPending, params.previousPending);
-    if (!didRollbackPending) return;
+    previousManualInterrupt: OrcaManualInterruptSnapshot | null;
+  }): Promise<boolean> {
+    if (!params.currentPending) return false;
+    const didRollbackPending = rollbackPending(
+      params.sessionId,
+      params.currentPending,
+      params.previousPending,
+    );
+    if (!didRollbackPending) return false;
+
+    // accepted clears the old mark. A new stop/interrupt during the provisional window owns the
+    // current ledger and must not be overwritten by this older rollback.
+    if (deps.getManualInterrupt(params.sessionId) === null && params.previousManualInterrupt) {
+      deps.restoreManualInterrupt(params.sessionId, params.previousManualInterrupt);
+    }
 
     const workers = await deps.listWorkersByLead(params.worker.leadSessionId);
     const currentWorker = workers.find((worker) => worker.id === params.worker.id);
-    if (currentWorker?.status !== 'running') return;
+    if (currentWorker?.status !== 'running') return true;
 
     await deps.updateWorkerStatus(params.worker.id, params.previousStatus);
     deps.broadcastOrcaWorkerChanged(params.worker.leadSessionId);
+    return true;
   }
 
-  function dispatchFailureFromThrown(err: unknown, meta: DispatchWorkerTaskParams['dispatchMeta']): CollabDispatchFailureOutcome {
+  function dispatchFailureFromThrown(
+    err: unknown,
+    meta: DispatchWorkerTaskParams['dispatchMeta'],
+  ): CollabDispatchFailureOutcome {
     return {
       ...createHostSendFailure('SEND_FAILED', err instanceof Error ? err.message : String(err)),
       source: meta.source,
@@ -514,7 +1086,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     };
   }
 
-  function sendToWorkerFailureFromDispatchOutcome(outcome: CollabDispatchFailureOutcome): Extract<SendToWorkerResult, { ok: false }> {
+  function sendToWorkerFailureFromDispatchOutcome(
+    outcome: CollabDispatchFailureOutcome,
+  ): Extract<SendToWorkerResult, { ok: false }> {
     if (outcome.kind === 'host-send') {
       const errorCode: SendToWorkerFailureCode = (() => {
         switch (outcome.code) {
@@ -529,6 +1103,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           case 'REHYDRATE_FAILED':
           case 'HOST_NOT_READY':
           case 'SEND_FAILED':
+          case 'PLUGIN_TURN_SKIPPED':
+          case 'PLUGIN_TURN_BLOCKED':
             return 'AGENT_NOT_READY';
         }
       })();
@@ -545,13 +1121,19 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     };
   }
 
-  async function dispatchWorkerTask(params: DispatchWorkerTaskParams): Promise<DispatchWorkerTaskResult> {
+  async function dispatchWorkerTask(
+    params: DispatchWorkerTaskParams,
+    assertCurrent?: () => Promise<void>,
+  ): Promise<DispatchWorkerTaskResult> {
     const link = await deps.getWorkerLinkBySessionId(params.targetSessionId);
     if (!link) {
       return {
         dispatched: false,
         dispatchOutcome: {
-          ...createHostSendFailure('SESSION_NOT_FOUND', `worker session ${params.targetSessionId} not found in orca_workers`),
+          ...createHostSendFailure(
+            'SESSION_NOT_FOUND',
+            `worker session ${params.targetSessionId} not found in orca_workers`,
+          ),
           source: params.dispatchMeta.source,
           context: params.dispatchMeta.context,
         },
@@ -564,100 +1146,298 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       return {
         dispatched: false,
         dispatchOutcome: {
-          ...createHostSendFailure('SESSION_NOT_FOUND', `worker session ${params.targetSessionId} not found`),
+          ...createHostSendFailure(
+            'SESSION_NOT_FOUND',
+            `worker session ${params.targetSessionId} not found`,
+          ),
           source: params.dispatchMeta.source,
           context: params.dispatchMeta.context,
         },
       };
     }
 
+    const execution = await dispatchResolvedWorker({
+      resolved: { worker: target, link },
+      message: params.message,
+      mode: 'normal',
+      ...(params.imagePaths ? { imagePaths: params.imagePaths } : {}),
+      dispatchMeta: params.dispatchMeta,
+      assertCurrent,
+      // Creation can queue its first task too; acceptance then lands after this call.
+      assertDeliveryCurrent: await deps.captureDeliveryAuthority?.(link.leadSessionId),
+    });
+    return mapNormalDispatchResult(target, execution);
+  }
+
+  type ResolvedWorker = Pick<
+    Extract<Awaited<ReturnType<typeof resolveWorkerRef>>, { ok: true }>,
+    'worker' | 'link'
+  >;
+
+  interface ResolvedWorkerDispatchExecution {
+    result: DispatchWorkerMessageResult;
+    wasLiveBeforeDispatch: boolean;
+    stopResult?: {
+      stopOutcome: WorkerInterruptStopOutcome;
+      queuePaused: boolean;
+    };
+  }
+
+  function mapNormalDispatchResult(
+    target: OrcaWorkerRecordSnapshot,
+    execution: ResolvedWorkerDispatchExecution,
+  ): DispatchWorkerTaskResult {
+    const { result } = execution;
+    if (!result.ok) {
+      return { dispatched: false, dispatchOutcome: result.dispatchOutcome };
+    }
+    if (result.mode === 'queued') {
+      return {
+        dispatched: false,
+        queued: true,
+        dispatchOutcome: result.dispatchOutcome as CollabDispatchQueuedOutcome,
+        agentKind: target.session.agentKind,
+        wakeKind: 'queued',
+        targetTitle: result.targetTitle ?? target.session.title,
+        targetLastUserSendAt: result.targetLastUserSendAt,
+        queuedMessageId: result.clientId,
+        ...(result.steerFallbackReason ? { steerFallbackReason: result.steerFallbackReason } : {}),
+      };
+    }
+    return {
+      dispatched: true,
+      dispatchOutcome: result.dispatchOutcome as CollabDispatchSuccessOutcome,
+      agentKind: result.agentKind ?? target.session.agentKind,
+      wakeKind:
+        result.mode === 'steered'
+          ? 'steered'
+          : execution.wasLiveBeforeDispatch ? 'already-active' : 'resumed',
+      targetTitle: result.targetTitle ?? target.session.title,
+      targetLastUserSendAt: result.targetLastUserSendAt,
+    };
+  }
+
+  /** Shared accepted/rollback/running/auto-bridge lifecycle for normal and interrupt dispatch. */
+  async function dispatchResolvedWorker(params: {
+    resolved: ResolvedWorker;
+    message: string;
+    mode: 'normal' | 'interrupt';
+    delivery?: 'queue' | 'steer';
+    imagePaths?: string[];
+    dispatchMeta: DispatchWorkerTaskParams['dispatchMeta'];
+    assertCurrent?: () => Promise<void>;
+    /** Rechecked when the target accepts, possibly after the caller's turn is over. */
+    assertDeliveryCurrent?: () => Promise<void>;
+  }): Promise<ResolvedWorkerDispatchExecution> {
+    const { worker: target, link } = params.resolved;
     await reserveWorkerDispatch(target.id);
     try {
-      let acceptedSnapshot: {
-        previousStatus: OrcaWorkerStatus;
-        previousPending: AutoBridgeState | undefined;
-      } | undefined;
+      let acceptedSnapshot:
+        | {
+            previousStatus: OrcaWorkerStatus;
+            previousPending: AutoBridgeState | undefined;
+            previousManualInterrupt: OrcaManualInterruptSnapshot | null;
+          }
+        | undefined;
       let currentPending: AutoBridgeState | undefined;
+      let currentProvisional: ProvisionalDispatchState | undefined;
+      let stopPromise: ReturnType<OrcaTeamServiceDeps['requestWorkerInterrupt']> | undefined;
       const rollbackAccepted = async (): Promise<void> => {
         if (!acceptedSnapshot) return;
-        await rollbackAcceptedDispatchState({
-          sessionId: params.targetSessionId,
-          worker: target,
-          previousStatus: acceptedSnapshot.previousStatus,
-          currentPending,
-          previousPending: acceptedSnapshot.previousPending,
-        });
-      };
-
-      let result: DispatchWorkerMessageResult;
-      const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;
-      try {
-        // Runtime liveness is independent from the persisted worker status. After a restart a
-        // running/error worker can be dormant too, and must rehydrate through the Worker-specific
-        // path so its stored permission mode and Orca vendor options are preserved.
-        if (!wasLiveBeforeDispatch) {
-          await deps.resumeWorkerSession(target, link);
+        const snapshot = acceptedSnapshot;
+        let settled: ProvisionalDispatchState | undefined;
+        let settlement: ProvisionalDispatchSettlement = { outcome: 'committed' };
+        try {
+          await withWorkerTransition(target.id, async () => {
+            // Ownership is decided synchronously before rollback starts. Even if a later DB write
+            // rejects, a waiter must wake against the runtime/manual identities already restored.
+            const ownsRollback =
+              currentPending !== undefined &&
+              autoBridge.get(target.sessionId) === currentPending;
+            try {
+              await rollbackAcceptedDispatchState({
+                sessionId: target.sessionId,
+                worker: target,
+                previousStatus: snapshot.previousStatus,
+                currentPending,
+                previousPending: snapshot.previousPending,
+                previousManualInterrupt: snapshot.previousManualInterrupt,
+              });
+            } finally {
+              if (
+                currentProvisional &&
+                provisionalDispatches.get(target.sessionId) === currentProvisional
+              ) {
+                provisionalDispatches.delete(target.sessionId);
+                settled = currentProvisional;
+                settlement = ownsRollback
+                  ? {
+                      outcome: 'rolled-back',
+                      manualInterrupt: deps.getManualInterrupt(target.sessionId),
+                    }
+                  : { outcome: 'committed' };
+              }
+            }
+          });
+        } finally {
+          settled?.resolveSettlement(settlement);
         }
-        result = await deps.dispatchWorkerMessage({
-          targetSessionId: params.targetSessionId,
-          message: params.message,
-          workerId: link.workerId,
-          dispatchMeta: params.dispatchMeta,
-          onAccepted: async () => {
+      };
+      const commitAccepted = async (): Promise<void> => {
+        let settled: ProvisionalDispatchState | undefined;
+        await withWorkerTransition(target.id, async () => {
+          if (
+            currentProvisional &&
+            provisionalDispatches.get(target.sessionId) === currentProvisional
+          ) {
+            provisionalDispatches.delete(target.sessionId);
+            settled = currentProvisional;
+          }
+        });
+        settled?.resolveSettlement({ outcome: 'committed' });
+      };
+      const onAccepted = async (): Promise<void> => {
+        // Fail closed: without a delivery guard, keep the round check instead of skipping it.
+        const assertAcceptedCurrent = params.assertDeliveryCurrent ?? params.assertCurrent;
+        try {
+          // Acceptance can land after the caller's turn ended (queued item, cold resume).
+          await assertAcceptedCurrent?.();
+          await withWorkerTransition(target.id, async () => {
             const currentWorkers = await deps.listWorkersByLead(link.leadSessionId);
             const currentWorker = currentWorkers.find((worker) => worker.id === target.id);
-            const previousPending = autoBridge.get(params.targetSessionId);
+            // The store lists only active teams and worker sessions: absence is a real
+            // revocation (team ended / worker archived), not a stale turn.
+            if (!currentWorker) throw new Error('worker no longer belongs to an active team');
             acceptedSnapshot = {
-              previousStatus: currentWorker?.status ?? target.status,
-              previousPending,
+              previousStatus: currentWorker.status,
+              previousPending: autoBridge.get(target.sessionId),
+              previousManualInterrupt: deps.getManualInterrupt(target.sessionId),
             };
-            await deps.updateWorkerStatus(target.id, 'running');
-            deps.broadcastOrcaWorkerChanged(link.leadSessionId);
-            currentPending = setPending(params.targetSessionId, {
+            deps.clearManualInterrupt(target.sessionId);
+            currentPending = setPending(target.sessionId, {
               workerId: target.id,
               leadSessionId: link.leadSessionId,
             });
-            await markPendingReady(params.targetSessionId, currentPending);
-          },
-          onAcceptedRollback: rollbackAccepted,
-        });
+            let resolveSettlement!: (settlement: ProvisionalDispatchSettlement) => void;
+            const settlement = new Promise<ProvisionalDispatchSettlement>((resolve) => {
+              resolveSettlement = resolve;
+            });
+            currentProvisional = {
+              currentPending,
+              previousPendingIdentity: acceptedSnapshot.previousPending ?? null,
+              previousManualInterrupt: acceptedSnapshot.previousManualInterrupt,
+              settlement,
+              resolveSettlement,
+            };
+            provisionalDispatches.set(target.sessionId, currentProvisional);
+            await deps.updateWorkerStatus(target.id, 'running');
+            deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+          });
+          if (currentPending) await markPendingReady(target.sessionId, currentPending);
+          await assertAcceptedCurrent?.();
+        } catch (err) {
+          try {
+            await rollbackAccepted();
+          } catch (rollbackErr) {
+            deps.log.warn('orca accepted lifecycle rollback failed', {
+              workerId: target.id,
+              err: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
+            });
+          }
+          throw new AcceptedCallbackDispatchCancelled(
+            `Orca worker accepted lifecycle failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      };
+
+      const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;
+      let result: DispatchWorkerMessageResult;
+      try {
+        await params.assertCurrent?.();
+        if (params.mode === 'normal') {
+          // Runtime liveness is independent from the persisted worker status. After a restart a
+          // running/error worker can be dormant too, and must rehydrate through the Worker-specific
+          // path so its stored permission mode and Orca vendor options are preserved.
+          if (!wasLiveBeforeDispatch) await deps.resumeWorkerSession(target, link);
+          await params.assertCurrent?.();
+          result = await deps.dispatchWorkerMessage({
+            targetSessionId: target.sessionId,
+            message: params.message,
+            workerId: link.workerId,
+            ...(params.delivery ? { delivery: params.delivery } : {}),
+            ...(params.imagePaths ? { imagePaths: params.imagePaths } : {}),
+            dispatchMeta: params.dispatchMeta,
+            onAccepted,
+            onAcceptedRollback: rollbackAccepted,
+            onAcceptedCommit: commitAccepted,
+          });
+        } else {
+          result = await deps.reserveWorkerMessage({
+            targetSessionId: target.sessionId,
+            message: params.message,
+            workerId: target.id,
+            dispatchMeta: params.dispatchMeta,
+            beforeReserve: params.assertCurrent,
+            onReserved: () => {
+              // The dependency marks the manual interrupt and calls the Session stop API before
+              // its first await. Coordinator has not scheduled drain yet, so this can only target
+              // the turn being replaced.
+              try {
+                stopPromise = deps.requestWorkerInterrupt(target.sessionId);
+              } catch (err) {
+                stopPromise = Promise.reject(err);
+              }
+              // Reservation can finish asynchronously; observe an early rejection until it is
+              // converted to the truthful unconfirmed result below.
+              return stopPromise.then(() => undefined, () => undefined);
+            },
+            onAccepted,
+            onAcceptedRollback: rollbackAccepted,
+            onAcceptedCommit: commitAccepted,
+          });
+        }
       } catch (err) {
         await rollbackAccepted();
         return {
-          dispatched: false,
-          dispatchOutcome: dispatchFailureFromThrown(err, params.dispatchMeta),
+          result: {
+            ok: false,
+            dispatchOutcome: dispatchFailureFromThrown(err, params.dispatchMeta),
+          },
+          wasLiveBeforeDispatch,
         };
       }
 
       if (!result.ok) {
         await rollbackAccepted();
-        return {
-          dispatched: false,
-          dispatchOutcome: result.dispatchOutcome,
+        return { result, wasLiveBeforeDispatch };
+      }
+      if (result.mode === 'dispatched') {
+        // The dependency result is the direct vendor-dispatch settlement. Keep this idempotent
+        // fallback even though the dispatcher also reports commit through the callback.
+        await commitAccepted();
+      }
+      if (params.mode === 'normal') return { result, wasLiveBeforeDispatch };
+
+      let stopResult: ResolvedWorkerDispatchExecution['stopResult'];
+      try {
+        stopResult = stopPromise
+          ? await stopPromise
+          : {
+              stopOutcome: 'unconfirmed',
+              queuePaused: deps.getWorkerQueuePaused(target.sessionId),
+            };
+      } catch (err) {
+        deps.log.warn('orca lead interrupt stop request could not be confirmed', {
+          workerId: target.id,
+          workerSessionId: target.sessionId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        stopResult = {
+          stopOutcome: 'unconfirmed',
+          queuePaused: deps.getWorkerQueuePaused(target.sessionId),
         };
       }
-
-      if (result.mode === 'queued') {
-        return {
-          dispatched: false,
-          queued: true,
-          dispatchOutcome: result.dispatchOutcome as CollabDispatchQueuedOutcome,
-          agentKind: target.session.agentKind,
-          wakeKind: 'queued',
-          targetTitle: result.targetTitle ?? target.session.title,
-          targetLastUserSendAt: result.targetLastUserSendAt,
-          queuedMessageId: result.clientId,
-        };
-      }
-
-      return {
-        dispatched: true,
-        dispatchOutcome: result.dispatchOutcome as CollabDispatchSuccessOutcome,
-        agentKind: target.session.agentKind,
-        wakeKind: wasLiveBeforeDispatch ? 'already-active' : 'resumed',
-        targetTitle: result.targetTitle ?? target.session.title,
-        targetLastUserSendAt: result.targetLastUserSendAt,
-      };
+      return { result, wasLiveBeforeDispatch, stopResult };
     } finally {
       await releaseWorkerDispatch(target.id);
     }
@@ -667,28 +1447,95 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     callerLeadSessionId: string;
     targetSessionId: string;
     message: string;
-  }): Promise<SendToWorkerResult> {
+    delivery?: 'queue' | 'steer';
+    imagePaths?: string[];
+  }, assertCurrent?: () => Promise<void>): Promise<SendToWorkerResult> {
+    return dispatchToWorker({ ...params, mode: 'normal' }, assertCurrent) as Promise<SendToWorkerResult>;
+  }
+
+  async function interruptWorker(params: {
+    callerLeadSessionId: string;
+    targetSessionId: string;
+    message: string;
+  }): Promise<InterruptWorkerResult> {
+    return dispatchToWorker({ ...params, mode: 'interrupt' }) as Promise<InterruptWorkerResult>;
+  }
+
+  /** Both public tools enter this private ownership/dispatch boundary with an explicit mode. */
+  async function dispatchToWorker(params: {
+    callerLeadSessionId: string;
+    targetSessionId: string;
+    message: string;
+    mode: 'normal' | 'interrupt';
+    delivery?: 'queue' | 'steer';
+    imagePaths?: string[];
+  }, captured?: () => Promise<void>): Promise<SendToWorkerResult | InterruptWorkerResult> {
+    // interrupt 预留路径只支持纯文本; 内部误传图片宁拒勿静默丢。
+    if (params.mode === 'interrupt' && params.imagePaths?.length) {
+      return {
+        ok: false,
+        errorCode: 'INVALID_ARGS',
+        message: 'image attachments are not supported for interrupt_worker',
+      };
+    }
+    const assertCurrent = captured ?? await deps.captureControlAuthority?.(params.callerLeadSessionId);
+    // A queued item is accepted only when the worker drains it, which can be long after this
+    // turn ended: that callback must use the delivery guard instead.
+    const assertDeliveryCurrent = await deps.captureDeliveryAuthority?.(params.callerLeadSessionId);
     const resolved = await resolveWorkerRef(params.callerLeadSessionId, params.targetSessionId);
     if (!resolved.ok) {
       return {
         ok: false,
         errorCode: resolved.errorCode,
-        message: resolved.errorCode === 'NOT_FOUND'
-          ? `worker session ${params.targetSessionId} not found`
-          : resolved.message,
+        message:
+          resolved.errorCode === 'NOT_FOUND'
+            ? `worker session ${params.targetSessionId} not found`
+            : resolved.message,
       };
     }
-    const callerWorker = resolved.worker;
-
-    const dispatchResult = await dispatchWorkerTask({
-      targetSessionId: callerWorker.sessionId,
+    // 派发前记下已有的异常终止回报：只撤这些。派发之后才进队列的属于新一轮，必须照常送达。
+    const staleFailureNotices = resolved.worker.status === 'error'
+      ? await listQueuedFailureNotices(params.callerLeadSessionId, resolved.worker.sessionId).catch(() => [])
+      : [];
+    const supersededNotices = async (): Promise<{ supersededFailureNotices?: WithdrawnFailureNotice[] }> => {
+      if (staleFailureNotices.length === 0) return {};
+      const withdrawn = await withdrawQueuedFailureNotices(
+        params.callerLeadSessionId, resolved.worker.sessionId, staleFailureNotices,
+      );
+      return withdrawn.length > 0 ? { supersededFailureNotices: withdrawn } : {};
+    };
+    const execution = await dispatchResolvedWorker({
+      resolved,
       message: params.message,
+      mode: params.mode,
+      ...(params.delivery ? { delivery: params.delivery } : {}),
+      ...(params.imagePaths ? { imagePaths: params.imagePaths } : {}),
+      assertCurrent,
+      assertDeliveryCurrent,
       dispatchMeta: {
         source: 'maker-ipc/collab',
-        context: `send_to_worker/${callerWorker.sessionId}/dispatch-worker-message`,
+        context:
+          params.mode === 'normal'
+            ? `send_to_worker/${resolved.worker.sessionId}/dispatch-worker-message`
+            : `interrupt_worker/${resolved.worker.sessionId}/reserve-next-input`,
       },
     });
-
+    if (params.mode === 'interrupt') {
+      if (!execution.result.ok) {
+        return sendToWorkerFailureFromDispatchOutcome(execution.result.dispatchOutcome);
+      }
+      return {
+        ok: true,
+        agentKind: resolved.worker.session.agentKind,
+        queuedMessageId: execution.result.clientId,
+        stopOutcome: execution.stopResult?.stopOutcome ?? 'unconfirmed',
+        queuePaused:
+          execution.stopResult?.queuePaused ??
+          deps.getWorkerQueuePaused(resolved.worker.sessionId),
+        ...(await supersededNotices()),
+      };
+    }
+    const dispatchResult = mapNormalDispatchResult(resolved.worker, execution);
     if (!dispatchResult.dispatched && dispatchResult.queued !== true) {
       return sendToWorkerFailureFromDispatchOutcome(dispatchResult.dispatchOutcome);
     }
@@ -699,11 +1546,28 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       wakeKind: dispatchResult.wakeKind,
       targetTitle: dispatchResult.targetTitle,
       targetLastUserSendAt: dispatchResult.targetLastUserSendAt,
-      ...(dispatchResult.queued === true ? { queuedMessageId: dispatchResult.queuedMessageId } : {}),
+      ...(dispatchResult.queued === true
+        ? {
+            queuedMessageId: dispatchResult.queuedMessageId,
+            ...(dispatchResult.steerFallbackReason
+              ? { steerFallbackReason: dispatchResult.steerFallbackReason }
+              : {}),
+          }
+        : {}),
+      ...(await supersededNotices()),
     };
   }
 
-  async function idleWorker(params: { callerLeadSessionId: string; workerId: string; expectedStatus?: 'done' }): Promise<OrcaOkResult> {
+  async function idleWorker(
+    params: { callerLeadSessionId: string; workerId: string; expectedStatus?: 'done' },
+    /**
+     * (#3153) 内部参数,不走 IPC 边界:terminal 边界的补收口重试必须带
+     * deferredRetry=true——重试再被 active-turn / send 锁守卫拒绝时**不得重新登记**,
+     * 否则 fire-once 契约被打破,且该 terminal 边界之后未必还有下一个 terminal
+     * 事件来消费,worker 会带着悬置登记卡回 done(正是本机制要修的状态)。
+     */
+    opts?: { deferredRetry?: boolean; assertCurrent?: () => Promise<void>; assertDeliveryCurrent?: () => Promise<void> },
+  ): Promise<OrcaOkResult> {
     const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerId);
     if (!found.ok) return workerRefFailureForControl(params.workerId, found);
 
@@ -711,6 +1575,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       current: Extract<Awaited<ReturnType<typeof resolveWorkerRef>>, { ok: true }>,
     ): Promise<OrcaOkResult> => {
       const { link, worker } = current;
+      await opts?.assertCurrent?.();
       if (params.expectedStatus && worker.status !== params.expectedStatus) {
         return {
           ok: false,
@@ -719,9 +1584,19 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         };
       }
       if (worker.status === 'idle') {
-        return { ok: false, errorCode: 'ALREADY_IDLE', message: `worker ${params.workerId} is already idle` };
+        return {
+          ok: false,
+          errorCode: 'ALREADY_IDLE',
+          message: `worker ${params.workerId} is already idle`,
+        };
       }
       if (params.expectedStatus && deps.getLiveSession(worker.sessionId)?.isTurnRunning()) {
+        // 回报 settle 先落库、worker 自己的 turn 还在收尾:登记后由 terminal 边界重试(#3153)。
+        // terminal 重试自身被拒时不登记(见 idleWorker 的 opts 注释)。
+        if (params.expectedStatus === 'done' && !opts?.deferredRetry) {
+          // The retry runs at a later terminal boundary: keep the delivery guard, not the turn's.
+          deferDoneAcknowledgement(worker.id, await captureDeferredAuthority(params.callerLeadSessionId, opts));
+        }
         return {
           ok: false,
           errorCode: 'WORKER_STATE_CHANGED',
@@ -729,13 +1604,16 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         };
       }
       if (params.expectedStatus && deps.hasSendToSessionLock(worker.sessionId)) {
+        if (params.expectedStatus === 'done' && !opts?.deferredRetry) {
+          deferDoneAcknowledgement(worker.id, await captureDeferredAuthority(params.callerLeadSessionId, opts));
+        }
         return {
           ok: false,
           errorCode: 'WORKER_STATE_CHANGED',
           message: `worker ${params.workerId} has a send in progress`,
         };
       }
-      if (params.expectedStatus && await deps.hasPendingWorkerInput(worker.sessionId)) {
+      if (params.expectedStatus && (await deps.hasPendingWorkerInput(worker.sessionId))) {
         return {
           ok: false,
           errorCode: 'WORKER_STATE_CHANGED',
@@ -743,6 +1621,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         };
       }
 
+      await opts?.assertCurrent?.();
       const didIdle = params.expectedStatus
         ? await deps.markWorkerIdleIfStatus(worker.id, params.expectedStatus)
         : (await deps.markWorkerIdle(worker.id), true);
@@ -757,9 +1636,16 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         await deps.restoreWorkerDoneIfIdle(worker.id);
         deps.broadcastOrcaWorkerChanged(link.leadSessionId);
       };
+      const assertAfterIdle = async () => {
+        try { await opts?.assertCurrent?.(); }
+        catch (err) {
+          if (params.expectedStatus) await rollbackDoneAcknowledgement();
+          throw err;
+        }
+      };
       // Queue state can change while the DB CAS awaits I/O. Preserve newly queued
       // follow-ups before close, then use Session.closeIfIdle for atomic send/close ordering.
-      if (params.expectedStatus && await deps.hasPendingWorkerInput(worker.sessionId)) {
+      if (params.expectedStatus && (await deps.hasPendingWorkerInput(worker.sessionId))) {
         await rollbackDoneAcknowledgement();
         return {
           ok: false,
@@ -768,6 +1654,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         };
       }
       if (params.expectedStatus) {
+        await assertAfterIdle();
         const didClose = await closeWorkerSessionIfIdleBestEffort(worker.sessionId, 'idleWorker');
         if (!didClose) {
           await rollbackDoneAcknowledgement();
@@ -778,10 +1665,14 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           };
         }
       }
+      // 显式 idle 会释放 runtime；先取消未落地的后台预热，避免释放后被重新拉起。
+      deps.cancelWorkerResume?.(worker.sessionId);
+      await assertAfterIdle();
       clearRuntimeState(worker.sessionId);
       if (!params.expectedStatus) {
-        await closeWorkerSessionBestEffort(worker.sessionId, 'idleWorker');
+        await closeWorkerSessionBestEffort(worker.sessionId, 'idleWorker', opts?.assertCurrent);
       }
+      deferredDoneAcknowledgements.delete(worker.id);
       deps.broadcastOrcaWorkerChanged(link.leadSessionId);
       return { ok: true, workerId: worker.id };
     };
@@ -802,108 +1693,275 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     });
   }
 
-  async function archiveWorker(params: { callerLeadSessionId: string; workerId: string }): Promise<OrcaOkResult> {
+  async function archiveWorker(params: {
+    callerLeadSessionId: string;
+    workerId: string;
+    onlyIfIdle?: boolean;
+    beforeArchive?: () => Promise<void>;
+  }): Promise<OrcaOkResult> {
+    const perform = async (): Promise<OrcaOkResult> => {
     const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerId);
     if (!found.ok) return workerRefFailureForControl(params.workerId, found);
     const { link, worker } = found;
 
+    const archive = async (): Promise<OrcaOkResult> => {
+    await params.beforeArchive?.();
+    if (params.onlyIfIdle) {
+      if ((activeWorkerDispatches.get(worker.id) ?? 0)>0 || await deps.hasPendingWorkerInput(worker.sessionId) || !await closeWorkerSessionIfIdleBestEffort(worker.sessionId,'releaseWorker',true)) return {ok:false,errorCode:'WORKER_STATE_CHANGED',message:'Worker has active or queued input'};
+      if (await deps.hasPendingWorkerInput(worker.sessionId)) return {ok:false,errorCode:'WORKER_STATE_CHANGED',message:'Worker has queued input'};
+    }
+    await params.beforeArchive?.();
     clearRuntimeState(worker.sessionId);
     deps.forgetWorkerSession?.(worker.sessionId);
-    await deps.cancelWorkerSessionOperations(worker.sessionId);
-    await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker');
-    await deps.archiveWorkerSession(worker.sessionId);
-    // The archived status is the admission barrier for new Host work. Cancel
-    // once more after publishing it to catch a build that registered between
-    // the pre-close cancellation and the status transition.
-    await deps.cancelWorkerSessionOperations(worker.sessionId);
+    deferredDoneAcknowledgements.delete(worker.id);
+    // 归档会释放 runtime；先取消未落地的后台预热，避免归档后被重新拉起（review P1）。
+    deps.cancelWorkerResume?.(worker.sessionId);
+    await params.beforeArchive?.();
+    await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker', params.beforeArchive);
+    await params.beforeArchive?.();
+    await deps.archiveWorkerSession(worker.sessionId, params.beforeArchive);
+    await params.beforeArchive?.();
     await deps.updateWorkerStatus(worker.id, 'done');
     deps.broadcastOrcaWorkerChanged(link.leadSessionId);
-    return { ok: true, workerId: worker.id };
+    const withdrawn = await withdrawQueuedFailureNotices(link.leadSessionId, worker.sessionId);
+    return {
+      ok: true,
+      workerId: worker.id,
+      ...(withdrawn.length > 0 ? { withdrawnFailureNotices: withdrawn.length } : {}),
+    };
+    };
+    // Never wait for a send while holding the Worker transition: send acceptance
+    // also needs this transition. Check and reserve synchronously (no await).
+    if (params.onlyIfIdle && deps.hasSendToSessionLock(worker.sessionId)) return {ok:false,errorCode:'WORKER_STATE_CHANGED',message:'Worker has a send in progress'};
+    return params.onlyIfIdle ? deps.withSessionSendLock(worker.sessionId, archive) : archive();
+    };
+    return params.onlyIfIdle ? withWorkerTransition(params.workerId,perform) : perform();
+  }
+
+  async function updateWorker(params: {
+    callerLeadSessionId: string;
+    workerId: string;
+    role?: string;
+    label?: string;
+  }): Promise<UpdateWorkerResult> {
+    const initial = await resolveWorkerRef(params.callerLeadSessionId, params.workerId);
+    if (!initial.ok) {
+      if (initial.errorCode === 'NOT_FOUND') {
+        return { ok: false, errorCode: 'WORKER_NOT_FOUND', message: `worker ${params.workerId} not found` };
+      }
+      return { ok: false, errorCode: 'INTERNAL', message: initial.message };
+    }
+    // 用解析出的 worker.id 串行化：worker_id / session_id 两种 ref 都落到同一把锁。
+    // 读-改-写整体在锁内，后到者重新读到前一次的结果，部分字段更新不会互相覆盖。
+    return withWorkerIdentityUpdate(initial.worker.id, async () => {
+      const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerId);
+      if (!found.ok) {
+        if (found.errorCode === 'NOT_FOUND') {
+          return { ok: false as const, errorCode: 'WORKER_NOT_FOUND' as const, message: `worker ${params.workerId} not found` };
+        }
+        return { ok: false as const, errorCode: 'INTERNAL' as const, message: found.message };
+      }
+      const { link, worker } = found;
+      if (params.role === undefined && params.label === undefined) {
+        return { ok: false as const, errorCode: 'INVALID_PARAMS' as const, message: 'role or label required' };
+      }
+
+      let role = worker.role;
+      if (params.role !== undefined) {
+        const normalized = normalizeOrcaWorkerRole(params.role);
+        if (!normalized.ok) return { ok: false as const, errorCode: 'INVALID_PARAMS' as const, message: normalized.message };
+        role = normalized.value;
+      }
+      let label = worker.label;
+      if (params.label !== undefined) {
+        const normalized = normalizeOrcaWorkerLabel(params.label);
+        if (!normalized.ok) return { ok: false as const, errorCode: 'INVALID_PARAMS' as const, message: normalized.message };
+        label = normalized.value;
+      }
+
+      // 幂等：值没变时不写库、不广播（MCP 重试与 UI 重复提交都落到这里）。
+      if (role === worker.role && label === worker.label) {
+        return { ok: true as const, workerId: worker.id, role, label };
+      }
+
+      const updated = await deps.updateWorkerIdentity({
+        workerId: worker.id,
+        role,
+        label,
+        previousRole: worker.role,
+        previousLabel: worker.label,
+      });
+      if (!updated.ok) {
+        if (updated.errorCode === 'DUPLICATE_LABEL') {
+          return {
+            ok: false as const,
+            errorCode: 'DUPLICATE_LABEL' as const,
+            message: `label "${label}" already used in this team`,
+          };
+        }
+        return { ok: false as const, errorCode: 'WORKER_NOT_FOUND' as const, message: `worker ${params.workerId} not found` };
+      }
+      deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+      return { ok: true as const, workerId: worker.id, role, label };
+    });
+  }
+
+  async function withWorkerIdentityUpdate<T>(
+    workerId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = workerIdentityTails.get(workerId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    workerIdentityTails.set(workerId, current);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (workerIdentityTails.get(workerId) === current) {
+        workerIdentityTails.delete(workerId);
+      }
+    }
   }
 
   /** 排队消息 source 判定:worker 队列里 orca 条目只可能来自其 lead(通信拓扑为 Lead↔Worker)。 */
-  function queuedMessageSource(item: AgentInputQueuedMessage): WorkerQueuedMessageSnapshot['source'] {
+  function queuedMessageSource(
+    item: AgentInputQueuedMessage,
+  ): WorkerQueuedMessageSnapshot['source'] {
     if (item.origin?.kind === 'orca') return 'lead';
     if (item.origin?.kind === 'scheduler') return 'scheduler';
     return 'user';
   }
 
   /**
-   * update / cancel 共用的目标定位与权限校验:worker 归属(resolveWorkerRef)→
-   * 条目存在 → 必须是 lead 自己的 orca 条目(用户 / scheduler 排队消息绝不可动)→
-   * 未进入 steering 投递。全部通过才返回条目与 link。
+   * 队列目标:给了 workerRef 就是该 worker 的队列;省略时是调用方自己的队列
+   * (Lead 忙时 Worker 回报排在这里)。自身队列只开放协同(orca)条目。
    */
-  async function resolveLeadQueuedMessage(params: {
-    callerLeadSessionId: string;
-    workerRef: string;
-    queuedMessageId: string;
-  }): Promise<
-    | { ok: true; link: OrcaWorkerLinkSnapshot; entry: AgentInputQueuedMessage }
-    | { ok: false; errorCode: WorkerQueuedMessageFailureCode; message: string }
+  async function resolveQueueTarget(
+    callerLeadSessionId: string,
+    workerRef: string | undefined,
+  ): Promise<
+    | { ok: true; sessionId: string; worker: OrcaWorkerRecordSnapshot | null }
+    | { ok: false; errorCode: 'WORKER_NOT_FOUND' | 'INTERNAL'; message: string }
   > {
-    const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerRef);
-    if (!found.ok) {
-      return found.errorCode === 'NOT_FOUND'
-        ? { ok: false, errorCode: 'WORKER_NOT_FOUND', message: `worker ${params.workerRef} not found` }
-        : { ok: false, errorCode: 'INTERNAL', message: found.message };
-    }
-    const snapshot = await deps.getSessionQueueSnapshot(found.worker.sessionId);
-    const entry = snapshot.pendingQueue.find((item) => item.clientId === params.queuedMessageId);
-    if (!entry) {
-      return {
-        ok: false,
-        errorCode: 'QUEUED_MESSAGE_NOT_FOUND',
-        message: `queued message ${params.queuedMessageId} not found — it may have been dispatched or cancelled already`,
-      };
-    }
-    if (entry.origin?.kind !== 'orca') {
-      return {
-        ok: false,
-        errorCode: 'NOT_LEAD_MESSAGE',
-        message: `queued message ${params.queuedMessageId} was not sent by the lead; user/scheduler queued messages cannot be modified`,
-      };
-    }
-    if (snapshot.steeringClientIds.includes(entry.clientId)) {
-      return {
-        ok: false,
-        errorCode: 'MESSAGE_CONSUMING',
-        message: `queued message ${params.queuedMessageId} is being delivered and can no longer be modified`,
-      };
-    }
-    return { ok: true, link: found.link, entry };
+    if (workerRef === undefined) return { ok: true, sessionId: callerLeadSessionId, worker: null };
+    const found = await resolveWorkerRef(callerLeadSessionId, workerRef);
+    if (found.ok) return { ok: true, sessionId: found.worker.sessionId, worker: found.worker };
+    return found.errorCode === 'NOT_FOUND'
+      ? { ok: false, errorCode: 'WORKER_NOT_FOUND', message: `worker ${workerRef} not found` }
+      : { ok: false, errorCode: 'INTERNAL', message: found.message };
+  }
+
+  function authorizeOrcaQueueItem(
+    entry: AgentInputQueuedMessage,
+    queuedMessageId: string,
+    ownQueue: boolean,
+  ): { ok: true } | { ok: false; message: string } {
+    if (entry.origin?.kind === 'orca') return { ok: true };
+    return {
+      ok: false,
+      message: ownQueue
+        ? `queued message ${queuedMessageId} is not a collaboration message; user/scheduler queued messages cannot be changed`
+        : `queued message ${queuedMessageId} was not sent by the lead; user/scheduler queued messages cannot be modified`,
+    };
   }
 
   async function listWorkerQueuedMessages(params: {
     callerLeadSessionId: string;
-    workerRef: string;
+    workerRef?: string;
   }): Promise<ListWorkerQueuedMessagesResult> {
-    const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerRef);
-    if (!found.ok) {
-      return found.errorCode === 'NOT_FOUND'
-        ? { ok: false, errorCode: 'WORKER_NOT_FOUND', message: `worker ${params.workerRef} not found` }
-        : { ok: false, errorCode: 'INTERNAL', message: found.message };
-    }
-    const snapshot = await deps.getSessionQueueSnapshot(found.worker.sessionId);
-    const messages = snapshot.pendingQueue.map((item, index): WorkerQueuedMessageSnapshot => {
-      const source = queuedMessageSource(item);
-      // lead 条目回原始正文(displayText 缺失时回退带派发头的 text,可读性够诊断用);
-      // 用户 / scheduler 条目回排队正文 —— 内容全可见,可操作性仍由 NOT_LEAD_MESSAGE 把关。
-      const content = item.origin?.kind === 'orca'
-        ? item.origin.displayText ?? item.text
-        : item.text;
-      return {
-        queuedMessageId: item.clientId,
-        position: index,
-        source,
-        content,
-        consuming: snapshot.steeringClientIds.includes(item.clientId),
-      };
+    const target = await resolveQueueTarget(params.callerLeadSessionId, params.workerRef);
+    if (!target.ok) return target;
+    const snapshot = await deps.getSessionQueueSnapshot(target.sessionId);
+    const messages = (
+      snapshot.inspectionMessages ??
+      snapshot.pendingQueue.map((item, index): WorkerQueuedMessageSnapshot => {
+        const source = queuedMessageSource(item);
+        // lead 条目回原始正文(displayText 缺失时回退带派发头的 text,可读性够诊断用);
+        // 用户 / scheduler 条目回排队正文 —— 内容全可见,可操作性仍由 NOT_LEAD_MESSAGE 把关。
+        const content =
+          item.origin?.kind === 'orca' ? (item.origin.displayText ?? item.text) : item.text;
+        return {
+          queuedMessageId: item.clientId,
+          position: index,
+          source,
+          content,
+          consuming: snapshot.consumingClientIds.includes(item.clientId),
+        };
+      })
+    ).map((entry) =>
+      // 自身队列里的协同条目来自对端(Lead 收到的是 Worker 回报),不是 lead 自己发的。
+      target.worker === null && entry.source === 'lead' ? { ...entry, source: 'worker' as const } : entry,
+    );
+    return {
+      ok: true,
+      workerId: target.worker?.id ?? null,
+      workerSessionId: target.sessionId,
+      status: target.worker?.status ?? 'lead',
+      isWorking: snapshot.isWorking,
+      willQueue: snapshot.willQueue,
+      queuePaused: snapshot.queuePaused,
+      messages,
+    };
+  }
+
+  async function steerWorkerQueuedMessage(params: {
+    callerLeadSessionId: string;
+    workerRef?: string;
+    queuedMessageId: string;
+  }): Promise<SteerWorkerQueuedMessageResult> {
+    const assertCurrent = await deps.captureControlAuthority?.(params.callerLeadSessionId);
+    const target = await resolveQueueTarget(params.callerLeadSessionId, params.workerRef);
+    if (!target.ok) return target;
+    const ownQueue = target.worker === null;
+    const controlled = await queueControl.steer({
+      beforeMutation: assertCurrent,
+      sessionId: target.sessionId,
+      queuedMessageId: params.queuedMessageId,
+      authorize: (entry) => authorizeOrcaQueueItem(entry, params.queuedMessageId, ownQueue),
+    });
+    if (!controlled.ok) return mapWorkerQueueControlFailure(controlled, ownQueue);
+    deps.log.info('orca queued message steer requested', {
+      targetSessionId: target.sessionId,
+      ownQueue,
+      queuedMessageId: params.queuedMessageId,
+      delivery: controlled.delivery,
     });
     return {
       ok: true,
-      workerId: found.worker.id,
-      workerSessionId: found.worker.sessionId,
-      messages,
+      workerId: target.worker?.id ?? null,
+      queuedMessageId: params.queuedMessageId,
+      delivery: controlled.delivery,
+      ...(controlled.delivery === 'queued' ? { reason: controlled.reason } : {}),
+    };
+  }
+
+  async function moveWorkerQueuedMessage(params: {
+    callerLeadSessionId: string;
+    workerRef?: string;
+    queuedMessageId: string;
+    position: number;
+  }): Promise<MoveWorkerQueuedMessageResult> {
+    const assertCurrent = await deps.captureControlAuthority?.(params.callerLeadSessionId);
+    const target = await resolveQueueTarget(params.callerLeadSessionId, params.workerRef);
+    if (!target.ok) return target;
+    const ownQueue = target.worker === null;
+    const controlled = await queueControl.move({
+      beforeMutation: assertCurrent,
+      sessionId: target.sessionId,
+      queuedMessageId: params.queuedMessageId,
+      position: params.position,
+      authorize: (entry) => authorizeOrcaQueueItem(entry, params.queuedMessageId, ownQueue),
+    });
+    if (!controlled.ok) return mapWorkerQueueControlFailure(controlled, ownQueue);
+    return {
+      ok: true,
+      workerId: target.worker?.id ?? null,
+      queuedMessageId: params.queuedMessageId,
+      position: controlled.position,
     };
   }
 
@@ -913,31 +1971,38 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     queuedMessageId: string;
     message: string;
   }): Promise<WorkerQueuedMessageControlResult> {
-    if (params.message.trim().length === 0) {
-      return { ok: false, errorCode: 'INVALID_ARGS', message: 'message must not be empty' };
+    const assertCurrent = await deps.captureControlAuthority?.(params.callerLeadSessionId);
+    const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerRef);
+    if (!found.ok) {
+      return found.errorCode === 'NOT_FOUND'
+        ? {
+            ok: false,
+            errorCode: 'WORKER_NOT_FOUND',
+            message: `worker ${params.workerRef} not found`,
+          }
+        : { ok: false, errorCode: 'INTERNAL', message: found.message };
     }
-    const resolved = await resolveLeadQueuedMessage(params);
-    if (!resolved.ok) return resolved;
-    const next = rebuildQueuedOrcaLeadMessage(resolved.entry, params.message, resolved.link.workerId);
-    const replaced = deps.replaceQueuedMessage(
-      resolved.link.workerSessionId,
-      params.queuedMessageId,
-      next,
-    );
-    if (!replaced) {
-      // resolve 与 replace 之间的窄竞态:条目刚被 drain 取走 / steering 挡住。
-      return {
-        ok: false,
-        errorCode: 'QUEUED_MESSAGE_NOT_FOUND',
-        message: `queued message ${params.queuedMessageId} was consumed before the update could apply`,
-      };
-    }
+    const controlled = await queueControl.update({
+      beforeMutation: assertCurrent,
+      sessionId: found.worker.sessionId,
+      queuedMessageId: params.queuedMessageId,
+      message: params.message,
+      authorize: (entry) =>
+        entry.origin?.kind === 'orca'
+          ? { ok: true }
+          : {
+              ok: false,
+              message: `queued message ${params.queuedMessageId} was not sent by the lead; user/scheduler queued messages cannot be modified`,
+            },
+      rebuild: (entry, message) => rebuildQueuedOrcaLeadMessage(entry, message, found.worker.id),
+    });
+    if (!controlled.ok) return mapWorkerQueueControlFailure(controlled);
     deps.log.info('orca lead updated queued worker message', {
-      workerId: resolved.link.workerId,
-      workerSessionId: resolved.link.workerSessionId,
+      workerId: found.worker.id,
+      workerSessionId: found.worker.sessionId,
       queuedMessageId: params.queuedMessageId,
     });
-    return { ok: true, workerId: resolved.link.workerId, queuedMessageId: params.queuedMessageId };
+    return { ok: true, workerId: found.worker.id, queuedMessageId: params.queuedMessageId };
   }
 
   async function cancelWorkerQueuedMessage(params: {
@@ -945,32 +2010,159 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     workerRef: string;
     queuedMessageId: string;
   }): Promise<WorkerQueuedMessageControlResult> {
-    const resolved = await resolveLeadQueuedMessage(params);
-    if (!resolved.ok) return resolved;
-    // coordinator.remove 内部触发 onDiscardedQueuedMessage → dispatcher 丢弃该
-    // clientId 的 accepted 暂存回调,与 Stop 清队列共用同一条 settle 路径
-    // (架构文档「queued accepted 也要同样结算」不变量);queued 未 accepted,
-    // 无运行副作用需要回滚。
-    const removed = deps.removeQueuedMessage(resolved.link.workerSessionId, params.queuedMessageId);
-    if (!removed) {
-      return {
-        ok: false,
-        errorCode: 'QUEUED_MESSAGE_NOT_FOUND',
-        message: `queued message ${params.queuedMessageId} was consumed before the cancel could apply`,
-      };
+    const assertCurrent = await deps.captureControlAuthority?.(params.callerLeadSessionId);
+    const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerRef);
+    if (!found.ok) {
+      return found.errorCode === 'NOT_FOUND'
+        ? {
+            ok: false,
+            errorCode: 'WORKER_NOT_FOUND',
+            message: `worker ${params.workerRef} not found`,
+          }
+        : { ok: false, errorCode: 'INTERNAL', message: found.message };
     }
+    // coordinator.remove 仍负责 discard settle；公共 service 只统一定位、授权与竞态分类。
+    const controlled = await queueControl.cancel({
+      beforeMutation: assertCurrent,
+      sessionId: found.worker.sessionId,
+      queuedMessageId: params.queuedMessageId,
+      authorize: (entry) =>
+        entry.origin?.kind === 'orca'
+          ? { ok: true }
+          : {
+              ok: false,
+              message: `queued message ${params.queuedMessageId} was not sent by the lead; user/scheduler queued messages cannot be modified`,
+            },
+    });
+    if (!controlled.ok) return mapWorkerQueueControlFailure(controlled);
     deps.log.info('orca lead cancelled queued worker message', {
-      workerId: resolved.link.workerId,
-      workerSessionId: resolved.link.workerSessionId,
+      workerId: found.worker.id,
+      workerSessionId: found.worker.sessionId,
       queuedMessageId: params.queuedMessageId,
     });
-    return { ok: true, workerId: resolved.link.workerId, queuedMessageId: params.queuedMessageId };
+    return { ok: true, workerId: found.worker.id, queuedMessageId: params.queuedMessageId };
   }
 
-  async function closeWorkerSessionBestEffort(sessionId: string, owner: string): Promise<void> {
+  async function mergeWorkerQueuedMessages(params: {
+    callerLeadSessionId: string;
+    workerRef: string;
+    queuedMessageIds: string[];
+    message: string;
+  }): Promise<MergeWorkerQueuedMessagesResult> {
+    const assertCurrent = await deps.captureControlAuthority?.(params.callerLeadSessionId);
+    const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerRef);
+    if (!found.ok) {
+      return found.errorCode === 'NOT_FOUND'
+        ? {
+            ok: false,
+            errorCode: 'WORKER_NOT_FOUND',
+            message: `worker ${params.workerRef} not found`,
+          }
+        : { ok: false, errorCode: 'INTERNAL', message: found.message };
+    }
+    if (
+      params.queuedMessageIds.length < 2 ||
+      new Set(params.queuedMessageIds).size !== params.queuedMessageIds.length ||
+      params.message.trim().length === 0
+    ) {
+      return {
+        ok: false,
+        errorCode: 'INVALID_ARGS',
+        message:
+          'queued_message_ids must contain at least two unique ids and message must not be empty',
+      };
+    }
+
+    // Ensure restoration completes before the synchronous coordinator-side
+    // re-read. The builder performs ownership validation inside the same
+    // no-await critical section as the one-shot queue replacement.
+    if (!(await deps.ensureWorkerQueueRestored(found.worker.sessionId))) {
+      return {
+        ok: false,
+        errorCode: 'INTERNAL',
+        message: 'worker queue could not be restored; no messages were changed',
+      };
+    }
+    await assertCurrent?.();
+    const merged = deps.mergeQueuedMessages(
+      found.worker.sessionId,
+      params.queuedMessageIds,
+      (targets) => {
+        if (
+          targets.some((item) => item.origin?.kind !== 'orca' || item.origin.senderLabel !== 'Lead')
+        )
+          return null;
+        // 合并后条目代表全部被合并消息: 其余条目的图片按队列顺序并入保留条目,
+        // 避免"只改文本"语义静默丢图。
+        const survivor = targets[0]!;
+        const mergedFiles = [
+          ...(survivor.files ?? []),
+          ...targets.slice(1).flatMap((item) => item.files ?? []),
+        ];
+        return rebuildQueuedOrcaLeadMessage(
+          mergedFiles.length > 0 ? { ...survivor, files: mergedFiles } : survivor,
+          params.message,
+          found.worker.id,
+        );
+      },
+    );
+    const latest = await listWorkerQueuedMessages({
+      callerLeadSessionId: params.callerLeadSessionId,
+      workerRef: params.workerRef,
+    });
+    const messages = latest.ok ? latest.messages : [];
+    if (!merged) {
+      return {
+        ok: false,
+        errorCode: 'QUEUE_CHANGED',
+        message:
+          'worker queue changed before the messages could be merged; inspect the latest queue and retry',
+        messages,
+      };
+    }
+    deps.log.info('orca lead merged queued worker messages', {
+      workerId: found.worker.id,
+      workerSessionId: found.worker.sessionId,
+      survivorQueuedMessageId: params.queuedMessageIds[0],
+      mergedCount: params.queuedMessageIds.length,
+    });
+    return {
+      ok: true,
+      workerId: found.worker.id,
+      queuedMessageId: params.queuedMessageIds[0]!,
+      messages,
+    };
+  }
+
+  function mapWorkerQueueControlFailure(
+    failure: {
+      ok: false;
+      errorCode: string;
+      message: string;
+    },
+    ownQueue = false,
+  ): WorkerQueuedMessageFailure {
+    return {
+      ok: false,
+      errorCode:
+        failure.errorCode === 'NOT_AUTHORIZED'
+          ? ownQueue ? 'NOT_ORCA_MESSAGE' : 'NOT_LEAD_MESSAGE'
+          : (failure.errorCode as WorkerQueuedMessageFailureCode),
+      message: failure.message,
+    };
+  }
+
+  async function closeWorkerSessionBestEffort(sessionId: string, owner: string, assertCurrent?: () => Promise<void>): Promise<void> {
+    let authorityRejected = false;
+    const beforeClose = assertCurrent ? async () => {
+      try { await assertCurrent(); }
+      catch (err) { authorityRejected = true; throw err; }
+    } : undefined;
     try {
-      await deps.closeWorkerSession(sessionId);
+      if (beforeClose) await deps.closeWorkerSession(sessionId, beforeClose);
+      else await deps.closeWorkerSession(sessionId);
     } catch (err) {
+      if (authorityRejected) throw err;
       deps.log.warn(`${owner}: close worker session failed`, {
         sessionId,
         err: err instanceof Error ? err.message : String(err),
@@ -978,92 +2170,325 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     }
   }
 
-  async function closeWorkerSessionIfIdleBestEffort(sessionId: string, owner: string): Promise<boolean> {
+  async function closeWorkerSessionIfIdleBestEffort(
+    sessionId: string,
+    owner: string,
+    sendLockHeld = false,
+  ): Promise<boolean> {
     try {
-      return await deps.closeWorkerSessionIfIdle(sessionId);
+      return await (sendLockHeld ? deps.closeWorkerSessionIfIdle(sessionId, true) : deps.closeWorkerSessionIfIdle(sessionId));
     } catch (err) {
       deps.log.warn(`${owner}: close idle worker session failed`, {
         sessionId,
         err: err instanceof Error ? err.message : String(err),
       });
-      return true;
+      return false;
     }
   }
 
   return {
     dispatchWorkerTask,
     sendToWorker,
+    interruptWorker,
     idleWorker,
     archiveWorker,
+    updateWorker,
     listWorkerQueuedMessages,
     updateWorkerQueuedMessage,
     cancelWorkerQueuedMessage,
+    mergeWorkerQueuedMessages,
+    steerWorkerQueuedMessage,
+    moveWorkerQueuedMessage,
     captureWorkerText(sessionId, text, opts) {
       const state = autoBridge.get(sessionId);
-      if (!state || text.length === 0) return;
-      state.capturedText = opts?.isFinal === true
-        ? text.slice(-MAX_CAPTURED_TEXT)
-        : (state.capturedText + text).slice(-MAX_CAPTURED_TEXT);
+      if (!state?.pending || text.length === 0) return;
+      state.capturedText =
+        opts?.isFinal === true
+          ? text.slice(-MAX_CAPTURED_TEXT)
+          : (state.capturedText + text).slice(-MAX_CAPTURED_TEXT);
     },
     clearAutoBridgeState(sessionId) {
       clearRuntimeState(sessionId);
     },
+    captureLocalWorkerReport(sessionId) {
+      const state = autoBridge.get(sessionId);
+      // Direct user turns have no Lead obligation. In particular, a late callback must
+      // not look up and settle a new assignment that did not exist at capture time.
+      if (!state) return async () => {};
+      const runtime = deps.getLiveSession(sessionId);
+      const generation = runtime?.getTurnGeneration?.();
+      if (state.productTerminal && (
+        state.productTerminal.runtime !== runtime
+        || state.productTerminal.turnGeneration !== generation
+      )) return async () => {};
+      // Capture before delivery: an already-started final report may be accepted
+      // after terminal capture or B's start and still belongs to A.
+      let release!: () => void;
+      const settled = new Promise<void>(resolve => { release = resolve; });
+      state.reportsInFlight.add(settled);
+      let finished = false;
+      return async (accepted, receipt) => {
+        if (finished) return;
+        finished = true;
+        if (accepted && receipt?.delivered) state.deliveredReports += 1;
+        else if (accepted && receipt?.queuedMessageId) state.queuedReportIds.add(receipt.queuedMessageId);
+        try {
+          await withWorkerTransition(state.workerId, async () => {
+            const provisional = provisionalDispatches.get(sessionId);
+            if (accepted && (autoBridge.get(sessionId) === state
+              || provisional?.previousPendingIdentity === state)) settlePendingReport(state);
+          });
+        } finally {
+          state.reportsInFlight.delete(settled);
+          release();
+        }
+      };
+    },
+    workerReportWithdrawalStanding(sessionId, queuedMessageId) {
+      const state = autoBridge.get(sessionId);
+      if (!state) return 'untracked';
+      // Same boundary as captureLocalWorkerReport: once the assignment's product turn ended,
+      // a later direct user turn is not that assignment.
+      const runtime = deps.getLiveSession(sessionId);
+      if (state.productTerminal && (
+        state.productTerminal.runtime !== runtime
+        || state.productTerminal.turnGeneration !== runtime?.getTurnGeneration?.()
+      )) return 'untracked';
+      if (!state.queuedReportIds.has(queuedMessageId)) return 'other-assignment';
+      return state.deliveredReports > 0 || state.queuedReportIds.size > 1 ? 'covered' : 'last';
+    },
+    forgetWorkerQueuedReports(sessionId, queuedMessageIds) {
+      const state = autoBridge.get(sessionId);
+      if (!state) return;
+      for (const id of queuedMessageIds) state.queuedReportIds.delete(id);
+    },
+    adoptWorkerQueuedReport(sessionId, queuedMessageId) {
+      autoBridge.get(sessionId)?.queuedReportIds.add(queuedMessageId);
+    },
+    async settleReportedWorker(capture, commit) {
+      const link = await deps.getWorkerLinkBySessionId(capture.sessionId);
+      if (!link) return;
+      await withWorkerTransition(link.workerId, async () => {
+        const ownsReport = !!capture.autoBridgeIdentity
+          && autoBridge.get(capture.sessionId) === capture.autoBridgeIdentity;
+        if (commit) {
+          // The remote commit persists pending inputs and status in one SQL update.
+          // All fallible reads happen first; clear memory only after that commit succeeds.
+          if (!await commit(ownsReport) || !ownsReport) return;
+        } else {
+          if (!ownsReport) return;
+          await deps.updateWorkerStatus(link.workerId, 'done');
+        }
+        clearRuntimeState(capture.sessionId);
+        deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+      });
+    },
+    hasPendingWorkerReports,
+    restoreWorkerPendingReport(sessionId, input) {
+      if (autoBridge.has(sessionId)) return;
+      const state = setPending(sessionId, input);
+      state.ready = true;
+      // 重启前可能已经写入 done/error，但回报仍未被 Lead 接收。
+      state.retryAfterRejectedDelivery = true;
+    },
+    captureWorkerTerminalTurn,
+    noteWorkerProductTerminal,
     async handleWorkerTurnStarted(sessionId) {
       const link = await deps.getWorkerLinkBySessionId(sessionId);
       if (!link) return;
 
-      const workers = await deps.listWorkersByLead(link.leadSessionId);
-      const worker = workers.find((item) => item.id === link.workerId);
-      if (!worker || worker.status === 'running') return;
+      // 新 turn 开始意味着旧 done 状态已被取代,悬置的补确认不再有意义(#3153)。
+      // 作废必须放在 transition 临界区内、running 提交之后:ack 的登记同样发生在
+      // 临界区内,若在临界区外提前 delete,旧 done 的 ack 可以插队在 delete 之后、
+      // running 提交之前重新登记(active-turn 守卫只看 live session,不看持久化
+      // status 是否已推进),脏 entry 会存活到新 turn 的 terminal 边界被消费,
+      // 绕过「done 保持到用户看到为止」的可见性语义直接 idle。
+      await withWorkerTransition(link.workerId, async () => {
+        const workers = await deps.listWorkersByLead(link.leadSessionId);
+        const worker = workers.find((item) => item.id === link.workerId);
+        if (!worker || worker.status === 'running') return;
 
-      await deps.updateWorkerStatus(link.workerId, 'running');
-      deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+        await deps.updateWorkerStatus(link.workerId, 'running');
+        deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+      });
+      // running 提交后旧 entry 已不可能被重新登记,此时清理才是可靠的。
+      deferredDoneAcknowledgements.delete(link.workerId);
     },
     async handleWorkerTerminalTurn(params) {
+      // The event adapter captures before it wakes queue drain or awaits the
+      // turn-start sequencer. Direct callers fall back to an immediate capture.
+      const capture =
+        params.capture?.sessionId === params.sessionId
+          ? params.capture
+          : captureWorkerTerminalTurn(params.sessionId);
+      noteWorkerProductTerminal(capture);
+      let manualInterruptOwnership = capture.manualInterrupt;
+      const autoBridgeAtEntry = capture.autoBridgeIdentity;
+      const ownsRuntime = () => !capture.runtime || (
+        deps.getLiveSession(params.sessionId) === capture.runtime
+        && capture.runtime.getTurnGeneration?.() === capture.turnGeneration
+      );
       const link = await deps.getWorkerLinkBySessionId(params.sessionId);
       if (!link) return;
 
-      const workers = await deps.listWorkersByLead(link.leadSessionId);
-      const worker = workers.find((item) => item.id === link.workerId);
-      if (!worker) {
-        clearRuntimeState(params.sessionId);
-        return;
-      }
+      let retryAcknowledgeDone = false;
+      let retryAuthority: (() => Promise<void>) | undefined;
+      let manualInterruptSuppressed = false;
+      for (;;) {
+        const workers = await deps.listWorkersByLead(link.leadSessionId);
+        const worker = workers.find((item) => item.id === link.workerId);
+        let staleTerminal = false;
+        let completionState: AutoBridgeState | undefined;
+        let provisionalWait:
+          | {
+              settlement: Promise<ProvisionalDispatchSettlement>;
+              capturedIdentity: 'previous' | 'current';
+            }
+          | undefined;
+        await withWorkerTransition(link.workerId, async () => {
+          const currentAutoBridge = autoBridge.get(params.sessionId) ?? null;
+          const currentManualInterrupt = deps.getManualInterrupt(params.sessionId);
+          const provisional = provisionalDispatches.get(params.sessionId);
+          if (provisional) {
+            if (
+              autoBridgeAtEntry === provisional.previousPendingIdentity &&
+              manualInterruptOwnership === provisional.previousManualInterrupt
+            ) {
+              provisionalWait = {
+                settlement: provisional.settlement,
+                capturedIdentity: 'previous',
+              };
+              return;
+            }
+            if (
+              autoBridgeAtEntry === provisional.currentPending &&
+              manualInterruptOwnership === currentManualInterrupt
+            ) {
+              provisionalWait = {
+                settlement: provisional.settlement,
+                capturedIdentity: 'current',
+              };
+              return;
+            }
+          }
 
-      const state = autoBridge.get(params.sessionId);
-      if (worker.status === 'done' || worker.status === 'error' || worker.status === 'idle') {
-        if (state?.retryAfterRejectedDelivery === true) {
-          await bridgeWorkerCompletion(params.sessionId, {
-            status: params.status,
-            finalText: params.finalText,
-          });
+          // A newer Lead assignment owns a different report identity; preserve that path.
+          if (currentAutoBridge !== autoBridgeAtEntry) {
+            staleTerminal = true;
+            return;
+          }
+          if (!ownsRuntime()) {
+            // Direct-user B can reuse A's report identity. Settle only A's obligation:
+            // its old terminal must not write B's status or clear B's Stop/provisional state.
+            const state = autoBridge.get(params.sessionId);
+            if (state?.pending && !manualInterruptOwnership) completionState = state;
+            else if (state) deletePendingReport(params.sessionId);
+            return;
+          }
+          if (currentManualInterrupt !== manualInterruptOwnership) {
+            staleTerminal = true;
+            return;
+          }
+          if (!worker) {
+            deferredDoneAcknowledgements.delete(link.workerId);
+            clearRuntimeState(params.sessionId);
+            return;
+          }
+
+          const state = autoBridge.get(params.sessionId);
+          if (worker.status === 'done' || worker.status === 'error' || worker.status === 'idle') {
+            if (state?.pending && (state.terminalObserved || state.retryAfterRejectedDelivery)) {
+              completionState = state;
+              return;
+            }
+            // (#3153) done 的回报 settle 会先于本 turn 终止落库,renderer「看到 done
+            // 即 ack」在 active-turn 守卫处被拒后没有重试闭环,worker 会永久停在 done
+            // (runtime/attention 悬置)。这里在该 turn 的 terminal 边界补一次收口;
+            // 没登记过被拒确认的 done 保持原样(维持「done 保持到用户看到为止」语义)。
+            retryAuthority = deferredDoneAcknowledgements.get(link.workerId)?.assertDeliveryCurrent;
+            retryAcknowledgeDone =
+              worker.status === 'done' && deferredDoneAcknowledgements.delete(link.workerId);
+            clearRuntimeState(params.sessionId);
+            return;
+          }
+
+          if (manualInterruptOwnership) {
+            await deps.markWorkerIdle(link.workerId);
+            deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+            clearRuntimeState(params.sessionId);
+            manualInterruptSuppressed = true;
+            return;
+          }
+
+          await deps.updateWorkerStatus(link.workerId, params.status);
+          if (state) state.terminalObserved = true;
+          deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+          if (state && !state.pending) clearRuntimeState(params.sessionId);
+          else completionState = state;
+        });
+
+        if (provisionalWait) {
+          // Commit/rollback needs the same transition lock. Wait only after releasing it, then
+          // re-read durable/runtime state before deciding whether this captured terminal owns it.
+          const settlement = await provisionalWait.settlement;
+          if (
+            provisionalWait.capturedIdentity === 'previous' &&
+            settlement.outcome === 'rolled-back'
+          ) {
+            manualInterruptOwnership = settlement.manualInterrupt;
+            continue;
+          }
+          if (
+            provisionalWait.capturedIdentity === 'current' &&
+            settlement.outcome === 'committed'
+          ) {
+            continue;
+          }
           return;
         }
-        clearRuntimeState(params.sessionId);
-        return;
+        if (staleTerminal) return;
+        if (completionState) {
+          await bridgeWorkerCompletion(params.sessionId, params, completionState);
+          // Manual acceptance can win while terminal waits outside the lock.
+          await withWorkerTransition(link.workerId, async () => {
+            if (completionState && autoBridge.get(params.sessionId) === completionState && !completionState.pending) {
+              // A new direct-user turn may also start while delivery waits outside the lock.
+              if (ownsRuntime()) clearRuntimeState(params.sessionId);
+              else deletePendingReport(params.sessionId);
+            }
+          });
+        }
+        break;
       }
 
-      const manualInterrupt = deps.getManualInterrupt(params.sessionId);
-      if (manualInterrupt) {
-        await deps.markWorkerIdle(link.workerId);
-        deps.broadcastOrcaWorkerChanged(link.leadSessionId);
-        clearRuntimeState(params.sessionId);
+      if (manualInterruptSuppressed && manualInterruptOwnership) {
         deps.log.info('worker manual interrupt: suppressed auto-bridge', {
           workerId: link.workerId,
           leadSessionId: link.leadSessionId,
           sessionId: params.sessionId,
-          reason: manualInterrupt.reason,
+          reason: manualInterruptOwnership.reason,
           status: params.status,
         });
-        return;
       }
-
-      await deps.updateWorkerStatus(link.workerId, params.status);
-      deps.broadcastOrcaWorkerChanged(link.leadSessionId);
-      await bridgeWorkerCompletion(params.sessionId, {
-        status: params.status,
-        finalText: params.finalText,
-      });
+      if (!retryAcknowledgeDone) return;
+      const acknowledged = await idleWorker(
+        {
+          callerLeadSessionId: link.leadSessionId,
+          workerId: link.workerId,
+          expectedStatus: 'done',
+        },
+        // 补收口重试被拒时不得重新登记,保证 fire-once(见 idleWorker 的 opts 注释)。
+        { deferredRetry: true, assertCurrent: retryAuthority },
+      ).catch((err): OrcaOkResult => ({ ok: false, errorCode: 'INTERNAL', message: err instanceof Error ? err.message : String(err) }));
+      if (!acknowledged.ok) {
+        deps.log.info('orca deferred done acknowledgement skipped', {
+          workerId: link.workerId,
+          leadSessionId: link.leadSessionId,
+          sessionId: params.sessionId,
+          errorCode: acknowledged.errorCode,
+          message: acknowledged.message,
+        });
+      }
     },
   };
 }

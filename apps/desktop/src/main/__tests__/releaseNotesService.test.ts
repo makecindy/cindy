@@ -234,6 +234,7 @@ describe('releaseNotesService', () => {
       const notes = await promise;
       expect(notes).toBeNull();
       expect(requestMock).toHaveBeenCalledTimes(1);
+      expect(req.abort).toHaveBeenCalledTimes(1);
     });
 
     it('全部重试耗尽后返回 null', async () => {

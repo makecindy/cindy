@@ -46,6 +46,15 @@ export function isShareableMessage(message: ShareableMessageLike): boolean {
   return true;
 }
 
+/**
+ * 工具产物行(AI 截图 / 出图 / 插件回锚媒体)是否可被勾选:含图片才可选。
+ * 这些图渲染在消息气泡之外的独立行,不单独开放勾选就永远进不了分享图。
+ * 视频 / 音频画不进静态图,只剩它们的行没有可分享的内容。
+ */
+export function isShareableToolMedia(items: readonly { kind: string }[]): boolean {
+  return items.some((item) => item.kind === 'image');
+}
+
 /** 选择模式所属会话;null = 未进入选择模式。 */
 let activeSessionId: string | null = null;
 const selected = new Set<string>();

@@ -16,22 +16,26 @@
  * @vitest-environment node
  */
 
-import { describe, expect, it } from 'vitest';
-import type { ScheduleTemplate } from '@cindy/maker-scheduler';
+import { describe, expect, it, vi } from 'vitest';
+import type { Schedule, ScheduleTemplate } from '@cindy/maker-scheduler';
 import type { ProviderView } from '@cindy/model-providers';
 
 import {
   PENDING_SESSION_ID,
+  scheduleToUserCreateInput,
   buildHookCommandForScriptFile,
   applyRunMode,
   buildScheduleInput,
+  webhookSourceFormFields,
   canSubmitSessionBinding,
   captureBinding,
   deriveRunMode,
   hasRealBinding,
   isExplicitScheduleModelUnavailable,
+  missingRequiredTemplateParamLabel,
   isFollowingSessionSelection,
   needsBoundSessionGenerationRouteResolution,
+  buildPreRunHook,
   resolveScheduleGenerationProviderId,
   resolveScheduleModelEfforts,
   resolveTemplateAgentFields,
@@ -41,11 +45,14 @@ import {
   usesBoundSessionModel,
 } from '../scheduleFormLogic';
 import type { ScheduleFormState } from '../scheduleFormLogic';
+import { formToProjectConfig } from '../projectAutomationConfig';
 import {
   cronExprToIntervalMs,
   intervalMsToCronExpr,
   resolveScheduleTimingPresentation,
+  resolveIntervalMinutesPresetValue,
   switchScheduleTimingMode,
+  SUPPORTED_INTERVAL_MINUTES,
 } from '../cronCodexPreset';
 
 const tapsvcProvider: ProviderView = {
@@ -66,6 +73,30 @@ const tapsvcProvider: ProviderView = {
     }],
   },
 };
+
+// An automation with both a script and a plugin (set by an Agent) opens on the
+// plugin; saving an unrelated edit must keep the script, while choosing the plugin instead of a
+// script must still drop it. Existing cases do not cover the plugin source.
+// Issue 8886 / unit: both desktop save paths must retain, edit and clear the cutoff.
+it('serializes deadline edits through normal and project automation forms', () => {
+  const expireAt = new Date(2027, 3, 5, 10, 30, 15).getTime();
+  const form = makeForm({ deadline: '2027-04-05T10:30', sourceExpireAt: expireAt });
+  expect(buildScheduleInput(form).expireAt).toBe(expireAt);
+  expect(formToProjectConfig(form, 'expiry').expireAt).toBe(expireAt);
+  expect(buildScheduleInput({ ...form, deadline: '' }).expireAt).toBeNull();
+  expect(formToProjectConfig({ ...form, deadline: '' }, 'expiry').expireAt).toBeUndefined();
+  expect(buildScheduleInput({ ...form, deadline: '2027-04-06T11:45' }).expireAt)
+    .toBe(new Date(2027, 3, 6, 11, 45).getTime());
+});
+
+describe('buildPreRunHook with a plugin source', () => {
+  const form = { preRunHookEnabled: true, preRunHookCommand: 'sh check.sh', preRunHookTimeoutSec: '' };
+  it('keeps the saved script only when the task opened with both', () => {
+    expect(buildPreRunHook({ ...form, preRunSource: 'plugin', preRunKeepScript: true })?.command).toBe('sh check.sh');
+    expect(buildPreRunHook({ ...form, preRunSource: 'plugin' })).toBeUndefined();
+    expect(buildPreRunHook({ ...form, preRunSource: 'script' })?.command).toBe('sh check.sh');
+  });
+});
 
 describe('resolveScheduleGenerationProviderId', () => {
   it('materializes the effective custom provider when the stored provider id is empty', () => {
@@ -294,7 +325,7 @@ describe('canSubmitSessionBinding', () => {
     })).toBe(false);
   });
 
-  it('allows script mode to clear an unavailable stale binding', () => {
+  it('allows script edits while the host handles unavailable lifecycle owners', () => {
     expect(canSubmitSessionBinding('script', 'bound', undefined)).toBe(true);
     expect(
       canSubmitSessionBinding('script', 'bound', { sessionId: 'session-1', state: 'deleted' }),
@@ -304,6 +335,59 @@ describe('canSubmitSessionBinding', () => {
       state: 'available',
       status: 'archived',
     })).toBe(true);
+  });
+});
+
+// Rule: docs/product-rules/schedule-webhook-trigger.md. Turning the switch off must clear the
+// trigger, and a caller that never touched it must not; JSON null is the only clearing form.
+describe('buildScheduleInput webhook trigger', () => {
+  it.each([
+    [{ webhookEnabled: true, webhookEvents: ' check_suite, pull_request.closed ,' }, { events: ['check_suite', 'pull_request.closed'] }],
+    [{ webhookEnabled: true, webhookEvents: '' }, { events: [] }],
+    [{ webhookEnabled: false, webhookEvents: 'issues' }, null],
+  ])('%j', (fields, expected) => {
+    expect(buildScheduleInput(makeForm(fields)).webhookTrigger).toEqual(expected);
+  });
+
+  it('omits the key when the form does not carry the field', () => {
+    expect(Object.prototype.hasOwnProperty.call(buildScheduleInput(makeForm()), 'webhookTrigger')).toBe(false);
+  });
+
+  // A sender this build does not know came from a newer version; submitting it as GitHub
+  // would switch the server's format and reject every delivery.
+  it.each([
+    [{ webhookPreset: 'github-app', webhookRepositories: 'Example/Project\nother/repo, example/project' }, { preset: 'github-app', repositories: ['example/project', 'other/repo'] }],
+    [{ webhookPreset: 'stripe', webhookSigned: false }, { preset: 'stripe', signed: false }],
+    [{ webhookPreset: 'linear', webhookSigned: true }, { preset: 'linear' }],
+    [{ webhookPreset: 'from-a-newer-version' }, undefined],
+    [{ webhookPreset: 'custom', webhookFormat: '{"version":1,"signature":null,"fields":{}}' }, { preset: 'custom', format: { version: 1, signature: null, fields: {} } }],
+    [{ webhookPreset: 'custom', webhookFormat: '{"version":1}' }, undefined],
+    // The timestamp must be signed, otherwise an old request with a fresh timestamp passes.
+    [
+      {
+        webhookPreset: 'custom',
+        webhookFormat: JSON.stringify({
+          version: 1,
+          signature: {
+            type: 'hmac', algorithm: 'sha256', header: 'x-sig', encoding: 'hex', payload: '{body}', secret: 'text',
+            timestamp: { source: { header: 'x-ts' }, unit: 's', toleranceSec: 300 },
+          },
+          fields: {},
+        }),
+      },
+      undefined,
+    ],
+  ])('sender %j', (fields, source) => {
+    const trigger = buildScheduleInput(makeForm({ webhookEnabled: true, ...fields })).webhookTrigger;
+    expect(trigger).toEqual({ events: [], ...(source ? { source } : {}) });
+  });
+
+  it('round-trips a saved sender through the form fields', () => {
+    const sources = [undefined, { preset: 'stripe', signed: false }, { preset: 'custom', format: { version: 1, signature: null, fields: {} } }] as const;
+    for (const source of sources) {
+      const form = makeForm({ webhookEnabled: true, ...webhookSourceFormFields(source) });
+      expect(buildScheduleInput(form).webhookTrigger).toEqual({ events: [], source: source ?? { preset: 'github' } });
+    }
   });
 });
 
@@ -318,6 +402,9 @@ function makeForm(overrides: Partial<ScheduleFormState> = {}): ScheduleFormState
     manual: false,
     agentKind: 'claude-code',
     model: '',
+    preRunSource: 'script',
+    preRunPluginId: '',
+    preRunPluginOnFailure: 'block',
     providerId: '',
     effort: '',
     fastMode: false,
@@ -362,9 +449,14 @@ describe('schedule timing mode conversion', () => {
   });
 
   it('converts only the minute/hour presets supported by the timing-mode switch', () => {
+    expect(SUPPORTED_INTERVAL_MINUTES).toEqual([1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30]);
     expect(cronExprToIntervalMs('*/10 * * * *')).toBe(10 * 60_000);
     expect(intervalMsToCronExpr(10 * 60_000)).toBe('*/10 * * * *');
     expect(intervalMsToCronExpr(2 * 60 * 60_000)).toBe('0 */2 * * *');
+    expect(cronExprToIntervalMs('*/28 * * * *')).toBeUndefined();
+    expect(cronExprToIntervalMs('*/59 * * * *')).toBeUndefined();
+    expect(intervalMsToCronExpr(28 * 60_000)).toBeUndefined();
+    expect(intervalMsToCronExpr(59 * 60_000)).toBeUndefined();
     expect(intervalMsToCronExpr(90_000)).toBeUndefined();
   });
 
@@ -388,6 +480,36 @@ describe('schedule timing mode conversion', () => {
       intervalMs: 2 * 60_000,
     });
   });
+
+  it('preserves legacy unsupported minute Crons when switching to interval mode', () => {
+    expect(switchScheduleTimingMode('*/28 * * * *', undefined, 'interval')).toEqual({
+      cronExpr: '*/28 * * * *',
+      intervalMs: 28 * 60_000,
+    });
+    expect(switchScheduleTimingMode('*/59 * * * *', undefined, 'interval')).toEqual({
+      cronExpr: '*/59 * * * *',
+      intervalMs: 59 * 60_000,
+    });
+  });
+
+  it('falls back to a supported minute preset after an exact legacy interval', () => {
+    expect(resolveIntervalMinutesPresetValue({ mode: 'intervalMinutes', intervalMinutes: 28 })).toBe(5);
+    expect(resolveIntervalMinutesPresetValue({ mode: 'intervalMinutes', intervalMinutes: 20 })).toBe(20);
+    expect(resolveIntervalMinutesPresetValue({ mode: 'interval', intervalMinutes: 20 })).toBe(5);
+  });
+
+  it.each([7, 28, 59])('switches legacy %i-minute intervals using the authoritative value', (minutes) => {
+    const result = switchScheduleTimingMode('*/5 * * * *', minutes * 60_000, 'cron');
+    expect(result).toEqual({ cronExpr: `*/${minutes} * * * *`, intervalMs: undefined });
+    expect(switchScheduleTimingMode(result.cronExpr, undefined, 'interval')).toEqual({
+      cronExpr: result.cronExpr, intervalMs: minutes * 60_000,
+    });
+    // Conversion compatibility must not reintroduce these values into new presets.
+    expect(intervalMsToCronExpr(minutes * 60_000)).toBeUndefined();
+    expect(resolveScheduleTimingPresentation('*/5 * * * *', minutes * 60_000)).toEqual({
+      kind: 'intervalExact',
+    });
+  });
 });
 
 function makeTemplate(overrides: Partial<ScheduleTemplate> = {}): ScheduleTemplate {
@@ -402,6 +524,20 @@ function makeTemplate(overrides: Partial<ScheduleTemplate> = {}): ScheduleTempla
 }
 
 describe('buildScheduleInput — heartbeat 分支', () => {
+  // Unit: the shared source is one selection across mode changes and persistence;
+  // switching back to follow must clear the saved location together with the model.
+  it('preserves the selected Agent location when changing run modes', () => {
+    const form = makeForm({ targetSessionId: 'bound-task', modelAgentKind: 'pi',
+      modelAgentDeviceId: 'shared:owner', model: 'remote-model', providerId: 'remote-provider' });
+    const remembered = captureBinding(form);
+    const fresh = applyRunMode(form, 'fresh', remembered);
+    const bound = applyRunMode(fresh, 'bound', remembered);
+    expect(buildScheduleInput(bound)).toMatchObject({ targetSessionId: 'bound-task',
+      modelAgentDeviceId: 'shared:owner', model: 'remote-model', providerId: 'remote-provider' });
+    // An incomplete explicit choice must reach validation whole, not become follow mode.
+    expect(buildScheduleInput({ ...bound, model: '' })).toHaveProperty('modelAgentDeviceId', 'shared:owner');
+    expect(buildScheduleInput({ ...fresh, modelAgentDeviceId: '' })).toHaveProperty('modelAgentDeviceId', '');
+  });
   it('model/effort 空值时恒带 key 且值为 undefined(跟随会话 → patch 清列)', () => {
     const input = buildScheduleInput(makeForm({ targetSessionId: 'sess-1' }));
     expect(hasKey(input, 'model')).toBe(true);
@@ -442,14 +578,39 @@ describe('buildScheduleInput — heartbeat 分支', () => {
 });
 
 describe('buildScheduleInput — 非 heartbeat 分支(行为锁定,不动 create 路径)', () => {
+  // Unit regression: explicit choices must survive repeated remote/local saves
+  // (model-selector-unified.md §3). Existing cases cover bound/script clearing,
+  // but an unbound schedule kept remote effort when the local choice had none.
+  // Minimal input: same Harness/model/provider, remote high -> local empty effort.
+  it.each([false, true])('clears old effort across repeated source changes before binding (persistent=%s)', (persistentSession) => {
+    let saved: Partial<ReturnType<typeof buildScheduleInput>> = {};
+    const choices: Array<Pick<ScheduleFormState, 'modelAgentDeviceId' | 'effort' | 'fastMode'>> = [
+      { modelAgentDeviceId: 'shared:owner', effort: 'xhigh', fastMode: 'ultrafast' },
+      { modelAgentDeviceId: '', effort: '', fastMode: false },
+      { modelAgentDeviceId: 'shared:owner', effort: 'low', fastMode: true },
+      { modelAgentDeviceId: '', effort: '', fastMode: false },
+    ];
+    for (const choice of choices) {
+      saved = { ...saved, ...buildScheduleInput(makeForm({
+        agentKind: 'codex', modelAgentKind: 'codex', model: 'same-model', providerId: 'same-provider',
+        persistentSession, ...choice,
+      })) };
+      expect(saved).toMatchObject({ ...choice, effort: choice.effort || undefined,
+        model: 'same-model', providerId: 'same-provider', persistentSession });
+    }
+  });
+
   it('空 model/effort 不带 key', () => {
     const input = buildScheduleInput(makeForm());
     expect(hasKey(input, 'model')).toBe(false);
     expect(hasKey(input, 'effort')).toBe(false);
   });
 
-  it('空 providerId 不带 key(= 原生默认来源,no-break);显式值才带', () => {
-    expect(hasKey(buildScheduleInput(makeForm()), 'providerId')).toBe(false);
+  it('空 providerId 恒带 key 且值为 undefined（编辑回原生默认来源 → patch 清列）', () => {
+    const unpinned = buildScheduleInput(makeForm());
+    expect(hasKey(unpinned, 'providerId')).toBe(true);
+    expect(unpinned.providerId).toBeUndefined();
+
     const pinned = buildScheduleInput(makeForm({ providerId: 'anthropic' }));
     expect(pinned.providerId).toBe('anthropic');
   });
@@ -609,8 +770,11 @@ describe('hasRealBinding / agentKind 映射', () => {
 
 describe('resolveTemplateAgentFields', () => {
   const defaults = {
-    getDefaultModel: (agentKind: ScheduleFormState['agentKind']) =>
-      agentKind === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6',
+    // 与真实实现同口径:默认路由限定在给定来源内并整对返回。
+    getDefaultRoute: (agentKind: ScheduleFormState['agentKind'], preferred?: string | null) => ({
+      model: agentKind === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6',
+      providerId: preferred ?? null,
+    }),
     getAgentPrefs: (agentKind: ScheduleFormState['agentKind']) =>
       agentKind === 'codex'
         ? { providerId: 'openai', effort: 'high' as const, fastMode: true }
@@ -632,11 +796,32 @@ describe('resolveTemplateAgentFields', () => {
 
     expect(fields).toEqual({
       agentKind: 'claude-code',
+      modelAgentDeviceId: '',
       model: 'claude-sonnet-4-6',
       providerId: 'anthropic',
       effort: 'medium',
       fastMode: false,
     });
+  });
+
+  it('跨 agent 用默认路由时整对应用,并限定在任务记忆 / 模板的来源内', () => {
+    const getDefaultRoute = vi.fn((_agent: string, preferred?: string | null) =>
+      preferred === 'xd'
+        ? { model: 'claude-sonnet-5', providerId: 'xd' }
+        : { model: 'claude-opus-5-5', providerId: 'anthropic' });
+    const withRoute = {
+      getDefaultRoute,
+      getAgentPrefs: () => ({ providerId: '', effort: '' as const, fastMode: false }),
+    };
+    const form = makeForm({ agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai' });
+    expect(resolveTemplateAgentFields(form, makeTemplate({ agentKind: 'claude-code' }), withRoute))
+      .toMatchObject({ model: 'claude-opus-5-5', providerId: 'anthropic' });
+    // 任务只记了来源(没记模型):默认模型必须由这个来源提供。
+    expect(resolveTemplateAgentFields(form, makeTemplate({ agentKind: 'claude-code' }), {
+      ...withRoute,
+      getAgentPrefs: () => ({ providerId: 'xd', effort: '' as const, fastMode: false }),
+    })).toMatchObject({ model: 'claude-sonnet-5', providerId: 'xd' });
+    expect(getDefaultRoute).toHaveBeenLastCalledWith('claude-code', 'xd');
   });
 
   it('模板显式给 model/provider/effort/fast 时优先使用模板值', () => {
@@ -654,6 +839,7 @@ describe('resolveTemplateAgentFields', () => {
 
     expect(fields).toEqual({
       agentKind: 'claude-code',
+      modelAgentDeviceId: '',
       model: 'claude-opus-4-8',
       providerId: '',
       effort: 'xhigh',
@@ -862,5 +1048,86 @@ describe('formToProjectConfig — preRunHook 序列化(项目自动化)', () => 
     } as never;
     const config = scheduleToProjectConfig(schedule, 'auto-x');
     expect(config.preRunHook).toEqual({ command: 'node scripts/check.mjs', timeoutMs: 30_000 });
+  });
+});
+
+
+describe('scheduleToUserCreateInput', () => {
+  it.each([undefined, 'pi'] as const)('copies the full model choice into an unbound task (override: %s)', (modelAgentKind) => {
+    const original = { id: 'project-job', name: 'Job', source: 'project', projectConfigId: 'project',
+      agentKind: 'codex', modelAgentKind, model: 'shared-model', providerId: 'selected', effort: 'high',
+      fastMode: true, targetSessionId: 'old-target', persistentSession: true,
+    } as Schedule;
+    const input = scheduleToUserCreateInput(original, { name: 'Copy' });
+    expect(input).toMatchObject({ name: 'Copy', agentKind: modelAgentKind ?? 'codex', modelAgentKind,
+      model: 'shared-model', providerId: 'selected', effort: 'high', fastMode: true, persistentSession: true });
+    expect(input).not.toHaveProperty('targetSessionId');
+    expect(input).not.toHaveProperty('projectConfigId');
+    expect(original.agentKind).toBe('codex');
+  });
+});
+
+
+describe('script lifecycle serialization', () => {
+  // Review regression (unit): a script-mode patch previously cleared only the
+  // location/Harness, reinterpreting a retained remote model as a local route.
+  it.each([
+    { modelAgentDeviceId: 'shared:owner', effort: 'xhigh' as const, fastMode: 'ultrafast' as const },
+    { modelAgentDeviceId: '', effort: 'low' as const, fastMode: true },
+    { modelAgentDeviceId: '', effort: '' as const, fastMode: false },
+  ])('keeps the complete selected route when switching to script mode (%j)', (choice) => {
+    const remote = { modelAgentKind: 'codex' as const, modelAgentDeviceId: 'shared:owner',
+      model: 'same-model', providerId: 'openai', effort: 'xhigh', fastMode: 'ultrafast' as const };
+    const selected = { ...remote, ...choice,
+      ...(!choice.modelAgentDeviceId ? { model: 'local-model', providerId: 'local-provider' } : {}) };
+    const form = makeForm({ ...selected, executionMode: 'script', scriptCommand: 'node run.mjs' });
+    const merged = { ...remote, ...buildScheduleInput(form) };
+    // An own undefined effort clears the previous value in a Desktop patch;
+    // false must likewise clear a previously enabled Fast/Ultrafast mode.
+    expect(merged).toMatchObject({ ...selected, effort: choice.effort || undefined });
+    expect(merged.executionMode).toBe('script');
+    expect(form).toMatchObject(selected);
+  });
+  it('preserves owner and installed gate while keeping script cwd', () => {
+    const input = buildScheduleInput(makeForm({ executionMode: 'script',
+      targetSessionId: 'owner', workingDir: '/watcher', scriptCommand: 'node run.mjs',
+      preRunHookEnabled: true, preRunHookCommand: 'node /watcher/gate.mjs',
+    }));
+    expect(input.targetSessionId).toBe('owner');
+    expect(input.workingDir).toBe('/watcher');
+    expect(input.preRunHook?.command).toBe('node /watcher/gate.mjs');
+    expect(buildScheduleInput(makeForm({ executionMode: 'script', targetSessionId: '__pending__' })).targetSessionId).toBeUndefined();
+  });
+});
+
+describe('missingRequiredTemplateParamLabel', () => {
+  const radar = {
+    parameters: [
+      { key: 'topic', label: '关注主题', type: 'string', required: true },
+    ],
+  } as ScheduleTemplate;
+  const competitors = {
+    parameters: [
+      { key: 'competitors', label: '竞品名单', type: 'string', required: true },
+    ],
+  } as ScheduleTemplate;
+
+  it('returns the visible label when a required parameter is empty', () => {
+    expect(missingRequiredTemplateParamLabel(radar, {})).toBe('关注主题');
+    expect(missingRequiredTemplateParamLabel(competitors, { competitors: '   ' })).toBeNull();
+  });
+
+  it('accepts a filled value or a non-empty default', () => {
+    expect(missingRequiredTemplateParamLabel(radar, { topic: 'AI Agent' })).toBeNull();
+    expect(missingRequiredTemplateParamLabel({
+      parameters: [
+        { key: 'topic', label: '关注主题', type: 'string', required: true, default: 'AI' },
+      ],
+    } as ScheduleTemplate, {})).toBeNull();
+    expect(missingRequiredTemplateParamLabel({
+      parameters: [
+        { key: 'suite', label: 'Suite', type: 'string', required: true, default: 'full' },
+      ],
+    } as ScheduleTemplate, { suite: '' })).toBeNull();
   });
 });

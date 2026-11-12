@@ -16,11 +16,11 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { normalizeWorkingDir } from '@/features/cc-agent/lib/projectGrouping';
+import { useProjectLabel } from '../hooks/useProjectLabel';
 import type { Schedule, SchedulerRuntimeSnapshot } from '@cindy/maker-scheduler';
 
 import { TaskListCell } from './TaskListCell';
 import { TaskListFilterPopover, type StatusFilter } from './TaskListFilterPopover';
-import type { ScheduleCostSummary } from '../hooks/useScheduleCostSummaries';
 
 const COLLAPSE_KEY = 'xdt:scheduler.collapsedProjects';
 const OTHER_GROUP_KEY = 'other';
@@ -30,8 +30,6 @@ interface Props {
   schedules: Schedule[];
   selectedId: string | null;
   unreadRunCounts: ReadonlyMap<string, number>;
-  costSummaries: ReadonlyMap<string, ScheduleCostSummary>;
-  costSummariesLoaded: boolean;
   onSelect: (s: Schedule) => void;
   /** 当前 status 筛选值；默认 'active'。 */
   statusFilter: StatusFilter;
@@ -69,8 +67,6 @@ export function TaskListPane({
   schedules,
   selectedId,
   unreadRunCounts,
-  costSummaries,
-  costSummariesLoaded,
   onSelect,
   statusFilter,
   onStatusFilterChange,
@@ -93,6 +89,7 @@ export function TaskListPane({
 }: Props) {
   const { t } = useTranslation();
   const [collapsed, toggleCollapsed] = useCollapsedProjects();
+  const projectLabel = useProjectLabel();
   const waitingScheduleIds = useMemo(
     () => new Set(runtimeSnapshot?.waitingSchedules.map((waiting) => waiting.scheduleId) ?? []),
     [runtimeSnapshot],
@@ -128,7 +125,7 @@ export function TaskListPane({
             ? t('newChat.folderPicker.dialogue')
             : key === OTHER_GROUP_KEY
               ? t('scheduler.list.section.otherGroup')
-              : lastPathSegment(items[0].workingDir ?? key),
+              : projectLabel(items[0].workingDir ?? key),
         schedules: sortWithinGroup(items),
         hasProjectSchedules: items.some((s) => s.source === 'project'),
       }))
@@ -139,7 +136,7 @@ export function TaskListPane({
         if (b.workingDir === DIALOGUE_GROUP_KEY) return -1;
         return 0;
       });
-  }, [schedules, t]);
+  }, [schedules, t, projectLabel]);
 
   return (
     <aside
@@ -236,21 +233,6 @@ export function TaskListPane({
                         schedule={s}
                         selected={s.id === selectedId}
                         unreadCount={unreadRunCounts.get(s.id) ?? 0}
-                        totalMoney={
-                          costSummariesLoaded
-                            ? costSummaries.get(s.id)?.totalMoney
-                            : undefined
-                        }
-                        totalEstimatedValueMoney={
-                          costSummariesLoaded
-                            ? costSummaries.get(s.id)?.totalEstimatedValueMoney
-                            : undefined
-                        }
-                        hasUnavailableCost={
-                          costSummariesLoaded
-                            ? costSummaries.get(s.id)?.hasUnavailableCost
-                            : undefined
-                        }
                         onSelect={onSelect}
                         onTogglePause={onTogglePause}
                         onDelete={s.source === 'project' ? undefined : onDelete}
@@ -347,6 +329,3 @@ function sortWithinGroup(items: Schedule[]): Schedule[] {
   });
 }
 
-function lastPathSegment(input: string): string {
-  return input.split(/[\\/]/).filter(Boolean).pop() ?? input;
-}

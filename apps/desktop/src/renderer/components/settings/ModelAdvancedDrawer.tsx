@@ -1,0 +1,1331 @@
+import { modelImageInputDefault } from '../../../shared/modelImageInputOverride';
+import { displayPricingComponent, isDisplayPricingTableRedundant } from '@/lib/displayPricingFormat';
+import { DisplayPricingDetails, DisplayPricingQuote } from '@/components/DisplayPricingDetails';
+import { Button } from '@/components/ui/button';
+import { localizedModelDescription } from '@/lib/modelDescriptions';
+import { providerDisplayName } from '@/lib/providerDisplayName';
+import { localizedModelName, localizedBrandName } from '@/lib/modelDisplayNames';
+/**
+ * ModelAdvancedDrawer —— 单模型配置面板。宽屏配置与事实并列，窄屏按同一顺序排成一列。
+ *
+ * 为什么行尾只有这一个入口:它替代了原先的「⋯」菜单。那个菜单里三项(自定义报价 /
+ * 停用此模型 / 删除本机模型)全部搬进本抽屉 —— 一项能力都没减,但用户不必先猜「配置藏在
+ * 哪个菜单里」。
+ *
+ * 分段职责:
+ *   - 引擎 / 推理 / 上下文控制与只读事实同时可见;窗口规格紧随上下文输入。
+ *   - 默认推理强度 / 上下文上限 / 引擎支持 = **可配置项**,各自写入不同的既有存储
+ *     (providerModelMemory / model-context-limit-store / modelVisibilityPrefs)。
+ *   - 底部动作区 = 准入轴(停用)与本机文件(删除),与上面的显示轴严格分开。
+ *
+ * 「显示」与「停用」是两根正交的轴,语义见 UnifiedModelList 头注:开关管陈列,
+ * 停用管准入。抽屉把它们放在视觉上分离的位置(引擎支持 vs 底部动作区),不混成一个控件。
+ */
+
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
+import { AlertTriangle, Check, CircleHelp, Minus, Trash2, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+
+import { SegmentedControl } from '@/components/ui/segmented-control';
+import { cn } from '@/lib/utils';
+import { providerViewToCustomProviderConfig, updateCustomProvider } from '@/lib/customProviders';
+import { Select, type SelectOption } from '@/components/ui/select';
+import { MODEL_HARNESS_COLOR } from '@/lib/modelHarnessPresentation';
+import { ModelCompatibilityNotice } from '@/components/new-chat/ModelCompatibilityNotice';
+import { MODEL_PROTOCOL_LABEL, MODEL_PROTOCOL_OPTIONS } from '@/lib/modelProtocolLabel';
+import { toast } from '@/lib/toast';
+import { Tip } from '@/components/ui/tooltip';
+import { Switch } from '@/components/ui/switch';
+import { ClaudeMark } from '@/components/icons/ClaudeMark';
+import { CodexMark } from '@/components/icons/CodexMark';
+import { PiMark } from '@/components/icons/PiMark';
+import { useModelContextLimit } from '@/hooks/useModelContextLimit';
+import { useModelImageInputOverride } from '@/hooks/useModelImageInputOverride';
+import { parseContextTokenInput } from '../../../shared/modelContextLimit';
+import { ModelCompactionSettings } from './ModelCompactionSettings';
+import { modelPriceDetailRows, type ModelPricePresentation } from '@/lib/modelPriceFormat';
+import {
+  isModelEnabled,
+  setModelVisibility, setModelVisibilities,
+  isModelVisibilityCustomized,
+  resetModelVisibilities,
+  useModelVisibilityVersion,
+} from '@/state/modelVisibilityPrefs';
+import {
+  clearProviderModelEffort, editProviderModelMemoryBatch,
+  getProviderModelEffort,
+  setProviderModelEffort,
+  useProviderModelMemoryVersion,
+} from '@/state/providerModelMemory';
+import { EFFORT_TIER_COLORS } from '@/themes/effortTierColors';
+
+import {
+  classifyVisionCapability,
+  providerWireProtocolForApi,
+  providerBaseUrlForApi,
+  clampEffortToSupported,
+  EFFORT_VALUES,
+  isAgentSelectableModel,
+  isOrganizationManagedProvider,
+  modelProtocolComparison,
+  pickRecommendedAgent,
+} from '@cindy/model-providers';
+import type {
+  AgentKind,
+  CatalogModel,
+  Effort,
+  PiModelApi,
+  ProviderView,
+} from '@cindy/model-providers';
+
+import { isLocalRuntimeBetaProviderId, isManagedSidecarProviderId, MANAGED_OLLAMA_PROVIDER_ID } from '../../../shared/localModelRuntime';
+import { MANAGED_LLAMACPP_PROVIDER_ID, supportsLlamaCppMillionContext, llamaCppMaxContextSize } from '../../../shared/llamaCpp';
+import { modelBrand } from './modelManagementPresentation';
+import { ModelPriceOverrideDialog } from './ModelPriceOverrideDialog';
+import type { UnionModelRow } from './UnifiedModelList';
+
+const AGENT_LABEL: Record<AgentKind, string> = {
+  'claude-code': 'Claude Code',
+  codex: 'Codex',
+  pi: 'Pi',
+};
+
+const AGENT_MARK: Record<AgentKind, (size: number) => ReactNode> = {
+  'claude-code': (size) => <ClaudeMark size={size} />,
+  codex: (size) => <CodexMark size={size} />,
+  pi: (size) => <PiMark size={size} />,
+};
+
+/** 抽屉里的档位顺序 = 目录枚举顺序（弱到强）。ultra 只在模型真的提供时出现。 */
+const EFFORT_ORDER = EFFORT_VALUES;
+
+/**
+ * K / M 缩写在真实数据里是**歧义的**:contextWindow 同时存在 1,000,000、1,050,000、
+ * 1,048,576 三种写法,都会被印成「1M」。所以详情处一律给带千分位的准确 token 数,
+ * 括注里才给约数 —— 列表那种空间紧的位置继续用缩写。
+ */
+function formatExactTokens(tokens: number, locale: string): string {
+  return tokens.toLocaleString(locale);
+}
+
+function approxTokens(tokens: number): string {
+  if (tokens >= 1_000_000) {
+    const m = tokens / 1_000_000;
+    return `${Number.isInteger(m) ? m : Number(m.toFixed(2))}M`;
+  }
+  if (tokens >= 1000) return `${Math.round(tokens / 1000)}K`;
+  return String(tokens);
+}
+
+/** Select only shows a value through a matching option. A current state that is not one of
+ *  the choices (varies by engine, undeclared, an unlisted protocol) stays visible as one
+ *  disabled row, like other settings that keep an unavailable saved value. */
+function withCurrentOption(value: string | null | undefined, options: SelectOption[], currentLabel: string) {
+  if (value && options.some((option) => option.value === value)) return { value, options };
+  const current = value || '__current';
+  return { value: current, options: [{ value: current, label: currentLabel, disabled: true }, ...options] };
+}
+
+/** 定义列表的一行:左标签右值 + 细分隔线。 */
+function Row({
+  label,
+  children,
+  muted,
+}: {
+  label: string;
+  children: React.ReactNode;
+  muted?: boolean;
+}) {
+  return (
+    <div className="flex min-h-[34px] items-center justify-between gap-4 border-b border-[var(--settings-theme-card-border)] py-2 last:border-b-0">
+      <span className="shrink-0 text-13 text-[var(--text-secondary)]">{label}</span>
+      <span
+        className={cn(
+          'min-w-0 break-words text-right text-13',
+          muted ? 'text-[var(--text-tertiary)]' : 'text-[var(--text-primary)]',
+        )}
+      >
+        {children}
+      </span>
+    </div>
+  );
+}
+
+function CapabilityValue({ state, label }: { state: boolean | undefined; label: string }) {
+  const Icon = state === true ? Check : state === false ? Minus : CircleHelp;
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[var(--text-secondary)]">
+      <Icon size={13} aria-hidden />
+      {label}
+    </span>
+  );
+}
+
+function Section({
+  title,
+  hint,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="pt-5 first:pt-1">
+      <div className="flex items-center gap-1.5">
+        <h4 className="text-12 font-medium text-[var(--text-secondary)]">{title}</h4>
+        {hint && (
+          <Tip text={hint} contentClassName="z-[10002]">
+            <button
+              type="button"
+              aria-label={hint}
+              className="rounded-full p-1 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+            >
+              <CircleHelp size={12} aria-hidden />
+            </button>
+          </Tip>
+        )}
+      </div>
+      <div className="mt-1.5">{children}</div>
+    </section>
+  );
+}
+
+interface Props {
+  selectedMemberId?: string;
+  onSelectMember?: (row: UnionModelRow) => void;
+  provider: ProviderView;
+  row: UnionModelRow | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** 该行的报价展示（与列表同一份派生结果，避免抽屉自己再算一遍算出别的）。 */
+  pricePresentationOf: (agent: AgentKind, model: CatalogModel) => ModelPricePresentation | null;
+  /** 准入轴:停用此模型（main 侧 model-disable-store）。 */
+  onDisable: (row: UnionModelRow) => void;
+  /** 本机 Ollama 专有:删除磁盘上的模型文件。 */
+  onDeleteLocal?: (row: UnionModelRow) => void;
+  /** 该行当前是否已被停用（用于底部动作区的方向）。 */
+  disabled: boolean;
+  /** 付费锁定行不给写入入口（与列表行同一判定）。 */
+  paymentRequired: boolean;
+}
+
+export function ModelAdvancedDrawer({
+  provider,
+  row: groupRow,
+  selectedMemberId,
+  onSelectMember,
+  open,
+  onOpenChange,
+  pricePresentationOf,
+  onDisable,
+  onDeleteLocal,
+  disabled,
+  paymentRequired,
+}: Props) {
+  const row = groupRow?.aliasRows?.find((member) => member.id === selectedMemberId)
+    ?? groupRow?.aliasRows?.find((member) => member.id === groupRow.id) ?? groupRow;
+  const memberRows = groupRow?.aliasRows ?? (row ? [row] : []);
+  const memberTargets = memberRows.flatMap((member) => member.avail.flatMap((agent) => {
+    const model = member.byAgent[agent];
+    return model ? [{ agent, modelId: model.id, model }] : [];
+  }));
+  const { t, i18n } = useTranslation();
+  const selectionAvailable = provider.connected && !provider.suspended;
+  const locale = i18n.resolvedLanguage ?? i18n.language ?? 'en';
+  const pricePendingRef = useRef(false);
+  const [protocolSaving, setProtocolSaving] = useState(false);
+  const [imageCapabilitySaving, setImageCapabilitySaving] = useState(false);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  // 开关/档位写的是 renderer 本地存储，订阅 version 才能在写后重渲染。
+  useModelVisibilityVersion();
+  useProviderModelMemoryVersion();
+
+  /**
+   * 主展示引擎:该模型可用引擎里的第一个。只读事实(上下文、报价、能力)按它取 ——
+   * 同一模型跨引擎的元数据可能不同,抽屉顶部标注了这一点,逐引擎差异在「引擎支持」段展开。
+   */
+  const chatAgents = useMemo(() => (row?.avail ?? []).filter((agent) => {
+    const model = row?.byAgent[agent];
+    return model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' });
+  }), [row, provider.source]);
+  const priceRow = useMemo<UnionModelRow | null>(() => row && chatAgents.length ? {
+    ...row, avail: chatAgents,
+    byAgent: Object.fromEntries(chatAgents.map(agent => [agent, row.byAgent[agent]])),
+  } : null, [row, chatAgents]);
+  const primaryCandidates = chatAgents?.length ? chatAgents : row?.avail;
+  const primaryAgent =
+    primaryCandidates?.find((agent) =>
+      provider.id === 'openai'
+        ? agent === 'codex'
+        : provider.id === 'anthropic'
+          ? agent === 'claude-code'
+          : agent === 'pi',
+    ) ?? primaryCandidates?.[0] ?? null;
+  const primaryModel = row && primaryAgent ? (row.byAgent[primaryAgent] ?? null) : null;
+  const [localModelRepo, setLocalModelRepo] = useState<{ id: string; repo: string } | null>(null);
+  const [localConfigurationBlocked, setLocalConfigurationBlocked] = useState(false);
+  useEffect(() => {
+    let active = true;
+    setLocalModelRepo(null);
+    setLocalConfigurationBlocked(false);
+    if (open && provider.id === MANAGED_LLAMACPP_PROVIDER_ID && primaryModel) {
+      const modelId = primaryModel.id;
+      void window.electronAPI.maker.llamaCppStatus().then((snapshot) => {
+        if (active) setLocalConfigurationBlocked(snapshot.canConfigure === false);
+        if (active) setLocalModelRepo(snapshot.models.find((model) => model.id === modelId) ?? null);
+      }).catch(() => {});
+    }
+    return () => { active = false; };
+  }, [open, provider.id, primaryModel?.id]);
+  const supportsMillionContext = provider.id === MANAGED_LLAMACPP_PROVIDER_ID &&
+    !!primaryModel && localModelRepo?.id === primaryModel.id && supportsLlamaCppMillionContext(localModelRepo);
+  const maximumContext = provider.id === MANAGED_LLAMACPP_PROVIDER_ID
+    ? llamaCppMaxContextSize(localModelRepo?.id === primaryModel?.id && localModelRepo ? localModelRepo : { repo: '' })
+    : 100_000_000;
+
+  const contextAgent = primaryAgent && chatAgents.includes(primaryAgent) ? primaryAgent : null;
+  const contextModel = contextAgent ? row?.byAgent[contextAgent] : null;
+
+  const contextTarget = useMemo(
+    () =>
+      contextAgent && contextModel
+        ? {
+            providerId: provider.id,
+            agent: contextAgent,
+            modelId: contextModel.id,
+            relatedTargets: chatAgents
+              .filter((a) => a !== contextAgent)
+              .flatMap((agent) => {
+                const model = row?.byAgent[agent];
+                return model ? [{ providerId: provider.id, agent, modelId: model.id }] : [];
+              }),
+          }
+        : null,
+    [contextAgent, contextModel, provider.id, row, chatAgents],
+  );
+  const ctx = useModelContextLimit(open ? contextTarget : null);
+  const imageInputOverride = useModelImageInputOverride(open ? contextTarget : null);
+  const canEditProtocol = provider.source === 'user' && !provider.auth?.native && !isManagedSidecarProviderId(provider.id);
+  const imageAgents = canEditProtocol
+    ? provider.agents.filter(agent => provider.routing?.[agent]?.imageApi === 'openai-images')
+    : [];
+  const imageAgent = imageAgents.length === 1 ? imageAgents[0] : undefined;
+  const imageModel = imageAgent ? row?.byAgent[imageAgent] : undefined;
+  const imageCapability = imageModel?.userModelConfig?.mode === 'image_generation'
+    ? imageModel.userModelConfig.modalities?.input.includes('image') ? 'edit' : 'generate'
+    : 'default';
+  const videoAgents = canEditProtocol
+    ? provider.agents.filter(agent => provider.routing?.[agent]?.videoApi !== undefined) : [];
+  const videoAgent = videoAgents.length === 1 ? videoAgents[0] : undefined;
+  const videoModel = videoAgent ? row?.byAgent[videoAgent] : undefined;
+  const videoCapability = videoModel?.userModelConfig?.mode === 'video_generation'
+    ? videoModel.userModelConfig.modalities?.input.includes('image') ? 'edit' : 'generate' : 'default';
+  const setImageCapability = async (value: string, kind: 'image' | 'video' = 'image') => {
+    const agent = kind === 'image' ? imageAgent : videoAgent;
+    const sourceModel = kind === 'image' ? imageModel : videoModel;
+    if (imageCapabilitySaving || !agent || !sourceModel || !['default', 'generate', 'edit'].includes(value)) return;
+    const config = providerViewToCustomProviderConfig(provider);
+    const model = config.runtimes[agent]?.models.find(item => item.id === sourceModel.id);
+    if (!model) return;
+    if (value === 'default') {
+      delete model.mode;
+      delete model.modalities;
+    } else {
+      model.mode = kind === 'image' ? 'image_generation' : 'video_generation';
+      model.modalities = { input: value === 'edit' ? ['text', 'image'] : ['text'], output: [kind] };
+    }
+    setImageCapabilitySaving(true);
+    try {
+      const result = await updateCustomProvider(config, {}, { source: 'manual-settings' });
+      if (!result.ok) toast.error(t('settings.providers.custom.toast.saveFailed'));
+    } catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
+    finally { setImageCapabilitySaving(false); }
+  };
+  const setModelApi = async (agent: AgentKind, api: string) => {
+    if (protocolSaving || !canEditProtocol || !row?.byAgent[agent]) return;
+    const config = providerViewToCustomProviderConfig(provider);
+    const runtime = config.runtimes[agent];
+    const model = runtime?.models.find(m => m.id === row.byAgent[agent]!.id);
+    if (!runtime || !model) return;
+    const choice = row.byAgent[agent]?.availableInterfaces?.find(item => item.profileId === api);
+    if (api === 'auto' || choice) {
+      model.interfaceId = api;
+      delete model.api;
+      delete model.piApi;
+      delete model.route;
+    } else {
+      delete model.interfaceId;
+      model.api = api as PiModelApi;
+      if (agent === 'pi') model.piApi = api as PiModelApi;
+      const wire = providerWireProtocolForApi(api);
+      if (!wire) return;
+      // Pi gets the selected API from api/piApi. A same-endpoint generated route
+      // would look explicit after refresh and block a later Messages /v1 fix.
+      // Keep existing routes and endpoints that change for the selected API.
+      const inheritPiEndpoint = agent === 'pi' && !model.route && !runtime.requestPath &&
+        (runtime.wireProtocol === 'openai-chat' || runtime.wireProtocol === 'openai-responses' ||
+          runtime.wireProtocol === 'anthropic-messages' || runtime.wireProtocol === 'google-generative-ai') &&
+        (api === 'anthropic-messages' ||
+          ((api === 'openai-completions' || api === 'openai-responses' || api === 'google-generative-ai') &&
+            providerBaseUrlForApi(runtime.baseUrl, api) === runtime.baseUrl));
+      if (!inheritPiEndpoint) {
+        model.route = {
+          baseUrl: providerBaseUrlForApi(model.route?.baseUrl ?? runtime.baseUrl, api),
+          wireProtocol: wire,
+        };
+      }
+    }
+    setProtocolSaving(true);
+    try {
+      const result = await updateCustomProvider(config, {}, { source: 'manual-settings' });
+      if (!result.ok) toast.error(t('settings.providers.custom.toast.saveFailed'));
+    }
+    catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
+    finally { setProtocolSaving(false); }
+  };
+
+
+  const [ctxDraft, setCtxDraft] = useState('');
+  const ctxDirtyRef = useRef(false);
+  const defaultWindow =
+    contextAgent === 'codex' && ctx.codexContext
+      ? ctx.codexContext.contextWindow
+      : (contextModel?.contextWindow ?? 0);
+  // The editor guard is not a native request-capacity limit. Keep small/local
+  // model windows selectable and never derive this floor from a saved override.
+  // Local runtimes own their loaded window; their catalog maximum cannot set an editor floor.
+  const modelWindows = chatAgents
+    .map((agent) => row?.byAgent[agent]?.contextWindow)
+    .filter(
+      (window): window is number =>
+        typeof window === 'number' && Number.isFinite(window) && window > 0,
+    );
+  const minimumContextK = isLocalRuntimeBetaProviderId(provider.id)
+    ? 1
+    : Math.max(1, Math.floor(Math.min(100_000, ...modelWindows) / 1000));
+  // A working default (including a heuristic fallback) is not a declared capacity.
+  // Codex's native maximum may already contain the user's override, so it
+  // cannot establish the provider's declared capacity.
+  const routeWindow = supportsMillionContext ? 1_000_000
+    : (contextModel ?? primaryModel)?.contextWindowMax
+      ?? (primaryModel?.contextWindowVerified === true ? primaryModel.contextWindow : 0);
+  // Without a declared capacity, compare working defaults across engines only.
+  const engineWindowReference = routeWindow > 0 ? routeWindow : (primaryModel?.contextWindow ?? 0);
+  const effectiveLimit = ctx.limit ?? (defaultWindow > 0 ? defaultWindow : null);
+  useEffect(() => {
+    ctxDirtyRef.current = false;
+    setCtxDraft('');
+  }, [open, primaryAgent, primaryModel?.id, provider.id]);
+  useEffect(() => {
+    if (ctx.loading || ctxDirtyRef.current) return;
+    setCtxDraft(effectiveLimit === null ? '' : String(effectiveLimit));
+  }, [ctx.loading, effectiveLimit, open]);
+  const parsedTokens = parseContextTokenInput(ctxDraft);
+  const ctxInvalid =
+    ctxDirtyRef.current &&
+    ctxDraft.trim() !== '' &&
+    (parsedTokens === null ||
+      parsedTokens < minimumContextK * 1000 ||
+      parsedTokens > maximumContext);
+  const commitCtxDraft = useCallback(() => {
+    if (!ctxDirtyRef.current || ctxInvalid || ctx.loading || localConfigurationBlocked) return;
+    ctxDirtyRef.current = false;
+    void ctx.setLimit(ctxDraft.trim() === '' ? null : parsedTokens);
+  }, [ctx, ctxDraft, ctxInvalid, parsedTokens, localConfigurationBlocked]);
+  const resetCtx = useCallback(() => {
+    if (localConfigurationBlocked) return;
+    ctxDirtyRef.current = false;
+    setCtxDraft(defaultWindow > 0 ? String(defaultWindow) : '');
+    void ctx.reset();
+  }, [ctx, defaultWindow, localConfigurationBlocked]);
+
+  if (!row || !primaryAgent || !primaryModel) {
+    return (
+      <Dialog.Root open={false} onOpenChange={onOpenChange}>
+        <Dialog.Portal />
+      </Dialog.Root>
+    );
+  }
+
+  const capabilityModel = primaryModel.mode === 'video_generation' ? videoModel ?? primaryModel : imageModel ?? videoModel ?? primaryModel;
+  const vision = imageModel?.modalities
+    ? imageModel.modalities.input.includes('image') ? 'vision' : 'no-vision'
+    : primaryModel.supportsImageInput !== undefined
+      ? primaryModel.supportsImageInput
+        ? 'vision'
+        : 'no-vision'
+      : primaryModel.modalities
+        ? primaryModel.modalities.input.includes('image')
+          ? 'vision'
+          : 'no-vision'
+        : classifyVisionCapability(primaryModel.id);
+  const imageInputDefault = modelImageInputDefault(primaryModel, row.id);
+  // An undeclared catalog has no default option: both choices remain explicit overrides.
+  // A failed read retains the chat route's effective fields, independently of media routes.
+  const imageInputValue = imageInputOverride.value ?? (imageInputOverride.error || imageInputOverride.mixed
+    ? modelImageInputDefault({ ...primaryModel, imageInputDefault: undefined }, row.id)
+    : imageInputDefault);
+  const imageInputTargets = contextTarget ? [contextTarget, ...contextTarget.relatedTargets] : [];
+  const imageInputTargetDefaults = imageInputTargets.map(({ agent }) => {
+    const candidate = row.byAgent[agent];
+    return candidate ? modelImageInputDefault(candidate, row.id) : null;
+  });
+  const imageDefaultsMatch = (value: boolean) => imageInputTargetDefaults.length > 0 &&
+    imageInputTargetDefaults.every(defaultValue => defaultValue === value);
+  // Different override provenance can still resolve to the same effective capability.
+  const imageInputMixed = imageInputOverride.mixed
+    ? new Set(imageInputTargets.map(({ agent }) => {
+        const candidate = row.byAgent[agent];
+        return candidate ? modelImageInputDefault({ ...candidate, imageInputDefault: undefined }, row.id) : null;
+      })).size > 1
+    : !imageInputOverride.error && imageInputOverride.value === null && new Set(imageInputTargetDefaults).size > 1;
+
+  const conversational = isAgentSelectableModel(primaryModel, {
+    userProvider: provider.source === 'user',
+  });
+  // Same policy as the unified model selector. Visibility is a user preference,
+  // so hiding an engine does not change which compatible engine we recommend.
+  const recommendedAgent =
+    conversational && !disabled && !paymentRequired
+      ? pickRecommendedAgent(
+          provider,
+          row.id,
+          row.avail.filter((agent) => {
+            const model = row.byAgent[agent];
+            return (
+              model &&
+              isAgentSelectableModel(model, { userProvider: provider.source === 'user' }) &&
+              !model.disabled &&
+              model.status !== 'retired' &&
+              model.availability !== 'requires_payment'
+            );
+          }),
+        )
+      : null;
+  const visibilityTargets = row.avail.flatMap((agent) => {
+    const model = row.byAgent[agent];
+    return model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' }) ? [{ agent, modelId: model.id }] : [];
+  });
+  if (groupRow?.aliasRows) visibilityTargets.splice(0, visibilityTargets.length, ...memberTargets.map(({ agent, modelId }) => ({ agent, modelId })));
+  const visibilityCustomized = visibilityTargets.some(({ agent, modelId }) =>
+    isModelVisibilityCustomized(agent, provider.id, modelId),
+  );
+  const description = localizedModelDescription(primaryModel, t);
+  const protocols = modelProtocolComparison(provider, row.byAgent);
+  const protocolLabel = (api: PiModelApi | null) =>
+    api ? MODEL_PROTOCOL_LABEL[api] ?? null : t('settings.providers.models.advanced.undeclared');
+  const displayedLimit = ctxDirtyRef.current
+    ? ctxDraft.trim() === ''
+      ? defaultWindow
+      : parsedTokens
+    : effectiveLimit;
+  const editRouteWindow = routeWindow;
+  const overRouteWindow =
+    editRouteWindow > 0 &&
+    displayedLimit !== null &&
+    Number.isFinite(displayedLimit) &&
+    displayedLimit > editRouteWindow;
+
+  const efforts = EFFORT_ORDER.filter((effort) =>
+    chatAgents.some((a) => row.byAgent[a]?.efforts.includes(effort)),
+  );
+  const rememberedEffort = (agent: AgentKind, modelId: string) => {
+    const ids = groupRow?.aliasRows
+      ? memberTargets.filter((target) => target.agent === agent).map((target) => target.modelId)
+      : [modelId];
+    const values = [...new Set(ids.map((id) => getProviderModelEffort(agent, provider.id, id))
+      .filter((value) => value !== undefined))];
+    return values.length === 1 ? values[0] : undefined;
+  };
+  const commonEfforts = efforts.filter((intent) => chatAgents.every((agent) => {
+    const model = row.byAgent[agent];
+    return !model?.efforts.length ||
+      clampEffortToSupported(intent, model.efforts) ===
+        (rememberedEffort(agent, model.id) ?? model.defaultEffort);
+  }));
+  const preferredEffort = conversational
+    ? rememberedEffort(primaryAgent, primaryModel.id) ?? primaryModel.defaultEffort
+    : null;
+  const effortMixed = efforts.length > 0 && commonEfforts.length === 0;
+  const currentEffort = preferredEffort ?? commonEfforts[0] ?? null;
+  const shownEfforts = EFFORT_ORDER.filter((effort) =>
+    chatAgents.some((agent) => {
+      const model = row.byAgent[agent];
+      return model?.efforts.includes(effort) || model?.displayEfforts?.includes(effort);
+    }),
+  );
+  const ultrafastSupport = chatAgents.includes('codex')
+    ? row.byAgent.codex?.supportsUltrafastMode
+    : false;
+  /**
+   * 推理强度的存储是 per (agent, provider, model) 的。这里按显示轴同一条哲学
+   * **一次写该模型全部可用引擎** —— 用户在这个面板里选的是「这个模型默认想多用力」,
+   * 同一选择写入全部可调引擎；不支持的档位只做能力适配，不留下另一套旧默认值。
+   */
+  const applyEffort = (effort: Effort) => {
+    if (!efforts.includes(effort)) return;
+    if (groupRow?.aliasRows) {
+      const ok = editProviderModelMemoryBatch(memberTargets.filter((target) => target.model.efforts.length).map((target) => ({
+        kind: 'set-effort' as const, agent: target.agent, providerId: provider.id, model: target.modelId,
+        effort: clampEffortToSupported(effort, target.model.efforts) as Effort,
+      })));
+      if (!ok) toast.error(t('settings.providers.models.visibilityWriteFailed'));
+      return;
+    }
+    for (const agent of chatAgents) {
+      const model = row.byAgent[agent];
+      if (!model) continue;
+      if (!model.efforts.length) continue;
+      setProviderModelEffort(agent, provider.id, model.id,
+        clampEffortToSupported(effort, model.efforts) as Effort);
+    }
+  };
+
+  const isLocalOllama = provider.id === MANAGED_OLLAMA_PROVIDER_ID;
+
+  const referencePricing = (model: CatalogModel, agent: AgentKind) => {
+    const price = pricePresentationOf(agent, model);
+    // Ordinary Gateway chat models carry effective cost; keep their inferred discount.
+    const discount =
+      (!model.displayPricing && price?.kind === 'priced' ? price.discount : undefined) ??
+      model.costDiscount;
+    return (
+      <Section title={t('settings.providers.models.advanced.pricing')}>
+        {model.displayPricing && model.currency ? (
+          <>
+            {(['input', 'output', 'cacheRead', 'cacheWrite'] as const).map((role) => {
+              const quotes = model.displayPricing?.summary?.[role];
+              if (!quotes?.length) return null;
+              const components = quotes.map(quote => displayPricingComponent(quote.component));
+              const component = components.every(value => value === components[0]) ? components[0] : undefined;
+              return (
+                <Row
+                  key={role}
+                  label={component
+                    ? t(`newChat.modelSelector.displayPricing.roles.${component}.${role}`)
+                    : t(`settings.providers.models.advanced.price.${role === 'cacheWrite' ? 'cacheCreate' : role}`)}
+                >
+                  <span className="flex flex-col items-end gap-1">
+                    {quotes.map((quote, index) => (
+                      <DisplayPricingQuote
+                        key={index}
+                        quote={quote}
+                        currency={model.currency!}
+                        costDiscount={discount}
+                        componentLabel={!component && components[index]
+                          ? t(`newChat.modelSelector.displayPricing.components.${components[index]}`)
+                          : undefined}
+                      />
+                    ))}
+                  </span>
+                </Row>
+              );
+            })}
+          </>
+        ) : price === null ? (
+          <Row label={t('settings.providers.models.advanced.pricingLabel')} muted>
+            {t(
+              provider.access?.kind === 'subscription'
+                ? 'settings.providers.models.subscription'
+                : 'settings.providers.models.advanced.noPricing',
+            )}
+          </Row>
+        ) : price.kind === 'free' ? (
+          <Row label={t('settings.providers.models.advanced.pricingLabel')}>
+            {t('newChat.modelSelector.pricing.free')}
+          </Row>
+        ) : (
+          modelPriceDetailRows(price.current, price.original).map((detail) => (
+            <Row
+              key={detail.kind}
+              label={t(`settings.providers.models.advanced.price.${detail.kind}`)}
+            >
+              {/* 有折扣时给**实付价**，标准价划掉跟在后面：只写标准价再另起一行
+              「折扣 40%」等于让人自己乘一遍，而实付才是他要判断的数。 */}
+              {detail.value}
+              {detail.originalValue && (
+                <span className="ml-1.5 text-11 text-[var(--text-tertiary)] line-through">
+                  {detail.originalValue}
+                </span>
+              )}
+              <span className="ml-1 text-11 text-[var(--text-tertiary)]">
+                {t('settings.providers.models.advanced.perMtok')}
+              </span>
+            </Row>
+          ))
+        )}
+        {discount !== undefined && discount > 0 && discount <= 1 && (
+          <Row label={t('settings.providers.models.advanced.discount')}>
+            <span
+              className="inline-flex items-center rounded-full px-2 py-[1px] text-10 font-medium"
+              style={{
+                color: EFFORT_TIER_COLORS.low,
+                backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
+              }}
+            >
+              {`↓${Math.round(discount * 100)}%`}
+            </span>
+          </Row>
+        )}
+        {/* Keep conditions and notes after the primary quotes and their discount. */}
+        {model.displayPricing && model.currency &&
+          !isDisplayPricingTableRedundant(model.displayPricing) && (
+            <div className={model.displayPricing.summary ? 'pt-3' : undefined}>
+              <DisplayPricingDetails model={model} />
+            </div>
+          )}
+      </Section>
+    );
+  };
+
+  return (
+    <>
+      <Dialog.Root open={open} onOpenChange={(next) => {
+        if (!next && pricePendingRef.current) return;
+        onOpenChange(next);
+      }}>
+        <Dialog.Portal>
+          <Dialog.Overlay
+            className={cn(
+              'modal-scrim fixed inset-0 z-[10001]',
+            )}
+          />
+          <Dialog.Content
+            onPointerDownOutside={(event) => event.preventDefault()}
+            className={cn(
+              'modal-panel fixed inset-0 z-[10001] m-auto flex h-fit max-h-[calc(100dvh-48px)] w-[800px] max-w-[calc(100vw-32px)] flex-col overflow-hidden',
+            )}
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            aria-describedby={undefined}
+            onEscapeKeyDown={(event) => {
+              if (!(event.target instanceof HTMLElement) || !event.target.closest('[data-model-price-editor]')) return;
+              event.preventDefault();
+            }}
+            onOpenAutoFocus={(event) => {
+              event.preventDefault();
+              titleRef.current?.focus();
+            }}
+          >
+            <header className="flex shrink-0 items-start gap-3 border-b border-[var(--settings-theme-card-border)] px-5 pb-3 pt-4">
+              <div className="min-w-0 flex-1">
+                {groupRow?.aliasRows && (
+                  <Select data-settings-search-action="Choose which member model of this alias group the drawer shows"
+                    label={t('settings.providers.models.advanced.modelId')}
+                    size="compact"
+                    width="sm"
+                    className="mb-2"
+                    truncateOptions
+                    value={row.id}
+                    disabled={ctx.loading || protocolSaving}
+                    onValueChange={(id) => {
+                      if (ctx.loading || ctxDirtyRef.current || protocolSaving || pricePendingRef.current) return;
+                      const member = memberRows.find((candidate) => candidate.id === id);
+                      if (member) onSelectMember?.(member);
+                    }}
+                    options={memberRows.map((member) => ({ value: member.id, label: member.id }))}
+                  />
+                )}
+                <Dialog.Title
+                  ref={titleRef}
+                  tabIndex={-1}
+                  className="break-words text-15 font-medium text-[var(--text-primary)] outline-none"
+                >
+                  {localizedModelName(primaryModel.name, t)}
+                </Dialog.Title>
+                <p className="mt-0.5 truncate text-12 text-[var(--text-tertiary)]">
+                  {providerDisplayName(provider, t)}
+                </p>
+              </div>
+              <Dialog.Close
+                className="-mr-1 -mt-1 shrink-0 rounded-full p-1.5 text-[var(--text-secondary)] transition-colors hover:bg-[var(--settings-menu-bg-hover)] hover:text-[var(--text-primary)]"
+                aria-label={t('settings.providers.models.advanced.close')}
+              >
+                <X size={16} aria-hidden />
+              </Dialog.Close>
+            </header>
+
+            <div
+              key={`${provider.id}:${primaryModel.id}`}
+              className="min-h-0 overflow-y-auto px-5 pb-5 pt-3"
+            >
+              <div className="grid gap-5 min-[760px]:grid-cols-2 min-[760px]:gap-6">
+                <div className="min-w-0">
+                  {conversational && (
+                    <Section
+                      title={t('settings.providers.models.advanced.engines')}
+                      hint={t('settings.providers.models.advanced.enginesHint')}
+                    >
+                      {!selectionAvailable && (
+                        <p className="mb-2 text-12 text-[var(--text-secondary)]">
+                          {t('settings.providers.models.manage.connectionRequired')}
+                        </p>
+                      )}
+                      {protocols.upstreamApis.length > 0 && <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-11">
+                        <span className="text-[var(--text-tertiary)]">
+                          {t('settings.providers.models.advanced.protocol.upstream')}
+                        </span>
+                        <span className="text-[var(--text-secondary)]">
+                          {protocols.upstreamApis.map(api => MODEL_PROTOCOL_LABEL[api as PiModelApi] ?? api).join(' · ')}
+                        </span>
+                      </div>}
+                      {provider.agents.map((agent) => {
+                        const model = row.byAgent[agent];
+                        // Missing catalog membership proves no configured route, not upstream incompatibility.
+                        const supported = Boolean(model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' }));
+                        const protocol = protocols.forAgent(agent);
+                        const compatibility = protocol?.path === 'local';
+                        const protocolId = `model-protocol-${agent}`;
+                        const notes: string[] = [];
+                        if (model) {
+                          // 同一模型在不同引擎下的元数据差异如实标出来 —— 这些值来自目录的
+                          // perAgent 覆盖，用户看到「Codex 下 272K / 6 档」才知道差异是真的。
+                          // A shared saved budget overrides every engine's working default.
+                          if (!supportsMillionContext && (ctx.limit === null || ctx.mixed) &&
+                              model.contextWindow > 0 && model.contextWindow !== engineWindowReference) {
+                            notes.push(approxTokens(model.contextWindow));
+                          }
+                          if (
+                            model.supportsFastMode === false &&
+                            primaryModel.supportsFastMode === true
+                          ) {
+                            notes.push(t('settings.providers.models.advanced.engineNoFast'));
+                          }
+                        }
+                        return (
+                          <div
+                            key={agent}
+                            className={cn(
+                              'flex min-h-[34px] items-center gap-2.5 border-b border-[var(--settings-theme-card-border)] py-2 last:border-b-0',
+                              !supported && 'opacity-50',
+                            )}
+                          >
+                            <span
+                              className="inline-flex h-5 w-4 shrink-0 self-start items-center justify-center leading-none"
+                              style={{ color: MODEL_HARNESS_COLOR[agent] }}
+                              aria-hidden
+                            >
+                              {AGENT_MARK[agent](14)}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex min-h-5 flex-wrap items-center gap-x-2 gap-y-1">
+                                <span className="text-13 leading-5 text-[var(--text-primary)]">
+                                  {AGENT_LABEL[agent]}
+                                </span>
+                                {agent === recommendedAgent && (
+                                  <span className="rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-10 text-[var(--text-tertiary)]">
+                                    {t('newChat.modelSelector.unified.recommended')}
+                                  </span>
+                                )}
+                              </div>
+                              {protocol && (
+                                <p
+                                  id={protocolId}
+                                  className="mt-0.5 text-11 leading-4 text-[var(--text-tertiary)]"
+                                >
+                                  {/* Presets follow the catalog; any saved explicit choice, including older api/route-only
+                                      ones, keeps its way back to automatic. */}
+                                  {canEditProtocol && supported && (!model?.catalogPresetId || model.userModelConfig?.interfaceId ||
+                                    model.userModelConfig?.api || model.userModelConfig?.piApi || model.userModelConfig?.route?.wireProtocol) ? (
+                                    (() => {
+                                      const field = withCurrentOption(
+                                        model?.availableInterfaces?.length ? model.userModelConfig?.interfaceId ?? ((model.userModelConfig?.api || model.userModelConfig?.piApi || model.userModelConfig?.route) ? model.selectedInterface?.profileId : 'auto') : protocol.outbound,
+                                        model?.availableInterfaces?.length ? [
+                                          { value: 'auto', label: t('settings.providers.models.advanced.protocol.automatic') },
+                                          ...model.availableInterfaces.map(item => ({ value: item.profileId, label: protocolLabel(item.api) ?? item.api })),
+                                        ] : MODEL_PROTOCOL_OPTIONS.map(([api, label]) => ({ value: api, label })),
+                                        protocolLabel(protocol.outbound) ?? protocol.outbound ?? '',
+                                      );
+                                      return (
+                                        <Select data-settings-search-action="Choose the wire protocol this engine uses for the model"
+                                          label={`${AGENT_LABEL[agent]} · ${t('settings.providers.custom.fields.wireProtocol')}`}
+                                          size="compact"
+                                          width="sm"
+                                          className="mt-1"
+                                          value={field.value}
+                                          options={field.options}
+                                          disabled={protocolSaving}
+                                          // Automatic keeps showing the protocol it resolves to.
+                                          triggerAdornment={field.value === 'auto' ? (
+                                            <span className="shrink-0 text-[var(--text-tertiary)]">{protocolLabel(protocol.outbound)}</span>
+                                          ) : undefined}
+                                          onValueChange={value => void setModelApi(agent, value)}
+                                        />
+                                      );
+                                    })()
+                                  ) : protocolLabel(protocol.outbound)}
+                                  {/* Only Cindy's local conversion is called out; phone widths put it on its own line. */}
+                                  {compatibility && <>
+                                    <span className="hidden min-[400px]:inline"> · </span>
+                                    <span className="block min-[400px]:inline"><ModelCompatibilityNotice /></span>
+                                  </>}
+                                </p>
+                              )}
+                            </div>
+                            <span
+                              className="min-w-0 max-w-[80px] truncate text-right text-11 text-[var(--text-tertiary)]"
+                              title={supported ? notes.join(' · ') : undefined}
+                            >
+                              {supported ? (
+                                notes.join(' · ')
+                              ) : (
+                                <Tip
+                                  contentClassName="z-[10002]"
+                                  text={t('settings.providers.models.advanced.engineNotConfigured')}
+                                >
+                                  <button
+                                    type="button"
+                                    aria-label={`${AGENT_LABEL[agent]} · ${t('settings.providers.models.advanced.engineNotConfigured')}`}
+                                    className="inline-flex rounded-full p-1"
+                                  >
+                                    <CircleHelp size={13} aria-hidden />
+                                  </button>
+                                </Tip>
+                              )}
+                            </span>
+                            <span className="inline-flex shrink-0 rounded-full border border-transparent p-0.5">
+                              <Switch
+                                aria-describedby={protocol ? protocolId : undefined}
+                                data-compatibility={compatibility || undefined}
+                                checked={
+                                  selectionAvailable && supported
+                                    ? isModelEnabled(agent, provider.id, model!)
+                                    : false
+                                }
+                                disabled={!supported || paymentRequired || !selectionAvailable}
+                                onCheckedChange={async (next) => {
+                                  if (!model || !selectionAvailable) return;
+                                  if (
+                                    (groupRow?.aliasRows
+                                      ? await setModelVisibilities(provider.id, memberTargets.filter((m) => m.agent === agent), next)
+                                      : await setModelVisibility(agent, provider.id, model.id, next)) === false
+                                  ) {
+                                    toast.error(
+                                      t('settings.providers.models.visibilityWriteFailed'),
+                                    );
+                                  }
+                                }}
+                                aria-label={`${localizedModelName(primaryModel.name, t)} · ${AGENT_LABEL[agent]}`}
+                              />
+                            </span>
+                          </div>
+                        );
+                      })}
+                      {visibilityCustomized && !paymentRequired && selectionAvailable && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          tone="quiet"
+                          compact
+                          type="button"
+                          onClick={async () => {
+                            if (!await resetModelVisibilities(provider.id, visibilityTargets))
+                              toast.error(t('settings.providers.models.visibilityWriteFailed'));
+                          }}
+                          className="mt-2"
+                        >
+                          {t('settings.providers.models.advanced.restoreDefault')}
+                        </Button>
+                      )}
+                    </Section>
+                  )}
+
+                  {conversational && shownEfforts.length > 0 && (
+                    <Section
+                      title={t('settings.providers.models.advanced.defaultEffort')}
+                      hint={t('settings.providers.models.advanced.defaultEffortHint')}
+                    >
+                      <SegmentedControl
+                        className="mt-1"
+                        fullWidth
+                        // Six translated labels exceed a details column. Keep every
+                        // level visible instead of hiding Ultra in horizontal overflow.
+                        style={shownEfforts.length > 4 ? {
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                          borderRadius: 'var(--radius-xl)',
+                        } : undefined}
+                        optionClassName={shownEfforts.length > 4 ? '!min-w-0 px-1' : undefined}
+                        height={32}
+                        optionHeight={24}
+                        aria-label={t('settings.providers.models.advanced.defaultEffort')}
+                        value={shownEfforts.find((effort) => effort === currentEffort) ?? null}
+                        onValueChange={applyEffort}
+                        disabled={paymentRequired}
+                        options={shownEfforts.map((effort) => ({
+                          value: effort,
+                          label: t(`effortLevels.${effort}`),
+                          disabled: !efforts.includes(effort),
+                        }))}
+                      />
+                      {effortMixed && (
+                        <p className="mt-1.5 text-12 text-[var(--text-tertiary)]">
+                          {t('settings.providers.models.advanced.effortMixed')}
+                        </p>
+                      )}
+                      {chatAgents.some(
+                        (a) =>
+                          rememberedEffort(a, row.byAgent[a]!.id) !== undefined,
+                      ) && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          tone="quiet"
+                          compact
+                          type="button"
+                          disabled={paymentRequired}
+                          onClick={() => {
+                            if (groupRow?.aliasRows) {
+                              if (!editProviderModelMemoryBatch(memberTargets.map((target) => ({ kind: 'clear-effort' as const,
+                                agent: target.agent, providerId: provider.id, model: target.modelId })))) toast.error(t('settings.providers.models.visibilityWriteFailed'));
+                              return;
+                            }
+                            for (const a of chatAgents)
+                              clearProviderModelEffort(a, provider.id, row.byAgent[a]!.id);
+                          }}
+                          className="mt-2"
+                        >
+                          {t('settings.providers.models.advanced.restoreDefault')}
+                        </Button>
+                      )}
+                    </Section>
+                  )}
+
+                  {conversational && (
+                    <Section
+                      title={t('settings.providers.models.advanced.contextLimit')}
+                      hint={t(supportsMillionContext ? 'settings.providers.models.advanced.contextLimitLocalMillionHint' : /^(?:(?:openai-codex|codex|openai|chatgpt)\/)?gpt-/.test(primaryModel.id) && provider.source !== 'user' && ['openai', 'xd'].includes(provider.id)
+                        ? 'settings.providers.models.advanced.contextLimitGptHint'
+                        : 'settings.providers.models.advanced.contextLimitHint')}
+                    >
+                      {contextTarget && (
+                        <>
+                          {localConfigurationBlocked && <p className="text-12 text-[var(--text-secondary)]">{t('settings.providers.llamacpp.ownedElsewhere')}</p>}
+                          {supportsMillionContext && (
+                            <div className="mt-2 flex gap-2">
+                              {[{ label: '256K', tokens: 262144 }, { label: '1M', tokens: 1_000_000 }].map((preset) => (
+                                <Button key={preset.tokens} variant={effectiveLimit === preset.tokens ? 'primary' : 'secondary'} compact
+                                  aria-pressed={effectiveLimit === preset.tokens}
+                                  disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
+                                  onClick={() => {
+                                    ctxDirtyRef.current = false;
+                                    setCtxDraft(String(preset.tokens));
+                                    void ctx.setLimit(preset.tokens);
+                                  }}
+                                >{preset.label}</Button>
+                              ))}
+                            </div>
+                          )}
+                          <div className="mt-1 flex flex-wrap items-center gap-2.5">
+                            <span
+                              className={cn(
+                                'inline-flex h-7 items-center gap-1 rounded-full border px-2',
+                                overRouteWindow
+                                  ? 'border-[var(--warning-fg)]'
+                                  : 'border-[var(--settings-theme-card-border)]',
+                              )}
+                            >
+                              <input
+                                value={ctxDraft}
+                                onChange={(event) => {
+                                  ctxDirtyRef.current = true;
+                                  setCtxDraft(event.target.value);
+                                }}
+                                onBlur={commitCtxDraft}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Enter') {
+                                    event.preventDefault();
+                                    event.currentTarget.blur();
+                                  }
+                                }}
+                                aria-invalid={ctxInvalid || undefined}
+                                inputMode="text"
+                                maxLength={32}
+                                disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
+                                aria-label={t(
+                                  'settings.providers.models.advanced.contextLimitAria',
+                                )}
+                                className="w-28 bg-transparent text-center text-13 tabular-nums text-[var(--text-primary)] outline-none"
+                              />
+                              <span className="text-11 text-[var(--text-tertiary)]">tokens</span>
+                            </span>
+                            <span className="min-w-0 flex-1 text-11 tabular-nums text-[var(--text-tertiary)]">
+                              {t('settings.providers.models.advanced.contextLimitRoute', {
+                                tokens: formatExactTokens(
+                                  !ctxInvalid ? (displayedLimit ?? 0) : (effectiveLimit ?? 0),
+                                  locale,
+                                ),
+                              })}
+                            </span>
+                            {ctx.isCustomized && (
+                              <Button data-settings-search-action="Restore the default context limit for this model"
+                                variant="secondary"
+                                size="sm"
+                                tone="quiet"
+                                compact
+                                type="button"
+                                onClick={resetCtx}
+                                disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
+                                className="shrink-0"
+                              >
+                                {t('settings.providers.models.advanced.restoreDefault')}
+                              </Button>
+                            )}
+                          </div>
+                          {(ctxInvalid || ctx.error || ctx.mixed) && (
+                            <p role="status" className="mt-1.5 text-12 text-[var(--warning-fg)]">
+                              {t(
+                                `settings.providers.models.advanced.${ctxInvalid ? 'contextInvalid' : ctx.error ? 'contextWriteFailed' : 'contextMixed'}`,
+                                { min: formatExactTokens(minimumContextK * 1000, locale), max: formatExactTokens(maximumContext, locale) },
+                              )}
+                            </p>
+                          )}
+                          {overRouteWindow && (
+                            <p className="mt-1.5 flex items-start gap-1.5 text-11 leading-[1.5] text-[var(--warning-fg)]">
+                              <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                              {t('settings.providers.models.advanced.contextLimitOverWindow')}
+                            </p>
+                          )}
+                        </>
+                      )}
+                      {ctx.compaction && (
+                        <ModelCompactionSettings policy={ctx.compaction}
+                          disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
+                          onChange={ctx.setCompaction} />
+                      )}
+                    </Section>
+                  )}
+
+                  <Section title={t('settings.providers.models.advanced.spec')}>
+                    <Row label={t('settings.providers.models.advanced.contextWindow')}>
+                      {routeWindow > 0 ? (
+                        <>
+                          {formatExactTokens(routeWindow, locale)}
+                          <span className="ml-1 text-11 text-[var(--text-tertiary)]">
+                            {t('settings.providers.models.advanced.tokensApprox', {
+                              approx: approxTokens(routeWindow),
+                            })}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-[var(--text-tertiary)]">
+                          {t('settings.providers.models.advanced.catalogMissing')}
+                        </span>
+                      )}
+                    </Row>
+                    {primaryModel.maxOutput !== undefined && (
+                      <Row label={t('settings.providers.models.advanced.maxOutput')}>
+                        {formatExactTokens(primaryModel.maxOutput, locale)}
+                      </Row>
+                    )}
+                  </Section>
+                </div>
+                <div className="min-w-0 border-t border-[var(--settings-theme-card-border)] pt-4 min-[760px]:border-l min-[760px]:border-t-0 min-[760px]:pl-6 min-[760px]:pt-0">
+                  <Section
+                    title={t('settings.providers.models.advanced.capability')}
+                    hint={t('settings.providers.models.advanced.capabilityHint')}
+                  >
+                    {imageModel && (
+                      <>
+                        <Row label={t('settings.providers.models.advanced.imageCapability.label')}>
+                          <Select data-settings-search-action="Declare the image capability of the Images connection model"
+                            label={t('settings.providers.models.advanced.imageCapability.label')}
+                            size="compact"
+                            width="sm"
+                            value={imageCapability}
+                            disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
+                            onValueChange={value => void setImageCapability(value)}
+                            options={(['default', 'generate', 'edit'] as const).map(value => ({
+                              value, label: t(`settings.providers.models.advanced.imageCapability.${value}`),
+                            }))}
+                          />
+                        </Row>
+                        <p className="text-12 leading-5 text-[var(--text-tertiary)]">
+                          {t('settings.providers.models.advanced.imageCapability.hint', { agent: AGENT_LABEL[imageAgent!] })}
+                        </p>
+                      </>
+                    )}
+                    {videoModel && (
+                      <>
+                        <Row label={t('settings.providers.models.advanced.videoCapability.label')}>
+                          <Select data-settings-search-action="Declare the video capability of the video connection model"
+                            label={t('settings.providers.models.advanced.videoCapability.label')}
+                            size="compact"
+                            width="sm"
+                            value={videoCapability}
+                            disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
+                            onValueChange={value => void setImageCapability(value, 'video')}
+                            options={(['default', 'generate', 'edit'] as const).map(value => ({
+                              value, label: t(`settings.providers.models.advanced.videoCapability.${value}`),
+                            }))}
+                          />
+                        </Row>
+                        <p className="text-12 leading-5 text-[var(--text-tertiary)]">
+                          {t('settings.providers.models.advanced.videoCapability.hint', { agent: AGENT_LABEL[videoAgent!] })}
+                        </p>
+                      </>
+                    )}
+                    <Row label={t('settings.providers.models.advanced.imageInput')}>
+                      {conversational && !isOrganizationManagedProvider(provider) ? (
+                        (() => {
+                          // 'default' clears the override; 'true' / 'false' save an explicit choice.
+                          // States that are not one of these choices — an older explicit override
+                          // equal to the default, or overrides that differ by engine even when their
+                          // values agree — show as the current row, so every choice stays selectable.
+                          const choiceValue = (supported: boolean) => imageDefaultsMatch(supported) ? 'default' : String(supported);
+                          const staleOverride = imageInputOverride.value !== null && imageDefaultsMatch(imageInputOverride.value);
+                          const field = withCurrentOption(
+                            imageInputMixed || imageInputOverride.mixed || imageInputValue === null || staleOverride
+                              ? null : choiceValue(imageInputValue),
+                            [true, false].map((supported) => {
+                              const label = t(`settings.providers.models.advanced.${supported ? 'supported' : 'unsupported'}`);
+                              return {
+                                value: choiceValue(supported),
+                                label: imageDefaultsMatch(supported)
+                                  ? t('settings.providers.models.advanced.imageInputDefault', { value: label }) : label,
+                              };
+                            }),
+                            imageInputMixed
+                              ? t('settings.providers.models.advanced.imageInputMixed')
+                              : imageInputValue === null
+                                ? t('settings.providers.models.advanced.undeclared')
+                                : t(`settings.providers.models.advanced.${imageInputValue ? 'supported' : 'unsupported'}`),
+                          );
+                          return (
+                            <Select data-settings-search-action="Override whether this model accepts image input"
+                              label={t('settings.providers.models.advanced.imageInput')}
+                              size="compact"
+                              width="sm"
+                              value={field.value}
+                              options={field.options}
+                              disabled={imageInputOverride.loading || localConfigurationBlocked}
+                              onValueChange={(value) => void imageInputOverride.setValue(
+                                value === 'default' ? null : value === 'true',
+                              )}
+                            />
+                          );
+                        })()
+                      ) : <span
+                        title={
+                          capabilityModel.modalities || capabilityModel.supportsImageInput !== undefined
+                            ? t('settings.providers.models.advanced.catalogCapabilities')
+                            : t(`settings.providers.models.advanced.visionSource.${vision}`)
+                        }
+                      >
+                        <CapabilityValue
+                          state={
+                            vision === 'vision' ? true : vision === 'no-vision' ? false : undefined
+                          }
+                          label={t(`settings.providers.models.advanced.vision.${vision}`)}
+                        />
+                      </span>}
+                    </Row>
+                    {imageInputOverride.error && (
+                      <p role="alert" className="text-12 leading-5 text-[var(--error-fg)]">
+                        {t('settings.providers.custom.toast.saveFailed')}
+                      </p>
+                    )}
+                    {capabilityModel.modalities &&
+                      (['input', 'output'] as const).map((direction) => (
+                        <Row
+                          key={direction}
+                          label={t(`settings.providers.models.advanced.${direction}Modalities`)}
+                        >
+                          {capabilityModel
+                            .modalities![direction].map((modality) =>
+                              ['text', 'image', 'audio', 'video', 'file'].includes(modality)
+                                ? t(`settings.providers.models.advanced.modalities.${modality}`)
+                                : modality,
+                            )
+                            .join(' · ') || t('settings.providers.models.advanced.undeclared')}
+                        </Row>
+                      ))}
+                    <Row label="Fast" muted>
+                      <CapabilityValue
+                        state={primaryModel.supportsFastMode}
+                        label={t(
+                          `settings.providers.models.advanced.${primaryModel.supportsFastMode === true ? 'supported' : primaryModel.supportsFastMode === false ? 'unsupported' : 'undeclared'}`,
+                        )}
+                      />
+                    </Row>
+                    <Row label={t('newChat.modelSelector.speed.ultrafast')} muted>
+                      <CapabilityValue
+                        state={ultrafastSupport}
+                        label={t(
+                          `settings.providers.models.advanced.${ultrafastSupport === true ? 'supported' : ultrafastSupport === false ? 'unsupported' : 'undeclared'}`,
+                        )}
+                      />
+                    </Row>
+                  </Section>
+
+                  {provider.id !== 'xd' && !isOrganizationManagedProvider(provider) && !paymentRequired && priceRow ? (
+                    <ModelPriceOverrideDialog provider={provider} row={priceRow} open={open} onOpenChange={onOpenChange}
+                      presentation="inline" referenceDetails={(agent) => {
+                        const model = priceRow.byAgent[agent];
+                        return model ? referencePricing(model, agent) : null;
+                      }}
+                      onPendingChange={(pending) => { pricePendingRef.current = pending; }} />
+                  ) : referencePricing(primaryModel, primaryAgent)}
+                  <Section title={t('settings.providers.models.advanced.identity')}>
+                    {description && (
+                      <p className="mb-2 text-12 leading-relaxed text-[var(--text-secondary)]">{description}</p>
+                    )}
+                    <Row label={t('settings.providers.models.advanced.modelId')}>
+                      <code className="select-text break-all text-12">{primaryModel.id}</code>
+                    </Row>
+                    {modelBrand(primaryModel) && (
+                      <Row label={t('settings.providers.models.management.brand')} muted>
+                        {localizedBrandName(modelBrand(primaryModel)!, t)}
+                      </Row>
+                    )}
+                    {primaryModel.status && primaryModel.status !== 'active' && (
+                      <Row label={t('settings.providers.models.advanced.status')} muted>
+                        {t(`settings.providers.models.advanced.lifecycle.${primaryModel.status}`)}
+                      </Row>
+                    )}
+                  </Section>
+                </div>
+              </div>
+            </div>
+
+            {/* Missing manufacturer metadata does not make a configured
+                outbound protocol unconfirmed. Keep that distinction in
+                the manufacturer reference when one is declared. */}
+            {!paymentRequired && (
+              <div className="flex shrink-0 flex-col gap-2 border-t border-[var(--settings-theme-card-border)] px-5 py-3">
+                <Button
+                  variant="secondary"
+                  size="md"
+                  compact
+                  type="button"
+                  disabled={disabled && !selectionAvailable}
+                  data-settings-search-action="Enable or disable the displayed model group"
+                  onClick={() => { if (!pricePendingRef.current) onDisable(groupRow ?? row); }}
+                >
+                  {disabled
+                    ? t('settings.providers.models.enableModel')
+                    : t('settings.providers.models.disableModel')}
+                </Button>
+                {isLocalOllama && onDeleteLocal && (
+                  <Button
+                    variant="secondary"
+                    size="md"
+                    tone="danger"
+                    compact
+                    type="button"
+                    data-settings-search-action="Delete the displayed local model"
+                    onClick={() => { if (!pricePendingRef.current) onDeleteLocal(row); }}
+                  >
+                    <Trash2 size={13} />
+                    {t('settings.providers.local.deleteModel')}
+                  </Button>
+                )}
+              </div>
+            )}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </>
+  );
+}

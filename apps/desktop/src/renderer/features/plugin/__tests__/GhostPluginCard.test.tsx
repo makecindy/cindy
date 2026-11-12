@@ -1,7 +1,8 @@
 /**
  * Regression coverage for installed Plugin card actions (redesigned card:
  * whole-card opens detail, kind-specific primary button, manage entry),
- * market card actions, and the legacy recovery notice.
+ * market card actions, the legacy recovery notice, and market success navigation
+ * (first install opens detail; update stays put).
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  * @vitest-environment jsdom
  */
@@ -11,12 +12,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, options?: { name?: string }) =>
+    t: (key: string, options?: { name?: string; value?: string }) =>
       (key === 'settings.ghosts.market.detailsAria' ||
         key === 'settings.ghosts.market.replaceAria') &&
       options?.name
         ? `${key}:${options.name}`
-        : key,
+        : options?.value !== undefined ? `${options.value} ${key}` : key,
+    i18n: { language: 'en' },
   }),
   // 页面经批量更新控制器引 @/i18n,其 init 链路需要这些导出。
   initReactI18next: { type: '3rdParty', init: vi.fn() },
@@ -28,18 +30,18 @@ vi.mock('@/contexts/AuthContext', () => ({
 
 import {
   __installedPluginLayoutForTests,
-  diffMarketUpdatePermissionItems,
   GhostPluginCard,
   LegacyGhostRecoveryNotice,
-  marketUpdateAllowsPermissionExpansion,
   MarketPluginCard,
+  MyPublishesSectionVisibilityGate,
+  SHOW_MY_PUBLISHES_SECTION,
+  shouldOpenInstalledDetailAfterMarketSuccess,
 } from '../GhostPluginPage';
 import {
   __ingestGhostBadgeForTest,
   __resetGhostUnreadForTest,
 } from '@/cindy-brain/ghostUnreadStore';
 import type { GhostPluginListItem } from '../lib/ghostPluginViewModel';
-import type { InstalledGhost } from '../../../../shared/ghost';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
 const {
@@ -50,60 +52,119 @@ const {
   visibleInstalledPluginItems,
 } = __installedPluginLayoutForTests;
 
-describe('diffMarketUpdatePermissionItems', () => {
-  it.each(['legacy-unapproved', 'invalid'] as const)(
-    'reviews every target permission for a %s install',
-    (approvalState) => {
-      const manifest = {
-        schemaVersion: 2 as const,
-        id: 'legacy-plugin',
-        name: 'Legacy Plugin',
-        description: 'Legacy approval regression fixture',
-        author: 'Cindy',
-        version: '1.0.0',
-        kind: 'chip' as const,
-        entry: 'main.js',
-        slots: ['notify'] as ['notify'],
-      };
-      const installed = {
-        manifest,
-        dir: 'C:\\plugins\\legacy-plugin',
-        enabled: false,
-        approval: { state: approvalState },
-      };
-      const next = {
-        ...manifest,
-        version: '2.0.0',
-        slots: ['notify', 'fs'] as ['notify', 'fs'],
-      };
+describe('MyPublishesSectionVisibilityGate', () => {
+  const labels = {
+    overviewLabel: 'Overview',
+    publishesLabel: 'My publishes',
+    tabsAriaLabel: 'Plugin page sections',
+  };
 
-      const diff = diffMarketUpdatePermissionItems(installed, next);
-      expect(diff.added.map((item) => item.key)).toEqual(expect.arrayContaining(['notify', 'fs']));
-      expect(diff.removed).toEqual([]);
-      expect(diff.unchanged).toEqual([]);
-    },
-  );
+  it('shows both secondary tabs and switches their selected panel when enabled', () => {
+    render(
+      <MyPublishesSectionVisibilityGate
+        visible
+        {...labels}
+        publishes={<div data-testid="publishes-content" />}
+      >
+        <div data-testid="overview-content" />
+      </MyPublishesSectionVisibilityGate>,
+    );
+
+    const overviewTab = screen.getByRole('tab', { name: 'Overview' });
+    const publishesTab = screen.getByRole('tab', { name: 'My publishes' });
+    const overviewPanel = document.getElementById(overviewTab.getAttribute('aria-controls') ?? '');
+    const publishesPanel = document.getElementById(
+      publishesTab.getAttribute('aria-controls') ?? '',
+    );
+
+    expect(screen.getAllByRole('tab')).toHaveLength(2);
+    expect(overviewTab.getAttribute('aria-selected')).toBe('true');
+    expect(publishesTab.getAttribute('aria-selected')).toBe('false');
+    expect(overviewPanel?.hidden).toBe(false);
+    expect(publishesPanel?.hidden).toBe(true);
+
+    fireEvent.click(publishesTab);
+
+    // This excludes a decorative tab row that never switches the visible content.
+    expect(overviewTab.getAttribute('aria-selected')).toBe('false');
+    expect(publishesTab.getAttribute('aria-selected')).toBe('true');
+    expect(overviewPanel?.hidden).toBe(true);
+    expect(publishesPanel?.hidden).toBe(false);
+  });
+
+  it('removes the whole secondary tab row and publishing effects when disabled', () => {
+    const publishesRender = vi.fn();
+    function PublishesProbe() {
+      publishesRender();
+      return <div data-testid="publishes-content-disabled" />;
+    }
+
+    const { container } = render(
+      <MyPublishesSectionVisibilityGate
+        visible={SHOW_MY_PUBLISHES_SECTION}
+        {...labels}
+        publishes={<PublishesProbe />}
+      >
+        <section className="mt-6" data-testid="installed-content-disabled" />
+        <section className="mt-10" data-testid="recommended-content-disabled" />
+      </MyPublishesSectionVisibilityGate>,
+    );
+
+    // This excludes hiding only the publishing panel while leaving a one-tab row or wrapper noise.
+    expect(SHOW_MY_PUBLISHES_SECTION).toBe(false);
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.queryByRole('tab')).toBeNull();
+    const installed = screen.getByTestId('installed-content-disabled');
+    const recommended = screen.getByTestId('recommended-content-disabled');
+    expect(Array.from(container.children)).toEqual([installed, recommended]);
+    expect(installed.className).toBe('mt-6');
+    expect(recommended.className).toBe('mt-10');
+    expect(publishesRender).not.toHaveBeenCalled();
+  });
+
+  it('keeps overview content mounted and in place while viewing publishes', () => {
+    render(
+      <MyPublishesSectionVisibilityGate
+        visible
+        {...labels}
+        publishes={<div data-testid="publishes-content-persistent" />}
+      >
+        <div data-testid="overview-content-persistent" />
+      </MyPublishesSectionVisibilityGate>,
+    );
+
+    const overviewNode = screen.getByTestId('overview-content-persistent');
+    const publishesNode = screen.getByTestId('publishes-content-persistent');
+    const overviewPanel = overviewNode.parentElement;
+    const publishesPanel = publishesNode.parentElement;
+
+    expect(overviewPanel?.nextElementSibling).toBe(publishesPanel);
+    fireEvent.click(screen.getByRole('tab', { name: 'My publishes' }));
+
+    // The same DOM node and panel order exclude conditional unmounting or reordering the catalog.
+    expect(screen.getByTestId('overview-content-persistent')).toBe(overviewNode);
+    expect(overviewPanel?.nextElementSibling).toBe(publishesPanel);
+    expect(overviewPanel?.hidden).toBe(true);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Overview' }));
+    expect(screen.getByTestId('overview-content-persistent')).toBe(overviewNode);
+    expect(overviewPanel?.hidden).toBe(false);
+  });
 });
 
-describe('marketUpdateAllowsPermissionExpansion', () => {
-  const installed = (approvalState: 'approved' | 'legacy-unapproved' | 'invalid') =>
-    ({ approval: { state: approvalState } }) as InstalledGhost;
+describe('shouldOpenInstalledDetailAfterMarketSuccess', () => {
+  it('opens the installed detail after a first-time market install', () => {
+    expect(shouldOpenInstalledDetailAfterMarketSuccess(false)).toBe(true);
+  });
 
-  it.each(['legacy-unapproved', 'invalid'] as const)(
-    'allows the full reapproval of a no-permission %s install',
-    (approvalState) => {
-      expect(marketUpdateAllowsPermissionExpansion(installed(approvalState), 0)).toBe(true);
-    },
-  );
-
-  it('only allows approved installs when the reviewed diff adds permissions', () => {
-    expect(marketUpdateAllowsPermissionExpansion(installed('approved'), 0)).toBe(false);
-    expect(marketUpdateAllowsPermissionExpansion(installed('approved'), 1)).toBe(true);
+  it('stays on the current page after an update or replacement', () => {
+    expect(shouldOpenInstalledDetailAfterMarketSuccess(true)).toBe(false);
   });
 });
 
 const commandPlugin: GhostPluginListItem = {
   id: 'filo-google',
+  ghostId: 'filo-google',
   name: 'Filo Google',
   description: 'Google services',
   version: '1.0.0',
@@ -112,9 +173,24 @@ const commandPlugin: GhostPluginListItem = {
   approvalState: 'approved',
   builtin: false,
   tabPanel: false,
-  hostCapability: null,
+  hasMainView: false,
+  mainViewTitle: null,
   oauthAuthorizationExpired: false,
 };
+
+it('renders older Host facts in the standard card without invented version, updates or local actions', () => {
+  const manage = vi.fn();
+  const item = { id: 'remote-notes', name: 'Remote notes', description: 'Saved on the selected computer', enabled: false,
+    iconDataUrl: 'data:image/png;base64,aWNvbg==' };
+  const { container } = render(<GhostPluginCard item={item} readOnly showLocalUnread={false} onManage={manage} onPrimary={vi.fn()} />);
+  expect(container.querySelector('img')?.getAttribute('src')).toBe(item.iconDataUrl);
+  expect(screen.getByText('settings.ghosts.detail.disabledLabel')).toBeTruthy();
+  expect(screen.queryByText('settings.ghosts.page.upToDate')).toBeNull();
+  expect(screen.queryByText('settings.ghosts.page.manageAction')).toBeNull();
+  expect(container.textContent).not.toContain('undefined');
+  fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.market.details' }));
+  expect(manage).toHaveBeenCalledTimes(1);
+});
 
 const panelPlugin: GhostPluginListItem = {
   ...commandPlugin,
@@ -130,12 +206,18 @@ const toolPlugin: GhostPluginListItem = {
   canUse: false,
 };
 
-const simulatorPlugin: GhostPluginListItem = {
-  ...toolPlugin,
-  id: 'ios-simulator',
-  name: 'iOS Simulator',
-  hostCapability: 'ios-simulator',
+
+const mainViewPlugin: GhostPluginListItem = {
+  ...panelPlugin,
+  id: 'workspace',
+  name: 'Workspace',
+  hasMainView: true,
+  mainViewTitle: 'Workspace',
 };
+
+/** 未读角标点:AttentionDot 渲染的 aria-hidden 圆点,颜色走 `--card-status-*` token。 */
+const unreadDot = (container: HTMLElement) =>
+  container.querySelector<HTMLElement>('span[aria-hidden][class*="--card-status-"]');
 
 const marketPlugin: PluginMarketItem = {
   pluginId: 'release-google-calendar',
@@ -143,6 +225,7 @@ const marketPlugin: PluginMarketItem = {
   name: 'Google Calendar',
   description: 'Connect Google Calendar',
   author: 'Cindy',
+  publisherKind: 'official',
   scope: 'public',
   organizationId: null,
   defaultInstall: false,
@@ -229,15 +312,30 @@ describe('GhostPluginCard', () => {
     expect(onPrimary).not.toHaveBeenCalled();
   });
 
-  it('offers a conversation entry for a Host capability plugin', () => {
+  it('keeps the tab-panel action when the plugin also declares main-view', () => {
     const onPrimary = vi.fn();
-    const onManage = vi.fn();
-    render(<GhostPluginCard item={simulatorPlugin} onPrimary={onPrimary} onManage={onManage} />);
+    render(<GhostPluginCard item={mainViewPlugin} onPrimary={onPrimary} onManage={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.chatAria' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.useAria' }));
     expect(onPrimary).toHaveBeenCalledTimes(1);
-    expect(onManage).not.toHaveBeenCalled();
-    expect(screen.queryByText('settings.ghosts.page.agentInvoked')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.page.openAria' })).toBeNull();
+  });
+
+  it('does not add a primary action for a main-view-only tool plugin', () => {
+    render(
+      <GhostPluginCard
+        item={{
+          ...toolPlugin,
+          hasMainView: true,
+          mainViewTitle: 'Workspace',
+        }}
+        onPrimary={vi.fn()}
+        onManage={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('settings.ghosts.page.agentInvoked')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.page.openAria' })).toBeNull();
   });
 
   it('routes the manage icon to detail without firing the primary action', () => {
@@ -304,6 +402,28 @@ describe('GhostPluginCard', () => {
         }) as HTMLButtonElement
       ).disabled,
     ).toBe(true);
+  });
+
+  it('keeps the update label accessible while the shared button shows loading feedback', () => {
+    render(
+      <GhostPluginCard
+        item={commandPlugin}
+        updateVersion="1.1.0"
+        updateBusy
+        updatePending
+        onPrimary={vi.fn()}
+        onManage={vi.fn()}
+        onUpdate={vi.fn()}
+      />,
+    );
+
+    const update = screen.getByRole('button', {
+      name: 'settings.ghosts.page.updateAria',
+    });
+    expect(update.getAttribute('aria-busy')).toBe('true');
+    expect(update.querySelector('.animate-spinner')).toBeTruthy();
+    expect(update.querySelector('.opacity-0')?.textContent).toContain('settings.ghosts.page.updateTo');
+    expect((update as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('sends a tool-only plugin to manage and renders no primary button', () => {
@@ -409,17 +529,17 @@ describe('GhostPluginCard', () => {
     const { container } = render(
       <GhostPluginCard item={commandPlugin} onPrimary={vi.fn()} onManage={vi.fn()} />,
     );
-    expect(container.querySelector('.session-card-dot')).toBeNull();
+    expect(unreadDot(container)).toBeNull();
     expect(screen.getByText('Google services')).toBeTruthy();
   });
 
-  it('有未读时:呼吸绿点 + 摘要顶替静态描述', () => {
+  it('有未读时:绿点 + 摘要顶替静态描述', () => {
     __ingestGhostBadgeForTest('filo-google', { unread: true, summary: '2 封新邮件', at: 1 });
     const { container } = render(
       <GhostPluginCard item={commandPlugin} onPrimary={vi.fn()} onManage={vi.fn()} />,
     );
-    // 单条卡片走呼吸形态(session-card-dot 带呼吸关键帧),绿色走 done token。
-    const dot = container.querySelector('.session-card-dot');
+    // 静态绿点(2026-11-11 D-06:不再呼吸),绿色走 done token。
+    const dot = unreadDot(container);
     expect(dot).toBeTruthy();
     expect(dot?.className).toContain('var(--card-status-done)');
     // 摘要顶替静态描述:静态描述用户早读过了,"新内容是什么"才是这一刻的信息。
@@ -427,12 +547,22 @@ describe('GhostPluginCard', () => {
     expect(screen.queryByText('Google services')).toBeNull();
   });
 
+  it('keeps a remote card with the same id independent of local unread content', () => {
+    __ingestGhostBadgeForTest('filo-google', { unread: true, summary: 'local private summary', at: 1 });
+    const { container } = render(
+      <GhostPluginCard item={commandPlugin} showLocalUnread={false} onPrimary={vi.fn()} onManage={vi.fn()} />,
+    );
+    expect(unreadDot(container)).toBeNull();
+    expect(screen.queryByText('local private summary')).toBeNull();
+    expect(screen.getByText('Google services')).toBeTruthy();
+  });
+
   it('有未读但插件没给摘要:只点亮,静态描述保留(不留空白)', () => {
     __ingestGhostBadgeForTest('filo-google', { unread: true, at: 1 });
     const { container } = render(
       <GhostPluginCard item={commandPlugin} onPrimary={vi.fn()} onManage={vi.fn()} />,
     );
-    expect(container.querySelector('.session-card-dot')).toBeTruthy();
+    expect(unreadDot(container)).toBeTruthy();
     expect(screen.getByText('Google services')).toBeTruthy();
   });
 
@@ -441,12 +571,46 @@ describe('GhostPluginCard', () => {
     const { container } = render(
       <GhostPluginCard item={commandPlugin} onPrimary={vi.fn()} onManage={vi.fn()} />,
     );
-    expect(container.querySelector('.session-card-dot')).toBeNull();
+    expect(unreadDot(container)).toBeNull();
     expect(screen.getByText('Google services')).toBeTruthy();
   });
 });
 
 describe('MarketPluginCard', () => {
+  // 用户确认：推荐也展示可信身份和已有下载统计；公开社区保持匿名。
+  // unit：现有真实卡片入口缺少 compact 分支的身份、统计和匿名保护覆盖。
+  it('shows identity and exact download counts on recommendations without publishing community names', () => {
+    const { rerender } = render(<MarketPluginCard compact
+      item={{ ...marketPlugin, downloadStatistics: { requestCount: '9007199254740993' } }}
+      busy={false} onSelect={vi.fn()} onIconLoadError={vi.fn()} />);
+    expect(screen.getByText('settings.ghosts.market.publisherKind.official')).toBeTruthy();
+    expect(screen.getByText('9,007,199,254,740,993 settings.ghosts.usage.downloadsValue')).toBeTruthy();
+    rerender(<MarketPluginCard compact item={{ ...marketPlugin, publisherKind: 'personal', author: 'Private contributor' }}
+      busy={false} onSelect={vi.fn()} onIconLoadError={vi.fn()} />);
+    expect(screen.getByText('settings.ghosts.market.publisherKind.community')).toBeTruthy();
+    expect(screen.queryByText(/Private contributor/)).toBeNull();
+    expect(screen.queryByText(/settings.ghosts.usage.downloadsValue/)).toBeNull();
+  });
+
+  it.each([
+    [{ sourceType: 'server', scope: 'organization' }, 'settings.ghosts.page.origin.organization'],
+    [{ sourceType: 'git-market' }, 'settings.ghosts.page.origin.custom'],
+    [{ sourceType: 'local-market' }, 'settings.ghosts.page.origin.custom'],
+  ] as const)('prioritizes actual source over an official publisher field: %j', (source, label) => {
+    render(<MarketPluginCard item={{ ...marketPlugin, ...source }} busy={false}
+      onSelect={vi.fn()} onIconLoadError={vi.fn()} />);
+    expect(screen.getAllByText(label).length).toBeGreaterThan(1);
+    expect(screen.queryByText('settings.ghosts.market.publisherKind.official')).toBeNull();
+  });
+
+  it('does not guess a public identity from author text when provenance is missing', () => {
+    render(<MarketPluginCard item={{ ...marketPlugin, publisherKind: undefined }} busy={false}
+      onSelect={vi.fn()} onIconLoadError={vi.fn()} />);
+    expect(screen.queryByText('settings.ghosts.market.publisherKind.official')).toBeNull();
+    expect(screen.queryByText('settings.ghosts.market.publisherKind.community')).toBeNull();
+    expect(screen.queryByText('Cindy')).toBeNull();
+  });
+
   it('uses an icon-only details action in the card-level right action rail', () => {
     render(
       <MarketPluginCard
@@ -538,25 +702,33 @@ describe('MarketPluginCard', () => {
     ).toBeTruthy();
   });
 
-  it('keeps fixed market metadata on one line while truncating long identities', () => {
-    render(
+  it('shows scope, author and downloads without crowding the list with version or machine id', () => {
+    const { container } = render(
       <MarketPluginCard
-        item={marketPlugin}
+        item={{ ...marketPlugin, downloadStatistics: { requestCount: '12480' } }}
         busy={false}
         onSelect={vi.fn()}
         onIconLoadError={vi.fn()}
       />,
     );
+    const metadata = screen.getByText('settings.ghosts.page.origin.public').parentElement;
+    expect(metadata?.textContent).toBe('settings.ghosts.page.origin.public·Cindy·12,480 settings.ghosts.usage.downloadsValue');
+    expect(screen.queryByText('v1.3.11')).toBeNull();
+    expect(screen.queryByText('google-calendar')).toBeNull();
+    expect(container.querySelector('button button')).toBeNull();
+  });
 
-    const origin = screen.getByText('settings.ghosts.page.origin.public');
-    const metadata = origin.parentElement;
-    expect(metadata?.className).toContain('whitespace-nowrap');
-    expect(metadata?.className).toContain('overflow-hidden');
-    expect(origin.className).toContain('shrink-0');
-    expect(screen.getByText('v1.3.11').className).toContain('shrink-0');
-    expect(screen.getByText('google-calendar').className).toContain('truncate');
-    expect(screen.getByText('google-calendar').className).toContain('min-w-0');
-    expect(screen.getByText('Cindy').className).toContain('truncate');
+  it('keeps shared downloads in installed cards alongside exceptional authorization status', () => {
+    render(<GhostPluginCard
+      item={{ ...commandPlugin, oauthAuthorizationExpired: true }}
+      author="Cindy"
+      sourceLabel="Public"
+      marketItem={{ ...marketPlugin, downloadStatistics: { requestCount: '0' } }}
+      onPrimary={vi.fn()} onManage={vi.fn()}
+    />);
+    expect(screen.getByText('0 settings.ghosts.usage.downloadsValue')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.page.oauthAuthorizationExpired')).toBeTruthy();
+    expect(screen.queryByText('v1.0.0')).toBeNull();
   });
 
   it('offers explicit replacement while still blocking actions during busy operations', () => {
@@ -577,7 +749,7 @@ describe('MarketPluginCard', () => {
     expect(cardBody.className).not.toContain('cursor-wait');
     const replacementDescription = screen.getByText('settings.ghosts.market.replaceDescription');
     expect(replacementDescription.id).toBeTruthy();
-    expect(cardBody.getAttribute('aria-describedby')).toBe(replacementDescription.id);
+    expect(cardBody.getAttribute('aria-describedby')?.split(' ')).toContain(replacementDescription.id);
     const replaceAction = screen.getByRole('button', {
       name: 'settings.ghosts.market.replaceAria:Google Calendar',
     });
@@ -603,6 +775,27 @@ describe('MarketPluginCard', () => {
     expect((busyCardBody as HTMLButtonElement).disabled).toBe(true);
     expect(busyCardBody.className).toContain('cursor-wait');
     expect(busyCardBody.className).not.toContain('cursor-not-allowed');
+  });
+
+  it('replaces the install label with a spinner while this card is pending', () => {
+    render(
+      <MarketPluginCard
+        item={marketPlugin}
+        busy
+        pending
+        onSelect={vi.fn()}
+        onInstall={vi.fn()}
+        onIconLoadError={vi.fn()}
+      />,
+    );
+
+    const install = screen.getByRole('button', {
+      name: 'settings.ghosts.page.installAria',
+    });
+    expect(install.getAttribute('aria-busy')).toBe('true');
+    expect(install.querySelector('.animate-spinner')).toBeTruthy();
+    expect(install.querySelector('.opacity-0')?.textContent).toBe('settings.ghosts.market.install');
+    expect((install as HTMLButtonElement).disabled).toBe(true);
   });
 });
 

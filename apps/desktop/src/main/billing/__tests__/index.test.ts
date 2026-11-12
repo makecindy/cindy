@@ -2,11 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow } from 'electron';
 
 import { BILLING_INVOKE } from '../../../shared/billing.js';
-import { ServerApiError } from '../../serverApiClient.js';
+import { ServerApiError } from '../../serverApiClient.desktop.js';
 import { createBillingHandlers } from '../index.js';
 
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: vi.fn() }));
-vi.mock('../../serverApiClient.js', () => {
+vi.mock('../../serverApiClient.desktop.js', () => {
   class ServerApiError extends Error {
     constructor(
       public readonly code: string,
@@ -90,6 +90,7 @@ function harness() {
     }
     if (path === '/api/billing/catalog') return { products: [] };
     if (path === '/api/billing/orders?limit=20') return { orders: [], nextCursor: null };
+    if (path.startsWith('/api/billing/payment-history?')) return { records: [], nextCursor: null };
     if (path === '/api/billing/subscription') return { subscription };
     if (path.includes('/subscriptions')) return subscription;
     return paymentOrder;
@@ -121,6 +122,25 @@ function harness() {
 }
 
 describe('billing IPC', () => {
+  // 新成功历史必须经固定账号接口取下一页，renderer 不得覆盖账号或请求路径。
+  it('passes a bounded history cursor to the fixed personal history endpoint', async () => {
+    const { call, fetch } = harness();
+    await expect(call('billing:list-payment-history', { limit: 10, cursor: 'previous_page' }))
+      .resolves.toEqual({ records: [], nextCursor: null });
+    expect(fetch).toHaveBeenCalledWith('/api/billing/payment-history?limit=10&cursor=previous_page', {
+      baseUrl: expect.any(Function), timeoutMs: 20_000, redactErrorDetails: true,
+    });
+  });
+
+  it.each([
+    { limit: 0 }, { limit: 101 }, { limit: 10, cursor: '../other' },
+    { limit: 10, cursor: 'a'.repeat(1025) }, { limit: 10, membershipId: 'another-account' },
+  ])('rejects unsafe history payload before network access: %j', async (payload) => {
+    const { call, fetch } = harness();
+    await expect(call('billing:list-payment-history', payload)).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('queries the fixed current-account balance endpoint without a renderer payload', async () => {
     const { call, fetch } = harness();
 
@@ -456,7 +476,7 @@ describe('billing IPC', () => {
       method: 'POST',
       body: { targetOfferCode: 'plus_month' },
       headers: { 'Idempotency-Key': 'desktop:plan-change:12345678' },
-      allowedRedactedErrorCodes: ['PLAN_CHANGE_NOT_AVAILABLE'],
+      allowedRedactedErrorCodes: ['PLAN_CHANGE_NOT_AVAILABLE', 'PLAN_CHANGE_RENEWAL_PREPAID'],
     });
   });
 
@@ -480,6 +500,32 @@ describe('billing IPC', () => {
       message: '[PLAN_CHANGE_NOT_AVAILABLE] target plan is not available',
     });
   });
+
+  it.each([
+    [
+      BILLING_INVOKE.QUOTE_PLAN_CHANGE,
+      { targetOfferCode: 'max_month', idempotencyKey: 'desktop:plan-change:12345678' },
+    ],
+    [BILLING_INVOKE.CONFIRM_PLAN_CHANGE, { planChangeId: 'plan_change_1' }],
+  ])(
+    'preserves prepaid renewal rejection without exposing upstream text: %s',
+    async (channel, payload) => {
+      const { call, fetch } = harness();
+      fetch.mockRejectedValueOnce(
+        new ServerApiError('PLAN_CHANGE_RENEWAL_PREPAID', 409, 'private upstream detail'),
+      );
+      await expect(call(channel, payload)).rejects.toMatchObject({
+        code: 'PLAN_CHANGE_RENEWAL_PREPAID',
+        message: '[PLAN_CHANGE_RENEWAL_PREPAID] next renewal is already paid',
+      });
+      expect(fetch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          allowedRedactedErrorCodes: expect.arrayContaining(['PLAN_CHANGE_RENEWAL_PREPAID']),
+        }),
+      );
+    },
+  );
 
   it('rejects a plan change quote without a valid idempotency key before network access', async () => {
     const { call, fetch } = harness();

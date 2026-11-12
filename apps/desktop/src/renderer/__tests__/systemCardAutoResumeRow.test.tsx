@@ -29,6 +29,17 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+// These fixtures render other SystemCard variants; companion synchronization is tested separately.
+vi.mock('@/features/bots/useRemoteBots', () => ({ useRemoteBots: () => [] }));
+// Partner task cards have their own integration suite; isolate this sibling variant.
+vi.mock('@/features/bots/BotCollaborationCard', () => ({
+  BotSessionTaskCard: () => null,
+  BotSessionTaskMessageTrace: () => null,
+}));
+vi.mock('@/features/bots/BotSessionTaskResultCard', () => ({
+  BotSessionTaskResultCard: () => null,
+}));
+
 vi.mock('@/features/learn/LearnStatusCard', () => ({
   LearnStatusCard: () => null,
 }));
@@ -104,6 +115,50 @@ describe('SystemCard auto-resume 行', () => {
     ).toBeNull();
   });
 
+  it('供应商组换电脑进行中 → 「正在换一台电脑继续」,不带先不呈现的原始错误', () => {
+    render(
+      <SystemCard
+        cardType="auto-resume-pending"
+        data={{
+          error: "You've hit your session limit",
+          attempt: 0,
+          maxAttempts: 0,
+          sessionTotal: 0,
+          groupSwitchPending: { cause: 'usage-limit' },
+        }}
+      />,
+    );
+    expect(screen.getByText('chat.systemCard.autoResumePending.groupSwitch')).toBeTruthy();
+    expect(screen.queryByText(/session limit/)).toBeNull();
+    expect(screen.queryByText('chat.systemCard.autoResumePending.label')).toBeNull();
+  });
+
+  it('供应商组等回原电脑后在原电脑继续 → 「已重新连上 {电脑}，继续运行」,读不到名称时不写电脑名', () => {
+    const { unmount } = render(
+      <SystemCard
+        cardType="auto-resume"
+        data={{
+          reason: 'usage-limit-reset',
+          attempt: 1,
+          maxAttempts: 1,
+          sessionTotal: 0,
+          agentReconnect: { computer: 'Mac mini' },
+        }}
+      />,
+    );
+    expect(
+      screen.getByText('chat.systemCard.autoResume.agentReconnect.named({"computer":"Mac mini"})'),
+    ).toBeTruthy();
+    unmount();
+    render(
+      <SystemCard
+        cardType="auto-resume"
+        data={{ reason: 'usage-limit-reset', attempt: 1, maxAttempts: 1, sessionTotal: 0, agentReconnect: {} }}
+      />,
+    );
+    expect(screen.getByText('chat.systemCard.autoResume.agentReconnect.unnamed')).toBeTruthy();
+  });
+
   it('已回填时 inFlight 不参与:终态优先,仍定格 ✓ / ✗', () => {
     render(
       <SystemCard
@@ -163,9 +218,22 @@ describe('SystemCard auto-resume 行', () => {
       />,
     );
     const button = screen.getByRole('button');
+    expect(button.className.split(/\s+/)).toContain('group');
     expect(button.getAttribute('aria-label')).toBeNull();
     // 可见文本 = 结论 + 摘要,读屏据此拼出无障碍名。
     expect(button.textContent).toContain('chat.systemCard.autoResume.label');
     expect(button.textContent).toContain('502 upstream unreachable');
+  });
+
+  it('仅有 outcome 时仍保留 18px 三角槽,不画三角,也不挂 group', () => {
+    render(<SystemCard cardType="auto-resume" data={{ outcome: 'succeeded' }} />);
+    const button = screen.getByRole('button');
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(button.className.split(/\s+/)).not.toContain('group');
+    const slot = button.lastElementChild;
+    expect(slot?.className).toContain('w-[18px]');
+    expect(slot?.className).toContain('h-[18px]');
+    expect(slot?.className).toContain('ml-auto');
+    expect(slot?.querySelector('svg')).toBeNull();
   });
 });

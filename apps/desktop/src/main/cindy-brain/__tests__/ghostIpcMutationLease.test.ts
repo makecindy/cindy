@@ -24,7 +24,6 @@ import { describe, expect, it } from 'vitest';
 const MUTATING_GHOST_CHANNELS = [
   'ghosts:install',
   'ghosts:update',
-  'ghosts:set-enabled',
   'ghosts:restore-builtin',
 ] as const;
 
@@ -53,20 +52,28 @@ describe('ghost 写路径 IPC 的 owner 租约(源码契约)', () => {
     });
   }
 
-  it('ghosts:reapprove-installed 持租约,owner 以 inspect 时点的一次性票据为准(更强于 handler 内 capture)', () => {
-    // 第 8 轮 P0-2:owner 在 confirm 入口才 capture 绑不住"读事实那一刻"——确认卡
-    // 停留期间切号,A 看的确认可以给 B 的同 id 目录铸批准。现在 inspect 发一次性
-    // 票据(钉 owner + id + manifestSha256),confirm 原子消费并以**票据里的 owner**
-    // 起租约:generation 不等直接拒。handler 内不该再出现 captureGhostMutationOwner
-    // (那会退化回"用确认时刻的 owner",正是要消掉的形态)。
-    const block = handlerBlock(source, 'ghosts:reapprove-installed');
-    expect(block).toContain('reapproveTickets.consume(');
-    expect(block).toContain('beginGhostMutation(ticket.owner)');
-    expect(block).not.toContain('captureGhostMutationOwner()');
-    // inspect 侧必须在读事实之前捕获 owner 并发票。
-    const inspectBlock = handlerBlock(source, 'ghosts:reapprove-inspect');
-    expect(inspectBlock).toContain('captureGhostMutationOwner()');
-    expect(inspectBlock).toContain('reapproveTickets.issue(');
+  it('ghosts:set-enabled 同步委托共用入口，入口先持 owner 租约再异步修改', () => {
+    const block = handlerBlock(source, 'ghosts:set-enabled');
+    expect(block).toContain('assertTrustedAppRendererEvent(event)');
+    expect(block).toContain('return setGhostEnabledForUser(id, enabled, expectedInstalledApproval)');
+    expect(block).toContain('!isGhostInstallApprovalToken(expectedInstalledApproval)');
+    expect(block).not.toMatch(/\bawait\b/);
+    const start = source.indexOf('async function setGhostEnabledForUser(');
+    expect(start).toBeGreaterThan(-1);
+    // 注释会描述 await 窗口，只比较真正语句中的租约和异步边界。
+    const fn = source.slice(start, source.indexOf('\n}', start)).replace(/\/\/[^\n]*/g, '');
+    const lease = fn.indexOf('beginGhostMutation(captureGhostMutationOwner())');
+    expect(lease).toBeGreaterThan(-1);
+    expect(lease).toBeLessThan(fn.indexOf('await '));
+    expect(fn).toContain('return setPluginEnabled(');
+    expect(fn).toContain('getGhostManager().setEnabled(relId, next, approval, check)');
+    // Both launchers use the same transaction; retain the cross-file lease
+    // contract instead of requiring the old inline implementation.
+    const service = fs.readFileSync(path.join(__dirname, '..', 'pluginEnableService.ts'), 'utf8');
+    expect(service.indexOf('ports.acquire(storagePart)')).toBeLessThan(service.indexOf('await ports.stop'));
+    expect(service).toContain('installedGhostPhysicalRelId(target)');
+    expect(service).toContain('installedGhostStoragePart(target)');
+    expect(service).toMatch(/finally\s*\{\s*release\(\)/);
   });
 
   it('ghosts:uninstall 经 uninstallGhostAndCleanup 持租约(入口同步取,无异步窗口故无需 capture)', () => {
@@ -77,11 +84,22 @@ describe('ghost 写路径 IPC 的 owner 租约(源码契约)', () => {
     const outerStart = source.indexOf('export async function uninstallGhostAndCleanup');
     expect(outerStart).toBeGreaterThan(-1);
     const outer = source.slice(outerStart, source.indexOf('\n}', outerStart));
-    expect(outer).toContain('withGhostInstallLock(');
+    expect(outer).toContain('withGhostInstallLock(identity.ghostId');
+    expect(outer).toContain('installedGhostStoragePart(ghost)');
     const start = source.indexOf('async function uninstallGhostAndCleanupLocked');
     expect(start).toBeGreaterThan(-1);
     const fn = source.slice(start, source.indexOf('\n}', start));
     expect(fn).toContain('beginGhostMutation(');
+  });
+
+  it('卸载按物理存储键清理寄存引用、近期使用及提醒，而非目录相对路径', () => {
+    const start = source.indexOf('async function uninstallGhostAndCleanupLocked');
+    const block = source.slice(start, source.indexOf('\n}', start));
+    expect(block).toContain("removeRefs({ refKind: 'ghost-deposit', refId: storagePart })");
+    expect(block).toContain('forgetGhostRecentUsage(storagePart)');
+    expect(block).toContain('forgetGhostRecommendations(storagePart)');
+    expect(block).toContain('extinguishGhostUnread(storagePart)');
+    expect(block).toContain('badgeSlotSingleton?.forget(storagePart)');
   });
 
   it('市场装入/更新持租约(installOrUpdateMarketGhostPackage)', () => {

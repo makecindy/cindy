@@ -10,12 +10,20 @@
 
 import { summarizeToolUseText } from '@cindy/maker-shared/message-presentation';
 import { tokenizeThinkingText } from '@cindy/maker-shared/thinking-text';
+import { readTokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 
 /** Keep parity with the desktop/mobile running work preview. */
 export const MAX_VISIBLE_STEPS = 5;
 
 /** One-line remote previews must not let a command or thought dominate a card. */
 const STEP_LABEL_MAX = 80;
+
+/**
+ * 收口后可回看的过程记录最多列出多少项。运行中只露最近 5 项是为了不挤占正文;
+ * 记录收在折叠区里, 可以列全, 但仍要给渠道的单条消息容量留出正文的位置 ——
+ * 超出的更早项目只计数。
+ */
+export const MAX_RECORD_STEPS = 50;
 
 export interface TurnActivityStep {
   key: string;
@@ -58,6 +66,11 @@ export interface TurnActivityState {
    * 只由交互挂起/收口显式设置与清除, 进展事件一律不动它。
    */
   interactionNotice: string | null;
+  /**
+   * 宿主实测的当前输出速度(tok/s, 已取整), 与桌面运行状态栏同源(status 事件的
+   * tokenSpeed)。尚无可靠读数时为 null, 头部就不显示这一段。
+   */
+  tokenRate: number | null;
 }
 
 /** Replay/delta bookkeeping stays private and is never serialized with card state. */
@@ -65,6 +78,11 @@ interface TurnActivityInternalState {
   seenKeys: Set<string>;
   thinkingTextByBlockId: Map<string, string>;
   sequence: number;
+  /**
+   * 本轮按时间顺序的工作项(最多 MAX_RECORD_STEPS 项), 收口时生成过程记录。
+   * 与 recentSteps 共用同一批 step 对象: 思考行在窗口内原位更新时这里同步可见。
+   */
+  history: TurnActivityStep[];
 }
 
 const internalStateByActivity = new WeakMap<TurnActivityState, TurnActivityInternalState>();
@@ -83,11 +101,13 @@ export function createTurnActivity(startedAt: number): TurnActivityState {
     writing: false,
     notice: null,
     interactionNotice: null,
+    tokenRate: null,
   };
   internalStateByActivity.set(activity, {
     seenKeys: new Set(),
     thinkingTextByBlockId: new Map(),
     sequence: 0,
+    history: [],
   });
   return activity;
 }
@@ -104,6 +124,8 @@ function appendStep(activity: TurnActivityState, step: TurnActivityStep): boolea
   activity.totalSteps += 1;
   activity.recentSteps.push(step);
   if (activity.recentSteps.length > MAX_VISIBLE_STEPS) activity.recentSteps.shift();
+  internal.history.push(step);
+  if (internal.history.length > MAX_RECORD_STEPS) internal.history.shift();
   return true;
 }
 
@@ -130,6 +152,51 @@ export function setInteractionNotice(
   if (activity.interactionNotice === next) return false;
   activity.interactionNotice = next;
   return true;
+}
+
+/**
+ * 设置 / 清除头部的 tok/s。非正数与非有限值一律视为"没有读数"。返回是否变化,
+ * 语义同 setActivityNotice; 速度只随 ticker 带出, 调用方不必为它单独刷帧。
+ */
+export function setActivityTokenRate(activity: TurnActivityState, rate: number | null): boolean {
+  const next = rate !== null && Number.isFinite(rate) && rate > 0 ? Math.round(rate) : null;
+  if (activity.tokenRate === next) return false;
+  activity.tokenRate = next;
+  return true;
+}
+
+/**
+ * 用一条 status 事件的 data 更新头部 tok/s —— 所有渠道路径(官方 bot、个人 IM、
+ * 自动任务转播)共用这一个判据。返回头部是否变化。
+ *
+ * - generationReliable === false: 隐藏, 与桌面运行状态栏同口径(不显示错数);
+ * - 占位帧 / 首个输出之前的 0 读数 / 坏数据: 保留上一个值, 避免工具执行间隙头部来回闪。
+ */
+export function applyStatusTokenRate(activity: TurnActivityState, data: unknown): boolean {
+  return setActivityTokenRate(activity, tokenRateFromStatus(data, activity.tokenRate));
+}
+
+/**
+ * applyStatusTokenRate 的纯判据: 给定上一个值与一条 status data, 返回下一个值。
+ * 还没有 activity 可写时(自动任务转播卡尚未开出)用它暂存读数。
+ */
+export function tokenRateFromStatus(data: unknown, previous: number | null): number | null {
+  if (!data || typeof data !== 'object') return previous;
+  const record = data as { generationReliable?: unknown; tokenSpeed?: unknown };
+  if (record.generationReliable === false) return null;
+  const speed = readTokenSpeedSnapshot(record.tokenSpeed);
+  if (!speed || speed.rate <= 0) return previous;
+  return Math.round(speed.rate);
+}
+
+/**
+ * 收口时清掉只在运行中才成立的指示(重试说明、当前 tok/s)。凡是会把过程区冻结进
+ * 终稿的收口路径都要调它, 否则失败卡片会永久显示"仍在重试"或一个已经不存在的速度。
+ * 「等你确认」那一行由交互收口自行负责, 这里不碰。
+ */
+export function clearRunningIndicators(activity: TurnActivityState): void {
+  activity.notice = null;
+  activity.tokenRate = null;
 }
 
 /** 有真实进展 = 上一条状态说明(如"正在重试")已过期。 */
@@ -238,10 +305,11 @@ export function renderActivity(activity: TurnActivityState, now: number): string
   if (activity.totalSteps === 0 && activity.notice === null && activity.interactionNotice === null)
     return '';
   const elapsed = formatElapsed(now - activity.startedAt);
+  const rate = activity.tokenRate !== null ? ` · ${activity.tokenRate} tok/s` : '';
   const lines = [
     activity.totalSteps > 0
-      ? `⚙️ 工作中 · ${activity.totalSteps} 项 · ${elapsed}`
-      : `⚙️ 工作中 · ${elapsed}`,
+      ? `⚙️ 工作中 · ${activity.totalSteps} 项 · ${elapsed}${rate}`
+      : `⚙️ 工作中 · ${elapsed}${rate}`,
   ];
   const last = activity.recentSteps.length - 1;
   activity.recentSteps.forEach((step, index) => {
@@ -259,4 +327,32 @@ export function renderActivity(activity: TurnActivityState, now: number): string
   // 等用户那一行放最后: 它是此刻唯一需要用户动手的事。
   if (activity.interactionNotice !== null) lines.push(`> ⏳ ${activity.interactionNotice}`);
   return lines.join('\n');
+}
+
+/** 收口后的过程记录: 折叠后露出的一行标题 + 点开后的逐项记录。 */
+export interface TurnActivityRecord {
+  title: string;
+  lines: string[];
+}
+
+/**
+ * 一轮正常完成时的过程记录, 交给支持折叠的渠道收在正文上方: 平时只占一行,
+ * 想核对「这一轮到底做了什么」时点开回看, 不必回到 Cindy 里找。
+ *
+ * 没有任何工作项(纯文本快答)时返回 null —— 终稿与以前逐字一致, 不多出一个空的
+ * 折叠区。重试说明、tok/s、「在等你确认」都是运行中才成立的指示, 不进记录。
+ */
+export function buildActivityRecord(
+  activity: TurnActivityState,
+  now: number,
+): TurnActivityRecord | null {
+  if (activity.totalSteps === 0) return null;
+  const { history } = getInternalState(activity);
+  const lines = history.map((step) => `✓ ${step.kind === 'thinking' ? '✦ ' : ''}${step.label}`);
+  const earlier = activity.totalSteps - history.length;
+  if (earlier > 0) lines.unshift(`… 更早的 ${earlier} 项未列出`);
+  return {
+    title: `过程记录 · ${activity.totalSteps} 项 · ${formatElapsed(now - activity.startedAt)}`,
+    lines,
+  };
 }

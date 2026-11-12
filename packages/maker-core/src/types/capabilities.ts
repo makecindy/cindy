@@ -110,15 +110,20 @@ export interface Capabilities {
    */
   extraDirs: CapabilityStatus;
   /**
+   * Session 附加可读写目录。与 extraDirs 的只读授权严格分离；旧会话只含
+   * extraDirs 时不得因此获得写权限。
+   */
+  writableDirs?: CapabilityStatus;
+  /**
    * 会话导出为 HTML —— pi 原生 export_html RPC(自带 export-html 渲染器,离线、无网关)。
    * 支持时 handle 实现 exportSessionHtml;UI 据此决定是否显示「导出 HTML」入口。
    * CC/Codex 无对应能力(缺省视为不支持)。
    */
   sessionHtmlExport?: CapabilityStatus;
   /**
-   * 手动压缩会话上下文 —— pi 原生 compact RPC(可带聚焦指令,调 LLM 生成摘要)。
+   * 手动压缩会话上下文 —— Pi compact / Codex thread/compact/start 原生 RPC。
    * 支持时 handle 实现 compactSession;UI 据此决定是否显示「压缩会话」入口。
-   * CC/Codex 的 /compact 走各自 agent 内置斜杠命令,不经此能力(缺省视为不支持)。
+   * Claude Code 的 /compact 走内置斜杠命令，不经此能力。聚焦指令仅 Pi 支持。
    */
   manualCompact?: CapabilityStatus;
 }
@@ -242,10 +247,16 @@ export interface ModelDescriptor {
   /** 该模型默认 effort; null = 不支持 effort。 */
   defaultEffort: Effort | null;
   /**
+   * true = 目录里没有任何来源声明过该模型的 effort 能力(自定义来源只填了 id/name 等)。
+   * 这时 `efforts: []` 只是占位,不等于「明确无档位」;准入校验不应据此拒绝显式档位(#5535)。
+   */
+  effortsUnknown?: boolean;
+  /**
    * 该模型是否支持 Fast Mode (Claude 1M context 通道 / Codex priority service tier)。
    * UI 据此显示 / 隐藏 Fast Mode 开关, 不再自己 startsWith 解析 model id。
    */
   supportsFastMode?: boolean;
+  supportsUltrafastMode?: boolean;
   /**
    * 厂商分组 id（纯展示元数据，源自目录 providers.json，host 派生时透传）。
    * 渲染层据此对模型分组；缺省时回退 id 前缀归类。maker-core 运行时不读它。

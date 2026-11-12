@@ -19,6 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -199,15 +200,27 @@ function findAsset(meta, name) {
   return asset;
 }
 
+// A transient GitHub asset 5xx should not immediately send CI to a CDN that
+// may not contain this pin. Bound retries; permanent errors still fail normally.
+export async function fetchReleaseAsset(url, { fetchImpl = fetch, wait = delay } = {}) {
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetchImpl(url, { headers: ghHeaders() });
+    if (res.ok) return res;
+    await res.body?.cancel();
+    if (res.status < 500 || res.status >= 600 || attempt >= 3) {
+      throw new Error(`Download failed ${res.status}: ${url}`);
+    }
+    await wait(attempt * 1_000);
+  }
+}
+
 async function fetchText(url) {
-  const res = await fetch(url, { headers: ghHeaders() });
-  if (!res.ok) throw new Error(`Download failed ${res.status}: ${url}`);
+  const res = await fetchReleaseAsset(url);
   return await res.text();
 }
 
 async function downloadFile(url, destPath) {
-  const res = await fetch(url, { headers: ghHeaders() });
-  if (!res.ok) throw new Error(`Download failed ${res.status}: ${url}`);
+  const res = await fetchReleaseAsset(url);
   if (!res.body) throw new Error(`Download returned no body: ${url}`);
   await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(destPath));
 }

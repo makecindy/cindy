@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMessageContentLayout } from '@/session/messageContentLayout';
+import { buildMessageContentLayout, nextSettledContentWidth } from '@/session/messageContentLayout';
 
 describe('messageContentLayout', () => {
   it('compacts attachment and markdown content for iPhone SE width', () => {
@@ -50,5 +50,19 @@ describe('messageContentLayout', () => {
       imagePreviewWidth: 148,
       mediaPreviewWidth: 160,
     });
+  });
+});
+
+describe('nextSettledContentWidth', () => {
+  it('pins the first positive measured width and ignores sub-pixel jitter', () => {
+    expect(nextSettledContentWidth(0, 0)).toBe(0);
+    expect(nextSettledContentWidth(0, 360)).toBe(360);
+    expect(nextSettledContentWidth(360, 361)).toBe(360);
+    expect(nextSettledContentWidth(360, 359)).toBe(360);
+  });
+
+  it('updates when the container really changes width', () => {
+    expect(nextSettledContentWidth(360, 328)).toBe(328);
+    expect(nextSettledContentWidth(328, 390)).toBe(390);
   });
 });

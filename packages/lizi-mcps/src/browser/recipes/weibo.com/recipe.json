@@ -1,16 +1,18 @@
 {
   "id": "weibo-hot",
-  "match": ["weibo.com"],
-  "description": "读取微博热搜榜(排名/热词/热度值/分类/标签/链接)。先落到 weibo.com 域,再在页面内同源 fetch JSON——带上登录 cookie、不被风控挡(直接 navigate 到 ajax 接口会被喂 SPA HTML)。",
-  "inputs": { "limit": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://weibo.com" },
-    { "action": "wait", "loadState": "load" },
-    {
-      "action": "evaluate",
-      "as": "items",
-      "fn": "async () => { const limit = Number('{{limit|js}}') || 30; const r = await fetch('/ajax/statuses/hot_band', { credentials: 'include' }); const t = await r.text(); let d; try { d = JSON.parse(t); } catch (e) { throw new Error('微博返回非 JSON(未登录或被风控),请在持久浏览器登录 weibo.com 后重试'); } if (!d || !d.ok) throw new Error('微博热搜接口返回异常(可能未登录),请在持久浏览器登录 weibo.com 后重试'); const list = (d.data && d.data.band_list) ? d.data.band_list : []; return list.slice(0, limit).map((b, i) => ({ rank: b.realpos || (i + 1), word: b.word, hot: b.num || 0, category: b.category || '', label: b.label_name || '', url: 'https://s.weibo.com/weibo?q=' + encodeURIComponent('#' + b.word + '#') })); }"
-    }
+  "match": [
+    "weibo.com"
   ],
-  "output": "{{items}}"
+  "description": "微博热搜",
+  "access": "read",
+  "adapter": "weibo/hot",
+  "inputs": {
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 30,
+      "description": "Number of items (max 50)"
+    }
+  },
+  "steps": []
 }

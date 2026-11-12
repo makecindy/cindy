@@ -1,5 +1,5 @@
 /**
- * conversationSearchRequest —— "请求在某个 project 内打开会话搜索" 的跨层信号
+ * conversationSearchRequest —— 请求在项目或任务组内打开搜索的跨层信号。
  *
  * 背景:展开侧栏的会话搜索是常驻内联框(CCAgentSidebarUpper 的 SidebarInlineSearch
  * + useConversationSearch);rail 态是 ConversationSearchBox 图标弹窗。"在此项目内搜索"
@@ -14,13 +14,26 @@
 import { useSyncExternalStore } from 'react';
 
 export interface ConversationSearchProjectRequest {
+  kind?: 'project';
   projectKey: string;
   projectName: string;
+  sessionIds: string[];
+  workingDir?: string | null;
+  deviceLinkDeviceId?: string | null;
+  requestId: number;
+}
+
+export interface ConversationSearchSessionGroupRequest {
+  kind: 'session-group';
+  groupName: string;
   sessionIds: string[];
   requestId: number;
 }
 
-let current: ConversationSearchProjectRequest | null = null;
+export type ConversationSearchScopeRequest =
+  ConversationSearchProjectRequest | ConversationSearchSessionGroupRequest;
+
+let current: ConversationSearchScopeRequest | null = null;
 let nextRequestId = 1;
 const listeners = new Set<() => void>();
 
@@ -28,17 +41,17 @@ function emit(): void {
   for (const l of listeners) l();
 }
 
-/** 生产者:项目 ⋮ → "在此项目内搜索"。内部自增 requestId,触发消费方打开搜索。 */
-export function requestConversationSearch(req: {
-  projectKey: string;
-  projectName: string;
-  sessionIds: string[];
-}): void {
+/** 项目或任务组菜单发起搜索；自增 requestId 保证同一范围可反复打开。 */
+export function requestConversationSearch(
+  req:
+    | Omit<ConversationSearchProjectRequest, 'requestId'>
+    | Omit<ConversationSearchSessionGroupRequest, 'requestId'>,
+): void {
   current = { ...req, requestId: nextRequestId++ };
   emit();
 }
 
-export function getConversationSearchRequest(): ConversationSearchProjectRequest | null {
+export function getConversationSearchRequest(): ConversationSearchScopeRequest | null {
   return current;
 }
 
@@ -48,8 +61,12 @@ function subscribe(cb: () => void): () => void {
 }
 
 /** Hook —— 消费方(useConversationSearch)用它订阅 projectFilterRequest。 */
-export function useConversationSearchRequest(): ConversationSearchProjectRequest | null {
-  return useSyncExternalStore(subscribe, getConversationSearchRequest, getConversationSearchRequest);
+export function useConversationSearchRequest(): ConversationSearchScopeRequest | null {
+  return useSyncExternalStore(
+    subscribe,
+    getConversationSearchRequest,
+    getConversationSearchRequest,
+  );
 }
 
 /**

@@ -40,7 +40,11 @@
 
 import type { Settings } from '@anthropic-ai/claude-agent-sdk';
 import type { CapabilityRoutingPolicy } from '../../types/capability-routing.js';
-import { buildClaudeSkillOverrides } from './capability-routing.js';
+import type { BotRuntimeSkillPolicy } from '../base-agent.js';
+import {
+  buildClaudeDeniedMcpServers,
+  buildClaudeSkillOverrides,
+} from './capability-routing.js';
 
 export interface ClaudeFlagSettingsInput {
   /** reasoning summary 展示开关(displayReasoning === 'summarized')。 */
@@ -55,8 +59,12 @@ export interface ClaudeFlagSettingsInput {
    * 缺省时整字段不出现 → 与未升级行为逐字节一致,零缓存影响。
    */
   fastMode: boolean;
+  /** A trusted subscription prohibition must override native/user defaults explicitly. */
+  fastModeAllowed?: boolean;
   /** Host-owned policy for colliding downstream skills. */
   capabilityRouting?: CapabilityRoutingPolicy;
+  /** Bot Profile's native per-session Skill policy. */
+  botSkillPolicy?: BotRuntimeSkillPolicy;
   /**
    * Final Claude SDK wire model strings that Cindy allows for this session.
    * This highest-priority list replaces any stale user availableModels list.
@@ -66,7 +74,25 @@ export interface ClaudeFlagSettingsInput {
 
 /** 装配 startSession 注入的 flag settings 对象。纯函数 —— 每次调用读最新输入值。 */
 export function buildClaudeFlagSettings(input: ClaudeFlagSettingsInput): Settings {
-  const skillOverrides = buildClaudeSkillOverrides(input.capabilityRouting);
+  const skillOverrides: NonNullable<Settings['skillOverrides']> = {};
+  if (input.botSkillPolicy) {
+    const allowed = input.botSkillPolicy.mode === 'allowlist'
+      ? new Set(input.botSkillPolicy.configured.map((item) => item.trim()))
+      : new Set<string>();
+    for (const item of input.botSkillPolicy.catalog) {
+      const name = item.name.trim();
+      if (!name) continue;
+      const runtimeName = item.runtimeCommandName?.trim();
+      skillOverrides[name] = item.enabled !== false && item.runtimeStatus !== 'failed' &&
+        (allowed.has(name) || (!!runtimeName && allowed.has(runtimeName)))
+        ? 'on'
+        : 'off';
+    }
+  }
+  // Host routing is a security boundary and therefore wins over a Bot's
+  // allowlist when both address the same Skill.
+  Object.assign(skillOverrides, buildClaudeSkillOverrides(input.capabilityRouting));
+  const deniedMcpServers = buildClaudeDeniedMcpServers(input.capabilityRouting);
   return {
     showThinkingSummaries: input.showThinkingSummaries,
     // 屏蔽用户级 apiKeyHelper,防止它劫持 oauth-spawn 的订阅鉴权(见文件头注释)。
@@ -80,10 +106,11 @@ export function buildClaudeFlagSettings(input: ClaudeFlagSettingsInput): Setting
       autoMemoryEnabled: input.memoryOverride,
       autoDreamEnabled: input.memoryOverride,
     }),
-    ...(input.fastMode && { fastMode: true }),
+    ...(input.fastModeAllowed === false ? { fastMode: false } : input.fastMode ? { fastMode: true } : {}),
     ...(input.availableModels && input.availableModels.length > 0 && {
       availableModels: [...new Set(input.availableModels)],
     }),
     ...(Object.keys(skillOverrides).length > 0 && { skillOverrides }),
+    ...(deniedMcpServers.length > 0 && { deniedMcpServers }),
   };
 }

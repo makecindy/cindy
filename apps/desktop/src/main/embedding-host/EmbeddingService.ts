@@ -29,7 +29,7 @@ import type { DbClient } from '../localDb/client/DbClient';
 import {
   isProviderModelRouteDisabled,
   isProviderRouteSuspended,
-} from '../utility-model/oneShotCandidates';
+} from '../maker-host/model-route-availability.js';
 import { EmbeddingWorker } from './EmbeddingWorker';
 import { VecTableRegistry, type VecTableSpec } from './VecTableRegistry';
 import {

@@ -53,6 +53,13 @@ export function requireNullableString(value: unknown, name: string): string | nu
   return requireString(value, name);
 }
 
+export function requireBoolean(value: unknown, name: string): boolean {
+  if (typeof value !== 'boolean') {
+    throwIpcError('INVALID_PARAMS', `${name} must be a boolean`);
+  }
+  return value;
+}
+
 export function requireEnum<T extends string>(
   value: unknown,
   allowed: readonly T[],

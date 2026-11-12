@@ -1,12 +1,16 @@
+import { additionalSettings } from './AdditionalSettings.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
+import { Button } from '@/components/ui/button';
 import { RotateCcw } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
-import { cn } from '@/lib/utils';
+import { SettingsRow } from '@/components/ui/settings-rows';
 
 /** 正式版布局恢复入口：复用 main 的原子 reset + broadcast，不另存 renderer 状态。 */
 export function LayoutResetControl() {
+  const setting = useSettingDefinition(additionalSettings.layout);
   const { t } = useTranslation();
   const [resetting, setResetting] = useState(false);
 
@@ -28,41 +32,27 @@ export function LayoutResetControl() {
   };
 
   return (
-    <div
-      className={cn(
-        'flex items-center justify-between gap-3 rounded-xl p-5',
-        'bg-[var(--settings-theme-card-bg)]',
-        'border border-[var(--settings-theme-card-border)]',
-      )}
-    >
-      <div className="flex min-w-0 flex-col gap-1">
-        <p
-          className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-          style={{ letterSpacing: '0.12px' }}
+    <SettingsRow
+      {...setting.anchorProps}
+      title={setting.title}
+      hint={setting.description}
+      trailing={
+        <Button
+          {...setting.controlProps}
+          variant="secondary"
+          size="sm"
+          compact
+          loading={resetting}
+          type="button"
+          onClick={() => void handleReset()}
+          disabled={resetting}
+          aria-label={t('settings.appearance.layout.reset')}
+          className="shrink-0"
         >
-          {t('settings.appearance.layout.label')}
-        </p>
-        <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-          {t('settings.appearance.layout.hint')}
-        </p>
-      </div>
-
-      <button
-        type="button"
-        onClick={() => void handleReset()}
-        disabled={resetting}
-        aria-label={t('settings.appearance.layout.reset')}
-        className={cn(
-          'flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-12 font-medium',
-          'border border-[var(--settings-input-border)]',
-          'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-          'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
-          'disabled:cursor-wait disabled:opacity-60',
-        )}
-      >
-        <RotateCcw size={14} aria-hidden />
-        {t('settings.appearance.layout.reset')}
-      </button>
-    </div>
+          <RotateCcw size={14} aria-hidden />
+          {t('settings.appearance.layout.reset')}
+        </Button>
+      }
+    />
   );
 }

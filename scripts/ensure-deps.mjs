@@ -8,6 +8,9 @@
  *   3. Electron binary 完整性 — 确认 electron postinstall 已完整解出 dist binary
  *   4. native ABI 隔离 — root 保持 Node ABI，Electron cache 单独准备 native binding
  *
+ * `--electron-binary` 只跑第 3 道，由根 postinstall 调用，让任何 `pnpm install` 结束时
+ * Electron 都是完整的。
+ *
  * 关于 hoisted 模式：项目 .npmrc 指定 node-linker=hoisted，绝大多数依赖被平铺到根
  * node_modules，但原生二进制包（electron、protobufjs 等）必须留
  * 在子包 node_modules 下。如果这些子包目录只剩 postinstall 产物（例如
@@ -221,27 +224,27 @@ function findBrokenDeps(deps = CRITICAL_DEPS) {
   return broken;
 }
 
+// Simulator entrypoints are diagnostics/startup, never an implicit dependency repair.
+export function checkWorkspaceDependencies(root = ROOT) {
+  const missing = WORKSPACE_CRITICAL_DEPS.filter(({ checkPath }) =>
+    !fs.existsSync(path.join(root, checkPath))).map(({ name }) => name);
+  for (const name of ['expo', '@expo/env', 'react-native']) {
+    if (![path.join(root, 'apps/mobile/node_modules', name, 'package.json'),
+      path.join(root, 'node_modules', name, 'package.json')].some((file) => fs.existsSync(file))) missing.push(name);
+  }
+  return missing;
+}
+
 function ensureWorkspaceOnlyDependencies() {
-  const broken = findBrokenDeps(WORKSPACE_CRITICAL_DEPS);
+  const missing = checkWorkspaceDependencies();
   const lockIssue = reasonLockfileOutOfSync();
-  if (broken.length === 0 && !lockIssue) {
-    log('workspace 依赖已同步，跳过');
+  if (missing.length || lockIssue) {
+    err(`依赖检查失败: ${missing.join(', ') || lockIssue}`);
+    err('保留现有 node_modules，未安装或删除依赖。请在当前 worktree 显式运行 pnpm install --frozen-lockfile。');
+    process.exitCode = 1;
     return;
   }
-
-  if (broken.length > 0) {
-    warn(`workspace 依赖缺失：${broken.map((item) => item.name).join(', ')}`);
-    removeBrokenDirs(broken);
-  }
-  if (lockIssue) log(lockIssue);
-  runInstall(['install']);
-
-  const still = findBrokenDeps(WORKSPACE_CRITICAL_DEPS);
-  if (still.length > 0) {
-    err(`pnpm install 后 workspace 依赖仍缺失：${still.map((item) => item.name).join(', ')}`);
-    process.exit(1);
-  }
-  log('workspace 依赖已同步');
+  log('workspace 依赖检查通过（只读）');
 }
 
 function runInstall(args = ['install']) {
@@ -354,13 +357,26 @@ downloadArtifact({
   return zipPath;
 }
 
+/**
+ * Windows 自带的 tar.exe(bsdtar，能解 zip、认盘符路径)。不能按 PATH 找：在 Git Bash 里装依赖时，
+ * PATH 上先命中的是 Git 自带的 GNU tar，它把 `C:\...` 里的冒号当成「远程主机:路径」，
+ * 报 `Cannot connect to C: resolve failed`，也解不了 zip。系统目录里没有时才退回 PATH。
+ */
+export function resolveSystemTarCommand(platform = process.platform, env = process.env, exists = fs.existsSync) {
+  if (platform !== 'win32') return 'tar';
+  const systemRoot = env.SystemRoot || env.SYSTEMROOT || env.windir || env.WINDIR || 'C:\\Windows';
+  const systemTar = path.win32.join(systemRoot, 'System32', 'tar.exe');
+  return exists(systemTar) ? systemTar : 'tar';
+}
+
 function extractElectronZipWithSystemTar(zipPath, root = ROOT) {
   const electronDir = getElectronDir(root);
   const distDir = path.join(electronDir, 'dist');
   fs.mkdirSync(distDir, { recursive: true });
 
-  log(`使用系统 tar 解压 Electron zip：${zipPath}`);
-  const result = spawnSync('tar', ['-xf', zipPath, '-C', distDir], {
+  const tar = resolveSystemTarCommand();
+  log(`使用系统 tar 解压 Electron zip：${zipPath}（${tar}）`);
+  const result = spawnSync(tar, ['-xf', zipPath, '-C', distDir], {
     cwd: root,
     stdio: 'inherit',
   });
@@ -428,6 +444,26 @@ function ensureElectronBinaryComplete(root = ROOT) {
   if (issue) {
     repairElectronBinary(issue, root);
   }
+}
+
+// CI 用 stub dist 代替真实 Electron；显式跳过下载时也不应在安装阶段补下载。
+export function electronBinaryCheckSkipReason(env = process.env) {
+  if (env.ELECTRON_OVERRIDE_DIST_PATH) return 'ELECTRON_OVERRIDE_DIST_PATH';
+  if (env.ELECTRON_SKIP_BINARY_DOWNLOAD) return 'ELECTRON_SKIP_BINARY_DOWNLOAD';
+  return null;
+}
+
+// 由根 postinstall 调用。pnpm 的 side-effects cache 一旦记下「electron 构建完成但没有产物」
+// （例如某次安装设置了 ELECTRON_SKIP_BINARY_DOWNLOAD），之后同机每个新 worktree 都会跳过
+// Electron 自己的 postinstall，留下缺 dist 的安装。这里在每次 install 末尾按 install.js
+// 语义复核一次，缺失就补装，不依赖 store 缓存是否干净。
+function ensureElectronBinaryAfterInstall() {
+  const skipReason = electronBinaryCheckSkipReason();
+  if (skipReason) {
+    log(`已设置 ${skipReason}，跳过 Electron binary 检查`);
+    return;
+  }
+  ensureElectronBinaryComplete();
 }
 
 // 检测 frozen-lockfile 是否生效（根 .npmrc 显式配置，或环境变量覆盖）。
@@ -734,6 +770,10 @@ function ensureElectronNativeBinding(electronVersion, electronArch) {
 function main() {
   if (process.argv.slice(2).includes('--workspace-only')) {
     ensureWorkspaceOnlyDependencies();
+    return;
+  }
+  if (process.argv.slice(2).includes('--electron-binary')) {
+    ensureElectronBinaryAfterInstall();
     return;
   }
 

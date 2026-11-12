@@ -18,6 +18,7 @@ import { z } from 'zod';
 /**
  * Category 分两类:
  *  - 'cindy'   : 只读自省 (get_capabilities / get_current_session_id)
+ *  - 'auth'    : Host 托管的供应商授权流程；短码可见，长期凭证不返回。
  *  - 'history' : 只读查询本地数据库里的历史聊天数据 (list_workdirs /
  *                list_sessions / get_chat_history / search_chat_history),
  *                方便用户自己组织 memory / 知识库系统
@@ -25,8 +26,8 @@ import { z } from 'zod';
  * history 单独成类是因为它和 cindy 自省虽都只读, 但语义不同 (自省 = "我是谁",
  * 查询 = "我和你聊过啥"), 拆开后 list_tools 入口更清晰。
  *
- * 第三类 'control' 是改变 Cindy 状态的副作用工具(当前:set_current_session_title /
- * rename_sessions 改会话标题)。
+ * 第三类 'control' 是会话控制面：标题 / 归档，以及跨 session 的本人队列消息控制、
+ * same-turn 插话、优雅停止与只读运行探针。
  *
  * 第四类 'feedback' 是向 Cindy 官方提交反馈的工具 (submit_github_issue),
  * 有副作用但提交前由 host 弹系统确认卡片把关。
@@ -35,8 +36,22 @@ import { z } from 'zod';
  * session,或为业务对象新建专属 session),供 skill 路由用。单独成类(不并入 control)
  * 是为了让 list_tools(control) 的"改会话标题"结果里不混入 handoff,避免 LLM 在"改名"
  * 意图下误选 send_to_session。
+ *
+ * 'skills' 是由 Cindy 宿主管理的 Skill 工作流入口。工具只负责启动，
+ * staging、审查与安装仍由宿主状态机控制。
  */
-export type XdtHelperToolCategory = 'cindy' | 'history' | 'control' | 'feedback' | 'handoff';
+export type XdtHelperToolCategory =
+  | 'cindy'
+  | 'auth'
+  | 'history'
+  | 'control'
+  | 'feedback'
+  | 'handoff'
+  | 'skills'
+  | 'app_update'
+  | 'bots'
+  | 'github'
+  | 'settings';
 
 export type XdtHelperToolContentBlock =
   | { type: 'text'; text: string }
@@ -50,6 +65,7 @@ export interface XdtHelperToolResult {
 
 export type XdtHelperToolHandler<T = Record<string, unknown>> = (
   args: T,
+  signal?: AbortSignal,
 ) => Promise<XdtHelperToolResult>;
 
 export interface XdtHelperToolDef {
@@ -58,6 +74,11 @@ export interface XdtHelperToolDef {
   description: string;
   inputShape: z.ZodRawShape;
   handler: XdtHelperToolHandler;
+  /**
+   * Still callable by name, but never listed: a tool whose job moved to another
+   * entry keeps working for saved calls without offering the model two ways.
+   */
+  hidden?: boolean;
 }
 
 export interface XdtHelperToolSummary {
@@ -68,6 +89,15 @@ export interface XdtHelperToolSummary {
 
 export class XdtHelperToolRegistry {
   private readonly tools = new Map<string, XdtHelperToolDef>();
+  private readonly aliases = new Map<string, string>();
+
+  /** Accept saved legacy calls without advertising a second set of names to the model. */
+  registerAlias(alias: string, name: string): void {
+    if (this.tools.has(alias) || this.aliases.has(alias) || !this.tools.has(name)) {
+      throw new Error(`[cindyHelperToolRegistry] invalid tool alias: ${alias}`);
+    }
+    this.aliases.set(alias, name);
+  }
 
   register<T extends z.ZodRawShape>(def: {
     name: string;
@@ -75,24 +105,26 @@ export class XdtHelperToolRegistry {
     description: string;
     inputShape: T;
     handler: XdtHelperToolHandler<{ [K in keyof T]: z.infer<T[K]> }>;
+    hidden?: boolean;
   }): void {
-    if (this.tools.has(def.name)) {
+    if (this.tools.has(def.name) || this.aliases.has(def.name)) {
       throw new Error(`[cindyHelperToolRegistry] duplicate tool name: ${def.name}`);
     }
     this.tools.set(def.name, def as unknown as XdtHelperToolDef);
   }
 
   has(name: string): boolean {
-    return this.tools.has(name);
+    return this.get(name) !== undefined;
   }
 
   get(name: string): XdtHelperToolDef | undefined {
-    return this.tools.get(name);
+    return this.tools.get(this.aliases.get(name) ?? name);
   }
 
   list(category?: XdtHelperToolCategory): XdtHelperToolSummary[] {
     const all: XdtHelperToolSummary[] = [];
     for (const t of this.tools.values()) {
+      if (t.hidden) continue;
       if (category && t.category !== category) continue;
       all.push({
         name: t.name,
@@ -105,12 +137,12 @@ export class XdtHelperToolRegistry {
 
   listCategories(): XdtHelperToolCategory[] {
     const set = new Set<XdtHelperToolCategory>();
-    for (const t of this.tools.values()) set.add(t.category);
+    for (const t of this.tools.values()) if (!t.hidden) set.add(t.category);
     return Array.from(set);
   }
 
-  async call(name: string, rawArgs: unknown): Promise<XdtHelperToolResult> {
-    const def = this.tools.get(name);
+  async call(name: string, rawArgs: unknown, signal?: AbortSignal): Promise<XdtHelperToolResult> {
+    const def = this.get(name);
     if (!def) {
       return {
         content: [
@@ -121,7 +153,7 @@ export class XdtHelperToolRegistry {
               errorCode: 'UNKNOWN_TOOL',
               data: {
                 requested: name,
-                available: Array.from(this.tools.keys()),
+                available: Array.from(this.tools.values()).filter((t) => !t.hidden).map((t) => t.name),
                 hint: '调用 list_tools 查看完整工具列表',
               },
             }),
@@ -152,6 +184,11 @@ export class XdtHelperToolRegistry {
               errorCode: 'INVALID_ARGS',
               data: {
                 tool: name,
+                // received: 回显收到的顶层 keys — 只回 schema 时模型看不出自己是多包了一层信封
+                // (keys=["args"]) 还是拍平了 (keys=参数字段), 实测 2026-10-31 三个会话因此连续盲试。
+                received: rawArgs && typeof rawArgs === 'object'
+                  ? Object.keys(rawArgs as Record<string, unknown>)
+                  : [],
                 validation_errors: parsed.error.issues,
                 schema: jsonSchema,
                 hint: '请按 schema 修正参数后重试',
@@ -163,6 +200,6 @@ export class XdtHelperToolRegistry {
       };
     }
 
-    return def.handler(parsed.data as Record<string, unknown>);
+    return def.handler(parsed.data as Record<string, unknown>, signal);
   }
 }

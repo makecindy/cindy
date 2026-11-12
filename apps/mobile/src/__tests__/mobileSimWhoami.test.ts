@@ -1,5 +1,10 @@
 // @ts-nocheck —— 被测对象是 .mjs 开发工具模块，vitest 跑其纯函数。
+import { readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
+import { inspectSimulatorNativeIdentity } from '../../scripts/lib/sim-native-identity.mjs';
+import { readAndroidInstalledFingerprint, runAndroidProbe } from '../../scripts/lib/android-simulator.mjs';
 import {
   bootedSimulatorLinesForTarget,
   classifySimMetroListener,
@@ -9,9 +14,106 @@ import {
   extractSimWhoamiUdidArgs,
   getSimulatorAppContainer,
   resolveMobileSimulatorBundleId,
+  resolveSimMetroHandoff,
+  resolveSimulatorDeviceSets,
+  selectBootedSimulator,
+  simulatorBackendNotice,
+  cindySimulatorAvailable,
+  inspectTargetNativeIdentity,
+  findSimulatorDeviceSet,
+  simctlArgs,
 } from '../../scripts/lib/sim-whoami.mjs';
 
 const SIMULATOR_UDID = 'A1B2C3D4-E5F6-47A8-9B0C-D1E2F3A4B5C6';
+
+// Load the real CLI's native-check/reporting tail once. OS/process boundaries
+// are injected; assertions below inspect its output and exit status, not source text.
+const whoamiSource = readFileSync(resolve(process.cwd(), 'scripts/sim-whoami.mjs'), 'utf8');
+const nativeWorkflowStart = whoamiSource.indexOf('const native =');
+if (nativeWorkflowStart < 0) throw new Error('Missing whoami native reporting workflow');
+const nativeWorkflow = `(async () => { ${whoamiSource.slice(nativeWorkflowStart)} })()`;
+
+async function reportNativeIdentity({ platform = 'android', readError, installedHash = 'a'.repeat(40),
+  apkEntries = ['assets/fingerprint'], jsonOutput = false } = {}) {
+  const lines = [];
+  const log = (...args) => lines.push(args.join(' '));
+  const processStub = { env: {}, exitCode: 0 };
+  const read = (_path, args = []) => {
+    if (readError) throw Object.assign(new Error('private adb output'), { code: readError });
+    if (args.includes('-l')) return 'Archive: /installed/app\n  Length      Date    Time    Name\n'
+      + apkEntries.map((entry) => `       40  2026-01-01 00:00   ${entry}`).join('\n')
+      + `\n---------                     -------\n       40                     ${apkEntries.length} files`;
+    if (platform === 'android' && !apkEntries.includes('assets/fingerprint')) {
+      throw Object.assign(new Error('private unzip output: filename not matched'), { status: 11 });
+    }
+    return installedHash;
+  };
+  await runInNewContext(nativeWorkflow, {
+    inspectTargetNativeIdentity,
+    inspectSimulatorNativeIdentity: (options) => inspectSimulatorNativeIdentity({ ...options, read, compute: () => 'a'.repeat(40) }),
+    readAndroidInstalledFingerprint: (options) => readAndroidInstalledFingerprint({
+      ...options, run: (adb, args) => runAndroidProbe(adb, args, read),
+    }),
+    timedCheck: (_stage, run) => run(),
+    targetBooted: ['selected-device'], probeErrors: [], container: '/installed/app', platform,
+    androidTools: platform === 'android' ? { adb: '/sdk/adb' } : null,
+    selected: { serial: 'emulator-5556', avd: 'test-avd' },
+    mobileDir: '/repo/apps/mobile', worktreeRoot: '/repo', healthy: true,
+    process: processStub, console: { log, error: log }, jsonOutput, uiMock: true, region: 'global',
+    withLocalMobileRegionConfig: (env) => env, mobileClientBundleEnv: () => ({}),
+    simulatorUdid: platform === 'android' ? 'emulator-5556' : SIMULATOR_UDID,
+    ports: [8082], expectedPort: 8082, expectedSource: 'branch@commit', envFingerprint: 'env',
+    inspectSimMetroIdentity: () => ({ healthy: true, anyMetro: true, currentSourceOnExpectedPort: true,
+      metros: [], probeErrors: [], canSuggestStart: false }),
+    deviceSet: { name: platform, path: null }, backendNotice: null, booted: ['selected-device'],
+    inspectSimulatorViewer: async () => ({ available: true, running: true }),
+    checks: [], startedAt: Date.now(), requireViewer: false, bundleId: 'app.cindy', installed: {},
+  });
+  return { output: lines.join('\n'), exitCode: processStub.exitCode,
+    json: jsonOutput ? JSON.parse(lines.at(-1)) : undefined };
+}
+
+describe('mobile:sim:whoami native recovery guidance', () => {
+  // #9422 review P1: existing tests covered adb and fingerprint errors separately,
+  // but missed the real CLI advising rebuild after an installed APK read failed.
+  // Unit: inject one failed read, exercise production reporting and JSON/exit status.
+  it.each([
+    ['android', 'ETIMEDOUT', 'installed-fingerprint-timeout'],
+    ['android', 'ECONNRESET', 'installed-fingerprint-unreadable'],
+    ['ios', 'EACCES', 'installed-fingerprint-unreadable'],
+  ])('retries the probe instead of recommending rebuild: %s %s', async (platform, readError, reason) => {
+    const text = await reportNativeIdentity({ platform, readError });
+    expect(text.exitCode).toBe(1);
+    expect(text.output).toContain('原生身份检查未完成');
+    expect(text.output).toContain('重试');
+    expect(text.output).not.toContain('请运行 pnpm mobile:sim:rebuild');
+    if (platform === 'android') expect(text.output).toContain('adb');
+    const json = await reportNativeIdentity({ platform, readError, jsonOutput: true });
+    expect(json.exitCode).toBe(1);
+    expect(json.json).toMatchObject({ healthy: false, native: { code: 'native-unknown', reason } });
+    expect(text.output + json.output).not.toContain('private adb output');
+  });
+
+  it.each([
+    { platform: 'android', installedHash: 'b'.repeat(40) },
+    { platform: 'android', installedHash: '' },
+    // PR #9475: unlike an empty successful read, unzip may exit nonzero for a
+    // missing entry. Unit: real reader/reporting, injected process boundary;
+    // a similarly named archive member must not hide the missing fingerprint.
+    { platform: 'android', apkEntries: ['assets/fingerprint.backup'] },
+    { platform: 'ios', readError: 'ENOENT' },
+  ])('still recommends rebuilding an incompatible or fingerprint-less package: %j', async (options) => {
+    const result = await reportNativeIdentity(options);
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toContain('请运行 pnpm mobile:sim:rebuild');
+    if (options.apkEntries) {
+      const json = await reportNativeIdentity({ ...options, jsonOutput: true });
+      expect(json.exitCode).toBe(1);
+      expect(json.json.native.reason).toBe('installed-fingerprint-missing');
+      expect(result.output + json.output).not.toContain('private unzip output');
+    }
+  });
+});
 
 describe('mobile:sim:whoami Metro port', () => {
   it.each([
@@ -77,6 +179,146 @@ describe('mobile:sim takeover and JSON arguments', () => {
       targetWorktree: '/repo/',
     })).toEqual({ confirmed: true, worktree: '/repo', isTarget: true });
   });
+
+  it('compares Windows worktree paths case-insensitively', () => {
+    expect(classifySimMetroListener({
+      cwd: 'C:\\Repo\\apps\\mobile',
+      source: 'branch@commit',
+      targetWorktree: 'c:\\repo',
+      platform: 'win32',
+    })).toEqual({ confirmed: true, worktree: 'C:/Repo', isTarget: true });
+    expect(classifySimMetroListener({
+      cwd: 'C:\\RepoOther\\apps\\mobile',
+      source: 'branch@commit',
+      targetWorktree: 'c:\\repo',
+      platform: 'win32',
+    })).toEqual({ confirmed: true, worktree: 'C:/RepoOther', isTarget: false });
+    expect(classifySimMetroListener({
+      cwd: 'C:\\Repo\\apps\\mobile',
+      source: 'branch@commit',
+      targetWorktree: 'D:\\repo',
+      platform: 'win32',
+    })).toEqual({ confirmed: true, worktree: 'C:/Repo', isTarget: false });
+    expect(classifySimMetroListener({
+      cwd: '/Repo/apps/mobile',
+      source: 'branch@commit',
+      targetWorktree: '/repo',
+      platform: 'linux',
+    })).toEqual({ confirmed: true, worktree: '/Repo', isTarget: false });
+  });
+
+  it('restarts a target Metro when its persisted region differs', () => {
+    expect(resolveSimMetroHandoff({
+      currentSource: 'branch@commit', runningSource: 'branch@commit',
+      currentRegion: 'global', runningRegion: 'cn',
+      listener: { confirmed: true, isTarget: true }, listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'refuse', code: 'target-region-stale' });
+    expect(resolveSimMetroHandoff({
+      takeover: true, currentSource: 'branch@commit', runningSource: 'branch@commit',
+      currentRegion: 'global', runningRegion: 'cn',
+      listener: { confirmed: true, isTarget: true }, listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'restart', code: 'target-region' });
+  });
+
+  it('restarts a target Metro when its persisted environment fingerprint differs', () => {
+    expect(resolveSimMetroHandoff({
+      currentSource: 'branch@commit', runningSource: 'branch@commit',
+      currentEnvFingerprint: 'env-new', runningEnvFingerprint: 'env-old',
+      listener: { confirmed: true, isTarget: true }, listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'refuse', code: 'target-env-stale' });
+    expect(resolveSimMetroHandoff({
+      takeover: true, currentSource: 'branch@commit', runningSource: 'branch@commit',
+      currentEnvFingerprint: 'env-new', runningEnvFingerprint: 'env-old',
+      listener: { confirmed: true, isTarget: true }, listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'restart', code: 'target-env' });
+  });
+});
+
+describe('mobile:sim Metro handoff', () => {
+  const foreign = {
+    confirmed: true,
+    worktree: '/other',
+    isTarget: false,
+  };
+  const target = {
+    confirmed: true,
+    worktree: '/repo',
+    isTarget: true,
+  };
+
+  it('lets --takeover stop a foreign Metro even if that worktree is dirty', () => {
+    expect(resolveSimMetroHandoff({
+      cwd: '/other/apps/mobile',
+      takeover: true,
+      currentSource: 'here@aaa',
+      runningSource: 'there@bbb',
+      listener: foreign,
+      listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'restart', code: 'occupied-foreign' });
+  });
+
+  it('lets --takeover stop an orphan Metro whose worktree is gone', () => {
+    expect(resolveSimMetroHandoff({
+      cwd: '/gone/apps/mobile',
+      takeover: true,
+      currentSource: 'here@aaa',
+      runningSource: 'gone@ccc',
+      listener: foreign,
+      listenerWorktreeExists: false,
+    })).toMatchObject({ action: 'restart', code: 'occupied-orphan' });
+  });
+
+  it('refuses a dirty or orphan foreign Metro without --takeover', () => {
+    expect(resolveSimMetroHandoff({
+      cwd: '/other/apps/mobile',
+      currentSource: 'here@aaa',
+      runningSource: 'there@bbb',
+      listener: foreign,
+      listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'refuse', code: 'occupied-foreign' });
+    expect(resolveSimMetroHandoff({
+      cwd: '/gone/apps/mobile',
+      currentSource: 'here@aaa',
+      runningSource: 'gone@ccc',
+      listener: foreign,
+      listenerWorktreeExists: false,
+    })).toMatchObject({ action: 'refuse', code: 'occupied-orphan' });
+  });
+
+  it('keeps unknown occupants fail-closed even with --takeover', () => {
+    expect(resolveSimMetroHandoff({
+      cwd: '/random',
+      takeover: true,
+      currentSource: 'here@aaa',
+      runningSource: null,
+      listener: { confirmed: false, worktree: null },
+    })).toMatchObject({ action: 'refuse', code: 'occupied-unknown' });
+  });
+
+  it('reuses a fresh Metro on this worktree and restarts a stale one only with --takeover', () => {
+    expect(resolveSimMetroHandoff({
+      cwd: '/repo/apps/mobile',
+      currentSource: 'here@aaa',
+      runningSource: 'here@aaa',
+      listener: target,
+      listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'reuse', code: 'target-fresh' });
+    expect(resolveSimMetroHandoff({
+      cwd: '/repo/apps/mobile',
+      currentSource: 'here@aaa',
+      runningSource: 'here@old',
+      listener: target,
+      listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'refuse', code: 'target-stale' });
+    expect(resolveSimMetroHandoff({
+      cwd: '/repo/apps/mobile',
+      takeover: true,
+      currentSource: 'here@aaa',
+      runningSource: 'here@old',
+      listener: target,
+      listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'restart', code: 'target-stale' });
+  });
 });
 
 describe('mobile:sim:whoami exact Simulator target', () => {
@@ -134,7 +376,143 @@ describe('mobile:sim:whoami exact Simulator target', () => {
   });
 });
 
+describe('mobile:sim simulator choice', () => {
+  const root = '/home/test/Library/Application Support/BaguetteCindy';
+  const cindy = { name: 'cindy', path: join(root, 'devices') };
+  const system = { name: 'system', path: null };
+  const settings = (value?: string) => () => {
+    if (value === undefined) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    return value;
+  };
+  const resolve = (choice: string, readFile = settings(), exists = () => true) =>
+    resolveSimulatorDeviceSets({ choice, root, exists, readFile });
+
+  it('prefers Cindy only while it is installed and allowed to run', () => {
+    expect(resolve('auto')).toEqual([cindy, system]);
+    expect(resolve('auto', settings('{"enabled":true,"idleMinutes":15}'))).toEqual([cindy, system]);
+    expect(resolve('auto', settings('{"enabled":false,"idleMinutes":15}'))).toEqual([system]);
+    expect(resolve('auto', settings('{broken'))).toEqual([system]);
+    expect(resolve('auto', settings(), () => false)).toEqual([system]);
+  });
+
+  it('pins one simulator when chosen outside the repository', () => {
+    expect(resolve('system')).toEqual([system]);
+    expect(resolve('cindy')).toEqual([cindy]);
+    expect(resolve('/tmp/devices')).toEqual([{ name: '/tmp/devices', path: '/tmp/devices' }]);
+    expect(resolve(cindy.path)).toEqual([cindy]);
+    expect(() => resolve('cindy', settings('{"enabled":false,"idleMinutes":15}'))).toThrow(/关闭了运行/);
+    expect(() => resolve('cindy', settings(), () => false)).toThrow(/没有找到 Cindy 模拟器/);
+    expect(() => resolve('relative/devices')).toThrow(/绝对路径/);
+  });
+
+  it('scopes simctl to the selected device set', () => {
+    expect(simctlArgs(cindy, ['launch', 'booted', 'com.xd.cindy'])).toEqual([
+      'simctl', '--set', cindy.path, 'launch', 'booted', 'com.xd.cindy',
+    ]);
+    expect(simctlArgs(system, ['list'])).toEqual(['simctl', 'list']);
+    const run = vi.fn(() => '/cindy/Cindy.app');
+    getSimulatorAppContainer(run, null, 'com.xd.cindy', cindy);
+    expect(run).toHaveBeenCalledWith('xcrun', ['simctl', '--set', cindy.path, 'get_app_container', 'booted', 'com.xd.cindy', 'app']);
+  });
+
+  it('stays on Cindy while it is idle and only leaves it for an exact UDID', () => {
+    const otherUdid = '11111111-2222-4333-8444-555555555555';
+    const listing = { cindy: `iPhone A (${SIMULATOR_UDID}) (Booted)`, system: `iPhone B (${otherUdid}) (Booted)` };
+    const listBooted = (set: { name: 'cindy' | 'system' }) => listing[set.name];
+
+    expect(selectBootedSimulator([cindy, system], listBooted, null)).toMatchObject({ deviceSet: cindy, targetBooted: [listing.cindy] });
+    expect(selectBootedSimulator([cindy, system], listBooted, otherUdid)).toMatchObject({ deviceSet: system, targetBooted: [listing.system] });
+    expect(selectBootedSimulator([cindy, system], (set: { name: 'cindy' | 'system' }) => (set.name === 'cindy' ? '' : listing.system), null))
+      .toEqual({ deviceSet: cindy, booted: [], targetBooted: [] });
+    expect(selectBootedSimulator([cindy, system], (set: { name: 'cindy' | 'system' }) => (set.name === 'cindy' ? '' : listing.system), otherUdid))
+      .toMatchObject({ deviceSet: system, targetBooted: [listing.system] });
+    expect(selectBootedSimulator([system], () => listing.system, null)).toMatchObject({ deviceSet: system, targetBooted: [listing.system] });
+    expect(selectBootedSimulator([cindy, system], () => '', null)).toEqual({ deviceSet: cindy, booted: [], targetBooted: [] });
+  });
+
+  it('fails closed when Cindy cannot be listed, unless an exact UDID may live elsewhere', () => {
+    const line = `iPhone B (${SIMULATOR_UDID}) (Booted)`;
+    const listBooted = (set: { name: string }) => {
+      if (set.name === 'cindy') throw new Error('cannot read device set');
+      return line;
+    };
+    expect(() => selectBootedSimulator([cindy, system], listBooted, null)).toThrow(/cannot read.*不改用其他模拟器/);
+    expect(selectBootedSimulator([cindy, system], listBooted, SIMULATOR_UDID)).toMatchObject({ deviceSet: system, targetBooted: [line] });
+    expect(() => selectBootedSimulator([cindy], listBooted, null)).toThrow(/cannot read/);
+  });
+
+  it('points an idle Cindy simulator at the plugin and lists reusable devices', () => {
+    const shutdown = `iPhone Air (${SIMULATOR_UDID}) (Shutdown)`;
+    const listDevices = () => `== Devices ==\n    ${shutdown}\n    iPhone B (11111111-2222-4333-8444-555555555555) (Booted)`;
+    const idle = { deviceSet: cindy, booted: [], simulatorUdid: null, listDevices, cindyAvailable: true };
+
+    expect(simulatorBackendNotice(idle)).toMatchObject({ code: 'cindy-idle', reusable: [shutdown] });
+    expect(simulatorBackendNotice({ ...idle, listDevices: () => { throw new Error('no list'); } }))
+      .toMatchObject({ code: 'cindy-idle', reusable: [] });
+    expect(simulatorBackendNotice({ ...idle, booted: ['iPhone'] })).toBeNull();
+    expect(simulatorBackendNotice({ ...idle, simulatorUdid: SIMULATOR_UDID })).toBeNull();
+  });
+
+  it('flags the system simulator only while Cindy is available', () => {
+    const selection = { deviceSet: system, booted: ['iPhone'], simulatorUdid: SIMULATOR_UDID, listDevices: () => '' };
+    expect(simulatorBackendNotice({ ...selection, cindyAvailable: true })).toMatchObject({ code: 'system-while-cindy-available' });
+    expect(simulatorBackendNotice({ ...selection, cindyAvailable: false })).toBeNull();
+    expect(cindySimulatorAvailable({ root, exists: () => true, readFile: settings('{"enabled":false}') })).toBe(false);
+    expect(cindySimulatorAvailable({ root, exists: () => false, readFile: settings() })).toBe(false);
+    expect(cindySimulatorAvailable({ root, exists: () => true, readFile: settings() })).toBe(true);
+  });
+
+  it('does not report a missing app when no exact target was probed', () => {
+    const inspect = vi.fn(() => ({ healthy: true, code: 'native-matched' }));
+    const unknown = { healthy: false, code: 'native-unknown' };
+    expect(inspectTargetNativeIdentity({ targetBooted: ['a', 'b'], probeFailed: false, inspect }))
+      .toMatchObject({ ...unknown, reason: 'target-not-unique' });
+    expect(inspectTargetNativeIdentity({ targetBooted: [], probeFailed: false, inspect }))
+      .toMatchObject({ ...unknown, reason: 'target-not-unique' });
+    expect(inspectTargetNativeIdentity({ targetBooted: [], probeFailed: true, inspect }))
+      .toMatchObject({ ...unknown, reason: 'probe-timeout' });
+    expect(inspect).not.toHaveBeenCalled();
+    expect(inspectTargetNativeIdentity({ targetBooted: ['a'], probeFailed: false, inspect })).toMatchObject({ code: 'native-matched' });
+  });
+
+  it('finds the owning device set for a UDID in any state', () => {
+    const listing = { cindy: `iPhone A (${SIMULATOR_UDID.toLowerCase()}) (Shutdown)`, system: '' };
+    const list = (set: { name: 'cindy' | 'system' }) => listing[set.name];
+    expect(findSimulatorDeviceSet([cindy, system], list, SIMULATOR_UDID)).toBe(cindy);
+    expect(findSimulatorDeviceSet([cindy, system], list, '11111111-2222-4333-8444-555555555555')).toBeNull();
+    expect(findSimulatorDeviceSet([cindy, system], (set: { name: string }) => {
+      if (set.name === 'cindy') throw new Error('unreadable');
+      return `iPhone B (${SIMULATOR_UDID}) (Shutdown)`;
+    }, SIMULATOR_UDID)).toBe(system);
+  });
+});
+
 describe('mobile:sim:whoami bundle identity', () => {
+  // Windows acceptance must select a specific adb emulator and the Android
+  // package, not an iOS UUID/bundleIdentifier; unit, no device or process I/O.
+  it('accepts only emulator serials for an Android target', () => {
+    expect(extractSimWhoamiUdidArgs(['--udid', 'emulator-5556'], 'android'))
+      .toEqual({ simulatorUdid: 'emulator-5556', passthrough: [] });
+    expect(() => extractSimWhoamiUdidArgs(['--udid', SIMULATOR_UDID], 'android')).toThrow();
+    expect(() => extractSimWhoamiUdidArgs(['--udid', 'emulator-5556'])).toThrow();
+  });
+
+  it('resolves Android identity without falling back to the iOS bundle', () => {
+    const execFile = () => JSON.stringify({ ios: { bundleIdentifier: 'app.ios' }, android: { package: 'app.android' } });
+    expect(resolveMobileSimulatorBundleId('global', { execFile, platform: 'android' })).toBe('app.android');
+    expect(() => resolveMobileSimulatorBundleId('global', {
+      execFile: () => JSON.stringify({ ios: { bundleIdentifier: 'app.ios' } }), platform: 'android',
+    })).toThrow(/android.package/);
+  });
+
+  // 2026-10-29: identity checks stalled for minutes with no actionable phase.
+  // Unit: a timed-out Expo config must remain an explicit error, never a guessed bundle ID.
+  it('reports the bounded Expo config timeout without leaking child output', () => {
+    const execFile = vi.fn(() => { throw Object.assign(new Error('private output'), { code: 'ETIMEDOUT', stderr: 'private output' }); });
+    expect(() => resolveMobileSimulatorBundleId('global', { execFile })).toThrow(/Expo config.*超时/);
+    expect(execFile).toHaveBeenCalledWith('pnpm', expect.any(Array), expect.objectContaining({ timeout: 30_000, killSignal: 'SIGKILL' }));
+  });
+
   it.each([
     ['cn', 'com.local.cindycn'],
     ['global', 'com.local.cindy'],

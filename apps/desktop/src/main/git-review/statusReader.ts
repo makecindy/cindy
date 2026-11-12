@@ -179,6 +179,12 @@ export function parsePorcelainV2Status(stdout: string, baseScope: ReviewScope): 
     if (tag === 'u') {
       const parsed = splitFixedFields(record, 10);
       if (!parsed) continue;
+      // u 记录同样携带 XY 与 sub 字段(porcelain=2:u <XY> <sub> <m1..mW>
+      // <h1..h3> <path>)。sub 不能丢:顶层 gitlink 的合并冲突(如 UU 的
+      // submodule)必须保留 submodule 身份,否则不会被路由进 submodule
+      // reader,gitlink 目录会被普通文件指纹器拒绝、合法冲突无法启动
+      // Review(Codex review #2515)。
+      const [, xy, sub] = parsed.fields;
       files.push({
         path: parsed.rest,
         oldPath: null,
@@ -186,9 +192,9 @@ export function parsePorcelainV2Status(stdout: string, baseScope: ReviewScope): 
         worktreeStatus: 'unmerged',
         isUntracked: false,
         isUnmerged: true,
-        isSubmodule: false,
+        isSubmodule: isSubmoduleField(sub),
         sources: ['staged', 'unstaged'],
-        rawXY: 'UU',
+        rawXY: xy,
       });
     }
   }
@@ -271,7 +277,11 @@ export async function readStatus(scope: ReviewScope): Promise<ReviewStatus> {
       dirty: false,
     };
   }
-  const { stdout } = await runGit(['status', '--porcelain=2', '-z', '--branch', '--renames', '--untracked-files=all'], {
+  // --ignore-submodules=none:仓库配置 submodule.<name>.ignore=all/dirty 会让
+  // status 直接省略脏的 submodule,dirty 内容根本进不了 Review 发现链 ——
+  // 新鲜度身份绑定必须无视该配置(与 reviewSubmoduleIdentity 的子仓 status
+  // 同一裁决,Codex review #2515)。
+  const { stdout } = await runGit(['status', '--porcelain=2', '-z', '--branch', '--renames', '--untracked-files=all', '--ignore-submodules=none'], {
     cwd: scope.repoRoot,
     maxStdoutBytes: STATUS_MAX_STDOUT_BYTES,
   });

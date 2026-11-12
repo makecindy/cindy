@@ -11,17 +11,17 @@
  *     (permission/ask_user_question/plan_review),扩 union 会把 app 业务类型
  *     污染进 agent 抽象层;
  *  2. feishu /ctr 接管路径会把 pending 整体搬去飞书,而 IM 侧对未知 kind 直接
- *     deny,行为不可控 —— 独立桥保证确认卡只在 desktop 出现、超时即兜底;
+ *     deny,行为不可控 —— 独立桥由 Desktop / 同账号手机确认、超时即兜底;
  *  3. 独立模块可注入依赖、可单测(规则 14)。
  *
  * 本模块保持 electron-free(broadcast 由调用方注入),单测直接 new。
  */
 
-import { randomUUID } from 'node:crypto';
-
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
 import { normalizeIssuePublicName } from '../../shared/issuePublicName.js';
+import type { IssueHarness } from '../../shared/issueRuntimeMetadata.js';
+import { randomUUID } from 'node:crypto';
 import { MAKER_PUSH } from '../maker-ipc/channels';
 import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
 
@@ -37,6 +37,10 @@ export interface IssueEnvInfo {
   platform: string;
   arch: string;
   osVersion: string;
+  /** 本次 /issue 工具调用所在的 Agent harness；使用公开全名，不使用内部缩写。 */
+  harness: IssueHarness;
+  /** /issue 所在轮开始时冻结的 Cindy 模型选择值。 */
+  modelId: string;
   /**
    * 本构建的区域身份(中国版 / 国际版 / 开发版)。构建期烘焙、运行时不可切换,
    * 但同一个版本号在两区是两个不同的包——反馈里没有它就分不清用户装的是哪一个。
@@ -76,6 +80,7 @@ export type IssueConfirmDecision =
 /** Renderer 可重放的提交确认请求；主进程持有它直到确认流程 settle。 */
 export interface IssueConfirmInteractionSnapshot {
   kind: 'issue_confirm';
+  remoteConfirmSupported: true;
   requestId: string;
   draft: IssueDraft;
   env: IssueEnvInfo;
@@ -92,7 +97,7 @@ export interface IssueConfirmBridgeDeps {
   timeoutMs?: number;
   logger?: { warn: (...args: unknown[]) => void };
   /**
-   * 确认卡已派发的回调(#926):确认卡有意只在桌面出现,IM 绑定会话的用户可能
+   * 确认卡已派发的回调(#926):确认卡不在 IM 出现,IM 绑定会话的用户可能
    * 人在 IM 侧看不到 —— 接线方在这里给 IM 发「去桌面确认」的文字提示。
    * fire-and-forget,不得阻塞或影响确认流程。
    */
@@ -120,9 +125,10 @@ export class IssueConfirmBridge {
     submissionChoices: IssueSubmissionChoices,
     suggestedPublicName?: string,
   ): Promise<IssueConfirmDecision> {
-    const requestId = randomUUID();
+    const requestId = `issue-confirm-${randomUUID()}`;
     const request: IssueConfirmInteractionSnapshot = {
       kind: 'issue_confirm',
+      remoteConfirmSupported: true,
       requestId,
       draft,
       env,

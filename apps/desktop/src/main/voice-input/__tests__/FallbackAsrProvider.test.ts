@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { AsrEvent, AsrProvider } from '@cindy/voice-input-core';
+import type { AsrEvent, AsrProvider, AsrSegment } from '@cindy/voice-input-core';
+import { VoiceInputController, VoiceTimelineLogger } from '@cindy/voice-input-core';
+import { getVoiceInputRateLimitMessage } from '../voiceInputStartError.js';
+import { VOICE_INPUT_RATE_LIMITED_MESSAGE } from '../../../shared/voiceInputErrors.js';
 
 import { FallbackAsrProvider, type FallbackAsrCandidate } from '../FallbackAsrProvider.js';
 import {
@@ -12,20 +15,31 @@ import type { VoiceInputProviderKind } from '../voiceInputAsrConfig.js';
 type MockAsrProvider = AsrProvider & {
   emit: (event: AsrEvent) => void;
   appended: ArrayBuffer[];
+  emitSegment: (segment: AsrSegment) => void;
 };
 
 function makeMockProvider(options?: {
   startError?: Error;
+  startGate?: Promise<void>;
+  stopGate?: Promise<void>;
   recover?: () => Promise<void>;
+  endpointing?: AsrProvider['endpointing'];
 }): MockAsrProvider {
   const callbacks: Array<(event: AsrEvent) => void> = [];
   const appended: ArrayBuffer[] = [];
+  let onSegment: (segment: AsrSegment) => void = () => {};
   const provider: MockAsrProvider = {
     appended,
+    endpointing: options?.endpointing,
+    onSegment: (callback) => { onSegment = callback; },
+    emitSegment: (segment) => onSegment(segment),
     start: vi.fn(async () => {
       if (options?.startError) throw options.startError;
+      await options?.startGate;
     }),
-    stop: vi.fn(async () => {}),
+    stop: vi.fn(async () => {
+      await options?.stopGate;
+    }),
     appendAudio: vi.fn((chunk: ArrayBuffer) => {
       appended.push(chunk);
     }),
@@ -51,9 +65,192 @@ function candidate(kind: string, provider: MockAsrProvider | (() => Promise<AsrP
 
 const chunk = (byte: number): ArrayBuffer => new Uint8Array([byte]).buffer;
 
+const accountRateLimit = (): Error => Object.assign(new Error('语音请求过于频繁'), {
+  code: 'RATE_LIMITED',
+  statusCode: 429,
+});
+
 describe('FallbackAsrProvider', () => {
   beforeEach(() => {
     resetVoiceInputProviderHealthForTests();
+  });
+
+  // Continuous-input contract: capability and timing must belong to the
+  // candidate that actually won, and late loser events cannot end its turn.
+  it('forwards only the winning provider capability and endpoint metadata', async () => {
+    const first = makeMockProvider({ startError: new Error('unavailable'), endpointing: 'semantic' });
+    const winner = makeMockProvider({ endpointing: 'acoustic' });
+    const provider = new FallbackAsrProvider([
+      candidate('litellm-volcengine-sauc-asr', first),
+      candidate('litellm-qwen3-asr-flash-realtime', winner),
+    ]);
+    const segments = vi.fn();
+    provider.onSegment(segments);
+    try {
+      await provider.start();
+      const result: AsrSegment = { id: 'a', text: 'hello', final: true, audioEndMs: 800, turnEnd: 'acoustic' };
+      first.emitSegment({ ...result, turnEnd: 'semantic' });
+      winner.emitSegment(result);
+      expect(provider.endpointing).toBe('acoustic');
+      expect(segments).toHaveBeenCalledExactlyOnceWith(result);
+    } finally {
+      await provider.stop();
+      await provider.dispose();
+    }
+  });
+
+  it.each([
+    { managed: true, error: accountRateLimit(), limited: true },
+    { managed: true, error: new Error('network down'), limited: false },
+    { managed: false, error: accountRateLimit(), limited: false },
+  ])('preserves the recovery cause and recognized text through the controller (%#)', async ({ managed, error, limited }) => {
+    const primary = makeMockProvider({ recover: async () => { throw error; } });
+    const backup = makeMockProvider();
+    const fallback = new FallbackAsrProvider([
+      candidate('litellm-volcengine-sauc-asr', primary),
+      candidate('litellm-qwen3-asr-flash-realtime', backup),
+    ], { sharedAccountRateLimit: managed });
+    const onError = vi.fn();
+    const submitted: string[] = [];
+    const controller = new VoiceInputController({
+      asr: fallback,
+      logger: new VoiceTimelineLogger(),
+      recoveryErrorMessage: managed ? getVoiceInputRateLimitMessage : undefined,
+      callbacks: {
+        onDraftChanged: () => {},
+        onSubmitted: (text, segment) => {
+          submitted.push(text);
+          return { id: 'range', segmentIds: [segment.id], startOffset: 0, endOffset: text.length, userTouched: false };
+        },
+        onError,
+      },
+    });
+    try {
+      await controller.start();
+      primary.emit({ type: 'partial', text: 'keep these words', at: Date.now() });
+      primary.emit({ type: 'disconnected', at: Date.now() });
+      await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce());
+      expect(onError).toHaveBeenCalledWith(
+        limited ? VOICE_INPUT_RATE_LIMITED_MESSAGE : 'Voice input stopped receiving recognition. Please try again.',
+        limited ? undefined : 'recognition_stalled',
+        { transcriptKept: true },
+      );
+      expect(submitted).toEqual(['keep these words']);
+      expect(backup.start).not.toHaveBeenCalled();
+      expect(isVoiceInputProviderCoolingDown('asr', 'litellm-volcengine-sauc-asr')).toBe(!limited);
+    } finally {
+      await controller.cancel();
+      await fallback.dispose();
+    }
+  });
+
+  it.each(['create', 'start'] as const)('stops on shared account rate limits during %s without penalizing providers', async (phase) => {
+    const error = accountRateLimit();
+    const first = makeMockProvider({ startError: error });
+    const createBackup = vi.fn(async () => makeMockProvider());
+    const fallback = new FallbackAsrProvider([
+      candidate('litellm-volcengine-sauc-asr', phase === 'create' ? async () => { throw error; } : first),
+      candidate('litellm-qwen3-asr-flash-realtime', createBackup),
+    ], { hedgeDelayMs: null, sharedAccountRateLimit: true });
+
+    await expect(fallback.start()).rejects.toBe(error);
+
+    expect(createBackup).not.toHaveBeenCalled();
+    expect(fallback.activeProviderKind).toBeNull();
+    expect(isVoiceInputProviderCoolingDown('asr', 'litellm-volcengine-sauc-asr')).toBe(false);
+    expect(isVoiceInputProviderCoolingDown('asr', 'litellm-qwen3-asr-flash-realtime')).toBe(false);
+    if (phase === 'start') await vi.waitFor(() => expect(first.dispose).toHaveBeenCalledOnce());
+
+    // A subsequent user attempt can use the primary immediately, without
+    // waiting for a provider cooldown introduced by this failed run.
+    const retry = new FallbackAsrProvider([
+      candidate('litellm-volcengine-sauc-asr', makeMockProvider()),
+    ], { sharedAccountRateLimit: true });
+    await retry.start();
+    expect(retry.activeProviderKind).toBe('litellm-volcengine-sauc-asr');
+  });
+
+  it('preserves earlier real failures but surfaces the later account rate limit unchanged', async () => {
+    const error = accountRateLimit();
+    const third = vi.fn(async () => makeMockProvider());
+    const fallback = new FallbackAsrProvider([
+      candidate('litellm-volcengine-sauc-asr', makeMockProvider({ startError: new Error('connection refused') })),
+      candidate('litellm-qwen3-asr-flash-realtime', makeMockProvider({ startError: error })),
+      candidate('litellm-gpt-realtime-whisper', third),
+    ], { hedgeDelayMs: null, sharedAccountRateLimit: true });
+
+    await expect(fallback.start()).rejects.toBe(error);
+    expect(third).not.toHaveBeenCalled();
+    expect(isVoiceInputProviderCoolingDown('asr', 'litellm-volcengine-sauc-asr')).toBe(true);
+    expect(isVoiceInputProviderCoolingDown('asr', 'litellm-qwen3-asr-flash-realtime')).toBe(false);
+  });
+
+  it.each([
+    { sharedAccountRateLimit: false, error: accountRateLimit() },
+    { sharedAccountRateLimit: true, error: new Error('Upstream handshake failed: HTTP 429') },
+  ])('keeps independent provider failures eligible for fallback (%#)', async ({ sharedAccountRateLimit, error }) => {
+    const backup = makeMockProvider();
+    const fallback = new FallbackAsrProvider([
+      candidate('litellm-volcengine-sauc-asr', makeMockProvider({ startError: error })),
+      candidate('litellm-qwen3-asr-flash-realtime', backup),
+    ], { hedgeDelayMs: null, sharedAccountRateLimit });
+
+    await fallback.start();
+    expect(backup.start).toHaveBeenCalledOnce();
+    expect(isVoiceInputProviderCoolingDown('asr', 'litellm-volcengine-sauc-asr')).toBe(true);
+  });
+
+  it('does not penalize the active provider when recovery hits the shared account quota', async () => {
+    const error = accountRateLimit();
+    const backup = makeMockProvider();
+    const fallback = new FallbackAsrProvider([
+      candidate('litellm-volcengine-sauc-asr', makeMockProvider({ recover: async () => { throw error; } })),
+      candidate('litellm-qwen3-asr-flash-realtime', backup),
+    ], { sharedAccountRateLimit: true });
+
+    await fallback.start();
+    await expect(fallback.recover!()).rejects.toBe(error);
+    expect(backup.start).not.toHaveBeenCalled();
+    expect(isVoiceInputProviderCoolingDown('asr', 'litellm-volcengine-sauc-asr')).toBe(false);
+  });
+
+  it.each(['create', 'start'] as const)('cleans up a hedged candidate that finishes %s after an account rate limit', async (phase) => {
+    let rejectPrimary!: (error: Error) => void;
+    let releaseBackup!: () => void;
+    const primary = makeMockProvider({
+      startGate: new Promise<void>((_resolve, reject) => { rejectPrimary = reject; }),
+    });
+    const backupGate = new Promise<void>((resolve) => { releaseBackup = resolve; });
+    const backup = makeMockProvider({ startGate: phase === 'start' ? backupGate : undefined });
+    const createBackup = vi.fn(async () => {
+      if (phase === 'create') await backupGate;
+      return backup;
+    });
+    const third = vi.fn(async () => makeMockProvider());
+    const fallback = new FallbackAsrProvider([
+      candidate('litellm-volcengine-sauc-asr', primary),
+      candidate('litellm-qwen3-asr-flash-realtime', createBackup),
+      candidate('litellm-gpt-realtime-whisper', third),
+    ], { hedgeDelayMs: 1_000, sharedAccountRateLimit: true });
+    vi.useFakeTimers();
+    try {
+      const error = accountRateLimit();
+      const result = fallback.start().catch((failure: unknown) => failure);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(createBackup).toHaveBeenCalledOnce();
+      rejectPrimary(error);
+      expect(await result).toBe(error);
+      releaseBackup();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(backup.dispose).toHaveBeenCalledOnce();
+      expect(third).not.toHaveBeenCalled();
+      expect(fallback.activeProviderKind).toBeNull();
+      expect(isVoiceInputProviderCoolingDown('asr', 'litellm-volcengine-sauc-asr')).toBe(false);
+      expect(isVoiceInputProviderCoolingDown('asr', 'litellm-qwen3-asr-flash-realtime')).toBe(false);
+      if (phase === 'create') expect(backup.start).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('uses the first candidate when it starts successfully and forwards its events', async () => {
@@ -74,6 +271,66 @@ describe('FallbackAsrProvider', () => {
     expect(events).toEqual([{ type: 'partial', text: 'hello', at: 1 }]);
     fallback.appendAudio(chunk(1));
     expect(first.appended).toHaveLength(1);
+  });
+
+  it('replays the connected event emitted during start() once the candidate wins', async () => {
+    const callbacks: Array<(event: AsrEvent) => void> = [];
+    const provider: AsrProvider = {
+      start: vi.fn(async () => {
+        // Real providers emit `connected` from inside start(), before the
+        // wrapper has committed them as active.
+        for (const callback of callbacks) callback({ type: 'connected', at: 7 });
+      }),
+      stop: vi.fn(async () => {}),
+      appendAudio: vi.fn(),
+      flushAudio: vi.fn(async () => {}),
+      onEvent: (callback) => {
+        callbacks.push(callback);
+      },
+    };
+    const fallback = new FallbackAsrProvider([candidate('litellm-volcengine-sauc-asr', async () => provider)]);
+    const events: AsrEvent[] = [];
+    fallback.onEvent((event) => events.push(event));
+
+    await fallback.start();
+
+    expect(events).toEqual([{ type: 'connected', at: 7 }]);
+  });
+
+  it('drops the connected event of a losing candidate', async () => {
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const firstCallbacks: Array<(event: AsrEvent) => void> = [];
+    const first: AsrProvider = {
+      start: vi.fn(async () => {
+        await firstGate;
+        for (const callback of firstCallbacks) callback({ type: 'connected', at: 1 });
+      }),
+      stop: vi.fn(async () => {}),
+      appendAudio: vi.fn(),
+      flushAudio: vi.fn(async () => {}),
+      onEvent: (callback) => {
+        firstCallbacks.push(callback);
+      },
+      dispose: vi.fn(async () => {}),
+    };
+    const second = makeMockProvider();
+    const fallback = new FallbackAsrProvider([
+      candidate('litellm-volcengine-sauc-asr', async () => first),
+      candidate('litellm-qwen3-asr-flash-realtime', second),
+    ], { hedgeDelayMs: 0 });
+    const events: AsrEvent[] = [];
+    fallback.onEvent((event) => events.push(event));
+
+    await fallback.start();
+    expect(fallback.activeProviderKind).toBe('litellm-qwen3-asr-flash-realtime');
+    releaseFirst();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(events).toEqual([]);
   });
 
   it('falls back to the next candidate when start() fails and suppresses events from the failed attempt', async () => {
@@ -244,5 +501,87 @@ describe('FallbackAsrProvider', () => {
     expect(typeof fallbackWithRecover.recover).toBe('function');
     await expect(fallbackWithRecover.recover!()).rejects.toThrow('recover exhausted');
     expect(isVoiceInputProviderCoolingDown('asr', 'litellm-qwen3-asr-flash-realtime')).toBe(true);
+  });
+
+  it('starts a delayed hedge when the primary is slow and disposes the losing attempt', async () => {
+    let releasePrimary!: () => void;
+    const primaryGate = new Promise<void>((resolve) => { releasePrimary = resolve; });
+    const primary = makeMockProvider({ startGate: primaryGate });
+    const backup = makeMockProvider();
+    const fallback = new FallbackAsrProvider([
+      candidate('litellm-volcengine-sauc-asr', primary),
+      candidate('litellm-qwen3-asr-flash-realtime', backup),
+    ], { hedgeDelayMs: 10 });
+
+    const startPromise = fallback.start();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(backup.start).toHaveBeenCalledTimes(1);
+    expect(fallback.activeProviderKind).toBe('litellm-qwen3-asr-flash-realtime');
+    expect(primary.stop).toHaveBeenCalled();
+    expect(primary.dispose).toHaveBeenCalled();
+    releasePrimary();
+    await startPromise;
+  });
+
+  it('launches the next candidate immediately after an explicit start failure', async () => {
+    const first = makeMockProvider({ startError: new Error('connection refused') });
+    const second = makeMockProvider();
+    const fallback = new FallbackAsrProvider([
+      candidate('litellm-volcengine-sauc-asr', first),
+      candidate('litellm-qwen3-asr-flash-realtime', second),
+    ], { hedgeDelayMs: 10_000 });
+
+    await fallback.start();
+
+    expect(second.start).toHaveBeenCalledTimes(1);
+    expect(fallback.activeProviderKind).toBe('litellm-qwen3-asr-flash-realtime');
+  });
+
+  it('does not wait for failed-candidate cleanup before starting the fallback', async () => {
+    let releaseStop!: () => void;
+    const stopGate = new Promise<void>((resolve) => { releaseStop = resolve; });
+    const first = makeMockProvider({
+      startError: new Error('connection refused'),
+      stopGate,
+    });
+    const second = makeMockProvider();
+    const fallback = new FallbackAsrProvider([
+      candidate('litellm-volcengine-sauc-asr', first),
+      candidate('litellm-qwen3-asr-flash-realtime', second),
+    ], { hedgeDelayMs: null });
+
+    await fallback.start();
+
+    expect(first.stop).toHaveBeenCalledTimes(1);
+    expect(first.dispose).not.toHaveBeenCalled();
+    expect(second.start).toHaveBeenCalledTimes(1);
+    expect(fallback.activeProviderKind).toBe('litellm-qwen3-asr-flash-realtime');
+    releaseStop();
+    await vi.waitFor(() => expect(first.dispose).toHaveBeenCalledTimes(1));
+  });
+
+  it('lets a slow single candidate finish on its own deadline instead of imposing a wrapper timeout', async () => {
+    let releaseStart!: () => void;
+    const slow = makeMockProvider({
+      startGate: new Promise<void>((resolve) => {
+        releaseStart = resolve;
+      }),
+    });
+    const fallback = new FallbackAsrProvider([
+      candidate('litellm-volcengine-sauc-asr', slow),
+    ]);
+
+    const startPromise = fallback.start();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(fallback.activeProviderKind).toBeNull();
+    expect(slow.stop).not.toHaveBeenCalled();
+
+    releaseStart();
+    await startPromise;
+
+    expect(slow.start).toHaveBeenCalledTimes(1);
+    expect(slow.stop).not.toHaveBeenCalled();
+    expect(slow.dispose).not.toHaveBeenCalled();
+    expect(fallback.activeProviderKind).toBe('litellm-volcengine-sauc-asr');
   });
 });

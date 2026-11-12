@@ -69,12 +69,8 @@ The default flow covers mock login and device-list sync. Session control flows c
 pnpm --filter mobile test:e2e:maestro -- --flow remote_session_smoke.yaml
 pnpm --filter mobile test:e2e:create-session
 pnpm --filter mobile test:e2e:maestro -- --flow fork_rewind.yaml
-pnpm --filter mobile test:e2e:maestro -- --flow automations.yaml
-pnpm --filter mobile test:e2e:maestro -- --flow automations_create_edit.yaml
 pnpm --filter mobile test:e2e:maestro -- --flow file_browser.yaml
 ```
-
-`automations_create_edit.yaml` also touches the schedule template gallery before saving the created automation.
 
 For local device-link smoke, use the preflight runner. It probes the local server, mock auth, device-link REST, controllable desktop presence, then runs the session flow:
 
@@ -94,7 +90,7 @@ To browse real local Cindy session/message data through the same mobile flow, us
 pnpm --filter mobile test:e2e:local:real-db:ios
 ```
 
-Use the full suite when changing remote controls, file preview, media preview, message selection, automations, or settings:
+Use the full suite when changing remote controls, file preview, media preview, message selection, or settings:
 
 ```bash
 pnpm --filter mobile test:e2e:local:full:ios

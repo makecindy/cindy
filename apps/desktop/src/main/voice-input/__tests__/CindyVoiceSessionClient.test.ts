@@ -28,7 +28,7 @@ vi.mock('../../authManager.js', () => ({
 vi.mock('../../clientEndpointsService.js', () => ({
   getClientEndpoint: vi.fn(() => 'https://voice.example.com'),
 }));
-vi.mock('../../serverApiClient.js', () => ({
+vi.mock('../../serverApiClient.desktop.js', () => ({
   ServerApiError,
   serverApiFetch,
 }));
@@ -67,6 +67,25 @@ describe('CindyVoiceRunContext', () => {
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(serverApiFetch).toHaveBeenCalledTimes(2);
     expect(serverApiFetch.mock.calls[0]).toEqual(serverApiFetch.mock.calls[1]);
+  });
+
+  it('reports the refine budget of the latest session, falling back to 2 for servers that omit it', async () => {
+    serverApiFetch.mockReset();
+    serverApiFetch
+      .mockResolvedValueOnce(SESSION)
+      .mockResolvedValueOnce({
+        ...SESSION,
+        sessionId: 'session-2',
+        refiner: { enabled: true, provider: 'auto', maxRefineRequests: 8 },
+      });
+    const context = new CindyVoiceRunContext('zh-CN', 'auto');
+
+    expect(context.refineRequestBudget()).toEqual({ sessionKey: '', limit: 2 });
+    await context.createAsrConnection('qwen-asr-flash-realtime');
+    expect(context.refineRequestBudget()).toEqual({ sessionKey: 'session-1', limit: 2 });
+    // A reconnect allocates a new session; refines go to it, so its limit applies.
+    await context.createAsrConnection('qwen-asr-flash-realtime');
+    expect(context.refineRequestBudget()).toEqual({ sessionKey: 'session-2', limit: 8 });
   });
 
   it('keeps dictation working on a legacy server that rejects the auto refiner marker', async () => {
@@ -118,5 +137,27 @@ describe('CindyVoiceRunContext', () => {
     });
     const thirdBody = (serverApiFetch.mock.calls[2][1] as { body: { refinerProvider?: string } }).body;
     expect(thirdBody.refinerProvider).toBe('auto');
+  });
+
+  it('does not let a late session allocation overwrite a newer fallback attempt', async () => {
+    serverApiFetch.mockReset();
+    let resolveFirst!: (session: typeof SESSION) => void;
+    const firstResponse = new Promise<typeof SESSION>((resolve) => {
+      resolveFirst = resolve;
+    });
+    serverApiFetch
+      .mockReturnValueOnce(firstResponse)
+      .mockResolvedValueOnce(SESSION);
+    const context = new CindyVoiceRunContext('zh-CN', 'auto');
+
+    const first = context.createAsrConnection('qwen-asr-flash-realtime');
+    await Promise.resolve();
+    const second = context.createAsrConnection('qwen-asr-flash-realtime');
+    await expect(second).resolves.toEqual({
+      websocketUrl: SESSION.asr.websocketUrl,
+      authorizationToken: SESSION.ticket,
+    });
+    resolveFirst(SESSION);
+    await expect(first).rejects.toThrow('superseded by a newer provider attempt');
   });
 });

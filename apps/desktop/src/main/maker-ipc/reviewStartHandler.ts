@@ -9,11 +9,13 @@ import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 
 import type { ReviewAttachmentInput } from '../reviewer/reviewEvidence.js';
-import type {
-  ReviewFailureCode,
-  ReviewRunMeta,
-  ReviewRunOwner,
-  ReviewTargetKind,
+import { splitReviewFindingsMarker } from '../reviewer/reviewFindingsMarker.js';
+import type { ReviewReplyLanguage } from '../reviewer/reviewReplyLanguage.js';
+import {
+  type ReviewFailureCode,
+  type ReviewRunMeta,
+  type ReviewRunOwner,
+  type ReviewTargetKind,
 } from '../../shared/reviewRun.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { MAKER_INVOKE } from './channels.js';
@@ -137,7 +139,7 @@ export interface PreparedReviewLaunch {
   reviewerCreateOpts: MakerSessionCreateOpts;
   /** Fail closed if evidence changed after extraction but before provider start. */
   verifyBeforeStart(): Promise<ReviewFailureReason | null>;
-  /** Return a user-facing failure reason instead of publishing a stale result. */
+  /** Return why a completed result no longer represents the current source state. */
   verifyBeforePublish(): Promise<ReviewFailureReason | null>;
 }
 
@@ -150,8 +152,15 @@ export interface ReviewFailureReason {
 export interface PreparedReviewRun {
   sourceAgentKind: 'cc' | 'codex' | 'pi';
   prompt: string;
+  /** What the Reviewer task shows as its input. The full prompt is model input only. */
+  inputSummary?: string;
+  /** The user's language; the follow-up turn in the source task keeps it. */
+  replyLanguage?: ReviewReplyLanguage | null;
   targetKind: ReviewTargetKind;
+  workspace?: ReviewRunMeta['workspace'];
   prepareLaunch(): Promise<PreparedReviewLaunch>;
+  /** Release transport staging once the Review prompt is durably accepted. */
+  onAccepted?(): void;
   cleanup?(): Promise<void>;
 }
 
@@ -171,7 +180,9 @@ export interface ReviewCardWrite {
 
 export interface ReviewStartHandlerDeps {
   assertCaller(event: unknown): void;
-  waitUntilReady(): Promise<void>;
+  /** Capture trusted invocation origin now; refresh source visibility at each launch boundary. */
+  captureSourceAccessGuard(sourceSessionId: string): () => Promise<void>;
+  waitUntilReady(sourceSessionId: string): Promise<void>;
   createRunId(): string;
   createReviewerSessionId(): string;
   owner: ReviewRunOwner;
@@ -201,24 +212,56 @@ export interface ReviewStartHandlerDeps {
   broadcastReviewerCreated(reviewerSessionId: string): void;
   persistReviewerPrompt(input: {
     reviewerSessionId: string;
+    /** Labels the Reviewer input as sent from its source task, a durable way back. */
+    sourceSessionId: string;
     runId: string;
+    /** Display text for the Reviewer task's first message. */
     prompt: string;
     sourceAgentKind: PreparedReviewRun['sourceAgentKind'];
   }): Promise<void>;
   drainPersistQueue(): Promise<void>;
   readReviewerResult(reviewerSessionId: string): Promise<string>;
+  /**
+   * Queue a verified, current conclusion with findings into the source task so its
+   * agent verifies and fixes them. Best effort: the published card stays the record.
+   */
+  forwardResultToSource?(input: {
+    sourceSessionId: string;
+    reviewerSessionId: string;
+    runId: string;
+    result: string;
+    findingsCount: number | null;
+    replyLanguage: ReviewReplyLanguage | null;
+  }): Promise<void>;
   closeReviewer(reviewerSessionId: string): Promise<void>;
   warn(message: string, fields: Record<string, unknown>): void;
+}
+
+export interface ReviewRunControl {
+  /** Record local user intent before the shared input coordinator aborts the Reviewer turn. */
+  noteReviewerStopRequested(reviewerSessionId: string): boolean;
 }
 
 function terminalErrorDetails(event: AgentEvent): {
   error?: string;
   failureCode?: ReviewFailureCode;
 } {
-  const data = event.data as { message?: unknown } | null;
+  const data = event.data as { message?: unknown; reason?: unknown } | null;
+  if (data?.reason === 'tool_use_loop_detected') {
+    // The producer message is a diagnostic fallback and may contain Chinese
+    // text plus an internal contract category. Persist the stable code so the
+    // Reviewer card renders through its localized failure catalog.
+    return { failureCode: 'provider-failed' };
+  }
   return typeof data?.message === 'string' && data.message
     ? { error: data.message }
     : { failureCode: 'provider-failed' };
+}
+
+function isCancelledReviewDone(event: AgentEvent): boolean {
+  if (event.type !== 'done') return false;
+  const data = event.data as { cancelled?: unknown } | null;
+  return data?.cancelled === true;
 }
 
 export class ReviewPreconditionError extends Error {
@@ -241,13 +284,15 @@ const REVIEW_TERMINAL_CARD_RETRY_MAX_MS = 5_000;
 export function registerReviewStartHandler(
   registry: IpcHandlerRegistry,
   deps: ReviewStartHandlerDeps,
-): void {
+): ReviewRunControl {
   const activeReviewsBySource = new Map<string, { runId: string; reviewerSessionId: string }>();
+  const activeStopNotifiersByReviewer = new Map<string, () => boolean>();
 
   registry.handle(MAKER_INVOKE.START_REVIEW, async (event, raw: unknown) => {
     deps.assertCaller(event);
-    await deps.waitUntilReady();
     const request = readStartReviewRequest(raw);
+    const assertSourceAccess = deps.captureSourceAccessGuard(request.sourceSessionId);
+    await deps.waitUntilReady(request.sourceSessionId);
     if (activeReviewsBySource.has(request.sourceSessionId)) {
       throwIpcError('SESSION_RUNNING', 'This task already has a review in progress');
     }
@@ -264,6 +309,7 @@ export function registerReviewStartHandler(
     let settled = false;
     let settlementCause: 'provider-terminal' | 'reviewer-closed' | null = null;
     let reviewerClosed = false;
+    let completedResult = '';
     let preparedRunCleaned = false;
     let preparedRunCleanup: (() => Promise<void>) | null = null;
     let terminalFinalization: Promise<void> | null = null;
@@ -277,6 +323,13 @@ export function registerReviewStartHandler(
     let pendingTerminalCard: ReviewCardWrite | null = null;
     let terminalCardPersisted = false;
     let sourceCardWriteChain = Promise.resolve();
+    let stopRequested = false;
+    const noteStopRequested = (): boolean => {
+      if (settled) return false;
+      stopRequested = true;
+      return true;
+    };
+    activeStopNotifiersByReviewer.set(reviewerSessionId, noteStopRequested);
 
     const enqueueSourceCardWrite = (write: () => Promise<void>): Promise<void> => {
       const next = sourceCardWriteChain.then(write, write);
@@ -332,6 +385,9 @@ export function registerReviewStartHandler(
         releaseRetryDelayMs = REVIEW_SOURCE_LEASE_RELEASE_RETRY_MS;
         const active = activeReviewsBySource.get(request.sourceSessionId);
         if (active?.runId === runId) activeReviewsBySource.delete(request.sourceSessionId);
+        if (activeStopNotifiersByReviewer.get(reviewerSessionId) === noteStopRequested) {
+          activeStopNotifiersByReviewer.delete(reviewerSessionId);
+        }
       })();
       releasePromise = pending;
       void pending.finally(() => {
@@ -439,7 +495,9 @@ export function registerReviewStartHandler(
     try {
       const prepared = await deps.prepareRun({ event, request, runId, reviewerSessionId });
       preparedRunCleanup = prepared.cleanup?.bind(prepared) ?? null;
+      await assertSourceAccess();
       const preparedSourceAgentKind = prepared.sourceAgentKind;
+      const preparedReplyLanguage = prepared.replyLanguage ?? null;
       sourceAgentKind = preparedSourceAgentKind;
       const startedAt = deps.now();
       if (
@@ -459,6 +517,7 @@ export function registerReviewStartHandler(
         sourceSessionId: request.sourceSessionId,
         status: 'running',
         targetKind: prepared.targetKind,
+        ...(prepared.workspace ? { workspace: prepared.workspace } : {}),
         startedAt,
         owner: deps.owner,
       };
@@ -474,6 +533,8 @@ export function registerReviewStartHandler(
       const launch = await prepared.prepareLaunch();
       const startFailure = await launch.verifyBeforeStart();
       if (startFailure) throw new ReviewPreconditionError(startFailure);
+      // Evidence/fingerprint preparation can outlive the source's remote visibility.
+      await assertSourceAccess();
       const reviewer = await deps.startReviewer(launch.reviewerCreateOpts);
       const linkedRunningMeta: ReviewRunMeta = { ...runningMeta, reviewerSessionId };
       runningMeta = linkedRunningMeta;
@@ -487,6 +548,11 @@ export function registerReviewStartHandler(
         settlementCause = 'provider-terminal';
         disposeReviewerListeners();
         terminalFinalization = (async () => {
+          if (stopRequested || isCancelledReviewDone(reviewEvent)) {
+            await updateSourceCard('failed', '', undefined, 'reviewer-closed');
+            await closeReviewer();
+            return;
+          }
           if (terminalError) {
             const details = terminalErrorDetails(reviewEvent);
             await updateSourceCard('failed', '', details.error, details.failureCode);
@@ -494,19 +560,45 @@ export function registerReviewStartHandler(
             return;
           }
           await deps.drainPersistQueue();
-          const result = await deps.readReviewerResult(reviewerSessionId);
+          const parsed = splitReviewFindingsMarker(
+            await deps.readReviewerResult(reviewerSessionId),
+          );
+          const result = parsed.text;
           if (!result) {
             await updateSourceCard('failed', '', undefined, 'no-visible-result');
             await closeReviewer();
             return;
           }
+          completedResult = result;
           const staleReason = await launch.verifyBeforePublish();
           if (staleReason) {
-            await updateSourceCard('failed', '', staleReason.message, staleReason.code);
+            // Keep the completed conclusion visible, with its failed freshness
+            // check. Clients cannot treat it as a verified current result.
+            await updateSourceCard('failed', result, staleReason.message, staleReason.code);
             await closeReviewer();
             return;
           }
           await updateSourceCard('completed', result);
+          // Only a current conclusion goes back; a known zero needs no follow-up turn.
+          // An unknown count is forwarded so the source agent can judge it.
+          if (parsed.findingsCount !== 0 && terminalCardPersisted && deps.forwardResultToSource) {
+            await deps
+              .forwardResultToSource({
+                sourceSessionId: request.sourceSessionId,
+                reviewerSessionId,
+                runId,
+                result,
+                findingsCount: parsed.findingsCount,
+                replyLanguage: preparedReplyLanguage,
+              })
+              .catch((error) => {
+                deps.warn('review result forward to source failed', {
+                  sourceSessionId: request.sourceSessionId,
+                  runId,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              });
+          }
           await closeReviewer();
         })().catch(async (error) => {
           deps.warn('review result finalization failed', {
@@ -516,7 +608,7 @@ export function registerReviewStartHandler(
           });
           await updateSourceCard(
             'failed',
-            '',
+            completedResult,
             error instanceof Error ? error.message : String(error),
           ).catch((cardError) => {
             deps.warn('review failure card retry setup failed', {
@@ -553,6 +645,7 @@ export function registerReviewStartHandler(
       // created broadcast and listener registration, leaving the source gate
       // permanently occupied.
       await deps.markReviewerStarted(reviewerSessionId, startedAt);
+      await assertSourceAccess();
       if (settled) {
         await terminalFinalization;
         throwIpcError('PRECONDITION_FAILED', 'Reviewer task closed before it started');
@@ -578,13 +671,16 @@ export function registerReviewStartHandler(
 
       const sendResult = await reviewer.send(launch.message, {
         planMode: false,
+        beforeProviderStart: assertSourceAccess,
         onAccepted: async () => {
           await deps.persistReviewerPrompt({
             reviewerSessionId,
+            sourceSessionId: request.sourceSessionId,
             runId,
-            prompt: prepared.prompt,
+            prompt: prepared.inputSummary || prepared.prompt,
             sourceAgentKind: preparedSourceAgentKind,
           });
+          prepared.onAccepted?.();
         },
       });
       if (!sendResult.accepted) {
@@ -646,4 +742,9 @@ export function registerReviewStartHandler(
       throw error;
     }
   });
+
+  return {
+    noteReviewerStopRequested: (reviewerSessionId) =>
+      activeStopNotifiersByReviewer.get(reviewerSessionId)?.() ?? false,
+  };
 }

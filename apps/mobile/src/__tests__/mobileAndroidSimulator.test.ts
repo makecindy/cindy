@@ -1,0 +1,368 @@
+// @ts-nocheck —— 被测对象是 .mjs 开发工具模块，vitest 跑其纯函数与注入式流程。
+import { readFileSync } from 'node:fs';
+import { resolve, win32 } from 'node:path';
+import { runInNewContext } from 'node:vm';
+import { describe, expect, it, vi } from 'vitest';
+import { resolvePnpmInvocation, usablePnpmExecPath } from '../../../../scripts/shared/pnpm-invocation.mjs';
+import {
+  DEFAULT_ANDROID_AVD,
+  ensureWindowsAndroidEmulator,
+  extractAndroidSimulatorArgs,
+  parseAdbEmulatorSerials,
+  parseEmulatorAvdName,
+  resolveAndroidSdkTools,
+  inspectAndroidSimulator,
+  inspectAndroidInstalledApp,
+  readAndroidInstalledFingerprint,
+  runAndroidProbe,
+} from '../../scripts/lib/android-simulator.mjs';
+
+describe('Android whoami read-only probes', () => {
+  // #9422 acceptance was blocked by iOS-only whoami. These production probes
+  // distinguish device selection, missing packages and failed reads (unit).
+  // Inject adb output instead of using real devices, APKs or subprocesses.
+  it('requires an exact target when several emulators are online', () => {
+    const run = vi.fn((_adb, args) => args[0] === 'devices'
+      ? 'List of devices attached\nemulator-5554 device\nemulator-5556 device\nphone device\nemulator-5558 offline'
+      : args.includes('getprop') ? '1' : 'test-avd\nOK');
+    expect(inspectAndroidSimulator({ adb: 'adb', run })).toMatchObject({ serial: null, targetBooted: [] });
+    expect(inspectAndroidSimulator({ adb: 'adb', run, serial: 'emulator-5556' }))
+      .toMatchObject({ serial: 'emulator-5556', targetBooted: ['emulator-5556'], avd: 'test-avd' });
+    expect(inspectAndroidSimulator({ adb: 'adb', run, serial: 'emulator-5558' }))
+      .toMatchObject({ serial: null, targetBooted: [] });
+  });
+
+  it('does not inspect an app until the selected emulator finishes booting', () => {
+    expect(inspectAndroidSimulator({ adb: 'adb', run: (_adb, args) => args[0] === 'devices'
+      ? 'emulator-5554 device' : '0' })).toMatchObject({ targetBooted: [] });
+  });
+
+  it.each([true, false])('reads the base APK and identifies debug=%s', (debuggable) => {
+    const run = (_adb, args) => args.includes('packages') ? 'package:app.cindy' : args.includes('path')
+      ? 'package:/data/app/pkg/base.apk\npackage:/data/app/pkg/split_config.apk'
+      : `versionName=1.2.3\nversionCode=42 minSdk=24\nflags=[ HAS_CODE ${debuggable ? 'DEBUGGABLE' : ''} ]`;
+    expect(inspectAndroidInstalledApp({ adb: 'adb', serial: 'emulator-5554', packageName: 'app.cindy', run }))
+      .toEqual({ apk: '/data/app/pkg/base.apk', version: '1.2.3', buildNumber: '42', debuggable });
+  });
+
+  it('distinguishes missing packages from malformed or failed adb responses', () => {
+    const options = { adb: 'adb', serial: 'emulator-5554', packageName: 'app.cindy' };
+    const absent = vi.fn(() => 'package:app.cindy.other');
+    expect(inspectAndroidInstalledApp({ ...options, run: absent })).toBeNull();
+    expect(absent).toHaveBeenCalledTimes(1);
+    expect(() => inspectAndroidInstalledApp({ ...options, run: () => 'unexpected' })).toThrow(/包列表/);
+    expect(() => inspectAndroidInstalledApp({ ...options, run: (_adb, args) => args.includes('packages') ? 'package:app.cindy' : '' }))
+      .toThrow(/base.apk/);
+    expect(() => runAndroidProbe('adb', ['devices'], () => { throw new Error('private output'); }))
+      .toThrow(/adb 检查失败/);
+    expect(() => runAndroidProbe('adb', ['shell', 'pm', 'path'], () => "cmd: Can't find service: package"))
+      .toThrow(/adb 检查失败/);
+    expect(() => runAndroidProbe('adb', ['devices'], () => { throw Object.assign(new Error('private'), { code: 'ETIMEDOUT' }); }))
+      .toThrow(expect.objectContaining({ code: 'ANDROID_PROBE_TIMEOUT' }));
+  });
+
+  it('reads the embedded fingerprint with a quoted APK path, not the runtime sentinel', () => {
+    const run = vi.fn(() => 'a'.repeat(40));
+    expect(readAndroidInstalledFingerprint({ adb: 'adb', serial: 'emulator-5556', apk: '/data/app/pkg/base.apk', run }))
+      .toBe('a'.repeat(40));
+    expect(run).toHaveBeenCalledWith('adb', ['-s', 'emulator-5556', 'shell', 'unzip', '-p', "'/data/app/pkg/base.apk'", 'assets/fingerprint']);
+  });
+
+  // PR #9475: the failed-extraction fallback must prove absence, not turn a
+  // corrupt archive or a failed/empty listing into a rebuild recommendation.
+  // Unit: real reader/probe with only the child-process boundary injected.
+  it.each(['present', 'empty', 'failed'])('preserves read failure when the APK listing is %s', (listing) => {
+    const execFile = (_adb, args) => {
+      if (args.includes('-l') && listing !== 'failed') {
+        return listing === 'empty' ? '' : '       40  2026-01-01 00:00   assets/fingerprint\n';
+      }
+      throw Object.assign(new Error('private archive diagnostics'), { status: 1 });
+    };
+    expect(() => readAndroidInstalledFingerprint({
+      adb: 'adb', serial: 'emulator-5556', apk: '/data/app/pkg/base.apk',
+      run: (adb, args) => runAndroidProbe(adb, args, execFile),
+    })).toThrow(expect.objectContaining({ code: 'ANDROID_PROBE_FAILED' }));
+  });
+});
+
+describe('Windows Android 模拟器参数', () => {
+  // Execute the actual launch tail: losing the resolver or its cmd environment
+  // makes Windows fail before Expo starts (engineering-conventions.md §3.2).
+  it.each([
+    ['available pnpm script', 'C:\\tools\\pnpm.cjs', true],
+    ['removed pnpm script', 'C:\\tools\\pnpm.cjs', false],
+    ['unrelated npm executable', 'C:\\tools\\npm-cli.js', true],
+  ])('sim:start preserves the Windows invocation for %s', async (_name, npmExecPath, present) => {
+    const source = readFileSync(resolve(process.cwd(), 'scripts/sim-start.mjs'), 'utf8');
+    const start = source.indexOf("const args = ['exec', 'expo', 'start'");
+    if (start < 0) throw new Error('Missing sim:start launch flow');
+    const spawn = vi.fn(() => ({ once: vi.fn(), on: vi.fn() }));
+    const ensureAndroidTarget = vi.fn();
+    const node = 'C:\\Node\\node.exe';
+    const cmd = 'C:\\Windows\\cmd.exe';
+    await runInNewContext(`(async () => { ${source.slice(start)} })()`, {
+      DEFAULT_PORT: 8081, portArgs: { port: 8082, passthrough: ['--clear'] },
+      portInUse: async () => false, ensureAndroidTarget, spawn,
+      console: { log: vi.fn(), error: vi.fn() },
+      process: { on: vi.fn(), env: { npm_execpath: npmExecPath, KEEP: 'inherited' } },
+      resolvePnpmInvocation: (args, options) => resolvePnpmInvocation(args, { ...options, platform: 'win32', execPath: node, comSpec: cmd }),
+      usablePnpmExecPath, existsSync: (target) => present && target === npmExecPath,
+      mobileDir: 'C:\\repo\\apps\\mobile', worktreeRoot: 'C:\\repo',
+      buildEnv: { CINDY_USE_LOCAL_REGION_CONFIG: '1' }, region: 'global',
+      prepareMetroLog: () => null, removeMetroLog: () => {}, metroLogEnv: () => ({}),
+      branch: 'test', commit: '123', sourceIdentity: 'test@123',
+    });
+    expect(ensureAndroidTarget).toHaveBeenCalledOnce();
+    expect(spawn).toHaveBeenCalledOnce();
+    const [command, args, options] = spawn.mock.calls[0];
+    const expoArgs = ['exec', 'expo', 'start', '--dev-client', '--clear', '--port', '8082'];
+    if (present && npmExecPath.endsWith('pnpm.cjs')) {
+      expect(command).toBe(node);
+      expect(args).toEqual([npmExecPath, ...expoArgs]);
+      expect(options.windowsVerbatimArguments).toBeUndefined();
+    } else {
+      expect(command).toBe(cmd);
+      expect(args.slice(0, 4)).toEqual(['/d', '/s', '/v:off', '/c']);
+      expect(args[4]).toContain('%CINDY_PNPM_CMD_ARG_0%');
+      expect(Object.entries(options.env)
+        .filter(([key]) => key.startsWith('CINDY_PNPM_CMD_ARG_'))
+        .sort(([left], [right]) => Number(left.split('_').at(-1)) - Number(right.split('_').at(-1)))
+        .map(([, value]) => value)).toEqual(['pnpm', ...expoArgs]);
+      expect(options.windowsVerbatimArguments).toBe(true);
+    }
+    expect(options).toMatchObject({ cwd: 'C:\\repo\\apps\\mobile', shell: false, stdio: 'inherit',
+      env: { KEEP: 'inherited', CINDY_USE_LOCAL_REGION_CONFIG: '1', EXPO_PUBLIC_XDT_GIT_SOURCE: 'test@123' } });
+  });
+
+  it('Windows 默认启动 cindy-api36，且不把本地参数透传给 Expo', () => {
+    expect(extractAndroidSimulatorArgs(['--avd', 'Pixel_API_36', '--port', '8082'], 'win32'))
+      .toEqual({
+        avd: 'Pixel_API_36',
+        startEmulator: true,
+        passthrough: ['--port', '8082'],
+      });
+    expect(extractAndroidSimulatorArgs(['--no-emulator', '--clear'], 'win32')).toEqual({
+      avd: DEFAULT_ANDROID_AVD,
+      startEmulator: false,
+      passthrough: ['--clear'],
+    });
+  });
+
+  it('非 Windows 平台保持 Metro-only 行为', () => {
+    expect(extractAndroidSimulatorArgs([], 'darwin')).toEqual({
+      avd: DEFAULT_ANDROID_AVD,
+      startEmulator: false,
+      passthrough: [],
+    });
+  });
+
+  it('拒绝空 AVD 与重复参数', () => {
+    expect(() => extractAndroidSimulatorArgs(['--avd='], 'win32')).toThrow(/不能为空/);
+    expect(() => extractAndroidSimulatorArgs(['--avd=a', '--avd=b'], 'win32')).toThrow(/只能传一次/);
+  });
+});
+
+describe('Android SDK 与 adb 输出解析', () => {
+  it('依次尝试显式 SDK 与 Windows 标准目录', () => {
+    const existing = new Set([
+      'C:\\Users\\dev\\AppData\\Local\\Android\\Sdk\\platform-tools\\adb.exe',
+      'C:\\Users\\dev\\AppData\\Local\\Android\\Sdk\\emulator\\emulator.exe',
+    ]);
+    expect(resolveAndroidSdkTools({
+      platform: 'win32',
+      env: {
+        ANDROID_SDK_ROOT: 'D:\\missing',
+        LOCALAPPDATA: 'C:\\Users\\dev\\AppData\\Local',
+      },
+      exists: (target) => existing.has(target),
+    })).toEqual({
+      sdkRoot: 'C:\\Users\\dev\\AppData\\Local\\Android\\Sdk',
+      adb: 'C:\\Users\\dev\\AppData\\Local\\Android\\Sdk\\platform-tools\\adb.exe',
+      emulator: 'C:\\Users\\dev\\AppData\\Local\\Android\\Sdk\\emulator\\emulator.exe',
+    });
+  });
+
+  it('build-only 可在缺少 emulator 时仍解析 SDK 根目录', () => {
+    const sdkRoot = win32.join('D:\\', 'Android', 'Sdk');
+    const platforms = win32.join(sdkRoot, 'platforms');
+    const buildTools = win32.join(sdkRoot, 'build-tools');
+    expect(resolveAndroidSdkTools({
+      platform: 'win32',
+      requireTools: false,
+      env: { ANDROID_SDK_ROOT: sdkRoot },
+      exists: (target) => target === platforms || target === buildTools,
+      readDir: (target) => target === platforms ? ['android-36'] : ['35.0.0'],
+    })).toMatchObject({ sdkRoot });
+  });
+
+  it('build-only 跳过失效的环境变量路径，回退到标准 SDK 目录', () => {
+    const localAppData = win32.join('C:\\', 'Users', 'dev', 'AppData', 'Local');
+    const sdkRoot = win32.join(localAppData, 'Android', 'Sdk');
+    expect(resolveAndroidSdkTools({
+      platform: 'win32',
+      requireTools: false,
+      env: {
+        ANDROID_SDK_ROOT: win32.join('D:\\', 'missing-sdk'),
+        ANDROID_HOME: win32.join('D:\\', 'old-sdk'),
+        LOCALAPPDATA: localAppData,
+      },
+      exists: (target) => target === win32.join(sdkRoot, 'platforms')
+        || target === win32.join(sdkRoot, 'build-tools'),
+      readDir: (target) => target.endsWith('platforms') ? ['android-36'] : ['35.0.0'],
+    })).toMatchObject({ sdkRoot });
+  });
+
+  it('build-only skips an existing but incomplete SDK candidate', () => {
+    const stale = win32.join('D:\\', 'stale-sdk');
+    const valid = win32.join('C:\\', 'Users', 'dev', 'AppData', 'Local', 'Android', 'Sdk');
+    const existing = new Set([
+      stale,
+      win32.join(valid, 'platforms'),
+      win32.join(valid, 'build-tools'),
+    ]);
+    expect(resolveAndroidSdkTools({
+      platform: 'win32',
+      requireTools: false,
+      env: { ANDROID_SDK_ROOT: stale, LOCALAPPDATA: win32.join('C:\\', 'Users', 'dev', 'AppData', 'Local') },
+      exists: (target) => existing.has(target),
+      readDir: (target) => target.endsWith('platforms') ? ['android-36'] : ['35.0.0'],
+    })).toMatchObject({ sdkRoot: valid });
+  });
+
+  it('build-only 没有有效 SDK 候选时明确失败', () => {
+    expect(() => resolveAndroidSdkTools({
+      platform: 'win32', requireTools: false,
+      env: { ANDROID_SDK_ROOT: win32.join('D:\\', 'missing-sdk') },
+      exists: () => false,
+    })).toThrow('未找到 Android SDK 目录');
+  });
+
+  it('只接受在线 emulator，并去掉 avd name 的 OK 尾行', () => {
+    expect(parseAdbEmulatorSerials([
+      'List of devices attached',
+      'emulator-5554 device product:sdk',
+      'emulator-5556 offline',
+      'R5CT device product:phone',
+      '',
+    ].join('\r\n'))).toEqual(['emulator-5554']);
+    expect(parseEmulatorAvdName('cindy-api36\r\nOK\r\n')).toBe('cindy-api36');
+  });
+});
+
+describe('Windows Android 模拟器启动流程', () => {
+  const env = { ANDROID_SDK_ROOT: 'C:\\Android\\Sdk' };
+  const adb = 'C:\\Android\\Sdk\\platform-tools\\adb.exe';
+  const emulator = 'C:\\Android\\Sdk\\emulator\\emulator.exe';
+  const exists = () => true;
+
+  it('复用已启动 AVD，等待 boot_completed 后设置 adb reverse', async () => {
+    const execFile = vi.fn((command, args) => {
+      if (command === adb && args.join(' ') === 'devices') {
+        return 'List of devices attached\nemulator-5554 device\n';
+      }
+      if (command === adb && args.includes('name')) return 'cindy-api36\nOK\n';
+      if (command === adb && args.includes('sys.boot_completed')) return '1\n';
+      return '';
+    });
+
+    await expect(ensureWindowsAndroidEmulator({
+      avd: 'cindy-api36',
+      port: 8081,
+      platform: 'win32',
+      env,
+      exists,
+      execFile,
+      log: vi.fn(),
+    })).resolves.toMatchObject({ action: 'reused', serial: 'emulator-5554' });
+    expect(execFile).toHaveBeenCalledWith(
+      adb,
+      ['-s', 'emulator-5554', 'reverse', 'tcp:8081', 'tcp:8081'],
+      { stdio: 'ignore', windowsHide: true },
+    );
+  });
+
+  it('没有在线 AVD 时启动目标模拟器，再等待并设置端口', async () => {
+    let devicesChecks = 0;
+    let clock = 0;
+    const execFile = vi.fn((command, args) => {
+      if (command === emulator && args[0] === '-list-avds') return 'cindy-api36\n';
+      if (command === adb && args.join(' ') === 'devices') {
+        devicesChecks += 1;
+        return devicesChecks >= 2
+          ? 'List of devices attached\nemulator-5554 device\n'
+          : 'List of devices attached\n';
+      }
+      if (command === adb && args.includes('name')) return 'cindy-api36\nOK\n';
+      if (command === adb && args.includes('sys.boot_completed')) return '1\n';
+      return '';
+    });
+    const child = { once: vi.fn(), unref: vi.fn() };
+    const spawnProcess = vi.fn(() => child);
+
+    await expect(ensureWindowsAndroidEmulator({
+      avd: 'cindy-api36',
+      port: 8081,
+      platform: 'win32',
+      env,
+      exists,
+      execFile,
+      spawnProcess,
+      wait: async (ms) => { clock += ms; },
+      now: () => clock,
+      log: vi.fn(),
+    })).resolves.toMatchObject({ action: 'started', serial: 'emulator-5554' });
+    expect(spawnProcess).toHaveBeenCalledWith(emulator, ['-avd', 'cindy-api36'], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: false,
+    });
+    expect(child.unref).toHaveBeenCalledOnce();
+  });
+
+  it('目标 AVD 不存在时明确失败，不启动其它模拟器', async () => {
+    const execFile = vi.fn((command, args) => {
+      if (command === emulator && args[0] === '-list-avds') return 'other-avd\n';
+      if (command === adb && args.join(' ') === 'devices') return 'List of devices attached\n';
+      return '';
+    });
+    const spawnProcess = vi.fn();
+
+    await expect(ensureWindowsAndroidEmulator({
+      avd: 'cindy-api36',
+      port: 8081,
+      platform: 'win32',
+      env,
+      exists,
+      execFile,
+      spawnProcess,
+      log: vi.fn(),
+    })).rejects.toThrow(/未找到 Android AVD: cindy-api36/);
+    expect(spawnProcess).not.toHaveBeenCalled();
+  });
+
+  it('目标 AVD 一直未完成启动时超时失败', async () => {
+    let clock = 0;
+    const execFile = vi.fn((command, args) => {
+      if (command === adb && args.join(' ') === 'devices') {
+        return 'List of devices attached\nemulator-5554 device\n';
+      }
+      if (command === adb && args.includes('name')) return 'cindy-api36\nOK\n';
+      if (command === adb && args.includes('sys.boot_completed')) return '0\n';
+      return '';
+    });
+
+    await expect(ensureWindowsAndroidEmulator({
+      avd: 'cindy-api36',
+      port: 8081,
+      platform: 'win32',
+      env,
+      exists,
+      execFile,
+      wait: async (ms) => { clock += ms; },
+      now: () => clock,
+      timeoutMs: 2_000,
+      pollIntervalMs: 1_000,
+      log: vi.fn(),
+    })).rejects.toThrow(/启动超时 \(2s\)/);
+  });
+});

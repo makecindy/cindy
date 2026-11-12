@@ -8,7 +8,7 @@ interface AccountProviderModelRefreshLogger {
 }
 
 export interface AccountProviderModelRefreshDeps {
-  restartCodex(): Promise<void>;
+  restartCodex(refreshEnvironment: () => Promise<void | boolean>): Promise<void>;
   shutdownCodexEnvironment(): Promise<void>;
   loadXaiLkg(): Promise<boolean>;
   refreshProviderModels(
@@ -27,29 +27,31 @@ export interface AccountProviderModelRefreshDeps {
  * 刷新且纳入同一账号 barrier，防止切号后旧账号的迟到结果覆盖全局目录；各步骤保持
  * best-effort，失败会留日志，不会把可用的本地 DB 误判成初始化失败。
  */
-export async function refreshProviderModelsAfterAccountReady(
-  deps: AccountProviderModelRefreshDeps,
+export async function resetAccountProviderRuntimes(
+  deps: Pick<
+    AccountProviderModelRefreshDeps,
+    'restartCodex' | 'shutdownCodexEnvironment' | 'log'
+  >,
+  shouldContinue: () => boolean = () => true,
 ): Promise<void> {
-  let codexRestarted = false;
+  if (!shouldContinue()) return;
   try {
-    await deps.restartCodex();
-    codexRestarted = true;
+    await deps.restartCodex(async () => {
+      if (!shouldContinue()) return false;
+      await deps.shutdownCodexEnvironment();
+    });
   } catch (error) {
     deps.log.warn('restartCodexAfterAuthModeChange on account switch failed', {
       error: error instanceof Error ? error.message : String(error),
     });
   }
+}
 
-  if (codexRestarted) {
-    try {
-      await deps.shutdownCodexEnvironment();
-    } catch (error) {
-      deps.log.warn('shutdownCodexEnvironment on account switch failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
+export async function discoverAccountProviderModels(
+  deps: Pick<AccountProviderModelRefreshDeps, 'loadXaiLkg' | 'refreshProviderModels' | 'log'>,
+  shouldContinue: () => boolean = () => true,
+): Promise<void> {
+  if (!shouldContinue()) return;
   try {
     // Account readiness is also the owner boundary. Restore this owner's authoritative xAI LKG
     // before the HTTP refresh so an offline/timeout result never exposes the generic fallback in
@@ -60,6 +62,8 @@ export async function refreshProviderModelsAfterAccountReady(
       error: error instanceof Error ? error.message : String(error),
     });
   }
+
+  if (!shouldContinue()) return;
 
   const backgroundRefresh = deps
     .refreshProviderModels('startup', ['xd', 'openai', 'xai'])
@@ -76,4 +80,11 @@ export async function refreshProviderModelsAfterAccountReady(
   });
 
   await Promise.all([backgroundRefresh, anthropicRefresh]);
+}
+
+export async function refreshProviderModelsAfterAccountReady(
+  deps: AccountProviderModelRefreshDeps,
+): Promise<void> {
+  await resetAccountProviderRuntimes(deps);
+  await discoverAccountProviderModels(deps);
 }

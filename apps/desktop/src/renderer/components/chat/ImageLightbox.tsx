@@ -1,3 +1,4 @@
+import { usePreviewFocusReturn } from './PreviewChrome';
 /**
  * ImageLightbox
  * ---------------------------------------------------------------------------
@@ -6,9 +7,10 @@
  * - 遮罩：使用 `--overlay-lightbox` 主题 token，保持 lightbox 遮罩语义一致。
  * - 图片：`object-fit: contain`，四周保留 40px 安全边距。
  * - 缩放/平移(手势数学共用 `lightboxGestures`,与 MermaidLightbox 同一套):
- *   - 滚轮 / 触控板双指捏合(macOS、Windows 精密触摸板的 pinch 都由 Chromium
- *     合成为带 ctrlKey 的 wheel 事件)/ Ctrl(⌘)+滚轮 → 以光标为焦点缩放。
- *     普通滚轮不区分修饰键也直接缩放(Windows 看图器惯例,鼠标用户单手可缩放)。
+ *   - 各平台一致:触控板双指捏合(macOS、Windows 精密触摸板的 pinch 都由 Chromium
+ *     合成为带 ctrlKey 的 wheel 事件)/ Ctrl(⌘)+滚轮 / 鼠标滚轮 → 以光标为焦点缩放;
+ *     触控板双指滑动在放大后平移,适配态不响应。鼠标还是触控板按事件特征推断
+ *     (见 lightboxGestures.classifyWheelSample),判不准时按鼠标处理(缩放)。
  *   - 双击图片:1x ↔ 2x 切换(以双击点为焦点)。
  *   - 放大后左键拖拽平移;松手时若拖动超过阈值,该次 click 不触发关闭。
  *   - 键盘 +/- 步进缩放,0 重置。翻页(←/→ 或箭头按钮)时视口自动重置。
@@ -18,15 +20,20 @@
  * - 媒体动作(对齐手机版 lightbox 的功能集,底部胶囊操作栏 + 右键菜单双入口):
  *   复制图片 / 打开所在目录(右键) / 用默认应用打开 / 另存为 / 发送到对话。
  *   可用性按 src scheme 分层,见 `mediaActionCapabilities`:本地源
- *   (xdt-image:// / xdt-file://)全量;http(s):// 与 data:image 只有
- *   另存为 + 发送到对话(main 侧取字节);cindy-remote-media://(远程会话)与
- *   其它 scheme 一律只读预览。
+ *   (xdt-image:// / cindy-media:// / xdt-file://)全量;http(s)、data:image 与
+ *   cindy-remote-media 的字节动作共用安全取件和原生剪贴板入口;目录定位仅
+ *   用于真实本机文件或可定位的远端工作目录。其它 scheme 只读预览。
  * - 发送到对话:经 `media:cache-for-session` 为当前会话复制一份新缓存,再合入
  *   composerDraftStore(与手机版语义一致——加入输入框附件托盘,不直接发消息)。
  *   当前会话 id 来自 ChatSessionFileContext(portal 不断 context 链);聊天流外
  *   复用本组件(文件浏览器 / 输入框预览)拿到默认值 undefined,不显示该动作。
+ * - 标注模式(笔按钮 / autoAnnotate / 托盘编辑):Pointer Events 落笔(鼠标、触屏、
+ *   笔统一,pointer capture 保证移出图片仍能收尾),绘制中不经 React 重渲染;
+ *   ⌘/Ctrl+Z 撤销、⇧⌘Z / Ctrl+Shift+Z(非 mac 另有 Ctrl+Y)重做;放大后按住 Space
+ *   或中键拖拽平移;Esc / X 放弃——笔迹偏离基线时先经统一确认框确认。
  * - 右键：菜单关闭后的同一次背景点击不能顺带关闭 lightbox,见 `lastMenuCloseAt`。
  * - 动画：200ms 透明度淡入淡出。
+ * - 焦点：FocusScope 打开时把焦点移入 overlay 并圈禁 Tab;卸载时还给打开前的焦点元素。
  * - 滚动锁定：打开期间给 `[data-scroll-container]` 设置 `overflowY: hidden`。
  * - 关闭按钮：按设计不显示 X 关闭按钮。
  * - 会话画廊：`enableGallery` 开启后，可用 ←/→ 或屏幕箭头在会话图片间翻页，并显示
@@ -35,9 +42,14 @@
  *   `data-gallery-active` 定位，细节见 `collectGallery` / `resolveStartIndexInFull`。
  */
 
-import { useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { useImageClipboard } from './useImageClipboard';
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { FocusScope } from '@radix-ui/react-focus-scope';
 import {
+  Minus,
+  Plus,
+  Maximize,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -48,12 +60,14 @@ import {
   Globe,
   MessageSquarePlus,
   Pen,
+  Redo2,
   Undo2,
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
-import { cn } from '@/lib/utils';
+import { createLogger } from '@/lib/logger';
+import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
 import { extractIpcError } from '@/utils/ipcError';
 import { getMimeType, extractExt, type AttachedFile } from '@/lib/fileTypes';
 import {
@@ -67,14 +81,18 @@ import { toWorkdirRel } from '../../../shared/workdirPath';
 import { openFileInSidebarFileBrowser } from '@/features/right-sidebar/lib/openInSidebarFileBrowser';
 import { useSidebarTargetSessionId } from '@/features/cc-agent/embeddedSessionNavigation';
 import {
-  ANNOTATION_OUTLINE_COLOR,
-  ANNOTATION_STROKE_COLOR,
-  annotationStrokeWidth,
+  extendDraftSvgPath,
   normalizePoint,
   shouldAppendPoint,
-  strokeToSvgPath,
   type AnnotationStroke,
+  type DraftSvgPathCache,
 } from './lightboxAnnotations';
+import {
+  INTERRUPTED_STROKE_DISCARD_SCREEN_PX,
+  annotationStrokeScreenLength,
+} from '@cindy/maker-shared/image-annotation';
+import { AnnotationStrokesSvg, type AnnotationDraftPathRefs } from './AnnotationStrokesSvg';
+import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { getDraft, saveDraft } from '@/lib/composerDraftStore';
 import {
   DropdownMenu,
@@ -82,19 +100,36 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Tip } from '@/components/ui/tooltip';
 import { useChatSessionFile } from './ChatSessionFileContext';
 import {
   LIGHTBOX_MAX_SCALE,
   LIGHTBOX_WHEEL_IDLE_MS,
   LIGHTBOX_ZOOM_STEP,
   clampScale,
+  createWheelSourceTracker,
+  imageLightboxWheelIntent,
   type LightboxViewport,
+  normalizeWheelDelta,
   wheelZoomFactor,
   zoomAtPoint,
 } from './lightboxGestures';
 import { ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
 import { containImageSize } from './imageDisplaySize';
+import {
+  ActivePreviewCollection,
+  AttachmentCollectionPreview,
+  useOpeningCollection,
+} from './AttachmentCollection';
+import {
+  PREVIEW_PANEL_CLASS,
+  PREVIEW_PANEL_STYLE,
+  PreviewHeader,
+  PreviewFooter,
+  PreviewButton as LightboxToolbarButton,
+  PreviewScrim,
+  previewPanelSize,
+} from './PreviewChrome';
+import { previewAdjacentIndex, previewSourceName } from '@cindy/maker-shared/attachment-preview';
 
 /** 图片不允许缩得比"适配窗口"更小,所以下限是 1 而不是共享常量的 0.2。 */
 const IMAGE_MIN_SCALE = 1;
@@ -105,8 +140,51 @@ const DRAG_CLICK_SUPPRESS_PX = 4;
 /** 视口初始态:适配窗口、无平移。 */
 const FIT_VIEWPORT: LightboxViewport = { scale: 1, tx: 0, ty: 0 };
 
+const log = createLogger('ImageLightbox');
+
+/** 标注层与图片盒严格同尺寸;事件由 transform 容器接管。 */
+const ANNOTATION_OVERLAY_STYLE: React.CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  width: '100%',
+  height: '100%',
+  pointerEvents: 'none',
+};
+
+const EMPTY_STROKES: readonly AnnotationStroke[] = [];
+
+/**
+ * 画廊项可编辑的持久化笔迹:原图(annotationSourceUrl)与笔迹成对存在、且原图
+ * 未被判定丢失时才返回笔迹;否则返回空(显示烧录图本身,在其上叠新标)。
+ */
+function editableItemStrokes(
+  item: GalleryImage | undefined,
+  failedSources: ReadonlySet<string>,
+): readonly AnnotationStroke[] {
+  if (!item?.annotationSourceUrl || !item.annotationStrokes?.length) return EMPTY_STROKES;
+  return failedSources.has(item.annotationSourceUrl) ? EMPTY_STROKES : item.annotationStrokes;
+}
+
+/**
+ * 标注模式下 Space 按住 = 平移修饰键;但焦点在可编辑控件或按钮类控件上时让位
+ * (Space 在按钮上是激活键,键盘用户仍需用它操作工具栏 / 确认框)。
+ */
+function isSpacePanExemptTarget(target: EventTarget | null): boolean {
+  if (isEditableKeyboardTarget(target)) return true;
+  return (
+    target instanceof Element &&
+    target.closest('button, a[href], [role="button"], [role="menuitem"], [role="checkbox"]') !==
+      null
+  );
+}
+
+function isMacPlatform(): boolean {
+  return typeof window !== 'undefined' && window.electronAPI?.platform === 'darwin';
+}
+
 interface ImageLightboxProps {
   src: string;
+  filename?: string;
   onClose: () => void;
   /**
    * Stable identity of the clicked gallery item. Needed when the source lives
@@ -150,6 +228,12 @@ interface ImageLightboxProps {
    * 持久化的笔迹)。与 annotationEdit 互斥使用;出口仍是"发送到对话"。
    */
   initialStrokes?: readonly AnnotationStroke[];
+  /**
+   * 与 initialStrokes 配套:该标注图的**烧录图** url。未烧录原图(src)加载失败
+   * (原图缓存已被清理)时退回显示烧录图、清空预置笔迹——用户仍能查看并在其上
+   * 叠加新标注,而不是提示"图片已丢失"后直接关闭(imageRef 注释的降级语义)。
+   */
+  annotationFallbackSrc?: string;
   /**
    * 打开即进入标注模式(等价于用户点了笔按钮)。「Mermaid/表格/公式 → 标注」
    * 这类"光栅化后直奔涂画"的入口用它省一次点击;默认 false 不影响既有场景。
@@ -232,112 +316,35 @@ function isDirectCacheable(src: string): boolean {
 }
 
 /** 左右翻页圆形按钮的内联样式。lightbox overlay 不走 Tailwind,这里同样用内联。 */
-function navButtonStyle(side: 'left' | 'right'): React.CSSProperties {
-  return {
-    position: 'fixed',
-    top: '50%',
-    [side]: 24,
-    transform: 'translateY(-50%)',
-    width: 48,
-    height: 48,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: '9999px',
-    border: 'none',
-    background: 'rgba(0,0,0,0.45)',
-    color: '#fff',
-    cursor: 'pointer',
-    zIndex: 10000,
-  };
+export function ImageLightbox(props: ImageLightboxProps) {
+  const items = useOpeningCollection(props.annotationFallbackSrc ?? props.src);
+  return items ? (
+    <AttachmentCollectionPreview
+      items={items}
+      source={props.annotationFallbackSrc ?? props.src}
+      onClose={props.onClose}
+      initial={<ImageLightboxContent {...props} enableGallery={false} />}
+    />
+  ) : (
+    <ImageLightboxContent {...props} />
+  );
 }
 
-/**
- * 顶部居中 "n / 总数" 计数器的内联样式。原在底部,底部让位给媒体操作栏后移到
- * 顶部居中——与手机版 lightbox 的页码位置一致。
- */
-const counterStyle: React.CSSProperties = {
-  position: 'fixed',
-  top: 24,
-  left: '50%',
-  transform: 'translateX(-50%)',
-  padding: '4px 12px',
-  borderRadius: '9999px',
-  background: 'rgba(0,0,0,0.45)',
-  color: '#fff',
-  fontSize: 13,
-  fontVariantNumeric: 'tabular-nums',
-  userSelect: 'none',
-  zIndex: 10000,
-};
-
-/**
- * 收集当前聊天滚动区里所有可翻阅图片,按 DOM 顺序(即视觉 / 时间顺序)返回。
- * 数据源是各图片组件 `<img>` 上的 `data-gallery-src` 属性。优先限定在
- * [data-scroll-container](聊天消息区,和 scroll-lock 同一个)内,避免抓到
- * 其它面板里的图。
- *
- * `activeIndex` 是被点击那张图在列表里的位置:点击时调用方会在被点的 `<img>`
- * 上打一个临时 `data-gallery-active="1"` 标记,这里据此精确定位起始图。这样
- * 即便同一 URL 在会话里非相邻地出现多次(用户重复上传 / 工具返回同一缓存图),
- * 也能从用户真正点的那张开始,而不是按 URL 搜到的第一张。找不到标记时返回 -1,
- * 由调用方退回按 src 搜索。注意:这里**不做去重**,让列表下标和 DOM 元素一一
- * 对应,activeIndex 才准。
- */
-function collectGallery(): { items: GalleryImage[]; activeIndex: number } {
-  const root: ParentNode = document.querySelector('[data-scroll-container]') ?? document;
-  const els = Array.from(root.querySelectorAll<HTMLElement>('[data-gallery-src]'));
-  const items: GalleryImage[] = [];
-  let activeIndex = -1;
-  els.forEach((el, i) => {
-    items.push({ src: el.dataset.gallerySrc ?? '' });
-    if (el.dataset.galleryActive === '1') activeIndex = i;
-  });
-  return { items, activeIndex };
-}
-
-/** 清掉所有遗留的 `data-gallery-active` 临时标记(lightbox 读取起始下标后调用)。 */
-function clearGalleryActiveMarks(): void {
-  document.querySelectorAll<HTMLElement>('[data-gallery-active]').forEach((el) => {
-    delete el.dataset.galleryActive;
-  });
-}
-
-/**
- * 在「会话全量列表 `full`」里定位用户点的那张图的下标。
- *
- * 渲染窗口是全量列表的**末尾连续段**,所以 DOM 里已加载的 gallery 图就是 full 的
- * 尾巴。据此可做精确的位置映射:被点图在已加载段里的序号 `k`(由 data-gallery-active
- * 标记定位)+「full 长度 − 已加载数」= 它在 full 里的精确位置 —— 即便同一 URL 在
- * 会话里非相邻出现多次,也能落到用户真正点的那张(修 greptile P1)。
- *
- * 映射结果再用 src 校验一次:`full[mapped] === src` 才采用;不一致(列表与 DOM 口径
- * 偶有偏差,如失败图被换成占位符)则退回按 src 搜索的首个匹配,保证不会定位到错图。
- */
-function resolveStartIndexInFull(full: readonly GalleryImage[], src: string): number {
-  const { items: domItems, activeIndex } = collectGallery();
-  const M = domItems.length;
-  const T = full.length;
-  if (activeIndex >= 0 && M > 0 && T >= M) {
-    const mapped = T - M + activeIndex;
-    if (full[mapped]?.src === src) return mapped;
-  }
-  const bySrc = full.findIndex((g) => g.src === src);
-  return bySrc >= 0 ? bySrc : 0;
-}
-
-export function ImageLightbox({
+function ImageLightboxContent({
   src,
+  filename,
   onClose,
   enableGallery = false,
   galleryId,
   sessionId: sessionIdProp,
   annotationEdit,
   initialStrokes,
+  annotationFallbackSrc,
   autoAnnotate = false,
 }: ImageLightboxProps) {
   const { t } = useTranslation();
   // 会话全量图片列表(MessageStream 下发);非聊天场景无 Provider 时为 null。
+  const restorePreviewFocus = usePreviewFocusReturn();
   const sessionImages = useContext(ImageGalleryContext);
   // 当前会话 id(发送到对话用):prop 优先(文件浏览器等 provider 外宿主),
   // 否则取聊天流 context;都没有则为 undefined → 不显示该动作。
@@ -345,6 +352,8 @@ export function ImageLightbox({
   const chatSessionId = sessionIdProp ?? contextSessionId;
   const sidebarTargetSessionId = useSidebarTargetSessionId(chatSessionId);
   const [isVisible, setIsVisible] = useState(false);
+  const [loadFailed, setLoadFailed] = useState<string | null>(null);
+  const [retryVersion, setRetryVersion] = useState(0);
   // 会话内翻图列表 + 起始下标。只在挂载时算一次,翻页只在已知列表内移动下标。
   // enableGallery 关时退化成单张 [src]。开启时:
   //   1) 优先用 context 的全量列表(覆盖整个会话,含渲染窗口外的早期图),
@@ -354,7 +363,23 @@ export function ImageLightbox({
   // 本地文件**链接**复用同一个 lightbox 打开,但它们不是画廊图片)退回单张,
   // 不然会套用会话画廊、起始落到不相干的第 0 张图。
   const [gallery] = useState<{ items: readonly GalleryImage[]; start: number }>(() => {
-    if (!enableGallery) return { items: [{ src }], start: 0 };
+    if (!enableGallery) {
+      // 历史标注图再编辑:单张项带上烧录图 + 原图元数据,原图丢失时可退回烧录图
+      // (与画廊翻到标注图走同一套 currentSrc 推导)。
+      if (annotationFallbackSrc && !annotationEdit && initialStrokes?.length) {
+        return {
+          items: [
+            {
+              src: annotationFallbackSrc,
+              annotationSourceUrl: src,
+              annotationStrokes: initialStrokes,
+            },
+          ],
+          start: 0,
+        };
+      }
+      return { items: [{ src }], start: 0 };
+    }
     const keyedIndex =
       galleryId && sessionImages
         ? sessionImages.findIndex((item) => item.galleryId === galleryId)
@@ -363,13 +388,10 @@ export function ImageLightbox({
       return { items: sessionImages, start: keyedIndex };
     }
     if (sessionImages?.some((g) => g.src === src)) {
-      return { items: sessionImages, start: resolveStartIndexInFull(sessionImages, src) };
-    }
-    const { items, activeIndex } = collectGallery();
-    if (items.some((g) => g.src === src)) {
-      const bySrc = items.findIndex((g) => g.src === src);
-      const start = activeIndex >= 0 ? activeIndex : bySrc;
-      return { items, start };
+      return { items: sessionImages, start: Math.max(
+          0,
+          sessionImages.findIndex((image) => image.src === src)),
+      };
     }
     return { items: [{ src }], start: 0 };
   });
@@ -380,8 +402,16 @@ export function ImageLightbox({
   // 再编辑分支同语义),而非把烧录图当普通图降级(review P2)。笔迹预置在
   // index effect 里(挂载首帧由 initialStrokes 承担)。
   const currentItem = galleryItems[index] ?? { src };
+  // 已确认加载失败(被清理)的未烧录原图:该项退回烧录图 + 空笔迹。
+  const [failedAnnotationSources, setFailedAnnotationSources] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const failedAnnotationSourcesRef = useRef(failedAnnotationSources);
+  failedAnnotationSourcesRef.current = failedAnnotationSources;
   const currentSrc =
-    currentItem.annotationSourceUrl && currentItem.annotationStrokes?.length
+    currentItem.annotationSourceUrl &&
+    currentItem.annotationStrokes?.length &&
+    !failedAnnotationSources.has(currentItem.annotationSourceUrl)
       ? currentItem.annotationSourceUrl
       : currentItem.src;
   const isClosingRef = useRef(false);
@@ -420,16 +450,35 @@ export function ImageLightbox({
   // 已保存的笔迹起步(托盘编辑或历史图再编辑)——"撤销之前的编辑"就是从
   // 这里往回 pop。
   const [strokes, setStrokes] = useState<AnnotationStroke[]>(() => [...baselineStrokesRef.current]);
-  const [draftStroke, setDraftStroke] = useState<AnnotationStroke | null>(null);
-  const [isDrawing, setIsDrawing] = useState(false);
+  // 重做栈:撤销弹出的笔迹按序压栈;画新笔迹、放弃标注、翻页时清空。ref 供事件
+  // handler 同步读写(按键连发),canRedo 驱动工具栏重做按钮的可用态。
+  const redoStackRef = useRef<AnnotationStroke[]>([]);
+  const [canRedo, setCanRedo] = useState(false);
+  const setRedoStack = useCallback((next: AnnotationStroke[]) => {
+    redoStackRef.current = next;
+    setCanRedo(next.length > 0);
+  }, []);
+  // 标注模式下按住 Space = 平移修饰键(state 驱动光标,ref 供事件 handler 同步读)。
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  const spaceHeldRef = useRef(false);
+  // 放弃确认框在途:期间忽略 lightbox 自己的全部快捷键,避免同一次 Esc 既关确认框
+  // 又再次触发放弃(Radix 在 capture 阶段处理 Esc,本组件的 document 监听随后
+  // 仍会收到同一事件)。
+  const confirmPendingRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   // 图片自然尺寸:SVG viewBox 与烧录 canvas 的坐标基准。onLoad 时设置。
   const [naturalSize, setNaturalSize] = useState<{ src: string; w: number; h: number } | null>(
     null,
   );
-  const [viewportSize, setViewportSize] = useState(() => ({
-    width: window.innerWidth,
-    height: window.innerHeight,
-  }));
+  const [viewportSize, setViewportSize] = useState(() =>
+    previewPanelSize({ width: window.innerWidth, height: window.innerHeight }),
+  );
   const imgRef = useRef<HTMLImageElement>(null);
   // once-bound keydown handler 需要读到最新标注态,与 viewportRef 同一模式。
   const isAnnotatingRef = useRef(false);
@@ -437,9 +486,16 @@ export function ImageLightbox({
   isAnnotatingRef.current = isAnnotating;
   strokesRef.current = strokes;
 
+  // 退出标注模式时复位 Space 平移修饰(keyup 可能落在模式切换之后)。
+  useEffect(() => {
+    if (isAnnotating || !spaceHeldRef.current) return;
+    spaceHeldRef.current = false;
+    setSpaceHeld(false);
+  }, [isAnnotating]);
+
   useEffect(() => {
     const updateViewportSize = () => {
-      setViewportSize({ width: window.innerWidth, height: window.innerHeight });
+      setViewportSize(previewPanelSize({ width: window.innerWidth, height: window.innerHeight }));
     };
     window.addEventListener('resize', updateViewportSize);
     return () => window.removeEventListener('resize', updateViewportSize);
@@ -452,13 +508,29 @@ export function ImageLightbox({
     ? containImageSize(
         { width: currentNaturalSize.w, height: currentNaturalSize.h },
         viewportSize.width - 80,
-        viewportSize.height - 80,
+        viewportSize.height - 160,
       )
     : null;
 
-  const undoLastStroke = useCallback(() => {
-    setStrokes((s) => s.slice(0, -1));
+  /** 同步更新 ref 与 state:连续快捷键(按键连发)在重渲染前也读到最新笔迹。 */
+  const replaceStrokes = useCallback((next: AnnotationStroke[]) => {
+    strokesRef.current = next;
+    setStrokes(next);
   }, []);
+
+  const undoLastStroke = useCallback(() => {
+    const current = strokesRef.current;
+    if (current.length === 0) return;
+    setRedoStack([...redoStackRef.current, current[current.length - 1]]);
+    replaceStrokes(current.slice(0, -1));
+  }, [replaceStrokes, setRedoStack]);
+
+  const redoStroke = useCallback(() => {
+    const redo = redoStackRef.current;
+    if (redo.length === 0) return;
+    setRedoStack(redo.slice(0, -1));
+    replaceStrokes([...strokesRef.current, redo[redo.length - 1]]);
+  }, [replaceStrokes, setRedoStack]);
 
   /**
    * 放弃标注:恢复到打开时的笔迹(编辑模式=上次保存的;发送模式=空)并退出
@@ -468,16 +540,111 @@ export function ImageLightbox({
    * 为标注而开的临时光栅化图,放弃标注后留在图片界面没有意义——直接关闭
    * 整个 lightbox 回到原界面。
    */
-  const discardAnnotation = useCallback(() => {
+  const performDiscardAnnotation = () => {
     if (autoAnnotate) {
       handleClose();
       return;
     }
-    setStrokes([...baselineStrokesRef.current]);
-    setDraftStroke(null);
-    setIsDrawing(false);
+    resetDraftStroke();
+    setRedoStack([]);
+    replaceStrokes([...baselineStrokesRef.current]);
     setIsAnnotating(false);
-  }, [autoAnnotate, handleClose]);
+  };
+
+  /**
+   * 当前笔迹是否偏离基线(或有进行中的笔迹)。笔迹对象不可变、基线复制的是
+   * 同一批对象引用,所以按长度 + 逐项身份比较即可:撤销后再重做回来的笔迹
+   * 仍视为未改动。
+   */
+  const hasUnsavedStrokeChanges = (): boolean => {
+    if (draftStrokeRef.current) return true;
+    const current = strokesRef.current;
+    const baseline = baselineStrokesRef.current;
+    return current.length !== baseline.length || current.some((s, i) => s !== baseline[i]);
+  };
+
+  const confirmDialog = useOptionalConfirmDialog();
+  /**
+   * 放弃标注入口(X 按钮 / 标注中的 Esc)。笔迹与基线相同时行为与以往完全一致
+   * (立即恢复并退出);有改动时先经应用统一确认框确认,避免误触丢掉笔迹。
+   * 裸渲染环境(无 ConfirmDialogProvider)退回旧行为。
+   */
+  const discardAnnotation = async (): Promise<void> => {
+    if (confirmPendingRef.current) return;
+    if (!confirmDialog || !hasUnsavedStrokeChanges()) {
+      performDiscardAnnotation();
+      return;
+    }
+    confirmPendingRef.current = true;
+    let confirmed = false;
+    try {
+      confirmed = await confirmDialog.confirm({
+        title: t('chat.media.annotateDiscardConfirmTitle'),
+        description: t('chat.media.annotateDiscardConfirmDescription'),
+        confirmText: t('chat.media.annotateDiscardConfirmAction'),
+        cancelText: t('chat.media.annotateDiscardConfirmCancel'),
+        confirmVariant: 'destructive',
+      });
+    } finally {
+      // 推迟到下一个宏任务再解除:关闭确认框的那次 Esc 仍在派发中(微任务会在
+      // 两个监听之间清空),立即解除会让本组件的 keydown 再放弃一次。
+      setTimeout(() => {
+        confirmPendingRef.current = false;
+      }, 0);
+    }
+    if (confirmed && mountedRef.current) performDiscardAnnotation();
+  };
+  // once-bound keydown handler 通过 ref 调用最新的放弃逻辑(依赖 confirmDialog 等
+  // 每次渲染的值)。
+  const activeCollection = useContext(ActivePreviewCollection);
+  const requestClose = async (leave = handleClose) => {
+    if (confirmPendingRef.current) return;
+    if (!hasUnsavedStrokeChanges()) {
+      leave();
+      return;
+    }
+    if (!confirmDialog) return;
+    confirmPendingRef.current = true;
+    try {
+      const canSave = Boolean(annotationEdit || chatSessionId);
+      const choice = canSave
+        ? await confirmDialog.confirmThree({
+            title: t('chat.media.annotateDiscardConfirmTitle'),
+            description: t('chat.media.annotateDiscardConfirmDescription'),
+            confirmText: t('chat.media.annotateSave'),
+            cancelText: t('chat.media.annotateDiscardConfirmCancel'),
+            tertiaryText: t('chat.media.annotateDiscardConfirmAction'),
+          })
+        : (await confirmDialog.confirm({
+              title: t('chat.media.annotateDiscardConfirmTitle'),
+              confirmText: t('chat.media.annotateDiscardConfirmAction'),
+              cancelText: t('chat.media.annotateDiscardConfirmCancel'),
+            }))
+          ? 'tertiary'
+          : 'cancel';
+      if (!mountedRef.current) return;
+      if (choice === 'tertiary') leave();
+      if (choice === 'confirm') {
+        if (annotationEdit) await handleAnnotationSave(leave);
+        else await handleSendToChat(leave);
+      }
+    } finally {
+      setTimeout(() => {
+        confirmPendingRef.current = false;
+      }, 0);
+    }
+  };
+  const requestCloseRef = useRef(requestClose);
+  requestCloseRef.current = requestClose;
+  useEffect(() => {
+    if (!activeCollection) return;
+    activeCollection.beforeLeave.current = (leave) => {
+      void requestCloseRef.current(leave);
+    };
+    return () => {
+      activeCollection.beforeLeave.current = null;
+    };
+  }, [activeCollection?.beforeLeave]);
 
   const applyViewport = useCallback((next: LightboxViewport) => {
     viewportRef.current = next;
@@ -540,25 +707,54 @@ export function ImageLightbox({
     setIsAnnotating(false);
     // 翻到持久化标注图时预置其笔迹(配合 currentSrc 换到原图,进入可编辑
     // 视图);普通图照旧清空。基线同步更新,放弃标注恢复到该图的基线。
-    baselineStrokesRef.current = galleryItems[index]?.annotationStrokes ?? [];
-    setStrokes([...baselineStrokesRef.current]);
-    setDraftStroke(null);
-    setIsDrawing(false);
+    baselineStrokesRef.current = editableItemStrokes(
+      galleryItems[index],
+      failedAnnotationSourcesRef.current,
+    );
+    resetDraftStroke();
+    setRedoStack([]);
+    replaceStrokes([...baselineStrokesRef.current]);
     setNaturalSize(null);
     // biome-ignore lint/correctness/useExhaustiveDependencies: galleryItems 挂载时固定。
   }, [index, resetViewport]);
 
-  // 滚轮缩放。native listener + passive:false 才能 preventDefault,阻止事件穿透
-  // 到底下的聊天区,也阻止 Chromium 对 ctrl+wheel 的页面级缩放。
-  // 不区分修饰键:普通滚轮、Ctrl(⌘)+滚轮、触控板 pinch(Chromium 把 macOS /
-  // Windows 精密触摸板的捏合合成为 ctrlKey=true 的 wheel)统一以光标为焦点缩放。
+  // 滚轮 / 触控板。native listener + passive:false 才能 preventDefault,阻止事件穿透
+  // 到底下的聊天区,也阻止 Chromium 对 ctrl+wheel 的页面级缩放。路由见
+  // imageLightboxWheelIntent(各平台一致):双指捏合(Chromium 合成为 ctrlKey=true 的
+  // wheel)、⌘/Ctrl+滚轮与鼠标滚轮以光标为焦点缩放;触控板双指滑动在放大后平移。
+  // 鼠标 / 触控板按事件特征推断(classifyWheelSample),每段连续滚动只判定一次。
   useEffect(() => {
     const overlay = overlayRef.current;
     if (!overlay) return;
+    const trackWheelSource = createWheelSourceTracker();
     const onWheel = (e: globalThis.WheelEvent) => {
       e.preventDefault();
-      if (e.deltaY === 0) return;
       const current = viewportRef.current;
+      const source =
+        e.ctrlKey || e.metaKey
+          ? 'mouse'
+          : trackWheelSource(
+              {
+                deltaMode: e.deltaMode,
+                deltaX: e.deltaX,
+                deltaY: e.deltaY,
+                shiftKey: e.shiftKey,
+                // 非标准的旧字段(Chromium 仍提供),推断设备类型的关键信号。
+                wheelDeltaY: (e as globalThis.WheelEvent & { wheelDeltaY?: number }).wheelDeltaY,
+              },
+              e.timeStamp,
+            );
+      const intent = imageLightboxWheelIntent(e, source, current.scale);
+      if (intent === 'none') return;
+      if (intent === 'pan') {
+        markWheeling();
+        applyViewport({
+          ...current,
+          tx: current.tx - normalizeWheelDelta(e.deltaX, e.deltaMode),
+          ty: current.ty - normalizeWheelDelta(e.deltaY, e.deltaMode),
+        });
+        return;
+      }
       const rect = overlay.getBoundingClientRect();
       const point = {
         // 光标相对 overlay 中心的坐标。图片由 flex 居中,其盒中心与 overlay 中心
@@ -582,16 +778,21 @@ export function ImageLightbox({
     return () => overlay.removeEventListener('wheel', onWheel);
   }, [applyViewport, markWheeling]);
 
+  /** 放大状态下开始拖拽平移(适配态没有可平移的范围,不响应)。 */
+  function startPan(clientX: number, clientY: number) {
+    if (viewportRef.current.scale <= 1) return;
+    dragMovedRef.current = false;
+    setIsDragging(true);
+    const current = viewportRef.current;
+    dragStartRef.current = { x: clientX, y: clientY, tx: current.tx, ty: current.ty };
+  }
+
   /** 放大状态下按住图片开始拖拽平移。 */
   function handleImageMouseDown(e: React.MouseEvent) {
     if (e.button !== 0) return;
     // preventDefault 同时抑制 <img> 的原生拖拽 ghost 与文字选区。
     e.preventDefault();
-    if (viewportRef.current.scale <= 1) return;
-    dragMovedRef.current = false;
-    setIsDragging(true);
-    const current = viewportRef.current;
-    dragStartRef.current = { x: e.clientX, y: e.clientY, tx: current.tx, ty: current.ty };
+    startPan(e.clientX, e.clientY);
   }
 
   // 拖拽期间 move/up 绑到 window,光标移出图片仍能继续拖;仅 isDragging 时挂载。
@@ -650,54 +851,171 @@ export function ImageLightbox({
 
   // ---- 标注模式手势与烧录(状态声明在视口区,几何/烧录纯函数在 lightboxAnnotations) ----
 
-  // 进行中笔迹的事实源:ref(事件 handler 同步读写),state 仅驱动 SVG 渲染。
+  // 进行中笔迹的事实源:ref(事件 handler 同步读写)。绘制中不经 React state——
+  // 每个 move 事件只往 ref 里追加一点,再由 rAF 合帧直接改写两条草稿 path 的
+  // `d`(描边层 / 红线层,见 AnnotationStrokesSvg),避免每次移动都复制整条点
+  // 数组并重渲染整个 lightbox。
   // ⚠️ 提交笔迹绝不能写在 setState updater 内部——updater 必须是纯函数,
   // StrictMode(dev)会双调 updater,曾导致每笔被 push 两次:两条笔迹完全
   // 重叠肉眼不可见,表现为"撤销要点两次才生效"。
   const draftStrokeRef = useRef<AnnotationStroke | null>(null);
+  /** 正在绘制的指针(pointer capture 的所有者);null = 未在绘制。 */
+  const drawingPointerIdRef = useRef<number | null>(null);
+  const draftPathCacheRef = useRef<DraftSvgPathCache | null>(null);
+  const draftRafRef = useRef<number | null>(null);
+  const draftOutlinePathRef = useRef<SVGPathElement>(null);
+  const draftStrokePathRef = useRef<SVGPathElement>(null);
+  const draftPathRefs = useRef<AnnotationDraftPathRefs>({
+    outline: draftOutlinePathRef,
+    stroke: draftStrokePathRef,
+  }).current;
+  // rAF 回调读取的自然尺寸(与 SVG viewBox 同源)。
+  const naturalSizeRef = useRef<{ w: number; h: number } | null>(null);
+  naturalSizeRef.current = currentNaturalSize;
 
-  /** 标注模式画笔:mousedown 起笔(替代平移拖拽)。 */
-  function handleAnnotateMouseDown(e: React.MouseEvent) {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    const rect = imgRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const point = normalizePoint(e.clientX, e.clientY, rect);
-    if (!point) return;
-    draftStrokeRef.current = { points: [point] };
-    setDraftStroke(draftStrokeRef.current);
-    setIsDrawing(true);
+  function writeDraftPath(d: string) {
+    draftOutlinePathRef.current?.setAttribute('d', d);
+    draftStrokePathRef.current?.setAttribute('d', d);
   }
 
-  // 画笔进行中:move/up 绑 window(移出图片仍能收尾),仅 isDrawing 时挂载。
-  useEffect(() => {
-    if (!isDrawing) return;
-    const onMove = (e: globalThis.MouseEvent) => {
-      const draft = draftStrokeRef.current;
-      if (!draft) return;
-      const rect = imgRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      const point = normalizePoint(e.clientX, e.clientY, rect);
-      if (!point || !shouldAppendPoint(draft, point)) return;
-      draftStrokeRef.current = { points: [...draft.points, point] };
-      setDraftStroke(draftStrokeRef.current);
-    };
-    const onUp = () => {
-      const draft = draftStrokeRef.current;
-      draftStrokeRef.current = null;
-      setIsDrawing(false);
-      setDraftStroke(null);
-      if (draft && draft.points.length > 0) {
-        setStrokes((s) => [...s, draft]);
-      }
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-  }, [isDrawing]);
+  function paintDraftStroke() {
+    draftRafRef.current = null;
+    const draft = draftStrokeRef.current;
+    const size = naturalSizeRef.current;
+    if (!draft || !size) return;
+    draftPathCacheRef.current = extendDraftSvgPath(
+      draft.points,
+      size.w,
+      size.h,
+      draftPathCacheRef.current,
+    );
+    writeDraftPath(draftPathCacheRef.current.d);
+  }
+
+  function scheduleDraftPaint() {
+    if (draftRafRef.current !== null) return;
+    draftRafRef.current = requestAnimationFrame(paintDraftStroke);
+  }
+
+  /** 丢弃进行中的笔迹(放弃标注 / 翻页 / 卸载)。 */
+  function resetDraftStroke() {
+    if (draftRafRef.current !== null) {
+      cancelAnimationFrame(draftRafRef.current);
+      draftRafRef.current = null;
+    }
+    draftStrokeRef.current = null;
+    drawingPointerIdRef.current = null;
+    draftPathCacheRef.current = null;
+    writeDraftPath('');
+  }
+
+  useEffect(
+    () => () => {
+      if (draftRafRef.current !== null) cancelAnimationFrame(draftRafRef.current);
+    },
+    [],
+  );
+
+  // 提交后的笔迹由 React 渲染进已提交图层;在同一次提交的 layout 阶段(绘制前)
+  // 再清空草稿 path,松手瞬间不会出现"笔迹消失一帧"的闪烁。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 只在笔迹列表变化时收尾草稿。
+  useLayoutEffect(() => {
+    if (drawingPointerIdRef.current === null && draftStrokeRef.current === null) {
+      draftPathCacheRef.current = null;
+      writeDraftPath('');
+    }
+  }, [strokes]);
+
+  /** 当前指针位置 → 归一化图片坐标(rect 已含缩放/平移 transform)。 */
+  function pointFromClient(clientX: number, clientY: number) {
+    const rect = imgRef.current?.getBoundingClientRect();
+    if (!rect) return null;
+    return normalizePoint(clientX, clientY, rect);
+  }
+
+  /**
+   * 标注模式的鼠标按下:只负责平移手势(中键拖拽 / 按住 Space 左键拖拽)与
+   * 抑制原生拖拽 ghost、文字选区;画笔由 pointer 事件负责(鼠标 / 触屏 / 笔统一)。
+   */
+  function handleAnnotateMouseDown(e: React.MouseEvent) {
+    if (e.button === 1 || (e.button === 0 && spaceHeldRef.current)) {
+      // 中键 preventDefault 同时阻止 Windows / Linux 的中键自动滚动。
+      e.preventDefault();
+      startPan(e.clientX, e.clientY);
+      return;
+    }
+    if (e.button === 0) e.preventDefault();
+  }
+
+  /** 画笔起笔:仅主键(鼠标左键 / 触屏 / 笔尖接触),平移修饰键按住时不画。 */
+  function handleAnnotatePointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.button !== 0 || spaceHeldRef.current) return;
+    // 多点触控:已有指针在画时忽略其它手指。
+    if (drawingPointerIdRef.current !== null) return;
+    const point = pointFromClient(e.clientX, e.clientY);
+    if (!point) return;
+    draftStrokeRef.current = { points: [point] };
+    draftPathCacheRef.current = null;
+    drawingPointerIdRef.current = e.pointerId;
+    // pointer capture:移出图片 / 窗口仍能继续画与收尾(等价旧实现的 window 监听)。
+    try {
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    } catch {
+      // 指针已失效(极端竞态)时 capture 失败不影响本笔绘制。
+    }
+    scheduleDraftPaint();
+  }
+
+  function handleAnnotatePointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.pointerId !== drawingPointerIdRef.current) return;
+    const draft = draftStrokeRef.current;
+    if (!draft) return;
+    const point = pointFromClient(e.clientX, e.clientY);
+    if (!point || !shouldAppendPoint(draft, point)) return;
+    // 草稿笔迹提交前只归本 ref 所有,原地追加(O(1));提交后不再修改。
+    draft.points.push(point);
+    scheduleDraftPaint();
+  }
+
+  /** 收笔(pointerup / 失去 capture 走这里,较长的 pointercancel 也经此提交;幂等)。 */
+  function finishAnnotateStroke(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.pointerId !== drawingPointerIdRef.current) return;
+    const draft = draftStrokeRef.current;
+    drawingPointerIdRef.current = null;
+    draftStrokeRef.current = null;
+    if (draftRafRef.current !== null) {
+      cancelAnimationFrame(draftRafRef.current);
+      draftRafRef.current = null;
+    }
+    if (draft && draft.points.length > 0) {
+      setRedoStack([]);
+      replaceStrokes([...strokesRef.current, draft]);
+    } else {
+      draftPathCacheRef.current = null;
+      writeDraftPath('');
+    }
+  }
+
+  /**
+   * pointercancel(系统 / 浏览器接管了这次触摸或笔输入,并非用户抬笔):很短的
+   * 半笔视为误触丢弃,较长的笔迹照常保留,不丢用户真正画的内容。阈值与手机端
+   * 多指打断共用。
+   */
+  function cancelAnnotateStroke(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.pointerId !== drawingPointerIdRef.current) return;
+    const draft = draftStrokeRef.current;
+    const rect = imgRef.current?.getBoundingClientRect();
+    if (
+      draft &&
+      rect &&
+      annotationStrokeScreenLength(draft.points, rect.width, rect.height) <
+        INTERRUPTED_STROKE_DISCARD_SCREEN_PX
+    ) {
+      resetDraftStroke();
+      return;
+    }
+    finishAnnotateStroke(e);
+  }
 
   /** 即时烧录当前所见(复制/另存为用),实现在共享模块 annotationBurnIn。 */
   async function materializeAnnotatedImage(
@@ -713,35 +1031,52 @@ export function ImageLightbox({
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  // 起始下标已在 useState 初始化时从 data-gallery-active 读出,标记使命完成,
-  // 挂载后立即清掉,避免污染下一次打开(否则下次扫描会读到上次的残留标记)。
-  useEffect(() => {
-    clearGalleryActiveMarks();
-  }, []);
-
   // Esc 关闭；+/-/0 缩放;开启会话画廊时用 ←/→ 翻图。
   // biome-ignore lint/correctness/useExhaustiveDependencies: galleryItems 在挂载时固定；这里只订阅一次全局键盘事件，避免反复绑定 DOM listener。
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      // 放弃确认框打开期间,按键归确认框(含关闭它的那次 Esc)。
+      if (confirmPendingRef.current || e.defaultPrevented || isEditableKeyboardTarget(e.target)) return;
       if (e.key === 'Escape') {
         if (performance.now() - lastMenuCloseAt.current < 150) return;
         // 标注模式中 Esc = 放弃标注(清笔迹退出),再按一次才关 lightbox。
         if (isAnnotatingRef.current) {
-          discardAnnotation();
+          if (!hasUnsavedStrokeChanges()) performDiscardAnnotation();
+          else void requestCloseRef.current();
           return;
         }
         handleClose();
         return;
       }
-      // 标注模式撤销上一笔(在修饰键放行守卫之前拦截)。
+      // 标注模式按住 Space = 平移修饰键(焦点在输入 / 按钮类控件上时让位)。
+      if (e.code === 'Space' || e.key === ' ') {
+        if (isAnnotatingRef.current && !isSpacePanExemptTarget(e.target)) {
+          e.preventDefault();
+          if (!spaceHeldRef.current) {
+            spaceHeldRef.current = true;
+            setSpaceHeld(true);
+          }
+        }
+        return;
+      }
+      // 标注模式撤销 / 重做(在修饰键放行守卫之前拦截):⌘/Ctrl+Z 撤销,
+      // ⇧⌘Z / Ctrl+Shift+Z 重做,非 mac 另支持 Ctrl+Y。
+      if (isAnnotatingRef.current && (e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        if (e.shiftKey) redoStroke();
+        else undoLastStroke();
+        return;
+      }
       if (
         isAnnotatingRef.current &&
-        (e.metaKey || e.ctrlKey) &&
+        !isMacPlatform() &&
+        e.ctrlKey &&
+        !e.metaKey &&
         !e.shiftKey &&
-        (e.key === 'z' || e.key === 'Z')
+        (e.key === 'y' || e.key === 'Y')
       ) {
         e.preventDefault();
-        undoLastStroke();
+        redoStroke();
         return;
       }
       // 步进缩放。zoomBy / resetViewport 只读写 ref + 稳定 setter,首帧闭包即终身有效。
@@ -770,14 +1105,34 @@ export function ImageLightbox({
       if (galleryItems.length <= 1) return;
       if (e.key === 'ArrowRight') {
         e.preventDefault();
-        setIndex((i) => (i + 1) % galleryItems.length);
+        setIndex((i) => previewAdjacentIndex(i, 1, galleryItems.length));
       } else if (e.key === 'ArrowLeft') {
         e.preventDefault();
-        setIndex((i) => (i - 1 + galleryItems.length) % galleryItems.length);
+        setIndex((i) => previewAdjacentIndex(i, -1, galleryItems.length));
       }
     };
+    // Space 松开:结束平移修饰(只处理本组件接管过的那次按键)。
+    const keyUpHandler = (e: KeyboardEvent) => {
+      if ((e.code === 'Space' || e.key === ' ') && spaceHeldRef.current) {
+        e.preventDefault();
+        spaceHeldRef.current = false;
+        setSpaceHeld(false);
+      }
+    };
+    // 窗口失焦时收不到 keyup,修饰状态必须复位,否则回来后无法落笔。
+    const blurHandler = () => {
+      if (!spaceHeldRef.current) return;
+      spaceHeldRef.current = false;
+      setSpaceHeld(false);
+    };
     document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
+    document.addEventListener('keyup', keyUpHandler);
+    window.addEventListener('blur', blurHandler);
+    return () => {
+      document.removeEventListener('keydown', handler);
+      document.removeEventListener('keyup', keyUpHandler);
+      window.removeEventListener('blur', blurHandler);
+    };
     // handleClose / gallery 都在组件生命周期内稳定(onClose 是调用方传的稳定
     // setState dispatch;gallery 由 useState 初始化后不再变)。只在挂载/卸载
     // 订阅一次是有意为之——每次渲染重订阅会带来无谓的 DOM listener 抖动。
@@ -798,6 +1153,8 @@ export function ImageLightbox({
     setIsVisible(false);
     setTimeout(() => onClose(), 200);
   }
+
+  const { copyImage } = useImageClipboard(currentSrc);
 
   // 有笔迹时动作不隐藏,而是按对象分层:位图级动作(复制/另存为)作用于
   // "当前所见"——烧录合成图;文件级动作(默认应用打开/定位目录)指向原图
@@ -862,29 +1219,7 @@ export function ImageLightbox({
 
   async function handleCopyImage(): Promise<void> {
     setMenuPos(null);
-    // 有笔迹时复制"所见"(烧录合成图);data:/http/remote 源本机没有文件实体,
-    // 同样走位图复制(字节层统一取字节)。canvas 输出统一 PNG——ClipboardItem
-    // 仅接受 image/png。本地源无笔迹保持文件引用复制(可粘进 Finder)。
-    const isLocalFileSource =
-      currentSrc.startsWith('xdt-image://') ||
-      currentSrc.startsWith('cindy-media://') ||
-      xdtFileUrlToPath(currentSrc) !== null;
-    if (strokesRef.current.length > 0 || !isLocalFileSource) {
-      try {
-        const { blob } = await materializeAnnotatedImage('image/png');
-        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-        toast.success(t('chat.media.imageCopied'));
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : t('chat.media.copyFailed'));
-      }
-      return;
-    }
-    const res = await window.electronAPI.copyMediaToClipboard(legacyMediaIpcParams(currentSrc));
-    if (res.success) {
-      toast.success(t('chat.media.imageCopied'));
-    } else {
-      toast.error(res.error ?? t('chat.media.copyFailed'));
-    }
+    await copyImage(strokesRef.current);
   }
 
   async function handleOpenWithApp(): Promise<void> {
@@ -930,7 +1265,7 @@ export function ImageLightbox({
    * useAttachments(刷新托盘)与 ChatInput(重设文本并聚焦末尾——正好把焦点
    * 交还输入框,与手机版"回会话页聚焦 composer"一致)。成功后关闭 lightbox。
    */
-  async function handleSendToChat(): Promise<void> {
+  async function handleSendToChat(afterSave = handleClose): Promise<void> {
     if (!chatSessionId) return;
     setMenuPos(null);
     try {
@@ -1034,6 +1369,15 @@ export function ImageLightbox({
           }
         }
       }
+      // 历史标注图的原图已丢失、当前显示的是烧录图:底图本身带红线,转发后仍是
+      // 标注图(模型照常收到标注说明)。
+      if (
+        currentItem.annotationSourceUrl &&
+        currentItem.annotationStrokes?.length &&
+        failedAnnotationSources.has(currentItem.annotationSourceUrl)
+      ) {
+        attached = { ...attached, baseAnnotated: true };
+      }
       const existing = getDraft(chatSessionId);
       saveDraft(
         chatSessionId,
@@ -1046,7 +1390,7 @@ export function ImageLightbox({
         { preserveRemoteOptimisticRecovery: true },
       );
       toast.success(t('chat.media.sentToChat'));
-      handleClose();
+      afterSave();
     } catch (err) {
       toast.error(extractIpcError(err)?.message ?? t('chat.media.sendToChatFailed'));
     }
@@ -1056,53 +1400,131 @@ export function ImageLightbox({
    * 编辑模式出口:把当前笔迹(可能为空——用户撤光了之前的编辑)交回调用方
    * 更新托盘附件。惰性烧录:这里不产位图,发送消息时统一物化。
    */
-  async function handleAnnotationSave(): Promise<void> {
+  async function handleAnnotationSave(afterSave = handleClose): Promise<void> {
     if (!annotationEdit) return;
     try {
       await annotationEdit.onSave({
         strokes: strokesRef.current.map((stroke) => ({ points: [...stroke.points] })),
       });
-      handleClose();
+      afterSave();
     } catch (err) {
       toast.error(extractIpcError(err)?.message ?? t('chat.media.annotateSaveFailed'));
     }
   }
 
+  // 点预览窗外的遮罩与点窗内空白背景同一套守卫:菜单刚关、标注中、拖拽平移松手都不关。
+  const closeFromBackdrop = () => {
+    if (performance.now() - lastMenuCloseAt.current < 150) return;
+    if (isAnnotating) return;
+    if (dragMovedRef.current) {
+      dragMovedRef.current = false;
+      return;
+    }
+    handleClose();
+  };
+
   // 遮罩颜色走统一 token，不再按 Light / Dark 分支判断。
   const overlay = (
-    // biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: 全屏 overlay 的键盘关闭由全局 Escape 处理；点击关闭是 lightbox 本身的交互。
+    // FocusScope(trapped+loop):键盘打开后焦点进入弹窗并圈禁在内,Tab 不再
+    // 穿过被遮挡的聊天控件。挂载焦点给 overlay 根(tabIndex=-1 由 FocusScope
+    // 合入,全局 outline:none 保证不闪全屏焦点框):Enter 不触发任何动作,
+    // Tab 依次到达工具栏/翻页按钮;卸载时 FocusScope 默认把焦点还给打开前
+    // 的元素(ChatImageView 键盘路径 = 预览触发器,与 onClose 里的显式恢复
+    // 指向同一元素)。
+    <>
+    <PreviewScrim onClose={closeFromBackdrop} />
+    <FocusScope
+      onUnmountAutoFocus={restorePreviewFocus}
+      asChild
+      trapped
+      loop
+      onMountAutoFocus={(event) => {
+        event.preventDefault();
+        overlayRef.current?.focus();
+      }}
+    >
+    {/* biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: 全屏 overlay 的键盘关闭由全局 Escape 处理；点击关闭是 lightbox 本身的交互。 */}
     <div
       ref={overlayRef}
+      data-lightbox-layer
+      className={PREVIEW_PANEL_CLASS}
       style={{
-        position: 'fixed',
-        inset: 0,
+        ...PREVIEW_PANEL_STYLE,
         zIndex: 9999,
-        background: 'var(--overlay-lightbox)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         transition: 'opacity 200ms ease',
         opacity: isVisible ? 1 : 0,
         cursor: 'default',
-        // 放大后的图片可能超出视口,裁掉溢出部分避免出现滚动条。
-        overflow: 'hidden',
       }}
       onClick={(e) => {
-        // 右键菜单刚关闭时，吞掉同一次手势带来的 overlay click。
-        if (performance.now() - lastMenuCloseAt.current < 150) return;
-        // 标注模式中背景点击不关闭,防误触丢笔迹;放弃走 X 按钮或 Esc。
-        if (isAnnotating) return;
-        // 拖拽平移松手落在背景上时,同一手势的 click 不能顺带关闭。
-        if (dragMovedRef.current) {
-          dragMovedRef.current = false;
-          return;
-        }
-        // 只有点在黑色背景上才关闭;点在图片(或其它子元素)上不关,给双击缩放让路。
+        // 右键菜单刚关闭、标注模式(防误触丢笔迹)、拖拽平移松手时都不关闭;
+        // 只有点在空白背景上才关闭,点在图片(或其它子元素)上不关,给双击缩放让路。
         if (e.target !== e.currentTarget) return;
-        handleClose();
+        closeFromBackdrop();
       }}
     >
-      {/* 图片 + 标注层的公共 transform 容器:缩放/平移作用在容器上,SVG 笔迹
+        <PreviewHeader
+          name={filename ?? previewSourceName(currentSrc, t('attachmentPreview.image'))}
+          detail={
+            currentNaturalSize ? `${currentNaturalSize.w} × ${currentNaturalSize.h}` : undefined
+          }
+          onClose={() => {
+            void requestClose();
+          }}
+          onSave={canSaveAs ? handleSaveAs : undefined}
+          onMenuClose={() => {
+            lastMenuCloseAt.current = performance.now();
+          }}
+          menu={
+            <>
+              {canCopy ? (
+                <DropdownMenuItem onClick={handleCopyImage}>
+                  <Copy className="mr-2 h-4 w-4" />
+                  {t('chat.media.copyImage')}
+                </DropdownMenuItem>
+              ) : null}
+              {canOpenWith ? (
+                <DropdownMenuItem onClick={handleOpenWithApp}>
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                  {t('chat.media.openWithApp')}
+                </DropdownMenuItem>
+              ) : null}
+              {canOpenInBrowser ? (
+                <DropdownMenuItem onClick={handleOpenInBrowser}>
+                  <Globe className="mr-2 h-4 w-4" />
+                  {t('chat.media.openInBrowser')}
+                </DropdownMenuItem>
+              ) : null}
+              {canSendToChat ? (
+                <DropdownMenuItem onClick={() => void handleSendToChat()}>
+                  <MessageSquarePlus className="mr-2 h-4 w-4" />
+                  {t('chat.media.sendToChat')}
+                </DropdownMenuItem>
+              ) : null}
+            </>
+          }
+        />
+        {loadFailed === currentSrc ? (
+          <div
+            className="absolute z-[2] flex flex-col items-center gap-3 rounded-xl bg-[var(--surface)] p-6 text-[var(--text-secondary)]"
+            role="status"
+          >
+            <p>{t('chat.media.imageMissing')}</p>
+            <button
+              type="button"
+              className="rounded-full border border-[var(--border-default)] px-4 py-2 text-sm"
+              onClick={() => {
+                setLoadFailed(null);
+                setRetryVersion((value) => value + 1);
+              }}
+            >
+              {t('attachmentPreview.retry')}
+            </button>
+          </div>
+        ) : null}
+        {/* 图片 + 标注层的公共 transform 容器:缩放/平移作用在容器上,SVG 笔迹
           天然跟随图片。容器是 flex item,尺寸自适应贴合图片盒。 */}
       {/* biome-ignore lint/a11y/noStaticElementInteractions: 容器接管缩放/平移/画笔手势;点击背景关闭由 overlay 处理。 */}
       <div
@@ -1113,18 +1535,32 @@ export function ImageLightbox({
           // 拖拽/连续滚轮期间关过渡,跟手;步进缩放(键盘/双击)时 80ms 平滑。
           transition: isDragging || isWheeling ? 'none' : 'transform 80ms ease-out',
           cursor: isAnnotating
-            ? 'crosshair'
+            ? isDragging
+              ? 'grabbing'
+              : spaceHeld
+                ? scale > 1
+                  ? 'grab'
+                  : 'default'
+                : 'crosshair'
             : scale > 1
               ? isDragging
                 ? 'grabbing'
                 : 'grab'
               : 'default',
+          // 标注模式下触屏 / 笔的拖动全部交给画笔,不触发浏览器滚动 / 缩放手势。
+          touchAction: isAnnotating ? 'none' : undefined,
         }}
         onMouseDown={isAnnotating ? handleAnnotateMouseDown : handleImageMouseDown}
+        onPointerDown={isAnnotating ? handleAnnotatePointerDown : undefined}
+        onPointerMove={isAnnotating ? handleAnnotatePointerMove : undefined}
+        onPointerUp={isAnnotating ? finishAnnotateStroke : undefined}
+        onPointerCancel={isAnnotating ? cancelAnnotateStroke : undefined}
+        onLostPointerCapture={isAnnotating ? finishAnnotateStroke : undefined}
         onDoubleClick={isAnnotating ? undefined : handleImageDoubleClick}
       >
         <img
-          ref={imgRef}
+            key={retryVersion}
+            ref={imgRef}
           src={currentSrc}
           alt=""
           draggable={false}
@@ -1134,13 +1570,14 @@ export function ImageLightbox({
             // onLoad 后写入 contain 结果，同时让标注层与真实图片盒严格同尺寸。
             width: fittedImageSize?.width,
             height: fittedImageSize?.height,
-            maxWidth: 'calc(100vw - 80px)',
-            maxHeight: 'calc(100vh - 80px)',
+            maxWidth: 'calc(var(--preview-width) - 80px)',
+            maxHeight: 'calc(var(--preview-height) - 160px)',
             objectFit: 'contain',
             userSelect: 'none',
           }}
           onLoad={(e) => {
-            setNaturalSize({
+              setLoadFailed(null);
+              setNaturalSize({
               src: currentSrc,
               w: e.currentTarget.naturalWidth,
               h: e.currentTarget.naturalHeight,
@@ -1157,53 +1594,32 @@ export function ImageLightbox({
           // image-local-cache F4：lightbox 只放大已知可用图片。底层文件消失时
           // (例如缓存被清理)，关闭 lightbox 并提示；背后的缩略图卡片会显示自己的
           // ImageMissingPlaceholder，用户仍能看到上下文。
+          // 例外:历史标注图的未烧录原图丢失而烧录图仍在时,退回烧录图、清空预置
+          // 笔迹(在烧录图上叠新标),不关闭。
           onError={() => {
-            toast.warning(t('chat.media.imageMissing'));
-            handleClose();
+            const sourceUrl = currentItem.annotationSourceUrl;
+            if (sourceUrl && currentSrc === sourceUrl && currentItem.src !== sourceUrl) {
+              log.info('annotation source missing, falling back to burned image');
+              setFailedAnnotationSources((prev) => new Set(prev).add(sourceUrl));
+              baselineStrokesRef.current = EMPTY_STROKES;
+              resetDraftStroke();
+              setRedoStack([]);
+              replaceStrokes([]);
+              return;
+            }
+              setLoadFailed(currentSrc);
           }}
         />
         {/* 标注层:viewBox = 图片自然尺寸,归一化笔迹 × 自然尺寸 = path 坐标,
             与烧录坐标一致(所见即所得)。pointerEvents 关闭,事件由容器接管。 */}
-        {currentNaturalSize && (strokes.length > 0 || draftStroke) ? (
-          <svg
-            viewBox={`0 0 ${currentNaturalSize.w} ${currentNaturalSize.h}`}
-            preserveAspectRatio="none"
-            style={{
-              position: 'absolute',
-              inset: 0,
-              width: '100%',
-              height: '100%',
-              pointerEvents: 'none',
-            }}
-            aria-hidden
-          >
-            {[...strokes, ...(draftStroke ? [draftStroke] : [])].map((stroke, i) => {
-              const d = strokeToSvgPath(stroke, currentNaturalSize.w, currentNaturalSize.h);
-              if (!d) return null;
-              const w = annotationStrokeWidth(currentNaturalSize.w, currentNaturalSize.h);
-              return (
-                // biome-ignore lint/suspicious/noArrayIndexKey: 笔迹列表只增/尾删,index 稳定。
-                <g key={i}>
-                  <path
-                    d={d}
-                    fill="none"
-                    stroke={ANNOTATION_OUTLINE_COLOR}
-                    strokeWidth={Math.round(w * 1.8)}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                  <path
-                    d={d}
-                    fill="none"
-                    stroke={ANNOTATION_STROKE_COLOR}
-                    strokeWidth={w}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </g>
-              );
-            })}
-          </svg>
+        {currentNaturalSize && (strokes.length > 0 || isAnnotating) ? (
+          <AnnotationStrokesSvg
+            strokes={strokes}
+            naturalWidth={currentNaturalSize.w}
+            naturalHeight={currentNaturalSize.h}
+            style={ANNOTATION_OVERLAY_STYLE}
+            draftRefs={draftPathRefs}
+          />
         ) : null}
       </div>
       {hasAnyAction ? (
@@ -1284,7 +1700,7 @@ export function ImageLightbox({
               </DropdownMenuItem>
             ) : null}
             {canSendToChat ? (
-              <DropdownMenuItem onClick={handleSendToChat}>
+              <DropdownMenuItem onClick={() => void handleSendToChat()}>
                 <MessageSquarePlus className="mr-2 h-4 w-4" />
                 {t('chat.media.sendToChat')}
               </DropdownMenuItem>
@@ -1292,80 +1708,99 @@ export function ImageLightbox({
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}
-      {/* 底部媒体操作栏(视觉复用 MermaidLightbox 的胶囊 toolbar)。点按不冒泡,
-          否则会被 overlay 的 click-to-close 吞掉。标注模式下切换为画笔工具组。 */}
-      {isAnnotating ? (
-        // 标注模式:只有三个选择——放弃(X)/ 撤销上一笔 / 发送到聊天。
-        // 标注的唯一出口是发送,没有"完成后保留笔迹"的中间态。
-        <div
-          className={cn(
-            'fixed bottom-6 left-1/2 -translate-x-1/2 z-[10000]',
-            'flex items-center gap-1 rounded-full',
-            'border border-[var(--lightbox-toolbar-border)] bg-[var(--lightbox-toolbar-bg)] px-2 py-1',
-            'backdrop-blur',
-          )}
-          onClick={(e) => e.stopPropagation()}
-        >
+        <PreviewFooter>
           <LightboxToolbarButton
-            onClick={discardAnnotation}
+            label={t('chat.mermaidLightbox.zoomOut')}
+            disabled={scale <= IMAGE_MIN_SCALE}
+            onClick={() => zoomBy(1 / LIGHTBOX_ZOOM_STEP)}
+          >
+            <Minus className="h-4 w-4" />
+          </LightboxToolbarButton>
+          <DropdownMenu
+            onOpenChange={(open) => {
+              if (!open) lastMenuCloseAt.current = performance.now();
+            }}
+          >
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="min-w-16 rounded-full px-3 py-2 text-xs tabular-nums hover:bg-[var(--surface-hover)]"
+              >
+                {Math.round(
+                  scale *
+                    (fittedImageSize && currentNaturalSize
+                      ? fittedImageSize.width / currentNaturalSize.w
+                      : 1) *
+                    100,
+                )}
+                %
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className="z-[10002]">
+              <DropdownMenuItem onClick={resetViewport}>
+                {t('attachmentPreview.fit')}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => {
+                  if (fittedImageSize && currentNaturalSize)
+                    applyViewport({
+                      scale: Math.max(1, currentNaturalSize.w / fittedImageSize.width),
+                      tx: 0,
+                      ty: 0,
+                    });
+                }}
+              >
+                {t('attachmentPreview.actualSize')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <LightboxToolbarButton
+            label={t('chat.mermaidLightbox.zoomIn')}
+            disabled={scale >= LIGHTBOX_MAX_SCALE}
+            onClick={() => zoomBy(LIGHTBOX_ZOOM_STEP)}
+          >
+            <Plus className="h-4 w-4" />
+          </LightboxToolbarButton>
+          <LightboxToolbarButton label={t('attachmentPreview.fit')}
+          onClick={resetViewport}>
+            <Maximize className="h-4 w-4" />
+          </LightboxToolbarButton>
+          <div className="mx-2 h-5 w-px bg-[var(--border-default)]" />
+          {isAnnotating ? (
+            <>
+          <LightboxToolbarButton
+            onClick={() => void discardAnnotation()}
             label={t('chat.media.annotateDiscard')}
+            keepPointerFocus
           >
             <X className="h-4 w-4" />
           </LightboxToolbarButton>
-          <LightboxToolbarButton onClick={undoLastStroke} label={t('chat.media.annotateUndo')}>
+          <LightboxToolbarButton
+            onClick={undoLastStroke}
+            label={t('chat.media.annotateUndo')}
+            disabled={strokes.length === 0}
+            keepPointerFocus
+          >
             <Undo2 className="h-4 w-4" />
           </LightboxToolbarButton>
-          <div className="mx-1 h-5 w-px bg-[var(--lightbox-toolbar-border)]" />
-          {annotationEdit ? (
-            <LightboxToolbarButton
-              onClick={handleAnnotationSave}
-              label={t('chat.media.annotateSave')}
+          <LightboxToolbarButton
+            onClick={redoStroke}
+            label={t('chat.media.annotateRedo')}
+            disabled={!canRedo}
+            keepPointerFocus
+          >
+            <Redo2 className="h-4 w-4" />
+          </LightboxToolbarButton>
+          <LightboxToolbarButton
+              onClick={() => void (annotationEdit ? handleAnnotationSave() : handleSendToChat())}
+              label={t(annotationEdit ? 'chat.media.annotateSave' : 'chat.media.sendToChat')}
+              keepPointerFocus
             >
               <Check className="h-4 w-4" />
             </LightboxToolbarButton>
+            </>
           ) : (
-            <LightboxToolbarButton onClick={handleSendToChat} label={t('chat.media.sendToChat')}>
-              <MessageSquarePlus className="h-4 w-4" />
-            </LightboxToolbarButton>
-          )}
-        </div>
-      ) : hasAnyAction || canAnnotate ? (
-        <div
-          className={cn(
-            'fixed bottom-6 left-1/2 -translate-x-1/2 z-[10000]',
-            'flex items-center gap-1 rounded-full',
-            'border border-[var(--lightbox-toolbar-border)] bg-[var(--lightbox-toolbar-bg)] px-2 py-1',
-            'backdrop-blur',
-          )}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {canCopy ? (
-            <LightboxToolbarButton onClick={handleCopyImage} label={t('chat.media.copyImage')}>
-              <Copy className="h-4 w-4" />
-            </LightboxToolbarButton>
-          ) : null}
-          {canOpenWith ? (
-            <LightboxToolbarButton onClick={handleOpenWithApp} label={t('chat.media.openWithApp')}>
-              <ExternalLink className="h-4 w-4" />
-            </LightboxToolbarButton>
-          ) : null}
-          {canOpenInBrowser ? (
-            <LightboxToolbarButton
-              onClick={handleOpenInBrowser}
-              label={t('chat.media.openInBrowser')}
-            >
-              <Globe className="h-4 w-4" />
-            </LightboxToolbarButton>
-          ) : null}
-          {canSaveAs ? (
-            <LightboxToolbarButton onClick={handleSaveAs} label={t('chat.media.saveAs')}>
-              <Download className="h-4 w-4" />
-            </LightboxToolbarButton>
-          ) : null}
-          {/* 标注与发送是一组:圈点的产物就是发到对话,分隔线右侧成组摆放。 */}
-          {canAnnotate || canSendToChat ? (
             <>
-              <div className="mx-1 h-5 w-px bg-[var(--lightbox-toolbar-border)]" />
               {canAnnotate ? (
                 <LightboxToolbarButton
                   onClick={() => setIsAnnotating(true)}
@@ -1376,83 +1811,65 @@ export function ImageLightbox({
               ) : null}
               {canSendToChat ? (
                 <LightboxToolbarButton
-                  onClick={handleSendToChat}
+                  onClick={() => void handleSendToChat()}
                   label={t('chat.media.sendToChat')}
                 >
                   <MessageSquarePlus className="h-4 w-4" />
                 </LightboxToolbarButton>
               ) : null}
             </>
-          ) : null}
-        </div>
-      ) : null}
-      {/* 会话内翻图:左右箭头 + 计数。点按钮时 stopPropagation,否则会冒泡到
-          overlay 的 onClick 把整个 lightbox 关掉。只有 >1 张才显示;标注中或
-          标注模式中隐藏(翻页会清空笔迹,防误触)。 */}
+          )}
       {hasMultiple && !isAnnotating ? (
         <>
+          <div className="mx-2 h-5 w-px bg-[var(--border-default)]" />
+              <LightboxToolbarButton
+                label={t('chat.media.prevImage')}
+                disabled={index === 0}
+                onClick={() =>
+                  setIndex((value) => previewAdjacentIndex(value, -1, galleryItems.length))}
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </LightboxToolbarButton>
+              <DropdownMenu
+                onOpenChange={(open) => {
+                  if (!open) lastMenuCloseAt.current = performance.now();
+                }}
+              >
+                <DropdownMenuTrigger asChild>
           <button
             type="button"
-            aria-label={t('chat.media.prevImage')}
-            onClick={(e) => {
-              e.stopPropagation();
-              setIndex((i) => (i - 1 + galleryItems.length) % galleryItems.length);
-            }}
-            style={navButtonStyle('left')}
-          >
-            <ChevronLeft size={28} strokeWidth={2.5} />
-          </button>
-          <button
-            type="button"
-            aria-label={t('chat.media.nextImage')}
-            onClick={(e) => {
-              e.stopPropagation();
-              setIndex((i) => (i + 1) % galleryItems.length);
-            }}
-            style={navButtonStyle('right')}
-          >
-            <ChevronRight size={28} strokeWidth={2.5} />
-          </button>
-          {/* biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: 计数器不是交互控件；onClick 只阻止冒泡关闭 lightbox。 */}
-          <div style={counterStyle} onClick={(e) => e.stopPropagation()}>
+                    className="rounded-full px-3 py-2 text-xs tabular-nums hover:bg-[var(--surface-hover)]"
+                  >
             {index + 1} / {galleryItems.length}
-          </div>
+          </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent className="z-[10002] max-h-72 overflow-auto">
+                  {galleryItems.map((item, itemIndex) => (
+                    <DropdownMenuItem
+                      key={item.galleryId ?? `${itemIndex}:${item.src}`}
+                      onClick={() => setIndex(itemIndex)}
+                    >
+                      {itemIndex + 1}. {previewSourceName(item.src, t('attachmentPreview.image'))}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <LightboxToolbarButton
+                label={t('chat.media.nextImage')}
+                disabled={index === galleryItems.length - 1}
+                onClick={() =>
+                  setIndex((value) => previewAdjacentIndex(value, 1, galleryItems.length))
+                }
+              >
+                <ChevronRight className="h-4 w-4" />
+              </LightboxToolbarButton>
         </>
       ) : null}
-    </div>
+        </PreviewFooter>
+      </div>
+    </FocusScope>
+    </>
   );
 
   return createPortal(overlay, document.body);
-}
-
-/**
- * 底部操作栏的圆形图标按钮,样式与 MermaidLightbox 的 ToolbarButton 一致。
- * Tips 用应用统一的 Radix Tooltip(跨平台一致,原生 title 在 Electron 下延迟
- * 且样式不可控);lightbox overlay 是 z-9999,content 需抬到其上。
- */
-function LightboxToolbarButton({
-  onClick,
-  label,
-  children,
-}: {
-  onClick: () => void;
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <Tip text={label} contentClassName="z-[10001]">
-      <button
-        type="button"
-        onClick={onClick}
-        aria-label={label}
-        className={cn(
-          'inline-flex h-7 w-7 items-center justify-center',
-          'rounded-full text-[var(--lightbox-toolbar-fg)]',
-          'hover:bg-[var(--lightbox-toolbar-hover-bg)] hover:text-[var(--lightbox-toolbar-fg-hover)]',
-        )}
-      >
-        {children}
-      </button>
-    </Tip>
-  );
 }

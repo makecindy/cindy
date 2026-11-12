@@ -1,6 +1,8 @@
+import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CircleAlert, Copy, FolderOpen } from 'lucide-react';
+import { Copy, FolderOpen } from 'lucide-react';
 import type { ContextMenuEvent, WebviewTag } from 'electron';
 
 import {
@@ -9,10 +11,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
 
-import { GHOST_SCHEME, ghostPartition, type GhostManifest } from '../../shared/ghost';
-import { createGhostThemeInjector, observeHostTheme } from './ghostPanelTheme';
+import { GHOST_SCHEME, ghostInstallApprovalToken, type InstalledGhost } from '../../shared/ghost';
+import { installedGhostStoragePart, installedGhostWebviewPartitionClaim } from '../../shared/pluginIdentity';
+import { buildGhostMainViewThemeCss, createGhostThemeInjector, observeHostTheme } from './ghostPanelTheme';
 import {
   clearGhostUnread,
   useElementVisible,
@@ -28,46 +32,62 @@ import {
  * 本模块不因换容器多要任何特权。
  */
 
+const log = createLogger('GhostWebview');
+
+/** 面板 webview 被销毁的原因类别:卸载 / 依赖变化后原位重挂 / 崩溃或加载失败。 */
+type WebviewCloseReason = 'unmount' | 'reload' | 'crash';
+
+function toWebviewCloseReason(crashed: boolean, unmounting: boolean): WebviewCloseReason {
+  if (crashed) return 'crash';
+  return unmounting ? 'unmount' : 'reload';
+}
+
 /**
  * 面板错误接管态:芯片型意识崩溃 / 熔断时面板**不关闭**,
  * 原地显示错误信息 + 两个动作——「重载意识」(清熔断记账重新拉起)与
  * 「关闭意识」(转沉睡,面板收起,可到设置里再唤醒)。
  */
 export function GhostPanelError({
-  manifest,
+  ghost,
   state,
   onReload,
 }: {
-  manifest: GhostManifest;
+  ghost: Pick<InstalledGhost, 'manifest' | 'dir' | 'namespace'> & Partial<Pick<InstalledGhost, 'approval'>>;
   state: string;
   /** 重载动作;缺省走 ghosts:reload(离屏沙箱路径),面板 webview 路径传本地重挂载。 */
   onReload?: () => void;
 }): ReactNode {
   const { t } = useTranslation();
-  const reload = onReload ?? (() => void window.electronAPI.ghosts.reload(manifest.id).catch(() => {}));
+  const { manifest } = ghost;
+  const instanceId = installedGhostStoragePart(ghost);
+  const reload =
+    onReload ?? (() => void window.electronAPI.ghosts.reload(instanceId).catch(() => {}));
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-4">
-      <CircleAlert size={22} className="text-[var(--error-fg)]" />
-      <p className="text-center text-12 leading-relaxed text-[var(--text-secondary)]">
-        {t(state === 'fused' ? 'settings.ghosts.panelError.fused' : 'settings.ghosts.panelError.crashed')}
-      </p>
-      <div className="flex items-center gap-2">
-        <button
+      <ErrorNotice className="w-full" message={t(
+          state === 'fused'
+            ? 'settings.ghosts.panelError.fused'
+            : 'settings.ghosts.panelError.crashed',
+        )} actions={<>
+        <Button variant="secondary" size="sm" compact
           type="button"
           onClick={reload}
-          className="rounded-full border border-[var(--border-default)] px-3.5 py-1.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-chip)]"
         >
           {t('settings.ghosts.panelError.reload')}
-        </button>
+        </Button>
         {/* 关闭 = 转沉睡,可逆动作,按 docs/design-rules/cindy-design-system.md 红色纪律走灰度次按钮(红只留错误图标)。 */}
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
+          compact
           type="button"
-          onClick={() => void window.electronAPI.ghosts.setEnabled(manifest.id, false).catch(() => {})}
-          className="rounded-full border border-[var(--border-default)] px-3.5 py-1.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-chip)]"
+          onClick={() =>
+            void window.electronAPI.ghosts.setEnabled(instanceId, false, ghostInstallApprovalToken(ghost.approval)).catch(() => {})
+          }
         >
           {t('settings.ghosts.panelError.close')}
-        </button>
-      </div>
+        </Button>
+      </>} />
     </div>
   );
 }
@@ -172,67 +192,84 @@ export function pickGhostPanelMediaUri(
 }
 
 /**
- * 芯片型意识的自绘面板体:一块沙箱 webview 装载意识自己的
- * panel.html——分区/地址由 main 侧 webview 附加闸验明正身(webview-security),
+ * 插件自绘页面的通用 webview 体:装载调用方已经从批准 manifest 选定的入口。
+ * panel 与 main-view 只在 Host 入口和生命周期上不同，安全装载内核保持一份。
+ * 分区/地址由 main 侧 webview 附加闸验明正身(webview-security),
  * 主题 token 在 dom-ready 注入、主机换肤时重灌(ghostPanelTheme)。
  * webview 崩溃 = 本地错误接管态(重载 = 原地重挂载,不经主机)。
  */
-export function GhostChipPanelBody({ manifest }: { manifest: GhostManifest }): ReactNode {
+export function GhostWebviewBody({
+  ghost,
+  html,
+  query,
+  wallpaperCanvas = false,
+  onHostNode,
+}: {
+  ghost: Pick<InstalledGhost, 'manifest' | 'dir' | 'namespace'> & Partial<Pick<InstalledGhost, 'approval'>>;
+  html: string | undefined;
+  /**
+   * 附在入口地址后的查询串(不含 `?`),如任务页的 `session=<id>`。协议供片与附加闸
+   * 都只按 pathname 判定,查询串只给页面自己读。
+   */
+  query?: string;
+  /** Main-view pages share the host canvas, including when docked or detached. */
+  wallpaperCanvas?: boolean;
+  onHostNode?: (node: HTMLDivElement | null) => void;
+}): ReactNode {
+  const { manifest } = ghost;
+  const instanceId = installedGhostStoragePart(ghost);
+  const approvalToken = ghostInstallApprovalToken(ghost.approval);
   const [crashed, setCrashed] = useState(false);
+  const partitionClaim = installedGhostWebviewPartitionClaim(ghost);
   const [generation, setGeneration] = useState(0);
   const [mediaMenu, setMediaMenu] = useState<GhostPanelMediaMenuState | null>(null);
-  const hostRef = useRef<HTMLDivElement | null>(null);
 
-  /**
-   * 面板体挂载 = 未读已读(badge 槽的 explicit 清零)。
-   *
-   * 清零收在这里而不是各宿主的"打开"动作里:面板体有三个宿主(插件页页签
-   * GhostPagePanelHost、布局停靠 ghostPanels、独立窗口 GhostPanelWindowLayout),
-   * 挂载到本组件才是"内容确实在用户眼前"的唯一判据,三处天然对称。
-   * unread 进依赖:面板**已经开着**时插件又点亮一次(后台拿到新内容),用户
-   * 正看着它,不该留一颗清不掉的点。
-   *
-   * 清零的必要条件是**两层可见性同时成立**,缺一层都会把用户没看见的未读吞掉:
-   *   1. `foreground` —— 宿主窗口可见且聚焦。停靠面板与独立面板窗口长期挂着,
-   *      只看挂载的话,窗口最小化 / 失焦期间到来的未读会被一律清掉,常开面板的
-   *      用户从此收不到这个插件的提醒(codex review P1)。
-   *   2. `visible` —— 本面板**自己**占着可见面积。光有第 1 层还不够:同一个前台
-   *      窗口里,另一个停靠面板被最大化时本面板仍然挂载,却被压成零宽/隐藏,
-   *      用户根本没看到内容(codex review)。
-   * 两层都满足的那一刻 effect 重跑并清零,语义正是「他看的时候才算看过」。
-   */
-  const unread = useGhostUnread(manifest.id);
-  const foreground = useHostWindowForeground();
-  const { ref: observeHost, visible } = useElementVisible();
-  // 同一个 div 既要给 webview 挂载用(命令式 hostRef),又要被可见性观察器盯住。
-  // 合成一个 callback ref:崩溃走 fallback 时它带 null 触发(观察器解绑),
-  // 用户「重载」生成新 div 时又带新节点触发(观察器重挂)——正是 ref 对象做不到的。
+  // The host is swapping this instance's library on disk. Drop the webview
+  // until the swap and the partition clear finish, then load from disk again,
+  // so the old page cannot write its state over the swapped library.
+  const [librarySwapping, setLibrarySwapping] = useState(false);
+  useEffect(() => window.electronAPI?.ghosts?.onLibraryReplaced?.((payload) => {
+    if (payload?.id !== instanceId) return;
+    if (payload.phase === 'start') {
+      setLibrarySwapping(true);
+      return;
+    }
+    setLibrarySwapping(false);
+    setGeneration((value) => value + 1);
+  }), [instanceId]);
+  // 销毁原因:crash 由 guest 事件显式标记;其余靠「是不是整个组件在卸载」区分
+  // unmount 与依赖变化引起的 reload。卸载标记的 effect 必须排在 webview effect 之前,
+  // 卸载时 React 按声明顺序跑清理,webview 清理读到的才是已置位的标记。
+  const unmountingRef = useRef(false);
+  const crashMarkedRef = useRef(false);
+  useEffect(() => {
+    unmountingRef.current = false;
+    return () => {
+      unmountingRef.current = true;
+    };
+  }, []);
+  const hostRef = useRef<HTMLDivElement | null>(null);
   const setHostNode = useCallback(
     (el: HTMLDivElement | null) => {
       hostRef.current = el;
-      observeHost(el);
+      onHostNode?.(el);
     },
-    [observeHost],
+    [onHostNode],
   );
-  useEffect(() => {
-    if (!unread || !foreground || !visible) return;
-    clearGhostUnread(manifest.id);
-  }, [manifest.id, unread, foreground, visible]);
 
-  const panelHtml = manifest.panel?.html;
   useEffect(() => {
-    if (crashed || !panelHtml) return;
+    if (crashed || !html || librarySwapping) return;
     const host = hostRef.current;
     if (!host) return;
     const webview = document.createElement('webview') as WebviewTag;
-    webview.setAttribute('partition', ghostPartition(manifest.id));
-    webview.setAttribute('src', `${GHOST_SCHEME}://${manifest.id}/${panelHtml}`);
+    webview.setAttribute('partition', partitionClaim);
+    webview.setAttribute('src', `${GHOST_SCHEME}://${manifest.id}/${html}${query ? `?${query}` : ''}`);
     webview.setAttribute('style', 'display:flex;flex:1 1 auto;width:100%;height:100%;');
     let disposed = false;
     let themeTimer: ReturnType<typeof setTimeout> | null = null;
     // 状态机见 createGhostThemeInjector:换肤误触发去重、dom-ready(含拖动
     // 换位触发的 Electron 整页重载)无条件重灌,规则都封在里面(带单测)。
-    const injector = createGhostThemeInjector(webview);
+    const injector = createGhostThemeInjector(webview, wallpaperCanvas ? buildGhostMainViewThemeCss : undefined);
     // 突发属性变动(换肤瞬间多个属性接连翻动)合并成一次注入。
     const scheduleInjectTheme = () => {
       if (themeTimer !== null) return;
@@ -243,7 +280,16 @@ export function GhostChipPanelBody({ manifest }: { manifest: GhostManifest }): R
     };
     const onDomReady = () => injector.onDomReady();
     const onGone = () => {
-      if (!disposed) setCrashed(true);
+      if (disposed) return;
+      crashMarkedRef.current = true;
+      setCrashed(true);
+    };
+    // 主文档缺失、协议供片失败等必须进入可恢复错误态，不能留下白屏。
+    // -3 = ABORTED（导航中断）；子 frame 失败也不代表主页面已经失效。
+    const onFailLoad = (event: Electron.DidFailLoadEvent) => {
+      if (disposed || event.errorCode === -3 || !event.isMainFrame) return;
+      crashMarkedRef.current = true;
+      setCrashed(true);
     };
     // 右键产物 cell → 宿主自绘菜单(复制文件 / 打开所在目录,与聊天媒体同款)。
     // context-menu 是 Chromium 对真实右键的原生上报,guest 脚本 dispatchEvent
@@ -256,7 +302,7 @@ export function GhostChipPanelBody({ manifest }: { manifest: GhostManifest }): R
       // (OOPIF 命中测试按根帧算;Windows 实测 2077 > 面板宽,叠加 rect 会把
       // 菜单顶出屏外),直接用,不要再加 webview 偏移。
       const pos = { x: e.params.x, y: e.params.y };
-      void window.electronAPI.ghosts.resolvePanelMedia(uri, 'menu').then(
+      void window.electronAPI.ghosts.resolvePanelMedia(uri, 'menu', instanceId).then(
         ({ url, kind }) => {
           if (disposed) return;
           // 焦点还在 guest 里,不挪回宿主的话 Esc/方向键进不了菜单
@@ -272,16 +318,24 @@ export function GhostChipPanelBody({ manifest }: { manifest: GhostManifest }): R
     };
     webview.addEventListener('dom-ready', onDomReady);
     webview.addEventListener('render-process-gone', onGone);
+    webview.addEventListener('did-fail-load', onFailLoad);
     webview.addEventListener('context-menu', onContextMenu);
     const unobserveTheme = observeHostTheme(scheduleInjectTheme);
     host.appendChild(webview);
+    // 每次创建 / 销毁各一条:只记插件实例 id、存活毫秒与原因类别,不带 URL 与页面内容。
+    const createdAt = Date.now();
+    log.info('webview created', { instanceId });
     return () => {
+      const reason = toWebviewCloseReason(crashMarkedRef.current, unmountingRef.current);
+      crashMarkedRef.current = false;
+      log.info('webview destroyed', { instanceId, aliveMs: Date.now() - createdAt, reason });
       disposed = true;
       injector.dispose();
       if (themeTimer !== null) clearTimeout(themeTimer);
       unobserveTheme();
       webview.removeEventListener('dom-ready', onDomReady);
       webview.removeEventListener('render-process-gone', onGone);
+      webview.removeEventListener('did-fail-load', onFailLoad);
       webview.removeEventListener('context-menu', onContextMenu);
       webview.remove();
       // 菜单与 webview 同生共死:原位升级/重载导致的重挂载把开着的旧菜单
@@ -290,19 +344,12 @@ export function GhostChipPanelBody({ manifest }: { manifest: GhostManifest }): R
     };
     // version 入依赖:原位更新换版后 webview 重挂载,面板立刻跑新代码
     // (供片协议直读安装目录,不重挂会一直渲染旧版缓存的页面)。
-  }, [
-    crashed,
-    generation,
-    manifest.id,
-    manifest.version,
-    manifest.resolvedLocale,
-    panelHtml,
-  ]);
+  }, [crashed, generation, librarySwapping, instanceId, approvalToken, partitionClaim, manifest.id, manifest.version, manifest.resolvedLocale, html, query, wallpaperCanvas]);
 
   if (crashed) {
     return (
       <GhostPanelError
-        manifest={manifest}
+        ghost={ghost}
         state="crashed"
         onReload={() => {
           setGeneration((g) => g + 1);
@@ -320,5 +367,51 @@ export function GhostChipPanelBody({ manifest }: { manifest: GhostManifest }): R
         <GhostPanelMediaMenu menu={mediaMenu} onClose={() => setMediaMenu(null)} />
       ) : null}
     </>
+  );
+}
+
+/**
+ * 芯片型意识面板 wrapper。未读清零刻意留在 panel 生命周期，main-view
+ * 即使展示同一个插件也不能误清 panel 的 badge。
+ */
+export function GhostChipPanelBody({
+  ghost,
+}: {
+  ghost: Pick<InstalledGhost, 'manifest' | 'dir' | 'namespace'> & Partial<Pick<InstalledGhost, 'approval'>>;
+}): ReactNode {
+  const { manifest } = ghost;
+  /**
+   * 面板体挂载 = 未读已读(badge 槽的 explicit 清零)。
+   *
+   * 清零收在这里而不是各宿主的"打开"动作里:面板体有三个宿主(插件页页签
+   * GhostPagePanelHost、右侧栏插件视图页签 plugin-view 及其弹出窗口),
+   * 挂载到本组件才是"内容确实在用户眼前"的唯一判据,三处天然对称。
+   * unread 进依赖:面板**已经开着**时插件又点亮一次(后台拿到新内容),用户
+   * 正看着它,不该留一颗清不掉的点。
+   *
+   * 清零的必要条件是**两层可见性同时成立**,缺一层都会把用户没看见的未读吞掉:
+   *   1. `foreground` —— 宿主窗口可见且聚焦。停靠面板与独立面板窗口长期挂着,
+   *      只看挂载的话,窗口最小化 / 失焦期间到来的未读会被一律清掉,常开面板的
+   *      用户从此收不到这个插件的提醒(codex review P1)。
+   *   2. `visible` —— 本面板**自己**占着可见面积。光有第 1 层还不够:同一个前台
+   *      窗口里,另一个停靠面板被最大化时本面板仍然挂载,却被压成零宽/隐藏,
+   *      用户根本没看到内容(codex review)。
+   * 两层都满足的那一刻 effect 重跑并清零,语义正是「他看的时候才算看过」。
+   */
+  const unreadId = installedGhostStoragePart(ghost);
+  const unread = useGhostUnread(unreadId);
+  const foreground = useHostWindowForeground();
+  const { ref: observeHost, visible } = useElementVisible();
+  useEffect(() => {
+    if (!unread || !foreground || !visible) return;
+    clearGhostUnread(unreadId);
+  }, [unreadId, unread, foreground, visible]);
+
+  return (
+    <GhostWebviewBody
+      ghost={ghost}
+      html={manifest.panel?.html}
+      onHostNode={observeHost}
+    />
   );
 }

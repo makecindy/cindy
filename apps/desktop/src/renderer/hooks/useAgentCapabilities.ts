@@ -11,7 +11,10 @@
  *   capabilities?.availableModels.map(...);
  */
 import { useEffect, useState } from 'react';
+import { invokeModelCatalog } from '@/lib/invokeModelCatalog';
+import { parseModelCatalogKey } from '../../shared/controlledModelCatalog';
 
+import { MetadataSnapshotExpiry } from '@cindy/device-link';
 import { createLogger } from '@/lib/logger';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 
@@ -40,9 +43,12 @@ export interface ModelDescriptor {
   description?: string;
   contextWindow: number;
   efforts: readonly Effort[];
+  /** true = the catalog has not declared this model's effort capability yet. */
+  effortsUnknown?: boolean;
   effortDisplayNames?: Partial<Record<Effort, string>>;
   defaultEffort: Effort | null;
   supportsFastMode?: boolean;
+  supportsUltrafastMode?: boolean;
   /** 目录展示排序权重;缺省排末尾。 */
   sortOrder?: number;
   /**
@@ -94,6 +100,11 @@ export interface AgentCapabilities {
    * device-link 老被控端序列化的 capabilities 无此字段 → undefined = 不支持。
    */
   planMode?: CapabilityStatus;
+  /**
+   * 会话级外部可写目录能力。device-link 老被控端无此字段 → undefined = 不支持，
+   * 控制端必须隐藏会触发新 channel 的入口。
+   */
+  writableDirs?: CapabilityStatus;
   /** Session fork — UserMessage 下方 Fork icon 据此显示 / 隐藏。 */
   fork?: CapabilityStatus;
   /** Session rewind — UserMessage 下方 Rewind icon 据此显示 / 隐藏。 */
@@ -115,8 +126,23 @@ export interface AgentCapabilities {
    * device-link 老被控端无此字段 → undefined，控制端必须阻止开启协同并提示升级。
    */
   supportsOrcaWorkerPermissionMode?: boolean;
+  /**
+   * 被控端是否支持创建后修改 Worker 的角色名/标识(maker:worker:update)。
+   * device-link 老被控端无此字段 → undefined,控制端对远程 Worker 隐藏编辑入口。
+   */
+  supportsOrcaWorkerUpdate?: boolean;
   /** 被控端支持把 UI initial_task 延后到 Lead 首条输入 accepted 后派发。 */
   supportsDeferredOrcaUiAssignment?: boolean;
+  /**
+   * 被控端支持给协同 Worker 单独指定 Agent 所在电脑(远程供应商，`agentDeviceId`)。
+   * 老被控端无此字段 → undefined：Worker 面板不列远程供应商、不发这个字段(老端会静默丢掉)。
+   */
+  supportsOrcaWorkerAgentDevice?: boolean;
+  /**
+   * 被控端接受给它上面的协同 Lead / 本机 Worker 换 Agent 所在电脑。
+   * 老被控端无此字段 → undefined：控制端对这类任务不列其他电脑与分享(v0.1.104–v0.1.110 会拒绝)。
+   */
+  supportsOrcaAgentRelocation?: boolean;
   /**
    * 手动压缩会话上下文能力(pi 原生 compact)。与 maker-core Capabilities.manualCompact
    * 同形；device-link 老被控端序列化的 capabilities 无此字段 → undefined = 不支持。
@@ -136,11 +162,24 @@ export interface AgentCapabilities {
 }
 
 /**
+ * 可写目录回调的跨端兼容门：本地沿用既有能力，SSH 等待远端 picker，device-link
+ * 只信任当前被控端明确声明的能力。缺字段、加载中与不支持都 fail closed。
+ */
+export function canExposeWritableDirsChange(options: {
+  capabilities: Pick<AgentCapabilities, 'writableDirs'> | null | undefined;
+  deviceId: string | null | undefined;
+  remoteHostId: string | null | undefined;
+}): boolean {
+  if (options.remoteHostId != null) return false;
+  return options.deviceId == null || options.capabilities?.writableDirs?.supported === true;
+}
+
+/**
  * 手动压缩调用通道判定 —— 上下文环压缩入口与请求分流的唯一判据(#1927 / #1933 review):
  *   - 真实 Claude Code 会话 → `claude-input`(输入协调器 maker:input:compact,SDK 斜杠命令通道);
- *   - 其余 agent 声明 manualCompact.supported(当前仅 pi)→ `compact-session`
+ *   - 其余 agent 声明 manualCompact.supported(Pi / Codex)→ `compact-session`
  *     (capability-aware 通用通道 maker:compact-session,本地 IPC / device-link 隧道均可路由);
- *   - 其余(Codex 等无手动压缩能力)→ null = 无入口。
+ *   - 其余(未声明手动压缩能力)→ null = 无入口。
  * 刻意不按 agentKind 扩排除列表:新 agent 只需在 maker-core 声明能力即可自动接入。
  */
 export type CompactChannel = 'claude-input' | 'compact-session';
@@ -226,6 +265,7 @@ function isModelDescriptor(value: unknown): value is ModelDescriptor {
     isStringArray(efforts) &&
     (defaultEffort === null ||
       (typeof defaultEffort === 'string' && efforts.includes(defaultEffort))) &&
+    isOptionalBoolean(value.effortsUnknown) &&
     isOptionalString(value.group) &&
     isOptionalString(value.mode) &&
     isOptionalString(value.description) &&
@@ -269,7 +309,11 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
     !isOptionalBoolean(value.supportsSessionAgentSwitch) ||
     !isOptionalBoolean(value.supportsSessionAgentSwitchCas) ||
     !isOptionalBoolean(value.supportsOrcaWorkerPermissionMode) ||
+    !isOptionalBoolean(value.supportsOrcaWorkerUpdate) ||
     !isOptionalBoolean(value.supportsDeferredOrcaUiAssignment) ||
+    !isOptionalBoolean(value.supportsOrcaWorkerAgentDevice) ||
+    !isOptionalBoolean(value.supportsOrcaAgentRelocation) ||
+    !isOptionalCapabilityStatus(value.writableDirs) ||
     !isOptionalCapabilityStatus(value.manualCompact)
   ) {
     throw new Error('Invalid agent capabilities response');
@@ -312,6 +356,8 @@ function cacheKey(agentKind: AgentKind, deviceId?: string): CacheKey {
 }
 
 const cache = new Map<CacheKey, AgentCapabilities>();
+/** Remote snapshots inherit the host's bounded directory budget. */
+const expiry = new MetadataSnapshotExpiry();
 const inflight = new Map<CacheKey, Promise<AgentCapabilities | null>>();
 /** 本地能力刷新代际；使刷新前的在途 IPC 结果无法回写旧快照。 */
 let localGen = 0;
@@ -321,7 +367,7 @@ let localSnapshotRevision = 0;
 const localListeners = new Set<(agent: AgentKind, caps: AgentCapabilities | null) => void>();
 /** 远程能力缓存事件；驱逐时先标 stale，成功 / 失败后再结束这一轮刷新。 */
 export type DeviceCapabilitiesEvent =
-  | { status: 'loading' }
+  | { status: 'loading'; retainDisplaySnapshot?: boolean }
   | { status: 'ready'; capabilities: AgentCapabilities }
   | { status: 'error'; error: string };
 /** 已挂载的远程能力订阅者；key 同缓存，provider revision 后可原子换入新快照。 */
@@ -334,6 +380,23 @@ const remoteListeners = new Map<CacheKey, Set<(event: DeviceCapabilitiesEvent) =
  * 本机用 localGen 处理目录热刷新；远端继续按 deviceGen 隔离。
  */
 const deviceGen = new Map<string, number>();
+
+/** Retire exactly one (device, agentKind) cache key and its mounted consumers. */
+function retireDeviceCapabilityKey(deviceId: string, agentKind: AgentKind, deferNotify = false): void {
+  const key = cacheKey(agentKind, deviceId);
+  cache.delete(key);
+  expiry.forget(key);
+  inflight.delete(key);
+  const event: DeviceCapabilitiesEvent = { status: 'error',
+    error: '[MODEL_VISIBILITY_NOT_READY] Agent capabilities snapshot expired' };
+  // A synchronous getter may discover expiry during render; retire immediately
+  // but deliver the terminal event after the render.
+  if (deferNotify) {
+    queueMicrotask(() => {
+      if (!cache.has(key)) notifyRemoteCapabilities(deviceId, agentKind, event);
+    });
+  } else notifyRemoteCapabilities(deviceId, agentKind, event);
+}
 
 function notifyRemoteCapabilities(
   deviceId: string,
@@ -364,7 +427,7 @@ async function fetchCapabilities(
   deviceId?: string,
 ): Promise<AgentCapabilities | null> {
   const key = cacheKey(agentKind, deviceId);
-  const cached = cache.get(key);
+  const cached = expiry.valid(key) ? cache.get(key) : undefined;
   if (cached) return cached;
   const ip = inflight.get(key);
   if (ip) return ip;
@@ -372,17 +435,19 @@ async function fetchCapabilities(
   // 捕获发起时的设备代际;回调里若代际已变(被 evict)则认为本次请求作废。
   const startGen = deviceId ? (deviceGen.get(deviceId) ?? 0) : localGen;
   const startLocalSnapshotRevision = localSnapshotRevision;
+  const requestRef: { promise?: Promise<AgentCapabilities | null> } = {};
   const isCurrent = (): boolean =>
     deviceId
-      ? (deviceGen.get(deviceId) ?? 0) === startGen
+      ? (deviceGen.get(deviceId) ?? 0) === startGen && inflight.get(key) === requestRef.promise
       : localGen === startGen && localSnapshotRevision === startLocalSnapshotRevision;
 
+  const requestedAt = deviceId ? { wall: Date.now(), mono: performance.now() } : null;
   let raw: Promise<AgentCapabilities>;
   if (deviceId) {
     // 远程:隧道到被控端的 maker:get-capabilities(已在 allowlist)。
     const dl = getDeviceLink();
     if (!dl) throw new Error('device-link IPC not available');
-    raw = dl.invoke(deviceId, 'maker:get-capabilities', [agentKind]) as Promise<AgentCapabilities>;
+    raw = invokeModelCatalog(dl, deviceId, 'maker:get-capabilities', [agentKind]) as Promise<AgentCapabilities>;
   } else {
     // 本机:原路径,行为不变。
     const api = getMakerApi();
@@ -394,6 +459,15 @@ async function fetchCapabilities(
       const caps = parseAgentCapabilities(value);
       // 在途期间设备被驱逐(下线 / 断链)→ 丢弃结果,不回写 cache、不动 inflight。
       if (isCurrent()) {
+        if (deviceId && requestedAt && !expiry.remember(key, caps, requestedAt, () => {
+          // Only this (device, agentKind) cache key expired. Other kinds and
+          // routed aliases keep their independently measured budgets and
+          // in-flight responses; no prefetch is started here.
+          retireDeviceCapabilityKey(deviceId, agentKind, true);
+        })) {
+          cache.delete(key);
+          throw new Error('[MODEL_VISIBILITY_NOT_READY] Agent capabilities snapshot expired');
+        }
         cache.set(key, caps);
         inflight.delete(key);
         if (deviceId)
@@ -421,9 +495,17 @@ async function fetchCapabilities(
             error: e instanceof Error ? e.message : String(e),
           });
         }
+        throw e;
       }
+      // A retired / superseded remote request no longer owns this cache key:
+      // its invalidation path already delivered the terminal state, and a newer
+      // request may have succeeded since. Do not hand the late failure back to
+      // the old consumer or it would overwrite that fresh mounted state (null is
+      // an allowed result here). Local requests keep their original error path.
+      if (deviceId) return null;
       throw e;
     });
+  requestRef.promise = p;
   inflight.set(key, p);
   return p;
 }
@@ -439,7 +521,7 @@ export function useAgentCapabilities(
   deviceId?: string,
 ): UseAgentCapabilitiesResult {
   const selectedKey = agentKind ? cacheKey(agentKind, deviceId) : null;
-  const initialCapabilities = selectedKey ? cache.get(selectedKey) : undefined;
+  const initialCapabilities = agentKind ? getCachedCapabilities(agentKind, deviceId) ?? undefined : undefined;
   const [ownerKey, setOwnerKey] = useState<CacheKey | null>(
     initialCapabilities ? selectedKey : null,
   );
@@ -454,7 +536,8 @@ export function useAgentCapabilities(
     const key = cacheKey(agentKind, deviceId);
     const applyRemoteEvent = (event: DeviceCapabilitiesEvent): void => {
       if (event.status === 'loading') {
-        // 保留上一份完整快照以避免空白帧，但显式标记为 stale，调用方不得据此改写选择。
+        // 仅同账号配置刷新保留显示快照，账号边界不能展示上一账号的模型。
+        if (!event.retainDisplaySnapshot) setCapabilities(null);
         setOwnerKey(key);
         setLoading(true);
         setError(null);
@@ -498,7 +581,7 @@ export function useAgentCapabilities(
       return;
     }
     const key = cacheKey(agentKind, deviceId);
-    const cached = cache.get(key);
+    const cached = getCachedCapabilities(agentKind, deviceId);
     if (cached) {
       setOwnerKey(key);
       setCapabilities(cached);
@@ -557,7 +640,8 @@ export function getCachedCapabilities(
   agentKind: AgentKind,
   deviceId?: string,
 ): AgentCapabilities | null {
-  return cache.get(cacheKey(agentKind, deviceId)) ?? null;
+  const key = cacheKey(agentKind, deviceId);
+  return expiry.valid(key) ? cache.get(key) ?? null : null;
 }
 
 /**
@@ -568,18 +652,66 @@ export async function prefetchDeviceCapabilities(deviceId: string): Promise<void
   await Promise.allSettled(ALL_AGENT_KINDS.map((agent) => fetchCapabilities(agent, deviceId)));
 }
 
+export function evictControlledDeviceCapabilities(taskDeviceId: string): void {
+  const devices = new Set([...cache.keys(), ...inflight.keys(), ...remoteListeners.keys()]
+    .map(key => key.slice(0, key.lastIndexOf(':'))));
+  for (const key of devices) {
+    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId) evictDeviceCapabilities(key);
+  }
+}
+
+export function refreshControlledDeviceCapabilities(taskDeviceId: string): void {
+  const devices = new Set([...remoteListeners.keys()].map(key => key.slice(0, key.lastIndexOf(':'))));
+  for (const key of devices) {
+    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId) void prefetchDeviceCapabilities(key);
+  }
+}
+
 /** device-link:被控设备下线 / 断链时驱逐其能力缓存(只清该设备的 key)。 */
-export function evictDeviceCapabilities(deviceId: string): void {
+export function evictDeviceCapabilities(
+  deviceId: string,
+  options?: { retainDisplaySnapshot?: boolean; directOnly?: boolean },
+): void {
+  // A provisional direct target must not evict the host's healthy routed aliases.
+  if (!options?.directOnly) {
+    const scopedDevices = new Set([...cache.keys(), ...inflight.keys(), ...remoteListeners.keys()]
+      .map(key => key.slice(0, key.lastIndexOf(':'))));
+    for (const key of scopedDevices) {
+      const route = parseModelCatalogKey(key);
+      if (route && (route.taskDeviceId === deviceId || route.agentDeviceId === deviceId)) {
+        evictDeviceCapabilities(key, options);
+      }
+    }
+  }
   const prefix = `${deviceId}:`;
-  for (const k of [...cache.keys()]) if (k.startsWith(prefix)) cache.delete(k);
+  for (const k of [...cache.keys()]) if (k.startsWith(prefix)) {
+    cache.delete(k);
+    // A retained refresh preserves the mounted display payload, so its host
+    // deadline must survive too. Dropping it would let a hung refresh keep the
+    // old capabilities past the forwarded trust window.
+    if (!options?.retainDisplaySnapshot) expiry.forget(k);
+  }
   for (const k of [...inflight.keys()]) if (k.startsWith(prefix)) inflight.delete(k);
   // 代际自增:作废该设备所有在途 fetch 的回写(防其 .then 把陈旧能力复活回 cache)。
   deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
   // 已挂载 hook 必须同步知道旧快照已失效；否则 provider 新快照先到时会拿旧 capabilities
   // 计算 fallback，并永久覆盖用户原本保存的模型偏好。
   for (const agentKind of ALL_AGENT_KINDS) {
-    notifyRemoteCapabilities(deviceId, agentKind, { status: 'loading' });
+    notifyRemoteCapabilities(deviceId, agentKind, {
+      status: 'loading',
+      ...(options?.retainDisplaySnapshot ? { retainDisplaySnapshot: true } : {}),
+    });
   }
+}
+
+/** 只清远程能力，本机目录仍由本地刷新代际管理。 */
+export function evictAllRemoteCapabilities(): void {
+  const devices = new Set(deviceGen.keys());
+  for (const key of [...cache.keys(), ...inflight.keys(), ...remoteListeners.keys()]) {
+    const deviceId = key.slice(0, key.lastIndexOf(':'));
+    if (deviceId !== 'local') devices.add(deviceId);
+  }
+  for (const deviceId of devices) evictDeviceCapabilities(deviceId);
 }
 
 export type LocalCapabilitiesSnapshot = ReadonlyArray<readonly [AgentKind, AgentCapabilities]>;
@@ -604,7 +736,7 @@ export function beginLocalCapabilitiesRefresh(): number {
 export async function loadLocalCapabilitiesSnapshot(): Promise<LocalCapabilitiesSnapshot> {
   const api = getMakerApi();
   if (!api) throw new Error('maker IPC not available');
-  const entries = await Promise.all(
+  const results = await Promise.allSettled(
     ALL_AGENT_KINDS.map(async (agent): Promise<readonly [AgentKind, AgentCapabilities] | null> => {
       try {
         return [agent, await api.getCapabilities(agent)] as const;
@@ -621,6 +753,10 @@ export async function loadLocalCapabilitiesSnapshot(): Promise<LocalCapabilities
       }
     }),
   );
+  const entries = results.map((result) => {
+    if (result.status === 'rejected') throw result.reason;
+    return result.value;
+  });
   return entries.filter(
     (entry): entry is readonly [AgentKind, AgentCapabilities] => entry !== null,
   );

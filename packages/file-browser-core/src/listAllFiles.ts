@@ -98,7 +98,7 @@ export function listAllFiles(args: ListAllFilesArgs): Promise<ListAllFilesResult
       }
       setTimeout(() => {
         try {
-          if (!child.killed) child.kill('SIGKILL');
+          if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
         } catch {
           // ignore
         }
@@ -113,11 +113,13 @@ export function listAllFiles(args: ListAllFilesArgs): Promise<ListAllFilesResult
       // rg 偶尔有 `./` 前缀(取决于 cwd 形式),剥掉。
       const clean = normalized.startsWith('./') ? normalized.slice(2) : normalized;
       if (!clean) return;
-      files.push(clean);
+      // 只有第 cap + 1 个文件才证明清单被截断；恰好 cap 个自然结束不算超限。
       if (files.length >= cap) {
         truncated = true;
-        killRg('cap reached');
+        killRg('cap exceeded');
+        return;
       }
+      files.push(clean);
     });
 
     child.on('error', (err) => {
@@ -130,10 +132,21 @@ export function listAllFiles(args: ListAllFilesArgs): Promise<ListAllFilesResult
       reader.close();
       const elapsedMs = Date.now() - start;
       // truncated 时 rg 因被我们 SIGTERM 退出,code/signal 不一定 0 — 仍当 success。
-      if (!truncated && code !== 0 && code !== null) {
-        // rg exit code 1 = no matches(--files 模式下不会出现);其它非零是真错。
-        // 但 --files 即使工作目录空也是 exit 0,所以非 0 必然异常。
-        log.warn('rg exited non-zero', { code, signal, elapsedMs, files: files.length });
+      // signal 非空 = 被 OOM killer / SIGKILL 等意外终止(code 为 null)。
+      if (!truncated && signal !== null) {
+        log.warn('rg killed by signal', { signal, elapsedMs, files: files.length });
+        reject(new Error(`ripgrep killed by signal ${signal}`));
+        return;
+      }
+      // exit code 1 = no matches (--files 模式下空目录/全部被忽略);>= 2 = 致命错误。
+      if (!truncated && code !== null && code >= 2) {
+        log.warn('rg exited with fatal error', { code, signal, elapsedMs, files: files.length });
+        reject(new Error(`ripgrep exited with code ${code}${signal ? ` (signal: ${signal})` : ''}`));
+        return;
+      }
+      if (!truncated && code === 1) {
+        // exit 1 = 空目录或全部被 .gitignore 排除;合法的空清单。
+        log.debug('rg exited 1 (no files)', { elapsedMs });
       }
       log.debug('rg done', { workdir: args.workdir, files: files.length, truncated, elapsedMs });
       resolve({ files, truncated, elapsedMs });
@@ -151,10 +164,20 @@ export interface ListAllFilesWalkArgs {
  * 无 ripgrep 的纯 JS fallback:递归 readdir + 与文件树同一个 ignore matcher。
  *
  * 与 rg 版的语义差异(有意为之、确定可解释):过滤走 loadIgnoreMatcher(根
- * .gitignore / .p4ignore + BUILTIN_IGNORE),即**清单 = 用户在文件树里能看到的
- * 文件全集**;rg 版额外理解嵌套 .gitignore / .rgignore,并且不吃 BUILTIN_IGNORE。
- * 用途场景(远端裸机器没有 rg 时的文件名筛选)里"和树一致"比"和 rg 一致"更符合
- * 直觉。性能:纯 JS 串行遍历比 rg 慢一个量级,但被 cap 上限兜底,中型项目 <1s。
+ * .gitignore / .p4ignore + BUILTIN_IGNORE 的**默认层**,即
+ * BUILTIN_IGNORE_REVEALABLE 仍然隐藏);rg 版额外理解嵌套 .gitignore /
+ * .rgignore,也不吃 BUILTIN_IGNORE。用途场景(远端裸机器没有 rg 时的文件名
+ * 筛选)里"接近文件树默认口径"比"和 rg 一致"更符合直觉。性能:纯 JS 串行遍历比
+ * rg 慢一个量级,但被 cap 上限兜底,中型项目 <1s。
+ *
+ * 这里**不接**「显示被忽略的目录」(showIgnoredDirs):该开关只作用于**浏览面**
+ * (文件树),文件名筛选与内容搜索一直按 ignore 规则工作 —— rg 那一路吃
+ * .gitignore / .ignore / .rgignore,这条 fallback 吃根 .gitignore +
+ * BUILTIN_IGNORE 默认层。两条路都无法跟这个开关一致(rg 侧没有办法"只放行构建
+ * 产物"而保留用户自己的 gitignore 规则),而**只让 fallback 跟随**会让同一份筛选
+ * 在装没装 rg 的机器上给出不同结果 —— 那比"树里看得见、筛选找不到"更难解释。
+ * 所以开关打开后树里出现 build / dist、而这份清单不含它们,是有意的语义差异
+ * (决策测试见 listAllFilesWalk.test.ts);要改就得两个后端一起改。
  *
  * symlink:目录/文件符号链接一律跳过(rg --files 默认同样不 follow symlink,
  * 也避免链接环)。不可读目录(权限/竞态删除)静默跳过,不 fail 整个清单。
@@ -187,8 +210,11 @@ export async function listAllFilesWalk(args: ListAllFilesWalkArgs): Promise<List
       if (isDir) {
         await walk(childRel);
       } else if (ent.isFile()) {
+        if (files.length >= cap) {
+          truncated = true;
+          return;
+        }
         files.push(childRel);
-        if (files.length >= cap) truncated = true;
       }
     }
   };

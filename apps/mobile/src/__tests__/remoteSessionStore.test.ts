@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MAKER_EVENT_BATCH_CHANNEL } from '@cindy/device-link';
-import { remoteSessionStore, sessionPendingWrites } from '@/session/remoteSessionStore';
+import { MAKER_EVENT_BATCH_CHANNEL, SESSION_SYNC_CHANNEL } from '@cindy/device-link';
+import { clampLiveRowCreatedAt } from '@/session/messagePaging';
+import { MOBILE_TOOL_INPUT_PROJECTION_THRESHOLD_BYTES } from '@/session/messageToolPayloadProjection';
+import { remoteSessionStore, resolveSessionWriteDevices, sessionPendingWrites } from '@/session/remoteSessionStore';
+import { buildMobileSessionMessageDeepLink, parseSessionDeepLinkUrl, resolveSessionLinkDeviceId } from '@/session/sessionLinks';
+import { sessionMenuCopyLink } from '@/session/sessionMenu';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
+import { setJankMetricsEnabled, takeJankMetrics } from '@/debug/jankMetrics';
 
 function session(id: string, patch: Partial<RemoteSession> = {}): RemoteSession {
   return {
@@ -36,12 +41,132 @@ function message(id: string, sessionId: string): RemoteMessage {
   };
 }
 
+// Unit, PR #6863 r4353650385: existing removal coverage retained messages but
+// lost the raw metadata read by useRemoteSessionDetail. A preview must hide only
+// the visible/Home projections, retaining title, status and messages for details.
+it('keeps detail metadata and messages while an archive preview hides only the list row', () => {
+  remoteSessionStore.clear();
+  const row = session('s1');
+  remoteSessionStore.setDeviceSessions('dev-1', 'Computer', [row]);
+  remoteSessionStore.setMessages('s1', [message('m1', 's1')]);
+  const removed = vi.fn();
+  const off = remoteSessionStore.onSessionRemoved(removed);
+  try {
+    const finishPreview = remoteSessionStore.beginSessionListRemovalPreview('s1');
+    expect(remoteSessionStore.getVisibleSessions()).toEqual([]);
+    expect(remoteSessionStore.getHomeSessions()).toEqual([]);
+    expect(remoteSessionStore.getSessions()[0]).toMatchObject({ id: 's1', title: 's1', status: 'active' });
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(1);
+    expect(removed).not.toHaveBeenCalled();
+    remoteSessionStore.setDeviceSessions('dev-1', 'Computer', [row]);
+    expect(remoteSessionStore.getVisibleSessions()).toEqual([]);
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { title: 'Saved rename' });
+    finishPreview();
+    expect(remoteSessionStore.getHomeSessions()[0].title).toBe('Saved rename');
+    expect(remoteSessionStore.getMessages('s1')[0].content).toBe('hello');
+    const finishConfirmedPreview = remoteSessionStore.beginSessionListRemovalPreview('s1');
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { status: 'archived' });
+    finishConfirmedPreview();
+    expect(remoteSessionStore.getSessions()).toEqual([]);
+    expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+    expect(removed).toHaveBeenCalledExactlyOnceWith('dev-1', 's1');
+  } finally { off(); remoteSessionStore.clear(); }
+});
+
+it('finishing an older archive preview keeps a newer preview hidden and cannot revive a removed row', () => {
+  remoteSessionStore.clear();
+  remoteSessionStore.setDeviceSessions('dev-1', 'Computer', [session('s1')]);
+  const older = remoteSessionStore.beginSessionListRemovalPreview('s1');
+  const newer = remoteSessionStore.beginSessionListRemovalPreview('s1');
+  older();
+  older();
+  expect(remoteSessionStore.getHomeSessions()).toEqual([]);
+  expect(remoteSessionStore.getSessions()).toHaveLength(1);
+  remoteSessionStore.applySessionPatch('dev-1', 's1', { status: 'deleted' });
+  newer();
+  expect(remoteSessionStore.getSessions()).toEqual([]);
+  expect(remoteSessionStore.getHomeSessions()).toEqual([]);
+  remoteSessionStore.clear();
+});
+
+// Unit: side-chat details are omitted by the Host list. A list refresh must
+// retain opened details without leaking them into Home, and deletion must still
+// remove them. Existing tests only cover ordinary listed task reconciliation.
+it.each(['side-chat', 'bot'] as const)('retains hidden %s details across list refresh without changing composer availability', source => {
+  remoteSessionStore.clear();
+  try {
+    const detail = session('hidden', { source });
+    remoteSessionStore.upsertDeviceSession('dev-1', 'Computer', detail);
+    const previous = remoteSessionStore.getSessions().find(row => row.id === 'hidden');
+    const observed: boolean[] = [];
+    const off = remoteSessionStore.subscribe(() => observed.push(remoteSessionStore.getSessions().some(row => row.id === 'hidden')));
+    try {
+      for (let i = 0; i < 3; i++) remoteSessionStore.setDeviceSessions('dev-1', 'Computer', [session('ordinary')]);
+      expect(remoteSessionStore.getSessions().find(row => row.id === 'hidden')).toBe(previous);
+      expect(observed).not.toContain(false);
+      expect(remoteSessionStore.getHomeSessions().map(row => row.id)).toEqual(['ordinary']);
+      remoteSessionStore.applySessionPatch('dev-1', 'hidden', { status: 'deleted' });
+      expect(remoteSessionStore.getSessions().some(row => row.id === 'hidden')).toBe(false);
+      remoteSessionStore.setDeviceSessions('dev-1', 'Computer', []);
+      expect(remoteSessionStore.getSessions()).toEqual([]);
+    } finally { off(); }
+  } finally { remoteSessionStore.clear(); }
+});
+
+it.each(['deleted', 'archived'] as const)('retains hidden side-chat details across refresh, then reports %s after removal', status => {
+  remoteSessionStore.clear();
+  const parent = session('main');
+  const child = session('side', { source: 'side-chat', parentSessionId: 'main' });
+  remoteSessionStore.setDeviceSessions('dev-1', 'Computer', [parent]);
+  remoteSessionStore.upsertDeviceSession('dev-1', 'Computer', child);
+  // Black-box regression (2026-10-20): removing the row did not close its sheet.
+  // This lifecycle signal must follow removal, and must not fire on reconnect.
+  const removed = vi.fn(() => remoteSessionStore.getSessions().map(row => row.id));
+  const off = remoteSessionStore.onSessionRemoved(removed);
+  try {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Computer', [parent]);
+    remoteSessionStore.markDeviceOffline('dev-1');
+    expect(removed).not.toHaveBeenCalled();
+    expect(remoteSessionStore.getSessions().map(row => row.id)).toContain('side');
+    expect(remoteSessionStore.getVisibleSessions().map(row => row.id)).toEqual(['main']);
+    expect(remoteSessionStore.getHomeSessions().map(row => row.id)).toEqual(['main']);
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:sessions:patched', {
+      sessionId: 'side', patch: { status },
+    });
+    expect(removed).toHaveBeenCalledExactlyOnceWith('dev-1', 'side');
+    expect(removed.mock.results[0].value).toEqual(['main']);
+    remoteSessionStore.setDeviceSessions('dev-1', 'Computer', [parent]);
+    expect(remoteSessionStore.getSessions().map(row => row.id)).toEqual(['main']);
+  } finally { off(); remoteSessionStore.clear(); }
+});
+
+// Unit, #6529: reopening an archived side chat restores a detail omitted by
+// sessions:list. Active-only refresh coverage missed this archive → reopen path.
+it('keeps reopened archived side-chat details through list refresh until deletion', () => {
+  remoteSessionStore.clear();
+  const parent = session('main');
+  const archived = session('side', { source: 'side-chat', parentSessionId: 'main', status: 'archived' });
+  try {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Computer', [parent]);
+    remoteSessionStore.upsertDeviceSession('dev-1', 'Computer', archived);
+    remoteSessionStore.setDeviceSessions('dev-1', 'Computer', [parent]);
+    expect(remoteSessionStore.getSessions()).toContainEqual(expect.objectContaining({ id: 'side', status: 'archived' }));
+    expect(remoteSessionStore.getVisibleSessions().map(row => row.id)).toEqual(['main']);
+    expect(remoteSessionStore.getHomeSessions().map(row => row.id)).toEqual(['main']);
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:sessions:patched', {
+      sessionId: 'side', patch: { status: 'deleted' },
+    });
+    remoteSessionStore.setDeviceSessions('dev-1', 'Computer', [parent]);
+    expect(remoteSessionStore.getSessions().map(row => row.id)).toEqual(['main']);
+  } finally { remoteSessionStore.clear(); }
+});
+
 function messageAt(id: string, sessionId: string, createdAt: string): RemoteMessage {
   return { ...message(id, sessionId), createdAt };
 }
 
-function pushMakerStatus(sessionId: string, data: Record<string, unknown>): void {
-  remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+function pushMakerStatus(sessionId: string, data: Record<string, unknown>, deviceId = 'dev-1'): void {
+  remoteSessionStore.applyRemotePush(deviceId, 'maker:event', {
     sessionId,
     event: { type: 'status', data },
   });
@@ -132,6 +257,152 @@ function pending(kind: string, requestId?: string, persistId?: string): PendingI
 
 describe('remoteSessionStore', () => {
   beforeEach(() => remoteSessionStore.clear());
+
+  it('lists independent teammate lanes, excludes canonical chat and retains attribution after legacy detail reads', () => {
+    const taskTeammate = { id: 'cindy-default', name: 'Cindy' };
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('routine', { source: 'bot', companion: { id: 'cindy-default', role: 'routine' }, taskTeammate }),
+      session('channel', { source: 'bot', companion: { id: 'cindy-default', role: 'channel' }, taskTeammate }),
+      session('canonical', { source: 'bot', companion: { id: 'cindy-default', role: 'canonical' } }),
+      session('thread', { source: 'bot' }),
+    ]);
+    expect(remoteSessionStore.getHomeSessions().map(row => row.id).sort()).toEqual(['channel', 'routine']);
+    remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('routine', { source: 'bot', status: 'archived' }));
+    expect(remoteSessionStore.getHomeSessions().find(row => row.id === 'routine')).toMatchObject({
+      status: 'archived', companion: { id: 'cindy-default', role: 'routine' }, taskTeammate,
+    });
+  });
+
+  it.each(['superseded', 'resolved', 'session_closed'])('releases an edited async question on %s', (reason) => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const item: PendingInteraction = { request: { kind: 'ask_user_question', requestId: 'q1', delivery: 'async', questions: [{ question: 'Q?' }] } };
+    remoteSessionStore.setPendingInteractions('s1', [item]);
+    remoteSessionStore.protectAsyncQuestion('s1', item);
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:interaction-dismissed', {
+      sessionId: 's1', requestId: 'q1', reason, decision: { dismissed: true },
+    });
+    expect(remoteSessionStore.getVisiblePendingInteractions('s1')).toHaveLength(0);
+  });
+
+  // Regression: editing a second async question must not drop the first one's unsent supplement when it is withdrawn.
+  it('keeps every edited async question when an earlier one is withdrawn', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const ask = (requestId: string): PendingInteraction => ({ persistId: `p-${requestId}`,
+      request: { kind: 'ask_user_question', requestId, delivery: 'async', questions: [{ question: `${requestId}?` }] } });
+    const [a, b] = [ask('qa'), ask('qb')];
+    remoteSessionStore.setPendingInteractions('s1', [a, b]);
+    remoteSessionStore.protectAsyncQuestion('s1', a);
+    remoteSessionStore.protectAsyncQuestion('s1', b);
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:interaction-dismissed', {
+      sessionId: 's1', requestId: 'qa', reason: 'question_withdrawn', withdrawalReason: '已确认',
+    });
+    expect(remoteSessionStore.getVisiblePendingInteractions('s1').map(i => i.request.requestId)).toEqual(['qa', 'qb']);
+    expect(remoteSessionStore.getVisiblePendingInteractions('s1')[0]).toMatchObject({
+      retainedDraft: true, request: { withdrawalReason: '已确认' },
+    });
+    remoteSessionStore.releaseProtectedQuestion('s1', 'qa');
+    expect(remoteSessionStore.getVisiblePendingInteractions('s1').map(i => i.request.requestId)).toEqual(['qb']);
+  });
+
+  it('keeps an edited async question across disconnection but removes it on explicit history clearing', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const item: PendingInteraction = { persistId: 'p1',
+      request: { kind: 'ask_user_question', requestId: 'q1', delivery: 'async', questions: [{ question: 'Q?' }] } };
+    remoteSessionStore.setPendingInteractions('s1', [item]);
+    remoteSessionStore.protectAsyncQuestion('s1', item);
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:interaction-dismissed', {
+      sessionId: 's1', requestId: 'q1', reason: 'turn_completed', decision: { dismissed: true },
+    });
+    const visible = remoteSessionStore.getVisiblePendingInteractions('s1');
+    expect(remoteSessionStore.getVisiblePendingInteractions('s1')).toBe(visible);
+    remoteSessionStore.markDeviceOffline('dev-1');
+    expect(remoteSessionStore.getPendingInteractions('s1')).toHaveLength(0);
+    expect(remoteSessionStore.getVisiblePendingInteractions('s1')[0]).toMatchObject({ retainedDraft: true });
+    remoteSessionStore.invalidateSessionMessageWindow('s1', 'dev-1');
+    expect(remoteSessionStore.getVisiblePendingInteractions('s1')).toHaveLength(0);
+  });
+
+  it.each(['deleted', 'archived', 'logout'] as const)('drops protected cards on %s', (action) => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.protectAsyncQuestion('s1', { request: {
+      kind: 'ask_user_question', requestId: 'q1', delivery: 'async',
+    } });
+    if (action === 'logout') remoteSessionStore.clear();
+    else remoteSessionStore.applySessionPatch('dev-1', 's1', { status: action });
+    expect(remoteSessionStore.getVisiblePendingInteractions('s1')).toHaveLength(0);
+  });
+
+  it('keeps Make mirrors for transport while excluding them from visible session snapshots', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('make', { source: 'cindy-make' }),
+      session('merge', { source: 'cindy-make-merge' }),
+      session('ordinary', { source: 'desktop' }),
+    ]);
+    expect(remoteSessionStore.getSessions()).toHaveLength(3);
+    expect(remoteSessionStore.getSessionDeviceId('make')).toBe('dev-1');
+    const visible = remoteSessionStore.getVisibleSessions();
+    expect(visible.map(item => item.id)).toEqual(['ordinary']);
+    const home = remoteSessionStore.getHomeSessions();
+    expect(home.map(item => item.id)).toEqual(['ordinary']);
+    remoteSessionStore.applySessionPatch('dev-1', 'make', { totalCostUsd: 1 });
+    expect(remoteSessionStore.getVisibleSessions()).toBe(visible);
+    expect(remoteSessionStore.getHomeSessions()).toBe(home);
+    remoteSessionStore.applySessionPatch('dev-1', 'ordinary', { totalCostUsd: 2 });
+    expect(remoteSessionStore.getVisibleSessions()[0].totalCostUsd).toBe(2);
+    expect(remoteSessionStore.getHomeSessions()).toBe(home);
+    remoteSessionStore.applySessionPatch('dev-1', 'ordinary', { source: 'cindy-make-merge' });
+    expect(remoteSessionStore.getVisibleSessions()).toEqual([]);
+    expect(remoteSessionStore.getHomeSessions()).toEqual([]);
+    remoteSessionStore.clear();
+    expect(remoteSessionStore.getVisibleSessions()).toEqual([]);
+    expect(remoteSessionStore.getHomeSessions()).toEqual([]);
+  });
+
+  it.each(['cindy-make', 'cindy-make-merge'])('removes %s from Home when source metadata arrives late', (source) => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('unknown'),
+      session('ordinary', { source: 'desktop' }),
+    ]);
+    const ordinary = remoteSessionStore.getHomeSessions()[1];
+    remoteSessionStore.applySessionActivity('dev-1', { sessionId: 'unknown', phase: 'error', attention: true });
+    remoteSessionStore.applySessionPatch('dev-1', 'unknown', { source });
+    expect(remoteSessionStore.getHomeSessions()).toEqual([ordinary]);
+    expect(remoteSessionStore.getHomeSessions()[0]).toBe(ordinary);
+    expect(remoteSessionStore.getSessions()).toHaveLength(2);
+    expect(remoteSessionStore.getSessionLiveActivity('unknown')).toMatchObject({ phase: 'error', attention: true });
+    remoteSessionStore.applySessionActivity('dev-1', { sessionId: 'unknown', phase: 'completed', attention: true });
+    expect(remoteSessionStore.getHomeSessions()).toEqual([ordinary]);
+  });
+
+  it('releases a large persisted tool input when the matching result is appended', () => {
+    remoteSessionStore.setMessages('s1', [{
+      ...message('tool-use', 's1'),
+      role: 'tool_use',
+      toolUseId: 'toolu-1',
+      content: {
+        input: { payload: 'x'.repeat(MOBILE_TOOL_INPUT_PROJECTION_THRESHOLD_BYTES + 1) },
+        toolName: 'WebFetch',
+        toolUseId: 'toolu-1',
+      },
+    }]);
+    expect(remoteSessionStore.getMessages('s1')[0].mobileToolInputProjection).toBeUndefined();
+
+    remoteSessionStore.appendMessage('s1', {
+      ...message('tool-result', 's1'),
+      role: 'tool_result',
+      toolUseId: 'toolu-1',
+      content: 'finished',
+      createdAt: '2026-01-01T00:00:01.000Z',
+    });
+
+    expect(remoteSessionStore.getMessages('s1')[0]).toMatchObject({
+      content: { input: null, mobilePayloadProjected: true },
+      mobileToolInputProjection: {
+        projected: true,
+        toolUseMessageId: 'tool-use',
+      },
+    });
+  });
 
   it('normalizes same-timestamp messages by host rowid', () => {
     const createdAt = '2026-01-01T00:00:00.000Z';
@@ -387,6 +658,123 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  it('keeps the cached home projection stable across usage-only refreshes', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const before = remoteSessionStore.getHomeSessions();
+    const beforeRow = before[0];
+    expect(beforeRow).toBeDefined();
+    expect(beforeRow).not.toHaveProperty('totalCostUsd');
+
+    remoteSessionStore.applyRemotePush('dev-1', 'usage:session-spend-changed', {
+      sessionId: 's1',
+      totalCostUsd: 2.5,
+    });
+    expect(remoteSessionStore.getHomeSessions()).toBe(before);
+    expect(remoteSessionStore.getHomeSessions()[0]).toBe(beforeRow);
+
+    // A later ordinary recompute must still reuse the projection because usage
+    // fields are intentionally absent from Home.
+    remoteSessionStore.setDeviceIdentity([{ deviceId: 'dev-1', name: 'Mac' }]);
+    expect(remoteSessionStore.getHomeSessions()).toBe(before);
+    expect(remoteSessionStore.getHomeSessions()[0]).toBe(beforeRow);
+    expect(remoteSessionStore.getHomeSessions()[0]).not.toHaveProperty('totalCostUsd');
+  });
+
+  it('black-box: repeated device refreshes keep the visible home snapshot stable', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1'), session('s2')]);
+    const before = remoteSessionStore.getHomeSessions();
+    const beforeRows = [...before];
+
+    for (let index = 0; index < 100; index += 1) {
+      remoteSessionStore.setDeviceIdentity([
+        { deviceId: 'dev-1', name: 'Mac' },
+        { deviceId: `unrelated-${index}`, name: `Other ${index}` },
+      ]);
+    }
+
+    const after = remoteSessionStore.getHomeSessions();
+    expect(after).toBe(before);
+    expect(after).toEqual(beforeRows);
+    expect(after.every((row) => !Object.prototype.hasOwnProperty.call(row, 'totalCostUsd'))).toBe(true);
+    expect(after.every((row) => !Object.prototype.hasOwnProperty.call(row, 'totalMoney'))).toBe(true);
+    expect(after.every((row) => !Object.prototype.hasOwnProperty.call(row, 'totalTokenUsage'))).toBe(true);
+  });
+
+  it('refreshes Home metadata after unchanged device refreshes and usage-only pushes', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1'), session('s2')]);
+    const before = remoteSessionStore.getHomeSessions();
+    const homeChanged = vi.fn();
+    const unsubscribe = remoteSessionStore.subscribeHomeStatus(homeChanged);
+    try {
+      remoteSessionStore.applyRemotePush('dev-1', 'usage:session-tokens-changed', { sessionId: 's1', totalTokens: 500 });
+      for (let index = 0; index < 10; index += 1) {
+        remoteSessionStore.setDeviceIdentity([
+          { deviceId: 'dev-1', name: 'Mac' },
+          { deviceId: `other-${index}`, name: 'Other' },
+        ]);
+      }
+      expect(remoteSessionStore.getHomeSessions()).toBe(before);
+      expect(homeChanged).not.toHaveBeenCalled();
+      expect(remoteSessionStore.getSessions()[0].totalTokenUsage).toBe(500);
+      expect(remoteSessionStore.getDeviceIdentity()[1].deviceId).toBe('other-9');
+
+      remoteSessionStore.applySessionPatch('dev-1', 's1', { title: 'Renamed' });
+      const renamed = remoteSessionStore.getHomeSessions();
+      expect(renamed).not.toBe(before);
+      expect(renamed[0]).toMatchObject({ id: 's1', title: 'Renamed' });
+      expect(renamed[0]).not.toHaveProperty('totalTokenUsage');
+      expect(renamed[1]).toBe(before[1]);
+      expect(homeChanged).toHaveBeenCalledTimes(1);
+
+      remoteSessionStore.renameDevice('dev-1', 'New Mac');
+      expect(remoteSessionStore.getHomeSessions().every((row) => row.deviceLinkDeviceName === 'New Mac')).toBe(true);
+      expect(homeChanged).toHaveBeenCalledTimes(2);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it.each(['remove', 'clear'] as const)('rebuilds Home after %s and reusing a session ID', (action) => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1'), session('s2')]);
+    const before = remoteSessionStore.getHomeSessions();
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s2'), session('s1')]);
+    expect(remoteSessionStore.getHomeSessions()).toEqual([before[1], before[0]]);
+    expect(remoteSessionStore.getHomeSessions()[0]).toBe(before[1]);
+
+    if (action === 'clear') remoteSessionStore.clear();
+    else remoteSessionStore.setDeviceSessions('dev-1', 'Mac', []);
+    expect(remoteSessionStore.getHomeSessions()).toEqual([]);
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    expect(remoteSessionStore.getHomeSessions()).toHaveLength(1);
+    expect(remoteSessionStore.getHomeSessions()[0]).not.toBe(before[0]);
+    expect(remoteSessionStore.getHomeSessions()[0]).toMatchObject({ id: 's1', title: 's1' });
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { title: 'Restored title' });
+    expect(remoteSessionStore.getHomeSessions()[0].title).toBe('Restored title');
+  });
+
+  it('keeps metadata patches on the canonical shard and preserves hidden rows and usage projection', () => {
+    remoteSessionStore.setDeviceIdentity([{ deviceId: 'current', name: 'Mac' }]);
+    remoteSessionStore.setDeviceSessions('stale', 'Mac', [session('s1', { title: 'Stale' })]);
+    remoteSessionStore.setDeviceSessions('current', 'Mac', [session('s1'), session('s2')]);
+    const other = remoteSessionStore.getHomeSessions()[1];
+    const before = remoteSessionStore.getSessions()[0];
+    remoteSessionStore.applySessionPatch('stale', 's1', { title: 'Wrong', updatedAt: '2026-02-01T00:00:00Z' });
+    expect(remoteSessionStore.getSessions()[0]).toBe(before);
+    expect(remoteSessionStore.getSessionDeviceId('s1')).toBe('current');
+    const finishPreview = remoteSessionStore.beginSessionListRemovalPreview('s1');
+    remoteSessionStore.applySessionPatch('current', 's1', {
+      title: 'Renamed', updatedAt: '2026-02-02T00:00:00Z', totalTokenUsage: 500,
+    });
+    expect(remoteSessionStore.getHomeSessions()).toEqual([other]);
+    expect(remoteSessionStore.getSessions()[0]).toMatchObject({ title: 'Renamed', totalTokenUsage: 500 });
+    finishPreview();
+    expect(remoteSessionStore.getHomeSessions()[0]).toMatchObject({
+      title: 'Renamed', updatedAt: '2026-02-02T00:00:00Z', canonicalDeviceId: 'current',
+    });
+    expect(remoteSessionStore.getHomeSessions()[0]).not.toHaveProperty('totalTokenUsage');
+    expect(remoteSessionStore.getHomeSessions()[1]).toBe(other);
+  });
+
   it('removes archived sessions from the active mirror', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1'), session('s2')]);
     remoteSessionStore.applySessionPatch('dev-1', 's1', { status: 'archived' });
@@ -437,6 +825,148 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getSessions()[0].agentSwitchIntent).toBeNull();
   });
 
+  it('applies runtime model projections and preserves them only for legacy snapshots', () => {
+    const runtimeBaseline = {
+      agentKind: 'codex' as const,
+      model: 'gpt-baseline',
+      providerId: 'xd',
+      effort: 'high',
+      fastMode: false,
+    };
+    const runtimeEffective = {
+      agentKind: 'codex' as const,
+      model: 'gpt-runtime',
+      providerId: 'openai',
+      effort: 'xhigh',
+      fastMode: true,
+    };
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.applySessionPatch('dev-1', 's1', {
+      model: runtimeEffective.model,
+      providerId: runtimeEffective.providerId,
+      effort: runtimeEffective.effort,
+      fastMode: runtimeEffective.fastMode,
+      runtimeGeneration: 3,
+      runtimeBaseline,
+      runtimeEffective,
+      runtimePending: null,
+    });
+
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s1', { title: 'Legacy snapshot' }),
+    ]);
+    expect(remoteSessionStore.getSessions()[0]).toMatchObject({
+      title: 'Legacy snapshot',
+      runtimeGeneration: 3,
+      runtimeBaseline,
+      runtimeEffective,
+      runtimePending: null,
+    });
+
+    const settledBaseline = { ...runtimeBaseline, model: 'gpt-user-selected' };
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s1', {
+        model: settledBaseline.model,
+        runtimeGeneration: 0,
+        runtimeBaseline: settledBaseline,
+        runtimeEffective: settledBaseline,
+        runtimePending: null,
+      }),
+    ]);
+    expect(remoteSessionStore.getSessions()[0]).toMatchObject({
+      model: 'gpt-user-selected',
+      runtimeGeneration: 0,
+      runtimeBaseline: settledBaseline,
+      runtimeEffective: settledBaseline,
+      runtimePending: null,
+    });
+  });
+
+  it('clears stale effort for a fixed-strength runtime model', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { effort: 'high' })]);
+    remoteSessionStore.applySessionPatch('dev-1', 's1', {
+      model: 'fixed-strength-model',
+      providerId: 'openai',
+      effort: '',
+      runtimeEffective: {
+        agentKind: 'codex',
+        model: 'fixed-strength-model',
+        providerId: 'openai',
+        effort: null,
+        fastMode: false,
+      },
+    });
+
+    expect(remoteSessionStore.getSessions()[0]).toMatchObject({
+      model: 'fixed-strength-model',
+      effort: '',
+      runtimeEffective: { effort: null },
+    });
+  });
+
+  it('does not let a draft sentinel snapshot replace an optimistic first-message title', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s1', { title: '帮我排查登录失败' }),
+    ]);
+    remoteSessionStore.setPendingTitlePreview('s1', '帮我排查登录失败');
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s1', { title: 'New Maker' }),
+    ]);
+    expect(remoteSessionStore.getSessions()[0]?.title).toBe('帮我排查登录失败');
+
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { title: 'New Maker' });
+    expect(remoteSessionStore.getSessions()[0]?.title).toBe('帮我排查登录失败');
+
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s1', { title: '登录失败排查' }),
+    ]);
+    expect(remoteSessionStore.getSessions()[0]?.title).toBe('登录失败排查');
+  });
+
+  it('keeps the first-message preview after pendingLocalCreation settles', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s1', { title: '帮我排查登录失败', pendingLocalCreation: true }),
+    ]);
+    remoteSessionStore.setPendingTitlePreview('s1', '帮我排查登录失败');
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { pendingLocalCreation: false });
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s1', { title: 'New Maker' }),
+    ]);
+    expect(remoteSessionStore.getSessions()[0]?.title).toBe('帮我排查登录失败');
+    expect(remoteSessionStore.getSessions()[0]?.pendingLocalCreation).toBeFalsy();
+  });
+
+  it('lets an authoritative New Maker rename through after the preview is cleared', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s1', { title: '帮我排查登录失败' }),
+    ]);
+    remoteSessionStore.setPendingTitlePreview('s1', '帮我排查登录失败');
+    remoteSessionStore.clearPendingTitlePreview('s1');
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { title: 'New Maker' });
+    expect(remoteSessionStore.getSessions()[0]?.title).toBe('New Maker');
+  });
+
+  it('keeps a title preview across a stale list that temporarily omits the new session', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s-old'),
+    ]);
+    remoteSessionStore.upsertDeviceSession(
+      'dev-1',
+      'Mac',
+      session('s-new', { title: '帮我排查登录失败', pendingLocalCreation: true }),
+    );
+    remoteSessionStore.setPendingTitlePreview('s-new', '帮我排查登录失败');
+    remoteSessionStore.applySessionPatch('dev-1', 's-new', { pendingLocalCreation: false });
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s-old'),
+    ]);
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s-old'),
+      session('s-new', { title: 'New Maker' }),
+    ]);
+    expect(remoteSessionStore.getSessions().find((row) => row.id === 's-new')?.title).toBe('帮我排查登录失败');
+  });
+
   it('dedupes an unchanged message push by id or client id', () => {
     remoteSessionStore.setMessages('s1', [message('m1', 's1')]);
     const versionAfterSet = remoteSessionStore.getMessageVersion();
@@ -461,6 +991,34 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getMessages('s1')).toHaveLength(1);
     expect(remoteSessionStore.getMessages('s1')[0].content).toBe('updated');
     expect(remoteSessionStore.getMessageVersion()).toBeGreaterThan(versionAfterCreate);
+  });
+
+  // #8005, unit: import timestamps can be later than the live copy. The
+  // deletion push must remove that displayed copy without removing live text.
+  // Existing draft/round deletion cases did not cover this import ordering.
+  it('removes a reconciled Codex import copy from the displayed remote history', () => {
+    const importedId = 'codex-import:thread:1';
+    remoteSessionStore.setMessages('s1', [{
+      ...message(importedId, 's1'), content: 'Same answer', createdAt: '2026-06-15T00:00:06.000Z',
+    }]);
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+      sessionId: 's1', message: {
+        ...message('live-answer', 's1'), content: 'Same answer', createdAt: '2026-06-15T00:00:05.000Z',
+      },
+    });
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(2);
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:deleted', {
+      sessionId: 's1', clientId: importedId, clientIds: [importedId],
+    });
+    const enriched = 'Same answer\n<oai-mem-citation><citation_entries>MEMORY.md:1[note]</citation_entries></oai-mem-citation>';
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+      sessionId: 's1', message: { ...message('live-answer', 's1'), content: enriched,
+        createdAt: '2026-06-15T00:00:05.000Z', agentMeta: { assistantPhase: 'final_answer', totalCostUsd: 1 } },
+    });
+    expect(remoteSessionStore.getMessages('s1')).toEqual([
+      expect.objectContaining({ clientId: 'live-answer', content: enriched,
+        agentMeta: expect.objectContaining({ assistantPhase: 'final_answer', totalCostUsd: 1 }) }),
+    ]);
   });
 
   it('removes a deleted AI round from the device-link transcript mirror', () => {
@@ -490,6 +1048,23 @@ describe('remoteSessionStore', () => {
     })).toBe(false);
   });
 
+  it('removes a rejected persisted draft while a newer assistant keeps streaming', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setMessages('s1', [{ ...message('host-a', 's1'), clientId: 'item-a', content: 'Withdrawn' }]);
+      pushMakerText('s1', 'item-b', 'Next', false);
+      vi.runOnlyPendingTimers();
+      remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:deleted', {
+        sessionId: 's1', clientId: 'item-a', clientIds: ['item-a'],
+      });
+      pushMakerText('s1', undefined, ' tail', false);
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getMessages('s1')).toEqual([expect.objectContaining({
+        clientId: 'item-b', content: 'Next tail', agentMeta: expect.objectContaining({ isStreaming: true }),
+      })]);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('removes an orphan task update even when its deleted message is not cached', () => {
     remoteSessionStore.setMessages('s1', [message('m1', 's1')]);
     pushMakerTaskUpdate('s1', 'orphan-task');
@@ -503,6 +1078,338 @@ describe('remoteSessionStore', () => {
 
     expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual(['m1']);
     expect(remoteSessionStore.getSessionTaskUpdates('s1').size).toBe(0);
+  });
+
+  it('repairs a missing streaming prefix on reopen and keeps subsequent deltas exactly once', () => {
+    vi.useFakeTimers();
+    try {
+      pushMakerText('s1', 'live-id', ' suffix', false);
+      const snapshot = {
+        sessionId: 's1', persistId: 'live-id',
+        event: { type: 'text', data: { text: 'prefix suffix', isFinal: false, isFullText: true } },
+      };
+      remoteSessionStore.applyRemotePush('dev-1', SESSION_SYNC_CHANNEL, snapshot);
+      remoteSessionStore.applyRemotePush('dev-1', SESSION_SYNC_CHANNEL, snapshot);
+      pushMakerText('s1', 'live-id', ' tail', false);
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getMessages('s1')).toHaveLength(1);
+      expect(remoteSessionStore.getMessages('s1')[0]).toMatchObject({
+        content: 'prefix suffix tail', agentMeta: { isStreaming: true },
+      });
+      remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+        sessionId: 's1', message: { ...message('host-id', 's1'), clientId: 'live-id', content: 'prefix suffix tail final' },
+      });
+      remoteSessionStore.applyRemotePush('dev-1', SESSION_SYNC_CHANNEL, snapshot);
+      expect(remoteSessionStore.getMessages('s1')).toHaveLength(1);
+      expect(remoteSessionStore.getMessages('s1')[0].content).toBe('prefix suffix tail final');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each([['db-row', 'item-a'], ['db-row', 'host-a'], ['history', 'item-a'], ['history', 'host-a']] as const)('keeps anonymous B when initially unseen old A arrives before its final (%s, %s)', (arrival, finalId) => {
+    vi.useFakeTimers();
+    try {
+      pushMakerText('s1', undefined, 'Sure', false);
+      vi.runOnlyPendingTimers();
+      const newer = remoteSessionStore.getMessages('s1').find((row) => row.clientId?.startsWith('mobile-stream-'))!;
+      const older = { ...message('host-a', 's1'), clientId: 'item-a', content: 'Sure, that was the previous reply' };
+      if (arrival === 'db-row') {
+        remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+          sessionId: 's1', message: older,
+        });
+      } else {
+        remoteSessionStore.setLatestMessageWindow('s1', [older]);
+      }
+      // An equal DB replay must not retire B before the full correction either.
+      remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+        sessionId: 's1', message: older,
+      });
+      remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+        sessionId: 's1', persistId: finalId, event: {
+          type: 'text', data: { text: 'Corrected older reply', isFinal: true, isFullText: true },
+        },
+      });
+      const corrected = { ...older, content: 'Corrected older reply' };
+      remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+        sessionId: 's1', message: corrected,
+      });
+      remoteSessionStore.setLatestMessageWindow('s1', [corrected]);
+      pushMakerText('s1', undefined, ' tail', false);
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getMessages('s1')).toHaveLength(2);
+      expect(remoteSessionStore.getMessages('s1').find((row) => row.clientId === newer.clientId))
+        .toMatchObject({ content: 'Sure tail', agentMeta: { isStreaming: true } });
+      expect(remoteSessionStore.getMessages('s1').find((row) => row.clientId === 'item-a')?.content).toBe('Corrected older reply');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each([false, true, 'anonymous', 'anonymous-same-prefix'] as const)('calibrates a late final by identity without taking over a newer stream (newer=%s)', (newer) => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setMessages('s1', [{
+        ...message('host-a', 's1'), clientId: 'item-a', content: 'Incorrect long draft',
+      }]);
+      const anonymous = typeof newer === 'string';
+      const nextText = newer === 'anonymous-same-prefix' ? 'Correct' : 'Next';
+      if (newer) {
+        pushMakerText('s1', anonymous ? undefined : 'item-b', nextText, false);
+        vi.runOnlyPendingTimers();
+      }
+      remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+        sessionId: 's1', persistId: 'item-a', event: {
+          type: 'text', data: { text: 'Corrected', isFinal: true, isFullText: true },
+        },
+      });
+      expect(remoteSessionStore.getMessages('s1').find((row) => row.clientId === 'item-a')?.content).toBe('Corrected');
+      if (newer) {
+        remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+          sessionId: 's1', message: { ...message('host-a', 's1'), clientId: 'item-a', content: 'Corrected' },
+        });
+        pushMakerText('s1', undefined, ' tail', false);
+        vi.runOnlyPendingTimers();
+        expect(remoteSessionStore.getMessages('s1').find((row) => anonymous ? row.clientId?.startsWith('mobile-stream-') : row.clientId === 'item-b'))
+          .toMatchObject({ content: `${nextText} tail`, agentMeta: { isStreaming: true } });
+      }
+      expect(remoteSessionStore.getMessages('s1')).toHaveLength(newer ? 2 : 1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['db-row', 'full-final'] as const)('keeps an anonymous stream when an older row reappears outside the current window (%s)', (arrival) => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setMessages('s1', [{ ...message('host-a', 's1'), clientId: 'item-a', content: 'Old draft' }]);
+      const prefix = 'A shared introductory sentence';
+      pushMakerText('s1', undefined, prefix, false);
+      vi.runOnlyPendingTimers();
+      const newer = remoteSessionStore.getMessages('s1').find((row) => row.clientId?.startsWith('mobile-stream-'))!;
+      remoteSessionStore.setMessages('s1', [newer]);
+      if (arrival === 'full-final') {
+        remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+          sessionId: 's1', persistId: 'item-a', event: {
+            type: 'text', data: { text: `${prefix} from the older reply`, isFinal: true, isFullText: true },
+          },
+        });
+      }
+      remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+        sessionId: 's1', message: { ...message('host-a', 's1'), clientId: 'item-a', content: `${prefix} from the older reply` },
+      });
+      pushMakerText('s1', undefined, ' tail', false);
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getMessages('s1')).toHaveLength(2);
+      expect(remoteSessionStore.getMessages('s1').find((row) => row.clientId === newer.clientId)?.content).toBe(`${prefix} tail`);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each([false, true, 'db-first'] as const)('keeps a known older row from claiming a matching anonymous stream through history (cropped=%s)', (cropped) => {
+    vi.useFakeTimers();
+    try {
+      const older = { ...message('host-a', 's1'), clientId: 'item-a', content: 'partial answer from earlier' };
+      if (cropped !== 'db-first') remoteSessionStore.setMessages('s1', [older]);
+      pushMakerText('s1', undefined, cropped === 'db-first' ? 'partial' : 'partial answer', false);
+      vi.runOnlyPendingTimers();
+      const newer = remoteSessionStore.getMessages('s1').find((row) => row.clientId?.startsWith('mobile-stream-'))!;
+      if (cropped === 'db-first') {
+        remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', { sessionId: 's1', message: older });
+        pushMakerText('s1', undefined, ' answer', false);
+        vi.runOnlyPendingTimers();
+      }
+      if (cropped) remoteSessionStore.setMessages('s1', [remoteSessionStore.getMessages('s1').find((row) => row.clientId === newer.clientId)!]);
+      remoteSessionStore.setLatestMessageWindow('s1', [older]);
+      remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+        sessionId: 's1', persistId: 'item-a', event: {
+          type: 'text', data: { text: 'Corrected older reply', isFinal: true, isFullText: true },
+        },
+      });
+      pushMakerText('s1', undefined, ' tail', false);
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getMessages('s1')).toHaveLength(2);
+      expect(remoteSessionStore.getMessages('s1').find((row) => row.clientId === newer.clientId))
+        .toMatchObject({ content: 'partial answer tail', agentMeta: { isStreaming: true } });
+      expect(remoteSessionStore.getMessages('s1').find((row) => row.clientId === 'item-a')?.content).toBe('Corrected older reply');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['Sure, checked', 'Corrected'])('migrates a short anonymous stream when an identified delta follows its DB row (%s)', (finalText) => {
+    vi.useFakeTimers();
+    try {
+      pushMakerText('s1', undefined, 'Sure', false);
+      vi.runOnlyPendingTimers();
+      remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+        sessionId: 's1', message: { ...message('host-a', 's1'), clientId: 'item-a', content: 'Sure, checking' },
+      });
+      expect(remoteSessionStore.getMessages('s1')).toHaveLength(2);
+      const anonymousId = remoteSessionStore.getMessages('s1').find((row) => row.clientId?.startsWith('mobile-stream-'))!.clientId;
+      remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+        sessionId: 's1', persistId: 'item-a', event: {
+          type: 'text', data: { text: finalText, isFinal: true, isFullText: true },
+        },
+      });
+      expect(remoteSessionStore.getMessages('s1')).toHaveLength(2);
+      expect(remoteSessionStore.getMessages('s1').find((row) => row.clientId === anonymousId)?.content).toBe('Sure');
+      pushMakerText('s1', 'item-a', ', checking', false);
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getMessages('s1')).toHaveLength(1);
+      remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+        sessionId: 's1', persistId: 'item-a', event: {
+          type: 'text', data: { text: finalText, isFinal: true, isFullText: true },
+        },
+      });
+      expect(remoteSessionStore.getMessages('s1')).toHaveLength(1);
+      pushMakerText('s1', undefined, ' tail', false);
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getMessages('s1')).toEqual([expect.objectContaining({
+        id: 'host-a', clientId: 'item-a', content: `${finalText} tail`,
+      })]);
+    } finally { vi.useRealTimers(); }
+  });
+
+  // PR #6532: a legacy delta may omit persistId while still carrying the Codex
+  // item identity. Its final must merge the temporary bubble without another delta.
+  // Unit: applyRemotePush -> observable row count, authoritative content and tail.
+  it.each(['Sure, checked', 'Corrected'])('migrates a short unpersisted stream on its own identified final (%s)', (finalText) => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+        sessionId: 's1', event: {
+          type: 'text', source: 'codex',
+          data: { text: 'Sure', isFinal: false, agentMessageId: 'provider-item-a' },
+        },
+      });
+      vi.runOnlyPendingTimers();
+      remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+        sessionId: 's1', message: { ...message('host-a', 's1'), clientId: 'item-a', content: 'Sure, checking' },
+      });
+      expect(remoteSessionStore.getMessages('s1')).toHaveLength(2);
+      remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+        sessionId: 's1', persistId: 'item-a', event: {
+          type: 'text', source: 'codex',
+          data: { text: finalText, isFinal: true, isFullText: true, agentMessageId: 'provider-item-a' },
+        },
+      });
+      expect(remoteSessionStore.getMessages('s1')).toHaveLength(1);
+      pushMakerText('s1', undefined, ' tail', false);
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getMessages('s1')).toEqual([expect.objectContaining({
+        id: 'host-a', clientId: 'item-a', content: `${finalText} tail`,
+      })]);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['other-item', 'other-source', 'other-device', 'missing-item', 'mixed-batch', 'later-mixed-batch'] as const)(
+    'does not let a final with unproven provider identity claim a short new stream (%s)', (mismatch) => {
+      vi.useFakeTimers();
+      try {
+        remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+          sessionId: 's1', event: { type: 'text', source: 'codex',
+            data: { text: 'Sure', isFinal: false, agentMessageId: 'provider-item-b' } },
+        });
+        if (mismatch === 'later-mixed-batch') vi.runOnlyPendingTimers();
+        if (mismatch === 'mixed-batch' || mismatch === 'later-mixed-batch') {
+          remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+            sessionId: 's1', event: { type: 'text', source: 'codex',
+              data: { text: ' extra', isFinal: false, agentMessageId: 'provider-item-c' } },
+          });
+        }
+        vi.runOnlyPendingTimers();
+        const generatedId = remoteSessionStore.getMessages('s1')[0].clientId;
+        remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+          sessionId: 's1', message: { ...message('host-a', 's1'), clientId: 'item-a', content: 'Sure, old reply' },
+        });
+        remoteSessionStore.applyRemotePush(mismatch === 'other-device' ? 'dev-2' : 'dev-1', 'maker:event', {
+          sessionId: 's1', persistId: 'item-a', event: {
+            type: 'text', source: mismatch === 'other-source' ? 'pi' : 'codex',
+            data: { text: 'Corrected old reply', isFinal: true, isFullText: true,
+              agentMessageId: mismatch === 'other-item' ? 'provider-item-a'
+                : mismatch === 'missing-item' ? undefined : 'provider-item-b' },
+          },
+        });
+        pushMakerText('s1', undefined, ' tail', false);
+        vi.runOnlyPendingTimers();
+        expect(remoteSessionStore.getMessages('s1')).toHaveLength(2);
+        expect(remoteSessionStore.getMessages('s1').find((row) => row.clientId === generatedId))
+          .toMatchObject({ content: mismatch.endsWith('mixed-batch') ? 'Sure extra tail' : 'Sure tail',
+            agentMeta: { isStreaming: true } });
+        expect(remoteSessionStore.getMessages('s1').find((row) => row.clientId === 'item-a')?.content)
+          .toBe('Corrected old reply');
+      } finally { vi.useRealTimers(); }
+    },
+  );
+
+  it('still accepts a legacy final full-text event after its partial row was persisted', () => {
+    remoteSessionStore.setMessages('s1', [{
+      ...message('host-id', 's1'), clientId: 'legacy-id', content: 'partial',
+    }]);
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1', persistId: 'legacy-id', event: {
+        type: 'text', data: { text: 'partial completed', isFinal: true, isFullText: true },
+      },
+    });
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(1);
+    expect(remoteSessionStore.getMessages('s1')[0]).toMatchObject({
+      id: 'host-id', content: 'partial completed',
+    });
+  });
+
+  it.each([false, true])('orders the live snapshot by host time when history arrives later (existing=%s)', (existing) => {
+    vi.useFakeTimers();
+    try {
+      const oldTime = '2026-09-05T10:00:00.000Z';
+      const userTime = '2026-09-05T11:00:00.000Z';
+      const blockTime = '2026-09-05T11:00:01.000Z';
+      remoteSessionStore.setMessages('s1', [{ ...message('old', 's1'), createdAt: oldTime }]);
+      if (existing) {
+        pushMakerText('s1', 'live-id', 'suffix', false);
+        vi.runOnlyPendingTimers();
+        remoteSessionStore.mergeMessages('s1', [{ ...message('user', 's1'), role: 'user', createdAt: userTime }]);
+      }
+      remoteSessionStore.applyRemotePush('dev-1', SESSION_SYNC_CHANNEL, {
+        sessionId: 's1', persistId: 'live-id', event: {
+          type: 'text', data: { text: 'whole suffix', isFinal: false, isFullText: true, createdAt: blockTime },
+        },
+      });
+      remoteSessionStore.mergeMessages('s1', [{ ...message('user', 's1'), role: 'user', createdAt: userTime }]);
+      pushMakerText('s1', 'live-id', ' tail', false);
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getMessages('s1').map(m => m.id)).toEqual(['old', 'user', 'live-id']);
+      expect(remoteSessionStore.getMessages('s1').at(-1)).toMatchObject({
+        content: 'whole suffix tail', createdAt: blockTime, agentMeta: { isStreaming: true },
+      });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('requests history reconciliation after a dropped push without clearing cached messages', () => {
+    const meta = session('s1', { _count: { messages: 1 } });
+    remoteSessionStore.setMessages('s1', [message('m1', 's1')]);
+    remoteSessionStore.markSessionMessagesSynced('s1', meta);
+    remoteSessionStore.applyRemotePush('dev-1', SESSION_SYNC_CHANNEL, { sessionId: 's1', resyncRequired: true });
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(1);
+    expect(remoteSessionStore.isSessionMessageWindowSynced('s1', meta)).toBe(false);
+    expect(remoteSessionStore.hasPendingRefresh('s1')).toBe(true);
+    // An older in-flight history response commits after the dirty notification.
+    remoteSessionStore.markSessionMessagesSynced('s1', meta);
+    expect(remoteSessionStore.consumePendingRefresh('s1')).toBe(true);
+    expect(remoteSessionStore.isSessionMessageWindowSynced('s1', meta)).toBe(false);
+  });
+
+  it('retires a provisional time anchor even when the authoritative snapshot is identical', () => {
+    vi.useFakeTimers();
+    try {
+      const blockTime = '2026-09-05T11:00:01.000Z';
+      vi.setSystemTime(new Date(blockTime));
+      pushMakerText('s1', 'live-id', 'whole text', false);
+      vi.runOnlyPendingTimers();
+      const createdAt = remoteSessionStore.getMessages('s1')[0].createdAt;
+      remoteSessionStore.applyRemotePush('dev-1', SESSION_SYNC_CHANNEL, {
+        sessionId: 's1', persistId: 'live-id', event: {
+          type: 'text', data: { text: 'whole text', isFinal: false, isFullText: true, createdAt },
+        },
+      });
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', {
+        updatedAt: '2026-09-05T10:00:00.000Z', userSendAt: '2026-09-05T10:00:00.000Z',
+      })]);
+      expect(remoteSessionStore.getMessages('s1')[0]).toMatchObject({
+        createdAt, content: 'whole text', agentMeta: { isStreaming: true },
+      });
+    } finally { vi.useRealTimers(); }
   });
 
   it('batches maker text deltas into one streaming assistant row', () => {
@@ -529,6 +1436,393 @@ describe('remoteSessionStore', () => {
       expect(notify).toHaveBeenCalledTimes(1);
     } finally {
       unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps message structure and home status stable across ordinary text deltas', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.enterSessionMessageDetail('s1');
+      remoteSessionStore.setMessages('s1', Array.from({ length: 2_000 }, (_, index) => ({
+        ...message(`history-${index}`, 's1'),
+        createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+      })));
+      pushMakerText('s1', 'live-tail', 'first', false);
+      vi.runOnlyPendingTimers();
+
+      const firstStructure = remoteSessionStore.getSessionMessageStructureToken('s1');
+      const homeStatusBeforeDelta = remoteSessionStore.getHomeStatusVersion();
+      const reduceSpy = vi.spyOn(Array.prototype, 'reduce');
+      const filterSpy = vi.spyOn(Array.prototype, 'filter');
+      try {
+        pushMakerText('s1', 'live-tail', ' second', false);
+        vi.runOnlyPendingTimers();
+
+        expect(reduceSpy).not.toHaveBeenCalled();
+        expect(filterSpy).not.toHaveBeenCalled();
+      } finally {
+        reduceSpy.mockRestore();
+        filterSpy.mockRestore();
+      }
+
+      expect(remoteSessionStore.getMessages('s1').at(-1)?.content).toBe('first second');
+      expect(remoteSessionStore.getSessionMessageStructureToken('s1')).toBe(firstStructure);
+      expect(remoteSessionStore.getSessionMessageStructureChangedIndexes('s1')).toEqual(
+        new Set([2_000]),
+      );
+      expect(remoteSessionStore.getHomeStatusVersion()).toBe(homeStatusBeforeDelta);
+      expect(remoteSessionStore.getSessionMessagePreview('s1')).toBe('first second');
+
+      pushMakerText(
+        's1',
+        'live-tail',
+        'first second',
+        true,
+        { isStreaming: false, streaming: false },
+      );
+      expect(remoteSessionStore.getSessionMessageStructureToken('s1')).not.toBe(firstStructure);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('isolates empty message structure tokens by session', () => {
+    const first = remoteSessionStore.getSessionMessageStructureToken('s1');
+    expect(remoteSessionStore.getSessionMessageStructureToken('s1')).toBe(first);
+    expect(remoteSessionStore.getSessionMessageStructureToken('s2')).not.toBe(first);
+
+    remoteSessionStore.setMessages('s1', [message('m1', 's1')]);
+    expect(remoteSessionStore.getSessionMessageStructureToken('s1')).not.toBe(first);
+  });
+
+  it('notifies only the changed session preview subscription for text deltas', () => {
+    vi.useFakeTimers();
+    const firstPreview = vi.fn();
+    const secondPreview = vi.fn();
+    const homeStatus = vi.fn();
+    const unsubscribeFirst = remoteSessionStore.subscribeSessionMessagePreview('s1', firstPreview);
+    const unsubscribeSecond = remoteSessionStore.subscribeSessionMessagePreview('s2', secondPreview);
+    const unsubscribeHomeStatus = remoteSessionStore.subscribeHomeStatus(homeStatus);
+    try {
+      pushMakerText('s1', 'persist-1', 'first', false);
+      vi.advanceTimersByTime(32);
+
+      expect(firstPreview).toHaveBeenCalledTimes(1);
+      expect(secondPreview).not.toHaveBeenCalled();
+      expect(homeStatus).not.toHaveBeenCalled();
+    } finally {
+      unsubscribeFirst();
+      unsubscribeSecond();
+      unsubscribeHomeStatus();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the first text flush responsive and batches continuation deltas', () => {
+    vi.useFakeTimers();
+    const notify = vi.fn();
+    const unsubscribe = remoteSessionStore.subscribe(notify);
+    try {
+      remoteSessionStore.enterSessionMessageDetail('s1');
+      pushMakerText('s1', 'persist-1', 'first', false);
+      vi.advanceTimersByTime(31);
+      expect(remoteSessionStore.getMessages('s1')).toHaveLength(0);
+      expect(notify).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      expect(remoteSessionStore.getMessages('s1')[0]?.content).toBe('first');
+      expect(notify).toHaveBeenCalledTimes(1);
+      notify.mockClear();
+
+      pushMakerText('s1', 'persist-1', ' second', false);
+      vi.advanceTimersByTime(40);
+      pushMakerText('s1', 'persist-1', ' third', false);
+      expect(remoteSessionStore.getMessages('s1')[0]?.content).toBe('first');
+      expect(notify).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(24);
+      expect(remoteSessionStore.getMessages('s1')[0]?.content).toBe('first second third');
+      expect(notify).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+
+  it('batches background continuation deltas more aggressively than visible detail', () => {
+    vi.useFakeTimers();
+    const notify = vi.fn();
+    const unsubscribe = remoteSessionStore.subscribe(notify);
+    try {
+      pushMakerText('s1', 'persist-1', 'first', false);
+      vi.advanceTimersByTime(32);
+      notify.mockClear();
+
+      pushMakerText('s1', 'persist-1', ' second', false);
+      vi.advanceTimersByTime(64);
+      expect(remoteSessionStore.getMessages('s1')[0]?.content).toBe('first');
+      expect(notify).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(32);
+      expect(remoteSessionStore.getMessages('s1')[0]?.content).toBe('first second');
+      expect(notify).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets a new session first delta accelerate an existing continuation timer', () => {
+    vi.useFakeTimers();
+    try {
+      pushMakerText('s1', 'persist-1', 'first', false);
+      vi.advanceTimersByTime(32);
+      pushMakerText('s1', 'persist-1', ' continuation', false);
+
+      vi.advanceTimersByTime(20);
+      pushMakerText('s2', 'persist-2', 'new session', false);
+      vi.advanceTimersByTime(31);
+      expect(remoteSessionStore.getMessages('s1')[0]?.content).toBe('first');
+      expect(remoteSessionStore.getMessages('s2')).toHaveLength(0);
+
+      vi.advanceTimersByTime(1);
+      expect(remoteSessionStore.getMessages('s1')[0]?.content).toBe('first continuation');
+      expect(remoteSessionStore.getMessages('s2')[0]?.content).toBe('new session');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reuses the identity index when a streaming assistant is not the tail row', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.enterSessionMessageDetail('s1');
+      remoteSessionStore.setMessages('s1', Array.from({ length: 2_000 }, (_, index) => ({
+        ...message(`history-${index}`, 's1'),
+        createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+      })));
+      pushMakerText('s1', 'live-before-system-card', 'first', false);
+      vi.runOnlyPendingTimers();
+      remoteSessionStore.appendLocalSystemCard(
+        's1',
+        'context',
+        { context: 'tail card' },
+        new Date('2026-01-02T00:00:00.000Z'),
+      );
+
+      // The first non-tail delta builds the identity index. Its replacement inherits that index.
+      pushMakerText('s1', 'live-before-system-card', ' second', false);
+      vi.runOnlyPendingTimers();
+      const findIndexSpy = vi.spyOn(Array.prototype, 'findIndex');
+      try {
+        pushMakerText('s1', 'live-before-system-card', ' third', false);
+        vi.runOnlyPendingTimers();
+
+        expect(findIndexSpy).not.toHaveBeenCalled();
+        expect(remoteSessionStore.getMessages('s1').find(
+          (item) => item.clientId === 'live-before-system-card',
+        )?.content).toBe('first second third');
+      } finally {
+        findIndexSpy.mockRestore();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears content-only indexes after append, prepend, final, and reset writes', () => {
+    vi.useFakeTimers();
+    let sequence = 0;
+    const establishContentOnlyDelta = (persistId: string): object => {
+      pushMakerText('s1', persistId, 'first', false);
+      vi.runOnlyPendingTimers();
+      const structureToken = remoteSessionStore.getSessionMessageStructureToken('s1');
+      pushMakerText('s1', persistId, ' second', false);
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getSessionMessageStructureToken('s1')).toBe(structureToken);
+      expect(remoteSessionStore.getSessionMessageStructureChangedIndexes('s1').size).toBe(1);
+      return structureToken;
+    };
+    const expectStructuralReset = (previousToken: object): void => {
+      expect(remoteSessionStore.getSessionMessageStructureToken('s1')).not.toBe(previousToken);
+      expect(remoteSessionStore.getSessionMessageStructureChangedIndexes('s1').size).toBe(0);
+    };
+    const nextMessage = (prefix: string, createdAt: string): RemoteMessage => {
+      sequence += 1;
+      return messageAt(`${prefix}-${sequence}`, 's1', createdAt);
+    };
+    try {
+      let previousToken = establishContentOnlyDelta('live-before-append');
+      remoteSessionStore.appendMessage(
+        's1',
+        nextMessage('append', '2026-01-02T00:00:00.000Z'),
+      );
+      expectStructuralReset(previousToken);
+
+      previousToken = establishContentOnlyDelta('live-before-prepend');
+      remoteSessionStore.mergeEarlierMessages(
+        's1',
+        [nextMessage('prepend', '2025-12-31T00:00:00.000Z')],
+      );
+      expectStructuralReset(previousToken);
+
+      previousToken = establishContentOnlyDelta('live-before-final');
+      pushMakerText('s1', 'live-before-final', 'first second', true, {
+        isStreaming: false,
+        streaming: false,
+      });
+      expectStructuralReset(previousToken);
+
+      previousToken = establishContentOnlyDelta('live-before-reset');
+      remoteSessionStore.setMessages(
+        's1',
+        [nextMessage('reset', '2026-01-03T00:00:00.000Z')],
+      );
+      expectStructuralReset(previousToken);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('finalizes the previous streaming assistant when the persist id changes', () => {
+    vi.useFakeTimers();
+    try {
+      pushMakerText('s1', 'commentary-row', 'Inspecting the workspace', false);
+      vi.runOnlyPendingTimers();
+
+      pushMakerText('s1', 'final-answer-row', 'The fix is ready', false);
+      vi.runOnlyPendingTimers();
+
+      expect(remoteSessionStore.getMessages('s1')).toMatchObject([
+        {
+          clientId: 'commentary-row',
+          content: 'Inspecting the workspace',
+          agentMeta: null,
+        },
+        {
+          clientId: 'final-answer-row',
+          content: 'The fix is ready',
+          agentMeta: { isStreaming: true },
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['without persistId', undefined],
+    ['with the same persistId', 'shared-live-assistant'],
+  ] as const)('flushes a text delta batch when the transport changes %s', (_label, persistId) => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.applyRemotePush('stale-mac', 'maker:event', {
+        sessionId: 's1',
+        ...(persistId ? { persistId } : {}),
+        event: {
+          type: 'text',
+          data: { text: 'Stale reply', isFinal: false },
+        },
+      });
+      remoteSessionStore.applyRemotePush('current-mac', 'maker:event', {
+        sessionId: 's1',
+        ...(persistId ? { persistId } : {}),
+        event: {
+          type: 'text',
+          data: { text: 'Current reply', isFinal: false },
+        },
+      });
+
+      remoteSessionStore.removeDevice('stale-mac');
+      vi.runOnlyPendingTimers();
+
+      expect(remoteSessionStore.getMessages('s1')).toMatchObject([{
+        content: 'Current reply',
+        role: 'assistant',
+      }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('resets a shared-persist streaming row after both transport batches flush', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.applyRemotePush('stale-mac', 'maker:event', {
+        sessionId: 's1',
+        persistId: 'shared-live-assistant',
+        event: {
+          type: 'text',
+          data: { text: 'Stale reply', isFinal: false },
+        },
+      });
+      vi.runOnlyPendingTimers();
+
+      remoteSessionStore.applyRemotePush('current-mac', 'maker:event', {
+        sessionId: 's1',
+        persistId: 'shared-live-assistant',
+        event: {
+          type: 'text',
+          data: { text: 'Current reply', isFinal: false },
+        },
+      });
+      vi.runOnlyPendingTimers();
+
+      expect(remoteSessionStore.getMessages('s1')).toMatchObject([{
+        clientId: 'shared-live-assistant',
+        content: 'Current reply',
+        role: 'assistant',
+      }]);
+
+      remoteSessionStore.removeDevice('stale-mac');
+
+      expect(remoteSessionStore.getMessages('s1')).toMatchObject([{
+        clientId: 'shared-live-assistant',
+        content: 'Current reply',
+        role: 'assistant',
+      }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('tracks transport stream assembly independently for interleaved persist ids', () => {
+    vi.useFakeTimers();
+    try {
+      for (const [deviceId, persistId, text] of [
+        ['stale-mac', 'assistant-a', 'Stale A'],
+        ['stale-mac', 'assistant-b', 'Stale B'],
+        ['current-mac', 'assistant-a', 'Current A'],
+      ] as const) {
+        remoteSessionStore.applyRemotePush(deviceId, 'maker:event', {
+          sessionId: 's1',
+          persistId,
+          event: {
+            type: 'text',
+            data: { text, isFinal: false },
+          },
+        });
+        vi.runOnlyPendingTimers();
+      }
+
+      expect(remoteSessionStore.getMessages('s1').map((item) => ({
+        clientId: item.clientId,
+        content: item.content,
+      })).sort((left, right) => left.clientId.localeCompare(right.clientId))).toEqual([
+        { clientId: 'assistant-a', content: 'Current A' },
+        { clientId: 'assistant-b', content: 'Stale B' },
+      ]);
+
+      remoteSessionStore.removeDevice('stale-mac');
+
+      expect(remoteSessionStore.getMessages('s1').map((item) => ({
+        clientId: item.clientId,
+        content: item.content,
+      }))).toEqual([
+        { clientId: 'assistant-a', content: 'Current A' },
+      ]);
+    } finally {
       vi.useRealTimers();
     }
   });
@@ -1321,6 +2615,61 @@ describe('remoteSessionStore', () => {
     }
   });
 
+  it('does not finish a live turn when a background compact_boundary arrives', () => {
+    remoteSessionStore.setMessages('s1', [{
+      ...messageAt('live-after-idle-compact', 's1', '2026-01-01T00:00:01.000Z'),
+      content: { text: '正在回答', isStreaming: true, streaming: true },
+      agentMeta: { isStreaming: true, streaming: true },
+    }]);
+    remoteSessionStore.applyMakerEvent('s1', {
+      type: 'compact_boundary',
+      turnScope: 'background',
+      data: { boundaryId: 'idle-compact', trigger: 'auto' },
+    });
+
+    const stored = remoteSessionStore.getMessages('s1');
+    expect(stored.find((item) => item.id === 'live-after-idle-compact')).toMatchObject({
+      agentMeta: { isStreaming: true, streaming: true },
+      content: { text: '正在回答', isStreaming: true, streaming: true },
+    });
+    expect(stored.at(-1)).toMatchObject({
+      id: 'mobile-system-compact:idle-compact',
+      systemCardType: 'compact',
+    });
+  });
+
+  it('does not flip product isRunning for background compact status', () => {
+    remoteSessionStore.applyMakerEvent('s1', {
+      type: 'status',
+      data: { isRunning: true, status: 'Thinking…', tokenUsage: 80 },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1').isRunning).toBe(true);
+    expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(true);
+
+    remoteSessionStore.applyMakerEvent('s1', {
+      type: 'status',
+      turnScope: 'background',
+      data: { isRunning: true, status: 'Compacting context…' },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1')).toMatchObject({
+      isRunning: true,
+      status: 'Compacting context…',
+      tokenUsage: 80,
+    });
+    expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(true);
+
+    remoteSessionStore.applyMakerEvent('s1', {
+      type: 'status',
+      turnScope: 'background',
+      data: { isRunning: false, status: 'Done' },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1')).toMatchObject({
+      isRunning: true,
+      status: 'Compacting context…',
+    });
+    expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(true);
+  });
+
   it('increments message version when searchable message windows change', () => {
     const initialVersion = remoteSessionStore.getMessageVersion();
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
@@ -1334,6 +2683,144 @@ describe('remoteSessionStore', () => {
     const versionAfterAppend = remoteSessionStore.getMessageVersion();
     remoteSessionStore.removeDevice('dev-1');
     expect(remoteSessionStore.getMessageVersion()).toBeGreaterThan(versionAfterAppend);
+  });
+
+  it('uses fresh list metadata after opening history without rewriting the old message mirror', () => {
+    const meta = session('s1', { preview: 'old reply', _count: { messages: 1 } });
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [meta, session('s2')]);
+    remoteSessionStore.setMessages('s1', [{ ...message('m1', 's1'), content: 'old reply' }]);
+    remoteSessionStore.markSessionMessagesSynced('s1', meta);
+    const oldMirror = remoteSessionStore.getMessages('s1');
+    const first = vi.fn();
+    const second = vi.fn();
+    const offFirst = remoteSessionStore.subscribeSessionMessagePreview('s1', first);
+    const offSecond = remoteSessionStore.subscribeSessionMessagePreview('s2', second);
+    try {
+      // The history-view route commits fresh metadata but keeps persisted
+      // history outside this legacy mirror. Returning home must use that metadata.
+      remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', {
+        ...meta, preview: 'new reply', updatedAt: '2026-01-01T00:00:02.000Z', _count: { messages: 2 },
+      });
+      expect(remoteSessionStore.getMessages('s1')).toBe(oldMirror);
+      expect(remoteSessionStore.getSessionMessagePreview('s1')).toBe('old reply');
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('new reply');
+      expect(remoteSessionStore.getSessionListMessagePreviewIndex(remoteSessionStore.getSessions()).get('s1')).toBe('new reply');
+      expect(first).toHaveBeenCalled();
+      expect(second).not.toHaveBeenCalled();
+    } finally { offFirst(); offSecond(); }
+  });
+
+  it('notifies list previews when the same message array becomes synchronized', () => {
+    const meta = session('s1', { preview: 'host preview', _count: { messages: 1 } });
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [meta]);
+    remoteSessionStore.setMessages('s1', [{ ...message('m1', 's1'), content: 'loaded reply' }]);
+    expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('host preview');
+    const changed = vi.fn();
+    const off = remoteSessionStore.subscribeSessionMessagePreview('s1', changed);
+    const version = remoteSessionStore.getMessageVersion();
+    try {
+      remoteSessionStore.markSessionMessagesSynced('s1', meta);
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('loaded reply');
+      expect(remoteSessionStore.getMessageVersion()).toBeGreaterThan(version);
+      expect(changed).toHaveBeenCalledTimes(1);
+      remoteSessionStore.markSessionMessagesSynced('s1', meta);
+      expect(changed).toHaveBeenCalledTimes(1);
+      remoteSessionStore.applySessionPatch('dev-1', 's1', { preview: 'edited reply' });
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('edited reply');
+      // Preview selection must not make the history-loading gate more eager.
+      expect(remoteSessionStore.isSessionMessageWindowSynced('s1', meta)).toBe(true);
+      remoteSessionStore.applySessionPatch('dev-1', 's1', { _count: { messages: 2 }, preview: 'next reply' });
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('next reply');
+    } finally { off(); }
+  });
+
+  it('preserves actual live text over metadata but does not trust cached streaming flags', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { preview: 'host preview' })]);
+      remoteSessionStore.setMessages('s1', [{ ...message('m1', 's1'), content: 'stale stream', agentMeta: { isStreaming: true } }]);
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('host preview');
+      pushMakerText('s1', 'live-tail', 'live reply', false);
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('live reply');
+      pushMakerText('s1', 'live-tail', ' continues', false);
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('live reply continues');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['done', 'status'] as const)('retains received text when %s only finalizes streaming flags', (type) => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { preview: 'old reply' })]);
+      pushMakerText('s1', 'live-tail', 'new reply', false);
+      vi.runOnlyPendingTimers();
+      remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+        sessionId: 's1', event: { type, data: { isRunning: false } },
+      });
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('new reply');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('keeps loaded previews for old hosts without preview metadata', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.setMessages('s1', [message('m1', 's1')]);
+    expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('hello');
+  });
+
+  it.each([false, true])('refreshes the preview after missing completion in background (final received: %s)', (finalReceived) => {
+    vi.useFakeTimers();
+    try {
+      const meta = session('s1', { preview: 'earlier reply', _count: { messages: 1 } });
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [meta]);
+      pushMakerText('s1', 'live-tail', 'partial reply', finalReceived);
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('partial reply');
+      // No final/status push while suspended. The existing foreground loadHome
+      // refreshes sessions; it does not download all message mirrors.
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [{
+        ...meta, preview: 'completed reply', updatedAt: '2026-01-01T00:00:04.000Z', _count: { messages: 2 },
+      }]);
+      expect(remoteSessionStore.getSessionMessagePreview('s1')).toBe('partial reply');
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('completed reply');
+      expect(remoteSessionStore.getSessionListMessagePreviewIndex(remoteSessionStore.getSessions()).get('s1')).toBe('completed reply');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['offline', 'deletion'] as const)('notifies when %s invalidates only message freshness', (reason) => {
+    const meta = session('s1', { preview: 'host reply', _count: { messages: 1 } });
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [meta]);
+    remoteSessionStore.setMessages('s1', [message('m1', 's1')]);
+    remoteSessionStore.markSessionMessagesSynced('s1', meta);
+    expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('hello');
+    const changed = vi.fn();
+    const off = remoteSessionStore.subscribeSessionMessagePreview('s1', changed);
+    try {
+      if (reason === 'offline') remoteSessionStore.markDeviceOffline('dev-1');
+      else remoteSessionStore.removeMessages('s1', ['not-in-mirror']);
+      expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('host reply');
+      expect(changed).toHaveBeenCalled();
+    } finally { off(); }
+  });
+
+  it('does not resurrect an old cached preview when Host explicitly clears it', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { preview: '' })]);
+    remoteSessionStore.setMessages('s1', [message('m1', 's1')]);
+    expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe('');
+  });
+
+  it.each([null, 'previous user', 'newer reply'])('uses the canonical preview after a draft is retracted: %s', (preview) => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { preview: 'rejected draft' })]);
+    remoteSessionStore.setMessages('s1', [{ ...message('draft', 's1'), content: 'rejected draft' }]);
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:sessions:patched', {
+      sessionId: 's1', patch: { preview },
+    });
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:deleted', {
+      sessionId: 's1', clientIds: ['draft'],
+    });
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(0);
+    expect(remoteSessionStore.getSessions().find((row) => row.id === 's1')?.preview).toBe(preview);
+    expect(remoteSessionStore.getSessionListMessagePreview('s1')).toBe(preview ?? undefined);
   });
 
   it('tracks which session metadata the message window has been synced against', () => {
@@ -1496,6 +2983,135 @@ describe('remoteSessionStore', () => {
       'latest-1',
       'latest-2',
     ]);
+  });
+
+  it('断流期间漏收超过一页：补读到已验证上界后，整段旧历史保留', () => {
+    remoteSessionStore.setMessages('s1', [
+      messageAt('old-1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('old-2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    remoteSessionStore.noteLiveStreamInterrupted();
+    const latestPage = [
+      messageAt('gap-3', 's1', '2026-01-01T09:00:05.000Z'),
+      messageAt('gap-4', 's1', '2026-01-01T09:00:06.000Z'),
+    ];
+    // 本页最旧行晚于已验证上界:直接提交会丢掉 old-*,所以需要先补读。
+    expect(remoteSessionStore.latestMessageWindowNeedsBridge('s1', latestPage, true)).toBe(true);
+    // 本页不满页(历史到头)、或已验证区间不存在时,补读不改变结果。
+    expect(remoteSessionStore.latestMessageWindowNeedsBridge('s1', latestPage, false)).toBe(false);
+    expect(remoteSessionStore.latestMessageWindowNeedsBridge('s2', latestPage, true)).toBe(false);
+
+    const bridged = [
+      messageAt('old-2', 's1', '2026-01-01T09:00:02.000Z'),
+      messageAt('gap-1', 's1', '2026-01-01T09:00:03.000Z'),
+      messageAt('gap-2', 's1', '2026-01-01T09:00:04.000Z'),
+      ...latestPage,
+    ];
+    expect(remoteSessionStore.latestMessageWindowNeedsBridge('s1', bridged, true)).toBe(false);
+    remoteSessionStore.setLatestMessageWindow('s1', bridged, { moreBeyondWindow: true });
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'old-1',
+      'old-2',
+      'gap-1',
+      'gap-2',
+      'gap-3',
+      'gap-4',
+    ]);
+  });
+
+  it('漏推提示后只信区间下界：补读覆盖整段才相接，旧历史不被整段丢弃', () => {
+    remoteSessionStore.noteLiveStreamAcked('s1');
+    remoteSessionStore.setMessages('s1', [
+      messageAt('old-1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('old-2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    // 订阅内的 push 把上界推过了一条被漏推的 gap-3。
+    remoteSessionStore.appendMessage('s1', messageAt('live-4', 's1', '2026-01-01T09:00:04.000Z'));
+    remoteSessionStore.applyRemotePush('dev-1', SESSION_SYNC_CHANNEL, { sessionId: 's1', resyncRequired: true });
+
+    const latestPage = [
+      messageAt('live-4', 's1', '2026-01-01T09:00:04.000Z'),
+      messageAt('new-5', 's1', '2026-01-01T09:00:05.000Z'),
+    ];
+    // 上界已不可信:即使最新页与 live-4 有交集,也要补读到区间下界。
+    expect(remoteSessionStore.latestMessageWindowNeedsBridge('s1', latestPage, true)).toBe(true);
+    const bridged = [
+      messageAt('old-1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('old-2', 's1', '2026-01-01T09:00:02.000Z'),
+      messageAt('gap-3', 's1', '2026-01-01T09:00:03.000Z'),
+      ...latestPage,
+    ];
+    expect(remoteSessionStore.latestMessageWindowNeedsBridge('s1', bridged, true)).toBe(false);
+    remoteSessionStore.setLatestMessageWindow('s1', bridged, { moreBeyondWindow: true });
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'old-1', 'old-2', 'gap-3', 'live-4', 'new-5',
+    ]);
+  });
+
+  it('漏推提示后没补读到区间下界时，仍按未验证处置', () => {
+    remoteSessionStore.noteLiveStreamAcked('s1');
+    remoteSessionStore.setMessages('s1', [
+      messageAt('old-1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('old-2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    remoteSessionStore.appendMessage('s1', messageAt('live-4', 's1', '2026-01-01T09:00:04.000Z'));
+    remoteSessionStore.applyRemotePush('dev-1', SESSION_SYNC_CHANNEL, { sessionId: 's1', resyncRequired: true });
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('gap-3', 's1', '2026-01-01T09:00:03.000Z'),
+      messageAt('live-4', 's1', '2026-01-01T09:00:04.000Z'),
+    ], { moreBeyondWindow: true });
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual(['gap-3', 'live-4']);
+  });
+
+  it('来源不明的缓存段没有已验证区间可接，不触发补读', () => {
+    remoteSessionStore.hydrateMessagesIfEmpty('s1', [
+      messageAt('cached-old', 's1', '2026-01-01T00:00:01.000Z'),
+    ]);
+    expect(remoteSessionStore.latestMessageWindowNeedsBridge('s1', [
+      messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'),
+    ], true)).toBe(false);
+  });
+
+  it('rejects late paging whose anchor was removed by a concurrent latest-window refresh', () => {
+    const old = messageAt('old-anchor', 's1', '2026-01-01T09:00:00.000Z');
+    const latest = messageAt('new-anchor', 's1', '2026-01-01T10:00:00.000Z');
+    remoteSessionStore.setMessages('s1', [old]);
+    remoteSessionStore.setLatestMessageWindow('s1', [latest], { moreBeyondWindow: true });
+    expect(remoteSessionStore.mergeEarlierMessages('s1', [
+      messageAt('late-old-page', 's1', '2026-01-01T08:00:00.000Z'),
+    ], { before: old.id })).toBe(false);
+    expect(remoteSessionStore.mergeEarlierMessages('s1', [], { before: old.id })).toBe(false);
+    expect(remoteSessionStore.getMessages('s1').map(row => row.id)).toEqual(['new-anchor']);
+    // Paging again from the surviving anchor fills the actual gap and may extend coverage.
+    expect(remoteSessionStore.mergeEarlierMessages('s1', [old], { before: latest.id })).toBe(true);
+    remoteSessionStore.setLatestMessageWindow('s1', [latest], { moreBeyondWindow: true });
+    expect(remoteSessionStore.getMessages('s1').map(row => row.id)).toEqual(['old-anchor', 'new-anchor']);
+  });
+
+  it('does not join a late disjoint latest response to a newer verified window', () => {
+    const latest = messageAt('new-anchor', 's1', '2026-01-01T10:00:00.000Z');
+    remoteSessionStore.noteLiveStreamAcked('s1');
+    remoteSessionStore.setLatestMessageWindow('s1', [latest], { moreBeyondWindow: true });
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('stale-latest', 's1', '2026-01-01T08:00:00.000Z'),
+    ], { moreBeyondWindow: true });
+    const tail = messageAt('live-tail', 's1', '2026-01-01T11:00:00.000Z');
+    remoteSessionStore.appendMessage('s1', tail);
+    remoteSessionStore.setLatestMessageWindow('s1', [tail], { moreBeyondWindow: true });
+    expect(remoteSessionStore.getMessages('s1').map(row => row.id)).toEqual(['new-anchor', 'live-tail']);
+  });
+
+  it('does not certify a gap when paging before an unverified older island', () => {
+    const latest = messageAt('new-anchor', 's1', '2026-01-01T10:00:00.000Z');
+    const island = messageAt('island', 's1', '2026-01-01T09:00:00.000Z');
+    remoteSessionStore.setMessages('s1', [latest]);
+    remoteSessionStore.mergeMessages('s1', [island]);
+    remoteSessionStore.mergeEarlierMessages('s1', [
+      messageAt('old-page', 's1', '2026-01-01T08:00:00.000Z'),
+    ], { before: island.id });
+    remoteSessionStore.setLatestMessageWindow('s1', [latest], { moreBeyondWindow: true });
+    expect(remoteSessionStore.getMessages('s1').map(row => row.id)).toEqual(['new-anchor']);
   });
 
   it('用户「加载更早」翻出来的历史在满页重连时保留（已验证连续）', () => {
@@ -1789,9 +3405,9 @@ describe('remoteSessionStore', () => {
       content: '完整的长内容',
     };
     const truncated = {
-      ...messageAt('m1', 's1', '2026-01-01T10:00:01.000Z'),
+      ...messageAt('m1', 's1', '2026-01-01T10:00:01.500Z'),
       content: '[remote content truncated: payload too large]',
-      agentMeta: { remoteContentTruncated: true },
+      agentMeta: { remoteContentTruncated: true, agentTaskStatus: 'failed' as const },
     };
     remoteSessionStore.setMessages('s1', [full]);
 
@@ -1803,6 +3419,9 @@ describe('remoteSessionStore', () => {
     const rows = remoteSessionStore.getMessages('s1');
     expect(rows.map((item) => item.id)).toEqual(['m1', 'm2']);
     expect(rows[0].content).toBe('完整的长内容');
+    expect(rows[0].createdAt).toBe('2026-01-01T10:00:01.500Z');
+    expect(rows[0].agentMeta?.agentTaskStatus).toBe('failed');
+    expect(rows[0].agentMeta?.remoteContentTruncated).not.toBe(true);
   });
 
   it('does not emit when a reseed returns the same session list or message window', () => {
@@ -1860,6 +3479,59 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.isSessionRunning('s2')).toBe(true);
   });
 
+  it('reconciles a missed error-clear push from an authoritative active activity snapshot', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.applySessionActivity('dev-1', {
+      sessionId: 's1', phase: 'error', attention: true,
+    });
+    expect(remoteSessionStore.getSessionLiveActivity('s1')).toMatchObject({ phase: 'error', attention: true });
+
+    // 旧主机没有活动字段，运行标记本身不足以判定旧错误已读。
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', [{ sessionId: 's1', isTurnRunning: true }]);
+    expect(remoteSessionStore.getSessionLiveActivity('s1')).toMatchObject({ phase: 'error', attention: true });
+
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', [{
+      sessionId: 's1', isTurnRunning: true,
+      activityPhase: 'running', activityAttention: false,
+    }]);
+    expect(remoteSessionStore.getSessionLiveActivity('s1')).toMatchObject({ phase: 'running', attention: false });
+    expect(remoteSessionStore.isSessionRunning('s1')).toBe(true);
+
+    remoteSessionStore.applySessionActivity('dev-1', {
+      sessionId: 's1', phase: 'running', attention: false, workingPhase: 'testing',
+    });
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', [{
+      sessionId: 's1', isTurnRunning: true,
+      activityPhase: 'running', activityAttention: false,
+    }]);
+    expect(remoteSessionStore.getSessionLiveActivity('s1')?.workingPhase).toBe('testing');
+  });
+
+  it('does not let a delayed activity snapshot erase a newer error push', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const epoch = remoteSessionStore.captureActiveSessionSnapshotEpoch();
+    remoteSessionStore.applySessionActivity('dev-1', {
+      sessionId: 's1', phase: 'error', attention: true,
+    });
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', [{
+      sessionId: 's1', isTurnRunning: false,
+      activityPhase: 'completed', activityAttention: false,
+    }], epoch);
+    expect(remoteSessionStore.getSessionLiveActivity('s1')).toMatchObject({ phase: 'error', attention: true });
+  });
+
+  it('clears a cached error when the host explicitly reports no remaining activity', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.applySessionActivity('dev-1', {
+      sessionId: 's1', phase: 'error', attention: true,
+    });
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', [{
+      sessionId: 's1', isTurnRunning: false,
+      activityPhase: 'idle', activityAttention: false,
+    }]);
+    expect(remoteSessionStore.getSessionLiveActivity('s1')).toBeNull();
+  });
+
   it('does not treat an absent active-session row as an idle assertion', () => {
     vi.useFakeTimers();
     try {
@@ -1880,6 +3552,49 @@ describe('remoteSessionStore', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // Unit regression: after re-link, the physical shard can remain old while
+  // authoritative snapshots arrive from its canonical host. Preserve both paths.
+  it.each(['dev-1', 'new-dev-1'])('clears absent runtime state from complete snapshots on %s', (host) => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    if (host !== 'dev-1') remoteSessionStore.setDeviceIdentity([{ deviceId: host, name: 'Mac' }]);
+    remoteSessionStore.setDeviceSessions('dev-2', 'Mac mini', [session('s2')]);
+    remoteSessionStore.applySessionActivity(host, {
+      sessionId: 's1', phase: 'error', attention: true,
+    });
+    remoteSessionStore.applySessionActivity('dev-2', {
+      sessionId: 's2', phase: 'error', attention: true,
+    });
+    remoteSessionStore.setSessionRunning('s1', true);
+
+    // A legacy host also returns an empty array, without claiming completeness.
+    remoteSessionStore.setActiveSessionSnapshots(host, []);
+    expect(remoteSessionStore.getSessionLiveActivity('s1')).toMatchObject({ phase: 'error', attention: true });
+    expect(remoteSessionStore.isSessionRunning('s1')).toBe(true);
+
+    remoteSessionStore.setActiveSessionSnapshots(host, {
+      format: 'active-sessions-v2', sessions: [],
+    });
+
+    expect(remoteSessionStore.getSessionLiveActivity('s1')).toBeNull();
+    expect(remoteSessionStore.isSessionRunning('s1')).toBe(false);
+    expect(remoteSessionStore.getSessionLiveActivity('s2')).toMatchObject({ phase: 'error', attention: true });
+  });
+
+  it.each(['dev-1', 'new-dev-1'])('preserves newer activity across delayed complete snapshots on %s', (host) => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    if (host !== 'dev-1') remoteSessionStore.setDeviceIdentity([{ deviceId: host, name: 'Mac' }]);
+    const epoch = remoteSessionStore.captureActiveSessionSnapshotEpoch();
+    remoteSessionStore.applySessionActivity(host, {
+      sessionId: 's1', phase: 'error', attention: true,
+    });
+
+    remoteSessionStore.setActiveSessionSnapshots(host, {
+      format: 'active-sessions-v2', sessions: [],
+    }, epoch);
+
+    expect(remoteSessionStore.getSessionLiveActivity('s1')).toMatchObject({ phase: 'error', attention: true });
   });
 
   it('clears stale reconnect progress from an active snapshot without erasing newer retry events', () => {
@@ -2112,6 +3827,133 @@ describe('remoteSessionStore', () => {
     vi.useRealTimers();
   });
 
+  it('keeps live generation fields from the first post-reconnect status', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    pushMakerStatus('s1', {
+      isRunning: true,
+      outputTokens: 12,
+      generationDurationMs: 400,
+      generationActive: true,
+      generationReliable: true,
+    });
+    remoteSessionStore.markDeviceOffline('dev-1');
+    expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
+
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', [{ sessionId: 's1', isTurnRunning: true }]);
+    expect(remoteSessionStore.getSessionRunStatus('s1').isRunning).toBe(true);
+    expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
+
+    pushMakerStatus('s1', {
+      isRunning: true,
+      status: 'Generating...',
+      tokenUsage: 235,
+      outputTokens: 40,
+      generationDurationMs: 800,
+      generationActive: true,
+      generationReliable: true,
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1')).toMatchObject({
+      isRunning: true,
+      tokenUsage: 235,
+      outputTokens: 40,
+      generationDurationMs: 800,
+      generationActive: true,
+      generationReliable: true,
+    });
+  });
+
+  it('markDevicesOffline sweeps a wave with a single notification', () => {
+    const deviceIds = ['dev-a', 'dev-b', 'dev-c'];
+    deviceIds.forEach((id, i) => {
+      remoteSessionStore.setDeviceSessions(id, `Mac-${i}`, [session(`s-${id}`)]);
+    });
+    for (const id of deviceIds) {
+      pushMakerStatus(`s-${id}`, {
+        isRunning: true,
+        outputTokens: 12,
+        generationDurationMs: 400,
+        generationActive: true,
+        generationReliable: true,
+      }, id);
+      expect(remoteSessionStore.isSessionMakerTurnRunning(`s-${id}`)).toBe(true);
+    }
+    const notify = vi.fn();
+    const unsubscribe = remoteSessionStore.subscribe(notify);
+
+    remoteSessionStore.markDevicesOffline(deviceIds);
+
+    // 整波只 notify 一轮;逐台 markDeviceOffline 会 notify N 轮,叠加 schedule
+    // store 的逐台失效后在设备多时击穿 React 嵌套上限(2026-09-10)。
+    expect(notify).toHaveBeenCalledTimes(1);
+    for (const id of deviceIds) {
+      expect(remoteSessionStore.isSessionMakerTurnRunning(`s-${id}`)).toBe(false);
+    }
+
+    // 清理已生效:同批重复离线无变化、静默。
+    remoteSessionStore.markDevicesOffline(deviceIds);
+    expect(notify).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  it('still zeros leftover live metrics when a new turn starts without them', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    pushMakerStatus('s1', {
+      isRunning: true,
+      outputTokens: 99,
+      generationDurationMs: 5_000,
+      generationActive: true,
+      generationReliable: false,
+    });
+    pushMakerStatus('s1', { isRunning: false });
+    pushMakerStatus('s1', { isRunning: true, status: 'Thinking' });
+    expect(remoteSessionStore.getSessionRunStatus('s1')).toMatchObject({
+      isRunning: true,
+      outputTokens: 0,
+      generationDurationMs: 0,
+      generationActive: false,
+      generationReliable: true,
+    });
+  });
+
+  it('clears leftover tok/s when activity restores wide running before the next maker status', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    pushMakerStatus('s1', {
+      isRunning: true,
+      outputTokens: 40,
+      generationDurationMs: 800,
+      generationActive: true,
+      generationReliable: true,
+    });
+    pushMakerStatus('s1', { isRunning: false });
+    expect(remoteSessionStore.getSessionRunStatus('s1').outputTokens).toBe(40);
+
+    remoteSessionStore.applySessionActivity('dev-1', { sessionId: 's1', phase: 'running' });
+    expect(remoteSessionStore.getSessionRunStatus('s1')).toMatchObject({
+      isRunning: true,
+      outputTokens: 0,
+      generationDurationMs: 0,
+      generationActive: false,
+      generationReliable: true,
+    });
+  });
+
+  it('carries the host tok/s across statuses without it and clears it for the next turn', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const tokenSpeed = { rate: 42, average: 40, tokens: 120, elapsedMs: 3_000, streaming: true };
+    pushMakerStatus('s1', { isRunning: true, status: 'Generating...', tokenSpeed });
+    pushMakerStatus('s1', { isRunning: true, status: 'Running tool' });
+    expect(remoteSessionStore.getSessionRunStatus('s1').tokenSpeed).toEqual(tokenSpeed);
+    // The host withdrew the speed (suspended mid-generation): the stale reading goes too.
+    pushMakerStatus('s1', { isRunning: true, generationReliable: false });
+    expect(remoteSessionStore.getSessionRunStatus('s1').tokenSpeed).toBeUndefined();
+    pushMakerStatus('s1', { isRunning: false });
+    remoteSessionStore.applySessionActivity('dev-1', { sessionId: 's1', phase: 'running' });
+    expect(remoteSessionStore.getSessionRunStatus('s1').tokenSpeed).toBeUndefined();
+    pushMakerStatus('s1', { isRunning: false });
+    pushMakerStatus('s1', { isRunning: true, status: 'Thinking' });
+    expect(remoteSessionStore.getSessionRunStatus('s1').tokenSpeed).toBeUndefined();
+  });
+
   it('clears leftover task updates on a real turn start, scoped to that session', () => {
     // Turn 1 on s1 spawns a sub-agent, then the turn ends — the live update lingers.
     pushMakerStatus('s1', { isRunning: true });
@@ -2288,10 +4130,51 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
   });
 
-  it('keeps the product turn running across claimed mobile continuation boundaries', () => {
+  // Unit, #8147 r4427259022: soft offline must retain the known failure ID;
+  // reconnect restores the projection but does not replay the terminal event.
+  it('keeps terminal prediction eligibility and identity through acknowledgement and reconnect until the next run', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    pushMakerStatus('s1', { isRunning: true });
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1', persistId: 'failed-row', event: { type: 'error', data: { message: 'Failed', isTerminal: true } },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1').hasTerminalError).toBe(true);
+    expect(remoteSessionStore.getSessionRunStatus('s1').terminalError).toEqual({ clientId: 'failed-row', message: 'Failed' });
+    remoteSessionStore.applySessionActivity('dev-1', { sessionId: 's1', phase: 'completed', attention: false });
+    expect(remoteSessionStore.getSessionRunStatus('s1').hasTerminalError).toBe(true);
+    pushMakerStatus('s1', { isRunning: false });
+    expect(remoteSessionStore.getSessionRunStatus('s1').hasTerminalError).toBe(true);
+    expect(remoteSessionStore.getSessionRunStatus('s1').terminalError?.clientId).toBe('failed-row');
+    remoteSessionStore.markDeviceOffline('dev-1');
+    remoteSessionStore.markDeviceOffline('dev-1');
+    expect(remoteSessionStore.getSessionRunStatus('s1').isRunning).toBe(false);
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.setInputProjection('s1', { ...projection('s1'), error: 'Failed' });
+    pushMakerStatus('s1', { isRunning: false });
+    expect(remoteSessionStore.getSessionRunStatus('s1').terminalError).toEqual({
+      clientId: 'failed-row', message: remoteSessionStore.getInputProjection('s1').error,
+    });
+    pushMakerStatus('s1', { isRunning: true });
+    expect(remoteSessionStore.getSessionRunStatus('s1').hasTerminalError).toBe(false);
+    expect(remoteSessionStore.getSessionRunStatus('s1').terminalError).toBeNull();
+  });
+
+  it('recovers a terminal error from activity even without its maker event', () => {
+    remoteSessionStore.applySessionActivity('dev-1', { sessionId: 's1', phase: 'error', attention: false });
+    expect(remoteSessionStore.getSessionRunStatus('s1').hasTerminalError).toBe(true);
+    remoteSessionStore.applySessionActivity('dev-1', { sessionId: 's1', phase: 'running' });
+    expect(remoteSessionStore.getSessionRunStatus('s1').hasTerminalError).toBe(false);
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1', event: { type: 'error', data: { message: 'Retrying', isTerminal: false, willRetry: true } },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1').hasTerminalError).toBe(false);
+  });
+
+  it.each(['ask_user_question', 'plan_review'])('keeps the product running while %s awaits confirmation across an SDK boundary', (kind) => {
     vi.useFakeTimers();
     try {
       pushMakerStatus('s1', { isRunning: true });
+      remoteSessionStore.setPendingInteractions('s1', [{ request: { kind, requestId: 'human-1' } }]);
       pushMakerText('s1', 'persist-1', 'first segment', false);
       vi.runOnlyPendingTimers();
 
@@ -2309,16 +4192,21 @@ describe('remoteSessionStore', () => {
       });
 
       expect(remoteSessionStore.isSessionRunning('s1')).toBe(true);
+      expect(remoteSessionStore.getPendingInteractions('s1')).toHaveLength(1);
       expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(true);
       expect(remoteSessionStore.getSessionRunStatus('s1').startedAt).not.toBeNull();
       expect(remoteSessionStore.getMessages('s1')[0]?.agentMeta?.isStreaming).toBe(true);
 
+      remoteSessionStore.applyRemotePush('dev-1', 'maker:interaction-dismissed', {
+        sessionId: 's1', requestId: 'human-1', resolvedAs: 'allow',
+      });
       remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
         sessionId: 's1',
         event: { type: 'done', data: {} },
       });
 
       expect(remoteSessionStore.isSessionRunning('s1')).toBe(false);
+      expect(remoteSessionStore.getPendingInteractions('s1')).toHaveLength(0);
       expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
       expect(remoteSessionStore.getMessages('s1')[0]?.agentMeta?.isStreaming).not.toBe(true);
     } finally {
@@ -2399,6 +4287,52 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getSessions()[0].title).toBe('New');
   });
 
+  it('fences an older whole-list snapshot after created/patched pushes per device', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { title: 'Old' })]);
+    const dev1Epoch = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-1');
+    const dev2Epoch = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-2');
+
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:sessions:patched', {
+      sessionId: 's1',
+      patch: { title: 'New' },
+    });
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', dev1Epoch)).toBe(false);
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-2', dev2Epoch)).toBe(true);
+
+    const afterPatch = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-1');
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:sessions:created', { sessionId: 's2' });
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', afterPatch)).toBe(false);
+
+    const beforeReset = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-1');
+    remoteSessionStore.clear();
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', beforeReset)).toBe(false);
+  });
+
+  it('fences an older whole-list snapshot after valid session usage pushes', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+
+    const beforeSpend = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-1');
+    remoteSessionStore.applyRemotePush('dev-1', 'usage:session-spend-changed', {
+      sessionId: 's1',
+      totalCostUsd: 1.23,
+    });
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', beforeSpend)).toBe(false);
+
+    const beforeTokens = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-1');
+    remoteSessionStore.applyRemotePush('dev-1', 'usage:session-tokens-changed', {
+      sessionId: 's1',
+      totalTokens: 45_000,
+    });
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', beforeTokens)).toBe(false);
+
+    const beforeInvalid = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-1');
+    remoteSessionStore.applyRemotePush('dev-1', 'usage:session-tokens-changed', {
+      sessionId: 's1',
+      totalTokens: -1,
+    });
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-1', beforeInvalid)).toBe(true);
+  });
+
   it('mirrors goal status pushes per session and clears on null goal', () => {
     const goal = {
       sessionId: 's1',
@@ -2455,6 +4389,29 @@ describe('remoteSessionStore', () => {
 
     expect(remoteSessionStore.getSessions()[0].pinnedAt).toBeNull();
     expect(reseed).toHaveBeenCalledTimes(1);
+  });
+
+  // Unit regression: unopened side chats are absent from the ordinary mirror.
+  // Existing reseed coverage handled creation only, leaving their count stale.
+  it.each(['deleted', 'archived'] as const)('invalidates device lists on an unseen child becoming %s', status => {
+    for (const withShard of [false, true]) {
+      remoteSessionStore.clear();
+      if (withShard) remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('parent')]);
+      const refresh = vi.fn();
+      const otherDevice = vi.fn();
+      const off = remoteSessionStore.registerReseedHandler('dev-1', refresh);
+      const offOther = remoteSessionStore.registerReseedHandler('dev-2', otherDevice);
+      const removed = vi.fn();
+      const offRemoved = remoteSessionStore.onSessionRemoved(removed);
+      remoteSessionStore.applyRemotePush('dev-1', 'local-db:sessions:patched', {
+        sessionId: 'unopened-child', patch: { status },
+      });
+      expect(refresh).toHaveBeenCalledOnce();
+      expect(otherDevice).not.toHaveBeenCalled();
+      expect(removed).toHaveBeenCalledExactlyOnceWith('dev-1', 'unopened-child');
+      expect(remoteSessionStore.getSessions().some(row => row.id === 'unopened-child')).toBe(false);
+      off(); offOther(); offRemoved();
+    }
   });
 
   it('fans reseed out to every subscriber and only unregisters the one that left', () => {
@@ -2716,6 +4673,53 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getInputProjection('s1').pendingQueue[0]?.clientId).toBe('q-1');
   });
 
+  it('keeps optimistic projection writes out of remote acceptance evidence', () => {
+    const local = projection('s1', 'q-local');
+    const authorityEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+    const remoteEpoch = remoteSessionStore.captureInputProjectionRemoteEpoch('s1');
+    remoteSessionStore.setInputProjectionOptimistically('s1', { ...local, queuePaused: true });
+    expect(remoteSessionStore.captureInputProjectionAuthorityEpoch('s1')).not.toBe(authorityEpoch);
+    expect(remoteSessionStore.captureInputProjectionRemoteEpoch('s1')).toBe(remoteEpoch);
+    expect(remoteSessionStore.hasAuthoritativeQueuedItemSince('s1', 'q-local', remoteEpoch)).toBe(false);
+    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', local, authorityEpoch, remoteEpoch)).toBe(false);
+    expect(remoteSessionStore.getInputProjection('s1').pendingQueue[0]?.clientId).toBe('q-local');
+
+    remoteSessionStore.setInputProjection('s1', local);
+    expect(remoteSessionStore.hasAuthoritativeQueuedItemSince('s1', 'q-local', remoteEpoch)).toBe(true);
+  });
+
+  it('records accepted evidence from a stale response without overwriting a newer projection', () => {
+    const expectedEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+    const expectedRemoteEpoch = remoteSessionStore.captureInputProjectionRemoteEpoch('s1');
+    remoteSessionStore.setInputProjection('s1', projection('s1', 'q-new'));
+
+    expect(remoteSessionStore.setInputProjectionIfCurrent(
+      's1',
+      projection('s1', 'q-old'),
+      expectedEpoch,
+      expectedRemoteEpoch,
+      'q-accepted',
+    )).toBe(false);
+    expect(remoteSessionStore.getInputProjection('s1').pendingQueue[0]?.clientId).toBe('q-new');
+    expect(remoteSessionStore.hasAuthoritativeQueuedItemSince(
+      's1',
+      'q-accepted',
+      expectedRemoteEpoch,
+    )).toBe(true);
+  });
+
+  it('settles a local optimistic row when its persisted user message arrives', () => {
+    const local = projection('s1', 'q-local');
+    const remoteEpoch = remoteSessionStore.captureInputProjectionRemoteEpoch('s1');
+    remoteSessionStore.setInputProjectionOptimistically('s1', local);
+    remoteSessionStore.appendMessage('s1', message('q-local', 's1'));
+    expect(remoteSessionStore.getInputProjection('s1').pendingQueue).toHaveLength(1);
+
+    remoteSessionStore.appendMessage('s1', { ...message('q-local', 's1'), role: 'user' });
+    expect(remoteSessionStore.getInputProjection('s1').pendingQueue).toEqual([]);
+    expect(remoteSessionStore.hasAuthoritativeQueuedItemSince('s1', 'q-local', remoteEpoch)).toBe(true);
+  });
+
   it('clears a continuation owner at a terminal boundary without a projection clear push', () => {
     const ownerProjection = {
       ...projection('s1'),
@@ -2724,6 +4728,7 @@ describe('remoteSessionStore', () => {
     remoteSessionStore.setInputProjection('s1', ownerProjection);
     remoteSessionStore.setSessionRunning('s1', true);
     const operationEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+    const operationRemoteEpoch = remoteSessionStore.captureInputProjectionRemoteEpoch('s1');
 
     remoteSessionStore.applyRemotePush('dev-1', 'maker:status-changed', {
       sessionId: 's1',
@@ -2732,7 +4737,9 @@ describe('remoteSessionStore', () => {
 
     expect(remoteSessionStore.getInputProjection('s1').continuationTurnClientId).toBeNull();
     expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
-    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', ownerProjection, operationEpoch)).toBe(false);
+    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', { ...ownerProjection, pendingQueue: [] }, operationEpoch, operationRemoteEpoch, 'q-1')).toBe(false);
+    expect(remoteSessionStore.getInputProjection('s1').pendingQueue[0]?.clientId).toBe('q-1');
+    expect(remoteSessionStore.hasAuthoritativeQueuedItemSince('s1', 'q-1', operationRemoteEpoch)).toBe(true);
   });
 
   it('soft-invalidates an offline device without deleting sessions or messages', () => {
@@ -2771,6 +4778,474 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getMessages('s1')).toHaveLength(2);
   });
 
+  it('preserves a provisional live reply anchor across transient device offline', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', {
+        userSendAt: '2026-01-01T00:00:01.000Z',
+        updatedAt: '2026-01-01T00:00:01.000Z',
+      })]);
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'current-live-assistant', 'Current reply', true);
+
+      remoteSessionStore.markDeviceOffline('dev-1');
+      remoteSessionStore.setLatestMessageWindow('s1', [{
+        ...messageAt('current-user', 's1', '2026-01-01T00:00:02.000Z'),
+        role: 'user',
+        content: 'Current question',
+      }]);
+
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual([
+        'current-user',
+        'current-live-assistant',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let a reconnecting newer send claim an older offline provisional reply', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', {
+        userSendAt: '2026-01-01T00:00:01.000Z',
+        updatedAt: '2026-01-01T00:00:01.000Z',
+      })]);
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'previous-live-assistant', 'Previous reply', true);
+
+      remoteSessionStore.markDeviceOffline('dev-1');
+      remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', {
+        userSendAt: '2026-01-01T00:00:02.000Z',
+        updatedAt: '2026-01-01T00:00:02.000Z',
+      }));
+      remoteSessionStore.setLatestMessageWindow('s1', [
+        {
+          ...messageAt('previous-user', 's1', '2026-01-01T00:00:01.000Z'),
+          role: 'user',
+          content: 'Previous question',
+        },
+        {
+          ...messageAt('current-user', 's1', '2026-01-01T00:00:02.000Z'),
+          role: 'user',
+          content: 'Current question',
+        },
+      ]);
+
+      const rows = remoteSessionStore.getMessages('s1');
+      expect(rows.map((item) => item.clientId)).toEqual([
+        'previous-user',
+        'previous-live-assistant',
+        'current-user',
+      ]);
+      expect(rows.find((item) => item.clientId === 'previous-live-assistant')?.createdAt)
+        .toBe('2026-01-01T00:00:01.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps per-identity transport ownership across soft offline finalization', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('stale-mac', 'Mac', [session('s1')]);
+      remoteSessionStore.applyRemotePush('stale-mac', 'maker:event', {
+        sessionId: 's1',
+        persistId: 'shared-live-assistant',
+        event: {
+          type: 'text',
+          data: { text: 'Stale reply', isFinal: false },
+        },
+      });
+      vi.runOnlyPendingTimers();
+
+      remoteSessionStore.markDeviceOffline('stale-mac');
+      remoteSessionStore.applyRemotePush('current-mac', 'maker:event', {
+        sessionId: 's1',
+        persistId: 'shared-live-assistant',
+        event: {
+          type: 'text',
+          data: { text: 'Current reply', isFinal: false },
+        },
+      });
+      vi.runOnlyPendingTimers();
+
+      expect(remoteSessionStore.getMessages('s1')).toMatchObject([{
+        clientId: 'shared-live-assistant',
+        content: 'Current reply',
+      }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a pre-metadata offline reply unbound until its older user row arrives', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'previous-live-assistant', 'Previous reply', true);
+
+      // No session list row exists yet, so the offline transition must use the
+      // maker event's transport device rather than sessionDeviceIndex.
+      remoteSessionStore.markDeviceOffline('dev-1');
+      remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', {
+        userSendAt: '2026-01-01T00:00:02.000Z',
+        updatedAt: '2026-01-01T00:00:02.000Z',
+      }));
+      remoteSessionStore.setLatestMessageWindow('s1', [{
+        ...messageAt('current-user', 's1', '2026-01-01T00:00:02.000Z'),
+        role: 'user',
+        content: 'Current question',
+      }]);
+
+      expect(remoteSessionStore.getMessages('s1')
+        .find((item) => item.clientId === 'previous-live-assistant')?.createdAt)
+        .toBe('2026-01-01T00:10:00.000Z');
+
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('previous-user', 's1', '2026-01-01T00:00:01.000Z'),
+        role: 'user',
+        content: 'Previous question',
+      });
+
+      const rows = remoteSessionStore.getMessages('s1');
+      expect(rows.map((item) => item.clientId)).toEqual([
+        'previous-user',
+        'previous-live-assistant',
+        'current-user',
+      ]);
+      expect(rows.find((item) => item.clientId === 'previous-live-assistant')?.createdAt)
+        .toBe('2026-01-01T00:00:01.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('flushes and freezes a pre-metadata text delta when its transport goes offline', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'previous-live-assistant', 'Previous reply', false);
+
+      remoteSessionStore.markDeviceOffline('dev-1');
+      remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', {
+        userSendAt: '2026-01-01T00:00:02.000Z',
+        updatedAt: '2026-01-01T00:00:02.000Z',
+      }));
+      remoteSessionStore.setLatestMessageWindow('s1', [{
+        ...messageAt('current-user', 's1', '2026-01-01T00:00:02.000Z'),
+        role: 'user',
+        content: 'Current question',
+      }]);
+
+      expect(remoteSessionStore.getMessages('s1')
+        .find((item) => item.clientId === 'previous-live-assistant')?.createdAt)
+        .toBe('2026-01-01T00:10:00.000Z');
+
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('previous-user', 's1', '2026-01-01T00:00:01.000Z'),
+        role: 'user',
+        content: 'Previous question',
+      });
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual([
+        'previous-user',
+        'previous-live-assistant',
+        'current-user',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('pairs an older delayed user with the offline-unbound reply before the new round reply', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'previous-live-assistant', 'Previous reply', true);
+      remoteSessionStore.markDeviceOffline('dev-1');
+
+      remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', {
+        userSendAt: '2026-01-01T00:00:02.000Z',
+        updatedAt: '2026-01-01T00:00:02.000Z',
+      }));
+      vi.setSystemTime(new Date('2026-01-01T00:11:00.000Z'));
+      pushMakerText('s1', 'current-live-assistant', 'Current reply', true);
+
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('previous-user', 's1', '2026-01-01T00:00:01.000Z'),
+        role: 'user',
+        content: 'Previous question',
+      });
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual([
+        'previous-user',
+        'previous-live-assistant',
+        'current-live-assistant',
+      ]);
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('current-user', 's1', '2026-01-01T00:00:02.000Z'),
+        role: 'user',
+        content: 'Current question',
+      });
+
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual([
+        'previous-user',
+        'previous-live-assistant',
+        'current-user',
+        'current-live-assistant',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('pairs multiple offline-unbound reply cohorts with realtime users in arrival order', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.applyMakerEvent('s1', {
+        type: 'status',
+        data: { isRunning: true },
+      });
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'live-assistant-1', 'First reply', true);
+      remoteSessionStore.applyMakerEvent('s1', {
+        type: 'status',
+        data: { isRunning: false },
+      });
+      remoteSessionStore.applyMakerEvent('s1', {
+        type: 'status',
+        data: { isRunning: true },
+      });
+      vi.setSystemTime(new Date('2026-01-01T00:11:00.000Z'));
+      pushMakerText('s1', 'live-assistant-2', 'Second reply', true);
+
+      remoteSessionStore.markDeviceOffline('dev-1');
+      remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', {
+        userSendAt: '2026-01-01T00:00:02.000Z',
+        updatedAt: '2026-01-01T00:00:02.000Z',
+      }));
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('user-1', 's1', '2026-01-01T00:00:01.000Z'),
+        role: 'user',
+        content: 'First question',
+      });
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('user-2', 's1', '2026-01-01T00:00:02.000Z'),
+        role: 'user',
+        content: 'Second question',
+      });
+
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual([
+        'user-1',
+        'live-assistant-1',
+        'user-2',
+        'live-assistant-2',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('pairs multiple offline-unbound reply cohorts with a reconnect window in arrival order', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.applyMakerEvent('s1', {
+        type: 'status',
+        data: { isRunning: true },
+      });
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'live-assistant-1', 'First reply', true);
+      remoteSessionStore.applyMakerEvent('s1', {
+        type: 'status',
+        data: { isRunning: false },
+      });
+      remoteSessionStore.applyMakerEvent('s1', {
+        type: 'status',
+        data: { isRunning: true },
+      });
+      vi.setSystemTime(new Date('2026-01-01T00:11:00.000Z'));
+      pushMakerText('s1', 'live-assistant-2', 'Second reply', true);
+
+      remoteSessionStore.markDeviceOffline('dev-1');
+      remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', {
+        userSendAt: '2026-01-01T00:00:02.000Z',
+        updatedAt: '2026-01-01T00:00:02.000Z',
+      }));
+      remoteSessionStore.setLatestMessageWindow('s1', [
+        {
+          ...messageAt('user-1', 's1', '2026-01-01T00:00:01.000Z'),
+          role: 'user',
+          content: 'First question',
+        },
+        {
+          ...messageAt('user-2', 's1', '2026-01-01T00:00:02.000Z'),
+          role: 'user',
+          content: 'Second question',
+        },
+      ], { moreBeyondWindow: false });
+
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual([
+        'user-1',
+        'live-assistant-1',
+        'user-2',
+        'live-assistant-2',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves offline-unbound cohorts pending when the reconnect window is truncated', () => {
+    vi.useFakeTimers();
+    try {
+      for (const [index, createdAt] of [
+        ['1', '2026-01-01T00:10:00.000Z'],
+        ['2', '2026-01-01T00:11:00.000Z'],
+        ['3', '2026-01-01T00:12:00.000Z'],
+      ] as const) {
+        remoteSessionStore.applyMakerEvent('s1', {
+          type: 'status',
+          data: { isRunning: true },
+        });
+        vi.setSystemTime(new Date(createdAt));
+        pushMakerText('s1', `live-assistant-${index}`, `Reply ${index}`, true);
+        remoteSessionStore.applyMakerEvent('s1', {
+          type: 'status',
+          data: { isRunning: false },
+        });
+      }
+
+      remoteSessionStore.markDeviceOffline('dev-1');
+      remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', {
+        userSendAt: '2026-01-01T00:00:03.000Z',
+        updatedAt: '2026-01-01T00:00:03.000Z',
+      }));
+      remoteSessionStore.setLatestMessageWindow('s1', [
+        {
+          ...messageAt('user-2', 's1', '2026-01-01T00:00:02.000Z'),
+          role: 'user',
+          content: 'Second question',
+        },
+        {
+          ...messageAt('user-3', 's1', '2026-01-01T00:00:03.000Z'),
+          role: 'user',
+          content: 'Third question',
+        },
+      ], { moreBeyondWindow: true });
+
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual([
+        'user-2',
+        'user-3',
+        'live-assistant-1',
+        'live-assistant-2',
+        'live-assistant-3',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves offline-unbound cohorts pending when the reconnect window has extra users', () => {
+    vi.useFakeTimers();
+    try {
+      for (const [index, createdAt] of [
+        ['1', '2026-01-01T00:10:00.000Z'],
+        ['2', '2026-01-01T00:11:00.000Z'],
+      ] as const) {
+        remoteSessionStore.applyMakerEvent('s1', {
+          type: 'status',
+          data: { isRunning: true },
+        });
+        vi.setSystemTime(new Date(createdAt));
+        pushMakerText('s1', `live-assistant-${index}`, `Reply ${index}`, true);
+        remoteSessionStore.applyMakerEvent('s1', {
+          type: 'status',
+          data: { isRunning: false },
+        });
+      }
+
+      remoteSessionStore.markDeviceOffline('dev-1');
+      remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', {
+        userSendAt: '2026-01-01T00:00:03.000Z',
+        updatedAt: '2026-01-01T00:00:03.000Z',
+      }));
+      remoteSessionStore.setLatestMessageWindow('s1', [
+        {
+          ...messageAt('user-1', 's1', '2026-01-01T00:00:01.000Z'),
+          role: 'user',
+          content: 'First question',
+        },
+        {
+          ...messageAt('user-2', 's1', '2026-01-01T00:00:02.000Z'),
+          role: 'user',
+          content: 'Second question',
+        },
+        {
+          ...messageAt('user-3', 's1', '2026-01-01T00:00:03.000Z'),
+          role: 'user',
+          content: 'Third question',
+        },
+      ], { moreBeyondWindow: false });
+
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual([
+        'user-1',
+        'user-2',
+        'user-3',
+        'live-assistant-1',
+        'live-assistant-2',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves offline-unbound cohorts pending when an equal-sized reconnect window is truncated', () => {
+    vi.useFakeTimers();
+    try {
+      for (const [index, createdAt] of [
+        ['1', '2026-01-01T00:10:00.000Z'],
+        ['2', '2026-01-01T00:11:00.000Z'],
+      ] as const) {
+        remoteSessionStore.applyMakerEvent('s1', {
+          type: 'status',
+          data: { isRunning: true },
+        });
+        vi.setSystemTime(new Date(createdAt));
+        pushMakerText('s1', `live-assistant-${index}`, `Reply ${index}`, true);
+        remoteSessionStore.applyMakerEvent('s1', {
+          type: 'status',
+          data: { isRunning: false },
+        });
+      }
+
+      remoteSessionStore.markDeviceOffline('dev-1');
+      remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', {
+        userSendAt: '2026-01-01T00:00:03.000Z',
+        updatedAt: '2026-01-01T00:00:03.000Z',
+      }));
+      remoteSessionStore.setLatestMessageWindow('s1', [
+        {
+          ...messageAt('user-2', 's1', '2026-01-01T00:00:02.000Z'),
+          role: 'user',
+          content: 'Second question',
+        },
+        {
+          ...messageAt('user-3', 's1', '2026-01-01T00:00:03.000Z'),
+          role: 'user',
+          content: 'Third question',
+        },
+      ], { moreBeyondWindow: true });
+
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual([
+        'user-2',
+        'user-3',
+        'live-assistant-1',
+        'live-assistant-2',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('emits when soft offline only clears pending-refresh metadata', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
     remoteSessionStore.applyRemotePush('dev-1', 'local-db:session:error-persisted', {
@@ -2806,6 +5281,427 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getMessages('s2')).toHaveLength(1);
   });
 
+  it('discards a pre-metadata text batch when its transport is hard removed', () => {
+    vi.useFakeTimers();
+    try {
+      pushMakerText('s1', 'live-assistant', 'Stale reply', false);
+
+      remoteSessionStore.removeDevice('dev-1');
+      vi.runOnlyPendingTimers();
+
+      expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+      expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('removes a flushed pre-metadata reply with its transport-owned anchor', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'live-assistant', 'Stale reply', true);
+      remoteSessionStore.setSessionRunning('s1', true);
+      expect(remoteSessionStore.getMessages('s1')).toHaveLength(1);
+      expect(remoteSessionStore.getSessionRunStatus('s1').isRunning).toBe(true);
+
+      remoteSessionStore.removeDevice('dev-1');
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', {
+        userSendAt: '2026-01-01T00:00:01.000Z',
+        updatedAt: '2026-01-01T00:00:01.000Z',
+      })]);
+      expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+      expect(remoteSessionStore.getSessionRunStatus('s1').isRunning).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a current shard window when removing a stale transport for the same session id', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      remoteSessionStore.applyRemotePush('stale-mac', 'maker:event', {
+        sessionId: 's1',
+        persistId: 'stale-live-assistant',
+        event: {
+          type: 'text',
+          data: { text: 'Stale reply', isFinal: true },
+        },
+      });
+      remoteSessionStore.setDeviceSessions('current-mac', 'Mac', [session('s1')]);
+      remoteSessionStore.setMessages('s1', [messageAt(
+        'current-assistant',
+        's1',
+        '2026-01-01T00:00:01.000Z',
+      )]);
+
+      remoteSessionStore.removeDevice('stale-mac');
+
+      expect(remoteSessionStore.getSessionDeviceId('s1')).toBe('current-mac');
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual([
+        'current-assistant',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let an identical transport replay claim a persisted assistant row', () => {
+    remoteSessionStore.setDeviceSessions('current-mac', 'Mac', [session('s1')]);
+    remoteSessionStore.setMessages('s1', [message('persisted-assistant', 's1')]);
+
+    remoteSessionStore.applyRemotePush('stale-mac', 'maker:event', {
+      sessionId: 's1',
+      persistId: 'persisted-assistant',
+      event: {
+        type: 'text',
+        data: { text: 'hello', isFinal: true },
+      },
+    });
+    remoteSessionStore.removeDevice('stale-mac');
+
+    expect(remoteSessionStore.getSessionDeviceId('s1')).toBe('current-mac');
+    expect(remoteSessionStore.getMessages('s1')).toEqual([
+      message('persisted-assistant', 's1'),
+    ]);
+  });
+
+  it('retires pending identity when an identical persisted assistant echo arrives', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      pushMakerText('s1', 'persisted-assistant', 'hello', true);
+      remoteSessionStore.appendMessage('s1', message('persisted-assistant', 's1'));
+
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('next-user', 's1', '2026-01-01T00:00:01.000Z'),
+        role: 'user',
+        content: 'Next question',
+      });
+
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual([
+        'persisted-assistant',
+        'next-user',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps pending identity for an identical live transport replay', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      pushMakerText('s1', 'live-assistant', 'hello', true);
+      pushMakerText('s1', 'live-assistant', 'hello', true);
+
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('trigger-user', 's1', '2026-01-01T00:00:01.000Z'),
+        role: 'user',
+        content: 'Question',
+      });
+
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual([
+        'trigger-user',
+        'live-assistant',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let a stale transport mutate or claim a persisted assistant row', () => {
+    remoteSessionStore.setDeviceIdentity([{ deviceId: 'current-mac', name: 'Mac' }]);
+    remoteSessionStore.setDeviceSessions('current-mac', 'Mac', [session('s1')]);
+    remoteSessionStore.setMessages('s1', [message('persisted-assistant', 's1')]);
+
+    remoteSessionStore.applyRemotePush('stale-mac', 'maker:event', {
+      sessionId: 's1',
+      persistId: 'persisted-assistant',
+      event: {
+        type: 'text',
+        data: { text: 'Stale replay', isFinal: true },
+      },
+    });
+    remoteSessionStore.removeDevice('stale-mac');
+
+    expect(remoteSessionStore.getSessionDeviceId('s1')).toBe('current-mac');
+    expect(remoteSessionStore.getMessages('s1')).toEqual([
+      message('persisted-assistant', 's1'),
+    ]);
+  });
+
+  it.each([
+    ['before the current transport batch flushes', false],
+    ['after the current transport batch flushes', true],
+  ] as const)('keeps replacement transport state %s when removing an indexed stale shard', (
+    _label,
+    flushBeforeRemoval,
+  ) => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('stale-mac', 'Mac', [session('s1')]);
+      remoteSessionStore.applyRemotePush('current-mac', 'maker:event', {
+        sessionId: 's1',
+        persistId: 'current-live-assistant',
+        event: {
+          type: 'text',
+          data: { text: 'Current reply', isFinal: false },
+        },
+      });
+      if (flushBeforeRemoval) vi.runOnlyPendingTimers();
+
+      remoteSessionStore.removeDevice('stale-mac');
+      vi.runOnlyPendingTimers();
+
+      expect(remoteSessionStore.getMessages('s1')).toMatchObject([{
+        clientId: 'current-live-assistant',
+        content: 'Current reply',
+      }]);
+
+      remoteSessionStore.setDeviceSessions('current-mac', 'Mac', [session('s1')]);
+      expect(remoteSessionStore.getSessionDeviceId('s1')).toBe('current-mac');
+      expect(remoteSessionStore.getMessages('s1')).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['stale transport writes first', ['stale-mac', 'current-mac']],
+    ['stale transport writes last', ['current-mac', 'stale-mac']],
+  ] as const)('removes only the stale transport provisional reply when %s', (_label, deviceOrder) => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('current-mac', 'Mac', [session('s1')]);
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      for (const deviceId of deviceOrder) {
+        const isStale = deviceId === 'stale-mac';
+        remoteSessionStore.applyRemotePush(deviceId, 'maker:event', {
+          sessionId: 's1',
+          persistId: isStale ? 'stale-live-assistant' : 'current-live-assistant',
+          event: {
+            type: 'text',
+            data: {
+              text: isStale ? 'Stale reply' : 'Current reply',
+              isFinal: true,
+            },
+          },
+        });
+      }
+
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId).sort()).toEqual([
+        'current-live-assistant',
+        'stale-live-assistant',
+      ]);
+      remoteSessionStore.removeDevice('stale-mac');
+
+      expect(remoteSessionStore.getSessionDeviceId('s1')).toBe('current-mac');
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual([
+        'current-live-assistant',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a provisional reply that is also owned by the current transport', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('current-mac', 'Mac', [session('s1')]);
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      for (const deviceId of ['stale-mac', 'current-mac']) {
+        remoteSessionStore.applyRemotePush(deviceId, 'maker:event', {
+          sessionId: 's1',
+          persistId: 'shared-live-assistant',
+          event: {
+            type: 'text',
+            data: { text: 'Shared reply', isFinal: true },
+          },
+        });
+      }
+
+      remoteSessionStore.removeDevice('stale-mac');
+
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual([
+        'shared-live-assistant',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let a stale replay replace the current transport assembly', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceIdentity([{ deviceId: 'current-mac', name: 'Mac' }]);
+      remoteSessionStore.setDeviceSessions('current-mac', 'Mac', [session('s1')]);
+      remoteSessionStore.applyRemotePush('current-mac', 'maker:event', {
+        sessionId: 's1',
+        persistId: 'shared-live-assistant',
+        event: {
+          type: 'text',
+          data: { text: 'Current reply', isFinal: true },
+        },
+      });
+      remoteSessionStore.applyRemotePush('stale-mac', 'maker:event', {
+        sessionId: 's1',
+        persistId: 'shared-live-assistant',
+        event: {
+          type: 'text',
+          data: { text: 'Stale replay', isFinal: true },
+        },
+      });
+
+      expect(remoteSessionStore.getMessages('s1')).toMatchObject([{
+        clientId: 'shared-live-assistant',
+        content: 'Current reply',
+      }]);
+      remoteSessionStore.removeDevice('stale-mac');
+      expect(remoteSessionStore.getMessages('s1')).toMatchObject([{
+        clientId: 'shared-live-assistant',
+        content: 'Current reply',
+      }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let a stale transport migrate the current generated assembly', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceIdentity([{ deviceId: 'current-mac', name: 'Mac' }]);
+      remoteSessionStore.setDeviceSessions('current-mac', 'Mac', [session('s1')]);
+      remoteSessionStore.applyRemotePush('current-mac', 'maker:event', {
+        sessionId: 's1',
+        event: {
+          type: 'text',
+          data: { text: 'Current reply', isFinal: true },
+        },
+      });
+      const currentClientId = remoteSessionStore.getMessages('s1')[0]?.clientId;
+
+      remoteSessionStore.applyRemotePush('stale-mac', 'maker:event', {
+        sessionId: 's1',
+        persistId: 'stale-persisted-assistant',
+        event: {
+          type: 'text',
+          data: { text: 'Stale replay', isFinal: true },
+        },
+      });
+
+      expect(currentClientId).toMatch(/^mobile-stream-/);
+      expect(remoteSessionStore.getMessages('s1')).toMatchObject([{
+        clientId: currentClientId,
+        content: 'Current reply',
+      }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps current generated ownership across a done boundary before stale replay', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceIdentity([{ deviceId: 'current-mac', name: 'Mac' }]);
+      remoteSessionStore.setDeviceSessions('current-mac', 'Mac', [session('s1')]);
+      remoteSessionStore.applyRemotePush('current-mac', 'maker:event', {
+        sessionId: 's1',
+        event: {
+          type: 'text',
+          data: { text: 'Current reply', isFinal: true },
+        },
+      });
+      const currentClientId = remoteSessionStore.getMessages('s1')[0]?.clientId;
+      remoteSessionStore.applyRemotePush('current-mac', 'maker:event', {
+        sessionId: 's1',
+        event: { type: 'done', data: {} },
+      });
+
+      remoteSessionStore.applyRemotePush('stale-mac', 'maker:event', {
+        sessionId: 's1',
+        persistId: 'stale-persisted-assistant',
+        event: {
+          type: 'text',
+          data: { text: 'Stale replay', isFinal: true },
+        },
+      });
+
+      expect(currentClientId).toMatch(/^mobile-stream-/);
+      expect(remoteSessionStore.getMessages('s1')).toMatchObject([{
+        clientId: currentClientId,
+        content: 'Current reply',
+      }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('allows a replacement transport when no authoritative device identity is available', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('stale-mac', 'Mac', [session('s1')]);
+      remoteSessionStore.applyRemotePush('stale-mac', 'maker:event', {
+        sessionId: 's1',
+        persistId: 'shared-live-assistant',
+        event: {
+          type: 'text',
+          data: { text: 'Stale reply', isFinal: true },
+        },
+      });
+      remoteSessionStore.applyRemotePush('current-mac', 'maker:event', {
+        sessionId: 's1',
+        persistId: 'shared-live-assistant',
+        event: {
+          type: 'text',
+          data: { text: 'Current reply', isFinal: true },
+        },
+      });
+
+      remoteSessionStore.removeDevice('stale-mac');
+      expect(remoteSessionStore.getMessages('s1')).toMatchObject([{
+        clientId: 'shared-live-assistant',
+        content: 'Current reply',
+      }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets the canonical current transport replace an indexed stale assembly', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceIdentity([{ deviceId: 'current-mac', name: 'Mac' }]);
+      remoteSessionStore.setDeviceSessions('stale-mac', 'Mac', [session('s1')]);
+      remoteSessionStore.applyRemotePush('stale-mac', 'maker:event', {
+        sessionId: 's1',
+        persistId: 'shared-live-assistant',
+        event: {
+          type: 'text',
+          data: { text: 'Stale reply', isFinal: true },
+        },
+      });
+      remoteSessionStore.applyRemotePush('current-mac', 'maker:event', {
+        sessionId: 's1',
+        persistId: 'shared-live-assistant',
+        event: {
+          type: 'text',
+          data: { text: 'Current reply', isFinal: true },
+        },
+      });
+
+      remoteSessionStore.removeDevice('stale-mac');
+      expect(remoteSessionStore.getMessages('s1')).toMatchObject([{
+        clientId: 'shared-live-assistant',
+        content: 'Current reply',
+      }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('writes canonicalDeviceId for a stale shard uniquely matching a current device, keeping deviceLinkDeviceId physical', () => {
     remoteSessionStore.setDeviceIdentity([{ deviceId: 'current-mac', name: 'Lizi Mac' }]);
     remoteSessionStore.setDeviceSessions('current-mac', 'Lizi Mac', [session('s-current')]);
@@ -2818,6 +5714,35 @@ describe('remoteSessionStore', () => {
     // 路由维度:deviceLinkDeviceId 保持物理 shard id,sessionDeviceIndex 指向物理 shard(patch 不丢)。
     expect(byId.get('s-stale')?.deviceLinkDeviceId).toBe('stale-mac');
     expect(remoteSessionStore.getSessionDeviceId('s-stale')).toBe('stale-mac');
+  });
+
+  it('keeps links generated after re-link routed to the new device after archival removes the lookup', () => {
+    const routeDeviceId = 'old-mac';
+    remoteSessionStore.setDeviceIdentity([{ deviceId: routeDeviceId, name: 'Mac' }]);
+    remoteSessionStore.setDeviceSessions(routeDeviceId, 'Mac', [session('source')]);
+    const before = remoteSessionStore.getSessions()[0]!;
+    expect(parseSessionDeepLinkUrl(buildMobileSessionMessageDeepLink(
+      'source', 'anchor', { session: before, deviceId: routeDeviceId },
+    ))?.deviceId).toBe(routeDeviceId);
+
+    remoteSessionStore.setDeviceIdentity([{ deviceId: 'new-mac', name: 'Mac' }]);
+    const current = remoteSessionStore.getSessions()[0]!;
+    expect(current.canonicalDeviceId).toBe('new-mac');
+    expect(current.deviceLinkDeviceId).toBe(routeDeviceId);
+    const links = [
+      buildMobileSessionMessageDeepLink('source', 'anchor', { session: current, deviceId: routeDeviceId }),
+      sessionMenuCopyLink(current),
+    ];
+    remoteSessionStore.applySessionPatch(routeDeviceId, 'source', { status: 'archived' });
+    expect(remoteSessionStore.getSessionDeviceId('source')).toBeUndefined();
+    for (const link of links) {
+      const target = parseSessionDeepLinkUrl(link)!;
+      expect(resolveSessionLinkDeviceId({
+        listedDeviceId: remoteSessionStore.getSessionDeviceId(target.sessionId),
+        linkedDeviceId: target.deviceId,
+        currentDeviceId: 'other-mac',
+      })).toBe('new-mac');
+    }
   });
 
   it('dedupes the same session id across stale/current shards, keeping the current shard copy', () => {
@@ -2975,6 +5900,62 @@ describe('setDeviceSessions 在途元数据写保护(sessionPendingWrites)', () 
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { title: 'A' })]);
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { title: 'B' })]);
     expect(remoteSessionStore.getSessions().find((s) => s.id === 's1')?.title).toBe('B');
+  });
+});
+
+describe('upsertDeviceSession 在途元数据写保护(sessionPendingWrites)', () => {
+  beforeEach(() => remoteSessionStore.clear());
+
+  it('归档在途、行已被乐观移出:单条读回的旧行不插回;release 后恢复正常 upsert', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1'), session('s2')]);
+    const release = sessionPendingWrites.track('s1', ['status']);
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { status: 'archived' });
+    // 会话页 getSession 慢回包:被控端还没处理归档,带回旧 status
+    remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', { status: 'active' }));
+    expect(remoteSessionStore.getSessions().map((s) => s.id)).toEqual(['s2']);
+    // 失败回滚先 release 再整行插回:不被自己的在途登记挡掉
+    release();
+    remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1'));
+    expect(remoteSessionStore.getSessions().map((s) => s.id).sort()).toEqual(['s1', 's2']);
+  });
+
+  it('行仍在本地:在途字段保留本地乐观值并留差异痕,其余字段照常吃读回', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { title: '旧名' })]);
+    const release = sessionPendingWrites.track('s1', ['title']);
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { title: '新名' });
+    remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', {
+      title: '旧名',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+    }));
+    const row = remoteSessionStore.getSessions().find((s) => s.id === 's1');
+    expect(row?.title).toBe('新名');
+    expect(row?.updatedAt).toBe('2026-01-02T00:00:00.000Z');
+    expect(sessionPendingWrites.consumeMaskedPush('s1', ['title'])).toBe(true);
+    release();
+  });
+
+  it('只有非 status 字段在途时,本地缺行的读回照常插入', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', []);
+    const release = sessionPendingWrites.track('s1', ['title']);
+    remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1'));
+    expect(remoteSessionStore.getSessions().map((s) => s.id)).toEqual(['s1']);
+    release();
+  });
+});
+
+describe('resolveSessionWriteDevices', () => {
+  beforeEach(() => remoteSessionStore.clear());
+
+  it('乐观 patch / 回滚落行所在的物理 shard,出网走规范 id 或调用方指定的路由设备', () => {
+    remoteSessionStore.setDeviceSessions('dev-old', 'Mac', [session('s1')]);
+    const row = { ...remoteSessionStore.getSessions().find((s) => s.id === 's1')!, canonicalDeviceId: 'dev-new' };
+    expect(resolveSessionWriteDevices('s1', row)).toEqual({ rpcDeviceId: 'dev-new', shardId: 'dev-old' });
+    // 会话页:出网沿用路由设备,shard 仍是物理 shard(不是路由 id)
+    expect(resolveSessionWriteDevices('s1', row, 'dev-route')).toEqual({ rpcDeviceId: 'dev-route', shardId: 'dev-old' });
+    // 调用方没有会话对象时按 store 索引解析
+    expect(resolveSessionWriteDevices('s1', null, 'dev-route')).toEqual({ rpcDeviceId: 'dev-route', shardId: 'dev-old' });
+    expect(resolveSessionWriteDevices('missing', null)).toBeNull();
+    expect(resolveSessionWriteDevices('missing', null, 'dev-route')).toEqual({ rpcDeviceId: 'dev-route', shardId: 'dev-route' });
   });
 });
 
@@ -3150,6 +6131,1502 @@ describe('maker:event 微批拆包(CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1)',
       expect(remoteSessionStore.getMessages('s-own')[0]).toMatchObject({ content: 'mine' });
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+describe('任务消息内存治理', () => {
+  beforeEach(() => remoteSessionStore.clear());
+
+  it('补读结果区分已接受的相同窗口与失效代际或过旧窗口', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
+    const first = remoteSessionStore.enterSessionMessageDetail('s1');
+    const latest = [messageAt('latest', 's1', '2026-09-08T00:00:00.000Z')];
+    expect(remoteSessionStore.setLatestMessageWindow('s1', latest, { authority: first })).toBe(true);
+    expect(remoteSessionStore.setLatestMessageWindow('s1', latest, { authority: first })).toBe(true);
+    expect(remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('old', 's1', '2026-09-07T00:00:00.000Z'),
+    ], { authority: first })).toBe(false);
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', first);
+    remoteSessionStore.enterSessionMessageDetail('s1');
+    expect(remoteSessionStore.setLatestMessageWindow('s1', latest, { authority: first })).toBe(false);
+    expect(remoteSessionStore.getMessages('s1').map((row) => row.id)).toEqual(['latest']);
+  });
+
+  const manyMessages = (sessionId: string, count: number): RemoteMessage[] =>
+    Array.from({ length: count }, (_, index) => messageAt(
+      `${sessionId}-m-${index}`,
+      sessionId,
+      new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+    ));
+
+  const flushReclaim = async (): Promise<void> => {
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  it('只按 source=scheduler 分类，标题与 source 缺失均保守按 regular', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('schedule', { source: 'scheduler', title: '普通标题' }),
+      session('legacy-title', { title: '[Schedule] 旧标题' }),
+      session('bound', { source: 'user', title: '被定时器绑定' }),
+    ]);
+
+    expect(remoteSessionStore.getSessionRetention('schedule')).toBe('schedule');
+    expect(remoteSessionStore.getSessionRetention('legacy-title')).toBe('regular');
+    expect(remoteSessionStore.getSessionRetention('bound')).toBe('regular');
+  });
+
+  it('keeps retention lookup current across patch, shard replacement, removal and ID reuse', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { source: 'scheduler' });
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { totalCostUsd: 5 });
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('schedule');
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('regular');
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { source: 'scheduler' });
+    remoteSessionStore.removeDevice('dev-1');
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('regular');
+    remoteSessionStore.setDeviceSessions('dev-2', 'PC', [session('s1', { source: 'scheduler' })]);
+    remoteSessionStore.clear();
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('regular');
+    remoteSessionStore.setDeviceSessions('dev-2', 'PC', [session('s1')]);
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('regular');
+  });
+
+  it('旧详情代际的读取在 blur→refocus 后不能覆盖新窗口', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
+    const first = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.setMessages('s1', [message('first', 's1')], { authority: first });
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', first);
+    const second = remoteSessionStore.enterSessionMessageDetail('s1');
+
+    remoteSessionStore.setMessages('s1', [message('stale', 's1')], { authority: first });
+    expect(remoteSessionStore.getMessages('s1').map((row) => row.id)).toEqual(['first']);
+
+    remoteSessionStore.setMessages('s1', [message('fresh', 's1')], { authority: second });
+    expect(remoteSessionStore.getMessages('s1').map((row) => row.id)).toEqual(['fresh']);
+  });
+
+  it('从未打开的 regular 可更新全局镜像，首次进入或离场后不再接受无 authority 补读', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const unenteredAuthority = remoteSessionStore.captureUnenteredSessionMessageAuthority('s1');
+    expect(remoteSessionStore.hasSessionMessageDetailEntered('s1')).toBe(false);
+    expect(remoteSessionStore.canCommitUnenteredSessionMessageWindow(unenteredAuthority, 'dev-1')).toBe(true);
+    expect(remoteSessionStore.canCommitUnenteredSessionMessageWindow(unenteredAuthority, 'dev-2')).toBe(false);
+
+    remoteSessionStore.setLatestMessageWindow('s1', [message('global-mirror', 's1')]);
+    expect(remoteSessionStore.getMessages('s1').map((row) => row.id)).toEqual(['global-mirror']);
+
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    expect(remoteSessionStore.hasSessionMessageDetailEntered('s1')).toBe(true);
+    expect(remoteSessionStore.canCommitUnenteredSessionMessageWindow(unenteredAuthority, 'dev-1')).toBe(false);
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', authority);
+    remoteSessionStore.setLatestMessageWindow('s1', [message('stale-reconnect', 's1')]);
+
+    expect(remoteSessionStore.getMessages('s1').some((row) => row.id === 'stale-reconnect')).toBe(false);
+  });
+
+  it('从未打开的 schedule 不接受无 authority 的重连补读', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s1', { source: 'scheduler' }),
+    ]);
+
+    const unenteredAuthority = remoteSessionStore.captureUnenteredSessionMessageAuthority('s1');
+    expect(remoteSessionStore.hasSessionMessageDetailEntered('s1')).toBe(false);
+    expect(remoteSessionStore.canCommitUnenteredSessionMessageWindow(unenteredAuthority, 'dev-1')).toBe(false);
+    remoteSessionStore.setLatestMessageWindow('s1', [message('schedule-reconnect', 's1')]);
+    expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+  });
+
+  it('clear 后同设备同任务重建也拒绝 reset 前的未进入详情读取', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const beforeReset = remoteSessionStore.captureUnenteredSessionMessageAuthority('s1');
+
+    remoteSessionStore.clear();
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+
+    expect(remoteSessionStore.canCommitUnenteredSessionMessageWindow(beforeReset, 'dev-1')).toBe(false);
+    const afterReset = remoteSessionStore.captureUnenteredSessionMessageAuthority('s1');
+    expect(remoteSessionStore.canCommitUnenteredSessionMessageWindow(afterReset, 'dev-1')).toBe(true);
+  });
+
+  it('打开过的 schedule 离场后与 regular 一致：压回单窗而不是清空', async () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('schedule');
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('regular');
+    remoteSessionStore.setMessages('s1', manyMessages('s1', 100), { authority });
+
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'app-background', authority);
+    await flushReclaim();
+    const rows = remoteSessionStore.getMessages('s1');
+    expect(rows).toHaveLength(80);
+    expect(rows.at(-1)?.id).toBe('s1-m-99');
+  });
+
+  it.each(['deleted', 'archived'] as const)('%s 后同 id 重新出现的 schedule 不沿用旧的已打开标记', (status) => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
+    remoteSessionStore.enterSessionMessageDetail('s1');
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('regular');
+
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { status });
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('schedule');
+  });
+
+  it('移除设备后同 id 重新出现的 schedule 不沿用旧的已打开标记', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
+    remoteSessionStore.enterSessionMessageDetail('s1');
+
+    remoteSessionStore.removeDevice('dev-1');
+    remoteSessionStore.setDeviceSessions('dev-2', 'PC', [session('s1', { source: 'scheduler' })]);
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('schedule');
+  });
+
+  it('从未打开的 schedule 不驻留推送来的完整正文', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+      sessionId: 's1',
+      message: message('unopened-push', 's1'),
+    });
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('schedule');
+    expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+  });
+
+  it('regular 离场后旧订阅 push 与尚未 flush 的流式批次都不能复活窗口', async () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+      const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+      remoteSessionStore.setMessages('s1', manyMessages('s1', 2), { authority });
+      pushMakerText('s1', 'stream-1', 'queued delta', false);
+
+      remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', authority);
+      const nextAuthority = remoteSessionStore.enterSessionMessageDetail('s1');
+      vi.runOnlyPendingTimers();
+      remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+        sessionId: 's1',
+        message: message('late-subscription-push', 's1'),
+      });
+
+      expect(remoteSessionStore.isSessionMessageAuthorityCurrent(nextAuthority)).toBe(true);
+      expect(remoteSessionStore.getMessages('s1').map((row) => row.id)).toEqual([
+        's1-m-0',
+        'late-subscription-push',
+        's1-m-1',
+      ]);
+      // 上面的 push 是在新代际可见期间到达，应该保留；旧代际排队的 delta 不得出现。
+      expect(remoteSessionStore.getMessages('s1').some((row) => row.id === 'stream-1')).toBe(false);
+
+      remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', nextAuthority);
+      await flushReclaim();
+      remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+        sessionId: 's1',
+        message: message('push-after-leave', 's1'),
+      });
+      expect(remoteSessionStore.getMessages('s1').some((row) => row.id === 'push-after-leave')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('页面卸载后本地工作排空仍会完成 deferred reclaim', async () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const work = remoteSessionStore.acquireSessionMessageWork('s1', true);
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.setMessages('s1', manyMessages('s1', 100), { authority });
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'session-switch', authority);
+
+    await flushReclaim();
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(100);
+    work.release();
+    await flushReclaim();
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(80);
+  });
+
+  it('pending queue 暂缓回收，queue 排空后由 store 主动补回收', async () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.setMessages('s1', manyMessages('s1', 100), { authority });
+    remoteSessionStore.setInputProjection('s1', projection('s1'));
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'app-background', authority);
+
+    await flushReclaim();
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(100);
+    remoteSessionStore.setInputProjection('s1', {
+      ...projection('s1'),
+      pendingQueue: [],
+    });
+    await flushReclaim();
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(80);
+  });
+
+  it('regular 失焦压回单窗，同时保留窗口外的本地系统卡', async () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    const localCard = {
+      ...messageAt('mobile-system-pwd-old', 's1', '2025-12-31T23:59:59.000Z'),
+      role: 'system' as const,
+    };
+    remoteSessionStore.setMessages('s1', [localCard, ...manyMessages('s1', 100)], { authority });
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', authority);
+    await flushReclaim();
+
+    const rows = remoteSessionStore.getMessages('s1');
+    expect(rows).toHaveLength(80);
+    expect(rows.some((row) => row.id === localCard.id)).toBe(true);
+    expect(rows.at(-1)?.id).toBe('s1-m-99');
+  });
+
+  it('后台运行中的 regular 任务持续收到列表推送，内存窗口不超过一页', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.setSessionRunning('s1', true);
+    const pushed = manyMessages('s1', 300);
+    for (const row of pushed) {
+      remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+        sessionId: 's1', listMessage: true, message: row,
+      });
+    }
+    const rows = remoteSessionStore.getMessages('s1');
+    expect(rows).toHaveLength(80);
+    expect(rows.at(-1)?.id).toBe('s1-m-299');
+  });
+
+  it('后台单窗上限只裁可重取的行，保留本地系统卡', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.setSessionRunning('s1', true);
+    const localCard = {
+      ...messageAt('mobile-system-local-only', 's1', '2025-12-31T23:59:59.000Z'),
+      role: 'system' as const,
+    };
+    remoteSessionStore.setMessages('s1', [localCard]);
+    for (const row of manyMessages('s1', 200)) {
+      remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+        sessionId: 's1', listMessage: true, message: row,
+      });
+    }
+    const rows = remoteSessionStore.getMessages('s1');
+    expect(rows).toHaveLength(80);
+    expect(rows.some((row) => row.id === localCard.id)).toBe(true);
+    expect(rows.at(-1)?.id).toBe('s1-m-199');
+  });
+
+  it('正在看的 regular 任务不受后台单窗上限影响', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.setSessionRunning('s1', true);
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.setMessages('s1', manyMessages('s1', 120), { authority });
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+      sessionId: 's1', listMessage: true, message: messageAt('s1-new', 's1', '2026-01-01T01:00:00.000Z'),
+    });
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(121);
+  });
+
+  it('regular 全局 LRU 不淘汰当前详情，且总量压回约 800 条', () => {
+    // 后台任务各自封顶一页(80)，要 11 个以上后台任务才会触发全局淘汰。
+    const sessions = Array.from({ length: 13 }, (_, index) => session(`s${index}`));
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', sessions);
+    remoteSessionStore.enterSessionMessageDetail('s0');
+    for (const item of sessions) {
+      remoteSessionStore.setMessages(item.id, manyMessages(item.id, 100));
+    }
+
+    const total = sessions.reduce(
+      (sum, item) => sum + remoteSessionStore.getMessages(item.id).length,
+      0,
+    );
+    expect(total).toBeLessThanOrEqual(800);
+    expect(remoteSessionStore.getMessages('s0')).toHaveLength(100);
+    expect(sessions.slice(1).some((item) => remoteSessionStore.getMessages(item.id).length === 0)).toBe(true);
+  });
+
+  it('notifies an evicted session preview subscriber when another session exceeds the LRU budget', () => {
+    const sessions = Array.from({ length: 13 }, (_, index) => session(`s${index}`));
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', sessions);
+    const previewChanged = vi.fn();
+    const unsubscribe = remoteSessionStore.subscribeSessionMessagePreview('s0', previewChanged);
+    try {
+      remoteSessionStore.setMessages('s0', manyMessages('s0', 80));
+      expect(remoteSessionStore.getSessionMessagePreview('s0')).toBeDefined();
+      previewChanged.mockClear();
+
+      for (const item of sessions.slice(1)) {
+        remoteSessionStore.setMessages(item.id, manyMessages(item.id, 80));
+      }
+
+      expect(remoteSessionStore.getMessages('s0')).toEqual([]);
+      expect(previewChanged).toHaveBeenCalledTimes(1);
+      expect(remoteSessionStore.getSessionMessagePreview('s0')).toBeUndefined();
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it('regular 字节 LRU 会计入深层容器中的大字符串', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s0'), session('s1')]);
+    const currentAuthority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.setMessages('s1', [message('current', 's1')], { authority: currentAuthority });
+
+    // 同一字符串引用复用四次,避免测试本身额外分配 72 MiB;逻辑 payload 序列化后
+    // 仍会产生四份内容。旧 depth=3 截断会在 chunks 外层直接按 64 bytes 低估。
+    const chunk = 'x'.repeat(9 * 1024 * 1024);
+    const deepPayload = {
+      level1: {
+        level2: {
+          level3: {
+            chunks: [chunk, chunk, chunk, chunk],
+          },
+        },
+      },
+    };
+    remoteSessionStore.setMessages('s0', [{
+      ...message('deep', 's0'),
+      content: deepPayload,
+    }]);
+
+    expect(remoteSessionStore.getMessages('s0')).toEqual([]);
+    expect(remoteSessionStore.getMessages('s1').map((row) => row.id)).toEqual(['current']);
+  });
+
+  it('regular LRU 只淘汰可重取正文，不丢尚未落盘的本地系统卡', () => {
+    const sessions = Array.from({ length: 13 }, (_, index) => session(`s${index}`));
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', sessions);
+    const localCard = {
+      ...messageAt('mobile-system-local-only', 's0', '2025-12-31T23:59:59.000Z'),
+      role: 'system' as const,
+    };
+    remoteSessionStore.setMessages('s0', [localCard, ...manyMessages('s0', 79)]);
+    for (const item of sessions.slice(1)) {
+      remoteSessionStore.setMessages(item.id, manyMessages(item.id, 80));
+    }
+
+    expect(remoteSessionStore.getMessages('s0')).toHaveLength(80);
+    expect(remoteSessionStore.getMessages('s0').some((row) => row.id === localCard.id)).toBe(true);
+  });
+
+  it('regular 离场释放详情投影并拒绝离场前启动的旧投影查询', async () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.setMessages('s1', [message('m1', 's1')], { authority });
+    remoteSessionStore.setInputProjection('s1', {
+      ...projection('s1'),
+      pendingQueue: [],
+    });
+    const queryEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', authority);
+    await flushReclaim();
+
+    expect(remoteSessionStore.getInputProjection('s1').pendingQueue).toEqual([]);
+    expect(remoteSessionStore.setInputProjectionIfCurrent(
+      's1',
+      projection('s1'),
+      queryEpoch,
+    )).toBe(false);
+  });
+
+  it('source 晚到为 scheduler：已打开的详情仍按 regular 驻留', async () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.setMessages('s1', manyMessages('s1', 100), { authority });
+
+    remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', { source: 'scheduler' }));
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('regular');
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(100);
+
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', authority);
+    await flushReclaim();
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(80);
+  });
+
+  it('归档会话会撤销旧 authority，并拒绝迟到 push 复活正文', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.setMessages('s1', [message('before-archive', 's1')], { authority });
+
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { status: 'archived' });
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+      sessionId: 's1',
+      message: message('late-after-archive', 's1'),
+    });
+
+    expect(remoteSessionStore.isSessionMessageAuthorityCurrent(authority)).toBe(false);
+    expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+  });
+
+  it('显式失效 rewind 窗口会清正文、sync marker 并登记刷新', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.setMessages('s1', [message('before-rewind', 's1')], { authority });
+    const row = remoteSessionStore.getSessions().find((item) => item.id === 's1')!;
+    remoteSessionStore.markSessionMessagesSynced('s1', row);
+
+    remoteSessionStore.invalidateSessionMessageWindow('s1', 'dev-1');
+
+    expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+    expect(remoteSessionStore.isSessionMessageWindowSynced('s1', row)).toBe(false);
+    expect(remoteSessionStore.hasPendingRefresh('s1')).toBe(true);
+    expect(remoteSessionStore.isSessionMessageAuthorityCurrent(authority)).toBe(true);
+  });
+});
+
+describe('device-clock live row clamp (applyRemoteTextEvent createdAt, cross-clock-domain sort fix)', () => {
+  beforeEach(() => remoteSessionStore.clear());
+
+  it('clampLiveRowCreatedAt: 无既有基准时原样返回设备时间', () => {
+    expect(clampLiveRowCreatedAt('2026-01-01T00:00:05.000Z', undefined))
+      .toBe('2026-01-01T00:00:05.000Z');
+  });
+
+  it('clampLiveRowCreatedAt: 设备时间领先于既有基准 → 锚定既有基准,不让快设备时钟支配后续主机行', () => {
+    expect(clampLiveRowCreatedAt('2026-01-01T00:00:05.000Z', '2026-01-01T00:00:01.000Z'))
+      .toBe('2026-01-01T00:00:01.000Z');
+  });
+
+  it('clampLiveRowCreatedAt: 设备时间与既有基准相同 → 原样返回(打平,交给 compareMessageOrder 的 rowid/到达序兜底)', () => {
+    expect(clampLiveRowCreatedAt('2026-01-01T00:00:05.000Z', '2026-01-01T00:00:05.000Z'))
+      .toBe('2026-01-01T00:00:05.000Z');
+  });
+
+  it('clampLiveRowCreatedAt: 设备时间落后于既有基准 → 钳制为既有基准本身,不发明 +1ms', () => {
+    expect(clampLiveRowCreatedAt('2026-01-01T00:00:01.000Z', '2026-01-01T00:00:05.000Z'))
+      .toBe('2026-01-01T00:00:05.000Z');
+  });
+
+  it('设备时钟落后会话已知最新行时,新建的 live 行不再被排到该行之前(跨时钟域错位的修复现场)', () => {
+    vi.useFakeTimers();
+    try {
+      // 会话里已有一条 createdAt 更新的行(可能是刚持久化的用户消息,也可能是更早一次
+      // 已经落定的 live 行),随后设备本地时钟给出的「现在」比它更旧 —— 这正是本 bug 的
+      // 跨时钟域场景(不论具体是设备落后还是设备超前,症状同源:新行的设备戳不保证
+      // ≥ 会话已知最新行,可能被排到它前面,`getMessages` 尾部就不是最新内容)。
+      remoteSessionStore.setLatestMessageWindow('s1', [
+        messageAt('user-sent', 's1', '2026-01-01T00:10:00.000Z'),
+      ]);
+      vi.setSystemTime(new Date('2026-01-01T00:05:00.000Z'));
+      pushMakerText('s1', 'live-assistant', 'streaming reply', true);
+
+      const rows = remoteSessionStore.getMessages('s1');
+      // 钳制后,新 live 行的 createdAt 被拉到「已知最新行」自身(打平),稳定排序下
+      // 仍落在其后 —— 不再被排到 user-sent 前面(修复前会因为设备戳更早而插到它前面,
+      // 尾部就会显示旧内容而不是刚发生的这条)。
+      expect(rows.map((item) => item.clientId)).toEqual(['user-sent', 'live-assistant']);
+      expect(rows.find((item) => item.clientId === 'live-assistant')?.createdAt)
+        .toBe('2026-01-01T00:10:00.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('设备时钟快于主机时,后续主机持久化消息仍能排到旧 live 行之后', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setLatestMessageWindow('s1', [
+        {
+          ...messageAt('previous-user', 's1', '2026-01-01T00:00:00.000Z'),
+          role: 'user',
+        },
+      ]);
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'stale-live-assistant', 'previous streaming reply', true);
+
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('new-user', 's1', '2026-01-01T00:05:00.000Z'),
+        role: 'user',
+      });
+
+      const rows = remoteSessionStore.getMessages('s1');
+      expect(rows.map((item) => item.clientId)).toEqual([
+        'previous-user',
+        'stale-live-assistant',
+        'new-user',
+      ]);
+      expect(rows.find((item) => item.clientId === 'stale-live-assistant')?.createdAt)
+        .toBe('2026-01-01T00:00:00.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('会话 userSendAt 已越过旧 user 尾行时,当前 live 回复仍等待本轮 user push 重锚', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', {
+        userSendAt: '2026-01-01T00:00:02.000Z',
+        updatedAt: '2026-01-01T00:00:02.000Z',
+      })]);
+      remoteSessionStore.setLatestMessageWindow('s1', [{
+        ...messageAt('previous-user', 's1', '2026-01-01T00:00:01.000Z'),
+        role: 'user',
+        content: 'Previous question',
+      }]);
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'current-live-assistant', 'Current reply', true);
+
+      expect(remoteSessionStore.getMessages('s1')
+        .find((item) => item.clientId === 'current-live-assistant')?.createdAt)
+        .toBe('2026-01-01T00:00:02.000Z');
+
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('current-user', 's1', '2026-01-01T00:00:02.000Z'),
+        role: 'user',
+        content: 'Current question',
+      });
+
+      const rows = remoteSessionStore.getMessages('s1');
+      expect(rows.map((item) => item.clientId)).toEqual([
+        'previous-user',
+        'current-user',
+        'current-live-assistant',
+      ]);
+      expect(rows.slice(1).map((item) => item.createdAt)).toEqual([
+        '2026-01-01T00:00:02.000Z',
+        '2026-01-01T00:00:02.000Z',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('空消息窗先用会话 userSendAt 临时锚定短 live 行,再由权威消息完成重锚', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', {
+        userSendAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      })]);
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', undefined, 'OK', true);
+
+      expect(remoteSessionStore.getMessages('s1')[0]?.createdAt)
+        .toBe('2026-01-01T00:00:00.000Z');
+
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('persisted-short', 's1', '2026-01-01T00:00:01.000Z'),
+        content: 'OK',
+      });
+
+      const rows = remoteSessionStore.getMessages('s1');
+      expect(rows).toHaveLength(2);
+      expect(rows[0]?.clientId).toMatch(/^mobile-stream-/);
+      expect(rows[0]?.createdAt).toBe('2026-01-01T00:00:01.000Z');
+      expect(rows[1]?.clientId).toBe('persisted-short');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('首个短 live 行早于会话元数据时,元数据到达后把设备时间重锚到主机时间域', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', undefined, 'OK', true);
+
+      expect(remoteSessionStore.getMessages('s1')[0]?.createdAt)
+        .toBe('2026-01-01T00:10:00.000Z');
+
+      remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', {
+        userSendAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      }));
+
+      expect(remoteSessionStore.getMessages('s1')[0]?.createdAt)
+        .toBe('2026-01-01T00:00:00.000Z');
+
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('persisted-short', 's1', '2026-01-01T00:00:01.000Z'),
+        content: 'OK',
+      });
+
+      const rows = remoteSessionStore.getMessages('s1');
+      expect(rows).toHaveLength(2);
+      expect(rows[0]?.clientId).toMatch(/^mobile-stream-/);
+      expect(rows[0]?.createdAt).toBe('2026-01-01T00:00:01.000Z');
+      expect(rows[1]?.clientId).toBe('persisted-short');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('旧会话快照只做临时重锚,后续权威 user push 仍会恢复问题先于 live 回复', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'live-assistant', 'OK', true);
+
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', {
+        userSendAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      })]);
+
+      expect(remoteSessionStore.getMessages('s1')[0]?.createdAt)
+        .toBe('2026-01-01T00:00:00.000Z');
+
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('persisted-user', 's1', '2026-01-01T00:00:01.000Z'),
+        role: 'user',
+        content: 'Question',
+      });
+
+      const rows = remoteSessionStore.getMessages('s1');
+      expect(rows.map((item) => item.clientId)).toEqual([
+        'persisted-user',
+        'live-assistant',
+      ]);
+      expect(rows.map((item) => item.createdAt)).toEqual([
+        '2026-01-01T00:00:01.000Z',
+        '2026-01-01T00:00:01.000Z',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('只有旧会话快照水位时,随后创建的 live 行也会等待权威消息重锚', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', {
+        userSendAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      })]);
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'live-assistant', 'OK', true);
+
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('persisted-user', 's1', '2026-01-01T00:00:01.000Z'),
+        role: 'user',
+        content: 'Question',
+      });
+
+      const rows = remoteSessionStore.getMessages('s1');
+      expect(rows.map((item) => item.clientId)).toEqual([
+        'persisted-user',
+        'live-assistant',
+      ]);
+      expect(rows.map((item) => item.createdAt)).toEqual([
+        '2026-01-01T00:00:01.000Z',
+        '2026-01-01T00:00:01.000Z',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('发送前发起的旧消息窗口迟到时不消费 live 行待重锚身份', () => {
+    vi.useFakeTimers();
+    try {
+      // 此时发送前的 history 请求已经发出,但本地窗口尚未拿到任何主机时间水位。
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'live-assistant', 'Current reply', true);
+
+      // 这份窗口在发送前已经开始读取,返回时不含本轮 user 行。它可以临时把 live
+      // 行拉回主机时间域,但不能消费待重锚身份；否则后续权威 user push 无法恢复顺序。
+      remoteSessionStore.setLatestMessageWindow('s1', [
+        messageAt('previous-assistant', 's1', '2026-01-01T00:00:00.000Z'),
+      ]);
+
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('current-user', 's1', '2026-01-01T00:00:01.000Z'),
+        role: 'user',
+        content: 'Current question',
+      });
+
+      const rows = remoteSessionStore.getMessages('s1');
+      expect(rows.map((item) => item.clientId)).toEqual([
+        'previous-assistant',
+        'current-user',
+        'live-assistant',
+      ]);
+      expect(rows.slice(1).map((item) => item.createdAt)).toEqual([
+        '2026-01-01T00:00:01.000Z',
+        '2026-01-01T00:00:01.000Z',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('非空会话的旧 assistant 尾行不能让当前 live 回复失去待重锚资格', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setLatestMessageWindow('s1', [
+        messageAt('previous-assistant', 's1', '2026-01-01T00:00:00.000Z'),
+      ]);
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'current-live-assistant', 'Current reply', true);
+
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('current-user', 's1', '2026-01-01T00:00:01.000Z'),
+        role: 'user',
+        content: 'Current question',
+      });
+
+      const rows = remoteSessionStore.getMessages('s1');
+      expect(rows.map((item) => item.clientId)).toEqual([
+        'previous-assistant',
+        'current-user',
+        'current-live-assistant',
+      ]);
+      expect(rows.slice(1).map((item) => item.createdAt)).toEqual([
+        '2026-01-01T00:00:01.000Z',
+        '2026-01-01T00:00:01.000Z',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('连续两轮 provisional live 回复按 user push 顺序逐条完成重锚', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'live-assistant-1', 'First reply', true);
+      vi.setSystemTime(new Date('2026-01-01T00:11:00.000Z'));
+      pushMakerText('s1', 'live-assistant-2', 'Second reply', true);
+
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('user-1', 's1', '2026-01-01T00:00:01.000Z'),
+        role: 'user',
+        content: 'First question',
+      });
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('user-2', 's1', '2026-01-01T00:00:02.000Z'),
+        role: 'user',
+        content: 'Second question',
+      });
+
+      const rows = remoteSessionStore.getMessages('s1');
+      expect(rows.map((item) => item.clientId)).toEqual([
+        'user-1',
+        'live-assistant-1',
+        'user-2',
+        'live-assistant-2',
+      ]);
+      expect(rows.map((item) => item.createdAt)).toEqual([
+        '2026-01-01T00:00:01.000Z',
+        '2026-01-01T00:00:01.000Z',
+        '2026-01-01T00:00:02.000Z',
+        '2026-01-01T00:00:02.000Z',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('同一发送轮次的多条 live 回复按原顺序整体移到 user 行之后', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', {
+        userSendAt: '2026-01-01T00:00:01.000Z',
+        updatedAt: '2026-01-01T00:00:01.000Z',
+      })]);
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'live-assistant-1', 'First reply block', true);
+      pushMakerText('s1', 'live-assistant-2', 'Second reply block', true);
+
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('user-1', 's1', '2026-01-01T00:00:01.000Z'),
+        role: 'user',
+        content: 'Question',
+      });
+
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual([
+        'user-1',
+        'live-assistant-1',
+        'live-assistant-2',
+      ]);
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('user-2', 's1', '2026-01-01T00:00:02.000Z'),
+        role: 'user',
+        content: 'Next question',
+      });
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual([
+        'user-1',
+        'live-assistant-1',
+        'live-assistant-2',
+        'user-2',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('元数据前同一 maker turn 的多条 live 回复由首个 user 行整体消费', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.applyMakerEvent('s1', {
+        type: 'status',
+        data: { isRunning: true },
+      });
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'live-assistant-1', 'First reply block', true);
+      pushMakerText('s1', 'live-assistant-2', 'Second reply block', true);
+
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('user-1', 's1', '2026-01-01T00:00:01.000Z'),
+        role: 'user',
+        content: 'Question',
+      });
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual([
+        'user-1',
+        'live-assistant-1',
+        'live-assistant-2',
+      ]);
+
+      remoteSessionStore.applyMakerEvent('s1', {
+        type: 'status',
+        data: { isRunning: false },
+      });
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('user-2', 's1', '2026-01-01T00:00:02.000Z'),
+        role: 'user',
+        content: 'Next question',
+      });
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual([
+        'user-1',
+        'live-assistant-1',
+        'live-assistant-2',
+        'user-2',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('延迟的非 user push 不会消费当前轮 live 回复的待重锚身份', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', {
+        userSendAt: '2026-01-01T00:00:02.000Z',
+        updatedAt: '2026-01-01T00:00:02.000Z',
+      })]);
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'current-live-assistant', 'Current reply', true);
+
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('delayed-previous-assistant', 's1', '2026-01-01T00:00:01.000Z'),
+        content: 'Delayed previous reply',
+      });
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('current-user', 's1', '2026-01-01T00:00:02.000Z'),
+        role: 'user',
+        content: 'Current question',
+      });
+
+      const rows = remoteSessionStore.getMessages('s1');
+      expect(rows.map((item) => item.clientId)).toEqual([
+        'delayed-previous-assistant',
+        'current-user',
+        'current-live-assistant',
+      ]);
+      expect(rows.slice(1).map((item) => item.createdAt)).toEqual([
+        '2026-01-01T00:00:02.000Z',
+        '2026-01-01T00:00:02.000Z',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('早于本轮发送时间的 user push 不会消费当前轮 live 回复的待重锚身份', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', {
+        userSendAt: '2026-01-01T00:00:02.000Z',
+        updatedAt: '2026-01-01T00:00:02.000Z',
+      })]);
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'current-live-assistant', 'Current reply', true);
+
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('delayed-previous-user', 's1', '2026-01-01T00:00:01.000Z'),
+        role: 'user',
+        content: 'Previous question',
+      });
+      expect(remoteSessionStore.getMessages('s1')
+        .find((item) => item.clientId === 'current-live-assistant')?.createdAt)
+        .toBe('2026-01-01T00:00:02.000Z');
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('current-user', 's1', '2026-01-01T00:00:02.000Z'),
+        role: 'user',
+        content: 'Current question',
+      });
+
+      const rows = remoteSessionStore.getMessages('s1');
+      expect(rows.map((item) => item.clientId)).toEqual([
+        'delayed-previous-user',
+        'current-user',
+        'current-live-assistant',
+      ]);
+      expect(rows.slice(1).map((item) => item.createdAt)).toEqual([
+        '2026-01-01T00:00:02.000Z',
+        '2026-01-01T00:00:02.000Z',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('匹配本轮发送时间的 user 最新窗口会完成配对,下一轮 user 不再认领旧回复', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', {
+        userSendAt: '2026-01-01T00:00:01.000Z',
+        updatedAt: '2026-01-01T00:00:01.000Z',
+      })]);
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'live-assistant-1', 'First reply', true);
+
+      remoteSessionStore.setLatestMessageWindow('s1', [{
+        ...messageAt('user-1', 's1', '2026-01-01T00:00:01.000Z'),
+        role: 'user',
+        content: 'First question',
+      }]);
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('user-2', 's1', '2026-01-01T00:00:02.000Z'),
+        role: 'user',
+        content: 'Second question',
+      });
+
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual([
+        'user-1',
+        'live-assistant-1',
+        'user-2',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('一次权威窗口带回多轮 user 时,按窗口顺序逐条配对 provisional 回复', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', {
+        userSendAt: '2026-01-01T00:00:02.000Z',
+        updatedAt: '2026-01-01T00:00:02.000Z',
+      })]);
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'live-assistant-1', 'First reply', true);
+      vi.setSystemTime(new Date('2026-01-01T00:11:00.000Z'));
+      pushMakerText('s1', 'live-assistant-2', 'Second reply', true);
+
+      remoteSessionStore.setLatestMessageWindow('s1', [
+        {
+          ...messageAt('user-1', 's1', '2026-01-01T00:00:01.000Z'),
+          role: 'user',
+          content: 'First question',
+        },
+        {
+          ...messageAt('user-2', 's1', '2026-01-01T00:00:02.000Z'),
+          role: 'user',
+          content: 'Second question',
+        },
+      ]);
+
+      const rows = remoteSessionStore.getMessages('s1');
+      expect(rows.map((item) => item.clientId)).toEqual([
+        'user-1',
+        'live-assistant-1',
+        'user-2',
+        'live-assistant-2',
+      ]);
+      expect(rows.map((item) => item.createdAt)).toEqual([
+        '2026-01-01T00:00:01.000Z',
+        '2026-01-01T00:00:01.000Z',
+        '2026-01-01T00:00:02.000Z',
+        '2026-01-01T00:00:02.000Z',
+      ]);
+
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('user-3', 's1', '2026-01-01T00:00:03.000Z'),
+        role: 'user',
+        content: 'Third question',
+      });
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual([
+        'user-1',
+        'live-assistant-1',
+        'user-2',
+        'live-assistant-2',
+        'user-3',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('截断权威窗口只配对窗口内对应的最新 provisional 回复', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', {
+        userSendAt: '2026-01-01T00:00:03.000Z',
+        updatedAt: '2026-01-01T00:00:03.000Z',
+      })]);
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'live-assistant-1', 'First reply', true);
+      pushMakerText('s1', 'live-assistant-2', 'Second reply', true);
+      pushMakerText('s1', 'live-assistant-3', 'Third reply', true);
+
+      remoteSessionStore.setLatestMessageWindow('s1', [
+        {
+          ...messageAt('user-2', 's1', '2026-01-01T00:00:02.000Z'),
+          role: 'user',
+          content: 'Second question',
+        },
+        {
+          ...messageAt('user-3', 's1', '2026-01-01T00:00:03.000Z'),
+          role: 'user',
+          content: 'Third question',
+        },
+      ]);
+
+      remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', {
+        userSendAt: '2026-01-01T00:00:04.000Z',
+        updatedAt: '2026-01-01T00:00:04.000Z',
+      }));
+      pushMakerText('s1', 'live-assistant-4', 'Fourth reply', true);
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('user-4', 's1', '2026-01-01T00:00:04.000Z'),
+        role: 'user',
+        content: 'Fourth question',
+      });
+
+      const rows = remoteSessionStore.getMessages('s1');
+      const rowIds = rows.map((item) => item.clientId);
+      expect(rowIds.indexOf('live-assistant-2')).toBe(rowIds.indexOf('user-2') + 1);
+      expect(rowIds.indexOf('live-assistant-3')).toBe(rowIds.indexOf('user-3') + 1);
+      expect(rowIds.indexOf('live-assistant-4')).toBe(rowIds.indexOf('user-4') + 1);
+      expect(rowIds.indexOf('live-assistant-1')).toBeLessThan(rowIds.indexOf('user-4'));
+      expect(rows.find((item) => item.clientId === 'live-assistant-2')?.createdAt)
+        .toBe('2026-01-01T00:00:02.000Z');
+      expect(rows.find((item) => item.clientId === 'live-assistant-3')?.createdAt)
+        .toBe('2026-01-01T00:00:03.000Z');
+      expect(rows.find((item) => item.clientId === 'live-assistant-4')?.createdAt)
+        .toBe('2026-01-01T00:00:04.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('截断窗口中的中间 user 边界不会认领更旧轮次的 pending 回复', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', {
+        userSendAt: '2026-01-01T00:00:01.000Z',
+        updatedAt: '2026-01-01T00:00:01.000Z',
+      })]);
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'live-assistant-1', 'First reply', true);
+
+      remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', {
+        userSendAt: '2026-01-01T00:00:02.000Z',
+        updatedAt: '2026-01-01T00:00:02.000Z',
+      }));
+      pushMakerText('s1', 'live-assistant-2', 'Second reply', true);
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('user-2', 's1', '2026-01-01T00:00:02.000Z'),
+        role: 'user',
+        content: 'Second question',
+      });
+
+      remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', {
+        userSendAt: '2026-01-01T00:00:03.000Z',
+        updatedAt: '2026-01-01T00:00:03.000Z',
+      }));
+      pushMakerText('s1', 'live-assistant-3', 'Third reply', true);
+      remoteSessionStore.setLatestMessageWindow('s1', [
+        {
+          ...messageAt('user-2', 's1', '2026-01-01T00:00:02.000Z'),
+          role: 'user',
+          content: 'Second question',
+        },
+        {
+          ...messageAt('user-3', 's1', '2026-01-01T00:00:03.000Z'),
+          role: 'user',
+          content: 'Third question',
+        },
+      ]);
+
+      const truncatedRows = remoteSessionStore.getMessages('s1');
+      expect(truncatedRows.find((item) => item.clientId === 'live-assistant-1')?.createdAt)
+        .toBe('2026-01-01T00:00:01.000Z');
+      expect(truncatedRows.map((item) => item.clientId).indexOf('live-assistant-1'))
+        .toBeLessThan(truncatedRows.map((item) => item.clientId).indexOf('user-2'));
+
+      remoteSessionStore.setLatestMessageWindow('s1', [
+        {
+          ...messageAt('user-1', 's1', '2026-01-01T00:00:01.000Z'),
+          role: 'user',
+          content: 'First question',
+        },
+        {
+          ...messageAt('user-2', 's1', '2026-01-01T00:00:02.000Z'),
+          role: 'user',
+          content: 'Second question',
+        },
+        {
+          ...messageAt('user-3', 's1', '2026-01-01T00:00:03.000Z'),
+          role: 'user',
+          content: 'Third question',
+        },
+      ]);
+      const completeRowIds = remoteSessionStore.getMessages('s1').map((item) => item.clientId);
+      expect(completeRowIds.indexOf('live-assistant-1'))
+        .toBe(completeRowIds.indexOf('user-1') + 1);
+      expect(remoteSessionStore.getMessages('s1')
+        .find((item) => item.clientId === 'live-assistant-1')?.createdAt)
+        .toBe('2026-01-01T00:00:01.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('早于本轮发送时间的 user 最新窗口不改写当前 live 锚点,仍等待当前 user push 完成配对', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', {
+        userSendAt: '2026-01-01T00:00:02.000Z',
+        updatedAt: '2026-01-01T00:00:02.000Z',
+      })]);
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'current-live-assistant', 'Current reply', true);
+
+      remoteSessionStore.setLatestMessageWindow('s1', [{
+        ...messageAt('previous-user', 's1', '2026-01-01T00:00:01.000Z'),
+        role: 'user',
+        content: 'Previous question',
+      }]);
+      expect(remoteSessionStore.getMessages('s1')
+        .find((item) => item.clientId === 'current-live-assistant')?.createdAt)
+        .toBe('2026-01-01T00:00:02.000Z');
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('current-user', 's1', '2026-01-01T00:00:02.000Z'),
+        role: 'user',
+        content: 'Current question',
+      });
+
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.clientId)).toEqual([
+        'previous-user',
+        'current-user',
+        'current-live-assistant',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('多帧 live 行在会话元数据到达前持续保留待重锚标记', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', undefined, 'O', false);
+      vi.runOnlyPendingTimers();
+      const provisionalCreatedAt = remoteSessionStore.getMessages('s1')[0]?.createdAt;
+      pushMakerText('s1', undefined, 'K', true);
+
+      expect(remoteSessionStore.getMessages('s1')[0]).toMatchObject({
+        content: 'OK',
+        createdAt: provisionalCreatedAt,
+      });
+
+      remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', {
+        userSendAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      }));
+
+      expect(remoteSessionStore.getMessages('s1')[0]).toMatchObject({
+        content: 'OK',
+        createdAt: '2026-01-01T00:00:00.000Z',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('多条 distinct live 行在首个主机水位到达前都保持待重锚', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', 'live-assistant-1', 'First reply', true);
+      vi.setSystemTime(new Date('2026-01-01T00:11:00.000Z'));
+      pushMakerText('s1', 'live-assistant-2', 'Second reply', true);
+
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.createdAt)).toEqual([
+        '2026-01-01T00:10:00.000Z',
+        '2026-01-01T00:11:00.000Z',
+      ]);
+
+      remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', {
+        userSendAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      }));
+
+      expect(remoteSessionStore.getMessages('s1').map((item) => item.createdAt)).toEqual([
+        '2026-01-01T00:00:00.000Z',
+        '2026-01-01T00:00:00.000Z',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('本地 system card 不会被当成首条 live 行的主机时间水位', () => {
+    vi.useFakeTimers();
+    try {
+      const localCardId = remoteSessionStore.appendLocalSystemCard(
+        's1',
+        'status',
+        {},
+        new Date('2026-01-01T00:10:00.000Z'),
+      );
+      vi.setSystemTime(new Date('2026-01-01T00:11:00.000Z'));
+      pushMakerText('s1', 'live-assistant', 'Reply after local card', true);
+
+      expect(remoteSessionStore.getMessages('s1')
+        .find((item) => item.clientId === 'live-assistant')?.createdAt)
+        .toBe('2026-01-01T00:11:00.000Z');
+
+      remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s1', {
+        userSendAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      }));
+
+      const rows = remoteSessionStore.getMessages('s1');
+      expect(rows.find((item) => item.id === localCardId)?.createdAt)
+        .toBe('2026-01-01T00:10:00.000Z');
+      expect(rows.find((item) => item.clientId === 'live-assistant')?.createdAt)
+        .toBe('2026-01-01T00:00:00.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('主机持久化消息早于会话元数据时,也会收口临时 live 行的设备时间', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', undefined, 'OK', true);
+
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('persisted-short', 's1', '2026-01-01T00:00:01.000Z'),
+        content: 'OK',
+      });
+
+      const rows = remoteSessionStore.getMessages('s1');
+      expect(rows).toHaveLength(2);
+      expect(rows[0]?.clientId).toMatch(/^mobile-stream-/);
+      expect(rows[0]?.createdAt).toBe('2026-01-01T00:00:01.000Z');
+      expect(rows[1]?.clientId).toBe('persisted-short');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('首个主机 user push 在插入后再重锚,保持问题先于 live 回复', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', undefined, 'OK', true);
+
+      remoteSessionStore.appendMessage('s1', {
+        ...messageAt('persisted-user', 's1', '2026-01-01T00:00:01.000Z'),
+        role: 'user',
+        content: 'Question',
+      });
+
+      const rows = remoteSessionStore.getMessages('s1');
+      expect(rows.map((item) => item.clientId)).toEqual([
+        'persisted-user',
+        expect.stringMatching(/^mobile-stream-/),
+      ]);
+      expect(rows.map((item) => item.createdAt)).toEqual([
+        '2026-01-01T00:00:01.000Z',
+        '2026-01-01T00:00:01.000Z',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('权威最新消息窗口先于会话元数据到达时也会重锚临时 live 行', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', undefined, 'OK', true);
+
+      remoteSessionStore.setLatestMessageWindow('s1', [{
+        ...messageAt('persisted-user', 's1', '2026-01-01T00:00:01.000Z'),
+        role: 'user',
+        content: 'Question',
+      }]);
+
+      const rows = remoteSessionStore.getMessages('s1');
+      expect(rows.map((item) => item.clientId)).toEqual([
+        'persisted-user',
+        expect.stringMatching(/^mobile-stream-/),
+      ]);
+      expect(rows.map((item) => item.createdAt)).toEqual([
+        '2026-01-01T00:00:01.000Z',
+        '2026-01-01T00:00:01.000Z',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('权威 assistant 最新窗口重锚后仍让持久化行占据尾部', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+      pushMakerText('s1', undefined, 'OK', true);
+
+      remoteSessionStore.setLatestMessageWindow('s1', [{
+        ...messageAt('persisted-short', 's1', '2026-01-01T00:00:01.000Z'),
+        content: 'OK',
+      }]);
+
+      const rows = remoteSessionStore.getMessages('s1');
+      expect(rows).toHaveLength(2);
+      expect(rows[0]?.clientId).toMatch(/^mobile-stream-/);
+      expect(rows[1]?.clientId).toBe('persisted-short');
+      expect(rows.map((item) => item.createdAt)).toEqual([
+        '2026-01-01T00:00:01.000Z',
+        '2026-01-01T00:00:01.000Z',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('流式增量的首个 delta 落定 createdAt 后,后续 delta 沿用同一戳(不重复取设备时间/不重新钳制)', () => {
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.setLatestMessageWindow('s1', [
+        messageAt('user-sent', 's1', '2026-01-01T00:10:00.000Z'),
+      ]);
+      vi.setSystemTime(new Date('2026-01-01T00:05:00.000Z'));
+      pushMakerText('s1', 'live-assistant', 'partial ', false);
+      // 非 final 的增量先进 pendingTextDeltaBatches,由防抖定时器统一落定
+      // (见 remoteSessionStore.ts scheduleTextDeltaFlush/flushPendingTextDeltas)。
+      vi.runOnlyPendingTimers();
+      const firstStamp = remoteSessionStore.getMessages('s1')
+        .find((item) => item.clientId === 'live-assistant')?.createdAt;
+      expect(firstStamp).toBe('2026-01-01T00:10:00.000Z');
+
+      vi.setSystemTime(new Date('2026-01-01T00:20:00.000Z'));
+      pushMakerText('s1', 'live-assistant', 'and more', false);
+      vi.runOnlyPendingTimers();
+      const secondStamp = remoteSessionStore.getMessages('s1')
+        .find((item) => item.clientId === 'live-assistant')?.createdAt;
+      // 已存在行的 createdAt 保持不变(见 remoteSessionStore.ts applyRemoteTextEvent
+      // 对应分支的注释),不会因为设备时间继续前进而被重新戳一次。
+      expect(secondStamp).toBe(firstStamp);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('task tag source isolation', () => {
+  beforeEach(() => remoteSessionStore.clear());
+  it('invalidates a first list response before a shard exists, only for the source device', () => {
+    const epoch = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-a');
+    const otherEpoch = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-b');
+    remoteSessionStore.applyRemotePush('dev-a', 'local-db:task-tags:changed', { tags: [] });
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-a', epoch)).toBe(false);
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-b', otherEpoch)).toBe(true);
+    const replacementEpoch = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-a');
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-a', replacementEpoch)).toBe(true);
+  });
+  it('projects rename and deletion only into the source computer task memberships', () => {
+    const tag = {
+      id: 'default:red',
+      name: 'Red',
+      color: 'red' as const,
+      favoriteOrder: 0,
+      revision: 1,
+    };
+    remoteSessionStore.setDeviceSessions('dev-a', 'A', [session('a', { tags: [tag] })]);
+    remoteSessionStore.setDeviceSessions('dev-b', 'B', [session('b', { tags: [tag] })]);
+    const renamed = { ...tag, name: 'Work', revision: 2 };
+    remoteSessionStore.applyRemotePush('dev-a', 'local-db:task-tags:changed', {
+      tags: [renamed],
+    });
+    expect(remoteSessionStore.getSessions().find((row) => row.id === 'a')?.tags).toEqual([renamed]);
+    expect(remoteSessionStore.getSessions().find((row) => row.id === 'b')?.tags).toEqual([tag]);
+    remoteSessionStore.applyRemotePush('dev-a', 'local-db:task-tags:changed', {
+      tags: [],
+    });
+    expect(remoteSessionStore.getSessions().find((row) => row.id === 'a')?.tags).toEqual([]);
+    expect(remoteSessionStore.getSessions().find((row) => row.id === 'b')?.tags).toEqual([tag]);
+  });
+});
+
+describe('list message reuse', () => {
+  beforeEach(() => remoteSessionStore.clear());
+  it('keeps explicitly prefetched prose after leaving a task, while stale detail pushes remain blocked', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Host', [session('s1')]);
+    const authority = remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.leaveSessionMessageDetail('s1', 'detail-blur', authority);
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', { sessionId: 's1', message: message('stale', 's1') });
+    const content = '完整正文'.repeat(2000);
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', { sessionId: 's1', listMessage: true,
+      message: { ...message('prefetched', 's1'), content } });
+    expect(remoteSessionStore.getMessages('s1').map(row => row.id)).toEqual(['prefetched']);
+    expect(remoteSessionStore.getMessages('s1')[0].content).toBe(content);
+    remoteSessionStore.enterSessionMessageDetail('s1');
+    expect(remoteSessionStore.getMessages('s1')[0].content).toBe(content);
+  });
+
+  it('merges the disk window under list-only rows when the task opens', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Host', [session('s1')]);
+    const at = (id: string, createdAt: string) => messageAt(id, 's1', createdAt);
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', { sessionId: 's1', listMessage: true,
+      message: at('prefetched', '2026-01-01T00:00:09.000Z') });
+    remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.hydrateMessagesIfEmpty('s1', [
+      at('older', '2026-01-01T00:00:01.000Z'), { ...at('prefetched', '2026-01-01T00:00:09.000Z'), content: 'cached copy' },
+    ]);
+    expect(remoteSessionStore.getMessages('s1').map(row => [row.id, row.content])).toEqual([
+      ['older', 'hello'], ['prefetched', 'hello'],
+    ]);
+    // Only a list-only mirror merges; a loaded window keeps the existing "if empty" rule.
+    remoteSessionStore.hydrateMessagesIfEmpty('s1', [at('ignored', '2026-01-01T00:00:00.000Z')]);
+    expect(remoteSessionStore.getMessages('s1').map(row => row.id)).toEqual(['older', 'prefetched']);
+  });
+
+  it('does not let another device seed the same task ID', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Host', [session('s1')]);
+    remoteSessionStore.applyRemotePush('other', 'local-db:messages:created', { sessionId: 's1', listMessage: true, message: message('wrong', 's1') });
+    expect(remoteSessionStore.getMessages('s1')).toEqual([]);
+  });
+});
+
+describe('jank metrics store size', () => {
+  beforeEach(() => remoteSessionStore.clear());
+
+  it('counts full-store, home status and per-task preview subscribers separately', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Host', [session('s1'), session('s2')]);
+    remoteSessionStore.setMessages('s1', [message('m1', 's1'), message('m2', 's1')]);
+    const before = takeJankMetrics().store!;
+    const unsubscribe = [
+      remoteSessionStore.subscribe(() => undefined),
+      remoteSessionStore.subscribeHomeStatus(() => undefined),
+      remoteSessionStore.subscribeHomeStatus(() => undefined),
+      remoteSessionStore.subscribeSessionMessagePreview('s1', () => undefined),
+      remoteSessionStore.subscribeSessionMessagePreview('s2', () => undefined),
+      remoteSessionStore.subscribeSessionMessagePreview('s2', () => undefined),
+    ];
+    setJankMetricsEnabled(true);
+    try {
+      const store = takeJankMetrics().store!;
+      expect(store).toMatchObject({ sessionCount: 1, messageCount: 2, maxSessionMessageCount: 2 });
+      expect(store.subscriberCount - before.subscriberCount).toBe(1);
+      expect(store.homeStatusSubscriberCount - before.homeStatusSubscriberCount).toBe(2);
+      expect(store.previewSubscriberCount - before.previewSubscriberCount).toBe(3);
+    } finally {
+      setJankMetricsEnabled(false);
+      for (const off of unsubscribe) off();
     }
   });
 });

@@ -3,11 +3,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import {
+  DEFAULT_MATERIALIZE_LIMITS,
   addManualEntry,
+  coalesceDictionaryLearningActions,
   deleteTerms,
   dictionaryTermKey,
+  isSpeakerGateStrictness,
+  materializeDictionary,
   recordLearningEvent,
   renameTerm,
+  replaceTermAliases,
   termKeyFromMaterializedId,
   type DictationDictionaryLearningAction,
   type MaterializedDictionary,
@@ -99,22 +104,26 @@ export class VoiceInputDataStore {
 
   updateSettings(patch: unknown): VoiceInputSettings {
     const current = this.load();
-    const syncJustEnabled = isRecord(patch)
-      && patch.dictionarySyncEnabled === true
-      && current.settings.dictionarySyncEnabled === false;
+    // 同步开关的立即广播不能只看布尔 patch:「恢复默认」(传 null)同样会翻转有效值
+    // (比如显式关闭后恢复默认,有效值 false → 当前默认 true),对端可能早已在线,
+    // 必须按更新前后的有效值判断是否跨越开关边界。
+    const syncEnabledBefore = current.settings.dictionarySyncEnabled;
     // 词典三件套的真相在同步状态里,不接受整份覆盖 —— 那会绕过 CRDT,让本地写入
     // 在下一次物化时被静默丢掉。词典变更一律走下面的语义化入口。
     const nextSettings = normalizeVoiceInputSettings({
       ...current.settings,
-      ...stripDictionaryFields(patch),
+      ...translateSpeakerFilterStrictnessPatch(translateComposerLongPressPatch(stripDictionaryFields(patch))),
     }, process.platform);
     this.replaceState({
       ...current,
       settings: nextSettings,
     });
-    // 刚打开同步开关:对端可能早已在线,既没有 presence 事件也没有词典变更,
-    // 不主动推一次就要等到兜底心跳才收敛。
-    if (syncJustEnabled) notifyDictionaryChanged({ immediate: true });
+    // 开关刚切到开或关(含恢复默认导致的翻转):对端可能早已在线,既没有 presence
+    // 事件也没有词典变更。打开时立刻推当前投影;关闭时立刻推空表,清掉已经在线的
+    // 手机缓存。
+    if (syncEnabledBefore !== nextSettings.dictionarySyncEnabled) {
+      notifyDictionaryChanged({ immediate: true });
+    }
     return cloneSettings(nextSettings);
   }
 
@@ -166,6 +175,57 @@ export class VoiceInputDataStore {
     );
   }
 
+  editDictionaryEntry(entryId: string, nextText: string, aliases: string[]): VoiceInputSettings {
+    const state = voiceDictionarySyncStore.getState();
+    const termKey = termKeyFromMaterializedId(state, entryId);
+    if (!termKey) return cloneSettings(this.load().settings);
+    const targetKey = dictionaryTermKey(nextText);
+    const visibleEntry = materializeDictionary(state).entries.find((entry) => entry.id === entryId);
+    const allEntry = materializeDictionary(state, {
+      ...DEFAULT_MATERIALIZE_LIMITS,
+      maxAliases: Number.MAX_SAFE_INTEGER,
+    }).entries.find((entry) => entry.id === entryId);
+    const editableAliasKeys = new Set(
+      visibleEntry?.aliases.map((alias) => dictionaryTermKey(alias.text)) ?? [],
+    );
+    const submittedAliasKeys = new Set(aliases.map((alias) => dictionaryTermKey(alias)));
+    const visibleAliasesUnchanged =
+      submittedAliasKeys.size === editableAliasKeys.size &&
+      [...submittedAliasKeys].every((aliasKey) => editableAliasKeys.has(aliasKey));
+    // UI 按产品上限只展示前 8 个别名。更低权重的别名仍属于同步正本，原样保存时
+    // 不能把用户根本没看见的第 9 个及之后条目当作删除；但用户增删或替换了
+    // 任一可见项时，提交集合就是完整显式意图，否则新别名可能立刻被隐藏高频项挤出。
+    const hiddenAliases = visibleAliasesUnchanged
+      ? allEntry?.aliases
+          .filter((alias) => !editableAliasKeys.has(dictionaryTermKey(alias.text)))
+          .map((alias) => alias.text) ?? []
+      : [];
+    const nextAliases = [...aliases, ...hiddenAliases].filter(
+      (alias) => dictionaryTermKey(alias) !== targetKey,
+    );
+    return this.applyDictionaryMutation((current, clock) => {
+      const nowMs = Date.now();
+      // 先在原词条上替换别名，再搬到新主键。若新主键已存在，它原有的独立证据与别名
+      // 会由 renameTerm 正常合并，不会被这次编辑整份覆盖掉。
+      const aliasesEdited = replaceTermAliases(current, clock, {
+        termKey,
+        primaryText: nextText,
+        aliases: nextAliases,
+        nowMs,
+      });
+      const renamed = renameTerm(aliasesEdited.state, aliasesEdited.clock, {
+        termKey,
+        nextText,
+        nowMs,
+      });
+      return {
+        state: renamed.state,
+        clock: renamed.clock,
+        changed: aliasesEdited.changed || renamed.changed,
+      };
+    });
+  }
+
   recordDictionaryLearningActions(actions: DictationDictionaryLearningAction[]): {
     settings: VoiceInputSettings;
     newAutomaticEntries: Array<Pick<VoiceInputDictionaryEntry, 'id' | 'text'>>;
@@ -185,11 +245,10 @@ export class VoiceInputDataStore {
       let nextClock = clock;
       let changed = false;
       const nowMs = Date.now();
-      for (const action of actions) {
-        // 与单机学习路径一致:低置信度或没有别名证据的建议不进词典。
+      for (const action of coalesceDictionaryLearningActions(actions)) {
+        // 词汇证据与纠错别名独立:低置信度不学习,但允许没有别名的词汇。
         if (action.confidence === 'low') continue;
         const aliases = action.aliases ?? [];
-        if (aliases.length === 0) continue;
         const result = recordLearningEvent(nextState, nextClock, {
           text: action.term,
           aliases,
@@ -587,7 +646,7 @@ export class VoiceInputDataStore {
     try {
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
       const tmp = `${filePath}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf-8');
+      fs.writeFileSync(tmp, JSON.stringify(projectVoiceInputDataForPersist(state), null, 2), 'utf-8');
       fs.renameSync(tmp, filePath);
     } catch (error) {
       log.warn('voice input data write failed', {
@@ -615,7 +674,7 @@ export const voiceInputDataStore = new VoiceInputDataStore();
 const dictionaryChangedListeners = new Set<DictionaryChangedListener>();
 
 /**
- * `immediate` = 这次变更希望立刻广播,不要走去抖(用户刚打开同步开关)。
+ * `immediate` = 这次变更希望立刻广播,不要走去抖(用户刚打开或关闭同步开关)。
  */
 export type DictionaryChangedListener = (options?: { immediate?: boolean }) => void;
 
@@ -766,6 +825,33 @@ export function registerVoiceInputDataStoreIpc(): void {
     },
   );
 
+  ipcMain.handle(
+    'voice-input:dictionary:edit-entry',
+    (
+      event,
+      payload: { entryId?: unknown; text?: unknown; aliases?: unknown },
+    ): VoiceInputSettings => {
+      try {
+        assertTrustedAppRendererEvent(event);
+        const entryId = typeof payload?.entryId === 'string' ? payload.entryId : '';
+        const text =
+          typeof payload?.text === 'string'
+            ? payload.text.slice(0, MAX_VOICE_INPUT_DICTIONARY_ENTRY_CHARS)
+            : '';
+        const aliases = Array.isArray(payload?.aliases)
+          ? payload.aliases
+              .filter((item): item is string => typeof item === 'string')
+              .map((item) => item.slice(0, MAX_VOICE_INPUT_DICTIONARY_ENTRY_CHARS))
+              .slice(0, MAX_VOICE_INPUT_DICTIONARY_ALIASES)
+          : [];
+        if (!entryId) return voiceInputDataStore.getSettings();
+        return voiceInputDataStore.editDictionaryEntry(entryId, text, aliases);
+      } catch (error) {
+        throwVoiceInputDataStoreIpcError(error);
+      }
+    },
+  );
+
   ipcMain.handle('voice-input:dictionary-learning:record-actions', (event, actions: unknown) => {
     try {
       // 这个 handler 直接往词典正本里写。没有守卫的话,任意子帧(webview、插件面板)
@@ -865,6 +951,21 @@ function cloneSettings(settings: VoiceInputSettings): VoiceInputSettings {
   return JSON.parse(JSON.stringify(settings)) as VoiceInputSettings;
 }
 
+/**
+ * 落盘只记录 override。运行时快照里的 `composerLongPressEnabled` / `dictionarySyncEnabled`
+ * 是默认值 + override 合成的有效值;写进文件会把当时的默认钉死,未自定义的用户就跟不上
+ * 后续改默认 —— 尤其是「恢复默认」后残留的旧有效值,将来默认一变就会被
+ * `legacyDictionarySyncOverride()` 重新解释成显式 override。这几个字段(含声纹过滤
+ * 灵敏度 `speakerFilterStrictness`)都只持久化各自的 `*Override`。
+ */
+function projectVoiceInputDataForPersist(state: StoredVoiceInputData): unknown {
+  const settings: Record<string, unknown> = { ...state.settings };
+  delete settings.composerLongPressEnabled;
+  delete settings.dictionarySyncEnabled;
+  delete settings.speakerFilterStrictness;
+  return { ...state, settings };
+}
+
 function cloneHistory(history: VoiceInputHistoryEntry[]): VoiceInputHistoryEntry[] {
   return JSON.parse(JSON.stringify(history)) as VoiceInputHistoryEntry[];
 }
@@ -939,6 +1040,37 @@ function stripDictionaryFields(patch: unknown): Record<string, unknown> {
     // 展开合并的,undefined 会被现有值盖掉。
     next.dictionarySyncEnabledOverride = null;
     delete next.dictionarySyncEnabled;
+  }
+  return next;
+}
+
+/** 声纹过滤灵敏度:同样只记 override,renderer 传有效值字段;`null` = 恢复默认。 */
+function translateSpeakerFilterStrictnessPatch(patch: Record<string, unknown>): Record<string, unknown> {
+  if (!('speakerFilterStrictness' in patch)) return patch;
+  const next = { ...patch };
+  const value = next.speakerFilterStrictness;
+  delete next.speakerFilterStrictness;
+  if (isSpeakerGateStrictness(value)) {
+    next.speakerFilterStrictnessOverride = value;
+  } else if (value === null) {
+    next.speakerFilterStrictnessOverride = null;
+  }
+  return next;
+}
+
+/**
+ * 长按输入框开关:UI 传有效值,持久化只认 override(规则同上面的同步开关)。
+ * 每次显式拨动都记成 override;`null` = 恢复默认,删掉 override 跟随版本默认值。
+ */
+function translateComposerLongPressPatch(patch: Record<string, unknown>): Record<string, unknown> {
+  if (!('composerLongPressEnabled' in patch)) return patch;
+  const next = { ...patch };
+  const value = next.composerLongPressEnabled;
+  delete next.composerLongPressEnabled;
+  if (typeof value === 'boolean') {
+    next.composerLongPressEnabledOverride = value;
+  } else if (value === null) {
+    next.composerLongPressEnabledOverride = null;
   }
   return next;
 }

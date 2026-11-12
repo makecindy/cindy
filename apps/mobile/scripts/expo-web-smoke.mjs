@@ -45,7 +45,6 @@ try {
     'session.screen',
     'newSession.actions',
     'newSession.createButton',
-    'automations.screen',
     'settings.screen',
     'settings.logoutButton',
     'maker:schedule:delete',

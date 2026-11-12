@@ -12,23 +12,28 @@
  *     会重发 attention=false 的收尾包)
  *   - 其余(已读收尾包)→ 删除条目,行回落时间显示
  *
- * 不喂系统级 attention(dock 角标 / 通知)—— 通知职责归被控端本机,控制端只做行内可视。
+ * 不喂 dock 角标——未读归被控端。灵动岛与桌面通知由 agentIslandRemoteSessions 按侧栏
+ * 「任务范围」裁剪后另行同步给 main。
  *
  * ⚠️ 性能不变量(与 sessionAttentionStore 同款):SessionItem 逐行挂载,订阅必须是
- * 按 sessionId 的稳定引用精准订阅(条目对象未替换时快照引用不变),禁止整表订阅。
+ * 按 deviceId + sessionId 的稳定引用精准订阅(条目对象未替换时快照引用不变),禁止整表订阅。
  */
 
-import { useSyncExternalStore } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 
 export type RemoteSessionActivityPhase = 'running' | 'needs-interaction' | 'completed' | 'error';
 
 /** 镜像 @cindy/device-link 的 SessionActivityPayload(renderer 不直接依赖该包)。 */
 export interface RemoteSessionActivity {
+  completionToken?: string;
   sessionId: string;
   phase: RemoteSessionActivityPhase;
   compactDetail: string;
+  summaryFormat?: 'plain-text';
+  workingPhase?: string;
   interactionKind?: string;
   attention: boolean;
+  completionNotification?: 'pending' | 'teammate' | 'silent';
 }
 
 /** Active remote turns must win over the persisted "started without ended" heuristic. */
@@ -38,48 +43,93 @@ export function isRemoteSessionActivityActive(
   return activity?.phase === 'running' || activity?.phase === 'needs-interaction';
 }
 
-const listeners = new Set<() => void>();
-/** sessionId → 活动条目(引用稳定,内容变化才替换)。 */
-const activityMap = new Map<string, RemoteSessionActivity>();
-/** sessionId → deviceId(设备移除时按设备清扫)。 */
-const sessionDeviceIndex = new Map<string, string>();
+const listeners = new Set<(deviceId?: string, sessionId?: string) => void>();
+/** deviceId → sessionId → 活动条目；本地任务没有 deviceId，不读取远程缓存。 */
+const activityByDevice = new Map<string, Map<string, RemoteSessionActivity>>();
 /** 整表变更版本号(聚合消费方作依赖用;activityMap 本体是可变引用,不能当快照)。 */
 let revision = 0;
 
-function emit(): void {
+function emit(deviceId?: string, sessionId?: string): void {
   revision++;
-  for (const l of listeners) l();
+  for (const l of listeners) l(deviceId, sessionId);
 }
 
 function isPhase(value: unknown): value is RemoteSessionActivityPhase {
-  return value === 'running' || value === 'needs-interaction' || value === 'completed' || value === 'error';
+  return (
+    value === 'running' ||
+    value === 'needs-interaction' ||
+    value === 'completed' ||
+    value === 'error'
+  );
 }
 
 function sameActivity(a: RemoteSessionActivity, b: RemoteSessionActivity): boolean {
-  return a.phase === b.phase
-    && a.compactDetail === b.compactDetail
-    && a.interactionKind === b.interactionKind
-    && a.attention === b.attention;
+  return (
+    a.completionToken === b.completionToken &&
+    a.phase === b.phase &&
+    a.compactDetail === b.compactDetail &&
+    a.summaryFormat === b.summaryFormat &&
+    a.workingPhase === b.workingPhase &&
+    a.interactionKind === b.interactionKind &&
+    a.completionNotification === b.completionNotification &&
+    a.attention === b.attention
+  );
 }
 
-export function subscribeRemoteSessionActivity(listener: () => void): () => void {
+export function subscribeRemoteSessionActivity(
+  listener: (deviceId?: string, sessionId?: string) => void,
+): () => void {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
   };
 }
 
-export function getRemoteSessionActivity(sessionId: string): RemoteSessionActivity | undefined {
-  return activityMap.get(sessionId);
+export function getRemoteSessionActivity(
+  sessionId: string,
+  deviceId: string | null | undefined,
+): RemoteSessionActivity | undefined {
+  return deviceId ? activityByDevice.get(deviceId)?.get(sessionId) : undefined;
 }
 
 /** Hook —— 按 sessionId 精准订阅(本地会话恒为 undefined,零开销)。 */
-export function useRemoteSessionActivity(sessionId: string): RemoteSessionActivity | undefined {
+export function useRemoteSessionActivity(
+  sessionId: string,
+  deviceId: string | null | undefined,
+): RemoteSessionActivity | undefined {
   return useSyncExternalStore(
     subscribeRemoteSessionActivity,
-    () => activityMap.get(sessionId),
-    () => activityMap.get(sessionId),
+    () => getRemoteSessionActivity(sessionId, deviceId),
+    () => getRemoteSessionActivity(sessionId, deviceId),
   );
+}
+
+/** Hook —— 一组 sessionId 的 phase 子映射(无远程活动条目的不进结果)。
+ *  给"折叠容器按同一份判据汇总整组"的场景用(定时任务分组头,组内可能含
+ *  device-link 远程运行)。快照是序列化 key(primitive),Map 由 useMemo 派生:
+ *  组外条目变化、以及组内 detail 类变化都不会触发重渲染 —— 别改成整表 revision
+ *  逐行用(会退化成整表订阅,违反文件头的性能不变量)。 */
+export function useRemoteSessionsPhaseMap(
+  sessions: readonly { id: string; deviceLinkDeviceId?: string | null }[],
+): ReadonlyMap<string, RemoteSessionActivityPhase> {
+  const getSnapshot = (): string => {
+    let key = '';
+    for (const { id, deviceLinkDeviceId } of sessions) {
+      const phase = getRemoteSessionActivity(id, deviceLinkDeviceId)?.phase;
+      if (phase) key += `${id}:${phase}|`;
+    }
+    return key;
+  };
+  const key = useSyncExternalStore(subscribeRemoteSessionActivity, getSnapshot, getSnapshot);
+  return useMemo(() => {
+    const map = new Map<string, RemoteSessionActivityPhase>();
+    for (const pair of key.split('|')) {
+      if (!pair) continue;
+      const sep = pair.lastIndexOf(':');
+      map.set(pair.slice(0, sep), pair.slice(sep + 1) as RemoteSessionActivityPhase);
+    }
+    return map;
+  }, [key]);
 }
 
 function getRevision(): number {
@@ -99,49 +149,73 @@ export function applyRemoteSessionActivity(deviceId: string, payload: unknown): 
   if (typeof payload !== 'object' || payload === null) return;
   const p = payload as Record<string, unknown>;
   const sessionId = typeof p.sessionId === 'string' ? p.sessionId : '';
-  if (!sessionId || !isPhase(p.phase)) return;
+  if (!deviceId || !sessionId || !isPhase(p.phase)) return;
   const attention = p.attention === true;
   const keep = p.phase === 'running' || p.phase === 'needs-interaction' || attention;
   if (!keep) {
-    removeRemoteSessionActivityEntry(sessionId);
+    removeRemoteSessionActivityEntry(sessionId, deviceId);
     return;
   }
   const next: RemoteSessionActivity = {
+    ...(typeof p.completionToken === 'string' && p.completionToken.length > 0 && p.completionToken.length <= 128
+      ? { completionToken: p.completionToken } : {}),
     sessionId,
     phase: p.phase,
     compactDetail: typeof p.compactDetail === 'string' ? p.compactDetail : '',
+    ...(p.summaryFormat === 'plain-text' ? { summaryFormat: 'plain-text' as const } : {}),
+    workingPhase: typeof p.workingPhase === 'string' ? p.workingPhase : undefined,
     interactionKind: typeof p.interactionKind === 'string' ? p.interactionKind : undefined,
     attention,
+    completionNotification: p.completionNotification === 'pending' || p.completionNotification === 'teammate' || p.completionNotification === 'silent' ? p.completionNotification : undefined,
   };
-  sessionDeviceIndex.set(sessionId, deviceId);
+  let activityMap = activityByDevice.get(deviceId);
+  if (!activityMap) {
+    activityMap = new Map();
+    activityByDevice.set(deviceId, activityMap);
+  }
   const current = activityMap.get(sessionId);
   if (current && sameActivity(current, next)) return;
   activityMap.set(sessionId, next);
-  emit();
+  emit(deviceId, sessionId);
+}
+
+/** 刚发送时丢掉上一轮 completed/error 镜像。running / needs-interaction 是本轮活档,保留。 */
+export function dropStaleRemoteTerminalActivity(
+  sessionId: string,
+  deviceId: string | null | undefined,
+): void {
+  const activity = getRemoteSessionActivity(sessionId, deviceId);
+  if (!activity) return;
+  if (activity.phase !== 'completed' && activity.phase !== 'error') return;
+  removeRemoteSessionActivityEntry(sessionId, deviceId);
 }
 
 /** 单会话清除(被控端删除 / 归档该会话时由 sessions:patched 路由调用)。 */
-export function removeRemoteSessionActivityEntry(sessionId: string): void {
-  sessionDeviceIndex.delete(sessionId);
-  if (activityMap.delete(sessionId)) emit();
+export function removeRemoteSessionActivityEntry(
+  sessionId: string,
+  deviceId: string | null | undefined,
+): void {
+  if (!deviceId) return;
+  const activityMap = activityByDevice.get(deviceId);
+  if (!activityMap?.delete(sessionId)) return;
+  if (activityMap.size === 0) activityByDevice.delete(deviceId);
+  emit(deviceId, sessionId);
 }
 
-/** 设备级清扫(设备被移除 / 撤销 / 关被控)。瞬时 disconnected 不调用 —— 保留快照与
- *  remoteProjectsStore.markDeviceDisconnected 的"网络抖动不清列表"语义对齐。 */
+/** 设备移除时只清理该设备；瞬时断线仍保留快照。 */
 export function removeRemoteSessionActivityForDevice(deviceId: string): void {
-  let changed = false;
-  for (const [sessionId, indexedDeviceId] of sessionDeviceIndex) {
-    if (indexedDeviceId !== deviceId) continue;
-    sessionDeviceIndex.delete(sessionId);
-    changed = activityMap.delete(sessionId) || changed;
-  }
-  if (changed) emit();
+  if (activityByDevice.delete(deviceId)) emit(deviceId);
 }
 
 /** 全清(登出 / device-link stopped)。 */
-export function clearRemoteSessionActivity(): void {
-  sessionDeviceIndex.clear();
-  if (activityMap.size === 0) return;
-  activityMap.clear();
+export function clearRemoteSessionActivity(matchesDevice?: (deviceId: string) => boolean): void {
+  if (activityByDevice.size === 0) return;
+  if (matchesDevice) {
+    for (const deviceId of activityByDevice.keys()) {
+      if (matchesDevice(deviceId)) removeRemoteSessionActivityForDevice(deviceId);
+    }
+    return;
+  }
+  activityByDevice.clear();
   emit();
 }

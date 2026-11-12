@@ -2,20 +2,17 @@ import { createRoot } from 'react-dom/client';
 
 import '@fontsource-variable/inter';
 import '@fontsource-variable/jetbrains-mono';
-import 'harmonyos-sans-sc-webfont-splitted';
+import './styles/cjk-webfont.css';
 
-// Registers the `<model-viewer>` custom element globally. Used by
-// ModelLightbox to preview mivo-generated 3D models. Side-effect-only
-// import — the package self-registers when loaded.
-import '@google/model-viewer';
-
-// 在任何 React 组件渲染前先 import 触发 i18next 同步 init —— 否则首屏 useTranslation
-// 拿到的会是 fallback 英文文案再瞬切到目标语言，造成可见闪烁。
+// i18next 在此之前已 init：分发入口 index.tsx 等当前语言包加载完才加载本模块，
+// 首屏 useTranslation 直接拿到目标语言，不会先显示英文再切换。
 import '@/i18n';
 import './themes/colors';
 
 import { TopLevelErrorBoundary } from './components/error/TopLevelErrorBoundary';
 import { initTapdb } from './analytics/tapdbClient';
+import { createAuthService } from './lib/authService';
+import { createLogger } from './lib/logger';
 import { installScrollbarAutoHide } from './lib/scrollbarAutoHide';
 import { bootstrapMemorySettingsFromMain } from './lib/memorySettingsStore';
 import {
@@ -35,7 +32,6 @@ import { bootstrapGitSafetySettingsFromMain } from './lib/gitSafetySettingsStore
 import { bootstrapLspModeFromMain } from './lib/lspModeStore';
 import { bootstrapSilentEncryptedRetryFromMain } from './lib/silentEncryptedRetryStore';
 import { initRsbBrowserBridge } from './features/right-sidebar/lib/rsbBrowserBridge';
-import { isGhostPanelWindow } from './lib/ghostPanelWindow';
 import { isSecondaryWindow } from './lib/secondaryWindow';
 import {
   installForegroundRecoveryDiagnostics,
@@ -48,7 +44,7 @@ import { installSwallowActivationClick } from './lib/swallowActivationClick';
 import { installEarlyKeyDownCapture } from './lib/earlyKeyDownCapture';
 import { getSwallowActivationClickEnabled } from './hooks/useSwallowActivationClickSettings';
 import { bootstrapLocalThemesSync } from './themes/local-themes';
-import { themeService } from './themes/theme-service';
+import { installAppearancePresenter, presentTheme } from './appearance/AppearancePresenter';
 import './styles/globals.css';
 import './styles/sortable.css';
 
@@ -67,13 +63,11 @@ const disposeHiddenAnimationGate = installHiddenAnimationGate();
 migrateLegacyVoiceInputRendererStorage();
 void syncVoiceInputGlobalShortcut(getVoiceInputSettings().shortcut);
 void bootstrapSilentEncryptedRetryFromMain();
-// chat embedding 开关 (Phase 1.2) — 同款镜像同步方式, 让 Settings UI 第一次渲染时
-// localStorage 已是真值, 用户能看到正确的初始 toggle 状态。
+// 对话语义索引开关 —— 先同步 signed-out 镜像；AuthContext 提交稳定 owner 后会切换
+// owner 分区并重拉 Main 真值，迟到的启动响应会被 revision fence 丢弃。
 void bootstrapChatEmbeddingFromMain();
 // LSP Beta 开关 (Phase 1) — admin-only, 默认 false; 同款镜像同步方式。
 void bootstrapLspModeFromMain();
-// Git safety workflow 开关 — 默认 false; Codex rewind 入口同步依赖此镜像。
-void bootstrapGitSafetySettingsFromMain();
 
 const view = new URLSearchParams(window.location.search).get('view');
 const isVoiceInputOverlay = view === 'voice-input-overlay';
@@ -81,9 +75,14 @@ const isVoiceInputDictionaryToast = view === 'voice-input-dictionary-toast';
 const isComputerPermissionGuide = view === 'computer-permission-guide';
 const isComputerPermissionBackdrop = view === 'computer-permission-backdrop';
 const isComputerPermissionView = isComputerPermissionGuide || isComputerPermissionBackdrop;
-const isAppearanceUtilityView =
-  isVoiceInputOverlay || isVoiceInputDictionaryToast || isComputerPermissionView;
 document.documentElement.dataset.platform = window.electronAPI.platform;
+document.documentElement.dataset.windowBackdropMaterial =
+  window.electronAPI.windowBackdropMaterial ?? 'none';
+const disposeWindowBackdropMaterialChanged =
+  window.electronAPI.onWindowBackdropMaterialChanged?.((material) => {
+    document.documentElement.dataset.windowBackdropMaterial = material;
+  }) ?? (() => {});
+import.meta.hot?.dispose(disposeWindowBackdropMaterialChanged);
 if (isVoiceInputOverlay || isVoiceInputDictionaryToast) {
   document.documentElement.dataset.voiceInputOverlay = 'true';
 }
@@ -131,12 +130,8 @@ if (import.meta.env.DEV) {
 }
 
 bootstrapLocalThemesSync();
-themeService.applyTheme(getInitialThemeVariant().theme);
+presentTheme(getInitialThemeVariant().theme, false);
 applyFontSettings(getInitialFontSettings());
-const disposeUtilityAppearanceSettingsSync = isAppearanceUtilityView
-  ? (window.electronAPI.appearanceSettings?.onChanged?.(applyFontSettings) ?? (() => {}))
-  : (): void => {};
-import.meta.hot?.dispose(disposeUtilityAppearanceSettingsSync);
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -145,12 +140,15 @@ if (!rootElement) {
 const root = createRoot(rootElement);
 
 void (async () => {
+  const disposeAppearancePresenter = installAppearancePresenter(applyFontSettings,
+    isComputerPermissionView || isVoiceInputOverlay || isVoiceInputDictionaryToast);
+  import.meta.hot?.dispose(disposeAppearancePresenter);
   if (isComputerPermissionBackdrop) {
     const { ComputerPermissionBackdrop } = await import(
       './components/settings/ComputerPermissionGuideWindow'
     );
     root.render(
-      <ThemeProvider>
+      <ThemeProvider syncWindowVibrancy={false}>
         <ComputerPermissionBackdrop />
       </ThemeProvider>,
     );
@@ -162,7 +160,7 @@ void (async () => {
       './components/settings/ComputerPermissionGuideWindow'
     );
     root.render(
-      <ThemeProvider>
+      <ThemeProvider syncWindowVibrancy={false}>
         <LocaleProvider>
           <ComputerPermissionGuideWindow />
         </LocaleProvider>
@@ -174,7 +172,7 @@ void (async () => {
   if (isVoiceInputDictionaryToast) {
     const { VoiceInputDictionaryToast } = await import('./voice-input/VoiceInputDictionaryToast');
     root.render(
-      <ThemeProvider>
+      <ThemeProvider syncWindowVibrancy={false}>
         <LocaleProvider>
           <VoiceInputDictionaryToast />
         </LocaleProvider>
@@ -186,7 +184,7 @@ void (async () => {
   if (isVoiceInputOverlay) {
     const { VoiceInputOverlay } = await import('./voice-input/VoiceInputOverlay');
     root.render(
-      <ThemeProvider>
+      <ThemeProvider syncWindowVibrancy={false}>
         <LocaleProvider>
           <ConfirmDialogProvider>
             <VoiceInputOverlay />
@@ -202,19 +200,28 @@ void (async () => {
   // or unmounted sidebar UI. Only the primary and dedicated sidebar windows
   // can own RSB tabs; other full-app windows must not publish an empty pool
   // snapshot into the primary registry.
-  if (!isGhostPanelWindow() && !isSecondaryWindow()) {
+  if (!isSecondaryWindow()) {
     const disposeRsbBrowserBridge = initRsbBrowserBridge();
     import.meta.hot?.dispose(disposeRsbBrowserBridge);
   }
 
-  // 主视图挂载前完成 memory 真值同步与旧配置迁移，确保用户可交互的 toggle 不会和
-  // 启动快照并发。浮窗不消费该设置，跳过同步以免多个 renderer 争写共享 localStorage。
+  // 主视图挂载前完成 memory 与 Git safety 真值同步及旧配置迁移，确保用户可交互的
+  // toggle、回退入口不会在镜像迁移完成前和启动快照并发。浮窗不消费这些设置，跳过
+  // 同步以免多个 renderer 争写共享 localStorage。
   await bootstrapMemorySettingsFromMain();
+  await bootstrapGitSafetySettingsFromMain();
+
+  // 认证预热独立于统计同意与 SDK 生命周期;AuthProvider 复用同一任务和最新快照。
+  const auth = createAuthService();
+  void auth.initialize().catch((error: unknown) => {
+    createLogger('auth-service').error('auth prewarm failed', error);
+  });
+  window.addEventListener('pagehide', () => auth.dispose(), { once: true });
 
   // TapDB 在线活跃上报 — 只在主视图启用,避免 voice-input 浮窗的弹出被算成 PV。
   // 这里只挂"同意闸":SDK 是否初始化由 main 的 analytics-settings 决定,用户没
   // 同意过《隐私政策》时一个字节都不会发出去(见 analytics/tapdbClient.ts)。
-  initTapdb();
+  initTapdb(auth);
 
   // 顶层 boundary:App 内 RouterProvider 之上的 provider 链渲染崩溃时兜底
   // (路由子树的崩溃仍由 router.tsx 的 errorElement 就近接住)。

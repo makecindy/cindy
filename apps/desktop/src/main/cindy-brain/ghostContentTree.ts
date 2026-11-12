@@ -184,7 +184,12 @@ function sameFileIdentity(
   return a.dev === b.dev && a.ino === b.ino;
 }
 
-function sameStableFileState(before: fs.BigIntStats, after: fs.BigIntStats): boolean {
+/**
+ * 「读取期间这个文件没被换掉也没被改过」的统一判据。`ctimeNs` 让它同时覆盖
+ * `chmod` —— 权限变化也算内容快照失效,导出侧据此拒绝把不同时刻的 mode 与字节
+ * 拼进同一个归档条目。
+ */
+export function sameStableFileState(before: fs.BigIntStats, after: fs.BigIntStats): boolean {
   return after.isFile() &&
     sameFileIdentity(before, after) &&
     before.size === after.size &&

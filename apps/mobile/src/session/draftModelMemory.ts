@@ -26,16 +26,18 @@ const STORAGE_KEY = 'xdtm:draftModelMemory:v1';
  * sessionModelMirror 的 accessors,组件本身不耦合具体存储。
  */
 export interface MobileModelMemoryAccessors {
+  clearEffort?(agent: AgentKind, providerId: string, modelId: string): void;
+  clearFast?(agent: AgentKind, providerId: string, modelId: string): void;
   getEffort(agent: AgentKind, providerId: string, modelId: string): string | undefined;
   setEffort(agent: AgentKind, providerId: string, modelId: string, effort: string): void;
-  getFast(agent: AgentKind, providerId: string, modelId: string): boolean | undefined;
-  setFast(agent: AgentKind, providerId: string, modelId: string, enabled: boolean): void;
+  getFast(agent: AgentKind, providerId: string, modelId: string): boolean | 'ultrafast' | undefined;
+  setFast(agent: AgentKind, providerId: string, modelId: string, enabled: boolean | 'ultrafast'): void;
 }
 
 /** 单槽:某 (device, agent, 来源) 下每个模型的 effort/fast。 */
 interface Slot {
   effortByModel: Record<string, string>;
-  fastByModel: Record<string, boolean>;
+  fastByModel: Record<string, boolean | 'ultrafast'>;
 }
 
 // deviceId → (`${agent}:${providerId}` → Slot)
@@ -83,10 +85,10 @@ function sanitize(raw: unknown): MemoryMap {
           if (mid && typeof eff === 'string' && eff.length > 0) effortByModel[mid] = eff;
         }
       }
-      const fastByModel: Record<string, boolean> = {};
+      const fastByModel: Record<string, boolean | 'ultrafast'> = {};
       if (rec.fastByModel && typeof rec.fastByModel === 'object' && !Array.isArray(rec.fastByModel)) {
         for (const [mid, fb] of Object.entries(rec.fastByModel as Record<string, unknown>)) {
-          if (mid && typeof fb === 'boolean') fastByModel[mid] = fb;
+          if (mid && (typeof fb === 'boolean' || fb === 'ultrafast')) fastByModel[mid] = fb;
         }
       }
       if (Object.keys(effortByModel).length === 0 && Object.keys(fastByModel).length === 0) continue;
@@ -145,6 +147,14 @@ function getSlot(deviceId: string, agent: AgentKind, providerId: string, create:
 /** 取某被控设备的草稿记忆读写器(注入模型选择列表)。deviceId 空 → 全 no-op/undefined。 */
 export function draftModelMemoryFor(deviceId: string): MobileModelMemoryAccessors {
   return {
+    clearEffort: (agent, providerId, modelId) => {
+      const slot = getSlot(deviceId, agent, providerId, false);
+      if (slot) { delete slot.effortByModel[modelId]; persist(); }
+    },
+    clearFast: (agent, providerId, modelId) => {
+      const slot = getSlot(deviceId, agent, providerId, false);
+      if (slot) { delete slot.fastByModel[modelId]; persist(); }
+    },
     getEffort: (agent, providerId, modelId) => {
       if (!deviceId || !providerId || !modelId) return undefined;
       return getSlot(deviceId, agent, providerId, false)?.effortByModel[modelId];

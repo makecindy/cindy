@@ -1,3 +1,4 @@
+import { withSendToSessionLock, advanceSessionRewindGeneration } from './sendToSessionLock.js';
 /**
  * registerMakerRewindIpc — maker:rewind:preview / maker:rewind:commit
  *
@@ -11,10 +12,12 @@
 import { ipcMain } from 'electron';
 
 import { createLogger } from '../logger.js';
-import { previewRewindAtMessage, commitRewindAtMessage } from '../maker-orchestration/rewind.js';
-import { drainPersistQueue } from '../messagePersistBroadcaster.js';
+import { previewRewindAtMessage, commitRewindAtMessage, type RewindCommitOptions } from '../maker-orchestration/rewind.js';
+import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
 import { getGoalController } from '../goal-host/index.js';
-import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
+import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../device-link/broadcast-tap.js';
 import { broadcastSubagentRunsInvalidated } from '../localDb/ipc/subagentRuns.js';
 import {
   listVisibleSubagentObservationIdentities,
@@ -30,17 +33,35 @@ import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate.js';
 
 import { MAKER_INVOKE } from './channels.js';
-import { withSessionInputStoppedForRewind } from './register.js';
+import {
+  withSessionInputStoppedForRewind,
+  prepareSessionForHistoryAction,
+  releaseSessionAfterHistoryAction,
+} from './register.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
 
 const log = createLogger('maker-ipc/rewind');
 const STOPPED_REWIND_RETRY_MS = 100;
 const STOPPED_REWIND_TIMEOUT_MS = 15_000;
 
+function assertRewindOwner(scope: RewindCommitOptions['ownerScope']) {
+  if (scope && !isDataOwnerBroadcastScopeCurrent(scope)) {
+    throwIpcError('PRECONDITION_FAILED', 'Account changed while preparing rewind');
+  }
+}
+
+// Rewind can now start a cold task, so a local caller must be the trusted top-level
+// page like the other history actions; device-link has its own authenticated channel.
+function assertTrustedRewindCaller(event: Electron.IpcMainInvokeEvent) {
+  if (!isDeviceLinkInvoke()) {
+    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+  }
+}
+
 async function commitAfterStopping(
   sessionId: string,
   clientId: string,
-  opts: { requireLatestUser: boolean },
+  opts: RewindCommitOptions,
 ) {
   const deadline = Date.now() + STOPPED_REWIND_TIMEOUT_MS;
   while (true) {
@@ -58,7 +79,7 @@ async function commitAfterStopping(
 async function commitAfterPersistBarrier(
   sessionId: string,
   clientId: string,
-  opts: { requireLatestUser: boolean },
+  opts: RewindCommitOptions,
 ) {
   // Rewind must see every chat/Subagent observation that was already queued
   // before its transaction chooses the visible tail. Otherwise a delayed
@@ -66,7 +87,20 @@ async function commitAfterPersistBarrier(
   // withdrawn work visible again. Drain first, then let commitRewindAtMessage
   // reload its target and transaction boundary from the durable store.
   await drainPersistQueue();
-  return commitRewindAtMessage(sessionId, clientId, opts);
+  return withSendToSessionLock(sessionId, async () => {
+    let committed = false;
+    try {
+      assertRewindOwner(opts.ownerScope);
+      await prepareSessionForHistoryAction(sessionId, 'rewind');
+      assertRewindOwner(opts.ownerScope);
+      const result = await commitRewindAtMessage(sessionId, clientId, opts);
+      committed = true;
+      advanceSessionRewindGeneration(sessionId);
+      return result;
+    } finally {
+      await releaseSessionAfterHistoryAction(sessionId, { rewindCommitted: committed });
+    }
+  });
 }
 
 function wrapErr(err: unknown): never {
@@ -79,14 +113,25 @@ export function registerMakerRewindIpc(): void {
   ipcMain.handle(
     MAKER_INVOKE.REWIND_PREVIEW,
     async (
-      _event: Electron.IpcMainInvokeEvent,
+      event: Electron.IpcMainInvokeEvent,
       sessionId: unknown,
       clientId: unknown,
     ) => {
+      assertTrustedRewindCaller(event);
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
+      const ownerScope = captureDataOwnerBroadcastScope();
       try {
-        return await previewRewindAtMessage(sid, cid);
+        return await withSendToSessionLock(sid, async () => {
+          try {
+            assertRewindOwner(ownerScope);
+            await prepareSessionForHistoryAction(sid, 'rewind');
+            assertRewindOwner(ownerScope);
+            return await previewRewindAtMessage(sid, cid);
+          } finally {
+            await releaseSessionAfterHistoryAction(sid);
+          }
+        });
       } catch (err) {
         log.warn('rewind:preview failed', { sid, cid, error: String(err) });
         wrapErr(err);
@@ -97,11 +142,12 @@ export function registerMakerRewindIpc(): void {
   ipcMain.handle(
     MAKER_INVOKE.REWIND_COMMIT,
     async (
-      _event: Electron.IpcMainInvokeEvent,
+      event: Electron.IpcMainInvokeEvent,
       sessionId: unknown,
       clientId: unknown,
       opts?: unknown,
     ) => {
+      assertTrustedRewindCaller(event);
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
       const ownerScope = captureDataOwnerBroadcastScope();
@@ -114,6 +160,16 @@ export function registerMakerRewindIpc(): void {
       const stopIfRunning =
         !!opts && typeof opts === 'object' &&
         (opts as { stopIfRunning?: unknown }).stopIfRunning === true;
+      const allowFileRestore =
+        !!opts && typeof opts === 'object' &&
+        (opts as { allowFileRestore?: unknown }).allowFileRestore === false
+          ? false
+          : undefined;
+      const commitOpts = {
+        requireLatestUser,
+        ownerScope,
+        ...(allowFileRestore === false ? { allowFileRestore: false as const } : {}),
+      };
       let subagentFence: SubagentRewindFence | null = null;
       // This flag controls observation-generation advancement, not whether
       // the underlying message transaction has already committed.
@@ -129,8 +185,8 @@ export function registerMakerRewindIpc(): void {
         // transaction. Edit-last-message keeps its existing direct orchestration.
         const result = stopIfRunning
           ? await withSessionInputStoppedForRewind(sid, () =>
-              commitAfterStopping(sid, cid, { requireLatestUser }))
-          : await commitAfterPersistBarrier(sid, cid, { requireLatestUser });
+              commitAfterStopping(sid, cid, commitOpts))
+          : await commitAfterPersistBarrier(sid, cid, commitOpts);
         visibleSubagentIdentitiesAfterCommit =
           await listVisibleSubagentObservationIdentities(sid);
         // The fence may advance generations only after the post-commit

@@ -15,7 +15,7 @@ import { MIC_WAVE_ICON_SVG } from '../../voice-input/VoiceInputMicWaveIcon';
  * 'listening' shows a static mic with animated level bars inside the capsule;
  * 'processing' (submitting/refining) shows a spinner arc. Null hides the caret.
  */
-export type VoiceInputCaretState = 'listening' | 'processing';
+export type VoiceInputCaretState = 'listening' | 'stopping' | 'processing';
 
 type VoiceInputDraftMeta = {
   text: string;
@@ -32,6 +32,18 @@ type VoiceInputDraftDecorationState = VoiceInputDraftMeta & {
 
 const PLUGIN_KEY = new PluginKey<VoiceInputDraftDecorationState>('voiceInputDraftDecoration');
 const META_KEY = 'voiceInputDraftDecoration';
+
+/** Remove the temporary text in the very transaction that commits real text.
+ * React's later effect is too late: the old widget can survive next to the
+ * newly inserted document for a paint. Keep the processing caret meanwhile.
+ */
+export function clearVoiceInputDraftInTransaction(tr: Transaction): Transaction {
+  return tr.setMeta(META_KEY, {
+    text: '', source: null,
+    from: tr.selection.from, to: tr.selection.from,
+    anchorLocked: false, caretState: 'stopping',
+  } satisfies VoiceInputDraftMeta);
+}
 
 export type VoiceInputReplacementRange = {
   from: number;

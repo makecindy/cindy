@@ -35,6 +35,16 @@ afterEach(() => {
 });
 
 describe('gitReviewApiFor', () => {
+  it('routes historical summaries and exact patches to the owning device', async () => {
+    invokeMock.mockResolvedValue({ ok: true, result: [] });
+    const api = transport.turnChangeReadApiFor('device-1');
+    expect(await api.listTurnChangeSets('s1')).toEqual([]);
+    expect(await api.getTurnChangeSets('s1', ['set-1'])).toEqual([]);
+    expect(invokeMock.mock.calls).toEqual([
+      ['device-1', 'git-review:remote-op', [{ op: 'turn-list', payload: { sessionId: 's1' } }]],
+      ['device-1', 'git-review:remote-op', [{ op: 'turn-get', payload: { sessionId: 's1', ids: ['set-1'] } }]],
+    ]);
+  });
   it('returns the local API untouched when deviceId is empty', () => {
     expect(transport.gitReviewApiFor(null)).toBe(localGitReview);
     expect(transport.gitReviewApiFor(undefined)).toBe(localGitReview);

@@ -1,4 +1,3 @@
-import { app, BrowserWindow } from 'electron';
 import { createId } from '@paralleldrive/cuid2';
 import { createTwoFilesPatch, formatPatch, parsePatch, reversePatch } from 'diff';
 import { realpathSync } from 'node:fs';
@@ -25,11 +24,16 @@ import type { FileDiff } from '../../shared/gitReviewWire.js';
 import { parseGitDiffs } from '../git-review/diffParser.js';
 import { GitRunError, runGit } from '../git-review/gitRunner.js';
 import { getDbClient } from '../localDb/client/current.js';
+import { userDataPath } from '../userDataPath.js';
 import { createLogger } from '../logger.js';
 import { detectSensitivePath } from '../security/sensitivePath.js';
 import * as broadcastTap from '../device-link/broadcast-tap.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { atomicWriteFileSync } from '../utils/atomicWriteFile.js';
+import {
+  turnChangeSetSessionDirectory,
+  turnChangeSetStorageRoot,
+} from './storagePaths';
 
 const log = createLogger('turn-change-set');
 const MAX_LIST_ROWS = 100;
@@ -162,12 +166,11 @@ function assertSafeSegment(value: string, label: string): void {
 }
 
 function storageRoot(): string {
-  return path.join(app.getPath('userData'), 'turn-change-sets');
+  return turnChangeSetStorageRoot(userDataPath());
 }
 
 function sessionDir(sessionId: string): string {
-  assertSafeSegment(sessionId, 'session id');
-  return path.join(storageRoot(), sessionId);
+  return turnChangeSetSessionDirectory(userDataPath(), sessionId);
 }
 
 function detailPath(sessionId: string, id: string): string {
@@ -757,18 +760,25 @@ async function persistValue(value: PersistedTurnChangeSetV1): Promise<void> {
   });
 }
 
+/** The desktop injects its window fan-out; the host leaves it unset. */
+let windowBroadcast: ((payload: TurnChangeSetUpdatedPayload, ownerStamp?: unknown) => void) | null = null;
+
+export function setTurnChangeSetWindowBroadcast(
+  broadcast: ((payload: TurnChangeSetUpdatedPayload, ownerStamp?: unknown) => void) | null,
+): void {
+  windowBroadcast = broadcast;
+}
+
 function broadcastUpdated(
   payload: TurnChangeSetUpdatedPayload,
   ownerScope = broadcastTap.captureDataOwnerBroadcastScope(),
 ): void {
   if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed()) continue;
-    try {
-      win.webContents.send(MAKER_PUSH.TURN_CHANGE_SET_UPDATED, payload, ownerScope.ownerStamp);
-    } catch (error) {
-      log.warn('renderer turn change-set broadcast failed', { error });
-    }
+  broadcastTap.tapWindowBroadcast(MAKER_PUSH.TURN_CHANGE_SET_UPDATED, payload, ownerScope.ownerStamp);
+  try {
+    windowBroadcast?.(payload, ownerScope.ownerStamp);
+  } catch (error) {
+    log.warn('renderer turn change-set broadcast failed', { error });
   }
 }
 
@@ -1331,6 +1341,7 @@ export function applyTurnChangeSetAction(
   id: string,
   action: TurnChangeAction,
   ownerScope = broadcastTap.captureDataOwnerBroadcastScope(),
+  assertCanApply?: () => Promise<void>,
 ): Promise<TurnChangeActionResult> {
   const releaseSessionDir = retainSessionDir(sessionId);
   const operation = (async () => {
@@ -1384,12 +1395,16 @@ export function applyTurnChangeSetAction(
                 'The workspace no longer matches the recorded patch.',
               );
             }
+            await assertCanApply?.();
+            assertOwnerScopeCurrent(ownerScope);
             await persistWorkspaceState(sessionId, id, nextState);
             const summary = toSummary(value, nextState);
             broadcastUpdated({ sessionId, summary }, ownerScope);
             return { action, changed: false, summary };
           }
 
+          await assertCanApply?.();
+          assertOwnerScopeCurrent(ownerScope);
           await applyRecordedPatch(value, revert);
           await persistWorkspaceState(sessionId, id, nextState);
           const summary = toSummary(value, nextState);

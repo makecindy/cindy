@@ -14,6 +14,8 @@ const ENV = {
   platform: 'darwin',
   arch: 'arm64',
   osVersion: '25.5.0',
+  harness: 'Claude Code' as const,
+  modelId: 'claude-opus-4-1',
   region: 'cn' as const,
 };
 const PLATFORM_IDENTITY = { kind: 'platform', login: 'cindy-issue' } as const;
@@ -51,13 +53,16 @@ describe('IssueConfirmBridge', () => {
       sessionId: 'sess-1',
       request: {
         kind: 'issue_confirm',
+        remoteConfirmSupported: true,
         draft: DRAFT,
         env: ENV,
         submissionIdentity: PLATFORM_IDENTITY,
         githubUserIdentity: GITHUB_IDENTITY,
       },
     });
-    expect((payload as { request: { requestId: string } }).request.requestId).toBeTruthy();
+    expect((payload as { request: { requestId: string } }).request.requestId).toMatch(
+      /^issue-confirm-/,
+    );
     expect(bridge.pendingSnapshots('other-session')).toEqual([]);
     expect(bridge.pendingSnapshots('sess-1')).toEqual([
       { sessionId: 'sess-1', request: (payload as { request: unknown }).request },
@@ -287,7 +292,15 @@ describe('onDesktopOnlyConfirmPending(#926)', () => {
     const p = bridge.request(
       'feishu_bot_ou_1',
       { title: 't', body: 'b', type: 'bug' },
-      { appVersion: '0.0.0', platform: 'darwin', arch: 'arm64', osVersion: '1', region: 'cn' },
+      {
+        appVersion: '0.0.0',
+        platform: 'darwin',
+        arch: 'arm64',
+        osVersion: '1',
+        harness: 'Codex',
+        modelId: 'gpt-5.6',
+        region: 'cn',
+      },
       { platform: { kind: 'platform', login: 'cindy' } },
     );
     expect(onPending).toHaveBeenCalledWith('feishu_bot_ou_1');
@@ -299,7 +312,15 @@ describe('onDesktopOnlyConfirmPending(#926)', () => {
     const decision = await bridge.request(
       's1',
       { title: 't', body: 'b', type: 'bug' },
-      { appVersion: '0.0.0', platform: 'darwin', arch: 'arm64', osVersion: '1', region: 'cn' },
+      {
+        appVersion: '0.0.0',
+        platform: 'darwin',
+        arch: 'arm64',
+        osVersion: '1',
+        harness: 'Codex',
+        modelId: 'gpt-5.6',
+        region: 'cn',
+      },
       {
         platform: PLATFORM_IDENTITY,
         githubUser: { kind: 'github-user', login: 'u' },
@@ -323,7 +344,15 @@ describe('onDesktopOnlyConfirmPending 抛错防护(#1059 review)', () => {
     const decision = await bridge.request(
       's-throw',
       { title: 't', body: 'b', type: 'bug' },
-      { appVersion: '0.0.0', platform: 'darwin', arch: 'arm64', osVersion: '1', region: 'cn' },
+      {
+        appVersion: '0.0.0',
+        platform: 'darwin',
+        arch: 'arm64',
+        osVersion: '1',
+        harness: 'Codex',
+        modelId: 'gpt-5.6',
+        region: 'cn',
+      },
       {
         platform: PLATFORM_IDENTITY,
         githubUser: { kind: 'github-user', login: 'u' },

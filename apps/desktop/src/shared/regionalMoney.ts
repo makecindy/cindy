@@ -4,6 +4,7 @@ import { CURRENT_CINDY_REGION } from './brandRegion.js';
 
 export type MoneyCurrency = 'CNY' | 'USD';
 export type MoneyKind = 'actual-cost' | 'value-estimate';
+export type PriceVariant = 'standard' | 'priority' | 'fast' | 'batch' | 'ultrafast';
 export type MoneyEstimateReason =
   'fixed-fx' | 'legacy-usd' | 'subscription-value' | 'reference-price' | 'inferred-currency';
 
@@ -35,6 +36,17 @@ export interface ModelPriceQuote {
   outputPerMtok: number;
   cacheReadPerMtok?: number;
   cacheCreatePerMtok?: number;
+  /** 1h TTL cache write price; missing → 1h writes use cacheCreatePerMtok. */
+  cacheCreate1hPerMtok?: number;
+  /** Declared fast/priority tariff. Missing fields make that request unpriceable. */
+  priority?: {
+    inputPerMtok?: number;
+    outputPerMtok?: number;
+    cacheReadPerMtok?: number;
+    cacheCreatePerMtok?: number;
+    cacheCreate1hPerMtok?: number;
+    inputTokenPriceBands?: ModelPriceQuote['inputTokenPriceBands'];
+  };
   /**
    * Context-length pricing bands. minInputTokens is inclusive and maxInputTokens
    * is exclusive; omitted prices inherit the quote's baseline field.
@@ -46,8 +58,9 @@ export interface ModelPriceQuote {
     outputPerMtok?: number;
     cacheReadPerMtok?: number;
     cacheCreatePerMtok?: number;
+    cacheCreate1hPerMtok?: number;
   }>;
-  /** Gateway 声明的折扣比例；计费金额按原价 × (1 - costDiscount)。 */
+  /** 平台或企业 Gateway 声明的折扣比例；计费金额按原价 × (1 - costDiscount)。 */
   costDiscount?: number;
   /**
    * 该报价的币种不是上游声明的，而是本地按兜底链推断出来的。

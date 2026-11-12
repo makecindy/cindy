@@ -487,30 +487,30 @@ renderer 的 `$` 指令展开、`ghost_list`、`ghost_info` 与 `ghost_call` 都
 `exempt`**。所以改成「从对话中生成新记忆并在**后续对话**中召回」——用户视角真实、不含禁用
 词、也不暗示任何多余动作。**遇到 reviewer 意见相反时，先看是不是这个名词本身选错了。**
 
-#### 6.0.3 `/new` 不产生新任务：按落库行为定名，不按命令名字
+#### 6.0.3 `/new` 按各渠道的落库行为定名，不按命令名字
 
-IM 渠道的 `/new` 看着像「新建」，实际走 `im/shared/sessionRepo.ts::resetSessionToDefaults` ——
-`db.update(sessions).where(eq(sessions.id, …))`：**保留同一条 session 行**，只清 `sdkSessionId`、
-按渠道默认重置工作目录与上下文。侧边栏里的条目数不变，也没有新条目可以单独打开。
+`/new` 已经不是所有 IM 共用一种落库语义：
 
-所以凡是描述这条路径的中文，一律说**「新对话」**。说「新任务」会让用户去侧边栏找一条根本不
-存在的新条目。这条不变量的全部对称路径：
+- 两个 Telegram bot 都会 `INSERT` 一条新的 session 行、归档旧任务，并立即把新任务显示在
+  任务列表里。因此 Telegram 的成功提示、帮助与命令菜单一律说**「新任务」**；英文用
+  `new session`，日文、韩文也使用各自的 Session 术语。
+- 其它 IM 渠道仍走 `im/shared/sessionRepo.ts::resetSessionToDefaults`：
+  `db.update(sessions).where(eq(sessions.id, …))`，保留同一条 session 行，只清 `sdkSessionId`、
+  按渠道默认重置工作目录与上下文。侧边栏条目数不变，所以这些渠道继续说**「新对话」**。
+
+这条不变量的全部对称路径：
 
 | 触点 | 底层 | 说法 |
 |---|---|---|
 | IM 平台**首次**私聊 | `INSERT` 新 session 行 | 确实是新任务 |
-| 已有私聊发 `/new` | `UPDATE` 原行 | **不是**新任务 |
+| Telegram 已有私聊／群聊发 `/new` | `INSERT` 新 session 行并归档旧任务 | **新任务** |
+| 其它 IM 已有私聊发 `/new` | `UPDATE` 原行 | **新对话，不是新任务** |
 | 消息操作菜单 fork | `INSERT` 新 session 行 | 确实是新任务（「开启一个新任务」） |
 | `/ctr` → ➕ 新建 | `INSERT` 新 session 行 | 确实是新任务 |
 
-前两条**共用同一份设置、同一句文案**，所以文案必须取两者都成立的说法 = 「新对话」。落地时
-这一族被指出过三轮，每轮漏一处：`settings.imBot.defaults.*`（设置项标题）→
-`settings.wechatBot.workingDir.*` 与 `toasts.workingDir*`（工作目录那组）→
-`settings.telegramBot.commandMenu.new`（Telegram 斜杠菜单说明）。**判据一律回到落库行为。**
-
-英文侧同理：`Start a new session` 也不准确，已一并改成 `Start a new chat`（ja「新しい会話を
-開始」/ ko「새 대화 시작」）。en 的 `session` 词义比中文「任务」宽、读起来不刺眼，但既然中文
-已按落库行为定名，四语就该说同一件事（§4.2）。
+设置项可以继续描述跨渠道共用的「新对话配置」，但 Telegram 的执行结果必须明确是新任务；
+其它 IM 的 `/new` 文案不得跟随 Telegram 一起改成「新任务」。**判据一律回到各渠道当前的落库
+行为。**
 
 #### 6.0.4 兄弟渠道必须成组改：一处 IM 文案改动 = 四个包一起过
 
@@ -528,7 +528,7 @@ IM 渠道的 `/new` 看着像「新建」，实际走 `im/shared/sessionRepo.ts:
 | 渠道直接发给用户 | 四个 `uiText.ts` | **改**（已清零） |
 | main 抛给 renderer 的 `Error` message | 见下方「一句一句追展示路径」——**按 code 映射 i18n 的不改，原样展示的必须改**，不能按文件一刀切 |
 | 插件 / MCP / LLM 读的字符串 | `cindy-brain/*Slot.ts`、`mcp-integrations/ghost.ts` | **不改**：不是 UI 文案，且多数确实指 Agent 进程会话（§6.0.2） |
-| Orca 协同术语 | 架构代码与内部标识继续用 session；`packages/maker-shared/src/sessionIdentity.ts` 返回的手机端只读提示会直接展示给用户 | **按展示路径分开**：架构术语不改，用户可见的 Orca Lead / Worker / 协作条目仍叫「任务」（含「协作子任务」「任务写操作」） |
+| Orca 协同术语 | 架构代码与内部标识继续用 session；手机端协同标签与只读提示（`apps/mobile/src/session/collaboration.ts` + i18n）会直接展示给用户 | **按展示路径分开**：架构术语不改，用户可见的 Orca Lead / Worker / 协作条目仍叫「任务」（含「协同子任务」「任务修改」） |
 | 测试 fixture | `packages/maker-shared/src/fixtures.ts` | **不改** |
 
 另有一类**刻意保留的渠道人格用词**：discord / feishu / wechat 把 session 叫「存档」、把接管

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { i18n } from '@/i18n';
 import { buildSessionComposerLayout } from '@/session/sessionComposerLayout';
 
 const desktopZhLocale = JSON.parse(readFileSync(
@@ -15,6 +16,10 @@ const desktopZhLocale = JSON.parse(readFileSync(
 };
 
 describe('sessionComposerLayout', () => {
+  beforeAll(async () => {
+    await i18n.changeLanguage('zh-CN');
+  });
+
   it('keeps send disabled until text or attachments exist', () => {
     const empty = buildSessionComposerLayout({
       attachmentBusy: false,
@@ -276,7 +281,7 @@ describe('sessionComposerLayout', () => {
       label: '停止',
       visible: true,
     });
-    expect(runningWithDraft.guidanceText).toBe('点发送后会进入桌面端队列，按当前任务设置执行。');
+    expect(runningWithDraft.guidanceText).toBe('点发送后会进入电脑端队列，按当前任务设置执行。');
   });
 
   it('marks busy operations without changing the primary layout shape', () => {
@@ -301,8 +306,9 @@ describe('sessionComposerLayout', () => {
       },
     });
     expect(layout.input).toMatchObject({
-      disabled: true,
-      disabledReason: '消息正在发送到电脑端。',
+      // Keep the native editor focused while send itself remains locked below.
+      disabled: false,
+      disabledReason: null,
       placeholder: '正在转写语音',
     });
     expect(layout.voice).toMatchObject({
@@ -322,7 +328,7 @@ describe('sessionComposerLayout', () => {
       label: '发送中',
       visible: true,
     });
-    expect(layout.guidanceText).toBe('消息正在写入桌面端队列，完成前请不要重复发送。');
+    expect(layout.guidanceText).toBe('消息正在写入电脑端队列，完成前请不要重复发送。');
     expect(layout.statusText).toBe('正在发送到电脑端');
   });
 
@@ -400,6 +406,6 @@ describe('sessionComposerLayout', () => {
       queueBusy: false,
       sending: false,
       voiceState: 'idle',
-    }).guidanceText).toBe('点发送后会进入桌面端队列，按当前任务设置执行。');
+    }).guidanceText).toBe('点发送后会进入电脑端队列，按当前任务设置执行。');
   });
 });

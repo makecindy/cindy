@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 2,
+  "request": { "events": [{ "eventId": "00000000-0000-4000-8000-000000000001", "releaseId": "example-release", "occurredAt": "2026-10-12T08:00:00.000Z" }] },
+  "accepted": { "accepted": ["00000000-0000-4000-8000-000000000001"], "duplicate": [], "rejected": [] },
+  "retry": { "accepted": [], "duplicate": ["00000000-0000-4000-8000-000000000001"], "rejected": [] },
+  "conflict": { "accepted": [], "duplicate": [], "rejected": [{ "eventId": "00000000-0000-4000-8000-000000000001", "code": "EVENT_ID_CONFLICT" }] },
+  "zero": { "usageStatistics": { "usageCount": "0", "usageCountLast7Days": "0", "asOf": "2026-10-12T08:00:00.000Z" } },
+  "independent": { "usageStatistics": { "usageCount": "1234", "usageCountLast7Days": "123", "asOf": "2026-10-12T08:00:00.000Z" }, "downloadStatistics": { "requestCount": "4321", "last7DaysRequestCount": "12" } },
+  "unavailable": {},
+  "retryableError": { "error": { "code": "USAGE_STORAGE_UNAVAILABLE", "message": "调用回执存储暂不可用" } }
+}

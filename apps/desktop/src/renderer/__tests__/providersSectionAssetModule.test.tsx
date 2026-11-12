@@ -2,36 +2,53 @@
 
 /**
  * ProvidersSection — Cindy AI 卡片的「账户资产模块」不变量：
- *   1. 个人云账号 + 拿到余额 → 标题行下方出现「可用余额 + 金额 + 查看用量 + 余额充值」，
- *      两个动作分别深链到计费页与计费页的充值意图。
+ *   1. 个人云账号 + 拿到余额 → 标题行下方出现「可用余额 + 金额 + 查看用量」；右侧一颗
+ *      Black Pill 按套餐状态切换：非套餐购买套餐、还能升就升级、升满后才余额充值。
+ *      查看用量始终在。
  *   2. 企业账号 → 整块不渲染（不是灰置、不给占位）。
  *   3. 凭据同步失败 → 故障说明 + 重试，且**不显示「已连接」**（凭据没同步上，说已连接是假的）。
  *   4. 正常态版面上不出现「重试 / 重新获取凭据 / 轮换密钥」这类按钮 —— 它们退进「···」菜单。
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
+import { ProviderAccountUsageModule } from '../components/settings/ProviderAccountUsageModule';
 
-const { providersState, authState, creditUsageState, modelAccessState, apiKeyState } = vi.hoisted(
-  () => ({
-    providersState: { providers: [] as unknown[], order: [] as string[] },
-    authState: {
-      mode: 'cloud' as 'cloud' | 'local' | 'signed-out',
-      user: { membershipKind: 'personal' } as { membershipKind: 'personal' | 'org' } | null,
-      dataOwnerId: 'account-1' as string | null,
-    },
-    creditUsageState: { available: null as string | null },
-    modelAccessState: {
-      state: 'ok' as 'ok' | 'failed' | 'unsupported' | 'idle' | 'syncing' | 'disabled',
-      source: 'server' as string | null,
-    },
-    apiKeyState: { key: 'sk-live-abcd1234ef2a', hasSavedKey: true },
-  }),
-);
+const {
+  providersState,
+  authState,
+  creditUsageState,
+  quotaState,
+  modelAccessState,
+  apiKeyState,
+  primaryActionState,
+} = vi.hoisted(() => ({
+  providersState: { providers: [] as unknown[], order: [] as string[] },
+  authState: {
+    mode: 'cloud' as 'cloud' | 'local' | 'signed-out',
+    user: { membershipKind: 'personal' } as { membershipKind: 'personal' | 'org' } | null,
+    dataOwnerId: 'account-1' as string | null,
+  },
+  quotaState: {
+    unlimited: false,
+    usage: null as import('../hooks/useClaudeAccountUsage').ClaudeAccountUsageSnapshot | null,
+  },
+  creditUsageState: { available: null as string | null },
+  modelAccessState: {
+    state: 'ok' as 'ok' | 'failed' | 'unsupported' | 'idle' | 'syncing' | 'disabled',
+    source: 'server' as string | null,
+    accountTier: null as 'free' | 'paid' | 'not_applicable' | null,
+  },
+  apiKeyState: { key: 'sk-live-abcd1234ef2a', hasSavedKey: true },
+  primaryActionState: {
+    value: 'buy-plan' as 'buy-plan' | 'upgrade-plan' | 'topup' | null,
+    lastEnabled: false,
+  },
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -55,10 +72,30 @@ vi.mock('@/contexts/AuthContext', () => ({
 }));
 
 vi.mock('@/hooks/useModelAccessCreditUsage', () => ({
-  useModelAccessCreditUsage: (enabled: boolean) =>
-    enabled && creditUsageState.available !== null
-      ? { available: creditUsageState.available }
-      : null,
+  useModelAccessCreditUsageResult: (enabled: boolean) => ({
+    usage:
+      enabled && creditUsageState.available !== null
+        ? { available: creditUsageState.available }
+        : null,
+    loading: false,
+    refresh: vi.fn(),
+  }),
+}));
+
+vi.mock('@/hooks/useClaudeAccountUsage', () => ({
+  useClaudeAccountUsageResult: (enabled: boolean) => ({
+    usage: enabled ? quotaState.usage : null,
+    unlimited: enabled && quotaState.unlimited,
+    loading: false,
+    refresh: vi.fn(),
+  }),
+}));
+
+vi.mock('@/hooks/useXdAssetPrimaryAction', () => ({
+  useXdAssetPrimaryAction: (enabled: boolean) => {
+    primaryActionState.lastEnabled = enabled;
+    return enabled ? primaryActionState.value : null;
+  },
 }));
 
 vi.mock('@/hooks/useModelAccessStatus', () => ({
@@ -109,13 +146,13 @@ vi.mock('@/lib/providerSubtitle', () => ({
 
 vi.mock('@/state/modelVisibilityPrefs', () => ({
   isModelEnabled: () => true,
-  setManyVisibility: vi.fn(),
+  setModelVisibilities: vi.fn(),
   setModelVisibility: vi.fn(),
   useModelVisibilityVersion: () => 0,
 }));
 
-vi.mock('@/components/settings/CustomProviderDialog', () => ({
-  CustomProviderDialog: () => null,
+vi.mock('@/components/settings/ProviderConnectionDialog', () => ({
+  ProviderConnectionDialog: () => null,
 }));
 
 vi.mock('@/components/settings/AddProviderWizard', () => ({
@@ -137,7 +174,18 @@ function makeXd(): ProviderView {
     agents: ['claude-code', 'codex'],
     auth: { method: 'managed' },
     routing: {},
-    models: { 'claude-code': [], codex: [] },
+    models: {
+      'claude-code': [
+        {
+          id: 'cindy-test-model',
+          name: 'Cindy Test Model',
+          contextWindow: 200000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+      ],
+      codex: [],
+    },
     connected: true,
   } as unknown as ProviderView;
 }
@@ -172,9 +220,14 @@ beforeEach(() => {
   authState.user = { membershipKind: 'personal' };
   authState.dataOwnerId = 'account-1';
   creditUsageState.available = '18.42';
+  quotaState.usage = null;
+  quotaState.unlimited = false;
   modelAccessState.state = 'ok';
   modelAccessState.source = 'server';
+  modelAccessState.accountTier = null;
   apiKeyState.hasSavedKey = true;
+  primaryActionState.value = 'buy-plan';
+  primaryActionState.lastEnabled = false;
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
       scanLocalCli: vi.fn(async () => ({ detections: [] })),
@@ -193,30 +246,169 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+// PR #7031: settings and chip must both open the queried account's dashboard.
+// Unit/jsdom, a CN-first configuration whose usable key belongs to Global/Pi.
+it.each(['ready', 'unavailable'])('uses the queried dashboard in the settings card (%s)', async (status) => {
+  const dashboardUrl = 'https://z.ai/manage-apikey/coding-plan/personal/my-plan';
+  Object.assign(window.electronAPI, { openExternal: vi.fn(async () => undefined) });
+  Object.assign(window.electronAPI.maker, { fetchProviderAccountUsage: vi.fn(async () => ({
+    status, dashboardUrl,
+    ...(status === 'ready'
+      ? { agent: 'pi', stale: false, snapshot: { kind: 'zhipu-coding-plan-quota', noPlan: true, level: null, fiveHour: null, weekly: null, fetchedAt: 1 } }
+      : { error: 'auth' }),
+  })) });
+  render(<ProviderAccountUsageModule provider={{
+    id: 'mixed-glm', auth: { method: 'apiKey' },
+    routing: {
+      'claude-code': { upstream: 'https://open.bigmodel.cn/api/anthropic', authStrategy: 'api-key-header' },
+      pi: { upstream: 'https://api.z.ai/api/coding/paas/v4', authStrategy: 'api-key-header' },
+    },
+  } as ProviderView} />);
+  await screen.findByText(status === 'ready' ? 'Pi' : 'providerAccountUsage.error.auth');
+  fireEvent.click(screen.getByRole('button', { name: 'providerAccountUsage.zhipuCodingPlan.usage' }));
+  expect(window.electronAPI.openExternal).toHaveBeenCalledExactlyOnceWith(dashboardUrl);
+});
+
+it('keeps the manual refresh action after the first OpenCode Go quota snapshot', async () => {
+  Object.assign(window.electronAPI.maker, {
+    fetchProviderAccountUsage: vi.fn(async () => ({
+      status: 'ready',
+      stale: false,
+      snapshot: {
+        kind: 'opencode-go-quota',
+        fetchedAt: Date.now(),
+        windows: [
+          { id: 'rolling', usedPercent: 10, limited: false, resetsAt: null },
+          { id: 'weekly', usedPercent: 45, limited: false, resetsAt: null },
+          { id: 'monthly', usedPercent: 65, limited: false, resetsAt: null },
+        ],
+      },
+    })),
+  });
+  render(
+    <ProviderAccountUsageModule
+      provider={{
+        id: 'opencode-go',
+        connected: true,
+        auth: { method: 'apiKey' },
+        routing: {
+          codex: {
+            upstream: 'https://opencode.ai/zen/go/v1',
+            authStrategy: 'api-key-header',
+          },
+        },
+      } as ProviderView}
+    />,
+  );
+
+  await screen.findByText('OpenCode Go');
+  expect(screen.getByRole('button', { name: 'providerAccountUsage.kimi.refresh' })).toBeTruthy();
+});
+
 describe('ProvidersSection — Cindy AI 账户资产模块', () => {
-  it('个人云账号:显示可用余额 + 两个动作,并深链到计费页 / 充值意图', async () => {
+  it.each(['Cindy AI · 个人', 'Cindy AI · 心动', 'Cindy AI · Example Studio'])(
+    'shows the source name %s in the provider list and detail header', async (name) => {
+      providersState.providers = [{ ...makeXd(), name }];
+      renderSection();
+      expect((await screen.findAllByText(name)).length).toBeGreaterThanOrEqual(2);
+      expect(screen.queryByText('settings.providers.xd.title')).toBeNull();
+    },
+  );
+  it('仅免费个人账号在 Cindy AI 名称后显示身份标签', async () => {
+    modelAccessState.accountTier = 'free';
+    renderSection();
+
+    const badge = await screen.findByTestId('cindy-ai-free-tier-badge');
+    expect(badge.textContent).toBe('settings.providers.xd.accountTier.free');
+    const assetModule = screen.getByTestId('cindy-ai-asset-module');
+    expect(assetModule.contains(badge)).toBe(false);
+    expect(badge.previousElementSibling?.textContent).toBe('settings.providers.xd.title');
+    expect(screen.getByTestId('provider-detail-metadata').textContent).not.toContain('settings.providers.models.modelCount');
+    expect(screen.getByTestId('provider-detail-metadata').contains(badge)).toBe(true);
+
+    cleanup();
+    modelAccessState.accountTier = 'paid';
+    renderSection();
+    await screen.findAllByText('settings.providers.xd.title');
+    expect(screen.queryByTestId('cindy-ai-free-tier-badge')).toBeNull();
+
+    cleanup();
+    modelAccessState.accountTier = 'not_applicable';
+    renderSection();
+    await screen.findAllByText('settings.providers.xd.title');
+    expect(screen.queryByTestId('cindy-ai-free-tier-badge')).toBeNull();
+  });
+
+  it('非套餐用户:查看用量始终在,右边购买套餐,不显示充值', async () => {
     renderSection();
 
     expect(await screen.findByText('billing.balance.title')).toBeTruthy();
-    // 金额走 money.ts 的格式化 + BILLING_CURRENCY,不在这里自己拼字符串。
     expect(screen.getByText('cny:18.42')).toBeTruthy();
+    expect(primaryActionState.lastEnabled).toBe(true);
 
     fireEvent.click(screen.getByText('settings.providers.xd.asset.viewUsage'));
     await waitFor(() =>
       expect(screen.getByTestId('search').textContent).toBe('/settings?tab=billing'),
     );
 
+    fireEvent.click(screen.getByText('settings.providers.xd.asset.buyPlan'));
+    await waitFor(() =>
+      expect(screen.getByTestId('search').textContent).toBe(
+        '/settings?tab=billing&intent=subscribe',
+      ),
+    );
+
+    const buyPlan = screen.getByText('settings.providers.xd.asset.buyPlan').closest('button');
+    expect(buyPlan?.className).toContain('[--button-face-bg:var(--accent-cta-bg-pure)]');
+    expect(buyPlan?.className).toContain('text-[var(--accent-pure-cta-fg)]');
+    const usageButton = screen.getByText('settings.providers.xd.asset.viewUsage').closest('button');
+    expect(usageButton?.className).toContain('[--button-face-bg:var(--surface-elevated)]');
+    expect(usageButton?.className).toContain('text-[var(--text-primary)]');
+    expect(screen.queryByText('billing.settings.topupCard.action')).toBeNull();
+    expect(screen.queryByText('settings.providers.xd.asset.upgradePlan')).toBeNull();
+
+    const assetModule = screen.getByTestId('cindy-ai-asset-module');
+    expect(assetModule.children).toHaveLength(2);
+  });
+
+  it('有套餐还能升级:查看用量始终在,右边升级套餐,不显示充值', async () => {
+    primaryActionState.value = 'upgrade-plan';
+    renderSection();
+
+    expect(await screen.findByText('settings.providers.xd.asset.viewUsage')).toBeTruthy();
+    expect(screen.getByText('settings.providers.xd.asset.upgradePlan')).toBeTruthy();
+    expect(screen.queryByText('settings.providers.xd.asset.buyPlan')).toBeNull();
+    expect(screen.queryByText('billing.settings.topupCard.action')).toBeNull();
+
+    const upgrade = screen.getByText('settings.providers.xd.asset.upgradePlan').closest('button');
+    expect(upgrade?.className).toContain('[--button-face-bg:var(--accent-cta-bg-pure)]');
+    expect(upgrade?.className).toContain('text-[var(--accent-pure-cta-fg)]');
+
+    fireEvent.click(screen.getByText('settings.providers.xd.asset.upgradePlan'));
+    await waitFor(() =>
+      expect(screen.getByTestId('search').textContent).toBe(
+        '/settings?tab=billing&intent=plan-change',
+      ),
+    );
+  });
+
+  it('升满以后:查看用量始终在,右边才是余额充值', async () => {
+    primaryActionState.value = 'topup';
+    renderSection();
+
+    expect(await screen.findByText('settings.providers.xd.asset.viewUsage')).toBeTruthy();
+    expect(screen.getByText('billing.settings.topupCard.action')).toBeTruthy();
+    expect(screen.queryByText('settings.providers.xd.asset.buyPlan')).toBeNull();
+    expect(screen.queryByText('settings.providers.xd.asset.upgradePlan')).toBeNull();
+
+    const topup = screen.getByText('billing.settings.topupCard.action').closest('button');
+    expect(topup?.className).toContain('[--button-face-bg:var(--accent-cta-bg-pure)]');
+    expect(topup?.className).toContain('text-[var(--accent-pure-cta-fg)]');
+
     fireEvent.click(screen.getByText('billing.settings.topupCard.action'));
     await waitFor(() =>
       expect(screen.getByTestId('search').textContent).toBe('/settings?tab=billing&intent=topup'),
     );
-
-    // Black Pill(最高强调档)必须用 pure 对(DESIGN.md §4 button/cta):
-    // --accent-cta-bg-pure + --accent-pure-cta-fg;--accent-cta-bg 在默认 Light
-    // 下是 #262626,差一档,回归防再犯。
-    const topupButton = screen.getByText('billing.settings.topupCard.action').closest('button');
-    expect(topupButton?.style.backgroundColor).toBe('var(--accent-cta-bg-pure)');
-    expect(topupButton?.style.color).toBe('var(--accent-pure-cta-fg)');
   });
 
   it('正常态版面上没有重试 / 轮换 / 重新获取凭据按钮(它们退进「···」菜单)', async () => {
@@ -231,14 +423,28 @@ describe('ProvidersSection — Cindy AI 账户资产模块', () => {
     expect(screen.getByText('settings.providers.pill.connected')).toBeTruthy();
   });
 
-  it('企业账号:整块资产模块不渲染,也不显示占位', async () => {
+  it('企业账号:显示周期额度,不读取个人余额或提供充值', async () => {
     authState.user = { membershipKind: 'org' };
+    quotaState.usage = { spend: 25, maxBudget: 100, currency: 'USD', todaySpend: 5, fetchedAt: 1 };
     renderSection();
 
     await screen.findAllByText('settings.providers.xd.title');
     expect(screen.queryByText('billing.balance.title')).toBeNull();
     expect(screen.queryByText('cny:18.42')).toBeNull();
+    expect(screen.getByText('USD:75')).toBeTruthy();
+    expect(primaryActionState.lastEnabled).toBe(false);
     expect(screen.queryByText('billing.settings.topupCard.action')).toBeNull();
+  });
+
+  it('shows no personal limit rather than an unavailable quota for an enterprise', async () => {
+    authState.user = { membershipKind: 'org' };
+    quotaState.unlimited = true;
+    renderSection();
+    expect(await screen.findByText('settings.providers.xd.asset.noPersonalLimit')).toBeTruthy();
+    expect(screen.queryByText('settings.providers.xd.asset.unavailable')).toBeNull();
+    expect(screen.getByText('settings.providers.xd.asset.refresh')).toBeTruthy();
+    expect(screen.queryByText('billing.balance.title')).toBeNull();
+    expect(primaryActionState.lastEnabled).toBe(false);
   });
 
   it('local 会话(未登录云账号):同样不渲染', async () => {
@@ -250,12 +456,14 @@ describe('ProvidersSection — Cindy AI 账户资产模块', () => {
     expect(screen.queryByText('billing.balance.title')).toBeNull();
   });
 
-  it('拿不到余额:不渲染余额区,不显示「—」占位', async () => {
+  it('拿不到余额:显示说明和就地重试,不伪造零余额', async () => {
     creditUsageState.available = null;
     renderSection();
 
     await screen.findAllByText('settings.providers.xd.title');
-    expect(screen.queryByText('billing.balance.title')).toBeNull();
+    expect(screen.getByText('billing.balance.title')).toBeTruthy();
+    expect(screen.getByText('settings.providers.xd.asset.unavailable')).toBeTruthy();
+    expect(screen.getByText('settings.providers.xd.asset.refresh')).toBeTruthy();
     expect(screen.queryByText('settings.providers.xd.asset.syncFailed')).toBeNull();
   });
 
@@ -276,9 +484,13 @@ describe('ProvidersSection — Cindy AI 账户资产模块', () => {
 
     // Radix 的 DropdownMenuTrigger 走 pointerdown / 键盘,jsdom 下没有 PointerEvent,
     // 用键盘打开(与用户的键盘路径一致)。
-    fireEvent.keyDown(await screen.findByLabelText('settings.providers.detail.moreActionsAria'), {
-      key: 'Enter',
-    });
+    const providerIdentity = await screen.findByTestId('provider-detail-identity');
+    const providerHeader = providerIdentity.parentElement;
+    expect(providerHeader).not.toBeNull();
+    fireEvent.keyDown(
+      within(providerHeader!).getByLabelText('settings.providers.detail.moreActionsAria'),
+      { key: 'Enter' },
+    );
 
     expect(await screen.findByText('settings.providers.xd.sync.refresh')).toBeTruthy();
     expect(screen.getByText('settings.providers.xd.sync.rotate')).toBeTruthy();

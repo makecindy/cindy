@@ -63,7 +63,8 @@ describe('BrowserBackendSubsection', () => {
     ).toBeTruthy();
   });
 
-  it('uses the semantic spinner motion and stays static under reduced motion', () => {
+  it('keeps its accessible name while loading, prevents repeats and uses reduced-motion-aware feedback', () => {
+    const onRecover = vi.fn();
     render(
       <BrowserBackendSubsection
         active="rsb-webview"
@@ -71,14 +72,21 @@ describe('BrowserBackendSubsection', () => {
         recovering
         health={{ active: 'rsb-webview', status: 'ready', canRecover: true }}
         onSelect={vi.fn()}
-        onRecover={vi.fn()}
+        onRecover={onRecover}
       />,
     );
 
     const button = screen.getByRole('button', {
-      name: 'settings.computerUse.browserBackend.health.recovering',
+      name: 'settings.computerUse.browserBackend.health.reconnect',
     });
-    const spinner = button.querySelector('span');
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(button);
+    expect(onRecover).not.toHaveBeenCalled();
+    expect(button.querySelector('.opacity-0')?.textContent).toContain(
+      'settings.computerUse.browserBackend.health.reconnect',
+    );
+    const spinner = button.querySelector('.animate-spinner');
     expect(spinner?.classList.contains('animate-spinner')).toBe(true);
     expect(spinner?.classList.contains('motion-reduce:animate-none')).toBe(true);
     expect(spinner?.classList.contains('animate-spin')).toBe(false);
@@ -99,4 +107,23 @@ describe('BrowserBackendSubsection', () => {
     expect(screen.queryByRole('status')).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
   });
+});
+
+// Regression 2026-11-07: a usable plugin with a stale selection was mislabeled as outdated.
+// Render the real setup row; cover updating vs selection with no update/store action (unit/jsdom).
+it.each(['plugin-updating', 'plugin-selection-required'] as const)('explains %s without claiming the plugin is outdated', reason => {
+  const setup = vi.fn();
+  render(<BrowserBackendSubsection active="user-browser" pending={false} recovering={false}
+    health={{ active: 'user-browser', status: 'error', canRecover: false, reason }}
+    onSelect={vi.fn()} onRecover={vi.fn()} userBrowserPluginState="enabled"
+    userBrowserPluginSupportsControl onSetUpUserBrowser={setup} />);
+  const prefix = 'settings.computerUse.browserBackend.userBrowserSetup.';
+  expect(screen.queryByText(prefix + 'updatePluginTitle')).toBeNull();
+  if (reason === 'plugin-updating') {
+    expect(screen.getByText(prefix + 'updatingTitle')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: prefix + 'selectPlugin' })).toBeNull();
+  } else {
+    fireEvent.click(screen.getByRole('button', { name: prefix + 'selectPlugin' }));
+    expect(setup).toHaveBeenCalledOnce();
+  }
 });

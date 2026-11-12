@@ -19,6 +19,7 @@ import {
  */
 
 export type ComposerSuggestionActionId =
+  | 'retry-plugins'
   | 'attach-files'
   | 'new-goal'
   | 'plan-mode'
@@ -36,6 +37,8 @@ export interface ComposerSuggestionAction {
   disabled?: boolean;
   /** Shown as a row tooltip when the action is disabled (e.g. collab policy). */
   disabledReason?: string;
+  /** Opens a next-level page inside the `+` panel instead of finishing there (add directory). */
+  opensPanelPage?: boolean;
   run: () => void;
 }
 
@@ -167,10 +170,13 @@ export function buildComposerSuggestionEntries(
     const attach = input.actions.find((a) => a.id === 'attach-files');
     if (attach) entries.push({ kind: 'action', action: attach });
     for (const action of input.actions) {
-      if (action.id === 'attach-files' || action.id === 'add-extra-dir') continue;
+      if (
+        action.id === 'attach-files'
+        || action.id === 'add-extra-dir'
+      ) continue;
       entries.push({ kind: 'action', action });
     }
-    for (const type of ['browser-tab', 'agent'] as const) {
+    for (const type of ['bot', 'browser-tab', 'agent'] as const) {
       let count = 0;
       for (const item of input.resources) {
         if (item.type !== type) continue;

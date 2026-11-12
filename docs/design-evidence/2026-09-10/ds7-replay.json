@@ -1,0 +1,406 @@
+{
+  "date": "2026-09-10",
+  "executor": "Codex",
+  "reviewerStatus": "User explicitly waived independent dual review on 2026-09-10; executor self-review and E2E completed, administrator approval still required before merge",
+  "scriptHashes": {
+    "scripts/hardcoded-color-audit.mjs": "ccadd6ea522f6dcb194eb4ca7811de306be87de0e8c436319e31453b988512b0",
+    "scripts/shared/hardcoded-color-match.mjs": "5e61f5fffbcf978f6a1ffc1ec7030d1af2141a488dd8b812b1cbab8abf70fa66",
+    "scripts/shared/design-layer-report.mjs": "aceed4635883fc68ecc2acafa89edde5f2708988e83a082537a993a8381d1db3",
+    "scripts/hardcoded-color-exemptions.json": "0174ff5797f670034ddff646f797a4f9a4372670f6e79c0f4820aab8a9c36b68"
+  },
+  "samples": [
+    {
+      "pr": 3920,
+      "title": "feat(design-system): DS-4 Button 与 Input 标准组件",
+      "base": "917e97655d6d3a64b2488f77d7f2971da35178c6",
+      "head": "ede0f7739af5206c4f42c6db575d3de7bd633a22",
+      "expectedBlock": 0,
+      "expectedReason": "Button/Input semantic consumption; governed source/fixtures; prose colours and geometry report.",
+      "actual": {
+        "raw": 24,
+        "allowed": 1,
+        "unexpected": 0,
+        "report": 29
+      },
+      "findingGroups": {
+        "unknown:report": 4,
+        "unclassified-spacing:report": 2,
+        "bare-color:allowed": 1,
+        "bare-color:report": 23
+      },
+      "scannedCandidateHash": "e2f34e3c000fe1db0b6e910773ce597dda4e62a269cee700bcd5fde0889a4d55",
+      "executorFalseBlocks": 0,
+      "executorKnownMissesInDeclaredScope": 0
+    },
+    {
+      "pr": 4010,
+      "title": "fix(design-system): DS-4b 设置输入框旧主题兼容收口",
+      "base": "0f06db095e5971742af5db36c69e93482726ed4f",
+      "head": "e9c3729a18b4a84bd00f57ec302de3a6d3f54ab2",
+      "expectedBlock": 0,
+      "expectedReason": "Local alias/old theme compatibility without new literals.",
+      "actual": {
+        "raw": 0,
+        "allowed": 0,
+        "unexpected": 0,
+        "report": 0
+      },
+      "findingGroups": {},
+      "scannedCandidateHash": "944a05fb9b047b5cebbaee3c48f83d4691d2c4b85eb5fe248c5f8188a9fae066",
+      "executorFalseBlocks": 0,
+      "executorKnownMissesInDeclaredScope": 0
+    },
+    {
+      "pr": 4022,
+      "title": "docs(design-system): DS-5 对齐执行路线与双端设计合同",
+      "base": "fe806e33684860163d6573a23c2f09b9d732ec71",
+      "head": "63e90722e0de9e7b1db732274bdd9870337177d2",
+      "expectedBlock": 0,
+      "expectedReason": "Design route prose: PR numbers are not colours.",
+      "actual": {
+        "raw": 0,
+        "allowed": 0,
+        "unexpected": 0,
+        "report": 0
+      },
+      "findingGroups": {},
+      "scannedCandidateHash": "efdb31e11ce4604c499b197c5542dbaa4bece7ccf0ccdd6c517a97cf2f10a539",
+      "executorFalseBlocks": 0,
+      "executorKnownMissesInDeclaredScope": 0
+    },
+    {
+      "pr": 4135,
+      "title": "feat(design-system): DS-6 完成表单与确认组件复用",
+      "base": "79c89d14a9f073d93485c7e7d5c0bec79bd6a961",
+      "head": "6559d2610a35e5ff85adf9b41c2a620ac4a4c196",
+      "expectedBlock": 0,
+      "expectedReason": "Semantic form and confirm colours; four wrappers and seven PR references excluded; geometry/adoption report.",
+      "actual": {
+        "raw": 0,
+        "allowed": 0,
+        "unexpected": 0,
+        "report": 14
+      },
+      "findingGroups": {
+        "form-adoption:report": 3,
+        "unknown:report": 10,
+        "unclassified-spacing:report": 1
+      },
+      "scannedCandidateHash": "d791d0316d321f343f2dbe360e692d7f8841faee804371907936dc8a8988c9ae",
+      "executorFalseBlocks": 0,
+      "executorKnownMissesInDeclaredScope": 0
+    },
+    {
+      "pr": 4072,
+      "title": "docs(design): 按可见层与登记分配圆角并明确审查边界",
+      "base": "d94ddc194b6ef9fffd33b762ccc9739bb06451cd",
+      "head": "043eaec31d5cc080d3b1c9a472efb8fb8125158f",
+      "expectedBlock": 0,
+      "expectedReason": "Visible-layer documentation: parenthesized PR references are not colours.",
+      "actual": {
+        "raw": 0,
+        "allowed": 0,
+        "unexpected": 0,
+        "report": 0
+      },
+      "findingGroups": {},
+      "scannedCandidateHash": "778469b4b3ffd3361a47880387a6f3b46a79747a9657760b85d6cc9347b6b0e9",
+      "executorFalseBlocks": 0,
+      "executorKnownMissesInDeclaredScope": 0
+    },
+    {
+      "pr": 4076,
+      "title": "fix(desktop): 优化用量历史图表配色、交互反馈与文字层级",
+      "base": "b57c5eefb1c166cff6862bb07a2f370388e68d34",
+      "head": "f3203a7049c8ffe2b42d9d68df5aa68894ee54a3",
+      "expectedBlock": 0,
+      "expectedReason": "Palette originates in theme source; marks/targets stay separate and pending geometry reports; documentation RGB observations.",
+      "actual": {
+        "raw": 38,
+        "allowed": 20,
+        "unexpected": 0,
+        "report": 32
+      },
+      "findingGroups": {
+        "registered-value:report": 2,
+        "pending-target:report": 2,
+        "interaction-indicator:report": 2,
+        "unknown:report": 7,
+        "unclassified-spacing:report": 1,
+        "bare-color:allowed": 20,
+        "bare-color:report": 18
+      },
+      "scannedCandidateHash": "3e9c6e5876cd2cba2ff902909502575a61b0e7aa468520ad489bb9867d04564a",
+      "executorFalseBlocks": 0,
+      "executorKnownMissesInDeclaredScope": 0
+    },
+    {
+      "pr": 4164,
+      "title": "fix(desktop): 优化用量历史模型与 harness 配色",
+      "base": "3429d8b9c6c7602b1b9cd9f3a1f6978adc223ac1",
+      "head": "1fc30528c407166815db5878c6197ed3d62ece73",
+      "expectedBlock": 0,
+      "expectedReason": "Relative runtime OKLCH derives from semantic seeds; documentation colours report.",
+      "actual": {
+        "raw": 17,
+        "allowed": 0,
+        "unexpected": 0,
+        "report": 17
+      },
+      "findingGroups": {
+        "bare-color:report": 17
+      },
+      "scannedCandidateHash": "507c7bb47f4f4cd6fa49939550ad4dad9f027b61872696557cbd702bda398e3e",
+      "executorFalseBlocks": 0,
+      "executorKnownMissesInDeclaredScope": 0
+    },
+    {
+      "pr": 4146,
+      "title": "feat(bots): 统一持久授权卡与授权完成续接",
+      "base": "f914cba1e72543467421a5cc3764e41c50a22a69",
+      "head": "56c0e50028dcf0f5f83fb9a878e5cb32eee8806e",
+      "expectedBlock": 0,
+      "expectedReason": "Authorization card semantic colours; geometry unknown, no permission behaviour ruling.",
+      "actual": {
+        "raw": 0,
+        "allowed": 0,
+        "unexpected": 0,
+        "report": 3
+      },
+      "findingGroups": {
+        "unknown:report": 3
+      },
+      "scannedCandidateHash": "bcbc18fb12fddbe9465f1737cc9ada2c45fdf17c2151a4ea3cf27c286f1422f9",
+      "executorFalseBlocks": 0,
+      "executorKnownMissesInDeclaredScope": 0
+    },
+    {
+      "pr": 4190,
+      "title": "fix(desktop): 统一登录页面返回入口",
+      "base": "1fc30528c407166815db5878c6197ed3d62ece73",
+      "head": "6fb23e60796d260598f1deb0cd5f110cd9361052",
+      "expectedBlock": 0,
+      "expectedReason": "Login back control reuses existing classes; no new literals.",
+      "actual": {
+        "raw": 0,
+        "allowed": 0,
+        "unexpected": 0,
+        "report": 0
+      },
+      "findingGroups": {},
+      "scannedCandidateHash": "bcd41cdbc1d70303e502402f41477bee8eab75fba12f2a7745faebb7a41fe46c",
+      "executorFalseBlocks": 0,
+      "executorKnownMissesInDeclaredScope": 0
+    },
+    {
+      "pr": 4133,
+      "title": "fix(mobile): 恢复消息菜单图标并统一跨端规范",
+      "base": "7bf942a9ba5a33a9e53d1033e0b41b27b59c97ef",
+      "head": "7f7c7589edc619049781d7e9646bc5948e8dd047",
+      "expectedBlock": 0,
+      "expectedReason": "Mobile SVG asset colours report; original Mobile guards retained.",
+      "actual": {
+        "raw": 4,
+        "allowed": 0,
+        "unexpected": 0,
+        "report": 4
+      },
+      "findingGroups": {
+        "bare-color:report": 4
+      },
+      "scannedCandidateHash": "8666d7bc396867ea75ff406354527f5ec57e907839e3191dad6265d5b49fd1f0",
+      "executorFalseBlocks": 0,
+      "executorKnownMissesInDeclaredScope": 0
+    },
+    {
+      "pr": 4191,
+      "title": "fix(mobile): 普通同步使用延迟标题动画，异常保留悬浮提示",
+      "base": "b3a957b98dd0a22d68d5ac5a7d20eaca7a078e45",
+      "head": "e80bfccabed2b93dad20d9f887a582857cb8303f",
+      "expectedBlock": 0,
+      "expectedReason": "Mobile title animation and connection feedback; no new literals.",
+      "actual": {
+        "raw": 0,
+        "allowed": 0,
+        "unexpected": 0,
+        "report": 0
+      },
+      "findingGroups": {},
+      "scannedCandidateHash": "2cb1e9aaf07a4b08f042a58130f0af90e8d0a06c732555d283b198e14dac8989",
+      "executorFalseBlocks": 0,
+      "executorKnownMissesInDeclaredScope": 0
+    },
+    {
+      "pr": 4069,
+      "title": "fix(mobile): 统一待发送与正式消息的附件布局",
+      "base": "c651c37655fceeb714f92e8f88d5d5b390f57d91",
+      "head": "b57c5eefb1c166cff6862bb07a2f370388e68d34",
+      "expectedBlock": 0,
+      "expectedReason": "Mobile attachment layout reuses existing colours.",
+      "actual": {
+        "raw": 0,
+        "allowed": 0,
+        "unexpected": 0,
+        "report": 0
+      },
+      "findingGroups": {},
+      "scannedCandidateHash": "77e7d246d29f8e4aaed1c9847bb02e5c668e6f9c3b37434b74aeef463a097d9d",
+      "executorFalseBlocks": 0,
+      "executorKnownMissesInDeclaredScope": 0
+    },
+    {
+      "pr": 4081,
+      "title": "perf(device-link): 按可见内容分页并按需读取工作详情",
+      "base": "c5544d0f9070c060814755076e38fd58be0e0392",
+      "head": "f32cf9acfdb815acd32ef663695853923e8dfaaf",
+      "expectedBlock": 0,
+      "expectedReason": "Cross-device pagination/protocol: no new production UI literal colours.",
+      "actual": {
+        "raw": 0,
+        "allowed": 0,
+        "unexpected": 0,
+        "report": 0
+      },
+      "findingGroups": {},
+      "scannedCandidateHash": "6d22f0a774ba53b3d0f158680b1a0800ac542f0bc0203f332c59b898b5c33380",
+      "executorFalseBlocks": 0,
+      "executorKnownMissesInDeclaredScope": 0
+    },
+    {
+      "pr": 4065,
+      "title": "feat(remote-desktop): 手机远程桌面、网络协商与断线恢复",
+      "base": "ebcb181a5b61f8c27984190f76de687e576b1686",
+      "head": "c5544d0f9070c060814755076e38fd58be0e0392",
+      "expectedBlock": 0,
+      "expectedReason": "Viewer ThemeColors via ordinary color(surface) calls; smoke fixture literals report; Mobile and geometry report.",
+      "actual": {
+        "raw": 7,
+        "allowed": 3,
+        "unexpected": 0,
+        "report": 11
+      },
+      "findingGroups": {
+        "unknown:report": 7,
+        "bare-color:report": 4,
+        "bare-color:allowed": 3
+      },
+      "scannedCandidateHash": "0eabf053bbc7bd4252d1f0508f7fde3739749d5e09190b3b178bc219f83d4c85",
+      "executorFalseBlocks": 0,
+      "executorKnownMissesInDeclaredScope": 0
+    },
+    {
+      "pr": 4038,
+      "title": "perf(desktop): 将大段差异计算移出渲染主线程",
+      "base": "9e51a7284b9197852c2068f41d688739be5b9411",
+      "head": "00627ff750b3c8ac883afb0a63376c5466b12a3f",
+      "expectedBlock": 0,
+      "expectedReason": "Diff computation worker; semantic UI, unknown geometry reports.",
+      "actual": {
+        "raw": 0,
+        "allowed": 0,
+        "unexpected": 0,
+        "report": 3
+      },
+      "findingGroups": {
+        "unknown:report": 3
+      },
+      "scannedCandidateHash": "d7ef6891921e5dc4c2bbe14c17392d20a6ba29852e739dd1be040a145fa4be86",
+      "executorFalseBlocks": 0,
+      "executorKnownMissesInDeclaredScope": 0
+    },
+    {
+      "pr": 4040,
+      "title": "perf(file-browser): 合并文件树刷新请求",
+      "base": "00627ff750b3c8ac883afb0a63376c5466b12a3f",
+      "head": "ff8794746f119056833d6a8ebb0ddfcb0c91691e",
+      "expectedBlock": 0,
+      "expectedReason": "File-tree refresh coalescing; not a colour change.",
+      "actual": {
+        "raw": 0,
+        "allowed": 0,
+        "unexpected": 0,
+        "report": 0
+      },
+      "findingGroups": {},
+      "scannedCandidateHash": "2c8ca868bc87f6ca0d8154d1c94eb37051dab53d5fd72fefd3fde43f9b299184",
+      "executorFalseBlocks": 0,
+      "executorKnownMissesInDeclaredScope": 0
+    },
+    {
+      "pr": 3905,
+      "title": "fix(mobile): 修复 iOS HDR 截图发送失败",
+      "base": "63e90722e0de9e7b1db732274bdd9870337177d2",
+      "head": "50201fb83b24e529ff92af275cdb786ce493565f",
+      "expectedBlock": 0,
+      "expectedReason": "iOS HDR/native/dependency change; outside colour consumer scope, no cold-update approval implied.",
+      "actual": {
+        "raw": 0,
+        "allowed": 0,
+        "unexpected": 0,
+        "report": 0
+      },
+      "findingGroups": {},
+      "scannedCandidateHash": "5b721fc5a6850c5b5673e2e1f8300a3aa29f458afd6005a076401fe53d2c325a",
+      "executorFalseBlocks": 0,
+      "executorKnownMissesInDeclaredScope": 0
+    },
+    {
+      "pr": 4033,
+      "title": "fix(mobile): 自建 OTA 原生事务恢复（需冷更）",
+      "base": "77ccdc239c4c1c9538433b29e5af61a53080537f",
+      "head": "9e51a7284b9197852c2068f41d688739be5b9411",
+      "expectedBlock": 0,
+      "expectedReason": "OTA native transaction recovery; outside colour scope, no cold-update approval implied.",
+      "actual": {
+        "raw": 0,
+        "allowed": 0,
+        "unexpected": 0,
+        "report": 0
+      },
+      "findingGroups": {},
+      "scannedCandidateHash": "9b61dde1b20763ca2c40e6d39f5ce22196c1ed39ca8072bfb13c73e920bf33d8",
+      "executorFalseBlocks": 0,
+      "executorKnownMissesInDeclaredScope": 0
+    },
+    {
+      "pr": 4098,
+      "title": "feat(skillhub): 支持本地技能启停、卸载与详情跳转",
+      "base": "f32cf9acfdb815acd32ef663695853923e8dfaaf",
+      "head": "bd4ce12c46b8b237447da37326a1701112095c22",
+      "expectedBlock": 0,
+      "expectedReason": "Skill controls consume semantic colours; unknown geometry reports, no protocol/business ruling.",
+      "actual": {
+        "raw": 0,
+        "allowed": 0,
+        "unexpected": 0,
+        "report": 7
+      },
+      "findingGroups": {
+        "unknown:report": 7
+      },
+      "scannedCandidateHash": "3bf3a1f7174d82ff12134a9f1507af2b63a0eed5f938ebed230ac840d1322af1",
+      "executorFalseBlocks": 0,
+      "executorKnownMissesInDeclaredScope": 0
+    },
+    {
+      "pr": 4067,
+      "title": "feat(bots): 伙伴例行任务与本地事件触发",
+      "base": "bf24d6ffbd0f3083645d01c4cf12f8154e8fef18",
+      "head": "1358f714cabbe08bac0d0355d693b84f72a35a1d",
+      "expectedBlock": 0,
+      "expectedReason": "Bot routine UI consumes semantic colours; geometry reports, no protocol/business ruling.",
+      "actual": {
+        "raw": 0,
+        "allowed": 0,
+        "unexpected": 0,
+        "report": 11
+      },
+      "findingGroups": {
+        "unknown:report": 11
+      },
+      "scannedCandidateHash": "9793530b249f03eea4680f12f8d4a7dad080c8afafecd2be65bd03bf6786b491",
+      "executorFalseBlocks": 0,
+      "executorKnownMissesInDeclaredScope": 0
+    }
+  ]
+}

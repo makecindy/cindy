@@ -24,6 +24,11 @@ export interface ChatFilePathTarget {
   absPath: string;
   /** `foo.ts:42` 形态拆出的行号(仅文件预览用)。 */
   line?: number;
+  /**
+   * 路径所属的另一个任务(伙伴后台任务结果卡里的文件属于子任务);长按菜单的
+   * 打开 / 定位 / 分享按它执行,缺省为当前会话。
+   */
+  scope?: { sessionId: string; workdir: string };
 }
 
 export interface ChatFilePathContextValue {

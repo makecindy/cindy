@@ -1,4 +1,5 @@
 import { piEditReplacements } from './toolUseDescriptor.js';
+import { presentationText, type PresentationLocalizer } from './presentationLocalization.js';
 
 export type PayloadKind = 'text' | 'diff' | 'media' | 'mermaid' | 'file';
 
@@ -199,12 +200,13 @@ export function buildTextPayload(title: string, body: string): Extract<SharedMes
 
 export function buildDiffPayload<Diff extends PayloadToolDiffLike>(
   diff: Diff,
+  localizer?: PresentationLocalizer,
 ): Extract<SharedMessagePayload<Diff>, { kind: 'diff' }> {
   return {
     kind: 'diff',
     title: diff.filePath,
     diff,
-    body: formatDiffPayload(diff),
+    body: formatDiffPayload(diff, localizer),
   };
 }
 
@@ -283,8 +285,9 @@ export function buildPayloadToolDiff(toolName: string, input: unknown): PayloadT
 export function buildMediaPayload<Media extends PayloadMediaLike>(
   media: Media,
   label: string,
+  localizer?: PresentationLocalizer,
 ): Extract<SharedMessagePayload<PayloadToolDiffLike, Media>, { kind: 'media' }> {
-  const actionNotice = formatMediaActionNotice(media);
+  const actionNotice = formatMediaActionNotice(media, localizer);
   return {
     kind: 'media',
     title: label,
@@ -292,7 +295,7 @@ export function buildMediaPayload<Media extends PayloadMediaLike>(
     body: [
       media.previewable
         ? media.url
-        : `移动端会尝试从远程电脑取回媒体。\n\n${media.url}`,
+        : `${payloadPresentationText(localizer, 'remoteFetchBody', '移动端会尝试从远程电脑取回媒体。')}\n\n${media.url}`,
       actionNotice,
     ].filter(Boolean).join('\n\n'),
   };
@@ -301,17 +304,19 @@ export function buildMediaPayload<Media extends PayloadMediaLike>(
 export function buildFilePayload(
   title: string,
   sourcePath: string,
+  localizer?: PresentationLocalizer,
 ): Extract<SharedMessagePayload, { kind: 'file' }> {
   return {
     kind: 'file',
     title,
-    body: sourcePath || '没有可展示的远程路径',
+    body: sourcePath || payloadPresentationText(localizer, 'missingRemotePath', '没有可展示的远程路径'),
     sourcePath: sourcePath || undefined,
   };
 }
 
 export function buildAttachmentPayload(
   attachment: PayloadAttachmentLike,
+  localizer?: PresentationLocalizer,
 ): AttachmentMessagePayload {
   if (attachment.kind === 'image' && attachment.uri) {
     return buildMediaPayload({
@@ -319,7 +324,7 @@ export function buildAttachmentPayload(
       previewable: attachment.previewable,
       title: attachment.name,
       url: attachment.uri,
-    }, attachment.name);
+    }, attachment.name, localizer);
   }
 
   const sourcePath = attachment.path || attachment.uri || '';
@@ -338,21 +343,16 @@ export function buildAttachmentPayload(
         url: sourcePath,
       },
       attachment.name,
+      localizer,
     );
   }
-  return buildFilePayload(attachment.name, sourcePath);
+  return buildFilePayload(attachment.name, sourcePath, localizer);
 }
 
 export function extractPayloadToolResultMedia(toolResult: string): ExtractedPayloadToolMediaLike[] {
   if (!toolResult || typeof toolResult !== 'string') return [];
-  if (
-    !toolResult.includes('xdt_image_url')
-    && !toolResult.includes('xdt_video_url')
-    && !toolResult.includes('xdt_audio_url')
-  ) {
-    return [];
-  }
-  const parsed = parsePayloadJsonObject(toolResult);
+  if (!toolResult.includes("xdt_")) return [];
+  const parsed = parseToolResultPayload(toolResult);
   if (!parsed || parsed._xdt_render_image === false) return [];
 
   const items: ExtractedPayloadToolMediaLike[] = [];
@@ -418,6 +418,15 @@ export function extractPayloadToolResultMedia(toolResult: string): ExtractedPayl
     }
   }
 
+  // A host-recorded fallback is also a delivery channel on Mobile. Never guess
+  // a local path or classify unknown blob extensions as pictures.
+  if (Array.isArray(parsed.xdt_media_produced)) {
+    for (const url of parsed.xdt_media_produced) {
+      const kind = managedToolMediaKind(url);
+      if (kind) push(kind, url as string);
+    }
+  }
+
   const seen = new Set<string>();
   return items.filter((item) => {
     if (seen.has(item.url)) return false;
@@ -426,23 +435,276 @@ export function extractPayloadToolResultMedia(toolResult: string): ExtractedPayl
   });
 }
 
-export function buildMermaidPayload(source: string): Extract<SharedMessagePayload, { kind: 'mermaid' }> {
+/** Only unwrap the documented ghost_call envelope, never arbitrary nested tool data. */
+export function parseToolResultPayload(text: string): Record<string, unknown> | null {
+  const outer = parsePayloadJsonObject(text);
+  if (!outer) return null;
+  const inner = outer.ok === true ? readPayloadRecord(outer.result) : null;
+  return inner ? { ...inner, ...outer, ...(inner._xdt_render_image === false ? { _xdt_render_image: false } : {}) } : outer;
+}
+
+export function managedToolMediaKind(url: unknown): 'image' | 'video' | 'audio' | null {
+  if (typeof url !== 'string') return null;
+  if (url.startsWith('xdt-image://')) return 'image';
+  if (url.startsWith('xdt-video://')) return 'video';
+  if (url.startsWith('xdt-audio://')) return 'audio';
+  const match = /^cindy-media:\/\/blobs\/[0-9a-f]{64}\.([a-z0-9]+)$/.exec(url);
+  if (!match) return null;
+  if (/^(png|jpe?g|gif|webp|avif|bmp|svg)$/.test(match[1])) return 'image';
+  if (/^(mp4|webm|mov|m4v)$/.test(match[1])) return 'video';
+  if (/^(mp3|wav|m4a|ogg|flac|aac|opus)$/.test(match[1])) return 'audio';
+  return null;
+}
+
+/** Portable read-only card references; the Host resolves their content in the owning task. */
+export function extractPayloadToolCardIds(text: string): string[] {
+  const parsed = parseToolResultPayload(text);
+  if (!parsed) return [];
+  return [...new Set([parsed.xdt_card_id, parsed.xdt_anchor_card_id]
+    .filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 128))];
+}
+
+/** 声明排到本轮末尾的卡片 id(host 在 tool_result 里注入 xdt_card_turn_end: true)。 */
+export function extractPayloadTurnEndCardIds(text: string): string[] {
+  const parsed = parseToolResultPayload(text);
+  return parsed?.xdt_card_turn_end === true && typeof parsed.xdt_card_id === 'string'
+    && parsed.xdt_card_id.length > 0 && parsed.xdt_card_id.length <= 128 ? [parsed.xdt_card_id] : [];
+}
+
+export interface PayloadToolFile { url: string; title: string }
+
+// Preserve the legacy URL alphabet. Source delimiters are contextual; adding
+// filename punctuation here silently turns a valid reference into another path.
+const TOOL_FILE_URL_RE = /xdt-file:\/\/[^\s"<>\\)]+/g;
+
+function absoluteToolFilePath(url: string): string | null {
+  try {
+    // Keep both legacy direct-path links and the query-based local/open URLs.
+    let path: string;
+    if (url.startsWith('xdt-file:///')) {
+      path = url.slice('xdt-file://'.length);
+      // Legacy direct paths may contain a literal percent sign. Decode valid
+      // escapes once, but retain the original path if it is not URI-encoded.
+      try { path = decodeURIComponent(path); } catch { /* Keep the literal path. */ }
+    } else {
+      path = new URL(url).searchParams.get('path') ?? '';
+    }
+    return path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path) ? path : null;
+  } catch {
+    return null;
+  }
+}
+
+function* sourceContextTokens(text: string): Generator<{
+  start: number; end: number; comment: boolean; closed: boolean;
+}> {
+  // Always advance past a token, including unterminated strings/comments.
+  // An unanchored regex can retry every escaped quote or /* in a long result.
+  let index = 0;
+  const filePattern = new RegExp(TOOL_FILE_URL_RE.source, 'y');
+  while (index < text.length) {
+    // Unquoted legacy paths may themselves contain // or /*. Consume the
+    // existing URL alphabet atomically so later deliveries are not commented out.
+    if (text.startsWith('xdt-file://', index)) {
+      filePattern.lastIndex = index;
+      if (filePattern.exec(text)) {
+        index = filePattern.lastIndex;
+        continue;
+      }
+    }
+    const start = index;
+    const quote = text[index];
+    if (quote === '"' || quote === "'" || quote === '`') {
+      // Python triple quotes delimit one literal, including internal single or
+      // double quotes and newlines. Backticks retain their existing semantics.
+      const delimiter = quote !== '`' && text.startsWith(quote.repeat(3), index) ? quote.repeat(3) : quote;
+      index += delimiter.length;
+      let closed = false;
+      while (index < text.length) {
+        if (text[index] === '\\') {
+          index = Math.min(index + 2, text.length);
+        } else if (text.startsWith(delimiter, index)) {
+          index += delimiter.length;
+          closed = true;
+          break;
+        } else {
+          index++;
+        }
+      }
+      yield { start, end: index, comment: false, closed };
+    } else if (text.startsWith('/*', index)) {
+      const closing = text.indexOf('*/', index + 2);
+      index = closing < 0 ? text.length : closing + 2;
+      yield { start, end: index, comment: true, closed: closing >= 0 };
+    } else if (text.startsWith('//', index) && text[index - 1] !== ':' && text[index - 1] !== '/') {
+      index += 2;
+      while (index < text.length && text[index] !== '\r' && text[index] !== '\n') index++;
+      yield { start, end: index, comment: true, closed: true };
+    } else {
+      index++;
+    }
+  }
+}
+
+function withoutSourceComments(text: string): string {
+  // Skip string literals before recognizing comments, so URL schemes
+  // and comment-like file names inside strings remain part of the context.
+  const parts: string[] = [];
+  let end = 0;
+  for (const token of sourceContextTokens(text)) {
+    if (!token.comment) continue;
+    parts.push(text.slice(end, token.start), text.slice(token.start, token.end).replace(/[^\r\n]/g, ' '));
+    end = token.end;
+  }
+  parts.push(text.slice(end));
+  return parts.join('');
+}
+
+function sourceLiteralPrefix(text: string, quoteIndex: number): string {
+  const rawPrefix = text.slice(0, quoteIndex);
+  // Python/C# literal markers sit between the source operator and quote.
+  // Only unwrap a recognized, adjacent marker; still require source syntax
+  // before it, and never strip a suffix from an identifier such as "offer".
+  const marker = text[quoteIndex] === '`' ? null : /(?:\b(?:br|rb|fr|rf|[rubf])|\$@|@\$|[$@])$/i.exec(rawPrefix);
+  return (marker ? rawPrefix.slice(0, marker.index) : rawPrefix).trimEnd();
+}
+
+function looksLikeQuotedSourceLiteral(text: string, index: number, end: number): boolean {
+  const before = text[index - 1];
+  const after = text[end];
+  if (before !== '`' && before !== '\'' && before !== '"') return false;
+  // Quotes alone also occur in prose and inline Markdown. Require source syntax
+  // around the literal (assignment, collection entry, argument or conditional).
+  const prefix = sourceLiteralPrefix(text, index - 1);
+  return /(?:[=\[(,?]|=>|&&|\|\||\breturn)$/.test(prefix)
+    // A colon alone is also a prose label ("File:"). Require a preceding
+    // conditional, allowing indented continuation lines but not new prose.
+    || (prefix.endsWith(':') && /\?(?:[^;\r\n]|\r?\n[ \t])*:$/.test(prefix))
+    || /[{,]\s*(?:[\w$]+|["'][^"']+["'])\s*:$/.test(prefix)
+    || (after === before && /^\s*;/.test(text.slice(end + 1)));
+}
+
+function* quotedSourceRanges(text: string): Generator<{ start: number; end: number }> {
+  // Classify the whole literal, not only URLs touching its opening quote.
+  // Comments and escaped quotes use the same token boundaries as source context.
+  let previous: { end: number; source: boolean } | undefined;
+  for (const token of sourceContextTokens(text)) {
+    if (token.comment) continue;
+    const start = token.start;
+    // Tool output may end mid-literal after the Host applies its byte budget.
+    const end = token.end - (token.closed ? 1 : 0);
+    // Comments are already masked. Carry the established context across a list
+    // or concatenation, including prefixed literals, without treating prose +
+    // as source syntax by itself.
+    const separator = previous ? sourceLiteralPrefix(text, start).slice(previous.end + 1).trim() : '';
+    const continuesExpression = separator === ',' || separator === '+';
+    const source: boolean = previous && continuesExpression
+      ? previous.source
+      : looksLikeQuotedSourceLiteral(text, start + 1, end);
+    if (source) yield { start, end };
+    previous = { end, source };
+  }
+}
+
+/** Existing 3D attachments and managed file references retain a usable file entry on Mobile. */
+export function extractPayloadToolResultFiles(text: string): PayloadToolFile[] {
+  const parsed = parseToolResultPayload(text);
+  if (parsed?._xdt_render_image === false) return [];
+  const files: PayloadToolFile[] = [];
+  const add = (url: unknown, title?: unknown) => {
+    if (typeof url !== 'string' || !/^(?:xdt-file:\/\/[^\s]+|cindy-media:\/\/blobs\/[0-9a-f]{64}\.glb)$/.test(url)) return;
+    let name = url.split('/').pop()!;
+    if (url.startsWith('xdt-file://')) {
+      const path = absoluteToolFilePath(url);
+      if (path === null) return;
+      name = path.split(/[\\/]/).pop() || name;
+    }
+    if (!files.some((file) => file.url === url)) files.push({ url, title: typeof title === 'string' && title.trim() ? title : name });
+  };
+  if (Array.isArray(parsed?._xdt_model_files)) {
+    for (const raw of parsed._xdt_model_files) { const file = readPayloadRecord(raw); add(file?.url, file?.name); }
+  }
+  if (Array.isArray(parsed?.xdt_media_produced)) for (const url of parsed.xdt_media_produced) add(url);
+  // Decode arrays and scalar strings as well as the object/envelope above.
+  // JSON delimiters must not be mistaken for source literals. Keep declaration
+  // handling tied to the documented object envelope, as before.
+  let content: unknown = parsed ?? text;
+  if (!parsed) {
+    try { content = JSON.parse(text); } catch { /* Plain-text tool output. */ }
+  }
+  // Use a stack so deeply nested tool output cannot overflow the call stack.
+  const pending: unknown[] = [content];
+  while (pending.length) {
+    const value = pending.pop();
+    if (typeof value === 'string') {
+      if (!value.includes('xdt-file://')) continue;
+      const urlPattern = new RegExp(TOOL_FILE_URL_RE);
+      // Strip comments once; repeatedly lexing the prefix of every literal is
+      // quadratic for large source-file output. Offsets stay in the original text.
+      const sourceContext = withoutSourceComments(value);
+      const sourceRanges = quotedSourceRanges(sourceContext);
+      let range = sourceRanges.next();
+      let previous: { end: number; source: boolean } | undefined;
+      for (let match; (match = urlPattern.exec(value));) {
+        const start = match.index;
+        // Comment masking preserves offsets; extract URLs only outside it.
+        if (sourceContext[start] !== value[start]) continue;
+        while (!range.done && range.value.end < start) range = sourceRanges.next();
+        if (!range.done && range.value.start < start && start < range.value.end) continue;
+        // Quotes/backticks may be filename characters. Treat one as a delimiter
+        // only when it matches the opening wrapper around this reference.
+        const quote = value[start - 1];
+        const closingQuote = quote === "'" || quote === '`'
+          ? new RegExp(quote + '(?=[,.;:!?\\]}]*(?:["\'`]xdt-file://|$))').exec(match[0])
+          : null;
+        const url = closingQuote ? match[0].slice(0, closingQuote.index) : match[0];
+        urlPattern.lastIndex = start + url.length;
+        const continuesList = previous && /^["'`]$/.test(value[previous.end])
+          && /^["'`]$/.test(quote)
+          && withoutSourceComments(value.slice(previous.end + 1, start - 1)).trim() === ',';
+        const source = previous && continuesList
+          ? previous.source
+          : looksLikeQuotedSourceLiteral(sourceContext, start, start + url.length);
+        if (!source) add(url);
+        previous = { end: start + url.length, source };
+      }
+    } else if (Array.isArray(value)) {
+      for (let i = value.length - 1; i >= 0; i--) pending.push(value[i]);
+    } else if (value !== null && typeof value === 'object') {
+      const entries = Object.entries(value);
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const [key, child] = entries[i];
+        // Explicit declarations above already retain full URLs and display names.
+        if (key !== '_xdt_model_files' && key !== 'xdt_media_produced') pending.push(child);
+      }
+    }
+  }
+  return files;
+}
+
+export function buildMermaidPayload(
+  source: string,
+  localizer?: PresentationLocalizer,
+): Extract<SharedMessagePayload, { kind: 'mermaid' }> {
   return {
     kind: 'mermaid',
-    title: 'Mermaid 图表源码',
+    title: payloadPresentationText(localizer, 'mermaidSourceTitle', 'Mermaid 图表源码'),
     body: source,
   };
 }
 
-export function summarizeMessagePayload(payload: SharedMessagePayload): MessagePayloadSummary {
+export function summarizeMessagePayload(
+  payload: SharedMessagePayload,
+  localizer?: PresentationLocalizer,
+): MessagePayloadSummary {
   switch (payload.kind) {
     case 'diff':
       return {
         kind: 'diff',
         kindLabel: 'DIFF',
         title: payload.title,
-        subtitle: `+${payload.diff.insertions} / -${payload.diff.deletions} 行`,
-        copyableText: formatDiffPayload(payload.diff),
+        subtitle: formatDiffStats(payload.diff, localizer),
+        copyableText: formatDiffPayload(payload.diff, localizer),
         sourcePath: payload.diff.filePath,
         openTarget: { kind: 'file', value: payload.diff.filePath },
       };
@@ -463,7 +725,9 @@ export function summarizeMessagePayload(payload: SharedMessagePayload): MessageP
         kind: 'media',
         kindLabel: payload.media.kind.toUpperCase(),
         title: payload.title,
-        subtitle: payload.media.previewable ? '可直接预览' : '需要远程取件',
+        subtitle: payload.media.previewable
+          ? payloadPresentationText(localizer, 'directPreview', '可直接预览')
+          : payloadPresentationText(localizer, 'remoteFetchRequired', '需要远程取件'),
         copyableText: payload.media.url,
         openTarget: payload.media.previewable ? { kind: 'url', value: payload.media.url } : undefined,
       };
@@ -472,7 +736,7 @@ export function summarizeMessagePayload(payload: SharedMessagePayload): MessageP
         kind: 'mermaid',
         kindLabel: 'MERMAID',
         title: payload.title,
-        subtitle: '图表源码',
+        subtitle: payloadPresentationText(localizer, 'chartSource', '图表源码'),
         copyableText: payload.body,
       };
     case 'text':
@@ -485,10 +749,13 @@ export function summarizeMessagePayload(payload: SharedMessagePayload): MessageP
   }
 }
 
-export function summarizeMessagePayloadBody(payload: SharedMessagePayload): MessagePayloadBodyPresentation {
+export function summarizeMessagePayloadBody(
+  payload: SharedMessagePayload,
+  localizer?: PresentationLocalizer,
+): MessagePayloadBodyPresentation {
   switch (payload.kind) {
     case 'diff': {
-      const view = formatDiffPayloadView(payload.diff);
+      const view = formatDiffPayloadView(payload.diff, localizer);
       return {
         bodyText: payload.body,
         diff: {
@@ -496,7 +763,7 @@ export function summarizeMessagePayloadBody(payload: SharedMessagePayload): Mess
           sectionCount: view.sections.length,
           stats: view.stats,
         },
-        emptyText: '没有 diff 内容。',
+        emptyText: payloadPresentationText(localizer, 'noDiffContent', '没有 diff 内容。'),
         kind: 'diff',
         textMonospace: true,
       };
@@ -505,9 +772,9 @@ export function summarizeMessagePayloadBody(payload: SharedMessagePayload): Mess
       const sourcePath = payload.sourcePath ?? '';
       return {
         bodyText: payload.body || sourcePath,
-        emptyText: '没有可展示的远程路径。',
+        emptyText: payloadPresentationText(localizer, 'missingRemotePathSentence', '没有可展示的远程路径。'),
         file: {
-          displayPath: sourcePath || payload.body || '没有可展示的远程路径',
+          displayPath: sourcePath || payload.body || payloadPresentationText(localizer, 'missingRemotePath', '没有可展示的远程路径'),
           sourcePath,
         },
         kind: 'file',
@@ -519,27 +786,27 @@ export function summarizeMessagePayloadBody(payload: SharedMessagePayload): Mess
       const needsRemoteFetch = !payload.media.previewable && isPayloadDesktopLocalMediaUrl(payload.media.url);
       const canInlineDirectImage = payload.media.kind === 'image' && directPreviewable;
       const canInlineDirectPlayer = (payload.media.kind === 'video' || payload.media.kind === 'audio') && directPreviewable;
-      const bodyText = formatMediaPayloadDisplayText(payload);
+      const bodyText = formatMediaPayloadDisplayText(payload, localizer);
       return {
         bodyText,
-        emptyText: '没有媒体地址。',
+        emptyText: payloadPresentationText(localizer, 'noMediaAddress', '没有媒体地址。'),
         kind: 'media',
         media: {
           canDirectOpen: isPayloadDirectPreviewableUrl(payload.media.url),
           canInlineDirectImage,
           canInlineDirectPlayer,
           directPreviewable,
-          kindLabel: payloadMediaKindLabel(payload.media.kind),
+          kindLabel: payloadMediaKindLabel(payload.media.kind, localizer),
           needsRemoteFetch,
           placeholderText: needsRemoteFetch
-            ? '正在准备远程媒体取件'
+            ? payloadPresentationText(localizer, 'remoteMediaPreparing', '正在准备远程媒体取件')
             : payload.media.previewable
-              ? '当前媒体类型暂以地址形式展示。'
-              : '当前媒体暂不能直接预览。',
-          remoteIdleText: '正在准备远程媒体取件',
+              ? payloadPresentationText(localizer, 'mediaAddressOnlySentence', '当前媒体类型暂以地址形式展示。')
+              : payloadPresentationText(localizer, 'mediaCannotPreviewSentence', '当前媒体暂不能直接预览。'),
+          remoteIdleText: payloadPresentationText(localizer, 'remoteMediaPreparing', '正在准备远程媒体取件'),
           unsupportedText: payload.media.previewable
-            ? '当前媒体类型暂以地址形式展示。'
-            : '当前媒体暂不能直接预览。',
+            ? payloadPresentationText(localizer, 'mediaAddressOnlySentence', '当前媒体类型暂以地址形式展示。')
+            : payloadPresentationText(localizer, 'mediaCannotPreviewSentence', '当前媒体暂不能直接预览。'),
         },
         textMonospace: false,
       };
@@ -547,7 +814,7 @@ export function summarizeMessagePayloadBody(payload: SharedMessagePayload): Mess
     case 'mermaid':
       return {
         bodyText: payload.body,
-        emptyText: '空 Mermaid 图表。',
+        emptyText: payloadPresentationText(localizer, 'emptyMermaid', '空 Mermaid 图表。'),
         kind: 'mermaid',
         mermaid: { source: payload.body },
         textMonospace: true,
@@ -555,7 +822,7 @@ export function summarizeMessagePayloadBody(payload: SharedMessagePayload): Mess
     case 'text':
       return {
         bodyText: payload.body,
-        emptyText: '没有可展示的文本内容。',
+        emptyText: payloadPresentationText(localizer, 'noTextContent', '没有可展示的文本内容。'),
         kind: 'text',
         textMonospace: false,
       };
@@ -565,22 +832,24 @@ export function summarizeMessagePayloadBody(payload: SharedMessagePayload): Mess
 export function summarizeMessagePayloadPreview(
   payload: SharedMessagePayload,
   options: MessagePayloadPreviewOptions = {},
+  localizer?: PresentationLocalizer,
 ): MessagePayloadPreview {
   const maxPreviewChars = Math.max(24, options.maxPreviewChars ?? 220);
 
   switch (payload.kind) {
     case 'diff': {
-      const stats = `+${payload.diff.insertions} / -${payload.diff.deletions} 行`;
+      const stats = formatDiffStats(payload.diff, localizer);
       const editCount = payload.diff.segments.length;
       return {
         actionKind: 'view',
-        actionLabel: '查看 diff',
+        actionLabel: payloadPresentationText(localizer, 'viewDiff', '查看 diff'),
         canInlinePreview: false,
         detail: `${payload.diff.filePath} · ${stats}`,
         kind: 'diff',
-        meta: [stats, `${editCount} 处编辑`],
+        meta: [stats, payloadPresentationText(localizer, 'editCount', `${editCount} 处编辑`, { count: editCount })],
         needsRemoteFetch: false,
-        previewText: trimPayloadPreviewText(formatDiffPreviewText(payload.diff), maxPreviewChars) || '没有 diff 内容。',
+        previewText: trimPayloadPreviewText(formatDiffPreviewText(payload.diff, localizer), maxPreviewChars)
+          || payloadPresentationText(localizer, 'noDiffContent', '没有 diff 内容。'),
         severity: payload.diff.insertions > 0 || payload.diff.deletions > 0 ? 'info' : 'neutral',
         shouldUseMonospacePreview: true,
         title: payload.title,
@@ -591,13 +860,18 @@ export function summarizeMessagePayloadPreview(
       const hasSourcePath = !!sourcePath.trim();
       return {
         actionKind: hasSourcePath ? 'preview-file' : 'view',
-        actionLabel: hasSourcePath ? '预览文件' : '查看详情',
+        actionLabel: hasSourcePath
+          ? payloadPresentationText(localizer, 'previewFile', '预览文件')
+          : payloadPresentationText(localizer, 'viewDetails', '查看详情'),
         canInlinePreview: false,
-        detail: hasSourcePath ? sourcePath : '没有远程路径',
+        detail: hasSourcePath ? sourcePath : payloadPresentationText(localizer, 'noRemotePath', '没有远程路径'),
         kind: 'file',
-        meta: [hasSourcePath ? sourcePath : '缺少远程路径'],
+        meta: [hasSourcePath ? sourcePath : payloadPresentationText(localizer, 'remotePathMissing', '缺少远程路径')],
         needsRemoteFetch: false,
-        previewText: trimPayloadPreviewText(payload.body || sourcePath || '没有可展示的远程路径。', maxPreviewChars),
+        previewText: trimPayloadPreviewText(
+          payload.body || sourcePath || payloadPresentationText(localizer, 'missingRemotePathSentence', '没有可展示的远程路径。'),
+          maxPreviewChars,
+        ),
         severity: hasSourcePath ? 'neutral' : 'warning',
         shouldUseMonospacePreview: true,
         title: payload.title,
@@ -608,16 +882,16 @@ export function summarizeMessagePayloadPreview(
       const needsRemoteFetch = !payload.media.previewable && isPayloadDesktopLocalMediaUrl(payload.media.url);
       const canInlinePreview = directPreviewable
         && (payload.media.kind === 'image' || payload.media.kind === 'video' || payload.media.kind === 'audio');
-      const kindLabel = payloadMediaKindLabel(payload.media.kind);
-      const actionNotice = formatMediaActionNotice(payload.media);
+      const kindLabel = payloadMediaKindLabel(payload.media.kind, localizer);
+      const actionNotice = formatMediaActionNotice(payload.media, localizer);
       if (needsRemoteFetch) {
         return {
           actionKind: 'fetch-remote-media',
-          actionLabel: '取回媒体',
+          actionLabel: payloadPresentationText(localizer, 'fetchMedia', '取回媒体'),
           canInlinePreview: false,
-          detail: '需要从电脑端取回媒体',
+          detail: payloadPresentationText(localizer, 'fetchMediaFromDesktop', '需要从电脑端取回媒体'),
           kind: 'media',
-          meta: [kindLabel, '待取件'],
+          meta: [kindLabel, payloadPresentationText(localizer, 'pendingFetch', '待取件')],
           needsRemoteFetch: true,
           previewText: trimPayloadPreviewText([payload.media.url, actionNotice].filter(Boolean).join('\n'), maxPreviewChars),
           severity: 'info',
@@ -626,14 +900,14 @@ export function summarizeMessagePayloadPreview(
         };
       }
       if (directPreviewable) {
-        const displayText = formatMediaPayloadDisplayText(payload);
+        const displayText = formatMediaPayloadDisplayText(payload, localizer);
         return {
           actionKind: 'open-url',
-          actionLabel: '预览媒体',
+          actionLabel: payloadPresentationText(localizer, 'previewMedia', '预览媒体'),
           canInlinePreview,
-          detail: '可直接预览',
+          detail: payloadPresentationText(localizer, 'directPreview', '可直接预览'),
           kind: 'media',
-          meta: [kindLabel, '可预览'],
+          meta: [kindLabel, payloadPresentationText(localizer, 'previewable', '可预览')],
           needsRemoteFetch: false,
           previewText: trimPayloadPreviewText(displayText, maxPreviewChars),
           severity: 'neutral',
@@ -643,11 +917,20 @@ export function summarizeMessagePayloadPreview(
       }
       return {
         actionKind: payload.media.previewable ? 'open-url' : 'view',
-        actionLabel: payload.media.previewable ? '打开媒体' : '查看详情',
+        actionLabel: payload.media.previewable
+          ? payloadPresentationText(localizer, 'openMedia', '打开媒体')
+          : payloadPresentationText(localizer, 'viewDetails', '查看详情'),
         canInlinePreview: false,
-        detail: payload.media.previewable ? '当前媒体以地址形式展示' : '当前媒体暂不能直接预览',
+        detail: payload.media.previewable
+          ? payloadPresentationText(localizer, 'mediaAddressOnly', '当前媒体以地址形式展示')
+          : payloadPresentationText(localizer, 'mediaCannotPreview', '当前媒体暂不能直接预览'),
         kind: 'media',
-        meta: [kindLabel, payload.media.previewable ? '地址展示' : '不可预览'],
+        meta: [
+          kindLabel,
+          payload.media.previewable
+            ? payloadPresentationText(localizer, 'addressDisplay', '地址展示')
+            : payloadPresentationText(localizer, 'notPreviewable', '不可预览'),
+        ],
         needsRemoteFetch: false,
         previewText: trimPayloadPreviewText([payload.media.url, actionNotice].filter(Boolean).join('\n'), maxPreviewChars),
         severity: payload.media.previewable ? 'info' : 'warning',
@@ -658,13 +941,16 @@ export function summarizeMessagePayloadPreview(
     case 'mermaid':
       return {
         actionKind: 'view',
-        actionLabel: '查看图表',
+        actionLabel: payloadPresentationText(localizer, 'viewChart', '查看图表'),
         canInlinePreview: true,
-        detail: 'Mermaid 图表源码',
+        detail: payloadPresentationText(localizer, 'mermaidSourceTitle', 'Mermaid 图表源码'),
         kind: 'mermaid',
-        meta: ['图表源码'],
+        meta: [payloadPresentationText(localizer, 'chartSource', '图表源码')],
         needsRemoteFetch: false,
-        previewText: trimPayloadPreviewText(payload.body || '空 Mermaid 图表。', maxPreviewChars),
+        previewText: trimPayloadPreviewText(
+          payload.body || payloadPresentationText(localizer, 'emptyMermaid', '空 Mermaid 图表。'),
+          maxPreviewChars,
+        ),
         severity: 'neutral',
         shouldUseMonospacePreview: true,
         title: payload.title,
@@ -672,13 +958,16 @@ export function summarizeMessagePayloadPreview(
     case 'text':
       return {
         actionKind: 'view',
-        actionLabel: '查看内容',
+        actionLabel: payloadPresentationText(localizer, 'viewContent', '查看内容'),
         canInlinePreview: false,
-        detail: '文本输出',
+        detail: payloadPresentationText(localizer, 'textOutput', '文本输出'),
         kind: 'text',
-        meta: ['文本'],
+        meta: [payloadPresentationText(localizer, 'text', '文本')],
         needsRemoteFetch: false,
-        previewText: trimPayloadPreviewText(payload.body || '没有可展示的文本内容。', maxPreviewChars),
+        previewText: trimPayloadPreviewText(
+          payload.body || payloadPresentationText(localizer, 'noTextContent', '没有可展示的文本内容。'),
+          maxPreviewChars,
+        ),
         severity: 'neutral',
         shouldUseMonospacePreview: false,
         title: payload.title,
@@ -686,20 +975,28 @@ export function summarizeMessagePayloadPreview(
   }
 }
 
-export function payloadMediaKindLabel(kind: PayloadMediaLike['kind']): string {
-  if (kind === 'image') return '图片';
-  if (kind === 'video') return '视频';
-  return '音频';
+export function payloadMediaKindLabel(
+  kind: PayloadMediaLike['kind'],
+  localizer?: PresentationLocalizer,
+): string {
+  if (kind === 'image') return payloadPresentationText(localizer, 'image', '图片');
+  if (kind === 'video') return payloadPresentationText(localizer, 'video', '视频');
+  return payloadPresentationText(localizer, 'audio', '音频');
 }
 
-function formatMediaPayloadDisplayText(payload: Extract<SharedMessagePayload, { kind: 'media' }>): string {
+function formatMediaPayloadDisplayText(
+  payload: Extract<SharedMessagePayload, { kind: 'media' }>,
+  localizer?: PresentationLocalizer,
+): string {
   const dataImage = describeDataImageUrl(payload.media.url);
   if (!dataImage) return payload.body || payload.media.url;
   return [
-    `内联${payloadMediaKindLabel(payload.media.kind)}数据`,
+    payloadPresentationText(localizer, 'inlineMediaData', `内联${payloadMediaKindLabel(payload.media.kind, localizer)}数据`, {
+      kind: payloadMediaKindLabel(payload.media.kind, localizer),
+    }),
     dataImage.mimeLabel,
     dataImage.sizeLabel,
-    formatMediaActionNotice(payload.media),
+    formatMediaActionNotice(payload.media, localizer),
   ].filter(Boolean).join(' · ');
 }
 
@@ -716,12 +1013,20 @@ function describeDataImageUrl(url: string): { mimeLabel: string; sizeLabel: stri
   };
 }
 
+const PAYLOAD_BYTE_UNITS = ['KB', 'MB'] as const;
+
 function formatPayloadByteSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
-  const kib = bytes / 1024;
-  if (kib < 1024) return `${kib.toFixed(kib >= 10 ? 0 : 1)} KB`;
-  const mib = kib / 1024;
-  return `${mib.toFixed(mib >= 10 ? 0 : 1)} MB`;
+  // 与 filePreview 的字节口吻同一个规则:档位按取整后的展示值选,约 1 MiB 的图片
+  // 不该显示成 "1024 KB" —— 那一档的合法最大值是 1023。
+  let value = Math.round(bytes) / 1024;
+  for (let unit = 0; ; unit += 1) {
+    const text = value < 10 ? value.toFixed(1) : `${Math.round(value)}`;
+    if (Number(text) < 1024 || unit === PAYLOAD_BYTE_UNITS.length - 1) {
+      return `${text} ${PAYLOAD_BYTE_UNITS[unit]}`;
+    }
+    value /= 1024;
+  }
 }
 
 export function isPayloadDesktopLocalMediaUrl(url: unknown): url is string {
@@ -746,10 +1051,13 @@ export function isPayloadDirectPreviewableUrl(url: unknown): url is string {
   );
 }
 
-export function formatDiffPayload(diff: PayloadToolDiffLike): string {
+export function formatDiffPayload(
+  diff: PayloadToolDiffLike,
+  localizer?: PresentationLocalizer,
+): string {
   const head = [
     diff.filePath,
-    `+${diff.insertions} / -${diff.deletions} 行`,
+    formatDiffStats(diff, localizer),
   ];
   const segments = diff.segments.map((segment, index) => {
     const label = segment.label ?? `Edit ${index + 1}/${diff.segments.length}`;
@@ -760,10 +1068,13 @@ export function formatDiffPayload(diff: PayloadToolDiffLike): string {
   return [...head, ...segments].join('\n\n');
 }
 
-export function formatDiffPayloadRows(diff: PayloadToolDiffLike): FormattedDiffPayloadRow[] {
+export function formatDiffPayloadRows(
+  diff: PayloadToolDiffLike,
+  localizer?: PresentationLocalizer,
+): FormattedDiffPayloadRow[] {
   const rows: FormattedDiffPayloadRow[] = [
     { key: 'header', kind: 'header', text: diff.filePath },
-    { key: 'stats', kind: 'stats', text: `+${diff.insertions} / -${diff.deletions} 行` },
+    { key: 'stats', kind: 'stats', text: formatDiffStats(diff, localizer) },
   ];
   diff.segments.forEach((segment, index) => {
     const label = segment.label ?? `Edit ${index + 1}/${diff.segments.length}`;
@@ -786,10 +1097,13 @@ export function formatDiffPayloadRows(diff: PayloadToolDiffLike): FormattedDiffP
   return rows;
 }
 
-export function formatDiffPayloadView(diff: PayloadToolDiffLike): FormattedDiffPayloadView {
+export function formatDiffPayloadView(
+  diff: PayloadToolDiffLike,
+  localizer?: PresentationLocalizer,
+): FormattedDiffPayloadView {
   return {
     filePath: diff.filePath,
-    stats: `+${diff.insertions} / -${diff.deletions} 行`,
+    stats: formatDiffStats(diff, localizer),
     sections: diff.segments.map((segment, index) => ({
       key: segment.key,
       label: segment.label ?? `Edit ${index + 1}/${diff.segments.length}`,
@@ -807,14 +1121,21 @@ export function formatDiffPayloadView(diff: PayloadToolDiffLike): FormattedDiffP
   };
 }
 
-export function formatMediaActionNotice(media: PayloadMediaLike): string {
+export function formatMediaActionNotice(
+  media: PayloadMediaLike,
+  localizer?: PresentationLocalizer,
+): string {
   const actions = media.actions;
   if (!actions?.buttons.length) return '';
   const labels = actions.buttons.map(formatMediaActionButtonLabel).join(' / ');
   return [
-    '桌面端为这个媒体提供了后续操作。',
-    `可用操作: ${labels}`,
-    '手机版 V1 只安全展示这些操作,暂不远程触发。请回到电脑端点击。',
+    payloadPresentationText(localizer, 'mediaActionsAvailable', '桌面端为这个媒体提供了后续操作。'),
+    payloadPresentationText(localizer, 'availableActions', `可用操作：${labels}`, { actions: labels }),
+    payloadPresentationText(
+      localizer,
+      'mediaActionsDesktopOnly',
+      '手机版 V1 只安全展示这些操作，暂不远程触发。请回到电脑端点击。',
+    ),
   ].join('\n');
 }
 
@@ -828,14 +1149,42 @@ function splitChangedLines(value: string): string[] {
   return value.split('\n');
 }
 
-function formatDiffPreviewText(diff: PayloadToolDiffLike): string {
+function formatDiffPreviewText(
+  diff: PayloadToolDiffLike,
+  localizer?: PresentationLocalizer,
+): string {
   const firstSegment = diff.segments[0];
   if (!firstSegment) return '';
   const label = firstSegment.label ?? `Edit 1/${diff.segments.length}`;
   const oldLines = splitChangedLines(firstSegment.oldString).slice(0, 2).map((line) => `- ${line}`);
   const newLines = splitChangedLines(firstSegment.newString).slice(0, 2).map((line) => `+ ${line}`);
-  const more = diff.segments.length > 1 ? [`...还有 ${diff.segments.length - 1} 处编辑`] : [];
+  const more = diff.segments.length > 1
+    ? [payloadPresentationText(localizer, 'moreEdits', `…还有 ${diff.segments.length - 1} 处编辑`, {
+        count: diff.segments.length - 1,
+      })]
+    : [];
   return [label, ...oldLines, ...newLines, ...more].filter(Boolean).join('\n');
+}
+
+function formatDiffStats(
+  diff: Pick<PayloadToolDiffLike, 'insertions' | 'deletions'>,
+  localizer?: PresentationLocalizer,
+): string {
+  return payloadPresentationText(
+    localizer,
+    'diffStats',
+    `+${diff.insertions} / -${diff.deletions} 行`,
+    { insertions: diff.insertions, deletions: diff.deletions },
+  );
+}
+
+function payloadPresentationText(
+  localizer: PresentationLocalizer | undefined,
+  key: string,
+  fallback: string,
+  values?: Readonly<Record<string, string | number | boolean | null | undefined>>,
+): string {
+  return presentationText(localizer, `message.payloadPresentation.${key}`, fallback, values);
 }
 
 function trimPayloadPreviewText(value: string, maxChars: number): string {
@@ -908,5 +1257,8 @@ function createPayloadToolDiff(
 
 function countPayloadChangedLines(value: string): number {
   if (!value) return 0;
-  return value.split('\n').filter((line) => line.length > 0).length || 1;
+  // 中间空行也是改动行；只去掉结尾换行切出的哨兵空段。
+  const lines = value.split('\n');
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+  return lines.length;
 }

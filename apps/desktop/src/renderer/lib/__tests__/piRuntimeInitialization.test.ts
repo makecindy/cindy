@@ -1,55 +1,47 @@
 import { describe, expect, it } from 'vitest';
 
-import { derivePiRuntimeFromClaudeRuntime } from '@/../shared/piRuntimeInitialization';
+import type { ProviderPreset } from '@cindy/model-providers';
 
-describe('derivePiRuntimeFromClaudeRuntime', () => {
-  it('projects a plain Claude runtime to Pi without a request path', () => {
-    const result = derivePiRuntimeFromClaudeRuntime({
-      baseUrl: 'https://api.example/anthropic',
-      modelsUrl: 'https://api.example/v1/models',
-      headers: { 'x-provider': 'example' },
-      models: [
-        {
-          id: 'model-a',
-          name: 'Model A',
-          contextWindow: 100_000,
-          defaultEnabled: false,
-          supportsImageInput: true,
-          reasoning: true,
-          reasoningEfforts: ['high'],
-          reasoningDefaultEffort: 'high',
+import {
+  configuredPresetAgents,
+  isConfiguredPresetRuntime,
+} from '../../../shared/piRuntimeInitialization.js';
+
+describe('Pi preset runtime initialization', () => {
+  it('skips a legacy Pi runtime whose protocol is not declared', () => {
+    const preset: ProviderPreset = {
+      id: 'legacy-remote',
+      name: 'Legacy Remote',
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'https://example.com/anthropic',
+          models: [{ id: 'model-a', name: 'Model A' }],
         },
-      ],
-    });
+        pi: {
+          baseUrl: 'https://example.com/pi',
+          models: [{ id: 'model-a', name: 'Model A' }],
+        },
+      },
+    };
 
-    expect(result).toEqual({
-      baseUrl: 'https://api.example/anthropic',
-      wireProtocol: 'anthropic-messages',
-      models: [
-        { id: 'model-a', name: 'Model A', contextWindow: 100_000, defaultEnabled: false },
-      ],
-      headers: { 'x-provider': 'example' },
-      modelsUrl: 'https://api.example/v1/models',
-    });
+    expect(configuredPresetAgents(preset)).toEqual(['claude-code']);
+    expect(isConfiguredPresetRuntime('pi', preset.runtimes.pi)).toBe(false);
   });
 
-  it('does not project a Claude runtime with a custom request path', () => {
-    expect(
-      derivePiRuntimeFromClaudeRuntime({
-        baseUrl: 'https://api.example/anthropic',
-        requestPath: '/tenant/acme/infer',
-        models: [{ id: 'model-a', name: 'Model A' }],
-      }),
-    ).toBeNull();
-  });
+  it('keeps an explicitly configured Pi runtime', () => {
+    const preset: ProviderPreset = {
+      id: 'current-remote',
+      name: 'Current Remote',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://example.com/pi',
+          wireProtocol: 'anthropic-messages',
+          models: [{ id: 'model-a', name: 'Model A' }],
+        },
+      },
+    };
 
-  it('does not override an incompatible explicit wire protocol', () => {
-    expect(
-      derivePiRuntimeFromClaudeRuntime({
-        baseUrl: 'https://api.example/v1',
-        wireProtocol: 'openai-chat',
-        models: [{ id: 'model-a', name: 'Model A' }],
-      }),
-    ).toBeNull();
+    expect(configuredPresetAgents(preset)).toEqual(['pi']);
+    expect(isConfiguredPresetRuntime('pi', preset.runtimes.pi)).toBe(true);
   });
 });

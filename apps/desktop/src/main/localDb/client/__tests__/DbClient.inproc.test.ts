@@ -1,8 +1,12 @@
+import { configureSqliteVecExtPath } from '../../sqliteVecLoader.js';
+import { configureUserDataDir } from '../../../userDataPath.js';
+import { configureMigrationRuntime } from '../../migrationRuntime.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { PluginUsageTransaction, PluginUsageHandle } from '../../../../shared/pluginUsage';
 
 vi.mock('electron', () => ({
   app: {
@@ -45,6 +49,28 @@ CREATE TABLE embedding_jobs (
   locked_at INTEGER,
   UNIQUE(source, source_id, chunk_index, model_id)
 );
+CREATE TABLE task_tags (
+  id TEXT PRIMARY KEY NOT NULL,
+  name TEXT NOT NULL,
+  name_customized INTEGER NOT NULL DEFAULT 0,
+  color TEXT NOT NULL,
+  favorite_order INTEGER,
+  sort_order INTEGER,
+  revision INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE session_task_tags (
+  session_id TEXT NOT NULL,
+  tag_id TEXT NOT NULL,
+  PRIMARY KEY (session_id, tag_id)
+);
+CREATE TABLE sessions (
+  id TEXT PRIMARY KEY,
+  status TEXT,
+  working_dir TEXT,
+  worktree_path TEXT,
+  source TEXT NOT NULL DEFAULT 'desktop',
+  remote_host_id TEXT
+);
 `;
 
 describe('DbClient in-proc fallback', () => {
@@ -73,8 +99,15 @@ describe('DbClient in-proc fallback', () => {
     const drizzleDir = path.join(userDataDir, 'drizzle');
     fs.mkdirSync(drizzleDir);
     fs.writeFileSync(path.join(drizzleDir, '0000_init.sql'), INIT_SQL, 'utf-8');
+    for (const fileName of ['0128_demonic_odin.sql', '0132_abnormal_dazzler.sql']) {
+      fs.copyFileSync(new URL(`../../../../../drizzle/${fileName}`, import.meta.url), path.join(drizzleDir, fileName));
+    }
     process.env.XDT_INPROC_TEST_USER_DATA = userDataDir;
     process.env.XDT_DB_INPROC = 'true';
+    configureUserDataDir(userDataDir);
+    configureMigrationRuntime({ drizzleDir, isPackaged: true });
+    // This fixture does not exercise vector search; use its isolated optional path.
+    configureSqliteVecExtPath(path.join(userDataDir, 'optional-vec0'));
     previousResourcesPath = process.resourcesPath;
     Object.defineProperty(process, 'resourcesPath', {
       configurable: true,
@@ -102,6 +135,27 @@ describe('DbClient in-proc fallback', () => {
         [1],
       ),
     ).resolves.toEqual({ id: 1, name: 'alice' });
+
+    await client.exec(
+      'INSERT INTO sessions (id, status, working_dir, worktree_path) VALUES (?, ?, ?, ?)',
+      ['inproc-session', 'active', userDataDir, path.join(userDataDir, 'worktree')],
+    );
+    await expect(client.readLocalWorktreeReferences?.()).resolves.toEqual([
+      expect.objectContaining({
+        id: 'inproc-session',
+        status: 'active',
+        currentDatabase: true,
+      }),
+    ]);
+
+    const identity = { ghostId: 'inproc-plugin', displayName: 'Test', revision: 'revision', sourceKind: 'manual' as const,
+      stableKey: null, pluginId: null, organizationId: null, sourceKey: null, serverRoot: null, version: '1.0', releaseId: null };
+    const bindUsage = { action: 'bind', identity, newId: 'inproc-subject', now: 1 } satisfies PluginUsageTransaction;
+    const handle = await client.tx<PluginUsageHandle | null>('pluginUsage.execute', bindUsage);
+    await client.tx('pluginUsage.execute', { action: 'accept', handle: handle!, callId: 'inproc-call', toolName: 'tool', sessionId: null, occurredAt: 2 });
+    await client.tx('pluginUsage.execute', { action: 'clear', subjectId: handle!.subjectId, now: 3 });
+    await client.tx('pluginUsage.execute', { action: 'settle', handle: handle!, callId: 'inproc-call', outcome: 'failed' });
+    expect(await client.queryOne('SELECT COUNT(*) AS n FROM plugin_usage_events')).toEqual({ n: 0 });
 
     const sourceId = `inproc-source-${Date.now()}`;
     await expect(

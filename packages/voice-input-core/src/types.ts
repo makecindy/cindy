@@ -43,9 +43,29 @@ export type AsrEvent =
   | { type: 'stable'; text: string; at: number }
   | { type: 'error'; message: string; at: number };
 
+/** How a provider can delimit input; an acoustic boundary is not a semantic turn end. */
+export type AsrEndpointing = 'segment-final' | 'acoustic' | 'manual' | 'semantic';
+
+/** One provider-owned segment, independent of the cumulative dictation transcript. */
+export type AsrSegment = {
+  id: string;
+  text: string;
+  /** Text is immutable. This alone never means the user has finished their turn. */
+  final: boolean;
+  order?: number;
+  /**
+   * End of this segment's audio in milliseconds from this provider's first
+   * appendAudio(). Omit after replay/recovery if that clock cannot be preserved.
+   * Must describe audio, never the arrival time of a network message.
+   */
+  audioEndMs?: number;
+  /** Only emit with actual boundary evidence; never infer from punctuation/final. */
+  turnEnd?: Exclude<AsrEndpointing, 'segment-final'>;
+};
+
 export type VoiceInputDraftSource = 'partial' | 'stable' | 'refinement';
 
-export type VoiceInputDraftReason = 'asr_partial' | 'asr_stable';
+export type VoiceInputDraftReason = 'asr_partial' | 'asr_stable' | 'refinement_preview';
 
 export type AudioTrace = {
   capturedAt: number;
@@ -56,13 +76,20 @@ export type AudioTrace = {
 };
 
 export interface AsrProvider {
+  /** Optional continuous-input capability; absence means segment finalization only. */
+  readonly endpointing?: AsrEndpointing;
+  /** Optional continuous-input contract. Existing dictation consumers are unchanged. */
+  onSegment?(callback: (segment: AsrSegment) => void): void;
+  /** Commit an utterance without closing the connection; server-VAD providers need no action. */
+  commitUtterance?(): void;
   start(): Promise<void>;
   stop(): Promise<void>;
   appendAudio(chunk: ArrayBuffer, trace?: AudioTrace): void;
   flushAudio(): Promise<void>;
   onEvent(callback: (event: AsrEvent) => void): void;
   /**
-   * Best-effort reconnect for explicit transport failures. The controller does
+   * Best-effort reconnect for explicit transport failures or, when opted in,
+   * an audible recording that ends without any transcript. The controller does
    * not call this for ASR partial gaps: some realtime providers can legitimately
    * pause deltas and still return a complete transcript on flush. A provider
    * implementation should close the dead transport, re-establish the session,
@@ -170,6 +197,15 @@ export type DictationRefinementContext = {
   selectionAfter?: string;
 };
 
+/**
+ * Refinement requests the current managed voice session accepts. `sessionKey`
+ * changes when a reconnect allocates a new session, which starts a fresh count.
+ */
+export type RefineRequestBudget = {
+  sessionKey: string;
+  limit: number;
+};
+
 export type VoiceTimelineEvent =
   | { type: 'start_clicked'; runId: string; at: number }
   | { type: 'first_audio_chunk'; runId: string; at: number; elapsedMs: number }
@@ -187,6 +223,16 @@ export type VoiceTimelineEvent =
   | { type: 'stable_received'; runId: string; at: number; text: string }
   | { type: 'submitted'; runId: string; at: number; text: string; source: 'stable' | 'partial' }
   | { type: 'refine_requested'; runId: string; at: number; text: string }
+  | {
+      type: 'speculative_refine_skipped';
+      runId: string;
+      at: number;
+      /** 'pause': refinement during a speech pause; 'stop': speculative request before ASR finalizes. */
+      stage: 'pause' | 'stop';
+      reason: 'final_request_reserved';
+      requestLimit: number;
+      requestsStarted: number;
+    }
   | { type: 'refine_discarded'; runId: string; at: number; reason: 'final_text_changed' | 'stale_run' | 'cancelled' | 'no_submitted_text' | 'no_editable_range' | 'run_failed'; basedOnText: string }
   | { type: 'refine_accepted'; runId: string; at: number; basedOnText: string; refinedText: string; elapsedMs: number }
   | {
@@ -214,7 +260,7 @@ export type VoiceTimelineEvent =
       type: 'asr_recovery_attempted';
       runId: string;
       at: number;
-      trigger: 'error' | 'disconnected';
+      trigger: 'error' | 'disconnected' | 'empty_transcript';
       attempt: number;
       audioMsSinceLastSignal: number;
       voicedAudioMsSinceLastSignal: number;
@@ -238,7 +284,7 @@ export type VoiceTimelineEvent =
       source: 'stable' | 'partial';
       accepted: boolean;
     }
-  | { type: 'error'; runId: string; at: number; message: string };
+  | { type: 'error'; runId: string; at: number; message: string; code?: VoiceInputErrorCode };
 
 export type VoiceInputCallbacks = {
   onStateChanged?: (state: VoiceInputState, outcome?: VoiceInputTerminalOutcome) => void;
@@ -276,4 +322,6 @@ export type VoiceInputRendererEvent =
   | { type: 'refined'; runId: string; text: string; segment: SpeechSegment; range: EditableRange }
   | { type: 'usage'; runId: string; refinement: RefinementTokenUsage }
   | { type: 'timeline'; runId: string; event: VoiceTimelineEvent }
+  /** "Recognize my voice" muted a stretch of speech judged to be someone else. */
+  | { type: 'speaker-filtered'; runId: string }
   | { type: 'error'; runId: string; message: string; code?: VoiceInputErrorCode; transcriptKept?: boolean };

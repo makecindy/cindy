@@ -22,6 +22,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentDeps, AgentSessionHandle } from '../../base-agent.js';
+import { ASYNC_QUESTION_ANSWER } from '../../base-agent.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { AgentEvent } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -78,7 +79,7 @@ vi.mock('../../shared/async-queue.js', async (importOriginal) => {
   };
 });
 
-import { ClaudeCodeAgent } from '../index.js';
+import { ClaudeCodeAgent, WAKE_CONTRACT_GRACE_MS } from '../index.js';
 import { Session } from '../../../session.js';
 
 const tempDirs: string[] = [];
@@ -219,6 +220,7 @@ async function startSessionWithStream(
     vendorOptions?: Record<string, unknown>;
     autoCompactThresholdPct?: number;
     capturePrompts?: boolean;
+    resolveModelContextLimit?: AgentDeps['resolveModelContextLimit'];
   },
 ) {
   const configDir = await makeTempDir();
@@ -257,6 +259,7 @@ async function startSessionWithStream(
 
   const agent = new ClaudeCodeAgent({
     ...createDeps({
+      resolveModelContextLimit: opts?.resolveModelContextLimit,
       runtimeConfig: {
         ...(opts?.autoCompactThresholdPct === undefined
           ? {}
@@ -475,6 +478,459 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent abort stops background wake tasks', () => {
+  it('graceful stop cancels a Session send while Claude is still converting attachments', async () => {
+    const { handle, stream, fakeQuery } = await startSessionWithStream();
+    const session = wrapInSession(handle);
+    let resolveResize!: (value: string) => void;
+    imageResizerMock.process.mockImplementationOnce(
+      () => new Promise<string>((resolve) => { resolveResize = resolve; }),
+    );
+
+    const imagePath = path.join(os.tmpdir(), 'graceful-stop-pre-acceptance.png');
+    const send = session.send({
+      type: 'user',
+      content: [{ type: 'image', path: imagePath }],
+    });
+    await waitFor(() => imageResizerMock.process.mock.calls.length > 0, 'attachment conversion started');
+
+    const firstStop = session.requestGracefulStop();
+    const secondStop = session.requestGracefulStop();
+    expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+    resolveResize(imagePath);
+
+    await expect(send).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    await expect(Promise.all([firstStop, secondStop])).resolves.toEqual([
+      { status: 'requested', turnGeneration: 1 },
+      { status: 'requested', turnGeneration: 1 },
+    ]);
+    expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+
+    stream.end();
+    await session.close().catch(() => undefined);
+  });
+
+  // 2026-10-24: Session.steer 在前台 result 后被 adapter 拒绝，手机消息永久排队。
+  // unit: 现有 Stop/continuation 用例未覆盖这个输入窗口；捕获真实 adapter 输入队列，
+  // 验证插话只提交一次、后台任务保留、最终只产生一个产品终态。
+  it.each(['completed', 'stopped'] as const)('accepts a steer while awaiting a background task that later %s', async (status) => {
+    const { agent, handle, stream, fakeQuery } = await startSessionWithStream(undefined, {
+      autoCollect: false, capturePrompts: true,
+    });
+    const session = new Session({
+      id: 'background-steer', agentKind: 'claude-code', workDir: path.join('workspace', 'repo'),
+      handle, capabilities: agent.capabilities, logger: createNoopLogger(), turnStallMs: 0,
+    });
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push(event));
+    const prompt = sdkMock.query.mock.calls.at(-1)?.[0].prompt as AsyncIterable<unknown>;
+    const submitted: unknown[] = [];
+    const collecting = (async () => { for await (const value of prompt) submitted.push(value); })();
+    try {
+      await session.send('spawn background agent');
+      stream.emit(taskStarted('worker', 'local_agent'));
+      stream.emit(turnResult('waiting'));
+      await waitFor(() => seen.some((event) => event.turnContinuationId !== undefined), 'awaiting background');
+      await session.steer('reload the save without restarting');
+      await waitFor(() => submitted.length === 2, 'steer accepted once');
+      expect(submitted[1]).toMatchObject({ message: { content: 'reload the save without restarting' } });
+      expect(handle.listBackgroundTasks?.().map((task) => task.taskId)).toEqual(['worker']);
+      expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+      expect(fakeQuery.stopTask).not.toHaveBeenCalled();
+      stream.emit(taskNotification('worker', status));
+      await waitFor(() => taskEvents(seen).length === 2, 'background terminal');
+      expect(seen.filter(isProductTerminal)).toHaveLength(0);
+      stream.emit(assistantText('using your correction'));
+      stream.emit(turnResult('complete'));
+      await waitFor(() => seen.filter(isProductTerminal).length === 1, 'product terminal');
+      expect(session.isTurnRunning()).toBe(false);
+      expect(submitted).toHaveLength(2);
+    } finally {
+      stream.end();
+      await session.close();
+      await collecting;
+    }
+  });
+
+  it('does not deliver a waiting-turn steer when Stop wins during attachment conversion', async () => {
+    const { handle, stream, events } = await startSessionWithStream();
+    await handle.send({ type: 'user', content: 'background work' });
+    stream.emit(taskStarted('worker', 'local_agent'));
+    stream.emit(turnResult('waiting'));
+    await waitFor(() => events.some((event) => event.turnContinuationId !== undefined), 'awaiting background');
+    const resize = createDeferred<string>();
+    const entered = createDeferred<void>();
+    imageResizerMock.process.mockImplementationOnce(() => { entered.resolve(); return resize.promise; });
+    const imagePath = path.join(os.tmpdir(), 'waiting-steer.png');
+    const steer = handle.steer({ type: 'user', content: [{ type: 'image', path: imagePath }] });
+    const rejected = expect(steer).rejects.toThrow('No active Claude turn to steer');
+    await entered.promise;
+    await handle.abort();
+    resize.resolve(imagePath);
+    await rejected;
+    expect(events.filter(isProductTerminal)).toHaveLength(1);
+    expect(handle.isTurnRunning?.()).toBe(false);
+    stream.end();
+    await handle.close();
+  });
+
+  it('graceful stop sends only the SDK interrupt without closing or stopping background tasks', async () => {
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream();
+    await handle.send({ type: 'user', content: 'long turn' });
+
+    await expect(handle.requestGracefulStop?.()).resolves.toBeUndefined();
+    expect(fakeQuery.interrupt).toHaveBeenCalledOnce();
+    expect(fakeQuery.close).not.toHaveBeenCalled();
+    expect(fakeQuery.stopTask).not.toHaveBeenCalled();
+
+    stream.emit(turnResult('stopped'));
+    await waitFor(
+      () => events.some((event) => event.type === 'done'),
+      'graceful stop terminal',
+    );
+    await handle.close();
+  });
+
+  it.each([1, 2])('retains the product for a batch of %i submitted async answers without adding a wake task', async (count) => {
+    const { handle, stream, events } = await startSessionWithStream();
+    try {
+      await handle.send({ type: 'user', content: 'independent work' });
+      for (let i = 0; i < count; i++) {
+        await handle.steer({ type: 'user', content: `answer ${i}` }, { [ASYNC_QUESTION_ANSWER]: true });
+      }
+      stream.emit(turnResult('original work complete'));
+      await waitFor(() => events.some((e) => e.type === 'done'), 'original SDK boundary');
+      const boundary = events.find((e) => e.type === 'done')!;
+      expect(boundary.turnContinuationId).toBeTypeOf('number');
+      expect(handle.isTurnRunning?.()).toBe(true);
+      expect(handle.listBackgroundTasks?.()).toEqual([]);
+      expect(events.filter(isProductTerminal)).toHaveLength(0);
+      stream.emit(assistantText('using the answers'));
+      stream.emit(turnResult('answer work complete'));
+      await waitFor(() => events.filter(isProductTerminal).length === 1, 'one product terminal');
+      expect(handle.isTurnRunning?.()).toBe(false);
+    } finally { await handle.close(); }
+  });
+
+  it.each(['abort', 'requestGracefulStop'] as const)('cancels accepted-answer continuation on %s without reviving it', async (action) => {
+    const { handle, stream, streams, events } = await startSessionWithStream();
+    try {
+      await handle.send({ type: 'user', content: 'work' });
+      await handle.steer({ type: 'user', content: 'answer' }, { [ASYNC_QUESTION_ANSWER]: true });
+      stream.emit(turnResult());
+      await waitFor(() => events.some((e) => e.type === 'done'), 'claimed SDK boundary');
+      await handle[action]?.();
+      await waitFor(() => events.filter(isProductTerminal).length === 1, 'cancelled product');
+      streams[0].emit(assistantText('late answer processing'));
+      streams[0].emit(turnResult());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(events.filter(isProductTerminal)).toHaveLength(1);
+      expect(handle.isTurnRunning?.()).toBe(false);
+    } finally { await handle.close(); }
+  });
+
+  it('graceful stop cancels an awaiting wake continuation and rebuilds before the next send', async () => {
+    const { handle, stream, streams, events, fakeQuery, fakeQueries } =
+      await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'spawn background work' });
+    stream.emit(taskStarted('task-agent', 'local_agent'));
+    await waitFor(() => taskEvents(events).length >= 1, 'wake task observed');
+    stream.emit(turnResult('waiting'));
+    await waitFor(() => events.some((event) => event.type === 'done'), 'parent done observed');
+    const continuationId = events.find((event) => event.type === 'done')?.turnContinuationId;
+    expect(continuationId).toBeTypeOf('number');
+    expect(handle.beginTurnContinuationWait?.(continuationId)).toBe('awaiting');
+
+    await expect(handle.requestGracefulStop?.()).resolves.toBeUndefined();
+
+    expect(fakeQuery.stopTask).toHaveBeenCalledWith('task-agent');
+    expect(fakeQuery.interrupt).toHaveBeenCalledOnce();
+    expect(fakeQuery.close).not.toHaveBeenCalled();
+    await waitFor(
+      () =>
+        events.some(
+          (event) =>
+            event.type === 'done' &&
+            (event.data as { reason?: unknown } | null | undefined)?.reason ===
+              'turn_continuation_cancelled',
+        ),
+      'graceful continuation cancellation observed',
+    );
+    expect(handle.beginTurnContinuationWait?.(continuationId)).toBeNull();
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    const eventCountAfterStop = events.length;
+    streams[0]?.emit(assistantText('late automatic continuation'));
+    streams[0]?.emit(turnResult('late automatic result'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(events).toHaveLength(eventCountAfterStop);
+
+    await handle.send({ type: 'user', content: 'fresh turn after graceful stop' });
+    expect(fakeQueries).toHaveLength(2);
+    expect(fakeQuery.close).toHaveBeenCalledTimes(1);
+    stream.emit(turnResult('fresh turn complete'));
+    await waitFor(() => events.filter(isProductTerminal).length === 2, 'fresh terminal observed');
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('graceful stop cancels an awaiting claim after its wake task already completed', async () => {
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'spawn background work' });
+    stream.emit(taskStarted('task-agent', 'local_agent'));
+    await waitFor(() => taskEvents(events).length >= 1, 'wake task observed');
+    stream.emit(turnResult('waiting'));
+    await waitFor(() => events.some((event) => event.type === 'done'), 'parent done observed');
+    const continuationId = events.find((event) => event.type === 'done')?.turnContinuationId;
+    expect(continuationId).toBeTypeOf('number');
+    stream.emit(taskNotification('task-agent', 'completed'));
+    await waitFor(() => taskEvents(events).length >= 2, 'task completion observed');
+
+    await expect(handle.requestGracefulStop?.()).resolves.toBeUndefined();
+
+    expect(fakeQuery.stopTask).not.toHaveBeenCalled();
+    expect(fakeQuery.interrupt).toHaveBeenCalledOnce();
+    await waitFor(() => events.filter(isProductTerminal).length === 1, 'cancellation terminal observed');
+    expect(handle.beginTurnContinuationWait?.(continuationId)).toBeNull();
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('wake contract reconciliation cancels an awaiting claim whose tasks are all terminal without continuation activity', async () => {
+    vi.useFakeTimers();
+    try {
+      const { handle, stream, events, fakeQuery } = await startSessionWithStream();
+
+      await handle.send({ type: 'user', content: 'spawn background work' });
+      stream.emit(taskStarted('task-agent', 'local_agent'));
+      await vi.advanceTimersByTimeAsync(0);
+      stream.emit(turnResult('waiting'));
+      await vi.advanceTimersByTimeAsync(0);
+      const continuationId = events.find((event) => event.type === 'done')?.turnContinuationId;
+      expect(continuationId).toBeTypeOf('number');
+      stream.emit(taskNotification('task-agent', 'completed'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(taskEvents(events).length).toBeGreaterThanOrEqual(2);
+
+      // 宽限期内:claim 仍在按 task_notification 续跑契约等待,不得提前收口。
+      expect(handle.beginTurnContinuationWait?.(continuationId)).toBe('awaiting');
+      expect(events.filter(isProductTerminal)).toHaveLength(0);
+
+      // 快进越过宽限窗口且无任何续跑活动:契约失守 → 取消 claim 并补合成终态。
+      await vi.advanceTimersByTimeAsync(WAKE_CONTRACT_GRACE_MS + 1_000);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(events.filter(isProductTerminal).length).toBe(1);
+      expect(
+        events.find(
+          (event) => event.type === 'done' && event.turnContinuationId === undefined,
+        )?.data,
+      ).toMatchObject({ reason: 'turn_continuation_cancelled' });
+      expect(handle.beginTurnContinuationWait?.(continuationId)).toBeNull();
+      expect(handle.isTurnRunning?.()).toBe(false);
+      // 对账不是用户 Stop:不得触碰 stopTask / interrupt。
+      expect(fakeQuery.stopTask).not.toHaveBeenCalled();
+      expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+
+      stream.end();
+      await handle.close().catch(() => undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('wake contract reconciliation stands down once the continuation activates', async () => {
+    vi.useFakeTimers();
+    try {
+      const { handle, stream, events } = await startSessionWithStream();
+
+      await handle.send({ type: 'user', content: 'spawn background work' });
+      stream.emit(taskStarted('task-agent', 'local_agent'));
+      await vi.advanceTimersByTimeAsync(0);
+      stream.emit(turnResult('waiting'));
+      await vi.advanceTimersByTimeAsync(0);
+      const continuationId = events.find((event) => event.type === 'done')?.turnContinuationId;
+      expect(continuationId).toBeTypeOf('number');
+      stream.emit(taskNotification('task-agent', 'completed'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handle.beginTurnContinuationWait?.(continuationId)).toBe('awaiting');
+
+      // 健康路径:续跑段在宽限期内激活,对账定时器随之解除。
+      stream.emit(assistantText('automatic continuation started'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handle.beginTurnContinuationWait?.(continuationId)).toBe('active');
+
+      await vi.advanceTimersByTimeAsync(WAKE_CONTRACT_GRACE_MS + 60_000);
+      expect(events.filter(isProductTerminal)).toHaveLength(0);
+      expect(handle.beginTurnContinuationWait?.(continuationId)).toBe('active');
+
+      stream.end();
+      await handle.close().catch(() => undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('graceful stop lets an already active continuation finish through its interrupted result', async () => {
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'spawn background work' });
+    stream.emit(taskStarted('task-agent', 'local_agent'));
+    await waitFor(() => taskEvents(events).length >= 1, 'wake task observed');
+    stream.emit(turnResult('waiting'));
+    await waitFor(() => events.some((event) => event.type === 'done'), 'parent done observed');
+    const continuationId = events.find((event) => event.type === 'done')?.turnContinuationId;
+    expect(continuationId).toBeTypeOf('number');
+    stream.emit(taskNotification('task-agent', 'completed'));
+    await waitFor(() => taskEvents(events).length >= 2, 'task completion observed');
+    stream.emit(assistantText('automatic continuation started'));
+    await waitFor(() => handle.beginTurnContinuationWait?.(continuationId) === 'active', 'claim activated');
+
+    await expect(handle.requestGracefulStop?.()).resolves.toBeUndefined();
+
+    expect(fakeQuery.stopTask).not.toHaveBeenCalled();
+    expect(fakeQuery.interrupt).toHaveBeenCalledOnce();
+    expect(events.filter(isProductTerminal)).toHaveLength(0);
+    expect(handle.beginTurnContinuationWait?.(continuationId)).toBe('active');
+
+    stream.emit(interruptedTurnResult());
+    await waitFor(() => events.filter(isProductTerminal).length === 1, 'interrupted continuation terminal');
+    await waitFor(() => handle.isTurnRunning?.() === false, 'active continuation settled');
+    expect(handle.beginTurnContinuationWait?.(continuationId)).toBeNull();
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('provider stopped notification may cancel the awaiting claim before graceful-stop ACK', async () => {
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'spawn background work' });
+    stream.emit(taskStarted('task-agent', 'local_agent'));
+    await waitFor(() => taskEvents(events).length >= 1, 'wake task observed');
+    stream.emit(turnResult('waiting'));
+    await waitFor(() => events.some((event) => event.type === 'done'), 'parent done observed');
+    const continuationId = events.find((event) => event.type === 'done')?.turnContinuationId;
+    expect(continuationId).toBeTypeOf('number');
+
+    const stopTask = createDeferred<void>();
+    const interrupt = createDeferred<void>();
+    fakeQuery.stopTask!.mockImplementationOnce(() => stopTask.promise);
+    fakeQuery.interrupt.mockImplementationOnce(() => interrupt.promise);
+    const stop = handle.requestGracefulStop?.();
+    await waitFor(() => fakeQuery.interrupt.mock.calls.length === 1, 'interrupt dispatched');
+
+    stream.emit(taskNotification('task-agent', 'stopped'));
+    await waitFor(() => events.filter(isProductTerminal).length === 1, 'provider stop terminal observed');
+    expect(handle.beginTurnContinuationWait?.(continuationId)).toBeNull();
+
+    stopTask.resolve(undefined);
+    interrupt.resolve(undefined);
+    await expect(stop).resolves.toBeUndefined();
+    expect(events.filter(isProductTerminal)).toHaveLength(1);
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it.each([
+    ['stopTask rejection', false],
+    ['legacy query without stopTask', true],
+  ] as const)(
+    'graceful stop stays unconfirmed without hard-closing on %s',
+    async (_label, omitStopTask) => {
+      const { handle, stream, events, fakeQuery } = await startSessionWithStream({ omitStopTask });
+
+      await handle.send({ type: 'user', content: 'spawn background work' });
+      stream.emit(taskStarted('task-agent', 'local_agent'));
+      await waitFor(() => taskEvents(events).length >= 1, 'wake task observed');
+      stream.emit(turnResult('waiting'));
+      await waitFor(() => events.some((event) => event.type === 'done'), 'parent done observed');
+      const continuationId = events.find((event) => event.type === 'done')?.turnContinuationId;
+      expect(continuationId).toBeTypeOf('number');
+      if (!omitStopTask) {
+        fakeQuery.stopTask!.mockRejectedValueOnce(new Error('stop rejected'));
+      }
+
+      await expect(handle.requestGracefulStop?.()).rejects.toThrow(
+        'could not confirm all background task stops',
+      );
+
+      expect(fakeQuery.interrupt).toHaveBeenCalledOnce();
+      expect(fakeQuery.close).not.toHaveBeenCalled();
+      expect(handle.beginTurnContinuationWait?.(continuationId)).toBe('awaiting');
+      expect(handle.isTurnRunning?.()).toBe(true);
+      expect(events.filter(isProductTerminal)).toHaveLength(0);
+
+      stream.end();
+      await handle.close().catch(() => undefined);
+    },
+  );
+
+  it('graceful stop stays unconfirmed when a new wake task appears before interrupt ACK', async () => {
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'ordinary foreground turn' });
+    const interrupt = createDeferred<void>();
+    fakeQuery.interrupt.mockImplementationOnce(() => interrupt.promise);
+    const stop = handle.requestGracefulStop?.();
+    await waitFor(() => fakeQuery.interrupt.mock.calls.length === 1, 'interrupt dispatched');
+
+    stream.emit(taskStarted('task-late', 'local_agent'));
+    await waitFor(() => taskEvents(events).length >= 1, 'late wake task observed');
+    interrupt.resolve(undefined);
+
+    await expect(stop).rejects.toThrow('could not confirm all background task stops');
+    expect(fakeQuery.stopTask).not.toHaveBeenCalled();
+    expect(fakeQuery.close).not.toHaveBeenCalled();
+    expect(handle.listBackgroundTasks?.().map((task) => task.taskId)).toEqual(['task-late']);
+    expect(handle.isTurnRunning?.()).toBe(true);
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('concurrent Session graceful-stop requests share one continuation cancellation', async () => {
+    const { handle, stream, fakeQuery } = await startSessionWithStream(undefined, {
+      autoCollect: false,
+    });
+    const session = wrapInSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push(event));
+
+    await session.send('spawn background work');
+    stream.emit(taskStarted('task-agent', 'local_agent'));
+    await waitFor(() => taskEvents(seen).length >= 1, 'Session observed wake task');
+    stream.emit(turnResult('waiting'));
+    await waitFor(
+      () => seen.some((event) => event.type === 'done' && event.turnContinuationId !== undefined),
+      'Session observed claimed parent done',
+    );
+
+    const interrupt = createDeferred<void>();
+    fakeQuery.interrupt.mockImplementationOnce(() => interrupt.promise);
+    const first = session.requestGracefulStop();
+    const second = session.requestGracefulStop();
+    await waitFor(() => fakeQuery.interrupt.mock.calls.length === 1, 'single interrupt dispatched');
+    expect(fakeQuery.stopTask).toHaveBeenCalledTimes(1);
+    interrupt.resolve(undefined);
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { status: 'requested', turnGeneration: 1 },
+      { status: 'requested', turnGeneration: 1 },
+    ]);
+    await waitFor(() => session.isTurnRunning() === false, 'Session continuation settled');
+    expect(fakeQuery.interrupt).toHaveBeenCalledTimes(1);
+    expect(fakeQuery.stopTask).toHaveBeenCalledTimes(1);
+
+    stream.end();
+    await session.close().catch(() => undefined);
+  });
+
   it('只给会触发 SDK 自动续 turn 的 wake 任务对应 done 附 continuation claim', async () => {
     const { handle, stream, events } = await startSessionWithStream();
 
@@ -1797,6 +2253,90 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     await handle.close().catch(() => undefined);
   });
 
+  it('exposes the SDK output file of running background tasks and drops it on terminal', async () => {
+    const { handle, stream, events } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'run a background command' });
+    stream.emit({
+      ...taskStarted('bash-1', 'local_bash'),
+      output_file: '/tmp/claude-501/project/session/tasks/bash-1.output',
+    });
+    await waitFor(() => taskEvents(events).length >= 1, 'task_started observed');
+    // task_updated 补丁不带 output_file,不得冲掉已登记的路径。
+    stream.emit(taskUpdatedRunning('bash-1'));
+    await waitFor(() => taskEvents(events).length >= 2, 'task_updated observed');
+    expect(handle.listBackgroundTasks?.()).toEqual([
+      expect.objectContaining({
+        taskId: 'bash-1',
+        taskType: 'local_bash',
+        outputFile: '/tmp/claude-501/project/session/tasks/bash-1.output',
+      }),
+    ]);
+
+    stream.emit(taskNotification('bash-1', 'completed'));
+    await waitFor(() => (handle.listBackgroundTasks?.() ?? []).length === 0, 'terminal task removed');
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  // 规则:后台命令按启动它的命令写法分成「工作」与「长驻服务」,任务列表只把前者显示为运行中
+  // (docs/dev-rules/maker-core-and-agent-behavior.md「后台命令：工作与服务」)。task_started 只带
+  // 描述不带命令,种类必须从同一 tool_use 的 Bash 输入取,并随事件与快照一起下发。
+  it('labels a background command as work or service from the Bash call that launched it', async () => {
+    const { handle, stream, events } = await startSessionWithStream();
+    const bashToolUse = (taskId: string, command: string): Record<string, unknown> => ({
+      type: 'assistant',
+      parent_tool_use_id: null,
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: `tu-${taskId}`, name: 'Bash', input: { command, run_in_background: true } },
+        ],
+      },
+    });
+
+    await handle.send({ type: 'user', content: 'run the tests and start the preview' });
+    stream.emit(bashToolUse('bash-tests', 'pnpm test:unit:related'));
+    stream.emit(taskStarted('bash-tests', 'local_bash'));
+    stream.emit(bashToolUse('bash-server', 'cd apps/web && pnpm dev'));
+    stream.emit(taskStarted('bash-server', 'local_bash'));
+    // 没见过对应 Bash 调用的后台命令不标种类,下游按「工作」处理。
+    stream.emit(taskStarted('bash-unknown', 'local_bash'));
+    await waitFor(() => taskEvents(events).length >= 3, 'task_started observed');
+
+    const kindByTask = (list: Array<{ taskId: string; backgroundCommandKind?: string }>) =>
+      Object.fromEntries(list.map((task) => [task.taskId, task.backgroundCommandKind]));
+    const expected = { 'bash-tests': 'work', 'bash-server': 'service', 'bash-unknown': undefined };
+    expect(kindByTask(handle.listBackgroundTasks?.() ?? [])).toEqual(expected);
+    expect(
+      kindByTask(taskEvents(events).map((event) => event.data as { taskId: string; backgroundCommandKind?: string })),
+    ).toEqual(expected);
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  // 回退提交会关闭旧 Query,CLI 子进程连同它的后台命令一起终止。快照必须立刻反映这一点:宿主据此
+  // 刷新任务列表,否则已不存在的命令会让任务一直显示运行中,直到下一次发送才换 Query 清表。
+  it('rewind commit closes the Query and drops its background commands from the snapshot', async () => {
+    const { handle, stream, events, fakeQueries } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'run the tests in the background' });
+    stream.emit(taskStarted('bash-1', 'local_bash'));
+    await waitFor(() => taskEvents(events).length >= 1, 'task_started observed');
+    stream.emit(turnResult('tests started'));
+    await waitFor(() => handle.isTurnRunning?.() === false, 'turn settled');
+    expect(handle.listBackgroundTasks?.()).toHaveLength(1);
+
+    await handle.commitRewindFiles?.('user-uuid-1', 'assistant-uuid-1');
+    expect(fakeQueries[0]?.close).toHaveBeenCalledTimes(1);
+    expect(handle.listBackgroundTasks?.()).toEqual([]);
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
   it('stopTask rejection does not leak an awaiting claim after interrupt succeeds', async () => {
     const { handle, stream, events, fakeQuery } = await startSessionWithStream();
 
@@ -2621,7 +3161,7 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
       () => events.some(
         (event) => event.type === 'error' &&
           (event.data as { reason?: unknown } | null | undefined)?.reason ===
-            'upstream_response_idle_timeout',
+            'bridge_upstream_response_idle_timeout',
       ),
       'watchdog timeout observed',
     );
@@ -2788,6 +3328,7 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     // 模拟 SDK 在 retry backoff 中不立即响应 interrupt(如全池冷却 503)。
     let interruptResolved = false;
     fakeQuery.interrupt.mockImplementation(async () => {
+      // real-wait: keep interrupt pending to assert the in-flight guard.
       await new Promise((r) => setTimeout(r, 200));
       interruptResolved = true;
     });
@@ -2844,4 +3385,18 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
       vi.useRealTimers();
     }
   });
+});
+
+
+it('applies an explicit model window to Claude runtime and compression accounting', async () => {
+  const { handle, fakeQueries } = await startSessionWithStream(undefined, {
+    resolveModelContextLimit: (_provider, model) => model === 'claude-opus-4-6' ? 600_000 : null,
+  });
+  expect(handle.getUsageSnapshot().contextWindow).toBe(600_000);
+  await handle.send({ type: 'user', content: 'hello' });
+  expect(fakeQueries).toHaveLength(1);
+  const query = sdkMock.query.mock.calls[0]![0] as { options: { env: Record<string, string> } };
+  expect(JSON.parse(query.options.env.XDT_MAKER_MODEL_CONTEXT_WINDOWS)).toMatchObject({ 'claude-opus-4-6[1m]': 600_000 });
+  expect(query.options.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('600000');
+  await handle.close();
 });

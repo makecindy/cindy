@@ -9,13 +9,17 @@ import { ResourceUsageWindowController } from '../controller.js';
 
 interface FakeWindow {
   on: ReturnType<typeof vi.fn>;
+  once: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   destroy: ReturnType<typeof vi.fn>;
   hide: ReturnType<typeof vi.fn>;
   show: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
   restore: ReturnType<typeof vi.fn>;
+  setFullScreen: ReturnType<typeof vi.fn>;
+  setTitle: ReturnType<typeof vi.fn>;
   isMinimized: () => boolean;
+  isFullScreen: () => boolean;
   isVisible: () => boolean;
   isDestroyed: () => boolean;
   webContents: WebContents;
@@ -23,6 +27,7 @@ interface FakeWindow {
   emitClosed: () => void;
   emitWebContents: (event: string, ...args: unknown[]) => void;
   emitWindow: (event: string) => void;
+  setFullscreenState: (fullscreen: boolean) => void;
 }
 
 function fakeWindow(id: number, minimized = false): FakeWindow {
@@ -30,6 +35,7 @@ function fakeWindow(id: number, minimized = false): FakeWindow {
   const webContentsListeners = new Map<string, (...args: unknown[]) => void>();
   let destroyed = false;
   let visible = false;
+  let fullscreen = false;
   const send = vi.fn();
   const webContents = {
     id,
@@ -42,6 +48,12 @@ function fakeWindow(id: number, minimized = false): FakeWindow {
   const win: FakeWindow = {
     on: vi.fn((event: string, callback: (...args: unknown[]) => void) => {
       listeners.set(event, callback);
+    }),
+    once: vi.fn((event: string, callback: (...args: unknown[]) => void) => {
+      listeners.set(event, (...args: unknown[]) => {
+        listeners.delete(event);
+        callback(...args);
+      });
     }),
     close: vi.fn(() => {
       let prevented = false;
@@ -68,7 +80,12 @@ function fakeWindow(id: number, minimized = false): FakeWindow {
     }),
     focus: vi.fn(),
     restore: vi.fn(),
+    setFullScreen: vi.fn((nextFullscreen: boolean) => {
+      fullscreen = nextFullscreen;
+    }),
+    setTitle: vi.fn(),
     isMinimized: () => minimized,
+    isFullScreen: () => fullscreen,
     isVisible: () => visible,
     isDestroyed: () => destroyed,
     webContents,
@@ -80,6 +97,9 @@ function fakeWindow(id: number, minimized = false): FakeWindow {
     },
     emitWebContents: (event, ...args) => webContentsListeners.get(event)?.(...args),
     emitWindow: (event) => listeners.get(event)?.(),
+    setFullscreenState: (nextFullscreen) => {
+      fullscreen = nextFullscreen;
+    },
   };
   return win;
 }
@@ -88,6 +108,9 @@ function makeHarness(
   timeoutMs = 5000,
   prewarmTimeoutMs = 10_000,
   recoveryStabilityMs = 30_000,
+  platform: NodeJS.Platform = 'linux',
+  leaveTimeoutMs = 2000,
+  prewarmWork?: boolean,
 ) {
   const windows: FakeWindow[] = [];
   const mainSender = { id: 100 } as WebContents;
@@ -101,6 +124,9 @@ function makeHarness(
     openTimeoutMs: timeoutMs,
     prewarmTimeoutMs,
     recoveryStabilityMs,
+    leaveTimeoutMs,
+    platform,
+    prewarmWork,
   });
   return { controller, windows, mainSender };
 }
@@ -114,6 +140,41 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe('ResourceUsageWindowController', () => {
+  it.each([
+    ['win32', undefined],
+    ['darwin', false],
+  ] as const)('keeps shell-only prewarm idle on %s until the user opens it', (platform, prewarmWork) => {
+    const { controller, windows, mainSender } = makeHarness(5000, 10_000, 30_000, platform, 2000, prewarmWork);
+
+    controller.prewarm();
+    expect(controller.allowsProcessMonitorSampling(windows[0]!.webContents)).toBe(false);
+    vi.advanceTimersByTime(10_000);
+    expect(controller.markRendererReady(windows[0]!.webContents)).toBe(true);
+    expect(windows[0]?.send).toHaveBeenLastCalledWith(
+      RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL,
+      false,
+    );
+    expect(vi.getTimerCount()).toBe(0);
+
+    windows[0]?.emitWebContents('did-start-loading');
+    expect(windows[0]?.send).toHaveBeenLastCalledWith(
+      RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL,
+      false,
+    );
+    expect(controller.markRendererReady(windows[0]!.webContents)).toBe(true);
+
+    expect(controller.open(mainSender)).toBe(true);
+    expect(controller.allowsProcessMonitorSampling(windows[0]!.webContents)).toBe(true);
+    expect(windows[0]?.send).toHaveBeenLastCalledWith(
+      RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL,
+      true,
+    );
+    expect(windows[0]?.show).not.toHaveBeenCalled();
+
+    expect(controller.markPresentationReady(windows[0]!.webContents)).toBe(true);
+    expect(windows[0]?.show).toHaveBeenCalledOnce();
+  });
+
   it('prewarms a complete presentation without showing or focusing it', () => {
     const { controller, windows } = makeHarness();
 
@@ -123,6 +184,7 @@ describe('ResourceUsageWindowController', () => {
     expect(windows).toHaveLength(1);
     expect(windows[0]?.show).not.toHaveBeenCalled();
     expect(windows[0]?.focus).not.toHaveBeenCalled();
+    expect(windows[0]?.setTitle).toHaveBeenCalled();
     expect(windows[0]?.send).toHaveBeenLastCalledWith(
       RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL,
       false,
@@ -222,9 +284,171 @@ describe('ResourceUsageWindowController', () => {
     expect(windows[0]?.hide).toHaveBeenCalledOnce();
   });
 
+  it("opens as a regular window in the owner's macOS fullscreen Space", () => {
+    const windows: FakeWindow[] = [];
+    const mainSender = { id: 100 } as WebContents;
+    const owner = {
+      isDestroyed: () => false,
+      isFullScreen: () => true,
+      isMinimized: () => false,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+    };
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => {
+        const win = fakeWindow(windows.length + 1);
+        windows.push(win);
+        return win as unknown as BrowserWindow;
+      },
+      isOpenSender: (sender) => sender === mainSender,
+      getOwnerWindow: () => owner,
+      platform: 'darwin',
+    });
+    controller.prewarm();
+    markPrewarmed(controller, windows[0]!);
+
+    expect(controller.open(mainSender)).toBe(true);
+    expect(windows[0]?.show).toHaveBeenCalledOnce();
+    expect(windows[0]?.focus).toHaveBeenCalledOnce();
+    expect(windows[0]?.setFullScreen).not.toHaveBeenCalled();
+    expect(owner.isFullScreen()).toBe(true);
+
+    expect(controller.close(windows[0]!.webContents)).toBe(true);
+    expect(windows[0]?.hide).toHaveBeenCalledOnce();
+    expect(windows[0]?.setFullScreen).not.toHaveBeenCalled();
+    expect(owner.show).toHaveBeenCalledOnce();
+    expect(owner.focus).toHaveBeenCalledOnce();
+  });
+
+  it('updates the native window title when the application locale changes', () => {
+    const windows: FakeWindow[] = [];
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => {
+        const win = fakeWindow(windows.length + 1);
+        windows.push(win);
+        return win as unknown as BrowserWindow;
+      },
+      isOpenSender: () => true,
+      resolveNativeTitle: (locale) => (locale === 'zh-CN' ? '资源监视器' : 'Activity Monitor'),
+    });
+    controller.prewarm();
+    expect(windows[0]?.setTitle).toHaveBeenCalledWith('Activity Monitor');
+    windows[0]?.setTitle.mockClear();
+    controller.setLocale('zh-CN');
+    expect(windows[0]?.setTitle).toHaveBeenCalledWith('资源监视器');
+  });
+
+  it('keeps the localized native title when the renderer reports Cindy as the page title', () => {
+    const windows: FakeWindow[] = [];
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => {
+        const win = fakeWindow(windows.length + 1);
+        windows.push(win);
+        return win as unknown as BrowserWindow;
+      },
+      isOpenSender: () => true,
+      resolveNativeTitle: (locale) => (locale === 'zh-CN' ? '资源监视器' : 'Activity Monitor'),
+    });
+    controller.prewarm();
+    windows[0]?.setTitle.mockClear();
+
+    const firstLoad = { preventDefault: vi.fn() };
+    windows[0]?.emitWebContents('page-title-updated', firstLoad, 'Cindy');
+    expect(firstLoad.preventDefault).toHaveBeenCalled();
+    expect(windows[0]?.setTitle).toHaveBeenCalledWith('Activity Monitor');
+
+    controller.setLocale('zh-CN');
+    windows[0]?.setTitle.mockClear();
+    const reload = { preventDefault: vi.fn() };
+    windows[0]?.emitWebContents('page-title-updated', reload, 'Cindy');
+    expect(reload.preventDefault).toHaveBeenCalled();
+    expect(windows[0]?.setTitle).toHaveBeenCalledWith('资源监视器');
+  });
+
+  it('hides with the owner without restoring a hidden Cindy window', () => {
+    const windows: FakeWindow[] = [];
+    const mainSender = { id: 100 } as WebContents;
+    const ownerListeners = new Map<string, () => void>();
+    const owner = {
+      isDestroyed: () => false,
+      isMinimized: () => false,
+      isVisible: () => false,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+      on: vi.fn((event: string, listener: () => void) => {
+        ownerListeners.set(event, listener);
+      }),
+    };
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => {
+        const win = fakeWindow(windows.length + 1);
+        windows.push(win);
+        return win as unknown as BrowserWindow;
+      },
+      isOpenSender: (sender) => sender === mainSender,
+      getOwnerWindow: () => owner,
+      platform: 'linux',
+    });
+    controller.prewarm();
+    markPrewarmed(controller, windows[0]!);
+    expect(controller.open(mainSender)).toBe(true);
+    owner.show.mockClear();
+    owner.focus.mockClear();
+
+    ownerListeners.get('hide')?.();
+    expect(windows[0]?.hide).toHaveBeenCalledOnce();
+    expect(owner.show).not.toHaveBeenCalled();
+    expect(owner.focus).not.toHaveBeenCalled();
+  });
+
+  it('tracks a pending macOS fullscreen entry without hiding the resource window', () => {
+    const windows: FakeWindow[] = [];
+    const mainSender = { id: 100 } as WebContents;
+    const ownerListeners = new Map<string, () => void>();
+    const owner = {
+      isDestroyed: () => false,
+      isMinimized: () => false,
+      isVisible: () => true,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+      on: vi.fn((event: string, listener: () => void) => {
+        ownerListeners.set(event, listener);
+      }),
+    };
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => {
+        const win = fakeWindow(windows.length + 1);
+        windows.push(win);
+        return win as unknown as BrowserWindow;
+      },
+      isOpenSender: (sender) => sender === mainSender,
+      getOwnerWindow: () => owner,
+      platform: 'darwin',
+    });
+    controller.prewarm();
+    markPrewarmed(controller, windows[0]!);
+    expect(controller.open(mainSender)).toBe(true);
+    windows[0]?.hide.mockClear();
+
+    expect(ownerListeners.has('hide')).toBe(true);
+    ownerListeners.get('hide')?.();
+    expect(windows[0]?.hide).not.toHaveBeenCalled();
+
+    windows[0]?.close();
+    expect(windows[0]?.setFullScreen).toHaveBeenCalledWith(false);
+    expect(windows[0]?.hide).not.toHaveBeenCalled();
+
+    windows[0]?.emitWindow('leave-full-screen');
+    expect(windows[0]?.hide).toHaveBeenCalledOnce();
+  });
+
   it('stops a hidden prewarm that cannot produce a presentation', () => {
     const { controller, windows } = makeHarness(5000, 1000);
     controller.prewarm();
+    controller.markRendererReady(windows[0]!.webContents);
 
     vi.advanceTimersByTime(999);
     expect(windows[0]?.send).not.toHaveBeenCalledWith(
@@ -243,6 +467,85 @@ describe('ResourceUsageWindowController', () => {
       RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL,
       false,
     );
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // Regression: a slow renderer used up the snapshot budget before subscribing, so
+  // its late ready handshake left prewarm paused until an explicit open. Existing coverage
+  // only exercised a timeout followed by an idle renderer. Unit tier: real controller
+  // entrypoints + fake time/windows; no Electron process, OS scans or user data.
+  // Single-file Vitest run: 1.65s (2026-11-10).
+  it.each([500, 1500])('gives the first renderer ready at %d ms one bounded snapshot attempt', (readyAt) => {
+    const { controller, windows, mainSender } = makeHarness(5000, 1000);
+    controller.prewarm();
+    const win = windows[0]!;
+    vi.advanceTimersByTime(readyAt);
+    controller.prewarm();
+    expect(windows).toHaveLength(1);
+
+    controller.markRendererReady(win.webContents);
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(true);
+    vi.advanceTimersByTime(999);
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(true);
+    expect(win.show).not.toHaveBeenCalled();
+    expect(win.focus).not.toHaveBeenCalled();
+
+    // A repeated ready must not extend the snapshot budget.
+    controller.markRendererReady(win.webContents);
+    vi.advanceTimersByTime(1);
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(false);
+    controller.markRendererReady(win.webContents);
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+
+    // A delayed snapshot may still populate the cache, but cannot show the window.
+    controller.markPresentationReady(win.webContents);
+    expect(win.show).not.toHaveBeenCalled();
+    controller.open(mainSender);
+    expect(win.show).toHaveBeenCalledOnce();
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(true);
+    controller.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['darwin', 'win32'] as const)('opens after prewarm timeout and reuses the window on %s', (platform) => {
+    const { controller, windows, mainSender } = makeHarness(5000, 1000, 30_000, platform);
+    controller.prewarm();
+    const win = windows[0]!;
+    vi.advanceTimersByTime(1000);
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(false);
+
+    controller.open(mainSender);
+    controller.markRendererReady(win.webContents);
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(true);
+    expect(win.show).not.toHaveBeenCalled();
+    controller.markPresentationReady(win.webContents);
+    expect(win.show).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+
+    controller.close(win.webContents);
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(false);
+    controller.open(mainSender);
+    expect(windows).toHaveLength(1);
+    expect(win.show).toHaveBeenCalledTimes(2);
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(true);
+    controller.dispose();
+    expect(win.destroy).toHaveBeenCalledOnce();
+    expect(controller.markRendererReady(win.webContents)).toBe(false);
+    expect(controller.markPresentationReady(win.webContents)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['close', 'hideWithOwner', 'minimize'] as const)('does not restart hidden work after %s cancels prewarm', (cancel) => {
+    const { controller, windows } = makeHarness(5000, 1000);
+    controller.prewarm();
+    const win = windows[0]!;
+    if (cancel === 'minimize') win.emitWindow('minimize');
+    else controller[cancel](win.webContents);
+    controller.markRendererReady(win.webContents);
+    expect(controller.allowsProcessMonitorSampling(win.webContents)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    controller.dispose();
   });
 
   it('invalidates readiness across a renderer reload', () => {
@@ -277,6 +580,102 @@ describe('ResourceUsageWindowController', () => {
     expect(windows[1]?.show).not.toHaveBeenCalled();
     controller.markPresentationReady(windows[1]!.webContents);
     expect(windows[1]?.show).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a replacement monitor regular when its owner is fullscreen', () => {
+    const windows: FakeWindow[] = [];
+    const mainSender = { id: 100 } as WebContents;
+    const owner = {
+      isDestroyed: () => false,
+      isFullScreen: () => true,
+      isMinimized: () => false,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+    };
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => {
+        const win = fakeWindow(windows.length + 1);
+        windows.push(win);
+        return win as unknown as BrowserWindow;
+      },
+      isOpenSender: (sender) => sender === mainSender,
+      getOwnerWindow: () => owner,
+      platform: 'darwin',
+    });
+    controller.prewarm();
+    markPrewarmed(controller, windows[0]!);
+    expect(controller.open(mainSender)).toBe(true);
+
+    windows[0]?.emitWebContents('render-process-gone', undefined, { reason: 'crashed' });
+    markPrewarmed(controller, windows[1]!);
+    expect(windows[1]?.show).toHaveBeenCalledOnce();
+    expect(windows[1]?.setFullScreen).not.toHaveBeenCalled();
+    expect(owner.isFullScreen()).toBe(true);
+  });
+
+  it('does not keep a leaked hide listener on the previous owner after automatic replacement', () => {
+    const windows: FakeWindow[] = [];
+    const firstSender = { id: 100 } as WebContents;
+    const secondSender = { id: 101 } as WebContents;
+    const firstOwnerListeners = new Map<string, Array<() => void>>();
+    const secondOwnerListeners = new Map<string, Array<() => void>>();
+    const firstOwner = {
+      isDestroyed: () => false,
+      isMinimized: () => false,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+      on: vi.fn((event: string, listener: () => void) => {
+        const list = firstOwnerListeners.get(event) ?? [];
+        list.push(listener);
+        firstOwnerListeners.set(event, list);
+      }),
+      off: vi.fn((event: string, listener: () => void) => {
+        firstOwnerListeners.set(
+          event,
+          (firstOwnerListeners.get(event) ?? []).filter((item) => item !== listener),
+        );
+      }),
+    };
+    const secondOwner = {
+      isDestroyed: () => false,
+      isMinimized: () => false,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+      on: vi.fn((event: string, listener: () => void) => {
+        const list = secondOwnerListeners.get(event) ?? [];
+        list.push(listener);
+        secondOwnerListeners.set(event, list);
+      }),
+      off: vi.fn((event: string, listener: () => void) => {
+        secondOwnerListeners.set(
+          event,
+          (secondOwnerListeners.get(event) ?? []).filter((item) => item !== listener),
+        );
+      }),
+    };
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => {
+        const win = fakeWindow(windows.length + 1);
+        windows.push(win);
+        return win as unknown as BrowserWindow;
+      },
+      isOpenSender: (sender) => sender === firstSender || sender === secondSender,
+      getOwnerWindow: (sender) => (sender === secondSender ? secondOwner : firstOwner),
+      platform: 'linux',
+    });
+    controller.prewarm();
+    markPrewarmed(controller, windows[0]!);
+    expect(controller.open(firstSender)).toBe(true);
+    windows[0]?.emitWebContents('render-process-gone', undefined, { reason: 'crashed' });
+    markPrewarmed(controller, windows[1]!);
+    expect(controller.open(secondSender)).toBe(true);
+    windows[1]?.hide.mockClear();
+
+    for (const listener of firstOwnerListeners.get('hide') ?? []) listener();
+    expect(windows[1]?.hide).not.toHaveBeenCalled();
   });
 
   it('bounds automatic replacement when renderer loading keeps failing', () => {
@@ -429,6 +828,65 @@ describe('ResourceUsageWindowController', () => {
     );
   });
 
+  it('keeps work active across native hide events when pauseWhenHidden is false', () => {
+    const windows: FakeWindow[] = [];
+    const mainSender = { id: 100 } as WebContents;
+    const onActivityChanged = vi.fn();
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => {
+        const win = fakeWindow(windows.length + 1);
+        windows.push(win);
+        return win as unknown as BrowserWindow;
+      },
+      isOpenSender: (sender) => sender === mainSender,
+      pauseWhenHidden: false,
+      onActivityChanged,
+      platform: 'darwin',
+    });
+    controller.prewarm();
+    markPrewarmed(controller, windows[0]!);
+    controller.open(mainSender);
+    onActivityChanged.mockClear();
+
+    // macOS reports Space switches and fullscreen transitions as hide/show.
+    for (const event of ['hide', 'show', 'minimize', 'restore'] as const) {
+      windows[0]?.emitWindow(event);
+    }
+    expect(onActivityChanged).not.toHaveBeenCalled();
+
+    controller.close(windows[0]!.webContents);
+    expect(onActivityChanged).toHaveBeenLastCalledWith(windows[0], false);
+    onActivityChanged.mockClear();
+    windows[0]?.emitWindow('show');
+    expect(onActivityChanged).not.toHaveBeenCalled();
+  });
+
+  it('still cancels a cold open on native hide when pauseWhenHidden is false', () => {
+    const windows: FakeWindow[] = [];
+    const mainSender = { id: 100 } as WebContents;
+    const onActivityChanged = vi.fn();
+    const controller = new ResourceUsageWindowController({
+      onActivityChanged,
+      createWindow: () => {
+        const win = fakeWindow(windows.length + 1);
+        windows.push(win);
+        return win as unknown as BrowserWindow;
+      },
+      isOpenSender: (sender) => sender === mainSender,
+      pauseWhenHidden: false,
+      openTimeoutMs: 1000,
+    });
+    controller.open(mainSender);
+    onActivityChanged.mockClear();
+    windows[0]?.emitWindow('hide');
+    controller.markPresentationReady(windows[0]!.webContents);
+    vi.advanceTimersByTime(1000);
+    expect(windows[0]?.show).not.toHaveBeenCalled();
+    expect(windows[0]?.focus).not.toHaveBeenCalled();
+    // The live session survives; only the reopening is cancelled.
+    expect(onActivityChanged).not.toHaveBeenCalledWith(expect.anything(), false);
+  });
+
   it('shows a loading fallback only after the renderer shell has mounted', () => {
     const { controller, windows, mainSender } = makeHarness(2500);
     controller.open(mainSender);
@@ -483,6 +941,62 @@ describe('ResourceUsageWindowController', () => {
     expect(controller.isOpen()).toBe(true);
   });
 
+  it('exits macOS native fullscreen before a native close hides the cached window', () => {
+    const { controller, windows, mainSender } = makeHarness(5000, 10_000, 30_000, 'darwin');
+    controller.prewarm();
+    markPrewarmed(controller, windows[0]!);
+    controller.open(mainSender);
+    windows[0]!.setFullscreenState(true);
+    vi.clearAllMocks();
+
+    windows[0]!.close();
+
+    expect(windows[0]?.setFullScreen).toHaveBeenCalledWith(false);
+    expect(windows[0]?.hide).not.toHaveBeenCalled();
+
+    windows[0]?.emitWindow('leave-full-screen');
+    expect(windows[0]?.hide).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(2000);
+    expect(windows[0]?.hide).toHaveBeenCalledOnce();
+    expect(controller.isOpen()).toBe(true);
+  });
+
+  it('falls back to hiding when macOS does not emit leave-full-screen', () => {
+    const { controller, windows, mainSender } = makeHarness(5000, 10_000, 30_000, 'darwin');
+    controller.prewarm();
+    markPrewarmed(controller, windows[0]!);
+    controller.open(mainSender);
+    windows[0]!.setFullscreenState(true);
+    vi.clearAllMocks();
+
+    windows[0]!.close();
+    vi.advanceTimersByTime(1999);
+    expect(windows[0]?.hide).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(windows[0]?.hide).toHaveBeenCalledOnce();
+    windows[0]?.emitWindow('leave-full-screen');
+    expect(windows[0]?.hide).toHaveBeenCalledOnce();
+    expect(controller.isOpen()).toBe(true);
+  });
+
+  it('does not hide a reopened macOS window when leave-full-screen arrives late', () => {
+    const { controller, windows, mainSender } = makeHarness(5000, 10_000, 30_000, 'darwin');
+    controller.prewarm();
+    markPrewarmed(controller, windows[0]!);
+    controller.open(mainSender);
+    windows[0]!.setFullscreenState(true);
+    controller.close(windows[0]!.webContents);
+    vi.clearAllMocks();
+
+    controller.open(mainSender);
+    windows[0]?.emitWindow('leave-full-screen');
+    vi.advanceTimersByTime(2000);
+
+    expect(windows[0]?.hide).not.toHaveBeenCalled();
+    expect(windows[0]?.show).toHaveBeenCalledOnce();
+  });
+
   it('destroys the cached child with its main window and may prewarm a replacement', () => {
     const { controller, windows } = makeHarness();
     controller.prewarm();
@@ -500,6 +1014,8 @@ describe('ResourceUsageWindowController', () => {
     controller.prewarm();
 
     controller.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(10_000);
     controller.prewarm();
     controller.open(mainSender);
 

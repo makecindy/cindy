@@ -55,9 +55,28 @@ export interface RsbWindowControllerDeps {
   createWindow: () => BrowserWindow;
   getMainWindow: () => BrowserWindow | null;
   /** 状态变化广播(所有窗口)。bootstrap 注入 getAllWindows 遍历实现。 */
-  broadcastState: (state: { detached: boolean; open: boolean }) => void;
+  broadcastState: (state: {
+    detached: boolean;
+    open: boolean;
+    hostSessionId?: string;
+    userClose?: boolean;
+  }) => void;
   /** 向裁决后的 renderer host 推送 context / command；窗口有效性由 controller 保证。 */
   sendToWindow: (win: BrowserWindow, channel: string, payload: unknown) => void;
+  /**
+   * 主窗没上报过该 session 时，从权威会话来源补齐 workdir / 远程归属。
+   * 不要在 controller 里把远程会话捏成本机空上下文。
+   */
+  resolveHostContext?: (
+    sessionId: string,
+  ) => RsbWindowContext | null | Promise<RsbWindowContext | null>;
+  /**
+   * 缓存窗口每次重新显示前的 Host 同步钩子。调用时窗口仍标记为 hidden，
+   * capability 同步必须以该精确 WebContents 为目标；原生 show 前完成。
+   */
+  onWindowWillShow?: (win: BrowserWindow) => void;
+  /** 缓存窗口隐藏后立即暂停 Host 侧交互能力，但保留 renderer 与分桶状态。 */
+  onWindowHidden?: (win: BrowserWindow) => void;
   contextChannel: string;
   commandChannel: string;
   /** main → renderer host；用于内嵌 / 分离宿主之间交接内存态 tab。 */
@@ -75,6 +94,10 @@ const DEFAULT_PREWARM_TIMEOUT_MS = 10_000;
 const DEFAULT_RECOVERY_STABILITY_MS = 30_000;
 const MAX_AUTOMATIC_RECOVERY_ATTEMPTS = 1;
 const MAX_DEFERRED_SESSIONS = 8;
+const MAX_KNOWN_CONTEXTS = 32;
+const MAX_ADOPT_RESOLVE_RETRIES = 5;
+const ADOPT_RESOLVE_RETRY_MS = 400;
+const ADOPT_RESOLVE_SLOW_RETRY_MS = 2_000;
 /**
  * 单会话 deferred 队列上限。正常路径远达不到(passive 命令种类有限且有合并
  * 规则);达到时丢最旧一条并记 warn —— 不能静默,登记类命令被丢意味着这次
@@ -88,6 +111,8 @@ const MAX_DEFERRED_COMMANDS_PER_SESSION = 32;
  * worker,tab 落在 lead 的桶),其余命令宿主即自身 sessionId。
  */
 function commandHostSessionId(cmd: RsbWindowCommand): string {
+  // Global commands are delivered directly, without a task bucket or adoption.
+  if (cmd.type === 'open-plugin-view') return '';
   return cmd.type === 'open-turn-review' ? (cmd.hostSessionId ?? cmd.sessionId) : cmd.sessionId;
 }
 
@@ -112,8 +137,16 @@ export class RsbWindowController {
   private visible = false;
   private pendingOpen = false;
   private pendingOpenShouldFocus = true;
+  private openFallbackExtended = false;
   private disposed = false;
   private readyWaiters: Array<{
+    resolve: () => void;
+    reject: (err: Error) => void;
+    timeout: NodeJS.Timeout;
+    sessionId?: string;
+  }> = [];
+  private hostWaiters: Array<{
+    sessionId: string;
     resolve: () => void;
     reject: (err: Error) => void;
     timeout: NodeJS.Timeout;
@@ -123,6 +156,19 @@ export class RsbWindowController {
   private recoveryStabilityTimeout: NodeJS.Timeout | null = null;
   private automaticRecoveryAttempts = 0;
   private lastContext: RsbWindowContext | null = null;
+  /** 主窗最近一次上报的焦点上下文；pin 期间 lastContext 可能仍是侧栏宿主。 */
+  private lastReportedContext: RsbWindowContext | null = null;
+  /**
+   * Agent / 跨 session 呼起把子窗口钉在发起方 session 上。
+   * 钉住期间主窗 setContext 的焦点切换不能把展示抢回台前 session；
+   * 用户切到被 pin 的 session、离开聊天视图或关掉子窗口时解除。
+   */
+  private pinnedSessionId: string | null = null;
+  private lastHostSessionId: string | null = null;
+  private adoptRetryTimer: NodeJS.Timeout | null = null;
+  private adoptRetryAttempts = 0;
+  /** 主窗曾上报、或权威来源解析过的完整宿主上下文，按 session 复用。 */
+  private knownContexts = new Map<string, RsbWindowContext>();
   /** 冷启动分离窗尚未 presentation-ready 时暂存主窗交来的内存态 tab。 */
   private pendingDetachedTabHandoff: RsbWindowTabHandoff | null = null;
   /**
@@ -147,7 +193,12 @@ export class RsbWindowController {
   getState(): RsbWindowState {
     const s = this.deps.settings.read();
     // pendingOpen:窗口已创建但等待 presentation-ready,外部视为 open。
-    return { detached: s.detached, lastOpen: s.lastOpen, open: this.isOpen() || this.pendingOpen };
+    return {
+      detached: s.detached,
+      lastOpen: s.lastOpen,
+      open: this.isOpen() || this.pendingOpen,
+      ...(this.lastHostSessionId ? { hostSessionId: this.lastHostSessionId } : {}),
+    };
   }
 
   /** 后台预热：主窗口首帧后创建隐藏窗口并挂载 renderer。不改变用户焦点。 */
@@ -170,9 +221,25 @@ export class RsbWindowController {
    * 幂等打开:热窗口(presentationReady)立即显示；冷窗口等待首份业务内容，
    * 超时按 Loading 壳兜底。
    */
-  open(opts: { userInitiated?: boolean } = {}): void {
+  open(opts: { userInitiated?: boolean; sessionId?: string } = {}): void {
     if (this.disposed) return;
     const userInitiated = opts.userInitiated !== false;
+    const revealSessionId = typeof opts.sessionId === 'string' ? opts.sessionId.trim() : '';
+    if (userInitiated) {
+      const currentHost = this.lastContext?.available ? this.lastContext.sessionId : '';
+      const targetHost = revealSessionId || currentHost;
+      if (this.pinnedSessionId && targetHost && this.pinnedSessionId !== targetHost) {
+        this.replacePinnedSession(null);
+      }
+    }
+    if (
+      revealSessionId &&
+      (userInitiated === false || this.lastContext?.sessionId !== revealSessionId)
+    ) {
+      void this.waitForHostSession(revealSessionId).catch(() => {
+        // waiter 超时或离开聊天会放掉 pin；open 是 fire-and-forget。
+      });
+    }
 
     this.automaticRecoveryAttempts = 0;
     this.clearRecoveryStabilityTimeout();
@@ -286,6 +353,9 @@ export class RsbWindowController {
     // command 可以安全交付的统一边界。不能在 showWindow 后提前返回，否则
     // 点击路径会永久留下此前排队的 passive intent。
     this.flushDeferredCommandsToDetachedHost();
+    if (this.pinnedSessionId && this.lastContext?.sessionId !== this.pinnedSessionId) {
+      this.pokeAdoptRetry(this.pinnedSessionId);
+    }
     return true;
   }
 
@@ -318,6 +388,7 @@ export class RsbWindowController {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.knownContexts.clear();
     this.destroyWindow();
   }
 
@@ -326,35 +397,57 @@ export class RsbWindowController {
   /**
    * agent tab-op(浏览器自动化)前置:detached 且窗口未就绪时先开窗并等 ready 握手。
    */
-  ensureOpenForAutomation(opts: { userInitiated?: boolean } = {}): Promise<void> {
-    if (!this.deps.settings.read().detached) return Promise.resolve();
-    this.open({ userInitiated: opts.userInitiated === true });
-    if (this.presentationReady) return Promise.resolve();
-    return new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        const idx = this.readyWaiters.findIndex((w) => w.timeout === timeout);
-        if (idx >= 0) this.readyWaiters.splice(idx, 1);
-        reject(new Error(`right-sidebar window ready timeout after ${READY_TIMEOUT_MS}ms`));
-      }, READY_TIMEOUT_MS);
-      this.readyWaiters.push({ resolve, reject, timeout });
+  async ensureOpenForAutomation(opts: { userInitiated?: boolean; sessionId?: string } = {}): Promise<void> {
+    if (!this.deps.settings.read().detached) return;
+    this.open({
+      userInitiated: opts.userInitiated === true,
+      ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
     });
+    if (!this.presentationReady) {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          const idx = this.readyWaiters.findIndex((w) => w.timeout === timeout);
+          if (idx >= 0) this.readyWaiters.splice(idx, 1);
+          reject(new Error(`right-sidebar window ready timeout after ${READY_TIMEOUT_MS}ms`));
+          if (opts.sessionId) this.releaseUnresolvedHostPin(opts.sessionId);
+        }, READY_TIMEOUT_MS);
+        this.readyWaiters.push({ resolve, reject, timeout, sessionId: opts.sessionId });
+      });
+    }
+    if (opts.sessionId) await this.waitForHostSession(opts.sessionId);
   }
 
   /** 主窗上报渲染上下文:缓存 + 窗口活跃就转发。 */
   setContext(ctx: RsbWindowContext): void {
-    const previousSessionId = this.lastContext?.sessionId ?? null;
-    this.lastContext = ctx;
-    if (!ctx.available || !ctx.sessionId) {
-      this.deferredCommands.clear();
-    } else if (previousSessionId !== ctx.sessionId) {
-      for (const sessionId of this.deferredCommands.keys()) {
-        if (sessionId !== ctx.sessionId) this.deferredCommands.delete(sessionId);
+    this.rememberContext(ctx);
+    this.lastReportedContext = ctx;
+    if (this.pinnedSessionId) {
+      if (ctx.available && ctx.sessionId === this.pinnedSessionId) {
+        this.clearPinnedSession();
+      } else if (ctx.available && ctx.sessionId) {
+        // 钉住中: 主窗切到别的焦点 session 不能把子窗口抢走。
+        this.pokeAdoptRetry(this.pinnedSessionId);
+        return;
+      } else {
+        const pinned = this.pinnedSessionId;
+        this.clearPinnedSession();
+        if (pinned) this.settleHostWaiters(pinned, false);
       }
     }
+    if (!ctx.available) this.cancelPendingOpen();
+    this.lastContext = ctx;
+    this.rememberLastHostSession(ctx, { onlyIfShowing: true });
+    this.revealPendingOpenIfHostReady();
     if (this.visible && this.winRef && !this.winRef.isDestroyed()) {
       this.deps.sendToWindow(this.winRef, this.deps.contextChannel, ctx);
     }
     this.flushDeferredCommandsToDetachedHost();
+    if (ctx.available && ctx.sessionId) {
+      this.settleHostWaiters(ctx.sessionId, true);
+      if (!this.deps.settings.read().detached) {
+        this.flushDeferredCommandsToAttachedHost(ctx.sessionId);
+      }
+    }
   }
 
   getContext(): RsbWindowContext | null {
@@ -367,25 +460,75 @@ export class RsbWindowController {
   async routeCommand(
     request: RsbWindowCommandRouteRequest,
   ): Promise<RsbWindowCommandRouteResult> {
-    const { command, allowOpen } = request;
+    const { allowOpen } = request;
+    // 子窗口执行开页时也需要原点击来源。只从既有路由信封派生一次，
+    // 与 command 一起经过现有排队/交接路径；不信任 command 内自报的来源。
+    const command: RsbWindowCommand = request.command.type === 'open-plugin-task'
+      ? { ...request.command, userInitiated: request.userInitiated === true }
+      : request.command;
     const userInitiated = request.userInitiated !== false;
     if (!this.deps.settings.read().detached) return 'attached';
-    if (!this.canDispatchCommand(command)) return 'stale-context';
-
-    const windowAlive = this.winRef && !this.winRef.isDestroyed();
-    if (!allowOpen && (!windowAlive || !this.presentationReady || !this.visible)) {
+    if (command.type === 'open-plugin-view') {
+      if (allowOpen) await this.ensureOpenForAutomation({ userInitiated });
+      if (!this.deps.settings.read().detached) return 'attached';
+      const win = this.winRef;
+      if (!win || win.isDestroyed() || !this.presentationReady || !this.visible) return 'stale-context';
+      this.deps.sendToWindow(win, this.deps.commandChannel, command);
+      return 'routed';
+    }
+    const hostSessionId = commandHostSessionId(command);
+    if (!allowOpen) {
+      const windowReady =
+        this.winRef &&
+        !this.winRef.isDestroyed() &&
+        this.presentationReady &&
+        this.visible;
+      if (windowReady && this.canDispatchCommand(command)) {
+        this.deps.sendToWindow(this.winRef!, this.deps.commandChannel, command);
+        return 'routed';
+      }
       this.enqueueDeferredCommand(command);
+      return 'queued';
+    }
+    const adopted = this.adoptHostSession(hostSessionId);
+    if (adopted) await adopted;
+    if (!this.stillOwnsHost(hostSessionId)) {
+      this.enqueueDeferredCommand(command);
+      return 'queued';
+    }
+    if (!this.canDispatchCommand(command)) {
+      this.enqueueDeferredCommand(command);
+      if (allowOpen && hostSessionId && this.pinnedSessionId === hostSessionId) {
+        if (!this.isOpen() || !this.presentationReady) {
+          this.open({
+            userInitiated,
+            sessionId: hostSessionId,
+          });
+        } else {
+          void this.waitForHostSession(hostSessionId).catch(() => {
+            // 窗口已可见时不会再走 open()；同样用有界 waiter 释放失败 pin。
+          });
+        }
+      }
       return 'queued';
     }
 
     if (allowOpen && (!this.isOpen() || !this.presentationReady)) {
+      const holdPin =
+        Boolean(hostSessionId) &&
+        this.lastContext?.available &&
+        this.lastContext.sessionId === hostSessionId &&
+        this.pinnedSessionId !== hostSessionId;
+      if (holdPin) this.pinnedSessionId = hostSessionId;
       try {
         await this.ensureOpenForAutomation({ userInitiated });
       } catch (err) {
+        if (holdPin && this.pinnedSessionId === hostSessionId) this.clearPinnedSession();
         if (!this.deps.settings.read().detached) return 'attached';
         if (!this.canDispatchCommand(command)) return 'stale-context';
         throw err;
       }
+      if (holdPin && this.pinnedSessionId === hostSessionId) this.clearPinnedSession();
     }
 
     if (!this.deps.settings.read().detached) return 'attached';
@@ -513,10 +656,20 @@ export class RsbWindowController {
   }
 
   private showWindow(win: BrowserWindow, shouldFocus: boolean): void {
+    if (this.pinnedSessionId && this.lastContext?.sessionId !== this.pinnedSessionId) {
+      this.pendingOpen = true;
+      this.pendingOpenShouldFocus = shouldFocus;
+      this.broadcast();
+      return;
+    }
     this.clearOpenTimeout();
     this.clearPrewarmTimeout();
     this.pendingOpen = false;
     this.pendingOpenShouldFocus = shouldFocus;
+    // 先同步 Host capability，再真正展示 renderer；保持 hidden 状态可确保同步
+    // 失败时只 fail-close 该缓存子窗口，不会误清当前主窗口 family。
+    this.deps.onWindowWillShow?.(win);
+    this.visible = true;
     if (win.isMinimized()) win.restore();
     win.webContents.setBackgroundThrottling(true);
     if (shouldFocus) {
@@ -525,12 +678,12 @@ export class RsbWindowController {
     } else {
       win.showInactive();
     }
-    this.visible = true;
     // lastOpen 由 open() 在外层写，这里只负责展示
     this.deps.sendToWindow(win, RSB_WINDOW_VISIBILITY_CHANGED_CHANNEL, { visible: true });
     // 隐藏复用期间的 passive 命令不能在用户看不见时改动子窗口 store；
     // 窗口重新显示后按原顺序统一交付。
     this.flushDeferredCommandsToDetachedHost();
+    if (this.lastContext) this.rememberLastHostSession(this.lastContext);
     this.broadcast();
   }
 
@@ -539,14 +692,16 @@ export class RsbWindowController {
     this.clearPrewarmTimeout();
     this.pendingOpen = false;
     this.pendingOpenShouldFocus = true;
-    if (win.isVisible()) win.hide();
     this.visible = false;
+    this.deps.onWindowHidden?.(win);
+    if (win.isVisible()) win.hide();
     try {
       this.deps.sendToWindow(win, RSB_WINDOW_VISIBILITY_CHANGED_CHANNEL, { visible: false });
     } catch {
       // 窗口可能在 isVisible 检查与 send 之间被系统销毁
     }
     this.deps.settings.writePatch({ lastOpen: false });
+    this.clearPinnedSession();
     this.broadcast();
     this.deps.log.info('right-sidebar window hidden');
   }
@@ -554,8 +709,19 @@ export class RsbWindowController {
   private onNativeVisibilityChanged(win: BrowserWindow, visible: boolean): void {
     if (win !== this.winRef || win.isDestroyed() || this.destroyingWindow || this.disposed) return;
     if (this.visible === visible && !this.pendingOpen) return;
-    this.visible = visible;
-    if (visible) this.pendingOpen = false;
+    // 原生 show / restore 可能绕过 showWindow；仍需在 renderer 收到 visible=true
+    // 之前完成同一轮 Host capability 同步。恢复时保持 hidden 到同步结束，失败
+    // 回退才只会清理该精确 WebContents；隐藏时则先退出可见 family 再暂停能力。
+    if (visible) {
+      this.deps.onWindowWillShow?.(win);
+      this.visible = true;
+      this.pendingOpen = false;
+      if (this.lastContext) this.rememberLastHostSession(this.lastContext);
+    } else {
+      this.visible = false;
+      this.deps.onWindowHidden?.(win);
+      this.clearPinnedSession();
+    }
     try {
       this.deps.sendToWindow(win, RSB_WINDOW_VISIBILITY_CHANGED_CHANNEL, { visible });
     } catch {
@@ -580,13 +746,16 @@ export class RsbWindowController {
     this.visible = false;
     this.pendingOpen = false;
     this.pendingOpenShouldFocus = true;
+    this.openFallbackExtended = false;
     this.destroyingWindow = false;
+    this.clearPinnedSession();
 
     const waiters = this.readyWaiters.splice(0);
     for (const w of waiters) {
       clearTimeout(w.timeout);
       w.reject(new Error('right-sidebar window closed before ready'));
     }
+    this.settleHostWaiters(null, false);
 
     if (this.deps.isQuitting()) return;
     this.deps.settings.writePatch({ lastOpen: false });
@@ -596,16 +765,32 @@ export class RsbWindowController {
 
   // ── 超时与恢复 ────────────────────────────────────────────────────
 
-  private scheduleOpenFallback(win: BrowserWindow): void {
+  private scheduleOpenFallback(win: BrowserWindow, resetExtension = true): void {
     this.clearOpenTimeout();
+    // 顺延是自我 re-arm,不得重置标志;外部重新打开(reload、新 open 周期)则给新一轮
+    // 一次顺延机会,晚到的自动化等待器仍能等满自身期限。
+    if (resetExtension) this.openFallbackExtended = false;
     this.openTimeout = setTimeout(() => {
       this.openTimeout = null;
       if (win !== this.winRef || win.isDestroyed() || !this.pendingOpen) return;
-      // renderer shell 未就绪时仍展示(loadURL 在 BrowserWindow 创建时就开始了,
-      // 5s 足够 Electron 完成 HTML 加载和 React 根挂载);即使只有 Loading 壳也是
-      // 可辨识的反馈,比永久不给用户任何反应好。
-      if (!this.rendererReady && !this.visible) {
-        this.deps.log.warn('right-sidebar open timed out before renderer-ready');
+      // 窗口规则 §3.1:超时只能展示已挂载的 Loading 壳。shell(rendererReady)未就绪
+      // 时展示可能是空白窗口;按资源用量窗口基线作废缓存并走有界恢复(重建重开),
+      // 恢复额度耗尽才放弃。仅 shell 就绪、内容未到时仍展示 Loading 壳。
+      if (!this.rendererReady) {
+        // 自动化/宿主 waiter(ready 握手、宿主会话)各自有界等待并假定窗口存活:
+        // 超时若有 waiter 在场则顺延一个周期再失效,避免提前拆窗把有界等待拒成
+        // 'closed before ready';每次外部重新打开可重置一次,持续有 waiter 时窗口
+        // 存活期仍以最长 waiter 期限为界,不会无限顺延。
+        if (
+          !this.openFallbackExtended
+          && (this.readyWaiters.length > 0 || this.hostWaiters.length > 0)
+        ) {
+          this.openFallbackExtended = true;
+          this.scheduleOpenFallback(win, false);
+          return;
+        }
+        this.invalidateWindow(win, 'renderer readiness timed out');
+        return;
       }
       if (!this.visible) this.showWindow(win, this.pendingOpenShouldFocus);
     }, DEFAULT_OPEN_TIMEOUT_MS);
@@ -660,7 +845,11 @@ export class RsbWindowController {
     if (shouldRestore) {
       this.pendingOpen = true;
     }
-    if (this.visible) win.hide();
+    if (this.visible) {
+      this.visible = false;
+      this.deps.onWindowHidden?.(win);
+      win.hide();
+    }
     win.webContents.setBackgroundThrottling(false);
     this.rendererReady = false;
     this.presentationReady = false;
@@ -765,6 +954,251 @@ export class RsbWindowController {
 
   // ── 命令路由辅助 ─────────────────────────────────────────────────
 
+  private adoptHostSession(sessionId: string, retrying = false): void | Promise<void> {
+    if (!sessionId) return;
+    if (!retrying && this.lastContext?.available && this.lastContext.sessionId === sessionId) {
+      // 已经在目标宿主上。再钉一次会挡住之后的 setContext。
+      // 若 pin 还钉着别人，当前宿主的新请求要先把它拆掉。
+      if (this.pinnedSessionId && this.pinnedSessionId !== sessionId) {
+        this.replacePinnedSession(null);
+      } else if (this.pinnedSessionId === sessionId) {
+        this.clearPinnedSession();
+      }
+      return;
+    }
+    if (this.pinnedSessionId !== sessionId) this.replacePinnedSession(sessionId);
+    const cached = this.knownContexts.get(sessionId);
+    // Bot ownership can change while this session is not focused. In particular,
+    // a cached canonical session may have become history, and a null owner may
+    // have been sent before the renderer's Bot profiles finished loading.
+    const needsFreshBotOwner = cached?.botOwner !== undefined && !!this.deps.resolveHostContext;
+    if (cached && !needsFreshBotOwner) {
+      this.applyAdoptedContext(cached);
+      return;
+    }
+    let pending: ReturnType<NonNullable<RsbWindowControllerDeps['resolveHostContext']>> | undefined;
+    try {
+      pending = this.deps.resolveHostContext?.(sessionId);
+    } catch {
+      this.finishAdoptHostSession(sessionId, null, cached, true);
+      return;
+    }
+    if (pending && typeof (pending as Promise<RsbWindowContext | null>).then === 'function') {
+      return Promise.resolve(pending).then(
+        (resolved) => {
+          if (this.disposed) return;
+          if (resolved) this.rememberContext(resolved);
+          if (this.pinnedSessionId !== sessionId) return;
+          this.finishAdoptHostSession(sessionId, resolved, cached);
+        },
+        () => {
+          if (this.disposed || this.pinnedSessionId !== sessionId) return;
+          this.finishAdoptHostSession(sessionId, null, cached, true);
+        },
+      );
+    }
+    this.finishAdoptHostSession(sessionId, (pending as RsbWindowContext | null | undefined) ?? null, cached);
+  }
+
+  private finishAdoptHostSession(
+    sessionId: string,
+    resolved: RsbWindowContext | null,
+    cached?: RsbWindowContext,
+    retryOnFailure = false,
+  ): void {
+    if (!resolved) {
+      if (cached) {
+        // Draft sessions may not be in the DB yet. Keep their usable host
+        // context, but never publish an unverified cached Bot owner.
+        this.applyAdoptedContext({ ...cached, botOwner: undefined });
+        if (retryOnFailure) this.scheduleAdoptRetry(sessionId);
+        else this.resetAdoptRetry();
+        return;
+      }
+      this.scheduleAdoptRetry(sessionId);
+      return;
+    }
+    this.resetAdoptRetry();
+    this.rememberContext(resolved);
+    this.applyAdoptedContext(resolved);
+  }
+
+  private pokeAdoptRetry(sessionId: string): void {
+    if (this.disposed || this.pinnedSessionId !== sessionId) return;
+    if (this.lastContext?.available && this.lastContext.sessionId === sessionId) return;
+    if (this.adoptRetryAttempts >= MAX_ADOPT_RESOLVE_RETRIES) {
+      this.adoptRetryAttempts = MAX_ADOPT_RESOLVE_RETRIES - 1;
+    }
+    this.scheduleAdoptRetry(sessionId);
+  }
+
+  private scheduleAdoptRetry(sessionId: string): void {
+    if (this.disposed || this.pinnedSessionId !== sessionId) return;
+    this.clearAdoptRetryTimer();
+    this.adoptRetryAttempts += 1;
+    const delay =
+      this.adoptRetryAttempts > MAX_ADOPT_RESOLVE_RETRIES
+        ? ADOPT_RESOLVE_SLOW_RETRY_MS
+        : ADOPT_RESOLVE_RETRY_MS;
+    this.adoptRetryTimer = setTimeout(() => {
+      this.adoptRetryTimer = null;
+      if (this.disposed || this.pinnedSessionId !== sessionId) return;
+      void this.adoptHostSession(sessionId, true);
+    }, delay);
+  }
+
+  private clearAdoptRetryTimer(): void {
+    if (!this.adoptRetryTimer) return;
+    clearTimeout(this.adoptRetryTimer);
+    this.adoptRetryTimer = null;
+  }
+
+  private resetAdoptRetry(): void {
+    this.clearAdoptRetryTimer();
+    this.adoptRetryAttempts = 0;
+  }
+
+  private rememberContext(ctx: RsbWindowContext): void {
+    if (!ctx.available || !ctx.sessionId) return;
+    if (this.knownContexts.size >= MAX_KNOWN_CONTEXTS && !this.knownContexts.has(ctx.sessionId)) {
+      const oldest = this.knownContexts.keys().next().value as string | undefined;
+      if (oldest) this.knownContexts.delete(oldest);
+    }
+    this.knownContexts.set(ctx.sessionId, ctx);
+  }
+
+  private applyAdoptedContext(next: RsbWindowContext): void {
+    this.lastContext = next;
+    this.rememberLastHostSession(next);
+    this.submitHostContext();
+    this.revealPendingOpenIfHostReady();
+    this.flushDeferredCommandsToDetachedHost();
+    this.settleHostWaiters(next.sessionId, true);
+  }
+
+  private submitHostContext(): void {
+    if (!this.lastContext || !this.winRef || this.winRef.isDestroyed()) return;
+    if (!this.presentationReady) return;
+    this.deps.sendToWindow(this.winRef, this.deps.contextChannel, this.lastContext);
+  }
+
+  private revealPendingOpenIfHostReady(): void {
+    if (
+      !this.pendingOpen ||
+      !this.winRef ||
+      this.winRef.isDestroyed() ||
+      !this.presentationReady
+    ) {
+      return;
+    }
+    if (this.pinnedSessionId && this.lastContext?.sessionId !== this.pinnedSessionId) return;
+    this.showWindow(this.winRef, this.pendingOpenShouldFocus);
+  }
+
+  private waitForHostSession(sessionId: string): Promise<void> {
+    if (this.lastContext?.available && this.lastContext.sessionId === sessionId) {
+      this.adoptHostSession(sessionId);
+      return Promise.resolve();
+    }
+    const adopted = this.adoptHostSession(sessionId);
+    if (adopted) {
+      return adopted.then(() => {
+        if (this.lastContext?.available && this.lastContext.sessionId === sessionId) return;
+        if (this.pinnedSessionId !== sessionId) {
+          return Promise.reject(new Error('right-sidebar host context wait cancelled'));
+        }
+        return this.queueHostWaiter(sessionId);
+      });
+    }
+    if (this.lastContext?.available && this.lastContext.sessionId === sessionId) {
+      return Promise.resolve();
+    }
+    return this.queueHostWaiter(sessionId);
+  }
+
+  private queueHostWaiter(sessionId: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        const idx = this.hostWaiters.findIndex((w) => w.timeout === timeout);
+        if (idx >= 0) this.hostWaiters.splice(idx, 1);
+        reject(new Error(`right-sidebar host context not ready for ${sessionId}`));
+        this.releaseUnresolvedHostPin(sessionId);
+      }, READY_TIMEOUT_MS);
+      this.hostWaiters.push({ sessionId, resolve, reject, timeout });
+    });
+  }
+
+  private releaseUnresolvedHostPin(sessionId: string): void {
+    if (this.pinnedSessionId !== sessionId) return;
+    if (this.hostWaiters.some((waiter) => waiter.sessionId === sessionId)) return;
+    if (this.readyWaiters.some((waiter) => waiter.sessionId === sessionId)) return;
+    this.clearPinnedSession();
+    this.cancelPendingOpen();
+  }
+
+  private settleHostWaiters(sessionId: string | null, ok: boolean): void {
+    if (this.hostWaiters.length === 0) return;
+    const remaining: typeof this.hostWaiters = [];
+    for (const waiter of this.hostWaiters) {
+      if (sessionId && waiter.sessionId !== sessionId) {
+        remaining.push(waiter);
+        continue;
+      }
+      clearTimeout(waiter.timeout);
+      if (ok) waiter.resolve();
+      else waiter.reject(new Error('right-sidebar host context wait cancelled'));
+    }
+    this.hostWaiters = remaining;
+  }
+
+  private rememberLastHostSession(
+    ctx: RsbWindowContext,
+    opts: { onlyIfShowing?: boolean } = {},
+  ): void {
+    if (opts.onlyIfShowing && !this.visible && !this.pendingOpen) return;
+    if (!ctx.available || !ctx.sessionId) return;
+    if (this.lastHostSessionId === ctx.sessionId) return;
+    this.lastHostSessionId = ctx.sessionId;
+    this.broadcast();
+  }
+
+  private clearPinnedSession(): void {
+    this.resetAdoptRetry();
+    this.pinnedSessionId = null;
+  }
+
+  private replacePinnedSession(next: string | null): void {
+    const previous = this.pinnedSessionId;
+    if (previous && previous !== next) {
+      this.settleHostWaiters(previous, false);
+      this.rejectReadyWaiters(previous);
+    }
+    this.resetAdoptRetry();
+    this.pinnedSessionId = next;
+  }
+
+  private rejectReadyWaiters(sessionId?: string): void {
+    if (this.readyWaiters.length === 0) return;
+    const remaining: typeof this.readyWaiters = [];
+    for (const waiter of this.readyWaiters) {
+      if (sessionId && waiter.sessionId !== sessionId) {
+        remaining.push(waiter);
+        continue;
+      }
+      clearTimeout(waiter.timeout);
+      waiter.reject(new Error('right-sidebar host context wait cancelled'));
+    }
+    this.readyWaiters = remaining;
+  }
+
+  private stillOwnsHost(sessionId: string): boolean {
+    if (!sessionId) return false;
+    return (
+      this.pinnedSessionId === sessionId ||
+      Boolean(this.lastContext?.available && this.lastContext.sessionId === sessionId)
+    );
+  }
+
   private canDispatchCommand(cmd: RsbWindowCommand): boolean {
     return Boolean(
       this.lastContext?.available &&
@@ -831,8 +1265,8 @@ export class RsbWindowController {
   private flushDeferredCommands(
     isHostAlive: () => boolean,
     send: (command: RsbWindowCommand) => void,
+    sessionId = this.lastContext?.available ? this.lastContext.sessionId : null,
   ): void {
-    const sessionId = this.lastContext?.available ? this.lastContext.sessionId : null;
     if (!sessionId) return;
     const queue = this.deferredCommands.get(sessionId);
     if (!queue || queue.length === 0) return;
@@ -873,19 +1307,37 @@ export class RsbWindowController {
     );
   }
 
-  private flushDeferredCommandsToAttachedHost(): void {
+  private flushDeferredCommandsToAttachedHost(sessionId?: string | null): void {
     if (this.deps.settings.read().detached) return;
     const main = this.deps.getMainWindow();
     if (!main || main.isDestroyed()) return;
+    const focusedSessionId =
+      sessionId ??
+      (this.lastReportedContext?.available ? this.lastReportedContext.sessionId : null);
     this.flushDeferredCommands(
       () => !main.isDestroyed(),
       (command) => this.deps.sendToWindow(main, this.deps.commandChannel, command),
+      focusedSessionId,
     );
   }
 
-  private broadcast(): void {
+  private broadcast(opts: { userClose?: boolean } = {}): void {
     const s = this.deps.settings.read();
     // pendingOpen:窗口已创建但等待 presentation-ready,从调用方视角视为 open。
-    this.deps.broadcastState({ detached: s.detached, open: this.isOpen() || this.pendingOpen });
+    this.deps.broadcastState({
+      detached: s.detached,
+      open: this.isOpen() || this.pendingOpen,
+      ...(this.lastHostSessionId ? { hostSessionId: this.lastHostSessionId } : {}),
+      ...(opts.userClose === false ? { userClose: false } : {}),
+    });
+  }
+
+  private cancelPendingOpen(): void {
+    const advertisedPending = this.pendingOpen && !this.visible;
+    this.pendingOpen = false;
+    this.pendingOpenShouldFocus = true;
+    this.clearOpenTimeout();
+    this.rejectReadyWaiters();
+    if (advertisedPending) this.broadcast({ userClose: false });
   }
 }

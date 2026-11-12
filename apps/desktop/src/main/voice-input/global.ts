@@ -18,13 +18,19 @@ import {
 } from '@cindy/voice-input-core';
 
 import { markAppearanceSettingsReaderWindow } from '../appearance-settings-reader.js';
+import { markMicrophonePermissionReaderWindow } from './microphonePermissionIpc.js';
 import { createLogger } from '../logger.js';
+import { acquireOverlayEscape } from '../overlayEscape.js';
 import { scheduleMainAppPresenceRestore } from '../appPresence.js';
 import { openMainWindowVoiceSettings } from '../deepLink.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { onQuit } from '../lifecycle.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
-import { prewarmVoiceInputProvider } from './index.js';
+import {
+  canGlobalVoiceInputOverlayStartDictation,
+  onVoiceInputReady,
+  prewarmVoiceInputProvider,
+} from './index.js';
 import {
   VOICE_INPUT_DICTIONARY_LEARNING_TRACK_TIMEOUT_MS,
 } from '../../shared/voiceInputDictionaryLearning.js';
@@ -53,11 +59,20 @@ import {
 import { voiceInputOverlayPositionStore } from './overlayPositionStore.js';
 import { voiceInputDataStore } from './VoiceInputDataStore.js';
 import { installWindowHiddenBroadcast } from '../windowHiddenBroadcast.js';
+import {
+  resolveNativeVoiceActivation,
+  type NativeVoiceActivationSource,
+} from './nativeVoiceActivation.js';
+import {
+  assertHelperCommandSucceeded,
+  waitForSpawnedProcess,
+} from './macHelperProcess.js';
 
 const log = createLogger('voice-input-global');
 type GlobalVoiceInputShortcutPhase = 'start' | 'tap' | 'end';
 
 const modifierShortcutRecordingWebContentsIds = new Set<number>();
+const modifierShortcutRecordingCleanupWebContentsIds = new Set<number>();
 /**
  * 正在录制快捷键的 renderer —— 与上面那个「keys 转发名单」是两件事。
  *
@@ -69,6 +84,7 @@ const modifierShortcutRecordingWebContentsIds = new Set<number>();
  */
 const modifierShortcutRecordingSessionIds = new Set<number>();
 const activeInlineVoiceInputWebContentsIds = new Set<number>();
+const activeInlineVoiceInputCleanupWebContentsIds = new Set<number>();
 
 /**
  * 有任何窗口的快捷键录制框开着时，全局快捷键的**新激活**一律丢弃。
@@ -91,32 +107,29 @@ function hasActiveShortcutRecordingSession(): boolean {
 }
 
 /**
- * 上一次 native 激活的 start 有没有真的投递到下游。
+ * Which native source currently owns the overlay start/end pair.
  *
- * listener 的 triggered / end 是它自己的内部时序，与这里的投递层抑制无关：被上面那条守卫挡掉的
- * start，用户按住超过阈值再松手时照样会给出一条 end（endActiveTriggerIfNeeded 补发的那条同理）。
- * 而 end 在下游就是「停止并提交」—— 一个正在跑的 inline 语音输入会话会被这条**没有配对 start**
- * 的 end 直接提交掉，而用户只是按了一下本该被吞掉的键。
- *
- * 所以 end 的投递条件是「配对的 start 投递过没有」。这也覆盖了录制框已经关掉、end 才姗姗来迟的
- * 情形 —— 那时录制守卫早就不生效了，只有配对关系还算数。
+ * Hardware and the system shortcut share this overlay. The pairing is per
+ * source so one side's start or end cannot submit or drop the other.
  */
-let nativeActivationStartDelivered = false;
+let nativeActivationOwner: NativeVoiceActivationSource | null = null;
 
-function handleNativeGlobalShortcutPhase(phase: GlobalVoiceInputShortcutPhase): void {
-  if (phase !== 'end' && hasActiveShortcutRecordingSession()) {
-    // 挡掉 start 就等于这次激活在下游不存在，它后面那条配对的 end 也必须一起挡掉。
-    if (phase === 'start') nativeActivationStartDelivered = false;
-    log.debug('ignoring native global shortcut activation while recording', { phase });
+function handleNativeGlobalShortcutPhase(
+  phase: GlobalVoiceInputShortcutPhase,
+  source: NativeVoiceActivationSource = 'shortcut',
+): void {
+  const next = resolveNativeVoiceActivation(
+    nativeActivationOwner,
+    phase,
+    source,
+    hasActiveShortcutRecordingSession(),
+  );
+  nativeActivationOwner = next.owner;
+  if (!next.deliver) {
+    log.debug('ignoring native voice activation', { phase, source });
     return;
   }
-  if (phase === 'end' && !nativeActivationStartDelivered) {
-    log.debug('ignoring native global shortcut end without a delivered start');
-    return;
-  }
-  // tap 没有配对的 end；end 到这里就算消费掉了。两种都把配对状态清干净。
-  nativeActivationStartDelivered = phase === 'start';
-  log.debug('native global shortcut triggered', { phase });
+  log.debug('native global shortcut triggered', { phase, source });
   if (phase === 'tap') {
     handleGlobalVoiceInputShortcutTap();
   } else if (phase === 'start') {
@@ -161,6 +174,11 @@ const windowsFunctionKeyShortcutListener = new WindowsFunctionKeyShortcutListene
 export function releaseActiveGlobalVoiceInputShortcut(): void {
   macModifierShortcutListener.releaseActiveTrigger();
   windowsFunctionKeyShortcutListener.releaseActiveTrigger();
+}
+
+/** Drive the existing global overlay from hardware, using the same phases as the system shortcut. */
+export function triggerGlobalVoiceInputFromHardware(phase: GlobalVoiceInputShortcutPhase): void {
+  handleNativeGlobalShortcutPhase(phase, 'hardware');
 }
 
 type VoiceInputGlobalResult =
@@ -284,8 +302,9 @@ const OVERLAY_SNAP_THRESHOLD_X = 48;
 // 也不让浮窗出现明显延迟；答案迟到时不再挪窗，避免可见的跨屏跳动。
 const OVERLAY_FOCUSED_DISPLAY_DEADLINE_MS = 90;
 const DICTIONARY_TOAST_QUERY = 'view=voice-input-dictionary-toast';
-const DICTIONARY_TOAST_CARD_WIDTH = 360;
-const DICTIONARY_TOAST_CARD_ESTIMATED_HEIGHT = 68;
+// Reserve the maximum card width; the renderer shrink-wraps shorter terms.
+const DICTIONARY_TOAST_CARD_WIDTH = 400;
+const DICTIONARY_TOAST_CARD_ESTIMATED_HEIGHT = 44;
 const DICTIONARY_TOAST_SHADOW_PADDING = 34;
 const DICTIONARY_TOAST_WIDTH = DICTIONARY_TOAST_CARD_WIDTH + DICTIONARY_TOAST_SHADOW_PADDING * 2;
 const DICTIONARY_TOAST_HEIGHT = DICTIONARY_TOAST_CARD_ESTIMATED_HEIGHT + DICTIONARY_TOAST_SHADOW_PADDING * 2;
@@ -322,7 +341,7 @@ let registeredAccelerator: string | null = null;
 let registeredShortcut: VoiceInputShortcut | null = null;
 let registeredNativeShortcutLabel: string | null = null;
 let registeredNativeShortcutKey: string | null = null;
-let overlayCancelRegistered = false;
+let releaseOverlayCancel: (() => void) | null = null;
 let overlayWindow: BrowserWindow | null = null;
 let overlayLoaded = false;
 let overlayPresentationActive = false;
@@ -442,6 +461,11 @@ let pendingFocusedWindowShortcutClaim: {
   modifierEndQueued?: boolean;
   modifierTapQueued?: boolean;
 } | null = null;
+// Each prewarm attempt awaits the readiness gate; a newer attempt supersedes it.
+let overlayPrewarmAttempt = 0;
+// Set when a prewarm was skipped for lack of a dictation path; the next ready
+// readiness refresh retries once.
+let overlayPrewarmSkippedUntilReady = false;
 
 /**
  * Pre-create the overlay BrowserWindow + renderer at idle time so the first
@@ -449,17 +473,43 @@ let pendingFocusedWindowShortcutClaim: {
  * start cost. The hidden window is kept in an explicit idle presentation state;
  * otherwise macOS can restore it when the app is activated by unrelated menu
  * shortcuts such as Cmd+,.
+ *
+ * Local and signed-out profiles without a ready dictation path skip the warm
+ * renderer: the shortcut can only show a setup error there. The skip is
+ * remembered, and the next readiness refresh that finds a startable path
+ * (configuring user credentials, signing in) prewarms again, so a usable
+ * profile does not keep the cold first press. A press before that still opens
+ * the existing cold path.
  */
 export function prewarmGlobalVoiceInputOverlay(): void {
-  const shortcutLabel = registeredAccelerator ?? registeredNativeShortcutLabel;
-  if (!shortcutLabel) return;
+  if (!(registeredAccelerator ?? registeredNativeShortcutLabel)) return;
   if (getOverlayWindow()) return;
-  const window = createOverlayWindow(Date.now());
-  setOverlayIdlePresentationState(window);
-  log.info('global overlay prewarmed', {
-    shortcut: shortcutLabel,
-    windowId: window.id,
+  const attempt = ++overlayPrewarmAttempt;
+  void canGlobalVoiceInputOverlayStartDictation().then((canStart) => {
+    if (attempt !== overlayPrewarmAttempt) return;
+    const shortcutLabel = registeredAccelerator ?? registeredNativeShortcutLabel;
+    if (!shortcutLabel || getOverlayWindow()) return;
+    if (!canStart) {
+      overlayPrewarmSkippedUntilReady = true;
+      log.info('global overlay prewarm skipped: no ready dictation path', { shortcut: shortcutLabel });
+      return;
+    }
+    overlayPrewarmSkippedUntilReady = false;
+    const window = createOverlayWindow(Date.now());
+    setOverlayIdlePresentationState(window);
+    log.info('global overlay prewarmed', {
+      shortcut: shortcutLabel,
+      windowId: window.id,
+    });
   });
+}
+
+function prewarmGlobalVoiceInputOverlayAfterReady(): void {
+  if (!overlayPrewarmSkippedUntilReady) return;
+  // Consume the flag first: the prewarm below refreshes readiness again, and
+  // its own ready notification must not re-enter this path.
+  overlayPrewarmSkippedUntilReady = false;
+  setImmediate(() => prewarmGlobalVoiceInputOverlay());
 }
 
 export function isGlobalVoiceInputOverlayVisible(): boolean {
@@ -641,10 +691,13 @@ async function classifyMacNativeListenerFailure(): Promise<VoiceInputGlobalError
 
 export function registerActiveInlineVoiceInputWebContents(sender: WebContents): void {
   if (isGlobalVoiceInputOverlaySender(sender)) return;
-  if (activeInlineVoiceInputWebContentsIds.has(sender.id)) return;
   activeInlineVoiceInputWebContentsIds.add(sender.id);
+  if (activeInlineVoiceInputCleanupWebContentsIds.has(sender.id)) return;
+  const webContentsId = sender.id;
+  activeInlineVoiceInputCleanupWebContentsIds.add(webContentsId);
   sender.once('destroyed', () => {
-    activeInlineVoiceInputWebContentsIds.delete(sender.id);
+    activeInlineVoiceInputCleanupWebContentsIds.delete(webContentsId);
+    activeInlineVoiceInputWebContentsIds.delete(webContentsId);
   });
 }
 
@@ -1002,14 +1055,28 @@ async function recoverPendingNativeShortcutRegistration(): Promise<void> {
 function markModifierShortcutRecordingSession(sender: WebContents): void {
   if (modifierShortcutRecordingSessionIds.has(sender.id)) return;
   modifierShortcutRecordingSessionIds.add(sender.id);
+  registerModifierShortcutRecordingCleanup(sender);
+}
+
+function registerModifierShortcutRecordingCleanup(sender: WebContents): void {
+  if (modifierShortcutRecordingCleanupWebContentsIds.has(sender.id)) return;
+  const webContentsId = sender.id;
+  modifierShortcutRecordingCleanupWebContentsIds.add(webContentsId);
   sender.once('destroyed', () => {
-    modifierShortcutRecordingSessionIds.delete(sender.id);
+    modifierShortcutRecordingCleanupWebContentsIds.delete(webContentsId);
+    modifierShortcutRecordingSessionIds.delete(webContentsId);
+    modifierShortcutRecordingWebContentsIds.delete(webContentsId);
+    if (modifierShortcutRecordingWebContentsIds.size === 0) {
+      macModifierShortcutListener.stopKeyCapture();
+    }
   });
 }
 
 export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void {
   if (registered) return;
   registered = true;
+
+  onVoiceInputReady(prewarmGlobalVoiceInputOverlayAfterReady);
 
   // 从系统设置切回 Cindy 就会走到这里 —— 这正是用户刚打开开关的那一刻，且与设置页开着
   // 没关系。设置页自己那条权限 effect 保留：它还负责录制期只补 Fn capture 那条路。
@@ -1133,12 +1200,6 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
       // 录制会话在**尝试之前**就登记：capture 起不起来都不影响「用户正在录」这个事实。
       // （显式挂起时其实已经登记过了，这里幂等补一次，不依赖调用顺序。）
       markModifierShortcutRecordingSession(event.sender);
-      event.sender.once('destroyed', () => {
-        modifierShortcutRecordingWebContentsIds.delete(event.sender.id);
-        if (modifierShortcutRecordingWebContentsIds.size === 0) {
-          macModifierShortcutListener.stopKeyCapture();
-        }
-      });
       // 走 startMacNativeListener：startKeyCapture 也会抛（helper 源码缺失 / swiftc
       // 失败）。不接住的话下面的清理与 errorCode 分类都跑不到，本 renderer 会留在
       // 转发名单里、原始路径还会过桥给它。
@@ -2186,23 +2247,21 @@ function cancelExternalDictionaryLearningWatch(): void {
 }
 
 function registerOverlayCancelShortcut(): void {
-  if (overlayCancelRegistered) return;
-  const ok = globalShortcut.register(OVERLAY_CANCEL_ACCELERATOR, () => {
+  if (releaseOverlayCancel) return;
+  releaseOverlayCancel = acquireOverlayEscape(() => {
     const overlay = getOverlayWindow();
     if (!overlay) return;
     overlay.webContents.send('voice-input:global-overlay-command', { type: 'cancel' });
   });
-  if (!ok) {
+  if (!releaseOverlayCancel) {
     log.warn('overlay cancel shortcut registration failed', { accelerator: OVERLAY_CANCEL_ACCELERATOR });
     return;
   }
-  overlayCancelRegistered = true;
 }
 
 function unregisterOverlayCancelShortcut(): void {
-  if (!overlayCancelRegistered) return;
-  globalShortcut.unregister(OVERLAY_CANCEL_ACCELERATOR);
-  overlayCancelRegistered = false;
+  releaseOverlayCancel?.();
+  releaseOverlayCancel = null;
 }
 
 async function showOverlayWindow(shortcutInvokedAt = Date.now()): Promise<void> {
@@ -2282,6 +2341,7 @@ function createOverlayWindow(shortcutInvokedAt: number): BrowserWindow {
   });
 
   markAppearanceSettingsReaderWindow(window);
+  markMicrophonePermissionReaderWindow(window);
   overlayWindow = window;
   overlayLoaded = false;
   // 浮窗建窗即 backgroundThrottling:false(保住麦克风回调调度),它的 Renderer 也装了
@@ -2418,6 +2478,7 @@ function createDictionaryToastWindow(payload: DictionaryToastPayload): BrowserWi
   });
 
   markAppearanceSettingsReaderWindow(window);
+  markMicrophonePermissionReaderWindow(window);
   window.once('closed', () => {
     if (dictionaryToastWindow === window) dictionaryToastWindow = null;
     if (dictionaryToastCloseTimer) {
@@ -3661,6 +3722,27 @@ async function runMacTextInsertionHelper(
       `Invalid helper response: ${error instanceof Error ? error.message : String(error)}. Stdout bytes: ${stdout.length}.`,
     );
   }
+}
+
+export async function runMacTextInsertionHelperCommand(
+  args: string[],
+  options?: { input?: string; timeoutMs?: number },
+): Promise<MacTextInsertionHelperResult> {
+  const result = await runMacTextInsertionHelper(args, options);
+  assertHelperCommandSucceeded(result);
+  return result;
+}
+
+export async function spawnMacTextInsertionHelper(args: string[]) {
+  const helperPath = await resolveMacTextInsertionHelperPath();
+  return waitForSpawnedProcess(
+    spawn(helperPath, args, { stdio: ['pipe', 'ignore', 'pipe'] }),
+    (error) => {
+      log.warn('macOS text insertion helper failed after spawn', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  );
 }
 
 /** 取 stdout 的最后一行 JSON 作为命令结果（前面的行是流式进度事件）。 */

@@ -1,10 +1,74 @@
-import type { ProviderRuntimeModelConfig, ProviderWireProtocol } from './types.js';
+import type { PiModelApi, ProviderRuntimeModelConfig, ProviderWireProtocol } from './types.js';
 
-/** Pi treats an omitted wire protocol as its effective OpenAI Chat default. */
+/** Preserve omission as a distinct state: Pi has no implicit protocol default. */
 export function effectivePiWireProtocol(
   value: ProviderWireProtocol | undefined,
-): ProviderWireProtocol {
-  return value ?? 'openai-chat';
+): ProviderWireProtocol | undefined {
+  return value;
+}
+
+type HttpBridgeWireProtocol = Exclude<ProviderWireProtocol, 'google-generative-ai'>;
+
+interface PiProtocolModelLike {
+  api?: PiModelApi;
+  piApi?: PiModelApi;
+  route?: { baseUrl?: string; wireProtocol: ProviderWireProtocol; requestPath?: string };
+}
+
+export interface ResolvedPiModelRoute {
+  baseUrl: string;
+  wireProtocol: HttpBridgeWireProtocol;
+  requestPath?: string;
+}
+
+/**
+ * Resolve the portable Pi model API to the provider wire protocol used by host-side probes and
+ * visual requests. A model override is authoritative over a route/provider default. Google uses
+ * a native Pi SDK surface that these HTTP bridges do not implement, so it fails closed here.
+ */
+export function resolvePiModelWireProtocol(
+  model: PiProtocolModelLike | undefined,
+  providerDefault: ProviderWireProtocol | undefined,
+): HttpBridgeWireProtocol | null {
+  switch (model?.api ?? model?.piApi) {
+    case 'anthropic-messages':
+      return 'anthropic-messages';
+    case 'openai-responses':
+      return 'openai-responses';
+    case 'openai-completions':
+      return 'openai-chat';
+    case 'google-generative-ai':
+    case 'bedrock-converse-stream':
+    case 'azure-openai-responses':
+    case 'google-vertex':
+    case 'mistral-conversations':
+      return null;
+    default: {
+      const wire = model?.route?.wireProtocol ?? providerDefault;
+      return wire === 'google-generative-ai' ? null : wire ?? null;
+    }
+  }
+}
+
+/** Resolve the effective HTTP target as one unit so protocol and endpoint cannot drift apart. */
+export function resolvePiModelRoute(
+  model: PiProtocolModelLike | undefined,
+  providerDefault: { baseUrl: string; wireProtocol: ProviderWireProtocol | undefined },
+): ResolvedPiModelRoute | null {
+  const wireProtocol = resolvePiModelWireProtocol(model, providerDefault.wireProtocol);
+  if (!wireProtocol) return null;
+  const modelRouteMatchesProtocol = model?.route?.wireProtocol === wireProtocol;
+  return {
+    // An explicit portable override is authoritative. Legacy configs may pair it with a stale
+    // route from the previous protocol; only reuse that endpoint when the route still agrees.
+    baseUrl: modelRouteMatchesProtocol
+      ? (model.route?.baseUrl ?? providerDefault.baseUrl)
+      : providerDefault.baseUrl,
+    wireProtocol,
+    ...(modelRouteMatchesProtocol && model.route?.requestPath
+      ? { requestPath: model.route.requestPath }
+      : {}),
+  };
 }
 
 function projectedPiCatalogFields(model: ProviderRuntimeModelConfig): object {

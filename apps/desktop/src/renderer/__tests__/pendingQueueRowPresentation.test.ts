@@ -1,4 +1,7 @@
+// @vitest-environment jsdom
+import { appendPendingQueueItems } from '@/components/chat/pendingQueueItems';
 import { describe, expect, it } from 'vitest';
+import { i18n } from '@/i18n';
 
 import {
   CONTINUE_AFTER_APP_EXIT_PROMPT,
@@ -7,6 +10,7 @@ import {
 import {
   getPendingQueueRowPresentation,
   resolvePendingQueueEditSubmission,
+  resolveSoleSteerableQueuedMessage,
 } from '@/components/new-chat/pendingQueueRowPresentation';
 import type { QueuedMessage } from '@/lib/makerChatStore';
 
@@ -41,7 +45,72 @@ function queuedMessage(patch: Partial<QueuedMessage> = {}): QueuedMessage {
 }
 
 describe('getPendingQueueRowPresentation', () => {
-  it('uses orca sender and display text while disabling edit and steer actions', () => {
+  it('allows messages sent by another session to steer without editing their source', () => {
+    const presentation = getPendingQueueRowPresentation(
+      queuedMessage({
+        text: 'follow-up',
+        persistedContent: 'follow-up',
+        origin: {
+          kind: 'session',
+          senderSessionId: 'caller',
+          displayText: 'follow-up',
+          senderSessionTitle: 'Release checklist',
+        },
+      }),
+    );
+
+    expect(presentation).toMatchObject({
+      isSession: true,
+      isPlugin: false,
+      isOrca: false,
+      isScheduler: false,
+      senderLabel: 'Release checklist',
+      displayText: 'follow-up',
+      canEdit: false,
+      canSteer: true,
+    });
+    expect(
+      getPendingQueueRowPresentation(
+        queuedMessage({ origin: { kind: 'session', senderSessionId: 'caller', displayText: 'x' } }),
+      ).senderLabel,
+    ).toBeNull();
+    expect(
+      getPendingQueueRowPresentation(
+        queuedMessage({
+          origin: {
+            kind: 'session',
+            senderSessionId: 'bot-task',
+            displayText: 'x',
+            senderSessionTitle: 'Weekly feedback',
+            senderBotId: 'bot-1',
+            senderBotName: 'Cindy',
+          },
+        }),
+      ),
+    ).toMatchObject({ isSession: true, senderLabel: 'Cindy', senderBotId: 'bot-1' });
+  });
+
+  it('shows the message text, not the host envelope, for session items with attachments', () => {
+    const origin = { kind: 'session' as const, senderSessionId: 'caller', displayText: 'see attached' };
+    expect(
+      getPendingQueueRowPresentation(
+        queuedMessage({
+          text: 'see attached',
+          persistedContent: JSON.stringify({ text: 'see attached', images: [], files: [{ name: 'a.txt', path: '/a.txt' }] }),
+          files: [{ name: 'a.txt', path: '/a.txt', category: 'file' } as never],
+          origin,
+        }),
+      ).displayText,
+    ).toBe('see attached');
+    // Without attachments a literal JSON message stays verbatim.
+    expect(
+      getPendingQueueRowPresentation(
+        queuedMessage({ text: '{"text":"x"}', persistedContent: '{"text":"x"}', origin }),
+      ).displayText,
+    ).toBe('{"text":"x"}');
+  });
+
+  it('uses orca sender and display text, keeping steer but disabling edit', () => {
     const presentation = getPendingQueueRowPresentation(
       queuedMessage({
         text: '[orca protocol text]',
@@ -56,18 +125,35 @@ describe('getPendingQueueRowPresentation', () => {
     expect(presentation).toEqual({
       isOrca: true,
       isScheduler: false,
+      isSession: false,
+      isPlugin: false,
+      senderBotId: null,
       senderLabel: 'reviewer',
       displayText: '请看一下这个结论',
+      rangedSourceText: null,
       isSyntheticTrigger: false,
       syntheticKind: null,
       canEdit: false,
-      canSteer: false,
+      canSteer: true,
     });
+  });
+
+  // 回归：批次 origin 即使带首个 Worker 的名字，也必须保留总数与正文（unit）。
+  it('counts system batches without changing their content or permissions', () => {
+    const body = 'Worker A (worker-1): done\nA full report\nWorker B (worker-2): error\nB full report';
+    const origin = { kind: 'orca' as const, senderLabel: 'A', senderSessionId: 'worker-1', displayText: body };
+    const presentation = getPendingQueueRowPresentation(queuedMessage({ origin }));
+    expect(presentation.senderLabel).toBe('A');
+    const batch = getPendingQueueRowPresentation(queuedMessage({
+      origin: { ...origin, autoBridge: true, autoBridgeBatchCount: 2 },
+    }));
+    expect(batch).toEqual({ ...presentation,
+      senderLabel: i18n.t('chat.userMessage.orcaFromWorkerBatch', { count: 2 }), displayText: body });
   });
 
   it('marks scheduler heartbeat rows with schedule name, hides silent-run suffix, locks edit/steer', () => {
     // 撞忙排队的心跳:text 带隐藏静默协议后缀,展示用 persistedContent(原始 prompt);
-    // 机器生成 → 保留重排/删除,禁编辑/steer(与 orca 同规)。
+    // 机器生成 → 保留重排/删除,禁编辑/steer。
     const presentation = getPendingQueueRowPresentation(
       queuedMessage({
         text: 'PR #971 heartbeat prompt\n\n---\n[Silent scheduled run]\n...',
@@ -83,8 +169,12 @@ describe('getPendingQueueRowPresentation', () => {
     expect(presentation).toEqual({
       isOrca: false,
       isScheduler: true,
+      isSession: false,
+      isPlugin: false,
+      senderBotId: null,
       senderLabel: 'PR #971 心跳',
       displayText: 'PR #971 heartbeat prompt',
+      rangedSourceText: null,
       isSyntheticTrigger: false,
       syntheticKind: null,
       canEdit: false,
@@ -104,6 +194,69 @@ describe('getPendingQueueRowPresentation', () => {
     );
 
     expect(presentation.displayText).toBe('raw queued text');
+  });
+
+  it('marks plugin-dispatched rows as read-only rows named after the plugin', () => {
+    const presentation = getPendingQueueRowPresentation(
+      queuedMessage({ sourcePlugin: { pluginId: 'ghost-github', name: 'GitHub' } }),
+    );
+
+    expect(presentation).toMatchObject({
+      isPlugin: true,
+      isSession: false,
+      senderLabel: 'GitHub',
+      displayText: 'queued text',
+      canEdit: false,
+      canSteer: false,
+    });
+  });
+
+  it('names the plugin, not the source task, when a plugin dispatches inside a task', () => {
+    const presentation = getPendingQueueRowPresentation(
+      queuedMessage({
+        sourcePlugin: { pluginId: 'ghost-github', name: 'GitHub' },
+        origin: { kind: 'session', senderSessionId: 'src', displayText: 'queued text', senderSessionTitle: 'Planner' },
+      }),
+    );
+    expect(presentation).toMatchObject({ isPlugin: true, isSession: false, senderLabel: 'GitHub', canEdit: false });
+  });
+
+  it('keeps the unfolded plugin text with its pasted ranges so the bubble folds them once', () => {
+    const raw = 'before PASTED after';
+    const presentation = getPendingQueueRowPresentation(
+      queuedMessage({
+        sourcePlugin: { pluginId: 'ghost-github', name: 'GitHub' },
+        persistedContent: JSON.stringify({ text: raw }),
+        chatMessage: {
+          ...queuedMessage().chatMessage,
+          pastedTextRanges: [{ start: 7, end: 13, display: '[Pasted]' }],
+        },
+      }),
+    );
+    expect(presentation.displayText).toBe('before [Pasted] after');
+    expect(presentation.rangedSourceText).toBe(raw);
+  });
+
+  it('leaves the plugin sender label empty when the plugin name is unknown', () => {
+    expect(
+      getPendingQueueRowPresentation(queuedMessage({ sourcePlugin: { pluginId: 'ghost-x' } })).senderLabel,
+    ).toBeNull();
+  });
+
+  it('never presents hook channel rows (hook:<conn> scheduler origins) as automation, but keeps them locked', () => {
+    const presentation = getPendingQueueRowPresentation(
+      queuedMessage({
+        origin: { kind: 'scheduler', scheduleId: 'hook:conn-1', scheduleName: 'Hook · Team Slack' },
+      }),
+    );
+    expect(presentation).toMatchObject({
+      isScheduler: false,
+      isSession: false,
+      isPlugin: false,
+      senderLabel: null,
+      canEdit: false,
+      canSteer: false,
+    });
   });
 
   it('keeps regular queued messages editable and steerable', () => {
@@ -138,6 +291,14 @@ describe('getPendingQueueRowPresentation', () => {
       .toBe('> quoted\n\nrevised reply');
   });
 
+  it('masks a serialized pending welcome and offers no edit or steer', () => {
+    const text = '[UI_ACTION_TRIGGER]Say hello using cached project/task hints.';
+    const restored = JSON.parse(JSON.stringify(queuedMessage({ text, persistedContent: text })));
+    expect(getPendingQueueRowPresentation(restored)).toMatchObject({
+      isSyntheticTrigger: true, syntheticKind: 'generic', canEdit: false, canSteer: false,
+    });
+  });
+
   it('flags synthetic [UI_ACTION_TRIGGER] rows and locks edit/steer', () => {
     // error-tail-banner:coordinator 续跑分支入队的合成指令,面板按此标记显示
     // i18n 遮蔽标签,禁编辑/steer(改了指令就不是规范化续跑了)。
@@ -164,5 +325,92 @@ describe('getPendingQueueRowPresentation', () => {
         canSteer: false,
       });
     }
+  });
+});
+
+describe('resolveSoleSteerableQueuedMessage', () => {
+  const idle = { editingClientId: null, steeringClientIds: [] as string[] };
+
+  it('targets the only queued row so the composer shortcut can steer it', () => {
+    expect(resolveSoleSteerableQueuedMessage([queuedMessage()], idle)).toBe('client-1');
+  });
+
+  it('never targets a hidden answered question reply, but still targets a supplement', () => {
+    const answered = queuedMessage({ clientId: 'question-reply:answered:request-1:digest' });
+    expect(getPendingQueueRowPresentation(answered)).toMatchObject({ canEdit: false, canSteer: false });
+    expect(resolveSoleSteerableQueuedMessage([answered], idle)).toBeNull();
+    expect(
+      resolveSoleSteerableQueuedMessage([queuedMessage({ clientId: 'question-reply:request-2:digest' })], idle),
+    ).toBe('question-reply:request-2:digest');
+  });
+
+  it('declines when the target is ambiguous or the row cannot steer right now', () => {
+    expect(
+      resolveSoleSteerableQueuedMessage(
+        [queuedMessage(), queuedMessage({ clientId: 'client-2' })],
+        idle,
+      ),
+    ).toBeNull();
+    expect(
+      resolveSoleSteerableQueuedMessage([queuedMessage({ isPendingEnqueue: true })], idle),
+    ).toBeNull();
+    expect(
+      resolveSoleSteerableQueuedMessage(
+        [queuedMessage({ sourcePlugin: { pluginId: 'ghost-github' } })],
+        idle,
+      ),
+    ).toBeNull();
+    expect(
+      resolveSoleSteerableQueuedMessage([queuedMessage()], {
+        editingClientId: 'client-1',
+        steeringClientIds: [],
+      }),
+    ).toBeNull();
+    expect(
+      resolveSoleSteerableQueuedMessage([queuedMessage()], {
+        editingClientId: null,
+        steeringClientIds: ['client-1'],
+      }),
+    ).toBeNull();
+  });
+});
+
+
+// Unit regression: pending task input must show the same paragraphs as delivered
+// history, while its send payload and an ordinary user's draft stay literal.
+it('decodes forwarded queue display without mutating the queued body', () => {
+  const content = '[来源] 用户原话由宿主从已接收的输入原样保留。\n用户原话："只检查"\nagent补充："第一段\\n第二段"';
+  const entry = queuedMessage({ text: content, persistedContent: content, origin: { kind: 'session', senderSessionId: 'sender', displayText: content } });
+  expect(getPendingQueueRowPresentation(entry).displayText).toContain('第一段\n第二段');
+  expect(entry.persistedContent).toBe(content);
+  expect(getPendingQueueRowPresentation(queuedMessage({ text: content })).displayText).toBe(content);
+});
+
+// Queue bubbles now share the transcript key. Previous tests covered menu labels,
+// not independent queue/history arrival: this unit regression prevents double rows
+// and keeps pending input out of turn grouping (minimum: one stale queue echo).
+describe('pending queue timeline', () => {
+  // PR #9727: an accepted answer is already visible on its card. Previous
+  // timeline coverage only tested deduplication against history. Tier: unit.
+  it('omits card answers before history arrives without consuming their queued payload', () => {
+    const first = queuedMessage().chatMessage;
+    const answer = { ...first, clientId: 'question-reply:answered:request-1' };
+    const supplement = { ...first, clientId: 'question-reply:request-2' };
+    const pending = [answer, first, supplement];
+    expect(appendPendingQueueItems([], pending, []).map(item => item.key))
+      .toEqual(['msg-client-1', 'msg-question-reply:request-2']);
+    expect(pending).toEqual([answer, first, supplement]);
+    expect(appendPendingQueueItems([], [answer], [])).toEqual([]);
+  });
+
+  it('keeps queue order and the delivered message key while dropping stale queue echoes', () => {
+    const first = queuedMessage().chatMessage;
+    const second = { ...first, clientId: 'second', content: 'second' };
+    const pending = appendPendingQueueItems([], [first, second, first], []);
+    expect(pending.map(item => item.key)).toEqual(['msg-client-1', 'msg-second']);
+    const delivered = { type: 'message' as const, key: 'msg-client-1', message: first };
+    const result = appendPendingQueueItems([delivered], [first, second], [first]);
+    expect(result).toEqual([delivered, pending[1]]);
+    expect(result[0]).toBe(delivered);
   });
 });

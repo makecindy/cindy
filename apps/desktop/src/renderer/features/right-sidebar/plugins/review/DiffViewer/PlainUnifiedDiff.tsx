@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -93,7 +94,7 @@ function HunkActionPill({
       <span
         data-review-action-reveal="hunk"
         className={cn(
-          'pointer-events-auto sticky right-2 flex shrink-0 items-center gap-1 rounded-full border border-[var(--border-default)] bg-[color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] p-1 text-[var(--text-primary)] shadow-[var(--shadow-menu)] backdrop-blur-sm',
+          'pointer-events-auto sticky right-2 flex shrink-0 items-center gap-1 rounded-full border border-[var(--border-default)] bg-[color-mix(in_srgb,var(--surface-elevated)_90%,transparent)] p-1 text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)] backdrop-blur-sm',
           hunkActionRevealClass(hasPendingAction),
         )}
       >
@@ -262,6 +263,14 @@ function CodeContent({
       side: line.type === 'add' ? 'add' : 'delete',
     })
     : null;
+  const renderedHtml = inlineHtml || html;
+  // React can rewrite innerHTML when this prop object changes, even if its
+  // content is identical. Keep highlighted nodes (and selection) stable across
+  // review refreshes to avoid flooding Windows with accessibility hide events.
+  const htmlContent = useMemo(
+    () => renderedHtml ? { __html: renderedHtml } : undefined,
+    [renderedHtml],
+  );
 
   return (
     <span className={cn(
@@ -269,10 +278,10 @@ function CodeContent({
       wordWrap ? 'flex-1 whitespace-pre-wrap break-words' : !splitScrollable && 'whitespace-pre',
       compact ? 'pr-3' : 'pr-4',
     )}>
-      {inlineHtml ? (
-        <span dangerouslySetInnerHTML={{ __html: inlineHtml }} />
-      ) : html ? (
-        <span dangerouslySetInnerHTML={{ __html: html }} />
+      {/* Keep code semantics in the AX tree: an ignored span promotes every
+          syntax token to the row and fans out Windows node-show events. */}
+      {htmlContent ? (
+        <code className="font-mono" dangerouslySetInnerHTML={htmlContent} />
       ) : (
         line.content
       )}
@@ -406,14 +415,10 @@ export function PlainUnifiedDiff({
           <span className="ml-2">{notice}</span>
         </span>
         {diff.kind === 'too-large' && onOpenFile && (
-          <button
-            type="button"
-            onClick={() => onOpenFile(diff)}
-            className="inline-flex h-6 shrink-0 items-center gap-1 rounded-[6px] border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2 text-11 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
-          >
+          <Button variant="secondary" size="xs" compact type="button" onClick={() => onOpenFile(diff)}>
             <ExternalLink size={12} />
             <span>{t('rightSidebar.review.openFile')}</span>
-          </button>
+          </Button>
         )}
       </div>
     );

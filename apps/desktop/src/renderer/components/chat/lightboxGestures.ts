@@ -103,3 +103,86 @@ export function zoomAtPoint(
     ty: point.cy - (point.cy - viewport.ty) * ratio,
   };
 }
+
+/** Physical device behind a wheel event, as far as it can be inferred. */
+export type WheelInputSource = 'mouse' | 'trackpad';
+
+/** The wheel event fields the source heuristic reads (legacy `wheelDeltaY` is Chromium-only). */
+export interface WheelSample {
+  deltaMode: number;
+  deltaX: number;
+  deltaY: number;
+  shiftKey: boolean;
+  wheelDeltaY?: number;
+}
+
+/** A gap longer than this starts a new wheel stream (re-classified from scratch). */
+export const WHEEL_SOURCE_IDLE_MS = 250;
+
+/**
+ * Best-effort guess of whether one wheel event came from a mouse wheel or a
+ * multi-touch surface (trackpad / precision touchpad). Browsers expose no
+ * device type, so this combines the signals that hold in Chromium:
+ *
+ * - line/page delta units only come from wheels;
+ * - a horizontal component without Shift is a two-finger scroll (wheels only
+ *   scroll sideways with Shift or a tilt wheel);
+ * - macOS accelerated wheels produce fractional pixel deltas, trackpads whole ones;
+ * - Chromium encodes the legacy `wheelDeltaY` as ±120 per wheel notch, and as
+ *   `-3 × deltaY` for continuous (precise) scrolling devices.
+ *
+ * Anything undecided counts as a mouse wheel, i.e. keeps the zoom behaviour.
+ */
+export function classifyWheelSample(e: WheelSample): WheelInputSource {
+  if (e.deltaMode !== WHEEL_DELTA_PIXEL) return 'mouse';
+  if (e.deltaX !== 0 && !e.shiftKey) return 'trackpad';
+  if (!Number.isInteger(e.deltaY)) return 'mouse';
+  const legacy = e.wheelDeltaY;
+  if (typeof legacy === 'number' && legacy !== 0) {
+    if (legacy % 120 === 0) return 'mouse';
+    if (legacy === -3 * e.deltaY) return 'trackpad';
+  }
+  return 'mouse';
+}
+
+/**
+ * Classify once per wheel stream so a gesture never flips mid-way (e.g. the
+ * momentum tail of a two-finger fling). A later horizontal component upgrades a
+ * stream to trackpad. `now` is the event timestamp in ms.
+ */
+export function createWheelSourceTracker(idleMs = WHEEL_SOURCE_IDLE_MS) {
+  let source: WheelInputSource | null = null;
+  let lastAt = Number.NEGATIVE_INFINITY;
+  return (e: WheelSample, now: number): WheelInputSource => {
+    if (source === null || now - lastAt > idleMs) {
+      source = classifyWheelSample(e);
+    } else if (source === 'mouse' && e.deltaMode === WHEEL_DELTA_PIXEL && e.deltaX !== 0 && !e.shiftKey) {
+      source = 'trackpad';
+    }
+    lastAt = now;
+    return source;
+  };
+}
+
+/** What a single wheel event should do in the image lightbox. */
+export type ImageLightboxWheelIntent = 'zoom' | 'pan' | 'none';
+
+/**
+ * Route one wheel event for ImageLightbox, the same on every OS:
+ *
+ * - pinch (Chromium delivers it as wheel + ctrlKey), ⌘/Ctrl + wheel, and a plain
+ *   mouse wheel zoom at the cursor;
+ * - a two-finger scroll on a trackpad pans while zoomed in and does nothing at
+ *   fit scale.
+ */
+export function imageLightboxWheelIntent(
+  event: { ctrlKey: boolean; metaKey: boolean; deltaX: number; deltaY: number },
+  source: WheelInputSource,
+  scale: number,
+): ImageLightboxWheelIntent {
+  if (event.ctrlKey || event.metaKey || source === 'mouse') {
+    return event.deltaY === 0 ? 'none' : 'zoom';
+  }
+  if (scale <= 1 || (event.deltaX === 0 && event.deltaY === 0)) return 'none';
+  return 'pan';
+}

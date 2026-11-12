@@ -17,6 +17,8 @@ export interface TurnUsageTooltipInput {
   costUsd?: number;
   isEstimate?: boolean;
   title?: string;
+  /** Costs already appear in the shared model/channel panel. */
+  usageOnly?: boolean;
 }
 
 function formatPercent(value: number | null): string | null {
@@ -30,20 +32,33 @@ function formatTokens(value: number): string {
   return formatCompactTokens(Math.max(0, Math.floor(value)));
 }
 
-export function formatOutputTokenRate(details: TurnUsageDetails): string | null {
-  const durationMs = details.durationMs;
+export function formatOutputTokenRateValue(
+  outputTokens: number,
+  durationMs: number,
+): string | null {
   if (
-    details.outputTokens <= 0 ||
+    outputTokens <= 0 ||
     typeof durationMs !== 'number' ||
     !Number.isFinite(durationMs) ||
     durationMs <= 0
   ) {
     return null;
   }
-  const rate = (details.outputTokens * 1000) / durationMs;
+  const rate = (outputTokens * 1000) / durationMs;
   if (!Number.isFinite(rate) || rate <= 0) return null;
   if (rate < 0.1) return '<0.1';
   return rate >= 100 ? rate.toFixed(0) : rate.toFixed(1).replace(/\.0$/, '');
+}
+
+export function formatOutputTokenRate(details: TurnUsageDetails): string | null {
+  if (typeof details.durationMs !== 'number') return null;
+  // 生成耗时按每个 API 请求累加，并行请求（子代理、SDK 后台请求）会让它超过整轮
+  // 实际耗时。速率与「耗时」并排展示，分母不能超过那一列，否则两数互相矛盾。
+  const durationMs =
+    typeof details.turnDurationMs === 'number' && details.turnDurationMs > 0
+      ? Math.min(details.durationMs, details.turnDurationMs)
+      : details.durationMs;
+  return formatOutputTokenRateValue(details.outputTokens, durationMs);
 }
 
 export function formatTurnDuration(durationMs: number, t?: TFunction): string | null {
@@ -59,6 +74,21 @@ export function formatTurnDuration(durationMs: number, t?: TFunction): string | 
     }
   }
   const roundedSeconds = Math.round(seconds);
+  if (roundedSeconds >= 86_400) {
+    const days = Math.floor(roundedSeconds / 86_400);
+    const hours = Math.floor((roundedSeconds % 86_400) / 3_600);
+    const minutes = Math.floor((roundedSeconds % 3_600) / 60);
+    return t
+      ? t('usageDetails.durationDaysHoursMinutes', { days, hours, minutes })
+      : `${days}d ${hours}h ${minutes}m`;
+  }
+  if (roundedSeconds >= 3_600) {
+    const hours = Math.floor(roundedSeconds / 3_600);
+    const minutes = Math.floor((roundedSeconds % 3_600) / 60);
+    return t
+      ? t('usageDetails.durationHoursMinutes', { hours, minutes })
+      : `${hours}h ${minutes}m`;
+  }
   const minutes = Math.floor(roundedSeconds / 60);
   const remainder = roundedSeconds % 60;
   const paddedSeconds = String(remainder).padStart(2, '0');
@@ -88,6 +118,8 @@ const LOW_CACHE_MIN_INPUT_TOKENS = 50_000;
 const LOW_CACHE_MAX_HIT_RATE = 0.2;
 
 export function getTurnUsageSuggestion(details: TurnUsageDetails, t: TFunction): string | null {
+  // 第一轮没有可复用的缓存，命中率为 0 是必然，不是可避免的浪费。
+  if (details.firstUserRound) return null;
   const inputTotal = details.inputTokens + details.cacheReadTokens + details.cacheCreateTokens;
   if (
     inputTotal >= LOW_CACHE_MIN_INPUT_TOKENS &&
@@ -106,6 +138,7 @@ export function buildTurnUsageTooltipLines({
   costUsd,
   isEstimate = false,
   title,
+  usageOnly = false,
 }: TurnUsageTooltipInput): string[] {
   const lines: string[] = [];
   if (title) lines.push(title);
@@ -114,7 +147,7 @@ export function buildTurnUsageTooltipLines({
     : typeof costUsd === 'number' && Number.isFinite(costUsd) && costUsd > 0
       ? formatTurnCostUsd(costUsd)
       : null;
-  if (formattedCost) {
+  if (formattedCost && !usageOnly) {
     lines.push(t(isEstimate ? 'usageDetails.valueLine' : 'usageDetails.costLine', {
       cost: formattedCost,
     }));
@@ -122,7 +155,7 @@ export function buildTurnUsageTooltipLines({
   // 按模型成本明细: 仅在 ≥2 个模型时展开 (单模型已由下方 modelLine 表达)。
   // 让用户一眼看到「主 agent + subagent (如 Task 工具跑的 Haiku) 各花了多少」。
   const perModelCost = details.perModelCost;
-  const showBreakdown = Array.isArray(perModelCost) && perModelCost.length >= 2;
+  const showBreakdown = !usageOnly && Array.isArray(perModelCost) && perModelCost.length >= 2;
   if (showBreakdown) {
     lines.push(t('usageDetails.costBreakdownHeader'));
     for (const m of perModelCost) {
@@ -158,7 +191,7 @@ export function buildTurnUsageTooltipLines({
     lines.push(t('usageDetails.timeLine', { duration: turnDuration }));
   }
   // 已展开按模型明细时不再重复笼统的「N 个模型」行。
-  if (!showBreakdown) {
+  if (!showBreakdown && !usageOnly) {
     const model = modelLabel(details, t);
     if (model) lines.push(t('usageDetails.modelLine', { model }));
   }
@@ -167,7 +200,7 @@ export function buildTurnUsageTooltipLines({
     lines.push(t('usageDetails.suggestionLine', { suggestion: suggestionText }));
   }
   // 无金额时交代一句,避免「只有 token、没有钱」被读成事实缺失；这一层不猜测具体原因。
-  if (!formattedCost) {
+  if (!formattedCost && !usageOnly) {
     lines.push(t('usageDetails.noBilledCost'));
   }
   return lines;

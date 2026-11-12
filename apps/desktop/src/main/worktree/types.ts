@@ -10,6 +10,13 @@
  * 同时也是 sessions.worktree_path 反范式快照的来源。
  */
 export interface WorktreeMeta {
+  /**
+   * Left by a V1 teammate background task that was reopened in a new task and interrupted
+   * before the move finished. Nothing writes it any more; a worktree carrying it is kept, never recycled.
+   */
+  pendingSessionTransfer?: { sessionId: string; delegationId: string; requestingBotId: string };
+  /** New physical contents at the same path invalidate old recycle requests. */
+  generation?: string;
   sessionId: string;
   /** 用户输入或 nameGenerator 给的名字（用于显示 + 路径段 + 分支段）。 */
   name: string;
@@ -95,6 +102,8 @@ export interface ListBranchesReq {
 }
 
 export interface ListBranchesResp {
+  /** Full ref, never a local branch named origin/main. */
+  remoteDefaultBranch?: string;
   branches: string[];
   current: string;
 }

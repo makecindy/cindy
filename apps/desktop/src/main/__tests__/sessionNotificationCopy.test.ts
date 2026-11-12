@@ -7,11 +7,12 @@ vi.mock('electron', () => ({
   },
 }));
 
-import { setMainLocale } from '../i18n';
+import { setMainLocale } from '../i18n.desktop';
 import {
   getSessionExternalNotificationText,
   getSessionNotificationBody,
   getSessionNotificationUntitled,
+  getTeammateNotificationFallback,
 } from '../sessionNotificationCopy';
 import type { SupportedLocale } from '../../shared/locale';
 
@@ -120,4 +121,12 @@ describe('session notification copy', () => {
       );
     },
   );
+});
+
+
+it.each([
+  ['en', 'New reply'], ['zh-CN', '有新回复'], ['zh-TW', '有新回覆'], ['ja', '新しい返信'], ['ko', '새 답장'],
+] as const)('uses the current %s locale for a reply with no preview', (locale, expected) => {
+  setMainLocale(locale);
+  expect(getTeammateNotificationFallback()).toBe(expected);
 });

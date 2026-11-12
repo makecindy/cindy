@@ -13,6 +13,8 @@ export interface SerializedConnectionLifecycle {
 /** Dependencies are injected so lifecycle ordering stays unit-testable. */
 export interface SerializedConnectionLifecycleDeps {
   startConnection(): Promise<void>;
+  /** Ingress must already be fenced; keep outbound transports available here. */
+  beforeStopConnection?(): Promise<void>;
   stopConnection(reason?: string): Promise<void>;
   onStartError(error: unknown): void;
 }
@@ -62,7 +64,11 @@ export function createSerializedConnectionLifecycle(
       generation += 1;
       await enqueue(async () => {
         if (!shouldStopConnection) return;
-        await deps.stopConnection(reason);
+        try {
+          await deps.beforeStopConnection?.();
+        } finally {
+          await deps.stopConnection(reason);
+        }
       });
     },
 

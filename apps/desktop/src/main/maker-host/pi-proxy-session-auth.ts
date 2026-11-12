@@ -8,49 +8,101 @@
  */
 
 import { timingSafeEqual } from 'node:crypto';
+import type { NativeSubscriptionAccount } from '@cindy/maker-core';
 
 interface ActivePiProxySession {
   token: string;
+  controller: AbortController;
   resolveProviderId: () => string | null;
+  scope: 'session' | 'subagent-route';
+  nativeSubscriptionAccount?: NativeSubscriptionAccount;
 }
 
-const activeSessions = new Map<string, ActivePiProxySession>();
+const activeSessions = new Map<string, Map<string, ActivePiProxySession>>();
+
+function findPiProxySession(
+  sessionId: string,
+  candidate: string | null,
+): ActivePiProxySession | null {
+  if (!candidate) return null;
+  const registrations = activeSessions.get(sessionId);
+  if (!registrations) return null;
+  const candidateBytes = Buffer.from(candidate);
+  for (const registration of registrations.values()) {
+    const expectedBytes = Buffer.from(registration.token);
+    if (
+      expectedBytes.length === candidateBytes.length
+      && timingSafeEqual(expectedBytes, candidateBytes)
+    ) return registration;
+  }
+  return null;
+}
 
 export function registerPiProxySession(
   sessionId: string,
   token: string,
   resolveProviderId: () => string | null = () => null,
+  options: { scope?: 'session' | 'subagent-route'; nativeSubscriptionAccount?: NativeSubscriptionAccount } = {},
 ): () => void {
   if (!sessionId || !token)
     throw new Error('Pi proxy session registration requires an id and token');
-  const registration = { token, resolveProviderId };
-  activeSessions.set(sessionId, registration);
+  const registration = {
+    token,
+    controller: new AbortController(),
+    resolveProviderId,
+    nativeSubscriptionAccount: options.nativeSubscriptionAccount,
+    scope: options.scope === 'subagent-route' ? 'subagent-route' as const : 'session' as const,
+  };
+  const registrations = activeSessions.get(sessionId) ?? new Map();
+  registrations.get(token)?.controller.abort();
+  registrations.set(token, registration);
+  activeSessions.set(sessionId, registrations);
   return () => {
-    if (activeSessions.get(sessionId) === registration) {
-      activeSessions.delete(sessionId);
-    }
+    const current = activeSessions.get(sessionId);
+    if (current?.get(token) !== registration) return;
+    registration.controller.abort();
+    current.delete(token);
+    if (current.size === 0) activeSessions.delete(sessionId);
   };
 }
 
 export function authenticatePiProxySession(sessionId: string, candidate: string | null): boolean {
-  const expected = activeSessions.get(sessionId)?.token;
-  if (!expected || !candidate) return false;
-  const expectedBytes = Buffer.from(expected);
-  const candidateBytes = Buffer.from(candidate);
-  return (
-    expectedBytes.length === candidateBytes.length && timingSafeEqual(expectedBytes, candidateBytes)
-  );
+  return findPiProxySession(sessionId, candidate) !== null;
+}
+
+/** Lifetime of the exact authenticated runtime, including separately scoped children. */
+export function getPiProxySessionSignal(sessionId: string, candidate: string | null): AbortSignal | null {
+  return findPiProxySession(sessionId, candidate)?.controller.signal ?? null;
+}
+
+export function getPiProxySubscriptionAccount(sessionId: string, candidate: string | null): NativeSubscriptionAccount | undefined {
+  const account = findPiProxySession(sessionId, candidate)?.nativeSubscriptionAccount;
+  account?.assertCurrent();
+  return account;
 }
 
 /**
  * Host-resolved provider bound to the authenticated Pi process. Callers must
  * authenticate the same session immediately before reading this value.
  */
-export function getPiProxySessionProvider(sessionId: string): string | null {
-  return activeSessions.get(sessionId)?.resolveProviderId() ?? null;
+export function getPiProxySessionProvider(
+  sessionId: string,
+  candidate: string | null,
+): string | null {
+  return findPiProxySession(sessionId, candidate)?.resolveProviderId() ?? null;
+}
+
+export function isPiProxySubagentRoute(
+  sessionId: string,
+  candidate: string | null,
+): boolean {
+  return findPiProxySession(sessionId, candidate)?.scope === 'subagent-route';
 }
 
 /** Test isolation only. */
 export function resetPiProxySessionsForTest(): void {
+  for (const registrations of activeSessions.values()) {
+    for (const registration of registrations.values()) registration.controller.abort();
+  }
   activeSessions.clear();
 }

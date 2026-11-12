@@ -51,6 +51,14 @@ const REPLY_LANGUAGE_BY_LOCALE: Record<string, string> = {
   en: 'English',
   ja: 'Japanese (日本語)',
   ko: 'Korean (한국어)',
+
+  "es": "Spanish (Español)",
+  "fr": "French (Français)",
+  "de": "German (Deutsch)",
+  "pt-PT": "European Portuguese (Português (Portugal))",
+  "pt-BR": "Brazilian Portuguese (Português (Brasil))",
+  "zh-Hant-x-lzh": "Traditional Chinese (繁體中文)",
+  "zh-Hans-x-lzh": "Simplified Chinese (简体中文)",
 };
 
 export interface BuildLearnPromptArgs {

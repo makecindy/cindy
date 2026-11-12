@@ -14,8 +14,8 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { OpenInSystemActions } from './OpenInSystemActions';
-import { pickFileIcon } from './lib/fileIcon';
-import { basename, dirname, formatBytes, formatMtime, joinPath } from './lib/fileMeta';
+import { FileTypeTile } from '@/components/ui/file-type-tile';
+import { basename, formatBytes, formatMtime, joinPath } from './lib/fileMeta';
 
 export interface UnrenderablePlaceholderProps {
   workdir: string;
@@ -53,9 +53,7 @@ export function UnrenderablePlaceholder({
 }: UnrenderablePlaceholderProps) {
   const { t } = useTranslation();
   const name = basename(relPath);
-  const Icon = pickFileIcon(name);
   const absPath = joinPath(workdir, relPath);
-  const folderPath = joinPath(workdir, dirname(relPath));
 
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-5 px-8">
@@ -65,7 +63,7 @@ export function UnrenderablePlaceholder({
           'bg-[var(--chat-input-chip-bg)]',
         )}
       >
-        <Icon size={32} className="text-[var(--cmd-palette-item-meta)]" />
+        <FileTypeTile name={name} />
       </div>
       <div className="flex flex-col items-center gap-1.5">
         <div className="text-base font-semibold text-foreground">{name}</div>
@@ -85,17 +83,9 @@ export function UnrenderablePlaceholder({
         </div>
       </div>
       {localCopyPath ? (
-        // cachePath 是本机绝对路径(Windows 反斜杠),不能用 fileMeta 的 POSIX
-        // dirname——按两种分隔符取父目录(规则 15)。
-        <OpenInSystemActions
-          absPath={localCopyPath}
-          folderPath={localCopyPath.slice(
-            0,
-            Math.max(localCopyPath.lastIndexOf('/'), localCopyPath.lastIndexOf('\\')),
-          )}
-        />
+        <OpenInSystemActions absPath={localCopyPath} />
       ) : (
-        !remote && <OpenInSystemActions absPath={absPath} folderPath={folderPath} />
+        !remote && <OpenInSystemActions absPath={absPath} />
       )}
     </div>
   );

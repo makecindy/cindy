@@ -31,7 +31,9 @@ export async function list(
 
 export async function estimatedSessionValue(
   sessionId: string,
+  options?: { includeBreakdown?: boolean; clientId?: string },
 ): Promise<{
+  costBreakdown?: import('@cindy/maker-shared/usage-cost-details').UsageCostRow[];
   totalValueMoney?: RegionalMoney | null;
   totalValueUsd?: number;
   entries: Array<{
@@ -41,7 +43,8 @@ export async function estimatedSessionValue(
     turnUsageDetails?: unknown;
   }>;
 }> {
-  return wrap(window.electronAPI.localDb.messages.estimatedSessionValue(sessionId));
+  return wrap(options ? window.electronAPI.localDb.messages.estimatedSessionValue(sessionId, options)
+    : window.electronAPI.localDb.messages.estimatedSessionValue(sessionId));
 }
 
 export async function around(

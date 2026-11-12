@@ -14,12 +14,17 @@ import type { Node as PMNode, Schema } from '@tiptap/pm/model';
 import { Plugin, PluginKey, type EditorState, type Transaction } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 
+import { slashCommandRuntimePrefixLength } from '@cindy/maker-shared/composer-palette';
+
 import type { UnifiedCommand } from '@/lib/slashCommands';
 
 const PLUGIN_KEY = new PluginKey<SlashCommandPluginState>('slashCommandDecoration');
 const META_KEY = 'slashCommandDecoration';
 
-export type SlashCommandRoster = ReadonlyArray<Pick<UnifiedCommand, 'name' | 'description'>>;
+export type SlashCommandRosterItem = Pick<UnifiedCommand, 'name' | 'description'> & {
+  runtimeCommandName?: string;
+};
+export type SlashCommandRoster = ReadonlyArray<SlashCommandRosterItem>;
 
 interface SlashCommandPluginState {
   commands: SlashCommandRoster;
@@ -29,7 +34,7 @@ interface SlashCommandPluginState {
 export interface SlashCommandMatch {
   from: number;
   to: number;
-  command: Pick<UnifiedCommand, 'name' | 'description'>;
+  command: SlashCommandRosterItem;
 }
 
 function previousInlineAllowsSlash(parent: PMNode, childIndex: number): boolean {
@@ -52,10 +57,13 @@ export function findSlashCommandMatches(
   commands: SlashCommandRoster,
 ): SlashCommandMatch[] {
   if (commands.length === 0) return [];
-  const byName = new Map<string, Pick<UnifiedCommand, 'name' | 'description'>>();
+  const byName = new Map<string, SlashCommandRosterItem>();
   for (const command of commands) {
     const name = command.name.trim();
     if (name) byName.set(name.toLowerCase(), command);
+    const runtime = command.runtimeCommandName?.trim();
+    // Palette shows `git`; Pi wire form is `skill:git`. Both must light the pill.
+    if (runtime) byName.set(runtime.toLowerCase(), command);
   }
   if (byName.size === 0) return [];
 
@@ -83,9 +91,7 @@ export function findSlashCommandMatches(
   return matches;
 }
 
-function slashPillAttrs(
-  command: Pick<UnifiedCommand, 'name' | 'description'>,
-): Record<string, string> {
+function slashPillAttrs(command: SlashCommandRosterItem): Record<string, string> {
   return {
     class: 'slash-cmd-pill',
     'data-slash-command': command.name,
@@ -96,10 +102,20 @@ function slashPillAttrs(
 function buildDecorations(doc: PMNode, commands: SlashCommandRoster): DecorationSet {
   const matches = findSlashCommandMatches(doc, commands);
   if (matches.length === 0) return DecorationSet.empty;
-  return DecorationSet.create(
-    doc,
-    matches.map((match) => Decoration.inline(match.from, match.to, slashPillAttrs(match.command))),
-  );
+  const decorations: Decoration[] = [];
+  for (const match of matches) {
+    const token = doc.textBetween(match.from, match.to);
+    const prefixLength = slashCommandRuntimePrefixLength(token, match.command);
+    if (prefixLength > 0) {
+      decorations.push(
+        Decoration.inline(match.from + 1, match.from + 1 + prefixLength, {
+          class: 'slash-cmd-runtime-prefix',
+        }),
+      );
+    }
+    decorations.push(Decoration.inline(match.from, match.to, slashPillAttrs(match.command)));
+  }
+  return DecorationSet.create(doc, decorations);
 }
 
 /** Palette 选择后用普通文本替换 slash run,不创建 mentionChip atom。 */
@@ -111,6 +127,66 @@ export function replaceSlashCommandRunWithText(
   commandName: string,
 ): Transaction {
   return tr.replaceWith(from, to, schema.text(`/${commandName} `));
+}
+
+/** Names that may already be visible in the editor for a selected palette row. */
+export function commandPaletteReplacementNames(command: UnifiedCommand): string[] {
+  const names = [command.name];
+  if (command.kind === 'desktop' && command.label) names.push(command.label);
+  if (command.kind === 'agent-skill' && command.runtimeCommandName) {
+    names.push(command.runtimeCommandName);
+  }
+  return names;
+}
+
+/**
+ * Resolve the slash range owned by the active palette query.
+ *
+ * Text after the caret may be an existing draft, so it is consumed only when
+ * it completes the selected command and ends at a real inline boundary.
+ */
+export function resolveSlashCommandRunEnd(
+  doc: PMNode,
+  from: number,
+  query: string,
+  commandNames: readonly string[],
+): number {
+  const cursorEnd = from + 1 + query.length;
+  if (!query) return cursorEnd;
+
+  let $cursor;
+  try {
+    $cursor = doc.resolve(cursorEnd);
+  } catch {
+    return cursorEnd;
+  }
+  const parent = $cursor.parent;
+  const queryLower = query.toLowerCase();
+
+  for (const rawName of commandNames) {
+    const name = rawName.trim();
+    if (!name.toLowerCase().startsWith(queryLower)) continue;
+    const suffix = name.slice(query.length);
+    if (!suffix) return cursorEnd;
+
+    const suffixEnd = $cursor.parentOffset + suffix.length;
+    if (suffixEnd > parent.content.size) continue;
+    const actualSuffix = parent.textBetween($cursor.parentOffset, suffixEnd, '\n', '\0');
+    if (actualSuffix.toLowerCase() !== suffix.toLowerCase()) continue;
+
+    const next = suffixEnd < parent.content.size ? parent.childAfter(suffixEnd) : null;
+    const nextNode = next?.node;
+    const nextOffset = next?.offset;
+    let followingWhitespaceLength = 0;
+    if (nextNode?.isText && nextOffset !== undefined) {
+      const nextCharacter = (nextNode.text ?? '')[suffixEnd - nextOffset];
+      if (nextCharacter && !/\s/.test(nextCharacter)) continue;
+      if (nextCharacter) followingWhitespaceLength = nextCharacter.length;
+    }
+    return cursorEnd + suffix.length + followingWhitespaceLength;
+  }
+
+  return cursorEnd;
 }
 
 function migrateLegacySlashChips(state: EditorState): Transaction | null {

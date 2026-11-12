@@ -79,6 +79,26 @@ describe('discord streaming text', () => {
     expect(deps.send.mock.calls[1][0].length).toBeLessThanOrEqual(2000);
   });
 
+  it('sends the final reply as a new message when the placeholder can no longer be edited', async () => {
+    const deps = makeDeps();
+    deps.edit.mockRejectedValueOnce(new Error('Missing Access'));
+    const handle = await startStreaming(deps);
+
+    await handle.finalize('final answer');
+
+    expect(deps.send).toHaveBeenLastCalledWith('final answer');
+    expect(deps.remove).toHaveBeenCalledWith('dm-1|m1');
+  });
+
+  it('still fails when neither editing nor re-sending the final reply works', async () => {
+    const deps = makeDeps();
+    deps.edit.mockRejectedValueOnce(new Error('Missing Access'));
+    const handle = await startStreaming(deps);
+    deps.send.mockRejectedValueOnce(new Error('Missing Permissions'));
+
+    await expect(handle.finalize('final answer')).rejects.toThrow('Missing Permissions');
+  });
+
   it('finalize is idempotent', async () => {
     const deps = makeDeps();
     const handle = await startStreaming(deps);
@@ -103,14 +123,16 @@ describe('discord streaming text', () => {
     expect(deps.uploadImages).toHaveBeenCalledWith('dm-1|m1', ['/tmp/abc123.png']);
   });
 
-  it('skips empty final edit when there is no text or image to send', async () => {
+  it.each(['', ' \n '])('removes progress for an empty final %j', async (text) => {
     const deps = makeDeps();
     const handle = await startStreaming(deps);
 
-    await handle.finalize('');
+    await handle.finalize(text);
+    await handle.finalize(text);
 
     expect(deps.edit).not.toHaveBeenCalled();
     expect(deps.uploadImages).not.toHaveBeenCalled();
+    expect(deps.remove).toHaveBeenCalledExactlyOnceWith('dm-1|m1');
   });
 
   it('close prevents future edits', async () => {
@@ -135,6 +157,7 @@ function makeDeps() {
     edit: vi.fn(async (...args: [string, string]) => {
       void args;
     }),
+    remove: vi.fn(async (_messageId: string) => {}),
     markdownToDiscord,
     chunk: chunkDiscordText,
     resolveImageUrl: vi.fn((url: string) => `/tmp/${url.replace('xdt-image://', '')}.png`),

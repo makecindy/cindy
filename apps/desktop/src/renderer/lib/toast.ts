@@ -13,7 +13,7 @@
  * 不要把视觉组件混在这里 —— Toast.tsx / ToastContainer.tsx 另外放。
  */
 
-export type ToastVariant = 'info' | 'success' | 'warning' | 'error';
+export type ToastVariant = 'loading' | 'info' | 'success' | 'warning' | 'error';
 
 /**
  * 提示来源(第三方供文案时的身份头,由宿主画在正文前;当前消费方:意识
@@ -26,21 +26,57 @@ export interface ToastSource {
   iconDataUrl?: string;
 }
 
+/** A snapshot in viewport CSS pixels, captured before the action changes layout. */
+export interface ToastActionPoint { x: number; y: number }
+
+export interface ToastAction {
+  label: string;
+  emphasis?: 'cta';
+  onClick: (point?: ToastActionPoint) => void;
+  disabled?: boolean;
+  /** Async actions can keep the notification open until their result arrives. */
+  keepOpen?: boolean;
+}
+
 export interface ToastOptions {
+  placement?: 'top-right';
+  /** Defaults to true; acknowledgements can keep a fixed expiry while hovered. */
+  pauseOnHover?: boolean;
+  /** Optional heading and dismiss action for a persistent, multi-line notification. */
+  title?: string;
+  icon?: 'star';
+  dismissLabel?: string;
+  /** Opt-in one-shot celebration; only approved celebration surfaces set this. */
+  celebrate?: boolean;
+  celebrationOrigin?: ToastActionPoint;
+
   /** 自动关闭时长（ms）。不传时按 variant 取默认：info / success 1200，warning / error 8000；0 表示永久显示 */
   duration?: number;
   /** 来源身份头（见 ToastSource；主机自己的提示不传） */
   source?: ToastSource;
+  /** 与提示直接相关的单一步骤（例如打开对应设置项）。 */
+  action?: ToastAction;
   /** 关闭时回调 */
   onClose?: () => void;
 }
 
 export interface ToastItem {
+  placement?: 'top-right';
+  pauseOnHover?: boolean;
+  /** Optional heading and dismiss action for a persistent, multi-line notification. */
+  title?: string;
+  icon?: 'star';
+  dismissLabel?: string;
+  /** Opt-in one-shot celebration; only approved celebration surfaces set this. */
+  celebrate?: boolean;
+  celebrationOrigin?: ToastActionPoint;
+
   id: string;
   variant: ToastVariant;
   message: string;
   duration: number;
   source?: ToastSource;
+  action?: ToastAction;
   onClose?: () => void;
   createdAt: number;
   /** 是否处于退出动画阶段（仍在 state 里但即将被移除） */
@@ -234,6 +270,14 @@ function createItem(variant: ToastVariant, message: string, options?: ToastOptio
       options?.duration ??
       (variant === 'error' || variant === 'warning' ? DEFAULT_ALERT_DURATION : DEFAULT_DURATION),
     ...(options?.source ? { source: options.source } : {}),
+    ...(options?.action ? { action: options.action } : {}),
+    celebrate: options?.celebrate,
+    celebrationOrigin: options?.celebrationOrigin,
+    title: options?.title,
+    placement: options?.placement,
+    pauseOnHover: options?.pauseOnHover,
+    icon: options?.icon,
+    dismissLabel: options?.dismissLabel,
     onClose: options?.onClose,
     createdAt: Date.now(),
     exiting: false,
@@ -243,6 +287,10 @@ function createItem(variant: ToastVariant, message: string, options?: ToastOptio
 }
 
 export const toast = {
+  /** Neutral progress; the caller dismisses it when the operation settles. */
+  loading(message: string, options?: ToastOptions): string {
+    return createItem('loading', message, { duration: 0, ...options });
+  },
   info(message: string, options?: ToastOptions): string {
     return createItem('info', message, options);
   },
@@ -263,19 +311,23 @@ export const toast = {
    * 设计目的: 给长任务 (silent install / progress 之类) 改 toast 副文案,
    * 避免反复 dismiss+success 触发的"toast 闪两下"。
    */
-  update(id: string, message: string): void {
+  update(id: string, message: string, options?: Partial<ToastOptions> & { variant?: ToastVariant }): void {
     const idx = activeItems.findIndex((t) => t.id === id);
     if (idx === -1) {
       // 也可能还在等待队列里, 也要支持
       const qIdx = queue.findIndex((t) => t.id === id);
-      if (qIdx !== -1) queue[qIdx] = { ...queue[qIdx], message };
+      if (qIdx !== -1) queue[qIdx] = { ...queue[qIdx], ...options, message };
       return;
     }
     activeItems = [
       ...activeItems.slice(0, idx),
-      { ...activeItems[idx], message },
+      { ...activeItems[idx], ...options, message },
       ...activeItems.slice(idx + 1),
     ];
+    if (options?.duration !== undefined) {
+      clearItemTimer(id);
+      startTimer(id, options.duration);
+    }
     notify();
   },
   /** hover 进入时调用：暂停该条 toast 的自动关闭计时（永久显示 / 已退出的条目 no-op）。 */

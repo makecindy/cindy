@@ -7,6 +7,8 @@
  * assistant。
  */
 
+import { isSubagentParentToolUseId } from '@cindy/maker-shared/message-render';
+
 export interface TitleMessageCandidate {
   role: 'user' | 'assistant';
   text: string;
@@ -25,11 +27,6 @@ export interface SelectedTitleMessage {
 }
 
 const EXPLICIT_TOOL_PARENT_META_KEYS = ['parentToolUseId', 'parent_tool_use_id'] as const;
-// Live Claude SDK tool ids use one of these prefixes. A bare `parentUuid` is
-// intentionally not enough: legacy Claude imports used that field for the
-// ordinary transcript chain, and deleting those rows would erase valid title
-// evidence from old sessions.
-const TOOL_PARENT_ID_RE = /^(?:toolu|call)[_-]/iu;
 
 function hasNonEmptyString(value: unknown): boolean {
   return typeof value === 'string' && value.trim().length > 0;
@@ -48,7 +45,7 @@ export function isTopLevelTitleAssistant(
   if (EXPLICIT_TOOL_PARENT_META_KEYS.some((key) => hasNonEmptyString(meta[key]))) return false;
   if (typeof meta.parentUuid !== 'string' || !meta.parentUuid.trim()) return true;
   const parentUuid = meta.parentUuid.trim();
-  return !knownToolUseIds.has(parentUuid) && !TOOL_PARENT_ID_RE.test(parentUuid);
+  return !knownToolUseIds.has(parentUuid) && !isSubagentParentToolUseId(parentUuid);
 }
 
 /** Host writes one of these fields when a real SDK turn reaches its terminal boundary. */
@@ -86,10 +83,28 @@ function isInternalTitleAssistant(meta: Record<string, unknown> | null): boolean
   if (!meta) return false;
   return (
     meta.goalCompletion !== undefined ||
+    meta.cindyMakeCompletion !== undefined ||
     meta.goalNotice !== undefined ||
     meta.reviewRun !== undefined ||
-    meta.scheduleSkip !== undefined
+    meta.scheduleSkip !== undefined ||
+    isBotCollaborationCardRow(meta)
   );
+}
+
+/**
+ * 伙伴协作里**渲染成内联卡**的那两种行：委派锚点（空正文）与插话留痕。它们是对话
+ * 的注解，不是对话内容，不该被拿去当标题或列表预览。
+ *
+ * 刻意不排除客座请求 / 客座结果 / 终态镜像：那三种带的是伙伴真正说的话，本来就是
+ * 合法的会话主题证据，把它们一起挡掉会让「刚收到委派结果」的任务预览凭空变空。
+ */
+function isBotCollaborationCardRow(meta: Record<string, unknown>): boolean {
+  const collaboration = meta.botCollaboration;
+  if (!collaboration || typeof collaboration !== 'object' || Array.isArray(collaboration)) {
+    return false;
+  }
+  const role = (collaboration as { role?: unknown }).role;
+  return role === 'delegation-request' || role === 'delegation-result' || role === 'interjection';
 }
 
 /** Only an explicit user send starts a new title turn; steer stays inside the current turn. */

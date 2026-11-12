@@ -1,10 +1,11 @@
 /**
  * Shim: openclaw/plugin-sdk/config-contracts.
  *
- * BrowserConfig / BrowserProfileConfig are ported verbatim from upstream
- * `config/types.browser.ts` (self-contained type-only). OpenClawConfig is the
- * app root config in upstream; the browser core only ever reads its `browser`
- * slice, so we model it as a minimal envelope carrying that slice.
+ * BrowserConfig / BrowserProfileConfig are ported from upstream
+ * `config/types.browser.ts` (self-contained type-only). `displayName` is a
+ * host-only extension: the map key stays the on-disk folder. OpenClawConfig is
+ * the app root config in upstream; the browser core only ever reads its
+ * `browser` slice, so we model it as a minimal envelope carrying that slice.
  */
 export type { BrowserConfig, BrowserProfileConfig } from './_local/config-types-browser.js';
 import type { BrowserConfig } from './_local/config-types-browser.js';

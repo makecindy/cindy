@@ -139,9 +139,7 @@ describe('sidebar owner-scoped renderer storage', () => {
   it('blocks a first scoped write while shared legacy ownership is unresolved', () => {
     localStorage.setItem(PROJECTS_KEY, '["legacy"]');
     __testing.setOwnerAuthorityReader((ownerId) =>
-      ownerId === 'owner-a'
-        ? { ...OWNER_A, claimed: false, canInitialize: false }
-        : null,
+      ownerId === 'owner-a' ? { ...OWNER_A, claimed: false, canInitialize: false } : null,
     );
 
     expect(writeSidebarOwnerStorage(PROJECTS_KEY, 'owner-a', '["default-derived"]')).toBe(false);
@@ -155,9 +153,7 @@ describe('sidebar owner-scoped renderer storage', () => {
     expect(readSidebarOwnerStorage(PROJECTS_KEY, 'owner-a')).toBe('["legacy"]');
 
     __testing.setOwnerAuthorityReader((ownerId) =>
-      ownerId === 'owner-a'
-        ? { ...OWNER_A, claimed: false, canInitialize: false }
-        : null,
+      ownerId === 'owner-a' ? { ...OWNER_A, claimed: false, canInitialize: false } : null,
     );
     expect(readSidebarOwnerStorage(PROJECTS_KEY, 'owner-a')).toBeNull();
     expect(writeSidebarOwnerStorage(PROJECTS_KEY, 'owner-a', '["default-derived"]')).toBe(false);

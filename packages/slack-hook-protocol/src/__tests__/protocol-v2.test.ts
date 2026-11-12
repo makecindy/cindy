@@ -170,6 +170,28 @@ describe('v2 新帧 round-trip', () => {
     roundTrip(
       makeQueryResponse({ queryId: 'q-3', kind: 'models', ok: false, error: 'device busy' }),
     );
+    roundTrip(
+      makeQueryRequest({
+        queryId: 'q-new',
+        kind: 'session-new',
+        sessionNew: {
+          previousExternalKey: 'telegram:dm:1:g1',
+          externalKey: 'telegram:dm:1:g2',
+          workspace: 'cindy',
+          options: { agentKind: 'pi', model: 'grok-4.6', permissionMode: 'bypassPermissions' },
+          source: { im: 'telegram', userText: '' },
+        },
+      }),
+    );
+    roundTrip(
+      makeQueryResponse({
+        queryId: 'q-new',
+        kind: 'session-new',
+        ok: true,
+        error: null,
+        sessionId: 'new-task-id',
+      }),
+    );
   });
 
   it('task.cancel', () => {
@@ -327,6 +349,13 @@ describe('query 帧字段联动', () => {
   it('未知 kind 拒收', () => {
     const msg = makeQueryRequest({ queryId: 'q-1', kind: 'workspaces' });
     expectReject({ ...msg, payload: { queryId: 'q-1', kind: 'channels' } }, 'kind must be one of');
+  });
+
+  it('recipient 可选; 带上时必须是完整的应用与账号', () => {
+    const msg = roundTrip(
+      makeQueryRequest({ queryId: 'q-1', kind: 'workspaces', recipient: { scopeId: 'cli_app', principalId: 'ou_user' } }),
+    );
+    expectReject({ ...msg, payload: { queryId: 'q-1', kind: 'workspaces', recipient: { scopeId: 'cli_app' } } }, 'recipient');
   });
 });
 

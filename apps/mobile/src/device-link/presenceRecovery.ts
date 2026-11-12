@@ -1,4 +1,5 @@
 import type { InvokeResultPayload, PresenceSnapshot } from '@cindy/device-link';
+export { isPresenceEligibleForRemoteRequest } from '@cindy/maker-shared/device-responsiveness';
 
 type PresenceAvailabilitySnapshot = Pick<PresenceSnapshot, 'deviceId' | 'online' | 'remoteControlEnabled'>;
 
@@ -62,10 +63,13 @@ export function getOrCreatePresenceTrackedRequest<T>(
   options: {
     /** 成功的 link 在当前 presence / 连接代保持可复用；失败仍立即清除。 */
     retainSuccessful?: boolean;
+    /** 重试已失效的 link 时替换已结算缓存；仍复用当前在途请求以保持单飞。 */
+    refreshSettled?: boolean;
   } = {},
 ): PresenceTrackedRequest<T> {
   const existing = inFlight.get(deviceId);
-  if (existing) return existing;
+  if (existing && (!options.refreshSettled || existing.pending)) return existing;
+  if (existing) inFlight.delete(deviceId);
 
   const tracked: PresenceTrackedRequest<T> = {
     capturedPresenceEpoch: capturePresenceAvailabilityEpoch(epochs, deviceId),
@@ -105,6 +109,8 @@ export interface PresenceWipeTimerDeps {
   setTimer(callback: () => void, delayMs: number): ReturnType<typeof setTimeout>;
   clearTimer(timer: ReturnType<typeof setTimeout>): void;
   wipe(deviceId: string): void;
+  /** Deferred consumers must claim immediately before wiping, keeping recovery protection alive. */
+  deferWipe?(deviceId: string, claim: () => boolean): void;
   isConfirmationInFlight?(deviceId: string): boolean;
 }
 
@@ -200,10 +206,22 @@ function schedulePresenceWipeAt(
         );
         return;
       }
-      timers.delete(deviceId);
-      if (shouldWipeUnavailableDeviceMirror(availabilityByDevice, deviceId)) {
-        deps.wipe(deviceId);
-      }
+      const claim = (): boolean => {
+        if (timers.get(deviceId) !== entry) return false;
+        if (deps.isConfirmationInFlight?.(deviceId)) {
+          schedulePresenceWipeAt(
+            timers, availabilityByDevice, deviceId, firstScheduledAt,
+            deps.now() + PRESENCE_WIPE_CONFIRMATION_POLL_MS, deps,
+          );
+          return false;
+        }
+        timers.delete(deviceId);
+        return shouldWipeUnavailableDeviceMirror(availabilityByDevice, deviceId);
+      };
+      // Retain the entry until execution, so reconnect can still extend its
+      // deadline and clear/replacement can invalidate the queued claim.
+      if (deps.deferWipe) deps.deferWipe(deviceId, claim);
+      else if (claim()) deps.wipe(deviceId);
     }, delayMs),
   };
   timers.set(deviceId, entry);
@@ -293,28 +311,22 @@ export function reconcileAvailabilityAfterInboundFrame(
   return cleared;
 }
 
-export function isPresenceEligibleForRemoteRequest(
-  availabilityByDevice: ReadonlyMap<string, boolean>,
-  deviceId: string,
-): boolean {
-  // 首次尚未收到 presence 时保留既有乐观尝试;只有 relay 已明确声明 unavailable
-  // 才拦住 rehydrate / half-open probe,避免对离线设备立即重放请求风暴。
-  return availabilityByDevice.get(deviceId) !== false;
-}
-
 export function resetPresenceAvailabilityForConnection(
   availabilityByDevice: Map<string, boolean>,
   pendingRecoveryDeviceIds: Set<string>,
+  belongsToConnection: (deviceId: string) => boolean = () => true,
 ): string[] {
   // presence-changed 是只发给「当时在线控制端」的增量广播,新连接没有全量重放。
-  // 每个连接代际都必须丢弃旧 verdict,否则后台期间漏掉的恢复事件会让 stale false
-  // 永久挡住该设备的 rehydrate。上一代明确 unavailable 的设备另存为 pending
+  // 每个连接代际都必须丢弃旧的离线/存在性 verdict,否则后台期间漏掉的恢复事件会让 stale false
+  // 永久挡住该设备的 rehydrate;显式 disabled 由调用方跨代保留。上一代明确 unavailable 的设备另存为 pending
   // recovery:当前连接按 unknown 乐观尝试,而它稍后首个 available 快照仍能形成恢复边。
   const unavailableDeviceIds = [...availabilityByDevice.entries()]
-    .filter(([, available]) => !available)
+    .filter(([deviceId, available]) => belongsToConnection(deviceId) && !available)
     .map(([deviceId]) => deviceId);
   for (const deviceId of unavailableDeviceIds) pendingRecoveryDeviceIds.add(deviceId);
-  availabilityByDevice.clear();
+  for (const deviceId of availabilityByDevice.keys()) {
+    if (belongsToConnection(deviceId)) availabilityByDevice.delete(deviceId);
+  }
   return unavailableDeviceIds;
 }
 

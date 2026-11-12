@@ -1,3 +1,7 @@
+vi.mock('../../downloader/http', async () => {
+  const { net } = await import('electron');
+  return { requestResponse: (url: string, init: RequestInit) => net.fetch(url, init) };
+});
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,6 +13,11 @@ import JSZip from 'jszip';
 // A fixed root lets concurrent `pnpm test:unit` runs delete each other's
 // junctions and rename targets, producing ENOENT/EPERM/ENOTEMPTY on Windows.
 const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-install-service-test-'));
+async function configureTestPaths(): Promise<void> {
+  const { configureAppDataDir, configureUserDataDir } = await import('../../userDataPath');
+  configureAppDataDir(path.join(TEST_ROOT, 'userData'));
+  configureUserDataDir(path.join(TEST_ROOT, 'userData'));
+}
 
 function removeTestRoot(): void {
   fs.rmSync(TEST_ROOT, {
@@ -22,6 +31,13 @@ function removeTestRoot(): void {
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => path.join(TEST_ROOT, 'userData')),
+  },
+  shell: {
+    trashItem: vi.fn(async (source: string) => {
+      const trash = path.join(TEST_ROOT, 'trash', crypto.randomUUID());
+      fs.mkdirSync(path.dirname(trash), { recursive: true });
+      await fs.promises.rename(source, trash);
+    }),
   },
   net: {
     fetch: vi.fn(),
@@ -58,7 +74,7 @@ vi.mock('../../clientEndpointsService', () => ({
   getClientEndpoint: vi.fn(() => 'https://skillhub.test.invalid'),
 }));
 
-vi.mock('../../serverApiClient', () => ({
+vi.mock('../../serverApiClient.desktop', () => ({
   serverApiFetch: vi.fn(),
 }));
 
@@ -67,6 +83,7 @@ vi.mock('../registry', () => ({
     addInstall: vi.fn(),
     getInstall: vi.fn(),
     readManifest: vi.fn(),
+    listAllInstalls: vi.fn(),
     removeInstall: vi.fn(),
   },
 }));
@@ -79,6 +96,7 @@ vi.mock('../../maker-host/shared-global-skills.js', () => ({
   prepareSharedGlobalSkillLinks: vi.fn(async () => ({ warnings: [] })),
   prepareSharedProjectSkillLinks: vi.fn(async () => ({ warnings: [] })),
   projectWorkingDirFromSkillPath: vi.fn(() => null),
+  shouldProjectToClaudeSkills: vi.fn(async () => true),
 }));
 
 async function makeZip(files: Record<string, string>): Promise<Uint8Array> {
@@ -94,40 +112,22 @@ function sha256(buf: Uint8Array): string {
 }
 
 function mockDownload(zipBuf: Uint8Array) {
-  return {
-    ok: true,
-    status: 200,
-    headers: {
-      get: (name: string) => name.toLowerCase() === 'content-length' ? String(zipBuf.byteLength) : null,
-    },
-    body: {
-      getReader: () => {
-        let done = false;
-        return {
-          read: async () => {
-            if (done) return { done: true, value: undefined };
-            done = true;
-            return { done: false, value: zipBuf };
-          },
-          cancel: vi.fn(),
-        };
-      },
-    },
-  } as unknown as Response;
+  return new Response(Buffer.from(zipBuf), {
+    headers: { 'content-length': String(zipBuf.byteLength) },
+  });
 }
 
 function makeDirectoryLink(linkPath: string, targetPath: string) {
   fs.mkdirSync(path.dirname(linkPath), { recursive: true });
-  const linkTarget = process.platform === 'win32'
-    ? targetPath
-    : path.relative(path.dirname(linkPath), targetPath);
+  const linkTarget =
+    process.platform === 'win32' ? targetPath : path.relative(path.dirname(linkPath), targetPath);
   fs.symlinkSync(linkTarget, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
 }
 
 async function setupInstallDownload(skillName: string, zipBuf: Uint8Array) {
   const { net } = await import('electron');
   const { getCurrentUserId } = await import('../../authManager');
-  const { serverApiFetch } = await import('../../serverApiClient');
+  const { serverApiFetch } = await import('../../serverApiClient.desktop');
 
   vi.mocked(getCurrentUserId).mockReturnValue('user-1');
   vi.mocked(serverApiFetch).mockImplementation(async (apiPath: string) => {
@@ -149,16 +149,616 @@ async function setupInstallDownload(skillName: string, zipBuf: Uint8Array) {
 }
 
 describe('skillhub/installService', () => {
-  beforeEach(() => {
-    vi.resetModules();
-    vi.clearAllMocks();
+  beforeEach(async () => {
+    // Keep the module graph warm: each case owns TEST_ROOT and resets every mock below.
+    // The restart-specific cases call resetModules() at the exact boundary they exercise.
+    vi.resetAllMocks();
+    await configureTestPaths();
     removeTestRoot();
     fs.mkdirSync(TEST_ROOT, { recursive: true });
+    const { projectWorkingDirFromSkillPath } =
+      await import('../../maker-host/shared-global-skills.js');
+    vi.mocked(projectWorkingDirFromSkillPath).mockReturnValue(null);
+    const { getAppCapabilities } = await import('../../appCapabilities.js');
+    vi.mocked(getAppCapabilities).mockReturnValue({
+      canUseCindyAccountServices: true,
+      canUseCindyGateway: true,
+      canUseDeviceLink: true,
+      canUseSkillHubCloud: true,
+      canUseCindyOAuthBroker: true,
+      canUseCindyHeartbeat: true,
+    });
   });
 
   afterAll(() => {
     removeTestRoot();
   });
+
+  async function localFixture(name: string) {
+    const source = path.join(TEST_ROOT, '.agents', 'skills', name);
+    fs.mkdirSync(source, { recursive: true });
+    fs.writeFileSync(path.join(source, 'SKILL.md'), 'fixture content');
+    const { inspectLocalSkillTarget } = await import('../localSkillTarget');
+    const { registryService } = await import('../registry');
+    vi.mocked(registryService.getInstall).mockResolvedValue(null);
+    vi.mocked(registryService.readManifest).mockResolvedValue(null);
+    vi.mocked(registryService.listAllInstalls).mockResolvedValue([]);
+    return { source, target: inspectLocalSkillTarget(source, [source])! };
+  }
+
+  it('trashes an unregistered scanned skill and clears its Cindy override', async () => {
+    const { source, target } = await localFixture('unregistered');
+    const { setCindySkillEnabled, isCindySkillEnabled } = await import('../activationPreferences');
+    const { uninstall } = await import('../installService');
+    await setCindySkillEnabled(source, false);
+    expect(await uninstall(source, target)).toEqual({ success: true });
+    expect(fs.existsSync(source)).toBe(false);
+    expect(isCindySkillEnabled(source)).toBe(true);
+  });
+
+  it('keeps files intact when a remote approval expires after the uninstall leases are acquired', async () => {
+    const { source, target } = await localFixture('remote-remove');
+    const { uninstall } = await import('../installService');
+    const { shell } = await import('electron');
+    const beforeCommit = vi.fn(() => false);
+    expect((await uninstall(source, target, () => true, beforeCommit)).success).toBe(false);
+    expect(beforeCommit).toHaveBeenCalledOnce();
+    expect(fs.readFileSync(path.join(source, 'SKILL.md'), 'utf8')).toBe('fixture content');
+    expect(shell.trashItem).not.toHaveBeenCalled();
+  });
+
+  it('checks the remote instance after extraction and preserves the old version when confirmation is stale', async () => {
+    const { source } = await localFixture('remote-update');
+    await setupInstallDownload('remote-update', await makeZip({ 'SKILL.md': 'new content' }));
+    const { getCurrentDataOwnerId } = await import('../../authManager');
+    vi.mocked(getCurrentDataOwnerId).mockReturnValue('owner');
+    const { install } = await import('../installService');
+    const { registryService } = await import('../registry');
+    const beforeCommit = vi.fn(async () => false);
+    const result = await install({ name: 'remote-update', installPath: source, version: '2.0.0', force: true }, () => {}, { current: () => true, beforeCommit });
+    expect(result).toMatchObject({ success: false, errorCode: 'CANCELLED' });
+    expect(beforeCommit).toHaveBeenCalledOnce();
+    expect(fs.readFileSync(path.join(source, 'SKILL.md'), 'utf8')).toBe('fixture content');
+    expect(registryService.addInstall).not.toHaveBeenCalled();
+  });
+
+  it('serializes an in-flight scanner repair before uninstall snapshots and removes its completed link', async () => {
+    const { source, target } = await localFixture('scanner-race');
+    const { registryService } = await import('../registry');
+    const { reconcileScannedInstall } = await import('../registryReconciliation');
+    const { uninstall } = await import('../installService');
+    const { shell } = await import('electron');
+    const entry = {
+      version: '1.0.0',
+      catalogScope: 'market',
+    } as import('../registry').StoredInstall;
+    let entered!: () => void;
+    const checking = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let resume!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    vi.mocked(registryService.getInstall).mockImplementationOnce(async () => {
+      entered();
+      await waiting;
+      return entry;
+    });
+    const repair = reconcileScannedInstall(
+      { skillName: 'scanner-race', installPath: source, entry },
+      false,
+    );
+    await checking;
+    try {
+      expect((await uninstall(source, target)).success).toBe(false);
+      expect(shell.trashItem).not.toHaveBeenCalled();
+    } finally {
+      resume();
+      await repair;
+    }
+    const link = path.join(TEST_ROOT, '.claude', 'skills', 'scanner-race');
+    expect(fs.existsSync(link)).toBe(true);
+    expect(await uninstall(source, target)).toEqual({ success: true });
+    expect(fs.existsSync(source)).toBe(false);
+    expect(() => fs.lstatSync(link)).toThrow();
+    expect(shell.trashItem).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves files, registry and disabled state when system trash fails', async () => {
+    const { source, target } = await localFixture('trash-failure');
+    const { shell } = await import('electron');
+    const { registryService } = await import('../registry');
+    const { setCindySkillEnabled, isCindySkillEnabled } = await import('../activationPreferences');
+    const { uninstall } = await import('../installService');
+    await setCindySkillEnabled(source, false);
+    vi.mocked(shell.trashItem).mockRejectedValueOnce(new Error('trash unavailable'));
+    expect((await uninstall(source, target)).success).toBe(false);
+    expect(fs.readFileSync(path.join(source, 'SKILL.md'), 'utf8')).toBe('fixture content');
+    expect(registryService.removeInstall).not.toHaveBeenCalled();
+    expect(isCindySkillEnabled(source)).toBe(false);
+  });
+
+  it.each(['ordinary', 'skill-shaped'])(
+    'removes only an external import link and leaves its source untouched (%s)',
+    async (layout) => {
+      const source =
+        layout === 'ordinary'
+          ? path.join(TEST_ROOT, 'external', 'shared')
+          : path.join(TEST_ROOT, 'checkout', '.agents', 'skills', 'shared');
+      const alias = path.join(TEST_ROOT, '.agents', 'skills', 'shared');
+      fs.mkdirSync(source, { recursive: true });
+      fs.writeFileSync(path.join(source, 'SKILL.md'), 'external content');
+      makeDirectoryLink(alias, source);
+      const { inspectLocalSkillTarget } = await import('../localSkillTarget');
+      const { registryService } = await import('../registry');
+      vi.mocked(registryService.getInstall).mockResolvedValue(null);
+      vi.mocked(registryService.readManifest).mockResolvedValue(null);
+      vi.mocked(registryService.listAllInstalls).mockResolvedValue([]);
+      const { uninstall } = await import('../installService');
+      const { shell } = await import('electron');
+      const target = inspectLocalSkillTarget(source, [alias])!;
+      expect(target.linkOnly).toBe(true);
+      expect(await uninstall(source, target)).toEqual({ success: true });
+      expect(shell.trashItem).toHaveBeenCalledWith(alias);
+      expect(fs.existsSync(alias)).toBe(false);
+      expect(fs.readFileSync(path.join(source, 'SKILL.md'), 'utf8')).toBe('external content');
+    },
+  );
+
+  it.each(['complete', 'retry'])(
+    'preserves shared disabled state after removing one external scope (%s)',
+    async (outcome) => {
+      const source = path.join(TEST_ROOT, 'external', 'shared');
+      const alias = path.join(TEST_ROOT, '.agents', 'skills', 'global-import');
+      const otherAlias = path.join(TEST_ROOT, 'project', '.agents', 'skills', 'project-import');
+      fs.mkdirSync(source, { recursive: true });
+      fs.writeFileSync(path.join(source, 'SKILL.md'), 'external content');
+      for (const entry of [alias, otherAlias]) makeDirectoryLink(entry, source);
+      const { inspectLocalSkillTarget } = await import('../localSkillTarget');
+      const target = inspectLocalSkillTarget(source, [alias])!;
+      const { registryService } = await import('../registry');
+      vi.mocked(registryService.getInstall).mockResolvedValue(null);
+      vi.mocked(registryService.readManifest).mockResolvedValue(null);
+      vi.mocked(registryService.listAllInstalls).mockResolvedValue([]);
+      const { setCindySkillEnabled, isCindySkillEnabled } =
+        await import('../activationPreferences');
+      await setCindySkillEnabled(source, false);
+      const { shell } = await import('electron');
+      let cleanupBlocked = false;
+      vi.mocked(shell.trashItem).mockImplementationOnce(async (entry) => {
+        await fs.promises.rename(entry, path.join(TEST_ROOT, 'removed-import'));
+        cleanupBlocked = outcome === 'retry';
+      });
+      const { uninstall, retryUninstallCleanup } = await import('../installService');
+      const result = await uninstall(source, target, () => !cleanupBlocked);
+      expect(result).toMatchObject({ success: true });
+      if (outcome === 'retry') {
+        expect(result).toHaveProperty('cleanupToken');
+        if (result.success && result.cleanupToken) {
+          expect(await retryUninstallCleanup(result.cleanupToken, () => true)).toBe(true);
+        }
+      }
+      expect(fs.lstatSync(alias, { throwIfNoEntry: false })).toBeUndefined();
+      expect(fs.readFileSync(path.join(otherAlias, 'SKILL.md'), 'utf8')).toBe('external content');
+      expect(isCindySkillEnabled(otherAlias)).toBe(false);
+    },
+  );
+
+  it('cleans cross-scope aliases after physical removal and preserves a retargeted link', async () => {
+    const { source } = await localFixture('foo');
+    const globalAlias = path.join(TEST_ROOT, 'home', '.agents', 'skills', 'global-alias');
+    const projectAlias = path.join(TEST_ROOT, 'project', '.agents', 'skills', 'project-alias');
+    const replacedAlias = path.join(TEST_ROOT, 'other', '.agents', 'skills', 'replaced-alias');
+    for (const alias of [globalAlias, projectAlias, replacedAlias])
+      makeDirectoryLink(alias, source);
+    const { inspectLocalSkillTarget } = await import('../localSkillTarget');
+    const target = inspectLocalSkillTarget(source, [
+      source,
+      globalAlias,
+      projectAlias,
+      replacedAlias,
+    ])!;
+    const otherSource = path.join(TEST_ROOT, 'unrelated');
+    fs.mkdirSync(otherSource);
+    fs.unlinkSync(replacedAlias);
+    makeDirectoryLink(replacedAlias, otherSource);
+    const { uninstall } = await import('../installService');
+    expect(await uninstall(source, target)).toEqual({ success: true });
+    for (const alias of [globalAlias, projectAlias]) {
+      expect(fs.lstatSync(alias, { throwIfNoEntry: false })).toBeUndefined();
+      // A fresh directory can now occupy the old alias name.
+      fs.mkdirSync(alias);
+    }
+    expect(fs.realpathSync.native(replacedAlias)).toBe(fs.realpathSync.native(otherSource));
+  });
+
+  it('rejects a source replaced while registry inspection is pending', async () => {
+    const { source, target } = await localFixture('replaced');
+    const { registryService } = await import('../registry');
+    vi.mocked(registryService.getInstall).mockImplementationOnce(async () => {
+      fs.renameSync(source, source + '-old');
+      fs.mkdirSync(source);
+      fs.writeFileSync(path.join(source, 'SKILL.md'), 'replacement');
+      return null;
+    });
+    const { uninstall } = await import('../installService');
+    const { shell } = await import('electron');
+    expect((await uninstall(source, target)).success).toBe(false);
+    expect(shell.trashItem).not.toHaveBeenCalled();
+    expect(fs.readFileSync(path.join(source, 'SKILL.md'), 'utf8')).toBe('replacement');
+  });
+
+  it('retries metadata cleanup without trashing a second time', async () => {
+    const { source, target } = await localFixture('cleanup-retry');
+    const { registryService } = await import('../registry');
+    vi.mocked(registryService.getInstall).mockResolvedValue({
+      origin: 'imported',
+      version: '1',
+      authorId: '',
+      folderHash: 'hash',
+      installedAt: 1,
+      updatedAt: 1,
+    });
+    vi.mocked(registryService.removeInstall)
+      .mockRejectedValueOnce(new Error('disk unavailable'))
+      .mockResolvedValue(undefined);
+    const { uninstall, retryUninstallCleanup } = await import('../installService');
+    const { shell } = await import('electron');
+    const result = await uninstall(source, target);
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error('uninstall failed');
+    expect(result.cleanupToken).toBeTruthy();
+    expect(await retryUninstallCleanup(result.cleanupToken!, () => true)).toBe(true);
+    expect(shell.trashItem).toHaveBeenCalledTimes(1);
+    expect(registryService.removeInstall).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves a restored installation untouched when retrying cleanup', async () => {
+    const { source, target } = await localFixture('cleanup-restored');
+    const { registryService } = await import('../registry');
+    vi.mocked(registryService.getInstall).mockResolvedValue({
+      origin: 'imported',
+      version: '1',
+      authorId: '',
+      folderHash: 'hash',
+      installedAt: 1,
+      updatedAt: 1,
+    });
+    vi.mocked(registryService.removeInstall).mockRejectedValueOnce(new Error('disk unavailable'));
+    const { uninstall, retryUninstallCleanup } = await import('../installService');
+    const result = await uninstall(source, target);
+    if (!result.success || !result.cleanupToken) throw new Error('expected retry receipt');
+    fs.mkdirSync(source);
+    fs.writeFileSync(path.join(source, 'SKILL.md'), 'restored');
+    expect(await retryUninstallCleanup(result.cleanupToken, () => true)).toBe(true);
+    expect(registryService.removeInstall).toHaveBeenCalledTimes(1);
+    expect(fs.readFileSync(path.join(source, 'SKILL.md'), 'utf8')).toBe('restored');
+  });
+
+  it('recovers a receipt after restart while retaining every alias barrier', async () => {
+    const { source, target } = await localFixture('cleanup-restarted');
+    const { registryService } = await import('../registry');
+    vi.mocked(registryService.getInstall).mockResolvedValue({
+      origin: 'imported',
+      version: '1',
+      authorId: '',
+      folderHash: 'hash',
+      installedAt: 1,
+      updatedAt: 1,
+    });
+    vi.mocked(registryService.removeInstall).mockRejectedValueOnce(new Error('disk unavailable'));
+    const { uninstall } = await import('../installService');
+    const { shell } = await import('electron');
+    const result = await uninstall(source, target);
+    if (!result.success || !result.cleanupToken) throw new Error('expected receipt');
+    vi.resetModules();
+    await configureTestPaths();
+    const { retryUninstallCleanup, listPendingUninstallCleanups } =
+      await import('../installService');
+    const { acquireSharedSkillMutationLease } = await import('../sharedMutationLease');
+    expect(listPendingUninstallCleanups()).toEqual([
+      { token: result.cleanupToken, name: 'cleanup-restarted' },
+    ]);
+    expect(await acquireSharedSkillMutationLease(['cleanup-restarted'])).toBeNull();
+    expect(await retryUninstallCleanup(result.cleanupToken, () => true)).toBe(true);
+    expect(listPendingUninstallCleanups()).toEqual([]);
+    const next = await acquireSharedSkillMutationLease(['cleanup-restarted']);
+    expect(next).not.toBeNull();
+    await next!();
+    expect(shell.trashItem).toHaveBeenCalledOnce();
+  });
+
+  it.each(['retry-then-install', 'external-replacement'] as const)(
+    'finishes old imported aliases without losing the source (%s)',
+    async (scenario) => {
+      const source = path.join(TEST_ROOT, 'external', 'old-source');
+      const alias = path.join(TEST_ROOT, '.agents', 'skills', 'reinstalled-alias');
+      const compatibilityAlias = path.join(TEST_ROOT, '.claude', 'skills', 'different-alias');
+      fs.mkdirSync(source, { recursive: true });
+      fs.writeFileSync(path.join(source, 'SKILL.md'), 'old external skill');
+      for (const entry of [alias, compatibilityAlias]) makeDirectoryLink(entry, source);
+      const { inspectLocalSkillTarget } = await import('../localSkillTarget');
+      const { registryService } = await import('../registry');
+      vi.mocked(registryService.listAllInstalls).mockResolvedValue([]);
+      const target = inspectLocalSkillTarget(source, [alias, compatibilityAlias])!;
+      expect(target.linkOnly).toBe(true);
+      const originalUnlink = fs.unlinkSync;
+      const unlink = vi.spyOn(fs, 'unlinkSync').mockImplementation((entry) => {
+        if (entry === compatibilityAlias)
+          throw Object.assign(new Error('fixture link is busy'), { code: 'EPERM' });
+        return originalUnlink(entry);
+      });
+      const { uninstall, install } = await import('../installService');
+      const { shell } = await import('electron');
+      let result: Awaited<ReturnType<typeof uninstall>>;
+      try {
+        result = await uninstall(source, target);
+      } finally {
+        unlink.mockRestore();
+      }
+      if (!result.success || !result.cleanupToken) throw new Error('expected unfinished cleanup');
+      // Simulate an app restart: the pending lease/journal modules own process state that
+      // clearAllMocks() cannot reset, so re-importing is part of this recovery contract.
+      vi.resetModules();
+      await configureTestPaths();
+      const { acquireSharedSkillMutationLease } = await import('../sharedMutationLease');
+      for (const name of ['old-source', 'reinstalled-alias', 'different-alias']) {
+        expect(await acquireSharedSkillMutationLease([name])).toBeNull();
+      }
+      const unrelated = await acquireSharedSkillMutationLease(['unrelated-skill']);
+      expect(unrelated).not.toBeNull();
+      await unrelated!();
+      const zip = await makeZip({ 'SKILL.md': 'new installed skill' });
+      await setupInstallDownload('reinstalled-alias', zip);
+      const params = { name: 'reinstalled-alias', installPath: alias, version: '1.0.0' };
+      expect((await install(params, () => {})).success).toBe(false);
+      if (scenario === 'external-replacement') {
+        // External CLIs do not participate in Cindy's shared mutation protocol.
+        fs.mkdirSync(alias);
+        fs.writeFileSync(path.join(alias, 'SKILL.md'), 'new installed skill');
+      }
+      const { retryUninstallCleanup } = await import('../installService');
+      expect(await retryUninstallCleanup(result.cleanupToken, () => true)).toBe(true);
+      expect(fs.lstatSync(compatibilityAlias, { throwIfNoEntry: false })).toBeUndefined();
+      if (scenario === 'retry-then-install')
+        expect((await install(params, () => {})).success).toBe(true);
+      expect(fs.readFileSync(path.join(alias, 'SKILL.md'), 'utf8')).toBe('new installed skill');
+      expect(fs.readFileSync(path.join(source, 'SKILL.md'), 'utf8')).toBe('old external skill');
+      expect(shell.trashItem).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('preserves restored source links and newer disabled intent during delayed cleanup', async () => {
+    const { source } = await localFixture('restored-source');
+    const alias = path.join(TEST_ROOT, '.claude', 'skills', 'restored-alias');
+    makeDirectoryLink(alias, source);
+    const { inspectLocalSkillTarget } = await import('../localSkillTarget');
+    const target = inspectLocalSkillTarget(source, [source, alias])!;
+    const prefs = await import('../activationPreferences');
+    await prefs.setCindySkillEnabled(source, false);
+    const originalUnlink = fs.unlinkSync;
+    const unlink = vi.spyOn(fs, 'unlinkSync').mockImplementation((entry) => {
+      if (entry === alias) throw Object.assign(new Error('busy'), { code: 'EPERM' });
+      return originalUnlink(entry);
+    });
+    const { uninstall, retryUninstallCleanup } = await import('../installService');
+    let result: Awaited<ReturnType<typeof uninstall>>;
+    try {
+      result = await uninstall(source, target);
+    } finally {
+      unlink.mockRestore();
+    }
+    if (!result.success || !result.cleanupToken) throw new Error('expected receipt');
+    fs.mkdirSync(source);
+    fs.writeFileSync(path.join(source, 'SKILL.md'), 'restored source');
+    await prefs.setCindySkillEnabled(source, true);
+    await prefs.setCindySkillEnabled(source, false);
+    expect(await retryUninstallCleanup(result.cleanupToken, () => true)).toBe(true);
+    expect(fs.readFileSync(path.join(alias, 'SKILL.md'), 'utf8')).toBe('restored source');
+    expect(prefs.isCindySkillEnabled(source)).toBe(false);
+  });
+
+  it.each(['before-trash', 'after-trash', 'barrier-release'] as const)(
+    'recovers interrupted persistence without replaying trash (%s)',
+    async (failure) => {
+      const { source, target } = await localFixture('persistence-failure');
+      const { shell } = await import('electron');
+      const journal = await import('../uninstallJournal');
+      const realWrite = journal.writeUninstallCleanup;
+      const write = vi.spyOn(journal, 'writeUninstallCleanup').mockImplementation((record) => {
+        if (
+          failure === 'before-trash' ||
+          (failure === 'after-trash' && record.phase !== 'prepared')
+        )
+          throw new Error('disk full');
+        realWrite(record);
+      });
+      const originalUnlink = fs.unlinkSync;
+      const unlink = vi.spyOn(fs, 'unlinkSync').mockImplementation((entry) => {
+        if (
+          failure === 'barrier-release' &&
+          String(entry).includes('shared-skill-mutation-locks') &&
+          String(entry).endsWith('.json')
+        ) {
+          throw Object.assign(new Error('busy'), { code: 'EPERM' });
+        }
+        return originalUnlink(entry);
+      });
+      const { uninstall } = await import('../installService');
+      let result: Awaited<ReturnType<typeof uninstall>>;
+      try {
+        result = await uninstall(source, target);
+      } finally {
+        write.mockRestore();
+        unlink.mockRestore();
+      }
+      if (failure === 'before-trash') {
+        expect(result.success).toBe(false);
+        expect(shell.trashItem).not.toHaveBeenCalled();
+        expect(fs.existsSync(source)).toBe(true);
+        return;
+      }
+      if (!result.success || !result.cleanupToken) throw new Error('expected durable receipt');
+      // Simulate an app restart so the durable cleanup receipt is reconstructed by the
+      // module-level journal/lease state; mock reset alone cannot exercise that boundary.
+      vi.resetModules();
+      await configureTestPaths();
+      const { retryUninstallCleanup } = await import('../installService');
+      const { acquireSharedSkillMutationLease } = await import('../sharedMutationLease');
+      expect(await acquireSharedSkillMutationLease(['persistence-failure'])).toBeNull();
+      expect(await retryUninstallCleanup(result.cleanupToken, () => true)).toBe(true);
+      expect(shell.trashItem).toHaveBeenCalledOnce();
+      expect(fs.existsSync(source)).toBe(false);
+    },
+  );
+
+  it('retries only finalization after completed journal deletion fails', async () => {
+    const { source, target } = await localFixture('completed-receipt');
+    const { registryService } = await import('../registry');
+    vi.mocked(registryService.getInstall).mockResolvedValue({
+      origin: 'imported',
+      version: '1',
+      authorId: '',
+      folderHash: 'hash',
+      installedAt: 1,
+      updatedAt: 1,
+    });
+    const originalUnlink = fs.unlinkSync;
+    const unlink = vi.spyOn(fs, 'unlinkSync').mockImplementation((entry) => {
+      if (String(entry).includes('uninstall-cleanups') && String(entry).endsWith('.json')) {
+        throw Object.assign(new Error('busy journal'), { code: 'EPERM' });
+      }
+      return originalUnlink(entry);
+    });
+    const { uninstall, retryUninstallCleanup } = await import('../installService');
+    let result: Awaited<ReturnType<typeof uninstall>>;
+    try {
+      result = await uninstall(source, target);
+    } finally {
+      unlink.mockRestore();
+    }
+    if (!result.success || !result.cleanupToken) throw new Error('expected receipt');
+    const { readUninstallCleanup } = await import('../uninstallJournal');
+    expect(readUninstallCleanup(result.cleanupToken)?.phase).toBe('completed');
+    expect(registryService.removeInstall).toHaveBeenCalledOnce();
+    const { acquireSharedSkillMutationLease } = await import('../sharedMutationLease');
+    const next = await acquireSharedSkillMutationLease(['completed-receipt']);
+    expect(next).not.toBeNull();
+    await next!();
+    expect(await retryUninstallCleanup(result.cleanupToken, () => true)).toBe(true);
+    expect(registryService.removeInstall).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the receipt and barrier when a retry cannot inspect the source', async () => {
+    const { source, target } = await localFixture('unreadable-source');
+    const { registryService } = await import('../registry');
+    vi.mocked(registryService.getInstall).mockResolvedValue({
+      origin: 'imported',
+      version: '1',
+      authorId: '',
+      folderHash: 'hash',
+      installedAt: 1,
+      updatedAt: 1,
+    });
+    vi.mocked(registryService.removeInstall).mockRejectedValueOnce(new Error('busy registry'));
+    const { uninstall, retryUninstallCleanup, listPendingUninstallCleanups } =
+      await import('../installService');
+    const result = await uninstall(source, target);
+    if (!result.success || !result.cleanupToken) throw new Error('expected receipt');
+    const originalStat = fs.lstatSync;
+    const stat = vi.spyOn(fs, 'lstatSync').mockImplementation((...args) => {
+      if (String(args[0]) === target.sourcePath)
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      return originalStat(...args);
+    });
+    try {
+      expect(await retryUninstallCleanup(result.cleanupToken, () => true)).toBe(false);
+    } finally {
+      stat.mockRestore();
+    }
+    expect(listPendingUninstallCleanups()).toHaveLength(1);
+    const { acquireSharedSkillMutationLease } = await import('../sharedMutationLease');
+    expect(await acquireSharedSkillMutationLease(['unreadable-source'])).toBeNull();
+    expect(await retryUninstallCleanup(result.cleanupToken, () => true)).toBe(true);
+  });
+
+  it('retains cleanup across owner changes and refuses to run it as another owner', async () => {
+    const { source, target } = await localFixture('owner-cleanup');
+    const { shell } = await import('electron');
+    const { getCurrentDataOwnerId } = await import('../../authManager');
+    vi.mocked(shell.trashItem).mockImplementationOnce(async (entry) => {
+      await fs.promises.rename(entry, source + '-trash');
+      vi.mocked(getCurrentDataOwnerId).mockReturnValue('other-owner');
+    });
+    const { uninstall, retryUninstallCleanup, listPendingUninstallCleanups } =
+      await import('../installService');
+    const result = await uninstall(source, target);
+    if (!result.success || !result.cleanupToken) throw new Error('expected durable receipt');
+    expect(listPendingUninstallCleanups()).toEqual([]);
+    expect(await retryUninstallCleanup(result.cleanupToken, () => true)).toBe(false);
+    vi.mocked(getCurrentDataOwnerId).mockReturnValue('user-1');
+    expect(listPendingUninstallCleanups()).toHaveLength(1);
+    expect(await retryUninstallCleanup(result.cleanupToken, () => true)).toBe(true);
+    expect(shell.trashItem).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { scope: undefined, origin: 'published', expectedOrigin: 'published' },
+    { scope: 'market', origin: 'published', expectedOrigin: 'installed' },
+    { scope: undefined, origin: 'installed', expectedOrigin: 'installed' },
+  ] as const)(
+    'preserves publication provenance only when updating the same catalog ($scope/$origin)',
+    async ({ scope, origin, expectedOrigin }) => {
+      const name = 'google-play-console';
+      const finalDir = path.join(TEST_ROOT, 'skills', name);
+      fs.mkdirSync(finalDir, { recursive: true });
+      fs.writeFileSync(path.join(finalDir, 'SKILL.md'), 'old content');
+      const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
+      await setupInstallDownload(name, zipBuf);
+      const { registryService } = await import('../registry');
+      const { serverApiFetch } = await import('../../serverApiClient.desktop');
+      const fetch = vi.mocked(serverApiFetch).getMockImplementation()!;
+      vi.mocked(serverApiFetch).mockImplementation(async (url, options) =>
+        url.includes('/batch-detail')
+          ? { items: [{ slug: name, owner: { slug: 'org-owner' }, isMine: true }] }
+          : fetch(url, options),
+      );
+      vi.mocked(registryService.getInstall).mockResolvedValue({
+        version: '1.0.0',
+        origin,
+        authorId: 'org-owner',
+        folderHash: 'old-hash',
+        installedAt: 1,
+        updatedAt: 1,
+      });
+      const { install } = await import('../installService');
+      expect(
+        await install(
+          {
+            name,
+            installPath: finalDir,
+            version: '1.0.1',
+            catalogScope: scope,
+            force: true,
+            skipBackup: false,
+          },
+          () => {},
+        ),
+      ).toMatchObject({ success: true, version: '1.0.1' });
+      expect(registryService.addInstall).toHaveBeenCalledWith(
+        name,
+        finalDir,
+        expect.objectContaining({
+          version: '1.0.1',
+          origin: expectedOrigin,
+          authorId: 'org-owner',
+          ...(scope ? { catalogScope: scope } : {}),
+        }),
+      );
+      expect(fs.readFileSync(path.join(finalDir, 'SKILL.md'), 'utf8')).toBe('new content');
+    },
+  );
 
   it('keeps the previous install intact when extraction fails during forced update', async () => {
     const finalDir = path.join(TEST_ROOT, 'skills', 'broken-skill');
@@ -171,7 +771,7 @@ describe('skillhub/installService', () => {
     });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { install } = await import('../installService');
 
     vi.mocked(getCurrentUserId).mockReturnValue('user-1');
@@ -204,7 +804,7 @@ describe('skillhub/installService', () => {
     expect(fs.readFileSync(path.join(finalDir, 'SKILL.md'), 'utf-8')).toBe('old content');
   });
 
-  it('rejects uninstall outside a cloud capability boundary for market installs', async () => {
+  it('trashes a market install without requiring cloud capabilities', async () => {
     const finalDir = path.join(TEST_ROOT, '.agents', 'skills', 'market-only');
     fs.mkdirSync(finalDir, { recursive: true });
     fs.writeFileSync(path.join(finalDir, 'SKILL.md'), 'content', 'utf-8');
@@ -220,7 +820,7 @@ describe('skillhub/installService', () => {
       updatedAt: 1,
       origin: 'installed',
     });
-    vi.mocked(getAppCapabilities).mockReturnValueOnce({
+    vi.mocked(getAppCapabilities).mockReturnValue({
       canUseCindyAccountServices: false,
       canUseCindyGateway: false,
       canUseDeviceLink: false,
@@ -229,12 +829,8 @@ describe('skillhub/installService', () => {
       canUseCindyHeartbeat: false,
     });
 
-    await expect(uninstall(finalDir)).resolves.toEqual({
-      success: false,
-      errorCode: 'AUTH_REQUIRED',
-      message: 'SkillHub 卸载需要 Cindy 云端账号',
-    });
-    expect(fs.existsSync(finalDir)).toBe(true);
+    await expect(uninstall(finalDir)).resolves.toEqual({ success: true });
+    expect(fs.existsSync(finalDir)).toBe(false);
   });
 
   it('allows uninstalling an imported skill without cloud login', async () => {
@@ -248,7 +844,7 @@ describe('skillhub/installService', () => {
     const { uninstall } = await import('../installService');
 
     vi.mocked(getCurrentUserId).mockReturnValueOnce(null);
-    vi.mocked(registryService.getInstall).mockResolvedValueOnce({
+    vi.mocked(registryService.getInstall).mockResolvedValue({
       version: '0.1.0',
       authorId: '',
       folderHash: 'hash',
@@ -275,6 +871,11 @@ describe('skillhub/installService', () => {
       expect(registryService.removeInstall).toHaveBeenCalledWith(
         'imported-offline',
         expect.stringMatching(/[/\\]imported-offline$/),
+        expect.objectContaining({
+          expected: expect.any(Object),
+          canMutate: expect.any(Function),
+          shouldRemove: expect.any(Function),
+        }),
       );
     } finally {
       vi.mocked(getAppCapabilities).mockImplementation(() => ({
@@ -308,7 +909,7 @@ describe('skillhub/installService', () => {
     const zipBuf = new Uint8Array([1, 2, 3]);
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { install } = await import('../installService');
 
     try {
@@ -345,12 +946,60 @@ describe('skillhub/installService', () => {
     }
   });
 
+  it.each([
+    'success',
+    'registry-failure',
+    'owner-before-registry',
+    'owner-during-registry',
+    'preference-failure',
+  ])('preserves a missing installation’s disabled override until commit (%s)', async (outcome) => {
+    const skillName = 'stale-disabled';
+    const finalDir = path.join(fs.realpathSync.native(TEST_ROOT), 'skills', skillName);
+    const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
+    await setupInstallDownload(skillName, zipBuf);
+    const activation = await import('../activationPreferences');
+    await activation.setCindySkillEnabled(finalDir, false);
+    const { getCurrentDataOwnerId } = await import('../../authManager');
+    vi.mocked(getCurrentDataOwnerId).mockReturnValue('owner-1');
+    const { registryService } = await import('../registry');
+    vi.mocked(registryService.addInstall).mockImplementation(async () => {
+      if (outcome === 'registry-failure') throw new Error('registry unavailable');
+      if (outcome === 'owner-during-registry')
+        vi.mocked(getCurrentDataOwnerId).mockReturnValue('owner-2');
+    });
+    const reset =
+      outcome === 'preference-failure'
+        ? vi
+            .spyOn(activation, 'setCindySkillEnabled')
+            .mockRejectedValueOnce(new Error('settings unavailable'))
+        : undefined;
+    try {
+      const { install } = await import('../installService');
+      const result = await install(
+        { name: skillName, installPath: finalDir, version: '1.0.0' },
+        (progress) => {
+          if (outcome === 'owner-before-registry' && progress.phase === 'registering') {
+            vi.mocked(getCurrentDataOwnerId).mockReturnValue('owner-2');
+          }
+        },
+      );
+      expect(result.success).toBe(outcome === 'success');
+      expect(fs.existsSync(finalDir)).toBe(outcome === 'success');
+      expect(activation.isCindySkillEnabled(finalDir)).toBe(outcome === 'success');
+      if (outcome === 'owner-during-registry' || outcome === 'preference-failure') {
+        expect(registryService.removeInstall).toHaveBeenCalledWith(skillName, finalDir);
+      }
+    } finally {
+      reset?.mockRestore();
+    }
+  });
+
   it('removes a fresh install directory when registry registration fails', async () => {
     const finalDir = path.join(TEST_ROOT, 'skills', 'registry-fail-skill');
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -366,7 +1015,9 @@ describe('skillhub/installService', () => {
         };
       }
       if (apiPath.includes('/batch-detail')) {
-        return { items: [{ slug: 'registry-fail-skill', owner: { slug: 'owner' }, isMine: false }] };
+        return {
+          items: [{ slug: 'registry-fail-skill', owner: { slug: 'owner' }, isMine: false }],
+        };
       }
       throw new Error(`unexpected api path ${apiPath}`);
     });
@@ -395,7 +1046,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -432,7 +1083,9 @@ describe('skillhub/installService', () => {
     expect(result.success).toBe(false);
     if (!result.success) expect(result.errorCode).toBe('WRITE_FAILED');
     expect(fs.readFileSync(path.join(finalDir, 'SKILL.md'), 'utf-8')).toBe('old content');
-    expect(fs.readdirSync(path.dirname(finalDir)).filter((name) => name.includes('.replacing.'))).toEqual([]);
+    expect(
+      fs.readdirSync(path.dirname(finalDir)).filter((name) => name.includes('.replacing.')),
+    ).toEqual([]);
   });
 
   it('restores the previous install when registry registration fails during backed-up update', async () => {
@@ -443,7 +1096,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -459,7 +1112,9 @@ describe('skillhub/installService', () => {
         };
       }
       if (apiPath.includes('/batch-detail')) {
-        return { items: [{ slug: 'backup-restore-skill', owner: { slug: 'owner' }, isMine: false }] };
+        return {
+          items: [{ slug: 'backup-restore-skill', owner: { slug: 'owner' }, isMine: false }],
+        };
       }
       throw new Error(`unexpected api path ${apiPath}`);
     });
@@ -479,7 +1134,9 @@ describe('skillhub/installService', () => {
     expect(result.success).toBe(false);
     if (!result.success) expect(result.errorCode).toBe('WRITE_FAILED');
     expect(fs.readFileSync(path.join(finalDir, 'SKILL.md'), 'utf-8')).toBe('old content');
-    expect(fs.readdirSync(path.dirname(finalDir)).filter((name) => name.includes('.bak.'))).toEqual([]);
+    expect(fs.readdirSync(path.dirname(finalDir)).filter((name) => name.includes('.bak.'))).toEqual(
+      [],
+    );
   });
 
   it('moves persistent backups outside agent skill roots after a backed-up update succeeds', async () => {
@@ -490,7 +1147,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -506,7 +1163,9 @@ describe('skillhub/installService', () => {
         };
       }
       if (apiPath.includes('/batch-detail')) {
-        return { items: [{ slug: 'backup-success-skill', owner: { slug: 'owner' }, isMine: false }] };
+        return {
+          items: [{ slug: 'backup-success-skill', owner: { slug: 'owner' }, isMine: false }],
+        };
       }
       throw new Error(`unexpected api path ${apiPath}`);
     });
@@ -529,10 +1188,18 @@ describe('skillhub/installService', () => {
     expect(skillRootEntries.filter((name) => name.includes('.bak.'))).toEqual([]);
     expect(skillRootEntries.filter((name) => name.includes('.xdt-replacing-'))).toEqual([]);
 
-    const backupRoot = path.join(TEST_ROOT, 'userData', 'skillhub', 'backups', 'backup-success-skill');
+    const backupRoot = path.join(
+      TEST_ROOT,
+      'userData',
+      'skillhub',
+      'backups',
+      'backup-success-skill',
+    );
     const backups = fs.readdirSync(backupRoot);
     expect(backups).toHaveLength(1);
-    expect(fs.readFileSync(path.join(backupRoot, backups[0], 'SKILL.md'), 'utf-8')).toBe('old content');
+    expect(fs.readFileSync(path.join(backupRoot, backups[0], 'SKILL.md'), 'utf-8')).toBe(
+      'old content',
+    );
   });
 
   it('prepares the Claude compatibility link after installing a project skill', async () => {
@@ -541,7 +1208,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'project content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const sharedSkills = await import('../../maker-host/shared-global-skills.js');
     const { install } = await import('../installService');
@@ -582,6 +1249,35 @@ describe('skillhub/installService', () => {
     expect(sharedSkills.prepareSharedProjectSkillLinks).toHaveBeenCalledWith({
       workingDir: projectRoot,
     });
+  });
+
+  it('creates the Claude discovery link for a global install only when projection is allowed (#9282)', async () => {
+    const fakeHome = path.join(TEST_ROOT, 'claude-gate-home');
+    const sharedSkills = await import('../../maker-host/shared-global-skills.js');
+    const { install } = await import('../installService');
+    const home = vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+    try {
+      const { registryService } = await import('../registry');
+      vi.mocked(registryService.addInstall).mockResolvedValue(undefined);
+      const zipBuf = await makeZip({ 'SKILL.md': 'global content' });
+      await setupInstallDownload('claude-gate-on', zipBuf);
+      vi.mocked(sharedSkills.shouldProjectToClaudeSkills).mockResolvedValue(true);
+      const on = await install({ name: 'claude-gate-on', version: '1.0.0' }, () => {});
+      expect(on).toMatchObject({ success: true });
+      expect(fs.existsSync(path.join(fakeHome, '.claude', 'skills', 'claude-gate-on'))).toBe(true);
+
+      const zipBuf2 = await makeZip({ 'SKILL.md': 'global content' });
+      await setupInstallDownload('claude-gate-off', zipBuf2);
+      vi.mocked(sharedSkills.shouldProjectToClaudeSkills).mockResolvedValue(false);
+      const off = await install({ name: 'claude-gate-off', version: '1.0.0' }, () => {});
+      expect(off).toMatchObject({ success: true });
+      // 门关：安装成功但不主动创建 ~/.claude（目录与链接都不建）。
+      expect(fs.existsSync(path.join(fakeHome, '.claude', 'skills', 'claude-gate-off'))).toBe(false);
+      expect(fs.existsSync(path.join(fakeHome, '.agents', 'skills', 'claude-gate-off'))).toBe(true);
+    } finally {
+      home.mockRestore();
+      vi.mocked(sharedSkills.shouldProjectToClaudeSkills).mockResolvedValue(true);
+    }
   });
 
   it('force-updates the physical skill while preserving a project compatibility link', async () => {
@@ -926,6 +1622,77 @@ describe('skillhub/installService', () => {
     );
   });
 
+  it('only removes selected project import links and metadata while retaining global imports', async () => {
+    const source = path.join(TEST_ROOT, 'scoped-external', 'foo');
+    const projectAlias = path.join(TEST_ROOT, 'selected-project', '.agents', 'skills', 'foo');
+    const fakeHome = path.join(TEST_ROOT, 'scoped-home');
+    const globalAlias = path.join(fakeHome, '.claude', 'skills', 'foo');
+    fs.mkdirSync(source, { recursive: true });
+    fs.writeFileSync(path.join(source, 'SKILL.md'), 'fixture');
+    makeDirectoryLink(projectAlias, source);
+    makeDirectoryLink(globalAlias, source);
+    const { inspectLocalSkillTarget } = await import('../localSkillTarget');
+    const { registryService } = await import('../registry');
+    const { uninstall } = await import('../installService');
+    const entry = {
+      version: '1.0.0',
+      authorId: 'owner',
+      folderHash: 'hash',
+      installedAt: 1,
+      updatedAt: 1,
+      origin: 'installed' as const,
+    };
+    vi.mocked(registryService.getInstall).mockResolvedValue(entry);
+    vi.mocked(registryService.listAllInstalls).mockResolvedValue([
+      { skillName: 'foo', installPath: globalAlias, entry },
+      { skillName: 'foo', installPath: projectAlias, entry },
+    ]);
+    const home = vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+    try {
+      const result = await uninstall(source, inspectLocalSkillTarget(source, [projectAlias])!);
+      expect(result).toEqual({ success: true });
+      expect(fs.existsSync(projectAlias)).toBe(false);
+      expect(fs.existsSync(globalAlias)).toBe(true);
+      expect(fs.readFileSync(path.join(source, 'SKILL.md'), 'utf8')).toBe('fixture');
+      expect(registryService.removeInstall).toHaveBeenCalledExactlyOnceWith(
+        'foo',
+        projectAlias,
+        expect.objectContaining({
+          expected: expect.any(Object),
+          canMutate: expect.any(Function),
+          shouldRemove: expect.any(Function),
+        }),
+      );
+    } finally {
+      home.mockRestore();
+    }
+  });
+
+  it('refreshes the importing project when removing an external skill alias', async () => {
+    const projectRoot = path.join(TEST_ROOT, 'importing-project');
+    const alias = path.join(projectRoot, '.agents', 'skills', 'alias');
+    const source = path.join(TEST_ROOT, 'external', 'source');
+    fs.mkdirSync(source, { recursive: true });
+    fs.writeFileSync(path.join(source, 'SKILL.md'), 'external content');
+    makeDirectoryLink(alias, source);
+    const { inspectLocalSkillTarget } = await import('../localSkillTarget');
+    const target = inspectLocalSkillTarget(source, [alias])!;
+    const sharedSkills = await import('../../maker-host/shared-global-skills.js');
+    const { registryService } = await import('../registry');
+    vi.mocked(registryService.getInstall).mockResolvedValue(null);
+    vi.mocked(registryService.readManifest).mockResolvedValue(null);
+    vi.mocked(registryService.listAllInstalls).mockResolvedValue([]);
+    vi.mocked(sharedSkills.projectWorkingDirFromSkillPath).mockImplementation((entry) =>
+      entry === alias ? projectRoot : null,
+    );
+    const { uninstall } = await import('../installService');
+    const result = await uninstall(target.sourcePath, target);
+    expect(result).toEqual({ success: true, projectWorkingDir: projectRoot });
+    expect(sharedSkills.prepareSharedProjectSkillLinks).not.toHaveBeenCalled();
+    expect(fs.existsSync(alias)).toBe(false);
+    expect(fs.readFileSync(path.join(source, 'SKILL.md'), 'utf8')).toBe('external content');
+  });
+
   it('returns the project cwd after uninstalling a project skill', async () => {
     const projectRoot = path.join(TEST_ROOT, 'project-uninstall');
     const finalDir = path.join(projectRoot, '.agents', 'skills', 'project-skill');
@@ -952,12 +1719,10 @@ describe('skillhub/installService', () => {
     const result = await uninstall(finalDir);
 
     expect(result).toEqual({ success: true, projectWorkingDir: projectRoot });
-    expect(sharedSkills.prepareSharedProjectSkillLinks).toHaveBeenCalledWith({
-      workingDir: projectRoot,
-    });
+    expect(sharedSkills.prepareSharedProjectSkillLinks).not.toHaveBeenCalled();
   });
 
-  it('rejects local mode uninstall of a market-installed skill while cloud is unavailable', async () => {
+  it('trashes a market install in local mode while cloud is unavailable', async () => {
     const finalDir = path.join(TEST_ROOT, 'local-project', '.agents', 'skills', 'local-skill');
     fs.mkdirSync(finalDir, { recursive: true });
     fs.writeFileSync(path.join(finalDir, 'SKILL.md'), 'content', 'utf-8');
@@ -976,7 +1741,7 @@ describe('skillhub/installService', () => {
       updatedAt: 1,
       origin: 'installed',
     });
-    vi.mocked(getAppCapabilities).mockReturnValueOnce({
+    vi.mocked(getAppCapabilities).mockReturnValue({
       canUseCindyAccountServices: false,
       canUseCindyGateway: false,
       canUseDeviceLink: false,
@@ -987,12 +1752,48 @@ describe('skillhub/installService', () => {
 
     const result = await uninstall(finalDir);
 
-    expect(result).toMatchObject({
-      success: false,
-      errorCode: 'AUTH_REQUIRED',
-    });
-    expect(fs.existsSync(finalDir)).toBe(true);
+    expect(result).toEqual({ success: true });
+    expect(fs.existsSync(finalDir)).toBe(false);
     vi.mocked(getCurrentDataOwnerId).mockReturnValue('user-1');
+  });
+
+  it('uses the original registry name after a case-only source directory rename', async () => {
+    const physicalDir = path.join(TEST_ROOT, 'case-registry', '.agents', 'skills', 'Foo');
+    const logicalDir = path.join(TEST_ROOT, 'case-registry-alias', '.agents', 'skills', 'foo');
+    fs.mkdirSync(physicalDir, { recursive: true });
+    fs.writeFileSync(path.join(physicalDir, 'SKILL.md'), 'fixture');
+    makeDirectoryLink(logicalDir, physicalDir);
+    const entry = {
+      version: '1.0.0',
+      authorId: 'owner',
+      folderHash: 'hash',
+      installedAt: 1,
+      updatedAt: 1,
+      origin: 'installed' as const,
+    };
+    const { registryService } = await import('../registry');
+    const { uninstall } = await import('../installService');
+    vi.mocked(registryService.getInstall).mockImplementation(async (name) => {
+      if (name === 'Foo') throw new Error('REGISTRY_CORRUPTED');
+      return name === 'foo' ? entry : null;
+    });
+    vi.mocked(registryService.readManifest).mockRejectedValue(new Error('REGISTRY_CORRUPTED'));
+    vi.mocked(registryService.listAllInstalls).mockResolvedValue([
+      { skillName: 'foo', installPath: path.join(TEST_ROOT, 'unrelated'), entry },
+      { skillName: 'foo', installPath: logicalDir, entry },
+    ]);
+    const result = await uninstall(physicalDir);
+    expect(result).toEqual({ success: true });
+    expect(fs.existsSync(physicalDir)).toBe(false);
+    expect(registryService.removeInstall).toHaveBeenCalledWith(
+      'foo',
+      logicalDir,
+      expect.objectContaining({
+        expected: expect.any(Object),
+        canMutate: expect.any(Function),
+        shouldRemove: expect.any(Function),
+      }),
+    );
   });
 
   it('uninstalls a linked install when the scanner passes its physical path', async () => {
@@ -1016,7 +1817,9 @@ describe('skillhub/installService', () => {
     const { registryService } = await import('../registry');
     const { uninstall } = await import('../installService');
     vi.mocked(getCurrentUserId).mockReturnValue('user-1');
-    vi.mocked(registryService.getInstall).mockResolvedValue(null);
+    vi.mocked(registryService.getInstall).mockImplementation(async (_name, installPath) =>
+      installPath === logicalDir ? registryEntry : null,
+    );
     vi.mocked(registryService.readManifest).mockResolvedValue({
       schemaVersion: 1,
       skillName,
@@ -1028,7 +1831,15 @@ describe('skillhub/installService', () => {
 
     expect(result.success).toBe(true);
     expect(fs.existsSync(physicalDir)).toBe(false);
-    expect(registryService.removeInstall).toHaveBeenCalledWith(skillName, logicalDir);
+    expect(registryService.removeInstall).toHaveBeenCalledWith(
+      skillName,
+      logicalDir,
+      expect.objectContaining({
+        expected: expect.any(Object),
+        canMutate: expect.any(Function),
+        shouldRemove: expect.any(Function),
+      }),
+    );
   });
 
   it('clears a previous auto-sync ignore marker after a successful manual install', async () => {
@@ -1051,7 +1862,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -1104,7 +1915,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -1141,6 +1952,7 @@ describe('skillhub/installService', () => {
       schemaVersion: 1,
       ignoredSkills: [],
       autoSyncCandidates: [],
+      pendingOfflineUninstalls: [],
     });
   });
 
@@ -1149,7 +1961,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -1165,7 +1977,9 @@ describe('skillhub/installService', () => {
         };
       }
       if (apiPath.includes('/batch-detail')) {
-        return { items: [{ slug: 'auto-installed-skill', owner: { slug: 'owner' }, isMine: false }] };
+        return {
+          items: [{ slug: 'auto-installed-skill', owner: { slug: 'owner' }, isMine: false }],
+        };
       }
       throw new Error(`unexpected api path ${apiPath}`);
     });
@@ -1198,9 +2012,7 @@ describe('skillhub/installService', () => {
       prefPath,
       JSON.stringify({
         schemaVersion: 1,
-        ignoredSkills: [
-          { name: 'auto-installed-skill', userId: 'user-1', ignoredAt: 1 },
-        ],
+        ignoredSkills: [{ name: 'auto-installed-skill', userId: 'user-1', ignoredAt: 1 }],
       }),
       'utf-8',
     );
@@ -1208,7 +2020,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -1224,7 +2036,9 @@ describe('skillhub/installService', () => {
         };
       }
       if (apiPath.includes('/batch-detail')) {
-        return { items: [{ slug: 'auto-installed-skill', owner: { slug: 'owner' }, isMine: false }] };
+        return {
+          items: [{ slug: 'auto-installed-skill', owner: { slug: 'owner' }, isMine: false }],
+        };
       }
       throw new Error(`unexpected api path ${apiPath}`);
     });
@@ -1245,7 +2059,9 @@ describe('skillhub/installService', () => {
     const stored = JSON.parse(fs.readFileSync(prefPath, 'utf-8')) as {
       ignoredSkills: Array<{ name: string; userId: string }>;
     };
-    expect(stored.ignoredSkills).toMatchObject([{ name: 'auto-installed-skill', userId: 'user-1' }]);
+    expect(stored.ignoredSkills).toMatchObject([
+      { name: 'auto-installed-skill', userId: 'user-1' },
+    ]);
   });
 
   it('preserves auto-sync ownership when manually updating an auto-synced skill', async () => {
@@ -1256,7 +2072,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -1306,6 +2122,63 @@ describe('skillhub/installService', () => {
     );
   });
 
+  it.each([true, undefined])(
+    'persists offline auto-sync opt-out across restart (autoSynced=%s)',
+    async (autoSynced) => {
+      const { source, target } = await localFixture('offline-auto');
+      const { getCurrentUserId } = await import('../../authManager');
+      const { registryService } = await import('../registry');
+      const { recordAutoSyncCandidateSkills } = await import('../autoSyncPreferences');
+      await recordAutoSyncCandidateSkills('original-user', ['offline-auto']);
+      vi.mocked(getCurrentUserId).mockReturnValue(null);
+      vi.mocked(registryService.getInstall).mockResolvedValue({
+        origin: 'installed',
+        autoSynced,
+        version: '1',
+        authorId: '',
+        folderHash: 'hash',
+        installedAt: 1,
+        updatedAt: 1,
+      });
+      const { uninstall } = await import('../installService');
+      expect(await uninstall(source, target)).toEqual({ success: true });
+      // Auto-sync preferences are module-scoped and this case verifies their cross-restart
+      // persistence; only resetModules() gives the next import a fresh in-memory store.
+      vi.resetModules();
+      await configureTestPaths();
+      const { listIgnoredAutoSyncSkills, clearIgnoredAutoSyncSkill } =
+        await import('../autoSyncPreferences');
+      expect(await listIgnoredAutoSyncSkills('original-user')).toContain('offline-auto');
+      expect(await listIgnoredAutoSyncSkills('another-user')).toContain('offline-auto');
+      // Manual installation is the existing explicit reset of this device-level opt-out.
+      await clearIgnoredAutoSyncSkill('offline-auto', 'original-user');
+      expect(await listIgnoredAutoSyncSkills('original-user')).not.toContain('offline-auto');
+    },
+  );
+
+  it('rolls back an offline opt-out when trash fails', async () => {
+    const { source, target } = await localFixture('offline-trash-failure');
+    const { getCurrentUserId } = await import('../../authManager');
+    const { registryService } = await import('../registry');
+    const { shell } = await import('electron');
+    vi.mocked(getCurrentUserId).mockReturnValue(null);
+    vi.mocked(registryService.getInstall).mockResolvedValue({
+      origin: 'installed',
+      autoSynced: true,
+      version: '1',
+      authorId: '',
+      folderHash: 'hash',
+      installedAt: 1,
+      updatedAt: 1,
+    });
+    vi.mocked(shell.trashItem).mockRejectedValueOnce(new Error('trash unavailable'));
+    const { uninstall } = await import('../installService');
+    const { listIgnoredAutoSyncSkills } = await import('../autoSyncPreferences');
+    expect((await uninstall(source, target)).success).toBe(false);
+    expect(await listIgnoredAutoSyncSkills('original-user')).not.toContain('offline-trash-failure');
+    expect(fs.existsSync(source)).toBe(true);
+  });
+
   it('records an auto-sync ignore marker when uninstalling an auto-synced skill', async () => {
     const finalDir = path.join(TEST_ROOT, '.agents', 'skills', 'auto-skill');
     fs.mkdirSync(finalDir, { recursive: true });
@@ -1348,9 +2221,7 @@ describe('skillhub/installService', () => {
       JSON.stringify({
         schemaVersion: 1,
         ignoredSkills: [],
-        autoSyncCandidates: [
-          { name: 'remote-auto-skill', userId: 'user-1', updatedAt: 1 },
-        ],
+        autoSyncCandidates: [{ name: 'remote-auto-skill', userId: 'user-1', updatedAt: 1 }],
       }),
       'utf-8',
     );
@@ -1402,11 +2273,13 @@ describe('skillhub/installService', () => {
     const stored = JSON.parse(fs.readFileSync(prefPath, 'utf-8')) as {
       autoSyncCandidates: Array<{ name: string; userId: string }>;
     };
-    expect(stored.autoSyncCandidates).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: 'remote-auto-skill', userId: 'user-1' }),
-      expect.objectContaining({ name: 'demo-oa-skill', userId: 'user-1' }),
-      expect.objectContaining({ name: 'other-user-skill', userId: 'user-2' }),
-    ]));
+    expect(stored.autoSyncCandidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'remote-auto-skill', userId: 'user-1' }),
+        expect.objectContaining({ name: 'demo-oa-skill', userId: 'user-1' }),
+        expect.objectContaining({ name: 'other-user-skill', userId: 'user-2' }),
+      ]),
+    );
   });
 
   it('repairs a corrupt auto-sync preferences file when listing ignored skills', async () => {
@@ -1421,6 +2294,7 @@ describe('skillhub/installService', () => {
       schemaVersion: 1,
       ignoredSkills: [],
       autoSyncCandidates: [],
+      pendingOfflineUninstalls: [],
     });
   });
 
@@ -1432,9 +2306,7 @@ describe('skillhub/installService', () => {
       JSON.stringify({
         schemaVersion: 1,
         ignoredSkills: [],
-        autoSyncCandidates: [
-          { name: 'remote-auto-skill', userId: 'user-1', updatedAt: 1 },
-        ],
+        autoSyncCandidates: [{ name: 'remote-auto-skill', userId: 'user-1', updatedAt: 1 }],
       }),
       'utf-8',
     );
@@ -1446,10 +2318,12 @@ describe('skillhub/installService', () => {
     const stored = JSON.parse(fs.readFileSync(prefPath, 'utf-8')) as {
       autoSyncCandidates: Array<{ name: string; userId: string }>;
     };
-    expect(stored.autoSyncCandidates).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: 'remote-auto-skill', userId: 'user-1' }),
-      expect.objectContaining({ name: 'demo-oa-skill', userId: 'user-1' }),
-    ]));
+    expect(stored.autoSyncCandidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'remote-auto-skill', userId: 'user-1' }),
+        expect.objectContaining({ name: 'demo-oa-skill', userId: 'user-1' }),
+      ]),
+    );
   });
 
   it('does not record an auto-sync ignore marker when uninstalling a regular installed skill', async () => {
@@ -1516,9 +2390,7 @@ describe('skillhub/installService', () => {
       prefPath,
       JSON.stringify({
         schemaVersion: 1,
-        ignoredSkills: [
-          { name: 'backup-fail-skill', userId: 'user-1', ignoredAt: 1 },
-        ],
+        ignoredSkills: [{ name: 'backup-fail-skill', userId: 'user-1', ignoredAt: 1 }],
       }),
       'utf-8',
     );
@@ -1526,7 +2398,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
     const previousEntry = {
@@ -1558,13 +2430,15 @@ describe('skillhub/installService', () => {
     vi.mocked(registryService.getInstall).mockResolvedValue(previousEntry);
     vi.mocked(registryService.addInstall).mockResolvedValue(undefined);
     const originalMkdir = fs.promises.mkdir.bind(fs.promises);
-    const mkdirSpy = vi.spyOn(fs.promises, 'mkdir').mockImplementation(async (...args: Parameters<typeof fs.promises.mkdir>) => {
-      const [target] = args;
-      if (String(target).includes(`${path.sep}skillhub${path.sep}backups${path.sep}`)) {
-        throw new Error('backup disk full');
-      }
-      return originalMkdir(...args);
-    });
+    const mkdirSpy = vi
+      .spyOn(fs.promises, 'mkdir')
+      .mockImplementation(async (...args: Parameters<typeof fs.promises.mkdir>) => {
+        const [target] = args;
+        if (String(target).includes(`${path.sep}skillhub${path.sep}backups${path.sep}`)) {
+          throw new Error('backup disk full');
+        }
+        return originalMkdir(...args);
+      });
 
     try {
       const result = await install(
@@ -1580,8 +2454,14 @@ describe('skillhub/installService', () => {
       expect(result.success).toBe(false);
       if (!result.success) expect(result.errorCode).toBe('WRITE_FAILED');
       expect(fs.readFileSync(path.join(finalDir, 'SKILL.md'), 'utf-8')).toBe('old content');
-      expect(registryService.addInstall).toHaveBeenLastCalledWith('backup-fail-skill', finalDir, previousEntry);
-      expect(fs.readdirSync(path.dirname(finalDir)).filter((name) => name.includes('.xdt-replacing-'))).toEqual([]);
+      expect(registryService.addInstall).toHaveBeenLastCalledWith(
+        'backup-fail-skill',
+        finalDir,
+        previousEntry,
+      );
+      expect(
+        fs.readdirSync(path.dirname(finalDir)).filter((name) => name.includes('.xdt-replacing-')),
+      ).toEqual([]);
       const stored = JSON.parse(fs.readFileSync(prefPath, 'utf-8')) as {
         ignoredSkills: Array<{ name: string; userId: string }>;
       };
@@ -1599,7 +2479,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
     const previousEntry = {
@@ -1623,7 +2503,11 @@ describe('skillhub/installService', () => {
         };
       }
       if (apiPath.includes('/batch-detail')) {
-        return { items: [{ slug: 'backup-registry-restore-fail-skill', owner: { slug: 'owner' }, isMine: false }] };
+        return {
+          items: [
+            { slug: 'backup-registry-restore-fail-skill', owner: { slug: 'owner' }, isMine: false },
+          ],
+        };
       }
       throw new Error(`unexpected api path ${apiPath}`);
     });
@@ -1634,13 +2518,15 @@ describe('skillhub/installService', () => {
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error('registry locked'));
     const originalMkdir = fs.promises.mkdir.bind(fs.promises);
-    const mkdirSpy = vi.spyOn(fs.promises, 'mkdir').mockImplementation(async (...args: Parameters<typeof fs.promises.mkdir>) => {
-      const [target] = args;
-      if (String(target).includes(`${path.sep}skillhub${path.sep}backups${path.sep}`)) {
-        throw new Error('backup disk full');
-      }
-      return originalMkdir(...args);
-    });
+    const mkdirSpy = vi
+      .spyOn(fs.promises, 'mkdir')
+      .mockImplementation(async (...args: Parameters<typeof fs.promises.mkdir>) => {
+        const [target] = args;
+        if (String(target).includes(`${path.sep}skillhub${path.sep}backups${path.sep}`)) {
+          throw new Error('backup disk full');
+        }
+        return originalMkdir(...args);
+      });
 
     try {
       const result = await install(
@@ -1659,13 +2545,21 @@ describe('skillhub/installService', () => {
         expect(result.message).toContain('registry 回滚失败');
       }
       expect(fs.existsSync(finalDir)).toBe(false);
-      const quarantines = fs.readdirSync(path.dirname(finalDir))
-        .filter((name) => name.includes('.xdt-rollback-registry-failed-backup-registry-restore-fail-skill-'));
+      const quarantines = fs
+        .readdirSync(path.dirname(finalDir))
+        .filter((name) =>
+          name.includes('.xdt-rollback-registry-failed-backup-registry-restore-fail-skill-'),
+        );
       expect(quarantines).toHaveLength(1);
-      expect(fs.readFileSync(path.join(path.dirname(finalDir), quarantines[0], 'SKILL.md'), 'utf-8')).toBe('old content');
+      expect(
+        fs.readFileSync(path.join(path.dirname(finalDir), quarantines[0], 'SKILL.md'), 'utf-8'),
+      ).toBe('old content');
       const removeInstallMock = vi.mocked(registryService.removeInstall);
       const addInstallMock = vi.mocked(registryService.addInstall);
-      expect(removeInstallMock).toHaveBeenCalledWith('backup-registry-restore-fail-skill', finalDir);
+      expect(removeInstallMock).toHaveBeenCalledWith(
+        'backup-registry-restore-fail-skill',
+        finalDir,
+      );
       expect(removeInstallMock.mock.invocationCallOrder[0]).toBeLessThan(
         addInstallMock.mock.invocationCallOrder[1],
       );
@@ -1688,7 +2582,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
     const previousEntry = {
@@ -1712,7 +2606,11 @@ describe('skillhub/installService', () => {
         };
       }
       if (apiPath.includes('/batch-detail')) {
-        return { items: [{ slug: 'backup-registry-remove-fail-skill', owner: { slug: 'owner' }, isMine: false }] };
+        return {
+          items: [
+            { slug: 'backup-registry-remove-fail-skill', owner: { slug: 'owner' }, isMine: false },
+          ],
+        };
       }
       throw new Error(`unexpected api path ${apiPath}`);
     });
@@ -1721,13 +2619,15 @@ describe('skillhub/installService', () => {
     vi.mocked(registryService.addInstall).mockResolvedValue(undefined);
     vi.mocked(registryService.removeInstall).mockRejectedValue(new Error('registry remove locked'));
     const originalMkdir = fs.promises.mkdir.bind(fs.promises);
-    const mkdirSpy = vi.spyOn(fs.promises, 'mkdir').mockImplementation(async (...args: Parameters<typeof fs.promises.mkdir>) => {
-      const [target] = args;
-      if (String(target).includes(`${path.sep}skillhub${path.sep}backups${path.sep}`)) {
-        throw new Error('backup disk full');
-      }
-      return originalMkdir(...args);
-    });
+    const mkdirSpy = vi
+      .spyOn(fs.promises, 'mkdir')
+      .mockImplementation(async (...args: Parameters<typeof fs.promises.mkdir>) => {
+        const [target] = args;
+        if (String(target).includes(`${path.sep}skillhub${path.sep}backups${path.sep}`)) {
+          throw new Error('backup disk full');
+        }
+        return originalMkdir(...args);
+      });
 
     try {
       const result = await install(
@@ -1746,11 +2646,19 @@ describe('skillhub/installService', () => {
         expect(result.message).toContain('registry 回滚失败');
       }
       expect(fs.existsSync(finalDir)).toBe(false);
-      const quarantines = fs.readdirSync(path.dirname(finalDir))
-        .filter((name) => name.includes('.xdt-rollback-registry-failed-backup-registry-remove-fail-skill-'));
+      const quarantines = fs
+        .readdirSync(path.dirname(finalDir))
+        .filter((name) =>
+          name.includes('.xdt-rollback-registry-failed-backup-registry-remove-fail-skill-'),
+        );
       expect(quarantines).toHaveLength(1);
-      expect(fs.readFileSync(path.join(path.dirname(finalDir), quarantines[0], 'SKILL.md'), 'utf-8')).toBe('old content');
-      expect(registryService.removeInstall).toHaveBeenCalledWith('backup-registry-remove-fail-skill', finalDir);
+      expect(
+        fs.readFileSync(path.join(path.dirname(finalDir), quarantines[0], 'SKILL.md'), 'utf-8'),
+      ).toBe('old content');
+      expect(registryService.removeInstall).toHaveBeenCalledWith(
+        'backup-registry-remove-fail-skill',
+        finalDir,
+      );
     } finally {
       mkdirSpy.mockRestore();
     }
@@ -1758,10 +2666,38 @@ describe('skillhub/installService', () => {
 
   // ── 共享安装锁(与 learn apply 互斥) ───────────────────────────────────────
 
+  it('refuses installation and uninstall while another client holds the filesystem lease', async () => {
+    const { acquireSharedSkillMutationLease } = await import('../sharedMutationLease');
+    const { install, uninstall } = await import('../installService');
+    const { inspectLocalSkillTarget } = await import('../localSkillTarget');
+    const { shell } = await import('electron');
+    const finalDir = path.join(TEST_ROOT, '.agents', 'skills', 'external-client');
+    fs.mkdirSync(finalDir, { recursive: true });
+    fs.writeFileSync(path.join(finalDir, 'SKILL.md'), 'original');
+    const target = inspectLocalSkillTarget(finalDir, [finalDir])!;
+    const release = await acquireSharedSkillMutationLease(['external-client']);
+    expect(release).not.toBeNull();
+    try {
+      expect((await uninstall(finalDir, target)).success).toBe(false);
+      expect(
+        (
+          await install(
+            { name: 'external-client', installPath: finalDir, version: '1.0.0' },
+            () => {},
+          )
+        ).success,
+      ).toBe(false);
+      expect(shell.trashItem).not.toHaveBeenCalled();
+      expect(fs.readFileSync(path.join(finalDir, 'SKILL.md'), 'utf8')).toBe('original');
+    } finally {
+      await release!();
+    }
+  });
+
   it('rejects install while a learn apply holds the shared lock; other names unaffected', async () => {
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { tryAcquireSkillInstallLock } = await import('../installLock');
     const { install } = await import('../installService');
 
@@ -1770,7 +2706,11 @@ describe('skillhub/installService', () => {
     const lstatSpy = vi.spyOn(fs.promises, 'lstat');
     try {
       const result = await install(
-        { name: 'locked-skill', installPath: path.join(TEST_ROOT, 'skills', 'locked-skill'), version: '1.0.0' },
+        {
+          name: 'locked-skill',
+          installPath: path.join(TEST_ROOT, 'skills', 'locked-skill'),
+          version: '1.0.0',
+        },
         () => {},
       );
       expect(result.success).toBe(false);
@@ -1803,7 +2743,11 @@ describe('skillhub/installService', () => {
       });
       vi.mocked(net.fetch).mockResolvedValue(mockDownload(zipBuf));
       const ok = await install(
-        { name: 'other-skill', installPath: path.join(TEST_ROOT, 'skills', 'other-skill'), version: '1.0.0' },
+        {
+          name: 'other-skill',
+          installPath: path.join(TEST_ROOT, 'skills', 'other-skill'),
+          version: '1.0.0',
+        },
         () => {},
       );
       expect(ok.success).toBe(true);
@@ -1817,7 +2761,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { getSkillInstallLockOwner, tryAcquireSkillInstallLock } = await import('../installLock');
     const { install } = await import('../installService');
 
@@ -1846,7 +2790,11 @@ describe('skillhub/installService', () => {
     });
 
     const installing = install(
-      { name: 'race-skill', installPath: path.join(TEST_ROOT, 'skills', 'race-skill'), version: '1.0.0' },
+      {
+        name: 'race-skill',
+        installPath: path.join(TEST_ROOT, 'skills', 'race-skill'),
+        version: '1.0.0',
+      },
       () => {},
     );
     await vi.waitFor(() => {
@@ -1870,7 +2818,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'content' });
     const { net } = await import('electron');
     const { getCurrentDataOwnerId, getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -1897,7 +2845,10 @@ describe('skillhub/installService', () => {
     });
 
     const finalDir = path.join(TEST_ROOT, 'skills', 'owner-race');
-    const installing = install({ name: 'owner-race', installPath: finalDir, version: '1.0.0' }, () => {});
+    const installing = install(
+      { name: 'owner-race', installPath: finalDir, version: '1.0.0' },
+      () => {},
+    );
     await vi.waitFor(() => expect(releaseDownload).toBeDefined());
 
     vi.mocked(getCurrentDataOwnerId).mockReturnValue('owner-2');
@@ -1907,6 +2858,82 @@ describe('skillhub/installService', () => {
     expect(result).toEqual({ success: false, errorCode: 'CANCELLED', message: '已取消' });
     expect(fs.existsSync(finalDir)).toBe(false);
     expect(vi.mocked(registryService.addInstall)).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['install-first', 'source', 'alias'],
+    ['uninstall-first', 'source', 'alias'],
+    ['install-first', 'Foo', 'foo'],
+    ['uninstall-first', 'Foo', 'foo'],
+  ])('locks import entries against install (%s, %s, %s)', async (order, sourceName, aliasName) => {
+    const source = path.join(TEST_ROOT, 'checkout', sourceName);
+    const alias = path.join(TEST_ROOT, '.agents', 'skills', aliasName);
+    fs.mkdirSync(source, { recursive: true });
+    fs.writeFileSync(path.join(source, 'SKILL.md'), 'external content');
+    makeDirectoryLink(alias, source);
+    const { inspectLocalSkillTarget } = await import('../localSkillTarget');
+    const { tryAcquireSkillInstallLock, getSkillInstallLockOwner } = await import('../installLock');
+    const { uninstall, install } = await import('../installService');
+    const { getCurrentUserId } = await import('../../authManager');
+    const { shell } = await import('electron');
+    vi.mocked(getCurrentUserId).mockReturnValue('user-1');
+    const { registryService } = await import('../registry');
+    vi.mocked(registryService.getInstall).mockResolvedValue(null);
+    vi.mocked(registryService.readManifest).mockResolvedValue(null);
+    vi.mocked(registryService.listAllInstalls).mockResolvedValue([]);
+    const target = inspectLocalSkillTarget(source, [alias])!;
+    if (order === 'install-first') {
+      const releaseInstall = tryAcquireSkillInstallLock(aliasName, 'market-install')!;
+      try {
+        expect((await uninstall(source, target)).success).toBe(false);
+        expect(shell.trashItem).not.toHaveBeenCalled();
+        expect(getSkillInstallLockOwner(sourceName)).toBe(
+          sourceName.toLowerCase() === aliasName.toLowerCase() ? 'market-install' : null,
+        );
+      } finally {
+        releaseInstall();
+      }
+    } else {
+      let finishTrash: (() => void) | undefined;
+      vi.mocked(shell.trashItem).mockImplementationOnce(async (entry) => {
+        const { acquireSharedSkillMutationLease } = await import('../sharedMutationLease');
+        expect(await acquireSharedSkillMutationLease([aliasName])).toBeNull();
+        expect(await acquireSharedSkillMutationLease([sourceName])).toBeNull();
+        await new Promise<void>((resolve) => {
+          finishTrash = resolve;
+        });
+        await fs.promises.rename(entry, path.join(TEST_ROOT, 'trashed-alias'));
+      });
+      const removing = uninstall(source, target);
+      await vi.waitFor(() => expect(finishTrash).toBeDefined());
+      try {
+        expect(
+          (await install({ name: aliasName, installPath: alias, version: '1' }, () => {})).success,
+        ).toBe(false);
+        expect(getSkillInstallLockOwner(aliasName)).toBe('market-uninstall');
+      } finally {
+        finishTrash!();
+      }
+      expect(await removing).toEqual({ success: true });
+    }
+    expect(fs.readFileSync(path.join(source, 'SKILL.md'), 'utf8')).toBe('external content');
+    expect(getSkillInstallLockOwner(aliasName)).toBeNull();
+    expect(getSkillInstallLockOwner(sourceName)).toBeNull();
+  });
+
+  it('rejects physical uninstall while a differently cased market name holds the lock', async () => {
+    const { source, target } = await localFixture('Foo');
+    const { tryAcquireSkillInstallLock } = await import('../installLock');
+    const { uninstall } = await import('../installService');
+    const { shell } = await import('electron');
+    const release = tryAcquireSkillInstallLock('foo', 'market-install')!;
+    try {
+      expect((await uninstall(source, target)).success).toBe(false);
+      expect(shell.trashItem).not.toHaveBeenCalled();
+      expect(fs.existsSync(source)).toBe(true);
+    } finally {
+      release();
+    }
   });
 
   it('rejects uninstall while a learn apply holds the shared lock', async () => {

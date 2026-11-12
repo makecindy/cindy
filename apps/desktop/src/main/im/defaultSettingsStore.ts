@@ -196,6 +196,8 @@ function normalizeAgentSettings(
   const defaults = IM_DEFAULT_SETTINGS.agents[agentKind];
   if (!isRecord(raw)) return { ...defaults };
   return {
+    ...(typeof raw.agentDeviceId === 'string' && raw.agentDeviceId.trim()
+      ? { agentDeviceId: raw.agentDeviceId.trim() } : {}),
     providerId:
       typeof raw.providerId === 'string' && raw.providerId.trim() ? raw.providerId.trim() : null,
     model: typeof raw.model === 'string' && raw.model.trim() ? raw.model.trim() : defaults.model,
@@ -263,6 +265,19 @@ export function writeImDefaultSettingsPatch(
   }
   log.info('im default settings written', { channel: channel ?? 'global', patch });
   return readImDefaultSettingsState(channel);
+}
+
+/**
+ * 合并后的设置预览(不写盘) —— 保存前比较路由指纹用: 只改权限档等不动路由默认的
+ * 保存, 不该被阻塞式回填(PR #5155 review P2)。
+ */
+export function previewImDefaultSettingsPatch(
+  patch: ImDefaultSettingsPatch,
+  channel?: ImDefaultSettingsChannel,
+): ImDefaultSettings {
+  const document = store.read();
+  const current = channel ? document.channels[channel] : document.global;
+  return mergeSettingsPatch(current, patch);
 }
 
 export function resetImDefaultSettings(): ImDefaultSettings {
@@ -373,7 +388,8 @@ function settingsCustomizedKeys(value: ImDefaultSettings, defaults: ImDefaultSet
 }
 
 function agentSettingsEqual(a: ImDefaultAgentSettings, b: ImDefaultAgentSettings): boolean {
-  return a.providerId === b.providerId && a.model === b.model && a.effort === b.effort;
+  return (a.agentDeviceId ?? null) === (b.agentDeviceId ?? null)
+    && a.providerId === b.providerId && a.model === b.model && a.effort === b.effort;
 }
 
 function cloneSettings(settings: ImDefaultSettings): ImDefaultSettings {

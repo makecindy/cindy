@@ -7,26 +7,18 @@
  * 本身的契约:registry 命中、defaultState 形状、hydrateState 对非法 raw 的容错。
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
-let registry: typeof import('../../../registry');
-let pluginMod: typeof import('../index');
-let expansionPreference: typeof import('../diffExpansionPreference');
+import * as registry from '../../../registry';
+import * as expansionPreference from '../diffExpansionPreference';
+import * as pluginMod from '../index';
 
 describe('review plugin', () => {
-  beforeEach(async () => {
-    // 关键:vitest 模块缓存默认共享,直接 import 第二次拿到 cached export 不会再
-    // 跑顶层 registerTabKind side-effect。每个测试前先 resetModules + 全新 import
-    // registry,registry 也是模块单例,新 import 拿到的是空 registry。然后 import
-    // plugin 让它跑一遍 register。
-    vi.resetModules();
-    registry = await import('../../../registry');
-    pluginMod = await import('../index');
-    expansionPreference = await import('../diffExpansionPreference');
+  beforeEach(() => {
     expansionPreference.resetReviewDiffExpansionPreferencesForTests();
   });
 
-  afterEach(() => {
+  afterAll(() => {
     registry._resetTabKindRegistry();
   });
 

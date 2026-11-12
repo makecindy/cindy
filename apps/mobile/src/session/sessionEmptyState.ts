@@ -1,3 +1,5 @@
+import type { DeviceLinkStatus } from '@cindy/device-link';
+
 /**
  * 会话消息区"空状态"(暂无消息)是否应被抑制的纯判定。判定为 true 时消息区渲染
  * 「正在同步」loading 占位(MessageRenderer 的 SyncingMessages)而非「暂无消息」。
@@ -16,9 +18,9 @@ export interface MessageEmptyStateInput {
   showSyncingShell: boolean;
   /** 当前已加载的消息条数。 */
   messageCount: number;
-  /** 本次打开是否已完成过至少一次同步(lastSyncedAt != null)。 */
+  /** 当前消息历史是否已成功读取或恢复缓存，且尚未被新活动作废。 */
   hasSyncedThisOpen: boolean;
-  /** 远端不可用(离线/被撤销)——此时保留原阻塞占位,不进抑制分支。 */
+  /** 远端不可用(离线/被撤销)——允许显示历史未缓存说明，不进同步占位分支。 */
   remoteUnavailable: boolean;
 }
 
@@ -27,6 +29,46 @@ export function shouldSuppressEmptyMessageState(input: MessageEmptyStateInput): 
   // 冷开未同步窗口:还没首次同步完成、0 条、且不是离线/被撤销 → 渲染同步占位而非闪"暂无消息"。
   if (input.messageCount === 0 && !input.hasSyncedThisOpen && !input.remoteUnavailable) return true;
   return false;
+}
+
+/** 当前访问的历史结果：切换任务/设备时重置，通知或新活动作废旧结果，重连保留。 */
+export type MessageHistoryRead = { key: string; synced: boolean };
+
+export interface SessionMessageEmptyStateInput {
+  loading: boolean;
+  showSyncingShell: boolean;
+  subscriptionIdentity: string;
+  historyRead: MessageHistoryRead | null;
+  historySnapshot: { ready: boolean; items: readonly unknown[] };
+  messageCount: number;
+  status: DeviceLinkStatus;
+  targetAvailable: boolean | null;
+  remoteUnavailableReason: string | null;
+  historyNotCachedMessage: string;
+}
+
+/** 连接中且可用性未知时继续等待，不据此要求用户重新连接电脑。 */
+export function shouldShowCachedHistoryNotice(status: DeviceLinkStatus, targetAvailable: boolean | null): boolean {
+  return status !== 'connecting' && (status !== 'online' || targetAvailable === false);
+}
+
+/** 结合历史读取结果与连接状态，统一决定同步占位和未缓存文案。 */
+export function resolveSessionMessageEmptyState(input: SessionMessageEmptyStateInput) {
+  // 新活动作废的是本次访问的旧历史；连接代推进不能凭旧缓存撤销失效标记。
+  const hasSyncedHistory = input.historyRead?.synced !== false
+    && (input.historyRead?.key === input.subscriptionIdentity || input.historySnapshot.ready);
+  const remoteUnavailable = !!input.remoteUnavailableReason
+    || shouldShowCachedHistoryNotice(input.status, input.targetAvailable);
+  return {
+    syncingWhileEmpty: shouldSuppressEmptyMessageState({
+      loading: input.loading,
+      showSyncingShell: input.showSyncingShell,
+      messageCount: input.historySnapshot.ready ? input.historySnapshot.items.length : input.messageCount,
+      hasSyncedThisOpen: hasSyncedHistory,
+      remoteUnavailable,
+    }),
+    emptyMessage: !hasSyncedHistory && remoteUnavailable ? input.historyNotCachedMessage : undefined,
+  };
 }
 
 /**
@@ -42,8 +84,12 @@ export interface RemoteListEmptyStateInput {
   itemCount: number;
   /** 本次打开是否已完成过至少一次成功同步(lastSyncedAt != null)。 */
   hasSyncedThisOpen: boolean;
+  /** 当前筛选或搜索仍在读取；上一次成功不能证明这次为空。 */
+  loading?: boolean;
+  /** 读取失败由连接提示负责展示，不同时声称列表为空。 */
+  failed?: boolean;
 }
 
 export function shouldSuppressRemoteListEmptyState(input: RemoteListEmptyStateInput): boolean {
-  return input.itemCount === 0 && !input.hasSyncedThisOpen;
+  return input.itemCount === 0 && (!input.hasSyncedThisOpen || input.loading === true || input.failed === true);
 }

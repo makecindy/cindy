@@ -40,6 +40,8 @@ export {
 
 export {
   loadIgnoreMatcher,
+  createEventIgnoreMatcher,
+  WATCH_ALWAYS_IGNORE,
   __clearCacheForTesting,
   type Matcher,
 } from './ignore.js';

@@ -9,7 +9,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   queryOne: vi.fn(),
   exec: vi.fn(async () => undefined),
-  getCurrentUserId: vi.fn(() => 'user-1'),
+  getCurrentDbClientUserId: vi.fn(() => 'user-1'),
+  legacyCurrentUserId: vi.fn(() => null),
   /** 广播到 renderer 的 payload —— 并发用例据此断言不会闪出空快照。 */
   broadcasts: [] as unknown[],
 }));
@@ -37,9 +38,10 @@ vi.mock('../localDb/dailyModelUsage', () => ({
 }));
 vi.mock('../localDb/client/current', () => ({
   getDbClient: () => ({ queryOne: mocks.queryOne, exec: mocks.exec, drizzle: {} }),
+  getCurrentDbClientUserId: mocks.getCurrentDbClientUserId,
 }));
 vi.mock('../localDb/index', () => ({
-  getCurrentUserId: mocks.getCurrentUserId,
+  getCurrentUserId: mocks.legacyCurrentUserId,
 }));
 
 const APP_SERVER_SNAPSHOT = {
@@ -66,8 +68,20 @@ describe('codex account usage source slots', () => {
     vi.resetModules();
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
-    mocks.getCurrentUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
+    mocks.legacyCurrentUserId.mockReturnValue(null);
     mocks.broadcasts.length = 0;
+  });
+
+  it('counts cache writes once in today usage and accepts older done events', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    broadcaster.recordCodexTurnUsage({ promptTokens: 100, completionTokens: 20,
+      reasoningTokens: 5, cachedTokens: 10, cacheCreationTokens: 50 });
+    broadcaster.recordCodexTurnUsage({ promptTokens: 10, completionTokens: 2, cachedTokens: 1 });
+    expect(await broadcaster.readAgentTodayUsage('codex')).toMatchObject({
+      totalTokens: 193, promptTokens: 110, completionTokens: 22,
+      reasoningTokens: 5, cachedTokens: 11, cacheCreationTokens: 50,
+    });
   });
 
   it('keeps app-server windows when a WHAM snapshot arrives (no cross-source overwrite)', async () => {
@@ -84,6 +98,33 @@ describe('codex account usage source slots', () => {
     // WHAM 数据完整落在 webSnapshot 槽(bridge 形态消费)
     expect(payload?.webSnapshot?.primary?.usedPercent).toBe(0);
     expect(payload?.webSnapshot?.source).toBe('openai-web');
+  });
+
+  it('isolates provider snapshots, persistent keys, and clearing', async () => {
+    const usage = await import('../usageBroadcaster');
+    await usage.recordCodexAccountUsageSnapshot(APP_SERVER_SNAPSHOT);
+    await usage.recordCodexAccountUsageSnapshot({ ...APP_SERVER_SNAPSHOT,
+      accountId: 'acc-2', primary: { usedPercent: 13 } }, 'openai-second');
+    expect((await usage.readCodexAccountUsageSnapshot())?.primary?.usedPercent).toBe(82);
+    expect((await usage.readCodexAccountUsageSnapshot('openai-second'))?.primary?.usedPercent).toBe(13);
+    expect(mocks.exec.mock.calls.some((call) => (call as unknown[])[1] instanceof Array
+      && ((call as unknown[])[1] as unknown[])[0] === 'codex:openai-second')).toBe(true);
+    expect(mocks.broadcasts.at(-1)).toMatchObject({ providerId: 'openai-second', snapshot: { accountId: 'acc-2' } });
+    await usage.clearCodexAccountUsageSnapshot('openai-second');
+    expect(await usage.readCodexAccountUsageSnapshot('openai-second')).toBeNull();
+    expect((await usage.readCodexAccountUsageSnapshot())?.accountId).toBe('acc-1');
+  });
+
+  it('does not revive a cleared provider with a late hydration', async () => {
+    let resolve!: (value: { snapshot: string }) => void;
+    mocks.queryOne.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+    const usage = await import('../usageBroadcaster');
+    const pending = usage.recordCodexAccountUsageSnapshot(APP_SERVER_SNAPSHOT, 'openai-second');
+    await usage.clearCodexAccountUsageSnapshot('openai-second');
+    resolve({ snapshot: JSON.stringify(APP_SERVER_SNAPSHOT) });
+    await pending;
+    expect(await usage.readCodexAccountUsageSnapshot('openai-second')).toBeNull();
+    expect(mocks.broadcasts).toEqual([{ providerId: 'openai-second', snapshot: null }]);
   });
 
   it('keeps the web slot intact when app-server events arrive afterwards', async () => {
@@ -164,7 +205,7 @@ describe('codex app-server limit buckets', () => {
     vi.resetModules();
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
-    mocks.getCurrentUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
     mocks.broadcasts.length = 0;
   });
 
@@ -204,6 +245,34 @@ describe('codex app-server limit buckets', () => {
     const payload = await broadcaster.readCodexAccountUsageSnapshot();
     expect(Object.keys(payload?.appServerBuckets ?? {})).toEqual(['codex']);
     expect(payload?.appServerBuckets?.codex?.primary?.usedPercent).toBe(91);
+  });
+
+  it('keeps the sibling window when a sparse update only carries one window', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    await broadcaster.recordCodexAccountUsageSnapshot(APP_SERVER_SNAPSHOT);
+    await broadcaster.recordCodexAccountUsageSnapshot({
+      limitId: 'codex',
+      primary: { usedPercent: 91, windowMinutes: 300, resetsAt: 1_800_000_000 },
+      source: 'codex-app-server',
+    });
+
+    const payload = await broadcaster.readCodexAccountUsageSnapshot();
+    expect(payload?.appServerBuckets?.codex?.primary?.usedPercent).toBe(91);
+    expect(payload?.appServerBuckets?.codex?.secondary?.usedPercent).toBe(55);
+  });
+
+  it('clears an explicitly null window while preserving an omitted sibling', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    await broadcaster.recordCodexAccountUsageSnapshot(APP_SERVER_SNAPSHOT);
+    await broadcaster.recordCodexAccountUsageSnapshot({
+      limitId: 'codex',
+      primary: null,
+      source: 'codex-app-server',
+    });
+
+    const payload = await broadcaster.readCodexAccountUsageSnapshot();
+    expect(payload?.appServerBuckets?.codex?.primary ?? null).toBeNull();
+    expect(payload?.appServerBuckets?.codex?.secondary?.usedPercent).toBe(55);
   });
 
   it('hydrates a pre-bucket persisted row into its matching bucket', async () => {
@@ -254,7 +323,7 @@ describe('codex bucket edge cases (review follow-up)', () => {
     vi.resetModules();
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
-    mocks.getCurrentUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
     mocks.broadcasts.length = 0;
   });
 
@@ -360,7 +429,7 @@ describe('codex stale bucket pruning', () => {
     vi.resetModules();
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
-    mocks.getCurrentUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
     mocks.broadcasts.length = 0;
   });
 
@@ -402,7 +471,7 @@ describe('empty snapshot must not clobber the persisted row', () => {
     vi.resetModules();
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
-    mocks.getCurrentUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
     mocks.broadcasts.length = 0;
   });
 
@@ -509,14 +578,14 @@ describe('empty snapshot must not clobber the persisted row', () => {
   // hydrated 永远为 false, 本进程之后所有落库都被守卫跳过。
   it('reads the database once the owner becomes available', async () => {
     const broadcaster = await import('../usageBroadcaster');
-    mocks.getCurrentUserId.mockReturnValue(null as unknown as string);
+    mocks.getCurrentDbClientUserId.mockReturnValue(null as unknown as string);
 
     await broadcaster.recordCodexAccountUsageSnapshot(APP_SERVER_SNAPSHOT);
     expect(mocks.queryOne).not.toHaveBeenCalled();
     expect(mocks.exec).not.toHaveBeenCalled();
 
     // 用户登录后必须重新查库, 并恢复正常落库。
-    mocks.getCurrentUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
     mocks.queryOne.mockResolvedValue(null);
     await broadcaster.recordCodexAccountUsageSnapshot(APP_SERVER_SNAPSHOT);
 
@@ -524,10 +593,27 @@ describe('empty snapshot must not clobber the persisted row', () => {
     expect(mocks.exec).toHaveBeenCalled();
   });
 
+  it('hydrates through the current DbClient after the legacy database is closed', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    // DbClient 接管会关闭 legacy localDb 并清空它的 owner；新 client 仍持有当前用户。
+    mocks.legacyCurrentUserId.mockReturnValue(null);
+    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
+    mocks.queryOne.mockResolvedValue({ snapshot: JSON.stringify(APP_SERVER_SNAPSHOT) });
+
+    const payload = await broadcaster.readCodexAccountUsageSnapshot();
+
+    expect(mocks.queryOne).toHaveBeenCalledWith(
+      'SELECT snapshot FROM account_usage_snapshots WHERE agent_kind = ?',
+      ['codex'],
+    );
+    expect(payload?.primary?.usedPercent).toBe(82);
+    expect(payload?.secondary?.usedPercent).toBe(55);
+  });
+
   it('skips persistence when the owner is not initialized yet', async () => {
     const broadcaster = await import('../usageBroadcaster');
-    // 启动早期 getCurrentUserId 尚不可用 → hydration 被跳过, 内存为空。
-    mocks.getCurrentUserId.mockReturnValue(null as unknown as string);
+    // 启动早期 DbClient owner 尚不可用 → hydration 被跳过, 内存为空。
+    mocks.getCurrentDbClientUserId.mockReturnValue(null as unknown as string);
 
     await broadcaster.recordCodexAccountUsageSnapshot(NULL_SPARSE_EVENT);
 
@@ -651,7 +737,7 @@ describe('sparse rate-limit updates without a limitId', () => {
     vi.resetModules();
     mocks.queryOne.mockReset().mockResolvedValue(null);
     mocks.exec.mockReset().mockResolvedValue(undefined);
-    mocks.getCurrentUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
     mocks.broadcasts.length = 0;
   });
 

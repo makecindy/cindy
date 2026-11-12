@@ -28,6 +28,28 @@ describe('isCurrentSubagentRunsChange', () => {
     __testing.reset();
   });
 
+  it('accepts a whole-session invalidation, which carries no runId', () => {
+    // `/clear` and a rewind past the Subagent's start emit exactly this shape:
+    // the session's records are gone. Both the panel and the sidebar-entry
+    // discovery read it through this predicate, so a filter that treated a null
+    // `runId` as "nothing to do" would leave each of them on stale state.
+    expect(
+      isCurrentSubagentRunsChange(
+        { ...payload, runId: null, created: false, firstForSession: false },
+        { dataOwnerId: 'owner-new', ownerGeneration: 2 },
+        'session-1',
+      ),
+    ).toBe(true);
+    // Still scoped: another task's invalidation is not ours to act on.
+    expect(
+      isCurrentSubagentRunsChange(
+        { ...payload, runId: null },
+        { dataOwnerId: 'owner-new', ownerGeneration: 2 },
+        'session-2',
+      ),
+    ).toBe(false);
+  });
+
   it('accepts only the current owner and session', () => {
     expect(
       isCurrentSubagentRunsChange(

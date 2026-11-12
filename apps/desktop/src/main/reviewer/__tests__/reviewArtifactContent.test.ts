@@ -20,7 +20,12 @@ const tempDirs: string[] = [];
 
 class InProcessPdfUtility extends EventEmitter implements ReviewPdfUtilityChildLike {
   postMessage(message: unknown): void {
+    // 这个假子进程只服务 reviewer 的正文抽取;协议后来加了 'inspect'(cindy_docs
+    // 的产出自检),两者共用同一条链路,所以这里要先按 kind 收窄再取 maxChars。
     const request = message as ReviewPdfUtilityRequest;
+    if (request.kind !== 'extract') {
+      throw new Error(`unexpected PDF utility request kind: ${request.kind}`);
+    }
     void extractReviewPdfText(request.data, request.maxChars, request.maxPages)
       .then<ReviewPdfUtilityResponse, ReviewPdfUtilityResponse>(
         (result) => ({ kind: 'result', id: request.id, ok: true, result }),

@@ -11,6 +11,7 @@ vi.mock('electron', () => ({
 }));
 
 import { buildHelpPrompt, parseAssistantOutput } from '../maker-ipc/help';
+import { HELP_KNOWLEDGE } from '../maker-ipc/helpKnowledge.generated';
 import { truncateHelpHistory, type HelpMessage } from '../../shared/helpTypes';
 
 describe('parseAssistantOutput', () => {
@@ -108,6 +109,28 @@ describe('buildHelpPrompt', () => {
       'Only short topic summaries are available',
     );
   });
+
+  it.each(['claude-code', 'codex'] as const)(
+    'does not advertise disabled Cindy Make entries in the packaged help knowledge for %s',
+    (agentKind) => {
+      for (const docs of [HELP_KNOWLEDGE, []]) {
+        const prompt = buildHelpPrompt(history, 'en', agentKind, docs);
+        expect(prompt).not.toMatch(/cindy[ -]make/i);
+      }
+    },
+  );
+
+  it.each(['claude-code', 'codex'] as const)(
+    'preserves enabled slash-command guidance in the packaged help knowledge for %s',
+    (agentKind) => {
+      const docs = HELP_KNOWLEDGE.filter((doc) => doc.id === 'commands');
+      expect(docs).toHaveLength(1);
+      const prompt = buildHelpPrompt(history, 'en', agentKind, docs);
+      for (const command of ['/help', '/clear', '/cmd', '/issue', '/goal', '/workflows', '/jump-session']) {
+        expect(prompt).toContain(command);
+      }
+    },
+  );
 });
 
 describe('truncateHelpHistory', () => {

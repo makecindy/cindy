@@ -1,38 +1,61 @@
+import { aboutSettings } from './AboutSection.settings-search';
 /**
  * AboutSection — Settings → About tab content.
  *
  * 版本号:
  *   - 应用版本号:仅国内版显示,值由 window.electronAPI.appDisplayVersion 同步注入
- *   - Claude Code 版本号: spawn 当前应用使用的 binary `--version`
- *   - Codex 版本号: 同上
+ *   - Claude Code / Codex 版本号: spawn 当前应用使用的 binary `--version`,再比较当前通道的
+ *     线上版本;菜单样式与 Pi 共用 HarnessVersionMenuRow,更新仍是重启后由启动流程安装
+ *   - Pi 版本号与内核更新由 PiKernelVersionRow 管理
  *
- * 卡片样式与 NotificationSection / FeishuBotSection 同级 (rounded-xl / Board border)。
+ * 分区、卡片与行用 settings-rows;版本菜单行与日志行来自别的文件,包在 SettingsBlock(p-0) 里只取分割线。
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ExternalLink, FolderOpen, Loader2, Upload } from 'lucide-react';
+import { ExternalLink } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
+import { Button } from '@/components/ui/button';
+import { SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { useExperimentalFlag } from '@/hooks/useExperimentalFeatures';
 import { useAutoUpdateSettings } from '@/hooks/useAutoUpdateSettings';
 import { useAnalyticsSettings } from '@/hooks/useAnalyticsSettings';
 import { useLogUploadSettings } from '@/hooks/useLogUploadSettings';
-import { extractIpcError } from '@/utils/ipcError';
+import { OpenLogsRow, UploadLogsRow } from '@/components/log-support/LogSupportActions';
+import { PiKernelVersionRow } from './PiKernelVersionRow';
+import { HARNESS_MENU_ITEM_CLASS, HarnessMenuFootnote, HarnessVersionMenuItem, HarnessVersionMenuRow } from './HarnessVersionMenuRow';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
-import { StorageManagementCard } from './StorageManagementCard';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { LEGAL_LINKS } from '../../../shared/legalLinks';
+
+type UpdatableAgentKind = 'claude-code' | 'codex';
 
 interface AgentVersionState {
   loading: boolean;
   version: string | null;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  checking: boolean;
+  checkFailed: boolean;
+  /** Last successful online comparison (renderer clock); a failed check keeps the previous one. */
+  checkedAt: number | null;
   error?: string;
 }
 
-const INITIAL: AgentVersionState = { loading: true, version: null };
+const INITIAL: AgentVersionState = {
+  loading: true,
+  version: null,
+  latestVersion: null,
+  updateAvailable: false,
+  checking: false,
+  checkFailed: false,
+  checkedAt: null,
+};
 
 const DESKTOP_SOCIAL_LINKS = [
   {
@@ -55,28 +78,77 @@ const DESKTOP_SOCIAL_LINKS = [
   },
 ] as const;
 
-function useAgentBinaryVersion(kind: 'claude-code' | 'codex'): AgentVersionState {
+function useAgentBinaryVersion(kind: UpdatableAgentKind): { state: AgentVersionState; check: () => void } {
   const [state, setState] = useState<AgentVersionState>(INITIAL);
+  const mounted = useRef(false);
+  const checkPending = useRef(false);
+
+  const check = useCallback(() => {
+    if (checkPending.current) return;
+    checkPending.current = true;
+    setState((prev) => ({ ...prev, checking: true }));
+    void window.electronAPI.maker.agent
+      .getBinaryVersion(kind, { checkLatest: true })
+      .then(
+        (latest) => {
+          if (!mounted.current) return;
+          const failed = latest.latestCheckFailed;
+          setState((prev) => ({
+            ...prev,
+            loading: false,
+            version: latest.version,
+            error: latest.error,
+            // Keep the last known channel version and check time so the menu
+            // still shows what we last saw. Do not keep Update enabled: a
+            // harness relaunch re-checks the manifest, so a stale
+            // updateAvailable can confirm a version that is not installable
+            // while offline.
+            latestVersion: failed ? prev.latestVersion : latest.latestVersion,
+            updateAvailable: failed ? false : latest.updateAvailable,
+            checkFailed: failed,
+            checkedAt: failed ? prev.checkedAt : Date.now(),
+            checking: false,
+          }));
+        },
+        () => {
+          if (mounted.current) {
+            setState((prev) => ({ ...prev, checking: false, checkFailed: true, updateAvailable: false }));
+          }
+        },
+      )
+      .finally(() => {
+        checkPending.current = false;
+      });
+  }, [kind]);
 
   useEffect(() => {
+    mounted.current = true;
     let cancelled = false;
+    // Local first so the version shows immediately even offline; the online
+    // comparison follows and only ever adds the update action.
     void window.electronAPI.maker.agent
       .getBinaryVersion(kind)
-      .then((res) => {
-        if (cancelled) return;
-        setState({ loading: false, version: res.version, error: res.error });
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        const message = err instanceof Error ? err.message : String(err);
-        setState({ loading: false, version: null, error: message });
+      .then(
+        (res) => {
+          if (cancelled) return;
+          setState((prev) => ({ ...prev, loading: false, version: res.version, error: res.error }));
+        },
+        (err: unknown) => {
+          if (cancelled) return;
+          const message = err instanceof Error ? err.message : String(err);
+          setState((prev) => ({ ...prev, loading: false, version: null, error: message }));
+        },
+      )
+      .then(() => {
+        if (!cancelled) check();
       });
     return () => {
       cancelled = true;
+      mounted.current = false;
     };
-  }, [kind]);
+  }, [kind, check]);
 
-  return state;
+  return { state, check };
 }
 
 const SEMVER_RE = /\d+\.\d+\.\d+(?:[-+.\w]*)?/;
@@ -92,75 +164,205 @@ function renderVersion(state: AgentVersionState, t: (key: string) => string): st
   return t('settings.about.version.unknown');
 }
 
-export function AboutSection() {
+export function AgentVersionsRows() {
   const { t } = useTranslation();
   const claudeCode = useAgentBinaryVersion('claude-code');
   const codex = useAgentBinaryVersion('codex');
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.about.title')}
-        </h2>
-        <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-          {t('settings.about.description')}
-        </p>
-      </div>
+    <>
+      <SettingsBlock className="p-0">
+        <AgentVersionRow
+          kind="claude-code"
+          name="Claude Code"
+          label={t('settings.about.claudeCodeVersionLabel')}
+          state={claudeCode.state}
+          onCheck={claudeCode.check}
+        />
+      </SettingsBlock>
+      <SettingsBlock className="p-0">
+        <AgentVersionRow
+          kind="codex"
+          name="Codex"
+          label={t('settings.about.codexVersionLabel')}
+          state={codex.state}
+          onCheck={codex.check}
+        />
+      </SettingsBlock>
+      <SettingsBlock className="p-0">
+        <PiKernelVersionRow />
+      </SettingsBlock>
+    </>
+  );
+}
 
+function AgentVersionRow({
+  kind,
+  name,
+  label,
+  state,
+  onCheck,
+}: {
+  kind: UpdatableAgentKind;
+  /** Product name for actions and dialogs; `label` is the row label ("<name> version"). */
+  name: string;
+  label: string;
+  state: AgentVersionState;
+  onCheck: () => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  const [preparing, setPreparing] = useState(false);
+  const preparingRef = useRef(false);
+  const active = useRef(true);
+  useEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const currentVersion = state.version ? extractSemver(state.version) : null;
+  const latestVersion = state.latestVersion ? extractSemver(state.latestVersion) : null;
+  // Main decides with the installer's semver ordering: a newer local build never offers a no-op relaunch.
+  const updateAvailable = Boolean(state.updateAvailable && currentVersion && latestVersion);
+  // A later check keeps the last channel version in the menu, but Update must not
+  // confirm a stale result while that check is still in flight.
+  const canUpdate = () => {
+    const next = stateRef.current;
+    return Boolean(
+      active.current && !next.checking &&
+        next.updateAvailable &&
+        next.version &&
+        next.latestVersion &&
+        extractSemver(next.version) &&
+        extractSemver(next.latestVersion),
+    );
+  };
+  const status = preparing
+    ? t('settings.about.piKernel.download')
+    : state.checking
+    ? t('settings.about.harnessChecking')
+    : state.checkFailed
+      ? t('settings.about.harnessCheckFailed')
+      : updateAvailable
+        ? t('settings.about.harnessUpdateAvailable')
+        : '';
+
+  const handleUpdate = async () => {
+    if (preparingRef.current || !canUpdate() || !currentVersion || !latestVersion) return;
+    const targetVersion = stateRef.current.latestVersion;
+    if (!targetVersion) return;
+    preparingRef.current = true;
+    setPreparing(true);
+    try {
+      await window.electronAPI.prepareHarnessUpdate(kind, targetVersion);
+    } catch {
+      toast.error(t('settings.about.harnessUpdateFailed'));
+      return;
+    } finally {
+      preparingRef.current = false;
+      if (active.current) setPreparing(false);
+    }
+    if (!canUpdate() || stateRef.current.latestVersion !== targetVersion) return;
+    const confirmed = await confirm({
+      title: t('settings.about.harnessUpdateTitle', { name }),
+      description: t('settings.about.harnessUpdateDescription', {
+        name,
+        currentVersion,
+        latestVersion,
+      }),
+      confirmText: t('settings.about.harnessUpdateConfirm', { name }),
+      cancelText: t('settings.about.harnessUpdateCancel'),
+      autoFocusConfirm: true,
+    });
+    if (!confirmed) return;
+    if (!canUpdate()) return;
+
+    // Same gate as the app-update banner and the beta-channel restart: a logical
+    // turn, Claude background activity, or Ghost card action must not be killed
+    // by a generic confirmation. A failed probe means we cannot tell, so fail
+    // closed into the interruption warning instead of relaunching.
+    let hasInFlight = true;
+    try {
+      hasInFlight = await window.electronAPI.anyActivityBlockingRelaunch();
+    } catch {
+      hasInFlight = true;
+    }
+    if (hasInFlight) {
+      const interrupt = await confirm({
+        title: t('settings.about.harnessUpdateTitle', { name }),
+        description: t('settings.about.harnessUpdateBusyDescription', { name }),
+        confirmText: t('settings.about.harnessUpdateConfirm', { name }),
+        cancelText: t('settings.about.harnessUpdateCancel'),
+      });
+      if (!interrupt) return;
+    }
+    if (!canUpdate()) return;
+
+    try {
+      await window.electronAPI.relaunchForHarnessUpdate(kind, targetVersion);
+    } catch {
+      toast.error(t('settings.about.harnessUpdateFailed'));
+    }
+  };
+
+  return (
+    <HarnessVersionMenuRow
+      label={label}
+      manageLabel={t('settings.about.harnessManage', { name })}
+      version={renderVersion(state, t)}
+      status={status}
+      pending={state.checking || preparing}
+    >
+      <HarnessVersionMenuItem
+        label={t('settings.about.harnessUpdateButton', { name })}
+        version={latestVersion}
+        disabled={!updateAvailable || state.checking || preparing}
+        onSelect={() => void handleUpdate()}
+      />
+      <DropdownMenuSeparator />
+      <DropdownMenuItem className={HARNESS_MENU_ITEM_CLASS} disabled={state.checking || preparing} onSelect={onCheck}>
+        {state.checking ? t('settings.about.harnessChecking') : t('settings.about.harnessCheck')}
+      </DropdownMenuItem>
+      {state.checkedAt && (
+        <HarnessMenuFootnote>
+          {t('settings.about.harnessCheckedAt', { time: new Date(state.checkedAt).toLocaleString(i18n.language) })}
+        </HarnessMenuFootnote>
+      )}
+    </HarnessVersionMenuRow>
+  );
+}
+
+export function AboutSection() {
+  const { t } = useTranslation();
+
+  return (
+    <SettingsSection variant="page" title={t('settings.about.title')} description={t('settings.about.description')}>
       {/* Info Card */}
-      <div
-        className={cn(
-          'flex flex-col rounded-xl',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
+      <SettingsCard id={aboutSettings.appVersionLabel.targetId}>
         {CURRENT_CINDY_REGION === 'cn' && (
-          <>
-            <InfoRow
-              label={t('settings.about.appVersionLabel')}
-              value={window.electronAPI.appDisplayVersion}
-              title={window.electronAPI.appDisplayVersionDetail}
-            />
-            <Divider />
-          </>
+          <InfoRow
+            label={t(aboutSettings.appVersionLabel.titleKey)}
+            value={window.electronAPI.appDisplayVersion}
+            title={window.electronAPI.appDisplayVersionDetail}
+          />
         )}
         <AutoUpdateToggleRow />
-        <Divider />
         <AnalyticsToggleRow />
-        <Divider />
-        <InfoRow
-          label={t('settings.about.claudeCodeVersionLabel')}
-          value={renderVersion(claudeCode, t)}
-          dim={!claudeCode.version}
-        />
-        <Divider />
-        <InfoRow
-          label={t('settings.about.codexVersionLabel')}
-          value={renderVersion(codex, t)}
-          dim={!codex.version}
-        />
-        <Divider />
+        <AgentVersionsRows />
         <DebugLogToggleRow />
-        <Divider />
-        <OpenLogsRow />
-        <Divider />
+        <SettingsBlock id={aboutSettings.logsDirLabel.targetId} className="p-0">
+          <OpenLogsRow />
+        </SettingsBlock>
         <CrashAutoUploadToggleRow />
-        <Divider />
-        <UploadLogsRow />
-        <Divider />
+        <SettingsBlock id={aboutSettings.logUploadUploadLabel.targetId} className="p-0">
+          <UploadLogsRow />
+        </SettingsBlock>
         <LegalLinksRows />
-      </div>
-
-      {/* 存储空间(媒体总仓占用 / 清理 / 体检) */}
-      <h3 className="mt-2 text-13 font-medium text-[var(--settings-section-title)]">
-        {t('settings.about.storage.title')}
-      </h3>
-      <StorageManagementCard />
+      </SettingsCard>
 
       <SocialLinksPanel />
-    </div>
+    </SettingsSection>
   );
 }
 
@@ -173,7 +375,6 @@ export function LegalLinksRows() {
         label={t('settings.about.legal.termsOfServiceLabel')}
         url={LEGAL_LINKS.termsOfService}
       />
-      <Divider />
       <LegalLinkRow
         label={t('settings.about.legal.privacyPolicyLabel')}
         url={LEGAL_LINKS.privacyPolicy}
@@ -197,25 +398,23 @@ function LegalLinkRow({ label, url }: { label: string; url: string }) {
   };
 
   return (
-    <div className="flex items-center justify-between gap-3 px-[18px] py-4">
-      <span className="select-none text-13 text-[var(--settings-section-sublabel)]">{label}</span>
-      <button
-        aria-label={t('settings.about.legal.viewDocument', { document: label })}
-        className={cn(
-          '-mr-1 flex select-none items-center gap-1.5 rounded-full px-6 py-2.5',
-          'text-12 font-medium text-[var(--settings-section-title)]',
-          'border border-[var(--settings-theme-card-border)]',
-          'transition-colors hover:bg-[var(--surface-hover)] active:scale-[0.98]',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]',
-        )}
-        onClick={() => void handleOpen()}
-        title={url}
-        type="button"
-      >
-        {t('settings.about.legal.viewDocument', { document: label })}
-        <ExternalLink aria-hidden size={13} strokeWidth={1.7} />
-      </button>
-    </div>
+    <SettingsRow
+      title={<span className="select-none">{label}</span>}
+      trailing={
+        <Button data-settings-search-action="Open the selected help link or legal document"
+          variant="secondary"
+          size="lg"
+          aria-label={t('settings.about.legal.viewDocument', { document: label })}
+          className="-mr-1 select-none"
+          onClick={() => void handleOpen()}
+          title={url}
+          type="button"
+        >
+          {t('settings.about.legal.viewDocument', { document: label })}
+          <ExternalLink aria-hidden size={13} strokeWidth={1.7} />
+        </Button>
+      }
+    />
   );
 }
 
@@ -234,14 +433,14 @@ function SocialLinksPanel() {
   };
 
   return (
-    <div className="mt-5 flex flex-col gap-2.5">
+    <div className="flex flex-col gap-2.5">
       <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
         {t('settings.about.social.title')}
       </h3>
 
       <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-2.5">
         {DESKTOP_SOCIAL_LINKS.map((link) => (
-          <button
+          <button data-settings-search-action="Open the selected help link or legal document"
             className={cn(
               'group flex min-h-[68px] min-w-0 select-none items-center gap-3 rounded-full px-6 py-2.5 text-left',
               'border border-[var(--settings-theme-card-border)]',
@@ -265,7 +464,7 @@ function SocialLinksPanel() {
             </span>
             <ExternalLink
               aria-hidden
-              className="shrink-0 text-[var(--settings-section-sublabel)] opacity-65 transition-opacity duration-[var(--motion-fast,150ms)] group-hover:opacity-100"
+              className="shrink-0 text-[var(--text-tertiary)] transition-colors duration-[var(--motion-fast,150ms)] group-hover:text-[var(--settings-section-sublabel)]"
               size={13}
               strokeWidth={1.7}
             />
@@ -313,10 +512,20 @@ function SocialPlatformIcon({ id }: { id: (typeof DESKTOP_SOCIAL_LINKS)[number][
   );
 }
 
-function AutoUpdateToggleRow() {
+export function AutoUpdateToggleRow() {
   const { t } = useTranslation();
+  const isLinux = window.electronAPI?.platform === 'linux';
   const { state, setAutoRelaunchOnIdle, reset } = useAutoUpdateSettings();
   const [saving, setSaving] = useState(false);
+
+  if (isLinux) {
+    return (
+      <SettingsRow
+        title={<span id={aboutSettings.autoUpdateLabel.targetId}>{t(aboutSettings.autoUpdateLabel.titleKey)}</span>}
+        hint={t('settings.about.linuxUpdateDescription')}
+      />
+    );
+  }
 
   const handleToggle = async (next: boolean) => {
     setSaving(true);
@@ -349,31 +558,25 @@ function AutoUpdateToggleRow() {
   const disabled = state.loading || saving;
 
   return (
-    <div className="flex flex-col gap-1.5 px-[18px] py-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <span className="text-13 text-[var(--settings-section-sublabel)]">
-            {t('settings.about.autoUpdateLabel')}
-          </span>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-            {t('settings.about.autoUpdateDescription')}
-          </p>
-        </div>
+    <SettingsRow
+      title={<span id={aboutSettings.autoUpdateLabel.targetId}>{t(aboutSettings.autoUpdateLabel.titleKey)}</span>}
+      hint={t(aboutSettings.autoUpdateLabel.descriptionKey)}
+      trailing={
         <div className="flex shrink-0 items-center gap-2">
           <DefaultOverrideControls
             isCustomized={state.isCustomized}
             disabled={disabled}
             onReset={handleReset}
           />
-          <Switch
+          <Switch data-setting-id={aboutSettings.autoUpdateLabel.id}
             checked={state.autoRelaunchOnIdle}
             disabled={disabled}
             onCheckedChange={handleToggle}
-            aria-label={t('settings.about.autoUpdateLabel')}
+            aria-label={t(aboutSettings.autoUpdateLabel.titleKey)}
           />
         </div>
-      </div>
-    </div>
+      }
+    />
   );
 }
 
@@ -425,31 +628,25 @@ function AnalyticsToggleRow() {
   };
 
   return (
-    <div className="flex flex-col gap-1.5 px-[18px] py-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <span className="text-13 text-[var(--settings-section-sublabel)]">
-            {t('settings.about.analyticsLabel')}
-          </span>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-            {t('settings.about.analyticsDescription')}
-          </p>
-        </div>
+    <SettingsRow
+      title={<span id={aboutSettings.analyticsLabel.targetId}>{t(aboutSettings.analyticsLabel.titleKey)}</span>}
+      hint={t(aboutSettings.analyticsLabel.descriptionKey)}
+      trailing={
         <div className="flex shrink-0 items-center gap-2">
           <DefaultOverrideControls
             isCustomized={state.analyticsEnabledCustomized}
             disabled={state.loading || saving}
             onReset={handleReset}
           />
-          <Switch
+          <Switch data-setting-id={aboutSettings.analyticsLabel.id}
             checked={state.analyticsEnabled}
             disabled={state.loading || saving}
             onCheckedChange={handleToggle}
-            aria-label={t('settings.about.analyticsLabel')}
+            aria-label={t(aboutSettings.analyticsLabel.titleKey)}
           />
         </div>
-      </div>
-    </div>
+      }
+    />
   );
 }
 
@@ -475,57 +672,18 @@ function DebugLogToggleRow() {
   }, [effectiveEnabled]);
 
   return (
-    <div className="flex flex-col gap-1.5 px-[18px] py-4">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-13 text-[var(--settings-section-sublabel)]">
-          {t('settings.about.debugLogLabel')}
-        </span>
-        <Switch
+    <SettingsRow
+      title={<span id={aboutSettings.debugLogLabel.targetId}>{t(aboutSettings.debugLogLabel.titleKey)}</span>}
+      hint={t(aboutSettings.debugLogLabel.descriptionKey)}
+      trailing={
+        <Switch data-setting-id={aboutSettings.debugLogLabel.id}
           checked={effectiveEnabled}
           disabled={lockedOn}
           onCheckedChange={setEnabled}
-          aria-label={t('settings.about.debugLogLabel')}
+          aria-label={t(aboutSettings.debugLogLabel.titleKey)}
         />
-      </div>
-      <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70 pr-12">
-        {t('settings.about.debugLogDescription')}
-      </p>
-    </div>
-  );
-}
-
-function OpenLogsRow() {
-  const { t } = useTranslation();
-  const handleOpen = async () => {
-    try {
-      const res = await window.electronAPI.openLogsDir();
-      if (!res.success) toast.error(res.error || t('settings.about.openLogsDirError'));
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t('settings.about.openLogsDirError'));
-    }
-  };
-
-  return (
-    <div className="flex items-center justify-between gap-3 px-[18px] py-4">
-      <span className="text-13 text-[var(--settings-section-sublabel)]">
-        {t('settings.about.logsDirLabel')}
-      </span>
-      <button
-        type="button"
-        onClick={handleOpen}
-        className={cn(
-          'flex items-center gap-1.5 rounded-md px-2.5 py-1 -mr-1',
-          'text-12 font-medium text-[var(--settings-section-title)]',
-          'border border-[var(--settings-theme-card-border)]',
-          'hover:bg-[var(--settings-theme-card-border)]/40',
-          'transition-colors',
-        )}
-        title={t('settings.about.openLogsDirTooltip')}
-      >
-        <FolderOpen size={13} />
-        {t('settings.about.openLogsDir')}
-      </button>
-    </div>
+      }
+    />
   );
 }
 
@@ -579,134 +737,25 @@ function CrashAutoUploadToggleRow() {
   const disabled = state.loading || saving || blocked;
 
   return (
-    <div className="flex flex-col gap-1.5 px-[18px] py-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <span className="text-13 text-[var(--settings-section-sublabel)]">
-            {t('settings.about.logUpload.crashAutoLabel')}
-          </span>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-            {t('settings.about.logUpload.crashAutoDescription')}
-          </p>
-        </div>
+    <SettingsRow
+      title={<span id={aboutSettings.logUploadCrashAutoLabel.targetId}>{t(aboutSettings.logUploadCrashAutoLabel.titleKey)}</span>}
+      hint={t('settings.about.logUpload.crashAutoDescription')}
+      trailing={
         <div className="flex shrink-0 items-center gap-2">
           <DefaultOverrideControls
             isCustomized={state.crashAutoUploadCustomized}
             disabled={state.loading || saving}
             onReset={handleReset}
           />
-          <Switch
+          <Switch data-setting-id={aboutSettings.logUploadCrashAutoLabel.id}
             checked={state.crashAutoUploadEnabled}
             disabled={disabled}
             onCheckedChange={handleToggle}
-            aria-label={t('settings.about.logUpload.crashAutoLabel')}
+            aria-label={t(aboutSettings.logUploadCrashAutoLabel.titleKey)}
           />
         </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * 「上传日志」按钮。
- *
- * 成功后必须给出上传编号(用户报障时口述给我们),所以 toast 里带编号并把它复制到剪贴板。
- * 四种失败按 IPC 错误码给可区分的文案:未配置目标 / 未同意隐私政策 / 采到 0 条 / 上传失败。
- */
-function UploadLogsRow() {
-  const { t } = useTranslation();
-  const { state } = useLogUploadSettings();
-  const [uploading, setUploading] = useState(false);
-
-  const handleUpload = async () => {
-    setUploading(true);
-    try {
-      const result = await window.electronAPI.uploadLogsNow();
-      toast.success(t('settings.about.logUpload.successToast', { code: result.uploadCode }));
-      // 编号是这次上报唯一的可报凭据,顺手放进剪贴板,省得用户从 toast 里抄。
-      try {
-        await navigator.clipboard.writeText(result.uploadCode);
-      } catch {
-        // 剪贴板不可用不影响主流程 —— 编号已经显示在 toast 里了。
       }
-    } catch (err) {
-      const code = extractIpcError(err)?.code;
-      switch (code) {
-        case 'LOG_UPLOAD_UNAVAILABLE':
-          toast.error(t('settings.about.logUpload.errorUnavailable'));
-          break;
-        case 'PRIVACY_CONSENT_REQUIRED':
-          toast.error(t('settings.about.logUpload.errorConsentRequired'));
-          break;
-        case 'LOG_UPLOAD_EMPTY':
-          toast.error(t('settings.about.logUpload.errorEmpty'));
-          break;
-        case 'LOG_UPLOAD_BUSY':
-          toast.error(t('settings.about.logUpload.errorBusy'));
-          break;
-        default:
-          toast.error(t('settings.about.logUpload.errorFailed'));
-      }
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const unavailableReason = !state.targetConfigured
-    ? t('settings.about.logUpload.unavailableNotConfigured')
-    : !state.privacyConsentAccepted
-      ? t('settings.about.logUpload.unavailableNoConsent')
-      : null;
-
-  return (
-    <div className="flex flex-col gap-1.5 px-[18px] py-4">
-      {/* items-start:本行的说明有三段(用途 / 上传内容边界 / 不可用原因),按钮若垂直居中会浮在
-          文字块中间;与标签对齐才和同页其它「标签 + 按钮」行(日志目录 / 服务条款)读起来一致。 */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <span className="text-13 text-[var(--settings-section-sublabel)]">
-            {t('settings.about.logUpload.uploadLabel')}
-          </span>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-            {t('settings.about.logUpload.uploadDescription')}
-          </p>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-            {t('settings.about.logUpload.scopeDescription')}
-          </p>
-          {unavailableReason !== null && (
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-              {unavailableReason}
-            </p>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={() => void handleUpload()}
-          disabled={!state.manualUploadAvailable || uploading || state.loading}
-          className={cn(
-            'flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 -mr-1',
-            'text-12 font-medium text-[var(--settings-section-title)]',
-            'border border-[var(--settings-theme-card-border)]',
-            'transition-colors hover:bg-[var(--settings-theme-card-border)]/40',
-            'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent',
-          )}
-          title={t('settings.about.logUpload.uploadTooltip')}
-        >
-          {/* 动画必须挂在 HTML 元素上并只用 transform / opacity(工程规范 §7):
-              图标本身是 SVG,所以旋转挂外层 span 而不是 <Loader2 className="animate-spin">。 */}
-          {uploading ? (
-            <span className="inline-flex animate-spin">
-              <Loader2 size={13} />
-            </span>
-          ) : (
-            <Upload size={13} />
-          )}
-          {uploading
-            ? t('settings.about.logUpload.uploading')
-            : t('settings.about.logUpload.uploadButton')}
-        </button>
-      </div>
-    </div>
+    />
   );
 }
 
@@ -721,29 +770,23 @@ function InfoRow({
   title?: string;
   dim?: boolean;
 }) {
+  // SettingsRow 的 title 是行名称,悬停说明挂在名称和值上
   return (
-    <div className="flex items-center justify-between gap-3 px-[18px] py-4" title={title}>
-      <span className="text-13 text-[var(--settings-section-sublabel)]">{label}</span>
-      <span
-        className={cn(
-          'truncate text-13 font-medium',
-          dim
-            ? 'text-[var(--settings-section-sublabel)] opacity-70'
-            : 'text-[var(--settings-section-title)]',
-        )}
-      >
-        {value}
-      </span>
-    </div>
-  );
-}
-
-function Divider() {
-  return (
-    <div
-      aria-hidden
-      className="h-px w-full"
-      style={{ background: 'var(--settings-theme-card-border)' }}
+    <SettingsRow
+      title={<span title={title}>{label}</span>}
+      trailing={
+        <span
+          title={title}
+          className={cn(
+            'truncate text-13 font-medium',
+            dim
+              ? 'text-[var(--text-secondary)]'
+              : 'text-[var(--settings-section-title)]',
+          )}
+        >
+          {value}
+        </span>
+      }
     />
   );
 }

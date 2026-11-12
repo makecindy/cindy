@@ -20,7 +20,7 @@ const TARGET: LogUploadTarget = {
 };
 
 const META: LogUploadMeta = {
-  uploadCode: 'ABCD-2345',
+  uploadCode: 'CN-ABCD-2345',
   userId: 'user-1',
   deviceId: 'device-1',
   appVersion: '1.2.3',
@@ -57,7 +57,7 @@ describe('buildTrackUrl', () => {
 describe('toWireTags', () => {
   it('带上后台检索需要的全部维度', () => {
     expect(toWireTags(META)).toMatchObject({
-      uploadCode: 'ABCD-2345',
+      uploadCode: 'CN-ABCD-2345',
       userId: 'user-1',
       deviceId: 'device-1',
       appVersion: '1.2.3',
@@ -233,6 +233,7 @@ describe('sendLogs', () => {
 
     const result = await sendLogs({ fetchImpl }, TARGET, META, [record(1)]);
 
-    expect(result).toEqual({ ok: false, batches: 0, sentRecords: 0, status: 0 });
+    expect(result).toEqual({ ok: false, batches: 0, sentRecords: 0, status: 0,
+      error: 'getaddrinfo ENOTFOUND' });
   });
 });

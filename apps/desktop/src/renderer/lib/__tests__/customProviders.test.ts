@@ -1,21 +1,18 @@
+import { buildUserProvider, BUNDLED_CATALOG, DEFAULT_CUSTOM_CONTEXT_WINDOW } from '@cindy/model-providers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { customProviderSecretStorageKey } from '@/../shared/providerSecrets';
 
 import {
   appendDiscoveredCustomProviderModels,
-  clearCustomProviderModelPiApiOverrides,
   createCustomProvider,
   customProviderModelConfigFromCatalogModel,
   customProviderWireProtocolForSave,
   deleteCustomProvider,
+  fetchCustomProviderModelsForRefresh,
   piCatalogProviderIdAfterRouteEdit,
   providerViewToCustomProviderConfig,
   readCustomProviderKey,
-  replaceCustomProviderModelId,
-  setCustomProviderModelReasoning,
-  setCustomProviderModelReasoningEffort,
-  setCustomProviderModelSupportsImageInput,
   updateCustomProvider,
 } from '../customProviders';
 import type {
@@ -23,8 +20,114 @@ import type {
   ProviderRuntimeModelConfig,
   ProviderView,
 } from '@cindy/model-providers';
+import { fetchProviderModels, buildModelsFetchRequest } from '../../../main/maker-host/provider-model-fetch';
+import { acceptsModelSourceSnapshot, modelSourceRequestSignature } from '../../../main/maker-host/model-source-snapshots';
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe('saved Hinoki refresh batch', () => {
+  const agents = ['claude-code', 'codex', 'pi'] as const;
+  function fixture() {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'hinoki')!;
+    const raw = { id: 'saved-hinoki', name: 'Hinoki', runtimes: structuredClone(preset.runtimes) };
+    const provider = { ...buildUserProvider(raw, { presets: [preset] }), connected: true } as ProviderView;
+    expect(provider.agents).toEqual(expect.arrayContaining([...agents]));
+    return { provider, config: providerViewToCustomProviderConfig(provider) };
+  }
+  function bridge(read: (key: string) => Promise<string | null>, transport: typeof fetch) {
+    const ipc = vi.fn(input => fetchProviderModels(input, transport));
+    vi.stubGlobal('window', { electronAPI: { safeStorageRead: read, maker: { fetchProviderModels: ipc } } });
+    return ipc;
+  }
+  it('waits for all saved keys, then shares one HTTP read with independent agent receipts', async () => {
+    const { provider, config } = fixture();
+    let release!: () => void;
+    const keyGate = new Promise<void>(resolve => { release = resolve; });
+    const read = vi.fn(async key => {
+      if (key === customProviderSecretStorageKey(provider.id, 'pi')) await keyGate;
+      return 'fake-hinoki-key';
+    });
+    // Synthetic provenance-marker response, not a claimed Hinoki API payload.
+    const transport = vi.fn(async () => new Response(JSON.stringify({ data: [{
+      id: 'future-model', owned_by: 'fake-source', magpie_label: 'Model · fake-source',
+    }] })));
+    const ipc = bridge(read, transport);
+    const pending = fetchCustomProviderModelsForRefresh(provider, config);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(3));
+    expect(ipc).not.toHaveBeenCalled();
+    release();
+    const results = (await pending)!;
+    expect(ipc).toHaveBeenCalledTimes(3);
+    expect(transport).toHaveBeenCalledOnce();
+    const snapshots = new Set<string>();
+    for (const { agent, result } of results) {
+      expect(result.ok).toBe(true);
+      const model = result.models![0]; snapshots.add(model.discoverySnapshotId!);
+      const request = ipc.mock.calls.find(([input]) => input.agent === agent)![0];
+      expect(request).toMatchObject({ savedProviderId: provider.id, apiKey: 'fake-hinoki-key', wireProtocol: 'openai-chat' });
+      const { url, init } = buildModelsFetchRequest(request);
+      const signature = modelSourceRequestSignature(url, init);
+      expect(acceptsModelSourceSnapshot(model.id, model.discoveredSource, 'new', agent, signature)).toBe(true);
+      expect(acceptsModelSourceSnapshot(model.id, model.discoveredSource, 'new', agents.find(a => a !== agent)!, signature)).toBe(false);
+    }
+    expect(snapshots.size).toBe(3);
+    expect(results[0].result.models).not.toBe(results[1].result.models);
+    // A later user refresh is a fresh read, not a completed response cache.
+    await fetchCustomProviderModelsForRefresh(provider, config);
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
+  it('keeps distinct saved keys separate at the real Main discovery entry', async () => {
+    const { provider, config } = fixture();
+    const transport = vi.fn<typeof fetch>(async () => new Response('{"data":[{"id":"future-model"}]}'));
+    bridge(async storageKey => 'fake-' + storageKey, transport);
+    const results = (await fetchCustomProviderModelsForRefresh(provider, config))!;
+    expect(results.every(r => r.result.ok)).toBe(true);
+    expect(transport).toHaveBeenCalledTimes(3);
+    expect(new Set(transport.mock.calls.map(([, init]) => new Headers(init?.headers).get('authorization'))).size).toBe(3);
+  });
+  it.each(['network', 'http', 'json', 'business', 'empty'] as const)
+  ('preserves %s results and allows the next refresh to recover', async kind => {
+    const { provider, config } = fixture(); let recovered = false;
+    const transport = vi.fn(async () => {
+      if (recovered) return new Response('{"data":[{"id":"recovered"}]}');
+      if (kind === 'network') throw new TypeError('controlled network failure');
+      return new Response(kind === 'json' ? 'invalid-json' : kind === 'business'
+        ? '{"error":"fake invalid key","data":[]}' : '{"data":[]}', { status: kind === 'http' ? 401 : 200 });
+    });
+    bridge(async () => 'fake-hinoki-key', transport);
+    const results = (await fetchCustomProviderModelsForRefresh(provider, config))!;
+    expect(transport).toHaveBeenCalledOnce();
+    expect(results.every(r => r.result.ok === (kind === 'empty'))).toBe(true);
+    if (kind === 'empty') expect(results.map(r => r.result.models)).toEqual([[], [], []]);
+    if (kind === 'http') expect(results.every(r => r.result.status === 401)).toBe(true);
+    recovered = true;
+    expect((await fetchCustomProviderModelsForRefresh(provider, config))!.every(r => r.result.ok)).toBe(true);
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
+  it('leaves changed directory views and other suppliers on their existing caller path', async () => {
+    for (const modelsUrl of ['https://inference.hinoki.security/v1/models?view=chat', 'https://other.example/v1/models']) {
+      const { provider, config } = fixture();
+      for (const rt of Object.values(config.runtimes)) rt!.modelsUrl = modelsUrl;
+      const read = vi.fn(); const ipc = vi.fn();
+      vi.stubGlobal('window', { electronAPI: { safeStorageRead: read, maker: { fetchProviderModels: ipc } } });
+      expect(await fetchCustomProviderModelsForRefresh(provider, config)).toBeNull();
+      expect(read).not.toHaveBeenCalled(); expect(ipc).not.toHaveBeenCalled();
+    }
+  });
+  it('leaves native OAuth on its existing caller path without reading an API key', async () => {
+    const { provider, config } = fixture(); provider.auth = { method: 'oauth', native: 'claude' };
+    const read = vi.fn(); const ipc = vi.fn();
+    vi.stubGlobal('window', { electronAPI: { safeStorageRead: read, maker: { fetchProviderModels: ipc } } });
+    expect(await fetchCustomProviderModelsForRefresh(provider, config)).toBeNull();
+    expect(read).not.toHaveBeenCalled(); expect(ipc).not.toHaveBeenCalled();
+  });
+  it('does not start partial discovery if a stored key cannot be read', async () => {
+    const { provider, config } = fixture(); const transport = vi.fn();
+    bridge(async key => { if (key === customProviderSecretStorageKey(provider.id, 'pi')) throw new Error('controlled key read failure'); return 'fake-key'; }, transport);
+    await expect(fetchCustomProviderModelsForRefresh(provider, config)).rejects.toThrow('controlled key read failure');
+    expect(transport).not.toHaveBeenCalled();
+  });
 });
 
 describe('piCatalogProviderIdAfterRouteEdit', () => {
@@ -86,7 +189,7 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
     ).toBeUndefined();
   });
 
-  it('treats an omitted Pi protocol as the effective openai-chat default', () => {
+  it('treats an omitted Pi protocol as a configuration change, not Chat', () => {
     const openAiChat = {
       ...official,
       wireProtocol: 'openai-chat' as const,
@@ -96,7 +199,7 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
         ...openAiChat,
         wireProtocol: undefined,
       }),
-    ).toBe('example');
+    ).toBeUndefined();
     expect(
       piCatalogProviderIdAfterRouteEdit(
         'pi',
@@ -106,7 +209,7 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
         },
         openAiChat,
       ),
-    ).toBe('example');
+    ).toBeUndefined();
     expect(
       piCatalogProviderIdAfterRouteEdit('pi', openAiChat, {
         ...openAiChat,
@@ -212,55 +315,7 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
   });
 });
 
-describe('replaceCustomProviderModelId', () => {
-  it('drops hidden metadata when the model id changes', () => {
-    expect(
-      replaceCustomProviderModelId(
-        {
-          id: 'MiniMax-M3',
-          name: 'MiniMax M3',
-          contextWindow: 1_000_000,
-          supportsImageInput: true,
-          reasoning: true,
-          reasoningEfforts: ['low', 'high'],
-          reasoningDefaultEffort: 'high',
-        },
-        'another-model',
-      ),
-    ).toEqual({
-      id: 'another-model',
-      name: 'MiniMax M3',
-    });
-  });
-
-  it('preserves the original model when the id is unchanged', () => {
-    const model = {
-      id: 'MiniMax-M3',
-      name: 'MiniMax M3',
-      contextWindow: 1_000_000,
-    };
-    expect(replaceCustomProviderModelId(model, model.id)).toBe(model);
-  });
-});
-
-describe('PI custom-provider protocol overrides', () => {
-  it('drops preset piApi metadata and persists an explicit Chat selection', () => {
-    const models: ProviderRuntimeModelConfig[] = [
-      {
-        id: 'deepseek-v4-pro',
-        name: 'DeepSeek V4 Pro',
-        piApi: 'openai-responses',
-        contextWindow: 1_000_000,
-      },
-    ];
-
-    expect(clearCustomProviderModelPiApiOverrides(models)).toEqual([
-      {
-        id: 'deepseek-v4-pro',
-        name: 'DeepSeek V4 Pro',
-        contextWindow: 1_000_000,
-      },
-    ]);
+  it('persists the Pi provider default without rewriting model overrides', () => {
     expect(customProviderWireProtocolForSave('pi', 'openai-chat', 'openai-chat')).toBe(
       'openai-chat',
     );
@@ -270,60 +325,13 @@ describe('PI custom-provider protocol overrides', () => {
     expect(
       customProviderWireProtocolForSave('codex', 'openai-responses', 'openai-responses'),
     ).toBeUndefined();
-  });
-});
-
-describe('setCustomProviderModelSupportsImageInput', () => {
-  it('updates only the selected model row', () => {
-    const models = [
-      { id: 'text', name: 'Text' },
-      { id: 'vision', name: 'Vision' },
-    ];
-    expect(setCustomProviderModelSupportsImageInput(models, 1, true)).toEqual([
-      models[0],
-      { id: 'vision', name: 'Vision', supportsImageInput: true },
-    ]);
-  });
-});
-
-describe('Pi custom-provider reasoning controls', () => {
-  it('enables conservative default levels and removes the capability when disabled', () => {
-    const models = [{ id: 'reasoner', name: 'Reasoner' }];
-    const enabled = setCustomProviderModelReasoning(models, 0, true);
-    expect(enabled).toEqual([
-      {
-        id: 'reasoner',
-        name: 'Reasoner',
-        reasoning: true,
-        reasoningEfforts: ['minimal', 'low', 'medium', 'high'],
-      },
-    ]);
-    expect(setCustomProviderModelReasoning(enabled, 0, false)).toEqual(models);
-  });
-
-  it('keeps canonical order and refuses to remove the final supported effort', () => {
-    const models: ProviderRuntimeModelConfig[] = [
-      {
-        id: 'reasoner',
-        name: 'Reasoner',
-        reasoning: true,
-        reasoningEfforts: ['high'],
-      },
-    ];
-    const withXhigh = setCustomProviderModelReasoningEffort(models, 0, 'xhigh', true);
-    expect(withXhigh[0]?.reasoningEfforts).toEqual(['high', 'xhigh']);
-    const highOnly = setCustomProviderModelReasoningEffort(withXhigh, 0, 'xhigh', false);
-    expect(setCustomProviderModelReasoningEffort(highOnly, 0, 'high', false)).toEqual(highOnly);
-  });
-});
-
-describe('customProviderModelConfigFromCatalogModel', () => {
+  });describe('customProviderModelConfigFromCatalogModel', () => {
   it('does not freeze the materialized custom-provider default into user config', () => {
     expect(
       customProviderModelConfigFromCatalogModel({
         id: 'default-context',
         name: 'Default Context',
-        contextWindow: 200_000,
+        contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
       }),
     ).toEqual({
       id: 'default-context',
@@ -345,21 +353,34 @@ describe('customProviderModelConfigFromCatalogModel', () => {
     });
   });
 
-  it('preserves an explicit override equal to the current default (explicit flag wins)', () => {
-    // 用户显式填了 200000:值恰好等于当前默认,但显式覆盖必须在未来默认升级后
-    // 原样保留——不能靠等值推断丢掉字段(PR review P1)。
+  it.each([200_000, 500_000])('preserves an explicit %i override across default changes', contextWindow => {
     expect(
       customProviderModelConfigFromCatalogModel({
         id: 'pinned-default',
         name: 'Pinned',
-        contextWindow: 200_000,
+        contextWindow,
         contextWindowExplicit: true,
       }),
     ).toEqual({
       id: 'pinned-default',
       name: 'Pinned',
-      contextWindow: 200_000,
+      contextWindow,
     });
+  });
+
+  it.each(['claude-code', 'codex', 'pi'] as const)('keeps materialized defaults sparse through the %s edit round trip', agent => {
+    for (const contextWindow of [200_000, 500_000]) {
+      const model = { id: 'private-default', name: 'Private', contextWindow, contextWindowExplicit: false };
+      const saved = customProviderModelConfigFromCatalogModel(model, agent);
+      expect(saved).toEqual({ id: model.id, name: model.name });
+      const rebuilt = buildUserProvider({
+        id: 'round-trip', name: 'Round Trip',
+        runtimes: { [agent]: { baseUrl: 'https://private.example/v1', wireProtocol: 'openai-chat', models: [saved] } },
+      }).models[agent]![0];
+      expect(rebuilt.contextWindow).toBe(500_000);
+      expect(rebuilt.contextWindowExplicit).toBeUndefined();
+      expect(model.contextWindow).toBe(contextWindow);
+    }
   });
 
   it('preserves hidden defaults while round-tripping catalog models', () => {
@@ -367,7 +388,7 @@ describe('customProviderModelConfigFromCatalogModel', () => {
       customProviderModelConfigFromCatalogModel({
         id: 'discovered',
         name: 'Discovered',
-        contextWindow: 200_000,
+        contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
         defaultEnabled: false,
       }),
     ).toEqual({
@@ -382,7 +403,7 @@ describe('customProviderModelConfigFromCatalogModel', () => {
       customProviderModelConfigFromCatalogModel({
         id: 'vision-model',
         name: 'Vision Model',
-        contextWindow: 200_000,
+        contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
         supportsImageInput: true,
       }),
     ).toEqual({
@@ -397,7 +418,7 @@ describe('customProviderModelConfigFromCatalogModel', () => {
       customProviderModelConfigFromCatalogModel({
         id: 'glm-5.3',
         name: 'GLM-5.3',
-        contextWindow: 200_000,
+        contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
         route: {
           baseUrl: 'https://open.bigmodel.cn/api/v1',
           wireProtocol: 'openai-responses',
@@ -413,17 +434,18 @@ describe('customProviderModelConfigFromCatalogModel', () => {
     });
   });
 
-  it('reconstructs explicit Pi reasoning capability from catalog efforts only for Pi', () => {
+  it('preserves reasoning metadata when reconstructing every engine', () => {
     const catalogModel = {
       id: 'reasoner',
       name: 'Reasoner',
-      contextWindow: 200_000,
+      contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
       efforts: ['low', 'high', 'xhigh'] as CatalogModel['efforts'],
       defaultEffort: 'xhigh' as const,
     };
     expect(customProviderModelConfigFromCatalogModel(catalogModel, 'pi')).toEqual({
       id: 'reasoner',
       name: 'Reasoner',
+      efforts: ['low', 'high', 'xhigh'], defaultEffort: 'xhigh',
       reasoning: true,
       reasoningEfforts: ['low', 'high', 'xhigh'],
       reasoningDefaultEffort: 'xhigh',
@@ -431,6 +453,7 @@ describe('customProviderModelConfigFromCatalogModel', () => {
     expect(customProviderModelConfigFromCatalogModel(catalogModel, 'codex')).toEqual({
       id: 'reasoner',
       name: 'Reasoner',
+      efforts: ['low', 'high', 'xhigh'], defaultEffort: 'xhigh',
     });
   });
 });
@@ -469,6 +492,20 @@ describe('providerViewToCustomProviderConfig Pi catalog metadata', () => {
 });
 
 describe('providerViewToCustomProviderConfig', () => {
+  it.each(['claude', 'xai'] as const)('preserves the %s account binding when renaming an all-Harness view', native => {
+    const id = `${native}-second`;
+    const config = providerViewToCustomProviderConfig({
+      id, name: 'My account', source: 'user', connected: true,
+      auth: { method: 'oauth', native }, agents: ['claude-code', 'codex', 'pi'], models: {}, routing: {},
+    });
+    const agent = native === 'claude' ? 'claude-code' : 'codex';
+    expect(config.id).toBe(id);
+    expect(config.name).toBe('My account');
+    expect(config.auth).toEqual({ method: 'oauth', native });
+    expect(Object.keys(config.runtimes)).toEqual([agent]);
+    expect(config.runtimes[agent]?.models).toEqual([]);
+    expect(config.runtimes[agent]?.baseUrl).toBe(native === 'claude' ? 'https://api.anthropic.com' : 'https://api.x.ai/v1');
+  });
   it('restores the stored id for a legacy custom xai runtime projection', () => {
     const provider = {
       id: 'custom:xai',
@@ -522,7 +559,7 @@ describe('providerViewToCustomProviderConfig', () => {
           {
             id: 'local-model',
             name: 'Local Model',
-            contextWindow: 200_000,
+            contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
             efforts: [],
             defaultEffort: null,
           },
@@ -541,7 +578,7 @@ describe('providerViewToCustomProviderConfig', () => {
           requestPath: '/tenant/acme/infer?stream=1',
           wireProtocol: 'openai-chat',
           modelsUrl: 'http://127.0.0.1:4000/v1/models',
-          models: [{ id: 'local-model', name: 'Local Model' }],
+          models: [{ id: 'local-model', name: 'Local Model', efforts: [], defaultEffort: null }],
         },
       },
     });
@@ -568,7 +605,7 @@ describe('providerViewToCustomProviderConfig', () => {
           {
             id: 'glm-5.3',
             name: 'GLM-5.3',
-            contextWindow: 200_000,
+            contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
             efforts: [],
             defaultEffort: null,
             route: {
@@ -586,6 +623,7 @@ describe('providerViewToCustomProviderConfig', () => {
       {
         id: 'glm-5.3',
         name: 'GLM-5.3',
+        efforts: [], defaultEffort: null,
         route: {
           baseUrl: 'https://open.bigmodel.cn/api/v1',
           wireProtocol: 'openai-responses',
@@ -593,6 +631,45 @@ describe('providerViewToCustomProviderConfig', () => {
         },
       },
     ]);
+  });
+
+  it('round-trips Codex image generation independently from image input', () => {
+    const provider = {
+      id: 'image-provider',
+      name: 'Image Provider',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      access: { kind: 'api' },
+      routing: {
+        codex: {
+          upstream: 'https://image.example/v1',
+          authStrategy: 'api-key-header',
+          wireProtocol: 'openai-responses',
+          supportsImageGeneration: true,
+          imageApi: 'openai-images',
+        },
+      },
+      models: {
+        codex: [
+          {
+            id: 'image-model',
+            name: 'Image Model',
+            contextWindow: 200_000,
+            efforts: [],
+            defaultEffort: null,
+            supportsImageInput: false,
+          },
+        ],
+      },
+      connected: true,
+    } satisfies ProviderView;
+
+    expect(providerViewToCustomProviderConfig(provider).runtimes.codex).toMatchObject({
+      supportsImageGeneration: true,
+      imageApi: 'openai-images',
+      models: [{ id: 'image-model', name: 'Image Model' }],
+    });
   });
 
   it('round-trips Pi reasoning efforts from a provider view', () => {
@@ -615,7 +692,7 @@ describe('providerViewToCustomProviderConfig', () => {
           {
             id: 'reasoner',
             name: 'Reasoner',
-            contextWindow: 200_000,
+            contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
             efforts: ['low', 'high', 'xhigh'],
             defaultEffort: 'high',
           },
@@ -628,6 +705,7 @@ describe('providerViewToCustomProviderConfig', () => {
       {
         id: 'reasoner',
         name: 'Reasoner',
+        efforts: ['low', 'high', 'xhigh'], defaultEffort: 'high',
         reasoning: true,
         reasoningEfforts: ['low', 'high', 'xhigh'],
         reasoningDefaultEffort: 'high',
@@ -670,7 +748,25 @@ describe('providerViewToCustomProviderConfig', () => {
 });
 
 describe('appendDiscoveredCustomProviderModels', () => {
-  it('only appends unknown models and defaults them to hidden', () => {
+  it('repairs confirmed OpenRouter discovery wrappers while preserving explicit model fields and manual IDs', () => {
+    const existing = [
+      { id: 'anthropic/openai/new[1m]', name: 'Wrong wrapper', discoveredMetadata: {}, contextWindow: 64000 },
+      { id: 'openai/new', name: 'Current', discoveredMetadata: {}, defaultEnabled: false },
+      { id: 'anthropic/manual/id', name: 'Manual', nameExplicit: true, discoveredMetadata: {} },
+    ];
+    const discovered = [{ id: 'openai/new', name: 'Official', discoveredMetadata: { contextWindow: 128000 } },
+      { id: 'manual/id', name: 'Other model' }];
+    const result = appendDiscoveredCustomProviderModels(existing, discovered, 'https://openrouter.ai/api/v1/models');
+    expect(result.models.map(model => model.id)).not.toContain('anthropic/openai/new[1m]');
+    expect(result.models.find(model => model.id === 'openai/new'))
+      .toMatchObject({ contextWindow: 64000, defaultEnabled: false });
+    expect(result.models.find(model => model.id === 'anthropic/manual/id'))
+      .toMatchObject({ name: 'Manual', nameExplicit: true });
+    expect(appendDiscoveredCustomProviderModels(existing, discovered, 'https://proxy.example/v1/models').models)
+      .toContainEqual(expect.objectContaining({ id: 'anthropic/openai/new[1m]' }));
+    expect(existing[0].id).toBe('anthropic/openai/new[1m]');
+  });
+  it('puts new models first without overriding native-engine defaults', () => {
     const result = appendDiscoveredCustomProviderModels(
       [{ id: 'kept', name: 'Kept' }],
       [
@@ -682,8 +778,8 @@ describe('appendDiscoveredCustomProviderModels', () => {
     );
     expect(result).toEqual({
       models: [
-        { id: 'kept', name: 'Kept' },
-        { id: 'new', name: 'New', defaultEnabled: false },
+        { id: 'new', name: 'New', discoveredMetadata: { name: 'New' } },
+        { id: 'kept', name: 'Kept', nameExplicit: true, discoveredMetadata: { name: 'New name' } },
       ],
       addedIds: ['new'],
     });
@@ -699,10 +795,14 @@ describe('appendDiscoveredCustomProviderModels', () => {
       ],
     );
     expect(result.models).toEqual([
-      { id: 'big', name: 'Big', contextWindow: 1_000_000, defaultEnabled: false },
-      { id: 'plain', name: 'Plain', defaultEnabled: false },
+      {
+        id: 'big',
+        name: 'Big',
+        discoveredMetadata: { name: 'Big', contextWindow: 1_000_000 },
+      },
+      { id: 'plain', name: 'Plain', discoveredMetadata: { name: 'Plain' } },
       // 非法值不落盘,回落保守默认
-      { id: 'bogus', name: 'Bogus', defaultEnabled: false },
+      { id: 'bogus', name: 'Bogus', discoveredMetadata: { name: 'Bogus' } },
     ]);
   });
 });
@@ -764,6 +864,34 @@ describe('custom provider credential lifecycle', () => {
     await createCustomProvider(config, keys);
 
     expect(create).toHaveBeenCalledWith(config, keys);
+  });
+
+  it('forwards the explicit manual create restart policy through the same mutation', async () => {
+    const create = vi.fn(async () => ({ ok: true as const }));
+    vi.stubGlobal('window', {
+      electronAPI: {
+        maker: { createCustomProvider: create },
+      },
+    });
+    const config = {
+      id: 'new-image-provider',
+      name: 'New image provider',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.example/v1',
+          supportsImageGeneration: true,
+          models: [{ id: 'model', name: 'Model' }],
+        },
+      },
+    };
+    const options = {
+      source: 'manual-settings' as const,
+      codexImageGenerationRestartPolicy: 'interrupt' as const,
+    };
+
+    await createCustomProvider(config, {}, options);
+
+    expect(create).toHaveBeenCalledWith(config, {}, options);
   });
 
   it('surfaces an atomic main-process create failure', async () => {
@@ -848,4 +976,27 @@ describe('custom provider credential lifecycle', () => {
       ),
     ).rejects.toThrow('credential rollback failed');
   });
+});
+
+
+it('roundtrips raw model choices without freezing projected protocols or limits', () => {
+  const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'google-gemini-api')!);
+  const modelId = 'gemini-3.6-flash';
+  const raw = { id: 'google-test', name: 'Google', runtimes: {
+    pi: { ...preset.runtimes.pi!, catalogPresetId: 'google-gemini-api', models: [
+      { id: modelId, name: 'Gemini' },
+      { id: 'manual', name: 'Manual', api: 'openai-completions' as const, contextWindow: 32000,
+        route: { baseUrl: 'https://custom.example/v1', wireProtocol: 'openai-chat' as const } },
+    ] },
+  } };
+  const view = { ...buildUserProvider(raw, { presets: [preset] }), connected: true } as ProviderView;
+  const saved = providerViewToCustomProviderConfig(view);
+  saved.name = 'Renamed';
+  expect(saved.runtimes.pi!.models).toEqual(raw.runtimes.pi.models);
+  const nextModel = preset.runtimes.pi!.models.find(m => m.id === modelId)!;
+  nextModel.api = 'openai-completions'; nextModel.piApi = 'openai-completions';
+  nextModel.route = { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', wireProtocol: 'openai-chat' };
+  const next = buildUserProvider(saved, { presets: [preset] });
+  expect(next.models.pi![0]).toMatchObject({ api: 'openai-completions', route: nextModel.route });
+  expect(next.models.pi![1].userModelConfig).toEqual(raw.runtimes.pi.models[1]);
 });

@@ -5,6 +5,8 @@ export type McpCallerKind = 'root' | 'descendant' | 'unknown';
 export interface McpProviderContext {
   agentKind: AgentKind;
   workingDir: string;
+  /** Host-owned memory namespace override (for example a stable Cindy Bot scope). */
+  memoryScopeKey?: string;
   vendorOptions?: Record<string, unknown>;
   /**
    * Business 层 session id (host 通过 createSession 的 opts.id 提供, 由 maker.ts
@@ -64,6 +66,13 @@ export interface CodexHttpMcpServerConfig {
 export interface McpProvider {
   /** MCP server 唯一名（host 自定义） */
   name: string;
+  /** Discovery metadata lives beside the provider; never a second tool/permission table. */
+  capability?: {
+    title: string;
+    description: string;
+    source: 'builtin' | 'plugin' | 'custom' | 'harness';
+    discovery?: { tool: string; args?: Record<string, unknown> };
+  };
   /** 按 session 上下文决定是否启用，例如飞书 bot MCP 只给 source='feishu' 会话。 */
   isEnabled?(context: McpProviderContext): boolean;
   /**

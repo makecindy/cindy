@@ -7,10 +7,13 @@
 //  - advanced unsupported actions yield a structured error (no throw)
 
 import fs from 'node:fs/promises';
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { createBrowserMcpServer } from '@cindy/mcps';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WebContents } from 'electron';
 
@@ -116,6 +119,87 @@ beforeEach(() => {
 
 afterEach(() => {
   dispatchTabOpSpy.mockReset();
+});
+
+describe('RsbWebviewBackend — bundled recipe sessions', () => {
+  it('routes commands to the owning guest, rejects another session and releases listeners', async () => {
+    const wc = fakeWc();
+    const send = vi.fn(async (_method: string) => ({ root: { nodeId: 42 } }));
+    const listeners = new Set<unknown>();
+    Object.assign(wc, { removeListener: vi.fn(), debugger: {
+      isAttached: () => true, sendCommand: send,
+      on: (_event: string, listener: unknown) => { listeners.add(listener); },
+      removeListener: (_event: string, listener: unknown) => { listeners.delete(listener); },
+    } });
+    let activeSession = 'owner';
+    const backend = new RsbWebviewBackend({
+      registry: fakeRegistry([{ sessionId: 'owner', tabId: 't', webContentsId: 1 }], new Map([['t', wc]])),
+      getActiveSessionId: () => activeSession,
+      bridge: { getHostWebContents: () => null, logger: logger() }, logger: logger(),
+    });
+    try {
+      const begin = await backend.call({ action: 'recipeCommand', targetId: 't', recipeCommand: { method: 'Cindy.begin' } });
+      expect(begin.ok).toBe(true);
+      const sessionId = (begin.data as { sessionId: string }).sessionId;
+      const request = { action: 'recipeCommand' as const, targetId: 't', recipeCommand: { method: 'DOM.getDocument', sessionId } };
+      expect((await backend.call(request)).data).toMatchObject({ root: { nodeId: 42 } });
+      activeSession = 'other';
+      expect((await backend.call(request)).ok).toBe(false);
+      expect(send.mock.calls.filter(([method]) => method === 'DOM.getDocument')).toHaveLength(1);
+      activeSession = 'owner';
+      const before = listeners.size;
+      expect((await backend.call({ ...request, recipeCommand: { method: 'Cindy.end', sessionId } })).ok).toBe(true);
+      expect(listeners.size).toBeLessThan(before);
+    } finally { await backend.dispose(); }
+  });
+
+  // Tool layer joined to this backend (unit tier, real MCP entry and real backend, fake guest).
+  // Rule: docs/dev-rules/browser-use.md, shared-layer work must hold on every backend that supports
+  // it. Gap: the tool-layer tests script the runtime and the test above drives the backend alone, so
+  // nothing proved the agent-facing cdp action speaks this backend's session contract (begin returns
+  // no tab id here; every command must stay on the same guest and the session must be released).
+  it('carries the agent cdp action through to the owning guest and releases the session', async () => {
+    const wc = fakeWc();
+    const sent: Array<[string, Record<string, unknown> | undefined]> = [];
+    const send = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      sent.push([method, params]);
+      if (method === 'Accessibility.getFullAXTree') return { nodes: [{ nodeId: '1', role: { value: 'button' }, name: { value: 'Reveal code' }, backendDOMNodeId: 41 }] };
+      if (method === 'DOM.getContentQuads') return { quads: [[10, 20, 110, 20, 110, 60, 10, 60]] };
+      return {};
+    });
+    const listeners = new Set<unknown>();
+    Object.assign(wc, { removeListener: vi.fn(), debugger: {
+      isAttached: () => true, sendCommand: send,
+      on: (_event: string, listener: unknown) => { listeners.add(listener); },
+      removeListener: (_event: string, listener: unknown) => { listeners.delete(listener); },
+    } });
+    const backend = new RsbWebviewBackend({
+      registry: fakeRegistry([{ sessionId: 'owner', tabId: 't', webContentsId: 1 }], new Map([['t', wc]])),
+      getActiveSessionId: () => 'owner',
+      bridge: { getHostWebContents: () => null, logger: logger() }, logger: logger(),
+    });
+    const server = createBrowserMcpServer({ getRuntime: () => backend, getBackendKind: () => 'rsb-webview' });
+    const client = new Client({ name: 'rsb-cdp', version: '0.0.0' });
+    const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTx), client.connect(clientTx)]);
+    try {
+      const run = () => client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: {
+        action: 'cdp', targetId: 't', commands: [{ method: 'nodes' }, { method: 'click', params: { node: 41 } }],
+      } } });
+      const reply = await run();
+      // The tab's network monitor keeps its own listeners; a finished call must not add to them.
+      const afterFirst = listeners.size;
+      const body = JSON.parse((reply.content as Array<{ text: string }>)[0].text);
+      expect(body).toMatchObject({ ok: true, data: { results: [
+        { method: 'nodes', result: { nodes: '[41] button "Reveal code"', count: 1 } },
+        { method: 'click', result: { clicked: 41, x: 60, y: 40 } },
+      ] } });
+      expect(sent.filter(([method]) => method === 'Input.dispatchMouseEvent').map(([, params]) => [params?.type, params?.x, params?.y]))
+        .toEqual([['mouseMoved', 60, 40], ['mousePressed', 60, 40], ['mouseReleased', 60, 40]]);
+      expect((await run()).isError).toBeFalsy();
+      expect(listeners.size).toBe(afterFirst);
+    } finally { await client.close(); await server.close(); await backend.dispose(); }
+  });
 });
 
 describe('RsbWebviewBackend — diagnostic actions', () => {
@@ -1418,7 +1502,7 @@ describe('RsbWebviewBackend — uploads and page dialogs', () => {
       expect(res.ok).toBe(true);
       expect(res.data).toMatchObject({ tabId: 't1', uploadedFiles: 1 });
       expect(env.sendCommand).toHaveBeenCalledWith('DOM.setFileInputFiles', {
-        files: [await fs.realpath(file)],
+        files: [realpathSync(file)],
         objectId: 'file-input',
       });
       await env.backend.dispose();
@@ -2040,6 +2124,30 @@ describe('RsbWebviewBackend — detached-window ensure/wait for direct actions',
       url: 'https://example.com',
     } as never);
     expect(ensureHost).toHaveBeenCalledTimes(1);
+    expect(ensureHost).toHaveBeenCalledWith('s1');
+    expect(res.ok).toBe(true);
+  });
+
+  it('direct action asks ensureHost for the request session, not the focused one', async () => {
+    const ensureHost = vi.fn(async () => undefined);
+    const wc = fakeWc();
+    const registry = fakeRegistry(
+      [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
+      new Map([['t1', wc]]),
+    );
+    const backend = new RsbWebviewBackend({
+      registry,
+      getActiveSessionId: () => 's2',
+      bridge: { getHostWebContents: () => null, ensureHost, logger: logger() },
+      logger: logger(),
+    });
+    const res = await backend.call({
+      action: 'navigate',
+      targetId: 't1',
+      url: 'https://example.com',
+      __mcpSessionId: 's1',
+    } as never);
+    expect(ensureHost).toHaveBeenCalledWith('s1');
     expect(res.ok).toBe(true);
   });
 
@@ -2175,9 +2283,9 @@ describe('RsbWebviewBackend — detached-window ensure/wait for direct actions',
     expect(res.message).toMatch(/t-ghost not in active session s1/);
   });
 
-  it('ensureHost rejection does not mask a resolvable tab', async () => {
+  it('ensureHost rejection fails closed even if a pooled tab still exists', async () => {
     const ensureHost = vi.fn(async () => {
-      throw new Error('ready timeout');
+      throw new Error('host context not ready');
     });
     const wc = fakeWc();
     const registry = fakeRegistry(
@@ -2186,15 +2294,17 @@ describe('RsbWebviewBackend — detached-window ensure/wait for direct actions',
     );
     const backend = new RsbWebviewBackend({
       registry,
-      getActiveSessionId: () => 's1',
+      getActiveSessionId: () => 's2',
       bridge: { getHostWebContents: () => null, ensureHost, logger: logger() },
       logger: logger(),
     });
     const res = await backend.call({
       action: 'screenshot',
       targetId: 't1',
+      __mcpSessionId: 's1',
     } as never);
-    expect(res.ok).toBe(true);
+    expect(res.ok).toBe(false);
+    expect(res.message).toMatch(/host context not ready/);
   });
 
   it('embedded mode (isDetached false) → resolve miss fails fast, no polling', async () => {

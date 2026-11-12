@@ -1,11 +1,57 @@
 import { EventEmitter } from 'node:events';
-import { describe, expect, it, vi } from 'vitest';
+import { zstdCompress, zstdDecompress, zstdCompressSync, zstdDecompressSync } from 'node:zlib';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createAnthropicCompatProxy } from '@cindy/anthropic-compat-proxy';
+import type { NativeSubscriptionAccount } from '@cindy/maker-core';
+
+const { ownerState } = vi.hoisted(() => ({
+  ownerState: {
+    pending: false,
+    scope: 'cloud:owner-a:1',
+    fastAllowed: true,
+    afterFastRead: undefined as 'relax' | 'owner' | undefined,
+  },
+}));
+
+// Measure actual asynchronous zstd work on the production HTTP path. The
+// synchronous fixture encoder/decoder remains untouched.
+vi.mock('node:zlib', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:zlib')>();
+  return { ...actual, zstdCompress: vi.fn(actual.zstdCompress), zstdDecompress: vi.fn(actual.zstdDecompress) };
+});
 
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/cindy-pi-native-forwarding-test' },
 }));
+
+// The HTTP transport fixture injects account readers below. Global Skill
+// projection has its own tests and must not start Desktop services here.
+vi.mock('../managed-skills.js', () => ({
+  listCindyManagedSkills: async () => [],
+  cindyManagedSkillRoots: async () => [],
+}));
+vi.mock('../model-discovery/xai.js', () => ({
+  discardXaiModelsDiskCache: vi.fn(async () => {}),
+}));
+
+vi.mock('../../appSessionState.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../appSessionState.js')>(),
+  isAppSessionBoundaryPending: () => ownerState.pending,
+  activeOwnerScopeKey: () => ownerState.scope,
+}));
+vi.mock('../subscription-fast-policy.js', () => ({ createSubscriptionFastPolicy: () => ({
+  isAllowed: () => {
+    const allowed = ownerState.fastAllowed;
+    const action = ownerState.afterFastRead;
+    ownerState.afterFastRead = undefined;
+    if (action) queueMicrotask(() => {
+      if (action === 'relax') ownerState.fastAllowed = true;
+      else ownerState.scope = 'cloud:owner-b:2';
+    });
+    return allowed;
+  },
+}) }));
 
 vi.mock('../logger-adapter.js', () => ({
   createMakerLogger: () => {
@@ -26,8 +72,17 @@ vi.mock('../logger-adapter.js', () => ({
 
 import {
   getPiNativeSubscriptionHandler,
+  getChatgptBridgeAuth,
+  getChatgptBridgeAuthForDispatch,
+  invalidateChatgptBridgeAuth,
   type PiNativeSubscriptionHandlerDeps,
 } from '../anthropic-responses-bridge-host.js';
+import { buildUserProvider } from '@cindy/model-providers';
+import { setCustomProviders, setXaiDiscoveredModels } from '../active-catalog.js';
+import { registerUsagePricing, clearUsagePricing } from '../model-usage-pricing.js';
+import { registerGuestProviderRoute } from '../guest-provider-route-store.js';
+import { bindHostedSessionProvider } from '../session-provider-store.js';
+import { setSessionFastMode } from '../session-effort-store.js';
 
 function responseRecorder() {
   const response = new EventEmitter() as EventEmitter & {
@@ -68,6 +123,7 @@ function deps(overrides: Partial<PiNativeSubscriptionHandlerDeps> = {}): PiNativ
     })) as PiNativeSubscriptionHandlerDeps['fetch'],
     getChatgptAuth: vi.fn(async () => ({ accessToken: 'host-openai-token', accountId: 'account-1' })),
     getGrokToken: vi.fn(async () => 'host-xai-token'),
+    peekGrokToken: vi.fn(() => 'host-xai-token'),
     invalidateChatgpt: vi.fn(async () => false),
     invalidateXai: vi.fn(async () => 'ignored' as const),
     recordXaiRateLimit: vi.fn(),
@@ -76,6 +132,296 @@ function deps(overrides: Partial<PiNativeSubscriptionHandlerDeps> = {}): PiNativ
 }
 
 describe('PI native subscription forwarding', () => {
+  // Standard: exercise the real account bridge without reading an on-disk credential.
+  it('reads and refreshes only the selected profile and fences its dispatch proof', async () => {
+    let current = true;
+    const read = vi.fn(async () => ({ accessToken: 'fixture-access-b', chatgptAccountId: 'fixture-account-b', canDispatch: () => current }));
+    const invalidate = vi.fn();
+    const account: NativeSubscriptionAccount = { id: 'fixture-profile-b', configDir: '/fixture/.codex-b',
+      assertCurrent: () => {}, readState: async () => ({ authenticated: true }), readCodexTokens: read, invalidateAuth: invalidate };
+    const auth = await getChatgptBridgeAuth('openai', account);
+    expect(auth.accountId).toBe('fixture-account-b');
+    const proof = await getChatgptBridgeAuthForDispatch('openai', account);
+    expect(proof.canDispatch()).toBe(true);
+    current = false;
+    expect(proof.canDispatch()).toBe(false);
+    current = true;
+    await invalidateChatgptBridgeAuth({ status: 401, body: 'token_revoked', failedAccessToken: 'old-fixture-token' }, 'openai', account);
+    expect(invalidate).not.toHaveBeenCalled();
+    await invalidateChatgptBridgeAuth({ status: 401, body: 'token_revoked', failedAccessToken: 'fixture-access-b' }, 'openai', account);
+    expect(invalidate).toHaveBeenCalledWith('token_revoked', 'fixture-access-b');
+  });
+  it('uses the selected account for HTTP headers and never invalidates the default account', async () => {
+    const account: NativeSubscriptionAccount = { id: 'fixture-profile-b', configDir: '/fixture/.codex-b',
+      assertCurrent: () => {}, readState: async () => ({ authenticated: true }) };
+    const injected = deps({ fetch: vi.fn(async () => new Response('token_revoked', { status: 401 })) });
+    const body = { model: 'gpt-6-astra', input: [] };
+    const res = responseRecorder();
+    await getPiNativeSubscriptionHandler('openai', 'pool-http', injected, account)({
+      rawBody: Buffer.from(JSON.stringify(body)), parsedBody: body,
+      ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: {} }, res: res as never,
+    });
+    expect(injected.getChatgptAuth).toHaveBeenCalledWith('openai', account);
+    expect(injected.invalidateChatgpt).toHaveBeenCalledWith(expect.objectContaining({ failedAccessToken: 'host-openai-token' }), 'openai', account);
+  });
+  // provider-sharing §12: decoding cannot bypass exact model grants. The earlier
+  // forwarding tests had no hosted binding, while routing tests only sent plain JSON.
+  it.each(['guest', 'owner'].flatMap(trust => [false, true].map(compressed => ({ trust, compressed }))))(
+    'checks the decoded model for $trust subscriptions (zstd: $compressed)', async ({ trust, compressed }) => {
+      const providerId = 'openai-codec-fixture';
+      setCustomProviders([buildUserProvider({
+        id: providerId, name: 'Codec fixture', auth: { method: 'oauth', native: 'codex' },
+        runtimes: { codex: { baseUrl: 'https://chatgpt.example', wireProtocol: 'openai-responses',
+          models: ['gpt-6.1-sol', 'gpt-6.1-sol[1m]'].map(id => ({ id, name: id })) },
+          pi: { baseUrl: 'https://chatgpt.example', wireProtocol: 'openai-responses',
+          models: ['chatgpt/gpt-6.1-sol', 'chatgpt/gpt-6.1-sol[1m]'].map(id => ({ id, name: id })) } },
+      })]);
+      let allowedModel = 'chatgpt/gpt-6.1-sol';
+      const binding = trust === 'guest'
+        ? registerGuestProviderRoute('pi-codec-grant', providerId, model => model === allowedModel)
+        : bindHostedSessionProvider('pi-codec-grant', providerId, (provider, model) => provider === providerId && model === allowedModel);
+      const injected = deps();
+      const handler = getPiNativeSubscriptionHandler(providerId, 'pi-codec-grant', injected);
+      const request = async (model: unknown) => {
+        const body = { model, input: [] };
+        const res = responseRecorder();
+        await handler({
+          rawBody: compressed ? zstdCompressSync(Buffer.from(JSON.stringify(body))) : Buffer.from(JSON.stringify(body)),
+          parsedBody: compressed ? undefined : body,
+          ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: compressed ? { 'content-encoding': 'zstd' } : {} },
+          res: res as never,
+        });
+        return res;
+      };
+      try {
+        expect((await request('gpt-6.1-sol')).status).toBe(200);
+        vi.mocked(injected.fetch).mockClear();
+        vi.mocked(injected.getChatgptAuth).mockClear();
+        for (const model of ['gpt-6.1-sol[1m]', 'unknown-model', undefined]) {
+          expect((await request(model)).status).toBe(403);
+          expect(injected.fetch).not.toHaveBeenCalled();
+          expect(injected.getChatgptAuth).not.toHaveBeenCalled();
+        }
+        allowedModel = 'chatgpt/gpt-6.1-sol[1m]';
+        expect((await request('gpt-6.1-sol')).status).toBe(403);
+        expect(injected.fetch).not.toHaveBeenCalled();
+        expect((await request('gpt-6.1-sol[1m]')).status).toBe(200);
+        vi.mocked(injected.fetch).mockClear();
+        vi.mocked(injected.getChatgptAuth).mockImplementationOnce(async () => {
+          binding.release();
+          return { accessToken: 'fixture-token', accountId: 'fixture-account' };
+        });
+        // Removing the hosted binding during an async auth read must not turn
+        // the in-flight request into an unrestricted local request.
+        expect((await request('gpt-6.1-sol[1m]')).status).toBe(403);
+        expect(injected.fetch).not.toHaveBeenCalled();
+      } finally { binding.release(); }
+    },
+  );
+
+  afterEach(() => {
+    setCustomProviders([]);
+    setXaiDiscoveredModels(null);
+    setSessionFastMode('session-fast', false);
+    clearUsagePricing('session-fast');
+    ownerState.pending = false;
+    ownerState.scope = 'cloud:owner-a:1';
+    ownerState.fastAllowed = true;
+    ownerState.afterFastRead = undefined;
+    vi.mocked(zstdCompress).mockClear();
+    vi.mocked(zstdDecompress).mockClear();
+  });
+
+  // The same HTTP request used to decode twice and discard
+  // compression when the final Fast restriction applied. Assert real bytes,
+  // semantics and codec calls, rather than helper return values.
+  it.each(['openai', 'openai-account-fixture'].flatMap(provider => [false, true].flatMap(compressed =>
+    [false, true].flatMap(profile => [false, true].map(fastAllowed => ({ provider, compressed, profile, fastAllowed }))))))(
+    'preserves encoding and applies both rewrites once: %j', async ({ provider, compressed, profile, fastAllowed }) => {
+      setCustomProviders([buildUserProvider({ id: 'openai-account-fixture', name: 'Fixture account',
+        auth: { method: 'oauth', native: 'codex' }, runtimes: {} })]);
+      ownerState.fastAllowed = fastAllowed;
+      // Exercise the combined compressed rewrite with a 10 MiB history too.
+      const repeats = compressed && profile && !fastAllowed ? 655360 : 4096;
+      const payload = { model: 'gpt-6.1-sol' + (profile ? '[1m]' : ''), service_tier: 'priority',
+        input: [{ role: 'user', content: 'fixture-history-'.repeat(repeats) }] };
+      const raw = Buffer.from(JSON.stringify(payload));
+      const bytes = compressed ? zstdCompressSync(raw) : raw;
+      const injected = deps();
+      await getPiNativeSubscriptionHandler(provider, 'fixture-codec-session', injected)({
+        rawBody: bytes, parsedBody: compressed ? undefined : payload,
+        ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: compressed ? { 'content-encoding': 'zstd' } : {} },
+        res: responseRecorder(),
+      } as never);
+      expect(injected.fetch).toHaveBeenCalledOnce();
+      const sent = vi.mocked(injected.fetch).mock.calls[0]![1]!;
+      const sentBytes = Buffer.from(sent.body as Uint8Array);
+      if (compressed) expect(sent.headers).toMatchObject({ 'content-encoding': 'zstd' });
+      else expect(sent.headers).not.toHaveProperty('content-encoding');
+      const decoded = JSON.parse((compressed ? zstdDecompressSync(sentBytes) : sentBytes).toString());
+      expect(decoded).toEqual({ ...payload, model: 'gpt-6.1-sol', service_tier: fastAllowed ? 'priority' : 'default' });
+      expect(zstdDecompress).toHaveBeenCalledTimes(compressed ? 1 : 0);
+      expect(zstdCompress).toHaveBeenCalledTimes(compressed && (profile || !fastAllowed) ? 1 : 0);
+      if (!profile && fastAllowed) expect(sentBytes).toEqual(bytes);
+    },
+  );
+
+  it.each([false, true])('passes already-standard requests byte-for-byte, compressed=%s', async compressed => {
+    ownerState.fastAllowed = false;
+    const payload = { model: 'gpt-6.1-sol', service_tier: 'default', input: [] };
+    const raw = Buffer.from('{ "model": "gpt-6.1-sol", "service_tier": "default", "input": [] }');
+    const bytes = compressed ? zstdCompressSync(raw) : raw;
+    const injected = deps();
+    await getPiNativeSubscriptionHandler('openai', 'fixture-standard', injected)({
+      rawBody: bytes, parsedBody: compressed ? undefined : payload,
+      ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: compressed ? { 'content-encoding': 'zstd' } : {} },
+      res: responseRecorder(),
+    } as never);
+    const sent = vi.mocked(injected.fetch).mock.calls[0]![1]!;
+    expect(Buffer.from(sent.body as Uint8Array)).toEqual(bytes);
+    if (compressed) expect(sent.headers).toMatchObject({ 'content-encoding': 'zstd' });
+    expect(zstdCompress).not.toHaveBeenCalled();
+    expect(zstdDecompress).toHaveBeenCalledTimes(compressed ? 1 : 0);
+  });
+
+  // Credential refresh and the final guest grant check can both suspend while
+  // the provider/group closes Fast. The outgoing bytes must reflect that change.
+  it.each(['auth', 'final-grant'].flatMap(timing => [false, true].map(compressed => ({ timing, compressed }))))(
+    'rechecks Fast after $timing, compressed=$compressed', async ({ timing, compressed }) => {
+      const providerId = 'openai-fast-race-fixture';
+      setCustomProviders([buildUserProvider({ id: providerId, name: 'Fast race fixture',
+        auth: { method: 'oauth', native: 'codex' },
+        runtimes: { codex: { baseUrl: 'https://chatgpt.example', wireProtocol: 'openai-responses',
+          models: [{ id: 'gpt-6.1-sol', name: 'Fixture' }] } } })]);
+      let authRead = false;
+      const binding = registerGuestProviderRoute('pi-fast-race', providerId, async () => {
+        if (authRead && timing === 'final-grant') ownerState.fastAllowed = false;
+        return true;
+      });
+      const injected = deps({ getChatgptAuth: vi.fn(async () => {
+        authRead = true;
+        if (timing === 'auth') ownerState.fastAllowed = false;
+        return { accessToken: 'fixture-token', accountId: 'fixture-account' };
+      }) });
+      const payload = { model: 'gpt-6.1-sol', service_tier: 'priority', input: [] };
+      const raw = Buffer.from(JSON.stringify(payload));
+      try {
+        const res = responseRecorder();
+        await getPiNativeSubscriptionHandler(providerId, 'pi-fast-race', injected)({
+          rawBody: compressed ? zstdCompressSync(raw) : raw, parsedBody: compressed ? undefined : payload,
+          ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: compressed ? { 'content-encoding': 'zstd' } : {} },
+          res,
+        } as never);
+        expect(res.status).toBe(200);
+        expect(injected.getChatgptAuth).toHaveBeenCalledOnce();
+        expect(injected.fetch).toHaveBeenCalledOnce();
+        const sent = vi.mocked(injected.fetch).mock.calls[0]![1]!;
+        const bytes = Buffer.from(sent.body as Uint8Array);
+        expect(JSON.parse((compressed ? zstdDecompressSync(bytes) : bytes).toString()))
+          .toEqual({ ...payload, service_tier: 'default' });
+        expect(zstdDecompress).toHaveBeenCalledTimes(compressed ? 1 : 0);
+        expect(zstdCompress).toHaveBeenCalledTimes(compressed ? 1 : 0);
+      } finally { binding.release(); }
+    },
+  );
+
+  it('rechecks Fast after asynchronous profile recompression before dispatch', async () => {
+    const actual = await vi.importActual<typeof import('node:zlib')>('node:zlib');
+    vi.mocked(zstdCompress).mockImplementationOnce(((...args: unknown[]) => {
+      ownerState.fastAllowed = false;
+      return Reflect.apply(actual.zstdCompress, actual, args);
+    }) as typeof zstdCompress);
+    const payload = { model: 'gpt-6.1-sol[1m]', service_tier: 'priority', input: [] };
+    const injected = deps();
+    await getPiNativeSubscriptionHandler('openai', 'fixture-policy-race', injected)({
+      rawBody: zstdCompressSync(Buffer.from(JSON.stringify(payload))), parsedBody: undefined,
+      ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: { 'content-encoding': 'zstd' } },
+      res: responseRecorder(),
+    } as never);
+    const sent = vi.mocked(injected.fetch).mock.calls[0]![1]!;
+    expect(sent.headers).toMatchObject({ 'content-encoding': 'zstd' });
+    expect(JSON.parse(zstdDecompressSync(Buffer.from(sent.body as Uint8Array)).toString()))
+      .toEqual({ ...payload, model: 'gpt-6.1-sol', service_tier: 'default' });
+    expect(zstdDecompress).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])('does not dispatch malformed restricted requests, compressed=%s', async compressed => {
+    ownerState.fastAllowed = false;
+    const malformed = Buffer.from('{invalid json');
+    const injected = deps();
+    const res = responseRecorder();
+    await getPiNativeSubscriptionHandler('openai', 'fixture-malformed', injected)({
+      rawBody: compressed ? zstdCompressSync(malformed) : malformed, parsedBody: undefined,
+      ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: compressed ? { 'content-encoding': 'zstd' } : {} },
+      res,
+    } as never);
+    expect(injected.fetch).not.toHaveBeenCalled();
+    expect(res.status).toBe(502);
+  });
+
+  it.each(['relax', 'owner'] as const)('preserves the final boundary when %s changes during request rewriting', async action => {
+    ownerState.fastAllowed = false;
+    ownerState.afterFastRead = action;
+    const injected = deps();
+    const res = responseRecorder();
+    await getPiNativeSubscriptionHandler('openai', 'session-fast', injected)({
+      rawBody: zstdCompressSync(Buffer.from(JSON.stringify({ model: 'gpt-6.1-sol', input: [], service_tier: 'priority' }))),
+      parsedBody: undefined,
+      ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: { 'content-encoding': 'zstd' } },
+      res,
+    } as never);
+    if (action === 'owner') {
+      expect(injected.fetch).not.toHaveBeenCalled();
+      expect(res.status).toBe(503);
+    } else {
+      expect(injected.fetch).toHaveBeenCalledOnce();
+      const sent = vi.mocked(injected.fetch).mock.calls[0][1]!;
+      expect(JSON.parse(zstdDecompressSync(Buffer.from(sent.body as Uint8Array)).toString()).service_tier).toBe('default');
+      expect(sent.headers).toMatchObject({ 'content-encoding': 'zstd' });
+    }
+  });
+
+  it.each([['grok-4.7', true, 'grok-4.7-build-fast'], ['grok-4.7', false, 'grok-4.7'],
+    ['grok-4.6', true, 'grok-4.6']] as const)('forwards %s Fast=%s to %s', async (model, fast, expected) => {
+    setXaiDiscoveredModels(['grok-4.7', 'grok-4.7-build-fast', 'grok-4.6'].map(id => ({
+      id: `xai/${id}`, contextWindow: 500000, nativeApi: 'openai-responses',
+    })));
+    setSessionFastMode('session-fast', fast);
+    const injected = deps();
+    const handler = getPiNativeSubscriptionHandler('xai', 'session-fast', injected);
+    const parsedBody = { model, input: 'OK' };
+    await handler({ rawBody: Buffer.from(JSON.stringify(parsedBody)), parsedBody,
+      ctx: { reqId: 1, method: 'POST', url: '/v1/responses', headers: {} }, res: responseRecorder() } as never);
+    const request = JSON.parse(Buffer.from(vi.mocked(injected.fetch).mock.calls[0][1]!.body as Uint8Array).toString());
+    expect(request.model).toBe(expected);
+    expect(request.service_tier).toBeUndefined();
+  });
+
+  it.each([true, false, null])('prices the actual native execution when Fast availability is %s', async available => {
+    setXaiDiscoveredModels(available === null ? null : ['grok-4.7', ...(available ? ['grok-4.7-build-fast'] : [])]
+      .map(id => ({ id: `xai/${id}`, contextWindow: 500000, nativeApi: 'openai-responses' })));
+    setSessionFastMode('session-fast', true);
+    const resolvePrice = registerUsagePricing('session-fast');
+    const wire = 'data: ' + JSON.stringify({ type: 'response.completed', response: {
+      usage: { input_tokens: 30, output_tokens: 5, input_tokens_details: { cached_tokens: 10 } },
+    } }) + '\n\n';
+    const injected = deps({ fetch: vi.fn(async () => {
+      setXaiDiscoveredModels(null);
+      setSessionFastMode('session-fast', false);
+      return new Response(wire, { headers: { 'content-type': 'text/event-stream' } });
+    }) });
+    const parsedBody = { model: 'grok-4.7', input: 'OK' };
+    const res = responseRecorder();
+    await getPiNativeSubscriptionHandler('xai', 'session-fast', injected)({
+      rawBody: Buffer.from(JSON.stringify(parsedBody)), parsedBody,
+      ctx: { reqId: 1, method: 'POST', url: '/v1/responses', headers: {} }, res,
+    } as never);
+    const request = JSON.parse(Buffer.from(vi.mocked(injected.fetch).mock.calls[0][1]!.body as Uint8Array).toString());
+    expect(request.model).toBe(available ? 'grok-4.7-build-fast' : 'grok-4.7');
+    expect(Buffer.concat(res.chunks).toString()).toBe(wire);
+    expect(resolvePrice({ inputTokens: 30, outputTokens: 5, cacheReadTokens: 10 })).toBe(available ? 'priority' : 'standard');
+  });
+
   it('forwards Codex Responses bytes unchanged with host-owned ChatGPT auth', async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('event: done\n\n', {
       status: 200,
@@ -117,6 +463,73 @@ describe('PI native subscription forwarding', () => {
     expect(Buffer.concat(res.chunks).toString('utf8')).toContain('event: done');
   });
 
+  it('keeps Pi 1M as a distinct local model but sends the official bare id upstream', async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('event: done\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    const handler = getPiNativeSubscriptionHandler('openai', 'session-1m', deps({
+      fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+    }));
+    const parsedBody = { model: 'gpt-5.6-sol[1m]', input: 'hello' };
+
+    await handler({
+      rawBody: Buffer.from(JSON.stringify(parsedBody)),
+      parsedBody,
+      ctx: {
+        reqId: 2,
+        method: 'POST',
+        url: '/codex/responses',
+        headers: { 'content-type': 'application/json' },
+      },
+      res: responseRecorder(),
+    } as never);
+
+    const request = JSON.parse(
+      Buffer.from(fetchMock.mock.calls[0]![1]?.body as Uint8Array).toString('utf8'),
+    );
+    expect(request).toEqual({ model: 'gpt-5.6-sol', input: 'hello' });
+    expect(fetchMock.mock.calls[0]![1]?.headers).not.toHaveProperty('content-encoding');
+  });
+
+  it('rewrites the profile suffix after the real proxy zstd parse boundary', async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('event: done\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    const handler = getPiNativeSubscriptionHandler('openai', 'session-1m-zstd', deps({
+      fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+    }));
+    const proxy = await createAnthropicCompatProxy({
+      upstream: null,
+      transformRequest: [],
+      routingTransform: () => ({ localHandler: handler }),
+    });
+    const compressed = zstdCompressSync(Buffer.from(JSON.stringify({
+      model: 'gpt-5.6-sol[1m]',
+      input: 'hello',
+    })));
+
+    try {
+      const response = await fetch(`${proxy.url}/codex/responses`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-encoding': 'zstd' },
+        body: compressed,
+      });
+      expect(response.status).toBe(200);
+      await response.text();
+    } finally {
+      await proxy.dispose();
+    }
+
+    const init = fetchMock.mock.calls[0]![1];
+    expect(init?.headers).toMatchObject({ 'content-encoding': 'zstd' });
+    const request = JSON.parse(
+      zstdDecompressSync(Buffer.from(init?.body as Uint8Array)).toString('utf8'),
+    );
+    expect(request).toEqual({ model: 'gpt-5.6-sol', input: 'hello' });
+  });
+
   it('destroys the local bridge response when a native upstream stream fails after headers', async () => {
     const upstreamError = new Error('native upstream disconnected mid-stream');
     let sentFirstChunk = false;
@@ -156,7 +569,7 @@ describe('PI native subscription forwarding', () => {
     }
   });
 
-  it('adds model-gated x_search to native general Grok requests after PI function tools', async () => {
+  it('adds one x_search to native Grok 4.6 Responses after PI function tools', async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('event: done\n\n', {
       status: 200,
       headers: { 'content-type': 'text/event-stream' },
@@ -165,8 +578,12 @@ describe('PI native subscription forwarding', () => {
       fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
     }));
     const parsedBody = {
-      model: 'grok-4.5',
-      tools: [{ type: 'function', name: 'read_file', parameters: { type: 'object' } }],
+      model: 'grok-4.6',
+      tools: [
+        { type: 'function', name: 'read_file', parameters: { type: 'object' } },
+        { type: 'live_search', sources: [{ type: 'x' }] },
+        { type: 'x_search', from_date: '2026-08-01' },
+      ],
       tool_choice: 'required',
     };
 
@@ -185,9 +602,120 @@ describe('PI native subscription forwarding', () => {
     const request = JSON.parse(Buffer.from(fetchMock.mock.calls[0]![1]?.body as Uint8Array).toString('utf8'));
     expect(request.tools).toEqual([
       { type: 'function', name: 'read_file', parameters: { type: 'object' } },
-      { type: 'x_search' },
+      { type: 'x_search', from_date: '2026-08-01' },
     ]);
     expect(request.tool_choice).toEqual({ type: 'function', name: 'read_file' });
+  });
+
+  it.each([
+    [
+      'keeps a configured x_search before a legacy declaration',
+      [
+        { type: 'x_search', from_date: '2026-08-01' },
+        { type: 'live_search', sources: [{ type: 'x' }] },
+      ],
+      [{ type: 'x_search', from_date: '2026-08-01' }],
+    ],
+    [
+      'normalizes a lone legacy declaration',
+      [{ type: 'live_search', sources: [{ type: 'x' }] }],
+      [{ type: 'x_search' }],
+    ],
+    [
+      'keeps the first of multiple native declarations',
+      [
+        { type: 'x_search', from_date: '2026-08-01' },
+        { type: 'x_search', to_date: '2026-08-18' },
+      ],
+      [{ type: 'x_search', from_date: '2026-08-01' }],
+    ],
+  ])('%s', async (_name, tools, expectedTools) => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('event: done\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    const handler = getPiNativeSubscriptionHandler('xai', 'session-x-search-dedupe', deps({
+      fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+    }));
+    const parsedBody = { model: 'grok-4.5', tools };
+
+    await handler({
+      rawBody: Buffer.from(JSON.stringify(parsedBody)),
+      parsedBody,
+      ctx: {
+        reqId: 12,
+        method: 'POST',
+        url: '/v1/responses',
+        headers: { 'content-type': 'application/json' },
+      },
+      res: responseRecorder(),
+    } as never);
+
+    const request = JSON.parse(Buffer.from(fetchMock.mock.calls[0]![1]?.body as Uint8Array).toString('utf8'));
+    expect(request.tools).toEqual(expectedTools);
+  });
+
+  it.each([
+    [
+      'normalizes a legacy search choice with its declaration',
+      [{ type: 'live_search', sources: [{ type: 'x' }] }],
+      { type: 'live_search' },
+      [{ type: 'x_search' }],
+      { type: 'x_search' },
+    ],
+    [
+      'keeps an absent choice absent while preferring a native declaration',
+      [
+        { type: 'live_search', sources: [{ type: 'x' }] },
+        { type: 'x_search', from_date: '2026-08-01' },
+      ],
+      undefined,
+      [{ type: 'x_search', from_date: '2026-08-01' }],
+      undefined,
+    ],
+    [
+      'preserves a function choice across duplicate search spellings',
+      [
+        { type: 'function', name: 'read_file', parameters: { type: 'object' } },
+        { type: 'live_search', sources: [{ type: 'x' }] },
+        { type: 'x_search', from_date: '2026-08-01' },
+      ],
+      { type: 'function', name: 'read_file' },
+      [
+        { type: 'function', name: 'read_file', parameters: { type: 'object' } },
+        { type: 'x_search', from_date: '2026-08-01' },
+      ],
+      { type: 'function', name: 'read_file' },
+    ],
+  ])('%s', async (_name, tools, toolChoice, expectedTools, expectedToolChoice) => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('event: done\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    const handler = getPiNativeSubscriptionHandler('xai', 'session-x-search-choice', deps({
+      fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+    }));
+    const parsedBody = {
+      model: 'grok-4.5',
+      tools,
+      ...(toolChoice === undefined ? {} : { tool_choice: toolChoice }),
+    };
+
+    await handler({
+      rawBody: Buffer.from(JSON.stringify(parsedBody)),
+      parsedBody,
+      ctx: {
+        reqId: 13,
+        method: 'POST',
+        url: '/v1/responses',
+        headers: { 'content-type': 'application/json' },
+      },
+      res: responseRecorder(),
+    } as never);
+
+    const request = JSON.parse(Buffer.from(fetchMock.mock.calls[0]![1]?.body as Uint8Array).toString('utf8'));
+    expect(request.tools).toEqual(expectedTools);
+    expect(request.tool_choice).toEqual(expectedToolChoice);
   });
 
   it('preserves an existing native x_search declaration without duplicating it', async () => {
@@ -223,6 +751,187 @@ describe('PI native subscription forwarding', () => {
     ]);
   });
 
+  it('removes xAI search tools from Chat Completions without changing PI function tools or tool_choice', async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('data: [DONE]\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    const handler = getPiNativeSubscriptionHandler('xai', 'session-chat-search-filter', deps({
+      fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+    }));
+    const functionTool = {
+      type: 'function',
+      function: {
+        name: 'read_file',
+        description: 'Read one file',
+        parameters: { type: 'object', properties: { path: { type: 'string' } } },
+      },
+    };
+    const parsedBody = {
+      model: 'grok-4.6',
+      tools: [
+        { type: 'x_search', from_date: '2026-08-01' },
+        functionTool,
+        { type: 'live_search', sources: [{ type: 'x' }] },
+      ],
+      tool_choice: { type: 'function', function: { name: 'read_file' } },
+    };
+
+    await handler({
+      rawBody: Buffer.from(JSON.stringify(parsedBody)),
+      parsedBody,
+      ctx: {
+        reqId: 8,
+        method: 'POST',
+        url: '/v1/chat/completions',
+        headers: { 'content-type': 'application/json' },
+      },
+      res: responseRecorder(),
+    } as never);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.x.ai/v1/chat/completions',
+      expect.any(Object),
+    );
+    const request = JSON.parse(Buffer.from(fetchMock.mock.calls[0]![1]?.body as Uint8Array).toString('utf8'));
+    expect(request).toEqual({
+      model: 'grok-4.6',
+      tools: [functionTool],
+      tool_choice: { type: 'function', function: { name: 'read_file' } },
+    });
+  });
+
+  it.each([
+    ['auto', 'auto'],
+    ['required', 'required'],
+    [
+      { type: 'function', function: { name: 'read_file' } },
+      { type: 'function', function: { name: 'read_file' } },
+    ],
+    [
+      { type: 'x_search' },
+      { type: 'function', function: { name: 'read_file' } },
+    ],
+    [
+      { type: 'live_search' },
+      { type: 'function', function: { name: 'read_file' } },
+    ],
+  ])(
+    'keeps Chat Completions tool controls consistent after removing search choice %j',
+    async (toolChoice, expectedToolChoice) => {
+      const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('data: [DONE]\n\n', {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      }));
+      const handler = getPiNativeSubscriptionHandler('xai', 'session-chat-choice-filter', deps({
+        fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+      }));
+      const functionTool = {
+        type: 'function',
+        function: { name: 'read_file', parameters: { type: 'object' } },
+      };
+      const parsedBody = {
+        model: 'grok-4.6',
+        tools: [{ type: 'x_search' }, functionTool],
+        tool_choice: toolChoice,
+        parallel_tool_calls: true,
+      };
+
+      await handler({
+        rawBody: Buffer.from(JSON.stringify(parsedBody)),
+        parsedBody,
+        ctx: {
+          reqId: 10,
+          method: 'POST',
+          url: '/v1/chat/completions',
+          headers: { 'content-type': 'application/json' },
+        },
+        res: responseRecorder(),
+      } as never);
+
+      const request = JSON.parse(Buffer.from(fetchMock.mock.calls[0]![1]?.body as Uint8Array).toString('utf8'));
+      expect(request).toEqual({
+        model: 'grok-4.6',
+        tools: [functionTool],
+        tool_choice: expectedToolChoice,
+        parallel_tool_calls: true,
+      });
+    },
+  );
+
+  it.each([
+    'required',
+    { type: 'x_search' },
+    { type: 'live_search' },
+  ])(
+    'removes dangling Chat Completions controls when search-only choice %j leaves no tools',
+    async (toolChoice) => {
+      const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('data: [DONE]\n\n', {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      }));
+      const handler = getPiNativeSubscriptionHandler('xai', 'session-chat-empty-tools', deps({
+        fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+      }));
+      const parsedBody = {
+        model: 'grok-4.6',
+        tools: [{ type: 'x_search' }, { type: 'live_search', sources: [{ type: 'x' }] }],
+        tool_choice: toolChoice,
+        parallel_tool_calls: true,
+      };
+
+      await handler({
+        rawBody: Buffer.from(JSON.stringify(parsedBody)),
+        parsedBody,
+        ctx: {
+          reqId: 11,
+          method: 'POST',
+          url: '/v1/chat/completions',
+          headers: { 'content-type': 'application/json' },
+        },
+        res: responseRecorder(),
+      } as never);
+
+      const request = JSON.parse(Buffer.from(fetchMock.mock.calls[0]![1]?.body as Uint8Array).toString('utf8'));
+      expect(request).toEqual({ model: 'grok-4.6' });
+    },
+  );
+
+  it('does not add a search tool to native Grok Chat Completions', async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('data: [DONE]\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    const handler = getPiNativeSubscriptionHandler('xai', 'session-chat-no-search', deps({
+      fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+    }));
+    const parsedBody = {
+      model: 'grok-4.6',
+      tools: [{
+        type: 'function',
+        function: { name: 'read_file', parameters: { type: 'object' } },
+      }],
+      tool_choice: 'required',
+    };
+    const rawBody = Buffer.from(JSON.stringify(parsedBody));
+
+    await handler({
+      rawBody,
+      parsedBody,
+      ctx: {
+        reqId: 9,
+        method: 'POST',
+        url: '/v1/chat/completions',
+        headers: { 'content-type': 'application/json' },
+      },
+      res: responseRecorder(),
+    } as never);
+
+    const forwarded = Buffer.from(fetchMock.mock.calls[0]![1]?.body as Uint8Array);
+    expect(forwarded).toEqual(rawBody);
+    expect(JSON.parse(forwarded.toString('utf8'))).toEqual(parsedBody);
+  });
+
   it.each(['grok-code-fast', 'grok-build-0.1'])(
     'does not add x_search to native coding model %s',
     async (model) => {
@@ -249,6 +958,96 @@ describe('PI native subscription forwarding', () => {
       } as never);
 
       expect(Buffer.from(fetchMock.mock.calls[0]![1]?.body as Uint8Array)).toEqual(rawBody);
+    },
+  );
+
+  // #9469: capture bytes at the native forwarding fetch boundary. Previous
+  // ModelInput fixtures exercised only text/reasoning, missing image-only results.
+  it('sanitizes native xAI Responses input and forwards Pi tool images', async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('event: done\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    const handler = getPiNativeSubscriptionHandler('xai', 'session-model-input', deps({
+      fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+    }));
+    const parsedBody = {
+      model: 'grok-4.5',
+      input: [
+        { type: 'message', role: 'user', content: 'go' },
+        { type: 'agent_message', author: '/root', content: 'done' },
+        { type: 'reasoning', id: 'rs_1', content: null, encrypted_content: 'BLOB' },
+        { type: 'function_call', name: 'read', arguments: '{"path":"/fixture.png"}', call_id: 'read_image' },
+        { type: 'function_call_output', call_id: 'read_image', output: [
+          { type: 'input_image', image_url: 'data:image/png;base64,AA==' },
+        ] },
+      ],
+    };
+
+    await handler({
+      rawBody: Buffer.from(JSON.stringify(parsedBody)),
+      parsedBody,
+      ctx: {
+        reqId: 8,
+        method: 'POST',
+        url: '/v1/responses',
+        headers: { 'content-type': 'application/json' },
+      },
+      res: responseRecorder(),
+    } as never);
+
+    const request = JSON.parse(Buffer.from(fetchMock.mock.calls[0]![1]?.body as Uint8Array).toString('utf8'));
+    expect(request.input).toEqual([
+      { type: 'message', role: 'user', content: 'go' },
+      {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: '[collab /root]\ndone' }],
+      },
+      { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'BLOB' },
+      { type: 'function_call', name: 'read', arguments: '{"path":"/fixture.png"}', call_id: 'read_image' },
+      { type: 'function_call_output', call_id: 'read_image', output: [
+        { type: 'input_image', image_url: 'data:image/png;base64,AA==' },
+      ] },
+    ]);
+    expect(request.tools).toEqual([{ type: 'x_search' }]);
+  });
+
+  it.each(['grok-code-fast', 'grok-build-0.1'])(
+    'drops reasoning items on native non-reasoning model %s',
+    async (model) => {
+      const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('event: done\n\n', {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      }));
+      const handler = getPiNativeSubscriptionHandler('xai', `session-reason-${model}`, deps({
+        fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+      }));
+      const parsedBody = {
+        model,
+        input: [
+          { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'BLOB' },
+          { type: 'message', role: 'user', content: 'hi' },
+        ],
+      };
+
+      await handler({
+        rawBody: Buffer.from(JSON.stringify(parsedBody)),
+        parsedBody,
+        ctx: {
+          reqId: 9,
+          method: 'POST',
+          url: '/v1/responses',
+          headers: { 'content-type': 'application/json' },
+        },
+        res: responseRecorder(),
+      } as never);
+
+      const request = JSON.parse(Buffer.from(fetchMock.mock.calls[0]![1]?.body as Uint8Array).toString('utf8'));
+      expect(request.input).toEqual([
+        { type: 'message', role: 'user', content: 'hi' },
+      ]);
+      expect(request.tools).toBeUndefined();
     },
   );
 
@@ -326,6 +1125,112 @@ describe('PI native subscription forwarding', () => {
       remainingRequests: 9,
       limitTokens: undefined,
       remainingTokens: undefined,
+    }, 'xai');
+  });
+
+  it('labels pre-response xAI failures with the real provider and endpoint', async () => {
+    const injected = deps({
+      fetch: vi.fn(async () => {
+        throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } });
+      }) as PiNativeSubscriptionHandlerDeps['fetch'],
+    });
+    const handler = getPiNativeSubscriptionHandler('xai', 'session-network-error', injected);
+    const res = responseRecorder();
+
+    await handler({
+      rawBody: Buffer.from('{"model":"grok-4.6"}'),
+      parsedBody: { model: 'grok-4.6' },
+      ctx: {
+        reqId: 14,
+        method: 'POST',
+        url: '/v1/responses',
+        headers: { 'content-type': 'application/json' },
+      },
+      res,
+    } as never);
+
+    expect(res.status).toBe(502);
+    expect(JSON.parse(Buffer.concat(res.chunks).toString('utf8'))).toMatchObject({
+      error: {
+        type: 'upstream_error',
+        provider: 'xai',
+        endpoint: 'https://api.x.ai/v1/responses',
+        message: 'xAI/Grok upstream request failed: fetch failed',
+      },
+    });
+  });
+
+  it('does not fetch after ChatGPT context-profile rewrite if owner scope changed', async () => {
+    const fetchMock = vi.fn(async () => new Response('event: done\n\n', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    const handler = getPiNativeSubscriptionHandler('openai', 'session-rewrite-scope', deps({
+      fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+      getChatgptAuth: vi.fn(async () => {
+        const auth = { accessToken: 'token-owner-a', accountId: 'account-1' };
+        ownerState.scope = 'cloud:owner-b:2';
+        return auth;
+      }),
+    }));
+    const compressed = zstdCompressSync(Buffer.from(JSON.stringify({
+      model: 'gpt-5.6-sol[1m]',
+      input: 'hello',
+    })));
+    const res = responseRecorder();
+
+    await handler({
+      rawBody: compressed,
+      parsedBody: undefined,
+      ctx: {
+        reqId: 21,
+        method: 'POST',
+        url: '/codex/responses',
+        headers: {
+          'content-type': 'application/json',
+          'content-encoding': 'zstd',
+        },
+      },
+      res,
+    } as never);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.status).toBe(503);
+    expect(JSON.parse(Buffer.concat(res.chunks).toString('utf8'))).toMatchObject({
+      error: { type: 'owner_boundary_pending', code: 'owner_boundary_pending' },
+    });
+  });
+
+  it('does not fetch xAI after sanitizing the body if owner scope changed', async () => {
+    const fetchMock = vi.fn(async () => new Response('ok', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    const handler = getPiNativeSubscriptionHandler('xai', 'session-sanitize-scope', deps({
+      fetch: fetchMock as PiNativeSubscriptionHandlerDeps['fetch'],
+      getGrokToken: vi.fn(async () => {
+        ownerState.scope = 'cloud:owner-b:2';
+        return 'token-owner-a';
+      }),
+    }));
+    const res = responseRecorder();
+
+    await handler({
+      rawBody: Buffer.from('{"model":"grok-4.6"}'),
+      parsedBody: { model: 'grok-4.6' },
+      ctx: {
+        reqId: 22,
+        method: 'POST',
+        url: '/v1/responses',
+        headers: { 'content-type': 'application/json' },
+      },
+      res,
+    } as never);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.status).toBe(503);
+    expect(JSON.parse(Buffer.concat(res.chunks).toString('utf8'))).toMatchObject({
+      error: { type: 'owner_boundary_pending', code: 'owner_boundary_pending' },
     });
   });
 
@@ -344,4 +1249,45 @@ describe('PI native subscription forwarding', () => {
     expect(injected.fetch).not.toHaveBeenCalled();
     expect(res.status).toBe(404);
   });
+});
+
+it.each([false, true])('scopes independent Grok limits and drops stale token pushes without failing streaming (stale=%s)', async stale => {
+  const { setCustomProviderConfigs } = await import('../active-catalog.js');
+  setCustomProviderConfigs([{ id: 'xai-work', name: 'Work', auth: { method: 'oauth', native: 'xai' }, runtimes: {} }]);
+  try {
+    const injected = deps({
+      fetch: vi.fn(async () => new Response('stream ok', { status: 200, headers: { 'x-ratelimit-remaining-requests': '7' } })),
+      peekGrokToken: vi.fn(() => stale ? 'replacement-token' : 'host-xai-token'),
+    });
+    const handler = getPiNativeSubscriptionHandler('xai-work', 'session-work', injected);
+    const res = responseRecorder();
+    await handler({ rawBody: Buffer.from('{}'), parsedBody: {}, ctx: { method: 'POST', url: '/v1/responses', headers: {} }, res } as never);
+    expect(res.status).toBe(200);
+    expect(Buffer.concat(res.chunks).toString()).toBe('stream ok');
+    if (stale) expect(injected.recordXaiRateLimit).not.toHaveBeenCalled();
+    else expect(injected.recordXaiRateLimit).toHaveBeenCalledWith(expect.objectContaining({ remainingRequests: 7 }), 'xai-work');
+  } finally { setCustomProviderConfigs([]); }
+});
+
+// The production native handler must meter a child model before forwarding its final bytes.
+// This covers the path the turn-summary tests cannot observe. Tier: unit; injected HTTP response.
+it('records a shared native request once by its requested model and preserves streaming bytes', async () => {
+  const record = vi.fn();
+  const providerId = 'openai-meter-fixture';
+  setCustomProviders([buildUserProvider({ id: providerId, name: 'Meter fixture', auth: { method: 'oauth', native: 'codex' },
+    runtimes: { codex: { baseUrl: 'https://chatgpt.example', wireProtocol: 'openai-responses', models: [{ id: 'astra', name: 'Astra' }] },
+      pi: { baseUrl: 'https://chatgpt.example', wireProtocol: 'openai-responses', models: [{ id: 'chatgpt/astra', name: 'Astra' }] } },
+  })]);
+  const binding = registerGuestProviderRoute('guest-meter', providerId, undefined, undefined, undefined, record);
+  const frame = { type: 'response.completed', response: { usage: { input_tokens: 120, output_tokens: 8, input_tokens_details: { cached_tokens: 100 } } } };
+  const wire = `data: ${JSON.stringify(frame)}\n\ndata: ${JSON.stringify(frame)}\n\n`;
+  const injected = deps({ fetch: vi.fn(async () => new Response(wire, { headers: { 'content-type': 'text/event-stream' } })) });
+  const body = { model: 'astra', input: [] };
+  const res = responseRecorder();
+  try {
+    await getPiNativeSubscriptionHandler(providerId, 'guest-meter', injected)({ rawBody: Buffer.from(JSON.stringify(body)), parsedBody: body,
+      ctx: { method: 'POST', url: '/codex/responses', headers: { 'content-type': 'application/json' } }, res } as never);
+    expect(Buffer.concat(res.chunks).toString()).toBe(wire);
+    expect(record).toHaveBeenCalledExactlyOnceWith({ model: 'astra', inputTokens: 20, outputTokens: 8, cacheReadTokens: 100, cacheCreateTokens: 0 });
+  } finally { binding.release(); setCustomProviders([]); }
 });

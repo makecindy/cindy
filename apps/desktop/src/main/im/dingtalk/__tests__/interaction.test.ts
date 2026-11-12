@@ -2,8 +2,22 @@ import { describe, expect, it, vi } from 'vitest';
 import type { DingTalkIM } from '@cindy/im';
 
 import { __testing, handleDingTalkTextInteraction } from '../interaction';
+import { createSharedPermission } from '../../../maker-ipc/sharedPermission';
 
 describe('dingtalk text interactions', () => {
+  it('settles the shared permission when the text reply times out', async () => {
+    const sharedPermission = createSharedPermission();
+    const im = {
+      requestTextReply: vi.fn(async () => { throw new Error('DINGTALK_INTERACTION_TIMEOUT'); }),
+      sendText: vi.fn(async () => {}),
+    } as unknown as DingTalkIM;
+    await expect(handleDingTalkTextInteraction(im, 'owner', {
+      kind: 'permission', requestId: 'timeout', toolName: 'Bash', input: {},
+    }, { sharedPermission })).resolves.toMatchObject({ kind: 'permission', behavior: 'deny' });
+    expect(sharedPermission.decide({ kind: 'permission', behavior: 'allow' })).toBe(false);
+    await expect(sharedPermission.result).resolves.toMatchObject({ reason: 'dingtalk_interaction_timeout_or_cancelled' });
+  });
+
   it('parses explicit allow and deny replies', () => {
     const request = {
       kind: 'permission' as const,
@@ -20,6 +34,20 @@ describe('dingtalk text interactions', () => {
       behavior: 'deny',
       reason: 'dingtalk_user_denied',
     });
+  });
+
+  // 2026-10-24 review: text channels showed only the tool name, so a safe and a destructive
+  // Bash call looked identical. They now share the desktop/phone operation summary.
+  it('确认提示显示要执行的具体操作和审核原因', () => {
+    const prompt = __testing.formatInteractionPrompt({
+      kind: 'permission',
+      requestId: 'request-2',
+      toolName: 'Bash',
+      input: { command: 'xcrun simctl delete all' },
+      metadata: { autoReviewReason: '这会删除所有模拟器。' },
+    });
+    expect(prompt).toContain('操作：xcrun simctl delete all');
+    expect(prompt).toContain('自动审批需要你决定：这会删除所有模拟器。');
   });
 
   it('自动审批故障时在钉钉确认提示里写明原因', () => {

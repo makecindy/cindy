@@ -40,6 +40,65 @@ Tauri 实现）与 Electron 侧的更新服务（`apps/desktop/src/main/updateSe
 
 先读实际代码再决定实现；不要只凭文档或记忆猜测更新流程。
 
+## Agent 入口
+
+Agent 只能通过 `updateService.ts` 的 `applyConfirmedAppUpdateForAgent` 走同一条
+check → download → relaunch 状态机，且必须先经宿主确认卡；不得给 Agent 新开下载、替换或重启
+路径。产品规则见 [`../product-rules/agent-app-update.md`](../product-rules/agent-app-update.md)。
+
+## Rosetta 下的 x64 包换装原生架构
+
+应用更新只前进不后退，唯一例外由 `updateService.ts` 的 `appUpdateRelation` 统一判定：
+darwin + x64 + `app.runningUnderARM64Translation` 的进程，经 `manifestService.fetchAppUpdateManifest`
+读到不低于 x64 版本的同渠道 `manifest-darwin-arm64*.json` 时，同版本 arm64 hotfix 也视为可安装。
+补丁在 `patch-info.json` 记 `targetArch: 'arm64'`，换装后进程已是 arm64，同版本补丁按已应用清理。
+arm64 清单不写清单缓存、不通知监听者，引擎安装继续按进程架构取资产。macOS 执行器整包替换
+`.app`，换架构不残留旧文件。Agent 更新查询保持严格版本比较。新增版本闸门须复用 `appUpdateRelation`，
+不要另写同版本例外。
+
+## Linux 更新后的自动重启
+
+Linux 没有独立更新器，由 `updateScriptLinux.ts` 生成的脚本在旧进程退出后安装并拉起新版本。
+重启参数只保留两类：`--password-store`，以及用户启动器带的图形后端开关（`--ozone-platform`
+等，白名单见 `linuxRelaunchDisplayArgs`）。纯 Wayland 会话缺少 Ozone 开关时，Electron 在
+建窗口前就退出；链接、任务参数和调试端口仍不带过去。新进程的 stdout／stderr 写入日志目录的
+`cindy-relaunch.log`，每次拉起时清空；文件不可写时退回 `/dev/null`，不能挡住拉起。新进程要
+连续存活 `verifyStableSeconds` 秒才记为 `PROCESS VERIFIED`；提前退出时，脚本把退出码和
+输出末尾抄进 `cindy-update.log`。回归见 `updateScriptLinux.test.ts` 与
+`linuxInstallation.test.ts`。
+
+## 引擎二进制的后台下载
+
+主程序的检查、下载、ready、自动重启、替换和回滚条件不依赖引擎下载。环境就绪后，
+`agent-binaries/background-update.ts` 订阅现有更新检查取得的清单，在独立下载队列中缓存
+引擎归档；不更改当前引擎路径，也不删除正在使用的版本。
+
+下次启动仍由原安装器解压、校验安装与选定路径，优先消费已经校验的下载缓存。旧应用
+更新器留下的无范围一次性标记不再强制联网升级；缓存未准备好时复用本地可用版本。
+启动时运行环境缺失不再阻断本地功能：主界面就绪后，Claude Code / Codex 的首次安装
+与修复复用现有清单订阅，Pi 复用既有恢复流程；后台不替换本次已经选定的运行环境。
+发送前检查对三个 Agent 都会报告组件未就绪，并引导到「设置 → 关于」；该页联网检查版本时
+发布的清单会立即触发补装，否则等下一次更新轮询（最长约 30 分钟）。
+启动最多用 2.5 秒读取引擎清单，随后仅复用本地已验证版本或已下载且校验通过的归档。
+清单不可达时，已安装的 Pi 同样可用，显式版本选择仍优先。
+主界面的更新等待最多 3 秒，下载中途断网或失败也进入本地界面；已完成的更新仍走原重启提示，
+超时后下载与安装状态由原更新服务继续管理，不把失败标作成功。
+Linux 的可用系统/私有引擎也能消费缓存；只有目标版本确定更新时才采用，缓存不可用、
+实际本地版本不低于目标或无法比较时继续使用原引擎，不由后台缓存降级。
+
+设置中的 Claude Code/Codex 更新先调用本地 `update-harness-prepare`，复用后台缓存和锁，
+完成后再确认重启及中断运行中的工作；失败可重试，离开设置后不弹出迟到的重启确认。
+新入口重启时携带准备成功的原始目标版本，由宿主复核，不再写强制联网的 scoped 标记；
+确认期间清单或缓存改变时，下次启动保留可用旧引擎，等待后台重试。旧的仅传 kind 的重启
+调用仍写 scoped 修复标记，兼容原入口。
+Pi 的显式版本选择沿用原内核管理器，不由后台更新覆盖。没有搬迁既有引擎目录、凭证
+或设置，也没有修改 Tauri 更新器；旧客户端忽略新的下载缓存。
+
+行为回归见 `factory-startup-update.test.ts`、`factory-dir-dist.test.ts`、`startup-policy.test.ts`、
+`background-update.test.ts`、`manifestService.test.ts`、`updateService.test.ts` 及
+`AboutSection.binaryVersions.test.tsx`；缓存生命周期见
+[`credentials-and-local-storage.md`](credentials-and-local-storage.md)。
+
 ## Review 要点
 
 1. 改动是否触及更新器或更新服务？触及就必须先有 owner 确认，PR 说明写明。

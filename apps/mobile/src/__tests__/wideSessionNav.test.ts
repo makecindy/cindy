@@ -1,63 +1,43 @@
 import { describe, expect, it } from 'vitest';
-import {
-  WIDE_SESSION_NAV_MIN_WIDTH,
-  buildWideSessionNavLayout,
-} from '@/session/wideSessionNav';
+import { buildWideSessionNavLayout } from '@/session/wideSessionNav';
 
-describe('buildWideSessionNavLayout', () => {
-  it('keeps portrait phones on the classic back-button navigation', () => {
-    // iPhone SE / 15 Pro / 16 Pro Max 竖屏与 iPad 窄分屏(约 1/3)都必须回退返回键。
-    for (const windowWidth of [320, 375, 393, 440]) {
-      expect(buildWideSessionNavLayout({ windowHeight: 852, windowWidth })).toEqual({
-        drawerWidth: 0,
-        enabled: false,
-      });
+describe('quick-switch panel sizing', () => {
+  it.each([600, 744, 852, 1366])('offers switching at width %i without replacing back', (windowWidth) => {
+    for (const platform of ['ios', 'android']) {
+      const layout = buildWideSessionNavLayout({ windowWidth, windowHeight: 852, platform });
+      expect(layout.enabled).toBe(true);
+      expect(layout.drawerWidth).toBeLessThanOrEqual(windowWidth - 96);
+      expect(layout.drawerWidth).toBeGreaterThan(0);
+      expect(layout.resizeBounds).toEqual({ min: 300, max: 420 });
     }
   });
-
-  it('enables drawer navigation for iPad both orientations', () => {
-    // iPad mini 竖屏(744)/ iPad Pro 横屏(1366)。
-    expect(buildWideSessionNavLayout({ iosPad: true, platform: 'ios', windowHeight: 1133, windowWidth: 744 }).enabled).toBe(true);
-    expect(buildWideSessionNavLayout({ iosPad: true, platform: 'ios', windowHeight: 1024, windowWidth: 1366 }).enabled).toBe(true);
-    // iPad 窄分屏(~1/3)回退返回键。
-    expect(buildWideSessionNavLayout({ iosPad: true, platform: 'ios', windowHeight: 1024, windowWidth: 320 }).enabled).toBe(false);
+  // User request 2026-11-06: on an iPad mini the drawer was ~300pt, narrower than
+  // the phone's own list. Default to at least a regular phone's portrait width.
+  it('defaults to a phone-width list on every wide window', () => {
+    for (const windowWidth of [600, 744, 800, 1366]) {
+      expect(buildWideSessionNavLayout({ windowWidth }).drawerWidth).toBe(400);
+    }
   });
-
-  it('keeps iPhone on back-button navigation even in landscape (per-platform rollout)', () => {
-    // 发布策略:iOS 只发 iPad;iPhone 横屏达宽也不启用宽屏形态。
-    expect(buildWideSessionNavLayout({ iosPad: false, platform: 'ios', windowHeight: 393, windowWidth: 852 }).enabled).toBe(false);
-    expect(buildWideSessionNavLayout({ platform: 'ios', windowHeight: 393, windowWidth: 852 }).enabled).toBe(false);
+  it('follows the shared width the user dragged, clamped to leave a tappable scrim', () => {
+    expect(buildWideSessionNavLayout({ windowWidth: 744, preferredWidth: 520 }).drawerWidth).toBe(420);
+    expect(buildWideSessionNavLayout({ windowWidth: 744, preferredWidth: 900 }).drawerWidth).toBe(420);
+    // Both surfaces now share the same minimum, including older preferences.
+    expect(buildWideSessionNavLayout({ windowWidth: 744, preferredWidth: 240 }).drawerWidth).toBe(300);
+    expect(buildWideSessionNavLayout({ windowWidth: 744, preferredWidth: null }).drawerWidth).toBe(400);
+    expect(buildWideSessionNavLayout({ windowWidth: 744, preferredWidth: Number.NaN }).drawerWidth).toBe(400);
   });
-
-  it('enables drawer navigation for unfolded foldables even in portrait (android)', () => {
-    // Pixel Fold 内屏竖持(约 648×672)——宽度已达 medium 档,不要求 landscape。
-    const layout = buildWideSessionNavLayout({ platform: 'android', windowHeight: 672, windowWidth: 648 });
-    expect(layout.enabled).toBe(true);
+  // Duo portrait: the status area shares the top row, so a settled drawer stops
+  // before it; only the drag on toward full screen passes under it.
+  it('keeps the settled drawer clear of a top trailing status area', () => {
+    expect(buildWideSessionNavLayout({ windowWidth: 669, trailingReserve: 320, preferredWidth: 420 }).drawerWidth).toBe(349);
+    expect(buildWideSessionNavLayout({ windowWidth: 669, trailingReserve: 140 }).resizeBounds).toEqual({ min: 300, max: 420 });
+    expect(buildWideSessionNavLayout({ windowWidth: 669, trailingReserve: 140, preferredWidth: 600 }).drawerWidth).toBe(420);
+    expect(buildWideSessionNavLayout({ windowWidth: 669, trailingReserve: 40 }).resizeBounds).toEqual({ min: 300, max: 420 });
+    expect(buildWideSessionNavLayout({ windowWidth: 669, trailingReserve: 0 }).resizeBounds).toEqual({ min: 300, max: 420 });
   });
-
-  it('enables drawer navigation for android landscape phones', () => {
-    const layout = buildWideSessionNavLayout({ platform: 'android', windowHeight: 393, windowWidth: 852 });
-    expect(layout.enabled).toBe(true);
-  });
-
-  it('clamps drawer width to a readable range', () => {
-    // 断点下缘:0.4×600=240 < 300,顶到下限。
-    expect(buildWideSessionNavLayout({ windowHeight: 900, windowWidth: 600 }).drawerWidth).toBe(300);
-    // 大屏:0.4×1366=546 > 360,压到上限。
-    expect(buildWideSessionNavLayout({ windowHeight: 1024, windowWidth: 1366 }).drawerWidth).toBe(360);
-    // 区间内按比例取整。
-    expect(buildWideSessionNavLayout({ windowHeight: 1133, windowWidth: 800 }).drawerWidth).toBe(320);
-  });
-
-  it('treats missing or invalid dimensions as narrow (fail closed to back button)', () => {
-    expect(buildWideSessionNavLayout({}).enabled).toBe(false);
-    expect(buildWideSessionNavLayout({ windowHeight: Number.NaN, windowWidth: Number.NaN }).enabled).toBe(false);
-    expect(buildWideSessionNavLayout({ windowHeight: 800, windowWidth: -1 }).enabled).toBe(false);
-  });
-
-  it('keeps the breakpoint constant aligned with the documented medium window class', () => {
-    expect(WIDE_SESSION_NAV_MIN_WIDTH).toBe(600);
-    expect(buildWideSessionNavLayout({ windowHeight: 900, windowWidth: 599 }).enabled).toBe(false);
-    expect(buildWideSessionNavLayout({ windowHeight: 900, windowWidth: 600 }).enabled).toBe(true);
+  it.each([undefined, Number.NaN, -1, 0, 280, 393, 599])('does not open before a valid layout (%s)', (windowWidth) => {
+    const layout = buildWideSessionNavLayout({ windowWidth });
+    expect(layout.enabled).toBe(false);
+    expect(layout.resizeBounds).toBeNull();
   });
 });

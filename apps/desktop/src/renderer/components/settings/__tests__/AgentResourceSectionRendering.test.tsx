@@ -109,6 +109,10 @@ describe('AgentResourceSection', () => {
     expect(visiblePresetHint()).toBe('settings.agentResource.presetHints.full');
     const numberInput = screen.getByRole('spinbutton') as HTMLInputElement;
     expect(numberInput.value).toBe('0');
+    // DS-4 前数字框消费过这些局部主题键；迁标准件不能丢掉用户覆盖。
+    expect(numberInput.className).toContain('text-[var(--settings-input-text)]');
+    expect(numberInput.className).toContain('border-[var(--settings-input-border)]');
+    expect(numberInput.className).toContain('focus:border-[var(--settings-input-border-focus)]');
     expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false');
   });
 

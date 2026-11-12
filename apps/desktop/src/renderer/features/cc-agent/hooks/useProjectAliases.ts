@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { createLogger } from '@/lib/logger';
 import type { ProjectAlias } from '../../../../shared/projectAliases';
+import { projectKeyComparisonKey } from '../../../../shared/projectKeys';
 import { listProjectAliases, onProjectAliasesChanged, setProjectAlias } from '@/lib/projectAliasService';
 
 const log = createLogger('useProjectAliases');
@@ -41,8 +42,12 @@ export function useProjectAliases(): {
   const updateAlias = useCallback(async (projectKey: string, alias: string) => {
     const nextAlias = alias.trim();
     const previousRows = rows;
+    const localPlatform = window.electronAPI.platform;
+    const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
     setRows((prev) => {
-      const remaining = prev.filter((row) => row.projectKey !== projectKey);
+      const remaining = prev.filter(
+        (row) => projectKeyComparisonKey(row.projectKey, localPlatform) !== comparisonKey,
+      );
       if (!nextAlias) return remaining;
       return [
         { projectKey, alias: nextAlias, updatedAt: new Date().toISOString() },

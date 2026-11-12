@@ -16,7 +16,10 @@
  * 跨渠道互不影响。
  */
 
-import type { IMAttachment, IMMessageEvent, InteractiveCardSpec, TextChannelIM } from '@cindy/im';
+import type { IMMessageEvent, InteractiveCardSpec, TextChannelIM } from '@cindy/im';
+import { buildInboundMessageFacts } from '@cindy/im';
+import { decodeDingTalkLaneUserId, decodeWecomLane } from '@cindy/im';
+import { receivedHistoryScope, recordReceivedImageMessage } from './receivedImageHistory';
 
 import { createLogger } from '../../logger';
 import {
@@ -30,8 +33,13 @@ import { getControlScope, isInControl } from './controlState';
 import { isCommandAuthorized, isStopCommand } from './controlCommands';
 import type { ImSlashHandlers } from './slashCommands';
 import { looksLikeSlashCommand } from './slashCommands';
-import type { ImTurnRunner } from './turnRunner';
+import type { ImRunAgentTurnArgs, ImTurnRunner } from './turnRunner';
 import type { ImChannelAdapter } from './types';
+import { describeInteractionSource } from './interactionSource';
+import { buildImReplyContextBlock } from './replyContext';
+import { captureImContext } from '../../../shared/imMessageSource';
+import { imChannelNoteSourceFromEvent, imMessageOriginFor, type ImChannelNoteSource } from './channelNote';
+import { isLaneTurnScopeChannel, type ChannelToolScope } from './channelToolScope';
 
 /**
  * `!stop` 控制指令 — 半角/全角感叹号、大小写不敏感(issue #867)。
@@ -65,6 +73,7 @@ export function createMessageHandler(
       return false;
     }
   }
+
   const log = createLogger(`im:${channel}:msg`);
 
   /** Per-user serial lock — same shape as legacy messageRouter.turnLocks. */
@@ -93,6 +102,7 @@ export function createMessageHandler(
     event: IMMessageEvent,
     accountGeneration: ImAccountGeneration,
   ): Promise<void> {
+    if (event.delivery?.isCancelled?.()) return;
     log.info(
       `processOne sender=...${event.senderId.slice(-8)} chat=...${event.chatId.slice(-8)} ` +
         `textLen=${event.text.length} att=${event.attachments.length} unsupported=${event.unsupported.length}`,
@@ -125,6 +135,27 @@ export function createMessageHandler(
       return;
     }
 
+    let notificationSessionId: string | undefined;
+    if (event.replyThread && adapter.resolveNotificationReply) {
+      try {
+        notificationSessionId = (await adapter.resolveNotificationReply(event)) ?? undefined;
+      } catch (error) {
+        if (isImAccountScopeClosedError(error)) throw error;
+        log.warn('notification reply route unavailable');
+        await im.sendMarkdownText(event.senderId, adapter.notificationReplyText!.unavailable, {
+          threadTs: event.replyThread.rootMessageId,
+        });
+        return;
+      }
+      if (notificationSessionId) {
+        event = { ...event, scopeKey: event.replyThread.rootMessageId };
+        if (pureTextCommandInput && looksLikeSlashCommand(event.text)) {
+          await im.sendMarkdownText(event.senderId, adapter.notificationReplyText!.commands, { threadTs: event.scopeKey });
+          return;
+        }
+      }
+    }
+
     // ── /ctr 原子化拦截 ────────────────────────────────────────────────
     // 该 (bot, owner) 处于 /ctr 流程中 → 任何消息都不路由到 slash/agent,
     // 直接回提示让用户走卡片按钮 (back/exit/session-pick) 退出。包括重复
@@ -137,7 +168,7 @@ export function createMessageHandler(
       ? isInControl(event.contextId, event.senderId) &&
         (!event.threadTs || event.threadTs === getControlScope(event.contextId, event.senderId))
       : isInControl(event.contextId, event.senderId);
-    if (blockedByControl) {
+    if (blockedByControl && !notificationSessionId) {
       log.info(
         `dropped (in /ctr) sender=...${event.senderId.slice(-8)} bot=...${event.contextId.slice(-8)}`,
       );
@@ -156,15 +187,29 @@ export function createMessageHandler(
     // 放在 slash 之前; 与 slash 同口径只认纯文本(见 pureTextCommandInput)。turn
     // 运行期间 userLocks 并不持锁(runAgentTurn 在 dispatch 后即返回), 所以这里能在
     // 上一轮仍在跑时立刻执行, 而不是排到它后面。
-    if (pureTextCommandInput && isStopCommand(event.text)) {
+    if (pureTextCommandInput && (isStopCommand(event.text) ||
+      (event.delivery && event.text.trim().toLowerCase() === '/stop'))) {
       let reply: string;
+      let droppedExternal = 0;
+      let cancellationError: string | undefined;
       try {
+        droppedExternal = event.delivery?.cancelPending?.() ?? 0;
+      } catch (err) {
+        if (isImAccountScopeClosedError(err)) throw err;
+        cancellationError = err instanceof Error ? err.message : String(err);
+        log.error(`cancelPending threw: ${cancellationError}`);
+      }
+      try {
+        // A failed durable queue cancellation must not prevent aborting the
+        // active turn. Report both outcomes without claiming the queue cleared.
         const result = await turnRunner.stopActiveTurn({
           botContextId: event.contextId,
           userId: event.senderId,
-          scopeKey: threadScoped ? event.scopeKey : undefined,
+          scopeKey: notificationSessionId || threadScoped ? event.scopeKey : undefined,
+          ...(notificationSessionId ? { notificationSessionId } : {}),
         });
-        reply = result.stopped ? ui.agent.stopDone(result.droppedQueued) : ui.agent.stopIdle;
+        reply = result.stopped || droppedExternal > 0
+          ? ui.agent.stopDone(result.droppedQueued + droppedExternal) : ui.agent.stopIdle;
         log.info(
           `!stop handled sender=...${event.senderId.slice(-8)} stopped=${result.stopped} dropped=${result.droppedQueued}`,
         );
@@ -173,6 +218,7 @@ export function createMessageHandler(
         log.error(`stopActiveTurn threw: ${msg}`);
         reply = ui.agent.sendInternalError(msg);
       }
+      if (cancellationError !== undefined) reply += `\n\n${ui.agent.sendInternalError(cancellationError)}`;
       // 群主流 @ 开话题的首条若是 !stop: 「思考中」开场白卡就地 patch 成
       // stop 回复(消费 pending opener), 不再另发一条; 消费不了再走正常发送。
       // 仅当本条消息**自己**开了话题(groupContextLane 存在)才消费 — 同话题
@@ -264,10 +310,35 @@ export function createMessageHandler(
       return;
     }
 
+    // ── 全响应(ambient)前置判定: 辅助模型先说该不该插话 ───────────────────
+    // 放在 ack / 提前落库之前: 判成 SKIP 的消息不留任何痕迹(不落专线、不起轮次、
+    // 群窗口游标不动)。判不出来按原路径起轮次, 由主模型自己 NO_REPLY。
+    const skipAmbient = async (): Promise<boolean> => {
+      if (event.ambient !== true || !adapter.ambientTurnGate) return false;
+      let verdict: 'proceed' | 'skip' = 'proceed';
+      try {
+        verdict = await adapter.ambientTurnGate(event);
+      } catch (err) {
+        if (isImAccountScopeClosedError(err)) throw err;
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`ambientTurnGate failed (proceeding): ${msg}`);
+      }
+      if (verdict === 'skip') {
+        log.info(
+          `ambient skipped by judge sender=...${event.senderId.slice(-8)} msg=...${event.messageId.slice(-8)}`,
+        );
+        return true;
+      }
+      return false;
+    };
+
+    // iMessage participation mode applies before any attachment notice.
+    if (channel === 'imessage' && event.ambient === true && adapter.ambientTurnGate && await skipAmbient()) return;
+
     const hasContent = event.text.length > 0 || event.attachments.length > 0;
 
     // ── pure-unsupported: reply directly, do NOT invoke agent ───────────────
-    if (!hasContent && event.unsupported.length > 0) {
+    if (!hasContent && !event.invoked && !event.replyContext && event.unsupported.length > 0) {
       const notice = ui.agent.unsupportedOnly(event.unsupported);
       // 同 !stop: 开场白卡就地 patch 成 unsupported 提示, 消费不了再另发;
       // 仅本条消息自己开了话题(groupContextLane)才消费。
@@ -288,13 +359,15 @@ export function createMessageHandler(
       return;
     }
 
-    if (!hasContent) {
+    if (!hasContent && !event.invoked && !event.replyContext) {
       // empty + no unsupported — should already be filtered upstream, but be safe
       return;
     }
 
-    // ── mixed: ack the dropped bits as a SEPARATE text msg, then run agent ──
-    if (event.unsupported.length > 0) {
+    // Durable callers may retry a busy dispatch. Emit mixed-attachment notices
+    // only after acceptance so those queue retries cannot repeat the notice.
+    const notifyUnsupported = async () => {
+      if (!event.unsupported.length) return;
       try {
         await im.sendText(event.senderId, ui.agent.unsupportedNotice(event.unsupported), {
           threadTs: event.scopeKey,
@@ -303,15 +376,27 @@ export function createMessageHandler(
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`unsupportedNotice send failed (non-fatal): ${msg}`);
       }
-    }
+    };
+    if (!event.delivery) await notifyUnsupported();
+
+    if (channel !== 'imessage' && event.ambient === true && adapter.ambientTurnGate && await skipAmbient()) return;
 
     // ── invoke agent ────────────────────────────────────────────────────────
+    // 本条的渠道来源事实(只进模型正文); 取不到按"不写说明"降级, 不阻断消息。与下面的
+    // 群上下文拼装互不依赖, 先发起、派发前再取, 群名查询不额外拖慢首条消息。
+    const channelNoteSourcePromise: Promise<ImChannelNoteSource | null> = (async () => {
+      try {
+        return adapter.channelNoteSourceFor
+          ? await adapter.channelNoteSourceFor(event)
+          : imChannelNoteSourceFromEvent(event);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`channelNoteSourceFor failed (note omitted): ${msg}`);
+        return null;
+      }
+    })();
     // 送模型正文改写钩子(群上下文拼装): 失败按"不改写"降级, 不阻断消息。
-    let prepared: {
-      agentText: string;
-      contextAttachments?: IMAttachment[];
-      commit?: () => void | Promise<void>;
-    } | null = null;
+    let prepared: Awaited<ReturnType<NonNullable<ImChannelAdapter['prepareAgentTurnText']>>> = null;
     // 「已收到」表情先落, 再拼上下文 —— 群上下文拼装要回翻群历史(可能翻页 + 调
     // 轻量模型), 慢的时候几十秒没有任何反馈, 用户只能看着不动的消息猜 bot 是不是
     // 挂了(实测最慢到 87s)。句柄交给 turn 接管(turn 收口时照常撤掉/换成结果
@@ -323,18 +408,52 @@ export function createMessageHandler(
     // 群上下文拼装慢的时候就是 15~60s 的空白, 看着像消息丢了。忙 / 新会话 /
     // 受保护内容时返回 null, 完全退回原行为(见 persistInboundUserMessageEarly)。
     let prePersisted: { sessionId: string; clientId: string } | null = null;
+    const groupHistoryAccess =
+      adapter.groupHistoryAccessFor?.(event) ??
+      (() => {
+        if (!['wecom', 'dingtalk', 'discord'].includes(channel)) return undefined;
+        const chatId =
+          channel === 'wecom'
+            ? decodeWecomLane(event.senderId).targetId
+            : channel === 'dingtalk'
+              ? (decodeDingTalkLaneUserId(event.senderId)?.conversationId ?? event.chatId)
+              : event.chatId;
+        return chatId ? receivedHistoryScope(channel, event.contextId, chatId) : undefined;
+      })();
+    if (groupHistoryAccess && channel !== 'telegram' && !event.protectedContent) {
+      // Before channel context assembly: its idempotent window insert must not hide image refs.
+      const messageId =
+        channel === 'discord' && event.messageId.startsWith(`${event.chatId}|`)
+          ? event.messageId.slice(event.chatId.length + 1)
+          : event.messageId;
+      await recordReceivedImageMessage({
+        scope: groupHistoryAccess,
+        messageId,
+        text: event.text,
+        attachments: event.attachments,
+        author: event.speaker?.name,
+        chatName: event.interactionSource?.chatName,
+      }).catch(() => log.warn('received image history indexing failed'));
+    }
     if (adapter.prepareAgentTurnText) {
       handedOverAck = event.messageId ? ackProcessingEarly(im, event.messageId) : null;
       try {
-        prePersisted =
-          (await turnRunner.persistInboundUserMessageEarly?.({
-            botContextId: event.contextId,
-            userId: event.senderId,
-            scopeKey: threadScoped ? event.scopeKey : undefined,
-            text: event.text,
-            attachments: event.attachments,
-            ...(event.protectedContent === true ? { protectedContent: true } : {}),
-          })) ?? null;
+        if (!notificationSessionId && !event.delivery) {
+          prePersisted =
+            (await turnRunner.persistInboundUserMessageEarly?.({
+              botContextId: event.contextId,
+              userId: event.senderId,
+              scopeKey: threadScoped ? event.scopeKey : undefined,
+              text: event.text,
+              attachments: event.attachments,
+              ...(event.protectedContent === true ? { protectedContent: true } : {}),
+              // 群 / 私聊此刻还没算出来(渠道说明在拼), 先把发言人存上; 派发时补齐。
+              ...(() => {
+                const messageOrigin = imMessageOriginFor(event, null);
+                return messageOrigin ? { messageOrigin } : {};
+              })(),
+            })) ?? null;
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`early user-message persist failed (non-fatal): ${msg}`);
@@ -346,20 +465,59 @@ export function createMessageHandler(
         log.warn(`prepareAgentTurnText failed (degraded to raw text): ${msg}`);
       }
     }
+    const channelNoteSource = await channelNoteSourcePromise;
+    const messageOrigin = imMessageOriginFor(event, channelNoteSource);
     // 按事件挂 per-turn 权限策略(telegram 群成员触发 → 破坏性调用强确认)。
     const turnPermissionPolicy = adapter.turnPermissionPolicyFor?.(event);
-    const groupHistoryAccess = adapter.groupHistoryAccessFor?.(event);
+    // A channel policy's own identity verdict wins (personal WeChat is always
+    // `unknown`); otherwise the control-command owner check applies.
+    const requesterIsOwner = turnPermissionPolicy?.autoReviewContext
+      ? turnPermissionPolicy.autoReviewContext.requesterAuthority === 'owner'
+      : isCommandAuthorized(event);
+    // Telegram / 飞书由渠道自己登记带 transport 的作用域; 企业微信 / 钉钉 / Discord 的伙伴专线
+    // 轮次登记一份不带 transport 的, 让伙伴技能等能按本轮触发者授权(否则主人也只读)。
+    const channelToolScope: ChannelToolScope | undefined =
+      adapter.channelToolScopeFor?.(event) ??
+      (isLaneTurnScopeChannel(channel) && turnRunner.companionBotIdFor?.(event.contextId)
+        ? {
+            channel,
+            botId: event.contextId,
+            laneUserId: event.senderId,
+            chatId: event.chatId?.trim() || event.senderId,
+            chatKind: channelNoteSource?.chatKind ?? (event.speaker ? 'group' : 'direct'),
+            requesterIsOwner,
+            companion: true,
+          }
+        : undefined);
+    const fallbackReplyPrefix = !adapter.prepareAgentTurnText && event.replyContext
+      ? buildImReplyContextBlock(event.replyContext)
+      : '';
+    const deliveredReply = prepared?.replyContext ??
+      (!adapter.prepareAgentTurnText ? event.replyContext : undefined);
     try {
-      await turnRunner.runAgentTurn({
+      const turnArgs: ImRunAgentTurnArgs = {
+        ...(notificationSessionId ? {
+          notificationSessionId,
+          revalidateNotificationReply: async () => {
+            if (await adapter.resolveNotificationReply!(event) !== notificationSessionId) {
+              throw new Error('Notification reply identity changed before dispatch');
+            }
+          },
+        } : {}),
         botContextId: event.contextId,
         userId: event.senderId,
         userMessageId: event.messageId,
+        sourceDescription: describeInteractionSource(event),
+        requesterIsOwner,
+        ...(channelNoteSource ? { channelNoteSource } : {}),
+        ...(messageOrigin ? { messageOrigin } : {}),
         text: event.text,
         // 受保护群的触发消息照常起 turn, 但不进会话存档(渠道侧已挡住群历史池,
         // 这里挡住第二条路径)。
         ...(event.protectedContent === true ? { protectedContent: true } : {}),
         ...(turnPermissionPolicy ? { turnPermissionPolicy } : {}),
         ...(groupHistoryAccess ? { groupHistoryAccess } : {}),
+        ...(channelToolScope ? { channelToolScope } : {}),
         ...(handedOverAck !== undefined ? { ackReactionIdPromise: handedOverAck } : {}),
         // 早期拒绝终态(missing_auth / credential busy): 本条消息自己开了话题
         // 时, 用终态文案收口开场白卡 — 否则「思考中」卡残留且下一条误认领。
@@ -372,7 +530,18 @@ export function createMessageHandler(
             }
           : {}),
         ...(prePersisted ? { prePersistedUserMessage: prePersisted } : {}),
-        ...(prepared ? { agentText: prepared.agentText } : {}),
+        agentText: buildInboundMessageFacts({
+          text: event.text,
+          invoked: event.invoked,
+          hasReply: !!event.replyContext,
+          attachmentCount: event.attachments.length + (prepared?.contextAttachments?.length ?? 0),
+          unavailable: [
+            ...event.unsupported.map((entry) => `${entry.type}：${entry.label}`),
+            ...(deliveredReply?.unavailableAttachments ?? []),
+          ],
+        }) + (prepared?.agentText ?? `${fallbackReplyPrefix}${event.text}`),
+        ...(prepared?.contextSnapshot ? { contextSnapshot: prepared.contextSnapshot } : fallbackReplyPrefix
+          ? { contextSnapshot: captureImContext({ replyPrefix: fallbackReplyPrefix, replyMessageCount: 1 }) } : {}),
         // 群历史附件只进模型消息、不落库(见 ImRunAgentTurnArgs.contextAttachments)。
         ...(prepared?.contextAttachments?.length
           ? { contextAttachments: prepared.contextAttachments }
@@ -387,8 +556,10 @@ export function createMessageHandler(
             }
           : {}),
         attachments: event.attachments,
+        // 只取 adapter 实际交给模型的回复投影(可能已被过滤成占位), 不用 event 原值。
+        ...(deliveredReply ? { replyContext: deliveredReply } : {}),
         // threadScoped 渠道: scopeKey = thread root ts(thread = session 路由键)
-        scopeKey: threadScoped ? event.scopeKey : undefined,
+        scopeKey: notificationSessionId || threadScoped ? event.scopeKey : undefined,
         // Title generation and similar detached work must stay visible to the
         // same account drain without delaying the foreground message dispatch.
         trackBackgroundTask: (operation) => {
@@ -401,18 +572,48 @@ export function createMessageHandler(
             log.warn(`account-scoped background task failed (non-fatal): ${msg}`);
           });
         },
-      });
+      };
+      if (event.delivery) {
+        // Durable transports own their pending queue. A busy session must not
+        // silently accept this message into turnRunner's volatile sendQueue.
+        event.delivery.awaitPersistence();
+        const dispatch = await turnRunner.dispatchAgentTurn({
+          ...turnArgs, queueMode: 'external',
+          beforeProviderStart: async () => { event.delivery!.awaitPersistence(); },
+        });
+        if (dispatch.kind === 'busy') event.delivery.defer();
+        else if (dispatch.kind === 'rejected') {
+          const text = dispatch.reason === 'missing_auth' ? ui.agent.apiKeyMissing
+            : dispatch.reason === 'companion_unavailable'
+              ? ui.agent.companionUnavailable?.(dispatch.reason) ?? ui.agent.runtimeError(dispatch.reason)
+              : ui.agent.sendInternalError(dispatch.reason);
+          try {
+            await im.sendText(event.senderId, text, { threadTs: event.scopeKey });
+            event.delivery.accept();
+          } catch {
+            // A failed failure notice is not handled: retain it for a later retry.
+            event.delivery.defer();
+          }
+        }
+        else await notifyUnsupported();
+      } else {
+        await turnRunner.runAgentTurn(turnArgs);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error(`runAgentTurn threw: ${msg}`);
       // 本条消息自己开了话题(groupContextLane)时, 开场白卡还没被流式认领 —
       // 用内部错误内容收口它, 否则卡永久残留且同话题下一条会 patch 错卡。
+      if (isImAccountScopeClosedError(err)) throw err;
+      const errorText = notificationSessionId
+        ? adapter.notificationReplyText!.unavailable
+        : ui.agent.sendInternalError(msg);
       const openerConsumed = event.groupContextLane
-        ? await consumeOpenerWithText(event.senderId, ui.agent.sendInternalError(msg))
+        ? await consumeOpenerWithText(event.senderId, errorText)
         : false;
       if (!openerConsumed) {
         try {
-          await im.sendText(event.senderId, ui.agent.sendInternalError(msg), {
+          await im.sendText(event.senderId, errorText, {
             threadTs: event.scopeKey,
             fallbackOpenerId: richIm?.takeNotedFallbackOpenerId?.(event.senderId, 'markdown'),
           });
@@ -457,6 +658,7 @@ export function createMessageHandler(
         // Only clear if I'm still the tail (no follow-up enqueued).
         if (userLocks.get(key) === work) userLocks.delete(key);
       });
+      return work;
     });
   };
 }

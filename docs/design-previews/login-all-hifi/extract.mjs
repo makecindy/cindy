@@ -197,15 +197,22 @@ const desk = await (async () => {
   /* 颜色 token:正则解析 registerColor('login-*', {light, dark}) */
   const COLORS_TS = 'apps/desktop/src/renderer/themes/colors.ts';
   const colorsSrc = readFileSync(R(COLORS_TS), 'utf8');
+  // DS-8 将默认值抽到生成的 JSON 字面量；保留对旧内联声明的读取。
+  const generatedDefaultsSource = colorsSrc.match(/const GENERATED_DEFAULTS = (\{[\s\S]*?\n\}) as const;/)?.[1];
+  const generatedDefaults = generatedDefaultsSource ? JSON.parse(generatedDefaultsSource) : {};
   function tokenPair(name) {
     const re = new RegExp(
       `registerColor\\('${name}',\\s*\\{\\s*light:\\s*'([^']+)',\\s*dark:\\s*'([^']+)',?\\s*\\}`,
     );
     const m = colorsSrc.match(re);
-    if (!m) throw new Error(`colors.ts 未找到 token ${name}`);
+    const usesGenerated = colorsSrc.includes(`registerColor('${name}', GENERATED_DEFAULTS["${name}"]`);
+    const pair = m ? { light: m[1], dark: m[2] } : usesGenerated ? generatedDefaults[name] : undefined;
+    if (typeof pair?.light !== 'string' || typeof pair?.dark !== 'string') {
+      throw new Error(`colors.ts 未找到 token ${name}`);
+    }
     return {
-      light: leaf(m[1], COLORS_TS, `registerColor('${name}').light`),
-      dark: leaf(m[2], COLORS_TS, `registerColor('${name}').dark`),
+      light: leaf(pair.light, COLORS_TS, `registerColor('${name}').light`),
+      dark: leaf(pair.dark, COLORS_TS, `registerColor('${name}').dark`),
     };
   }
   const colorNames = {
@@ -466,6 +473,7 @@ const mobile = await (async () => {
   const CNPHONE_TS = 'apps/mobile/src/auth/cnPhone.ts';
   const KB_TS = 'apps/mobile/src/auth/loginKeyboardAvoidance.ts';
   const mods = await compileModules([
+    ['apps/mobile/src/i18n/locale.ts', 'mob-locale.mjs'],
     [LAYOUT_TS, 'mob-layout.mjs'],
     [TOKENS_TS, 'mob-tokens.mjs'],
     [METHOD_TS, 'mob-method.mjs'],
@@ -478,6 +486,7 @@ const mobile = await (async () => {
       // authErrorMessages 常量,不执行 getLocales/getManualLocaleOverride。
       (code) =>
         code
+          .replace(/from ["']@\/i18n\/locale["']/g, 'from "./mob-locale.mjs"')
           .replace(
             /import\s*\{\s*getLocales\s*\}\s*from\s*['"]expo-localization['"];?/,
             'const getLocales = () => [{ languageTag: "zh-CN" }];',

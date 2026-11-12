@@ -29,7 +29,6 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import type { Schedule } from '@cindy/maker-scheduler';
-import type { RegionalMoney } from '../../../../shared/regionalMoney';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -39,15 +38,11 @@ import {
 } from '@/components/ui/dropdown-menu';
 
 import { formatLastRun, formatNextRun } from '../lib/formatters';
-import { formatTurnCostMoney } from '@/lib/usageFormat';
 
 interface Props {
   schedule: Schedule;
   selected: boolean;
   unreadCount?: number;
-  totalMoney?: RegionalMoney;
-  totalEstimatedValueMoney?: RegionalMoney;
-  hasUnavailableCost?: boolean;
   onSelect: (s: Schedule) => void;
   /** 右键菜单的 Pause/Resume 动作；与 RunHistoryPane ⋯ 菜单同行为。 */
   onTogglePause?: (s: Schedule) => void | Promise<void>;
@@ -88,9 +83,6 @@ export function TaskListCell({
   schedule: s,
   selected,
   unreadCount = 0,
-  totalMoney,
-  totalEstimatedValueMoney,
-  hasUnavailableCost = false,
   onSelect,
   onTogglePause,
   onDelete,
@@ -155,8 +147,8 @@ export function TaskListCell({
   //     · 没跑过 → "Next in Y"  · 没下一次 → "Last X ago"
   // 用 lastFiredAt（上一次开始时间）而不是 lastFinishedAt：用户更关心"任务上次什么时候被触发"，
   // 而不是"上次跑完是什么时候"。长跑任务在 running 中也能立刻看到 "Last HH:mm"。
-  const lastText = formatLastRun(s.lastFiredAt);
-  const nextText = s.status === 'active' ? formatNextRun(s.nextFireAt) : null;
+  const lastText = formatLastRun(s.lastFiredAt, Date.now(), t);
+  const nextText = s.status === 'active' ? formatNextRun(s.nextFireAt, Date.now(), t) : null;
   let subtitle: string | null;
   if (queuedForSession) {
     // 排在目标会话队列里等派发 —— 比"没抢到执行槽"更靠前判定:这一轮已经触发过了，
@@ -170,7 +162,7 @@ export function TaskListCell({
   } else if (s.status === 'paused') {
     subtitle = t('scheduler.cell.subtitlePaused');
   } else if (s.manual) {
-    subtitle = lastText ?? t('scheduler.cell.subtitleManual');
+    subtitle = lastText ?? (s.webhookTrigger ? t('scheduler.webhook.title') : t('scheduler.cell.subtitleManual'));
   } else if (!s.recurring) {
     subtitle = lastText ?? t('scheduler.cell.subtitleOnce');
   } else if (lastText && nextText) {
@@ -178,31 +170,8 @@ export function TaskListCell({
   } else {
     subtitle = lastText ?? nextText;
   }
-  const costText =
-    totalMoney == null && !hasUnavailableCost
-      ? null
-      : [
-          totalMoney && totalMoney.amount > 0
-            ? t('scheduler.cell.totalCost', {
-                cost: formatTurnCostMoney(totalMoney),
-              })
-            : null,
-          (totalEstimatedValueMoney?.amount ?? 0) > 0
-            ? t('scheduler.cell.totalValue', {
-                value: formatTurnCostMoney(totalEstimatedValueMoney!),
-              })
-            : null,
-          hasUnavailableCost ? t('scheduler.cell.costUnavailable') : null,
-        ]
-          .filter(Boolean)
-          .join(' · ') ||
-            (totalMoney
-              ? t('scheduler.cell.totalCost', {
-                  cost: formatTurnCostMoney(totalMoney),
-                })
-              : t('scheduler.cell.costUnavailable'));
   // 副标题行是否渲染:决定右下角 Run 按钮的"预留位"落在哪一行(见下方两处 pr-3.5)。
-  const hasMetaRow = Boolean(subtitle || costText);
+  const hasMetaRow = Boolean(subtitle);
 
   // ── Double-click rename（与 SessionItem 完全同款）──
   // - 单击立即选择；双击只额外进入重命名（仅在 onRename 传入时启用）
@@ -405,27 +374,19 @@ export function TaskListCell({
             {t('scheduler.projectAutomation.cell.tag')}
           </span>
         )}
-        {!isEditing && (s.manual || !s.recurring) && (
+        {!isEditing && (s.webhookTrigger || s.manual || !s.recurring) && (
           <span
             className={cn(
               'shrink-0 translate-x-[2px] rounded-full border px-2 py-[2px] text-11 font-medium leading-none',
               'border-[var(--cmd-palette-border)] text-[var(--cmd-palette-item-meta)]',
             )}
           >
-            {s.manual ? t('scheduler.cell.tagManual') : t('scheduler.cell.tagOnce')}
+            {s.webhookTrigger ? t('scheduler.cell.tagWebhook') : s.manual ? t('scheduler.cell.tagManual') : t('scheduler.cell.tagOnce')}
           </span>
         )}
       </div>
       {hasMetaRow && (
-        <div
-          className={cn(
-            'flex min-w-0 items-center gap-2',
-            // 无 cost 的行,右下角 Run 按钮没有可替换的对象,给副标题常驻预留按钮位,
-            // 避免悬浮时压住文字;预留量与标题行同款(pr-5 = 补齐 14px 侵入 + 6px 间隙)。
-            // 有 cost 的行不预留——按钮悬浮时原位替换 cost(见下方 costText 的淡出)。
-            onRunNow && !costText && 'pr-5',
-          )}
-        >
+        <div className={cn('flex min-w-0 items-center gap-2', onRunNow && 'pr-5')}>
           {subtitle && (
             <span
               className={cn(
@@ -438,25 +399,6 @@ export function TaskListCell({
               )}
             >
               {subtitle}
-            </span>
-          )}
-          {costText && (
-            <span
-              className={cn(
-                'ml-auto shrink-0 text-11',
-                selected
-                  ? 'text-[var(--settings-section-desc)]'
-                  : 'text-[var(--cmd-palette-item-meta)]',
-                // 行悬浮时淡出,让右下角的 Run 按钮原位替换 cost(与侧栏"meta 让位给
-                // 操作按钮"的手法一致);仅 opacity 过渡,宽度保留,副标题不回流。
-                // 键盘可达性:按钮经 Tab 聚焦(focus-visible)显示时 cost 同样让位。
-                // 精确匹配"按钮自身 focus-visible"而非 group-focus-within——行本身也
-                // focusable,点选/Tab 到行时按钮并不显示,不应误藏 cost。
-                onRunNow &&
-                  'transition-opacity group-hover:opacity-0 group-has-[button:focus-visible]:opacity-0',
-              )}
-            >
-              {costText}
             </span>
           )}
         </div>
@@ -485,17 +427,11 @@ export function TaskListCell({
         <DropdownMenuContent
           align="start"
           sideOffset={2}
-          className={cn(
-            'min-w-[180px] rounded-xl p-1 overflow-hidden',
-            'bg-[var(--cmd-palette-bg)]',
-            'border border-[var(--cmd-palette-border)]',
-            'shadow-[var(--shadow-menu)]',
-          )}
+          className="min-w-[180px]"
         >
           {canRename && (
             <DropdownMenuItem
               onSelect={enterEdit}
-              className="cursor-pointer text-sm hover:bg-[var(--cmd-palette-item-hover)]"
             >
               <Pencil size={13} strokeWidth={2} className="mr-2" />
               {t('scheduler.cell.menu.rename')}
@@ -505,7 +441,6 @@ export function TaskListCell({
             <DropdownMenuItem
               onSelect={() => void onTogglePause(s)}
               disabled={isExpiredSch}
-              className="cursor-pointer text-sm hover:bg-[var(--cmd-palette-item-hover)]"
             >
               {isPausedSch ? (
                 <Play size={13} strokeWidth={2} className="mr-2" />
@@ -517,10 +452,9 @@ export function TaskListCell({
           )}
           {canPromote && (
             <>
-              <DropdownMenuSeparator className="bg-[var(--cmd-palette-border)]" />
+              <DropdownMenuSeparator />
               <DropdownMenuItem
                 onSelect={() => void onPromoteToProject(s)}
-                className="cursor-pointer text-sm hover:bg-[var(--cmd-palette-item-hover)]"
               >
                 <ArrowUpToLine size={13} strokeWidth={2} className="mr-2" />
                 {t('scheduler.list.promote.menu')}
@@ -530,7 +464,6 @@ export function TaskListCell({
           {canEditProject && (
             <DropdownMenuItem
               onSelect={() => void onEditProjectSchedule(s)}
-              className="cursor-pointer text-sm hover:bg-[var(--cmd-palette-item-hover)]"
             >
               <Pencil size={13} strokeWidth={2} className="mr-2" />
               {t('scheduler.list.editProject.menu')}
@@ -539,7 +472,6 @@ export function TaskListCell({
           {canCloneToUser && (
             <DropdownMenuItem
               onSelect={() => void onCloneToUser(s)}
-              className="cursor-pointer text-sm hover:bg-[var(--cmd-palette-item-hover)]"
             >
               <Copy size={13} strokeWidth={2} className="mr-2" />
               {t('scheduler.list.cloneToUser.menu')}
@@ -547,10 +479,9 @@ export function TaskListCell({
           )}
           {canRemoveProject && (
             <>
-              <DropdownMenuSeparator className="bg-[var(--cmd-palette-border)]" />
+              <DropdownMenuSeparator />
               <DropdownMenuItem
                 onSelect={() => void onRemoveProjectSchedule(s)}
-                className="cursor-pointer text-sm hover:bg-[var(--cmd-palette-item-hover)]"
               >
                 <FolderMinus size={13} strokeWidth={2} className="mr-2" />
                 {t('scheduler.list.removeProject.menu')}
@@ -559,11 +490,8 @@ export function TaskListCell({
           )}
           {canDelete && (
             <>
-              <DropdownMenuSeparator className="bg-[var(--cmd-palette-border)]" />
-              <DropdownMenuItem
-                onSelect={() => void onDelete(s)}
-                className="cursor-pointer text-sm hover:bg-[var(--cmd-palette-item-hover)]"
-              >
+              <DropdownMenuSeparator />
+              <DropdownMenuItem variant="danger" onSelect={() => void onDelete(s)}>
                 <Trash2 size={13} strokeWidth={2} className="mr-2" />
                 {t('scheduler.cell.menu.deleteAutomation')}
               </DropdownMenuItem>

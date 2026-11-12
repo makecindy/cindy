@@ -18,10 +18,9 @@ describe('chat attachment IPC owner boundary', () => {
     expect(attachmentIpcSource).not.toContain('authManager.getAuthState().user?.id');
   });
 
-  it('protects persisted paths and rechecks owner scope before renderer cleanup', () => {
-    expect(attachmentIpcSource).toContain(
-      'const protectedPaths = await listPersistedChatAttachmentPaths();',
-    );
+  it('does not query message history and rechecks owner scope before renderer cleanup', () => {
+    expect(attachmentIpcSource).not.toContain('listPersistedChatAttachmentPaths');
+    expect(attachmentIpcSource).not.toContain('getDbClient');
     expect(attachmentIpcSource).toContain('activeOwnerScopeKey() === ownerScopeKey');
     expect(attachmentIpcSource).toContain('cleanupOwnedUnpersistedStagedChatAttachments({');
   });

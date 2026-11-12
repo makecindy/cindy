@@ -79,6 +79,11 @@ describe('CollaborationSection', () => {
       expect(screen.getByText('settings.collaboration.title')).toBeTruthy();
     });
     expect(limitInputs().map((i) => i.value)).toEqual(['5', '8', '0']);
+    for (const input of limitInputs()) {
+      expect(input.className).toContain('text-[var(--settings-input-text)]');
+      expect(input.className).toContain('border-[var(--settings-input-border)]');
+      expect(input.className).toContain('focus:border-[var(--settings-input-border-focus)]');
+    }
   });
 
   it('writes the soft limit on change without waiting for blur', async () => {

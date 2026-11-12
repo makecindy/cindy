@@ -1,13 +1,21 @@
+import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
+import {
+  buildSessionOperationLayout as buildSessionOperationLayoutShared,
+} from '@cindy/maker-shared/session-operation';
 import type { SessionComposerDisabledReasonSource } from '@cindy/maker-shared/session-operation';
+import type { SessionOperationLayoutInput } from '@cindy/maker-shared/session-operation';
 
 export {
-  buildSessionOperationLayout,
   type SessionComposerDisabledReasonSource,
   type SessionComposerSlot,
   type SessionMessageHistoryMode,
   type SessionOperationLayout,
   type SessionOperationLayoutInput,
 } from '@cindy/maker-shared/session-operation';
+
+export function buildSessionOperationLayout(input: SessionOperationLayoutInput) {
+  return buildSessionOperationLayoutShared(input, mobilePresentationLocalizer);
+}
 
 /**
  * 共享模型自造的禁发理由 → 手机端文案 key。

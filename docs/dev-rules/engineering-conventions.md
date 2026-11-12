@@ -2,8 +2,9 @@
 
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：新增或修改 Desktop 日志、IPC 错误处理、main 侧业务逻辑与测试、
-> 跨平台（macOS／Windows）相关行为、任何 UI 文案的 i18n 落地，或新增／修改动画与
-> 界面加载时序等渲染性能相关行为之前
+> 客户端本地读取／扫描、缓存与轮询性能、跨平台（macOS／Windows）相关行为、任何 UI 文案
+> 的 i18n 落地，新增／修改动画与界面加载时序等渲染性能相关行为，或新增一处每个功能都要
+> 来登记的列表、台账、注册表、版本号之前
 
 本文收拢一组适用于整个客户端的通用工程约束。IPC 的安全与授权边界另见
 [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)，
@@ -89,7 +90,95 @@ UI 文案的语气与措辞另见 [`DESIGN.md`](../design-rules/DESIGN.md) 的 V
 `scripts/__tests__/test-workspaces.test.mjs` 是 tier 边界的可执行契约；调整测试命名、include
 或 exclude 时必须同步更新并运行 `pnpm test:runner`。
 
-### 3.2 路径断言的跨平台宪法
+### 3.2 新增测试的价值门槛
+
+测试数量不是覆盖质量。后续 Agent 新增或改写测试时，每个测试文件在 PR 描述或邻近注释中都
+要能回答「它保护哪个真实行为、历史 bug 或稳定契约」。没有可观察行为变化的重构、文档和
+纯类型调整，不为了凑覆盖率新增测试。
+
+- **测生产行为**：优先调用被测模块的公开函数、handler 或真实组件入口，断言用户可观察的
+  结果、错误语义、权限边界、数据持久化或协议结构。禁止复制生产函数、常量表、JSX 或
+  Tailwind 字符串后再与副本比较；只证明“源码里出现了某段字面量”的测试不算行为覆盖。
+- **回归测试先红后绿**：修 bug 时先用最小用例复现修复前的失败，再验证修复后的通过。若
+  只能测试静态契约，必须写出规则编号和保留原因，并把它放进明确的 guard／静态检查位置，
+  不要把普通布局、类名、import 或调用顺序扫描伪装成 unit test。只包含跨文件静态契约的
+  Desktop / Mobile 测试文件必须加入 `scripts/test-workspaces.config.mjs` 的 guard allowlist，并由
+  CI 的 `pnpm test:guard` 执行；混合文件中的静态断言只有在保护权限、凭证、协议或竞态
+  规则且无法从生产入口隔离时才保留，并在测试名或注释中写明失效后果。没有对应规则或
+  失效后果的源码字面量断言直接删除。
+- **控制文件数量**：同一领域的输入矩阵优先加入现有测试文件并使用表驱动；只有测试环境、
+  生命周期、隔离资源或 tier 不同，才新建文件。一个文件只放一两个机械断言，或把同一行为
+  拆成多个重复文件，必须合并或说明为什么不能合并。
+- **不重复断言**：每条用例都应区分一个实际行为分支。只断言内部函数被调用，却不验证
+  由此产生的用户可观察结果、错误语义、持久化或时序，通常没有独立价值；常量等于字面量、
+  某个 class／属性存在、或重复同一 happy path 的用例应删除。调用、字面量或属性本身若是
+  对外协议，可以保留，但要在测试名和注释中写明协议及失效后果。
+- **隔离和分层**：默认 unit 使用进程内依赖注入、内存 fake；真实网络、外部进程、真实 Git
+  矩阵、SQLite migration 和严格计时进入已有专用 tier。不要为了让 unit 变绿而把真实资源
+  粗暴 mock 掉，也不要在测试里新增全局锁。
+- **先查已有覆盖**：新增前先搜索相邻测试和相关入口；如果已有用例覆盖同一行为，只补缺失
+  的输入或回归条件，不复制一套断言。删除候选测试时要确认剩余测试仍经生产入口覆盖该风险。
+
+Agent 在提交新增测试前必须在 PR 描述或测试文件邻近注释中填清四项：被测生产入口和
+用户可观察结果、对应的历史 bug／规则编号、现有覆盖为什么不够、以及最小失败输入和
+所属 tier。四项有一项答不出来就不新增测试；修复后仍要保留能在回归前失败的最小断言，
+不要用更多 happy path 来替代。
+
+建议直接复制下面的模板填写；同一 PR 有多个测试文件时逐文件填写，不能用一句“补充覆盖”
+代替：
+
+~~~text
+测试价值
+- 生产入口与可观察结果：<调用哪个公开函数／handler／组件入口；用户或协议会看到什么>
+- Bug／规则依据：<issue、回归提交或规则章节；没有就不新增>
+- 现有覆盖缺口：<为什么相邻测试没有覆盖这个分支>
+- 最小失败输入：<触发旧错误的最小输入、状态或时序>
+- tier：<unit / guard / db / integration / e2e；为什么放这里>
+- 实测耗时：<单独运行该文件的墙钟，例如 pnpm --dir apps/desktop exec vitest run <文件>>
+~~~
+
+用例的停止条件是覆盖完不同的结果分支：同一入口、同一结果只保留一个最小代表，更多
+输入用表驱动表达；当新增用例不能指出新的结果、错误、权限、持久化、协议或时序差异时
+就停止。不要设置“每个函数都要一个测试”或“覆盖率必须再涨一点”的数量目标，也不要
+为了填满文件、提高测试条数或证明测试框架本身而新增用例。
+
+评审可以直接要求删掉无法指出生产行为或契约的测试；“测试通过”本身不能证明它有价值。
+
+#### 性能预算（与价值门槛同等强制）
+
+单测的成本主要不在用例条数，而在每个文件的准备、收集（导入模块）和环境初始化。2026-10-16
+实测 Desktop 每个分片的 worker 时间里，收集阶段与执行测试相当；一个逐用例重置模块的文件
+（`codexProxyHost.test.ts`）就占全部文件耗时的约 10%，不重置时同样 285 条用例从 105 秒降到
+7 秒。新增或改写测试时：
+
+- **单文件预算**：新增或改写的单测文件单独运行应在 5 秒内（本机），超过 10 秒必须在 PR
+  写明原因，并优先改用文件级 fixture、依赖注入或迁移 tier；不得用放宽 timeout 掩盖。
+  「测试价值」模板里填写实测耗时。
+- **模块只加载一次**：默认在文件顶部静态 import 被测模块。需要干净的模块级状态时，调用
+  生产代码已有的 dispose／reset 或注入依赖；`vi.resetModules()` 只用于确实在验证「重启／
+  重新加载」语义的边界，上一行写 `// reset-modules: <被隔离的状态>`，禁止放进
+  `beforeEach` 或每个用例都会调用的 helper。
+- **不做真实等待**：不用 ≥100ms 的 `setTimeout`／`sleep` 等异步结果，改用
+  `vi.useFakeTimers()`、`vi.waitFor`／事件，或直接 await 被测 Promise。确需真实等待时上一行写
+  `// real-wait: <原因>`。
+- **环境按需**：只有真正渲染组件或操作 DOM 的文件才声明 `@vitest-environment jsdom`，纯逻辑
+  留在 node 环境；jsdom 每个文件约多 0.5 秒初始化。
+- **不新开小文件**：同一被测模块的新用例加进已有文件并用表驱动；每个新文件都要多付一次
+  准备、收集和环境初始化。不超过 3 条用例的新文件必须说明为什么不能并入。
+- **重 I/O 下沉**：真实子进程、真实 socket、真实 Git 或大量文件 I/O 让单文件超预算时，迁移到
+  §3.1 的专用 tier，不要留在默认 unit。
+
+**机器门禁**：CI verify 运行 `pnpm check:test-hygiene`（`scripts/check-test-hygiene.mjs`）并阻断
+三类问题：没有写理由的 `vi.resetModules()`、没有写理由的 ≥100ms 真实等待、普通单测读取生产源码
+文本（这类静态契约只能进 guard tier，不接受理由豁免）。存量计数记在
+`scripts/test-hygiene-baseline.json`，只允许减少；修掉存量后运行
+`node scripts/check-test-hygiene.mjs --update` 收紧基线。门禁从 GitHub PR／合并队列／push 事件
+取得基准提交，本地使用 `origin/main`；逐文件、逐规则拒绝基线上调，手改 JSON 也不能放行。
+只有确认基准提交确实没有基线文件时才允许首次登记；基准缺失、读取失败或基线格式错误均失败。
+若当前分支已有高于 Git 基准的旧基线，先修复对应源码违规再运行 `--update`；更新器对新生成的
+基线同时核对本地与 Git 基准上限，允许收紧修复，不允许把仍存在的新违规登记为存量。
+
+### 3.3 路径断言的跨平台宪法
 
 测试必须先区分路径代表的语义，不能把当前开发机的路径表示误当成跨平台事实：
 
@@ -111,8 +200,10 @@ UI 文案的语气与措辞另见 [`DESIGN.md`](../design-rules/DESIGN.md) 的 V
   依赖注入／纯函数用例保留等价覆盖；禁止按 `process.platform` 大面积跳过后让整个 CI 矩阵
   失去相应回归保护。
 
-PR 门禁必须在 Windows 上用两个并行分片完整覆盖 `pnpm test:unit`；两个分片的并集必须等价于
-未分片的全量测试，且由稳定的汇总检查统一阻断。`scripts/__tests__/dev-docs-contract.test.mjs` 锁住
+PR 门禁必须在 Windows 上用多个并行分片（当前为 4 个）完整覆盖 `pnpm test:unit`；所有分片的
+并集必须等价于未分片的全量测试，且由稳定的汇总检查统一阻断。分片数可以按 CI 实测耗时调整，
+但分片矩阵必须连续列出 1..N 并与 `XDT_UNIT_TEST_SHARD` 的 N 一致；只需执行一次的检查放在
+独立并行 job，不叠加在某个分片上。`scripts/__tests__/dev-docs-contract.test.mjs` 锁住
 该 CI 契约。不能用静态扫描“测试字符串是否含斜杠”代替 Windows 实跑，因为它无法可靠区分宿主
 路径与逻辑路径。
 
@@ -140,22 +231,44 @@ PR 门禁必须在 Windows 上用两个并行分片完整覆盖 `pnpm test:unit`
 一种语言。本节管“文案怎么落地进 i18n”，文案的语气／措辞见 `DESIGN.md` 的 Voice & Content。
 
 - 资源在 `renderer/i18n/locales/<locale>/common.json`，语言由 `shared/locale.ts` 的
-  `SUPPORTED_LOCALES` 定义（当前 `zh-CN` / `zh-TW` / `en` / `ja` / `ko`），组件通过 `react-i18next` 的
+  `SUPPORTED_LOCALES` 定义（当前 `zh-CN` / `zh-TW` / `en` / `ja` / `ko` / `es` / `fr` / `de` / `pt-PT` / `pt-BR` / `zh-Hant-x-lzh` / `zh-Hans-x-lzh`），组件通过 `react-i18next` 的
   `t('<嵌套.key>')` 消费，单 namespace `common`。
+- **加载方式**：只有英文静态打包，其他语言由 `renderer/i18n/index.ts` 的 `LOCALE_LOADERS` 按需
+  加载（新增语言要在这里加一行）；renderer 分发入口 `index.tsx` 先等 `i18nReady` 再加载各窗口，
+  首屏直接是目标语言。`t(key, { lng })`、`getFixedT(lng)` 只对已加载的语言有效：需要在非当前
+  语言下同步读文案的功能，把 key 加进 `scripts/i18n-cross-locale.mjs` 的 `CROSS_LOCALE_KEYS`，
+  运行该脚本重新生成 `crossLocaleStrings.generated.json`，代码经 `@/i18n/crossLocale` 读取；
+  改这些 key 的文案后同样要重新生成。测试需要其他语言时先
+  `await i18n.loadLanguages([...])` 或 `await i18n.changeLanguage(lng)`。
 - **新增**：复用已有嵌套分组选 key，组件用 `t('key')`，绝不写 `<div>保存</div>` 裸文案。
-- **修改**：改某 key 文案时 5 种语言同步更新，不要只改中文留其它语言旧值。
+- **修改**：改某 key 文案时全部已支持语言同步更新，不要只改中文留其它语言旧值。
 - **删除**：删 UI 时把对应 key 从全部 locale 一起删掉，不留孤儿 key。
-- **翻译准确性**：`fallbackLng = 'en'`，缺 key 会静默回退英文。5 种语言都必须补齐并给出
+- **文言版（繁 `zh-Hant-x-lzh`／简 `zh-Hans-x-lzh`）**：只能由用户手动选择，系统语言永不自动
+  落到它；Intl 日期与数字按 `zh-Hant`／`zh-Hans` 格式化，缺 key 先回退 `zh-TW`／`zh-CN` 再回退
+  英文。繁体版是译写正本，简体版由它转写生成（规则见 `i18n/classical-chinese-style.md`，含文风、
+  术语表与必须保持白话的删除、权限、凭证、付款、安全文案）。选用文言界面时，每轮界面语言说明
+  同时要求 AI 以文言作答，作答文风（唐诗、宋词等）在设置的语言卡片里选，登记在
+  `packages/maker-shared/src/classicalReply.ts`；新增文风只需在该表加一项并补齐各语言的
+  `settings.language.classical.styles.*` 文案。IM 渠道不套用文言作答风格。
+- **翻译准确性**：`fallbackLng = 'en'`，缺 key 会静默回退英文。全部已支持语言都必须补齐并给出
   **准确**翻译，不留空、占位或“待校对”；ja / ko 没把握时先查证再写。
 - **术语一致性**：写任何术语前先查 `i18n/GLOSSARY.md`。同一个概念在不同界面译法不一致
   是用户直接可见的质量问题（引入术语表时实测：162 个英文短语存在多种中文译法，反向
   227 条）。表里已裁决的术语**必须照用**，拿不准或表里没有的先在
   `i18n/glossary.json` 加 `status: "proposed"` 条目，别自己临时造一个译法。
+- **中文变体命名**：语言列表、选择器、设置项里的 zh-CN / zh-TW 一律按书写体系命名——中文界面
+  「简体中文」「繁体中文」，英文界面「Simplified Chinese」「Traditional Chinese」。不要直接用
+  `Intl.DisplayNames` 生成的「中文（中国）」「中文（台湾）」这类按地区的名称（2026-10-28 裁决：
+  按地区表述在中国大陆有政治风险）；用 DisplayNames 生成名称时对中文变体做显式覆盖。
 
 ### 5.1 术语表与门禁
 
 - **数据正本**：`i18n/glossary.json`；人读版 `i18n/GLOSSARY.md` 由
   `pnpm i18n:glossary-doc` 生成，**不要手改**。
+- **条目顺序**：`terms` 按 `id` 升序，门禁校验。新术语插到按 id 排序的位置，不加在数组
+  开头或末尾——都往同一处加时，任意两个加术语的 PR 必然冲突（2026-11-11 有 7 个未合并 PR
+  卡在数组开头）。顺序不参与规则判定：扫描逐条独立，人读版生成时自行重排（已裁决在前，
+  各组内按 id）。
 - **两级状态**：`decided` 违反即阻断 CI；`proposed` 只告警，用于承载「已知不一致但
   尚未拍板」的术语——让清单可见可讨论，而不是靠脚本替产品做裁决。
 - **三类规则**：禁用译法、保留英文术语的大小写形态、zh-CN 半角标点与三语省略号。
@@ -168,11 +281,12 @@ PR 门禁必须在 Windows 上用两个并行分片完整覆盖 `pnpm test:unit`
   或以 `.` 结尾的子树前缀；同形异义必须在 `note` 里写明理由。
 - **门禁**：
   - `pnpm check:i18n` 校验 key 结构——缺 key、孤儿 key、跨 locale 类型冲突报错阻断；
-    空值与“与默认语言完全相同”只发警告。
+    空值与“与默认语言完全相同”只发警告。跨语言常驻表 `crossLocaleStrings.generated.json`
+    与各 locale 不一致时同样阻断，按提示运行 `node scripts/i18n-cross-locale.mjs` 重新生成。
   - `pnpm check:i18n-glossary` 校验译文术语与标点，并检查 `GLOSSARY.md` 是否与术语表同步。
   - 两者互补：前者管「key 齐不齐」，后者管「词译得一不一致」，谁也替代不了谁。改
     i18n 后两个都要跑（CI 已强制）。
-- **影子 catalog**：有几批不走 i18next 的手写五语 catalog，根脚本只扫 locale JSON、扫不到
+- **影子 catalog**：有几批不走 i18next 的手写多语 catalog，根脚本只扫 locale JSON、扫不到
   这些 `.ts`。它们由 vitest 直接 import 运行时对象覆盖，复用
   `scripts/shared/glossary-rules.mjs` 的同一套判定，随 `test:unit` 阻断：
   - mobile：`src/auth/loginMessages.ts`、`src/session/newSessionMessages.ts`、
@@ -195,7 +309,7 @@ PR 门禁必须在 Windows 上用两个并行分片完整覆盖 `pnpm test:unit`
   权限卡片按钮是硬编码中文，与应用内 `permissions.alwaysAllowForSession` 是同一个动作。
   改产品术语时这类「同一动作、两处独立文案」要一起找出来，否则用户在 Slack 和 App 里
   看到两种说法。
-- **批量改术语时必须跑全量 `pnpm test:unit`**：仓库里有若干测试直接断言中文文案
+- **批量改术语时覆盖相关文案断言，完整单测由 CI 兜底**：仓库里有若干测试直接断言中文文案
   （`automationGeneratedSessions.test.ts`、`builtinToolsCollabDescriptionI18n.test.ts`、
   mobile 的 `sessionMenu.test.ts` 等）。它们是有意的文案锁，改词后要同步更新期望值，
   不能靠 guard 绿灯就认为改完了。反过来这也是一层兜底——Session→对话 那轮正是
@@ -263,6 +377,114 @@ PR 门禁必须在 Windows 上用两个并行分片完整覆盖 `pnpm test:unit`
   时用 DevTools Performance 实测，以数据为准。弹窗按钮 loading 等秒级瞬态存量不强制
   改，新代码一律照此。
 
+## 8. 客户端数据读取与扫描性能
+
+本节约束 Main／Renderer 在用户可见路径上的本地数据读取、扫描、缓存和轮询。网络请求、
+订阅、重试与共享通道压力见 [`server-channel-review.md`](server-channel-review.md)；
+插件市场、实例查找和使用统计的专用边界见
+[`plugin-security-and-authoring.md`](plugin-security-and-authoring.md) §5.4；
+渲染动画与加载时序见 §7。本节只约束新增和正在修改的代码，不要求专项重构存量。
+
+### 8.1 一次用户动作只取一次快照
+
+- 一次打开页面、一轮刷新或一次搜索是一个动作；同一动作内后续分页、来源切换和计数
+  投影复用同一份安装快照。一次分页请求不得单独触发新的全量安装扫描。
+- 安装、卸载、批准、切换账号或 owner／revision 变化后必须失效重取；不得把旧快照继续
+  用于新动作。
+- 精确实例键走 `findInstalledInstance` 等单实例入口；只有无法精确匹配时才回退全量列表。
+- 禁止在循环里调用带默认全量参数的查找函数，或逐条调用 `findAvailableGhost`。
+- 验收：翻 10 页断言 `GhostManager.list()` 1 次；100 条记录循环断言 `list()` 1 次；
+  精确实例查找断言 `list()` 0 次。
+
+### 8.2 读路径和轮询路径禁止写
+
+- 禁止在 `summary`、`get`、`list`、轮询、可见性恢复等读路径里执行持久化写（`bind`、
+  migration、UPDATE、INSERT）或全量重建持久状态。
+- 绑定和迁移只在安装、启动、首次使用或身份 revision 变化时执行；首次打开详情或首次工具
+  调用的幂等 ensure 允许一次，后续轮询不得重复写。
+- 验收：连续调用 summary 3 次断言写事务 0 次；revision 不变时断言不再写；切账号后旧
+  handle 不复活。
+
+### 8.3 隐藏、离屏、卸载后 0 请求、0 定时器
+
+- 组件不可见时不得发首页请求或继续轮询；`setInterval` 必须判断 `visible`／
+  `document.visibilityState`；卸载后必须清理定时器、监听、订阅和在途请求。
+- 后台下载、任务执行等明确的后台工作有独立生命周期和停止条件，不借用 UI 轮询。
+- 验收：隐藏渲染断言加载函数 0 调用；卸载后触发计时器断言无回调；恢复可见只读一次。
+
+### 8.4 分页、并发、缓存必须有界且 key 完整
+
+- 禁止无界 cursor 追页、按用户数据量无界 `Promise.all`、单槽缓存承接多账号／多供应商／
+  多查询、无上限 Map／数组长期增长。
+- 缓存 key 至少包含 owner／revision／query／scope（或 provider），有 TTL 或显式失效；
+  批量请求有单次批数和总批数上限。
+- 验收：多账号或多 provider 交替轮询断言各自命中；切账号断言不读旧缓存；1000 条输入
+  断言并发不超过设定上限。
+
+### 8.5 热路径禁止同步 I/O 和 `sendSync`
+
+- 禁止在 IPC handler、Renderer 列表行、聊天行渲染路径里新增 `fs.*Sync`、
+  `getGhostManager().list()` 或 `ipcRenderer.sendSync`。
+- 允许启动窗口创建前的小型固定配置读取和一次性 CLI；窗口级首帧缓存只允许整个窗口加载
+  一次，并由 `ghosts:changed` 推送刷新，不得每行组件重复调用。
+- 验收：精确查找测试断言 `list()` 0 次；列表渲染测试断言每行不再 `listSync`；改动文件
+  grep 不到新增同步 I/O。
+
+### 8.6 预算与例外
+
+- 预算：单次市场分页 1 页服务器数据；单次安装扫描 1 次／浏览或刷新代次；磁盘扫描并发
+  不超过现有实现的 4 路；批量 resolve 单批 ≤100 且总批数有上限，超限返回
+  `counts: null`，不继续无界请求；统计类轮询默认 15 秒（分享申请等有时效要求的
+  可保持 5 秒）；操作回执 1–1.2 秒且仅操作进行中；列表载荷只含 UI 字段，不含 icon／完整 manifest／base64。
+- 预算为基线，改数字必须附测量证据；不得因存量代码未达标阻断无关改动。
+- 例外必须可定位：小型固定配置、一次性 CLI、固定小数组并行、纯本地短计时器、明确的
+  后台任务，以及首帧窗口缓存。例外要在代码或 PR 写清原因、边界和验证方式。
+
+验收对照（文件只表示起点；未覆盖的断言在实现 PR 中补，不能把文件存在当作已验证）：
+
+| 规则 | 测试／检查 |
+| --- | --- |
+| 8.1 一次快照 | `plugin-market/__tests__/service.test.ts`、`PluginCatalogBrowser.test.tsx` |
+| 8.2 读路径不写 | `plugin-usage/__tests__/ipc.test.ts`、`service.test.ts` |
+| 8.3 可见性 | `PluginCatalogBrowser.test.tsx`、`PluginUsageCard.test.tsx` |
+| 8.4 缓存与并发 | `providerShareInsights.test.ts`、`providerShareInsightsFlow.test.tsx` |
+| 8.5 同步 I/O | `useInstalledGhosts.test.tsx`、精确查找测试 |
+
+## 9. 不制造共享追加点
+
+合并冲突的主要成因不是文件大，而是许多 PR 改同一行，或都往同一个位置插入。两个 PR 各改
+一个大文件的不同区域可以自动合并；各往同一处加一行则必然冲突。这类冲突没有语义分歧，
+只是登记方式造成的，却要每个 PR 逐个处理，后合入的还要再做一遍。
+
+2026-11-11 对最近 14 天更新过的 189 个冲突 PR 逐个与 `main` 模拟合并（当时未合并 PR 618 个，
+368 个处于冲突）。下表是多数 PR 落在同一位置的文件；同期 `register.ts` 命中 29 个 PR，
+除 import 区外分散在 58 处，属于正常的并发修改。
+
+| 位置 | 命中的冲突 PR | 成因 | 现状 |
+| --- | --- | --- | --- |
+| `protocol-compatibility.md` | 31 | 新记录都插在文首 | 已拆成每项能力一个文件，并由 `pnpm check:dev-docs` 守护 |
+| 大文件的 import 区 | `register.ts` 18、`mcp-providers.ts` 9、`bootstrap-electron.ts` 9 | 同一条 import 里各加一个名字，或都在末尾加一行 | 未治理 |
+| `BUILT_IN_SKILLS_BUNDLE_VERSION` | 10 | 每个改内置 Skill 的 PR 都把同一个整数加一（近 30 天 94 次） | 已改成基数 + 记录文件数，每次改动新增一个记录文件，由 `pnpm check:built-in-skills` 守护 |
+| `createLiziMcpProviders({ ... })` 的 `xdtHelper` | 8 | 每个新 helper 工具都往同一个 600 行的依赖对象里加属性 | 未治理 |
+| `HELPER_CATEGORY_DESCRIPTIONS` | 7 | 一个类目的说明写成一整行，增删该类目工具都改这一行 | 已改成一句一行再拼接，拼出的文字不变；新增内容单独起一行 |
+| `agent-user-parity.md`「现状台账」 | 7 | 每个 helper 工具改动都要写回同一张表，新行集中插在少数几处 | 未治理 |
+| `i18n/glossary.json` | 7 | 新术语多插在 `terms` 数组开头 | 已按 id 排序，由 `pnpm check:i18n-glossary` 守护 |
+
+新增一处每个功能都要来登记一笔的位置，或发现现有位置反复冲突时：
+
+- **列表、台账、注册表**：一项一个文件，目录本身就是索引；必须放在同一个文件时，规定按键
+  排序并由检查脚本守护。不规定「加在开头」或「加在末尾」。
+- **计数器、版本号、合计**：从内容推导。必须人工维护时，不让两个 PR 写同一行。
+- **一行里的多项内容**（数组常量、同一条 import 的多个名字、汇总多个工具的长描述）：拆成
+  一项一行并排序。只拆行不够：两处新增都落在末尾仍然冲突，排序才让它们落在不同位置。
+- **生成物**：只入库稳定的登记事实；随每次改动变化的统计数字按需生成。设计台账的统计列
+  即按此移出入库文件（`pnpm design:inventory:report`）。
+
+复查用 `pnpm repo:conflict-hotspots`（[`scripts/repo-conflict-hotspots.mjs`](../../scripts/repo-conflict-hotspots.mjs)，
+需要 gh 已登录；不改工作区和分支，临时引用结束时删除）。读法：一个文件命中很多 PR 但位置
+分散，是正常的并发修改；多数 PR 落在同一位置（报告标「共享追加点」）才需要从结构上消除。
+治理一处后把上表对应行的现状写回来。
+
 ## Review 清单
 
 1. 有没有裸 `console.log`？临时排查日志是否清理干净？
@@ -274,11 +496,15 @@ PR 门禁必须在 Windows 上用两个并行分片完整覆盖 `pnpm test:unit`
    tier，并保留了低成本默认 smoke？
 5. 路径、子进程、FS、性能、快捷键是否在 macOS / Windows 两端都成立？未实测平台是否
    标注？
-6. UI 文案是否全部走 `t()`、5 种语言齐全且翻译准确、无孤儿 key？术语是否照 `i18n/GLOSSARY.md`
+6. UI 文案是否全部走 `t()`、全部已支持语言齐全且翻译准确、无孤儿 key？术语是否照 `i18n/GLOSSARY.md`
    写、没有自造译法？是否跑过 `pnpm check:i18n` 与 `pnpm check:i18n-glossary`？
 7. 新增类／核心逻辑是否有职责注释？
 8. 新增常驻动画是否 compositor-only（HTML 元素 + `transform`/`opacity` + wrapper）、
    响应 `prefers-reduced-motion`？界面切换是否无跳变／空白帧、未引入不必要的 loading 态？
+9. 是否新增了每个功能都要改同一行、或都往同一位置追加的登记点（列表开头／末尾、手动
+   递增的版本号、单行数组）？是否改成一项一个文件、按键排序或从内容推导？
+10. 本次改动每个用户动作会触发几次 `list()`／扫描／IPC／写事务？隐藏／卸载后是否为 0？
+11. 缓存 key 是否包含 owner／revision／query／provider，是否有 TTL／失效路径？
 
 验证按 [`desktop-development.md`](desktop-development.md) 的分层选择：改 TypeScript 至少跑相关
 类型检查与定向测试；改 i18n 跑 `pnpm check:i18n` 与 `pnpm check:i18n-glossary`；跨模块或

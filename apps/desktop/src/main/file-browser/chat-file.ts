@@ -1,3 +1,4 @@
+import { copyFile, writeFile } from 'node:fs/promises';
 /**
  * chat-file.ts — 聊天流文件类交互的远程取回编排(`maker:chat-file:fetch` 的业务体)。
  * ---------------------------------------------------------------------------
@@ -31,8 +32,7 @@ export { toWorkdirRel } from '../../shared/workdirPath.js';
 
 /** 聊天文件取回的远程来源(local 不进本模块——renderer 侧直接走本机路径)。 */
 export type ChatFileOrigin =
-  | { kind: 'device'; deviceId: string }
-  | { kind: 'ssh'; remoteHostId: string };
+  { kind: 'device'; deviceId: string } | { kind: 'ssh'; remoteHostId: string };
 
 export interface ChatFileFetchArgs {
   origin: ChatFileOrigin;
@@ -40,7 +40,14 @@ export interface ChatFileFetchArgs {
   workdir: string;
   /** 目标文件在远端机器上的绝对路径。 */
   absPath: string;
+  /** Local IPC correlation for transfer progress; never forwarded to the remote device. */
+  requestId?: string;
+  /** Optional generated-command evidence window, using timestamps from the owning device. */
+  modifiedWindow?: { startMs: number; endMs: number | null };
 }
+
+/** Bound renderer-provided correlation IDs before repeating them in progress events. */
+export { fileTransferRequestId as chatFileProgressRequestId } from './transfer-progress.js';
 
 /**
  * 返回形态走规则 13 的 `{success}` 例外:失败时 renderer 需要按 code 分流降级
@@ -48,7 +55,11 @@ export interface ChatFileFetchArgs {
  */
 export type ChatFileFetchResult =
   | { ok: true; cachePath: string; stale: boolean; size: number }
-  | { ok: false; code: 'BAD_ARGS' | 'OUTSIDE_WORKDIR' | 'NOT_FOUND' | 'FETCH_FAILED'; message?: string };
+  | {
+      ok: false;
+      code: 'BAD_ARGS' | 'OUTSIDE_WORKDIR' | 'NOT_FOUND' | 'FETCH_FAILED';
+      message?: string;
+    };
 
 /** 远端 stat 结果(file-service 与 device-op statEntry 同形投影)。 */
 export interface ChatFileStat {
@@ -74,15 +85,25 @@ export interface ChatFileDeps {
       deviceId?: string | null;
     },
     onProgress: FetchProgressFn,
+    signal?: AbortSignal,
   ): Promise<string>;
   /** device workdir 外:被控端 media:fetch(任意绝对路径上 OSS)。 */
-  deviceMediaFetch(deviceId: string, url: string): Promise<{ ossKey: string; size: number }>;
+  deviceMediaFetch(
+    deviceId: string,
+    url: string,
+    signal?: AbortSignal,
+    onProgress?: FetchProgressFn,
+  ): Promise<
+    | { ossKey: string; size: number; inlineBase64?: string }
+    | { ossKey: string; size: number; path: string; dispose(): Promise<void> }
+  >;
   /** OSS 对象流式直下到本地文件。 */
   downloadToFile(
     key: string,
     destPath: string,
     expected?: undefined,
     onProgress?: (downloadedBytes: number) => void,
+    signal?: AbortSignal,
   ): Promise<void>;
   /** 用后删 OSS 对象(best-effort)。 */
   removeRemote(key: string): void;
@@ -123,6 +144,26 @@ export async function statChatFile(
 ): Promise<ChatFileStatVerdict> {
   const { origin, workdir, absPath } = args ?? ({} as ChatFileFetchArgs);
   if (!workdir || !absPath || !origin) return 'nonfile';
+  const window = args.modifiedWindow;
+  if (
+    window &&
+    (!Number.isFinite(window.startMs) ||
+      (window.endMs !== null && (!Number.isFinite(window.endMs) || window.endMs <= window.startMs)))
+  ) {
+    return 'nonfile';
+  }
+  const verdictFor = (stat: ChatFileStat): ChatFileStatVerdict => {
+    if (
+      window &&
+      (stat.type !== 'file' ||
+        !Number.isFinite(stat.mtimeMs) ||
+        stat.mtimeMs < window.startMs ||
+        (window.endMs !== null && stat.mtimeMs >= window.endMs))
+    ) {
+      return 'nonfile';
+    }
+    return stat.type === 'file' ? 'file' : stat.type === 'directory' ? 'directory' : 'nonfile';
+  };
   const relPath = toWorkdirRel(workdir, absPath);
   if (origin.kind === 'ssh') {
     if (!origin.remoteHostId) return 'nonfile';
@@ -130,7 +171,7 @@ export async function statChatFile(
     if (!relPath) return 'nonfile';
     try {
       const stat = await deps.sshStat(origin.remoteHostId, workdir, relPath);
-      return stat.type === 'file' ? 'file' : stat.type === 'directory' ? 'directory' : 'nonfile';
+      return verdictFor(stat);
     } catch (err) {
       return classifyStatError(err);
     }
@@ -141,7 +182,7 @@ export async function statChatFile(
   if (!relPath) return 'unknown';
   try {
     const stat = await deps.deviceStat(origin.deviceId, workdir, relPath);
-    return stat.type === 'file' ? 'file' : stat.type === 'directory' ? 'directory' : 'nonfile';
+    return verdictFor(stat);
   } catch (err) {
     return classifyStatError(err);
   }
@@ -153,6 +194,8 @@ async function staleFallback(
   id: Pick<RemoteFileIdentity, 'transport' | 'endpointId' | 'workdir' | 'relPath'>,
   err: unknown,
 ): Promise<ChatFileFetchResult> {
+  if (String(err).includes('FILE_PEER_CANCELLED'))
+    return { ok: false, code: 'FETCH_FAILED', message: String(err) };
   const stalePath = await deps.findStale(id).catch(() => null);
   if (stalePath) return { ok: true, cachePath: stalePath, stale: true, size: -1 };
   return { ok: false, code: 'FETCH_FAILED', message: String(err) };
@@ -166,6 +209,8 @@ export async function fetchChatFile(
   args: ChatFileFetchArgs,
   onProgress: FetchProgressFn,
   deps: ChatFileDeps,
+  /** 调用方放弃(如下载的发起窗口已关闭)时中止取回;取消不走历史副本兜底。 */
+  signal?: AbortSignal,
 ): Promise<ChatFileFetchResult> {
   const { origin, workdir, absPath } = args ?? ({} as ChatFileFetchArgs);
   if (
@@ -201,12 +246,23 @@ export async function fetchChatFile(
     if (stat.type !== 'file') return { ok: false, code: 'NOT_FOUND' };
     try {
       const cachePath = await deps.fetchBigFile(
-        { workdir, relPath, size: stat.size, mtimeMs: stat.mtimeMs, remoteHostId: origin.remoteHostId },
+        {
+          workdir,
+          relPath,
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+          remoteHostId: origin.remoteHostId,
+        },
         onProgress,
+        signal,
       );
       return { ok: true, cachePath, stale: false, size: stat.size };
     } catch (err) {
-      return staleFallback(deps, { transport: 'ssh', endpointId: origin.remoteHostId, workdir, relPath }, err);
+      return staleFallback(
+        deps,
+        { transport: 'ssh', endpointId: origin.remoteHostId, workdir, relPath },
+        err,
+      );
     }
   }
 
@@ -231,10 +287,15 @@ export async function fetchChatFile(
       const cachePath = await deps.fetchBigFile(
         { workdir, relPath, size: stat.size, mtimeMs: stat.mtimeMs, deviceId: origin.deviceId },
         onProgress,
+        signal,
       );
       return { ok: true, cachePath, stale: false, size: stat.size };
     } catch (err) {
-      return staleFallback(deps, { transport: 'device', endpointId: origin.deviceId, workdir, relPath }, err);
+      return staleFallback(
+        deps,
+        { transport: 'device', endpointId: origin.deviceId, workdir, relPath },
+        err,
+      );
     }
   }
 
@@ -258,23 +319,52 @@ export async function fetchChatFile(
   let uploadedKey: string | null = null;
   let consumed = false;
   try {
-    const fetched = await deps.deviceMediaFetch(origin.deviceId, buildDevicePathUrl(absPath));
+    const fetched = await deps.deviceMediaFetch(
+      origin.deviceId,
+      buildDevicePathUrl(absPath),
+      signal,
+      onProgress,
+    );
+    if ('path' in fetched || fetched.inlineBase64 !== undefined) {
+      try {
+        const cachePath = await deps.fetchToCache(
+          { ...identity, size: fetched.size },
+          async (dest, progress) => {
+            if ('path' in fetched) await copyFile(fetched.path, dest);
+            else await writeFile(dest, Buffer.from(fetched.inlineBase64!, 'base64'));
+            progress(fetched.size, fetched.size);
+          },
+          onProgress,
+          signal,
+        );
+        return { ok: true, cachePath, stale: false, size: fetched.size };
+      } finally {
+        if ('path' in fetched) await fetched.dispose();
+      }
+    }
     uploadedKey = fetched.ossKey;
     const cachePath = await deps.fetchToCache(
       { ...identity, size: fetched.size },
-      async (dest, progress) => {
+      async (dest, progress, transferSignal) => {
         consumed = true;
         progress(0, fetched.size);
         try {
-          await deps.downloadToFile(fetched.ossKey, dest, undefined, (downloaded) => {
-            progress(Math.min(downloaded, fetched.size), fetched.size);
-          });
+          await deps.downloadToFile(
+            fetched.ossKey,
+            dest,
+            undefined,
+            (downloaded) => {
+              progress(Math.min(downloaded, fetched.size), fetched.size);
+            },
+            transferSignal,
+          );
           progress(fetched.size, fetched.size);
         } finally {
           deps.removeRemote(fetched.ossKey);
         }
       },
       onProgress,
+      signal,
     );
     if (!consumed) deps.removeRemote(fetched.ossKey);
     return { ok: true, cachePath, stale: false, size: fetched.size };

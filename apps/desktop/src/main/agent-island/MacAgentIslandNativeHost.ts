@@ -57,6 +57,8 @@ export interface AgentIslandNativeScreenMetrics {
   displayId: number;
   frame: Rectangle;
   hasNotch: boolean;
+  /** Older helpers omit it; parsed as false. */
+  hasSystemIsland: boolean;
   notchWidth: number;
   topBarHeight: number;
   menuBarHeight: number;
@@ -68,7 +70,9 @@ export interface AgentIslandNativeScreenMetrics {
 interface MacAgentIslandNativeHostOptions {
   onPointerZones: (zones: { menuBar: boolean; panel: boolean; displayId?: number | null }) => void;
   onExpand: (displayId?: number | null) => void;
+  onCollapse: (displayId?: number | null) => void;
   onFocusSession: (sessionId: string) => void;
+  onCompletionAction?: (sessionId: string, action: 'mark-read' | 'archive', completionToken: string) => Promise<boolean>;
   onOpenSettings: () => void;
   onNewMessage: () => void;
   onToggleSound: () => void;
@@ -120,6 +124,7 @@ type NativePayload = {
   panel?: unknown;
   sessionId?: unknown;
   requestId?: unknown;
+  completionToken?: unknown;
   action?: unknown;
   active?: unknown;
   centerXRatio?: unknown;
@@ -171,6 +176,11 @@ export class MacAgentIslandNativeHost {
 
   get failed(): boolean {
     return this.permanentlyFailed;
+  }
+
+  /** A buffered publish during startup is not delivery to a native window. */
+  get available(): boolean {
+    return this.ready && this.child !== null && !this.permanentlyFailed;
   }
 
   publish(
@@ -499,8 +509,34 @@ export class MacAgentIslandNativeHost {
       return;
     }
 
+    if (payload.type === 'collapse' && this.child === child) {
+      this.options.onCollapse(typeof payload.displayId === 'number' ? payload.displayId : null);
+      return;
+    }
+
     if (payload.type === 'focus-session' && this.child === child && typeof payload.sessionId === 'string') {
       this.options.onFocusSession(payload.sessionId);
+      return;
+    }
+
+    if (
+      payload.type === 'completion-action' && this.child === child
+      && typeof payload.sessionId === 'string' && payload.sessionId.length > 0
+      && (payload.action === 'mark-read' || payload.action === 'archive')
+      && typeof payload.completionToken === 'string' && payload.completionToken.length > 0 && payload.completionToken.length <= 128
+    ) {
+      const { sessionId, action, requestId, completionToken } = payload;
+      const reply = (success: boolean): void => {
+        if (this.child !== child || typeof requestId !== 'string') return;
+        try {
+          child.stdin.write(`${JSON.stringify({ type: 'completion-action-result', requestId, success })}\n`);
+        } catch (error) {
+          log.warn('failed to send completion action result', { error });
+        }
+      };
+      void Promise.resolve()
+        .then(() => this.options.onCompletionAction?.(sessionId, action, completionToken) ?? false)
+        .then(reply, () => reply(false));
       return;
     }
 
@@ -716,6 +752,7 @@ function parseNativeScreenMetrics(input: unknown): AgentIslandNativeScreenMetric
       displayId: record.displayId,
       frame,
       hasNotch: record.hasNotch,
+      hasSystemIsland: record.hasSystemIsland === true,
       notchWidth: record.notchWidth,
       topBarHeight: record.topBarHeight,
       menuBarHeight: record.menuBarHeight,
@@ -779,7 +816,9 @@ async function buildDevMacAgentIslandHelper(): Promise<void> {
     return;
   }
   fs.mkdirSync(path.dirname(binary), { recursive: true });
-  await execFilePromise('swiftc', [source, '-O', '-o', binary], 20_000);
+  // Cold -O compile of the single-file helper is ~20s+ on this machine;
+  // a 20s cap kills the first build and permanently hides the island.
+  await execFilePromise('swiftc', [source, '-O', '-o', binary], 120_000);
   fs.chmodSync(binary, 0o755);
   fs.writeFileSync(hashFile, `${sourceHash}\n`, 'utf8');
   log.info('built dev macOS agent island helper', { path: binary });

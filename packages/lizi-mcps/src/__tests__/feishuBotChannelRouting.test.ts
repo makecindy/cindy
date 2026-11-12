@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   createFeishuBotMcpServer,
+  FEISHU_HOOK_SESSION_CHANNEL_NOTE,
   SLACK_HOOK_SESSION_CHANNEL_NOTE,
   TELEGRAM_HOOK_SESSION_CHANNEL_NOTE,
   X_HOOK_SESSION_CHANNEL_NOTE,
@@ -89,7 +90,7 @@ describe('cindy_feishu_bot channel routing note', () => {
       '正文可以使用标题、列表、表格、普通段落或代码块组织内容,发布时会转换为纯文本;附件引用不受此限制',
     );
     expect(X_HOOK_SESSION_CHANNEL_NOTE).toContain('xdt-file:///绝对路径');
-    expect(X_HOOK_SESSION_CHANNEL_NOTE).toContain('cindy-media://… 或 xdt-image://…');
+    expect(X_HOOK_SESSION_CHANNEL_NOTE).toContain('本机图片绝对路径或 cindy-media://…');
     expect(X_HOOK_SESSION_CHANNEL_NOTE).toContain('不要解释或复述这些格式要求');
     expect(X_HOOK_SESSION_CHANNEL_NOTE).not.toContain('X (Twitter)');
     expect(X_HOOK_SESSION_CHANNEL_NOTE).not.toContain('公开回帖');
@@ -100,6 +101,8 @@ describe('cindy_feishu_bot channel routing note', () => {
     ['telegram', TELEGRAM_HOOK_SESSION_CHANNEL_NOTE],
     ['wecom', WECOM_SESSION_CHANNEL_NOTE],
     ['x', X_HOOK_SESSION_CHANNEL_NOTE],
+    // 官方飞书 hook 会话: 不得像个人飞书会话那样不带提示(否则「发给我」会被路由到个人 bot)。
+    ['feishu-hook', FEISHU_HOOK_SESSION_CHANNEL_NOTE],
   ] as const)(
     '%s description === base description + fixed note, for every tool',
     async (source, note) => {
@@ -131,10 +134,33 @@ describe('cindy_feishu_bot channel routing note', () => {
         expect(description).not.toContain(TELEGRAM_HOOK_SESSION_CHANNEL_NOTE.trim());
         expect(description).not.toContain(WECOM_SESSION_CHANNEL_NOTE.trim());
         expect(description).not.toContain(X_HOOK_SESSION_CHANNEL_NOTE.trim());
+        expect(description).not.toContain(FEISHU_HOOK_SESSION_CHANNEL_NOTE.trim());
       }
     } finally {
       await feishu.cleanup();
       await base.cleanup();
+    }
+  });
+});
+
+
+describe('Feishu notification delivery result', () => {
+  it('reports delivered-but-unlinked as success with a no-resend warning and receipt', async () => {
+    const deps = makeDeps();
+    deps.sendMessage = vi.fn(async () => ({ ok: true, messageId: 'om_sent', sessionLinked: false }));
+    const harness = await makeHarness(deps);
+    try {
+      const result = await harness.client.callTool({
+        name: 'call_tool', arguments: { name: 'send_message_to_user', args: { text: 'done' } },
+      });
+      const content = result.content as Array<{ text?: string }>;
+      const payload = JSON.parse(content[0].text!);
+      expect(result.isError).not.toBe(true);
+      expect(payload).toMatchObject({ ok: true, messageId: 'om_sent', sessionLinked: false });
+      expect(payload.warning).toContain('不要重新发送');
+      expect(deps.sendMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      await harness.cleanup();
     }
   });
 });

@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { ModelAccessStatus } from '../../../shared/modelAccess.js';
 
 import {
   buildModelsSyncRequest,
+  cindyAutoModelIdsChanged,
   ensureCredentialsReadyForModelsRefresh,
+  modelsWithoutStalePaymentUpsell,
   parseModelsSyncPayload,
+  shouldPreservePaymentRequiredRoutes,
   withModelsSyncOverallDeadline,
   waitForModelsSyncRefresh,
   XD_MODELS_SYNC_TIMEOUT_MS,
@@ -11,6 +15,39 @@ import {
 } from '../modelsSyncRefresh.js';
 
 describe('parseModelsSyncPayload', () => {
+  it.each(['available', 'requires_payment'] as const)(
+    'accepts standalone speech from the opted-in v5 catalog (%s)',
+    (availability) => {
+      const model = {
+        id: 'speech-from-gateway', name: 'Gateway Speech', mode: 'audio_speech',
+        currency: 'USD', agents: [], availability,
+        inputCostPerCharacter: 0.00001, outputCostPerAudioToken: 0.00002,
+        modalities: { input: ['text'], output: ['audio'] },
+      };
+      expect(parseModelsSyncPayload({ schemaVersion: 5, accountTier: 'free', models: [model] }))
+        .toEqual({ ok: true, accountTier: 'free', models: [model] });
+    },
+  );
+
+  it('accepts quote removal or an unsupported quote as a successful replacement', () => {
+    const model = {
+      id: 'example-video', name: 'Example Video', mode: 'video_generation',
+      currency: 'USD', agents: [], availability: 'available',
+    };
+    // Unit contract: refresh must preserve an optional summary, not only the existing table.
+    const quote = { items: [{ label: 'Output', price: 0.5, unit: 'second', quantity: 1 }], summary: {
+      output: [{ price: 6, maxPrice: 10, unit: 'token', quantity: 1000000, tier: '480P/720P', component: 'video' }],
+    } };
+    const response = { schemaVersion: 5, accountTier: 'paid', models: [{ ...model, displayPricing: quote }] };
+    expect(parseModelsSyncPayload(response)).toMatchObject({ ok: true, models: [{ displayPricing: quote }] });
+    expect(parseModelsSyncPayload({ ...response, models: [{ ...model, displayPricing: { ...quote, summary: { output: [] } } }] }))
+      .toMatchObject({ ok: true, models: [{ displayPricing: { items: quote.items } }] });
+    for (const displayPricing of [undefined, null, { items: [] }, { items: [{ ...quote.items[0], priceType: 'future' }] }]) {
+      expect(parseModelsSyncPayload({ ...response, models: [{ ...model, displayPricing }] }))
+        .toEqual({ ok: true, accountTier: 'paid', models: [model] });
+    }
+  });
+
   const baseModel = {
     id: 'deepseek/deepseek-v4-pro',
     name: 'DeepSeek V4 Pro',
@@ -22,13 +59,13 @@ describe('parseModelsSyncPayload', () => {
     modalities: { input: ['text'], output: ['text'] },
   };
 
-  it('does not downgrade a v3 sync request to a v1 response', () => {
+  it('does not downgrade a v5 sync request to a v1 response', () => {
     expect(parseModelsSyncPayload({ schemaVersion: 1, models: [baseModel] })).toMatchObject({
       ok: false,
     });
   });
 
-  it('does not downgrade a v3 sync request to a v2 response', () => {
+  it('does not downgrade a v5 sync request to a v2 response', () => {
     const model = {
       ...baseModel,
       newSessionDefault: ['claude-code', 'codex'] as const,
@@ -58,15 +95,17 @@ describe('parseModelsSyncPayload', () => {
     expect(parseModelsSyncPayload({ schemaVersion: 2, models: [legacyModel] })).toMatchObject({
       ok: false,
     });
-    expect(parseModelsSyncPayload({ schemaVersion: 2, models: [modelWithOverride] })).toMatchObject({
-      ok: false,
-    });
+    expect(parseModelsSyncPayload({ schemaVersion: 2, models: [modelWithOverride] })).toMatchObject(
+      {
+        ok: false,
+      },
+    );
   });
 
   it.each([
     {
       label: 'unknown schema version',
-      payload: { schemaVersion: 4, models: [baseModel] },
+      payload: { schemaVersion: 6, models: [baseModel] },
       errorPath: 'response.schemaVersion',
     },
     {
@@ -103,6 +142,29 @@ describe('parseModelsSyncPayload', () => {
     },
   );
 
+  it('accepts a new vendor and icon within v5 but rejects unversioned new fields', () => {
+    const futureModel = {
+      ...baseModel,
+      id: 'new-labs/new-family-9',
+      name: 'New Family 9',
+      icon: 'future-brand',
+      availability: 'available',
+      perAgent: {
+        'claude-code': { wireProtocol: 'anthropic-messages' },
+        codex: { wireProtocol: 'openai-responses' },
+      },
+    };
+    const envelope = { schemaVersion: 5, accountTier: 'paid', models: [futureModel] };
+    expect(parseModelsSyncPayload(envelope)).toMatchObject({ ok: true, models: [futureModel] });
+    const changedContract = parseModelsSyncPayload({
+      ...envelope,
+      models: [{ ...futureModel, createdAt: '2026-09-05T00:00:00Z' }],
+    });
+    expect(changedContract.ok).toBe(false);
+    if (!changedContract.ok) expect(changedContract.error).toContain('createdAt');
+    expect(envelope.models).toEqual([futureModel]);
+  });
+
   it('leaves the caller-owned last-known-good snapshot untouched on rejection', () => {
     const lastKnownGood = [{ id: 'last-known-model' }];
     const parsed = parseModelsSyncPayload({ schemaVersion: 99, models: [] });
@@ -112,49 +174,90 @@ describe('parseModelsSyncPayload', () => {
     expect(lastKnownGood).toEqual([{ id: 'last-known-model' }]);
   });
 
-  it('reads v3 Pi routing and filters future agent kinds without rejecting the catalog', () => {
-    const payload = {
-      schemaVersion: 3,
-      models: [
-        {
-          ...baseModel,
-          agents: ['claude-code', 'codex', 'pi', 'future-agent'],
-          newSessionDefault: ['pi', 'future-agent'],
-          perAgent: {
-            'claude-code': { wireProtocol: 'anthropic-messages' },
-            codex: { wireProtocol: 'openai-responses' },
-            pi: { wireProtocol: 'openai-responses' },
-            'future-agent': { arbitrary: true },
+  it.each([
+    'anthropic-messages',
+    'openai-responses',
+    'openai-completions',
+    'google-generative-ai',
+  ] as const)(
+    'reads v5 Pi %s routing and filters future agent kinds without rejecting the catalog',
+    (piWireProtocol) => {
+      const payload = {
+        schemaVersion: 5,
+        accountTier: 'free',
+        models: [
+          {
+            ...baseModel,
+            availability: 'requires_payment',
+            agents: ['claude-code', 'codex', 'pi', 'future-agent'],
+            newSessionDefault: ['pi', 'future-agent'],
+            perAgent: {
+              'claude-code': { wireProtocol: 'anthropic-messages' },
+              codex: { wireProtocol: 'openai-responses' },
+              pi: { wireProtocol: piWireProtocol },
+              'future-agent': { arbitrary: true },
+            },
           },
-        },
-      ],
-    };
+        ],
+      };
 
-    expect(parseModelsSyncPayload(payload)).toEqual({
-      ok: true,
-      models: [
-        {
-          ...baseModel,
-          agents: ['claude-code', 'codex', 'pi'],
-          newSessionDefault: ['pi'],
-          perAgent: {
-            'claude-code': { wireProtocol: 'anthropic-messages' },
-            codex: { wireProtocol: 'openai-responses' },
-            pi: { wireProtocol: 'openai-responses' },
+      expect(parseModelsSyncPayload(payload)).toEqual({
+        ok: true,
+        accountTier: 'free',
+        models: [
+          {
+            ...baseModel,
+            availability: 'requires_payment',
+            agents: ['claude-code', 'codex', 'pi'],
+            newSessionDefault: ['pi'],
+            perAgent: {
+              'claude-code': { wireProtocol: 'anthropic-messages' },
+              codex: { wireProtocol: 'openai-responses' },
+              pi: { wireProtocol: piWireProtocol },
+            },
           },
-        },
-      ],
-    });
+        ],
+      });
+    },
+  );
+});
+
+describe('modelsWithoutStalePaymentUpsell', () => {
+  it('保留旧快照中的可执行模型，但移除已无法在线确认的付费锁定行', () => {
+    expect(modelsWithoutStalePaymentUpsell([
+      { id: 'available', currency: 'CNY', agents: [], availability: 'available' },
+      { id: 'locked', currency: 'CNY', agents: [], availability: 'requires_payment' },
+    ])).toEqual([
+      { id: 'available', currency: 'CNY', agents: [], availability: 'available' },
+    ]);
+  });
+});
+
+describe('shouldPreservePaymentRequiredRoutes', () => {
+  const status = (state: ModelAccessStatus['state']): ModelAccessStatus => ({
+    state,
+    source: null,
+    endpoint: null,
+    accountTier: null,
+  });
+
+  it('只在同账号凭据临时失败时保留付费拒绝快照', () => {
+    expect(shouldPreservePaymentRequiredRoutes(status('failed'))).toBe(true);
+    expect(shouldPreservePaymentRequiredRoutes(status('disabled'))).toBe(false);
+    expect(shouldPreservePaymentRequiredRoutes(status('unsupported'))).toBe(false);
+    expect(shouldPreservePaymentRequiredRoutes(status('idle'))).toBe(false);
   });
 });
 
 describe('waitForModelsSyncRefresh', () => {
   it('gives the shared XD model-list request a finite deadline', () => {
     expect(buildModelsSyncRequest('https://model-access.example.com')).toEqual({
-      path: '/api/model-access/models?schemaVersion=3',
+      path: '/api/model-access/models?schemaVersion=5',
       options: {
         baseUrl: 'https://model-access.example.com',
         timeoutMs: 20_000,
+        cache: 'no-store',
+        headers: { 'X-Cindy-Model-Capabilities': 'audio_speech,display_pricing' },
       },
     });
     expect(Number.isFinite(XD_MODELS_SYNC_TIMEOUT_MS)).toBe(true);
@@ -204,6 +307,7 @@ describe('waitForModelsSyncRefresh', () => {
         state: 'failed' as const,
         source: null,
         endpoint: null,
+        accountTier: null,
       };
     });
     const status = await ensureCredentialsReadyForModelsRefresh({
@@ -211,6 +315,7 @@ describe('waitForModelsSyncRefresh', () => {
         state: 'ok',
         source: 'server',
         endpoint: 'https://gateway.example.com',
+        accountTier: null,
       }),
       retry,
     });
@@ -220,6 +325,7 @@ describe('waitForModelsSyncRefresh', () => {
     await expect(
       waitForModelsSyncRefresh({
         expectedGeneration: 3,
+        minimumAttempt: 9,
         schedule: vi.fn(),
         snapshot: () => ({ flight: Promise.resolve(), generation: 3, attempt: 9 }),
         currentGeneration: () => 3,
@@ -234,11 +340,17 @@ describe('waitForModelsSyncRefresh', () => {
       state: 'ok' as const,
       source: 'server' as const,
       endpoint: 'https://gateway.example.com',
+      accountTier: null,
     }));
 
     await expect(
       ensureCredentialsReadyForModelsRefresh({
-        getStatus: () => ({ state: 'failed', source: null, endpoint: null }),
+        getStatus: () => ({
+          state: 'failed',
+          source: null,
+          endpoint: null,
+          accountTier: null,
+        }),
         retry,
       }),
     ).resolves.toMatchObject({ state: 'ok' });
@@ -258,6 +370,7 @@ describe('waitForModelsSyncRefresh', () => {
     await expect(
       waitForModelsSyncRefresh({
         expectedGeneration: 2,
+        minimumAttempt: 5,
         schedule: () => {
           if (scheduleCalls > 0) index = 1;
           scheduleCalls += 1;
@@ -269,6 +382,37 @@ describe('waitForModelsSyncRefresh', () => {
     ).resolves.toBe('succeeded');
   });
 
+  it('waits through a same-account prepayment flight and requires a newer attempt', async () => {
+    let resolveOldFlight!: () => void;
+    const oldFlight = new Promise<void>((resolve) => {
+      resolveOldFlight = resolve;
+    });
+    const newFlight = Promise.resolve();
+    let snapshot: ModelsSyncFlightSnapshot = {
+      flight: oldFlight,
+      generation: 4,
+      attempt: 8,
+    };
+    let scheduleCalls = 0;
+    const outcome = waitForModelsSyncRefresh({
+      expectedGeneration: 4,
+      minimumAttempt: 9,
+      schedule: () => {
+        if (scheduleCalls > 0) {
+          snapshot = { flight: newFlight, generation: 4, attempt: 9 };
+        }
+        scheduleCalls += 1;
+      },
+      snapshot: () => snapshot,
+      currentGeneration: () => 4,
+      lastSuccessfulAttempt: () => 9,
+    });
+
+    resolveOldFlight();
+    await expect(outcome).resolves.toBe('succeeded');
+    expect(scheduleCalls).toBe(2);
+  });
+
   it('stops instead of following a new account when auth changes in flight', async () => {
     let resolveFlight!: () => void;
     const flight = new Promise<void>((resolve) => {
@@ -277,6 +421,7 @@ describe('waitForModelsSyncRefresh', () => {
     let generation = 7;
     const outcome = waitForModelsSyncRefresh({
       expectedGeneration: 7,
+      minimumAttempt: 3,
       schedule: vi.fn(),
       snapshot: () => ({ flight, generation: 7, attempt: 3 }),
       currentGeneration: () => generation,
@@ -292,11 +437,34 @@ describe('waitForModelsSyncRefresh', () => {
     await expect(
       waitForModelsSyncRefresh({
         expectedGeneration: 3,
+        minimumAttempt: 9,
         schedule: vi.fn(),
         snapshot: () => ({ flight: Promise.resolve(), generation: 3, attempt: 9 }),
         currentGeneration: () => 3,
         lastSuccessfulAttempt: () => 8,
       }),
     ).resolves.toBe('failed');
+  });
+});
+
+describe('cindyAutoModelIdsChanged', () => {
+  const ids = (...values: string[]) => values.map((id) => ({ id }));
+
+  it('号池 → 平台：Cindy AI 列表新增 Auto 算变化', () => {
+    expect(cindyAutoModelIdsChanged(ids('p1'), ids('p1', 'auto/group-a'))).toBe(true);
+  });
+
+  it('平台 → 号池：Cindy AI 列表移除 Auto 算变化', () => {
+    expect(cindyAutoModelIdsChanged(ids('auto/group-a', 'p1'), ids('p1'))).toBe(true);
+  });
+
+  it('负向：只有普通模型变化、顺序变化或形似 auto 的 ID 不算', () => {
+    expect(cindyAutoModelIdsChanged(ids('auto/group-a', 'p1'), ids('p2', 'auto/group-a'))).toBe(
+      false,
+    );
+    expect(cindyAutoModelIdsChanged(ids('autopilot', 'vendor/auto'), ids('automation'))).toBe(
+      false,
+    );
+    expect(cindyAutoModelIdsChanged([], [])).toBe(false);
   });
 });

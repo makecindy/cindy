@@ -13,17 +13,22 @@
  * refresh 会把数组里旧的 CustomMcpProvider 全部移除、按当前 DB 重新追加。
  */
 
+import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { createLogger } from '../logger.js';
 import type { McpProvider } from '@cindy/maker-core';
 
 import {
   isUnsafeMcpServerId,
-  listCustomMcpServers,
   validateCustomMcpConfig,
 } from '../maker-host/custom-mcp-store.js';
-import { readCustomMcpToken } from '../secrets/providerSecretStore.js';
 import { CustomMcpProvider } from './custom-mcp-provider.js';
 
+export function createCustomMcpRegistry(ports: {
+  listCustomMcpServers: ReturnType<typeof import('../maker-host/custom-mcp-store.js').createCustomMcpStore>['listCustomMcpServers'];
+  readCustomMcpToken(id: string): string | null;
+  createAppServerProxy: ReturnType<typeof import('../mcp-apps/serverProxy.js').createAppServerProxyFactory>;
+} & Pick<ReturnType<typeof import('../mcp-apps/runtimeCore.js').createMcpAppsRuntime>, 'registerAppServer' | 'resetAppServers' | 'clearAppServerConfigs'>) {
+const { listCustomMcpServers, readCustomMcpToken, createAppServerProxy, registerAppServer, resetAppServers, clearAppServerConfigs } = ports;
 const log = createLogger('custom-mcp-registry');
 
 /** 被注入的 agent mcpProviders 数组(原地 mutate 的目标)。 */
@@ -33,15 +38,16 @@ const registeredArrays: McpProvider[][] = [];
  * 注册一个 agent 的 mcpProviders 数组,后续 refresh 会原地更新它。
  * 传入的必须是 agent 实例实际持有的那个数组引用(不能是 spread 拷贝)。
  */
-export function registerCustomMcpArrays(...arrays: McpProvider[][]): void {
+function registerCustomMcpArrays(...arrays: McpProvider[][]): void {
   for (const arr of arrays) {
     if (!registeredArrays.includes(arr)) registeredArrays.push(arr);
   }
 }
 
 /** 清空注册表（切账号 / resetMaker 时调用，防止旧数组引用残留）。 */
-export function resetCustomMcpRegistry(): void {
+function resetCustomMcpRegistry(): void {
   registeredArrays.length = 0;
+  resetAppServers();
 }
 
 /**
@@ -50,7 +56,7 @@ export function resetCustomMcpRegistry(): void {
  * 从已注册数组里实际存在的 provider 派生，而不是硬编码一份名单：内置 provider 增删
  * 时这里自动跟上，不会漏掉新 server 而让保留名校验形同虚设。
  */
-export function getBuiltinMcpServerNames(): string[] {
+function getBuiltinMcpServerNames(): string[] {
   const names = new Set<string>();
   for (const arr of registeredArrays) {
     for (const provider of arr) {
@@ -61,19 +67,31 @@ export function getBuiltinMcpServerNames(): string[] {
   return [...names];
 }
 
+/** Read current rows using the same admission rules as provider registration. */
+async function listRegistrableCustomMcpServers() {
+  const configs = await listCustomMcpServers();
+  const reservedIds = getBuiltinMcpServerNames();
+  return configs.filter(config => validateCustomMcpConfig(config, reservedIds).ok);
+}
+
 /** @deprecated 测试别名，直接用 resetCustomMcpRegistry。 */
-export const __resetCustomMcpRegistryForTest = resetCustomMcpRegistry;
+const __resetCustomMcpRegistryForTest = resetCustomMcpRegistry;
 
 /**
  * 读 DB → 重建 CustomMcpProvider[] → 原地更新每个已注册数组
  * (移除旧 CustomMcpProvider,追加新的)。任何一步失败只 warn,不抛。
  */
-export async function refreshCustomMcpProviders(): Promise<void> {
+async function refreshCustomMcpProviders(): Promise<void> {
+  // Maker may be constructed before localDb. onReady refreshes again before
+  // publishing account-provider readiness; a missing DB is not an empty registry.
+  const owner = getCurrentDbClientSnapshot();
+  if (!owner) return;
   let providers: CustomMcpProvider[] = [];
   // 按名字去重统计：同一个撞名配置会在每个已注册数组各命中一次，累加会虚报。
   const skippedNames = new Set<string>();
   try {
     const configs = await listCustomMcpServers();
+    if (getCurrentDbClientSnapshot() !== owner) return;
     const reservedIds = getBuiltinMcpServerNames();
     providers = configs.flatMap((config) => {
       const validation = validateCustomMcpConfig(config, reservedIds);
@@ -88,7 +106,8 @@ export async function refreshCustomMcpProviders(): Promise<void> {
         skippedNames.add(serverName);
         return [];
       }
-      return [new CustomMcpProvider(config, readCustomMcpToken)];
+      const provider = new CustomMcpProvider(config, readCustomMcpToken, createAppServerProxy);
+      return [provider];
     });
   } catch (err) {
     log.warn('list custom mcp servers failed; leaving providers unchanged', {
@@ -96,6 +115,9 @@ export async function refreshCustomMcpProviders(): Promise<void> {
     });
     return;
   }
+  // Saved endpoint changes revoke open Views, while existing Agent calls retain their snapshot.
+  clearAppServerConfigs();
+  for (const provider of providers) registerAppServer(provider.name, () => provider.appServerConfig());
   for (const arr of registeredArrays) {
     // 原地移除旧的 custom provider,再追加新的一批(不换数组引用)。
     for (let i = arr.length - 1; i >= 0; i--) {
@@ -138,4 +160,7 @@ export async function refreshCustomMcpProviders(): Promise<void> {
     skipped: skippedNames.size,
     arrays: registeredArrays.length,
   });
+}
+
+return { registerCustomMcpArrays, resetCustomMcpRegistry, getBuiltinMcpServerNames, listRegistrableCustomMcpServers, refreshCustomMcpProviders, __resetCustomMcpRegistryForTest };
 }

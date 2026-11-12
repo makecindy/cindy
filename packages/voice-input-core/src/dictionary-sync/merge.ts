@@ -180,7 +180,17 @@ export function mergeSyncStates(
     else suppressed[key] = left ?? right;
   }
 
-  return { version: VOICE_DICTIONARY_SYNC_VERSION, records, suppressed };
+  const state: VoiceDictionarySyncState = { version: VOICE_DICTIONARY_SYNC_VERSION, records, suppressed };
+  if (a.mutationVector !== undefined || b.mutationVector !== undefined) {
+    const vector = createDictionaryMap<HlcTimestamp>();
+    for (const input of [a.mutationVector, b.mutationVector]) {
+      for (const [nodeId, stamp] of Object.entries(input ?? {})) {
+        vector[nodeId] = vector[nodeId] === undefined ? stamp : maxHlc(vector[nodeId], stamp);
+      }
+    }
+    state.mutationVector = vector;
+  }
+  return state;
 }
 
 /** 合并多份状态(设备上线时一次性收敛)。空数组返回空状态。 */
@@ -221,6 +231,7 @@ export function buildStateVersionVector(state: VoiceDictionarySyncState): Record
     for (const stamp of Object.values(record.tombstones)) observe(stamp);
   }
   for (const suppression of Object.values(state.suppressed)) observe(suppression.stamp);
+  for (const stamp of Object.values(state.mutationVector ?? {})) observe(stamp);
   // 原样返回无原型字典 —— 展开成 `{...vector}` 会把 Object.prototype 装回去,而
   // nodeId 是可以长成 `__proto__` / `constructor` 的(`isCanonicalHlc` 只要求它非空
   // 且不含 '.'),那样包含性比较会读到原型链上的值。JSON 序列化不受影响。
@@ -260,5 +271,6 @@ export function findMaxHlc(state: VoiceDictionarySyncState): HlcTimestamp | null
     for (const stamp of Object.values(record.tombstones)) observe(stamp);
   }
   for (const suppression of Object.values(state.suppressed)) observe(suppression.stamp);
+  for (const stamp of Object.values(state.mutationVector ?? {})) observe(stamp);
   return max;
 }

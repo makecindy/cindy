@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Agent as UndiciAgent, ProxyAgent } from 'undici';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { Agent as UndiciAgent, Dispatcher, ProxyAgent } from 'undici';
 
 import { Socks5HttpsAgent, TunnelingHttpsAgent } from '@cindy/anthropic-compat-proxy';
 
@@ -9,6 +11,7 @@ const resolverState = vi.hoisted(() => ({
 
 const undiciState = vi.hoisted(() => ({
   fetch: vi.fn(async () => ({ ok: true, status: 200, headers: new Headers(), body: null })),
+  actualFetch: null as ((...args: unknown[]) => Promise<unknown>) | null,
 }));
 
 /** 造一个 3xx 响应桩(带可取消的 body,验证我们会归还连接)。 */
@@ -48,17 +51,21 @@ vi.mock('../outbound-proxy-resolver.js', () => ({
 // 只替换 fetch:ProxyAgent / Agent 用真实类,断言才能验证选型。
 vi.mock('undici', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
+  undiciState.actualFetch = actual.fetch as (...args: unknown[]) => Promise<unknown>;
   return { ...actual, fetch: (...args: unknown[]) => undiciState.fetch(...(args as [])) };
 });
 
 import {
   createOutboundHttpAgent,
+  createPinnedProxyDispatcher,
+  guardedOutboundFetch,
   outboundFetch,
   outboundUndiciFetch,
   resetOutboundFetchStateForTest,
+  rewritePinnedProxyDispatchOptions,
   resolveConnectOptions,
   resolveOutboundDispatcher,
-} from '../outbound-fetch.js';
+} from '../outbound-fetch.desktop.js';
 
 /** 取包装 dispatcher 对某个目标 URL 实际选中的底层 dispatcher(重定向选路即走这条)。 */
 function pick(dispatcher: unknown, url: string): unknown {
@@ -291,6 +298,260 @@ describe('resolveOutboundDispatcher', () => {
 });
 
 describe('outboundFetch', () => {
+  it('rewrites proxy dial origin to the vetted IP while preserving the original Host', () => {
+    const rewritten = rewritePinnedProxyDispatchOptions(
+      {
+        origin: 'https://api.example.com',
+        path: '/data',
+        method: 'GET',
+        headers: ['accept', 'application/json'],
+      },
+      new URL('https://api.example.com/data'),
+      '2001:db8::1',
+    );
+
+    expect(rewritten.origin).toBe('https://[2001:db8::1]');
+    expect(rewritten.headers).toEqual([
+      'accept',
+      'application/json',
+      'host',
+      'api.example.com',
+    ]);
+  });
+
+  it('fails over between vetted proxy targets only before the request starts', async () => {
+    const dispatchSpy = vi.spyOn(ProxyAgent.prototype, 'dispatch');
+    const controller = {} as Dispatcher.DispatchController;
+    const responseError = vi.fn();
+    let authorizeRetry!: () => void;
+    const retryAuthorization = new Promise<void>((resolve) => {
+      authorizeRetry = resolve;
+    });
+    const beforeRetry = vi.fn(() => retryAuthorization);
+    try {
+      dispatchSpy
+        .mockImplementationOnce((_options, handler) => {
+          handler.onResponseError?.(controller, new Error('first address unreachable'));
+          return true;
+        })
+        .mockImplementationOnce((_options, handler) => {
+          handler.onRequestStart?.(controller, null);
+          handler.onResponseError?.(controller, new Error('request failed after start'));
+          return true;
+        });
+      const dispatcher = createPinnedProxyDispatcher(
+        {
+          kind: 'http',
+          url: 'http://127.0.0.1:7890',
+          hostname: '127.0.0.1',
+          port: 7890,
+        },
+        new URL('https://api.example.com/data'),
+        ['203.0.113.10', '203.0.113.11'],
+        beforeRetry,
+      );
+
+      dispatcher.dispatch(
+        { origin: 'https://api.example.com', path: '/data', method: 'POST', body: 'payload' },
+        { onRequestStart: vi.fn(), onResponseError: responseError },
+      );
+
+      expect(dispatchSpy).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(beforeRetry).toHaveBeenCalledTimes(1));
+      authorizeRetry();
+      await vi.waitFor(() => expect(dispatchSpy).toHaveBeenCalledTimes(2));
+      expect(dispatchSpy.mock.calls.map(([options]) => options.origin)).toEqual([
+        'https://203.0.113.10',
+        'https://203.0.113.11',
+      ]);
+      expect(responseError).toHaveBeenCalledTimes(1);
+      expect(responseError).toHaveBeenCalledWith(
+        controller,
+        expect.objectContaining({ message: 'request failed after start' }),
+      );
+      await dispatcher.close();
+    } finally {
+      dispatchSpy.mockRestore();
+    }
+  });
+
+  it.each([null, undefined])('handles a pre-connect error with controller %s', async (missing) => {
+    const controller = missing as unknown as Dispatcher.DispatchController;
+    const error = new Error('proxy handshake failed');
+    const responseError = vi.fn();
+    const beforeRetry = vi.fn();
+    const spy = vi
+      .spyOn(ProxyAgent.prototype, 'dispatch')
+      .mockImplementation((_options, handler) => {
+        handler.onResponseError?.(controller, error);
+        return true;
+      });
+    const dispatcher = createPinnedProxyDispatcher(
+      { kind: 'http', url: 'http://127.0.0.1:7890', hostname: '127.0.0.1', port: 7890 },
+      new URL('https://cdn.example.com/file'),
+      ['93.184.216.34', '93.184.216.35'],
+      beforeRetry,
+    );
+    try {
+      dispatcher.dispatch(
+        { origin: 'https://cdn.example.com', path: '/file', method: 'GET' },
+        {
+          onResponseError: responseError,
+        },
+      );
+      await vi.waitFor(() => expect(responseError).toHaveBeenCalledWith(controller, error));
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect(beforeRetry).toHaveBeenCalledOnce();
+    } finally {
+      await dispatcher.close();
+      spy.mockRestore();
+    }
+  });
+
+  it('does not retry after cancellation while rechecking a pre-connect failure', async () => {
+    const signalController = new AbortController();
+    const error = new Error('proxy handshake failed');
+    const responseError = vi.fn();
+    const spy = vi
+      .spyOn(ProxyAgent.prototype, 'dispatch')
+      .mockImplementation((_options, handler) => {
+        handler.onResponseError?.(undefined as unknown as Dispatcher.DispatchController, error);
+        return true;
+      });
+    const dispatcher = createPinnedProxyDispatcher(
+      { kind: 'http', url: 'http://127.0.0.1:7890', hostname: '127.0.0.1', port: 7890 },
+      new URL('https://cdn.example.com/file'),
+      ['93.184.216.34', '93.184.216.35'],
+      () => {
+        signalController.abort();
+      },
+      signalController.signal,
+    );
+    try {
+      dispatcher.dispatch(
+        { origin: 'https://cdn.example.com', path: '/file', method: 'GET' },
+        {
+          onResponseError: responseError,
+        },
+      );
+      await vi.waitFor(() => expect(responseError).toHaveBeenCalledOnce());
+      expect(spy).toHaveBeenCalledOnce();
+    } finally {
+      await dispatcher.close();
+      spy.mockRestore();
+    }
+  });
+
+  it('does not try another proxy target when retry authorization has expired', async () => {
+    const dispatchSpy = vi.spyOn(ProxyAgent.prototype, 'dispatch');
+    const controller = {} as Dispatcher.DispatchController;
+    const responseError = vi.fn();
+    const authorizationError = new Error('authorization expired');
+    try {
+      dispatchSpy.mockImplementationOnce((_options, handler) => {
+        handler.onResponseError?.(controller, new Error('first address unreachable'));
+        return true;
+      });
+      const dispatcher = createPinnedProxyDispatcher(
+        {
+          kind: 'http',
+          url: 'http://127.0.0.1:7890',
+          hostname: '127.0.0.1',
+          port: 7890,
+        },
+        new URL('https://api.example.com/data'),
+        ['203.0.113.10', '203.0.113.11'],
+        () => Promise.reject(authorizationError),
+      );
+
+      dispatcher.dispatch(
+        { origin: 'https://api.example.com', path: '/data', method: 'POST', body: 'payload' },
+        { onResponseError: responseError },
+      );
+
+      await vi.waitFor(() =>
+        expect(responseError).toHaveBeenCalledWith(controller, authorizationError),
+      );
+      expect(dispatchSpy).toHaveBeenCalledTimes(1);
+      await dispatcher.close();
+    } finally {
+      dispatchSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    'http://127.0.0.1:7890',
+    'socks5://127.0.0.1:7891',
+  ])('keeps the pinned public-target guard on the %s proxy path', async (proxyUrl) => {
+    resolverState.resolve.mockResolvedValue(proxyUrl);
+    const beforeDispatch = vi.fn(() => {
+      throw new Error('authorization expired');
+    });
+
+    await expect(
+      guardedOutboundFetch('https://93.184.216.34/data', { method: 'GET' }, beforeDispatch),
+    ).rejects.toThrow('authorization expired');
+
+    expect(resolverState.resolve).toHaveBeenCalledWith('https://93.184.216.34/data');
+    expect(loggerState.debug).toHaveBeenCalledWith(
+      'creating outbound proxy dispatcher',
+      expect.objectContaining({ protocol: 'https:' }),
+    );
+    expect(beforeDispatch).toHaveBeenCalledTimes(1);
+    expect(undiciState.fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'https://198.18.0.1/data',
+    'https://[fc00::1]/data',
+  ])('does not treat selecting a proxy as authorization for special-use target %s', async (url) => {
+    resolverState.resolve.mockResolvedValue('http://127.0.0.1:7890');
+    loggerState.debug.mockClear();
+
+    await expect(guardedOutboundFetch(url, { method: 'GET' }, vi.fn())).rejects.toThrow(/blocked/i);
+
+    expect(undiciState.fetch).not.toHaveBeenCalled();
+    expect(loggerState.debug).not.toHaveBeenCalledWith(
+      'creating outbound proxy dispatcher',
+      expect.anything(),
+    );
+  });
+
+  it('allows only the explicitly approved network target and keeps manual redirects', async () => {
+    const requests: Array<{ path?: string; method?: string; authorization?: string }> = [];
+    // Use a server owned by this test. With pnpm hoisting, the shared runtime can
+    // resolve the same undici module as this file and get the fetch mock above, so
+    // let that mock reach the network here.
+    undiciState.fetch.mockImplementation(
+      async (...args: unknown[]) => (await undiciState.actualFetch!(...args)) as never,
+    );
+    const server = createServer((request, response) => {
+      requests.push({ path: request.url, method: request.method, authorization: request.headers.authorization });
+      response.writeHead(302, { location: '/unapproved' });
+      response.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/video`;
+    try {
+      const result = await guardedOutboundFetch(url, { method: 'GET' }, vi.fn(), {
+        targetUrl: url, allowHttp: true, allowPrivateNetwork: true,
+      });
+      try {
+        expect(result.response.status).toBe(302);
+        expect(result.response.headers.get('location')).toBe('/unapproved');
+      } finally {
+        await result.response.body?.cancel();
+        await result.release();
+      }
+      await expect(guardedOutboundFetch(new URL('/unapproved', url).href, { method: 'GET' }, vi.fn(), {
+        targetUrl: url, allowHttp: true, allowPrivateNetwork: true,
+      })).rejects.toThrow('approval target mismatch');
+      expect(requests).toEqual([{ path: '/video', method: 'GET', authorization: undefined }]);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
   it('passes the proxy dispatcher through to undici fetch', async () => {
     resolverState.resolve.mockResolvedValue('http://127.0.0.1:7890');
     await outboundFetch('https://platform.claude.com/v1/oauth/token', { method: 'POST' });

@@ -25,7 +25,7 @@ export type PlanChangeTargetSnapshot = Omit<BillingPlanChangeTargetPlan, 'produc
   product: Omit<BillingPlanChangeTargetPlan['product'], 'level'> & { level: number | null };
 };
 
-export type PlanChangeQuoteFailureReason = 'TARGET_NOT_ALLOWED' | 'REQUEST_FAILED';
+export type PlanChangeQuoteFailureReason = 'TARGET_NOT_ALLOWED' | 'RENEWAL_PREPAID' | 'REQUEST_FAILED';
 
 export type PlanChangeState = {
   open: boolean;
@@ -81,9 +81,9 @@ function phaseForPlanChange(change: BillingPlanChange): PlanChangePhase {
 }
 
 function quoteFailureReason(error: unknown): PlanChangeQuoteFailureReason {
-  return extractIpcError(error)?.code === 'PLAN_CHANGE_NOT_AVAILABLE'
-    ? 'TARGET_NOT_ALLOWED'
-    : 'REQUEST_FAILED';
+  const code = extractIpcError(error)?.code;
+  if (code === 'PLAN_CHANGE_RENEWAL_PREPAID') return 'RENEWAL_PREPAID';
+  return code === 'PLAN_CHANGE_NOT_AVAILABLE' ? 'TARGET_NOT_ALLOWED' : 'REQUEST_FAILED';
 }
 
 export function usePlanChange(
@@ -204,7 +204,19 @@ export function usePlanChange(
     await withRequestLock(session, async () => {
       try {
         applyChange(await billingApi.confirmPlanChange(change.planChangeId), session);
-      } catch {
+      } catch (error) {
+        // 明确的业务拒绝没有发起支付；展示原因并结束本次确认，不把它当网络未知结果。
+        if (quoteFailureReason(error) === 'RENEWAL_PREPAID') {
+          if (mountedRef.current && session === sessionRef.current) {
+            setState((value) => ({
+              ...value,
+              phase: 'FAILED',
+              error: true,
+              quoteFailureReason: 'RENEWAL_PREPAID',
+            }));
+          }
+          return;
+        }
         // The confirm may have landed server-side even though the response was
         // lost. Re-read the change before restoring anything local, so a
         // progressed change is never re-rendered as a confirmable quote.

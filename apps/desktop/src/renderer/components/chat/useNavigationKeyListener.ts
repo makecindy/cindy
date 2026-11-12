@@ -39,14 +39,19 @@ export function shouldHandleNavigationKey(key: string, target: EventTarget | nul
 
 /**
  * 监听 window keydown,任一 NAVIGATION_KEYS 触发时调用 onNavKey。
- * onNavKey 用 ref 持有,避免每次 render 重新挂 listener。
+ * onNavKey / enabled 用 ref 持有,避免每次 render 重新挂 listener。
+ * SplitGroup 里每个 MessageStream 都会挂一份；enabled=false 时忽略，
+ * 避免未获滚动主权的 pane 把别人的键盘当成自己的上翻意图。
  */
-export function useNavigationKeyListener(onNavKey: () => void): void {
+export function useNavigationKeyListener(onNavKey: () => void, enabled = true): void {
   const cbRef = useRef(onNavKey);
   cbRef.current = onNavKey;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (!enabledRef.current) return;
       if (shouldHandleNavigationKey(e.key, e.target)) {
         cbRef.current();
       }

@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
-import { isSidebarLegacyRendererOwnerClaim, isSidebarSettingsSnapshot } from '../sidebarSettings';
+import { isSidebarGhostId, isSidebarLegacyRendererOwnerClaim, isSidebarSettingsSnapshot } from '../sidebarSettings';
 
 const OWNER_STAMP = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
 
 describe('sidebar settings snapshot validation', () => {
+  it('accepts new root storage keys without accepting paths or malformed keys', () => {
+    expect(isSidebarGhostId('_root__helper')).toBe(true);
+    for (const invalid of ['_root__', '_root__Helper', '_root__../helper', '_ns/_root/helper']) {
+      expect(isSidebarGhostId(invalid)).toBe(false);
+    }
+    expect(isSidebarSettingsSnapshot({ ...OWNER_STAMP, pinnedOrderIsAuthoritative: false,
+      pinnedOrder: [], hiddenProjectKeys: [], hiddenMainViewGhostIds: ['_root__helper'] })).toBe(true);
+  });
   it.each([true, false])(
     'accepts an empty snapshot when authority is %s',
     (pinnedOrderIsAuthoritative) => {
@@ -14,6 +22,7 @@ describe('sidebar settings snapshot validation', () => {
           pinnedOrderIsAuthoritative,
           pinnedOrder: [],
           hiddenProjectKeys: [],
+          hiddenMainViewGhostIds: [],
         }),
       ).toBe(true);
     },
@@ -26,6 +35,7 @@ describe('sidebar settings snapshot validation', () => {
         pinnedOrderIsAuthoritative: true,
         pinnedOrder: ['session-a'],
         hiddenProjectKeys: [],
+        hiddenMainViewGhostIds: [],
       }),
     ).toBe(true);
     expect(
@@ -34,6 +44,7 @@ describe('sidebar settings snapshot validation', () => {
         pinnedOrderIsAuthoritative: false,
         pinnedOrder: ['session-a'],
         hiddenProjectKeys: [],
+        hiddenMainViewGhostIds: [],
       }),
     ).toBe(false);
   });
@@ -44,6 +55,7 @@ describe('sidebar settings snapshot validation', () => {
         ...OWNER_STAMP,
         pinnedOrder: [],
         hiddenProjectKeys: [],
+        hiddenMainViewGhostIds: [],
       }),
     ).toBe(false);
     expect(
@@ -52,6 +64,55 @@ describe('sidebar settings snapshot validation', () => {
         pinnedOrderIsAuthoritative: 'yes',
         pinnedOrder: [],
         hiddenProjectKeys: [],
+        hiddenMainViewGhostIds: [],
+      }),
+    ).toBe(false);
+  });
+
+  it('requires bounded unique Ghost ids for hidden main views', () => {
+    expect(
+      isSidebarSettingsSnapshot({
+        ...OWNER_STAMP,
+        pinnedOrderIsAuthoritative: false,
+        pinnedOrder: [],
+        hiddenProjectKeys: [],
+        hiddenMainViewGhostIds: ['xd-sites'],
+      }),
+    ).toBe(true);
+    expect(
+      isSidebarSettingsSnapshot({
+        ...OWNER_STAMP,
+        pinnedOrderIsAuthoritative: false,
+        pinnedOrder: [],
+        hiddenProjectKeys: [],
+        hiddenMainViewGhostIds: ['xd-sites', 'xd-sites'],
+      }),
+    ).toBe(false);
+    expect(
+      isSidebarSettingsSnapshot({
+        ...OWNER_STAMP,
+        pinnedOrderIsAuthoritative: false,
+        pinnedOrder: [],
+        hiddenProjectKeys: [],
+        hiddenMainViewGhostIds: ['XD Sites'],
+      }),
+    ).toBe(false);
+    expect(
+      isSidebarSettingsSnapshot({
+        ...OWNER_STAMP,
+        pinnedOrderIsAuthoritative: false,
+        pinnedOrder: [],
+        hiddenProjectKeys: [],
+        hiddenMainViewGhostIds: ['_ns__acme__helper'],
+      }),
+    ).toBe(true);
+    expect(
+      isSidebarSettingsSnapshot({
+        ...OWNER_STAMP,
+        pinnedOrderIsAuthoritative: false,
+        pinnedOrder: [],
+        hiddenProjectKeys: [],
+        hiddenMainViewGhostIds: ['_ns/acme/helper'],
       }),
     ).toBe(false);
   });

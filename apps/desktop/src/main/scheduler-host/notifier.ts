@@ -1,50 +1,68 @@
-/**
- * Phase 3: DesktopNotifier
- *
- * 实现 `Notifier` 接口（来自 @cindy/maker-scheduler）。
- *
- * 桌面通道：直接复用 notificationService 的 main 进程入口。
- * 飞书通道：Phase 3 暂时只 log 一行（owner openId 解析逻辑要等 Phase 4 IPC
- * 时补充 schedule.notifyFeishuTarget 字段 + ownerGuard 暴露 owner 接口）。
- *
- * **硬规则**：notify() 不能 throw —— 通知失败不能中断 run。所有 try/catch 包好。
- */
-
-import type { BrowserWindow } from 'electron';
 import type { Notifier, Schedule, ScheduleRun } from '@cindy/maker-scheduler';
 import { stripXdtFileLinks, stripXdtImageLinks, type FeishuIM } from '@cindy/im';
 
 import type { Logger } from '@cindy/maker-scheduler';
 
 import { stripTrailingPathSeparators } from '../../shared/pathText';
-import { showDesktopSessionEvent } from '../notificationService';
-import { getMobileNotifyGeneration, sendMobileSessionNotify } from '../device-link';
 import type { WecomGroupNotificationPublisher } from '../wecomGroupNotification';
 
-export interface DesktopNotifierDeps {
-  getMainWindow: () => BrowserWindow | null;
+export interface ScheduleNotifierDeps {
+  hasUnrecoveredMatchingFailure?: (run: ScheduleRun) => Promise<boolean>;
   feishuIm: FeishuIM;
   logger: Logger;
-  /** Global desktop preference and Agent Island arbitration, evaluated at send time. */
+  /** Persist the notification receipt against this exact run, when a session exists. */
+  sendFeishuSessionNotification?: (sessionId: string, text: string) => Promise<void>;
+  /** Global desktop preference, evaluated at send time. */
   shouldNotifyDesktop: () => boolean;
+  /**
+   * The task surface (Agent Notch, or the Live Activity while it can show) already alerts
+   * for this run, so the routine desktop notification would repeat it.
+   */
+  isRunAlertShownElsewhere: (run: ScheduleRun) => boolean;
   wecomGroupPublisher?: WecomGroupNotificationPublisher;
 }
 
-export class DesktopNotifier implements Notifier {
-  constructor(private readonly deps: DesktopNotifierDeps) {}
+export interface ScheduleNotifierRuntime {
+  getMobileNotifyGeneration(): number;
+  isSessionNotificationsMutedSync(sessionId: string): boolean;
+  showSessionNotification(payload: { sessionId: string; title: string; kind: 'done' | 'error' }): void;
+  sendMobileSessionNotify(payload: {
+    sessionId: string; title: string; kind: 'done' | 'error'; generation: number; detail?: string;
+  }): void;
+}
+
+export class ScheduleNotifier implements Notifier {
+  constructor(private readonly deps: ScheduleNotifierDeps, private readonly runtime: ScheduleNotifierRuntime) {}
 
   async notify(schedule: Schedule, run: ScheduleRun): Promise<void> {
     // 链路代次在任何 await 之前捕获:飞书分支的 await 期间可能发生登出/换号,
     // 发送侧按代次不一致丢弃,旧账号调度的通知不会进新账号的链路。
-    const generation = getMobileNotifyGeneration();
-    if (schedule.notify.desktop && this.deps.shouldNotifyDesktop()) {
+    const generation = this.runtime.getMobileNotifyGeneration();
+    if (schedule.silentWhenIdle && run.status === 'failed') {
+      try {
+        if (await this.deps.hasUnrecoveredMatchingFailure?.(run)) return;
+      } catch (error) {
+        // A failed history lookup must never hide the original failure.
+        this.deps.logger.warn?.('scheduler failure dedup lookup failed', error);
+      }
+    }
+    if (this.runtime.getMobileNotifyGeneration() !== generation) return;
+    // 「消息免打扰」任务不再发个人提醒。wecomGroup 是共享群通知,不跟个人静音走;
+    // 手机通道在 sendMobileSessionNotify 内另有同一道门,覆盖不走这里的调用方。
+    const muted = run.sessionId ? this.runtime.isSessionNotificationsMutedSync(run.sessionId) : false;
+    if (
+      schedule.notify.desktop &&
+      !muted &&
+      this.deps.shouldNotifyDesktop() &&
+      (!this.deps.isRunAlertShownElsewhere(run) || (run.status === 'failed' && !run.sessionId))
+    ) {
       try {
         this.notifyDesktop(schedule, run);
       } catch (err) {
         this.deps.logger.warn?.('desktop notify failed', err);
       }
     }
-    if (schedule.notify.feishu) {
+    if (schedule.notify.feishu && !muted) {
       try {
         await this.notifyFeishu(schedule, run);
       } catch (err) {
@@ -65,7 +83,7 @@ export class DesktopNotifier implements Notifier {
         // 正文带运行结果摘要(与飞书卡片同源素材):成功给 resultText,失败给
         // errorMsg;缺省回退终态短文案。截断由 mobileNotify 按协议上限统一处理。
         const detail = run.status === 'success' ? run.resultText : run.errorMsg;
-        sendMobileSessionNotify({
+        this.runtime.sendMobileSessionNotify({
           sessionId: run.sessionId,
           title: schedule.name,
           kind: run.status === 'success' ? 'done' : 'error',
@@ -79,7 +97,7 @@ export class DesktopNotifier implements Notifier {
   }
 
   private notifyDesktop(schedule: Schedule, run: ScheduleRun): void {
-    showDesktopSessionEvent(this.deps.getMainWindow, {
+    this.runtime.showSessionNotification({
       sessionId: run.sessionId ?? '',
       title: schedule.name,
       // Notifier 只接收终态 run；除 success 外都表示任务没有完成，不能显示“已完成”。
@@ -101,7 +119,11 @@ export class DesktopNotifier implements Notifier {
     }
     const text = renderExternalMessage(schedule, run);
     try {
-      await this.deps.feishuIm.sendMarkdownText(ownerOpenId, text);
+      if (run.sessionId && this.deps.sendFeishuSessionNotification) {
+        await this.deps.sendFeishuSessionNotification(run.sessionId, text);
+      } else {
+        await this.deps.feishuIm.sendMarkdownText(ownerOpenId, text);
+      }
     } catch (err) {
       // 飞书 SDK 包了一层 axios; 400 等业务错误的真正 message 在 response.data.code/msg
       // 里, axios.toString() 看不到。显式拆出来 log, 否则只看到 'Request failed

@@ -84,6 +84,56 @@ const wrapper = ({ children }: { children: ReactNode }) =>
   createElement(PrRefsProvider, null, children);
 
 describe('PrRefsProvider 订阅粒度(真实 Provider)', () => {
+  // Unit tier: observable IPC count verifies the agreed 90s foreground boundary.
+  // Existing focus dedup coverage did not exercise elapsed time or hidden windows.
+  it('refreshes once at 90 seconds, skips hidden windows, and resumes on focus', async () => {
+    vi.useFakeTimers();
+    const api = installElectronApi();
+    api.gitContext.listAllPrRefs.mockResolvedValue([makeRef('session-a', 7)]);
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
+    const { result, unmount } = renderHook(() => usePrActions(), { wrapper });
+    try {
+      await act(async () => { await Promise.resolve(); });
+      await act(async () => { result.current.registerPrConsumer('session-a'); });
+      api.gitContext.getPrStatuses.mockClear();
+      await act(async () => { await vi.advanceTimersByTimeAsync(89_999); });
+      expect(api.gitContext.getPrStatuses).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(api.gitContext.getPrStatuses).toHaveBeenCalledTimes(1);
+      hidden.mockReturnValue(true);
+      await act(async () => { await vi.advanceTimersByTimeAsync(90_000); });
+      expect(api.gitContext.getPrStatuses).toHaveBeenCalledTimes(1);
+      hidden.mockReturnValue(false);
+      await act(async () => { window.dispatchEvent(new Event('focus')); });
+      expect(api.gitContext.getPrStatuses).toHaveBeenCalledTimes(2);
+    } finally { unmount(); focus.mockRestore(); hidden.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it('coalesces repeated focus and registration while remote PR reads are queued or running', async () => {
+    const api = installElectronApi();
+    let finishRefs!: (refs: SessionPrRef[]) => void;
+    let finishStatuses!: (statuses: unknown[]) => void;
+    api.invoke.mockImplementation((_device, channel) => new Promise((resolve) => {
+      if (channel === 'git-context:pr-refs:list') finishRefs = resolve as typeof finishRefs;
+      else finishStatuses = resolve as typeof finishStatuses;
+    }));
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    const { result, unmount } = renderHook(() => usePrActions(), { wrapper });
+    try {
+      act(() => { result.current.registerPrConsumer('session-r', 'device-1'); });
+      for (let n = 0; n < 5; n++) act(() => {
+        result.current.registerPrConsumer('session-r', 'device-1');
+        window.dispatchEvent(new Event('focus'));
+      });
+      expect(api.invoke).toHaveBeenCalledTimes(1);
+      await act(async () => { finishRefs([makeRef('session-r', 42)]); });
+      expect(api.invoke).toHaveBeenCalledTimes(2);
+      for (let n = 0; n < 5; n++) act(() => { window.dispatchEvent(new Event('focus')); });
+      expect(api.invoke).toHaveBeenCalledTimes(2);
+      await act(async () => { finishStatuses([]); });
+    } finally { unmount(); focus.mockRestore(); }
+  });
   it('某会话 refs 更新只重渲染该会话的订阅行,其它行不醒', async () => {
     const api = installElectronApi();
     api.gitContext.listPrRefs.mockImplementation(async (sessionId: string) =>
@@ -181,7 +231,7 @@ describe('PrRefsProvider owner 切换的在飞隔离', () => {
     const { result, rerender } = renderHook(
       () => {
         const { registerPrConsumer } = usePrActions();
-        const status = usePrStatus('octo/repo#9');
+        const status = usePrStatus('session-s', 'octo/repo#9');
         return { registerPrConsumer, status };
       },
       { wrapper },

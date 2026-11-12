@@ -13,7 +13,7 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 
-import { isKeychainIdentityMarkerArtifact, type KeychainIdentityIo } from './devKeychainName.js';
+import { isDevProfileFreshnessArtifact, type KeychainIdentityIo } from './devKeychainName.js';
 
 export interface KeychainMarkerIoDeps {
   /** 身份标记文件的绝对路径(profileDir 下的 KEYCHAIN_IDENTITY_MARKER_FILE)。 */
@@ -258,8 +258,9 @@ export function createKeychainMarkerIo(deps: KeychainMarkerIoDeps): KeychainIden
     },
     profileHasData: () => {
       try {
-        // 排除标记文件与其 .tmp 半成品:它们是本机制自身产物,不构成旧沙箱证据。
-        return fs.readdirSync(profileDir).some((entry) => !isKeychainIdentityMarkerArtifact(entry));
+        // 排除身份标记、launch proof 与各自的 .tmp 半成品:它们是 dev 启动机制
+        // 自身产物,不能把本轮刚创建的空隔离沙箱误判成旧 profile。
+        return fs.readdirSync(profileDir).some((entry) => !isDevProfileFreshnessArtifact(entry));
       } catch (err) {
         // 读失败(非 ENOENT)按「有数据」处理:误判方向安全,保持改动前行为。
         return (err as NodeJS.ErrnoException)?.code !== 'ENOENT';

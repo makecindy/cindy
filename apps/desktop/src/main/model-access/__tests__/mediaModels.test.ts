@@ -1,0 +1,430 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const serverApiFetchMock = vi.hoisted(() => vi.fn());
+const readModelDisableOverridesMock = vi.hoisted(() => vi.fn());
+const listProviderMediaModelsMock = vi.hoisted(() => vi.fn());
+const isCatalogMediaModelVisibleMock = vi.hoisted(() =>
+  vi.fn((_providerId: string, _modelId: string, _defaultEnabled?: boolean) => true),
+);
+
+vi.mock('../../serverApiClient.desktop.js', () => ({
+  serverApiFetch: serverApiFetchMock,
+  ServerApiError: class ServerApiError extends Error {
+    constructor(
+      readonly code: string,
+      readonly statusCode: number,
+      message: string,
+    ) {
+      super(message);
+    }
+  },
+}));
+vi.mock('../../clientEndpointsService.js', () => ({
+  getClientEndpoint: vi.fn(() => 'https://model-access.example.com'),
+}));
+vi.mock('../../maker-host/model-disable-store.js', () => ({
+  readModelDisableOverrides: readModelDisableOverridesMock,
+}));
+vi.mock('../../cindy-media/providerMediaRuntime.js', () => ({
+  listProviderMediaModels: listProviderMediaModelsMock,
+}));
+vi.mock('../../cindy-brain/mediaDisplayVisibility.js', () => ({
+  isCatalogMediaModelVisible: isCatalogMediaModelVisibleMock,
+}));
+
+import {
+  fetchMediaInvocationGuide,
+  isMediaModelExecutable,
+  isMediaModelExecutableForLegacyInput,
+  listAvailableMediaModels,
+  listExecutableMediaModels,
+  MediaGuideCompatibilityError,
+  resetExecutableMediaModelCache,
+} from '../mediaModels.js';
+
+const payload = {
+  schemaVersion: 5 as const,
+  accountTier: 'free' as const,
+  models: [
+    {
+      id: 'image-without-guide',
+      name: 'Image Without Guide',
+      mode: 'image_generation',
+      availability: 'available' as const,
+      currency: 'CNY' as const,
+      agents: [],
+      modalities: { input: ['text'], output: ['image'] },
+    },
+    {
+      id: 'image-with-guide',
+      name: 'Image With Guide',
+      mode: 'image_generation',
+      availability: 'available' as const,
+      currency: 'CNY' as const,
+      agents: [],
+      modalities: { input: ['text', 'image'], output: ['image'] },
+    },
+    {
+      id: 'video-without-guide',
+      name: 'Video Without Guide',
+      mode: 'video_generation',
+      availability: 'available' as const,
+      currency: 'CNY' as const,
+      agents: [],
+      modalities: { input: ['text', 'image'], output: ['video'] },
+    },
+    {
+      id: 'guide-only-chat',
+      name: 'Guide Only Chat',
+      mode: 'chat',
+      availability: 'available' as const,
+      currency: 'CNY' as const,
+      contextWindow: 200_000,
+      agents: ['codex' as const],
+      perAgent: {
+        codex: { wireProtocol: 'openai-responses' as const },
+      },
+    },
+  ],
+};
+
+describe('listAvailableMediaModels', () => {
+  beforeEach(() => {
+    resetExecutableMediaModelCache();
+    serverApiFetchMock.mockReset().mockResolvedValue(payload);
+    readModelDisableOverridesMock.mockReset().mockReturnValue({});
+    listProviderMediaModelsMock.mockReset().mockReturnValue([]);
+    isCatalogMediaModelVisibleMock.mockReset().mockReturnValue(true);
+  });
+
+  // Unit contract: listAvailableMediaModels preserves the parsed summary and provider discount.
+  // Existing fixtures had no pricing; minimal regression is a Gateway image with one summary.output quote.
+  it('preserves the optional summary through media parsing and provider projection', async () => {
+    const displayPricing = { items: [{ label: 'Output', price: 0.3, unit: 'image', quantity: 1 }],
+      summary: { input: [{ price: 0.02, unit: 'image', quantity: 1, component: 'image' }], output: [{ price: 0.3, unit: 'image', quantity: 1, component: 'image' }] } };
+    serverApiFetchMock.mockResolvedValue({ ...payload, models: [{ ...payload.models[0], displayPricing, costDiscount: 0.2 }] });
+    await expect(listAvailableMediaModels()).resolves.toMatchObject([{ displayPricing, costDiscount: 0.2, currency: 'CNY', providerId: 'xd' }]);
+  });
+
+  it('不带操作筛选时按 Gateway mode 返回图片/视频模型', async () => {
+    await expect(listAvailableMediaModels()).resolves.toMatchObject([
+      { id: 'image-without-guide' },
+      { id: 'image-with-guide' },
+      { id: 'video-without-guide' },
+    ]);
+  });
+
+  it('带操作筛选时按 Gateway modalities 判断模型能力', async () => {
+    await expect(listAvailableMediaModels('image.generate')).resolves.toMatchObject([
+      { id: 'image-without-guide', modalities: { input: ['text'], output: ['image'] } },
+      {
+        id: 'image-with-guide',
+        modalities: { input: ['text', 'image'], output: ['image'] },
+      },
+    ]);
+    await expect(listAvailableMediaModels('image.edit')).resolves.toMatchObject([
+      {
+        id: 'image-with-guide',
+        modalities: { input: ['text', 'image'], output: ['image'] },
+      },
+    ]);
+  });
+
+  it('同名媒体模型按 providerId 保留为两个可选来源', async () => {
+    listProviderMediaModelsMock.mockReturnValue([
+      {
+        id: 'image-with-guide',
+        name: 'Provider Image',
+        providerId: 'openai',
+        mode: 'image_generation',
+        modalities: { input: ['text', 'image'], output: ['image'] },
+      },
+    ]);
+
+    const models = await listAvailableMediaModels('image.generate');
+
+    expect(models.filter((model) => model.id === 'image-with-guide')).toMatchObject([
+      { id: 'image-with-guide', providerId: 'xd' },
+      { id: 'image-with-guide', providerId: 'openai' },
+    ]);
+  });
+
+  it('xAI provider 图片模型在媒体目录中保留来源身份', async () => {
+    listProviderMediaModelsMock.mockReturnValue([
+      {
+        id: 'xai/grok-imagine-image',
+        name: 'Grok Imagine Image',
+        providerId: 'xai',
+        mode: 'image_generation',
+        modalities: { input: ['text', 'image'], output: ['image'] },
+      },
+    ]);
+
+    await expect(listAvailableMediaModels('image.edit')).resolves.toContainEqual(
+      expect.objectContaining({ id: 'xai/grok-imagine-image', providerId: 'xai' }),
+    );
+  });
+
+  it('Gateway 图像型号尊重设置页显示开关', async () => {
+    isCatalogMediaModelVisibleMock.mockImplementation(
+      (_providerId: string, modelId: string, _defaultEnabled?: boolean) =>
+        modelId !== 'image-without-guide',
+    );
+    await expect(listAvailableMediaModels('image.generate')).resolves.toMatchObject([
+      { id: 'image-with-guide' },
+    ]);
+  });
+
+  it('叠加客户端现有 XD provider/model 停用准入', async () => {
+    readModelDisableOverridesMock.mockReturnValueOnce({
+      disabledModels: { 'xd:image-without-guide': true },
+    });
+    await expect(listAvailableMediaModels('image.generate')).resolves.toMatchObject([
+      { id: 'image-with-guide' },
+    ]);
+
+    readModelDisableOverridesMock.mockReturnValueOnce({ disabledProviders: { xd: true } });
+    await expect(listAvailableMediaModels()).resolves.toEqual([]);
+  });
+
+  it('v5 目录不会把需要付费的媒体模型暴露为可用模型', async () => {
+    serverApiFetchMock.mockResolvedValueOnce({
+      ...payload,
+      models: [
+        payload.models[1],
+        {
+          ...payload.models[0],
+          id: 'paid-image',
+          availability: 'requires_payment',
+        },
+      ],
+    });
+
+    await expect(listAvailableMediaModels('image.generate')).resolves.toMatchObject([
+      { id: 'image-with-guide', availability: 'available' },
+    ]);
+    expect(serverApiFetchMock).toHaveBeenCalledWith(
+      '/api/model-access/models?schemaVersion=5',
+      expect.objectContaining({ headers: { 'X-Cindy-Model-Capabilities': 'display_pricing' } }),
+    );
+  });
+
+  it('namespaced modelId 唯一时继承旧裸 ID 的停用项', async () => {
+    serverApiFetchMock.mockResolvedValueOnce({
+      ...payload,
+      models: [{ ...payload.models[1], id: 'openai/image-with-guide' }],
+    });
+    readModelDisableOverridesMock.mockReturnValueOnce({
+      disabledModels: { 'xd:image-with-guide': true },
+    });
+
+    await expect(listAvailableMediaModels('image.generate')).resolves.toEqual([]);
+  });
+
+  it('拒绝旧版聊天目录，不把版本不匹配静默解释为空媒体列表', async () => {
+    serverApiFetchMock.mockResolvedValueOnce({ ...payload, schemaVersion: 3 });
+
+    await expect(listAvailableMediaModels()).rejects.toMatchObject({
+      name: 'MediaModelCatalogError',
+    });
+  });
+
+  it('按模型与连接已有的接口格式读取公开协议资料，不附带账号 token', async () => {
+    serverApiFetchMock.mockResolvedValueOnce({
+      modelId: 'image-with-guide',
+      guide: {
+        schemaVersion: 1,
+        guideId: 'images-v1',
+        revision: '2026-08-13.1',
+        operations: [
+          {
+            capability: 'image.generate',
+            request: {
+              method: 'POST',
+              path: '/images/generations',
+              bodyEncoding: 'json',
+              bodyModelPath: ['model'],
+              timeoutMs: 1_000,
+              maxRequestBytes: 1_024,
+              maxResponseBytes: 1_024,
+            },
+            response: {
+              mode: 'sync',
+              media: [
+                {
+                  path: ['data', '*', 'url'],
+                  encoding: 'url',
+                  kind: 'image',
+                  allowedUrlHosts: ['example.com'],
+                },
+              ],
+            },
+            instructions: '按协议组装请求。',
+            exampleBody: { prompt: 'hello' },
+            inputSchema: { type: 'object' },
+            officialDocs: 'https://example.com/images-api',
+          },
+        ],
+      },
+    });
+
+    await expect(fetchMediaInvocationGuide('image-with-guide')).resolves.toMatchObject({
+      modelId: 'image-with-guide',
+      guide: { guideId: 'images-v1', revision: '2026-08-13.1' },
+    });
+    expect(serverApiFetchMock).toHaveBeenLastCalledWith(
+      '/api/model-access/invocation-guide?modelId=image-with-guide&protocol=gateway',
+      expect.objectContaining({ token: null, skipAutoRefresh: true, skipSessionInvalidation: true }),
+    );
+  });
+
+  it('私有模型别名保持完整，由 Server 根据接口格式选择说明', async () => {
+    serverApiFetchMock.mockResolvedValueOnce({
+      modelId: 'custom/image',
+      guide: {
+        schemaVersion: 1,
+        guideId: 'openai-images-v1',
+        revision: '2026-08-20.1',
+        operations: [
+          {
+            capability: 'image.generate',
+            request: {
+              method: 'POST',
+              path: '/images/generations',
+              bodyEncoding: 'json',
+              bodyModelPath: ['model'],
+              timeoutMs: 1_000,
+              maxRequestBytes: 1_024,
+              maxResponseBytes: 1_024,
+            },
+            response: {
+              mode: 'sync',
+              media: [
+                {
+                  path: ['data', '*', 'url'],
+                  encoding: 'url',
+                  kind: 'image',
+                  allowedUrlHosts: ['example.com'],
+                },
+              ],
+            },
+            instructions: '按协议组装请求。',
+            exampleBody: { prompt: 'hello' },
+            inputSchema: { type: 'object' },
+            officialDocs: 'https://example.com/images-api',
+          },
+        ],
+      },
+    });
+
+    await expect(fetchMediaInvocationGuide('custom/image', 'openai')).resolves.toMatchObject({
+      modelId: 'custom/image',
+      guide: { guideId: 'openai-images-v1' },
+    });
+    expect(serverApiFetchMock).toHaveBeenLastCalledWith(
+      '/api/model-access/invocation-guide?modelId=custom%2Fimage&protocol=openai',
+      expect.any(Object),
+    );
+  });
+
+  it('把更高 Guide schemaVersion 分类为客户端需要升级', async () => {
+    serverApiFetchMock.mockResolvedValueOnce({
+      modelId: 'image-with-guide',
+      guide: { schemaVersion: 2 },
+    });
+
+    await expect(fetchMediaInvocationGuide('image-with-guide')).rejects.toMatchObject({
+      code: 'CLIENT_UPGRADE_REQUIRED',
+    } satisfies Partial<MediaGuideCompatibilityError>);
+  });
+
+  it('批量预检缓存 modelId 对应的协议 Guide', async () => {
+    const modelId = 'openai/image-with-guide';
+    const paidModelId = 'openai/paid-image';
+    const guide = {
+      schemaVersion: 1 as const,
+      guideId: 'openai-images-v1',
+      revision: '2026-08-20.1',
+      connection: { providerId: 'xd' },
+      operations: [
+        {
+          capability: 'image.generate' as const,
+          request: {
+            method: 'POST' as const,
+            path: '/images/generations',
+            bodyEncoding: 'json' as const,
+            bodyModelPath: ['model'],
+            timeoutMs: 1_000,
+            maxRequestBytes: 1_024,
+            maxResponseBytes: 1_024,
+          },
+          response: {
+            mode: 'sync' as const,
+            media: [
+              {
+                path: ['data', '*', 'url'],
+                encoding: 'url' as const,
+                kind: 'image' as const,
+                allowedUrlHosts: ['example.com'],
+              },
+            ],
+          },
+          instructions: '按协议组装请求。',
+          exampleBody: { prompt: 'hello' },
+          inputSchema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] },
+          officialDocs: 'https://example.com/images-api',
+        },
+      ],
+    };
+    serverApiFetchMock.mockImplementation(async (path: string) => {
+      if (path.startsWith('/api/model-access/models')) {
+        return {
+          ...payload,
+          models: [
+            { ...payload.models[1], id: modelId },
+            {
+              ...payload.models[1],
+              id: paidModelId,
+              availability: 'requires_payment',
+            },
+          ],
+        };
+      }
+      if (path === '/api/model-access/invocation-guides') {
+        return {
+          guides: [
+            { modelId, guide },
+            { modelId: paidModelId, guide: { ...guide, guideId: 'paid-images-v1' } },
+          ],
+        };
+      }
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    await expect(
+      listExecutableMediaModels(['image.generate'], { forceRefresh: true }),
+    ).resolves.toMatchObject({ models: [{ id: modelId }] });
+    resetExecutableMediaModelCache();
+    isCatalogMediaModelVisibleMock.mockImplementation(
+      (_providerId: string, id: string, _defaultEnabled?: boolean) => id !== modelId,
+    );
+    await expect(
+      listExecutableMediaModels(['image.generate'], { forceRefresh: true }),
+    ).resolves.toMatchObject({ models: [] });
+    expect(
+      isMediaModelExecutableForLegacyInput(modelId, 'image.generate'),
+    ).toBe(true);
+    guide.guideId = 'opaque-server-metadata';
+    await listExecutableMediaModels(['image.generate'], { forceRefresh: true });
+    expect(
+      isMediaModelExecutableForLegacyInput(modelId, 'image.generate'),
+    ).toBe(true);
+    guide.operations[0].inputSchema.required = ['native_parameter'];
+    await listExecutableMediaModels(['image.generate'], { forceRefresh: true });
+    expect(
+      isMediaModelExecutableForLegacyInput(modelId, 'image.generate'),
+    ).toBe(false);
+    expect(isMediaModelExecutable(modelId, 'image.generate')).toBe(true);
+    expect(isMediaModelExecutable(paidModelId, 'image.generate')).toBe(false);
+  });
+});

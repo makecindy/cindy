@@ -30,6 +30,56 @@ afterEach(async () => {
 });
 
 describe('readBoundedFileNoFollow', () => {
+  it('rejects by a bounded prefix before reading the payload, using one handle', async () => {
+    const file = path.join(workDir, 'large.bin');
+    await fs.promises.writeFile(file, Buffer.alloc(8192, 7));
+    const realOpen = fs.promises.open;
+    const lengths: number[] = [];
+    const openSpy = vi.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      const realRead = handle.read.bind(handle);
+      vi.spyOn(handle, 'read').mockImplementation((async (...readArgs: unknown[]) => {
+        lengths.push((readArgs[0] as Buffer).length);
+        return realRead(
+          readArgs[0] as Buffer,
+          readArgs[1] as number,
+          readArgs[2] as number,
+          readArgs[3] as number,
+        );
+      }) as typeof handle.read);
+      return handle;
+    });
+    try {
+      const limit = vi.fn<(prefix: Buffer) => number>(() => 4096);
+      expect(await readBoundedFileNoFollow(file, 16384, { maxBytesForPrefix: limit })).toBeNull();
+      expect(openSpy).toHaveBeenCalledTimes(1);
+      expect(lengths).toEqual([4096]);
+      expect(limit.mock.calls[0][0]).toEqual(Buffer.alloc(4096, 7));
+      lengths.length = 0;
+      expect(await readBoundedFileNoFollow(file, 16384, { maxBytesForPrefix: () => 8192 })).toEqual(
+        Buffer.alloc(8192, 7),
+      );
+      expect(lengths).toEqual([4096, 8192]);
+      expect(
+        await readBoundedFileNoFollow(file, 4096, { maxBytesForPrefix: () => 16384 }),
+      ).toBeNull();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('still rejects content changed between the prefix probe and the full read', async () => {
+    const file = path.join(workDir, 'changing.bin');
+    await fs.promises.writeFile(file, 'before');
+    await expect(
+      readBoundedFileNoFollow(file, 1024, {
+        maxBytesForPrefix: () => {
+          fs.writeFileSync(file, 'changed-and-longer');
+          return 1024;
+        },
+      }),
+    ).rejects.toThrow('source file changed');
+  });
   it('opens follow-links untrusted paths in non-blocking mode; no-follow defaults to blocking', async () => {
     const file = path.join(workDir, 'plain.json');
     await fs.promises.writeFile(file, '{"ok":1}');

@@ -7,6 +7,12 @@
     "active": "https://lobste.rs/active.json",
     "tag": "https://lobste.rs/t/{tag}.json"
   },
-  "recipes": ["lobsters-feed"],
-  "notes": "lobste.rs 的稳定读接口是各 feed 的 .json:hottest/newest/active(navigate 到该 URL 再 extract body 即拿 JSON 数组)。每条故事含 {short_id,title,url,score,comment_count,comments_url,created_at,submitter_user,tags,...}。按 tag 读用 https://lobste.rs/t/{tag}.json。注意:没有可用的 search.json(返回搜索页 HTML / 易被限流),要搜关键词只能拉 feed 后本地过滤。"
+  "recipes": [
+    "lobsters-feed"
+  ],
+  "notes": "lobste.rs 的稳定读接口是各 feed 的 .json:hottest/newest/active(navigate 到该 URL 再 extract body 即拿 JSON 数组)。每条故事含 {short_id,title,url,score,comment_count,comments_url,created_at,submitter_user,tags,...}。按 tag 读用 https://lobste.rs/t/{tag}.json。注意:没有可用的 search.json(返回搜索页 HTML / 易被限流),要搜关键词只能拉 feed 后本地过滤。\n完整目录更新时保留此 Cindy 独立配方：上游没有相同的接口或免登录/参数合同。本站可用能力以 siteguide 当前目录为准。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

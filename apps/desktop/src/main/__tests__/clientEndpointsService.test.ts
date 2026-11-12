@@ -14,10 +14,26 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
+import { app } from 'electron';
+import { setCindyPersonalRuntime, setCindyVersionEndpointOverride } from '../cindy-make/versionRuntimeIdentity';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TEST_CLIENT_ENDPOINTS } from '../../test/vitest/clientEndpointsFixture';
+
+const canLinkFile = (() => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'client-endpoints-file-link-probe-'));
+  try {
+    const target = path.join(root, 'target');
+    fs.writeFileSync(target, 'probe');
+    fs.symlinkSync(target, path.join(root, 'link'), 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+})();
 
 const ipcOn = vi.hoisted(() => vi.fn());
 const netRequest = vi.hoisted(() => vi.fn());
@@ -27,6 +43,7 @@ vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(),
     getAppPath: vi.fn(() => '/repo/apps/desktop'),
+    getPreferredSystemLanguages: vi.fn(() => ['en-US']),
     isPackaged: false,
     exit: vi.fn(),
   },
@@ -55,6 +72,7 @@ import {
   getClientEndpoint,
   getClientEndpointForRealm,
   getResolvedClientEndpoints,
+  initClientEndpoints,
   loadClientEndpointsForRealm,
   isUsingCachedClientEndpoints,
   registerClientEndpointsIpc,
@@ -90,6 +108,7 @@ const FULL_MANIFEST = JSON.stringify({
   voiceApiBaseUrl: 'https://voice.remote.example.com',
   githubApiBaseUrl: 'https://github-api.remote.example.com',
   skillhubApiBaseUrl: 'https://skillhub.remote.example.com',
+  cindySkillHubApiBaseUrl: 'https://cindy-skillhub.remote.example.com',
   pluginApiBaseUrl: 'https://plugin.remote.example.com',
   cdnBaseUrl: 'https://cdn.remote.example.com/app',
   mobileUpdateBaseUrl: 'https://mobile-update.remote.example.com',
@@ -240,6 +259,67 @@ describe('resolveEndpointSource(清单来源三选一)', () => {
     ],
   ] as const)('%s', (_label, input, expected) => {
     expect(resolveEndpointSource({ ...input, repoRoot: REPO_ROOT })).toEqual(expected);
+  });
+});
+
+describe('localhost 开发端点的 realm 固定', () => {
+  it('a packaged personal version keeps the verified local Dev services instead of sending credentials to production', async () => {
+    const previousPackaged = app.isPackaged;
+    (app as { isPackaged: boolean }).isPackaged = true;
+    setCindyPersonalRuntime(true);
+    setCindyVersionEndpointOverride({ manifestText: LOCAL_MANIFEST, local: true });
+    netRequest.mockClear();
+    try {
+      await expect(initClientEndpoints()).resolves.toBe(true);
+      const local = getClientEndpoint('authApiBaseUrl');
+      expect(local.startsWith('http://localhost')).toBe(true);
+      activateClientEndpointRealm('global');
+      expect(getClientEndpoint('authApiBaseUrl')).toBe(local);
+      activateClientEndpointRealm('cn');
+      expect(getClientEndpoint('authApiBaseUrl')).toBe(local);
+      expect(netRequest).not.toHaveBeenCalled();
+    } finally {
+      setCindyPersonalRuntime(false);
+      setCindyVersionEndpointOverride(undefined);
+      (app as { isPackaged: boolean }).isPackaged = previousPackaged;
+    }
+  });
+  it('登录恢复切换 realm 时仍复用本地文件清单，不加载线上清单', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'client-endpoints-local-realm-'));
+    const manifestPath = path.join(root, 'endpoint.local.json');
+    const previousMode = process.env.XDT_DESKTOP_DEV_MODE;
+    const previousManifestFile = process.env.XDT_ENDPOINT_MANIFEST_FILE;
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        ...(JSON.parse(LOCAL_MANIFEST) as Record<string, unknown>),
+        cindySkillHubApiBaseUrl: 'http://localhost:3345',
+      }),
+    );
+    process.env.XDT_DESKTOP_DEV_MODE = 'local';
+    process.env.XDT_ENDPOINT_MANIFEST_FILE = manifestPath;
+
+    try {
+      await expect(initClientEndpoints()).resolves.toBe(true);
+
+      activateClientEndpointRealm('cn');
+      expect(getClientEndpoint('cindySkillHubApiBaseUrl')).toBe('http://localhost:3345');
+      activateClientEndpointRealm('global');
+      expect(getClientEndpoint('cindySkillHubApiBaseUrl')).toBe('http://localhost:3345');
+      await expect(loadClientEndpointsForRealm('cn')).resolves.toMatchObject({
+        cindySkillHubApiBaseUrl: 'http://localhost:3345',
+      });
+      await expect(loadClientEndpointsForRealm('global')).resolves.toMatchObject({
+        cindySkillHubApiBaseUrl: 'http://localhost:3345',
+      });
+      expect(netRequest).not.toHaveBeenCalled();
+    } finally {
+      if (previousMode === undefined) delete process.env.XDT_DESKTOP_DEV_MODE;
+      else process.env.XDT_DESKTOP_DEV_MODE = previousMode;
+      if (previousManifestFile === undefined) delete process.env.XDT_ENDPOINT_MANIFEST_FILE;
+      else process.env.XDT_ENDPOINT_MANIFEST_FILE = previousManifestFile;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1387,12 +1467,11 @@ describe('netlog 产物事后核对(verifyEndpointNetLogCapture)', () => {
   it('目录项被换成 symlink → 不通过(产物丢弃)', () => {
     // 这是攻击的真实形状:把我们创建的目录项换成指向别处的 symlink,好让 Chromium
     // 写到别的地方去。lstat 不跟随 symlink,所以 isDirectory() 为 false。
-    if (process.platform === 'win32') return;
     const capture = prepareEndpointNetLogFile(logDir)!;
     const captureDir = path.dirname(capture.file);
     const elsewhere = fs.mkdtempSync(path.join(logDir, 'elsewhere-'));
     fs.rmSync(captureDir, { recursive: true, force: true });
-    fs.symlinkSync(elsewhere, captureDir);
+    fs.symlinkSync(elsewhere, captureDir, process.platform === 'win32' ? 'junction' : 'dir');
     fs.writeFileSync(capture.file, '{}', 'utf8');
     expect(verifyEndpointNetLogCapture(capture)).toBe(false);
   });
@@ -1414,7 +1493,7 @@ describe('netlog 产物事后核对(verifyEndpointNetLogCapture)', () => {
   });
 
   it('目标被换成 symlink → 不通过', () => {
-    if (process.platform === 'win32') return;
+    if (!canLinkFile) return;
     const capture = prepareEndpointNetLogFile(logDir)!;
     const real = path.join(logDir, 'elsewhere.json');
     fs.writeFileSync(real, '{}', 'utf8');
@@ -1429,6 +1508,24 @@ describe('netlog 产物事后核对(verifyEndpointNetLogCapture)', () => {
 });
 
 describe('getter / IPC', () => {
+  it('aborts a non-200 endpoint response instead of draining without a deadline', async () => {
+    resetClientEndpointsForTest(TEST_CLIENT_ENDPOINTS, {
+      buildRegion: 'cn',
+      realmManifestBaseUrls: {
+        cn: 'https://manifest.cn.example.com/app',
+        global: 'https://manifest.global.example.com/app',
+      },
+    });
+    const response = Object.assign(new EventEmitter(), { statusCode: 404 });
+    const request = Object.assign(new EventEmitter(), {
+      end: vi.fn(() => request.emit('response', response)),
+      abort: vi.fn(() => response.emit('error', new Error('cancelled'))),
+    });
+    netRequest.mockReturnValueOnce(request);
+    await expect(loadClientEndpointsForRealm('global')).rejects.toThrow('http-404');
+    expect(request.abort).toHaveBeenCalledTimes(1);
+  });
+
   it('默认不是离线缓存启动', () => {
     expect(isUsingCachedClientEndpoints()).toBe(false);
   });
@@ -1449,6 +1546,123 @@ describe('getter / IPC', () => {
     expect(event.returnValue).toMatchObject({ websiteUrl: 'https://site.example.com' });
     expect(getResolvedClientEndpoints().websiteUrl).toBe('https://site.example.com');
     expect(getClientEndpoint('websiteUrl')).toBe('https://site.example.com');
+  });
+
+  // unit: partial local-server tests must preserve real SSO realm separation;
+  // full-local startup previously pinned both realms to one authentication server.
+  it('开发版只覆盖回环设备互联地址，两个区域的认证与模型端点保持独立', () => {
+    const cn = { ...TEST_CLIENT_ENDPOINTS, authApiBaseUrl: 'https://auth.cn.example.com' };
+    const global = { ...TEST_CLIENT_ENDPOINTS, authApiBaseUrl: 'https://auth.global.example.com' };
+    resetClientEndpointsForTest(global, { buildRegion: 'global', realmEndpoints: { cn, global } });
+    vi.stubEnv('XDT_DEVICE_LINK_CN_LOCAL_URL', 'http://127.0.0.1:33355');
+    vi.stubEnv('XDT_DEVICE_LINK_GLOBAL_LOCAL_URL', 'http://127.0.0.1:33356');
+    try {
+      for (const region of ['cn', 'global'] as const) {
+        activateClientEndpointRealm(region);
+        const local = region === 'cn' ? 'http://127.0.0.1:33355' : 'http://127.0.0.1:33356';
+        expect(getClientEndpoint('deviceLinkApiBaseUrl')).toBe(local);
+        expect(getClientEndpointForRealm(region, 'deviceLinkApiBaseUrl')).toBe(local);
+        const expected = region === 'cn' ? cn : global;
+        expect(getClientEndpoint('authApiBaseUrl')).toBe(expected.authApiBaseUrl);
+        expect(getClientEndpointForRealm(region, 'authApiBaseUrl')).toBe(expected.authApiBaseUrl);
+        expect(getClientEndpoint('modelAccessApiBaseUrl')).toBe(expected.modelAccessApiBaseUrl);
+      }
+      Object.defineProperty(app, 'isPackaged', { configurable: true, value: true });
+      expect(getClientEndpoint('deviceLinkApiBaseUrl')).toBe(global.deviceLinkApiBaseUrl);
+      expect(getClientEndpointForRealm('cn', 'deviceLinkApiBaseUrl')).toBe(cn.deviceLinkApiBaseUrl);
+    } finally {
+      Object.defineProperty(app, 'isPackaged', { configurable: true, value: false });
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each(['http://192.0.2.1:33355', 'http://user:secret@127.0.0.1:33355', 'file:///tmp/test', 'http://127.0.0.1:33355/other'])('拒绝开发版设备互联覆盖的非回环或含凭据/路径输入 %s', (value) => {
+    resetClientEndpointsForTest(TEST_CLIENT_ENDPOINTS);
+    vi.stubEnv('XDT_DEVICE_LINK_CN_LOCAL_URL', value);
+    vi.stubEnv('XDT_DEVICE_LINK_GLOBAL_LOCAL_URL', value);
+    try {
+      expect(() => getClientEndpoint('deviceLinkApiBaseUrl')).toThrow(/loopback/);
+      expect(getClientEndpoint('authApiBaseUrl')).toBe(TEST_CLIENT_ENDPOINTS.authApiBaseUrl);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('个人版保留正式 Webhook 地址，只有明确的开发覆盖才使用本机服务', () => {
+    resetClientEndpointsForTest(TEST_CLIENT_ENDPOINTS);
+    vi.stubEnv('CINDY_PERSONAL_FIXED_APP', '/Applications/Example Personal.app');
+    vi.stubEnv('XDT_WEBHOOK_CN_LOCAL_URL', '');
+    vi.stubEnv('XDT_WEBHOOK_GLOBAL_LOCAL_URL', '');
+    try {
+      expect(getClientEndpointForRealm('cn', 'webhookApiBaseUrl')).not.toMatch(/127\.0\.0\.1/);
+      expect(getClientEndpointForRealm('global', 'webhookApiBaseUrl')).toBe(TEST_CLIENT_ENDPOINTS.webhookApiBaseUrl);
+      expect(getClientEndpoint('authApiBaseUrl')).toBe(TEST_CLIENT_ENDPOINTS.authApiBaseUrl);
+      vi.stubEnv('XDT_WEBHOOK_GLOBAL_LOCAL_URL', 'http://127.0.0.1:33356');
+      expect(getClientEndpointForRealm('global', 'webhookApiBaseUrl')).toBe('http://127.0.0.1:33356');
+      Object.defineProperty(app, 'isPackaged', { configurable: true, value: true });
+      expect(getClientEndpoint('webhookApiBaseUrl')).toBe(TEST_CLIENT_ENDPOINTS.webhookApiBaseUrl);
+      Object.defineProperty(app, 'isPackaged', { configurable: true, value: false });
+      vi.stubEnv('CINDY_PERSONAL_FIXED_APP', '');
+      vi.stubEnv('XDT_WEBHOOK_GLOBAL_LOCAL_URL', '');
+      expect(getClientEndpoint('webhookApiBaseUrl')).toBe(TEST_CLIENT_ENDPOINTS.webhookApiBaseUrl);
+    } finally {
+      Object.defineProperty(app, 'isPackaged', { configurable: true, value: false });
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('开发版只覆盖回环Webhook地址，两个区域的认证与模型端点保持独立', () => {
+    const cn = { ...TEST_CLIENT_ENDPOINTS, authApiBaseUrl: 'https://auth.cn.example.com' };
+    const global = { ...TEST_CLIENT_ENDPOINTS, authApiBaseUrl: 'https://auth.global.example.com' };
+    resetClientEndpointsForTest(global, { buildRegion: 'global', realmEndpoints: { cn, global } });
+    vi.stubEnv('XDT_WEBHOOK_CN_LOCAL_URL', 'http://127.0.0.1:33355');
+    vi.stubEnv('XDT_WEBHOOK_GLOBAL_LOCAL_URL', 'http://127.0.0.1:33356');
+    try {
+      for (const region of ['cn', 'global'] as const) {
+        activateClientEndpointRealm(region);
+        const local = region === 'cn' ? 'http://127.0.0.1:33355' : 'http://127.0.0.1:33356';
+        expect(getClientEndpoint('webhookApiBaseUrl')).toBe(local);
+        expect(getClientEndpointForRealm(region, 'webhookApiBaseUrl')).toBe(local);
+        const expected = region === 'cn' ? cn : global;
+        expect(getClientEndpoint('authApiBaseUrl')).toBe(expected.authApiBaseUrl);
+        expect(getClientEndpointForRealm(region, 'authApiBaseUrl')).toBe(expected.authApiBaseUrl);
+        expect(getClientEndpoint('modelAccessApiBaseUrl')).toBe(expected.modelAccessApiBaseUrl);
+      }
+      Object.defineProperty(app, 'isPackaged', { configurable: true, value: true });
+      expect(getClientEndpoint('webhookApiBaseUrl')).toBe(global.webhookApiBaseUrl);
+      expect(getClientEndpointForRealm('cn', 'webhookApiBaseUrl')).toBe(cn.webhookApiBaseUrl);
+    } finally {
+      Object.defineProperty(app, 'isPackaged', { configurable: true, value: false });
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each(['http://192.0.2.1:33355', 'http://user:secret@127.0.0.1:33355', 'file:///tmp/test', 'http://127.0.0.1:33355/other'])('拒绝开发版Webhook覆盖的非回环或含凭据/路径输入 %s', (value) => {
+    resetClientEndpointsForTest(TEST_CLIENT_ENDPOINTS);
+    vi.stubEnv('XDT_WEBHOOK_CN_LOCAL_URL', value);
+    vi.stubEnv('XDT_WEBHOOK_GLOBAL_LOCAL_URL', value);
+    try {
+      expect(() => getClientEndpoint('webhookApiBaseUrl')).toThrow(/loopback/);
+      expect(getClientEndpoint('authApiBaseUrl')).toBe(TEST_CLIENT_ENDPOINTS.authApiBaseUrl);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('仅设置旧 CN 测试地址时不会把 Global 账号的请求发往 CN 服务', () => {
+    const cn = { ...TEST_CLIENT_ENDPOINTS, deviceLinkApiBaseUrl: 'https://device.cn.example.com' };
+    const global = { ...TEST_CLIENT_ENDPOINTS, deviceLinkApiBaseUrl: 'https://device.global.example.com' };
+    resetClientEndpointsForTest(global, { buildRegion: 'global', realmEndpoints: { cn, global } });
+    vi.stubEnv('XDT_DEVICE_LINK_LOCAL_URL', 'http://127.0.0.1:33355');
+    try {
+      activateClientEndpointRealm('global');
+      expect(getClientEndpoint('deviceLinkApiBaseUrl')).toBe(global.deviceLinkApiBaseUrl);
+      expect(getClientEndpointForRealm('global', 'deviceLinkApiBaseUrl')).toBe(global.deviceLinkApiBaseUrl);
+      activateClientEndpointRealm('cn');
+      expect(getClientEndpoint('deviceLinkApiBaseUrl')).toBe('http://127.0.0.1:33355');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('组织会话切换所有 token 消费端点,但安装身份与更新链保持构建区域', () => {

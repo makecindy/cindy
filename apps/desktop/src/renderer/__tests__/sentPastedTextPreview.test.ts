@@ -18,8 +18,7 @@
  *   S3  测量镜像与收起态渲染共用 collapseMeasureBody(同一份投影,判定与呈现一致)。
  *   S4  previewTitle 在四种界面语言里都有,标题不复用随消息落库的 display。
  *
- * 组件级契约走静态源码扫描,与 textLightbox.test.ts / imageLightboxCloseAnywhere.test.ts
- * 同一约定:把测试留在 node 环境,不为这几条接线检查拖进 jsdom + react-dom。
+ * 组件级契约走静态源码扫描,把测试留在 node 环境,不为这几条接线检查拖进 jsdom + react-dom。
  */
 
 import { describe, it, expect } from 'vitest';
@@ -150,17 +149,6 @@ describe('UserMessage pasted-text chip wiring', () => {
     // 调用点统一渲染,不再有第三个调用点。
     // 计数包含 useCallback 定义本身 + 两个调用点。
     expect(source.match(/handlePastedTextChipClick/g)?.length).toBe(3);
-  });
-
-  it('S1b 两个调用点都拿到同一份 sessionReferences(不再有 undefined 占位)', () => {
-    // 召唤卡 prompt 曾经漏传 sessionReferences(PR #966 review);该插槽现已
-    // 随合并形态取消,$指令 正文并入普通正文调用点。sessionReferences 按
-    // sessionId / messageClientId 匹配、不依赖文本偏移,两处理应拿同一份。
-    // 展开态传 handler;收起态传 undefined,但两个调用点都保留同一份引用元数据。
-    expect(source).toMatch(
-      /sessionReferences,\s*\n\s*longMessageCollapsed \? undefined : handlePastedTextChipClick,/,
-    );
-    expect(source).toMatch(/sessionReferences,\s*\n\s*handlePastedTextChipClick,/);
   });
 
   it('S2 ToolPayloadLightbox 以只读 text 模式挂载', () => {

@@ -15,6 +15,10 @@ export { MOBILE_MERMAID_VERSION } from '@/session/richContentAssets.generated';
 /** 本地资源执行超时;异常时停留在源码降级。 */
 const MERMAID_LOCAL_TIMEOUT_MS = 1000;
 
+// The bundled runtime is immutable. Escape it once on first use, not on startup
+// or for every diagram/theme; only source and callbacks vary between documents.
+let serializedMermaidRuntime: string | undefined;
+
 /** Mermaid 本地动态加载器,只在页面含图表时注入。 */
 export function buildMermaidLoaderJs(
   onReadyJs: string,
@@ -32,7 +36,7 @@ export function buildMermaidLoaderJs(
       }
       try {
         var script = document.createElement('script');
-        script.textContent = ${serializeForScript(MOBILE_MERMAID_JS)};
+        script.textContent = ${serializedMermaidRuntime ??= serializeForScript(MOBILE_MERMAID_JS)};
         document.head.appendChild(script);
         if (!window.mermaid) { fail(); return; }
         try { ${onReadyJs} } catch (error) { fail(); return; }
@@ -58,6 +62,7 @@ export interface MermaidWebViewColors {
   deferSource?: boolean;
   /** true 时页面允许双指缩放(详情查看);缺省锁定(内联预览,避免列表滚动误触)。 */
   zoomable?: boolean;
+  preview?: boolean;
 }
 
 export function buildMermaidWebViewHtml(
@@ -165,6 +170,13 @@ export function buildMermaidWebViewHtml(
       root.appendChild(pre);
     }
 
+    function snapshotPreview() {
+      if (!${theme.preview === true}) return;
+      Promise.resolve(document.fonts && document.fonts.ready).then(function () {
+        window.__cindyMermaidExportPng('inline-preview', 3);
+      });
+    }
+
     async function renderMermaid() {
       const trimmed = source.trim();
       if (!trimmed || !window.mermaid) return;
@@ -192,6 +204,7 @@ export function buildMermaidWebViewHtml(
         const rendered = await window.mermaid.render('mobile-mermaid-diagram', trimmed);
         root.className = '';
         root.innerHTML = rendered.svg;
+        snapshotPreview();
       } catch (error) {
         // 原文失败 → 用 RN 侧预算好的修复版重试一次;再失败才降级源码展示。
         if (repairedSource) {
@@ -200,6 +213,7 @@ export function buildMermaidWebViewHtml(
             const rendered = await window.mermaid.render('mobile-mermaid-diagram-fixed', repairedSource);
             root.className = '';
             root.innerHTML = rendered.svg;
+            snapshotPreview();
             return;
           } catch (retryError) {
             // fall through
@@ -224,6 +238,8 @@ export function buildMermaidWebViewHtml(
         var w = (vb && vb.width) || rect.width || 800;
         var h = (vb && vb.height) || rect.height || 600;
         var effScale = Math.min(scale || 2, 4096 / Math.max(w, h));
+        // Inline snapshots have a separate pixel budget; full-screen export keeps its resolution.
+        if (id === 'inline-preview') effScale = Math.min(effScale, 1536 / Math.max(w, h));
         var xml = new XMLSerializer().serializeToString(svg);
         var img = new Image();
         img.onload = function () {

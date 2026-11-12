@@ -1,0 +1,10 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "podspecPath": "./ios/CindySpeakerOnnx.podspec",
+    "modules": ["CindySpeakerOnnxModule"]
+  },
+  "android": {
+    "modules": ["com.xdtmaker.speakeronnx.CindySpeakerOnnxModule"]
+  }
+}

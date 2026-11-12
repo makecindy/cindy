@@ -21,6 +21,63 @@ describe('translateRequest', () => {
     ]);
   });
 
+  it('strict 逐工具判定:开关开启时合规工具 strict:true,不合规工具回落 strict:false', () => {
+    const req: AnthropicMessagesRequest = {
+      model: 'xai/grok-4.6',
+      messages: [],
+      tools: [
+        {
+          // 合规:全必填 + additionalProperties:false
+          name: 'Conforming',
+          input_schema: {
+            type: 'object',
+            properties: { file_path: { type: 'string' } },
+            required: ['file_path'],
+            additionalProperties: false,
+          },
+        },
+        {
+          // Edit 真实形态:replace_all 是 optional → 不合规,回落 strict:false
+          name: 'Edit',
+          input_schema: {
+            type: 'object',
+            properties: {
+              file_path: { type: 'string' },
+              old_string: { type: 'string' },
+              new_string: { type: 'string' },
+              replace_all: { type: 'boolean' },
+            },
+            required: ['file_path', 'old_string', 'new_string'],
+            additionalProperties: false,
+          },
+        },
+        {
+          // 复杂 MCP schema 形态:propertyNames 在 strict 子集外 → 不合规
+          name: 'ghost_call',
+          input_schema: {
+            type: 'object',
+            properties: {
+              args: { type: 'object', propertyNames: { type: 'string' } },
+            },
+            required: ['args'],
+            additionalProperties: false,
+          },
+        },
+        {
+          // 无 input_schema → 兜底 {} 不合规,strict:false
+          name: 'NoSchema',
+        },
+      ],
+    };
+    const strictFlags = (opts: Parameters<typeof translateRequest>[1]): boolean[] =>
+      (translateRequest(req, opts).tools ?? []).map((t) => (t as { strict?: boolean }).strict === true);
+
+    // 开关关闭(默认,所有非启用 provider):全部 strict:false
+    expect(strictFlags({ model: 'grok-4.6' })).toEqual([false, false, false, false]);
+    // 开关开启:只有合规工具 strict:true,其余回落
+    expect(strictFlags({ model: 'grok-4.6', strictFunctionTools: true })).toEqual([true, false, false, false]);
+  });
+
   it('上游恒流式:调用方 stream:false 也发 stream:true(codex 对 stream:false 返 400)', () => {
     // chatgpt.com/backend-api/codex 实测:stream:false → 400
     // `{"detail":"Stream must be set to true"}`。非流式调用方由 handler 在下游缓冲满足。
@@ -191,7 +248,9 @@ describe('translateRequest', () => {
     expect(out.input).toEqual([{ type: 'function_call_output', call_id: 'c1', output: 'r1\nr2' }]);
   });
 
-  it('tool_result 图像块降级为带说明的占位文案,图像数据不外泄 (#795)', () => {
+  // Regression: #9469. Text-only coverage missed images returned by Read/MCP.
+  // Exercise the production translator; preserve bytes, order and tool provenance.
+  it('preserves base64 and URL images inside the original tool result', () => {
     const req: AnthropicMessagesRequest = {
       model: 'gpt-5.5',
       messages: [
@@ -204,6 +263,8 @@ describe('translateRequest', () => {
               content: [
                 { type: 'text', text: 'screenshot below' },
                 { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAABBBB' } },
+                { type: 'text', text: 'second image' },
+                { type: 'image', source: { type: 'url', url: 'https://example.com/fixture.png' } },
               ],
             },
           ],
@@ -211,18 +272,41 @@ describe('translateRequest', () => {
       ],
     };
     const out = translateRequest(req, { model: 'gpt-5.5' });
-    // 先断言长度再取元素:input 缺失时给出清晰断言失败而不是 TypeError。
-    expect(out.input).toHaveLength(1);
-    const item = out.input![0] as { type: string; output: string };
-    expect(item.type).toBe('function_call_output');
-    expect(item.output).toContain('screenshot below');
-    // 占位文案要素:确认有图、说明送不到是路由限制、禁止臆测、给出改走 user 消息的出路。
-    expect(item.output).toContain('[image omitted:');
-    expect(item.output).toContain('Do NOT guess');
-    expect(item.output).toContain('attach the image');
-    // 图像字节与旧版裸占位符都不应出现。
-    expect(item.output).not.toContain('AAAABBBB');
-    expect(item.output).not.toContain('[image]');
+    expect(out.input).toEqual([{
+      type: 'function_call_output', call_id: 'c1', output: [
+        { type: 'input_text', text: 'screenshot below' },
+        { type: 'input_image', image_url: 'data:image/png;base64,AAAABBBB' },
+        { type: 'input_text', text: 'second image' },
+        { type: 'input_image', image_url: 'https://example.com/fixture.png' },
+      ],
+    }]);
+  });
+
+  it('preserves an image-only result separately from a sibling text-only error result', () => {
+    const out = translateRequest({ model: 'xai/grok-4.7', messages: [{ role: 'user', content: [
+      { type: 'tool_result', tool_use_id: 'image', content: [
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'AA==' } },
+      ] },
+      { type: 'tool_result', tool_use_id: 'error', is_error: true, content: [
+        { type: 'text', text: 'File not found' }, { type: 'text', text: 'Retry another path' },
+      ] },
+    ] }] }, { model: 'grok-4.7' });
+    expect(out.input).toEqual([
+      { type: 'function_call_output', call_id: 'image', output: [
+        { type: 'input_image', image_url: 'data:image/jpeg;base64,AA==' },
+      ] },
+      { type: 'function_call_output', call_id: 'error', output: 'File not found\nRetry another path' },
+    ]);
+  });
+
+  it('reports a missing image source without serializing the image block as text', () => {
+    const out = translateRequest({ model: 'xai/grok-4.7', messages: [{ role: 'user', content: [
+      { type: 'tool_result', tool_use_id: 'c1', content: [
+        { type: 'text', text: 'screenshot' }, { type: 'image', source: { type: 'base64' } },
+      ] },
+    ] }] }, { model: 'grok-4.7' });
+    expect(out.input).toEqual([{ type: 'function_call_output', call_id: 'c1',
+      output: 'screenshot\n[image omitted: missing or unsupported image source]' }]);
   });
 
   it('serverSideTools 恒定追加在 function tools 之后(位置固定 → 前缀稳定)', () => {
@@ -450,4 +534,21 @@ describe('translateRequest', () => {
     const normal = translateRequest({ model: 'gpt-5.5', messages: [] }, { model: 'gpt-5.5' });
     expect(normal.service_tier).toBeUndefined();
   });
+});
+
+it('round-trips bare-model native tool state with thinking disabled without accepting another connection', async () => {
+  const { SseTranslator } = await import('../translate-sse.js');
+  const namespace = 'cindy-provider-fixture/';
+  const translator = new SseTranslator('bare-model', 'default', namespace);
+  const events = [
+    { type: 'response.created', response: { id: 'resp_native', model: 'bare-model' } },
+    { type: 'response.output_item.added', output_index: 0, item: { id: 'rs_native', type: 'reasoning', summary: [] } },
+    { type: 'response.output_item.done', output_index: 0, item: { id: 'rs_native', type: 'reasoning', summary: [], encrypted_content: 'opaque-tool-state' } },
+  ].flatMap(event => translator.push(event));
+  const block = events.find(event => event.event === 'content_block_start')!.data.content_block;
+  const request = { model: 'bare-model', messages: [{ role: 'assistant', content: [block] }] } as AnthropicMessagesRequest;
+  const settings = { model: 'bare-model', reasoningEffort: 'none' as const, providerPrefix: namespace, preserveReasoningState: true };
+  expect(translateRequest(request, settings).input).toEqual([{ type: 'reasoning', id: 'rs_native', summary: [], encrypted_content: 'opaque-tool-state' }]);
+  expect(translateRequest(request, { ...settings, providerPrefix: 'another-connection/' }).input).toEqual([]);
+  expect(translateRequest(request, { ...settings, preserveReasoningState: false }).input).toEqual([]);
 });

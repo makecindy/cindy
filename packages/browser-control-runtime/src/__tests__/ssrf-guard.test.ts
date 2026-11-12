@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { fetchWithSsrFGuard } from '../shim/ssrf-runtime.js';
+import {
+  fetchSingleHopWithSsrFGuard,
+  fetchWithSsrFGuard,
+} from '../shim/ssrf-runtime.js';
+import { assertBrowserNavigationAllowed } from '../_generated/extension/src/browser/navigation-guard.js';
+import { withAllowedHostname } from '../_generated/extension/src/browser/ssrf-policy-helpers.js';
 import {
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
@@ -72,6 +77,53 @@ describe('vendored SSRF decision primitives', () => {
   );
 });
 
+describe('proxied browser navigation policy', () => {
+  it('fails closed without an explicit public-hostname allowlist', async () => {
+    await expect(assertBrowserNavigationAllowed({
+      url: 'https://auth.example.com/authorize',
+      browserProxyMode: 'explicit-browser-proxy',
+      ssrfPolicy: {},
+      lookupFn: lookupAddresses([{ address: '8.8.8.8', family: 4 }]),
+    })).rejects.toThrow(/requires an explicit public-hostname allowlist/);
+  });
+
+  it('blocks cleartext navigation even when the proxy destination is allowlisted', async () => {
+    await expect(assertBrowserNavigationAllowed({
+      url: 'http://auth.example.com/authorize',
+      browserProxyMode: 'explicit-browser-proxy',
+      ssrfPolicy: { hostnameAllowlist: ['*.example.com'] },
+      lookupFn: lookupAddresses([{ address: '8.8.8.8', family: 4 }]),
+    })).rejects.toThrow(/requires HTTPS/);
+  });
+
+  it('allows an allowlisted proxy destination after public DNS validation', async () => {
+    await expect(assertBrowserNavigationAllowed({
+      url: 'https://auth.example.com/authorize',
+      browserProxyMode: 'explicit-browser-proxy',
+      ssrfPolicy: { hostnameAllowlist: ['*.example.com'] },
+      lookupFn: lookupAddresses([{ address: '8.8.8.8', family: 4 }]),
+    })).resolves.toBeUndefined();
+  });
+
+  it('blocks private DNS answers even for an allowlisted proxy destination', async () => {
+    await expect(assertBrowserNavigationAllowed({
+      url: 'https://auth.example.com/authorize',
+      browserProxyMode: 'explicit-browser-proxy',
+      ssrfPolicy: { hostnameAllowlist: ['*.example.com'] },
+      lookupFn: lookupAddresses([{ address: '127.0.0.1', family: 4 }]),
+    })).rejects.toThrow(/blocked/i);
+  });
+
+  it('blocks a public destination outside the proxy allowlist', async () => {
+    await expect(assertBrowserNavigationAllowed({
+      url: 'https://example.com/',
+      browserProxyMode: 'explicit-browser-proxy',
+      ssrfPolicy: { hostnameAllowlist: ['*.example.com'] },
+      lookupFn: lookupAddresses([{ address: '8.8.8.8', family: 4 }]),
+    })).rejects.toThrow(/allowlist/i);
+  });
+});
+
 describe('fetchWithSsrFGuard thin shell', () => {
   it('rejects non-http(s) schemes before any network access', async () => {
     await expect(
@@ -91,6 +143,123 @@ describe('fetchWithSsrFGuard thin shell', () => {
     await expect(fetchWithSsrFGuard({ url: 'http://10.0.0.5/' })).rejects.toThrow(/blocked/i);
   });
 
+  it('blocks a hostname whose pinned DNS answer is private before a single-hop fetch', async () => {
+    await expect(
+      fetchSingleHopWithSsrFGuard({
+        url: 'https://public.example/data',
+        lookupFn: lookupAddresses([{ address: '127.0.0.1', family: 4 }]),
+      }),
+    ).rejects.toThrow(/blocked/i);
+  });
+
+  it('revalidates only after DNS and dispatcher selection, then closes without dispatching', async () => {
+    const events: string[] = [];
+    const close = vi.fn(async () => undefined);
+    await expect(
+      fetchSingleHopWithSsrFGuard({
+        url: 'https://public.example/data',
+        lookupFn: (async () => {
+          events.push('dns');
+          return [{ address: '93.184.216.34', family: 4 }];
+        }) as unknown as LookupFn,
+        dispatcherFactory: async () => {
+          events.push('dispatcher');
+          return { close } as never;
+        },
+        beforeDispatch: () => {
+          events.push('revalidate');
+          throw new Error('authorization expired');
+        },
+      }),
+    ).rejects.toThrow('authorization expired');
+
+    expect(events).toEqual(['dns', 'dispatcher', 'revalidate']);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a pending DNS lookup without dispatching after its late result", async () => {
+    let finishDns!: (value: Array<{ address: string; family: number }>) => void;
+    const dns = new Promise<Array<{ address: string; family: number }>>(
+      (resolve) => {
+        finishDns = resolve;
+      },
+    );
+    const lookup = vi.fn(() => dns);
+    const dispatcherFactory = vi.fn();
+    const beforeDispatch = vi.fn();
+    const controller = new AbortController();
+    const pending = fetchSingleHopWithSsrFGuard({
+      url: "https://cdn.example.com/file",
+      signal: controller.signal,
+      lookupFn: lookup as unknown as LookupFn,
+      dispatcherFactory,
+      beforeDispatch,
+    });
+    const rejected = expect(pending).rejects.toThrow("cancelled during DNS");
+    expect(lookup).toHaveBeenCalledOnce();
+    controller.abort(new Error("cancelled during DNS"));
+    await rejected;
+    finishDns([{ address: "93.184.216.34", family: 4 }]);
+    await dns;
+    await Promise.resolve();
+    expect(dispatcherFactory).not.toHaveBeenCalled();
+    expect(beforeDispatch).not.toHaveBeenCalled();
+  });
+
+  it("cleans up a dispatcher factory that completes after cancellation", async () => {
+    let finishFactory!: (value: never) => void;
+    const factoryResult = new Promise<never>((resolve) => {
+      finishFactory = resolve;
+    });
+    const dispatcherFactory = vi.fn(() => factoryResult);
+    const close = vi.fn(async () => undefined);
+    const beforeDispatch = vi.fn();
+    const controller = new AbortController();
+    const pending = fetchSingleHopWithSsrFGuard({
+      url: "https://cdn.example.com/file",
+      signal: controller.signal,
+      lookupFn: lookupAddresses([{ address: "93.184.216.34", family: 4 }]),
+      dispatcherFactory,
+      beforeDispatch,
+    });
+    const rejected = expect(pending).rejects.toThrow("cancelled during setup");
+    await vi.waitFor(() => expect(dispatcherFactory).toHaveBeenCalledOnce());
+    controller.abort(new Error("cancelled during setup"));
+    await rejected;
+    finishFactory({ close } as never);
+    await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+    expect(beforeDispatch).not.toHaveBeenCalled();
+  });
+
+  it("does not start DNS when the request is already cancelled", async () => {
+    const lookup = vi.fn();
+    const controller = new AbortController();
+    controller.abort(new Error("already cancelled"));
+    await expect(
+      fetchSingleHopWithSsrFGuard({
+        url: "https://cdn.example.com/file",
+        signal: controller.signal,
+        lookupFn: lookup as LookupFn,
+      }),
+    ).rejects.toThrow("already cancelled");
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("rejects a mixed public/private DNS answer before creating a dispatcher", async () => {
+    const dispatcherFactory = vi.fn();
+    await expect(
+      fetchSingleHopWithSsrFGuard({
+        url: "https://cdn.example.com/file",
+        lookupFn: lookupAddresses([
+          { address: "93.184.216.34", family: 4 },
+          { address: "10.0.0.1", family: 4 },
+        ]),
+        dispatcherFactory,
+      }),
+    ).rejects.toThrow(/blocked/i);
+    expect(dispatcherFactory).not.toHaveBeenCalled();
+  });
+
   it('does NOT block an allowlisted loopback host (regression: CDP control plane)', async () => {
     // With the host in allowedHostnames, the policy gate must pass it. We use a
     // port nothing listens on, so the only acceptable failure is a CONNECTION
@@ -102,5 +271,34 @@ describe('fetchWithSsrFGuard thin shell', () => {
         timeoutMs: 1500,
       }),
     ).rejects.not.toThrow(/blocked|not in allowlist/i);
+  });
+});
+
+describe('one-off hostname grants under a strict allowlist', () => {
+  // Regression: a per-start proxyAllowedHostnames lands in `hostnameAllowlist`,
+  // but the CDP endpoint's own exemption used to write only `allowedHostnames`.
+  // The loopback endpoint was therefore blocked by the very allowlist meant for
+  // page navigation, and EVERY proxied navigation failed with
+  // "browser endpoint blocked by policy". Found by end-to-end run, not units.
+  it('grants the loopback CDP endpoint through both policy fields', () => {
+    const granted = withAllowedHostname(
+      { hostnameAllowlist: ['example.com'] },
+      '127.0.0.1',
+    );
+    expect(granted.allowedHostnames).toContain('127.0.0.1');
+    expect(granted.hostnameAllowlist).toContain('127.0.0.1');
+    // The caller's own allowlist entries must survive the grant.
+    expect(granted.hostnameAllowlist).toContain('example.com');
+  });
+
+  it('does not invent an allowlist when the policy has none', () => {
+    // An absent/empty allowlist means "no allowlist", not "allow only this
+    // host" — inventing one here would silently narrow an unrestricted policy
+    // to a single host. Absent stays absent; empty stays empty (which
+    // matchesHostnameAllowlist also treats as unrestricted).
+    expect(withAllowedHostname({}, '127.0.0.1').hostnameAllowlist).toBeUndefined();
+    expect(
+      withAllowedHostname({ hostnameAllowlist: [] }, '127.0.0.1').hostnameAllowlist,
+    ).toEqual([]);
   });
 });

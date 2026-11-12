@@ -1,10 +1,17 @@
 /**
  * mainListModel — 主列表混排模型单测(sidebar-redesign D 期)。
- * 覆盖:混排口径(项目行与散排对话平级竞争位置)、四种排序、对话组开关、
- * flat 平铺、手动排序只管项目行的收窄语义。
+ * 覆盖:混排口径(项目行与散排对话平级竞争位置)、任务排序、对话组开关、
+ * flat 平铺、自定义项目顺序只管项目行的收窄语义。
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const feature = vi.hoisted(() => ({ enabled: true }));
+vi.mock('@cindy/maker-shared/cindy-make-feature', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@cindy/maker-shared/cindy-make-feature')>(),
+  get CINDY_MAKE_ENABLED() { return feature.enabled; },
+}));
+beforeEach(() => { feature.enabled = true; });
 
 import { LIVE_TASK_PRIORITY } from '../../shared/liveTaskPriority';
 import type { Session } from '@/lib/ccAgent.types';
@@ -12,8 +19,14 @@ import type { ProjectNode } from '../features/cc-agent/lib/projectGrouping';
 import {
   advanceViewedPriorityHold,
   buildMainListEntries,
+  getMainListEntrySessions,
   holdViewedPriorityRank,
+  sessionPriorityRecencyMs,
   sessionPriorityRank,
+  sortSessionsForMainList,
+  partitionCindyMakeSessions,
+  onlineDeviceSectionIds,
+  hasSettledOnlineDeviceSection,
   splitEntriesByDevice,
   type MainListEntry,
 } from '../features/cc-agent/lib/mainListModel';
@@ -64,7 +77,11 @@ function labels(entries: MainListEntry[]): string[] {
       ? `p:${entry.project.displayName}`
       : entry.kind === 'dialogue-group'
         ? 'dlg-group'
-        : `s:${entry.session.title}`,
+        : entry.kind === 'automation-group'
+          ? `auto:${entry.group.title}`
+          : entry.kind === 'cindy-make-group'
+            ? 'cindy-make-group'
+            : `s:${entry.session.title}`,
   );
 }
 
@@ -72,6 +89,180 @@ const NO_PRIORITY = {
   runningSessionIds: new Set<string>(),
   attentionSessionIds: new Set<string>(),
 };
+
+describe('Cindy Make sidebar group', () => {
+  it('preserves empty saved projects and ordinary tasks in mixed projects while disabled', () => {
+    feature.enabled = false;
+    const updatedAt = '2026-10-12T00:00:00Z';
+    const hidden = session({ id: 'make', source: 'cindy-make', updatedAt });
+    const ordinary = session({ id: 'ordinary', source: 'desktop', updatedAt });
+    const saved = project('saved', []);
+    const mixed = project('mixed', [hidden, ordinary]);
+    const entries = buildMainListEntries({
+      projects: [saved, mixed], dialogues: [], unclassified: [], groupBy: 'project',
+      groupDialogue: false, sortBy: 'recency', manualProjectOrder: [],
+    });
+    expect(entries.map(entry => entry.kind === 'project' ? entry.project.projectKey : entry.kind).sort()).toEqual(['local:mixed', 'local:saved']);
+    expect(entries.flatMap(getMainListEntrySessions)).toEqual([ordinary]);
+    expect(mixed.sessions).toEqual([hidden, ordinary]);
+  });
+  it.each(['project', 'flat'] as const)('hides all Make sources and their projects in %s mode when disabled', (groupBy) => {
+    feature.enabled = false;
+    const updatedAt = '2026-10-12T00:00:00Z';
+    const make = session({ id: 'make', source: 'cindy-make', updatedAt });
+    const merge = session({ id: 'merge', source: 'cindy-make-merge', updatedAt });
+    const ordinary = session({ id: 'ordinary', title: 'Ordinary', source: 'desktop', updatedAt });
+    const entries = buildMainListEntries({
+      projects: [project('make', [make])], dialogues: [ordinary], unclassified: [merge],
+      groupBy, groupDialogue: false, sortBy: 'recency', manualProjectOrder: [],
+    });
+    expect(labels(entries)).toEqual(['s:Ordinary']);
+    expect(getMainListEntrySessions(entries[0])).toEqual([ordinary]);
+  });
+  it('groups a distinct upstream-merge source alongside personal-feature tasks', () => {
+    const merge = session({ source: 'cindy-make-merge', workingDir: '/managed/merge-worktrees/abcd', workspaceKind: 'project', updatedAt: '2026-09-17T00:00:00Z' });
+    const normal = session({ source: 'cindy-make', workingDir: '/managed/worktrees/efgh', workspaceKind: 'project', updatedAt: '2026-09-17T00:00:00Z' });
+    const result = partitionCindyMakeSessions({ projects: [], dialogues: [], unclassified: [merge, normal] });
+    expect(result.cindyMake).toEqual([merge, normal]);
+    expect(result.unclassified).toEqual([]);
+    expect(merge.source).toBe('cindy-make-merge');
+  });
+  const make = (id: string, updatedAt: string, extra: Partial<Session> = {}) =>
+    session({
+      id,
+      updatedAt,
+      title: id,
+      source: 'cindy-make',
+      workspaceKind: 'project',
+      workingDir: '/managed/worktrees/' + id,
+      ...extra,
+    });
+
+  it.each(['project', 'flat'] as const)(
+    'collects different worktrees and newly preparing tasks under one root in %s mode',
+    (groupBy) => {
+      const first = make('first', '2026-09-17T01:00:00Z');
+      const second = make('second', '2026-09-17T02:00:00Z');
+      const waiting = make('waiting', '2026-09-17T03:00:00Z', { workingDir: null });
+      const ordinary = session({ updatedAt: '2026-09-17T00:00:00Z', title: 'Cindy Make' });
+      const entries = buildMainListEntries({
+        projects: [project('first', [first]), project('second', [second])],
+        dialogues: [ordinary],
+        unclassified: [waiting],
+        groupBy,
+        groupDialogue: false,
+        sortBy: 'recency',
+        manualProjectOrder: [],
+      });
+      expect(labels(entries)).toEqual(['cindy-make-group', 's:Cindy Make']);
+      expect(getMainListEntrySessions(entries[0]).map((value) => value.id)).toEqual([
+        'waiting',
+        'second',
+        'first',
+      ]);
+      expect(first.workingDir).toBe('/managed/worktrees/first');
+      expect(second.workingDir).toBe('/managed/worktrees/second');
+    },
+  );
+
+  it('preserves ordinary tasks that share a directory and leaves empty saved projects intact', () => {
+    const personal = make('make', '2026-09-17T02:00:00Z');
+    const ordinary = session({ updatedAt: '2026-09-17T01:00:00Z', title: 'ordinary' });
+    const mixed = project('shared', [personal, ordinary]);
+    const empty = project('saved', []);
+    const result = partitionCindyMakeSessions({
+      projects: [mixed, empty],
+      dialogues: [],
+      unclassified: [],
+    });
+    expect(result.projects.map((value) => value.projectKey)).toEqual([
+      'local:shared',
+      'local:saved',
+    ]);
+    expect(result.projects[0].sessions).toEqual([ordinary]);
+    expect(result.projects[1]).toBe(empty);
+    expect(result.cindyMake).toEqual([personal]);
+    expect(mixed.sessions).toEqual([personal, ordinary]);
+  });
+
+  it('keeps the root first while ordering its tasks by the existing attention priorities', () => {
+    const waiting = make('waiting', '2026-09-17T01:00:00Z');
+    const newer = make('newer', '2026-09-17T02:00:00Z');
+    const newest = session({ updatedAt: '2026-09-17T03:00:00Z' });
+    const entries = buildMainListEntries({
+      projects: [project('waiting', [waiting]), project('newer', [newer])],
+      dialogues: [newest],
+      groupBy: 'project',
+      groupDialogue: false,
+      sortBy: 'priority',
+      manualProjectOrder: [],
+      priorityContext: {
+        ...NO_PRIORITY,
+        attentionSessionIds: new Set([waiting.id]),
+        waitingSessionIds: new Set([waiting.id]),
+      },
+    });
+    expect(entries[0].kind).toBe('cindy-make-group');
+    expect(getMainListEntrySessions(entries[0])).toEqual([waiting, newer]);
+  });
+
+  it.each(['recency', 'created', 'priority'] as const)(
+    'keeps idle Cindy Make first under %s, custom project order and device grouping',
+    (sortBy) => {
+      const local = make('local', '2026-09-17T01:00:00Z');
+      const remote = make('remote', '2026-09-17T01:00:00Z', { deviceLinkDeviceId: 'remote-device' });
+      const newer = session({ updatedAt: '2026-09-18T00:00:00Z' });
+      const remoteNewer = session({ updatedAt: '2026-09-18T00:00:00Z', deviceLinkDeviceId: 'remote-device' });
+      for (const groupBy of ['project', 'flat'] as const) {
+        for (const projectOrder of ['activity', 'custom'] as const) {
+          const options = {
+            sortBy,
+            projectOrder,
+            manualProjectOrder: ['local:ordinary'],
+            priorityContext: {
+              ...NO_PRIORITY,
+              attentionSessionIds: new Set([newer.id, remoteNewer.id]),
+              waitingSessionIds: new Set([newer.id, remoteNewer.id]),
+            },
+          };
+          const entries = buildMainListEntries({
+            projects: [project('ordinary', [newer]), project('make', [local])],
+            dialogues: [remoteNewer],
+            unclassified: [remote],
+            groupBy,
+            groupDialogue: false,
+            ...options,
+          });
+          expect(entries[0].kind).toBe('cindy-make-group');
+          expect(getMainListEntrySessions(entries[0])).toHaveLength(2);
+          const sections = splitEntriesByDevice(entries, ['remote-device'], options);
+          expect(sections.map((section) => section.entries[0].kind)).toEqual([
+            'cindy-make-group',
+            'cindy-make-group',
+          ]);
+          expect(getMainListEntrySessions(sections[0].entries[0])).toEqual([local]);
+          expect(getMainListEntrySessions(sections[1].entries[0])).toEqual([remote]);
+        }
+      }
+    },
+  );
+
+  it('separates local and remote Cindy Make roots by device', () => {
+    const local = make('local', '2026-09-17T01:00:00Z');
+    const remote = make('remote', '2026-09-17T02:00:00Z', { deviceLinkDeviceId: 'remote-device' });
+    const sections = splitEntriesByDevice(
+      [{ kind: 'cindy-make-group', sessions: [remote, local] }],
+      ['remote-device'],
+    );
+    expect(sections.map((section) => section.deviceId)).toEqual([null, 'remote-device']);
+    expect(sections.map((section) => section.entries[0].kind)).toEqual([
+      'cindy-make-group',
+      'cindy-make-group',
+    ]);
+    expect(getMainListEntrySessions(sections[0].entries[0])).toEqual([local]);
+    expect(getMainListEntrySessions(sections[1].entries[0])).toEqual([remote]);
+  });
+});
 
 describe('buildMainListEntries — 混排(recency)', () => {
   it('interleaves project rows and stray dialogues by latest activity', () => {
@@ -123,6 +314,230 @@ describe('buildMainListEntries — 混排(recency)', () => {
     });
     expect(labels(entries)).toEqual(['s:dlg', 's:in-proj']);
   });
+
+  it('keeps repeated automation runs grouped when project grouping is flat', () => {
+    const olderRun = session({
+      updatedAt: '2026-08-10T10:00:00Z',
+      title: 'automation run 1',
+      source: 'scheduler',
+      workspaceKind: 'project',
+      workingDir: '/repo',
+    });
+    const newerRun = session({
+      updatedAt: '2026-08-12T10:00:00Z',
+      title: 'automation run 2',
+      source: 'scheduler',
+      workspaceKind: 'project',
+      workingDir: '/repo',
+    });
+    const manual = session({
+      updatedAt: '2026-08-11T10:00:00Z',
+      title: 'manual',
+      workspaceKind: 'project',
+      workingDir: '/repo',
+    });
+    const scheduleInfo = {
+      scheduleId: 'schedule-cindy-check',
+      scheduleName: '自动检查 Cindy',
+      unreadRunIds: [],
+      hasUnreadRun: false,
+      hasUnreadFailedRun: false,
+      unreadFailedRunIds: [],
+    };
+
+    const entries = buildMainListEntries({
+      projects: [project('/repo', [olderRun, manual, newerRun])],
+      dialogues: [],
+      groupBy: 'flat',
+      groupDialogue: false,
+      sortBy: 'recency',
+      manualProjectOrder: [],
+      notifications: new Set(),
+      scheduleSessionIndex: new Map([
+        [olderRun.id, scheduleInfo],
+        [newerRun.id, scheduleInfo],
+      ]),
+    });
+
+    expect(labels(entries)).toEqual(['auto:自动检查 Cindy', 's:manual']);
+    const automationGroup = entries[0];
+    expect(automationGroup.kind).toBe('automation-group');
+    if (automationGroup.kind !== 'automation-group') throw new Error('expected automation group');
+    expect(automationGroup.group.sessions.map((item) => item.id)).toEqual([
+      newerRun.id,
+      olderRun.id,
+    ]);
+  });
+
+  it('keeps one schedule grouped after its working directory changes', () => {
+    const olderRun = session({
+      updatedAt: '2026-08-10T10:00:00Z',
+      title: 'automation run 1',
+      source: 'scheduler',
+      workspaceKind: 'project',
+      workingDir: '/old-repo',
+    });
+    const newerRun = session({
+      updatedAt: '2026-08-12T10:00:00Z',
+      title: 'automation run 2',
+      source: 'scheduler',
+      workspaceKind: 'project',
+      workingDir: '/new-repo',
+    });
+    const scheduleInfo = {
+      scheduleId: 'schedule-cindy-check',
+      scheduleName: '自动检查 Cindy',
+      unreadRunIds: [],
+      hasUnreadRun: false,
+      hasUnreadFailedRun: false,
+      unreadFailedRunIds: [],
+    };
+
+    const entries = buildMainListEntries({
+      projects: [project('/old-repo', [olderRun]), project('/new-repo', [newerRun])],
+      dialogues: [],
+      groupBy: 'flat',
+      groupDialogue: false,
+      sortBy: 'recency',
+      manualProjectOrder: [],
+      scheduleSessionIndex: new Map([
+        [olderRun.id, scheduleInfo],
+        [newerRun.id, scheduleInfo],
+      ]),
+    });
+
+    expect(labels(entries)).toEqual(['auto:自动检查 Cindy']);
+    const automationGroup = entries[0];
+    expect(automationGroup.kind).toBe('automation-group');
+    if (automationGroup.kind !== 'automation-group') throw new Error('expected automation group');
+    expect(automationGroup.group.sessions.map((item) => item.id)).toEqual([
+      newerRun.id,
+      olderRun.id,
+    ]);
+  });
+
+  it('groups one schedule across project and dialogue destinations before grouping dialogues', () => {
+    const olderProjectRun = session({
+      updatedAt: '2026-08-10T10:00:00Z',
+      title: 'project run',
+      source: 'scheduler',
+      workspaceKind: 'project',
+      workingDir: '/repo',
+    });
+    const newerDialogueRun = session({
+      updatedAt: '2026-08-12T10:00:00Z',
+      title: 'dialogue run',
+      source: 'scheduler',
+      workspaceKind: 'dialogue',
+      workingDir: null,
+    });
+    const manualDialogue = session({
+      updatedAt: '2026-08-11T10:00:00Z',
+      title: 'manual dialogue',
+    });
+    const scheduleInfo = {
+      scheduleId: 'schedule-cindy-check',
+      scheduleName: '自动检查 Cindy',
+      unreadRunIds: [],
+      hasUnreadRun: false,
+      hasUnreadFailedRun: false,
+      unreadFailedRunIds: [],
+    };
+
+    const entries = buildMainListEntries({
+      projects: [project('/repo', [olderProjectRun])],
+      dialogues: [manualDialogue, newerDialogueRun],
+      groupBy: 'flat',
+      groupDialogue: true,
+      sortBy: 'recency',
+      manualProjectOrder: [],
+      scheduleSessionIndex: new Map([
+        [olderProjectRun.id, scheduleInfo],
+        [newerDialogueRun.id, scheduleInfo],
+      ]),
+    });
+
+    expect(labels(entries)).toEqual(['auto:自动检查 Cindy', 'dlg-group']);
+    const automationGroup = entries[0];
+    expect(automationGroup.kind).toBe('automation-group');
+    if (automationGroup.kind !== 'automation-group') throw new Error('expected automation group');
+    expect(automationGroup.group.sessions.map((item) => item.id)).toEqual([
+      newerDialogueRun.id,
+      olderProjectRun.id,
+    ]);
+    const dialogueGroup = entries[1];
+    expect(dialogueGroup.kind).toBe('dialogue-group');
+    if (dialogueGroup.kind !== 'dialogue-group') throw new Error('expected dialogue group');
+    expect(dialogueGroup.sessions.map((item) => item.id)).toEqual([manualDialogue.id]);
+  });
+
+  it('keeps matching schedule ids isolated by remote device', () => {
+    const runs = ['dev-a', 'dev-b'].flatMap((deviceLinkDeviceId, deviceIndex) =>
+      [1, 2].map((runIndex) =>
+        session({
+          updatedAt: `2026-08-${10 + deviceIndex + runIndex}T10:00:00Z`,
+          title: `${deviceLinkDeviceId} run ${runIndex}`,
+          source: 'scheduler',
+          workspaceKind: 'project',
+          workingDir: '/repo',
+          deviceLinkDeviceId,
+        }),
+      ),
+    );
+    const scheduleSessionIndex = new Map(
+      runs.map((run) => [
+        run.id,
+        {
+          scheduleId: 'shared-schedule-id',
+          scheduleName: '远程自动检查',
+          unreadRunIds: [],
+          unreadFailedRunIds: [],
+          hasUnreadRun: false,
+          hasUnreadFailedRun: false,
+        },
+      ]),
+    );
+
+    const entries = buildMainListEntries({
+      projects: [project('/repo-a', runs.slice(0, 2)), project('/repo-b', runs.slice(2))],
+      dialogues: [],
+      groupBy: 'flat',
+      groupDialogue: false,
+      sortBy: 'recency',
+      manualProjectOrder: [],
+      scheduleSessionIndex,
+    });
+    const groups = entries.filter(
+      (entry): entry is Extract<MainListEntry, { kind: 'automation-group' }> =>
+        entry.kind === 'automation-group',
+    );
+    expect(groups).toHaveLength(2);
+    expect(new Set(groups.map((entry) => entry.group.id)).size).toBe(2);
+    expect(groups.map((entry) => entry.group.legacyId)).toEqual([
+      'schedule:shared-schedule-id',
+      'schedule:shared-schedule-id',
+    ]);
+    expect(
+      groups.map((entry) => new Set(entry.group.sessions.map((item) => item.deviceLinkDeviceId))),
+    ).toEqual([new Set(['dev-b']), new Set(['dev-a'])]);
+
+    const sections = splitEntriesByDevice(entries, ['dev-a', 'dev-b'], { sortBy: 'recency' });
+    expect(sections.map((section) => section.deviceId)).toEqual(['dev-a', 'dev-b']);
+    expect(
+      sections.map((section) =>
+        section.entries.flatMap((entry) => getMainListEntrySessions(entry).map((item) => item.id)),
+      ),
+    ).toEqual([
+      runs
+        .slice(0, 2)
+        .map((run) => run.id)
+        .reverse(),
+      runs
+        .slice(2)
+        .map((run) => run.id)
+        .reverse(),
+    ]);
+  });
 });
 
 describe('buildMainListEntries — 排序口径', () => {
@@ -167,6 +582,133 @@ describe('buildMainListEntries — 排序口径', () => {
       priorityContext: ctx,
     });
     expect(labels(entries)).toEqual(['s:needs-input', 's:done-unread', 's:running', 's:idle']);
+  });
+
+  it('keeps a just-sent session at the top of running before the agent is actually live', () => {
+    // 组装层把 starting 并进 runningSessionIds。新发送比已在跑的更新,应压在运行中档顶;
+    // 更新的空闲任务仍在其余档,不能因为它更新就插到运行中前面。
+    const justSent = session({ updatedAt: '2026-08-12T12:00:00Z', title: 'just-sent' });
+    const runningOlder = session({ updatedAt: '2026-08-12T11:00:00Z', title: 'running-older' });
+    const idleNewer = session({ updatedAt: '2026-08-12T13:00:00Z', title: 'idle-newer' });
+    const entries = buildMainListEntries({
+      projects: [],
+      dialogues: [idleNewer, runningOlder, justSent],
+      groupBy: 'project',
+      groupDialogue: false,
+      sortBy: 'priority',
+      manualProjectOrder: [],
+      priorityContext: {
+        runningSessionIds: new Set([justSent.id, runningOlder.id]),
+        attentionSessionIds: new Set<string>(),
+      },
+    });
+    expect(labels(entries)).toEqual(['s:just-sent', 's:running-older', 's:idle-newer']);
+  });
+
+  it('keeps running tasks in recency order when one also has stale unread attention', () => {
+    const newer = session({ updatedAt: '2026-08-12T12:00:00Z', title: 'newer-running' });
+    const older = session({ updatedAt: '2026-08-12T11:00:00Z', title: 'older-running' });
+    const hold = {
+      heldPriorityRanks: new Map<string, number>(),
+      recentlyViewedAtMs: new Map<string, number>(),
+    };
+    const withStaleUnread = {
+      runningSessionIds: new Set([newer.id, older.id]),
+      attentionSessionIds: new Set([older.id]),
+      waitingSessionIds: new Set<string>(),
+    };
+
+    expect(sessionPriorityRank(older, withStaleUnread)).toBe(LIVE_TASK_PRIORITY.running);
+    holdViewedPriorityRank(hold, older.id, withStaleUnread);
+    const runningOnly = {
+      ...withStaleUnread,
+      attentionSessionIds: new Set<string>(),
+    };
+    advanceViewedPriorityHold(hold, older.id, runningOnly, 1_000);
+    expect(hold.heldPriorityRanks.get(older.id)).toBe(LIVE_TASK_PRIORITY.running);
+
+    const beforeSwitch = buildMainListEntries({
+      projects: [],
+      dialogues: [older, newer],
+      groupBy: 'project',
+      groupDialogue: false,
+      sortBy: 'priority',
+      manualProjectOrder: [],
+      priorityContext: { ...runningOnly, heldPriorityRanks: hold.heldPriorityRanks },
+    });
+    expect(labels(beforeSwitch)).toEqual(['s:newer-running', 's:older-running']);
+
+    advanceViewedPriorityHold(hold, newer.id, runningOnly, 2_000);
+    const afterSwitch = buildMainListEntries({
+      projects: [],
+      dialogues: [older, newer],
+      groupBy: 'project',
+      groupDialogue: false,
+      sortBy: 'priority',
+      manualProjectOrder: [],
+      priorityContext: { ...runningOnly, heldPriorityRanks: hold.heldPriorityRanks },
+    });
+    expect(labels(afterSwitch)).toEqual(labels(beforeSwitch));
+    expect(hold.recentlyViewedAtMs.has(older.id)).toBe(false);
+  });
+
+  it('does not restore an old unread hold after the viewed run finishes', () => {
+    const viewed = session({ updatedAt: '2026-08-12T12:00:00Z', title: 'viewed' });
+    const hold = {
+      heldPriorityRanks: new Map<string, number>(),
+      recentlyViewedAtMs: new Map<string, number>(),
+    };
+    holdViewedPriorityRank(hold, viewed.id, {
+      runningSessionIds: new Set<string>(),
+      attentionSessionIds: new Set([viewed.id]),
+      waitingSessionIds: new Set<string>(),
+    });
+    const running = {
+      runningSessionIds: new Set([viewed.id]),
+      attentionSessionIds: new Set<string>(),
+      waitingSessionIds: new Set<string>(),
+    };
+    advanceViewedPriorityHold(hold, viewed.id, running, 1_000);
+    expect(hold.heldPriorityRanks.get(viewed.id)).toBe(LIVE_TASK_PRIORITY.running);
+
+    const finished = {
+      ...running,
+      runningSessionIds: new Set<string>(),
+      heldPriorityRanks: hold.heldPriorityRanks,
+    };
+    expect(sessionPriorityRank(viewed, finished)).toBe(LIVE_TASK_PRIORITY.running);
+
+    advanceViewedPriorityHold(hold, undefined, finished, 2_000);
+    expect(hold.recentlyViewedAtMs.has(viewed.id)).toBe(false);
+    expect(sessionPriorityRank(viewed, finished)).toBe(LIVE_TASK_PRIORITY.rest);
+  });
+
+  it('still promotes a viewed running task to waiting and releases it when running resumes', () => {
+    const viewed = session({ updatedAt: '2026-08-12T12:00:00Z', title: 'viewed' });
+    const hold = {
+      heldPriorityRanks: new Map<string, number>(),
+      recentlyViewedAtMs: new Map<string, number>(),
+    };
+    const running = {
+      runningSessionIds: new Set([viewed.id]),
+      attentionSessionIds: new Set<string>(),
+      waitingSessionIds: new Set<string>(),
+    };
+    holdViewedPriorityRank(hold, viewed.id, running);
+
+    const waiting = {
+      ...running,
+      attentionSessionIds: new Set([viewed.id]),
+      waitingSessionIds: new Set([viewed.id]),
+    };
+    advanceViewedPriorityHold(hold, viewed.id, waiting, 1_000);
+    expect(hold.heldPriorityRanks.get(viewed.id)).toBe(LIVE_TASK_PRIORITY.waiting);
+    expect(
+      sessionPriorityRank(viewed, { ...waiting, heldPriorityRanks: hold.heldPriorityRanks }),
+    ).toBe(LIVE_TASK_PRIORITY.waiting);
+
+    advanceViewedPriorityHold(hold, viewed.id, running, 2_000);
+    expect(hold.heldPriorityRanks.get(viewed.id)).toBe(LIVE_TASK_PRIORITY.running);
   });
 
   it('keeps the open unread task in place, then parks it at the top of the rest tier after leave', () => {
@@ -234,12 +776,14 @@ describe('buildMainListEntries — 排序口径', () => {
       },
     });
     expect(labels(afterLeave)).toEqual(['s:needs-input', 's:just-read', 's:older-rest']);
-    expect(sessionPriorityRank(unread, {
-      runningSessionIds: new Set<string>(),
-      attentionSessionIds: new Set([waiting.id]),
-      waitingSessionIds: new Set([waiting.id]),
-      recentlyViewedAtMs: left.recentlyViewedAtMs,
-    })).toBe(LIVE_TASK_PRIORITY.rest);
+    expect(
+      sessionPriorityRank(unread, {
+        runningSessionIds: new Set<string>(),
+        attentionSessionIds: new Set([waiting.id]),
+        waitingSessionIds: new Set([waiting.id]),
+        recentlyViewedAtMs: left.recentlyViewedAtMs,
+      }),
+    ).toBe(LIVE_TASK_PRIORITY.rest);
 
     const sunkWithoutViewedAt = buildMainListEntries({
       projects: [],
@@ -357,6 +901,22 @@ describe('buildMainListEntries — 排序口径', () => {
       },
     });
     expect(labels(entries)).toEqual(['s:needs-input', 's:just-read', 's:older-rest']);
+  });
+
+  it('does not apply an earlier visit time while the unread rank is still held', () => {
+    const viewed = session({ updatedAt: '2026-07-01T00:00:00Z', title: 'viewed' });
+    const hold = {
+      heldPriorityRanks: new Map<string, number>(),
+      recentlyViewedAtMs: new Map([[viewed.id, Date.parse('2026-08-01T00:00:00Z')]]),
+    };
+    const unread = { ...NO_PRIORITY, attentionSessionIds: new Set([viewed.id]) };
+    holdViewedPriorityRank(hold, viewed.id, unread);
+    const beforeRead = sessionPriorityRecencyMs(viewed, { ...unread, ...hold });
+    advanceViewedPriorityHold(hold, viewed.id, NO_PRIORITY, 1_000);
+    expect(sessionPriorityRecencyMs(viewed, { ...NO_PRIORITY, ...hold })).toBe(beforeRead);
+    const leaveAt = Date.parse('2026-09-01T00:00:00Z');
+    advanceViewedPriorityHold(hold, undefined, NO_PRIORITY, leaveAt);
+    expect(sessionPriorityRecencyMs(viewed, { ...NO_PRIORITY, ...hold })).toBe(leaveAt);
   });
 
   it('does not let leave time promote a still-waiting or running task', () => {
@@ -485,7 +1045,8 @@ describe('buildMainListEntries — 排序口径', () => {
       dialogues: [dlgActiveOld, dlgArchivedNew],
       groupBy: 'project',
       groupDialogue: true,
-      sortBy: 'manual',
+      sortBy: 'recency',
+      projectOrder: 'custom',
       manualProjectOrder: ['local:alpha'],
     });
     const projectEntry = entries.find((entry) => entry.kind === 'project');
@@ -507,16 +1068,98 @@ describe('buildMainListEntries — 排序口径', () => {
       dialogues: [dlg],
       groupBy: 'project',
       groupDialogue: false,
-      sortBy: 'manual',
+      sortBy: 'recency',
+      projectOrder: 'custom',
       manualProjectOrder: ['local:beta', 'local:alpha'],
       priorityContext: NO_PRIORITY,
     });
-    // 项目按手动顺序;最新的散排对话也排在项目之后(手动排序只管项目行)。
+    // 项目按自定义顺序;最新的散排对话也排在项目之后(自定义只管项目行)。
     expect(labels(entries)).toEqual(['p:beta', 'p:alpha', 's:newest-dlg']);
+  });
+
+  it('stacks custom project order with priority sort for tasks after the project block', () => {
+    const waitingDlg = session({ id: 'wait', updatedAt: '2026-08-01T00:00:00Z', title: 'wait' });
+    const idleDlg = session({ id: 'idle', updatedAt: '2026-08-13T00:00:00Z', title: 'idle' });
+    const projA = project('alpha', [session({ updatedAt: '2026-08-12T00:00:00Z' })]);
+    const projB = project('beta', [session({ updatedAt: '2026-08-10T00:00:00Z' })]);
+    const entries = buildMainListEntries({
+      projects: [projA, projB],
+      dialogues: [idleDlg, waitingDlg],
+      groupBy: 'project',
+      groupDialogue: false,
+      sortBy: 'priority',
+      projectOrder: 'custom',
+      manualProjectOrder: ['local:beta', 'local:alpha'],
+      priorityContext: {
+        runningSessionIds: new Set<string>(),
+        attentionSessionIds: new Set([waitingDlg.id]),
+        waitingSessionIds: new Set([waitingDlg.id]),
+      },
+    });
+    expect(labels(entries)).toEqual(['p:beta', 'p:alpha', 's:wait', 's:idle']);
   });
 });
 
 describe('splitEntriesByDevice — 拆段后按本段重排', () => {
+  it('retains online empty devices in device order and removes them after going offline', () => {
+    const devices = new Map([
+      ['online', { online: true }],
+      ['offline', { online: false }],
+    ]);
+    const split = () =>
+      splitEntriesByDevice([], [...devices.keys()], {
+        onlineDeviceIds: onlineDeviceSectionIds(devices, 'all'),
+      });
+    expect(split()).toEqual([
+      { deviceId: null, entries: [] },
+      { deviceId: 'online', entries: [] },
+    ]);
+    devices.set('online', { online: false });
+    expect(split()).toEqual([{ deviceId: null, entries: [] }]);
+    expect(splitEntriesByDevice([], [...devices.keys()])).toEqual([]);
+  });
+
+  it('only retains empty online devices inside the selected machine scope', () => {
+    const devices = new Map([
+      ['a', { online: true }],
+      ['b', { online: true }],
+      ['offline', { online: false }],
+    ]);
+    expect(onlineDeviceSectionIds(devices, ['b', 'offline'])).toEqual(['b']);
+    expect(onlineDeviceSectionIds(devices, ['local', 'a'])).toEqual([null, 'a']);
+  });
+
+  it('does not count empty sections of remote devices still loading or failed', () => {
+    const devices = new Map([
+      ['a', { online: true }],
+      ['b', { online: true }],
+    ]);
+    // 单机范围选中一台正在首次读取 / 读取失败的远程设备:空段头不能遮掉整屏提示。
+    expect(hasSettledOnlineDeviceSection(devices, ['a'], new Set(['a']))).toBe(false);
+    expect(hasSettledOnlineDeviceSection(devices, ['a', 'b'], new Set(['a', 'b']))).toBe(false);
+    // 读取就绪后,在线空段照常算作已有内容。
+    expect(hasSettledOnlineDeviceSection(devices, ['a'], new Set())).toBe(true);
+    expect(hasSettledOnlineDeviceSection(devices, ['a', 'b'], new Set(['a']))).toBe(true);
+    // 本机段不受远程读取状态影响。
+    expect(hasSettledOnlineDeviceSection(devices, ['local'], new Set(['a']))).toBe(true);
+    expect(hasSettledOnlineDeviceSection(devices, 'all', new Set(['a', 'b']))).toBe(true);
+  });
+
+  it('keeps offline tasks and avoids duplicating populated online device sections', () => {
+    const entries: MainListEntry[] = ['online', 'offline'].map((deviceLinkDeviceId) => ({
+      kind: 'session',
+      session: session({ deviceLinkDeviceId, updatedAt: '2026-09-19T00:00:00Z' }),
+    }));
+    const sections = splitEntriesByDevice(entries, ['online', 'offline'], {
+      onlineDeviceIds: [null, 'online'],
+    });
+    expect(sections.map(({ deviceId, entries }) => [deviceId, entries.length])).toEqual([
+      [null, 0],
+      ['online', 1],
+      ['offline', 1],
+    ]);
+  });
+
   it('re-sorts each device section by its own activity after splitting a dialogue group', () => {
     const localOld = session({
       updatedAt: '2026-08-01T00:00:00Z',
@@ -566,5 +1209,154 @@ describe('splitEntriesByDevice — 拆段后按本段重排', () => {
     const sections = splitEntriesByDevice(entries, ['dev-a'], { sortBy: 'recency' });
     expect(sections.map((section) => section.deviceId)).toEqual(['dev-a']);
     expect(labels(sections[0].entries)).toEqual(['s:remote-draft']);
+  });
+});
+
+describe('creation-time ordering', () => {
+  it.each(['flat', 'project'] as const)(
+    'keeps %s tasks and groups in place after activity changes',
+    (groupBy) => {
+      const older = session({
+        id: 'older',
+        title: 'older',
+        createdAt: '2026-08-01T00:00:00Z',
+        updatedAt: '2026-08-20T00:00:00Z',
+      });
+      const newer = session({
+        id: 'newer',
+        title: 'newer',
+        createdAt: '2026-08-10T00:00:00Z',
+        updatedAt: '2026-08-10T00:00:00Z',
+      });
+      const middle = session({
+        title: 'middle',
+        createdAt: '2026-08-05T00:00:00Z',
+        updatedAt: '2026-08-21T00:00:00Z',
+      });
+      const input = {
+        projects: [project('alpha', [older, newer])],
+        dialogues: [middle],
+        groupBy,
+        groupDialogue: false,
+        sortBy: 'created' as const,
+        manualProjectOrder: [],
+      };
+      const before = buildMainListEntries(input);
+      expect(labels(before)).toEqual(
+        groupBy === 'flat' ? ['s:newer', 's:middle', 's:older'] : ['p:alpha', 's:middle'],
+      );
+      if (before[0].kind === 'project') {
+        expect(before[0].project.sessions.map((s) => s.id)).toEqual(['newer', 'older']);
+      }
+      older.updatedAt = '2026-09-09T00:00:00Z';
+      older.userSendAt = '2026-09-09T00:00:00Z';
+      expect(labels(buildMainListEntries(input))).toEqual(labels(before));
+      expect(labels(buildMainListEntries({ ...input, sortBy: 'recency' }))).toEqual(
+        groupBy === 'flat' ? ['s:older', 's:middle', 's:newer'] : ['p:alpha', 's:middle'],
+      );
+    },
+  );
+
+  it('orders dialogue groups and cached remote device sections by creation time', () => {
+    const old = session({
+      title: 'old',
+      createdAt: '2026-08-01T00:00:00Z',
+      updatedAt: '2026-09-09T00:00:00Z',
+      deviceLinkDeviceId: 'old-device',
+    });
+    const recent = session({
+      title: 'recent',
+      createdAt: '2026-08-10T00:00:00Z',
+      updatedAt: '2026-08-10T00:00:00Z',
+      deviceLinkDeviceId: 'new-device',
+    });
+    const entries = buildMainListEntries({
+      projects: [],
+      dialogues: [old, recent],
+      groupBy: 'flat',
+      groupDialogue: true,
+      sortBy: 'created',
+      manualProjectOrder: [],
+    });
+    expect(getMainListEntrySessions(entries[0]).map((s) => s.title)).toEqual(['recent', 'old']);
+    const sections = splitEntriesByDevice(entries, [], { sortBy: 'created' });
+    expect(sections.map((section) => section.deviceId)).toEqual(['new-device', 'old-device']);
+  });
+});
+
+it('keeps manual project order while creation-time tasks stay stable inside each project', () => {
+  const old = session({
+    id: 'old',
+    title: 'old',
+    createdAt: '2026-08-01T00:00:00Z',
+    updatedAt: '2026-08-20T00:00:00Z',
+  });
+  const recent = session({
+    id: 'recent',
+    title: 'recent',
+    createdAt: '2026-08-10T00:00:00Z',
+    updatedAt: '2026-08-10T00:00:00Z',
+  });
+  const alpha = project('alpha', [old, recent]);
+  const beta = project('beta', [session({ updatedAt: '2026-07-01T00:00:00Z' })]);
+  const input = {
+    projects: [alpha, beta],
+    dialogues: [],
+    groupBy: 'project' as const,
+    groupDialogue: false,
+    sortBy: 'created' as const,
+    projectOrder: 'custom' as const,
+    manualProjectOrder: ['local:beta', 'local:alpha'],
+  };
+  const before = buildMainListEntries(input);
+  expect(labels(before)).toEqual(['p:beta', 'p:alpha']);
+  expect(getMainListEntrySessions(before[1]).map((s) => s.id)).toEqual(['recent', 'old']);
+  old.userSendAt = '2026-09-09T00:00:00Z';
+  old.updatedAt = '2026-09-09T00:00:00Z';
+  const after = buildMainListEntries(input);
+  expect(labels(after)).toEqual(['p:beta', 'p:alpha']);
+  expect(getMainListEntrySessions(after[1]).map((s) => s.id)).toEqual(['recent', 'old']);
+  const activityOrder = buildMainListEntries({ ...input, sortBy: 'recency' });
+  expect(labels(activityOrder)).toEqual(['p:beta', 'p:alpha']);
+  expect(getMainListEntrySessions(activityOrder[1]).map((s) => s.id)).toEqual(['old', 'recent']);
+});
+
+describe('per-sort numeric keys', () => {
+  it('reads each activity key a bounded number of times and observes later in-place updates', () => {
+    let reads = 0;
+    const rows = Array.from({ length: 100 }, (_, i) => {
+      const row = session({ id: String(i), updatedAt: new Date(i * 1000).toISOString() });
+      let value = row.updatedAt;
+      Object.defineProperty(row, 'updatedAt', {
+        get: () => {
+          reads++;
+          return value;
+        },
+        set: (v) => {
+          value = v;
+        },
+      });
+      return row;
+    });
+    expect(sortSessionsForMainList(rows, 'recency')[0].id).toBe('99');
+    expect(reads).toBe(100);
+    rows[0].updatedAt = '2030-01-01T00:00:00Z';
+    expect(sortSessionsForMainList(rows, 'recency')[0].id).toBe('0');
+  });
+  it('preserves stable ties, created-id ties and invalid userSendAt semantics', () => {
+    const a = session({ id: 'z', updatedAt: '2026-01-01T00:00:00Z' });
+    const b = session({ id: 'a', updatedAt: a.updatedAt });
+    const invalid = session({
+      id: 'invalid',
+      updatedAt: '2030-01-01T00:00:00Z',
+      userSendAt: 'invalid',
+    });
+    expect(sortSessionsForMainList([a, b, invalid], 'recency').map((x) => x.id)).toEqual([
+      'z',
+      'a',
+      'invalid',
+    ]);
+    expect(sortSessionsForMainList([a, b], 'created').map((x) => x.id)).toEqual(['a', 'z']);
+    expect(sortSessionsForMainList([a, b], 'priority').map((x) => x.id)).toEqual(['z', 'a']);
   });
 });

@@ -69,8 +69,8 @@ describe('buildMathWebViewHtml — 主题色净化', () => {
       errorColor: evil,
     });
     expect(html).not.toContain('alert(1)');
-    // fallback = lightColors.surface;随 CINDY 色板(U3+U8)同步为 #EDEDED。
-    expect(html).toContain('background: #EDEDED');
+    // fallback = lightColors.surface;随 2026-09-26 移动端象牙白色板同步为 #F9F9F6。
+    expect(html).toContain('background: #F9F9F6');
   });
 });
 

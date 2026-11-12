@@ -4,6 +4,7 @@ import {
   markHeldRemoteTopicsSubscribed,
   markRemoteTopicsSubscribed,
   markRemoteTopicsUnsubscribed,
+  resolvePeerRecoveryPlan,
   topicsMissingRemoteAck,
 } from '@/device-link/topicRegistry';
 
@@ -18,6 +19,35 @@ describe('DeviceLinkTopicRegistry', () => {
     expect(registry.snapshot()).toEqual([
       { deviceId: 'dev-1', openLink: true, topics: ['session:s1', 'sessions'] },
     ]);
+  });
+
+  it('builds one peer recovery plan without reading neighboring peers', () => {
+    const registry = new DeviceLinkTopicRegistry();
+    registry.trackOpenLink('dev-b');
+    registry.trackSubscribe('list-a', 'dev-a', ['sessions']);
+    registry.trackSubscribe('session-b', 'dev-b', ['session:s2']);
+
+    expect(registry.snapshotDevice('dev-a')).toEqual({
+      deviceId: 'dev-a',
+      openLink: false,
+      topics: ['sessions'],
+    });
+    expect(registry.snapshotDevice('dev-b')).toEqual({
+      deviceId: 'dev-b',
+      openLink: true,
+      topics: ['session:s2'],
+    });
+    expect(registry.snapshotDevice('dev-missing')).toBeNull();
+    expect(registry.deviceIds()).toEqual(['dev-a', 'dev-b']);
+  });
+
+  it('queues visible topic holders before historical open-link-only peers', () => {
+    const registry = new DeviceLinkTopicRegistry();
+    registry.trackOpenLink('dev-a-hidden');
+    registry.trackOpenLink('dev-z-visible');
+    registry.trackSubscribe('device-list', 'dev-z-visible', ['sessions']);
+
+    expect(registry.deviceIds()).toEqual(['dev-z-visible', 'dev-a-hidden']);
   });
 
   it('removes topics independently from the open link intent', () => {
@@ -55,6 +85,18 @@ describe('DeviceLinkTopicRegistry', () => {
     // Device list unmounts: now `sessions`'s last owner is gone too.
     expect(registry.untrackSubscribe('device-list', 'dev-1', ['sessions'])).toEqual(['sessions']);
     expect(registry.snapshot()).toEqual([]);
+  });
+
+  it('lets Home release a hidden device without interrupting its focused session owner', () => {
+    const registry = new DeviceLinkTopicRegistry();
+
+    registry.trackSubscribe('device-list', 'dev-1', ['sessions']);
+    registry.trackSubscribe('session:s1', 'dev-1', ['sessions', 'session:s1']);
+
+    expect(registry.untrackSubscribe('device-list', 'dev-1', ['sessions'])).toEqual([]);
+    expect(registry.snapshot()).toEqual([
+      { deviceId: 'dev-1', openLink: false, topics: ['session:s1', 'sessions'] },
+    ]);
   });
 
   it('releases a focused session stream without dropping the list subscription', () => {
@@ -135,5 +177,23 @@ describe('DeviceLinkTopicRegistry', () => {
       'session:s1',
     ]);
     expect(topicsMissingRemoteAck(acked, 'dev-1', ['sessions', 'session:s1'])).toEqual(['sessions']);
+  });
+
+  it('builds an open-only recovery plan when ACK reset outlives durable owners', () => {
+    expect(resolvePeerRecoveryPlan('dev-1', null, false)).toBeNull();
+    expect(resolvePeerRecoveryPlan('dev-1', null, true)).toEqual({
+      deviceId: 'dev-1',
+      openLink: true,
+      topics: [],
+    });
+    expect(resolvePeerRecoveryPlan(
+      'dev-1',
+      { deviceId: 'dev-1', openLink: false, topics: ['sessions'] },
+      true,
+    )).toEqual({
+      deviceId: 'dev-1',
+      openLink: true,
+      topics: ['sessions'],
+    });
   });
 });

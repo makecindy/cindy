@@ -2,19 +2,19 @@ appId: ${APP_ID}
 ---
 - assertVisible:
     id: "session.screen"
-# 排队消息 inline 在消息流末尾:轻点气泡展开操作行,编辑走底部 composer。
+# 排队消息是消息流中的 pending_send 项:轻点包含状态徽标的气泡展开操作行。
 - extendedWaitUntil:
     visible:
-      id: "queue.inline.section"
+      id: "pendingSend.bubble.mock-queue-1"
     timeout: 10000
 - tapOn:
-    id: "queue.inline.bubble.1"
+    id: "pendingSend.bubble.mock-queue-1"
 - extendedWaitUntil:
     visible:
-      id: "queue.inline.actions.1"
+      id: "pendingSend.actions.mock-queue-1"
     timeout: 10000
 - tapOn:
-    id: "queue.inline.edit.1"
+    id: "pendingSend.edit.mock-queue-1"
 - extendedWaitUntil:
     visible:
       id: "session.queueEditBar"
@@ -31,13 +31,13 @@ appId: ${APP_ID}
       id: "session.queueEditBar"
     timeout: 10000
 - tapOn:
-    id: "queue.inline.bubble.1"
+    id: "pendingSend.bubble.mock-queue-1"
 - extendedWaitUntil:
     visible:
-      id: "queue.inline.actions.1"
+      id: "pendingSend.actions.mock-queue-1"
     timeout: 10000
 - tapOn:
-    id: "queue.inline.edit.1"
+    id: "pendingSend.edit.mock-queue-1"
 - extendedWaitUntil:
     visible:
       id: "session.queueEditBar"
@@ -57,13 +57,13 @@ appId: ${APP_ID}
       id: "session.queueEditBar"
     timeout: 10000
 - tapOn:
-    id: "queue.inline.bubble.1"
+    id: "pendingSend.bubble.mock-queue-1"
 - extendedWaitUntil:
     visible:
-      id: "queue.inline.actions.1"
+      id: "pendingSend.actions.mock-queue-1"
     timeout: 10000
 - tapOn:
-    id: "queue.inline.edit.1"
+    id: "pendingSend.edit.mock-queue-1"
 - extendedWaitUntil:
     visible:
       id: "session.queueEditBar"
@@ -73,6 +73,21 @@ appId: ${APP_ID}
 - extendedWaitUntil:
     notVisible:
       id: "session.queueEditBar"
+    timeout: 10000
+- tapOn:
+    id: "pendingSend.badge.queued"
+- extendedWaitUntil:
+    visible:
+      id: "pendingSend.actions.mock-queue-1"
+    timeout: 10000
+- tapOn:
+    id: "pendingSend.steer.mock-queue-1"
+- extendedWaitUntil:
+    notVisible:
+      id: "pendingSend.bubble.mock-queue-1"
+    timeout: 10000
+- extendedWaitUntil:
+    visible: "Mock desktop received: Second queue edit"
     timeout: 10000
 - assertVisible:
     id: "session.screen"

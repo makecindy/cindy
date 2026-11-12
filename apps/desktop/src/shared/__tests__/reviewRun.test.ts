@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  isStaleReviewFailureCode,
   readReviewFailureCode,
   readReviewRunMeta,
   reviewFailureCodeFromLegacyError,
@@ -47,6 +48,8 @@ describe('ReviewRunMeta', () => {
     ).toMatchObject({ failureCode: 'reviewer-closed' });
     expect(readReviewRunMeta({ ...base, status: 'failed', failureCode: 'made-up' })).toBeNull();
     expect(readReviewFailureCode('artifact-changed')).toBe('artifact-changed');
+    expect(isStaleReviewFailureCode('artifact-changed')).toBe(true);
+    expect(isStaleReviewFailureCode('provider-failed')).toBe(false);
     expect(readReviewFailureCode(123)).toBeNull();
   });
 

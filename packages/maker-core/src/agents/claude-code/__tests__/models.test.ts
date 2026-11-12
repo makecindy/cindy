@@ -58,7 +58,7 @@ describe('ClaudeCodeAgent model capabilities', () => {
       ['medium', 'Medium'],
       ['high', 'High'],
       ['xhigh', 'Extra High'],
-      ['max', 'Max'],
+      ['max', 'Maximum'],
     ]);
   });
 
@@ -67,6 +67,19 @@ describe('ClaudeCodeAgent model capabilities', () => {
   it('maps every catalog sonnet model to its explicit versioned SDK string', () => {
     expect(toSdkModelString('claude-sonnet-5')).toBe('claude-sonnet-5[1m]');
     expect(toSdkModelString('claude-sonnet-4-6')).toBe('claude-sonnet-4-6[1m]');
+  });
+
+  // #3764:命名空间 id 是自定义 Provider 的路由键,兜底链不得含糊改写 ——
+  // 此前 cindy/claude-sonnet-5 被加 [1m] 而 cindy/claude-opus-5 透传,同一
+  // Provider 两个模型 wire id 形态不对称,被上游白名单逐一 403。
+  it('passes namespaced custom-provider ids through verbatim and symmetrically', () => {
+    expect(toSdkModelString('cindy/claude-sonnet-5')).toBe('cindy/claude-sonnet-5');
+    expect(toSdkModelString('cindy/claude-opus-5')).toBe('cindy/claude-opus-5');
+    expect(toSdkModelString('winky/claude-sonnet-4-6')).toBe('winky/claude-sonnet-4-6');
+    expect(toSdkModelString('winky/claude-opus-4-8')).toBe('winky/claude-opus-4-8');
+    // 目录窗口已知时仍按窗口决定 [1m](与命名空间无关)。
+    expect(toSdkModelString('cindy/claude-sonnet-5', 1_000_000)).toBe('cindy/claude-sonnet-5[1m]');
+    expect(toSdkModelString('cindy/claude-opus-5', 200_000)).toBe('cindy/claude-opus-5');
   });
 
   it('never collapses a sonnet model to the bare drifting alias', () => {

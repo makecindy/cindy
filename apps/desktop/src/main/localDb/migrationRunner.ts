@@ -8,6 +8,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import type Database from 'better-sqlite3';
 
 export interface MigrationFile {
@@ -44,6 +45,29 @@ export interface MigrationRuntimeManifest {
   /** 首次引入 sidecar 时由当前 primary 明确认领的 legacy schema 上界。 */
   legacyBaselineVersion: number;
   migrations: MigrationRuntimeIdentity[];
+}
+
+export type MigrationRuntimeManifestErrorCode =
+  | 'applied-migration-missing-from-application';
+
+/**
+ * A stable, structured failure for callers that need to distinguish an older
+ * application package from migration identity drift. Both cases remain
+ * fail-closed: old code must never open a newer local schema.
+ */
+export class MigrationRuntimeManifestError extends Error {
+  readonly name = 'MigrationRuntimeManifestError';
+
+  constructor(
+    readonly code: MigrationRuntimeManifestErrorCode,
+    readonly seq: number,
+    readonly fileName: string,
+  ) {
+    super(
+      `current application is missing applied migration at seq ${seq} (${fileName}); `
+      + 'verify that the application package contains this migration',
+    );
+  }
 }
 
 export type MigrationCompatibilityIssue =
@@ -233,7 +257,14 @@ export function prepareMigrationRuntimeManifest(
     for (const identity of existing.migrations) {
       if (identity.seq > databaseVersion) continue;
       const current = expectedBySeq.get(identity.seq);
-      if (!current || !runtimeIdentityMatches(identity, current)) {
+      if (!current) {
+        throw new MigrationRuntimeManifestError(
+          'applied-migration-missing-from-application',
+          identity.seq,
+          identity.fileName,
+        );
+      }
+      if (!runtimeIdentityMatches(identity, current)) {
         throw new Error(
           `applied migration runtime identity changed at seq ${identity.seq} (${identity.fileName})`,
         );
@@ -497,8 +528,8 @@ export function runMigrationReplay(
 
 function loadScriptWithRequire(scriptPath: string): unknown {
   // require 而非 import：生产 Electron 以 CommonJS 加载 raw TS 配套脚本。
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require(scriptPath);
+  // Node Host loads this runner as ESM; the companion itself remains CommonJS.
+  return createRequire(import.meta.url)(scriptPath);
 }
 
 function writeSchemaVersion(db: Database.Database, seq: number): void {

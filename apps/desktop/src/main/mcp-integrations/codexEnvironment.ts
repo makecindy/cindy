@@ -10,14 +10,48 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Logger, McpProvider, McpProviderContext } from '@cindy/maker-core';
 import { getLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 import { pluginIdForKnownProviderName } from '../maker-host/plugins/builtin-plugins.js';
-import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from './codexBuiltinToolPolicy.js';
-
 import {
-  startCodexHttpBridge,
-  type CodexHttpBridge,
-  withMcpRouteIdentity,
-} from './codexHttpBridge.js';
-import { getRemoteMcpBridgeToken } from './remoteMcpBridgeToken.js';
+  CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,
+  CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
+  isFrozenMcpServerAllowed,
+} from './codexBuiltinToolPolicy.js';
+import {
+  CINDY_MAKE_MCP_SERVER_NAME,
+  isCindyMakeVendorOptions,
+} from '../../shared/cindyMakeSession.js';
+import type { CodexHttpBridge } from './codexHttpBridge.js';
+import { hasImChannelVendorOptions } from '../../shared/botImConnection.js';
+
+
+
+export interface CodexExtraSpawnConfig {
+  /** 拼到 codex spawn 的 extraArgs 里：-c 'mcp_servers.xxx.url=...' 等 */
+  extraArgs: string[];
+  /** 拼到 codex spawn 的 env 里：{ LIZI_MCP_TOKEN: <token> } */
+  extraEnv: Record<string, string>;
+  /** 暴露 bridge 给诊断 / 测试用，业务侧通常不直接用；只有纯远程 MCP 时为 null。 */
+  bridge: CodexHttpBridge | null;
+  /** bridge 上实际挂出的 server 名 (远端注入 config.toml 时按此渲染 mcp_servers 段)。 */
+  bridgeServerNames: string[];
+  /**
+   * 为本地 app-server 的具体 thread 绑定 Session instance 的 URL overrides;
+   * session 事实(vendorOptions)用于按线程隐藏任务专属 server(如 cindy_make)。
+   */
+  buildSessionMcpConfig?: (
+    sessionInstanceId: string,
+    session?: { vendorOptions?: Record<string, unknown> },
+  ) => Record<string, unknown>;
+}
+
+export interface GetCodexExtraSpawnConfigOptions {
+  mcpProviders: McpProvider[];
+  logger: Logger;
+}
+
+/** Shared MCP transport with launcher-owned runtime and credentials. */
+export function createCodexEnvironment(ports: { startCodexHttpBridge: ReturnType<typeof import('./codexHttpBridge.js').createCodexHttpBridgeRuntime>['startCodexHttpBridge']; withMcpRouteIdentity: ReturnType<typeof import('./codexHttpBridge.js').createCodexHttpBridgeRuntime>['withMcpRouteIdentity']; getRemoteMcpBridgeToken: () => string | null; appServerIds: () => string[]; }) {
+const { startCodexHttpBridge, withMcpRouteIdentity, getRemoteMcpBridgeToken, appServerIds } = ports;
+
 
 const TOKEN_ENV = 'LIZI_MCP_TOKEN';
 const MCP_TIMEOUT_SEC = 10 * 60;
@@ -34,30 +68,12 @@ function tomlDottedKeySegment(key: string): string {
   return `"${key.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
-export interface CodexExtraSpawnConfig {
-  /** 拼到 codex spawn 的 extraArgs 里：-c 'mcp_servers.xxx.url=...' 等 */
-  extraArgs: string[];
-  /** 拼到 codex spawn 的 env 里：{ LIZI_MCP_TOKEN: <token> } */
-  extraEnv: Record<string, string>;
-  /** 暴露 bridge 给诊断 / 测试用，业务侧通常不直接用；只有纯远程 MCP 时为 null。 */
-  bridge: CodexHttpBridge | null;
-  /** bridge 上实际挂出的 server 名 (远端注入 config.toml 时按此渲染 mcp_servers 段)。 */
-  bridgeServerNames: string[];
-  /** 为本地 app-server 的具体 thread 绑定 Session instance 的 URL overrides。 */
-  buildSessionMcpConfig?: (sessionInstanceId: string) => Record<string, unknown>;
-}
-
-export interface GetCodexExtraSpawnConfigOptions {
-  mcpProviders: McpProvider[];
-  logger: Logger;
-}
-
 let cached: Promise<CodexExtraSpawnConfig> | null = null;
 let activeBridge: CodexHttpBridge | null = null;
 let activeBridgeServerNames: string[] | null = null;
 const disabledPluginPolicyByThread = new Map<
   string,
-  { sessionInstanceId?: string; policy: unknown }
+  { sessionInstanceId?: string; disabledPolicy: unknown; allowedPolicy: unknown }
 >();
 const callerProvenanceByThread = new Map<
   string,
@@ -75,7 +91,7 @@ const callerProvenanceByThread = new Map<
  *
  * 跟 AppServerHost.startPromise 同款模式 (host.ts:170-209)。
  */
-export function getCodexExtraSpawnConfig(
+function getCodexExtraSpawnConfig(
   opts: GetCodexExtraSpawnConfigOptions,
 ): Promise<CodexExtraSpawnConfig> {
   if (cached) return cached;
@@ -98,7 +114,7 @@ export function getCodexExtraSpawnConfig(
  */
 let shutdownHook: (() => void) | null = null;
 
-export function setCodexEnvironmentShutdownHook(fn: (() => void) | null): void {
+function setCodexEnvironmentShutdownHook(fn: (() => void) | null): void {
   shutdownHook = fn;
 }
 
@@ -107,7 +123,7 @@ export function setCodexEnvironmentShutdownHook(fn: (() => void) | null): void {
  * null)。live send 的轻量 MCP 漂移判定 (hasPendingRemoteMcpDrift) 用它
  * 区分「bridge 不在 ⇒ 必 ensure」与「比对实例代际」。
  */
-export function getActiveCodexBridgeInstanceId(): string | null {
+function getActiveCodexBridgeInstanceId(): string | null {
   return activeBridge?.instanceId ?? null;
 }
 
@@ -118,14 +134,14 @@ export function getActiveCodexBridgeInstanceId(): string | null {
  * per-session flag 钳制必须以本快照为准, 不能只看 manager 现值, 否则
  * prompt 注入与工具面失配、drift 永不收敛 (review R2 P2)。
  */
-export function getActiveCodexBridgeServerNames(): string[] | null {
+function getActiveCodexBridgeServerNames(): string[] | null {
   // 与 activeBridge 同生共死 (doStart 同步赋值 / shutdown finally 同步清空)。
   // 返回防御性拷贝: 内部数组同时是 drift 判定 / stale-bridge 钳制的数据源,
   // 调用方误改不得污染快照。
   return activeBridgeServerNames ? [...activeBridgeServerNames] : null;
 }
 
-export async function shutdownCodexEnvironment(): Promise<void> {
+async function shutdownCodexEnvironment(): Promise<void> {
   const cur = cached;
   if (!cur) return;
   cached = null;
@@ -152,19 +168,22 @@ export async function shutdownCodexEnvironment(): Promise<void> {
   }
 }
 
-export function registerCodexMcpThreadContext(
+function registerCodexMcpThreadContext(
   threadId: string,
   ctx: LiziMcpSessionContext,
 ): void {
   const requestedPolicy = ctx.vendorOptions?.[CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY];
+  const requestedAllowedPolicy = ctx.vendorOptions?.[CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY];
   const frozen = disabledPluginPolicyByThread.get(threadId);
   if (!frozen || frozen.sessionInstanceId !== ctx.sessionInstanceId) {
     disabledPluginPolicyByThread.set(threadId, {
       ...(ctx.sessionInstanceId ? { sessionInstanceId: ctx.sessionInstanceId } : {}),
-      policy: requestedPolicy,
+      disabledPolicy: requestedPolicy,
+      allowedPolicy: requestedAllowedPolicy,
     });
   }
-  const effectivePolicy = disabledPluginPolicyByThread.get(threadId)?.policy;
+  const effectivePolicy = disabledPluginPolicyByThread.get(threadId)?.disabledPolicy;
+  const effectiveAllowedPolicy = disabledPluginPolicyByThread.get(threadId)?.allowedPolicy;
   const previousProvenance = callerProvenanceByThread.get(threadId);
   const sameSessionInstance =
     ctx.sessionInstanceId !== undefined &&
@@ -202,11 +221,21 @@ export function registerCodexMcpThreadContext(
     vendorOptions: {
       ...ctx.vendorOptions,
       [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: effectivePolicy,
+      [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: effectiveAllowedPolicy,
     },
   });
 }
 
-export function unregisterCodexMcpThreadContext(
+/** Capture only the current bridge generation; confirmation cannot target a replacement. */
+function prepareCodexMcpToolCancellation(identity: {
+  sessionId: string; sessionInstanceId: string; threadId: string;
+}): () => void {
+  const bridge = activeBridge;
+  const cancel = bridge?.prepareToolCancellation(identity);
+  return () => { if (activeBridge === bridge) cancel?.(); };
+}
+
+function unregisterCodexMcpThreadContext(
   threadId: string,
   expectedSessionInstanceId?: string,
 ): void {
@@ -223,6 +252,8 @@ export function unregisterCodexMcpThreadContext(
   callerProvenanceByThread.delete(threadId);
   activeBridge?.unregisterThreadContext(threadId, expectedSessionInstanceId);
 }
+
+const TELEGRAM_BOT_MCP_SERVER_NAME = 'cindy_telegram_bot';
 
 async function doStart(
   opts: GetCodexExtraSpawnConfigOptions,
@@ -248,6 +279,7 @@ async function doStart(
       return {
         agentKind: active.agentKind,
         workingDir: active.workingDir,
+        ...(active.memoryScopeKey ? { memoryScopeKey: active.memoryScopeKey } : {}),
         // SSH remote 会话的 ctx 字段必须透传 — cindy_memory 用它算 scope key
         // (buildMemoryScopeKey);丢掉的话远端工具会落到本地路径 key 的 store,
         // 与 agent prompt 注入读的 ssh:<hostId>:<path> store 分家 (review R4 P1)。
@@ -304,7 +336,8 @@ async function doStart(
     if (!toClaudeSdkConfig) continue;
 
     const createServer = (): McpServer => {
-      const cfg = toClaudeSdkConfig(ctx) as
+      // Class providers read instance state, including when creating later client facades.
+      const cfg = toClaudeSdkConfig.call(provider, ctx) as
         | { type?: string; name?: string; instance?: unknown }
         | null;
       if (cfg?.type !== 'sdk' || !cfg.instance) {
@@ -347,6 +380,7 @@ async function doStart(
   const bridge = Object.keys(serverFactories).length > 0
     ? await startCodexHttpBridge({
         serverFactories,
+        appServerNames: Object.keys(serverFactories).filter(name => appServerIds().includes(name)),
         pluginIdByServerName,
         // 远端常驻 daemon 经 SSH remote-forward 直连本 bridge:接受 persistent
         // token (safeStorage, 跨 app 重启稳定)。函数形式读取,token 首用时惰性
@@ -386,6 +420,7 @@ async function doStart(
     // bearer_token_env_var 让 codex 从 env 读 token，不暴露在 process args。
     extraArgs.push('-c', `mcp_servers.${name}.url="${url}"`);
     extraArgs.push('-c', `mcp_servers.${name}.bearer_token_env_var="${TOKEN_ENV}"`);
+    if (appServerIds().includes(name)) extraArgs.push('-c', `mcp_servers.${name}.enabled=false`);
     extraArgs.push('-c', `mcp_servers.${name}.startup_timeout_sec=${MCP_TIMEOUT_SEC}`);
     extraArgs.push('-c', `mcp_servers.${name}.tool_timeout_sec=${MCP_TIMEOUT_SEC}`);
   }
@@ -407,14 +442,47 @@ async function doStart(
     bridgeServerNames,
     ...(bridge
       ? {
-          buildSessionMcpConfig: (sessionInstanceId: string) =>
-            Object.fromEntries(
+          buildSessionMcpConfig: (
+            sessionInstanceId: string,
+            session?: { vendorOptions?: Record<string, unknown> },
+          ) => ({
+            ...Object.fromEntries(
               bridgeServerNames.map((name) => [
                 `mcp_servers.${name}.url`,
                 withMcpRouteIdentity(bridge.url(name), { sessionInstanceId }),
               ]),
             ),
+            ...Object.fromEntries(bridgeServerNames.filter((name) => appServerIds().includes(name))
+              .map((name) => [`mcp_servers.${name}.enabled`, isFrozenMcpServerAllowed(session?.vendorOptions, name)])),
+            // Cindy Make 个人版工具:app-server 共享一份 spawn 级 transport,只能按
+            // 线程关。transport 与本 config 同源(上面刚写了 url),所以 enabled=false
+            // 不会落成"只有 enabled 没有 transport"的非法条目(codex 先解析 transport)。
+            ...(bridgeServerNames.includes(CINDY_MAKE_MCP_SERVER_NAME)
+              && !isCindyMakeVendorOptions(session?.vendorOptions)
+              ? { [`mcp_servers.${CINDY_MAKE_MCP_SERVER_NAME}.enabled`]: false }
+              : {}),
+            // Telegram Bot API 直通同理: 只有带 Telegram 渠道标记(专线 chat / 伙伴绑了 Telegram)
+            // 的线程看得到, 普通桌面任务按线程关掉。工具本身没有租约也 fail closed, 这里是让
+            // 工具清单别在无关任务里出现。
+            ...(bridgeServerNames.includes('cindy_imessage')
+              && !hasImChannelVendorOptions(session?.vendorOptions, 'imessage')
+              ? { 'mcp_servers.cindy_imessage.enabled': false } : {}),
+            ...(bridgeServerNames.includes(TELEGRAM_BOT_MCP_SERVER_NAME)
+              && !hasImChannelVendorOptions(session?.vendorOptions, 'telegram')
+              ? { [`mcp_servers.${TELEGRAM_BOT_MCP_SERVER_NAME}.enabled`]: false }
+              : {}),
+          }),
         }
       : {}),
   };
+}
+
+/** Native startup discovery is earlier than the thread registration callback. */
+function withCodexMcpDiscoveryContext<T>(
+  ctx: LiziMcpSessionContext,
+  run: () => Promise<T>,
+): Promise<T> {
+  return activeBridge ? activeBridge.withDiscoveryContext(ctx, run) : run();
+}
+return { getCodexExtraSpawnConfig, setCodexEnvironmentShutdownHook, getActiveCodexBridgeInstanceId, getActiveCodexBridgeServerNames, shutdownCodexEnvironment, registerCodexMcpThreadContext, prepareCodexMcpToolCancellation, unregisterCodexMcpThreadContext, withCodexMcpDiscoveryContext };
 }

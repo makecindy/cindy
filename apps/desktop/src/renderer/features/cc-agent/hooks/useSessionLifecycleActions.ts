@@ -5,14 +5,17 @@
  *   - CCAgentSidebarUpper：会话列表右键菜单 / 行内 archive 快捷按钮
  *   - SessionContentHeader：右栏顶栏 ··· 菜单
  *
- * 本 hook 只封装"确认之后的执行序列"（关子进程 / 写库 / 乐观补丁 / 释放内存 /
- * 清 composer draft / refresh 列表与 worktree / 必要时跳转）。**前置检查
- * （running / IM 接管拦截）和确认弹窗留在调用方** —— 两处的确认交互形态不同
- * （sidebar 是受控 ConfirmDialog + 行内两步确认，header 是 imperative
- * confirmDialog），强行收进来反而耦合。
+ * 本 hook 封装乐观补丁、预检、写库与收尾。前置检查（IM 接管拦截）和确认弹窗
+ * 由调用方通过 prepareArchive 提供；运行态判据由本 hook 统一提供，
+ * 调用方在关闭共享前复用，执行层在异步等待后复核。归档入口共用可等待的
+ * confirmDialog，确认文案与是否需要确认仍由各入口按预检结果决定。
  *
- * activeSessionId 由调用方传入：sidebar 是当前路由解析出的活跃会话（可能
- * 操作非活跃行）；header 操作的恒为当前打开的会话（传 session.id 即可）。
+ * activeSessionId 表示调用方原先浏览的会话；归档跳转前还会读取实时路由，
+ * 防止预检或确认期间切换任务后，旧操作把新页面带走。
+ *
+ * 远程(device-link)任务的归档 / 恢复走 remoteProjectsStore 的状态迁移叠加层,与本机
+ * sessionsStore 状态事务对称:行当帧换桶,写库成功后落被控端返回的行,失败回滚。
+ * 远程预检通过 prepareArchive 在乐观换桶之后执行；取消或失败恢复行，确认后才跳离详情。
  *
  * includeArchived 必须与调用方自己的 useCCSessions 桶一致：unarchive 的 refreshSessions
  * 只刷当前桶，sidebar 处于 archived / all 桶时删除行后若刷的是默认 active
@@ -22,7 +25,8 @@
 
 import { useCallback } from 'react';
 import { flushSync } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
+import { useSidebarNavigate } from '../sidebar/sidebarNavigation';
+import { isSessionRemovalRouteCurrent } from '../lib/sessionRemovalNavigation';
 import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
@@ -30,16 +34,50 @@ import * as sessionService from '@/lib/sessionService';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { discardDraft as discardComposerDraft } from '@/lib/composerDraftStore';
 import { cleanupSessionLayoutPrefs } from '@/lib/sessionLayoutPrefs';
-import { emitRefresh } from '@/lib/sessionsBus';
+import { sessionsStore, type SessionStatusTransitionToken } from '@/lib/sessionsStore';
 import { useCCSessions } from '@/hooks/useCCSessions';
-import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
+import {
+  remoteProjectsStore,
+  type RemotePendingStatusToken,
+} from '@/features/device-link/remoteProjectsStore';
+import {
+  getRemoteSessionActivity,
+  isRemoteSessionActivityActive,
+} from '@/features/device-link/remoteSessionActivityStore';
 import { createLogger } from '@/lib/logger';
 import type { ListStatusFilter } from '@/lib/sessionService';
-import type { SessionStatus } from '@/lib/ccAgent.types';
+import type { Session, SessionStatus } from '@/lib/ccAgent.types';
 
 const log = createLogger('useSessionLifecycleActions');
 
+/**
+ * 远程任务的状态写按会话串行发出(对齐本机 beginStatusTransitionWhenReady、手机
+ * sessionMetaWriteQueue):叠加层当帧切换,用户可在「全部」筛选里归档后立刻恢复;两次
+ * patch-meta 可能走不同链路(直连 / 中继)逆序到达被控端,较早的意图会最后落库。
+ * 前一笔结算(成功或失败)后才发下一笔,被控端按用户操作顺序落库。
+ */
+const remoteStatusWrites = new Map<string, Promise<Session>>();
+
+function setStatusInOrder(
+  sessionId: string,
+  status: SessionStatus,
+  target: Awaited<ReturnType<typeof sessionService.resolveStatusWriteTarget>>,
+): Promise<Session> {
+  const write = () => sessionService.setStatus(sessionId, status, target);
+  if (target.kind !== 'device-link') return write();
+  const previous = remoteStatusWrites.get(sessionId);
+  const next = previous ? previous.then(write, write) : write();
+  remoteStatusWrites.set(sessionId, next);
+  const release = () => {
+    if (remoteStatusWrites.get(sessionId) === next) remoteStatusWrites.delete(sessionId);
+  };
+  next.then(release, release);
+  return next;
+}
+
 export interface RunSessionActionOptions {
+  /** 归档预检与确认。远程任务先乐观换桶，未获确认不写入、不清理或跳离详情。 */
+  prepareArchive?: (isCurrent: () => boolean) => Promise<boolean>;
   /** 当前活跃会话 id —— 决定 archive / delete 后是否需要跳走。 */
   activeSessionId: string | null | undefined;
   /**
@@ -50,17 +88,52 @@ export interface RunSessionActionOptions {
 }
 
 export function useSessionLifecycleActions(options?: { includeArchived?: ListStatusFilter }) {
-  const navigate = useNavigate();
+  const navigate = useSidebarNavigate();
   const { t } = useTranslation();
   // patchLocal / refreshSessions 转发到 sessionsStore 模块级单例，
   // 与调用方组件里的 useCCSessions 实例共享同一份 cache。
   // includeArchived 跟随调用方的桶（见文件头注释）。
   const { refreshSessions, patchLocal } = useCCSessions(options);
-  const refreshWorktrees = useRefreshWorktrees();
   // 取成 string 再进 deps —— options 是调用方每次渲染新建的字面量对象,直接放进
   // runSessionAction 的 deps 会让它每次重建,打穿 sidebar 的行 handler memo
   // (行渲染隔离不变量,见 SessionItem.tsx)。
   const listFilter: ListStatusFilter = options?.includeArchived ?? 'active';
+
+  // Read stores at the side-effect boundary, never the render-time running set.
+  const archiveBlockedByRunning = useCallback((sessionId: string, deviceId?: string | null) => {
+    const running = makerChatStore.getRunningSnapshot().get(sessionId)?.isRunning ||
+      (deviceId && isRemoteSessionActivityActive(getRemoteSessionActivity(sessionId, deviceId)));
+    if (running) toast.warning(t('ccAgent.sidebar.archiveBlocked.running'));
+    return Boolean(running);
+  }, [t]);
+
+  /**
+   * 远程任务归档的乐观起点:叠加层把行移出 active 桶,并按 runSessionAction 同一顺序
+   * 跳离(行留在列表时先跳再换桶,否则先换桶再跳,理由见下方 archive 段注释)。
+   * 只在已确认的 runSessionAction 内开始，返回凭据供写库成功或失败时结算。
+   */
+  const beginRemoteArchive = useCallback(
+    (
+      sessionId: string,
+      deviceId: string,
+      activeSessionId: string | null | undefined,
+    ): RemotePendingStatusToken => {
+      const archivedRowStaysInList = listFilter === 'all';
+      const leaveArchivedSession = () => {
+        if (sessionId === activeSessionId && isSessionRemovalRouteCurrent(sessionId)) {
+          navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
+        }
+      };
+      if (archivedRowStaysInList) flushSync(leaveArchivedSession);
+      let token!: RemotePendingStatusToken;
+      flushSync(() => {
+        token = remoteProjectsStore.beginPendingStatus(deviceId, sessionId, 'archived');
+      });
+      if (!archivedRowStaysInList) leaveArchivedSession();
+      return token;
+    },
+    [navigate, listFilter],
+  );
 
   /**
    * archive / delete 实际执行序列。不关心确认弹窗的开合状态——由调用方负责。
@@ -69,13 +142,50 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
     async (
       sessionId: string,
       action: 'delete' | 'archive',
-      { activeSessionId, deleteRedirectRoute }: RunSessionActionOptions,
+      { activeSessionId, deleteRedirectRoute, prepareArchive }: RunSessionActionOptions,
     ) => {
+      const actionStartedAt = performance.now();
       const targetStatus: SessionStatus = action === 'delete' ? 'deleted' : 'archived';
-      // device-link 远程会话:status 写经隧道(setStatus 内部按来源路由 patch-meta),被控端写库后
-      // 广播 sessions:patched{status} → 控制端 applyPatch 把它移出分片(纯镜像,无需乐观/重拉)。
+      const statusWriteTarget = await sessionService.resolveStatusWriteTarget(sessionId);
+      const isDeviceLinkSession = statusWriteTarget.kind === 'device-link';
+      // Preflight/confirmation and write-target resolution may outlive the initial running check.
+      const deviceId = statusWriteTarget.kind === 'device-link' ? statusWriteTarget.deviceId : undefined;
+      if (action === 'archive' && archiveBlockedByRunning(sessionId, deviceId)) return;
+      let statusTransition: SessionStatusTransitionToken | null = null;
+      // device-link 远程会话:status 写经隧道(setStatus 内部按来源路由 patch-meta)。归档走
+      // remoteProjectsStore 的状态迁移叠加层乐观换桶,写库成功即落被控端返回的行,不等
+      // sessions:patched 回流。
+      let remoteStatus: RemotePendingStatusToken | null = null;
 
-      if (action === 'archive') {
+      if (action === 'archive' && prepareArchive) {
+        if (isDeviceLinkSession) {
+          remoteStatus = beginRemoteArchive(sessionId, statusWriteTarget.deviceId, null);
+        }
+        try {
+          const confirmed = await prepareArchive(
+            () => !remoteStatus || remoteProjectsStore.isPendingStatusCurrent(remoteStatus),
+          );
+          if (!confirmed || archiveBlockedByRunning(sessionId, deviceId)) {
+            if (remoteStatus) remoteProjectsStore.rollbackPendingStatus(remoteStatus);
+            return;
+          }
+          // 恢复、删除或设备移除已经取代了本次意图时，迟到预检不能再发归档。
+          if (remoteStatus && !remoteProjectsStore.isPendingStatusCurrent(remoteStatus)) return;
+        } catch (err) {
+          if (remoteStatus) remoteProjectsStore.rollbackPendingStatus(remoteStatus);
+          log.error('[archive preparation]', err);
+          toast.error(t('ccAgent.sidebar.archiveFailed'));
+          return;
+        }
+      }
+
+      if (action === 'archive' && isDeviceLinkSession) {
+        if (!remoteStatus) {
+          remoteStatus = beginRemoteArchive(sessionId, statusWriteTarget.deviceId, activeSessionId);
+        } else if (sessionId === activeSessionId && isSessionRemovalRouteCurrent(sessionId)) {
+          navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
+        }
+      } else if (action === 'archive') {
         // 乐观更新的顺序取决于**被归档的行还会不会留在当前列表里**,两种情况相反:
         //
         //   · 会留下(调用方在 'all' 桶):patchLocal 只是把它重排到归档段,行还在。
@@ -98,17 +208,31 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         //
         // Delete 仍走原来的"先 DB 后清理"流程:delete 不可逆,乐观删除如果 DB 失
         // 败会让用户看到"行消失又出现"的诡异闪烁,代价比 archive 大。写库成功
-        // 后再用 patchLocal 从所有桶移除,并由 emitRefresh 强制重拉所有桶兜底。
+        // 后再用 patchLocal 从所有桶移除。
         const archivedRowStaysInList = listFilter === 'all';
         const leaveArchivedSession = () => {
-          if (sessionId === activeSessionId) navigate('/cc-agent/new');
+          if (sessionId === activeSessionId && isSessionRemovalRouteCurrent(sessionId)) {
+            navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
+          }
         };
-        if (archivedRowStaysInList) {
-          flushSync(leaveArchivedSession);
-        }
-        flushSync(() => {
-          patchLocal(sessionId, { status: 'archived', pinnedAt: null });
-        });
+        statusTransition = await sessionsStore.beginStatusTransitionWhenReady(
+          sessionId,
+          {
+            status: 'archived',
+            pinnedAt: null,
+          },
+          (begin) => {
+            // A previous local status write can keep us waiting after the check above.
+            if (archiveBlockedByRunning(sessionId, deviceId)) return null;
+            if (archivedRowStaysInList) flushSync(leaveArchivedSession);
+            let transition: SessionStatusTransitionToken | null = null;
+            flushSync(() => {
+              transition = begin();
+            });
+            return transition;
+          },
+        );
+        if (!statusTransition) return;
         if (!archivedRowStaysInList) {
           leaveArchivedSession();
         }
@@ -118,18 +242,33 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       // query,不影响列表,没有理由挤在用户等着看到行消失的那一段前面。
       makerChatStore.closeSessionQuery(sessionId);
 
+      const statusWriteStartedAt = performance.now();
+      let statusWriteFinishedAt = statusWriteStartedAt;
+      let persisted: Session;
       try {
         // setStatus 按来源路由(远程走隧道 set-status,本机走原 update);archive 时
         // handler 内部一并 unpin —— 归档列表里不该再保留 pin 标记。
-        await sessionService.setStatus(sessionId, targetStatus);
+        persisted = await setStatusInOrder(sessionId, targetStatus, statusWriteTarget);
+        statusWriteFinishedAt = performance.now();
+        if (statusTransition) {
+          sessionsStore.completeStatusTransition(statusTransition, persisted);
+        }
+        if (remoteStatus) remoteProjectsStore.completePendingStatus(remoteStatus, persisted);
       } catch (err) {
         log.error('[session action]', err);
-        // Archive 乐观更新失败的回滚:把 status 改回 active(pinnedAt 已被乐观
-        // 清了,如果回滚不补回原值就会丢 pin。但 oldPinnedAt 在闭包里没捕获,
-        // 这里只能补 status —— pin 丢失是已知 trade-off,概率极低(只有 DB
-        // 写失败这种边界场景才触发)。
+        if (statusTransition) sessionsStore.rollbackStatusTransition(statusTransition);
+        if (remoteStatus) remoteProjectsStore.rollbackPendingStatus(remoteStatus);
         if (action === 'archive') {
-          patchLocal(sessionId, { status: 'active' });
+          const failedAt = performance.now();
+          log.warn('archive timing', {
+            event: 'renderer.session.archive.timing',
+            outcome: 'failed',
+            sessionId,
+            deviceLink: isDeviceLinkSession,
+            preWriteMs: Math.round(statusWriteStartedAt - actionStartedAt),
+            writeMs: Math.round(failedAt - statusWriteStartedAt),
+            totalMs: Math.round(failedAt - actionStartedAt),
+          });
         }
         toast.error(
           action === 'delete'
@@ -138,12 +277,13 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         );
         return;
       }
+      const statusConvergedAt = performance.now();
 
-      if (action === 'delete') {
+      if (action === 'delete' && !isDeviceLinkSession) {
         // DB 已确认删除成功后再让 sessionsStore 修正所有已加载的筛选桶。
         // 仅刷新当前桶会留下陈旧的 active / all 缓存，切换筛选时已删除会话会短暂重现；
         // 不在写库前乐观移除，避免失败时出现“先消失、再恢复”的反向闪烁。
-        patchLocal(sessionId, { status: 'deleted' });
+        patchLocal(sessionId, persisted);
       }
 
       // MEM-1: Free all in-memory state (messages, base64 images, listeners)
@@ -161,61 +301,81 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         // localStorage,删 session 时一起清掉,避免僵尸数据堆积。
         cleanupSessionLayoutPrefs(sessionId);
       }
+      if (action === 'archive') {
+        const finishedAt = performance.now();
+        log.info('archive timing', {
+          event: 'renderer.session.archive.timing',
+          outcome: 'success',
+          sessionId,
+          deviceLink: isDeviceLinkSession,
+          preWriteMs: Math.round(statusWriteStartedAt - actionStartedAt),
+          writeMs: Math.round(statusWriteFinishedAt - statusWriteStartedAt),
+          convergeMs: Math.round(statusConvergedAt - statusWriteFinishedAt),
+          cleanupMs: Math.round(finishedAt - statusConvergedAt),
+          totalMs: Math.round(finishedAt - actionStartedAt),
+        });
+      }
 
-      // 写库成功后强制重拉**所有已加载桶**。不 await —— 列表视觉已由上面的
-      // patchLocal 就地改好,这里只是让缓存跟 DB 对齐;sessions:list 是
-      // LEFT JOIN messages + GROUP BY + latest-message 子查询的重查询,await 它
-      // 只会把后面的 refreshWorktrees / delete 跳转推迟几百毫秒。
-      //
-      // 为什么必须全桶、不能只刷当前桶(codex review):归档时 patchLocal 会 drop
-      // 目标桶(archived,本地没有这条的完整 row)并立刻重拉,而那次重拉发生在
-      // setStatus 写库**之前**,拿回来的是「还没归档」的快照。本机
-      // local-db:sessions:update 又只在 title / settings / project 变化时才广播
-      // sessions:patched(status 不在其中),archived 桶再没有别的修正机会 —— 用户
-      // 切到「已归档」筛选会看不到刚归档的这条,直到某次无关刷新。
-      // 与 unarchiveSession 末尾的 emitRefresh 同口径。
-      emitRefresh();
-      // 远程会话从侧边栏消失由被控端 sessions:patched{status} 回流(applyPatch 移出分片)驱动,
-      // 控制端不再主动重拉 / 不再埋「主动移除」标记(掉线 vs 删除的区分见 CCAgentSessionView 优雅退出)。
-      // I-2: delete/archive 都要顺手刷一次 worktree map。上面的 emitRefresh 已经会
-      // 触发 WorktreeContext(它订阅 sessionsBus.onRefresh),这里再显式刷一次是为了
-      // 不依赖那条链;worktree 回收真正跑完后 main 还会广播 worktree:changed。
-      void refreshWorktrees();
+      // sessionsStore 已用任一缓存桶中的完整 row 同步迁移 active / archived / all；
+      // 完全找不到 row 时也只合并补查目标桶。这里不再发全局 refresh，避免连续归档
+      // 把每次状态写放大成所有已加载桶的一轮 fresh 查询。
+      // 远程归档已由叠加层换桶并落了写库返回的行;远程删除仍由被控端 sessions:patched{status}
+      // 回流(applyPatch 移出分片)驱动,控制端不主动重拉 / 不埋「主动移除」标记(掉线 vs 删除的
+      // 区分见 CCAgentSessionView 优雅退出)。
 
       // Archive 已在前面乐观跳到 /cc-agent/new,这里只处理 delete。调用方有列表
       // 上下文时会传入按当前可见顺序解析好的 route；否则回落到 /cc-agent
       // 让 CCAgentIndexRedirect 做默认恢复。
       if (action === 'delete' && sessionId === activeSessionId) {
-        navigate(deleteRedirectRoute ?? '/cc-agent');
+        const route = deleteRedirectRoute ?? '/cc-agent';
+        if (route === '/cc-agent/new') {
+          navigate(route, { state: { workspacePrompt: 'generic' } });
+        } else {
+          navigate(route);
+        }
       }
+      // 写库成功:需要知道结果的调用方(如合并后自动归档的撤销提示)据此继续。
+      return true;
     },
-    [navigate, refreshWorktrees, patchLocal, listFilter, t],
+    [navigate, patchLocal, listFilter, beginRemoteArchive, archiveBlockedByRunning, t],
   );
 
   /**
-   * unarchive：archive 的反向操作，无副作用直接 patch，不弹确认。
-   * 调用方 filter.status === 'archived' 时，unarchive 后 session 不再匹配筛选，
-   * 由 refreshSessions 拉到最新列表后自然消失。
+   * unarchive：archive 的反向状态事务，不弹确认。若归档仍在写库，先等它收敛，
+   * 再以完整归档行作为恢复失败时的回滚基线。远程任务同样乐观换桶(叠加层)，
+   * 写库成功后释放归档墓碑，被控端后续 patch 不再被丢弃、也不必等 reseed。
    */
   const unarchiveSession = useCallback(
     async (sessionId: string) => {
-      // 乐观更新本地状态，避免 refresh 期间残留 archived 视觉
-      patchLocal(sessionId, { status: 'active' });
+      const statusWriteTarget = await sessionService.resolveStatusWriteTarget(sessionId);
+      const isDeviceLinkSession = statusWriteTarget.kind === 'device-link';
+      const statusTransition = isDeviceLinkSession
+        ? null
+        : await sessionsStore.beginStatusTransitionWhenReady(sessionId, { status: 'active' });
+      if (!isDeviceLinkSession && !statusTransition) return;
+      const remoteStatus = isDeviceLinkSession
+        ? remoteProjectsStore.beginPendingStatus(statusWriteTarget.deviceId, sessionId, 'active')
+        : null;
       try {
-        await sessionService.setStatus(sessionId, 'active');
+        const persisted = await setStatusInOrder(sessionId, 'active', statusWriteTarget);
+        if (statusTransition) {
+          sessionsStore.completeStatusTransition(statusTransition, persisted);
+        }
+        if (remoteStatus) {
+          makerChatStore.releaseRemoteArchivedTombstone(sessionId, remoteStatus.deviceId);
+          remoteProjectsStore.completePendingStatus(remoteStatus, persisted);
+        }
       } catch (err) {
         log.error('[session unarchive]', err);
+        if (statusTransition) sessionsStore.rollbackStatusTransition(statusTransition);
+        if (remoteStatus) remoteProjectsStore.rollbackPendingStatus(remoteStatus);
         toast.error(t('ccAgent.sidebar.unarchiveFailed'));
-        await refreshSessions();
+        if (!statusTransition && !isDeviceLinkSession) await refreshSessions();
         return;
       }
-      // 兜底:status 跨桶迁移由 sessionsStore.patchLocal 自动 drop+refetch 相关桶,
-      // 这里再 emitRefresh 一次,确保即便存在 pre-fix 陈旧 cache,active/archived/all
-      // 三桶都会被强制重拉,跟 DB 对齐(unarchive 频次低,代价可接受)。
-      emitRefresh();
     },
-    [patchLocal, refreshSessions, t],
+    [refreshSessions, t],
   );
 
-  return { runSessionAction, unarchiveSession };
+  return { runSessionAction, unarchiveSession, archiveBlockedByRunning };
 }

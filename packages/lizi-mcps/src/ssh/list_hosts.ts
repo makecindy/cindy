@@ -22,14 +22,14 @@ export function registerSshListHostsTool(
     inputShape: {},
     handler: async () => {
       try {
-        const pool = await deps.getPool();
-        const hosts = pool.list().map(hostBrief);
+        const snapshots = deps.listHosts ? await deps.listHosts() : (await deps.getPool()).list();
+        const hosts = snapshots.map((snapshot) => hostBrief(snapshot, deps));
         return okPayload({
           hosts,
           ...(hosts.length === 0
             ? {
                 hint:
-                  '当前没有配置任何 SSH 主机。请告知用户到「设置 → 远程连接」添加主机（支持 ~/.ssh/config 已有 alias 自动导入）。',
+                  '当前没有配置任何 SSH 主机。用 ssh_add_host 添加；用户已在 ~/.ssh/config 写过的主机用 ssh_reload_config 导入。',
               }
             : {}),
         });

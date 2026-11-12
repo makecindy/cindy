@@ -17,6 +17,25 @@ export const DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT = 'reliable-transport-v1'
  */
 export const DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE = 'transport-timeout-close-v1';
 
+/**
+ * 声明本端会在真正处理 link-accept、安装对端可靠 stream 基线后，回一条带
+ * linkRequestId 的 transport ACK。被控端只有收到这条确认才恢复向该控制端
+ * drain pending，避免把「accept 已写进本地 WebSocket」误当成「对端已提交链路」。
+ *
+ * 能力是 append-only：任一端未声明时继续沿用 v1 的即时 ready 语义，保证新旧
+ * Desktop / Mobile 可以独立升级；relay 仍只路由普通 push，不需要服务端改动。
+ */
+export const DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM = 'reliable-link-confirm-v1';
+
+/** Mobile understands tool-input detail references and bounded plain result previews in
+ * list/created/maker:event. Around reads retain full detail; old peers stay unchanged. */
+export const DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1 = 'compact-message-history-v1';
+
+/** Desktop declares support for the structured history projection channels. */
+export const DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1 = 'history-view-v1';
+/** Same-account host GitHub reads and explicit PR associations. Not a shared-task grant. */
+export const DEVICE_LINK_CAPABILITY_GITHUB_READ_V1 = 'github-read-v1';
+
 /** transport ACK 使用普通 push 承载，且 ACK 本身永不再包 transport。 */
 export const DEVICE_LINK_TRANSPORT_ACK_CHANNEL = '__cindy/device-link/transport-ack';
 
@@ -51,7 +70,7 @@ export const TRANSPORT_MAX_RETRY_ATTEMPTS = 5;
  * 2026-08-08 线上单簇 213 条、单日 449 条，8-06 单簇 125 条，全部是这个形状。
  *
  * 这条路径原本有两道刹车，但都装在错的量上:
- *  - per-peer 制动（收到带 dst 的 DEVICE_OFFLINE → linkReady=false + 清重试定时器，
+ *  - per-peer 制动（收到带 dst 的 DEVICE_OFFLINE → 复位该 peer 收发方向 + 清重试定时器，
  *    #1187）是**异步**的:relay-error 要一个 RTT 才回来，那一趟早已全部上线路，它只
  *    拦得住下一轮；
  *  - 单趟中断（ws 容量抛 BACKPRESSURE → break，#2167）的阈值是 8MB buffered bytes，
@@ -81,6 +100,78 @@ export const TRANSPORT_RETRY_PASS_BUDGET = 8;
  * 前缀（含新鲜 push 与 transport-skip 占位），保证 invoke-result 是最早的 live seq。
  */
 export const TRANSPORT_PENDING_PUSH_MAX_AGE_MS = 5 * 60_000;
+/**
+ * 自适应重发间隔的上限。弱网（机上 Wi-Fi、卫星链路）往返常达数秒，固定 2s 重发会
+ * 在 ACK 回来前反复写出同一帧，2026-10-12 机上实测 40% 出站字节是重发；但间隔也
+ * 不能无限拉长，否则真正断掉的链路要很久才走到重试耗尽的止损。
+ */
+export const TRANSPORT_ADAPTIVE_RETRY_MAX_MS = 10_000;
+
+/**
+ * RFC 6298 平滑往返估计，样本取小消息从本轮首次写出到被累计 ACK 的时长。
+ * 不套用 Karn 规则（只采未重发的消息）：链路往返超过重发间隔时每帧都会先被
+ * 重发，按 Karn 永远采不到样本，自适应恰在最需要时失效。代价是真丢包时样本
+ * 偏大，单样本按 TRANSPORT_ADAPTIVE_RETRY_MAX_MS 截断。
+ */
+export interface RetransmitEstimate {
+  srttMs: number | null;
+  rttVarMs: number;
+  /** End-to-end delivery, including relay queues; never inferred from socket drain. */
+  deliveryBytesPerMs?: number;
+}
+
+/** Only first-attempt ACKs give an unambiguous large-message delivery sample. */
+export function updateDeliveryEstimate(estimate: RetransmitEstimate, bytes: number, elapsedMs: number): void {
+  if (bytes < 64 * 1024 || !Number.isFinite(elapsedMs) || elapsedMs <= 0) return;
+  const sample = bytes / elapsedMs;
+  const previous = estimate.deliveryBytesPerMs;
+  // Slow down immediately, recover gradually; bursts must not erase a slow-path observation.
+  estimate.deliveryBytesPerMs = previous === undefined ? sample : Math.min(sample, previous * 0.75 + sample * 0.25);
+}
+
+export function updateRetransmitEstimate(estimate: RetransmitEstimate, sampleMs: number): void {
+  const sample = Math.min(TRANSPORT_ADAPTIVE_RETRY_MAX_MS, Math.max(0, sampleMs));
+  if (estimate.srttMs === null) {
+    estimate.srttMs = sample;
+    estimate.rttVarMs = sample / 2;
+    return;
+  }
+  estimate.rttVarMs = 0.75 * estimate.rttVarMs + 0.25 * Math.abs(estimate.srttMs - sample);
+  estimate.srttMs = 0.875 * estimate.srttMs + 0.125 * sample;
+}
+
+/** 重发基准间隔：不低于配置值，慢链路按 SRTT + 4·RTTVAR 放宽，封顶。 */
+export function retransmitBaseMs(estimate: RetransmitEstimate, configuredMs: number): number {
+  if (estimate.srttMs === null) return configuredMs;
+  const adaptive = Math.min(
+    TRANSPORT_ADAPTIVE_RETRY_MAX_MS,
+    estimate.srttMs + 4 * estimate.rttVarMs,
+  );
+  return Math.max(configuredMs, adaptive);
+}
+
+/**
+ * 单条可靠消息距上次写出后多久可以重发。字节节奏和已确认的交付速度估算传输耗时；
+ * 超过 512KiB 的回包再按次数退避，传输等待封顶 120s。小消息保留 RTT 退避，
+ * 请求自身的响应截止时间不因重传延长。
+ */
+export function reliableRetryDelayMs(
+  estimate: RetransmitEstimate,
+  configuredMs: number,
+  sizeIntervals: number,
+  attempts: number,
+  bytes = 0,
+): number {
+  const backoff = Math.min(4, 2 ** Math.max(0, attempts - 1));
+  const measuredDelivery = bytes >= 64 * 1024 && estimate.deliveryBytesPerMs
+    ? bytes / estimate.deliveryBytesPerMs * 1.5 : 0;
+  // A 1.85 MB result needs roughly two minutes at 128 Kbit/s. The old 30s
+  // size ceiling repeatedly copied it before its first ACK. Keep a finite
+  // ceiling and retry exhaustion, while leaving small-message timing intact.
+  const delivery = Math.min(120_000,
+    Math.max(configuredMs * sizeIntervals, measuredDelivery) * (bytes > 512 * 1024 ? backoff : 1));
+  return Math.max(delivery, retransmitBaseMs(estimate, configuredMs) * backoff);
+}
 
 const TRANSPORT_MARKER = '__cindyDeviceLinkTransport';
 const TRANSPORT_SKIP_MARKER = '__cindyDeviceLinkTransportSkip';
@@ -108,6 +199,8 @@ export interface ReliableTransportPayload {
 export interface TransportAckPayload {
   streamId: string;
   ackSeq: number;
+  /** 处理 link-accept 后回显其 request id；缺省表示普通累计 ACK / 旧客户端。 */
+  linkRequestId?: string;
 }
 
 export interface TransportSkipPayload {
@@ -312,6 +405,7 @@ export function makeTransportAck(
   dst: string,
   streamId: string,
   ackSeq: number,
+  linkRequestId?: string,
 ): Envelope {
   return {
     v: PROTOCOL_VERSION,
@@ -319,7 +413,11 @@ export function makeTransportAck(
     dst,
     payload: {
       channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
-      payload: { streamId, ackSeq } satisfies TransportAckPayload,
+      payload: {
+        streamId,
+        ackSeq,
+        ...(linkRequestId ? { linkRequestId } : {}),
+      } satisfies TransportAckPayload,
     },
   };
 }
@@ -330,13 +428,23 @@ export function parseTransportAck(env: Envelope): TransportAckPayload | null {
   const payload = env.payload.payload;
   const streamId = isRecord(payload) ? payload.streamId : undefined;
   const ackSeq = isRecord(payload) ? payload.ackSeq : undefined;
+  const linkRequestId = isRecord(payload) ? payload.linkRequestId : undefined;
   if (
     typeof streamId !== 'string' ||
     typeof ackSeq !== 'number' ||
     !Number.isSafeInteger(ackSeq) ||
-    ackSeq < 0
+    ackSeq < 0 ||
+    (linkRequestId !== undefined && (
+      typeof linkRequestId !== 'string'
+      || linkRequestId.length < 1
+      || linkRequestId.length > 256
+    ))
   ) {
     return null;
   }
-  return { streamId, ackSeq };
+  return {
+    streamId,
+    ackSeq,
+    ...(typeof linkRequestId === 'string' ? { linkRequestId } : {}),
+  };
 }

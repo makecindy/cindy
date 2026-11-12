@@ -6,7 +6,13 @@
  * 与现有 httpClient 错误对齐。
  */
 
-import type { OrcaRole, Session, SessionStatus, WorkspaceKind } from '@/lib/ccAgent.types';
+import type {
+  OrcaRole,
+  Session,
+  SessionStatus,
+  UsageHistorySession,
+  WorkspaceKind,
+} from '@/lib/ccAgent.types';
 import { ApiError } from '@/lib/httpClient';
 import { extractIpcError } from '@/utils/ipcError';
 // device-link 透明对等:fork / rewind 按 sessionId 来源路由(本机 → 本地 maker,
@@ -26,6 +32,10 @@ import type { SessionReference } from '../../shared/sessionReference';
  */
 export type ListStatusFilter = 'active' | 'archived' | 'all';
 
+export type SessionStatusWriteTarget =
+  | { kind: 'local' }
+  | { kind: 'device-link'; deviceId: string };
+
 function wrap<T>(p: Promise<T>): Promise<T> {
   return p.catch((err: unknown) => {
     const ipcError = extractIpcError(err);
@@ -44,36 +54,88 @@ function wrap<T>(p: Promise<T>): Promise<T> {
 // settled rows must not become a stale renderer cache.
 const getInFlight = new Map<string, Promise<Session>>();
 
+export type SessionListOptions = {
+  /** Local list continuation; does not change the default capped query. */
+  before?: { updatedAt: number; id: string };
+  /** Local renderer-only exact subset, filtered before sorting and pagination. */
+  ids?: string[];
+  includePinned?: boolean;
+  /** forceRefresh / status 重拉：绕开 main 侧 in-flight 合并。 */
+  fresh?: boolean;
+  /** 用量历史页读取完整会话候选集，跳过侧栏的 1000 行上限与消息预览。 */
+  usageHistory?: boolean;
+};
+
+type SessionListRegularOptions = Omit<SessionListOptions, 'usageHistory'> & {
+  usageHistory?: false | undefined;
+};
+type SessionListUsageOptions = Omit<SessionListOptions, 'usageHistory'> & {
+  usageHistory: true;
+};
+
+export function list(
+  limit?: number,
+  status?: ListStatusFilter,
+  options?: SessionListRegularOptions,
+): Promise<Session[]>;
+export function list(
+  limit?: number,
+  status?: ListStatusFilter,
+  options?: SessionListUsageOptions,
+): Promise<UsageHistorySession[]>;
+export function list(
+  limit?: number,
+  status?: ListStatusFilter,
+  options?: SessionListOptions,
+): Promise<Session[] | UsageHistorySession[]>;
 export async function list(
   limit: number = 20,
   status?: ListStatusFilter,
-): Promise<Session[]> {
-  return wrap(window.electronAPI.localDb.sessions.list(limit, status));
+  options?: SessionListOptions,
+): Promise<Session[] | UsageHistorySession[]> {
+  return wrap(window.electronAPI.localDb.sessions.list(limit, status, options));
 }
 
 export async function create(body?: {
   id?: string;
+  title?: string;
   workingDir?: string;
   workspaceKind?: WorkspaceKind;
   model?: string;
   effort?: string;
   permissionMode?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   /** 计划模式一级开关(与 permissionMode 正交); 草稿开着计划模式时随建会话落库。 */
   planModeEnabled?: boolean;
   agentKind?: 'cc' | 'codex' | 'pi';
   orcaRole?: OrcaRole | null;
   /** 附加只读引用目录列表 (绝对路径); main 端 mapper 会 JSON.stringify 后写库。 */
   extraDirs?: string[];
+  writableDirs?: string[];
   /** Remote codex session (P2): 远端 SSH host alias。设置后 workingDir 须为
    *  远端绝对路径; codex agent 跑在远端机器, 本地不 spawn。 */
   remoteHostId?: string;
+  /**
+   * Agent 在同账号另一台电脑上运行:那台电脑的 deviceId。任务、项目文件与命令仍在本机,
+   * 模型来源由那台电脑解析。与 remoteHostId 互斥。
+   */
+  agentDeviceId?: string;
   /**
    * per-session 来源(供应商)显式选择,落盘 sessions.provider_id(与 update 同列、同语义)。
    * null/undefined = 跟随默认路由。草稿态发送建会话时透传用户在草稿里选定的来源,
    * 让新会话与「会话内切来源」行为一致(首个请求即走对供应商)。
    */
   providerId?: string | null;
+  /**
+   * Cindy Make code task marker. Main only accepts it for the managed source
+   * checkout; the persisted source later drives the `cindy_make` tool injection.
+   */
+  source?: 'cindy-make';
+  /**
+   * 新建页开始输入时先建出来的未发送任务：只在本机列表可见，清空输入就删掉，
+   * 第一次发送前转为普通任务(见 main/localDb/provisionalSessions.ts)。
+   */
+  provisional?: boolean;
 }): Promise<Session> {
   return wrap(window.electronAPI.localDb.sessions.create(body));
 }
@@ -128,7 +190,7 @@ export async function update(
     model?: string;
     effort?: string;
     permissionMode?: string;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
     /** 计划模式一级开关(与 permissionMode 正交), 与 maker.setPlanMode 双 IPC 协调。 */
     planModeEnabled?: boolean;
     sdkSessionId?: string | null;
@@ -136,33 +198,53 @@ export async function update(
     totalCostUsd?: number;
     contextTokens?: number;
     contextWindow?: number;
+    /**
+     * 任务级工作上下文预算（tokens）；null = 清除显式选择、跟随模型路由默认。
+     * 落库后 main 会把新窗口应用到活实例（空闲冷重建 / 回合中登记 pending）。
+     */
+    contextWindowBudget?: number | null;
     clearedAt?: string | null;
     pinnedAt?: string | null;
     status?: SessionStatus;
     orcaRole?: OrcaRole | null;
     /** 附加只读引用目录覆盖列表 (绝对路径); main 端会在 mapper 里 JSON.stringify 后写库。 */
     extraDirs?: string[];
+    writableDirs?: string[];
     /**
      * per-session 来源(供应商)选择,持久化到 sessions.provider_id(与 model/effort 同模式)。
      * null = 清除显式选择,回落默认路由。运行时即时生效由 maker.setModel 的第 3 参负责;
      * 此处仅落盘,使跨重启可恢复(host 加载时回填 session-provider-store)。
      */
     providerId?: string | null;
+    notificationsMuted?: boolean;
   },
 ): Promise<Session> {
   return wrap(window.electronAPI.localDb.sessions.update(id, patch));
 }
 
 /**
- * 窄口径会话元数据编辑(status / title / pinnedAt = 删/归档/恢复/重命名/置顶)。按来源路由:
+ * 窄口径会话元数据编辑(status / title / pinnedAt / notificationsMuted = 删/归档/恢复/重命名/置顶/静音通知)。按来源路由:
  *   - device-link 远程会话 → 隧道到被控端的 local-db:sessions:patch-meta(allowlist 内的窄口径写)
  *   - 本机会话 → 保持原 update 路径(零行为变更)
  * 通用 update 写任意字段、故意不进 allowlist,所以远程改这些元数据必须走这个专用通道。
+ * notificationsMuted 当前只在本机写:被控端 patch-meta 的 allowlist 不收它(提醒归任务所在的
+ * 那台设备发,入口也对 device-link 任务隐藏),所以这个字段不会经隧道下发。
  */
 export async function patchMeta(
   sessionId: string,
-  patch: { status?: SessionStatus; title?: string; pinnedAt?: string | null },
+  patch: {
+    status?: SessionStatus;
+    title?: string;
+    pinnedAt?: string | null;
+    notificationsMuted?: boolean;
+  },
 ): Promise<Session> {
+  // 「消息免打扰」是**本机**属性（提醒由任务所在的那台设备发出，菜单也对 device-link
+  // 任务隐藏），不随 sticky origin 隧道：被控端 patch-meta 的 allowlist 不收这个字段，
+  // 隧道过去只会抛 INVALID_PARAMS，让开关白回滚一次。
+  if (patch.notificationsMuted !== undefined) {
+    return update(sessionId, { notificationsMuted: patch.notificationsMuted });
+  }
   // Metadata writes must stay pinned to the last known device while the
   // relay's session mirror is being rebuilt. Otherwise an archived remote
   // task's auto-unarchive can fall through to the controller's local DB.
@@ -178,9 +260,54 @@ export async function patchMeta(
   return update(sessionId, patch);
 }
 
+/**
+ * Resolve one status mutation before the caller starts local optimistic convergence.
+ *
+ * A restored/copied database can contain the same session id as a task mirrored from a
+ * device that the user has disabled controlling. Sticky origin deliberately survives
+ * mirror removal, so only prefer the local row when both facts are proven: that exact
+ * device is disabled locally and the current local database contains the id. Any lookup
+ * failure stays pinned to the remote device (fail closed) instead of risking a local write.
+ */
+export async function resolveStatusWriteTarget(
+  sessionId: string,
+): Promise<SessionStatusWriteTarget> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (!deviceId) return { kind: 'local' };
+
+  try {
+    const state = await window.electronAPI.deviceLink.getState();
+    if (!state.disabledControlDeviceIds?.includes(deviceId)) {
+      return { kind: 'device-link', deviceId };
+    }
+  } catch {
+    return { kind: 'device-link', deviceId };
+  }
+
+  try {
+    await get(sessionId);
+    return { kind: 'local' };
+  } catch {
+    return { kind: 'device-link', deviceId };
+  }
+}
+
 /** status 切换便捷封装(archive 一并 unpin)。 */
-export async function setStatus(sessionId: string, status: SessionStatus): Promise<Session> {
-  return patchMeta(sessionId, status === 'archived' ? { status, pinnedAt: null } : { status });
+export async function setStatus(
+  sessionId: string,
+  status: SessionStatus,
+  target?: SessionStatusWriteTarget,
+): Promise<Session> {
+  const patch = status === 'archived' ? { status, pinnedAt: null } : { status };
+  const resolvedTarget = target ?? (await resolveStatusWriteTarget(sessionId));
+  if (resolvedTarget.kind === 'local') return update(sessionId, patch);
+  return wrap(
+    window.electronAPI.deviceLink.invoke(
+      resolvedTarget.deviceId,
+      'local-db:sessions:patch-meta',
+      [sessionId, patch],
+    ) as Promise<Session>,
+  );
 }
 
 /**
@@ -250,7 +377,7 @@ export async function rewindPreview(
 export async function rewindCommit(
   sessionId: string,
   clientId: string,
-  opts?: { requireLatestUser?: boolean; stopIfRunning?: boolean },
+  opts?: { requireLatestUser?: boolean; stopIfRunning?: boolean; allowFileRestore?: boolean },
 ): Promise<Session> {
   return wrap(
     makerApiFor(sessionId).rewindCommit(sessionId, clientId, opts) as Promise<Session>,

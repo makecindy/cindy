@@ -24,6 +24,7 @@ const loginHook = vi.hoisted(() => ({
     errorCode: null as string | null,
     loginState: null as unknown,
     dispatch: vi.fn(async () => true),
+    dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
     clearError: vi.fn(),
   },
 }));
@@ -87,6 +88,7 @@ function mount(state: AuthFlowState) {
     errorCode: null,
     loginState: state,
     dispatch: vi.fn(async () => true),
+    dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
     clearError: vi.fn(),
   };
   return render(<LoginPage />);
@@ -116,7 +118,8 @@ describe('identifier 本地格式校验错误态(设计稿 347:1727)', () => {
       target: { value: 'user@example.com' },
     });
     fireEvent.click(screen.getByTestId('login-continue-button'));
-    expect(loginHook.value.dispatch).toHaveBeenCalledWith({
+    // 邮箱 discover 走 dispatchWithResult(captcha 兜底需要读失败码)
+    expect(loginHook.value.dispatchWithResult).toHaveBeenCalledWith({
       type: 'discover',
       email: 'user@example.com',
     });
@@ -132,10 +135,12 @@ describe('identifier 本地格式校验错误态(设计稿 347:1727)', () => {
     });
     fireEvent.click(screen.getByTestId('login-continue-button'));
     // 桌面不再做 cnPhone 本地拦截:任意输入原样透传服务端,无红边红字
-    expect(loginHook.value.dispatch).toHaveBeenCalledWith({
+    // (request-code 走 dispatchWithResult,captcha 兜底需要读失败码)
+    expect(loginHook.value.dispatchWithResult).toHaveBeenCalledWith({
       type: 'request-code',
       kind: 'phone',
       identifier: '12345',
+      captchaToken: undefined,
     });
     expect(screen.queryByTestId('login-error-text')).toBeNull();
   });

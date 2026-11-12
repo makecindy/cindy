@@ -14,6 +14,12 @@ import { isNetworkishErrorMessage, parseReconnectAttemptMessage } from '@/utils/
 describe('isNetworkishErrorMessage', () => {
   it.each([
     // Anthropic SDK 重试耗尽后透传的终止型错误原文
+    'Error Code null: Service temporarily unavailable. The model\'s availability is currently degraded.',
+    'SERVICE TEMPORARILY UNAVAILABLE',
+    'Service is temporarily unavailable.',
+    'Service Unavailable',
+    "The model's availability is currently degraded.",
+    'Model availability is degraded.',
     'Request timed out.',
     'API Error: The operation timed out.',
     'Connection error.',
@@ -24,18 +30,32 @@ describe('isNetworkishErrorMessage', () => {
     'socket hang up',
     'Reconnecting... 2/5',
     'Reconnecting… 3/5 (stream disconnected before completion)',
+    'The operation timed out.',
+    'OpenAI Responses stream ended before a terminal response event',
+    // Cindy Responses bridge / compat-proxy 中途断流；Claude Code 再包 API Error:
+    'API Error: upstream stream error: terminated',
+    'upstream stream error: socket reset',
+    'upstream stream error: Error: terminated',
   ])('matches networkish message: %s', (msg) => {
     expect(isNetworkishErrorMessage(msg)).toBe(true);
   });
 
   it.each([
     'Invalid API key',
+    'Permission denied',
+    'Insufficient quota',
+    'Model unavailable for this account',
+    'Tool availability is currently degraded',
+    'Degraded performance',
     'thread not found',
     'context window exceeded',
     'Local tool operation timed out.',
     'Wrapped error: API Error: The operation timed out.',
     // 长数字不因包含 502 片段误伤(\b 词边界)
     'order id 15024 rejected',
+    // 裸 terminated 是鉴权终态,不能当传输抖动
+    'app_session_terminated',
+    'Your session has ended. Please log in again. (app_session_terminated)',
   ])('does not match non-network message: %s', (msg) => {
     expect(isNetworkishErrorMessage(msg)).toBe(false);
   });

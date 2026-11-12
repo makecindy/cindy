@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 
 /**
  * PR4a 错误文案行测试(SC-7 slice pr4a error-copy 族):
- * inventory §4.5 移动具名 14 码 + REGION_MISMATCH + UNKNOWN_CODE 兜底,
+ * inventory §4.5 移动具名码 + REGION_MISMATCH + 发码路径常见码
+ * (RATE_LIMITED / SSO_LOGIN_REQUIRED / INVALID_RESPONSE / AUTH_SERVICE_UNAVAILABLE)
+ * + UNKNOWN_CODE 兜底,
  * 逐码断言 5 语 catalog verbatim 路由(vi.mock expo-localization 轮换系统 locale,
  * authErrorText 走真实解析链)。皮肤层错误条消费 authErrorText 输出,
  * 文案权威在 loginMessages catalog(translation-review SHA 绑定)。
@@ -19,6 +21,7 @@ import {
   type LoginLocale,
 } from "@/auth/loginMessages";
 import { LOGIN_SCENARIO_ERROR_CODES } from "@cindy/auth-client/fixtures";
+import { setManualLocaleOverride } from "@/i18n/appLanguage";
 
 /** locale → 代表性系统 languageTag(catalog 解析规则全路径过一遍)。 */
 const LOCALE_TAGS: Record<LoginLocale, string> = {
@@ -27,8 +30,23 @@ const LOCALE_TAGS: Record<LoginLocale, string> = {
   en: "en-US",
   ja: "ja-JP",
   ko: "ko-KR",
+  es: "es-MX",
+  fr: "fr-CA",
+  de: "de-AT",
+  "pt-PT": "pt-PT",
+  "pt-BR": "pt-BR",
+  // 文言只能手动选择:系统 tag 解析到 zh-TW / zh-CN,由 selectLocale 走手动 override。
+  "zh-Hant-x-lzh": "zh-Hant-TW",
+  "zh-Hans-x-lzh": "zh-Hans-CN",
 };
 const LOCALES = Object.keys(LOCALE_TAGS) as LoginLocale[];
+const MANUAL_ONLY_LOCALES: readonly LoginLocale[] = ["zh-Hant-x-lzh", "zh-Hans-x-lzh"];
+
+/** 切换生效语言:常规 locale 走系统 tag,仅手动可选的 locale 走 override。 */
+function selectLocale(locale: LoginLocale) {
+  mockLanguageTag.current = LOCALE_TAGS[locale];
+  setManualLocaleOverride(MANUAL_ONLY_LOCALES.includes(locale) ? locale : null);
+}
 
 /** 逐 locale 断言 authErrorText 命中 catalog verbatim(且非空、码间不串词)。 */
 function expectCodeRoutedVerbatim(code: string) {
@@ -41,7 +59,7 @@ function expectCodeRoutedVerbatim(code: string) {
     `code=${code} 应在附录 A error 场景值域内`,
   ).toBe(true);
   for (const locale of LOCALES) {
-    mockLanguageTag.current = LOCALE_TAGS[locale];
+    selectLocale(locale);
     const text = authErrorText(code);
     expect(text, `code=${code} locale=${locale}`).toBe(perLocale[locale]);
     expect(text?.trim(), `code=${code} locale=${locale} 非空`).not.toBe("");
@@ -63,6 +81,27 @@ describe("loginSkin 错误文案 5 语(catalog verbatim 路由)", () => {
     expectCodeRoutedVerbatim("INVALID_PARAMS");
     expect(authErrorMessages.INVALID_PARAMS["zh-CN"]).toBe(
       "输入内容格式不正确。",
+    );
+  });
+
+  it("CAPTCHA_REQUIRED:5 语 catalog verbatim 路由", () => {
+    expectCodeRoutedVerbatim("CAPTCHA_REQUIRED");
+    expect(authErrorMessages.CAPTCHA_REQUIRED["zh-CN"]).toBe(
+      "请先完成安全验证。",
+    );
+  });
+
+  it("CAPTCHA_INVALID:5 语 catalog verbatim 路由", () => {
+    expectCodeRoutedVerbatim("CAPTCHA_INVALID");
+    expect(authErrorMessages.CAPTCHA_INVALID["zh-CN"]).toBe(
+      "安全验证未通过，请重试。",
+    );
+  });
+
+  it("CAPTCHA_UNAVAILABLE:5 语 catalog verbatim 路由", () => {
+    expectCodeRoutedVerbatim("CAPTCHA_UNAVAILABLE");
+    expect(authErrorMessages.CAPTCHA_UNAVAILABLE["zh-CN"]).toBe(
+      "安全验证服务暂不可用，请稍后再试。",
     );
   });
 
@@ -148,15 +187,52 @@ describe("loginSkin 错误文案 5 语(catalog verbatim 路由)", () => {
     );
   });
 
+  it("RATE_LIMITED:5 语 catalog verbatim 路由", () => {
+    expectCodeRoutedVerbatim("RATE_LIMITED");
+    expect(authErrorMessages.RATE_LIMITED["zh-CN"]).toBe(
+      "操作过于频繁，请稍后再试。",
+    );
+  });
+
+  it("SSO_LOGIN_REQUIRED:5 语 catalog verbatim 路由", () => {
+    expectCodeRoutedVerbatim("SSO_LOGIN_REQUIRED");
+    expect(authErrorMessages.SSO_LOGIN_REQUIRED["zh-CN"]).toBe(
+      "该邮箱所属企业要求通过 SSO 登录。",
+    );
+  });
+
+  it("AUTH_SERVICE_UNAVAILABLE:5 语 catalog verbatim 路由", () => {
+    expectCodeRoutedVerbatim("AUTH_SERVICE_UNAVAILABLE");
+    expect(authErrorMessages.AUTH_SERVICE_UNAVAILABLE["zh-CN"]).toBe(
+      "登录服务暂不可用，请稍后重试。",
+    );
+  });
+
+  it("INVALID_RESPONSE:5 语 catalog verbatim 路由(zod 契约漂移,不在 scenario error 值域)", () => {
+    const perLocale = authErrorMessages.INVALID_RESPONSE;
+    expect(perLocale).toBeTruthy();
+    expect(Object.keys(perLocale).sort()).toEqual([...LOCALES].sort());
+    for (const locale of LOCALES) {
+      selectLocale(locale);
+      const text = authErrorText("INVALID_RESPONSE");
+      expect(text, locale).toBe(perLocale[locale]);
+      expect(text, locale).not.toBe(loginMessages[locale].errorFallback);
+    }
+    selectLocale("zh-CN");
+    expect(authErrorMessages.INVALID_RESPONSE["zh-CN"]).toBe(
+      "登录服务返回了无法识别的结果，请稍后重试。",
+    );
+  });
+
   it("UNKNOWN_CODE:未注册 wire code 逐 locale 回退 errorFallback,null 返回 null", () => {
     expect(authErrorMessages.UNKNOWN_CODE).toBeUndefined();
     for (const locale of LOCALES) {
-      mockLanguageTag.current = LOCALE_TAGS[locale];
+      selectLocale(locale);
       expect(authErrorText("UNKNOWN_CODE"), locale).toBe(
         loginMessages[locale].errorFallback,
       );
     }
-    mockLanguageTag.current = "zh-Hans-CN";
+    selectLocale("zh-CN");
     expect(authErrorText("UNKNOWN_CODE")).toBe("登录未完成，请重试。");
     expect(authErrorText(null)).toBeNull();
   });

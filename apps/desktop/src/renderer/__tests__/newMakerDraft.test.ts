@@ -11,9 +11,13 @@
  *
  * 项目 vitest env=node,无 window。这里用 vi.stubGlobal 注入最小 localStorage
  * 实现,避免新增 jsdom/happy-dom 依赖。
+ *
+ * 模块只加载一次:每例用 __reloadForTest 从新的空 localStorage 复位;「app 重启」
+ * 同样用它从持久值重新加载。两个 Electron renderer 的场景另用一个文件开始时加载的
+ * 独立模块实例(secondWindow),两者只共享 localStorage。
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 
 class MemLocalStorage {
   private store = new Map<string, string>();
@@ -31,17 +35,55 @@ class MemLocalStorage {
   }
 }
 
-let memStorage: MemLocalStorage;
+type DraftModule = typeof import('@/state/newMakerDraft');
+
+let memStorage = new MemLocalStorage();
+const storageListeners: Array<(event: StorageEvent) => void> = [];
+const testWindow = {
+  localStorage: memStorage,
+  addEventListener(type: string, listener: EventListenerOrEventListenerObject) {
+    if (type === 'storage' && typeof listener === 'function') {
+      storageListeners.push(listener as (event: StorageEvent) => void);
+    }
+  },
+  removeEventListener() {},
+};
+let draftStore: DraftModule;
+let secondWindow: DraftModule;
+let onStorage: ((event: StorageEvent) => void) | undefined;
+
+beforeAll(async () => {
+  vi.stubGlobal('window', testWindow);
+  vi.stubGlobal('localStorage', memStorage);
+  secondWindow = await import('@/state/newMakerDraft');
+  // reset-modules: 第二个 renderer 窗口需要独立的模块内存,只在文件开始时加载一次
+  vi.resetModules();
+  storageListeners.length = 0;
+  draftStore = await import('@/state/newMakerDraft');
+  onStorage = storageListeners.at(-1);
+});
 
 beforeEach(() => {
   memStorage = new MemLocalStorage();
-  vi.stubGlobal('window', { localStorage: memStorage });
+  testWindow.localStorage = memStorage;
   vi.stubGlobal('localStorage', memStorage);
-  vi.resetModules();
+  draftStore.__reloadForTest();
 });
 
 async function loadModule() {
-  return await import('@/state/newMakerDraft');
+  return draftStore;
+}
+
+/** 模拟 app 重启:丢弃内存态,从 localStorage 重新加载。 */
+async function reloadModule() {
+  draftStore.__reloadForTest();
+  return draftStore;
+}
+
+/** 另一个 renderer 窗口此刻打开:独立内存,从共享 localStorage 加载。 */
+async function openSecondWindow() {
+  secondWindow.__reloadForTest();
+  return secondWindow;
 }
 
 describe('newMakerDraft store', () => {
@@ -66,13 +108,463 @@ describe('newMakerDraft store', () => {
     expect(d.effortByModel).toEqual({});
     expect(d.worktreeEnabled).toBe(false);
     expect(d.worktreePreferenceCustomized).toBe(false);
+    expect(d.defaultTupleCustomized).toBe(false);
+    expect(d.defaultTupleSelectionCustomized).toBe(false);
+  });
+
+  it('产品默认原子写入完整组合，但不伪装成用户显式选模', async () => {
+    const { applySuggestedDefaultTuple, getDraft } = await loadModule();
+    expect(
+      applySuggestedDefaultTuple({
+        vendor: 'codex',
+        providerId: 'openai',
+        model: 'chatgpt/gpt-5.6-sol',
+        effort: 'high',
+      }),
+    ).toBe(true);
+    expect(getDraft()).toMatchObject({
+      vendor: 'codex',
+      defaultTupleCustomized: false,
+      lastByVendor: {
+        codex: {
+          providerId: 'openai',
+          model: 'chatgpt/gpt-5.6-sol',
+          effort: 'high',
+        },
+      },
+    });
+    expect(getDraft().modelChosenByVendor.codex).toBeUndefined();
+
+    const reloaded = await reloadModule();
+    expect(reloaded.getDraft().defaultTupleCustomized).toBe(false);
+  });
+
+  it.each([false, true])('Gateway 后到不抢订阅，Codex 后到只更新未自定义草稿（手动选择=%s）', async (customized) => {
+    const { resolveNewMakerDefaultTuple } = await import('@/lib/newMakerDefaultTuple');
+    const { applySuggestedDefaultTuple, getDraft, markDefaultTupleCustomized } = await loadModule();
+    const sources: import('@cindy/model-providers').ProviderView[] = [
+      {
+        id: 'anthropic',
+        name: 'Claude',
+        source: 'builtin',
+        connected: true,
+        agents: ['claude-code'],
+        auth: { method: 'oauth' },
+        access: { kind: 'subscription', product: 'Claude' },
+        routing: {},
+        models: {
+          'claude-code': [
+            {
+              id: 'claude-opus-5-5',
+              name: 'Opus',
+              contextWindow: 272000,
+              efforts: ['high'],
+              defaultEffort: 'high',
+            },
+          ],
+        },
+      },
+    ];
+    const resolve = () =>
+      resolveNewMakerDefaultTuple({
+        providers: sources,
+        providersLoading: false,
+        availableAgents: new Set(['cc', 'codex', 'pi']),
+        availableAgentsLoaded: true,
+      })!;
+    expect(applySuggestedDefaultTuple(resolve())).toBe(true);
+    expect(getDraft().vendor).toBe('cc');
+    if (customized) markDefaultTupleCustomized();
+    sources.push({
+      id: 'xd',
+      name: 'Cindy AI',
+      source: 'builtin',
+      connected: true,
+      agents: ['pi'],
+      auth: { method: 'managed' },
+      access: { kind: 'managed' },
+      routing: {},
+      models: {
+        pi: [
+          {
+            id: 'auto',
+            name: 'Auto',
+            contextWindow: 200000,
+            efforts: ['high'],
+            defaultEffort: 'high',
+            newSessionDefault: ['pi'],
+            modalities: { input: ['text', 'image'], output: ['text'] },
+          },
+        ],
+      },
+    });
+    expect(applySuggestedDefaultTuple(resolve())).toBe(false);
+    expect(getDraft().vendor).toBe('cc');
+    sources.push({ ...sources[0]!, id: 'openai', agents: ['codex'],
+      access: { kind: 'subscription', product: 'ChatGPT' },
+      models: { codex: [{ id: 'gpt-6.1-sol', name: 'Sol', contextWindow: 272000, efforts: ['high'], defaultEffort: 'high' }] },
+    });
+    expect(applySuggestedDefaultTuple(resolve())).toBe(!customized);
+    const draft = getDraft();
+    expect(draft.vendor).toBe(customized ? 'cc' : 'codex');
+    expect(draft.lastByVendor[draft.vendor].providerId).toBe(customized ? 'anthropic' : 'openai');
+    expect(draft.defaultTupleCustomized).toBe(customized);
+    expect(applySuggestedDefaultTuple(resolve())).toBe(false);
+  });
+
+  it('用户明确改过组合后，登录态变化不再覆盖', async () => {
+    const { applySuggestedDefaultTuple, getDraft, markDefaultTupleCustomized } = await loadModule();
+    markDefaultTupleCustomized();
+    expect(
+      applySuggestedDefaultTuple({
+        vendor: 'pi',
+        providerId: 'xai',
+        model: 'grok-4.6',
+        effort: 'high',
+      }),
+    ).toBe(false);
+    expect(getDraft().vendor).toBe('cc');
+    expect(getDraft().defaultTupleCustomized).toBe(true);
+    expect(getDraft().defaultTupleSelectionCustomized).toBe(true);
+  });
+
+  it('恢复推荐只撤销 effort/Fast 调档，不清除模型/来源/Harness 选择', async () => {
+    const tuningOnly = await loadModule();
+    tuningOnly.markDefaultTupleCustomized(false);
+    expect(tuningOnly.getDraft()).toMatchObject({
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: false,
+    });
+    tuningOnly.clearDefaultTupleTuningCustomization({
+      modelId: 'claude-sonnet-4-6',
+      hasExternalOverrides: false,
+    });
+    expect(tuningOnly.getDraft().defaultTupleCustomized).toBe(false);
+
+    tuningOnly.markDefaultTupleCustomized();
+    tuningOnly.markDefaultTupleCustomized(false);
+    tuningOnly.clearDefaultTupleTuningCustomization({
+      modelId: 'claude-sonnet-4-6',
+      hasExternalOverrides: false,
+    });
+    expect(tuningOnly.getDraft()).toMatchObject({
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: true,
+    });
+  });
+
+  it.each(['effort', 'fast'] as const)(
+    '当前默认模型只改 %s 时，恢复推荐清空旧记忆并允许后续默认变化',
+    async (kind) => {
+      const modelId = 'claude-sonnet-4-6';
+      const draft = await loadModule();
+      draft.markDefaultTupleCustomized(false);
+      if (kind === 'effort') draft.setEffortForModel(modelId, 'high');
+      else draft.setFastModeForModel(modelId, true);
+
+      draft.clearDefaultTupleTuningCustomization({
+        modelId,
+        hasExternalOverrides: false,
+      });
+      expect(draft.getDraft()).toMatchObject({
+        defaultTupleCustomized: false,
+        defaultTupleSelectionCustomized: false,
+        effortByModel: {},
+        fastModeByModel: {},
+      });
+      expect(
+        draft.applySuggestedDefaultTuple({
+          vendor: 'pi',
+          providerId: 'xai',
+          model: 'grok-4.6',
+          effort: 'high',
+        }),
+      ).toBe(true);
+
+      const reloaded = await reloadModule();
+      expect(reloaded.getDraft()).toMatchObject({
+        defaultTupleCustomized: false,
+        effortByModel: {},
+        fastModeByModel: {},
+      });
+    },
+  );
+
+  it('恢复当前项后仍有其它草稿或外部 override 时继续保护默认组合', async () => {
+    const draft = await loadModule();
+    draft.markDefaultTupleCustomized(false);
+    draft.setEffortForModel('claude-sonnet-4-6', 'high');
+    draft.setFastModeForModel('gpt-5.5', true);
+
+    draft.clearDefaultTupleTuningCustomization({
+      modelId: 'claude-sonnet-4-6',
+      hasExternalOverrides: false,
+    });
+    expect(draft.getDraft()).toMatchObject({
+      defaultTupleCustomized: true,
+      effortByModel: {},
+      fastModeByModel: { 'gpt-5.5': true },
+    });
+
+    draft.clearDefaultTupleTuningCustomization({
+      modelId: 'gpt-5.5',
+      hasExternalOverrides: true,
+    });
+    expect(draft.getDraft()).toMatchObject({
+      defaultTupleCustomized: true,
+      effortByModel: {},
+      fastModeByModel: {},
+    });
+  });
+
+  it('只改权限不把模型组合误标成用户自定义', async () => {
+    const { getDraft, patchCurrentVendorPrefs } = await loadModule();
+    patchCurrentVendorPrefs({ permissionMode: 'bypassPermissions' });
+    expect(getDraft().defaultTupleCustomized).toBe(false);
+  });
+
+  it('旧草稿的模型、来源、思考深度或 Fast 选择会迁移成已自定义', async () => {
+    for (const saved of [
+      { vendor: 'cc', modelChosenByVendor: { cc: true } },
+      { vendor: 'cc', lastByVendor: { cc: { model: 'claude-opus-4-8' } } },
+      { vendor: 'cc', lastByVendor: { cc: { providerId: 'anthropic' } } },
+      { vendor: 'cc', effortByModel: { 'claude-opus-5': 'high' } },
+      { vendor: 'cc', fastModeByModel: { 'claude-opus-5': true } },
+    ]) {
+      memStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify(saved));
+      const { getDraft } = await reloadModule();
+      expect(getDraft().defaultTupleCustomized).toBe(true);
+    }
+  });
+
+  it('旧 preserving 路径仅留下 cc.model 时仍保护旧模型', async () => {
+    memStorage.setItem(
+      'xdt:newMakerDraft:v1',
+      JSON.stringify({ vendor: 'cc', lastByVendor: { cc: { model: 'claude-opus-4-8' } } }),
+    );
+    const { applySuggestedDefaultTuple, getDraft } = await reloadModule();
+    expect(getDraft().defaultTupleCustomized).toBe(true);
+    expect(
+      applySuggestedDefaultTuple({
+        vendor: 'pi',
+        providerId: 'xai',
+        model: 'grok-4.6',
+        effort: 'high',
+      }),
+    ).toBe(false);
+    expect(getDraft().vendor).toBe('cc');
+    expect(getDraft().lastByVendor.cc.model).toBe('claude-opus-4-8');
+  });
+
+  it('旧 device-link preserving 完整快照与空 marker 仍保护 cc 旧模型', async () => {
+    memStorage.setItem(
+      'xdt:newMakerDraft:v1',
+      JSON.stringify({
+        vendor: 'cc',
+        modelChosenByVendor: {},
+        lastByVendor: {
+          cc: {
+            model: 'claude-opus-4-8',
+            providerId: null,
+            effort: 'medium',
+            permissionMode: 'auto',
+            planMode: false,
+          },
+          codex: { model: 'gpt-5.5', providerId: null, effort: 'high' },
+          pi: { model: 'claude-sonnet-5', providerId: null, effort: 'high' },
+          orca: { model: 'claude-sonnet-4-6', providerId: null, effort: 'medium' },
+        },
+      }),
+    );
+    const { applySuggestedDefaultTuple, getDraft } = await reloadModule();
+    expect(getDraft()).toMatchObject({
+      vendor: 'cc',
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: true,
+      lastByVendor: { cc: { model: 'claude-opus-4-8', providerId: null, effort: 'medium' } },
+    });
+    expect(
+      applySuggestedDefaultTuple({
+        vendor: 'pi',
+        providerId: 'xai',
+        model: 'grok-4.6',
+        effort: 'high',
+      }),
+    ).toBe(false);
+    expect(getDraft().lastByVendor.cc.model).toBe('claude-opus-4-8');
+  });
+
+  it('旧完整快照里的 cc 种子模型不误判成用户自定义', async () => {
+    memStorage.setItem(
+      'xdt:newMakerDraft:v1',
+      JSON.stringify({
+        vendor: 'cc',
+        workingDir: '/tmp/project',
+        lastByVendor: {
+          cc: { model: 'claude-sonnet-4-6' },
+          codex: { model: 'gpt-5.5' },
+          pi: { model: 'claude-sonnet-5' },
+          orca: { model: 'claude-sonnet-4-6' },
+        },
+      }),
+    );
+    const { applySuggestedDefaultTuple, getDraft } = await reloadModule();
+    expect(getDraft().defaultTupleCustomized).toBe(false);
+    expect(
+      applySuggestedDefaultTuple({
+        vendor: 'pi',
+        providerId: 'xai',
+        model: 'grok-4.6',
+        effort: 'high',
+      }),
+    ).toBe(true);
+    expect(getDraft()).toMatchObject({
+      vendor: 'pi',
+      lastByVendor: { pi: { providerId: 'xai', model: 'grok-4.6', effort: 'high' } },
+    });
+  });
+
+  it('旧 head 已标明系统默认时，不因 Gateway 来源反推成用户选择', async () => {
+    memStorage.setItem(
+      'xdt:newMakerDraft:v1',
+      JSON.stringify({
+        vendor: 'pi',
+        defaultTupleCustomized: false,
+        modelChosenByVendor: {},
+        lastByVendor: {
+          cc: { model: 'claude-sonnet-4-6' },
+          codex: { model: 'gpt-5.5' },
+          pi: { model: 'grok-4.6', providerId: 'xai', effort: 'high' },
+        },
+      }),
+    );
+    const { getDraft } = await reloadModule();
+    expect(getDraft()).toMatchObject({
+      defaultTupleCustomized: false,
+      defaultTupleSelectionCustomized: false,
+    });
+  });
+
+  it('旧 head 已标明自定义时，从显式模型证据补出 selection marker', async () => {
+    memStorage.setItem(
+      'xdt:newMakerDraft:v1',
+      JSON.stringify({
+        vendor: 'cc',
+        defaultTupleCustomized: true,
+        modelChosenByVendor: { cc: true },
+        lastByVendor: { cc: { model: 'claude-opus-4-8' } },
+      }),
+    );
+    const { getDraft } = await reloadModule();
+    expect(getDraft()).toMatchObject({
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: true,
+    });
+  });
+
+  it('旧 head 的 Gateway 默认来源加调档，不误补成 selection marker', async () => {
+    memStorage.setItem(
+      'xdt:newMakerDraft:v1',
+      JSON.stringify({
+        vendor: 'pi',
+        defaultTupleCustomized: true,
+        modelChosenByVendor: {},
+        effortByModel: { 'grok-4.6': 'medium' },
+        lastByVendor: {
+          cc: { model: 'claude-sonnet-4-6' },
+          codex: { model: 'gpt-5.5' },
+          pi: { model: 'grok-4.6', providerId: 'xai', effort: 'medium' },
+        },
+      }),
+    );
+    const { clearDefaultTupleTuningCustomization, getDraft } = await reloadModule();
+    expect(getDraft()).toMatchObject({
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: false,
+    });
+    clearDefaultTupleTuningCustomization({
+      modelId: 'grok-4.6',
+      hasExternalOverrides: false,
+    });
+    expect(getDraft().defaultTupleCustomized).toBe(false);
+  });
+
+  it('旧 head 只换来源时，即使没有 modelChosen marker 也保护真实来源选择', async () => {
+    memStorage.setItem(
+      'xdt:newMakerDraft:v1',
+      JSON.stringify({
+        vendor: 'pi',
+        defaultTupleCustomized: true,
+        modelChosenByVendor: {},
+        lastByVendor: {
+          cc: { model: 'claude-sonnet-4-6' },
+          codex: { model: 'gpt-5.5' },
+          pi: { model: 'grok-4.6', providerId: 'openrouter', effort: 'high' },
+        },
+      }),
+    );
+    const { clearDefaultTupleTuningCustomization, getDraft } = await reloadModule();
+    expect(getDraft()).toMatchObject({
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: true,
+    });
+    clearDefaultTupleTuningCustomization({
+      modelId: 'grok-4.6',
+      hasExternalOverrides: false,
+    });
+    expect(getDraft().defaultTupleCustomized).toBe(true);
+  });
+
+  it('旧版系统可用性 fallback 不迁移成用户自定义', async () => {
+    for (const vendor of ['codex', 'pi'] as const) {
+      memStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify({ vendor }));
+      const { applySuggestedDefaultTuple, getDraft } = await reloadModule();
+      expect(getDraft().defaultTupleCustomized).toBe(false);
+      expect(
+        applySuggestedDefaultTuple({
+          vendor: 'pi',
+          providerId: 'xai',
+          model: 'grok-4.6',
+          effort: 'high',
+        }),
+      ).toBe(true);
+      expect(getDraft()).toMatchObject({
+        vendor: 'pi',
+        defaultTupleCustomized: false,
+        lastByVendor: { pi: { providerId: 'xai', model: 'grok-4.6', effort: 'high' } },
+      });
+    }
+  });
+
+  it('默认组合先落 Pi 后，可用性回退读取实时草稿且不被旧 cc 闭包覆盖', async () => {
+    const { applySuggestedDefaultTuple, fallbackUnavailableVendor, getDraft } = await loadModule();
+    expect(
+      applySuggestedDefaultTuple({
+        vendor: 'pi',
+        providerId: 'xai',
+        model: 'grok-4.6',
+        effort: 'high',
+      }),
+    ).toBe(true);
+    expect(fallbackUnavailableVendor(new Set(['codex', 'pi']))).toBe(false);
+    expect(getDraft()).toMatchObject({
+      vendor: 'pi',
+      defaultTupleCustomized: false,
+      lastByVendor: { pi: { providerId: 'xai', model: 'grok-4.6', effort: 'high' } },
+    });
+  });
+
+  it('系统可用性回退本身不标记用户自定义', async () => {
+    const { fallbackUnavailableVendor, getDraft } = await loadModule();
+    expect(fallbackUnavailableVendor(new Set(['codex', 'pi']))).toBe(true);
+    expect(getDraft().vendor).toBe('codex');
+    expect(getDraft().defaultTupleCustomized).toBe(false);
   });
 
   it('persists an explicit Pi model choice across reload', async () => {
     const m1 = await loadModule();
     m1.patchVendorPrefs('pi', { model: 'chatgpt/gpt-5.6' });
-    vi.resetModules();
-    const m2 = await loadModule();
+    const m2 = await reloadModule();
     expect(m2.getDraft().modelChosenByVendor.pi).toBe(true);
     expect(m2.getPersistedVendorModel('pi')).toBe('chatgpt/gpt-5.6');
   });
@@ -95,8 +587,7 @@ describe('newMakerDraft store', () => {
     expect(m1.getEffortForModel('claude-opus-4-7')).toBe('xhigh');
 
     // 模拟 app 重启 → 仍按模型恢复
-    vi.resetModules();
-    const m2 = await loadModule();
+    const m2 = await reloadModule();
     expect(m2.getEffortForModel('claude-opus-4-7')).toBe('xhigh');
     expect(m2.getEffortForModel('claude-haiku-4-5')).toBe('low');
     expect(m2.getEffortForModel('not-recorded')).toBeUndefined();
@@ -107,8 +598,7 @@ describe('newMakerDraft store', () => {
       'xdt:newMakerDraft:v1',
       JSON.stringify({ vendor: 'cc' /* 无 effortByModel */ }),
     );
-    vi.resetModules();
-    const { getDraft, getEffortForModel } = await loadModule();
+    const { getDraft, getEffortForModel } = await reloadModule();
     expect(getDraft().effortByModel).toEqual({});
     expect(getEffortForModel('claude-opus-4-7')).toBeUndefined();
   });
@@ -126,8 +616,7 @@ describe('newMakerDraft store', () => {
         },
       }),
     );
-    vi.resetModules();
-    const { getDraft } = await loadModule();
+    const { getDraft } = await reloadModule();
     expect(getDraft().effortByModel).toEqual({ 'claude-opus-4-7': 'high' });
   });
 
@@ -138,8 +627,7 @@ describe('newMakerDraft store', () => {
     expect(memStorage.getItem(m1.__STORAGE_KEY)).not.toBeNull();
 
     // 模拟"app 重启"——重置 module cache,重新 import 后从 localStorage 恢复
-    vi.resetModules();
-    const m2 = await loadModule();
+    const m2 = await reloadModule();
     expect(m2.getDraft().workingDir).toBe('E:/projects/foo');
   });
 
@@ -150,8 +638,7 @@ describe('newMakerDraft store', () => {
     expect(m1.getDraft().extraDirs).toEqual(['E:/projects/shared-lib']);
 
     // 模拟 app 重启 → workingDir 等偏好保留,extraDirs 清空(sanitize 一律置空)
-    vi.resetModules();
-    const m2 = await loadModule();
+    const m2 = await reloadModule();
     expect(m2.getDraft().workingDir).toBe('E:/projects/foo');
     expect(m2.getDraft().extraDirs).toEqual([]);
   });
@@ -179,8 +666,7 @@ describe('newMakerDraft store', () => {
     // 模拟 app 重启:耐久选择(role/model/effort/fast)恢复,一次性任务不复活——
     // 否则重启后 Send 会静默把过期任务当 delegateTask 派给 Worker,而收起态
     // pill 无从看见/编辑。
-    vi.resetModules();
-    const m2 = await loadModule();
+    const m2 = await reloadModule();
     const wc = m2.getDraft().collab.workerConfig;
     expect(wc).toMatchObject({
       role: 'developer',
@@ -244,8 +730,7 @@ describe('newMakerDraft store', () => {
         workingDir: 'E:/projects/foo/.xdt-worktrees/auto-abc/src',
       }),
     );
-    vi.resetModules();
-    const { getDraft } = await loadModule();
+    const { getDraft } = await reloadModule();
     expect(getDraft().workingDir).toBe('E:/projects/foo');
   });
 
@@ -258,21 +743,20 @@ describe('newMakerDraft store', () => {
     expect(getDraft().workingDir).toBe('E:/projects/foo/.claude/worktrees/auto-abc/src');
   });
 
-  it('switchVendor:落地当前 vendor 的最新 prefs 后再切到目标 vendor', async () => {
-    const { getDraft, switchVendor } = await loadModule();
-    // 当前 vendor='cc',传入"模拟用户改过的 cc prefs"
-    switchVendor('codex', {
-      ...getDraft().lastByVendor.cc,
+  it('switchVendor:保留已同步的当前 vendor prefs 后再切到目标 vendor', async () => {
+    const { getDraft, patchCurrentVendorPrefs, switchVendor } = await loadModule();
+    patchCurrentVendorPrefs({
       model: 'claude-opus-4-7',
       effort: 'high',
-      permissionMode: 'plan',
+      permissionMode: 'bypassPermissions',
     });
+    switchVendor('codex');
     const d = getDraft();
     expect(d.vendor).toBe('codex');
     // 旧 vendor(cc)的 prefs 被落地为传入的值
     expect(d.lastByVendor.cc.model).toBe('claude-opus-4-7');
     expect(d.lastByVendor.cc.effort).toBe('high');
-    expect(d.lastByVendor.cc.permissionMode).toBe('plan');
+    expect(d.lastByVendor.cc.permissionMode).toBe('bypassPermissions');
     // 新 vendor(codex)的 prefs 不变(等待用户在 codex 下继续操作)
     expect(d.lastByVendor.codex.permissionMode).toBe('auto');
   });
@@ -280,11 +764,10 @@ describe('newMakerDraft store', () => {
   it('switchVendor:选中的引擎跨重启保留(模拟 app 重启后仍是上次选的)', async () => {
     const m1 = await loadModule();
     expect(m1.getDraft().vendor).toBe('cc');
-    m1.switchVendor('codex', m1.getDraft().lastByVendor.cc);
+    m1.switchVendor('codex');
     expect(m1.getDraft().vendor).toBe('codex');
 
-    vi.resetModules();
-    const m2 = await loadModule();
+    const m2 = await reloadModule();
     expect(m2.getDraft().vendor).toBe('codex');
   });
 
@@ -292,8 +775,7 @@ describe('newMakerDraft store', () => {
     const { SELECTABLE_VENDORS } = await import('@/lib/agentVendors');
     for (const vendor of SELECTABLE_VENDORS) {
       memStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify({ vendor }));
-      vi.resetModules();
-      const { getDraft } = await loadModule();
+      const { getDraft } = await reloadModule();
       // 逐个写死白名单时,新上线的引擎在这里会被静默重置回 'cc' —— 用户选中后重启就丢。
       expect(getDraft().vendor).toBe(vendor);
     }
@@ -302,8 +784,7 @@ describe('newMakerDraft store', () => {
   it("sanitize:表外的引擎值(历史 'orca' / 未知 / 非字符串)回退默认", async () => {
     for (const vendor of ['orca', 'unknown-engine', '', 42, null]) {
       memStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify({ vendor }));
-      vi.resetModules();
-      const { getDraft } = await loadModule();
+      const { getDraft } = await reloadModule();
       expect(getDraft().vendor).toBe('cc');
     }
   });
@@ -311,7 +792,7 @@ describe('newMakerDraft store', () => {
   it('switchVendor:相同 vendor 不变(no-op,避免误覆盖)', async () => {
     const { getDraft, switchVendor } = await loadModule();
     const before = getDraft().lastByVendor.cc;
-    switchVendor('cc', { ...before, model: 'XX', effort: 'low', permissionMode: 'auto' });
+    switchVendor('cc');
     expect(getDraft().lastByVendor.cc).toEqual(before);
   });
 
@@ -344,10 +825,222 @@ describe('newMakerDraft store', () => {
     expect(m1.getPersistedVendorModel('codex')).toBe('');
 
     // 模拟 app 重启 → 标记与值都恢复
-    vi.resetModules();
-    const m2 = await loadModule();
+    const m2 = await reloadModule();
     expect(m2.getDraft().modelChosenByVendor).toEqual({ cc: true });
     expect(m2.getPersistedVendorModel('cc')).toBe('claude-opus-4-8');
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:新建默认在另一个来源上时,任务内只换模型不改写', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'claude-opus-5-5', providerId: 'anthropic', effort: 'high' });
+
+    const written = m1.patchVendorPrefsFromTaskModelSwitch(
+      'cc',
+      { model: 'anthropic/claude-sonnet-5-5', providerId: 'xd', effort: 'medium' },
+      'xd',
+    );
+
+    expect(written).toBe(false);
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({
+      model: 'claude-opus-5-5',
+      providerId: 'anthropic',
+      effort: 'high',
+    });
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:来源一致时照常写回并打标', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'claude-opus-5-5', providerId: 'anthropic' });
+
+    const written = m1.patchVendorPrefsFromTaskModelSwitch(
+      'cc',
+      { model: 'claude-sonnet-5-5', providerId: 'anthropic', effort: 'xhigh' },
+      'anthropic',
+    );
+
+    expect(written).toBe(true);
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({
+      model: 'claude-sonnet-5-5',
+      providerId: 'anthropic',
+      effort: 'xhigh',
+    });
+    expect(m1.getDraft().modelChosenByVendor).toEqual({ cc: true });
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:存着的来源已被搬走时按实际路由比较', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'auto/pool', providerId: 'org-pool' });
+    // 服务端把该 Auto 搬到了 xd:实际来源是 xd，不是存着的 org-pool。
+    const moved = () => 'xd';
+
+    expect(
+      m1.patchVendorPrefsFromTaskModelSwitch(
+        'cc',
+        { model: 'auto/pool', providerId: 'org-pool' },
+        'org-pool',
+        moved,
+      ),
+    ).toBe(false);
+    expect(m1.getDraft().lastByVendor.cc.providerId).toBe('org-pool');
+    // 解析不出来时回退用存着的来源比较。
+    expect(
+      m1.patchVendorPrefsFromTaskModelSwitch(
+        'cc',
+        { model: 'auto/pool', providerId: 'org-pool' },
+        'org-pool',
+        () => null,
+      ),
+    ).toBe(true);
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:保留的草稿来源对新模型已失效时改写入任务实际来源', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'auto/pool', providerId: 'org-pool' });
+    // Auto 已搬到 xd：旧 org-pool 对任何模型都解析不到，实际落点是 xd。
+    const resolve = (prefs: { model: string; providerId?: string | null }) =>
+      prefs.model === 'auto/pool'
+        ? 'xd'
+        : prefs.providerId === 'org-pool'
+          ? null
+          : (prefs.providerId ?? null);
+
+    const written = m1.patchVendorPrefsFromTaskModelSwitch(
+      'cc',
+      { model: 'plain-model', providerId: null },
+      'xd',
+      resolve,
+    );
+
+    expect(written).toBe(true);
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({
+      model: 'plain-model',
+      providerId: 'xd',
+    });
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:旧来源搬走后即使仍能提供新模型也不复活', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'auto/pool', providerId: 'org-pool' });
+    // Auto 已搬到 xd：存着的 org-pool 实际落点是 xd；org-pool 对普通模型仍然能提供。
+    const resolve = (prefs: { model: string; providerId?: string | null }) =>
+      prefs.model === 'auto/pool' ? 'xd' : (prefs.providerId ?? null);
+
+    expect(
+      m1.patchVendorPrefsFromTaskModelSwitch(
+        'cc',
+        { model: 'plain-model', providerId: null },
+        'xd',
+        resolve,
+      ),
+    ).toBe(true);
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({
+      model: 'plain-model',
+      providerId: 'xd',
+    });
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:patch 里带着过期来源时仍写入已确认的任务来源', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'auto/pool', providerId: 'org-pool' });
+    const resolve = (prefs: { model: string; providerId?: string | null }) =>
+      prefs.model === 'auto/pool' ? 'xd' : (prefs.providerId ?? null);
+
+    expect(
+      m1.patchVendorPrefsFromTaskModelSwitch(
+        'cc',
+        { model: 'plain-model', providerId: 'org-pool' },
+        'xd',
+        resolve,
+      ),
+    ).toBe(true);
+    expect(m1.getDraft().lastByVendor.cc.providerId).toBe('xd');
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:草稿本来跟随默认路由时保持跟随', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'claude-opus-5-5', providerId: null });
+
+    expect(
+      m1.patchVendorPrefsFromTaskModelSwitch(
+        'cc',
+        { model: 'claude-sonnet-5-5', providerId: 'anthropic' },
+        'anthropic',
+        () => 'anthropic',
+      ),
+    ).toBe(true);
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({
+      model: 'claude-sonnet-5-5',
+      providerId: null,
+    });
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:任务跟随默认路由时保留草稿显式选过的同一来源', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'claude-opus-5-5', providerId: 'anthropic' });
+
+    const written = m1.patchVendorPrefsFromTaskModelSwitch(
+      'cc',
+      { model: 'claude-sonnet-5-5', providerId: null },
+      'anthropic',
+    );
+
+    expect(written).toBe(true);
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({
+      model: 'claude-sonnet-5-5',
+      providerId: 'anthropic',
+    });
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:跟随默认路由的新建默认按解析出的来源比较', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'claude-opus-5-5', providerId: null });
+    const resolve = (prefs: { model: string }) =>
+      prefs.model === 'claude-opus-5-5' ? 'anthropic' : null;
+
+    expect(
+      m1.patchVendorPrefsFromTaskModelSwitch(
+        'cc',
+        { model: 'anthropic/claude-opus-5-5', providerId: 'xd' },
+        'xd',
+        resolve,
+      ),
+    ).toBe(false);
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({ model: 'claude-opus-5-5', providerId: null });
+
+    // 新建默认的来源解析不出来(目录未就绪等)时不能放行，否则会绕过保护把默认搬到任务的来源。
+    expect(
+      m1.patchVendorPrefsFromTaskModelSwitch(
+        'cc',
+        { model: 'anthropic/claude-opus-5-5', providerId: 'xd' },
+        'xd',
+        () => null,
+      ),
+    ).toBe(false);
+    expect(m1.patchVendorPrefsFromTaskModelSwitch('cc', { model: 'x', providerId: 'xd' }, 'xd')).toBe(
+      false,
+    );
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({ model: 'claude-opus-5-5', providerId: null });
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:先吸收另一窗口刚保存的默认再比较来源', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'claude-opus-5-5', providerId: 'xd' });
+    // 另一窗口把新建默认改成 anthropic，本窗口的 storage 事件还没送达。
+    const stored = JSON.parse(memStorage.getItem([...(memStorage as any).store.keys()][0]) as string);
+    stored.lastByVendor.cc = { ...stored.lastByVendor.cc, model: 'claude-opus-5-5', providerId: 'anthropic' };
+    stored.modelChosenByVendor = { cc: true };
+    stored.defaultTupleCustomized = true;
+    stored.defaultTupleSelectionCustomized = true;
+    memStorage.setItem([...(memStorage as any).store.keys()][0], JSON.stringify(stored));
+
+    const written = m1.patchVendorPrefsFromTaskModelSwitch(
+      'cc',
+      { model: 'anthropic/claude-sonnet-5-5', providerId: 'xd' },
+      'xd',
+    );
+
+    expect(written).toBe(false);
+    expect(m1.getDraft().lastByVendor.cc.providerId).toBe('anthropic');
   });
 
   it('patchVendorPrefsPreservingModelChoice:只改思考档不打显式选择标记', async () => {
@@ -484,16 +1177,14 @@ describe('newMakerDraft store', () => {
     const m1 = await loadModule();
     m1.setFastModeForModel('gpt-5.5', true);
 
-    vi.resetModules();
-    const m2 = await loadModule();
+    const m2 = await reloadModule();
     expect(m2.getFastModeForModel('gpt-5.5')).toBe(true);
     expect(m2.getFastModeForModel('claude-opus-4-7')).toBe(false);
   });
 
   it('schema 损坏的 localStorage 入参 → 静默回退默认,不抛错', async () => {
     memStorage.setItem('xdt:newMakerDraft:v1', '{"vendor":"unknown","oops":true,broken json');
-    vi.resetModules();
-    const { getDraft } = await loadModule();
+    const { getDraft } = await reloadModule();
     const d = getDraft();
     expect(d.vendor).toBe('cc');
     expect(d.workingDir).toBeNull();
@@ -510,8 +1201,7 @@ describe('newMakerDraft store', () => {
         },
       }),
     );
-    vi.resetModules();
-    const { getDraft } = await loadModule();
+    const { getDraft } = await reloadModule();
     const d = getDraft();
     // legacy 'plan' 档 → planMode 开关 + 回落该 vendor 默认权限档(与 DB 迁移同语义)
     expect(d.lastByVendor.cc.permissionMode).toBe('auto');
@@ -526,8 +1216,7 @@ describe('newMakerDraft store', () => {
       'xdt:newMakerDraft:v1',
       JSON.stringify({ vendor: 'codex' /* workingDir / lastByVendor 都缺 */ }),
     );
-    vi.resetModules();
-    const { getDraft } = await loadModule();
+    const { getDraft } = await reloadModule();
     const d = getDraft();
     expect(d.vendor).toBe('codex');
     expect(d.workingDir).toBeNull();
@@ -551,8 +1240,7 @@ describe('newMakerDraft store', () => {
         wtBaseRepo: '/x',
       }),
     );
-    vi.resetModules();
-    const { getDraft } = await loadModule();
+    const { getDraft } = await reloadModule();
     const d = getDraft();
     expect(d).not.toHaveProperty('wtEnabled');
     expect(d).not.toHaveProperty('wtName');
@@ -563,18 +1251,16 @@ describe('newMakerDraft store', () => {
 
   it('schema:worktree 偏好以显式 override 持久化,脏值/缺字段跟随系统默认', async () => {
     // 勾选记忆是「工作端一份」的显式 override:专用 setter 写入 → 重载后恢复。
-    vi.resetModules();
     {
-      const { getDraft, setWorktreePreference } = await loadModule();
+      const { getDraft, setWorktreePreference } = await reloadModule();
       expect(getDraft().worktreeEnabled).toBe(false); // 出厂默认不勾选(防误操作)
       expect(getDraft().worktreePreferenceCustomized).toBe(false);
       setWorktreePreference(true);
       expect(getDraft().worktreeEnabled).toBe(true);
       expect(getDraft().worktreePreferenceCustomized).toBe(true);
     }
-    vi.resetModules();
     {
-      const { getDraft } = await loadModule();
+      const { getDraft } = await reloadModule();
       expect(getDraft().worktreeEnabled).toBe(true);
       expect(getDraft().worktreePreferenceCustomized).toBe(true);
     }
@@ -583,17 +1269,15 @@ describe('newMakerDraft store', () => {
       'xdt:newMakerDraft:v1',
       JSON.stringify({ vendor: 'cc', worktreeEnabled: 'yes' }),
     );
-    vi.resetModules();
     {
-      const { getDraft } = await loadModule();
+      const { getDraft } = await reloadModule();
       expect(getDraft().worktreeEnabled).toBe(false);
       expect(getDraft().worktreePreferenceCustomized).toBe(false);
     }
   });
 
   it('通用草稿 patch 不能改动 worktree 偏好', async () => {
-    vi.resetModules();
-    const { getDraft, patchDraft, setWorktreePreference } = await loadModule();
+    const { getDraft, patchDraft, setWorktreePreference } = await reloadModule();
 
     patchDraft({ worktreeEnabled: true, worktreePreferenceCustomized: true });
     expect(getDraft().worktreeEnabled).toBe(false);
@@ -610,9 +1294,8 @@ describe('newMakerDraft store', () => {
       'xdt:newMakerDraft:v1',
       JSON.stringify({ vendor: 'cc', worktreeEnabled: false }),
     );
-    vi.resetModules();
     {
-      const { getDraft, patchDraft } = await loadModule();
+      const { getDraft, patchDraft } = await reloadModule();
       expect(getDraft().worktreeEnabled).toBe(false);
       expect(getDraft().worktreePreferenceCustomized).toBe(false);
       patchDraft({ workingDir: '/projects/default-following' });
@@ -628,9 +1311,8 @@ describe('newMakerDraft store', () => {
       'xdt:newMakerDraft:v1',
       JSON.stringify({ vendor: 'cc', worktreeEnabled: true }),
     );
-    vi.resetModules();
     {
-      const { getDraft } = await loadModule();
+      const { getDraft } = await reloadModule();
       expect(getDraft().worktreeEnabled).toBe(true);
       expect(getDraft().worktreePreferenceCustomized).toBe(true);
     }
@@ -645,8 +1327,7 @@ describe('newMakerDraft store', () => {
         worktreePreferenceCustomized: false,
       }),
     );
-    vi.resetModules();
-    const { getDraft } = await loadModule();
+    const { getDraft } = await reloadModule();
     expect(getDraft().worktreeEnabled).toBe(false);
     expect(getDraft().worktreePreferenceCustomized).toBe(false);
   });
@@ -654,8 +1335,7 @@ describe('newMakerDraft store', () => {
   it('附属窗口的过期草稿写入不会覆盖另一个窗口刚保存的 worktree 偏好', async () => {
     // 两次 import 模拟两个 Electron renderer:模块内存独立,localStorage 共享。
     const staleWindow = await loadModule();
-    vi.resetModules();
-    const activeWindow = await loadModule();
+    const activeWindow = await openSecondWindow();
 
     activeWindow.setWorktreePreference(true);
     expect(staleWindow.getDraft().worktreeEnabled).toBe(false);
@@ -673,14 +1353,370 @@ describe('newMakerDraft store', () => {
     });
   });
 
+  it('旧窗口的完整草稿写入不会覆盖另一窗口刚保存的默认模型组合', async () => {
+    // 两个 renderer 的模块内存独立；旧窗口仍停在未自定义的 cc 草稿。
+    const staleWindow = await loadModule();
+    const activeWindow = await openSecondWindow();
+
+    activeWindow.markDefaultTupleCustomized();
+    activeWindow.switchVendor('pi');
+    activeWindow.patchVendorPrefs('pi', {
+      model: 'grok-4.6',
+      providerId: 'xai',
+      effort: 'high',
+    });
+    activeWindow.setEffortForModel('grok-4.6', 'high');
+    activeWindow.setFastModeForModel('grok-4.6', true);
+    expect(staleWindow.getDraft().defaultTupleCustomized).toBe(false);
+
+    // storage event 尚未送达时，旧窗口只改无关的工作目录。完整写入前必须把用户组合
+    // 整体 rebase，不能只保住 marker 而丢 Harness / 来源 / 模型 / 深度 / Fast。
+    staleWindow.patchDraft({ workingDir: '/projects/stale-window' });
+
+    const expectedTuple = {
+      vendor: 'pi',
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: true,
+      modelChosenByVendor: { pi: true },
+      effortByModel: { 'grok-4.6': 'high' },
+      fastModeByModel: { 'grok-4.6': true },
+      lastByVendor: {
+        pi: expect.objectContaining({
+          model: 'grok-4.6',
+          providerId: 'xai',
+          effort: 'high',
+        }),
+      },
+    };
+    expect(staleWindow.getDraft()).toMatchObject(expectedTuple);
+    expect(staleWindow.getDraft().workingDir).toBe('/projects/stale-window');
+    expect(
+      JSON.parse(memStorage.getItem(staleWindow.__STORAGE_KEY) ?? '{}'),
+    ).toMatchObject(expectedTuple);
+  });
+
+  it('旧窗口的无关写入不会复活另一窗口已恢复推荐的 tuple', async () => {
+    const activeWindow = await loadModule();
+    activeWindow.setEffortForModel('legacy-model', 'high');
+    activeWindow.markDefaultTupleCustomized(false);
+    const staleWindow = await openSecondWindow();
+    expect(staleWindow.getDraft().defaultTupleCustomized).toBe(true);
+
+    activeWindow.clearDefaultTupleTuningCustomization({
+      modelId: 'legacy-model',
+      hasExternalOverrides: false,
+    });
+    const restoredTuple = {
+      vendor: activeWindow.getDraft().vendor,
+      defaultTupleCustomized: false,
+      defaultTupleSelectionCustomized: false,
+      modelChosenByVendor: {},
+      effortByModel: {},
+      fastModeByModel: {},
+      lastByVendor: activeWindow.getDraft().lastByVendor,
+    };
+
+    // storage event 尚未到达 B；仅改工作目录时必须采用 A 已写入的完整恢复结果。
+    staleWindow.patchDraft({ workingDir: '/projects/after-restore' });
+    expect(staleWindow.getDraft()).toMatchObject(restoredTuple);
+    expect(staleWindow.getDraft().workingDir).toBe('/projects/after-restore');
+    expect(JSON.parse(memStorage.getItem(staleWindow.__STORAGE_KEY) ?? '{}')).toMatchObject(
+      restoredTuple,
+    );
+  });
+
+  it('旧窗口在恢复推荐后明确选模时，只写入这次新的 tuple 意图', async () => {
+    const activeWindow = await loadModule();
+    activeWindow.setEffortForModel('legacy-model', 'high');
+    activeWindow.markDefaultTupleCustomized(false);
+    const staleWindow = await openSecondWindow();
+
+    activeWindow.clearDefaultTupleTuningCustomization({
+      modelId: 'legacy-model',
+      hasExternalOverrides: false,
+    });
+    staleWindow.patchVendorPrefs('cc', {
+      model: 'claude-new-choice',
+      providerId: 'anthropic',
+      effort: 'xhigh',
+    });
+
+    expect(staleWindow.getDraft()).toMatchObject({
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: true,
+      modelChosenByVendor: { cc: true },
+      effortByModel: {},
+      fastModeByModel: {},
+      lastByVendor: {
+        cc: expect.objectContaining({
+          model: 'claude-new-choice',
+          providerId: 'anthropic',
+          effort: 'xhigh',
+        }),
+      },
+    });
+  });
+
+  it('旧窗口在恢复推荐后切 Harness 时，不用旧闭包污染最新来源槽', async () => {
+    const activeWindow = await loadModule();
+    activeWindow.setEffortForModel('legacy-model', 'high');
+    activeWindow.markDefaultTupleCustomized(false);
+    const staleWindow = await openSecondWindow();
+
+    activeWindow.clearDefaultTupleTuningCustomization({
+      modelId: 'legacy-model',
+      hasExternalOverrides: false,
+    });
+    activeWindow.applySuggestedDefaultTuple({
+      vendor: 'pi',
+      model: 'z-ai/glm-5.3-flash',
+      providerId: 'xd',
+      effort: 'medium',
+    });
+
+    // B 仍渲染着旧 cc tuple，但这次明确意图只有“切到 Codex”。切换前必须采用 A 的
+    // 最新 Pi tuple，不能把旧 cc prefs 填进 Pi 槽。
+    staleWindow.markDefaultTupleCustomized();
+    staleWindow.switchVendor('codex');
+
+    const expected = {
+      vendor: 'codex',
+      defaultTupleCustomized: true,
+      lastByVendor: {
+        pi: expect.objectContaining({
+          model: 'z-ai/glm-5.3-flash',
+          providerId: 'xd',
+          effort: 'medium',
+        }),
+      },
+    };
+    expect(staleWindow.getDraft()).toMatchObject(expected);
+    expect(JSON.parse(memStorage.getItem(staleWindow.__STORAGE_KEY) ?? '{}')).toMatchObject(
+      expected,
+    );
+  });
+
+  it('旧窗口选择界面所示 Harness 时，仍按最新持久状态执行切换', async () => {
+    const activeWindow = await loadModule();
+    activeWindow.setEffortForModel('legacy-model', 'high');
+    activeWindow.markDefaultTupleCustomized(false);
+    const staleWindow = await openSecondWindow();
+    expect(staleWindow.getDraft().vendor).toBe('cc');
+
+    activeWindow.clearDefaultTupleTuningCustomization({
+      modelId: 'legacy-model',
+      hasExternalOverrides: false,
+    });
+    activeWindow.applySuggestedDefaultTuple({
+      vendor: 'pi',
+      model: 'z-ai/glm-5.3-flash',
+      providerId: 'xd',
+      effort: 'medium',
+    });
+
+    // B 仍显示 cc，用户明确点 cc。调用方必须始终进入 switchVendor，让它先看到真实 Pi
+    // 再切回 cc；若用旧 draft.vendor 预判，这次明确意图会被错误跳过。
+    staleWindow.switchVendor('cc');
+    staleWindow.patchVendorPrefs('cc', {
+      model: 'claude-new-choice',
+      providerId: 'anthropic',
+      effort: 'high',
+    });
+
+    expect(staleWindow.getDraft()).toMatchObject({
+      vendor: 'cc',
+      defaultTupleCustomized: true,
+      modelChosenByVendor: { cc: true },
+      lastByVendor: {
+        cc: expect.objectContaining({
+          model: 'claude-new-choice',
+          providerId: 'anthropic',
+        }),
+        pi: expect.objectContaining({
+          model: 'z-ai/glm-5.3-flash',
+          providerId: 'xd',
+        }),
+      },
+    });
+  });
+
+  it('旧窗口的内联控件按界面 Harness 写入，不串到最新持久 Harness', async () => {
+    const activeWindow = await loadModule();
+    activeWindow.setEffortForModel('legacy-model', 'high');
+    activeWindow.markDefaultTupleCustomized(false);
+    const staleWindow = await openSecondWindow();
+    const renderedVendor = staleWindow.getDraft().vendor;
+    expect(renderedVendor).toBe('cc');
+
+    activeWindow.clearDefaultTupleTuningCustomization({
+      modelId: 'legacy-model',
+      hasExternalOverrides: false,
+    });
+    activeWindow.applySuggestedDefaultTuple({
+      vendor: 'pi',
+      model: 'z-ai/glm-5.3-flash',
+      providerId: 'xd',
+      effort: 'medium',
+    });
+
+    // 模拟 classic/inline 回调：marker 会先 rebase 到 Pi，但后续必须按渲染时捕获的 cc
+    // 执行切换并写 cc 槽，不能用 rebase 后的 currentDraft.vendor 把值串进 Pi。
+    staleWindow.markDefaultTupleCustomized();
+    staleWindow.switchVendor(renderedVendor);
+    staleWindow.patchVendorPrefs(renderedVendor, {
+      model: 'claude-inline-choice',
+      providerId: 'anthropic',
+      effort: 'xhigh',
+    });
+
+    expect(staleWindow.getDraft()).toMatchObject({
+      vendor: 'cc',
+      defaultTupleCustomized: true,
+      modelChosenByVendor: { cc: true },
+      lastByVendor: {
+        cc: expect.objectContaining({
+          model: 'claude-inline-choice',
+          providerId: 'anthropic',
+          effort: 'xhigh',
+        }),
+        pi: expect.objectContaining({
+          model: 'z-ai/glm-5.3-flash',
+          providerId: 'xd',
+          effort: 'medium',
+        }),
+      },
+    });
+  });
+
+  it('旧窗口切 Fast 时回到界面 Harness，并保留最新 Pi 默认', async () => {
+    const activeWindow = await loadModule();
+    activeWindow.setEffortForModel('legacy-model', 'high');
+    activeWindow.markDefaultTupleCustomized(false);
+    const staleWindow = await openSecondWindow();
+    const renderedVendor = staleWindow.getDraft().vendor;
+
+    activeWindow.clearDefaultTupleTuningCustomization({
+      modelId: 'legacy-model',
+      hasExternalOverrides: false,
+    });
+    activeWindow.applySuggestedDefaultTuple({
+      vendor: 'pi',
+      model: 'z-ai/glm-5.3-flash',
+      providerId: 'xd',
+      effort: 'medium',
+    });
+
+    // 模拟 Fast handler：先标记调档，再确保当前 Harness 是用户仍看见的 cc，最后写模型记忆。
+    staleWindow.markDefaultTupleCustomized(false);
+    staleWindow.switchVendor(renderedVendor);
+    staleWindow.setFastModeForModel('claude-visible-model', true);
+
+    expect(staleWindow.getDraft()).toMatchObject({
+      vendor: 'cc',
+      defaultTupleCustomized: true,
+      fastModeByModel: { 'claude-visible-model': true },
+      lastByVendor: {
+        pi: expect.objectContaining({
+          model: 'z-ai/glm-5.3-flash',
+          providerId: 'xd',
+        }),
+      },
+    });
+  });
+
+  it('旧窗口改权限等非 tuple 字段时，只更新界面 Harness 槽', async () => {
+    const activeWindow = await loadModule();
+    activeWindow.setEffortForModel('legacy-model', 'high');
+    activeWindow.markDefaultTupleCustomized(false);
+    const staleWindow = await openSecondWindow();
+
+    activeWindow.clearDefaultTupleTuningCustomization({
+      modelId: 'legacy-model',
+      hasExternalOverrides: false,
+    });
+    activeWindow.applySuggestedDefaultTuple({
+      vendor: 'pi',
+      model: 'z-ai/glm-5.3-flash',
+      providerId: 'xd',
+      effort: 'medium',
+    });
+
+    staleWindow.patchVendorPrefs('cc', { permissionMode: 'bypassPermissions' });
+
+    expect(staleWindow.getDraft()).toMatchObject({
+      vendor: 'pi',
+      defaultTupleCustomized: false,
+      lastByVendor: {
+        cc: expect.objectContaining({ permissionMode: 'bypassPermissions' }),
+        pi: expect.objectContaining({
+          model: 'z-ai/glm-5.3-flash',
+          providerId: 'xd',
+        }),
+      },
+    });
+  });
+
+  it('preserving 活动同步基于恢复后的 tuple，不带回旧 marker 和调档', async () => {
+    const activeWindow = await loadModule();
+    activeWindow.setEffortForModel('legacy-model', 'high');
+    activeWindow.markDefaultTupleCustomized(false);
+    const staleWindow = await openSecondWindow();
+
+    activeWindow.clearDefaultTupleTuningCustomization({
+      modelId: 'legacy-model',
+      hasExternalOverrides: false,
+    });
+    staleWindow.patchVendorPrefsPreservingModelChoice('cc', { effort: 'medium' });
+
+    expect(staleWindow.getDraft()).toMatchObject({
+      defaultTupleCustomized: false,
+      defaultTupleSelectionCustomized: false,
+      modelChosenByVendor: {},
+      effortByModel: {},
+      fastModeByModel: {},
+      lastByVendor: {
+        cc: expect.objectContaining({ effort: 'medium' }),
+      },
+    });
+  });
+
+  it('旧窗口只清调档但未解锁时仍保住另一窗口的新默认组合', async () => {
+    const staleWindow = await loadModule();
+    staleWindow.setEffortForModel('legacy-model', 'high');
+    const activeWindow = await openSecondWindow();
+
+    activeWindow.markDefaultTupleCustomized();
+    activeWindow.switchVendor('pi');
+    activeWindow.patchVendorPrefs('pi', {
+      model: 'grok-4.6',
+      providerId: 'xai',
+      effort: 'high',
+    });
+
+    // staleWindow 自己仍是 false，所以这不是合法的 true → false 解锁；清理写入也必须 rebase。
+    staleWindow.clearDefaultTupleTuningCustomization({
+      modelId: 'legacy-model',
+      hasExternalOverrides: true,
+    });
+
+    expect(staleWindow.getDraft()).toMatchObject({
+      vendor: 'pi',
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: true,
+      modelChosenByVendor: { pi: true },
+      lastByVendor: {
+        pi: expect.objectContaining({ model: 'grok-4.6', providerId: 'xai' }),
+      },
+    });
+  });
+
   it('远程 worktree 广播不会让旧窗口回滚持久草稿或 main 偏好镜像', async () => {
     // 先让附属窗口持有旧的模型/目录，再由活跃窗口保存新值；两个模块实例模拟两个 renderer。
     const staleWindow = await loadModule();
     staleWindow.patchDraft({ workingDir: '/projects/stale' });
     staleWindow.patchVendorPrefs('cc', { model: 'claude-stale' });
 
-    vi.resetModules();
-    const activeWindow = await loadModule();
+    const activeWindow = await openSecondWindow();
     activeWindow.patchDraft({ workingDir: '/projects/current' });
     activeWindow.patchVendorPrefs('cc', { model: 'claude-current' });
 
@@ -721,8 +1757,7 @@ describe('newMakerDraft store', () => {
     staleWindow.patchDraft({ workingDir: '/projects/stale' });
     staleWindow.patchVendorPrefs('cc', { model: 'claude-stale' });
 
-    vi.resetModules();
-    const activeWindow = await loadModule();
+    const activeWindow = await openSecondWindow();
     activeWindow.patchDraft({ workingDir: '/projects/current' });
     activeWindow.patchVendorPrefs('cc', { model: 'claude-current' });
 
@@ -740,22 +1775,8 @@ describe('newMakerDraft store', () => {
   });
 
   it('storage event 会把其它窗口保存的 worktree 偏好同步进当前 store 并通知订阅者', async () => {
-    let onStorage: ((event: StorageEvent) => void) | undefined;
-    const removeEventListener = vi.fn();
-    vi.stubGlobal('window', {
-      localStorage: memStorage,
-      addEventListener: (
-        type: string,
-        listener: EventListenerOrEventListenerObject,
-      ) => {
-        if (type === 'storage' && typeof listener === 'function') {
-          onStorage = listener as (event: StorageEvent) => void;
-        }
-      },
-      removeEventListener,
-    });
-    vi.resetModules();
-
+    // onStorage 是模块加载时向 window 注册的 storage 监听。
+    expect(onStorage).toBeTypeOf('function');
     const draftStore = await loadModule();
     const subscriber = vi.fn();
     draftStore.subscribeDraft(subscriber);
@@ -763,6 +1784,21 @@ describe('newMakerDraft store', () => {
       ...draftStore.getDraft(),
       worktreeEnabled: true,
       worktreePreferenceCustomized: true,
+      vendor: 'pi',
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: true,
+      modelChosenByVendor: { pi: true },
+      effortByModel: { 'grok-4.6': 'high' },
+      fastModeByModel: { 'grok-4.6': true },
+      lastByVendor: {
+        ...draftStore.getDraft().lastByVendor,
+        pi: {
+          ...draftStore.getDraft().lastByVendor.pi,
+          model: 'grok-4.6',
+          providerId: 'xai',
+          effort: 'high',
+        },
+      },
     });
     memStorage.setItem(draftStore.__STORAGE_KEY, serialized);
 
@@ -773,6 +1809,21 @@ describe('newMakerDraft store', () => {
 
     expect(draftStore.getDraft().worktreeEnabled).toBe(true);
     expect(draftStore.getDraft().worktreePreferenceCustomized).toBe(true);
+    expect(draftStore.getDraft()).toMatchObject({
+      vendor: 'pi',
+      defaultTupleCustomized: true,
+      defaultTupleSelectionCustomized: true,
+      modelChosenByVendor: { pi: true },
+      effortByModel: { 'grok-4.6': 'high' },
+      fastModeByModel: { 'grok-4.6': true },
+      lastByVendor: {
+        pi: expect.objectContaining({
+          model: 'grok-4.6',
+          providerId: 'xai',
+          effort: 'high',
+        }),
+      },
+    });
     expect(subscriber).toHaveBeenCalledTimes(1);
 
     // 旧 false 事件若迟到,当前 localStorage 的 true 仍是权威值,不得回滚内存或 main 镜像。
@@ -791,8 +1842,7 @@ describe('newMakerDraft store', () => {
 
   it('vendor 字段非合法值(非 cc/codex)→ 回退 cc', async () => {
     memStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify({ vendor: 'gemini' }));
-    vi.resetModules();
-    const { getDraft } = await loadModule();
+    const { getDraft } = await reloadModule();
     expect(getDraft().vendor).toBe('cc');
   });
 
@@ -807,8 +1857,7 @@ describe('newMakerDraft store', () => {
         },
       }),
     );
-    vi.resetModules();
-    const { getDraft, getFastModeForModel } = await loadModule();
+    const { getDraft, getFastModeForModel } = await reloadModule();
     expect(getFastModeForModel('gpt-5.5')).toBe(true);
     expect(getFastModeForModel('gpt-5.4')).toBe(false);
     expect(getFastModeForModel('claude-opus-4-7')).toBe(false);
@@ -836,18 +1885,18 @@ describe('newMakerDraft store', () => {
 
     it('显式带设备 + 具体 workingDir(选该设备上的项目)→ 两者都保留', async () => {
       const { getDraft, patchDraft } = await loadModule();
-      patchDraft({
-        deviceLinkDeviceId: 'dev-a',
-        deviceLinkDeviceName: 'Studio Mac',
-        workingDir: '/host/proj',
-      });
+      patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio Mac', workingDir: '/host/proj' });
       expect(getDraft().deviceLinkDeviceId).toBe('dev-a');
       expect(getDraft().workingDir).toBe('/host/proj');
     });
 
     it('改 workingDir 但不带设备字段 → 仍按老规则清设备(防本地项目被误当远程)', async () => {
       const { getDraft, patchDraft } = await loadModule();
-      patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio Mac', workingDir: '/host/proj' });
+      patchDraft({
+        deviceLinkDeviceId: 'dev-a',
+        deviceLinkDeviceName: 'Studio Mac',
+        workingDir: '/host/proj',
+      });
       patchDraft({ workingDir: '/local/proj' });
       expect(getDraft().deviceLinkDeviceId).toBeNull();
       expect(getDraft().deviceLinkDeviceName).toBeNull();
@@ -957,4 +2006,120 @@ describe('newMakerDraft store', () => {
       expect(getDraft().collab.workerConfig?.model).toBe('claude-opus-4-7');
     });
   });
+});
+
+
+it('does not stamp a prior owner draft during the synchronous auth handoff', async () => {
+  const { setNewMakerDraftOwner, getDraftForOwnerPreferenceSync, patchCurrentVendorPrefs } = await loadModule();
+  setNewMakerDraftOwner('A');
+  patchCurrentVendorPrefs({ model: 'owner-a-model' });
+  expect(getDraftForOwnerPreferenceSync('B')).toBeNull();
+  setNewMakerDraftOwner('B');
+  expect(getDraftForOwnerPreferenceSync('B')?.lastByVendor.cc.model).not.toBe('owner-a-model');
+  expect(getDraftForOwnerPreferenceSync('A')).toBeNull();
+});
+
+describe('Bot default model write-through', () => {
+  async function setup() {
+    const store = await loadModule();
+    const owner = await import('@/contexts/dataOwnerGeneration');
+    owner.setDataOwnerGeneration('bot-owner', 8);
+    store.setNewMakerDraftOwner('bot-owner');
+    store.patchVendorPrefs('codex', { model: 'luna', providerId: 'openai', effort: 'medium' });
+    store.switchVendor('codex');
+    const route = { harness: 'codex' as const, providerId: 'openai', model: 'luna', effort: 'medium', fastMode: false };
+    return { store, selection: { requestId: "test-default-selection", route: { ...route, effort: 'low' }, expectedRoute: route,
+      ownerStamp: { dataOwnerId: 'bot-owner', ownerGeneration: 8 }, expiresAt: Date.now() + 5000 } };
+  }
+  it('persists the same default used by new tasks and survives reloading', async () => {
+    const { store, selection } = await setup();
+    expect(store.applyAppDefaultModelSelection(selection)).toBe(true);
+    const reloaded = await reloadModule();
+    reloaded.setNewMakerDraftOwner('bot-owner');
+    expect(reloaded.getDraft().lastByVendor.codex).toMatchObject({ model: 'luna', effort: 'low', providerId: 'openai' });
+    expect(reloaded.getDraft().vendor).toBe('codex');
+    expect(reloaded.getDraft().defaultTupleSelectionCustomized).toBe(true);
+  });
+  it.each(['owner', 'expiry', 'selection', 'disk'] as const)('refuses %s changes without reporting success', async reason => {
+    const { store, selection } = await setup();
+    if (reason === 'owner') selection.ownerStamp.ownerGeneration = 7;
+    if (reason === 'expiry') selection.expiresAt = Date.now() - 1;
+    if (reason === 'selection') store.patchVendorPrefs('codex', { model: 'a-new-user-choice' });
+    if (reason === 'disk') vi.spyOn(memStorage, 'setItem').mockImplementation(() => { throw new Error('full'); });
+    const before = store.getDraft();
+    expect(store.applyAppDefaultModelSelection(selection)).toBe(false);
+    expect(store.getDraft()).toEqual(before);
+  });
+});
+
+// Agent 在同账号另一台电脑运行:任务、项目与命令仍在本机,只记下运行 Agent 的电脑。
+describe('newMakerDraft agent computer', () => {
+  it('keeps the agent computer across local folder changes and clears it for remote tasks', async () => {
+    const { getDraft, patchDraft } = await loadModule();
+    patchDraft({ agentDeviceId: ' dev-b ', agentDeviceName: 'Office Mac' });
+    expect(getDraft().agentDeviceId).toBe('dev-b');
+    // 换本机项目:Agent 仍在那台。
+    patchDraft({ workingDir: '/local/proj' });
+    expect(getDraft()).toMatchObject({ agentDeviceId: 'dev-b', agentDeviceName: 'Office Mac', workingDir: '/local/proj' });
+    // 任务改建到远程设备或 SSH 主机时不成立。
+    patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio', workingDir: null });
+    expect(getDraft()).toMatchObject({ agentDeviceId: null, agentDeviceName: null });
+    patchDraft({ deviceLinkDeviceId: null, deviceLinkDeviceName: null, workingDir: null });
+    patchDraft({ agentDeviceId: 'dev-b', agentDeviceName: 'Office Mac' });
+    patchDraft({ workingDir: '/remote/proj', remoteHostId: 'ssh-1' });
+    expect(getDraft()).toMatchObject({ agentDeviceId: null, remoteHostId: 'ssh-1' });
+  });
+
+  // 远程控制下新建任务:任务建到被控电脑 dev-a,Agent 在第三台电脑 dev-c。
+  it('keeps the agent computer for a task on a controlled computer until that computer changes', async () => {
+    const { getDraft, patchDraft } = await loadModule();
+    patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio', workingDir: null });
+    patchDraft({ agentDeviceId: 'dev-c', agentDeviceName: 'Office Mac' });
+    expect(getDraft()).toMatchObject({ deviceLinkDeviceId: 'dev-a', agentDeviceId: 'dev-c' });
+    // 同一台被控电脑上换项目(设备字段照样显式带上):Agent 仍在那台。
+    patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio', workingDir: '/a/proj' });
+    expect(getDraft()).toMatchObject({ agentDeviceId: 'dev-c', agentDeviceName: 'Office Mac' });
+    // 换到另一台被控电脑 / 回到本机:上一台的选择不再适用。
+    patchDraft({ deviceLinkDeviceId: 'dev-d', deviceLinkDeviceName: 'Lab', workingDir: null });
+    expect(getDraft()).toMatchObject({ agentDeviceId: null, agentDeviceName: null });
+    patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio', workingDir: null });
+    patchDraft({ agentDeviceId: 'dev-c', agentDeviceName: 'Office Mac' });
+    patchDraft({ deviceLinkDeviceId: null, deviceLinkDeviceName: null, workingDir: null });
+    expect(getDraft()).toMatchObject({ agentDeviceId: null, agentDeviceName: null });
+  });
+
+  it('never lets the agent computer be the computer the task is on', async () => {
+    const { getDraft, patchDraft } = await loadModule();
+    patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio', workingDir: null });
+    patchDraft({ agentDeviceId: 'dev-a', agentDeviceName: 'Studio' });
+    expect(getDraft()).toMatchObject({ deviceLinkDeviceId: 'dev-a', agentDeviceId: null, agentDeviceName: null });
+  });
+
+  it('does not restore the agent computer after a restart', async () => {
+    let mod = await loadModule();
+    mod.patchDraft({ workingDir: '/local/proj', agentDeviceId: 'dev-b', agentDeviceName: 'Office Mac' });
+    mod = await reloadModule();
+    expect(mod.getDraft()).toMatchObject({ workingDir: '/local/proj', agentDeviceId: null, agentDeviceName: null });
+  });
+});
+
+// Standard: the new-task preference must survive owner reload without becoming a picker override.
+it('persists the default, preserves explicit permissions, isolates owners and restores auto', async () => {
+  const m = await loadModule();
+  m.setNewMakerDraftOwner('permission-owner');
+  m.patchVendorPrefs('cc', { permissionMode: 'acceptEdits' });
+  m.setNewChatDefaultPermissionMode('bypassPermissions');
+  expect(m.getDraft().lastByVendor.cc.permissionMode).toBe('acceptEdits');
+  expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('bypassPermissions');
+  m.setNewMakerDraftOwner('another-owner');
+  expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('auto');
+  m.setNewMakerDraftOwner('permission-owner');
+  expect(m.getDraft().newChatDefaultPermissionMode).toBe('bypassPermissions');
+  m.setNewChatDefaultPermissionMode(null);
+  expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('auto');
+  expect(m.getDraft().lastByVendor.cc.permissionMode).toBe('acceptEdits');
+  m.setNewMakerDraftOwner('another-owner');
+  m.setNewMakerDraftOwner('permission-owner');
+  expect(m.getDraft().newChatDefaultPermissionMode).toBeNull();
+  expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('auto');
 });

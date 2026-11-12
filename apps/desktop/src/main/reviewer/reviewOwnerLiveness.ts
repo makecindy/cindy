@@ -69,6 +69,14 @@ export async function startReviewOwnerLiveness(): Promise<ReviewOwnerLivenessHan
  * Verify an exact owner. Ambiguous transport failures are fail-closed: they
  * preserve the lease instead of risking concurrent Review runs.
  */
+const ENDED_CONNECT_ERROR_CODES = new Set([
+  'ECONNREFUSED',
+  'ENOENT',
+  'ECONNRESET',
+  'ECONNABORTED',
+  'EPIPE',
+]);
+
 export async function probeReviewOwnerLiveness(
   identity: ReviewRunOwnerLiveness,
   timeoutMs = DEFAULT_PROBE_TIMEOUT_MS,
@@ -77,6 +85,7 @@ export async function probeReviewOwnerLiveness(
   return await new Promise<ReviewOwnerLivenessProbeResult>((resolve) => {
     let settled = false;
     let received = '';
+    let connected = false;
     const socket = net.createConnection({ host: LOOPBACK_HOST, port: identity.port });
     const finish = (result: ReviewOwnerLivenessProbeResult) => {
       if (settled) return;
@@ -86,6 +95,9 @@ export async function probeReviewOwnerLiveness(
     };
     socket.setEncoding('utf8');
     socket.setTimeout(timeoutMs);
+    socket.on('connect', () => {
+      connected = true;
+    });
     socket.on('data', (chunk) => {
       received += chunk;
       if (received === expectedReply) finish('alive');
@@ -93,9 +105,9 @@ export async function probeReviewOwnerLiveness(
       else if (received.length >= expectedReply.length) finish('ended');
     });
     socket.on('end', () => finish(received === expectedReply ? 'alive' : 'ended'));
-    socket.on('timeout', () => finish('unknown'));
+    socket.on('timeout', () => finish(connected ? 'unknown' : 'ended'));
     socket.on('error', (error: NodeJS.ErrnoException) => {
-      if (error.code === 'ECONNREFUSED' || error.code === 'ENOENT') finish('ended');
+      if (ENDED_CONNECT_ERROR_CODES.has(error.code ?? '')) finish('ended');
       else finish('unknown');
     });
   });

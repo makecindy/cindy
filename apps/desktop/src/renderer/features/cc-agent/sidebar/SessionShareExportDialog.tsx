@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * SessionShareExportDialog — 会话导出为 .cshare 的确认弹窗。
  *
@@ -17,6 +18,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
+import { Tip } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
@@ -123,10 +125,7 @@ export function SessionShareExportDialog({
             统一截断冒泡。 */}
         <AlertDialog.Overlay
           className={cn(
-            'fixed inset-0 z-[10000]',
-            'bg-[var(--overlay-modal)]',
-            'data-[state=open]:animate-confirm-overlay-in',
-            'data-[state=closed]:animate-confirm-overlay-out',
+            'modal-scrim fixed inset-0 z-[10000]',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           onClick={(e) => e.stopPropagation()}
@@ -135,11 +134,8 @@ export function SessionShareExportDialog({
         />
         <AlertDialog.Content
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
-            'w-full max-w-[440px] rounded-xl p-4',
-            'bg-[var(--confirm-bg)] shadow-[var(--confirm-shadow)]',
-            'data-[state=open]:animate-confirm-content-in',
-            'data-[state=closed]:animate-confirm-content-out',
+            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'w-full max-w-[440px] p-4',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           onEscapeKeyDown={(e) => {
@@ -192,14 +188,28 @@ export function SessionShareExportDialog({
                     color: 'var(--confirm-title)',
                   }}
                 />
-                <button
-                  type="button"
-                  onClick={() => setShowPass((v) => !v)}
-                  aria-label={t(showPass ? 'sessionShare.export.hidePassword' : 'sessionShare.export.showPassword')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                <Tip
+                  text={t(
+                    showPass
+                      ? 'sessionShare.export.hidePassword'
+                      : 'sessionShare.export.showPassword',
+                  )}
+                  side="bottom"
+                  contentClassName="z-[10001]"
                 >
-                  {showPass ? <EyeOff size={14} /> : <Eye size={14} />}
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowPass((v) => !v)}
+                    aria-label={t(
+                      showPass
+                        ? 'sessionShare.export.hidePassword'
+                        : 'sessionShare.export.showPassword',
+                    )}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                  >
+                    {showPass ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </Tip>
               </div>
               <input
                 type={showPass ? 'text' : 'password'}
@@ -215,7 +225,11 @@ export function SessionShareExportDialog({
               />
               {(mismatch || tooShort) && (
                 <p className="text-xs" style={{ color: 'var(--error-fg)' }}>
-                  {t(mismatch ? 'sessionShare.export.passwordMismatch' : 'sessionShare.export.passwordTooShort')}
+                  {t(
+                    mismatch
+                      ? 'sessionShare.export.passwordMismatch'
+                      : 'sessionShare.export.passwordTooShort',
+                  )}
                 </p>
               )}
             </div>
@@ -223,28 +237,26 @@ export function SessionShareExportDialog({
 
           <div className="mt-5 flex justify-end gap-2">
             <AlertDialog.Cancel asChild>
-              <button
+              <Button
+                variant="secondary"
+                size="md"
+                compact
+                palette="confirmation"
                 type="button"
                 disabled={exporting}
-                className={cn(
-                  'h-8 rounded-lg px-3 text-sm font-medium',
-                  'text-[var(--confirm-btn-secondary-text)] bg-[var(--confirm-bg)]',
-                  'hover:bg-[var(--confirm-btn-secondary-hover)]',
-                )}
               >
                 {t('sessionShare.export.cancel')}
-              </button>
+              </Button>
             </AlertDialog.Cancel>
-            <button
+            <Button
+              variant="cta"
+              size="md"
+              compact
+              palette="confirmation"
+              loading={exporting}
               type="button"
               disabled={!canSubmit}
               onClick={() => void handleExport()}
-              className={cn(
-                'h-8 rounded-lg px-3 text-sm font-medium inline-flex items-center gap-1.5',
-                'text-[var(--confirm-btn-primary-text)] bg-[var(--confirm-btn-primary-bg)]',
-                'hover:bg-[var(--confirm-btn-primary-hover)]',
-                !canSubmit && 'opacity-50 cursor-not-allowed',
-              )}
             >
               {exporting && <Spinner size={14} />}
               {t(
@@ -252,7 +264,7 @@ export function SessionShareExportDialog({
                   ? 'sessionShare.export.confirmExcludeMedia'
                   : 'sessionShare.export.confirm',
               )}
-            </button>
+            </Button>
           </div>
         </AlertDialog.Content>
       </AlertDialog.Portal>

@@ -46,7 +46,7 @@ describe('maker Orca role marking IPC boundary', () => {
     expectOrder(
       roleMarkingSource,
       'await assertReviewSettingsUnlocked(sessionId);',
-      'await setSessionOrcaRole(sessionId, orcaRole);',
+      'await setSessionOrcaRole(sessionId, orcaRole, { owner: owner!, assertCurrent });',
     );
     expectOrder(
       collabGuardSource,
@@ -66,12 +66,17 @@ describe('maker Orca role marking IPC boundary', () => {
     );
 
     expect(workerIpcSource).toContain('await assertLeadCollabProjectEnabled(b.leadSessionId);');
-    expect(collabHolderSource).toContain('startTeam: async');
+    const sharedStart = registerSource.slice(
+      registerSource.indexOf('const startOrcaTeamForCaller ='),
+      registerSource.indexOf('const pluginPermissionRequests ='),
+    );
+    expectOrder(sharedStart, 'await assertLeadCollabProjectEnabled(leadSessionId);', 'return await startOrcaTeamWithPermissionGate(');
+    expect(collabHolderSource).toContain('startOrcaTeamForCaller(leadSessionId, workerPermissionMode)');
     expect(collabHolderSource).toContain('createWorker: async');
     expect(collabHolderSource).toContain('createWorkerFromTask: async');
     expect(
       collabHolderSource.match(/await assertLeadCollabProjectEnabled\(/g)?.length ?? 0,
-    ).toBeGreaterThanOrEqual(3);
+    ).toBeGreaterThanOrEqual(2);
   });
 
   it('registers rehydrated worker sessions as known before Maker publishes them', () => {
@@ -82,6 +87,18 @@ describe('maker Orca role marking IPC boundary', () => {
 
     expect(successHookSource).toContain("if (createOpts.orcaRole === 'worker') {");
     expect(successHookSource).toContain('markKnownOrcaWorkerSession(sessionId);');
+  });
+
+  it('rejects Review sessions before thinking can be flipped', () => {
+    const thinkingSource = registerSource.slice(
+      registerSource.indexOf('MAKER_INVOKE.SET_THINKING_ENABLED'),
+      registerSource.indexOf('MAKER_INVOKE.SET_EXTRA_DIRS'),
+    );
+    expectOrder(
+      thinkingSource,
+      'await assertReviewSettingsUnlocked(sessionId);',
+      'await sess.setThinkingEnabled(enabled);',
+    );
   });
 });
 

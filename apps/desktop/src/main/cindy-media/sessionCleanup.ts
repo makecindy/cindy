@@ -10,7 +10,6 @@ export interface ReconcileDeletedSessionMediaOptions {
   db: LedgerDb;
   isOwnerCurrent(): boolean;
   withSessionLock<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
-  quiesceSession(sessionId: string): Promise<void>;
   removeRefsIfDeleted?: (sessionId: string, db: LedgerDb) => Promise<number>;
 }
 
@@ -22,9 +21,7 @@ export interface ReconcileDeletedSessionMediaResult {
 }
 
 /**
- * Retry runtime quiescence and session-ref cleanup from durable soft-delete
- * tombstones. Archived Simulator ownership is reconciled in one bounded Host
- * registry pass before this media cleanup runs. The atomic ledger guard still
+ * Retry session-ref cleanup from durable soft-delete tombstones. The atomic guard
  * preserves refs unless the task remains deleted when the DELETE executes.
  */
 export async function reconcileSessionMediaRefsForDeletedSessions(
@@ -73,7 +70,6 @@ export async function reconcileSessionMediaRefsForDeletedSessions(
           .limit(1)
           .all();
         if (!options.isOwnerCurrent() || current?.status !== 'deleted') return null;
-        await options.quiesceSession(row.id);
         if (!options.isOwnerCurrent()) return null;
         return removeRefs(row.id, options.db);
       });

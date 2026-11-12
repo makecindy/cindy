@@ -3,8 +3,8 @@
  * ---------------------------------------------------------------------------
  * ghost 附件过户地址解析的回归测试。锁三层行为:
  *   1. 会话图片缓存的宽容解析透传(canonical / 缓存内绝对路径);
- *   2. 媒体总仓 blob(聊天附件迁总仓后模型手里的用户图地址)——绝对路径按
- *      指纹反推规范路径逐字节比对,URL 形走 parseBlobUrl;mime 限 image/*;
+ *   2. 媒体总仓 blob(聊天附件或 Agent 工具结果)——绝对路径按指纹反推
+ *      规范路径逐字节比对,URL 形走 parseBlobUrl,媒体类型走 blobStore 白名单;
  *   3. maker-core 缩图缓存路径(大图送模型前被 image-resizer 透明替换,
  *      模型只有副本路径)——只认恰好一级深、真实存在的文件。
  */
@@ -31,7 +31,7 @@ const cacheRoot = path.join(userDataDir, 'cc-agent', 'images');
 const sessionId = 'sess-ghost-att';
 const cachedFilename = 'bbbb2222-cccc-3333-dddd-4444eeee5555-1700000000001.png';
 const resizedFilename = `${'a'.repeat(64)}.webp`;
-// 媒体总仓 blob:图片一枚(规范分桶)+ 视频一枚(mime 闸反例)。
+// 媒体总仓 blob:图片与视频各一枚(规范分桶)。
 const blobsRoot = path.join(userDataDir, 'cindy-media', 'blobs');
 const imageBlobHash = 'c'.repeat(64);
 const imageBlobPath = path.join(blobsRoot, 'cc', `${imageBlobHash}.jpg`);
@@ -118,8 +118,17 @@ describe('resolveGhostAttachmentUrl', () => {
     expect(() => resolveGhostAttachmentUrl(wrongBucket)).toThrow();
   });
 
-  it('视频 blob 拒于 mime 闸(过户语义 = 用户的图,仅 image/*)', () => {
-    expect(() => resolveGhostAttachmentUrl(videoBlobPath)).toThrow();
+  it('当前 Agent 生成的视频 blob 可按路径或受管 URL 交给插件', () => {
+    expect(resolveGhostAttachmentUrl(videoBlobPath)).toEqual({
+      absPath: videoBlobPath,
+      mimeType: 'video/mp4',
+      blobHash: videoBlobHash,
+    });
+    expect(resolveGhostAttachmentUrl(`cindy-media://blobs/${videoBlobHash}.mp4`)).toEqual({
+      absPath: videoBlobPath,
+      mimeType: 'video/mp4',
+      blobHash: videoBlobHash,
+    });
   });
 
   it('指纹形状合格但文件不存在 → 拒', () => {

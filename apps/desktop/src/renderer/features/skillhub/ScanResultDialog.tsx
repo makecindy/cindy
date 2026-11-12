@@ -1,3 +1,5 @@
+import { ErrorNotice } from '@/components/ui/error-notice';
+import { Button } from '@/components/ui/button';
 /**
  * ScanResultDialog — hub 安全扫描完成后弹出的独立结果弹窗。
  * 通过时简洁提示;未通过时展示原因 + 具体 issues。
@@ -12,7 +14,9 @@ import { ShieldAlert, ShieldCheck, AlertTriangle, Check, Copy } from 'lucide-rea
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import type { ScanResultPayload } from './PublishDialog';
-import { isPassingScanStatus } from './lib/scanStatus';
+import { isPassingScanStatus, isPendingManualReviewStatus } from './lib/scanStatus';
+import { isPublicationProcessingFailure, publicationProcessingErrorCode, publicationProcessingGateErrorCode, scanPublicationErrorCode } from './lib/scanResultPresentation';
+import { publishErrorDetail } from '../../../shared/skillhubPublishErrors';
 
 interface ScanIssue {
   severity?: string;
@@ -43,15 +47,25 @@ function resolveI18nField(value: unknown): string {
   return String(value ?? '');
 }
 
-function visibleScanIssues(gate: ScanGate): ScanIssue[] {
+function visibleScanIssues(gate: ScanGate, t: TFunction): ScanIssue[] {
   const issues = Array.isArray(gate.issues) ? gate.issues : [];
-  return (issues as ScanIssue[]).filter((issue) => (
-    issue.severity === 'warning' || issue.severity === 'error'
-  ));
+  return (issues as ScanIssue[]).filter(
+    (issue) => issue.severity === 'warning' || issue.severity === 'error',
+  ).map((issue) => {
+    const code = scanPublicationErrorCode(issue.code, resolveI18nField(issue.message)) ?? publicationProcessingGateErrorCode(gate.name);
+    if (!code) return issue;
+    const message = publishErrorDetail(code, resolveI18nField(issue.message));
+    if (message) return { ...issue, message };
+    // Service/auth diagnostics must not escape through either rendering or copy.
+    return { severity: issue.severity, code: issue.code, message: t(`skillhub.publishError.${code}.message`) };
+  });
 }
 
 function normalizeScanCode(value: unknown): string {
-  return String(value ?? '').trim().toLowerCase().replace(/[\s_]+/g, '-');
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, '-');
 }
 
 function scanStatusLabel(value: unknown, t: TFunction): string {
@@ -59,13 +73,28 @@ function scanStatusLabel(value: unknown, t: TFunction): string {
   if (code === 'pass' || code === 'passed' || code === 'success' || code === 'ok') {
     return t('skillhub.scanResult.statusLabel.passed');
   }
-  if (code === 'fail' || code === 'failed' || code === 'rejected' || code === 'blocked' || code === 'quarantine' || code === 'error') {
+  if (
+    code === 'fail' ||
+    code === 'failed' ||
+    code === 'rejected' ||
+    code === 'blocked' ||
+    code === 'quarantine' ||
+    code === 'error'
+  ) {
     return t('skillhub.scanResult.statusLabel.failed');
   }
   if (code === 'warn' || code === 'warning') {
     return t('skillhub.scanResult.statusLabel.warning');
   }
-  if (code === 'pending' || code === 'scanning' || code === 'reviewing' || code === 'running' || code === 'in-progress') {
+  if (code === 'pending') {
+    return t('skillhub.scanResult.statusLabel.waitingReview');
+  }
+  if (
+    code === 'scanning' ||
+    code === 'reviewing' ||
+    code === 'running' ||
+    code === 'in-progress'
+  ) {
     return t('skillhub.scanResult.statusLabel.reviewing');
   }
   if (code === 'unavailable' || code === 'scan-status-unavailable') {
@@ -83,6 +112,11 @@ function scanGateLabel(gate: ScanGate, t: TFunction): string {
   if (code === 'security-scan' || code === 'scan-status') {
     return t('skillhub.scanResult.gateLabel.securityScan');
   }
+  if (code === 'internal-error') {
+    return t('skillhub.scanResult.gateLabel.publicationProcessing');
+  }
+  const errorCode = publicationProcessingErrorCode([gate]);
+  if (errorCode) return t(`skillhub.publishError.${errorCode}.title`);
   return gate.name;
 }
 
@@ -123,34 +157,62 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
   if (!result) return null;
 
   const passed = isPassingScanStatus(result.status);
-  const failedGates = (result.gates ?? []).filter((g) => g.status !== 'pass');
-  const title = passed
-    ? t('skillhub.scanResult.passedTitle')
-    : t('skillhub.scanResult.failedTitle', { status: result.status });
+  const pendingManualReview = isPendingManualReviewStatus(result.status);
+  const rejected = result.status === 'rejected';
+  const rejectionReason = rejected && typeof result.rejectionReason === 'string'
+    ? result.rejectionReason.trim()
+    : '';
+  const failedGates = (result.gates ?? []).filter((g) => !isPassingScanStatus(g.status));
+  const processingFailure =
+    !passed && !pendingManualReview && isPublicationProcessingFailure(result.gates);
+  const processingErrorCode = processingFailure ? publicationProcessingErrorCode(result.gates) : undefined;
+  const processingErrorCopy = processingErrorCode && processingErrorCode !== 'INTERNAL'
+    ? {
+        title: t(`skillhub.publishError.${processingErrorCode}.title`),
+        message: t(`skillhub.publishError.${processingErrorCode}.message`),
+      }
+    : undefined;
+  const title = rejected
+    ? t('skillhub.scanResult.rejectedTitle')
+    : passed
+      ? t('skillhub.scanResult.passedTitle')
+      : pendingManualReview
+        ? t('skillhub.scanResult.pendingTitle')
+        : processingFailure
+          ? processingErrorCopy?.title ?? t('skillhub.scanResult.processingFailedTitle')
+          : t('skillhub.scanResult.failedTitle', { status: result.status });
   const statusLabel = scanStatusLabel(result.status, t);
-  const description = passed
-    ? t('skillhub.scanResult.passedDesc')
-    : t('skillhub.scanResult.failedDesc', { status: statusLabel });
-  const footerButtonBaseClass = cn(
-    'inline-flex h-9 min-w-[104px] items-center justify-center gap-1.5 rounded-full px-5',
-    'text-sm font-medium leading-none',
-    'transition-colors',
-  );
+  const description = rejected
+    ? t(rejectionReason
+      ? 'skillhub.scanResult.rejectedDesc'
+      : 'skillhub.scanResult.rejectionReasonUnavailable')
+    : passed
+      ? t('skillhub.scanResult.passedDesc')
+      : pendingManualReview
+        ? t('skillhub.scanResult.pendingDesc')
+        : processingFailure
+          ? processingErrorCopy?.message ?? t('skillhub.scanResult.processingFailedDesc')
+          : t('skillhub.scanResult.failedDesc', { status: statusLabel });
 
   async function handleCopyReviewResult(): Promise<void> {
-    const gatesToCopy = passed ? (result?.gates ?? []) : failedGates;
+    const gatesToCopy = passed || pendingManualReview ? (result?.gates ?? []) : failedGates;
     const lines = [
       title,
       `${t('skillhub.scanResult.copyText.status')}: ${withRawCode(statusLabel, result?.status)}`,
       `${t('skillhub.scanResult.copyText.summary')}: ${description}`,
     ];
+    if (rejectionReason) {
+      lines.push('', t('skillhub.scanResult.rejectionReason'), rejectionReason);
+    }
 
     if (gatesToCopy.length > 0) {
       lines.push('', `${t('skillhub.scanResult.copyText.gates')}:`);
       for (const gate of gatesToCopy) {
         const label = scanGateLabel(gate, t);
-        lines.push(`- ${withRawCode(label, gate.name)}: ${withRawCode(scanStatusLabel(gate.status, t), gate.status)}`);
-        for (const issue of visibleScanIssues(gate)) {
+        lines.push(
+          `- ${withRawCode(label, gate.name)}: ${withRawCode(scanStatusLabel(gate.status, t), gate.status)}`,
+        );
+        for (const issue of visibleScanIssues(gate, t)) {
           const line = scanIssueCopyLine(issue);
           if (line) lines.push(`  - ${line}`);
         }
@@ -171,18 +233,22 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
   }
 
   return (
-    <Dialog.Root open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+    <Dialog.Root
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) onClose();
+      }}
+    >
       <Dialog.Portal>
         <Dialog.Overlay
-          className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]"
+          className="modal-scrim fixed inset-0 z-[10000]"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
-            'w-full max-w-[480px] rounded-xl',
-            'border bg-[var(--cmd-palette-bg)]',
-            'border-[var(--cmd-palette-border)]',
+            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'w-full max-w-[480px]',
             'max-h-[80vh] overflow-hidden flex flex-col',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -193,6 +259,14 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
             {passed ? (
               <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[var(--diff-add-bg)]">
                 <ShieldCheck size={22} className="text-[var(--diff-add-fg)]" />
+              </div>
+            ) : pendingManualReview ? (
+              <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[var(--diff-add-bg)]">
+                <ShieldCheck size={22} className="text-[var(--diff-add-fg)]" />
+              </div>
+            ) : processingFailure ? (
+              <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[var(--warning-bg-soft)]">
+                <AlertTriangle size={22} className="text-[var(--warning-fg)]" />
               </div>
             ) : (
               <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[var(--error-bg)]">
@@ -207,38 +281,49 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
             </p>
           </div>
 
-          {/* Gates list */}
-          {result.gates && result.gates.length > 0 && (
-            <div className="flex-1 overflow-y-auto px-6 pb-2">
+          {/* Review feedback stays scrollable, including long manual reasons with no failed scan gates. */}
+          {(rejectionReason || failedGates.length > 0) && (
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-2">
+              {rejectionReason && (
+                <ErrorNotice
+                  className="mb-3 select-text"
+                  message={<h3 className="font-medium">{t('skillhub.scanResult.rejectionReason')}</h3>}
+                  description={<p className="whitespace-pre-wrap break-words">{rejectionReason}</p>}
+                />
+              )}
               {/* Failed gates with details */}
               {failedGates.length > 0 && (
                 <div className="flex flex-col gap-2">
                   {failedGates.map((gate) => (
-                    <div
+                    <ErrorNotice
                       key={gate.name}
-                      className="rounded-lg border border-[var(--error-border)] bg-[var(--error-bg)] p-3"
+                      message={
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-medium text-[var(--msg-assistant-text)]">
+                            {scanGateLabel(gate, t)}
+                          </span>
+                          <span
+                            className={cn(
+                              'ml-auto shrink-0 rounded-full border px-2 py-0.5',
+                              'border-[var(--error-border)] text-xs font-medium leading-none text-[var(--error-fg)]',
+                            )}
+                          >
+                            {scanStatusLabel(gate.status, t)}
+                          </span>
+                        </div>
+                      }
                     >
-                      <div className="flex items-center gap-2">
-                        <AlertTriangle size={14} className="shrink-0 text-[var(--error-fg-strong)]" />
-                        <span className="text-sm font-medium text-[var(--msg-assistant-text)]">
-                          {scanGateLabel(gate, t)}
-                        </span>
-                        <span
-                          className={cn(
-                            'ml-auto shrink-0 rounded-full border px-2 py-0.5',
-                            'border-[var(--error-border)] text-xs font-medium leading-none text-[var(--error-fg)]',
-                          )}
-                        >
-                          {scanStatusLabel(gate.status, t)}
-                        </span>
-                      </div>
-                      {visibleScanIssues(gate).length > 0 && (
+                      {visibleScanIssues(gate, t).length > 0 && (
                         <div className="mt-2 flex flex-col gap-1.5 pl-5">
-                          {visibleScanIssues(gate).map((issue, i) => (
-                            <div key={i} className="text-xs leading-relaxed text-[var(--cmd-palette-item-meta)]">
+                          {visibleScanIssues(gate, t).map((issue, i) => (
+                            <div
+                              key={i}
+                              className="text-xs leading-relaxed text-[var(--cmd-palette-item-meta)]"
+                            >
                               {issue.path && (
                                 <span className="font-mono text-[var(--settings-section-desc)]">
-                                  {issue.path}{issue.line != null ? `:${issue.line}` : ''}
+                                  {issue.path}
+                                  {issue.line != null ? `:${issue.line}` : ''}
                                 </span>
                               )}
                               {issue.path && issue.message && <span className="mx-1">—</span>}
@@ -250,45 +335,35 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
                           ))}
                         </div>
                       )}
-                    </div>
+                    </ErrorNotice>
                   ))}
                 </div>
               )}
-
             </div>
           )}
 
           {/* Footer */}
           <div className="flex flex-wrap items-center justify-center gap-2 p-5">
-            {!passed && (
-              <button
+            {!passed && !pendingManualReview && (
+              <Button
+                variant="secondary"
+                size="lg"
+                compact
                 type="button"
                 onClick={() => void handleCopyReviewResult()}
                 aria-label={t('skillhub.scanResult.copyReviewResult')}
                 title={t('skillhub.scanResult.copyReviewResult')}
-                className={cn(
-                  footerButtonBaseClass,
-                  'h-[38px] px-[22px]',
-                  'border',
-                  'border-[var(--confirm-btn-secondary-border)] bg-[var(--cmd-palette-bg)]',
-                  'text-[var(--settings-btn-secondary-text)] hover:bg-[var(--surface-hover)]',
-                )}
+                className="min-w-[104px]"
               >
                 {copied ? <Check size={15} className="shrink-0" /> : <Copy size={15} className="shrink-0" />}
-                {copied ? t('skillhub.scanResult.copiedReviewResult') : t('skillhub.scanResult.copyReviewResult')}
-              </button>
+                {copied
+                  ? t('skillhub.scanResult.copiedReviewResult')
+                  : t('skillhub.scanResult.copyReviewResult')}
+              </Button>
             )}
-            <button
-              type="button"
-              onClick={onClose}
-              className={cn(
-                footerButtonBaseClass,
-                'bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]',
-                'hover:bg-[var(--lightbox-cta-hover)]',
-              )}
-            >
+            <Button variant="cta" size="lg" compact type="button" onClick={onClose} className="min-w-[104px]">
               {t('skillhub.scanResult.dismiss')}
-            </button>
+            </Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

@@ -34,10 +34,7 @@ import {
 import {
   VOICE_INPUT_REFINEMENT_CACHE_SCOPE,
   buildReplyToMessageFromChatMessages,
-  MAX_REFINEMENT_SIDE_CONTEXT_CHARS,
-  takeContextHead,
-  takeContextTail,
-  truncateContextText,
+  buildEditorSelectionContext,
   type VoiceInputChatMessage,
 } from './refinementContext';
 import {
@@ -56,17 +53,25 @@ import {
   buildBaseVoiceInputRefinementContext,
   resolveBrowserVoiceInputLanguage,
 } from './refinementContextBuilder';
+import { createStartCueGate, type StartCueGate } from './startCue';
 import { resolveVoiceInputStartGuards } from './startGuards';
+import { createVoiceInputStartupTimeline, type VoiceInputStartupTimeline } from './startupTimeline';
 import { getVoiceInputWorkletUrl } from './workletUrl';
 import { buildRefinementPreviewText } from './refinementPreviewText';
-import { isVoiceInputEventScopeActive, shouldHandleVoiceInputEvent } from './eventScope';
+import { useSpeakerFilterNotice } from './useSpeakerFilterNotice';
+import { clearVoiceInputDraftInTransaction } from '@/components/new-chat/VoiceInputDraftDecoration';
+import { dispatchVoiceInputEvent } from './eventScope';
 import {
   clampEditorTextRangeToDoc,
   mapEditorTextRange,
   resolveInsertedTextRange,
   type EditorTextRange,
 } from './editorRangeMapping';
-import { isVoiceInputServiceConnectionError, VOICE_INPUT_ERROR_CODE_KEYS } from './overlayErrors';
+import { getVoiceInputErrorMessageKey, VOICE_INPUT_ERROR_CODE_KEYS } from './overlayErrors';
+import {
+  hasArmedDetachedVoiceDraft,
+  settleArmedDetachedVoiceDraft,
+} from '@/components/new-chat/composerSendOwnership';
 import {
   VOICE_INPUT_DICTIONARY_LEARNING_TRACK_TIMEOUT_MS,
 } from '../../shared/voiceInputDictionaryLearning';
@@ -89,6 +94,7 @@ type SubmittedTextRange = {
   start: number;
   end: number;
   submittedText: string;
+  rawTranscriptText?: string;
   historyEntryId: string | null;
 };
 
@@ -123,6 +129,11 @@ const STOP_WAIT_REFINEMENT_FAILSAFE_MS = 90_000;
 const START_READY_STOP_TIMEOUT_MS = 10_000;
 const INLINE_ERROR_AUTO_DISMISS_MS = 8_000;
 
+export type VoiceInputRefinementSnapshot = {
+  basedOnText: string;
+  refinedText: string;
+};
+
 export type UseVoiceInputResult = {
   state: VoiceInputState;
   draftText: string;
@@ -130,10 +141,27 @@ export type UseVoiceInputResult = {
   draftRange: EditorTextRange | null;
   lastError: string | null;
   isListening: boolean;
+  isCaptureReady: boolean;
   isBusy: boolean;
-  start: () => Promise<void>;
+  /** The voiceprint filter just muted someone else's speech in this run. */
+  speakerFiltered: boolean;
+  getLastSubmittedText: () => string;
+  getLastRefinement: () => VoiceInputRefinementSnapshot | null;
+  /** 同步读取当前状态，不经过 React 渲染。长按手势靠它判断是否占用了录音。 */
+  getState: () => VoiceInputState;
+  /** 仅预热音频处理与服务连接，不打开麦克风。 */
+  prepare: () => void;
+  /** 同步 claim 录音后立刻返回是否占用；启动流程（授权确认、采集、连接）在后台继续。 */
+  start: (options?: VoiceInputStartOptions) => boolean;
   stop: (options?: VoiceInputStopOptions) => Promise<void>;
   cancel: () => Promise<void>;
+};
+
+export type VoiceInputStartOptions = {
+  startedAt?: number;
+  beforeStart?: () => boolean | Promise<boolean>;
+  /** Audible start feedback. Runs once the microphone is open, or after a short cap. */
+  onStartFeedback?: () => void | Promise<void>;
 };
 
 export type VoiceInputStopOptions = {
@@ -154,6 +182,9 @@ type StopCompletionWaiter = {
 
 export type UseVoiceInputOptions = {
   onMicrophonePermissionRequired?: (error: string) => void | Promise<void>;
+  /** When false, keep refining in the background but do not write the live editor. */
+  shouldApplyToEditor?: () => boolean;
+  getDraftStorageKey?: () => string | undefined;
 };
 
 /**
@@ -170,14 +201,22 @@ export function useVoiceInput(
   options?: UseVoiceInputOptions,
 ): UseVoiceInputResult {
   const [state, setState] = useState<VoiceInputState>('idle');
+  const [captureReady, setCaptureReady] = useState(false);
+  const startupTimelineRef = useRef<VoiceInputStartupTimeline | null>(null);
   const [draftText, setDraftText] = useState('');
   const [draftSource, setDraftSource] = useState<VoiceInputDraftSource | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
+  const {
+    visible: speakerFiltered,
+    show: showSpeakerFiltered,
+    clear: clearSpeakerFiltered,
+  } = useSpeakerFilterNotice();
   const { t } = useTranslation();
   const { settings: voiceInputSettings } = useVoiceInputSettings();
   const promptCodexSessionExpired = useCodexSessionExpiredPrompt();
   const stateRef = useRef<VoiceInputState>('idle');
   const engineRef = useRef<WebMicAudioEngine | null>(null);
+  const startCueGateRef = useRef<StartCueGate | null>(null);
   const runIdRef = useRef<string | null>(null);
   const systemAudioMutedRef = useRef(false);
   // The mute IPC takes 50-150ms (osascript on macOS). Recording start fires it
@@ -185,10 +224,9 @@ export function useVoiceInput(
   // in-flight promise lets restoreSystemAudioForRecording await it before
   // checking the muted ref, preventing leaked mute state.
   const pendingSystemAudioMutePromiseRef = useRef<Promise<void> | null>(null);
-  const systemAudioMuteGateOpenRef = useRef(true);
-  const systemAudioMuteGateDropLoggedRef = useRef(false);
   const stopCompletionWaitersRef = useRef<StopCompletionWaiter[]>([]);
   const sentAudioMsRef = useRef(0);
+  const hasRecordingContentRef = useRef(false);
   const terminalOutcomeRef = useRef<VoiceInputUsageOutcome>('success');
   const startAttemptIdRef = useRef(0);
   const startReadyRef = useRef<StartReadyState | null>(null);
@@ -211,14 +249,24 @@ export function useVoiceInput(
   const applyingVoiceTextRef = useRef(false);
   const editorRef = useRef<Editor | null>(editor);
   const disabledRef = useRef(Boolean(disabled));
+  const optionsRef = useRef(options);
+  const lastRefinementRef = useRef<VoiceInputRefinementSnapshot | null>(null);
+  const lastSubmittedTextRef = useRef('');
+  const stopWithGateRef = useRef<((options?: VoiceInputStopOptions) => Promise<void>) | null>(
+    null,
+  );
   editorRef.current = editor;
   disabledRef.current = Boolean(disabled);
+  optionsRef.current = options;
 
   const setVoiceState = useCallback((next: VoiceInputState) => {
     stateRef.current = next;
+    if (next !== 'listening') setCaptureReady(false);
     if (next === 'error') terminalOutcomeRef.current = 'failed';
     setState(next);
   }, []);
+
+  const getState = useCallback(() => stateRef.current, []);
 
   const isActiveStartAttempt = useCallback((attemptId: number) => (
     startAttemptIdRef.current === attemptId
@@ -227,6 +275,8 @@ export function useVoiceInput(
 
   const invalidateStartAttempt = useCallback(() => {
     startAttemptIdRef.current += 1;
+    startReadyRef.current?.resolve({ ok: false, error: 'Voice input start was cancelled.' });
+    startReadyRef.current = null;
   }, []);
 
   const createStartReadyState = useCallback((attemptId: number) => {
@@ -294,6 +344,8 @@ export function useVoiceInput(
   }, []);
 
   const stopEngine = useCallback(async () => {
+    // The attempt is ending: nothing is left for the start cue to wait for.
+    startCueGateRef.current?.abandon();
     const engine = engineRef.current;
     engineRef.current = null;
     if (engine) await engine.stop();
@@ -315,6 +367,7 @@ export function useVoiceInput(
   }, []);
 
   const drainAndStopEngine = useCallback(async () => {
+    startCueGateRef.current?.abandon();
     const engine = engineRef.current;
     if (!engine) return;
     // Normal submission must preserve the last sub-chunk of microphone audio.
@@ -379,9 +432,8 @@ export function useVoiceInput(
   }, [clearInlineErrorDismissTimer]);
 
   const formatVoiceInputStartError = useCallback((message: string): string => {
-    return isVoiceInputServiceConnectionError(message)
-      ? t('voiceInputOverlay.asrServiceUnavailable')
-      : message;
+    const key = getVoiceInputErrorMessageKey(message);
+    return key ? t(key) : message;
   }, [t]);
 
   const formatVoiceInputError = useCallback((
@@ -408,14 +460,6 @@ export function useVoiceInput(
     window.electronAPI.voiceInput.appendAudio(chunk);
   }, []);
 
-  const canAcceptAudioChunk = useCallback(() => {
-    if (systemAudioMuteGateOpenRef.current) return true;
-    if (!systemAudioMuteGateDropLoggedRef.current) {
-      systemAudioMuteGateDropLoggedRef.current = true;
-      log.debug('dropping voice input pcm until system audio mute completes');
-    }
-    return false;
-  }, []);
 
   const commitUsageStats = useCallback(() => {
     const audioMs = sentAudioMsRef.current;
@@ -423,20 +467,18 @@ export function useVoiceInput(
     recordVoiceInputUsage(audioMs, terminalOutcomeRef.current);
   }, []);
 
-  const muteSystemAudioForRecording = useCallback((): Promise<void> => {
+  const muteSystemAudioForRecording = useCallback((feedback: Promise<void>): Promise<void> => {
     if (!supportsSystemAudioMute()) {
-      systemAudioMuteGateOpenRef.current = true;
       return Promise.resolve();
     }
     if (systemAudioMutedRef.current) {
-      systemAudioMuteGateOpenRef.current = true;
       return pendingSystemAudioMutePromiseRef.current ?? Promise.resolve();
     }
     if (pendingSystemAudioMutePromiseRef.current) {
       return pendingSystemAudioMutePromiseRef.current;
     }
-    const mutePromise = window.electronAPI.voiceInput
-      .muteSystemAudio()
+    const mutePromise = feedback.catch(() => undefined)
+      .then(() => window.electronAPI.voiceInput.muteSystemAudio())
       .then((result) => {
         if (result.ok) {
           systemAudioMutedRef.current = true;
@@ -448,7 +490,6 @@ export function useVoiceInput(
         log.warn('system audio mute failed:', error instanceof Error ? error.message : String(error));
       })
       .finally(() => {
-        systemAudioMuteGateOpenRef.current = true;
         if (pendingSystemAudioMutePromiseRef.current === mutePromise) {
           pendingSystemAudioMutePromiseRef.current = null;
         }
@@ -458,7 +499,6 @@ export function useVoiceInput(
   }, []);
 
   const restoreSystemAudioForRecording = useCallback(async () => {
-    systemAudioMuteGateOpenRef.current = true;
     if (!supportsSystemAudioMute()) return;
     // Await any in-flight mute so we never skip a restore for a mute that
     // hadn't yet flipped systemAudioMutedRef when restore began.
@@ -568,9 +608,11 @@ export function useVoiceInput(
     triggerReason: string,
   ): boolean => {
     const watch = dictionaryLearningWatchesRef.current.get(segmentId);
-    if (!watch?.pendingEvidence) return false;
+    if (!watch) return false;
+    // Clearing the tracked text ends its lifetime even without a correction.
     clearDictionaryLearningWatchTimer(watch);
     dictionaryLearningWatchesRef.current.delete(segmentId);
+    if (!watch.pendingEvidence) return false;
     publishDictionaryLearningEvidence(watch.pendingEvidence, triggerReason);
     return true;
   }, [clearDictionaryLearningWatchTimer, publishDictionaryLearningEvidence]);
@@ -697,6 +739,8 @@ export function useVoiceInput(
             start: range.from,
             end: range.to,
             pendingAdviceTimer: undefined,
+            // A later clear/unmount must not publish a correction the user undid.
+            pendingEvidence: undefined,
           });
           return [];
         }
@@ -775,9 +819,7 @@ export function useVoiceInput(
       ...baseContext,
       // DictationRefiner.getContext re-imposes cache-friendly ordering when
       // serializing the request body.
-      selectionBefore: takeContextTail(doc.textBetween(0, range.from, '\n', '\n'), MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
-      selectedText: truncateContextText(doc.textBetween(range.from, range.to, '\n', '\n'), MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
-      selectionAfter: takeContextHead(doc.textBetween(range.to, doc.content.size, '\n', '\n'), MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
+      ...buildEditorSelectionContext(doc, range),
       replyToMessage,
     };
   }, [
@@ -810,6 +852,7 @@ export function useVoiceInput(
   }, [readEditorSnapshot]);
 
   const insertSubmittedText = useCallback((text: string): { start: number; end: number } | null => {
+    if (optionsRef.current?.shouldApplyToEditor?.() === false) return null;
     const current = editorRef.current;
     if (!current || current.isDestroyed) return null;
     current.commands.focus();
@@ -826,7 +869,7 @@ export function useVoiceInput(
       // fit 进段落,字形实际落在边界之后。用旧 from 记录会让润色回填、润色预览与
       // 词典学习 watch 整体错位(润色会因读到截断文本而被丢弃)。
       const inserted = resolveInsertedTextRange(transaction, range.from, text.length);
-      dispatch(transaction);
+      dispatch(clearVoiceInputDraftInTransaction(transaction));
       return inserted;
     } finally {
       applyingVoiceTextRef.current = false;
@@ -834,6 +877,7 @@ export function useVoiceInput(
   }, [clampEditorTextRange]);
 
   const applyRefinedText = useCallback((event: Extract<VoiceInputRendererEvent, { type: 'refined' }>): boolean => {
+    if (optionsRef.current?.shouldApplyToEditor?.() === false) return false;
     const segmentId = event.range.segmentIds[0];
     const range = segmentId ? submittedRangesRef.current.get(segmentId) : undefined;
     const current = editorRef.current;
@@ -877,7 +921,7 @@ export function useVoiceInput(
     // This guard is for stale async refinement results after cancellation,
     // route/session changes, draft restore, or other programmatic editor updates.
     const currentText = state.doc.textBetween(range.start, range.end, '');
-    const basedOnText = event.segment.basedOnText ?? range.submittedText;
+    const basedOnText = event.segment.basedOnText ?? range.rawTranscriptText ?? range.submittedText;
     if (currentText !== range.submittedText && currentText !== basedOnText) {
       log.debug('refinement skipped: submitted range changed', {
         segmentId,
@@ -890,7 +934,7 @@ export function useVoiceInput(
 
     applyingVoiceTextRef.current = true;
     try {
-      dispatch(state.tr.insertText(event.text, range.start, range.end));
+      dispatch(clearVoiceInputDraftInTransaction(state.tr.insertText(event.text, range.start, range.end)));
     } finally {
       applyingVoiceTextRef.current = false;
     }
@@ -915,12 +959,16 @@ export function useVoiceInput(
   }, [upsertDictionaryLearningWatch]);
 
   useEffect(() => {
-    return window.electronAPI.voiceInput.onEvent((event) => {
-      if (!shouldHandleVoiceInputEvent(
-        ownedRunIdRef.current,
-        event.runId,
-        isVoiceInputEventScopeActive(stateRef.current),
-      )) return;
+    let subscribed = true;
+    const unsubscribe = window.electronAPI.voiceInput.onEvent((event) => {
+      dispatchVoiceInputEvent(
+        event,
+        () => subscribed ? ownedRunIdRef.current : null,
+        startReadyRef.current?.promise,
+        handleEvent,
+      );
+    });
+    function handleEvent(event: VoiceInputRendererEvent): void {
       switch (event.type) {
         case 'auth-required':
           promptCodexSessionExpired(event.reason);
@@ -946,6 +994,8 @@ export function useVoiceInput(
           }
           break;
         case 'draft':
+          if (event.text.trim()) hasRecordingContentRef.current = true;
+          if (event.text.trim()) startupTimelineRef.current?.mark('first_transcript');
           draftDisplayRangeRef.current = insertionRangeRef.current;
           setDraftText(event.text);
           setDraftSource(event.source);
@@ -958,7 +1008,10 @@ export function useVoiceInput(
           });
           break;
         case 'submitted':
+          if (event.text.trim()) hasRecordingContentRef.current = true;
+          if (event.text.trim()) startupTimelineRef.current?.mark('first_transcript');
           {
+            lastSubmittedTextRef.current = event.text;
             const range = insertSubmittedText(event.text);
             transcriptLandedRef.current = Boolean(range);
             if (range) {
@@ -968,11 +1021,12 @@ export function useVoiceInput(
                 start: range.start,
                 end: range.end,
                 submittedText: event.text,
+                rawTranscriptText: event.segment.basedOnText ?? event.text,
                 historyEntryId,
               });
               upsertDictionaryLearningWatch({
                 segmentId: event.segment.id,
-                rawTranscriptText: event.text,
+                rawTranscriptText: event.segment.basedOnText ?? event.text,
                 baselineText: event.text,
                 start: range.start,
                 end: range.end,
@@ -1000,6 +1054,7 @@ export function useVoiceInput(
           // lookup keyed by segmentId binds the preview to its target text,
           // exactly like the 'refined' / 'submitted' paths.
           {
+            if (optionsRef.current?.shouldApplyToEditor?.() === false) break;
             const segmentId = event.range.segmentIds[0];
             const range = segmentId ? submittedRangesRef.current.get(segmentId) : undefined;
             const current = editorRef.current;
@@ -1018,6 +1073,14 @@ export function useVoiceInput(
           }
           break;
         case 'refined':
+          {
+            const segmentId = event.range.segmentIds[0];
+            const range = segmentId ? submittedRangesRef.current.get(segmentId) : undefined;
+            lastRefinementRef.current = {
+              basedOnText: event.segment.basedOnText ?? range?.rawTranscriptText ?? range?.submittedText ?? '',
+              refinedText: event.text,
+            };
+          }
           if (applyRefinedText(event)) {
             recordVisibleTextChanged({
               runId: event.runId,
@@ -1060,6 +1123,9 @@ export function useVoiceInput(
         case 'usage':
           recordVoiceInputRefinementUsage(event.refinement);
           break;
+        case 'speaker-filtered':
+          showSpeakerFiltered();
+          break;
         case 'timeline':
           if (
             event.event.type === 'refine_rejected' &&
@@ -1069,11 +1135,49 @@ export function useVoiceInput(
           }
           break;
       }
-    });
-  }, [applyRefinedText, clampEditorTextRange, commitUsageStats, formatVoiceInputError, insertSubmittedText, promptCodexSessionExpired, recordVisibleTextChanged, reportVoiceInputError, resolveStopCompletion, restoreEditorFocusAfterVoiceInput, restoreSystemAudioForRecording, setVoiceState, stopEngine, upsertDictionaryLearningWatch]);
+    }
+    const stopListening = () => {
+      subscribed = false;
+      unsubscribe();
+    };
+    return () => {
+      if (hasArmedDetachedVoiceDraft(optionsRef.current?.getDraftStorageKey?.())) {
+        const timeoutId = window.setTimeout(stopListening, STOP_WAIT_REFINEMENT_FAILSAFE_MS);
+        const intervalId = window.setInterval(() => {
+          if (hasArmedDetachedVoiceDraft(optionsRef.current?.getDraftStorageKey?.())) return;
+          window.clearInterval(intervalId);
+          window.clearTimeout(timeoutId);
+          stopListening();
+        }, 100);
+        return;
+      }
+      stopListening();
+    };
+  }, [applyRefinedText, clampEditorTextRange, commitUsageStats, formatVoiceInputError, insertSubmittedText, promptCodexSessionExpired, recordVisibleTextChanged, reportVoiceInputError, resolveStopCompletion, restoreEditorFocusAfterVoiceInput, restoreSystemAudioForRecording, setVoiceState, showSpeakerFiltered, stopEngine, upsertDictionaryLearningWatch]);
 
   useEffect(() => {
     return () => {
+      const draftKey = optionsRef.current?.getDraftStorageKey?.();
+      if (hasArmedDetachedVoiceDraft(draftKey)) {
+        const stop = stopWithGateRef.current;
+        void (stop ? stop({ waitForRefinement: true }) : Promise.resolve())
+          .catch(() => undefined)
+          .finally(() => {
+            settleArmedDetachedVoiceDraft(
+              lastRefinementRef.current?.refinedText.trim() || lastSubmittedTextRef.current.trim(),
+            );
+            commitUsageStats();
+            clearDictionaryLearningWatches();
+            void stopEngine();
+            void restoreSystemAudioForRecording();
+            clearInlineErrorDismissTimer();
+          });
+        return;
+      }
+      if (hasArmedDetachedVoiceDraft()) {
+        // Another ChatInput owns the in-flight persist; do not cancel or settle it.
+        return;
+      }
       resolveStopCompletion();
       commitUsageStats();
       clearDictionaryLearningWatches();
@@ -1127,9 +1231,11 @@ export function useVoiceInput(
 
   // Microphone keep-alive is deliberately a separate effect: unlike the prewarm
   // above it opens a real capture device and turns on the OS privacy indicator,
-  // so it must not re-run for settings unrelated to the microphone. Language and
-  // refinement changes used to re-assert keep-alive intent here, which kept the
-  // device warm for reasons the user never asked for.
+  // so it must not re-run for settings unrelated to the microphone. It only
+  // opens the device while the user is inside the use window, so a remount
+  // cannot relight the indicator on its own (see WebMicAudioEngine). Language
+  // and refinement changes used to re-assert keep-alive intent here, which kept
+  // the device warm for reasons the user never asked for.
   useEffect(() => {
     if (disabledRef.current) return;
     if (!voiceInputSettings.fastActivationEnabled) {
@@ -1159,7 +1265,20 @@ export function useVoiceInput(
     voiceInputSettings.microphoneDeviceId,
   ]);
 
-  const start = useCallback(async () => {
+  const prepare = useCallback(() => {
+    if (disabledRef.current || !editorRef.current || editorRef.current.isDestroyed) return;
+    if (!['idle', 'done', 'error'].includes(stateRef.current)) return;
+    // Every composer mouse-down reaches here, including ordinary clicks and
+    // text selection. Opening even an authorized microphone can switch Bluetooth
+    // headphones to call audio, so leave device capture to start() after the hold.
+    void prewarmVoiceInputAudio(workletUrl).catch(() => undefined);
+    void window.electronAPI.voiceInput.prewarm({
+      sourceLanguage: voiceInputSettings.language,
+      refinementEnabled: voiceInputSettings.refinementEnabled,
+    }).catch(() => undefined);
+  }, [voiceInputSettings.language, voiceInputSettings.refinementEnabled]);
+
+  const start = useCallback((startOptions?: VoiceInputStartOptions): boolean => {
     const currentState = stateRef.current;
     if (
       disabled ||
@@ -1169,9 +1288,13 @@ export function useVoiceInput(
       currentState === 'submitting' ||
       currentState === 'refining'
     ) {
-      return;
+      return false;
     }
+    const timeline = createVoiceInputStartupTimeline('inline', startOptions?.startedAt);
+    startupTimelineRef.current = timeline;
+    setCaptureReady(false);
     dismissInlineError();
+    clearSpeakerFiltered();
     shouldRestoreEditorFocusRef.current = true;
     insertionRangeRef.current = readEditorSelectionRange();
     draftDisplayRangeRef.current = insertionRangeRef.current;
@@ -1184,34 +1307,112 @@ export function useVoiceInput(
     runIdRef.current = null;
     ownedRunIdRef.current = null;
     submittedRangesRef.current.clear();
+    lastRefinementRef.current = null;
+    lastSubmittedTextRef.current = '';
+    hasRecordingContentRef.current = false;
     sentAudioMsRef.current = 0;
     terminalOutcomeRef.current = 'success';
-    systemAudioMuteGateOpenRef.current = true;
-    systemAudioMuteGateDropLoggedRef.current = false;
-    if (voiceInputSettings.muteSystemAudio && supportsSystemAudioMute()) {
-      systemAudioMuteGateOpenRef.current = false;
-      void muteSystemAudioForRecording();
-    }
-    const bootstrapStartedAt = performance.now();
-    const elapsedMs = () => Math.round(performance.now() - bootstrapStartedAt);
 
-    // Critical-path parallelization (mirrors VoiceInputOverlay.startRecording):
-    //
-    // 1. Permission + provider-readiness use main's positive cache when
-    //    available. Missing/negative cache falls back to the existing async
-    //    checks. Main still verifies readiness inside voice-input:start, so a
-    //    stale positive cache cannot bypass auth; it only avoids blocking
-    //    getUserMedia on two IPC round trips.
-    // 2. After both gates, getUserMedia/worklet setup and the main-side
-    //    WebSocket dial run concurrently — the network round-trip overlaps
-    //    the OS microphone handshake instead of waiting for it.
-    // 3. PCM chunks emitted before `runId` is known are buffered and drained
-    //    the moment the start IPC resolves.
-    // 4. System-audio mute starts before the gates. While it is pending,
-    //    microphone PCM is gated so system audio playing during the mute delay
-    //    cannot enter ASR.
-    const guards = await resolveVoiceInputStartGuards();
-    log.debug('voice input start guards checked', {
+    // 同步 claim 已经返回,启动流程在后台继续:本地采集与提示音先走,授权确认
+    // （beforeStart）、服务可用性检查与云端连接随后;stop() 通过 start-ready 等待
+    // 这段启动期,松手后立刻进入停止流程,不必等这里的异步步骤全部完成。
+    void (async () => {
+    const { elapsedMs } = timeline;
+
+    // The start cue and system mute both touch the speakers. Hold them until the
+    // microphone is open so capture does not queue behind that (see
+    // createStartCueGate).
+    const cueGate = createStartCueGate();
+    startCueGateRef.current = cueGate;
+
+    const capturePromise = startVoiceInputCaptureSession({
+      label: '',
+      workletUrl,
+      deviceId: voiceInputSettings.microphoneDeviceId ?? undefined,
+      fastActivationEnabled: voiceInputSettings.fastActivationEnabled,
+      getRunId: () => runIdRef.current,
+      setEngine: (engine) => {
+        engineRef.current = engine;
+      },
+      isCurrentEngine: (engine) => startAttemptIdRef.current === attemptId && engineRef.current === engine,
+      timeline,
+      onCaptureReady: () => {
+        cueGate.release();
+        if (!isActiveStartAttempt(attemptId) || stateRef.current !== 'listening') return;
+        setCaptureReady(true);
+      },
+      onSoundDetected: () => { hasRecordingContentRef.current = true; },
+      appendAudioChunk,
+      onInterrupted: (message) => {
+        if (isActiveStartAttempt(attemptId)) void failActiveRecording(message);
+      },
+      onStateChange: (event, details) => {
+        log.debug('microphone engine', event, details);
+      },
+      getFallbackMessage: formatMicrophoneFallbackMessage,
+      onFallback: (message) => {
+        toast.warning(message);
+      },
+      formatStartError: formatMicrophoneStartError,
+      elapsedMs,
+    });
+
+    // Start capture first; feedback follows the open microphone (bounded by the
+    // gate's cap) and never waits for service checks or the cloud. Only system
+    // mute waits for playback to avoid cutting it off.
+    const feedback = cueGate.released.then((play) => {
+      const playCue = startOptions?.onStartFeedback;
+      if (!play || !playCue || !isActiveStartAttempt(attemptId) || stateRef.current !== 'listening') return;
+      timeline.mark('start_cue_released');
+      return playCue();
+    });
+    // A capture that never becomes ready (denied, unavailable, cancelled) has no
+    // cue to wait for; do not leave system mute waiting for the cap.
+    void capturePromise.then((capture) => { if (!capture.ok) cueGate.abandon(); });
+    if (voiceInputSettings.muteSystemAudio && supportsSystemAudioMute()) {
+      void muteSystemAudioForRecording(feedback).then(() => timeline.mark('mute_finished'));
+    } else {
+      void feedback.catch(() => undefined);
+    }
+
+    // Local capture (and its permission request) starts before service checks.
+    // A slow account/readiness dialog must not cost the user's opening words.
+    let proceed = true;
+    try {
+      proceed = (await startOptions?.beforeStart?.()) !== false;
+    } catch (error) {
+      if (isActiveStartAttempt(attemptId)) {
+        const message = error instanceof Error ? error.message : String(error);
+        resolveStartReadyState(attemptId, { ok: false, error: message });
+        await failActiveRecording(message);
+      }
+      return;
+    }
+    if (!isActiveStartAttempt(attemptId)) return;
+    if (!proceed) {
+      resolveStartReadyState(attemptId, { ok: false, error: 'Voice input start was cancelled.' });
+      invalidateStartAttempt();
+      await stopEngine();
+      await restoreSystemAudioForRecording();
+      draftDisplayRangeRef.current = null;
+      insertionRangeRef.current = null;
+      setVoiceState('idle');
+      restoreEditorFocusAfterVoiceInput();
+      return;
+    }
+    let guards: Awaited<ReturnType<typeof resolveVoiceInputStartGuards>>;
+    try {
+      guards = await resolveVoiceInputStartGuards();
+    } catch (error) {
+      if (isActiveStartAttempt(attemptId)) {
+        const message = error instanceof Error ? error.message : String(error);
+        resolveStartReadyState(attemptId, { ok: false, error: message });
+        await failActiveRecording(message);
+      }
+      return;
+    }
+    timeline.mark('checks_finished');
+    log.info('voice input start guards checked', {
       ok: guards.ok,
       failed: guards.ok ? undefined : guards.failed,
       permissionSource: guards.permissionSource,
@@ -1220,10 +1421,6 @@ export function useVoiceInput(
     });
     if (!isActiveStartAttempt(attemptId)) {
       resolveStartReadyState(attemptId, { ok: false, error: 'Voice input start was cancelled.' });
-      draftDisplayRangeRef.current = null;
-      insertionRangeRef.current = null;
-      await restoreSystemAudioForRecording();
-      restoreEditorFocusAfterVoiceInput();
       return;
     }
     if (!guards.permission.ok) {
@@ -1236,6 +1433,7 @@ export function useVoiceInput(
       } else {
         reportVoiceInputError(guards.permission.error);
       }
+      await stopEngine();
       await restoreSystemAudioForRecording();
       restoreEditorFocusAfterVoiceInput();
       return;
@@ -1261,6 +1459,7 @@ export function useVoiceInput(
       insertionRangeRef.current = null;
       setVoiceState('error');
       reportVoiceInputError(readinessError);
+      await stopEngine();
       await restoreSystemAudioForRecording();
       restoreEditorFocusAfterVoiceInput();
       return;
@@ -1274,36 +1473,23 @@ export function useVoiceInput(
     };
     const startResultPromise: Promise<StartVoiceInputResult> = window.electronAPI.voiceInput
       .start(startPayload)
+      .then((result) => {
+        if (result.ok) timeline.mark('connection_ready');
+        return result;
+      })
       .catch((startError) => ({
         ok: false as const,
         error: startError instanceof Error ? startError.message : String(startError),
       }));
 
-    const captureStart = await startVoiceInputCaptureSession({
-      label: '',
-      workletUrl,
-      deviceId: voiceInputSettings.microphoneDeviceId ?? undefined,
-      fastActivationEnabled: voiceInputSettings.fastActivationEnabled,
-      getRunId: () => runIdRef.current,
-      setEngine: (engine) => {
-        engineRef.current = engine;
-      },
-      isCurrentEngine: (engine) => startAttemptIdRef.current === attemptId && engineRef.current === engine,
-      canAcceptAudioChunk,
-      appendAudioChunk,
-      onInterrupted: (message) => {
-        void failActiveRecording(message);
-      },
-      onStateChange: (event, details) => {
-        log.debug('microphone engine', event, details);
-      },
-      getFallbackMessage: formatMicrophoneFallbackMessage,
-      onFallback: (message) => {
-        toast.warning(message);
-      },
-      formatStartError: formatMicrophoneStartError,
-      elapsedMs,
-    });
+    const captureStart = await capturePromise;
+    if (!isActiveStartAttempt(attemptId)) {
+      resolveStartReadyState(attemptId, { ok: false, error: 'Voice input start was cancelled.' });
+      void startResultPromise.then((result) => {
+        if (result.ok) void window.electronAPI.voiceInput.cancel({ runId: result.runId });
+      });
+      return;
+    }
     if (!captureStart.ok) {
       // 电源释放(锁屏/挂起)取消了启动:静默回收,不显示错误态 —— 用户是主动
       // 离开,内部的 disposed 消息不该出现在界面上。
@@ -1337,7 +1523,14 @@ export function useVoiceInput(
       draftDisplayRangeRef.current = null;
       insertionRangeRef.current = null;
       setVoiceState('error');
-      reportVoiceInputError(captureStart.error);
+      // Permission revoked after the start guard trusted a positive cache:
+      // route to the same recovery prompt as a guard-time denial instead of
+      // making the user retry before they see how to fix it.
+      if (captureStart.permissionDenied && options?.onMicrophonePermissionRequired) {
+        void options.onMicrophonePermissionRequired(captureStart.error);
+      } else {
+        reportVoiceInputError(captureStart.error);
+      }
       restoreEditorFocusAfterVoiceInput();
       return;
     }
@@ -1359,14 +1552,9 @@ export function useVoiceInput(
     const result = await startResultPromise;
     if (!isActiveStartAttempt(attemptId)) {
       resolveStartReadyState(attemptId, { ok: false, error: result.ok ? 'Voice input start was cancelled.' : result.error });
-      await stopEngine();
-      await restoreSystemAudioForRecording();
-      draftDisplayRangeRef.current = null;
-      insertionRangeRef.current = null;
-      if (result.ok) {
-        await window.electronAPI.voiceInput.cancel({ runId: result.runId });
-      }
-      restoreEditorFocusAfterVoiceInput();
+      // The cancelling attempt already stopped its own device. A late network
+      // result must not touch a replacement attempt's microphone or UI.
+      if (result.ok) await window.electronAPI.voiceInput.cancel({ runId: result.runId });
       return;
     }
     if (!result.ok) {
@@ -1402,10 +1590,15 @@ export function useVoiceInput(
     }
     captureStart.drainPendingChunks();
     resolveStartReadyState(attemptId, result);
+    })().catch((error) => {
+      log.warn('voice input start failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return true;
   }, [
     appendAudioChunk,
     buildRefinementContext,
-    canAcceptAudioChunk,
     createStartReadyState,
     disabled,
     failActiveRecording,
@@ -1473,6 +1666,28 @@ export function useVoiceInput(
     });
   }, []);
 
+  const cancel = useCallback(async () => {
+    const runId = runIdRef.current;
+    invalidateStartAttempt();
+    resolveStopCompletion();
+    await stopEngine();
+    try {
+      await window.electronAPI.voiceInput.cancel(runId ? { runId } : undefined);
+    } finally {
+      await restoreSystemAudioForRecording();
+    }
+    commitUsageStats();
+    setDraftText('');
+    setDraftSource(null);
+    draftDisplayRangeRef.current = null;
+    runIdRef.current = null;
+    ownedRunIdRef.current = null;
+    insertionRangeRef.current = null;
+    submittedRangesRef.current.clear();
+    setVoiceState('done');
+    restoreEditorFocusAfterVoiceInput();
+  }, [commitUsageStats, invalidateStartAttempt, resolveStopCompletion, restoreEditorFocusAfterVoiceInput, restoreSystemAudioForRecording, setVoiceState, stopEngine]);
+
   const stop = useCallback(async (options?: VoiceInputStopOptions) => {
     const currentState = stateRef.current;
     if (currentState === 'submitting' || currentState === 'refining') {
@@ -1484,6 +1699,20 @@ export function useVoiceInput(
       return;
     }
     if (currentState !== 'listening') return;
+    if (hasRecordingContentRef.current) setVoiceState('submitting');
+    // Include the final worklet sub-chunk before deciding there was no sound.
+    // A silent recording must not wait for a pending cloud start or final text.
+    await drainAndStopEngine();
+    if (stateRef.current === 'error') {
+      throw new Error(lastErrorRef.current ?? 'Voice input failed.');
+    }
+    if (stateRef.current !== 'listening' && stateRef.current !== 'submitting') return;
+    if (!hasRecordingContentRef.current) {
+      log.info('silent recording ended without ASR finalization');
+      await cancel();
+      notifyReadyForEndCue(options);
+      return;
+    }
     let runId = runIdRef.current;
     let restorePromise: Promise<void> | null = null;
     setVoiceState('submitting');
@@ -1570,7 +1799,7 @@ export function useVoiceInput(
       setVoiceState('done');
       restoreEditorFocusAfterVoiceInput();
     }
-  }, [commitUsageStats, dismissInlineError, drainAndStopEngine, drainQueuedAudioToMain, formatVoiceInputStartError, invalidateStartAttempt, reportVoiceInputError, resolveStopCompletion, restoreEditorFocusAfterVoiceInput, restoreSystemAudioAndNotifyEndCue, setVoiceState, waitForBusyCompletion, waitForStartReadyWhileStopping]);
+  }, [cancel, notifyReadyForEndCue, clearSpeakerFiltered, commitUsageStats, dismissInlineError, drainAndStopEngine, drainQueuedAudioToMain, formatVoiceInputStartError, invalidateStartAttempt, reportVoiceInputError, resolveStopCompletion, restoreEditorFocusAfterVoiceInput, restoreSystemAudioAndNotifyEndCue, setVoiceState, waitForBusyCompletion, waitForStartReadyWhileStopping]);
 
   const stopWithGate = useCallback(async (options?: VoiceInputStopOptions) => {
     if (stopInFlightPromiseRef.current) return stopInFlightPromiseRef.current;
@@ -1582,28 +1811,7 @@ export function useVoiceInput(
     stopInFlightPromiseRef.current = stopPromise;
     return stopPromise;
   }, [stop]);
-
-  const cancel = useCallback(async () => {
-    const runId = runIdRef.current;
-    invalidateStartAttempt();
-    resolveStopCompletion();
-    await stopEngine();
-    try {
-      await window.electronAPI.voiceInput.cancel(runId ? { runId } : undefined);
-    } finally {
-      await restoreSystemAudioForRecording();
-    }
-    commitUsageStats();
-    setDraftText('');
-    setDraftSource(null);
-    draftDisplayRangeRef.current = null;
-    runIdRef.current = null;
-    ownedRunIdRef.current = null;
-    insertionRangeRef.current = null;
-    submittedRangesRef.current.clear();
-    setVoiceState('done');
-    restoreEditorFocusAfterVoiceInput();
-  }, [commitUsageStats, invalidateStartAttempt, resolveStopCompletion, restoreEditorFocusAfterVoiceInput, restoreSystemAudioForRecording, setVoiceState, stopEngine]);
+  stopWithGateRef.current = stopWithGate;
 
   useEffect(() => {
     const editorUnavailable = !editor || editor.isDestroyed || disabled;
@@ -1632,7 +1840,13 @@ export function useVoiceInput(
     draftRange: draftDisplayRangeRef.current ?? insertionRangeRef.current,
     lastError,
     isListening: state === 'listening',
+    isCaptureReady: state === 'listening' && captureReady,
     isBusy: state === 'listening' || state === 'submitting' || state === 'refining',
+    speakerFiltered,
+    getLastSubmittedText: () => lastSubmittedTextRef.current,
+    getLastRefinement: () => lastRefinementRef.current,
+    getState,
+    prepare,
     start,
     stop: stopWithGate,
     cancel,

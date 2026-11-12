@@ -167,6 +167,21 @@ describe('miss 路径', () => {
 });
 
 describe('staged write rollback', () => {
+  it('accepts a file source without buffering it, and guards owner changes before persistent publication', async () => {
+    const file = path.join(tmpUserData, 'received-file');
+    fs.writeFileSync(file, BYTES_A);
+    const key = 'remote-file:source:version';
+    const written = await integrationCache.integrationCachePut({
+      cacheKey: key, integration: 'remote-file', filePath: file, mimeType: 'image/png',
+      assertStillValid: () => {},
+    }, db);
+    expect(fs.readFileSync(written.absPath)).toEqual(BYTES_A);
+    await expect(integrationCache.integrationCachePut({
+      cacheKey: 'remote-file:cancelled', integration: 'remote-file', filePath: file, mimeType: 'image/png',
+      assertStillValid: () => { throw new Error('owner changed'); },
+    }, db)).rejects.toThrow('owner changed');
+    expect(await integrationCache.integrationCacheGet('remote-file:cancelled', db)).toBeNull();
+  });
   it('removes only the integration ref created by that write', async () => {
     const first = await integrationCache.integrationCachePut(
       { cacheKey: KEY, integration: 'feishu', buffer: BYTES_A, mimeType: 'image/png' },

@@ -14,6 +14,9 @@
  */
 
 export { createAnthropicCompatProxy } from './server.js';
+export { recoverInlineAttachments, recoverOversizedMessage } from './oversized-attachments.js';
+export type { OversizedBody, RecoveredAttachment, AttachmentKeeper } from './oversized-attachments.js';
+export type { OversizedRequestRecovery } from './types.js';
 export {
   createEnvOutboundProxyResolver,
   hasProxyEnvConfig,
@@ -35,28 +38,51 @@ export {
 } from './instructions-injection.js';
 export {
   createActiveStripTransform,
+  createToolReferenceRecoveryRule,
+  lowerToolReferencesFromBody,
   createDuplicateToolUseIdRecoveryRule,
   createEmptyAssistantMessageRecoveryRule,
   createEmptyTextRecoveryRule,
   createEmptyThinkingRecoveryRule,
+  createAnthropicContextManagementRecoveryRule,
   createEncryptedContentRecoveryRule,
+  createResponsesReasoningContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
+  createResponsesItemIdPrefixRecoveryRule,
+  createResponsesItemIdLengthRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
+  compactOversizedImageHistory,
   createToolUseProviderSpecificFieldsRecoveryRule,
   dedupeDuplicateToolUseIds,
   dedupeDuplicateToolUseIdsFromBody,
   repairToolExchangeAdjacency,
   repairToolExchangeAdjacencyFromBody,
   repairToolExchangeStructureFromBody,
+  replaceToolResultImagesWithNotice,
   stripEmptyAssistantMessagesFromBody,
   stripEmptyTextFromBody,
   stripEmptyThinkingFromBody,
   stripEncryptedContentFromBody,
+  stripResponsesReasoningContentFromBody,
   stripImageGenerationItemsWithoutIdFromBody,
   stripNonAnthropicFields,
+  stripNonCanonicalResponsesItemIdsFromBody,
+  shortenOversizedResponsesItemIdsFromBody,
+  shortenResponsesItemId,
   stripToolUseProviderSpecificFields,
   stripToolUseProviderSpecificFieldsFromBody,
 } from './transform.js';
+export {
+  createXaiModelInputRecoveryRule,
+  createXaiModelInputSanitizeTransform,
+  looksLikeXaiResponsesModel,
+  sanitizeXaiModelInputBody,
+  sanitizeXaiModelInputFromBody,
+  supportsXaiReasoningModel,
+  xaiBareModelId,
+} from './xai-model-input.js';
+export { createVllmResponsesCompatibilityRule } from './vllm-responses-compatibility.js';
+export { createAnthropicEffortCompatibilityRule } from './anthropic-effort-compatibility.js';
 export { createVisionBridgeTransform } from './vision-bridge-transform.js';
 export { createThreadStripController } from './thread-strip-controller.js';
 export type { ThreadStripController } from './thread-strip-controller.js';
@@ -70,7 +96,10 @@ export type {
   InstructionsRegistry,
 } from './instructions-injection.js';
 export type {
+  ForwardLifecycleObserver,
+  ForwardLifecycleFailure,
   LocalRequestHandler,
+  OversizedRequestCompactor,
   ProxyHandle,
   ProxyLogger,
   ProxyOptions,
@@ -78,8 +107,11 @@ export type {
   ResponseObserver,
   ResponseObserverCtx,
   ResponseObserverSink,
+  ResponseTransform,
   RequestTransform,
   RequestTransformCtx,
   RoutingDecision,
   RoutingTransform,
 } from './types.js';
+
+export { createWebSocketMessageTransform } from './websocket-message-transform.js';

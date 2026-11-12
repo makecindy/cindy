@@ -25,6 +25,51 @@ function channel(fetchImplementation: typeof fetch, overrides: Record<string, un
 }
 
 describe('xaiImageClient', () => {
+  // #8673 / unit: extra native JSON fields used to disappear in the fixed
+  // payload builder; generation and editing must expose the same behavior.
+  it('preserves unenumerated native fields in generation and editing requests', async () => {
+    const doFetch = vi.fn<typeof fetch>(async () => Response.json({ data: [{ b64_json: 'aW1hZ2U=' }] }));
+    const nativeParameters = { seed: 0, future_option: { enabled: false, values: ['native', 1] } };
+    const params = { model: 'xai/grok-imagine-image', prompt: 'p', nativeParameters };
+    const c = channel(doFetch);
+    await c.generateImage(params);
+    const readFile = vi.spyOn(fs, 'readFile').mockResolvedValue(Buffer.from('89504e470d0a1a0a', 'hex'));
+    try {
+      await c.editImage({ ...params, imagePaths: ['/test/reference.png'] });
+    } finally {
+      readFile.mockRestore();
+    }
+    for (const [, init] of doFetch.mock.calls) expect(JSON.parse(String(init?.body))).toMatchObject(nativeParameters);
+    expect(JSON.parse(String(doFetch.mock.calls[1]?.[1]?.body)).image).toMatchObject({ type: 'image_url' });
+  });
+
+  it('uses the xAI API-key source for Imagine generation', async () => {
+    const doFetch = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify({ data: [{ b64_json: 'aW1hZ2U=' }] }), { status: 200 }),
+    );
+    const hasApiKey = vi.fn(() => true);
+    const result = await channel(doFetch, {
+      hasApiKey,
+      getApiKey: () => 'xai-platform-key',
+      hasOAuthLogin: () => false,
+      getCredentialGeneration: () => 0,
+    }).generateImage({ model: 'xai/grok-imagine-image', prompt: '一只猫' });
+
+    expect(result.data[0]?.b64_json).toBe('aW1hZ2U=');
+    expect(hasApiKey).toHaveBeenCalled();
+    expect((doFetch.mock.calls[0]?.[1]?.headers as Record<string, string>).Authorization).toBe(
+      'Bearer xai-platform-key',
+    );
+
+    const unavailable = channel(doFetch, {
+      hasApiKey: () => false,
+      hasOAuthLogin: () => false,
+      getCredentialGeneration: () => 0,
+    });
+    expect(unavailable.ready()).toBe(false);
+  });
+
   it('复用 SuperGrok OAuth 调 Imagine generation 并保留原生画幅', async () => {
     const doFetch = vi.fn<typeof fetch>(
       async () =>
@@ -38,7 +83,7 @@ describe('xaiImageClient', () => {
     const result = await channel(doFetch).generateImage({
       model: 'xai/grok-imagine-image',
       prompt: '一只猫',
-      aspectRatio: '3:2',
+      aspectRatio: '3:2', resolution: '1k',
     });
 
     expect(result).toEqual({ data: [{ b64_json: 'aW1hZ2U=' }], output_format: 'jpeg' });
@@ -52,6 +97,15 @@ describe('xaiImageClient', () => {
       resolution: '1k',
       response_format: 'b64_json',
     });
+  });
+
+  it('transmits native 2K resolution and phone ratios without injecting defaults', async () => {
+    const doFetch = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ data: [{ b64_json: 'image' }] })));
+    const imageChannel = channel(doFetch);
+    await imageChannel.generateImage({ model: 'xai/grok-imagine-image', prompt: 'p', aspectRatio: '9:19.5', resolution: '2k' });
+    for (const [, init] of doFetch.mock.calls) expect(JSON.parse(String(init?.body))).toMatchObject({ aspect_ratio: '9:19.5', resolution: '2k' });
+    await imageChannel.generateImage({ model: 'xai/grok-imagine-image', prompt: 'p' });
+    expect(JSON.parse(String(doFetch.mock.calls[1]?.[1]?.body))).not.toHaveProperty('resolution');
   });
 
   it('直接转发类型发现得到的未来图片模型，不依赖型号名白名单', async () => {
@@ -94,12 +148,14 @@ describe('xaiImageClient', () => {
       model: 'xai/grok-imagine-image-quality',
       prompt: '合成一张图',
       imagePaths: paths,
-      aspectRatio: '2:3',
+      aspectRatio: '9:19.5',
+      resolution: '2k',
     });
 
     const [url, init] = doFetch.mock.calls[0]!;
     expect(String(url)).toBe('https://api.x.ai/v1/images/edits');
     const body = JSON.parse(String(init?.body)) as { images: Array<{ type: string; url: string }> };
+    expect(body).toMatchObject({ aspect_ratio: '9:19.5', resolution: '2k' });
     expect(body.images).toHaveLength(2);
     expect(body.images.every((image) => image.type === 'image_url')).toBe(true);
     expect(body.images.every((image) => image.url.startsWith('data:image/png;base64,'))).toBe(true);

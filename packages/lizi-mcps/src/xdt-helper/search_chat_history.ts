@@ -29,6 +29,10 @@ import { z } from 'zod';
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperHistoryDeps, HistoryRole } from './_history_types.js';
 import { okPayload, errorPayload } from './_payload.js';
+import { parseIsoMs } from './_history_time.js';
+import { stringArrayParam } from './_array-param.js';
+import { resolveHistoryScope } from './_history_scope.js';
+import { historyDeviceShape, HISTORY_DEVICE_DESCRIPTION, queryHistoryDevices } from './_history_devices.js';
 
 const ROLE_VALUES = [
   'user',
@@ -44,6 +48,8 @@ const ROLE_VALUES = [
 const DEFAULT_QA_ROLES = ['user', 'assistant', 'ask_user', 'plan_review'] as const satisfies readonly HistoryRole[];
 
 const DESCRIPTION = [
+  'sessions 元数据中的 sessionUrl 是可直接引用的任务链接；用 [任务标题](sessionUrl) 返回给用户。',
+  HISTORY_DEVICE_DESCRIPTION,
   '跨所有 session 用自然语言语义检索历史聊天记录, 返回相关命中 + 上下文窗口的原始数据。',
   '',
   '【何时调用】用户"我之前聊过 X / 上次怎么解决那个 bug / 关于 Y 我们讨论过啥"等',
@@ -65,12 +71,17 @@ const DESCRIPTION = [
   '  - sessions: { [sessionId]: { workingDir, agentKind, title } } 命中涉及的 session 元数据。',
   '  - vector_used / vector_skip_reason / pool_size / pool_capped 诊断字段。',
   '',
+  '【云端伙伴】主力电脑在别的电脑上的伙伴，这台电脑没有完整记录：首页另带 cloud_hits（直接查伙伴的云端对话，那台电脑离线也能查）、cloud_failed（没查到的伙伴）和 cloud_incomplete（还可能有更多，用 teammate_id、from、to 或更具体的关键词缩小范围，不要当成已经全部列出）。有 cloud_continue_to 时，把它作为 to 再查一次可读后面的云端结果。',
+  '云端只做关键词子串匹配，自然语言整句通常搜不到，没结果时换短关键词再试。只支持 teammate_id、from、to、roles 过滤，用了其它过滤条件时不查云端。device=all 且那台电脑在线时，可能与该电脑的结果重复。',
+  '',
   '【分页】游标分页, 默认 limit=10(最大 50)。hasMore=true 时用 nextCursor 再调拿下一页。',
+  '源设备可按完整命中及其上下文的 64 KiB 软预算提前分页；不截断单个命中，单条超大命中仍完整返回。limit 是上限，结束以 hasMore 为准。',
   'pool_capped=true 表示候选池已达上限, 更靠后的相关结果可能未进池(可缩小过滤范围再搜)。',
 ].join('\n');
 
 export interface SearchChatHistoryToolDeps {
   history: XdtHelperHistoryDeps;
+  getSessionContext?: () => import('../types.js').LiziMcpSessionContext | undefined;
 }
 
 export function registerSearchChatHistoryTool(
@@ -82,10 +93,11 @@ export function registerSearchChatHistoryTool(
     category: 'history',
     description: DESCRIPTION,
     inputShape: {
-      query: z.string().min(1).describe('自然语言查询(必填)。例: "上次怎么修的语音输入授权问题"。'),
-      session_ids: z
-        .array(z.string().min(1))
-        .max(50)
+      ...historyDeviceShape,
+      teammate_id: z.string().min(1).max(256).optional().describe('限定已保存归属的伙伴聊天（含历史、话题、渠道专线），使用 get_teammate_state 的 profile.id。不限制当前 workdir；未关联的旧 IM 记录不自动认领。'),
+      source: z.string().min(1).max(64).optional().describe('精确匹配任务原始 source，如 telegram（旧独立机器人）或 bot（伙伴）。不指定则跨来源搜索。'),
+      query: z.string().min(1).max(256).describe('自然语言查询(必填, 最长 256)。例: "上次怎么修的语音输入授权问题"。'),
+      session_ids: stringArrayParam(z.array(z.string().min(1)).max(50))
         .optional()
         .describe('限定一批 sessionId(最多 50)。与其它过滤叠加(AND)。'),
       workdir: z.string().optional().describe('精确匹配 sessions.workingDir。'),
@@ -95,8 +107,7 @@ export function registerSearchChatHistoryTool(
         .enum(['cc', 'codex', 'pi'])
         .optional()
         .describe('按 session.agentKind 过滤; 不传 = 全部搜。'),
-      roles: z
-        .array(z.enum(ROLE_VALUES))
+      roles: stringArrayParam(z.array(z.enum(ROLE_VALUES)))
         .optional()
         .describe(
           '只命中这些 role 的消息(也用于上下文窗口过滤)。不传 = 问答类' +
@@ -112,18 +123,39 @@ export function registerSearchChatHistoryTool(
       limit: z.number().int().min(1).max(50).default(10).describe('融合后返回命中条数, 1-50, 默认 10。'),
       cursor: z.string().optional().describe('上次响应的 nextCursor; 不传 = 第一页。坏 cursor 自动回第一页。'),
     },
-    handler: async ({
-      query,
-      session_ids,
-      workdir,
-      from,
-      to,
-      agent_kind,
-      roles,
-      context_radius,
-      limit,
-      cursor,
-    }) => {
+    handler: async (args) => {
+      if (args.device !== 'local') return queryHistoryDevices(registry, deps, 'search_chat_history', args);
+      if (args.session_ids?.some((id) => id.includes('::'))) return errorPayload('INVALID_ARGS', '远程 session_ids 必须指定对应 device，不能作为本机 ID 查询。');
+      const {
+        query,
+        session_ids,
+        workdir,
+        from,
+        to,
+        agent_kind,
+        roles,
+        context_radius,
+        limit,
+        cursor,
+      } = args;
+      const scope = await resolveHistoryScope(
+        deps.history,
+        deps.getSessionContext,
+        session_ids ?? null,
+      );
+      if (!scope.ok) return errorPayload(scope.errorCode, scope.message);
+      if (
+        session_ids !== undefined
+        && session_ids.length > 0
+        && scope.sessionIds?.length === 0
+        && scope.deniedSessionIds.length > 0
+      ) {
+        return errorPayload(
+          'HISTORY_SCOPE_DENIED',
+          '请求的任务不在当前伙伴可读取的历史范围内。不要把空结果解释成对方没有回复；请改用伙伴状态或任务摘要（get_task_digest）。',
+          { denied_session_ids: scope.deniedSessionIds },
+        );
+      }
       const fromMs = parseIsoMs(from);
       if (fromMs === 'invalid') {
         return errorPayload('INVALID_ARGS', `from 不是合法 ISO 8601 时间字符串: "${from}"`);
@@ -137,9 +169,14 @@ export function registerSearchChatHistoryTool(
       const cursorWasBad = cursor !== undefined && cursor !== '' && offset === null;
       const effectiveRoles: HistoryRole[] = roles ?? [...DEFAULT_QA_ROLES];
 
-      const res = await deps.history.searchChatHistory({
+      // Host-only hint travels with normalized args through the existing local
+      // adapter (and the source device's tool registry). Public input has no knob.
+      // Internal UI/learn callers omit it and keep count-based result pages.
+      const searchArgs = {
         query: query.trim(),
-        sessionIds: session_ids ?? null,
+        sessionIds: scope.sessionIds,
+        ...(args.teammate_id ? { teammateId: args.teammate_id } : {}),
+        ...(args.source ? { source: args.source } : {}),
         workdir: workdir ?? null,
         fromMs,
         toMs,
@@ -148,7 +185,9 @@ export function registerSearchChatHistoryTool(
         contextRadius: context_radius,
         limit,
         offset: offset ?? 0,
-      });
+        historyToolPageBudget: true,
+      };
+      const res = await deps.history.searchChatHistory(searchArgs);
       if (!res.ok) {
         if (res.errorCode === 'HOST_NOT_READY') {
           return errorPayload(
@@ -160,7 +199,21 @@ export function registerSearchChatHistoryTool(
       }
 
       const { result } = res;
+      // Only for a caller on this computer (a remote query has no session) that may read everything.
+      const callerSessionId = deps.getSessionContext?.()?.sessionId;
+      const cloud = callerSessionId && deps.history.searchCompanionRooms && (offset ?? 0) === 0
+        && scope.sessionIds === null && !workdir && !agent_kind && !args.source
+        && effectiveRoles.some((role) => role === 'user' || role === 'assistant')
+        ? await deps.history.searchCompanionRooms({ query: query.trim(), callerSessionId, fromMs, toMs,
+          roles: effectiveRoles.filter((role): role is 'user' | 'assistant' => role === 'user' || role === 'assistant'),
+          ...(args.teammate_id ? { teammateId: args.teammate_id } : {}) }).catch(() => null)
+        : null;
+      const cloudPage = cloud ? cloudHitsPage(cloud.hits, limit) : null;
       return okPayload({
+        ...(cloudPage?.hits.length ? { cloud_hits: cloudPage.hits } : {}),
+        ...(cloud?.incomplete || cloudPage?.continueTo ? { cloud_incomplete: true } : {}),
+        ...(cloudPage?.continueTo ? { cloud_continue_to: cloudPage.continueTo } : {}),
+        ...(cloud?.failed.length ? { cloud_failed: cloud.failed } : {}),
         hits: result.hits.map((h) => {
           const out: Record<string, unknown> = {
             messageId: h.messageId,
@@ -189,7 +242,10 @@ export function registerSearchChatHistoryTool(
           if (h.vectorDistance !== null) out.vectorDistance = h.vectorDistance;
           return out;
         }),
-        sessions: result.sessions,
+        sessions: Object.fromEntries(Object.entries(result.sessions).map(([id, meta]) => [id, {
+          ...meta,
+          ...(deps.history.sessionUrl ? { sessionUrl: deps.history.sessionUrl(id) } : {}),
+        }])),
         vector_used: result.vectorUsed,
         ...(result.vectorSkipReason ? { vector_skip_reason: result.vectorSkipReason } : {}),
         pool_size: result.poolSize,
@@ -198,6 +254,8 @@ export function registerSearchChatHistoryTool(
         hasMore: result.hasMore,
         query: {
           query: query.trim(),
+          teammate_id: args.teammate_id,
+          source: args.source,
           session_ids,
           workdir,
           from,
@@ -207,6 +265,9 @@ export function registerSearchChatHistoryTool(
           roles_defaulted: roles === undefined,
           context_radius,
           limit,
+          ...(scope.deniedSessionIds.length > 0
+            ? { scope_filtered_session_ids: scope.deniedSessionIds }
+            : {}),
         },
         ...(cursorWasBad ? { warning: 'INVALID_CURSOR_FALLBACK_TO_FIRST_PAGE' } : {}),
       });
@@ -214,11 +275,21 @@ export function registerSearchChatHistoryTool(
   });
 }
 
-function parseIsoMs(s: string | undefined): number | null | 'invalid' {
-  if (s === undefined || s === '') return null;
-  const t = new Date(s).getTime();
-  if (!Number.isFinite(t)) return 'invalid';
-  return t;
+/** 按条数和字节分页，与本机结果同一预算：不截断单条，放不下的留给下一次（hits 按时间从新到旧）。 */
+const CLOUD_PAGE_BUDGET_BYTES = 64 * 1024;
+function cloudHitsPage(hits: NonNullable<Awaited<ReturnType<NonNullable<XdtHelperHistoryDeps['searchCompanionRooms']>>>>['hits'], limit: number) {
+  const page: Array<Omit<(typeof hits)[number], 'createdAt'> & { createdAt: string }> = [];
+  let bytes = 0;
+  for (const hit of hits) {
+    const entry = { ...hit, createdAt: new Date(hit.createdAt).toISOString() };
+    bytes += Buffer.byteLength(JSON.stringify(entry));
+    // 长消息分成多段时时间相同，续读按时间切（to 不含），所以同一时间的段不能拆开。
+    if (page.length && (bytes > CLOUD_PAGE_BUDGET_BYTES || page.length >= limit) && entry.createdAt !== page.at(-1)!.createdAt) {
+      return { hits: page, continueTo: page.at(-1)!.createdAt };
+    }
+    page.push(entry);
+  }
+  return { hits: page, continueTo: null };
 }
 
 /**

@@ -5,7 +5,7 @@
  * renderer locale key。函数每次调用都现场执行 t()，因此 renderer 通过
  * setMainLocale() 切换语言后，下一条通知会立即跟随，不需要额外缓存或事件机制。
  */
-import { t } from './i18n.js';
+import { t } from './i18n.desktop.js';
 
 export type SessionEventKind = 'done' | 'error' | 'needs-reply';
 
@@ -33,4 +33,35 @@ export function getSessionExternalNotificationText(title: string, kind: SessionE
   // replacement 必须是函数：任务标题是原样数据，`$&` / `$\`` / `$'` / `$$`
   // 等 JavaScript replacement token 不能被解释成模板控制符。
   return t(EXTERNAL_KEY_BY_KIND[kind]).replaceAll('{{title}}', () => title);
+}
+
+/** 代输入 push body: fixed copy, never the screen or the agent's purpose text. */
+export function getInputHandoffNotificationBody(): string {
+  return t('settings.notifications.sessionEvent.inputHandoff');
+}
+
+export function getTeammateNotificationFallback(): string {
+  return t('settings.notifications.sessionEvent.newReply');
+}
+
+/** Phone push body for a 分工 step that stopped for the user (bot-group-chat.md §8.3). */
+export function getBotGroupStepNotificationBody(event: {
+  botName: string;
+  task: string;
+  outcome: 'done' | 'failed';
+  planDone: boolean;
+}): string {
+  const key = event.outcome === 'failed'
+    ? 'settings.notifications.botGroupPlan.stepFailed'
+    : event.planDone
+      ? 'settings.notifications.botGroupPlan.planDone'
+      : 'settings.notifications.botGroupPlan.stepDone';
+  // Function replacements: names and tasks are data, never replacement tokens.
+  return t(key)
+    .replaceAll('{{name}}', () => event.botName)
+    .replaceAll('{{task}}', () => event.task);
+}
+
+export function getNotificationImageLabel(): string {
+  return t('settings.notifications.chat.image');
 }

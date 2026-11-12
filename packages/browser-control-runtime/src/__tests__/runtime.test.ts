@@ -2,6 +2,33 @@ import { describe, expect, it } from 'vitest';
 
 import { createBrowserControlRuntime, planDispatch } from '../runtime.js';
 import { createUnavailableBrowserRuntime } from '../unavailable.js';
+import { resolveActionTargetIds } from '../shim/browser-action-targets.js';
+
+// Historical Play/AWS labels failed after tab selection had resolved their ID.
+// Unit tier: exercise the same normalization used by the real /act route;
+// the history replay script covers its wiring against real Chrome.
+describe('resolved action target identity', () => {
+  it.each([undefined, 'google-play-review-status', 'raw-tab-id'])(
+    'executes an action on the selected tab when its target is %s', (targetId) => {
+      expect(resolveActionTargetIds({ kind: 'wait', timeMs: 1, targetId }, 'google-play-review-status', 'raw-tab-id'))
+        .toEqual({ kind: 'wait', timeMs: 1, targetId: 'raw-tab-id' });
+    },
+  );
+
+  it('normalizes nested batches without allowing a different target or mutating the request', () => {
+    const action = {
+      kind: 'batch' as const,
+      targetId: 'aws-ce',
+      actions: [{ kind: 'batch' as const, actions: [{ kind: 'wait' as const, timeMs: 1, targetId: 'aws-ce' }] }],
+    };
+    expect(resolveActionTargetIds(action, 'aws-ce', 'raw-id')).toMatchObject({
+      targetId: 'raw-id', actions: [{ targetId: 'raw-id', actions: [{ targetId: 'raw-id' }] }],
+    });
+    expect(action.actions[0].actions[0].targetId).toBe('aws-ce');
+    action.actions[0].actions[0].targetId = 'different-tab';
+    expect(() => resolveActionTargetIds(action, 'aws-ce', 'raw-id')).toThrow('targetId must match');
+  });
+});
 
 describe('createUnavailableBrowserRuntime', () => {
   it('reports BROWSER_RUNTIME_NOT_CONFIGURED for any action', async () => {
@@ -28,6 +55,56 @@ describe('createBrowserControlRuntime — request planning + dispatch', () => {
     // present or a large/slow page ignores the caller's bounds (maxChars falls
     // through to outer truncation; timeoutMs falls back to the default).
     expect(plan.query).toMatchObject({ targetId: 't1', maxChars: 500, timeoutMs: 9000 });
+  });
+
+  it('opens agent pages in the background unless the host marks them user-initiated', () => {
+    expect(planDispatch({ action: 'open', url: 'https://example.com' }).body).toEqual({
+      url: 'https://example.com',
+      label: undefined,
+      background: true,
+    });
+    expect(planDispatch({
+      action: 'open',
+      url: 'about:blank',
+      background: false,
+    }).body).toEqual({
+      url: 'about:blank',
+      label: undefined,
+      background: false,
+    });
+  });
+
+  it('accepts proxyServer only for start and does not forward it to the vendored route', () => {
+    expect(planDispatch({ action: 'start', proxyServer: 'http://proxy.test:8080' })).toEqual({
+      method: 'POST',
+      path: '/start',
+      body: {},
+    });
+    expect(() => planDispatch({ action: 'status', proxyServer: 'http://proxy.test:8080' }))
+      .toThrow(/only valid for action=start/);
+  });
+
+  it('rejects a credentialed proxyServer at the planning layer', () => {
+    // Authenticated proxies are unsupported; the rejection must happen before
+    // any dispatch is planned, not deeper in the launch path.
+    expect(() => planDispatch({ action: 'start', proxyServer: 'http://u:p@proxy.test:8080' }))
+      .toThrow(/authenticated proxies are not supported/);
+  });
+
+  it('validates and does not forward proxy navigation policy', () => {
+    expect(planDispatch({
+      action: 'start',
+      proxyServer: 'http://proxy.test:8080',
+      proxyAllowedHostnames: ['*.example.com'],
+    })).toEqual({
+      method: 'POST',
+      path: '/start',
+      body: {},
+    });
+    expect(() => planDispatch({
+      action: 'status',
+      proxyAllowedHostnames: ['*.example.com'],
+    })).toThrow(/only valid for action=start/);
   });
 
   it('forwards act timeoutMs into the /act body (top-level, or nested wins)', () => {

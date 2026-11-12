@@ -141,7 +141,7 @@ export async function resolvePastedSessionTitle(sessionId: string): Promise<stri
     // 本地库没有(远程 / 未知会话)→ 走远程镜像降级
   }
   const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
-  const remote = remoteProjectsStore.getMergedRemoteSessions().find((s) => s.id === sessionId);
+  const remote = remoteProjectsStore.getVisibleMergedRemoteSessions().find((s) => s.id === sessionId);
   const remoteTitle = remote?.title?.trim();
   return remoteTitle ? projectResolvedChipTitle(remoteTitle) : null;
 }

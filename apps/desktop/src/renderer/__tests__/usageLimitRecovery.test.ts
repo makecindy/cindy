@@ -31,7 +31,96 @@ describe('usage limit recovery detection', () => {
         },
         NOW,
       ),
-    ).toEqual({ resetAtMs: NOW + 75 * 60_000 });
+    ).toEqual({ resetAtMs: NOW + 75 * 60_000, isAccountUsageLimit: true });
+  });
+
+  it('parses the Codex app-server "try again at" wording in local time', () => {
+    const sameDay = new Date(NOW);
+    sameDay.setHours(23, 30, 0, 0);
+    if (sameDay.getTime() <= NOW) sameDay.setDate(sameDay.getDate() + 1);
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          codexErrorInfo: 'usageLimitExceeded',
+          message: "You've hit your usage limit. Upgrade to Pro, or try again at 11:30 PM.",
+        },
+        NOW,
+      )?.resetAtMs,
+    ).toBe(sameDay.getTime());
+
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          codexErrorInfo: 'usageLimitExceeded',
+          message: "You've hit your usage limit. Try again at Jan 27, 2026 3:05 PM.",
+        },
+        NOW,
+      )?.resetAtMs,
+    ).toBe(new Date(2026, 0, 27, 15, 5).getTime());
+  });
+
+  it('drops zone-less clock times when the local time zone is not trusted (SSH sessions)', () => {
+    const remote = { localTimeZoneTrusted: false };
+    expect(
+      extractUsageLimitRecoveryHint(
+        { codexErrorInfo: 'usageLimitExceeded', message: 'Try again at Jan 27, 2026 3:05 PM.' },
+        NOW,
+        remote,
+      )?.resetAtMs,
+    ).toBeNull();
+    // 带时区的钟点与相对时长不受影响。
+    expect(
+      extractUsageLimitRecoveryHint(
+        { sdkError: 'rate_limit', message: "You've hit your limit · resets 11pm (UTC)" },
+        NOW,
+        remote,
+      )?.resetAtMs,
+    ).toBe(Date.parse('2026-01-24T23:00:00.000Z'));
+    expect(
+      extractUsageLimitRecoveryHint(
+        { codexErrorInfo: 'usageLimitExceeded', message: 'Try again in 1h 15m.' },
+        NOW,
+        remote,
+      )?.resetAtMs,
+    ).toBe(NOW + 75 * 60_000);
+  });
+
+  it("parses Pi's approximate ChatGPT relative reset", () => {
+    expect(
+      extractUsageLimitRecoveryHint(
+        { message: 'You have hit your ChatGPT usage limit (plus plan). Try again in ~12 min.' },
+        NOW,
+      )?.resetAtMs,
+    ).toBe(NOW + 12 * 60_000);
+  });
+
+  it('extracts the organization plan and reset time from the Codex 429 payload', () => {
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          message:
+            'API Error: Request rejected (429) · {"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"business","resets_at":1788220709,"eligible_promo":null,"resets_in_seconds":1264528}}',
+        },
+        Date.parse('2026-08-17T00:00:00.000Z'),
+      ),
+    ).toEqual({
+      resetAtMs: Date.parse('2026-08-31T23:58:29.000Z'),
+      isAccountUsageLimit: true,
+      planType: 'business',
+    });
+  });
+
+  it('does not classify a transient Codex 429 as an account usage limit', () => {
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          errorStatus: 429,
+          codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } },
+          message: 'Too many requests',
+        },
+        NOW,
+      ),
+    ).toEqual({ resetAtMs: null });
   });
 
   it('parses the real Claude session-limit wording with a named timezone', () => {
@@ -44,6 +133,18 @@ describe('usage limit recovery detection', () => {
       ),
     ).toEqual({ resetAtMs: Date.parse('2026-01-24T13:10:00.000Z') });
   });
+
+  // Unit regression: the screenshot's text-only five-hour error was not recognized,
+  // so its explicit timezone/reset was lost. Existing cases only covered session/weekly.
+  it.each(["You've hit your 5-hour limit", 'You’ve hit your 5-hour limit'])(
+    'parses the five-hour deadline without SDK metadata: %s', (message) => {
+      expect(extractUsageLimitRecoveryHint(
+        { message: `${message} · resets 2:30am (Pacific/Auckland)` },
+        Date.parse('2026-11-11T10:00:00Z'),
+        { localTimeZoneTrusted: false },
+      )).toEqual({ resetAtMs: Date.parse('2026-11-11T13:30:00Z') });
+    },
+  );
 
   it('normalizes Intl midnight hour 24 while parsing a time-of-day reset', () => {
     const originalFormatToParts = Intl.DateTimeFormat.prototype.formatToParts;
@@ -108,6 +209,17 @@ describe('usage limit recovery detection', () => {
     ).toBeNull();
     expect(
       extractUsageLimitRecoveryHint({ message: 'insufficient_quota: add billing credits' }, NOW),
+    ).toBeNull();
+  });
+
+  it('keeps an upstream overload that also says "rate limit exceeded" out of the limit path', () => {
+    // 实录文案同时命中限额正则与过载短语，过载短语必须优先(否则会按限额的周期
+    // 重置去安排自动续跑，issue #7897)。
+    expect(
+      extractUsageLimitRecoveryHint(
+        { message: 'rate limit exceeded: The engine is currently overloaded, please try again later' },
+        NOW,
+      ),
     ).toBeNull();
   });
 });

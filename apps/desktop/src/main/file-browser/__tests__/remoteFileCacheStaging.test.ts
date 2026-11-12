@@ -27,7 +27,6 @@ const {
   getRemoteFileCacheRoot,
   stageLocalFileToCache,
   sweepCacheOnStartup,
-  sweepStagedChatAttachmentsOnStartup,
 } = await import('../remote-file-cache');
 
 afterEach(async () => {
@@ -71,127 +70,7 @@ describe('chat attachment staging cache', () => {
     await expect(fs.readFile(stagedPath)).resolves.toEqual(payload);
   });
 
-  it('sweeps only old, unreferenced files for the current owner', async () => {
-    const ownerId = 'owner-a';
-    const otherOwnerId = 'owner-b';
-    const ownerRoot = getChatAttachmentOwnerCacheRoot(ownerId);
-    const otherOwnerRoot = getChatAttachmentOwnerCacheRoot(otherOwnerId);
-    await fs.mkdir(ownerRoot, { recursive: true });
-    await fs.mkdir(otherOwnerRoot, { recursive: true });
-
-    const orphanPath = path.join(ownerRoot, 'orphan.bin');
-    const protectedPath = path.join(ownerRoot, 'protected.bin');
-    const partialPath = path.join(ownerRoot, 'partial.bin.part');
-    const freshPath = path.join(ownerRoot, 'fresh.bin');
-    const otherOwnerPath = path.join(otherOwnerRoot, 'other.bin');
-    await Promise.all([
-      fs.writeFile(orphanPath, 'orphan'),
-      fs.writeFile(protectedPath, 'protected'),
-      fs.writeFile(partialPath, 'partial'),
-      fs.writeFile(freshPath, 'fresh'),
-      fs.writeFile(otherOwnerPath, 'other'),
-    ]);
-    const oldTime = new Date(Date.now() - 60_000);
-    await Promise.all([
-      fs.utimes(orphanPath, oldTime, oldTime),
-      fs.utimes(protectedPath, oldTime, oldTime),
-      fs.utimes(partialPath, oldTime, oldTime),
-      fs.utimes(otherOwnerPath, oldTime, oldTime),
-    ]);
-
-    await expect(
-      sweepStagedChatAttachmentsOnStartup({
-        ownerId,
-        protectedPaths: [protectedPath],
-        createdBeforeMs: Date.now() - 1_000,
-      }),
-    ).resolves.toMatchObject({ inspected: 4, removed: 2, protected: 1 });
-
-    await expect(fs.stat(orphanPath)).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(fs.stat(partialPath)).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(fs.stat(protectedPath)).resolves.toBeDefined();
-    await expect(fs.stat(freshPath)).resolves.toBeDefined();
-    await expect(fs.stat(otherOwnerPath)).resolves.toBeDefined();
-  });
-
-  it('does not load persisted paths when the owner cache has no stale files', async () => {
-    const loadProtectedPaths = vi.fn(async () => {
-      throw new Error('must not query message bodies when there is nothing to sweep');
-    });
-
-    await expect(
-      sweepStagedChatAttachmentsOnStartup({
-        ownerId: 'owner-empty',
-        createdBeforeMs: Date.now() - 1_000,
-        loadProtectedPaths,
-      }),
-    ).resolves.toMatchObject({ inspected: 0, removed: 0, protected: 0 });
-    expect(loadProtectedPaths).not.toHaveBeenCalled();
-
-    const ownerRoot = getChatAttachmentOwnerCacheRoot('owner-fresh');
-    await fs.mkdir(ownerRoot, { recursive: true });
-    const freshPath = path.join(ownerRoot, 'fresh.bin');
-    await fs.writeFile(freshPath, 'fresh');
-
-    await expect(
-      sweepStagedChatAttachmentsOnStartup({
-        ownerId: 'owner-fresh',
-        createdBeforeMs: Date.now() - 1_000,
-        loadProtectedPaths,
-      }),
-    ).resolves.toMatchObject({ inspected: 1, removed: 0, protected: 0 });
-    expect(loadProtectedPaths).not.toHaveBeenCalled();
-    await expect(fs.stat(freshPath)).resolves.toBeDefined();
-  });
-
-  it('loads persisted paths only after it finds stale cache files', async () => {
-    const ownerId = 'owner-stale';
-    const ownerRoot = getChatAttachmentOwnerCacheRoot(ownerId);
-    await fs.mkdir(ownerRoot, { recursive: true });
-    const orphanPath = path.join(ownerRoot, 'orphan.bin');
-    const protectedPath = path.join(ownerRoot, 'protected.bin');
-    await Promise.all([fs.writeFile(orphanPath, 'orphan'), fs.writeFile(protectedPath, 'kept')]);
-    const oldTime = new Date(Date.now() - 60_000);
-    await Promise.all([
-      fs.utimes(orphanPath, oldTime, oldTime),
-      fs.utimes(protectedPath, oldTime, oldTime),
-    ]);
-    const loadProtectedPaths = vi.fn(async () => [protectedPath]);
-
-    await expect(
-      sweepStagedChatAttachmentsOnStartup({
-        ownerId,
-        createdBeforeMs: Date.now() - 1_000,
-        loadProtectedPaths,
-      }),
-    ).resolves.toMatchObject({ inspected: 2, removed: 1, protected: 1 });
-    expect(loadProtectedPaths).toHaveBeenCalledOnce();
-    await expect(fs.stat(orphanPath)).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(fs.stat(protectedPath)).resolves.toBeDefined();
-  });
-
-  it('stops before deleting when the owner is no longer current', async () => {
-    const ownerId = 'owner-switch';
-    const ownerRoot = getChatAttachmentOwnerCacheRoot(ownerId);
-    await fs.mkdir(ownerRoot, { recursive: true });
-    const orphanPath = path.join(ownerRoot, 'orphan.bin');
-    await fs.writeFile(orphanPath, 'orphan');
-    await fs.utimes(orphanPath, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
-    const loadProtectedPaths = vi.fn(async () => []);
-
-    await expect(
-      sweepStagedChatAttachmentsOnStartup({
-        ownerId,
-        createdBeforeMs: Date.now() - 1_000,
-        loadProtectedPaths,
-        canContinue: () => false,
-      }),
-    ).resolves.toMatchObject({ inspected: 1, removed: 0, protected: 0 });
-    expect(loadProtectedPaths).not.toHaveBeenCalled();
-    await expect(fs.stat(orphanPath)).resolves.toBeDefined();
-  });
-
-  it('renderer cleanup removes only current-owner files not retained by messages', async () => {
+  it('renderer cleanup removes only files from the explicitly discarded current-owner draft', async () => {
     const ownerId = 'owner-a';
     const ownerRoot = getChatAttachmentOwnerCacheRoot(ownerId);
     const otherOwnerRoot = getChatAttachmentOwnerCacheRoot('owner-b');
@@ -211,8 +90,7 @@ describe('chat attachment staging cache', () => {
 
     await cleanupOwnedUnpersistedStagedChatAttachments({
       ownerId,
-      filePaths: [draftPath, persistedPath, otherOwnerPath, nestedPath],
-      protectedPaths: [persistedPath],
+      filePaths: [draftPath, otherOwnerPath, nestedPath],
     });
 
     await expect(fs.stat(draftPath)).rejects.toMatchObject({ code: 'ENOENT' });
@@ -231,7 +109,6 @@ describe('chat attachment staging cache', () => {
     await cleanupOwnedUnpersistedStagedChatAttachments({
       ownerId,
       filePaths: [draftPath],
-      protectedPaths: [],
       canRemove: () => false,
     });
 

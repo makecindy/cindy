@@ -156,6 +156,11 @@ async function createRegistry(
     onSessionClosed,
     ...overrides,
   });
+  // Register cleanup at creation so assertions cannot skip releasing this fixture.
+  cleanupFns.push(() => {
+    registry.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
   return { registry, tmpDir, sockDir, envDir, onSessionClosed };
 }
 
@@ -185,8 +190,7 @@ afterEach(() => {
 describe('ensure', () => {
   // 1a. 新建 spawn
   it('should spawn a new session (isReattach=false)', async () => {
-    const { registry, tmpDir, onSessionClosed } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry, onSessionClosed } = await createRegistry();
 
     const child = makeChild();
     mockSpawn.mockReturnValueOnce(child);
@@ -215,8 +219,7 @@ describe('ensure', () => {
 
   // 1b. 已存在 + 同 envHash + restart=false → isReattach=true（不杀）
   it('should reattach when same envHash and restart=false', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry();
 
     const child1 = makeChild();
     mockSpawn.mockReturnValueOnce(child1);
@@ -236,8 +239,7 @@ describe('ensure', () => {
 
   // 1c. 不同 envHash + restart=true → SIGTERM 旧 + 新 spawn
   it('should kill old and spawn new when different envHash and restart=true', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry();
 
     const child1 = makeChild();
     mockSpawn.mockReturnValueOnce(child1);
@@ -257,10 +259,30 @@ describe('ensure', () => {
     child2.emit('close', 0, null);
   });
 
+  // 1c-2. 同 envHash + restart=true（Host 每次 ensure 都传 restart:true）→ 仍 attach。
+  // 提示词走文件后命令行不再随内容变化，这一条就是「内容没变就别重启旧进程」的落点。
+  it('should attach (not restart) when same envHash and restart=true', async () => {
+    const { registry } = await createRegistry();
+
+    const child1 = makeChild();
+    mockSpawn.mockReturnValueOnce(child1);
+    mockCreateServer.mockReturnValueOnce(makeServer());
+
+    const r1 = await registry.ensure('s1', 'cmd', { K: 'v' }, 'hash-same', true);
+    expect(r1.isReattach).toBe(false);
+
+    const r2 = await registry.ensure('s1', 'cmd', { K: 'v' }, 'hash-same', true);
+    expect(r2.isReattach).toBe(true);
+    expect(r2.sockPath).toBe(r1.sockPath);
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(child1.kill).not.toHaveBeenCalled();
+
+    child1.emit('close', 0, null);
+  });
+
   // 1d. 不同 envHash + restart=false → 纯 attach（不杀旧）
   it('should pure attach when different envHash and restart=false', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry();
 
     mockSpawn.mockReturnValueOnce(makeChild());
     mockCreateServer.mockReturnValueOnce(makeServer());
@@ -275,8 +297,7 @@ describe('ensure', () => {
 
   // 1e. In-flight spawn dedup:并发 ensure 同一 id 只 spawn 一次
   it('should deduplicate concurrent ensure for same sessionId', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry();
 
     // Delay spawn resolution so both ensures hit pendingSpawns
     let resolveSpawn: (child: any) => void;
@@ -304,8 +325,7 @@ describe('ensure', () => {
 
   // 1f: 已存在 + 同 envHash + restart=true → 不杀(同 hash)
   it('should reattach when same envHash even with restart=true', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry();
 
     mockSpawn.mockReturnValueOnce(makeChild());
     mockCreateServer.mockReturnValueOnce(makeServer());
@@ -322,8 +342,7 @@ describe('ensure', () => {
 describe('kill', () => {
   // 2a. 正常 kill:SIGTERM → 进程退出
   it('should kill an active session (SIGTERM → exit)', async () => {
-    const { registry, tmpDir, onSessionClosed } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry, onSessionClosed } = await createRegistry();
 
     const child = makeChild();
     mockSpawn.mockReturnValueOnce(child);
@@ -346,8 +365,7 @@ describe('kill', () => {
   it('should throw SESSION_KILL_SURVIVED when process survives SIGKILL', async () => {
     vi.useFakeTimers();
     try {
-      const { registry, tmpDir } = await createRegistry();
-      cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+      const { registry } = await createRegistry();
 
       const child = makeSurviveChild();
       mockSpawn.mockReturnValueOnce(child);
@@ -379,8 +397,7 @@ describe('kill', () => {
 
   // 2c. 双 kill 幂等
   it('should be idempotent on double kill', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry();
 
     const child = makeChild();
     mockSpawn.mockReturnValueOnce(child);
@@ -398,8 +415,7 @@ describe('kill', () => {
 
   // 2d. kill in-flight spawn
   it('should kill an in-flight spawn (wait for spawn then kill)', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry();
 
     // Make spawn slow: server.listen delayed
     let resolveListen: () => void;
@@ -438,16 +454,14 @@ describe('kill', () => {
 
   // 2e. SESSION_NOT_FOUND
   it('should throw SESSION_NOT_FOUND for unknown session', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry();
 
     await expect(registry.kill('no-such-session')).rejects.toMatchObject({ code: 'SESSION_NOT_FOUND' });
   });
 
   // 2f: kill in-flight spawn where spawn fails → kill succeeds (幂等)
   it('should treat kill as success when in-flight spawn fails', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry();
 
     // Make spawn fail immediately
     mockSpawn.mockImplementationOnce(() => { throw new Error('spawn ENOENT'); });
@@ -464,8 +478,7 @@ describe('kill', () => {
 describe('list / shutdownAll / teardown identity', () => {
   // 3a. list 返回正确
   it('should list all sessions with correct fields', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry();
 
     mockSpawn.mockReturnValueOnce(makeChild({ pid: 100 }));
     mockCreateServer.mockReturnValueOnce(makeServer());
@@ -492,8 +505,7 @@ describe('list / shutdownAll / teardown identity', () => {
 
   // 3b. shutdownAll 排空 pending + 双轮扫描
   it('should drain pending spawns and kill all sessions during shutdownAll', async () => {
-    const { registry, tmpDir, onSessionClosed } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry, onSessionClosed } = await createRegistry();
 
     // First spawn: normal
     const child1 = makeChild();
@@ -532,7 +544,6 @@ describe('list / shutdownAll / teardown identity', () => {
 
   it('awaits close-handler teardown cleanup during shutdownAll', async () => {
     const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
 
     const child = makeChild();
     mockSpawn.mockReturnValueOnce(child);
@@ -553,7 +564,6 @@ describe('list / shutdownAll / teardown identity', () => {
 
   it('collects natural-exit teardown while shutdownAll drains pending spawns', async () => {
     const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
 
     const live = makeChild();
     mockSpawn.mockReturnValueOnce(live);
@@ -586,7 +596,6 @@ describe('list / shutdownAll / teardown identity', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const { registry, tmpDir, onSessionClosed } = await createRegistry();
-      cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
 
       // survivor:杀不死(D-state)
       const survivor = makeSurviveChild();
@@ -621,8 +630,7 @@ describe('list / shutdownAll / teardown identity', () => {
 
   // 3c. stale entry teardown 不删新会话（身份校验）
   it('should not remove a newer session with same id during stale teardown', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry();
 
     const child1 = makeChild();
     mockSpawn.mockReturnValueOnce(child1);
@@ -659,10 +667,9 @@ describe('list / shutdownAll / teardown identity', () => {
 // ── 4. 空闲回收 ──────────────────────────────────────────
 describe('idle recycling', () => {
   it('should recycle session that exceeds idle timeout', async () => {
-    const { registry, tmpDir, onSessionClosed } = await createRegistry({
+    const { registry, onSessionClosed } = await createRegistry({
       idleTimeoutMs: 1, // very short timeout
     });
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
 
     const child = makeChild();
     mockSpawn.mockReturnValueOnce(child);
@@ -686,10 +693,9 @@ describe('idle recycling', () => {
   });
 
   it('should not recycle session within idle boundary', async () => {
-    const { registry, tmpDir, onSessionClosed } = await createRegistry({
+    const { registry, onSessionClosed } = await createRegistry({
       idleTimeoutMs: 60_000, // 60 seconds
     });
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
 
     const child = makeChild();
     mockSpawn.mockReturnValueOnce(child);
@@ -708,10 +714,9 @@ describe('idle recycling', () => {
   });
 
   it('should not recycle session with attached socket', async () => {
-    const { registry, tmpDir } = await createRegistry({
+    const { registry } = await createRegistry({
       idleTimeoutMs: 1,
     });
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
 
     const child = makeChild();
     mockSpawn.mockReturnValueOnce(child);
@@ -736,8 +741,7 @@ describe('idle recycling', () => {
   });
 
   it('should guard against connected client in killChild (TOCTOU)', async () => {
-    const { registry, tmpDir } = await createRegistry({ idleTimeoutMs: 1 });
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry({ idleTimeoutMs: 1 });
 
     const child = makeChild();
     mockSpawn.mockReturnValueOnce(child);
@@ -763,8 +767,7 @@ describe('idle recycling', () => {
   });
 
   it('explicit kill ignores attached socket — must terminate the process (round 40-w3 CRITICAL)', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry();
 
     const child = makeChild();
     mockSpawn.mockReturnValueOnce(child);
@@ -789,7 +792,6 @@ describe('idle recycling', () => {
 describe('env-file', () => {
   it('should write env-file with KEY=val format', async () => {
     const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
 
     mockSpawn.mockReturnValueOnce(makeChild());
     mockCreateServer.mockReturnValueOnce(makeServer());
@@ -804,7 +806,6 @@ describe('env-file', () => {
 
   it('should create env-file with restrictive permissions', async () => {
     const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
 
     mockSpawn.mockReturnValueOnce(makeChild());
     mockCreateServer.mockReturnValueOnce(makeServer());
@@ -824,7 +825,6 @@ describe('env-file', () => {
 
   it('should clean up env-file and child on spawn failure', async () => {
     const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
 
     const child = makeChild();
     mockSpawn.mockReturnValueOnce(child);
@@ -851,8 +851,7 @@ describe('env-file', () => {
   // 轮 40-w4-t5 MEDIUM-5:env-file 写入自身失败(原子写 tmp 失败)时 —— ensure
   // reject、无 env-file 残留、不 spawn child、不 listen socket。
   it('should reject cleanly when env-file write fails (no residue, no spawn)', async () => {
-    const { registry, tmpDir, envDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry, envDir } = await createRegistry();
 
     // 诱发 atomic write 的 writeFile(envTmp) 抛错:mockFsWriteFile 对 .tmp-
     // 路径抛 ENOSPC(其余路径透传真实实现)。
@@ -881,8 +880,7 @@ describe('env-file', () => {
     process.env.HTTP_PROXY = 'http://proxy.example:8080';
     process.env.MY_CUSTOM_VAR = 'should-not-leak';
     try {
-      const { registry, tmpDir } = await createRegistry();
-      cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+      const { registry } = await createRegistry();
 
       const child = makeChild();
       mockSpawn.mockReturnValueOnce(child);
@@ -911,7 +909,6 @@ describe('env-file', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const { registry, tmpDir } = await createRegistry();
-      cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
 
       const child = makeSurviveChild();
       mockSpawn.mockReturnValueOnce(child);
@@ -946,8 +943,7 @@ describe('env-file', () => {
   });
 
   it('5d. should clean stale socket file before listen', async () => {
-    const { registry, tmpDir, sockDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry, sockDir } = await createRegistry();
 
     // 轮 21-W4 HIGH:socket 文件名是 sha256(sessionId) 截断 —— stale 文件必须
     // 用 ensure 实际生成的 sockPath(registry 的 list 可查)才验证到清理逻辑。
@@ -977,8 +973,7 @@ describe('env-file', () => {
 // ── 6. shuttingDown ──────────────────────────────────────
 describe('shuttingDown', () => {
   it('should reject ensure with INTERNAL after beginShutdown', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry();
 
     registry.beginShutdown();
 
@@ -996,8 +991,7 @@ describe('shuttingDown', () => {
   });
 
   it('should reject ensure during shutdownAll', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry();
 
     mockSpawn.mockReturnValueOnce(makeChild());
     mockCreateServer.mockReturnValueOnce(makeServer());
@@ -1016,7 +1010,6 @@ describe('shuttingDown', () => {
 
   it('should reject new spawn during shutdown (guard in spawnSession before spawn)', async () => {
     const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
 
     // 守卫在 spawnSession 的 env-file 写后、spawn 前 —— 直接置 shuttingDown
     // 再 ensure 即可触发(自审轮 6 L-3 把守卫提前后的语义)。
@@ -1037,7 +1030,6 @@ describe('shuttingDown', () => {
 
   it('awaits env-file removal when shutdown races after the credential file is written', async () => {
     const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
 
     const envFile = path.join(tmpDir, 'envs', 'env-race-shutdown');
     const origRename = fsPromises.rename.bind(fsPromises);
@@ -1059,37 +1051,38 @@ describe('shuttingDown', () => {
 
 // ── 7. sessionId / env 校验 ──────────────────────────────
 describe('sessionId / env validation', () => {
-  it('should reject sessionId with path traversal (/)', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+  let fixture: Awaited<ReturnType<typeof createRegistry>>;
 
-    await expect(
-      registry.ensure('../escape', 'cmd', { K: 'v' }, 'h1', false),
-    ).rejects.toThrow(/unsafe sessionId/);
+  beforeEach(async () => {
+    fixture = await createRegistry();
   });
 
-  it('should reject sessionId with backslash (path traversal)', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
-
-    await expect(
-      registry.ensure('..\\escape', 'cmd', { K: 'v' }, 'h1', false),
-    ).rejects.toThrow(/unsafe sessionId/);
-  });
-
-  it('should reject sessionId with spaces', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
-
-    await expect(
-      registry.ensure('has space', 'cmd', { K: 'v' }, 'h1', false),
-    ).rejects.toThrow(/unsafe sessionId/);
+  it.each<[string, {
+    sessionId?: string;
+    cmd?: string;
+    env?: Record<string, string>;
+    error: RegExp;
+  }]>([
+    ['should reject sessionId with path traversal (/)', { sessionId: '../escape', error: /unsafe sessionId/ }],
+    ['should reject sessionId with backslash (path traversal)', { sessionId: '..\\escape', error: /unsafe sessionId/ }],
+    ['should reject sessionId with spaces', { sessionId: 'has space', error: /unsafe sessionId/ }],
+    ['should reject env key with leading digit', { env: { '1BAD': 'val' }, error: /unsafe env entry/ }],
+    ['should reject env key with special characters', { env: { 'KEY-INJECT=evil': 'val' }, error: /unsafe env entry/ }],
+    ['should reject env value with newline injection', { env: { KEY: 'val\nINJECT=evil' }, error: /unsafe env entry/ }],
+    ['should reject env value with carriage return', { env: { KEY: 'val\rINJECT=evil' }, error: /unsafe env entry/ }],
+    ['should reject env value with NUL byte (spawn would throw synchronously)', { env: { KEY: 'val\0INJECT' }, error: /unsafe env entry/ }],
+    ['should reject cmd with NUL byte', { cmd: 'echo a\0rm -rf /', error: /unsafe cmd/ }],
+  ])('%s', async (_name, { sessionId = 'test', cmd = 'cmd', env = { K: 'v' }, error }) => {
+    const { registry, envDir } = fixture;
+    await expect(registry.ensure(sessionId, cmd, env, 'h1', false)).rejects.toThrow(error);
+    // NUL inputs must fail before spawn could throw and leave a credential file.
+    // Keep that regression assertion for every invalid input.
+    expect(fs.readdirSync(envDir)).toHaveLength(0);
+    expect(mockSpawn).not.toHaveBeenCalled();
   });
 
   it('should accept sessionId with alphanumeric, dash, underscore', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
-
+    const { registry } = fixture;
     mockSpawn.mockReturnValueOnce(makeChild());
     mockCreateServer.mockReturnValueOnce(makeServer());
 
@@ -1102,68 +1095,6 @@ describe('sessionId / env validation', () => {
     );
     expect(result.sessionId).toBe('my-session_42');
   });
-
-  it('should reject env key with leading digit', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
-
-    await expect(
-      registry.ensure('test', 'cmd', { '1BAD': 'val' }, 'h1', false),
-    ).rejects.toThrow(/unsafe env entry/);
-  });
-
-  it('should reject env key with special characters', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
-
-    await expect(
-      registry.ensure('test', 'cmd', { 'KEY-INJECT=evil': 'val' }, 'h1', false),
-    ).rejects.toThrow(/unsafe env entry/);
-  });
-
-  it('should reject env value with newline injection', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
-
-    await expect(
-      registry.ensure('test', 'cmd', { KEY: 'val\nINJECT=evil' }, 'h1', false),
-    ).rejects.toThrow(/unsafe env entry/);
-  });
-
-  it('should reject env value with carriage return', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
-
-    await expect(
-      registry.ensure('test', 'cmd', { KEY: 'val\rINJECT=evil' }, 'h1', false),
-    ).rejects.toThrow(/unsafe env entry/);
-  });
-
-  // 轮 40-w5 MEDIUM:env value 含 NUL → Node spawn 同步抛 ERR_INVALID_ARG_VALUE,
-  // 发生在 env-file 写入之后会残留凭证文件。ensure 必须在写入前拒绝。
-  it('should reject env value with NUL byte (spawn would throw synchronously)', async () => {
-    const { registry, tmpDir, envDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
-
-    await expect(
-      registry.ensure('test', 'cmd', { KEY: 'val\0INJECT' }, 'h1', false),
-    ).rejects.toThrow(/unsafe env entry/);
-    // fail-fast: 任何 env-file 都不得写入
-    expect(fs.readdirSync(envDir)).toHaveLength(0);
-    expect(mockSpawn).not.toHaveBeenCalled();
-  });
-
-  // 轮 40-w5 MEDIUM:cmd 含 NUL 同理会同步抛 ERR_INVALID_ARG_VALUE。
-  it('should reject cmd with NUL byte', async () => {
-    const { registry, tmpDir, envDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
-
-    await expect(
-      registry.ensure('test', 'echo a\0rm -rf /', { K: 'v' }, 'h1', false),
-    ).rejects.toThrow(/unsafe cmd/);
-    expect(fs.readdirSync(envDir)).toHaveLength(0);
-    expect(mockSpawn).not.toHaveBeenCalled();
-  });
 });
 
 // ── 8. child stdout / stderr forwarding ─────────────────
@@ -1172,8 +1103,7 @@ describe('sessionId / env validation', () => {
 // The forwarding logic itself is independent of how the socket was connected.
 describe('child stdout / stderr forwarding', () => {
   it('8a. should forward stdout to attached socket', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry();
 
     const child = makeChild();
     mockSpawn.mockReturnValueOnce(child);
@@ -1193,8 +1123,7 @@ describe('child stdout / stderr forwarding', () => {
   });
 
   it('8b. should discard stdout when no client attached', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry();
 
     const child = makeChild();
     mockSpawn.mockReturnValueOnce(child);
@@ -1210,8 +1139,7 @@ describe('child stdout / stderr forwarding', () => {
   });
 
   it('8c. detached control frame (extension_ui_request) → fail-closed kill (round 42 P1)', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry();
 
     const child = makeChild();
     child.kill = vi.fn((_signal?: string) => { child.exitCode = 0; return true; });
@@ -1229,8 +1157,7 @@ describe('child stdout / stderr forwarding', () => {
   });
 
   it('8f. resumes paused stdout when conn closes before drain (round 16 HIGH — backpressure hang fix)', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry();
 
     const child = makeChild();
     mockSpawn.mockReturnValueOnce(child);
@@ -1255,8 +1182,7 @@ describe('child stdout / stderr forwarding', () => {
   });
 
   it('8c. should forward client data to child stdin', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry();
 
     const child = makeChild();
     mockSpawn.mockReturnValueOnce(child);
@@ -1280,8 +1206,7 @@ describe('child stdout / stderr forwarding', () => {
   });
 
   it('8d. should clear attachedSocket on connection close', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry();
 
     const child = makeChild();
     mockSpawn.mockReturnValueOnce(child);
@@ -1302,8 +1227,7 @@ describe('child stdout / stderr forwarding', () => {
   });
 
   it('8e. should emit pi stderr to logger', async () => {
-    const { registry, tmpDir } = await createRegistry();
-    cleanupFns.push(() => { registry.close(); fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry();
 
     const child = makeChild();
     mockSpawn.mockReturnValueOnce(child);
@@ -1320,16 +1244,14 @@ describe('child stdout / stderr forwarding', () => {
 // ── 9. close() ───────────────────────────────────────────
 describe('close', () => {
   it('should clear the idle timer on close', async () => {
-    const { registry, tmpDir } = await createRegistry({ idleTimeoutMs: 60_000 });
-    cleanupFns.push(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry({ idleTimeoutMs: 60_000 });
 
     // close() should not throw
     expect(() => registry.close()).not.toThrow();
   });
 
   it('should be safe to close without idle timer (idleTimeoutMs=0)', async () => {
-    const { registry, tmpDir } = await createRegistry({ idleTimeoutMs: 0 });
-    cleanupFns.push(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+    const { registry } = await createRegistry({ idleTimeoutMs: 0 });
 
     expect(() => registry.close()).not.toThrow();
   });

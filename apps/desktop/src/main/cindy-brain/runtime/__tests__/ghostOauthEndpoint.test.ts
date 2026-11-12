@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { GhostKvError } from '../../ghostKvStore.js';
 import { GHOST_SECRET_VALUE_MAX_CHARS } from '../ghostSecretsEndpoint.js';
 import { handleGhostOauthRequest, type GhostOauthEndpointManager } from '../ghostOauthEndpoint.js';
-import type { GhostOauthDecl } from '../../ghostOauthAccounts.js';
+import { GhostOauthAccountManager, type GhostOauthDecl } from '../../ghostOauthAccounts.js';
 
 const GHOST = 'g-oauth';
 const DECL: GhostOauthDecl = {
@@ -75,6 +75,128 @@ function call(params: {
     ghostId: GHOST,
   });
 }
+
+describe('OAuth credential install target guard', () => {
+  const mutations = [
+    ['PUT', '/oauth/acct/client', '{"clientId":"fake-old-client"}', 'setClientConfig'],
+    ['DELETE', '/oauth/acct/client', '', 'clearClientConfig'],
+    ['DELETE', '/oauth/acct/accounts/acc-1', '', 'disconnectAccount'],
+    ['POST', '/oauth/acct/default', '{"accountId":"acc-1"}', 'setDefaultAccount'],
+    ['POST', '/oauth/acct/insufficient-scopes', '{"scopes":["read.a"]}', 'reportInsufficientScopes'],
+  ] as const;
+
+  it.each(mutations)('rejects %s %s after waiting for the mutation lock', async (method, pathname, body, mutation) => {
+    const manager = fakeManager();
+    const onChanged = vi.fn();
+    let current = true;
+    const result = await handleGhostOauthRequest({
+      method, pathname, ghostId: GHOST, oauthSecrets: SECRETS, manager, onChanged,
+      readBodyText: async () => body, isCurrent: () => current,
+      withMutationLock: async (_ghostId, task) => { current = false; return task(); },
+    });
+    expect(result).toEqual({ status: 403 });
+    expect(manager[mutation]).not.toHaveBeenCalled();
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it.each([...mutations.filter(([method]) => method !== 'DELETE'),
+    ['POST', '/oauth/acct/connect', '{}', 'connectAccount'] as const,
+  ])('rejects a late body for %s %s', async (method, pathname, body, mutation) => {
+    const manager = fakeManager();
+    const onChanged = vi.fn();
+    let current = true;
+    const result = await handleGhostOauthRequest({
+      method, pathname, ghostId: GHOST, oauthSecrets: SECRETS, manager, onChanged,
+      isCurrent: () => current,
+      readBodyText: async () => { current = false; return body; },
+    });
+    expect(result).toEqual({ status: 403 });
+    expect(manager[mutation]).not.toHaveBeenCalled();
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it.each(mutations)('allows %s %s for the unchanged install', async (method, pathname, body, mutation) => {
+    const manager = fakeManager();
+    const onChanged = vi.fn();
+    const result = await handleGhostOauthRequest({
+      method, pathname, ghostId: GHOST, oauthSecrets: SECRETS, manager, onChanged,
+      isCurrent: () => true, readBodyText: async () => body,
+      withMutationLock: async (_ghostId, task) => task(),
+    });
+    expect(result.status).toBe(204);
+    expect(manager[mutation]).toHaveBeenCalledTimes(1);
+    expect(onChanged).toHaveBeenCalledExactlyOnceWith('acct');
+  });
+
+  it('rechecks the protocol target inside the connect manager commit boundary', async () => {
+    let current = true;
+    const write = vi.fn();
+    const manager = fakeManager({
+      connectAccount: vi.fn(async (_ghostId, _secretKey, _decl, opts) => {
+        current = false;
+        opts?.assertCurrent?.();
+        write();
+        return { ok: false, error: 'INVALID_CONFIG' } as const;
+      }),
+    });
+    expect(await handleGhostOauthRequest({
+      method: 'POST', pathname: '/oauth/acct/connect', ghostId: GHOST, oauthSecrets: SECRETS,
+      manager, readBodyText: async () => '{}', isCurrent: () => current,
+    })).toEqual({ status: 403 });
+    expect(write).not.toHaveBeenCalled();
+  });
+});
+
+describe('OAuth connect target identity', () => {
+  it('rejects a same-declaration replacement during body reading through the real manager', async () => {
+    const originalTarget = { revision: 'approved-org', storagePart: 'helper' };
+    const replacementTarget = { revision: 'approved-root', storagePart: 'helper' };
+    let currentTarget = originalTarget;
+    const store = vi.fn(() => true);
+    const openExternal = vi.fn();
+    const manager = new GhostOauthAccountManager({
+      vault: { read: () => null, store, remove: vi.fn() },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal,
+      captureConnectTarget: () => currentTarget,
+      isConnectTargetCurrent: (_ghostId, _secretKey, _decl, expected) => expected === currentTarget,
+    });
+    const result = await handleGhostOauthRequest({
+      method: 'POST', pathname: '/oauth/acct/connect', ghostId: 'helper',
+      oauthSecrets: new Map([['acct', { ...DECL, clientId: 'fake-client' }]]),
+      manager,
+      readBodyText: async () => {
+        currentTarget = replacementTarget;
+        return JSON.stringify({ expectedConnectTarget: replacementTarget });
+      },
+    });
+    expect(result.status).toBe(200);
+    expect(JSON.parse(result.body ?? '{}')).toMatchObject({ ok: false, error: 'INVALID_CONFIG' });
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(store).not.toHaveBeenCalled();
+  });
+
+  it('captures the Host target before reading a body that replaces the instance', async () => {
+    const originalTarget = { revision: 'approved-org', storagePart: 'helper' };
+    const replacementTarget = { revision: 'approved-root', storagePart: 'helper' };
+    let currentTarget = originalTarget;
+    const captureConnectTarget = vi.fn(() => currentTarget);
+    const manager = fakeManager({ captureConnectTarget });
+    const result = await handleGhostOauthRequest({
+      method: 'POST', pathname: '/oauth/acct/connect', ghostId: 'helper', oauthSecrets: SECRETS,
+      manager,
+      readBodyText: async () => {
+        currentTarget = replacementTarget;
+        return JSON.stringify({ expectedConnectTarget: replacementTarget });
+      },
+    });
+    expect(result.status).toBe(200);
+    expect(captureConnectTarget).toHaveBeenCalledExactlyOnceWith('helper');
+    expect(manager.connectAccount).toHaveBeenCalledWith('helper', 'acct', DECL, {
+      expectedConnectTarget: originalTarget,
+    });
+  });
+});
 
 describe('GET /oauth', () => {
   it('回全部 oauth 凭证槽状态,零令牌字节', async () => {
@@ -197,6 +319,40 @@ describe('POST /oauth/<key>/connect', () => {
     });
     expect(outcome.status).toBe(200);
     expect(JSON.parse(outcome.body ?? '{}')).toMatchObject({ ok: false, error: 'TIMEOUT' });
+  });
+
+  it('tokenBroker 声明在注入判据返回 false 时被拒，返回 true 时放行', async () => {
+    const brokerDecl: GhostOauthDecl = { ...DECL, tokenBroker: 'feishu' };
+    const secrets = new Map<string, GhostOauthDecl>([['acct', brokerDecl]]);
+    const denied = fakeManager();
+    const forbidden = await handleGhostOauthRequest({
+      method: 'POST',
+      pathname: '/oauth/acct/connect',
+      readBodyText: async () => '',
+      oauthSecrets: secrets,
+      manager: denied,
+      ghostId: 'acme-feishu',
+      isTokenBrokerAuthorized: () => false,
+    });
+    expect(forbidden.status).toBe(200);
+    expect(JSON.parse(forbidden.body ?? '{}')).toMatchObject({
+      ok: false,
+      error: 'BROKER_FORBIDDEN',
+    });
+    expect(denied.connectAccount).not.toHaveBeenCalled();
+
+    const allowed = fakeManager();
+    const ok = await handleGhostOauthRequest({
+      method: 'POST',
+      pathname: '/oauth/acct/connect',
+      readBodyText: async () => '',
+      oauthSecrets: secrets,
+      manager: allowed,
+      ghostId: 'xd-feishu',
+      isTokenBrokerAuthorized: () => true,
+    });
+    expect(ok.status).toBe(200);
+    expect(allowed.connectAccount).toHaveBeenCalled();
   });
 
   it('GET → 405;流程异常 → 500', async () => {
@@ -480,6 +636,7 @@ describe('tokenBroker 门控', () => {
     pathname: string,
     manager = fakeManager(),
     body: Record<string, unknown> = {},
+    authorized = false,
   ) {
     return handleGhostOauthRequest({
       method,
@@ -488,6 +645,7 @@ describe('tokenBroker 门控', () => {
       oauthSecrets: BROKERED_SECRETS,
       manager,
       ghostId,
+      isTokenBrokerAuthorized: () => authorized,
     });
   }
 
@@ -503,9 +661,18 @@ describe('tokenBroker 门控', () => {
     expect(manager.clearClientConfig).not.toHaveBeenCalled();
   });
 
-  it('connect:官方前缀 id 放行;第三方 id 结构化拒(不触发授权流程)', async () => {
+  it('connect: missing grant denies even official-looking ids; authorized grant proceeds', async () => {
+    const deniedOfficial = fakeManager();
+    const denied = await callAs('xd-atlassian', 'POST', '/oauth/acct/connect', deniedOfficial);
+    expect(denied.status).toBe(200);
+    expect(JSON.parse(denied.body ?? '{}')).toMatchObject({
+      ok: false,
+      error: 'BROKER_FORBIDDEN',
+    });
+    expect(deniedOfficial.connectAccount).not.toHaveBeenCalled();
+
     const okManager = fakeManager();
-    const allowed = await callAs('xd-atlassian', 'POST', '/oauth/acct/connect', okManager);
+    const allowed = await callAs('xd-atlassian', 'POST', '/oauth/acct/connect', okManager, {}, true);
     expect(allowed.status).toBe(200);
     expect(okManager.connectAccount).toHaveBeenCalledTimes(1);
 
@@ -523,7 +690,7 @@ describe('tokenBroker 门控', () => {
     const manager = fakeManager();
     const selected = await callAs('xd-atlassian', 'POST', '/oauth/acct/connect', manager, {
       clientId: 'global-cid',
-    });
+    }, true);
     expect(selected.status).toBe(200);
     expect(manager.connectAccount).toHaveBeenCalledWith('xd-atlassian', 'acct', BROKERED, {
       clientId: 'global-cid',
@@ -532,8 +699,16 @@ describe('tokenBroker 门控', () => {
     const rejectedManager = fakeManager();
     const rejected = await callAs('xd-atlassian', 'POST', '/oauth/acct/connect', rejectedManager, {
       clientId: 'foreign-cid',
-    });
+    }, true);
     expect(rejected.status).toBe(400);
     expect(rejectedManager.connectAccount).not.toHaveBeenCalled();
   });
+});
+
+
+it('does not accept a remote context from a local guest request body', async () => {
+  const manager = fakeManager();
+  const result = await call({ method: 'POST', pathname: '/oauth/acct/connect', body: '{"remote":{"scope":"forged"}}', manager });
+  expect(result.status).toBe(200);
+  expect(manager.connectAccount).toHaveBeenCalledExactlyOnceWith(GHOST, 'acct', DECL, undefined);
 });

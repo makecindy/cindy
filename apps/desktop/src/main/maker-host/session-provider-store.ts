@@ -15,6 +15,7 @@
  */
 
 const bySession = new Map<string, string | null>();
+const hostedBindings = new Map<string, { allowsModel?: (providerId: string, model: string) => boolean }>();
 
 /** Canonical provider id used by runtime routing and every persistence adapter. */
 export function normalizeSessionProviderId(
@@ -27,12 +28,71 @@ export function normalizeSessionProviderId(
 
 /** 设定某会话的供应商(SET_MODEL 携带 providerId 时调用)。null/'' = 清除显式选择。 */
 export function setSessionProvider(sessionId: string, providerId: string | null): void {
+  hostedBindings.delete(sessionId);
   bySession.set(sessionId, normalizeSessionProviderId(providerId) ?? null);
+}
+
+/**
+ * 托管任务不创建本机 Session，也不经过 prepareStartOptions，须在启动 Agent 前登记来源。
+ * 每次运行持有独立登记：重连后的新运行、普通写入或账号清理都会令旧登记失效，
+ * 迟到的换源/回滚/收尾不能覆盖新运行或重新写回已清掉的来源。
+ */
+export function bindHostedSessionProvider(
+  sessionId: string,
+  providerId: string,
+  allowsModel?: (providerId: string, model: string) => boolean,
+): {
+  setProvider(providerId: string): void;
+  release(): void;
+} {
+  const binding = { allowsModel };
+  hostedBindings.set(sessionId, binding);
+  bySession.set(sessionId, normalizeSessionProviderId(providerId) ?? null);
+  return {
+    setProvider(nextProviderId) {
+      if (hostedBindings.get(sessionId) !== binding) return;
+      bySession.set(sessionId, normalizeSessionProviderId(nextProviderId) ?? null);
+    },
+    release() {
+      if (hostedBindings.get(sessionId) !== binding) return;
+      clearSessionProvider(sessionId);
+    },
+  };
+}
+
+/** Only remote owner tasks carry this gate; ordinary local sessions retain their routing behavior. */
+export function hasHostedSessionModelAccess(sessionId: string | null | undefined): boolean {
+  return !!sessionId && !!hostedBindings.get(sessionId)?.allowsModel;
+}
+
+/** Model is the exact catalog identity, resolved from the request's actual provider and wire model. */
+export function hostedSessionModelAllowed(sessionId: string, providerId: string, model: string): boolean {
+  try { return hostedBindings.get(sessionId)?.allowsModel?.(providerId, model) ?? true; }
+  catch { return false; }
+}
+
+/**
+ * 启动派发边界(`prepareStartOptions` 钩子)冻结调用方携带的来源:登记须早于第一次
+ * send 且不经 DB 往返 —— renderer 那份排在 createSession 之后、落库失败只记日志,
+ * 会让会话永久未登记而恒走默认路由。`undefined` = 调用方未携带选择,不写入:
+ * learn-host 等路径自己在 createSession 前写好 store,写 null 会清掉它们的选择。
+ * proxy 在 createSession 返回前反解不到 sessionId,首 turn 误路由(#4154)不在此闭合。
+ */
+export function freezeSessionProviderAtStart(
+  sessionId: string,
+  providerId: string | null | undefined,
+): void {
+  if (providerId !== undefined) setSessionProvider(sessionId, providerId);
 }
 
 /** 读取某会话的供应商;未设置或已清除返回 null(调用方据此走默认路由)。 */
 export function getSessionProvider(sessionId: string): string | null {
   return bySession.get(sessionId) ?? null;
+}
+
+/** 内存里是否已有该会话的来源条目(含显式 null)。未 hydrate 时为 false。 */
+export function hasSessionProvider(sessionId: string): boolean {
+  return bySession.has(sessionId);
 }
 
 /**
@@ -47,5 +107,12 @@ export function hydrateSessionProvider(sessionId: string, providerId: string | n
 
 /** 会话关闭/销毁时清理内存条目。 */
 export function clearSessionProvider(sessionId: string): void {
+  hostedBindings.delete(sessionId);
   bySession.delete(sessionId);
+}
+
+/** 账户 / app-session 边界清理全部 owner-scoped 路由。 */
+export function clearAllSessionProviders(): void {
+  hostedBindings.clear();
+  bySession.clear();
 }

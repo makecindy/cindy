@@ -17,11 +17,14 @@
 import { app, net } from 'electron';
 import * as canaryFlagStore from './canaryFlagStore';
 
-import { resolveUpdateChannel } from '@cindy/maker-shared/update-channel';
+import { resolveUpdateChannel, type UpdateChannel } from '@cindy/maker-shared/update-channel';
 
+import { supportsBetaUpdateChannel } from '../shared/updateChannelCapability';
 import { createLogger } from './logger';
 import { getClientEndpoint } from './clientEndpointsService';
 import { isBetaChannelEnabled } from './updateChannelStore';
+import { compareAppUpdateVersions, parseAppUpdateVersion } from './updateVersionPolicy';
+import { isRunningUnderArm64Translation } from './arm64Translation';
 
 const log = createLogger('manifestService');
 
@@ -90,6 +93,7 @@ export interface Manifest {
   /** Linux manifests omit agent assets; packaged Linux uses its official runtime fallback. */
   claudeCode?: ClaudeCodeManifest;
   codex?: CodexManifest;
+  codexPackage?: CodexManifest;
   ripgrep?: RipgrepManifest;
   pi?: PiManifest;
 }
@@ -97,16 +101,31 @@ export interface Manifest {
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const REQUEST_TIMEOUT_MS = 30_000;
+// Metadata only: bound accumulation even when a server keeps streaming a 200.
+const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 // ── State ──────────────────────────────────────────────────────────────────
 
 let cached: Manifest | null = null;
+/** 当前缓存对应的发布通道。读取时跟磁盘对账,共库另一实例切过渠道就丢掉。 */
+let cachedChannel: UpdateChannel | null = null;
 /**
  * manifest 代际:切渠道(clearCachedManifest)时 +1。fetchManifest 发起时快照,
  * 响应完成写 cached 前核对——若期间切了渠道,这次 in-flight 的旧渠道响应直接作废,
  * 不写缓存、返回 null,让调用方(agent prepare / 更新轮询)下次按新渠道重新 fetch。
  */
 let manifestEpoch = 0;
+const manifestListeners = new Set<(manifest: Manifest) => void>();
+
+/** Observers cannot delay or fail application update checks. */
+export function onManifestFetched(listener: (manifest: Manifest) => void): () => void {
+  manifestListeners.add(listener);
+  return () => { manifestListeners.delete(listener); };
+}
+
+function currentUpdateChannel(): UpdateChannel {
+  return resolveUpdateChannel(canaryFlagStore.read(), isBetaChannelEnabled());
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -155,16 +174,68 @@ export async function fetchManifest(
   timeoutMs?: number,
   signal?: AbortSignal,
 ): Promise<Manifest | null> {
+  return requestManifest(getPlatformKey(), true, timeoutMs, signal);
+}
+
+/** 只用于应用更新判断的原生架构清单：不写缓存、不通知监听者。 */
+const nativeAppUpdateTargetArch = new WeakMap<Manifest, 'arm64'>();
+
+/**
+ * 应用更新专用的清单。
+ *
+ * Apple 芯片上经 Rosetta 运行的 darwin-x64 包，按 process.arch 只会一直拿到 x64 清单，
+ * 永远留在转译状态。此时额外读取 darwin-arm64 同渠道清单：它不低于 x64 清单的版本就用它，
+ * 下一次更新即换成原生包（同版本也算，见 updateService.appUpdateRelation）。
+ * x64 清单照常经 fetchManifest 读取并写缓存——Claude Code / Codex 等引擎安装仍按
+ * 当前进程架构取资产，不能被 arm64 清单污染。arm64 清单读不到时退回 x64 清单。
+ */
+export async function fetchAppUpdateManifest(
+  timeoutMs?: number,
+  signal?: AbortSignal,
+): Promise<Manifest | null> {
+  const channel = currentUpdateChannel();
+  const epochAtStart = manifestEpoch;
+  const manifest = await fetchManifest(timeoutMs, signal);
+  if (process.platform !== 'darwin' || process.arch !== 'x64' || !isRunningUnderArm64Translation()) {
+    return manifest;
+  }
+  const native = await requestManifest('darwin-arm64', false, timeoutMs, signal);
+  // 两次读取之间切了渠道：已取到的 x64 清单也属旧渠道，整次作废，不能回退去装旧渠道包。
+  if (epochAtStart !== manifestEpoch || currentUpdateChannel() !== channel) {
+    log.info('manifest channel changed during app update lookup — discarding both responses');
+    return null;
+  }
+  // 只在 arm64 清单本身可安装（版本合法、带 hotfix）时替换，否则不能挡住已取到的 x64 更新。
+  const hotfix = native?.app?.hotfix;
+  if (!native || !parseAppUpdateVersion(native.app?.version) || !hotfix?.file || !hotfix.sha256) {
+    return manifest;
+  }
+  if (manifest && compareAppUpdateVersions(native.app.version, manifest.app?.version) === 'older') {
+    log.info('arm64 manifest %s is behind x64 %s — keeping x64 update', native.app?.version, manifest.app?.version);
+    return manifest;
+  }
+  nativeAppUpdateTargetArch.set(native, 'arm64');
+  return native;
+}
+
+/** fetchAppUpdateManifest 选中原生架构清单时返回 'arm64'，其余返回 undefined。 */
+export function getAppUpdateTargetArch(manifest: Manifest): 'arm64' | undefined {
+  return nativeAppUpdateTargetArch.get(manifest);
+}
+
+async function requestManifest(
+  platformKey: string,
+  publish: boolean,
+  timeoutMs?: number,
+  signal?: AbortSignal,
+): Promise<Manifest | null> {
   if (isDev()) return null;
   if (signal?.aborted) return null;
 
-  const channel = resolveUpdateChannel(
-    canaryFlagStore.read(),
-    isBetaChannelEnabled(),
-  );
+  const channel = currentUpdateChannel();
   const channelSuffix = channel === 'release' ? '' : `-${channel}`;
   // Cache-bust: append timestamp to prevent Chromium / CDN serving stale manifest
-  const url = `${getBaseUrl()}/manifest-${getPlatformKey()}${channelSuffix}.json?t=${Date.now()}`;
+  const url = `${getBaseUrl()}/manifest-${platformKey}${channelSuffix}.json?t=${Date.now()}`;
   // 快照发起时的代际:响应完成写 cached 前核对,期间切渠道则作废本次结果。
   const epochAtStart = manifestEpoch;
   log.info('Fetching (%s channel): %s', channel, url);
@@ -173,30 +244,50 @@ export async function fetchManifest(
     try {
       const request = net.request(url);
       let body = '';
+      let bodyBytes = 0;
       let settled = false;
-      let timeout: ReturnType<typeof setTimeout> | undefined;
+      let aborted = false;
 
       const finish = (value: Manifest | null, abortRequest = false): void => {
-        if (settled) return;
-        settled = true;
-        if (timeout) clearTimeout(timeout);
-        signal?.removeEventListener('abort', onAbort);
-        if (abortRequest) request.abort();
-        resolve(value);
+        if (!settled) {
+          settled = true;
+          if (timeout) clearTimeout(timeout);
+          signal?.removeEventListener('abort', onAbort);
+          resolve(value);
+        }
+        // Promise settlement must not prevent late response/error cleanup.
+        if (abortRequest && !aborted) {
+          aborted = true;
+          request.abort();
+        }
       };
       const onAbort = (): void => finish(null, true);
+      const timeout = setTimeout(() => finish(null, true), timeoutMs ?? REQUEST_TIMEOUT_MS);
       signal?.addEventListener('abort', onAbort, { once: true });
 
-      timeout = setTimeout(() => finish(null, true), timeoutMs ?? REQUEST_TIMEOUT_MS);
-
       request.on('response', (response) => {
+        // Keep an error listener even on responses discarded at the headers.
+        response.on('error', () => finish(null, true));
+        response.on('aborted', () => finish(null, true));
+        if (settled) {
+          finish(null, true);
+          return;
+        }
         if (response.statusCode !== 200) {
           log.info('HTTP %d for %s', response.statusCode, url);
-          finish(null);
+          // Unread Electron responses retain the native loader and data pipe.
+          finish(null, true);
           return;
         }
 
         response.on('data', (chunk) => {
+          if (settled) return;
+          bodyBytes += Buffer.byteLength(chunk);
+          if (bodyBytes > MAX_RESPONSE_BYTES) {
+            body = '';
+            finish(null, true);
+            return;
+          }
           body += chunk.toString();
         });
         response.on('end', () => {
@@ -205,25 +296,38 @@ export async function fetchManifest(
             const json = JSON.parse(body) as Manifest;
             // 响应回来前切了渠道:这是旧渠道的 manifest,不作废会污染 cached,
             // 让后续 agent prepare 装旧渠道资产。返回 null 让调用方下次按新渠道重取。
-            if (epochAtStart !== manifestEpoch) {
+            // 共库另一实例改开关不会推进本进程 epoch,所以还要再对一次当前通道。
+            if (epochAtStart !== manifestEpoch || currentUpdateChannel() !== channel) {
               log.info('manifest channel changed during fetch — discarding stale response');
               finish(null);
               return;
             }
-            cached = json;
             log.info('Fetched OK: app.version=%s, hotfix=%s', json.app?.version, json.app?.hotfix?.file ?? 'none');
+            if (!publish) {
+              finish(json);
+              return;
+            }
+            cached = json;
+            cachedChannel = channel;
             finish(json);
+            for (const listener of manifestListeners) {
+              try { listener(json); } catch { /* an optional observer cannot fail the update */ }
+            }
           } catch (err) {
             log.error('JSON parse failed:', err);
             finish(null);
           }
         });
-        response.on('error', () => finish(null));
       });
 
-      request.on('error', () => finish(null));
+      request.on('error', () => finish(null, true));
 
       try {
+        // A signal can be cancelled while the request is being constructed.
+        if (signal?.aborted) {
+          onAbort();
+          return;
+        }
         request.end();
       } catch {
         finish(null, true);
@@ -236,8 +340,15 @@ export async function fetchManifest(
 
 /**
  * Return the in-memory cached manifest (may be null if never fetched or dev mode).
+ * 读取时跟当前发布通道对账:共库另一实例切过渠道后,旧缓存不能再给 agent prepare 用。
  */
 export function getCachedManifest(): Manifest | null {
+  if (!cached) return null;
+  if (cachedChannel !== currentUpdateChannel()) {
+    log.info('cached manifest channel is stale — discarding');
+    clearCachedManifest();
+    return null;
+  }
   return cached;
 }
 
@@ -251,6 +362,7 @@ export function getCachedManifest(): Manifest | null {
  */
 export function clearCachedManifest(): void {
   cached = null;
+  cachedChannel = null;
   manifestEpoch += 1;
 }
 
@@ -264,17 +376,36 @@ export function clearCachedManifest(): void {
  * 「manifest 之后才判 isInstalled」顺序)——所以「能不能开」必须提前探明,
  * 而不是等用户重启后才发现坏了。
  *
- * 只判 HTTP 200 可达,不解析正文、不写 cache、不改当前发布通道。dev 不联网,
- * 直接返回 true(dev 不消费远程 manifest,无需预检)。
+ * HTTP 200 之后还要能解析出 app.version；Linux 还必须带完整可信的 .deb 元数据。
+ * 截断 JSON / 错误页 / 不完整安装清单都不能当成渠道可用。
+ * 不写 cache、不改当前发布通道。dev 不联网,直接返回 true。
  */
+function isUsableBetaManifest(manifest: Manifest): boolean {
+  if (!parseAppUpdateVersion(manifest.app?.version)) return false;
+  if (process.platform !== 'linux') return true;
+
+  const installer = manifest.app.installer;
+  return Boolean(
+    installer &&
+      typeof installer.file === 'string' &&
+      installer.file.endsWith('.deb') &&
+      typeof installer.sha256 === 'string' &&
+      /^[a-f0-9]{64}$/i.test(installer.sha256) &&
+      typeof installer.size === 'number' &&
+      Number.isFinite(installer.size) &&
+      installer.size > 0,
+  );
+}
+
 export function probeBetaManifest(timeoutMs = 8_000): Promise<boolean> {
+  if (!supportsBetaUpdateChannel(process.platform, process.arch)) return Promise.resolve(false);
   if (isDev()) return Promise.resolve(true);
   const url = `${getBaseUrl()}/manifest-${getPlatformKey()}-beta.json?t=${Date.now()}`;
   return new Promise<boolean>((resolve) => {
     try {
       const request = net.request(url);
+      let body = '';
       let settled = false;
-      let timeout: ReturnType<typeof setTimeout> | undefined;
       const finish = (value: boolean, abortRequest = false): void => {
         if (settled) return;
         settled = true;
@@ -282,11 +413,25 @@ export function probeBetaManifest(timeoutMs = 8_000): Promise<boolean> {
         if (abortRequest) request.abort();
         resolve(value);
       };
-      timeout = setTimeout(() => finish(false, true), timeoutMs);
+      const timeout = setTimeout(() => finish(false, true), timeoutMs);
       request.on('response', (response) => {
-        // 读完响应体以正确触发流结束、避免连接泄漏(内容不关心)。
-        response.on('data', () => {});
-        response.on('end', () => finish(response.statusCode === 200));
+        if (response.statusCode !== 200) {
+          response.on('data', () => {});
+          response.on('end', () => finish(false));
+          response.on('error', () => finish(false));
+          return;
+        }
+        response.on('data', (chunk) => {
+          body += chunk.toString();
+        });
+        response.on('end', () => {
+          try {
+            const json = JSON.parse(body) as Manifest;
+            finish(isUsableBetaManifest(json));
+          } catch {
+            finish(false);
+          }
+        });
         response.on('error', () => finish(false));
       });
       request.on('error', () => finish(false));

@@ -1,16 +1,17 @@
 {
   "id": "instagram-profile",
-  "match": ["instagram.com"],
-  "description": "读取某个 Instagram 账号的公开资料(用户名/昵称/粉丝数/关注数/发帖数/是否认证/简介)。先落到 instagram.com 域,再在页面内带登录 cookie 同源 fetch 内部 web_profile_info 接口——需要在持久浏览器里已登录 Instagram。",
-  "inputs": { "username": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://www.instagram.com" },
-    { "action": "wait", "loadState": "load" },
-    {
-      "action": "evaluate",
-      "as": "profile",
-      "fn": "async () => { const r = await fetch('https://www.instagram.com/api/v1/users/web_profile_info/?username=' + encodeURIComponent('{{username|js}}'), { credentials: 'include', headers: { 'X-IG-App-ID': '936619743392459' } }); const t = await r.text(); let d; try { d = JSON.parse(t); } catch (e) { throw new Error('Instagram 返回非 JSON(未登录或被风控),请在持久浏览器里登录 Instagram 后重试'); } const u = d && d.data && d.data.user; if (!u) throw new Error('未找到用户: {{username|js}}'); return { username: u.username, name: u.full_name || '', followers: (u.edge_followed_by && u.edge_followed_by.count) || 0, following: (u.edge_follow && u.edge_follow.count) || 0, posts: (u.edge_owner_to_timeline_media && u.edge_owner_to_timeline_media.count) || 0, verified: !!u.is_verified, private: !!u.is_private, bio: (u.biography || '').replace(/\\n/g, ' ').slice(0, 200), userId: u.id, url: 'https://www.instagram.com/' + u.username }; }"
-    }
+  "match": [
+    "instagram.com"
   ],
-  "output": "{{profile}}"
+  "description": "Get Instagram user profile info",
+  "access": "read",
+  "adapter": "instagram/profile",
+  "inputs": {
+    "username": {
+      "required": true,
+      "type": "str",
+      "description": "Instagram username"
+    }
+  },
+  "steps": []
 }

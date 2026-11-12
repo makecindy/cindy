@@ -1,16 +1,8 @@
 /**
- * Host capability invocation metadata for user messages.
- *
- * A Host capability Plugin is not a normal command Plugin: selecting it must
- * route the Agent to a Cindy-owned capability and must never synthesize a
- * `ghost_call`. The deterministic suffix below serves two purposes:
- *
- * - it tells the Agent which Host route the user explicitly selected;
- * - it persists enough structured identity for UserMessage to render the same
- *   invocation annotation used by command Plugins.
- *
- * Generation and parsing share one exact template. Anything that does not
- * match the complete suffix remains ordinary user text.
+ * Read-only display of Host capability directives in historical user messages.
+ * The retired composer no longer generates these directives. Keep the exact
+ * persisted template so old messages render their original invocation details;
+ * anything that does not match the complete suffix remains ordinary user text.
  */
 
 import type { GhostDirectiveSegment } from './ghostCommand';
@@ -27,15 +19,12 @@ export interface HostCapabilityDirectiveDisplay extends HostCapabilitySelection 
   raw: string;
 }
 
-export function routeForHostCapability(capability: string): string {
-  return capability === 'ios-simulator' ? 'cindy_ios_simulator' : capability;
-}
 
-/** The exact suffix sent to the Agent and shown in the invocation details. */
+/** Reconstruct the historical suffix for parsing and invocation details only. */
 export function hostCapabilityDirectiveSegments(
   selection: HostCapabilitySelection & { route?: string },
 ): GhostDirectiveSegment[] {
-  const route = selection.route ?? routeForHostCapability(selection.capability);
+  const route = selection.route ?? selection.capability;
   return [
     { text: '[Cindy Host 能力] 用户显式选择了「', injected: false },
     { text: selection.name, injected: true },
@@ -52,26 +41,6 @@ export function hostCapabilityDirectiveSegments(
       injected: false,
     },
   ];
-}
-
-function buildHostCapabilityDirective(selection: HostCapabilitySelection): string {
-  return hostCapabilityDirectiveSegments(selection)
-    .map((segment) => segment.text)
-    .join('');
-}
-
-/**
- * Append Host routing metadata without changing the user's own body.
- * `defaultPrompt` is used only when the capability chip was sent by itself.
- */
-export function expandHostCapabilityInvocation(
-  text: string,
-  selection: HostCapabilitySelection,
-  defaultPrompt: string,
-): string {
-  const body = text.trim() ? text : defaultPrompt;
-  const directive = buildHostCapabilityDirective(selection);
-  return `${body}\n\n${directive}`;
 }
 
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

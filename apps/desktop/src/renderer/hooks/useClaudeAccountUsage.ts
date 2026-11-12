@@ -12,7 +12,7 @@
  *   IPC 出口: electronAPI.maker.usage.{getAccount('claude-code'), onClaudeAccountChanged}
  *
  * 触发时机:
- *   - mount 时调一次 getAccount('claude-code'), main 端若无 snapshot 会 force 刷新一次
+ *   - mount / 手动刷新时调 getAccount('claude-code')，main 按既有节流查询后返回快照
  *   - 后续每个 cc turn done 后, main fire-and-forget 拉取并 push, 本 hook 收 push 直接覆盖
  *
  * 与 useAccountUsage(codex) 的差异:
@@ -25,7 +25,8 @@
  * 启用；自定义供应商即使复用相同 host 也不会读这份账号配额。
  */
 
-import { useEffect, useState } from 'react';
+import { CLAUDE_QUOTA_STATE_READ, isClaudeQuotaClear } from '../../shared/claudeQuotaState';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { MoneyCurrency } from '../../shared/regionalMoney';
 import { useAuth } from '../contexts/AuthContext';
@@ -46,15 +47,35 @@ export interface ClaudeAccountUsageSnapshot {
    * 此时消费方应隐藏 daily 段。
    */
   todaySpend: number | null;
+  /** 企业日额度开关；false 隐藏日额度和读取失败提示，旧网关路径不设置。 */
+  dailyLimitEnabled?: boolean;
   fetchedAt: number;
 }
 
 interface OwnerBoundSnapshot {
   ownerKey: string;
-  usage: ClaudeAccountUsageSnapshot;
+  cachedAt: number;
+  usage: ClaudeAccountUsageSnapshot | null;
+  unlimited: boolean;
 }
 
 let lastSnapshot: OwnerBoundSnapshot | null = null;
+
+// All panes for one account share a read. A null push emitted by that read must
+// not make an idle pane start another forced read and wake the other panes again.
+const reads = new Map<string, Promise<unknown>>();
+function readQuota(ownerKey: string): Promise<unknown> {
+  const pending = reads.get(ownerKey);
+  if (pending) return pending;
+  const request = Promise.resolve().then(() =>
+    window.electronAPI.maker.usage.getAccount('claude-code', CLAUDE_QUOTA_STATE_READ),
+  );
+  reads.set(ownerKey, request);
+  const clear = () => { if (reads.get(ownerKey) === request) reads.delete(ownerKey); };
+  void request.then(clear, clear);
+  return request;
+}
+
 
 function isSnapshot(v: unknown): v is ClaudeAccountUsageSnapshot {
   if (!v || typeof v !== 'object') return false;
@@ -68,49 +89,91 @@ function isSnapshot(v: unknown): v is ClaudeAccountUsageSnapshot {
   );
 }
 
-export function useClaudeAccountUsage(
-  enabled: boolean,
-): ClaudeAccountUsageSnapshot | null {
-  const { dataOwnerId, mode, user } = useAuth();
+export function useClaudeAccountUsageResult(enabled: boolean) {
+  const { dataOwnerId, dataOwnerGeneration, mode, user } = useAuth();
   const ownerKey =
     enabled &&
     dataOwnerId &&
     (mode === 'local' || (mode === 'cloud' && user?.membershipKind === 'org'))
-      ? `${mode}:${dataOwnerId}`
+      ? `${mode}:${dataOwnerId}:${dataOwnerGeneration}`
       : null;
   const [snapshot, setSnapshot] = useState<OwnerBoundSnapshot | null>(() =>
     ownerKey && lastSnapshot?.ownerKey === ownerKey ? lastSnapshot : null,
   );
 
-  // mount 拉一次 (warm-start: main 若无 snapshot 会 force 刷新, 那一次的结果走 push 通道补帧)
+  const reading = useRef(false);
+  const [revision, setRevision] = useState(0);
+  const refresh = useCallback(() => setRevision((value) => value + 1), []);
+  const [request, setRequest] = useState<{ ownerKey: string; loading: boolean } | null>(null);
+
+  // 初次打开和手动刷新共用 main 的账号隔离、请求合并与节流。
   useEffect(() => {
     if (!ownerKey) return;
+    const cached = lastSnapshot?.ownerKey === ownerKey ? lastSnapshot : null;
+    if (cached) setSnapshot(cached);
+    // Display warm data immediately, but read again to replay a missed authoritative clear.
     let cancelled = false;
-    void window.electronAPI.maker.usage
-      .getAccount('claude-code')
+    setRequest({ ownerKey, loading: true });
+    reading.current = true;
+    void readQuota(ownerKey)
       .then((res) => {
         if (cancelled) return;
+        if (isClaudeQuotaClear(res)) {
+          lastSnapshot = {
+            ownerKey,
+            cachedAt: Date.now(),
+            usage: null,
+            unlimited: res.quotaState === 'unlimited',
+          };
+          setSnapshot(lastSnapshot);
+          return;
+        }
+        // Unavailable reads must retain the last owner-bound snapshot.
         if (!isSnapshot(res)) return;
-        lastSnapshot = { ownerKey, usage: res };
+        lastSnapshot = { ownerKey, cachedAt: Date.now(), usage: res, unlimited: false };
         setSnapshot(lastSnapshot);
       })
       .catch(() => {
         /* best-effort warm-start */
+      })
+      .finally(() => {
+        if (!cancelled) {
+          reading.current = false;
+          setRequest({ ownerKey, loading: false });
+        }
       });
     return () => {
       cancelled = true;
+      reading.current = false;
     };
-  }, [ownerKey]);
+  }, [ownerKey, revision]);
 
   // 订阅 push (cc / codex-api turn done 后 main 推 — 都是同一把 XD key 的 spend)
   useEffect(() => {
     if (!ownerKey) return;
     return window.electronAPI.maker.usage.onClaudeAccountChanged((p) => {
+      if (p === null) {
+        if (lastSnapshot?.ownerKey === ownerKey) lastSnapshot = null;
+        setSnapshot(null);
+        // The legacy push cannot distinguish unlimited from invalidation. Read the explicit state.
+        if (!reading.current) refresh();
+        return;
+      }
       if (!isSnapshot(p)) return;
-      lastSnapshot = { ownerKey, usage: p };
+      lastSnapshot = { ownerKey, cachedAt: Date.now(), usage: p, unlimited: false };
       setSnapshot(lastSnapshot);
     });
-  }, [ownerKey]);
+  }, [ownerKey, refresh]);
 
-  return ownerKey && snapshot?.ownerKey === ownerKey ? snapshot.usage : null;
+  const currentSnapshot = lastSnapshot?.ownerKey === ownerKey ? lastSnapshot : snapshot;
+  return {
+    unlimited: Boolean(ownerKey && currentSnapshot?.ownerKey === ownerKey && currentSnapshot.unlimited),
+    usage: ownerKey && currentSnapshot?.ownerKey === ownerKey ? currentSnapshot.usage : null,
+    loading: Boolean(ownerKey && (request?.ownerKey !== ownerKey || request.loading)),
+    refresh,
+  };
+}
+
+export function useClaudeAccountUsage(enabled: boolean): ClaudeAccountUsageSnapshot | null {
+  return useClaudeAccountUsageResult(enabled).usage;
 }

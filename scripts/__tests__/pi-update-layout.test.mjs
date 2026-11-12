@@ -8,8 +8,10 @@ import test from 'node:test';
 import {
   assertPinnedRuntimeAsset,
   assetDigestMatchesUpstream,
+  ensurePiThemeAssets,
   extractArchive,
   flattenExtractedDir,
+  hasPiThemeAssets,
   readCachedAssetDigest,
 } from '../../tools/pi/update.mjs';
 
@@ -39,6 +41,19 @@ test('Pi updater still flattens the nested Unix release layout', (t) => {
   assert.ok(fs.statSync(path.join(dir, 'theme')).isDirectory());
 });
 
+test('Pi updater supplies fallback themes when an archive omits them', () => {
+  const dir = tempDir();
+  assert.equal(hasPiThemeAssets(dir), false);
+  ensurePiThemeAssets(dir);
+  assert.equal(hasPiThemeAssets(dir), true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'theme', 'dark.json'), 'utf8')).name, 'dark');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'theme', 'light.json'), 'utf8')).name, 'light');
+
+  fs.writeFileSync(path.join(dir, 'theme', 'dark.json'), '{"name":"custom"}');
+  ensurePiThemeAssets(dir);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'theme', 'dark.json'), 'utf8')).name, 'custom');
+});
+
 test('Pi updater extracts tar.gz archives streamed to the system tar', async (t) => {
   const root = tempDir();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -57,6 +72,27 @@ test('Pi updater extracts tar.gz archives streamed to the system tar', async (t)
   await extractArchive(path.join(root, 'fixture.tar.gz'), outputDir);
 
   assert.equal(fs.readFileSync(path.join(outputDir, 'pi', 'pi'), 'utf8'), 'pi-fixture');
+});
+
+test('Pi updater extracts Windows ZIP archives without dropping the first entry', async (t) => {
+  if (process.platform !== 'win32') return t.skip('Windows tar ZIP behavior');
+  const root = tempDir();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const inputDir = path.join(root, 'input');
+  const outputDir = path.join(root, 'output');
+  fs.mkdirSync(inputDir);
+  fs.mkdirSync(outputDir);
+  fs.writeFileSync(path.join(inputDir, 'pi.exe'), 'pi-fixture');
+
+  const created = spawnSync('tar', ['-a', '-cf', 'fixture.zip', '-C', 'input', 'pi.exe'], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  assert.equal(created.status, 0, created.stderr || created.error?.message);
+
+  await extractArchive(path.join(root, 'fixture.zip'), outputDir);
+
+  assert.equal(fs.readFileSync(path.join(outputDir, 'pi.exe'), 'utf8'), 'pi-fixture');
 });
 
 test('Pi updater rejects unreadable archives through the returned promise', async (t) => {

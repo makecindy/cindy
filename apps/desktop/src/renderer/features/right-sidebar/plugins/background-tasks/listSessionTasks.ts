@@ -19,8 +19,16 @@
 import {
   deriveAgentTaskStatus,
   isAgentTaskToolName,
+
+  isClaudeSubagentToolName,
+  isSubagentResultError,
+
+  lookupSubagentRunStatus,
+  normalizeAgentTaskTerminalStatus,
+
   subagentSpawnReceiptName,
   subagentSpawnResultIndicatesRunning,
+  type SubagentRunStatusIndex,
 } from '@cindy/maker-shared/agent-task';
 
 import type { Message } from '@/lib/ccAgent.types';
@@ -263,8 +271,10 @@ export function listSessionTasks(input: {
   messages: readonly Message[];
   taskUpdates: ReadonlyMap<string, AgentTaskUpdate> | undefined;
   isSessionStreaming: boolean;
+  /** Host `subagent_runs` status; same source and precedence as the chat cards. */
+  subagentRunStatuses?: SubagentRunStatusIndex;
 }): SessionTaskLists {
-  const { messages, taskUpdates, isSessionStreaming } = input;
+  const { messages, taskUpdates, isSessionStreaming, subagentRunStatuses } = input;
 
   // Pass 0:tool_result 的 toolUseId 查表(与 buildRenderItems Pass 0 同口径)。
   // 同时留住结果内容引用:历史 workflow(update 已随重载清空)从结果文本里
@@ -275,9 +285,9 @@ export function listSessionTasks(input: {
     if (m.role !== 'tool_result') continue;
     if (typeof m.toolUseId === 'string' && m.toolUseId.length > 0) {
       settledToolUseIds.add(m.toolUseId);
-      if (!resultContentByToolUseId.has(m.toolUseId)) {
-        resultContentByToolUseId.set(m.toolUseId, m.content);
-      }
+      // 同一 toolUseId 多行结果按「末条胜出」覆盖(与共享 buildMessageToolResultPairing
+      // 及聊天流一致):先写中间 <tool_use_error>、后写最终成功结果时,不得因首条误判 failed。
+      resultContentByToolUseId.set(m.toolUseId, m.content);
     }
   }
 
@@ -334,15 +344,41 @@ export function listSessionTasks(input: {
     // 的死任务(同步 Task 没有启动回执,永远不会有结果),断言 running 会让它
     // 永久转圈且无任何收口路径,按 stopped(被中断)呈现。
     const resultText = typeof resultContent === 'string' ? resultContent : undefined;
+    // 重载后与聊天卡(AgentTaskCard)共用 deriveAgentTaskStatus:持久化终态
+    // (agentMeta.agentTaskStatus)必须传入,否则列表与卡片会对同一任务给出不同终态。
+    const persistedStatus = msg.agentMeta?.agentTaskStatus;
+    // `<tool_use_error>` 是 Claude SDK 协议级标记,只对 Claude 子任务(Agent/Task)的结果
+    // 有意义。后台 Bash、PI subagent 与 Codex `collab:*` 的成功产物可能合法地以该前缀
+    // 开头,无条件判定会把成功任务误标成 failed(与 AgentTaskCard 同口径)。
+    const resultIsError = isClaudeSubagentToolName(toolName) && isSubagentResultError(resultText);
+    const durableStatus = isWorkflowTool
+      ? undefined
+      : lookupSubagentRunStatus(subagentRunStatuses, toolUseId, update);
     const status: AgentTaskStatus = isWorkflowTool
       ? update?.status ?? (settled ? 'completed' : isSessionStreaming ? 'running' : 'stopped')
       : update
         ? deriveAgentTaskStatus(update.status, resultText, {
+
+            persistedStatus,
+
+            durableStatus,
+
             resultIsLaunchReceipt:
               subagentSpawnReceiptName(toolName, toolInput, resultText) !== undefined
               || subagentSpawnResultIndicatesRunning(toolName, resultText),
+            resultIsError,
           })
-        : (settled ? 'completed' : isSessionStreaming ? 'running' : 'stopped');
+        : normalizeAgentTaskTerminalStatus(durableStatus)
+          ?? (settled
+            // 无 live update 的历史回放:settled 即终态。也走 deriveAgentTaskStatus:
+            // 持久化终态优先;错误结果收口为 failed;普通结果 completed。未 settled
+            // 时持久化终态仍优先(启动失败只写 agentTaskStatus、无 tool result 的
+            // 场景),否则沿用 running/stopped 的死任务语义 —— 与聊天卡同口径。
+            ? deriveAgentTaskStatus(resultIsError ? undefined : 'completed', resultText, {
+                persistedStatus,
+                resultIsError,
+              })
+            : (persistedStatus ?? (isSessionStreaming ? 'running' : 'stopped')));
     const provider: SessionTaskItem['provider'] =
       update?.provider ?? (toolName.startsWith('collab:') ? 'codex' : 'claude-code');
 
@@ -375,7 +411,14 @@ export function listSessionTasks(input: {
     const seenTaskIds = new Set<string>();
     let orphanOrder = messages.length;
     for (const update of taskUpdates.values()) {
-      if (!isSessionStreaming && update.status !== 'running') continue;
+      // 与配对行同一状态口径:subagent_runs 的终态收口 stale running(调用滑出
+      // 消息窗口时,聊天里的孤儿卡同样采用它)。后台 Bash / workflow 不进该表。
+      const durableStatus =
+        update.taskType === 'local_bash' || update.taskType === 'local_workflow'
+          ? undefined
+          : lookupSubagentRunStatus(subagentRunStatuses, undefined, update);
+      const status = deriveAgentTaskStatus(update.status, undefined, { durableStatus });
+      if (!isSessionStreaming && status !== 'running') continue;
       const primaryKey = update.parentToolUseId ?? update.taskId;
       if (
         seenTaskIds.has(update.taskId) ||
@@ -391,7 +434,7 @@ export function listSessionTasks(input: {
         taskId: update.taskId,
         kind,
         title: deriveTitle(kind, update, undefined),
-        status: update.status,
+        status,
         provider: update.provider,
         update,
         orderIndex: orphanOrder++,

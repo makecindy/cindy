@@ -11,18 +11,23 @@
 import { describe, expect, it } from 'vitest';
 
 import { SESSION_PERMISSION_DESTINATION, type InteractionRequest } from '@cindy/maker-core';
+import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../../shared/providerShareCredentialConsent';
 
 import { composeInteractionCard } from '../../../hook-control/interactions';
 import { ui } from '../../feishu/uiText';
 import { createCardBuilders } from '../cardBuilders';
 import {
   buildAskAnswerDecision,
+  buildAskAnswersDecision,
+  encodeAskOptionAnswers,
+  formatAskAnswersForDisplay,
   buildPermissionAllowAlwaysDecision,
   buildPermissionAllowOnceDecision,
   buildPermissionDenyDecision,
   buildPlanApproveDecision,
   buildPlanDenyDecision,
   composeInteractionModel,
+  needsAskMultiCard,
   BTN_LABEL_MAX,
   MAX_OPTIONS,
   MAX_PLAN_LEN,
@@ -31,7 +36,26 @@ import {
 } from '../interactionCardModel';
 import { cancelPending, registerPending } from '../pendingInteractions';
 
-const cards = createCardBuilders(ui, () => 'high');
+/**
+ * v1 单问卡视图: 飞书 ui 包已带 multi 打勾卡文案, 剥掉它等价于未提供打勾卡
+ * 的渠道(hook 侧 / telegram / wecom / wechat)—— 跨实现一致性断言的是这条
+ * 两侧共享的 v1 语义, 用剥离后的包才能锁住它不随飞书升级漂移。
+ */
+const uiV1 = {
+  ...ui,
+  cards: {
+    ...ui.cards,
+    ask: {
+      title: ui.cards.ask.title,
+      noOptionsHint: ui.cards.ask.noOptionsHint,
+      resolved: ui.cards.ask.resolved,
+    },
+  },
+} as typeof ui;
+
+const cards = createCardBuilders(uiV1, () => 'high');
+/** 飞书原样包(带 multi 打勾卡文案) — 多题/多选分发用。 */
+const feishuCards = createCardBuilders(ui, () => 'high');
 
 /** IM 侧按压 -> 决策: 与 cardActionHandler.decisionFromPress 同一张表。 */
 function imDecisionFromButton(
@@ -44,7 +68,7 @@ function imDecisionFromButton(
       return buildPermissionAllowOnceDecision();
     case 'permission:allow:always':
       return toolName
-        ? buildPermissionAllowAlwaysDecision(toolName)
+        ? buildPermissionAllowAlwaysDecision({ toolName })
         : buildPermissionAllowOnceDecision();
     case 'permission:deny':
       return buildPermissionDenyDecision(PERMISSION_USER_DENIED_REASON);
@@ -162,8 +186,85 @@ describe('composeInteractionModel — v1 规则', () => {
     ).toBeNull();
   });
 
+  it('questions 保留全部问题: 每问独立 multiSelect / 选项上限 / 降级, 顶层字段仍是第一问投影', () => {
+    const model = composeInteractionModel(ASK_MULTI)!;
+    if (model.kind !== 'ask_user_question') throw new Error('unreachable');
+    // 顶层 v1 投影不变(第一问)
+    expect(model.question.question).toBe('这次用哪个方案实现?');
+    expect(model.choices).toHaveLength(MAX_OPTIONS);
+    // questions 全量: 两问都在, 各自截到 MAX_OPTIONS
+    expect(model.questions).toHaveLength(2);
+    const [q0, q1] = model.questions;
+    expect(q0.multiSelect).toBe(true);
+    expect(q0.choices).toHaveLength(MAX_OPTIONS);
+    expect(q1.multiSelect).toBe(false);
+    expect(q1.choices).toHaveLength(1);
+    expect(q1.choices[0].decision).toEqual({
+      kind: 'ask_user_question',
+      answers: { '第二问在 v1 不渲染': '不该出现' },
+    });
+  });
+
+  it('needsAskMultiCard: 多题或含多选才走打勾卡; 混合问卷只要有选项题仍走打勾卡', () => {
+    expect(needsAskMultiCard(ASK_MULTI)).toBe(true); // 多题 + 多选
+    expect(needsAskMultiCard(ASK_NO_OPTIONS)).toBe(false); // 单题非多选
+    expect(
+      needsAskMultiCard({
+        kind: 'ask_user_question',
+        requestId: 'r',
+        questions: [{ question: '挑几个', multiSelect: true, options: [{ label: 'A' }] }],
+      }),
+    ).toBe(true); // 单题但多选
+    expect(
+      needsAskMultiCard({ kind: 'ask_user_question', requestId: 'r', questions: [] }),
+    ).toBe(false);
+    // 混合问卷: 选项题可在打勾卡作答, 无选项题只展示、提交时省略
+    expect(
+      needsAskMultiCard({
+        kind: 'ask_user_question',
+        requestId: 'r',
+        questions: [
+          { question: '选一个', options: [{ label: 'A' }] },
+          { question: '备注?' },
+        ],
+      }),
+    ).toBe(true);
+    // 全部无选项: 打勾卡收不了任何答案, 保持 v1 单问卡
+    expect(
+      needsAskMultiCard({
+        kind: 'ask_user_question',
+        requestId: 'r',
+        questions: [{ question: '备注?' }, { question: '还有呢?' }],
+      }),
+    ).toBe(false);
+  });
+
+  it('buildAskAnswersDecision: 未答的题不写 key, 多选答案由调用方编码', () => {
+    expect(buildAskAnswersDecision({ '用哪个?': JSON.stringify(['A', 'B']) })).toEqual({
+      kind: 'ask_user_question',
+      answers: { '用哪个?': JSON.stringify(['A', 'B']) },
+    });
+    expect(buildAskAnswersDecision({})).toEqual({ kind: 'ask_user_question', answers: {} });
+  });
+
+  it('encodeAskOptionAnswers: 多选 JSON 数组, 单选裸 label', () => {
+    expect(encodeAskOptionAnswers(true, ['A', 'B'])).toBe(JSON.stringify(['A', 'B']));
+    expect(encodeAskOptionAnswers(true, ['A'])).toBe(JSON.stringify(['A']));
+    expect(encodeAskOptionAnswers(false, ['A'])).toBe('A');
+    expect(encodeAskOptionAnswers(true, [])).toBe('');
+  });
+
+  it('formatAskAnswersForDisplay: JSON 数组解成逗号, 多问分号', () => {
+    expect(
+      formatAskAnswersForDisplay({
+        '开启哪些组件?': JSON.stringify(['网关', '日志']),
+        '部署到哪?': '生产环境',
+      }),
+    ).toBe('网关, 日志；生产环境');
+  });
+
   it('permission 的会话级 addRules destination 与 maker-core 常量同值(防漂移)', () => {
-    const decision = buildPermissionAllowAlwaysDecision('Bash');
+    const decision = buildPermissionAllowAlwaysDecision({ toolName: 'Bash' });
     expect(decision).toEqual({
       kind: 'permission',
       behavior: 'allow',
@@ -180,6 +281,24 @@ describe('composeInteractionModel — v1 规则', () => {
 });
 
 describe('跨实现一致性 — IM cardBuilders vs hook composeInteractionCard', () => {
+  it('本机凭证卡回传专用授权标记，普通卡不采信孤立的标记或 metadata', () => {
+    const req: PermissionRequest = {
+      ...PERMISSION_RICH,
+      metadata: { hostOwnedConfirmation: 'shared_provider_credential' },
+      suggestions: [PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL],
+    };
+    const expected = {
+      kind: 'permission', behavior: 'allow',
+      permissionUpdates: [PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL],
+    };
+    expect(composeInteractionModel(req).choices[1].decision).toEqual(expected);
+    const hook = composeInteractionCard(req)!;
+    expect(hook.decisions.get(hook.card.buttons[1].id)).toEqual(expected);
+    const ordinary = buildPermissionAllowAlwaysDecision({ toolName: req.toolName });
+    expect(buildPermissionAllowAlwaysDecision({ ...req, metadata: undefined })).toEqual(ordinary);
+    expect(buildPermissionAllowAlwaysDecision({ ...req, suggestions: undefined })).toEqual(ordinary);
+  });
+
   it('ask(多问 / 多选 / 超长 label): 两侧选项集与决策逐项对齐', () => {
     const model = composeInteractionModel(ASK_MULTI)!;
     if (model.kind !== 'ask_user_question') throw new Error('unreachable');
@@ -283,8 +402,11 @@ describe('跨实现一致性 — IM cardBuilders vs hook composeInteractionCard'
 
     // 两侧都渲染 toolName 与入参摘要, 但上限不同(600 单行 vs 800 pretty) —— 渲染差异
     expect(hook.card.body).toContain('Bash');
+    expect(hook.card.body).toContain('echo ');
     expect(hook.card.body.length).toBeLessThan(800);
-    expect(im.body).toContain('command');
+    // Shell calls show the command itself, not its JSON envelope.
+    expect(im.body).toContain('echo ');
+    expect(im.body).not.toContain('"command"');
     expect(im.body!.length).toBeLessThan(1000);
     expect(im.body).not.toContain('自动审批没完成');
   });
@@ -296,11 +418,26 @@ describe('跨实现一致性 — IM cardBuilders vs hook composeInteractionCard'
       metadata: { autoReviewUnavailable: true },
     });
     expect(im.body).toContain('自动审批没完成，请确认要不要允许这次操作。');
-    expect(im.body).toContain('command');
+    expect(im.body).toContain('echo ');
     expect(im.buttons.map((b) => b.id)).toEqual([
       'permission:allow:once',
       'permission:deny',
     ]);
+  });
+
+  it('AI ask 的富卡片写明审阅原因，且只能允许这一次', () => {
+    const request = {
+      ...PERMISSION_RICH,
+      requestId: 'req-perm-ask',
+      metadata: { autoReviewReason: '这会删除所有 iOS 模拟器，你只让我排查键盘问题。' },
+    };
+    const im = cards.buildPermissionCard(request);
+    expect(im.body).toContain('自动审批需要你决定：这会删除所有 iOS 模拟器，你只让我排查键盘问题。');
+    expect(im.buttons.map((b) => b.id)).toEqual(['permission:allow:once', 'permission:deny']);
+    const hook = composeInteractionCard(request);
+    expect(hook?.card.body).toContain('自动审批需要你决定：');
+    expect(hook?.card.buttons.map((b) => b.id)).toEqual(['perm:allow', 'perm:deny']);
+    expect(hook?.decisions.has('perm:always')).toBe(false);
   });
 
   it('安全默认: IM cancelPending 与 hook defaultDecision 同形(只有 reason 由渠道给)', async () => {
@@ -339,4 +476,91 @@ describe('跨实现一致性 — IM cardBuilders vs hook composeInteractionCard'
     // 按钮清空 — 已决策的卡不能再点
     expect(resolved.buttons).toEqual([]);
   });
+});
+
+describe('多题/多选打勾卡(仅提供 ui.cards.ask.multi 的渠道, 目前飞书)', () => {
+  it('命中 needsAskMultiCard 时 buildAskUserCard 分发打勾卡: 全问题渲染 + 题号按钮 + 提交', () => {
+    const spec = feishuCards.buildAskUserCard(ASK_MULTI)!;
+    // 标题用 multi 总标题(多道题), 不再借用第一问 header
+    expect(spec.title).toBe(ui.cards.ask.multi!.title);
+    // 正文: 两问都渲染(带序号), 多选问带提示, header 不同的问把问题全文放正文
+    expect(spec.body).toContain('**1. 方案选择**（可多选）');
+    expect(spec.body).toContain('这次用哪个方案实现?');
+    expect(spec.body).toContain('**2. 第二问在 v1 不渲染**');
+    // 按钮: 每问至多 MAX_OPTIONS 个选项 + 1 枚提交; 选项按钮带题号锚定
+    const optionButtons = spec.buttons.filter((b) => b.id === 'ask:multi');
+    expect(optionButtons).toHaveLength(MAX_OPTIONS + 1);
+    expect(optionButtons[0].label).toBe('1·方案 0');
+    expect(optionButtons[0].payload).toMatchObject({ requestId: 'req-ask-multi', q: 0, o: 0 });
+    expect(optionButtons[MAX_OPTIONS].label).toBe('2·不该出现');
+    const submit = spec.buttons.find((b) => b.id === 'ask:multi-submit');
+    expect(submit?.label).toBe(ui.cards.ask.multi!.submitLabel);
+    expect(submit?.type).toBe('primary');
+    expect(submit?.payload).toMatchObject({ requestId: 'req-ask-multi' });
+  });
+
+  it('未提供 multi 文案的渠道同请求保持 v1 单问卡(回归锁)', () => {
+    const spec = cards.buildAskUserCard(ASK_MULTI)!;
+    expect(spec.buttons.every((b) => b.id === 'ask:pick')).toBe(true);
+    expect(spec.buttons).toHaveLength(MAX_OPTIONS);
+    expect(JSON.stringify(spec)).not.toContain('不该出现');
+    expect(spec.buttons).not.toContainEqual(expect.objectContaining({ id: 'ask:multi-submit' }));
+  });
+
+  it('单题多选沿用单问卡标题观感; 勾选态打勾前缀, 前缀占按钮文案预算', () => {
+    const single: AskRequest = {
+      kind: 'ask_user_question',
+      requestId: 'req-single-multi',
+      questions: [
+        {
+          question: '挑几个框架?',
+          header: '框架',
+          multiSelect: true,
+          options: [{ label: LONG_LABEL }, { label: 'Vue' }],
+        },
+      ],
+    };
+    expect(feishuCards.buildAskUserCard(single)!.title).toBe(ui.cards.ask.title('框架'));
+
+    const selections = new Map<number, Set<number>>([[0, new Set([0])]]);
+    const spec = feishuCards.buildAskMultiCard({
+      requestId: 'req-single-multi',
+      questions: single.questions,
+      selections,
+    });
+    const [on, off] = spec.buttons.filter((b) => b.id === 'ask:multi');
+    expect(on.label.startsWith(`${ui.cards.ask.multi!.selectedMark}1·`)).toBe(true);
+    // 勾选前缀也占预算: 总长不超 BTN_LABEL_MAX, 且内容仍可辨
+    expect(on.label.length).toBeLessThanOrEqual(BTN_LABEL_MAX);
+    expect(off.label).toBe('1·Vue');
+  });
+
+  it('无选项的问题仍展示正文, 不出按钮也不写「直接发文字」', () => {
+    const mixed: AskRequest = {
+      kind: 'ask_user_question',
+      requestId: 'r',
+      questions: [
+        { question: '选一个', options: [{ label: 'A' }] },
+        { question: '备注?', multiSelect: true },
+      ],
+    };
+    const spec = feishuCards.buildAskUserCard(mixed)!;
+    expect(spec.buttons.some((b) => b.id === 'ask:multi-submit')).toBe(true);
+    expect(spec.body).toContain('**1. 选一个**');
+    expect(spec.body).toContain('**2. 备注?**');
+    const optionButtons = spec.buttons.filter((b) => b.id === 'ask:multi');
+    // 只有第一问有选项按钮(1 枚); 无选项题不出按钮、也不承诺文字输入
+    expect(optionButtons).toHaveLength(1);
+    expect(optionButtons[0].label).toBe('1·A');
+    expect(spec.body).not.toContain(ui.cards.ask.noOptionsHint);
+  });
+});
+
+// unit: same page request must offer the same scope in IM and Desktop.
+// Minimum input is one permission with Main-owned once/session metadata.
+it.each(['once', 'session'])('IM page permission scope %s preserves the existing answer contract', scope => {
+  const request: PermissionRequest = { ...PERMISSION_RICH, metadata: { mcpApp: { scope } },
+    suggestions: scope === 'session' ? [{ destination: 'session' }] : undefined };
+  const card = cards.buildPermissionCard(request);
+  expect(card.buttons?.some(button => button.id === 'permission:allow:always')).toBe(scope === 'session');
 });

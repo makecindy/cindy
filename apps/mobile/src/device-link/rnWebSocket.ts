@@ -1,4 +1,5 @@
 import type { WsLike } from '@cindy/device-link';
+import { recordDeviceLinkWireFrame } from '@/debug/deviceLinkTraffic';
 
 type EventName = 'open' | 'message' | 'close' | 'error';
 
@@ -29,7 +30,10 @@ class RnWsLike implements WsLike {
     ) => WebSocket;
     this.ws = new WebSocketCtor(url, undefined, { headers });
     this.ws.onopen = () => this.emit('open');
-    this.ws.onmessage = (event) => this.emit('message', { toString: () => String(event.data ?? '') });
+    this.ws.onmessage = (event) => {
+      recordDeviceLinkWireFrame('in', event.data);
+      this.emit('message', { toString: () => String(event.data ?? '') });
+    };
     this.ws.onclose = (event) => this.emit('close', event.code, event.reason);
     this.ws.onerror = (event) => {
       // RN 的 error 事件带 message(如升级失败的 "Expected HTTP 101 response but
@@ -41,6 +45,7 @@ class RnWsLike implements WsLike {
   }
 
   send(data: string): void {
+    recordDeviceLinkWireFrame('out', data);
     this.ws.send(data);
   }
 

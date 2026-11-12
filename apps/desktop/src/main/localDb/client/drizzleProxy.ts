@@ -95,14 +95,33 @@ async function executeAll<T>(builder: AnyObject, transport: DbTransport): Promis
       mapResultRow(fieldsList, row, normalizeJoins(builder.joinsNotNullableMap)) as T,
     );
   }
-  // 非 SELECT(INSERT/UPDATE/DELETE 无 RETURNING)走 'run' op。worker 内 'query' op
-  // 用 stmt.all(),better-sqlite3 对写操作 .all() 会抛 "This statement does not
-  // return data. Use run() instead"。await db.insert(...) / db.update(...) 这种隐式
-  // terminal 落到 executeAll,调用方通常忽略返回值。RETURNING 当前未使用,未来若加
-  // .returning() 需要在此分支(查 SQL 末尾 RETURNING)再走 query。
+  // 写语句带 .returning()(#3496):此前该分支固定回 [],UPDATE ... RETURNING 在
+  // 磁盘上成功、调用方却判未命中 —— compareAndClearSdkSessionId 的 CAS 清除被
+  // 误判失败,invalid-resume 的一次性 fresh fallback 被拦成 UI 终态错误。
+  // config.returning 是 drizzle 已排序的字段列表;RETURNING 语句是 reader
+  // statement,worker 'rawAll'(stmt.raw().all())合法,按 select 同款映射回行。
+  const returningFields = returningFieldsList(builder);
   const { sql, params } = toSql(builder);
+  if (returningFields) {
+    const rawRows = await transport.send<unknown[][]>('rawAll', { sql, params });
+    return rawRows.map((row) => mapResultRow(returningFields, row, undefined) as T);
+  }
+  // 非 SELECT 且无 RETURNING:走 'run' op(worker 'query' 用 stmt.all(),
+  // better-sqlite3 对纯写语句 .all() 会抛 "This statement does not return
+  // data")。await db.insert(...) / db.update(...) 这种隐式 terminal 落到
+  // executeAll,调用方忽略返回值。
   await transport.send('run', { sql, params });
   return [];
+}
+
+/** drizzle 写 builder 的 .returning() 字段列表(SelectedFieldsOrdered);无则 null。 */
+function returningFieldsList(value: AnyObject): SelectedField[] | null {
+  const config = value.config;
+  if (!config || typeof config !== 'object') return null;
+  const returning = (config as { returning?: unknown }).returning;
+  return Array.isArray(returning) && returning.length > 0
+    ? (returning as SelectedField[])
+    : null;
 }
 
 async function executeGet<T>(builder: AnyObject, transport: DbTransport): Promise<T | undefined> {
@@ -114,7 +133,14 @@ async function executeGet<T>(builder: AnyObject, transport: DbTransport): Promis
       ? (mapResultRow(fieldsList, row, normalizeJoins(builder.joinsNotNullableMap)) as T)
       : undefined;
   }
+  // 写语句带 .returning() 的 .get():与 executeAll 同因(#3496),字段别名与列名
+  // 不一致时 queryOne 的按列名对象会映射错,统一走 rawGet + mapResultRow。
+  const returningFields = returningFieldsList(builder);
   const { sql, params } = toSql(builder);
+  if (returningFields) {
+    const row = await transport.send<unknown[] | undefined>('rawGet', { sql, params });
+    return row ? (mapResultRow(returningFields, row, undefined) as T) : undefined;
+  }
   return transport.send<T | undefined>('queryOne', { sql, params });
 }
 

@@ -1,0 +1,31 @@
+{
+  "id": "open-library-search",
+  "match": [
+    "openlibrary.org"
+  ],
+  "description": "搜索 Open Library 书目，返回作者、首版年份、版本数量与作品链接。",
+  "access": "read",
+  "inputs": {
+    "query": {
+      "required": true,
+      "description": "书名、作者或 ISBN，也支持 isbn:978..."
+    }
+  },
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "https://openlibrary.org/search.json?q={{query|url}}&limit=20&fields=key,title,author_name,first_publish_year,edition_count,isbn"
+    },
+    {
+      "action": "wait",
+      "loadState": "load"
+    },
+    {
+      "action": "evaluate",
+      "as": "result",
+      "fn": "() => {\n const data = JSON.parse(document.body.innerText);\n if (!Array.isArray(data.docs)) throw new Error('Open Library 未返回有效书目，检查当前页面');\n return {total: data.numFound, books: data.docs.map(b => ({title: b.title, authors: b.author_name || [], firstPublishYear: b.first_publish_year, editionCount: b.edition_count, isbn: (b.isbn || []).slice(0,5), url: 'https://openlibrary.org' + b.key}))};\n}",
+      "timeoutMs": 30000
+    }
+  ],
+  "output": "{{result}}"
+}

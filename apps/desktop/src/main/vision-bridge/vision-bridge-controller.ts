@@ -9,7 +9,12 @@
  *
  * 对齐 maker-host 里 setClaudeProxyGatewayKeyReader 的注入套路。
  */
-import { createVisionBridgeTransform, type ProxyLogger, type RequestTransform } from '@cindy/anthropic-compat-proxy';
+import {
+  createVisionBridgeTransform,
+  type ProxyLogger,
+  type RequestTransform,
+  type RequestTransformCtx,
+} from '@cindy/anthropic-compat-proxy';
 
 /** 视觉桥 transform 所需的两个能力（对应 createVisionBridge 的 isTargetModel / describeImage）。 */
 export interface VisionBridgeController {
@@ -43,7 +48,20 @@ export function getVisionBridgeController(): VisionBridgeController | null {
  * 构建一个始终有效的视觉桥 RequestTransform。controller 未注入时 shouldBridge 恒 false，
  * transform 短路返回 null（字节透传）。用于 proxy host 装配 transformRequest 链。
  */
-export function buildVisionBridgeProxyTransform(logger?: ProxyLogger): RequestTransform {
+export function buildVisionBridgeProxyTransform(
+  logger?: ProxyLogger,
+  /** 返回 true 的请求不走视觉桥(供应商分享受邀者：视觉后端是本机用户自己的其它供应商)。 */
+  skipRequest?: (ctx: RequestTransformCtx) => boolean,
+): RequestTransform {
+  const transform = buildVisionBridgeTransform(logger);
+  if (!skipRequest) return transform;
+  const guarded: RequestTransform = (body, ctx) => (skipRequest(ctx) ? null : transform(body, ctx));
+  guarded.errorMode = transform.errorMode;
+  guarded.onRequestSettled = transform.onRequestSettled;
+  return guarded;
+}
+
+function buildVisionBridgeTransform(logger?: ProxyLogger): RequestTransform {
   return createVisionBridgeTransform({
     shouldBridge: (model) => _controller?.shouldBridge(model) ?? false,
     describeImage: (input) => {

@@ -1,17 +1,26 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { CINDY_LEARN_SOURCE_DESCRIPTION } from '../../../shared/cindyBuiltInSkills';
 
 import {
+  addPluginSkillSetupCommands,
+  commandsForHelpCard,
   filterSlashCommands,
   firstAvailableSlashCommandIndex,
   hasAvailableSlashCommand,
   hasUnavailableProjectSkillPreview,
+  isCindyOfficialSlashCommand,
   isSlashCommandUnavailable,
+  loadAllCommands,
   mergeCommands,
   nextAvailableSlashCommandIndex,
+  pluginSkillSetupName,
   rebaseInlineRangesAfterSlashCommandRewrite,
   reconcilePiRuntimeCommandForDispatch,
   reconcilePiRuntimeCommandForDispatchWithRetry,
   rewriteAgentSkillInvocationForDispatch,
+  rewritePiSkillAliasFromCommand,
+  rewritePiSkillMessageForSend,
+  rewriteBuiltInSkillDraftForSend,
   slashCommandInvocationName,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
@@ -21,6 +30,123 @@ const skill = (overrides: Partial<Extract<UnifiedCommand, { kind: 'agent-skill' 
   name: 'demo',
   source: 'skill' as const,
   ...overrides,
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+function stubCommandLists(skillResult: { success: boolean; skills?: UnifiedCommand[] }) {
+  vi.stubGlobal('window', {
+    electronAPI: {
+      maker: {
+        listDesktopCommands: vi.fn(async () => ({
+          success: true,
+          commands: [{ kind: 'desktop', name: 'learn', description: 'Learn' }],
+        })),
+        listAgentCommands: vi.fn(async () => ({ success: true, commands: [] })),
+        listAgentSkills: vi.fn(async () => skillResult),
+      },
+    },
+  });
+}
+
+// Unit: repeated palette consumers previously logged each identical conflict.
+// Existing merge tests checked precedence but not repeated renderer log IPC.
+it('warns once per conflict while preserving command precedence across rebuilds', () => {
+  const logToMain = vi.fn();
+  vi.stubGlobal('window', { electronAPI: { logToMain } });
+  const preferred = skill({ name: 'conflict-diagnostic-test' });
+  const desktop: UnifiedCommand = { kind: 'desktop', name: preferred.name, description: 'fallback' };
+  for (let i = 0; i < 3; i++) expect(mergeCommands([desktop], [], [preferred])).toEqual([preferred]);
+  const warnings = () => logToMain.mock.calls.filter(([level]) => level === 'warn');
+  expect(warnings()).toHaveLength(1);
+  expect(mergeCommands([], [{ kind: 'agent-builtin', name: preferred.name, description: 'builtin' }], [preferred])).toEqual([preferred]);
+  expect(warnings()).toHaveLength(2);
+});
+
+describe('loadAllCommands Learn fallback', () => {
+  it.each([
+    ['the Skill query fails', { success: false }],
+    ['Learn is not discovered yet', { success: true, skills: [] }],
+  ])('keeps the Desktop Learn command when %s', async (_label, result) => {
+    stubCommandLists(result as { success: boolean; skills?: UnifiedCommand[] });
+
+    await expect(loadAllCommands('claude-code', null)).resolves.toEqual([
+      { kind: 'desktop', name: 'learn', description: 'Learn' },
+    ]);
+  });
+
+  it('uses an available Agent Skill instead of the Desktop Learn fallback', async () => {
+    const learnSkill = skill({ name: 'learn', builtIn: true });
+    stubCommandLists({ success: true, skills: [learnSkill] });
+
+    await expect(loadAllCommands('claude-code', null)).resolves.toEqual([learnSkill]);
+  });
+});
+
+// Unit: the creator's click-time name is not its final invocation identity.
+// Resolve through the production IPC catalog after engine/task-computer changes.
+describe('routed built-in draft dispatch', () => {
+  const intent = { name: 'cindy-plugin-creator', commandName: 'cindy-plugin-creator' };
+  it('resolves a Pi draft to the official Claude alias on the final task computer', async () => {
+    stubCommandLists({ success: true, skills: [] });
+    const invoke = vi.fn(async (_device, channel) => channel === 'maker:list-agent-skills'
+      ? { success: true, skills: [
+          skill({ name: 'cindy-plugin-creator' }),
+          skill({ name: 'cindy:cindy-plugin-creator', runtimeCommandName: 'cindy:cindy-plugin-creator', builtIn: true }),
+        ] }
+      : { success: true, commands: [] });
+    Object.assign(window.electronAPI, { deviceLink: { invoke } });
+    await expect(rewriteBuiltInSkillDraftForSend({
+      message: '/cindy-plugin-creator Make a plugin', intent, agentKind: 'claude-code',
+      deviceId: 'task-computer', workingDir: '/project',
+    })).resolves.toBe('/cindy:cindy-plugin-creator Make a plugin');
+    expect(invoke).toHaveBeenCalledWith('task-computer', 'maker:list-agent-skills', ['claude-code', { workingDir: '/project', forceReload: true }]);
+    expect(window.electronAPI.maker.listAgentSkills).not.toHaveBeenCalled();
+  });
+  it('refuses a missing built-in and an SSH draft instead of sending a user Skill', async () => {
+    stubCommandLists({ success: true, skills: [skill({ name: 'cindy-plugin-creator' })] });
+    const request = { message: '/cindy-plugin-creator Make a plugin', intent, agentKind: 'pi' as const };
+    await expect(rewriteBuiltInSkillDraftForSend(request)).resolves.toBeNull();
+    vi.mocked(window.electronAPI.maker.listAgentSkills).mockClear();
+    await expect(rewriteBuiltInSkillDraftForSend({ ...request, remoteHostId: 'ssh-host' })).resolves.toBeNull();
+    expect(window.electronAPI.maker.listAgentSkills).not.toHaveBeenCalled();
+  });
+  it('refreshes a handed-off identity when project skills change after preflight', async () => {
+    const catalog = { success: true, skills: [skill({ name: intent.name, builtIn: true })] };
+    stubCommandLists(catalog);
+    const request = { message: '/cindy-plugin-creator Make a plugin', intent, agentKind: 'claude-code' as const, workingDir: '/project' };
+    expect(await rewriteBuiltInSkillDraftForSend(request)).toBe(request.message);
+    catalog.skills = [skill({ name: intent.name }), skill({ name: `cindy:${intent.name}`, builtIn: true })];
+    expect(await rewriteBuiltInSkillDraftForSend(request)).toBe('/cindy:cindy-plugin-creator Make a plugin');
+    catalog.skills = [skill({ name: intent.name })];
+    expect(await rewriteBuiltInSkillDraftForSend(request)).toBeNull();
+  });
+  it('respects an explicitly edited command instead of restoring the routed Skill', async () => {
+    stubCommandLists({ success: true, skills: [] });
+    await expect(rewriteBuiltInSkillDraftForSend({
+      message: '/custom My changed request', intent, agentKind: 'pi',
+    })).resolves.toBe('/custom My changed request');
+    expect(window.electronAPI.maker.listAgentSkills).not.toHaveBeenCalled();
+  });
+});
+
+describe('commandsForHelpCard', () => {
+  it('preserves only the Main-attested built-in marker needed for localized descriptions', () => {
+    expect(commandsForHelpCard([
+      skill({ name: 'learn', builtIn: true, description: CINDY_LEARN_SOURCE_DESCRIPTION }),
+      skill({ name: 'custom', description: 'Custom description' }),
+    ])).toEqual([
+      {
+        name: 'learn',
+        description: CINDY_LEARN_SOURCE_DESCRIPTION,
+        source: 'skill',
+        builtIn: true,
+      },
+      { name: 'custom', description: 'Custom description', source: 'skill' },
+    ]);
+  });
 });
 
 describe('rewriteAgentSkillInvocationForDispatch', () => {
@@ -34,6 +160,13 @@ describe('rewriteAgentSkillInvocationForDispatch', () => {
 
     expect(rewriteAgentSkillInvocationForDispatch('/demo   keep spacing', loaded)).toBe(
       '/skill:demo   keep spacing',
+    );
+    expect(rewriteAgentSkillInvocationForDispatch('  \n/demo keep', loaded)).toBe(
+      '  \n/skill:demo keep',
+    );
+    expect(rewriteAgentSkillInvocationForDispatch('please /demo', loaded)).toBe('please /demo');
+    expect(rewriteAgentSkillInvocationForDispatch('> quoted\n\n/demo', loaded)).toBe(
+      '> quoted\n\n/demo',
     );
   });
 
@@ -54,6 +187,18 @@ describe('rewriteAgentSkillInvocationForDispatch', () => {
       { start: 12, end: 17, kind: 'reference' },
       { start: 18, end: 24, kind: 'paste' },
     ]);
+
+    expect(rebaseInlineRangesAfterSlashCommandRewrite(
+      [
+        { start: 3, end: 8, kind: 'slash' },
+        { start: 9, end: 14, kind: 'reference' },
+      ],
+      '  \n/demo @task',
+      '  \n/skill:demo @task',
+    )).toEqual([
+      { start: 3, end: 14, kind: 'slash' },
+      { start: 15, end: 20, kind: 'reference' },
+    ]);
   });
 
   it('does not rewrite unavailable, mismatched, or non-skill commands', () => {
@@ -72,9 +217,101 @@ describe('rewriteAgentSkillInvocationForDispatch', () => {
     })).toBe('/other');
     expect(rewriteAgentSkillInvocationForDispatch('/demo', desktop)).toBe('/demo');
   });
+
+  it('leaves non-Pi first messages untouched without loading a roster', async () => {
+    await expect(rewritePiSkillMessageForSend({
+      agentKind: 'codex',
+      message: '/git please',
+    })).resolves.toBe('/git please');
+  });
+
+  it('rewrites a discovered Pi project skill that already has a runtime alias', () => {
+    const discovered = skill({
+      name: 'git',
+      scope: 'repo',
+      runtimeStatus: 'discovered',
+      runtimeCommandName: 'skill:git',
+    });
+    expect(rewriteAgentSkillInvocationForDispatch('/git please', discovered)).toBe('/git please');
+    expect(rewritePiSkillAliasFromCommand('/git please', discovered)).toBe('/skill:git please');
+    expect(rewritePiSkillAliasFromCommand(' \n/git please', discovered)).toBe(' \n/skill:git please');
+    expect(rewritePiSkillAliasFromCommand('note /git', discovered)).toBe('note /git');
+  });
 });
 
 describe('filterSlashCommands', () => {
+  it('ranks a plugin command by its display label so hidden qualifiers keep exact matches on top', () => {
+    const prefixed = Array.from({ length: 30 }, (_, i) => ({
+      kind: 'desktop' as const, name: `draw-${i}`, description: '',
+    }));
+    const shared = [
+      { kind: 'desktop' as const, name: 'draw/@root', description: '', label: 'draw' },
+      { kind: 'desktop' as const, name: 'draw/acme', description: '', label: 'draw', meta: '团队共享' },
+    ];
+    const commands = [...prefixed, ...shared];
+
+    expect(filterSlashCommands(commands, 'draw').slice(0, 2).map((command) => command.name))
+      .toEqual(['draw/@root', 'draw/acme']);
+    // The full qualified token still matches what will be inserted.
+    expect(filterSlashCommands(commands, 'draw/acme').map((command) => command.name)).toEqual(['draw/acme']);
+  });
+
+  it('places Cindy official entries before ordinary commands in the initial palette', () => {
+    const commands = [
+      { kind: 'desktop' as const, name: 'help', description: 'Help' },
+      {
+        kind: 'agent-skill' as const,
+        name: 'cindy-skill-creator',
+        description: 'Create or update a Cindy Skill',
+        builtIn: true,
+        source: 'skill' as const,
+      },
+      {
+        kind: 'agent-skill' as const,
+        name: 'learn',
+        description: CINDY_LEARN_SOURCE_DESCRIPTION,
+        builtIn: true,
+        source: 'skill' as const,
+      },
+      { kind: 'agent-skill' as const, name: 'release-notes', source: 'skill' as const },
+    ];
+
+    expect(filterSlashCommands(commands, '').map((command) => command.name)).toEqual([
+      'cindy-skill-creator',
+      'learn',
+      'help',
+      'release-notes',
+    ]);
+  });
+
+  it('recognizes the Cindy Learn Skill but not a same-name desktop command or user Skill', () => {
+    expect(isCindyOfficialSlashCommand({
+      kind: 'desktop',
+      name: 'learn',
+      description: 'Learn',
+    })).toBe(false);
+    expect(isCindyOfficialSlashCommand({
+      kind: 'agent-skill',
+      name: 'learn',
+      description: CINDY_LEARN_SOURCE_DESCRIPTION,
+      builtIn: true,
+      source: 'skill',
+    })).toBe(true);
+    expect(isCindyOfficialSlashCommand({
+      kind: 'agent-skill',
+      name: 'learn',
+      description: 'Distill a reusable Skill with Cindy',
+      builtIn: true,
+      source: 'skill',
+    })).toBe(true);
+    expect(isCindyOfficialSlashCommand({
+      kind: 'agent-skill',
+      name: 'learn',
+      description: CINDY_LEARN_SOURCE_DESCRIPTION,
+      source: 'skill',
+    })).toBe(false);
+  });
+
   it('matches command names by case-insensitive containment', () => {
     const commands = [
       { kind: 'desktop' as const, name: 'lark-drive', description: 'Drive' },
@@ -138,31 +375,37 @@ describe('Pi project skill availability', () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
-  it('does not retry a Pi slash name absent from the refreshed filesystem catalog', async () => {
-    const sleeps: number[] = [];
-    const reload = vi.fn(async () => [] as UnifiedCommand[]);
+  it.each(['foo', 'path'])(
+    'forwards unknown Pi slash text /%s after one refresh without retry delays',
+    async (commandName) => {
+      const sleeps: number[] = [];
+      const reload = vi.fn(async () => [] as UnifiedCommand[]);
 
-    await expect(reconcilePiRuntimeCommandForDispatchWithRetry({
-      agentKind: 'pi',
-      sessionId: 'session-1',
-      commandName: 'missing',
-      commands: [],
-      retryDelaysMs: [10, 20],
-      sleep: async (delayMs) => { sleeps.push(delayMs); },
-      reload,
-    })).resolves.toEqual({ command: undefined, commands: [] });
-    expect(sleeps).toEqual([]);
-    expect(reload).toHaveBeenCalledTimes(1);
-  });
+      await expect(reconcilePiRuntimeCommandForDispatchWithRetry({
+        agentKind: 'pi',
+        sessionId: 'session-1',
+        commandName,
+        commands: [],
+        retryDelaysMs: [10, 20],
+        sleep: async (delayMs) => { sleeps.push(delayMs); },
+        reload,
+      })).resolves.toEqual({ command: undefined, commands: [] });
+      expect(sleeps).toEqual([]);
+      expect(reload).toHaveBeenCalledTimes(1);
+    },
+  );
 
-  it('disables only discovered project skills', () => {
+  it('disables unproven runtime skills while keeping approved new-task previews available', () => {
     expect(isSlashCommandUnavailable(skill({ scope: 'repo', runtimeStatus: 'discovered' }))).toBe(true);
     expect(isSlashCommandUnavailable(skill({ scope: 'repo', runtimeStatus: 'loaded' }))).toBe(false);
     expect(isSlashCommandUnavailable(skill({ scope: 'user', runtimeStatus: 'discovered' }))).toBe(false);
+    expect(isSlashCommandUnavailable(skill({ scope: 'user', runtimeStatus: 'unknown' }))).toBe(true);
+    expect(isSlashCommandUnavailable(skill({ scope: 'user', runtimeStatus: 'failed' }))).toBe(true);
+    expect(isSlashCommandUnavailable(skill({ scope: 'user', runtimeStatus: 'approved' }))).toBe(false);
     expect(isSlashCommandUnavailable(skill({ scope: 'repo' }))).toBe(false);
   });
 
-  it('keeps the palette label while invoking Pi skills by their runtime command name', () => {
+  it('keeps the palette / composer label while invoking Pi skills by their runtime command name', () => {
     const loaded = skill({
       name: 'demo',
       scope: 'repo',
@@ -359,6 +602,30 @@ describe('Pi project skill availability', () => {
     expect(events).toEqual(['runtime', 'catalog']);
   });
 
+  it('retries a missing command after explicitly starting its project runtime', async () => {
+    const loaded = skill({
+      name: 'demo',
+      scope: 'repo',
+      runtimeStatus: 'loaded',
+      runtimeCommandName: 'skill:demo',
+    });
+    const sleeps: number[] = [];
+    let reloads = 0;
+
+    await expect(reconcilePiRuntimeCommandForDispatchWithRetry({
+      agentKind: 'pi',
+      sessionId: 'session-1',
+      commandName: 'demo',
+      commands: [],
+      prepareRuntime: async () => undefined,
+      retryDelaysMs: [10, 20],
+      sleep: async (delayMs) => { sleeps.push(delayMs); },
+      reload: async () => (++reloads < 2 ? [] : [loaded]),
+    })).resolves.toEqual({ command: loaded, commands: [loaded] });
+    expect(sleeps).toEqual([10]);
+    expect(reloads).toBe(2);
+  });
+
   it('does not restart the runtime for an already loaded Pi skill', async () => {
     const loaded = skill({
       name: 'demo',
@@ -445,5 +712,54 @@ describe('Pi project skill availability', () => {
       },
     })).resolves.toEqual({ command: desktop, commands: [desktop] });
     expect(reloaded).toBe(false);
+  });
+});
+
+
+describe('Claude managed skill dispatch', () => {
+  it('rewrites the short Cindy command to its native plugin command, preserving arguments', () => {
+    const command = skill({ name: 'learn', runtimeCommandName: 'cindy:learn', builtIn: true });
+    expect(rewriteAgentSkillInvocationForDispatch('/learn keep this workflow', command)).toBe('/cindy:learn keep this workflow');
+  });
+});
+
+describe('plugin Skill setup rows', () => {
+  const entry = { skillName: 'pr', description: 'Needs the GitHub plugin', meta: 'Not installed' };
+
+  it('appends a selectable setup row after every real command when the Skill is absent', () => {
+    const commands = mergeCommands(
+      [{ kind: 'desktop', name: 'help', description: 'Help' }],
+      [],
+      [skill({ name: 'zeta' }), skill({ name: 'repo', scope: 'repo', runtimeStatus: 'discovered' })],
+    );
+    const result = addPluginSkillSetupCommands(commands, [entry]);
+    expect(result.map((command) => command.name)).toEqual(['zeta', 'help', 'repo', 'pr']);
+    const row = result[3];
+    expect(row).toMatchObject({ kind: 'desktop', description: entry.description, meta: entry.meta });
+    expect(isSlashCommandUnavailable(row)).toBe(false);
+    expect(pluginSkillSetupName(row)).toBe('pr');
+    expect(pluginSkillSetupName(result[0])).toBeUndefined();
+    // Filtering keeps the same row object, so selection still recognizes it.
+    expect(pluginSkillSetupName(filterSlashCommands(result, 'pr')[0])).toBe('pr');
+  });
+
+  it('never shadows a command of the same name, available or not', () => {
+    const real = [skill({ name: 'PR' })];
+    expect(addPluginSkillSetupCommands(real, [entry])).toBe(real);
+    const unavailable = [skill({ name: 'pr', scope: 'repo', runtimeStatus: 'discovered' })];
+    expect(addPluginSkillSetupCommands(unavailable, [entry])).toBe(unavailable);
+    const none: UnifiedCommand[] = [];
+    expect(addPluginSkillSetupCommands(none, [])).toBe(none);
+  });
+
+  it('lets an enable row replace the Skill linked from an install the project has switched off', () => {
+    const linked = [skill({ name: 'pr' }), skill({ name: 'zeta' })];
+    const result = addPluginSkillSetupCommands(linked, [{ ...entry, replacesInstalled: true }]);
+    expect(result.map((command) => command.name)).toEqual(['zeta', 'pr']);
+    expect(pluginSkillSetupName(result[1])).toBe('pr');
+  });
+
+  it('does not mark an ordinary desktop command of the same shape', () => {
+    expect(pluginSkillSetupName({ kind: 'desktop', name: 'pr', description: 'x' })).toBeUndefined();
   });
 });

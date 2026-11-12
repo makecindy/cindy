@@ -1,15 +1,15 @@
 # @cindy/device-link — 远程控制协议与契约
 
-同账号跨设备远程控制的**传输/协议层**。当前消费者是 desktop(`apps/desktop`),既可作控制端也可作被控端。
+同账号跨设备远程控制的**传输/协议层**。当前消费者是 desktop(`apps/desktop`)与 mobile(`apps/mobile`);desktop 既可作控制端也可作被控端,mobile 是纯控制端。
 
-> **为什么有这份文档**:未来的**手机版 App = 纯控制端**(本地无 AI agent / 无会话 / 无 DB),完全经本协议连到桌面端 Cindy 驱动。手机版照着这份契约实现自己的客户端即可 —— 不需要本地 maker。本文件是「远程控制面」的 single source of truth;具体值以源码为准(见各节引用),改协议先读本文件的「兼容性」一节。
+> **为什么有这份文档**:**手机版 App = 纯控制端**(本地无 AI agent / 无会话 / 无 DB),完全经本协议连到桌面端 Cindy 驱动。手机版照着这份契约实现自己的客户端即可 —— 不需要本地 maker。本文件是「远程控制面」的 single source of truth;具体值以源码为准(见各节引用),改协议先读本文件的「兼容性」一节。
 
 本包**严格 host 无关**:WebSocket 实现、token、设备信息全部由 host 注入(见 `DeviceLinkClientOptions`,`src/client.ts`),不依赖 Electron / 渲染层。手机端注入自己的 WS + token 即可复用同一个 `DeviceLinkClient`,或用任意语言按本协议另写客户端。
 
 ## 角色与拓扑
 
 ```
-控制端(desktop / 未来手机) ─┐                        ┌─ 被控端(desktop,开了「允许被控」)
+控制端(desktop / mobile) ───┐                        ┌─ 被控端(desktop,开了「允许被控」)
                             ├─ server relay(哑中继)─┤
             另一控制端 ──────┘   apps/server/device-link └─ 另一被控端
 ```
@@ -20,7 +20,7 @@
 
 ## 连接生命周期(连接层帧)
 
-`src/client.ts` 的 `DeviceLinkClient` 状态机:`connect → hello 握手 → online`,断线指数退避重连(1s→30s),online 后每 20s `ping`,连续 2 周期无 `pong` 判僵死重连。
+`src/client.ts` 的 `DeviceLinkClient` 状态机:`connect → hello 握手 → online`,断线指数退避重连(1s→30s),online 后每 20s `ping`;默认至少连续 4 个心跳周期没有任何有效入站帧才判僵死重连(不只检查 `pong`)。
 
 | 帧 `kind` | 方向 | 说明 |
 |---|---|---|
@@ -66,8 +66,40 @@
   顺序，避免“业务处理慢”被误判成“网络断开”。
 - 可靠业务帧必须等 link-open/link-accept 能力协商完成后才接收；断线后迟到到新进程的
   旧 relay 帧不会在新基线建立前执行。
+- 同时声明 `reliable-link-confirm-v1` 时，可靠链路按方向提交：收到 `link-open` 的一端
+  发出 `link-accept` 后，只先开放接收方向；控制端真正处理匹配的 accept、安装 stream
+  基线后，会回一条带该 `link-open` requestId 的 transport ACK。被控端只有收到同代、
+  同 stream 且基线合法的确认才开放发送方向并 replay pending；若这条确认因瞬时背压未发出，
+  控制端会按既有可靠重试间隔有界重发确认。确认窗口耗尽仍无确认时，被控端复用现有 peer 级
+  `transport-timeout` 重置，要求控制端重开链路，而不是永久停在等待态。迟到 accept、被新请求
+  替换的 accept、错误 requestId、旧 stream 业务帧都不能跨代放行；任一端未声明本能力时继续
+  使用旧版即时 ready 行为，保证 Desktop 与 Mobile 可以独立升级，server relay 无需理解新字段。
+- Desktop 与 Mobile 的自动恢复共用同一条 presence 三态规则：当前连接代没有收到
+  presence 时是 `unknown`，只允许熔断器/恢复器自己的单飞探测或定向重建尝试；relay
+  明确报告 `false` 时才停止自动发送。这样重连清空 presence 不会把熔断器永久锁死，
+  也不会把普通业务请求在未知状态下全部放行成洪峰。
 - 当前**不做压缩**：wrapper 只做分片、顺序、ACK、重传和背压。文本消息的压缩收益有限，
- 先避免引入 CPU、延迟和跨端实现差异；后续若需要可新增独立 capability。
+  先避免引入 CPU、延迟和跨端实现差异；后续若需要可新增独立 capability。
+
+### 本次修复后的剩余问题边界
+
+这组修复覆盖“可靠链进入错误代际”以及“熔断在重连后无法自探测”两类客户端状态机
+卡死；以下日志仍应按独立问题保留线索，不要再次归因到 pending 消息池：
+
+- `401`、`4409`、`4429`、`VERSION_MISMATCH`：鉴权过期、设备被顶、连接数超限或版本
+  不兼容，走连接/账号恢复路径。
+- WebSocket 升级、DNS、代理、VPN、TLS 或握手超时：属于 relay 到本机的网络路径，
+  需要看 `connection issue`、socket error 和握手耗时。
+- `1013` / relay backpressure：属于服务端或共享 relay 拥塞；本客户端只做退避和
+  peer 级恢复，不等同于链路代际分叉。
+- `local-db:sessions:list` 探测本身仍超时：说明对端进程、数据库迁移或 IPC/DB 子系统
+  仍未恢复；熔断器会继续保持单飞探测，不应把普通业务请求重新放成洪峰。
+- 真机版本未同时包含这组代码时，只能验证旧协议兼容路径；必须以 Desktop、Mobile
+  实际版本和 24 小时日志中的 `await-link-confirm`、`link-confirm-ack`、
+  `link confirmation timeout` 与 `responsiveness probe` 证据判断发布效果，不能仅凭
+  “online”判定连接健康。若同一 request 长期只有 `await-link-confirm`，说明对端没有
+  提交本代 accept；若随后出现 `link-confirm-ack`，说明发送方向已经安全恢复；若出现
+  `link confirmation timeout`，说明本代确认未完成并已进入 peer 级重开路径。
 
 设备列表另有 REST:`GET /api/device-link/devices` → `DeviceView[]`(DB 档案 ∪ presence 三态合成,含可选 `selfName/deviceInfo`);`PATCH`/`DELETE` 改名/删除。
 
@@ -129,3 +161,13 @@
 | server 中继(presence / 路由 / pub-sub) | `apps/server/src/device-link/*` |
 | 被控端 dispatch(双层校验 + 合成 event) | `apps/desktop/src/main/device-link/dispatch.ts` |
 | 桌面控制端传输路由(本地/远程按 session 切换) | `apps/desktop/src/renderer/lib/makerTransport.ts` |
+
+## Remote plugin authorization transport v3
+
+`device-link:plugin-oauth:v3` is a Host-only signed/encrypted channel carried by the existing authorized account route. It does not require CIS or an instance identity endpoint. Both Desktops must support v3; older peers fail without falling back to raw setup, plaintext input, v1 or the separate cloud v2 protocol.
+
+A Host lazily persists a separate Ed25519 signing key in OS secure storage. The controller resolves the exact realm/membership/device descriptor over Device Link, verifies the signed card/nonce/ephemeral-key transcript, then pins the peer public key in its own encrypted owner-scoped store. Restarts retain the key and change the boot identifier; changed peer keys are rejected. **First admission trusts account services and the relay**, like upstream same-account key registration; this does not protect first contact against a malicious relay and is not mutual attestation.
+
+All inner offers, callbacks, codes and private form values use authenticated encryption. Local Renderer supplies card IDs or one-shot protected input to dedicated local IPC; it cannot invoke this channel directly. A short-lived user code can be displayed/copied only on its initiating local card. Tokens, callback codes, full URLs and state stay out of card snapshots, logs, history and the model. Capability flags are additive and must be explicitly negotiated.
+
+See [remote-plugin-oauth.md](../../docs/remote-plugin-oauth.md) for exact shapes, target validation, supported adapters, lifecycle and trust limits. No relay/Auth/Model Access deployment is introduced.

@@ -1,16 +1,18 @@
 {
   "id": "twitter-profile",
-  "match": ["x.com", "twitter.com"],
-  "description": "读取某个 X(Twitter)账号的资料(昵称/简介/位置/粉丝数/关注数/推文数/是否认证/注册时间)。先落到 x.com 域,再在页面内从 cookie 取 csrf token、带登录态 fetch 内部 GraphQL UserByScreenName 接口——需要在持久浏览器里已登录 x.com。username 不带 @。",
-  "inputs": { "username": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://x.com" },
-    { "action": "wait", "loadState": "load" },
-    {
-      "action": "evaluate",
-      "as": "profile",
-      "fn": "async () => { const ct0 = (document.cookie.split(';').map(c => c.trim()).find(c => c.startsWith('ct0=')) || '').split('=')[1]; if (!ct0) throw new Error('未登录 x.com(缺 ct0 cookie),请在持久浏览器里登录 X 后重试'); const bearer = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA'; const headers = { 'Authorization': 'Bearer ' + decodeURIComponent(bearer), 'X-Csrf-Token': ct0, 'X-Twitter-Auth-Type': 'OAuth2Session', 'X-Twitter-Active-User': 'yes' }; const variables = JSON.stringify({ screen_name: '{{username|js}}'.replace(/^@/, ''), withSafetyModeUserFields: true }); const features = JSON.stringify({ hidden_profile_subscriptions_enabled: true, rweb_tipjar_consumption_enabled: true, responsive_web_graphql_exclude_directive_enabled: true, verified_phone_label_enabled: false, subscriptions_verification_info_is_identity_verified_enabled: true, subscriptions_verification_info_verified_since_enabled: true, highlights_tweets_tab_ui_enabled: true, responsive_web_twitter_article_notes_tab_enabled: true, subscriptions_feature_can_gift_premium: true, creator_subscriptions_tweet_preview_api_enabled: true, responsive_web_graphql_skip_user_profile_image_extensions_enabled: false, responsive_web_graphql_timeline_navigation_enabled: true }); const url = '/i/api/graphql/qRednkZG-rn1P6b48NINmQ/UserByScreenName?variables=' + encodeURIComponent(variables) + '&features=' + encodeURIComponent(features); const r = await fetch(url, { headers: headers, credentials: 'include' }); const txt = await r.text(); let d; try { d = JSON.parse(txt); } catch (e) { throw new Error('x.com 返回非 JSON(未登录、被风控或内部接口已变更),请在持久浏览器登录后重试'); } const res = d && d.data && d.data.user && d.data.user.result; if (!res) throw new Error('未找到用户 @' + '{{username|js}}'.replace(/^@/, '')); const lg = res.legacy || {}; const expanded = lg.entities && lg.entities.url && lg.entities.url.urls && lg.entities.url.urls[0] && lg.entities.url.urls[0].expanded_url; return { screen_name: lg.screen_name || '{{username|js}}'.replace(/^@/, ''), name: lg.name || '', bio: lg.description || '', location: lg.location || '', link: expanded || '', followers: lg.followers_count || 0, following: lg.friends_count || 0, tweets: lg.statuses_count || 0, likes: lg.favourites_count || 0, verified: !!(res.is_blue_verified || lg.verified), created_at: lg.created_at || '', url: 'https://x.com/' + (lg.screen_name || '{{username|js}}'.replace(/^@/, '')) }; }"
-    }
+  "match": [
+    "x.com",
+    "twitter.com"
   ],
-  "output": "{{profile}}"
+  "description": "Fetch a Twitter user profile — bio, stats, etc. (defaults to the logged-in user when no username is given)",
+  "access": "read",
+  "adapter": "twitter/profile",
+  "inputs": {
+    "username": {
+      "required": false,
+      "type": "string",
+      "description": "Twitter screen name (with or without @). Defaults to the logged-in user when omitted."
+    }
+  },
+  "steps": []
 }

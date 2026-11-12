@@ -1,0 +1,7 @@
+{
+  "$description": "error fixture: illegal $type",
+  "broken": {
+    "$type": "not-a-dtcg-type",
+    "$value": "#ffffff"
+  }
+}

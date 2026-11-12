@@ -42,6 +42,11 @@ export const MOBILE_IMAGE_UPLOAD_MAX_LONG_EDGE = 2048;
 export const MOBILE_IMAGE_UPLOAD_JPEG_QUALITY = 0.8;
 /** 文件小于此值时不值得重编码,直接原样上传。 */
 export const MOBILE_IMAGE_UPLOAD_SKIP_BYTES = 400 * 1024;
+/**
+ * 文件超过此值不在手机上解码处理,原样上传:整图解码的内存随像素增长,超大图可能让进程被系统终止。
+ * 与放开附件体积前的解码范围一致(当时超过 30 MB 的图片不会进入这里)。
+ */
+export const MOBILE_IMAGE_PREPROCESS_MAX_BYTES = 30 * 1024 * 1024;
 
 /**
  * 决定一张图要不要 / 怎么在上传前处理。返回 null = 原样上传。
@@ -51,6 +56,7 @@ export function planMobileImageUploadPreprocess(
 ): MobileImagePreprocessPlan | null {
   const mime = (input.mimeType ?? '').trim().toLowerCase();
   if (mime === 'image/gif') return null;
+  if (input.size > MOBILE_IMAGE_PREPROCESS_MAX_BYTES) return null;
 
   const width = normalizeDim(input.width);
   const height = normalizeDim(input.height);

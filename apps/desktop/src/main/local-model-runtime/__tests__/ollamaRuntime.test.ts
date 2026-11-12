@@ -1,0 +1,189 @@
+import path from 'node:path';
+
+import { describe, expect, it, vi } from 'vitest';
+
+import { probeOllamaStatus, startOfficialOllamaApp } from '../ollamaRuntime.js';
+import { OllamaHttpError } from '../ollamaClient.js';
+
+const WIN_LOCAL = 'C:\\Users\\dash\\AppData\\Local';
+const WIN_OFFICIAL = path.join(WIN_LOCAL, 'Programs', 'Ollama', 'ollama.exe');
+
+describe('ollamaRuntime', () => {
+  it('maps connection refused + missing app to absent', async () => {
+    const status = await probeOllamaStatus({
+      platform: 'darwin',
+      appExists: () => false,
+      fetchImpl: async () => {
+        throw new OllamaHttpError('refused', 'down');
+      },
+    });
+    expect(status).toMatchObject({ kind: 'absent', appInstalled: false });
+  });
+
+  it('maps connection refused + installed app to stopped', async () => {
+    const status = await probeOllamaStatus({
+      platform: 'darwin',
+      appExists: () => true,
+      fetchImpl: async () => {
+        throw new OllamaHttpError('refused', 'down');
+      },
+    });
+    expect(status).toMatchObject({ kind: 'stopped', appInstalled: true });
+  });
+
+  it('starts a Cindy sidecar when the official app is missing', async () => {
+    const spawnSidecar = vi.fn();
+    let ready = false;
+    const status = await startOfficialOllamaApp({
+      platform: 'darwin',
+      userDataDir: '/tmp/cindy-ollama-sidecar',
+      appExists: () => false,
+      spawnSidecar,
+      fetchImpl: async () => {
+        if (!ready) {
+          ready = true;
+          throw new OllamaHttpError('refused', 'down');
+        }
+        return new Response(JSON.stringify({ version: '0.32.14' }));
+      },
+    });
+    expect(spawnSidecar).not.toHaveBeenCalled();
+    expect(status.kind).toBe('absent');
+  });
+
+  it('maps connection refused + missing windows app to absent and installable', async () => {
+    const status = await probeOllamaStatus({
+      platform: 'win32',
+      arch: 'x64',
+      env: { LOCALAPPDATA: WIN_LOCAL },
+      appExists: () => false,
+      fetchImpl: async () => {
+        throw new OllamaHttpError('refused', 'down');
+      },
+    });
+    expect(status).toMatchObject({ kind: 'absent', appInstalled: false, canInstallRuntime: true });
+  });
+
+  it('maps connection refused + official windows install to stopped', async () => {
+    const status = await probeOllamaStatus({
+      platform: 'win32',
+      arch: 'x64',
+      env: { LOCALAPPDATA: WIN_LOCAL },
+      appExists: (filePath) => filePath === WIN_OFFICIAL,
+      fetchImpl: async () => {
+        throw new OllamaHttpError('refused', 'down');
+      },
+    });
+    expect(status).toMatchObject({
+      kind: 'stopped',
+      appInstalled: true,
+      canInstallRuntime: false,
+    });
+  });
+
+  it('starts official windows ollama.exe when present', async () => {
+    const spawnSidecar = vi.fn();
+    let ready = false;
+    const status = await startOfficialOllamaApp({
+      platform: 'win32',
+      arch: 'x64',
+      env: { LOCALAPPDATA: WIN_LOCAL },
+      appExists: (filePath) => filePath === WIN_OFFICIAL,
+      spawnSidecar,
+      fetchImpl: async () => {
+        if (!ready) {
+          ready = true;
+          throw new OllamaHttpError('refused', 'down');
+        }
+        return new Response(JSON.stringify({ version: '0.32.14' }));
+      },
+    });
+    expect(spawnSidecar).toHaveBeenCalledWith(WIN_OFFICIAL);
+    expect(status.kind).toBe('ready');
+  });
+
+  it('does not spawn when the port is already a non-Ollama service', async () => {
+    const openApp = vi.fn();
+    const status = await startOfficialOllamaApp({
+      platform: 'darwin',
+      appExists: () => true,
+      openApp,
+      fetchImpl: async () => {
+        throw new OllamaHttpError('conflict', 'busy');
+      },
+    });
+    expect(openApp).not.toHaveBeenCalled();
+    expect(status.kind).toBe('port-conflict');
+  });
+
+  it('keeps waiting past the default deadline when the caller extends it', async () => {
+    // Cold sidecar starts were measured at ~19s; the default 15s gave up too early.
+    let clock = 0;
+    const run = (startTimeoutMs?: number) =>
+      startOfficialOllamaApp({
+        platform: 'darwin',
+        appExists: () => true,
+        openApp: async () => undefined,
+        now: () => clock,
+        sleep: async (ms) => {
+          clock += ms;
+        },
+        startTimeoutMs,
+        fetchImpl: async () => {
+          if (clock < 20_000) throw new OllamaHttpError('refused', 'down');
+          return new Response(JSON.stringify({ version: '0.34.4' }));
+        },
+      });
+    expect((await run()).kind).toBe('stopped');
+    clock = 0;
+    expect((await run(120_000)).kind).toBe('ready');
+  });
+
+  // PR #9420: cancellation must also interrupt an HTTP probe, not just polling sleep.
+  // Unit tier; hold the initial or readiness probe until its fetch signal aborts.
+  it.each(['initial', 'poll'] as const)('aborts a pending %s probe without launching again', async (phase) => {
+    const controller = new AbortController();
+    const openApp = vi.fn(async () => undefined);
+    let entered!: () => void;
+    const probing = new Promise<void>((resolve) => { entered = resolve; });
+    let requestSignal: AbortSignal | undefined;
+    let calls = 0;
+    const pending = startOfficialOllamaApp({
+      platform: 'darwin',
+      appExists: () => true,
+      openApp,
+      signal: controller.signal,
+      sleep: async () => undefined,
+      fetchImpl: async (_url, init) => {
+        if (phase === 'poll' && calls++ === 0) throw new OllamaHttpError('refused', 'down');
+        requestSignal = init.signal;
+        entered();
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        });
+      },
+    });
+    const result = expect(pending).rejects.toThrow('aborted');
+    await probing;
+    controller.abort();
+    expect(requestSignal?.aborted).toBe(true);
+    await result;
+    expect(openApp).toHaveBeenCalledTimes(phase === 'initial' ? 0 : 1);
+  });
+
+  it('aborts start polling when the install signal fires', async () => {
+    const abort = new AbortController();
+    const pending = startOfficialOllamaApp({
+      platform: 'darwin',
+      appExists: () => true,
+      openApp: async () => undefined,
+      signal: abort.signal,
+      sleep: () => new Promise(() => undefined),
+      fetchImpl: async () => {
+        throw new OllamaHttpError('refused', 'down');
+      },
+    });
+    abort.abort();
+    await expect(pending).rejects.toThrow('aborted');
+  });
+});

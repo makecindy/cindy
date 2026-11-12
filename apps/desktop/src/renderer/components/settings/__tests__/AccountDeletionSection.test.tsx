@@ -120,7 +120,7 @@ describe('AccountDeletionSection', () => {
   it('requires OTP plus explicit acknowledgement before confirming deletion', async () => {
     render(<AccountDeletionSection />);
     const entry = await screen.findByRole('button', { name: 'accountDeletion.entryAria' });
-    expect(entry.className).toContain('text-[var(--text-tertiary)]');
+    expect(entry.className).toContain('text-[var(--text-secondary)]');
     expect(entry.className).not.toContain('var(--destructive)');
     fireEvent.click(entry);
 

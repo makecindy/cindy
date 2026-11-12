@@ -5,12 +5,14 @@
  *
  * pi 侧的到达面与 CC 不同:bridge 在 pi 进程内直通「只读内置四件套且入参不碰凭证
  * 路径」(见 cindy-bridge-source.ts READONLY_BUILTINS + touchesCredentialPath),
- * `bypassPermissions` 全放行 —— 能到这里的是 bash / edit / write / 桥接 MCP 工具 /
+ * `bypassPermissions` 全放行 —— 能到这里的是 bash / powershell / edit / write / 桥接 MCP 工具 /
  * 凭证路径的只读调用 / 未来新增内置工具。只读分支扫全部字符串入参判凭证,与 bridge
- * 同判定:bridge 升级上来的凭证读在 auto 档必须落弹窗,不能被 path 字段缺失反向放行。
+ * 同判定:bridge 升级上来的凭证读在 auto 档必须送审,不能被 path 字段缺失静态放行。
  *
- * MCP 工具(`mcp__*`)一律走 `other`,由当前会话模型结合完整工具名/入参轻量诊断；
- * 本 adapter 不猜测各 server 的安全性。reviewer 缺失/失败仍由共享决策层 fail-closed。
+ * 第一方 durable `subagent` spawn 没有直接副作用,显式归为 session-state；子层具体工具调用
+ * 仍经 runner 回到父审批面。MCP 工具(`mcp__*`)一律走 `other`,由当前会话模型结合完整工具名 /
+ * 入参轻量诊断；本 adapter 不猜测各 server 的安全性。reviewer 缺失 / 失败仍由共享决策层
+ * fail-closed。
  */
 
 import {
@@ -19,18 +21,26 @@ import {
   type ReviewableAction,
   type ReviewVerdict,
 } from '../shared/auto-review.js';
+import { CINDY_SUBAGENT_TOOL_NAME } from './cindy-subagent-source.js';
 
 export type PiAutoReviewVerdict = ReviewVerdict;
 
 export interface PiAutoReviewContext {
-  /** pi 工具名(内置小写:bash/edit/write/read/…;桥接 MCP 为 mcp__<server>__<tool>)。 */
+  /** pi 内置工具名，或 bridge 从稳定网关还原出的 mcp__<server>__<tool> 真实身份。 */
   toolName: string;
   /** 工具入参(bridge 透传的原始对象)。 */
   input: Record<string, unknown>;
+  /**
+   * Bridge-followed real paths that matched the credential policy. `null` means
+   * canonical evidence is unavailable or malformed; the reviewer must see that uncertainty.
+   */
+  resolvedCredentialPaths?: readonly string[] | null;
   /** 会话工作区根:cwd,绝对路径(pi 无 extraDirs)。 */
   workspaceRoots: string[];
   /** 可读根:工作区 + Pi 附加只读引用目录。写操作仍只看 workspaceRoots。 */
   readRoots?: string[];
+  /** 工作目录与用户明确授权的附加可写目录。 */
+  writableRoots?: string[];
 }
 
 /** 给当前模型 reviewer 的完整 MCP/未知工具证据；输入来自 JSON RPC，可安全序列化。 */
@@ -56,6 +66,9 @@ const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(['read', 'grep', 'find', 'l
 
 /** 会改文件、带结构化 `path` 入参的 pi 内置工具。 */
 const FILE_WRITE_TOOLS: ReadonlySet<string> = new Set(['write', 'edit']);
+
+/** Pi v0.84.3 起 Windows 可选 powershell 与 bash 同为 shell 执行面，入参都是 `command`。 */
+const SHELL_TOOLS: ReadonlySet<string> = new Set(['bash', 'powershell']);
 
 function stringField(input: Record<string, unknown>, key: string): string | undefined {
   const v = input[key];
@@ -85,6 +98,23 @@ function findCredentialLeaf(input: unknown, depth = 0): string | undefined {
   return undefined;
 }
 
+function canonicalCredentialEvidenceAction(
+  ctx: PiAutoReviewContext,
+): ReviewableAction | undefined {
+  const { toolName, input, resolvedCredentialPaths } = ctx;
+  if (resolvedCredentialPaths !== null && !resolvedCredentialPaths?.length) return undefined;
+  // Canonical paths supplement the operation; they must not replace a shell
+  // command (which may do more than read) or hide an unverifiable request.
+  return {
+    kind: 'other',
+    description: JSON.stringify({ toolName, input, resolvedCredentialPaths,
+      credentialEvidenceStatus: resolvedCredentialPaths === null ? 'unverifiable'
+        : findCredentialLeaf(resolvedCredentialPaths) ? 'credential-paths' : 'host-policy-mismatch',
+    }),
+    requireConsent: true,
+  };
+}
+
 /**
  * Auto-review 下对一个 pi 工具调用给出审查档位。仅在权限档为 `auto` 时调用
  * (见 pi/index.ts handleExtensionUiRequest 的 dispatcher)。纯映射,判定逻辑全在 core。
@@ -92,16 +122,29 @@ function findCredentialLeaf(input: unknown, depth = 0): string | undefined {
 export function normalizePiToolForAutoReview(ctx: PiAutoReviewContext): ReviewableAction {
   const { toolName, input } = ctx;
 
+  if (toolName === CINDY_SUBAGENT_TOOL_NAME) {
+    // Spawn only creates a Cindy-managed durable child; it has no direct side effect itself.
+    // Defense in depth stays at the child boundary: every concrete Ask/Auto tool call is
+    // forwarded by the durable runner to this same parent approval surface for a fresh decision.
+    return { kind: 'session-state' };
+  }
   if (READ_ONLY_TOOLS.has(toolName)) {
+    // Bridge follows symlinks in its process, so Host must include those canonical
+    // targets in the same credential decision. A malformed or policy-inconsistent
+    // evidence payload cannot fall back to the innocent-looking link path.
+    const evidenceAction = canonicalCredentialEvidenceAction(ctx);
+    if (evidenceAction) return evidenceAction;
     // 凭证特征可能落在任意字符串入参(grep 的 pattern、find 的表达式等),与 bridge
-    // 的 touchesCredentialPath 同口径递归扫全字段;命中的字符串作为 path 交 core 判必问。
+    // 的 touchesCredentialPath 同口径递归扫全字段。
     const credentialHit = findCredentialLeaf(input);
     return { kind: 'read', path: credentialHit ?? stringField(input, 'path') };
   }
   if (FILE_WRITE_TOOLS.has(toolName)) {
     return { kind: 'file-write', path: stringField(input, 'path') };
   }
-  if (toolName === 'bash') {
+  if (SHELL_TOOLS.has(toolName)) {
+    const evidenceAction = canonicalCredentialEvidenceAction(ctx);
+    if (evidenceAction) return evidenceAction;
     return { kind: 'exec', command: stringField(input, 'command') ?? '' };
   }
   // MCP / 自定义 / 未知工具进入灰区，同时把完整工具名与入参交给轻量 reviewer。
@@ -109,5 +152,9 @@ export function normalizePiToolForAutoReview(ctx: PiAutoReviewContext): Reviewab
 }
 
 export function classifyPiToolForAutoReview(ctx: PiAutoReviewContext): PiAutoReviewVerdict {
-  return reviewAction(normalizePiToolForAutoReview(ctx), ctx.readRoots ?? ctx.workspaceRoots);
+  return reviewAction(
+    normalizePiToolForAutoReview(ctx),
+    ctx.readRoots ?? ctx.workspaceRoots,
+    { writableRoots: ctx.writableRoots ?? ctx.workspaceRoots },
+  );
 }

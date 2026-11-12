@@ -47,5 +47,13 @@ describe('turn continuation predicates', () => {
     expect(isProductTurnCompletionTailEvent({ type: 'status', data: { status: 'Working', isRunning: false } })).toBe(false);
     expect(isProductTurnCompletionTailEvent({ type: 'status', data: { status: 'Done', isRunning: true } })).toBe(false);
     expect(isProductTurnCompletionTailEvent({ type: 'status', data: null })).toBe(false);
+    expect(
+      isProductTurnCompletionTailEvent({
+        type: 'status',
+        turnScope: 'background',
+        data: { status: 'Done', isRunning: false },
+      }),
+    ).toBe(false);
+    expect(isProductTurnCompletionTailEvent({ type: 'done', turnScope: 'background' })).toBe(false);
   });
 });

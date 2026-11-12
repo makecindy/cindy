@@ -40,12 +40,7 @@ import type {
 import type { Session } from '@/lib/ccAgent.types';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from '../sessionMoveTarget';
-import {
-  MENU_CONTENT_CLASS,
-  MENU_ITEM_CLASS,
-  MENU_ROW_CLASS,
-  MENU_SUB_CONTENT_CLASS,
-} from '../menuStyles';
+import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from '../menuStyles';
 
 export type DialogueSortBy = 'recency' | 'time' | 'title';
 
@@ -204,12 +199,7 @@ export function DialogueSection({
                 </button>
               </Tip>
             </DropdownMenuTrigger>
-            <DropdownMenuContent
-              side="bottom"
-              align="start"
-              sideOffset={8}
-              className={cn(MENU_CONTENT_CLASS, 'w-[196px]')}
-            >
+            <DropdownMenuContent side="bottom" align="start" sideOffset={8} className="w-[196px]">
               <div className="px-2 py-1.5 text-xs font-medium text-[var(--cmd-palette-item-meta)]">
                 {t('ccAgent.sidebar.dialogueSettings')}
               </div>
@@ -224,10 +214,7 @@ export function DialogueSection({
                     className="shrink-0 text-[var(--cmd-palette-item-meta)]"
                   />
                 </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent
-                  sideOffset={8}
-                  className={cn(MENU_SUB_CONTENT_CLASS, 'w-[180px]')}
-                >
+                <DropdownMenuSubContent sideOffset={8} className="w-[180px]">
                   {DIALOGUE_SORT_OPTIONS.map((option) => (
                     <DropdownMenuItem
                       key={option.value}

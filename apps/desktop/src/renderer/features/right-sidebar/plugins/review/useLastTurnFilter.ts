@@ -7,10 +7,10 @@
 
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
 
-import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
+import { makerChatStore } from '@/lib/makerChatStore';
 import { collectLastTurnPaths } from '../../lib/lastTurnChangedFiles';
 
-const EMPTY_MESSAGES: readonly ChatMessage[] = Object.freeze([]);
+const EMPTY_PATH_SNAPSHOT = '[]';
 
 export {
   absoluteToWorkdirRelative as absoluteToRepoRelative,
@@ -25,10 +25,14 @@ export function useLastTurnFilter(sessionId: string | null, repoRoot: string | n
     },
     [sessionId],
   );
-  const getSnapshot = useCallback((): readonly ChatMessage[] => {
-    if (!sessionId) return EMPTY_MESSAGES;
-    return makerChatStore.getSnapshot(sessionId).messages;
-  }, [sessionId]);
-  const messages = useSyncExternalStore(subscribe, getSnapshot);
-  return useMemo(() => collectLastTurnPaths(messages, repoRoot), [messages, repoRoot]);
+  const getSnapshot = useCallback((): string => {
+    if (!sessionId) return EMPTY_PATH_SNAPSHOT;
+    const paths = collectLastTurnPaths(makerChatStore.getSnapshot(sessionId).messages, repoRoot);
+    return JSON.stringify([...paths].sort());
+  }, [repoRoot, sessionId]);
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot);
+  return useMemo(
+    () => new Set<string>(JSON.parse(snapshot) as string[]),
+    [snapshot],
+  );
 }

@@ -4,8 +4,8 @@
  * ErrorBanner — Cindy AI 网关余额耗尽的导流不变量：
  *   1. 来源确定是 xd 且计费面可见（父组件传了 onViewBalance）→ 文案换成「余额不足，
  *      请充值后继续」并给出右端内联「查看余额」。
- *   2. 来源是其它供应商 → 一个字都不改，也不加按钮（没有可跳的地方）。
- *   3. 来源是 xd 但计费面不可见（org / local，父组件不传回调）→ 同样不改、不加按钮。
+ *   2. 来源是其它供应商 → 使用供应商余额提示，不加 Cindy 余额按钮。
+ *   3. 来源是 xd 但计费面不可见（org / local，父组件不传回调）→ 同样提示额度不足、不加余额按钮。
  *   4. 非余额类错误不被这条分支吃掉。
  */
 
@@ -18,7 +18,7 @@ const { useCodexRuntimeRouteMock } = vi.hoisted(() => ({
 }));
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: { exists: () => false, language: 'en' } }),
 }));
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
@@ -48,6 +48,18 @@ afterEach(() => {
 });
 
 describe('ErrorBanner — Cindy AI 余额不足导流', () => {
+  it.each(['cc', 'codex', 'pi'] as const)('explains the reported LiteLLM balance error for %s without a Cindy billing action', agentKind => {
+    const error = '402: {"message":"litellm.BadRequestError: OpenAIException - Insufficient Balance", "type":"insufficient_balance_error","code":"402"}';
+    const onRetry = vi.fn();
+    render(createElement(ErrorBanner, { error, agentKind, providerId: 'custom-litellm',
+      errorSourceProviderId: 'custom-litellm', onViewBalance: vi.fn(), onRetry, retryText: 'original input' }));
+    expect(screen.getByText('providerError.QUOTA_EXCEEDED')).toBeTruthy();
+    expect(screen.queryByTitle('chat.errorBanner.viewBalanceTitle')).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(error)).toBeTruthy();
+    fireEvent.click(screen.getByTitle('chat.errorBanner.retryTitle'));
+    expect(onRetry).toHaveBeenCalledOnce();
+  });
   it('来源是 xd 且计费面可见时换文案并给「查看余额」出口', () => {
     const onViewBalance = vi.fn();
 
@@ -70,6 +82,12 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
     expect(onViewBalance).toHaveBeenCalledOnce();
   });
 
+  it('recognizes the reported structured error type without its English message', () => {
+    render(createElement(ErrorBanner, { error: '{"type":"insufficient_balance_error"}',
+      providerId: 'custom', errorSourceProviderId: 'custom', onRetry: vi.fn() }));
+    expect(screen.getByText('providerError.QUOTA_EXCEEDED')).toBeTruthy();
+  });
+
   it('余额不足不隐藏 Retry —— 充值后原样重试就该成功', () => {
     const onRetry = vi.fn();
 
@@ -89,7 +107,7 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
     expect(onRetry).toHaveBeenCalledWith('retry-token');
   });
 
-  it('其它供应商保持现状：不改文案、不加按钮', () => {
+  it('其它供应商使用通用摘要，不加余额按钮', () => {
     render(
       createElement(ErrorBanner, {
         error: QUOTA_ERROR,
@@ -101,12 +119,15 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
       }),
     );
 
+    expect(screen.getByText('providerError.QUOTA_EXCEEDED')).toBeTruthy();
+    expect(screen.queryByText(QUOTA_ERROR)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
     expect(screen.queryByText('chat.errorBanner.gatewayQuotaExhausted')).toBeNull();
     expect(screen.queryByTitle('chat.errorBanner.viewBalanceTitle')).toBeNull();
   });
 
-  it('错误来源不明(无 errorSourceProviderId)时不启用余额分类 —— 即使会话当前是 xd', () => {
+  it('错误来源不明时提示额度不足，但不提供 Cindy 充值入口', () => {
     render(
       createElement(ErrorBanner, {
         error: QUOTA_ERROR,
@@ -118,6 +139,9 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
       }),
     );
 
+    expect(screen.getByText('providerError.QUOTA_EXCEEDED')).toBeTruthy();
+    expect(screen.queryByText(QUOTA_ERROR)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
     expect(screen.queryByTitle('chat.errorBanner.viewBalanceTitle')).toBeNull();
   });
@@ -133,6 +157,9 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
       }),
     );
 
+    expect(screen.getByText('providerError.QUOTA_EXCEEDED')).toBeTruthy();
+    expect(screen.queryByText(QUOTA_ERROR)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
     expect(screen.queryByText('chat.errorBanner.gatewayQuotaExhausted')).toBeNull();
     expect(screen.queryByTitle('chat.errorBanner.viewBalanceTitle')).toBeNull();
@@ -152,6 +179,24 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
 
     expect(screen.queryByText('chat.errorBanner.gatewayQuotaExhausted')).toBeNull();
     expect(screen.queryByTitle('chat.errorBanner.viewBalanceTitle')).toBeNull();
+  });
+
+  it.each(['429 Too Many Requests: rate limit exceeded', '401 invalid API key', 'ECONNREFUSED',
+    'Selected model is at capacity', 'error at line 402'])('does not classify %s as quota exhaustion', error => {
+    render(createElement(ErrorBanner, { error, providerId: 'custom', errorSourceProviderId: 'custom', onRetry: vi.fn() }));
+    expect(screen.queryByText('providerError.QUOTA_EXCEEDED')).toBeNull();
+    expect(screen.queryByTitle('chat.errorBanner.viewBalanceTitle')).toBeNull();
+  });
+
+  it('shows the provider quota summary and original detail in a persisted error', async () => {
+    const { ErrorTailErrorBanner } = await import('@/components/chat/InterruptedTurnBanner');
+    render(createElement(ErrorTailErrorBanner, { errorText: QUOTA_ERROR,
+      onContinue: vi.fn(), onDismiss: vi.fn(), agentKind: 'cc',
+      providerId: 'custom', errorSourceProviderId: 'custom', onViewBalance: vi.fn() }));
+    expect(screen.getByText('providerError.QUOTA_EXCEEDED')).toBeTruthy();
+    expect(screen.queryByTitle('chat.errorBanner.viewBalanceTitle')).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
   });
 
   it('持久化错误行(ErrorTailErrorBanner)同样透传「查看余额」—— 重载后恢复的历史余额错误不退化', async () => {
@@ -206,6 +251,9 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
       }),
     );
 
+    expect(screen.getByText('providerError.QUOTA_EXCEEDED')).toBeTruthy();
+    expect(screen.queryByText(QUOTA_ERROR)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
     expect(screen.queryByText('chat.errorBanner.gatewayQuotaExhausted')).toBeNull();
     expect(screen.queryByTitle('chat.errorBanner.viewBalanceTitle')).toBeNull();

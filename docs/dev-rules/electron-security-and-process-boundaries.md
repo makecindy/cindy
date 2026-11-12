@@ -95,7 +95,10 @@ Renderer 可以负责组件渲染、交互状态、表单状态、展示数据�
    才显示冷窗口。超时只能展示已经挂载的 Loading 壳，不得展示空白窗口，也不得永久隐藏。
 3. **隐藏复用而非反复冷启动**：普通关闭转换为 `hide()`，再次打开复用同一 Renderer；
    主窗口真正销毁或应用退出时才 `destroy()`。隐藏／最小化必须暂停轮询、采样等后台重活，
-   再次显示时先展示保留快照并异步刷新。
+   再次显示时先展示保留快照并异步刷新。例外：承载实时会话的窗口（远程桌面查看器）
+   以 `pauseWhenHidden: false` 让会话跨越最小化、切换 Space 与原生全屏切换，只在用户
+   关闭窗口时结束——macOS 会把后两者及完全遮挡都报告成原生 hide；隐藏期间改由被控端
+   暂停视频（见 `protocol-compatibility/remote-desktop-pause-video-when-hidden.md`「远程桌面查看窗口隐藏时暂停视频」）。
 4. **隐藏时重置交互态**：必须清除焦点，并重置自绘窗口按钮、hover／pressed、确认框、
    选中项与待执行操作等瞬时状态，确保二次打开不会继承上次关闭时的视觉或交互状态。
 5. **使用真正的轻量入口**：独立窗口不得先进入完整 `App` 再在组件树内分流；使用独立的
@@ -113,13 +116,126 @@ Renderer 可以负责组件渲染、交互状态、表单状态、展示数据�
 必须区分冷启动与热打开，并确认热打开链路没有重新创建 BrowserWindow、重新加载 Renderer
 或同步等待业务数据。
 
+按内容多实例、内容回到主窗即结束的窗口（右侧栏页签弹出窗口，一扇窗承载若干页签，
+`main/sidebar-tab-window/controller.ts`）对「隐藏复用」取另一种等价形式：关窗即关闭窗内页签
+（经 renderer 走与侧边栏相同的 closeTab 流程），页签关掉或合并回侧边栏后窗口没有可复用的
+内容，随即销毁；「准备成本移出点击路径」由一扇未指派的预热 spare
+窗口承担（弹出时只做指派 → 首份内容 → `show()`），指派后再延迟补一扇。崩溃不重建 renderer，
+而是把页签交回侧边栏（侧边栏本身就是安全态），这同样满足「恢复有界」。
+
 确因透明窗口、全局热键窗口、系统级浮层等平台约束不能复用完整基线时，必须在实现前于代码
 注释和测试中写明冲突点；例外只豁免冲突项，其余预热、就绪握手、安全配置、状态清理与故障
 隔离要求仍然适用。
 
-`webviewTag` 默认关闭；受控例外目前有三处——主界面与右侧栏子窗口（内置浏览器需要），
-以及插件面板独立窗口（`main/ghost-panel-window/window.ts`，仅承载 ghost 分区面板
-webview）——所有例外都必须继续由 `webview-security.ts` 在 `will-attach-webview` 阶段
+截图贴图窗口（`main/region-screenshot/pins.ts`）采用按内容多实例、关闭销毁；
+2026-10-26 用户明确选择按需创建，不常驻备用 Renderer，接受首次贴图的加载时间。
+此例外仅豁免预热，不豁免首份图片绘制后才显示、专用 preload、来源校验与故障关闭；
+超时、崩溃或失去响应时关闭该贴图，不以黑窗替代内容。回归见该目录的
+`__tests__/windows.test.ts`。2026-11-02 用户明确选择框选截图首次使用时创建、后续隐藏复用，
+不在应用启动或截图结束后预热（包括长图编辑与录屏回放窗口）。正常退出清空图片与交互态，
+释放鼠标穿透状态；Windows 显隐都临时禁用 Aura 动画，每次仅在当前 token 的首帧绘制确认后
+恢复不透明与焦点，旧 token 不得揭示旧画面。绘制失败、崩溃或显示器配置变化时丢弃失效窗口，
+下次按需重建；应用退出销毁全部窗口。
+macOS 浮层是不激活应用的面板（`type: 'panel'`）：拿键盘焦点但不激活 Cindy，截图前的
+应用保持前台，菜单栏不切换，滚动截图时触控板滚动与惯性照常交给它；不得改回
+`app.focus({ steal: true })`。
+
+截图自动选区只查询几何信息。macOS 按原生命中规则跳过透明位置与忽略鼠标的窗口，
+只显式排除本次截图浮层；命中未收入截图快照的窗口时不继续向下穿透。辅助功能查询
+优先命中目标应用并沿父级取区域，失败时在有界预算内回退到目标窗口树。
+本机 `ELEMENTS_AT` 返回纠正后的窗口与元素；主进程保留 sender／顶层 frame／token 和
+显示器内坐标校验，只接受快照中的目标。精细元素缓存绑定查询位置，迟到结果不覆盖新位置或默认区域缓存。
+此接口与原生 helper 同包更新，不进入 device-link allowlist；旧 helper 缺少命中查询时
+沿用窗口矩形吸附。回归见 `snapshotHost.test.ts`、`windows.test.ts` 与 `screenshotRendering.test.tsx`。
+首次悬停优先网页／文档内容区，浏览器工具栏与标签栏回到整窗，内部元素保留供滚轮切换。
+Windows 在截图准备阶段保存原生子窗口区域（每窗最多 256 个、最多 40 层，按原生层级／z 序，
+裁到祖先边界），随窗口列表可选 `snapRects` 下发；main 校验并转换为显示器局部 DIP。
+移动时从快照同步命中默认区域，异步元素查询只补滚轮候选，不在等待时退回整窗；
+相同默认区域保留仍有效的滚轮层级，相同候选和层级不重复更新。旧 helper／macOS 没有此字段，
+或 Chromium 没有原生内容子窗口时，将有效的内容区按窗口补入本次截图的默认区域缓存（每窗最多 256 个）。
+等待查询和空／不完整回复不清除仍包含指针的已知内容区；退出／重新截图即清空。
+不复用旧位置的精细元素链。若原生命中曾纠正透明／鼠标穿透前窗，新位置仍在纠正窗口内、
+且矩形命中的前窗未变，等待查询期间沿用已确认目标的默认区域显示；此显示保留不替代新位置的
+原生命中，当前回复确认不透明前窗后立即切换。离开纠正窗口或进入另一前窗时立即按新边界显示；
+未知遮挡物的显式空命中也须保留，不能在同一快照前窗内移动时因新坐标尚未回复而选中底层窗口；
+新位置的有效回复恢复已知窗口，进入另一快照前窗则结束保留。
+双窗口／未知遮挡中间帧、迟到回复和不透明区域切换回归见 `screenshotRendering.test.tsx`。
+Windows 同时在有界预算内遍历重叠的 UIA 分支，不能因首个同尺寸
+空容器而漏掉正文；macOS 沿 AXWebArea／滚动容器获取内容区。helper 可选返回 `preferredRect`，
+主进程验证并转换到显示器局部 DIP；旧 helper 省略时保持原有元素吸附。
+Windows 真实 Chrome＋原生 helper＋生产浮层的黑盒回归入口为
+`node apps/desktop/scripts/check-region-snapping.mjs`，副屏可加 `--position=2700,100`；
+记录 Light／Dark 连续移动时的 DOM 提交与绘制帧，并延后真实元素响应验证过程中无整窗闪回及跨边界切换；
+只适配测试传输，不替代生产 IPC 授权用例或 macOS 实机验证。
+
+macOS helper 在读取首条请求前初始化 `NSApplication`，使用 `.prohibited` 激活策略保持
+后台进程；否则 AppKit 窗口命中可能始终返回 0。不得为初始化激活应用、显示 Dock 图标或
+启动阻塞 stdin 协议的应用事件循环。原生回归入口为
+`node apps/desktop/scripts/check-macos-region-snapping.mjs`（需要 macOS 图形桌面与辅助功能权限），
+实际编译生产 helper 并查询独立 AppKit 测试窗口，覆盖冷启动、焦点／鼠标保持、内容区、
+截图浮层排除和真实遮挡；`--helper=<binary>` 可对旧二进制运行同一用例。
+透明像素使用独立 AppKit 应用的实际命中作参照，不假定每个系统都把视觉透明区域视为鼠标穿透。
+
+滚动截图与区域录制复用该浮层和会话 token，开始后把控制区移到选区之外。
+滚动截图在原透明浮层显示选区轮廓与侧边预览，只在预览和自动滚动按钮处接收鼠标。
+长图编辑交给独立无标题栏窗口，复用辅助窗口 controller，原浮层结束；首份图片绘制后才显示。
+录屏统一入口，框选后选择视频／GIF；3秒大号倒计时结束才采样。默认录入鼠标指针，不采集或叠加按键。
+录制中透明浮层仅在选区外的紧凑控制条接收鼠标，拖动范围由 main 限制在本屏选区外；
+macOS 开始采集保留面板的位置与层级，不调用会先隐藏再后置窗口的 `blur()`；
+控制条的拖柄、格式、计时与同组空白区域可拖动，按钮操作独立，松手按最终指针位置落定。
+标注预览按需展开。结束后把已编码字节交给无标题栏回放窗口，随即结束采集与全局 Escape。
+回放窗口复用辅助窗口 controller、独立轻量入口及最小 preload；只持有已完成结果和保存／复制能力，
+不授予屏幕、按键或路径访问。回放窗口在 main 单独登记播放器全屏权限，权限检查仍核对自有页面、
+顶层 frame 与请求地址，不升级为 app-content，不开放媒体采集或自动全屏；Esc 先退出全屏。
+macOS 在用户请求的回放窗口实际显示前激活应用，再聚焦回放窗口；隐藏预热与录制浮层不抢应用焦点。
+取消保存保留结果，关闭清理媒体 URL 与交互状态。
+复制 IPC 只接受当前预览 token，主机验证真实 sender 与顶层 frame，字节与格式取自主机保留的结果，
+不接受路径或任意文件参数。原生文件剪贴板复用 `fileClipboard.ts`，视频／GIF 保留原格式；
+复制失败保留预览供重试。落盘引用生命周期见媒体存储规则「录屏剪贴板」。此 IPC 仅本机回放窗使用，不进入 device-link 白名单。
+自动滚动同样校验所属窗口、顶层 frame、当前 token 和滚动模式；只向启动时选中的原窗口
+发送选区中心的向下滚动，原生侧再次核对命中的窗口／进程。停止、编辑、导出或退出后不再发起滚动。
+main 按所属窗口、顶层 frame 和当前 token 校验每次采集，只向面板发送裁剪后的像素；
+不授予 Renderer 通用屏幕媒体流，不扩大 device-link 的远程 IPC 白名单。
+Windows 滚动截图与录制由当前用户会话的截图 helper 直接读取已选矩形（单帧最多 3200 万像素），不启动 SYSTEM broker；
+Windows 首次定格同样优先使用该 helper，仅对已确认的 8-bit sRGB 显示器启用，按物理坐标和原分辨率采集；
+HDR、广色域、未知色彩配置或 helper 不可用时，整组显示器回退 Electron 原采集路径。
+Windows helper 的 `frame` 请求可显式指定 `encoding: "bgra"`，响应为一行 JSON 头加
+`byteLength` 个原始像素字节；未指定时保留旧 Base64 JSON，新主机也接受旧 helper 的回复。
+主机按请求 ID、尺寸和 3200 万像素上限校验后才分配独立的定长缓冲，按管道分段填充，
+完整收到后才交给截图／录制；不将像素转成文本，不把共用管道缓冲的其它字节带过 IPC。
+长度不符、截断或超时结束本次 helper 并沿用原降级路径；不落盘，也不延长辅助进程生命周期。
+无后台持续采集，不改变截图授权、IPC 来源检查或远程桌面采集行为。
+macOS 复用本地 ScreenCaptureKit helper，main 裁剪后才跨 IPC。没有录制临时文件。
+视频录制可分别选择扬声器和麦克风，默认均关闭；GIF 不采集声音。音源由独立的
+`DesktopCaptureWindow` recording 模式持有，媒体权限只授予该次录制的顶层页面和所选音源。
+系统声音所需的屏幕流只进入隔离进程，其视频轨道立即停止；截图界面只接收最多 100 ms
+的立体声 PCM，不获得未裁剪画面或通用媒体权限。混音不回放到本机扬声器，声音与画面
+通过同一个 MediaRecorder 暂停、恢复和封装。暂停时销毁音源采集窗口、停止 PCM 轮询并挂起
+接收端 AudioContext，仅保留封装所需的同一条输出音轨；恢复时重新获取所选音源，丢弃旧读取结果，
+音频就绪后才恢复录制计时。音源失败会明确提示；取消、结束或会话关闭
+均销毁采集窗口及音轨，不在后台继续收音。这些接口仅供本机截图窗口使用，不加入远程 IPC allowlist。
+本地区域 GIF／视频录制通过同包 helper 的 `cursor-overlay-demand` 模式按请求编码：
+系统仍按原来的 30fps 配置提供画面，仅保留最新一张尚未编码的 IOSurface，使用 CF retain 与
+IOSurface use count 阻止缓冲复用；替换、编码完成、空白画面和销毁均释放它。无请求时不做 JPEG
+编码，静止画面可复用已编码结果；请求早于首帧时等第一张有效画面。分辨率、JPEG 参数和大小预算
+降级规则不变，仍先压缩整屏再由 main 裁选区。远程桌面与单窗口拍照沿用原 `cursor-overlay`
+即时编码方式；不新增远端字段、权限、allowlist 或 relay 行为。单次取帧会增加编码等待，验收需
+同时检查 CPU、取帧速率和暂停恢复，不能只报编码次数。原生对照与实机入口分别为
+`benchmark-macos-demand-capture.mjs`、`benchmark-macos-live-capture.mjs`（位于 Desktop scripts）。
+暂停停止采样，关闭、显示器变化或 Renderer 故障结束会话；异步迟到帧丢弃。
+视频与 GIF 在内存中编码；保存通过原生保存框选择导出路径，取消保存保留本次结果供重试。
+GIF 的量化与压缩在 Renderer 专属 Web Worker 中完成，仅接收已裁剪像素，不获得 Node 或
+屏幕访问权限。每次等待上一帧完成再采样，暂停与停止按序处理；取消、异常和超时均终止 Worker。
+GIF 只在 rgb444 每个分组的计数与 RGB 总和全部相同时复用量化结果，索引映射和压缩仍逐帧执行，
+不得用近似调色板或降低颜色数替代。大幅不透明 PNG 保存可用已有 libvips 线程池无损编码；
+透明图、JPEG 与编码器不可用时保持原生路径，仍先经用户的保存框选址，不新增临时媒体文件。
+复制通过媒体总仓保留文件，并写入原生文件剪贴板。
+
+`webviewTag` 默认关闭；受控例外目前只有两类——主界面与右侧栏子窗口（内置浏览器需要；
+右侧栏整栏子窗口与页签弹出窗口共用 `main/right-sidebar-window/window.ts` 的
+`createSidebarHostWindow` 工厂与 `sidebarWindowPreload`，`main/sidebar-tab-window/window.ts`
+只改启动参数、尺寸与位置记忆）。插件面板（ghost 分区 webview）不再有专属窗口：它以右侧栏
+全局页签承载，弹出时走同一扇页签窗口——所有例外都必须继续由 `webview-security.ts` 在 `will-attach-webview` 阶段
 覆盖 Renderer 传入的全部安全选项（hardener 挂在 `web-contents-created`，对所有窗口
 全局生效，ghost 附加闸只认分区与地址、不认宿主窗口）。
 
@@ -127,6 +243,19 @@ webview）——所有例外都必须继续由 `webview-security.ts` 在 `will-a
 `setWindowOpenHandler` 拒绝真实弹窗并转成受控标签页。这是唯一允许的窄例外；Renderer
 不得自行添加 `allowpopups`。Ghost 面板更严格：专属 partition、无 Node、无通用 preload，
 身份由 Main 根据真实 `webContents` 反查。
+
+登录人机验证（captcha）webview 是 hardener 中与 ghost 同级的第三类受控分支
+（`LOGIN_CAPTCHA_PARTITION`，非 persist 内存分区）：`will-attach-webview` 阶段按
+`isAllowedLoginCaptchaUrl` 验明正身——协议（https，或 loopback http 兼容本地 dev
+auth-server）+ origin 命中 `setLoginCaptchaOriginResolver` 注入的 auth 端点集合 +
+路径精确等于托管挑战页（`@cindy/auth-client` 的 `CAPTCHA_CHALLENGE_PAGE_PATH`），
+验不过直接拒附加，绝不回落浏览器分区；attach 后零 preload、零弹窗，顶层导航仅放行
+同一白名单。挑战结果（Turnstile token）经托管页 `location.hash` 写入、宿主 renderer
+监听 `did-navigate-in-page` 读取——fragment 变更不产生网络请求，token 不进任何日志，
+也不需要新增 preload / IPC 注入面。主窗 CSP 保持不动：挑战页是独立 origin 的 guest
+文档，`installContentSecurityPolicy` 只注入 app 自有文档，`frame-src 'none'` 也不约束
+`<webview>`。回归用例钉在 `main/__tests__/webview-security.test.ts` 的 captcha 分区
+测试组。
 
 ## 4．preload 与 Context Bridge
 
@@ -169,6 +298,21 @@ webview）——所有例外都必须继续由 `webview-security.ts` 在 `will-a
 - 新增加载远程内容的 session 时，必须同时设置 `setPermissionRequestHandler` 与
   `setPermissionCheckHandler`，按最小权限默认拒绝；需要放行时必须校验真实来源与权限类型。
 
+### 正文视频网站播放器
+
+YouTube 视频组件复用内置浏览器的 `BROWSER_PARTITION` 持久会话、标准 WebView
+加固与原生弹窗路由。用户从播放器登录时，在 Cindy 浏览器完成授权，登录状态保留在同一
+会话中；不得另造无痕视频分区、阻断登录跳转或复制外部浏览器 Cookie。
+共享解析器从核验的视频 ID 生成 `https://www.youtube.com/embed/<video-id>`，
+不执行模型提供的任意 iframe/HTML。点击封面后装载，卸载时销毁 guest；切换焦点或打开
+登录页不会销毁播放器。主窗口 CSP、沙箱、上下文隔离和无 Node 的浏览器基线保持不变。
+
+播放器首次加载通过 WebView `httpreferrer` 提供当前 App ID。浏览器会话的单一请求头
+listener 仅匹配 YouTube `/embed/*`：来源缺失或登录返回变成 YouTube 自身时补上 App ID，
+已有网站嵌入来源原样保留。不注册第二个同会话 listener，也不触及 default session 的
+MCP 请求钩子。此身份要求来自 YouTube 官方文档，不伪装成第三方网站或改写 User-Agent。
+普通视频文件继续走原媒体播放器，原视频外链始终保留。
+
 ## 7．CSP、协议与 Electron Fuses
 
 - 应用 CSP 由 `main/security/csp.ts` 统一注入。不得另注册会覆盖它的
@@ -176,6 +320,11 @@ webview）——所有例外都必须继续由 `webview-security.ts` 在 `will-a
 - 正式包不得新增远程脚本或 `'unsafe-inline'`。现有 `'unsafe-eval'` 仅为 vendored drawio
   的已知例外；新增用途必须先做安全评估，不能顺手扩大 `script-src`、`connect-src` 或
   `frame-src`。
+- 所有插件 HTML 页面统一允许 HTTPS 图片：Host 生成的 CSP 只给 `img-src` 增加 `https:`，
+  owner × plugin session 的请求闸只额外放行
+  `protocol === "https:" && resourceType === "image"`。HTTP 图片、XHR／fetch、脚本、
+  样式表、字体、媒体、WebSocket 与其它协议保持拒绝，同 ghost 的 `cindy-ghost://` 资源照常
+  放行。不得把这项图片能力扩成通用网络口子；listener 继续按 partition 幂等注册。
 - 新的本地资源通道优先使用范围受控的自定义协议，不新增 `file://` 读取路径。主 Renderer
   仍使用 `file://` 是存量架构，迁移需要单独设计和验证，不能在普通功能 PR 中顺带改动。
 - 打包必须保留现有 Fuses：关闭 RunAsNode、Node options 和 CLI inspect，开启 cookie 加密、

@@ -93,8 +93,10 @@ export interface GatewayImageGenerateParams {
   model: string;
   prompt: string;
   size?: string;
-  quality?: 'low' | 'medium' | 'high';
+  quality?: string;
   n?: number;
+  /** Additional native body fields; connection and credentials remain host-owned. */
+  nativeParameters?: Record<string, unknown>;
 }
 
 export interface GatewayImageEditParams {
@@ -103,8 +105,9 @@ export interface GatewayImageEditParams {
   prompt: string;
   imagePaths: string[];
   size?: string;
-  quality?: 'low' | 'medium' | 'high';
+  quality?: string;
   n?: number;
+  nativeParameters?: Record<string, unknown>;
 }
 
 export interface GatewayImageItem {

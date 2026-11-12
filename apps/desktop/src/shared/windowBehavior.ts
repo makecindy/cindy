@@ -14,6 +14,7 @@ export const WINDOW_BEHAVIOR_SET_SWALLOW_ACTIVATION_CLICK_CHANNEL =
   'window-behavior:set-swallow-activation-click';
 
 export type WindowsCloseBehavior = 'quit' | 'tray';
+export type LinuxCloseBehavior = 'quit' | 'minimize';
 
 export const WINDOW_BEHAVIOR_GET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL =
   'window-behavior:get-windows-close-behavior';
@@ -23,7 +24,19 @@ export const WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_REQUESTED_CHANNEL =
   'window-behavior:windows-close-behavior-requested';
 export const WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_SHOWN_CHANNEL =
   'window-behavior:windows-close-behavior-shown';
+export const WINDOW_BEHAVIOR_GET_LINUX_CLOSE_BEHAVIOR_CHANNEL =
+  'window-behavior:get-linux-close-behavior';
+export const WINDOW_BEHAVIOR_SET_LINUX_CLOSE_BEHAVIOR_CHANNEL =
+  'window-behavior:set-linux-close-behavior';
+export const WINDOW_BEHAVIOR_LINUX_CLOSE_BEHAVIOR_REQUESTED_CHANNEL =
+  'window-behavior:linux-close-behavior-requested';
+export const WINDOW_BEHAVIOR_LINUX_CLOSE_BEHAVIOR_SHOWN_CHANNEL =
+  'window-behavior:linux-close-behavior-shown';
 
 export function isWindowsCloseBehavior(value: unknown): value is WindowsCloseBehavior {
   return value === 'quit' || value === 'tray';
+}
+
+export function isLinuxCloseBehavior(value: unknown): value is LinuxCloseBehavior {
+  return value === 'quit' || value === 'minimize';
 }

@@ -17,6 +17,7 @@ import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 import { isIpcErrorCode } from '../../../shared/ipc-errors.js';
 import { createLogger } from '../../logger.js';
+import { clearSessionAttention } from '../../appBadgeService.js';
 import { notifyGhostSessionEvent } from '../../cindy-brain/index.js';
 import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate.js';
 import {
@@ -37,10 +38,12 @@ import {
 } from '../../session-share/sessionShareImport.js';
 import { getDbClient, tryGetDbClient } from '../client/current.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
-import { captureMediaRefCompensationScope } from '../../cindy-media/refCompensationJournal.js';
+import { captureMediaRefCompensationScope } from '../../cindy-media/refCompensationJournal.desktop.js';
+import { compactSessionToolResultsBestEffort } from '../toolResultCompaction.js';
 import {
   broadcastSessionPatched,
   captureSessionRecycleScope,
+  requestSessionWorktreeRecycle,
   recycleSessionWorktreeForStatusChange,
 } from './sessions.js';
 
@@ -189,7 +192,13 @@ export function registerSessionShareIpc(): void {
         };
         const result = await commitShareImport(
           { draftId, workingDir, draftPrefs, overwrite, useWorktree },
-          { dbClient: importDbClient, assertStillValid, refCompensationScope },
+          {
+            dbClient: importDbClient,
+            assertStillValid,
+            refCompensationScope,
+            requestWorktreeRecycle: (sessionId) =>
+              requestSessionWorktreeRecycle(importDbClient.drizzle, sessionId),
+          },
         );
         // 覆盖事务成功后再执行不可随 SQLite 回滚的运行时/UI/资源收尾：
         // - 广播 patched 让 sidebar/会话视图立即移除旧任务；
@@ -198,7 +207,12 @@ export function registerSessionShareIpc(): void {
         // 不直接删除转录或媒体字节：同 resume id/内容的新任务可能复用它们。
         for (const replaced of result.replacedSessions) {
           if (!isStillCurrent()) break;
+          clearSessionAttention(replaced.id, 'explicit');
           broadcastSessionPatched(replaced.id, { status: 'deleted' }, recycleScope.ownerScope);
+          void compactSessionToolResultsBestEffort({
+            client: importDbClient,
+            sessionId: replaced.id,
+          });
           await recycleSessionWorktreeForStatusChange(replaced.id, 'deleted', recycleScope);
         }
         if (isStillCurrent()) {
@@ -271,7 +285,7 @@ function sanitizeDraftPrefs(raw: unknown): ShareImportDraftPrefs | null {
     effort: typeof r.effort === 'string' ? r.effort : undefined,
     permissionMode: typeof r.permissionMode === 'string' ? r.permissionMode : undefined,
     planMode: r.planMode === true,
-    fastMode: r.fastMode === true,
+    fastMode: (r.fastMode === 'ultrafast' ? 'ultrafast' : r.fastMode === true),
     providerId: typeof r.providerId === 'string' && r.providerId.length > 0 ? r.providerId : null,
   };
 }

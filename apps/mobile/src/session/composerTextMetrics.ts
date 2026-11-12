@@ -17,8 +17,8 @@
  */
 import { lineHeight, spacing, typeScale } from '@/theme/tokens';
 
-/** 输入文本字号(排版阶梯 typeScale.code)。 */
-export const COMPOSER_TEXT_FONT_SIZE = typeScale.code;
+/** 输入文本字号(排版阶梯 typeScale.bodySmall)。 */
+export const COMPOSER_TEXT_FONT_SIZE = typeScale.bodySmall;
 /**
  * 单行文字的行高(排版阶梯 lineHeight.body),**不含内边距**;
  * 也是 COMPOSER_SINGLE_LINE_HEIGHT 的基数(见下)。

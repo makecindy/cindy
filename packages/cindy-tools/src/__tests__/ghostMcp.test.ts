@@ -4,14 +4,19 @@ import { GHOST_MANIFEST_SUMMARY_MAX_CHARS } from "@cindy/plugin-protocol";
 import {
   createCindyGhostsMcpServer,
   extractAgentToolUseId,
+  ghostForgePublishInputSchema,
   ghostSetupPlanInputSchema,
   handleForgeGuide,
+  handleForgeInstall,
   handleForgePack,
+  handleForgePublish,
+  handleForgePublishStatus,
   handleForgeScaffold,
   handleGhostCall,
   handleGhostInfo,
   handleGhostList,
   handleGhostManual,
+  handleMedia,
 } from "../ghost/mcpServer.js";
 import type {
   CindyGhostInfo,
@@ -63,20 +68,42 @@ function fakeDeps(
     }),
     forgePack: async () => ({
       ok: true,
-      cindyPath: "/tmp/x.cindy",
+      cindyPath: "x-1.0.0.cindy",
       id: "x",
       name: "X",
       version: "1.0.0",
-      note: "pending confirm",
+      note: "packed",
+    }),
+    forgeInstall: async () => ({
+      ok: true,
+      action: "installed",
+      id: "x",
+      name: "X",
+      version: "1.0.0",
+      enabled: true,
+      note: "installed",
+    }),
+    forgePublish: async () => ({
+      ok: true,
+      transferId: "transfer-1",
+      uploadId: null,
+      note: "started",
+    }),
+    forgePublishStatus: async () => ({
+      ok: true,
+      transferId: "transfer-1",
+      uploadId: "upload-1",
+      stage: "processing",
     }),
     ...overrides,
   };
 }
 
 function parsePayload(result: {
-  content: { text: string }[];
+  content: Array<{ type: string; text?: string }>;
 }): Record<string, unknown> {
-  return JSON.parse(result.content[0].text) as Record<string, unknown>;
+  // The first block is always the JSON text (ghost_call may append images).
+  return JSON.parse(result.content[0].text ?? "") as Record<string, unknown>;
 }
 
 const READY_WITH_REAUTH_SUGGEST = {
@@ -101,6 +128,19 @@ const READY_WITH_REAUTH_SUGGEST = {
 };
 
 describe("cindy_ghosts · ghost_list(总机接线簿,现查现报)", () => {
+  it("Manual-only plugins retain empty tools and the same manual index through list/info", async () => {
+    const ghost = { ...ART_GHOST, tools: [] };
+    const deps = fakeDeps({
+      listAwakeGhosts: async () => [ghost],
+      getAwakeGhost: async () => ({ ok: true, ghost }),
+    });
+    const list = parsePayload(await handleGhostList(deps));
+    const info = parsePayload(await handleGhostInfo(deps, { ghost_id: ghost.id }));
+    expect(list.ghosts).toEqual([ghost]);
+    expect(info).toEqual({ ok: true, ghost });
+    expect(list.hint).toContain("ghost_manual");
+  });
+
   it("返回唤醒中的意识与工具,附调用提示", async () => {
     const result = await handleGhostList(fakeDeps());
     const payload = parsePayload(result);
@@ -334,9 +374,37 @@ describe("cindy_ghosts · ghost_info(单插件精准查询)", () => {
     });
   });
 
+  it("GHOST_AMBIGUOUS 带回 candidates 且把 namespace 传给 host", async () => {
+    const getAwakeGhost = vi.fn(async () => ({
+      ok: false as const,
+      errorCode: "GHOST_AMBIGUOUS" as const,
+      message: "插件 helper 存在多个实例",
+      candidates: [
+        { ghostId: "helper", namespace: null },
+        { ghostId: "helper", namespace: "acme" },
+      ],
+    }));
+    const result = await handleGhostInfo(
+      fakeDeps({ getAwakeGhost }),
+      { ghost_id: "helper", namespace: "acme" },
+    );
+    expect(getAwakeGhost).toHaveBeenCalledWith("helper", "acme");
+    expect(result.isError).toBe(true);
+    expect(parsePayload(result)).toEqual({
+      ok: false,
+      errorCode: "GHOST_AMBIGUOUS",
+      message: "插件 helper 存在多个实例",
+      candidates: [
+        { ghostId: "helper", namespace: null },
+        { ghostId: "helper", namespace: "acme" },
+      ],
+    });
+  });
+
   it.each([
     ["GHOST_ASLEEP", "目标插件未启用"],
     ["GHOST_DISABLED_IN_WORKDIR", "当前工作目录已停用"],
+    ["GHOST_RETIRED", "该功能已下线"],
   ] as const)("%s 只返回公开结构化错误字段", async (errorCode, message) => {
     const result = await handleGhostInfo(
       fakeDeps({
@@ -465,6 +533,7 @@ describe("cindy_ghosts · ghost_manual(随包手册按需读取)", () => {
     "GHOST_NOT_FOUND",
     "GHOST_ASLEEP",
     "GHOST_DISABLED_IN_WORKDIR",
+    "GHOST_RETIRED",
   ] as const)("%s 可见性错误保持同一固定信封", async (errorCode) => {
     const result = await handleGhostManual(
       fakeDeps({
@@ -524,6 +593,22 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
       tool: "gen_image",
       args: {},
     });
+  });
+
+  it("images the plugin shows the model follow the JSON text as image content and stay out of the JSON", async () => {
+    const callGhostTool = vi.fn().mockResolvedValue({
+      ok: true,
+      result: { path: "/tmp/s.jpg" },
+      images: [{ data: "AAAA", mimeType: "image/jpeg" }],
+      imagesOmitted: 1,
+    });
+    const result = await handleGhostCall(fakeDeps({ callGhostTool }), { ghost_id: "sim", tool: "screenshot" });
+    expect(result.content).toHaveLength(2);
+    expect(result.content[1]).toEqual({ type: "image", data: "AAAA", mimeType: "image/jpeg" });
+    const payload = parsePayload(result);
+    expect(payload).toMatchObject({ ok: true, result: { path: "/tmp/s.jpg" }, images_omitted: 1 });
+    expect(payload).not.toHaveProperty("images");
+    expect(payload).not.toHaveProperty("imagesOmitted");
   });
 
   it("成功调用可附 setup.reauthSuggest，仍保持 ok:true", async () => {
@@ -1107,33 +1192,112 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
   });
 });
 
+describe("cindy · media MCP 边界", () => {
+  it("imports existing screenshots without requiring a model or plugin", async () => {
+    const callMedia = vi.fn(async () => ({ ok: true, xdt_image_urls: ['cindy-media://blobs/image.png'] }));
+    const deps = fakeDeps({ callMedia });
+    expect(parsePayload(await handleMedia(deps, { action: 'import_image' }))).toMatchObject({ errorCode: 'INVALID_INPUT' });
+    expect(callMedia).not.toHaveBeenCalled();
+    expect(parsePayload(await handleMedia(deps, { action: 'import_image', path: 'screenshots/actual.png' }))).toMatchObject({ ok: true });
+    expect(callMedia).toHaveBeenCalledWith({ action: 'import_image', path: 'screenshots/actual.png' });
+  });
+  it("把 snake_case 输入转换为 Host 稳定类型", async () => {
+    const callMedia = vi.fn(async () => ({ ok: true, status: "prepared" }));
+    const result = await handleMedia(fakeDeps({ callMedia }), {
+      action: "prepare",
+      capability: "image.generate",
+      provider_id: "openai",
+      model_id: "vendor/image-model",
+    });
+
+    expect(callMedia).toHaveBeenCalledWith({
+      action: "prepare",
+      capability: "image.generate",
+      providerId: "openai",
+      modelId: "vendor/image-model",
+    });
+    expect(parsePayload(result)).toMatchObject({ ok: true, status: "prepared" });
+  });
+
+  it.each(['png', 'mp4', 'webm'])("把受管 %s 地址交给 Host 按需解析本地路径", async (ext) => {
+    const url = `cindy-media://blobs/${"a".repeat(64)}.${ext}`;
+    const localPath = `/media/a.${ext}`;
+    const callMedia = vi.fn(async () => ({ ok: true, local_path: localPath }));
+    const result = await handleMedia(fakeDeps({ callMedia }), {
+      action: "resolve_local_path",
+      url,
+    });
+
+    expect(callMedia).toHaveBeenCalledWith({ action: "resolve_local_path", url });
+    expect(parsePayload(result)).toMatchObject({ ok: true, local_path: localPath });
+  });
+
+  it("在进入 Host 前拒绝缺失字段和未知 capability", async () => {
+    const callMedia = vi.fn(async () => ({ ok: true }));
+    expect(
+      parsePayload(
+        await handleMedia(fakeDeps({ callMedia }), {
+          action: "prepare",
+          capability: "image.generate",
+        }),
+      ),
+    ).toMatchObject({ ok: false, errorCode: "INVALID_INPUT" });
+    expect(
+      parsePayload(
+        await handleMedia(fakeDeps({ callMedia }), {
+          action: "list_models",
+          capability: "document.generate" as "image.generate",
+        }),
+      ),
+    ).toMatchObject({ ok: false, errorCode: "INVALID_INPUT" });
+    expect(
+      parsePayload(
+        await handleMedia(fakeDeps({ callMedia }), {
+          action: "resolve_local_path",
+        }),
+      ),
+    ).toMatchObject({ ok: false, errorCode: "INVALID_INPUT" });
+    expect(callMedia).not.toHaveBeenCalled();
+  });
+});
+
 describe("cindy_ghosts · server 构建", () => {
-  it("四件插件发现/读取/调用工具与三件锻造工具固定注册", () => {
+  it("四件插件发现/读取/调用工具、锻造工具与 Core media 固定注册", () => {
     const server = createCindyGhostsMcpServer(fakeDeps()) as unknown as {
       _registeredTools: Record<string, { description?: string } | undefined>;
     };
     expect(Object.keys(server._registeredTools).sort()).toEqual([
       "ghost_call",
+      "ghost_cancel_plugin_review",
+      "ghost_contribution_prepare",
+      "ghost_contribution_status",
+      "ghost_contribution_stop",
+      "ghost_contribution_submit",
       "ghost_forge_guide",
+      "ghost_forge_install",
       "ghost_forge_pack",
+      "ghost_forge_publish",
+      "ghost_forge_publish_status",
       "ghost_forge_scaffold",
       "ghost_info",
       "ghost_list",
       "ghost_manual",
+      "ghost_my_plugins",
+      "media",
     ]);
     const infoDescription = server._registeredTools.ghost_info?.description ?? "";
     expect(infoDescription).toContain("精准查询单个当前可用插件");
     expect(infoDescription).toContain("完全没有目标线索时才用 ghost_list");
     expect(infoDescription).toContain("不要缓存");
     expect(infoDescription).toContain(
-      "GHOST_NOT_FOUND(不存在、已卸载或当前账号不可用)",
+      "GHOST_AMBIGUOUS",
     );
     expect(infoDescription).toContain("GHOST_DISABLED_IN_WORKDIR");
-    expect(infoDescription).toContain("INTERNAL(内部查询失败)");
+    expect(infoDescription).toContain("INTERNAL");
     const manualDescription =
       server._registeredTools.ghost_manual?.description ?? "";
     expect(server._registeredTools.ghost_list?.description).toContain(
-      "manual 轻量索引",
+      "namespace",
     );
     expect(server._registeredTools.ghost_info?.description).toContain(
       "需要长文时用 ghost_manual",
@@ -1143,6 +1307,11 @@ describe("cindy_ghosts · server 构建", () => {
     expect(manualDescription).toContain(
       'path:"x-ops/references/reply-limits.md"',
     );
+    for (const name of ["ghost_list", "ghost_info"]) {
+      expect(server._registeredTools[name]?.description).toContain("tools 可能为空");
+    }
+    expect(manualDescription).toContain("Manual-only");
+    expect(manualDescription).toContain("未声明手册");
   });
 });
 
@@ -1351,6 +1520,26 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
     expect(payload.message).toContain("4.7 网络代发(network 槽)");
   });
 
+  // 协议:show_page 说明让模型调 ghost_forge_guide({section:"pages"}) 读页面手册,命中失败
+  // 模型就只能凭记忆写页面。手册自带多个 ## 小节,必须整份返回而不是被当成章节切开;
+  // 宿主未提供时与旧版一致报 SECTION_NOT_FOUND。最小失败输入:旧代码对 "pages" 报未命中。
+  it("forge_guide section pages 整份返回宿主页面手册,目录提示该入口;宿主未提供时按旧行为未命中", async () => {
+    const PAGE_MANUAL = ["# 页面手册", "## 1. 首屏", "first", "## 2. 规则", "second"].join("\n");
+    const deps = fakeDeps({
+      forgeGuide: async () => SECTIONED_GUIDE,
+      forgePageManual: async () => PAGE_MANUAL,
+    });
+    const pages = await handleForgeGuide(deps, { section: "pages" });
+    expect(pages.isError).toBeUndefined();
+    expect(pages.content[0].text).toBe(PAGE_MANUAL);
+    const toc = (await handleForgeGuide(deps)).content[0].text;
+    expect(toc).toContain('{"section":"pages"}');
+
+    const legacy = await handleForgeGuide(sectionedDeps(), { section: "pages" });
+    expect(parsePayload(legacy)).toMatchObject({ ok: false, errorCode: "SECTION_NOT_FOUND" });
+    expect((await handleForgeGuide(sectionedDeps())).content[0].text).not.toContain('"pages"');
+  });
+
   it("forge_scaffold 透传模板和创建文件；目标存在时标 isError", async () => {
     const okResult = await handleForgeScaffold(fakeDeps(), {
       dir: "/src/my-ghost",
@@ -1390,7 +1579,11 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
       ok: true,
       id: "x",
       version: "1.0.0",
+      cindyPath: "x-1.0.0.cindy",
     });
+    const cindyPath = String(parsePayload(okResult).cindyPath);
+    expect(cindyPath.includes("/")).toBe(false);
+    expect(cindyPath.includes("\\")).toBe(false);
 
     const failed = await handleForgePack(
       fakeDeps({
@@ -1409,14 +1602,18 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
     });
   });
 
-  it("forge_pack 仅在传入时把 icon_source 映射给 host", async () => {
-    const requests: Array<{ dir: string; iconSource?: string }> = [];
+  it("forge_pack 仅在传入时把 icon_source / intent 映射给 host", async () => {
+    const requests: Array<{
+      dir: string;
+      iconSource?: string;
+      intent?: "publish";
+    }> = [];
     const deps = fakeDeps({
       forgePack: async (request) => {
         requests.push(request);
         return {
           ok: true,
-          cindyPath: "/src/my-ghost/my-ghost-1.0.0.cindy",
+          cindyPath: "my-ghost-1.0.0.cindy",
           id: "my-ghost",
           name: "My Ghost",
           version: "1.0.0",
@@ -1430,6 +1627,7 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
       icon_source: `cindy-media://blobs/${"a".repeat(64)}.png`,
     });
     await handleForgePack(deps, { dir: "/src/default" });
+    await handleForgePack(deps, { dir: "/src/publish", intent: "publish" });
 
     expect(requests).toEqual([
       {
@@ -1437,17 +1635,199 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
         iconSource: `cindy-media://blobs/${"a".repeat(64)}.png`,
       },
       { dir: "/src/default" },
+      { dir: "/src/publish", intent: "publish" },
     ]);
   });
 
-  it("forge_pack 描述明确图片工具结果字段", () => {
+  it("forge_install 透传源码目录与可选图标并返回真实安装动作;失败标 isError", async () => {
+    const requests: Array<{ dir: string; iconSource?: string; targetInstanceId?: string }> = [];
+    const installed = await handleForgeInstall(
+      fakeDeps({
+        forgeInstall: async (request) => {
+          requests.push(request);
+          return {
+            ok: true,
+            action: "updated",
+            id: "my-ghost",
+            name: "My Ghost",
+            version: "1.0.0",
+            enabled: false,
+            note: "updated",
+          };
+        },
+      }),
+      {
+        dir: "/src/my-ghost",
+        icon_source: `cindy-media://blobs/${"a".repeat(64)}.png`,
+        target_instance_id: '_root__my-ghost',
+      },
+    );
+    expect(parsePayload(installed)).toMatchObject({
+      ok: true,
+      action: "updated",
+      id: "my-ghost",
+      enabled: false,
+    });
+    expect(requests).toEqual([
+      {
+        dir: "/src/my-ghost",
+        iconSource: `cindy-media://blobs/${"a".repeat(64)}.png`,
+        targetInstanceId: '_root__my-ghost',
+      },
+    ]);
+
+    const failed = await handleForgeInstall(
+      fakeDeps({
+        forgeInstall: async () => ({
+          ok: false,
+          errorCode: "GHOST_FILE_INVALID",
+          message: "invalid package",
+        }),
+      }),
+      { dir: "/src/bad" },
+    );
+    expect(failed.isError).toBe(true);
+    expect(parsePayload(failed)).toMatchObject({
+      ok: false,
+      errorCode: "GHOST_FILE_INVALID",
+    });
+  });
+
+  it("forge_publish 只透传 opaque token 并立即返回 transferId;失败标 isError", async () => {
+    const requests: Array<{ token: string }> = [];
+    const okResult = await handleForgePublish(fakeDeps(), {
+      token: "publish-token-1",
+    });
+    expect(parsePayload(okResult)).toMatchObject({
+      ok: true,
+      transferId: "transfer-1",
+    });
+
+    const failed = await handleForgePublish(
+      fakeDeps({
+        forgePublish: async (request) => {
+          requests.push(request);
+          return {
+            ok: false,
+            errorCode: "NOT_ORG_MEMBER",
+            message: "需要组织身份",
+          };
+        },
+      }),
+      { token: "publish-token-2" },
+    );
+    expect(failed.isError).toBe(true);
+    expect(parsePayload(failed)).toMatchObject({
+      ok: false,
+      errorCode: "NOT_ORG_MEMBER",
+    });
+    expect(requests).toEqual([{ token: "publish-token-2" }]);
+  });
+
+  it("forge_publish schema rejects the old file path shape before Host and accepts token only", () => {
+    // Excludes a runtime-only path rejection: the public MCP schema itself has no file field.
+    expect(
+      ghostForgePublishInputSchema.safeParse({ file: "/tmp/arbitrary.cindy" }).success,
+    ).toBe(false);
+    expect(
+      ghostForgePublishInputSchema.safeParse({
+        token: "publish-token-1",
+        file: "/tmp/arbitrary.cindy",
+      }).success,
+    ).toBe(false);
+    expect(
+      ghostForgePublishInputSchema.safeParse({ token: "publish-token-1" }),
+    ).toMatchObject({ success: true });
+  });
+
+  it("registered forge_publish schema rejects file paths and accepts token only", () => {
     const server = createCindyGhostsMcpServer(fakeDeps()) as unknown as {
-      _registeredTools: Record<string, { description?: string } | undefined>;
+      _registeredTools: Record<
+        string,
+        {
+          inputSchema?: {
+            safeParse: (input: unknown) => { success: boolean };
+          };
+        } | undefined
+      >;
+    };
+    const inputSchema = server._registeredTools.ghost_forge_publish?.inputSchema;
+    expect(inputSchema).toBeDefined();
+    if (!inputSchema) throw new Error("ghost_forge_publish input schema 未注册");
+
+    // Excludes wiring the registered tool to a permissive or stale schema.
+    expect(inputSchema.safeParse({ file: "/tmp/arbitrary.cindy" }).success).toBe(
+      false,
+    );
+    expect(
+      inputSchema.safeParse({
+        token: "publish-token-1",
+        file: "/tmp/arbitrary.cindy",
+      }).success,
+    ).toBe(false);
+    expect(inputSchema.safeParse({ token: "publish-token-1" }).success).toBe(
+      true,
+    );
+  });
+
+  it("forge_publish_status 透传后台阶段", async () => {
+    const result = await handleForgePublishStatus(fakeDeps(), {
+      transferId: "transfer-1",
+    });
+    expect(parsePayload(result)).toMatchObject({
+      ok: true,
+      stage: "processing",
+      uploadId: "upload-1",
+    });
+  });
+
+  it("forge_pack / publish 描述明确图片字段、发布意图与组织身份限制", () => {
+    const server = createCindyGhostsMcpServer(fakeDeps()) as unknown as {
+      _registeredTools: Record<
+        string,
+        {
+          description?: string;
+          inputSchema?: {
+            shape?: { intent?: { description?: string } };
+          };
+        } | undefined
+      >;
     };
     const description = server._registeredTools.ghost_forge_pack?.description ?? "";
     expect(description).toContain("xdt_image_url");
     expect(description).toContain("xdt_image_urls");
     expect(description).toContain("icon_source");
+    expect(description).toContain("缺省只打包并返回产物路径");
+    expect(description).toContain("intent=publish");
+    expect(description).toContain("intent=publish 仅企业组织成员可用");
+    expect(description).toContain("个人账号仍可使用缺省的纯打包模式");
+    const intentDescription =
+      server._registeredTools.ghost_forge_pack?.inputSchema?.shape?.intent
+        ?.description ?? "";
+    // Excludes documenting the organization restriction only in the tool summary
+    // while the registered intent parameter still advertises publish to everyone.
+    expect(intentDescription).toContain("publish 仅企业组织成员可用");
+    expect(intentDescription).toContain("个人账号仍可使用缺省的纯打包模式");
+    const publishDescription = server._registeredTools.ghost_forge_publish?.description ?? "";
+    expect(publishDescription).toContain("publishToken");
+    expect(publishDescription).toContain("仅企业组织成员可用");
+    expect(publishDescription).toContain("个人账号不可用");
+    expect(description).toContain("不安装或更新插件");
+    expect(description).not.toContain("确认框");
+  });
+
+  it("forge_publish_status 在上传成功后收口,不守着轮询人工审核", () => {
+    const server = createCindyGhostsMcpServer(fakeDeps()) as unknown as {
+      _registeredTools: Record<string, { description?: string } | undefined>;
+    };
+    const description =
+      server._registeredTools.ghost_forge_publish_status?.description ?? "";
+
+    // Excludes guidance that keeps the Agent polling for an unbounded human review.
+    expect(description).toContain("status 变成 succeeded 即可");
+    expect(description).toContain("等待管理员审核并收口");
+    expect(description).toContain("等用户下次问起时再查一次");
+    expect(description).not.toContain("继续查到审核终态");
   });
 });
 
@@ -1457,6 +1837,17 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
 const GHOST_ROSTER_CACHE_PREFIX_BUDGET_CHARS = 8_000;
 
 describe("formatGhostRoster(花名册快照:JSONL 召回数据源)", () => {
+  it('preserves root and organization identities in both prompt and tool roster', async () => {
+    const { buildGhostRosterPrompt, formatGhostRoster } = await import('../ghost/mcpServer');
+    const items = [
+      { id: 'helper', namespace: null, name: 'Root' },
+      { id: 'helper', namespace: 'acme', name: 'Organization' },
+    ];
+    for (const roster of [formatGhostRoster(items), buildGhostRosterPrompt(items)]) {
+      expect(roster).toContain('"namespace":null');
+      expect(roster).toContain('"namespace":"acme"');
+    }
+  });
   it("固定字段序列化;折叠/截断/空清单/条数/预算", async () => {
     const { formatGhostRoster } = await import("../ghost/mcpServer");
     expect(formatGhostRoster([])).toBe("");
@@ -1529,7 +1920,7 @@ describe("formatGhostRoster(花名册快照:JSONL 召回数据源)", () => {
         ],
       }),
     ) as unknown as {
-      _registeredTools: Record<string, { description?: string } | undefined>;
+      _registeredTools: Record<string, { description?: string; inputSchema?: { shape?: Record<string, { description?: string }> } } | undefined>;
     };
 
     const listDesc = server._registeredTools.ghost_list?.description ?? "";
@@ -1549,10 +1940,17 @@ describe("formatGhostRoster(花名册快照:JSONL 召回数据源)", () => {
     // ghost_call 仍保留自身基线描述(去重不等于把描述删空)。
     expect(callDesc).toContain("调用某个插件(Ghost)提供的工具。");
     expect(callDesc).toContain("ghost_info 或 ghost_list");
-    // 权限契约必须进入模型可见描述:本地 Full Access 自动交接,远程/降档
-    // 仍 fail closed，且自动交接不伪装成人工永久授权。
-    expect(callDesc).toContain("Full Access(bypassPermissions)");
-    expect(callDesc).toContain("远程会话仍向用户弹确认卡");
+    // PR #6731 权限协议：原生审核读取真实注册的工具/参数说明；不能因
+    // “之后还有确认卡”的错误承诺放行。旧测试只覆盖 Full Access 总说明，
+    // 漏掉 Auto 与四个参数入口。unit：核验模型可见协议，而非扫描源码。
+    const callTool = server._registeredTools.ghost_call;
+    for (const description of [callDesc, ...['grant_only', 'attachments', 'dir', 'save_dir'].map(
+      (name) => callTool?.inputSchema?.shape?.[name]?.description ?? '',
+    )]) {
+      expect(description).toContain("Auto 沿用实际审批负责人，可能直接交接");
+      expect(description).toContain("Ask 需用户确认");
+      expect(description).toContain("不保证另有确认卡");
+    }
     expect(callDesc).toContain("不写人工永久授权");
   });
 
@@ -1567,6 +1965,7 @@ describe("formatGhostRoster(花名册快照:JSONL 召回数据源)", () => {
     const prompt = buildGhostRosterPrompt(items);
     expect(prompt).toBe(formatGhostRoster(items));
     expect(prompt).toContain("直接调用 ghost_info({ghost_id})");
+    expect(prompt).toContain("ghost_manual");
     expect(prompt.indexOf('"id":"a"')).toBeLessThan(prompt.indexOf('"id":"z"'));
     expect(buildGhostRosterPrompt([])).toBe("");
   });
@@ -1678,5 +2077,258 @@ describe("cindy · 卡槽③(xdt_card_id 提升 + agentToolUseId 提取)", () =>
     );
     await handleGhostCall(deps, { ghost_id: "art", tool: "gen_image" });
     expect(callGhostTool.mock.calls[1][0]).not.toHaveProperty("agentToolUseId");
+  });
+});
+
+describe('connect_account transport', () => {
+  it('exposes cloud market discovery/install only when the Host supplies them', async () => {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    const searchMarket = vi.fn(async () => ({ ok: true, plugins: [] }));
+    const installMarket = vi.fn(async () => ({ ok: true, ghostId: 'example-plugin', installed: true }));
+    const server = createCindyGhostsMcpServer(fakeDeps({ searchMarket, installMarket }));
+    const client = new Client({ name: 'market-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair(); await server.connect(st); await client.connect(ct);
+    try {
+      expect((await client.listTools()).tools.map(t => t.name)).toEqual(expect.arrayContaining(['ghost_market_search', 'ghost_market_install']));
+      await client.callTool({ name: 'ghost_market_search', arguments: { query: 'calendar' } });
+      expect(searchMarket).toHaveBeenCalledWith('calendar');
+      await client.callTool({ name: 'ghost_market_install', arguments: { plugin_id: 'catalog-plugin', release_id: 'release-1' } });
+      expect(installMarket).toHaveBeenCalledWith({ pluginId: 'catalog-plugin', releaseId: 'release-1' }, expect.any(AbortSignal));
+      const rejected = await client.callTool({ name: 'ghost_market_install', arguments: { plugin_id: 'catalog-plugin' } });
+      expect(rejected.isError).toBe(true); expect(installMarket).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  });
+  it('propagates MCP cancellation to the exact Host tool call', async () => {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => { started = resolve; });
+    let aborted!: () => void;
+    const cancelled = new Promise<void>((resolve) => { aborted = resolve; });
+    const server = createCindyGhostsMcpServer(fakeDeps({
+      callGhostTool: async ({ signal }) => {
+        expect(signal).toBeInstanceOf(AbortSignal);
+        started();
+        await new Promise<void>((resolve) => signal!.addEventListener('abort', () => {
+          aborted(); resolve();
+        }, { once: true }));
+        return { ok: false, errorCode: 'INTERNAL', message: 'cancelled' };
+      },
+    }));
+    const client = new Client({ name: 'cancel-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await server.connect(st); await client.connect(ct);
+    try {
+      const controller = new AbortController();
+      const call = client.callTool({ name: 'ghost_call', arguments: {
+        ghost_id: 'art', tool: 'gen_image',
+      } }, undefined, { signal: controller.signal });
+      const rejected = expect(call).rejects.toBeDefined();
+      await ready; controller.abort();
+      await rejected; await cancelled;
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it('exposes Host connections (Grok, teammate messaging platforms) without requiring an installed plugin', async () => {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    const connectAccount = vi.fn(async () => ({ ok: false, errorCode: 'SETUP_REQUIRED', requestId: 'card' }));
+    const server = createCindyGhostsMcpServer(fakeDeps({ listAwakeGhosts: async () => [], connectAccount }));
+    const client = new Client({ name: 'test', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport); await client.connect(clientTransport);
+    try {
+      const tools = await client.listTools();
+      expect(tools.tools.some(tool => tool.name === 'connect_account')).toBe(true);
+      await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'grok' } });
+      expect(connectAccount).toHaveBeenCalledWith({ kind: 'host', id: 'grok', reauthorize: undefined }, expect.any(AbortSignal));
+      await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'im-telegram' } });
+      expect(connectAccount).toHaveBeenLastCalledWith({ kind: 'host', id: 'im-telegram', reauthorize: undefined }, expect.any(AbortSignal));
+      // #9250: the settings adapter existed, but the real MCP whitelist rejected iMessage.
+      expect(tools.tools.find(tool => tool.name === 'connect_account')?.description).toContain('im-imessage');
+      await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'im-imessage' } });
+      expect(connectAccount).toHaveBeenLastCalledWith({ kind: 'host', id: 'im-imessage', reauthorize: undefined }, expect.any(AbortSignal));
+      for (const id of ['invented', 'im-unknown']) {
+        const rejected = await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id } });
+        expect(rejected.isError).toBe(true);
+      }
+      expect(connectAccount).toHaveBeenCalledTimes(3);
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it('forwards MCP cancellation to the ordinary connection waiter', async () => {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    let started!: () => void, cancelled!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const aborted = new Promise<void>(resolve => { cancelled = resolve; });
+    const server = createCindyGhostsMcpServer(fakeDeps({ connectAccount: async (_target, signal) => {
+      expect(signal).toBeInstanceOf(AbortSignal); started();
+      return new Promise(resolve => signal!.addEventListener('abort', () => {
+        cancelled(); resolve({ ok: false, errorCode: 'SETUP_CANCELLED' });
+      }, { once: true }));
+    } }));
+    const client = new Client({ name: 'connection-cancel', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await server.connect(st); await client.connect(ct);
+    try {
+      const controller = new AbortController();
+      const result = client.callTool({ name: 'connect_account', arguments: { kind: 'plugin', id: 'calendar' } },
+        undefined, { signal: controller.signal });
+      const rejected = expect(result).rejects.toBeDefined();
+      await ready; controller.abort(); await rejected; await aborted;
+    } finally { await client.close(); await server.close(); }
+  });
+});
+
+describe('Cindy market MCP transport', () => {
+  it('keeps discovery, installation, account connection and execution separate', async () => {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    const searchMarket = vi.fn(async () => ({ ok: true, items: [{ plugin_id: 'p1', release_id: 'r1', ghost_id: 'art' }] }));
+    const installMarket = vi.fn<NonNullable<CindyGhostsMcpDeps['installMarket']>>(async () => ({ ok: true, status: 'installed', ghost_id: 'art' }));
+    const connectAccount = vi.fn(async () => ({ ok: false, errorCode: 'SETUP_REQUIRED', requestId: 'card' }));
+    const callGhostTool = vi.fn(async () => ({ ok: true as const, result: 'image' }));
+    const server = createCindyGhostsMcpServer(fakeDeps({ searchMarket, installMarket, connectAccount, callGhostTool }));
+    const client = new Client({ name: 'market-test', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport); await client.connect(clientTransport);
+    try {
+      const search = await client.callTool({ name: 'ghost_market_search', arguments: { query: ' image ' } });
+      expect(search.isError).not.toBe(true);
+      expect(searchMarket).toHaveBeenCalledWith('image');
+      expect(installMarket).not.toHaveBeenCalled();
+      const invalid = await client.callTool({ name: 'ghost_market_install', arguments: { plugin_id: 'p1' } });
+      expect(invalid.isError).toBe(true);
+      expect(installMarket).not.toHaveBeenCalled();
+      const installed = await client.callTool({ name: 'ghost_market_install', arguments: { plugin_id: 'p1', release_id: 'r1' } });
+      expect(installed.isError).not.toBe(true);
+      expect(installMarket).toHaveBeenCalledWith({ pluginId: 'p1', releaseId: 'r1' }, expect.any(AbortSignal));
+      expect(connectAccount).not.toHaveBeenCalled();
+      expect(callGhostTool).not.toHaveBeenCalled();
+      await client.callTool({ name: 'ghost_info', arguments: { ghost_id: 'art' } });
+      await client.callTool({ name: 'connect_account', arguments: { kind: 'plugin', id: 'art' } });
+      expect(connectAccount).toHaveBeenCalledWith({ kind: 'plugin', id: 'art', reauthorize: undefined }, expect.any(AbortSignal));
+      await client.callTool({ name: 'connect_account', arguments: { kind: 'plugin', id: 'art', namespace: null } });
+      expect(connectAccount).toHaveBeenCalledWith({ kind: 'plugin', id: 'art', namespace: null, reauthorize: undefined }, expect.any(AbortSignal));
+      expect(callGhostTool).not.toHaveBeenCalled();
+      // Host authorization continuation retries the original work through the same gateway.
+      await client.callTool({ name: 'ghost_call', arguments: { ghost_id: 'art', tool: 'gen_image', args: {} } });
+      expect(callGhostTool).toHaveBeenCalledOnce();
+      installMarket.mockResolvedValueOnce({ ok: false, errorCode: 'PRECONDITION_FAILED' });
+      expect((await client.callTool({ name: 'ghost_market_install', arguments: { plugin_id: 'p1', release_id: 'r1' } })).isError).toBe(true);
+      searchMarket.mockRejectedValueOnce(new Error('private-token'));
+      const failed = await client.callTool({ name: 'ghost_market_search', arguments: { query: 'image' } });
+      expect(failed.isError).toBe(true);
+      expect(JSON.stringify(failed)).not.toContain('private-token');
+    } finally { await client.close(); await server.close(); }
+  });
+});
+
+
+describe("portable legacy plugin media", () => {
+  it("hoists singular image/video and audio arrays without claiming cards were delivered", async () => {
+    const payload = parsePayload(await handleGhostCall(fakeDeps({ callGhostTool: async () => ({ ok: true, result: {
+      xdt_image_url: "cindy-media://blobs/a.png", xdt_video_url: "cindy-media://blobs/a.mp4", xdt_audio_urls: ["cindy-media://blobs/a.mp3"],
+    } }) }), { ghost_id: "legacy", tool: "create" }));
+    expect(payload.xdt_image_url).toBe("cindy-media://blobs/a.png");
+    expect(payload.xdt_video_url).toBe("cindy-media://blobs/a.mp4");
+    expect(payload.xdt_audio_urls).toEqual(["cindy-media://blobs/a.mp3"]);
+  });
+  it("does not claim delivered media for a card-only or ledger-only result", async () => {
+    for (const result of [{ ok: true as const, result: { xdt_card_id: "c" } }, { ok: true as const, result: {}, producedMedia: ["cindy-media://blobs/a.png"] }]) {
+      const payload = parsePayload(await handleGhostCall(fakeDeps({ callGhostTool: async () => result }), { ghost_id: "art", tool: "create" }));
+      expect(payload.hint).not.toContain("已自动送达");
+      expect(payload.hint).not.toContain("媒体已由聊天气泡自动渲染");
+    }
+  });
+});
+
+describe('personal community author MCP transport', () => {
+  async function connected(deps: CindyGhostsMcpDeps) {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    const server = createCindyGhostsMcpServer(deps);
+    const client = new Client({ name: 'personal-author-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await server.connect(st);
+    await client.connect(ct);
+    return { client, close: async () => { await client.close(); await server.close(); } };
+  }
+
+  it('routes preparation, the same operation, and exact personal reads to the independent Host capability', async () => {
+    const communityContribution = vi.fn<NonNullable<CindyGhostsMcpDeps['communityContribution']>>(async () => ({ ok: true, result: {} }));
+    const forgePublish = vi.fn();
+    const transport = await connected(fakeDeps({ communityContribution, forgePublish }));
+    try {
+      for (const [name, args] of [
+        ['ghost_contribution_prepare', { ghost_id: 'hello', namespace: null }],
+        ['ghost_contribution_submit', { prepared_id: 'original-operation' }],
+        ['ghost_contribution_status', { local_id: 'original-operation' }],
+        ['ghost_contribution_stop', { local_id: 'original-operation' }],
+        ['ghost_cancel_plugin_review', { plugin_id: 'plugin-1', release_id: 'release-1', sha256: 'a'.repeat(64), revision: '2026-10-16T00:00:00.000Z' }],
+        ['ghost_my_plugins', { query: 'hello', filter: 'needs_action', cursor: 'list-cursor' }],
+        ['ghost_my_plugins', { plugin_id: 'plugin-1', cursor: 'history-cursor' }],
+        ['ghost_my_plugins', { plugin_id: 'plugin-1', submission_id: 'submission-1' }],
+      ] as const) {
+        expect((await transport.client.callTool({ name, arguments: args })).isError).not.toBe(true);
+      }
+      expect(communityContribution.mock.calls.map(([input]) => input)).toEqual([
+        { action: 'prepare', ghostId: 'hello', namespace: null },
+        { action: 'submit', id: 'original-operation' },
+        { action: 'status', id: 'original-operation' },
+        { action: 'cancel', id: 'original-operation' },
+        { action: 'cancel-review', pluginId: 'plugin-1', release: { releaseId: 'release-1', sha256: 'a'.repeat(64), revision: '2026-10-16T00:00:00.000Z' } },
+        { action: 'list', query: 'hello', filter: 'needs_action', cursor: 'list-cursor' },
+        { action: 'detail', pluginId: 'plugin-1', cursor: 'history-cursor' },
+        { action: 'submission', pluginId: 'plugin-1', submissionId: 'submission-1' },
+      ]);
+      expect(forgePublish).not.toHaveBeenCalled();
+    } finally { await transport.close(); }
+  });
+
+  it('rejects arbitrary paths, replacement identities and incomplete exact submission reads before Host', async () => {
+    const communityContribution = vi.fn();
+    const transport = await connected(fakeDeps({ communityContribution }));
+    try {
+      for (const [name, args] of [
+        ['ghost_contribution_prepare', { ghost_id: 'hello', file: '/private/package.cindy' }],
+        ['ghost_contribution_submit', { prepared_id: 'original-operation', resume: true }],
+        ['ghost_contribution_status', {}],
+        ['ghost_contribution_submit', { prepared_id: 'original-operation', authority: 'other-issuer' }],
+        ['ghost_contribution_status', { local_id: 'original-operation', token: 'not-a-host-token' }],
+        ['ghost_contribution_stop', { local_id: 'original-operation', membershipId: 'other' }],
+        ['ghost_cancel_plugin_review', { plugin_id: 'plugin-1', release_id: 'r', sha256: 'bad', revision: 'not-a-date' }],
+        ['ghost_cancel_plugin_review', { plugin_id: 'plugin-1', release_id: 'r', sha256: 'a'.repeat(64), revision: '2026-10-16T00:00:00.000Z', token: 'override' }],
+        ['ghost_my_plugins', { plugin_id: 'plugin-1', scope: 'organization' }],
+        ['ghost_my_plugins', { submission_id: 'submission-without-plugin' }],
+      ] as const) {
+        expect((await transport.client.callTool({ name, arguments: args })).isError).toBe(true);
+      }
+      expect(communityContribution).not.toHaveBeenCalled();
+    } finally { await transport.close(); }
+  });
+
+  it('reports unavailable capabilities and sanitized Host failures as MCP errors without enterprise fallback', async () => {
+    const absent = await connected(fakeDeps());
+    try {
+      const result = await absent.client.callTool({ name: 'ghost_my_plugins', arguments: {} });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain('UNSUPPORTED_CAPABILITY');
+    } finally { await absent.close(); }
+    const communityContribution = vi.fn()
+      .mockResolvedValueOnce({ ok: false, errorCode: 'CONTRIBUTION_NOT_AUTHORIZED', message: 'This account cannot publish this plugin.' })
+      .mockRejectedValueOnce(new Error('private-transport-token'));
+    const transport = await connected(fakeDeps({ communityContribution }));
+    try {
+      const denied = await transport.client.callTool({ name: 'ghost_contribution_submit', arguments: { prepared_id: 'original-operation' } });
+      expect(denied.isError).toBe(true);
+      expect(JSON.stringify(denied)).toContain('CONTRIBUTION_NOT_AUTHORIZED');
+      expect(JSON.stringify(denied)).toContain('This account cannot publish this plugin.');
+      const failed = await transport.client.callTool({ name: 'ghost_my_plugins', arguments: {} });
+      expect(failed.isError).toBe(true);
+      expect(JSON.stringify(failed)).not.toContain('private-transport-token');
+    } finally { await transport.close(); }
   });
 });

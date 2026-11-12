@@ -17,10 +17,12 @@ interface Caps {
     contextWindow: number;
     efforts: string[];
     defaultEffort: string | null;
+    effortsUnknown?: boolean;
   }>;
   hasFastMode: boolean;
   effortLevels: unknown[];
   permissionModes: unknown[];
+  writableDirs?: { supported: boolean };
 }
 const caps = (label: string, ctx = 1): Caps => ({
   availableModels: [
@@ -232,6 +234,106 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     );
     // 本地缓存不受影响(没预热过)
     expect(mod.getCachedCapabilities('claude-code')).toBeNull();
+  });
+
+  it('旧被控端缺少 writableDirs 时安全降级，新端声明后保留能力', async () => {
+    const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
+    const invoke = vi.fn(async (_deviceId: string, _channel: string, args: unknown[]) =>
+      args[0] === 'codex'
+        ? { ...caps('dev-1:codex'), writableDirs: { supported: true } }
+        : caps(`dev-1:${String(args[0])}`),
+    );
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } },
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    await mod.prefetchDeviceCapabilities('dev-1');
+
+    expect(mod.getCachedCapabilities('claude-code', 'dev-1')?.writableDirs).toBeUndefined();
+    expect(mod.getCachedCapabilities('codex', 'dev-1')?.writableDirs).toEqual({
+      supported: true,
+    });
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: mod.getCachedCapabilities('claude-code', 'dev-1'),
+        deviceId: 'dev-1',
+        remoteHostId: null,
+      }),
+    ).toBe(false);
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: { writableDirs: { supported: false } },
+        deviceId: 'dev-1',
+        remoteHostId: null,
+      }),
+    ).toBe(false);
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: mod.getCachedCapabilities('codex', 'dev-1'),
+        deviceId: 'dev-1',
+        remoteHostId: null,
+      }),
+    ).toBe(true);
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: { writableDirs: { supported: true } },
+        deviceId: null,
+        remoteHostId: 'ssh-host',
+      }),
+    ).toBe(false);
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: null,
+        deviceId: null,
+        remoteHostId: null,
+      }),
+    ).toBe(true);
+  });
+
+  it('拒绝畸形 writableDirs 能力而不开放远端入口', async () => {
+    const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
+    const invoke = vi.fn(async (_deviceId: string, _channel: string, args: unknown[]) => ({
+      ...caps(`dev-1:${String(args[0])}`),
+      writableDirs: true,
+    }));
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } },
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    await mod.prefetchDeviceCapabilities('dev-1');
+
+    expect(mod.getCachedCapabilities('claude-code', 'dev-1')).toBeNull();
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: mod.getCachedCapabilities('claude-code', 'dev-1'),
+        deviceId: 'dev-1',
+        remoteHostId: null,
+      }),
+    ).toBe(false);
+  });
+
+  it.each([undefined, true, false])('preserves remote effort capability marker %s without inferring legacy emptiness', async (effortsUnknown) => {
+    const snapshot: Caps = {
+      ...caps('dev-1:codex'),
+      availableModels: [{
+        id: 'empty-efforts',
+        displayName: 'Empty efforts',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+        ...(effortsUnknown === undefined ? {} : { effortsUnknown }),
+      }],
+    };
+    const invoke = vi.fn(async () => snapshot);
+    const getCapabilities = vi.fn(async (agent: string) => caps(`local:${agent}`));
+    vi.stubGlobal('window', { electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    await mod.prefetchDeviceCapabilities('dev-1');
+
+    expect(mod.getCachedCapabilities('codex', 'dev-1')?.availableModels[0]?.effortsUnknown).toBe(effortsUnknown);
   });
 
   it('远程 Pi capabilities 原样保留 BYOM 显式 effort 子集', async () => {
@@ -574,4 +676,61 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
       'fresh:codex',
     );
   });
+});
+
+// Regression: object-form capability replies carry the same bounded metadata stamp
+// as provider lists; the renderer cache must not outlive the forwarded deadline.
+it('expires a remote capabilities snapshot at the forwarded host deadline', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  try {
+    const invoke = vi.fn(async (deviceId: string, _channel: string, args: unknown[]) => ({
+      ...caps(`${deviceId}:${String(args[0])}`),
+      providerContinuity: { stale: true, remainingMs: 1000 },
+    }));
+    const getCapabilities = vi.fn(async (kind: string) => caps(`local:${kind}`));
+    vi.stubGlobal('window', { electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useAgentCapabilities');
+    await mod.prefetchDeviceCapabilities('dev-1');
+    expect(mod.getCachedCapabilities('codex', 'dev-1')).not.toBeNull();
+
+    invoke.mockRejectedValue(new Error('[DEVICE_LINK_NOT_CONNECTED] offline'));
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(mod.getCachedCapabilities('codex', 'dev-1')).toBeNull();
+  } finally {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
+
+// Regression: a retained capability refresh keeps the display payload while the
+// new read is in flight, but it must not clear the forwarded deadline. Otherwise
+// a hung refresh can leave the old capabilities on screen indefinitely.
+it('keeps the host deadline across a retained capability refresh', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  try {
+    const invoke = vi.fn(async (deviceId: string, _channel: string, args: unknown[]) => ({
+      ...caps(`${deviceId}:${String(args[0])}`),
+      providerContinuity: { stale: true, remainingMs: 1000 },
+    }));
+    const getCapabilities = vi.fn(async (kind: string) => caps(`local:${kind}`));
+    vi.stubGlobal('window', { electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useAgentCapabilities');
+    await mod.prefetchDeviceCapabilities('dev-1');
+    const events = vi.fn();
+    const off = mod.subscribeDeviceCapabilities('dev-1', 'codex', events);
+    events.mockClear();
+
+    mod.evictDeviceCapabilities('dev-1', { retainDisplaySnapshot: true });
+    expect(events).toHaveBeenCalledWith({ status: 'loading', retainDisplaySnapshot: true });
+    await vi.advanceTimersByTimeAsync(1001);
+    // The deadline now ends the affected cache key with a terminal error, not
+    // an indefinite loading state.
+    expect(events).toHaveBeenCalledWith({ status: 'error',
+      error: '[MODEL_VISIBILITY_NOT_READY] Agent capabilities snapshot expired' });
+    expect(mod.getCachedCapabilities('codex', 'dev-1')).toBeNull();
+    off();
+  } finally {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
 });

@@ -13,6 +13,7 @@ import type { IssueConfirmDecision } from '../issueConfirmBridge';
 
 const REQ = {
   sessionId: 'sess-1',
+  agentKind: 'codex' as const,
   workingDir: '/repo',
   title: 'agent 整理的标题标题标题',
   body: '## 现象\nagent 整理的正文,长度足够覆盖最小要求。',
@@ -40,12 +41,13 @@ function makeDeps(over: Partial<GithubIssueSubmitServiceDeps> = {}) {
     postIssue,
     getAppVersion: () => '0.0.112',
     getOsInfo: () => ({ platform: 'darwin', arch: 'arm64', osVersion: '25.5.0' }),
+    getTurnModelId: async () => 'gpt-5.6',
     getRegion: () => 'cn',
     getFallbackLocale: () => 'en',
     getSubmitterName: () => 'Carol',
     ...over,
   };
-  return { deps, confirm, postIssue };
+  return { deps, confirm: deps.confirm as typeof confirm, postIssue };
 }
 
 describe('submitGithubIssueWithConfirm', () => {
@@ -63,6 +65,63 @@ describe('submitGithubIssueWithConfirm', () => {
       expect(res).toMatchObject({ ok: false, errorCode });
       expect(postIssue).not.toHaveBeenCalled();
     }
+  });
+
+  it('用户同意后把安全相关日志作为独立模块放进确认稿和最终正文', async () => {
+    const collectRelatedLogs = vi.fn(async () => ({
+      recordCount: 1,
+      section: '\n---\n## 相关日志\n\n- 2026-09-15T12:00:00+08:00 [main/network] token=<redacted>',
+    }));
+    const { deps, confirm, postIssue } = makeDeps({
+      collectRelatedLogs,
+      confirm: vi.fn(async (_sessionId, draft) => ({
+        confirmed: true as const,
+        ...draft,
+        publicName: 'Carol',
+        uiLanguage: 'zh-CN',
+      })),
+    });
+
+    await expect(
+      submitGithubIssueWithConfirm(deps, { ...REQ, includeRelatedLogs: true }),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(collectRelatedLogs).toHaveBeenCalledTimes(1);
+    expect(confirm.mock.calls[0]![1].body).toContain('## 相关日志');
+    expect(postIssue.mock.calls[0]![1]().description).toContain('## 相关日志');
+  });
+
+  it('未明确同意时不读取本地相关日志', async () => {
+    const collectRelatedLogs = vi.fn(async () => ({ section: '\n## 相关日志\nsecret', recordCount: 1 }));
+    const { deps } = makeDeps({ collectRelatedLogs });
+
+    await expect(submitGithubIssueWithConfirm(deps, REQ)).resolves.toMatchObject({ ok: true });
+
+    expect(collectRelatedLogs).not.toHaveBeenCalled();
+  });
+
+  it('正文超长时仍保留相关日志模块', async () => {
+    const collectRelatedLogs = vi.fn(async () => ({
+      recordCount: 1,
+      section: '\n---\n## 相关日志\n\n- safe diagnostic record',
+    }));
+    const { deps, postIssue } = makeDeps({
+      collectRelatedLogs,
+      confirm: vi.fn(async (_sessionId, draft) => ({
+        confirmed: true as const,
+        ...draft,
+        publicName: 'Carol',
+        uiLanguage: 'zh-CN',
+      })),
+    });
+
+    await submitGithubIssueWithConfirm(deps, {
+      ...REQ,
+      body: '正文'.repeat(3000),
+      includeRelatedLogs: true,
+    });
+
+    expect(postIssue.mock.calls[0]![1]().description).toContain('## 相关日志');
   });
 
   it('confirm 收到 agent 草稿 + env;confirmed 后 postIssue 收到用户编辑版', async () => {
@@ -84,6 +143,8 @@ describe('submitGithubIssueWithConfirm', () => {
         platform: 'darwin',
         arch: 'arm64',
         osVersion: '25.5.0',
+        harness: 'Codex',
+        modelId: 'gpt-5.6',
         region: 'cn',
       },
       { platform: PLATFORM_IDENTITY },
@@ -97,8 +158,14 @@ describe('submitGithubIssueWithConfirm', () => {
     expect(posted.appVersion).toBe('0.0.112');
     expect(posted.userName).toBe('公开昵称');
     expect(posted.description).toContain('用户改过的正文');
+    expect(posted.description).toContain('## 提交时的任务环境');
+    expect(posted.description).toContain(
+      '仅代表提交时快照,不一定是故障环境。OS 来自提交客户端本机,不含 SSH 远端主机;Harness / 模型来自当前任务。与运行环境无关的反馈可忽略本段。',
+    );
     expect(posted.description).toContain('**版本区域**: CN');
     expect(posted.description).toContain('**OS**: darwin arm64 (25.5.0)');
+    expect(posted.description).toContain('**Harness**: Codex');
+    expect(posted.description).toContain('**Model ID**: ` gpt-5.6 `');
     expect(posted.description).toContain('**界面语言**: ja');
     expect(res).toEqual({
       ok: true,
@@ -110,17 +177,85 @@ describe('submitGithubIssueWithConfirm', () => {
     });
   });
 
-  it('agent 初稿中的常见敏感信息在确认前自动脱敏,并标记隐私处理', async () => {
+  it('把三种 agentKind 映射为公开 Harness 全名', async () => {
+    for (const [agentKind, harness] of [
+      ['claude-code', 'Claude Code'],
+      ['codex', 'Codex'],
+      ['pi', 'Pi'],
+    ] as const) {
+      const { deps, confirm, postIssue } = makeDeps();
+      await expect(
+        submitGithubIssueWithConfirm(deps, { ...REQ, agentKind }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(confirm.mock.calls[0]![2]).toMatchObject({ harness });
+      expect(postIssue.mock.calls[0]![1]().description).toContain(`**Harness**: ${harness}`);
+    }
+  });
+
+  it('在确认卡出现前锁定本轮模型 ID，之后切换 session 模型不会改写提交值', async () => {
+    let selectedModel = 'claude-sonnet-4-5';
+    const getTurnModelId = vi.fn(async () => selectedModel);
     const confirm = vi.fn<GithubIssueSubmitServiceDeps['confirm']>(
-      async (_sessionId, draft) => ({
-        confirmed: true,
-        title: draft.title,
-        body: draft.body,
-        type: draft.type,
-        publicName: 'Carol',
-        uiLanguage: 'zh-CN',
-      }),
+      async (_sessionId, draft, env) => {
+        expect(env.modelId).toBe('claude-sonnet-4-5');
+        selectedModel = 'gpt-5.6';
+        return {
+          confirmed: true,
+          title: draft.title,
+          body: draft.body,
+          type: draft.type,
+          publicName: 'Carol',
+          uiLanguage: 'zh-CN',
+        };
+      },
     );
+    const { deps, postIssue } = makeDeps({ getTurnModelId, confirm });
+
+    await expect(submitGithubIssueWithConfirm(deps, REQ)).resolves.toMatchObject({ ok: true });
+
+    expect(getTurnModelId).toHaveBeenCalledWith('sess-1');
+    expect(postIssue.mock.calls[0]![1]().description).toContain(
+      '**Model ID**: ` claude-sonnet-4-5 `',
+    );
+    expect(postIssue.mock.calls[0]![1]().description).not.toContain(
+      '**Model ID**: ` gpt-5.6 `',
+    );
+  });
+
+  it('把自定义模型 ID 规范为有界单行值，查找失败时使用 unknown 且不阻断提交', async () => {
+    const injected = `custom-model\n**Injected**: @maintainers \`value\` ${'x'.repeat(300)}`;
+    const { deps, confirm, postIssue } = makeDeps({
+      getTurnModelId: async () => injected,
+    });
+    await expect(submitGithubIssueWithConfirm(deps, REQ)).resolves.toMatchObject({ ok: true });
+    const confirmedModelId = confirm.mock.calls[0]![2].modelId;
+    expect(confirmedModelId).toHaveLength(200);
+    expect(confirmedModelId).not.toMatch(/[\r\n]/);
+    expect(postIssue.mock.calls[0]![1]().description).toContain(
+      '**Model ID**: `` ' + confirmedModelId + ' ``',
+    );
+    expect(postIssue.mock.calls[0]![1]().description).not.toContain('\n**Injected**:');
+
+    const fallback = makeDeps({
+      getTurnModelId: async () => {
+        throw new Error('database unavailable');
+      },
+    });
+    await expect(submitGithubIssueWithConfirm(fallback.deps, REQ)).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(fallback.confirm.mock.calls[0]![2]).toMatchObject({ modelId: 'unknown' });
+  });
+
+  it('agent 初稿中的常见敏感信息在确认前自动脱敏,并标记隐私处理', async () => {
+    const confirm = vi.fn<GithubIssueSubmitServiceDeps['confirm']>(async (_sessionId, draft) => ({
+      confirmed: true,
+      title: draft.title,
+      body: draft.body,
+      type: draft.type,
+      publicName: 'Carol',
+      uiLanguage: 'zh-CN',
+    }));
     const postIssue = vi.fn<GithubIssueSubmitServiceDeps['postIssue']>(async () => ({
       githubIssue: { number: 81, url: 'https://github.com/makecindy/cindy/issues/81' },
     }));
@@ -163,6 +298,7 @@ describe('submitGithubIssueWithConfirm', () => {
     expect(description).not.toContain('版本区域');
     expect(description).not.toContain('global');
     // 其余 env 行不受影响,不能因为省略区域行把 env 块整段搞坏。
+    expect(description).toContain('## 提交时的任务环境');
     expect(description).toContain('**OS**: darwin arm64 (25.5.0)');
     expect(description).toContain('**界面语言**: zh-CN');
   });
@@ -307,7 +443,10 @@ describe('submitGithubIssueWithConfirm', () => {
     expect(confirm.mock.calls[0]![3]).toEqual(submissionChoices);
     expect(confirm.mock.calls[0]![4]).toBe('Carol');
     expect(postIssue.mock.calls[0]![0]).toEqual(identity);
-    expect(postIssue.mock.calls[0]![1]()).not.toHaveProperty('userName');
+    const directBody = postIssue.mock.calls[0]![1]();
+    expect(directBody).not.toHaveProperty('userName');
+    expect(directBody.description).toContain('**Harness**: Codex');
+    expect(directBody.description).toContain('**Model ID**: ` gpt-5.6 `');
   });
 
   it('身份选项解析意外失败时不弹确认卡、不提交', async () => {

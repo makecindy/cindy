@@ -49,6 +49,10 @@ export {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const SCRIPTS_DIR = path.resolve(__dirname, '..');
+/** App Sandbox entitlements of the Live Activity widget extension (native/agent-island/live-activity). */
+const APP_EXTENSION_ENTITLEMENTS_PATH = path.resolve(
+  __dirname, '../../native/agent-island/live-activity/extension.entitlements',
+);
 export const DESKTOP_ROOT = path.resolve(SCRIPTS_DIR, '..');
 export const PROJECT_ROOT = path.resolve(DESKTOP_ROOT, '../..');
 export const RELEASE_DIR = path.join(DESKTOP_ROOT, 'release');
@@ -261,11 +265,13 @@ export function createInitialManifest(version, options = {}) {
 }
 
 /**
- * Linux first release is installer/manual-download only.
- * Reuse this helper anywhere we mint a Linux manifest so `app.hotfix` and
- * `app.requireRelogin` can never leak back in through copy/paste drift.
+ * Linux in-app update downloads `app.installer` (.deb) and applies it with
+ * pkexec. Reuse this helper anywhere we mint a Linux manifest so `app.hotfix`
+ * and `app.requireRelogin` can never leak back in through copy/paste drift.
+ * Callers that have a real .deb must pass `installer`; omitting it keeps the
+ * installer-only shape without inventing a fake asset.
  */
-export function createLinuxFirstReleaseManifest(version, baseManifest) {
+export function createLinuxFirstReleaseManifest(version, baseManifest, installer) {
   const releaseNotes = baseManifest?.app?.releaseNotes;
   const manifest = baseManifest
     ? JSON.parse(JSON.stringify(baseManifest))
@@ -276,8 +282,16 @@ export function createLinuxFirstReleaseManifest(version, baseManifest) {
   };
   delete manifest.app.hotfix;
   delete manifest.app.requireRelogin;
-  delete manifest.app.installer;
   delete manifest.installer;
+  if (installer?.file && installer.sha256) {
+    manifest.app.installer = {
+      file: installer.file,
+      sha256: installer.sha256,
+      size: typeof installer.size === 'number' ? installer.size : 0,
+    };
+  } else {
+    delete manifest.app.installer;
+  }
   // Packaged Linux resolves Claude/Codex from a compatible system install,
   // migrates the legacy local cache, or downloads the pinned official asset.
   // Ripgrep remains bundled in the .deb by forge and needs no manifest entry.
@@ -427,6 +441,26 @@ export function writeReleaseManifest(destPath, ctx) {
 //
 // macOS:   appPath/Contents/Resources/drizzle/
 // Windows: packagedDir/resources/drizzle/
+
+/**
+ * 内置技能的版本号在运行时由随包的记录文件数得出(built-in-skills.ts 的
+ * readBuiltInSkillsBundleVersion)。包里少了记录,新包会把自己的技能判成不比已安装的新,
+ * 用户永远拿不到更新;所以打出来的包必须带着与源码同样多的记录。
+ */
+export function verifyPackagedSkillVersionRecords(systemSkillsOut) {
+  const count = (dir) => (fs.existsSync(dir)
+    ? fs.readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isFile() && entry.name.endsWith('.md')).length
+    : 0);
+  const packaged = path.join(systemSkillsOut, '_versions');
+  console.log(`==> Verifying packaged built-in Skill version records at ${packaged} ...`);
+  const expected = count(path.join(DESKTOP_ROOT, 'resources', 'system-skills', '_versions'));
+  const actual = count(packaged);
+  if (expected < 1 || actual !== expected) {
+    console.error(`ERROR: packaged built-in Skill version records: expected ${expected}, found ${actual} at ${packaged}`);
+    process.exit(1);
+  }
+  console.log(`    OK (${actual} records)`);
+}
 
 export function verifyPackagedDrizzle(drizzleOut) {
   console.log(`==> Verifying packaged drizzle/ at ${drizzleOut} ...`);
@@ -752,205 +786,6 @@ export function verifyMacContactsPermissions(appPath, { keychainAccessGroup, sig
   );
 }
 
-const IOS_SIMULATOR_HELPER_RELATIVE_PATH = path.join(
-  'Contents',
-  'Helpers',
-  'Cindy iOS Simulator Helper.app',
-);
-const IOS_SIMULATOR_HELPER_EXECUTABLE = 'ios-simulator-sidecar';
-const IOS_SIMULATOR_SIDECAR_MANIFEST_RELATIVE_PATH = path.join(
-  'Contents',
-  'Resources',
-  'ios-simulator',
-  'native-sidecar-manifest.json',
-);
-const IOS_SIMULATOR_HELPER_BUILD_RESULT_RELATIVE_PATH = path.join(
-  'Contents',
-  'Resources',
-  'ios-simulator',
-  'native-helper-build-result.json',
-);
-const IOS_SIMULATOR_HELPER_UNSUPPORTED_REASON =
-  'simulator-kit-architecture-unavailable';
-
-function expectedIOSSimulatorHelperArchitecture(packageArch) {
-  switch (packageArch) {
-    case 'arm64':
-      return 'arm64';
-    case 'x64':
-      return 'x86_64';
-    case 'universal':
-      return 'universal';
-    default:
-      throw new Error(`unsupported packaged iOS Simulator helper architecture: ${packageArch}`);
-  }
-}
-
-export function inspectPackagedIOSSimulatorHelper(appPath, packageArch) {
-  const expectedArchitecture = expectedIOSSimulatorHelperArchitecture(packageArch);
-  const helperPath = path.join(appPath, IOS_SIMULATOR_HELPER_RELATIVE_PATH);
-  const executablePath = path.join(
-    helperPath,
-    'Contents',
-    'MacOS',
-    IOS_SIMULATOR_HELPER_EXECUTABLE,
-  );
-  const buildResultPath = path.join(
-    appPath,
-    IOS_SIMULATOR_HELPER_BUILD_RESULT_RELATIVE_PATH,
-  );
-  const hasExecutable = fs.existsSync(executablePath);
-  const hasBuildResult = fs.existsSync(buildResultPath);
-  if (hasExecutable) {
-    if (hasBuildResult) {
-      throw new Error('packaged iOS Simulator helper conflicts with unsupported build result');
-    }
-    return { status: 'present', helperPath, executablePath };
-  }
-  if (!hasBuildResult) {
-    throw new Error(`packaged iOS Simulator helper is missing: ${executablePath}`);
-  }
-
-  let result;
-  try {
-    result = JSON.parse(fs.readFileSync(buildResultPath, 'utf8'));
-  } catch (error) {
-    throw new Error(
-      `packaged iOS Simulator helper build result is invalid: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  }
-  if (
-    result?.schemaVersion !== 1 ||
-    result?.status !== 'unsupported' ||
-    result?.targetArchitecture !== 'x86_64' ||
-    result?.reason !== IOS_SIMULATOR_HELPER_UNSUPPORTED_REASON ||
-    !Array.isArray(result?.simulatorKitArchitectures) ||
-    result.simulatorKitArchitectures.length === 0 ||
-    result.simulatorKitArchitectures.includes('x86_64') ||
-    !result.simulatorKitArchitectures.every((architecture) => typeof architecture === 'string')
-  ) {
-    throw new Error('packaged iOS Simulator helper build result is invalid');
-  }
-  if (expectedArchitecture !== 'x86_64') {
-    throw new Error(
-      `packaged iOS Simulator helper fallback is allowed only for x64 packages, received ${packageArch}`,
-    );
-  }
-  return { status: 'unsupported', buildResultPath, result };
-}
-
-function runSigningCommand(command, args, label) {
-  const result = spawnSync(command, args, { encoding: 'utf8' });
-  if (result.error) {
-    throw new Error(`${label} could not execute: ${result.error.message}`);
-  }
-  if (result.status !== 0) {
-    throw new Error(`${label} failed: ${result.stderr || result.stdout}`);
-  }
-  return {
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
-  };
-}
-
-function inspectDesignatedRequirement(bundlePath) {
-  const result = runSigningCommand(
-    '/usr/bin/codesign',
-    ['-d', '-r', '-', bundlePath],
-    'iOS Simulator helper designated requirement inspection',
-  );
-  const output = `${result.stdout}\n${result.stderr}`;
-  const requirement = output.match(/designated\s*=>\s*(.+)/)?.[1]?.trim();
-  if (!requirement) {
-    throw new Error('iOS Simulator helper designated requirement is unavailable');
-  }
-  return requirement;
-}
-
-function inspectMachOArchitectures(executablePath) {
-  const { stdout } = runSigningCommand(
-    '/usr/bin/lipo',
-    ['-archs', executablePath],
-    'iOS Simulator helper architecture inspection',
-  );
-  const architectures = stdout
-    .trim()
-    .split(/\s+/)
-    .filter((architecture) => architecture === 'arm64' || architecture === 'x86_64');
-  if (architectures.length === 0) {
-    throw new Error('iOS Simulator helper has no supported architecture');
-  }
-  return [...new Set(architectures)].sort();
-}
-
-/**
- * Writes the Host-private identity record after the nested Helper is signed.
- * The main app is signed afterwards, sealing this resource into its code signature.
- */
-export function writeIOSSimulatorSidecarManifest(appPath, signing) {
-  const helperPath = path.join(appPath, IOS_SIMULATOR_HELPER_RELATIVE_PATH);
-  const executablePath = path.join(
-    helperPath,
-    'Contents',
-    'MacOS',
-    IOS_SIMULATOR_HELPER_EXECUTABLE,
-  );
-  const infoPlistPath = path.join(helperPath, 'Contents', 'Info.plist');
-  if (!fs.existsSync(executablePath) || !fs.existsSync(infoPlistPath)) {
-    throw new Error('packaged iOS Simulator helper is incomplete');
-  }
-
-  const manifestPath = path.join(appPath, IOS_SIMULATOR_SIDECAR_MANIFEST_RELATIVE_PATH);
-  const manifest = {
-    schemaVersion: 1,
-    artifactId: 'cindy.ios-simulator-sidecar',
-    bundleIdentifier: readPlistString(infoPlistPath, 'CFBundleIdentifier'),
-    version: readPlistString(infoPlistPath, 'CFBundleShortVersionString'),
-    architectures: inspectMachOArchitectures(executablePath),
-    sha256: sha256(executablePath),
-    signing: {
-      mode: signing.mode,
-      teamIdentifier: signing.teamIdentifier ?? null,
-      designatedRequirement: inspectDesignatedRequirement(helperPath),
-      hardenedRuntime: true,
-    },
-  };
-  fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
-  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, {
-    mode: 0o644,
-  });
-  return manifestPath;
-}
-
-export function signIOSSimulatorHelper(appPath, signArgs, signing, packageArch) {
-  const helper = inspectPackagedIOSSimulatorHelper(appPath, packageArch);
-  if (helper.status === 'unsupported') {
-    fs.rmSync(path.join(appPath, IOS_SIMULATOR_SIDECAR_MANIFEST_RELATIVE_PATH), {
-      force: true,
-    });
-    console.warn(
-      '    Skipping iOS Simulator helper signing: x86_64 SimulatorKit slice unavailable; package will use WDA/MJPEG',
-    );
-    return false;
-  }
-  console.log('    Signing iOS Simulator helper executable...');
-  runSigningCommand(
-    '/usr/bin/codesign',
-    [...signArgs, helper.executablePath],
-    'iOS Simulator helper signing',
-  );
-  console.log('    Signing iOS Simulator helper bundle...');
-  runSigningCommand(
-    '/usr/bin/codesign',
-    [...signArgs, helper.helperPath],
-    'iOS Simulator helper bundle signing',
-  );
-  writeIOSSimulatorSidecarManifest(appPath, signing);
-  return true;
-}
-
 export function adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlementsPath, arch) {
   console.log('==> Ad-hoc signing macOS app for local packaged testing...');
   const signBase = '/usr/bin/codesign --force --options runtime --sign -';
@@ -970,16 +805,9 @@ export function adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlement
   exec(`find "${frameworksDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
   exec(`find "${frameworksDir}" -name "*.app" -exec ${signBase} --entitlements "${helperEntitlementsPath}" "{}" \\;`);
   exec(`find "${frameworksDir}" -maxdepth 1 -name "*.framework" -exec ${signBase} "{}" \\;`);
-  const iosSimulatorHelperSigned = signIOSSimulatorHelper(
-    appPath,
-    ['--force', '--options', 'runtime', '--sign', '-'],
-    { mode: 'adhoc', teamIdentifier: null },
-    arch,
-  );
   exec(`${signBase} --entitlements "${mainEntitlementsPath}" "${appPath}"`);
   exec(`/usr/bin/codesign --verify --deep --strict "${appPath}"`);
   verifyMacContactsPermissions(appPath);
-  return iosSimulatorHelperSigned;
 }
 
 // ── macOS 正式签名 / 公证 / DMG(单点实现;publish-macos 与 package-desktop 共用)──
@@ -1032,15 +860,13 @@ export function signMacAppWithIdentity(
   console.log('    Signing frameworks...');
   exec(`find "${frameworksDir}" -maxdepth 1 -name "*.framework" -exec ${signBase} "{}" \\;`);
 
-  // 4. Host-owned iOS Simulator Helper uses Hardened Runtime but receives no
-  // Electron/V8 or main-app entitlements. Its manifest is written only after
-  // the final nested signature, then sealed by the outer app signature.
-  const iosSimulatorHelperSigned = signIOSSimulatorHelper(
-    appPath,
-    ['--force', '--timestamp', '--options', 'runtime', '--sign', identity.signIdentity],
-    { mode: 'developer-id', teamIdentifier: identity.teamId },
-    arch,
-  );
+  // 4. Contents/PlugIns/ 下的 app extension(如 macOS 实时活动的 WidgetKit 扩展)。必须在主 app 之前
+  //    单独签,且带 App Sandbox entitlements:扩展没有沙盒无法加载;主 app 用 --deep 统一签会丢掉它。
+  const plugInsDir = path.join(appPath, 'Contents', 'PlugIns');
+  if (fs.existsSync(plugInsDir)) {
+    console.log('    Signing app extensions in Contents/PlugIns/...');
+    exec(`find "${plugInsDir}" -maxdepth 1 -name "*.appex" -exec ${signBase} --entitlements "${APP_EXTENSION_ENTITLEMENTS_PATH}" "{}" \\;`);
+  }
 
   // 5. 主 app bundle
   console.log('    Signing main app...');
@@ -1052,7 +878,6 @@ export function signMacAppWithIdentity(
     keychainAccessGroup,
     signingTeamId: identity.teamId,
   });
-  return iosSimulatorHelperSigned;
 }
 
 const NOTARYTOOL_TIMEOUT_MS = 1800000;
@@ -1400,40 +1225,6 @@ export function runSmokeTest(platform, arch, region = 'global') {
   if (result.status !== 0) {
     console.error('ERROR: packaged smoke test failed; aborting.');
     process.exit(1);
-  }
-}
-
-/**
- * Runs the iOS Simulator qualification path against the final macOS .app.
- * Callers must invoke this only after the app's final nested/outer signing
- * (and notarization when applicable), but before wrapping it in a DMG/ZIP.
- */
-export function runIOSSimulatorReleaseGate(appPath, arch, expectedTrust, requireNative = false) {
-  console.log(
-    `==> Running packaged iOS Simulator release gate (${expectedTrust}, ${
-      requireNative ? 'native' : 'static'
-    })...`,
-  );
-  const args = [
-    'scripts/ios-simulator-release-gate.mjs',
-    `--app-path=${appPath}`,
-    `--arch=${arch}`,
-    `--expected-trust=${expectedTrust}`,
-  ];
-  if (requireNative) args.push('--require-native');
-  const result = spawnSync('node', args, {
-    stdio: 'inherit',
-    cwd: DESKTOP_ROOT,
-    shell: false,
-  });
-  if (result.error) {
-    throw new Error(`packaged iOS Simulator release gate could not start: ${result.error.message}`);
-  }
-  if (result.signal) {
-    throw new Error(`packaged iOS Simulator release gate was terminated by ${result.signal}`);
-  }
-  if (result.status !== 0) {
-    throw new Error('packaged iOS Simulator release gate failed');
   }
 }
 

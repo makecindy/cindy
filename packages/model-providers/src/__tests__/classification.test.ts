@@ -10,6 +10,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CHATGPT_MODEL_PREFIX,
+  CHAT_VENDOR_CATEGORY_ORDER,
+  CATEGORY_ORDER,
   SUBSCRIPTION_DIRECT_MODEL_PREFIXES,
   XAI_MODEL_PREFIX,
   categorize,
@@ -21,7 +23,10 @@ import {
   isBudgetModel,
   isChatEligible,
   isModelSelectableForNewRoute,
+  exclusiveXaiCatalogModelId,
+  isExclusiveXaiModelId,
   isSubscriptionDirectModel,
+  isSubscriptionDirectRoute,
   modelBadges,
   type ModelCategory,
 } from '../classification.js';
@@ -149,6 +154,8 @@ describe('categorize', () => {
   it('图像生成类归 image(issue #882)', () => {
     expect(categorize('gemini-3.1-flash-image')).toBe('image');
     expect(categorize('gpt-image-1.5')).toBe('image');
+    expect(categorize('gpt-image-2.5-sunburst')).toBe('image');
+    expect(categorize('openai/gpt-image-2.5-flare')).toBe('image');
   });
 
   it('id 里不含类型关键词的知名非聊天模型家族(dall-e / sora / veo)也不误判为可聊天(2026-07 review:走 {id,name} 极简发现的自定义 OAuth 供应商没有 mode/group 兜底,全靠这份正则)', () => {
@@ -282,6 +289,7 @@ describe('categorize', () => {
     // 折扣路由不能被"认尾段"的 gpt 规则抢走:codex/gpt-5.4 的尾段就是 gpt-5.4。
     expect(categorize('codex/gpt-5.4')).toBe('gpt-budget');
     expect(categorize('codex/gpt-5.6-sol')).toBe('gpt-budget');
+    expect(categorize('openai-codex/gpt-6.1-sol')).toBe('gpt-budget');
     // xd/codex-gpt-* 的尾段是 codex-gpt-*,不以 gpt- 开头,同样不落 gpt 组。
     expect(categorize('xd/codex-gpt-5.5')).not.toBe('gpt');
     expect(groupOf({ id: 'xd/codex-gpt-5.5', group: 'gpt-budget' })).toBe('gpt-budget');
@@ -311,10 +319,16 @@ describe('groupOf — 数据优先,前缀兜底', () => {
 
 describe('classifyModel — mode 权威,缺省时回退 groupOf(issue #882)', () => {
   const NON_CHAT_MODE_CASES: Array<{ id: string; mode: string; category: ModelCategory }> = [
+    { id: 'typesafe/jev', mode: 'evaluation', category: 'decision' },
+    { id: 'edit-model', mode: 'image_edit', category: 'image' },
+    { id: 'ocr-model', mode: 'ocr', category: 'other' },
+    { id: 'rerank-model', mode: 'rerank', category: 'other' },
     { id: 'gemini-3.1-flash-image', mode: 'image_generation', category: 'image' },
     { id: 'gemini-3-pro-image', mode: 'image_generation', category: 'image' },
     { id: 'gpt-image-1.5', mode: 'image_generation', category: 'image' },
     { id: 'gpt-image-2', mode: 'image_generation', category: 'image' },
+    { id: 'gpt-image-2.5-sunburst', mode: 'image_generation', category: 'image' },
+    { id: 'gpt-image-2.5-flare', mode: 'image_generation', category: 'image' },
     { id: 'text-embedding-3-large', mode: 'embedding', category: 'embedding' },
     { id: 'text-embedding-3-small', mode: 'embedding', category: 'embedding' },
     { id: 'gemini-embedding-2-preview', mode: 'embedding', category: 'embedding' },
@@ -483,12 +497,42 @@ describe('isSubscriptionDirectModel(下沉自 shared/subscriptionModels,签名�
   });
 });
 
+describe('isExclusiveXaiModelId / isSubscriptionDirectRoute', () => {
+  it('认 xai/ 前缀与裸 grok id,不认网关 x-ai/ 或其它厂商', () => {
+    expect(isExclusiveXaiModelId('xai/grok-4.6')).toBe(true);
+    expect(isExclusiveXaiModelId('grok-4.6')).toBe(true);
+    expect(isExclusiveXaiModelId('grok-4.6[1m]')).toBe(true);
+    expect(isExclusiveXaiModelId('grok-build-0.1')).toBe(true);
+    expect(isExclusiveXaiModelId('x-ai/grok-4.6')).toBe(false);
+    expect(isExclusiveXaiModelId('xai/not-grok')).toBe(false);
+    expect(isExclusiveXaiModelId('claude-opus-5')).toBe(false);
+    expect(isExclusiveXaiModelId('chatgpt/gpt-5.5')).toBe(false);
+    expect(isExclusiveXaiModelId(null)).toBe(false);
+  });
+
+  it('isSubscriptionDirectRoute 覆盖前缀与独占裸 id', () => {
+    expect(isSubscriptionDirectRoute('xai/grok-4.6')).toBe(true);
+    expect(isSubscriptionDirectRoute('grok-4.6')).toBe(true);
+    expect(isSubscriptionDirectRoute('chatgpt/gpt-5.5')).toBe(true);
+    expect(isSubscriptionDirectRoute('x-ai/grok-4.6')).toBe(false);
+    expect(isSubscriptionDirectRoute('claude-opus-5')).toBe(false);
+  });
+
+  it('exclusiveXaiCatalogModelId 把裸 grok 归一成 xai/ 目录 id', () => {
+    expect(exclusiveXaiCatalogModelId('grok-4.6')).toBe('xai/grok-4.6');
+    expect(exclusiveXaiCatalogModelId('xai/grok-4.6')).toBe('xai/grok-4.6');
+    expect(exclusiveXaiCatalogModelId('x-ai/grok-4.6')).toBeNull();
+    expect(exclusiveXaiCatalogModelId('claude-opus-5')).toBeNull();
+  });
+});
+
 describe('isBudgetModel — 目录 group 优先,codex/ 前缀兜底', () => {
   it('group 标注优先(网关新数据)', () => {
     expect(isBudgetModel({ id: 'whatever', group: 'gpt-budget' })).toBe(true);
   });
   it('无 group 时按前缀(网关旧数据)', () => {
     expect(isBudgetModel({ id: 'codex/gpt-5.5' })).toBe(true);
+    expect(isBudgetModel({ id: 'openai-codex/gpt-6.1-sol' })).toBe(true);
     expect(isBudgetModel({ id: 'gpt-5.5' })).toBe(false);
   });
   // 与 groupOf 同一「数据优先」契约(2026-07 Greptile review):目录显式给出合法的
@@ -556,4 +600,16 @@ describe('formatContextWindow(下沉自 ModelSelector,输出逐字一致)', () =
   it('<1000 原样', () => {
     expect(formatContextWindow(512)).toBe('512');
   });
+});
+
+// Unit contract: evaluation is a Decisions endpoint, never an Agent chat model.
+// Existing cases did not cover evaluation or the newly recognized decision group without mode.
+it('keeps decision after embedding and outside all chat selection paths', () => {
+  expect(CATEGORY_ORDER.slice(CATEGORY_ORDER.indexOf('embedding'), CATEGORY_ORDER.indexOf('compression') + 1)).toEqual(['embedding', 'decision', 'compression']);
+  expect(CHAT_VENDOR_CATEGORY_ORDER).not.toContain('decision');
+  for (const value of [{ id: 'typesafe/jev', mode: 'evaluation' }, { id: 'typesafe/jev', group: 'decision' }]) {
+    expect(isChatEligible(value)).toBe(false);
+    expect(isAgentSelectableModel(value, { userProvider: true })).toBe(false);
+    expect(isModelSelectableForNewRoute(value)).toBe(false);
+  }
 });

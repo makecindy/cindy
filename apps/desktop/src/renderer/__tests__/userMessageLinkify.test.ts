@@ -83,9 +83,32 @@ describe('userMessageLinkify', () => {
     ]);
   });
 
-  it('stops URL matches before ASCII quotes and CJK text', () => {
+  it('stops URL matches before ASCII quotes and CJK punctuation', () => {
     expect(urls('看 "https://example.com/path"然后')).toEqual(['https://example.com/path']);
-    expect(urls('看 https://example.com/path这是说明')).toEqual(['https://example.com/path']);
+    expect(urls('看 https://example.com/path。然后')).toEqual(['https://example.com/path']);
+  });
+
+  it('keeps Unicode domain and path segments', () => {
+    expect(urls('打开 https://example.com/路径 与 https://例子.测试/path')).toEqual([
+      'https://example.com/路径',
+      'https://例子.测试/path',
+    ]);
+    expect(urls('打开 https://www.例子.com/2024年报告')).toEqual([
+      'https://www.例子.com/2024年报告',
+    ]);
+    expect(urls('打开 https://例子。测试/path')).toEqual([
+      'https://例子。测试/path',
+    ]);
+    expect(urls('看 http://localhost:3000。然后')).toEqual([
+      'http://localhost:3000',
+    ]);
+    expect(urls('打开 https://example.com/ＡＢＣ 与 https://example.com/ｶﾀｶﾅ')).toEqual([
+      'https://example.com/ＡＢＣ',
+      'https://example.com/ｶﾀｶﾅ',
+    ]);
+    expect(urls('看 https://example.com/path\u00A0然后')).toEqual([
+      'https://example.com/path',
+    ]);
   });
 
   it('keeps apostrophes inside URL paths and at URL endings', () => {

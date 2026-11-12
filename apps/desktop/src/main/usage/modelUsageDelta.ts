@@ -6,8 +6,9 @@
  * daily_model_usage 表必须 cumulative - lastReported (与 register.ts 的
  * lastReportedCostUsdBySession 同款手法)。
  *
- * 钳制: 子进程重 spawn (resume / 崩溃重启) 后累计值归零, delta 会算出负数 —
- * 一律 Math.max(0, ...) 钳到 0 (接受少记一个 turn 的取舍, 与 total_cost_usd 一致)。
+ * 基线: 首次快照或子进程重 spawn 后的回退快照不能直接当成本轮增量。
+ * 先把累计值设为新基线；若独立观察到的完整 request segments 与该快照逐桶一致，
+ * 才保留这轮 token/cost。其余情况宁可只保留可证明的 segment token，也不吞入历史累计。
  *
  * ## 已知上游行为: output 归属可能滞后一轮
  *
@@ -43,6 +44,13 @@ export interface ModelUsageDeltaEntry {
   cacheCreateTokensDelta: number;
 }
 
+export interface ObservedModelTurnUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreateTokens: number;
+}
+
 function num(v: unknown): number {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0;
 }
@@ -70,6 +78,8 @@ function sanitize(raw: unknown): ModelUsageCumulative {
 export function computeModelUsageDeltas(
   prev: Map<string, ModelUsageCumulative> | undefined,
   current: Record<string, unknown>,
+  observedTurnUsage?: ReadonlyMap<string, ObservedModelTurnUsage>,
+  options: { cumulativeStartsAtZero?: boolean } = {},
 ): { next: Map<string, ModelUsageCumulative>; deltas: ModelUsageDeltaEntry[] } {
   const next = new Map<string, ModelUsageCumulative>();
   const deltas: ModelUsageDeltaEntry[] = [];
@@ -88,17 +98,54 @@ export function computeModelUsageDeltas(
         cum.outputTokens < last.outputTokens ||
         cum.cacheReadInputTokens < last.cacheReadInputTokens ||
         cum.cacheCreationInputTokens < last.cacheCreationInputTokens);
-    const base = reset || last === undefined
-      ? { costUSD: 0, inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 }
+    const unbaselined = reset || last === undefined;
+    const cumulativeStartsAtZero = options.cumulativeStartsAtZero === true;
+    const observed =
+      observedTurnUsage?.get(model) ?? observedTurnUsage?.get(model.replace(/\[[^\]]*\]\s*$/, ''));
+    const observedMatchesCumulative =
+      observed !== undefined &&
+      cum.inputTokens === observed.inputTokens &&
+      cum.outputTokens === observed.outputTokens &&
+      cum.cacheReadInputTokens === observed.cacheReadTokens &&
+      cum.cacheCreationInputTokens === observed.cacheCreateTokens;
+    const base = unbaselined
+      ? cumulativeStartsAtZero
+        ? {
+            costUSD: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+          }
+        : cum
       : last;
 
     const entry: ModelUsageDeltaEntry = {
       model,
-      costUsdDelta: Math.max(0, cum.costUSD - base.costUSD),
-      inputTokensDelta: Math.max(0, cum.inputTokens - base.inputTokens),
-      outputTokensDelta: Math.max(0, cum.outputTokens - base.outputTokens),
-      cacheReadTokensDelta: Math.max(0, cum.cacheReadInputTokens - base.cacheReadInputTokens),
-      cacheCreateTokensDelta: Math.max(0, cum.cacheCreationInputTokens - base.cacheCreationInputTokens),
+      // A first snapshot after desktop restart/reattach may contain the whole
+      // provider session. Only treat its cumulative cost as this turn when the
+      // independently observed request segments prove the token totals match.
+      costUsdDelta: unbaselined
+        ? cumulativeStartsAtZero || observedMatchesCumulative
+          ? cum.costUSD
+          : 0
+        : Math.max(0, cum.costUSD - base.costUSD),
+      inputTokensDelta:
+        observed && unbaselined && !cumulativeStartsAtZero
+          ? observed.inputTokens
+          : Math.max(0, cum.inputTokens - base.inputTokens),
+      outputTokensDelta:
+        observed && unbaselined && !cumulativeStartsAtZero
+          ? observed.outputTokens
+          : Math.max(0, cum.outputTokens - base.outputTokens),
+      cacheReadTokensDelta:
+        observed && unbaselined && !cumulativeStartsAtZero
+          ? observed.cacheReadTokens
+          : Math.max(0, cum.cacheReadInputTokens - base.cacheReadInputTokens),
+      cacheCreateTokensDelta:
+        observed && unbaselined && !cumulativeStartsAtZero
+          ? observed.cacheCreateTokens
+          : Math.max(0, cum.cacheCreationInputTokens - base.cacheCreationInputTokens),
     };
     next.set(model, cum);
     if (

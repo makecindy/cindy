@@ -27,6 +27,18 @@ describe('stopRuntimeForQuit', () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
+  it('pins the active profile on the quit path', async () => {
+    const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>(async () => ({
+      ok: true,
+      action: 'stop',
+      status: 200,
+    }));
+
+    await stopRuntimeForQuit({ call }, fakeLogger(), 'Cindy-real');
+
+    expect(call).toHaveBeenCalledWith({ action: 'stop', profile: 'Cindy-real' });
+  });
+
   it('warns but does not throw when stop returns not-ok', async () => {
     const call = vi.fn(
       async (): Promise<BrowserControlResult> => ({

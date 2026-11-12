@@ -1,3 +1,5 @@
+import { sidebarPinnedEntryComparisonKey } from '../../../../shared/sidebarSettings';
+
 /**
  * Pinned sidebar order stores conversations and projects in one persisted list.
  * Conversation ids remain unchanged for backward compatibility; project entries
@@ -19,6 +21,24 @@ export function isPinnedProjectEntryId(entryId: string): boolean {
   return projectKeyFromPinnedEntryId(entryId) !== null;
 }
 
+/** Comparison identity for mixed persisted pinned entries; conversation ids remain exact. */
+export function pinnedSidebarEntryComparisonKey(entryId: string, localPlatform: string): string {
+  return sidebarPinnedEntryComparisonKey(entryId, localPlatform);
+}
+
+/** Build stable persisted ranks while retaining the first durable representative. */
+export function buildPinnedSidebarRank(
+  order: readonly string[],
+  localPlatform: string,
+): Map<string, number> {
+  const rank = new Map<string, number>();
+  order.forEach((entryId, index) => {
+    const identity = pinnedSidebarEntryComparisonKey(entryId, localPlatform);
+    if (!rank.has(identity)) rank.set(identity, index);
+  });
+  return rank;
+}
+
 /**
  * Project tokens are intentionally kept even when a project is temporarily
  * absent (machine/status filtering, remote disconnect, or no unpinned chats).
@@ -28,19 +48,23 @@ export function isPinnedProjectEntryId(entryId: string): boolean {
 export function activePinnedSidebarEntryIds(
   manualOrder: readonly string[],
   pinnedSessionIds: readonly string[],
+  localPlatform: string = '',
 ): string[] {
   const seen = new Set<string>();
   const active: string[] = [];
 
   for (const id of pinnedSessionIds) {
-    if (seen.has(id)) continue;
-    seen.add(id);
+    const identity = pinnedSidebarEntryComparisonKey(id, localPlatform);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     active.push(id);
   }
 
   for (const id of manualOrder) {
-    if (!isPinnedProjectEntryId(id) || seen.has(id)) continue;
-    seen.add(id);
+    if (!isPinnedProjectEntryId(id)) continue;
+    const identity = pinnedSidebarEntryComparisonKey(id, localPlatform);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     active.push(id);
   }
 

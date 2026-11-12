@@ -211,7 +211,9 @@ export async function socks5Connect(
   destPort: number,
 ): Promise<Socket> {
   const authority = formatAuthority(destHost, destPort);
-  const fail = (message: string): Error => new Error(`outbound proxy ${proxy.url} ${message}`);
+  // cause 保留底层 errno:server.ts 的 502 分类要沿错误链找 ECONNREFUSED + 回环地址。
+  const fail = (message: string, cause?: unknown): Error =>
+    new Error(`outbound proxy ${proxy.url} ${message}`, cause === undefined ? undefined : { cause });
 
   const destination = encodeDestination(destHost);
   if (!destination) throw fail(`cannot encode destination ${authority}`);
@@ -237,7 +239,7 @@ export async function socks5Connect(
 
   // socket 层错误 / 提前 EOF 唤醒等待中的 read,避免握手 Promise 永久悬挂。
   const onError = (err: Error): void => {
-    reader.fail(timedOut ? fail(`CONNECT ${authority} timed out`) : fail(`unreachable: ${err.message}`));
+    reader.fail(timedOut ? fail(`CONNECT ${authority} timed out`) : fail(`unreachable: ${err.message}`, err));
   };
   const onClose = (): void => {
     reader.fail(timedOut
@@ -251,7 +253,7 @@ export async function socks5Connect(
     await new Promise<void>((resolve, reject) => {
       if (!socket.connecting) { resolve(); return; }
       socket.once('connect', resolve);
-      socket.once('error', (err: Error) => reject(fail(`unreachable: ${err.message}`)));
+      socket.once('error', (err: Error) => reject(fail(`unreachable: ${err.message}`, err)));
       socket.once('close', () => reject(fail('unreachable: connection closed')));
     });
 

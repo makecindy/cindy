@@ -9,9 +9,26 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { awaitWithStartupTimeout } from '../authStartupGate';
+import { AuthApiError } from '@cindy/auth-client';
+
+import {
+  LOGIN_PREPARING_GATE_TIMEOUT_MS,
+  awaitLoginProvidersWithPreparingGate,
+  awaitWithStartupTimeout,
+  ColdStartAuthFallbackRegistry,
+  commitColdStartRefreshIfCurrent,
+  resolveColdStartTimeoutRecovery,
+  mapLoginProvidersLoadFailure,
+} from '../authStartupGate';
 
 describe('awaitWithStartupTimeout', () => {
+  it('preserves rate-limit deadlines during provider discovery', () => {
+    expect(
+      mapLoginProvidersLoadFailure(
+        new AuthApiError('RATE_LIMITED', 429, 'limited', 1_800_000_000_000),
+      ),
+    ).toMatchObject({ code: 'RATE_LIMITED', retryAt: 1_800_000_000_000 });
+  });
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -131,6 +148,30 @@ describe('awaitWithStartupTimeout', () => {
     }
   });
 
+  it('超时且 onTimeout 抛错:waiter 收到该错误;flow 迟到 resolve 仍走 onLateResult', async () => {
+    let resolveFlow!: (v: string) => void;
+    const flow = new Promise<string>((r) => {
+      resolveFlow = r;
+    });
+    const boom = new Error('timeout-fallback-failed');
+    const onLateResult = vi.fn();
+    const p = awaitWithStartupTimeout(flow, {
+      timeoutMs: 1000,
+      onTimeout: () => {
+        throw boom;
+      },
+      onLateResult,
+    });
+    // 先挂上 rejection 断言再推进计时器,避免超时 reject 在 expect 之前变成 unhandled。
+    const rejected = expect(p).rejects.toBe(boom);
+    await vi.advanceTimersByTimeAsync(1000);
+    await rejected;
+
+    resolveFlow('late');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onLateResult).toHaveBeenCalledWith('late');
+  });
+
   it('timeoutMs <= 0:退化为直接 await,永不超时', async () => {
     const onTimeout = vi.fn(() => 'fallback');
     let resolveFlow!: (v: string) => void;
@@ -142,5 +183,308 @@ describe('awaitWithStartupTimeout', () => {
     resolveFlow('ok');
     await expect(p).resolves.toBe('ok');
     expect(onTimeout).not.toHaveBeenCalled();
+  });
+});
+
+describe('ColdStartAuthFallbackRegistry', () => {
+  it('returns a pending boundary when the owner transition exceeds the startup deadline', async () => {
+    const pendingState = { mode: 'signed-out', ownerBoundaryPending: true } as const;
+    const recover = vi.fn(async () => ({ mode: 'signed-out', ownerBoundaryPending: false }));
+    const result = await resolveColdStartTimeoutRecovery({
+      ownerTransitionPending: true,
+      authChangedSinceInitialize: false,
+      loginCommitPending: false,
+      loginCommittedSinceInitialize: false,
+      isStartupFallbackEpoch: () => false,
+      timeoutStartEpoch: 7,
+      currentEpoch: 7,
+      currentState: { mode: 'cloud', ownerBoundaryPending: false },
+      pendingState,
+      recover,
+    });
+    expect(result).toEqual(pendingState);
+    expect(recover).not.toHaveBeenCalled();
+  });
+
+  it('recovers a signed-out owner when no owner transition is pending', async () => {
+    const pendingState = { mode: 'signed-out', ownerBoundaryPending: true } as const;
+    const currentState = { mode: 'cloud', ownerBoundaryPending: false } as const;
+    const recoveredState = { mode: 'signed-out', ownerBoundaryPending: false } as const;
+    const recover = vi.fn(async () => recoveredState);
+    await expect(resolveColdStartTimeoutRecovery({
+      ownerTransitionPending: false,
+      authChangedSinceInitialize: false,
+      loginCommitPending: false,
+      loginCommittedSinceInitialize: false,
+      isStartupFallbackEpoch: () => false,
+      timeoutStartEpoch: 7,
+      currentEpoch: 7,
+      currentState,
+      pendingState,
+      recover,
+    })).resolves.toBe(recoveredState);
+    expect(recover).toHaveBeenCalledOnce();
+  });
+
+  it('returns a pending boundary while an explicit login transaction is committing', async () => {
+    const pendingState = { mode: 'signed-out', ownerBoundaryPending: true } as const;
+    const recover = vi.fn(async () => ({ mode: 'signed-out' as const }));
+    await expect(resolveColdStartTimeoutRecovery({
+      ownerTransitionPending: false,
+      authChangedSinceInitialize: false,
+      loginCommitPending: true,
+      loginCommittedSinceInitialize: false,
+      isStartupFallbackEpoch: () => false,
+      timeoutStartEpoch: 7,
+      currentEpoch: 8,
+      currentState: { mode: 'cloud', userId: 'login-committing' },
+      pendingState,
+      recover,
+    })).resolves.toEqual(pendingState);
+    expect(recover).not.toHaveBeenCalled();
+  });
+
+  it('preserves an explicit login completed before a sibling startup timeout', async () => {
+    const loggedInState = { mode: 'cloud', userId: 'new-owner' } as const;
+    const recover = vi.fn(async () => ({ mode: 'signed-out' as const }));
+
+    await expect(resolveColdStartTimeoutRecovery({
+      ownerTransitionPending: false,
+      authChangedSinceInitialize: false,
+      loginCommitPending: false,
+      loginCommittedSinceInitialize: false,
+      isStartupFallbackEpoch: () => false,
+      timeoutStartEpoch: 7,
+      currentEpoch: 8,
+      currentState: loggedInState,
+      pendingState: { mode: 'signed-out', ownerBoundaryPending: true },
+      recover,
+    })).resolves.toBe(loggedInState);
+
+    expect(recover).not.toHaveBeenCalled();
+  });
+
+  it('preserves login completed during async startup prereads before the sibling timeout', async () => {
+    const initializeStartEpoch = 7;
+    let authStateEpoch = initializeStartEpoch;
+    const loggedInState = { mode: 'cloud', userId: 'new-owner' } as const;
+    const recover = vi.fn(async () => ({ mode: 'signed-out' as const }));
+
+    // reconcileDesktopActiveAuthSession/loadClientEndpointsForRealm are awaited
+    // before the shared refresh starts; login may commit while either is pending.
+    authStateEpoch += 1;
+    await expect(resolveColdStartTimeoutRecovery({
+      ownerTransitionPending: false,
+      authChangedSinceInitialize: authStateEpoch !== initializeStartEpoch,
+      loginCommitPending: false,
+      loginCommittedSinceInitialize: false,
+      isStartupFallbackEpoch: () => false,
+      timeoutStartEpoch: initializeStartEpoch,
+      currentEpoch: authStateEpoch,
+      currentState: loggedInState,
+      pendingState: { mode: 'signed-out', ownerBoundaryPending: true },
+      recover,
+    })).resolves.toBe(loggedInState);
+
+    expect(recover).not.toHaveBeenCalled();
+  });
+
+  it('preserves a login whose commit settled after the sibling initialize entered', async () => {
+    // completeLogin increments authStateEpoch before awaiting the durable
+    // commit, so a sibling initialize entering inside that interval snapshots
+    // the in-progress epoch; when the commit finishes before the sibling timer
+    // fires, every epoch guard compares equal and recovery would clear the new
+    // login. Only the settled-login counter distinguishes this case.
+    const loggedInState = { mode: 'cloud', userId: 'new-owner' } as const;
+    const recover = vi.fn(async () => ({ mode: 'signed-out' as const }));
+    await expect(resolveColdStartTimeoutRecovery({
+      ownerTransitionPending: false,
+      authChangedSinceInitialize: false,
+      loginCommitPending: false,
+      loginCommittedSinceInitialize: true,
+      isStartupFallbackEpoch: () => false,
+      timeoutStartEpoch: 7,
+      currentEpoch: 7,
+      currentState: loggedInState,
+      pendingState: { mode: 'signed-out', ownerBoundaryPending: true },
+      recover,
+    })).resolves.toBe(loggedInState);
+
+    expect(recover).not.toHaveBeenCalled();
+  });
+
+  it('preserves a late successful refresh across consecutive renderer startup timeouts', async () => {
+    vi.useFakeTimers();
+    const registry = new ColdStartAuthFallbackRegistry();
+    const flowEpoch = 7;
+    let currentEpoch = flowEpoch;
+    let committedUser: string | null = null;
+    let resolveRefresh!: (user: string) => void;
+    const refresh = new Promise<string>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const recover = () => {
+      const previousEpoch = currentEpoch;
+      currentEpoch += 1;
+      registry.record(previousEpoch, currentEpoch);
+      return Promise.resolve('signed-out');
+    };
+
+    // Two renderer windows share the same refresh, but each owns a startup timer.
+    const primary = awaitWithStartupTimeout(refresh, { timeoutMs: 1000, onTimeout: recover });
+    const secondary = awaitWithStartupTimeout(refresh, { timeoutMs: 1500, onTimeout: recover });
+    await vi.advanceTimersByTimeAsync(1500);
+    await expect(primary).resolves.toBe('signed-out');
+    await expect(secondary).resolves.toBe('signed-out');
+    expect(currentEpoch).toBe(9);
+
+    resolveRefresh('owner');
+    const refreshedUser = await refresh;
+    const commit = commitColdStartRefreshIfCurrent({
+      registry,
+      flowEpoch,
+      currentEpoch,
+      commit: () => {
+        committedUser = refreshedUser;
+        return committedUser;
+      },
+    });
+
+    expect(commit).toEqual({ superseded: false, flowEpoch: 9, value: 'owner' });
+    expect(committedUser).toBe('owner');
+  });
+
+  it('keeps every unobserved sibling timeout edge until the shared refresh commits', async () => {
+    const registry = new ColdStartAuthFallbackRegistry();
+    const flowEpoch = 7;
+    let currentEpoch = flowEpoch;
+    const recover = vi.fn(async () => {
+      const fromEpoch = currentEpoch;
+      currentEpoch += 1;
+      registry.record(fromEpoch, currentEpoch);
+      return { mode: 'signed-out' as const };
+    });
+    const loggedOut = { mode: 'signed-out' as const };
+
+    await expect(resolveColdStartTimeoutRecovery({
+      ownerTransitionPending: false,
+      authChangedSinceInitialize: false,
+      loginCommitPending: false,
+      loginCommittedSinceInitialize: false,
+      isStartupFallbackEpoch: (epoch) => registry.containsOnlyFallbacks(flowEpoch, epoch),
+      timeoutStartEpoch: flowEpoch,
+      currentEpoch,
+      currentState: loggedOut,
+      pendingState: { mode: 'signed-out', ownerBoundaryPending: true },
+      recover,
+    })).resolves.toEqual(loggedOut);
+    await expect(resolveColdStartTimeoutRecovery({
+      ownerTransitionPending: false,
+      authChangedSinceInitialize: false,
+      loginCommitPending: false,
+      loginCommittedSinceInitialize: false,
+      isStartupFallbackEpoch: (epoch) => registry.containsOnlyFallbacks(flowEpoch, epoch),
+      timeoutStartEpoch: flowEpoch,
+      currentEpoch,
+      currentState: loggedOut,
+      pendingState: { mode: 'signed-out', ownerBoundaryPending: true },
+      recover,
+    })).resolves.toEqual(loggedOut);
+
+    expect(currentEpoch).toBe(9);
+    expect(commitColdStartRefreshIfCurrent({
+      registry,
+      flowEpoch,
+      currentEpoch,
+      commit: () => 'owner',
+    })).toEqual({ superseded: false, flowEpoch: 9, value: 'owner' });
+    expect(recover).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not commit a refresh after an explicit login interrupts the fallback chain', () => {
+    const registry = new ColdStartAuthFallbackRegistry();
+    registry.record(8, 9);
+    const commit = vi.fn(() => 'stale-owner');
+
+    const rejected = commitColdStartRefreshIfCurrent({
+      registry,
+      flowEpoch: 7,
+      currentEpoch: 9,
+      commit,
+    });
+    expect(rejected).toEqual({ superseded: true });
+    expect(commit).not.toHaveBeenCalled();
+  });
+
+  it('rejects a later user auth change after consecutive startup fallbacks', () => {
+    const registry = new ColdStartAuthFallbackRegistry();
+    registry.record(7, 8);
+    registry.record(8, 9);
+    expect(registry.containsOnlyFallbacks(7, 10)).toBe(false);
+  });
+
+  it('accepts the unchanged generation without fallback records', () => {
+    const registry = new ColdStartAuthFallbackRegistry();
+    expect(registry.containsOnlyFallbacks(7, 7)).toBe(true);
+  });
+});
+
+describe('awaitLoginProvidersWithPreparingGate', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('stalled getProviders becomes retryable AUTH_SERVICE_UNAVAILABLE after 30s', async () => {
+    const hung = new Promise<string>(() => undefined);
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const p = awaitLoginProvidersWithPreparingGate(hung, log);
+    const rejected = expect(p).rejects.toMatchObject({
+      name: 'AuthApiError',
+      code: 'AUTH_SERVICE_UNAVAILABLE',
+    });
+
+    await vi.advanceTimersByTimeAsync(LOGIN_PREPARING_GATE_TIMEOUT_MS - 1);
+    expect(log.warn).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    const error = await p.catch((err: unknown) => err);
+    await rejected;
+
+    expect(error).toBeInstanceOf(AuthApiError);
+    expect(mapLoginProvidersLoadFailure(error)).toEqual({
+      success: false,
+      code: 'AUTH_SERVICE_UNAVAILABLE',
+      state: { step: 'error', code: 'AUTH_SERVICE_UNAVAILABLE', recoverTo: 'identifier' },
+    });
+
+    const hungRetry = new Promise<string>(() => undefined);
+    const retry = awaitLoginProvidersWithPreparingGate(hungRetry, log);
+    const retryRejected = expect(retry).rejects.toMatchObject({
+      code: 'AUTH_SERVICE_UNAVAILABLE',
+    });
+    await vi.advanceTimersByTimeAsync(LOGIN_PREPARING_GATE_TIMEOUT_MS);
+    await retryRejected;
+  });
+
+  it('does not abort a late getProviders; only logs the late settle', async () => {
+    let resolveFlow!: (v: string) => void;
+    const flow = new Promise<string>((resolve) => {
+      resolveFlow = resolve;
+    });
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const p = awaitLoginProvidersWithPreparingGate(flow, log);
+    const rejected = expect(p).rejects.toMatchObject({ code: 'AUTH_SERVICE_UNAVAILABLE' });
+    await vi.advanceTimersByTimeAsync(LOGIN_PREPARING_GATE_TIMEOUT_MS);
+    await rejected;
+
+    resolveFlow('late-providers');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(log.info).toHaveBeenCalledWith('login providers settled after preparing gate timeout');
+    expect(log.warn).not.toHaveBeenCalledWith(
+      'login providers request failed after preparing gate timeout',
+      expect.anything(),
+    );
   });
 });

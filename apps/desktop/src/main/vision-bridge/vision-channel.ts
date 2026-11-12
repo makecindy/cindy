@@ -18,12 +18,23 @@
  */
 import fs from 'node:fs/promises';
 
-import type { AgentKind } from '@cindy/model-providers';
-import type { Provider } from '@cindy/model-providers';
+import { isCodexGatewayWireModel, resolvePiModelWireProtocol, type AgentKind, type Provider } from '@cindy/model-providers';
+
+import { withOpenCodeGoSessionHeader } from '../maker-host/opencode-go-session.js';
+import { providerRuntimeCatalogPresetId } from '../maker-host/provider-route.js';
 
 /** 视觉后端执行失败（带原因）。调用方据此决定 fallback 或回退。 */
 export class VisionBackendError extends Error {
-  readonly code: 'unsupported-auth' | 'not-found' | 'http' | 'network' | 'timeout' | 'abort' | 'empty' | 'unsupported-image' | 'unavailable';
+  readonly code:
+    | 'unsupported-auth'
+    | 'not-found'
+    | 'http'
+    | 'network'
+    | 'timeout'
+    | 'abort'
+    | 'empty'
+    | 'unsupported-image'
+    | 'unavailable';
   constructor(
     code: VisionBackendError['code'],
     message: string,
@@ -55,10 +66,7 @@ export interface VisionChannelDeps {
    * `provider-route.resolveVisionBackendRoute`（含 xd 特例 / modelIdRewrite / 动态端点 /
    * 凭证），视觉桥不自己复刻路由判断。返回 null = 后端不可用（走 fallback/回退）。
    */
-  resolveBackendRoute?: (
-    providerId: string,
-    modelId: string,
-  ) => VisionBackendEndpoint | null;
+  resolveBackendRoute?: (providerId: string, modelId: string) => VisionBackendEndpoint | null;
   /** 出网 fetch（对齐签名）。缺省 = globalThis.fetch。 */
   fetch?: typeof globalThis.fetch;
   /** 单次视觉调用的软超时（ms）。缺省 30000——视觉推理（尤其带图）常需 10-30s，5s 太短易超时。 */
@@ -80,9 +88,13 @@ export const DEFAULT_VISION_PROMPT =
   'Describe this image accurately and factually. Do NOT guess or fabricate details. ' +
   'Report visible text verbatim. If the image contains UI elements, lists their labels and state.';
 
-/** anthropic-messages 视觉请求的 max_tokens（/v1/messages 强制要求，缺省 400）。
- *  描述文本通常远小于此，取有界值防超长输出。 */
-const VISION_ANTHROPIC_MAX_TOKENS = 1024;
+/**
+ * anthropic-messages 视觉请求的 max_tokens（/v1/messages 缺省会 400）。
+ * 思考模型会先输出 thinking / redacted_thinking，1024 常被思考吃光，正文为空，
+ * 视觉桥误判「图片不可用」（#4580）。4096 够一段思考加图片描述，同时保持有界，
+ * 避免把输出预算开成无上限、把单次转图的费用和延迟拉满。
+ */
+export const VISION_ANTHROPIC_MAX_TOKENS = 4096;
 
 /** 允许直接转为 data URL 的图片 mime（对齐 vision_client.py）。 */
 const ALLOWED_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
@@ -98,9 +110,16 @@ function sniffImageMime(buf: Buffer): string | null {
   if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38) return 'image/gif';
   // WebP: RIFF .... WEBP
   if (
-    buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
-    buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
-  ) return 'image/webp';
+    buf[0] === 0x52 &&
+    buf[1] === 0x49 &&
+    buf[2] === 0x46 &&
+    buf[3] === 0x46 &&
+    buf[8] === 0x57 &&
+    buf[9] === 0x45 &&
+    buf[10] === 0x42 &&
+    buf[11] === 0x50
+  )
+    return 'image/webp';
   return null;
 }
 
@@ -140,20 +159,23 @@ async function toDataUrl(imagePath: string): Promise<string> {
   // 安全：只允许真实图片字节（魔数校验），防止任意文件（.env / 密钥 / 文档）base64 外传。
   const mime = sniffImageMime(data);
   if (!mime) {
-    throw new VisionBackendError('unsupported-image', 'not a supported image (magic-byte check failed)');
+    throw new VisionBackendError(
+      'unsupported-image',
+      'not a supported image (magic-byte check failed)',
+    );
   }
   return `data:${mime};base64,${data.toString('base64')}`;
 }
 
 /**
  * 选该 provider 用于视觉的 agent 面。跟 agent 路由一致：先按模型 id 前缀判定面
- * （`codex/` → codex 面、`claude-`/`anthropic/` → claude-code 面），再按 provider.models
+ * （`openai-codex/`、`codex/` → codex 面、`claude-`/`anthropic/` → claude-code 面），再按 provider.models
  * 里模型归属，最后回退到第一个声明 routing 的 agent。避免「模型是 codex 面却走了
  * claude-code 的 routing」导致协议/端点不匹配。
  */
 function pickAgent(provider: Provider, modelId: string): AgentKind | null {
-  // 模型前缀显式指面（对齐 codex-proxy 的 `model.startsWith('codex/')` 判定）。
-  if (modelId.startsWith('codex/') && provider.routing.codex) return 'codex';
+  // 模型前缀显式指面（对齐 codex-proxy 的折扣 wire 前缀判定）。
+  if (isCodexGatewayWireModel(modelId) && provider.routing.codex) return 'codex';
   if (
     (modelId.startsWith('claude-') || modelId.startsWith('anthropic/')) &&
     provider.routing['claude-code']
@@ -174,11 +196,11 @@ function pickAgent(provider: Provider, modelId: string): AgentKind | null {
   return null;
 }
 
-/** 按 agent 面推断缺省 wireProtocol（对齐 user-provider defaultWireProtocol）。 */
-function defaultWireProtocol(agent: AgentKind): 'anthropic-messages' | 'openai-responses' | 'openai-chat' {
+/** Claude/Codex 保留历史缺省；Pi 必须由来源显式声明。 */
+function defaultWireProtocol(agent: AgentKind): 'anthropic-messages' | 'openai-responses' | null {
   if (agent === 'claude-code') return 'anthropic-messages';
   if (agent === 'codex') return 'openai-responses';
-  return 'openai-chat';
+  return null;
 }
 
 /**
@@ -191,25 +213,40 @@ function rewriteVisionModel(modelId: string, stripPrefix: string | undefined): s
     : modelId;
 }
 
-/** 从 routing 读 wireProtocol，缺省按 agent 面推断。 */
-function wireProtocolFor(provider: Provider, agent: AgentKind): 'anthropic-messages' | 'openai-responses' | 'openai-chat' {
-  return provider.routing[agent]?.wireProtocol ?? defaultWireProtocol(agent);
+/** 从 routing 读 wireProtocol；Pi 缺声明时返回 null。 */
+function wireProtocolFor(
+  provider: Provider,
+  agent: AgentKind,
+  modelId: string,
+): 'anthropic-messages' | 'openai-responses' | 'openai-chat' | null {
+  if (agent === 'pi') {
+    const model = provider.models.pi?.find((candidate) => candidate.id === modelId);
+    return resolvePiModelWireProtocol(model, provider.routing.pi?.wireProtocol);
+  }
+  const wire = provider.routing[agent]?.wireProtocol ?? defaultWireProtocol(agent);
+  return wire === 'google-generative-ai' ? null : wire;
 }
 
 /** 视觉桥请求应带的路由额外头（headerOverride 去掉客户端凭证头）。
  *  视觉桥直连不发 proxy，需自己带上 anthropic-version / x-api-key / 自定义 provider 头
  *  （与代理层 withoutClientAuthHeaders 对齐，防 catalog 误配把客户端凭证带进第三方）。 */
 const VISION_CLIENT_AUTH_HEADERS = new Set(['authorization', 'x-api-key']);
-function visionRouteHeaders(routing: Provider['routing'][AgentKind] | undefined): Record<string, string> {
+function visionRouteHeaders(
+  routing: Provider['routing'][AgentKind] | undefined,
+): Record<string, string> {
   const override = routing?.headerOverride;
   if (!override) return {};
   return Object.fromEntries(
-    Object.entries(override).filter(([name]) => !VISION_CLIENT_AUTH_HEADERS.has(name.toLowerCase())),
+    Object.entries(override).filter(
+      ([name]) => !VISION_CLIENT_AUTH_HEADERS.has(name.toLowerCase()),
+    ),
   );
 }
 
 /** 按 wireProtocol 推断缺省请求路径（对齐上游标准路径）。 */
-function defaultRequestPath(wire: 'anthropic-messages' | 'openai-responses' | 'openai-chat'): string {
+function defaultRequestPath(
+  wire: 'anthropic-messages' | 'openai-responses' | 'openai-chat',
+): string {
   if (wire === 'anthropic-messages') return '/v1/messages';
   if (wire === 'openai-responses') return '/responses';
   return '/chat/completions';
@@ -231,7 +268,8 @@ function applyAuthStrategy(
   switch (routing.authStrategy) {
     case 'api-key-header': {
       const key = deps.readCustomProviderKey?.(provider.id, agent) ?? null;
-      if (!key) throw new VisionBackendError('unavailable', `no api key for provider ${provider.id}`);
+      if (!key)
+        throw new VisionBackendError('unavailable', `no api key for provider ${provider.id}`);
       return { authorization: `Bearer ${key}` };
     }
     case 'none':
@@ -268,13 +306,19 @@ export async function describeImageWithProvider(
   const endpoint = resolveVisionBackendEndpoint(providerId, modelId, deps);
   const url = `${endpoint.upstream}${endpoint.requestPath.startsWith('/') ? endpoint.requestPath : `/${endpoint.requestPath}`}`;
   // 合并路由额外头（anthropic-version / x-api-key / 自定义 provider 头）+ Authorization。
-  // endpoint.headers 已过滤客户端凭证头，与 authorization 无冲突。
-  const headers: Record<string, string> = {
+  // endpoint.headers 已过滤客户端凭证头，与 authorization 无冲突。OpenCode Go 直连
+  // 需补会话头（缺失上游 400 MissingSessionID）；每次识别请求即一次独立对话，随机 UUID。
+  const headers: Record<string, string> = withOpenCodeGoSessionHeader({
     ...endpoint.headers,
     ...(endpoint.authorization ? { authorization: endpoint.authorization } : {}),
-  };
+  }, {
+    providerId,
+    catalogPresetId: endpoint.catalogPresetId,
+    upstream: endpoint.upstream,
+  }) ?? {};
   const imageUrl = await resolveImageUrl(input);
-  const prompt = input.prompt && input.prompt.trim().length > 0 ? input.prompt.trim() : DEFAULT_VISION_PROMPT;
+  const prompt =
+    input.prompt && input.prompt.trim().length > 0 ? input.prompt.trim() : DEFAULT_VISION_PROMPT;
 
   // 按 wire 协议构造对应请求体（对齐 agent 上游形态）：
   //  - openai-chat → messages[].content[] 里 image_url
@@ -370,17 +414,19 @@ export function extractChatContent(parsed: unknown): string | null {
   return null;
 }
 
-/** 从 Anthropic Messages 响应抽 content[].text 拼接。 */
+/**
+ * 从 Anthropic Messages 响应抽正文。跳过 thinking / redacted_thinking：思考块不是图片描述。
+ * 只有思考、没有 text 时返回 null，调用方仍走空描述失败，不把空串当成成功（#4580）。
+ */
 export function extractAnthropicContent(parsed: unknown): string | null {
   const content = (parsed as { content?: unknown })?.content;
   if (!Array.isArray(content)) return null;
   const parts = content
     .map((block) => {
-      if (block && typeof block === 'object') {
-        const t = (block as { type?: unknown; text?: unknown }).text;
-        return typeof t === 'string' ? t : '';
-      }
-      return '';
+      if (!block || typeof block !== 'object') return '';
+      const b = block as { type?: unknown; text?: unknown };
+      if (b.type === 'thinking' || b.type === 'redacted_thinking') return '';
+      return typeof b.text === 'string' ? b.text : '';
     })
     .join('');
   return parts.trim().length > 0 ? parts : null;
@@ -456,7 +502,7 @@ function buildVisionRequestBody(
   const source = imageUrl.startsWith('data:')
     ? dataUrlToAnthropicSource(imageUrl)
     : { type: 'url', url: imageUrl };
-  // /v1/messages 强制要求 max_tokens，缺省会 400（视觉桥描述文本短，1024 足够且有界）。
+  // /v1/messages 强制要求 max_tokens。过小会被 thinking 块吃光，正文为空（#4580）。
   return {
     model,
     max_tokens: VISION_ANTHROPIC_MAX_TOKENS,
@@ -473,9 +519,11 @@ function buildVisionRequestBody(
 }
 
 /** data:image/png;base64,xxx → { type:'base64', media_type, data }。 */
-function dataUrlToAnthropicSource(
-  dataUrl: string,
-): { type: 'base64'; media_type: string; data: string } {
+function dataUrlToAnthropicSource(dataUrl: string): {
+  type: 'base64';
+  media_type: string;
+  data: string;
+} {
   const comma = dataUrl.indexOf(',');
   const meta = comma === -1 ? '' : dataUrl.slice(0, comma);
   const data = comma === -1 ? dataUrl : dataUrl.slice(comma + 1);
@@ -501,6 +549,8 @@ export interface VisionBackendEndpoint {
   headers: Record<string, string>;
   /** wire 协议（决定请求体/响应解析形态）。 */
   wireProtocol: VisionWireProtocol;
+  /** 该 runtime 的目录预设身份（如 'opencode-go'）：改地址后仍保留，直连路径据此补会话头。 */
+  catalogPresetId?: string;
 }
 
 /**
@@ -533,7 +583,14 @@ export function resolveVisionBackendEndpoint(
     throw new VisionBackendError('not-found', `provider ${providerId} has no usable routing`);
   }
   const routing = provider.routing[agent]!;
-  const wireProtocol = wireProtocolFor(provider, agent);
+  const catalogPresetId = providerRuntimeCatalogPresetId(provider, agent);
+  const wireProtocol = wireProtocolFor(provider, agent, modelId);
+  if (!wireProtocol) {
+    throw new VisionBackendError(
+      'unavailable',
+      `vision wire protocol is not configured for provider ${provider.id} agent ${agent}`,
+    );
+  }
   const requestPath = routing.requestPath ?? defaultRequestPath(wireProtocol);
   // gateway-key 路由的 builtin upstream 是占位地址（如 xd-gateway.invalid），真实入口必须
   // 经 deps.resolveGatewayEndpoint 取随凭据下发的租户端点（与 key 同源不变量）。拿不到
@@ -554,6 +611,7 @@ export function resolveVisionBackendEndpoint(
       authorization: headers.authorization ?? null,
       headers: visionRouteHeaders(routing),
       wireProtocol,
+      ...(catalogPresetId ? { catalogPresetId } : {}),
     };
   }
   const headers = applyAuthStrategy(provider, agent, deps);
@@ -564,5 +622,6 @@ export function resolveVisionBackendEndpoint(
     authorization: headers.authorization ?? null,
     headers: visionRouteHeaders(routing),
     wireProtocol,
+    ...(catalogPresetId ? { catalogPresetId } : {}),
   };
 }

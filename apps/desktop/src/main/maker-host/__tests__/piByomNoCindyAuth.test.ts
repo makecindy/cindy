@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const grokOAuth = vi.hoisted(() => ({ loggedIn: false }));
+const state = vi.hoisted(() => ({ loggedIn: false, proxyReady: true, sharedSkillRefreshes: 0 }));
+const ensureLocalReady = vi.hoisted(() => vi.fn());
+vi.mock('../../local-model-runtime/preflight.js', () => ({
+  ensureManagedOllamaReadyForSession: ensureLocalReady,
+}));
 
 vi.mock('electron', () => ({
   app: {
@@ -11,6 +15,11 @@ vi.mock('electron', () => ({
 }));
 vi.mock('../auth-adapters.js', () => ({
   readClaudeApiKey: () => null,
+  desktopClaudeAuthAdapter: {
+    ensureSharedGlobalSkills: async () => {
+      state.sharedSkillRefreshes += 1;
+    },
+  },
   desktopCodexAuthAdapter: { getState: async () => ({ authenticated: false }) },
 }));
 vi.mock('../custom-provider-header-secrets.js', () => ({
@@ -19,7 +28,25 @@ vi.mock('../custom-provider-header-secrets.js', () => ({
       id: 'local-keyless',
       name: 'Local keyless',
       auth: { method: 'none' },
-      runtimes: { pi: { baseUrl: 'http://127.0.0.1:11434/v1', models: [{ id: 'local-model' }] } },
+      runtimes: {
+        pi: {
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          wireProtocol: 'openai-chat',
+          models: [{ id: 'local-model' }],
+        },
+      },
+    },
+    {
+      id: 'openrouter-oauth',
+      name: 'OpenRouter OAuth',
+      auth: { method: 'oauth', oauth: { authorizeUrl: 'https://openrouter.ai/auth' } },
+      runtimes: {
+        pi: {
+          baseUrl: 'https://openrouter.ai/api/v1',
+          wireProtocol: 'openai-chat',
+          models: [{ id: 'google/gemini-test', api: 'openai-completions' }],
+        },
+      },
     },
     {
       id: 'xai',
@@ -28,6 +55,7 @@ vi.mock('../custom-provider-header-secrets.js', () => ({
       runtimes: {
         pi: {
           baseUrl: 'https://private-xai.example/v1',
+          wireProtocol: 'openai-chat',
           models: [{ id: 'private-grok' }, { id: 'grok-4.6' }],
         },
       },
@@ -35,21 +63,65 @@ vi.mock('../custom-provider-header-secrets.js', () => ({
   ],
 }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({
+  migrateInstalledGhostSecretAliases: vi.fn(() => true),
   readCustomProviderKey: (providerId: string) =>
     providerId === 'xai' ? 'legacy-custom-key' : null,
 }));
-vi.mock('../grok-oauth-login.js', () => ({
-  hasGrokOAuthLogin: () => grokOAuth.loggedIn,
+vi.mock('../grok-oauth-login.desktop.js', () => ({
+  hasGrokOAuthLogin: () => state.loggedIn,
   getGrokAccessToken: async () => 'grok-test-token',
-  peekGrokAccessToken: () => (grokOAuth.loggedIn ? 'grok-test-token' : null),
+  peekGrokAccessToken: () => (state.loggedIn ? 'grok-test-token' : null),
   recoverGrokAuthAfterRejection: async () => 'superseded' as const,
+}));
+vi.mock('../anthropic-compat-proxy-host.js', () => ({
+  getClaudeEndpoint: () => 'http://127.0.0.1:18765',
+  isAnthropicCompatProxyHandleReady: () => state.proxyReady,
 }));
 
 import { desktopPiAuthAdapter, resolvePiNativeProviders } from '../pi-host.js';
 
 describe('Pi pure BYOM auth without a Cindy account', () => {
   beforeEach(() => {
-    grokOAuth.loggedIn = false;
+    state.loggedIn = false;
+    state.proxyReady = true;
+    state.sharedSkillRefreshes = 0;
+    ensureLocalReady.mockReset();
+  });
+
+  it.each(['cindy-local-llamacpp', 'cindy-local-ollama'])('starts %s on demand during local Pi provider resolution only', async providerId => {
+    await resolvePiNativeProviders({ workingDir: '/tmp/project', providerId, model: 'local-model' });
+    expect(ensureLocalReady).toHaveBeenCalledWith(expect.objectContaining({ providerId, remoteHostId: null }));
+    ensureLocalReady.mockClear();
+    await resolvePiNativeProviders({ workingDir: '/tmp/project', providerId, model: 'local-model', purpose: 'preview' });
+    expect(ensureLocalReady).not.toHaveBeenCalled();
+    await resolvePiNativeProviders({ workingDir: '/remote/project', providerId, model: 'local-model', remoteHostId: 'remote-1' });
+    expect(ensureLocalReady).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when an official SuperGrok route has no local compat proxy', async () => {
+    state.proxyReady = false;
+    await expect(resolvePiNativeProviders({
+      workingDir: '/tmp/project',
+      providerId: 'xai',
+      model: 'grok-4.6',
+    })).rejects.toThrow('local compatibility proxy is not ready');
+  });
+
+  it('refreshes local shared skills before provider resolution and skips remote homes', async () => {
+    await resolvePiNativeProviders({
+      workingDir: '/tmp/project',
+      providerId: 'local-keyless',
+      model: 'local-model',
+    });
+    expect(state.sharedSkillRefreshes).toBe(1);
+
+    await resolvePiNativeProviders({
+      workingDir: '/remote/project',
+      remoteHostId: 'remote-1',
+      providerId: 'local-keyless',
+      model: 'local-model',
+    });
+    expect(state.sharedSkillRefreshes).toBe(1);
   });
 
   it('authenticates the native provider and only uses an inert gateway placeholder', async () => {
@@ -78,7 +150,7 @@ describe('Pi pure BYOM auth without a Cindy account', () => {
   });
 
   it('keeps an official xai resume on SuperGrok when a custom provider has the same model', async () => {
-    grokOAuth.loggedIn = true;
+    state.loggedIn = true;
     const resolved = await resolvePiNativeProviders({
       workingDir: '/tmp/project',
       providerId: 'xai',
@@ -88,9 +160,9 @@ describe('Pi pure BYOM auth without a Cindy account', () => {
 
     expect(resolved.providers).toContainEqual(
       expect.objectContaining({
-        id: 'cindy-byom-xai',
+        id: 'xai',
         sourceProviderId: 'xai',
-        baseUrl: expect.not.stringContaining('private-xai.example'),
+        baseUrl: 'http://127.0.0.1:18765/v1',
       }),
     );
     expect(resolved.providers).toContainEqual(
@@ -102,7 +174,7 @@ describe('Pi pure BYOM auth without a Cindy account', () => {
   });
 
   it('restores a migrated custom:xai session from its saved endpoint after SuperGrok is connected', async () => {
-    grokOAuth.loggedIn = true;
+    state.loggedIn = true;
     const resolved = await resolvePiNativeProviders({
       workingDir: '/tmp/project',
       providerId: 'custom:xai',
@@ -118,5 +190,17 @@ describe('Pi pure BYOM auth without a Cindy account', () => {
       }),
     );
     expect(Object.values(resolved.env)).toContain('legacy-custom-key');
+  });
+
+  it('does not give remote OAuth Pi a local proxy endpoint', async () => {
+    const resolved = await resolvePiNativeProviders({
+      workingDir: '/remote/project',
+      remoteHostId: 'remote-1',
+      providerId: 'openrouter-oauth',
+      model: 'google/gemini-test',
+    });
+    expect(resolved.providers.some((provider) => provider.id.includes('openrouter-oauth'))).toBe(false);
+    expect(resolved.providers.some((provider) =>
+      provider.baseUrl?.includes('127.0.0.1:18765') && !provider.hostProxyForward)).toBe(false);
   });
 });

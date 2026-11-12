@@ -81,4 +81,31 @@ describe('handleStreamEvent compact boundary identity', () => {
     expect(afterSecond.streamingClientId).toBeNull();
     expect(afterSecond.messages.at(-1)?.clientId).toBe('compact:boundary-2');
   });
+
+  it('does not finish a live turn when a background compact_boundary arrives', () => {
+    const streaming = {
+      ...EMPTY_SESSION_STATE,
+      messages: [
+        {
+          clientId: 'live-after-idle-compact',
+          role: 'assistant' as const,
+          content: '正在回答',
+          isStreaming: true,
+        },
+      ],
+      streamingClientId: 'live-after-idle-compact',
+      isStreaming: true,
+    };
+    const afterBackground = handleStreamEvent(streaming, {
+      ...compactEvent('idle-compact'),
+      turnScope: 'background',
+    });
+
+    expect(afterBackground.streamingClientId).toBe('live-after-idle-compact');
+    expect(afterBackground.isStreaming).toBe(true);
+    expect(
+      afterBackground.messages.find((message) => message.clientId === 'live-after-idle-compact'),
+    ).toMatchObject({ isStreaming: true });
+    expect(afterBackground.messages.at(-1)?.systemCardType).toBe('compact');
+  });
 });

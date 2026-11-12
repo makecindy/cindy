@@ -134,6 +134,20 @@ if (localeKeyErrors.length > 0) {
   fail(`术语表里有无法生效的语言键(拼错的语言键会让整条规则静默失效):\n${localeKeyErrors.map((e) => `  - ${e}`).join('\n')}`);
 }
 
+// terms 必须按 id 升序。新术语若都加在数组开头(或末尾),任意两个加术语的 PR 都会在同一
+// 位置冲突——2026-11-11 有 7 个未合并 PR 卡在这里。按 id 排序让新增落在各自的位置。
+// 顺序不参与任何规则判定:扫描逐条独立,人读版生成时自行重排(已裁决在前,各组内按 id)。
+for (let i = 1; i < glossary.terms.length; i += 1) {
+  const previous = glossary.terms[i - 1].id;
+  const current = glossary.terms[i].id;
+  if (previous > current) {
+    fail(
+      `i18n/glossary.json 的 terms 必须按 id 升序排列:"${current}" 排在了 "${previous}" 之后。\n` +
+        `  把新术语插到按 id 排序的位置,不要加在数组开头或末尾(大家都往同一处加会让 PR 互相冲突)。`,
+    );
+  }
+}
+
 /** 递归展平嵌套 JSON 为 Map<'a.b.c', string>。 */
 function flatten(obj, prefix, out) {
   for (const [key, value] of Object.entries(obj)) {

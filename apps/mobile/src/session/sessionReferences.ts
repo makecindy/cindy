@@ -2,14 +2,19 @@ import {
   DL_HISTORY_MESSAGES_CHANNEL,
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
 } from '@cindy/device-link';
-import { i18n } from '@/i18n';
 import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import {
   createSessionLinkPattern,
   parseSessionDeepLinkUrl,
+  resolveSessionLinkDeviceId,
   trimSessionLinkMatch,
 } from '@/session/sessionLinks';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
+import {
+  agentInputMessageReferenceKey,
+  collectInlineMessageReferenceKeys,
+  type AgentInputReference,
+} from '@cindy/maker-shared/agent-input-projection';
 
 export const MAX_MOBILE_SESSION_REFERENCES = 8;
 export const MAX_MOBILE_REFERENCE_MESSAGES = 20;
@@ -73,6 +78,8 @@ interface MobileQueuedReferenceCarrier {
   sessionRefs?: MobileSessionReference[];
   trustedSessionReferenceContexts?: MobileSessionReferenceContext[];
   sessionReferencesRequireTrustedSnapshot?: boolean;
+  /** Composer references already delivered verbatim in the message text. */
+  agentReferences?: readonly AgentInputReference[];
 }
 
 export type MobileSessionReferenceErrorCode =
@@ -131,19 +138,6 @@ export function mobileSessionReferenceMetadataKey(
   return `${sessionId}\u0000${messageClientId ?? ''}`;
 }
 
-/** 格式化展示安全的范围摘要（文案经 i18n 本地化）。 */
-export function formatMobileSessionReferenceMetadata(
-  metadata: MobilePersistedSessionReferenceMetadata,
-): string {
-  return [
-    metadata.range === 'around-anchor'
-      ? i18n.t('session.row.referenceAroundAnchor')
-      : i18n.t('session.row.referenceRecent'),
-    i18n.t('session.row.referenceCount', { num: metadata.messageCount }),
-    ...(metadata.truncated ? [i18n.t('session.row.referenceTruncated')] : []),
-  ].join(' · ');
-}
-
 /** Extract visible session links and bind each one to the mobile store's source device. */
 export function extractMobileSessionReferences(
   text: string,
@@ -172,11 +166,12 @@ export function extractMobileSessionReferences(
     const key = mobileSessionReferenceMetadataKey(target.sessionId, target.messageClientId);
     if (seen.has(key)) continue;
     seen.add(key);
-    // 深链里冻结的 `?device=`(生成时刻的会话归属)优先——与桌面端
-    // reconcileSessionRefsForText 同口径;会话归属不会迁移,冻结值不受
-    // 发送时刻 store 状态(设备离线 / 列表未同步)影响。
-    const deviceId = target.deviceId
-      ?? deviceIdForSession(target.sessionId)
+    // 与打开链接使用同一顺序:重新连接后的设备或共享任务本地句柄优先,
+    // 未同步的归档任务仍用链接冻结值,最后保留队列里的来源提示。
+    const deviceId = resolveSessionLinkDeviceId({
+      listedDeviceId: deviceIdForSession(target.sessionId),
+      linkedDeviceId: target.deviceId,
+    })
       ?? previousDeviceIds.get(key)
       ?? previousDeviceIdsBySession.get(target.sessionId);
     refs.push({
@@ -264,6 +259,19 @@ function toReferenceMessage(row: Record<string, unknown>): MobileSessionReferenc
   };
 }
 
+function sliceFromCodePointBoundary(text: string, start: number): string {
+  const code = text.charCodeAt(start);
+  const previous = text.charCodeAt(start - 1);
+  // 截点落在低代理项时连同高代理项一起丢弃；向后包含它可能超出预算，
+  // 还会让已带省略号的内容在序列化预算循环中不再缩短。
+  const safeStart = start > 0 &&
+    code >= 0xdc00 && code <= 0xdfff &&
+    previous >= 0xd800 && previous <= 0xdbff
+    ? start + 1
+    : start;
+  return text.slice(safeStart);
+}
+
 function sliceTailToTokenBudget(text: string, budget: number): string {
   if (budget <= 0) return '';
   if (estimateMobileReferenceTokens(text) <= budget) return text;
@@ -276,6 +284,8 @@ function sliceTailToTokenBudget(text: string, budget: number): string {
     if (estimateMobileReferenceTokens(text.slice(text.length - middle)) <= payloadBudget) low = middle;
     else high = middle - 1;
   }
+  // 估算按 code point 计数，补上低代理项前的高代理项不增加 token，
+  // 二分得到的最长后缀因此不会从代理对中间开始。
   return `…${text.slice(text.length - low)}`;
 }
 
@@ -283,28 +293,42 @@ function fitMessagesToTokenBudget(
   raw: MobileSessionReferenceMessage[],
   tokenBudget: number,
   anchorIndex?: number,
-): { messages: MobileSessionReferenceMessage[]; usedTokens: number; truncated: boolean } {
+  options?: { excludeAnchor?: boolean },
+): {
+  messages: MobileSessionReferenceMessage[];
+  usedTokens: number;
+  truncated: boolean;
+  /** Position of the anchor inside `messages`; -1 when it is not part of the quote. */
+  anchorPosition: number;
+} {
   if (anchorIndex !== undefined && raw[anchorIndex]) {
     const anchor = raw[anchorIndex];
     const anchorTokens = estimateMobileReferenceTokens(anchor.content);
-    if (anchorTokens >= tokenBudget) {
+    // The anchor can already be delivered verbatim inside the user message. In
+    // that case the quote only carries the surrounding context, and the anchor
+    // body must not be paid for twice.
+    const excludeAnchor = options?.excludeAnchor === true;
+    if (!excludeAnchor && anchorTokens >= tokenBudget) {
       const content = sliceTailToTokenBudget(anchor.content, tokenBudget);
       return {
         messages: content ? [{ ...anchor, content }] : [],
         usedTokens: tokenBudget,
         truncated: true,
+        anchorPosition: content ? 0 : -1,
       };
     }
 
-    let remaining = tokenBudget - anchorTokens;
-    const kept = new Map<number, MobileSessionReferenceMessage>([[anchorIndex, anchor]]);
+    let remaining = excludeAnchor ? tokenBudget : tokenBudget - anchorTokens;
+    const kept = new Map<number, MobileSessionReferenceMessage>();
+    if (!excludeAnchor) kept.set(anchorIndex, anchor);
     let budgetExhausted = false;
     let partialTruncation = false;
     for (let distance = 1; kept.size < raw.length && !budgetExhausted; distance += 1) {
       if (remaining === 0) break;
-      const candidates = [anchorIndex - distance, anchorIndex + distance];
+      const candidates: number[] = [anchorIndex - distance, anchorIndex + distance];
       let found = false;
       for (const index of candidates) {
+        if (index === anchorIndex) continue;
         const message = raw[index];
         if (!message) continue;
         found = true;
@@ -323,10 +347,15 @@ function fitMessagesToTokenBudget(
       }
       if (!found) break;
     }
+    const messages = [...kept.entries()].sort(([left], [right]) => left - right).map(([, message]) => message);
+    // The anchor was left out on purpose (it is already in the user message),
+    // so it does not count as a budget loss.
+    const available = raw.length - (excludeAnchor ? 1 : 0);
     return {
-      messages: [...kept.entries()].sort(([left], [right]) => left - right).map(([, message]) => message),
+      messages,
       usedTokens: tokenBudget - remaining,
-      truncated: partialTruncation || kept.size < raw.length,
+      truncated: partialTruncation || kept.size < available,
+      anchorPosition: excludeAnchor ? -1 : messages.indexOf(anchor),
     };
   }
 
@@ -350,11 +379,12 @@ function fitMessagesToTokenBudget(
     truncated = true;
     break;
   }
-  return { messages: kept, usedTokens: tokenBudget - remaining, truncated };
+  return { messages: kept, usedTokens: tokenBudget - remaining, truncated, anchorPosition: -1 };
 }
 
 function fitSerializedPayloadBudget(
   input: readonly MobileSessionReferenceContext[],
+  anchorPositions: readonly number[] = [],
 ): MobileSessionReferenceContext[] {
   const contexts = input.map((context) => ({
     ...context,
@@ -362,20 +392,42 @@ function fitSerializedPayloadBudget(
   }));
   let tokens = estimateMobileReferenceTokens(serializeMobileSessionReferencePayload(contexts));
   while (tokens > FINAL_REFERENCE_PAYLOAD_TOKENS) {
+    // The anchor is the message the user pointed at: it must not lose its head
+    // while other quoted content can still be shed.
     let targetContext: MobileSessionReferenceContext | undefined;
     let targetMessage: MobileSessionReferenceMessage | undefined;
-    for (const context of contexts) {
-      for (const message of context.messages) {
+    for (let contextIndex = 0; contextIndex < contexts.length; contextIndex += 1) {
+      const context = contexts[contextIndex];
+      const anchorPosition = anchorPositions[contextIndex] ?? -1;
+      for (let messageIndex = 0; messageIndex < context.messages.length; messageIndex += 1) {
+        if (messageIndex === anchorPosition) continue;
+        const message = context.messages[messageIndex];
+        // A one-character body cannot shed more content; picking it would stall
+        // the loop and mask the anchor fallback below.
+        if (message.content.length <= 1) continue;
         if (!targetMessage || message.content.length > targetMessage.content.length) {
           targetContext = context;
           targetMessage = message;
         }
       }
     }
-    if (targetMessage && targetMessage.content.length > 1) {
+    if (!targetMessage) {
+      // No neighbor can shrink any further; trim the anchor rather than
+      // dropping the whole quote.
+      for (const context of contexts) {
+        for (const message of context.messages) {
+          if (message.content.length <= 1) continue;
+          if (!targetMessage || message.content.length > targetMessage.content.length) {
+            targetContext = context;
+            targetMessage = message;
+          }
+        }
+      }
+    }
+    if (targetMessage) {
       const excess = tokens - FINAL_REFERENCE_PAYLOAD_TOKENS;
       const drop = Math.min(targetMessage.content.length - 1, Math.max(1, excess));
-      targetMessage.content = `…${targetMessage.content.slice(drop + 1)}`;
+      targetMessage.content = `…${sliceFromCodePointBoundary(targetMessage.content, drop + 1)}`;
       if (targetContext) targetContext.truncated = true;
     } else {
       const titled = contexts.find((context) => context.title);
@@ -613,7 +665,8 @@ async function resolveRemoteReference(
   ref: MobileSessionReference,
   messageLimit: number,
   tokenBudget: number,
-): Promise<{ context: MobileSessionReferenceContext; usedTokens: number }> {
+  options?: { excludeAnchor?: boolean },
+): Promise<{ context: MobileSessionReferenceContext; usedTokens: number; anchorPosition: number }> {
   if (!ref.deviceId) {
     throw new MobileSessionReferenceError(
       'SESSION_REFERENCE_NOT_FOUND',
@@ -718,7 +771,12 @@ async function resolveRemoteReference(
       `Session ${ref.sessionId} has no visible messages to reference`,
     );
   }
-  const fitted = fitMessagesToTokenBudget(mapped, tokenBudget, anchorIndex);
+  const excludeAnchor = options?.excludeAnchor === true && anchorIndex !== undefined;
+  let fitted = fitMessagesToTokenBudget(mapped, tokenBudget, anchorIndex, { excludeAnchor });
+  if (excludeAnchor && fitted.messages.length === 0) {
+    // An empty quote carries nothing: keep the anchor instead.
+    fitted = fitMessagesToTokenBudget(mapped, tokenBudget, anchorIndex);
+  }
   return {
     context: {
       sessionId: ref.sessionId,
@@ -735,6 +793,7 @@ async function resolveRemoteReference(
       ...(terminal ? { terminal } : {}),
     },
     usedTokens: fitted.usedTokens,
+    anchorPosition: fitted.anchorPosition,
   };
 }
 
@@ -742,6 +801,7 @@ async function resolveRemoteReference(
 export async function resolveMobileSessionReferences(
   refs: readonly MobileSessionReference[] | undefined,
   invoke: RemoteInvoke,
+  options?: { inlineMessageKeys?: ReadonlySet<string> },
 ): Promise<MobileSessionReferenceContext[]> {
   if (!refs || refs.length === 0) return [];
   if (refs.length > MAX_MOBILE_SESSION_REFERENCES) {
@@ -752,6 +812,7 @@ export async function resolveMobileSessionReferences(
   }
 
   const contexts: MobileSessionReferenceContext[] = [];
+  const anchorPositions: number[] = [];
   let remainingMessages = MAX_MOBILE_REFERENCE_MESSAGES;
   let remainingTokens = MAX_MOBILE_REFERENCE_TOKENS;
   for (let index = 0; index < refs.length; index += 1) {
@@ -776,12 +837,25 @@ export async function resolveMobileSessionReferences(
     const referencesLeft = refs.length - index;
     const messageLimit = Math.max(1, Math.floor(remainingMessages / referencesLeft));
     const tokenBudget = Math.max(1, Math.floor(remainingTokens / referencesLeft));
-    const resolved = await resolveRemoteReference(invoke, ref, messageLimit, tokenBudget);
+    // The anchor is already delivered verbatim inside the user message when the
+    // composer inlined it; the quote then carries the surrounding context only.
+    const inlineAnchor = ref.messageClientId !== undefined
+      && options?.inlineMessageKeys?.has(
+        agentInputMessageReferenceKey(ref.sessionId, ref.messageClientId),
+      ) === true;
+    const resolved = await resolveRemoteReference(
+      invoke,
+      ref,
+      messageLimit,
+      tokenBudget,
+      { excludeAnchor: inlineAnchor },
+    );
     contexts.push(resolved.context);
+    anchorPositions.push(resolved.anchorPosition);
     remainingMessages -= resolved.context.messageCount;
     remainingTokens -= resolved.usedTokens;
   }
-  return fitSerializedPayloadBudget(contexts);
+  return fitSerializedPayloadBudget(contexts, anchorPositions);
 }
 
 /**
@@ -888,7 +962,10 @@ export async function prepareMobileQueuedSessionReferences<T extends MobileQueue
     return prepared;
   }
   try {
-    const contexts = await resolveMobileSessionReferences(refs, invoke);
+    const contexts = await resolveMobileSessionReferences(refs, invoke, {
+      // 引用的消息正文已经在用户消息里逐字送达，引用载荷不再重复投递。
+      inlineMessageKeys: collectInlineMessageReferenceKeys(item.agentReferences),
+    });
     return {
       ...prepared,
       sessionRefs: refs,
@@ -929,7 +1006,10 @@ export async function prepareMobileQueuedSessionReferencesForSteer<T extends Mob
     return prepared;
   }
   try {
-    const contexts = await resolveMobileSessionReferences(refs, invoke);
+    const contexts = await resolveMobileSessionReferences(refs, invoke, {
+      // 引用的消息正文已经在用户消息里逐字送达，引用载荷不再重复投递。
+      inlineMessageKeys: collectInlineMessageReferenceKeys(item.agentReferences),
+    });
     return {
       ...prepared,
       sessionRefs: refs,

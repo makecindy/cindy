@@ -2,7 +2,8 @@
  * vision-channel 单元测试。
  *
  * 覆盖：resolveVisionBackendEndpoint（api-key / none / gateway-key / 不支持 OAuth 抛错）、
- * extractChatContent（string / array / 空）。
+ * extractChatContent（string / array / 空）、
+ * extractAnthropicContent（thinking 在前、只有 thinking、普通 text、多 text 拼接）。
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -14,9 +15,11 @@ import type { Provider } from '@cindy/model-providers';
 
 import {
   describeImageWithProvider,
+  extractAnthropicContent,
   extractChatContent,
   MAX_DESCRIPTION_CHARS,
   resolveVisionBackendEndpoint,
+  VISION_ANTHROPIC_MAX_TOKENS,
   VisionBackendError,
   type VisionChannelDeps,
 } from '../vision-channel.js';
@@ -137,6 +140,98 @@ describe('resolveVisionBackendEndpoint', () => {
     const d = deps({ getProviderById: () => null });
     expect(() => resolveVisionBackendEndpoint('nope', 'vision-x', d)).toThrow(/provider not found/);
   });
+
+  it('does not guess Chat for a Pi vision route without an explicit protocol', () => {
+    const d = deps();
+    d.getProviderById = () =>
+      fakeProvider({
+        agents: ['pi'],
+        routing: {
+          pi: {
+            upstream: 'https://pi.example.com/v1',
+            authStrategy: 'api-key-header',
+          },
+        },
+        models: {
+          pi: [
+            {
+              id: 'vision-x',
+              name: 'Vision X',
+              contextWindow: 200000,
+              efforts: ['low'],
+              defaultEffort: null,
+            },
+          ],
+        },
+      });
+
+    expect(() => resolveVisionBackendEndpoint('user-x', 'vision-x', d)).toThrow(
+      /wire protocol is not configured/,
+    );
+  });
+
+  it('uses a Pi model protocol override instead of the provider default', () => {
+    const d = deps();
+    d.getProviderById = () =>
+      fakeProvider({
+        agents: ['pi'],
+        routing: {
+          pi: {
+            upstream: 'https://pi.example.com/v1',
+            wireProtocol: 'openai-chat',
+            authStrategy: 'api-key-header',
+          },
+        },
+        models: {
+          pi: [
+            {
+              id: 'vision-x',
+              name: 'Vision X',
+              piApi: 'openai-responses',
+              contextWindow: 200000,
+              efforts: ['low'],
+              defaultEffort: null,
+            },
+          ],
+        },
+      });
+
+    expect(resolveVisionBackendEndpoint('user-x', 'vision-x', d)).toMatchObject({
+      requestPath: '/responses',
+      wireProtocol: 'openai-responses',
+    });
+  });
+
+  it('fails closed when the Pi model uses a native Google protocol', () => {
+    const d = deps();
+    d.getProviderById = () =>
+      fakeProvider({
+        agents: ['pi'],
+        routing: {
+          pi: {
+            upstream: 'https://generativelanguage.googleapis.com',
+            wireProtocol: 'openai-chat',
+            authStrategy: 'api-key-header',
+          },
+        },
+        models: {
+          pi: [
+            {
+              id: 'gemini',
+              name: 'Gemini',
+              piApi: 'google-generative-ai',
+              contextWindow: 200000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      });
+
+    expect(() => resolveVisionBackendEndpoint('user-x', 'gemini', d)).toThrow(
+      /wire protocol is not configured/,
+    );
+  });
 });
 
 describe('extractChatContent', () => {
@@ -159,6 +254,56 @@ describe('extractChatContent', () => {
   });
 });
 
+// 测试价值
+// - 生产入口与可观察结果：extractAnthropicContent。视觉桥只把 text 块当成图片描述。
+// - Bug／规则依据：#4580。思考模型把 token 花在 thinking 块上时，正文为空被当成图片不可用。
+// - 现有覆盖缺口：原来只断言过 type=text 的成功响应，没有 thinking / redacted_thinking。
+// - 最小失败输入：thinking 块自己带 text 字段，排在真正的 text 块前面；或响应里只有 thinking。
+// - tier：unit。纯函数，不碰网络。修复前「thinking 带 text」会把思考串进描述或当成成功。
+describe('extractAnthropicContent', () => {
+  it('keeps the text block when a thinking block comes first', () => {
+    expect(
+      extractAnthropicContent({
+        content: [
+          { type: 'thinking', thinking: 'hidden reasoning', text: 'should not leak' },
+          { type: 'redacted_thinking', data: 'opaque', text: 'also hidden' },
+          { type: 'text', text: 'a red button' },
+        ],
+      }),
+    ).toBe('a red button');
+  });
+
+  it('returns null when the reply is only thinking, so the caller still fails closed', () => {
+    expect(
+      extractAnthropicContent({
+        content: [{ type: 'thinking', thinking: 'only thoughts', text: 'not a description' }],
+      }),
+    ).toBeNull();
+    expect(
+      extractAnthropicContent({
+        content: [{ type: 'redacted_thinking', data: 'opaque', text: 'not a description' }],
+      }),
+    ).toBeNull();
+  });
+
+  it('extracts a plain text block', () => {
+    expect(extractAnthropicContent({ content: [{ type: 'text', text: 'a blue sky' }] })).toBe(
+      'a blue sky',
+    );
+  });
+
+  it('concatenates multiple text blocks', () => {
+    expect(
+      extractAnthropicContent({
+        content: [
+          { type: 'text', text: 'a blue ' },
+          { type: 'text', text: 'sky' },
+        ],
+      }),
+    ).toBe('a blue sky');
+  });
+});
+
 describe('describeImageWithProvider', () => {
   it('sends OpenAI chat request with image_url + auth, returns description', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
@@ -166,15 +311,77 @@ describe('describeImageWithProvider', () => {
       json: async () => ({ choices: [{ message: { content: 'a red button' } }] }),
     } as unknown as Response);
     const d = deps({ fetch: fetchMock as unknown as typeof globalThis.fetch });
-    const text = await describeImageWithProvider('user-x', 'vision-x', { imageUrl: 'https://x/y.png', prompt: 'what is this?' }, d);
+    const text = await describeImageWithProvider(
+      'user-x',
+      'vision-x',
+      { imageUrl: 'https://x/y.png', prompt: 'what is this?' },
+      d,
+    );
     expect(text).toBe('a red button');
     // 请求发到 provider upstream + /chat/completions，带 auth 头 + image_url。
-    const [url, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string>; body: string }];
+    const [url, init] = fetchMock.mock.calls[0] as [
+      string,
+      { headers: Record<string, string>; body: string },
+    ];
     expect(url).toBe('https://api.example.com/v1/chat/completions');
     expect(init.headers.authorization).toBe('Bearer sk-test');
     const body = JSON.parse(init.body);
     expect(body.model).toBe('vision-x');
     expect(body.messages[0].content[1].image_url.url).toBe('https://x/y.png');
+  });
+
+  it('adds the OpenCode Go session header to the vision request', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'ok' } }] }),
+    } as unknown as Response);
+    const d = deps({ fetch: fetchMock as unknown as typeof globalThis.fetch });
+    d.getProviderById = () =>
+      fakeProvider({
+        id: 'opencode-go',
+        routing: {
+          'claude-code': {
+            wireProtocol: 'openai-chat',
+            upstream: 'https://opencode.ai/zen/go/v1',
+            authStrategy: 'api-key-header',
+          },
+        },
+      });
+    await describeImageWithProvider('opencode-go', 'vision-x', { imageUrl: 'https://x/y.png' }, d);
+    const init = fetchMock.mock.calls[0]?.[1] as { headers: Record<string, string> };
+    expect(init.headers['x-opencode-session']).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('recognizes a preset-created vision provider after its id and endpoint changed', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'ok' } }] }),
+    } as unknown as Response);
+    const d = deps({ fetch: fetchMock as unknown as typeof globalThis.fetch });
+    d.getProviderById = () =>
+      fakeProvider({
+        id: 'opencode-go-mirror',
+        routing: {
+          'claude-code': {
+            wireProtocol: 'openai-chat',
+            upstream: 'https://mirror.example/v1',
+            authStrategy: 'api-key-header',
+          },
+        },
+        models: {
+          'claude-code': [{
+            id: 'vision-x',
+            name: 'Vision X',
+            contextWindow: 200000,
+            efforts: ['low'],
+            defaultEffort: null,
+            catalogPresetId: 'opencode-go',
+          }],
+        },
+      });
+    await describeImageWithProvider('opencode-go-mirror', 'vision-x', { imageUrl: 'https://x/y.png' }, d);
+    const init = fetchMock.mock.calls[0]?.[1] as { headers: Record<string, string> };
+    expect(init.headers['x-opencode-session']).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it('propagates HTTP error as VisionBackendError', async () => {
@@ -185,7 +392,12 @@ describe('describeImageWithProvider', () => {
     } as unknown as Response);
     const d = deps({ fetch: fetchMock as unknown as typeof globalThis.fetch });
     await expect(
-      describeImageWithProvider('user-x', 'vision-x', { imageUrl: 'data:image/png;base64,QUJD' }, d),
+      describeImageWithProvider(
+        'user-x',
+        'vision-x',
+        { imageUrl: 'data:image/png;base64,QUJD' },
+        d,
+      ),
     ).rejects.toMatchObject({ code: 'http' });
   });
 
@@ -226,7 +438,12 @@ describe('describeImageWithProvider', () => {
     } as unknown as Response);
     const d = deps({ fetch: fetchMock as unknown as typeof globalThis.fetch });
     const controller = new AbortController();
-    await describeImageWithProvider('user-x', 'vision-x', { imageUrl: 'https://x/y.png', signal: controller.signal }, d);
+    await describeImageWithProvider(
+      'user-x',
+      'vision-x',
+      { imageUrl: 'https://x/y.png', signal: controller.signal },
+      d,
+    );
     // fetch 收到的 signal 是组合 signal：abort caller 后它应变为 aborted。
     const init = fetchMock.mock.calls[0]?.[1] as { signal?: AbortSignal };
     expect(init?.signal).toBeTruthy();
@@ -240,7 +457,12 @@ describe('describeImageWithProvider', () => {
     const controller = new AbortController();
     controller.abort();
     await expect(
-      describeImageWithProvider('user-x', 'vision-x', { imageUrl: 'https://x/y.png', signal: controller.signal }, d),
+      describeImageWithProvider(
+        'user-x',
+        'vision-x',
+        { imageUrl: 'https://x/y.png', signal: controller.signal },
+        d,
+      ),
     ).rejects.toMatchObject({ code: 'abort' });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -252,7 +474,12 @@ describe('describeImageWithProvider', () => {
       json: async () => ({ choices: [{ message: { content: long } }] }),
     } as unknown as Response);
     const d = deps({ fetch: fetchMock as unknown as typeof globalThis.fetch });
-    const text = await describeImageWithProvider('user-x', 'vision-x', { imageUrl: 'https://x/y.png' }, d);
+    const text = await describeImageWithProvider(
+      'user-x',
+      'vision-x',
+      { imageUrl: 'https://x/y.png' },
+      d,
+    );
     expect(text.endsWith('[truncated]')).toBe(true);
     expect(text.length).toBeLessThan(MAX_DESCRIPTION_CHARS + 100);
   });
@@ -262,7 +489,9 @@ describe('describeImageWithProvider', () => {
     const fetchMock = vi.fn().mockImplementation(
       (_url: string, init: { signal?: AbortSignal }) =>
         new Promise<never>((_resolve, reject) => {
-          init.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+          init.signal?.addEventListener('abort', () =>
+            reject(new DOMException('Aborted', 'AbortError')),
+          );
         }),
     );
     const d = deps({ fetch: fetchMock as unknown as typeof globalThis.fetch, timeoutMs: 30 });
@@ -276,11 +505,18 @@ describe('describeImageWithProvider', () => {
     const controller = new AbortController();
     const fetchMock = vi.fn().mockReturnValue(
       new Promise<never>((_resolve, reject) => {
-        controller.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+        controller.signal.addEventListener('abort', () =>
+          reject(new DOMException('Aborted', 'AbortError')),
+        );
       }),
     );
     const d = deps({ fetch: fetchMock as unknown as typeof globalThis.fetch });
-    const p = describeImageWithProvider('user-x', 'vision-x', { imageUrl: 'https://x/y.png', signal: controller.signal }, d);
+    const p = describeImageWithProvider(
+      'user-x',
+      'vision-x',
+      { imageUrl: 'https://x/y.png', signal: controller.signal },
+      d,
+    );
     setTimeout(() => controller.abort(), 10);
     await expect(p).rejects.toMatchObject({ code: 'abort' });
   });
@@ -323,9 +559,12 @@ describe('describeImageWithProvider', () => {
     try {
       const fetchMock = vi.fn();
       const d = deps({ fetch: fetchMock as unknown as typeof globalThis.fetch });
-      const err = await describeImageWithProvider('user-x', 'vision-x', { imagePath: imgPath }, d).catch(
-        (e: unknown) => e,
-      );
+      const err = await describeImageWithProvider(
+        'user-x',
+        'vision-x',
+        { imagePath: imgPath },
+        d,
+      ).catch((e: unknown) => e);
       expect(err).toMatchObject({ code: 'unsupported-image' });
       // P1-1：错误 message 脱敏，不含本地路径/文件名（日志可能被上传/外发）。
       expect(err).not.toMatchObject({ message: expect.stringContaining('fake.png') });
@@ -344,9 +583,12 @@ describe('describeImageWithProvider', () => {
     try {
       const fetchMock = vi.fn();
       const d = deps({ fetch: fetchMock as unknown as typeof globalThis.fetch });
-      const err = await describeImageWithProvider('user-x', 'vision-x', { imagePath: imgPath }, d).catch(
-        (e: unknown) => e,
-      );
+      const err = await describeImageWithProvider(
+        'user-x',
+        'vision-x',
+        { imagePath: imgPath },
+        d,
+      ).catch((e: unknown) => e);
       expect(err).toMatchObject({ code: 'unsupported-image' });
       // P1-1：too-large message 不含路径/文件名。
       expect(err).not.toMatchObject({ message: expect.stringContaining('big.png') });
@@ -373,22 +615,60 @@ describe('describeImageWithProvider', () => {
           },
         },
       });
-    const text = await describeImageWithProvider('user-x', 'vision-x', { imageUrl: 'data:image/png;base64,QUJD', prompt: 'what?' }, d);
+    const text = await describeImageWithProvider(
+      'user-x',
+      'vision-x',
+      { imageUrl: 'data:image/png;base64,QUJD', prompt: 'what?' },
+      d,
+    );
     expect(text).toBe('a blue sky');
     const [url, init] = fetchMock.mock.calls[0] as [string, { body: string }];
     // anthropic-messages 缺省路径 /v1/messages + image block（data URL 转 base64 source）。
     expect(url).toBe('https://api.example.com/v1/messages');
     const body = JSON.parse(init.body);
+    // #4580：预算必须盖住 thinking 块。1024 会被思考吃光，正文变空。
+    expect(body.max_tokens).toBe(VISION_ANTHROPIC_MAX_TOKENS);
+    expect(VISION_ANTHROPIC_MAX_TOKENS).toBe(4096);
     expect(body.messages[0].content[1]).toEqual({
       type: 'image',
       source: { type: 'base64', media_type: 'image/png', data: 'QUJD' },
     });
   });
 
+  it('throws empty when an anthropic reply is only a thinking block', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        content: [{ type: 'thinking', thinking: 'looks like a button', text: 'not the description' }],
+      }),
+    } as unknown as Response);
+    const d = deps({ fetch: fetchMock as unknown as typeof globalThis.fetch });
+    d.getProviderById = () =>
+      fakeProvider({
+        routing: {
+          'claude-code': {
+            wireProtocol: 'anthropic-messages',
+            upstream: 'https://api.example.com',
+            authStrategy: 'api-key-header',
+          },
+        },
+      });
+    await expect(
+      describeImageWithProvider(
+        'user-x',
+        'vision-x',
+        { imageUrl: 'data:image/png;base64,QUJD', prompt: 'what?' },
+        d,
+      ),
+    ).rejects.toMatchObject({ code: 'empty', name: 'VisionBackendError' });
+  });
+
   it('sends openai-responses request with input_image when routing is responses', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'a chart' }] }] }),
+      json: async () => ({
+        output: [{ type: 'message', content: [{ type: 'output_text', text: 'a chart' }] }],
+      }),
     } as unknown as Response);
     const d = deps({ fetch: fetchMock as unknown as typeof globalThis.fetch });
     d.getProviderById = () =>
@@ -403,7 +683,12 @@ describe('describeImageWithProvider', () => {
         agents: ['codex'],
         models: { codex: [] },
       });
-    const text = await describeImageWithProvider('user-x', 'vision-x', { imageUrl: 'https://x/y.png', prompt: 'describe' }, d);
+    const text = await describeImageWithProvider(
+      'user-x',
+      'vision-x',
+      { imageUrl: 'https://x/y.png', prompt: 'describe' },
+      d,
+    );
     expect(text).toBe('a chart');
     const [url, init] = fetchMock.mock.calls[0] as [string, { body: string }];
     // responses 缺省路径 /responses + input_image。

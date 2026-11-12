@@ -9,11 +9,18 @@ import {
   KEY_FILE_NOT_FOUND_CODE,
   KEY_FILE_UNREADABLE_CODE,
   PINNED_AGENT_FAILED_CODE,
+  SSH_AGENT_UNAVAILABLE_CODE,
+  SSH_CONFIG_AUTH_UNSUPPORTED_CODE,
 } from '@cindy/maker-remote-ssh';
 
 import { classifyConnectFailure } from '../connect-failure.js';
 
 describe('classifyConnectFailure', () => {
+  it('keeps host verification separate from login and ignores forged server text', () => {
+    const error = Object.assign(new Error('SSH host key changed'), { code: 'SSH_HOST_KEY_MISMATCH' });
+    expect(classifyConnectFailure(error).code).toBe('SSH_HOST_KEY_MISMATCH');
+    expect(classifyConnectFailure(new Error('SSH_HOST_KEY_MISMATCH')).code).toBe('SSH_CONNECT_FAILED');
+  });
   it('classifies the resolveAuth ENOENT error as SSH_KEY_FILE_NOT_FOUND via its stable local code', () => {
     const err = new Error(`identity file not found: C:\\Users\\someone\\.ssh\\id_ed25519`);
     (err as { code?: string }).code = KEY_FILE_NOT_FOUND_CODE;
@@ -54,5 +61,23 @@ describe('classifyConnectFailure', () => {
     expect(classifyConnectFailure(new Error('connect ETIMEDOUT 10.0.0.5:22')).code).toBe('SSH_CONNECT_FAILED');
     expect(classifyConnectFailure('connection closed before ready').code).toBe('SSH_CONNECT_FAILED');
     expect(classifyConnectFailure(undefined).code).toBe('SSH_CONNECT_FAILED');
+  });
+
+  it('surfaces the explicit Cindy authentication subset error', () => {
+    const err = new Error('SSH config authentication is outside Cindy\'s supported subset: IdentityAgent none');
+    (err as { code?: string }).code = SSH_CONFIG_AUTH_UNSUPPORTED_CODE;
+    expect(classifyConnectFailure(err)).toMatchObject({
+      code: 'SSH_CONFIG_AUTH_UNSUPPORTED',
+      msg: err.message,
+    });
+  });
+
+  it('surfaces an unavailable local SSH Agent separately from unsupported config', () => {
+    const err = new Error('$SSH_AUTH_SOCK is not set');
+    (err as { code?: string }).code = SSH_AGENT_UNAVAILABLE_CODE;
+    expect(classifyConnectFailure(err)).toEqual({
+      code: 'SSH_AGENT_UNAVAILABLE',
+      msg: err.message,
+    });
   });
 });

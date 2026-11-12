@@ -1,12 +1,23 @@
+// @vitest-environment jsdom
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../store', () => ({
   ensureHydrated: vi.fn(async () => undefined),
   addOrFocusSingletonTab: vi.fn(async () => undefined),
+  closeTab: vi.fn(async () => undefined),
+  getBucket: vi.fn(() => ({
+    tabs: [{ id: 'review-1', kind: 'review' }],
+    activeTabId: 'review-1',
+  })),
 }));
 vi.mock('../openInSidebarBrowser', () => ({
   openUrlInSidebarBrowser: vi.fn(async () => undefined),
 }));
+vi.mock('../openPluginTaskTab', () => ({
+  openPluginTaskTab: vi.fn(async () => undefined),
+}));
+vi.mock('../openPluginUiView', () => ({ openPluginUiView: vi.fn(async () => undefined) }));
 vi.mock('../openInSidebarFileBrowser', () => ({
   openDirInSidebarFileBrowser: vi.fn(async () => undefined),
   openExternalFileInSidebarFileBrowser: vi.fn(async () => undefined),
@@ -20,12 +31,14 @@ vi.mock('../../plugins/orca-workers/actions', () => ({
   closeOrcaWorkersTabAfterTeamEnd: vi.fn(async () => undefined),
 }));
 
-import { addOrFocusSingletonTab, ensureHydrated } from '../../store';
+import { addOrFocusSingletonTab, closeTab, ensureHydrated, getBucket } from '../../store';
 import {
   closeOrcaWorkersTabAfterTeamEnd,
   ensureOrcaWorkersTab,
 } from '../../plugins/orca-workers/actions';
 import { executeSidebarCommand } from '../executeSidebarCommand';
+import { openPluginTaskTab } from '../openPluginTaskTab';
+import { openPluginUiView } from '../openPluginUiView';
 import {
   openDirInSidebarFileBrowser,
   openExternalFileInSidebarFileBrowser,
@@ -36,6 +49,20 @@ import { openSubagentsTab } from '../openSubagentsTab';
 
 describe('executeSidebarCommand', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  // Global resource activation must be executed in the selected renderer. tier: unit.
+  it('opens the global named resource in the actual sidebar renderer', async () => {
+    await executeSidebarCommand({ type: 'open-plugin-view', instanceId: 'sim', resourceViewId: 'board', resourceInput: { selected: 'one' } });
+    expect(openPluginUiView).toHaveBeenCalledWith('sim', 'board', null, { selected: 'one' });
+    expect(ensureHydrated).not.toHaveBeenCalled();
+  });
+
+  // PR #6939 discussion_r4357929340：分离宿主执行命令不能降级已验证的点击来源。
+  // unit：真实 executor 的输出是传给开页入口的来源协议；原用例未覆盖插件命令。
+  it.each([true, false, undefined])('preserves plugin task intent, defaulting old commands to passive: %s', async (userInitiated) => {
+    await executeSidebarCommand({ type: 'open-plugin-task', sessionId: 's1', instanceId: 'sim', userInitiated });
+    expect(openPluginTaskTab).toHaveBeenCalledWith('s1', 'sim', { userInitiated: userInitiated === true });
+  });
 
   it('dispatches every command kind to the current renderer host implementation', async () => {
     const searchJump = {
@@ -104,5 +131,20 @@ describe('executeSidebarCommand', () => {
       revealSidebar: true,
       userInitiated: false,
     });
+  });
+
+  it('keeps Review when the detached host is still hidden', async () => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    await executeSidebarCommand({ type: 'toggle-review-tab', sessionId: 's1' });
+    expect(getBucket).toHaveBeenCalledWith('s1');
+    expect(closeTab).not.toHaveBeenCalled();
+    expect(addOrFocusSingletonTab).toHaveBeenCalledWith('s1', 'review', null);
+  });
+
+  it('hides Review only after the detached host is already visible', async () => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    await executeSidebarCommand({ type: 'toggle-review-tab', sessionId: 's1' });
+    expect(closeTab).toHaveBeenCalledWith('s1', 'review-1');
+    expect(addOrFocusSingletonTab).not.toHaveBeenCalled();
   });
 });

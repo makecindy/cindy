@@ -1,3 +1,6 @@
+import { imBotSettings } from './ImBotSection.settings-search';
+import { Button } from '@/components/ui/button';
+import { ImConnectionError, ImSavedConnectionRecovery } from './ImConnectionRecovery';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -142,8 +145,8 @@ export function TelegramBotSection({
 
   return (
     <ImChannelSettingsCard
-      id="personal-im-telegram"
-      title={t('settings.telegramBot.title')}
+      id={imBotSettings.telegram.targetId}
+      title={t(imBotSettings.telegram.titleKey)}
       description={t('settings.telegramBot.description')}
       routeSummary={
         routeSummary
@@ -203,7 +206,7 @@ export function TelegramBotSection({
             {t('settings.telegramBot.tokenLabel')}
           </label>
           <div className="relative">
-            <input
+            <input data-setting-id={imBotSettings.telegram.id}
               type={showToken ? 'text' : 'password'}
               value={token}
               onChange={(e) => setToken(e.target.value)}
@@ -218,7 +221,7 @@ export function TelegramBotSection({
               )}
               style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
             />
-            <button
+            <button data-setting-id={imBotSettings.telegram.id}
               type="button"
               onClick={() => setShowToken(!showToken)}
               className="absolute right-[14px] top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)] transition-colors hover:text-[var(--settings-eye-icon-hover)]"
@@ -238,7 +241,7 @@ export function TelegramBotSection({
           >
             {t('settings.telegramBot.ownerUserIdLabel')}
           </label>
-          <input
+          <input data-setting-id={imBotSettings.telegram.id}
             type="text"
             value={ownerUserId}
             onChange={(e) => setOwnerUserId(e.target.value)}
@@ -262,9 +265,10 @@ export function TelegramBotSection({
                   {validationError}
                 </p>
               ) : status.kind === 'error' ? (
-                <p className="text-12 text-[var(--settings-error-text)]" role="alert">
-                  {describeTelegramStatusFailure(status, t)}
-                </p>
+                <ImConnectionError
+                  message={describeTelegramStatusFailure(status, t)}
+                  details={status.reason}
+                />
               ) : (
                 <p className="text-12 text-[var(--settings-source-meta)]">
                   {t('settings.telegramBot.formHint')}
@@ -272,7 +276,7 @@ export function TelegramBotSection({
               )}
             </div>
             {hasSavedCreds && (
-              <button
+              <button data-setting-id={imBotSettings.telegram.id}
                 type="button"
                 onClick={() => void handleDisconnectClick()}
                 disabled={isDisconnecting}
@@ -288,32 +292,30 @@ export function TelegramBotSection({
             )}
           </div>
 
-          <button
+          {hasSavedCreds && ownerUserId && (
+            <ImSavedConnectionRecovery
+              loading={isTogglingOnline}
+              disabled={isSaving || isDisconnecting}
+              onReconnect={() => setOnline(true)}
+            />
+          )}
+
+          <Button data-setting-id={imBotSettings.telegram.id}
+            variant="cta"
+            size="lg"
+            loading={isSaving}
             type="button"
             onClick={() => void connect()}
             disabled={!canConnect}
-            className={cn(
-              'flex h-[42px] w-full items-center justify-center gap-1.5 rounded-full',
-              'bg-[var(--settings-btn-primary-bg)] border border-[var(--settings-btn-primary-border)]',
-              'text-13 font-medium text-[var(--settings-btn-primary-text)]',
-              'transition-colors hover:bg-[var(--settings-btn-primary-hover-bg)]',
-              !canConnect && 'cursor-not-allowed opacity-40',
-            )}
+            className="w-full"
           >
-            {isSaving ? (
-              <span className="inline-flex animate-spin motion-reduce:animate-none" aria-hidden>
-                <Loader2 size={14} />
-              </span>
-            ) : null}
-            {isSaving
-              ? t('settings.telegramBot.connectingAction')
-              : t('settings.telegramBot.connect')}
-          </button>
+            {t('settings.telegramBot.connect')}
+          </Button>
         </div>
       )}
 
       <div className="border-t border-[var(--settings-theme-card-border)] pt-3">
-        <button
+        <button data-setting-id={imBotSettings.telegram.id}
           type="button"
           onClick={() => setGuideOpen(!guideOpen)}
           className="flex w-full items-center justify-between gap-3 bg-transparent p-0 text-left"
@@ -344,7 +346,7 @@ export function TelegramBotSection({
                 </div>
               </div>
             ))}
-            <button
+            <button data-setting-id={imBotSettings.telegram.id}
               type="button"
               onClick={openBotFather}
               className="w-fit cursor-pointer bg-transparent p-0 text-12 font-medium text-[var(--settings-source-link)] underline decoration-[var(--settings-source-link)] decoration-1 underline-offset-2"
@@ -422,9 +424,7 @@ function ConnectedCard(props: {
       <div className="grid gap-2 text-12 text-[var(--settings-section-desc)]">
         <div className="flex justify-between gap-4">
           <span>{t('settings.telegramBot.connected.botLabel')}</span>
-          <span className="font-medium text-[var(--settings-section-title)]">
-            {props.botLabel}
-          </span>
+          <span className="font-medium text-[var(--settings-section-title)]">{props.botLabel}</span>
         </div>
         <div className="flex justify-between gap-4">
           <span>{t('settings.telegramBot.connected.ownerLabel')}</span>
@@ -435,16 +435,14 @@ function ConnectedCard(props: {
       </div>
       <div className="flex gap-2 pt-1">
         {/* 下线/上线: 可逆且零数据损失, 不加二次确认(解绑才需要确认)。 */}
-        <button
+        <Button data-setting-id={imBotSettings.telegram.id}
+          variant="secondary"
+          size="lg"
+          loading={props.isTogglingOnline}
           type="button"
           onClick={props.onToggleOnline}
           disabled={busy}
-          className={cn(
-            'flex h-[36px] flex-1 items-center justify-center gap-1.5 rounded-full',
-            'border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)]',
-            'text-12 font-medium text-[var(--settings-btn-secondary-text)]',
-            busy && 'cursor-not-allowed opacity-40',
-          )}
+          className="flex-1"
         >
           {props.isTogglingOnline ? (
             <span className="inline-flex animate-spin motion-reduce:animate-none" aria-hidden>
@@ -462,29 +460,19 @@ function ConnectedCard(props: {
                   : 'settings.telegramBot.goingOfflineAction',
               )
             : t(isOffline ? 'settings.telegramBot.goOnline' : 'settings.telegramBot.goOffline')}
-        </button>
-        <button
+        </Button>
+        <Button data-settings-search-action="Disconnect this bot account"
+          variant="secondary"
+          size="lg"
+          loading={props.isDisconnecting}
           type="button"
           onClick={props.onDisconnect}
           disabled={busy}
-          className={cn(
-            'flex h-[36px] flex-1 items-center justify-center gap-1.5 rounded-full',
-            'border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)]',
-            'text-12 font-medium text-[var(--settings-btn-secondary-text)]',
-            busy && 'cursor-not-allowed opacity-40',
-          )}
+          className="flex-1"
         >
-          {props.isDisconnecting ? (
-            <span className="inline-flex animate-spin motion-reduce:animate-none" aria-hidden>
-              <Loader2 size={13} />
-            </span>
-          ) : (
-            <Trash2 size={13} />
-          )}
-          {props.isDisconnecting
-            ? t('settings.telegramBot.disconnectingAction')
-            : t('settings.telegramBot.disconnect')}
-        </button>
+          <Trash2 size={13} />
+          {t('settings.telegramBot.disconnect')}
+        </Button>
       </div>
       {props.remoteDevices}
     </div>

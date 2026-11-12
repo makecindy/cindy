@@ -5,11 +5,11 @@
  *   1. SSH agent, unfiltered  (authMethod='agent', no identityFile)
  *        → enumerate every key in the agent. Risks tripping MaxAuthTries
  *          when the agent holds many keys; fine for users with 1-2.
- *   2. SSH agent, pinned to one key  (authMethod='agent', identityFile=<pubkey>)
- *        → wrap the agent in a FilteredAgent that only offers the matching
- *          identity. Same UX as OpenSSH CLI's `IdentitiesOnly yes` + the
- *          agent still owns the (cached) passphrase so the user doesn't
- *          retype it. This is the recommended setup for multi-host devs.
+ *   2. SSH agent, pinned to an ordered key set
+ *        → an explicit Cindy marker pin or effective `IdentitiesOnly yes`
+ *          supplies public-key fingerprints. FilteredAgent offers only those
+ *          identities, in SSH config order. The agent still owns any cached
+ *          passphrases; Cindy never decrypts private keys for this path.
  *   3. Identity file  (authMethod='key', identityFile=<private key>)
  *        → read the file, hand the bytes straight to ssh2. Bypasses the
  *          agent entirely; encrypted keys need a passphrase per connect.
@@ -25,7 +25,12 @@
 import { promises as fs } from 'node:fs';
 import type { BaseAgent } from 'ssh2';
 
-import { createFilteredAgentFromPubkey } from './filteredAgent.js';
+import { createFilteredAgentFromFingerprints } from './filteredAgent.js';
+import {
+  resolveAgentEndpoint,
+  resolveIdentityFingerprints,
+  SSH_AGENT_UNAVAILABLE_CODE,
+} from './sshAuthentication.js';
 import type { HostConfig } from './types.js';
 
 /**
@@ -41,6 +46,8 @@ export const KEY_FILE_UNREADABLE_CODE = 'KEY_FILE_UNREADABLE';
 /** 轮 21-W2 MEDIUM:agent + pinned-key 解析失败(缺 .pub/内容非法/不匹配)——
  *  确定性本地配置错误, 不应落进 SSH_CONNECT_FAILED(可重试语义)。 */
 export const PINNED_AGENT_FAILED_CODE = 'PINNED_AGENT_FAILED';
+/** Cindy can discover an SSH config it cannot faithfully express in ssh2. */
+export const SSH_CONFIG_AUTH_UNSUPPORTED_CODE = 'SSH_CONFIG_AUTH_UNSUPPORTED';
 
 export interface ResolvedAuth {
   /**
@@ -57,49 +64,64 @@ export interface ResolvedAuth {
   label: string;
 }
 
-/** Detect platform default SSH agent endpoint. */
-export function defaultAgentEndpoint(): string | undefined {
-  if (process.platform === 'win32') {
-    // OpenSSH agent (default-installed on Win10 1809+) exposes a named pipe.
-    // ssh2 special-cases this path on win32; falls back to Pageant if needed.
-    return '\\\\.\\pipe\\openssh-ssh-agent';
-  }
-  return process.env.SSH_AUTH_SOCK;
-}
-
 export async function resolveAuth(host: HostConfig): Promise<ResolvedAuth> {
+  // Discovery may retain a host in the list while marking it unsupported so
+  // the UI can explain why Cindy cannot faithfully reproduce the SSH config.
+  // This guard must run before either auth branch; otherwise a marked key host
+  // could still connect to a default endpoint after Match directives were
+  // ignored.
+  if (host.sshAuthentication?.unsupportedReason) {
+    throwUnsupported(host.sshAuthentication.unsupportedReason);
+  }
+
   if (host.authMethod === 'agent') {
-    const endpoint = defaultAgentEndpoint();
-    if (!endpoint) {
-      throw new Error(
-        process.platform === 'win32'
-          ? 'OpenSSH agent named pipe not available. Start the "OpenSSH Authentication Agent" service.'
-          : '$SSH_AUTH_SOCK is not set. Start ssh-agent and `ssh-add` your key first.',
-      );
-    }
-    // Pinned-key flavour: identityFile present alongside agent auth → we
-    // treat identityFile as a *public* key reference (path may point at the
-    // private key, but the matching .pub sits next to it by convention).
-    // Wrap the agent so only that fingerprint gets offered, bypassing the
-    // MaxAuthTries-trigger of enumerating every loaded key.
-    if (host.identityFile) {
-      const pubkeyPath = host.identityFile.endsWith('.pub')
-        ? host.identityFile
-        : `${host.identityFile}.pub`;
-      try {
-        const filtered = await createFilteredAgentFromPubkey(pubkeyPath, endpoint);
-        return { agent: filtered, label: `ssh-agent[${baseName(pubkeyPath)}]` };
-      } catch (err) {
-        // 轮 21-W2 MEDIUM:tag PINNED_AGENT_FAILED —— 本地配置错误(缺 .pub /
-        // 内容非法 / 与 loaded key 不匹配), 不应落进 SSH_CONNECT_FAILED(可重试
-        // 语义)。classifyConnectFailure 按稳定 code 分类, 不 pattern-match 文本。
+    let allowedFingerprints = host.sshAuthentication?.allowedAgentFingerprints;
+
+    // A marker-authenticated agent host may carry an explicit Cindy pin even
+    // when IdentitiesOnly is no. External IdentityFile metadata never enters
+    // HostConfig.identityFile, so it cannot accidentally become a pin.
+    if (!allowedFingerprints && host.identityFile) {
+      const resolved = await resolveIdentityFingerprints(host.identityFile);
+      allowedFingerprints = resolved.fingerprints;
+      if (allowedFingerprints.length === 0) {
         const e = new Error(
-          `agent + pinned key failed (${(err as Error).message}). ` +
-          `Make sure ${pubkeyPath} exists and is a valid SSH public key, ` +
-          `and that the matching private key is loaded in ssh-agent ('ssh-add ${pubkeyPath.replace(/\.pub$/, '')}').`,
+          `agent + pinned key failed: ${host.identityFile} is not a readable public key `
+          + `and its .pub sibling is unavailable or invalid`,
         );
         (e as { code?: string }).code = PINNED_AGENT_FAILED_CODE;
         throw e;
+      }
+    }
+
+    // Validate deterministic configuration limits before touching the local
+    // Agent endpoint. This keeps a missing SSH_AUTH_SOCK from masking the
+    // more actionable IdentitiesOnly capability error (and makes the result
+    // independent of whether an Agent happens to be running in the process
+    // environment).
+    if (host.sshAuthentication?.identitiesOnly
+      && (!allowedFingerprints || allowedFingerprints.length === 0)) {
+      throwUnsupported('IdentitiesOnly yes has no public key Cindy can use to pin the agent');
+    }
+
+    let endpoint: string;
+    try {
+      endpoint = await resolveAgentEndpoint(host.sshAuthentication?.identityAgent);
+    } catch (err) {
+      if ((err as { code?: unknown } | null)?.code === SSH_AGENT_UNAVAILABLE_CODE) throw err;
+      throwUnsupported((err as Error).message);
+    }
+
+    if (allowedFingerprints && allowedFingerprints.length > 0) {
+      try {
+        const filtered = createFilteredAgentFromFingerprints(allowedFingerprints, endpoint);
+        return {
+          agent: filtered,
+          label: allowedFingerprints.length === 1
+            ? 'ssh-agent[filtered]'
+            : `ssh-agent[filtered:${allowedFingerprints.length}]`,
+        };
+      } catch (err) {
+        throwUnsupported((err as Error).message);
       }
     }
     return { agent: endpoint, label: 'ssh-agent' };
@@ -132,6 +154,15 @@ export async function resolveAuth(host: HostConfig): Promise<ResolvedAuth> {
   }
 
   throw new Error(`unsupported authMethod: ${(host as { authMethod: string }).authMethod}`);
+}
+
+function throwUnsupported(reason: string): never {
+  const error = new Error(
+    `SSH config authentication is outside Cindy's supported subset: ${reason}. `
+    + 'Terminal ssh may still work with this configuration.',
+  );
+  (error as { code?: string }).code = SSH_CONFIG_AUTH_UNSUPPORTED_CODE;
+  throw error;
 }
 
 function baseName(p: string): string {

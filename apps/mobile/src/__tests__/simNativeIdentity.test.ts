@@ -1,0 +1,103 @@
+import { describe, expect, it, vi } from "vitest";
+import { join } from "node:path";
+import { inspectSimulatorNativeIdentity } from "../../scripts/lib/sim-native-identity.mjs";
+
+const current = "a".repeat(40);
+const previous = "b".repeat(40);
+
+describe("simulator native compatibility", () => {
+  // 2026-10-29: avoid expensive calculation when no installed fingerprint can be
+  // compared, and distinguish a calculator timeout from an incompatible app (unit).
+  it("skips calculation when the installed fingerprint is missing", () => {
+    const compute = vi.fn(() => current);
+    expect(inspectSimulatorNativeIdentity({ appPath: '/app', read: () => '', compute }))
+      .toMatchObject({ healthy: false, code: 'native-unknown', reason: 'installed-fingerprint-missing' });
+    expect(compute).not.toHaveBeenCalled();
+  });
+
+  it("reports calculation timeout without claiming the app needs a rebuild", () => {
+    const result = inspectSimulatorNativeIdentity({ appPath: '/app', read: () => current,
+      compute: () => { throw Object.assign(new Error('private child output'), { code: 'NATIVE_FINGERPRINT_TIMEOUT' }); } });
+    expect(result).toMatchObject({ healthy: false, code: 'native-unknown', reason: 'native-fingerprint-timeout' });
+    expect(JSON.stringify(result)).not.toContain('private');
+  });
+
+  it.each([
+    [current, current, true, "native-matched"],
+    [previous, current, false, "native-mismatch"],
+    ["", current, false, "native-unknown"],
+    ["file:fingerprint", current, false, "native-unknown"],
+    [current, "", false, "native-unknown"],
+  ])(
+    "compares the embedded build fingerprint: %s / %s",
+    (installed, expected, healthy, code) => {
+      const read = vi.fn(() => installed);
+      const result = inspectSimulatorNativeIdentity({
+        appPath: "/sim/Cindy.app",
+        expectedFingerprint: expected,
+        read,
+      });
+      expect(result).toMatchObject({ healthy, code });
+      expect(read).toHaveBeenCalledWith(
+        join("/sim/Cindy.app", "EXUpdates.bundle", "fingerprint"),
+      );
+    },
+  );
+
+  it("does not treat a missing app or unreadable build resource as compatible", () => {
+    expect(inspectSimulatorNativeIdentity({ appPath: "" })).toMatchObject({
+      healthy: false,
+      code: "native-missing",
+    });
+    expect(
+      inspectSimulatorNativeIdentity({
+        appPath: "/missing.app",
+        read: () => {
+          throw new Error("missing");
+        },
+      }),
+    ).toMatchObject({ healthy: false, code: "native-unknown" });
+  });
+
+  it("fails closed when calculation fails without disclosing child output", () => {
+    const result = inspectSimulatorNativeIdentity({
+      appPath: "/app",
+      read: () => current,
+      compute: () => {
+        throw new Error("secret child output");
+      },
+    });
+    expect(result).toMatchObject({ healthy: false, code: "native-unknown" });
+    expect(JSON.stringify(result)).not.toContain("secret");
+  });
+
+  it("passes the actual worktree and development environment to the calculator", () => {
+    const env = { EXPO_PUBLIC_APP_VARIANT: "beta" };
+    const compute = vi.fn(() => current);
+    expect(
+      inspectSimulatorNativeIdentity({
+        appPath: "/app",
+        projectDir: "/worktree/mobile",
+        env,
+        read: () => `${current}\n`,
+        compute,
+      }).healthy,
+    ).toBe(true);
+    expect(compute).toHaveBeenCalledWith("/worktree/mobile", env, 'ios');
+  });
+
+  // Windows whoami previously invoked xcrun. Android must compare the APK's
+  // embedded hash against Android's Expo workflow, never iOS or a version label (unit).
+  it.each([
+    [current, 'native-matched'], [previous, 'native-mismatch'], ['', 'native-unknown'],
+  ])('checks an Android APK fingerprint: %s', (hash, code) => {
+    const compute = vi.fn(() => current);
+    const env = { EXPO_PUBLIC_CINDY_AUTH_REGION: 'global' };
+    expect(inspectSimulatorNativeIdentity({
+      appPath: '/data/app/pkg/base.apk', projectDir: '/repo/mobile', env, platform: 'android',
+      readInstalledFingerprint: () => hash, compute,
+    })).toMatchObject({ code, healthy: code === 'native-matched' });
+    if (hash) expect(compute).toHaveBeenCalledWith('/repo/mobile', env, 'android');
+    else expect(compute).not.toHaveBeenCalled();
+  });
+});

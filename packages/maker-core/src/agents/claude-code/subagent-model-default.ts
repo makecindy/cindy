@@ -14,6 +14,26 @@
  * env 变量是**强制覆盖**,平台没有「最低优先级默认值」这个位置。于是用户手写 agent 里的
  * `model:` 一旦设过该设置就**静默失效** —— 说的是默认,做的是覆盖。
  *
+ * ## ⚠️ 上面那张表在 cc 2.1.259 上已经不成立(2026-09-03 实测,尚未据此改行为)
+ *
+ * 反编译 2.1.259 的解析函数,env **从最高降到了最低**:
+ *
+ *   1. 每次调用传入的 model 参数
+ *   2. agent frontmatter 的 model —— 且写 `"inherit"` 会直接短路回主会话模型
+ *   3. `CLAUDE_CODE_SUBAGENT_MODEL` ← 只在该 agent **完全没声明** model 时才轮到它
+ *   4. 主会话模型
+ *
+ * 另有 `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` 恢复旧的「env 压过一切」。
+ *
+ * 两个直接后果:
+ *   - 下面「有人声明 model 就整个会话不设 env」的条件化**已无必要**(env 再也盖不掉
+ *     frontmatter),但也无害,所以先不动 —— 改它要连带重跑那个判别实验;
+ *   - 内置 `Explore` 自己声明了 `model: "inherit"`,会在读 env 之前短路,所以这个设置
+ *     **对它从来不生效**。它另有一层 cap,见 env-builder.ts 的
+ *     `shouldDisableExploreInheritCap`。
+ *
+ * 结论保持:要动这段逻辑,先回到当前 pin 的二进制里重新核对解析顺序,别只信这段文字。
+ *
  * ## 做法:条件化地设不设 env
  *
  * | 会话里的情况 | 做法 | 效果 |

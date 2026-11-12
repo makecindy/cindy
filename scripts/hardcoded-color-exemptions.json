@@ -1,227 +1,299 @@
 [
  {
-  "glob": "apps/desktop/src/renderer/themes/builtin/cindy-light.ts",
-  "reason": "CINDY token override(决策表 §3 落值,U8 批准)",
-  "owner": "D2"
- },
- {
-  "glob": "apps/desktop/src/renderer/themes/builtin/cindy-dark.ts",
-  "reason": "CINDY token override(决策表 §3 落值,U8 批准)",
-  "owner": "D2"
- },
- {
-  "glob": "apps/desktop/src/renderer/themes/__tests__/cindyDecisionData.ts",
-  "reason": "决策数据冻结(含期望 hex/HSL)",
-  "owner": "D2T"
- },
- {
-  "glob": "apps/desktop/src/renderer/themes/__tests__/cindyThemes.test.ts",
-  "reason": "D2T 单测期望值与 helper(含 hex)",
-  "owner": "D2T"
- },
- {
-  "glob": "apps/desktop/src/renderer/themes/__tests__/tokenRegistry.test.ts",
-  "reason": "D1 注册守卫单测(含 hex 期望)",
-  "owner": "D1"
- },
- {
-  "glob": "apps/desktop/src/renderer/cindy-brain/__tests__/ghostPanelTheme.test.ts",
-  "reason": "D1 Ghost 注入单测(含 hex 样例)",
-  "owner": "D1"
- },
- {
-  "glob": "docs/design-rules/cindy-design-system.md",
-  "reason": "§15 CINDY 色板/三份红 map 文档示例",
-  "owner": "D2"
- },
- {
-  "glob": "docs/design-rules/DESIGN.md",
-  "reason": "设计规范正本即色值权威(§15.16 色阶/用户调参记录),文档示例不是组件硬编码",
-  "owner": "D2"
- },
- {
-  "glob": "docs/design-rules/token-decision-table.md",
-  "reason": "token 决策表即色值权威(§9 面阶梯),文档示例不是组件硬编码",
-  "owner": "D2"
- },
- {
-  "glob": "apps/desktop/src/renderer/themes/__tests__/cindyCodeBlockContrast.test.ts",
-  "reason": "D2-6 hljs 落档:hljs 主题色数据(LIGHT/DARK)+注释引用 default/CINDY 色",
-  "owner": "D2"
- },
- {
-  "glob": "apps/desktop/src/renderer/themes/colors.ts",
-  "reason": "token 注册表:注册值 + 注释引用色(panel-bg/board D1 + status-badge-fg D2)",
-  "owner": "D1+D2"
- },
- {
-  "glob": "apps/desktop/src/main/cindy-brain/forge.ts",
-  "reason": "FORGE_GUIDE §5 主题条:意识契约回退值示例 var(--panel-bg, #f7f7f5) 等(D1 同步)",
-  "owner": "D1"
- },
- {
   "glob": "apps/desktop/src/renderer/styles/globals.css",
   "reason": "D hljs 整改段 [data-theme=cindy-dark] .hljs-section 提亮值 #2573ec + 注释引用 default/CINDY 色",
-  "owner": "D"
- },
- {
-  "glob": "apps/desktop/src/main/vibrancyConfig.ts",
-  "reason": "E4D vibrancy 配置(opaqueBg #1f1f1e/#f8f8f6 + 透明底 #00000000)",
-  "owner": "E4D"
- },
- {
-  "glob": "apps/desktop/src/main/__tests__/vibrancyConfig.test.ts",
-  "reason": "E4D vibrancy 单测断言(期望 hex)",
-  "owner": "E4D"
- },
- {
-  "glob": "apps/desktop/src/main/bootstrap-electron.ts",
-  "reason": "E4D applyWindowVibrancy 配置色(opaqueBg/透明底)+注释",
-  "owner": "E4D"
- },
- {
-  "glob": "apps/desktop/src/renderer/themes/builtin/default-light.ts",
-  "reason": "E5D 默认皮肤 Auto Approval palette override(perm-auto-selected-text #417CDD)",
-  "owner": "E5D"
- },
- {
-  "glob": "apps/desktop/src/renderer/themes/builtin/default-dark.ts",
-  "reason": "E5D 默认皮肤 Auto Approval palette override(perm-auto-selected-text #417CDD)",
-  "owner": "E5D"
+  "owner": "D",
+  "matches": [
+   {
+    "value": "#2573ec",
+    "before": "color:\\s*",
+    "selector": "[data-theme=\"cindy-dark\"] .hljs-section"
+   },
+   {
+    "value": "#c9d1d9",
+    "before": "color:\\s*",
+    "selector": "[data-theme=\"cindy-dark\"] .hljs-punctuation,\n[data-theme=\"cindy-dark\"] .hljs-tag"
+   }
+  ],
+  "reviewDate": "2027-04-30",
+  "maintenanceOwner": "kirozeng / DS-7 executor",
+  "basis": "Existing approval above; DS-7 narrows it to the named colour role and exact approved values, no new palette approval."
  },
  {
   "glob": "apps/desktop/src/renderer/components/ui/toast/Toast.tsx",
-  "reason": "E5D Toast 四色定稿 hardcode(docs/design-rules/cindy-design-system.md §2 sanctioned,info #417CDD/success #2AAE5B/warning #F3A115/error #D91F37;VARIANT_MAP 已导出供 toastColors 守)",
-  "owner": "E5D"
- },
- {
-  "glob": "apps/desktop/src/renderer/__tests__/toastColors.test.ts",
-  "reason": "E5D Toast 四色定稿单测(期望 hex)",
-  "owner": "E5D"
- },
- {
-  "glob": "apps/desktop/src/renderer/__tests__/themePermissionColors.test.ts",
-  "reason": "E5D Auto Approval 默认值单测(期望 hex #417CDD)",
-  "owner": "E5D"
- },
- {
-  "glob": "apps/desktop/src/renderer/components/splash/SplashScreen.tsx",
-  "reason": "E6/E6-B splash 双模式:进度条双套白黑 alpha(既有值恢复)+ hsl(var()) 双模式取色(膘叔交付,阿梅 E6-B-R PASS)",
-  "owner": "E6"
- },
- {
-  "glob": "apps/desktop/src/renderer/__tests__/newMakerCreateAgentVisualContract.test.ts",
-  "reason": "合同测试值守护断言(expect toContain hex),非样式硬编码",
-  "owner": "E2"
+  "reason": "E5D Toast 四色定稿 hardcode(docs/design-rules/cindy-design-system.md §2 sanctioned,info #417CDD/success #2AAE5B/warning #F3A115/error #D91F37;VARIANT_MAP 使用已批准的语义色)",
+  "owner": "E5D",
+  "matches": [
+   {
+    "value": "#417CDD",
+    "before": "color:\\s*['\\\"]",
+    "object": "VARIANT_MAP.info"
+   },
+   {
+    "value": "#2AAE5B",
+    "before": "color:\\s*['\\\"]",
+    "object": "VARIANT_MAP.success"
+   },
+   {
+    "value": "#F3A115",
+    "before": "color:\\s*['\\\"]",
+    "object": "VARIANT_MAP.warning"
+   },
+   {
+    "value": "#D91F37",
+    "before": "color:\\s*['\\\"]",
+    "object": "VARIANT_MAP.error"
+   }
+  ],
+  "reviewDate": "2027-04-30",
+  "maintenanceOwner": "kirozeng / DS-7 executor",
+  "basis": "Existing approval above; DS-7 narrows it to the named colour role and exact approved values, no new palette approval."
  },
  {
   "glob": "apps/desktop/src/renderer/components/new-chat/*.tsx",
   "reason": "composer-pill fallback var(--composer-pill-*,hex)(lead 裁决 a+fallback,token 已注册 b5d7310,集成收口删)",
-  "owner": "E3-fix"
- },
- {
-  "glob": "apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx",
-  "reason": "create-agent 变体 focus/spec 残留 fallback(E2-S)",
-  "owner": "E2"
- },
- {
-  "glob": "apps/desktop/src/renderer/components/splash/__tests__/SplashScreen.test.tsx",
-  "reason": "splash v2 断言值守护(expect rgba),非样式硬编码",
-  "owner": "SPLASH-V2"
- },
- {
-  "glob": "apps/mobile/src/theme/tokens.ts",
-  "reason": "mobile CINDY token source of truth: palette literals are the governed values, not component hardcoding",
-  "owner": "M1-mobile-align"
- },
- {
-  "glob": "apps/mobile/src/__tests__/themeTokens.test.ts",
-  "reason": "mobile token contract tests assert exact governed palette values",
-  "owner": "M1-mobile-align"
- },
- {
-  "glob": "apps/mobile/src/__tests__/homeDesktopFirst.test.ts",
-  "reason": "mobile desktop-parity tests assert token/icon migration evidence and expected palette strings",
-  "owner": "M1-mobile-align"
- },
- {
-  "glob": "apps/mobile/src/__tests__/mathWebViewHtml.test.ts",
-  "reason": "mobile webview HTML fallback color test mirrors token-derived CINDY surface",
-  "owner": "M1-mobile-align"
- },
- {
-  "glob": "apps/mobile/src/session/BlurBackdrop.tsx",
-  "reason": "mobile blur component comments document approved translucent token source values; runtime styles consume tokens",
-  "owner": "M1-mobile-align"
- },
- {
-  "glob": "apps/mobile/src/__tests__/typographyTokenDiscipline.test.ts",
-  "reason": "caret 防红回流守护测试:红色字面量是禁止匹配的正则模式与豁免蓝值,非组件硬编码",
-  "owner": "M1-mobile-align"
- },
- {
-  "glob": "apps/desktop/src/renderer/components/sidebar/VendorIcon.tsx",
-  "reason": "hsl(var(--sidebar-muted)) 合法 token 消费(规则16 HSL wrap);红胶囊反白重构 2026-07-19 改行形态后入账",
-  "owner": "lead"
- },
- {
-  "glob": "docs/design-previews/**",
-  "reason": "hifi 设计预览页(随 PR 供 reviewer 对照的静态示意物,非产品代码;色值为按设计常量手写的展示样式)",
-  "owner": "apple-signin-review"
- },
- {
-  "glob": "apps/desktop/src/renderer/assets/login/icons/apple.svg",
-  "reason": "亮色黑圆上的白色 Apple 官方 logo 资产固有色(ADR SIWA Logo-only 逐字节导入,Guideline 4)",
-  "owner": "apple-signin-review"
- },
- {
-  "glob": "apps/desktop/src/renderer/assets/login/icons/apple-dark.svg",
-  "reason": "暗色白圆上的深色 Apple 图标资产固有色(figma 489:676 white apple);#229 等为 SVG 中文 id 的 HTML 实体误报",
-  "owner": "login-dark"
- },
- {
-  "glob": "apps/desktop/src/renderer/assets/login/icons/sso-dark.svg",
-  "reason": "暗色白圆上的深色 SSO 图标资产固有色(figma 489:710 white SSO);#229 等为 SVG 中文 id 的 HTML 实体误报",
-  "owner": "login-dark"
- },
- {
-  "glob": "apps/desktop/src/renderer/components/login/LoginBrandStage.tsx",
-  "reason": "注释文档化 --login-bg-base 双态值与白字版资产色(#EDEDED/#1F1F1E/#FBFBFB),无硬编码消费",
-  "owner": "login-dark"
- },
- {
-  "glob": "apps/desktop/src/renderer/components/login/LoginPage.tsx",
-  "reason": "注释说明 Apple 图标暗色反相值(#2A2828),消费走 -dark.svg 资产",
-  "owner": "login-dark"
- },
- {
-  "glob": "apps/mobile/app/(auth)/login.tsx",
-  "reason": "注释说明 loginError 语义豁免值(#D91F37),消费走 loginPalettes",
-  "owner": "login-dark"
- },
- {
-  "glob": "apps/mobile/src/components/LoginSkinControls.tsx",
-  "reason": "Apple/SSO 品牌图标反相 fill(资产固有色,与桌面 icons/*-dark.svg 同源;figma 489:676/489:710)+ 注释色值;主题色一律走 colors.login",
-  "owner": "login-dark"
- },
- {
-  "glob": "apps/mobile/src/components/MobileLoginHandoffStage.tsx",
-  "reason": "注释引用暗色 SLOGAN 资产固有色(#FBFBFB),消费走 -dark 资产与 colors.login",
-  "owner": "login-dark"
- },
- {
-  "glob": "apps/mobile/src/auth/__tests__/loginConsent.test.ts",
-  "reason": "consent 双态色板守卫单测(token 期望 hex/rgba,同 tokenRegistry.test.ts 先例)",
-  "owner": "login-consent"
+  "owner": "E3-fix",
+  "matches": [
+   {
+    "value": "#3C3F43",
+    "before": "var\\(--composer-pill-icon,\\s*"
+   },
+   {
+    "value": "#D9D9D9",
+    "before": "var\\(--composer-pill-icon,\\s*"
+   },
+   {
+    "value": "#FCFCFC",
+    "before": "var\\(--composer-pill-bg,\\s*"
+   },
+   {
+    "value": "#393838",
+    "before": "var\\(--composer-pill-bg,\\s*"
+   }
+  ],
+  "reviewDate": "2026-09-17",
+  "maintenanceOwner": "kirozeng / DS-7 executor",
+  "basis": "Existing approval above; DS-7 narrows it to the named colour role and exact approved values, no new palette approval."
  },
  {
   "glob": "apps/desktop/src/renderer/components/settings/AgentIslandSection.tsx",
-  "reason": "灵动岛 mascot 预览的角色素材固有色(眼色/键盘条):与原生 SpriteMascotConfig 一一对应的素材参数,不是界面语义色;改用 token 会与原生渲染脱钩",
-  "owner": "agent-island"
+  "reason": "灵动岛 mascot 预览的角色素材固有色(眼色):与原生 SpriteMascotConfig 一一对应的素材参数,不是界面语义色;改用 token 会与原生渲染脱钩",
+  "owner": "agent-island",
+  "matches": [
+   {
+    "value": "rgb(107 61 50)",
+    "before": "eyeColor:\\s*['\\\"]",
+    "object": "MASCOT_PREVIEW_CONFIGS.cindy"
+   },
+   {
+    "value": "rgb(253 207 69)",
+    "before": "eyeColor:\\s*['\\\"]",
+    "object": ["MASCOT_PREVIEW_CONFIGS.blackcat", "MASCOT_PREVIEW_CONFIGS.chaku"]
+   },
+   {
+    "value": "rgb(135 93 66)",
+    "before": "eyeColor:\\s*['\\\"]",
+    "object": "MASCOT_PREVIEW_CONFIGS.erika"
+   },
+   {
+    "value": "rgb(61 114 228)",
+    "before": "eyeColor:\\s*['\\\"]",
+    "object": "MASCOT_PREVIEW_CONFIGS.tarara"
+   },
+   {
+    "value": "black",
+    "before": "eyeColor:\\s*['\\\"]",
+    "object": ["MASCOT_PREVIEW_CONFIGS.boli", "MASCOT_PREVIEW_CONFIGS.whitesnow", "MASCOT_PREVIEW_CONFIGS.muffin"]
+   },
+   {
+    "value": "rgb(174 33 70)",
+    "before": "eyeColor:\\s*['\\\"]",
+    "object": "MASCOT_PREVIEW_CONFIGS.annie"
+   }
+  ],
+  "reviewDate": "2027-04-30",
+  "maintenanceOwner": "kirozeng / DS-7 executor",
+  "basis": "Existing approval above; DS-7 narrows it to the named colour role and exact approved values, no new palette approval."
  },
  {
-  "glob": "apps/desktop/native/agent-island/macos-agent-island-helper.swift",
-  "reason": "原生 helper 注释里引用的角色素材固有色 hex(便于与设计素材对照);渲染值本身是 Color(red:green:blue:),不经过 renderer token 体系",
-  "owner": "agent-island"
+  "glob": "apps/desktop/src/renderer/components/settings/WorkLouderCodexKeyboardLayout.tsx",
+  "reason": "Codex Micro 设置页复刻实体键盘的固有色(透白任务帽/深灰命令帽/摇杆座),不是界面语义色;走 surface token 会在 dark mode 反相",
+  "owner": "worklouder-codex",
+  "matches": [
+   {
+    "value": "rgb(255 255 255 / 0.06)",
+    "before": "'\\-\\-wl\\-board\\-shadow':\\s*'inset\\ 0\\ 1px\\ 0\\ "
+   },
+   {
+    "value": "rgb(0 0 0 / 0.12)",
+    "before": "'\\-\\-wl\\-board\\-shadow':\\s*'inset\\ 0\\ 1px\\ 0\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.06\\),\\ inset\\ 0\\ 0\\ 0\\ 1px\\ "
+   },
+   {
+    "value": "rgb(0 0 0 / 0.22)",
+    "before": "'\\-\\-wl\\-board\\-shadow':\\s*'inset\\ 0\\ 1px\\ 0\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.06\\),\\ inset\\ 0\\ 0\\ 0\\ 1px\\ rgb\\(0\\ 0\\ 0\\ /\\ 0\\.12\\),\\ 0\\ 2px\\ 8px\\ "
+   },
+   {
+    "value": "rgb(214 214 214 / 0.92)",
+    "before": "'\\-\\-wl\\-agent\\-cap':\\s*'"
+   },
+   {
+    "value": "rgb(255 255 255 / 0.5)",
+    "before": "'\\-\\-wl\\-agent\\-shadow':\\s*'inset\\ 0\\ 0\\ 0\\ 1px\\ "
+   },
+   {
+    "value": "rgb(255 255 255 / 0.6)",
+    "before": "'\\-\\-wl\\-agent\\-shadow':\\s*'inset\\ 0\\ 0\\ 0\\ 1px\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.5\\),\\ inset\\ 0\\ 1px\\ 2px\\ "
+   },
+   {
+    "value": "rgb(0 0 0 / 0.35)",
+    "before": "'\\-\\-wl\\-agent\\-shadow':\\s*'inset\\ 0\\ 0\\ 0\\ 1px\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.5\\),\\ inset\\ 0\\ 1px\\ 2px\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.6\\),\\ 0\\ 1px\\ 3px\\ "
+   },
+   {
+    "value": "#8177c8",
+    "before": "'\\-\\-wl\\-agent\\-dot':\\s*'"
+   },
+   {
+    "value": "#2a2b30",
+    "before": "'\\-\\-wl\\-command\\-cap':\\s*'"
+   },
+   {
+    "value": "rgb(255 255 255 / 0.08)",
+    "before": "'\\-\\-wl\\-command\\-shadow':\\s*'inset\\ 0\\ 0\\ 0\\ 1px\\ "
+   },
+   {
+    "value": "rgb(255 255 255 / 0.06)",
+    "before": "'\\-\\-wl\\-command\\-shadow':\\s*'inset\\ 0\\ 0\\ 0\\ 1px\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.08\\),\\ inset\\ 0\\ 1px\\ 2px\\ "
+   },
+   {
+    "value": "rgb(0 0 0 / 0.4)",
+    "before": "'\\-\\-wl\\-command\\-shadow':\\s*'inset\\ 0\\ 0\\ 0\\ 1px\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.08\\),\\ inset\\ 0\\ 1px\\ 2px\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.06\\),\\ 0\\ 1px\\ 3px\\ "
+   },
+   {
+    "value": "rgb(236 236 236)",
+    "before": "'\\-\\-wl\\-command\\-glyph':\\s*'"
+   },
+   {
+    "value": "rgb(198 198 200 / 0.96)",
+    "before": "'\\-\\-wl\\-stick\\-housing':\\s*'"
+   },
+   {
+    "value": "rgb(0 0 0 / 0.22)",
+    "before": "'\\-\\-wl\\-stick\\-housing\\-shadow':\\s*'inset\\ 0\\ 1px\\ 3px\\ "
+   },
+   {
+    "value": "rgb(0 0 0 / 0.08)",
+    "before": "'\\-\\-wl\\-stick\\-housing\\-shadow':\\s*'inset\\ 0\\ 1px\\ 3px\\ rgb\\(0\\ 0\\ 0\\ /\\ 0\\.22\\),\\ inset\\ 0\\ 0\\ 0\\ 1px\\ "
+   },
+   {
+    "value": "rgb(255 255 255 / 0.35)",
+    "before": "'\\-\\-wl\\-stick\\-housing\\-shadow':\\s*'inset\\ 0\\ 1px\\ 3px\\ rgb\\(0\\ 0\\ 0\\ /\\ 0\\.22\\),\\ inset\\ 0\\ 0\\ 0\\ 1px\\ rgb\\(0\\ 0\\ 0\\ /\\ 0\\.08\\),\\ 0\\ 1px\\ 0\\ "
+   },
+   {
+    "value": "#2a2b30",
+    "before": "'\\-\\-wl\\-stick\\-cap':\\s*'"
+   },
+   {
+    "value": "#2a2b30",
+    "before": "'\\-\\-wl\\-agent\\-cap':\\s*'"
+   },
+   {
+    "value": "rgb(255 255 255 / 0.08)",
+    "before": "'\\-\\-wl\\-agent\\-shadow':\\s*'inset\\ 0\\ 0\\ 0\\ 1px\\ "
+   },
+   {
+    "value": "rgb(255 255 255 / 0.06)",
+    "before": "'\\-\\-wl\\-agent\\-shadow':\\s*'inset\\ 0\\ 0\\ 0\\ 1px\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.08\\),\\ inset\\ 0\\ 1px\\ 2px\\ "
+   },
+   {
+    "value": "rgb(0 0 0 / 0.4)",
+    "before": "'\\-\\-wl\\-agent\\-shadow':\\s*'inset\\ 0\\ 0\\ 0\\ 1px\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.08\\),\\ inset\\ 0\\ 1px\\ 2px\\ rgb\\(255\\ 255\\ 255\\ /\\ 0\\.06\\),\\ 0\\ 1px\\ 3px\\ "
+   },
+   {
+    "value": "#a99df2",
+    "before": "'\\-\\-wl\\-agent\\-dot':\\s*'"
+   },
+   {
+    "value": "rgb(255_255_255/0.18)",
+    "before": "shadow\\-\\[inset_0_1px_1px_"
+   },
+   {
+    "value": "rgb(0_0_0/0.28)",
+    "before": "shadow\\-\\[inset_0_1px_1px_rgb\\(255_255_255/0\\.18\\),0_1px_2px_"
+   },
+   {
+    "value": "#4c8dff",
+    "before": "className=\"block\\ size\\-1\\ rounded\\-full\\ bg\\-\\["
+   },
+   {
+    "value": "#e0b341",
+    "before": "className=\"block\\ size\\-1\\ rounded\\-full\\ bg\\-\\["
+   }
+  ],
+  "reviewDate": "2027-04-30",
+  "maintenanceOwner": "kirozeng / DS-7 executor",
+  "basis": "Existing approval above; DS-7 narrows it to the named colour role and exact approved values, no new palette approval."
+ },
+ {
+  "glob": "apps/desktop/src/renderer/features/region-screenshot/screenshotColors.ts",
+  "reason": "全局截图的标注墨水 (烧录进用户截图的内容像素, 红色即 annotation-accent) 与覆盖在任意屏幕内容上的功能像素 (暗化遮罩、选区白描边与暗色外圈、放大镜十字线、定格底色): 不是界面语义色, 两种模式必须同值才能在任何底色上看清; 界面 chrome 仍走 token。DESIGN.md §2「Screenshot overlay and annotation ink」登记",
+  "owner": "region-screenshot",
+  "reviewDate": "2027-04-26",
+  "matches": [
+   {
+    "value": "#FF3B30",
+    "before": "red:\\s*['\\\"]",
+    "object": "SCREENSHOT_INK"
+   },
+   {
+    "value": "#FFCC00",
+    "before": "yellow:\\s*['\\\"]",
+    "object": "SCREENSHOT_INK"
+   },
+   {
+    "value": "#34C759",
+    "before": "green:\\s*['\\\"]",
+    "object": "SCREENSHOT_INK"
+   },
+   {
+    "value": "#007AFF",
+    "before": "blue:\\s*['\\\"]",
+    "object": "SCREENSHOT_INK"
+   },
+   {
+    "value": "#000000",
+    "before": "black:\\s*['\\\"]",
+    "object": "SCREENSHOT_INK"
+   },
+   {
+    "value": "#FFFFFF",
+    "before": "white:\\s*['\\\"]",
+    "object": "SCREENSHOT_INK"
+   },
+   {
+    "value": "#000000",
+    "before": "backdrop:\\s*['\\\"]",
+    "object": "SCREENSHOT_OVERLAY"
+   },
+   {
+    "value": "rgba(0, 0, 0, 0.45)",
+    "before": "shade:\\s*['\\\"]",
+    "object": "SCREENSHOT_OVERLAY"
+   },
+   {
+    "value": "#FFFFFF",
+    "before": "edge:\\s*['\\\"]",
+    "object": "SCREENSHOT_OVERLAY"
+   },
+   {
+    "value": "rgba(0, 0, 0, 0.6)",
+    "before": "edgeOuter:\\s*['\\\"]",
+    "object": "SCREENSHOT_OVERLAY"
+   },
+   {
+    "value": "rgba(0, 0, 0, 0.35)",
+    "before": "crosshair:\\s*['\\\"]",
+    "object": "SCREENSHOT_OVERLAY"
+   }
+  ]
  }
 ]

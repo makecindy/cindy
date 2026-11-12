@@ -138,7 +138,7 @@ describe('orca 远程路由接线不变式', () => {
     expect(src).toContain(
       "import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects'",
     );
-    expect(src).toContain('useDeviceLinkRemoteProjects();');
+    expect(src).toContain("useDeviceLinkRemoteProjects(windowVisible, 'sidebar');");
   });
 
   it('右侧栏协同 tab close 不带路由副作用,避免 detached 窗口跳回 MainLayout', () => {

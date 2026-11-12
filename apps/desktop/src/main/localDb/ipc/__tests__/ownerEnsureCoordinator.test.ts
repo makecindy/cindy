@@ -12,6 +12,26 @@ function deferred<T>() {
 }
 
 describe('createOwnerEnsureCoordinator', () => {
+  it('keeps the target unopened when preflight fails and allows a later retry', async () => {
+    let failPreflight = true;
+    const ensure = vi.fn(async () => ({ ready: true as const }));
+    const run = createOwnerEnsureCoordinator({
+      isOwnerCurrent: () => true,
+      beforeEnsureReady: () => {
+        if (failPreflight) throw new Error('local profile adoption failed');
+      },
+      ensureReady: ensure,
+      discardReadyOwner: vi.fn(),
+    });
+
+    await expect(run('cloud-a')).rejects.toThrow('local profile adoption failed');
+    expect(ensure).not.toHaveBeenCalled();
+
+    failPreflight = false;
+    await expect(run('cloud-a')).resolves.toEqual({ ready: true });
+    expect(ensure).toHaveBeenCalledOnce();
+  });
+
   it('drops an owner superseded while its preflight is pending', async () => {
     let activeOwner = 'cloud-a';
     const preflightA = deferred<void>();
@@ -125,10 +145,7 @@ describe('registerLocalDbIpc ready-hook composition', () => {
     expect(hook.indexOf('await opts.onReady?.(userId)')).toBeLessThan(
       hook.indexOf('tryGetDbClient()'),
     );
-    expect(hook).toContain('await opts.reconcilePersistedSessionRuntimes?.()');
-    expect(hook.indexOf('await opts.reconcilePersistedSessionRuntimes?.()')).toBeLessThan(
-      hook.indexOf('reconcileSessionMediaRefsForDeletedSessions({'),
-    );
+
     expect(hook).toContain('if (');
     expect(hook).toContain('!client');
     expect(hook).toContain('!withSessionLock');

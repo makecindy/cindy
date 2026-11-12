@@ -6,6 +6,7 @@
  *  - delete 幂等:不存在的 path 返回 deleted:false,不抛错
  *  - delete 入参非法(非字符串 / 空白)→ INVALID_PARAMS / no-op
  *  - list 返回 exists 字段:磁盘上真实存在的目录 true,已迁移的死路径 false
+ *  - hasRecentWorkdir 只认存储形态的精确路径(给「添加目录」发可写授权用)
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -20,6 +21,7 @@ const h = vi.hoisted(() => ({
   sqlite: null as InstanceType<typeof import('better-sqlite3')> | null,
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   webContentsSend: null as ReturnType<typeof vi.fn> | null,
+  tx: null as ((name: string, args: unknown) => Promise<unknown>) | null,
 }));
 
 vi.mock('electron', () => ({
@@ -29,19 +31,18 @@ vi.mock('electron', () => ({
     }),
   },
   BrowserWindow: {
-    getAllWindows: () => [
-      { isDestroyed: () => false, webContents: { send: h.webContentsSend } },
-    ],
+    getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: h.webContentsSend } }],
   },
 }));
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('../../client/current', () => ({
-  getDbClient: () => ({ drizzle: h.db }),
+  getDbClient: () => ({ drizzle: h.db, tx: h.tx }),
 }));
 
-import { registerRecentWorkdirsIpc } from '../recentWorkdirs';
+import { tx as runDbTx } from '../../worker/opHandlers/tx';
+import { hasRecentWorkdir, registerRecentWorkdirsIpc, removeRecentWorkdir } from '../recentWorkdirs';
 
 function createDb(): void {
   h.sqlite?.close();
@@ -52,15 +53,27 @@ function createDb(): void {
       last_used_at INTEGER NOT NULL
     );
     CREATE INDEX idx_recent_workdirs_last_used_at ON recent_workdirs(last_used_at);
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY NOT NULL,
+      working_dir TEXT,
+      project_dir TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      workspace_kind TEXT NOT NULL DEFAULT 'project',
+      remote_host_id TEXT,
+      orca_role TEXT,
+      agent_kind TEXT NOT NULL DEFAULT 'cc'
+    );
   `);
   h.sqlite = sqlite;
   h.db = drizzle(sqlite);
+  h.tx = async (name: string, args: unknown) => runDbTx(sqlite, { name, args });
 }
 
 function seed(path: string, lastUsedAt: number): void {
-  h.sqlite!
-    .prepare('INSERT INTO recent_workdirs (path, last_used_at) VALUES (?, ?)')
-    .run(path, lastUsedAt);
+  h.sqlite!.prepare('INSERT INTO recent_workdirs (path, last_used_at) VALUES (?, ?)').run(
+    path,
+    lastUsedAt,
+  );
 }
 
 function rows(): Array<{ path: string }> {
@@ -117,6 +130,36 @@ describe('local-db:recent-workdirs:remove', () => {
 
     expect(res.deleted).toBe(true);
     expect(rows()).toEqual([]);
+  });
+
+  it('removes every legacy Windows casing variant for the same drive/UNC identity', async () => {
+    seed('D:/Work/Project-A', 1_000);
+    seed('d:/work/project-a', 2_000);
+    seed('//Server/Share/Project-B', 3_000);
+    seed('//server/share/project-b', 4_000);
+
+    await removeRecentWorkdir('D:\\WORK\\PROJECT-A', 'win32');
+    await removeRecentWorkdir('\\\\SERVER\\SHARE\\PROJECT-B', 'win32');
+
+    expect(rows()).toEqual([]);
+  });
+
+  it('removes every non-ASCII Windows casing variant for the same identity', async () => {
+    seed('D:/École/Project-A', 1_000);
+    seed('d:/école/project-a', 2_000);
+
+    await removeRecentWorkdir('D:/ÉCOLE/PROJECT-A', 'win32');
+
+    expect(rows()).toEqual([]);
+  });
+
+  it('does not fold POSIX path casing when removing on Windows', async () => {
+    seed('/Workspace/Project-A', 1_000);
+    seed('/workspace/project-a', 2_000);
+
+    await invoke('local-db:recent-workdirs:remove', { path: '/Workspace/Project-A' });
+
+    expect(rows()).toEqual([{ path: '/workspace/project-a' }]);
   });
 
   it('is idempotent: missing path resolves deleted:false without broadcasting', async () => {
@@ -177,5 +220,69 @@ describe('local-db:recent-workdirs:list exists probe', () => {
     expect(list[1].exists).toBe(false);
     expect(list[2].exists).toBe(false);
     expect(typeof list[0].lastUsedAt).toBe('string');
+  });
+
+  it('returns every explicitly retained project instead of truncating at ten', async () => {
+    for (let i = 0; i < 14; i += 1) {
+      seed(`/not-mounted/project-${i}`, 1_000 + i);
+    }
+
+    const list = (await invoke('local-db:recent-workdirs:list')) as Array<{ path: string }>;
+
+    expect(list).toHaveLength(14);
+    expect(list[0]?.path).toBe('/not-mounted/project-13');
+    expect(list[13]?.path).toBe('/not-mounted/project-0');
+  });
+
+  it('does not let hidden workers supply project agent-kind history', async () => {
+    seed('/workspace/shared', 1_786_500_000_000);
+    h.sqlite!.exec(`
+      INSERT INTO sessions (id, working_dir, agent_kind, orca_role)
+      VALUES ('ordinary', '/workspace/shared', 'cc', NULL),
+             ('worker', '/workspace/shared', 'codex', 'worker');
+    `);
+
+    expect(await invoke('local-db:recent-workdirs:list')).toEqual([
+      expect.objectContaining({ path: '/workspace/shared', knownAgentKinds: ['cc'] }),
+    ]);
+  });
+
+  it('retains agent-kind history after the last project session is soft-deleted', async () => {
+    seed('/workspace/codex-only', 1_786_500_000_000);
+    h.sqlite!.prepare(
+      `INSERT INTO sessions (id, working_dir, status, workspace_kind, remote_host_id, agent_kind)
+         VALUES (?, ?, 'active', 'project', NULL, 'codex')`,
+    ).run('codex-session', '/workspace/codex-only');
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-session');
+
+    const list = (await invoke('local-db:recent-workdirs:list')) as Array<{
+      path: string;
+      knownAgentKinds: string[];
+    }>;
+
+    expect(list).toEqual([
+      expect.objectContaining({
+        path: '/workspace/codex-only',
+        knownAgentKinds: ['codex'],
+      }),
+    ]);
+  });
+});
+
+// 「添加目录」最近列表的授权依据：变体写法、托管 worktree 与列表外路径都不能借最近项目拿到可写授权。
+describe('hasRecentWorkdir writable-grant membership', () => {
+  beforeEach(() => {
+    createDb();
+    seed('/u/proj', 1);
+  });
+
+  it.each([
+    ['/u/proj', true],
+    ['/u/proj/', false],
+    ['/u/PROJ', false],
+    ['/u/proj/sub', false],
+    ['/u/proj/.cindy-worktrees/feature', false],
+  ])('%s → %s', async (path, expected) => {
+    await expect(hasRecentWorkdir(path)).resolves.toBe(expected);
   });
 });

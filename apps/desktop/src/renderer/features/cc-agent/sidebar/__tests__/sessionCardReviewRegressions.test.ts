@@ -7,6 +7,15 @@ const sidebarDir = resolve(__dirname, '..');
 const sessionCardSource = readFileSync(resolve(sidebarDir, 'SessionCard.tsx'), 'utf8');
 const sessionEntryListSource = readFileSync(resolve(sidebarDir, 'SessionEntryList.tsx'), 'utf8');
 const sessionItemSource = readFileSync(resolve(sidebarDir, 'SessionItem.tsx'), 'utf8');
+const automationSessionButtonSource = readFileSync(
+  resolve(sidebarDir, 'AutomationSessionButton.tsx'),
+  'utf8',
+);
+const sessionOrdinalBadgeSource = readFileSync(
+  resolve(sidebarDir, 'sessionOrdinalBadges.tsx'),
+  'utf8',
+);
+const railNavSource = readFileSync(resolve(sidebarDir, 'RailNav.tsx'), 'utf8');
 const sessionRenameInputSource = readFileSync(
   resolve(sidebarDir, '..', 'SessionRenameInput.tsx'),
   'utf8',
@@ -42,7 +51,7 @@ describe('SessionCard review regressions', () => {
 
   it('keeps awaiting text in list mode previews', () => {
     expect(sessionCardSource).toContain(
-      'const listPreview = awaitingText ?? runningDetail ?? summaryPreview',
+      'const listPreview = awaitingText ?? preparationText ?? runningDetail ?? bodyPreview',
     );
     expect(sessionCardSource).toContain('{listPreview}');
   });
@@ -113,8 +122,12 @@ describe('SessionCard review regressions', () => {
     );
   });
 
-  it('keeps card titles to two lines with shared inline prefix alignment', () => {
-    expect(sessionCardSource).toContain('[-webkit-line-clamp:2] overflow-hidden');
+  // 2026-11-09 用户定:置顶卡片标题单行,悬停时与列表行同一个跑马灯展示全名。
+  it('keeps card titles on the shared list marquee with shared inline prefix alignment', () => {
+    expect(sessionCardSource.match(/<SidebarTitleMarquee\b/g)).toHaveLength(2);
+    expect(sessionCardSource).not.toContain(
+      "'[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:1] overflow-hidden'",
+    );
     expect(sessionCardSource).toContain('style={{ textIndent: 0, paddingLeft: 0 }}');
     expect(sessionCardSource).toContain('const titlePrefixNode = (');
     expect(sessionCardSource).toContain('{titlePrefixNode}');
@@ -122,27 +135,31 @@ describe('SessionCard review regressions', () => {
     expect(sessionCardSource).not.toContain('titlePrefixWidth');
   });
 
-  it('merges remote activity into the left vendor-mark running state', () => {
-    // 远程会话的运行态原先只进右侧状态槽,左侧图标仍只看本地 running 集。
-    // 只并入 phase=running,与折叠 rail / remoteLampOf 同一口径;
-    // needs-interaction 继续由右侧 awaiting 表达。
+  it('projects local and remote activity through the shared session status model', () => {
+    // 左侧运行标记和右侧状态槽必须消费同一投影，避免各自组合本地/远程状态源。
+    expect(sessionItemSource).toContain('projectSidebarSessionActivity({');
     expect(sessionItemSource).toContain(
-      "const leftIconRunning = isRunning || remoteActivity?.phase === 'running'",
+      'const leftIconRunning = sessionActivity.currentTurnActive === true',
     );
+    expect(sessionItemSource).toContain('resolveSidebarRightStatus(sessionActivity)');
     expect(sessionItemSource).toContain('isRunning={leftIconRunning}');
+    expect(sessionCardSource).toContain('projectSidebarSessionActivity({');
     expect(sessionCardSource).toContain(
-      "const leftIconRunning = isRunning || remoteActivity?.phase === 'running'",
+      'const leftIconRunning = sessionActivity.currentTurnActive === true',
     );
+    expect(sessionCardSource).toContain('resolveSidebarRightStatus(sessionActivity)');
     expect(sessionCardSource).toContain('isRunning={leftIconRunning}');
     expect(sessionCardSource).not.toContain('isRemoteSessionActivityActive');
     expect(sessionItemSource).not.toContain('isRemoteSessionActivityActive');
   });
 
-  it('keeps card preview line budgets stable across content sources', () => {
+  // 置顶卡片等高(2026-11-08 用户定稿):正文区不论有无内容都占 2 行;失效后两列卡片底边错开。
+  it('keeps card preview at a fixed two-line height across content sources', () => {
+    expect(sessionCardSource).toContain("'mt-[4px] h-[2.8em] text-11 leading-[1.4]'");
     expect(sessionCardSource).toContain(
-      'const cardPreviewLineClamp = session.summary ? 3 : isRunning ? 2 : isAutomationGenerated ? 1 : 2',
+      "'[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden'",
     );
-    expect(sessionCardSource).toContain('style={{ WebkitLineClamp: cardPreviewLineClamp }}');
+    expect(sessionCardSource).not.toContain('cardPreviewLineClamp');
   });
 
   it('keeps one Timer glyph for scheduled and automation sessions', () => {
@@ -154,8 +171,10 @@ describe('SessionCard review regressions', () => {
     );
     // schedule 绑定与普通自动化都复用 AutomationTimerIcon;绑定态优先承载更多状态。
     expect(sessionCardSource).toMatch(
-      /const renderAutomationMeta = \(iconSize: number\) =>[\s\S]*?showScheduleBindingBadge \? \([\s\S]*?<ScheduleBindingBadge[\s\S]*?schedules=\{boundSchedules\}[\s\S]*?size=\{iconSize\}[\s\S]*?activeForeground=\{isActive\}[\s\S]*?\) : showAutomationTimer \? \([\s\S]*?<AutomationTimerIcon size=\{iconSize\}/,
+      /const renderAutomationMeta = \(iconSize: number\) =>[\s\S]*?showScheduleBindingBadge \? \([\s\S]*?<ScheduleBindingBadge[\s\S]*?schedules=\{boundSchedules\}[\s\S]*?size=\{iconSize\}[\s\S]*?activeForeground=\{isActive\}[\s\S]*?\) : showAutomationTimer \? \([\s\S]*?<AutomationSessionButton[\s\S]*?size=\{iconSize\}/,
     );
+    expect(automationSessionButtonSource.match(/<AutomationTimerIcon\b/g)).toHaveLength(1);
+    expect(automationSessionButtonSource).toContain('size={size}');
     expect(sessionCardSource).toContain('{renderAutomationMeta(10)}');
     expect(sessionCardSource).toContain('{renderAutomationMeta(11)}');
   });
@@ -192,6 +211,7 @@ describe('SessionCard review regressions', () => {
     );
     expect(sessionItemSource).toContain('invisible col-start-1 row-start-1 inline-flex');
     expect(sessionItemSource).toContain('<SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />');
+    expect(sessionOrdinalBadgeSource).toContain('rounded-[4px]');
     expect(sessionCardSource).toContain('invisible col-start-1 row-start-1 inline-flex');
     expect(sessionCardSource).toContain('<SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />');
     expect(sessionItemSource).not.toContain(
@@ -212,30 +232,33 @@ describe('SessionCard review regressions', () => {
 
   it('keeps archive confirmation pills clear of time and ordinal overlays', () => {
     expect(sessionCardSource).toContain('w-max min-w-14');
-    expect(sessionCardSource).toContain('whitespace-nowrap text-11 font-semibold');
     expect(sessionCardSource).toContain(
-      'invisible col-start-1 row-start-1 inline-flex h-[22px] w-max min-w-14 items-center justify-center whitespace-nowrap rounded-full px-[9px] text-11 font-semibold',
+      'invisible col-start-1 row-start-1 w-max min-w-14 whitespace-nowrap',
     );
     expect(sessionCardSource).not.toContain(
       'invisible col-start-1 row-start-1 inline-block h-[22px] w-14',
     );
     expect(sessionItemSource).toContain('invisible col-start-1 row-start-1 inline-block h-6 w-14');
-    expect(sessionItemSource).toContain(
-      'absolute right-0 top-0 flex h-6 w-14 items-center justify-center rounded-md text-xs font-medium',
+    expect(sessionItemSource).toMatch(
+      /<Button\s+variant="secondary"\s+tone="danger-surface"\s+size="xs"\s+compact[\s\S]*?className="absolute right-0 top-0 w-14"/,
     );
     expect(sessionCardSource).toContain(
       '!isEditing && !archivePending && ordinalBadgeLabel != null',
     );
-    expect(sessionCardSource).toContain("archivePending && 'invisible opacity-0'");
+    expect(sessionCardSource).toContain(
+      "archivePending && 'invisible opacity-0 w-0 overflow-hidden'",
+    );
   });
 
   it('keeps running card previews stable instead of streaming compact activity text', () => {
     expect(sessionCardSource).toContain(
-      'const listPreview = awaitingText ?? runningDetail ?? summaryPreview',
+      'const listPreview = awaitingText ?? preparationText ?? runningDetail ?? bodyPreview',
     );
-    expect(sessionCardSource).toContain('const cardPreview = awaitingText ?? summaryPreview');
+    expect(sessionCardSource).toContain(
+      'const cardPreview = awaitingText ?? preparationText ?? bodyPreview',
+    );
     expect(sessionCardSource).not.toContain(
-      'const cardPreview = awaitingText ?? runningDetail ?? summaryPreview',
+      'const cardPreview = awaitingText ?? preparationText ?? runningDetail ?? bodyPreview',
     );
   });
 
@@ -289,9 +312,6 @@ describe('SessionCard review regressions', () => {
       'const hasAutomationMeta = boundSchedules.length > 0 || isAutomationGenerated;',
     );
     expect(sessionItemSource).toContain("!isEditing && hasAutomationMeta ? 'gap-1.5' : 'gap-2.5'");
-    expect(automationGroupSource).toContain(
-      'className="flex min-w-0 items-center gap-1.5 text-left disabled:cursor-default"',
-    );
     expect(automationGroupSource).toContain('className="flex min-w-0 items-center gap-1.5"');
   });
 
@@ -319,6 +339,12 @@ describe('SessionCard review regressions', () => {
     expect(sessionItemSource).toContain(
       "isActive ? 'text-sidebar-item-active-foreground' : 'text-sidebar-action-icon'",
     );
+  });
+
+  it('keeps rail hover backgrounds in the sidebar token family', () => {
+    expect(railNavSource).toContain('group-hover/pin:bg-sidebar-item-hover');
+    expect(railNavSource).toContain('hover:bg-sidebar-item-hover');
+    expect(railNavSource).not.toContain('update-btn-hover');
   });
 
   it('keeps selected sidebar hover actions inside the active color system', () => {
@@ -389,7 +415,10 @@ describe('SessionCard review regressions', () => {
     // 否则红胶囊上 Timer 仍是 meta 灰;普通自动化分支也必须透传 activeForeground。
     expect(sessionCardSource).toContain('activeForeground={isActive}');
     expect(sessionCardSource).toMatch(
-      /showAutomationTimer \? \([\s\S]*?<AutomationTimerIcon[\s\S]*?activeForeground=\{isActive\}/,
+      /showAutomationTimer \? \([\s\S]*?<AutomationSessionButton[\s\S]*?activeForeground=\{isActive\}/,
+    );
+    expect(automationSessionButtonSource).toMatch(
+      /<AutomationTimerIcon[\s\S]*?activeForeground=\{activeForeground\}/,
     );
   });
 
@@ -456,9 +485,9 @@ describe('SessionCard review regressions', () => {
 
   it('aligns list automation headers with regular tasks and indents only expanded children', () => {
     expect(automationGroupSource).toMatch(
-      /sessionVariant === 'list'\s*\? 'px-2\.5'\s*: indented\s*\? 'pl-\[22px\] pr-2'\s*: 'pl-3 pr-2'/,
+      /sessionVariant === 'list'\s*\? 'px-2\.5'\s*: indented\s*\? 'pl-5 pr-2'\s*: 'pl-3 pr-2'/,
     );
-    expect(automationGroupSource).toContain('<div className="flex flex-col gap-0.5 pl-3">');
+    expect(automationGroupSource).toContain('<div className="flex flex-col gap-0.5 pl-2">');
     expect(automationGroupSource).toContain("sessionVariant === 'list' ? 'w-3' : 'w-[15px]'");
     expect(automationGroupSource).toContain("sessionVariant === 'list' && 'order-2'");
   });

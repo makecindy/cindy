@@ -18,6 +18,7 @@ import {
   type ProviderModelAutoRefreshTrigger,
 } from '../../shared/providerModelRefresh.js';
 import { createLogger, type Logger } from '../logger.js';
+import { refreshModelsWithCatalog } from './provider-model-refresh.js';
 
 export const PROVIDER_MODEL_AUTO_REFRESH_COOLDOWN_MS = 30 * 60_000;
 export const PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS = 5 * 60_000;
@@ -313,9 +314,15 @@ export function createProviderModelRefreshCoordinator(
     },
 
     async refreshManually(providerId): Promise<void> {
-      // xAI 同时有公共静态目录与账号态媒体发现。手动刷新要把两层都刷新；自动路径
-      // 已在上方统一先刷新公共目录，再调用 provider hook，因此不会重复拉 Catalog。
-      if (providerId === 'xai' && deps.refreshCatalog) await deps.refreshCatalog();
+      // Subscription media declarations can change independently of chat discovery.
+      // Automatic refresh already loads the shared catalog before calling the provider hook.
+      if ((providerId === 'xai' || providerId === 'openai') && deps.refreshCatalog) {
+        return refreshModelsWithCatalog({
+          refreshCatalog: deps.refreshCatalog,
+          refreshModels: () => refresh(providerId, true),
+          getScopeKey: () => deps.getScopeKey?.(),
+        });
+      }
       await refresh(providerId, true);
     },
     resetCooldowns,

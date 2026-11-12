@@ -22,18 +22,22 @@ import { useSyncExternalStore } from 'react';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
 import type { ModelMemoryAccessors } from '@/components/new-chat/ModelSelector';
-import { MODEL_PRESET_SLOT_ID } from '@/state/providerModelMemory';
 
 /** 单槽:被控端某 (agent, 来源) 下每个模型的 effort/fast 镜像。 */
 interface Slot {
   effortByModel: Record<string, Effort>;
-  fastByModel: Record<string, boolean>;
+  fastByModel: Record<string, boolean | 'ultrafast'>;
+  thinkingByModel: Record<string, boolean>;
 }
 
 /** 被控端推 / 拉过来的全量快照形状(`${agent}:${providerId}` → Slot)。 */
 export type RemoteModelMemorySnapshot = Record<
   string,
-  { effortByModel: Record<string, string>; fastByModel: Record<string, boolean> }
+  {
+    effortByModel: Record<string, string>;
+    fastByModel: Record<string, boolean | 'ultrafast'>;
+    thinkingByModel?: Record<string, boolean>;
+  }
 >;
 
 // scopeKey(`draft:<deviceId>` | `session:<sessionId>`)→ (slotKey `${agent}:${providerId}` → Slot)
@@ -64,6 +68,13 @@ function slotKey(agent: AgentKind, providerId: string): string {
   return `${agent}:${providerId}`;
 }
 
+/** 被控端权威模型预设槽(与 providerModelMemory 同口径:见其文件头)。 */
+const GLOBAL_PRESET_PROVIDER_ID = '*';
+
+function presetSlotKey(agent: AgentKind): string {
+  return slotKey(agent, GLOBAL_PRESET_PROVIDER_ID);
+}
+
 /**
  * 用被控端全量快照整体替换某 scope 的镜像(初始 pull seed / push 全量刷新)。深拷贝入库,
  * 与调用方持有的快照解耦。同 scope 反复 replace 安全(幂等覆盖)。
@@ -79,6 +90,7 @@ export function replaceScope(scopeKey: string, snapshot: RemoteModelMemorySnapsh
       bySlot.set(k, {
         effortByModel: { ...(slot.effortByModel as Record<string, Effort>) },
         fastByModel: { ...slot.fastByModel },
+        thinkingByModel: { ...(slot.thinkingByModel ?? {}) },
       });
     }
   }
@@ -102,7 +114,7 @@ function getSlot(scopeKey: string, agent: AgentKind, providerId: string, create:
   const k = slotKey(agent, providerId);
   let slot = bySlot.get(k);
   if (!slot && create) {
-    slot = { effortByModel: {}, fastByModel: {} };
+    slot = { effortByModel: {}, fastByModel: {}, thinkingByModel: {} };
     bySlot.set(k, slot);
   }
   return slot;
@@ -115,8 +127,12 @@ export function getMirrorEffort(
   model: string,
 ): Effort | undefined {
   if (!scopeKey || !providerId || !model) return undefined;
-  return getSlot(scopeKey, agent, MODEL_PRESET_SLOT_ID, false)?.effortByModel[model]
-    ?? getSlot(scopeKey, agent, providerId, false)?.effortByModel[model];
+  const bySlot = store.get(scopeKey);
+  // 权威 `${agent}:*` 优先,来源槽兜底(被控端旧快照可能只写过来源槽)。
+  return (
+    bySlot?.get(presetSlotKey(agent))?.effortByModel[model] ??
+    getSlot(scopeKey, agent, providerId, false)?.effortByModel[model]
+  );
 }
 
 export function getMirrorFast(
@@ -124,10 +140,13 @@ export function getMirrorFast(
   agent: AgentKind,
   providerId: string,
   model: string,
-): boolean | undefined {
+): boolean | 'ultrafast' | undefined {
   if (!scopeKey || !providerId || !model) return undefined;
-  return getSlot(scopeKey, agent, MODEL_PRESET_SLOT_ID, false)?.fastByModel[model]
-    ?? getSlot(scopeKey, agent, providerId, false)?.fastByModel[model];
+  const bySlot = store.get(scopeKey);
+  return (
+    bySlot?.get(presetSlotKey(agent))?.fastByModel?.[model] ??
+    getSlot(scopeKey, agent, providerId, false)?.fastByModel?.[model]
+  );
 }
 
 /** 乐观本地写镜像(控制端编辑时 snappy 显示 / 被控端 push 回流时刷新)。同值短路。 */
@@ -139,16 +158,34 @@ export function setMirrorEffort(
   effort: Effort,
 ): void {
   if (!scopeKey || !providerId || !model || !effort) return;
+  // 权威槽与来源副本都写:只写来源槽的话,被控端下一次全量 echo(带 `*` 槽)会按
+  // 「全局优先」把这次乐观值覆盖回去,表现为「调了档又弹回旧值」。
   const providerSlot = getSlot(scopeKey, agent, providerId, true)!;
-  const presetSlot = getSlot(scopeKey, agent, MODEL_PRESET_SLOT_ID, true)!;
-  if (providerSlot.effortByModel[model] === effort && presetSlot.effortByModel[model] === effort) return;
+  const presetSlot = getSlot(scopeKey, agent, GLOBAL_PRESET_PROVIDER_ID, true)!;
+  if (providerSlot.effortByModel[model] === effort && presetSlot.effortByModel[model] === effort) {
+    return;
+  }
   providerSlot.effortByModel[model] = effort;
   presetSlot.effortByModel[model] = effort;
   scopeSerial.delete(scopeKey); // 直接改了 slot → 失效 replaceScope 同值缓存,下次全量 echo 必重新比对/应用
   emit();
 }
 
-export function setMirrorFast(
+export function getMirrorThinking(
+  scopeKey: string,
+  agent: AgentKind,
+  providerId: string,
+  model: string,
+): boolean | undefined {
+  if (!scopeKey || !providerId || !model) return undefined;
+  const bySlot = store.get(scopeKey);
+  return (
+    bySlot?.get(presetSlotKey(agent))?.thinkingByModel?.[model] ??
+    getSlot(scopeKey, agent, providerId, false)?.thinkingByModel?.[model]
+  );
+}
+
+export function setMirrorThinking(
   scopeKey: string,
   agent: AgentKind,
   providerId: string,
@@ -157,8 +194,31 @@ export function setMirrorFast(
 ): void {
   if (!scopeKey || !providerId || !model) return;
   const providerSlot = getSlot(scopeKey, agent, providerId, true)!;
-  const presetSlot = getSlot(scopeKey, agent, MODEL_PRESET_SLOT_ID, true)!;
-  if (providerSlot.fastByModel[model] === enabled && presetSlot.fastByModel[model] === enabled) return;
+  const presetSlot = getSlot(scopeKey, agent, GLOBAL_PRESET_PROVIDER_ID, true)!;
+  providerSlot.thinkingByModel ??= {};
+  presetSlot.thinkingByModel ??= {};
+  if (providerSlot.thinkingByModel[model] === enabled && presetSlot.thinkingByModel[model] === enabled) {
+    return;
+  }
+  providerSlot.thinkingByModel[model] = enabled;
+  presetSlot.thinkingByModel[model] = enabled;
+  scopeSerial.delete(scopeKey);
+  emit();
+}
+
+export function setMirrorFast(
+  scopeKey: string,
+  agent: AgentKind,
+  providerId: string,
+  model: string,
+  enabled: boolean | 'ultrafast',
+): void {
+  if (!scopeKey || !providerId || !model) return;
+  const providerSlot = getSlot(scopeKey, agent, providerId, true)!;
+  const presetSlot = getSlot(scopeKey, agent, GLOBAL_PRESET_PROVIDER_ID, true)!;
+  if (providerSlot.fastByModel[model] === enabled && presetSlot.fastByModel[model] === enabled) {
+    return;
+  }
   providerSlot.fastByModel[model] = enabled;
   presetSlot.fastByModel[model] = enabled;
   scopeSerial.delete(scopeKey); // 同 setMirrorEffort:失效同值缓存
@@ -176,12 +236,13 @@ export function makeMirrorAccessors(
     agent: AgentKind,
     providerId: string,
     model: string,
-    patch: { effort?: Effort; fast?: boolean; markModelChoice?: boolean },
+    patch: { effort?: Effort; fast?: boolean | 'ultrafast'; thinking?: boolean; markModelChoice?: boolean },
   ) => void,
 ): ModelMemoryAccessors {
   return {
     getEffort: (agent, providerId, model) => getMirrorEffort(scopeKey, agent, providerId, model),
     getFast: (agent, providerId, model) => getMirrorFast(scopeKey, agent, providerId, model),
+    getThinking: (agent, providerId, model) => getMirrorThinking(scopeKey, agent, providerId, model),
     setEffort: (agent, providerId, model, effort) => {
       setMirrorEffort(scopeKey, agent, providerId, model, effort);
       onWrite(agent, providerId, model, { effort });
@@ -193,6 +254,10 @@ export function makeMirrorAccessors(
     setFast: (agent, providerId, model, enabled) => {
       setMirrorFast(scopeKey, agent, providerId, model, enabled);
       onWrite(agent, providerId, model, { fast: enabled });
+    },
+    setThinking: (agent, providerId, model, enabled) => {
+      setMirrorThinking(scopeKey, agent, providerId, model, enabled);
+      onWrite(agent, providerId, model, { thinking: enabled });
     },
   };
 }

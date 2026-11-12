@@ -1,14 +1,16 @@
 import path from 'node:path';
+import { agentDesktopInputRevision, desktopInputRevision, hasRemoteDesktopInput, isAgentDesktopInputActive, isHumanDesktopInputActive, withAgentDesktopInput } from '../remote-desktop/inputOwnership';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync } from 'node:fs';
 import type { Stream } from 'node:stream';
-import { app } from 'electron';
 import { hasProxyEnvConfig, parseOutboundProxyUrl } from '@cindy/anthropic-compat-proxy';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
+import type { JsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/index.js';
 import type {
   ComputerMcpCallContext,
   ComputerDriverPermissionGrant,
@@ -19,8 +21,214 @@ import type {
   ComputerMcpToolName,
 } from '@cindy/mcps';
 import { createLogger } from '../logger.js';
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
-import { resolveDesktopOutboundProxy } from '../maker-host/outbound-proxy-resolver.js';
+import {
+  adaptComputerDriverArgs,
+  selectAdvertisedComputerDriverArgs,
+  type ComputerDriverToolSchema,
+} from './computer-contract.js';
+import { computerResultOutcome, computerPointerTargetError, getComputerTool, isDesktopComputerTarget, isUnavailableDesktopObservation, isUnavailableWindowObservation } from '@cindy/mcps/computer';
+import { callComputerToolWithOutputValidation } from './computer-output.js';
+
+
+interface ExecResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+}
+
+interface RunDriverOptions {
+  stdin?: string;
+  /** spawn 后回调子进程句柄(grant 流程需要持有以便 stale 时收割)。 */
+  onChild?: (child: ChildProcess) => void;
+}
+
+interface DaemonStatus {
+  running: boolean;
+  message: string;
+  /** daemon 进程 pid(从 `cua-driver status` 输出解析);解析不出为 null。 */
+  pid: number | null;
+}
+
+interface CuaMcpSessionEntry {
+  logicalSessionId: string;
+  client: Client;
+  transport: StdioClientTransport;
+  ready: Promise<void>;
+  driverSessionId: string;
+  toolSchemas: Map<string, ComputerDriverToolSchema>;
+  outputValidators: Map<string, JsonSchemaValidator<unknown>>;
+  cursorSetup: {
+    motion: CursorSetupState;
+    style: CursorSetupState;
+  };
+}
+type CursorSetupState = 'pending' | 'applied' | 'unavailable';
+type CursorCapabilityState = 'unknown' | 'unavailable';
+
+interface CuaMcpSessionCursorCapabilities {
+  motion: CursorCapabilityState;
+  style: CursorCapabilityState;
+}
+
+interface ProcessSnapshotEntry {
+  pid: number;
+  parent_pid?: number;
+  name?: string;
+  command?: string;
+  executable?: string;
+  cwd?: string;
+}
+
+interface WindowIdentity {
+  kind: 'electron-dev' | 'node-dev' | 'browser' | 'terminal' | 'ios-simulator' | 'unknown';
+  workspace_root?: string;
+  confidence: number;
+  labels: string[];
+  /**
+   * Model-facing routing facts about this target that the driver cannot tell
+   * from the window alone. Written from the 2026-10 audit: every simulator
+   * session tried synthetic clicks first, every Electron text session tried
+   * keystrokes first; both routes fail and the hint names the working one.
+   */
+  hints?: string[];
+}
+
+interface ProcessSnapshotResult {
+  processes: Map<number, ProcessSnapshotEntry>;
+  available: boolean;
+}
+
+interface WindowsWin32FallbackSnapshot {
+  windows: Record<string, unknown>[];
+  processSnapshot: ProcessSnapshotResult;
+}
+
+export interface ComputerDriverInstallResult {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  status: ComputerDriverStatus;
+}
+
+/**
+ * cua-driver 更新检查结果。检查状态和已知可安装版本分别保留，网络失败
+ * 不能伪装成“已是最新”，也不能抹掉此前已发现的更新。
+ * updating 表示 main 侧此刻有一个更新安装在跑(设置面板关闭不影响它),
+ * renderer 重新打开面板时据此恢复「更新中」态并 join 完成时刻。
+ */
+export interface ComputerDriverUpdateCheck {
+  currentVersion: string | null;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  updating: boolean;
+  /** Optional on the wire for older desktop peers. */
+  checkStatus?: 'success' | 'error';
+  checkedAt?: number;
+  /**
+   * 失败原因分类。checkStatus 只有 success/error 两态,无法区分「等一会就能好」
+   * 与「需要用户处理」;这里单独给出可执行的那一类。旧版 renderer 忽略该字段,
+   * 仍按 checkStatus 显示原来的失败文案。
+   */
+  checkError?: { kind: 'rate_limited' | 'network' };
+}
+
+export interface ComputerDriverPermissionGrantResult {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  status: ComputerDriverStatus;
+}
+
+export interface ComputerMcpDepsOptions {
+  isComputerUseEnabled?: (context?: ComputerMcpCallContext) => boolean;
+  /** Optional provider gate before the first status/tool request. */
+  prepareRuntimeBeforeUse?: () => Promise<void>;
+}
+
+interface ComputerDriverStatusOptions {
+  includeDoctor?: boolean;
+  forcePermissionProbe?: boolean;
+  /** Passive surfaces must not trigger ScreenCaptureKit authorization prompts. */
+  skipPermissionProbe?: boolean;
+  /**
+   * 显式用户动作(重新检查 / 开启开关)专用:先重启 daemon 再实测。
+   * 背景:辅助功能(AX)被用户在系统设置里撤销后,**正在运行的 daemon 感知不到**
+   * (AXIsProcessTrusted 对撤销不生效,授予方向才是实时的;而屏幕录制的任何改动
+   * macOS 都会直接杀掉 daemon),不重启就永远报 stale 的 granted。
+   * 护栏(见 getComputerDriverStatus 实现):有 cua MCP 会话在跑、或已知屏幕录制
+   * 处于「探测会弹窗」的坏状态时,跳过重启走普通探测。
+   */
+  freshPermissionProbe?: boolean;
+  /**
+   * 跳过「坏状态探测结果」的 pid 门控缓存,强制现场重新探测(不重启 daemon)。
+   * 使用方:grant 流程刷新状态(main 内部),以及 renderer 授权引导轮询——引导
+   * 期间权限逐项变化(授予方向 daemon 实时可见),复用缓存会把进度冻住,导致
+   * 「授完第一个权限后第二个设置页永远不弹」(2026-07-03 实踩);此时系统本就在
+   * 弹授权对话框,实测可能再触发的弹窗与引导语义一致。
+   */
+  bypassPermissionProbeCache?: boolean;
+  /** Never fall back to a status implementation that may open a macOS TCC prompt. */
+  passivePermissionProbeOnly?: boolean;
+}
+
+export interface ActivityTimeoutOptions {
+  idleTimeoutMs: number;
+  hardTimeoutMs: number;
+  pollIntervalMs: number;
+  /** 测试注入:进程树采样器。返回 null 表示本平台/本次不可采样。 */
+  sampleTree?: (rootPid: number) => Promise<string | null>;
+  /** 子进程 spawn 后回调其 pid(供下载进度采样定位进程组)。 */
+  onSpawn?: (pid: number | undefined) => void;
+  /** 附加环境变量(如 CUA_DRIVER_RS_VERSION 版本 pin)。 */
+  extraEnv?: Record<string, string>;
+}
+
+export interface CuaDriverReleaseAsset {
+  name: string;
+  size: number;
+}
+
+interface CuaDriverReleaseInfo {
+  version: string;
+  assets: CuaDriverReleaseAsset[];
+}
+
+// ── 更新下载进度采样 ──────────────────────────────────────────────────────
+// 上游安装脚本用静默 curl 下载(无输出、落在随机 mktemp 目录),字节级进度
+// 只能从外部观测:在安装进程组里找 curl 的命令行,取 `-o <file>` 目标文件
+// stat 其大小 = 已下载字节;总字节用文件名匹配 release asset 的 size。
+// Windows 无进程组/ps,不采样(renderer 退化为不定态文案)。
+
+export interface ComputerDriverUpdateProgress {
+  /** downloading = 正在下载 tarball;installing = 下载完成后的解压/落盘阶段;done = 本次更新结束(成功或失败)。 */
+  phase: 'downloading' | 'installing' | 'done';
+  downloadedBytes: number | null;
+  totalBytes: number | null;
+}
+export interface ComputerRuntimePorts {
+  /** Host monitor liveness check; never treat unavailable OS facts as idle. */
+  assertAvailable?(): void;
+  /** Cross-process input coordinator readiness, checked before every write. */
+  assertInputAvailable?(): void;
+  beforeCall?(): Promise<void>;
+  getPath(name: 'home' | 'temp'): string;
+  powerMonitor: {
+    getSystemIdleTime(): number;
+    getSystemIdleState(threshold: number): string;
+    on(event: 'lock-screen' | 'unlock-screen', listener: () => void): unknown;
+    removeListener?(event: 'lock-screen' | 'unlock-screen', listener: () => void): unknown;
+  };
+  outboundFetch: typeof fetch;
+  resolveOutboundProxy(url: string): string | null | undefined | Promise<string | null | undefined>;
+  isSecureTarget: NonNullable<ComputerMcpDeps['isSecureTarget']>;
+}
+/** One runtime per execution owner; a UI attachment must never construct or dispose it. */
+export function createComputerRuntime(ports: ComputerRuntimePorts) {
+const app = { getPath: ports.getPath };
+const { powerMonitor, outboundFetch } = ports;
+const resolveDesktopOutboundProxy = ports.resolveOutboundProxy;
+
 
 const logger = createLogger('mcp/cindy_computer');
 const DRIVER_COMMAND = 'cua-driver';
@@ -79,10 +287,12 @@ const CUA_DRIVER_SESSION_PROCESS_NONCE = randomUUID().replace(/-/g, '').slice(0,
 // 0.12.2 changed `permissions status` into a strictly read-only daemon query.
 // Older builds may touch ScreenCaptureKit while checking capturability.
 const PASSIVE_PERMISSION_STATUS_MIN_VERSION = '0.12.2';
-const SCREENSHOT_OUTPUT_TOOL_NAMES = new Set<ComputerMcpToolName>(['get_window_state']);
+const SCREENSHOT_OUTPUT_TOOL_NAMES = new Set<ComputerMcpToolName>(['get_window_state', 'get_desktop_state']);
 const DRIVER_SESSION_ARG_TOOL_NAMES = new Set<ComputerMcpToolName>([
+  'get_desktop_state',
   'list_windows',
   'get_window_state',
+  'verify_state',
   'click',
   'double_click',
   'right_click',
@@ -97,6 +307,7 @@ const DRIVER_SESSION_ARG_TOOL_NAMES = new Set<ComputerMcpToolName>([
   'start_recording',
 ]);
 const CURSOR_STYLED_TOOL_NAMES = new Set<ComputerMcpToolName>([
+  'get_desktop_state',
   'get_window_state',
   'click',
   'double_click',
@@ -151,7 +362,7 @@ let computerDriverPermissionProbePaused = false;
  * macOS permission panes accept application bundles as native file drags.
  * Keep the technical bundle path in main; renderer only sees "Computer Use".
  */
-export function getComputerDriverAppBundlePath(): string | null {
+function getComputerDriverAppBundlePath(): string | null {
   if (process.platform !== 'darwin') return null;
   if (!existsSync(CUA_DRIVER_APP_BUNDLE_PATH)) return null;
   return CUA_DRIVER_APP_BUNDLE_PATH;
@@ -257,63 +468,10 @@ foreach ($procId in $processIds) {
 } | ConvertTo-Json -Compress -Depth 6
 `;
 
-interface ExecResult {
-  stdout: string;
-  stderr: string;
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-}
-
-interface RunDriverOptions {
-  stdin?: string;
-  /** spawn 后回调子进程句柄(grant 流程需要持有以便 stale 时收割)。 */
-  onChild?: (child: ChildProcess) => void;
-}
-
-interface DaemonStatus {
-  running: boolean;
-  message: string;
-  /** daemon 进程 pid(从 `cua-driver status` 输出解析);解析不出为 null。 */
-  pid: number | null;
-}
-
-interface CuaMcpSessionEntry {
-  client: Client;
-  transport: StdioClientTransport;
-  ready: Promise<void>;
-  driverSessionId: string;
-  cursorSetup: {
-    motion: CursorSetupState;
-    style: CursorSetupState;
-  };
-}
-type CursorSetupState = 'pending' | 'applied' | 'unavailable';
-
-interface ProcessSnapshotEntry {
-  pid: number;
-  parent_pid?: number;
-  name?: string;
-  command?: string;
-  executable?: string;
-  cwd?: string;
-}
-
-interface WindowIdentity {
-  kind: 'electron-dev' | 'node-dev' | 'browser' | 'terminal' | 'unknown';
-  workspace_root?: string;
-  confidence: number;
-  labels: string[];
-}
-
-interface ProcessSnapshotResult {
-  processes: Map<number, ProcessSnapshotEntry>;
-  available: boolean;
-}
-
-interface WindowsWin32FallbackSnapshot {
-  windows: Record<string, unknown>[];
-  processSnapshot: ProcessSnapshotResult;
-}
+const IOS_SIMULATOR_INPUT_HINT =
+  'Synthetic clicks and keystrokes are not delivered to iOS Simulator / Device Hub windows (background, foreground or AX). Observe it here if needed, but drive it with `xcrun simctl` (launch, openurl, io screenshot) or AXe.';
+const WEB_CONTENT_TEXT_HINT =
+  'Electron / web content: type_text into its text fields is refused in background and unreliable in foreground; use set_value with the field\'s element_token.';
 
 let cachedProcessSnapshot: {
   expiresAt: number;
@@ -326,82 +484,10 @@ function clearProcessSnapshotCache(): void {
   cachedProcessSnapshot = null;
 }
 
-export interface ComputerDriverInstallResult {
-  ok: boolean;
-  stdout: string;
-  stderr: string;
-  status: ComputerDriverStatus;
-}
-
-/**
- * cua-driver 更新检查结果。查询型数据:任何一步失败(本地未装 / 网络不通 /
- * API 限流 / tag 解析不出)都静默落到 updateAvailable=false,renderer 直接
- * 不渲染更新入口,绝不打扰用户。
- * updating 表示 main 侧此刻有一个更新安装在跑(设置面板关闭不影响它),
- * renderer 重新打开面板时据此恢复「更新中」态并 join 完成时刻。
- */
-export interface ComputerDriverUpdateCheck {
-  currentVersion: string | null;
-  latestVersion: string | null;
-  updateAvailable: boolean;
-  updating: boolean;
-}
-
-export interface ComputerDriverPermissionGrantResult {
-  ok: boolean;
-  stdout: string;
-  stderr: string;
-  status: ComputerDriverStatus;
-}
-
-export interface ComputerMcpDepsOptions {
-  isComputerUseEnabled?: (context?: ComputerMcpCallContext) => boolean;
-  /** Optional provider gate before the first status/tool request. */
-  prepareRuntimeBeforeUse?: () => Promise<void>;
-}
-
-interface ComputerDriverStatusOptions {
-  includeDoctor?: boolean;
-  forcePermissionProbe?: boolean;
-  /** Passive surfaces must not trigger ScreenCaptureKit authorization prompts. */
-  skipPermissionProbe?: boolean;
-  /**
-   * 显式用户动作(重新检查 / 开启开关)专用:先重启 daemon 再实测。
-   * 背景:辅助功能(AX)被用户在系统设置里撤销后,**正在运行的 daemon 感知不到**
-   * (AXIsProcessTrusted 对撤销不生效,授予方向才是实时的;而屏幕录制的任何改动
-   * macOS 都会直接杀掉 daemon),不重启就永远报 stale 的 granted。
-   * 护栏(见 getComputerDriverStatus 实现):有 cua MCP 会话在跑、或已知屏幕录制
-   * 处于「探测会弹窗」的坏状态时,跳过重启走普通探测。
-   */
-  freshPermissionProbe?: boolean;
-  /**
-   * 跳过「坏状态探测结果」的 pid 门控缓存,强制现场重新探测(不重启 daemon)。
-   * 使用方:grant 流程刷新状态(main 内部),以及 renderer 授权引导轮询——引导
-   * 期间权限逐项变化(授予方向 daemon 实时可见),复用缓存会把进度冻住,导致
-   * 「授完第一个权限后第二个设置页永远不弹」(2026-07-03 实踩);此时系统本就在
-   * 弹授权对话框,实测可能再触发的弹窗与引导语义一致。
-   */
-  bypassPermissionProbeCache?: boolean;
-  /** Never fall back to a status implementation that may open a macOS TCC prompt. */
-  passivePermissionProbeOnly?: boolean;
-}
-
 class ComputerDriverError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly code = 'COMPUTER_DRIVER_ERROR', readonly outcomeUnknown = false) {
     super(message);
     this.name = 'ComputerDriverError';
-  }
-}
-
-class ComputerDriverTypeTextRetryError extends ComputerDriverError {
-  constructor(
-    message: string,
-    readonly remainingText: string,
-    readonly completedChars: number,
-    readonly completedChunks: number,
-  ) {
-    super(message);
-    this.name = 'ComputerDriverTypeTextRetryError';
   }
 }
 
@@ -424,7 +510,7 @@ let cachedPermissionProbe: {
 } | null = null;
 
 /** 测试隔离用:清空权限探测缓存与 daemon 自愈启动节流。 */
-export function resetComputerDriverPermissionProbeCacheForTests(): void {
+function resetComputerDriverPermissionProbeCacheForTests(): void {
   cachedPermissionProbe = null;
   lastDaemonAutostartAt = 0;
   daemonAutostartInFlight = null;
@@ -523,7 +609,13 @@ function probeDriverPermissionsOnce(options: { forceNew?: boolean } = {}): Promi
 }
 const cuaMcpSessions = new Map<string, CuaMcpSessionEntry>();
 const cuaMcpSessionCleanups = new Map<string, Promise<void>>();
+// 永久的能力/策略拒绝属于逻辑 MCP session，而不是某一代 driver transport。
+// applied/pending 仍保留在 entry 内，因为新 generation 必须重新应用成功的设置。
+const cuaMcpSessionCursorCapabilities = new Map<string, CuaMcpSessionCursorCapabilities>();
 const cuaDriverSessionGenerations = new Map<string, number>();
+// Retained across transport retries; cleared only when the owning run closes.
+const cuaDriverSessionNames = new Map<string, string>();
+let cuaDriverNamedRunSequence = 0;
 const cuaMcpSessionCloseVersions = new Map<string, number>();
 
 function getInstallCommand(): string {
@@ -577,7 +669,7 @@ function resolveDriverInvocation(args: readonly string[]): {
 }
 
 /** Whether permission onboarding is deliberately waiting for a real app drag. */
-export function isComputerDriverPermissionProbePaused(): boolean {
+function isComputerDriverPermissionProbePaused(): boolean {
   return computerDriverPermissionProbePaused;
 }
 
@@ -595,7 +687,7 @@ function assertComputerDriverToolDispatchAvailable(): void {
  * so they cannot re-register a deleted app row while the guide waits for a
  * fresh drag.
  */
-export async function pauseComputerDriverPermissionProbe(): Promise<void> {
+async function pauseComputerDriverPermissionProbe(): Promise<void> {
   computerDriverPermissionProbePaused = true;
   cachedPermissionProbe = null;
   lastDaemonAutostartAt = 0;
@@ -603,7 +695,7 @@ export async function pauseComputerDriverPermissionProbe(): Promise<void> {
 }
 
 /** Resume live permission checks after System Settings contains Computer Use. */
-export function resumeComputerDriverPermissionProbe(): void {
+function resumeComputerDriverPermissionProbe(): void {
   computerDriverPermissionProbePaused = false;
   cachedPermissionProbe = null;
   lastDaemonAutostartAt = 0;
@@ -670,7 +762,7 @@ function runDriver(args: string[], timeoutMs: number, options: RunDriverOptions 
  * 明确公开的行为;这里只在 holder 确认已死(kill -0 ESRCH)时才敢清,
  * 活着的慢安装绝不抢锁。返回是否清了锁,便于测试与日志。
  */
-export function isInstallLockHolderAlive(holderPid: number): boolean {
+function isInstallLockHolderAlive(holderPid: number): boolean {
   try {
     process.kill(holderPid, 0);
     return true;
@@ -680,7 +772,7 @@ export function isInstallLockHolderAlive(holderPid: number): boolean {
   }
 }
 
-export function clearStaleCuaInstallLock(
+function clearStaleCuaInstallLock(
   lockDir: string = path.join(os.homedir(), '.cua-driver', 'packages', '.install.lock.d'),
   isHolderAlive: (pid: number) => boolean = isInstallLockHolderAlive,
 ): boolean {
@@ -713,7 +805,7 @@ export function clearStaleCuaInstallLock(
  * 在涨即算活动。Windows 无进程组概念,返回 null(活动检测退化为仅
  * stdout/stderr,硬上限兜底)。导出仅供测试。
  */
-export async function sampleInstallProcessTree(rootPid: number): Promise<string | null> {
+async function sampleInstallProcessTree(rootPid: number): Promise<string | null> {
   if (process.platform === 'win32') return null;
   return new Promise((resolve) => {
     const ps = spawn('ps', ['-ax', '-o', 'pgid=,pid=,time=,command='], {
@@ -772,25 +864,13 @@ function killInstallTree(child: { pid?: number; kill: (signal?: NodeJS.Signals) 
   }
 }
 
-export interface ActivityTimeoutOptions {
-  idleTimeoutMs: number;
-  hardTimeoutMs: number;
-  pollIntervalMs: number;
-  /** 测试注入:进程树采样器。返回 null 表示本平台/本次不可采样。 */
-  sampleTree?: (rootPid: number) => Promise<string | null>;
-  /** 子进程 spawn 后回调其 pid(供下载进度采样定位进程组)。 */
-  onSpawn?: (pid: number | undefined) => void;
-  /** 附加环境变量(如 CUA_DRIVER_RS_VERSION 版本 pin)。 */
-  extraEnv?: Record<string, string>;
-}
-
 /**
  * 活动感知地运行安装命令:stdout/stderr 有输出、或安装进程树快照有变化,
  * 都视为「有进度」并重置 idle 计时;连续 idleTimeoutMs 无任何活动才判失败,
  * hardTimeoutMs 是防僵死的总时长兜底。POSIX 下 detached 起新进程组,超时
  * 时整组终止(而不是只杀外层 bash 留下持锁孤儿)。
  */
-export function runProcessWithActivityTimeout(
+function runProcessWithActivityTimeout(
   command: string,
   args: string[],
   options: ActivityTimeoutOptions,
@@ -896,12 +976,12 @@ export function runProcessWithActivityTimeout(
  * 信号,慢网下载会被误杀。因此 Windows 退化为「仅硬上限兜底」:idle 窗口
  * 拉满到硬上限,等价于不做 idle 判死。POSIX 保持 3 分钟无活动即失败。
  */
-export function installIdleTimeoutForPlatform(platform: NodeJS.Platform = process.platform): number {
+function installIdleTimeoutForPlatform(platform: NodeJS.Platform = process.platform): number {
   return platform === 'win32' ? INSTALL_HARD_TIMEOUT_MS : INSTALL_IDLE_TIMEOUT_MS;
 }
 
 /** Translate Cindy's validated system proxy decision into env understood by installer tools. */
-export function buildCuaInstallerProxyEnv(
+function buildCuaInstallerProxyEnv(
   proxyUrl: string | null | undefined,
 ): Record<string, string> | undefined {
   const proxy = parseOutboundProxyUrl(proxyUrl);
@@ -1573,20 +1653,38 @@ function inferWindowIdentity(
   workspaceRootCache: Map<string, string | undefined>,
 ): WindowIdentity {
   const labels: string[] = [];
+  // Every kind comes from the app and its process only. A window title is page or
+  // document content: a Chrome tab titled "Node.js documentation" or "iOS Simulator
+  // guide" must not be classified (or routed) as the thing it talks about.
   const haystack = [
     typeof window.app_name === 'string' ? window.app_name : '',
-    typeof window.title === 'string' ? window.title : '',
     processInfo?.name ?? '',
     processInfo?.command ?? '',
     processInfo?.executable ?? '',
   ].join(' ').toLowerCase();
+  const appName = (typeof window.app_name === 'string' ? window.app_name : '').trim().toLowerCase();
+  const executableText = `${processInfo?.name ?? ''} ${processInfo?.command ?? ''} ${processInfo?.executable ?? ''}`.toLowerCase();
+  const isIosSimulator =
+    appName === 'simulator' ||
+    appName === 'device hub' ||
+    /(?:^|[\\/])simulator\.app[\\/]|(?:^|[\\/])device hub\.app[\\/]|com\.apple\.(?:iphonesimulator|coresimulator)/.test(executableText);
 
   let kind: WindowIdentity['kind'] = 'unknown';
   let confidence = 0;
-  if (/\b(electron|electron-forge)\b/.test(haystack)) {
+  const hints: string[] = [];
+  // Simulator first: its process line also mentions node/electron-free paths,
+  // and a Device Hub (Cindy's simulator surface) window must never fall into
+  // the generic branches below.
+  if (isIosSimulator) {
+    kind = 'ios-simulator';
+    confidence = 0.8;
+    labels.push('simulator');
+    hints.push(IOS_SIMULATOR_INPUT_HINT);
+  } else if (/\b(electron|electron-forge)\b/.test(haystack)) {
     kind = 'electron-dev';
     confidence = 0.75;
     labels.push('electron');
+    hints.push(WEB_CONTENT_TEXT_HINT);
   } else if (/\b(pnpm|npm|yarn|node|tsx|vite)\b/.test(haystack)) {
     kind = 'node-dev';
     confidence = 0.65;
@@ -1595,6 +1693,7 @@ function inferWindowIdentity(
     kind = 'browser';
     confidence = 0.7;
     labels.push('browser');
+    hints.push(WEB_CONTENT_TEXT_HINT);
   } else if (/\b(terminal|iterm|powershell|cmd\.exe|windows terminal|wt\.exe)\b/.test(haystack)) {
     kind = 'terminal';
     confidence = 0.7;
@@ -1608,6 +1707,7 @@ function inferWindowIdentity(
     workspace_root: workspaceRoot,
     confidence,
     labels,
+    ...(hints.length > 0 ? { hints } : {}),
   };
 }
 
@@ -1821,7 +1921,7 @@ async function buildWindowsWin32ListAppsFallback(): Promise<unknown> {
  * fail closed, so opening the palette can never become a permission prompt.
  * Results are briefly cached because the palette rescans while the user types.
  */
-export async function listComputerWindowsForAtMention(): Promise<unknown> {
+async function listComputerWindowsForAtMention(): Promise<unknown> {
   const now = Date.now();
   if (cachedAtMentionWindows && cachedAtMentionWindows.expiresAt > now) {
     return cachedAtMentionWindows.result;
@@ -1868,7 +1968,7 @@ export async function listComputerWindowsForAtMention(): Promise<unknown> {
   return result;
 }
 
-export function resetAtMentionWindowCacheForTests(): void {
+function resetAtMentionWindowCacheForTests(): void {
   cachedAtMentionWindows = null;
 }
 
@@ -1879,13 +1979,71 @@ function normalizeToolArgsForDriver(
   if (!SCREENSHOT_OUTPUT_TOOL_NAMES.has(name) || typeof args.screenshot_out_file === 'string') {
     return args;
   }
-  if (args.capture_mode === 'ax') {
+  if (args.include_screenshot === false || (args.include_screenshot === undefined && args.capture_mode === 'ax')) {
     return args;
   }
   return {
     ...args,
     screenshot_out_file: defaultScreenshotOutputPath(name, args),
   };
+}
+
+type DesktopScreenshot = { directory: string; pending: boolean; current: boolean };
+const desktopScreenshots = new Map<string, Set<DesktopScreenshot>>();
+
+function removeDesktopScreenshot(sessionId: string, screenshot: DesktopScreenshot): void {
+  try {
+    // Only directories created by this host call are owned here. Never trust
+    // a returned driver path or an explicit screenshot_out_file for deletion.
+    rmSync(screenshot.directory, { recursive: true, force: true });
+    const owned = desktopScreenshots.get(sessionId);
+    owned?.delete(screenshot);
+    if (owned?.size === 0) desktopScreenshots.delete(sessionId);
+  } catch (err) {
+    // Keep ownership so the next observation or session cleanup can retry.
+    logger.warn('Desktop screenshot cleanup failed', { sessionId, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+function retireDesktopScreenshots(sessionId: string): void {
+  for (const screenshot of desktopScreenshots.get(sessionId) ?? []) {
+    screenshot.current = false;
+    // An in-flight driver may still write its file. Its finally owns cleanup;
+    // it must not delete a later read's directory, even if the session reopened.
+    if (!screenshot.pending) removeDesktopScreenshot(sessionId, screenshot);
+  }
+}
+
+async function readDesktopState(args: Record<string, unknown>, context?: ComputerMcpCallContext): Promise<unknown> {
+  const sessionId = readSessionIdFromContext(context);
+  if (!sessionId) return callComputerDriverToolImpl('get_desktop_state', args, context);
+  retireDesktopScreenshots(sessionId);
+  if (typeof args.screenshot_out_file === 'string') {
+    return callComputerDriverToolImpl('get_desktop_state', args, context);
+  }
+  const screenshot: DesktopScreenshot = {
+    directory: mkdtempSync(path.join(app.getPath('temp'), 'xdt-maker-cua-desktop-')),
+    pending: true,
+    current: true,
+  };
+  let owned = desktopScreenshots.get(sessionId);
+  if (!owned) {
+    owned = new Set();
+    desktopScreenshots.set(sessionId, owned);
+  }
+  owned.add(screenshot);
+  let usable = false;
+  try {
+    const result = await callComputerDriverToolImpl('get_desktop_state', {
+      ...args,
+      screenshot_out_file: path.join(screenshot.directory, 'get_desktop_state.png'),
+    }, context);
+    usable = !context?.signal?.aborted && !isUnavailableDesktopObservation(result);
+    return result;
+  } finally {
+    screenshot.pending = false;
+    if (!usable || !screenshot.current) removeDesktopScreenshot(sessionId, screenshot);
+  }
 }
 
 function readSessionIdFromContext(
@@ -1938,7 +2096,8 @@ function parseMcpToolResult(result: unknown): unknown {
 
 function getDriverSessionId(sessionId: string): string {
   const generation = cuaDriverSessionGenerations.get(sessionId) ?? 0;
-  return `${sessionId}-cua-${CUA_DRIVER_SESSION_PROCESS_NONCE}-${generation}`;
+  const name = cuaDriverSessionNames.get(sessionId) ?? sessionId;
+  return `${name}-cua-${CUA_DRIVER_SESSION_PROCESS_NONCE}-${generation}`;
 }
 
 function rotateDriverSessionId(sessionId: string, failedDriverSessionId: string): void {
@@ -1951,33 +2110,28 @@ function applyDriverSessionArgs(
   name: ComputerMcpToolName,
   args: Record<string, unknown>,
   driverSessionId: string,
+  schemas: ReadonlyMap<string, ComputerDriverToolSchema>,
 ): Record<string, unknown> {
   if (!DRIVER_SESSION_ARG_TOOL_NAMES.has(name)) return args;
-  if (name === 'get_agent_cursor_state') {
-    return {
-      ...args,
-      cursor_id: driverSessionId,
-    };
+  const result = { ...args };
+  const schema = schemas.get(name);
+  const keys = name === 'get_agent_cursor_state'
+    ? ['cursor_id', ...(schema?.properties && 'session' in schema.properties ? ['session'] : [])]
+    : name === 'move_cursor' ? ['cursor_id', 'session'] : ['session'];
+  for (const key of keys) {
+    // Host-owned routing metadata is injected only when the installed tool accepts it.
+    if (schema?.additionalProperties === false && !(key in (schema.properties ?? {}))) delete result[key];
+    else result[key] = driverSessionId;
   }
-  if (name === 'move_cursor') {
-    return {
-      ...args,
-      cursor_id: driverSessionId,
-      session: driverSessionId,
-    };
-  }
-  return {
-    ...args,
-    session: driverSessionId,
-  };
+  return result;
 }
 
-function splitTypeTextChunks(text: string): string[] {
+function splitTypeTextChunks(text: string, chunkChars = TYPE_TEXT_CHUNK_CHARS): string[] {
   const chars = Array.from(text);
-  if (chars.length <= TYPE_TEXT_CHUNK_CHARS) return [text];
+  if (chars.length <= chunkChars) return [text];
   const chunks: string[] = [];
-  for (let index = 0; index < chars.length; index += TYPE_TEXT_CHUNK_CHARS) {
-    chunks.push(chars.slice(index, index + TYPE_TEXT_CHUNK_CHARS).join(''));
+  for (let index = 0; index < chars.length; index += chunkChars) {
+    chunks.push(chars.slice(index, index + chunkChars).join(''));
   }
   return chunks;
 }
@@ -2001,10 +2155,10 @@ function shouldCleanupCuaMcpSessionAfterError(err: unknown): boolean {
 
 function shouldRetryWithFreshCuaSession(name: ComputerMcpToolName, err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
-  return (
+  return (getComputerTool(name)?.readOnly === true && (
     STALE_CUA_SESSION_MARKER_RE.test(message) ||
     (/timed out after/i.test(message) && LIGHTWEIGHT_TIMEOUT_RETRY_TOOL_NAMES.has(name))
-  );
+  ));
 }
 
 function getCuaMcpToolTimeoutMs(name: ComputerMcpToolName): number {
@@ -2114,20 +2268,45 @@ function createCuaMcpSession(sessionId: string): CuaMcpSessionEntry {
     name: 'xdt-maker-cua-driver',
     version: '0.1.0',
   });
+  const capabilities = cuaMcpSessionCursorCapabilities.get(sessionId);
   const entry: CuaMcpSessionEntry = {
+    logicalSessionId: sessionId,
     client,
     transport,
     driverSessionId: getDriverSessionId(sessionId),
+    toolSchemas: new Map(),
+    outputValidators: new Map(),
     cursorSetup: {
-      motion: 'pending',
-      style: 'pending',
+      motion: capabilities?.motion === 'unavailable' ? 'unavailable' : 'pending',
+      style: capabilities?.style === 'unavailable' ? 'unavailable' : 'pending',
     },
     ready: withTimeout(
-      client.connect(transport),
+      client.connect(transport).then(async () => {
+        const outputValidator = new AjvJsonSchemaValidator();
+        let cursor: string | undefined;
+        const seen = new Set<string>();
+        do {
+          const page = await client.listTools(cursor ? { cursor } : undefined);
+          for (const tool of page.tools) {
+            entry.toolSchemas.set(tool.name, tool.inputSchema as ComputerDriverToolSchema);
+            // Required-task tools must stay on SDK callTool's task protocol guard.
+            if (tool.outputSchema && tool.execution?.taskSupport !== 'required') {
+              entry.outputValidators.set(
+                tool.name,
+                outputValidator.getValidator(tool.outputSchema),
+              );
+            }
+          }
+          cursor = page.nextCursor;
+          if (cursor && (seen.has(cursor) || seen.size >= 20))
+            throw new ComputerDriverError('Driver tools/list pagination did not terminate.');
+          if (cursor) seen.add(cursor);
+        } while (cursor);
+      }),
       MCP_STARTUP_TIMEOUT_MS,
       `cua-driver mcp session ${sessionId} startup`,
     ).catch(async (err) => {
-      cuaMcpSessions.delete(sessionId);
+      if (cuaMcpSessions.get(sessionId) === entry) cuaMcpSessions.delete(sessionId);
       try {
         await client.close();
       } catch {
@@ -2144,24 +2323,43 @@ function createCuaMcpSession(sessionId: string): CuaMcpSessionEntry {
   return entry;
 }
 
-async function getCuaMcpSession(sessionId: string): Promise<CuaMcpSessionEntry> {
+/** Cancel this caller's wait without cancelling shared startup or another caller. */
+async function waitForCuaSession<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return pending;
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener('abort', onAbort);
+      reject(new ComputerDriverError('Computer Use cancelled while waiting for the driver.', 'REQUEST_CANCELLED'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    void pending.then(
+      (value) => { signal.removeEventListener('abort', onAbort); resolve(value); },
+      (error) => { signal.removeEventListener('abort', onAbort); reject(error); },
+    );
+  });
+}
+
+async function getCuaMcpSession(sessionId: string, signal?: AbortSignal): Promise<CuaMcpSessionEntry> {
+  signal?.throwIfAborted();
   assertComputerDriverToolDispatchAvailable();
   const existing = cuaMcpSessions.get(sessionId);
   if (existing) {
-    await existing.ready;
+    await waitForCuaSession(existing.ready, signal);
     return existing;
   }
   const cleanup = cuaMcpSessionCleanups.get(sessionId);
   if (cleanup) {
-    await cleanup.catch(() => undefined);
+    await waitForCuaSession(cleanup.catch(() => undefined), signal);
+    signal?.throwIfAborted();
     const next = cuaMcpSessions.get(sessionId);
     if (next) {
-      await next.ready;
+      await waitForCuaSession(next.ready, signal);
       return next;
     }
   }
   const entry = createCuaMcpSession(sessionId);
-  await entry.ready;
+  await waitForCuaSession(entry.ready, signal);
   return entry;
 }
 
@@ -2170,18 +2368,64 @@ async function callCuaMcpTool(
   name: string,
   args: Record<string, unknown>,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<unknown> {
+  signal?.throwIfAborted();
+  if (
+    name === 'drag' &&
+    process.platform === 'darwin' &&
+    args.delivery_mode === undefined &&
+    Object.hasOwn(entry.toolSchemas.get(name)?.properties ?? {}, 'delivery_mode')
+  ) {
+    // Never implicitly take foreground input from the person using this Mac.
+    // Older drivers may not accept delivery_mode; adapt only advertised capabilities.
+    args = { ...args, delivery_mode: 'background' };
+  }
+  const driverArgs = adaptComputerDriverArgs(name, args, entry.toolSchemas, {
+    // The input queue's assertCurrent has already checked this session's
+    // latest capture immediately before dispatching desktop pointer input.
+    desktopCaptureValidated: name === 'drag' && isDesktopComputerTarget(args),
+  });
   const result = await withTimeout(
-    entry.client.callTool({
-      name,
-      arguments: args,
-    }),
+    callComputerToolWithOutputValidation(
+      entry.client,
+      {
+        name,
+        arguments: driverArgs,
+      },
+      entry.outputValidators.get(name),
+      getComputerTool(name)?.readOnly === true,
+      signal,
+    ),
     timeoutMs,
     `cua-driver mcp tool ${name}`,
   );
   if ((result as { isError?: unknown }).isError) {
     const text = firstTextFromMcpResult(result);
-    throw new ComputerDriverError(text ?? `cua-driver mcp tool ${name} returned an error`);
+    const details = objectValue(parseMcpToolResult(result));
+    const message = typeof details?.message === 'string'
+      ? details.message
+      : (text ?? `cua-driver mcp tool ${name} returned an error`);
+    const reportedCode = typeof details?.code === 'string'
+      ? details.code
+      // The driver also reports snake_case codes (tool_invocation_failed);
+      // keep them instead of collapsing to the generic code.
+      : typeof details?.error === 'string' && /^[A-Za-z][A-Za-z0-9_]+$/.test(details.error)
+        ? details.error
+        : 'COMPUTER_DRIVER_ERROR';
+    throw new ComputerDriverError(
+      message,
+      // cua-driver 0.37 reports a missing app as the generic tool_invocation_failed;
+      // older drivers named it. Keep the stable name the MCP recovery and smoke rely on.
+      name === 'launch_app' && reportedCode !== 'APP_NOT_INSTALLED'
+        && /^No installed macOS app found (?:for |with )?name\b/i.test(message)
+        ? 'APP_NOT_INSTALLED'
+        : reportedCode,
+      getComputerTool(name)?.readOnly !== true && (
+        details?.effect === 'partial' || details?.effect === 'unverifiable' ||
+        details?.code === 'type_text_incomplete'
+      ),
+    );
   }
   const parsed = parseMcpToolResult(result);
   if (typeof parsed === 'string' && STALE_CUA_SESSION_MARKER_RE.test(parsed)) {
@@ -2195,14 +2439,40 @@ async function callCuaMcpToolWithTypeTextChunks(
   name: ComputerMcpToolName,
   args: Record<string, unknown>,
   timeoutMs: number,
+  signal?: AbortSignal,
+  assertActive: () => void = () => {},
+  settleFailedInput: () => Promise<void> = async () => {},
+  onDispatch: () => void = () => {},
 ): Promise<unknown> {
+  signal?.throwIfAborted();
+  assertActive();
+  const dispatch = async (input: Record<string, unknown>) => {
+    signal?.throwIfAborted();
+    assertActive();
+    onDispatch();
+    try {
+      return await callCuaMcpTool(entry, name, input, timeoutMs, signal);
+    } catch (error) {
+      // Cancellation/timeout is not proof that native input stopped. Keep
+      // all competing input waiting through the existing driver-session teardown.
+      if (getComputerTool(name)?.readOnly !== true
+        && (signal?.aborted || shouldCleanupCuaMcpSessionAfterError(error))) {
+        await settleFailedInput();
+      }
+      throw error;
+    }
+  };
   if (name !== 'type_text' || typeof args.text !== 'string') {
-    return callCuaMcpTool(entry, name, args, timeoutMs);
+    return dispatch(args);
   }
 
-  const chunks = splitTypeTextChunks(args.text);
+  // Slow per-character typing must also offer frequent handoff boundaries.
+  const chunkChars = hasRemoteDesktopInput() && typeof args.delay_ms === 'number' && args.delay_ms > 0
+    ? Math.max(1, Math.min(TYPE_TEXT_CHUNK_CHARS, Math.floor(300 / args.delay_ms)))
+    : TYPE_TEXT_CHUNK_CHARS;
+  const chunks = splitTypeTextChunks(args.text, chunkChars);
   if (chunks.length === 1) {
-    return callCuaMcpTool(entry, name, args, timeoutMs);
+    return dispatch(args);
   }
 
   let lastResult: unknown = null;
@@ -2210,31 +2480,33 @@ async function callCuaMcpToolWithTypeTextChunks(
   let processedChunks = 0;
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index];
+    let attempted = false;
     try {
-      lastResult = await callCuaMcpTool(
-        entry,
-        name,
-        {
-          ...args,
-          text: chunk,
+      signal?.throwIfAborted();
+      assertActive();
+      attempted = true;
+      lastResult = await dispatch({ ...args, text: chunk });
+    } catch (error) {
+      // A completed prefix must survive cancellation/yield/transport errors.
+      // Never encourage replay of the whole string or guess the in-flight chunk.
+      throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+        outcomeUnknown: attempted || inserted > 0,
+        inputProgress: {
+          completed_chars: inserted,
+          attempted_chars: attempted ? Array.from(chunk).length : 0,
+          remaining_chars: Array.from(chunks.slice(index + (attempted ? 1 : 0)).join('')).length,
         },
-        timeoutMs,
-      );
-    } catch (err) {
-      if (shouldRetryWithFreshCuaSession(name, err)) {
-        throw new ComputerDriverTypeTextRetryError(
-          err instanceof Error ? err.message : String(err),
-          chunks.slice(index).join(''),
-          inserted,
-          index,
-        );
-      }
-      throw err;
+      });
     }
     const resultObject = objectValue(lastResult);
     processedChunks += 1;
-    if (resultObject?.ok === false) {
-      if (typeof resultObject.inserted === 'number') {
+    const outcome = computerResultOutcome(name, lastResult);
+    if (resultObject?.effect !== undefined && outcome.outcome?.status !== 'confirmed') {
+      return { ...resultObject, chunks: processedChunks, completed_chars: inserted,
+        attempted_chars: Array.from(chunk).length, remaining_chars: Array.from(chunks.slice(index + 1).join('')).length };
+    }
+    if (!outcome.ok) {
+      if (typeof resultObject?.inserted === 'number') {
         inserted += resultObject.inserted;
       }
       return {
@@ -2267,6 +2539,9 @@ async function initializeDefaultCursorStyle(
   _args: Record<string, unknown>,
   entry: CuaMcpSessionEntry,
   session: string,
+  sessionCloseVersion: number,
+  signal?: AbortSignal,
+  assertActive: () => void = () => {},
 ): Promise<void> {
   if (!CURSOR_STYLED_TOOL_NAMES.has(name)) return;
 
@@ -2295,19 +2570,40 @@ async function initializeDefaultCursorStyle(
   ];
 
   for (const call of calls) {
+    assertActive();
+    signal?.throwIfAborted();
     if (entry.cursorSetup[call.stateKey] !== 'pending') continue;
+    const driverArgs = selectAdvertisedComputerDriverArgs(call.tool, call.args, entry.toolSchemas);
+    if (!driverArgs) {
+      entry.cursorSetup[call.stateKey] = 'unavailable';
+      continue;
+    }
     try {
       await callCuaMcpTool(
         entry,
         call.tool,
-        call.args,
+        driverArgs,
         STATUS_TIMEOUT_MS,
+        signal,
       );
       entry.cursorSetup[call.stateKey] = 'applied';
     } catch (err) {
+      assertActive();
+      signal?.throwIfAborted();
       const message = err instanceof Error ? err.message : String(err);
-      if (isCursorSetupUnavailableError(message)) {
+      if (isCursorSetupUnavailableError(message)
+        || (err as { code?: string })?.code === 'COMPUTER_DRIVER_INCOMPATIBLE') {
         entry.cursorSetup[call.stateKey] = 'unavailable';
+        if (getCuaMcpSessionCloseVersion(entry.logicalSessionId) === sessionCloseVersion) {
+          const capabilities = cuaMcpSessionCursorCapabilities.get(entry.logicalSessionId) ?? {
+            motion: 'unknown',
+            style: 'unknown',
+          };
+          cuaMcpSessionCursorCapabilities.set(entry.logicalSessionId, {
+            ...capabilities,
+            [call.stateKey]: 'unavailable',
+          });
+        }
         logger.info('cua-driver cursor setup unavailable; continuing without it', {
           tool: name,
           cursorTool: call.tool,
@@ -2327,9 +2623,10 @@ async function initializeDefaultCursorStyle(
 }
 
 /**
- * Driver capability/policy failures cannot recover while the same MCP process
- * remains alive. Remember them on the session entry so an optional cursor
- * decoration never adds a rejected tool call to every real computer action.
+ * Driver capability/policy failures cannot recover while the same logical MCP
+ * session remains alive. Remember them outside the generation-specific entry
+ * so an optional cursor decoration never adds a rejected tool call after a
+ * stale driver transport is replaced.
  */
 function isCursorSetupUnavailableError(message: string): boolean {
   return /has no reviewed risk classification|method not found|unknown tool|tool .+ not found/i.test(message);
@@ -2432,7 +2729,7 @@ function normalizePermissionState(raw: unknown): ComputerDriverPermissionState {
   };
 }
 
-export async function getComputerDriverStatus(
+async function getComputerDriverStatus(
   options: ComputerDriverStatusOptions = {},
 ): Promise<ComputerDriverStatus> {
   try {
@@ -2607,13 +2904,20 @@ export async function getComputerDriverStatus(
   }
 }
 
-export async function installComputerDriver(
+async function installComputerDriver(
   onSpawn?: (pid: number | undefined) => void,
   targetVersion?: string,
 ): Promise<ComputerDriverInstallResult> {
   const res = await runInstallCommand(onSpawn, targetVersion);
   const status = await getComputerDriverStatus();
   if (res.exitCode !== 0 || !status.installed) {
+    logger.warn('cua-driver install did not complete cleanly', {
+      exitCode: res.exitCode,
+      signal: res.signal,
+      installed: status.installed,
+      installedVersion: status.version,
+      statusError: status.error,
+    });
     throw new ComputerDriverError(
       res.stderr.trim() || res.stdout.trim() || `cua-driver installer exited ${res.exitCode}`,
     );
@@ -2630,14 +2934,14 @@ export async function installComputerDriver(
  * 从 `cua-driver --version` 的原始输出中提取 x.y.z 语义化版本号。
  * 输出形态不保证稳定(可能是 "0.5.8" 或 "cua-driver 0.5.8"),取第一个匹配。
  */
-export function extractDriverSemver(raw: string | null): string | null {
+function extractDriverSemver(raw: string | null): string | null {
   if (!raw) return null;
   const match = raw.match(/\d+\.\d+\.\d+/);
   return match ? match[0] : null;
 }
 
 /** 数值逐段比较两个 x.y.z 版本。a<b 返回负数,a>b 返回正数,相等返回 0。 */
-export function compareSemver(a: string, b: string): number {
+function compareSemver(a: string, b: string): number {
   const pa = a.split('.').map(Number);
   const pb = b.split('.').map(Number);
   for (let i = 0; i < 3; i += 1) {
@@ -2645,16 +2949,6 @@ export function compareSemver(a: string, b: string): number {
     if (diff !== 0) return diff;
   }
   return 0;
-}
-
-export interface CuaDriverReleaseAsset {
-  name: string;
-  size: number;
-}
-
-interface CuaDriverReleaseInfo {
-  version: string;
-  assets: CuaDriverReleaseAsset[];
 }
 
 /** 只接受完整稳定版 tag,避免把 prerelease 后缀截断后误认成正式版本。 */
@@ -2670,7 +2964,7 @@ function extractCuaDriverTagVersion(tagName: string): string | null {
  * agent-v* / cli-v* 等其它组件,只认 cua-driver-rs-v 前缀;按 semver 取
  * 最大而不是取第一条,避免依赖发布顺序。
  */
-export function pickLatestCuaDriverRelease(
+function pickLatestCuaDriverRelease(
   releases: Array<{ tag_name?: unknown; assets?: unknown }>,
 ): CuaDriverReleaseInfo | null {
   let latest: CuaDriverReleaseInfo | null = null;
@@ -2692,7 +2986,7 @@ export function pickLatestCuaDriverRelease(
 }
 
 /** 兼容旧签名:仅按 tag 列表挑最新版本号(单测与调用方沿用)。 */
-export function pickLatestCuaDriverVersion(tagNames: string[]): string | null {
+function pickLatestCuaDriverVersion(tagNames: string[]): string | null {
   return pickLatestCuaDriverRelease(tagNames.map((tag) => ({ tag_name: tag })))?.version ?? null;
 }
 
@@ -2709,7 +3003,7 @@ function normalizeCuaDriverMachineArch(machineArch: string): 'x64' | 'arm64' | n
  * Node 可能返回 `unknown`(nodejs#62232) 时回退 `PROCESSOR_ARCHITECTURE`,
  * 再回退 `process.arch`。
  */
-export function resolveCuaDriverHostArch(
+function resolveCuaDriverHostArch(
   platform: NodeJS.Platform = process.platform,
   machineArch: string = os.machine(),
   options?: { processArch?: string; env?: NodeJS.ProcessEnv },
@@ -2732,7 +3026,7 @@ export function resolveCuaDriverHostArch(
  * 返回官方安装脚本在指定平台会下载的 release asset 文件名。优先原生机器架构,
  * 避免 Windows ARM64 上 x64 仿真进程用错包;machine 未知时再按宿主探测回退。
  */
-export function getCuaDriverReleaseAssetName(
+function getCuaDriverReleaseAssetName(
   version: string,
   platform: NodeJS.Platform = process.platform,
   machineArch: string = os.machine(),
@@ -2751,6 +3045,35 @@ export function getCuaDriverReleaseAssetName(
     if (arch === 'arm64') return `${prefix}-windows-arm64.zip`;
   }
   return null;
+}
+
+/**
+ * GitHub 未鉴权 REST 限额(60/h,按出口 IP 共享)打满时的 403/429。
+ * 单独建模:它不代表检查本身有问题,而是「等配额重置再试就能成功」,
+ * 需要和真正的网络/上游故障区分开。
+ */
+class GitHubRateLimitError extends Error {
+  constructor(readonly status: number, readonly resetAt: number | null) {
+    super(`GitHub API rate limit reached (${status})`);
+    this.name = 'GitHubRateLimitError';
+  }
+}
+
+/**
+ * 403 也可能是仓库不可访问;只有配额确认见底(x-ratelimit-remaining: 0)
+ * 或显式 429 才按限流处理,避免把别的问题报成「稍后重试」。
+ */
+function toGitHubRateLimitError(res: {
+  ok: boolean;
+  status: number;
+  headers?: { get(name: string): string | null } | null;
+}): GitHubRateLimitError | null {
+  if (res.ok) return null;
+  const remaining = res.headers?.get('x-ratelimit-remaining') ?? null;
+  if (res.status !== 429 && !(res.status === 403 && remaining === '0')) return null;
+  const resetSeconds = Number(res.headers?.get('x-ratelimit-reset'));
+  const resetAt = Number.isFinite(resetSeconds) && resetSeconds > 0 ? resetSeconds * 1000 : null;
+  return new GitHubRateLimitError(res.status, resetAt);
 }
 
 /** 携带 HTTP status,供多候选探测区分可继续的上游 5xx 与应立即停止的错误。 */
@@ -2790,6 +3113,8 @@ async function fetchInstallableCuaDriverRelease(
     return null;
   }
   if (!res.ok) {
+    const rateLimited = toGitHubRateLimitError(res);
+    if (rateLimited) throw rateLimited;
     throw new CuaDriverReleaseHttpError(res.status, version);
   }
 
@@ -2834,11 +3159,11 @@ let driverUpdateCheckInFlight: Promise<Omit<ComputerDriverUpdateCheck, 'updating
 let driverUpdateInstallInFlight: Promise<ComputerDriverInstallResult> | null = null;
 // 最新 release 的 asset 列表(name + size),供更新进度采样换算总字节数。
 let cachedDriverReleaseAssets: CuaDriverReleaseAsset[] = [];
-// 上次检查(成功或失败)完成时刻,SWR 后台刷新节流用。
+// 上次检查(成功或失败)完成时刻,自动检查节流用。
 let driverUpdateCheckLastFetchAt = 0;
 
 /** 测试隔离用:清空更新检查缓存与 in-flight 状态。 */
-export function resetComputerDriverUpdateStateForTests(): void {
+function resetComputerDriverUpdateStateForTests(): void {
   cachedDriverUpdateCheck = null;
   driverUpdateCheckInFlight = null;
   driverUpdateInstallInFlight = null;
@@ -2874,6 +3199,8 @@ async function fetchDriverUpdateCheck(
         { headers, signal: AbortSignal.timeout(UPDATE_CHECK_TIMEOUT_MS) },
       );
       if (!res.ok) {
+        const rateLimited = toGitHubRateLimitError(res);
+        if (rateLimited) throw rateLimited;
         throw new Error(`GitHub matching-refs API responded ${res.status}`);
       }
       const batch = (await res.json()) as Array<{ ref?: unknown }>;
@@ -2942,10 +3269,28 @@ async function fetchDriverUpdateCheck(
     cachedDriverReleaseAssets = [];
     return { currentVersion, latestVersion: currentVersion, updateAvailable: false };
   } catch (err) {
-    logger.debug('cua-driver update check failed (silently ignored)', {
+    if (err instanceof GitHubRateLimitError) {
+      // 限流不是用户侧故障,但它是「现在查不到」的主因;warn 级别让日志能自证。
+      logger.warn('cua-driver update check rate limited by GitHub', {
+        status: err.status,
+        resetAt: err.resetAt === null ? null : new Date(err.resetAt).toISOString(),
+      });
+      return {
+        currentVersion,
+        latestVersion: null,
+        updateAvailable: false,
+        checkError: { kind: 'rate_limited' },
+      };
+    }
+    logger.debug('cua-driver update check failed', {
       message: err instanceof Error ? err.message : String(err),
     });
-    return { currentVersion, latestVersion: null, updateAvailable: false };
+    return {
+      currentVersion,
+      latestVersion: null,
+      updateAvailable: false,
+      checkError: { kind: 'network' },
+    };
   }
 }
 
@@ -2959,7 +3304,27 @@ function commitDriverUpdateCheck(
 ): void {
   if (result.latestVersion !== null || result.currentVersion === null || !cachedDriverUpdateCheck) {
     cachedDriverUpdateCheck = result;
+  } else {
+    cachedDriverUpdateCheck = {
+      ...cachedDriverUpdateCheck,
+      currentVersion: result.currentVersion,
+      updateAvailable: cachedDriverUpdateCheck.updateAvailable && cachedDriverUpdateCheck.latestVersion !== null
+        && compareSemver(result.currentVersion, cachedDriverUpdateCheck.latestVersion) < 0,
+      checkStatus: result.checkStatus,
+      checkError: result.checkError,
+      checkedAt: result.checkedAt,
+    };
   }
+}
+
+function completedDriverUpdateCheck(
+  result: Omit<ComputerDriverUpdateCheck, 'updating'>,
+): Omit<ComputerDriverUpdateCheck, 'updating'> {
+  return {
+    ...result,
+    checkStatus: result.currentVersion && result.latestVersion ? 'success' : 'error',
+    checkedAt: Date.now(),
+  };
 }
 
 function startDriverUpdateCheck(fetchImpl: typeof fetch): Promise<Omit<ComputerDriverUpdateCheck, 'updating'>> {
@@ -2967,41 +3332,47 @@ function startDriverUpdateCheck(fetchImpl: typeof fetch): Promise<Omit<ComputerD
     const knownVerifiedTarget = cachedDriverUpdateCheck?.updateAvailable
       ? cachedDriverUpdateCheck.latestVersion
       : null;
-    driverUpdateCheckInFlight = fetchDriverUpdateCheck(fetchImpl, new Set(), knownVerifiedTarget)
+    const pending: Promise<Omit<ComputerDriverUpdateCheck, 'updating'>> = fetchDriverUpdateCheck(fetchImpl, new Set(), knownVerifiedTarget)
       .then((result) => {
-        commitDriverUpdateCheck(result);
-        return result;
+        const completed = completedDriverUpdateCheck(result);
+        // An installation can invalidate a check that started against the old binary.
+        if (driverUpdateCheckInFlight === pending) {
+          commitDriverUpdateCheck(completed);
+          return cachedDriverUpdateCheck!;
+        }
+        // Existing callers must also receive the post-install state, not only
+        // callers of a later check. Reuse the current check/cache when available.
+        return driverUpdateCheckInFlight ?? cachedDriverUpdateCheck ?? startDriverUpdateCheck(fetchImpl);
       })
       .finally(() => {
-        driverUpdateCheckInFlight = null;
-        driverUpdateCheckLastFetchAt = Date.now();
+        if (driverUpdateCheckInFlight === pending) {
+          driverUpdateCheckInFlight = null;
+          driverUpdateCheckLastFetchAt = Date.now();
+        }
       });
+    driverUpdateCheckInFlight = pending;
   }
   return driverUpdateCheckInFlight;
 }
 
 /**
- * 检查 cua-driver 是否有新版本。刻意保持"安静"语义:仅在用户打开设置页
- * 时由 renderer 触发,不做启动检查、不做后台轮询;任何失败都返回
- * updateAvailable=false 而不是抛错(查询型,失败时 renderer 静默隐藏入口)。
- *
- * 缓存语义(stale-while-revalidate):有缓存时立即返回缓存——用户第二次
- * 打开面板不必等网络往返;同时后台静默刷新,结果供下次读取。更新安装
- * 进行中不发起刷新(装完缓存会被清)。fetchImpl 可注入用于测试。
+ * 打开设置时自动检查，十分钟内复用结果；手动检查绕过节流。
+ * 到期后等待共享的检查 Promise，让当前页面收到新结果，无需轮询或重开。
+ * 安装期间只返回已有状态，避免对正在替换的二进制发起检查。
  */
-export async function checkComputerDriverUpdate(
+async function checkComputerDriverUpdate(
   // 默认吃系统代理:api.github.com / raw.githubusercontent.com 都是境外端点。
   fetchImpl: typeof fetch = outboundFetch,
+  options?: { force?: boolean },
 ): Promise<ComputerDriverUpdateCheck> {
   const updating = driverUpdateInstallInFlight !== null;
   if (cachedDriverUpdateCheck) {
-    // 后台刷新节流:面板频繁开合时不重复打 GitHub API(未鉴权限额有限)。
+    // 自动检查节流:面板频繁开合时不重复打 GitHub API(未鉴权限额有限)。
     const refreshDue =
       Date.now() - driverUpdateCheckLastFetchAt >= UPDATE_CHECK_REFRESH_MIN_INTERVAL_MS;
-    if (!updating && refreshDue) {
-      void startDriverUpdateCheck(fetchImpl);
+    if (updating || (!options?.force && !refreshDue && !driverUpdateCheckInFlight)) {
+      return { ...cachedDriverUpdateCheck, updating };
     }
-    return { ...cachedDriverUpdateCheck, updating };
   }
   const result = await startDriverUpdateCheck(fetchImpl);
   return { ...result, updating: driverUpdateInstallInFlight !== null };
@@ -3027,7 +3398,7 @@ async function revalidateComputerDriverUpdateTarget(fetchImpl: typeof fetch): Pr
 
     const refreshed = await fetchDriverUpdateCheck(fetchImpl, new Set([cachedTarget]));
     // 已确认 cachedTarget 不可安装,即使 fallback 刷新失败也不能保留旧入口。
-    cachedDriverUpdateCheck = refreshed;
+    cachedDriverUpdateCheck = completedDriverUpdateCheck(refreshed);
     if (!refreshed.updateAvailable) cachedDriverReleaseAssets = [];
     return refreshed.updateAvailable ? refreshed.latestVersion : null;
   } finally {
@@ -3036,21 +3407,8 @@ async function revalidateComputerDriverUpdateTarget(fetchImpl: typeof fetch): Pr
   }
 }
 
-// ── 更新下载进度采样 ──────────────────────────────────────────────────────
-// 上游安装脚本用静默 curl 下载(无输出、落在随机 mktemp 目录),字节级进度
-// 只能从外部观测:在安装进程组里找 curl 的命令行,取 `-o <file>` 目标文件
-// stat 其大小 = 已下载字节;总字节用文件名匹配 release asset 的 size。
-// Windows 无进程组/ps,不采样(renderer 退化为不定态文案)。
-
-export interface ComputerDriverUpdateProgress {
-  /** downloading = 正在下载 tarball;installing = 下载完成后的解压/落盘阶段;done = 本次更新结束(成功或失败)。 */
-  phase: 'downloading' | 'installing' | 'done';
-  downloadedBytes: number | null;
-  totalBytes: number | null;
-}
-
 /** 从 curl 命令行里提取 `-o` 的输出文件路径(支持 -o <path> 与 -o<path>)。 */
-export function extractCurlOutputPath(command: string): string | null {
+function extractCurlOutputPath(command: string): string | null {
   const spaced = command.match(/(?:^|\s)-o\s+("[^"]+"|\S+)/);
   const joined = command.match(/(?:^|\s)-o("[^"]+"|[^\s"]\S*)/);
   const raw = spaced?.[1] ?? joined?.[1] ?? null;
@@ -3059,7 +3417,7 @@ export function extractCurlOutputPath(command: string): string | null {
 }
 
 /** 用下载目标文件名匹配 release asset,拿总字节数;匹配不到返回 null。 */
-export function matchAssetSizeByFilename(
+function matchAssetSizeByFilename(
   assets: CuaDriverReleaseAsset[],
   filePath: string,
 ): number | null {
@@ -3135,7 +3493,7 @@ function startInstallProgressSampler(
  * 执行 cua-driver 更新(复用官方安装脚本,装最新版覆盖旧版)。
  * in-flight 复用:更新过程托管在 main,设置面板关闭它照常跑完;面板重开
  * 后再调用本函数会 join 同一个安装 Promise,不会重复起安装进程。
- * 成功后清掉更新检查缓存(本地版本已变,旧结果作废)。
+ * 安装尝试结束后清掉更新检查缓存(报错时也可能已经替换了本地版本)。
  * onProgress 只在发起安装的那次调用被采纳(进度经 IPC 广播给所有窗口,
  * join 的调用方天然共享),结束时保证发一条 phase='done'。
  * opts.joinOnly:仅 join 既有安装,绝不起新安装——renderer 的 resume 路径
@@ -3143,7 +3501,7 @@ function startInstallProgressSampler(
  * 到 updateDriver IPC 到达之间原安装恰好完成时,无 in-flight 会误起一次
  * 全新的未 pin 安装(review P2);join-only 命空时直接返回当前状态。
  */
-export async function updateComputerDriver(
+async function updateComputerDriver(
   onProgress?: (progress: ComputerDriverUpdateProgress) => void,
   opts?: { joinOnly?: boolean; fetchImpl?: typeof fetch },
 ): Promise<ComputerDriverInstallResult> {
@@ -3159,18 +3517,24 @@ export async function updateComputerDriver(
       if (!targetVersion) {
         throw new ComputerDriverError('no verified installable cua-driver update is available');
       }
-      const result = await installComputerDriver((pid) => {
-        if (onProgress) stopSampler = startInstallProgressSampler(pid, onProgress);
-      }, targetVersion);
-      const installedVersion = extractDriverSemver(result.status.version);
-      if (!installedVersion || compareSemver(installedVersion, targetVersion) < 0) {
-        throw new ComputerDriverError(
-          `cua-driver update did not reach v${targetVersion} (installed: ${result.status.version ?? 'unknown'})`,
-        );
+      try {
+        const result = await installComputerDriver((pid) => {
+          if (onProgress) stopSampler = startInstallProgressSampler(pid, onProgress);
+        }, targetVersion);
+        const installedVersion = extractDriverSemver(result.status.version);
+        if (!installedVersion || compareSemver(installedVersion, targetVersion) < 0) {
+          throw new ComputerDriverError(
+            `cua-driver update did not reach v${targetVersion} (installed: ${result.status.version ?? 'unknown'})`,
+          );
+        }
+        return result;
+      } finally {
+        // Failed installers can still replace the binary. The next check must
+        // read it again, including when the settings panel was closed meanwhile.
+        cachedDriverUpdateCheck = null;
+        cachedDriverReleaseAssets = [];
+        driverUpdateCheckInFlight = null;
       }
-      cachedDriverUpdateCheck = null;
-      cachedDriverReleaseAssets = [];
-      return result;
     })().finally(() => {
       driverUpdateInstallInFlight = null;
       stopSampler();
@@ -3195,7 +3559,7 @@ let cachedDriverAppIconDataUrl: string | null | undefined;
  * 进程内原生调用)。子进程方案再怎么失败也只是取不到图标,绝不可能带崩应用。
  * 非 macOS / 未装 app bundle / 任一步失败一律返回 null,调用方降级为通用图标。
  */
-export async function getComputerDriverAppIcon(): Promise<string | null> {
+async function getComputerDriverAppIcon(): Promise<string | null> {
   if (process.platform !== 'darwin') return null;
   if (cachedDriverAppIconDataUrl !== undefined) return cachedDriverAppIconDataUrl;
   cachedDriverAppIconDataUrl = null;
@@ -3242,7 +3606,7 @@ export async function getComputerDriverAppIcon(): Promise<string | null> {
 }
 
 /** 测试隔离用:清空图标缓存。 */
-export function resetComputerDriverAppIconCacheForTests(): void {
+function resetComputerDriverAppIconCacheForTests(): void {
   cachedDriverAppIconDataUrl = undefined;
 }
 
@@ -3251,11 +3615,11 @@ export function resetComputerDriverAppIconCacheForTests(): void {
  * 让原生授权流程真正停下——否则它会继续等待/驱动系统弹窗直至 210s 超时,
  * 且 15s 复用窗口内下一次点击会复用这个已被放弃的流程(review P2)。幂等。
  */
-export function cancelComputerDriverPermissionGrant(): void {
+function cancelComputerDriverPermissionGrant(): void {
   stopPermissionGrantFlow('user cancelled permission guide');
 }
 
-export async function grantComputerDriverPermissions(
+async function grantComputerDriverPermissions(
   knownStatus?: ComputerDriverStatus,
 ): Promise<ComputerDriverPermissionGrantResult> {
   if (process.platform !== 'darwin') {
@@ -3308,27 +3672,328 @@ export async function grantComputerDriverPermissions(
   };
 }
 
-export async function callComputerDriverTool(
+// Human input and other tasks invalidate observed targets after ownership ends.
+// Own sequential primitives retain their observations; overlapping reads do not.
+const inputObservations = new Map<string, {
+  windows: Map<string, number | symbol>;
+  requiresObservation: boolean;
+  desktopCapture?: { id: string; startedAt: number };
+}>();
+
+/**
+ * Foreground delivery shares the keyboard and mouse with whoever is at this
+ * Mac. The 2026-10 audit found eight sessions where the Agent's foreground
+ * input landed while the person was typing in Slack / Chrome / another Cindy;
+ * the model only noticed from a later screenshot. Before a foreground action,
+ * treat any system input newer than the Agent's own last dispatch as a person
+ * and refuse with a structured code instead of competing for focus.
+ *
+ * `powerMonitor.getSystemIdleTime()` is whole seconds since the last HID
+ * event, including events the Agent itself posted, so the Agent's dispatch
+ * time is subtracted: input is attributed to a person only when it is newer
+ * than that by more than the clock granularity.
+ */
+const USER_INPUT_ACTIVE_WINDOW_MS = 3_000;
+/**
+ * The tail after an Agent HID action returns in which the driver may still be
+ * delivering its own events (2026-10-31 smoke run: a background click that had
+ * returned 2.2 s earlier left the idle clock at 1 s). Input inside this tail is
+ * indistinguishable from the Agent's and is attributed to it; the cost is that a
+ * person's input within this long of an Agent action is not seen by one check.
+ * It is kept at the smallest value the smoke run needs.
+ */
+const AGENT_INPUT_ATTRIBUTION_SLACK_MS = 1_500;
+let lastAgentInputEndedAt = 0;
+let agentInputsInFlight = 0;
+let screenLockedByEvent: boolean | undefined;
+let powerMonitorHooked = false;
+
+/**
+ * Tools that synthesize keyboard / pointer events and therefore move the system
+ * idle clock. `set_value` (AX write), `launch_app`, recording and the like do not,
+ * so they must not take the credit for a person's input that follows them.
+ */
+const HID_SYNTHESIZING_TOOLS: ReadonlySet<string> = new Set([
+  'click', 'double_click', 'right_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll',
+]);
+
+function isRefusedDriverResult(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false;
+  const candidate = result as { effect?: unknown; ok?: unknown };
+  return candidate.effect === 'refused' || candidate.ok === false;
+}
+
+/**
+ * Called around every non-read driver dispatch. Only an input that may really
+ * have produced HID events is attributed to the Agent: the tool must synthesize
+ * events, and the call must have returned or failed with an unknown outcome
+ * (partial typing). A refusal (background_unavailable, USER_INPUT_ACTIVE, stale
+ * snapshot) sent nothing and leaves the person's activity record untouched.
+ */
+async function trackAgentInputDispatch<T>(name: string, run: () => Promise<T>): Promise<T> {
+  if (!HID_SYNTHESIZING_TOOLS.has(name)) return run();
+  agentInputsInFlight += 1;
+  let attributable = false;
+  try {
+    const result = await run();
+    // A driver refusal comes back as a normal result (`effect: "refused"`, e.g.
+    // background_unavailable) and sent nothing, so it must not take the credit either.
+    attributable = !isRefusedDriverResult(result);
+    return result;
+  } catch (err) {
+    attributable = (err as { outcomeUnknown?: unknown } | null)?.outcomeUnknown === true;
+    throw err;
+  } finally {
+    agentInputsInFlight -= 1;
+    if (attributable) lastAgentInputEndedAt = Date.now();
+  }
+}
+
+function resetDesktopInputGuardStateForTests(): void {
+  lastAgentInputEndedAt = 0;
+  agentInputsInFlight = 0;
+  screenLockedByEvent = undefined;
+}
+
+const onScreenLocked = () => { screenLockedByEvent = true; };
+const onScreenUnlocked = () => { screenLockedByEvent = false; };
+function hookPowerMonitor(): void {
+  if (powerMonitorHooked) return;
+  powerMonitorHooked = true;
+  try {
+    powerMonitor.on('lock-screen', onScreenLocked);
+    powerMonitor.on('unlock-screen', onScreenUnlocked);
+  } catch {
+    // powerMonitor is unavailable before app ready in some test harnesses; the
+    // idle-state probe below still answers.
+  }
+}
+
+/**
+ * Lock state read from the console session at startup, before any lock/unlock event:
+ * Electron's idle-state probe never reports 'locked' on macOS, so a Cindy started on a
+ * locked screen would otherwise believe it is unlocked. A later event always wins.
+ */
+function seedDesktopScreenLocked(locked: boolean): void {
+  hookPowerMonitor();
+  if (screenLockedByEvent === undefined) screenLockedByEvent = locked;
+}
+
+/** True when the screen is locked, from events (or the startup seed), else the idle-state probe. */
+function isDesktopScreenLocked(): boolean {
+  hookPowerMonitor();
+  if (screenLockedByEvent !== undefined) return screenLockedByEvent;
+  try {
+    return powerMonitor.getSystemIdleState(1) === 'locked';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Milliseconds since the last system HID input not explained by the Agent's own dispatch, or null when unknown.
+ * Also tells the away guard whether its owner is still at this Mac.
+ */
+function msSinceForeignDesktopInput(now = Date.now()): number | null {
+  let idleSeconds: number;
+  try {
+    idleSeconds = powerMonitor.getSystemIdleTime();
+  } catch {
+    return null;
+  }
+  if (!Number.isFinite(idleSeconds) || idleSeconds < 0) return null;
+  // Another Agent input is still being delivered: its events are ours.
+  if (agentInputsInFlight > 0) return Number.POSITIVE_INFINITY;
+  // The idle clock is floored to whole seconds: the last input happened at or before
+  // this instant, and at most a second earlier. Only when even the latest possible
+  // moment lies within the Agent's delivery tail is the whole range the Agent's.
+  const latestInputAt = now - idleSeconds * 1000;
+  if (latestInputAt <= lastAgentInputEndedAt + AGENT_INPUT_ATTRIBUTION_SLACK_MS) return Number.POSITIVE_INFINITY;
+  return idleSeconds * 1000;
+}
+
+let physicalInputShielded: () => boolean = () => false;
+/**
+ * The away cover swallows all physical input and locks on a deliberate press, so
+ * device noise under it (a drifting mouse) is not a person using this computer.
+ */
+function setPhysicalInputShielded(isShielded: () => boolean): void {
+  physicalInputShielded = isShielded;
+}
+
+/** Refuse foreground delivery while a person is using this computer. */
+function assertNoRecentUserInput(name: ComputerMcpToolName, args: Record<string, unknown>): void {
+  if (getComputerTool(name)?.readOnly === true || (args.delivery_mode !== 'foreground' && !isDesktopComputerTarget(args))) return;
+  ports.assertAvailable?.();
+  if (physicalInputShielded()) return;
+  const since = msSinceForeignDesktopInput();
+  if (since === null || since >= USER_INPUT_ACTIVE_WINDOW_MS) return;
+  throw new ComputerDriverError(
+    `Someone is using this computer (keyboard or mouse input ${Math.max(0, Math.round(since / 100) / 10)}s ago). Foreground input was not sent so it cannot land in their window. Continue in the background: background delivery, window-local coordinates, double_click, a menu bar item, set_value, or files and command-line tools for the same change. Wait or ask them before taking the foreground only when none of these can do it.`,
+    'USER_INPUT_ACTIVE',
+  );
+}
+
+/** A quiet user is not proof that an earlier desktop picture is still current. */
+function hasNoInputSinceDesktopCapture(startedAt: number): boolean {
+  try {
+    const idleSeconds = powerMonitor.getSystemIdleTime();
+    const now = Date.now();
+    // Unlike the busy guard, do not attribute HID events to our previous action:
+    // even its late events can invalidate a picture taken in the meantime.
+    // Subtracting floored idle seconds gives the latest possible input instant.
+    // When it overlaps capture, require another observation, not a grace period.
+    return Number.isFinite(idleSeconds) && idleSeconds >= 0 && now >= startedAt
+      && now - idleSeconds * 1000 < startedAt;
+  } catch {
+    return false;
+  }
+}
+
+async function callComputerDriverTool(
   name: ComputerMcpToolName,
   args: Record<string, unknown>,
   context?: ComputerMcpCallContext,
 ): Promise<unknown> {
+  const targetError = computerPointerTargetError(name, args);
+  if (targetError) throw new ComputerDriverError(targetError, 'INVALID_ARGS');
+  if (getComputerTool(name)?.readOnly !== true) ports.assertInputAvailable?.();
+  const sessionId = readSessionIdFromContext(context);
+  const revision = desktopInputRevision();
+  let observations = sessionId ? inputObservations.get(sessionId) : undefined;
+  if (sessionId && !observations) {
+    observations = { windows: new Map(), requiresObservation: agentDesktopInputRevision() > 0 };
+    inputObservations.set(sessionId, observations);
+  }
+  const desktop = name === 'get_desktop_state' || isDesktopComputerTarget(args);
+  const window = desktop ? 'desktop:primary' : `${args.pid}:${args.window_id}`;
+  if (getComputerTool(name)?.readOnly === true) {
+    const observationStartedAt = Date.now();
+    const agentRevision = agentDesktopInputRevision();
+    const startedIdle = !isHumanDesktopInputActive() && !isAgentDesktopInputActive();
+    const explicitObservation = (name === 'get_window_state' || name === 'get_desktop_state') && context?.observationPurpose !== 'recovery';
+    const observation = Symbol('pending observation');
+    const app = `${args.pid}:undefined`;
+    if (explicitObservation) {
+      if (observations) observations.requiresObservation = true;
+      if (desktop && observations) observations.desktopCapture = undefined;
+      // Revoke old permission and prevent an older concurrent read from
+      // restoring it after this read fails or is cancelled.
+      observations?.windows.set(window, observation);
+      if (!desktop) observations?.windows.set(app, observation);
+    }
+    const result = name === 'get_desktop_state'
+      ? await readDesktopState(args, context)
+      : await callComputerDriverToolImpl(name, args, context);
+    if (explicitObservation && startedIdle && !context?.signal?.aborted
+      && !(desktop ? isUnavailableDesktopObservation(result) : isUnavailableWindowObservation(result, args)) && computerResultOutcome(name, result).ok
+      && revision === desktopInputRevision() && !isHumanDesktopInputActive()
+      && agentRevision === agentDesktopInputRevision() && !isAgentDesktopInputActive()) {
+      if (observations?.windows.get(window) === observation) {
+        observations.windows.set(window, revision);
+        if (desktop) observations.desktopCapture = {
+          id: (result as { capture_id: string }).capture_id,
+          startedAt: observationStartedAt,
+        };
+      }
+      // App-scoped actions may omit window_id; a successful observation of
+      // that app also refreshes its focus, without refreshing other windows.
+      if (!desktop && observations?.windows.get(app) === observation) observations.windows.set(app, revision);
+    }
+    return result;
+  }
+  // Preparation can be slow and does not inject input. Reserve ownership only
+  // around the logical input, and recheck this observation after queue admission.
+  const assertCurrent = () => {
+    if (desktopInputRevision() !== revision) {
+      throw new ComputerDriverError('Remote desktop input arrived. Agent yielded before further input; previous input may have completed. Get fresh window state before continuing.', 'DESKTOP_INPUT_YIELDED');
+    }
+    assertNoRecentUserInput(name, args);
+    if (isHumanDesktopInputActive()) {
+      throw new ComputerDriverError('Remote desktop input is active. Yield briefly, then get fresh window state before retrying; the remote connection can stay open.', 'DESKTOP_INPUT_BUSY');
+    }
+    if ((desktop || args.pid !== undefined) && observations && (desktop || revision > 0 || observations.requiresObservation)
+      && observations.windows.get(window) !== revision) {
+      throw new ComputerDriverError(desktop
+        ? 'Desktop input or a newer observation invalidated this target. Call get_desktop_state before acting again.'
+        : 'Desktop input or a newer observation invalidated this target. Get fresh state for this window before acting again.', 'STALE_SNAPSHOT');
+    }
+    if (desktop) {
+      const capture = observations?.desktopCapture;
+      if (!observations || !capture || args.capture_id !== capture.id) {
+        throw new ComputerDriverError('Desktop capture is stale or already used. Call get_desktop_state again before pointer input.', 'STALE_SNAPSHOT');
+      }
+      if (!hasNoInputSinceDesktopCapture(capture.startedAt)) {
+        observations.desktopCapture = undefined;
+        throw new ComputerDriverError('System input may have occurred since this desktop capture. Call get_desktop_state again after input settles; no pointer input was sent.', 'STALE_SNAPSHOT');
+      }
+    }
+  };
+  assertCurrent();
+  return callComputerDriverToolImpl(name, args, context, assertCurrent);
+}
+
+async function callComputerDriverToolImpl(
+  name: ComputerMcpToolName,
+  args: Record<string, unknown>,
+  context?: ComputerMcpCallContext,
+  assertInputCurrent: () => void = () => {},
+): Promise<unknown> {
+  const signal = context?.signal;
+  signal?.throwIfAborted();
   assertComputerDriverToolDispatchAvailable();
   const sessionId = readSessionIdFromContext(context);
   if (!sessionId) {
     throw new ComputerDriverError(`Computer Use tool calls require an active ${BRAND_NAME} session.`);
   }
   const sessionCloseVersion = getCuaMcpSessionCloseVersion(sessionId);
+  const assertActive = () => {
+    if (getComputerTool(name)?.readOnly !== true) ports.assertInputAvailable?.();
+    assertInputCurrent();
+    signal?.throwIfAborted();
+    assertComputerDriverToolDispatchAvailable();
+    if (getCuaMcpSessionCloseVersion(sessionId) !== sessionCloseVersion) {
+      throw new ComputerDriverError('Computer Use session closed; no further action was dispatched.', 'REQUEST_CANCELLED');
+    }
+  };
   const rawArgs = args ?? {};
-  const driverInputArgs = stripLocalListWindowsArgs(name, rawArgs);
+  const { session_goal: sessionGoal, ...operationArgs } = rawArgs;
+  // Claim synchronously before shared startup, so concurrent first calls cannot
+  // rename an in-flight cursor. Even callers without a goal lock their old name.
+  if (!cuaDriverSessionNames.has(sessionId)) {
+    const goal = typeof sessionGoal === 'string'
+      ? Array.from(sessionGoal.replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/gu, ' ').trim()).slice(0, 40).join('')
+      : '';
+    cuaDriverSessionNames.set(sessionId, goal ? `${goal} · ${++cuaDriverNamedRunSequence}` : sessionId);
+  }
+  const driverInputArgs = stripLocalListWindowsArgs(name, operationArgs);
   const normalizedArgs = normalizeToolArgsForDriver(name, driverInputArgs);
-  const entry = await getCuaMcpSession(sessionId);
-  assertComputerDriverToolDispatchAvailable();
-  const driverArgs = applyDriverSessionArgs(name, normalizedArgs, entry.driverSessionId);
-  await initializeDefaultCursorStyle(name, driverArgs, entry, entry.driverSessionId);
+  const entry = await getCuaMcpSession(sessionId, signal);
+  const driverArgs = applyDriverSessionArgs(name, normalizedArgs, entry.driverSessionId, entry.toolSchemas);
   const timeoutMs = getCuaMcpToolTimeoutMs(name);
+  let inputDispatched = false;
   try {
-    const result = await callCuaMcpToolWithTypeTextChunks(entry, name, driverArgs, timeoutMs);
+    await initializeDefaultCursorStyle(name, driverArgs, entry, entry.driverSessionId, sessionCloseVersion, signal, assertActive);
+    const invoke = () => callCuaMcpToolWithTypeTextChunks(entry, name, driverArgs, timeoutMs, signal, assertActive,
+      () => cleanupCuaMcpSessionAfterError(sessionId, entry), () => { inputDispatched = true; });
+    const result = getComputerTool(name)?.readOnly === true ? await invoke()
+      : await withAgentDesktopInput(async () => {
+        for (const [otherSessionId, observation] of inputObservations) {
+          if (otherSessionId === sessionId) continue;
+          observation.requiresObservation = true;
+          observation.windows.clear();
+        }
+        // Only HID-synthesizing input moves the system idle clock; neither a read nor
+        // an AX write may mask a person's input.
+        try {
+          return await trackAgentInputDispatch(name, invoke);
+        } finally {
+          // CUA 0.47.6 can retain earlier captures. Any input (including own
+          // window input) may change the desktop; require a new picture next.
+          const observation = inputObservations.get(sessionId);
+          if (observation) observation.desktopCapture = undefined;
+        }
+      }, { signal, assertCurrent: assertActive });
     return name === 'list_windows' ? enrichAndFilterListWindowsResult(result, rawArgs) : result;
   } catch (err) {
     logger.warn('cua-driver MCP tool call failed', {
@@ -3337,8 +4002,21 @@ export async function callComputerDriverTool(
       driverSessionId: entry.driverSessionId,
       error: err instanceof Error ? err.message : String(err),
     });
+    if (signal?.aborted) {
+      if (inputDispatched) await cleanupCuaMcpSessionAfterError(sessionId, entry).catch(() => undefined);
+      throw Object.assign(new ComputerDriverError(
+        inputDispatched ? 'Computer Use cancelled. An action already dispatched may have taken effect; observe before acting again.'
+          : 'Computer Use cancelled before dispatch; no input was sent.',
+        'REQUEST_CANCELLED', inputDispatched && getComputerTool(name)?.readOnly !== true),
+      { inputProgress: (err as { inputProgress?: unknown })?.inputProgress });
+    }
     if (shouldCleanupCuaMcpSessionAfterError(err)) {
       const cleanup = cleanupCuaMcpSessionAfterError(sessionId, entry);
+      if (getComputerTool(name)?.readOnly !== true) {
+        await cleanup.catch(() => undefined);
+        throw Object.assign(new ComputerDriverError('Driver connection failed during an action. Its outcome is unknown; the action was not replayed. Take fresh state before continuing.', 'ACTION_OUTCOME_UNKNOWN', true),
+          { inputProgress: (err as { inputProgress?: unknown })?.inputProgress });
+      }
       if (shouldUseCliFallbackAfterError(name, err)) {
         try {
           return await callCuaCliTool(name);
@@ -3353,62 +4031,24 @@ export async function callComputerDriverTool(
       }
       if (shouldRetryWithFreshCuaSession(name, err)) {
         await cleanup.catch(() => undefined);
+        assertActive();
         if (getCuaMcpSessionCloseVersion(sessionId) !== sessionCloseVersion) {
           throw err;
         }
-        const freshEntry = await getCuaMcpSession(sessionId);
-        assertComputerDriverToolDispatchAvailable();
-        if (getCuaMcpSessionCloseVersion(sessionId) !== sessionCloseVersion) {
-          await cleanupComputerDriverSessionInternal(sessionId, {
-            resetGeneration: false,
-            expectedEntry: freshEntry,
-          }).catch(() => undefined);
-          throw err;
-        }
-        const retryArgs = err instanceof ComputerDriverTypeTextRetryError
-          ? {
-              ...normalizedArgs,
-              text: err.remainingText,
-            }
-          : normalizedArgs;
-        const freshArgs = applyDriverSessionArgs(name, retryArgs, freshEntry.driverSessionId);
-        await initializeDefaultCursorStyle(name, freshArgs, freshEntry, freshEntry.driverSessionId);
-        if (getCuaMcpSessionCloseVersion(sessionId) !== sessionCloseVersion) {
-          await cleanupComputerDriverSessionInternal(sessionId, {
-            resetGeneration: false,
-            expectedEntry: freshEntry,
-          }).catch(() => undefined);
-          throw err;
-        }
+        const freshEntry = await getCuaMcpSession(sessionId, signal);
         let retryResult: unknown;
         try {
-          retryResult = await callCuaMcpToolWithTypeTextChunks(freshEntry, name, freshArgs, timeoutMs);
+          assertActive();
+          const freshArgs = applyDriverSessionArgs(name, normalizedArgs, freshEntry.driverSessionId, freshEntry.toolSchemas);
+          await initializeDefaultCursorStyle(name, freshArgs, freshEntry, freshEntry.driverSessionId,
+            sessionCloseVersion, signal, assertActive);
+          retryResult = await callCuaMcpToolWithTypeTextChunks(freshEntry, name, freshArgs, timeoutMs, signal, assertActive);
         } catch (retryErr) {
-          if (shouldCleanupCuaMcpSessionAfterError(retryErr)) {
+          if (signal?.aborted || getCuaMcpSessionCloseVersion(sessionId) !== sessionCloseVersion
+            || shouldCleanupCuaMcpSessionAfterError(retryErr)) {
             await cleanupCuaMcpSessionAfterError(sessionId, freshEntry).catch(() => undefined);
           }
           return tryWindowsWin32Fallback(name, rawArgs, retryErr);
-        }
-        if (err instanceof ComputerDriverTypeTextRetryError) {
-          const retryResultObject = objectValue(retryResult);
-          const retryInserted = typeof retryResultObject?.inserted === 'number'
-            ? retryResultObject.inserted
-            : retryResultObject?.ok === false
-              ? 0
-              : Array.from(err.remainingText).length;
-          const retryChars = typeof retryResultObject?.chars === 'number'
-            ? retryResultObject.chars
-            : retryInserted;
-          return {
-            ...(retryResultObject ?? {}),
-            inserted: err.completedChars + retryInserted,
-            chunks: err.completedChunks + (
-              typeof retryResultObject?.chunks === 'number'
-                ? retryResultObject.chunks
-                : 1
-            ),
-            chars: err.completedChars + retryChars,
-          };
         }
         return name === 'list_windows' ? enrichAndFilterListWindowsResult(retryResult, rawArgs) : retryResult;
       }
@@ -3447,12 +4087,16 @@ async function cleanupComputerDriverSessionEntry(sessionId: string, entry: CuaMc
   }
 }
 
-export function cleanupComputerDriverSession(sessionId: string): Promise<void> {
+function cleanupComputerDriverSession(sessionId: string): Promise<void> {
+  retireDesktopScreenshots(sessionId);
+  inputObservations.delete(sessionId);
+  cuaMcpSessionCursorCapabilities.delete(sessionId);
   markCuaMcpSessionClosed(sessionId);
   const entry = cuaMcpSessions.get(sessionId);
   if (entry) {
     rotateDriverSessionId(sessionId, entry.driverSessionId);
   }
+  cuaDriverSessionNames.delete(sessionId);
   return cleanupComputerDriverSessionInternal(sessionId, { resetGeneration: false });
 }
 
@@ -3480,25 +4124,30 @@ function cleanupComputerDriverSessionInternal(
 }
 
 async function cleanupActiveComputerDriverSessions(): Promise<void> {
-  const sessionIds = Array.from(cuaMcpSessions.keys());
+  const sessionIds = [...new Set([...cuaMcpSessions.keys(), ...desktopScreenshots.keys()])];
   await Promise.allSettled(sessionIds.map((sessionId) => cleanupComputerDriverSession(sessionId)));
   await Promise.allSettled(Array.from(cuaMcpSessionCleanups.values()));
 }
 
-export async function cleanupAllComputerDriverSessions(): Promise<void> {
+async function cleanupAllComputerDriverSessions(): Promise<void> {
+  inputObservations.clear();
   stopPermissionGrantFlow('cleanup');
   clearProcessSnapshotCache();
   await cleanupActiveComputerDriverSessions();
+  cuaMcpSessionCursorCapabilities.clear();
   cuaDriverSessionGenerations.clear();
+  cuaDriverSessionNames.clear();
   cuaMcpSessionCloseVersions.clear();
 }
 
-export function getComputerMcpDeps(options: ComputerMcpDepsOptions = {}): ComputerMcpDeps {
+function getComputerMcpDeps(options: ComputerMcpDepsOptions = {}): ComputerMcpDeps {
   let runtimePreparation: Promise<void> | null = null;
   const ensureRuntime = async (): Promise<void> => {
-    if (!options.prepareRuntimeBeforeUse) return;
-    runtimePreparation ??= Promise.resolve().then(options.prepareRuntimeBeforeUse);
-    await runtimePreparation;
+    if (options.prepareRuntimeBeforeUse) {
+      runtimePreparation ??= Promise.resolve().then(options.prepareRuntimeBeforeUse);
+      await runtimePreparation;
+    }
+    await ports.beforeCall?.();
   };
   return {
     getStatus: async () => {
@@ -3507,11 +4156,24 @@ export function getComputerMcpDeps(options: ComputerMcpDepsOptions = {}): Comput
     },
     callTool: async (name, args, context) => {
       if (options.isComputerUseEnabled && !options.isComputerUseEnabled(context)) {
-        throw new ComputerDriverError('Computer Use is disabled in Settings.');
+        throw new ComputerDriverError(
+          'Computer Use is disabled in Settings. Tell the person this step needs it: Settings → Built-in tools → Computer Use (link: cindy://settings/builtin-tools; macOS also asks for Accessibility and Screen Recording there). Only they can enable it; do not simulate input from the shell.',
+          'COMPUTER_USE_DISABLED',
+        );
       }
       await ensureRuntime();
       return callComputerDriverTool(name, args, context);
     },
+    isSecureTarget: async target => { await ensureRuntime(); return ports.isSecureTarget(target); },
+    describeDesktop: async () => { await ensureRuntime(); return { screen_locked: isDesktopScreenLocked() }; },
     logger,
   };
+}
+async function dispose(): Promise<void> {
+  powerMonitor.removeListener?.('lock-screen', onScreenLocked);
+  powerMonitor.removeListener?.('unlock-screen', onScreenUnlocked);
+  powerMonitorHooked = false;
+  await cleanupAllComputerDriverSessions();
+}
+return { dispose, getComputerDriverAppBundlePath, resetComputerDriverPermissionProbeCacheForTests, isComputerDriverPermissionProbePaused, pauseComputerDriverPermissionProbe, resumeComputerDriverPermissionProbe, isInstallLockHolderAlive, clearStaleCuaInstallLock, sampleInstallProcessTree, runProcessWithActivityTimeout, installIdleTimeoutForPlatform, buildCuaInstallerProxyEnv, listComputerWindowsForAtMention, resetAtMentionWindowCacheForTests, getComputerDriverStatus, installComputerDriver, extractDriverSemver, compareSemver, pickLatestCuaDriverRelease, pickLatestCuaDriverVersion, resolveCuaDriverHostArch, getCuaDriverReleaseAssetName, resetComputerDriverUpdateStateForTests, checkComputerDriverUpdate, extractCurlOutputPath, matchAssetSizeByFilename, updateComputerDriver, getComputerDriverAppIcon, resetComputerDriverAppIconCacheForTests, cancelComputerDriverPermissionGrant, grantComputerDriverPermissions, USER_INPUT_ACTIVE_WINDOW_MS, resetDesktopInputGuardStateForTests, seedDesktopScreenLocked, isDesktopScreenLocked, msSinceForeignDesktopInput, setPhysicalInputShielded, assertNoRecentUserInput, callComputerDriverTool, cleanupComputerDriverSession, cleanupAllComputerDriverSessions, getComputerMcpDeps };
 }

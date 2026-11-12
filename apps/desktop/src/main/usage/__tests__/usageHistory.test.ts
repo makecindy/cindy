@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { usageScope } from '../../menubar/collect';
+import { buildMenubarView } from '../../menubar/snapshot';
+import { buildUsageWidgetSnapshot } from '../../quota-overview/widgetSnapshot';
+import { DEFAULT_MENUBAR_SETTINGS } from '../../../shared/menubarQuota';
+import { MENUBAR_HARNESS_LOGOS } from '../../menubar/logos';
 
 const currentDbClient = vi.hoisted(() => ({
   userId: 'user-a' as string | null,
@@ -16,6 +21,10 @@ vi.mock('../../localDb/dailySpend', () => ({
 }));
 vi.mock('../../localDb/dailyModelUsage', () => ({
   getModelUsageSince: vi.fn(),
+}));
+vi.mock('../../localDb/dailySessionUsage', () => ({
+  getSessionUsageSince: vi.fn(async () => ({ rows: [], tasks: [] })),
+  getUsageTaskMeta: vi.fn(async () => []),
 }));
 vi.mock('../../localDb/client/current', () => ({
   getCurrentDbClientUserId: () => currentDbClient.userId,
@@ -74,16 +83,17 @@ vi.mock('../referenceModelPricing', () => ({
           outputPerMtok: 10,
         }
       : undefined,
-  getSubscriptionDirectValuePrice: (model: string) =>
-    model === 'xai/grok-4.3'
+  getSubscriptionDirectValuePrice: (model: string, agent?: string) =>
+    model === 'xai/grok-4.3' || (model === 'grok-4.6' && agent === 'pi')
       ? {
           providerId: 'xai',
           modelId: model,
           currency: 'USD',
           source: 'subscription-reference',
           approximate: true,
-          inputPerMtok: 3,
-          outputPerMtok: 15,
+          inputPerMtok: model === 'grok-4.6' ? 2 : 3,
+          outputPerMtok: model === 'grok-4.6' ? 6 : 15,
+          cacheReadPerMtok: model === 'grok-4.6' ? 0.5 : undefined,
         }
       : undefined,
 }));
@@ -101,6 +111,7 @@ vi.mock('../../logger', () => ({
   }),
 }));
 
+import { getSessionUsageSince, getUsageTaskMeta } from '../../localDb/dailySessionUsage';
 import {
   __resetUsageHistoryCacheForTesting,
   claudeSubscriptionUsageModelKey,
@@ -109,13 +120,23 @@ import {
   computeAnomaly,
   computeStreaks,
   emptyUsageHistoryPayload,
+  getSubscriptionValuePriceFor,
   piSubscriptionUsageModelKey,
   prevDayKey,
   readUsageHistory,
   readUsageHistoryWith,
   shiftDayKey,
+  combineUsageDeviceRows,
+  usageHistoryDepsForScope,
+  clampPeerRowsToToday,
   type UsageHistoryDeps,
 } from '../usageHistory';
+import {
+  __resetPeerUsageSyncForTesting,
+  configurePeerUsageSync,
+  type PeerUsageSyncDeps,
+} from '../peerUsageSync';
+import { readUsageDeviceRows } from '../usageDeviceRows';
 import { getAllSpendDays } from '../../localDb/dailySpend';
 import { getModelUsageSince } from '../../localDb/dailyModelUsage';
 import { getGatewayModelPricing, isModelPricingRefreshInFlight } from '../modelPricing';
@@ -204,12 +225,24 @@ function makeDeps(overrides: Partial<UsageHistoryDeps> = {}): UsageHistoryDeps {
   };
 }
 
+function usageView(result: Awaited<ReturnType<typeof readUsageHistoryWith>>) {
+  const scope = usageScope(result, [TODAY], []);
+  return buildMenubarView({
+    nowMs: Date.now(), locale: 'zh-CN', moneySymbol: result.totals.today.currency === 'CNY' ? '¥' : '$',
+    settings: DEFAULT_MENUBAR_SETTINGS, sources: [], tasks: [], updatedAtMs: null,
+    harnessLogos: MENUBAR_HARNESS_LOGOS,
+    usage: { days: [TODAY], scopes: { local: scope, all: scope } }, uiStrings: {},
+    t: (key, vars) => key === 'fact.about' ? `约 ${vars?.value}` : key,
+  });
+}
+
 beforeEach(async () => {
   mocks.electronAppGetPath.mockReturnValue(
     await mkdtemp(path.join(os.tmpdir(), 'cindy-usage-history-')),
   );
   currentDbClient.userId = 'user-a';
   __resetUsageHistoryCacheForTesting();
+  __resetPeerUsageSyncForTesting();
   // 账本币种是跨用例的模块级状态,逐例重置,不受前一例显式设定的账号币种影响。
   // 重置后必须再显式落一次账号币种:生产里由 modelPricing(报价目录同步/磁盘快照
   // 恢复)写入,而本文件把它整体 mock 掉了;不落这一笔,回退链会落到与构建区域
@@ -221,6 +254,8 @@ beforeEach(async () => {
   setActiveLedgerCurrency(DEFAULT_USAGE_CURRENCY);
   vi.mocked(getAllSpendDays).mockResolvedValue([]);
   vi.mocked(getModelUsageSince).mockResolvedValue([]);
+  vi.mocked(getSessionUsageSince).mockResolvedValue({ rows: [], tasks: [] });
+  vi.mocked(getUsageTaskMeta).mockResolvedValue([]);
   vi.mocked(getGatewayModelPricing).mockResolvedValue(null);
   vi.mocked(getReferenceModelPricing).mockReturnValue({});
   vi.mocked(isModelPricingRefreshInFlight).mockReturnValue(false);
@@ -297,7 +332,150 @@ describe('billing model keys', () => {
   });
 });
 
+describe('getSubscriptionValuePriceFor', () => {
+  it('routes Pi exclusive Grok ids through the subscription-direct quote', () => {
+    expect(getSubscriptionValuePriceFor('pi', 'grok-4.6', null)).toMatchObject({
+      providerId: 'xai',
+      modelId: 'grok-4.6',
+      inputPerMtok: 2,
+      outputPerMtok: 6,
+      cacheReadPerMtok: 0.5,
+    });
+  });
+
+  it('routes Claude bridge subscription ids through their direct quote', () => {
+    expect(getSubscriptionValuePriceFor('claude-code', 'xai/grok-4.3', null)).toMatchObject({
+      providerId: 'xai',
+      modelId: 'xai/grok-4.3',
+      source: 'subscription-reference',
+    });
+  });
+});
+
 describe('readUsageHistoryWith', () => {
+  // 单测：纯 CNY 的订阅估值、海外 USD 的原有金额与展示不能因迁移修复改变。
+  // 现有用例只校验聚合值，没有经过菜单栏和 iPhone 小组件投影；最小输入是 API 3 + 订阅估值 2 USD。
+  it.each(['CNY', 'USD'] as const)('keeps %s account and subscription presentation unchanged', async (currency) => {
+    setActiveLedgerCurrency(currency);
+    const paid: RegionalMoney = { amount: 3, currency, approximate: false, kind: 'actual-cost' };
+    const zero = { ...paid, amount: 0 };
+    const estimate = currency === 'CNY' ? 13.4 : 2;
+    const foreign: RegionalMoney = { ...paid, amount: 9, currency: 'CNY' };
+    const result = await readUsageHistoryWith(makeDeps({
+      getAllSpendDays: async () => [{ day: TODAY, monies: currency === 'USD' ? [paid, foreign] : [paid] }],
+      getModelUsageSince: async () => [
+        modelRow(TODAY, 'claude-code', 'api-model', paid, { outputTokens: 20 }),
+        modelRow(TODAY, 'codex', codexSubscriptionUsageModelKey('gpt-5.5'), zero, { inputTokens: 1_000_000 }),
+        ...(currency === 'USD' ? [modelRow(TODAY, 'pi', 'foreign-model', foreign, { inputTokens: 30 })] : []),
+      ],
+    }));
+    expect(result.totals.today).toEqual(paid);
+    expect(result.totals.last30DaysEstimatedValue).toMatchObject({ amount: estimate, currency, approximate: true });
+    expect(result.totals.last30DaysWithEstimatedValue.amount).toBeCloseTo(3 + estimate);
+    const scope = usageScope(result, [TODAY], []);
+    expect(scope.daily).toEqual([{ money: [3, estimate, 0], paid: 3, tokens: [20, 1_000_000, currency === 'USD' ? 30 : 0] }]);
+    const view = usageView(result);
+    expect(view.usage.scopes.all.daily).toEqual(scope.daily);
+    expect(view.strings).not.toHaveProperty('moneyAbout');
+    expect(buildUsageWidgetSnapshot(view, Date.now(), () => null)?.usage.daily).toEqual(scope.daily);
+    if (currency === 'USD') {
+      expect(result.modelDaily.find(row => row.model === 'foreign-model')?.money.amount).toBe(0);
+      expect(result.totals.todayTokens).toBe(1_000_050);
+    }
+  });
+
+  it('keeps media fees in actual totals and model detail without inventing chat tokens', async () => {
+    const money = actual(1.25);
+    const result = await readUsageHistoryWith(makeDeps({
+      getAllSpendDays: async () => [{ day: TODAY, monies: [money] }],
+      getModelUsageSince: async () => [{
+        ...modelRow(TODAY, 'pi', 'seedance-2.0', money), agentKind: 'media',
+      }],
+    }));
+    expect(result.totals.today.amount).toBe(1.25);
+    expect(result.totals.last30DaysTokens).toBe(0);
+    expect(result.models).toEqual([expect.objectContaining({
+      agentKind: 'media', model: 'seedance-2.0', money, estimatedMoney: null,
+    })]);
+    expect(result.modelDaily[0]).toMatchObject({ agentKind: 'media', apiMoney: money, tokens: 0 });
+  });
+
+  it('supports an all-time request without changing the default 30-day model window', async () => {
+    const oldRow = modelRow('2026-04-01', 'codex', 'gpt-5.5', actual(0), {
+      inputTokens: 123,
+    });
+    const recentRow = modelRow(TODAY, 'codex', 'gpt-5.5', actual(0), {
+      inputTokens: 456,
+    });
+    let requestedSince = '';
+    const deps = makeDeps({
+      getModelUsageSince: async (sinceDayKey) => {
+        requestedSince = sinceDayKey;
+        return [oldRow, recentRow];
+      },
+    });
+
+    const defaultResult = await readUsageHistoryWith(deps);
+    expect(defaultResult.modelDaily.map((row) => row.day)).toEqual([TODAY]);
+
+    const allResult = await readUsageHistoryWith(deps, { days: 'all', modelDays: 'all' });
+    expect(requestedSince).toBe('0000-01-01');
+    expect(allResult.modelDaily.map((row) => row.day)).toEqual(['2026-04-01', TODAY]);
+    expect(allResult.totals.last30DaysTokens).toBe(579);
+    expect(allResult.modelDaily[0]).toMatchObject({
+      inputTokens: 123,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreateTokens: 0,
+    });
+  });
+
+  it('keeps all-time heatmap token rows when the model window is finite', async () => {
+    const oldRow = modelRow('2026-04-01', 'codex', 'gpt-5.5', actual(0), {
+      inputTokens: 123,
+    });
+    const recentRow = modelRow(TODAY, 'codex', 'gpt-5.5', actual(0), {
+      inputTokens: 456,
+    });
+    let requestedSince = '';
+    const result = await readUsageHistoryWith(
+      makeDeps({
+        getModelUsageSince: async (sinceDayKey) => {
+          requestedSince = sinceDayKey;
+          return [oldRow, recentRow];
+        },
+      }),
+      { days: 'all', modelDays: 30 },
+    );
+
+    expect(requestedSince).toBe('0000-01-01');
+    expect(result.days.map((row) => row.day)).toEqual(['2026-04-01', TODAY]);
+    expect(result.modelDaily.map((row) => row.day)).toEqual([TODAY]);
+  });
+
+  it('keeps all-time model rows when the heatmap window is finite', async () => {
+    const oldRow = modelRow('2026-04-01', 'codex', 'gpt-5.5', actual(0), {
+      inputTokens: 123,
+    });
+    const recentRow = modelRow(TODAY, 'codex', 'gpt-5.5', actual(0), {
+      inputTokens: 456,
+    });
+    let requestedSince = '';
+    const result = await readUsageHistoryWith(
+      makeDeps({
+        getModelUsageSince: async (sinceDayKey) => {
+          requestedSince = sinceDayKey;
+          return [oldRow, recentRow];
+        },
+      }),
+      { days: 30, modelDays: 'all' },
+    );
+
+    expect(requestedSince).toBe('0000-01-01');
+    expect(result.days.map((row) => row.day)).toEqual([TODAY]);
+    expect(result.modelDaily.map((row) => row.day)).toEqual(['2026-04-01', TODAY]);
+  });
+
   it('aggregates actual money and subscription value without double counting', async () => {
     const estimateAmount = regionalUsdAmount(2);
     const result = await readUsageHistoryWith(makeDeps({
@@ -398,9 +576,109 @@ describe('readUsageHistoryWith', () => {
     expect(result.totals.last30DaysEstimatedValue.amount).toBeCloseTo(regionalUsdAmount(5));
   });
 
+  it('uses the request-priced subscription value stored at write time', async () => {
+    const stored: RegionalMoney = {
+      amount: regionalUsdAmount(1.25),
+      currency: DEFAULT_USAGE_CURRENCY,
+      approximate: true,
+      kind: 'value-estimate',
+      estimateReasons: ['subscription-value', 'reference-price'],
+    };
+    const result = await readUsageHistoryWith(
+      makeDeps({
+        getModelUsageSince: async () => [
+          modelRow(TODAY, 'codex', codexSubscriptionUsageModelKey('gpt-5.5'), stored, {
+            inputTokens: 1_000_000,
+          }),
+        ],
+        getReferenceModelPricing: () => ({
+          openai: {
+            // A later catalog price would produce 9. The frozen request-level
+            // estimate must win instead of repricing the day aggregate.
+            'gpt-5.5': subscriptionQuote('openai', 'gpt-5.5', 9, 20),
+          },
+        }),
+      }),
+    );
+    expect(result.models[0].estimatedMoney?.amount).toBeCloseTo(stored.amount);
+    expect(result.modelDaily[0].subscriptionEstimateMoney.amount).toBeCloseTo(stored.amount);
+  });
+
+  it('does not reprice an explicitly unpriceable future subscription row', async () => {
+    const unavailable: RegionalMoney = {
+      amount: 0,
+      currency: DEFAULT_USAGE_CURRENCY,
+      approximate: true,
+      kind: 'value-estimate',
+      estimateReasons: ['subscription-value', 'reference-price'],
+    };
+    const result = await readUsageHistoryWith(
+      makeDeps({
+        getModelUsageSince: async () => [
+          modelRow(TODAY, 'codex', codexSubscriptionUsageModelKey('gpt-5.5'), unavailable, {
+            inputTokens: 1_000_000,
+          }),
+        ],
+        getReferenceModelPricing: () => ({
+          openai: { 'gpt-5.5': subscriptionQuote('openai', 'gpt-5.5', 9, 20) },
+        }),
+        isModelPricingRefreshInFlight: () => true,
+      }),
+    );
+    expect(result.estimatesPending).toBe(false);
+    expect(result.models[0].estimatedMoney).toBeNull();
+    expect(result.modelDaily[0].subscriptionEstimateMoney.amount).toBe(0);
+  });
+
+  it('does not reprice a value estimate after projecting it into another ledger currency', async () => {
+    const historicalCurrency = DEFAULT_USAGE_CURRENCY === 'CNY' ? 'USD' : 'CNY';
+    const stored: RegionalMoney = {
+      amount: 4,
+      currency: historicalCurrency,
+      approximate: true,
+      kind: 'value-estimate',
+      estimateReasons: ['subscription-value', 'reference-price'],
+    };
+    const result = await readUsageHistoryWith(
+      makeDeps({
+        getModelUsageSince: async () => [
+          modelRow(TODAY, 'codex', codexSubscriptionUsageModelKey('gpt-5.5'), stored, {
+            inputTokens: 1_000_000,
+          }),
+        ],
+        getReferenceModelPricing: () => ({
+          openai: { 'gpt-5.5': subscriptionQuote('openai', 'gpt-5.5', 99, 199) },
+        }),
+      }),
+    );
+
+    const projectedAmount = DEFAULT_USAGE_CURRENCY === 'CNY'
+      ? stored.amount * USD_TO_CNY_FIXED_RATE : 0;
+    expect(result.estimatesPending).toBe(false);
+    if (DEFAULT_USAGE_CURRENCY === 'CNY') {
+      // 保留历史估值的换算结果，不能按上面的当前参考价重新计价。
+      expect(result.models[0].estimatedMoney).toMatchObject({
+        amount: projectedAmount, currency: 'CNY', kind: 'value-estimate',
+      });
+    } else {
+      expect(result.models[0].estimatedMoney).toBeNull();
+    }
+    expect(result.modelDaily[0]).toMatchObject({
+      subscriptionEstimateMoney: {
+        amount: projectedAmount,
+        currency: DEFAULT_USAGE_CURRENCY,
+        kind: 'value-estimate',
+      },
+    });
+  });
+
   it('keeps active-ledger subscription estimates when history uses another currency', async () => {
     const historicalCurrency = DEFAULT_USAGE_CURRENCY === 'CNY' ? 'USD' : 'CNY';
     const estimateAmount = regionalUsdAmount(2);
+    const historicalCost: RegionalMoney = DEFAULT_USAGE_CURRENCY === 'CNY'
+      ? actual(33.5) : actual(0);
+    const historicalModelCost: RegionalMoney = DEFAULT_USAGE_CURRENCY === 'CNY'
+      ? actual(67) : actual(0);
     const result = await readUsageHistoryWith(
       makeDeps({
         getAllSpendDays: async () => [
@@ -439,32 +717,29 @@ describe('readUsageHistoryWith', () => {
       }),
     );
 
-    expect(result.totals.today).toEqual(actual(0));
-    expect(result.totals.last30Days).toEqual(actual(0));
+    expect(result.totals.today).toEqual(historicalCost);
+    expect(result.totals.last30Days).toEqual(historicalCost);
     expect(result.totals.last30DaysEstimatedValue).toMatchObject({
       amount: estimateAmount,
       currency: DEFAULT_USAGE_CURRENCY,
     });
-    expect(result.totals.last30DaysWithEstimatedValue.amount).toBeCloseTo(estimateAmount);
+    expect(result.totals.last30DaysWithEstimatedValue.amount).toBeCloseTo(estimateAmount + historicalCost.amount);
     expect(result.days[0]).toMatchObject({
-      money: actual(0),
+      money: historicalCost,
       tokens: 1_000_020,
     });
     expect(
       result.models.find((row) => row.model === 'legacy-mixed-currency'),
     ).toMatchObject({
-      money: actual(0),
+      money: historicalModelCost,
       estimatedMoney: null,
       outputTokens: 20,
     });
     expect(
       result.modelDaily.find((row) => row.model === 'legacy-mixed-currency'),
     ).toMatchObject({
-      money: {
-        amount: 0,
-        currency: DEFAULT_USAGE_CURRENCY,
-      },
-      apiMoney: actual(0),
+      money: { amount: historicalModelCost.amount, currency: DEFAULT_USAGE_CURRENCY },
+      apiMoney: historicalModelCost,
       tokens: 20,
     });
   });
@@ -542,7 +817,7 @@ describe('readUsageHistoryWith', () => {
     expect(result.models[0].estimatedMoney?.amount).toBe(expected);
   });
 
-  it('keeps Pi cache usage as a distinct subscription row', async () => {
+  it('keeps Pi cache usage token-only when the quote omits a cache-read price', async () => {
     const result = await readUsageHistoryWith(makeDeps({
       getModelUsageSince: async () => [
         modelRow(
@@ -561,8 +836,31 @@ describe('readUsageHistoryWith', () => {
       inputTokens: 100_000,
       cacheReadTokens: 900_000,
     });
-    expect(result.models[0].estimatedMoney?.amount).toBeGreaterThan(0);
+    expect(result.models[0].estimatedMoney).toBeNull();
     expect(result.totals.todayTokens).toBe(1_002_000);
+  });
+
+  it('estimates Pi SuperGrok subscription value for exclusive grok ids', async () => {
+    const result = await readUsageHistoryWith(makeDeps({
+      getModelUsageSince: async () => [
+        modelRow(
+          TODAY,
+          'pi',
+          piSubscriptionUsageModelKey('grok-4.6'),
+          actual(0),
+          { inputTokens: 179_300, outputTokens: 9_300, cacheReadTokens: 1_600_000 },
+        ),
+      ],
+    }));
+
+    expect(result.models[0]).toMatchObject({
+      agentKind: 'pi',
+      model: 'grok-4.6',
+      inputTokens: 179_300,
+      cacheReadTokens: 1_600_000,
+    });
+    // 179.3k * $2 + 9.3k * $6 + 1.6M * $0.50 = $1.2144
+    expect(result.models[0].estimatedMoney?.amount).toBeCloseTo(regionalUsdAmount(1.2144), 6);
   });
 
   it('marks estimates pending only when a subscription price is missing during refresh', async () => {
@@ -609,6 +907,77 @@ describe('readUsageHistoryWith', () => {
 });
 
 describe('production cache and empty payload', () => {
+  // 单测：v5 曾把旧 USD 缓存为 0，升级必须重算；v6 则继续走原有磁盘复用路径。
+  // 真实 readUsageHistory 读取临时磁盘文件；旧覆盖只检查写出的版本号，不能发现误复用。
+  it.each([5, 6])('recomputes v5 zero cache and reuses v6 cache (version %i)', async (version) => {
+    setActiveLedgerCurrency('CNY');
+    const usd: RegionalMoney = { amount: 10, currency: 'USD', approximate: false, kind: 'actual-cost' };
+    const cached = emptyUsageHistoryPayload();
+    cached.generatedAt = Date.now();
+    cached.todayKey = TODAY;
+    cached.totals.today = { amount: version === 5 ? 0 : 67, currency: 'CNY', approximate: false, kind: 'actual-cost' };
+    const file = path.join(mocks.electronAppGetPath(), 'cache', 'usage-history.json');
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify({ version, optsKey: 'user=user-a|days=30', payload: cached }));
+    vi.mocked(getAllSpendDays).mockResolvedValue([{ day: TODAY, monies: [usd] }]);
+    const result = await readUsageHistory({ days: 30 });
+    expect(result.totals.today.amount).toBe(67);
+    expect(result.stale).toBe(version === 6);
+    // 等待既有后台刷新完成，避免清理临时目录时还有写入。
+    await readUsageHistory({ days: 30, forceRefresh: true });
+  });
+
+  it('overlays current local task metadata on a cached aggregate', async () => {
+    const meta = (sessionId: string, title: string, source: string | null = null) => ({
+      sessionId,
+      title,
+      model: 'gpt-5.5',
+      providerId: null,
+      source,
+      contextTokens: 0,
+      contextWindow: 0,
+      lastActiveAt: 1,
+    });
+    vi.mocked(getSessionUsageSince).mockResolvedValue({
+      rows: [
+        { day: TODAY, sessionId: 's1', tokens: 5 },
+        { day: TODAY, sessionId: 's2', tokens: 7 },
+      ],
+      tasks: [meta('s1', 'Old title'), meta('s2', 'Doomed')],
+    });
+    vi.mocked(getUsageTaskMeta).mockResolvedValue([meta('s1', 'Old title'), meta('s2', 'Doomed')]);
+    const first = await readUsageHistory({ days: 30, includeTasks: true });
+    expect(first.tasks?.map((task) => task.title)).toEqual(['Old title', 'Doomed']);
+    // 重命名 s1、删除 s2:不产生用量,聚合缓存照常复用,但出口的任务元数据必须是当前值。
+    vi.mocked(getUsageTaskMeta).mockResolvedValue([meta('s1', 'New title', 'cindy-make')]);
+    const second = await readUsageHistory({ days: 30, includeTasks: true });
+    expect(second.tasks?.map((task) => [task.sessionId, task.title])).toEqual([['s1', 'New title']]);
+    expect(second.tasks?.[0].source).toBe('cindy-make');
+    expect(second.taskDaily).toEqual(first.taskDaily);
+    expect(getSessionUsageSince).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips task data unless the caller asks for it (home dashboard reads)', async () => {
+    const payload = await readUsageHistory({ days: 30 });
+    expect(payload.tasks).toBeUndefined();
+    expect(payload.taskDaily).toBeUndefined();
+    expect(getSessionUsageSince).not.toHaveBeenCalled();
+    expect(getUsageTaskMeta).not.toHaveBeenCalled();
+  });
+
+  // Launch race: the menu bar (and the iPhone widgets it feeds) cached a fresh-looking
+  // empty payload for minutes when the database was not open yet.
+  it('marks an unreadable first read stale so callers retry instead of caching zero usage', async () => {
+    vi.mocked(getAllSpendDays).mockRejectedValueOnce(new Error('DbClient not ready'));
+    const first = await readUsageHistory({ days: 30 });
+    expect(first.stale).toBe(true);
+    expect(first.totals.today).toEqual(zeroUsageMoney());
+    vi.mocked(getAllSpendDays).mockResolvedValue([{ day: TODAY, monies: [actual(2)] }]);
+    const second = await readUsageHistory({ days: 30 });
+    expect(second.stale).toBe(false);
+    expect(second.totals.today).toEqual(actual(2));
+  });
+
   it('writes a structured fresh payload and serves it from memory', async () => {
     vi.mocked(getAllSpendDays).mockResolvedValue([
       { day: TODAY, monies: [actual(2)] },
@@ -627,9 +996,8 @@ describe('production cache and empty payload', () => {
         ),
       );
       expect(raw).toMatchObject({
-        // 日账改为按币种分行、折叠推迟到读侧之后升到 5:v4 快照是用「按区域猜出来的
-        // 账本币种」折叠出来的聚合值，不能沿用。改折叠口径时同步这里。
-        version: 5,
+        // v6 作废曾丢弃旧 USD 的展示缓存。
+        version: 6,
         optsKey: 'user=user-a|days=30',
         payload: {
           totals: {
@@ -646,5 +1014,371 @@ describe('production cache and empty payload', () => {
     expect(empty.totals.last30DaysEstimatedValue).toEqual(
       zeroUsageMoney('value-estimate'),
     );
+  });
+});
+
+describe('multi-device scope', () => {
+  const peerRows = {
+    sessionRows: [],
+    tasks: [],
+    spendDays: [
+      { day: '2026-06-10', monies: [actual(3)] },
+      { day: TODAY, monies: [actual(3)] },
+    ],
+    modelRows: [
+      modelRow(TODAY, 'codex', 'gpt-5.5', actual(0), { inputTokens: 100 }),
+      modelRow('2026-06-10', 'claude-code', 'claude-sonnet-5', actual(3), { outputTokens: 50 }),
+    ],
+  };
+
+  // 单测：真实设备 scope 装配会调用 combineUsageDeviceRows，不能用本机行的名字冒充跨设备。
+  // 最小失败输入：本机 CNY 3、另一台电脑 USD 10；全部设备与指定设备都应包含旧 USD。
+  it('converts peer USD through all-device and single-device scopes', async () => {
+    setActiveLedgerCurrency('CNY');
+    const cny: RegionalMoney = Object.freeze({ amount: 3, currency: 'CNY', approximate: false, kind: 'actual-cost' });
+    const usd: RegionalMoney = Object.freeze({ ...cny, amount: 10, currency: 'USD' });
+    const peer = {
+      spendDays: [{ day: TODAY, monies: [usd] }],
+      modelRows: [modelRow(TODAY, 'pi', 'same-model', usd, { inputTokens: 1_000_000_000 })],
+      sessionRows: [], tasks: [],
+    };
+    const base = makeDeps({
+      getAllSpendDays: async () => [{ day: TODAY, monies: [cny] }],
+      getModelUsageSince: async () => [modelRow(TODAY, 'pi', 'same-model', cny, { inputTokens: 20 })],
+    });
+    const snapshot = { peerRows: new Map([['mate-b13', peer]]) };
+    for (const [device, amount, tokens] of [['all', 70, 1_000_000_020], ['mate-b13', 67, 1_000_000_000], ['local', 3, 20]] as const) {
+      const result = await readUsageHistoryWith(usageHistoryDepsForScope(base, device, snapshot));
+      expect(result.days[0]).toMatchObject({ money: { amount, currency: 'CNY', approximate: false }, tokens });
+      expect(result.days[0].money.estimateReasons).toBeUndefined();
+      expect(result.modelDaily.reduce((sum, row) => sum + row.money.amount, 0)).toBe(amount);
+      const view = usageView(result);
+      const desktopDay = view.usage.scopes.all.daily[0];
+      expect(desktopDay.money.reduce((a, b) => a + b, 0)).toBe(amount);
+      expect(desktopDay.tokens.reduce((a, b) => a + b, 0)).toBe(tokens);
+      expect(desktopDay).not.toHaveProperty('approximate');
+      expect(buildUsageWidgetSnapshot(view, Date.now(), () => null)?.usage.daily[0]).toEqual(desktopDay);
+    }
+    expect(peer.spendDays[0].monies[0]).toBe(usd);
+    expect(peer.modelRows[0].money).toBe(usd);
+  });
+
+  it('merges identical model keys from different devices into one row', () => {
+    const combined = combineUsageDeviceRows([
+      {
+        sessionRows: [],
+        tasks: [],
+        spendDays: [{ day: TODAY, monies: [actual(1)] }],
+        modelRows: [modelRow(TODAY, 'codex', 'gpt-5.5', actual(1), { inputTokens: 10 })],
+      },
+      {
+        sessionRows: [],
+        tasks: [],
+        spendDays: [{ day: TODAY, monies: [actual(2)] }],
+        modelRows: [modelRow(TODAY, 'codex', 'gpt-5.5', actual(2), { inputTokens: 5, outputTokens: 7 })],
+      },
+    ]);
+    expect(combined.spendDays).toEqual([{ day: TODAY, monies: [actual(1), actual(2)] }]);
+    expect(combined.modelRows).toHaveLength(1);
+    expect(combined.modelRows[0]).toMatchObject({
+      money: actual(3),
+      inputTokens: 15,
+      outputTokens: 7,
+    });
+  });
+
+  it('aggregates local plus peer rows for all devices, and only the peer for a device scope', async () => {
+    const base = makeDeps({
+      getAllSpendDays: async () => [{ day: TODAY, monies: [actual(2)] }],
+      getModelUsageSince: async () => [
+        modelRow(TODAY, 'codex', 'gpt-5.5', actual(0), { inputTokens: 40 }),
+      ],
+    });
+    const snapshot = { peerRows: new Map([['device-b', peerRows]]) };
+
+    const all = await readUsageHistoryWith(usageHistoryDepsForScope(base, 'all', snapshot), {
+      days: 'all',
+      modelDays: 'all',
+    });
+    expect(all.totals.today).toEqual(actual(5));
+    expect(all.totals.todayTokens).toBe(140);
+    expect(all.modelDaily.filter((row) => row.day === TODAY)).toHaveLength(1);
+    expect(all.streak.current).toBe(2);
+
+    const peerOnly = await readUsageHistoryWith(usageHistoryDepsForScope(base, 'device-b', snapshot), {
+      days: 'all',
+      modelDays: 'all',
+    });
+    expect(peerOnly.totals.today).toEqual(actual(3));
+    expect(peerOnly.totals.todayTokens).toBe(100);
+
+    const unknown = await readUsageHistoryWith(usageHistoryDepsForScope(base, 'device-x', snapshot));
+    expect(unknown.days).toEqual([]);
+
+    expect(usageHistoryDepsForScope(base, 'local', snapshot)).toBe(base);
+  });
+
+  it('counts a peer that is already on tomorrow into the controller today', async () => {
+    const tomorrow = shiftDayKey(TODAY, 1);
+    const ahead = {
+      sessionRows: [],
+      tasks: [],
+      spendDays: [{ day: tomorrow, monies: [actual(4)] }],
+      modelRows: [modelRow(tomorrow, 'codex', 'gpt-5.5', actual(0), { inputTokens: 70 })],
+    };
+    expect(clampPeerRowsToToday(ahead, TODAY).modelRows[0].day).toBe(TODAY);
+
+    const base = makeDeps({
+      getAllSpendDays: async () => [{ day: TODAY, monies: [actual(2)] }],
+      getModelUsageSince: async () => [
+        modelRow(TODAY, 'codex', 'gpt-5.5', actual(0), { inputTokens: 30 }),
+      ],
+    });
+    const snapshot = { peerRows: new Map([['device-b', ahead]]) };
+    const all = await readUsageHistoryWith(usageHistoryDepsForScope(base, 'all', snapshot), {
+      days: 'all',
+      modelDays: 'all',
+    });
+    expect(all.totals.today).toEqual(actual(6));
+    expect(all.totals.todayTokens).toBe(100);
+    expect(all.days.map((d) => d.day)).toEqual([TODAY]);
+
+    const peerOnly = await readUsageHistoryWith(
+      usageHistoryDepsForScope(base, 'device-b', snapshot),
+      { days: 'all', modelDays: 'all' },
+    );
+    expect(peerOnly.totals.todayTokens).toBe(70);
+  });
+
+  it('round-trips a peer through the device-rows wire format into the all-devices payload', async () => {
+    vi.mocked(getAllSpendDays).mockResolvedValue([{ day: TODAY, monies: [actual(2)] }]);
+    const response = await readUsageDeviceRows(
+      {
+        getAllSpendDays: async () => peerRows.spendDays,
+        getModelUsageSince: async () => peerRows.modelRows,
+        getSessionUsageSince: async () => ({ rows: [], tasks: [] }),
+        remoteVisibleTaskIds: async (ids) => new Set(ids),
+todayKey: () => TODAY,
+      },
+      { sinceDay: null },
+    );
+    let resolveInvoke!: () => void;
+    const invokeGate = new Promise<void>((resolve) => {
+      resolveInvoke = resolve;
+    });
+    const deps: PeerUsageSyncDeps = {
+      userId: () => 'user-a',
+      selfDeviceId: () => 'device-a',
+      listDevices: async () => ({
+        devices: [
+          {
+            deviceId: 'device-a', name: 'Studio', platform: 'darwin', appVersion: null, lastSeenAt: null,
+            online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: true,
+          },
+          {
+            deviceId: 'device-b', name: 'Laptop', platform: 'darwin', appVersion: '0.1.94', lastSeenAt: null,
+            online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false,
+          },
+        ],
+      }),
+      invoke: async () => {
+        await invokeGate;
+        return { ok: true, result: response };
+      },
+      readCache: async () => null,
+      writeCache: async () => undefined,
+      now: () => Date.now(),
+    };
+    configurePeerUsageSync(deps);
+
+    const first = await readUsageHistory({ days: 'all', modelDays: 'all', device: 'all' });
+    expect(first.stale).toBe(true);
+    expect(first.devicesSyncing).toBe(true);
+    expect(first.totals.today).toEqual(actual(2));
+
+    resolveInvoke();
+    await vi.waitFor(async () => {
+      const next = await readUsageHistory({ days: 'all', modelDays: 'all', device: 'all' });
+      expect(next.stale).toBe(false);
+      expect(next.totals.today).toEqual(actual(5));
+      expect(next.devices?.map((device) => [device.name, device.isSelf, device.status])).toEqual([
+        ['Studio', true, 'ok'],
+        ['Laptop', false, 'ok'],
+      ]);
+    });
+
+    // 本机范围不受跨设备数据影响, 也不带设备列表。
+    const local = await readUsageHistory({ days: 'all', modelDays: 'all' });
+    expect(local.totals.today).toEqual(actual(2));
+    expect(local.devices).toBeUndefined();
+  });
+
+  it('does not mark an aggregate fresh when the peer sync finished while it was being computed', async () => {
+    const response = await readUsageDeviceRows(
+      {
+        getAllSpendDays: async () => peerRows.spendDays,
+        getModelUsageSince: async () => peerRows.modelRows,
+        getSessionUsageSince: async () => ({ rows: [], tasks: [] }),
+        remoteVisibleTaskIds: async (ids) => new Set(ids),
+todayKey: () => TODAY,
+      },
+      { sinceDay: null },
+    );
+    let releaseInvoke!: () => void;
+    const invokeGate = new Promise<void>((resolve) => {
+      releaseInvoke = resolve;
+    });
+    let releaseLocal!: () => void;
+    const localGate = new Promise<void>((resolve) => {
+      releaseLocal = resolve;
+    });
+    let localReads = 0;
+    vi.mocked(getAllSpendDays).mockImplementation(async () => {
+      localReads += 1;
+      if (localReads === 1) await localGate;
+      return [{ day: TODAY, monies: [actual(2)] }];
+    });
+    configurePeerUsageSync({
+      userId: () => 'user-a',
+      selfDeviceId: () => 'device-a',
+      listDevices: async () => ({
+        devices: [
+          {
+            deviceId: 'device-b', name: 'Laptop', platform: 'darwin', appVersion: '0.1.94', lastSeenAt: null,
+            online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false,
+          },
+        ],
+      }),
+      invoke: async () => {
+        await invokeGate;
+        return { ok: true, result: response };
+      },
+      readCache: async () => null,
+      writeCache: async () => undefined,
+      now: () => Date.now(),
+    });
+
+    const opts = { days: 'all' as const, modelDays: 'all' as const, device: 'all' };
+    const first = readUsageHistory(opts);
+    // 聚合已拿到旧快照并卡在读本机日账时, 让跨设备同步完成。
+    await vi.waitFor(() => expect(localReads).toBe(1));
+    releaseInvoke();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releaseLocal();
+    const settled = await first;
+    expect(settled.stale).toBe(true);
+    expect(settled.totals.today).toEqual(actual(2));
+
+    await vi.waitFor(async () => {
+      const next = await readUsageHistory(opts);
+      expect(next.stale).toBe(false);
+      expect(next.totals.today).toEqual(actual(5));
+    });
+  });
+
+  it('does not re-aggregate the full history on periodic re-reads when nothing changed', async () => {
+    let now = 1_800_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    vi.mocked(getAllSpendDays).mockResolvedValue([{ day: TODAY, monies: [actual(2)] }]);
+    configurePeerUsageSync({
+      userId: () => 'user-a',
+      selfDeviceId: () => 'device-a',
+      listDevices: async () => ({
+        devices: [
+          {
+            deviceId: 'device-a', name: 'Studio', platform: 'darwin', appVersion: null, lastSeenAt: null,
+            online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: true,
+          },
+        ],
+      }),
+      invoke: async () => ({ ok: false, error: { code: 'TIMEOUT', message: 'unused' } }),
+      readCache: async () => null,
+      writeCache: async () => undefined,
+      now: () => now,
+    });
+    const opts = { days: 'all' as const, modelDays: 'all' as const, device: 'all' };
+    await vi.waitFor(async () => expect((await readUsageHistory(opts)).stale).toBe(false));
+    const readsAfterSettle = vi.mocked(getAllSpendDays).mock.calls.length;
+
+    // 设置页每分钟一次的定时重读:没有其它电脑、本机也没有新用量。
+    // 每次重读会触发一轮(节流的)设备同步,同步期间如实标为更新中;同步结束后结果即为最新。
+    for (let i = 0; i < 3; i += 1) {
+      now += 61_000;
+      await readUsageHistory(opts);
+      await vi.waitFor(async () => expect((await readUsageHistory(opts)).stale).toBe(false));
+    }
+    expect(vi.mocked(getAllSpendDays).mock.calls.length).toBe(readsAfterSettle);
+
+    // 本机有新用量时照常经 forceRefresh 重聚合。
+    now += 1_000;
+    await readUsageHistory({ ...opts, forceRefresh: true });
+    expect(vi.mocked(getAllSpendDays).mock.calls.length).toBeGreaterThan(readsAfterSettle);
+  });
+
+  it('refreshes peer sync time without re-aggregating until peer rows actually change', async () => {
+    let now = 1_800_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    vi.mocked(getAllSpendDays).mockResolvedValue([{ day: TODAY, monies: [actual(2)] }]);
+    let peerTokens = 10;
+    configurePeerUsageSync({
+      userId: () => 'user-a',
+      selfDeviceId: () => 'device-a',
+      listDevices: async () => ({
+        devices: [
+          {
+            deviceId: 'device-b', name: 'Laptop', platform: 'darwin', appVersion: '0.1.94', lastSeenAt: null,
+            online: true, busy: false, remoteControlEnabled: true, controlEnabled: true, isSelf: false,
+          },
+        ],
+      }),
+      invoke: async () => ({
+        ok: true,
+        result: await readUsageDeviceRows(
+          {
+            getAllSpendDays: async () => [],
+            getModelUsageSince: async () => [
+              modelRow(TODAY, 'codex', 'gpt-5.5', actual(0), { inputTokens: peerTokens }),
+            ],
+            getSessionUsageSince: async () => ({ rows: [], tasks: [] }),
+            remoteVisibleTaskIds: async (ids) => new Set(ids),
+todayKey: () => TODAY,
+          },
+          { sinceDay: null },
+        ),
+      }),
+      readCache: async () => null,
+      writeCache: async () => undefined,
+      now: () => now,
+    });
+    const opts = { days: 'all' as const, modelDays: 'all' as const, device: 'all' };
+    const settled = async () => {
+      let last!: Awaited<ReturnType<typeof readUsageHistory>>;
+      await vi.waitFor(async () => {
+        last = await readUsageHistory(opts);
+        expect(last.stale).toBe(false);
+      });
+      return last;
+    };
+    const first = await settled();
+    expect(first.totals.todayTokens).toBe(10);
+    const aggregations = vi.mocked(getAllSpendDays).mock.calls.length;
+    const firstSyncedAt = first.devices?.find((d) => d.deviceId === 'device-b')?.syncedAt;
+
+    // 60 秒后的定时重读:对方成功同步但行没变 —— 同步时间更新,不重聚合全量历史。
+    now += 61_000;
+    await readUsageHistory(opts);
+    const second = await settled();
+    expect(vi.mocked(getAllSpendDays).mock.calls.length).toBe(aggregations);
+    expect(second.devices?.find((d) => d.deviceId === 'device-b')?.syncedAt).toBeGreaterThan(
+      firstSyncedAt ?? 0,
+    );
+
+    // 对方有新用量:行变化 → 重聚合一次。
+    peerTokens = 25;
+    now += 61_000;
+    await readUsageHistory(opts);
+    const third = await settled();
+    expect(third.totals.todayTokens).toBe(25);
+    expect(vi.mocked(getAllSpendDays).mock.calls.length).toBeGreaterThan(aggregations);
   });
 });

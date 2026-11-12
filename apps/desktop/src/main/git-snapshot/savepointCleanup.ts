@@ -20,6 +20,7 @@ import { getDbClient } from '../localDb/client/current';
 import { sessions } from '../localDb/schema';
 import { createLogger } from '../logger';
 import { gitExec } from '../worktree/gitExec';
+import { gitPathOutput } from '../worktree/gitPathOutput';
 import { deleteSavepointRef, listSavepointRefs } from './savepointRefs';
 
 const log = createLogger('git-snapshot');
@@ -35,7 +36,7 @@ const RECONCILE_MAX_WORKDIRS = 200;
  */
 async function resolveSavepointRepoRoot(workingDir: string): Promise<string | null> {
   try {
-    const repoRoot = (await gitExec(['rev-parse', '--show-toplevel'], workingDir)).stdout.trim();
+    const repoRoot = gitPathOutput((await gitExec(['rev-parse', '--show-toplevel'], workingDir)).stdout);
     if (!repoRoot) return null;
     const [gitDir, commonDir] = await Promise.all([
       gitExec(['rev-parse', '--git-dir'], workingDir),
@@ -45,8 +46,8 @@ async function resolveSavepointRepoRoot(workingDir: string): Promise<string | nu
     // WorktreeManager.detectCwd 同口径;用 repoRoot 作基准会在子目录场景
     // 下解析错。
     const isInsideWorktree =
-      path.resolve(workingDir, gitDir.stdout.trim()) !==
-      path.resolve(workingDir, commonDir.stdout.trim());
+      path.resolve(workingDir, gitPathOutput(gitDir.stdout)) !==
+      path.resolve(workingDir, gitPathOutput(commonDir.stdout));
     if (isInsideWorktree) return null;
     return repoRoot;
   } catch {

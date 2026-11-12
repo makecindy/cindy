@@ -8,7 +8,11 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { deriveCindyMediaConfig, type CindyMediaProviderSlice } from '../cindyMediaCatalog';
+import {
+  deriveCindyMediaConfig,
+  selectExecutableCoreMediaModels,
+  type CindyMediaProviderSlice,
+} from '../cindyMediaCatalog';
 
 const XD: CindyMediaProviderSlice = {
   id: 'xd',
@@ -34,6 +38,20 @@ const XD: CindyMediaProviderSlice = {
     best: 'voyage/voyage-4-large',
   },
 };
+
+describe('selectExecutableCoreMediaModels', () => {
+  it('保留 Core 可执行但没有 legacy alias 的视频模型', () => {
+    const models = [
+      { id: 'legacy-video', mode: 'video_generation', coreExecutable: false },
+      { id: 'minimax/minimax-h3', mode: 'video_generation', coreExecutable: true },
+      { id: 'image-only', mode: 'image_generation', coreExecutable: true },
+    ];
+
+    expect(
+      selectExecutableCoreMediaModels(models, 'video', (model) => model.coreExecutable),
+    ).toEqual([{ id: 'minimax/minimax-h3', mode: 'video_generation', coreExecutable: true }]);
+  });
+});
 
 describe('deriveCindyMediaConfig — 正常目录', () => {
   it('清单按目录序、label 取 name、providerId 记归属;draft/best 缺省回落 standard', () => {
@@ -201,6 +219,20 @@ describe('deriveCindyMediaConfig — 停用过滤(model-disable override)', () =
 
   it('不传谓词 = 不过滤(既有调用方为空的兼容路径)', () => {
     expect(deriveCindyMediaConfig([XD], 'image').models).toHaveLength(3);
+  });
+
+  it('显示开关关闭的图像型号不进作图清单,目录默认回落可见项', () => {
+    const cfg = deriveCindyMediaConfig(
+      [XD],
+      'image',
+      undefined,
+      undefined,
+      undefined,
+      (_providerId, modelId, defaultEnabled) =>
+        modelId === 'gpt-image-2' ? false : defaultEnabled !== false,
+    );
+    expect(cfg.models.map((m) => m.id)).toEqual(['gemini-3-pro-image', 'gemini-3.1-flash-image']);
+    expect(cfg.defaults?.standard).toBe('gemini-3-pro-image');
   });
 });
 

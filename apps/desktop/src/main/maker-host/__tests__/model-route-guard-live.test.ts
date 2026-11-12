@@ -4,12 +4,18 @@ const h = vi.hoisted(() => ({
   catalog: { modelRegistry: {} },
   listProviders: vi.fn(),
   effectiveSourceIdForModel: vi.fn(),
+  readDeviceProviderViews: vi.fn(),
 }));
 
-vi.mock('@cindy/model-providers', () => ({
-  connectedProvidersForAgent: vi.fn(() => []),
+
+vi.mock('@cindy/model-providers', async (importOriginal) => ({
+  findCatalogModel: (await importOriginal<typeof import('@cindy/model-providers')>()).findCatalogModel,
+  connectedProvidersForAgent: (await importOriginal<typeof import('@cindy/model-providers')>()).connectedProvidersForAgent,
   effectiveSourceIdForModel: h.effectiveSourceIdForModel,
   getModel: vi.fn(() => null),
+  isExclusiveXaiModelId: (model: string | null | undefined) =>
+    typeof model === 'string'
+    && (model.startsWith('grok') || model.startsWith('xai/grok')),
   isModelDisabled: vi.fn(() => false),
   isModelSelectableForNewRoute: vi.fn(() => true),
   isProviderDisabled: vi.fn(() => false),
@@ -35,7 +41,29 @@ vi.mock('../model-plane/modelPlanePolicy.js', () => ({
   MODEL_PLANE_POLICIES: new Map(),
 }));
 
-import { resolveDefaultScheduleRoute } from '../model-route-guard-live.js';
+import {
+  resolveDefaultScheduleRoute,
+  resolveScheduledModelSelectionLive,
+  resolveLenientSessionRoute,
+} from '../model-route-guard-live.js';
+
+// Unit: use the remote authorized catalog even when the local provider has the
+// same id. An offline/revoked share must fail before trying local credentials.
+describe('scheduled remote model catalog', () => {
+  it('resolves only the selected computer catalog and preserves its axes', async () => {
+    vi.clearAllMocks();
+    h.readDeviceProviderViews.mockResolvedValue([{ id: 'shared-provider', connected: true, agents: ['pi'], routing: { pi: {} },
+      models: { pi: [{ id: 'remote-model', efforts: ['high'], defaultEffort: 'high', supportsFastMode: false }] } }]);
+    const choice = { agentKind: 'pi' as const, agentDeviceId: 'shared:owner', model: 'remote-model',
+      providerId: 'shared-provider', effort: 'ultra' as const, fastMode: true };
+    await expect(resolveScheduledModelSelectionLive(choice, h.readDeviceProviderViews)).resolves.toMatchObject({ ...choice, effort: 'high', fastMode: false });
+    expect(h.listProviders).not.toHaveBeenCalled();
+    expect(h.readDeviceProviderViews).toHaveBeenCalledWith('shared:owner');
+    h.readDeviceProviderViews.mockRejectedValueOnce(new Error('[REMOTE_AGENT_SHARE_REMOVED] removed'));
+    await expect(resolveScheduledModelSelectionLive(choice, h.readDeviceProviderViews)).rejects.toThrow('REMOTE_AGENT_SHARE_REMOVED');
+    expect(h.listProviders).not.toHaveBeenCalled();
+  });
+});
 
 describe('resolveDefaultScheduleRoute', () => {
   beforeEach(() => {
@@ -56,6 +84,7 @@ describe('resolveDefaultScheduleRoute', () => {
           name: 'Anthropic',
           connected: true,
           source: 'bundled',
+          agents: ['claude-code'], routing: { 'claude-code': {} },
           models: { 'claude-code': [dynamicModel] },
         },
       ];
@@ -112,5 +141,30 @@ describe('resolveDefaultScheduleRoute', () => {
     await expect(
       resolveDefaultScheduleRoute('claude-code', null, 'claude-first-fire'),
     ).resolves.toBeNull();
+  });
+});
+
+describe('resolveLenientSessionRoute provider-list outage', () => {
+  it('拒绝把裸 Grok 原样放行成 providerId=null', async () => {
+    h.listProviders.mockRejectedValueOnce(new Error('provider list unavailable'));
+    await expect(resolveLenientSessionRoute('claude-code', 'grok-4.6', null)).resolves.toEqual({
+      model: undefined,
+      providerId: null,
+      degraded: true,
+    });
+  });
+});
+
+
+describe('scheduled selection uses the live source copy', () => {
+  it('reads the current catalog without claiming credentials and preserves the requested route', async () => {
+    const selection = { agentKind: 'pi' as const, model: 'same-model', providerId: 'selected', effort: 'ultra' as const, fastMode: true };
+    h.listProviders.mockResolvedValue([
+      { id: 'other', connected: true, agents: ['pi'], routing: { pi: {} }, models: { pi: [{ id: 'same-model', efforts: ['ultra'], defaultEffort: 'ultra', supportsFastMode: true }] } },
+      { id: 'selected', connected: true, agents: ['pi'], routing: { pi: {} }, models: { pi: [{ id: 'same-model', efforts: ['medium'], defaultEffort: 'medium', supportsFastMode: false }] } },
+    ]);
+    await expect(resolveScheduledModelSelectionLive(selection)).resolves.toEqual({ ...selection, effort: 'medium', fastMode: false });
+    expect(h.listProviders).toHaveBeenLastCalledWith({ allowSideEffects: false, catalog: h.catalog });
+    expect(selection).toMatchObject({ effort: 'ultra', fastMode: true });
   });
 });

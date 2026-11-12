@@ -13,6 +13,7 @@
 
 import { cn } from '@/lib/utils';
 import type { ScheduleStatus } from '@cindy/maker-scheduler';
+import { useTranslation } from 'react-i18next';
 
 export type ChipVariant = ScheduleStatus | 'running';
 
@@ -23,14 +24,9 @@ interface Props {
 
 // 内部 status 'expired' 对外显示成 "Once" — 一次性任务跑完是预期终态，
 // "Expired" 字样会让用户误以为任务出错。
-const VARIANT_LABEL: Record<ChipVariant, string> = {
-  active: 'Active',
-  paused: 'Paused',
-  expired: 'Once',
-  running: 'Running',
-};
-
 export function ScheduleStatusChip({ variant, className }: Props) {
+  const { t } = useTranslation();
+  const label = t(`scheduler.presentation.status.${variant}`);
   const isFilled = variant === 'active' || variant === 'running';
   return (
     <span
@@ -44,7 +40,7 @@ export function ScheduleStatusChip({ variant, className }: Props) {
             : 'border border-[var(--cmd-palette-border)] bg-transparent text-[var(--settings-section-desc)]',
         className,
       )}
-      aria-label={`Status: ${VARIANT_LABEL[variant]}`}
+      aria-label={t('scheduler.runs.statusAria', { status: label })}
     >
       {variant === 'running' && (
         <span
@@ -52,7 +48,7 @@ export function ScheduleStatusChip({ variant, className }: Props) {
           aria-hidden
         />
       )}
-      {VARIANT_LABEL[variant]}
+      {label}
     </span>
   );
 }

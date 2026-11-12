@@ -1,0 +1,7 @@
+{
+  "site": "itch.io",
+  "auth": "公开搜索，无需登录。",
+  "recipes": ["itch-search"],
+  "notes": "仅返回当前搜索页前 1–20 个项目，不支持分页。空结果必须由页面确认。",
+  "source": "Cindy"
+}

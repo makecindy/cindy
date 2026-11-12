@@ -16,23 +16,17 @@ import sloganPng2x from '@/assets/login/slogan@2x.png';
 import sloganDarkPng from '@/assets/login/slogan-dark.png';
 import sloganDarkPng2x from '@/assets/login/slogan-dark@2x.png';
 
-import { brandPlacement, sloganShiftX } from './loginScale';
-import {
-  HERO,
-  LOGIN_COLORS,
-  LOGIN_LOCAL_MODE,
-  SLOGAN,
-  STAGE,
-  WORDMARK,
-} from './loginDesignTokens';
+import { brandPlacement, sloganShiftX, splashBrandPlacement } from './loginScale';
+import { HERO, LOGIN_COLORS, LOGIN_LOCAL_MODE, SLOGAN, STAGE, WORDMARK } from './loginDesignTokens';
 import { useViewportSize } from './LoginStage';
 
 /**
  * LoginBrandStage — 品牌视觉层唯一渲染者(implementation-plan Step 3b WHAT2)。
  *
  * 所有权契约(v6.12 冻结;暗色实现 PR 起画布随 light/dark 二态):
- * - 唯一渲染登录画布背景(不透明纯平底,亮 #EDEDED / 暗 #1F1F1E 经 --login-bg-base
- *   二态;2026-07-22 用户拍板对齐 PR #104 撤 wave4 双红渐变,暗色沿用纯平口径)
+ * - 唯一渲染登录画布背景(不透明纯平底,亮 #F2F2ED / 暗 #181818 经 --login-bg-base
+ *   二态,与登录后 CINDY 皮肤页底同色;2026-07-22 用户拍板对齐 PR #104 撤 wave4
+ *   双红渐变,暗色沿用纯平口径)
  *   与品牌三要素(立绘/字标/Slogan);输入面板与圆钮行归 LoginPage,绝不在此重复。
  *   暗色画布用白字版字标/SLOGAN 资产(figma 532:585),立绘两模式同资产。
  * - overlay `pointer-events: none`,不拦截 hit-test;仅主窗挂载(App.tsx 与 Splash
@@ -53,9 +47,13 @@ export function LoginBrandStage() {
   const handoff = useLoginHandoff();
   const { width, height } = useViewportSize();
   const panelBottomReserve =
-    handoff.panelBottomReserve ?? LOGIN_LOCAL_MODE.reservedHeight;
+    handoff.panelBottomReserve ??
+    (handoff.brandLayout === 'login' ? LOGIN_LOCAL_MODE.reservedHeight : 0);
   // 品牌块整体让位(scale+translateY,构图冻结;用户拍板 2026-07-23,design.md §11)
-  const { scale, translateY } = brandPlacement(width, height, panelBottomReserve);
+  const { scale, translateY } =
+    handoff.brandLayout === 'splash'
+      ? splashBrandPlacement(width, height)
+      : brandPlacement(width, height, panelBottomReserve);
   const sloganShift = sloganShiftX(width, scale);
   // 暗色画布用白字版字标/SLOGAN(figma 532:585 CINDY_Standard_White / SLOGAN #FBFBFB;
   // 深浅判定同 useBrandLogo:跟随 theme-service 挂的 dark class)。立绘两模式同资产。
@@ -93,7 +91,10 @@ export function LoginBrandStage() {
 
   if (!handoff.brandStageMounted) return null;
 
-  const rootStyle: CSSProperties = handoff.brandExiting
+  // The background must stay opaque while the authenticated brand content
+  // fades. Otherwise the transparent macOS vibrancy backing shows through as
+  // a gray veil during the Splash → app handoff.
+  const contentStyle: CSSProperties = handoff.brandExiting
     ? {
         opacity: 0,
         transition: 'opacity var(--splash-fade-duration) var(--splash-fade-easing)',
@@ -118,9 +119,8 @@ export function LoginBrandStage() {
       aria-hidden
       data-testid="login-stage-root"
       className="pointer-events-none fixed inset-0 z-[9980] overflow-hidden"
-      style={rootStyle}
     >
-      {/* 静态背景子层:纯平底(--login-bg-base 二态,亮 #EDEDED / 暗 #1F1F1E;
+      {/* 静态背景子层:纯平底(--login-bg-base 二态,亮 #F2F2ED / 暗 #181818;
           PR #104 撤渐变口径),viewport 锚定铺满,不参与 handoff 变换(v6.12 分层冻结) */}
       <div
         aria-hidden
@@ -131,7 +131,7 @@ export function LoginBrandStage() {
         }}
       />
       {/* 可动画内容子层:立绘/字标/Slogan(1819×2098 画布居中等比缩放) */}
-      <div data-testid="login-brand-content" className="absolute inset-0">
+      <div data-testid="login-brand-content" className="absolute inset-0" style={contentStyle}>
         <div
           data-testid="login-brand-canvas"
           className="absolute left-1/2 top-1/2"
@@ -140,6 +140,14 @@ export function LoginBrandStage() {
             height: STAGE.height,
             transform: `translate(-50%, calc(-50% + ${translateY}px)) scale(${scale})`,
             transformOrigin: '50% 50%',
+            // The layout switch is synchronized with panel/slogan playback;
+            // shift and terminal states remain immediate.
+            transition:
+              handoff.isPlaying &&
+              handoff.brandLayout === 'login' &&
+              (handoff.phase === 'panel' || handoff.phase === 'slogan')
+                ? `transform ${LOGIN_HANDOFF_TIMINGS.panelMs}ms ${LOGIN_HANDOFF_TIMINGS.panelEasing}`
+                : undefined,
           }}
         >
           <img

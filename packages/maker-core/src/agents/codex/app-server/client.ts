@@ -45,10 +45,26 @@ export class AppServerRequestTimeoutError extends Error {
   constructor(
     public readonly method: string,
     public readonly timeoutMs: number,
+    /** 超时时的诊断(只含计数与耗时)，附在消息末尾。 */
+    detail?: string,
   ) {
-    super(`codex app-server ${method} timed out after ${timeoutMs}ms`);
+    super(`codex app-server ${method} timed out after ${timeoutMs}ms${detail ? ` (${detail})` : ''}`);
     this.name = 'AppServerRequestTimeoutError';
   }
+}
+
+/**
+ * 有进展就顺延的请求上限：到 timeoutMs 时若最近 idleMs 内仍有进展就继续等，直到连续 idleMs 没有
+ * 进展，或从发出起等满 maxMs。用于设备托管会话：线程启动要经设备互联逐个读项目文件，慢链路下
+ * 合法地超过固定上限(#5764)；真正卡住(没有任何往来)时仍按原上限结束。
+ */
+export interface RequestProgressDeadline {
+  /** 最近一次有进展的时间(Date.now 毫秒)；没有记录时为 null。 */
+  lastProgressAt(): number | null;
+  idleMs: number;
+  maxMs: number;
+  /** 超时时附在错误消息里的诊断。 */
+  describe?(): string;
 }
 
 /**
@@ -188,7 +204,15 @@ export interface AppServerClientOptions {
    * 关联中的 JSON-RPC response 明确返回 cloudRequirements Auth/relogin 时调用一次。
    * 任意 stderr 与工具输出均不得触发；上层 (CodexAgent) 用它注销旧凭证并通知 UI 重登。
    */
-  onAuthInvalidated?: (reason: string) => void;
+  onAuthInvalidated?: (
+    reason: string,
+    context?: { credentialGeneration?: string | null },
+  ) => void;
+  /**
+   * Return the generation frozen for this concrete transport. It must not resnapshot mutable
+   * credential storage; the client binds the returned host fact to each correlated request id.
+   */
+  captureCredentialGeneration?: () => string | null;
 }
 
 export type NotificationHandler = (params: unknown) => void | Promise<void>;
@@ -201,6 +225,7 @@ interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   method: string;
+  credentialGeneration?: string | null;
   timeoutId: ReturnType<typeof setTimeout> | null;
 }
 
@@ -211,7 +236,8 @@ export class AppServerClient {
   private readonly logger: Logger;
   private readonly maxLineBytes: number;
   private readonly onTransportError?: (err: Error) => void;
-  private readonly onAuthInvalidated?: (reason: string) => void;
+  private readonly onAuthInvalidated?: AppServerClientOptions['onAuthInvalidated'];
+  private readonly captureCredentialGeneration?: () => string | null;
   /** 单次 latch — 结构化鉴权失败只通知一次, 防 cloud_requirements 周期性 retry 刷屏。 */
   private authInvalidatedFired = false;
 
@@ -226,13 +252,17 @@ export class AppServerClient {
    * the request. Preserve only the request id/method so a late structured auth
    * error remains correlated without keeping the already-rejected Promise.
    */
-  private readonly writeFailureTombstones = new Map<JsonRpcId, string>();
+  private readonly writeFailureTombstones = new Map<
+    JsonRpcId,
+    { method: string; credentialGeneration?: string | null }
+  >();
   private readonly notificationHandlers = new Map<string, NotificationHandler>();
   private readonly requestHandlers = new Map<string, ServerRequestHandler>();
 
   private initialized = false;
   /** close() 调用后置 true, 阻止后续 request / 重复 close 的副作用。 */
   private closed = false;
+  private closePromise: Promise<void> | null = null;
 
   constructor(opts: AppServerClientOptions) {
     if (typeof opts.createTransport !== 'function') {
@@ -243,6 +273,7 @@ export class AppServerClient {
     this.maxLineBytes = opts.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES;
     this.onTransportError = opts.onTransportError;
     this.onAuthInvalidated = opts.onAuthInvalidated;
+    this.captureCredentialGeneration = opts.captureCredentialGeneration;
   }
 
   /**
@@ -298,31 +329,42 @@ export class AppServerClient {
     return response;
   }
 
+  /** Only local transports can prove this pre-protocol failure and process exit. */
+  nativeSqliteInitializationFailed(): boolean {
+    return !this.initialized && this.transport?.nativeSqliteInitializationFailed?.() === true;
+  }
+
   /**
    * close() 是幂等的; reason 仅用于 reject pending requests 的错误消息。
    * - reject 所有挂起 promise
    * - 关闭 transport (杀子进程 / 关 ssh channel)
    */
-  async close(opts?: { reason?: string }): Promise<void> {
-    if (this.closed) return;
-    this.closed = true;
-    const reason = opts?.reason ?? 'AppServerClient.close()';
+  async close(opts?: { reason?: string; throwOnTransportError?: boolean }): Promise<void> {
+    if (!this.closePromise) {
+      this.closed = true;
+      const reason = opts?.reason ?? 'AppServerClient.close()';
+      // 缓存未吞错的完成结果，各调用方独立选择是否传播失败。
+      const closePromise = Promise.resolve().then(() => this.transport?.close(reason)).catch((error) => {
+        // 保留 closed，后续调用仅重查幂等关闭，不重新开放协议。
+        if (this.closePromise === closePromise) this.closePromise = null;
+        this.logger.warn('transport.close threw', { message: (error as Error).message });
+        throw error;
+      });
+      this.closePromise = closePromise;
 
-    // reject 所有挂起 request — 上层 await 不会无限等。
-    const err = new Error(`codex app-server closed: ${reason}`);
-    for (const [, pending] of this.pending) {
-      if (pending.timeoutId) clearTimeout(pending.timeoutId);
-      pending.reject(err);
-    }
-    this.pending.clear();
-    this.writeFailureTombstones.clear();
-
-    if (this.transport) {
-      try {
-        await this.transport.close(reason);
-      } catch (e) {
-        this.logger.warn('transport.close threw', { message: (e as Error).message });
+      // reject 所有挂起 request — 包括正在 initialize 的调用。
+      const err = new Error(`codex app-server closed: ${reason}`);
+      for (const [, pending] of this.pending) {
+        if (pending.timeoutId) clearTimeout(pending.timeoutId);
+        pending.reject(err);
       }
+      this.pending.clear();
+      this.writeFailureTombstones.clear();
+    }
+    try {
+      await this.closePromise;
+    } catch (error) {
+      if (opts?.throwOnTransportError) throw error;
     }
   }
 
@@ -331,11 +373,12 @@ export class AppServerClient {
   /**
    * 发送一个 JSON-RPC request, 等待对应 id 的 response。
    * server 返回 error 时 reject 一个携带 code+message 的 Error。
+   * `extendWhileProgress` 只在给了 timeoutMs 时生效(见 RequestProgressDeadline)。
    */
   request<R = unknown>(
     method: string,
     params?: unknown,
-    opts?: { timeoutMs?: number },
+    opts?: { timeoutMs?: number; extendWhileProgress?: RequestProgressDeadline },
   ): Promise<R> {
     if (this.closed) {
       return Promise.reject(new Error(`AppServerClient.request(${method}) after close()`));
@@ -346,6 +389,15 @@ export class AppServerClient {
     const transport = this.transport;
     const id = this.nextId++;
     const payload = JSON.stringify({ id, method, params });
+    let credentialGeneration: string | null | undefined;
+    try {
+      credentialGeneration = this.captureCredentialGeneration?.();
+    } catch (error) {
+      credentialGeneration = null;
+      this.logger.warn('credential generation capture failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
     const timeoutMs = opts?.timeoutMs;
     if (
       timeoutMs !== undefined &&
@@ -360,15 +412,44 @@ export class AppServerClient {
         resolve: resolve as (v: unknown) => void,
         reject,
         method,
+        credentialGeneration,
         timeoutId: null,
       };
       this.pending.set(id, pending);
       if (timeoutMs !== undefined) {
-        pending.timeoutId = setTimeout(() => {
+        const progress = opts?.extendWhileProgress;
+        const startedAt = Date.now();
+        let extended = false;
+        const expire = (): void => {
           if (this.pending.get(id) !== pending) return;
+          if (progress) {
+            const now = Date.now();
+            let last: number | null = null;
+            try {
+              last = progress.lastProgressAt();
+            } catch {
+              last = null;
+            }
+            const idleLeft = last === null ? 0 : progress.idleMs - (now - last);
+            const capLeft = progress.maxMs - (now - startedAt);
+            if (idleLeft > 0 && capLeft > 0) {
+              extended = true;
+              pending.timeoutId = setTimeout(expire, Math.min(idleLeft, capLeft));
+              pending.timeoutId.unref?.();
+              return;
+            }
+          }
           this.pending.delete(id);
-          reject(new AppServerRequestTimeoutError(method, timeoutMs));
-        }, timeoutMs);
+          let detail: string | undefined;
+          try {
+            detail = progress?.describe?.();
+          } catch {
+            detail = undefined;
+          }
+          // 没顺延过时照旧报配置的上限；顺延过报实际等了多久。
+          reject(new AppServerRequestTimeoutError(method, extended ? Date.now() - startedAt : timeoutMs, detail));
+        };
+        pending.timeoutId = setTimeout(expire, timeoutMs);
         pending.timeoutId.unref?.();
       }
       transport.writeLine(payload).then(undefined, (err: Error) => {
@@ -378,7 +459,7 @@ export class AppServerClient {
         if (this.pending.get(id) !== pending) return;
         this.pending.delete(id);
         if (pending.timeoutId) clearTimeout(pending.timeoutId);
-        this.rememberWriteFailure(id, method);
+        this.rememberWriteFailure(id, method, credentialGeneration);
         reject(err);
       });
     });
@@ -470,15 +551,21 @@ export class AppServerClient {
   private dispatchResponse(id: JsonRpcId, result: unknown, error: JsonRpcErrorObject | null): void {
     const pending = this.pending.get(id);
     if (!pending) {
-      const failedWriteMethod = this.writeFailureTombstones.get(id);
-      if (failedWriteMethod !== undefined) {
+      const failedWrite = this.writeFailureTombstones.get(id);
+      if (failedWrite !== undefined) {
         this.writeFailureTombstones.delete(id);
         this.logger.warn('late response for request with failed write', {
           id,
-          method: failedWriteMethod,
+          method: failedWrite.method,
           hasError: error !== null,
         });
-        if (error) this.notifyAuthInvalidated(error, failedWriteMethod);
+        if (error) {
+          this.notifyAuthInvalidated(
+            error,
+            failedWrite.method,
+            failedWrite.credentialGeneration,
+          );
+        }
         return;
       }
       this.logger.warn('response for unknown id', { id });
@@ -487,7 +574,7 @@ export class AppServerClient {
     this.pending.delete(id);
     if (pending.timeoutId) clearTimeout(pending.timeoutId);
     if (error) {
-      this.notifyAuthInvalidated(error, pending.method);
+      this.notifyAuthInvalidated(error, pending.method, pending.credentialGeneration);
       const err = new Error(`codex app-server ${pending.method} error ${error.code}: ${error.message}`);
       // 把 code/data 挂上, 上层想区分 OVERLOADED 等可以判 (err as any).code。
       Object.assign(err, { code: error.code, data: error.data });
@@ -498,8 +585,12 @@ export class AppServerClient {
   }
 
   /** Keep write-failure correlation bounded; oldest ids are least useful. */
-  private rememberWriteFailure(id: JsonRpcId, method: string): void {
-    this.writeFailureTombstones.set(id, method);
+  private rememberWriteFailure(
+    id: JsonRpcId,
+    method: string,
+    credentialGeneration?: string | null,
+  ): void {
+    this.writeFailureTombstones.set(id, { method, credentialGeneration });
     while (this.writeFailureTombstones.size > MAX_WRITE_FAILURE_TOMBSTONES) {
       const oldestId = this.writeFailureTombstones.keys().next().value as JsonRpcId | undefined;
       if (oldestId === undefined) break;
@@ -508,12 +599,20 @@ export class AppServerClient {
   }
 
   /** Notify the host once, but only after the caller has correlated the response. */
-  private notifyAuthInvalidated(error: JsonRpcErrorObject, method?: string): void {
+  private notifyAuthInvalidated(
+    error: JsonRpcErrorObject,
+    method?: string,
+    credentialGeneration?: string | null,
+  ): void {
     const authInvalidationReason = detectAuthInvalidationReason(error, method);
     if (this.authInvalidatedFired || !this.onAuthInvalidated || !authInvalidationReason) return;
     this.authInvalidatedFired = true;
     try {
-      this.onAuthInvalidated(authInvalidationReason);
+      if (credentialGeneration === undefined) {
+        this.onAuthInvalidated(authInvalidationReason);
+      } else {
+        this.onAuthInvalidated(authInvalidationReason, { credentialGeneration });
+      }
     } catch (e) {
       this.logger.warn('onAuthInvalidated handler threw', { message: (e as Error).message });
     }

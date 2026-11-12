@@ -1,8 +1,22 @@
-import type { MessageBoxOptions } from 'electron';
-
 import type { ReviewArtifactConfirmationItem } from './reviewArtifactAuthorization.js';
 
 type Translate = (key: string) => string;
+
+export interface ReviewArtifactConfirmItem {
+  kind: 'external-path' | 'inline';
+  label: string;
+  path?: string;
+  inlineLabel?: string;
+}
+
+export interface ReviewArtifactConfirmDialogModel {
+  title: string;
+  message: string;
+  detail: string;
+  items: ReviewArtifactConfirmItem[];
+  allowText: string;
+  cancelText: string;
+}
 
 function dialogLine(value: string, max = 600): string {
   return (
@@ -14,34 +28,33 @@ function dialogLine(value: string, max = 600): string {
 }
 
 /**
- * Native consent is the final boundary before out-of-workspace bytes reach a
- * configured model. Every item remains visible and Cancel owns both Enter and
- * Escape so approval always requires an explicit click.
+ * Main owns the consent copy and sanitizes every value before the isolated
+ * Cindy consent window renders it. Every item remains visible and approval
+ * requires an explicit click.
  */
 export function buildReviewArtifactConfirmationDialog(
   items: readonly ReviewArtifactConfirmationItem[],
   translate: Translate,
-): MessageBoxOptions {
-  const lines = items.map((item) => {
+): ReviewArtifactConfirmDialogModel {
+  const dialogItems = items.map((item) => {
     const label = dialogLine(item.label);
     return item.kind === 'external-path'
-      ? `• ${label}\n  ${dialogLine(item.path ?? '', 1_200)}`
-      : `• ${label} (${translate('review.externalArtifactConfirm.inline')})`;
+      ? { kind: item.kind, label, path: dialogLine(item.path ?? '', 1_200) }
+      : {
+          kind: item.kind,
+          label,
+          inlineLabel: translate('review.externalArtifactConfirm.inline'),
+        };
   });
   return {
-    type: 'warning',
     title: translate('review.externalArtifactConfirm.title'),
     message: translate('review.externalArtifactConfirm.message').replace(
       '{{count}}',
       String(items.length),
     ),
-    detail: `${translate('review.externalArtifactConfirm.detail')}\n\n${lines.join('\n')}`,
-    buttons: [
-      translate('review.externalArtifactConfirm.cancel'),
-      translate('review.externalArtifactConfirm.allow'),
-    ],
-    defaultId: 0,
-    cancelId: 0,
-    noLink: true,
+    detail: translate('review.externalArtifactConfirm.detail'),
+    items: dialogItems,
+    allowText: translate('review.externalArtifactConfirm.allow'),
+    cancelText: translate('review.externalArtifactConfirm.cancel'),
   };
 }

@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { IMAttachment } from '@cindy/im';
 import type { WechatMediaRef, WechatTransport } from '@cindy/wechat-ilink';
 
-import * as blobStore from '../../cindy-media/blobStore';
+import * as blobStore from '../../cindy-media/blobStore.desktop';
 import { ingestMedia } from '../../cindy-media/ingest';
 import type {
   WechatPollFileAttachmentInput,
@@ -172,13 +172,6 @@ export async function removeReleasedWechatFiles(filePaths: readonly string[]): P
       await fs.rm(resolved, { force: true }).catch(() => undefined);
     }),
   );
-}
-
-export async function removeWechatSessionAttachmentDir(sessionId: string): Promise<void> {
-  const root = path.resolve(ownerScopedImUserDataPath('im-attachments', 'wechat', 'sessions'));
-  const target = path.resolve(root, sessionId);
-  if (!target.startsWith(`${root}${path.sep}`)) return;
-  await fs.rm(target, { recursive: true, force: true });
 }
 
 interface DetectedMedia {

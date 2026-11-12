@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { PluginMarketItem } from '../../../../../shared/pluginMarket';
 import {
+  canOfferMarketInstall,
   ghostReapprovalRoute,
   marketReviewTargetsInstalledGhost,
+  findInstalledGhostForMarketItem,
+  marketItemForInstalledGhost,
+  marketItemMatchesInstalledGhost,
   orderPluginCatalogItems,
   pluginPresentationOrigin,
   pluginUpdateForInstalledVersion,
@@ -84,9 +88,9 @@ describe('pluginPresentationOrigin', () => {
   });
 
   it('maps organization plugins to their organization source', () => {
-    expect(
-      pluginPresentationOrigin({ scope: 'organization', sourceType: 'server' }),
-    ).toBe('organization');
+    expect(pluginPresentationOrigin({ scope: 'organization', sourceType: 'server' })).toBe(
+      'organization',
+    );
   });
 
   it('keeps personal plugins out of the client-facing market taxonomy', () => {
@@ -94,9 +98,7 @@ describe('pluginPresentationOrigin', () => {
   });
 
   it('maps custom market sources to the custom origin regardless of scope', () => {
-    expect(pluginPresentationOrigin({ scope: 'public', sourceType: 'git-market' })).toBe(
-      'custom',
-    );
+    expect(pluginPresentationOrigin({ scope: 'public', sourceType: 'git-market' })).toBe('custom');
     expect(pluginPresentationOrigin({ scope: 'public', sourceType: 'local-market' })).toBe(
       'custom',
     );
@@ -203,5 +205,88 @@ describe('orderPluginCatalogItems', () => {
     expect(
       ordered.map(({ kind, item }) => `${kind}:${kind === 'installed' ? item.id : item.ghostId}`),
     ).toEqual(['market:first', 'installed:third']);
+  });
+});
+
+describe('market instance identity', () => {
+  type InstalledIdentity = Parameters<typeof marketItemMatchesInstalledGhost>[1];
+  const root = { manifest: { id: 'helper' }, dir: '/ghosts/helper' };
+  const knownRoot = { ...root, namespace: null };
+  const rootWithoutDirectory = { manifest: { id: 'helper' }, namespace: null };
+  const freshRoot = { ...knownRoot, dir: '/ghosts/_ns/_root/helper' };
+  const namespaced = {
+    ...root,
+    namespace: 'xd',
+    dir: '/ghosts/_ns/xd/helper',
+  };
+  const inPlace = { ...root, namespace: 'xd' };
+  const publicRow = { ghostId: 'helper' };
+  const explicitRoot = { ...publicRow, namespace: null };
+  const organizationRow = { ...publicRow, namespace: 'xd' };
+
+  it.each([
+    ['organization row', [namespaced, root], organizationRow, namespaced],
+    ['legacy row', [namespaced, root], publicRow, root],
+    ['legacy stamped row', [inPlace], publicRow, inPlace],
+    ['no physical root', [namespaced], publicRow, undefined],
+    ['fresh root beside stamped twin', [inPlace, freshRoot], explicitRoot, freshRoot],
+    ['fresh root alone', [freshRoot], explicitRoot, freshRoot],
+    ['stamped twin is not root', [inPlace], explicitRoot, undefined],
+    ['known root for legacy row', [namespaced, knownRoot], publicRow, knownRoot],
+    ['known root for explicit row', [namespaced, knownRoot], explicitRoot, knownRoot],
+    ['unstamped install is not organization', [root], organizationRow, undefined],
+    ['root without directory', [rootWithoutDirectory], explicitRoot, rootWithoutDirectory],
+    ['known namespace mismatch without directory', [{ manifest: { id: 'helper' }, namespace: 'xd' }], explicitRoot, undefined],
+  ] as const)('binds only the intended instance for %s', (_label, ghosts, item, expected) => {
+    expect(findInstalledGhostForMarketItem<InstalledIdentity>(ghosts, item)).toBe(expected);
+    for (const ghost of ghosts) {
+      expect(marketItemMatchesInstalledGhost(item, ghost)).toBe(ghost === expected);
+    }
+  });
+});
+
+describe('marketItemForInstalledGhost', () => {
+  const pending = { manifest: { id: 'helper' }, dir: '/ghosts/helper' };
+  const stampedInPlace = { ...pending, namespace: 'xd' };
+
+  it('keeps a pending legacy install local when a same-name organization market item is not installed', () => {
+    const organization = { ...marketItem('organization', 'helper', 'not-installed'),
+      scope: 'organization' as const, namespace: 'xd' };
+    expect(marketItemForInstalledGhost([organization], pending)).toBeNull();
+    expect(pluginPresentationOrigin(marketItemForInstalledGhost([organization], pending))).toBe('local');
+  });
+
+  it('does not let an uninstalled organization listing shadow a verified root route', () => {
+    const organization = { ...marketItem('organization', 'helper', 'not-installed'),
+      scope: 'organization' as const, namespace: 'xd' };
+    const root = { ...marketItem('root', 'helper', 'installed'), namespace: null };
+    expect(marketItemForInstalledGhost([organization, root], pending)).toBe(root);
+    expect(pluginPresentationOrigin(marketItemForInstalledGhost([organization, root], pending))).toBe('public');
+  });
+
+  it('does not use an unverified root route even when it points to the same directory', () => {
+    const root = marketItem('root', 'helper', 'not-installed');
+    expect(marketItemForInstalledGhost([root], pending)).toBeNull();
+  });
+
+  it('keeps a verified legacy market route for an in-place stamped organization plugin', () => {
+    const legacy = marketItem('legacy', 'helper', 'update-available');
+    expect(marketItemForInstalledGhost([legacy], stampedInPlace)).toBe(legacy);
+  });
+
+  it('requires logical identity for a known-namespace installed route', () => {
+    const organization = { ...marketItem('organization', 'helper', 'installed'),
+      scope: 'organization' as const, namespace: 'xd' };
+    expect(marketItemForInstalledGhost([organization], pending)).toBeNull();
+    expect(marketItemForInstalledGhost([organization], stampedInPlace)).toBe(organization);
+  });
+});
+
+describe('canOfferMarketInstall', () => {
+  it('hides signed-out installation without guessing service requirements from the plugin name', () => {
+    expect(canOfferMarketInstall('signed-out', 'cindy-test')).toBe(false);
+    expect(canOfferMarketInstall('local', 'cindy-art')).toBe(true);
+    expect(canOfferMarketInstall('local', 'cindy-test')).toBe(true);
+    expect(canOfferMarketInstall('cloud', 'cindy-art')).toBe(true);
   });
 });

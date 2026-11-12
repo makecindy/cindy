@@ -49,6 +49,113 @@ async function drain(queue: ReturnType<typeof createAsyncQueue<AgentEvent>>): Pr
 }
 
 describe('Claude Code translator tool output normalization', () => {
+  it.each(['toolu_child', null, undefined])('preserves tool-result scope %s without inheriting the last assistant', async (parent) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+    ctx.rt.lastAssistantMeta = { uuid: 'root-assistant' };
+    translateSdkMessage({
+      type: 'user',
+      parent_tool_use_id: parent,
+      message: { content: [{
+        type: 'tool_result', tool_use_id: 'image-tool',
+        content: 'xdt-image://fixture/generated.png',
+      }] },
+    }, queue, ctx);
+    const results = (await drain(queue)).filter((event) => event.type === 'tool_result_full');
+    expect(results).toHaveLength(1);
+    expect(results[0].data).toEqual({
+      toolUseId: 'image-tool', fullText: 'xdt-image://fixture/generated.png',
+    });
+    expect(results[0].agentMeta).toEqual(parent ? { parentUuid: parent } : undefined);
+  });
+
+  it.each([true, false])('propagates tool_result.is_error=%s to the loop-guard callback', (isError) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const onToolResultDone = vi.fn();
+    const ctx = { ...createCtx(), onToolResultDone };
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'toolu_error_flag', name: 'Read', input: { file_path: 'fixture.txt' } }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: 'toolu_error_flag',
+            content: 'The pages must be numbered',
+            is_error: isError,
+          }],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    expect(onToolResultDone).toHaveBeenCalledWith(
+      'toolu_error_flag',
+      'The pages must be numbered',
+      undefined,
+      isError,
+      expect.any(String),
+    );
+  });
+
+  it('把同一 user tool-result 消息中的并行结果标记为同一批次', () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const onToolResultDone = vi.fn();
+    const ctx = { ...createCtx(), onToolResultDone };
+    const toolUses = ['toolu_batch_1', 'toolu_batch_2', 'toolu_batch_3'];
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: toolUses.map((id) => ({
+            type: 'tool_use',
+            id,
+            name: 'Edit',
+            input: { old_string: id },
+          })),
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: toolUses.map((id) => ({
+            type: 'tool_result',
+            tool_use_id: id,
+            content: 'The required parameter `file_path` is missing',
+            is_error: true,
+          })),
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const batchIds = onToolResultDone.mock.calls.map((call) => call[4]);
+    expect(batchIds).toHaveLength(3);
+    expect(new Set(batchIds).size).toBe(1);
+    expect(batchIds[0]).toEqual(expect.any(String));
+  });
+
   it('preserves a 64KB ghost_manual JSON envelope as an MCP tool result', async () => {
     const { content, wire } = makeGhostManual64KiBFixture();
     expect(Buffer.byteLength(content, 'utf8')).toBeLessThanOrEqual(64 * 1024);
@@ -249,5 +356,19 @@ describe('Claude Code translator tool output normalization', () => {
       },
       source: 'claude-code',
     });
+  });
+});
+
+// Regression: image-only tool results used to disappear from the GUI; unit tier.
+it('retains native image-only results and their tool identity', async () => {
+  const queue = createAsyncQueue<AgentEvent>();
+  translateSdkMessage({ type: 'user', message: { content: [{ type: 'tool_result',
+    tool_use_id: 'read-image', content: [{ type: 'image', source: {
+      type: 'base64', media_type: 'image/png', data: 'aW1hZ2U=',
+    } }],
+  }] } }, queue, createCtx());
+  expect((await drain(queue)).find(e => e.type === 'tool_result_full')?.data).toMatchObject({
+    toolUseId: 'read-image', fullText: '',
+    processMedia: [{ kind: 'image', mimeType: 'image/png', data: 'aW1hZ2U=' }],
   });
 });

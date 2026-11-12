@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   getCurrentStatus: vi.fn<
     () => 'idle' | 'testing' | 'connected' | 'reconnecting' | 'conflict' | 'error'
   >(() => 'idle'),
+  getCurrentError: vi.fn<() => string | undefined>(() => undefined),
   readCredentials: vi.fn(
     () =>
       null as {
@@ -28,6 +29,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../wsClient.js', () => ({
   QUIT_OFFLINE_ANNOUNCE_TIMEOUT_MS: 4500,
   getCurrentStatus: mocks.getCurrentStatus,
+  getCurrentError: mocks.getCurrentError,
   setLifecycleAnnouncement: vi.fn(),
   clearOrphanRetriesForCredentialClear: vi.fn(),
   stop: mocks.stop,
@@ -133,6 +135,7 @@ beforeEach(() => {
   operationGate = null;
   vi.clearAllMocks();
   mocks.getCurrentStatus.mockReturnValue('idle');
+  mocks.getCurrentError.mockReturnValue(undefined);
   mocks.readCredentials.mockReturnValue(null);
   mocks.stop.mockResolvedValue(undefined);
   mocks.start.mockResolvedValue('connected');
@@ -142,6 +145,17 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+// Unit regression: opening settings after a failure must retain its cause.
+// Existing tests cover account boundaries, not the get-state error snapshot.
+it('returns the connection failure reason when settings opens after the status event', async () => {
+  mocks.getCurrentStatus.mockReturnValue('error');
+  mocks.getCurrentError.mockReturnValue('connect ETIMEDOUT');
+  await expect(Promise.resolve(handlers.get('feishuBot:get-state')?.())).resolves.toMatchObject({
+    status: 'error',
+    error: 'connect ETIMEDOUT',
+  });
 });
 
 describe('Feishu IPC account scope', () => {
@@ -379,6 +393,7 @@ describe('Feishu credential connection semantics', () => {
     expect(mocks.stop).toHaveBeenCalledWith({
       reason: 'credentials-cleared',
       clearOwnerBeforeIdle: true,
+      discardPendingTopicLeases: true,
     });
     expect(mocks.clearOwner).not.toHaveBeenCalled();
     expect(mocks.clearAll).toHaveBeenCalledOnce();
@@ -457,6 +472,7 @@ describe('Feishu credential connection semantics', () => {
     expect(mocks.stop).toHaveBeenCalledWith({
       announceOffline: false,
       reason: 'manual-reconnect',
+      nextAccount: { appId: credentials.appId, service: credentials.service },
     });
     expect(mocks.start).toHaveBeenCalledWith(credentials, {
       announceLifecycle: false,
@@ -474,6 +490,7 @@ describe('Feishu credential connection semantics', () => {
     expect(mocks.stop).toHaveBeenCalledWith({
       announceOffline: false,
       reason: 'manual-reconnect',
+      nextAccount: { appId: credentials.appId, service: credentials.service },
     });
     expect(mocks.start).toHaveBeenCalledWith(credentials, {
       announceLifecycle: false,
@@ -491,6 +508,7 @@ describe('Feishu credential connection semantics', () => {
     expect(mocks.stop).toHaveBeenCalledWith({
       reason: 'credentials-replaced',
       clearOwnerBeforeIdle: true,
+      nextAccount: { appId: 'cli_other', service: 'feishu' },
     });
     expect(mocks.start).toHaveBeenCalledWith(
       { appId: 'cli_other', appSecret: 'other-secret', service: 'feishu' },
@@ -513,6 +531,7 @@ describe('Feishu credential connection semantics', () => {
     expect(mocks.stop).toHaveBeenCalledWith({
       reason: 'credentials-replaced',
       clearOwnerBeforeIdle: true,
+      nextAccount: { appId: credentials.appId, service: 'lark' },
     });
     expect(mocks.start).toHaveBeenCalledWith(
       {
@@ -536,6 +555,7 @@ describe('Feishu credential connection semantics', () => {
     expect(mocks.stop).toHaveBeenCalledWith({
       reason: 'credentials-replaced',
       clearOwnerBeforeIdle: true,
+      nextAccount: { appId: 'cli_registered', service: 'feishu' },
     });
     expect(mocks.writeOwnerOpenId).toHaveBeenCalledWith('ou_registered_owner');
     expect(mocks.loadOwner).toHaveBeenCalledOnce();
@@ -568,6 +588,7 @@ describe('Feishu credential connection semantics', () => {
     expect(mocks.stop).toHaveBeenCalledWith({
       reason: 'credentials-replaced',
       clearOwnerBeforeIdle: false,
+      nextAccount: { appId: credentials.appId, service: credentials.service },
     });
     expect(mocks.writeOwnerOpenId).not.toHaveBeenCalled();
     expect(mocks.loadOwner).not.toHaveBeenCalled();

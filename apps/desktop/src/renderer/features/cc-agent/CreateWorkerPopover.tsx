@@ -1,8 +1,29 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  WorkerProjectField,
+  useWorkerProjectSelection,
+  workerProjectName,
+} from './WorkerProjectField';
+import { modelCatalogKey } from '../../../shared/controlledModelCatalog';
+import {
+  ORCA_REMOTE_WORKER_MODELS_CHANNEL,
+  ORCA_WORKER_ROLES_APPLY,
+  ORCA_WORKER_ROLES_GET,
+  parseOrcaWorkerRoles,
+  type OrcaWorkerRolesMutation,
+} from '@cindy/device-link';
+import { orcaWorkflowsForDevice } from '@/lib/makerTransport';
+import type { WorkerWorktreeRequest } from '../../../shared/orca-worker-project';
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import * as Dialog from '@radix-ui/react-dialog';
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
+import { Button } from '@/components/ui/button';
+import { Select } from '@/components/ui/select';
+import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { Info, TriangleAlert, X } from 'lucide-react';
-import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
+import { ChevronDown, Folder, Plus, X } from 'lucide-react';
+import { AddRemoteProjectDialog } from '@/components/new-chat/AddRemoteProjectDialog';
 import {
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
@@ -13,11 +34,12 @@ import {
 } from '@cindy/model-providers';
 
 import { FastModeToggle } from '@/components/new-chat/FastModeToggle';
-import { FullAccessConfirmContent } from '@/components/new-chat/FullAccessConfirmContent';
-import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { ModelSelector, type RemoteAgentSelectorOptions } from '@/components/new-chat/ModelSelector';
+import { remoteAgentProviders } from '@/components/new-chat/unifiedModelSelection';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSwitcher';
 import { agentKindToVendor } from '@/components/sidebar/VendorIcon';
+import { providersSettingsPath } from '@/features/provider-share/providerShareNavigation';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useProviders } from '@/hooks/useProviders';
@@ -25,6 +47,10 @@ import { filterChatBridgedCodexProviders } from '@/lib/providerModels';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { cn } from '@/lib/utils';
 import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
+import {
+  agentDeviceModelMemoryAccessors,
+  useAgentDeviceModelMemoryVersion,
+} from '@/state/agentDeviceModelMemory';
 import {
   getProviderModelEffort,
   getProviderModelFast,
@@ -34,11 +60,22 @@ import {
 } from '@/state/providerModelMemory';
 import {
   DEFAULT_WORKER_CREATION_PREFS,
+  EMPTY_WORKER_ROLE_PREFS,
+  forgetWorkerRole,
+  fromRemoteWorkerDefaults,
+  fromRemoteWorkerRoles,
+  listedWorkerRoles,
   readWorkerCreationPrefs,
+  readWorkerRolePrefs,
+  rememberWorkerRoleSubmission,
+  workerRoleMemory,
   writeWorkerCreationPrefs,
   type WorkerCreationPrefs,
+  type WorkerRoleMemory,
+  type WorkerRolePrefs,
 } from '@/state/workerCreationPrefs';
 import type { Effort } from '@/lib/userPreferences.types';
+import { extractIpcError } from '@/utils/ipcError';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Tip } from '@/components/ui/tooltip';
 import {
@@ -47,28 +84,91 @@ import {
   type OrcaWorkerPermissionMode,
 } from '../../../shared/orca-worker-permission-mode';
 import { selectWorkerModels } from './workerModelAvailability';
+import {
+  BUILTIN_WORKER_ROLES,
+  resolveCustomWorkerRole,
+  taskAfterTemplateChange,
+  workerStarterTaskKey,
+} from './workerTemplates';
 
-const PREDEFINED_ROLES = ['developer', 'designer', 'reviewer', 'tester', 'merger'] as const;
 const AUTO_ONLY_WORKER_PERMISSION_MODES = ['auto'] as const;
+
+/** 本机目录的模型级全局预设(与 composer 共用)。 */
+const LOCAL_WORKER_MODEL_MEMORY = {
+  getEffort: getProviderModelEffort,
+  setEffort: setProviderModelEffort,
+  setChoice: setProviderModelChoice,
+  getFast: getProviderModelFast,
+  setFast: setProviderModelFast,
+};
 
 export interface CreateWorkerForm {
   role: string;
   agent: 'claude-code' | 'codex' | 'pi';
   model: string;
   effort?: Effort;
-  fast?: boolean;
+  fast?: boolean | 'ultrafast';
   /** 显式选定的模型来源;null = 未显式,由 main 侧按默认路由解析。 */
   providerId: string | null;
   initialTask: string;
   /** 本次 Worker 权限；提交后同时成为下一次创建 Worker 的默认值。 */
   workerPermissionMode?: OrcaWorkerPermissionMode;
+  /** 运行设备(同账号另一台电脑)；缺省 = 这台电脑。 */
+  executionDeviceId?: string;
+  /** 运行设备名，只用于失败提示。 */
+  executionDeviceName?: string;
+  /** 本机显式项目目录，或指定运行设备上的目录；远程缺省创建对话任务。 */
+  workingDir?: string;
+  worktree?: WorkerWorktreeRequest;
+  projectPath?: string;
+  /**
+   * Worker 的 Agent 所在电脑(远程供应商)：string = 那台电脑或分享，null = 任务所在电脑。
+   * 缺省 = 不指定(任务所在电脑不支持选择时)，Worker 跟 Lead。
+   */
+  agentDeviceId?: string | null;
+}
+
+/** 可放 Worker 的同账号其他电脑(`maker:orca:execution-devices`)。 */
+export interface ExecutionDeviceOption {
+  deviceId: string;
+  name: string;
+  platform: string | null;
+  /** false = 版本过旧，不可选。 */
+  supported: boolean;
+  supportsAgentDevice?: boolean;
+}
+
+export function parseExecutionDevices(value: unknown): ExecutionDeviceOption[] {
+  const devices = (value as { devices?: unknown } | null)?.devices;
+  if (!Array.isArray(devices)) return [];
+  return devices.flatMap((item) => {
+    const row = item as Record<string, unknown> | null;
+    if (!row || typeof row.deviceId !== 'string' || !row.deviceId) return [];
+    return [
+      {
+        deviceId: row.deviceId,
+        name: typeof row.name === 'string' && row.name ? row.name : row.deviceId,
+        platform: typeof row.platform === 'string' ? row.platform : null,
+        supported: row.supported === true,
+        ...(row.supportsAgentDevice === true ? { supportsAgentDevice: true } : {}),
+      },
+    ];
+  });
+}
+
+/** 运行设备的系统未知：接受 POSIX、Windows 盘符与 UNC 绝对路径，是否存在由那台检查。 */
+export function isAbsoluteRemoteDir(value: string): boolean {
+  return /^(\/|[a-zA-Z]:[\\/]|\\\\)/.test(value);
 }
 
 export interface CreateWorkerPopoverProps {
+  leadSessionId?: string;
   open: boolean;
   onClose: () => void;
   onCreate: (form: CreateWorkerForm) => void | Promise<void>;
   title?: string;
+  /** 标题下的一句说明；开启协同时用它讲清 Lead 与 Worker 的分工。 */
+  description?: string;
   submitLabel?: string;
   className?: string;
   /** device-link controlled device; omitted for a local Lead session. */
@@ -82,24 +182,54 @@ export interface CreateWorkerPopoverProps {
   sshRemote?: boolean;
   /** 开启新协同时必须确认执行端支持权限偏好；已有旧版远程 Team 创建 Worker 仍兼容旧行为。 */
   requireWorkerPermissionModeSupport?: boolean;
+  /** 允许把 Worker 放到同账号另一台电脑运行(SSH Lead 除外)。 */
+  executionDevicesEnabled?: boolean;
+  /**
+   * Lead 的 Agent 所在电脑(远程供应商)：string = 那台电脑或分享，null / 缺省 = 任务所在电脑。
+   * Worker 默认跟它，模型目录也先按它读(主进程不指定位置时同样让 Worker 跟 Lead)。
+   */
+  leadAgentDeviceId?: string | null;
+  /**
+   * 可以放 Worker Agent 的其他电脑与分享(与任务输入框模型面板同一份候选，不含任务所在电脑)。
+   * 传了且任务所在电脑支持时，模型面板左侧栏列出这些远程供应商；缺省 = 不提供(SSH 等)。
+   */
+  remoteAgentDevices?: readonly { deviceId: string; name: string }[];
+  catalogHostDeviceId?: string;
 }
 
 export function CreateWorkerPopover({
+  leadSessionId,
   open,
   onClose,
   onCreate,
   title,
+  description,
   submitLabel,
   className,
-  deviceId,
+  deviceId: leadDeviceId,
   sshRemote,
   requireWorkerPermissionModeSupport = false,
+  executionDevicesEnabled = false,
+  leadAgentDeviceId,
+  remoteAgentDevices,
+  catalogHostDeviceId,
 }: CreateWorkerPopoverProps) {
   const { t } = useTranslation();
   const { confirm: confirmDialog } = useConfirmDialog();
   const navigate = useNavigate();
-  const [role, setRole] = useState('developer');
+  // 选中的预设角色；null = 「自定义」，角色名取下面的输入。
+  const [selectedRole, setSelectedRole] = useState<string | null>(BUILTIN_WORKER_ROLES[0] ?? null);
   const [customRole, setCustomRole] = useState('');
+  const [moreSettingsOpen, setMoreSettingsOpen] = useState(false);
+  // 远程控制的任务从任务所在电脑读到的记忆；prefs 为 null = 那台读不到角色清单。
+  // memory 是「上次选择」记在哪：'host' = 那台电脑上；'controller' = 那台电脑版本太旧，沿用这台
+  // 电脑自己的旧记忆；'none' = 一时读不到，按首次默认值打开，这台电脑不存。
+  const [remoteRoles, setRemoteRoles] = useState<{
+    deviceId: string;
+    prefs: WorkerRolePrefs | null;
+    memory: 'host' | 'controller' | 'none';
+  } | null>(null);
+  const [remoteRolesRequest, setRemoteRolesRequest] = useState(0);
   const [agent, setAgent] = useState<'claude-code' | 'codex' | 'pi'>('codex');
   const [model, setModel] = useState(DEFAULT_WORKER_CREATION_PREFS.codex.model);
   const [effort, setEffort] = useState<Effort>(DEFAULT_WORKER_CREATION_PREFS.codex.effort);
@@ -114,24 +244,77 @@ export function CreateWorkerPopover({
   const [prefsRestored, setPrefsRestored] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submittingRef = useRef(false);
+  const [executionDevices, setExecutionDevices] = useState<ExecutionDeviceOption[]>([]);
+  const [executionDeviceId, setExecutionDeviceId] = useState<string | null>(null);
+  const [executionAgentDevices, setExecutionAgentDevices] = useState<{
+    deviceId: string; devices: Array<{ deviceId: string; name: string }>;
+  } | null>(null);
+  const [remoteDirMode, setRemoteDirMode] = useState<'dialogue' | 'path'>('dialogue');
+  const [remoteDir, setRemoteDir] = useState('');
+  const [directoryPickerOpen, setDirectoryPickerOpen] = useState(false);
+  const directoryTargetRef = useRef<{ deviceId: string | null; open: boolean; pickerOpen: boolean }>({ deviceId: null, open, pickerOpen: false });
+  directoryTargetRef.current = { deviceId: executionDeviceId, open, pickerOpen: directoryPickerOpen };
+  useEffect(() => { setDirectoryPickerOpen(false); }, [executionDeviceId, open]);
+  // Worker 的 Agent 所在电脑(远程供应商)；null = 任务所在电脑。没有手动记忆时跟 Lead。
+  const [agentDeviceId, setAgentDeviceId] = useState<string | null>(null);
+  const dataOwnerId = getDataOwnerGeneration().dataOwnerId;
+  const modelSelectionScope = JSON.stringify([dataOwnerId, leadDeviceId ?? 'local']);
+  // 模型、供应商与能力按 Worker 的 Agent 实际运行的电脑读取：选了远程供应商读那台(或分享)，
+  // 远程控制的 Lead 读它所在的电脑，选了运行设备则读运行设备。权限档始终跟 Lead 所在电脑走。
+  const workerHostDeviceId = executionDeviceId ?? leadDeviceId;
+  const deviceId = agentDeviceId ?? workerHostDeviceId ?? undefined;
+  const catalogDeviceId = modelCatalogKey(deviceId, executionDeviceId ? undefined : catalogHostDeviceId);
+  const executionDevice = executionDevices.find((d) => d.deviceId === executionDeviceId) ?? null;
+  const agentDevices = executionDeviceId
+    ? executionAgentDevices?.deviceId === executionDeviceId ? executionAgentDevices.devices : []
+    : remoteAgentDevices;
+  const localProjectEnabled =
+    !!leadSessionId && !leadDeviceId && !sshRemote && !executionDeviceId && !isSidebarWindow();
+  const project = useWorkerProjectSelection(open, leadSessionId, localProjectEnabled);
+  const trimmedRemoteDir = remoteDir.trim();
+  const remoteDirInvalid =
+    !!executionDevice && remoteDirMode === 'path' && !isAbsoluteRemoteDir(trimmedRemoteDir);
 
-  const ccCaps = useAgentCapabilities('claude-code', deviceId);
-  const codexCaps = useAgentCapabilities('codex', deviceId);
-  const piCaps = useAgentCapabilities('pi', deviceId);
+  const ccCaps = useAgentCapabilities('claude-code', catalogDeviceId);
+  const codexCaps = useAgentCapabilities('codex', catalogDeviceId);
+  const piCaps = useAgentCapabilities('pi', catalogDeviceId);
+  const pickerAgents = useModelPickerAgents(agent, catalogDeviceId);
   const localProviders = useProviders();
-  const remoteProviders = useDeviceProviders(deviceId);
-  const providers = deviceId ? remoteProviders.providers : localProviders.providers;
+  const remoteProviders = useDeviceProviders(catalogDeviceId);
+  // Agent 在另一台电脑运行时只能用那台允许被远程调用的供应商(那台是最终裁决方)。
+  const providers = useMemo(
+    () =>
+      deviceId
+        ? agentDeviceId
+          ? remoteAgentProviders(remoteProviders.providers)
+          : remoteProviders.providers
+        : localProviders.providers,
+    [agentDeviceId, deviceId, localProviders.providers, remoteProviders.providers],
+  );
   const providersLoading = deviceId ? remoteProviders.loading : localProviders.loading;
   const providersError = deviceId ? remoteProviders.error : null;
   const visibilityVersion = useModelVisibilityVersion();
+  useAgentDeviceModelMemoryVersion();
   const activeCapabilitiesState = agent === 'codex' ? codexCaps : agent === 'pi' ? piCaps : ccCaps;
   const activeCaps = activeCapabilitiesState.capabilities;
+  // 协同的执行端是任务所在电脑：Worker 权限与「能否给 Worker 选 Agent 位置」按它的能力判，
+  // 不跟着模型目录换到 Agent 所在电脑。这两位是整台电脑的协议位，用那台一定注册的 Claude Code
+  // 读(Worker 选的 Agent 可能只装在 Agent 所在电脑上，按它读会读不到)。
+  const hostCaps = useAgentCapabilities(leadDeviceId ? 'claude-code' : null, leadDeviceId);
+  const taskHostCaps = leadDeviceId ? hostCaps.capabilities : activeCaps;
   const supportsWorkerPermissionModeSelection =
-    !deviceId || activeCaps?.supportsOrcaWorkerPermissionMode === true;
+    !leadDeviceId || taskHostCaps?.supportsOrcaWorkerPermissionMode === true;
   const remoteWorkerPermissionModeUnsupported =
-    !!deviceId
-    && activeCaps !== null
-    && activeCaps?.supportsOrcaWorkerPermissionMode !== true;
+    !!leadDeviceId
+    && taskHostCaps !== null
+    && taskHostCaps?.supportsOrcaWorkerPermissionMode !== true;
+  // 能否给 Worker 单独选 Agent 所在电脑：本机任务恒可以；远程控制的任务要那台声明支持(老端会把
+  // 字段静默丢掉)。跨设备 Worker 还要工作电脑声明独立 Agent 能力。
+  const agentLocationSelectable =
+    agentDevices !== undefined
+    && sshRemote !== true
+    && (!executionDeviceId || executionDevice?.supportsAgentDevice === true)
+    && (!leadDeviceId || hostCaps.capabilities?.supportsOrcaWorkerAgentDevice === true);
   const activeModels = useMemo(() => {
     return selectWorkerModels({
       agent,
@@ -183,7 +366,7 @@ export function CreateWorkerPopover({
   );
   const narrowProviderSource = useCallback(
     (candidate: string | null, modelId: string): string | null => {
-      if (!candidate || deviceId) return null;
+      if (!candidate || (deviceId && remoteProviders.unsupported)) return null;
       const provider = routableProviders.find((p) => p.id === candidate);
       if (!provider || !providerOffersModel(provider, modelId, agent)) return null;
       const catalogModel = getModel(provider, modelId, agent);
@@ -198,7 +381,7 @@ export function CreateWorkerPopover({
         ? candidate
         : null;
     },
-    [agent, deviceId, routableProviders],
+    [agent, deviceId, remoteProviders.unsupported, routableProviders],
   );
 
   // per-provider Fast 能力:同一 model id 在不同来源下 supportsFastMode 可不同(见
@@ -209,7 +392,7 @@ export function CreateWorkerPopover({
   // peer 无 provider 镜像,解析不出来源)才回落拍平并集(codex review)。
   const providerFastSupported = useCallback(
     (candidate: string | null, modelId: string): boolean => {
-      // device-link 面板无来源维度,candidate 恒 null,走默认来源解析。
+      // 本机和远程显式来源同一口径；只有未指定时解析默认来源。
       const sourceId =
         candidate ?? effectiveSourceIdForModel(routableProviders, null, modelId, agent);
       if (!sourceId) {
@@ -239,10 +422,8 @@ export function CreateWorkerPopover({
   const routeEffortMetaFor = useCallback(
     (modelId: string): { efforts: readonly string[]; defaultEffort: string | null } | undefined => {
       const flat = activeModels.find((m) => m.id === modelId);
-      const sourceId = deviceId
-        ? effectiveSourceIdForModel(providers, null, modelId, agent)
-        : narrowProviderSource(providerSource, modelId)
-          ?? effectiveSourceIdForModel(routableProviders, null, modelId, agent);
+      const sourceId = narrowProviderSource(providerSource, modelId)
+        ?? effectiveSourceIdForModel(routableProviders, null, modelId, agent);
       const provider = sourceId
         ? (deviceId ? connectedProvidersForAgent(providers, agent) : routableProviders).find(
             (p) => p.id === sourceId,
@@ -268,24 +449,143 @@ export function CreateWorkerPopover({
     (activeCaps !== null || activeCapabilitiesState.error !== null) &&
     activeModels.length === 0;
 
-  // 打开弹窗时恢复上次选择；initial task 不记忆，避免把旧任务误带到下一次创建。
+  // 选中一个预设时任务框里带出的内容：这个角色上次提交的文字；没记过的，内置检查类预设用自带的
+  // 一句话。自带的任务只在 Lead 已有工作可查时提供，新建任务的草稿没有 leadSessionId。
+  const leadHasWork = !!leadSessionId;
+  const defaultTaskFor = useCallback(
+    (role: string | null, roles: WorkerRolePrefs) => {
+      if (role === null) return '';
+      const remembered = workerRoleMemory(roles, role)?.task;
+      if (remembered !== undefined) return remembered;
+      const key = leadHasWork ? workerStarterTaskKey(role) : null;
+      return key ? t(key) : '';
+    },
+    [leadHasWork, t],
+  );
+  // 打开弹窗的 effect 只在打开那一刻读它：语言或任务切换不应把已填的表单重置一遍。
+  const defaultTaskForRef = useRef(defaultTaskFor);
+  defaultTaskForRef.current = defaultTaskFor;
+  const focusCustomRoleRef = useRef(false);
+
+  // 打开弹窗时恢复上次选择：回到上次提交的角色，带出它记下的任务文字、模型和权限。
+  // Lead 的位置按打开那一刻读：打开期间它变化(分享列表异步读到、任务快照刷新)不清掉用户已填的内容，
+  // 只在没有已保存的模型选择、本次也没手选时让 Worker 的位置继续跟着 Lead。
+  const leadAgentDeviceIdRef = useRef(leadAgentDeviceId ?? null);
+  leadAgentDeviceIdRef.current = leadAgentDeviceId ?? null;
+  const modelSelectionChosenRef = useRef(false);
+  const restoredModelSelectionRef = useRef(false);
+  // 打开后用户是否已经动过表单：远程的角色清单晚一步读到时，动过就不再替他改选。
+  const interactedRef = useRef(false);
+  // 按一份「上次选择」和角色清单把表单恢复成打开时的样子：回到第一个(上次用的)角色，带出它记的
+  // 任务、模型和权限，没记过的用「上次选择」。本机任务打开时用这台电脑的；远程控制的任务读到那台
+  // 电脑的记忆后再按它恢复一次。
+  // prefsFromHost：这份「上次选择」是任务所在的电脑自己记的(本机任务，或读到了被控端的记忆)。
+  // 它记的来源(providerId)属于那台电脑的目录，可以带回；操作端自己的旧记忆里的来源不能用在别的电脑上。
+  const restoreForm = (stored: WorkerCreationPrefs, roles: WorkerRolePrefs, prefsFromHost: boolean) => {
+    // 这一排按最近使用排序，第一个就是上次用的角色；全部移除后只剩角色名输入。
+    const role = listedWorkerRoles(roles)[0] ?? null;
+    const roleMemory = role === null ? undefined : workerRoleMemory(roles, role);
+    // 这个角色自己记的模型路线优先，其次是通用的上次选择。
+    const selection = sshRemote
+      ? undefined
+      : roleMemory?.modelSelectionByHost?.[modelSelectionScope]
+        ?? stored.modelSelectionByHost?.[modelSelectionScope];
+    const rememberedAgent = selection?.agent ?? stored.lastAgent;
+    const agentPrefs = selection ?? stored[rememberedAgent];
+    // 完整选择优先；旧版逐 Agent 记忆没有位置信息，仍按原规则跟 Lead，不猜测旧值的归属。
+    const leadLocation = leadAgentDeviceIdRef.current;
+    modelSelectionChosenRef.current = selection !== undefined;
+    restoredModelSelectionRef.current = selection !== undefined;
+    setPrefs(stored);
+    setAgent(rememberedAgent);
+    setModel(agentPrefs.model);
+    setEffort(agentPrefs.effort);
+    setFast(agentPrefs.fast);
+    setAgentDeviceId(selection ? selection.agentDeviceId : leadLocation);
+    setProviderSource(
+      selection ? selection.providerId : (leadDeviceId && !prefsFromHost) || leadLocation ? null : agentPrefs.providerId,
+    );
+    setSelectedRole(role);
+    setCustomRole('');
+    setInitialTask(defaultTaskForRef.current(role, roles));
+    setSelectedWorkerPermissionMode(roleMemory?.permission ?? stored.workerPermissionMode);
+  };
+  const restoreFormRef = useRef(restoreForm);
+  restoreFormRef.current = restoreForm;
   useEffect(() => {
     if (!open) {
       setPrefsRestored(false);
       return;
     }
-    const stored = readWorkerCreationPrefs();
-    const agentPrefs = stored[stored.lastAgent];
-    setPrefs(stored);
-    setAgent(stored.lastAgent);
-    setModel(agentPrefs.model);
-    setEffort(agentPrefs.effort);
-    setFast(agentPrefs.fast);
-    setProviderSource(deviceId ? null : agentPrefs.providerId);
-    setInitialTask('');
-    setSelectedWorkerPermissionMode(stored.workerPermissionMode);
+    interactedRef.current = false;
+    // 远程控制的任务：角色清单和「上次选择」都以那台电脑为准，这里先按没有记录打开，读到后再
+    // 套用(见下)；不拿这台电脑自己的记忆垫底。
+    if (leadDeviceId) restoreFormRef.current(DEFAULT_WORKER_CREATION_PREFS, EMPTY_WORKER_ROLE_PREFS, false);
+    else {
+      const stored = readWorkerCreationPrefs();
+      restoreFormRef.current(stored, readWorkerRolePrefs(stored, getDataOwnerGeneration().dataOwnerId), true);
+    }
+    setMoreSettingsOpen(false);
+    setExecutionDeviceId(null);
+    setRemoteDirMode('dialogue');
+    setRemoteDir('');
     setPrefsRestored(true);
-  }, [deviceId, open]);
+  }, [leadDeviceId, modelSelectionScope, open, sshRemote]);
+  useEffect(() => {
+    if (open && !executionDeviceId && !modelSelectionChosenRef.current) setAgentDeviceId(leadAgentDeviceId ?? null);
+  }, [leadAgentDeviceId, executionDeviceId, open]);
+
+  // 可选运行设备：每次打开读一次；读不到就只有这台电脑，不提示错误。
+  useEffect(() => {
+    if (!open || !executionDevicesEnabled) {
+      setExecutionDevices([]);
+      return;
+    }
+    let disposed = false;
+    const workflows = leadDeviceId ? orcaWorkflowsForDevice(leadDeviceId) : window.electronAPI?.localDb?.orcaWorkflows;
+    void Promise.resolve(workflows?.listExecutionDevices?.())
+      .then((value) => {
+        if (!disposed) setExecutionDevices(parseExecutionDevices(value));
+      })
+      .catch(() => {
+        if (!disposed) setExecutionDevices([]);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [executionDevicesEnabled, leadDeviceId, open]);
+
+  useEffect(() => {
+    if (!open || !executionDeviceId || !executionDevice?.supportsAgentDevice) return;
+    let disposed = false;
+    void window.electronAPI.deviceLink.invoke(executionDeviceId, ORCA_REMOTE_WORKER_MODELS_CHANNEL, [{}])
+      .then((value) => {
+        const locations = (value as { locations?: Array<{ agentDeviceId: string; name: string }> }).locations ?? [];
+        if (!disposed) setExecutionAgentDevices({ deviceId: executionDeviceId,
+          devices: locations.filter(location => remoteAgentDevices?.some(device => device.deviceId === location.agentDeviceId))
+            .map(location => ({ deviceId: location.agentDeviceId, name: location.name })) });
+      })
+      .catch(() => { if (!disposed) setExecutionAgentDevices({ deviceId: executionDeviceId, devices: [] }); });
+    return () => { disposed = true; };
+  }, [executionDevice?.supportsAgentDevice, executionDeviceId, open, remoteAgentDevices]);
+
+  // 当前这份「上次选择」是不是任务所在的电脑自己记的(本机任务，或已读到被控端的记忆)。
+  const hostPrefs =
+    !leadDeviceId || (remoteRoles?.deviceId === leadDeviceId && remoteRoles.memory === 'host');
+  const selectExecutionDevice = useCallback(
+    (next: string | null) => {
+      if (next === executionDeviceId) return;
+      restoredModelSelectionRef.current = false;
+      modelSelectionChosenRef.current = false;
+      setExecutionDeviceId(next);
+      setAgentDeviceId(next ? null : leadAgentDeviceIdRef.current);
+      setRemoteDirMode('dialogue');
+      setRemoteDir('');
+      // 换工作电脑后重新按它的目录选择来源；回到 Lead 时恢复本机记忆。
+      setProviderSource(next || (leadDeviceId && !hostPrefs) ? null : prefs[agent].providerId);
+    },
+    [agent, executionDeviceId, hostPrefs, leadDeviceId, prefs],
+  );
 
   useEffect(() => {
     if (
@@ -296,13 +596,17 @@ export function CreateWorkerPopover({
     }
   }, [selectedWorkerPermissionMode, supportsWorkerPermissionModeSelection]);
 
+  const rememberedSourceUnavailable = restoredModelSelectionRef.current
+    && providerSource !== null && narrowProviderSource(providerSource, model) !== providerSource;
+
   // capabilities 可能尚未加载或模型被移除；加载后把当前选择收敛到可用模型和 effort。
   useEffect(() => {
-    if (!open || !prefsRestored || modelCatalogLoading) return;
+    if (!open || !prefsRestored || modelCatalogLoading || rememberedSourceUnavailable) return;
     const models = activeModels;
     if (models.length === 0) return;
     let selected = models.find((m) => m.id === model);
     if (!selected) {
+      if (restoredModelSelectionRef.current) return;
       // Provider loading has settled, so activeModels is authoritative for both local and remote
       // creation. A capability entry alone does not make a disconnected provider's model usable.
       selected = models[0];
@@ -319,7 +623,7 @@ export function CreateWorkerPopover({
     // 恢复出来的显式来源可能已断开或不提供收敛后的模型 —— 目录就绪后同步收窄。
     if (providerSource !== null) {
       const narrowed = narrowProviderSource(providerSource, selected.id);
-      if (narrowed !== providerSource) setProviderSource(narrowed);
+      if (narrowed !== providerSource && !restoredModelSelectionRef.current) setProviderSource(narrowed);
     }
   }, [
     activeModels,
@@ -330,34 +634,38 @@ export function CreateWorkerPopover({
     narrowProviderSource,
     open,
     prefsRestored,
+    rememberedSourceUnavailable,
     providerSource,
     routeEffortMetaFor,
   ]);
 
   useEffect(() => {
-    if (currentModel && !currentModelSupportsFast && fast) {
+    if (!modelCatalogLoading && !rememberedSourceUnavailable && currentModel && !currentModelSupportsFast && fast) {
       setFast(false);
     }
-  }, [currentModel, currentModelSupportsFast, fast]);
+  }, [currentModel, currentModelSupportsFast, fast, modelCatalogLoading, rememberedSourceUnavailable]);
 
   const vendorKey = agentKindToVendor(agent);
   const updateAgent = useCallback(
     (nextAgent: 'claude-code' | 'codex' | 'pi') => {
       if (nextAgent === agent) return;
+      modelSelectionChosenRef.current = true;
+      restoredModelSelectionRef.current = false;
       // 切走前把当前 agent 的 live 编辑(模型/effort/Fast/来源)快照进内存 prefs:
       // 恢复读的是 prefs,不快照会把「改了还没提交就切了个 tab」的编辑静默回滚到
       // 打开弹窗时的旧值(codex review)。只更新内存态,localStorage 仍只在提交时
       // 写 —— 关闭弹窗不持久化未提交编辑,语义不变。
       const snapshot: WorkerCreationPrefs = {
         ...prefs,
-        [agent]: {
-          model,
-          effort,
-          fast,
-          // device-link 面板无来源维度(providerSource 恒 null),保留本地记忆原值,
-          // 与提交路径同规则。
-          providerId: deviceId ? prefs[agent].providerId : providerSource,
-        },
+        // 另一台电脑(远程供应商)目录里的选择不进本机 Worker 偏好，与提交路径同规则。
+        [agent]: deviceId
+          ? prefs[agent]
+          : {
+              model,
+              effort,
+              fast,
+              providerId: providerSource,
+            },
       };
       setPrefs(snapshot);
       setAgent(nextAgent);
@@ -365,13 +673,16 @@ export function CreateWorkerPopover({
       setModel(remembered.model);
       setEffort(remembered.effort);
       setFast(remembered.fast);
-      setProviderSource(deviceId ? null : remembered.providerId);
+      // Agent 就在任务所在的电脑上、也没选运行设备，且这份记忆来自那台电脑时，带回它记的来源。
+      setProviderSource(!agentDeviceId && !executionDeviceId && hostPrefs ? remembered.providerId : null);
     },
-    [agent, deviceId, effort, fast, model, prefs, providerSource],
+    [agent, agentDeviceId, deviceId, effort, executionDeviceId, fast, hostPrefs, model, prefs, providerSource],
   );
 
   const updateModel = useCallback(
     (nextModel: string) => {
+      modelSelectionChosenRef.current = true;
+      restoredModelSelectionRef.current = false;
       setModel(nextModel);
       // flat 面板换模型(device-link 退化路径):effort 同样按路由来源档位表收敛,
       // 与收敛 effect / 提交同口径,不留显示与派发不一致的窗口。
@@ -396,24 +707,24 @@ export function CreateWorkerPopover({
   // 主动从模型级全局预设恢复(codex review:否则用户在非选中行 hover 配置的
   // effort/Fast 在选中该行后被丢弃);Fast 还要叠加该来源条目的 per-provider 能力。
   const handleProviderChange = useCallback(
-    (providerId: string | null, modelId?: string, reconciledEffort?: Effort) => {
+    (providerId: string | null, modelId?: string, reconciledEffort?: Effort, reconciledFast?: boolean | 'ultrafast') => {
+      modelSelectionChosenRef.current = true;
+      restoredModelSelectionRef.current = false;
       const nextModel = modelId ?? model;
       const narrowed = narrowProviderSource(providerId, nextModel);
       // 「钉/重选当前生效来源」与「切到恰好提供同一模型的另一来源」必须区分
       // (codex review):前者保留表单 live 值(仅把生效来源钉成显式);后者是真实
       // 来源切换,要恢复目标行显示的预设。判据 = 目标来源是否就是切换前的生效来源
       // (显式值,未显式时为解析出的默认来源),不能只看模型是否相同。
-      const effectiveBefore = deviceId
-        ? null
-        : providerSource ?? effectiveSourceIdForModel(routableProviders, null, model, agent);
+      const effectiveBefore = providerSource ?? effectiveSourceIdForModel(routableProviders, null, model, agent);
       setProviderSource(narrowed);
       if (!modelId) return;
-      if (modelId === model && narrowed !== null && narrowed === effectiveBefore) {
+      if (modelId === model && narrowed !== null && narrowed === effectiveBefore && reconciledEffort === undefined && reconciledFast === undefined) {
         // 钉当前生效来源也是一次真实选定:live effort/Fast 保留,但 (来源, 模型)
         // 要记入全局 choice —— 该来源槽的 lastModel 可能还指着别的模型,不记会让
         // 其它标准选择器切到该来源时恢复 stale 模型(codex review)。无档模型跳过,
         // 与下方真实切换路径同规则。
-        if (currentModel && currentModel.efforts.length > 0) {
+        if (!deviceId && currentModel && currentModel.efforts.length > 0) {
           setProviderModelChoice(agent, narrowed, modelId, effort);
         }
         return;
@@ -425,7 +736,7 @@ export function CreateWorkerPopover({
       // 同 id 模型的 efforts/defaultEffort 跨来源可分叉,按拍平条目校验会保留/赋予
       // 选中来源不支持的档位,提交后被 main 侧路由来源校验拒掉(codex review)。
       // 未收窄出显式来源时取生效默认来源的条目;来源条目缺失或无档位元数据时
-      // 回落拍平条目(device-link 无本地目录,handleProviderChange 本就不接线)。
+      // 回落拍平条目(仅旧被控端缺少完整来源目录)。
       const effortSourceId =
         narrowed ?? effectiveSourceIdForModel(routableProviders, null, modelId, agent);
       const effortSourceProvider = effortSourceId
@@ -440,7 +751,7 @@ export function CreateWorkerPopover({
       const validEfforts: readonly string[] = effortMeta.efforts;
       const remembered =
         reconciledEffort ??
-        (providerId ? getProviderModelEffort(agent, providerId, modelId) : undefined);
+        (!deviceId && providerId ? getProviderModelEffort(agent, providerId, modelId) : undefined);
       let nextEffort: Effort | null = null;
       if (remembered && validEfforts.includes(remembered)) {
         nextEffort = remembered;
@@ -458,7 +769,7 @@ export function CreateWorkerPopover({
       // 其它标准选择器的 resolveSourceSwitch 用它做切来源落点),否则本面板的显式
       // 选择不进全局记忆,别处切到该来源仍恢复旧模型(codex review)。无档模型
       // 跳过 —— store 的 lastModel 依附 effort 记录。
-      if (effortSourceId && nextEffort) {
+      if (!deviceId && effortSourceId && nextEffort) {
         setProviderModelChoice(agent, effortSourceId, modelId, nextEffort);
       }
       if (!providerFastSupported(narrowed, modelId)) {
@@ -466,10 +777,10 @@ export function CreateWorkerPopover({
       } else {
         // 面板行的 Fast 闪电按全局预设显示,无预设 = 关:选行后必须对齐显示,
         // 不能沿用上一个模型的 true(codex review)。
-        const rememberedFast = providerId
+        const rememberedFast = !deviceId && providerId
           ? getProviderModelFast(agent, providerId, modelId)
           : undefined;
-        setFast(rememberedFast === true);
+        setFast((reconciledFast ?? rememberedFast) === true);
       }
     },
     [
@@ -493,80 +804,225 @@ export function CreateWorkerPopover({
   // 影响,但来源槽兼容副本按实际生效来源落 key,不在收敛 effect 前的窗口里写给已
   // 失效来源(copilot review;ChatInput 的 effectiveSourceId 同语义);收窄空则回落
   // 该模型的生效默认来源(全局预设本就是跨来源共享)。
-  const activeMemorySourceId = deviceId
+  // 非选中行 hover 配置(推理强度/Fast)与 composer 共用同一份模型级全局预设。
+  // device-link 远程创建不传:被控端记忆需镜像通道,宁可无记忆也不掺控制端本机。
+  // Agent 在另一台电脑(远程供应商)时用本机为那台单独记的一份，与任务输入框同一份。
+  const modelMemory = useMemo(
+    () =>
+      agentDeviceId
+        ? agentDeviceModelMemoryAccessors(agentDeviceId)
+        : deviceId
+          ? undefined
+          : LOCAL_WORKER_MODEL_MEMORY,
+    [agentDeviceId, deviceId],
+  );
+  const activeMemorySourceId = !modelMemory
     ? null
     : narrowProviderSource(providerSource, model)
       ?? effectiveSourceIdForModel(routableProviders, null, model, agent);
   const updateEffort = useCallback(
     (next: Effort) => {
       setEffort(next);
-      if (activeMemorySourceId && model) {
-        setProviderModelEffort(agent, activeMemorySourceId, model, next);
+      if (modelMemory && activeMemorySourceId && model) {
+        modelMemory.setEffort(agent, activeMemorySourceId, model, next);
       }
     },
-    [activeMemorySourceId, agent, model],
+    [activeMemorySourceId, agent, model, modelMemory],
   );
   const updateFast = useCallback(
-    (enabled: boolean) => {
+    (enabled: boolean | 'ultrafast') => {
       setFast(enabled);
-      if (activeMemorySourceId && model) {
-        setProviderModelFast(agent, activeMemorySourceId, model, enabled);
+      if (modelMemory && activeMemorySourceId && model) {
+        modelMemory.setFast(agent, activeMemorySourceId, model, enabled);
       }
     },
-    [activeMemorySourceId, agent, model],
+    [activeMemorySourceId, agent, model, modelMemory],
   );
 
-  // 非选中行 hover 配置(推理强度/Fast)与 composer 共用同一份模型级全局预设。
-  // device-link 远程创建不传:被控端记忆需镜像通道,宁可无记忆也不掺控制端本机。
-  const modelMemory = useMemo(
+  // 远程 Agent：模型面板左侧栏在任务所在电脑的供应商之后列出其他电脑与分享的供应商，选中那里的
+  // 模型 = Worker 的 Agent 在那台运行(与新建任务同一套)，工作电脑独立选择。
+  const remoteAgentOptions = useMemo<RemoteAgentSelectorOptions | undefined>(
     () =>
-      deviceId
-        ? undefined
-        : {
-            getEffort: getProviderModelEffort,
-            setEffort: setProviderModelEffort,
-            setChoice: setProviderModelChoice,
-            getFast: getProviderModelFast,
-            setFast: setProviderModelFast,
-          },
-    [deviceId],
+      agentLocationSelectable && agentDevices && (agentDevices.length > 0 || !!executionDeviceId)
+        ? {
+            devices: agentDevices,
+            catalogHostDeviceId: executionDeviceId ? undefined : catalogHostDeviceId,
+            selectedDeviceId: agentDeviceId,
+            ...(workerHostDeviceId ? { homeDeviceId: workerHostDeviceId } : { localModelMemory: LOCAL_WORKER_MODEL_MEMORY }),
+            deviceModelMemory: agentDeviceModelMemoryAccessors,
+          }
+        : undefined,
+    [agentDeviceId, agentLocationSelectable, workerHostDeviceId, agentDevices, executionDeviceId, catalogHostDeviceId],
   );
+  const agentDeviceName = agentDeviceId
+    ? (agentDevices?.find((device) => device.deviceId === agentDeviceId)?.name ?? null)
+    : null;
 
-  const activeRole = customRole || role;
-  const customRoleError =
-    customRole.length > 0 &&
-    PREDEFINED_ROLES.includes(customRole as (typeof PREDEFINED_ROLES)[number])
-      ? t('orca.createWorker.customRolePredefinedError')
-      : null;
+  // 角色清单与记忆的来源：本机任务读这台电脑的；远程控制的任务(device-link)读任务所在的那台电脑，
+  // 读到之前、或那台电脑版本太旧读不到时，只列内置角色，不能增删也不记忆。
+  const remoteRolePrefs =
+    leadDeviceId && remoteRoles?.deviceId === leadDeviceId ? remoteRoles.prefs : null;
+  const localRolePrefs = useMemo(() => readWorkerRolePrefs(prefs, dataOwnerId), [dataOwnerId, prefs]);
+  const rolePrefs = leadDeviceId ? (remoteRolePrefs ?? EMPTY_WORKER_ROLE_PREFS) : localRolePrefs;
+  const rolesEditable = !leadDeviceId || remoteRolePrefs !== null;
+  const listedRoles = useMemo(() => listedWorkerRoles(rolePrefs), [rolePrefs]);
+  const builtinRoleName = useCallback(
+    (role: string) => t(`orca.createWorker.templates.${role}.name`),
+    [t],
+  );
+  const roleDisplayName = (role: string) =>
+    BUILTIN_WORKER_ROLES.includes(role) ? builtinRoleName(role) : role;
+  const customTemplate = selectedRole === null;
+  // 输入的名字与某个预设同名就算继续用那个预设(移除过的内置预设也这样找回来)，不报错。
+  const activeRole = selectedRole ?? resolveCustomWorkerRole(customRole, builtinRoleName);
+  // 一个角色上次提交的模型和权限一起带回；没记过的保持表单当前的选择不动。
+  // 选了其他运行设备时模型目录来自那台电脑，记的是任务所在电脑的路线，不套用。
+  const applyRoleMemory = useCallback(
+    (memory: WorkerRoleMemory | undefined) => {
+      const selection =
+        sshRemote || executionDeviceId
+          ? undefined
+          : memory?.modelSelectionByHost?.[modelSelectionScope];
+      if (selection) {
+        modelSelectionChosenRef.current = true;
+        restoredModelSelectionRef.current = true;
+        setAgent(selection.agent);
+        setModel(selection.model);
+        setEffort(selection.effort);
+        setFast(selection.fast);
+        setAgentDeviceId(selection.agentDeviceId);
+        setProviderSource(selection.providerId);
+      }
+      if (memory?.permission && supportsWorkerPermissionModeSelection) {
+        setSelectedWorkerPermissionMode(memory.permission);
+      }
+    },
+    [executionDeviceId, modelSelectionScope, sshRemote, supportsWorkerPermissionModeSelection],
+  );
+  const applyRoleMemoryRef = useRef(applyRoleMemory);
+  applyRoleMemoryRef.current = applyRoleMemory;
+  // 远程控制的任务：打开时向任务所在的电脑读记忆(角色清单 + 「上次选择」)。读到时用户还没动过
+  // 表单，就像本机打开那样按它恢复；已经动过则只更新角色这一排，不替他改选。
+  useEffect(() => {
+    if (!open || !leadDeviceId) {
+      setRemoteRoles(null);
+      return;
+    }
+    let disposed = false;
+    setRemoteRoles(null);
+    // 包一层 Promise：调用本身抛错(通道还没就绪)也按读不到处理。
+    void Promise.resolve()
+      .then(() => window.electronAPI.deviceLink.invoke(leadDeviceId, ORCA_WORKER_ROLES_GET, []))
+      .then((value) => {
+        if (disposed) return;
+        const remote = parseOrcaWorkerRoles(value);
+        const roles = fromRemoteWorkerRoles(remote, modelSelectionScope);
+        setRemoteRoles({ deviceId: leadDeviceId, prefs: roles, memory: 'host' });
+        const stored = fromRemoteWorkerDefaults(remote, modelSelectionScope) ?? DEFAULT_WORKER_CREATION_PREFS;
+        // 用户已动过表单：不替他改选，但那台电脑记的「上次选择」仍要接过来，之后切换 Agent
+        // 等操作才会按它的记忆恢复，而不是退回首次默认值。
+        if (interactedRef.current) {
+          setPrefs(stored);
+          return;
+        }
+        restoreFormRef.current(stored, roles, true);
+      })
+      .catch((error) => {
+        if (disposed) return;
+        // 那台电脑版本太旧、没有这组通道：只列内置角色、不能增删，「上次选择」沿用这台电脑自己的
+        // 旧记忆。一时读不到(还没准备好、连不上)：保持按首次默认值打开，不提示错误。
+        const unsupported = extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED';
+        setRemoteRoles({ deviceId: leadDeviceId, prefs: null, memory: unsupported ? 'controller' : 'none' });
+        if (unsupported) {
+          if (interactedRef.current) setPrefs(readWorkerCreationPrefs());
+          else restoreFormRef.current(readWorkerCreationPrefs(), EMPTY_WORKER_ROLE_PREFS, false);
+        }
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [leadDeviceId, modelSelectionScope, open, remoteRolesRequest]);
+  const selectRole = useCallback(
+    (next: string | null) => {
+      if (next === selectedRole) return;
+      setInitialTask((current) =>
+        taskAfterTemplateChange(
+          current,
+          defaultTaskFor(selectedRole, rolePrefs),
+          defaultTaskFor(next, rolePrefs),
+        ),
+      );
+      setSelectedRole(next);
+      // 用户刚切到「自定义」：角色名输入出现后把焦点交给它。
+      focusCustomRoleRef.current = next === null;
+      applyRoleMemory(next === null ? undefined : workerRoleMemory(rolePrefs, next));
+    },
+    [applyRoleMemory, defaultTaskFor, rolePrefs, selectedRole],
+  );
+  const removeRole = useCallback(
+    async (role: string) => {
+      // 移除会丢掉这个角色记住的内容，先确认；说明里写清之后怎么加回来。
+      const confirmed = await confirmDialog({
+        title: t('orca.createWorker.removePresetConfirm.title', {
+          role: BUILTIN_WORKER_ROLES.includes(role) ? builtinRoleName(role) : role,
+        }),
+        description: t('orca.createWorker.removePresetConfirm.description'),
+        confirmText: t('orca.createWorker.removePresetConfirm.confirm'),
+        cancelText: t('orca.createWorker.removePresetConfirm.cancel'),
+      });
+      if (!confirmed) return;
+      // 移除的是正在选中的那个：换到剩下的第一个；一个都不剩就进入添加角色。
+      if (selectedRole === role) selectRole(listedRoles.find((item) => item !== role) ?? null);
+      if (leadDeviceId) {
+        // 远程控制的任务：改的是任务所在那台电脑的清单。这里先从这一排拿掉；没改成就重新读一次，
+        // 以那台电脑的实际清单为准。
+        setRemoteRoles((current) =>
+          current?.deviceId === leadDeviceId && current.prefs
+            ? {
+                ...current,
+                prefs: {
+                  ...current.prefs,
+                  recentRoles: current.prefs.recentRoles.filter((item) => item !== role),
+                  removedBuiltinRoles: [...current.prefs.removedBuiltinRoles, role],
+                },
+              }
+            : current,
+        );
+        const mutation: OrcaWorkerRolesMutation = { kind: 'forget', role };
+        void Promise.resolve()
+          .then(() => window.electronAPI.deviceLink.invoke(leadDeviceId, ORCA_WORKER_ROLES_APPLY, [mutation]))
+          .catch(() => setRemoteRolesRequest((value) => value + 1));
+        return;
+      }
+      // 确认过的移除立即落盘；只改角色记忆，不把弹窗里尚未提交的模型编辑一并写进去。
+      const ownerId = getDataOwnerGeneration().dataOwnerId;
+      writeWorkerCreationPrefs(forgetWorkerRole(readWorkerCreationPrefs(), ownerId, role));
+      setPrefs((current) => forgetWorkerRole(current, ownerId, role));
+    },
+    [builtinRoleName, confirmDialog, leadDeviceId, listedRoles, selectRole, selectedRole, t],
+  );
+  // 选了 Lead 之外的位置、但任务所在电脑现在不能带这个字段(能力还在读 / 已降级)：不能悄悄按 Lead 的位置建。
+  const agentLocationUnsendable =
+    !agentLocationSelectable && agentDeviceId !== (executionDeviceId ? null : leadAgentDeviceId ?? null);
   const canCreate =
+    (!localProjectEnabled || project.ready) &&
     !isSubmitting &&
     activeRole.length >= 1 &&
     activeRole.length <= 32 &&
-    !customRoleError &&
     !remoteModelListBlocked &&
+    !remoteDirInvalid &&
+    !agentLocationUnsendable &&
+    !rememberedSourceUnavailable &&
     (!requireWorkerPermissionModeSupport || !remoteWorkerPermissionModeUnsupported) &&
     !!currentModel;
   const resolvedTitle = title ?? t('orca.createWorker.title');
   const resolvedSubmitLabel = submitLabel ?? t('orca.createWorker.submit');
 
   const updateWorkerPermissionMode = useCallback(
-    async (nextMode: OrcaWorkerPermissionMode) => {
-      if (requiresFullAccessConfirmation(selectedWorkerPermissionMode, nextMode)) {
-        const confirmed = await confirmDialog({
-          title: t('newChat.chatInput.fullAccessConfirmation.title'),
-          description: t('newChat.chatInput.fullAccessConfirmation.description'),
-          content: <FullAccessConfirmContent />,
-          describeContent: true,
-          maxWidth: 440,
-          confirmText: t('newChat.chatInput.fullAccessConfirmation.confirm'),
-          cancelText: t('newChat.chatInput.fullAccessConfirmation.cancel'),
-          confirmIcon: <TriangleAlert size={14} />,
-        });
-        if (!confirmed) return;
-      }
+    (nextMode: OrcaWorkerPermissionMode) => {
       setSelectedWorkerPermissionMode(nextMode);
     },
-    [confirmDialog, selectedWorkerPermissionMode, t],
+    [],
   );
 
   const handleCreate = useCallback(async () => {
@@ -575,22 +1031,91 @@ export function CreateWorkerPopover({
     setIsSubmitting(true);
     // 提交前对 (来源, 模型) 再收窄一次:收敛 effect 与提交之间目录可能已变化。
     const submitProviderId = narrowProviderSource(providerSource, model);
-    const nextPrefs: WorkerCreationPrefs = {
-      ...prefs,
+    // 弹窗打开期间，手机或另一台电脑可能已改了这台电脑的记忆(角色清单、上次选择，App 直接写进存储)。
+    // 所以记忆以存储里最新的为准，只叠加本次提交自己的字段，不用打开时的快照覆盖别处的改动。
+    const withSubmission = (base: WorkerCreationPrefs): WorkerCreationPrefs => ({
+      ...base,
+      // 只记手动确认的路线，默认跟随与运行设备的临时目录不固化成模型偏好。
+      ...(!sshRemote && !executionDevice && modelSelectionChosenRef.current ? {
+        modelSelectionByHost: {
+          ...base.modelSelectionByHost,
+          [modelSelectionScope]: { agent, agentDeviceId, model, effort, fast, providerId: submitProviderId },
+        },
+      } : {}),
       lastAgent: agent,
       workerPermissionMode: supportsWorkerPermissionModeSelection
         ? selectedWorkerPermissionMode
-        : prefs.workerPermissionMode,
-      [agent]: {
-        model,
-        effort,
-        fast,
-        // device-link 创建不覆盖本地来源记忆(远程面板没有来源维度)。
-        providerId: deviceId ? prefs[agent].providerId : submitProviderId,
-      },
-    };
-    setPrefs(nextPrefs);
-    writeWorkerCreationPrefs(nextPrefs);
+        : base.workerPermissionMode,
+      // 远程路线单独记在 modelSelectionByHost，不覆盖旧版逐 Agent 的本机目录记忆。
+      [agent]: deviceId
+        ? base[agent]
+        : {
+            model,
+            effort,
+            fast,
+            providerId: submitProviderId,
+          },
+    });
+    const latestWithSubmission = () => withSubmission(readWorkerCreationPrefs());
+    // 这个角色这次的内容：任务文字(为空或就是预设自带的那句则不记)、权限、手动选定的模型路线。
+    // 自定义角色同时留在预设里，下次打开回到它。
+    const starterTaskKey = workerStarterTaskKey(activeRole);
+    const rememberedTask =
+      starterTaskKey && initialTask === t(starterTaskKey) ? undefined : initialTask;
+    const rememberedPermission = supportsWorkerPermissionModeSelection
+      ? selectedWorkerPermissionMode
+      : undefined;
+    const rememberedModel =
+      !sshRemote && !executionDevice && modelSelectionChosenRef.current
+        ? { agent, agentDeviceId, model, effort, fast, providerId: submitProviderId }
+        : undefined;
+    if (leadDeviceId) {
+      // 远程控制的任务：记到任务所在的那台电脑上，这台电脑不留副本 —— 这个角色的内容，连同不分
+      // 角色的「上次选择」(choice)。只有那台电脑版本太旧时，「上次选择」才按旧办法记在这台电脑上。
+      const memoryHome = remoteRoles?.deviceId === leadDeviceId ? remoteRoles.memory : 'none';
+      const rememberHere = () => {
+        const merged = latestWithSubmission();
+        setPrefs(merged);
+        writeWorkerCreationPrefs(merged);
+      };
+      if (memoryHome === 'controller') rememberHere();
+      else {
+        const mutation: OrcaWorkerRolesMutation = {
+          kind: 'remember',
+          role: activeRole,
+          ...(rememberedTask !== undefined && rememberedTask.trim() !== '' ? { task: rememberedTask } : {}),
+          ...(rememberedPermission ? { permission: rememberedPermission } : {}),
+          ...(rememberedModel ? { model: rememberedModel } : {}),
+          choice: {
+            agent,
+            // 逐 Agent 的模型只在它属于那台电脑自己的目录时记：Agent 就在那台电脑上，也没选运行设备。
+            ...(agentDeviceId === null && !executionDevice
+              ? { agentModel: { model, effort, fast, providerId: submitProviderId } }
+              : {}),
+            ...(rememberedModel ? { route: rememberedModel } : {}),
+          },
+        };
+        void Promise.resolve()
+          .then(() => window.electronAPI.deviceLink.invoke(leadDeviceId, ORCA_WORKER_ROLES_APPLY, [mutation]))
+          .catch((error) => {
+            // 还没读到那台电脑的记忆就提交了，结果它版本太旧：这次按旧办法记在这台电脑上。
+            if (memoryHome === 'none' && extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') {
+              rememberHere();
+            }
+          });
+      }
+    } else {
+      const nextPrefsWithRole = rememberWorkerRoleSubmission(latestWithSubmission(), dataOwnerId, {
+        role: activeRole,
+        ...(rememberedTask !== undefined ? { task: rememberedTask } : {}),
+        ...(rememberedPermission ? { permission: rememberedPermission } : {}),
+        ...(rememberedModel
+          ? { model: { scope: modelSelectionScope, selection: rememberedModel } }
+          : {}),
+      });
+      setPrefs(nextPrefsWithRole);
+      writeWorkerCreationPrefs(nextPrefsWithRole);
+    }
     // 提交 effort 按**实际路由来源档位表**对账(codex/copilot review):恢复路径的
     // stale effort、以及路由来源条目无档而拍平条目有档的组合,直接把 live 值
     // explicit 下发会被 main 侧路由来源校验拒掉(INVALID_PARAMS 阻断创建)。条目
@@ -606,6 +1131,7 @@ export function CreateWorkerPopover({
         : (submitEffortMeta?.defaultEffort ?? undefined);
     try {
       await onCreate({
+        ...(localProjectEnabled ? project.fields : {}),
         role: activeRole,
         agent,
         model,
@@ -616,16 +1142,32 @@ export function CreateWorkerPopover({
         ...(supportsWorkerPermissionModeSelection
           ? { workerPermissionMode: selectedWorkerPermissionMode }
           : {}),
+        ...(executionDevice
+          ? {
+              executionDeviceId: executionDevice.deviceId,
+              executionDeviceName: executionDevice.name,
+              ...(remoteDirMode === 'path' ? { workingDir: trimmedRemoteDir } : {}),
+            }
+          : {}),
+        // 任务所在电脑支持时总是显式带上 Worker 的 Agent 位置(null = 任务所在电脑)，不依赖
+        // 创建时 Lead 的位置；不支持的老被控端不带，Worker 跟 Lead(与面板读的目录一致)。
+        ...(agentLocationSelectable ? { agentDeviceId } : {}),
       });
     } finally {
       submittingRef.current = false;
       setIsSubmitting(false);
     }
   }, [
+    localProjectEnabled,
+    project.fields,
     canCreate,
     prefs,
+    modelSelectionScope,
+    sshRemote,
     activeRole,
     agent,
+    agentDeviceId,
+    agentLocationSelectable,
     deviceId,
     model,
     effort,
@@ -639,127 +1181,263 @@ export function CreateWorkerPopover({
     routeEffortMetaFor,
     selectedWorkerPermissionMode,
     supportsWorkerPermissionModeSelection,
+    executionDevice,
+    remoteDirMode,
+    trimmedRemoteDir,
+    dataOwnerId,
+    t,
+    leadDeviceId,
+    remoteRoles,
   ]);
 
-  if (!open) return null;
+  const roleInputRef = useRef<HTMLInputElement>(null);
+  const taskInputRef = useRef<HTMLTextAreaElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
+  const templateLabelId = useId();
+  const moreSettingsId = useId();
+  useEffect(() => {
+    if (!customTemplate || !focusCustomRoleRef.current) return;
+    focusCustomRoleRef.current = false;
+    roleInputRef.current?.focus();
+  }, [customTemplate]);
+
+  const hasMoreSettings = localProjectEnabled || executionDevices.length > 0;
+  // 需要用户处理的问题(项目目录读不到 / 已不存在、其他电脑上的目录无效)不能藏在收起的分区里。
+  const moreSettingsNeedsAttention =
+    (localProjectEnabled
+      && (project.failed === true || (!!project.context && !project.context.selected.exists)))
+    || remoteDirInvalid;
+  const moreSettingsExpanded = moreSettingsOpen || moreSettingsNeedsAttention;
+  const moreSettingsSummary = [
+    localProjectEnabled && project.context
+      ? project.sameProject
+        ? t('orca.workerProject.current')
+        : workerProjectName(project.context)
+      : null,
+    executionDevices.length > 0
+      ? (executionDevice?.name ?? t('orca.createWorker.thisComputer'))
+      : null,
+  ]
+    .filter((part): part is string => !!part)
+    .join(' · ');
+  const handleClose = useCallback(() => {
+    if (!submittingRef.current) onClose();
+  }, [onClose]);
 
   return (
-    <div className={cn('fixed inset-0 z-50 flex items-center justify-center', className)}>
-      <div className="absolute inset-0 bg-[var(--overlay-modal)]" onClick={onClose} />
-      <div
-        className="relative z-10 w-[500px] rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-6"
-        style={{ boxShadow: 'var(--shadow-menu)' }}
+    <><Dialog.Root open={open} onOpenChange={(next) => { if (!next) handleClose(); }}>
+      <Dialog.Portal>
+      <Dialog.Overlay
+        className={cn('modal-scrim fixed inset-0 z-50 flex items-center justify-center', className)}
+        // 遮罩不是拖拽区:标 drag 会把整块视口变成拖拽命中区,只给 500px 的 Content 挖洞,
+        // 探出洞的浮层(模型面板)左侧就被吞掉 —— 与其它 modal 弹窗同口径(windowDrag.tsx)。
+        style={WINDOW_NO_DRAG_STYLE}
       >
-        <div className="mb-5 flex items-center justify-between">
-          <span className="text-16 font-medium text-[var(--text-primary)]">{resolvedTitle}</span>
+      <Dialog.Content
+        className="modal-panel relative z-10 max-h-[calc(100dvh-48px)] w-[500px] overflow-y-auto p-6 outline-none"
+        // 没有说明文字时显式置空,避免指向不存在的描述节点。
+        {...(description ? {} : { 'aria-describedby': undefined })}
+        onPointerDownOutside={(event) => event.preventDefault()}
+        // 用户动过表单后，晚到的远程记忆不再替他改选。点击与输入也算：读屏和粘贴不一定先有
+        // 指针或按键事件。
+        onPointerDownCapture={() => { interactedRef.current = true; }}
+        onKeyDownCapture={() => { interactedRef.current = true; }}
+        onClickCapture={() => { interactedRef.current = true; }}
+        onInputCapture={() => { interactedRef.current = true; }}
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+          taskInputRef.current?.focus();
+        }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          if (openerRef.current?.isConnected) openerRef.current.focus({ preventScroll: true });
+        }}
+        onEscapeKeyDown={(event) => {
+          if (submittingRef.current || event.isComposing || event.keyCode === 229) event.preventDefault();
+        }}
+        style={WINDOW_NO_DRAG_STYLE}
+      >
+        <div className="mb-5 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <Dialog.Title asChild>
+              <span className="block text-16 font-medium text-[var(--text-primary)]">{resolvedTitle}</span>
+            </Dialog.Title>
+            {description ? (
+              <Dialog.Description className="mt-1.5 text-12 leading-snug text-[var(--text-secondary)]">
+                {description}
+              </Dialog.Description>
+            ) : null}
+          </div>
           <button
             type="button"
             aria-label={t('orca.createWorker.closeAria')}
-            className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
-            onClick={onClose}
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+            disabled={isSubmitting}
+            onClick={handleClose}
           >
             <X size={15} />
           </button>
         </div>
 
+        {/* 角色:先选让 Worker 做哪类事,选中即带回这个角色上次用的任务文字、模型和权限;内置的检查类
+            角色另带一句现成的任务。顺序是最近使用在前。末尾的加号添加新角色:原地变成输入框,
+            创建后它留在这一排。 */}
         <div className="mb-4">
-          <div className="mb-2 flex items-center gap-1">
-            <span className="text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
-              {t('orca.createWorker.roleLabel')}
-            </span>
-            <Tip
-              text={t('orca.createWorker.roleHint')}
-              side="top"
-              contentClassName="max-w-[280px] whitespace-normal break-words text-left"
-            >
-              <button
-                type="button"
-                className={cn(
-                  'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-0 bg-transparent p-0',
-                  'text-[var(--text-tertiary)] outline-none transition-colors',
-                  'hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]',
-                  'focus:bg-[var(--surface-hover)] focus:text-[var(--text-secondary)]',
-                )}
-                aria-label={t('orca.createWorker.roleHintAria')}
-              >
-                <Info size={13} aria-hidden />
-              </button>
-            </Tip>
+          <div
+            id={templateLabelId}
+            className="mb-2 text-12 font-medium text-[var(--text-tertiary)]"
+          >
+            {t('orca.createWorker.templateLabel')}
           </div>
-          <div className="flex flex-wrap gap-2">
-            {PREDEFINED_ROLES.map((r) => (
-              <button
-                key={r}
-                type="button"
-                className={cn(
-                  'rounded-full px-3 py-1.5 text-13 leading-none border transition-colors',
-                  activeRole === r
-                    ? 'bg-[var(--surface-chip)] border-[var(--text-secondary)] text-[var(--text-primary)] font-medium'
-                    : 'border-[var(--border-default)] text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]',
-                )}
-                onClick={() => {
-                  setRole(r);
-                  setCustomRole('');
-                }}
-              >
-                {r}
-              </button>
-            ))}
+          <div className="flex flex-wrap gap-2" role="radiogroup" aria-labelledby={templateLabelId}>
+            {listedRoles.map((role) => {
+              const name = roleDisplayName(role);
+              const removeLabel = t('orca.createWorker.removePreset', { role: name });
+              return (
+                <span key={role} className="group relative inline-flex max-w-full">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={selectedRole === role}
+                    className={cn(choiceChipClass(selectedRole === role), 'max-w-full truncate')}
+                    onClick={() => selectRole(role)}
+                  >
+                    {name}
+                  </button>
+                  {/* 移除按钮平时不显示:鼠标移到这个角色上或键盘聚焦到它时,浮在胶囊右上角,不挤动这一排。
+                      远程任务读不到那台电脑的清单时改不了,不提供移除。 */}
+                  {rolesEditable ? <Tip text={removeLabel} side="top">
+                    <button
+                      type="button"
+                      aria-label={removeLabel}
+                      disabled={isSubmitting}
+                      className={cn(
+                        'absolute -right-1.5 -top-1.5 inline-flex h-[18px] w-[18px] items-center justify-center rounded-full p-0',
+                        'border border-[var(--border-default)] bg-[var(--confirm-bg)] text-[var(--text-secondary)] outline-none',
+                        'pointer-events-none opacity-0 transition-opacity duration-[var(--motion-fast)]',
+                        'group-hover:pointer-events-auto group-hover:opacity-100',
+                        'group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100',
+                        'hover:border-[var(--text-secondary)] hover:text-[var(--text-primary)]',
+                        'focus-visible:border-[var(--text-secondary)] focus-visible:text-[var(--text-primary)]',
+                      )}
+                      onClick={() => void removeRole(role)}
+                    >
+                      <X size={10} strokeWidth={2.25} aria-hidden />
+                    </button>
+                  </Tip> : null}
+                </span>
+              );
+            })}
+            {customTemplate ? (
+              <input
+                ref={roleInputRef}
+                type="text"
+                aria-label={t('orca.createWorker.roleLabel')}
+                className="h-8 w-[168px] max-w-full rounded-full border border-[var(--text-secondary)] bg-transparent px-3 text-13 leading-none text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] outline-none"
+                placeholder={t('orca.createWorker.roleLabel')}
+                value={customRole}
+                maxLength={32}
+                onChange={(e) => setCustomRole(e.target.value)}
+              />
+            ) : (
+              <Tip text={t('orca.createWorker.addRole')} side="top">
+                <button
+                  type="button"
+                  aria-label={t('orca.createWorker.addRole')}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[var(--border-default)] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-chip)]"
+                  onClick={() => selectRole(null)}
+                >
+                  <Plus size={14} aria-hidden />
+                </button>
+              </Tip>
+            )}
           </div>
-          <input
-            type="text"
-            className="mt-2 w-full rounded-full border border-[var(--border-default)] bg-transparent px-3 py-1.5 text-13 leading-none text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] outline-none focus:border-[var(--text-secondary)]"
-            placeholder={t('orca.createWorker.customRolePlaceholder')}
-            value={customRole}
-            maxLength={32}
-            onChange={(e) => {
-              setCustomRole(e.target.value);
-              setRole('');
-            }}
-          />
-          {customRoleError && (
-            <div className="mt-1 text-11 text-[var(--error-fg)]">{customRoleError}</div>
-          )}
         </div>
 
-        <div className="mb-4 grid grid-cols-[220px_minmax(0,1fr)] gap-4">
-          <div className="min-w-0">
-            <div className="mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
-              {t('orca.createWorker.agentLabel')}
-            </div>
-            {/* 应用标准 Agent 分段控件(替换此前手写的按钮组;与 New Maker / IM 目录偏好同款,
-                「不自建选择 UI」的组件复用原则)。 */}
+        {deviceId && remoteProviders.unsupported && (
+          <div className="mb-3">
             <VendorSegmentedSwitcher
               value={vendorKey}
               width={220}
               ariaLabel={t('orca.createWorker.agentLabel')}
-              onChange={(next) =>
-                updateAgent(next === 'codex' ? 'codex' : next === 'pi' ? 'pi' : 'claude-code')
-              }
+              onChange={(next) => updateAgent(next === 'codex' ? 'codex' : next === 'pi' ? 'pi' : 'claude-code')}
             />
           </div>
+        )}
 
-          <div className="min-w-0">
-            <div className="mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
-              {t('orca.createWorker.modelLabel')}
-            </div>
-            {/* composer 同款全功能标准面板(2026-07 用户定稿基准:全软件一个模型选择面板,
-                处处同行为):供应商分段、订阅来源、推理强度、Fast(行级配置列,替代此前的
-                外置开关)全开;选定来源随创建参数显式下发,由 OrcaWorkerCreationService
-                精确 preflight。device-link 远程创建维持既有退化:被控端纯列表、无来源维度,
-                且面板行级 Fast 依赖来源分段(fastEditable 走 connected 目录),故远程仍用
-                外置 FastModeToggle,不能删。 */}
-            <div className="flex min-w-0 items-center gap-2">
-              {deviceId && currentModelSupportsFast && (
-                <FastModeToggle enabled={fast} onToggle={() => setFast((v) => !v)} />
+        {/* 首条任务与输入框同构:上面写任务,底部一行选模型和权限。
+            模型面板是 composer 同款全功能标准面板(2026-07 用户定稿基准:全软件一个模型选择面板,
+            处处同行为):供应商分段、订阅来源、推理强度、Fast(行级配置列)全开;选定来源随创建参数
+            显式下发,由 OrcaWorkerCreationService 精确 preflight。device-link 远程创建维持既有退化:
+            被控端纯列表、无来源维度,且面板行级 Fast 依赖来源分段(fastEditable 走 connected 目录),
+            故远程仍用外置 FastModeToggle,不能删。 */}
+        <div className="mb-4 rounded-xl border border-[var(--border-default)] transition-colors has-[textarea:focus]:border-[var(--text-secondary)]">
+          <textarea
+            ref={taskInputRef}
+            aria-label={t('orca.createWorker.initialTaskLabel')}
+            className="block h-[96px] w-full resize-none bg-transparent px-3.5 pb-1 pt-3 text-13 leading-snug text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] outline-none"
+            placeholder={t('orca.createWorker.initialTaskPlaceholder')}
+            value={initialTask}
+            onChange={(e) => setInitialTask(e.target.value)}
+          />
+          {/* 底部一行与输入框同序:权限在左,模型在右。 */}
+          <div className="flex min-w-0 items-center gap-1 px-1.5 pb-1.5">
+            {remoteWorkerPermissionModeUnsupported ? null : (
+              <div data-testid="worker-permission-mode" className="flex min-w-0 shrink-0 items-center">
+                <PermissionSelector
+                  permissionMode={selectedWorkerPermissionMode}
+                  onPermissionModeChange={(mode) =>
+                    void updateWorkerPermissionMode(mode as OrcaWorkerPermissionMode)
+                  }
+                  vendorKey={vendorKey}
+                  deviceId={leadDeviceId}
+                  // 与输入框同款的紧凑外观。弹窗是模态层:composer 的形变面板挂在弹窗之外,
+                  // 会被模态层挡住点击,这里改用锚定的弹层。
+                  useMorphPopover={false}
+                  dense
+                  ariaContext={t('orca.createWorker.permissionLabel')}
+                  allowedModes={
+                    supportsWorkerPermissionModeSelection
+                      ? ORCA_WORKER_PERMISSION_MODES
+                      : AUTO_ONLY_WORKER_PERMISSION_MODES
+                  }
+                />
+              </div>
+            )}
+            <div className="ml-auto flex min-w-0 items-center justify-end gap-1">
+              {deviceId && remoteProviders.unsupported && currentModelSupportsFast && (
+                <FastModeToggle enabled={!!fast} onToggle={() => setFast((v) => !v)} />
               )}
               <ModelSelector
+                fastModeConfigurable={['codex', 'pi']}
+                unifiedAgents={pickerAgents}
+                onUnifiedSelect={deviceId && remoteProviders.unsupported ? undefined : (selection) => {
+                  if (selection.agentDevice !== undefined && executionDeviceId && !agentLocationSelectable) return;
+                  modelSelectionChosenRef.current = true;
+                  restoredModelSelectionRef.current = false;
+                  const nextAgent = selection.engine === 'cc' ? 'claude-code' : selection.engine;
+                  updateAgent(nextAgent);
+                  // 列出远程供应商时，行带着它所属的电脑(null = 任务所在电脑)：一起换 Worker 的 Agent 位置。
+                  if (selection.agentDevice !== undefined) {
+                    setAgentDeviceId(selection.agentDevice?.deviceId ?? null);
+                  }
+                  setModel(selection.modelId);
+                  setProviderSource(selection.providerId);
+                  setEffort(selection.effort ?? '');
+                  setFast(selection.fast);
+                }}
                 modelId={model}
                 effort={effort}
                 onModelChange={updateModel}
                 onEffortChange={updateEffort}
                 vendorKey={vendorKey}
-                deviceId={deviceId}
+                deviceId={catalogDeviceId}
+                remoteAgent={remoteAgentOptions && !(deviceId && remoteProviders.unsupported)
+                  ? remoteAgentOptions
+                  : undefined}
+                // Worker 的 Agent 在另一台电脑运行：trigger 用带信号波纹的远程供应商 Logo。
+                agentDevice={agentDeviceId ? { deviceId: agentDeviceId, name: agentDeviceName } : undefined}
                 // SSH 远程 Lead:与 ChatInput 同口径藏掉仅本地可桥接的模型/来源
                 // (订阅直连接本地 compat-proxy,openai-chat 桥接 Codex 接本地
                 // codex-proxy,远端都不经翻译)—— 否则提交才被 main 侧 guard 拒绝。
@@ -767,13 +1445,9 @@ export function CreateWorkerPopover({
                 excludeChatBridgedCodex={sshRemote === true}
                 popoverSide="bottom"
                 currentProviderId={
-                  deviceId
-                    ? undefined
-                    : sshRemote === true
-                      ? narrowProviderSource(providerSource, model)
-                      : providerSource
+                  sshRemote === true ? narrowProviderSource(providerSource, model) : providerSource
                 }
-                onProviderChange={deviceId ? undefined : handleProviderChange}
+                onProviderChange={deviceId && remoteProviders.unsupported ? undefined : handleProviderChange}
                 // providerSource=null 时面板高亮的是**解析出来的生效默认来源**,点它的
                 // 语义是「把默认来源钉成显式偏好」,必须照常回调(codex review)——否则
                 // 用户点了没反应,之后默认路由一变创建就静默换来源。显式同值幂等无害。
@@ -781,102 +1455,254 @@ export function CreateWorkerPopover({
                 // 分离侧栏窗口固定在 /sidebar-window 壳路由,本地 navigate 会把辅助
                 // 窗口整壳替换成主设置路由(codex review)——与 OrcaWorkerPanel 的
                 // settingsEnabled={!isSidebarWindow()} 同禁用口径,不接线跳转。
+                // 只看任务所在电脑(远程控制的 Lead / 运行设备)：Worker 的 Agent 选在分享或其他电脑上时，
+                // 面板自己决定底部入口(分享来的供应商直达设置里那一条)。
                 onNavigateToProviders={
-                  deviceId || isSidebarWindow()
+                  leadDeviceId || executionDeviceId || isSidebarWindow()
                     ? undefined
-                    : () => {
+                    : (target) => {
                         onClose();
-                        navigate('/settings?tab=providers');
+                        navigate(providersSettingsPath(target));
                       }
                 }
                 modelMemory={modelMemory}
                 // worker 创建链的显式 Fast 派发支持 Codex 与 Pi(resolveWorkerConfig 对二者
                 // 消费 input.fast,并按模型 supportsFastMode 收口):cc 层面为 no-op,不接线,
                 // 面板就不显示 Fast 开关,避免「开关能开、提交被丢」的名不副实(codex review)。
-                fastMode={deviceId || !(agent === 'codex' || agent === 'pi') ? undefined : fast}
+                fastMode={!(agent === 'codex' || agent === 'pi') ? undefined : fast}
                 onFastModeChange={
-                  deviceId || !(agent === 'codex' || agent === 'pi') ? undefined : updateFast
+                  !(agent === 'codex' || agent === 'pi') ? undefined : updateFast
                 }
               />
             </div>
-            {noAvailableLocalModels ? (
-              <p className="mt-1.5 text-11 leading-snug text-[var(--error-fg)]" role="status">
-                {t('orca.createWorker.noAvailableModels', {
-                  agent: agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code',
-                })}
-              </p>
+          </div>
+        </div>
+        {noAvailableLocalModels ? (
+          <p className="-mt-2 mb-4 text-12 leading-snug text-[var(--error-fg)]" role="status">
+            {t('orca.createWorker.noAvailableModels', {
+              agent: agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code',
+            })}
+          </p>
+        ) : null}
+        {remoteWorkerPermissionModeUnsupported && requireWorkerPermissionModeSupport ? (
+          <p
+            data-testid="worker-permission-mode"
+            className="-mt-2 mb-4 text-12 leading-snug text-[var(--error-fg)]"
+            role="status"
+          >
+            {t('newChat.collaboration.unsupportedRemoteHint')}
+          </p>
+        ) : null}
+
+        {/* 项目与运行设备多数时候用默认值,收进「更多设置」;收起时一行显示当前取值。 */}
+        {hasMoreSettings ? (
+          <div className={cn('flex flex-col', moreSettingsExpanded ? 'mb-1' : 'mb-4')}>
+            <button
+              type="button"
+              className="flex min-h-8 max-w-full items-center gap-1 self-start rounded-full text-13 font-medium text-[var(--settings-section-title)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+              aria-expanded={moreSettingsExpanded}
+              aria-controls={moreSettingsId}
+              onClick={() => setMoreSettingsOpen(!moreSettingsExpanded)}
+            >
+              <ChevronDown
+                size={14}
+                aria-hidden
+                className={cn('shrink-0 transition-transform', moreSettingsExpanded && 'rotate-180')}
+              />
+              <span className="shrink-0">{t('orca.createWorker.moreSettings')}</span>
+              {!moreSettingsExpanded && moreSettingsSummary ? (
+                <span
+                  className="min-w-0 truncate pl-1 font-normal text-[var(--text-tertiary)]"
+                  title={moreSettingsSummary}
+                >
+                  {moreSettingsSummary}
+                </span>
+              ) : null}
+            </button>
+            {moreSettingsExpanded ? (
+              <div id={moreSettingsId} className="pl-5 pt-2">
+                {localProjectEnabled && <WorkerProjectField selection={project} disabled={isSubmitting} />}
+
+                {/* 工作电脑与 Agent 所在电脑独立选择。 */}
+                {executionDevices.length > 0 ? (
+                  <ExecutionDeviceField
+                    devices={executionDevices}
+                    selectedId={executionDevice?.deviceId ?? null}
+                    onSelect={selectExecutionDevice}
+                    dirMode={remoteDirMode}
+                    onDirModeChange={setRemoteDirMode}
+                    dir={remoteDir}
+                    onPickDirectory={() => setDirectoryPickerOpen(true)}
+                    dirInvalid={remoteDirInvalid && trimmedRemoteDir.length > 0}
+                  />
+                ) : null}
+              </div>
             ) : null}
           </div>
-        </div>
+        ) : null}
 
-        {remoteWorkerPermissionModeUnsupported ? (
-          requireWorkerPermissionModeSupport ? (
-            <div
-              data-testid="worker-permission-mode"
-              className="mb-4 rounded-xl border border-[var(--border-default)] px-3.5 py-3"
-            >
-            <p className="text-12 leading-snug text-[var(--error-fg)]" role="status">
-              {t('newChat.collaboration.unsupportedRemoteHint')}
-            </p>
-            </div>
-          ) : null
-        ) : (
-          <div
-            data-testid="worker-permission-mode"
-            className="mb-4 grid grid-cols-[minmax(0,1fr)_220px] items-center gap-4 rounded-xl border border-[var(--border-default)] px-3.5 py-3"
-          >
-            <span className="text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
-              {t('orca.createWorker.permissionLabel')}
-            </span>
-            <PermissionSelector
-              permissionMode={selectedWorkerPermissionMode}
-              onPermissionModeChange={(mode) =>
-                void updateWorkerPermissionMode(mode as OrcaWorkerPermissionMode)
-              }
-              vendorKey={vendorKey}
-              deviceId={deviceId}
-              triggerVariant="field"
-              dense
-              ariaContext={t('orca.createWorker.permissionLabel')}
-              allowedModes={
-                supportsWorkerPermissionModeSelection
-                  ? ORCA_WORKER_PERMISSION_MODES
-                  : AUTO_ONLY_WORKER_PERMISSION_MODES
-              }
-            />
-          </div>
-        )}
-
-        <div className="mb-5">
-          <div className="mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
-            {t('orca.createWorker.initialTaskLabel')}{' '}
-            <span className="font-normal normal-case tracking-normal">
-              {t('orca.createWorker.optional')}
-            </span>
-          </div>
-          <textarea
-            className="h-[96px] w-full resize-none rounded-xl border border-[var(--border-default)] bg-transparent px-3.5 py-2.5 text-13 leading-snug text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] outline-none"
-            placeholder={t('orca.createWorker.initialTaskPlaceholder')}
-            value={initialTask}
-            onChange={(e) => setInitialTask(e.target.value)}
-          />
-        </div>
-
-        <button
+        <Button
+          variant="cta"
+          palette="confirmation"
+          size="lg"
+          loading={isSubmitting}
           type="button"
-          className={cn(
-            'w-full rounded-full py-3 text-14 font-medium leading-none transition-colors',
-            canCreate
-              ? 'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] hover:bg-[var(--confirm-btn-primary-hover)]'
-              : 'bg-[var(--surface-chip)] text-[var(--text-tertiary)] cursor-not-allowed',
-          )}
+          className="w-full"
           disabled={!canCreate}
           aria-busy={isSubmitting}
           onClick={handleCreate}
         >
           {resolvedSubmitLabel}
-        </button>
+        </Button>
+      </Dialog.Content>
+      </Dialog.Overlay>
+      </Dialog.Portal>
+    </Dialog.Root>
+    {executionDeviceId ? <AddRemoteProjectDialog
+      open={open && directoryPickerOpen}
+      onOpenChange={setDirectoryPickerOpen}
+      initialDeviceId={executionDeviceId}
+      fixedDeviceId={executionDeviceId}
+      title={t('orca.createWorker.remoteDirLabel', { device: executionDevice?.name })}
+      confirmText={t('newChat.folderPicker.selectFolder')}
+      onProjectAdded={(target) => {
+        const current = directoryTargetRef.current;
+        if (!current.open || !current.pickerOpen || target.kind !== 'device-link' || target.deviceId !== current.deviceId) return;
+        setRemoteDir(target.path);
+        setRemoteDirMode('path');
+      }}
+    /> : null}</>
+  );
+}
+
+const FIELD_LABEL_CLASS =
+  'mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]';
+
+/** 弹窗内的单选胶囊(预设、其他电脑上的目录方式)。 */
+function choiceChipClass(checked: boolean): string {
+  return cn(
+    'min-h-8 rounded-full border px-3 py-1.5 text-13 leading-none transition-colors',
+    checked
+      ? 'border-[var(--text-secondary)] bg-[var(--surface-chip)] font-medium text-[var(--text-primary)]'
+      : 'border-[var(--border-default)] text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]',
+  );
+}
+
+/** 运行设备下拉选择 + 选了其他电脑时的工作目录(对话 / 指定目录)。 */
+function ExecutionDeviceField({
+  devices,
+  selectedId,
+  onSelect,
+  dirMode,
+  onDirModeChange,
+  dir,
+  onPickDirectory,
+  dirInvalid,
+}: {
+  devices: ExecutionDeviceOption[];
+  selectedId: string | null;
+  onSelect: (deviceId: string | null) => void;
+  dirMode: 'dialogue' | 'path';
+  onDirModeChange: (mode: 'dialogue' | 'path') => void;
+  dir: string;
+  onPickDirectory: () => void;
+  dirInvalid: boolean;
+}) {
+  const { t } = useTranslation();
+  const selected = devices.find((d) => d.deviceId === selectedId) ?? null;
+  return (
+    <div className="mb-4 grid gap-3" data-testid="worker-execution-device">
+      <div>
+        <div className={FIELD_LABEL_CLASS}>{t('orca.createWorker.executionDeviceLabel')}</div>
+        <Select
+          className="w-full"
+          label={t('orca.createWorker.executionDeviceLabel')}
+          value={selected?.deviceId ?? '__this_computer__'}
+          truncateOptions
+          options={[
+            { value: '__this_computer__', label: t('orca.createWorker.thisComputer') },
+            ...devices.map((device) => ({
+              value: device.deviceId,
+              label: device.name,
+              disabled: !device.supported,
+              endAdornment: (
+                <span className="text-11 font-normal text-[var(--text-secondary)]">
+                  {device.supported
+                    ? t('orca.createWorker.deviceOnline')
+                    : t('orca.createWorker.deviceNeedsUpdate')}
+                </span>
+              ),
+            })),
+          ]}
+          onValueChange={(value) => onSelect(value === '__this_computer__' ? null : value)}
+        />
+        <p className="mt-1.5 text-11 leading-snug text-[var(--text-secondary)]">
+          {selected
+            ? t('orca.createWorker.executionDeviceRemoteHint', { device: selected.name })
+            : t('orca.createWorker.executionDeviceHint')}
+        </p>
       </div>
+      {selected ? (
+        <div>
+          <div className={FIELD_LABEL_CLASS}>
+            {t('orca.createWorker.remoteDirLabel', { device: selected.name })}
+          </div>
+          <div
+            className="flex flex-wrap gap-2"
+            role="radiogroup"
+            aria-label={t('orca.createWorker.remoteDirLabel', { device: selected.name })}
+          >
+            <button
+              type="button"
+              role="radio"
+              aria-checked={dirMode === 'dialogue'}
+              className={choiceChipClass(dirMode === 'dialogue')}
+              onClick={() => onDirModeChange('dialogue')}
+            >
+              {t('orca.createWorker.remoteDirChat')}
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={dirMode === 'path'}
+              className={choiceChipClass(dirMode === 'path')}
+              onClick={() => onDirModeChange('path')}
+            >
+              {t('orca.createWorker.remoteDirPath')}
+            </button>
+          </div>
+          {dirMode === 'path' ? (
+            <button
+              type="button"
+              className={cn(
+                'mt-2 flex min-h-9 w-full items-center gap-2 rounded-full border bg-transparent px-3 py-2 text-left text-13 leading-snug text-[var(--text-primary)] outline-none hover:bg-[var(--surface-chip)]',
+                dirInvalid
+                  ? 'border-[var(--error-fg)]'
+                  : 'border-[var(--border-default)] focus:border-[var(--text-secondary)]',
+              )}
+              aria-label={t('orca.createWorker.remoteDirLabel', { device: selected.name })}
+              aria-invalid={dirInvalid}
+              onClick={onPickDirectory}
+            >
+              <Folder size={16} className="shrink-0 text-[var(--text-secondary)]" />
+              <span className="min-w-0 truncate">{dir || t('newChat.folderPicker.selectFolder')}</span>
+            </button>
+          ) : null}
+          <p
+            className={cn(
+              'mt-1.5 text-11 leading-snug',
+              dirInvalid ? 'text-[var(--error-fg)]' : 'text-[var(--text-secondary)]',
+            )}
+            role={dirInvalid ? 'status' : undefined}
+          >
+            {dirInvalid
+              ? t('orca.createWorker.remoteDirInvalid', { device: selected.name })
+              : dirMode === 'dialogue'
+                ? t('orca.createWorker.remoteDirChatHint', { device: selected.name })
+                : t('orca.createWorker.remoteDirPathHint', { device: selected.name })}
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -90,6 +90,13 @@ describe('markdownToDiscord', () => {
     });
   });
 
+  it('does not let an unclosed image ref swallow a later valid image and its text', () => {
+    expect(markdownToDiscord('see ![bad](xdt-image://oops ![good](cindy-media://ok) done')).toEqual({
+      text: 'see ![bad](xdt-image://oops done',
+      imageUrls: ['cindy-media://ok'],
+    });
+  });
+
   it('handles a mixed document', () => {
     const md = [
       '## Report',

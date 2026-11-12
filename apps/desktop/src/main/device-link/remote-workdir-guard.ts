@@ -1,12 +1,13 @@
 /**
  * remote-workdir-guard —— 远程新建会话的 workingDir 收敛(被控端)。
  *
- * 背景(安全):dispatch 把控制端传来的 `args` 原样喂给本机 handler;
+ * 背景(安全):dispatch 把控制端请求交给本机 handler;
  * `maker:create-session` 的 `workingDir` 决定 agent 在哪个目录起进程(可读写 / 执行 shell)。
  * allowlist 只挡 channel、不挡 args,故此处对 workingDir 收敛,挡掉「不存在 / 非目录」的
  * 伪造或笔误路径。
  *
- * 放行判据:路径必须**当前在被控端真实存在、且是一个目录**。
+ * 放行判据:路径必须在实际执行端当前存在且是目录。本地路径由
+ * checkRemoteWorkingDir 检查;新建 SSH 任务由 createRemoteWorkingDirGuard 解析端点并探测。
  *
  * 本地目录探测是必须的:本版本开放了远程文件浏览(AddRemoteProjectDialog + fs:* 隧道),
  * 控制端可浏览 / 新建被控端任意目录并在其下建首个会话,但目录的历史记录不能证明它
@@ -15,12 +16,12 @@
  * 任意目录,故「限定到已存在目录」是此处剩余的、成本极低的越权兜底(挡掉不存在路径 /
  * 把文件当目录),并非完全放开。
  *
- * 路径比较复用 normalizeWorkingDirForStorage,只做路径形态归一。SSH endpoint 的
- * 归属由 file-browser 在本地探测后单独解析;create-session / worktree:create / 远程
- * `/cmd` 不得借 SSH 会话记录绕过本地目录校验。空 / 非法 / 不存在 / 非目录路径仍拒绝。
+ * 路径比较复用 normalizeWorkingDirForStorage,只做路径形态归一。
+ * 新建任务可用历史会话解析唯一 SSH 归属,但记录不能替代远端实时探测。
+ * worktree:create / 远程 `/cmd` 仍只接受本地目录。空 / 非法 / 不存在 / 非目录路径仍拒绝。
  */
 
-import type { IpcErrorCode } from '../../shared/ipc-errors';
+import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
 
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir';
 import { workdirProbeHostClient } from '../workdir-probe-host/index.js';
@@ -35,7 +36,7 @@ interface DirectoryStatLike {
 export type RemoteDirectoryStat = (dir: string) => Promise<DirectoryStatLike>;
 
 export type RemoteWorkingDirRejectionReason =
-  'invalid' | 'not-found' | 'not-directory' | 'unavailable' | 'timeout';
+  'invalid' | 'not-found' | 'not-directory' | 'unavailable' | 'timeout' | 'ambiguous';
 
 export type RemoteWorkingDirCheckResult =
   | { allowed: true; source: 'filesystem' }
@@ -44,6 +45,73 @@ export type RemoteWorkingDirCheckResult =
 export interface RemoteDirectoryProbeOptions {
   stat?: RemoteDirectoryStat;
   timeoutMs?: number;
+}
+
+export interface RemoteWorkingDirGuardContext {
+  channel: string;
+  remoteHostId?: unknown;
+  agentDeviceId?: unknown;
+}
+
+export type RemoteWorkingDirGuardValue = boolean | RemoteWorkingDirCheckResult | {
+  allowed: true;
+  source: 'ssh';
+  remoteHostId: string;
+  workingDir: string;
+};
+
+export type RemoteWorkingDirGuard = (
+  dir: string,
+  context?: RemoteWorkingDirGuardContext,
+) => RemoteWorkingDirGuardValue | Promise<RemoteWorkingDirGuardValue>;
+
+/** Only create-session can resolve an SSH endpoint; other guarded channels stay local. */
+export function createRemoteWorkingDirGuard(
+  deps: {
+    findSshHosts(dir: string): Promise<readonly string[]>;
+    probeSshWorkingDirectory(hostId: string, dir: string): Promise<string>;
+  },
+  probeOptions: RemoteDirectoryProbeOptions = {},
+): RemoteWorkingDirGuard {
+  return async (dir, context) => {
+    if (context?.channel !== 'maker:create-session') return checkRemoteWorkingDir(dir, probeOptions);
+    const normalized = normalizeWorkingDirForStorage(dir);
+    if (!normalized) return { allowed: false, reason: 'invalid' };
+    const explicitHost = context.remoteHostId;
+    if (explicitHost != null && (typeof explicitHost !== 'string' || !explicitHost.trim())) {
+      return { allowed: false, reason: 'invalid' };
+    }
+    const checkSsh = async (hostId: string): Promise<RemoteWorkingDirGuardValue> => {
+      if (context.agentDeviceId != null || /[\r\n\0]/.test(dir)) {
+        return { allowed: false, reason: 'invalid' };
+      }
+      try {
+        const workingDir = await deps.probeSshWorkingDirectory(hostId, dir);
+        return { allowed: true, source: 'ssh', remoteHostId: hostId, workingDir };
+      } catch (error) {
+        // SSH readiness errors already use the public IPC protocol and redact local paths.
+        if (isIpcError(error) && error.code.startsWith('SSH_')) throw error;
+        return { allowed: false, reason: 'unavailable' };
+      }
+    };
+    if (typeof explicitHost === 'string') return checkSsh(explicitHost);
+    const local = await checkRemoteWorkingDir(dir, probeOptions);
+    // null explicitly selects local; an Agent on another device still uses this host's files.
+    if (explicitHost === null || context.agentDeviceId != null || (!local.allowed && local.reason === 'invalid')) {
+      return local;
+    }
+    let hosts: string[];
+    try {
+      hosts = [...new Set(await deps.findSshHosts(normalized))];
+    } catch {
+      // Without the lookup we cannot tell a local path from an ambiguous SSH workspace.
+      return { allowed: false, reason: 'unavailable' };
+    }
+    if (hosts.length > 1 || (hosts.length > 0 && local.allowed)) {
+      return { allowed: false, reason: 'ambiguous' };
+    }
+    return hosts.length === 1 ? checkSsh(hosts[0]) : local;
+  };
 }
 
 function classifyStatError(err: unknown): RemoteWorkingDirRejectionReason {
@@ -60,9 +128,9 @@ function classifyStatError(err: unknown): RemoteWorkingDirRejectionReason {
 }
 
 /**
- * 生产探测在有界 utility-process 池中执行。`fs.stat` 不支持 AbortSignal,
- * 因此超时会终止对应 host,释放其 libuv 状态并让等待请求获得槽位。
- * `options.stat` 仅为单元测试注入,同样保留业务超时语义。
+ * 生产探测在主进程的有限异步池中执行。`fs.promises` 保持事件循环可运行，
+ * 每次请求仍有端到端 deadline；底层 I/O 不可取消时会继续占用有限槽位，避免
+ * 超时重试把未完成的文件系统请求无限堆积。`options.stat` 仅为单元测试注入。
  */
 export async function probeRemoteDirectory(
   dir: string,
@@ -132,6 +200,11 @@ export function remoteWorkingDirRejectionToIpcError(reason: RemoteWorkingDirReje
   message: string;
 } {
   switch (reason) {
+    case 'ambiguous':
+      return {
+        code: 'REMOTE_WORKDIR_INVALID',
+        message: 'Working directory belongs to multiple execution environments. Select a host explicitly.',
+      };
     case 'invalid':
       return { code: 'REMOTE_WORKDIR_INVALID', message: 'Remote working directory is invalid.' };
     case 'not-found':

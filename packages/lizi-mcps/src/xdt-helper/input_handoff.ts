@@ -1,0 +1,166 @@
+import { z } from 'zod';
+import type { XdtHelperToolRegistry, XdtHelperToolResult } from '../lizi_xdtHelperToolRegistry.js';
+import type { LiziMcpSessionContext } from '../types.js';
+import { errorPayload, okPayload } from './_payload.js';
+
+/**
+ * 代输入 (input handoff): the agent hands the owner what it must never see: a
+ * sign-in, or a secret field on screen (password, key, verification code). The
+ * owner signs in on the window itself and answers other secret fields from any
+ * of their devices; values never come back here. A sign-in QR code is
+ * handed to the owner to scan. Buttons and options stay with the agent.
+ *
+ * Independent of question tools: the model supplies a window or a screenshot
+ * containing a sign-in QR code. Both use the existing host handoff lifecycle.
+ */
+
+export interface InputHandoffToolRequest {
+  purpose: string;
+  note?: string;
+  target: { app?: string; pid?: number; windowTitle?: string };
+  completeWhen?: { windowClosed?: boolean; textAppears?: string; urlContains?: string };
+  timeoutMinutes?: number;
+}
+
+/** A sign-in QR code the agent captured (a screenshot), not a window on this computer. */
+export interface InputHandoffImageRequest {
+  purpose: string;
+  note?: string;
+  /** A local image path (relative paths resolve against the task's folder) or a managed media URL. */
+  image: string;
+  timeoutMinutes?: number;
+}
+
+export type InputHandoffToolResult =
+  | { ok: true; requestId: string }
+  | { ok: false; errorCode: string; message: string };
+
+export interface InputHandoffCallbacks {
+  start(context: LiziMcpSessionContext, request: InputHandoffToolRequest): Promise<InputHandoffToolResult>;
+  /** Scan from a picture: Cindy reads the code itself and shows the owner where it leads. */
+  startImage?(context: LiziMcpSessionContext, request: InputHandoffImageRequest): Promise<InputHandoffToolResult>;
+}
+
+export const INPUT_HANDOFF_TOOL_NAME = 'request_input_handoff';
+
+const DESCRIPTION =
+  'Hand the owner what you must never see on this computer\'s screen: a sign-in, or a password, API key, token or verification code. '
+  + 'For non-secret questions (an email address, a name, a choice), use your question tools. '
+  + 'The owner does a sign-in on the window itself; for other secret fields Cindy shows just those fields, types the answer in and confirms with the page\'s own main button. '
+  + 'It follows the flow across windows and browsers while fields keep appearing. '
+  + 'A sign-in QR code on screen is handed to the owner to scan, and the task continues once they are signed in. '
+  + 'Pass `target` for a window on this computer, or `image` for a fresh screenshot containing a sign-in QR code '
+  + '(for example a simulator inside Cindy). Never target the Cindy window itself. '
+  + 'Buttons, options and consent pages are yours to handle: a screen with neither a field to type nor a sign-in QR code ends at once with failure nothing_to_fill. '
+  + 'Do not type, click or read secrets in that window yourself while it is pending. '
+  + 'Returns a pending receipt; a hidden "[Input handoff ended]" message continues this task later. '
+  + 'Values the owner enters are never shared with you. One pending handoff per task. '
+  + 'Not needed for terminal password prompts on macOS and Linux: in this task\'s shell, sudo (run it as `sudo -A`), '
+  + 'ssh and git over HTTPS ask the owner automatically and your command simply continues.';
+
+const STRING = (max: number) => z.string().trim().min(1).max(max);
+
+export const HANDOFF_PURPOSE = STRING(200);
+export const HANDOFF_NOTE = STRING(500);
+export const HANDOFF_TARGET = z.object({
+  app: STRING(200).optional().describe('Application name or bundle id showing the step, e.g. "Google Chrome".'),
+  pid: z.number().int().positive().optional(),
+  window_title: STRING(300).optional().describe('Window title, when the app has several windows. A minimized window named here is brought back for the owner.'),
+}).strict();
+export const HANDOFF_COMPLETE_WHEN = z.object({
+  window_closed: z.boolean().optional(),
+  text_appears: STRING(200).optional(),
+  url_contains: STRING(500).optional(),
+}).strict();
+export const HANDOFF_TIMEOUT = z.number().int().min(1).max(60);
+
+export function toHandoffTarget(target: z.infer<typeof HANDOFF_TARGET>): InputHandoffToolRequest['target'] {
+  return {
+    ...(target.app ? { app: target.app } : {}),
+    ...(target.pid ? { pid: target.pid } : {}),
+    ...(target.window_title ? { windowTitle: target.window_title } : {}),
+  };
+}
+
+export function toHandoffCompleteWhen(
+  completeWhen: z.infer<typeof HANDOFF_COMPLETE_WHEN> | undefined,
+): Pick<InputHandoffToolRequest, 'completeWhen'> {
+  if (!completeWhen) return {};
+  return {
+    completeWhen: {
+      ...(completeWhen.window_closed !== undefined ? { windowClosed: completeWhen.window_closed } : {}),
+      ...(completeWhen.text_appears ? { textAppears: completeWhen.text_appears } : {}),
+      ...(completeWhen.url_contains ? { urlContains: completeWhen.url_contains } : {}),
+    },
+  };
+}
+
+/**
+ * Shared host admission: the caller checks, the start, and
+ * the receipt. Failures the host can see right away come back here, not later.
+ */
+export async function runInputHandoff(
+  context: LiziMcpSessionContext,
+  start: () => Promise<InputHandoffToolResult>,
+): Promise<XdtHelperToolResult> {
+  if (!context.sessionId || !context.sessionInstanceId)
+    return errorPayload('NO_SESSION_CONTEXT', 'No current Cindy task for this handoff.');
+  if (context.remoteHostId)
+    return errorPayload('CAPABILITY_NOT_AVAILABLE', 'Input handoff only works for windows on this computer.');
+  if (context.mcpCallerKind === 'descendant')
+    return errorPayload('ROOT_REQUIRED', 'Ask the parent agent to request the input handoff.');
+  let result: InputHandoffToolResult;
+  try {
+    result = await start();
+  } catch {
+    return errorPayload('HANDOFF_UNAVAILABLE', 'Cindy could not start the input handoff. Tell the owner what is needed instead.');
+  }
+  if (!result.ok) return errorPayload(result.errorCode, result.message);
+  return okPayload({
+    request_id: result.requestId,
+    status: 'pending',
+    next: 'End your turn or do unrelated work. Do not touch that window until "[Input handoff ended]" arrives.',
+  });
+}
+
+export function registerInputHandoffTool(
+  registry: XdtHelperToolRegistry,
+  getContext: () => LiziMcpSessionContext,
+  callbacks: InputHandoffCallbacks,
+): void {
+  registry.register({
+    name: INPUT_HANDOFF_TOOL_NAME,
+    category: 'auth',
+    description: DESCRIPTION,
+    inputShape: {
+      purpose: HANDOFF_PURPOSE.describe('One short sentence for the owner, e.g. "Sign in to Example to continue setup".'),
+      note: HANDOFF_NOTE.optional().describe('Optional extra context for the owner, e.g. "I do not know which sign-in option your organization uses". Shown labelled as from you.'),
+      target: HANDOFF_TARGET.optional().describe('The window that shows the step. Pass {} for the frontmost app. Mutually exclusive with image.'),
+      image: STRING(4096).optional().describe('A fresh screenshot containing the sign-in QR code: local image path (relative to the task folder or absolute) or cindy-media:// URL. Mutually exclusive with target; completion is confirmed by the owner.'),
+      complete_when: HANDOFF_COMPLETE_WHEN.optional().describe('Optional signs that the step is done. Cindy also detects completion itself.'),
+      timeout_minutes: HANDOFF_TIMEOUT.optional(),
+    },
+    handler: async ({ purpose, note, target, image, complete_when, timeout_minutes }) => {
+      const context = getContext();
+      if (!!target === !!image)
+        return errorPayload('INVALID_ARGS', 'Pass exactly one of `target` (a window) or `image` (a screenshot containing the sign-in QR code).');
+      const common = {
+        purpose,
+        ...(note ? { note } : {}),
+        ...(timeout_minutes ? { timeoutMinutes: timeout_minutes } : {}),
+      };
+      if (image) {
+        if (complete_when)
+          return errorPayload('INVALID_ARGS', '`complete_when` observes a window and cannot be used with a screenshot. The owner confirms completion.');
+        if (!callbacks.startImage)
+          return errorPayload('CAPABILITY_NOT_AVAILABLE', 'Scanning from a picture is not available here; pass the window as `target`.');
+        return runInputHandoff(context, () => callbacks.startImage!(context, { ...common, image }));
+      }
+      return runInputHandoff(context, () => callbacks.start(context, {
+        ...common,
+        target: toHandoffTarget(target!),
+        ...toHandoffCompleteWhen(complete_when),
+      }));
+    },
+  });
+}

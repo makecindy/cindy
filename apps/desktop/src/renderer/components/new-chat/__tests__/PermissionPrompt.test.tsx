@@ -11,6 +11,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { PendingPermission } from '@/lib/makerChatStore';
+import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../../shared/providerShareCredentialConsent';
 
 // 仓库同款 i18n mock:t 返回 key(带参时拼上参数便于断言)。
 vi.mock('react-i18next', () => ({
@@ -52,6 +53,35 @@ function permission(suggestions?: unknown[]): PendingPermission {
 }
 
 describe('PermissionPrompt 的会话级授权按钮', () => {
+  it('供应商分享的凭证确认提供本任务允许，并回传本机提供的授权标记', () => {
+    const onRespond = vi.fn();
+    render(<PermissionPrompt permission={permission([PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL])} onRespond={onRespond} />);
+    fireEvent.click(screen.getByRole('button', { name: /alwaysAllowForSession/ }));
+    expect(onRespond).toHaveBeenCalledWith({
+      behavior: 'allow',
+      updatedPermissions: [PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL],
+      decisionClassification: 'user_permanent',
+    });
+  });
+  it('提交中禁用按钮和快捷键，失败后允许重试', () => {
+    const onRespond = vi.fn();
+    const request = permission([bashRule]);
+    const { rerender } = render(<PermissionPrompt permission={{ ...request, submitting: true }} onRespond={onRespond} />);
+    for (const button of screen.getAllByRole('button')) {
+      expect((button as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(button);
+    }
+    fireEvent.keyDown(window, { key: 'Enter' });
+    fireEvent.keyDown(window, { key: 'Enter', ctrlKey: true });
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onRespond).not.toHaveBeenCalled();
+    expect(screen.getByRole('status').textContent).toBe('newChat.permissionPrompt.submitting');
+    rerender(<PermissionPrompt permission={{ ...request, submitting: false, submissionFailed: true }} onRespond={onRespond} />);
+    expect(screen.getByRole('status').textContent).toBe('newChat.permissionPrompt.submissionFailed');
+    fireEvent.click(screen.getByRole('button', { name: /allowOnce/ }));
+    expect(onRespond).toHaveBeenCalledWith({ behavior: 'allow' });
+  });
+
   it('把规则范围写进按钮文案', () => {
     render(<PermissionPrompt permission={permission([bashRule])} onRespond={vi.fn()} />);
 
@@ -173,5 +203,28 @@ describe('PermissionPrompt 的会话级授权按钮', () => {
     expect(onRespond).toHaveBeenCalledWith(
       expect.objectContaining({ decisionClassification: 'user_permanent' }),
     );
+  });
+});
+
+describe('PermissionPrompt 的插件安装确认', () => {
+  it('首行作说明，权限清单放进可滚动区域，不显示内部参数', () => {
+    render(
+      <PermissionPrompt
+        permission={{
+          requestId: 'req-install',
+          toolName: 'cindy.plugin.install',
+          input: { ghost_id: 'weather-chip', version: '1.0.0' },
+          title: '安装插件「Weather」？',
+          description: '版本 1.0.0 · 由 Agent 发起 · 来自 Cindy 插件市场\n确认后才会安装。\n安装后它将拥有：\n• 访问 api.weather.test',
+        }}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('版本 1.0.0 · 由 Agent 发起 · 来自 Cindy 插件市场')).toBeTruthy();
+    const list = screen.getByText(/安装后它将拥有/);
+    expect(list.textContent).toContain('• 访问 api.weather.test');
+    expect(list.textContent).not.toContain('版本 1.0.0');
+    expect(screen.queryByText(/weather-chip/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /alwaysAllow/ })).toBeNull();
   });
 });

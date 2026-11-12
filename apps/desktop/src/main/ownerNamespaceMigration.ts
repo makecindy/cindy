@@ -1,5 +1,4 @@
 import { app } from 'electron';
-import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
@@ -24,6 +23,8 @@ import {
   readBoundedFileNoFollow,
   readBoundedFileNoFollowSync,
 } from './utils/readBoundedFile.js';
+import { readAtomicFileSync } from './utils/atomicWriteFile.js';
+import { readProcessIdentities, type ProcessIdentitySnapshot } from './processIdentity.js';
 
 const CLAIM_MARKER = '.owner-namespace-claim-v1.json';
 const LEGACY_GHOST_RECOVERY_MARKER = '.legacy-ghost-recovery-v1.json';
@@ -112,9 +113,11 @@ interface RegisteredInstanceRecord {
   rootDir?: string;
 }
 
-interface ProcessIdentitySnapshot {
-  startedAtMs: number;
-  command: string;
+interface RegisteredInstanceCandidate {
+  pid: number;
+  userDataDir: string | undefined;
+  recordedAtMs: number | undefined;
+  rootDir: string | undefined;
 }
 
 type ProcessIdentityReader = (pid: number) => ProcessIdentitySnapshot | null;
@@ -143,7 +146,6 @@ const log = createLogger('ownerNamespaceMigration');
 // sampling skew): a large window would permanently classify a PID reused
 // shortly after the record was written as the old Cindy process.
 const PID_REUSE_TOLERANCE_MS = 2_000;
-const PROCESS_IDENTITY_QUERY_TIMEOUT_MS = 1_500;
 const STALE_PROCESS_PROOF_TTL_MS = 10_000;
 const legacyGhostMigrationResults = new Map<
   string,
@@ -327,112 +329,6 @@ function isPidAliveDefault(pid: number): boolean {
   }
 }
 
-function parseProcessIdentityOutput(raw: string): ProcessIdentitySnapshot | null {
-  const newline = raw.indexOf('\n');
-  if (newline < 0) return null;
-  const startedAtMs = Date.parse(raw.slice(0, newline).trim());
-  const command = raw.slice(newline + 1).trim();
-  if (!Number.isFinite(startedAtMs) || startedAtMs <= 0 || command.length === 0) return null;
-  return { startedAtMs, command };
-}
-
-function execFileUtf8(
-  file: string,
-  args: readonly string[],
-  options: {
-    maxBuffer: number;
-    env?: NodeJS.ProcessEnv;
-    windowsHide?: boolean;
-  },
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      file,
-      [...args],
-      {
-        ...options,
-        encoding: 'utf-8',
-        timeout: PROCESS_IDENTITY_QUERY_TIMEOUT_MS,
-      },
-      (error, stdout) => {
-        if (error) reject(error);
-        else resolve(stdout);
-      },
-    );
-  });
-}
-
-/** Read all candidate process identities asynchronously with one OS query per scan. */
-async function readProcessIdentitiesDefault(
-  pids: readonly number[],
-): Promise<ReadonlyMap<number, ProcessIdentitySnapshot | null>> {
-  const uniquePids = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
-  const result = new Map<number, ProcessIdentitySnapshot | null>();
-  if (uniquePids.length === 0) return result;
-  try {
-    if (process.platform === 'win32') {
-      const powershell = `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
-      const output = await execFileUtf8(
-        powershell,
-        [
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          `$ids = @(${uniquePids.join(',')}); ` +
-            '$rows = Get-Process -Id $ids -ErrorAction Stop | ForEach-Object { ' +
-            '$command = if ($_.Path) { $_.Path } else { $_.ProcessName }; ' +
-            "[PSCustomObject]@{ pid = $_.Id; startedAt = $_.StartTime.ToUniversalTime().ToString('O'); command = $command } }; " +
-            '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); ' +
-            '$rows | ConvertTo-Json -Compress',
-        ],
-        {
-          maxBuffer: 16_384,
-          windowsHide: true,
-        },
-      );
-      const parsed = JSON.parse(output) as unknown;
-      const rows = Array.isArray(parsed) ? parsed : [parsed];
-      for (const row of rows) {
-        if (!row || typeof row !== 'object') continue;
-        const value = row as Record<string, unknown>;
-        const pid = value.pid;
-        const startedAtMs = typeof value.startedAt === 'string' ? Date.parse(value.startedAt) : NaN;
-        const command = value.command;
-        if (
-          typeof pid === 'number' &&
-          Number.isInteger(pid) &&
-          Number.isFinite(startedAtMs) &&
-          startedAtMs > 0 &&
-          typeof command === 'string' &&
-          command.length > 0
-        ) {
-          result.set(pid, { startedAtMs, command });
-        }
-      }
-      return result;
-    }
-
-    const output = await execFileUtf8(
-      'ps',
-      ['-p', uniquePids.join(','), '-o', 'pid=', '-o', 'lstart=', '-o', 'command='],
-      {
-        maxBuffer: 16_384,
-        env: { ...process.env, LC_ALL: 'C' },
-      },
-    );
-    for (const line of output.split('\n')) {
-      const match = /^\s*(\d+)\s+(.{24})\s+([\s\S]+)$/.exec(line.trimEnd());
-      if (!match) continue;
-      const pid = Number(match[1]);
-      const identity = parseProcessIdentityOutput(`${match[2]}\n${match[3]}`);
-      if (identity) result.set(pid, identity);
-    }
-  } catch {
-    // Missing entries keep the caller fail-closed when provenance is ambiguous.
-  }
-  return result;
-}
-
 function looksLikeCindyRuntime(command: string, rootDir?: string): boolean {
   const normalizedCommand = command.replaceAll('\\', '/').toLowerCase();
   const normalizedRoot = rootDir?.replaceAll('\\', '/').toLowerCase();
@@ -471,7 +367,7 @@ async function readProcessIdentitiesForPids(
   pids: readonly number[],
   reader?: ProcessIdentityReader,
 ): Promise<ReadonlyMap<number, ProcessIdentitySnapshot | null>> {
-  if (!reader) return readProcessIdentitiesDefault(pids);
+  if (!reader) return readProcessIdentities(pids);
   return new Map(pids.map((pid) => [pid, readProcessIdentitySafely(reader, pid)] as const));
 }
 
@@ -581,38 +477,40 @@ function hasConcurrentLiveInstanceSync(
     recordedAtMs: number | undefined;
     rootDir: string | undefined;
   }> = [];
-  for (const name of names) {
-    if (!name.endsWith('.json')) continue;
+  const recordNames = new Set(
+    names.flatMap((name) => {
+      if (name.endsWith('.json')) return [name];
+      if (name.endsWith('.json.bak')) return [name.slice(0, -'.bak'.length)];
+      return [];
+    }),
+  );
+  for (const name of recordNames) {
     let raw: string;
     try {
-      raw = fsSync.readFileSync(path.join(registryDir, name), 'utf-8');
+      const restored = readAtomicFileSync(path.join(registryDir, name));
+      if (restored === null) continue;
+      raw = restored;
     } catch (error) {
+      // A backup that cannot be restored may still be the only live-process
+      // record. Fail closed rather than treating the instance as gone.
       if (isMissing(error)) continue;
       return true;
     }
-    let record: RegisteredInstanceRecord;
-    try {
-      record = JSON.parse(raw) as RegisteredInstanceRecord;
-    } catch {
-      continue; // torn leftover
-    }
-    const pid = record.pid;
-    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0 || pid === selfPid) {
-      continue;
-    }
+    const candidate = parseRegisteredInstanceCandidate(raw, name);
+    if (candidate === null || candidate.pid === selfPid) continue;
     if (
-      typeof record.userDataDir === 'string' &&
-      !isSameUserDataDir(record.userDataDir, userDataDir, process.platform)
+      candidate.userDataDir !== undefined &&
+      !isSameUserDataDir(candidate.userDataDir, userDataDir, process.platform)
     ) {
       continue;
     }
-    if (!isPidAlive(pid)) continue;
+    if (!isPidAlive(candidate.pid)) continue;
     candidates.push({
       raw,
       fileName: name,
-      pid,
-      recordedAtMs: record.startedAtMs,
-      rootDir: record.rootDir,
+      pid: candidate.pid,
+      recordedAtMs: candidate.recordedAtMs,
+      rootDir: candidate.rootDir,
     });
   }
   if (readProcessIdentity) {
@@ -2424,6 +2322,49 @@ function isSameUserDataDir(a: string, b: string, platform: NodeJS.Platform): boo
     : ra === rb;
 }
 
+function instancePidFromRecordName(name: string): number | null {
+  const match = /^(\d+)\.json$/.exec(name);
+  if (!match) return null;
+  const pid = Number(match[1]);
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+}
+
+function parseRegisteredInstanceCandidate(
+  raw: string,
+  fileName: string,
+): RegisteredInstanceCandidate | null {
+  const filePid = instancePidFromRecordName(fileName);
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const record = parsed as RegisteredInstanceRecord;
+      if (typeof record.pid === 'number' && Number.isInteger(record.pid) && record.pid > 0) {
+        if (filePid !== null && record.pid !== filePid) {
+          return {
+            pid: filePid,
+            userDataDir: undefined,
+            recordedAtMs: undefined,
+            rootDir: undefined,
+          };
+        }
+        return {
+          pid: record.pid,
+          userDataDir: typeof record.userDataDir === 'string' ? record.userDataDir : undefined,
+          recordedAtMs:
+            typeof record.startedAtMs === 'number' ? record.startedAtMs : undefined,
+          rootDir: typeof record.rootDir === 'string' ? record.rootDir : undefined,
+        };
+      }
+    }
+  } catch {
+    // A torn payload still has a process identity in its canonical filename.
+  }
+
+  return filePid === null
+    ? null
+    : { pid: filePid, userDataDir: undefined, recordedAtMs: undefined, rootDir: undefined };
+}
+
 /**
  * Other live Cindy instances sharing this userData, discovered via the
  * `.dev-instances/<pid>.json` runtime provenance registry (devStartupStatus;
@@ -2435,9 +2376,10 @@ function isSameUserDataDir(a: string, b: string, platform: NodeJS.Platform): boo
  * Error posture is asymmetric on purpose: a record file that VANISHES
  * (ENOENT) means that instance exited — skip it; a record file that exists
  * but cannot be READ (EACCES, I/O errors) may hide a live instance — fail
- * closed by rethrowing so the caller defers the destructive claim. Only a
- * record that reads fine but fails to PARSE is treated as a torn leftover
- * (writes are atomic rename, so torn content cannot be a live registration).
+ * closed by rethrowing so the caller defers the destructive claim. If a
+ * record reads but has an invalid or mismatched payload, its `<pid>.json`
+ * filename still keeps a live process visible; dead-PID leftovers remain
+ * safely ignorable.
  */
 async function findConcurrentLiveInstancePids(
   deps: MigrationDeps,
@@ -2459,39 +2401,49 @@ async function findConcurrentLiveInstancePids(
     recordedAtMs: number | undefined;
     rootDir: string | undefined;
   }> = [];
-  for (const name of names) {
-    if (!name.endsWith('.json')) continue;
-    let raw: string;
-    try {
-      raw = await deps.readFile(path.join(registryDir, name));
-    } catch (error) {
-      if (isMissing(error)) continue;
-      throw error;
+  const recordNames = new Set(
+    names.flatMap((name) => {
+      if (name.endsWith('.json')) return [name];
+      if (name.endsWith('.json.bak')) return [name.slice(0, -'.bak'.length)];
+      return [];
+    }),
+  );
+  for (const name of recordNames) {
+    const recordPath = path.join(registryDir, name);
+    let raw: string | null = null;
+    for (let attempt = 0; attempt < 2 && raw === null; attempt += 1) {
+      try {
+        raw = await deps.readFile(recordPath);
+      } catch (error) {
+        if (!isMissing(error)) throw error;
+        // During atomic backup exchange the canonical record may be absent
+        // while `<pid>.json.bak` is the only snapshot. If the writer finishes
+        // and removes the backup before this read, retry canonical once before
+        // deciding that the instance exited.
+        try {
+          raw = await deps.readFile(`${recordPath}.bak`);
+        } catch (backupError) {
+          if (!isMissing(backupError)) throw backupError;
+        }
+      }
     }
-    let record: RegisteredInstanceRecord;
-    try {
-      record = JSON.parse(raw) as RegisteredInstanceRecord;
-    } catch {
-      continue; // torn leftover, never a live registration
-    }
-    const pid = record.pid;
-    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0 || pid === selfPid) {
-      continue;
-    }
+    if (raw === null) continue;
+    const candidate = parseRegisteredInstanceCandidate(raw, name);
+    if (candidate === null || candidate.pid === selfPid) continue;
     // 只认同一 userData 的记录;userDataDir 不一致说明是异常拷贝进来的残留。
     if (
-      typeof record.userDataDir === 'string' &&
-      !isSameUserDataDir(record.userDataDir, userDataDir, process.platform)
+      candidate.userDataDir !== undefined &&
+      !isSameUserDataDir(candidate.userDataDir, userDataDir, process.platform)
     ) {
       continue;
     }
-    if (!deps.isPidAlive(pid)) continue;
+    if (!deps.isPidAlive(candidate.pid)) continue;
     candidates.push({
       raw,
       fileName: name,
-      pid,
-      recordedAtMs: record.startedAtMs,
-      rootDir: record.rootDir,
+      pid: candidate.pid,
+      recordedAtMs: candidate.recordedAtMs,
+      rootDir: candidate.rootDir,
     });
   }
 

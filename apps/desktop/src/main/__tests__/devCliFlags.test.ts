@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -183,15 +183,23 @@ describe('resolveDevCliFlags', () => {
       canonicalizePath: sensitiveVolume,
     });
     expect(miss.isolatedDirIsEpochDerived).toBe(false);
-    // 缺省实现:路径与全部有字母的祖先都不存在时无从探测卷语义 → 保守不折叠
-    // (/AppData 在测试机不存在,最近存在祖先是根目录,无字母可翻转)。
-    const unprobeable = resolveDevCliFlags({
-      ...base,
-      envIsolated: '1',
-      envUserDataDir: '/AppData/CINDY-DEV2',
-      envUserDataDirEpoch: '1',
+    // 缺省实现无法探测路径及祖先时必须保守不折叠。显式模拟文件系统失败，
+    // 不假设宿主 /AppData 不存在（Windows 本机可能已有 C:\\AppData）。
+    const unavailablePath = vi.spyOn(realpathSync, 'native').mockImplementation(() => {
+      throw Object.assign(new Error('fixture: path unavailable'), { code: 'ENOENT' });
     });
-    expect(unprobeable.isolatedDirIsEpochDerived).toBe(false);
+    try {
+      const unprobeable = resolveDevCliFlags({
+        ...base,
+        envIsolated: '1',
+        envUserDataDir: '/AppData/CINDY-DEV2',
+        envUserDataDirEpoch: '1',
+      });
+      expect(unavailablePath).toHaveBeenCalled();
+      expect(unprobeable.isolatedDirIsEpochDerived).toBe(false);
+    } finally {
+      unavailablePath.mockRestore();
+    }
   });
 
   it('缺省实现:首启(目录不存在)按最近存在祖先的卷语义探测(#912 review P2 第二十二轮)', () => {

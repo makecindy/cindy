@@ -3,9 +3,9 @@
  *
  * 为什么走系统而不是自己渲染:`nativeImage.createThumbnailFromPath` 在 macOS 背后
  * 是 QuickLook、Windows 是 Shell IShellItemImageFactory —— 一个调用就覆盖 PDF /
- * Office / 文本 / 代码 / 图片 / 视频,拿到的是**文件真实内容**的缩略图(实测本机
- * PDF 48ms、Markdown 165ms、JSON 22ms),renderer 不必背 pdfjs,也不用为每种格式
- * 各自接一个解析器。
+ * Office / 文本 / 代码 / 图片 / 视频,拿到的是**文件真实内容**的缩略图,renderer
+ * 不必背 pdfjs,也不用为每种格式各自接一个解析器。Windows Markdown 是例外:Shell
+ * 调用会同步阻塞 Electron main event loop,因此直接回落到 renderer 的轻量文件图标。
  *
  * 边界(见 docs/dev-rules/electron-security-and-process-boundaries.md §5):
  *   - 调用方身份由 assertTrustedAppRendererEvent 在 handler 侧闸住,这里只做
@@ -34,10 +34,18 @@ const MIN_PX = 16;
 const MAX_PX = 128;
 
 /**
- * 系统缩略图偶发卡住(实测同进程连续调 app.getFileIcon 会挂死),这里给硬超时:
- * 附件托盘宁可回落图标,也不能把一次 IPC 永远挂在那儿。
+ * 系统缩略图偶发卡住(实测同进程连续调 app.getFileIcon 会挂死),这里给硬超时。
+ * 超时只能覆盖 event loop 仍可调度 timer 的异步挂起;已知会同步阻塞的输入必须在
+ * 进入原生调用前回落。
  */
 const TIMEOUT_MS = 4000;
+
+/**
+ * Win10 的 Shell 缩略图实现会在这些 Markdown 扩展名上同步阻塞 Electron main
+ * event loop;Promise.race 的 timer 因而没有机会运行。仅 Windows 绕开原生调用,
+ * 其余平台仍可使用 QuickLook 等系统预览。
+ */
+const WINDOWS_MARKDOWN_EXTS = new Set(['.md', '.markdown', '.mdown', '.mkd', '.mdx']);
 
 /**
  * 缓存条数上限;给得宽是为了别让大托盘反复触发驱逐——驱逐后每次焦点复核都要重新
@@ -244,6 +252,12 @@ export async function readFileThumbnail(
   // POSITIVE_TTL_MS 的软过期兜底。
   const key = `${realPath}::${stat.dev}::${stat.ino}::${stat.mtimeMs}::${stat.size}::${Math.round(size)}`;
   const byteSize = stat.size;
+  if (
+    process.platform === 'win32' &&
+    WINDOWS_MARKDOWN_EXTS.has(path.extname(realPath).toLowerCase())
+  ) {
+    return { dataUrl: null, byteSize };
+  }
   const cached = cacheGet(key);
   // revalidate 只跳过正缓存;负缓存照旧命中,否则每次焦点复核都要再撞一次同一堵墙。
   if (cached !== undefined && !(params?.revalidate && cached !== null)) {

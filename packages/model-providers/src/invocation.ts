@@ -37,7 +37,7 @@ export interface InvocationPreferences {
   effort?: string | null;
   providerId?: string | null;
   permissionMode?: string | null;
-  fastMode?: boolean | null;
+  fastMode?: boolean | 'ultrafast' | null;
 }
 
 /** 场景默认 —— 每个派发面自己的产品决策,作为参数传入,不散落硬编码。 */
@@ -57,7 +57,7 @@ export interface ScenarioDefaults {
   permissionMode: string;
   /** 场景默认来源(如 IM 草稿的 providerId);与显式值同样要过收敛校验。 */
   providerIdFor?: (agent: AgentKind, modelId: string) => string | null;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   /**
    * 显式模型经目录/caps 校验确认不可用时的策略:
    *   - 'fallback'(默认)= 落场景默认链继续派发 —— IM/hook 无人值守历史语义(宁可换模型
@@ -89,7 +89,7 @@ export interface ResolvedInvocation {
   effort: string | null | undefined;
   providerId: string | null;
   permissionMode: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   /**
    * 诊断轨迹: 各字段命中了哪级回落(如 'model:scenario-default'、
    * 'permission:strictest-fallback')。调用方打日志用,不参与任何逻辑。

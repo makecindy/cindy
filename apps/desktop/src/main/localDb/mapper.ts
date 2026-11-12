@@ -1,3 +1,4 @@
+import { richAnswerText } from '@cindy/maker-shared/rich-answer';
 /**
  * chat-data-localization F5：IPC 边界 row ↔ camel/ISO 转换。
  *
@@ -8,7 +9,17 @@
  */
 
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
+import { hasPendingSessionInterruption } from '@cindy/maker-shared/session-activity';
+import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
+import { getSessionInterruptionBootAt } from './sessionInterruptionBoot';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
+import { projectMcpAppHistory } from '../mcp-apps/history.js';
+import { markdownPreviewText } from '../../shared/markdownPreviewText.js';
+import {
+  parseOrcaRemoteLead,
+  serializeOrcaRemoteLead,
+  type OrcaRemoteLead,
+} from '../../shared/orcaRemoteWorker.js';
 
 import type {
   sessions,
@@ -20,6 +31,7 @@ import type {
 // 类型从 renderer 共享（仅 type-only import，运行时无 import 副作用）
 import type {
   Session,
+  UsageHistorySession,
   SessionStatus,
   Message,
   MessageRole,
@@ -38,10 +50,15 @@ import type {
   RunStatus,
   AgentKind as SchedulerAgentKind,
   ScriptExecutionConfig,
+  ScheduleWebhookTrigger,
   ScriptCapability,
   PreRunHookRunResult,
+  PreRunPluginFailureAction,
 } from '@cindy/maker-scheduler';
+// 子路径只加载这一份无依赖的格式校验，不引入引擎。
+import { normalizeScheduleWebhookSource, type ScheduleWebhookSource } from '@cindy/maker-scheduler/webhook-formats';
 import { normalizeSessionSource } from '../../shared/sessionSource.js';
+import type { SessionSource } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { isSyntheticTriggerText } from '../../shared/interruptedTurn.js';
 import {
@@ -54,6 +71,29 @@ import {
 
 type SessionRow = typeof sessions.$inferSelect;
 type SessionInsert = typeof sessions.$inferInsert;
+type SessionUsageRow = Pick<
+  SessionRow,
+  | 'id'
+  | 'title'
+  | 'model'
+  | 'providerId'
+  | 'totalTokenUsage'
+  | 'contextTokens'
+  | 'contextWindow'
+  | 'userSendAt'
+  | 'updatedAt'
+>;
+
+/**
+ * 运行时固定 effort 模型用 `null`；`sessions.effort` 是 NOT NULL 枚举。
+ * 空白 / null 表示不落库，UPDATE 保留该行已有的合法档位。
+ */
+export function persistableSessionEffort(effort: unknown): SessionInsert['effort'] | undefined {
+  if (typeof effort !== 'string') return undefined;
+  const trimmed = effort.trim();
+  return trimmed ? (trimmed as SessionInsert['effort']) : undefined;
+}
+
 type MessageRow = typeof messages.$inferSelect;
 type MessageInsert = typeof messages.$inferInsert;
 type ScheduleRow = typeof schedules.$inferSelect;
@@ -62,6 +102,21 @@ type ProjectAutomationConsentRow = typeof projectAutomationConsents.$inferSelect
 type ProjectAutomationConsentInsert = typeof projectAutomationConsents.$inferInsert;
 type ScheduleRunRow = typeof scheduleRuns.$inferSelect;
 type ScheduleRunInsert = typeof scheduleRuns.$inferInsert;
+
+type SessionRuntimeFields = Pick<Session, 'id' | 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode'> & {
+  scheduledModelBaseline?: string | null;
+};
+type SessionRuntimeProjector = (session: SessionRuntimeFields) => Partial<Session>;
+let sessionRuntimeProjector: SessionRuntimeProjector | null = null;
+
+export function setSessionRuntimeProjector(projector: SessionRuntimeProjector | null): void {
+  sessionRuntimeProjector = projector;
+}
+
+/** Full reads and committed route patches must publish the same runtime snapshot. */
+export function projectSessionRuntimeFields(session: SessionRuntimeFields): Partial<Session> {
+  return sessionRuntimeProjector?.(session) ?? {};
+}
 
 /**
  * SessionRow + 同 session 下 messages 总条数。IPC handler 必须通过 LEFT JOIN + GROUP BY
@@ -77,21 +132,67 @@ type ScheduleRunInsert = typeof scheduleRuns.$inferInsert;
  * preview 落 null，渲染端兜底隐藏。
  */
 export type SessionRowWithCount = SessionRow & {
+  companion?: Session['companion'];
+  tags?: import('@cindy/maker-shared').TaskTag[];
   messageCount: number;
   latestMessageContent?: string | null;
+  latestMessageExtract?: string | null;
   latestMessageRole?: string | null;
 };
 
 /** preview 最大长度（字符）。渲染端 3 行 line-clamp 之外的兜底硬上限。 */
 const PREVIEW_MAX_CHARS = 140;
+/** Bound serialized content before JSON.parse so oversized rows stay valid JSON. */
+const PREVIEW_CONTENT_BOUND_CHARS = 4096;
+// Cache only this pure projection, never a session row. Exact text/role keys
+// keep edits visible; both entry count and input size bound retained memory.
+const PREVIEW_CACHE_ENTRIES = 1024;
+const plainPreviewCache = new Map<string, string | null>();
 
 /**
  * 从消息 content（DB 存的 JSON string）提炼 sidebar 卡片预览纯文本。
  *  - user 消息：content 是 `{"text":"...","images":[],"files":[]}` → 取 .text
- *  - assistant 消息：content 是 JSON.stringify 后的 markdown 字符串 → 解析后原样用
+ *  - assistant 消息：content 是 JSON.stringify 后的 markdown 字符串 → 提取可读正文
  *  - 解析失败 / 空文本 → null（渲染端隐藏预览行）
  * 换行折叠成空格——卡片预览是流式 3 行 clamp，不保留消息内排版。
  */
+export function finalizePlainPreview(
+  text: string | null | undefined,
+  role: string | null | undefined,
+): string | null {
+  if (!text) return null;
+  const key = text.length <= PREVIEW_CONTENT_BOUND_CHARS
+    ? `${role === 'assistant' ? 'assistant' : 'plain'}:${text}`
+    : null;
+  if (key !== null && plainPreviewCache.has(key)) {
+    const cached = plainPreviewCache.get(key)!;
+    plainPreviewCache.delete(key);
+    plainPreviewCache.set(key, cached);
+    return cached;
+  }
+  const preview = computePlainPreview(text, role);
+  if (key !== null) {
+    plainPreviewCache.set(key, preview);
+    if (plainPreviewCache.size > PREVIEW_CACHE_ENTRIES) {
+      plainPreviewCache.delete(plainPreviewCache.keys().next().value!);
+    }
+  }
+  return preview;
+}
+
+function computePlainPreview(text: string, role: string | null | undefined): string | null {
+  let next = text;
+  // 合成 UI 指令行(隐藏续跑 / 图片按钮)不进 sidebar 预览(review P2):它是
+  // role='user' 的正常落库行,但对用户不可见 —— 预览显示隐藏英文指令会暴露
+  // 实现细节。返回 null 与"无预览"同渲染语义。
+  if (isSyntheticTriggerText(next)) return null;
+  if (role === 'assistant') next = richAnswerText(stripInternalWebCitations(next));
+  // Strip formatting before the display limit: URLs must not consume the preview budget.
+  const collapsed = markdownPreviewText(next);
+  if (!collapsed) return null;
+  return collapsed.length > PREVIEW_MAX_CHARS ? collapsed.slice(0, PREVIEW_MAX_CHARS) : collapsed;
+}
+
 export function extractMessagePreview(
   raw: string | null | undefined,
   role: string | null | undefined,
@@ -110,15 +211,37 @@ export function extractMessagePreview(
     // 极端情况 content 不是合法 JSON（旧手工写入）——按纯文本兜底
     text = raw;
   }
-  if (!text) return null;
-  // 合成 UI 指令行(隐藏续跑 / 图片按钮)不进 sidebar 预览(review P2):它是
-  // role='user' 的正常落库行,但对用户不可见 —— 预览显示隐藏英文指令会暴露
-  // 实现细节。返回 null 与"无预览"同渲染语义。
-  if (isSyntheticTriggerText(text)) return null;
-  if (role === 'assistant') text = stripInternalWebCitations(text);
-  const collapsed = text.replace(/\s+/g, ' ').trim();
-  if (!collapsed) return null;
-  return collapsed.length > PREVIEW_MAX_CHARS ? collapsed.slice(0, PREVIEW_MAX_CHARS) : collapsed;
+  return finalizePlainPreview(text, role);
+}
+
+/**
+ * Bound oversized serialized message bodies before they enter the mapper.
+ * Truncate the extracted text, then re-encode, so JSON objects stay valid and
+ * `extractMessagePreview` still sees `.text` instead of a cut-off document.
+ */
+export function boundSerializedMessageContent(
+  raw: string | null | undefined,
+  maxChars = PREVIEW_CONTENT_BOUND_CHARS,
+): string | null | undefined {
+  if (raw == null || raw.length <= maxChars) return raw;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed === 'string') {
+      return JSON.stringify(parsed.slice(0, maxChars));
+    }
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const record = parsed as { text?: unknown };
+      if (typeof record.text === 'string') {
+        return JSON.stringify({
+          ...record,
+          text: record.text.length > maxChars ? record.text.slice(0, maxChars) : record.text,
+        });
+      }
+    }
+    return raw;
+  } catch {
+    return raw.slice(0, maxChars);
+  }
 }
 
 /**
@@ -128,8 +251,7 @@ export function extractMessagePreview(
  * 出口处补一个空字符串 `userId: ''`，避免类型缺失；上层消费如果需要用户 id 应该读 AuthContext。
  */
 export function sessionToCamel(row: SessionRowWithCount): Session {
-  const legacyMoney =
-    row.totalCostUsd > 0 ? legacyUsdMoney(row.totalCostUsd) : undefined;
+  const legacyMoney = row.totalCostUsd > 0 ? legacyUsdMoney(row.totalCostUsd) : undefined;
   const currentMoney =
     row.totalCostCurrency && row.totalCostAmount > 0
       ? normalizeRegionalMoney({
@@ -149,13 +271,15 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
   // 否则(CNY 无法表达进 USD 字段)保持冻结历史值。只消费 totalCostUsd 的读方
   // (device-link v1 / 手机端)在全量 reseed 后才不会丢本构建新增的 USD 花费。
   const legacyUsdProjection =
-    row.totalCostUsd +
-    (row.totalCostCurrency === 'USD' ? row.totalCostAmount : 0);
-  return {
+    row.totalCostUsd + (row.totalCostCurrency === 'USD' ? row.totalCostAmount : 0);
+  const base: Session = {
     id: row.id,
+    ...(row.companion ? { companion: row.companion } : {}),
+    ...(row.tags ? { tags: row.tags } : {}),
     userId: '', // 本地 db 已按 user 隔离，无需冗余存储
     title: row.title,
     workingDir: row.workingDir,
+    projectDir: row.projectDir,
     workspaceKind: normalizeWorkspaceKind(row.workspaceKind),
     model: row.model,
     effort: row.effort as Effort,
@@ -168,11 +292,14 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     totalMoney,
     contextTokens: row.contextTokens,
     contextWindow: row.contextWindow,
-    fastMode: !!row.fastMode,
+    fastMode: (row.fastMode ?? false),
     planModeEnabled: !!row.planModeEnabled,
     clearedAt: msToIso(row.clearedAt),
     pinnedAt: msToIso(row.pinnedAt),
+    hiddenAt: msToIso(row.hiddenAt),
+    notificationsMuted: !!row.notificationsMuted,
     userSendAt: msToIso(row.userSendAt),
+    lastActivityAt: msToIso(row.lastActivityAt),
     agentKind: row.agentKind as AgentKind,
     source: normalizeSessionSource(row.source),
     orcaRole: row.orcaRole as OrcaRole | null,
@@ -181,7 +308,10 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     worktreePath: row.worktreePath,
     usedProjectContext: !!row.usedProjectContext,
     extraDirs: safeParseStringArray(row.extraDirs),
+    writableDirs: safeParseStringArray(row.writableDirs),
     remoteHostId: row.remoteHostId ?? null,
+    agentDeviceId: row.agentDeviceId ?? null,
+    orcaRemoteLead: parseOrcaRemoteLead(row.orcaRemoteLead ?? null),
     // interrupted-turn-resume:「疑似中断」判定的两个时间戳(unix ms 原样透出,
     // renderer 打开会话时比较 startedAt > endedAt,见 sessionActiveTurn.ts)。
     activeTurnStartedAt: row.activeTurnStartedAt ?? null,
@@ -189,9 +319,42 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     createdAt: new Date(row.createdAt).toISOString(),
     updatedAt: new Date(row.updatedAt).toISOString(),
     _count: { messages: row.messageCount },
-    preview: extractMessagePreview(row.latestMessageContent, row.latestMessageRole),
+    preview:
+      row.listPreview
+        ? finalizePlainPreview(row.listPreview, row.listPreviewRole)
+        : row.latestMessageExtract != null
+          ? finalizePlainPreview(row.latestMessageExtract, row.latestMessageRole)
+          : extractMessagePreview(
+              boundSerializedMessageContent(row.latestMessageContent),
+              row.latestMessageRole,
+            ),
     summary: row.summary ?? null,
   };
+  // Only the owning host can distinguish a pre-boot interruption from a live
+  // turn. Keep the generation so existing ended/clear patches revoke it without
+  // another query; a normal read acknowledgement must not revoke this evidence.
+  const candidate = { ...base, interruptedTurnStartedAt: base.activeTurnStartedAt };
+  base.interruptedTurnStartedAt =
+    row.source != null &&
+    DESKTOP_VISIBLE_SESSION_SOURCES.includes(
+      row.source as (typeof DESKTOP_VISIBLE_SESSION_SOURCES)[number],
+    ) &&
+    (base.activeTurnStartedAt ?? Infinity) < getSessionInterruptionBootAt() &&
+    hasPendingSessionInterruption(candidate)
+      ? base.activeTurnStartedAt
+      : null;
+  return { ...base, ...projectSessionRuntimeFields({ ...base, scheduledModelBaseline: row.scheduledModelBaseline }) };
+}
+
+function importedReplyText(content: unknown): unknown {
+  if (!Array.isArray(content) || !content.length) return content;
+  const texts: string[] = [];
+  for (const block of content) {
+    const record = block && typeof block === 'object' ? (block as { type?: unknown; text?: unknown }) : null;
+    if (record?.type !== 'text' || typeof record.text !== 'string') return content;
+    texts.push(record.text);
+  }
+  return texts.join('');
 }
 
 export function messageToCamel(row: MessageRow): Message {
@@ -201,6 +364,11 @@ export function messageToCamel(row: MessageRow): Message {
   } catch {
     // 容错：极端情况下 content 可能不是合法 JSON（例如旧手工写入），保留原字符串
     content = row.content;
+  }
+  // Replies imported from the cloud room (`cloud-history:`, companion-cloud/mirror.ts) were once
+  // stored as text blocks; every reader expects a reply as a plain string, so they read as one.
+  if (row.role === 'assistant' && row.clientId?.startsWith('cloud-history:')) {
+    content = importedReplyText(content);
   }
   if (row.role === 'assistant' && typeof content === 'string') {
     content = stripInternalWebCitations(content);
@@ -220,7 +388,7 @@ export function messageToCamel(row: MessageRow): Message {
     clientId: row.clientId,
     sessionId: row.sessionId,
     role: row.role as MessageRole,
-    content,
+    content: projectMcpAppHistory(content, agentMeta?.mcpApp === true),
     toolUseId: row.toolUseId,
     agentMeta,
     agentKind: (row.agentKind as 'cc' | 'codex' | 'pi' | null) ?? null,
@@ -249,34 +417,47 @@ export function sessionCreateToRow(
   body:
     | {
         id?: string;
+        title?: string;
         workingDir?: string;
+        projectDir?: string | null;
         workspaceKind?: WorkspaceKind;
         model?: string;
         effort?: string;
         permissionMode?: string;
-        fastMode?: boolean;
+        fastMode?: boolean | 'ultrafast';
         planModeEnabled?: boolean;
         agentKind?: AgentKind;
         orcaRole?: OrcaRole | null;
         parentSessionId?: string | null;
         forkedAtMessageId?: string | null;
         extraDirs?: string[];
+        writableDirs?: string[];
         /** Remote codex (P2): 远端 SSH host alias; null/undefined = 本地。 */
         remoteHostId?: string | null;
+        /** Agent 在同账号另一台电脑上运行时那台电脑的 deviceId; null/undefined = Agent 在本机。 */
+        agentDeviceId?: string | null;
+        /** 仅运行设备上的协同远端 Worker 入口写入(见 shared/orcaRemoteWorker.ts)。 */
+        orcaRemoteLead?: OrcaRemoteLead | null;
         /**
          * per-session 来源(供应商)显式选择,落盘 sessions.provider_id(与 update 同列)。
          * null/undefined = 不显式选,跟随该 agent 的原生默认路由(no-break)。草稿态首次
          * create 由 renderer 透传用户在草稿里选定的来源,使新会话首个请求就走对供应商。
          */
         providerId?: string | null;
+        /** Main-owned purposes only; the renderer create IPC validates which values it accepts. */
+        source?: 'bot' | 'cindy-make' | 'cindy-make-merge';
       }
     | undefined,
   now: number,
 ): SessionInsert {
   return {
     id,
-    title: DEFAULT_DRAFT_SESSION_TITLE,
+    title:
+      typeof body?.title === 'string' && body.title.trim().length > 0
+        ? body.title.trim()
+        : DEFAULT_DRAFT_SESSION_TITLE,
     workingDir: normalizeWorkingDirForStorage(body?.workingDir),
+    projectDir: normalizeWorkingDirForStorage(body?.projectDir),
     workspaceKind: body?.workspaceKind ?? 'project',
     model: body?.model ?? 'claude-sonnet-4-6',
     effort: (body?.effort as SessionInsert['effort']) ?? 'high',
@@ -288,7 +469,7 @@ export function sessionCreateToRow(
     contextTokens: 0,
     contextWindow: 0,
     // 新建 session 默认 Fast Mode OFF；调用方显式传 true 时才打开。
-    fastMode: !!body?.fastMode,
+    fastMode: (body?.fastMode ?? false),
     // 计划模式默认 OFF；草稿里开了计划模式的会话显式传 true。
     planModeEnabled: !!body?.planModeEnabled,
     clearedAt: null,
@@ -300,13 +481,18 @@ export function sessionCreateToRow(
     forkedAtMessageId: body?.forkedAtMessageId ?? null,
     worktreePath: null,
     extraDirs: safeStringify(body?.extraDirs ?? []),
+    writableDirs: safeStringify(body?.writableDirs ?? []),
     remoteHostId: normalizeRemoteHostId(body?.remoteHostId),
+    // Agent 运行在另一台电脑时与 SSH 远端互斥：两者同时给出时以 SSH 远端为准、不记录设备。
+    agentDeviceId: normalizeRemoteHostId(body?.remoteHostId) ? null : normalizeRemoteHostId(body?.agentDeviceId),
+    orcaRemoteLead: body?.orcaRemoteLead ? serializeOrcaRemoteLead(body.orcaRemoteLead) : null,
     // 显式来源:trim 后非空才入库,其余(undefined / null / 空串 / 纯空白)一律落 null,
     // 与 session-provider-store 的 null 语义对齐(null → 回落默认路由,字节级不变)。
     providerId:
       typeof body?.providerId === 'string' && body.providerId.trim().length > 0
         ? body.providerId.trim()
         : null,
+    source: body?.source ?? 'desktop',
     createdAt: now,
     updatedAt: now,
   };
@@ -324,10 +510,10 @@ export function sessionPatchToRow(
     workingDir?: string;
     workspaceKind?: WorkspaceKind;
     model?: string;
-    effort?: string;
+    effort?: string | null;
     permissionMode?: string;
     providerId?: string | null;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
     planModeEnabled?: boolean;
     sdkSessionId?: string | null;
     totalTokenUsage?: number;
@@ -336,9 +522,11 @@ export function sessionPatchToRow(
     contextWindow?: number;
     clearedAt?: string | null;
     pinnedAt?: string | null;
+    notificationsMuted?: boolean;
     status?: SessionStatus;
     orcaRole?: OrcaRole | null;
     extraDirs?: string[];
+    writableDirs?: string[];
   },
   opts?: { bumpUpdatedAt?: boolean },
 ): Partial<SessionInsert> {
@@ -347,12 +535,17 @@ export function sessionPatchToRow(
   if (patch.workingDir !== undefined)
     out.workingDir = normalizeWorkingDirForStorage(patch.workingDir);
   if (patch.workspaceKind !== undefined) out.workspaceKind = patch.workspaceKind;
+  // Move controls explicitly set workspaceKind; an execution-only cwd update
+  // (e.g. attaching a worktree) must preserve the chosen project.
+  if (patch.workspaceKind === 'dialogue'
+    || (patch.workspaceKind === 'project' && patch.workingDir !== undefined)) out.projectDir = null;
   if (patch.model !== undefined) out.model = patch.model;
-  if (patch.effort !== undefined) out.effort = patch.effort as SessionInsert['effort'];
+  const persistableEffort = persistableSessionEffort(patch.effort);
+  if (persistableEffort !== undefined) out.effort = persistableEffort;
   if (patch.permissionMode !== undefined)
     out.permissionMode = patch.permissionMode as SessionInsert['permissionMode'];
   if (patch.providerId !== undefined) out.providerId = patch.providerId;
-  if (patch.fastMode !== undefined) out.fastMode = !!patch.fastMode;
+  if (patch.fastMode !== undefined) out.fastMode = (patch.fastMode ?? false);
   if (patch.planModeEnabled !== undefined) out.planModeEnabled = !!patch.planModeEnabled;
   if (patch.sdkSessionId !== undefined) out.sdkSessionId = patch.sdkSessionId;
   if (patch.totalTokenUsage !== undefined) out.totalTokenUsage = patch.totalTokenUsage;
@@ -361,9 +554,11 @@ export function sessionPatchToRow(
   if (patch.contextWindow !== undefined) out.contextWindow = patch.contextWindow;
   if (patch.clearedAt !== undefined) out.clearedAt = isoToMs(patch.clearedAt);
   if (patch.pinnedAt !== undefined) out.pinnedAt = isoToMs(patch.pinnedAt);
+  if (patch.notificationsMuted !== undefined) out.notificationsMuted = !!patch.notificationsMuted;
   if (patch.status !== undefined) out.status = patch.status;
   if (patch.orcaRole !== undefined) out.orcaRole = patch.orcaRole;
   if (patch.extraDirs !== undefined) out.extraDirs = safeStringify(patch.extraDirs);
+  if (patch.writableDirs !== undefined) out.writableDirs = safeStringify(patch.writableDirs);
   if (opts?.bumpUpdatedAt !== false) out.updatedAt = Date.now();
   return out;
 }
@@ -402,6 +597,26 @@ export function messageCreateToRow(
 function msToIso(ms: number | null | undefined): string | null {
   if (ms === null || ms === undefined) return null;
   return new Date(ms).toISOString();
+}
+
+/**
+ * 用量历史榜单的最小行映射。
+ *
+ * 与 sessionToCamel 分开，避免全量 usageHistory 查询把 workingDir、SDK
+ * 标识、远程主机等只属于会话管理的字段泄露到 Renderer。
+ */
+export function sessionUsageToCamel(row: SessionUsageRow): UsageHistorySession {
+  return {
+    id: row.id,
+    title: row.title,
+    model: row.model,
+    providerId: row.providerId,
+    totalTokenUsage: row.totalTokenUsage,
+    contextTokens: row.contextTokens,
+    contextWindow: row.contextWindow,
+    userSendAt: msToIso(row.userSendAt),
+    updatedAt: new Date(row.updatedAt).toISOString(),
+  };
 }
 
 function isoToMs(iso: string | null): number | null {
@@ -490,6 +705,11 @@ function parseScriptConfig(raw: string | null): ScriptExecutionConfig | undefine
 const PRE_RUN_HOOK_STATUSES = new Set(['passed', 'skipped', 'failed', 'timed_out', 'aborted']);
 const PRE_RUN_HOOK_DECISIONS = new Set(['run', 'skip', 'block']);
 
+/** 本文件只做 type-only import,取值表在此重复声明;未知值按最严格的 block 读。 */
+function isPreRunPluginFailureAction(value: string | null): value is PreRunPluginFailureAction {
+  return value === 'allow' || value === 'skip' || value === 'block';
+}
+
 /** 兼容损坏/手工写入的 JSON：非法结果不应让整个运行历史加载失败。 */
 function parsePreRunHookResult(raw: string | null): PreRunHookRunResult | undefined {
   if (!raw) return undefined;
@@ -517,6 +737,33 @@ function parsePreRunHookResult(raw: string | null): PreRunHookRunResult | undefi
   }
 }
 
+/**
+ * 更新版本写入的预设本机可能不认识：原样保留，不当作 GitHub，否则下次同步会覆盖服务器上的格式。
+ */
+function parseWebhookSource(value: unknown): Pick<ScheduleWebhookTrigger, 'source'> {
+  if (value === undefined) return {};
+  try {
+    return { source: normalizeScheduleWebhookSource(value) };
+  } catch {
+    const preset = (value as { preset?: unknown } | null)?.preset;
+    return typeof preset === 'string' && preset ? { source: value as ScheduleWebhookSource } : {};
+  }
+}
+
+function parseWebhookTrigger(raw: string | null): ScheduleWebhookTrigger | undefined {
+  if (!raw) return undefined;
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof value.endpointId !== 'string' || !value.endpointId) return undefined;
+    const events = Array.isArray(value.events)
+      ? value.events.filter((event): event is string => typeof event === 'string')
+      : [];
+    return { endpointId: value.endpointId, ...(events.length ? { events } : {}), ...parseWebhookSource(value.source) };
+  } catch {
+    return undefined;
+  }
+}
+
 function serializeScriptConfig(config: ScriptExecutionConfig | undefined): string | null {
   return config ? JSON.stringify(config) : null;
 }
@@ -531,7 +778,8 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     jobConfig: row.jobConfig ?? undefined,
     executionMode: row.executionMode === 'script' ? 'script' : 'agent',
     scriptConfig: parseScriptConfig(row.scriptConfig),
-    source: row.source === 'project' ? 'project' : 'user',
+    webhookTrigger: parseWebhookTrigger(row.webhookTrigger),
+    source: row.source === 'project' ? 'project' : row.source === 'bot' ? 'bot' : 'user',
     projectConfigId: row.projectConfigId ?? undefined,
     kind: row.kind,
     cronExpr: row.cronExpr,
@@ -540,10 +788,13 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     manual: !!row.manual,
     intervalMs: row.intervalMs ?? undefined,
     agentKind: row.agentKind as SchedulerAgentKind,
+    modelAgentKind: row.modelAgentKind ?? undefined,
+    modelAgentDeviceId: row.modelAgentDeviceId ?? undefined,
     model: row.model ?? undefined,
     providerId: row.providerId ?? undefined,
+    agentDeviceId: row.agentDeviceId ?? undefined,
     effort: row.effort ?? undefined,
-    fastMode: !!row.fastMode,
+    fastMode: (row.fastMode ?? false),
     workspaceKind: normalizeWorkspaceKind(row.workspaceKind),
     workingDir: row.workingDir ?? undefined,
     useWorktree: !!row.useWorktree,
@@ -555,6 +806,12 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
       ? {
           command: row.preRunHookCommand,
           timeoutMs: row.preRunHookTimeoutMs ?? undefined,
+        }
+      : undefined,
+    preRunPlugin: row.preRunPluginId
+      ? {
+          pluginId: row.preRunPluginId,
+          onFailure: isPreRunPluginFailureAction(row.preRunPluginOnFailure) ? row.preRunPluginOnFailure : 'block',
         }
       : undefined,
     notify: {
@@ -582,6 +839,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     jobConfig: s.jobConfig ?? null,
     executionMode: s.executionMode ?? 'agent',
     scriptConfig: serializeScriptConfig(s.scriptConfig),
+    webhookTrigger: s.webhookTrigger ? JSON.stringify(s.webhookTrigger) : null,
     source: s.source ?? 'user',
     projectConfigId: s.projectConfigId ?? null,
     kind: s.kind,
@@ -591,10 +849,13 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     manual: s.manual,
     intervalMs: s.intervalMs ?? null,
     agentKind: s.agentKind,
+    modelAgentKind: s.modelAgentKind ?? null,
+    modelAgentDeviceId: s.modelAgentDeviceId ?? null,
     model: s.model ?? null,
     providerId: s.providerId ?? null,
+    agentDeviceId: s.agentDeviceId ?? null,
     effort: (s.effort as ScheduleInsert['effort']) ?? null,
-    fastMode: !!s.fastMode,
+    fastMode: (s.fastMode ?? false),
     workspaceKind: s.workspaceKind ?? 'project',
     workingDir: s.workingDir ?? null,
     useWorktree: s.useWorktree,
@@ -603,6 +864,8 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     silentWhenIdle: !!s.silentWhenIdle,
     preRunHookCommand: s.preRunHook?.command ?? null,
     preRunHookTimeoutMs: s.preRunHook?.timeoutMs ?? null,
+    preRunPluginId: s.preRunPlugin?.pluginId ?? null,
+    preRunPluginOnFailure: s.preRunPlugin?.onFailure ?? null,
     notifyDesktop: s.notify.desktop,
     notifyFeishu: s.notify.feishu,
     notifyWecomGroup: s.notify.wecomGroup === true,
@@ -635,6 +898,7 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'jobConfig')) out.jobConfig = patch.jobConfig ?? null;
   if (hasKey(patch, 'executionMode')) out.executionMode = patch.executionMode ?? 'agent';
   if (hasKey(patch, 'scriptConfig')) out.scriptConfig = serializeScriptConfig(patch.scriptConfig);
+  if (hasKey(patch, 'webhookTrigger')) out.webhookTrigger = patch.webhookTrigger ? JSON.stringify(patch.webhookTrigger) : null;
   if (hasKey(patch, 'source')) out.source = patch.source ?? 'user';
   if (hasKey(patch, 'projectConfigId')) out.projectConfigId = patch.projectConfigId ?? null;
   if (hasKey(patch, 'kind')) out.kind = patch.kind as ScheduleInsert['kind'];
@@ -645,10 +909,13 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   // intervalMs：undefined → null（清空，回退到 cron 槽位语义）；数字原样写
   if (hasKey(patch, 'intervalMs')) out.intervalMs = patch.intervalMs ?? null;
   if (hasKey(patch, 'agentKind')) out.agentKind = patch.agentKind as ScheduleInsert['agentKind'];
+  if (hasKey(patch, 'modelAgentKind')) out.modelAgentKind = patch.modelAgentKind ?? null;
+  if (hasKey(patch, 'modelAgentDeviceId')) out.modelAgentDeviceId = patch.modelAgentDeviceId ?? null;
   if (hasKey(patch, 'model')) out.model = patch.model ?? null;
   if (hasKey(patch, 'providerId')) out.providerId = patch.providerId ?? null;
+  if (hasKey(patch, 'agentDeviceId')) out.agentDeviceId = patch.agentDeviceId ?? null;
   if (hasKey(patch, 'effort')) out.effort = (patch.effort as ScheduleInsert['effort']) ?? null;
-  if (hasKey(patch, 'fastMode')) out.fastMode = !!patch.fastMode;
+  if (hasKey(patch, 'fastMode')) out.fastMode = (patch.fastMode ?? false);
   if (hasKey(patch, 'workspaceKind')) out.workspaceKind = patch.workspaceKind ?? 'project';
   if (hasKey(patch, 'workingDir')) out.workingDir = patch.workingDir ?? null;
   if (hasKey(patch, 'useWorktree')) out.useWorktree = patch.useWorktree as boolean;
@@ -659,6 +926,10 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
     // 嵌套对象整体替换(同 notify):出现即两列同写;undefined = 关闭 hook,双列清 NULL
     out.preRunHookCommand = patch.preRunHook?.command ?? null;
     out.preRunHookTimeoutMs = patch.preRunHook?.timeoutMs ?? null;
+  }
+  if (hasKey(patch, 'preRunPlugin')) {
+    out.preRunPluginId = patch.preRunPlugin?.pluginId ?? null;
+    out.preRunPluginOnFailure = patch.preRunPlugin?.onFailure ?? null;
   }
   if (hasKey(patch, 'notify')) {
     const n = patch.notify;
@@ -712,8 +983,7 @@ export function projectAutomationConsentToRow(
 
 /** ScheduleRun 行 → 内存对象。 */
 export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
-  const legacyCost =
-    row.costUsd > 0 ? legacyUsdMoney(row.costUsd) : undefined;
+  const legacyCost = row.costUsd > 0 ? legacyUsdMoney(row.costUsd) : undefined;
   const currentCost =
     row.costCurrency && row.costAmount > 0
       ? normalizeRegionalMoney({
@@ -748,9 +1018,7 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
       ? legacyEstimate.currency === currentEstimate.currency
         ? addRegionalMoney([legacyEstimate, currentEstimate])
         : currentEstimate
-      : (currentEstimate ??
-        legacyEstimate ??
-        zeroUsageMoney('value-estimate'));
+      : (currentEstimate ?? legacyEstimate ?? zeroUsageMoney('value-estimate'));
   return {
     id: row.id,
     scheduleId: row.scheduleId,
@@ -766,6 +1034,7 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
     costAttribution: row.costAttribution,
     resultText: row.resultText ?? undefined,
     preRunHookResult: parsePreRunHookResult(row.preRunHookResult),
+    triggerSource: row.triggerSource === 'webhook' ? 'webhook' : undefined,
     readAt: row.readAt ?? undefined,
     heartbeatAt: row.heartbeatAt ?? undefined,
   };
@@ -791,6 +1060,7 @@ export function scheduleRunCreateToRow(r: ScheduleRun): ScheduleRunInsert {
     costAttribution: r.costAttribution ?? 'exact',
     resultText: r.resultText ?? null,
     preRunHookResult: r.preRunHookResult ? JSON.stringify(r.preRunHookResult) : null,
+    triggerSource: r.triggerSource ?? null,
     readAt: r.readAt ?? null,
     heartbeatAt: r.heartbeatAt ?? null,
   };

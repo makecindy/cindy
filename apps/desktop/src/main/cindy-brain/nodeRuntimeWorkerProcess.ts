@@ -17,8 +17,7 @@
  *   [node, entryPath, ...args],让 Maker 这类库以为自己被 node 正常启动。
  *
  * 插件代码拥有当前系统用户级本机权限。这里提供的是进程隔离与通信收口,不是
- * OS 沙箱;授权入口是装入确认卡的权限清单(2026-07-24 起不再有 Main 原生
- * 二次确认弹窗)。
+ * OS 沙箱；能力在插件详情中披露，运行期由 Main 按 manifest 严格守门。
  */
 
 import { EventEmitter } from 'node:events';
@@ -29,8 +28,12 @@ import { PassThrough } from 'node:stream';
 import type { GhostNodeChildToWorkerMessage } from '../../shared/ghost.js';
 import { GHOST_NODE_CHILD_MODE_FLAG } from '../../shared/ghost.js';
 import { installVirtualStdin } from './nodeRuntimeVirtualStdin.js';
+import { NodeRequestScopes } from './nodeRequestScope.js';
+import { NodeDeviceAuthorizationClient } from './nodeDeviceAuthorizationClient.js';
+import { NodeHostServicesClient } from './nodeHostServicesClient.js';
+import { NodeAuthorizationClient } from './nodeAuthorizationClient.js';
 
-interface ParentPortLike {
+export interface NodeWorkerParentPort {
   postMessage(message: unknown): void;
   on(event: 'message', listener: (event: { data: unknown }) => void): void;
 }
@@ -39,10 +42,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-const parentPort = (process as unknown as { parentPort?: ParentPortLike }).parentPort;
-const entryPath = process.argv[2];
-const childMode = process.argv[3] === GHOST_NODE_CHILD_MODE_FLAG;
-const childArgs = childMode ? process.argv.slice(4) : [];
+export function runNodeRuntimeWorker(parentPort: NodeWorkerParentPort, entryPath: string, args: string[] = []) {
+const childMode = args[0] === GHOST_NODE_CHILD_MODE_FLAG;
+const childArgs = childMode ? args.slice(1) : [];
 
 if (!parentPort) throw new Error('Node 插件工作进程缺少 parentPort');
 if (
@@ -56,6 +58,12 @@ if (
 // Windows 上 Electron 把 process.stdin 钉成不可配置 getter,不能整体替换;
 // 替换或原地复活的分支收敛在 installVirtualStdin 里。
 const virtualStdin = installVirtualStdin(process);
+const requestScopes = new NodeRequestScopes();
+const deviceAuthorization = new NodeDeviceAuthorizationClient(requestScopes, (message) =>
+  parentPort.postMessage(message),
+);
+const hostServices = new NodeHostServicesClient(requestScopes, message => parentPort.postMessage(message));
+const authorization = new NodeAuthorizationClient(requestScopes, message => parentPort.postMessage(message));
 
 /* ── spawnEntry 窄接口(仅普通 worker 模式;子进程模式不给,树深恒为 1)── */
 
@@ -137,6 +145,7 @@ function handleChildControlMessage(m: GhostNodeChildToWorkerMessage): void {
     pending.resolve(handle);
     return;
   }
+  if (m.type === 'device-authorize-result' || m.type === 'plugin-authorize-result' || m.type === 'node-host-result') return;
   const internal = childHandles.get(m.childId);
   if (!internal) return;
   if (m.type === 'child-stdout') {
@@ -160,6 +169,7 @@ function handleChildControlMessage(m: GhostNodeChildToWorkerMessage): void {
  */
 function spawnEntry(entry: string, args?: string[]): Promise<unknown> {
   return new Promise((resolve, reject) => {
+    const rpcId = requestScopes.currentRpcId();
     const reqId = `r${nextSpawnReq++}`;
     const timer = setTimeout(() => {
       pendingSpawns.delete(reqId);
@@ -171,6 +181,7 @@ function spawnEntry(entry: string, args?: string[]): Promise<unknown> {
       type: 'spawn-child',
       reqId,
       entry,
+      ...(rpcId !== undefined ? { rpcId } : {}),
       ...(args !== undefined ? { args } : {}),
     });
   });
@@ -182,7 +193,25 @@ parentPort.on('message', (event) => {
   const data = event.data;
   if (!isRecord(data)) return;
   if (data.type === 'stdin' && typeof data.chunk === 'string') {
-    if (Buffer.byteLength(data.chunk, 'utf8') <= 1024 * 1024) virtualStdin.feed(data.chunk);
+    if (Buffer.byteLength(data.chunk, 'utf8') <= 1024 * 1024) {
+      requestScopes.feed(data.chunk, (chunk) => virtualStdin.feed(chunk));
+    }
+    return;
+  }
+  if (!childMode && data.type === 'request-settled' && typeof data.rpcId === 'string') {
+    requestScopes.finish(data.rpcId);
+    deviceAuthorization.finish(data.rpcId);
+    authorization.finish(data.rpcId);
+    hostServices.finish(data.rpcId);
+    return;
+  }
+  if (!childMode && data.type === 'device-authorize-result') {
+    deviceAuthorization.reply(data);
+    return;
+  }
+  if (!childMode && data.type === 'node-host-result') { hostServices.reply(data); return; }
+  if (!childMode && data.type === 'plugin-authorize-result') {
+    authorization.reply(data);
     return;
   }
   // 子进程原样模式的字节口(base64,防多字节字符被 chunk 边界切坏)。
@@ -226,9 +255,13 @@ if (childMode) {
     configurable: false,
     enumerable: false,
     writable: false,
-    value: Object.freeze({ spawnEntry }),
+    value: Object.freeze({ spawnEntry, bindDeviceAuthorization: () => deviceAuthorization.bind(),
+      bindHostServices: () => hostServices.bind(),
+      bindAuthorization: () => authorization.bind() }),
   });
 }
 
-const requireFromWorker = createRequire(__filename);
+const requireFromWorker = createRequire(entryPath);
 requireFromWorker(entryPath);
+
+}

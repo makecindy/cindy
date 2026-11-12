@@ -143,10 +143,17 @@ export function SessionBranchTreeDialog({
     navigate(route);
   }, [navigate, onOpenChange, session.id]);
 
-  const renderPiNode = (node: SessionTreeNode, depth: number): React.ReactNode => {
+  const renderPiNode = (node: SessionTreeNode, branchDepth: number, justBranched: boolean): React.ReactNode => {
     const active = tree?.activePathIds.includes(node.id) === true;
     const leaf = tree?.leafId === node.id;
     const branching = node.children.length > 1;
+    // Pi groups the first continuation after a fork once; later single-child
+    // continuations stay aligned. A nested fork adds one level, not both.
+    const childBranchDepth = branching
+      ? branchDepth + 1
+      : justBranched && branchDepth > 0
+        ? branchDepth + 1
+        : branchDepth;
     return (
       <div key={node.id}>
         <button
@@ -158,7 +165,7 @@ export function SessionBranchTreeDialog({
             'hover:bg-[var(--surface-elevated)] disabled:cursor-default',
             active && 'bg-[var(--surface-elevated)]',
           )}
-          style={{ paddingLeft: `${10 + depth * 18}px` }}
+          style={{ paddingLeft: `${10 + branchDepth * 18}px` }}
         >
           <span
             className={cn(
@@ -181,7 +188,7 @@ export function SessionBranchTreeDialog({
             </span>
           </span>
         </button>
-        {node.children.map((child) => renderPiNode(child, depth + 1))}
+        {node.children.map((child) => renderPiNode(child, childBranchDepth, branching))}
       </div>
     );
   };
@@ -211,7 +218,11 @@ export function SessionBranchTreeDialog({
             {loading ? (
               <div className="flex h-16 items-center justify-center"><Spinner size={16} /></div>
             ) : tree && tree.roots.length > 0 ? (
-              tree.roots.map((root) => renderPiNode(root, depth + 1))
+              tree.roots.map((root) => renderPiNode(
+                root,
+                depth + (tree.roots.length > 1 ? 2 : 1),
+                tree.roots.length > 1,
+              ))
             ) : (
               <div className="px-3 py-3 text-12 text-[var(--text-tertiary)]">
                 {t('ccAgent.sidebar.sessionBranches.empty')}
@@ -227,10 +238,11 @@ export function SessionBranchTreeDialog({
   return (
     <Dialog.Root open={open} onOpenChange={(next) => !switchingId && onOpenChange(next)}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
         <Dialog.Content
-          className="fixed left-1/2 top-1/2 z-[10001] flex max-h-[min(760px,calc(100vh-48px))] w-[min(620px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border shadow-[var(--confirm-shadow)]"
-          style={{ backgroundColor: 'var(--confirm-bg)', borderColor: 'var(--border-default)', WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          onPointerDownOutside={(event) => event.preventDefault()}
+          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[min(760px,calc(100vh-48px))] w-[min(620px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
           <div className="flex items-start gap-3 border-b px-4 py-3" style={{ borderColor: 'var(--border-default)' }}>
             <div className="min-w-0 flex-1">
@@ -253,7 +265,7 @@ export function SessionBranchTreeDialog({
           </div>
 
           {session.agentKind === 'pi' && (
-            <div className="border-t px-4 py-3" style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--surface-subtle)' }}>
+            <div className="border-t px-4 py-3" style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--surface-elevated-soft)' }}>
               <label className="flex items-center gap-2 text-12 text-[var(--text-primary)]">
                 <input
                   type="checkbox"

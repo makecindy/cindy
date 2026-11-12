@@ -7,6 +7,8 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { buildSubagentRunStatusIndex } from '@cindy/maker-shared/agent-task';
+
 import type { Message } from '@/lib/ccAgent.types';
 import type { AgentTaskUpdate } from '@/lib/makerChatStore';
 
@@ -152,6 +154,59 @@ describe('listSessionTasks 配对', () => {
       expect.objectContaining({ taskId: 'task-completed', status: 'completed' }),
       expect.objectContaining({ taskId: 'task-failed', status: 'failed' }),
     ]));
+  });
+
+  it('无 update 的历史回放读取持久化终态(与聊天卡同源,避免重载后终态漂移)', () => {
+    // tool_use 行的 agentMeta.agentTaskStatus 是 messagePersistBroadcaster 落库的
+    // 权威终态:重载(update 清空)后列表必须读它,而不是只看 isSubagentResultError。
+    const persisted = (status: 'completed' | 'failed' | 'stopped', clientId: string, toolUseId: string) =>
+      baseMessage({
+        clientId,
+        role: 'tool_use',
+        toolUseId,
+        content: { toolName: 'Task', input: {} },
+        agentMeta: { agentTaskStatus: status } as Message['agentMeta'],
+      });
+    const { completed } = listSessionTasks({
+      messages: [
+        persisted('stopped', 'c-stopped', 'toolu-stopped'),
+        toolResult('r-stopped', 'toolu-stopped', '<tool_use_error>Interrupted</tool_use_error>'),
+        persisted('completed', 'c-completed', 'toolu-completed'),
+        toolResult('r-completed', 'toolu-completed', '<tool_use_error>transient</tool_use_error>'),
+      ],
+      taskUpdates: undefined,
+      isSessionStreaming: false,
+    });
+
+    // 持久化 stopped 优先于错误回执(与 deriveAgentTaskStatus 的 persistedStatus 语义一致)。
+    expect(completed.find((it) => it.toolUseId === 'toolu-stopped')?.status).toBe('stopped');
+    // 持久化 completed 也优先于错误回执 —— 与聊天卡同源,不会重载后一边失败一边完成。
+    expect(completed.find((it) => it.toolUseId === 'toolu-completed')?.status).toBe('completed');
+  });
+
+  it('无 update 且未 settled 时,持久化终态(仅写 agentTaskStatus、无 tool result)优先', () => {
+    // 启动失败只写回 tool-use 的 agentTaskStatus、未产生 tool result:settled 与 update
+    // 都为 false。此时必须无条件采用持久化终态,而不是空闲显示 stopped / 流式显示
+    // running —— 与聊天卡(MessageStream 传终态)同口径。
+    const persistedOnly = (status: 'completed' | 'failed' | 'stopped', clientId: string, toolUseId: string) =>
+      baseMessage({
+        clientId,
+        role: 'tool_use',
+        toolUseId,
+        content: { toolName: 'Task', input: {} },
+        agentMeta: { agentTaskStatus: status } as Message['agentMeta'],
+      });
+    const { completed } = listSessionTasks({
+      messages: [
+        persistedOnly('failed', 'c-fail', 'toolu-fail'),
+        persistedOnly('stopped', 'c-stop', 'toolu-stop'),
+      ],
+      taskUpdates: undefined,
+      isSessionStreaming: true, // 即便流式,持久化 failed/stopped 也不得退化成 running
+    });
+
+    expect(completed.find((it) => it.toolUseId === 'toolu-fail')?.status).toBe('failed');
+    expect(completed.find((it) => it.toolUseId === 'toolu-stop')?.status).toBe('stopped');
   });
 
   it('历史 workflow(无 update):从结果文本「Task ID: xxx」提取 taskId(详情读 wf 文件用)', () => {
@@ -402,6 +457,74 @@ describe('listSessionTasks 历史条目状态推导', () => {
     });
     expect(running[0].title).toHaveLength(96);
     expect(running[0].title.endsWith('…')).toBe(true);
+  });
+});
+
+describe('listSessionTasks 共用 subagent_runs 状态', () => {
+  const receipt = 'Background agent launched (receipt wording the text matcher does not know)';
+
+  it('durable running 让未知措辞的启动回执不再把运行中的 Agent 判成 completed', () => {
+    const { running, completed } = listSessionTasks({
+      messages: [
+        toolUse('c1', 'toolu-bg', 'Agent', { description: 'bg agent' }),
+        toolResult('r1', 'toolu-bg', receipt),
+      ],
+      taskUpdates: aliasedMap(makeUpdate({ taskId: 'agent-1', parentToolUseId: 'toolu-bg' })),
+      isSessionStreaming: false,
+      subagentRunStatuses: buildSubagentRunStatusIndex([
+        { parentToolUseId: 'toolu-bg', logicalAgentId: 'agent-1', status: 'running' },
+      ]),
+    });
+    expect(completed).toHaveLength(0);
+    expect(running[0]).toMatchObject({ title: 'bg agent', status: 'running' });
+  });
+
+  it('无 live update 的历史行采用 durable 终态,不再一律涂成 completed', () => {
+    const { completed } = listSessionTasks({
+      messages: [
+        toolUse('c1', 'toolu-bg', 'Agent', { description: 'bg agent' }),
+        toolResult('r1', 'toolu-bg', receipt),
+      ],
+      taskUpdates: undefined,
+      isSessionStreaming: false,
+      subagentRunStatuses: buildSubagentRunStatusIndex([
+        { parentToolUseId: 'toolu-bg', status: 'failed' },
+      ]),
+    });
+    expect(completed[0]).toMatchObject({ status: 'failed' });
+  });
+
+  it('调用滑出消息窗口的孤儿 update 同样采用 durable 终态,不再留在「运行中」', () => {
+    const update = makeUpdate({ taskId: 'agent-1', parentToolUseId: 'toolu-gone' });
+    const input = {
+      messages: [],
+      taskUpdates: aliasedMap(update),
+      subagentRunStatuses: buildSubagentRunStatusIndex([
+        { parentToolUseId: 'toolu-gone', status: 'failed' },
+      ]),
+    };
+    // 空闲态:终态孤儿是陈旧残留,不列出。
+    expect(listSessionTasks({ ...input, isSessionStreaming: false })).toEqual({
+      running: [],
+      completed: [],
+    });
+    // 运行中:作为 LIVE 占位列在终态区。
+    const live = listSessionTasks({ ...input, isSessionStreaming: true });
+    expect(live.running).toHaveLength(0);
+    expect(live.completed[0]).toMatchObject({ taskId: 'agent-1', status: 'failed' });
+  });
+
+  it('后台 Bash 孤儿不查 subagent_runs', () => {
+    const update = makeUpdate({ taskId: 'bash-1', parentToolUseId: 'toolu-b', taskType: 'local_bash' });
+    const { running } = listSessionTasks({
+      messages: [],
+      taskUpdates: aliasedMap(update),
+      isSessionStreaming: false,
+      subagentRunStatuses: buildSubagentRunStatusIndex([
+        { parentToolUseId: 'toolu-b', status: 'completed' },
+      ]),
+    });
+    expect(running[0]).toMatchObject({ taskId: 'bash-1', status: 'running' });
   });
 });
 

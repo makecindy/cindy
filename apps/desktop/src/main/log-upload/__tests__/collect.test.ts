@@ -24,6 +24,8 @@ import {
 } from '../collect';
 import { MAX_LOOKBACK_DAYS_CAP, MAX_RECORDS } from '../limits';
 import type { ParsedRecord } from '../types';
+import { InvokeScheduler } from '../../../../../../packages/device-link/src/invokeScheduler';
+import { DeviceLinkError, StallDiagnostics } from '@cindy/device-link';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** 固定「现在」：2026-08-04 12:00 本地时间。测试不依赖真实时钟。 */
@@ -92,6 +94,43 @@ function harness(files: Record<string, string>): {
 
 const SENTINEL = mainLine(NOW - 60_000, 'INFO ', 'logger', RECORD_FORMAT_SENTINEL_MSG);
 
+// Integration: previously INFO summaries were dropped by scope filtering, and
+// an unsplit queue snapshot could lose its tail at the 2000-character limit.
+it('preserves correlated bounded queue evidence through actual collection and redaction', async () => {
+  const lines: string[] = [];
+  const diagnostics = new StallDiagnostics(message => lines.push(message));
+  const scheduler = new InvokeScheduler();
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const channels = ['local-db:sessions:list', 'maker:session:messages:view', 'maker:remote-resources:invoke'];
+  const running = Array.from({ length: 140 }, (_, n) => scheduler.run('host', false, 30_000, () => hold,
+    { channel: channels[n % channels.length], request: 'abcdef12-0000-0000-0000-000000000000', source: 'renderer' }).catch(e => e));
+  diagnostics.record('request', { request: 'abcdef12', outcome: 'timeout', admission: scheduler.snapshot('host'),
+    transport: { head: channels.map((channel, n) => ({ channel, seq: n + 1, bytes: 1_000_000, path: 'relay',
+      request: 'abcdef12', ageMs: 30_000, attempts: 3, gate: 'socket-budget' })),
+      otherPeers: channels.map((_, n) => ({ peer: `abcdef${n}1`, pending: 64, bytes: 4_000_000, relayBytes: 4_000_000 })),
+      receive: [{ delivered: 1, ready: 3, firstReady: 3, assembling: 0, bytes: 500_000 }] } });
+  diagnostics.flush(); scheduler.clear(new DeviceLinkError('NOT_CONNECTED', 'stop')); release(); await Promise.all(running);
+  expect(lines.length).toBeGreaterThan(1);
+  expect(lines.every(line => line.length < 2000)).toBe(true);
+  const scopes = ['device-link', 'device-link:ipc-diagnostics', 'device-link:execution-diagnostics', 'device-link-transfer'];
+  const { deps } = harness({ [path.join('/tmp/cindy-logs', `main-${dayKey(NOW)}.log`)]: [SENTINEL,
+    ...scopes.flatMap(scope => lines.map(msg => mainLine(NOW - 1000, 'INFO ', scope, msg))),
+    mainLine(NOW - 1000, 'INFO ', 'device-link:execution-diagnostics/payload', 'PRIVATE_PAYLOAD'),
+  ].join('\n') });
+  const collected = await collectLogs(deps, { reason: 'manual', anchors: [] });
+  expect(collected.records).toHaveLength(scopes.length * lines.length);
+  expect(new Set(collected.records.map(row => row.scope))).toEqual(new Set(scopes));
+  const decoded = collected.records.filter(row => row.scope === 'device-link')
+    .map(row => JSON.parse(row.msg.slice('device-link diagnostic '.length)));
+  expect(new Set(decoded.map(row => `${row.instance}:${row.event}`)).size).toBe(1);
+  expect(decoded.every(row => row.parts === lines.length)).toBe(true);
+  expect(decoded.map(row => row.part)).toEqual(lines.map((_, n) => n + 1));
+  expect(JSON.stringify(decoded)).toContain('socket-budget');
+  expect(JSON.stringify(decoded)).toContain('abcdef12');
+  expect(JSON.stringify(collected)).not.toContain('PRIVATE_PAYLOAD');
+});
+
 describe('第一层源白名单：会话目录与调试原文永不被打开', () => {
   it('诱饵文件存在也不被读取，且内容不出现在结果里', async () => {
     const logDir = path.join('/tmp', 'cindy-logs');
@@ -126,7 +165,7 @@ describe('第一层源白名单：会话目录与调试原文永不被打开', (
     expect(result.records).toHaveLength(1);
   });
 
-  it('手动上报不读 agent 流（只在崩溃路径作上下文）', async () => {
+  it('普通手动上报不读 agent 流（不含 /issue 同意路径）', async () => {
     const logDir = path.join('/tmp', 'cindy-logs');
     const today = dayKey(NOW);
     const files: Record<string, string> = {
@@ -147,6 +186,42 @@ describe('第一层源白名单：会话目录与调试原文永不被打开', (
     await collectLogs(deps, { reason: 'manual', anchors: [] });
 
     expect(openedPaths.some((p) => p.includes('agent-'))).toBe(false);
+  });
+
+  it('手动路径仅在 includeAgentLogs=true 时读 agent 流，且仍只取 proxy 源', async () => {
+    const logDir = path.join('/tmp', 'cindy-logs');
+    const today = dayKey(NOW);
+    const files: Record<string, string> = {
+      [path.join(logDir, `main-${today}.log`)]: SENTINEL,
+      [path.join(logDir, `agent-${today}.ndjson`)]: [
+        JSON.stringify({
+          ts: NOW - 20_000,
+          level: 'info',
+          source: 'proxy',
+          scope: 'cc-proxy/req',
+          msg: 'POST /v1/messages 200 812ms',
+        }),
+        JSON.stringify({
+          ts: NOW - 19_000,
+          level: 'debug',
+          source: 'maker',
+          scope: 'maker/s:abc',
+          msg: '用户提示词正文',
+        }),
+      ].join('\n'),
+    };
+    const { deps, openedPaths } = harness(files);
+
+    const result = await collectLogs(deps, {
+      reason: 'manual',
+      anchors: [],
+      includeAgentLogs: true,
+    });
+
+    expect(openedPaths.some((p) => p.includes('agent-'))).toBe(true);
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0].src).toBe('proxy');
+    expect(JSON.stringify(result.records)).not.toContain('提示词');
   });
 
   it('崩溃路径读 agent 流，但只取 proxy 源', async () => {

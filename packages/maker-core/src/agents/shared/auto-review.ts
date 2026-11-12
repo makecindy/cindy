@@ -13,12 +13,12 @@
  *
  * ## 两层判定
  *
- *   - **确定性绿灯 → `auto-approve`**：只读、会话内状态、工作区内文件写、明确只读 shell。
- *   - **灰区 → `prompt`**：交当前会话模型判 allow / block / ask；reviewer 故障时静默 block。
- *   - **确定性红线 → `prompt-each-time`**：凭证、提权、广泛破坏等极高风险动作才允许打扰用户。
+ *   - `auto-approve`：已有明确安全证据，可静态放行。
+ *   - `prompt` / `prompt-each-time`：历史风险等级，均交 AI 判断 allow / block / ask。
  *
- * 这里的 `prompt` 是内部灰区标记，不等于 UI 弹窗。最终只有轻量 reviewer 明确返回 `ask`，
- * 或本地规则命中确定性红线，才弹确认；拿不准与服务不可用都回主 Agent `block`，让它换安全做法。
+ * 本文件只分类风险，不决定弹窗。下面的“必问/逐次确认”注释描述旧等级名称；
+ * Auto 的最终决策统一由 resolveAutoReviewDecision 给出：模型 ask、审阅故障或完整证据超出预算
+ * 才交给用户，高风险名称、路径未知或 requireConsent 本身不能硬转人工。
  *
  * ## 已知静态残口(命令字符串层不可闭合,应在 env / OS / 会话配置层缓解,不在此兜底)
  *
@@ -37,18 +37,28 @@
  *   - **DNS 重绑定 / 符号链接**:见 isInternalFetchTarget / isInsideWorkspace 各自注释;属网络出口过滤 / fs.realpath 层。
  */
 
+import { lstatSync, realpathSync } from 'node:fs';
+import * as nodePath from 'node:path';
+
 import {
+  isDotenvCredentialPath,
   isSensitiveCredentialPath,
+  SENSITIVE_CREDENTIAL_GLOB_PATTERNS,
   SENSITIVE_CREDENTIAL_PATH_PATTERNS,
 } from './sensitive-credential-paths.js';
+import { parseShellInputRedirections } from './shell-input-redirections.js';
 
 export { isSensitiveCredentialPath } from './sensitive-credential-paths.js';
 
 export type ReviewVerdict = 'auto-approve' | 'prompt' | 'prompt-each-time';
+/** Bound synchronous shell/path parsing separately from the model's full evidence. */
+export const MAX_AUTO_REVIEW_STATIC_TEXT_CHARS = 4_096;
+/** Full command bodies (including document rewrites) must reach review without truncation. */
+export const MAX_AUTO_REVIEW_ACTION_TEXT_CHARS = 131_072;
 
 /**
  * 归一化动作 —— 各 harness 的 adapter 把自己的工具调用/审批请求翻译成它,交 reviewAction 裁决。
- *   read          读文件/内省(可带 path:读凭证文件必问;scope='tree' 的目录级递归读若根在区外必升级,其余放行)
+ *   read          读文件/内省(可带 path:读凭证文件需送审;scope='tree' 的目录级递归读若根在区外必升级,其余放行)
  *   session-state 会话内状态/控制,无本地写/外发(todo、后台 shell 读写、subagent 派生)
  *   file-write    带结构化路径的文件写(path 缺失=无法确认在区内→升级)
  *   exec          shell 命令(交给命令分类器)
@@ -56,24 +66,51 @@ export type ReviewVerdict = 'auto-approve' | 'prompt' | 'prompt-each-time';
  *   other         未知/其它 → fail-closed
  */
 export type ReviewableAction =
-  | { kind: 'read'; path?: string; scope?: 'file' | 'tree' }
+  | {
+      kind: 'read';
+      path?: string;
+      scope?: 'file' | 'tree';
+      /** Harness 的执行范围会动态收紧时，区外读不得沿用旧 provider allowlist。 */
+      requireWorkspaceBoundary?: boolean;
+    }
   | { kind: 'session-state' }
-  | { kind: 'file-write'; path: string | undefined }
+  | {
+      kind: 'file-write';
+      path: string | undefined;
+      /**
+       * Harness 在实际执行进程中解析出的写目标。`null` 表示 harness 声明会提供
+       * canonical 证据、但本次无法证明；缺省保持不具备 realpath 能力的旧 adapter 语义。
+       */
+      resolvedPath?: string | null;
+      /**
+       * 与 resolvedPath 同一执行文件系统内解析出的可写根。原始 path 仍只按词法根检查，
+       * 避免区外别名借真实根反向洗成绿灯。`null` 表示证据无法证明。
+       */
+      resolvedWritableRoots?: readonly string[] | null;
+    }
   // cwdUnknown:harness 上报了 cwd 字段但内容为空/不可解析 —— 与"未提供 cwd"(按会话工作目录)不同,
   // 必须按未知处理:相对破坏目标不可证明在区内(copidot 报 `params.cwd || workingDir` 把空串当区内)。
-  | { kind: 'exec'; command: string; cwd?: string; cwdUnknown?: boolean }
+  | {
+      kind: 'exec';
+      command: string;
+      cwd?: string;
+      cwdUnknown?: boolean;
+      /** 远端路径不属于控制端文件系统；无法取得执行端 realpath 时写目标不做静态免审。 */
+      destructivePathResolution?: 'host' | 'unavailable';
+    }
   | { kind: 'network'; target?: string; operation?: string }
   | { kind: 'other'; description?: string; requireConsent?: boolean };
 
 /**
- * 核心裁决。纯函数、确定性、无副作用(不触文件系统 —— 探文件存在性会变侧信道,且对远端
- * 路径不可行;workspaceRoots 只做字符串前缀判定)。workspaceRoots[0] 是唯一可写工作目录，
- * 后续项是 additionalDirectories 只读引用目录，均为绝对路径。
+ * 核心裁决。shell 写目标会在实际执行主机上解析最近存在祖先的 realpath，防止授权根内
+ * symlink / junction 越界。远端 adapter 必须显式标记无法取证，
+ * 此时标为需送审。workspaceRoots 是全部可读根；opts.writableRoots 是明确可写根。
+ * 旧调用未提供 writableRoots 时仍只有首个工作目录可写。
  */
 export function reviewAction(
   action: ReviewableAction,
   workspaceRoots: string[],
-  opts?: { platform?: NodeJS.Platform },
+  opts?: { platform?: NodeJS.Platform; writableRoots?: readonly string[] },
 ): ReviewVerdict {
   // macOS firmlink(/private/{var,tmp,etc} == /{var,tmp,etc})仅在 darwin 上成立;在 Linux(含远端 Linux)
   // 上 /private/tmp 与 /tmp 是无关路径,无条件抹平会把区外写误判为区内(codex 报)→ 只在 darwin 上抹平。
@@ -82,6 +119,12 @@ export function reviewAction(
     case 'read':
       // 读凭证/密钥文件(内置 Read/Grep 等,path 命中)必问、不可记住。
       if (action.path && isSensitiveCredentialPath(action.path)) return 'prompt-each-time';
+      if (action.requireWorkspaceBoundary && action.path
+        && !isInsideWorkspace(
+          normalizeTarget(action.path, workspaceRoots),
+          workspaceRoots,
+          aliasFirmlinks,
+        )) return 'prompt-each-time';
       // 目录级递归读(Grep/Glob/LS,scope='tree')的**根目录**在工作区外 → 能遍历进区外的凭证子路径
       // (如 `Grep {path:'/Users/me', pattern:'AKIA'}` 读出 ~/.aws/credentials,而 path 本身不含凭证名,
       // copilot 报)→ 升级。读取范围含额外只读引用目录(整个 workspaceRoots)。单文件读只读一个具名文件。
@@ -92,33 +135,85 @@ export function reviewAction(
       return 'auto-approve';
     case 'file-write': {
       if (!action.path) return 'prompt';
+      // 能提供执行期真实路径的 harness 一旦解析失败，就不能退回字面路径绿灯。
+      // 这不是普通灰区：用户看到的授权根与实际落盘目标可能已经不同，必须逐次确认。
+      if (action.resolvedPath === null || action.resolvedWritableRoots === null) {
+        return 'prompt-each-time';
+      }
+      const writeTargets = action.resolvedPath === undefined
+        ? [action.path]
+        : [action.path, action.resolvedPath];
       // 写凭证文件必问、不可记住 —— 即便落在工作区内(如 /repo/.aws/credentials、/repo/.codex/auth.json):
       // 把 secret 写进 git-tracked checkout 与写区外同样危险,凭证性优先于工作区边界。
-      if (isSensitiveCredentialPath(action.path)) return 'prompt-each-time';
-      const normalizedWriteTarget = normalizeTarget(action.path, workspaceRoots);
-      // **只有工作目录(workspaceRoots[0])可写**;额外目录(additionalDirectories)是只读引用上下文
-      // (base-agent 契约 / index.ts extraDirs 注释:可读不可写)。相对路径挂到 workspaceRoots[0] 解析。
-      // 区内一律放行 —— 即便工作区本身落在 /var、/root 等下,区内写也不该被系统红线误升(先判区内)。
-      const writableRoots = workspaceRoots.slice(0, 1);
-      if (isInsideWorkspace(normalizedWriteTarget, writableRoots, aliasFirmlinks)) return 'auto-approve';
+      if (writeTargets.some((target) => isSensitiveCredentialPath(target))) {
+        return 'prompt-each-time';
+      }
+      const normalizedWriteTargets = writeTargets.map((target) =>
+        normalizeTarget(target, workspaceRoots));
+      const normalizedWriteTarget = normalizedWriteTargets[0]!;
+      const normalizedResolvedTarget = normalizedWriteTargets[1];
+      // 相对路径始终挂到主工作目录(workspaceRoots[0])解析；绝对路径可落进任一显式可写根。
+      // 主工作目录内一律放行 —— 即便仓库本身落在 /var、/root 等下,区内写也不该被系统红线误升。
+      // 但用户追加的可写根不能把 /etc、/System 等系统红线洗成绿灯；那类目录仍须逐次确认。
+      const writableRoots = resolveWritableRoots(workspaceRoots, opts?.writableRoots);
+      const resolvedWritableRoots = action.resolvedWritableRoots === undefined
+        ? writableRoots
+        : [...action.resolvedWritableRoots];
+      const primaryWorkspaceRoot = workspaceRoots[0];
+      const lexicalTargetIsPrimary = Boolean(
+        primaryWorkspaceRoot
+        && isInsideWorkspace(normalizedWriteTarget, [primaryWorkspaceRoot], aliasFirmlinks)
+      );
+      const lexicalTargetIsWritable = isInsideWorkspace(
+        normalizedWriteTarget,
+        writableRoots,
+        aliasFirmlinks,
+      );
+      if (normalizedResolvedTarget !== undefined) {
+        // 系统与凭证红线必须对实际落盘目标重跑，不能被授权根内的链接名遮住。
+        if (isProtectedSystemPath(canonicalPath(normalizedResolvedTarget, aliasFirmlinks))) {
+          return 'prompt-each-time';
+        }
+        const resolvedTargetIsWritable = isInsideWorkspace(
+          normalizedResolvedTarget,
+          resolvedWritableRoots,
+          aliasFirmlinks,
+        );
+        // 最危险的形态是“看起来在授权内，实际写到授权外”。普通区外写仍保留
+        // 既有灰区语义；链接越界则必须让用户看到真实边界变化并逐次确认。
+        if ((lexicalTargetIsPrimary || lexicalTargetIsWritable) && !resolvedTargetIsWritable) {
+          return 'prompt-each-time';
+        }
+        // 原始路径本身也必须在授权边界内；不能用一个区外别名反向洗成绿灯。
+        if (!lexicalTargetIsPrimary && !lexicalTargetIsWritable) return 'prompt';
+        return 'auto-approve';
+      }
+      if (lexicalTargetIsPrimary) return 'auto-approve';
       // 区外写系统/受保护目录(/etc、/System、C:\Windows 等)是高影响系统级写入,不能交灰区 reviewer
       // 静默 allow(copilot 报)→ 确定性必问。canonical(darwin 抹平 /private firmlink)后判,使
       // `/private/etc/passwd` 也命中 `/etc`。其它区外写 → 灰区 reviewer。
       if (isProtectedSystemPath(canonicalPath(normalizedWriteTarget, aliasFirmlinks))) return 'prompt-each-time';
+      if (lexicalTargetIsWritable) return 'auto-approve';
       return 'prompt';
     }
     case 'exec': {
       const cwdUnknown = action.cwdUnknown === true || (action.cwd !== undefined && action.cwd.trim() === '');
+      const writableRoots = resolveWritableRoots(workspaceRoots, opts?.writableRoots);
       const shellVerdict = classifyShellCommand(action.command, workspaceRoots, {
         cwd: cwdUnknown ? undefined : action.cwd,
         cwdUnknown,
         platform: opts?.platform,
+        writableRoots,
+        destructivePathResolution: action.destructivePathResolution === 'unavailable'
+          ? 'unavailable'
+          : (opts?.platform ?? process.platform) === process.platform
+            ? 'host'
+            : 'lexical',
       });
       // cwd 未知 → 相对目标无法证明落在工作区内,不能按"区内"放行(至少升到灰区交 reviewer)。
       if (cwdUnknown) return shellVerdict === 'auto-approve' ? 'prompt' : shellVerdict;
-      // 额外目录是只读引用，不是可执行写入边界。先保留命令分类器识别出的确定性红线，
-      // 其它命令只要 cwd 不在首个可写根内就升级到 reviewer，避免相对写落进 additionalDirectories。
-      const writableRoots = workspaceRoots.slice(0, 1);
+      // 先保留命令分类器识别出的确定性红线；其它命令只要 cwd 不在任一显式可写根内
+      // 就升级到 reviewer，避免相对写落进只读 additionalDirectories。
       if (action.cwd
         && !isInsideWorkspace(normalizeTarget(action.cwd, workspaceRoots), writableRoots, aliasFirmlinks)) {
         return shellVerdict === 'prompt-each-time' ? shellVerdict : 'prompt';
@@ -160,6 +255,15 @@ const SAFE_READONLY_BINS: ReadonlySet<string> = new Set([
   'diff', 'cmp', 'sort', 'uniq', 'cut', 'tr', 'column', 'nl', 'tac',
   'jq', 'yq', 'base64', 'md5', 'md5sum', 'sha256sum', 'cksum',
 ]);
+
+/** Read-only commands whose positional operands may expose file contents. */
+const DOTENV_FILE_READER_BINS: ReadonlySet<string> = new Set([
+  'cat', 'head', 'tail', 'wc', 'stat', 'file', 'realpath', 'readlink',
+  'grep', 'egrep', 'fgrep', 'rg', 'ag', 'find', 'tree', 'du',
+  'diff', 'cmp', 'sort', 'uniq', 'cut', 'tr', 'column', 'nl', 'tac',
+  'jq', 'yq', 'base64', 'md5', 'md5sum', 'sha256sum', 'cksum', 'sed', 'date',
+]);
+
 
 /** 命令包裹器:剥掉后信任绑定到内层真实命令。`sudo`/`doas` 不在此列(提权本身危险)。 */
 const COMMAND_WRAPPERS: ReadonlySet<string> = new Set([
@@ -1476,34 +1580,52 @@ function stripDataLiterals(command: string): string {
     );
 }
 
-const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
+type CommandScanPattern = Pick<RegExp, 'test'>;
+
+function ghAuthShowsToken(command: string): boolean {
+  // A slash also establishes a command boundary for /usr/bin/gh and ./gh.
+  // Avoid rescanning an arbitrary path prefix from every shell separator.
+  const heads = /(?:^|[\s|&;(\/])gh\s+auth\s+[a-z][\w-]*/g;
+  const boundary = /[|;&\n]/g;
+  // Sticky: scan the suffix only from the first auth head in each segment.
+  // Keep --show-token[=value], -t/-wt/-tw[=value] and separator boundaries.
+  // The lookahead makes the short-option letter run linear even for a long
+  // cluster containing many t's followed by an invalid trailing '-'.
+  const flags = /[^|;&\n]*?\s(?:--show-token(?:$|[\s=|&;)])|-(?=[a-zA-Z]*t)[a-zA-Z]+(?:=[^\s|;&]*)?(?![\w-]))/y;
+  let scannedUntil = -1;
+  let head: RegExpExecArray | null;
+  while ((head = heads.exec(command))) {
+    const argsStart = heads.lastIndex;
+    // Preserve overlapping heads and heads whose whitespace spans a newline.
+    // Only a head ending beyond the already-scanned segment needs another scan.
+    heads.lastIndex = head.index + 1;
+    if (argsStart <= scannedUntil) continue;
+    flags.lastIndex = argsStart;
+    if (flags.test(command)) return true;
+    boundary.lastIndex = argsStart;
+    scannedUntil = boundary.exec(command)?.index ?? command.length;
+  }
+  return false;
+}
+
+/**
+ * 读取或打出可复用凭证的确定性红线(ALWAYS_ASK_PATTERNS 的子集)。单独成表：供应商分享的受邀者
+ * 任务在完全访问下也要确认这一类(shellCommandReadsCredentials)。
+ */
+const CREDENTIAL_ALWAYS_ASK_PATTERNS: readonly CommandScanPattern[] = [
+  // Token flags belong to gh auth only: echo/grep --show-token and docker -t
+  // must not become credential prompts. Use the same scanner in both gates.
+  { test: ghAuthShowsToken },
+  // `gh auth token` directly prints a reusable credential.
+  /(?:^|[\s|&;(\/])gh\s+auth\s+token\b/,
+  ...SENSITIVE_CREDENTIAL_PATH_PATTERNS,                  // 凭证/密钥路径(见上)
+  /\bsecurity\s+(?:find|dump|export|add)-/,               // macOS keychain
+  /\$\{?[A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|APIKEY|_PAT)[A-Za-z0-9_]*\}?/i, // 敏感环境变量展开(echo "$API_KEY" 等)
+];
+
+const ALWAYS_ASK_PATTERNS: readonly CommandScanPattern[] = [
   /\b(?:sudo|doas|runuser)\b/,                           // 提权(runuser 名字独特,直接词界)
-  // `--show-token` = 把**可复用的凭证**打进 stdout,从而进模型上下文与会话记录。等同于
-  // 读凭证文件,按凭证同级作**确定性必问** —— 只把它挡在 gh 只读白名单外还不够:落灰区
-  // 意味着可能被轻量审阅器静默放行(`gh auth status` 看起来就是一条状态查询)。
-  // 覆盖 `--show-token` / `--show-token=true` 两种形态(review 二轮 P1)。
-  // **必须限定在 `gh auth` 命令位**:这个字符串出现在别处只是普通文本或参数,
-  // `echo --show-token`、`grep -rn -- --show-token src` 原本是直接放行的,不限定就被打成
-  // 硬弹窗 —— 正是本 PR 要消灭的那类误报(review 报)。命令位写法与下面的短选项一致。
-  // 首尾边界要**对称**:命令位允许分隔符开头(`ls;gh auth …`),flag 后面同样可以紧跟
-  // `;` `|` `&` `)` 而不带空格 —— 只补开头是把同一条边界修了一半(review 报)。
-  /(?:^|[\s|&;(])(?:\S*\/)?gh\s+auth\s+[a-z][\w-]*[^|;&\n]*?\s--show-token(?:$|[\s=|&;)])/,
-  // 短选项形态:`gh auth status -t` 与含 `t` 的簇写(`-wt`/`-tw`)是同一个 flag,只把它挡在
-  // gh 只读白名单外不够 —— 落灰区就可能被轻量审阅器静默放行(review 三轮 P1)。`-t` 本身
-  // 在别的命令里含义完全不同(`docker -t`、`tar -t`),所以**限定在 `gh auth` 命令位**上匹配。
-  // `(?:\S*\/)?` 让绝对/相对路径调用同样命中(`/usr/bin/gh auth status -t`,review 四轮 P1)——
-  // 只匹配裸 `gh` 等于给一个换写法就绕过的口子。
-  // 子命令与 `-t` 之间允许**任意**中间参数:`gh auth status --hostname github.com -t` 是
-  // 合法组合,原来只允许非选项 token 会漏(review 报)。用 `[^|;&\n]*?` 限定在同一段内。
-  // 结尾的 `(?:=[^\s|;&]*)?` 覆盖 `-t=true` 这类**带等号的 truthy 布尔值** —— gh 照常接受,
-  // 而原来的 `(?![\w=-])` 把等号形态排除在外,令牌仍会被打进模型上下文(review 报)。
-  // 命令位判据用 `(?:^|[\s|&;(])` 而不是 `(?:^|\s)`:分隔符后可以不带空格
-  // (`ls;gh auth token`、`ls&&gh auth token`、`(gh auth token)`),而分段之后不会再重扫
-  // 确定性红线 —— 只认空白等于给一个删空格就绕过的口子(review 报)。与本表里 `su`
-  // 那条的边界写法一致。
-  /(?:^|[\s|&;(])(?:\S*\/)?gh\s+auth\s+[a-z][\w-]*[^|;&\n]*?\s-[a-zA-Z]*t[a-zA-Z]*(?:=[^\s|;&]*)?(?![\w-])/,
-  // `gh auth token` 直接把令牌打到 stdout,与 `--show-token` 同级(同族一次收完)。
-  /(?:^|[\s|&;(])(?:\S*\/)?gh\s+auth\s+token\b/,
+  ...CREDENTIAL_ALWAYS_ASK_PATTERNS,                     // 凭证文件、钥匙串、令牌(见上)
   // 裸 `su`(切换到其它用户/root)同属提权,但 "su" 常出现在无关文本里 → 只在命令位(段首/分隔符后,或
   // 已知启动器后)匹配,避免 `git commit -m "su"` 之类误升(自审补:sudo/doas 已红线,漏了同级的 su)。
   /(?:^|[\n|&;(]\s*|\b(?:sudo|doas|xargs|nohup|setsid|env|command|exec|time|timeout|nice|ionice|stdbuf|chrt|builtin|watch|flock)\s+(?:-\S+\s+)*)su\b(?![\w.-])/,
@@ -1525,9 +1647,6 @@ const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
   /:\s*\(\s*\)\s*\{.*\|.*&.*\}/,                          // fork bomb :(){ :|:& };:
   /\bchmod\b[^|;&]*\s(?:-R\s+)?[0-7]*7{2,3}\b/,           // chmod 777 之类数字放宽权限
   /\bchmod\b[^|;&]*\s[ugoa]*[oa][ugoa]*[-+=][^\s]*w/,     // chmod 符号型对 other/all 开放写(a+w / o+w / a+rwx)
-  ...SENSITIVE_CREDENTIAL_PATH_PATTERNS,                  // 凭证/密钥路径(见上)
-  /\bsecurity\s+(?:find|dump|export|add)-/,               // macOS keychain
-  /\$\{?[A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|APIKEY|_PAT)[A-Za-z0-9_]*\}?/i, // 敏感环境变量展开(echo "$API_KEY" 等)
 ];
 
 /**
@@ -1578,8 +1697,8 @@ const REVIEW_REQUIRED_PATTERNS: readonly RegExp[] = [
   /\bgit\b[^|;&]*\bclean\b[^|;&]*\s-\w*f/,                // git clean -f
 ];
 
-/** 命令替换 / 进程替换:参数里塞 `$(...)` / 反引号 / `<(...)`,可绕过静态判定 → 一律升级。 */
-const COMMAND_SUBSTITUTION = /\$\(|`|<\(/;
+/** 命令替换 / 进程替换:参数里塞 `$(...)` / 反引号 / `<(...)` / `>(...)`,可绕过静态判定 → 一律升级。 */
+const COMMAND_SUBSTITUTION = /\$\(|`|[<>]\(/;
 
 /**
  * 去掉能**嵌进词中间**的 shell 参数展开:花括号形 `${...}` 与位置参数 `$1`(**不含**命令替换 `$(...)`,
@@ -1784,7 +1903,7 @@ function stripShellControlTokens(tokens: string[]): string[] {
   if (out[0]) out[0] = out[0].replace(/^[({]+/, '');
   while (out[0] === '') out.shift();
   const last = out.length - 1;
-  if (last >= 0 && !/[$<]\(/.test(out[last])) {
+  if (last >= 0 && !/[$<]\(/.test(out[last]) && !out[last].includes('{')) {
     out[last] = out[last].replace(/[)}]+$/, '');
     if (out[last] === '') out.pop();
   }
@@ -1858,6 +1977,7 @@ function unwrapCommand(
       let bail = false;
       while (i < toks.length) {
         const t = toks[i];
+        if (t === '--') { i++; break; }
         if (t === '-' || t === '-i' || t === '--ignore-environment' || t === '-0' || t === '--null' || t === '-v' || t === '--debug') { i++; continue; }
         if (t === '-u' || t === '--unset') { i += 2; continue; }
         if (t === '-C' || t === '--chdir') {
@@ -2729,6 +2849,7 @@ function shellSourceSelectorPayload(tokens: string[]): string | null {
     const token = tokens[i] as string;
     if (token === '--') return null;
     if (token === '--command') return tokens[i + 1] ?? '';
+    if (token.startsWith('--command=')) return token.slice('--command='.length);
     if (token.startsWith('--')) {
       if (token.includes('=') || SHELL_VALUELESS_LONG_OPTIONS.has(token)) continue;
       return null;                                    // 表外长选项:可能吃掉下一个 token
@@ -2753,7 +2874,9 @@ function shellCommandPayload(tokens: string[]): string | null {
   for (let i = 1; i < tokens.length; i++) {
     const token = tokens[i];
     if (token === '--') return null;
-    if (token === '--command' || /^-[^-]*c[^-]*$/.test(token)) {
+    if (token === '--command') return tokens[i + 1] ?? '';
+    if (token.startsWith('--command=')) return token.slice('--command='.length);
+    if (/^-[^-]*c[^-]*$/.test(token)) {
       return tokens[i + 1] ?? '';
     }
   }
@@ -3107,7 +3230,66 @@ type ShellReviewOptions = {
   cwd?: string;
   cwdUnknown?: boolean;
   platform?: NodeJS.Platform;
+  /** 明确可写根；缺省保持历史语义，仅 workspaceRoots[0] 可写。 */
+  writableRoots?: readonly string[];
+  /** reviewAction 才能声明执行端证据；直接分类调用保持兼容的纯字符串语义。 */
+  destructivePathResolution?: 'host' | 'unavailable' | 'lexical';
+  /** 仅由分享任务传入；存在时允许解析 Git 配置覆盖并交给调用方核实。 */
+  gitContentRead?: (read: GitRead) => boolean;
+  gitConfigRead?: (read: GitRead) => boolean;
 };
+
+/**
+ * 交给调用方核实的一次 git 调用：查看内容又没有静态限定到具体文件(git diff、git log -p、git grep 等)，
+ * 或会打出 git 配置与保存的凭证(git remote -v、git config --list、git credential fill 等)。
+ */
+export type GitRead = {
+  sub: string;
+  /** 子命令之后的参数(已去引号)。 */
+  args: readonly string[];
+  /** git 实际运行的目录(已跟随前面各段的 cd 与 -C)；认不出时为 undefined。 */
+  cwd?: string;
+  usesInheritedGitRuntime?: boolean;
+  metadataOnly?: boolean;
+  /**
+   * 当前 git 读取前是否有无法证明只读的 shell 段。前置段可能先修改工作区或索引，
+   * 因而使执行器在命令运行前取得的凭证扫描结果过时；调用方应拒绝凭证豁免。
+   */
+  priorSegmentsMayMutate?: boolean;
+};
+
+/**
+ * shellCommandReadsCredentials 的附加选项：只供供应商分享的受邀者任务确认凭证用
+ * (apps/desktop/src/main/remote-agent/credentials.ts)。本机任务的自动审查不传，判定不变。
+ */
+export type CredentialCommandOptions = ShellReviewOptions & {
+  credentialTextTransform?: (text: string) => string;
+  fileReadRequiresConsent?: (read: {
+    operand: string;
+    cwd?: string;
+    priorSegmentsMayMutate: boolean;
+  }) => boolean;
+  /** rg -g、grep --include 这类搜索范围只选中源码与文档扩展名时不算读取凭证。 */
+  sourceFileSelectors?: boolean;
+  ripgrepConfigActive?: boolean;
+  /**
+   * git 查看内容又没有限定到具体文件时默认按可能读到提交进仓库的凭证处理；提供时先问调用方，
+   * 返回 true 表示调用方已核实这次调用读不到凭证类文件。
+   */
+  gitContentRead?: (read: GitRead) => boolean;
+  /**
+   * 会打出 git 配置(远程地址、http 头等)或保存的凭证的调用默认不算；提供时交给调用方，返回 false 表示
+   * 这次调用要按读取凭证处理。认不出子命令所在目录时 cwd 为 undefined。
+   */
+  gitConfigRead?: (read: GitRead) => boolean;
+};
+
+function resolveWritableRoots(
+  workspaceRoots: readonly string[],
+  explicit?: readonly string[],
+): string[] {
+  return [...(explicit ?? workspaceRoots.slice(0, 1))];
+}
 
 /** 提取普通位置参数；`--` 后即使以 `-` 开头也按目标处理。 */
 function positionalOperands(tokens: string[]): string[] {
@@ -3179,7 +3361,7 @@ function operandsIncludingAttachedPowerShellPaths(
   return out;
 }
 
-/** 破坏性目标是否无法证明被限制在首个可写根的子目录内。 */
+/** 破坏性目标是否无法证明被限制在某个可写根的子目录内。 */
 /**
  * 破坏目标里的字符类 `[…]` 能否展开出路径穿越字符 `.`(0x2E)或 `/`(0x2F)——能则运行期可拼出 `..`/额外
  * 分隔符逃出静态前缀(greptile 报 `rm -rf sub/[.-x][.-x]/etc/passwd`,`[.-x]` 范围含 `.`/`/`)。
@@ -3197,13 +3379,54 @@ function charClassCanTraverse(target: string): boolean {
   return false;
 }
 
+/**
+ * 解析删除目标真正会穿过的路径。目标不存在时从最近存在祖先重建尾部，因此仍能看穿
+ * `/grant/link/missing` 中的 link；存在却无法 realpath 的祖先（悬空/循环链接、权限错误）
+ * 不能继续向上跳过，否则会把未知目标重新伪装成授权根内路径。
+ */
+function resolveDestructiveTargetPath(target: string): string | null {
+  const absoluteTarget = nodePath.resolve(target);
+  try {
+    return normalizeSlashes(realpathSync(absoluteTarget));
+  } catch {
+    try {
+      lstatSync(absoluteTarget);
+      return null;
+    } catch (lstatError) {
+      const code = (lstatError as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') return null;
+    }
+    let ancestor = nodePath.dirname(absoluteTarget);
+    for (let depth = 0; depth < 64; depth += 1) {
+      try {
+        return normalizeSlashes(nodePath.join(
+          realpathSync(ancestor),
+          nodePath.relative(ancestor, absoluteTarget),
+        ));
+      } catch {
+        try {
+          lstatSync(ancestor);
+          return null;
+        } catch (lstatError) {
+          const code = (lstatError as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT' && code !== 'ENOTDIR') return null;
+        }
+        const parent = nodePath.dirname(ancestor);
+        if (parent === ancestor) return null;
+        ancestor = parent;
+      }
+    }
+    return null;
+  }
+}
+
 function destructiveTargetNeedsConsent(
   target: string,
   workspaceRoots: string[],
   opts: ShellReviewOptions,
 ): boolean {
-  const writableRoot = workspaceRoots[0];
-  if (!writableRoot) return true;
+  const writableRoots = resolveWritableRoots(workspaceRoots, opts.writableRoots);
+  if (writableRoots.length === 0) return true;
   // 变量、命令/花括号展开的运行期目标不可静态求值；`~` 也不能按 cwd 解析。
   if (/[$`{}]/.test(target) || target.startsWith('~')) return true;
   // 字符类能展开出 `.`/`/` → 运行期路径可穿越出静态前缀,不可静态证明在区内 → 必问(greptile 报)。
@@ -3213,10 +3436,8 @@ function destructiveTargetNeedsConsent(
   // workspace”级别；只有明确进入子目录（如 build/*）才交 reviewer 静默裁决。
   const globIndex = target.search(/[*?[\]]/);
   const staticTarget = globIndex >= 0 ? (target.slice(0, globIndex) || '.') : target;
-  const cwd = opts.cwd ?? writableRoot;
+  const cwd = opts.cwd ?? workspaceRoots[0] ?? writableRoots[0];
   const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
-  const normalizedRoot = canonicalPath(writableRoot, aliasFirmlinks);
-  if (normalizedRoot === '/' || /^[A-Za-z]:\/$/.test(normalizedRoot)) return true;
   const candidates = [staticTarget];
   if (globIndex >= 0) {
     // A bracket expression may itself spell `..` (`[.].`). Check the same
@@ -3226,9 +3447,70 @@ function destructiveTargetNeedsConsent(
   }
   return candidates.some((candidate) => {
     const normalizedTarget = normalizeTarget(candidate, [cwd]);
-    if (!isInsideWorkspace(normalizedTarget, [writableRoot], aliasFirmlinks)) return true;
-    return canonicalPath(normalizedTarget, aliasFirmlinks) === normalizedRoot;
+    const matchedRoot = writableRoots.find((root) =>
+      isInsideWorkspace(normalizedTarget, [root], aliasFirmlinks));
+    if (!matchedRoot) return true;
+    const normalizedRoot = canonicalPath(matchedRoot, aliasFirmlinks);
+    if (normalizedRoot === '/' || /^[A-Za-z]:\/$/.test(normalizedRoot)) return true;
+    const lexicalTarget = canonicalPath(normalizedTarget, aliasFirmlinks);
+    if (isProtectedSystemPath(lexicalTarget) || isSensitiveCredentialPath(lexicalTarget)) return true;
+    if (opts.destructivePathResolution === 'unavailable') return true;
+    if (opts.destructivePathResolution !== 'host') return lexicalTarget === normalizedRoot;
+
+    const resolvedTarget = resolveDestructiveTargetPath(normalizedTarget);
+    const resolvedRoot = resolveDestructiveTargetPath(matchedRoot);
+    if (resolvedTarget === null || resolvedRoot === null) return true;
+    const canonicalResolvedTarget = canonicalPath(resolvedTarget, aliasFirmlinks);
+    const canonicalResolvedRoot = canonicalPath(resolvedRoot, aliasFirmlinks);
+    if (
+      isProtectedSystemPath(canonicalResolvedTarget)
+      || isSensitiveCredentialPath(canonicalResolvedTarget)
+    ) return true;
+    if (!isInsideWorkspace(canonicalResolvedTarget, [canonicalResolvedRoot], aliasFirmlinks)) {
+      return true;
+    }
+    return canonicalResolvedTarget === canonicalResolvedRoot;
   });
+}
+
+/** 普通 shell 写目标只有在词法授权内却无法证明真实落点仍在同一授权根时才升级。 */
+function writeTargetNeedsConsent(
+  target: string,
+  workspaceRoots: string[],
+  opts: ShellReviewOptions,
+): boolean {
+  if (/[$`{}]/.test(target) || target.startsWith('~')) {
+    return opts.destructivePathResolution === 'host'
+      || opts.destructivePathResolution === 'unavailable';
+  }
+  if (opts.cwdUnknown && !isAbsolutePath(toForwardSlashes(target))) return true;
+  const writableRoots = resolveWritableRoots(workspaceRoots, opts.writableRoots);
+  const cwd = opts.cwd ?? workspaceRoots[0] ?? writableRoots[0];
+  const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
+  const normalizedTarget = normalizeTarget(target, [cwd]);
+  const lexicalTarget = canonicalPath(normalizedTarget, aliasFirmlinks);
+  if (isProtectedSystemPath(lexicalTarget) || isSensitiveCredentialPath(lexicalTarget)) return true;
+  const matchedRoot = writableRoots.find((root) =>
+    isInsideWorkspace(normalizedTarget, [root], aliasFirmlinks));
+  // Ordinary writes outside an authorized root retain the existing grey reviewer path.
+  if (!matchedRoot) return false;
+  if (opts.destructivePathResolution === 'unavailable') return true;
+  if (opts.destructivePathResolution !== 'host') return false;
+
+  const resolvedTarget = resolveDestructiveTargetPath(normalizedTarget);
+  const resolvedRoot = resolveDestructiveTargetPath(matchedRoot);
+  if (resolvedTarget === null || resolvedRoot === null) return true;
+  const canonicalResolvedTarget = canonicalPath(resolvedTarget, aliasFirmlinks);
+  const canonicalResolvedRoot = canonicalPath(resolvedRoot, aliasFirmlinks);
+  if (
+    isProtectedSystemPath(canonicalResolvedTarget)
+    || isSensitiveCredentialPath(canonicalResolvedTarget)
+  ) return true;
+  return !isInsideWorkspace(
+    canonicalResolvedTarget,
+    [canonicalResolvedRoot],
+    aliasFirmlinks,
+  );
 }
 
 function findDeleteRoots(tokens: string[]): string[] {
@@ -3587,7 +3869,7 @@ function matchedPathSentinel(
   if (/[$`{}*?[\]]/.test(root) || root.startsWith('~')) return null;
   const base = opts.cwd ?? workspaceRoots[0];
   if (!isAbsolutePath(toForwardSlashes(root)) && (!base || opts.cwdUnknown)) return null;
-  const resolved = normalizeTarget(root, base ? [base] : []).replace(/\/+$/, '');
+  const resolved = trimTrailingSlashes(normalizeTarget(root, base ? [base] : []));
   return `${resolved}/${MATCHED_PATH_SENTINEL}`;
 }
 
@@ -3655,7 +3937,8 @@ function systemWriteTargetsInSegment(
       if (opts.cwdUnknown && !isAbsolutePath(toForwardSlashes(concrete))) return true;
       const resolved = canonicalPath(normalizeTarget(concrete, [base]), aliasFirmlinks);
       if (isProtectedProviderPath(resolved) || isProtectedSystemPath(resolved)) return true;
-      return !isInsideWorkspace(resolved, workspaceRoots, aliasFirmlinks);
+      if (!isInsideWorkspace(resolved, workspaceRoots, aliasFirmlinks)) return true;
+      return writeTargetNeedsConsent(concrete, workspaceRoots, opts);
     }
     // 每个目标查三种形态:原样(保留 Windows `\` 分隔符)、去 POSIX `\` 转义(`/e\tc`→`/etc`)、
     // 去 PowerShell 反引号转义。后者是 codex 报的绕过:PowerShell 里 `` ` `` 转义下一个字符,
@@ -3667,7 +3950,7 @@ function systemWriteTargetsInSegment(
       const forward = toForwardSlashes(v);
       // cwd 未知 + 相对目标 → 无法证明它没落进系统目录,fail-closed。
       if (opts.cwdUnknown && !isAbsolutePath(forward)) return true;
-      return isProtectedSystemPath(canonicalPath(normalizeTarget(v, [base]), aliasFirmlinks));
+      return writeTargetNeedsConsent(v, workspaceRoots, opts);
     });
   });
 }
@@ -3860,8 +4143,6 @@ function pipelineFedWriteTargetNeedsConsent(
   //   · `targets: 'last'` 且不销毁源(Copy-Item)—— 项只被读,不需要同意。
   if (spec.targets === 'last' && spec.sources !== true) return false;
   if (hasExplicitPathArgument(tokens)) return false; // 项写在命令行上 → 已由写目标表判过
-  const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
-  const base = opts.cwd ?? workspaceRoots[0];
   // `null` = 上游来源不可证(表外的 pipeline 阶段能返回任意对象)→ 直接要求同意。
   if (upstreamOperands === null) return true;
   const candidates = upstreamOperands.length > 0 ? upstreamOperands : ['.'];
@@ -3876,9 +4157,7 @@ function pipelineFedWriteTargetNeedsConsent(
       .map((part) => (POWERSHELL_WILDCARD.test(part) ? GLOB_COMPONENT_PLACEHOLDER : part))
       .join('');
     if (opts.cwdUnknown && !isAbsolutePath(toForwardSlashes(concrete))) return true;
-    const resolved = canonicalPath(normalizeTarget(concrete, [base]), aliasFirmlinks);
-    if (isProtectedSystemPath(resolved)) return true;
-    return !isInsideWorkspace(resolved, workspaceRoots, aliasFirmlinks);
+    return writeTargetNeedsConsent(concrete, workspaceRoots, opts);
   });
 }
 
@@ -4296,6 +4575,7 @@ const HOST_CONTROL_CHARS = new RegExp('[\\s\\u0000-\\u001f\\u007f]', 'g');
  * 序列)静态不可证清白 → fail-closed。
  */
 function isInternalFetchTarget(t: string): boolean {
+  if (t.length > MAX_AUTO_REVIEW_STATIC_TEXT_CHARS) return true;
   const forms: string[] = [t];
   let cur = t;
   for (let round = 0; round < 3 && /%[0-9a-fA-F]{2}/.test(cur); round++) {
@@ -4484,6 +4764,7 @@ function parseGitInvocation(
   // 寻找第一个非 `-` token，会把它误判为子命令而把只读 show 降级为 prompt。
   // 这里只消费能够静态确认的全局选项。未知/缺值选项一律返回 undefined，让调用方 fail-closed。
   let index = 1;
+  const allowConfigOverrides = opts.gitContentRead !== undefined || opts.gitConfigRead !== undefined;
   while (index < tokens.length) {
     const token = tokens[index];
     if (token === '--') {
@@ -4496,6 +4777,17 @@ function parseGitInvocation(
     if (token === '-C') {
       if (!isTrustedGitCwdPath(tokens[index + 1], workspaceRoots, opts.cwd, opts.cwdUnknown === true, opts.platform)) return undefined;
       index += 2;
+      continue;
+    }
+    if (token === '-c' || token === '--config-env') {
+      if (!allowConfigOverrides) return undefined;
+      if (index + 1 >= tokens.length || tokens[index + 1] === '') return undefined;
+      index += 2;
+      continue;
+    }
+    if (/^-c.+/.test(token) || /^--config-env=.+/.test(token)) {
+      if (!allowConfigOverrides) return undefined;
+      index++;
       continue;
     }
     if (token === '--git-dir' || token === '--work-tree') return undefined;
@@ -4720,12 +5012,1578 @@ export function commandExecutableNames(command: string): string[] {
   return [...names];
 }
 
+const FIRST_DATA_ARGUMENT_BINS: ReadonlySet<string> = new Set([
+  'grep', 'egrep', 'fgrep', 'rg', 'ag', 'sed', 'jq', 'yq', 'date',
+]);
+
+type ReaderOptionKind =
+  | 'data'
+  | 'data-file'
+  | 'selector'
+  | 'filter'
+  | 'aux-file'
+  | 'aux-file-list'
+  | 'named-data'
+  | 'named-file'
+  | 'type-definition'
+  | 'type-include'
+  | 'type-exclude'
+  | 'type-clear';
+type ReaderLongOption = { name: string; kind: ReaderOptionKind };
+
+const GREP_LONG_OPTIONS: readonly ReaderLongOption[] = [
+  { name: '--regexp', kind: 'data' },
+  { name: '--file', kind: 'data-file' },
+  { name: '--include', kind: 'selector' },
+  { name: '--exclude', kind: 'filter' },
+  { name: '--include-from', kind: 'aux-file' },
+  { name: '--exclude-from', kind: 'aux-file' },
+];
+const RG_LONG_OPTIONS: readonly ReaderLongOption[] = [
+  { name: '--regexp', kind: 'data' },
+  { name: '--file', kind: 'data-file' },
+  { name: '--glob', kind: 'selector' },
+  { name: '--iglob', kind: 'selector' },
+  { name: '--ignore-file', kind: 'aux-file' },
+  { name: '--type-add', kind: 'type-definition' },
+  { name: '--type', kind: 'type-include' },
+  { name: '--type-not', kind: 'type-exclude' },
+  { name: '--type-clear', kind: 'type-clear' },
+];
+const SED_LONG_OPTIONS: readonly ReaderLongOption[] = [
+  { name: '--expression', kind: 'data' },
+  { name: '--file', kind: 'data-file' },
+];
+const JQ_LONG_OPTIONS: readonly ReaderLongOption[] = [
+  { name: '--from-file', kind: 'data-file' },
+  { name: '--arg', kind: 'named-data' },
+  { name: '--argjson', kind: 'named-data' },
+  { name: '--argfile', kind: 'named-file' },
+  { name: '--slurpfile', kind: 'named-file' },
+  { name: '--rawfile', kind: 'named-file' },
+];
+const DIFF_LONG_OPTIONS: readonly ReaderLongOption[] = [
+  { name: '--from-file', kind: 'data-file' },
+  { name: '--to-file', kind: 'data-file' },
+];
+const FILE_LONG_OPTIONS: readonly ReaderLongOption[] = [
+  { name: '--files-from', kind: 'data-file' },
+  { name: '--magic-file', kind: 'aux-file-list' },
+];
+const FILES0_FROM_LONG_OPTIONS: readonly ReaderLongOption[] = [
+  { name: '--files0-from', kind: 'data-file' },
+];
+const DU_LONG_OPTIONS: readonly ReaderLongOption[] = [
+  ...FILES0_FROM_LONG_OPTIONS,
+  { name: '--exclude', kind: 'filter' },
+  { name: '--exclude-from', kind: 'aux-file' },
+];
+const SORT_LONG_OPTIONS: readonly ReaderLongOption[] = [
+  ...FILES0_FROM_LONG_OPTIONS,
+  { name: '--random-source', kind: 'aux-file' },
+];
+const DATE_LONG_OPTIONS: readonly ReaderLongOption[] = [
+  { name: '--file', kind: 'data-file' },
+  { name: '--reference', kind: 'aux-file' },
+];
+const AG_LONG_OPTIONS: readonly ReaderLongOption[] = [
+  { name: '--file-search-regex', kind: 'selector' },
+  { name: '--ignore', kind: 'filter' },
+  { name: '--ignore-dir', kind: 'filter' },
+  { name: '--path-to-ignore', kind: 'aux-file' },
+];
+const TREE_LONG_OPTIONS: readonly ReaderLongOption[] = [
+  { name: '--infofile', kind: 'aux-file' },
+];
+
+function readerLongOptions(bin: string): readonly ReaderLongOption[] {
+  if (bin === 'grep' || bin === 'egrep' || bin === 'fgrep') return GREP_LONG_OPTIONS;
+  if (bin === 'rg') return RG_LONG_OPTIONS;
+  if (bin === 'sed') return SED_LONG_OPTIONS;
+  if (bin === 'jq' || bin === 'yq') return JQ_LONG_OPTIONS;
+  if (bin === 'diff') return DIFF_LONG_OPTIONS;
+  if (bin === 'file') return FILE_LONG_OPTIONS;
+  if (bin === 'wc') return FILES0_FROM_LONG_OPTIONS;
+  if (bin === 'du') return DU_LONG_OPTIONS;
+  if (bin === 'sort') return SORT_LONG_OPTIONS;
+  if (bin === 'date') return DATE_LONG_OPTIONS;
+  if (bin === 'ag') return AG_LONG_OPTIONS;
+  if (bin === 'tree') return TREE_LONG_OPTIONS;
+  return [];
+}
+
+function resolveReaderLongOption(bin: string, name: string): ReaderOptionKind | null {
+  const specs = readerLongOptions(bin);
+  const exact = specs.find((spec) => spec.name === name);
+  if (exact) return exact.kind;
+
+  // GNU readers accept unique long-option abbreviations (`--fil=.env`). If every
+  // matching expansion has the same semantic kind, that kind is still provable.
+  const candidates = specs.filter((spec) => spec.name.startsWith(name));
+  const kinds = new Set(candidates.map((spec) => spec.kind));
+  return kinds.size === 1 ? candidates[0]?.kind ?? null : null;
+}
+
+function readerShortOptionKind(
+  bin: string,
+  option: string,
+  platform: NodeJS.Platform = process.platform,
+): ReaderOptionKind | null {
+  if (bin === 'grep' || bin === 'egrep' || bin === 'fgrep' || bin === 'sed') {
+    if (option === 'e') return 'data';
+    if (option === 'f') return 'data-file';
+  }
+  if (bin === 'rg') {
+    if (option === 'e') return 'data';
+    if (option === 'f') return 'data-file';
+    if (option === 'g') return 'selector';
+    if (option === 't') return 'type-include';
+    if (option === 'T') return 'type-exclude';
+  }
+  if ((bin === 'jq' || bin === 'yq') && option === 'f') return 'data-file';
+  if (bin === 'ag' && option === 'G') return 'selector';
+  if (bin === 'file' && option === 'f') return 'data-file';
+  if (bin === 'file' && (option === 'm' || option === 'M')) return 'aux-file-list';
+  if (bin === 'file' && (option === 'e' || option === 'F' || option === 'P')) return 'data';
+  if (bin === 'date' && option === 'f') return platform === 'darwin' ? 'data' : 'data-file';
+  if (bin === 'date' && option === 'r') return platform === 'darwin' ? 'data' : 'aux-file';
+  if (bin === 'date' && (option === 'd' || option === 'I' || option === 's'
+      || option === 'v' || option === 'z')) return 'data';
+  return null;
+}
+
+function selectorAlternativeCannotMatchDotenv(value: string): boolean {
+  const basename = value.replace(/\\/g, '/').split('/').pop() ?? '';
+  if (!/[*?\[]/.test(basename)) return !isDotenvCredentialPath(value);
+  if (/^\[(?:!|\^)\.\]/.test(basename)) return true;
+  const literalPrefix = basename.slice(0, basename.search(/[*?\[]/));
+  const couldStartDotenv = '.env'.startsWith(literalPrefix) || literalPrefix.startsWith('.env.');
+  return Boolean(literalPrefix) && !couldStartDotenv;
+}
+
+function expandBraceSequence(value: string): string[] | null {
+  const match = /^(-?\d+|[A-Za-z])\.\.(-?\d+|[A-Za-z])(?:\.\.(-?\d+))?$/.exec(value);
+  if (!match) return null;
+  const numeric = /^-?\d+$/.test(match[1]) && /^-?\d+$/.test(match[2]);
+  const alphabetic = /^[A-Za-z]$/.test(match[1]) && /^[A-Za-z]$/.test(match[2]);
+  if (!numeric && !alphabetic) return ['*'];
+  const start = numeric ? Number(match[1]) : match[1].charCodeAt(0);
+  const end = numeric ? Number(match[2]) : match[2].charCodeAt(0);
+  const step = match[3] ? Math.abs(Number(match[3])) : 1;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || !Number.isSafeInteger(step) || step === 0) return ['*'];
+  const count = Math.floor(Math.abs(end - start) / step) + 1;
+  if (count > 64) return ['*'];
+  const direction = start <= end ? 1 : -1;
+  return Array.from({ length: count }, (_, index) => {
+    const item = start + (index * step * direction);
+    return numeric ? String(item) : String.fromCharCode(item);
+  });
+}
+
+const BRACE_EXPANSION_MAX_DEPTH = 8;
+const BRACE_EXPANSION_CANDIDATE_BUDGET = 4_096;
+
+function* commaBraceAlternatives(value: string): Generator<string> {
+  let start = 0;
+  for (let index = 0; index <= value.length; index += 1) {
+    if (index < value.length && value.charAt(index) !== ',') continue;
+    yield value.slice(start, index);
+    start = index + 1;
+  }
+}
+
+function braceAlternatives(value: string): Iterable<string> | null {
+  if (value.includes(',')) return commaBraceAlternatives(value);
+  return expandBraceSequence(value);
+}
+
+function braceExpansionCouldMatch(value: string, predicate: (candidate: string) => boolean): boolean {
+  let remainingCandidates = BRACE_EXPANSION_CANDIDATE_BUDGET;
+  const visit = (candidate: string, depth: number): boolean => {
+    // An expansion we cannot finish proving safe must stay behind the credential consent gate.
+    if (remainingCandidates <= 0) return true;
+    remainingCandidates -= 1;
+
+    const match = /^(.*?)\{([^{}]+)\}(.*)$/.exec(candidate);
+    if (!match) return predicate(candidate);
+    if (depth >= BRACE_EXPANSION_MAX_DEPTH) return true;
+
+    const alternatives = braceAlternatives(match[2]);
+    if (!alternatives) return predicate(candidate);
+    for (const alternative of alternatives) {
+      if (visit(`${match[1]}${alternative}${match[3]}`, depth + 1)) return true;
+    }
+    return false;
+  };
+  return visit(value, 0);
+}
+
+function selectorCouldMatchDotenv(value: string): boolean {
+  return !value.startsWith('!') && braceExpansionCouldMatch(
+    value,
+    (alternative) => !selectorAlternativeCannotMatchDotenv(alternative),
+  );
+}
+
+const CREDENTIAL_SELECTOR_WORD_BOUNDARY = '\u0001';
+const SHELL_CREDENTIAL_SELECTOR_GLOBS = [...new Set(
+  SENSITIVE_CREDENTIAL_GLOB_PATTERNS.flatMap((pattern) => {
+    const variants: string[] = [pattern];
+    const directory = pattern.endsWith('/**') ? pattern.slice(0, -3) : undefined;
+    if (directory) {
+      variants.push(directory, directory + CREDENTIAL_SELECTOR_WORD_BOUNDARY + '**');
+    } else if (pattern !== '**/.env' && pattern !== '**/.env.*' && !pattern.endsWith('*')) {
+      variants.push(pattern + CREDENTIAL_SELECTOR_WORD_BOUNDARY + '**');
+    }
+    return variants.flatMap((variant) =>
+      variant.startsWith('**/') ? [variant, variant.slice(3)] : [variant]);
+  }),
+)];
+
+type ShellSelectorGlobLabel =
+  | { kind: 'literal'; value: string }
+  | { kind: 'class'; values: ReadonlySet<string>; negated: boolean }
+  | { kind: 'non-slash' | 'non-word' | 'any' };
+
+type ShellSelectorGlobToken =
+  | { kind: 'literal'; value: string }
+  | { kind: 'class'; label: ShellSelectorGlobLabel }
+  | { kind: 'one' | 'star' | 'globstar' | 'nonword' };
+
+function shellSelectorClassLabel(value: string): ShellSelectorGlobLabel | null {
+  if (!value || value.includes('[:')) return null;
+  let cursor = 0;
+  const negated = value.startsWith('!') || value.startsWith('^');
+  if (negated) cursor += 1;
+  const values = new Set<string>();
+  while (cursor < value.length) {
+    const start = value.charCodeAt(cursor);
+    if (value[cursor + 1] === '-' && cursor + 2 < value.length) {
+      const end = value.charCodeAt(cursor + 2);
+      if (end < start || end - start > 64) return null;
+      for (let code = start; code <= end; code += 1) {
+        values.add(String.fromCharCode(code).toLowerCase());
+      }
+      cursor += 3;
+    } else {
+      values.add(value[cursor].toLowerCase());
+      cursor += 1;
+    }
+    if (values.size > 128) return null;
+  }
+  return values.size > 0 ? { kind: 'class', values, negated } : null;
+}
+
+const SHELL_SELECTOR_MAX_PATTERN_LENGTH = 4_096;
+
+function shellSelectorGlobTokens(pattern: string): ShellSelectorGlobToken[] | null {
+  if (pattern.length > SHELL_SELECTOR_MAX_PATTERN_LENGTH || /[{}()|+@]/.test(pattern)) return null;
+  const normalized = pattern.replace(/\\/g, '/').toLowerCase();
+  const tokens: ShellSelectorGlobToken[] = [];
+  for (let index = 0; index < normalized.length; index += 1) {
+    const char = normalized[index];
+    if (char === CREDENTIAL_SELECTOR_WORD_BOUNDARY) {
+      tokens.push({ kind: 'nonword' });
+      continue;
+    }
+    if (char === '[') {
+      const end = normalized.indexOf(']', index + 1);
+      if (end < 0) return null;
+      const label = shellSelectorClassLabel(normalized.slice(index + 1, end));
+      if (!label) return null;
+      tokens.push({ kind: 'class', label });
+      index = end;
+      continue;
+    }
+    if (char === ']') return null;
+    if (char === '?') {
+      tokens.push({ kind: 'one' });
+      continue;
+    }
+    if (char === '*') {
+      let end = index + 1;
+      while (normalized[end] === '*') end += 1;
+      tokens.push({ kind: end - index >= 2 ? 'globstar' : 'star' });
+      index = end - 1;
+      continue;
+    }
+    tokens.push({ kind: 'literal', value: char });
+  }
+  return tokens;
+}
+
+function shellSelectorGlobTransition(
+  tokens: readonly ShellSelectorGlobToken[],
+  index: number,
+): { next: number; label: ShellSelectorGlobLabel } | null {
+  const token = tokens[index];
+  if (!token) return null;
+  if (token.kind === 'literal') return { next: index + 1, label: token };
+  if (token.kind === 'class') return { next: index + 1, label: token.label };
+  if (token.kind === 'one') return { next: index + 1, label: { kind: 'non-slash' } };
+  if (token.kind === 'nonword') return { next: index + 1, label: { kind: 'non-word' } };
+  if (token.kind === 'star') return { next: index, label: { kind: 'non-slash' } };
+  return { next: index, label: { kind: 'any' } };
+}
+
+function shellSelectorClassAllows(
+  label: Extract<ShellSelectorGlobLabel, { kind: 'class' }>,
+  value: string,
+): boolean {
+  if (value === '/') return false;
+  return label.negated !== label.values.has(value);
+}
+
+function shellSelectorGlobLabelsOverlap(
+  left: ShellSelectorGlobLabel,
+  right: ShellSelectorGlobLabel,
+): boolean {
+  if (left.kind === 'any' || right.kind === 'any') return true;
+  if (left.kind === 'literal' && right.kind === 'literal') return left.value === right.value;
+  if (left.kind === 'literal') {
+    if (right.kind === 'class') return shellSelectorClassAllows(right, left.value);
+    if (right.kind === 'non-word') return !/[a-z0-9_]/i.test(left.value);
+    return left.value !== '/';
+  }
+  if (right.kind === 'literal') return shellSelectorGlobLabelsOverlap(right, left);
+  if (left.kind === 'class' && right.kind === 'class') {
+    if (!left.negated && !right.negated) {
+      return [...left.values].some((value) => shellSelectorClassAllows(right, value));
+    }
+    if (!left.negated) return [...left.values].some((value) => shellSelectorClassAllows(right, value));
+    if (!right.negated) return [...right.values].some((value) => shellSelectorClassAllows(left, value));
+    return true;
+  }
+  if (left.kind === 'class') {
+    if (left.negated) return true;
+    return [...left.values].some((value) => value !== '/'
+      && (right.kind !== 'non-word' || !/[a-z0-9_]/i.test(value)));
+  }
+  if (right.kind === 'class') return shellSelectorGlobLabelsOverlap(right, left);
+  return true;
+}
+
+function shellSelectorGlobsIntersect(leftPattern: string, rightPattern: string): boolean | null {
+  const left = shellSelectorGlobTokens(leftPattern);
+  const right = shellSelectorGlobTokens(rightPattern);
+  if (!left || !right) return null;
+  const pending: Array<[number, number]> = [[0, 0]];
+  const visited = new Set<string>();
+  while (pending.length > 0) {
+    const [leftIndex, rightIndex] = pending.pop()!;
+    const key = `${leftIndex}:${rightIndex}`;
+    if (visited.has(key)) continue;
+    visited.add(key);
+    if (leftIndex === left.length && rightIndex === right.length) return true;
+
+    const leftToken = left[leftIndex];
+    const rightToken = right[rightIndex];
+    if (leftToken?.kind === 'star' || leftToken?.kind === 'globstar') {
+      pending.push([leftIndex + 1, rightIndex]);
+    }
+    if (rightToken?.kind === 'star' || rightToken?.kind === 'globstar') {
+      pending.push([leftIndex, rightIndex + 1]);
+    }
+
+    const leftTransition = shellSelectorGlobTransition(left, leftIndex);
+    const rightTransition = shellSelectorGlobTransition(right, rightIndex);
+    if (leftTransition && rightTransition
+      && shellSelectorGlobLabelsOverlap(leftTransition.label, rightTransition.label)) {
+      pending.push([leftTransition.next, rightTransition.next]);
+    }
+  }
+  return false;
+}
+
+function selectorCouldMatchCredential(value: string): boolean {
+  if (value.startsWith('!')) return false;
+  return braceExpansionCouldMatch(value, (candidate) =>
+    SHELL_CREDENTIAL_SELECTOR_GLOBS.some((credentialGlob) => {
+      if (!candidate.includes('/') && credentialGlob.endsWith('/**')) return false;
+      const sensitivePattern = candidate.includes('/')
+        ? credentialGlob
+        : credentialGlob.replace(/\\/g, '/').split('/').pop() ?? '';
+      return shellSelectorGlobsIntersect(candidate, sensitivePattern) !== false;
+    }));
+}
+
+function shellOperandCouldMatchDotenv(
+  value: string,
+  exactMatcher: (candidate: string) => boolean = isDotenvCredentialPath,
+): boolean {
+  if (exactMatcher(value)) return true;
+  return braceExpansionCouldMatch(value, (alternative) => {
+    const basename = alternative.replace(/\\/g, '/').split('/').pop() ?? '';
+    return basename.startsWith('.') && !selectorAlternativeCannotMatchDotenv(alternative);
+  });
+}
+
+/**
+ * 分享任务确认凭证用(CredentialCommandOptions.sourceFileSelectors)：只选中这些扩展名的搜索范围不算
+ * 读取凭证。都是代码与文档；`.json`、`.yaml`、`.txt`、`.sh`、`.sql` 这类可能直接存放凭证的格式不在内。
+ */
+const SOURCE_FILE_SELECTOR_EXTENSIONS: ReadonlySet<string> = new Set([
+  'ts', 'tsx', 'mts', 'cts', 'js', 'jsx', 'mjs', 'cjs', 'vue', 'svelte', 'astro',
+  'py', 'pyi', 'rb', 'go', 'rs', 'java', 'kt', 'kts', 'scala', 'swift', 'm', 'mm',
+  'c', 'h', 'cc', 'cpp', 'cxx', 'hpp', 'hh', 'cs', 'fs', 'php', 'lua', 'dart',
+  'ex', 'exs', 'erl', 'hs', 'ml', 'clj', 'r', 'jl', 'zig', 'sol', 'proto', 'graphql', 'gql',
+  'css', 'scss', 'sass', 'less', 'html', 'htm', 'md', 'mdx', 'rst', 'adoc',
+]);
+
+/**
+ * 选择器的每个展开都以固定的源码 / 文档扩展名结尾，且扩展名前的部分去掉通配符后不像凭证：
+ * `*.ts`、`src/**\/*.{ts,tsx}` 算；`.env.ts`、`server.key.ts`、`.ssh/**\/*.ts`、`*.ts*`、`*.t[s]` 不算。
+ * 字面上 `*.ts` 也能选中 `.env.ts`、`id_rsa.ts`，这类名字按代码模块处理(provider-sharing.md §9 第 7 条)。
+ */
+function selectorOnlyMatchesSourceFiles(value: string): boolean {
+  return !braceExpansionCouldMatch(value, (alternative) => {
+    const normalized = alternative.replace(/\\/g, '/');
+    const slash = normalized.lastIndexOf('/');
+    const match = /^(.*)\.([A-Za-z0-9]+)$/.exec(normalized.slice(slash + 1));
+    if (!match || !SOURCE_FILE_SELECTOR_EXTENSIONS.has(match[2].toLowerCase())) return true;
+    const literal = (normalized.slice(0, slash + 1) + match[1]).replace(/[*?[\]!]/g, '');
+    return isSensitiveCredentialPath(literal) || isSensitiveCredentialPath(`${literal}/`);
+  });
+}
+
+function shareSelectorCouldMatchCredential(value: string): boolean {
+  return selectorCouldMatchCredential(value) && !selectorOnlyMatchesSourceFiles(value);
+}
+
+function readerOptionValueIsSensitive(
+  kind: ReaderOptionKind,
+  value: string | undefined,
+  isSensitiveOperand: (value: string) => boolean,
+  selectorCouldMatch: (value: string) => boolean = selectorCouldMatchCredential,
+  fileReadRequiresConsent?: (value: string) => boolean,
+): boolean {
+  if (kind === 'selector') return selectorCouldMatch(value ?? '');
+  if (!value || (kind !== 'data-file' && kind !== 'aux-file' && kind !== 'aux-file-list')) return false;
+  const operands = kind === 'aux-file-list' ? value.split(/[:;]/) : [value];
+  return operands.some((operand) => fileReadRequiresConsent
+    ? fileReadRequiresConsent(operand)
+    : isSensitiveOperand(operand) || selectorCouldMatchCredential(operand));
+}
+
+function readerArgumentsReadDotenv(
+  bin: string,
+  args: readonly string[],
+  isSensitiveOperand: (value: string) => boolean = isDotenvCredentialPath,
+  platform: NodeJS.Platform = process.platform,
+  selectorCouldMatch: (value: string) => boolean = selectorCouldMatchCredential,
+  fileReadRequiresConsent?: (value: string) => boolean,
+  checkPositionalFiles = true,
+): boolean {
+  let dataArgumentProvided = !FIRST_DATA_ARGUMENT_BINS.has(bin);
+  let optionsEnded = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (!optionsEnded && token === '--') {
+      optionsEnded = true;
+      continue;
+    }
+
+    if (!optionsEnded && token.startsWith('--')) {
+      const equalsIndex = token.indexOf('=');
+      const name = equalsIndex >= 0 ? token.slice(0, equalsIndex) : token;
+      const kind = resolveReaderLongOption(bin, name);
+      if (kind) {
+        const attached = equalsIndex >= 0 ? token.slice(equalsIndex + 1) : undefined;
+        if (kind === 'named-data' || kind === 'named-file') {
+          const nameValue = attached ?? args[index + 1];
+          const secondValue = attached === undefined ? args[index + 2] : args[index + 1];
+          if (nameValue === undefined || secondValue === undefined) return true;
+          if (kind === 'named-file'
+            && readerOptionValueIsSensitive('data-file', secondValue, isSensitiveOperand,
+              selectorCouldMatch, fileReadRequiresConsent)) return true;
+          index += attached === undefined ? 2 : 1;
+          continue;
+        }
+        const value = attached ?? args[index + 1];
+        const isSensitive = readerOptionValueIsSensitive(kind, value, isSensitiveOperand,
+          selectorCouldMatch, fileReadRequiresConsent);
+        if (kind !== 'data' && isSensitive) return true;
+        if (attached === undefined) index += 1;
+        if (kind === 'data' || kind === 'data-file') dataArgumentProvided = true;
+        continue;
+      }
+    }
+
+    if (!optionsEnded && /^-[^-]/.test(token)) {
+      let handled = false;
+      for (let optionIndex = 1; optionIndex < token.length; optionIndex += 1) {
+        const kind = readerShortOptionKind(bin, token.charAt(optionIndex), platform);
+        if (!kind) continue;
+        const attached = token.slice(optionIndex + 1) || undefined;
+        const value = attached ?? args[index + 1];
+        const isSensitive = readerOptionValueIsSensitive(kind, value, isSensitiveOperand,
+          selectorCouldMatch, fileReadRequiresConsent);
+        if (kind !== 'data' && isSensitive) return true;
+        if (attached === undefined) index += 1;
+        if (kind === 'data' || kind === 'data-file') dataArgumentProvided = true;
+        handled = true;
+        break; // getopt: the first value-taking option consumes the rest of the cluster.
+      }
+      if (handled) continue;
+      if (token.startsWith('-')) continue;
+    }
+
+    if (!dataArgumentProvided) {
+      dataArgumentProvided = true;
+      continue;
+    }
+    if (fileReadRequiresConsent && checkPositionalFiles
+      ? fileReadRequiresConsent(token)
+      : shellOperandCouldMatchDotenv(token, isSensitiveOperand)) return true;
+  }
+  return false;
+}
+
+function grepRecursesIntoPotentialDotenv(
+  bin: string,
+  args: readonly string[],
+  selectorCouldMatch: (value: string) => boolean = selectorCouldMatchCredential,
+): boolean {
+  if (bin !== 'grep' && bin !== 'egrep' && bin !== 'fgrep') return false;
+
+  const longOptionNames = [
+    '--recursive', '--directories', ...GREP_LONG_OPTIONS.map((option) => option.name),
+  ];
+  let recursive = false;
+  const includes: string[] = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === '--') break;
+
+    if (token.startsWith('--')) {
+      const equalsIndex = token.indexOf('=');
+      const name = equalsIndex >= 0 ? token.slice(0, equalsIndex) : token;
+      const exact = longOptionNames.find((option) => option === name);
+      const matches = exact ? [exact] : longOptionNames.filter((option) => option.startsWith(name));
+      const canonical = matches.length === 1 ? matches[0] : null;
+      if (!canonical) continue;
+
+      if (canonical === '--recursive') {
+        recursive = true;
+        continue;
+      }
+
+      const attached = equalsIndex >= 0 ? token.slice(equalsIndex + 1) : undefined;
+      const value = attached ?? args[index + 1];
+      if (attached === undefined) index += 1;
+      if (canonical === '--directories') {
+        recursive = Boolean(value && 'recurse'.startsWith(value));
+      }
+      if (canonical === '--include' && value) includes.push(value);
+      continue;
+    }
+
+    if (/^-[^-]/.test(token)) {
+      for (let optionIndex = 1; optionIndex < token.length; optionIndex += 1) {
+        const option = token.charAt(optionIndex);
+        if (option === 'r' || option === 'R') {
+          recursive = true;
+          continue;
+        }
+        if (option === 'd') {
+          const attached = token.slice(optionIndex + 1) || undefined;
+          const value = attached ?? args[index + 1];
+          if (attached === undefined) index += 1;
+          recursive = Boolean(value && 'recurse'.startsWith(value));
+          break;
+        }
+        if (readerShortOptionKind('grep', option)) {
+          if (optionIndex === token.length - 1) index += 1;
+          break;
+        }
+      }
+    }
+  }
+
+  return recursive && (includes.length === 0 || includes.some(selectorCouldMatch));
+}
+
+type RgTypeDefinition = { globs: string[]; includes: string[] };
+
+type ParsedRgTypeSpec = {
+  name: string;
+  glob?: string;
+  includes?: string[];
+};
+
+function parseRgTypeSpec(value: string): ParsedRgTypeSpec | null {
+  const separator = value.indexOf(':');
+  if (separator <= 0 || separator === value.length - 1) return null;
+  const name = value.slice(0, separator);
+  if (!/^[\p{L}\p{N}]+$/u.test(name)) return null;
+  const definition = value.slice(separator + 1);
+  if (!definition.startsWith('include:')) return { name, glob: definition };
+  const includes = definition.slice('include:'.length).split(',');
+  return includes.length > 0 && includes.every((included) => /^[\p{L}\p{N}]+$/u.test(included))
+    ? { name, includes }
+    : null;
+}
+
+function rgCustomTypeCouldMatchCredential(
+  name: string,
+  definitions: ReadonlyMap<string, RgTypeDefinition>,
+  selectorCouldMatch: (value: string) => boolean,
+  visiting = new Set<string>(),
+): boolean {
+  if (visiting.has(name)) return true;
+  const definition = definitions.get(name);
+  if (!definition) return true;
+  if (definition.globs.some(selectorCouldMatch)) return true;
+  const nextVisiting = new Set(visiting).add(name);
+  return definition.includes.some((included) =>
+    rgCustomTypeCouldMatchCredential(included, definitions, selectorCouldMatch, nextVisiting));
+}
+
+type AgScopeOptionKind =
+  | 'hidden'
+  | 'recursive'
+  | 'non-recursive'
+  | 'value'
+  | 'optional-value'
+  | 'filename-only'
+  | 'flag';
+
+const AG_SCOPE_LONG_OPTIONS: ReadonlyArray<{ name: string; kind: AgScopeOptionKind }> = [
+  { name: '--ackmate-dir-filter', kind: 'value' },
+  { name: '--after', kind: 'optional-value' },
+  { name: '--before', kind: 'optional-value' },
+  { name: '--color-line-number', kind: 'value' },
+  { name: '--color-match', kind: 'value' },
+  { name: '--color-path', kind: 'value' },
+  { name: '--context', kind: 'optional-value' },
+  { name: '--depth', kind: 'value' },
+  { name: '--filename-pattern', kind: 'filename-only' },
+  { name: '--file-search-regex', kind: 'value' },
+  { name: '--heading', kind: 'flag' },
+  { name: '--help', kind: 'flag' },
+  { name: '--hidden', kind: 'hidden' },
+  { name: '--ignore', kind: 'value' },
+  { name: '--ignore-case', kind: 'flag' },
+  { name: '--ignore-dir', kind: 'value' },
+  { name: '--max-count', kind: 'value' },
+  { name: '--no-recurse', kind: 'non-recursive' },
+  { name: '--norecurse', kind: 'non-recursive' },
+  { name: '--pager', kind: 'value' },
+  { name: '--path-to-ignore', kind: 'value' },
+  { name: '--recurse', kind: 'recursive' },
+  { name: '--unrestricted', kind: 'hidden' },
+  { name: '--width', kind: 'value' },
+  { name: '--workers', kind: 'value' },
+];
+const AG_VALUE_SHORT_OPTIONS: ReadonlySet<string> = new Set(['A', 'B', 'C', 'G', 'm', 'p', 'W']);
+
+function agSearchesPotentialCredential(args: readonly string[]): boolean {
+  let hidden = false;
+  let recursive = true;
+  let filenameOnly = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === '--') break;
+
+    if (token.startsWith('--')) {
+      const equalsIndex = token.indexOf('=');
+      const name = equalsIndex >= 0 ? token.slice(0, equalsIndex) : token;
+      const exact = AG_SCOPE_LONG_OPTIONS.find((option) => option.name === name);
+      const matches = exact
+        ? [exact]
+        : AG_SCOPE_LONG_OPTIONS.filter((option) => option.name.startsWith(name));
+      const option = matches.length === 1 ? matches[0] : null;
+      if (!option) continue;
+      if (option.kind === 'hidden') hidden = true;
+      if (option.kind === 'recursive') recursive = true;
+      if (option.kind === 'non-recursive') recursive = false;
+      if (option.kind === 'filename-only') filenameOnly = true;
+      if ((option.kind === 'value' || option.kind === 'filename-only') && equalsIndex < 0) index += 1;
+      continue;
+    }
+
+    if (!/^-[^-]/.test(token)) continue;
+    for (let optionIndex = 1; optionIndex < token.length; optionIndex += 1) {
+      const option = token.charAt(optionIndex);
+      if (option === 'u') hidden = true;
+      if (option === 'n') recursive = false;
+      if (option === 'r' || option === 'R') recursive = true;
+      if (option === 'g') filenameOnly = true;
+      if (option !== 'g' && !AG_VALUE_SHORT_OPTIONS.has(option)) continue;
+      if (optionIndex === token.length - 1) index += 1;
+      break;
+    }
+  }
+
+  // Explicit ignore patterns only subtract candidates and cannot prove that the
+  // complete credential language is excluded. Unrestricted mode ignores them.
+  return hidden && recursive && !filenameOnly;
+}
+
+function searchFollowsSymlinks(bin: string, args: readonly string[]): boolean {
+  for (const token of args) {
+    if (token === '--') break;
+    if (bin === 'rg' && (token === '--follow' || /^-[^-]*L/.test(token))) return true;
+    if (bin === 'ag' && (token === '--follow' || /^-[^-]*f/.test(token))) return true;
+    if (bin === 'grep' || bin === 'egrep' || bin === 'fgrep') {
+      if (/^-[^-]*R/.test(token)) return true;
+      const name = token.split('=')[0];
+      if (name.startsWith('--') && '--dereference-recursive'.startsWith(name)) return true;
+    }
+  }
+  return false;
+}
+
+function ripgrepMayRunPreprocessor(args: readonly string[]): boolean {
+  return args.some((token) => {
+    const name = token.split('=', 1)[0];
+    return name.length > 2 && '--pre'.startsWith(name);
+  });
+}
+
+function rgSearchesPotentialDotenv(
+  args: readonly string[],
+  selectorCouldMatch: (value: string) => boolean = selectorCouldMatchCredential,
+): boolean {
+  let hidden = false;
+  let unrestricted = 0;
+  let typeParsingUnresolved = false;
+  const globs: string[] = [];
+  const definitions = new Map<string, RgTypeDefinition>();
+  let allTypesIncluded = false;
+  const typeSelections = new Map<string, boolean>();
+  const applyTypeOption = (kind: ReaderOptionKind, value: string | undefined): void => {
+    if (!value) {
+      typeParsingUnresolved = true;
+      return;
+    }
+    if (kind === 'type-include' || kind === 'type-exclude') {
+      const included = kind === 'type-include';
+      if (value === 'all') {
+        allTypesIncluded = included;
+        typeSelections.clear();
+      } else if (!/^[\p{L}\p{N}]+$/u.test(value)) {
+        typeParsingUnresolved = true;
+      } else {
+        typeSelections.set(value, included);
+      }
+      return;
+    }
+    if (kind === 'type-clear') {
+      if (!/^[\p{L}\p{N}]+$/u.test(value)) typeParsingUnresolved = true;
+      else definitions.set(value, { globs: [], includes: [] });
+      return;
+    }
+    if (kind !== 'type-definition') return;
+    const parsed = parseRgTypeSpec(value);
+    if (!parsed) {
+      typeParsingUnresolved = true;
+      return;
+    }
+    const definition = definitions.get(parsed.name) ?? { globs: [], includes: [] };
+    if (parsed.glob !== undefined) definition.globs.push(parsed.glob);
+    if (parsed.includes !== undefined) definition.includes.push(...parsed.includes);
+    definitions.set(parsed.name, definition);
+  };
+
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === '--') break;
+    if (token === '--hidden') { hidden = true; continue; }
+    if (token === '--no-hidden') { hidden = false; continue; }
+    if (token.startsWith('--')) {
+      const equalsIndex = token.indexOf('=');
+      const name = equalsIndex >= 0 ? token.slice(0, equalsIndex) : token;
+      const kind = resolveReaderLongOption('rg', name);
+      if (!kind) continue;
+      const attached = equalsIndex >= 0 ? token.slice(equalsIndex + 1) : undefined;
+      const value = attached ?? args[index + 1];
+      if (attached === undefined) index += 1;
+      if (kind === 'selector' && value) globs.push(value);
+      applyTypeOption(kind, value);
+      continue;
+    }
+    if (!/^-[^-]/.test(token)) continue;
+    for (let optionIndex = 1; optionIndex < token.length; optionIndex += 1) {
+      const option = token.charAt(optionIndex);
+      if (option === '.') { hidden = true; continue; }
+      if (option === 'u') { unrestricted += 1; if (unrestricted >= 2) hidden = true; continue; }
+      const kind = readerShortOptionKind('rg', option);
+      if (!kind) continue;
+      const attached = token.slice(optionIndex + 1) || undefined;
+      const value = attached ?? args[index + 1];
+      if (attached === undefined) index += 1;
+      if (kind === 'selector' && value) globs.push(value);
+      applyTypeOption(kind, value);
+      break;
+    }
+  }
+
+  if (typeParsingUnresolved) return true;
+  const selectedCustomTypes = [...definitions.keys()].filter((name) =>
+    typeSelections.get(name) ?? allTypesIncluded);
+  if (selectedCustomTypes.some((name) =>
+    rgCustomTypeCouldMatchCredential(name, definitions, selectorCouldMatch))) return true;
+
+  const positive = globs.filter((glob) => !glob.startsWith('!'));
+  const positiveCouldMatchCredential = positive.some(selectorCouldMatch);
+  const positiveIsSafe = positive.length > 0 && !positiveCouldMatchCredential;
+  return hidden && !positiveIsSafe;
+}
+
+function gitGrepExpandsSearchScope(args: readonly string[]): boolean {
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === '--') return false;
+
+    if (token.startsWith('--')) {
+      const equalsIndex = token.indexOf('=');
+      const name = equalsIndex >= 0 ? token.slice(0, equalsIndex) : token;
+      if ('--untracked'.startsWith(name) || '--no-index'.startsWith(name)) return true;
+
+      const kind = resolveReaderLongOption('grep', name);
+      if (kind && equalsIndex < 0) index += 1;
+      continue;
+    }
+
+    if (/^-[^-]/.test(token)) {
+      for (let optionIndex = 1; optionIndex < token.length; optionIndex += 1) {
+        const kind = readerShortOptionKind('grep', token.charAt(optionIndex));
+        if (!kind) continue;
+        if (optionIndex === token.length - 1) index += 1;
+        break;
+      }
+    }
+  }
+  return false;
+}
+
+function isGitDotenvOperand(value: string): boolean {
+  if (isDotenvCredentialPath(value)) return true;
+  if (value.startsWith('-')) return false;
+
+  const longPathspec = /^:\(([^)]*)\)(.+)$/.exec(value);
+  if (longPathspec) {
+    if (/(?:^|,)(?:exclude|!)(?:,|$)/.test(longPathspec[1])) return false;
+    return selectorCouldMatchDotenv(longPathspec[2]);
+  }
+  if (value.startsWith(':/')) return selectorCouldMatchDotenv(value.slice(2));
+  if (value.startsWith(':!') || value.startsWith(':^')) return false;
+
+  const indexPath = /^:(?:[0-3]:)?(.+)$/.exec(value);
+  return Boolean(indexPath && isDotenvCredentialPath(indexPath[1]));
+}
+
+function isGitRevisionDotenvOperand(value: string): boolean {
+  if (value.startsWith('-')) return false;
+  const revisionPathSeparator = value.indexOf(':');
+  return revisionPathSeparator > 0
+    && isDotenvCredentialPath(value.slice(revisionPathSeparator + 1));
+}
+
+function isGitExcludePathspec(value: string): boolean {
+  const longPathspec = /^:\(([^)]*)\)(.*)$/.exec(value);
+  if (longPathspec) return /(?:^|,)(?:exclude|!)(?:,|$)/.test(longPathspec[1]);
+  return value.startsWith(':!') || value.startsWith(':^');
+}
+
+function gitBlameContentsReadDotenv(
+  args: readonly string[],
+  fileReadRequiresConsent: (value: string) => boolean = shellOperandCouldMatchDotenv,
+): boolean {
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === '--') break;
+    if (!token.startsWith('--')) continue;
+    const equalsIndex = token.indexOf('=');
+    const name = equalsIndex >= 0 ? token.slice(0, equalsIndex) : token;
+    const isContentsOption = name === '--contents'
+      || (name.length >= '--cont'.length && '--contents'.startsWith(name));
+    if (!isContentsOption) continue;
+    const attached = equalsIndex >= 0 ? token.slice(equalsIndex + 1) : undefined;
+    const value = attached ?? args[index + 1];
+    if (value && fileReadRequiresConsent(value)) return true;
+    if (attached === undefined) index += 1;
+  }
+  return false;
+}
+
+/**
+ * `-L` uses `<range>:<file>`: regex ranges may contain colons inside `/.../`, while
+ * function ranges begin with `:` and use the next unescaped colon as the separator.
+ */
+function gitLineRangeFile(value: string): string | null {
+  let escaped = false;
+  if (value.startsWith(':')) {
+    for (let index = 1; index < value.length; index += 1) {
+      const char = value.charAt(index);
+      if (escaped) { escaped = false; continue; }
+      if (char === '\\') { escaped = true; continue; }
+      if (char === ':') return value.slice(index + 1);
+    }
+    return null;
+  }
+
+  let inRegex = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value.charAt(index);
+    if (escaped) { escaped = false; continue; }
+    if (char === '\\') { escaped = true; continue; }
+    if (char === '/') { inRegex = !inRegex; continue; }
+    if (char === ':' && !inRegex) return value.slice(index + 1);
+  }
+  return null;
+}
+
+function gitLineRangeReadsDotenv(args: readonly string[]): boolean {
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === '--') break;
+    let value: string | undefined;
+    if (token === '-L') {
+      value = args[index + 1];
+      index += 1;
+    } else if (token.startsWith('-L')) {
+      value = token.slice(2);
+    } else {
+      continue;
+    }
+    if (!value) return true;
+    const file = gitLineRangeFile(value);
+    if (file === null || shellOperandCouldMatchDotenv(file, isGitDotenvOperand)) return true;
+  }
+  return false;
+}
+
+function gitArgumentsReadDotenv(args: readonly string[]): boolean {
+  let pathspecOnly = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === '--') {
+      pathspecOnly = true;
+      continue;
+    }
+    if (!pathspecOnly && (token === '--format' || token === '--pretty')) {
+      index += 1;
+      continue;
+    }
+    if (isGitExcludePathspec(token)) continue;
+    if (shellOperandCouldMatchDotenv(token, isGitDotenvOperand)) return true;
+    if (!pathspecOnly && isGitRevisionDotenvOperand(token)) return true;
+  }
+  return false;
+}
+
+type GitGrepOutputMode = 'content' | 'files-only';
+
+const GIT_GREP_OUTPUT_OPTIONS: readonly { name: string; mode: GitGrepOutputMode }[] = [
+  { name: '--files-with-matches', mode: 'files-only' },
+  { name: '--files-without-match', mode: 'files-only' },
+  { name: '--name-only', mode: 'files-only' },
+  { name: '--no-files-with-matches', mode: 'content' },
+  { name: '--no-files-without-match', mode: 'content' },
+  { name: '--no-name-only', mode: 'content' },
+];
+
+function resolveGitGrepOutputMode(name: string): GitGrepOutputMode | null {
+  const exact = GIT_GREP_OUTPUT_OPTIONS.find((option) => option.name === name);
+  if (exact) return exact.mode;
+  const modes = new Set(
+    GIT_GREP_OUTPUT_OPTIONS
+      .filter((option) => option.name.startsWith(name))
+      .map((option) => option.mode),
+  );
+  return modes.size === 1 ? [...modes][0] ?? null : null;
+}
+
+function gitGrepListsOnly(args: readonly string[]): boolean {
+  let outputMode: GitGrepOutputMode = 'content';
+  for (let tokenIndex = 0; tokenIndex < args.length; tokenIndex += 1) {
+    const token = args[tokenIndex];
+    if (token === '--') break;
+    if (token.startsWith('--')) {
+      const equalsIndex = token.indexOf('=');
+      const name = equalsIndex >= 0 ? token.slice(0, equalsIndex) : token;
+      const kind = resolveReaderLongOption('grep', name);
+      if (kind === 'data' || kind === 'data-file') {
+        if (equalsIndex < 0) tokenIndex += 1;
+        continue;
+      }
+      outputMode = resolveGitGrepOutputMode(name) ?? outputMode;
+      continue;
+    }
+    if (!/^-[^-]/.test(token)) continue;
+    for (let optionIndex = 1; optionIndex < token.length; optionIndex += 1) {
+      const option = token.charAt(optionIndex);
+      if (option === 'e' || option === 'f') {
+        if (optionIndex === token.length - 1) tokenIndex += 1;
+        break;
+      }
+      if (option === 'l' || option === 'L') outputMode = 'files-only';
+    }
+  }
+  return outputMode === 'files-only';
+}
+
+const GIT_METADATA_ONLY_FLAGS = [
+  '--stat', '--shortstat', '--numstat', '--name-only', '--name-status', '--summary', '--check', '--raw',
+] as const;
+
+function gitPatchRequested(args: readonly string[]): boolean {
+  return args.some((arg) =>
+    /^(?:-p|--patch|-u|-U\d*|--unified(?:=.*)?|-W|-c|--cc|--function-context|--word-diff(?:=.*)?|--word-diff-regex(?:=.*)?|--color-words(?:=.*)?|--patch-with-stat|--patch-with-raw|--binary|--inter-hunk-context(?:=.*)?)$/.test(arg));
+}
+
+function gitMetadataOnlyRequested(args: readonly string[]): boolean {
+  return args.some((arg) => GIT_METADATA_ONLY_FLAGS.includes(arg as typeof GIT_METADATA_ONLY_FLAGS[number]));
+}
+
+function isSafeGitObjectPath(value: string): boolean {
+  if (value.startsWith(':(') || value.startsWith(':!') || value.startsWith(':^') || value.startsWith(':/')) return false;
+  const indexPath = /^:(?:[0-3]:)?(.+)$/.exec(value);
+  if (indexPath) return !isDotenvCredentialPath(indexPath[1]);
+  const separator = value.indexOf(':');
+  if (separator <= 0) return false;
+  const revision = value.slice(0, separator);
+  const objectPath = value.slice(separator + 1);
+  return /^[A-Za-z0-9_./@{}~^+\-]+$/.test(revision)
+    && Boolean(objectPath)
+    && !isDotenvCredentialPath(objectPath);
+}
+
+function gitShowHasOnlySafeObjectPaths(args: readonly string[]): boolean {
+  let sawObjectPath = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === '--') return false;
+    if (token === '--format' || token === '--pretty') {
+      index += 1;
+      continue;
+    }
+    if (token.startsWith('-')) continue;
+    if (!isSafeGitObjectPath(token)) return false;
+    sawObjectPath = true;
+  }
+  return sawObjectPath;
+}
+
+function gitCatFileReadsUnscopedContent(args: readonly string[]): boolean {
+  if (args.includes('--batch-check') || args.some((arg) => arg.startsWith('--batch-check='))) return false;
+  if (args.some((arg) => arg === '--batch' || arg.startsWith('--batch=') || arg === '--batch-command' || arg.startsWith('--batch-command='))) return true;
+
+  let contentMode = args.includes('-p');
+  let objectArgs = args.filter((arg) => !arg.startsWith('-'));
+  if (objectArgs[0] === 'blob') {
+    contentMode = true;
+    objectArgs = objectArgs.slice(1);
+  } else if (objectArgs[0] === 'tree' || objectArgs[0] === 'commit' || objectArgs[0] === 'tag') {
+    return false;
+  }
+  return contentMode && !objectArgs.some(isSafeGitObjectPath);
+}
+
+// Git parse-options accepts unique long-option prefixes. Keep the complete status option
+// set here so ambiguous prefixes such as `--s` do not resolve to one arbitrary candidate.
+const GIT_STATUS_LONG_OPTIONS = [
+  '--verbose', '--short', '--branch', '--show-stash', '--ahead-behind', '--porcelain', '--long',
+  '--null', '--untracked-files', '--ignored', '--ignore-submodules', '--column', '--renames',
+  '--find-renames',
+] as const;
+
+function resolveGitStatusLongOption(name: string): typeof GIT_STATUS_LONG_OPTIONS[number] | null {
+  const exact = GIT_STATUS_LONG_OPTIONS.find((option) => option === name);
+  if (exact) return exact;
+  const matches = GIT_STATUS_LONG_OPTIONS.filter((option) => option.startsWith(name));
+  return matches.length === 1 ? matches[0] ?? null : null;
+}
+
+function gitStatusRequestsVerbose(args: readonly string[]): boolean {
+  for (const token of args) {
+    if (token === '--') break;
+    if (/^-[^-]*v/.test(token)) return true;
+    if (!token.startsWith('--') || token.includes('=') || token.startsWith('--no-')) continue;
+    if (resolveGitStatusLongOption(token) === '--verbose') return true;
+  }
+  return false;
+}
+
+function gitContentReadWithoutPath(sub: string, args: readonly string[]): boolean {
+  if (sub === 'grep') return !gitGrepListsOnly(args);
+  if (sub === 'diff') return !gitMetadataOnlyRequested(args) || gitPatchRequested(args);
+  if (sub === 'show') {
+    if (gitShowHasOnlySafeObjectPaths(args)) return false;
+    const patchSuppressed = args.includes('-s') || args.includes('--no-patch') || gitMetadataOnlyRequested(args);
+    return !patchSuppressed || gitPatchRequested(args);
+  }
+  if (sub === 'log' || sub === 'whatchanged') return gitPatchRequested(args);
+  if (sub === 'cat-file') return gitCatFileReadsUnscopedContent(args);
+  if (sub === 'status') return gitStatusRequestsVerbose(args);
+  return false;
+}
+
+/**
+ * 各段命令实际运行的目录(认不出时为 undefined)：跟随前面各段的 cd / pushd，规则同 scopedDestructionNeedsConsent。
+ * 出现括号(子 shell、命令组)后，后续各段的目录按认不出处理。
+ */
+function segmentWorkingDirs(
+  segments: readonly ExecutableSegment[],
+  workspaceRoots: string[],
+  opts: ShellReviewOptions,
+): Array<string | undefined> {
+  let cwd: string | undefined = opts.cwd ?? workspaceRoots[0];
+  let cwdUnknown = opts.cwdUnknown === true;
+  return segments.map(({ text, separatorAfter }) => {
+    const unwrapped = unwrapCommand(stripShellControlTokens(tokenize(text)), cwd, cwdUnknown);
+    const here = unwrapped.cwdUnknown ? undefined : unwrapped.cwd;
+    const change = directoryChangeTarget(unwrapped.tokens);
+    if (/[(){}]/.test(text) || (change.changesDirectory && separatorAfter === 'or')) {
+      cwd = undefined;
+      cwdUnknown = true;
+    } else if (change.changesDirectory && separatorAfter !== 'pipe' && separatorAfter !== 'background') {
+      const next = resolveCwdTarget(change.target, unwrapped.cwd, unwrapped.cwdUnknown);
+      cwd = next.cwd;
+      cwdUnknown = next.cwdUnknown;
+    }
+    return here;
+  });
+}
+
+/** git 的 -C 叠加在所在目录上(parseGitInvocation 已核对过全局选项)。 */
+function gitInvocationCwd(tokens: readonly string[], cwd: string | undefined): string | undefined {
+  for (let index = 1; index < tokens.length && cwd !== undefined; index += 1) {
+    const token = tokens[index];
+    if (token === '--' || !token.startsWith('-')) break;
+    if (token === '--namespace') {
+      index += 1;
+      continue;
+    }
+    const attached = /^-C=?(.+)$/.exec(token);
+    if (token !== '-C' && !attached) continue;
+    const target = attached ? attached[1] : tokens[index + 1];
+    if (!attached) index += 1;
+    const next = resolveCwdTarget(target, cwd);
+    cwd = next.cwdUnknown ? undefined : next.cwd;
+  }
+  return cwd;
+}
+
+/** 带独立取值的 git 全局选项(只用于在 parseGitInvocation 认不出时粗找子命令)。 */
+const GIT_GLOBAL_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  '-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix',
+]);
+/** 读取 git config 的选项与子命令；其余写配置的选项与子命令见 GIT_CONFIG_WRITES。 */
+const GIT_CONFIG_READS = /^(?:--get(?:-all|-regexp|-urlmatch)?|--list|-l|list|get)$/;
+const GIT_CONFIG_WRITES: ReadonlySet<string> = new Set([
+  '--unset', '--unset-all', '--add', '--replace-all', '--rename-section', '--remove-section', '-e', '--edit',
+  'set', 'unset', 'rename-section', 'remove-section', 'edit',
+]);
+
+/**
+ * 会打出 git 配置(远程地址、http 头等)或保存的凭证：git credential 与 credential-* 助手、git remote -v /
+ * get-url / show、读 git config、git var -l。
+ */
+function gitPrintsConfig(sub: string, args: readonly string[]): boolean {
+  if (sub === 'credential' || sub.startsWith('credential-')) return true;
+  if (sub === 'var') return true;
+  if (sub === 'remote') {
+    const action = args.find((arg) => !arg.startsWith('-'));
+    return action === 'get-url' || action === 'show'
+      || (action === undefined && args.some((arg) => arg === '-v' || arg === '--verbose'));
+  }
+  if (sub !== 'config') return false;
+  if (args.some((arg) => GIT_CONFIG_READS.test(arg))) return true;
+  if (args.some((arg) => GIT_CONFIG_WRITES.has(arg))) return false;
+  if (args.some((arg) => arg.startsWith('-') && arg !== '--')) return true;
+  const positionals = args.filter((arg) => !arg.startsWith('-')).length;
+  return positionals <= 1;
+}
+
+/**
+ * 一段命令里会打出 git 配置或保存的凭证的调用(gitPrintsConfig)。全局选项超出已知范围时
+ * parseGitInvocation 认不出子命令，这里退一步粗找子命令名，目录按认不出(调用方据此按读取凭证处理)。
+ */
+function gitConfigReadOf(
+  tokens: string[],
+  workspaceRoots: string[],
+  opts: ShellReviewOptions,
+  segmentCwd: string | undefined,
+): GitRead | null {
+  if (executableName(tokens[0] ?? '') !== 'git') return { sub: 'credential', args: tokens.slice(1), cwd: segmentCwd };
+  const invocation = parseGitInvocation(tokens, workspaceRoots, opts);
+  if (invocation?.sub) {
+    return gitPrintsConfig(invocation.sub, invocation.args)
+      ? {
+        sub: invocation.sub,
+        args: invocation.args,
+        cwd: gitUsesConfigOverride(tokens) ? undefined : gitInvocationCwd(tokens, segmentCwd),
+      }
+      : null;
+  }
+  for (let index = 1; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (GIT_GLOBAL_VALUE_OPTIONS.has(token)) {
+      index += 1;
+      continue;
+    }
+    if (token.startsWith('-')) continue;
+    const args = tokens.slice(index + 1);
+    return gitPrintsConfig(token, args) ? { sub: token, args } : null;
+  }
+  return null;
+}
+
+/**
+ * 这些 Git 全局选项会在本次调用里改变仓库上下文、配置来源或配置值。执行器的核实命令不带它们，
+ * 因而不能把核实结果套到实际调用上；分享任务直接保留凭证确认卡。
+ */
+function gitUsesConfigOverride(tokens: readonly string[]): boolean {
+  for (let index = 1; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token === '--') break;
+    if (token === '--bare') return true;
+    if (token === '-c' || token.startsWith('-c') && !token.startsWith('-C')) return true;
+    if (token === '--config-env' || token.startsWith('--config-env=')) return true;
+  }
+  return false;
+}
+
+/**
+ * 凭证核实发生在整条 shell 命令执行之前。前面的段如果会写工作区、索引或 git 引用，
+ * 后面的 git diff / git show 等读取看到的状态就不是核实时的状态。只有能静态证明
+ * 前置段按只读命令执行时，才允许把这次读取交给执行器做本机凭证豁免；认不出的段一律
+ * 按可能有副作用处理，保持 fail-closed。
+ */
+function shellSegmentMutation(
+  segments: readonly ExecutableSegment[],
+  index: number,
+  workspaceRoots: string[],
+  opts: ShellReviewOptions,
+  segmentCwds: readonly (string | undefined)[],
+): { mayMutate: boolean; mayMutateFiles: boolean } {
+  const segment = segments[index];
+  const segmentCwd = segmentCwds[index];
+  const segmentOpts: ShellReviewOptions = {
+    ...opts,
+    cwd: segmentCwd ?? opts.cwd,
+    cwdUnknown: segmentCwd === undefined ? true : opts.cwdUnknown,
+  };
+  // git status may refresh the index, so it cannot establish a stable pre-read state
+  // for a later credential exemption even though its output is otherwise read-only.
+  const tokens = stripShellControlTokens(tokenize(segment.text));
+  const unwrapped = unwrapCommand(tokens, segmentOpts.cwd ?? workspaceRoots[0], segmentOpts.cwdUnknown === true);
+  const resolvedDirectoryChange = !process.env.CDPATH
+    && tokens[0] === 'cd' && tokens.length === 2 && !tokens[1].startsWith('-')
+    && segment.separatorAfter === 'and' && segmentCwds[index + 1] !== undefined
+    && !segmentHasSideEffectRedirectOrSubstitution(segment.text);
+  const invocation = unwrapped.tokens[0] && executableName(unwrapped.tokens[0]) === 'git'
+    ? parseGitInvocation(unwrapped.tokens, workspaceRoots, segmentOpts)
+    : undefined;
+  const mayMutate = invocation?.sub === 'status'
+    || classifyShellSegment(segment.text, workspaceRoots, segmentOpts) !== 'auto-approve';
+  return { mayMutate, mayMutateFiles: mayMutate && !resolvedDirectoryChange };
+}
+
+/**
+ * Inline interpreter payloads are code rather than ordinary file operands. A credential
+ * basename can therefore be surrounded by call syntax (`open(".env").read()`) and
+ * bypass the reader-argument parser. Split the payload at code punctuation and apply the
+ * same path matcher to each literal-looking fragment; this is deliberately fail-closed.
+ */
+function inlinePayloadMentionsCredentialPath(payload: string): boolean {
+  return payload
+    .split(/[\s'"`(){};|&=,]+/)
+    .some((candidate) => candidate.length > 0 && isSensitiveCredentialPath(candidate));
+}
+
+function shellCommandReadsDotenv(
+  command: string,
+  workspaceRoots: string[],
+  opts: CredentialCommandOptions,
+  depth = 0,
+): boolean {
+  if (depth >= MAX_EXEC_REVIEW_DEPTH) return true;
+  const credentialText = opts.credentialTextTransform ?? ((text: string) => text);
+  const selectorMatcher = opts.sourceFileSelectors ? shareSelectorCouldMatchCredential : selectorCouldMatchCredential;
+  const selectorCouldMatch = (value: string) => selectorMatcher(credentialText(value));
+  const segments = splitExecutableSegments(command);
+  // 调用方核实 Git 或文件读取时需要各段的实际目录。
+  const segmentCwds = opts.gitContentRead || opts.gitConfigRead || opts.fileReadRequiresConsent
+    ? segmentWorkingDirs(segments, workspaceRoots, opts) : [];
+  const sharesGitCredentialChecks = opts.gitContentRead !== undefined || opts.gitConfigRead !== undefined;
+  let previousMayMutate = false;
+  let previousMayMutateFiles = false;
+  for (const [segmentIndex, { text: segment }] of segments.entries()) {
+    // Accumulate the prefix once, instead of reclassifying all prior segments for
+    // every read. Updating at entry also covers earlier segments that continued.
+    // File checks may accept a resolved cd; Git checks retain the stricter state.
+    if (segmentIndex > 0 && (sharesGitCredentialChecks || opts.fileReadRequiresConsent)
+      && (!previousMayMutate || (opts.fileReadRequiresConsent && !previousMayMutateFiles))) {
+      const previous = shellSegmentMutation(segments, segmentIndex - 1, workspaceRoots, opts, segmentCwds);
+      previousMayMutate ||= previous.mayMutate;
+      previousMayMutateFiles ||= previous.mayMutateFiles;
+    }
+    const inputRedirections = parseShellInputRedirections(segment);
+    if (inputRedirections.hasUnresolvedTarget) return true;
+    const inspectionCommand = inputRedirections.targets.length > 0
+      ? parseShellInputRedirections(segment, true).command
+      : inputRedirections.command;
+    const rawTokens = tokenize(inspectionCommand);
+    const unwrapped = unwrapCommand(
+      stripShellControlTokens(rawTokens),
+      opts.cwd ?? workspaceRoots[0],
+      opts.cwdUnknown === true,
+    );
+    const tokens = unwrapped.tokens;
+    const bin = executableName(tokens[0] ?? '');
+    const configOverride = bin === 'git' && gitUsesConfigOverride(tokens);
+    const priorMutation = sharesGitCredentialChecks || opts.fileReadRequiresConsent
+      ? previousMayMutate
+        || segmentHasSideEffectRedirectOrSubstitution(segment)
+        || configOverride
+      : false;
+    const priorFileMutation = opts.fileReadRequiresConsent
+      ? previousMayMutateFiles
+        || segmentHasSideEffectRedirectOrSubstitution(segment)
+        || rawTokens[0] !== tokens[0]
+      : false;
+    const fileReadRequiresConsent = opts.fileReadRequiresConsent
+      ? (operand: string) => opts.fileReadRequiresConsent!({
+        operand,
+        cwd: depth === 0 ? segmentCwds[segmentIndex] : undefined,
+        priorSegmentsMayMutate: priorFileMutation,
+      }) : undefined;
+    const readsCredentialInput = inputRedirections.targets.some((target) => fileReadRequiresConsent
+      ? fileReadRequiresConsent(target)
+      : shellOperandCouldMatchDotenv(credentialText(target)));
+    if (fileReadRequiresConsent && readsCredentialInput) return true;
+
+    // xargs and parallel construct the real argv from stdin. The command that eventually reads
+    // a repository or credential file is therefore outside this static scan; shared-provider
+    // tasks must keep the confirmation card instead of granting a pre-read exemption.
+    if (sharesGitCredentialChecks && (bin === 'xargs' || bin === 'parallel')) return true;
+    // env -S/--split-string reparses an inline command string. The wrapper deliberately stays
+    // unexpanded here, so a nested Git read cannot be tied to the pre-read repository state.
+    if (sharesGitCredentialChecks && executableName(rawTokens[0] ?? '') === 'env'
+      && rawTokens.slice(1).some((token) => token === '-S' || token === '--split-string' || token.startsWith('--split-string='))) return true;
+
+    // The outer command may only print a substitution or process-substitution result, while the
+    // nested Git invocation reads the repository (echo "$(git diff)" / cat "<(git diff)"). Likewise,
+    // an inline shell/interpreter payload, eval/awk dynamic command, or find -exec can hide the
+    // Git read without a separate top-level segment. These commands are intentionally kept behind
+    // the confirmation card: the pre-read cannot prove the nested execution context or cwd.
+    const nestedCredentialPayloads = new Set<string>();
+    const addNestedPayload = (payload: string | null | undefined): void => {
+      if (typeof payload === 'string' && payload.trim().length > 0) nestedCredentialPayloads.add(payload);
+    };
+    addNestedPayload(shellCommandPayload(rawTokens));
+    addNestedPayload(interpreterInlineCodePayload(rawTokens));
+    addNestedPayload(shellSourceSelectorPayload(rawTokens));
+    // Transparent launchers (env/timeout/busybox/command) are unwrapped above;
+    // inspect the resulting argv too so their shell/interpreter payload remains
+    // inside the shared-provider credential gate.
+    addNestedPayload(shellCommandPayload(tokens));
+    addNestedPayload(interpreterInlineCodePayload(tokens));
+    addNestedPayload(shellSourceSelectorPayload(tokens));
+    for (const body of substitutionBodies(segment)) addNestedPayload(body);
+    if (executableName(rawTokens[0] ?? '') === 'eval') addNestedPayload(rawTokens.slice(1).join(' '));
+    if (executableName(rawTokens[0] ?? '') === 'awk'
+      && AWK_SCRIPT_EXECUTES_COMMANDS.test(rawTokens.slice(1).join(' '))) {
+      addNestedPayload(rawTokens.slice(1).join(' '));
+    }
+    if (executableName(rawTokens[0] ?? '') === 'find') {
+      for (const { argv } of findExecCommands(rawTokens)) addNestedPayload(shellQuoteArgvForReview(argv));
+    }
+    const hasGitInvocationText = /\bgit(?:\.exe)?(?:-credential[\w-]*)?\b/i.test(segment);
+    const hasNestedGitInvocation = [...nestedCredentialPayloads]
+      .some((payload) => /\bgit(?:\.exe)?(?:-credential[\w-]*)?\b/i.test(payload));
+    if (sharesGitCredentialChecks && hasGitInvocationText
+      && executableName(rawTokens[0] ?? '') !== 'git'
+      && (hasNestedGitInvocation || nestedCredentialPayloads.size > 0)) return true;
+
+    // Only sharing callers request these extra nested checks. Local Auto and
+    // same-account remote commands retain their existing classification.
+    if (sharesGitCredentialChecks || opts.fileReadRequiresConsent) {
+      for (const payload of nestedCredentialPayloads) {
+        // Inline programs are not shell argv: keep paths in e.g. Python
+        // open(".env") visible before recursively checking shell payloads.
+        if (inlinePayloadMentionsCredentialPath(opts.fileReadRequiresConsent ? payload : credentialText(payload))) return true;
+        if (shellCommandReadsCredentials(payload, workspaceRoots, opts, depth + 1)) return true;
+      }
+    }
+
+    if (opts.gitConfigRead && (bin === 'git' || bin.startsWith('git-credential'))) {
+      const read = gitConfigReadOf(tokens, workspaceRoots, opts, segmentCwds[segmentIndex]);
+      if (read && !opts.gitConfigRead({
+        ...read,
+        priorSegmentsMayMutate: priorMutation,
+        usesInheritedGitRuntime: rawTokens[0] === 'git',
+      })) return true;
+    }
+
+    if (bin === 'git') {
+      const invocation = parseGitInvocation(tokens, workspaceRoots, opts);
+      if (!invocation?.sub || !SAFE_GIT_SUBCOMMANDS.has(invocation.sub)) {
+        if (sharesGitCredentialChecks && !invocation?.sub
+          && tokens.slice(1).some((arg) => /^(?:diff|show|log|whatchanged|grep|cat-file|status|blame)$/.test(arg))) return true;
+        continue;
+      }
+      const credentialArgs = invocation.args.map(credentialText);
+      if (readsCredentialInput) return true;
+      if (invocation.sub === 'grep') {
+        if (gitGrepExpandsSearchScope(invocation.args)) return true;
+        if (readerArgumentsReadDotenv('grep', fileReadRequiresConsent ? invocation.args : credentialArgs,
+          (operand) => isGitDotenvOperand(credentialText(operand)), opts.platform ?? process.platform,
+          selectorCouldMatch, fileReadRequiresConsent, false)) return true;
+      } else if ((invocation.sub === 'blame' && gitBlameContentsReadDotenv(invocation.args,
+        fileReadRequiresConsent ?? ((operand) => shellOperandCouldMatchDotenv(credentialText(operand)))))
+        || ((invocation.sub === 'log' || invocation.sub === 'whatchanged' || invocation.sub === 'show')
+          && gitLineRangeReadsDotenv(credentialArgs))
+        || gitArgumentsReadDotenv(credentialArgs)) {
+        return true;
+      }
+      const probesShowObject = opts.gitContentRead !== undefined && invocation.sub === 'show'
+        && !gitShowHasOnlySafeObjectPaths(invocation.args);
+      // Merge-diff modes can imply -p; treat long-option prefixes conservatively
+      // too. Sharing probes must not grant the metadata-only exemption.
+      // Keep the existing local / same-account classifier unchanged.
+      const probesMergePatch = sharesGitCredentialChecks
+        && /^(?:log|show|whatchanged)$/.test(invocation.sub)
+        && invocation.args.some((arg, index, args) => {
+          const name = arg.split('=')[0];
+          if (!name.startsWith('--') || name.length <= 2) return false;
+          if (['--remerge-diff', '--dd'].some((option) => option.startsWith(name))) return true;
+          const mode = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : args[index + 1];
+          return '--diff-merges'.startsWith(name) && mode !== 'off' && mode !== 'none';
+        });
+      // Whitespace diagnostics print offending source lines even without -p,
+      // including when --check is combined with a metadata output flag.
+      const probesWhitespaceContent = sharesGitCredentialChecks
+        && /^(?:diff|log|show|whatchanged)$/.test(invocation.sub)
+        && invocation.args.includes('--check');
+      const readsContent = gitContentReadWithoutPath(invocation.sub, invocation.args)
+        || probesShowObject || probesMergePatch || probesWhitespaceContent;
+      const probesRuntime = opts.gitContentRead !== undefined
+        && /^(?:diff|show|log|whatchanged|grep|cat-file|status|blame|ls-files|check-ignore)$/.test(invocation.sub);
+      const checksContent = readsContent || probesRuntime || (sharesGitCredentialChecks
+        && /^(?:diff|show|log|whatchanged|grep|cat-file|status|blame)$/.test(invocation.sub));
+      const canProbe = checksContent && classifyGit(tokens, segment, workspaceRoots, opts) === 'auto-approve';
+      if (checksContent && sharesGitCredentialChecks && !canProbe) return true;
+      if ((readsContent || probesRuntime) && canProbe && !opts.gitContentRead?.({
+          sub: invocation.sub,
+          args: invocation.args,
+          cwd: configOverride ? undefined : gitInvocationCwd(tokens, segmentCwds[segmentIndex]),
+          priorSegmentsMayMutate: priorMutation,
+          usesInheritedGitRuntime: rawTokens[0] === 'git',
+          ...(!readsContent ? { metadataOnly: true } : {}),
+        })) return true;
+      continue;
+    }
+
+    if (!DOTENV_FILE_READER_BINS.has(bin)) {
+      if (fileReadRequiresConsent && credentialText(segment) !== segment) return true;
+      continue;
+    }
+    if (readsCredentialInput) return true;
+    const args = tokens.slice(1);
+    if (opts.sourceFileSelectors && bin === 'rg' && ripgrepMayRunPreprocessor(args)) return true;
+    if (opts.sourceFileSelectors && searchFollowsSymlinks(bin, args)) return true;
+    if (opts.sourceFileSelectors && bin === 'rg'
+      && (opts.ripgrepConfigActive || /\bRIPGREP_CONFIG_PATH\s*=/i.test(command))
+      && args[0] !== '--no-config') return true;
+    const readerArgs = opts.sourceFileSelectors && bin === 'rg' && args[0] === '--no-config'
+      ? args.slice(1) : args;
+    if (grepRecursesIntoPotentialDotenv(bin, args, selectorCouldMatch)) return true;
+    if (bin === 'ag' && agSearchesPotentialCredential(args)) return true;
+    if (bin === 'rg' && rgSearchesPotentialDotenv(args, selectorCouldMatch)) return true;
+    if (readerArgumentsReadDotenv(
+      bin, readerArgs, isDotenvCredentialPath, opts.platform ?? process.platform,
+      selectorCouldMatch, fileReadRequiresConsent)) return true;
+  }
+  return false;
+}
+
+/**
+ * 确定性红线的扫描面：结构上确定是数据的引号字面量先换成占位符(stripDataLiterals)，再生成防拆词
+ * 绕过的各个变体(各变体的用途见 classifyShellCommand 里的说明)。
+ */
+function deterministicScanVariants(command: string): {
+  deEscaped: string;
+  quotesOnly: string;
+  deGlobbed: string;
+  deExpanded: string;
+  deExpandedGlob: string;
+  deSubstituted: string;
+} {
+  const scannable = stripDataLiterals(command);
+  const deEscaped = scannable.replace(/['"\\]/g, '');
+  const quotesOnly = scannable.replace(/['"]/g, '');
+  const deGlobbed = deEscaped.replace(/[[\]{}*?]/g, '');
+  // deExpanded:抹掉参数展开(见 stripExpansions)—— 防 `s${X}udo`/`rm -r${X}f /` 这类把关键词拆开、
+  // bash 展开成空后才成形的绕过。**必须从 deEscaped 派生**(保留 `${...}` 完整):若先去 glob 会把
+  // `${X}` 的 `{}` 抹成 `$X`,再 stripExpansions 会把 `$Xudo` 整词吞掉、反而复原不出 `sudo`。
+  // deExpandedGlob:再叠加去 glob,覆盖 `${X}` 与 `[h]` 混用的组合变形。
+  const deExpanded = stripExpansions(deEscaped);
+  const deExpandedGlob = deExpanded.replace(/[[\]{}*?]/g, '');
+  // deSubstituted:把 `${X:-sudo}` 等默认值代入,让藏在展开默认值里的危险关键词现形(codex 报)。
+  const deSubstituted = substituteDefaults(deEscaped);
+  return { deEscaped, quotesOnly, deGlobbed, deExpanded, deExpandedGlob, deSubstituted };
+}
+
+/** curl / wget 抓云 metadata(读实例临时云凭证)。 */
+function fetchesCloudMetadata(quotesOnly: string): boolean {
+  for (const { text } of splitExecutableSegments(quotesOnly)) {
+    const tokens = unwrapWrappers(tokenize(text));
+    const bin = executableName(tokens[0] ?? '');
+    if (bin !== 'curl' && bin !== 'wget') continue;
+    if (tokens.slice(1).some((t) => isFetchTargetToken(t) && isCloudMetadataFetchTarget(t))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function matchesAnyVariant(patterns: readonly CommandScanPattern[], variants: ReturnType<typeof deterministicScanVariants>): boolean {
+  const texts = Object.values(variants);
+  return patterns.some((re) => texts.some((text) => re.test(text)));
+}
+
+/**
+ * 命令是否静态可证地读取或打出可复用凭证：读凭证 / 密钥文件(含 .env)、钥匙串、令牌类环境变量、
+ * `gh auth token`、抓云 metadata。是 classifyShellCommand「必问」判据里凭证的那一部分，供应商分享的
+ * 受邀者任务在完全访问下也要确认这一类。只看命令文本：脚本文件里读的、编码后再解开的认不出来。
+ */
+export function shellCommandReadsCredentials(
+  command: string,
+  workspaceRoots: string[],
+  opts: CredentialCommandOptions = {},
+  depth = 0,
+): boolean {
+  if (typeof command !== 'string' || command.trim().length === 0) return false;
+  // 确定性扫描与模型审阅的 4096 字符预算无关。普通长编辑脚本不能仅因长度
+  // 被当作凭证读取；仍扫描完整文本，独立上限用于限制解析资源消耗。
+  if (command.length > 256 * 1024) return true;
+  if (shellCommandReadsDotenv(command, workspaceRoots, opts, depth)) return true;
+  const variants = deterministicScanVariants(opts.credentialTextTransform?.(command) ?? command);
+  return matchesAnyVariant(CREDENTIAL_ALWAYS_ASK_PATTERNS, variants) || fetchesCloudMetadata(variants.quotesOnly);
+}
+
 export function classifyShellCommand(
   command: string,
   workspaceRoots: string[],
   opts: ShellReviewOptions = {},
 ): ReviewVerdict {
-  if (typeof command !== 'string' || command.trim().length === 0) return 'prompt';
+  if (typeof command !== 'string') return 'prompt';
+  // Keep the primitive length barrier next to the parsers, including for direct
+  // classifier callers. Longer commands go to full model review, not this parser.
+  if (command.length > MAX_AUTO_REVIEW_STATIC_TEXT_CHARS) return 'prompt';
+  if (command.trim().length === 0) return 'prompt';
+  // The shared path matcher deliberately accepts only complete path values. Shell
+  // commands need argument-aware scanning so a trailing pipe/comment cannot hide a
+  // dotenv operand, while jq/grep expressions such as jq .env data.json stay data.
+  if (shellCommandReadsDotenv(command, workspaceRoots, opts)) return 'prompt-each-time';
   // 两档风险模式都跑以下变体；明确红线优先，命中才 prompt-each-time：
   //  - deEscaped(去引号 + 去反斜杠转义):防 su'do' / su\do / rm -r'f' 这类把关键词拆开的绕过。
   //  - quotesOnly(只去引号、保留 `\`):Windows `\` 路径的凭证检测 —— `cat C:\Users\me\.ssh\id_rsa`
@@ -4739,18 +6597,7 @@ export function classifyShellCommand(
   // grep 搜索模式)先换成占位符,否则中文提交说明与 PR 回复正文会被当命令扫(见
   // stripDataLiterals)。执行面判定不用这份 —— highImpactExecutionNeedsConsent 已在上面
   // 按引号外的真实结构判过。
-  const scannable = stripDataLiterals(command);
-  const deEscaped = scannable.replace(/['"\\]/g, '');
-  const quotesOnly = scannable.replace(/['"]/g, '');
-  const deGlobbed = deEscaped.replace(/[[\]{}*?]/g, '');
-  // deExpanded:抹掉参数展开(见 stripExpansions)—— 防 `s${X}udo`/`rm -r${X}f /` 这类把关键词拆开、
-  // bash 展开成空后才成形的绕过。**必须从 deEscaped 派生**(保留 `${...}` 完整):若先去 glob 会把
-  // `${X}` 的 `{}` 抹成 `$X`,再 stripExpansions 会把 `$Xudo` 整词吞掉、反而复原不出 `sudo`。
-  // deExpandedGlob:再叠加去 glob,覆盖 `${X}` 与 `[h]` 混用的组合变形。
-  const deExpanded = stripExpansions(deEscaped);
-  const deExpandedGlob = deExpanded.replace(/[[\]{}*?]/g, '');
-  // deSubstituted:把 `${X:-sudo}` 等默认值代入,让藏在展开默认值里的危险关键词现形(codex 报)。
-  const deSubstituted = substituteDefaults(deEscaped);
+  const { deEscaped, quotesOnly, deGlobbed, deExpanded, deExpandedGlob, deSubstituted } = deterministicScanVariants(command);
   // 仅按引号外的真实执行结构识别 pipe→解释器 / eval / 下载即执行，避免把打印示例文本误升级。
   if ([command, stripExpansions(command), substituteDefaults(command)]
     .some((variant) => highImpactExecutionNeedsConsent(variant))) return 'prompt-each-time';
@@ -4760,14 +6607,7 @@ export function classifyShellCommand(
   // 抓云 metadata = 读实例临时云凭证,静态可证的高危 → 与内置 WebFetch(reviewAction network)一致地
   // 确定性必问,不能一边硬问一边只给 shell curl 灰区(自审发现的两通道不一致)。
   // 只认 metadata,不含 localhost/私网 —— `curl localhost:3000` 是开发日常,硬弹窗会违反"尽量不打扰"。
-  for (const { text } of splitExecutableSegments(quotesOnly)) {
-    const tokens = unwrapWrappers(tokenize(text));
-    const bin = executableName(tokens[0] ?? '');
-    if (bin !== 'curl' && bin !== 'wget') continue;
-    if (tokens.slice(1).some((t) => isFetchTargetToken(t) && isCloudMetadataFetchTarget(t))) {
-      return 'prompt-each-time';
-    }
-  }
+  if (fetchesCloudMetadata(quotesOnly)) return 'prompt-each-time';
   // 写系统/受保护目录(重定向 `cat x > /etc/hosts` 与参数写通道 `cp payload /etc/hosts`、
   // `| tee /etc/hosts`、`truncate -s 0 /etc/passwd`、`tar -C /etc` 等)= 高影响系统写,复用
   // file-write 的系统红线。**判定放在 scopedDestructionNeedsConsent 的分段循环里**,因为那里已经
@@ -4801,7 +6641,8 @@ export function classifyShellCommand(
   let trackedCwdUnknown = opts.cwdUnknown === true;
   const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
   for (const seg of segments) {
-    const segTokens = stripShellControlTokens(tokenize(seg));
+    const parsedSegment = parseShellInputRedirections(seg);
+    const segTokens = stripShellControlTokens(tokenize(parsedSegment.command));
     const dirChange = directoryChangeTarget(segTokens);
     if (dirChange.changesDirectory) {
       const segBin = executableName(segTokens[0] ?? '');
@@ -4820,7 +6661,7 @@ export function classifyShellCommand(
       needsPrompt = true; // 区外/动态目标、source/popd:与改动前同档(灰区)。
       continue;
     }
-    const v = classifyShellSegment(seg, workspaceRoots, opts);
+    const v = classifyShellSegment(parsedSegment.command, workspaceRoots, opts);
     if (v === 'prompt-each-time') return 'prompt-each-time';
     if (v === 'prompt') needsPrompt = true;
   }
@@ -4847,12 +6688,18 @@ function isAbsolutePath(p: string): boolean {
   return p.startsWith('/') || /^[A-Za-z]:/.test(p);
 }
 
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === '/') end--;
+  return value.slice(0, end);
+}
+
 /** 归一化路径:去包裹引号、统一分隔符,相对路径挂到第一个 workspace root(cwd)。 */
 function normalizeTarget(target: string, workspaceRoots: string[]): string {
   let p = toForwardSlashes(target.replace(/^['"]|['"]$/g, ''));
   if (!isAbsolutePath(p)) {
     const cwd = workspaceRoots[0];
-    if (cwd) p = `${toForwardSlashes(cwd).replace(/\/+$/, '')}/${p.replace(/^\/+/, '')}`;
+    if (cwd) p = `${trimTrailingSlashes(toForwardSlashes(cwd))}/${p.replace(/^\/+/, '')}`;
   }
   return normalizeSlashes(p);
 }

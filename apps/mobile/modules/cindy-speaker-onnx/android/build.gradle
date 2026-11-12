@@ -1,0 +1,25 @@
+apply plugin: 'com.android.library'
+apply plugin: 'org.jetbrains.kotlin.android'
+
+group = 'com.xdtmaker.speakeronnx'
+version = '0.1.0'
+
+def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
+apply from: expoModulesCorePlugin
+applyKotlinExpoModulesCorePlugin()
+useCoreDependencies()
+useDefaultAndroidSdkVersions()
+
+android {
+  namespace "com.xdtmaker.speakeronnx"
+
+  defaultConfig {
+    minSdkVersion 23
+    consumerProguardFiles 'consumer-rules.pro'
+  }
+}
+
+dependencies {
+  // Official Microsoft build; keep in step with onnxruntime-objc in ../ios/CindySpeakerOnnx.podspec.
+  implementation "com.microsoft.onnxruntime:onnxruntime-android:1.30.0"
+}

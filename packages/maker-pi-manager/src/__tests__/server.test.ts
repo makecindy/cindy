@@ -203,6 +203,24 @@ describe('ManagerServer', () => {
     await server.stop();
   });
 
+  /** One isolated client per validation case; cleanup also covers failed handshakes. */
+  async function requestFromClient(
+    method: string,
+    params: unknown = {},
+    { id = 2, hello = true }: { id?: number; hello?: boolean } = {},
+  ): Promise<any> {
+    const socket = await connectRaw(socketPath);
+    try {
+      if (hello) await doHello(socket);
+      const response = readNextFrame(socket);
+      writeRequest(socket, id, method, params);
+      return await response;
+    } finally {
+      socket.destroy();
+      socketFrameBuffers.delete(socket);
+    }
+  }
+
   // -----------------------------------------------------------------------
   // 1. hello handshake
   // -----------------------------------------------------------------------
@@ -222,35 +240,31 @@ describe('ManagerServer', () => {
       socket.destroy();
     });
 
-    it('rejects mismatched protocolVersion with INVALID_PROTOCOL_VERSION', async () => {
-      const socket = await connectRaw(socketPath);
-      writeRequest(socket, 1, 'protocol/hello', { protocolVersion: 999 });
-      const resp = await readNextFrame(socket);
+    it.each([
+      {
+        name: 'rejects mismatched protocolVersion with INVALID_PROTOCOL_VERSION',
+        id: 1,
+        params: { protocolVersion: 999 },
+        error: { code: 'INVALID_PROTOCOL_VERSION', message: expect.stringContaining('999') },
+      },
+      {
+        name: 'rejects missing protocolVersion with INVALID_PARAMS',
+        id: 2,
+        params: {},
+        error: { code: 'INVALID_PARAMS', message: expect.stringContaining('protocolVersion') },
+      },
+      {
+        name: 'rejects non-number protocolVersion with INVALID_PARAMS',
+        id: 3,
+        params: { protocolVersion: 'v1' },
+        error: { code: 'INVALID_PARAMS' },
+      },
+    ].map(({ name, ...input }) => [name, input] as const))('%s', async (_name, { id, params, error }) => {
+      const resp = await requestFromClient('protocol/hello', params, { id, hello: false });
       expect(resp.type).toBe('response');
-      expect(resp.id).toBe(1);
+      expect(resp.id).toBe(id);
       expect(resp.error).toBeDefined();
-      expect(resp.error.code).toBe('INVALID_PROTOCOL_VERSION');
-      expect(resp.error.message).toContain('999');
-      socket.destroy();
-    });
-
-    it('rejects missing protocolVersion with INVALID_PARAMS', async () => {
-      const socket = await connectRaw(socketPath);
-      writeRequest(socket, 2, 'protocol/hello', {});
-      const resp = await readNextFrame(socket);
-      expect(resp.error).toBeDefined();
-      expect(resp.error.code).toBe('INVALID_PARAMS');
-      expect(resp.error.message).toContain('protocolVersion');
-      socket.destroy();
-    });
-
-    it('rejects non-number protocolVersion with INVALID_PARAMS', async () => {
-      const socket = await connectRaw(socketPath);
-      writeRequest(socket, 3, 'protocol/hello', { protocolVersion: 'v1' });
-      const resp = await readNextFrame(socket);
-      expect(resp.error).toBeDefined();
-      expect(resp.error.code).toBe('INVALID_PARAMS');
-      socket.destroy();
+      expect(resp.error).toMatchObject(error);
     });
 
     it('allows client to proceed with requests after successful hello', async () => {
@@ -301,22 +315,22 @@ describe('ManagerServer', () => {
   // 2. NOT_INITIALIZED guard
   // -----------------------------------------------------------------------
   describe('NOT_INITIALIZED guard', () => {
-    it('rejects pi/list before hello with NOT_INITIALIZED', async () => {
-      const socket = await connectRaw(socketPath);
-      writeRequest(socket, 1, 'pi/list', {});
-      const resp = await readNextFrame(socket);
+    it.each([
+      {
+        name: 'rejects pi/list before hello with NOT_INITIALIZED',
+        method: 'pi/list',
+        params: {},
+      },
+      {
+        name: 'rejects any non-hello method before initialization',
+        method: 'pi/ensure',
+        params: { sessionId: 'x' },
+      },
+    ].map(({ name, ...input }) => [name, input] as const))('%s', async (_name, { method, params }) => {
+      const resp = await requestFromClient(method, params, { id: 1, hello: false });
       expect(resp.error).toBeDefined();
       expect(resp.error.code).toBe('NOT_INITIALIZED');
       expect(resp.error.message).toContain('protocol/hello');
-      socket.destroy();
-    });
-
-    it('rejects any non-hello method before initialization', async () => {
-      const socket = await connectRaw(socketPath);
-      writeRequest(socket, 1, 'pi/ensure', { sessionId: 'x' });
-      const resp = await readNextFrame(socket);
-      expect(resp.error.code).toBe('NOT_INITIALIZED');
-      socket.destroy();
     });
 
     it('allows hello before initialization (no NOT_INITIALIZED for hello itself)', async () => {
@@ -331,24 +345,22 @@ describe('ManagerServer', () => {
   // 3. UNKNOWN_METHOD
   // -----------------------------------------------------------------------
   describe('UNKNOWN_METHOD', () => {
-    it('returns UNKNOWN_METHOD for unregistered method after hello', async () => {
-      const socket = await connectRaw(socketPath);
-      await doHello(socket);
-      writeRequest(socket, 2, 'totally/made-up', {});
-      const resp = await readNextFrame(socket);
+    it.each([
+      {
+        name: 'returns UNKNOWN_METHOD for unregistered method after hello',
+        id: 2,
+        method: 'totally/made-up',
+      },
+      {
+        name: 'returns UNKNOWN_METHOD even for plausible-but-unregistered methods',
+        id: 3,
+        method: 'protocol/version',
+      },
+    ].map(({ name, ...input }) => [name, input] as const))('%s', async (_name, { id, method }) => {
+      const resp = await requestFromClient(method, {}, { id });
       expect(resp.error).toBeDefined();
       expect(resp.error.code).toBe('UNKNOWN_METHOD');
-      expect(resp.error.message).toContain('totally/made-up');
-      socket.destroy();
-    });
-
-    it('returns UNKNOWN_METHOD even for plausible-but-unregistered methods', async () => {
-      const socket = await connectRaw(socketPath);
-      await doHello(socket);
-      writeRequest(socket, 3, 'protocol/version', {});
-      const resp = await readNextFrame(socket);
-      expect(resp.error.code).toBe('UNKNOWN_METHOD');
-      socket.destroy();
+      expect(resp.error.message).toContain(method);
     });
   });
 
@@ -411,87 +423,52 @@ describe('ManagerServer', () => {
   // 5. error code mapping
   // -----------------------------------------------------------------------
   describe('error code mapping', () => {
-    it('passes through known error codes from handler throws', async () => {
-      server.setHandler('test/known-error', async () => {
-        throw makeServerError('INVALID_PARAMS', 'bad params', { field: 'x' });
+    it.each([
+      {
+        name: 'passes through known error codes from handler throws',
+        method: 'test/known-error',
+        createError: () => makeServerError('INVALID_PARAMS', 'bad params', { field: 'x' }),
+        expectedError: { code: 'INVALID_PARAMS', message: 'bad params', data: { field: 'x' } },
+      },
+      {
+        name: 'maps unknown error codes to INTERNAL',
+        method: 'test/unknown-code',
+        createError: () => Object.assign(new Error('something went wrong'), { code: 'WEIRD_CUSTOM_CODE' }),
+        expectedError: { code: 'INTERNAL', message: 'something went wrong' },
+      },
+      {
+        name: 'maps throws without code property to INTERNAL',
+        method: 'test/no-code',
+        createError: () => new Error('plain error'),
+        expectedError: { code: 'INTERNAL', message: 'plain error' },
+      },
+      {
+        name: 'maps non-Error throws to INTERNAL with fallback message',
+        method: 'test/throw-string',
+        createError: () => 'just a string',
+        expectedError: { code: 'INTERNAL', message: 'internal error' },
+      },
+      {
+        name: 'maps null-throws to INTERNAL with fallback message',
+        method: 'test/throw-null',
+        createError: () => null,
+        expectedError: { code: 'INTERNAL', message: 'internal error' },
+      },
+      {
+        name: 'maps SESSION_NOT_FOUND from handler',
+        method: 'test/session-not-found',
+        createError: () => makeServerError('SESSION_NOT_FOUND', 'no such session', { sessionId: 'abc' }),
+        expectedError: { code: 'SESSION_NOT_FOUND', data: { sessionId: 'abc' } },
+      },
+    ].map(({ name, ...input }) => [name, input] as const))('%s', async (_name, { method, createError, expectedError }) => {
+      server.setHandler(method, async () => {
+        throw createError();
       });
-      const socket = await connectRaw(socketPath);
-      await doHello(socket);
-      writeRequest(socket, 2, 'test/known-error', {});
-      const resp = await readNextFrame(socket);
-      expect(resp.error.code).toBe('INVALID_PARAMS');
-      expect(resp.error.message).toBe('bad params');
-      expect(resp.error.data).toEqual({ field: 'x' });
-      socket.destroy();
-    });
-
-    it('maps unknown error codes to INTERNAL', async () => {
-      server.setHandler('test/unknown-code', async () => {
-        const err = new Error('something went wrong') as Error & { code: string };
-        err.code = 'WEIRD_CUSTOM_CODE';
-        throw err;
-      });
-      const socket = await connectRaw(socketPath);
-      await doHello(socket);
-      writeRequest(socket, 2, 'test/unknown-code', {});
-      const resp = await readNextFrame(socket);
-      expect(resp.error.code).toBe('INTERNAL');
-      expect(resp.error.message).toBe('something went wrong');
-      socket.destroy();
-    });
-
-    it('maps throws without code property to INTERNAL', async () => {
-      server.setHandler('test/no-code', async () => {
-        throw new Error('plain error');
-      });
-      const socket = await connectRaw(socketPath);
-      await doHello(socket);
-      writeRequest(socket, 2, 'test/no-code', {});
-      const resp = await readNextFrame(socket);
-      expect(resp.error.code).toBe('INTERNAL');
-      expect(resp.error.message).toBe('plain error');
-      socket.destroy();
-    });
-
-    it('maps non-Error throws to INTERNAL with fallback message', async () => {
-      server.setHandler('test/throw-string', async () => {
-        throw 'just a string';
-      });
-      const socket = await connectRaw(socketPath);
-      await doHello(socket);
-      writeRequest(socket, 2, 'test/throw-string', {});
-      const resp = await readNextFrame(socket);
-      expect(resp.error.code).toBe('INTERNAL');
-      expect(resp.error.message).toBe('internal error');
-      socket.destroy();
-    });
-
-    it('maps null-throws to INTERNAL with fallback message', async () => {
-      server.setHandler('test/throw-null', async () => {
-        throw null;
-      });
-      const socket = await connectRaw(socketPath);
-      await doHello(socket);
-      writeRequest(socket, 2, 'test/throw-null', {});
-      const resp = await readNextFrame(socket);
-      expect(resp.error.code).toBe('INTERNAL');
-      expect(resp.error.message).toBe('internal error');
-      socket.destroy();
-    });
-
-    it('maps SESSION_NOT_FOUND from handler', async () => {
-      server.setHandler('test/session-not-found', async () => {
-        throw makeServerError('SESSION_NOT_FOUND', 'no such session', {
-          sessionId: 'abc',
-        });
-      });
-      const socket = await connectRaw(socketPath);
-      await doHello(socket);
-      writeRequest(socket, 2, 'test/session-not-found', {});
-      const resp = await readNextFrame(socket);
-      expect(resp.error.code).toBe('SESSION_NOT_FOUND');
-      expect(resp.error.data).toEqual({ sessionId: 'abc' });
-      socket.destroy();
+      const resp = await requestFromClient(method);
+      expect(resp.error).toMatchObject(expectedError);
+      if ('data' in expectedError) {
+        expect(resp.error.data).toEqual(expectedError.data);
+      }
     });
   });
 

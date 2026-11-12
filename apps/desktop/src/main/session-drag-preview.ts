@@ -118,6 +118,23 @@ export function endSessionDragPreview(sourceWindow: BrowserWindow): void {
   controller.end(sourceWindow);
 }
 
+/**
+ * 右侧栏页签拖出窗口:只借用窗外预览卡。页签拖拽走指针事件(不是 HTML5 DnD),松手
+ * 位置由 renderer 自己判定并经 sidebar-tab-window:open 带 position 弹窗,这里不接
+ * 原生 mouse-up 协调。同一时刻只有一场拖动在跑(controller 按 owner 互斥)。
+ */
+export function beginSidebarTabDragPreview(
+  sourceWindow: BrowserWindow,
+  label: string,
+  palette: SessionDragPreviewPalette,
+): void {
+  controller.begin(sourceWindow, label, palette);
+}
+
+export function endSidebarTabDragPreview(sourceWindow: BrowserWindow): void {
+  controller.end(sourceWindow);
+}
+
 export function consumeNativeSessionDragOpenResult(
   sourceWindow: BrowserWindow,
   sessionId: string,

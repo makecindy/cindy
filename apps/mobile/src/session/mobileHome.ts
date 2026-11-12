@@ -1,6 +1,108 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import type { RemoteSession } from '@/session/types';
+import { isSharedTaskPeer } from '@cindy/device-link';
+import { i18n } from '@/i18n';
+import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
+import { createSessionListTranslator, localizeRemoteSessionListItem } from '@/session/sessionList';
+import {
+  buildMobileHomePresentation as buildMobileHomePresentationShared,
+  sessionMatchesProjectDir,
+  type MobileHomeSessionLike,
+  type MobileHomeNoDeviceContext,
+  type MobileHomeOptions,
+  type MobileHomePresentation,
+} from '@cindy/maker-shared/mobile-home';
 
 export * from '@cindy/maker-shared/mobile-home';
+
+export function buildMobileHomePresentation(options: MobileHomeOptions): MobileHomePresentation {
+  const now = options.now ?? Date.now();
+  const translate = createSessionListTranslator();
+  // Shared peers route individual tasks, not device scopes. Retain their task
+  // rows, but discard legacy selections of these synthetic device entries.
+  const selectedDeviceId = options.selectedDeviceId && isSharedTaskPeer(options.selectedDeviceId)
+    ? null : options.selectedDeviceId;
+  const base = buildMobileHomePresentationShared({ ...options, selectedDeviceId, localizer: mobilePresentationLocalizer });
+  const ownDeviceFilters = base.deviceFilters.filter((filter) => !filter.deviceId || !isSharedTaskPeer(filter.deviceId));
+  const deviceNameSources = ownDeviceFilters.flatMap((filter) => filter.deviceId ? [{
+    deviceId: filter.deviceId, name: filter.label,
+  }] : []);
+  const deviceFilters = ownDeviceFilters.map((filter) => ({
+    ...filter,
+    label: filter.deviceId === null ? i18n.t('devices.presentation.home.allDevices') : deviceDisplayName(filter.deviceId, filter.label, deviceNameSources),
+    statusLabel: filter.waitingCount > 0
+      ? i18n.t('devices.presentation.home.waitingCount', { count: filter.waitingCount })
+      : filter.deviceId === null
+        ? i18n.t('devices.presentation.home.allComputers')
+        : filter.statusLabel === '已同步'
+          ? i18n.t('devices.presentation.home.synced')
+          : filter.statusLabel,
+  }));
+  const primaryDevice = base.primaryDevice
+    ? deviceFilters.find((item) => item.id === base.primaryDevice?.id) ?? null
+    : null;
+  const empty = localizedHomeEmpty(base.emptyKind, base.emptyNoDevice);
+  return {
+    ...base,
+    chats: base.chats.map((item) => localizeRemoteSessionListItem(item, now, translate)),
+    deviceFilters,
+    emptyCopy: empty.copy,
+    emptyTitle: empty.title,
+    pinned: base.pinned.map((item) => localizeRemoteSessionListItem(item, now, translate)),
+    primaryDevice,
+    projects: base.projects.map((project) => {
+      const sourceDeviceName = (project.sessions[0]?.session as MobileHomeSessionLike | undefined)?.deviceLinkDeviceName
+        ?? (project.deviceId
+          ? options.devices?.find((device) => device.deviceId === project.deviceId)?.name
+          : undefined);
+      const deviceName = sourceDeviceName == null
+        ? i18n.t('devices.presentation.home.unknownComputer')
+        : deviceDisplayName(project.deviceId ?? '', project.deviceName);
+      const workingDir = project.workingDir;
+      return {
+        ...project,
+        deviceName,
+        sessions: project.sessions.map((item) => localizeRemoteSessionListItem(item, now, translate)),
+        subtitle: [deviceName, workingDir].filter(Boolean).join(' · '),
+        title: project.kind === 'cindy-make'
+          ? i18n.t('devices.presentation.home.cindyMake')
+          : project.workingDir
+            ? project.title
+            : i18n.t('devices.presentation.home.uncategorizedProject'),
+      };
+    }),
+  };
+}
+
+function localizedHomeEmpty(
+  kind: MobileHomePresentation['emptyKind'],
+  noDevice: MobileHomeNoDeviceContext | null,
+): { title: string; copy: string } {
+  if (kind !== 'noDevice' || !noDevice) {
+    return {
+      title: i18n.t(`devices.presentation.home.empty.${kind}.title`),
+      copy: i18n.t(`devices.presentation.home.empty.${kind}.copy`),
+    };
+  }
+  const names = formatDeviceNames(noDevice.devices.map((device) => device.name));
+  return {
+    title: i18n.t(`devices.presentation.home.noDevice.${noDevice.reason}.title`),
+    copy: i18n.t(`devices.presentation.home.noDevice.${noDevice.reason}.copy`, { names }),
+  };
+}
+
+function formatDeviceNames(names: readonly string[]): string {
+  if (names.length === 0) return '';
+  const quoted = names.map((name) => `“${name}”`);
+  try {
+    return new Intl.ListFormat(i18n.resolvedLanguage || i18n.language, {
+      style: 'long',
+      type: 'conjunction',
+    }).format(quoted);
+  } catch {
+    return quoted.join(', ');
+  }
+}
 
 /**
  * 手机端隐藏 Orca worker 子会话(本期不支持进 worker 子会话聊天),Lead 会话与普通会话保留。
@@ -10,4 +112,20 @@ export function excludeOrcaWorkerSessions<T extends Pick<RemoteSession, 'orcaRol
   sessions: readonly T[],
 ): T[] {
   return sessions.filter((session) => session.orcaRole !== 'worker');
+}
+
+/**
+ * 设备/项目「查看全部」列表的会话派生:先丢掉 Orca worker,再按规范设备 id 与项目目录收口。
+ * 结果必须直接喂给该页的 sections / 计数,不能只在别处调用 helper。
+ */
+export function selectVisibleDeviceSessions<
+  T extends Pick<RemoteSession, 'orcaRole' | 'canonicalDeviceId' | 'deviceLinkDeviceId' | 'workingDir' | 'projectDir'>,
+>(
+  sessions: readonly T[],
+  deviceId: string,
+  projectWorkingDir?: string | null,
+): T[] {
+  return excludeOrcaWorkerSessions(sessions).filter((session) =>
+    (session.canonicalDeviceId ?? session.deviceLinkDeviceId) === deviceId
+    && (!projectWorkingDir || sessionMatchesProjectDir(session, projectWorkingDir)));
 }

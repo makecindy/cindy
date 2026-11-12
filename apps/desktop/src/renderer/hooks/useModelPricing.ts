@@ -100,16 +100,55 @@ function isValidCatalog(value: unknown, kind: PricingKind): value is ModelPricin
   );
 }
 
+/**
+ * 报价读写都经过这一层防御性取值:preload 面缺这几个方法时**降级为「没有报价」**,
+ * 而不是让整个消费页崩掉。
+ *
+ * 为什么必须在这里挡:`load()` 下面那个 `.catch` 抓不到 —— 直接解引用
+ * `usage.getModelPricing` 是**同步抛出**,发生在 `.then` 链建立之前。同理
+ * `subscribePricing` 一抛就会打断 effect,连卸载清理都不会注册。
+ *
+ * 什么时候真会缺:升级窗口期的旧 preload,以及只投影部分能力的宿主。同一条哲学见
+ * `useCodexRateLimits` 的 `readCodexRateLimitsSafely`(「Missing/older preload ...
+ * degrade to no extra tooltip rows」)——价格是**装饰性信息**,拿不到就不显示,
+ * 不该把它的缺失升级成页面级故障。
+ */
+function pricingApi(): {
+  getModelPricing?: () => Promise<unknown>;
+  getReferenceModelPricing?: () => Promise<unknown>;
+  onModelPricingChanged?: (listener: (pricing: unknown) => void) => () => void;
+  onReferenceModelPricingChanged?: (listener: (pricing: unknown) => void) => () => void;
+} | null {
+  return (
+    (
+      window as unknown as {
+        electronAPI?: { maker?: { usage?: ReturnType<typeof pricingApi> } };
+      }
+    ).electronAPI?.maker?.usage ?? null
+  );
+}
+
 function readPricing(kind: PricingKind): Promise<unknown> {
-  return kind === 'gateway'
-    ? window.electronAPI.maker.usage.getModelPricing()
-    : window.electronAPI.maker.usage.getReferenceModelPricing();
+  const api = pricingApi();
+  const read = kind === 'gateway' ? api?.getModelPricing : api?.getReferenceModelPricing;
+  if (typeof read !== 'function') return Promise.resolve(null);
+  try {
+    return Promise.resolve(read.call(api));
+  } catch {
+    return Promise.resolve(null);
+  }
 }
 
 function subscribePricing(kind: PricingKind, listener: (pricing: unknown) => void): () => void {
-  return kind === 'gateway'
-    ? window.electronAPI.maker.usage.onModelPricingChanged(listener)
-    : window.electronAPI.maker.usage.onReferenceModelPricingChanged(listener);
+  const api = pricingApi();
+  const subscribe =
+    kind === 'gateway' ? api?.onModelPricingChanged : api?.onReferenceModelPricingChanged;
+  if (typeof subscribe !== 'function') return () => {};
+  try {
+    return subscribe.call(api, listener) ?? (() => {});
+  } catch {
+    return () => {};
+  }
 }
 
 function load(

@@ -1,3 +1,5 @@
+import { colorRegistry } from '../../../themes/color-registry';
+import '../../../themes/colors';
 // @vitest-environment jsdom
 
 import { render } from '@testing-library/react';
@@ -7,12 +9,8 @@ import { resolve } from 'node:path';
 
 import { QuotaBar, quotaSeverity } from '../QuotaBar';
 
-const colorsSource = readFileSync(
-  resolve(__dirname, '..', '..', '..', 'themes', 'colors.ts'),
-  'utf8',
-).replace(/\r\n/g, '\n');
-const globalsSource = readFileSync(
-  resolve(__dirname, '..', '..', '..', 'styles', 'globals.css'),
+const bootstrapSource = readFileSync(
+  resolve(__dirname, '..', '..', '..', 'styles', 'generated', 'tokens.css'),
   'utf8',
 ).replace(/\r\n/g, '\n');
 
@@ -28,8 +26,8 @@ describe('QuotaBar', () => {
   });
 
   it.each([
-    { usedPercent: 70, expected: 'normal' },
-    { usedPercent: 71, expected: 'warn' },
+    { usedPercent: 69.9, expected: 'normal' },
+    { usedPercent: 70, expected: 'warn' },
     { usedPercent: 89.9, expected: 'warn' },
     { usedPercent: 90, expected: 'crit' },
     { usedPercent: 100, expected: 'crit' },
@@ -40,8 +38,8 @@ describe('QuotaBar', () => {
   });
 
   it.each([
-    { usedPercent: 70, expected: 'normal' },
-    { usedPercent: 71, expected: 'warn' },
+    { usedPercent: 69.9, expected: 'normal' },
+    { usedPercent: 70, expected: 'warn' },
     { usedPercent: 89.9, expected: 'warn' },
     { usedPercent: 90, expected: 'crit' },
     { usedPercent: 100, expected: 'crit' },
@@ -100,14 +98,9 @@ describe('QuotaBar', () => {
     } as const;
 
     for (const [quotaToken, semanticToken] of Object.entries(aliases)) {
-      expect(colorsSource).toContain(
-        `registerColor('${quotaToken}', {\n`
-        + `  light: 'var(--${semanticToken})',\n`
-        + `  dark: 'var(--${semanticToken})',\n`
-        + '}',
-      );
+      for (const mode of ['light', 'dark'] as const) expect(colorRegistry.resolveDefault(quotaToken, mode)).toBe(`var(--${semanticToken})`);
       expect(
-        globalsSource.match(
+        bootstrapSource.match(
           new RegExp(`--${quotaToken}: var\\(--${semanticToken}\\);`, 'g'),
         ),
       ).toHaveLength(2);

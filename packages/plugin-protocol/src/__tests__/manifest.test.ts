@@ -1,3 +1,5 @@
+import { getPluginToolUi, pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '../toolUi.js';
+import { hostUiApprovalSubjects } from '../hostUi.js';
 import { describe, expect, it } from 'vitest';
 import {
   GHOST_MANUAL_DESCRIPTION_MAX_CHARS,
@@ -6,7 +8,9 @@ import {
   GHOST_MANUAL_MD_MAX_BYTES,
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_MANIFEST_SCHEMA_VERSION,
+  GHOST_MAIN_VIEW_ICONS,
   GHOST_OAUTH_SCOPES_MAX,
+  LEGACY_GHOST_SLOTS,
   compareCindyVersions,
   ghostManifestUsesOidcToken,
   isSafeGhostRelativePath,
@@ -15,10 +19,11 @@ import {
   isVersionlessCindyVersion,
   supportsCindyVersion,
   validateGhostManifest,
+  validateStoredGhostManifest,
 } from '../manifest.js';
 
 const validManifest = {
-  schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION,
+  schemaVersion: 2,
   id: 'acme-helper',
   name: 'Acme Helper',
   version: '1.0.0',
@@ -29,6 +34,178 @@ const validManifest = {
 } as const;
 
 describe('Ghost manifest contract', () => {
+  it('validates static task prompt declarations while preserving older installed plugin behavior', () => {
+    const base = { ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined };
+    expect(validateGhostManifest({ ...base, systemPrompt: [{ id: 'style', order: 0, text: 'Static', scope: 'selected-task' }] })).toMatchObject({ ok: true });
+    const historical = { ...base, systemPrompt: { vendorExtension: 'previously unknown' } };
+    expect(validateGhostManifest(historical).ok).toBe(false);
+    expect(validateStoredGhostManifest(historical)).toMatchObject({ ok: true, manifest: { tools: base.tools } });
+    const stored = validateStoredGhostManifest(historical);
+    if (stored.ok) expect(stored.manifest.systemPrompt).toBeUndefined();
+  });
+  // Runtime controls are on-demand entry points. Unlike message hooks, selecting
+  // one must not require a resident process (protocol contract, unit).
+  it('accepts on-demand runtime controls without making message hooks non-resident', () => {
+    const base = { ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined };
+    const hooks = ['will-start-turn', 'will-model-request', 'will-compose-context', 'will-search-memory'];
+    const result = validateGhostManifest({ ...base, subscribe: { hooks } });
+    expect(result).toMatchObject({ ok: true, manifest: { subscribe: { hooks } } });
+    expect(validateGhostManifest({ ...base, subscribe: { hooks: ['will-user-message'] } }).ok).toBe(false);
+  });
+
+  it.each([2, 3])('preserves the optional Host task card visibility flag in schema v%s', (schemaVersion) => {
+    const base = {
+      ...validManifest,
+      schemaVersion,
+      ...(schemaVersion === 3 ? { minCindyVersion: '0.1.0' } : {}),
+      slots: schemaVersion === 2 ? ['agent'] : undefined,
+      tools: undefined,
+      agent: { tasks: true },
+    };
+    for (const showTaskPreferences of [undefined, true, false]) {
+      const result = validateGhostManifest({ ...base, showTaskPreferences });
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+      expect(result.manifest.showTaskPreferences).toBe(showTaskPreferences);
+      expect(Object.hasOwn(result.manifest, 'showTaskPreferences')).toBe(showTaskPreferences !== undefined);
+      expect(result.manifest.agent?.tasks).toBe(true);
+      expect(validateGhostManifest(result.manifest)).toEqual(result);
+    }
+    for (const showTaskPreferences of [null, 0, 1, 'false', {}, []]) {
+      expect(validateGhostManifest({ ...base, showTaskPreferences })).toMatchObject({
+        ok: false,
+        reason: 'showTaskPreferences 必须是布尔值',
+      });
+    }
+  });
+
+  it('keeps main-view in the v2 compatibility contract', () => {
+    expect(LEGACY_GHOST_SLOTS).toContain('main-view');
+    expect(GHOST_MAIN_VIEW_ICONS).toEqual([
+      'puzzle',
+      'globe',
+      'code',
+      'folder',
+      'database',
+      'chart-column',
+      'image',
+      'message-circle',
+      'calendar-days',
+    ]);
+  });
+
+  it('uses Manifest v3 for new plugins and keeps v2 as input compatibility', () => {
+    expect(GHOST_MANIFEST_SCHEMA_VERSION).toBe(3);
+    const result = validateGhostManifest({
+      schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION,
+      minCindyVersion: '0.1.61',
+      id: 'direct-helper',
+      name: 'Direct Helper',
+      version: '1.0.0',
+      entry: 'index.js',
+      tools: [{ name: 'help', description: 'Help with direct capabilities' }],
+      card: {},
+      agent: {},
+      notify: true,
+      futureCapability: { mode: 'example' },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest).not.toHaveProperty('slots');
+    expect(result.manifest.card).toEqual({});
+    expect(result.manifest.agent).toEqual({});
+    expect(result.manifest.notify).toBe(true);
+    expect(result.manifest.futureCapability).toEqual({ mode: 'example' });
+
+    expect(validateGhostManifest({ ...validManifest, schemaVersion: 3 }).ok).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        schemaVersion: 3,
+        minCindyVersion: '0.1.61',
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        schemaVersion: 3,
+        minCindyVersion: '0.1.61',
+        slots: undefined,
+        notify: false,
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGhostManifest({
+        schemaVersion: 3,
+        minCindyVersion: '0.1.60',
+        id: 'older-compatible-v3',
+        name: 'Older Compatible v3',
+        version: '1.0.0',
+        entry: 'index.js',
+      }).ok,
+    ).toBe(true);
+  });
+
+  it('validates and normalizes setup at the shared protocol boundary', () => {
+    const manifest = {
+      schemaVersion: 3,
+      minCindyVersion: '0.1.61',
+      id: 'setup-helper',
+      name: 'Setup Helper',
+      version: '1.0.0',
+      entry: 'index.js',
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.example.com'],
+        secrets: [
+          {
+            key: 'api_key',
+            label: 'API key',
+            inject: { header: 'Authorization', format: 'Bearer {value}' },
+          },
+        ],
+      },
+      setup: {
+        requires: [
+          {
+            anyOf: ['secret:api_key', { kv: 'repository', label: 'Repository' }],
+          },
+        ],
+      },
+    } as const;
+
+    const result = validateGhostManifest(manifest);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.setup).toEqual({
+      requires: [
+        {
+          anyOf: [
+            { kind: 'secret', key: 'api_key' },
+            { kind: 'kv', key: 'repository', label: 'Repository' },
+          ],
+        },
+      ],
+    });
+    expect(validateGhostManifest({ ...manifest, setup: { requires: 'bad' } }).ok).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...manifest,
+        setup: { requires: [{ anyOf: ['secret:missing'] }] },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('accepts empty and zero-power v2 slots and drops the latter', () => {
+    expect(validateGhostManifest({ ...validManifest, slots: [], tools: undefined })).toMatchObject({
+      ok: true,
+      manifest: { slots: [] },
+    });
+    expect(
+      validateGhostManifest({ ...validManifest, slots: ['tool', 'network'], tools: undefined }),
+    ).toMatchObject({ ok: true, manifest: { slots: [] } });
+  });
+
   it('exports the manual authoring limits', () => {
     expect(GHOST_MANUAL_MAX_ITEMS).toBe(8);
     expect(GHOST_MANUAL_ENTRY_FILE).toBe('MANUAL.md');
@@ -41,8 +218,38 @@ describe('Ghost manifest contract', () => {
     expect(result).toEqual({ ok: true, manifest: validManifest });
   });
 
+  // Unit regression for the production validator: the existing 16KB protocol cap must use
+  // UTF-8 bytes. Shape coverage missed Chinese schemas accepted by the old UTF-16 length check.
+  it('enforces the tools parameters byte limit without rejecting the exact boundary', () => {
+    const schema = (description: string) => ({ type: 'object', description });
+    const utf8Bytes = (parameters: Record<string, unknown>) =>
+      new TextEncoder().encode(JSON.stringify(parameters)).length;
+    const emptySchemaBytes = utf8Bytes(schema(''));
+    const atLimit = schema('a'.repeat(16_384 - emptySchemaBytes));
+    const chineseDescription = '汉'.repeat(5_000);
+    const overLimit = schema(
+      `${chineseDescription}${'a'.repeat(16_385 - utf8Bytes(schema(chineseDescription)))}`,
+    );
+
+    expect(utf8Bytes(atLimit)).toBe(16_384);
+    expect(validateGhostManifest({
+      ...validManifest,
+      tools: [{ name: 'help', description: 'Help', parameters: atLimit }],
+    }).ok).toBe(true);
+
+    expect(JSON.stringify(overLimit).length).toBeLessThan(16_384);
+    expect(utf8Bytes(overLimit)).toBe(16_385);
+    expect(validateGhostManifest({
+      ...validManifest,
+      tools: [{ name: 'help', description: 'Help', parameters: overLimit }],
+    })).toEqual({ ok: false, reason: 'tools[].parameters 过大(上限 16KB)' });
+  });
+
   it('keeps minCindyVersion optional for old plugins and validates declared versions', () => {
-    expect(validateGhostManifest(validManifest)).toEqual({ ok: true, manifest: validManifest });
+    expect(validateGhostManifest(validManifest)).toEqual({
+      ok: true,
+      manifest: validManifest,
+    });
     expect(validateGhostManifest({ ...validManifest, minCindyVersion: '1.2.3' })).toEqual({
       ok: true,
       manifest: { ...validManifest, minCindyVersion: '1.2.3' },
@@ -177,34 +384,54 @@ describe('Ghost manifest contract', () => {
     expect(
       validateGhostManifest(
         secret({
-          inject: { header: 'X-Identity', format: 'Bearer {value}', hosts: ['api.example.com'] },
+          inject: {
+            header: 'X-Identity',
+            format: 'Bearer {value}',
+            hosts: ['api.example.com'],
+          },
         }),
       ),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('Authorization: Bearer') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('Authorization: Bearer'),
+    });
     expect(
       validateGhostManifest(
         secret({
           inject: { header: 'Authorization', format: 'Basic {value}' },
         }),
       ),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('Authorization: Bearer') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('Authorization: Bearer'),
+    });
     expect(
       validateGhostManifest(
         secret(
           {
-            inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['*.example.com'] },
+            inject: {
+              header: 'Authorization',
+              format: 'Bearer {value}',
+              hosts: ['*.example.com'],
+            },
           },
           ['*.example.com'],
         ),
       ),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('不允许通配') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('不允许通配'),
+    });
     expect(
       validateGhostManifest(
         secret({
           inject: { header: 'Authorization', format: 'Bearer {value}' },
         }),
       ),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('显式声明非空 inject.hosts') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('显式声明非空 inject.hosts'),
+    });
     expect(validateGhostManifest(secret({ url: 'https://api.example.com/keys' }))).toMatchObject({
       ok: false,
       reason: expect.stringContaining('不允许声明 url'),
@@ -223,7 +450,10 @@ describe('Ghost manifest contract', () => {
           input: 'ghost',
         }),
       ),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('不允许标注 input') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('不允许标注 input'),
+    });
   });
 
   it('accepts a gh-cli secret with a settings-managed fallback token', () => {
@@ -319,7 +549,10 @@ describe('Ghost manifest contract', () => {
           },
         }),
       ),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('Authorization: Bearer') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('Authorization: Bearer'),
+    });
     expect(
       validateGhostManifest(
         secret({
@@ -330,14 +563,20 @@ describe('Ghost manifest contract', () => {
           },
         }),
       ),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('只能是 api.github.com') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('只能是 api.github.com'),
+    });
     expect(
       validateGhostManifest(
         secret({
           inject: { header: 'Authorization', format: 'Bearer {value}' },
         }),
       ),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('只能是 api.github.com') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('只能是 api.github.com'),
+    });
     expect(validateGhostManifest(secret({ exchange: {} }))).toMatchObject({
       ok: false,
       reason: expect.stringContaining('不允许声明 exchange'),
@@ -499,7 +738,7 @@ describe('Ghost manifest contract', () => {
         ...validManifest,
         locales: {
           en: 'locales/en.json',
-          fr: 'locales/fr.json',
+          it: 'locales/it.json',
         },
       }),
     ).toMatchObject({
@@ -639,6 +878,7 @@ describe('Ghost manifest contract', () => {
   it('normalizes a representative full capability manifest', () => {
     const result = validateGhostManifest({
       schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION,
+      minCindyVersion: '0.1.61',
       id: 'full-helper',
       name: 'Full Helper',
       version: '2.0.0',
@@ -650,14 +890,21 @@ describe('Ghost manifest contract', () => {
       launch: 'resident',
       settingsHtml: 'settings.html',
       settingsHeight: 320,
-      slots: ['subscribe', 'tool', 'card', 'panel', 'cindy', 'network', 'notify', 'fs'],
+      card: {},
+      notify: true,
+      fs: true,
+      library: true,
       tools: [
         {
           name: 'run_helper',
           description: 'Run the helper.',
           parameters: {
             type: 'object',
-            properties: { input: { type: 'string' } },
+            properties: {
+              input: { type: 'string' },
+              mediaUrl: { type: 'string' },
+              references: { type: 'array', items: { type: 'string' } },
+            },
             required: ['input'],
           },
         },
@@ -689,17 +936,12 @@ describe('Ghost manifest contract', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.manifest.kind).toBe('chip');
-    expect(result.manifest.slots).toEqual([
-      'subscribe',
-      'tool',
-      'card',
-      'panel',
-      'cindy',
-      'network',
-      'notify',
-      'fs',
-    ]);
-    expect(result.manifest).not.toHaveProperty('unknownField');
+    expect(result.manifest).not.toHaveProperty('slots');
+    expect(result.manifest.card).toEqual({});
+    expect(result.manifest.notify).toBe(true);
+    expect(result.manifest.fs).toBe(true);
+    expect(result.manifest.library).toBe(true);
+    expect(result.manifest.unknownField).toBe('ignored');
   });
 
   it('accepts Desktop-supported badge and confirm slots while requiring a badge panel', () => {
@@ -724,6 +966,7 @@ describe('Ghost manifest contract', () => {
   it('accepts the taptap-maker style manifest with node/session-context/pick/preview slots', () => {
     const result = validateGhostManifest({
       schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION,
+      minCindyVersion: '0.1.61',
       id: 'taptap-maker',
       name: 'TapTap Maker',
       version: '2.0.0',
@@ -732,8 +975,10 @@ describe('Ghost manifest contract', () => {
       entry: 'main.js',
       settingsHtml: 'settings.html',
       settingsHeight: 760,
-      slots: ['tool', 'card', 'node', 'session-context', 'pick', 'preview', 'workspace'],
       card: { externalLinks: true },
+      sessionContext: true,
+      pick: true,
+      workspace: true,
       node: {
         entry: 'node/maker-mcp.cjs',
         entries: ['node/account.cjs', 'node/maker-child.cjs'],
@@ -749,15 +994,10 @@ describe('Ghost manifest contract', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.manifest.slots).toEqual([
-      'tool',
-      'card',
-      'node',
-      'session-context',
-      'pick',
-      'preview',
-      'workspace',
-    ]);
+    expect(result.manifest).not.toHaveProperty('slots');
+    expect(result.manifest.sessionContext).toBe(true);
+    expect(result.manifest.pick).toBe(true);
+    expect(result.manifest.workspace).toBe(true);
     expect(result.manifest.node).toEqual({
       entry: 'node/maker-mcp.cjs',
       protocol: 'mcp-stdio',
@@ -770,12 +1010,11 @@ describe('Ghost manifest contract', () => {
     expect(result.manifest.card).toEqual({ externalLinks: true });
   });
 
-  it('round-trips the Host-owned ios-simulator slot with an explicit Cindy version floor', () => {
+  it('keeps minCindyVersion optional for Host-owned slots', () => {
     const manifest = {
       ...validManifest,
       id: 'simulator-workflow',
       name: 'Simulator Workflow',
-      minCindyVersion: '1.2.3',
       slots: ['ios-simulator'],
       tools: undefined,
     } as const;
@@ -785,42 +1024,154 @@ describe('Ghost manifest contract', () => {
     expect(result).toEqual({ ok: true, manifest });
   });
 
-  it('rejects ios-simulator manifests that cannot be version-gated for older Hosts', () => {
+  it('preserves well-formed unknown slots and rejects unsafe slot names', () => {
     const manifest = {
       ...validManifest,
-      slots: ['ios-simulator'],
+      slots: ['future-host-capability'],
       tools: undefined,
     };
 
-    expect(validateGhostManifest(manifest)).toMatchObject({
+    expect(validateGhostManifest(manifest)).toEqual({ ok: true, manifest });
+    for (const slot of ['FutureCapability', 'future capability', 'future/capability', '']) {
+      expect(validateGhostManifest({ ...manifest, slots: [slot] })).toMatchObject({
+        ok: false,
+        reason: expect.stringContaining('格式非法'),
+      });
+    }
+  });
+
+  // 跟对话的任务页:v3 直接声明保留;v2 必须与 task-view 槽成对;入口路径与 mainView 同一套安全约束。
+  it('accepts direct v3 taskView, pairs v2 task-view, and rejects unsafe or missing entries', () => {
+    const direct = {
+      schemaVersion: 3,
+      minCindyVersion: '1.2.3',
+      id: 'direct-task-view',
+      name: 'Direct Task View',
+      version: '1.0.0',
+      entry: 'index.js',
+      taskView: { title: 'Simulator', html: 'ui/task.html' },
+    } as const;
+    expect(validateGhostManifest(direct)).toMatchObject({ ok: true, manifest: { taskView: direct.taskView } });
+    expect(validateGhostManifest({ ...direct, taskView: { html: '../task.html' } }).ok).toBe(false);
+    expect(validateGhostManifest({ ...direct, taskView: { title: 'Simulator' } }).ok).toBe(false);
+    const v2 = { ...validManifest, minCindyVersion: '1.2.3', slots: ['task-view'], tools: undefined, taskView: { html: 'task.html' } };
+    expect(validateGhostManifest(JSON.parse(JSON.stringify(v2)))).toMatchObject({ ok: true });
+    expect(validateGhostManifest({ ...v2, slots: [] }).ok).toBe(false);
+    expect(validateGhostManifest({ ...v2, taskView: undefined }).ok).toBe(false);
+  });
+
+  it('accepts direct v3 mainView and round-trips v2 main-view compatibility', () => {
+    const direct = {
+      schemaVersion: 3,
+      minCindyVersion: '0.1.61',
+      id: 'direct-main-view',
+      name: 'Direct Main View',
+      version: '1.0.0',
+      entry: 'index.js',
+      mainView: {
+        title: 'Workspace',
+        icon: 'globe',
+        html: 'ui/main-view.html',
+      },
+    } as const;
+    const directResult = validateGhostManifest(direct);
+    expect(directResult).toMatchObject({ ok: true, manifest: { mainView: direct.mainView } });
+    if (directResult.ok) expect(directResult.manifest).not.toHaveProperty('slots');
+
+    const manifest = {
+      ...validManifest,
+      minCindyVersion: '1.2.3',
+      slots: ['main-view'],
+      tools: undefined,
+      mainView: {
+        title: 'Workspace',
+        icon: 'globe',
+        html: 'ui/main-view.html',
+      },
+    } as const;
+
+    expect(validateGhostManifest(JSON.parse(JSON.stringify(manifest)))).toEqual({
+      ok: true,
+      manifest,
+    });
+
+    const withoutMin = { ...manifest } as Record<string, unknown>;
+    delete withoutMin.minCindyVersion;
+    expect(validateGhostManifest(withoutMin)).toEqual({ ok: true, manifest: withoutMin });
+  });
+
+  it('keeps v2 main-view paired, rejects unsafe paths and preserves extension fields', () => {
+    const legacyBase = {
+      ...validManifest,
+      minCindyVersion: '1.2.3',
+      slots: ['main-view'],
+      tools: undefined,
+    };
+    expect(validateGhostManifest(legacyBase)).toMatchObject({
       ok: false,
-      reason: expect.stringContaining('minCindyVersion'),
+      reason: expect.stringContaining('mainView'),
     });
     expect(
       validateGhostManifest({
-        ...manifest,
+        ...validManifest,
         minCindyVersion: '1.2.3',
-        slots: ['ios-simulator-control'],
+        mainView: { html: 'main-view.html' },
       }),
     ).toMatchObject({
       ok: false,
-      reason: expect.stringContaining('未知卡槽'),
+      reason: expect.stringContaining('main-view'),
+    });
+    const base = {
+      schemaVersion: 3,
+      minCindyVersion: '0.1.61',
+      id: 'invalid-main-view',
+      name: 'Invalid Main View',
+      version: '1.0.0',
+      entry: 'index.js',
+    } as const;
+    expect(validateGhostManifest({ ...base, mainView: { html: '../escape.html' } }).ok).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...base,
+        mainView: { html: 'main-view.html', icon: 'plugin' },
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('mainView.icon'),
+    });
+    expect(
+      validateGhostManifest({
+        ...base,
+        mainView: { html: 'main-view.html', icon: 'globe-2' },
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('puzzle / globe / code'),
+    });
+    expect(
+      validateGhostManifest({
+        ...base,
+        mainView: { html: 'main-view.html', position: 'left' },
+      }),
+    ).toMatchObject({
+      ok: true,
+      manifest: { mainView: { position: 'left' } },
     });
   });
 
-  it('enforces node slot / detail pairing and entry discipline', () => {
+  it('drops an empty legacy node slot and enforces entry discipline', () => {
     const base = {
       ...validManifest,
       slots: ['tool', 'node'],
     };
     expect(validateGhostManifest(base)).toMatchObject({
-      ok: false,
-      reason: expect.stringContaining('缺少 node 工作进程详单'),
+      ok: true,
+      manifest: { slots: ['tool'] },
     });
     const withNode = (node: Record<string, unknown>) => validateGhostManifest({ ...base, node });
     expect(withNode({ entry: 'node/a.cjs', protocol: 'mcp-stdio', command: 'sh' })).toMatchObject({
-      ok: false,
-      reason: expect.stringContaining('不能声明 command/args/shell/env'),
+      ok: true,
+      manifest: { node: { command: 'sh', entry: 'node/a.cjs', protocol: 'mcp-stdio' } },
     });
     expect(withNode({ entry: '../a.cjs', protocol: 'mcp-stdio' }).ok).toBe(false);
     expect(withNode({ entry: 'index.js', protocol: 'mcp-stdio' })).toMatchObject({
@@ -829,16 +1180,30 @@ describe('Ghost manifest contract', () => {
     });
     expect(withNode({ entry: 'node/a.cjs', protocol: 'bash' }).ok).toBe(false);
     expect(
-      withNode({ entry: 'node/a.cjs', protocol: 'mcp-stdio', entries: ['node/a.cjs'] }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('不能重复主入口') });
+      withNode({
+        entry: 'node/a.cjs',
+        protocol: 'mcp-stdio',
+        entries: ['node/a.cjs'],
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('不能重复主入口'),
+    });
     // 大小写不敏感文件系统上的同名变体必须按同一个文件拒绝。
     expect(withNode({ entry: 'Index.js', protocol: 'mcp-stdio' })).toMatchObject({
       ok: false,
       reason: expect.stringContaining('不能与浏览器沙箱 entry'),
     });
     expect(
-      withNode({ entry: 'node/a.cjs', protocol: 'mcp-stdio', entries: ['node/A.cjs'] }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('不能重复主入口') });
+      withNode({
+        entry: 'node/a.cjs',
+        protocol: 'mcp-stdio',
+        entries: ['node/A.cjs'],
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('不能重复主入口'),
+    });
     expect(
       withNode({
         entry: 'node/a.cjs',
@@ -854,8 +1219,15 @@ describe('Ghost manifest contract', () => {
       }),
     ).toMatchObject({ ok: false, reason: expect.stringContaining('重复入口') });
     expect(
-      withNode({ entry: 'node/a.cjs', protocol: 'mcp-stdio', childSpawn: 'yes' }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('childSpawn 必须是布尔值') });
+      withNode({
+        entry: 'node/a.cjs',
+        protocol: 'mcp-stdio',
+        childSpawn: 'yes',
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('childSpawn 必须是布尔值'),
+    });
     expect(
       withNode({
         entry: 'node/a.cjs',
@@ -863,7 +1235,10 @@ describe('Ghost manifest contract', () => {
         lifecycle: 'resident',
         idleTimeoutSeconds: 60,
       }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('resident 时不能再声明') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('resident 时不能再声明'),
+    });
   });
 
   it('accepts and normalizes method-scoped Node secret bindings', () => {
@@ -902,6 +1277,29 @@ describe('Ghost manifest contract', () => {
     ]);
   });
 
+  it('preserves OAuth references for plugin-local runtime resolution', () => {
+    const manifest = {
+      ...validManifest, settingsHtml: 'settings.html', slots: ['tool', 'network', 'node'],
+      network: { hosts: ['example.test'], secrets: [{
+        key: 'mail_account', label: 'Mail', source: 'oauth',
+        inject: { header: 'Authorization', format: 'Bearer {value}' },
+        oauth: { authorizeUrl: 'https://example.test/auth', tokenUrl: 'https://example.test/token', scopes: ['mail'] },
+      }] },
+      node: { entry: 'node/worker.cjs', protocol: 'json-rpc-stdio', secretBindings: [{
+        key: 'access_token', label: 'Mail', methods: ['run'], oauthSecret: 'mail_account',
+      }] },
+    };
+    const result = validateGhostManifest(manifest);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.manifest.node?.secretBindings?.[0]?.oauthSecret).toBe('mail_account');
+    const missing = structuredClone(manifest);
+    missing.node.secretBindings[0].oauthSecret = 'other_plugin';
+    expect(validateGhostManifest(missing).ok).toBe(true);
+    const staticSource = structuredClone(manifest);
+    staticSource.network.secrets[0].source = 'user';
+    expect(validateGhostManifest(staticSource).ok).toBe(false);
+  });
+
   it('rejects unsafe Node secret bindings and shared credential-key collisions', () => {
     const base = {
       ...validManifest,
@@ -925,13 +1323,22 @@ describe('Ghost manifest contract', () => {
         settingsHtml: undefined,
         node: { ...base.node, secretBindings: [binding] },
       }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('需要 settingsHtml') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('需要 settingsHtml'),
+    });
     expect(
       validateGhostManifest({
         ...base,
-        node: { ...base.node, secretBindings: [{ ...binding, methods: ['bad method'] }] },
+        node: {
+          ...base.node,
+          secretBindings: [{ ...binding, methods: ['bad method'] }],
+        },
       }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('安全方法名') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('安全方法名'),
+    });
     expect(
       validateGhostManifest({
         ...base,
@@ -941,7 +1348,10 @@ describe('Ghost manifest contract', () => {
           secretBindings: [{ ...binding, methods: ['initialize'] }],
         },
       }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('宿主保留的 MCP 方法') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('宿主保留的 MCP 方法'),
+    });
     expect(
       validateGhostManifest({
         ...base,
@@ -983,7 +1393,10 @@ describe('Ghost manifest contract', () => {
           ],
         },
       }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('与 node.secretBindings 撞名') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('与 node.secretBindings 撞名'),
+    });
     expect(
       validateGhostManifest({
         ...base,
@@ -1000,7 +1413,10 @@ describe('Ghost manifest contract', () => {
           ],
         },
       }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('与 node.secretBindings') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('与 node.secretBindings'),
+    });
 
     for (const invalidBinding of [
       { ...binding, key: 'Bad-Key' },
@@ -1009,7 +1425,6 @@ describe('Ghost manifest contract', () => {
       { ...binding, methods: ['mail/action', 'mail/action'] },
       { ...binding, hint: '' },
       { ...binding, url: 'http://mail.example.com/settings' },
-      { ...binding, unexpected: true },
     ]) {
       expect(
         validateGhostManifest({
@@ -1039,15 +1454,18 @@ describe('Ghost manifest contract', () => {
     ).toMatchObject({ ok: false, reason: expect.stringContaining('1–4 条') });
   });
 
-  it('enforces preview slot / hosts pairing and pattern rules', () => {
+  it('drops an empty legacy preview slot and enforces hosts and pattern rules', () => {
     const base = { ...validManifest, slots: ['tool', 'preview'] };
     expect(validateGhostManifest(base)).toMatchObject({
-      ok: false,
-      reason: expect.stringContaining('缺少 preview 详单'),
+      ok: true,
+      manifest: { slots: ['tool'] },
     });
     expect(validateGhostManifest({ ...base, preview: { hosts: [] } }).ok).toBe(false);
     expect(
-      validateGhostManifest({ ...base, preview: { hosts: ['https://x.example.com'] } }).ok,
+      validateGhostManifest({
+        ...base,
+        preview: { hosts: ['https://x.example.com'] },
+      }).ok,
     ).toBe(false);
     expect(
       validateGhostManifest({
@@ -1056,8 +1474,14 @@ describe('Ghost manifest contract', () => {
       }),
     ).toMatchObject({ ok: false, reason: expect.stringContaining('重复域名') });
     expect(
-      validateGhostManifest({ ...validManifest, preview: { hosts: ['maker.taptap.cn'] } }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('未包含 "preview"') });
+      validateGhostManifest({
+        ...validManifest,
+        preview: { hosts: ['maker.taptap.cn'] },
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('未包含 "preview"'),
+    });
     const loopback = validateGhostManifest({
       ...base,
       preview: { hosts: ['localhost', '*.taptap.cn'] },
@@ -1065,33 +1489,38 @@ describe('Ghost manifest contract', () => {
     expect(loopback.ok).toBe(true);
   });
 
-  it('enforces skill slot / items pairing and shape rules', () => {
+  it('drops an empty legacy skill slot and enforces item shape rules', () => {
     const base = { ...validManifest, slots: ['tool', 'skill'] };
     const goodItems = [{ dir: 'skills/foo', name: 'foo', description: '教 Agent 用 foo' }];
-    // 有槽必有详单;有详单必有槽
     expect(validateGhostManifest(base)).toMatchObject({
-      ok: false,
-      reason: expect.stringContaining('缺少 skill 详单'),
+      ok: true,
+      manifest: { slots: ['tool'] },
     });
     expect(validateGhostManifest({ ...validManifest, skill: { items: goodItems } })).toMatchObject({
       ok: false,
       reason: expect.stringContaining('未包含 "skill"'),
     });
     // 合法声明原样收录
-    const good = validateGhostManifest({ ...base, skill: { items: goodItems } });
-    expect(good).toMatchObject({ ok: true, manifest: { skill: { items: goodItems } } });
-    // items 形状:空/超限/非对象/自造字段一律拒
+    const good = validateGhostManifest({
+      ...base,
+      skill: { items: goodItems },
+    });
+    expect(good).toMatchObject({
+      ok: true,
+      manifest: { skill: { items: goodItems } },
+    });
+    // 已知字段校验形状；扩展字段保留但不改变技能安装范围。
     expect(validateGhostManifest({ ...base, skill: { items: [] } }).ok).toBe(false);
     expect(validateGhostManifest({ ...base, skill: {} }).ok).toBe(false);
     expect(validateGhostManifest({ ...base, skill: { items: goodItems, extra: 1 } }).ok).toBe(
-      false,
+      true,
     );
     expect(
       validateGhostManifest({
         ...base,
         skill: { items: [{ ...goodItems[0], scope: 'global' }] },
       }).ok,
-    ).toBe(false);
+    ).toBe(true);
     const five = Array.from({ length: 5 }, (_, i) => ({
       dir: `skills/s${i}`,
       name: `s${i}`,
@@ -1109,7 +1538,9 @@ describe('Ghost manifest contract', () => {
     const item = (patch: Record<string, unknown>) =>
       validateGhostManifest({
         ...base,
-        skill: { items: [{ dir: 'skills/foo', name: 'foo', description: 'x', ...patch }] },
+        skill: {
+          items: [{ dir: 'skills/foo', name: 'foo', description: 'x', ...patch }],
+        },
       });
     // dir:必须是包内安全相对路径
     expect(item({ dir: '../evil' }).ok).toBe(false);
@@ -1143,7 +1574,10 @@ describe('Ghost manifest contract', () => {
           ],
         },
       }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('重复 name') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('重复 name'),
+    });
     expect(
       validateGhostManifest({
         ...base,
@@ -1165,7 +1599,10 @@ describe('Ghost manifest contract', () => {
         description: '按需读取的入门工作流',
       },
     ];
-    const result = validateGhostManifest({ ...validManifest, manual: { items } });
+    const result = validateGhostManifest({
+      ...validManifest,
+      manual: { items },
+    });
     expect(result).toMatchObject({
       ok: true,
       manifest: {
@@ -1193,10 +1630,13 @@ describe('Ghost manifest contract', () => {
 
     expect(validateGhostManifest({ ...validManifest, manual: { items: [] } }).ok).toBe(false);
     expect(validateGhostManifest({ ...validManifest, manual: {} }).ok).toBe(false);
-    expect(validateGhostManifest({ ...validManifest, manual: { items: [], extra: true } }).ok).toBe(
-      false,
-    );
-    expect(item({ extra: true }).ok).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        manual: { items: [], extra: true },
+      }).ok,
+    ).toBe(false);
+    expect(item({ extra: true }).ok).toBe(true);
     const nine = Array.from({ length: 9 }, (_, index) => ({
       dir: `manual/unit-${index}`,
       name: `unit-${index}`,
@@ -1228,7 +1668,10 @@ describe('Ghost manifest contract', () => {
           ],
         },
       }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('重复 name') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('重复 name'),
+    });
     expect(
       validateGhostManifest({
         ...validManifest,
@@ -1245,7 +1688,11 @@ describe('Ghost manifest contract', () => {
   it('intentionally allows nested manual item directories with distinct logical names', () => {
     const items = [
       { dir: 'manual', name: 'overview', description: 'Overview.' },
-      { dir: 'manual/advanced', name: 'advanced', description: 'Advanced topics.' },
+      {
+        dir: 'manual/advanced',
+        name: 'advanced',
+        description: 'Advanced topics.',
+      },
     ];
 
     expect(validateGhostManifest({ ...validManifest, manual: { items } })).toMatchObject({
@@ -1258,14 +1705,20 @@ describe('Ghost manifest contract', () => {
     const withManual = (manifest: Record<string, unknown>, dir: string) =>
       validateGhostManifest({
         ...manifest,
-        manual: { items: [{ dir, name: 'guide', description: 'Manual guide.' }] },
+        manual: {
+          items: [{ dir, name: 'guide', description: 'Manual guide.' }],
+        },
       });
     const declaredFileCases: Array<{
       label: string;
       manifest: Record<string, unknown>;
       dir: string;
     }> = [
-      { label: 'ghost.json', manifest: { ...validManifest }, dir: 'ghost.json' },
+      {
+        label: 'ghost.json',
+        manifest: { ...validManifest },
+        dir: 'ghost.json',
+      },
       {
         label: 'entry',
         manifest: { ...validManifest, entry: 'manual/entry/main.js' },
@@ -1278,7 +1731,10 @@ describe('Ghost manifest contract', () => {
       },
       {
         label: 'settingsHtml',
-        manifest: { ...validManifest, settingsHtml: 'manual/settings/settings.html' },
+        manifest: {
+          ...validManifest,
+          settingsHtml: 'manual/settings/settings.html',
+        },
         dir: 'manual/settings',
       },
       {
@@ -1337,7 +1793,13 @@ describe('Ghost manifest contract', () => {
       ok: true,
       manifest: expect.objectContaining({
         manual: {
-          items: [{ dir: 'manual/guide', name: 'guide', description: 'Manual guide.' }],
+          items: [
+            {
+              dir: 'manual/guide',
+              name: 'guide',
+              description: 'Manual guide.',
+            },
+          ],
         },
       }),
     });
@@ -1352,8 +1814,14 @@ describe('Ghost manifest contract', () => {
       }).ok,
     ).toBe(false);
     expect(
-      validateGhostManifest({ ...validManifest, card: { externalLinks: true } }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('未包含 "card"') });
+      validateGhostManifest({
+        ...validManifest,
+        card: { externalLinks: true },
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('未包含 "card"'),
+    });
     const normalizedCard = validateGhostManifest({
       ...validManifest,
       slots: ['tool', 'card'],
@@ -1368,7 +1836,10 @@ describe('Ghost manifest contract', () => {
         slots: ['tool', 'agent'],
         agent: { background: false },
       }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('background: true') });
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('background: true'),
+    });
     const backgroundAgent = validateGhostManifest({
       ...validManifest,
       slots: ['tool', 'agent'],
@@ -1408,17 +1879,41 @@ describe('Ghost manifest contract', () => {
       if (!rejected.ok) expect(rejected.reason).toContain('仅停靠形态');
     }
 
-    // top/bottom 仍收词明确拒绝,野值仍拒。
-    const pending = validateGhostManifest(withPanel({ position: 'top' }));
-    expect(pending.ok).toBe(false);
-    if (!pending.ok) expect(pending.reason).toContain('暂未支持');
+    // 四条边都是真实的页签组位置(与 Desktop 校验一致),野值仍拒。
+    for (const side of ['left', 'right', 'top', 'bottom'] as const) {
+      const ok = validateGhostManifest(withPanel({ position: side }));
+      expect(ok.ok, side).toBe(true);
+      if (ok.ok) expect(ok.manifest.panel?.position).toBe(side);
+    }
     expect(validateGhostManifest(withPanel({ position: 'center' })).ok).toBe(false);
+  });
+
+  it('mainView.open / side / multiple 与 Desktop 校验一致:合法保留,野值与错配拒', () => {
+    const withView = (mainView: Record<string, unknown>) =>
+      validateGhostManifest({
+        schemaVersion: 3,
+        minCindyVersion: '0.1.61',
+        id: 'view-helper',
+        name: 'View Helper',
+        version: '1.0.0',
+        entry: 'main.js',
+        mainView: { html: 'main-view.html', ...mainView },
+      });
+    const ok = withView({ open: 'sidebar', side: 'bottom', multiple: true });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) {
+      expect(ok.manifest.mainView).toMatchObject({ open: 'sidebar', side: 'bottom', multiple: true });
+    }
+    expect(withView({ open: 'popup' }).ok).toBe(false);
+    expect(withView({ open: 'page', side: 'left' }).ok).toBe(false);
+    expect(withView({ open: 'sidebar', side: 'middle' }).ok).toBe(false);
+    expect(withView({ multiple: false }).ok).toBe(false);
   });
 });
 
 describe('cindy 详单:media/text/embed/search 类目与 oneshotModel 校验', () => {
   const base = {
-    schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION,
+    schemaVersion: 2,
     id: 'cindy-full',
     name: 'Cindy Full',
     version: '1.0.0',
@@ -1433,12 +1928,16 @@ describe('cindy 详单:media/text/embed/search 类目与 oneshotModel 校验', (
     });
     expect(r.ok, r.ok ? '' : String(r.reason)).toBe(true);
     if (!r.ok) return;
-    expect(r.manifest.cindy).toEqual({ media: ['deposit'], text: ['oneshot'], embed: ['text'] });
+    expect(r.manifest.cindy).toEqual({
+      media: ['deposit'],
+      text: ['oneshot'],
+      embed: ['text'],
+    });
   });
 
-  it('text 与 embed 的动作集各归各(不接受串用)', () => {
-    expect(validateGhostManifest({ ...base, cindy: { text: ['text'] } }).ok).toBe(false);
-    expect(validateGhostManifest({ ...base, cindy: { embed: ['oneshot'] } }).ok).toBe(false);
+  it('保留当前类目尚未实现的动作，不替换或映射到其它类目', () => {
+    expect(validateGhostManifest({ ...base, cindy: { text: ['text'] } })).toMatchObject({ ok: true, manifest: { cindy: { text: ['text'] } } });
+    expect(validateGhostManifest({ ...base, cindy: { embed: ['oneshot'] } })).toMatchObject({ ok: true, manifest: { cindy: { embed: ['oneshot'] } } });
   });
 
   it('接受 search.web 并要求真实工具声明', () => {
@@ -1453,7 +1952,7 @@ describe('cindy 详单:media/text/embed/search 类目与 oneshotModel 校验', (
     if (accepted.ok) expect(accepted.manifest.cindy).toEqual({ search: ['web'] });
 
     expect(validateGhostManifest({ ...base, cindy: { search: ['web'] } }).ok).toBe(false);
-    expect(validateGhostManifest({ ...manifest, cindy: { search: ['deep'] } }).ok).toBe(false);
+    expect(validateGhostManifest({ ...manifest, cindy: { search: ['deep'] } }).ok).toBe(true);
     expect(validateGhostManifest({ ...manifest, cindy: { search: [] } }).ok).toBe(false);
     expect(validateGhostManifest({ ...manifest, cindy: { search: ['web', 'web'] } }).ok).toBe(
       false,
@@ -1467,7 +1966,10 @@ describe('cindy 详单:media/text/embed/search 类目与 oneshotModel 校验', (
     });
     expect(ok.ok, ok.ok ? '' : String(ok.reason)).toBe(true);
     if (ok.ok)
-      expect(ok.manifest.cindy).toEqual({ text: ['oneshot'], oneshotModel: 'codex/gpt-5.5' });
+      expect(ok.manifest.cindy).toEqual({
+        text: ['oneshot'],
+        oneshotModel: 'codex/gpt-5.5',
+      });
 
     for (const bad of [
       { text: ['oneshot'], oneshotModel: '' },
@@ -1480,5 +1982,258 @@ describe('cindy 详单:media/text/embed/search 类目与 oneshotModel 校验', (
       const rejected = validateGhostManifest({ ...base, cindy: bad });
       expect(rejected.ok, JSON.stringify(bad)).toBe(false);
     }
+  });
+});
+
+describe('agent.hiddenTasks declaration', () => {
+  const v3 = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'bg-tasks', name: 'Background', version: '1.0.0', entry: 'main.js' };
+  it('accepts it only together with agent.tasks', () => {
+    const ok = validateGhostManifest({ ...v3, agent: { tasks: true, hiddenTasks: true } });
+    expect(ok.ok && ok.manifest.agent).toEqual({ tasks: true, hiddenTasks: true });
+    expect(validateGhostManifest({ ...v3, agent: { hiddenTasks: true } }).ok).toBe(false);
+    expect(validateGhostManifest({ ...v3, agent: { tasks: true, hiddenTasks: 'yes' } }).ok).toBe(false);
+    const visible = validateGhostManifest({ ...v3, agent: { tasks: true, hiddenTasks: false } });
+    expect(visible.ok && visible.manifest.agent).toEqual({ tasks: true });
+  });
+});
+
+// New target access is not implied by the old plugin-owned tasks declaration.
+it('validates independent target access without dropping the tasks dependency', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'target-test', name: 'Targets', version: '1.0.0', entry: 'main.js' };
+  const approved = validateGhostManifest({ ...base, agent: { tasks: true, targets: true } });
+  expect(approved.ok && approved.manifest.agent).toEqual({ tasks: true, targets: true });
+  expect(validateGhostManifest({ ...base, agent: { targets: true } }).ok).toBe(false);
+  expect(validateGhostManifest({ ...base, agent: { tasks: true, targets: 'yes' } }).ok).toBe(false);
+  const disabled = validateGhostManifest({ ...base, agent: { tasks: true, targets: false } });
+  expect(disabled.ok && disabled.manifest.agent).toEqual({ tasks: true });
+});
+
+// Read-only observation is standalone; a non-boolean value must not install.
+it('validates read-only observe access without a tasks dependency', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'observe-test', name: 'Observe', version: '1.0.0', entry: 'main.js' };
+  const approved = validateGhostManifest({ ...base, agent: { observe: true } });
+  expect(approved.ok && approved.manifest.agent).toEqual({ observe: true });
+  expect(validateGhostManifest({ ...base, agent: { observe: 'yes' } }).ok).toBe(false);
+  expect(validateGhostManifest({ ...base, agent: { observe: false } }).ok).toBe(false);
+});
+
+// Companion viewing is standalone; a non-boolean value must not install.
+it('validates companion viewing without a tasks dependency', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'companions-test', name: 'Companions', version: '1.0.0', entry: 'main.js' };
+  const approved = validateGhostManifest({ ...base, agent: { companions: true } });
+  expect(approved.ok && approved.manifest.agent).toEqual({ companions: true });
+  expect(validateGhostManifest({ ...base, agent: { companions: 1 } }).ok).toBe(false);
+  expect(validateGhostManifest({ ...base, agent: { companions: false } }).ok).toBe(false);
+});
+
+describe('package release notes', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'notes-test', name: 'Notes test', version: '1.0.0', entry: 'main.js' };
+  it('keeps old packages without notes installable', () => {
+    const result = validateGhostManifest(base);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.manifest).not.toHaveProperty('releaseNotes');
+  });
+  it('retains the complete package text without turning it into manifest summary', () => {
+    const releaseNotes = 'First change\nSecond change\n' + 'More changes '.repeat(500);
+    const result = validateGhostManifest({ ...base, releaseNotes });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.manifest.releaseNotes).toBe(releaseNotes);
+  });
+  it('rejects a non-text package releaseNotes', () => {
+    expect(validateGhostManifest({ ...base, releaseNotes: { version: '1' } }).ok).toBe(false);
+  });
+});
+
+// ui is a preserved v3 capability, not a change to existing tool declarations.
+// The old top-level extension tests cover preservation; these cases protect the new
+// page/reference/path/domain authority at the production validator. Tier: unit.
+describe('interactive page declarations', () => {
+  const base = { ...validManifest, schemaVersion: 3, slots: undefined, minCindyVersion: '0.1.0',
+    network: { hosts: ['api.example.com'] },
+    mcpApps: { ui: { resources: [{
+            uri: "ui://planner",
+            file: 'ui/planner.html',
+            csp: { connectDomains: ['https://api.example.com'] }
+        }], tools: { help: { resourceUri: "ui://planner", visibility: ['model', 'app'] } } } } };
+  it('preserves top-level pages while leaving the original tool declaration unchanged', () => {
+    const original = validateGhostManifest({ ...base, mcpApps: undefined });
+    const result = validateGhostManifest(base);
+    expect(result.ok).toBe(true);
+    if (!result.ok || !original.ok) throw new Error('invalid fixture');
+    expect(result.manifest.mcpApps).toEqual(base.mcpApps);
+    expect(result.manifest.tools).toEqual(original.manifest.tools);
+    expect(validateGhostManifest({ ...base, mcpApps: { ui: { resources: [], tools: { help: { visibility: ['app'] } } } } }).ok).toBe(true);
+  });
+  // New host placements reference the same resource catalog. They must not
+  // require a dummy business tool or accept references outside that catalog.
+  it('accepts a resource-only named view without changing existing tool declarations', () => {
+    const mcpApps = { ui: { resources: base.mcpApps.ui.resources, tools: {} }, host: {
+      views: [{ id: 'workspace', title: 'Workspace', resourceUri: 'ui://planner', scope: 'global' }],
+      contributions: [{ id: 'open', title: 'Open workspace', position: 'composer.toolbar', view: 'workspace' }],
+    } };
+    expect(validateGhostManifest({ ...base, mcpApps })).toMatchObject({ ok: true, manifest: { mcpApps } });
+  });
+  it('includes a declared message menu action in explicit host approval', () => {
+    const host = { contributions: [{ id: 'help-menu', title: 'Help', position: 'message.menu', tool: 'help' }] };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
+    expect(hostUiApprovalSubjects(host)).toContainEqual(expect.objectContaining({ key: 'contribution:help-menu' }));
+  });
+  it('validates appearance resource declarations and grants only known fields', () => {
+    const host = { capabilities: ['appearance', 'app-icon'], appearance: { fields: ['bodyFont', 'appIcon', 'future-field'],
+      resources: [{ id: 'font', kind: 'font' as const, path: 'assets/font.woff2' }] } };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
+    expect(hostUiApprovalSubjects(host).map(subject => subject.key)).toEqual([
+      'capability:appearance', 'appearance:bodyFont', 'appearance-resource:font',
+    ]);
+    for (const path of ['../font.woff2', '/font.woff2', 'assets/../../font.woff2']) {
+      expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps,
+        host: { ...host, appearance: { ...host.appearance, resources: [{ id: 'font', kind: 'font', path }] } },
+      } }).ok).toBe(false);
+    }
+  });
+  it('requires renewed approval to present a view in an entry popover', () => {
+    const entry = { id: 'open', title: 'Open', position: 'composer.toolbar', view: 'board' };
+    const host = { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://planner' }], contributions: [entry] };
+    const popup = { ...host, contributions: [{ ...entry, presentation: 'popover' as const }] };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host: popup } }).ok).toBe(true);
+    expect(hostUiApprovalSubjects(popup)).not.toEqual(hostUiApprovalSubjects(host));
+    for (const position of ['message.menu', 'message.body', 'tool.body'])
+      expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps,
+        host: { ...popup, contributions: [{ ...popup.contributions[0], position }] },
+      } }).ok).toBe(false);
+  });
+  it.each([
+    { kind: 'status' },
+    { kind: 'select', tool: 'help', options: [{ label: 'Help', value: 'help' }] },
+  ])('rejects a non-action message menu declaration: %j', declaration => {
+    const host = { contributions: [{ id: 'help-menu', title: 'Help', position: 'message.menu', ...declaration }] };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(false);
+  });
+  it.each([
+    { views: [{ id: 'workspace', title: 'Workspace', resourceUri: 'ui://missing', scope: 'global' }] },
+    { views: [{ id: '../escape', title: 'Workspace', resourceUri: 'ui://planner', scope: 'global' }] },
+    { contributions: [{ id: 'open', title: 'Open', position: 'composer.toolbar', view: 'missing' }] },
+    { contributions: [{ id: 'open', title: 'Open', position: 'message.body', tool: 'help' }] },
+    { contributions: [{ id: 'one', title: 'One', position: 'composer.toolbar', tool: 'missing' }] },
+    { capabilities: ['context', 'context'] },
+  ])('rejects invalid host UI authority: %j', host => {
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(false);
+  });
+  it.each([
+    { resources: [{
+            uri: "ui://planner",
+            file: '../outside.html'
+        }], tools: base.mcpApps.ui.tools },
+    { resources: base.mcpApps.ui.resources, tools: { missing: { resourceUri: "ui://planner" } } },
+    { resources: base.mcpApps.ui.resources, tools: { help: { resourceUri: "ui://unknown" } } },
+    { resources: [{
+            uri: "ui://planner",
+            file: 'ui/planner.html',
+            csp: { resourceDomains: ['https://outside.example'] }
+        }], tools: base.mcpApps.ui.tools },
+    { resources: base.mcpApps.ui.resources, tools: { help: { visibility: ['admin'] } } },
+    { resources: [{
+            uri: "ui://planner",
+            file: 'ui/planner.html',
+            csp: { connectDomains: null }
+        }], tools: base.mcpApps.ui.tools },
+    { resources: [{
+            uri: "ui://planner",
+            file: 'ui/planner.html',
+            csp: { connectDomains: ['https://api.example.com; unsafe-inline'] }
+        }], tools: base.mcpApps.ui.tools },
+  ])('rejects invalid page authority: %j', ui => {
+    expect(validateGhostManifest({ ...base, mcpApps: { ui } }).ok).toBe(false);
+  });
+  // Declared mcpApps extensions must survive normalization without becoming authority.
+  // Minimal inputs distinguish duplicate IDs, wrong URI scheme and inert standard metadata.
+  it('preserves future extensions and standard resource metadata without granting them', () => {
+    const resource = { ...base.mcpApps.ui.resources[0], domain: 'app.example.com', permissions: { camera: {} } };
+    const mcpApps = { future: { enabled: true }, ui: { ...base.mcpApps.ui, resources: [resource] } };
+    const result = validateGhostManifest({ ...base, mcpApps });
+    expect(result).toMatchObject({ ok: true, manifest: { mcpApps } });
+    expect(validateGhostManifest({ ...base, mcpApps: { future: { enabled: true } } })).toMatchObject({ ok: true });
+  });
+  it.each([
+    { uri: 'https://planner' }, { uri: 'ui://' }, { domain: false },
+    { permissions: { camera: true } }, { permissions: { camera: { allow: true } } },
+  ])('rejects malformed resource metadata: %j', patch => {
+    const resources = [{ ...base.mcpApps.ui.resources[0], ...patch }];
+    expect(validateGhostManifest({ ...base, mcpApps: { ui: { ...base.mcpApps.ui, resources } } }).ok).toBe(false);
+  });
+  it('rejects duplicate resource URIs even when their files differ', () => {
+    const resources = [base.mcpApps.ui.resources[0], { ...base.mcpApps.ui.resources[0], file: 'other.html' }];
+    expect(validateGhostManifest({ ...base, mcpApps: { ui: { ...base.mcpApps.ui, resources } } }).ok).toBe(false);
+  });
+  it('does not silently add page capabilities to schema v2', () => {
+    expect(validateGhostManifest({ ...base, schemaVersion: 2 }).ok).toBe(false);
+  });
+});
+
+// Unit: historical unknown mcpApps must stay inert; the strict authoring validator
+// already rejects these values, but capability checks previously accepted traversal.
+it.each(['../page.html', '/page.html', 'ui/../page.html', 'ui\\page.html', 'con.html'])(
+  'does not grant any page authority for historical path %s', file => {
+    const manifest = { schemaVersion: 3, tools: [{ name: 'help' }], network: { hosts: ['api.example.com'] },
+      mcpApps: { ui: { resources: [{ uri: 'ui://help', file, csp: { connectDomains: ['https://api.example.com'] } }],
+        tools: { help: { resourceUri: 'ui://help', visibility: ['app'] } } } } };
+    expect(getPluginToolUi(manifest)).toBeUndefined();
+    expect(pluginHasToolUi(manifest)).toBe(false);
+    expect(pluginToolVisible(manifest, 'help', 'model')).toBe(true);
+    expect(pluginToolVisible(manifest, 'help', 'app')).toBe(false);
+    expect(pluginUiDomains(manifest)).toEqual([]);
+    expect(pluginUiPermissionsExpand({}, manifest)).toBe(false);
+    const valid = { ...manifest, mcpApps: { ui: { ...manifest.mcpApps.ui, resources: [{ uri: 'ui://help', file: 'page.html' }] } } };
+    expect(pluginUiPermissionsExpand(manifest, valid)).toBe(true);
+  },
+);
+
+it('keeps a liveScreen declaration as a granted capability only in v3', () => {
+  const base = {
+    schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION,
+    minCindyVersion: '0.1.116',
+    id: 'sim',
+    name: 'Simulator',
+    version: '1.0.0',
+    entry: 'main.js',
+    node: { entry: 'node/worker.cjs', protocol: 'json-rpc-stdio' },
+  };
+  const declared = validateGhostManifest({ ...base, liveScreen: true });
+  expect(declared.ok && declared.manifest.liveScreen).toBe(true);
+  const absent = validateGhostManifest(base);
+  expect(absent.ok && absent.manifest).not.toHaveProperty('liveScreen');
+  // Without a node worker the declaration could never run: refuse it at install.
+  const { node: _node, ...withoutNode } = base;
+  expect(validateGhostManifest({ ...withoutNode, liveScreen: true }).ok).toBe(false);
+});
+
+describe('tool approval declaration', () => {
+  it.each(['auto', 'each-call'] as const)('retains %s through protocol normalization', (approval) => {
+    const raw = { ...validManifest, tools: [{ name: 'run', description: 'Run', approval }] };
+    const result = validateGhostManifest(raw);
+    expect(result).toMatchObject({ ok: true, manifest: { tools: raw.tools } });
+    if (result.ok) expect(validateGhostManifest(result.manifest)).toEqual(result);
+  });
+  it('rejects an unknown approval policy', () => {
+    expect(validateGhostManifest({ ...validManifest, tools: [{ name: 'run', description: 'Run', approval: 'bypass' }] }))
+      .toMatchObject({ ok: false });
+  });
+});
+
+describe('readme declarations', () => {
+  // 作者契约(FORGE_GUIDE §2「详细介绍」):readme 规范化保留在 manifest 上,与已声明文件冲突时拒绝。
+  it('keeps a valid readme map and rejects paths that collide with other declared files', () => {
+    const readme = { en: 'README.md', 'zh-CN': 'README.zh-CN.md' };
+    expect(validateGhostManifest({ ...validManifest, readme })).toMatchObject({
+      ok: true,
+      manifest: { readme },
+    });
+    expect(
+      validateGhostManifest({
+        ...validManifest,
+        manual: { items: [{ dir: 'docs', name: 'docs', description: 'Docs' }] },
+        readme: { en: 'docs/README.md' },
+      }),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining('readme.en') });
   });
 });

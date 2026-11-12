@@ -15,9 +15,8 @@
  * 上,执行器(run.ts)与主机侧的按型号校验(cindy-brain 的
  * getGhostVideoCapabilities)取的都是 `provider.capabilities` —— 是 per-provider
  * 而不是 per-alias。所以把 2.5 挂成 2.0 的第三个 alias 时,它会**整份继承 2.0 的
- * 值域**,而两代的值域差得很远,四个后果都是真的:
+ * 值域**,而两代的值域差得很远,三个后果都是真的:
  *   - 时长被 2.0 的 [4,6,8,10] 卡住,2.5 的 4–30 长片一律明拒;
- *   - 1080p 被放行,而 2.5 只出到 720p,等于放过一个必然被上游拒的值;
  *   - 画幅没有 `adaptive`,首帧/首尾帧单子只能带着具体 `--ratio` 提交;
  *   - 后缀串照 2.0 的口径写 `--fps`,而方舟弱校验白名单里压根没有这一项。
  * 反向也成立:2.5 的宽值域挤进同一份 capabilities 就会替 2.0 放宽(2.0 收到
@@ -129,8 +128,9 @@ const SEEDANCE_25_DURATIONS: ReadonlyArray<number> = Array.from(
  *   - 时长放宽到 4–30(2.0 只有 4/6/8/10)。**不支持 `-1`**(上游的"智能选时长"):
  *     协议层 cindySlot 用 isPositiveIntWithin 收口,负数进不来,而 -1 主要服务于
  *     本次没接的视频编辑任务。
- *   - **没有 1080p**。2.5 只出 480p / 720p,所以这里不能照抄 2.0 的三档 ——
- *     抄了就会放行一个必然被上游拒的分辨率。
+ *   - 分辨率 480p / 720p / 1080p。2.5 上线 API 时只有前两档,方舟 2026-08-17 起
+ *     开放原生 1080p(H.265 编码);2026-10-30 经 XD Gateway 实测 9:16 出
+ *     1080×1920。
  *   - **`adaptive` 只当默认值,不进 `supportedRatios`**。它是 2.5 的上游默认
  *     (输出跟随输入自适应),但协议层的 GHOST_VIDEO_RATIOS 是闭集、不含它,
  *     插件显式传会先被 cindySlot 的粗筛拒掉("未知视频画幅")。所以列进
@@ -159,7 +159,7 @@ const CAPABILITIES_25: VideoProviderCapabilities = {
     },
   ],
   supportedDurations: SEEDANCE_25_DURATIONS,
-  supportedResolutions: ['480p', '720p'],
+  supportedResolutions: ['480p', '720p', '1080p'],
   supportedRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
   supportedFps: [24],
   maxImagesByRefMode: {

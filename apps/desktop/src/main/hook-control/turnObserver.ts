@@ -21,14 +21,16 @@
  * 本模块只碰事件流与定时器, 不做 IO —— 图片旁路、附件收集、落库都留在调用方。
  */
 
-import type { AgentEvent, TurnContinuationState } from '@cindy/maker-core';
+import type { AgentEvent, SendOrigin, TurnContinuationState } from '@cindy/maker-core';
 import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 
 import {
   createTurnPresenter,
   type ProgressBodyMode,
 } from '../im/shared/turnPresenter.js';
-import { overloadFailureNotice } from '../im/shared/turnRetryNotice.js';
+import { buildActivityRecord, type TurnActivityRecord } from '../im/shared/turnActivity.js';
+import { terminalErrorText } from '../im/shared/turnRetryNotice.js';
+import { isImSubagentEvent } from '../im/shared/agentEventScope.js';
 
 /*
  * ── 为什么这里**没有**整轮静默兜底 ──────────────────────────────────────────
@@ -92,8 +94,8 @@ export interface HookTurnObserverDeps {
   flushProgressOnDone?: boolean;
   /** tool_result 全文旁路(出站图片收集留在调用方, 观察器不碰 IO)。 */
   onToolResult?: (fullText: string) => void;
-  /** 完整 turn（含后台续跑）收口时同步通知，早于 finished settle。 */
-  onTurnTerminal?: () => void;
+  /** 完整 turn（含后台续跑）收口时同步通知，早于 finished settle；附这一轮最后见到的来源。 */
+  onTurnTerminal?: (origin: SendOrigin | undefined) => void;
   /** silent-stop 自动续跑守卫的 settle 订阅(生产为 maker-ipc 的同名函数)。 */
   onSilentStopSettled: (
     sessionId: string,
@@ -105,6 +107,10 @@ export interface HookTurnObserverDeps {
 export interface HookTurnObserver {
   /** done(含后台任务定格)时 resolve; 终态错误 / silent-stop 耗尽时 reject。 */
   readonly finished: Promise<void>;
+  /** Stable reason from the terminal error; available after teardown. */
+  readonly errorReason: string | null;
+  /** 终态错误事件的原始 data(未映射); 调用方按需补上下文重新组织失败说明。 */
+  readonly errorData: unknown;
   /** 摘监听 + 停止发射。幂等; 收口后自动调用过。 */
   stop(): void;
   /** 真正的新交互请求边界；等待提示的后续文案更新不得重复调用。 */
@@ -113,6 +119,8 @@ export interface HookTurnObserver {
   text(): string;
   /** 按桌面消息流同款折叠规则得到的正式答复正文。 */
   finalText(): string;
+  /** 这一轮的过程记录(全部工作项); 没有工作项的快答为 null。 */
+  processRecord(): TurnActivityRecord | null;
   /**
    * 在过程区挂 / 摘一行状态说明(渲染成 `> ⏳ …`, 与过载重试同一个位置)。
    *
@@ -152,6 +160,9 @@ export function observeHookTurn(
     progressBodyMode,
   });
 
+  let errorReason: string | null = null;
+  let errorData: unknown = null;
+  let turnOrigin: SendOrigin | undefined;
   let stopListening: (() => void) | undefined;
   const finished = new Promise<void>((resolve, reject) => {
     let turnTerminalNotified = false;
@@ -161,7 +172,7 @@ export function observeHookTurn(
       if (turnTerminalNotified) return;
       turnTerminalNotified = true;
       try {
-        onTurnTerminal?.();
+        onTurnTerminal?.(turnOrigin);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         log.warn(`[hook-runner] onTurnTerminal failed: ${message}`);
@@ -198,10 +209,17 @@ export function observeHookTurn(
       failTurn(new Error(`hook turn session ended without a terminal event (${status})`));
     });
     const off = session.onEvent((ev: AgentEvent) => {
+      if (isImSubagentEvent(ev) || ev.turnScope === 'background') return;
+      if (ev.turnOrigin) turnOrigin = ev.turnOrigin;
       if (ev.type === 'text') {
         // 正文累积(isFinal 逐条契约 / 定稿段按消息切开 / fallbackTail 自成段 /
         // uuid 缺失退 requestId)都在 presenter 的 finalized-segments 策略里。
         if (presenter.applyText(ev)) presenter.scheduleProgress();
+        return;
+      }
+      if (ev.type === 'status') {
+        // 只记头部 tok/s; 由进度 ticker 带出, 不为速度读数单独占用发帧配额。
+        presenter.applyStatus(ev);
         return;
       }
       if (ev.type === 'thinking') {
@@ -294,17 +312,23 @@ export function observeHookTurn(
           message?: string;
           errorStatus?: number;
           codexErrorInfo?: string;
+          reason?: unknown;
         } | null;
+        errorReason = typeof data?.reason === 'string' ? data.reason : null;
+        errorData = data;
+        // Seal the already received text before teardown; trailing done is no
+        // longer observed once the terminal error rejects finished.
+        if (errorReason === 'output-limit') presenter.seal();
         const raw = data?.message ?? 'agent terminal error';
         // 过载重试耗尽: 渠道里发裸英文原文(server 侧再前缀成 "Task failed:")
         // 等于把内部串丢给用户, 且没说清"怎么才能真的重试"。换成可读说明,
         // 原文留在本地日志里供排查。结构化 tag 一并传: 只认文案时 codex 改措辞
         // 会让这条终态说明退回裸英文原文(#1022)。
-        const friendly = overloadFailureNotice(raw, data?.errorStatus, data?.codexErrorInfo);
-        if (friendly !== null) {
-          log.warn(`hook turn failed (upstream overload): ${raw}`);
+        const friendly = terminalErrorText(data, { surface: 'official' });
+        if (friendly !== raw) {
+          log.warn(`hook turn failed (mapped channel error): ${raw}`);
         }
-        failTurn(new Error(friendly ?? raw));
+        failTurn(new Error(friendly));
       }
     });
     stopListening = teardown;
@@ -314,6 +338,8 @@ export function observeHookTurn(
 
   return {
     finished,
+    get errorReason() { return errorReason; },
+    get errorData() { return errorData; },
     stop(): void {
       stopListening?.();
       stopListening = undefined;
@@ -338,6 +364,9 @@ export function observeHookTurn(
     },
     finalText(): string {
       return presenter.finalText();
+    },
+    processRecord(): TurnActivityRecord | null {
+      return buildActivityRecord(presenter.activity, Date.now());
     },
   };
 }

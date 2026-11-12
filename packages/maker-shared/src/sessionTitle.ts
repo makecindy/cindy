@@ -21,6 +21,9 @@
  */
 export const DEFAULT_DRAFT_SESSION_TITLE = 'New Maker';
 
+/** AI 标题与自动占位的统一上限，按 Unicode code point 计数。 */
+export const AUTO_TITLE_MAX_CHARS = 40;
+
 /**
  * 自动标题的统一归一化:折叠空白 → trim → 截断 40 字。先 trim 再截断,避免前导
  * 大量空白吃满长度后得到空标题。
@@ -28,7 +31,15 @@ export const DEFAULT_DRAFT_SESSION_TITLE = 'New Maker';
  * 落库出口、占位覆写方与 renderer 的乐观预览都用它算出同一个串。
  */
 export function normalizeAutoTitle(text: string): string {
-  return text.replace(/\s+/g, ' ').trim().slice(0, 40).trimEnd();
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  let title = '';
+  let count = 0;
+  // User messages can be very large; collect only the title's code points.
+  for (const char of normalized) {
+    title += char;
+    if (++count === AUTO_TITLE_MAX_CHARS) break;
+  }
+  return title.trimEnd();
 }
 
 /**
@@ -60,4 +71,34 @@ export function projectDraftSessionTitle(
 ): string {
   if (isDefaultDraftSessionTitle(title) && unnamedLabel) return unnamedLabel;
   return title ?? '';
+}
+
+/**
+ * 新建任务第一帧该显示的标题。有用户文字就用原文截断;没有文字时才用附件名 /
+ * 类别词。算不出任何东西时返回空串,调用方再落到哨兵的显示层兜底。
+ *
+ * 桌面乐观预览、手机合成行、远程临时行共用这一份,避免「先亮未命名任务、再跳成
+ * 用户那句话」。mention / 引用的权威剔除仍在 desktop `deriveAutoTitleSeed`;
+ * 这里只处理调用方已经确认可当标题的素材。
+ */
+function optimisticFileBaseName(name: string): string {
+  return name.split(/[\\/]/).pop() ?? '';
+}
+
+export function deriveOptimisticSessionTitle(input: {
+  text?: string | null;
+  fileNames?: readonly string[] | null;
+  imageLabel?: string | null;
+  fileLabel?: string | null;
+  firstFileIsImage?: boolean;
+}): string {
+  const fromText = normalizeAutoTitle(input.text ?? '');
+  if (fromText) return fromText;
+  for (const name of input.fileNames ?? []) {
+    const fromFile = normalizeAutoTitle(optimisticFileBaseName(name));
+    if (fromFile) return fromFile;
+  }
+  if (input.firstFileIsImage) return normalizeAutoTitle(input.imageLabel ?? '');
+  if ((input.fileNames?.length ?? 0) > 0) return normalizeAutoTitle(input.fileLabel ?? '');
+  return '';
 }

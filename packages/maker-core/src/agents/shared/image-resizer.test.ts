@@ -43,17 +43,21 @@ describe("ImageResizer private cache", () => {
   });
 
   it("refuses a symlink in place of the cache directory", async () => {
-    if (process.platform === "win32") return;
     const root = await tempDir();
     const target = path.join(root, "attacker-readable");
     const cacheDir = path.join(root, "cache-link");
     await fs.mkdir(target, { mode: 0o755 });
-    await fs.symlink(target, cacheDir);
+    const targetMode = (await fs.stat(target)).mode & 0o777;
+    await fs.symlink(
+      target,
+      cacheDir,
+      process.platform === "win32" ? "junction" : "dir",
+    );
 
     const resizer = new ImageResizer({ cacheDir });
     await expect(resizer.process("/does/not/matter.png")).resolves.toBe(
       "/does/not/matter.png",
     );
-    expect((await fs.stat(target)).mode & 0o777).toBe(0o755);
+    expect((await fs.stat(target)).mode & 0o777).toBe(targetMode);
   });
 });

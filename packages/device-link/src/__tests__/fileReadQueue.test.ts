@@ -1,0 +1,45 @@
+import { expect, it, vi } from 'vitest';
+import { createFileReadQueue } from '../fileAccess';
+it('queues busy peers, permits other peers and recovers after failure', async () => {
+  const run = createFileReadQueue();
+  let release!: () => void;
+  const first = run('peer', () => new Promise<void>((resolve) => { release = resolve; }));
+  const second = vi.fn(async () => { throw new Error('transfer failed'); });
+  const rejected = expect(run('peer', second)).rejects.toThrow('transfer failed');
+  expect(await run('other-peer', async () => 'other')).toBe('other');
+  expect(second).not.toHaveBeenCalled();
+  release();
+  await first;
+  await rejected;
+  expect(await run('peer', async () => 'reused')).toBe('reused');
+});
+it('cancels queued work without interrupting the active reader', async () => {
+  const run = createFileReadQueue();
+  let release!: () => void;
+  const first = run('peer', () => new Promise<void>((resolve) => { release = resolve; }));
+  const controller = new AbortController();
+  const read = vi.fn();
+  const rejected = expect(run('peer', read, controller.signal)).rejects.toThrow('FILE_PEER_CANCELLED');
+  controller.abort();
+  await rejected;
+  release();
+  await first;
+  await run('peer', async () => {});
+  expect(read).not.toHaveBeenCalled();
+});
+it('awaits running cleanup on cancellation before releasing the queue', async () => {
+  const run = createFileReadQueue();
+  const controller = new AbortController();
+  let finish!: () => void;
+  const first = run('peer', () => new Promise<void>((resolve) => { finish = resolve; }), controller.signal);
+  await Promise.resolve();
+  controller.abort();
+  const next = vi.fn(async () => {});
+  const second = run('peer', next);
+  await Promise.resolve();
+  expect(next).not.toHaveBeenCalled();
+  finish();
+  await first;
+  await second;
+  expect(next).toHaveBeenCalledOnce();
+});

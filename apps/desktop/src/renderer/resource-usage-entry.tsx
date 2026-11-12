@@ -2,7 +2,7 @@ import { createRoot } from 'react-dom/client';
 
 import '@fontsource-variable/inter';
 import '@fontsource-variable/jetbrains-mono';
-import 'harmonyos-sans-sc-webfont-splitted';
+import './styles/cjk-webfont.css';
 
 import '@/i18n';
 import './themes/colors';
@@ -14,8 +14,10 @@ import { applyFontSettings, getInitialFontSettings } from './hooks/useFontSettin
 import { getInitialThemeVariant } from './hooks/useTheme';
 import { bootstrapLocalThemesSync } from './themes/local-themes';
 import { themeService } from './themes/theme-service';
+import { installHiddenAnimationGate } from './lib/hiddenAnimationGate';
 
 document.documentElement.dataset.platform = window.electronAPI.platform;
+installHiddenAnimationGate();
 bootstrapLocalThemesSync();
 themeService.applyTheme(getInitialThemeVariant().theme);
 applyFontSettings(getInitialFontSettings());

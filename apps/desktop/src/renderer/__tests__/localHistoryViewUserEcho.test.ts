@@ -1,0 +1,783 @@
+/**
+ * localHistoryViewUserEcho.test.ts
+ * ---------------------------------------------------------------------------
+ * 本机任务也由历史视图渲染(#5073)。本端发出的 user 行在落库回声时去掉
+ * isPendingPersist，而历史视图要等防抖重读(≥500ms)后才读到它；这段时间里
+ * 它既不在快照里、也不再算本地行，气泡会消失再出现。这里锁定：普通发送、排队
+ * 派发、插话三条本机路径的回声都保留位置预留，直到历史视图确认后才撤掉；
+ * 外部注入的 user 行与已进入快照的行不受影响。
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { AgentInputProjection, AgentInputQueuedMessage } from '../../shared/agentInputQueue';
+import type { Message } from '@/lib/ccAgent.types';
+import {
+  __testing as dataOwnerTesting,
+  setDataOwnerGeneration,
+} from '@/contexts/dataOwnerGeneration';
+
+vi.mock('@/lib/messageService', () => ({
+  list: vi.fn(async () => []),
+  around: vi.fn(async () => []),
+  create: vi.fn(async () => ({}) as unknown),
+  updateContent: vi.fn(async () => ({}) as unknown),
+}));
+vi.mock('@/lib/sessionService', () => ({
+  get: vi.fn(async () => {
+    throw new Error('[NOT_FOUND] Session 不存在');
+  }),
+  update: vi.fn(async () => ({})),
+  touchUserSend: vi.fn(async () => ({})),
+}));
+vi.mock('@/lib/sessionsBus', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/sessionsBus')>(),
+  emitPatch: vi.fn(),
+}));
+vi.mock('@/lib/userPromptStore', () => ({ getUserPrompt: () => '' }));
+vi.mock('@/lib/imageRef', () => ({
+  parseUserContent: vi.fn((c: string) => ({ text: c, images: [], files: [] })),
+  stringifyUserContent: vi.fn((text: string) => text),
+}));
+vi.mock('@/lib/composerDraftStore', () => ({
+  saveDraft: vi.fn(),
+  setRemoteOptimisticAttachmentUrls: vi.fn(),
+  plainTextToTiptapDoc: (s: string) => ({
+    type: 'doc',
+    content: [{ type: 'paragraph', content: [{ type: 'text', text: s }] }],
+  }),
+}));
+
+import { makerChatStore, getRemoteHistoryView, type HistoryChatMessage } from '@/lib/makerChatStore';
+import {
+  HistoryViewHandoff,
+  historyViewLeaves,
+  historyWorkSummaries,
+  projectHistoryView,
+  renderHistoryView,
+} from '@cindy/maker-shared/message-window';
+import { projectRemoteUsers } from '@/lib/remoteUserHandoff';
+import { collectLastTurnPaths } from '@/features/right-sidebar/lib/lastTurnChangedFiles';
+import { listSessionTasks } from '@/features/right-sidebar/plugins/background-tasks/listSessionTasks';
+
+const OWNER_STAMP = { dataOwnerId: 'test-owner', ownerGeneration: 0 } as const;
+const WD = 'C:\\workspace';
+
+function emptyProjection(sessionId: string, patch: Partial<AgentInputProjection> = {}): AgentInputProjection {
+  return {
+    sessionId, pendingQueue: [], steeringQueueClientIds: [], queuePaused: false,
+    queueExpanded: false, queueInteractionLocks: [], queueEditLocks: [], queueAbortPending: false,
+    error: null, recovery: null, errorRetryText: null, credentialSwitchWait: null,
+    ...patch,
+  };
+}
+
+function dbMessage(sessionId: string, clientId: string, content: string, createdAt: string, role: Message['role']): Message {
+  return { id: `db-${clientId}`, clientId, sessionId, role, content, toolUseId: null, agentMeta: null, createdAt };
+}
+
+// 本机 DB 的内存替身：historyView 按同一套投影读最新一页；落库时广播 messages:created。
+const rowsBySession = new Map<string, Message[]>();
+let onCreatedCb: ((data: unknown, ownerStamp?: unknown) => void) | null = null;
+let onProjectionCb: ((data: unknown, ownerStamp?: unknown) => void) | null = null;
+const enqueue = vi.fn(async (sessionId: string, _item: AgentInputQueuedMessage) => emptyProjection(sessionId));
+const steer = vi.fn(async (_sessionId: string, _item: AgentInputQueuedMessage) => true);
+
+function persist(message: Message): void {
+  rowsBySession.set(message.sessionId, [...(rowsBySession.get(message.sessionId) ?? []), message]);
+  onCreatedCb?.({ sessionId: message.sessionId, message }, OWNER_STAMP);
+}
+
+function persistQueued(sessionId: string, item: AgentInputQueuedMessage, createdAt: string): void {
+  persist(dbMessage(sessionId, item.clientId, item.text, createdAt, 'user'));
+}
+
+function completedWork(sessionId: string, size: number) {
+  const tool = { ...dbMessage(sessionId, 'read', '', '2026-09-28T00:00:02.000Z', 'tool_use'),
+    content: { toolName: 'Read', input: { file_path: 'large.txt' }, toolUseId: 'tool-read' }, toolUseId: 'tool-read' };
+  const result = { ...dbMessage(sessionId, 'result', 'x'.repeat(size), '2026-09-28T00:00:03.000Z', 'tool_result'), toolUseId: 'tool-read' };
+  persist(tool);
+  persist(result);
+  persist({ ...dbMessage(sessionId, 'finished', 'Done', '2026-09-28T00:00:04.000Z', 'assistant'), agentMeta: { turnCompleted: true } });
+  return { tool, result };
+}
+
+function installElectronApi(): void {
+  const fanOut = () => () => () => {};
+  (globalThis as { window?: unknown }).window = {
+    electronAPI: {
+      maker: {
+        onEvent: fanOut(),
+        onStatusChanged: fanOut(),
+        onInputProjection: (cb: (data: unknown, ownerStamp?: unknown) => void) => {
+          onProjectionCb = cb;
+          return () => { onProjectionCb = null; };
+        },
+        onInteractionRequest: fanOut(),
+        onInteractionDismissed: fanOut(),
+        autoTitle: vi.fn(async () => ({ applied: true, done: true })),
+        getPendingInteractions: vi.fn(async () => []),
+        input: {
+          enqueue,
+          steer,
+          getProjection: vi.fn(async (s: string) => emptyProjection(s)),
+        },
+      },
+      localDb: {
+        messages: {
+          onCreated: (cb: (data: unknown, ownerStamp?: unknown) => void) => {
+            onCreatedCb = cb;
+            return () => { onCreatedCb = null; };
+          },
+          historyView: vi.fn(async (sessionId: string) => {
+            // 最新一页：按行截尾再投影（prose 行会合成单个 messages 叶子，
+            // 直接 slice items 截不掉旧行，测试就无法把旧行挤出快照）。
+            const rows = (rowsBySession.get(sessionId) ?? []).slice(-20);
+            return { version: 1, items: projectHistoryView(rows, false), hasMore: false, nextCursor: null };
+          }),
+          workDetails: vi.fn(async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null })),
+        },
+      },
+      onUsageMessageTurnCost: fanOut(),
+      deviceLink: {
+        invoke: vi.fn(async () => null),
+        onRemotePush: fanOut(),
+        onStatusChanged: fanOut(),
+        onPresenceChanged: fanOut(),
+      },
+    },
+  };
+}
+
+/** 与 MessageStream 同一条渲染链：projectRemoteUsers → handoff → renderHistoryView。 */
+function renderedClientIds(sessionId: string): string[] {
+  const view = getRemoteHistoryView(sessionId)!;
+  const snapshot = view.getSnapshot();
+  const historyIds = new Set(historyViewLeaves(snapshot.items).flatMap((item) =>
+    item.type === 'messages' ? item.messages.map((row) => row.clientId) : []));
+  for (const detail of snapshot.details.values()) for (const row of detail.messages) historyIds.add(row.clientId);
+  const live = projectRemoteUsers(makerChatStore.getSnapshot(sessionId).messages, historyIds)
+    .map((row) => ({ ...row, id: row.id ?? row.clientId, createdAt: row.createdAt ?? '' })) as HistoryChatMessage[];
+  const handoff = new HistoryViewHandoff<HistoryChatMessage>((row) => row.isStreaming === true);
+  return renderHistoryView<HistoryChatMessage, string>({
+    view, snapshot, liveMessages: live, streaming: false,
+    isLive: (row) => row.isStreaming === true,
+    pendingHandoff: handoff.reconcile(snapshot, live).pending,
+    isLocalMessage: (row) => row.isLocalSystemCard === true,
+    isLocalUser: (row) => row.role === 'user'
+      && (row.isPendingPersist === true || !!row.blockedByGhost || !!row.localSendPrecedingClientIds),
+    build: (rows) => rows.map((row) => row.clientId),
+    structure: {
+      placeholder: () => { throw new Error('fixture contains prose only'); },
+      children: () => undefined,
+      sourceIds: () => [],
+      rebuild: (item) => item,
+    },
+  });
+}
+
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+let n = 0;
+const sid = () => `local-echo-${n++}`;
+
+async function openSession(sessionId: string): Promise<void> {
+  rowsBySession.set(sessionId, [
+    dbMessage(sessionId, 'old-user', 'old question', '2026-09-28T00:00:00.000Z', 'user'),
+    dbMessage(sessionId, 'old-answer', 'old answer', '2026-09-28T00:00:01.000Z', 'assistant'),
+  ]);
+  makerChatStore.enterView(sessionId);
+  makerChatStore.ensureInitialMessages(sessionId);
+  await flush(); await flush();
+  expect(getRemoteHistoryView(sessionId)?.getSnapshot().ready).toBe(true);
+}
+
+beforeEach(() => {
+  dataOwnerTesting.reset();
+  setDataOwnerGeneration(OWNER_STAMP.dataOwnerId, OWNER_STAMP.ownerGeneration);
+  rowsBySession.clear();
+  installElectronApi();
+  makerChatStore.initGlobalListeners();
+});
+
+afterEach(() => {
+  makerChatStore.__teardownGlobalListeners();
+  delete (globalThis as { window?: unknown }).window;
+  vi.clearAllMocks();
+  dataOwnerTesting.reset();
+});
+
+describe('local history view retires completed bodies', () => {
+  // Unit regression: review/preview still consume file-edit metadata from the
+  // raw store. Exercise foreground, background and borrowed-detail retirement;
+  // the existing protected-output cases only cover interactions and media.
+  it.each(['file_change', 'NotebookEdit', 'Bash'])('keeps %s consumer metadata after history retirement', async toolName => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const s = sid();
+    try {
+      await openSession(s);
+      const toolUseId = 'edit-file';
+      const call = { ...dbMessage(s, 'file-call', '', '2026-09-28T00:00:02Z', 'tool_use'), toolUseId,
+        content: { toolName, toolUseId, input: toolName === 'file_change'
+          ? { changes: [{ path: 'preview.html' }] } : toolName === 'Bash'
+            ? { command: 'echo done', run_in_background: true } : { file_path: 'preview.html' } } };
+      const result = { ...dbMessage(s, 'file-result', 'x'.repeat(1024 * 1024), '2026-09-28T00:00:03Z', 'tool_result'), toolUseId };
+      persist(call); persist(result);
+      persist({ ...dbMessage(s, 'finished', 'Done', '2026-09-28T00:00:04Z', 'assistant'), agentMeta: { turnCompleted: true } });
+      const view = getRemoteHistoryView(s)!;
+      await view.refresh();
+      const paths = () => toolName === 'Bash'
+        ? listSessionTasks({ messages: makerChatStore.getSnapshot(s).messages as unknown as Message[],
+          taskUpdates: undefined, isSessionStreaming: false }).completed.map(row => row.toolUseId)
+        : [...collectLastTurnPaths(makerChatStore.getSnapshot(s).messages, WD)];
+      const expected = [toolName === 'Bash' ? toolUseId : 'preview.html'];
+      expect(paths()).toEqual(expected);
+      makerChatStore.leaveView(s);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(paths()).toEqual(expected);
+      makerChatStore.enterView(s);
+      await view.refresh();
+      // A new source row available only through details must retain its paths too.
+      const summary = historyWorkSummaries(view.getSnapshot().items)[0];
+      vi.mocked(window.electronAPI.localDb.messages.workDetails).mockResolvedValue({
+        version: 1, messages: [{ ...call, id: 'borrowed-call', clientId: 'borrowed-call' },
+          { ...result, id: 'borrowed-result', clientId: 'borrowed-result' }], hasMore: false, nextCursor: null,
+      });
+      view.setExpanded(summary.key, true);
+      await view.loadDetails(summary);
+      view.setExpanded(summary.key, false);
+      expect(makerChatStore.getSnapshot(s).messages.some(row => row.clientId === 'borrowed-call')).toBe(true);
+      expect(makerChatStore.getSnapshot(s).messages.some(row => row.clientId === 'borrowed-result')).toBe(true);
+      expect(paths()).toEqual(expected);
+    } finally {
+      makerChatStore.purgeSession(s);
+      vi.useRealTimers();
+    }
+  });
+  it('bounds completed tool output inside one still-running foreground turn', async () => {
+    const s = sid();
+    await openSession(s);
+    vi.mocked(window.electronAPI.localDb.messages.historyView).mockImplementation(async id => ({
+      version: 1, items: projectHistoryView(rowsBySession.get(id) ?? [], true), hasMore: false, nextCursor: null,
+    }));
+    try {
+      for (let index = 0; index < 30; index++) {
+        const toolUseId = `foreground-${index}`;
+        const createdAt = new Date(1800000000000 + index * 1000).toISOString();
+        persist({ ...dbMessage(s, `call-${index}`, '', createdAt, 'tool_use'), toolUseId,
+          content: { toolName: 'Read', input: {}, toolUseId } });
+        persist({ ...dbMessage(s, `result-${index}`, 'x'.repeat(8192), createdAt, 'tool_result'), toolUseId });
+        await getRemoteHistoryView(s)!.refresh();
+        await flush();
+      }
+      const state = makerChatStore.getSnapshot(s);
+      expect(state.messages.filter(row => row.role === 'tool_result').length).toBeLessThanOrEqual(5);
+      expect(state.messages.some(row => row.clientId === 'result-29')).toBe(true);
+      expect(historyWorkSummaries(getRemoteHistoryView(s)!.getSnapshot().items).some(row => row.isStreaming)).toBe(true);
+    } finally { makerChatStore.purgeSession(s); }
+  });
+  // Repeated background writes used to accumulate even though the session kept
+  // running. Timers advance logical time; no model calls or real waiting (unit).
+  it('bounds repeated background output across nine tasks and many maintenance cycles', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const ids = Array.from({ length: 9 }, sid);
+    const cycles = Number(process.env.CINDY_LONG_SESSION_CYCLES ?? 40);
+    const samples: Array<{ cycle: number; heap: number }> = [];
+    const started = performance.now(), cpu = process.cpuUsage();
+    try {
+      for (const s of ids) {
+        await openSession(s);
+        makerChatStore.leaveView(s);
+        makerChatStore.__applyStreamEventForTest(s, { sessionId: s, type: 'text', persistId: 'live', data: { text: 'working', isFinal: false } });
+      }
+      for (let cycle = 0; cycle < cycles; cycle++) {
+        for (const s of ids) {
+          const toolId = `tool-${cycle}`;
+          const call = { ...dbMessage(s, `call-${cycle}`, '', new Date(1700000000000 + cycle * 30000).toISOString(), 'tool_use'),
+            content: { toolName: 'Read', input: { file_path: 'fixture.txt' }, toolUseId: toolId }, toolUseId: toolId };
+          const result = { ...dbMessage(s, `result-${cycle}`, 'x'.repeat(64 * 1024), call.createdAt, 'tool_result'), toolUseId: toolId };
+          onCreatedCb?.({ sessionId: s, message: call }, OWNER_STAMP);
+          onCreatedCb?.({ sessionId: s, message: result }, OWNER_STAMP);
+        }
+        await vi.advanceTimersByTimeAsync(30_000);
+        for (const s of ids) {
+          const state = makerChatStore.getSnapshot(s);
+          expect(state.messages.some(row => row.role === 'tool_result')).toBe(false);
+          expect(state.messages.find(row => row.clientId === 'live')?.isStreaming).toBe(true);
+          expect(state.messages.length).toBeLessThanOrEqual(3);
+        }
+        if (process.env.CINDY_LONG_SESSION_MEASURE === '1' && globalThis.gc
+          && (cycle === 0 || cycle % 500 === 0 || cycle === cycles - 1)) {
+          globalThis.gc();
+          samples.push({ cycle, heap: process.memoryUsage().heapUsed });
+        }
+      }
+      if (process.env.CINDY_LONG_SESSION_MEASURE === '1') console.info('LONG_SESSION_SOAK', JSON.stringify({
+        cycles, logicalHours: cycles / 120, tasks: ids.length, outputBytes: cycles * ids.length * 64 * 1024,
+        elapsedMs: performance.now() - started, cpuMicros: process.cpuUsage(cpu), samples,
+      }));
+    } finally {
+      for (const s of ids) makerChatStore.purgeSession(s);
+      vi.useRealTimers();
+    }
+  });
+  it('retires persisted background tool pairs without stopping work and reloads them on return', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const s = sid();
+    try {
+      await openSession(s);
+      makerChatStore.leaveView(s);
+      completedWork(s, 1024);
+      makerChatStore.__applyStreamEventForTest(s, {
+        sessionId: s, type: 'agent_task_update', source: 'codex',
+        data: { taskId: 'worker', status: 'running', provider: 'codex' },
+      });
+      const tasks = makerChatStore.getSnapshot(s).taskUpdates;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(makerChatStore.getSnapshot(s).messages.some(row => row.clientId === 'result')).toBe(false);
+      expect(makerChatStore.getSnapshot(s).taskUpdates).toBe(tasks);
+      makerChatStore.enterView(s);
+      await getRemoteHistoryView(s)!.refresh();
+      await flush();
+      expect(historyWorkSummaries(getRemoteHistoryView(s)!.getSnapshot().items)).toHaveLength(1);
+    } finally {
+      makerChatStore.purgeSession(s);
+      vi.useRealTimers();
+    }
+  });
+  // Unit: background trimming must preserve the only readable body when the
+  // existing history reader cannot reload it. Earlier cases assume a healthy reader.
+  it.each(['offline', 'unavailable'] as const)('keeps background output when history is %s', async kind => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const s = sid();
+    try {
+      await openSession(s);
+      const view = getRemoteHistoryView(s)!;
+      if (kind === 'offline') view.setNetworkAvailable(false);
+      else {
+        vi.mocked(window.electronAPI.localDb.messages.historyView).mockRejectedValueOnce(new Error('[CHANNEL_NOT_ALLOWED] old host'));
+        await view.refresh();
+      }
+      completedWork(s, 1024);
+      makerChatStore.leaveView(s);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(makerChatStore.getSnapshot(s).messages.find(row => row.clientId === 'result')?.content).toBe('x'.repeat(1024));
+    } finally {
+      makerChatStore.purgeSession(s);
+      vi.useRealTimers();
+    }
+  });
+  it.each(['new-live-body', 'media', 'interaction'] as const)('keeps protected background output: %s', async kind => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const s = sid();
+    try {
+      await openSession(s);
+      makerChatStore.leaveView(s);
+      const toolId = 'protected-tool';
+      const call = { ...dbMessage(s, 'protected-call', '', '2026-09-28T00:00:02Z', 'tool_use'), toolUseId: toolId,
+        content: { toolName: kind === 'interaction' ? 'AskUserQuestion' : 'Read', input: {}, toolUseId: toolId } };
+      const result = { ...dbMessage(s, 'protected-result', kind === 'media' ? 'cindy-media://blobs/test.png' : 'stored', '2026-09-28T00:00:03Z', 'tool_result'), toolUseId: toolId };
+      persist(call); persist(result);
+      if (kind === 'new-live-body') makerChatStore.__applyStreamEventForTest(s, {
+        sessionId: s, type: 'tool_result_full', persistId: result.clientId,
+        resolvedContent: 'new full body before its DB echo', data: { toolUseId: toolId },
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(makerChatStore.getSnapshot(s).messages.find(row => row.clientId === result.clientId)?.content)
+        .toBe(kind === 'new-live-body' ? 'new full body before its DB echo' : result.content);
+      expect(makerChatStore.getSnapshot(s).messages.some(row => row.clientId === call.clientId)).toBe(true);
+    } finally {
+      makerChatStore.purgeSession(s);
+      vi.useRealTimers();
+    }
+  });
+  it('releases large collapsed details from both the history view and raw mirror', async () => {
+    const s = sid();
+    await openSession(s);
+    const { tool, result } = completedWork(s, 1024 * 1024);
+    const view = getRemoteHistoryView(s)!;
+    await view.refresh();
+    await flush();
+    const summary = historyWorkSummaries(view.getSnapshot().items)[0];
+    vi.mocked(window.electronAPI.localDb.messages.workDetails).mockResolvedValue({
+      version: 1, messages: [tool, result], hasMore: false, nextCursor: null,
+    });
+    for (let round = 0; round < 3; round++) {
+      view.setExpanded(summary.key, true);
+      await view.loadDetails(summary);
+      await flush();
+      expect(view.getSnapshot().details.get(summary.key)?.messages).toHaveLength(2);
+      view.setExpanded(summary.key, false);
+      await flush();
+      expect(view.getSnapshot().details.has(summary.key)).toBe(false);
+      expect(makerChatStore.getSnapshot(s).messages.some(row => row.clientId === 'result')).toBe(false);
+    }
+    // A range folded while still running must also release its large cached
+    // body once a later page seals it, without requiring a second collapse.
+    view.setExpanded(summary.key, true);
+    await view.loadDetails(summary);
+    vi.mocked(window.electronAPI.localDb.messages.historyView).mockResolvedValueOnce({
+      version: 1, items: projectHistoryView(rowsBySession.get(s)!.filter(row => row.clientId !== 'finished'), true), hasMore: false, nextCursor: null,
+    });
+    await view.refresh();
+    view.setExpanded(summary.key, false);
+    expect(view.getSnapshot().details.has(summary.key)).toBe(true);
+    await view.refresh();
+    await flush();
+    expect(view.getSnapshot().details.has(summary.key)).toBe(false);
+    expect(makerChatStore.getSnapshot(s).messages.some(row => row.clientId === 'result')).toBe(false);
+    makerChatStore.purgeSession(s);
+  });
+  // Regression: a mounted long-running task retained completed tool bodies even
+  // after the history view owned their recoverable summaries. Existing echo tests
+  // contain only prose. Exercise the real store/DB-push/view path (unit tier),
+  // then read the folded body again through the existing details transport.
+  it('releases completed folded tool bodies while keeping them readable on expansion', async () => {
+    const s = sid();
+    await openSession(s);
+    const { tool, result } = completedWork(s, 1024 * 1024);
+    const view = getRemoteHistoryView(s)!;
+    expect(makerChatStore.getSnapshot(s).messages.some(row => row.clientId === 'result')).toBe(true);
+    await view.refresh();
+    await flush();
+    const summary = historyWorkSummaries(view.getSnapshot().items).find(row => !row.isStreaming)!;
+    expect(summary).toBeDefined();
+    expect(makerChatStore.getSnapshot(s).messages.some(row => row.clientId === 'result')).toBe(false);
+    expect(makerChatStore.getSnapshot(s).messages.some(row => row.clientId === 'finished')).toBe(true);
+    expect(rowsBySession.get(s)).toContain(result);
+    vi.mocked(window.electronAPI.localDb.messages.workDetails).mockResolvedValueOnce({
+      version: 1, messages: [tool, result], hasMore: false, nextCursor: null,
+    });
+    await view.loadDetails(summary, { allowCollapsed: true });
+    await flush();
+    expect(view.getSnapshot().details.get(summary.key)?.messages.find(row => row.clientId === 'result')?.content).toBe(result.content);
+    makerChatStore.purgeSession(s);
+  });
+
+  it.each(['before', 'during'] as const)('does not retire a tool result updated %s its summary read', async timing => {
+    const s = sid();
+    await openSession(s);
+    const { result } = completedWork(s, 128);
+    const page = { version: 1 as const, items: projectHistoryView(rowsBySession.get(s)!, false), hasMore: false, nextCursor: null };
+    let finish!: (value: typeof page) => void;
+    vi.mocked(window.electronAPI.localDb.messages.historyView).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const view = getRemoteHistoryView(s)!;
+    const updated = { ...result, content: 'new result not yet echoed by the DB' };
+    const update = () => makerChatStore.__applyStreamEventForTest(s, {
+      sessionId: s, type: 'tool_result_full', persistId: 'result',
+      resolvedContent: updated.content, data: { toolUseId: 'tool-read' },
+    });
+    if (timing === 'before') update();
+    const reading = view.refresh();
+    if (timing === 'during') update();
+    finish(page);
+    await reading;
+    await flush();
+    expect(makerChatStore.getSnapshot(s).messages.find(row => row.clientId === 'result')?.content).toBe(updated.content);
+    makerChatStore.purgeSession(s);
+  });
+
+  it('keeps unfinished history and background task state until the range is sealed', async () => {
+    const s = sid();
+    await openSession(s);
+    const { result } = completedWork(s, 128);
+    const unfinished = rowsBySession.get(s)!.filter(row => row.clientId !== 'finished');
+    vi.mocked(window.electronAPI.localDb.messages.historyView).mockResolvedValueOnce({
+      version: 1, items: projectHistoryView(unfinished, true), hasMore: false, nextCursor: null,
+    });
+    makerChatStore.__applyStreamEventForTest(s, {
+      sessionId: s, type: 'agent_task_update', source: 'codex',
+      data: { taskId: 'worker', status: 'running', provider: 'codex' },
+    });
+    const tasks = makerChatStore.getSnapshot(s).taskUpdates;
+    const view = getRemoteHistoryView(s)!;
+    await view.refresh();
+    await flush();
+    expect(historyWorkSummaries(view.getSnapshot().items).some(summary => summary.isStreaming)).toBe(true);
+    expect(makerChatStore.getSnapshot(s).messages.find(row => row.clientId === 'result')?.content).toBe(result.content);
+    await view.refresh();
+    await flush();
+    expect(makerChatStore.getSnapshot(s).messages.some(row => row.clientId === 'result')).toBe(false);
+    expect(makerChatStore.getSnapshot(s).taskUpdates).toBe(tasks);
+    expect(tasks?.get('worker')?.status).toBe('running');
+    makerChatStore.purgeSession(s);
+  });
+
+  it('releases completed history plus eight worker histories without ending live output', async () => {
+    // Synthetic payload accounting, not a claim about process RSS. No model calls
+    // or 31-hour wall-clock wait; nine independent live store slices use the same
+    // production history/persistence path. Keep normal unit payloads small: the
+    // explicit benchmark exercises the reported 80 MiB without CI timeouts.
+    const measure = process.env.CINDY_LONG_SESSION_MEASURE === '1';
+    const primaryBytes = (measure ? 80 : 1) * 1024 * 1024;
+    const workerBytes = measure ? 1024 * 1024 : 64 * 1024;
+    const ids: string[] = [];
+    let before = 0;
+    let after = 0;
+    try {
+      for (let index = 0; index < 9; index++) {
+        const s = sid(); ids.push(s);
+        await openSession(s);
+        completedWork(s, index === 0 ? primaryBytes : workerBytes);
+        makerChatStore.__applyStreamEventForTest(s, {
+          sessionId: s, type: 'text', persistId: 'live', data: { text: 'still working', isFinal: false },
+        });
+        const contentSize = () => makerChatStore.getSnapshot(s).messages.reduce((sum, row) => sum + row.content.length, 0);
+        before += contentSize();
+        // Optional diagnostic run with Node --expose-gc. The fake DB must not
+        // retain the body being measured (the real DB lives in another process).
+        const gc = measure ? globalThis.gc : undefined;
+        if (gc) {
+          const page = { version: 1 as const, items: projectHistoryView(rowsBySession.get(s)!, false), hasMore: false, nextCursor: null };
+          rowsBySession.set(s, []);
+          vi.mocked(window.electronAPI.localDb.messages.historyView).mockResolvedValueOnce(page);
+          gc();
+        }
+        const heapBefore = gc ? process.memoryUsage().heapUsed : 0;
+        const cpuBefore = gc ? process.cpuUsage() : undefined;
+        await getRemoteHistoryView(s)!.refresh();
+        await flush();
+        after += contentSize();
+        if (gc) {
+          gc();
+          console.info('LONG_SESSION_MEMORY', JSON.stringify({ index, heapBefore,
+            heapAfter: process.memoryUsage().heapUsed, cpuMicros: process.cpuUsage(cpuBefore) }));
+        }
+        expect(makerChatStore.getSnapshot(s).messages.find(row => row.clientId === 'live'))
+          .toMatchObject({ content: 'still working', isStreaming: true });
+        makerChatStore.__applyStreamEventForTest(s, {
+          sessionId: s, type: 'text', persistId: 'live', data: { text: ' and continuing', isFinal: false },
+        });
+        expect(makerChatStore.getSnapshot(s).messages.find(row => row.clientId === 'live')?.content)
+          .toBe('still working and continuing');
+      }
+      expect(before - after).toBeGreaterThanOrEqual(primaryBytes + 8 * workerBytes);
+      expect(after).toBeLessThan(1024);
+    } finally {
+      for (const s of ids) makerChatStore.purgeSession(s);
+    }
+  });
+});
+
+describe('local history view keeps command cards', () => {
+  it('shows help immediately and retains its position through history refresh and later messages', async () => {
+    const s = sid();
+    await openSession(s);
+    const helpId = makerChatStore.insertSystemCard(s, 'help', {
+      commands: [{ name: 'help', source: 'desktop' }],
+    })!;
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer', helpId]);
+    await getRemoteHistoryView(s)!.refresh();
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer', helpId]);
+
+    await makerChatStore.sendMessage(s, 'next question', 'claude', '', 'default', WD);
+    const item = enqueue.mock.calls[0][1];
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer', helpId, item.clientId]);
+    persistQueued(s, item, new Date(Date.now() + 1000).toISOString());
+    await getRemoteHistoryView(s)!.refresh();
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer', helpId, item.clientId]);
+    expect(rowsBySession.get(s)!.some((row) => row.clientId === helpId)).toBe(false);
+    makerChatStore.purgeSession(s);
+  });
+
+  it('keeps consecutive local command cards and does not revive them after the session is purged', async () => {
+    const s = sid();
+    await openSession(s);
+    const cards = (['help', 'cost', 'pwd', 'status', 'cmd'] as const)
+      .map((kind) => makerChatStore.insertSystemCard(s, kind)!);
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer', ...cards]);
+    await getRemoteHistoryView(s)!.refresh();
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer', ...cards]);
+    makerChatStore.purgeSession(s);
+    await openSession(s);
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer']);
+    makerChatStore.purgeSession(s);
+  });
+});
+
+describe('local history view keeps user rows through the DB echo', () => {
+  it('keeps a harness boundary before a local pending send and its durable echo', async () => {
+    const s = sid();
+    await openSession(s);
+    await makerChatStore.sendMessage(s, 'new question', 'claude', '', 'default', WD);
+    const item = enqueue.mock.calls[0][1];
+    persist(dbMessage(s, 'switch', JSON.stringify({ fromAgentKind: 'cc', toAgentKind: 'codex' }),
+      new Date(Date.now() + 1000).toISOString(), 'agent_switch'));
+    await getRemoteHistoryView(s)!.refresh();
+    const expected = ['old-user', 'old-answer', 'switch', item.clientId];
+    expect(renderedClientIds(s)).toEqual(expected);
+    persistQueued(s, item, new Date(Date.now() + 2000).toISOString());
+    expect(renderedClientIds(s)).toEqual(expected);
+    await getRemoteHistoryView(s)!.refresh();
+    expect(renderedClientIds(s)).toEqual(expected);
+    makerChatStore.purgeSession(s);
+  });
+
+  it('keeps an ordinary send visible between the echo and the history refresh', async () => {
+    const s = sid();
+    await openSession(s);
+    await makerChatStore.sendMessage(s, 'new question', 'claude', '', 'default', WD);
+    const item = enqueue.mock.calls[0][1];
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer', item.clientId]);
+
+    persistQueued(s, item, '2026-09-28T00:00:02.000Z');
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer', item.clientId]);
+    const echoed = makerChatStore.getSnapshot(s).messages.find((row) => row.clientId === item.clientId)!;
+    expect(echoed.isPendingPersist).toBeUndefined();
+    expect(echoed.localSendPrecedingClientIds).toEqual(['old-user', 'old-answer']);
+
+    await getRemoteHistoryView(s)!.refresh();
+    const final = makerChatStore.getSnapshot(s).messages.filter((row) => row.clientId === item.clientId);
+    expect(final).toHaveLength(1);
+    expect(final[0].localSendPrecedingClientIds).toBeUndefined();
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer', item.clientId]);
+    makerChatStore.purgeSession(s);
+  });
+
+  it.each(['echo-first', 'projection-first'])('keeps a queued send visible once main dispatches it: %s', async (order) => {
+    const s = sid();
+    await openSession(s);
+    enqueue.mockImplementationOnce(async (sessionId, queued) => emptyProjection(sessionId, { pendingQueue: [queued] }));
+    await makerChatStore.sendMessage(s, 'queued question', 'claude', '', 'default', WD);
+    const item = enqueue.mock.calls[0][1];
+    expect(makerChatStore.getSnapshot(s).pendingQueue.map((queued) => queued.clientId)).toEqual([item.clientId]);
+
+    if (order === 'projection-first') onProjectionCb?.(emptyProjection(s), OWNER_STAMP);
+    persistQueued(s, item, '2026-09-28T00:00:02.000Z');
+    if (order === 'echo-first') onProjectionCb?.(emptyProjection(s), OWNER_STAMP);
+    await flush();
+
+    expect(makerChatStore.getSnapshot(s).pendingQueue).toEqual([]);
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer', item.clientId]);
+
+    await getRemoteHistoryView(s)!.refresh();
+    expect(makerChatStore.getSnapshot(s).messages.find((row) => row.clientId === item.clientId)?.localSendPrecedingClientIds)
+      .toBeUndefined();
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer', item.clientId]);
+    makerChatStore.purgeSession(s);
+  });
+
+  it('keeps a steer visible from its echo until history owns it', async () => {
+    const s = sid();
+    await openSession(s);
+    await makerChatStore.steerMessage(s, 'steer text', 'claude', '', 'default', WD);
+    const item = steer.mock.calls[0][1];
+    persistQueued(s, item, '2026-09-28T00:00:02.000Z');
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer', item.clientId]);
+    await getRemoteHistoryView(s)!.refresh();
+    expect(makerChatStore.getSnapshot(s).messages.find((row) => row.clientId === item.clientId)?.localSendPrecedingClientIds)
+      .toBeUndefined();
+    makerChatStore.purgeSession(s);
+  });
+
+  it('leaves externally injected users and rows already in history unreserved', async () => {
+    const s = sid();
+    await openSession(s);
+    persist(dbMessage(s, 'from-im', 'im message', '2026-09-28T00:00:02.000Z', 'user'));
+    expect(makerChatStore.getSnapshot(s).messages.find((row) => row.clientId === 'from-im')?.localSendPrecedingClientIds)
+      .toBeUndefined();
+
+    await makerChatStore.sendMessage(s, 'already read', 'claude', '', 'default', WD);
+    const item = enqueue.mock.calls[0][1];
+    // 历史视图先读到落库行，回声后到：快照已拥有它，不再预留。
+    rowsBySession.set(s, [...rowsBySession.get(s)!, dbMessage(s, item.clientId, item.text, '2026-09-28T00:00:03.000Z', 'user')]);
+    await getRemoteHistoryView(s)!.refresh();
+    onCreatedCb?.({ sessionId: s, message: rowsBySession.get(s)!.at(-1) }, OWNER_STAMP);
+    expect(makerChatStore.getSnapshot(s).messages.find((row) => row.clientId === item.clientId)?.localSendPrecedingClientIds)
+      .toBeUndefined();
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer', 'from-im', item.clientId]);
+    makerChatStore.purgeSession(s);
+  });
+
+  // Codex review P2：排队项本身不构成本端发送证据。IM 通道、手机端、定时任务
+  // 注入的 user 项也会经 pendingQueue 派发，且不登记 localSentUserMessageIds；
+  // 它们的落库回声不得被附上 localSendPrecedingClientIds（否则历史视图会把它
+  // 当本地 user 尾项提前插入/重排，刷新后才纠正）。
+  it.each<[string, (item: AgentInputQueuedMessage) => AgentInputQueuedMessage]>([
+    ['IM 通道', (item) => item],
+    ['手机端', (item) => ({ ...item, fromMobileClient: true })],
+    ['定时任务', (item) => ({
+      ...item,
+      origin: { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: 'nightly' },
+    })],
+  ])('不把%s注入的排队项当成本端发送', async (source, decorate) => {
+    const s = sid();
+    await openSession(s);
+    const externalItem = decorate({
+      clientId: `from-queue-${source}`,
+      text: `${source} injected`,
+      persistedContent: JSON.stringify({ text: `${source} injected`, images: [], files: [] }),
+      model: 'claude',
+      effort: '',
+      permissionMode: 'default',
+      workingDir: WD,
+      chatMessage: {
+        clientId: `from-queue-${source}`,
+        role: 'user',
+        content: `${source} injected`,
+        isStreaming: false,
+        createdAt: '2026-09-28T00:00:02.000Z',
+      },
+      createOpts: {
+        agentKind: 'claude-code',
+        workingDir: WD,
+        model: 'claude',
+        effort: '',
+        permissionMode: 'default',
+        userPrompt: `${source} injected`,
+      },
+    } satisfies AgentInputQueuedMessage);
+    // 外部入口把 user 项注入 pendingQueue，回声先于派发投影到达。
+    onProjectionCb?.(emptyProjection(s, { pendingQueue: [externalItem] }), OWNER_STAMP);
+    expect(makerChatStore.getSnapshot(s).pendingQueue.map((queued) => queued.clientId))
+      .toEqual([externalItem.clientId]);
+    expect(makerChatStore.isLocalSentUserMessage(s, externalItem.clientId)).toBe(false);
+
+    persistQueued(s, externalItem, '2026-09-28T00:00:03.000Z');
+    const echoed = makerChatStore.getSnapshot(s).messages.find(
+      (row) => row.clientId === externalItem.clientId,
+    );
+    expect(echoed?.localSendPrecedingClientIds).toBeUndefined();
+    expect(makerChatStore.getSnapshot(s).pendingQueue).toEqual([]);
+    // 不被当成本端 user 尾项提前插入：回声不进本地气泡通道，历史视图读到才出现，
+    // 不会出现“提前插入/重排、刷新后又纠正”。
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer']);
+    await getRemoteHistoryView(s)!.refresh();
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer', externalItem.clientId]);
+    const final = makerChatStore.getSnapshot(s).messages.filter(
+      (row) => row.clientId === externalItem.clientId,
+    );
+    expect(final).toHaveLength(1);
+    expect(final[0].localSendPrecedingClientIds).toBeUndefined();
+    makerChatStore.purgeSession(s);
+  });
+
+  // Codex review P2（第二轮）：session.treeRehydrate 等会把活动路径的历史行重播成
+  // messages:created；仍留在 localSentUserMessageIds 的旧 user 行不得被当成新回声
+  // 再次预留——否则旧气泡被长期挪到历史尾部，后续刷新读不到这些较老的 id，
+  // confirmRemoteUsers 永远撤不掉预留。
+  it('历史行重播（treeRehydrate）不再次预留旧的本端发送行', async () => {
+    const s = sid();
+    await openSession(s);
+    await makerChatStore.sendMessage(s, 'old local send', 'claude', '', 'default', WD);
+    const item = enqueue.mock.calls[0][1];
+    persistQueued(s, item, '2026-09-28T00:00:02.000Z');
+    await getRemoteHistoryView(s)!.refresh();
+    const findEchoed = () => makerChatStore.getSnapshot(s).messages.find(
+      (row) => row.clientId === item.clientId,
+    );
+    expect(findEchoed()?.localSendPrecedingClientIds).toBeUndefined();
+    // 新行把旧 user 行挤出历史视图最新分页（mock 只回最新 20 行）：
+    // isAwaitingHistoryView 对它重新为真，具备被误判成新回声的条件。
+    for (let i = 0; i < 25; i++) {
+      persist(dbMessage(s, `newer-${i}`, 'newer answer',
+        `2026-09-28T01:${String(i).padStart(2, '0')}:00.000Z`, 'assistant'));
+    }
+    await getRemoteHistoryView(s)!.refresh();
+    // treeRehydrate 重播旧 user 行的 messages:created（本端发送账本仍盖着它）。
+    onCreatedCb?.({
+      sessionId: s,
+      message: rowsBySession.get(s)!.find((row) => row.clientId === item.clientId),
+    }, OWNER_STAMP);
+    expect(findEchoed()?.localSendPrecedingClientIds).toBeUndefined();
+    makerChatStore.purgeSession(s);
+  });
+});

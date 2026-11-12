@@ -1,6 +1,47 @@
 import { describe, expect, it } from 'vitest';
 
-import { assessModelSwitchContext } from '../modelSwitchAssessment';
+import {
+  assessModelSwitchContext,
+  shouldBlockLegacyRemotePiModelWindowSwitch,
+  shouldHandoffAfterContextAssessment,
+} from '../modelSwitchAssessment';
+
+describe('legacy remote Pi model-window guard', () => {
+  const legacyPiSwitch = {
+    hostGuardSupported: false,
+    contextTokens: 180_000,
+    currentContextWindow: 1_000_000,
+    targetContextWindow: 200_000,
+  };
+
+  it('blocks every old-host Pi route estimate', () => {
+    const estimatedRoutes = {
+      lowPressure: { ...legacyPiSwitch, contextTokens: 100_000 },
+      exact90Percent: legacyPiSwitch,
+      sameWindow: { ...legacyPiSwitch, targetContextWindow: 1_000_000 },
+      expansion: { ...legacyPiSwitch, targetContextWindow: 2_000_000 },
+      unknownUsage: { ...legacyPiSwitch, contextTokens: undefined },
+      unknownCurrentWindow: { ...legacyPiSwitch, currentContextWindow: undefined },
+      unknownTargetWindow: { ...legacyPiSwitch, targetContextWindow: undefined },
+    };
+    for (const route of Object.values(estimatedRoutes)) {
+      expect(shouldBlockLegacyRemotePiModelWindowSwitch(route)).toBe(true);
+    }
+  });
+
+  it('delegates guarded Pi routes to host-side final runtime verification', () => {
+    expect(shouldBlockLegacyRemotePiModelWindowSwitch({
+      ...legacyPiSwitch,
+      hostGuardSupported: true,
+    })).toBe(false);
+    expect(shouldBlockLegacyRemotePiModelWindowSwitch({
+      hostGuardSupported: true,
+      contextTokens: undefined,
+      currentContextWindow: undefined,
+      targetContextWindow: undefined,
+    })).toBe(false);
+  });
+});
 
 describe('assessModelSwitchContext', () => {
   it('fail-open: unknown context tokens → ok', () => {
@@ -96,4 +137,24 @@ describe('assessModelSwitchContext', () => {
       assessModelSwitchContext({ contextTokens: 190_000, targetContextWindow: 1_000_000 }),
     ).toEqual({ level: 'ok', projectedPct: 19 });
   });
+
+  it('handoffs on danger/overflow, not on warn',
+    () => {
+      expect(
+        shouldHandoffAfterContextAssessment(
+          assessModelSwitchContext({ contextTokens: 150_000, targetContextWindow: 200_000 }),
+        ),
+      ).toBe(false);
+      expect(
+        shouldHandoffAfterContextAssessment(
+          assessModelSwitchContext({ contextTokens: 180_000, targetContextWindow: 200_000 }),
+        ),
+      ).toBe(true);
+      expect(
+        shouldHandoffAfterContextAssessment(
+          assessModelSwitchContext({ contextTokens: 200_000, targetContextWindow: 200_000 }),
+        ),
+      ).toBe(true);
+    },
+  );
 });

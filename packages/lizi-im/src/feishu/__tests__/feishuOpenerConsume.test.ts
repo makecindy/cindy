@@ -106,7 +106,8 @@ vi.mock('../appRegistration.js', () => ({
   pollAppRegistration: vi.fn(),
 }));
 
-vi.mock('../moduleScope.js', () => ({
+vi.mock('../moduleScope.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../moduleScope.js')>()),
   getLog: () => ({
     trace: vi.fn(),
     debug: vi.fn(),
@@ -274,7 +275,7 @@ describe('FeishuIM opener consumption failure semantics', () => {
     await Promise.resolve();
 
     expect(outboundMocks.recallOwnMessageWith).toHaveBeenCalledWith(pinned, 'om_opener');
-    expect(outboundMocks.rearmAnchorToTrigger).toHaveBeenCalledWith('g/oc_c/omt_t');
+    expect(outboundMocks.rearmAnchorToTrigger).toHaveBeenCalledWith('g/oc_c/omt_t', 'om_opener');
     // 补发兜底: 文本经 sendMarkdownText(sendInteractive) 正常发送。
     expect(outboundMocks.sendInteractive).toHaveBeenCalledWith('g/oc_c/omt_t', {
       body: '兜底回复',
@@ -282,19 +283,20 @@ describe('FeishuIM opener consumption failure semantics', () => {
     });
   });
 
-  it('兜底发送就地收口预留 opener(不另发、不留思考卡)', async () => {
+  it.each(['回复', ''])('兜底发送就地收口预留 opener(正文=%s，不另发、不留思考卡)', async (markdown) => {
     // 空窗暂存后连接恢复: 兜底发送应优先 patch 预留卡, 而不是另发。
-    await queueOriginalFallback('om_reserved', '回复');
+    await queueOriginalFallback('om_reserved', markdown);
     outboundMocks.takeDeferredOpenerConsumeById.mockReturnValueOnce({
       userId: 'g/oc_c/omt_t',
       openerId: 'om_reserved',
-      markdown: '回复',
+      markdown,
       epoch: 0,
     });
 
     const result = await sendOriginalFallback('g/oc_c/omt_t', '兜底');
     expect(outboundMocks.takeDeferredOpenerConsumeById).toHaveBeenCalledWith('om_reserved');
-    expect(streamingText.patchMarkdown).toHaveBeenCalledWith('om_reserved', '回复');
+    expect(streamingText.patchMarkdown).toHaveBeenCalledWith('om_reserved', markdown);
+    if (!markdown) expect(outboundMocks.rearmAnchorToTrigger).toHaveBeenCalledWith('g/oc_c/omt_t', 'om_reserved');
     expect(result).toEqual({ messageId: 'om_reserved' });
     expect(outboundMocks.sendText).not.toHaveBeenCalled();
   });
@@ -396,7 +398,7 @@ describe('FeishuIM opener consumption failure semantics', () => {
     await expect(im.sendText('g/oc_c/omt_t', '/help')).resolves.toEqual({
       messageId: 'om_help',
     });
-    expect(outboundMocks.sendText).toHaveBeenCalledWith('g/oc_c/omt_t', '/help');
+    expect(outboundMocks.sendText).toHaveBeenCalledWith('g/oc_c/omt_t', '/help', undefined);
 
     await expect(sendOriginalFallback('g/oc_c/omt_t', '兜底')).resolves.toEqual({
       messageId: 'om_done',
@@ -420,7 +422,7 @@ describe('FeishuIM opener consumption failure semantics', () => {
     const helpP = im.sendText('g/oc_c/omt_t', '/help');
     resolvePatch();
     await expect(helpP).resolves.toEqual({ messageId: 'om_help' });
-    expect(outboundMocks.sendText).toHaveBeenCalledWith('g/oc_c/omt_t', '/help');
+    expect(outboundMocks.sendText).toHaveBeenCalledWith('g/oc_c/omt_t', '/help', undefined);
   });
 
   it('保持连接时重新入队后按退避再排空, 不依赖下一次 connected', async () => {
@@ -527,7 +529,26 @@ describe('FeishuIM opener consumption failure semantics', () => {
     );
     await expect(im.consumePendingOpenerCard('g/oc_c/omt_t', '回复')).resolves.toBe(false);
     expect(outboundMocks.recallOwnMessageWith).toHaveBeenCalledWith(fakeClient, 'om_opener');
-    expect(outboundMocks.rearmAnchorToTrigger).toHaveBeenCalledWith('g/oc_c/omt_t');
+    expect(outboundMocks.rearmAnchorToTrigger).toHaveBeenCalledWith('g/oc_c/omt_t', 'om_opener');
+  });
+
+  it('empty opener final is recalled and subsequent replies use the trigger anchor', async () => {
+    outboundMocks.claimPatchableOpener.mockReturnValue('om_opener');
+    await expect(im.consumePendingOpenerCard('g/oc_c/omt_t', '')).resolves.toBe(true);
+    expect(streamingText.patchMarkdown).toHaveBeenCalledWith('om_opener', '');
+    expect(outboundMocks.rearmAnchorToTrigger).toHaveBeenCalledWith('g/oc_c/omt_t', 'om_opener');
+    expect(outboundMocks.sendInteractive).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('deferred empty opener never falls back to a blank card (initial recall fails=%s)', async (fails) => {
+    outboundMocks.drainDeferredOpenerConsumes.mockReturnValueOnce([
+      { userId: 'g/oc_c/omt_t', openerId: 'om_empty', markdown: '' },
+    ]);
+    if (fails) vi.mocked(streamingText.patchMarkdown).mockRejectedValueOnce(new Error('recall failed'));
+    feishuEvents.emit('imStatus', { kind: 'connected', appId: 'cli' });
+    await vi.waitFor(() => expect(outboundMocks.rearmAnchorToTrigger).toHaveBeenCalledWith('g/oc_c/omt_t', 'om_empty'));
+    expect(outboundMocks.sendInteractive).not.toHaveBeenCalled();
+    expect(outboundMocks.sendText).not.toHaveBeenCalled();
   });
 
   it('consumePendingOpenerCard: 撤回失败不回拨不另发, 重新暂存等重试', async () => {
@@ -573,7 +594,7 @@ describe('FeishuIM opener consumption failure semantics', () => {
     outboundMocks.updateInteractive.mockRejectedValueOnce(new Error('replace failed'));
     await expect(im.consumePendingOpenerAsCard('g/oc_c/omt_t', SPEC)).resolves.toBe(false);
     expect(outboundMocks.recallOwnMessageWith).toHaveBeenCalledWith(fakeClient, 'om_opener');
-    expect(outboundMocks.rearmAnchorToTrigger).toHaveBeenCalledWith('g/oc_c/omt_t');
+    expect(outboundMocks.rearmAnchorToTrigger).toHaveBeenCalledWith('g/oc_c/omt_t', 'om_opener');
     expect(outboundMocks.registerCardLane).not.toHaveBeenCalled();
   });
 

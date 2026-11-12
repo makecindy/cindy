@@ -131,15 +131,30 @@ export async function assertBrowserNavigationAllowed(
     );
   }
 
-  // Browser proxy routing hides the final connect target from this process.
-  // Only block when the browser profile is known to be proxy-routed; Gateway
-  // provider proxy env alone is not proof of browser page proxy behavior.
+  // An explicit browser proxy resolves and connects outside this process, so
+  // local DNS pinning alone cannot prove the final connect target. Keep proxy
+  // navigation fail-closed unless the caller supplied a narrow public-hostname
+  // allowlist for this launch. The normal policy resolver below still rejects
+  // blocked names and private/special-use DNS answers for every permitted host.
   if (
     opts.browserProxyMode === "explicit-browser-proxy" &&
-    !isPrivateNetworkAllowedByPolicy(opts.ssrfPolicy)
+    parsed.protocol !== "https:"
   ) {
     throw new InvalidBrowserNavigationUrlError(
-      "Navigation blocked: strict browser SSRF policy cannot be enforced while this browser profile is proxy-routed",
+      "Navigation blocked: proxied browser navigation requires HTTPS",
+    );
+  }
+  const proxyHostnameAllowlist = (opts.ssrfPolicy?.hostnameAllowlist ?? [])
+    .map((pattern) => normalizeHostname(pattern))
+    .filter(Boolean);
+  if (
+    opts.browserProxyMode === "explicit-browser-proxy" &&
+    !isPrivateNetworkAllowedByPolicy(opts.ssrfPolicy) &&
+    (proxyHostnameAllowlist.length === 0 ||
+      !matchesHostnameAllowlist(normalizeHostname(parsed.hostname), proxyHostnameAllowlist))
+  ) {
+    throw new InvalidBrowserNavigationUrlError(
+      "Navigation blocked: proxied browser navigation requires an explicit public-hostname allowlist",
     );
   }
 

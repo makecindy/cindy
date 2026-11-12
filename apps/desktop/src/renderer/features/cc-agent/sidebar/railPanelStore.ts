@@ -38,9 +38,14 @@ export interface RailPanelState {
   lampScope: RailLampScope | null;
 }
 
+export interface RailLampSession {
+  id: string;
+  deviceLinkDeviceId?: string | null;
+}
+
 export interface RailLampScope {
-  projectSessionIds: readonly string[];
-  dialogueSessionIds: readonly string[];
+  projectSessions: readonly RailLampSession[];
+  dialogueSessions: readonly RailLampSession[];
 }
 
 /** hover 桥接:指针离开瓷砖/面板后的收回宽限(与 peek 抽屉同量级)。 */
@@ -146,10 +151,10 @@ export const railPanelStore = {
       (prev == null && scope == null) ||
       (prev != null &&
         scope != null &&
-        prev.projectSessionIds.length === scope.projectSessionIds.length &&
-        prev.dialogueSessionIds.length === scope.dialogueSessionIds.length &&
-        prev.projectSessionIds.every((id, i) => id === scope.projectSessionIds[i]) &&
-        prev.dialogueSessionIds.every((id, i) => id === scope.dialogueSessionIds[i]));
+        prev.projectSessions.length === scope.projectSessions.length &&
+        prev.dialogueSessions.length === scope.dialogueSessions.length &&
+        prev.projectSessions.every((session, i) => session.id === scope.projectSessions[i].id && session.deviceLinkDeviceId === scope.projectSessions[i].deviceLinkDeviceId) &&
+        prev.dialogueSessions.every((session, i) => session.id === scope.dialogueSessions[i].id && session.deviceLinkDeviceId === scope.dialogueSessions[i].deviceLinkDeviceId));
     if (same) return;
     emit({ ...state, lampScope: scope });
   },

@@ -1,10 +1,12 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { Image, StyleSheet, View } from 'react-native';
+import { RichContentContext, useDeferredRichContent } from './richContentContext';
 import { Directory, File, Paths } from 'expo-file-system';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import { buildMermaidWebViewHtml } from '@/session/mermaidWebViewHtml';
+import { registerMobileMessageWebView } from '@/session/mobileMessageWebViewMetrics';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { radius } from '@/theme/tokens';
+import { radius, spacing } from '@/theme/tokens';
 
 /** 导出光栅化倍率(相对 SVG 固有尺寸;WebView 内按 canvas 上限收敛)。 */
 const EXPORT_PNG_SCALE = 3;
@@ -15,6 +17,7 @@ const EXPORT_TMP_DIR_NAME = 'mermaid-export';
 export interface MermaidDiagramWebViewHandle {
   /** 把当前已渲染的 SVG 光栅化为 PNG(纯 base64,无 data: 前缀);未渲染/失败 reject。 */
   exportPng(): Promise<string>;
+  zoom(factor: number | "fit"): void;
 }
 
 interface PendingExport {
@@ -35,7 +38,12 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
   testID?: string;
   /** true 时页面允许双指缩放(详情查看用;内联预览保持锁定)。 */
   zoomable?: boolean;
+  active?: boolean;
+  /** Only the inline, tappable preview may release its WebView after taking a snapshot. */
+  cachePreview?: boolean;
 }>(function MermaidDiagramWebView({
+  active = true,
+  cachePreview = false,
   bare = false,
   deferSource = false,
   fill = false,
@@ -46,13 +54,41 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
 }, ref) {
   const styles = useThemedStyles(makeStyles);
   const { colors, mode } = useTheme();
+  const runtime = useContext(RichContentContext);
+  const previewEnabled = cachePreview && !!runtime && !fill && !zoomable;
+  const [width, setWidth] = useState(0);
+  // 全屏查看器(bare)铺在页面上,画布用页面底色;内联预览仍是 chip 底。
+  const canvas = bare ? colors.surface : colors.surfaceChip;
+  const cacheKey = JSON.stringify(['mermaid', source, mode, canvas, colors.textPrimary,
+    colors.textSecondary, colors.textTertiary, width, height]);
+  const [snapshot, setSnapshot] = useState<{ runtime: typeof runtime; key: string; uri: string;
+  } | null>(null);
+  const [failedKey, setFailedKey] = useState<string | null>(null);
+  const cachedPreview = useMemo(() => (previewEnabled ? runtime?.get(cacheKey) : undefined),
+    [cacheKey, previewEnabled, runtime]);
+  const preview = previewEnabled && failedKey !== cacheKey
+    ? snapshot?.runtime === runtime && snapshot?.key === cacheKey ? snapshot.uri : cachedPreview
+      : undefined;
+  const mountWebView = useDeferredRichContent(active && !preview && (!previewEnabled || width > 0), cacheKey, previewEnabled);
+  const currentKeyRef = useRef(cacheKey);
+  currentKeyRef.current = active ? cacheKey : '';
   const webViewRef = useRef<WebView | null>(null);
   // 导出任务信箱(id → promise 两端):按 id 配对回包,超时/卸载显式 reject。
   const pendingExportsRef = useRef(new Map<string, PendingExport>());
   const exportSeqRef = useRef(0);
 
+  useEffect(() => {
+    if (!mountWebView) return undefined;
+    return registerMobileMessageWebView('mermaid');
+  }, [mountWebView]);
+
   useImperativeHandle(ref, () => ({
-    exportPng() {
+      zoom(factor) {
+        webViewRef.current?.injectJavaScript(
+          `(function(){var r=document.getElementById('root');if(!r)return;var s=${factor == "fit" ? "1" : `(Number(r.dataset.previewScale)||1)*${factor}`};s=Math.max(.5,Math.min(5,s));r.dataset.previewScale=String(s);r.style.width=(innerWidth*s)+'px';r.style.minHeight=(innerHeight*s)+'px';var svg=r.querySelector('svg');if(svg)svg.style.setProperty('height',(innerHeight*s-24)+'px','important');if(s===1)window.scrollTo(0,0);})();true;`,
+        );
+      },
+      exportPng() {
       return new Promise<string>((resolve, reject) => {
         const webView = webViewRef.current;
         if (!webView) {
@@ -80,6 +116,7 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
   }), []);
 
   const handleMessage = useCallback((event: WebViewMessageEvent) => {
+    if (!active || currentKeyRef.current !== cacheKey) return;
     let message: unknown;
     try {
       message = JSON.parse(event.nativeEvent.data);
@@ -94,6 +131,14 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
       id?: unknown; ok?: unknown; base64?: unknown; error?: unknown;
     };
     if (typeof id !== 'string') return;
+    if (id === 'inline-preview' && previewEnabled) {
+      if (ok === true && typeof base64 === 'string' && base64.startsWith('iVBORw0KGgo')
+        && base64.length < 1024 * 1024) {
+        const uri = `data:image/png;base64,${base64}`;
+        if (runtime?.set(cacheKey, uri)) setSnapshot({ runtime, key: cacheKey, uri });
+      }
+      return;
+    }
     const pending = pendingExportsRef.current.get(id);
     if (!pending) return; // 超时后迟到的回包丢弃
     pendingExportsRef.current.delete(id);
@@ -103,7 +148,7 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
     } else {
       pending.reject(new Error(typeof error === 'string' && error ? error : 'mermaid export failed'));
     }
-  }, []);
+  }, [active, cacheKey, previewEnabled, runtime]);
 
   // 卸载时清空信箱:不兜底的话 exportPng promise 永不 settle。
   useEffect(() => () => {
@@ -112,22 +157,25 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
       pending.reject(new Error('mermaid webview unmounted'));
     }
     pendingExportsRef.current.clear();
-  }, []);
+  }, [active, source]);
 
   // 构建完整 HTML 非平凡字符串工作——memo 掉,只有源码或主题变化才重建,
   // 父级无关重渲染不重付。
   const html = useMemo(
-    () =>
-      buildMermaidWebViewHtml(source, {
-        surfaceChip: colors.surfaceChip,
+    () => {
+      if (!mountWebView) return '';
+      return buildMermaidWebViewHtml(source, {
+        surfaceChip: canvas,
         textPrimary: colors.textPrimary,
         textSecondary: colors.textSecondary,
         textTertiary: colors.textTertiary,
         dark: mode === 'dark',
         deferSource,
         zoomable,
-      }),
-    [source, colors.surfaceChip, colors.textPrimary, colors.textSecondary, colors.textTertiary, mode, deferSource, zoomable],
+        preview: previewEnabled && failedKey !== cacheKey,
+      });
+    },
+    [mountWebView, source, canvas, colors.textPrimary, colors.textSecondary, colors.textTertiary, mode, deferSource, zoomable, previewEnabled, failedKey, cacheKey],
   );
   return (
     // 尺寸必须钉在容器上(height 或 flex:1)、WebView 用 flex:1 填满:
@@ -141,8 +189,18 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
         fill ? styles.containerFill : { height },
       ]}
       testID={testID}
+      onLayout={previewEnabled ? (event) => setWidth(Math.round(event.nativeEvent.layout.width)) : undefined}
     >
-      <WebView
+      {active && preview ? (
+        <Image
+        source={{ uri: preview }}
+        resizeMode="contain"
+        style={styles.preview}
+        onError={() => { runtime?.delete(cacheKey); setFailedKey(cacheKey); }}
+      />
+      ) : mountWebView ? (
+        <WebView
+        key={cacheKey}
         automaticallyAdjustContentInsets={false}
         javaScriptEnabled
         nestedScrollEnabled
@@ -157,6 +215,7 @@ export const MermaidDiagramWebView = forwardRef<MermaidDiagramWebViewHandle, {
         }}
         style={styles.webView}
       />
+      ) : null}
     </View>
   );
 });
@@ -182,6 +241,7 @@ export async function writeMermaidExportPngTemp(base64: string): Promise<string 
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
+  preview: { flex: 1, margin: spacing.md },
   container: {
     backgroundColor: colors.surfaceChip,
     borderColor: colors.border,
@@ -191,7 +251,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   // 沉浸式全屏形态:无边框无圆角,图表铺到屏幕边缘。
   containerBare: {
-    backgroundColor: colors.surfaceChip,
+    backgroundColor: colors.surface,
     overflow: 'hidden',
   },
   containerFill: {

@@ -1,32 +1,30 @@
 /**
- * chat-embedding-settings-store —— 聊天嵌入开关的 main 端持久化 source of truth。
+ * chat-embedding-settings-store —— 对话语义索引开关的 main 端持久化真值。
  *
- * 落盘文件: <userData>/chat-embedding-settings.json
- *   { "enabled": true }
+ * 新设置按 data owner 落在 <userData>/owners/<ownerKey>/chat-embedding-settings.json。
+ * 文件只记录用户明确拨动的 override；有效默认值由当前稳定账号决定：企业组织账号开，
+ * 个人账号 / 本地模式 / 未登录关。恢复默认只删除 override，不快照当时的账号默认。
  *
- * 默认 true —— 聊天语义搜索默认全员开启以提升搜索体验。embedding 走 voyage-4
- * (~¥0.09/天/重度用户, 经 XD Gateway + 公司 LiteLLM bearer 集中承担, 不计用户钱包)。
- * "默认开"靠"无设置文件 → 用 DEFAULTS"实现: 全新装包 + 老用户从没碰过开关的,
- * 都会自动启用; 显式 toggle 关过 (文件 enabled:false) 的用户保持关闭, 不被覆盖。
- * 用户随时可在 Settings → 个性化 关闭。
- *
- * 注: 默认开只索引"开启之后"的新消息 (cutoff 语义, 不 backfill 历史, 见
- * chat-history-embedder.ts), 老对话仍由 FTS 在混合检索里兜底。
- *
- * 形态与 compat-mode-store / memory-settings-store 完全一致, 保持运维心智一致:
- *   - 同步 R/W (文件极小, < 30B), 不会卡 main 主线程
- *   - 写入用 .tmp + rename 原子语义, 防写一半崩 → JSON 截断
- *   - 内存 cache, 第一次从盘读, 后续走 cache
- *   - read 失败 (corrupt JSON / 权限) → fallback DEFAULTS + 删坏文件避免反复报错
- *
- * 注意: 启用状态 (enabled) 是 per-machine settings (跟 compat-mode 一样落 userData);
- * 而"cutoff timestamp" 是 per-DB 的事实 (落在 embedding_meta 表里, 见
- * chat-history-embedder.ts), 两者分开存。
+ * 旧版把设置写在 <userData>/chat-embedding-settings.json，且系统默认 true，因此只有
+ * enabled:false 能证明用户明确关闭过。升级时把这份 opt-out 归给第一个稳定云账号；
+ * 本地模式过去不展示该开关，不参与认领。
  */
 
 import { app } from 'electron';
+import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 
+import {
+  activeOwnerScopeKey,
+  dataOwnerStorageKey,
+  getActiveAppSession,
+  isAppSessionBoundaryPending,
+  ownerScopedUserDataPath,
+  type AppSessionMode,
+} from '../appSessionState.js';
+import { hasExclusiveSharedLegacyUserDataAccess } from '../ownerNamespaceMigration.js';
+import { readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 import {
   createOverrideSettingsFile,
@@ -34,50 +32,321 @@ import {
 } from './override-settings-file.js';
 
 const log = desktopMakerLogger.child('chat-embedding-settings-store');
+const SETTINGS_FILE = 'chat-embedding-settings.json';
+const LEGACY_CLAIM_FILE = '.chat-embedding-settings-owner-claim-v1.json';
+const MAX_SETTINGS_BYTES = 1_024;
+const STORAGE_DEFAULTS: ChatEmbeddingSettings = { enabled: false };
 
 export interface ChatEmbeddingSettings {
   enabled: boolean;
 }
 
-const DEFAULTS: ChatEmbeddingSettings = {
-  enabled: true,
-};
+export interface ChatEmbeddingDefaultContext {
+  mode: AppSessionMode;
+  isAuthenticated: boolean;
+  userId: string | null;
+  membershipKind: 'personal' | 'org' | null;
+}
+
+interface LegacyClaimMarker {
+  version: 1;
+  ownerKey: string;
+  complete: boolean;
+}
+
+type LegacyClaimRead =
+  { kind: 'valid'; marker: LegacyClaimMarker } | { kind: 'missing' } | { kind: 'blocked' };
+
+type LegacyChoiceRead = 'missing' | 'disabled' | 'not-disabled' | 'blocked';
+
+export function resolveChatEmbeddingDefault(context: ChatEmbeddingDefaultContext): boolean {
+  return context.mode === 'cloud' && context.isAuthenticated && context.membershipKind === 'org';
+}
 
 function settingsFilePath(): string {
-  return path.join(app.getPath('userData'), 'chat-embedding-settings.json');
+  return ownerScopedUserDataPath(SETTINGS_FILE);
+}
+
+function legacySettingsFilePath(): string {
+  return path.join(app.getPath('userData'), SETTINGS_FILE);
+}
+
+function legacyClaimFilePath(): string {
+  return path.join(app.getPath('userData'), LEGACY_CLAIM_FILE);
 }
 
 function normalize(raw: unknown): ChatEmbeddingSettings {
-  if (!raw || typeof raw !== 'object') return { ...DEFAULTS };
-  const r = raw as Record<string, unknown>;
+  if (!raw || typeof raw !== 'object') return { ...STORAGE_DEFAULTS };
   return {
-    enabled: typeof r.enabled === 'boolean' ? r.enabled : DEFAULTS.enabled,
+    enabled:
+      typeof (raw as { enabled?: unknown }).enabled === 'boolean'
+        ? (raw as { enabled: boolean }).enabled
+        : STORAGE_DEFAULTS.enabled,
   };
 }
 
 const store = createOverrideSettingsFile<ChatEmbeddingSettings>({
   filePath: settingsFilePath,
-  defaults: DEFAULTS,
+  defaults: STORAGE_DEFAULTS,
   normalize,
   log,
   label: 'chat embedding',
+  scopeKey: activeOwnerScopeKey,
+  maxBytes: MAX_SETTINGS_BYTES,
+  preserveUnreadableFile: true,
 });
 
-/** 同步读 —— 第一次从磁盘, 后续走内存 cache。 */
-export function readChatEmbeddingSettings(): ChatEmbeddingSettings {
-  return store.read();
+function readLegacyClaim(): LegacyClaimRead {
+  try {
+    const bytes = readBoundedFileNoFollowSync(legacyClaimFilePath(), MAX_SETTINGS_BYTES);
+    if (bytes === null) return { kind: 'blocked' };
+    const parsed: unknown = JSON.parse(bytes.toString('utf-8'));
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      !Array.isArray(parsed) &&
+      (parsed as { version?: unknown }).version === 1 &&
+      typeof (parsed as { ownerKey?: unknown }).ownerKey === 'string' &&
+      typeof (parsed as { complete?: unknown }).complete === 'boolean'
+    ) {
+      return { kind: 'valid', marker: parsed as LegacyClaimMarker };
+    }
+    return { kind: 'blocked' };
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ? { kind: 'missing' }
+      : { kind: 'blocked' };
+  }
 }
 
-export function readChatEmbeddingSettingsState(): OverrideSettingsState<ChatEmbeddingSettings> {
-  return store.readState();
+function readLegacyChoice(): LegacyChoiceRead {
+  try {
+    const bytes = readBoundedFileNoFollowSync(legacySettingsFilePath(), MAX_SETTINGS_BYTES);
+    if (bytes === null) return 'blocked';
+    const parsed: unknown = JSON.parse(bytes.toString('utf-8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 'blocked';
+    return (parsed as { enabled?: unknown }).enabled === false ? 'disabled' : 'not-disabled';
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'blocked';
+  }
 }
 
-/** 同步写 enabled 字段 + 更新 cache; 失败抛错让 IPC handler 反馈给 UI。 */
-export function writeChatEmbeddingEnabled(enabled: boolean): void {
-  store.writePatch({ enabled });
+function tryCreateLegacyClaim(ownerKey: string): LegacyClaimRead {
+  const markerPath = legacyClaimFilePath();
+  const temporaryPath = `${markerPath}.init-${process.pid}-${randomUUID()}`;
+  try {
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    fs.writeFileSync(
+      temporaryPath,
+      JSON.stringify({ version: 1, ownerKey, complete: false } satisfies LegacyClaimMarker),
+      { encoding: 'utf-8', flag: 'wx', mode: 0o600 },
+    );
+    fs.linkSync(temporaryPath, markerPath);
+    log.info('legacy chat embedding owner claimed', { ownerKey });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      log.warn('failed to claim legacy chat embedding setting', {
+        ownerKey,
+        errorCode: (error as NodeJS.ErrnoException).code ?? 'UNKNOWN',
+      });
+    }
+  } finally {
+    try {
+      fs.unlinkSync(temporaryPath);
+    } catch {
+      // The temporary file is not authoritative until the hard link exists.
+    }
+  }
+  return readLegacyClaim();
+}
+
+function completeLegacyClaim(ownerKey: string): boolean {
+  const markerPath = legacyClaimFilePath();
+  const temporaryPath = `${markerPath}.complete-${process.pid}-${randomUUID()}`;
+  try {
+    fs.writeFileSync(
+      temporaryPath,
+      JSON.stringify({ version: 1, ownerKey, complete: true } satisfies LegacyClaimMarker),
+      { encoding: 'utf-8', flag: 'wx', mode: 0o600 },
+    );
+    fs.renameSync(temporaryPath, markerPath);
+    return true;
+  } catch (error) {
+    log.warn('failed to complete legacy chat embedding owner claim', {
+      ownerKey,
+      errorCode: (error as NodeJS.ErrnoException).code ?? 'UNKNOWN',
+    });
+    return false;
+  } finally {
+    try {
+      fs.unlinkSync(temporaryPath);
+    } catch {
+      // rename already consumed the temporary file, or creation failed.
+    }
+  }
+}
+
+/**
+ * Returns true while a recognizable legacy opt-out still needs to be honored for this owner.
+ * The synchronous migration is safe because it only runs for a stable owner while this process
+ * has exclusive access to the shared legacy userData root.
+ */
+function migrateLegacyOptOut(context: ChatEmbeddingDefaultContext): boolean {
+  const session = getActiveAppSession();
+  if (
+    context.mode !== 'cloud' ||
+    !context.isAuthenticated ||
+    !context.membershipKind ||
+    session.mode !== 'cloud' ||
+    !session.dataOwnerId ||
+    context.userId !== session.dataOwnerId ||
+    isAppSessionBoundaryPending()
+  ) {
+    return false;
+  }
+
+  const ownerKey = dataOwnerStorageKey(session.dataOwnerId);
+  let claim = readLegacyClaim();
+  if (claim.kind === 'valid' && claim.marker.ownerKey !== ownerKey) return false;
+  if (claim.kind === 'valid' && claim.marker.complete) return false;
+
+  const legacyChoice = readLegacyChoice();
+  if (legacyChoice === 'blocked') return true;
+  if (legacyChoice !== 'disabled') return false;
+
+  if (claim.kind === 'missing') {
+    if (!hasExclusiveSharedLegacyUserDataAccess()) return true;
+    claim = tryCreateLegacyClaim(ownerKey);
+  }
+
+  if (claim.kind !== 'valid') return true;
+  if (claim.marker.ownerKey !== ownerKey) return false;
+  if (claim.marker.complete) return false;
+  if (!hasExclusiveSharedLegacyUserDataAccess()) return true;
+
+  store.invalidateIfChanged();
+  const current = store.readState();
+  if (!current.customizedKeys.includes('enabled')) {
+    try {
+      store.writePatch({ enabled: false }, { preserveDefaults: true });
+    } catch (error) {
+      log.warn('failed to preserve legacy chat embedding opt-out', {
+        ownerKey,
+        errorCode: (error as NodeJS.ErrnoException).code ?? 'UNKNOWN',
+      });
+      return true;
+    }
+  }
+
+  if (!completeLegacyClaim(ownerKey)) return true;
+  try {
+    fs.unlinkSync(legacySettingsFilePath());
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      log.warn('failed to remove migrated legacy chat embedding setting', {
+        ownerKey,
+        errorCode: (error as NodeJS.ErrnoException).code ?? 'UNKNOWN',
+      });
+    }
+  }
+  return false;
+}
+
+function acknowledgePendingLegacyForReset(context: ChatEmbeddingDefaultContext): boolean {
+  const session = getActiveAppSession();
+  if (
+    context.mode !== 'cloud' ||
+    !context.isAuthenticated ||
+    !session.dataOwnerId ||
+    context.userId !== session.dataOwnerId ||
+    isAppSessionBoundaryPending() ||
+    !hasExclusiveSharedLegacyUserDataAccess()
+  ) {
+    return false;
+  }
+
+  const ownerKey = dataOwnerStorageKey(session.dataOwnerId);
+  let claim = readLegacyClaim();
+  if (claim.kind === 'missing') claim = tryCreateLegacyClaim(ownerKey);
+  if (claim.kind === 'blocked') return completeLegacyClaim(ownerKey);
+  if (claim.kind !== 'valid' || claim.marker.ownerKey !== ownerKey) return false;
+  return claim.marker.complete || completeLegacyClaim(ownerKey);
+}
+
+function assertActiveOwner(context: ChatEmbeddingDefaultContext): void {
+  const session = getActiveAppSession();
+  if (
+    !session.dataOwnerId ||
+    isAppSessionBoundaryPending() ||
+    (context.mode === 'cloud' && context.userId !== session.dataOwnerId)
+  ) {
+    throw new Error('chat embedding settings require a stable data owner');
+  }
+}
+
+function projectState(
+  context: ChatEmbeddingDefaultContext,
+): OverrideSettingsState<ChatEmbeddingSettings> {
+  store.invalidateIfChanged();
+  const defaultEnabled = resolveChatEmbeddingDefault(context);
+  const pendingLegacyOptOut = migrateLegacyOptOut(context);
+  const state = store.readState();
+  const hasEnabledOverride = state.customizedKeys.includes('enabled');
+  // A preserved but unreadable owner file may contain an opt-out. Because a valid empty override
+  // file is never emitted by createOverrideSettingsFile, file-present + no enabled key fails closed.
+  // Project it as customized so Settings exposes the explicit Reset recovery path.
+  const unreadableOrUnknownOwnerOverride = !hasEnabledOverride && fs.existsSync(settingsFilePath());
+  const enabled = hasEnabledOverride
+    ? state.value.enabled
+    : pendingLegacyOptOut || unreadableOrUnknownOwnerOverride
+      ? false
+      : defaultEnabled;
+  const isCustomized =
+    hasEnabledOverride || pendingLegacyOptOut || unreadableOrUnknownOwnerOverride;
+  return {
+    value: { enabled },
+    defaults: { enabled: defaultEnabled },
+    isCustomized,
+    customizedKeys: isCustomized ? ['enabled'] : [],
+  };
+}
+
+export function readChatEmbeddingSettings(
+  context: ChatEmbeddingDefaultContext,
+): ChatEmbeddingSettings {
+  return projectState(context).value;
+}
+
+export function readChatEmbeddingSettingsState(
+  context: ChatEmbeddingDefaultContext,
+): OverrideSettingsState<ChatEmbeddingSettings> {
+  return projectState(context);
+}
+
+export async function writeChatEmbeddingEnabled(
+  enabled: boolean,
+  context: ChatEmbeddingDefaultContext,
+): Promise<OverrideSettingsState<ChatEmbeddingSettings>> {
+  assertActiveOwner(context);
+  await store.writePatchAtomic({ enabled }, { preserveDefaults: true });
   log.info('chat embedding setting written', { enabled });
+  return projectState(context);
 }
 
-export function resetChatEmbeddingSettings(): ChatEmbeddingSettings {
-  return store.reset();
+export async function resetChatEmbeddingSettings(
+  context: ChatEmbeddingDefaultContext,
+): Promise<OverrideSettingsState<ChatEmbeddingSettings>> {
+  assertActiveOwner(context);
+  const pendingLegacyOptOut = migrateLegacyOptOut(context);
+  if (pendingLegacyOptOut && !acknowledgePendingLegacyForReset(context)) {
+    throw new Error('legacy chat embedding setting migration is still pending');
+  }
+  await store.resetAtomic();
+  return projectState(context);
 }
+
+export const __testing = {
+  normalize,
+  readLegacyChoice,
+  resolveChatEmbeddingDefault,
+};

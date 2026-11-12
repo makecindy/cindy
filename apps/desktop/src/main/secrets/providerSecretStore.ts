@@ -1,6 +1,17 @@
+import { UNRECOVERABLE_PROVIDER_CREDENTIAL, parseCustomProviderHeaders, type UnrecoverableProviderCredential } from './providerCredentialState.js';
+export { UNRECOVERABLE_PROVIDER_CREDENTIAL, type UnrecoverableProviderCredential } from './providerCredentialState.js';
+import { createMcpAppRevisionKeyStore } from './mcpAppRevisionKeyCore.js';
+import {
+  isInstalledByokProvider,
+  readByokCredential,
+} from '../model-access/byokCredentials.js';
 import { app, safeStorage } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { createGhostSecretStore } from './ghostSecretStoreCore.js';
+import { readChunkedSecret, writeChunkedSecret } from './chunkedSecretFile.js';
+import { readStreamedSecret, writeStreamedSecret } from './streamedSecretFile.js';
 
 import { storedCustomProviderId } from '@cindy/model-providers';
 
@@ -20,11 +31,13 @@ import {
   GHOST_SECRET_HINT_PREFIX,
   PROVIDER_SECRET_IDS,
   PI_PROXY_DERIVATION_KEY_STORAGE_KEY,
+  MCP_APP_REVISION_KEY_STORAGE_KEY,
   REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY,
   type ProviderSecretId,
 } from '../../shared/providerSecrets.js';
 import {
   getActiveAppSession,
+  isAppSessionBoundaryPending,
   dataOwnerStorageKey,
   LOCAL_DATA_OWNER_ID,
 } from '../appSessionState.js';
@@ -78,6 +91,9 @@ function secretDir(): string {
 }
 
 const DYNAMIC_SECRET_PREFIXES = [
+  'ghost_alias_migration_',
+  'bot_environment_',
+  'byok_cache_',
   CUSTOM_MCP_SECRET_PREFIX,
   CUSTOM_PROVIDER_HEADER_SECRET_PREFIX,
   'provider_key_',
@@ -202,9 +218,11 @@ const electronSecretIo: SecretStorageIo = {
         .readdirSync(secretDir())
         .filter((f) => f.startsWith(prefix) && f.endsWith('.enc'))
         .map((f) => f.slice(prefix.length, -'.enc'.length));
-    } catch {
-      // 目录不存在(尚无任何密钥落盘)等 → 空列表。
-      return [];
+    } catch (err) {
+      if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return [];
+      }
+      throw err;
     }
   },
 };
@@ -263,6 +281,7 @@ export function createProviderSecretStore(
 ): ProviderSecretStore {
   let lastReconciledOwnerId: string | null = null;
   const notifySecretsCleared = (): void => {
+    mcpAppRevisionKeyStore.clear();
     for (const listener of secretsClearedListeners) {
       try {
         listener();
@@ -279,6 +298,7 @@ export function createProviderSecretStore(
     // 旧账号远端 host 上仍在跑的 daemon env 里的 token 必须失效,防串号。
     io.remove(REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY);
     io.remove(PI_PROXY_DERIVATION_KEY_STORAGE_KEY);
+    io.remove(MCP_APP_REVISION_KEY_STORAGE_KEY);
     // 动态键名密钥同清(按前缀扫 io.list()):自定义 MCP bearer token(mcp_token_<id>)、
     // 自定义供应商 per-runtime key(provider_key_*)、通用 OAuth 凭证 blob(provider_oauth_*)、
     // 意识 network 槽凭证(ghost_secret_*)。这些不在 PROVIDER_SECRET_IDS 静态集合里,
@@ -378,6 +398,19 @@ export function createProviderSecretStore(
   };
 }
 
+/** Setup consent only: check the current owner's standard slot without opening the keychain. */
+export function providerSecretSavedForSetup(id: ProviderSecretId): boolean {
+  const physicalKey = resolveOwnerScopedSecretStorageKey(providerSecretStorageKey(id));
+  if (!physicalKey) return false;
+  try {
+    fs.statSync(path.join(secretDir(), `${physicalKey}.enc`));
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
 let singleton: ProviderSecretStore | null = null;
 
 /** 进程内单例(默认 Electron IO)。 */
@@ -392,6 +425,9 @@ export function getProviderSecretStore(): ProviderSecretStore {
  * 与 renderer 经通用 safe-storage IPC 写入的 .enc 文件字节级互通。
  */
 export function readCustomProviderKey(providerId: string, agent: string): string | null {
+  const byok = readByokCredential(providerId, agent);
+  if (byok) return byok;
+  if (isInstalledByokProvider(providerId)) return null;
   const storageProviderId = storedCustomProviderId(providerId);
   try {
     return electronSecretIo.read(customProviderSecretStorageKey(storageProviderId, agent));
@@ -404,17 +440,6 @@ export function readCustomProviderKey(providerId: string, agent: string): string
   }
 }
 
-function parseCustomProviderHeaders(raw: string): Record<string, string> {
-  const value: unknown = JSON.parse(raw);
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('custom provider headers must be an object');
-  }
-  const entries = Object.entries(value as Record<string, unknown>);
-  if (entries.some(([name, headerValue]) => !name || typeof headerValue !== 'string')) {
-    throw new Error('custom provider headers must be string pairs');
-  }
-  return Object.fromEntries(entries) as Record<string, string>;
-}
 
 /** Read one runtime's encrypted custom headers for routing/Pi injection. */
 export function readCustomProviderHeaders(
@@ -435,14 +460,22 @@ export function readCustomProviderHeaders(
 }
 
 /**
+ * 严格快照的第三态：密文文件存在，但用当前 safeStorage 主密钥解不开（钥匙串条目变更、
+ * 由另一签名 / 构建写入等，见 #871）。重试无意义，只有显式替换值才允许覆盖它；回滚时
+ * 不尝试恢复这份旧 blob，而是删掉本次写入的新值（#3821）。
+ */
+
+
+/**
  * 配置 CRUD 回滚前的严格 API key 快照读取。
- * 仅 ENOENT 表示“没有旧 key”；owner / 加密不可用、文件读取或解密失败都必须抛错，
- * 防止调用方把暂时不可读的现有凭证误判为空并永久删除。
+ * 仅 ENOENT 表示“没有旧 key”；密文存在但解不开返回 UNRECOVERABLE_PROVIDER_CREDENTIAL；
+ * owner / 加密不可用、文件读取失败都必须抛错，防止调用方把暂时不可读的现有凭证误判为空
+ * 并永久删除。
  */
 export function readCustomProviderKeyForMutation(
   providerId: string,
   agent: string,
-): string | null {
+): string | null | UnrecoverableProviderCredential {
   const logicalKey = customProviderSecretStorageKey(providerId, agent);
   const scopedKey = resolveOwnerScopedSecretStorageKey(logicalKey);
   if (!scopedKey) throw new Error('provider secret owner is unavailable');
@@ -469,15 +502,19 @@ export function readCustomProviderKeyForMutation(
       { providerId, agent, err: err instanceof Error ? err.message : String(err) },
       'decrypt custom provider key snapshot failed',
     );
-    throw new Error('existing provider credential is unreadable');
+    return UNRECOVERABLE_PROVIDER_CREDENTIAL;
   }
 }
 
-/** Strict mutation snapshot for an encrypted runtime header blob. */
+/**
+ * Strict mutation snapshot for an encrypted runtime header blob. Same three states as
+ * readCustomProviderKeyForMutation: a blob that exists but cannot be decrypted (or parsed)
+ * is reported as UNRECOVERABLE_PROVIDER_CREDENTIAL instead of thrown.
+ */
 export function readCustomProviderHeadersForMutation(
   providerId: string,
   agent: string,
-): Record<string, string> | null {
+): Record<string, string> | null | UnrecoverableProviderCredential {
   const logicalKey = customProviderHeaderStorageKey(providerId, agent);
   const scopedKey = resolveOwnerScopedSecretStorageKey(logicalKey);
   if (!scopedKey) throw new Error('provider secret owner is unavailable');
@@ -500,7 +537,7 @@ export function readCustomProviderHeadersForMutation(
       { providerId, agent, err: err instanceof Error ? err.message : String(err) },
       'decrypt custom provider headers snapshot failed',
     );
-    throw new Error('existing provider header credentials are unreadable');
+    return UNRECOVERABLE_PROVIDER_CREDENTIAL;
   }
 }
 
@@ -598,6 +635,19 @@ export function writePiProxyDerivationKey(value: string): boolean {
   }
 }
 
+/** Owner-scoped revision key: private, encrypted and stable across Host restarts. */
+const mcpAppRevisionKeyStore = createMcpAppRevisionKeyStore({
+  filePath: () => {
+    const storageKey = resolveOwnerScopedSecretStorageKey(MCP_APP_REVISION_KEY_STORAGE_KEY);
+    if (!storageKey || isAppSessionBoundaryPending()) throw new Error('owner unavailable');
+    return path.join(secretDir(), `${storageKey}.enc`);
+  },
+  available: () => safeStorage.isEncryptionAvailable(),
+  read: () => readPhysical(resolveOwnerScopedSecretStorageKey(MCP_APP_REVISION_KEY_STORAGE_KEY)!),
+  encrypt: value => safeStorage.encryptString(value).toString('base64'),
+});
+export function getMcpAppRevisionKey(): string { return mcpAppRevisionKeyStore.get(); }
+
 /** 删除某自定义供应商 runtime 的 API key；不存在视为成功。 */
 export function removeCustomProviderKey(
   providerId: string,
@@ -647,175 +697,75 @@ export function readCustomMcpToken(mcpId: string): string | null {
   }
 }
 
-/**
- * 通用 OAuth 供应商凭证 blob 的 main 侧存储 IO（`provider_oauth_<id>`，机制同上）。
- * generic-oauth Runner 经 setter 注入消费（保持 Runner 可脱 Electron 单测）。
- */
-/**
- * 读取某意识的某条 network 槽凭证(**main 侧 networkSlot 注入专用**)。
- * 不存在 / safeStorage 不可用 / 读失败均返回 null。与 renderer 经通用
- * safe-storage IPC 写入的 .enc 文件字节级互通。凭证值从不进日志(只记 id)。
- */
-export function readGhostSecret(ghostId: string, secretKey: string): string | null {
+/** Writes a custom MCP access token under the same key the settings page uses (main-only callers). */
+export function storeCustomMcpToken(mcpId: string, value: string): boolean {
   try {
-    return electronSecretIo.read(ghostSecretStorageKey(ghostId, secretKey));
-  } catch (err) {
-    log.warn(
-      { ghostId, secretKey, err: err instanceof Error ? err.message : String(err) },
-      'read ghost secret failed',
-    );
-    return null;
-  }
-}
-
-/**
- * Strict Ghost secret read for owner-stable repair jobs. Absence is still a
- * normal null result, while keychain, IO, and decrypt failures remain errors
- * so the durable coordinator can retry instead of memoizing a false no-op.
- */
-export function readGhostSecretStrict(ghostId: string, secretKey: string): string | null {
-  const physicalKey = resolveOwnerScopedSecretStorageKey(
-    ghostSecretStorageKey(ghostId, secretKey),
-  );
-  if (!physicalKey) return null;
-  const filepath = path.join(secretDir(), `${physicalKey}.enc`);
-  let encoded: string;
-  try {
-    encoded = fs.readFileSync(filepath, 'utf-8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
-  }
-  if (!safeStorage.isEncryptionAvailable()) {
-    throw new Error('safeStorage is unavailable');
-  }
-  return safeStorage.decryptString(Buffer.from(encoded, 'base64'));
-}
-
-/**
- * 只查某意识凭证是否已入库(加密文件存在性,**不解密**)。插件页 setup
- * 就绪检查专用:判定只需要「存没存」,解密既无必要,还会把 safeStorage
- * 读取异常折叠成「未配置」造成误拦——存在性口径下,文件在就算已配置
- * (即便当下解密不可用,那是注入期要处理的问题,不该拦在使用入口)。
- * ENOENT 之外的真 IO 异常(如权限)**原样上抛**:「查询失败」≠「未配置」,
- * 调用方(ghosts:setup-status)让 invoke reject,renderer 侧 fail-open。
- * 键名走 ghostSecretStorageKey(官方别名同 read 侧)。
- */
-export function ghostSecretSaved(ghostId: string, secretKey: string): boolean {
-  try {
-    const physicalKey = resolveOwnerScopedSecretStorageKey(
-      ghostSecretStorageKey(ghostId, secretKey),
-    );
-    if (!physicalKey) return false;
-    fs.statSync(path.join(secretDir(), `${physicalKey}.enc`));
-    return true;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
-    throw err;
-  }
-}
-
-/**
- * 写入某意识的某条 network 槽凭证(**main 侧 /secrets 只写通道专用**,
- * input:'ghost' 凭证由意识 settingsHtml 收单后经协议一次性交来)。
- * 键名走 ghostSecretStorageKey(官方别名同 read 侧),与 renderer 写入的
- * .enc 文件字节级互通。凭证值从不进日志(只记 id)。
- */
-export function storeGhostSecret(ghostId: string, secretKey: string, value: string): boolean {
-  try {
-    const ok = electronSecretIo.write(ghostSecretStorageKey(ghostId, secretKey), value);
-    if (ok) {
-      // 入库即截尾 4 位指纹(分键保管,读路径永不碰明文);值太短不产指纹,
-      // 且要清掉旧值可能留下的指纹。指纹写失败不连坐主凭证(best-effort)。
+    const scopedKey = resolveOwnerScopedSecretStorageKey(customMcpSecretStorageKey(mcpId));
+    if (!scopedKey || !safeStorage.isEncryptionAvailable()) return false;
+    // Freeze the owner and directory before encryption. Keep the existing base64 format.
+    const directory = secretDir();
+    const target = path.join(directory, `${scopedKey}.enc`);
+    const encrypted = safeStorage.encryptString(value).toString('base64');
+    fs.mkdirSync(directory, { recursive: true });
+    const temporary = `${target}.${randomBytes(16).toString('hex')}.tmp`;
+    // Open outside the cleanup block: an exclusive-open collision is not our file.
+    const fd = fs.openSync(temporary, 'wx', 0o600);
+    try {
       try {
-        const tail = deriveGhostSecretTail(value);
-        const hintKey = ghostSecretHintStorageKey(ghostId, secretKey);
-        if (tail) electronSecretIo.write(hintKey, tail);
-        else electronSecretIo.remove(hintKey);
-      } catch (err) {
-        log.warn(
-          { ghostId, secretKey, err: err instanceof Error ? err.message : String(err) },
-          'store ghost secret tail failed',
-        );
+        fs.writeFileSync(fd, encrypted, 'utf-8');
+      } finally {
+        fs.closeSync(fd);
+      }
+      // Never delete the old target first, including when replacement is refused.
+      fs.renameSync(temporary, target);
+      return true;
+    } finally {
+      try {
+        fs.unlinkSync(temporary);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          log.warn('custom mcp token temporary ciphertext cleanup failed');
+        }
       }
     }
-    return ok;
   } catch (err) {
     log.warn(
-      { ghostId, secretKey, err: err instanceof Error ? err.message : String(err) },
-      'store ghost secret failed',
+      { mcpId, err: err instanceof Error ? err.message : String(err) },
+      'write custom mcp token failed',
     );
     return false;
   }
 }
 
 /**
- * 读某意识某条凭证的「尾 4 位指纹」(/secrets GET 状态回查用)。
- * 常规路径只回入库时预截的指纹;老键(host 收单时代或别名互通存的)没截过
- * 指纹,首查时**懒回填**——main 本来就持有明文读取权(每次代发注入都在读),
- * 此处补读一次截存指纹,沙箱可见面不变(仍只有预截的 4 个字符)。
- * 没存过 / 值太短不产指纹 / 读失败均返回 null(UI 降级成只显示「已保存」)。
- * io 可注入以便单测;生产走 electronSecretIo 包装。
+ * 通用 OAuth 供应商凭证 blob 的 main 侧存储 IO（`provider_oauth_<id>`，机制同上）。
+ * generic-oauth Runner 经 setter 注入消费（保持 Runner 可脱 Electron 单测）。
  */
-export function readGhostSecretTailFromIo(
-  io: SecretStorageIo,
-  ghostId: string,
-  secretKey: string,
-): string | null {
-  try {
-    const hintKey = ghostSecretHintStorageKey(ghostId, secretKey);
-    const existing = io.read(hintKey);
-    if (existing !== null) return existing;
-    const value = io.read(ghostSecretStorageKey(ghostId, secretKey));
-    if (value === null) return null;
-    const tail = deriveGhostSecretTail(value);
-    if (tail) io.write(hintKey, tail);
-    return tail;
-  } catch (err) {
-    log.warn(
-      { ghostId, secretKey, err: err instanceof Error ? err.message : String(err) },
-      'read ghost secret tail failed',
-    );
-    return null;
-  }
-}
-
-/** readGhostSecretTailFromIo 的生产入口(默认 safeStorage IO)。 */
-export function readGhostSecretTail(ghostId: string, secretKey: string): string | null {
-  return readGhostSecretTailFromIo(electronSecretIo, ghostId, secretKey);
-}
-
-/** 清除某意识的单条 network 槽凭证(/secrets DELETE 用;幂等,连同尾指纹)。 */
-export function removeGhostSecret(ghostId: string, secretKey: string): void {
-  try {
-    electronSecretIo.remove(ghostSecretStorageKey(ghostId, secretKey));
-    electronSecretIo.remove(ghostSecretHintStorageKey(ghostId, secretKey));
-  } catch (err) {
-    log.warn(
-      { ghostId, secretKey, err: err instanceof Error ? err.message : String(err) },
-      'remove ghost secret failed',
-    );
-  }
-}
-
-/**
- * 清掉某意识名下的全部 network 槽凭证(卸载意识时调用;幂等)。
- * 按 `ghost_secret_<ghostId>_` 前缀扫 io.list(),不依赖清单里的 secrets
- * 声明——旧版本声明过、新版本删掉的孤儿键也一并清。
- */
-export function removeGhostSecrets(ghostId: string): void {
-  const prefixes = [`${GHOST_SECRET_PREFIX}${ghostId}_`, `${GHOST_SECRET_HINT_PREFIX}${ghostId}_`];
-  try {
-    for (const key of electronSecretIo.list()) {
-      if (prefixes.some((prefix) => key.startsWith(prefix))) electronSecretIo.remove(key);
+const ghostSecretStore = createGhostSecretStore({
+  ...electronSecretIo,
+  readStrict(key) {
+    const physicalKey = resolveOwnerScopedSecretStorageKey(key);
+    if (!physicalKey) return null;
+    let encoded: string;
+    try { encoded = fs.readFileSync(path.join(secretDir(), `${physicalKey}.enc`), 'utf8'); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
     }
-  } catch (err) {
-    log.warn(
-      { ghostId, err: err instanceof Error ? err.message : String(err) },
-      'remove ghost secrets failed',
-    );
-  }
-}
+    if (!safeStorage.isEncryptionAvailable()) throw new Error('safeStorage is unavailable');
+    return safeStorage.decryptString(Buffer.from(encoded, 'base64'));
+  },
+  saved(key) {
+    const physicalKey = resolveOwnerScopedSecretStorageKey(key);
+    if (!physicalKey) return false;
+    try { fs.statSync(path.join(secretDir(), `${physicalKey}.enc`)); return true; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw error;
+    }
+  },
+}, log);
+export const { migrateInstalledGhostSecretAliases, readGhostSecret, readGhostSecretStrict, ghostSecretSaved, storeGhostSecret, readGhostSecretTailFromIo, readGhostSecretTail, removeGhostSecret, removeGhostSecrets, assertGhostSecretsCanRelocate, migrateGhostSecrets } = ghostSecretStore;
 
 export const genericOAuthSecretIo = {
   read(providerId: string): string | null {
@@ -890,3 +840,78 @@ export const genericOAuthSecretIo = {
     }
   },
 };
+
+/** Main-only BYOK snapshot storage; key names are fixed SHA-256 identities. */
+export const byokSnapshotSecretIo = {
+  read(key: string): string | null {
+    if (!/^byok_cache_[a-f0-9]{64}$/.test(key)) return null;
+    return electronSecretIo.read(key);
+  },
+  write(key: string, value: string): boolean {
+    if (!/^byok_cache_[a-f0-9]{64}$/.test(key)) return false;
+    return electronSecretIo.write(key, value);
+  },
+};
+
+/** Host-only companion environment. The key is never admitted by renderer safe-storage IPC. */
+export const botEnvironmentSecretIo = {
+  has(key: string): boolean {
+    if (!/^bot_environment_[a-f0-9]{64}$/.test(key)) throw new Error('Invalid companion secret key');
+    const scoped = resolveOwnerScopedSecretStorageKey(key);
+    if (!scoped) throw new Error('Companion credential storage unavailable');
+    try { return fs.readdirSync(secretDir()).some(name => name === `${scoped}.enc` || name === `${scoped}.resources` || companionTemporaryFile(name, scoped)); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
+  },
+  async read(key: string, assertCurrent?: () => void): Promise<string | null> {
+    const { scoped, assertOwner } = companionSecretScope(key, assertCurrent);
+    return readChunkedSecret(path.join(secretDir(), `${scoped}.enc`), scoped, companionCipher, assertOwner);
+  },
+  async write(key: string, value: string, assertCurrent?: () => void): Promise<boolean> {
+    const { scoped, assertOwner } = companionSecretScope(key, assertCurrent);
+    await writeChunkedSecret(path.join(secretDir(), `${scoped}.enc`), scoped, value, companionCipher, assertOwner);
+    return true;
+  },
+  async writeResource(key: string, id: string, chunks: AsyncIterable<string>, assertCurrent: () => void): Promise<string> {
+    if (!/^[a-f0-9]{64}$/.test(id)) throw new Error('Invalid companion resource id');
+    const { scoped, assertOwner } = companionSecretScope(key, assertCurrent);
+    return writeStreamedSecret(path.join(secretDir(), `${scoped}.resources`, `${id}.enc`), `${scoped}:${id}`, chunks, companionCipher, assertOwner);
+  },
+  async *readResource(key: string, id: string, digest: string, assertCurrent: () => void): AsyncGenerator<string> {
+    if (!/^[a-f0-9]{64}$/.test(id) || !/^[a-f0-9]{64}$/.test(digest)) throw new Error('Invalid companion resource id');
+    const { scoped, assertOwner } = companionSecretScope(key, assertCurrent);
+    yield* readStreamedSecret(path.join(secretDir(), `${scoped}.resources`, `${id}.enc`), `${scoped}:${id}`, digest, companionCipher, assertOwner);
+  },
+  async removeResourceFiles(key: string, assertCurrent: () => void): Promise<void> {
+    const { scoped, assertOwner } = companionSecretScope(key, assertCurrent, false);
+    assertOwner();
+    await fs.promises.rm(path.join(secretDir(), `${scoped}.resources`), { recursive: true, force: true });
+    assertOwner();
+  },
+  remove(key: string): boolean {
+    if (!/^bot_environment_[a-f0-9]{64}$/.test(key)) return false;
+    const scoped = resolveOwnerScopedSecretStorageKey(key);
+    if (!scoped) return false;
+    try {
+      // Remove encrypted leftovers from a hard crash as well as the committed file.
+      for (const name of fs.readdirSync(secretDir())) if (companionTemporaryFile(name, scoped)) fs.unlinkSync(path.join(secretDir(), name));
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false; }
+    return electronSecretIo.remove(key).success;
+  },
+};
+
+const companionCipher = { encrypt: (value: string) => safeStorage.encryptString(value), decrypt: (value: Buffer) => safeStorage.decryptString(value) };
+function companionTemporaryFile(name: string, scoped: string): boolean {
+  return name.startsWith(`${scoped}.enc.`) && /^[a-f0-9-]{36}\.tmp$/.test(name.slice(scoped.length + 5));
+}
+function companionSecretScope(key: string, assertCurrent: () => void = () => {}, requireEncryption = true) {
+  if (!/^bot_environment_[a-f0-9]{64}$/.test(key)) throw new Error('Invalid companion secret key');
+  const scoped = resolveOwnerScopedSecretStorageKey(key);
+  const generation = getActiveAppSession().generation;
+  const assertOwner = () => {
+    assertCurrent();
+    if (!scoped || isAppSessionBoundaryPending() || resolveOwnerScopedSecretStorageKey(key) !== scoped || getActiveAppSession().generation !== generation)
+      throw new Error('Companion credential owner changed');
+    if (requireEncryption && !safeStorage.isEncryptionAvailable()) throw new Error('Companion credential storage unavailable');
+  };
+  assertOwner(); return { scoped: scoped!, assertOwner };
+}

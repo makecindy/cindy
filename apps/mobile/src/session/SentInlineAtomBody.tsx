@@ -6,6 +6,7 @@ import {
   type TextStyle,
   type ViewStyle,
 } from "react-native";
+import { slashCommandDisplayLabel } from "@cindy/maker-shared/composer-palette";
 import { FileText } from "lucide-react-native";
 import { Text } from "@/components/AppText";
 import { InlineQuoteChip } from "@/session/InlineQuoteChip";
@@ -100,11 +101,12 @@ export function SentInlineAtomBody({
           );
         }
         if (token.kind === "slash") {
+          const slashLabel = slashCommandDisplayLabel(token.text);
           return (
             <InlineReferenceChip
-              accessibilityLabel={token.text}
+              accessibilityLabel={slashLabel}
               key={`slash:${index}`}
-              label={token.text}
+              label={slashLabel}
               testID="message.slashCommandChip"
             />
           );

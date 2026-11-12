@@ -14,6 +14,10 @@ import {
   type ToolUseDescriptor,
 } from './toolUseDescriptor';
 import type { CommandIntent, CommandIntentAction } from './commandIntent';
+import {
+  presentationText,
+  type PresentationLocalizer,
+} from './presentationLocalization';
 
 export type MessageFoldHeaderChevronPosition = 'leading' | 'trailing';
 
@@ -67,6 +71,10 @@ export interface ToolRowPresentationOptions {
   intentOverride?: CommandIntent;
   /** Shared work projection owns status when rendering a split command row. */
   statusOverride?: ToolRowStatus;
+  /** Localized row verbs; defaults to Chinese DEFAULT_TOOL_ROW_WORDING. */
+  wording?: ToolRowWording;
+  /** Optional localizer for tool-group aggregate titles. */
+  localizer?: PresentationLocalizer;
 }
 
 export interface TodoStatusPresentation {
@@ -84,11 +92,13 @@ export interface TodoCardPresentation {
 
 export type MessageActionBarAlignment = 'left' | 'right';
 
-export type MessageActionBarItemId = 'copy' | 'cost' | 'fork' | 'more' | 'streaming' | 'time';
+export type MessageActionBarItemId = 'copy' | 'cost' | 'edit' | 'fork' | 'more' | 'time';
 
 export interface MessageActionBarPresentationInput {
   align: 'agent' | 'user';
   canCopy: boolean;
+  /** 只有最后一条用户消息可编辑(编辑 = 回退本轮 + 用改后的内容重发)。 */
+  canEdit?: boolean;
   canFork: boolean;
   hasMoreActions?: boolean;
   hasTime: boolean;
@@ -311,13 +321,16 @@ export interface ToolRowWording {
   intentVerb(action: CommandIntentAction): string;
   /** fileChange 多文件复合短语("更新 3 个文件");量词与语序语言相关,整短语粒度,count 恒 >= 2。 */
   updateFilesLabel(count: number): string;
+  /** Compact activity fallback when no reliable action description is available. */
+  toolCallLabel?(): string;
 }
 
-export const DEFAULT_TOOL_ROW_WORDING: ToolRowWording = {
+export const DEFAULT_TOOL_ROW_WORDING = {
   verb: (key) => TOOL_ROW_VERB_ZH[key],
   intentVerb: (action) => INTENT_VERB_ZH[action],
   updateFilesLabel: (count) => `${TOOL_ROW_VERB_ZH.update} ${count} 个文件`,
-};
+  toolCallLabel: () => '正在调用工具…',
+} satisfies ToolRowWording;
 
 const TOOL_ROW_TEXT_MAX_CHARS = 60;
 
@@ -351,11 +364,12 @@ export function buildMessageActionBarPresentation(
   input: MessageActionBarPresentationInput,
 ): MessageActionBarPresentation {
   if (input.isStreaming) {
+    // Match desktop: streaming replies have no action row or status placeholder.
     return {
       align: 'left',
       buttonSize: 24,
       iconSize: 14,
-      items: ['streaming'],
+      items: [],
     };
   }
 
@@ -370,6 +384,8 @@ export function buildMessageActionBarPresentation(
     input.hasTime ? 'time' : null,
     input.canCopy ? 'copy' : null,
     input.canFork ? 'fork' : null,
+    // 对齐桌面用户消息操作行 [time][copy][fork][edit][...][more]。
+    input.canEdit ? 'edit' : null,
     input.hasMoreActions ? 'more' : null,
   ];
   const items = (input.align === 'agent' ? agentItems : userItems).filter(isMessageActionBarItemId);
@@ -388,9 +404,10 @@ export function summarizeToolGroupPresentation<
   item: MessageRenderToolGroupItem<TMessage>,
   options: ToolRowPresentationOptions = {},
 ): ToolGroupPresentation {
+  const wording = options.wording ?? DEFAULT_TOOL_ROW_WORDING;
   const primary = item.tools[0];
-  const title = formatToolGroupSummary(item.tools)
-    || (primary?.label ? `调用 ${primary.label}` : '调用了工具');
+  const title = formatToolGroupSummary(item.tools, options.localizer)
+    || (primary?.label ? joinVerb(wording.verb('use'), primary.label) : wording.verb('use'));
   const hasRunning = item.tools.some((tool) => toolRowStatus(tool, options) === 'running');
 
   // 折叠工具组只显示聚合标题(desktopPlainFoldHeader.subtitle 恒 null,对齐桌面):
@@ -415,7 +432,7 @@ export function summarizeToolRowPresentation<
   const hasError = isContentOutputDescriptor(descriptor)
     ? isContentToolFailureLike(tool)
     : isToolErrorLike(tool);
-  const text = formatToolRowText(descriptor);
+  const text = formatToolRowText(descriptor, options.wording);
 
   return {
     hasError,
@@ -622,12 +639,21 @@ export function todoStatusPresentation(status: MessageRenderTodoItem['status']):
 
 export function summarizeWorkGroupPresentation<
   TMessage extends MessagePresentationToolLike,
->(item: MessageRenderWorkGroupItem<TMessage>): WorkGroupPresentation {
+>(
+  item: MessageRenderWorkGroupItem<TMessage>,
+  localizer?: PresentationLocalizer,
+): WorkGroupPresentation {
+  const duration = item.durationMs !== undefined ? formatDuration(item.durationMs) : undefined;
   const title = item.isStreaming
-    ? '正在工作…'
-    : item.durationMs !== undefined
-      ? `已工作 ${formatDuration(item.durationMs)}`
-      : '工作过程';
+    ? presentationText(localizer, 'chat.workGroup.working', 'Working…')
+    : duration !== undefined
+      ? presentationText(
+        localizer,
+        'chat.workGroup.worked',
+        `Worked for ${duration}`,
+        { duration },
+      )
+      : presentationText(localizer, 'chat.workGroup.workDetails', 'Work details');
 
   return {
     header: desktopPlainFoldHeader({ title }),
@@ -654,10 +680,17 @@ export function isToolErrorLike(
     .test(text);
 }
 
+/** Same failure decision as a tool row, for a Host that only holds the descriptor and result text. */
+export function isToolResultFailureLike(descriptor: ToolUseDescriptor, result: string): boolean {
+  const tool = { body: '', secondaryBody: result };
+  return isContentOutputDescriptor(descriptor) ? isContentToolFailureLike(tool) : isToolErrorLike(tool);
+}
+
 /** 结果正文是「内容」的工具(读文件 / 搜索 / 网页):对其输出跑全文错误关键词匹配没有意义。 */
 function isContentOutputDescriptor(descriptor: ToolUseDescriptor): boolean {
   if (descriptor.kind === 'file') return descriptor.action === 'read';
-  return descriptor.kind === 'search' || descriptor.kind === 'web';
+  return descriptor.kind === 'search' || descriptor.kind === 'web'
+    || descriptor.kind === 'mcp' || descriptor.kind === 'dynamic';
 }
 
 /**
@@ -675,7 +708,7 @@ export function isContentToolFailureLike(
   const firstLine = secondary.split('\n', 1)[0].trim();
   // 字符类是全角冒号 U+FF1A + 半角冒号 U+003A 并列;别把全角的归一化成半角,
   // 会变成重复字符类(CodeQL 已拦过一次)。
-  return /^(error\b|request failed\b|failed to \S|enoent\b|eacces\b|permission denied\b|错误[：:]|(读取|搜索|请求|抓取)失败|无法(读取|访问|打开|获取))/i
+  return /^(error\b|mcp error(?:\s+-?\d+)?[：:]|request failed\b|failed to \S|enoent\b|eacces\b|permission denied\b|错误[：:]|(读取|搜索|请求|抓取)失败|无法(读取|访问|打开|获取))/i
     .test(firstLine);
 }
 
@@ -686,15 +719,43 @@ function isMessageActionBarItemId(value: MessageActionBarItemId | null): value i
 // 聚合摘要头（中文，对齐桌面 zh-CN：「编辑 3 个文件、运行 2 条命令 和 调用 1 个工具」口径的分隔符）。
 function formatToolGroupSummary<TMessage extends MessagePresentationToolLike>(
   tools: readonly TMessage[],
+  localizer?: PresentationLocalizer,
 ): string {
   const entries = aggregateToolSummaryVerbs(tools);
   const truncatedExtra = entries.length > 5 ? entries.length - 5 : 0;
-  const parts = entries.slice(0, 5).map((entry) => TOOL_SUMMARY_PART_ZH[entry.verb](entry.count));
-  if (truncatedExtra > 0) parts.push(`另外 ${truncatedExtra} 项`);
 
+  if (!localizer) {
+    const parts = entries.slice(0, 5).map((entry) => TOOL_SUMMARY_PART_ZH[entry.verb](entry.count));
+    if (truncatedExtra > 0) parts.push(`另外 ${truncatedExtra} 项`);
+    if (parts.length === 0) return '';
+    if (parts.length === 1) return parts[0];
+    return `${parts.slice(0, -1).join('、')} 和 ${parts[parts.length - 1]}`;
+  }
+
+  const parts = entries.slice(0, 5).map((entry) => presentationText(
+    localizer,
+    `chat.agentActions.part.${entry.verb}`,
+    TOOL_SUMMARY_PART_ZH[entry.verb](entry.count),
+    { count: entry.count },
+  ));
+  if (truncatedExtra > 0) {
+    parts.push(presentationText(
+      localizer,
+      'chat.agentActions.more',
+      `另外 ${truncatedExtra} 项`,
+      { count: truncatedExtra },
+    ));
+  }
   if (parts.length === 0) return '';
-  if (parts.length === 1) return parts[0];
-  return `${parts.slice(0, -1).join('、')} 和 ${parts[parts.length - 1]}`;
+  if (parts.length === 1) return capitalizeFirst(parts[0]);
+  const separator = presentationText(localizer, 'chat.agentActions.separator', '、');
+  const lastSeparator = presentationText(localizer, 'chat.agentActions.lastSeparator', ' 和 ');
+  return capitalizeFirst(`${parts.slice(0, -1).join(separator)}${lastSeparator}${parts[parts.length - 1]}`);
+}
+
+function capitalizeFirst(text: string): string {
+  if (!text) return text;
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function aggregateToolSummaryVerbs<TMessage extends MessagePresentationToolLike>(
@@ -790,12 +851,14 @@ function isErrorRecord(value: string): boolean {
     const parsed = JSON.parse(value) as unknown;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
     const record = parsed as Record<string, unknown>;
-    if (record.ok === false || record.success === false) return true;
+    if (record.ok === false || record.success === false || record.isError === true || record.is_error === true) return true;
     const status = typeof record.status === 'string' ? record.status.toLowerCase() : '';
     if (status === 'error' || status === 'failed' || status === 'failure') return true;
     return ['error', 'errors', 'exception', 'stderr'].some((key) => {
       const raw = record[key];
-      return typeof raw === 'string' ? raw.trim().length > 0 : raw !== undefined && raw !== null;
+      if (typeof raw === 'string') return raw.trim().length > 0;
+      if (Array.isArray(raw)) return raw.length > 0;
+      return raw !== undefined && raw !== null;
     });
   } catch {
     return false;

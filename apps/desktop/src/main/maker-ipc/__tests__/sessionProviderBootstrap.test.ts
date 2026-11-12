@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  clearAllSessionProviders,
   clearSessionProvider,
   getSessionProvider,
   hydrateSessionProvider,
@@ -83,5 +84,15 @@ describe('persistAndHydrateSessionProvider', () => {
     await hydration;
 
     expect(getSessionProvider(TEST_SESSION_ID)).toBe('anthropic');
+  });
+
+  it('clears every owner-scoped provider route at an account boundary', () => {
+    setSessionProvider(TEST_SESSION_ID, 'anthropic');
+    setSessionProvider('session-provider-bootstrap-other', 'openai');
+
+    clearAllSessionProviders();
+
+    expect(getSessionProvider(TEST_SESSION_ID)).toBeNull();
+    expect(getSessionProvider('session-provider-bootstrap-other')).toBeNull();
   });
 });

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * BrowserCommentPopover —— 页面评论的宿主侧输入气泡。
  *
@@ -25,6 +26,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { SlidersHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { Tip } from '@/components/ui/tooltip';
 import { parseCssColor } from '@/lib/browserComments';
 import { cn } from '@/lib/utils';
 
@@ -182,7 +184,10 @@ export function BrowserCommentPopover({
       const styles: Record<string, string> = {};
       for (const [property, value] of Object.entries(nextEdits)) {
         const trimmed = value.trim();
-        if (trimmed && !isSameStyleValue(property, trimmed, designBaseline.styles[property] ?? '')) {
+        if (
+          trimmed &&
+          !isSameStyleValue(property, trimmed, designBaseline.styles[property] ?? '')
+        ) {
           styles[property] = trimmed;
         }
       }
@@ -264,8 +269,31 @@ export function BrowserCommentPopover({
   const inputCls = cn(
     'w-full rounded-md border border-[var(--border-default)] bg-transparent',
     'px-2 py-1 text-12 leading-[1.4] text-[var(--text-primary)]',
-    'placeholder:text-[var(--text-tertiary)] outline-none',
+    'placeholder:text-[var(--text-placeholder)] outline-none',
     'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
+  );
+  const styleTweaksLabel = submitting
+    ? t('rightSidebar.browser.styleTweaksSubmitting')
+    : showStyles
+      ? t('rightSidebar.browser.styleTweaksCollapse')
+      : t('rightSidebar.browser.styleTweaksExpand');
+  const styleTweaksButton = (
+    <button
+      type="button"
+      aria-label={styleTweaksLabel}
+      aria-hidden={submitting ? true : undefined}
+      onClick={() => setShowStyles((v) => !v)}
+      disabled={submitting}
+      className={cn(
+        'flex size-6 items-center justify-center rounded-md transition-colors',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+        showStyles || changes.length > 0
+          ? 'bg-sidebar-item-active text-sidebar-item-active-foreground'
+          : 'text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground',
+      )}
+    >
+      <SlidersHorizontal size={13} strokeWidth={2} />
+    </button>
   );
 
   return (
@@ -273,7 +301,7 @@ export function BrowserCommentPopover({
       ref={rootRef}
       className={cn(
         'absolute z-20 flex flex-col gap-2 rounded-lg border border-[var(--border-default)]',
-        'bg-[var(--surface-elevated)] p-2.5 shadow-[var(--shadow-menu)]',
+        'bg-[var(--surface-elevated)] p-2.5 shadow-[shadow:var(--shadow-menu)]',
       )}
       style={{ left: pos.left, top: pos.top, width: POPOVER_WIDTH }}
     >
@@ -288,7 +316,7 @@ export function BrowserCommentPopover({
         className={cn(
           'w-full resize-none rounded-md border border-[var(--border-default)] bg-transparent',
           'px-2 py-1.5 text-12 leading-[1.5] text-[var(--text-primary)]',
-          'placeholder:text-[var(--text-tertiary)] outline-none',
+          'placeholder:text-[var(--text-placeholder)] outline-none',
           'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
         )}
       />
@@ -342,17 +370,17 @@ export function BrowserCommentPopover({
             );
           })}
           <div className="flex justify-end">
-            <button
+            <Button
+              variant="secondary"
+              size="xxs"
+              compact
+              tone="quiet"
               type="button"
               onClick={handleResetStyles}
               disabled={submitting}
-              className={cn(
-                'flex h-5 items-center rounded px-1.5 text-11',
-                'text-[var(--text-tertiary)] hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground',
-              )}
             >
               {t('rightSidebar.browser.styleReset')}
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -360,50 +388,47 @@ export function BrowserCommentPopover({
       <div className="flex items-center justify-between gap-1.5">
         {/* 左:样式编辑开关(Codex "config icon next to the text input")。 */}
         {designBaseline ? (
-          <button
-            type="button"
-            aria-label={t('rightSidebar.browser.styleTweaks')}
-            title={t('rightSidebar.browser.styleTweaks')}
-            onClick={() => setShowStyles((v) => !v)}
-            disabled={submitting}
-            className={cn(
-              'flex size-6 items-center justify-center rounded-md transition-colors',
-              showStyles || changes.length > 0
-                ? 'bg-sidebar-item-active text-sidebar-item-active-foreground'
-                : 'text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground',
+          <Tip text={styleTweaksLabel} side="bottom">
+            {submitting ? (
+              <span
+                role="button"
+                aria-disabled="true"
+                aria-label={styleTweaksLabel}
+                tabIndex={0}
+                className="inline-flex rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+              >
+                {styleTweaksButton}
+              </span>
+            ) : (
+              styleTweaksButton
             )}
-          >
-            <SlidersHorizontal size={13} strokeWidth={2} />
-          </button>
+          </Tip>
         ) : (
           <span />
         )}
         <div className="flex items-center gap-1.5">
-          <button
+          <Button
+            variant="secondary"
+            size="xs"
+            compact
+            tone="quiet"
             type="button"
             onClick={onCancel}
             disabled={submitting}
-            className={cn(
-              'flex h-6 items-center rounded-md px-2 text-12',
-              'text-[var(--text-secondary)] hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground',
-              submitting && 'opacity-40',
-            )}
           >
             {t('rightSidebar.browser.commentCancel')}
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="cta"
+            size="xs"
+            compact
+            loading={submitting}
             type="button"
             onClick={handleSubmit}
             disabled={!canSubmit}
-            className={cn(
-              'flex h-6 items-center rounded-md px-2.5 text-12 font-medium',
-              'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
-              'hover:bg-[var(--accent-hover)]',
-              !canSubmit && 'cursor-not-allowed opacity-40',
-            )}
           >
             {t('rightSidebar.browser.commentSubmit')}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

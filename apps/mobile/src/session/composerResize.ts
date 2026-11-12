@@ -47,6 +47,25 @@ export const COMPOSER_RESIZE_AUTO_SNAP_THRESHOLD = 24;
 /** manual 模式上边界之上保留的屏幕空间（顶部导航 + 至少一部分消息内容可见）。 */
 export const COMPOSER_RESIZE_TOP_RESERVED_HEIGHT = 220;
 
+// ⚠️ 声明顺序即正确性(#4039):react-native-worklets 插件把每个 `'worklet'` 函数改写成
+// 模块求值时立即执行的工厂,并在那一刻把它引用的模块内标识符抓进 `__closure`。
+// 被其它 worklet 引用的辅助函数必须写在引用者**之前**,否则抓到的是尚未赋值的 `var`
+// (undefined),UI 线程一调用就是 `undefined is not a function`(Android release 崩溃)。
+// vitest 不跑该插件,靠 composerResizeWorklet.test.ts 用真实转译守住这条约束。
+function normalizeBounds(bounds: ComposerResizeBounds): ComposerResizeBounds {
+  'worklet';
+  const minContentHeight = Math.max(1, Math.round(bounds.minContentHeight));
+  return {
+    minContentHeight,
+    maxContentHeight: Math.max(minContentHeight, Math.round(bounds.maxContentHeight)),
+  };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  'worklet';
+  return Math.min(Math.max(value, min), max);
+}
+
 export interface ResolveComposerInputHeightInput {
   /** TextInput 上报的内容高度（页面 state）。 */
   contentHeight: number;
@@ -108,6 +127,7 @@ export interface ApplyComposerResizeDragInput {
 }
 
 export function applyComposerResizeDrag(input: ApplyComposerResizeDragInput): number {
+  'worklet';
   const bounds = normalizeBounds(input.bounds);
   return clamp(
     Math.round(input.startContentHeight - input.translationY),
@@ -145,8 +165,32 @@ export function settleComposerResizeDrag(input: SettleComposerResizeDragInput): 
   return bounds.minContentHeight;
 }
 
-/** 松手时手势向下位移达到该值即可触发「下拉收起」（配合高度处于单行吸附区）。 */
+/**
+ * 输入框到一行后继续下拉、折叠工具栏所用的距离；松手时向下位移达到该值
+ * （且高度处于单行吸附区）即「下拉收起」。
+ */
 export const COMPOSER_RESIZE_DISMISS_PULL_THRESHOLD = 24;
+
+/** 工具栏折叠完（看起来只剩一行）后，还要再往下拉这么多才不等松手直接收起。 */
+export const COMPOSER_RESIZE_DRAG_DISMISS_EXTRA_PULL = 40;
+
+/** After the editor reaches one line, consume the remaining pull by folding its chrome. */
+export function composerCollapseProgress(input: ApplyComposerResizeDragInput): number {
+  'worklet';
+  const remainingPull = input.translationY - Math.max(0, input.startContentHeight - input.bounds.minContentHeight);
+  return clamp(remainingPull / COMPOSER_RESIZE_DISMISS_PULL_THRESHOLD, 0, 1);
+}
+
+/**
+ * 拖动途中是否直接收起：先缩到一行、再折叠完工具栏，之后还要多拉
+ * COMPOSER_RESIZE_DRAG_DISMISS_EXTRA_PULL。把「看起来到一行」与「收键盘」错开，
+ * 用户能先看到收缩到底，再决定继续往下拉收起。
+ */
+export function shouldDismissComposerDuringDrag(input: ApplyComposerResizeDragInput): boolean {
+  'worklet';
+  const remainingPull = input.translationY - Math.max(0, input.startContentHeight - input.bounds.minContentHeight);
+  return remainingPull >= COMPOSER_RESIZE_DISMISS_PULL_THRESHOLD + COMPOSER_RESIZE_DRAG_DISMISS_EXTRA_PULL;
+}
 
 export interface ShouldDismissComposerOnReleaseInput {
   /** 松手时的拖拽内容高度（applyComposerResizeDrag 的结果）。 */
@@ -294,14 +338,6 @@ export function computeComposerResizeBounds(
   };
 }
 
-function normalizeBounds(bounds: ComposerResizeBounds): ComposerResizeBounds {
-  const minContentHeight = Math.max(1, Math.round(bounds.minContentHeight));
-  return {
-    minContentHeight,
-    maxContentHeight: Math.max(minContentHeight, Math.round(bounds.maxContentHeight)),
-  };
-}
-
 function normalizePositiveDimension(value: number, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
@@ -310,6 +346,90 @@ function normalizeNonNegativeDimension(value: number, fallback: number): number 
   return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
+/** 输入框文字当前滚到了哪一端；编辑器没有上报时为 null。 */
+export interface ComposerTextScrollEdge {
+  atTop: boolean;
+  atBottom: boolean;
+}
+
+/**
+ * 由 TextInput 的 onScroll 事件算出文字滚动端点。Android 的事件不带 contentSize / layoutMeasurement，
+ * 缺字段时返回 null，交给 resolveComposerBodyDrag 回落到 measuredOverflow。
+ */
+export function textScrollEdgeFromEvent(metrics: {
+  contentOffset?: { y?: number };
+  contentSize?: { height?: number };
+  layoutMeasurement?: { height?: number };
+}): ComposerTextScrollEdge | null {
+  const offset = metrics.contentOffset?.y;
+  const content = metrics.contentSize?.height;
+  const viewport = metrics.layoutMeasurement?.height;
+  if (offset == null || content == null || viewport == null) return null;
+  return { atTop: offset <= 1, atBottom: offset + viewport >= content - 1 };
+}
+
+/** 按在卡片任意处拖动调高：手指移出这段距离才判定，之内仍可能是点按。 */
+export const COMPOSER_BODY_DRAG_SLOP = 8;
+/** 按住超过这么久才开始移动视为长按（选字 / 拖光标），交给编辑器。 */
+export const COMPOSER_BODY_DRAG_LONG_PRESS_MS = 350;
+
+export type ComposerBodyDragDecision = 'pending' | 'claim' | 'reject';
+
+export interface ResolveComposerBodyDragInput {
+  /** 输入框处于收起的单行态：只认往上拖（拉开），往下拖不接管。 */
+  collapsed?: boolean;
+  /** 起手点在文字区内（而不是工具排、附件或卡片留白）。 */
+  inText: boolean;
+  /** 编辑器上报的滚动端点；null 时退回 measuredOverflow。 */
+  edge: ComposerTextScrollEdge | null;
+  /** 测得的内容高度超出文字区可视高度。 */
+  measuredOverflow: boolean;
+  dx: number;
+  /** 向下为正。 */
+  dy: number;
+  /** 从按下到这次移动经过的时间。 */
+  elapsedMs: number;
+}
+
+/**
+ * 按在卡片任意处上下拖动时，这次拖动归调高还是归编辑器。
+ *
+ * 卡片留白、工具排、附件上的竖直拖动一律调高。文字区里，文字看得全时上下拖都调高；
+ * 文字需要滚动时先滚动，只有已在最上面还往下拖（拖矮）、已在最下面还往上拖（拉高）
+ * 才调高。编辑器没上报滚动端点、测量又显示溢出时保守交给滚动。横向滑动和长按后的
+ * 拖动（选字、拖光标）留给编辑器。
+ */
+export function resolveComposerBodyDrag(input: ResolveComposerBodyDragInput): ComposerBodyDragDecision {
+  'worklet';
+  const ax = Math.abs(input.dx);
+  const ay = Math.abs(input.dy);
+  if (input.elapsedMs >= COMPOSER_BODY_DRAG_LONG_PRESS_MS) return 'reject';
+  if (ax < COMPOSER_BODY_DRAG_SLOP && ay < COMPOSER_BODY_DRAG_SLOP) return 'pending';
+  if (ax >= ay) return 'reject';
+  if (input.collapsed === true) return input.dy < 0 ? 'claim' : 'reject';
+  if (!input.inText) return 'claim';
+  const edge = input.edge;
+  if (edge === null) return input.measuredOverflow ? 'reject' : 'claim';
+  return (input.dy > 0 ? edge.atTop : edge.atBottom) ? 'claim' : 'reject';
+}
+
+/**
+ * 从收起态往上拖拉开：与「拖到一行再折叠工具排」对称，先用这段距离展开工具排，
+ * 之后的位移才拉高输入区。返回调高用的位移（向下为正）。
+ */
+export function composerOpenDragTranslation(translationY: number): number {
+  'worklet';
+  return translationY + COMPOSER_RESIZE_DISMISS_PULL_THRESHOLD;
+}
+
+/** 拉开途中工具排的折叠进度：1 为全折叠（刚起手），0 为完全展开。 */
+export function composerOpenCollapseProgress(translationY: number): number {
+  'worklet';
+  return clamp(1 + translationY / COMPOSER_RESIZE_DISMISS_PULL_THRESHOLD, 0, 1);
+}
+
+/** 松手时工具排已完全展开才算拉开；不够就收回单行。 */
+export function shouldCommitComposerOpenDrag(translationY: number): boolean {
+  'worklet';
+  return translationY <= -COMPOSER_RESIZE_DISMISS_PULL_THRESHOLD;
 }

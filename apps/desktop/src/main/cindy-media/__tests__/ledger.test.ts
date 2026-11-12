@@ -75,6 +75,25 @@ describe('recordBlob(幂等入账)', () => {
 });
 
 describe('addRef / removeRefs(引用增删)', () => {
+  it('moves only the old physical ghost media ownership and remains safe to replay', async () => {
+    await seedBlob(HASH_A);
+    await seedBlob(HASH_B);
+    await ledger.addRef({ hash: HASH_A, refKind: 'ghost-gallery', refId: 'helper', originKind: 'ghost', originId: 'helper' }, db);
+    await ledger.addRef({ hash: HASH_B, refKind: 'ghost-grant', refId: 'helper', originKind: 'user' }, db);
+    await seedSession('session-1', 'active');
+    await ledger.addRef({ hash: HASH_B, refKind: 'message', refId: 'helper', originSessionId: 'session-1', originKind: 'tool', originId: 'helper' }, db);
+    await ledger.relocateGhostMediaRefs('helper', '_ns__acme__helper', db);
+    await ledger.relocateGhostMediaRefs('helper', '_ns__acme__helper', db);
+    expect(await ledger.ghostCanRead(HASH_A, 'helper', db)).toBe(false);
+    expect(await ledger.ghostCanRead(HASH_A, '_ns__acme__helper', db)).toBe(true);
+    expect(await ledger.ghostCanRead(HASH_B, 'helper', db)).toBe(false);
+    expect(await ledger.ghostCanRead(HASH_B, '_ns__acme__helper', db)).toBe(true);
+    expect(await ledger.listGhostGallery('helper', db)).toHaveLength(0);
+    expect(await ledger.listGhostGallery('_ns__acme__helper', db)).toHaveLength(1);
+    const messageRef = (await db.select().from(schema.mediaRefs).all()).find((row) => row.refKind === 'message');
+    expect(messageRef?.refId).toBe('helper');
+  });
+
   it('未入账的指纹加引用被 FK 拒绝(先记 blob 后记 ref 的顺序由类型层保证)', async () => {
     await expect(
       ledger.addRef(
@@ -420,27 +439,21 @@ describe('reconcileSessionMediaRefsForDeletedSessions(持久重试)', () => {
     await seedBlob(HASH_A);
     await ledger.addRef({ hash: HASH_A, refKind: 'session-attachment', refId: 'deleted-1' }, db);
     await ledger.addRef({ hash: HASH_A, refKind: 'session-attachment', refId: 'archived-1' }, db);
-    const quiesceSession = vi.fn(async () => undefined);
 
     await expect(
       sessionCleanup.reconcileSessionMediaRefsForDeletedSessions({
         db,
         isOwnerCurrent: () => true,
         withSessionLock: async (_sessionId, task) => task(),
-        quiesceSession,
       }),
     ).resolves.toMatchObject({ scanned: 1, removed: 1, failed: 0 });
-    expect(quiesceSession).toHaveBeenCalledWith('deleted-1');
-    quiesceSession.mockClear();
     await expect(
       sessionCleanup.reconcileSessionMediaRefsForDeletedSessions({
         db,
         isOwnerCurrent: () => true,
         withSessionLock: async (_sessionId, task) => task(),
-        quiesceSession,
       }),
     ).resolves.toMatchObject({ scanned: 1, removed: 0, failed: 0 });
-    expect(quiesceSession).toHaveBeenCalledTimes(1);
     expect(db.select().from(schema.mediaRefs).all()).toMatchObject([{ refId: 'archived-1' }]);
   });
 
@@ -457,7 +470,6 @@ describe('reconcileSessionMediaRefsForDeletedSessions(持久重试)', () => {
         db,
         isOwnerCurrent: () => true,
         withSessionLock: async (_sessionId, task) => task(),
-        quiesceSession: async () => undefined,
         removeRefsIfDeleted,
       }),
     ).resolves.toMatchObject({ scanned: 2, removed: 2, failed: 1, ownerChanged: false });
@@ -468,7 +480,6 @@ describe('reconcileSessionMediaRefsForDeletedSessions(持久重试)', () => {
         db,
         isOwnerCurrent: () => ++ownerChecks === 1,
         withSessionLock: async (_sessionId, task) => task(),
-        quiesceSession: async () => undefined,
         removeRefsIfDeleted,
       }),
     ).resolves.toMatchObject({ scanned: 0, removed: 0, ownerChanged: true });
@@ -485,7 +496,6 @@ describe('reconcileSessionMediaRefsForDeletedSessions(持久重试)', () => {
       },
       db,
     );
-    const quiesceSession = vi.fn(async () => undefined);
 
     await expect(
       sessionCleanup.reconcileSessionMediaRefsForDeletedSessions({
@@ -499,11 +509,9 @@ describe('reconcileSessionMediaRefsForDeletedSessions(持久重试)', () => {
             .run();
           return task();
         },
-        quiesceSession,
       }),
     ).resolves.toMatchObject({ scanned: 1, removed: 0, failed: 0 });
 
-    expect(quiesceSession).not.toHaveBeenCalled();
     expect(db.select().from(schema.mediaRefs).all()).toHaveLength(1);
   });
 });

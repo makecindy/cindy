@@ -1,0 +1,731 @@
+<!doctype html>
+<html lang="zh-CN">
+  <meta charset="utf-8" /><meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+  /><title>模型供应商 · 紧凑布局预览</title
+  ><style>
+    :root {
+      color-scheme: light;
+      --surface: #f8f8f6;
+      --card: #fff;
+      --line: #dededb;
+      --text: #262626;
+      --muted: #777773;
+      --chip: #ededeb;
+      --hover: #f2f2ef;
+      --on: #505153;
+      --knob: #fff;
+      --green: #28ac61;
+      --focus: #707070;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      background: var(--surface);
+      color: var(--text);
+      font:
+        14px Inter,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+    }
+    body.dark {
+      color-scheme: dark;
+      --surface: #1f1f1e;
+      --card: #2c2c2a;
+      --line: #444441;
+      --text: #e5e5e3;
+      --muted: #aaa9a4;
+      --chip: #3c3c3a;
+      --hover: #353533;
+      --on: #bdbdb8;
+      --knob: #2c2c2a;
+      --green: #55c886;
+      --focus: #bbb;
+    }
+    button,
+    input,
+    select {
+      font: inherit;
+      color: inherit;
+    }
+    button {
+      cursor: pointer;
+      background: transparent;
+      border: 1px solid var(--line);
+      border-radius: 9999px;
+      min-height: 32px;
+      padding: 4px 14px;
+    }
+    button:hover {
+      background: var(--hover);
+    }
+    button:focus-visible,
+    input:focus-visible,
+    summary:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 3px;
+    }
+    h1 {
+      font-size: 18px;
+      font-weight: 600;
+      margin: 0 0 8px;
+    }
+    h2 {
+      font-size: 14px;
+      font-weight: 600;
+      margin: 0;
+    }
+    .muted {
+      color: var(--muted);
+    }
+    .reviewbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 28px;
+      border-bottom: 1px solid var(--line);
+      font-size: 12px;
+    }
+    .reviewbar strong {
+      font-weight: 600;
+    }
+    .reviewbar .spacer {
+      flex: 1;
+    }
+    .page {
+      padding: 24px 28px 20px;
+      max-width: 1440px;
+      margin: auto;
+    }
+    .intro {
+      margin: 0 0 20px;
+      color: var(--muted);
+    }
+    .panel {
+      display: flex;
+      height: calc(100dvh - 166px);
+      min-height: 380px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .rail {
+      width: 224px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--line);
+    }
+    .railbody {
+      padding: 12px 8px;
+      overflow: auto;
+      flex: 1;
+    }
+    .railcaption {
+      font-size: 12px;
+      color: var(--muted);
+      padding: 6px 12px 12px;
+    }
+    .provider {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      min-height: 48px;
+      border-radius: 8px;
+    }
+    .provider.active {
+      background: var(--hover);
+    }
+    .provider .name {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-weight: 500;
+    }
+    .provider .count {
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .dot {
+      width: 6px;
+      height: 6px;
+      background: var(--green);
+      border-radius: 50%;
+    }
+    .mark {
+      width: 28px;
+      height: 28px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      font-size: 22px;
+    }
+    .railfoot {
+      padding: 10px;
+      border-top: 1px solid var(--line);
+    }
+    .railfoot button {
+      width: 100%;
+      border-style: dashed;
+    }
+    .detail {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .identity {
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+      border-bottom: 1px solid var(--line);
+      min-height: 76px;
+    }
+    .identity .mark {
+      height: 36px;
+      width: 36px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+    }
+    .identitytext {
+      flex: 1;
+    }
+    .identityname {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 16px;
+      font-weight: 500;
+    }
+    .badge {
+      font-size: 12px;
+      font-weight: 400;
+      border: 1px solid var(--line);
+      border-radius: 9999px;
+      padding: 2px 8px;
+      color: var(--muted);
+    }
+    .subtitle {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+    .status {
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .iconbtn {
+      width: 32px;
+      padding: 0;
+      border: 0;
+    }
+    .scroll {
+      overflow: auto;
+      flex: 1;
+      min-height: 0;
+      scrollbar-gutter: stable;
+      overscroll-behavior: contain;
+    }
+    .usage {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+    }
+    .usageline {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+    .meter {
+      height: 6px;
+      background: var(--chip);
+      border-radius: 9999px;
+      width: 160px;
+      overflow: hidden;
+    }
+    .meter span {
+      display: block;
+      width: 98%;
+      height: 100%;
+      background: var(--muted);
+      border-radius: inherit;
+    }
+    .balance {
+      border-left: 1px solid var(--line);
+      padding-left: 16px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .remaining {
+      font-weight: 500;
+    }
+    .reset {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    details {
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    summary {
+      cursor: pointer;
+      display: list-item;
+      width: fit-content;
+      min-height: 24px;
+      line-height: 24px;
+    }
+    details p {
+      margin: 8px 0;
+      line-height: 1.6;
+    }
+    .toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: var(--card);
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--line);
+    }
+    .tooltop,
+    .toolbottom {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .tooltop {
+      margin-bottom: 10px;
+    }
+    .tooltop .muted {
+      font-size: 12px;
+    }
+    .grow {
+      flex: 1;
+    }
+    .tabs {
+      display: flex;
+      gap: 2px;
+    }
+    .tab {
+      border: 0;
+      color: var(--muted);
+      padding: 4px 12px;
+    }
+    .tab.active {
+      background: var(--chip);
+      color: var(--text);
+      font-weight: 500;
+    }
+    .search {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 9999px;
+      padding: 0 12px;
+      width: 210px;
+      height: 32px;
+      color: var(--muted);
+    }
+    input {
+      background: transparent;
+      border: 0;
+      outline: none;
+      width: 100%;
+      min-width: 0;
+      font-size: 13px;
+    }
+    .models {
+      padding: 8px 20px 24px;
+    }
+    .group {
+      padding: 14px 0 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 48px;
+      border-radius: 8px;
+      padding: 0 8px;
+    }
+    .row:hover {
+      background: var(--hover);
+    }
+    .row .modelname {
+      font-weight: 500;
+    }
+    .row .kind {
+      font-size: 11px;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      border-radius: 9999px;
+      padding: 2px 6px;
+    }
+    .switch {
+      width: 44px;
+      min-width: 44px;
+      height: 32px;
+      border: 0;
+      padding: 6px 3px;
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+    }
+    .switch:hover {
+      background: transparent;
+    }
+    .track {
+      width: 36px;
+      height: 20px;
+      border-radius: 9999px;
+      background: var(--muted);
+      padding: 2px;
+      display: block;
+    }
+    .knob {
+      display: block;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--knob);
+    }
+    [aria-checked="true"] .track {
+      background: var(--on);
+    }
+    [aria-checked="true"] .knob {
+      transform: translateX(16px);
+    }
+    .empty {
+      padding: 32px;
+      color: var(--muted);
+      text-align: center;
+    }
+    .hint {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 10px;
+    }
+    .short .panel {
+      height: 440px;
+    }
+    .short .page {
+      padding-top: 16px;
+    }
+    @media (max-width: 800px) {
+      .page {
+        padding: 16px;
+      }
+      .rail {
+        width: 180px;
+      }
+      .count {
+        display: none;
+      }
+      .reviewbar {
+        padding: 8px 16px;
+      }
+      .reviewbar .explain {
+        display: none;
+      }
+      .usageline {
+        gap: 8px;
+      }
+      .meter {
+        width: 100px;
+      }
+      .balance {
+        border: 0;
+        padding: 0;
+      }
+      .identity {
+        flex-wrap: wrap;
+      }
+      .search {
+        width: 160px;
+      }
+      .panel {
+        height: calc(100dvh - 158px);
+      }
+    }
+    @media (max-width: 560px) {
+      .rail {
+        width: 60px;
+      }
+      .rail .name,
+      .railcaption,
+      .railfoot,
+      .rail .dot {
+        display: none;
+      }
+      .provider {
+        padding: 10px 0;
+        justify-content: center;
+      }
+      .identity {
+        padding: 12px;
+      }
+      .usage,
+      .toolbar {
+        padding: 12px;
+      }
+      .models {
+        padding: 4px 8px;
+      }
+      .status {
+        display: none;
+      }
+      .toolbottom {
+        flex-wrap: wrap;
+      }
+      .search {
+        width: 100%;
+      }
+    }
+  </style>
+  <body>
+    <div class="reviewbar">
+      <strong>设计预览</strong
+      ><span class="explain muted">紧凑额度 · 统一滚动 · 模型工具栏吸顶</span
+      ><span class="spacer"></span><button id="short">矮窗口</button
+      ><button id="theme">深色模式</button>
+    </div>
+    <main class="page">
+      <h1>模型供应商</h1>
+      <p class="intro">
+        选择模型时的来源。每个来源提供它支持的模型与计费方式。
+      </p>
+      <div class="panel">
+        <aside class="rail">
+          <div class="railbody">
+            <div class="railcaption">拖动排序</div>
+            <div id="providers"></div>
+            <div class="railcaption" style="margin-top: 20px">
+              检测到本机 CLI
+            </div>
+            <div class="provider muted">
+              <span class="mark">AⅠ</span><span class="name">Anthropic</span>
+            </div>
+          </div>
+          <div class="railfoot"><button disabled>＋ 添加供应商</button></div>
+        </aside>
+        <section class="detail">
+          <header class="identity">
+            <span class="mark">◎</span>
+            <div class="identitytext">
+              <div class="identityname">
+                OpenAI <span class="badge">ChatGPT Pro</span>
+              </div>
+              <div class="subtitle">本机 Codex 账号 · demo@example.com</div>
+            </div>
+            <span class="status">✓ 已连接</span><button disabled>断开</button
+            ><button class="iconbtn" disabled aria-label="更多操作">•••</button>
+          </header>
+          <div class="scroll" id="scroll">
+            <section class="usage">
+              <div class="usageline">
+                <span>周限</span><span class="remaining">剩余 98%</span>
+                <div
+                  class="meter"
+                  role="meter"
+                  aria-label="周限剩余"
+                  aria-valuenow="98"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                >
+                  <span></span>
+                </div>
+                <span class="reset">6天 8小时后重置</span
+                ><span class="grow"></span
+                ><span class="balance">0.00 credits · 余额已耗尽</span>
+              </div>
+              <details>
+                <summary>额度详情</summary>
+                <p>
+                  ChatGPT Pro · 周限于 9月22日 00:35 重置<br />按当前平均速度偏慢（粗略趋势）<br />Credits
+                  余额：0.00 · 余额已耗尽
+                </p>
+              </details>
+            </section>
+            <div class="toolbar">
+              <div class="tooltop">
+                <h2>模型</h2>
+                <span class="muted" id="selected"></span
+                ><span class="grow"></span
+                ><button
+                  id="reset"
+                  class="iconbtn"
+                  title="重置演示"
+                  aria-label="重置演示"
+                >
+                  ↻</button
+                ><button id="manage">全部启用</button>
+              </div>
+              <div class="toolbottom">
+                <div class="tabs" role="tablist" aria-label="模型类型">
+                  <button
+                    class="tab active"
+                    role="tab"
+                    aria-selected="true"
+                    data-tab="all"
+                  >
+                    全部</button
+                  ><button
+                    class="tab"
+                    role="tab"
+                    aria-selected="false"
+                    data-tab="chat"
+                  >
+                    对话</button
+                  ><button
+                    class="tab"
+                    role="tab"
+                    aria-selected="false"
+                    data-tab="image"
+                  >
+                    图像
+                  </button>
+                </div>
+                <span class="grow"></span
+                ><label class="search"
+                  >⌕
+                  <input
+                    id="search"
+                    type="search"
+                    aria-label="搜索模型"
+                    placeholder="搜索模型"
+                /></label>
+              </div>
+            </div>
+            <div class="models" id="models"></div>
+          </div>
+        </section>
+      </div>
+      <div class="hint">
+        演示数据。试试在额度区向下滚动、展开额度详情、搜索模型或切换开关；不会修改真实设置。
+      </div>
+    </main>
+    <script>
+      const providers = [
+        ["◒", "Cindy AI", 72],
+        ["◎", "OpenAI", 13],
+        ["◎", "OpenAI · 工作", 16],
+        ["◎", "OpenAI · 备用", 16],
+        ["◎", "OpenAI · API", 16],
+        ["𝕏", "xAI", 14],
+        ["♧", "Ollama", 1],
+      ];
+      document.querySelector("#providers").innerHTML = providers
+        .map(
+          (p, i) =>
+            `<div class="provider ${i === 1 ? "active" : ""}"><span class="mark">${p[0]}</span><span class="name">${p[1]}</span><span class="count">${p[2]} 个模型</span><i class="dot" ${i === 6 ? 'style="background:var(--line)"' : ""}></i></div>`,
+        )
+        .join("");
+      const names = [
+        "GPT-5.6",
+        "GPT-5.6 Sol",
+        "GPT-5.6 Terra",
+        "GPT-5.6 Luna",
+        "GPT Image 2",
+        "GPT-5.6 Cyber",
+        "GPT-5.5 Pro",
+        "GPT-5.5",
+        "GPT-5.4 Pro",
+        "GPT-5.4-Nano",
+        "GPT-5.4-Mini",
+        "GPT-5.4",
+        "GPT-5.3 Codex Spark",
+      ];
+      let enabled = names.map((_, i) => i < 5),
+        tab = "all";
+      function render() {
+        let q = document.querySelector("#search").value.toLowerCase();
+        let html = "",
+          count = 0;
+        for (const state of [true, false]) {
+          const ids = names
+            .map((n, i) => i)
+            .filter(
+              (i) =>
+                enabled[i] === state &&
+                names[i].toLowerCase().includes(q) &&
+                (tab === "all" || (tab === "image") === (i === 4)),
+            );
+          if (!ids.length) continue;
+          html += `<div class="group">${state ? "已启用" : "未启用"} ${ids.length}</div>`;
+          for (const i of ids) {
+            count++;
+            html += `<div class="row"><span class="mark muted">◎</span><span class="modelname">${names[i]}</span>${i === 4 ? '<span class="kind">图像</span>' : ""}<button class="switch" role="switch" aria-label="${names[i]}" aria-checked="${enabled[i]}" data-i="${i}"><span class="track"><span class="knob"></span></span></button></div>`;
+          }
+        }
+        document.querySelector("#models").innerHTML =
+          html || '<div class="empty">没有匹配的模型</div>';
+        document.querySelector("#selected").textContent =
+          `已选 ${enabled.filter(Boolean).length} 个`;
+        document.querySelector("#manage").textContent = enabled.every(Boolean)
+          ? "全部停用"
+          : "全部启用";
+      }
+      document.querySelector("#models").onclick = (e) => {
+        const b = e.target.closest("[data-i]");
+        if (!b) return;
+        let i = +b.dataset.i;
+        enabled[i] = !enabled[i];
+        render();
+        document
+          .querySelector(`[data-i="${i}"]`)
+          ?.focus({ preventScroll: true });
+      };
+      document.querySelectorAll("[data-tab]").forEach(
+        (b) =>
+          (b.onclick = () => {
+            tab = b.dataset.tab;
+            document.querySelectorAll("[data-tab]").forEach((t) => {
+              t.classList.toggle("active", t === b);
+              t.setAttribute("aria-selected", t === b);
+            });
+            render();
+          }),
+      );
+      document.querySelector("#search").oninput = render;
+      document.querySelector("#manage").onclick = () => {
+        enabled.fill(!enabled.every(Boolean));
+        render();
+      };
+      document.querySelector("#reset").onclick = () => {
+        enabled = names.map((_, i) => i < 5);
+        document.querySelector("#search").value = "";
+        document.querySelector('[data-tab="all"]').click();
+        document.querySelector("#scroll").scrollTop = 0;
+      };
+      document.querySelector("#theme").onclick = (e) => {
+        document.body.classList.toggle("dark");
+        e.target.textContent = document.body.classList.contains("dark")
+          ? "浅色模式"
+          : "深色模式";
+      };
+      document.querySelector("#short").onclick = (e) => {
+        document.body.classList.toggle("short");
+        e.target.textContent = document.body.classList.contains("short")
+          ? "自适应窗口"
+          : "矮窗口";
+      };
+      render();
+    </script>
+  </body>
+</html>

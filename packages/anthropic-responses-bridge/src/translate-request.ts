@@ -19,6 +19,7 @@
  *     (encrypted_content 存在 redacted_thinking.data 里)
  */
 
+import { isStrictCompatibleSchema } from './strict-schema.js';
 import type {
   AnthropicContentBlock,
   AnthropicMessage,
@@ -26,6 +27,7 @@ import type {
   AnthropicToolChoice,
   ResponsesContentPart,
   ResponsesFunctionTool,
+  ResponsesInputContentPart,
   ResponsesInputItem,
   ResponsesRequest,
   ResponsesServerTool,
@@ -46,36 +48,27 @@ function systemToInstructions(system: AnthropicMessagesRequest['system']): strin
   return undefined;
 }
 
-/** tool_result.content(string / block 数组)拍平成 function_call_output 需要的字符串。 */
-function toolResultToString(content: unknown): string {
+/** Responses 支持多模态工具结果；图片保留在原 call_id 下，纯文字沿用字符串。 */
+function toolResultToOutput(content: unknown): string | ResponsesInputContentPart[] {
   if (content == null) return '';
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
-    return content
-      .map((b) => {
-        if (b && typeof b === 'object') {
-          const rec = b as Record<string, unknown>;
-          if (rec.type === 'text' && typeof rec.text === 'string') return rec.text;
-          // 工具结果里嵌图片等非文本内容:Responses 的 function_call_output 只吃字符串,
-          // 退化成占位描述,不丢整条(模型仍知道该工具产出过内容)。
-          // 占位文案必须说明「有图但送不到、不要猜」:字符串限制是协议层的,与模型
-          // 是否具备视觉能力无关;不带说明的 '[image]' 会被模型当作空结果,诱发反复
-          // 重读或臆测图像内容。图像走 user 消息路径仍可正常送达(input_image)。
-          if (rec.type === 'image') {
-            return (
-              '[image omitted: this tool returned an image, but tool results on this '
-              + 'provider route are delivered as plain text only, so the image data could '
-              + 'not be included. Do NOT guess or fabricate what the image contains. '
-              + 'Tell the user the image could not be delivered on the current route, and '
-              + 'ask them to paste the relevant content as text or attach the image '
-              + 'directly to a chat message instead.]'
-            );
-          }
-          return JSON.stringify(rec);
+    const parts = content.map((b): ResponsesInputContentPart => {
+      if (b && typeof b === 'object') {
+        const rec = b as Record<string, unknown>;
+        if (rec.type === 'text' && typeof rec.text === 'string') return { type: 'input_text', text: rec.text };
+        if (rec.type === 'image') {
+          const url = imageToDataUrl(rec as Extract<AnthropicContentBlock, { type: 'image' }>);
+          return url
+            ? { type: 'input_image', image_url: url }
+            : { type: 'input_text', text: '[image omitted: missing or unsupported image source]' };
         }
-        return String(b);
-      })
-      .join('\n');
+        return { type: 'input_text', text: JSON.stringify(rec) };
+      }
+      return { type: 'input_text', text: String(b) };
+    });
+    if (parts.some(part => part.type === 'input_image')) return parts;
+    return parts.map(part => part.type === 'input_text' ? part.text : '').join('\n');
   }
   try {
     return JSON.stringify(content);
@@ -179,7 +172,7 @@ function messageToInputItems(msg: AnthropicMessage, reasoning: ReasoningReplayOp
         items.push({
           type: 'function_call_output',
           call_id: tr.tool_use_id,
-          output: toolResultToString(tr.content),
+          output: toolResultToOutput(tr.content),
         });
         break;
       }
@@ -278,8 +271,8 @@ function resolveToolChoice(
   return choice;
 }
 
-/** Responses 端点接受的 reasoning effort 档(codex / api.x.ai 通用)。 */
-export type ResponsesReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
+/** Responses reasoning effort 的并集；各通道只接受自身声明的档位。 */
+export type ResponsesReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
 export interface TranslateRequestOptions {
   /** 发给上游的真实 model id(已 strip 掉 bridge 前缀)。 */
@@ -294,7 +287,7 @@ export interface TranslateRequestOptions {
   maxOutputTokensSupported?: boolean;
   /**
    * reasoning 档控制:
-   *   - 具体档('low'|'medium'|'high'|'xhigh')→ 发 `reasoning: { effort, summary:'auto' }`(用户选的思维深度经此流入);
+   *   - 具体档(由通道能力限定)→ 发 `reasoning: { effort, summary:'auto' }`(用户选的思维深度经此流入);
    *   - `'none'` → **完全不发** reasoning 字段(某些模型如 xAI grok-code-fast 会对 reasoningEffort 报 400);
    *   - 省略(undefined)→ 回退到按 thinking.budget_tokens 推断(默认 medium),与旧行为一致。
    */
@@ -310,12 +303,21 @@ export interface TranslateRequestOptions {
    * 省略 = 不回放任何带 signature 的 reasoning(保守:无法证明出处即不回放)。
    */
   providerPrefix?: string;
+  /** Preserve connection-scoped native tool state when thinking is disabled. */
+  preserveReasoningState?: boolean;
   /**
    * 上游自带的服务端工具声明(如 xAI 的 `{ type: 'x_search' }`),由 provider 配置按 model 决定。
    * 恒定追加在 function tools **之后**,顺序稳定,保证请求前缀在会话内逐轮一致。
    * 请求本身没有任何 function tool 时也会单独下发(纯服务端工具轮)。
    */
   serverSideTools?: ResponsesServerTool[];
+  /**
+   * provider 级 strict 约束解码开关(bridge 层按 BridgeProviderConfig.strictFunctionTools(model)
+   * 解析后传入)。开启后仍**逐工具**做 strict 子集兼容检查(见 strict-schema.ts):
+   * 不合规工具(如 Edit 的可选 replace_all、复杂 MCP schema)回落 strict:false,不改写 schema。
+   * 省略 / false = 全部 strict:false(所有非启用 provider 的默认行为)。
+   */
+  strictFunctionTools?: boolean;
 }
 
 /**
@@ -330,7 +332,7 @@ export function translateRequest(
   const input: ResponsesInputItem[] = [];
   const reasoningReplay: ReasoningReplayOpts = {
     providerPrefix: opts.providerPrefix ?? '',
-    dropAll: opts.reasoningEffort === 'none',
+    dropAll: opts.reasoningEffort === 'none' && !opts.preserveReasoningState,
   };
   for (const msg of req.messages ?? []) {
     input.push(...messageToInputItems(msg, reasoningReplay));
@@ -339,11 +341,14 @@ export function translateRequest(
   // 显式用 ResponsesFunctionTool(而非放宽后的 ResponsesTool 联合):function tool 的
   // name / parameters 等必填字段要在编译期被校验,别被服务端工具那个 `type: string`
   // 兜底分支放过去。
+  const strictEnabled = opts.strictFunctionTools === true;
   const functionTools: ResponsesFunctionTool[] = (req.tools ?? []).map((t) => ({
     type: 'function',
     name: t.name,
     description: t.description,
-    strict: false,
+    // strict 逐工具判定:provider 开关 × schema 兼容(纯函数,同会话内稳定,前缀不抖)。
+    // 不合规回落 false,避免上游 400 或 optional→nullable 改写造成工具语义漂移。
+    strict: strictEnabled && isStrictCompatibleSchema(t.input_schema),
     parameters: t.input_schema ?? { type: 'object', properties: {} },
   }));
   // 服务端工具的声明**只由 model 决定**,不受任何单轮请求态(含 tool_choice)影响 ——

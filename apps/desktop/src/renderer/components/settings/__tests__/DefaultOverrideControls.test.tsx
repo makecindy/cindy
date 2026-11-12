@@ -33,4 +33,13 @@ describe('DefaultOverrideControls', () => {
 
     expect(screen.queryByRole('button')).toBeNull();
   });
+
+  it('keeps a disabled reset button visible when requested', () => {
+    render(<DefaultOverrideControls isCustomized={false} alwaysVisible onReset={vi.fn()} />);
+
+    expect(
+      (screen.getByRole('button', { name: 'settings.defaults.restore' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(screen.queryByText('settings.defaults.customizedBadge')).toBeNull();
+  });
 });

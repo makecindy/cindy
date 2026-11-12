@@ -30,6 +30,7 @@ vi.mock('../slashCommands', () => ({
 }));
 
 import { createMessageHandler, isStopCommand } from '../messageHandler';
+import { enterControl, exitControl } from '../controlState';
 import {
   activateImAccountBoundary,
   captureImAccountGeneration,
@@ -96,7 +97,13 @@ describe('messageHandler !stop routing', () => {
   let consumePendingOpenerAsCard: ReturnType<typeof vi.fn>;
   let deliver: (event: IMMessageEvent) => void;
 
-  function wire(threadScoped: boolean): void {
+  function wire(
+    threadScoped: boolean,
+    notificationSessionId?: string,
+    prepareAgentTurnText?: ImChannelAdapter['prepareAgentTurnText'],
+    turnPermissionPolicyFor?: ImChannelAdapter['turnPermissionPolicyFor'],
+    options: { channel?: string; companionBotIdFor?: (botContextId: string) => string | null } = {},
+  ): void {
     stopActiveTurn = vi.fn(async () => ({ stopped: true, droppedQueued: 0 }));
     runAgentTurn = vi.fn(async () => undefined);
     handleSlashCommand = vi.fn(async () => true);
@@ -118,25 +125,170 @@ describe('messageHandler !stop routing', () => {
     } as unknown as ChannelIM;
 
     const adapter = {
-      channel: 'slack',
+      channel: options.channel ?? 'slack',
+      ...(notificationSessionId ? {
+        resolveNotificationReply: async () => notificationSessionId,
+        notificationReplyText: { unavailable: 'unavailable', commands: 'topic commands' },
+      } : {}),
       im,
       output: { kind: 'rich-card', im },
       ui: slackUi,
       threadScoped,
+      ...(prepareAgentTurnText ? { prepareAgentTurnText } : {}),
+      ...(turnPermissionPolicyFor ? { turnPermissionPolicyFor } : {}),
     } as unknown as ImChannelAdapter;
 
     const attach = createMessageHandler(
       adapter,
       { handleSlashCommand } as unknown as ImSlashHandlers,
-      { stopActiveTurn, runAgentTurn } as unknown as ImTurnRunner,
+      {
+        stopActiveTurn,
+        runAgentTurn,
+        ...(options.companionBotIdFor ? { companionBotIdFor: options.companionBotIdFor } : {}),
+      } as unknown as ImTurnRunner,
     );
     attach(im);
   }
 
   beforeEach(() => {
     vi.clearAllMocks();
+    exitControl('bot-ctx', 'U123456789');
     activateImAccountBoundary();
     wire(true);
+  });
+
+  it('routes topic !stop to the original session even while /ctr is open elsewhere', async () => {
+    wire(false, 'original-session');
+    enterControl('bot-ctx', 'U123456789');
+    deliver(makeEvent({ replyThread: { rootMessageId: 'om_root', threadId: 'omt_topic' } }));
+    await vi.waitFor(() => expect(stopActiveTurn).toHaveBeenCalledWith({
+      botContextId: 'bot-ctx', userId: 'U123456789', scopeKey: 'om_root', notificationSessionId: 'original-session',
+    }));
+    expect(runAgentTurn).not.toHaveBeenCalled();
+  });
+
+  it.each(['telegram', 'feishu', 'dingtalk', 'wecom', 'discord'])('%s preserves a bare invocation without inventing user text', async (channelName) => {
+    deliver(makeEvent({ channelName, text: '', invoked: true }));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+    const turn = runAgentTurn.mock.calls[0][0];
+    expect(turn.text).toBe('');
+    expect(turn.agentText).toContain('用户显式召唤了机器人');
+    expect(turn.agentText).not.toMatch(/检查|看看|继续|附件/);
+  });
+
+  it('keeps an empty reply and its quoted content separate from the user text', async () => {
+    deliver(makeEvent({ text: '', replyContext: { author: 'Chris', text: '能省流量吗？' } }));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+    const turn = runAgentTurn.mock.calls[0][0];
+    expect(turn.text).toBe('');
+    expect(turn.agentText).toContain('<reply_context>');
+    expect(turn.agentText).toContain('能省流量吗？');
+    expect(turn.agentText).not.toContain('检查附件');
+  });
+
+  it.each(['audio', 'oversize', 'download_failed'])('keeps summons and quotes with unavailable media (%s)', async (type) => {
+    for (const invoked of [true, false]) {
+      runAgentTurn.mockClear();
+      deliver(makeEvent({
+        text: '', invoked,
+        ...(invoked ? {} : { replyContext: { author: 'Chris', text: '引用正文' } }),
+        unsupported: [{ type, label: '文件未提供' }],
+      }));
+      await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+      const turn = runAgentTurn.mock.calls[0][0];
+      expect(turn.text).toBe('');
+      expect(turn.agentText).toContain('未附加文字正文');
+      expect(turn.agentText).toContain('文件未提供');
+      expect(turn.agentText).not.toContain('实际提供了');
+      if (invoked) expect(turn.agentText).toContain('用户显式召唤了机器人');
+      else expect(turn.agentText).toContain('引用正文');
+    }
+  });
+
+  it.each([
+    ['a private chat', {}, true],
+    ['the owner in a group', { speaker: { id: 'owner', name: 'Owner', isOwner: true } }, true],
+    ['a group member', { speaker: { id: 'guest', name: 'Guest', isOwner: false } }, false],
+  ])('marks %s turns with the control-command owner check', async (_label, patch, owner) => {
+    deliver(makeEvent({ text: '更新 Cindy', ...patch } as Partial<IMMessageEvent>));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(runAgentTurn.mock.calls[0][0].requesterIsOwner).toBe(owner);
+  });
+
+  it.each(['unknown', 'guest'] as const)('lets a channel policy identity (%s) override the private-chat default', async (requesterAuthority) => {
+    wire(true, undefined, undefined, () => ({
+      origin: { kind: 'im', channel: 'wechat', taskId: 't' },
+      autoReviewContext: { requesterAuthority, source: 'direct' },
+      confirmationSurface: 'channel',
+      forceConfirmToolCall: () => false,
+    }));
+    deliver(makeEvent({ text: '更新 Cindy' }));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(runAgentTurn.mock.calls[0][0].requesterIsOwner).toBe(false);
+  });
+
+  // 回归(PR #6289 review): 企业微信 / 钉钉 / Discord 没有 channelToolScopeFor, 伙伴专线轮次之前不登记
+  // 作用域, 伙伴技能连主人也判只读。现在登记不带 transport 的 LaneTurnScope(触发者判定与本轮同一个)。
+  it.each([
+    ['the owner', { speaker: { id: 'owner', name: 'Owner', isOwner: true } }, true],
+    ['a group member', { speaker: { id: 'guest', name: 'Guest', isOwner: false } }, false],
+  ])('gives a WeCom companion lane turn from %s a transport-less tool scope', async (_label, patch, owner) => {
+    wire(false, undefined, undefined, undefined, { channel: 'wecom', companionBotIdFor: () => 'bot-mimi' });
+    deliver(makeEvent({ text: '记住这个做法', senderId: 'group/Y2hhdA', chatId: 'chat-1', ...patch } as Partial<IMMessageEvent>));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+    const turn = runAgentTurn.mock.calls[0][0];
+    expect(turn.requesterIsOwner).toBe(owner);
+    expect(turn.channelToolScope).toEqual({
+      channel: 'wecom',
+      botId: 'bot-ctx',
+      laneUserId: 'group/Y2hhdA',
+      chatId: 'chat-1',
+      chatKind: 'group',
+      requesterIsOwner: owner,
+      companion: true,
+    });
+  });
+
+  it('gives a WeCom turn that is not handed to a teammate no tool scope', async () => {
+    wire(false, undefined, undefined, undefined, { channel: 'wecom', companionBotIdFor: () => null });
+    deliver(makeEvent({ text: '你好' }));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(runAgentTurn.mock.calls[0][0]).not.toHaveProperty('channelToolScope');
+  });
+
+  it('still drops an empty event without a summon, quote or attachment', async () => {
+    deliver(makeEvent({ text: '' }));
+    await flushMicrotasks();
+    expect(runAgentTurn).not.toHaveBeenCalled();
+  });
+
+  it('does not reintroduce filtered quoted media into the model-only facts', async () => {
+    wire(true, undefined, async () => ({
+      agentText: '[已过滤的引用]',
+      replyContext: { author: 'Chris', text: '[已过滤的引用]' },
+    }));
+    deliver(makeEvent({ text: '', invoked: true, replyContext: {
+      author: 'Chris', text: 'filtered content', unavailableAttachments: ['filtered-file-name'],
+    } }));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(runAgentTurn.mock.calls[0][0].agentText).not.toContain('filtered-file-name');
+  });
+
+  it('does not bypass a channel context filter when context preparation fails', async () => {
+    wire(true, undefined, async () => { throw new Error('context unavailable'); });
+    deliver(makeEvent({ text: '', invoked: true, replyContext: {
+      author: 'Chris', text: 'unreviewed quote', unavailableAttachments: ['unreviewed-file'],
+    } }));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(runAgentTurn.mock.calls[0][0].agentText).not.toContain('unreviewed');
+  });
+
+  it('keeps slash commands in linked topics from changing the main conversation', async () => {
+    wire(false, 'original-session');
+    deliver(makeEvent({ text: '/new', replyThread: { rootMessageId: 'om_root', threadId: 'omt_topic' } }));
+    await vi.waitFor(() => expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', 'topic commands', { threadTs: 'om_root' }));
+    expect(handleSlashCommand).not.toHaveBeenCalled();
+    expect(runAgentTurn).not.toHaveBeenCalled();
   });
 
   it('silently drops messages delivered after logout closes the account boundary', async () => {
@@ -244,6 +396,25 @@ describe('messageHandler !stop routing', () => {
     expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', slackUi.agent.stopDone(2), {
       threadTs: '1234.5678',
     });
+  });
+
+  // Tier 1, #9250 review4503463411: external receipt writes may fail while
+  // cancelling a queue. Existing stop tests only exercised runner failures.
+  // The production handler must still abort and report the cancellation error.
+  it('stops an active turn even when external queue cancellation throws', async () => {
+    wire(false, undefined, undefined, undefined, { channel: 'imessage' });
+    const cancelPending = vi.fn(() => { throw new Error('ENOSPC'); });
+    deliver(makeEvent({ channelName: 'imessage', text: '/stop', delivery: {
+      cancelPending, accept() {}, awaitPersistence() {}, defer() {},
+    } }));
+    await flushMicrotasks();
+
+    expect(cancelPending).toHaveBeenCalledTimes(1);
+    expect(stopActiveTurn).toHaveBeenCalledWith({ botContextId: 'bot-ctx', userId: 'U123456789', scopeKey: undefined });
+    expect(sendMarkdownText).toHaveBeenCalledWith('U123456789',
+      `${slackUi.agent.stopDone(0)}\n\n${slackUi.agent.sendInternalError('ENOSPC')}`, { threadTs: '1234.5678' });
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(handleSlashCommand).not.toHaveBeenCalled();
   });
 
   it('replies stopIdle when nothing is running', async () => {

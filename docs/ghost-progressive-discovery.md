@@ -47,10 +47,27 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 
 - **系统提示词区插件花名册负责第一跳召回。** `recall = whenToUse ?? description`；
   用户点名插件或上文已有 `ghost_id` 也是 id 来源，但不属于花名册层。
+- **命中后不绕开插件。** 实时详情确认插件能完成当前步骤时，Agent 用插件完成，不为省事改用
+  本机命令行或其他直连方式另起一套设备、浏览器会话或账号；只有插件不支持的步骤另行处理，
+  且仍作用于插件管理的同一对象。用户明确指定做法（如点名用 `adb`／某台 AVD）时以用户为准，
+  不能让 Cindy 比原生 harness 更难用。判断依据是 `ghost_info` 的实时工具，不是作者 `recall`。
+  同一句宿主规则（`GHOST_NO_BYPASS_RULE`）放在插件发现的各条入口：花名册前导、`ghost_info`
+  工具说明，以及没有花名册时的 `ghost_list` 说明（有花名册时前导已在 `ghost_list` 描述里，
+  不重复）。`ghost_info` 与 `ghost_list` 是并列入口、没有固定补查链，缺一条入口，从那条入口
+  发现插件的任务就看不到规则。Agent 往往在查插件之前就决定了用命令行，所以规则必须在动手前
+  可见：工具按需加载时只有 system 段的前导能挡住；没有花名册的任务（伙伴、开始时没有可见
+  插件、缺工作目录）只能靠插件网关常驻注册的这两处工具说明。（2026-10-31：Agent 已命中设备模拟器插件，仍用 SDK
+  `emulator` 起了插件外的安卓模拟器，窗口弹在桌面而不在任务侧栏。）
 - **`ghost_info` 与 `ghost_list` 是并列查询方式。** 已知 id 时用 `ghost_info` 精准现查
   单条；未命中或需要全量实时回查时用 `ghost_list`。两者都返回完整 `CindyGhostInfo`
   （id/name/command/recall/setup/tools/manual），不存在 `ghost_list → ghost_info` 的
   固定补查链。
+- **Manual-only 插件也可被发现。** 非空 `manual.items` 不依赖 `tools`；这类插件的
+  `tools` 返回空数组，通过 `ghost_manual` 按需读取，不启动插件运行时，也不因此取得
+  `ghost_call` 能力。读取仍按插件存在、账号可用、工作目录停用、启用状态依次检查；
+  未声明手册时返回 `GHOST_NOT_FOUND`。无工具且无手册的插件仍隐藏。
+  实现与回归见 [ghost.ts](../apps/desktop/src/main/mcp-integrations/ghost.ts) 和
+  [ghostWorkdirGate.test.ts](../apps/desktop/src/main/mcp-integrations/__tests__/ghostWorkdirGate.test.ts)。
 - **取得完整 info 后有两条并行路径。** `ghost_manual` 展开根索引、`MANUAL.md` 和任意
   深度 Markdown；二级分派插件则通过
   `ghost_call({ ghost_id, tool: "list_tools", args: { category } })` 调用自己声明的顶层
@@ -62,7 +79,53 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
   放行（见 §4 第 6 条）。Manual 正文只作为 tool-result 按需进入上下文，不进入生产
   system/developer prompt；正文是作者数据，不构成系统规则、用户意图或权限授权。
 
+
+### 2.1 namespace 寻址
+
+`ghost_info`、`ghost_call`、`ghost_manual` 和 `connect_account` 都接受可选 `namespace`：
+
+- 省略：按下述日常版本规则选择 public/local 副本；其它同名实例仍须明确寻址。
+  同名实例只有一个时解析到它，包括升级普查中还没有 namespace 字段的旧安装。
+- `null`：已确认的 root。不能用来点名唯一的待迁移旧安装。
+- `"local"`：本地开发副本；其它字符串为企业 orgSlug。
+
+调用参数必须保留发现结果中的 JSON 类型：`null` 与字符串 `"null"` 不同，后者是合法的
+企业 slug，不能自动转成 root。插件名已安装但显式 namespace 不匹配时，共用可见性入口返回
+`GHOST_NAMESPACE_MISMATCH`，消息仅列出当前账号可用、保留 namespace 缺省／null／字符串三态的安装身份，
+供 Agent 核对目标后修正参数；原调用不进入 Setup、文件交接或插件派发，也不自动改选实例。
+修正参数后同一任务即可重新查询／调用，无需重新安装或新建任务。完全没有该插件名时仍返回
+`GHOST_NOT_FOUND`；账号切换期间或同名安装均不对当前账号可用时，也返回该错误且不披露身份。
+`GHOST_NAMESPACE_MISMATCH` 属于宿主保留码，插件交卷不能冒用；管子入口将其归一化为 `INTERNAL`，
+避免已执行的操作被误判为尚未派发。此错误码不改变安装数据、权限、实例解析或跨设备协议；
+旧 Host 仍返回原错误，旧查看端可照常显示文本。实现与回归见 `ghostVisibility.ts`、
+`ghostVisibility.test.ts` 和 `ghostWorkdirGate.test.ts`。
+
+同名多实例返回 `GHOST_AMBIGUOUS`，`candidates` 是 `{ ghostId, namespace }`。已确认 root 的 namespace 为 null，local 副本为字符串 local，企业实例为 orgSlug。待迁移旧安装没有 namespace 字段；它和另一个实例同名时，候选里的 null 可以点到这个待迁移实例。`/命令` 对没有 namespace 字段的旧安装不写 namespace，沿用 `(id: <ghostId>)`。已确认 root 写 `namespace: null`，企业实例写 `namespace: <orgSlug>`。
+
+### 2.2 日常调用的 public/local 版本选择
+
+同一逻辑 id 同时存在已确认的 public（`namespace: null`）与 local 副本时，
+花名册、`ghost_list` 和省略 namespace 的默认查询／调用只选择版本较新的一份。
+按 SemVer 比较数值段和预发布标识，build metadata 不影响版本优先级；版本相同选 public。
+不是本地优先，也不是公开版永久优先。每次实时查询重新选择，更新／启停／工作目录变化
+后不沿用旧胜者。已停用、下线或当前账号／工作目录不可用的副本不遮挡可用副本。
+
+企业 namespace、尚未确认的旧身份、无法比较的历史版本和重复物理身份不按名字强行合并，
+保持原来的明确寻址／歧义处理。显式 namespace 或物理实例键仍精确指向原安装，供明确指定
+来源的调试、历史页面与在途调用使用；不得静默把已绑定的请求、凭据或文件授权换给另一副本。
+管理列表保留所有安装，不改启用设置、不搬凭据和数据、不删除旧包。
+
+生产判据为 `ghostVisibility.ts` 的 `preferLatestLocalOrPublicGhosts`；
+花名册与实时清单在现有可见性过滤后复用它，默认名称解析也复用同一判据。
+回归见 `ghostVisibility.test.ts` 与 `ghostWorkdirGate.test.ts`。
+
 ## 3. 花名册（roster）
+
+普通任务可调用 `connect_account({kind:"plugin", id:ghost_id})`，由 Host 复用配置卡等待连接，
+不必先触发插件业务调用。等待受当前任务取消、插件可见性及原配置卡版本校验约束。
+伙伴继续使用原持久授权卡与配置策略；Host 账号入口仍只用于伙伴。显式 `reauthorize`
+只呈现已声明的 OAuth、Secret 或连接配置动作，不删除现存账号。没有 Host 配置动作的插件应使用其
+设置页或手册中的登录工具；空的配置就绪状态不能作为平台账号已登录的证据。
 
 ### 3.1 内容与口径
 
@@ -73,13 +136,12 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 - 序列化前逐字段折叠空白（`replace(/\s+/g, " ")` + trim）并防御截断
   （name ≤ 64、command ≤ 32、recall ≤ 300）；条目按 id 排序；最多 16 条、
   总预算 8000 字符。
-- 进入花名册的过滤条件：已启用 + 账号可用 + 有工具 + 当前工作目录未停用
+- 进入花名册的过滤条件：已启用的 chip 插件 + 账号可用 +（有工具或非空 `manual.items`）+ 当前工作目录未停用
   （`visibleChipGhosts`，`apps/desktop/src/main/mcp-integrations/ghost.ts`）。
 
 ### 3.2 注入位置（vendor-neutral，一份 formatter 两处消费）
 
-- **system 段（主通道）**：仿 Smart Contacts（`getContactsPromptState`）的接线
-  模式——`AgentDeps` 新增回调按 `{workingDir}` 取花名册文本，三 harness 各自在
+- **system 段（主通道）**：`AgentDeps` 新增回调按 `{workingDir}` 取花名册文本，三 harness 各自在
   会话装配点追加：
   - Claude Code：`buildQuery` → `systemPrompt.append`；
   - Codex：`startSession` → `developerInstructions`（HTTP proxy / OAuth WS /
@@ -90,6 +152,19 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
   一致。副通道保证只看工具面的路径（以及历史行为）不回退。
 - 纯格式化函数下沉在 `packages/cindy-tools`，主进程与 MCP server 共用，避免两处
   实现漂移。
+
+伙伴仅保留插件发现网关，不默认注入全量花名册；按需调用 `ghost_list` / `ghost_info`
+复用同账号已有插件。伙伴内置工具集的冻结名单不适用于插件 ID，插件仍由 §4 的实时可见性与
+调用授权守门。
+
+已安装插件无法满足请求时，伙伴经 `ghost_market_search` 查询 Cindy 服务端市场与用户配置的
+自定义市场；不以 Skill/MCP 搜索或模型供应商 Apps 市场代替。搜索只发现目录，不触发默认
+安装、更新、移除或账本修复。结果区分已装状态、实时可用性和来源不可用，失败不能解释为
+能力不存在。选定缺失插件后，`ghost_market_install` 绑定真实 plugin/release，复用现有
+安装事务与当前 Agent 操作授权；既有安装不重装、不启用、不换源。安装不等于登录，仍须
+经 `ghost_info` 与现有 `connect_account` / setup 链路连接，再续接原请求。宿主没有市场
+工具时如实说明并引导可信桌面插件页。实现见 `plugin-market/agentTools.ts`，回归覆盖
+`agentTools.test.ts`、市场 service 测试与 `ghostWorkdirGate.test.ts`。
 
 ### 3.3 快照语义
 
@@ -102,9 +177,21 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 - formatter 的调用方必须传入**已解析的会话 workingDir**；拿不到语境（ALS 缺失、
   bridge 建线期 `workingDir === ''`）时**不注入，绝不回退全量**——否则会把当前
   目录已停用插件的元数据送进高权重 prompt。
-- 远端 SSH 会话（`remoteHostId`）一律不注入：固定 `cindy` MCP server 不在远端
-  注入白名单，远端 agent 调不到 ghost 工具；且远端 workingDir 是远程路径，
-  无法匹配本地的目录停用记录。Claude 与 Codex 行为一致；Pi 仅支持本地会话。
+- 远端 SSH 的 Claude / Codex（`remoteHostId`）不注入花名册：固定 `cindy` MCP
+  不在远端注入白名单，agent 调不到 ghost 工具；且远端 workingDir 是远程路径，
+  无法匹配本地的目录停用记录。远端 Pi 经 MCP bridge 隧道可达 in-process
+  `cindy`，伙伴提示词与 helper 工具描述应保留 `ghost_list` / `ghost_info` /
+  `ghost_call`；花名册 system 段仍 fail-closed（远端路径对不上本地停用记录，
+  伙伴会话也不注入全量花名册，按需 `ghost_list`）。
+- 设备托管（远程供应商、供应商分享的受邀者、供应商组，`deviceHosted`）：Agent 在另一台
+  电脑运行，`ghost_*` 经隧道回到**任务所在电脑**。花名册由任务所在电脑在打开任务时按真实
+  工作目录调用同一个 `getGhostRosterPrompt` 生成，经远程 Agent 启动选项
+  `ghostRosterSnapshot` 带过去；Agent 所在电脑只在隧道确实提供 `cindy` 时原样注入，
+  从不读自己的已装插件（受邀者场景下那是分享者的插件）。空串同样要带到并按空注入，
+  否则对方会回退到它自己的插件。旧控制端不带该字段时：受邀者照旧不注入，同账号照旧用
+  Agent 所在电脑的花名册。实现见 `remote-agent/controller/service.ts`、`host/service.ts`
+  与 `maker-core/src/agents/shared/device-hosted.ts` 的 `deviceHostedGhostRoster`；
+  回归见三 harness 的 `device-hosted-guest` 测试与 `remote-agent/__tests__/roundtrip.test.ts`。
 - 空花名册 = 零注入（不留空壳标签）。
 
 ## 4. 安全设计（威胁模型：插件作者不守约）
@@ -152,6 +239,7 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 | --------------------------------------------------------------------------- | ------------------------------------------------ |
 | 本地普通会话                                                                | 是                                               |
 | device-link 手机发起/接管（agent 真身在被控端）                             | 是                                               |
+| 远程供应商 / 供应商分享 / 供应商组（Agent 在另一台电脑，`deviceHosted`）    | 是——用任务所在电脑带来的快照（§3.4）            |
 | Orca worker（含 bridge 对 dormant worker/lead 的 rehydrate）                | 是                                               |
 | scheduler 定时任务（heartbeat / persistent / ephemeral）                    | 是                                               |
 | send_to_session 新建与 lazy-resume、IM/飞书会话、hook-control、Goal restore | 是                                               |
@@ -182,8 +270,10 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 
 ## 7. 明确不做的事
 
-- 不新增全局路由 Skill；不把插件手册铺成全局 Skill。新插件使用按需读取的
-  `manual`；存量 Skill 槽处于停止新增、未来整体废弃的兼容期。
+- 不新增使用插件的全局路由 Skill；不把插件业务手册铺成全局 Skill。内置
+  `cindy-plugin-creator` 仅负责编写插件，不替代插件业务的渐进发现。插件工具的深入用法
+  使用按需读取的 `manual`；需要斜杠命令或本地脚本的完整工作流可用插件 Skill 槽，它装在
+  Cindy 私有目录，随插件启停（见插件编写手册 §4.16）。
 - 不维护排他的 active plugin / active context；插件切换不做上下文替换，规则
   适用范围由 `ghost_id + category` 边界保证。
 - 不引入宿主级 rules_revision / receipt 回执协议。
@@ -196,7 +286,8 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 - 花名册取数与过滤（`visibleChipGhosts` / `getRosterItems`）：
   `apps/desktop/src/main/mcp-integrations/ghost.ts`
 - 可见性唯一真源：`apps/desktop/src/main/cindy-brain/ghostVisibility.ts`
-- 作者契约（FORGE_GUIDE）：`apps/desktop/src/main/cindy-brain/forge.ts`
+- 作者契约：`apps/desktop/resources/system-skills/cindy-plugin-creator/references/`；
+  `apps/desktop/src/main/cindy-brain/forgeGuide.ts` 组合为兼容的 `FORGE_GUIDE`
 - 摘要与 manual 契约：本仓 `packages/plugin-protocol/src/manifest.ts`，desktop
   在 `apps/desktop/src/shared/ghost.ts` 维护完整镜像
 - 三 harness 注入落点：`packages/maker-core/src/agents/claude-code/index.ts`
@@ -206,3 +297,13 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
   `--append-system-prompt`）；Pi 的 host 侧装配在
   `apps/desktop/src/main/maker-host/pi-host.ts`（buildPiAgent /
   composePiSystemPrompt）
+
+### 任务内授权指引
+
+Desktop 的 Claude/Codex/Pi Host 追加同一静态授权指引，复用现有发现及市场安装工具，
+不改安装权限或来源策略。已有登录态时，用户明确要求更新授权仍调用 `reauthorize:true`；
+私密值只填原卡片，不进入工具参数或对话。先等待 Host 完成，再以最小只读调用验证平台权限。
+提示词保持原 system 前缀，无设备 ID、凭据、时间戳或动态账号状态；详见
+[远程授权契约](remote-plugin-oauth.md) 的兼容性与缓存影响。
+
+本地文件与 Forge 默认安装到 local。花名册、详情和调用始终保留真实 namespace；同名多份必须按用户目标选择，禁止按公开市场、企业或 local 排隐式优先级。已有任务绑定的实例键继续指向原实例，不迁移任务。

@@ -1,3 +1,4 @@
+import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 /**
  * 会话尾部收尾提示(error-tail / interrupted)的纯判定模型 —— 对齐桌面
  * CCAgentSessionView 的 errorTailMsg / interruptedFromSession 两套 banner 语义,
@@ -26,16 +27,27 @@ import {
   messageContentToPreview,
   sortMessagesByCreatedAt,
 } from '@cindy/maker-shared/message-normalize';
-import { describeAgentAuthError } from '@cindy/maker-shared/device-link-contract';
-import { i18n } from '@/i18n';
 import type { InputProjection, QueuedRemoteMessage, RemoteMessage, RemoteSession } from '@/session/types';
+import {
+  describeNonRetryableAgentError,
+  localizeAgentError,
+  requiresAgentErrorConfigurationChange,
+  localizeUnclassifiedAgentError,
+  unclassifiedAgentErrorI18nKey,
+  parseMobileToolLoopErrorDetails,
+  type MobileToolLoopErrorDetails,
+} from '@/session/agentErrorI18n';
 
 export interface SessionTailErrorBanner {
   kind: 'error-tail';
   /** 错误行 clientId:忽略(dismiss)与本地隐藏态都按它归属。 */
   clientId: string;
-  /** 展示文案(agent 未鉴权错误已换成中文引导,其余保持原文)。 */
+  /** 本地化展示文案；未知错误的技术原文放入 rawError。 */
   text: string;
+  rawError?: string;
+  /** 错误行的稳定 reason key，供诊断提示带上。 */
+  reason?: string | null;
+  summaryKey?: string;
   /** 主按钮语义:中断标记行 →「继续任务」;普通失败行 →「重试」。 */
   continueKind: 'interrupted' | 'error';
   /**
@@ -53,7 +65,7 @@ export type SessionTailBannerState = SessionTailErrorBanner | SessionTailInterru
 
 export interface ResolveSessionTailBannerInput {
   messages: readonly RemoteMessage[];
-  session: Pick<RemoteSession, 'activeTurnStartedAt' | 'lastTurnEndedAt' | 'clearedAt'> | null;
+  session: Pick<RemoteSession, 'activeTurnStartedAt' | 'lastTurnEndedAt' | 'clearedAt' | 'source'> | null;
   projection: Pick<InputProjection, 'error' | 'credentialSwitchWait'>;
   isSessionStreaming: boolean;
   /**
@@ -64,6 +76,8 @@ export interface ResolveSessionTailBannerInput {
    * (review P1 第五轮收敛,model 不再自己扫队列)。
    */
   continuationInFlight: boolean;
+  /** 当前任务元数据已在本 relay 连接代完成权威同步。只门控双时间戳中断推断。 */
+  sessionMetadataSyncedForConnection: boolean;
   /** interrupted 已被本视图操作过(继续/忽略)或本窗口内会话跑起来过 → 熄灭。 */
   interruptAcked: boolean;
   /**
@@ -92,18 +106,26 @@ export function resolveSessionTailBanner(input: ResolveSessionTailBannerInput): 
 
   const tail = findErrorTailMessage(input.messages);
   if (tail && !input.hiddenErrorClientIds.has(tail.clientId)) {
-    const guidance = describeNonRetryableTailError(tail.text);
+    const nonRetryableGuidance = describeNonRetryableAgentError(tail.text, tail.reason);
+    const agentErrorGuidance = localizeAgentError(tail.reason, tail.toolLoop, tail.text, tail.outputLimit);
     return {
       kind: 'error-tail',
       clientId: tail.clientId,
-      text: guidance ?? tail.text,
+      text: nonRetryableGuidance ?? agentErrorGuidance ?? localizeUnclassifiedAgentError(tail.text, input.session?.source),
+      rawError: tail.text,
+      reason: tail.reason,
+      ...(!nonRetryableGuidance && !agentErrorGuidance ? { summaryKey: unclassifiedAgentErrorI18nKey(tail.text, input.session?.source) } : {}),
       continueKind: tail.reason === APP_EXIT_INTERRUPTED_REASON ? 'interrupted' : 'error',
-      retryable: guidance === null,
+      retryable: nonRetryableGuidance === null && !requiresAgentErrorConfigurationChange(tail.text),
     };
   }
   // 历史中断行优先;无 error-tail 才轮到 session 双时间戳判定(对齐桌面互斥渲染)。
   if (tail) return null;
 
+  // 连接恢复或首次打开时，store 可能先呈现上一代的 activeTurnStartedAt / lastTurnEndedAt。
+  // 在本代 session 元数据完成同步前，这两个时间戳不能证明任务真的中断；持久 error-tail
+  // 已在上面独立处理，不受此门影响。
+  if (!input.sessionMetadataSyncedForConnection) return null;
   if (input.interruptAcked || !input.session) return null;
   const started = input.session.activeTurnStartedAt ?? null;
   if (!started) return null;
@@ -113,33 +135,12 @@ export function resolveSessionTailBanner(input: ResolveSessionTailBannerInput): 
   return null;
 }
 
-/**
- * 不可重试的持久化尾行错误 → 引导文案(null = 可重试,展示原文)。对齐桌面
- * ErrorBanner hide-Retry 门控的核心子集——这些错误重试只会撞同一个失败循环:
- *  - agent 未鉴权(describeAgentAuthError 模板):凭证在被控电脑上,手机改不了;
- *  - codex thread not found:进程重启 / 鉴权模式切换后旧 thread 已随旧进程销毁;
- *  - invalid_encrypted_content:换供应商后协议加密内容不可用,需回桌面处理
- *    (fork 剥离入口仅桌面本地 codex 会话有)。
- * 桌面还有依赖本地上下文的更细分支(codex 401 区分 oauth-bearer / 网关 key、
- * session-expired 的登录引导等),手机端拿不到对应信号,不搬——这些场景重试
- * 失败后错误会重新浮现,不破坏数据。
- */
-function describeNonRetryableTailError(text: string): string | null {
-  const authGuidance = describeAgentAuthError(text);
-  if (authGuidance) return authGuidance;
-  if (/thread not found/i.test(text)) {
-    return i18n.t('session.tail.codexThreadLost');
-  }
-  if (/invalid_encrypted_content/i.test(text)) {
-    return i18n.t('session.tail.encryptedContentInvalid');
-  }
-  return null;
-}
-
 interface ErrorTailMessage {
   clientId: string;
   text: string;
   reason: string | null;
+  toolLoop: MobileToolLoopErrorDetails | null;
+  outputLimit: OutputLimitDetails | null;
 }
 
 /**
@@ -172,6 +173,8 @@ function findErrorTailMessage(messages: readonly RemoteMessage[]): ErrorTailMess
       clientId: message.clientId,
       text: rawText,
       reason: typeof content?.reason === 'string' ? content.reason : null,
+      toolLoop: parseMobileToolLoopErrorDetails(content?.toolLoop),
+      outputLimit: parseOutputLimitDetails(content?.outputLimit) ?? null,
     };
   }
   return null;

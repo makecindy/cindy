@@ -34,6 +34,24 @@ function deferred(): {
 }
 
 describe('provider model auto-refresh coordinator', () => {
+  it('refreshes the public image catalog before manual OpenAI discovery', async () => {
+    const catalog = deferred();
+    const refreshProvider = vi.fn(async () => undefined);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [view('openai', true)],
+      refreshCatalog: () => catalog.promise,
+      refreshProvider,
+      getScopeKey: () => 1,
+      now: () => 1_000,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+    const result = coordinator.refreshManually('openai');
+    expect(refreshProvider).not.toHaveBeenCalled();
+    catalog.resolve();
+    await result;
+    expect(refreshProvider).toHaveBeenCalledExactlyOnceWith('openai');
+  });
+
   it('refreshes the shared Catalog after cooldown even when xAI is disconnected', async () => {
     let now = 1_000;
     const refreshCatalog = vi.fn(async () => undefined);

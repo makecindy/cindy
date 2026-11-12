@@ -16,8 +16,7 @@ export interface PublishFormValues {
   visibleDeptIds: string[];
   sharedTeamSlugs: string[];
   changelog: string;
-  categoryMode: 'auto' | 'manual';
-  categorySlug: string;
+  categorySlugs: string[];
 }
 
 export interface PublishCategoryOption {
@@ -25,31 +24,28 @@ export interface PublishCategoryOption {
   name?: string;
 }
 
-export type RequiredCategoryValidation =
+export type PlatformTagSelectionValidation =
   | { ok: true }
-  | { ok: false; reason: 'loading' | 'load-error' | 'empty' | 'required' | 'invalid' };
+  | { ok: false; reason: 'loading' | 'load-error' | 'empty' | 'invalid' };
 
-export function validateRequiredCategory({
+export function validatePlatformTagSelection({
   loading,
   error,
-  categories,
-  categoryMode,
-  selectedSlug,
+  categories = [],
+  selectedSlugs,
 }: {
   loading: boolean;
   error: string | null;
-  categories: PublishCategoryOption[];
-  categoryMode: 'auto' | 'manual';
-  selectedSlug: string;
-}): RequiredCategoryValidation {
-  if (categoryMode === 'auto') return { ok: true };
+  categories?: PublishCategoryOption[];
+  selectedSlugs: string[];
+}): PlatformTagSelectionValidation {
+  const slugs = [...new Set(selectedSlugs.map((slug) => slug.trim()).filter(Boolean))];
+  if (slugs.length === 0) return { ok: true };
   if (loading) return { ok: false, reason: 'loading' };
   if (error) return { ok: false, reason: 'load-error' };
   if (categories.length === 0) return { ok: false, reason: 'empty' };
 
-  const slug = selectedSlug.trim();
-  if (!slug) return { ok: false, reason: 'required' };
-  if (!categories.some((category) => category.slug === slug)) {
+  if (slugs.length > 50 || slugs.some((slug) => !categories.some((category) => category.slug === slug))) {
     return { ok: false, reason: 'invalid' };
   }
   return { ok: true };
@@ -115,15 +111,23 @@ export function buildSkillhubPublishParams({
   publishAbsolutePath,
   submitName,
   isFirstPublish,
+  ownerType,
+  categories = [],
 }: {
   form: PublishFormValues;
   publishAbsolutePath: string;
   submitName: string;
   isFirstPublish: boolean;
+  /** New SkillHub fixes ownership from the authenticated membership. */
+  ownerType?: 'personal' | 'organization' | null;
+  categories?: PublishCategoryOption[];
 }): SkillhubPublishParams {
-  const categorySlug = form.categorySlug.trim();
+  const availableSlugs = new Set(categories.map((category) => category.slug));
+  const categorySlugs = [...new Set(form.categorySlugs.map((slug) => slug.trim()).filter(Boolean))]
+    .filter((slug) => availableSlugs.has(slug));
   // 私有发布强制个人归属(Hub 约束:private + teamSlug 会 400)
-  const teamPublisher = form.visibility !== 'PRIVATE' && form.publisherMode === 'team' && form.ownerTeamSlug
+  const teamPublisher = ownerType === undefined
+    && form.visibility !== 'PRIVATE' && form.publisherMode === 'team' && form.ownerTeamSlug
     ? form.ownerTeamSlug
     : undefined;
 
@@ -136,10 +140,9 @@ export function buildSkillhubPublishParams({
     summary: form.summary,
     description: form.description,
     ...(isFirstPublish && {
-      categoryMode: form.categoryMode,
-      categories: form.categoryMode === 'manual' && categorySlug ? [categorySlug] : [],
+      tags: categorySlugs,
       visibility: form.visibility,
-      visibleSlugs: form.visibility === 'DEPARTMENT_SCOPED'
+      visibleSlugs: ownerType === undefined && form.visibility === 'DEPARTMENT_SCOPED'
         ? [...form.visibleDeptIds, ...form.sharedTeamSlugs]
         : [],
       ...(teamPublisher

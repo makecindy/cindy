@@ -9,15 +9,18 @@
  *   1. 执行细节字段(upstream / authStrategy / headerDelete / headerOverride / modelIdRewrite /
  *      adapter) → 投影后全部消失(安全边界 D3)。
  *   2. 即便输入里残留 supportsFastMode → 也一并剥掉(routing 不再承载任何 Fast 信息)。
- *   3. models[agent](含 supportsFastMode 显示门控)原样透传 —— Fast 显隐数据源在这里。
+ *   3. models[agent] 只投影可执行模型并保持旧 Mobile 结构；可用模型的 Fast 字段照常透传。
  *   4. disabled runtime 在控制端仍保持禁用，不会被共享 registry 重新列为可选。
  *   5. 品牌只以非敏感 logoKind 透传;重命名 preset 仍可识别,upstream 绝不泄漏。
  * 只 mock electron(app)+ logger,与同目录 dispatchSendSafety.test 同范式。
  */
 import { describe, it, expect, vi } from 'vitest';
-import { connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
+import { connectedProvidersForAgent, pickRecommendedAgent, remoteInvocationModels, type ProviderView } from '@cindy/model-providers';
+import { PROVIDER_METADATA_TRUST_MS } from '@cindy/device-link';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
 
+// The projection never reads persistence; avoid loading Electron through transitive stores.
+vi.mock('electron-store', () => ({ default: class {} }));
 vi.mock('electron', () => ({
   app: {
     getAppPath: () => '/tmp/xdt-maker-test/app',
@@ -33,18 +36,85 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-import { __testing } from '../dispatch';
+import { __testing, setProviderShareAccess } from '../dispatch.desktop';
 
 const project = (result: unknown) =>
   __testing.projectInvokeResultForTunnel('maker:provider:list', result) as {
     providers: Record<string, unknown>[];
     modelVisibilityOverrides?: Record<string, boolean>;
+    providerOrder?: string[];
+    providerContinuity?: { stale: boolean; remainingMs: number };
   };
 const projectForCurrentController = (result: unknown) =>
   __testing.projectInvokeResultForTunnel('maker:provider:list', result, true) as {
     providers: Record<string, unknown>[];
     modelVisibilityOverrides?: Record<string, boolean>;
   };
+
+// Upgrade 2026-11-11, standard: folding the local list must not remove an old remote grant.
+it.each([false, true])('retains the old remote source unless the complete pool is offered (%s)', offered => {
+  const projected = project({ providers: [
+    { id: 'openai', name: 'OpenAI', agents: [], models: {}, remoteInvocationEnabled: offered },
+    { id: 'old-openai', name: 'Old OpenAI', agents: [], models: {}, remoteInvocationEnabled: true, subscriptionPoolAlias: true },
+  ] });
+  expect(projected.providers.find(provider => provider.id === 'old-openai')?.subscriptionPoolAlias)
+    .toBe(offered ? true : undefined);
+});
+
+// PR #9900, standard: the pool's remote switch does not imply model coverage.
+// Previous upgrade fixtures had empty catalogs and could not expose a lost grant.
+it.each([
+  { poolModels: ['model-a'], oldModels: ['model-b'], hidden: false },
+  { poolModels: ['model-a', 'model-b'], oldModels: ['model-b'], hidden: true },
+])('keeps the old remote source until its models are covered: %j', ({ poolModels, oldModels, hidden }) => {
+  setProviderShareAccess({
+    guestAccess: () => null, ensureKnown: async () => {}, hasShares: () => false,
+    remoteModels: id => id === 'openai' ? poolModels : oldModels,
+  });
+  try {
+    const models = { codex: ['model-a', 'model-b'].map(id => ({ id, name: id, efforts: [], contextWindow: 1000 })) };
+    const projected = project({ providers: [
+      { id: 'openai', name: 'OpenAI', agents: ['codex'], models, remoteInvocationEnabled: true },
+      { id: 'old-openai', name: 'Old OpenAI', agents: ['codex'], models, remoteInvocationEnabled: true, subscriptionPoolAlias: true },
+    ] });
+    expect(projected.providers.find(provider => provider.id === 'old-openai')?.subscriptionPoolAlias)
+      .toBe(hidden ? true : undefined);
+  } finally { setProviderShareAccess(null); }
+});
+
+describe('schedule binding list projection', () => {
+  const fields = {
+    id: 'heartbeat', name: 'Heartbeat', status: 'paused', targetSessionId: 'task',
+    cronExpr: '*/5 * * * *', manual: false, recurring: true, intervalMs: 600_000,
+  };
+  it('removes execution payload before tunnel serialization, preserving every current binding', () => {
+    const full = [
+      { ...fields, prompt: 'x'.repeat(5 * 1024 * 1024), script: { code: 'private' } },
+      { ...fields, id: 'second', recurring: false },
+      { ...fields, id: 'persistent', persistentSession: true },
+      { ...fields, id: 'explicit-off', persistentSession: false },
+      { ...fields, id: 'expired', status: 'expired' },
+      { ...fields, id: 'unbound', targetSessionId: undefined },
+    ];
+    const projected = __testing.projectInvokeResultForTunnel(
+      'maker:schedule:list', full, false, [null, { sessionBindings: true }],
+    );
+    expect(projected).toEqual([
+      fields,
+      { ...fields, id: 'second', recurring: false },
+      { ...fields, id: 'persistent', persistentSession: true },
+      { ...fields, id: 'explicit-off' },
+    ]);
+    expect(Buffer.byteLength(JSON.stringify(full))).toBeGreaterThan(4 * 1024 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(projected))).toBeLessThan(1024);
+  });
+  it('keeps existing local/mobile/old-controller list responses intact without explicit opt-in', () => {
+    const full = [{ ...fields, prompt: 'execution config' }];
+    for (const args of [[], [null], [null, { sessionBindings: false }]]) {
+      expect(__testing.projectInvokeResultForTunnel('maker:schedule:list', full, false, args)).toBe(full);
+    }
+  });
+});
 
 describe('controller capability metadata', () => {
   it('distinguishes an absent subscribe field from an explicit empty capability set', () => {
@@ -95,7 +165,133 @@ function xdProviderWithFullRouting() {
   };
 }
 
+
+describe('allowed object-form read stamps', () => {
+  it.each(['maker:get-capabilities', 'maker:agent:status'] as const)(
+    'adds the host first-hop stamp to %s and keeps a shorter upstream budget',
+    (channel) => {
+      const value = channel === 'maker:agent:status' ? { binaryReady: true } : { availableModels: [] };
+      expect(__testing.projectInvokeResultForTunnel(channel, value)).toEqual({
+        ...value, providerContinuity: { stale: false, remainingMs: PROVIDER_METADATA_TRUST_MS },
+      });
+      const shorter = { ...value, providerContinuity: { stale: true, remainingMs: 1000 } };
+      expect(__testing.projectInvokeResultForTunnel(channel, shorter)).toEqual(shorter);
+    },
+  );
+
+  it('keeps array replies and unrelated object channels unchanged', () => {
+    const agents = ['claude-code', 'codex'];
+    expect(__testing.projectInvokeResultForTunnel('maker:list-available-agents', agents)).toBe(agents);
+    const other = { ok: true };
+    expect(__testing.projectInvokeResultForTunnel('maker:set-model', other)).toBe(other);
+  });
+});
+
 describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
+  // #9501 unit: the actual tunnel projection must preserve the host-only budget
+  // for Remote Agent selection while remote-control/settings keep the default.
+  it('preserves separate context overrides across tunnel serialization', () => {
+    const provider = xdProviderWithFullRouting();
+    const model = { ...provider.models['claude-code'][0], contextWindow: 200_000, contextWindowOverride: 1_000_000 };
+    provider.models['claude-code'] = [model];
+    const result = JSON.parse(JSON.stringify(project({ providers: [provider] })));
+    expect(result.providers[0].models['claude-code'][0]).toMatchObject({ contextWindow: 200_000, contextWindowOverride: 1_000_000 });
+    expect(remoteInvocationModels(result.providers[0]).models['claude-code']![0].contextWindow).toBe(1_000_000);
+  });
+  it('advertises the bounded directory budget and keeps a shorter upstream remainder', () => {
+    expect(project({ providers: [] }).providerContinuity)
+      .toEqual({ stale: false, remainingMs: PROVIDER_METADATA_TRUST_MS });
+    expect(project({ providers: [], providerContinuity: { stale: true, remainingMs: 1000 } }).providerContinuity)
+      .toEqual({ stale: true, remainingMs: 1000 });
+  });
+  it('keeps the source account name for mobile and desktop controllers', () => {
+    for (const name of ['Cindy AI · 个人', 'Cindy AI · 心动', 'Cindy AI · Example Studio']) {
+      const input = { providers: [{ ...xdProviderWithFullRouting(), name }] };
+      expect(project(input).providers[0]?.name).toBe(name);
+      expect(projectForCurrentController(input).providers[0]?.name).toBe(name);
+    }
+  });
+  it('applies owner visibility per provider and runtime before transport, preserving enabled model options', () => {
+    const models = [
+      { id: 'default-on', defaultEnabled: true, supportsFastMode: true },
+      { id: 'manual-on', defaultEnabled: false, efforts: ['low', 'high'], contextWindow: 272000 },
+      { id: 'manual-off', defaultEnabled: true },
+      { id: 'default-off', defaultEnabled: false },
+      { id: 'legacy-default' },
+    ];
+    const providers = ['a', 'b'].map(id => ({ id, agents: ['codex', 'pi'],
+      models: { codex: models, pi: models }, imageModels: models, videoModels: models,
+      audioModels: models, embeddingModels: models }));
+    const input = { providers, providerOrder: ['b', 'a'], modelVisibilityOverrides: {
+      'codex:a:manual-on': true, 'codex:a:manual-off': false,
+    } };
+    const output = project(input);
+    const a = output.providers[0];
+    const expected = [models[0], models[1], models[4]];
+    expect(a.models).toEqual({ codex: expected, pi: [models[0], models[2], models[4]] });
+    expect(output.providers[1].models).toEqual({ codex: [models[0], models[2], models[4]], pi: [models[0], models[2], models[4]] });
+    for (const field of ['imageModels', 'videoModels', 'audioModels', 'embeddingModels']) expect(a[field]).toEqual(expected);
+    expect(output.providerOrder).toEqual(['b', 'a']);
+    expect(output.modelVisibilityOverrides).toMatchObject({
+      ...input.modelVisibilityOverrides, 'codex:a:default-off': false, 'pi:b:default-on': true,
+    });
+    expect(input.modelVisibilityOverrides).not.toHaveProperty('codex:a:default-off');
+    expect(input.providers[0].models.codex).toHaveLength(5);
+    expect(project({ ...input, modelVisibilityOverrides: { 'codex:a:manual-on': false } }).providers[0].models)
+      .toEqual({ codex: [models[0], models[2], models[4]], pi: [models[0], models[2], models[4]] });
+  });
+
+  it('fits a catalog dominated by hidden models into the unchanged legacy response without truncating enabled rows', () => {
+    const enabled = Array.from({ length: 150 }, (_, i) => ({
+      id: `enabled-${i}`, defaultEnabled: true, efforts: ['medium', 'high'], supportsFastMode: true,
+    }));
+    const hidden = Array.from({ length: 900 }, (_, i) => ({
+      id: `hidden-${i}`, defaultEnabled: false, description: 'metadata '.repeat(600),
+    }));
+    const input = { providers: [{ id: 'large', models: { codex: [...enabled, ...hidden] } }] };
+    expect(Buffer.byteLength(JSON.stringify(input))).toBeGreaterThan(4 * 1024 * 1024);
+    const output = project(input); // No capability negotiation, same path as an old phone.
+    expect(output.providers[0].models).toEqual({ codex: enabled });
+    expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThan(64 * 1024);
+    expect(output).not.toHaveProperty('format');
+    expect(output).not.toHaveProperty('data');
+  });
+
+  it('keeps the remote native Codex preference after stripping OAuth execution details', () => {
+    const model = {
+      id: 'gpt-6-astra', name: 'GPT-6 Astra', contextWindow: 400000,
+      efforts: [], defaultEffort: null, nativeApi: 'openai-responses',
+    };
+    const provider = {
+      id: 'openai', name: 'OpenAI', connected: true, agents: ['codex', 'pi'],
+      routing: { codex: { authStrategy: 'oauth-passthrough', upstream: 'https://example.invalid' }, pi: {} },
+      models: { codex: [model], pi: [{ ...model, piApi: 'openai-responses' }] },
+    } as unknown as ProviderView;
+    expect(pickRecommendedAgent(provider, model.id, ['codex', 'pi'])).toBe('codex');
+    const projected = project({ providers: [provider] }).providers[0] as unknown as ProviderView;
+    expect(pickRecommendedAgent(projected, model.id, ['codex', 'pi'])).toBe('codex');
+    expect(JSON.stringify(projected)).not.toContain('authStrategy');
+    expect(JSON.stringify(projected)).not.toContain('example.invalid');
+  });
+
+  it('preserves live availability and native model metadata without exposing execution credentials', () => {
+    const provider = {
+      ...xdProviderWithFullRouting(),
+      connected: false,
+      availableMediaModelIds: [],
+      models: { pi: [{
+        id: 'google/gemini-new', name: 'Gemini New', contextWindow: 1_048_576,
+        nativeApi: 'google-generative-ai', piApi: 'google-generative-ai',
+        efforts: ['medium'], defaultEffort: 'medium', defaultEnabled: true,
+      }] },
+    };
+    const result = project({ providers: [provider] }).providers[0];
+    expect(result).toMatchObject({ connected: false, availableMediaModelIds: [], models: provider.models });
+    expect(JSON.stringify(result)).not.toContain('leak-me');
+    expect(JSON.stringify(result)).not.toContain(XD_GATEWAY_BASE_URL);
+    expect(connectedProvidersForAgent([result] as unknown as ProviderView[], 'claude-code')).toEqual([]);
+  });
+
   it('剥掉全部执行细节字段（安全边界 D3:upstream / 密钥 / endpoint 不出被控端）', () => {
     const { providers } = project({ providers: [xdProviderWithFullRouting()] });
     const cc = (providers[0].routing as Record<string, Record<string, unknown>>)['claude-code'];
@@ -109,15 +305,15 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
     ]) {
       expect(cc).not.toHaveProperty(secret);
     }
-    // claude-code 路由投影后是空对象(连残留的 supportsFastMode 也被剥掉)。
-    expect(cc).toEqual({});
+    // 保留协议证据；执行字段和残留的 supportsFastMode 都被剥掉。
+    expect(cc).toEqual({ wireProtocol: 'anthropic-messages' });
   });
 
   it('残留的 supportsFastMode 也被剥掉（routing 不再承载 Fast 信息）', () => {
     const { providers } = project({ providers: [xdProviderWithFullRouting()] });
     const routing = providers[0].routing as Record<string, Record<string, unknown>>;
     expect(routing['claude-code']).not.toHaveProperty('supportsFastMode');
-    expect(routing.codex).toEqual({});
+    expect(routing.codex).toEqual({ wireProtocol: 'openai-responses' });
   });
 
   it('只保留 openai-chat 兼容展示标记，仍不泄漏执行细节', () => {
@@ -140,8 +336,8 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
     const { providers } = project({ providers: [provider] });
     const routing = providers[0].routing as Record<string, Record<string, unknown>>;
 
-    expect(routing.codex).toEqual({ disabled: true });
-    expect(routing['claude-code']).toEqual({});
+    expect(routing.codex).toEqual({ wireProtocol: 'openai-responses', disabled: true });
+    expect(routing['claude-code']).toEqual({ wireProtocol: 'anthropic-messages' });
     expect(connectedProvidersForAgent(providers as unknown as ProviderView[], 'codex')).toEqual([]);
     expect(
       connectedProvidersForAgent(providers as unknown as ProviderView[], 'claude-code'),
@@ -149,16 +345,48 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
     expect(JSON.stringify(routing)).not.toContain(XD_GATEWAY_BASE_URL);
   });
 
-  it('models[agent] 原样透传（Fast 显隐数据源:per-provider supportsFastMode）', () => {
-    const { providers } = project({ providers: [xdProviderWithFullRouting()] });
+  it('models[agent] 只投影可执行模型，且不向 Mobile 下发 v5 availability 字段', () => {
+    const provider = xdProviderWithFullRouting();
+    const sourceModels = provider.models['claude-code'] as Array<
+      (typeof provider.models)['claude-code'][number] & {
+        availability?: 'available' | 'requires_payment';
+      }
+    >;
+    sourceModels.push(
+      {
+        id: 'claude-sonnet-available',
+        name: 'Sonnet Available',
+        contextWindow: 200000,
+        efforts: [],
+        defaultEffort: null,
+        supportsFastMode: false,
+        availability: 'available',
+      },
+      {
+        id: 'claude-opus-paid-only',
+        name: 'Opus Paid Only',
+        contextWindow: 200000,
+        efforts: [],
+        defaultEffort: null,
+        supportsFastMode: false,
+        availability: 'requires_payment',
+      },
+    );
+
+    const { providers } = project({ providers: [provider] });
     const models = providers[0].models as Record<
       string,
-      { id: string; supportsFastMode?: boolean }[]
+      { id: string; supportsFastMode?: boolean; availability?: string }[]
     >;
     expect(models['claude-code'][0]).toMatchObject({
       id: 'claude-opus-4-8',
       supportsFastMode: true,
     });
+    expect(models['claude-code'].map((model) => model.id)).toEqual([
+      'claude-opus-4-8',
+      'claude-sonnet-available',
+    ]);
+    expect(models['claude-code'].every((model) => model.availability === undefined)).toBe(true);
   });
 
   it('保留模型显示 override 快照并过滤非布尔值', () => {
@@ -210,7 +438,7 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
     const { providers } = project({ providers: [renamed] });
 
     expect(providers[0].logoKind).toBe('moonshot');
-    expect(providers[0].routing).toEqual({ 'claude-code': {} });
+    expect(providers[0].routing).toEqual({ 'claude-code': { wireProtocol: 'anthropic-messages' } });
     expect(JSON.stringify(providers[0])).not.toContain('api.moonshot.cn');
     expect(JSON.stringify(providers[0])).not.toContain('secret');
   });
@@ -249,6 +477,30 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
     expect(providers[0].routing).toEqual({ codex: {} });
   });
 
+  // PR #9941 review, unit: the enterprise artwork set by the host reaches this account's
+  // current controllers only. Other accounts (shared-task / provider-share guests), legacy
+  // controllers and non-organization sources never receive it.
+  it('企业专属图标只透传给同账号的当前控制端，且只认企业来源', () => {
+    const enterprise = {
+      ...xdProviderWithFullRouting(),
+      id: 'byok-1b2c3d4e',
+      source: 'organization',
+      logoKind: 'openai-spectrum',
+      routing: { codex: { upstream: 'https://gateway.example.invalid/v1' } },
+    };
+    const forged = { ...enterprise, id: 'custom-provider', source: 'user' };
+    const projectFor = (supportsFullLogoKinds: boolean, sameAccount: boolean) =>
+      (__testing.projectInvokeResultForTunnel(
+        'maker:provider:list', { providers: [enterprise, forged] }, supportsFullLogoKinds, [], sameAccount,
+      ) as { providers: Record<string, unknown>[] }).providers;
+
+    const own = projectFor(true, true);
+    expect(own[0].logoKind).toBe('openai-spectrum');
+    expect(own[1]).not.toHaveProperty('logoKind');
+    expect(projectFor(true, false)[0]).not.toHaveProperty('logoKind');
+    expect(projectFor(false, true)[0]).not.toHaveProperty('logoKind');
+  });
+
   it('混合品牌 routing 不产生 logoKind,也不透传伪造值', () => {
     const { providers } = project({
       providers: [
@@ -268,6 +520,21 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
     expect(providers[0].routing).toEqual({ codex: {}, 'claude-code': {} });
   });
 
+  it('「允许被远程调用」只作标记透传，不裁剪目录(远程控制与手机仍看到全部供应商)', () => {
+    const base = xdProviderWithFullRouting();
+    const { providers } = project({
+      providers: [
+        { ...base, id: 'shared', remoteInvocationEnabled: true },
+        { ...base, id: 'private', remoteInvocationEnabled: false },
+        { ...base, id: 'odd', remoteInvocationEnabled: 'yes' },
+        { ...base, id: 'legacy' },
+      ],
+    });
+    expect(providers.map((p) => p.id)).toEqual(['shared', 'private', 'odd', 'legacy']);
+    expect(providers.map((p) => p.remoteInvocationEnabled)).toEqual([true, false, undefined, undefined]);
+    expect(providers[2]).not.toHaveProperty('remoteInvocationEnabled');
+  });
+
   it('非 maker:provider:list 通道 → 原样返回不改', () => {
     const other = { foo: 'bar', providers: [xdProviderWithFullRouting()] };
     expect(__testing.projectInvokeResultForTunnel('maker:set-model', other)).toBe(other);
@@ -276,5 +543,126 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
   it('result 非 { providers: [] } 形状 → 原样返回', () => {
     const weird = { notProviders: 1 };
     expect(__testing.projectInvokeResultForTunnel('maker:provider:list', weird)).toBe(weird);
+  });
+});
+
+
+describe('active runtime summary projection', () => {
+  const rows = [true, false].map((isTurnRunning, i) => ({
+    sessionId: `session-${i}`, isTurnRunning, agentKind: 'codex', workDir: '/work',
+    capabilities: { availableModels: [{ id: 'model', description: 'x'.repeat(120_000) }] },
+  }));
+
+  it('omits repeated model catalogs only for an explicit summary request', () => {
+    const projected = __testing.projectInvokeResultForTunnel(
+      'maker:list-active', rows, false, [{ summary: true }],
+    );
+    expect(projected).toEqual([
+      { sessionId: 'session-0', isTurnRunning: true },
+      { sessionId: 'session-1', isTurnRunning: false },
+    ]);
+    expect(JSON.stringify(projected).length).toBeLessThan(150);
+    expect(rows[0].capabilities.availableModels[0].description).toHaveLength(120_000);
+  });
+
+  it('keeps only the canonical activity flags needed to clear stale mobile dots', () => {
+    const projected = __testing.projectInvokeResultForTunnel(
+      'maker:list-active', [{
+        ...rows[0], activityPhase: 'running', activityAttention: false,
+      }, {
+        ...rows[1], activityPhase: 'idle', activityAttention: false,
+      }], false, [{ summary: true }],
+    );
+    expect(projected).toEqual([{
+      sessionId: 'session-0', isTurnRunning: true,
+      activityPhase: 'running', activityAttention: false,
+    }, {
+      sessionId: 'session-1', isTurnRunning: false,
+      activityPhase: 'idle', activityAttention: false,
+    }]);
+  });
+
+  it('preserves the opt-in complete snapshot envelope while projecting its runtime rows', () => {
+    const projected = __testing.projectInvokeResultForTunnel(
+      'maker:list-active', { format: 'active-sessions-v2', sessions: rows },
+      false, [{ summary: true, snapshotVersion: 2 }],
+    );
+    expect(projected).toEqual({ format: 'active-sessions-v2', sessions: [
+      { sessionId: 'session-0', isTurnRunning: true },
+      { sessionId: 'session-1', isTurnRunning: false },
+    ] });
+    expect(__testing.projectInvokeResultForTunnel(
+      'maker:list-active', rows, false, [{ summary: true, snapshotVersion: 2 }],
+    )).toEqual([
+      { sessionId: 'session-0', isTurnRunning: true },
+      { sessionId: 'session-1', isTurnRunning: false },
+    ]);
+  });
+
+  it.each([[], [null], [{ summary: false }], [{ summary: 'true' }]])(
+    'preserves the complete response for legacy or non-opt-in callers (%j)', (...args) => {
+      expect(__testing.projectInvokeResultForTunnel('maker:list-active', rows, false, args))
+        .toBe(rows);
+    },
+  );
+});
+
+it('preserves host display order without changing catalog order', () => {
+  const result = project({ providers: [{ id: 'a' }, { id: 'b' }], providerOrder: ['b', 'a', 'b', null, 42] });
+  expect(result.providerOrder).toEqual(['b', 'a']);
+  expect(result.providers.map(p => p.id)).toEqual(['a', 'b']);
+  expect(project({ providers: [] }).providerOrder).toBeUndefined();
+});
+
+describe('schedule sidebar index tunnel cap', () => {
+  it('coalesces the schedule index channel with other listing reads', () => {
+    expect(__testing.canCoalesceRemoteListing({ channel: 'maker:schedule:list-sidebar-index-runs', args: [] })).toBe(true);
+    expect(__testing.canCoalesceRemoteListing({ channel: 'local-db:sessions:list', args: [] })).toBe(true);
+  });
+
+  it('keeps the newest mapping when the snapshot exceeds the tunnel budget', () => {
+    const padding = 'x'.repeat(80_000);
+    const runs = Array.from({ length: 80 }, (_, i) => ({
+      runId: `run-${i}`,
+      scheduleId: `sched-${i}`,
+      scheduleName: padding,
+      sessionId: `session-${i}`,
+      status: 'failed',
+      firedAt: i,
+    }));
+    const result = { runs, extra: true };
+    const projected = __testing.projectInvokeResultForTunnel(
+      'maker:schedule:list-sidebar-index-runs',
+      result,
+    ) as { runs: Array<{ runId: string }>; extra: boolean };
+    expect(projected.extra).toBe(true);
+    expect(projected.runs.length).toBeGreaterThan(0);
+    expect(projected.runs.length).toBeLessThan(runs.length);
+    expect(projected.runs.at(-1)?.runId).toBe('run-79');
+    expect(JSON.stringify(projected).length).toBeLessThanOrEqual(
+      __testing.remoteScheduleIndexMaxBytes,
+    );
+  });
+
+  it('returns the original snapshot when it already fits', () => {
+    const result = { runs: [{ runId: 'run-1', status: 'success' }] };
+    expect(__testing.projectInvokeResultForTunnel(
+      'maker:schedule:list-sidebar-index-runs',
+      result,
+    )).toBe(result);
+  });
+
+  it('returns an empty snapshot when a single run still exceeds the tunnel budget', () => {
+    const result = {
+      runs: [{
+        runId: 'run-fat',
+        scheduleName: 'x'.repeat(__testing.remoteScheduleIndexMaxBytes),
+        status: 'failed',
+      }],
+    };
+    expect(__testing.projectInvokeResultForTunnel(
+      'maker:schedule:list-sidebar-index-runs',
+      result,
+    )).toEqual({ runs: [] });
   });
 });

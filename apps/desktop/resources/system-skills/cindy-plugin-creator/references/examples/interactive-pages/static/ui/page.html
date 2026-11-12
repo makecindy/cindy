@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>记录表单</title>
+<style>
+:root{color-scheme:light dark}*{box-sizing:border-box}
+body{margin:0;padding:20px;font:14px/1.5 var(--font-sans,system-ui);color:var(--color-text-primary,CanvasText);background:var(--color-background-primary,Canvas)}
+input,button{font:inherit;color:inherit;background:var(--color-background-secondary,Canvas);border:1px solid var(--color-border-primary,GrayText);border-radius:8px;padding:10px;min-height:44px;max-width:100%}
+label{display:block}input{width:100%;margin:8px 0}p{overflow-wrap:anywhere}
+</style>
+<h1>记录表单</h1>
+<form id="form"><label>标题<input id="title" required maxlength="160"></label><button id="save" disabled>保存</button></form>
+<p id="status" role="status">正在连接…</p>
+<script type="module">
+import { App } from '@modelcontextprotocol/ext-apps';
+const app = new App({ name: '记录表单', version: '1.0.0' }, {}, { autoResize: true });
+const status = document.querySelector('#status'), button = document.querySelector('#save');
+const controller = new AbortController();
+let request;
+function theme(context) {
+  if (context.theme) document.documentElement.style.colorScheme = context.theme;
+  for (const [key, value] of Object.entries(context.styles?.variables ?? {}))
+    document.documentElement.style.setProperty(key, value);
+}
+app.ontoolresult = result => {
+  document.querySelector('#title').value = result.structuredContent?.title ?? '';
+  status.textContent = '可以编辑并保存。';
+};
+app.onhostcontextchanged = () => theme(app.getHostContext() ?? {});
+app.onteardown = async () => { controller.abort(); return {}; };
+const form = document.querySelector('#form');
+form.onsubmit = async event => {
+  event.preventDefault();
+  if (button.disabled || !form.reportValidity()) return;
+  const title = document.querySelector('#title').value;
+  if (!request || request.title !== title) request = { title, idempotencyKey: crypto.randomUUID() };
+  button.disabled = true; status.textContent = '正在保存…';
+  try {
+    const result = await app.callServerTool({ name: 'save_record', arguments: request }, {
+      timeout: 30 * 60 * 1000, maxTotalTimeout: 30 * 60 * 1000, signal: controller.signal
+    });
+    if (result.isError) throw new Error(result.content?.find(x => x.type === 'text')?.text || '保存失败');
+    status.textContent = '已保存 ' + result.structuredContent.saved + ' 次';
+    request = undefined;
+  } catch (error) { status.textContent = error.message; }
+  finally { button.disabled = false; }
+};
+try { await app.connect(); theme(app.getHostContext() ?? {}); button.disabled = false; }
+catch { status.textContent = '无法连接，请检查 Cindy 版本。'; }
+</script>
+</html>

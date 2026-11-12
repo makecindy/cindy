@@ -208,6 +208,27 @@ describe('CodexResponsesTextModelClient', () => {
     expect(undiciFetchMock).not.toHaveBeenCalled();
   });
 
+  it('runs the final dispatch guard after request awaits and can fail closed on owner drift', async () => {
+    let ownerScope = 'owner-a';
+    const beforeDispatch = vi.fn(() => {
+      if (ownerScope !== 'owner-a') throw new Error('voice input owner scope changed');
+    });
+    const client = new CodexResponsesTextModelClient({
+      accessTokenProvider: async () => {
+        ownerScope = 'owner-b';
+        return 'tok';
+      },
+      accountIdProvider: async () => null,
+      beforeDispatch,
+    });
+
+    await expect(client.requestJson({
+      model: 'm', schemaName: 's', system: 'sys', user: {},
+    })).rejects.toThrow('voice input owner scope changed');
+    expect(beforeDispatch).toHaveBeenCalledOnce();
+    expect(undiciFetchMock).not.toHaveBeenCalled();
+  });
+
   it('surfaces stream-level errors from response.failed events', async () => {
     const onAuthInvalidated = vi.fn();
     undiciFetchMock.mockResolvedValue(makeSseResponse([

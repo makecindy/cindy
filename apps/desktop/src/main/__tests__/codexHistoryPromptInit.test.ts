@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { initializeCodexHistoryPromptState } from '../localDb/codexHistoryPromptInit';
+import {
+  CODEX_PRODUCT_PROMPT_REVISION,
+  initializeCodexHistoryPromptState,
+} from '../localDb/codexHistoryPromptInit';
 
 function createFakeDb() {
   const meta = new Map<string, string | null>();
@@ -77,6 +80,9 @@ describe('initializeCodexHistoryPromptState', () => {
     expect(fake.sessions.get('proxy')).toBe(false);
     expect(fake.meta.get('codex_history_has_product_prompt_initialized_v1')).toBe('done');
     expect(fake.meta.get('codex_history_cindy_memory_prompt_reset_v2')).toBe('done');
+    expect(fake.meta.get('codex_history_product_prompt_revision')).toBe(
+      CODEX_PRODUCT_PROMPT_REVISION,
+    );
   });
 
   it('does not touch later rows after both one-time guards are set', () => {
@@ -102,6 +108,28 @@ describe('initializeCodexHistoryPromptState', () => {
     expect(fake.meta.get('codex_history_cindy_memory_prompt_reset_v2')).toBe('done');
   });
 
+  it('re-arms delivered histories once when the product prompt revision changes', () => {
+    const fake = createFakeDb();
+    fake.meta.set('codex_history_has_product_prompt_initialized_v1', 'done');
+    fake.meta.set('codex_history_cindy_memory_prompt_reset_v2', 'done');
+    fake.meta.set('codex_history_product_prompt_revision', '2');
+    fake.sessions.set('delivered', true);
+    fake.sessions.set('pending', false);
+
+    initializeCodexHistoryPromptState(fake.db as never);
+
+    expect(fake.sessions.get('delivered')).toBe(false);
+    expect(fake.sessions.get('pending')).toBe(false);
+    expect(fake.meta.get('codex_history_product_prompt_revision')).toBe(
+      CODEX_PRODUCT_PROMPT_REVISION,
+    );
+
+    // Simulate a successful one-shot delivery. The same revision must not re-arm it.
+    fake.sessions.set('delivered', true);
+    initializeCodexHistoryPromptState(fake.db as never);
+    expect(fake.sessions.get('delivered')).toBe(true);
+  });
+
   it('skips initialization when the codex history column is missing', () => {
     const fake = createFakeDb();
     fake.sessions.set('old', null);
@@ -120,5 +148,6 @@ describe('initializeCodexHistoryPromptState', () => {
     expect(fake.sessions.get('old')).toBeNull();
     expect(fake.meta.get('codex_history_has_product_prompt_initialized_v1')).toBeUndefined();
     expect(fake.meta.get('codex_history_cindy_memory_prompt_reset_v2')).toBeUndefined();
+    expect(fake.meta.get('codex_history_product_prompt_revision')).toBeUndefined();
   });
 });

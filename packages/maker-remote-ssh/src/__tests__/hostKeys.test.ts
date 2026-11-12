@@ -16,7 +16,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   FileHostKeyStore,
@@ -78,7 +78,113 @@ describe('FileHostKeyStore', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.rm(scratchDir, { recursive: true, force: true });
+  });
+
+  it('replaces only the reviewed fingerprint and survives reopening', async () => {
+    const store = new FileHostKeyStore(filePath);
+    await store.set('one:22', 'SHA256:old');
+    await store.set('two:22', 'SHA256:other');
+    await store.replace('one:22', 'SHA256:old', 'SHA256:new', () => true);
+    const reopened = new FileHostKeyStore(filePath);
+    expect(await reopened.get('one:22')).toBe('SHA256:new');
+    expect(await reopened.get('two:22')).toBe('SHA256:other');
+    await expect(store.set('one:22', 'SHA256:unreviewed')).rejects.toThrow();
+  });
+
+  it('preserves trust when confirmation expires while the temporary file is written', async () => {
+    const store = new FileHostKeyStore(filePath);
+    await store.set('one:22', 'SHA256:old');
+    await store.set('two:22', 'SHA256:other');
+    let current = true;
+    const writeFile = fs.writeFile.bind(fs);
+    vi.spyOn(fs, 'writeFile').mockImplementationOnce(async (...args) => {
+      await writeFile(...args);
+      current = false;
+    });
+
+    await expect(store.replace('one:22', 'SHA256:old', 'SHA256:new', () => current))
+      .rejects.toThrow('Host key details changed');
+    expect(await store.get('one:22')).toBe('SHA256:old');
+    expect(JSON.parse(await fs.readFile(filePath, 'utf8'))).toEqual({
+      'one:22': 'SHA256:old', 'two:22': 'SHA256:other',
+    });
+    expect(await fs.readdir(path.dirname(filePath))).toEqual(['known-hosts.json']);
+    await store.replace('one:22', 'SHA256:old', 'SHA256:reviewed-again', () => true);
+    expect(await new FileHostKeyStore(filePath).get('one:22')).toBe('SHA256:reviewed-again');
+  });
+
+  it('keeps concurrent reads and first-use writes behind a pending trust replacement', async () => {
+    const store = new FileHostKeyStore(filePath);
+    await store.set('one:22', 'SHA256:old');
+    let releaseWrite!: () => void;
+    let writing!: () => void;
+    const blocked = new Promise<void>(resolve => { releaseWrite = resolve; });
+    const entered = new Promise<void>(resolve => { writing = resolve; });
+    const writeFile = fs.writeFile.bind(fs);
+    vi.spyOn(fs, 'writeFile').mockImplementationOnce(async (...args) => {
+      await writeFile(...args);
+      writing();
+      await blocked;
+    });
+    const replacing = store.replace('one:22', 'SHA256:old', 'SHA256:new', () => true);
+    await entered;
+    const readFile = fs.readFile.bind(fs);
+    let releaseRead!: () => void;
+    const readBlocked = new Promise<void>(resolve => { releaseRead = resolve; });
+    const read = vi.spyOn(fs, 'readFile').mockImplementation(async (...args) => {
+      const value = await readFile(...args);
+      await readBlocked;
+      return value;
+    });
+    store.reload();
+    const concurrentRead = store.get('one:22');
+    const firstUse = store.get('two:22').then(value => {
+      expect(value).toBeNull();
+      return store.set('two:22', 'SHA256:other');
+    });
+    // Let pending microtasks run while persistence is deliberately suspended.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    const readsDuringWrite = read.mock.calls.length;
+    releaseWrite();
+    await replacing;
+    releaseRead();
+    const observed = await concurrentRead;
+    await firstUse;
+    expect(await store.get('one:22')).toBe('SHA256:new');
+    const reopened = new FileHostKeyStore(filePath);
+    expect(await reopened.get('one:22')).toBe('SHA256:new');
+    expect(await reopened.get('two:22')).toBe('SHA256:other');
+    expect(readsDuringWrite).toBe(0);
+    expect(observed).toBe('SHA256:new');
+  });
+
+  it('rejects stale confirmations, removed entries, and concurrent replacements', async () => {
+    const store = new FileHostKeyStore(filePath);
+    await store.set('one:22', 'SHA256:old');
+    await expect(store.replace('one:22', 'SHA256:old', 'SHA256:new', () => false)).rejects.toThrow();
+    expect(await store.get('one:22')).toBe('SHA256:old');
+    await expect(store.replace('missing:22', 'SHA256:old', 'SHA256:new', () => true)).rejects.toThrow();
+    const results = await Promise.allSettled([
+      store.replace('one:22', 'SHA256:old', 'SHA256:new', () => true),
+      store.replace('one:22', 'SHA256:old', 'SHA256:other', () => true),
+    ]);
+    expect(results.map((result) => result.status)).toEqual(['fulfilled', 'rejected']);
+    expect(await store.get('one:22')).toBe('SHA256:new');
+  });
+
+  it('rereads manual repairs and retains old trust when replacement cannot be saved', async () => {
+    const store = new FileHostKeyStore(filePath);
+    await store.set('one:22', 'SHA256:old');
+    await fs.writeFile(filePath, JSON.stringify({ 'one:22': 'SHA256:manual' }));
+    await expect(store.replace('one:22', 'SHA256:old', 'SHA256:new', () => true)).rejects.toThrow();
+    expect(await store.get('one:22')).toBe('SHA256:manual');
+    const blocker = `${filePath}.${process.pid}.tmp`;
+    await fs.mkdir(blocker);
+    await expect(store.replace('one:22', 'SHA256:manual', 'SHA256:new', () => true)).rejects.toThrow();
+    expect(await store.get('one:22')).toBe('SHA256:manual');
+    expect(await new FileHostKeyStore(filePath).get('one:22')).toBe('SHA256:manual');
   });
 
   it('returns null for an unknown host', async () => {

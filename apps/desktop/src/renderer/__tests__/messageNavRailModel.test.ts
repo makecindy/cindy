@@ -1,3 +1,4 @@
+import { resolveUserDisplayText } from '@/components/chat/userMessageDisplayText';
 /**
  * messageNavRailModel 纯逻辑单测:条目派生过滤 / 当前提问判定 / 空间与截断规划。
  * 全部 node 环境,无 DOM(组件侧几何测量不在此覆盖,见 MessageNavRail.tsx 注释)。
@@ -62,8 +63,22 @@ describe('deriveNavRailEntries', () => {
         automationOrigin: { kind: 'scheduler', scheduleId: 'schedule-1' },
       }),
       msg({ clientId: 'u3', role: 'user', content: '普通提问', automationOrigin: undefined }),
+      // 其他任务经工具发来的消息不是每轮重复的调度 prompt,保持普通刻度。
+      msg({
+        clientId: 'u4',
+        role: 'user',
+        content: '任务发来',
+        automationOrigin: { kind: 'session', senderSessionId: 'caller' },
+      }),
+      // Hook 渠道(IM)提问复用 scheduler 来源,但它是真人提问,不是自动化。
+      msg({
+        clientId: 'u5',
+        role: 'user',
+        content: 'Slack 提问',
+        automationOrigin: { kind: 'scheduler', scheduleId: 'hook:slack-1', scheduleName: 'Hook · Slack' },
+      }),
     ]);
-    expect(entries.map((entry) => entry.isAutomation)).toEqual([false, true, false]);
+    expect(entries.map((entry) => entry.isAutomation)).toEqual([false, true, false, false, false]);
   });
 
   it('运行中插话(delivery=steer)不算新一轮,不产生刻度', () => {
@@ -116,18 +131,104 @@ describe('deriveNavRailEntries', () => {
     expect(entries[0].attachmentsOnly).toBe(1);
   });
 
-  it('回答摘要取该轮第一条非空 assistant 正文,跳过 thinking / tool 行', () => {
+  it('回答摘要取该轮最后一条非空 assistant 正文,跳过 thinking / tool 行', () => {
     const messages = [
       msg({ clientId: 'u1', role: 'user', content: '第一问' }),
       msg({ clientId: 'th1', role: 'thinking', content: '推理过程' }),
       msg({ clientId: 't1', role: 'tool_use', content: '{"cmd":"ls"}' }),
       msg({ clientId: 'a1', role: 'assistant', content: '  我先看下\n项目结构  ' }),
-      msg({ clientId: 'a2', role: 'assistant', content: '后续补充,不该覆盖首条' }),
+      msg({ clientId: 'a2', role: 'assistant', content: '结论:入口在右键,不在 0 尺寸节点。' }),
       msg({ clientId: 'u2', role: 'user', content: '第二问(流式中,尚无回答)' }),
     ];
     const entries = deriveNavRailEntries(messages);
-    expect(entries[0].answerExcerpt).toBe('我先看下 项目结构');
+    expect(entries[0].answerExcerpt).toBe('结论:入口在右键,不在 0 尺寸节点。');
     expect(entries[1].answerExcerpt).toBeUndefined();
+  });
+
+  it('开工叙述会被同轮最终回答覆盖', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '这个点不到吧' }),
+      msg({
+        clientId: 'a1',
+        role: 'assistant',
+        content: '对，那个 0 尺寸节点不是给人点的，只是拿来锚菜单。我先核对它会不会一打开就被 Radix 关掉。',
+      }),
+      msg({
+        clientId: 'a2',
+        role: 'assistant',
+        content: '对，那个 0 尺寸节点本身点不到。\n\n它不是入口。入口是定时器按钮的右键。',
+      }),
+    ];
+    expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe(
+      '对，那个 0 尺寸节点本身点不到。 它不是入口。入口是定时器按钮的右键。',
+    );
+  });
+
+  it('已收尾的最终回答不会被后续开工叙述盖回去', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '这个点不到吧' }),
+      msg({
+        clientId: 'a1',
+        role: 'assistant',
+        content: '对，那个 0 尺寸节点本身点不到。入口是定时器按钮的右键。',
+        turnCompleted: true,
+      }),
+      msg({
+        clientId: 'a2',
+        role: 'assistant',
+        content: '我先核对展开态菜单会不会一打开就被关掉。',
+      }),
+    ];
+    expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe(
+      '对，那个 0 尺寸节点本身点不到。入口是定时器按钮的右键。',
+    );
+  });
+
+  it('同轮后一条收尾正文覆盖前一条收尾正文', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '继续' }),
+      msg({ clientId: 'a1', role: 'assistant', content: '先交了 PR。', turnCompleted: true }),
+      msg({ clientId: 'a2', role: 'assistant', content: '菜单已经改到组头右键。', turnCompleted: true }),
+    ];
+    expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe('菜单已经改到组头右键。');
+  });
+
+  it('系统卡不占用回答摘要', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '第一问' }),
+      msg({ clientId: 'a1', role: 'assistant', content: '真正的回答', turnCompleted: true }),
+      msg({
+        clientId: 'a2',
+        role: 'assistant',
+        content: '本轮费用 $0.12',
+        systemCardType: 'cost',
+      }),
+    ];
+    expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe('真正的回答');
+  });
+
+  it('合成续跑之后的回答不再盖到上一根可见刻度', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '这个点不到吧' }),
+      msg({
+        clientId: 'a1',
+        role: 'assistant',
+        content: '对，那个 0 尺寸节点本身点不到。入口是定时器按钮的右键。',
+        turnCompleted: true,
+      }),
+      msg({ clientId: 'syn', role: 'user', content: '继续', isSyntheticTrigger: true }),
+      msg({
+        clientId: 'a2',
+        role: 'assistant',
+        content: '续跑后的另一轮结论,不该出现在上一问预览里。',
+        turnCompleted: true,
+      }),
+    ];
+    const entries = deriveNavRailEntries(messages);
+    expect(entries.map((e) => e.id)).toEqual(['u1']);
+    expect(entries[0].answerExcerpt).toBe(
+      '对，那个 0 尺寸节点本身点不到。入口是定时器按钮的右键。',
+    );
   });
 
   it('提问之前的 assistant 消息不会挂到任何条目上', () => {
@@ -145,6 +246,70 @@ describe('deriveNavRailEntries', () => {
       msg({ clientId: 'a2', role: 'assistant', content: '真正的回答' }),
     ];
     expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe('真正的回答');
+  });
+
+  it('规范化后为空的尾条不冲掉已有有效摘要', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '第一问' }),
+      msg({ clientId: 'a1', role: 'assistant', content: '真正的回答' }),
+      msg({ clientId: 'a2', role: 'assistant', content: '<!-- hidden -->\n`**`' }),
+    ];
+    expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe('真正的回答');
+  });
+
+  it('收尾正文规范化为空仍封轮,未收尾进度不能盖掉已有摘要', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '第一问' }),
+      msg({
+        clientId: 'a1',
+        role: 'assistant',
+        content: '真正的回答',
+        turnCompleted: true,
+      }),
+      msg({
+        clientId: 'a2',
+        role: 'assistant',
+        content: '<!-- hidden -->',
+        turnCompleted: true,
+      }),
+      msg({ clientId: 'a3', role: 'assistant', content: '我先核对下一处入口。' }),
+    ];
+    expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe('真正的回答');
+  });
+
+  it('空正文收尾标记仍封轮,未收尾进度不能盖掉已有摘要', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '第一问' }),
+      msg({ clientId: 'a1', role: 'assistant', content: '真正的回答' }),
+      msg({ clientId: 'a2', role: 'assistant', content: '', turnCompleted: true }),
+      msg({ clientId: 'a3', role: 'assistant', content: '我先核对下一处入口。' }),
+    ];
+    expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe('真正的回答');
+  });
+
+  it('封轮后的下一 SDK turn 在再次封轮时提交新摘要', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '第一问' }),
+      msg({ clientId: 'a1', role: 'assistant', content: '第一轮结论。', turnCompleted: true }),
+      msg({ clientId: 'a2', role: 'assistant', content: '第二轮真正的结论。' }),
+      msg({ clientId: 'a3', role: 'assistant', content: '', turnCompleted: true }),
+    ];
+    expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe('第二轮真正的结论。');
+  });
+
+  it('显式失败收尾不能靠费用把进度提交成最终摘要', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '第一问' }),
+      msg({ clientId: 'a1', role: 'assistant', content: '成功结论。', turnCompleted: true }),
+      msg({
+        clientId: 'a2',
+        role: 'assistant',
+        content: '失败前的进度。',
+        turnCompleted: false,
+        turnCostUsd: 0.12,
+      }),
+    ];
+    expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe('成功结论。');
   });
 
   it('hook 消息(带 userText):预览取干净原文,不取 content 里的 agent prompt', () => {
@@ -462,4 +627,14 @@ describe('forwardNavRailWheel', () => {
   it('滚动容器缺席(卸载竞态)时静默不抛', () => {
     expect(() => forwardNavRailWheel(null, { deltaX: 0, deltaY: 10 })).not.toThrow();
   });
+});
+
+
+// Unit regression: bubble and navigation share this projection, which formerly
+// returned JSON-quoted history verbatim. Human examples must remain literal.
+it('shows readable delegated history only on attributed task messages', () => {
+  const content = '[来源] 用户原话由宿主从已接收的输入原样保留。\n用户原话："只检查"\nagent补充："第一段\\n\\n保留 `\\\\n`"';
+  expect(resolveUserDisplayText({ content, automationOrigin: { kind: 'session' } }))
+    .toContain('第一段\n\n保留 `\\n`');
+  expect(resolveUserDisplayText({ content })).toBe(content);
 });

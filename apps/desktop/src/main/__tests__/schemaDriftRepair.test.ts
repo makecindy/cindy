@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { getTableName, isTable } from 'drizzle-orm';
 
+import { createBetterSqliteDatabase } from '../localDb/betterSqliteFactory';
 import * as localSchema from '../localDb/schema';
 
 vi.mock('../logger', () => ({
@@ -17,6 +18,31 @@ import {
   repairSchemaDrift,
   repairSchemaDriftWithBackup,
 } from '../localDb/schemaDriftRepair';
+
+interface FtsRow {
+  rowid: number;
+  message_id: string;
+  session_id: string;
+  role: string;
+  content: string;
+}
+
+function ftsRows(db: Database.Database): FtsRow[] {
+  return db
+    .prepare(
+      `SELECT rowid, message_id, session_id, role, content
+       FROM messages_fts
+       ORDER BY rowid`,
+    )
+    .all() as FtsRow[];
+}
+
+function insertSearchMessage(db: Database.Database, id: string, content: string): void {
+  db.prepare(
+    `INSERT INTO messages(id, client_id, session_id, role, content, created_at)
+     VALUES (?, ?, 's1', 'user', ?, 1)`,
+  ).run(id, `client-${id}`, content);
+}
 
 describe('repairSchemaDrift', () => {
   it('derives managed tables from every sqliteTable export in schema.ts', () => {
@@ -37,7 +63,7 @@ describe('repairSchemaDrift', () => {
   });
 
   it('repairs missing partial indexes with their WHERE clauses', () => {
-    const db = new Database(':memory:');
+    const db = createBetterSqliteDatabase(':memory:');
     try {
       const report = repairSchemaDrift(db);
 
@@ -87,7 +113,7 @@ describe('repairSchemaDrift', () => {
   });
 
   it('does not back up when metadata drift has no physical schema repair actions', async () => {
-    const db = new Database(':memory:');
+    const db = createBetterSqliteDatabase(':memory:');
     try {
       // 先构造完整物理 schema；上层即使仍检测到 migration-history drift，也不应备份。
       expect(repairSchemaDrift(db).residual).toEqual([]);
@@ -104,7 +130,7 @@ describe('repairSchemaDrift', () => {
   });
 
   it('backs up before a real schema repair and skips backup on the second pass', async () => {
-    const db = new Database(':memory:');
+    const db = createBetterSqliteDatabase(':memory:');
     const events: string[] = [];
     try {
       const backup = vi.fn(async () => {
@@ -142,7 +168,7 @@ describe('repairSchemaDrift', () => {
   });
 
   it('does not mutate schema when the required backup fails', async () => {
-    const db = new Database(':memory:');
+    const db = createBetterSqliteDatabase(':memory:');
     try {
       const result = await repairSchemaDriftWithBackup(db, {
         backup: async () => null,
@@ -171,7 +197,7 @@ describe('repairSchemaDrift', () => {
   });
 
   it('returns an empty report (never residual) when db connection is already closed', () => {
-    const db = new Database(':memory:');
+    const db = createBetterSqliteDatabase(':memory:');
     db.close();
     expect(db.open).toBe(false);
 
@@ -182,7 +208,7 @@ describe('repairSchemaDrift', () => {
   });
 
   it('records residual when a missing partial index cannot be recreated', () => {
-    const db = new Database(':memory:');
+    const db = createBetterSqliteDatabase(':memory:');
     try {
       // 两条 active 记录共享同一个 lead_session_id，会让 partial unique index 创建失败。
       db.exec(`
@@ -215,6 +241,80 @@ describe('repairSchemaDrift', () => {
           AND name = 'uniq_active_team_per_lead'
       `).get();
       expect(partialIndex).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('restores a missing FTS row map before later inserts, updates, and deletes', () => {
+    const db = createBetterSqliteDatabase(':memory:');
+    try {
+      expect(repairSchemaDrift(db).residual).toEqual([]);
+      db.prepare("INSERT INTO sessions(id, created_at, updated_at) VALUES ('s1', 1, 1)").run();
+      insertSearchMessage(db, 'm1', 'first');
+      insertSearchMessage(db, 'm2', 'second');
+      const before = ftsRows(db);
+
+      db.exec('DROP TABLE messages_fts_rows;');
+      expect(repairSchemaDrift(db).residual).toEqual([]);
+
+      expect(
+        db.prepare('SELECT fts_rowid, message_id FROM messages_fts_rows ORDER BY fts_rowid').all(),
+      ).toEqual(before.map((row) => ({ fts_rowid: row.rowid, message_id: row.message_id })));
+
+      insertSearchMessage(db, 'm3', 'third');
+      db.prepare("UPDATE messages SET content = 'second updated' WHERE id = 'm2'").run();
+      db.prepare("DELETE FROM messages WHERE id = 'm1'").run();
+
+      expect(ftsRows(db).map(({ message_id, content }) => ({ message_id, content }))).toEqual([
+        { message_id: 'm2', content: 'second updated' },
+        { message_id: 'm3', content: 'third' },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('rebuilds stale FTS content while restoring a missing row map', () => {
+    const db = createBetterSqliteDatabase(':memory:');
+    try {
+      expect(repairSchemaDrift(db).residual).toEqual([]);
+      db.prepare("INSERT INTO sessions(id, created_at, updated_at) VALUES ('s1', 1, 1)").run();
+      insertSearchMessage(db, 'm1', 'canonical');
+      db.prepare("UPDATE messages_fts SET content = 'stale' WHERE message_id = 'm1'").run();
+      db.exec('DROP TABLE messages_fts_rows;');
+
+      expect(repairSchemaDrift(db).residual).toEqual([]);
+
+      const rows = ftsRows(db);
+      const mapping = db
+        .prepare("SELECT fts_rowid FROM messages_fts_rows WHERE message_id = 'm1'")
+        .get() as { fts_rowid: number };
+      expect(rows).toEqual([
+        {
+          rowid: mapping.fts_rowid,
+          message_id: 'm1',
+          session_id: 's1',
+          role: 'user',
+          content: 'canonical',
+        },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('CJK 分词后的健康库再跑 FTS 修复是 no-op', () => {
+    const db = createBetterSqliteDatabase(':memory:');
+    try {
+      expect(repairSchemaDrift(db).residual).toEqual([]);
+      db.prepare("INSERT INTO sessions(id, created_at, updated_at) VALUES ('s1', 1, 1)").run();
+      insertSearchMessage(db, 'm1', '登录报错了');
+      expect(ftsRows(db).map((row) => row.content)).toEqual(['登 录 报 错 了']);
+      const before = ftsRows(db);
+
+      expect(repairSchemaDrift(db).residual).toEqual([]);
+      expect(ftsRows(db)).toEqual(before);
     } finally {
       db.close();
     }

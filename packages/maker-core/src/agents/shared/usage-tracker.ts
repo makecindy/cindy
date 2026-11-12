@@ -22,9 +22,23 @@
  *     (它属于 session lifecycle 不属于 usage)
  */
 
+import { randomUUID } from 'node:crypto';
 import type { UsageSnapshot } from '../../types/events.js';
 
-interface ApiCallUsage {
+/**
+ * One provider request (or the narrowest reliable upstream usage boundary).
+ *
+ * Pricing consumers must price each segment independently before summing a
+ * turn. In particular, long-context bands are request-scoped: selecting a
+ * band from the turn aggregate overcharges turns made of many smaller calls.
+ */
+export interface UsageSegment {
+  /** Stable only within the owning turn; used to merge split provider frames. */
+  id?: string;
+  /** Actual model for this request when the provider exposes it. */
+  model?: string;
+  /** Request price variant. Fast maps to the gateway priority tariff. */
+  priceVariant?: 'standard' | 'priority' | 'fast' | 'batch' | 'ultrafast';
   /** 输入 token (不含 cache) */
   inputTokens: number;
   outputTokens: number;
@@ -32,13 +46,54 @@ interface ApiCallUsage {
   cacheReadTokens?: number;
   /** 写入缓存的 token (Anthropic cache_creation_input_tokens) */
   cacheCreateTokens?: number;
+  /**
+   * cacheCreateTokens 中按 1 小时 TTL 写入的部分 (Anthropic
+   * cache_creation.ephemeral_1h_input_tokens)。1h 写入单价高于 5m，计价需分开。
+   */
+  cacheCreate1hTokens?: number;
+  /** Provider diagnostic subset; never add this to outputTokens again. */
+  reasoningTokens?: number;
+  /** Provider-reported request cost, used only on routes where that value is authoritative. */
+  costUsd?: number;
+  /** Upstream emitted a terminal request usage frame covering every token bucket. */
+  complete?: boolean;
+}
+
+export class RequestUsageTracker {
+  private meteringEpoch = randomUUID();
+  private meteringModels = new Map<string, UsageSegment>();
+
+  /** Runtime-cumulative receipts. Independent of turn resets, context and display cost. */
+  snapshot() {
+    return { epoch: this.meteringEpoch, models: [...this.meteringModels.values()].map(row => ({ ...row })) };
+  }
+
+  ingest(usage: UsageSegment): void {
+    const model = usage.model ?? 'unknown';
+    const previous = this.meteringModels.get(model);
+    this.meteringModels.set(model, {
+      model,
+      inputTokens: (previous?.inputTokens ?? 0) + usage.inputTokens,
+      outputTokens: (previous?.outputTokens ?? 0) + usage.outputTokens,
+      cacheReadTokens: (previous?.cacheReadTokens ?? 0) + (usage.cacheReadTokens ?? 0),
+      cacheCreateTokens: (previous?.cacheCreateTokens ?? 0) + (usage.cacheCreateTokens ?? 0),
+    });
+  }
+
 }
 
 export class UsageTracker {
+  private requestMeter = new RequestUsageTracker();
+  getRequestMetering() { return this.requestMeter.snapshot(); }
   // ── turn 累计 ────────────────────────────────────────────────────────────
   // 每次 ingestApiCallUsage 累加, endTurn 后由 resetCurrentTurn 清零。
   // 老链路对标: agentManager.ts:2362-2365 currentTurn{Input,Output,CacheRead,CacheCreate}Tokens
   private currentTurn = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
+
+  // Request/segment boundaries for request-scoped pricing. This list follows
+  // the same turn lifecycle as currentTurn and is copied before exposure.
+  private currentTurnSegments: UsageSegment[] = [];
+  private currentTurnSegmentIndex = new Map<string, number>();
 
   // ── 最后一次 API call 快照 ─────────────────────────────────────────────────
   // 用于 contextTokens (圆环): 反映"自动压缩后真实 context 占用",而非整 turn 累计。
@@ -82,12 +137,115 @@ export class UsageTracker {
    * codex: 在 turn.completed 或类似事件提取后映射)。
    * 同时累加 currentTurn + 覆盖 lastApi。
    */
-  ingestApiCallUsage(usage: ApiCallUsage): void {
+  ingestApiCallUsage(usage: UsageSegment): void {
+    this.appendUsageSegment(usage);
+  }
+
+  /**
+   * Merge split frames for one provider request. Claude commonly reports the
+   * input/cache side at message_start and output at message_delta; some
+   * compatible endpoints repeat input/cache on both frames. Field-wise max
+   * preserves the final request snapshot without double counting repeats.
+   */
+  upsertApiCallUsage(segmentId: string, usage: UsageSegment): void {
+    if (!segmentId) {
+      this.appendUsageSegment(usage);
+      return;
+    }
+    const existingIndex = this.currentTurnSegmentIndex.get(segmentId);
+    if (existingIndex === undefined) {
+      this.appendUsageSegment({ ...usage, id: segmentId });
+      return;
+    }
+    const existing = this.currentTurnSegments[existingIndex]!;
+    const merged: UsageSegment = {
+      ...existing,
+      ...usage,
+      id: segmentId,
+      // Request identity is fixed by the first frame. Runtime settings may
+      // change before a terminal frame arrives, but that must not re-price an
+      // already-dispatched request.
+      model: existing.model ?? usage.model,
+      priceVariant: existing.priceVariant ?? usage.priceVariant,
+      inputTokens: Math.max(existing.inputTokens, usage.inputTokens),
+      outputTokens: Math.max(existing.outputTokens, usage.outputTokens),
+      cacheReadTokens: Math.max(existing.cacheReadTokens ?? 0, usage.cacheReadTokens ?? 0),
+      cacheCreateTokens: Math.max(existing.cacheCreateTokens ?? 0, usage.cacheCreateTokens ?? 0),
+      ...(existing.cacheCreate1hTokens !== undefined || usage.cacheCreate1hTokens !== undefined
+        ? {
+            cacheCreate1hTokens: Math.max(
+              existing.cacheCreate1hTokens ?? 0,
+              usage.cacheCreate1hTokens ?? 0,
+            ),
+          }
+        : {}),
+      reasoningTokens: Math.max(existing.reasoningTokens ?? 0, usage.reasoningTokens ?? 0),
+      costUsd: Math.max(existing.costUsd ?? 0, usage.costUsd ?? 0),
+      ...(existing.complete !== undefined || usage.complete !== undefined
+        ? { complete: existing.complete === true || usage.complete === true }
+        : {}),
+    };
+    this.currentTurnSegments[existingIndex] = merged;
+    this.requestMeter.ingest({
+      model: merged.model,
+      inputTokens: merged.inputTokens - existing.inputTokens,
+      outputTokens: merged.outputTokens - existing.outputTokens,
+      cacheReadTokens: (merged.cacheReadTokens ?? 0) - (existing.cacheReadTokens ?? 0),
+      cacheCreateTokens: (merged.cacheCreateTokens ?? 0) - (existing.cacheCreateTokens ?? 0),
+    });
+    this.applyUsageDelta(
+      {
+        inputTokens: merged.inputTokens - existing.inputTokens,
+        outputTokens: merged.outputTokens - existing.outputTokens,
+        cacheReadTokens: (merged.cacheReadTokens ?? 0) - (existing.cacheReadTokens ?? 0),
+        cacheCreateTokens: (merged.cacheCreateTokens ?? 0) - (existing.cacheCreateTokens ?? 0),
+      },
+      false,
+    );
+    if (
+      merged.inputTokens > 0 ||
+      (merged.cacheReadTokens ?? 0) > 0 ||
+      (merged.cacheCreateTokens ?? 0) > 0
+    ) {
+      this.lastApi = {
+        input: merged.inputTokens,
+        cacheRead: merged.cacheReadTokens ?? 0,
+        cacheCreate: merged.cacheCreateTokens ?? 0,
+      };
+    }
+  }
+
+  private appendUsageSegment(usage: UsageSegment): void {
+    const normalized: UsageSegment = {
+      ...usage,
+      inputTokens: Math.max(0, usage.inputTokens),
+      outputTokens: Math.max(0, usage.outputTokens),
+      cacheReadTokens: Math.max(0, usage.cacheReadTokens ?? 0),
+      cacheCreateTokens: Math.max(0, usage.cacheCreateTokens ?? 0),
+      ...(usage.reasoningTokens !== undefined
+        ? { reasoningTokens: Math.max(0, usage.reasoningTokens) }
+        : {}),
+      ...(usage.costUsd !== undefined ? { costUsd: Math.max(0, usage.costUsd) } : {}),
+    };
+    if (normalized.id)
+      this.currentTurnSegmentIndex.set(normalized.id, this.currentTurnSegments.length);
+    this.currentTurnSegments.push(normalized);
+    this.applyUsageDelta(normalized, true);
+    this.requestMeter.ingest(normalized);
+  }
+
+  private applyUsageDelta(
+    usage: Pick<
+      UsageSegment,
+      'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheCreateTokens'
+    >,
+    isNewApiCall: boolean,
+  ): void {
     const cr = usage.cacheReadTokens ?? 0;
     const cc = usage.cacheCreateTokens ?? 0;
 
     // lastApi: 覆盖, 反映"最后一次 API call" (如果入参全 0 则不覆盖，防止被没有 input_tokens 的 delta 冲掉)
-    if (usage.inputTokens > 0 || cr > 0 || cc > 0) {
+    if (isNewApiCall && (usage.inputTokens > 0 || cr > 0 || cc > 0)) {
       this.lastApi.input = usage.inputTokens;
       this.lastApi.cacheRead = cr;
       this.lastApi.cacheCreate = cc;
@@ -105,11 +263,11 @@ export class UsageTracker {
     this.turnCache.read += cr;
     this.turnCache.create += cc;
     this.turnCache.uncachedInput += usage.inputTokens;
-    this.turnCache.apiCalls += 1;
+    if (isNewApiCall) this.turnCache.apiCalls += 1;
     this.sessionCache.read += cr;
     this.sessionCache.create += cc;
     this.sessionCache.uncachedInput += usage.inputTokens;
-    this.sessionCache.apiCalls += 1;
+    if (isNewApiCall) this.sessionCache.apiCalls += 1;
   }
 
   /**
@@ -187,10 +345,21 @@ export class UsageTracker {
    * input/output 再 reset — Codex 链路的调用方只有 contextTokens 可给 (降级值),
    * 所以 done 事件要在 endTurn 之前用本方法取走真实 per-turn 累计
    * (来自每次 tokenUsage/updated 的 ingestApiCallUsage 累加)。
-   * 语义: input = 未命中缓存输入, output = 输出+推理合并, cacheRead = 命中缓存。
+   * 语义: input = 未命中缓存输入, output = provider 的计费 output（reasoning 若为
+   * 子集不重复相加）, cacheRead = 命中缓存。
    */
-  getTurnUsage(): { input: number; output: number; cacheRead: number; cacheCreate: number } {
+  getTurnUsage(): {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheCreate: number;
+  } {
     return { ...this.currentTurn };
+  }
+
+  /** Current turn's provider request boundaries, returned as defensive copies. */
+  getTurnUsageSegments(): UsageSegment[] {
+    return this.currentTurnSegments.map((segment) => ({ ...segment }));
   }
 
   /**
@@ -239,6 +408,8 @@ export class UsageTracker {
     const snap = this.snapshot();
     // reset currentTurn for next turn (lastApi / contextWindow / cost 跨 turn 保留)
     this.currentTurn = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
+    this.currentTurnSegments = [];
+    this.currentTurnSegmentIndex.clear();
     // turnCache 同步清零, sessionCache 跨 turn 累计保留
     this.turnCache = { read: 0, create: 0, uncachedInput: 0, apiCalls: 0 };
     return snap;
@@ -251,6 +422,8 @@ export class UsageTracker {
    */
   beginTurn(): void {
     this.currentTurn = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
+    this.currentTurnSegments = [];
+    this.currentTurnSegmentIndex.clear();
     // 兜底清 turnCache, 防止上一 turn 异常 / abort 没走到 endTurn 留下脏数据;
     // 与 currentTurn 同语义。
     this.turnCache = { read: 0, create: 0, uncachedInput: 0, apiCalls: 0 };
@@ -292,8 +465,20 @@ export class UsageTracker {
    *   (1-2 次的 hitRate 不能代表 session 长期表现)。
    */
   getCacheStats(): {
-    turn: { read: number; create: number; uncachedInput: number; apiCalls: number; hitRate: number | null };
-    session: { read: number; create: number; uncachedInput: number; apiCalls: number; hitRate: number | null };
+    turn: {
+      read: number;
+      create: number;
+      uncachedInput: number;
+      apiCalls: number;
+      hitRate: number | null;
+    };
+    session: {
+      read: number;
+      create: number;
+      uncachedInput: number;
+      apiCalls: number;
+      hitRate: number | null;
+    };
   } {
     const calc = (b: { read: number; create: number; uncachedInput: number }): number | null => {
       const denom = b.read + b.create + b.uncachedInput;

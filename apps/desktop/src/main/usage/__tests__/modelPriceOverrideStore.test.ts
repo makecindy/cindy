@@ -1,6 +1,106 @@
 import { describe, expect, it } from 'vitest';
+import { BUNDLED_CATALOG } from '@cindy/model-providers';
 
-import { __testing } from '../modelPriceOverrideStore';
+import { providerReferencePriceQuote } from '../../../shared/modelPriceQuote';
+import type { ModelPriceQuote } from '../../../shared/regionalMoney';
+import { __testing, applyModelPriceOverrides, type ModelPriceOverridesSnapshot } from '../modelPriceOverrideStore';
+import { computeGatewayTurnCost } from '../turnCostCalculator';
+
+describe('standard overrides preserve independent Fast reference prices', () => {
+  const target = { providerId: 'openai', agent: 'pi' as const, modelId: 'gpt-6-astra' };
+  const reference = providerReferencePriceQuote(
+    'openai',
+    target.modelId,
+    BUNDLED_CATALOG.modelRegistry,
+    {
+      at: '2026-09-04',
+    },
+  )!;
+  const savedBase = {
+    currency: reference.currency,
+    inputPerMtok: reference.inputPerMtok,
+    outputPerMtok: reference.outputPerMtok,
+    cacheReadPerMtok: reference.cacheReadPerMtok ?? null,
+    cacheCreatePerMtok: reference.cacheCreatePerMtok ?? null,
+    inputTokenPriceBands: reference.inputTokenPriceBands,
+  };
+  const tokens = {
+    inputTokens: 200_000,
+    outputTokens: 1_000,
+    cacheReadTokens: 0,
+    cacheCreateTokens: 0,
+  };
+
+  it('keeps Astra Fast prices and window bounds separate from saved standard edits', () => {
+    const merged = __testing.mergedQuote(
+      target,
+      reference,
+      {
+        inputPerMtok: 3,
+        outputPerMtok: 7,
+        cacheReadPerMtok: null,
+        cacheCreatePerMtok: null,
+      },
+      savedBase,
+    );
+    expect(merged).toMatchObject({ source: 'user-override', inputPerMtok: 3, outputPerMtok: 7 });
+    expect(merged?.priority).toEqual(reference.priority);
+    expect(computeGatewayTurnCost(tokens, merged, 'fast')).toBeCloseTo(4.1);
+    expect(computeGatewayTurnCost(tokens, merged)).toBeCloseTo(0.607);
+    expect(computeGatewayTurnCost({ ...tokens, inputTokens: 272_001 }, merged, 'fast')).toBeNull();
+    expect(__testing.mergedQuote(target, reference, undefined)).toBe(reference);
+  });
+
+  it.each([true, false])(
+    'follows live Fast updates while standard reference bands exist: %s',
+    (keepBands) => {
+      const updated: ModelPriceQuote = {
+        ...reference,
+        outputPerMtok: 60,
+        inputTokenPriceBands: keepBands ? reference.inputTokenPriceBands : undefined,
+        priority: { inputPerMtok: 30, outputPerMtok: 120 },
+      };
+      const merged = __testing.mergedQuote(target, updated, { inputPerMtok: 3 }, savedBase);
+      expect(merged?.outputPerMtok).toBe(60);
+      expect(merged?.priority).toEqual(updated.priority);
+      expect(computeGatewayTurnCost(tokens, merged, 'fast')).toBeCloseTo(6.12);
+      expect(
+        computeGatewayTurnCost({ ...tokens, cacheCreateTokens: 1 }, merged, 'fast'),
+      ).toBeNull();
+    },
+  );
+
+  it('does not relabel USD Fast prices when the user enters CNY prices', () => {
+    const values = __testing.sparseValues(
+      { currency: 'CNY', inputPerMtok: 3, outputPerMtok: 7 },
+      savedBase,
+    );
+    const merged = __testing.mergedQuote(target, reference, values, savedBase);
+    expect(merged?.currency).toBe('CNY');
+    expect(merged?.priority).toBeUndefined();
+    expect(computeGatewayTurnCost(tokens, merged, 'fast')).toBeNull();
+  });
+
+  it.each(['currency-change', 'missing-reference', 'missing-fast'] as const)(
+    'does not invent Fast prices after %s',
+    (scenario) => {
+      const live =
+        scenario === 'missing-reference'
+          ? undefined
+          : {
+              ...reference,
+              ...(scenario === 'currency-change'
+                ? { currency: 'CNY' as const }
+                : { priority: undefined }),
+            };
+      const merged = __testing.mergedQuote(target, live, { inputPerMtok: 3 }, savedBase);
+      expect(merged?.currency).toBe('USD');
+      expect(merged?.inputPerMtok).toBe(3);
+      expect(merged?.priority).toBeUndefined();
+      expect(computeGatewayTurnCost(tokens, merged, 'fast')).toBeNull();
+    },
+  );
+});
 
 describe('model price override sparse persistence', () => {
   it('keys overrides by provider instance, runtime, and exact model id', () => {
@@ -83,6 +183,52 @@ describe('model price override sparse persistence', () => {
         ],
       }),
     ).toBe(false);
+  });
+
+  // Settings expose a single cache-write price. The 1h tariff must follow that
+  // edit (keeping the provider's 1h/5m ratio) and, being non-editable, must
+  // not turn an existing saved override into a "reference changed" conflict.
+  it('projects the 1h cache-write price with cache-write edits and keeps it out of conflicts', () => {
+    const target = { providerId: 'anthropic', agent: 'claude-code' as const, modelId: 'claude-opus-5-5' };
+    const reference = providerReferencePriceQuote(
+      'anthropic', 'claude-opus-5-5', BUNDLED_CATALOG.modelRegistry,
+      { agent: 'claude-code', at: '2026-11-05' },
+    )!;
+    expect(reference.cacheCreate1hPerMtok).toBe(8);
+    expect(__testing.mergedQuote(target, reference, { inputPerMtok: 3 })?.cacheCreate1hPerMtok).toBe(8);
+    expect(__testing.mergedQuote(target, reference, { cacheCreatePerMtok: 10 })?.cacheCreate1hPerMtok).toBe(16);
+    expect(__testing.mergedQuote(target, reference, { cacheCreatePerMtok: null })?.cacheCreate1hPerMtok)
+      .toBeUndefined();
+
+    const savedBeforeThisField = __testing.comparable({
+      ...reference,
+      inputTokenPriceBands: reference.inputTokenPriceBands?.map((band) => {
+        const { cacheCreate1hPerMtok, ...rest } = band;
+        void cacheCreate1hPerMtok;
+        return rest;
+      }),
+    });
+    expect(__testing.sameComparable(savedBeforeThisField, __testing.comparable(reference))).toBe(true);
+  });
+
+  it('keeps the long-context multiplier on the 1h cache-write price of a band', () => {
+    const merged = __testing.mergedQuote(
+      { providerId: 'custom', agent: 'claude-code', modelId: 'model' },
+      {
+        providerId: 'custom', modelId: 'model', currency: 'USD', source: 'provider-reference',
+        approximate: true, inputPerMtok: 5, outputPerMtok: 25,
+        cacheCreatePerMtok: 6.25, cacheCreate1hPerMtok: 10,
+        inputTokenPriceBands: [{
+          minInputTokens: 200_000, inputPerMtok: 10, outputPerMtok: 50,
+          cacheCreatePerMtok: 12.5, cacheCreate1hPerMtok: 20,
+        }],
+      },
+      { cacheCreatePerMtok: 10 },
+    );
+    expect(merged?.cacheCreate1hPerMtok).toBe(16);
+    expect(merged?.inputTokenPriceBands?.[0]).toMatchObject({
+      cacheCreatePerMtok: 20, cacheCreate1hPerMtok: 32,
+    });
   });
 
   it('preserves remote long-context multipliers when applying a sparse local override', () => {
@@ -417,4 +563,32 @@ describe('model price override sparse persistence', () => {
       },
     });
   });
+});
+
+// PR #8489 review: historical usage valuation re-merges sparse overrides against the tariff
+// effective on that day; the baked current-date catalog cannot be reused for old rows.
+it('merges sparse overrides against the reference tariff effective on the requested day', () => {
+  const registry = BUNDLED_CATALOG.modelRegistry!;
+  const route = registry.models.find((model) => model.id === 'openai/gpt-5.6-luna')!.routes[0];
+  const original = route.referencePrices;
+  const source = { kind: 'provider-official' as const, url: 'https://example.com', verifiedAt: '2026-01-01' };
+  const target = { providerId: 'openai', agent: 'codex' as const, modelId: 'gpt-5.6-luna' };
+  const entries = {
+    [__testing.overrideKey(target)]: { ...target, values: { outputPerMtok: 50 }, baseReference: null, updatedAt: '2026-01-01' },
+  } as unknown as ModelPriceOverridesSnapshot;
+  try {
+    route.referencePrices = [
+      { currency: 'USD', variant: 'standard', inputPerMtok: 111, outputPerMtok: 1,
+        effectiveFrom: '2026-01-01', effectiveUntil: '2026-06-01', source },
+      { currency: 'USD', variant: 'standard', inputPerMtok: 222, outputPerMtok: 1,
+        effectiveFrom: '2026-06-01', effectiveUntil: '2026-08-01', source },
+    ];
+    const quote = (at: string) =>
+      applyModelPriceOverrides({}, registry, 'USD', { at, entries }).openai?.['gpt-5.6-luna\u0000codex'];
+    expect(quote('2026-03-01')).toMatchObject({ inputPerMtok: 111, outputPerMtok: 50 });
+    expect(quote('2026-07-01')).toMatchObject({ inputPerMtok: 222, outputPerMtok: 50 });
+  } finally {
+    if (original === undefined) delete route.referencePrices;
+    else route.referencePrices = original;
+  }
 });
