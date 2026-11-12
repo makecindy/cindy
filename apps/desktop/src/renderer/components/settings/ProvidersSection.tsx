@@ -1,6 +1,10 @@
 import { isProviderLogoKind } from '@cindy/model-providers/branding';
 import { providersSettings } from './ProvidersSection.settings-search';
-import { ProviderRunLocationSubtitle } from './ProviderRunLocationRow';
+import {
+  BorrowedProviderModels,
+  borrowedProviderModelCount,
+  ProviderRunLocationSubtitle,
+} from './ProviderRunLocationRow';
 import { useProviderBorrow } from '@/hooks/useProviderBorrow';
 import { AddSpeechModelsDialog } from './AddSpeechModelsDialog';
 import { providerSpeechSetup } from '../../../shared/speechProviderSetup';
@@ -2379,11 +2383,15 @@ function ListRow({
 }) {
   const { t } = useTranslation();
   const management = useProviderManagement(provider);
-  const borrowing = useProviderBorrow(provider).borrowed !== null;
+  const { borrowed, borrowedCatalog } = useProviderBorrow(provider);
+  const borrowing = borrowed !== null;
   const localLive = useManagedLocalRuntimeLive(provider.id);
+  // 借用另一台电脑时数那台开放的模型；本机目录此时可能是空的(本机没登录)。
   const modelCount = useMemo(
-    () => (providerHasModels(provider) ? buildUnionRows(provider).length : null),
-    [provider],
+    () => borrowedCatalog
+      ? borrowedProviderModelCount(borrowedCatalog)
+      : providerHasModels(provider) ? buildUnionRows(provider).length : null,
+    [provider, borrowedCatalog],
   );
   const title = providerDisplayName(provider, t);
   return (
@@ -3013,6 +3021,10 @@ export function ProvidersSection() {
       : selected;
   }, [selectedId, listProviders, codexAuth.state, openaiPoolState, dataOwnerId]);
   const selectedBorrow = useProviderBorrow(effectiveSelected);
+  // 借用时模型区整块换成「运行于」那台电脑的清单；本机目录、发现失败与刷新都不适用。
+  const selectedBorrowedModels = selectedBorrow.borrowed && selectedBorrow.borrowedCatalog
+    ? { device: selectedBorrow.borrowed, catalog: selectedBorrow.borrowedCatalog }
+    : null;
 
   const handleDelete = useCallback(
     async (p: ProviderView) => {
@@ -3527,6 +3539,7 @@ export function ProvidersSection() {
                     (DESIGN.md「Errors = what happened + what to do」)。有清单时以条带形式
                     置于列表上方,无清单时走下面的空态居中版。 */}
                   {!effectiveSelected.suspended &&
+                    !selectedBorrowedModels &&
                     effectiveSelected.modelDiscoveryFailure &&
                     providerHasModels(effectiveSelected) && (
                       <div
@@ -3570,7 +3583,15 @@ export function ProvidersSection() {
                         onManageShare={() => { setShareManageRemote(null); setShareManageProviderId(effectiveSelected.id); }}
                       />
                     )}
+                  {!effectiveSelected.suspended && selectedBorrowedModels && (
+                    <BorrowedProviderModels
+                      key={selectedBorrowedModels.device.deviceId}
+                      device={selectedBorrowedModels.device}
+                      catalog={selectedBorrowedModels.catalog}
+                    />
+                  )}
                   {!effectiveSelected.suspended &&
+                    !selectedBorrowedModels &&
                     (providerHasModels(effectiveSelected) ||
                       isCustomRoutedProvider(effectiveSelected) ||
                       (isBuiltinRefreshableProviderId(effectiveSelected.id) &&
@@ -3633,6 +3654,7 @@ export function ProvidersSection() {
                       </>
                     )}
                   {!effectiveSelected.suspended &&
+                    !selectedBorrowedModels &&
                     !providerHasModels(effectiveSelected) &&
                     !isCustomRoutedProvider(effectiveSelected) &&
                     !isManagedLocalProvider(effectiveSelected.id) &&

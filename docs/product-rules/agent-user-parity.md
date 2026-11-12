@@ -71,6 +71,11 @@ Agent 新建普通独立任务（`send_to_session` create；伙伴专用的 `sta
 
 ## 现状台账
 
+Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含中英文更新／升级说法）
+可发现 `application.update`，详情列出当前任务实际可用的检查与安装操作。安装仍由本机宿主
+确认并执行；没有安装工具时明确列为缺失，并提示在运行 Cindy 的电脑上使用设置中的
+“检查更新”。步骤与不可用时的处理写在工具说明及回执，不再占用所有任务的 system prompt。
+
 「跨电脑」一列写 Agent 工具的现状，不是用户界面的现状。改动对应能力时把这张表写回去。
 
 | 对象     | 操作                                                       | 本机 | 跨电脑           |
@@ -107,6 +112,7 @@ Agent 新建普通独立任务（`send_to_session` create；伙伴专用的 `sta
 | 项目     | 列出、登记、改名、移除；工作目录列表                       | 有   | 无               |
 | 项目     | 查询远程已有项目（`list_projects(device)`，复用目标项目目录与可见性） | 有 | 有（2026-11-11） |
 | 项目     | 查询新项目存放位置（`list_projects.projects_root`，含来源） | 有（只读；修改该设置暂无 Agent 工具，按 #8259 维护者初审意见保留为缺口） | 无 |
+| 外观     | 导入 `.cindy` 主题包并刷新列表；选择主题家族／明暗模式与回读 | 有（`appearance.themes` → `import_theme_package`，选择沿用 `preferences`；同 ID 更新，仅数据主题，额外外观插件仍走插件安装） | 无（在目标电脑的本机任务执行；手机可继续该任务） |
 | 任务导入 | 扫描其他 AI 编程工具的任务、开始导入、查进度与结果（与设置 → 任务导入同一实现） | 有（2026-10-30） | 无 |
 | 伙伴     | 发现伙伴（普通任务与伙伴任务均可用 `list_agents`，返回各伙伴主对话 `session_id`，另一台电脑上为 `deviceId::sessionId`），用 `send_to_session` 给它发消息；V1 的 `send_to_agent` / `check_agent_message` 已于 2026-11-08 移除 | 有   | 有               |
 | 伙伴     | 自身关联项目：列出、添加与移除（原有文件工具按需读资料） | 有 | 无（远程设置界面可管理） |
@@ -289,3 +295,11 @@ Claude Code／Pi 的非阻塞澄清恢复独立的 `ask_user_question_async`；P
 本机确认框，用户直接点击开启，不必另找设置。工具发现为 `devices.remote-consent`，
 精确目标来自 `list_machines`。此入口只请求确认，不能远程改开关；原任务收到 enabled 后
 继续工作。未授权消息通道与普通远控命令分离，详情见 [机器能力](cindy-machines.md)。
+
+### GitHub App 自动任务（2026-11-11，测试）
+
+Desktop 来源选择与 `schedule_create/update` 共用 `source={preset:"github-app",repositories:["owner/repository"]}`
+和事件筛选；Agent 可按既有 `device` 选择运行电脑。连接账号仍在目标电脑的 GitHub 插件完成，工具不接收
+OAuth 代码、App 密钥或任务签名密钥。`schedule_get.webhookStatus` 返回接收状态，不伪造专属地址。
+旧执行端明确拒绝未知来源；旧控制端省略来源的编辑保持既有配置。手机当前保留／读取该配置，新增来源
+表单只在 Desktop；不把控制端本机的登录状态冒充运行电脑的连接状态。

@@ -4,6 +4,17 @@
 
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件只记录这一项能力的协议约定。
 
+2026-11-12 Claude 登录到期：owner 账号管理视图可选追加 `loginExpiresAt?: string`（官方 CLI 的 ISO 到期估计），
+以及 `authIssue: 'claude-account-mismatch'` 和固定错误码 `SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH`、`SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN`。
+新增字段只属于账号管理，不进入匿名分享用量或任务选号协议；登录命令仍只传原来的 `accountId`，目录与期望身份由执行电脑解析。
+旧控制端忽略字段，未知错误按通用失败展示；新控制端面对旧执行电脑或旧 CLI 时显示到期未知，继续使用原登录命令，不承诺旧端具备身份复核。
+本机 owner 元数据追加可选 `lastConfirmedIdentity`，在正常 CLI 认证读取后保存，退出登录或重启不清除；
+`reloginIdentity` 保护一次未完成的重登，确认原身份成功后删除。两者不进入账号视图，也不搬移或改写官方凭证。
+原身份无法确认时不启动重登，提示通过添加账号重新连接；初次 `add` / `connect` 不受该限制。
+降级旧版本会恢复旧的登录行为，旧版本不认识身份保护元数据；未完成的重登应在新版确认原账号后再降级。
+没有新增 channel、allowlist、订阅或轮询，也不改变 invoke/push 包装与中转签名；官方及自建中转继续透传原 JSON，无需中转升级。
+回归覆盖新旧字段、owner IPC、所选目录、错误身份与取消后重启恢复；真实双账号浏览器授权仍需安装包验收。
+
 Codex 所选目录由当前供应商管理认证、无法提供 ChatGPT 账号时，管理操作使用追加的
 `SUBSCRIPTION_CODEX_PROVIDER_AUTH` 错误码。新版控制端显示独立账号指引，旧控制端仍按通用账号失败呈现；
 新版连接旧宿主仍接受旧错误。账号视图可选追加 `authIssue: 'codex-provider-managed-auth'`，让新向导
@@ -65,3 +76,47 @@ OpenAI 池快照增加可选 `nativeAccountPool` 标记，当前控制端让三�
 原生额度桶；旧控制端仍可读取 `webSnapshot` 的通用桶，不含账号身份。
 官方及自建 relay 均只透传已有 invoke/push 帧，无需服务端协议变更。原生手机目前没有本机
 供应商连接设置页；执行和远控通道复用上述协议，浏览器登录仍在执行电脑完成。
+
+## 远程任务的账号换号判断（2026-11-12）
+
+`session` 查询可选追加 `model`（非空字符串，最多 512 字符）。新版执行端在 `bound` 回包的 `account` 上可选追加
+`blocked: true`：绑定账号此刻接不了这个模型（记着该模型的真实失败、可信快照显示耗尽或已退出登录），且不是暂停账号或归并的
+旧独立连接；字段缺省表示可用或未知。`blocked` 回包同时追加可选布尔字段 `switchAvailable`：执行端排除绑定账号后，
+按真实选号入口只读检查另一个账号的认证、模型额度／冷却、并发名额和新路线权限，不预约、不修改绑定；读不到时为 `false`，
+owner 变化仍拒绝。可选准入从查询开始共用 2 秒预算，原账号读取已耗尽预算时不启动额外探测，
+原账号读取的既有超时保持不变；探测迟到仅完成既有 owner 隔离的快照读取，不改绑定或预约名额。
+新版控制端只在 `blocked: true` 且 `switchAvailable: true` 时交接（重开原生会话，由执行端新开会话按池策略选号），
+否则照常发送，不为此再读一次池配额。撞限后的立即续跑与供应商组的原地换账号用同一组证据。
+旧执行端忽略 `model`、不回报这两个字段，新控制端据此不交接，
+行为与以前相同；旧控制端不发 `model`，新执行端不回报新字段。暂停交接沿用原判定。新增字段不含账号 id、身份、目录或凭证；
+原 `session` 回包仍只向同账号 owner 展示既有的账号身份与用量。
+发送前仍只有原有的那次 `session` 读取，只多带模型并在执行端确认实际准入；暂停账号仍沿用原先的配额读取。
+沿用原 channel、owner 校验与在途 owner 栅栏，
+无新 channel、allowlist、能力位、帧或服务端字段，官方与自建中转按原 invoke 透传，无需升级。
+回归入口：`subscription-accounts/__tests__/runtime.test.ts`（执行端回报、控制端新旧回包、真实组服务 → 路由 → 账号池）。
+
+## 已绑定任务启动失败的提示
+
+启动准入仍使用原账号绑定与原用量判据，不改变选号、重试或自动等待。
+错误文本增加 `SUBSCRIPTION_ACCOUNT_LIMITED`、`SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED`、
+`SUBSCRIPTION_ACCOUNT_SIGNING_IN`、`SUBSCRIPTION_ACCOUNT_UNAVAILABLE` 方括号标记。
+受限错误仅在该账号、该模型的既有判据给出可靠未来重置时间时追加一行
+`resetAtMs=<unix 毫秒>`；不附账号身份、目录或凭证。
+Desktop 的实时横幅、历史错误卡和 Mobile 共用 `maker-shared/error-redaction` 的展示解析，
+按查看端语言与时区显示时间；展示时再次检查重置时间仍在未来，已到期的历史错误使用不带时间的提示。
+未知时间不推算，旧的 login-or-quota 文本只显示中性的账号状态检查提示。
+旧控制端仍显示通用错误及原始详情，新控制端兼容旧宿主。沿用错误字符串，无新 channel、
+能力协商或 relay 行为；官方及自建中转保持透传，不需要服务端发布。
+
+## Claude 百分比来源（2026-11-11）
+
+`ClaudeUsageWindow` 可选追加 `utilizationSource`（`oauth-endpoint` / `unified-headers`），
+记录该窗口百分比的来源；快照级 `source` 仍表示最近一次更新来源。同一有效额度周期内，
+已知端点百分比不被 SDK 事件覆盖；事件仍即时更新限额状态，端点缺失、窗口已失效或新周期
+时可补充百分比。端点后续回包可修正数值，不采用只升不降的最大值策略。
+
+旧快照无字段时沿用快照级来源；旧端忽略新字段，照旧读取百分比与重置时刻。
+不同窗口分别记录来源，避免 5 小时重置影响仍有效的周窗口。
+字段随现有用量快照传递，无新增 channel、能力门或中转行为；官方与自建中转继续透传。
+账号池的运行时事件不更新账号查询的缓存时间，保持已有 30 秒账号检查与 180 秒额度复用周期。
+回归入口：`claudeSubscriptionUsageMerge.test.ts`、`subscription-accounts/__tests__/runtime.test.ts`。

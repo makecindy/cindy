@@ -27,6 +27,7 @@ import type {
   AnthropicToolChoice,
   ResponsesContentPart,
   ResponsesFunctionTool,
+  ResponsesInputContentPart,
   ResponsesInputItem,
   ResponsesRequest,
   ResponsesServerTool,
@@ -47,36 +48,27 @@ function systemToInstructions(system: AnthropicMessagesRequest['system']): strin
   return undefined;
 }
 
-/** tool_result.content(string / block 数组)拍平成 function_call_output 需要的字符串。 */
-function toolResultToString(content: unknown): string {
+/** Responses 支持多模态工具结果；图片保留在原 call_id 下，纯文字沿用字符串。 */
+function toolResultToOutput(content: unknown): string | ResponsesInputContentPart[] {
   if (content == null) return '';
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
-    return content
-      .map((b) => {
-        if (b && typeof b === 'object') {
-          const rec = b as Record<string, unknown>;
-          if (rec.type === 'text' && typeof rec.text === 'string') return rec.text;
-          // 工具结果里嵌图片等非文本内容:Responses 的 function_call_output 只吃字符串,
-          // 退化成占位描述,不丢整条(模型仍知道该工具产出过内容)。
-          // 占位文案必须说明「有图但送不到、不要猜」:字符串限制是协议层的,与模型
-          // 是否具备视觉能力无关;不带说明的 '[image]' 会被模型当作空结果,诱发反复
-          // 重读或臆测图像内容。图像走 user 消息路径仍可正常送达(input_image)。
-          if (rec.type === 'image') {
-            return (
-              '[image omitted: this tool returned an image, but tool results on this '
-              + 'provider route are delivered as plain text only, so the image data could '
-              + 'not be included. Do NOT guess or fabricate what the image contains. '
-              + 'Tell the user the image could not be delivered on the current route, and '
-              + 'ask them to paste the relevant content as text or attach the image '
-              + 'directly to a chat message instead.]'
-            );
-          }
-          return JSON.stringify(rec);
+    const parts = content.map((b): ResponsesInputContentPart => {
+      if (b && typeof b === 'object') {
+        const rec = b as Record<string, unknown>;
+        if (rec.type === 'text' && typeof rec.text === 'string') return { type: 'input_text', text: rec.text };
+        if (rec.type === 'image') {
+          const url = imageToDataUrl(rec as Extract<AnthropicContentBlock, { type: 'image' }>);
+          return url
+            ? { type: 'input_image', image_url: url }
+            : { type: 'input_text', text: '[image omitted: missing or unsupported image source]' };
         }
-        return String(b);
-      })
-      .join('\n');
+        return { type: 'input_text', text: JSON.stringify(rec) };
+      }
+      return { type: 'input_text', text: String(b) };
+    });
+    if (parts.some(part => part.type === 'input_image')) return parts;
+    return parts.map(part => part.type === 'input_text' ? part.text : '').join('\n');
   }
   try {
     return JSON.stringify(content);
@@ -180,7 +172,7 @@ function messageToInputItems(msg: AnthropicMessage, reasoning: ReasoningReplayOp
         items.push({
           type: 'function_call_output',
           call_id: tr.tool_use_id,
-          output: toolResultToString(tr.content),
+          output: toolResultToOutput(tr.content),
         });
         break;
       }

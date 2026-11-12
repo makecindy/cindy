@@ -15,18 +15,19 @@ import type { ScheduleWebhookRemoteDeps } from '../remote';
 // - tier：unit，只用回环地址和临时目录。
 
 const dirs = vi.hoisted(() => ({ root: '' }));
-const remoteTransport = vi.hoisted(() => ({ deps: null as ScheduleWebhookRemoteDeps | null }));
+const remoteTransport = vi.hoisted(() => ({ deps: null as ScheduleWebhookRemoteDeps | null, syncs: 0 }));
 
 // Only replace the network boundary; admission, queue transactions and disk IO
 // below still run through the production Host and ScheduleWebhookQueue.
 vi.mock('../remote.js', () => ({
   ScheduleWebhookRemote: class {
     constructor(deps: ScheduleWebhookRemoteDeps) { remoteTransport.deps = deps; }
-    async sync() {}
+    async sync() { remoteTransport.syncs += 1; }
     stop() {}
     pause() {}
     problem() { return undefined; }
     canDeliver() { return true; }
+    canDeliverGithub() { return true; }
     view() { return { id: 'cloud-endpoint' }; }
   },
 }));
@@ -104,6 +105,31 @@ describe('ScheduleWebhookHost', () => {
     await host.start();
     return remoteTransport.deps!.onBatch;
   }
+
+  // PR #9378: queued/ACKed work must survive presentation-only edits. The
+  // network alone is replaced; Host refresh and persistent queue are production.
+  it('preserves durable App events after equivalent scope reorder and discards a real change', async () => {
+    const source = { preset: 'github-app' as const, repositories: ['example/project', 'other/project'] };
+    const events = ['issues.opened', 'release.published'];
+    const original = { ...withTrigger, webhookTrigger: { ...withTrigger.webhookTrigger!, source, events } };
+    await startCloudHost(original);
+    const comment = { deliveryId: 'reordered-scope', event: 'issues', action: 'opened', repository: 'example/project', receivedAt: Date.now() };
+    await remoteTransport.deps!.onGithubBatch!({ endpointId: 'managed', scheduleId: '__github_pr_watch__',
+      events: [comment], omitted: 0 }, () => true);
+    const stateFile = path.join(dirs.root, 'schedule-webhooks', 'state.json');
+    const before = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    expect(before.endpoints.s1.pending).toEqual([comment]);
+    const synced = remoteTransport.syncs;
+    scheduler.change([{ ...original, webhookTrigger: { ...original.webhookTrigger,
+      source: { ...source, repositories: [...source.repositories].reverse() }, events: [...events].reverse() } }]);
+    await vi.waitFor(() => expect(remoteTransport.syncs).toBeGreaterThan(synced));
+    const reordered = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    expect(reordered.endpoints.s1?.pending).toEqual([comment]);
+    const nextSync = remoteTransport.syncs;
+    scheduler.change([{ ...original, webhookTrigger: { ...original.webhookTrigger, events: ['release.published'] } }]);
+    await vi.waitFor(() => expect(remoteTransport.syncs).toBeGreaterThan(nextSync));
+    expect(JSON.parse(fs.readFileSync(stateFile, 'utf8')).endpoints.s1).toBeUndefined();
+  });
 
   // PR #8470 / discussion_r4488736908, unit: scheduler reconciliation can lag
   // behind a saved filter edit; existing HTTP tests did not exercise cloud admission.

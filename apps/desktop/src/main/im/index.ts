@@ -475,7 +475,7 @@ export function startImOrchestrators(): void {
   ipcMain.handle('wechatBot:set-companion', (event, botId: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (botId !== null && (typeof botId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(botId))) {
-      throwIpcError('INVALID_ARGUMENT', 'Invalid teammate');
+      throwIpcError('INVALID_ARGUMENT', 'Invalid buddy');
     }
     return setWechatCompanion(botId as string | null);
   });

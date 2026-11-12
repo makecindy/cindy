@@ -1,3 +1,13 @@
+/** Desktop pointer input needs an actual capture credential, never an AX-only read. */
+export function isUnavailableDesktopObservation(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return true;
+  const state = data as Record<string, unknown>;
+  return !computerResultOutcome('get_desktop_state', data).ok
+    || typeof state.capture_id !== 'string' || !state.capture_id
+    || state.screenshot_frame_valid === false
+    || (state.screenshot_error !== undefined && state.screenshot_error !== null);
+}
+
 /** Only explicit driver failure signals override legacy/partial observation success. */
 export function isUnavailableWindowObservation(
   data: unknown,

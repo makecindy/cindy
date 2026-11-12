@@ -60,7 +60,7 @@ describe('remote resource discovery', () => {
   });
 
   it('keeps a discovered offline host while excluding revoked and disabled hosts', async () => {
-    const previous = [{ id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', targets }];
+    const previous = [{ id: 'teammates', title: "Buddies", resourceKind: 'bot', placement: 'home-scope', targets }];
     const selected = remoteResourceDiscoveryTargets([
       { deviceId: 'mac-1', name: 'Studio', canOpen: false, state: 'offline' },
       { deviceId: 'mac-2', name: 'Laptop', canOpen: false, state: 'access_revoked' },
@@ -74,7 +74,7 @@ describe('remote resource discovery', () => {
   });
 
   it('refreshes an offline cached host when it comes online and removes an empty manifest', async () => {
-    const previous = [{ id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', targets }];
+    const previous = [{ id: 'teammates', title: "Buddies", resourceKind: 'bot', placement: 'home-scope', targets }];
     const selected = remoteResourceDiscoveryTargets([
       { deviceId: 'mac-1', name: 'Studio', canOpen: true, state: 'online' },
       { deviceId: 'mac-2', name: 'Laptop', canOpen: false, state: 'offline' },
@@ -98,7 +98,7 @@ describe('remote resource discovery', () => {
         resourceKind: 'bot',
         placement: 'home-scope',
         title: {
-          fallback: 'Teammates',
+          fallback: "Buddies",
           translations: { 'zh-CN': '所有伙伴' },
         },
         futureField: deviceId,
@@ -129,7 +129,7 @@ describe('remote resource discovery', () => {
       if (deviceId === 'mac-2') throw new Error('temporarily offline');
       return { protocolVersion: 1, collections: [] };
     }) as RemoteInvoke;
-    const previous = [{ id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', targets: [targets[0]] }];
+    const previous = [{ id: 'teammates', title: "Buddies", resourceKind: 'bot', placement: 'home-scope', targets: [targets[0]] }];
     const progress = vi.fn();
     await expect(discoverRemoteHomeCollections(invoke, targets, 'en', previous, progress)).resolves.toEqual([]);
     expect(progress).toHaveBeenLastCalledWith([]);
@@ -175,7 +175,7 @@ describe('remote resource discovery', () => {
     }) as RemoteInvoke;
     const previous = [{
       id: 'teammates',
-      title: 'Teammates',
+      title: "Buddies",
       resourceKind: 'bot',
       placement: 'home-scope',
       targets: [targets[0]],

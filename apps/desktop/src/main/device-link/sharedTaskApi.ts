@@ -147,7 +147,11 @@ export function captureSharedTaskBoundaryClose(ownerAccountId: string, region: R
   const token = getAccessToken();
   if (!token) return null;
   const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
-  const closeV2 = captureAgentNetSharingBoundaryClose(token, getClientEndpoint('authApiBaseUrl'));
+  // Agent-Net close is an extra route, never a precondition for the handover:
+  // a failure to capture it falls back to the legacy close and the journal retry.
+  let closeV2: (sharedTaskId: string) => Promise<unknown> | null = () => null;
+  try { closeV2 = captureAgentNetSharingBoundaryClose(token, getClientEndpoint('authApiBaseUrl')); }
+  catch { /* The durable local-close journal still records the closure. */ }
   const api = createSharedTaskApi({
     captureScope: () => ({ isCurrent: () => true }),
     request: (path, options) => trackListWrite(options.method, () => serverApiFetch<unknown>(path, {

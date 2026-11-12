@@ -1,5 +1,6 @@
 import { sessionAllowsProjectMove, useSessionProjectMoveSheet } from './SessionProjectMoveSheet';
 import { SessionPrLinks } from './SessionPrLinks';
+import { SessionMenuPrLinks } from './SessionMenuPrLinks';
 import { CodexResetAutoUseControl } from './CodexResetAutoUseControl';
 import { TaskTagLabels, TaskTagsPanel } from './TaskTags';
 import { TaskTagsSheet, useTaskTagsSheet } from './TaskTagsSheet';
@@ -709,6 +710,15 @@ export function SessionMenuSheet({
               ) : null}
             </View>
                 )}
+
+          {!messageOnly && !workerMode && !sharedGuest && (tagDeviceId ?? session.deviceLinkDeviceId) ? (
+            <SessionMenuPrLinks
+              deviceId={(tagDeviceId ?? session.deviceLinkDeviceId)!}
+              sessionId={session.id}
+              updatedAt={session.updatedAt}
+              visible={visible && view === 'menu'}
+            />
+          ) : null}
 
           {!messageOnly ? <SessionUsageSummary modelLabel={modelLabel} providerName={providerName} session={session} usage={menuUsage} contextUsage={contextUsage} onPress={openInfo} translucent={Platform.OS === 'ios'} /> : null}
 

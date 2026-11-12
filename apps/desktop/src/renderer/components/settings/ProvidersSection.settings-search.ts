@@ -91,7 +91,10 @@ export const providersSettings = defineSettings({
     targetId: 'settings-panel-providers',
     titleKey: TAB_LABEL_KEY['providers'],
     // Per-model controls use this entry; never index users' model names or IDs.
-    keywordKeys: ['settings.providers.models.advanced.displayName'],
+    keywordKeys: [
+      'settings.providers.models.advanced.displayName',
+      'settings.providers.remote.modelsTitle',
+    ],
     sectionKey: 'settings.sections.providers',
   },
   videoApi: {

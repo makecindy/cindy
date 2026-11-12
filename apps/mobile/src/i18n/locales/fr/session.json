@@ -1,5 +1,12 @@
 {
   "githubPrs": {
+    "status": {
+      "open": "Ouverte",
+      "draft": "Brouillon",
+      "merged": "Fusionnée",
+      "closed": "Fermée"
+    },
+    "statusUnavailable": "Statut pas encore chargé",
     "title": "Gérer les liens de PR",
     "hint": "Jusqu’à 3 dans l’en-tête ; les PR épinglées apparaissent en premier",
     "empty": "Collez un lien de PR GitHub ou de MR GitLab pour l’ajouter",
@@ -253,7 +260,7 @@
           "plugins": "Catalogue des plugins",
           "memoryRules": "Instructions de mémoire",
           "memoryIndex": "Index de mémoire",
-          "profile": "Profil du coéquipier",
+          "profile": "Profil de l’ami",
           "user": "Instructions utilisateur",
           "directories": "Répertoires supplémentaires",
           "native": "Instructions Pi",
@@ -667,6 +674,8 @@
     "taskAlreadyCreated": "Cette tâche existe déjà sur l'ordinateur. Ses messages enregistrés y reprendront."
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_FULL": "Tous les comptes ou ordinateurs pouvant exécuter cette tâche ont atteint leur limite de tâches simultanées. Attendez la fin d’une tâche en cours ou augmentez la limite dans les réglages du fournisseur.",
+    "SUBSCRIPTION_ACCOUNTS_FULL": "Tous les comptes ou ordinateurs pouvant exécuter cette tâche ont atteint leur limite de tâches simultanées. Attendez la fin d’une tâche en cours ou augmentez la limite dans les réglages du fournisseur.",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Cette tâche SSH ne peut pas changer de Harness. Choisissez un modèle dans son Harness actuel, ou créez une nouvelle tâche SSH avec le Harness souhaité.",
     "MODEL_SELECTION_UNAVAILABLE": "Le modèle sélectionné n'est plus disponible auprès de son fournisseur. Vérifiez la connexion dans les Paramètres ou choisissez un autre modèle disponible.",
     "HARNESS_SWITCH_NOT_READY": "Le changement de Harness n'est pas prêt. Consultez le détail de l'erreur et réessayez une fois le Harness prêt.",

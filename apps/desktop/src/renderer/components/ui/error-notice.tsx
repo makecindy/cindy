@@ -61,9 +61,9 @@ export const ErrorNotice = forwardRef<HTMLDivElement, ErrorNoticeProps>(function
         {icon ?? <AlertCircle size={16} />}
       </span>
       <div className="min-w-0 flex-1">
-        <div className="break-words text-13 leading-5 text-[var(--text-primary)]">{message}</div>
+        <div className="break-words text-13 leading-[1.54] text-[var(--text-primary)]">{message}</div>
         {description && (
-          <div className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">{description}</div>
+          <div className="mt-1 text-12 leading-[1.667] text-[var(--text-secondary)]">{description}</div>
         )}
         {children}
         <div className="mt-2 flex flex-wrap items-center gap-2 empty:hidden">
@@ -95,7 +95,7 @@ export const ErrorNotice = forwardRef<HTMLDivElement, ErrorNoticeProps>(function
           )}
         </div>
         {details && expanded && (
-          <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-[hsl(var(--surface-hsl))] p-2 text-12 leading-5 text-[var(--text-secondary)]">
+          <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-[hsl(var(--surface-hsl))] p-2 text-12 leading-[1.667] text-[var(--text-secondary)]">
             {redactSensitiveText(details)}
           </pre>
         )}

@@ -56,7 +56,7 @@ export function registerSubscriptionAccountsIpc(): void {
     const session = parseSubscriptionSessionAccountQuery(raw);
     if (session) {
       try {
-        return await readSubscriptionSessionAccount(session.providerId, session);
+        return await readSubscriptionSessionAccount(session.providerId, session, { remote: !!context });
       } catch {
         throwIpcError('SUBSCRIPTION_ACCOUNT_FAILED', 'Could not read the task account');
       }
@@ -70,6 +70,16 @@ export function registerSubscriptionAccountsIpc(): void {
         throwIpcError(
           'SUBSCRIPTION_CODEX_PROVIDER_AUTH',
           'The active Codex provider does not expose a ChatGPT account',
+        );
+      if (reason === 'account_mismatch')
+        throwIpcError(
+          'SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH',
+          'Sign in again with the selected Claude account',
+        );
+      if (reason === 'account_identity_unknown')
+        throwIpcError(
+          'SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN',
+          'The selected Claude account identity could not be confirmed',
         );
       throwIpcError(
         reason === 'login_cancelled'
