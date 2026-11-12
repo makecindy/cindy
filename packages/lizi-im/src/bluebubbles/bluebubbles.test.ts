@@ -60,6 +60,38 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
 }
 
 describe('BlueBubbles local ingress', () => {
+  // Tier 1, PR #10241/r4552494796: adding a chat must not execute its old
+  // requests, while existing chats still recover missed messages and receipts.
+  it('persists a new chat activation boundary without resetting existing history', async () => {
+    const f = await fixture();
+    const original = f.im.getEditableConfig();
+    const oldCursor = f.state().cursors[f.chat.guid];
+    f.message('existing-missed', { dateCreated: 2000 });
+    f.message('new-chat-old-command', { chats: [f.otherChat], dateCreated: 2000, text: '/new' });
+    f.advance(10_000);
+    const history = vi.mocked(f.api.history).getMockImplementation()!;
+    vi.mocked(f.api.history).mockImplementation(async (chat, after, before, offset) =>
+      (await history(chat, after, before, offset)).filter(message => message.chats?.some(row => row.guid === chat)));
+    await f.im.updateCredentials({ ...original, chatGuids: [...original.chatGuids, f.otherChat.guid] });
+    expect(f.state().activatedAt).toBe(1000);
+    expect(f.state().chatActivatedAt?.[f.otherChat.guid]).toBeGreaterThan(2000);
+    expect(f.state().chatActivatedAt?.[f.chat.guid]).toBeUndefined();
+    expect(f.state().cursors[f.chat.guid]).toBeGreaterThanOrEqual(oldCursor);
+    expect(f.received.map(event => event.messageId)).toEqual(['existing-missed']);
+    // Delayed webhook delivery must obey the same boundary as history recovery.
+    await f.webhook('new-chat-old-command');
+    await f.im.reconcile();
+    expect(f.state().inbox['new-chat-old-command'].state).toBe('ignored');
+    const accepted = structuredClone(f.state().inbox['existing-missed']);
+    const boundary = f.state().chatActivatedAt![f.otherChat.guid];
+    await f.im.dispose(); await f.im.init();
+    expect(f.state().chatActivatedAt![f.otherChat.guid]).toBe(boundary);
+    expect(f.state().inbox['existing-missed']).toEqual(accepted);
+    f.message('new-chat-current', { chats: [f.otherChat] });
+    await f.webhook('new-chat-current'); await f.im.reconcile();
+    expect(f.received.map(event => event.messageId)).toEqual(['existing-missed', 'new-chat-current']);
+  });
+
   // Tier 1, PR #10241/r4552243405: an unreadable saved key must not become a
   // missing-key rollback entry. Abort through the production edit entry point.
   it.each([...BLUEBUBBLES_SECRET_KEYS, 'unsupported-host'])('keeps the live connection and secrets intact when snapshotting %s fails', async key => {

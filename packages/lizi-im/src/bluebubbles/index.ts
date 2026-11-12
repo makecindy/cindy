@@ -166,6 +166,8 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     });
     const password = input.password || previous.find(([key]) => key === 'bluebubbles-password')?.[1];
     if (!password || password.length > 4096 || !this.host.secrets.isAvailable()) throw new Error('BLUEBUBBLES_SECRET_UNAVAILABLE');
+    const previousConfig = parseBlueBubblesConfig(JSON.parse(previous.find(([key]) => key === 'bluebubbles-config')?.[1] ?? 'null'));
+    const addedChats = config.chatGuids.filter(chat => !previousConfig.chatGuids.includes(chat));
     const account = this.host.accountScope?.capture();
     let expectedGeneration = this.generation;
     const current = () => this.generation === expectedGeneration
@@ -181,6 +183,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     expectedGeneration = await cleanup();
     if (!current()) throw new Error('BLUEBUBBLES_CONNECTION_CHANGED');
     try {
+      new BlueBubblesReceipts(this.options.storage, this.now()).activateChats(addedChats, this.now());
       // init disposes the previous generation, then starts a new one.
       const beforeSave = this.generation;
       try { await this.saveCredentials({ ...config, password }); }
@@ -362,7 +365,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     await api.info(); this.assertLive(generation);
     const before = this.now();
     for (const chat of config.chatGuids) {
-      const after = Math.max(receipts.activatedAt, receipts.cursor(chat) - 300_000);
+      const after = Math.max(receipts.activatedAtFor(chat), receipts.cursor(chat) - 300_000);
       let previousPage = '';
       for (let offset = 0; ; offset += 100) {
         const messages = await api.history(chat, after, before, offset);
@@ -373,7 +376,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
         previousPage = fingerprint;
         for (const message of messages) {
           if (typeof message.guid !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/.test(message.guid)) throw new Error('BLUEBUBBLES_INVALID_MESSAGE');
-          if (!message.isFromMe && message.dateCreated >= receipts.activatedAt) receipts.receive(message.guid, before);
+          if (!message.isFromMe && message.dateCreated >= receipts.activatedAtFor(chat)) receipts.receive(message.guid, before);
         }
         if (messages.length < 100) break;
       }
@@ -496,7 +499,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           const chat = message.chats?.find(item => config.chatGuids.includes(item.guid));
           const sender = message.handle?.address?.toLowerCase();
           if (message.guid !== guid || message.isFromMe || !chat || !sender || message.handle?.service !== 'iMessage'
-            || !Number.isFinite(message.dateCreated) || message.dateCreated < receipts.activatedAt
+            || !Number.isFinite(message.dateCreated) || message.dateCreated < receipts.activatedAtFor(chat.guid)
             || (message.associatedMessageType !== undefined && message.associatedMessageType >= 2000)) {
             receipts.mark(guid, 'ignored'); this.pendingInputs.delete(guid); this.retryAt.delete(guid); continue;
           }
