@@ -3,14 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { resolvePreferredSystemLocale, resolveSystemLocale } from '../locale';
 
 describe('desktop locale resolution', () => {
-  // CodeQL #436: POSIX suffix removal used an unanchored backtracking regex.
-  // Public locale resolution must keep encoding suffix support and reject internal
-  // line terminators; existing OS-tag tests covered neither input shape (unit).
-  it('strips POSIX codesets while keeping malformed multiline input invalid', () => {
-    expect(resolveSystemLocale(' ja_JP.UTF-8 ')).toBe('ja');
-    expect(resolveSystemLocale('pt_BR.UTF-8')).toBe('pt-BR');
+  // Unit regression: removing the codeset before validation must not turn an
+  // invalid multiline tag into the selected locale. Existing suffix tests only
+  // covered valid input; the first invalid preference must fall through.
+  it('keeps malformed multiline codesets invalid', () => {
     for (const separator of ['\n', '\r', '\u2028', '\u2029']) {
-      expect(resolvePreferredSystemLocale([`ja_JP.${'.'.repeat(100)}${separator}invalid`, 'de-DE'])).toBe('de');
+      expect(resolvePreferredSystemLocale([`ja_JP.UTF-8${separator}invalid`, 'de-DE'])).toBe('de');
     }
   });
 
@@ -34,6 +32,13 @@ describe('desktop locale resolution', () => {
     expect(resolvePreferredSystemLocale(['it-IT', 'zh-Hant-TW', 'en-US'])).toBe('zh-TW');
     expect(resolvePreferredSystemLocale(['it-IT', 'ja-JP'])).toBe('ja');
     expect(resolvePreferredSystemLocale(['it-IT'])).toBe('en');
+  });
+
+  it('drops the POSIX codeset and modifier after the first dot', () => {
+    expect(resolveSystemLocale('pt_BR.UTF-8')).toBe('pt-BR');
+    expect(resolveSystemLocale('zh_TW.Big5@stroke')).toBe('zh-TW');
+    expect(resolveSystemLocale(`ja.${'.'.repeat(50_000)}`)).toBe('ja');
+    expect(resolveSystemLocale('.UTF-8')).toBe('en');
   });
 
   // #8142: each catalog must be reachable from real OS regional language tags.

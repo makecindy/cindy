@@ -29,11 +29,10 @@ export const DEFAULT_LOCALE: SupportedLocale = 'en';
 
 function normalizeLocaleTag(raw: string | undefined | null): string | null {
   const value = raw?.trim();
-  // Internal line breaks are invalid even inside a POSIX codeset suffix. Check
-  // before slicing so malformed input cannot become a supported language tag.
+  // Reject internal line breaks before dropping the suffix so invalid tags stay invalid.
   if (!value || /[\r\n\u2028\u2029]/u.test(value)) return null;
-  const codesetStart = value.indexOf('.');
-  const tag = (codesetStart < 0 ? value : value.slice(0, codesetStart)).replace(/_/g, '-');
+  // POSIX locales carry a codeset/modifier after the first dot (en_US.UTF-8).
+  const tag = value.replace(/_/g, '-').split('.', 1)[0];
   if (!tag) return null;
 
   try {
