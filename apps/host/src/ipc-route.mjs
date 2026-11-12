@@ -7,6 +7,11 @@
  * arguments. Results are dropped when the owner changes while a handler runs.
  * A result that does not match the registered shape is still returned but
  * logged as `result_mismatch`, so a handler that quietly grows a field shows up.
+ * The log detail is the checker's position string, which names object property
+ * keys (`result[0].title is not part of the contract`) but never values. That
+ * is safe only while no registered schema has an object keyed by user data
+ * (ids, paths, names as keys); an entry that adds one must log the position
+ * without those keys.
  *
  * Handlers get the checked arguments only; a proxy timeout does not cancel
  * them. Add a handler context before binding writes or long reads.

@@ -166,7 +166,11 @@ export function hostIpcFingerprint(entry: HostIpcEntry): string {
   }));
 }
 
-/** Null when `value` matches `schema`; otherwise where and why it does not. */
+/**
+ * Null when `value` matches `schema`; otherwise where and why it does not. The
+ * position names object keys but never values; the Host logs it as is, so a
+ * schema with user data as object keys needs a keyless position first.
+ */
 export function checkHostIpcValue(schema: HostIpcSchema, value: unknown, at = 'value'): string | null {
   switch (schema.type) {
     case 'string':

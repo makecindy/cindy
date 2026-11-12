@@ -10,10 +10,35 @@
  * binding a write or a long-running read (see hostIpcRegistry.ts).
  */
 
-import { makerSessionBackgroundTasksIpcBindings, type MakerSessionBackgroundTasksDeps } from './maker-session-background-tasks.js';
-import { makerSideChatIpcBindings } from './maker-side-chat.js';
+import {
+  MAKER_SESSION_BACKGROUND_TASKS_RESULT_FIELDS,
+  makerSessionBackgroundTasksIpcBindings,
+  type MakerSessionBackgroundTasksDeps,
+} from './maker-session-background-tasks.js';
+import { MAKER_SIDE_CHAT_RESULT_FIELDS, makerSideChatIpcBindings } from './maker-side-chat.js';
 
 export type HostIpcBinding = (args: readonly unknown[]) => unknown;
+
+/**
+ * Every property of `T`, marked the way the registry schema marks it. Used with
+ * `satisfies` on a literal table, so a property added to or removed from `T`,
+ * or one that changes between optional and required, fails type checking.
+ */
+export type ResultFields<T> = { readonly [K in keyof T]-?: {} extends Pick<T, K> ? 'optional' : 'required' };
+
+/**
+ * Per channel, one table per object in the result schema, keyed by its schema
+ * path (`result`, `result[]`, `result.tasks[]`). The route test requires a
+ * table for every object a registered result contains and compares them with
+ * the schema, so a type change in the code that produces a result fails the
+ * build or the tests instead of only logging `result_mismatch` at run time.
+ */
+export type HostIpcResultFields = Readonly<Record<string, Readonly<Record<string, Readonly<Record<string, 'optional' | 'required'>>>>>>;
+
+export const HOST_IPC_RESULT_FIELDS: HostIpcResultFields = {
+  ...MAKER_SESSION_BACKGROUND_TASKS_RESULT_FIELDS,
+  ...MAKER_SIDE_CHAT_RESULT_FIELDS,
+};
 
 export type HostIpcBindingsDeps = MakerSessionBackgroundTasksDeps;
 

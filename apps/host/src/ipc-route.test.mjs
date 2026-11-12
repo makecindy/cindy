@@ -8,7 +8,7 @@
  * - 现有覆盖缺口：新路由；server.test.mjs 只覆盖既有专用路由的实例头；代理与路由各自的测试都用假对象，
  *   路径编码、头名与信封是否对得上只靠共享常量。
  * - 最小失败输入：网页 cookie 调用、缺实例头、旧指纹、处理期间切账号、空白会话 id、处理函数多返回一个字段、
- *   某族绑定了别族的通道、同一通道绑定两次。
+ *   某族绑定了别族的通道、同一通道绑定两次、返回形状表与登记表的字段或可选性不一致。
  * - tier：unit + 进程内联调（真实 loopback HTTP 与内存 SQLite，无外部进程；真实进程见 scripts/ipc-route.e2e.mjs）。
  */
 import assert from 'node:assert/strict';
@@ -26,7 +26,9 @@ import {
 
 import { createHostServer } from './server.mjs';
 import { createHostIpcRoute } from './ipc-route.mjs';
-import { createHostIpcBindings, createHostIpcFamilyBindings, mergeHostIpcBindings } from './ipc-bindings/index.ts';
+import {
+  HOST_IPC_RESULT_FIELDS, createHostIpcBindings, createHostIpcFamilyBindings, mergeHostIpcBindings,
+} from './ipc-bindings/index.ts';
 import { createHostIpcProxy } from '../../desktop/src/main/host-ipc-proxy.ts';
 import { createWebAuth } from './web-auth.mjs';
 import { projectHostAuthState } from './auth-state.ts';
@@ -212,6 +214,25 @@ test('Host bindings mirror the registry families, and the production table binds
   // Every registered entry bound, none left unsupported: the route's own startup check passes.
   assert.doesNotThrow(() => createHostIpcRoute({ instanceId: 'h', readOwnerStamp: () => OWNER,
     bindings: createHostIpcBindings({ getLiveSession: () => undefined }) }));
+});
+
+// Type half: the ResultFields tables in ipc-bindings/ stop type checking when the
+// types a handler returns change. This half keeps those tables equal to the
+// registry, so a maker-core field change cannot reach a window as result_mismatch only.
+test('every object in a registered result has a shape table equal to the registry schema', () => {
+  const objectTables = (schema, at, out = {}) => {
+    if (schema.type === 'array') return objectTables(schema.items, `${at}[]`, out);
+    if (schema.type !== 'object') return out;
+    out[at] = Object.fromEntries(Object.entries(schema.properties)
+      .map(([key, property]) => [key, property.optional ? 'optional' : 'required']));
+    for (const [key, property] of Object.entries(schema.properties)) objectTables(property, `${at}.${key}`, out);
+    return out;
+  };
+  const withObjects = HOST_IPC_ENTRIES.filter(entry => Object.keys(objectTables(entry.result, 'result')).length);
+  assert.deepEqual(Object.keys(HOST_IPC_RESULT_FIELDS).sort(), withObjects.map(entry => entry.channel).sort());
+  for (const entry of withObjects) {
+    assert.deepEqual(HOST_IPC_RESULT_FIELDS[entry.channel], objectTables(entry.result, 'result'), entry.channel);
+  }
 });
 
 test('desktop proxy and Host route agree over real HTTP with the production bindings', async t => {
