@@ -1,3 +1,4 @@
+import '@/styles/chatContentDirection.css';
 import { deviceDisplayName } from '@/lib/deviceName';
 import {
   useCallback,
@@ -2437,7 +2438,7 @@ export function ChatInput({
     editable: !composerEditorLocked,
     extensions: [
       Document,
-      Paragraph,
+      Paragraph.configure({ HTMLAttributes: { dir: 'auto' } }),
       Text,
       ComposerListItem,
       ComposerBulletList,

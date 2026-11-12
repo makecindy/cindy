@@ -1,3 +1,4 @@
+import '@/styles/chatContentDirection.css';
 import { VideoSitePreview } from './VideoSitePreview';
 import { youtubeVideo } from '@cindy/maker-shared/rich-answer';
 import { splitRichAnswer, richMediaSource, richMarkdown, richString, type RichNode } from '@cindy/maker-shared/rich-answer';
@@ -684,7 +685,7 @@ const baseComponents: Components = {
   // Lists
   ul({ children, ...props }) {
     return (
-      <ul className="my-2 ml-6 list-disc space-y-1" {...props}>
+      <ul className="my-2 list-disc space-y-1" {...props}>
         {children}
       </ul>
     );
@@ -692,10 +693,14 @@ const baseComponents: Components = {
 
   ol({ children, ...props }) {
     return (
-      <ol className="my-2 ml-6 list-decimal space-y-1" {...props}>
+      <ol className="my-2 list-decimal space-y-1" {...props}>
         {children}
       </ol>
     );
+  },
+
+  li({ children, ...props }) {
+    return <li dir="auto" {...props}>{children}</li>;
   },
 
   // Paragraphs
@@ -782,7 +787,7 @@ const baseComponents: Components = {
  *   - 已有 base renderer (h1-h6 / p / pre / table / ul / ol / blockquote / hr):
  *     把 lineAttr merge 进 props 后透传给 base 函数。base 内部 spread props 时
  *     data-source-line 自然落到对应 DOM 节点上。
- *   - base 没有的 (li): 直接 createElement 渲染原生 tag。
+ *   - base 没有的: 直接 createElement 渲染原生 tag。
  */
 type BlockTag = 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6' | 'p' | 'pre' | 'table' | 'ul' | 'ol' | 'li' | 'blockquote' | 'hr';
 
