@@ -494,6 +494,7 @@ import {
   startHostEventBridge,
   type HostDelegationConfig,
 } from './host-delegation';
+import { createIpcChannelUsage, registeredIpcChannels, tapIpcChannelUsage } from './ipcChannelUsage';
 import { hasRecentWorkdir, listRecentWorkdirs } from './localDb/ipc/recentWorkdirs';
 import { getActiveCatalog } from './maker-host/active-catalog';
 import { resolveSessionContextWindow } from '../shared/sessionContextWindow';
@@ -1323,6 +1324,9 @@ if (hostClientMode) {
   console.log('[bootstrap-electron] client mode requested at startup');
 }
 
+/** Source runs only: where to write IPC channel usage counts (see ipcChannelUsage.ts). */
+const ipcUsageReportFile = app.isPackaged ? undefined : process.env.CINDY_IPC_USAGE_FILE?.trim() || undefined;
+
 /** Client mode: the host owns every runtime channel; install its proxies now. */
 function installHostClientMode(): boolean {
   const delegation = hostDelegation();
@@ -1337,11 +1341,20 @@ function installHostClientMode(): boolean {
   claimProxiedChannels(ipcMain, (channel) => {
     console.log(`[bootstrap-electron] client mode keeps the host handler for ${channel}`);
   });
-  installUnsupportedMakerFallbacks({
-    ipcMain,
-    log: (channel) => {
-      console.log(`[bootstrap-electron] client mode unsupported maker fallback for ${channel}`);
-    },
+  const channelUsage = createIpcChannelUsage({
+    mode: 'client',
+    file: ipcUsageReportFile,
+    registered: ipcUsageReportFile ? () => registeredIpcChannels(ipcMain) : undefined,
+    log: (line) => console.log(`[bootstrap-electron] client mode ${line}`),
+  });
+  installUnsupportedMakerFallbacks({ ipcMain, usage: channelUsage });
+  app.once('before-quit', () => {
+    const unserved = channelUsage.topUnserved(30);
+    if (unserved.length) {
+      console.log(`[bootstrap-electron] client mode unserved channels: ${unserved
+        .map(([channel, entry]) => `${channel}=${entry.missing + entry.unsupported}`).join(', ')}`);
+    }
+    channelUsage.flush();
   });
   console.log(`[bootstrap-electron] client mode: delegating to ${delegation.baseUrl}`);
   console.log(`[bootstrap-electron] client mode proxies: ${installed.join(', ')}`);
@@ -1464,6 +1477,16 @@ function installHostClientMode(): boolean {
 }
 
 if (hostClientMode) installHostClientMode();
+else if (ipcUsageReportFile) {
+  const channelUsage = createIpcChannelUsage({
+    mode: 'embedded',
+    file: ipcUsageReportFile,
+    registered: () => registeredIpcChannels(ipcMain),
+    log: (line) => console.log(`[bootstrap-electron] ${line}`),
+  });
+  tapIpcChannelUsage(ipcMain, channelUsage);
+  app.once('before-quit', () => channelUsage.flush());
+}
 
 let startPendingAccountProviderReadiness: { ownerId: string; start: () => void } | null = null;
 
