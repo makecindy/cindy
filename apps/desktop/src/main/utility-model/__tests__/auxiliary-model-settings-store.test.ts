@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -117,6 +117,18 @@ describe('auxiliary-model-settings-store', () => {
     expect(readAuxiliaryModelSettings()).toEqual({ models: [] });
     expect(isAuxiliaryModelCustomized()).toBe(false);
     expect(() => readFileSync(settingsPath())).toThrow();
+  });
+
+  // The Desktop binding deletes such a file; the Node Host keeps it (preserveUnreadableFile in
+  // auxiliaryModelSettingsStoreCore.ts). Both then read the automatic chain.
+  it('deletes an unreadable or oversized settings file and reads automatic', () => {
+    writeFileSync(settingsPath(), '{"models": [', 'utf8');
+    expect(readAuxiliaryModelSettings()).toEqual({ models: [] });
+    expect(existsSync(settingsPath())).toBe(false);
+
+    writeFileSync(settingsPath(), JSON.stringify({ models: [TITLE_PIN], padding: 'x'.repeat(5000) }), 'utf8');
+    expect(readAuxiliaryModelSettings()).toEqual({ models: [] });
+    expect(existsSync(settingsPath())).toBe(false);
   });
 
   it('keeps an existing models array and leaves legacy voice settings untouched', () => {
