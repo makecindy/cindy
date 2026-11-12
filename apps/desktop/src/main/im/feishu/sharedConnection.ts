@@ -8,8 +8,9 @@ import { t } from '../../i18n.desktop';
 import { bindingStore } from '../binding';
 import { isInControl } from '../shared/controlState';
 import type { BotImConnectionRecord } from '../../../shared/botImConnection';
-import { DEFAULT_SCHEDULER_BOT_ID } from '../../../shared/botAutonomy';
 import { listBotImConnections, readBotImConnection, updateBotImConnectionRecord } from '../shared/botImConnectionStore';
+
+const CINDY_DEFAULT_BOT_ID = 'cindy-default';
 
 export function sharedFeishuBinding(record: BotImConnectionRecord, im: FeishuIM) {
   const shared = record.sharedFeishu;
@@ -26,7 +27,7 @@ export function createSharedFeishuControls(connectionId: string, im: FeishuIM) {
       if (userId !== im.getOwnerOpenId() || !record.sharedFeishu) return record.botId;
       const shared = sharedFeishuBinding(record, im);
       if (!shared || appId !== shared.appId) throw new Error('Feishu shared owner changed');
-      return shared.selectedBotId ?? DEFAULT_SCHEDULER_BOT_ID;
+      return shared.selectedBotId ?? CINDY_DEFAULT_BOT_ID;
     },
     async handleControlMessage(event: IMMessageEvent): Promise<boolean> {
       if (event.attachments.length || event.unsupported.length || event.speaker || event.replyThread

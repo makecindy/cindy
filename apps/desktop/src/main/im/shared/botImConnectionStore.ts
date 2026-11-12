@@ -340,6 +340,16 @@ export async function setBotImConnectionGroupActivation(
   });
 }
 
+/** Discord connection's server/channel allowlist; replacing it never affects other channels. */
+export async function setBotImConnectionDiscordChannelAccess(
+  id: string,
+  access: unknown,
+): Promise<BotImConnectionRecord | null> {
+  const current = readBotImConnection(id);
+  if (!current || current.channel !== 'discord') return null;
+  return updateBotImConnectionRecord(id, { discordChannelAccess: normalizeDiscordAccess(access) });
+}
+
 export async function removeBotImConnectionRecord(id: string): Promise<BotImConnectionRecord | null> {
   if (!isBotImConnectionId(id)) return null;
   let previous: BotImConnectionRecord | null = null;
