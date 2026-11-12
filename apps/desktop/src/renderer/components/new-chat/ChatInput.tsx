@@ -1,3 +1,4 @@
+import '@/styles/chatContentDirection.css';
 import { deviceDisplayName } from '@/lib/deviceName';
 import {
   useCallback,
@@ -2441,7 +2442,7 @@ export function ChatInput({
     editable: !composerEditorLocked,
     extensions: [
       Document,
-      Paragraph,
+      Paragraph.configure({ HTMLAttributes: { dir: 'auto' } }),
       Text,
       ComposerListItem,
       ComposerBulletList,
@@ -10810,7 +10811,7 @@ function VoiceInputButton({
           // (2026-07-22 用户定稿:裸态只用于 +/权限/模型;语音/发送常驻框,create-agent 不再分叉)。
           // 宽度由 inline style 驱动,标签溢出裁剪。
           'h-[30px] justify-start overflow-hidden p-0',
-          'bg-[var(--composer-pill-bg,#FCFCFC)] dark:bg-[var(--composer-pill-bg,#393838)] border border-[var(--border-default)] text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]' /* spec 2026-07-17, token by 一哥 */,
+          'bg-[var(--composer-pill-bg)] border border-[var(--border-default)] text-[var(--composer-pill-icon)]' /* spec 2026-07-17, token by 一哥 */,
           'hover:bg-[var(--model-trigger-hover)]',
           // 录音态:与主题同极性的 chip 填充(light 亮灰 / dark 深灰),红点 + 计时承担状态信号
           (activeRecording || stopping) &&
