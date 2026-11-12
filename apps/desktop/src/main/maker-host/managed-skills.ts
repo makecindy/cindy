@@ -8,10 +8,12 @@ import { createManagedSkills, type ManagedSkill } from './managedSkillsCore.js';
 
 // The listing lives in managedSkillsCore.ts (shared with the Node Host); this
 // module binds the desktop plugin registry and keeps the Codex projection.
+// Ports resolve the cindy-brain functions when called, not when this module
+// loads: the two modules import each other and this one is evaluated first.
 const managedSkills = createManagedSkills({
-  listAvailableGhosts: listAvailableGhostsAsync,
-  getGhostManager,
-  loadGhostFirstPartyFactsForGhost,
+  listAvailableGhosts: () => listAvailableGhostsAsync(),
+  getGhostManager: () => getGhostManager(),
+  loadGhostFirstPartyFactsForGhost: (id, purpose) => loadGhostFirstPartyFactsForGhost(id, purpose),
 });
 
 /** Reconcile the selected app-server home, including independently routed accounts. */
