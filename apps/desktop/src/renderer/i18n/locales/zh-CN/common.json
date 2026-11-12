@@ -11137,7 +11137,8 @@
         "capability": {
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
-          "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。"
+          "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。",
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连接你的 Cindy 后才能让 Cindy 替你干活（你的电脑上现在没有在线的 Cindy）。"
         }
       },
       "settings": {
@@ -11262,6 +11263,38 @@
           "failed": "失败了",
           "cancelled": "已取消",
           "timed-out": "已超时"
+        },
+        "label": "任务",
+        "untitled": "未命名任务",
+        "askedBy": "{{requester}} 让做的",
+        "pr": "PR #{{number}}",
+        "open": "打开任务「{{title}}」",
+        "live": {
+          "running": "进行中",
+          "waiting": "等待回复",
+          "idle": "空闲",
+          "failed": "出错了"
+        },
+        "othersSaid": "话题里其他人说的"
+      },
+      "assistant": {
+        "groupRecent": "群里最近的消息",
+        "groupNew": "群里的新消息",
+        "threadRecent": "话题里最近的消息",
+        "threadNew": "话题里的新消息",
+        "replyingTo": "回复「{{name}}」：{{text}}",
+        "earlierOmitted": "（更早的消息略去）",
+        "actingFor": "{{name}} · 替 {{person}}",
+        "checkout": {
+          "gitMissing": "（Cindy）这个群的项目 {{repo}} 还没下载到这台电脑：这台电脑还没有安装 git。{{guide}}装好后再 @Cindy，Cindy 会自动下载项目并在里面干活。",
+          "signInOpened": "（Cindy）这个群的项目 {{repo}} 还没下载到这台电脑：需要先连接你的 GitHub 账号。Cindy 已在这台电脑上打开 GitHub 登录，登录好后再 @Cindy，Cindy 会自动下载项目。",
+          "signIn": "（Cindy）这个群的项目 {{repo}} 还没下载到这台电脑：需要先连接你的 GitHub 账号。请在这台电脑的 Cindy 里登录 GitHub，然后再 @Cindy。",
+          "unavailable": "（Cindy）这个群的项目 {{repo}} 没能下载到这台电脑：你的 GitHub 账号可能没有这个仓库的权限，或者网络不通。确认能在 GitHub 上打开这个仓库后再 @Cindy。",
+          "installGit": {
+            "darwin": "在「终端」里运行 xcode-select --install，按提示装好即可。",
+            "win32": "从 https://git-scm.com/download/win 下载 Git 安装，一路默认即可。",
+            "linux": "用系统的软件包管理器安装 git（例如 sudo apt install git）。"
+          }
         }
       },
       "files": {
@@ -11465,10 +11498,21 @@
           "accessTools": "可用工具与资料",
           "replies": "伙伴怎么接话",
           "replyModeMentionedNote": "不 @ 人时，伙伴不会接话。",
+          "assistant": "群里的 Cindy",
+          "assistantHint": "谁 @ 它，就在谁自己的电脑上做。",
+          "replyModeAssistant": "Cindy 回答",
+          "replyModeAssistantNote": "由群里的 Cindy 回答。",
           "work": "分工",
           "ownFolder": "群自己的文件夹",
-          "projectDirHint": "分工时，伙伴们在这里干活。",
+          "projectDirHint": "只在这台电脑上生效。",
           "projectDirClearHint": "改用群自己的文件夹",
+          "project": "项目",
+          "projectCaption": "伙伴在群里回复和分工都在这个项目里做。仓库全群共享，文件夹只存在这台电脑上。",
+          "githubRepo": "GitHub 仓库",
+          "githubRepoHint": "填 owner/name。没选文件夹的电脑会用本机的这个项目，没有就自动下载一份。",
+          "githubRepoSaveFailed": "仓库没有保存，请检查后再试。",
+          "projectFolder": "这台电脑上的文件夹",
+          "projectDirAutoHint": "按仓库自动找到的本机项目。",
           "organizerHint": "安排谁做哪一步；默认是第一位伙伴。",
           "autoContinueHint": "关闭时，每一步都等你点「继续」。",
           "workCaption": "选了 git 项目时，每次分工都会新开分支，不动你手上的代码。项目文件夹和自动交接只在这台电脑上生效。",
@@ -14214,6 +14258,8 @@
       "sessionSentNamed": "由任务「{{name}}」发送",
       "sessionViewSource": "查看来源任务",
       "botSentNamed": "由伙伴「{{name}}」发送",
+      "groupThreadSent": "由「{{name}}」在群聊「{{group}}」的话题里发送",
+      "groupRequestSent": "来自群「{{group}}」· {{name}}",
       "orcaFromLead": "来自 Lead 的消息",
       "orcaFromWorker": "来自 Worker 的消息",
       "orcaFromWorkerBatch": "系统回传的 {{count}} 条 Worker 结果",
