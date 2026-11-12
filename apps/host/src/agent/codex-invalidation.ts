@@ -82,6 +82,11 @@ export async function invalidateHostCodexLogin(input: {
   credentialAttribution?: 'unproven';
   /** Whether a login of the native connection is in progress (the account service's). */
   loginInProgress?: () => boolean;
+  /**
+   * The desktop's isCodexDisconnectCurrent: whether the owner that started this invalidation is
+   * still current. The cleanup stops where the desktop's logout stops once it is not.
+   */
+  isCurrent?: () => boolean;
   /** The desktop's onLogoutSuccess: retire the local Codex host holding the old token. */
   disposeLocalHost?: () => Promise<void>;
   /** The desktop's onInvalidatedBroadcast, called last, after the marker write and cleanup. */
@@ -146,6 +151,20 @@ export async function invalidateHostCodexLogin(input: {
   try { unbindNativeProviderAuth('openai'); } catch (error) {
     log.warn('early unbind after Codex invalidation failed', { error: errorText(error) });
   }
+  await cleanUpAfterInvalidation(input, authPath, committed || fallbackCommitted);
+  await announce(input, credentialScope);
+  return committed || fallbackCommitted ? 'invalidated' : 'failed';
+}
+
+/**
+ * The desktop's logout({ preserveInvalidatedReason }) cleanup (runLogout, disconnectCodexOAuth), in
+ * its order. As there, each step runs only while the owner that started it is still current
+ * (isCodexDisconnectCurrent before the removal, after it, after the host retirement and after the
+ * models cache): what is left belongs to the next owner, whose binding the last unbind would clear.
+ */
+async function cleanUpAfterInvalidation(input: Parameters<typeof invalidateHostCodexLogin>[0], authPath: string, committed: boolean) {
+  const current = () => { try { return input.isCurrent?.() ?? true; } catch { return false; } };
+  if (!current()) return;
   try {
     // As the desktop's disconnectCodexOAuth: a server invalidation never removes auth.json when the
     // profile's entry is the system login's own (codex-home is, or links to, ~/.codex). Checked
@@ -156,21 +175,22 @@ export async function invalidateHostCodexLogin(input: {
       await fs.promises.rm(authPath, { force: true });
     }
   } catch (error) {
-    log.warn(committed || fallbackCommitted
+    log.warn(committed
       ? 'remove Codex auth.json after committed invalidation failed; credential remains suppressed'
       : 'remove Codex auth.json after uncommitted invalidation failed', { error: errorText(error) });
   }
+  if (!current()) return;
   try { await input.disposeLocalHost?.(); } catch (error) {
     log.warn('Codex host disposal after invalidation failed', { error: errorText(error) });
   }
+  if (!current()) return;
   try { await fs.promises.rm(path.join(input.codexHome, 'models_cache.json'), { force: true }); } catch (error) {
     log.warn('remove stale Codex models_cache.json failed', { error: errorText(error) });
   }
+  if (!current()) return;
   try { unbindNativeProviderAuth('openai'); } catch (error) {
     log.warn('unbind Codex OAuth provider after invalidation failed', { error: errorText(error) });
   }
-  await announce(input, credentialScope);
-  return committed || fallbackCommitted ? 'invalidated' : 'failed';
 }
 
 async function announce(input: Parameters<typeof invalidateHostCodexLogin>[0], credentialScope: CredentialScope) {

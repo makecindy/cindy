@@ -55,6 +55,7 @@ type HostInvalidation = {
     codexHome: string; reason: string; credentialGeneration?: string | null;
     credentialAttribution?: 'unproven'; loginInProgress?: () => boolean; hostBound?: boolean;
     providerId?: string; isCodexAccountProvider?: (providerId: string) => boolean;
+    isCurrent?: () => boolean; disposeLocalHost?: () => Promise<void>;
     onInvalidated?: (credentialScope: string) => void;
   }): Promise<string>;
 };
@@ -368,3 +369,42 @@ describe('a failure reported with the provider of the task', () => {
   }
 });
 
+
+/**
+ * The desktop's logout cleanup stops once the owner that started it is no longer current
+ * (isCodexDisconnectCurrent): what is left belongs to the next owner. Here the owner changes while
+ * the local Codex host is retired, and the next owner claims the native login right away; its
+ * binding must survive, and the models cache stays for it.
+ */
+describe('an owner change during the invalidation cleanup', () => {
+  it('stops the cleanup at the same step on both, keeping the next owner binding', async () => {
+    const { activeOwnerScopeKey } = await import('../../appSessionState.js');
+    const switchOwner = () => {
+      h.dataOwnerId = 'owner-b';
+      bindNativeProviderAuth('openai', { instanceIsolated: true });
+    };
+    const outcome = (p: ReturnType<typeof profile>) => ({
+      authFile: fs.existsSync(p.authPath),
+      modelsCache: fs.existsSync(path.join(p.codexHome, 'models_cache.json')),
+      nextOwnerBound: isNativeProviderAuthBound('openai'),
+      marker: readInvalidatedSystemCodexAuthMarker(p.codexHome)?.reason ?? null,
+    });
+
+    const byDesktop = profile();
+    const adapter = new DesktopCodexAuthAdapter();
+    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({ authenticated: true });
+    adapter.setOnLogoutSuccess(async () => { switchOwner(); });
+    await adapter.invalidate('token_revoked', { credentialGeneration: JSON.stringify(currentCodexCredentialGeneration(byDesktop.authPath)) });
+    const afterDesktop = outcome(byDesktop);
+
+    const byHost = profile();
+    const owner = activeOwnerScopeKey();
+    await host.invalidateHostCodexLogin({ codexHome: byHost.codexHome, reason: 'token_revoked',
+      credentialGeneration: JSON.stringify(currentCodexCredentialGeneration(byHost.authPath)),
+      isCurrent: () => activeOwnerScopeKey() === owner, disposeLocalHost: async () => { switchOwner(); } });
+    const afterHost = outcome(byHost);
+
+    expect(afterHost).toEqual(afterDesktop);
+    expect(afterHost).toEqual({ authFile: false, modelsCache: true, nextOwnerBound: true, marker: 'token_revoked' });
+  });
+});

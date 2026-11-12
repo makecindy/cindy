@@ -165,6 +165,8 @@ export function createHostCodexRuntime(options: {
       // The engine reports with a context; the subscription bridge reports without one.
       hostBound: context !== undefined,
       loginInProgress: () => options.config.codexAccounts.isCodexAccountLoginActive('openai'),
+      // The desktop's isCodexDisconnectCurrent: this runtime's owner, without a pending boundary.
+      isCurrent: current,
       // The desktop's invalidation runs logout(), whose cleanup calls onLogoutSuccess.
       disposeLocalHost: () => authBoundary.afterLogout(),
       onInvalidated: credentialScope => authBoundary.afterInvalidation(reason, credentialScope) });
