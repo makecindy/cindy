@@ -437,10 +437,9 @@ describe('sendToSession ordering', () => {
 
   it('awaits Git baseline capture after send_to_session user row persistence and before dispatch', () => {
     // The dispatch boundary moved verbatim to a leaf shared with the Node Host.
-    const changeSetBlock = dispatchBoundarySource.slice(
-      dispatchBoundarySource.indexOf('async function beginTurnChangeSetAtDispatch'),
-    );
-    expect(changeSetBlock.length).toBeGreaterThan(0);
+    const changeSetStart = dispatchBoundarySource.indexOf('async function beginTurnChangeSetAtDispatch');
+    expect(changeSetStart).toBeGreaterThanOrEqual(0);
+    const changeSetBlock = dispatchBoundarySource.slice(changeSetStart);
     expect(source).toContain("import { beginTurnChangeSetAtDispatch } from '../turn-change-set/dispatchBoundary.js';");
     const helperBlock = extractBetween(
       source,
