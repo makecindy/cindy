@@ -35,7 +35,6 @@
 
 import type { AgentKind } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext, isDeviceLinkInvoke, runOutsideDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
-import { parseOrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { createSharedTaskPendingSelectionGuard, createSharedTaskSettingGuard } from './sharedTaskSetting.js';
 
@@ -733,9 +732,8 @@ export async function performSessionAgentSwitch(
      */
     forceRelocation?: boolean;
     /**
-     * 仅限 main 内部(不接受 IPC 传入)：供应商组为这个任务换电脑——引擎与模型不变、只换 Agent 所在位置。
-     * 协同任务(Lead / Worker)不接受用户换引擎或换位置，只接受这一种切换(docs/product-rules/provider-groups.md §6.1)。
-     * 只在 applyNow 时生效。
+     * 仅限 main 内部(不接受 IPC 传入)：供应商组为这个任务换电脑——引擎与模型不变、只换 Agent 所在位置
+     * (docs/product-rules/provider-groups.md §6.1)。只在 applyNow 时生效。
      */
     providerGroupRelocation?: boolean;
     /**
@@ -814,17 +812,11 @@ export async function performSessionAgentSwitch(
     throwIpcError('SSH_HARNESS_SWITCH_UNSUPPORTED', 'agent switch is not supported for remote sessions');
   }
   // Orca Lead / Worker tasks live on this computer, so moving their Agent works like
-  // a normal task (2026-10-16). An execution-device Worker's task lives on that device;
-  // its Agent only moves through the provider group's internal relocation.
-  const providerGroupRelocationOnly =
-    params.providerGroupRelocation === true &&
-    params.applyNow === true &&
-    normalizeDbAgentKind(row.agentKind) === makerToDbAgentKind(targetAgentKind) &&
-    row.model === model;
-  if (parseOrcaRemoteLead(row.orcaRemoteLead) &&
-      params.agentDeviceId !== undefined && !providerGroupRelocationOnly) {
-    throwIpcError('UNSUPPORTED_CAPABILITY', 'agent relocation is not supported for Orca sessions');
-  }
+  // a normal task (2026-10-16). An execution-device Worker's task also lives on this
+  // computer (the one it runs on); since 2026-11-12 its Agent moves through the same
+  // deferred handoff. Its remote-Lead identity is restored from the DB on rebuild, and
+  // the send transaction refuses to deliver to the old Agent while an intent is pending.
+  // Controllers only offer this when the host declares supportsOrcaRemoteWorkerAgentRelocation.
   if (params.beforeMutation) await params.beforeMutation();
   params.assertSelectionCurrent?.();
 
