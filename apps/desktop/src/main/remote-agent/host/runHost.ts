@@ -1,6 +1,7 @@
 import type { GeneratedImageUpstream } from '../../cindy-media/generatedImageJournal';
 import { remoteAgentStartupTiming } from '../startupTiming';
 import { RemoteTurnTerminalOwnership, startsRemoteProductTurn } from '../turnLifecycle';
+import { isProductTurnDoneEvent } from '@cindy/maker-shared/turn-continuation';
 import { parseProviderSharePeer, providerShareGuestPeer } from '@cindy/device-link';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits, type RemoteAgentLimitUsage } from '../../../shared/remoteAgentLimits.js';
 /**
@@ -1841,7 +1842,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
               .catch(() => null);
             if (run.closing) break;
             if (token) append(run, { t: 'state', state: { [GROUP_SWITCH_STATE_KEY]: token } });
-          } else if (event.type === 'done') {
+          } else if (isProductTurnDoneEvent(event)) {
             noteGroupSwitchTurnEnded(run, groupTurnFailed || !!run.quotaFailure);
             groupTurnFailed = false;
           }
@@ -2299,7 +2300,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
               return;
             }
           }
-          if ((event as { type?: unknown }).type === 'done') {
+          if (isProductTurnDoneEvent(typed)) {
             noteGroupSwitchTurnEnded(run, turnFailed || !!run.quotaFailure);
             turnFailed = false;
           }

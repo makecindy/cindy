@@ -2245,6 +2245,35 @@ describe('provider group "switch to another computer" for shared users', () => {
       } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
     });
 
+  it.each((['local', 'member'] as const).flatMap(placement =>
+    (['codex', 'claude-code'] as const).flatMap(source =>
+      (['eof', 'product-done', 'stop'] as const).map(ending => ({ placement, source, ending })))))(
+    'keeps a claimed SDK boundary nonterminal on $placement ($source, $ending)', async ({ placement, source, ending }) => {
+      const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+        { kind: 'member', ...MEMBER_STUDIO }], switchWorthy: failure => failure.reason === 'remote_agent_closed' });
+      const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+      try {
+        await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+        const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+        record.emit({ type: 'text', source, data: { text: 'foreground progress' } } as AgentEvent);
+        await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'text'));
+        if (ending === 'stop') await guest.client.call('abort', []);
+        record.emit({ type: 'status', source, turnContinuationId: 7, data: { isRunning: false } } as AgentEvent);
+        record.emit({ type: 'done', source, turnContinuationId: 7, data: {} } as AgentEvent);
+        await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'done'));
+        if (ending === 'product-done') {
+          record.emit({ type: 'done', source, data: {} } as AgentEvent);
+          await waitFor(() => guest.stream.filter(item => item.t === 'event' && item.event.type === 'done').length === 2);
+        }
+        record.end();
+        await waitFor(() => guest.isClosed());
+        expect(env.relay.noteRunFailure).toHaveBeenCalledTimes(ending === 'eof' ? 1 : 0);
+        if (ending === 'eof') expect(env.relay.noteRunFailure.mock.calls[0][2]).toMatchObject({ reason: 'remote_agent_closed' });
+        expect(switchTokenIn(guest.stream) !== undefined).toBe(ending === 'eof');
+        expect(record.sends).toHaveLength(1);
+      } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+    });
+
   it.each(['local', 'member'] as const)('keeps a prior done from settling a new %s send', async placement => {
     const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
       { kind: 'member', ...MEMBER_STUDIO }] });

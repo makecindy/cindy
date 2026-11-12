@@ -2,6 +2,7 @@
  * Match Session's provider-initiated turn boundary, rather than busy snapshots.
  */
 import { isTerminalAgentErrorEvent, type AgentEvent } from '@cindy/maker-core';
+import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 
 export function startsRemoteProductTurn(event: AgentEvent): boolean {
   if (event.turnScope === 'background') return false;
@@ -48,6 +49,7 @@ export class RemoteTurnTerminalOwnership {
 
   observe(event: AgentEvent): boolean {
     if (event.turnScope === 'background') return false;
+    if ((event.type === 'done' || event.type === 'status') && isTurnContinuationBoundaryEvent(event)) return false;
     if (startsRemoteProductTurn(event)) {
       this.priorGeneration = null;
       this.terminalKind = null;

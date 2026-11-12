@@ -48,6 +48,23 @@ function fixture(agentKind: 'codex' | 'claude-code' = 'codex') {
 }
 
 describe('remote stream close settles the product turn', () => {
+  it('does not let a claimed SDK boundary consume the prior send fence', () => {
+    const owner = new RemoteTurnTerminalOwnership();
+    owner.beginSend(false, 'first');
+    owner.acceptSend('first');
+    owner.observe({ type: 'text', source: 'codex', data: { text: 'first progress' } });
+    owner.beginSend(true, 'second');
+    owner.acceptSend('second');
+    expect(owner.observe({ type: 'status', source: 'codex', turnContinuationId: 7, data: { isRunning: false } })).toBe(false);
+    expect(owner.observe({ type: 'done', source: 'codex', turnContinuationId: 7, data: {} })).toBe(false);
+    expect(owner.observe({ type: 'done', source: 'codex', data: {} })).toBe(false);
+    owner.observe({ type: 'text', source: 'codex', data: { text: 'second progress' } });
+    expect(owner.observe({ type: 'done', source: 'codex', data: {} })).toBe(true);
+    owner.beginSend(false, 'third');
+    expect(owner.observe({ type: 'error', source: 'codex', turnContinuationId: 7,
+      data: { isTerminal: true, message: 'continuation failed' } })).toBe(true);
+  });
+
   it('keeps an observed error fence across a late ordinary running snapshot', () => {
     const owner = new RemoteTurnTerminalOwnership();
     owner.beginSend(false, 'first');
