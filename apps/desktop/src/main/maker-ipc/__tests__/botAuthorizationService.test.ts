@@ -452,7 +452,7 @@ describe('Bot authorization transcript lifecycle (Grok parity)', () => {
   it.each(['resolve', 'submit'])('retires a rejected %s action when its recovery write also fails', async (operation) => {
     const h = harness();
     await h.service.request('s', { kind: 'plugin', id: 'p' });
-    const unavailable = new Error('Authorization owner or teammate is unavailable');
+    const unavailable = new Error("Authorization owner or buddy is unavailable");
     h.deps.adapter.mockRejectedValue(unavailable);
     h.deps.save.mockRejectedValue(unavailable);
     const accepted = operation === 'resolve' ? await h.click() : await h.service.submit(
@@ -467,7 +467,7 @@ describe('Bot authorization transcript lifecycle (Grok parity)', () => {
     expect(h.adapter.execute).not.toHaveBeenCalled();
     expect(h.deps.resume).not.toHaveBeenCalled();
     // A subsequent click must revalidate restoration, not reuse the invalid entry.
-    await expect(h.click()).rejects.toThrow('teammate is unavailable');
+    await expect(h.click()).rejects.toThrow('buddy is unavailable');
     expect(h.listeners.size).toBe(0);
     await h.service.dispose();
   });

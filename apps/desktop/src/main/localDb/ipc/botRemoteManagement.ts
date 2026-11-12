@@ -105,7 +105,7 @@ const getEditor = createBotRemoteEditors({ ...deps,
       source = await getBotRemoteResourceSource(input.id);
     }
     deps.assertOwner(owner);
-    if (source.status !== 'active') throwIpcError('PRECONDITION_FAILED', 'Teammate unavailable');
+    if (source.status !== 'active') throwIpcError('PRECONDITION_FAILED', 'Buddy unavailable');
     if (!source.canonicalSessionId && (!source.invitation || source.invitation.stage === 'ready')) await createBotCanonicalSession({ botId: source.id, expectedCanonicalSessionId: null, expectedProfileVersion: source.currentVersion });
     deps.assertOwner(owner);
   },
