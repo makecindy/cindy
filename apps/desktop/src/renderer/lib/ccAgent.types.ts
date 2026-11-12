@@ -106,6 +106,8 @@ export interface PluginModelRouteNote {
   effort?: string;
   reason?: string;
   why?: 'no-opinion' | 'failed' | 'unavailable-route';
+  /** 这行说明来自用户的模型组而不是插件(pluginName 是路线的名字)；缺省 = 插件。 */
+  source?: 'model-group';
 }
 
 /**
