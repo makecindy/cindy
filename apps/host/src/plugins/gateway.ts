@@ -128,6 +128,7 @@ export function createHostPluginGateway(options: GatewayOptions) {
     return result.ok ? pluginAppResult(result.result) : { isError: true,
       content: [{ type: 'text', text: JSON.stringify(result) }] };
   });
+  gateway.setPageControlGhostProvider(() => runtime.browserExtensions.getPageControl()?.instanceId ?? null);
   const provider: LiziMcpProvider = {
     name: 'cindy',
     capability: { title: 'Plugins and media', description: 'Discover installed plugins, their tools, accounts and media capabilities.',
