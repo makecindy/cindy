@@ -290,6 +290,7 @@ describe('provider catalog realm reload', () => {
           } },
         ] } } };
       const owner = h.owner;
+      h.owner = 'source-recovery-' + outcome;
       const previous = getActiveCatalog();
       let respond!: (response: Response) => void;
       h.sourceFetch.mockImplementationOnce(() => new Promise(resolve => { respond = resolve; }));
@@ -334,6 +335,41 @@ describe('provider catalog realm reload', () => {
       }
     },
   );
+
+  it('backs off failed source discovery per connection and retries after cooldown or credential changes', async () => {
+    const config: CustomProviderConfig = { id: 'source-retry', name: 'Gateway', auth: { method: 'none' },
+      runtimes: { pi: { baseUrl: 'http://127.0.0.1:43210/v1', wireProtocol: 'openai-chat', models: [
+        { id: 'supplier/model', name: 'Model', discoveredSource: { kind: 'magpie', providerId: 'supplier', snapshotId: 'old:receipt' } },
+      ] } } };
+    const owner = h.owner;
+    const previous = getActiveCatalog();
+    const clock = vi.spyOn(Date, 'now');
+    let now = 1000;
+    clock.mockImplementation(() => now);
+    h.owner = 'source-retry-owner';
+    h.customProviderRead.mockResolvedValue([config]);
+    h.sourceFetch.mockImplementation(async () => new Response('{}', { status: 503 }));
+    try {
+      setCustomProviders([buildUserProvider(config)]);
+      await refreshCustomProviderModelSources();
+      await refreshCustomProviderModelSources();
+      expect(h.sourceFetch).toHaveBeenCalledOnce();
+      now += 5 * 60_000;
+      await refreshCustomProviderModelSources();
+      expect(h.sourceFetch).toHaveBeenCalledTimes(2);
+      h.credentialRevision++;
+      await refreshCustomProviderModelSources();
+      expect(h.sourceFetch).toHaveBeenCalledTimes(3);
+    } finally {
+      clock.mockRestore();
+      h.owner = owner;
+      h.credentialRevision = 0;
+      h.customProviderRead.mockReset();
+      h.sourceFetch.mockReset().mockRejectedValue(new Error('offline'));
+      setCustomProviders([]);
+      setActiveCatalog(previous);
+    }
+  });
 
   // Upgrade 2026-11-11, standard: real loader/view wiring must import only native
   // Codex connections and keep their model membership under the canonical supplier.

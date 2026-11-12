@@ -95,6 +95,7 @@ import { readModelDisableOverrides } from './model-disable-store.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
 import { updateCustomProviderIfUnchanged } from './custom-provider-store.js';
 import { restoreProviderModelSources } from './provider-model-fetch.js';
+import { PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS } from './provider-model-auto-refresh.js';
 import { migrateManagedOllamaProvider } from '../local-model-runtime/managedOllamaProvider.js';
 import { migrateLocalConnectProvider } from '../../shared/localConnectHarness.js';
 import {
@@ -641,13 +642,19 @@ export async function refreshDiscoveredCodexModels(
 // the in-memory routing catalog until the next full app restart.
 let customProviderCatalogRefreshGeneration = 0;
 
-let sourceRestore: { owner: string; promise: Promise<void> } | null = null;
+let sourceRestore: {
+  owner: string;
+  promise: Promise<void> | null;
+  retries: Map<string, { revision: number; after: number }>;
+} | null = null;
 
 /** Background model-list hints restore only the supplier metadata hidden on restart. */
 export function refreshCustomProviderModelSources(): Promise<void> {
   const owner = activeOwnerScopeKey();
   if (isAppSessionBoundaryPending()) return Promise.resolve();
-  if (sourceRestore?.owner === owner) return sourceRestore.promise;
+  if (sourceRestore?.owner !== owner) sourceRestore = { owner, promise: null, retries: new Map() };
+  const state = sourceRestore;
+  if (state.promise) return state.promise;
   const scopeIsCurrent = () => owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending();
   const promise = (async () => {
     const revisions = new Map(getActiveCatalog().providers.map(provider =>
@@ -658,18 +665,22 @@ export function refreshCustomProviderModelSources(): Promise<void> {
     const updates = await Promise.all(configs.map(async config => {
       const revision = revisions.get(config.id);
       if (revision === undefined || isProviderDisabled(access, config.id)) return false;
+      const retry = state.retries.get(config.id);
+      if (retry?.revision === revision && Date.now() < retry.after) return false;
       const isCurrent = () => scopeIsCurrent() && !isProviderRouteMutationInProgress(config.id)
         && getProviderRouteCredentialRevision(config.id) === revision;
       const restored = await restoreProviderModelSources(config,
         agent => readCustomProviderKey(config.id, agent), isCurrent);
-      return restored && isCurrent()
-        ? updateCustomProviderIfUnchanged(config.id, config, restored) : false;
+      if (!isCurrent()) return false;
+      // A partial recovery can still leave another runtime's directory unavailable.
+      state.retries.set(config.id, { revision, after: Date.now() + PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS });
+      return restored ? updateCustomProviderIfUnchanged(config.id, config, restored) : false;
     }));
     if (updates.some(Boolean) && scopeIsCurrent()) await refreshCustomProvidersIntoCatalog(scopeIsCurrent);
   })().finally(() => {
-    if (sourceRestore?.promise === promise) sourceRestore = null;
+    if (state.promise === promise) state.promise = null;
   });
-  sourceRestore = { owner, promise };
+  state.promise = promise;
   return promise;
 }
 
