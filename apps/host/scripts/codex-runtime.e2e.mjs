@@ -78,6 +78,7 @@ const { createHostProviderConfig } = await import('../src/agent/provider-config.
 const { createHostModelAccess } = await import('../src/agent/model-access.ts');
 const { createHostCodexRuntime } = await import('../src/agent/codex-runtime.ts');
 const { createHostMcpRuntime } = await import('../src/agent/mcp-runtime.ts');
+const { ownerScopedUserDataPath } = await import('../../desktop/src/main/appSessionState.ts');
 const { createHostAgentGraph } = await import('../src/agent/runtime.ts');
 const { createCredentialStore } = await import('../src/credentials/store.mjs');
 const { hostRuntimeLayout } = await import('../src/runtime-layout.mjs');
@@ -336,6 +337,28 @@ try {
   const visible = toolScenario.output.includes(CODEX_PROXY_TOKEN_ENV);
   toolScenario = null;
   console.log(`PASS a Codex tool command ran inside the task; it ${visible ? 'can' : 'cannot'} read ${CODEX_PROXY_TOKEN_ENV}, which only this runtime's loopback proxies accept`);
+
+  // 2. A review through a Codex profile in the customized auxiliary chain (release table row 4):
+  //    maker.oneShot('codex') reuses the local Codex host, so the request crosses this runtime's
+  //    loopback proxy and must carry its token. The fixture's answer is not a review verdict,
+  //    so the tool-loop review continues; what matters is the route.
+  const chainFile = ownerScopedUserDataPath('auxiliary-model-settings.json');
+  await fs.mkdir(path.dirname(chainFile), { recursive: true });
+  await fs.writeFile(chainFile, JSON.stringify({ models: ['codex-gpt-5.4-mini'] }));
+  const rejectedBeforeReview = rejectedCount(await logText());
+  const requestsBeforeReview = requests.length;
+  const loopDecision = await graph.autoReview.toolLoopReviewer({
+    sessionId: 'loop-review', agentKind: 'pi', model: 'fixture-model', userIntent: 'Fix the build',
+    verdict: { reason: 'same call', count: 8, toolName: 'bash' },
+    evidence: [0, 1, 2].map(i => ({ toolName: 'bash', input: { command: 'make' }, output: 'error: missing header', isError: true, startedAt: i, finishedAt: i + 1 })),
+  }, { signal: AbortSignal.timeout(90_000) });
+  await fs.rm(chainFile, { force: true });
+  const reviewRequests = requests.slice(requestsBeforeReview);
+  assert.ok(reviewRequests.length >= 1, 'the review reached the upstream through Codex');
+  assert.ok(reviewRequests.every(request => request.url.endsWith('/responses')), 'as Codex Responses requests');
+  assert.equal(rejectedCount(await logText()), rejectedBeforeReview, 'no review request was refused at the gate');
+  assert.equal(loopDecision, 'continue');
+  console.log(`PASS a tool-loop review through a Codex profile crosses the loopback proxy with its token (${reviewRequests.length} upstream request(s), 0 refusals)`);
 
   // A synthetic ChatGPT login in the profile, so the next host uses cindy_openai with WebSockets.
   // Token and revoke URLs point at the fixture; HTTPS goes through the fixture, which refuses tunnels.
