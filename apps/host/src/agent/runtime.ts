@@ -9,6 +9,7 @@ import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../deskt
 import { ClaudeCodeAgent } from '@cindy/maker-core/agents/claude-code';
 import { CodexAgent } from '@cindy/maker-core/agents/codex';
 import { Maker, PiAgent } from '@cindy/maker-core';
+import type { AgentDeps, AgentKind, AuthAdapter, AuthAdapterOptions, AuthLoginOptions, AuthState, MakerDeps, MakerMemoryManager } from '@cindy/maker-core';
 
 import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claude-native-auth.ts';
 import { createMakerLogger } from '../../../desktop/src/main/maker-host/logger-adapter.js';
@@ -22,27 +23,57 @@ import { GatewayCodexRestartService } from '../../../desktop/src/main/maker-ipc/
 import { createDeferredRestartSettledWake } from '../../../desktop/src/main/maker-ipc/deferredRestartQueueWiring.js';
 import { refreshCodexGatewayRuntime } from '../../../desktop/src/main/maker-host/codexGatewayRefresh.js';
 import { isLocalSessionBusy } from '../../../desktop/src/main/maker-host/codex-credential-switch.js';
+import type { createHostProviderConfig } from './provider-config.js';
+import type { createHostMcpRuntime } from './mcp-runtime.js';
+import type { createHostCodexRuntime } from './codex-runtime.js';
+
+type HostProviderConfig = ReturnType<typeof createHostProviderConfig>;
+
+/** The live gateway view from model-access.ts; it never retains a replaced key. */
+export interface HostGateway { readonly endpoint?: string; readonly credential?: string | null }
+
+/** A selected custom provider's route (provider-credentials.mjs). */
+export interface HostProviderRoute { anthropicBaseUrl: string; apiKey?: string | null }
+export type HostProviderRouteResolver = (providerId: string, agent: AgentKind) => Promise<HostProviderRoute | null>;
+
+export interface HostAgentGraphOptions {
+  userDataDir: string;
+  providerConfig: HostProviderConfig;
+  mcpRuntime: ReturnType<typeof createHostMcpRuntime>;
+  codexRuntime?: ReturnType<typeof createHostCodexRuntime> | null;
+  storage: MakerDeps['storage'];
+  gateway?: HostGateway | null;
+  resolveProviderRoute?: HostProviderRouteResolver;
+  binaryPath?: string | null;
+  codexBinaryPath?: string;
+  piBinaryPath?: string;
+  makerMemory?: MakerMemoryManager;
+  mcpProviders?: NonNullable<AgentDeps['mcpProviders']>;
+  onSessionClose?: (id: string) => unknown;
+  isSessionInTurn?: (id: string) => boolean;
+  wakeSession?: (id: string, reason: string) => void;
+}
 
 export const LOGGER = createMakerLogger('maker');
 
-const missingRouteResolver = async () => { throw new Error('Provider credential resolver is unavailable'); };
+const missingRouteResolver: HostProviderRouteResolver = async () => { throw new Error('Provider credential resolver is unavailable'); };
 
 /** A credential adapter retained by an outgoing task cannot authenticate a new owner. */
-function bindAuthOwner(adapter) {
+function bindAuthOwner<T extends AuthAdapter>(adapter: T): T {
   const owner = activeOwnerScopeKey();
   const current = () => activeOwnerScopeKey() === owner && !isAppSessionBoundaryPending();
   const check = () => { if (!current()) throw new Error('AUTH_OWNER_CHANGED'); };
   return {
     ...adapter,
-    async getState(options) {
+    async getState(options?: AuthAdapterOptions) {
       if (!current()) return { authenticated: false, errorReason: 'owner_changed' };
       const state = await adapter.getState(options);
       return current() ? state : { authenticated: false, errorReason: 'owner_changed' };
     },
-    async getAuthEnv(options) {
+    async getAuthEnv(options?: AuthAdapterOptions) {
       check(); const env = await adapter.getAuthEnv(options); check(); return env;
     },
-    async triggerLogin(options) { check(); const state = await adapter.triggerLogin(options); check(); return state; },
+    async triggerLogin(options?: AuthLoginOptions) { check(); const state = await adapter.triggerLogin(options); check(); return state; },
     async logout() { check(); await adapter.logout(); check(); },
   };
 }
@@ -52,11 +83,11 @@ function bindAuthOwner(adapter) {
  * Subscription-only view: state comes from the shared verdict, and the lane
  * injects no credentials because the CLI authenticates itself.
  */
-export function createClaudeSubscriptionAuth(gateway, resolveRoute = missingRouteResolver, cli) {
+export function createClaudeSubscriptionAuth(gateway: HostGateway | null | undefined, resolveRoute: HostProviderRouteResolver = missingRouteResolver, cli?: HostProviderConfig['claudeNative']) {
   const owner = activeOwnerScopeKey();
   const current = () => owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending();
   return bindAuthOwner({
-    async getState(opts) {
+    async getState(opts?: AuthAdapterOptions) {
       if (opts?.providerId && !['xd', 'cindy', 'anthropic'].includes(opts.providerId)) {
         try { await resolveRoute(opts.providerId, 'claude-code'); return { authenticated: true, authSource: 'api-key', identity: opts.providerId }; }
         catch { return { authenticated: false, errorReason: 'not_connected' }; }
@@ -66,7 +97,7 @@ export function createClaudeSubscriptionAuth(gateway, resolveRoute = missingRout
         ? { authenticated: true, authSource: 'oauth', identity: 'Claude subscription' }
         : { authenticated: false, errorReason: 'not_connected' };
     },
-    async triggerLogin() {
+    async triggerLogin(_options?: AuthLoginOptions) {
       if (!cli) throw new Error('Claude CLI is unavailable');
       const signal = cli.beginClaudeCliLogin();
       const result = await cli.runClaudeCliLogin(signal);
@@ -80,7 +111,7 @@ export function createClaudeSubscriptionAuth(gateway, resolveRoute = missingRout
       cli?.cancelClaudeCliLogin();
       unbindNativeProviderAuth('anthropic', { revoked: true });
     },
-    async getAuthEnv(opts) {
+    async getAuthEnv(opts?: AuthAdapterOptions) {
       const custom = opts?.providerId && !['xd', 'cindy', 'anthropic'].includes(opts.providerId) ? await resolveRoute(opts.providerId, 'claude-code') : null;
       if (custom) {
         return {
@@ -93,14 +124,11 @@ export function createClaudeSubscriptionAuth(gateway, resolveRoute = missingRout
   });
 }
 
-/**
- * @param {{binaryPath: string, storage: unknown, makerMemory?: unknown}} options
- */
 /** Gateway-key lane: the key is injected as ANTHROPIC_API_KEY for the CLI spawn. */
-export function createClaudeGatewayAuth(gateway, resolveRoute = missingRouteResolver, cli) {
+export function createClaudeGatewayAuth(gateway: HostGateway | null | undefined, resolveRoute: HostProviderRouteResolver = missingRouteResolver, cli?: HostProviderConfig['claudeNative']) {
   const native = createClaudeSubscriptionAuth(null, resolveRoute, cli);
   return bindAuthOwner({
-    async getState(opts) {
+    async getState(opts?: AuthAdapterOptions) {
       if (opts?.providerId === 'anthropic' || opts?.credentialMode === 'oauth-bearer') return native.getState(opts);
       if (!opts?.providerId && !opts?.credentialMode && !gateway?.credential) return native.getState(opts);
       if (opts?.providerId && opts.providerId !== 'xd' && opts.providerId !== 'cindy') {
@@ -110,10 +138,10 @@ export function createClaudeGatewayAuth(gateway, resolveRoute = missingRouteReso
       return gateway?.credential ? { authenticated: true, authSource: 'api-key', identity: 'Cindy gateway' }
         : { authenticated: false, errorReason: 'no_key' };
     },
-    triggerLogin: options => native.triggerLogin(options),
+    triggerLogin: (options?: AuthLoginOptions) => native.triggerLogin(options),
     cancelLogin: () => native.cancelLogin(),
     logout: () => native.logout(),
-    async getAuthEnv(opts) {
+    async getAuthEnv(opts?: AuthAdapterOptions) {
       if (opts?.providerId === 'anthropic' || opts?.credentialMode === 'oauth-bearer') return native.getAuthEnv(opts);
       const custom = opts?.providerId && !['xd', 'cindy'].includes(opts.providerId) ? await resolveRoute(opts.providerId, 'claude-code') : null;
       if (custom) {
@@ -131,12 +159,13 @@ export function createClaudeGatewayAuth(gateway, resolveRoute = missingRouteReso
  * Codex reads the explicitly selected Host profile and the shared durable
  * invalidation rules. It never falls back to the system CLI authentication home.
  */
-export function createCodexLocalCliAuth(gateway, resolveRoute, codexHome, accounts, config) {
+export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined, resolveRoute: HostProviderRouteResolver | undefined, codexHome: string,
+  accounts?: HostProviderConfig['codexAccounts'], config?: HostProviderConfig) {
   if (!codexHome || !path.isAbsolute(codexHome)) throw new Error('Codex requires an explicit isolated profile');
   const owner = activeOwnerScopeKey();
   const current = () => owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending();
   return bindAuthOwner({
-    async getState(opts) {
+    async getState(opts?: AuthAdapterOptions) {
       if (opts?.nativeSubscriptionAccount) return opts.nativeSubscriptionAccount.readState();
       if (opts?.providerId && !['xd', 'cindy', 'openai'].includes(opts.providerId)) {
         if (accounts?.isCodexAccountProvider(opts.providerId)) return accounts.codexAccountState(opts.providerId);
@@ -144,22 +173,22 @@ export function createCodexLocalCliAuth(gateway, resolveRoute, codexHome, accoun
           if (config) {
             const provider = (await config.publicViews(Boolean(gateway?.credential))).find(item => item.id === opts.providerId);
             if (!provider?.connected || !provider.routing?.codex) throw new Error('Provider requires connection');
-          } else await resolveRoute(opts.providerId, 'codex');
+          } else await resolveRoute!(opts.providerId, 'codex');
           return { authenticated: true, authSource: 'api-key', identity: opts.providerId };
         }
         catch { return { authenticated: false, errorReason: 'not_connected' }; }
       }
-      const gatewayState = gateway?.credential
+      const gatewayState: AuthState = gateway?.credential
         ? { authenticated: true, authSource: 'api-key', identity: 'Cindy AI' }
         : { authenticated: false, errorReason: 'no_key' };
-      if (opts?.credentialMode === 'gateway-key' || ['xd', 'cindy'].includes(opts?.providerId)) return gatewayState;
+      if (opts?.credentialMode === 'gateway-key' || (['xd', 'cindy'] as Array<string | null | undefined>).includes(opts?.providerId)) return gatewayState;
       const native = isNativeProviderAuthBound('openai') ? await readCodexLocalAuthState(codexHome) : null;
       if (native?.authenticated && native.authSource === 'oauth') return native;
       if (opts?.providerId === 'openai' || opts?.credentialMode === 'oauth-bearer')
         return { authenticated: false, errorReason: native?.errorReason ?? 'oauth_not_bound' };
       return gatewayState;
     },
-    async triggerLogin(options) {
+    async triggerLogin(options?: AuthLoginOptions) {
       if (!accounts) throw new Error('Codex account service is unavailable');
       const result = await accounts.loginCodexAccount('openai', current, undefined, {
         mode: options?.mode === 'device-code' ? 'device-code' : 'browser', onProgress: options?.onProgress,
@@ -175,7 +204,7 @@ export function createCodexLocalCliAuth(gateway, resolveRoute, codexHome, accoun
       unbindNativeProviderAuth('openai', { revoked: true });
       await accounts.logoutCodexAccount('openai');
     },
-    async getAuthEnv(opts) {
+    async getAuthEnv(opts?: AuthAdapterOptions) {
       if (opts?.nativeSubscriptionAccount) {
         opts.nativeSubscriptionAccount.assertCurrent();
         return { CODEX_HOME: opts.nativeSubscriptionAccount.configDir };
@@ -197,7 +226,7 @@ export function createCodexLocalCliAuth(gateway, resolveRoute, codexHome, accoun
 }
 
 
-export function createHostAgentGraph(options) {
+export function createHostAgentGraph(options: HostAgentGraphOptions) {
   const mcpProviders = options.mcpProviders ?? [];
   const codexAuth = createCodexLocalCliAuth(options.gateway, options.resolveProviderRoute, path.join(options.userDataDir, 'codex-home'), options.providerConfig.codexAccounts, options.providerConfig);
   const config = options.providerConfig;
@@ -279,7 +308,7 @@ export function createHostAgentGraph(options) {
     ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
   });
   const owner = activeOwnerScopeKey();
-  const hostSessions = key => maker.listActiveSessions().filter(session => session.agentKind === 'codex'
+  const hostSessions = (key: string) => maker.listActiveSessions().filter(session => session.agentKind === 'codex'
     && !session.remoteHostId && (session.codexHostKey ?? 'local') === key);
   const gatewayRestart = new GatewayCodexRestartService({
     listHostKeys: () => codex?.getLocalHostKeysForCredentialMode('gateway-key') ?? [],
@@ -294,5 +323,5 @@ export function createHostAgentGraph(options) {
     logger: LOGGER,
   });
   return { maker, agent, codex, pi, gatewayRestart, capabilitiesByAgent, instances: agents,
-    agents: /** @type {import('@cindy/maker-core').AgentKind[]} */ (Object.keys(agents)) };
+    agents: Object.keys(agents) as AgentKind[] };
 }

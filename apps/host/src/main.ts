@@ -55,7 +55,7 @@ import { readAdoptedSessionState } from './credentials/session.mjs';
 import { refreshHostSession } from './auth/refresh.mjs';
 import { configureHostOwner, readClaudeSubscriptionState } from './agent/claude-auth.mjs';
 import { attachAgentsToMakerMemory, createHostMemoryManager, createHostMemoryMcpProviders } from './agent/memory.mjs';
-import { createHostAgentGraph } from './agent/runtime.mjs';
+import { createHostAgentGraph } from './agent/runtime.js';
 import { createHostMcpRuntime } from './agent/mcp-runtime.js';
 import { createHostAgentAuth } from './agent/auth-service.js';
 import { createLogger, initLogger } from '../../desktop/src/main/logger.js';

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createCodexLocalCliAuth, createClaudeGatewayAuth } from './runtime.mjs';
+import { createCodexLocalCliAuth, createClaudeGatewayAuth } from './runtime.ts';
 import { configureHostOwner } from './claude-auth.mjs';
 import { bindNativeProviderAuth, unbindNativeProviderAuth } from '../../../desktop/src/main/maker-host/nativeProviderAuthBinding.ts';
 import { createHostCodexCredentials } from './codex-credentials.ts';

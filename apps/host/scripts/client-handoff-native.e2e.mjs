@@ -229,7 +229,7 @@ const { createHostModelAccess } = await import("../src/agent/model-access.ts");
 const { createHostCodexRuntime } =
   await import("../src/agent/codex-runtime.ts");
 const { createHostMcpRuntime } = await import("../src/agent/mcp-runtime.ts");
-const { createHostAgentGraph } = await import("../src/agent/runtime.mjs");
+const { createHostAgentGraph } = await import("../src/agent/runtime.ts");
 const { createCredentialStore } = await import("../src/credentials/store.mjs");
 const { hostRuntimeLayout } = await import("../src/runtime-layout.mjs");
 const { openOwnerDatabase } =

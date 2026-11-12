@@ -53,7 +53,7 @@ const ROOT_SOURCE_CONTRACTS = new Map([
   ['scripts/__tests__/ensure-agent-binaries.test.mjs', 'runtime preparation startup wiring'],
   // Restart scripts and app bootstrap must agree on isolation/process boundaries.
   ['scripts/__tests__/restart-desktop-remote.test.mjs', 'restart and bootstrap isolation contracts'],
-  // Host hands maker-core engines only dependency keys maker-core reads (runtime.mjs is untyped JS).
+  // Host hands maker-core engines only dependency keys maker-core reads (spreads escape tsc's excess-key check).
   ['scripts/__tests__/host-agent-deps-contract.test.mjs', 'Host engine wiring and maker-core dependency keys'],
   // Packaged notice generation and both application entry points must stay wired.
   ['scripts/__tests__/third-party-notices.test.mjs', 'cross-platform bundled license contracts'],

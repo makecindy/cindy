@@ -1,9 +1,10 @@
 /*
  * 测试价值
  * - 规则依据：Host 交给 maker-core 引擎与 Maker 的依赖必须用 maker-core 读取的键名。
- *   apps/host/src/agent/runtime.mjs 是 JS，没有类型检查拦住写错的键；Host 曾把 Pi 的 MCP 桥写成
- *   `prepareMcpBridge`（AgentDeps 里没有），Host 上的 Pi 任务因此没有进程内 MCP。失效后果：
- *   写错的依赖被静默忽略，任务照常跑但缺能力。
+ *   Host 曾把 Pi 的 MCP 桥写成 `prepareMcpBridge`（AgentDeps 里没有），当时 runtime 还是没有类型检查的 JS，
+ *   Host 上的 Pi 任务因此没有进程内 MCP。失效后果：写错的依赖被静默忽略，任务照常跑但缺能力。
+ *   apps/host/src/agent/runtime.ts 现在受类型检查，对象字面量里的多余键由 tsc 拦下；展开进来的依赖包
+ *   不做多余键检查，所以本守护继续要求每个展开都来自登记过的 TS 类型化依赖包。
  * - 为什么是静态检查：键名对不对只能对照 maker-core 的类型声明；经生产入口的行为测试见
  *   apps/host/src/agent/agent-graph.test.mjs，它只覆盖 Pi 的桥。
  * - 最小失败输入：任一引擎构造参数里出现 AgentDeps 没有的键，或展开了一个不是 TS 类型化依赖包的对象。
@@ -67,7 +68,7 @@ function constructorKeys(sf, ctor) {
     ts.forEachChild(node, visit);
   };
   visit(sf);
-  assert.equal(found.length, 1, `expected one new ${ctor}({...}) in runtime.mjs`);
+  assert.equal(found.length, 1, `expected one new ${ctor}({...}) in runtime.ts`);
   return found[0];
 }
 
@@ -75,7 +76,7 @@ function constructorKeys(sf, ctor) {
 const TYPED_SPREADS = new Set(['options.mcpRuntime.codexDeps', 'options.codexRuntime?.deps', 'options.mcpRuntime.piDeps']);
 
 test('every key the Host hands an engine or Maker exists in the maker-core dependency types', () => {
-  const runtime = parse('apps/host/src/agent/runtime.mjs');
+  const runtime = parse('apps/host/src/agent/runtime.ts');
   const agentDeps = interfaceMembers('packages/maker-core/src/agents/base-agent.ts', 'AgentDeps');
   const makerDeps = interfaceMembers('packages/maker-core/src/maker.ts', 'MakerDeps');
   for (const [ctor, allowed] of [['ClaudeCodeAgent', agentDeps], ['CodexAgent', agentDeps], ['PiAgent', agentDeps], ['Maker', makerDeps]]) {

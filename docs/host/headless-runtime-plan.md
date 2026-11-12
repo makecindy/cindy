@@ -28,7 +28,7 @@ Host 仍是主动开启的实验功能。记录里的「本地」「未提交」
 | 范围 | 代码现状 | 必须完成的调整 |
 | --- | --- | --- |
 | 任务读取 | 普通列表、详情、历史、消息写入与子任务读取已共用；任务创建已复用原服务 | 逐步把数据库、投影和服务的依赖闭包移出 `desktop/main`，保持唯一 schema 和迁移链 |
-| 任务执行 | 共用 maker-core；Host 的 `agent/runtime.mjs`、队列、凭证装配仍另有实现 | 桌面和 Host 调用同一任务服务、Agent 装配与权限确认入口；删除被替代的 Host 分支 |
+| 任务执行 | 共用 maker-core；Host 的 `agent/runtime.ts`、队列、凭证装配仍另有实现 | 桌面和 Host 调用同一任务服务、Agent 装配与权限确认入口；删除被替代的 Host 分支 |
 | 重启恢复 | 客户端已有事件重放和快照恢复；Host 已使用共用持久队列和执行标记；异常恢复仍需端到端验收 | 共用持久队列、执行状态和中断恢复规则；不能靠客户端重新发送补偿 |
 | 远程客户端 | 已装配原 Device Link Client、完整 dispatcher、账号代次、撤销与 App 调用入口；多端实机未验收 | 把 Device Link 的被控入口与 Electron 适配拆开，沿用账号、设备、订阅、撤销与协议协商 |
 | 插件 | 已装配原 GhostManager/GhostRuntime、启用/设置服务、Chromium OS 沙箱和独立 Node worker；Claude/Codex/Pi 插件 MCP 实际调用通过 | 保留 GhostRuntime、安装回执和权限判断，提供无图形环境的沙箱与子进程适配器 |
@@ -1339,7 +1339,7 @@ Host 构造三个 agent 时一个都没传，也没有启动钩子，只有 Code
 ### 桌面与 Host 的装配差异
 
 逐项对比桌面（`apps/desktop/src/main/maker-host/index.ts`、`pi-host.ts`）与 Host
-（`apps/host/src/agent/runtime.mjs`、`codex-runtime.ts`、`mcp-runtime.ts`）给三个 agent 与 `Maker` 传的
+（`apps/host/src/agent/runtime.ts`，原 `runtime.mjs`；`codex-runtime.ts`、`mcp-runtime.ts`）给三个 agent 与 `Maker` 传的
 依赖。桌面给 Claude Code 传 34 项、Codex 48 项、Pi 45 项、Maker 8 项（生命周期钩子 9 个）；Host 分别是
 7、25、9（另有 1 项键名不对）、5（钩子 1 个）。状态：
 
@@ -1406,5 +1406,5 @@ cd apps/host && pnpm run test:ipc-route
   调用了什么。没有隔离开关，启动器的检查保证不了不调用模型，原计划的启动器 PR 已取消。
 - Pi MCP 桥的键名错误单独修（分支 `cindy/host-pi-mcp-bridge`），同时加一条守护：`runtime.mjs` 交给引擎与
   Maker 的键必须是 `AgentDeps`／`MakerDeps` 里有的键。
-- 以后单独做：让 `apps/host/src/agent/runtime.mjs` 受类型检查。它是 JS，引擎构造参数里写错的键今天只有上面
-  那条守护能拦；直接加 `// @ts-check` 会在这个文件里报 33 个现有的类型错误，要先逐个补类型。
+- 已在 M1 第 1 步完成：`runtime.mjs` 改名为 `apps/host/src/agent/runtime.ts` 并受类型检查。只补类型、不改运行逻辑；
+  对象字面量里写错的键由 tsc 拦下，展开进来的依赖包仍由上面那条守护管。

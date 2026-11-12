@@ -14,7 +14,7 @@ import { createLiziMcpProviders } from '../../../../packages/lizi-mcps/src/index
 
 import { dataOwnerStorageKey } from '../../../desktop/src/main/dataOwnerPath.ts';
 import { createBetterSqliteDatabase } from '../../../desktop/src/main/localDb/betterSqliteFactory.ts';
-import { LOGGER } from './runtime.mjs';
+import { LOGGER } from './runtime.ts';
 import { getActiveAppSession, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.ts';
 
 const DEFAULTS = Object.freeze({ maker: true, claudeCode: true, codex: true, pi: true });
