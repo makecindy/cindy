@@ -3710,8 +3710,8 @@ let powerMonitorHooked = false;
 
 /**
  * Tools that synthesize keyboard / pointer events and therefore move the system
- * idle clock. `set_value` (AX write), `launch_app`, recording and the like do not,
- * so they must not take the credit for a person's input that follows them.
+ * idle clock. `set_value` is checked separately against its actual driver path:
+ * an AX write, app launch or recording must not take credit for a person's input.
  */
 const HID_SYNTHESIZING_TOOLS: ReadonlySet<string> = new Set([
   'click', 'double_click', 'right_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll',
@@ -3731,17 +3731,25 @@ function isRefusedDriverResult(result: unknown): boolean {
  * snapshot) sent nothing and leaves the person's activity record untouched.
  */
 async function trackAgentInputDispatch<T>(name: string, run: () => Promise<T>): Promise<T> {
-  if (!HID_SYNTHESIZING_TOOLS.has(name)) return run();
+  const isSetValue = name === 'set_value';
+  if (!HID_SYNTHESIZING_TOOLS.has(name) && !isSetValue) return run();
   agentInputsInFlight += 1;
   let attributable = false;
   try {
     const result = await run();
     // A driver refusal comes back as a normal result (`effect: "refused"`, e.g.
     // background_unavailable) and sent nothing, so it must not take the credit either.
-    attributable = !isRefusedDriverResult(result);
+    const inputPath = isSetValue && result && typeof result === 'object'
+      ? (result as { path?: unknown }).path : undefined;
+    // CUA Linux reports these paths only after its pointer/keyboard fallback.
+    // Merely asking for foreground mode does not prove it emitted HID events.
+    const setValueUsedInput = inputPath === 'click_type_fg' || inputPath === 'click_select_fg'
+      || inputPath === 'click_type_mpx' || inputPath === 'click_select_mpx';
+    attributable = !isRefusedDriverResult(result) && (!isSetValue || setValueUsedInput);
     return result;
   } catch (err) {
-    attributable = (err as { outcomeUnknown?: unknown } | null)?.outcomeUnknown === true;
+    // A failed set_value has no attested path: keep later user input visible.
+    attributable = !isSetValue && (err as { outcomeUnknown?: unknown } | null)?.outcomeUnknown === true;
     throw err;
   } finally {
     agentInputsInFlight -= 1;

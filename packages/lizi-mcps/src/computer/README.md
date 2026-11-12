@@ -61,7 +61,8 @@ is usually redundant.
 - `USER_INPUT_ACTIVE`: foreground delivery is refused while system input newer
   than the Agent's own last dispatch is under three seconds old
   (`powerMonitor.getSystemIdleTime`, whole seconds). Background delivery and
-  `set_value` are unaffected. The refusal covers that foreground input only: the
+  focus-free `set_value` writes are unaffected. Explicit foreground `set_value`
+  respects the same guard as other foreground input. The refusal covers that foreground input only: the
   error and the workflow steer the Agent to background routes (window-local
   coordinates, `double_click`, menu bar items, `set_value`, files or CLI) and to
   waiting or asking only when none works.
@@ -73,6 +74,31 @@ is usually redundant.
   hint that synthetic input is not delivered there, and a `set_value` hint for
   Electron / browser targets. `set_value` was verified on Cindy's own composer:
   the field updates and its send button enables, without focus.
+
+## Linux X11 readiness and text entry
+
+Linux's permission status is separate from whether an application exposes its
+controls. The desktop session needs a running AT-SPI bus (`at-spi2-core`) with
+`org.a11y.Status.IsEnabled` enabled before the target starts. Do not launch GUI
+targets with `NO_AT_BRIDGE=1`. An application started without the bus may need
+an owner-coordinated restart after the session is repaired. For Chromium/Electron,
+`--force-renderer-accessibility=complete` enables a complete tree at launch.
+Confirm a real input field through `get_window_state`; a window screenshot alone
+does not prove readiness.
+
+`set_value` accepts optional `delivery_mode`. With no mode supplied the driver
+retains its default; a background refusal never selects foreground automatically.
+On X11 without writable `/dev/uinput`, CUA 0.47 can require explicitly authorized
+foreground delivery for a field without an AT-SPI EditableText/Value write route.
+This uses the same snapshot, secure-field, session, input-ownership and user-activity
+guards as existing Computer Use calls. The host credits actual CUA keyboard paths
+(`click_type_fg`, `click_select_fg`, `click_type_mpx`, `click_select_mpx`) as Agent
+input, while AX-only writes retain the existing user-input protection.
+
+MCP dispatch and activity regressions live in
+[computerMcpServer.test.ts](computerMcpServer.test.ts) and Desktop's
+[`computer.test.ts`](../../../../apps/desktop/src/main/mcp-integrations/__tests__/computer.test.ts).
+Native GTK and Chromium verification must be reported separately from these tests.
 
 ## Background pointer advice (2026-11-06)
 

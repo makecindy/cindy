@@ -4595,6 +4595,14 @@ describe('foreground input while the person is using this computer', () => {
   beforeEach(async () => {
     await cleanupAllComputerDriverSessions();
     resetDesktopInputGuardStateForTests();
+    // This group must also run alone, without mocks initialized by earlier tests.
+    mcpConnectMock.mockReset().mockResolvedValue(undefined);
+    mcpCloseMock.mockReset().mockResolvedValue(undefined);
+    transportCloseMock.mockReset().mockResolvedValue(undefined);
+    resolveDesktopOutboundProxyMock.mockReset().mockResolvedValue(null);
+    mcpListToolsMock.mockReset().mockResolvedValue({ tools: COMPUTER_TOOLS.map((tool) => ({
+      name: tool.name, inputSchema: { type: 'object', additionalProperties: true },
+    })) });
     mcpCallToolMock.mockReset().mockResolvedValue({ structuredContent: { ok: true, effect: 'confirmed' } });
     powerMonitorState.idleSeconds = 3600;
     powerMonitorState.idleState = 'active';
@@ -4606,6 +4614,10 @@ describe('foreground input while the person is using this computer', () => {
     await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
       .rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
     expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === 'click')).toHaveLength(0);
+    await expect(callComputerDriverTool('set_value', {
+      ...target, element_index: 0, value: 'hi', delivery_mode: 'foreground',
+    }, context)).rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
+    expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === 'set_value')).toHaveLength(0);
     await expect(callComputerDriverTool('click', {
       target: { kind: 'desktop', display_id: 'primary' }, capture_id: 'capture-1', x: 1, y: 1, delivery_mode: 'foreground',
     }, context)).rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
@@ -4643,11 +4655,15 @@ describe('foreground input while the person is using this computer', () => {
   // the credit for the person's typing that follows it.
   it.each([
     ['set_value', { element_token: 'x:1', value: 'hi' }],
+    ['set_value', { element_token: 'x:1', value: 'hi', delivery_mode: 'foreground' }],
     ['launch_app', { name: 'Notes' }],
-  ] as const)('does not attribute later input to a %s that synthesized none', async (tool, extra) => {
+  ] as const)('does not attribute later input to a %s (%j) that synthesized none', async (tool, extra) => {
     vi.useFakeTimers();
     try {
       await callComputerDriverTool('get_window_state', target, context);
+      if (tool === 'set_value') {
+        mcpCallToolMock.mockResolvedValue({ structuredContent: { ok: true, effect: 'confirmed', path: 'ax' } });
+      }
       await callComputerDriverTool(tool, tool === 'launch_app' ? { ...extra } : { ...target, ...extra }, context).catch(() => undefined);
       powerMonitorState.idleSeconds = 1;
       await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
@@ -4660,6 +4676,36 @@ describe('foreground input while the person is using this computer', () => {
       vi.useRealTimers();
     }
   });
+
+  // Linux set_value can use real keyboard input. Its actual CUA path must be
+  // credited, while AX-only writes above must still leave user input visible.
+  // Without this, the next foreground action rejects the Agent's own typing.
+  it.each(['click_type_fg', 'click_select_fg', 'click_type_mpx', 'click_select_mpx'])(
+    'attributes the keyboard fallback %s to the Agent', async (inputPath) => {
+      vi.useFakeTimers();
+      try {
+        await callComputerDriverTool('get_window_state', target, context);
+        mcpCallToolMock.mockResolvedValueOnce({ structuredContent: {
+          ok: true, effect: 'confirmed', path: inputPath,
+        } });
+        await callComputerDriverTool('set_value', {
+          ...target, element_index: 0, value: 'hi',
+          delivery_mode: inputPath.endsWith('_fg') ? 'foreground' : 'background',
+        }, context);
+        powerMonitorState.idleSeconds = 0;
+        await expect(callComputerDriverTool('click', {
+          ...target, x: 1, y: 1, delivery_mode: 'foreground',
+        }, context)).resolves.toBeDefined();
+        vi.advanceTimersByTime(10_000);
+        powerMonitorState.idleSeconds = 1;
+        await expect(callComputerDriverTool('click', {
+          ...target, x: 1, y: 1, delivery_mode: 'foreground',
+        }, context)).rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   // Review (#8227 round 8): input that follows an Agent action by more than the delivery
   // tail is a person's, however recent the action was.
