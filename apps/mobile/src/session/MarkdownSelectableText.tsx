@@ -50,7 +50,7 @@ export function MarkdownSelectableText({
     // Position only the selectable root. RN Text already centers its leading;
     // shifting the bubble itself would also shift pending/Android text and chips.
     const alignedStyle: StyleProp<TextStyle> = adjustVerticalAlignment ? [rest.style, { top }] : rest.style;
-    if (!quoteCtx || !selectable) {
+    if (!quoteCtx) {
       return (
         <UITextView
           maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
@@ -64,11 +64,13 @@ export function MarkdownSelectableText({
     return (
       <UITextView
         maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
-        selectable
+        selectable={selectable === true}
         uiTextView
         {...rest}
         style={alignedStyle}
         onTextLayout={(e) => {
+          // Paragraph layout keeps this UIKit root mounted during streaming.
+          // Cache then too: enabling selection alone does not emit a new layout.
           // uitextview 自定义 spec 的 lines 是 string[](RN 核心 Text 是对象数组),
           // 双形态防御:确保缓存的是纯字符串行。
           const rawLines = e.nativeEvent.lines as unknown as readonly (string | { text: string })[];
@@ -77,7 +79,7 @@ export function MarkdownSelectableText({
         }}
         // menuActionLabel / onMenuAction 是 uitextview patch 的扩展 prop,不在
         // RN Text props 里,组件内部私有附加(经 {...rest} 透传到原生组件)。
-        {...{
+        {...(selectable ? {
           menuActionLabel: selectionQuoteMenuLabel(),
           sideChatMenuActionLabel: quoteCtx.askInSideChat ? i18n.t('session.sideChat.title') : '',
           onMenuAction: (event: { nativeEvent: { target: number; start: number; end: number } }) => {
@@ -86,7 +88,7 @@ export function MarkdownSelectableText({
           onSideChatMenuAction: (event: { nativeEvent: { target: number; start: number; end: number } }) => {
             handleSelectionQuoteMenuAction(event, renderedLinesRef.current, quoteCtx, 'side-chat');
           },
-        }}
+        } : {})}
       />
     );
   }

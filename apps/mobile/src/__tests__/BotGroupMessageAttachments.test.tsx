@@ -33,6 +33,12 @@ vi.mock('@/i18n/locales/ko', () => ({ default: {} }));
 // Keep the real group attachment, AttachmentStrip, MediaPreview and LegendList hooks.
 // Only native surfaces and unrelated viewers are replaced for Node rendering.
 const imageEvents = vi.hoisted(() => new Map<string, { onLoad: (event: unknown) => void; onError: () => void; onDisplay: () => void; transition: number }>());
+const nativeTextRoots = vi.hoisted(() => new Map<string, {
+  selectable: boolean;
+  onTextLayout?: (event: { nativeEvent: { lines: string[] } }) => void;
+  onMenuAction?: (event: { nativeEvent: { target: number; start: number; end: number } }) => void;
+  onSideChatMenuAction?: (event: { nativeEvent: { target: number; start: number; end: number } }) => void;
+}>());
 vi.mock('expo-web-browser', () => ({ openBrowserAsync: vi.fn(async () => ({})) }));
 vi.mock('react-native', async () => {
   const React = await import('react');
@@ -70,9 +76,12 @@ vi.mock('react-native-svg', () => ({ default: () => null, Circle: () => null }))
 vi.mock('react-native-uitextview', async () => {
   const { createElement } = await import('react');
   const { Text } = await import('react-native');
-  return { UITextView: ({ children, ...props }: any) => createElement('span', {
-    'data-uitextview': props.uiTextView ? 'root' : 'span',
-  }, createElement(Text, props, children)) };
+  return { UITextView: ({ children, ...props }: any) => {
+    if (props.uiTextView && props.testID) nativeTextRoots.set(props.testID, props);
+    return createElement('span', {
+      'data-uitextview': props.uiTextView ? 'root' : 'span',
+    }, createElement(Text, props, children));
+  } };
 });
 vi.mock('expo-image', async () => {
   const { createElement } = await import('react');
@@ -160,6 +169,7 @@ import { ChatFilePathContext } from '@/session/chatFilePathContext';
 import { MessageLoadingImage } from '@/session/MessageLoadingImage';
 import { buildMessageContentLayout } from '@/session/messageContentLayout';
 import { MessageContentLongPressContext } from '@/session/messageContentLongPress';
+import { SelectionQuoteContext } from '@/session/selectionQuote';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
@@ -173,7 +183,7 @@ const resolveMedia = vi.fn<ResolveRemoteMediaFn>(async (_media, options) => ({
   ossKey: 'thumbnail', size: 10, expiresAt: '',
 }));
 
-beforeEach(() => { resolveMedia.mockClear(); imageEvents.clear(); vi.mocked(openBrowserAsync).mockClear(); });
+beforeEach(() => { resolveMedia.mockClear(); imageEvents.clear(); nativeTextRoots.clear(); vi.mocked(openBrowserAsync).mockClear(); });
 
 async function renderAttachment(messageId: string) {
   host = document.createElement('div');
@@ -437,6 +447,37 @@ it('renders nested reply levels inside one selectable text run', async () => {
   })));
   expect(host.textContent).toBe('• A\n\n\u2003◦ B\n\n\u2003\u2003▪ C\n\n\u2003◦ D\n\n• E');
   expect(host.querySelectorAll('[data-testid="message.markdownTextRun"]')).toHaveLength(1);
+});
+
+// #10103 / unit: existing rendering tests never dispatch a selection after
+// streaming completes. UITextView does not re-emit layout when only selectable
+// changes: unchanged text/frame keeps its cached layout and native text tree.
+it('quotes across nested items after streaming completes without another native layout', async () => {
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  const commitQuote = vi.fn();
+  const askInSideChat = vi.fn();
+  const renderBody = (selectable: boolean) => createElement(SelectionQuoteContext.Provider, {
+    value: { commitQuote, askInSideChat },
+  }, createElement(MarkdownBody, {
+    layout: buildMessageContentLayout({ screenWidth: 390 }), selectable, streaming: !selectable,
+    text: '- parent\n  - child 😀',
+  }));
+  await act(async () => root!.render(renderBody(false)));
+  const streamingRoot = host.querySelector('[data-uitextview="root"]');
+  const native = nativeTextRoots.get('message.markdownTextRun')!;
+  expect(native.selectable).toBe(false);
+  expect(native.onMenuAction).toBeUndefined();
+  const text = host.textContent!;
+  native.onTextLayout?.({ nativeEvent: { lines: [text] } });
+  await act(async () => root!.render(renderBody(true)));
+  expect(host.querySelector('[data-uitextview="root"]')).toBe(streamingRoot);
+  const settled = nativeTextRoots.get('message.markdownTextRun')!;
+  expect(settled.selectable).toBe(true);
+  const event = { nativeEvent: { target: 1, start: text.indexOf('parent'), end: text.length } };
+  settled.onMenuAction!(event);
+  settled.onSideChatMenuAction!(event);
+  expect(commitQuote).toHaveBeenCalledExactlyOnceWith('parent\n\n\u2003◦ child 😀');
+  expect(askInSideChat).toHaveBeenCalledExactlyOnceWith('parent\n\n\u2003◦ child 😀');
 });
 
 it('retains nesting when an inline image puts a reply item on the single-block path', async () => {
