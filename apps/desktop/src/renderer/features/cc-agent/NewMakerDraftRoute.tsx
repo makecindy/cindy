@@ -1867,6 +1867,18 @@ export function NewMakerDraftRoute() {
     agentCatalogProviders,
   ]);
 
+  // 用户为这个目标**明确选过**的来源:被控端草稿里记着的那家(agent-device 则是本机为
+  // 那台电脑记下的那次选择)。清单发现失败(unauthorized / regionBlocked 这类确定性失败)
+  // 时它照旧保留 —— 他选的就该生效,执行端按这一家报不可用,而不是静默换成另一家账号 /
+  // 计费路径(provider-sharing §5.3)。没有明确选择时是 null:那时发现失败的来源不配当
+  // 默认值,按健康口径剔掉。
+  const explicitDraftProviderId = useMemo<string | null>(() => {
+    const remembered = effectiveAgentDeviceId
+      ? recallAgentDeviceSelection(effectiveAgentDeviceId, capabilityAgentKind)?.providerId ?? null
+      : null;
+    return remembered ?? deviceDraftDefaults?.providerId ?? null;
+  }, [effectiveAgentDeviceId, capabilityAgentKind, deviceDraftDefaults]);
+
   // 选中模型 + effort:device-link 用镜像 holder(deviceLinkInitial,被控端草稿值已按 capabilities
   // 校准);本地草稿用 chatPrefs(逐字节不变)。device-link 在 holder seed 完成前(等隧道 / 能力)
   // 极早期暂用 chatPrefs,随后被 deviceLinkInitial 取代。
@@ -1886,7 +1898,11 @@ export function NewMakerDraftRoute() {
       // 首条消息对着一个发不出去的来源建任务(Codex review #9369)。与本机自动路径
       // (autoCalibrationProviders)和 remoteCatalogCalibration(filterHealthyDraftProviders)
       // 同一口径:全失败时 helper 自己退回完整候选。
-      filterHealthyDraftProviders(targetSelectableProviders),
+      //
+      // 用户**明确选过**的那一家是例外:它失败时照样留在候选里 —— 他选的就是这一家,
+      // 静默换成另一家等于换了账号 / 计费路径(provider-sharing §5.3)。执行端按选定来源
+      // 报不可用,比悄悄换一家更诚实(Codex review #9369)。
+      filterHealthyDraftProviders(targetSelectableProviders, explicitDraftProviderId),
       deviceLinkInitial.model,
       capabilityAgentKind,
     ).length > 0;
@@ -1899,6 +1915,7 @@ export function NewMakerDraftRoute() {
     deviceLinkInitial,
     targetSelectableProviders,
     capabilityAgentKind,
+    explicitDraftProviderId,
     deviceProvidersLoading,
     deviceProvidersUnsupported,
   ]);
@@ -2314,7 +2331,11 @@ export function NewMakerDraftRoute() {
   const draftInitialProviderId = useMemo<string | null>(() => {
     if (!usesDeviceCatalog) return null;
     const sources = chatEligibleSourcesForModel(
-      targetSelectableProviders,
+      // 与播种那条路同一口径:清单发现失败的来源手里握的是陈旧清单,不该被当成默认
+      // 来源送人 —— pickDraftProviderForModel 是**订阅优先**,一个失败的订阅会盖过健康
+      // 的那家,首条消息直接失败(Codex review #9369)。用户明确选过的那一家是例外,
+      // 照旧保留(见 explicitDraftProviderId)。
+      filterHealthyDraftProviders(targetSelectableProviders, explicitDraftProviderId),
       draftInitialModel,
       capabilityAgentKind,
     );
@@ -2334,6 +2355,7 @@ export function NewMakerDraftRoute() {
   }, [
     usesDeviceCatalog,
     targetSelectableProviders,
+    explicitDraftProviderId,
     draftInitialModel,
     capabilityAgentKind,
     remoteCatalogCalibration,
@@ -2419,7 +2441,20 @@ export function NewMakerDraftRoute() {
         // 种子档位只是**请求值**:它来自被控端 capabilities 的跨来源并集,种子来源被隐藏 /
         // 退役、最终路由落到另一家时,那一档可能不在最终型号的档位表里 —— pill 显示 high、
         // 发送时被 reconcile 成 medium,显示的和建成的不是同一个值(Codex review #9369)。
-        const requested = draftSeedSelection?.effort ?? rememberedEffort ?? perModelEffort ?? localDraftEffort;
+        //
+        // 种子档位为 **null** 是明确「这个型号没有档位」,不是「没有值」:最终来源那份条目
+        // 是空表(effortsUnknown !== false)时无法核对,requested 原样返回 —— 把 null 当成
+        // 缺失会一路掉到记忆 / 控制端档位(常是 high),等于给一个根本没有档位的型号指定了
+        // 档位(Codex review #9369)。最终那份条目**有**档位表时,最终型号确实支持档位,
+        // 按记忆 / 默认档走(那时 null 只说明种子来源那份条目是空的)。
+        const seedEffort = draftSeedSelection ? draftSeedSelection.effort : undefined;
+        const unknownEffortTable =
+          targetModel.effortsUnknown === true ||
+          (targetModel.efforts.length === 0 && targetModel.effortsUnknown !== false);
+        const requested =
+          unknownEffortTable && seedEffort !== undefined
+            ? seedEffort
+            : seedEffort ?? rememberedEffort ?? perModelEffort ?? localDraftEffort;
         const effort =
           targetModel.effortsUnknown === true ||
             (targetModel.efforts.length === 0 && targetModel.effortsUnknown !== false)
@@ -2450,6 +2485,44 @@ export function NewMakerDraftRoute() {
     chatInitialProviderId,
   ]);
 
+  // 设备草稿的 Fast 取值:必须落在**最终型号**上。
+  //
+  // holder 里的 Fast 值属于 holder 那个型号:播种型号被目录里的另一个型号换掉时,那是旧
+  // 型号的值 —— 新型号也许压根不支持 Fast,或者它自己的记忆里是关的。照抄旧值会让开关
+  // 与建出来的任务都带着旧型号的 Fast 开在新型号上(Codex review #9369)。
+  //
+  // holder 与显示一致时直接用 holder 的值:用户的开关就落在 holder 里(改 Fast 走
+  // handleFastModeChange),按记忆重算会把它抹掉。
+  const draftInitialFastMode = useMemo<boolean | 'ultrafast'>(() => {
+    if (!usesDeviceCatalog) return false;
+    if (deviceLinkInitial?.model === draftInitialModel) {
+      return deviceLinkInitial.fastMode ?? false;
+    }
+    // 型号被换过:按最终型号从被控端记忆重取。读序与 deviceLinkDraftDefaults 一致:
+    // 全局模型预设槽(`${agent}:*`)→ 来源槽(`${agent}:${providerId}`)→ 被控端当前选中的
+    // 型号沿用它的激活值 / 其它型号用 per-model 记忆。
+    const recalled = effectiveAgentDeviceId
+      ? recallAgentDeviceSelection(effectiveAgentDeviceId, capabilityAgentKind)
+      : deviceDraftDefaults;
+    const memory = recalled?.providerModelMemory;
+    const globalFast = memory?.[`${capabilityAgentKind}:*`]?.fastByModel?.[draftInitialModel];
+    const providerFast = chatInitialProviderId
+      ? memory?.[`${capabilityAgentKind}:${chatInitialProviderId}`]?.fastByModel?.[draftInitialModel]
+      : undefined;
+    const presetFast = globalFast ?? providerFast;
+    if (presetFast !== undefined) return presetFast;
+    if (recalled?.model === draftInitialModel) return recalled.fastMode ?? false;
+    return recalled?.fastModeByModel?.[draftInitialModel] ?? false;
+  }, [
+    usesDeviceCatalog,
+    deviceLinkInitial,
+    draftInitialModel,
+    effectiveAgentDeviceId,
+    capabilityAgentKind,
+    deviceDraftDefaults,
+    chatInitialProviderId,
+  ]);
+
   // holder 同步到显示的那一对(Codex review #9369):播种型号在目标目录里路由不出去、被换成
   // 目录里的另一个型号时,holder 还握着旧型号 —— 改档 / 改 Fast 会把新型号的改动写到旧型号
   // 的远端草稿记忆上,agent-device 草稿也会被 rememberAgentDeviceSelection 再记一次旧型号。
@@ -2467,6 +2540,9 @@ export function NewMakerDraftRoute() {
       model: draftInitialModel,
       providerId: chatInitialProviderId,
       effort: draftInitialEffort,
+      // Fast 也按显示的那一对:holder 里留着旧型号的值,改 Fast 会写穿到旧型号上,新型号
+      // 自己的记忆也就丢了(Codex review #9369)。
+      fastMode: draftInitialFastMode,
     });
   }, [
     usesDeviceCatalog,
@@ -2474,6 +2550,7 @@ export function NewMakerDraftRoute() {
     draftInitialModel,
     chatInitialProviderId,
     draftInitialEffort,
+    draftInitialFastMode,
     setDlSel,
   ]);
 
@@ -2521,12 +2598,12 @@ export function NewMakerDraftRoute() {
     capabilities,
     capabilityAgentKind,
   ]);
-  // device-link:fast 取镜像值(deviceLinkInitial.fastMode,seed 时已按被控端拍平能力校准),但再叠
-  // 一道 per-provider 的 supportsFastMode gate —— 让 per-provider 判定对"显示+发送"都权威,堵住 seed
+  // device-link:fast 取**最终型号**的值(型号被换过时按被控端记忆重取,见 draftInitialFastMode),
+  // 但再叠一道 per-provider 的 supportsFastMode gate —— 让 per-provider 判定对"显示+发送"都权威,堵住 seed
   // 拍平值在未来分叉下泄漏(seed 函数 deviceLinkDraftDefaults 保持纯/不依赖 ProviderView)。本地走原逻辑。
   const effectiveFastMode = usesDeviceCatalog
     ? supportsFastMode
-      ? (deviceLinkInitial?.fastMode ?? false)
+      ? draftInitialFastMode
       : false
     : supportsFastMode
       ? sshCodexDraftHostId ? (sshDraftSelection?.fastMode ?? false) : resolveDraftFast(calibratedDraftModel)

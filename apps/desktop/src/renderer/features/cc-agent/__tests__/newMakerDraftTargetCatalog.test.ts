@@ -460,12 +460,17 @@ describe('new task model resolves against the catalog it will use', () => {
       targetProviders: ProviderView[];
       model: string;
       rememberedProviderId?: string | null;
+      /** 用户为这个目标**明确选过**的来源(清单发现失败时也保留)。 */
+      pinnedProviderId?: string | null;
       calibrated?: DraftModelCalibrationResult | null;
+      /** 观察本次的候选来源清单。 */
+      onCandidates?: (ids: string[]) => void;
     }): string | null {
       return callback<() => string | null>('draftInitialProviderId', {
         usesDeviceCatalog: true,
         agentCatalogProviders: options.targetProviders,
         targetSelectableProviders: selectableProviders(options.targetProviders),
+        explicitDraftProviderId: options.pinnedProviderId ?? null,
         draftInitialModel: options.model,
         capabilityAgentKind: 'pi',
         remoteCatalogCalibration: options.calibrated ?? null,
@@ -475,7 +480,11 @@ describe('new task model resolves against the catalog it will use', () => {
             ? { model: options.model, providerId: options.rememberedProviderId }
             : null,
         chatEligibleSourcesForModel,
-        pickDraftProviderForModel,
+        filterHealthyDraftProviders,
+        pickDraftProviderForModel: (sources: ProviderView[], preferred?: string | null) => {
+          options.onCandidates?.(sources.map((provider) => provider.id));
+          return pickDraftProviderForModel(sources, preferred);
+        },
       })();
     }
 
@@ -515,6 +524,44 @@ describe('new task model resolves against the catalog it will use', () => {
         model: 'shared-model',
         rememberedProviderId: 'xd',
       })).toBe('xd');
+    });
+
+    // Codex review #9369:清单发现失败(unauthorized / regionBlocked)的来源手里握的是陈旧
+    // 清单,订阅优先的挑选会先挑中它 —— 首条消息对着一个发不出去的来源建任务。
+    it('skips a discovery-failed subscription when no source is pinned', () => {
+      const failed = providerWithModel('anthropic', 'shared-model', {
+        access: { kind: 'subscription', product: 'Claude' },
+      });
+      failed.modelDiscoveryFailure = { kind: 'unauthorized', at: '2026-11-12T00:00:00Z' };
+      expect(initialProvider({
+        targetProviders: [failed, providerWithModel('xd', 'shared-model')],
+        model: 'shared-model',
+      })).toBe('xd');
+    });
+
+    // 用户**明确选过**的那一家是例外:失败时照样留在候选里 —— 执行端按它报不可用,而不是
+    // 悄悄换成另一家账号 / 计费路径(provider-sharing §5.3)。
+    it('keeps the explicitly chosen source in the candidate list', () => {
+      const failed = providerWithModel('anthropic', 'shared-model', {
+        access: { kind: 'subscription', product: 'Claude' },
+      });
+      failed.modelDiscoveryFailure = { kind: 'unauthorized', at: '2026-11-12T00:00:00Z' };
+      const targetProviders = [failed, providerWithModel('xd', 'shared-model')];
+      const pinned: string[] = [];
+      initialProvider({
+        targetProviders,
+        model: 'shared-model',
+        pinnedProviderId: 'anthropic',
+        onCandidates: (ids) => pinned.push(...ids),
+      });
+      expect(pinned).toContain('anthropic');
+      const unpinned: string[] = [];
+      initialProvider({
+        targetProviders,
+        model: 'shared-model',
+        onCandidates: (ids) => unpinned.push(...ids),
+      });
+      expect(unpinned).not.toContain('anthropic');
     });
   });
 
@@ -563,6 +610,8 @@ describe('new task model falls back when the seeded model is empty', () => {
     targetEfforts?: Effort[];
     localEffort?: Effort | null;
     rememberedEffort?: Effort;
+    /** 用户为这个目标**明确选过**的来源(清单发现失败时也保留)。 */
+    pinnedProviderId?: string | null;
     /** 覆盖默认的那一家来源(清单发现失败 / 多家档位表不同这类场景)。 */
     providers?: ProviderView[];
   }): { model: string; effort: Effort | null } {
@@ -593,6 +642,7 @@ describe('new task model falls back when the seeded model is empty', () => {
         capabilityAgentKind: 'pi',
         chatEligibleSourcesForModel,
         filterHealthyDraftProviders,
+        explicitDraftProviderId: options.pinnedProviderId ?? null,
         deviceProvidersLoading: false,
         deviceProvidersUnsupported: false,
       },
@@ -684,6 +734,20 @@ describe('new task model falls back when the seeded model is empty', () => {
     expect(initialModel({
       deviceLinkInitial: { model: 'seeded-model', effort: 'high' },
       providers: [failed],
+    })).toEqual({ model: 'seeded-model', effort: 'high' });
+  });
+
+  // Codex review #9369:健康口径的例外是**用户明确选过**的那一家 —— 它清单发现失败时照样
+  // 保留候选,播种型号不因此被悄悄换成另一家账号 / 计费路径。他选的就是这一家,执行端按
+  // 选定来源报不可用才对(provider-sharing §5.3)。
+  it('keeps the seed when the explicitly chosen source failed discovery', () => {
+    const failed = providerWithEfforts('stale-source', ['seeded-model'], ['high']);
+    failed.modelDiscoveryFailure = { kind: 'unauthorized', at: '2026-11-12T00:00:00Z' };
+    const healthy = providerWithEfforts('healthy-source', ['shared-model'], ['medium']);
+    expect(initialModel({
+      deviceLinkInitial: { model: 'seeded-model', effort: 'high' },
+      providers: [failed, healthy],
+      pinnedProviderId: 'stale-source',
     })).toEqual({ model: 'seeded-model', effort: 'high' });
   });
 
@@ -807,6 +871,73 @@ describe('the source follows the final model', () => {
 });
 
 /**
+ * Fast 的取值要落在**最终型号**上(Codex review #9369)。
+ *
+ * 播种型号 M 的 Fast 是开的,校准把型号换成 N:那是 M 的值,不能带到 N 上 —— N 可能压根
+ * 不支持 Fast,或者它自己的记忆里是关的。开关与建出来的任务都得按 N 重取。
+ */
+describe('the Fast value follows the final model', () => {
+  function fastOf(bindings: {
+    deviceLinkInitial: { model: string; fastMode: boolean | 'ultrafast' } | null;
+    draftInitialModel: string;
+    deviceDraftDefaults?: RemoteDraftDefaults | null;
+    chatInitialProviderId?: string | null;
+  }): boolean | 'ultrafast' {
+    return compile<() => boolean | 'ultrafast'>(
+      'draftInitialFastMode',
+      (node) =>
+        ts.isVariableDeclaration(node) &&
+        node.name.getText(source) === 'draftInitialFastMode' &&
+        node.initializer &&
+        ts.isCallExpression(node.initializer)
+          ? node.initializer.arguments[0]
+          : undefined,
+      {
+        usesDeviceCatalog: true,
+        deviceLinkInitial: bindings.deviceLinkInitial,
+        draftInitialModel: bindings.draftInitialModel,
+        effectiveAgentDeviceId: null,
+        capabilityAgentKind: 'pi',
+        deviceDraftDefaults: bindings.deviceDraftDefaults ?? null,
+        chatInitialProviderId: bindings.chatInitialProviderId ?? null,
+        recallAgentDeviceSelection: () => null,
+      },
+    )();
+  }
+
+  it('re-resolves Fast when the calibration replaced the seed model', () => {
+    // 播种型号的 Fast 是开的,新型号在被控端没有记过 Fast:不能把旧型号的值带过来。
+    expect(fastOf({
+      deviceLinkInitial: { model: 'seeded-model', fastMode: true },
+      draftInitialModel: 'shared-model',
+      deviceDraftDefaults: { model: 'seeded-model', fastMode: true },
+    })).toBe(false);
+  });
+
+  it('takes the Fast the controlled device remembers for the final model', () => {
+    expect(fastOf({
+      deviceLinkInitial: { model: 'seeded-model', fastMode: false },
+      draftInitialModel: 'shared-model',
+      deviceDraftDefaults: {
+        model: 'seeded-model',
+        fastMode: false,
+        providerModelMemory: {
+          'pi:*': { effortByModel: {}, fastByModel: { 'shared-model': true } },
+        },
+      },
+    })).toBe(true);
+  });
+
+  it('keeps the Fast the user toggled on the displayed model', () => {
+    expect(fastOf({
+      deviceLinkInitial: { model: 'shared-model', fastMode: true },
+      draftInitialModel: 'shared-model',
+      deviceDraftDefaults: { model: 'shared-model', fastMode: false },
+    })).toBe(true);
+  });
+});
+
+/**
  * 档位要按**最终来源 + 最终型号**这一对来解析(Codex review #9369)。
  *
  * 同一个型号在多个来源上都有条目时,各家的档位表可以不一样;档位记忆也是**按模型**的:
@@ -919,6 +1050,22 @@ describe('the effort follows the final provider and model', () => {
     expect(effort).toBe('high');
   });
 
+  // Codex review #9369:种子档位为 **null** 是明确「这个型号没有档位」,不是「没有值」。
+  // 最终来源那份条目是空表(effortsUnknown 不为 false)时无法核对,requested 原样返回 ——
+  // 把 null 当成缺失会掉到控制端的 localDraftEffort,给一个根本没有档位的型号指定了档位。
+  it('keeps an explicit no-effort seed on an unknown effort table', () => {
+    const legacy = provider('chosen', []);
+    const entry = legacy.models.pi?.[0];
+    if (entry) delete entry.effortsUnknown;
+    const effort = effortOf({
+      agentCatalogProviders: [legacy],
+      chatInitialProviderId: 'chosen',
+      draftSeedSelection: { model: 'shared-model', effort: null },
+      localDraftEffort: 'high',
+    });
+    expect(effort).toBeNull();
+  });
+
   // Codex review #9369:被控端 providerModelMemory 的权威槽是 `${agent}:*`(模型级全局
   // 预设),来源槽只是旧 v2 兼容副本。现代被控端可能只在权威槽里为这个型号记过档 ——
   // 只读来源槽会漏掉它、一路掉到控制端的 localDraftEffort,两边都支持时 reconcile 保留
@@ -998,6 +1145,7 @@ describe('the remote draft holder follows the displayed model', () => {
       draftInitialModel: 'other-model',
       chatInitialProviderId: 'other',
       draftInitialEffort: 'medium',
+      draftInitialFastMode: false,
       setDlSel,
     })();
     expect(setDlSel).toHaveBeenCalledWith({
@@ -1005,6 +1153,7 @@ describe('the remote draft holder follows the displayed model', () => {
       model: 'other-model',
       providerId: 'other',
       effort: 'medium',
+      fastMode: false,
     });
   });
 
@@ -1016,6 +1165,7 @@ describe('the remote draft holder follows the displayed model', () => {
       draftInitialModel: 'shared-model',
       chatInitialProviderId: 'source',
       draftInitialEffort: 'high',
+      draftInitialFastMode: false,
       setDlSel,
     })();
     expect(setDlSel).not.toHaveBeenCalled();
@@ -1032,6 +1182,7 @@ describe('the remote draft holder follows the displayed model', () => {
       draftInitialModel: 'shared-model',
       chatInitialProviderId: 'other',
       draftInitialEffort: 'high',
+      draftInitialFastMode: false,
       setDlSel,
     })();
     expect(setDlSel).toHaveBeenCalledWith({
@@ -1039,6 +1190,7 @@ describe('the remote draft holder follows the displayed model', () => {
       model: 'shared-model',
       providerId: 'other',
       effort: 'high',
+      fastMode: false,
     });
   });
 });
