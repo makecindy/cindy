@@ -16,6 +16,8 @@ import {
   mergeSessionRuntimeProfilePatch,
   pickSessionRuntimeFallback,
   recordFailedSessionRuntimeFallbackCandidate,
+  recordSkippedSessionRuntimeFallbackRoutes,
+  resetSessionRuntimeFallbackEpisode,
   recordRecoveredSessionRuntimeMutation,
   recordRecoveredSessionRuntimeAxisMutation,
   recordUserSessionRuntimeAxisMutation,
@@ -717,6 +719,41 @@ describe('session runtime fallback selection', () => {
         providerId: 'xd',
       }),
     ).toBe(false);
+    expect(getSessionRuntimeControlSnapshot(sessionId).visitedRoutes).toEqual([]);
+  });
+
+  it('rejects skipped fallback route recording when generation is stale', () => {
+    const sessionId = 'runtime-stale-skipped-routes';
+    const observed = getSessionRuntimeControlSnapshot(sessionId).generation;
+    recordUserSessionRuntimeMutation(sessionId);
+
+    expect(
+      recordSkippedSessionRuntimeFallbackRoutes(sessionId, observed, ['key-1', 'key-2']),
+    ).toBe(false);
+    expect(getSessionRuntimeControlSnapshot(sessionId).visitedRoutes).toEqual([]);
+
+    const currentGen = getSessionRuntimeControlSnapshot(sessionId).generation;
+    expect(
+      recordSkippedSessionRuntimeFallbackRoutes(sessionId, currentGen, ['key-1', 'key-2']),
+    ).toBe(true);
+    expect(getSessionRuntimeControlSnapshot(sessionId).visitedRoutes).toEqual(['key-1', 'key-2']);
+  });
+
+  it.each([false, true])('expires episode routes without undoing the fallback (deferred=%s)', (deferred) => {
+    const sessionId = 'runtime-new-fallback-episode';
+    const fallback = { ...current, model: 'gpt-backup' };
+    acceptSessionRuntimeMutation({ sessionId, source: 'fallback', profile: fallback,
+      previousProfile: current, deferred });
+    const before = getSessionRuntimeControlSnapshot(sessionId);
+    recordSkippedSessionRuntimeFallbackRoutes(sessionId, before.generation, ['quota-full']);
+    resetSessionRuntimeFallbackEpisode(sessionId);
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toEqual({ ...before, fallbackHop: 0, visitedRoutes: [] });
+  });
+
+  it('expires quota-only exclusions even when no fallback switch happened', () => {
+    const sessionId = 'runtime-quota-only-episode';
+    recordSkippedSessionRuntimeFallbackRoutes(sessionId, 0, ['temporarily-full']);
+    resetSessionRuntimeFallbackEpisode(sessionId);
     expect(getSessionRuntimeControlSnapshot(sessionId).visitedRoutes).toEqual([]);
   });
 

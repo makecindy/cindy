@@ -30,6 +30,7 @@ import {
   sessionUsesOtherMachineAccount,
   subscriptionFamilyOf,
   xaiAccountUsageLimit,
+  antigravityQuotaLimit,
 } from '../accountUsageLimit';
 import { CodexResetAutoUse, DEFAULT_CODEX_RESET_AUTO_USE } from '../codexResetAutoUse';
 import { createCodexAccountUsageSnapshotReader } from '../codexAccountUsageRefresh';
@@ -347,6 +348,23 @@ describe('subscriptionFamilyOf / readAccountUsageLimit', () => {
     expect(mocks.codex).toHaveBeenCalledWith('codex-work');
   });
 
+  it('does not use ChatGPT windows to veto an untried credit-backed fallback', async () => {
+    mocks.providers = [{ id: 'codex-work', auth: { native: 'codex' } }];
+    mocks.codex.mockResolvedValue({ primary: { usedPercent: 100, resetsAt: RESET_5H } });
+    await expect(readAccountUsageLimit('codex', 'codex-work', 'gpt-5.5', 'admission')).resolves.toBeUndefined();
+    expect(mocks.codex).not.toHaveBeenCalled();
+    await expect(readAccountUsageLimit('codex', 'codex-work', 'gpt-5.5')).resolves.toMatchObject({ limited: true });
+  });
+
+  it('keeps Claude extra usage admission separate from a full plan reset window', async () => {
+    mocks.claude.mockResolvedValue({
+      fiveHour: { utilization: 100, resetsAt: RESET_5H },
+      extraUsage: { isEnabled: true, utilization: 10, usedCredits: 10, monthlyLimit: 100 },
+    });
+    await expect(readAccountUsageLimit('claude-code', 'anthropic', 'claude-sonnet-5', 'admission')).resolves.toMatchObject({ limited: false });
+    await expect(readAccountUsageLimit('claude-code', 'anthropic', 'claude-sonnet-5')).resolves.toMatchObject({ limited: true });
+  });
+
   it('reads independent SuperGrok accounts through the account reader', async () => {
     mocks.providers = [{ id: 'xai-2', auth: { native: 'xai' } }];
     mocks.accountUsage.mockResolvedValue({
@@ -359,5 +377,38 @@ describe('subscriptionFamilyOf / readAccountUsageLimit', () => {
       resetAtMs: RESET_WEEK * 1000,
     });
     expect(mocks.xai).not.toHaveBeenCalled();
+  });
+});
+
+describe('antigravityQuotaLimit', () => {
+  const now = 1_800_000_000_000;
+  const future = now / 1000 + 3600;
+  const payload = {
+    windows: [
+      { key: 'gemini-5h', window: { utilization: 40, resetsAt: future } },
+      { key: 'gemini-weekly', window: { utilization: 60, resetsAt: future } },
+      { key: 'gemini-argon-wtu-weekly', window: { utilization: 100, resetsAt: future } },
+      { key: '3p-5h', window: { utilization: 100, resetsAt: future + 60 } },
+      { key: '3p-weekly', window: { utilization: 10, resetsAt: future } },
+    ],
+  };
+
+  it('reports argon-4 as limited only from its own group', () => {
+    expect(antigravityQuotaLimit(payload, 'gemini-4-argon', now)).toEqual({ limited: true, resetAtMs: future * 1000 });
+  });
+
+  it('keeps other Gemini models available while argon is exhausted', () => {
+    expect(antigravityQuotaLimit(payload, 'gemini-3-pro', now)).toEqual({ limited: false, resetAtMs: null });
+  });
+
+  it('maps Claude and GPT models to the third-party group', () => {
+    expect(antigravityQuotaLimit(payload, 'claude-sonnet-5-5', now)?.limited).toBe(true);
+    expect(antigravityQuotaLimit(payload, 'gpt-oss-120b', now)?.limited).toBe(true);
+  });
+
+  it('returns null without data or model', () => {
+    expect(antigravityQuotaLimit(null, 'gemini-3-pro', now)).toBeNull();
+    expect(antigravityQuotaLimit(payload, null, now)).toBeNull();
+    expect(antigravityQuotaLimit({ windows: [] }, 'gemini-3-pro', now)).toBeNull();
   });
 });
