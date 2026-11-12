@@ -71,6 +71,23 @@ describe('openPluginTaskTab', () => {
     expect(getActiveGlobalTabId()).toBe(route === 'attached' ? target!.id : previous.id);
     if (route !== 'attached') expect(target).toBeUndefined();
   });
+  // PR review：MCP App 自己调 cindy.ui.open 不是用户手势，不能当用户开标去拉宽窗口 /
+  // 抢夺分离窗口前台。最小失败输入：openPluginUiView(..., { userInitiated: false })。
+  it('keeps a programmatic host-ui open from being treated as a user toggle', async () => {
+    const ghost: InstalledGhost = { enabled: true, dir: '/fixture', uiCapabilityApproved: true,
+      approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3,
+        id: 'sim', name: 'Sim', kind: 'chip', entry: 'main.js', version: '1',
+        mcpApps: { ui: { resources: [{ uri: 'ui://board', file: 'board.html' }, { uri: 'ui://panel', file: 'panel.html' }], tools: {} },
+          host: { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board' },
+            { id: 'panel', title: 'Panel', resourceUri: 'ui://panel', scope: 'task' }] } } } };
+    ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); installed.ghosts = [ghost];
+    await openPluginUiView('sim', 'board', null, undefined, { userInitiated: false });
+    expect(visibility).toHaveBeenCalledWith('open', { userInitiated: false });
+    // 任务页同一条来源：只落页签，不把弹出窗口叫到前台。
+    await openPluginUiView('sim', 'panel', 'task-1', undefined, { userInitiated: false });
+    expect(routeSidebarCommand).toHaveBeenLastCalledWith({ type: 'open-plugin-task', sessionId: 'task-1',
+      instanceId: 'sim', resourceViewId: 'panel' }, { userInitiated: false });
+  });
   // 同一实例的不同资源有独立身份；重复打开沿原任务桶更新参数，不产生新页。
   it('opens named task resources through the original owner and updates their input in place', async () => {
     await openPluginTaskTab('task-1', 'sim', { resourceViewId: 'one', resourceInput: { selected: 'a' } });
