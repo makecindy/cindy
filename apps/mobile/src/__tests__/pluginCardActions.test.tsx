@@ -7,6 +7,11 @@ import { pluginCardPlainText } from "../plugins/pluginCardText";
 import { pendingGhostCardFormDelivery } from "@cindy/maker-shared/ghost-card-form";
 import { MobileMailHtmlPreview } from '../plugins/MobileMailHtmlPreview';
 
+vi.mock('../plugins/PluginNativeIntent', () => ({ PluginNativeIntent: (props: any) => {
+  h.preview = props;
+  return createElement('button', { 'data-testid': 'plugin-preview', onClick: props.onClose }, props.intent.url);
+} }));
+
 vi.mock('react-native-webview', () => ({ WebView: forwardRef((props: any, ref) => {
   h.web = props;
   useImperativeHandle(ref, () => ({ injectJavaScript: h.inject }));
@@ -22,7 +27,7 @@ vi.mock('lucide-react-native', async () => {
   return Object.fromEntries(['Settings', 'ChevronDown', 'ExternalLink', 'GitPullRequest', 'GitMerge', 'GitPullRequestClosed', 'GitPullRequestDraft', 'Check', 'CircleMinus', 'CircleX', 'Clock'].map((name) => [name, icon(name)]));
 });
 
-const h = vi.hoisted(() => ({ noticeFrame: { y: 400, height: 24 }, invoke: vi.fn(), pick: vi.fn(), resolve: vi.fn(), inject: vi.fn(), web: {} as any, mode: 'light' }));
+const h = vi.hoisted(() => ({ noticeFrame: { y: 400, height: 24 }, invoke: vi.fn(), pick: vi.fn(), resolve: vi.fn(), inject: vi.fn(), web: {} as any, preview: {} as any, mode: 'light' }));
 vi.mock("react-native", () => {
   // The notice's frame comes from h.noticeFrame; every other View ignores its ref.
   const View = ({ children, ref }: { children?: ReactNode; ref?: { current: unknown } }) =>
@@ -120,6 +125,7 @@ let unmount: (() => void) | undefined;
 afterEach(() => {
   unmount?.();
   unmount = undefined;
+  vi.useRealTimers();
   h.mode = 'light';
   h.noticeFrame = { y: 400, height: 24 };
   vi.clearAllMocks();
@@ -784,6 +790,37 @@ it('hides superseded mail entirely instead of showing another draft-updated card
   expect(h.invoke).not.toHaveBeenCalled();
 });
 
+
+// Unit regression: a card action returns a preview intent, which the card poll used to discard.
+it('opens and acknowledges the computer preview requested by a card action', async () => {
+  vi.useFakeTimers();
+  const intent = { id: 'preview-1', kind: 'preview', pluginId: 'design', ghostName: 'Design', url: 'http://localhost:1234/draft' };
+  h.invoke.mockImplementation(async (_device, _channel, [request]) => ({ result:
+    request.actionId === 'open-interaction' ? { pageId: 'card-page' } :
+    request.actionId === 'poll' ? { confirms: [], intents: [intent] } : {} }));
+  const container = document.createElement('div'), root = createRoot(container);
+  unmount = () => act(() => root.unmount());
+  await act(async () => root.render(createElement(PluginCardActions, {
+    deviceId: 'device', sessionId: 's', callId: 'c',
+    data: { pluginId: 'design', revision: '1', items: [{ id: 'preview', label: 'Open draft', disabled: false }] },
+  })));
+  await act(async () => [...container.querySelectorAll('button')].find(button => button.textContent === 'Open draft')!.click());
+  const preview = container.querySelector<HTMLButtonElement>('[data-testid="plugin-preview"]');
+  expect(preview?.textContent).toBe(intent.url);
+  await h.preview.readPreview(intent.url, 49152, 'revision');
+  expect(h.invoke).toHaveBeenCalledWith('device', expect.any(String), [expect.objectContaining({
+    actionId: 'preview:fetch', resourceRef: { collectionId: 'plugins', kind: 'plugin', id: 'design' },
+    input: { pageId: 'card-page', intentId: 'preview-1', url: intent.url, offset: 49152, revision: 'revision' },
+  })]);
+  await act(async () => preview!.click());
+  expect(container.querySelector('[data-testid="plugin-preview"]')).toBeNull();
+  expect(h.invoke).toHaveBeenCalledWith('device', expect.any(String), [expect.objectContaining({
+    actionId: 'intent:ack', input: { pageId: 'card-page', intentId: 'preview-1' },
+  })]);
+  // A poll captured before acknowledgement must not reopen the dismissed viewer.
+  await act(async () => vi.advanceTimersByTimeAsync(1000));
+  expect(container.querySelector('[data-testid="plugin-preview"]')).toBeNull();
+});
 
 it('opens in-card task links through task navigation without a browser or plugin action', async () => {
   h.invoke.mockImplementation(async () => ({ result: { confirms: [] } }));
