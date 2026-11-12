@@ -1309,7 +1309,24 @@
     "credentialRequired": "請完成 Mac 密碼驗證。如果無法驗證，請更新兩台電腦上的 Cindy。",
     "handoffEnded": "這次代輸入已經結束，沒有可顯示的視窗。",
     "handoffUnavailable": "這台電腦暫時無法只顯示這個視窗。請在那台電腦上更新 Cindy，或開啟遠端桌面。",
-    "handoffWindow": "代輸入 · {{app}}"
+    "handoffWindow": "代輸入 · {{app}}",
+    "liveScreenPlugin": {
+      "install": {
+        "title": "需要安裝「{{plugin}}」插件",
+        "body": "這個任務在另一台電腦上開著 {{device}}。在這台電腦上安裝「{{plugin}}」插件後，就能在右側欄查看和操作它。",
+        "action": "前往安裝"
+      },
+      "enable": {
+        "title": "需要開啟「{{plugin}}」插件",
+        "body": "這個任務在另一台電腦上開著 {{device}}。在這台電腦上開啟「{{plugin}}」插件後，就能在右側欄查看和操作它。",
+        "action": "前往開啟"
+      },
+      "update": {
+        "title": "需要更新「{{plugin}}」插件",
+        "body": "這個任務在另一台電腦上開著 {{device}}。把這台電腦上的「{{plugin}}」插件更新到新版本後，就能在右側欄查看和操作它。",
+        "action": "前往更新"
+      }
+    }
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -8231,8 +8248,8 @@
         "workspaceDetail": "它發起請求時，由你親手選擇資料夾，或在確認卡上看到完整路徑後再決定；它正在處理你發起的呼叫時，目前任務工作目錄內的子資料夾可直接使用，不再單獨確認。資料夾已有任務時直接重複使用，不重複建立。建立的只是空任務，不會自動開始執行。",
         "sessionContext": "可獲知目前任務正在使用的專案資料夾位置",
         "sessionContextDetail": "只在它為目前任務工作時告知位置資訊（任務編號與專案資料夾路徑），不包含檔案內容，也不因此獲得檔案存取權。",
-        "liveScreen": "在手機上檢視與操作裝置畫面",
-        "liveScreenDetail": "透過遠端桌面，你的手機可以檢視它提供的裝置畫面（例如模擬器）並直接觸控、按鍵和輸入文字。只在你從手機開啟時連線，不會開啟電腦的其他內容。",
+        "liveScreen": "在手機或其他電腦上檢視與操作裝置畫面",
+        "liveScreenDetail": "透過遠端桌面，你的手機或其他電腦可以檢視它提供的裝置畫面（例如模擬器）並直接觸控、按鍵和輸入文字。只在你從這些裝置開啟時連線，不會開啟電腦的其他內容。",
         "preview": "可在右側欄瀏覽器中開啟以下網站的預覽頁面",
         "previewDetail": "只能開啟下方列出的網站；每次開啟都會提示是哪個插件開啟的。",
         "browserExtension": "可讓它自帶的瀏覽器擴充功能連線到 Cindy",

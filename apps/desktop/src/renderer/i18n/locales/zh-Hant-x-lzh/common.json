@@ -1309,7 +1309,24 @@
     "credentialRequired": "請完成 Mac 密碼驗證。若不能驗證，請更新兩機之 Cindy。",
     "handoffEnded": "此番代書已畢，無可顯之視窗。",
     "handoffUnavailable": "此機暫不能僅顯此視窗。請於彼機更新 Cindy，或啟遠端桌面。",
-    "handoffWindow": "代書 · {{app}}"
+    "handoffWindow": "代書 · {{app}}",
+    "liveScreenPlugin": {
+      "install": {
+        "title": "須裝「{{plugin}}」法器",
+        "body": "此務於他機開 {{device}}。於本機裝「{{plugin}}」法器，即可於右欄觀之、操之。",
+        "action": "往裝"
+      },
+      "enable": {
+        "title": "須啟「{{plugin}}」法器",
+        "body": "此務於他機開 {{device}}。於本機啟「{{plugin}}」法器，即可於右欄觀之、操之。",
+        "action": "往啟"
+      },
+      "update": {
+        "title": "須更「{{plugin}}」法器",
+        "body": "此務於他機開 {{device}}。更本機「{{plugin}}」法器至新版，即可於右欄觀之、操之。",
+        "action": "往更"
+      }
+    }
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -8201,8 +8218,8 @@
         "workspaceDetail": "其發請求時，或由君親擇卷匣，或於確認卡上觀完整路徑後再決；其處置君所發之呼叫時，當前差事工作目錄內之子卷匣可徑用，不另確認。卷匣已有差事者徑復用之，不重立。所立僅為空差事，不自行運行。",
         "sessionContext": "可知當前差事所用之案卷匣位置",
         "sessionContextDetail": "僅於其為當前差事效力時告以位置(差事編號與案卷匣路徑)，不含檔案內容，亦不因此得檔案存取之權。",
-        "liveScreen": "於手機觀並操器物之畫面",
-        "liveScreenDetail": "藉遠端桌面，手機可觀其所供器物之畫面(如模擬器)，並觸之、按之、書文字於其上。唯自手機開啟時方連，不示此電腦他物。",
+        "liveScreen": "於手機或他電腦觀並操器物之畫面",
+        "liveScreenDetail": "藉遠端桌面，手機或他電腦可觀其所供器物之畫面(如模擬器)，並觸之、按之、書文字於其上。唯自手機或他電腦開啟時方連，不示此電腦他物。",
         "preview": "可於右側欄瀏覽器中啟下列網站之預覽頁",
         "previewDetail": "僅能啟下方所列網站；每啟一頁，皆示為何法器所啟。",
         "browserExtension": "可令其自帶之瀏覽器擴充功能連 Cindy",

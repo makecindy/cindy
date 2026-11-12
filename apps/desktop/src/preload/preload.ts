@@ -3,6 +3,7 @@ import { APP_PREFERENCE_REQUEST, APP_PREFERENCE_REPLY, APP_SETTINGS_CHANGED, typ
 import type { VoiceConversationApi } from '../shared/voiceConversation';
 import { PERFORMANCE_TRACE_CHANNEL, PERFORMANCE_TRACE_EVENTS_CHANNEL, PERFORMANCE_TRACE_STATE_CHANNEL, type PerformanceTraceAPI, type PerformanceTraceState } from '../shared/performanceTrace';
 import { createAccessibilitySupportBridge } from './accessibilitySupport';
+import { createLiveScreenEmbedBridge, createLiveScreenRelayBridge } from './liveScreenEmbed';
 import { createMicrophonePermissionSnapshot } from './microphonePermissionSnapshot';
 import { createVoiceInputDataSnapshot } from './voiceInputDataSnapshot';
 import type { VoiceInputDataSnapshot } from '../shared/voiceInputData';
@@ -1281,6 +1282,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   } satisfies CompanionImportApi,
   platform: process.platform,
   accessibilitySupport: createAccessibilitySupportBridge(),
+  liveScreenEmbed: createLiveScreenEmbedBridge(),
+  liveScreenRelay: createLiveScreenRelayBridge(),
   supportsBetaUpdateChannel: supportsBetaUpdateChannel(process.platform, process.arch),
   windowBackdropMaterial: readWindowBackdropMaterialFromArgv(process.argv),
   onWindowBackdropMaterialChanged: (

@@ -1251,6 +1251,9 @@ interface ElectronAPI {
   pageZoomOut: () => Promise<{ ok: true; zoomFactor: number }>;
   pageZoomReset: () => Promise<{ ok: true; zoomFactor: number }>;
   accessibilitySupport: import('../shared/accessibilitySupport').AccessibilitySupportBridge;
+  /** Device screens of another computer shown inside this window (sidebar tab). */
+  liveScreenEmbed?: import('../shared/remoteDesktopViewer').LiveScreenEmbedBridge;
+  liveScreenRelay?: import('../shared/liveScreenView').LiveScreenRelayBridge;
   appPreferenceControl?: import('../shared/appPreferenceControl').AppPreferenceControlBridge;
   appearanceSettings: {
     loadPluginFont?: (role: string) => Promise<{ family: string; bytes: ArrayBuffer }>;
