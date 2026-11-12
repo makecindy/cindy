@@ -6780,7 +6780,106 @@
           "deviceLink": "Device Link"
         },
         "onlyEncrypted": "Use Only Agent-Net",
-        "onlyEncryptedHint": "Older devices and shares still using the older connection will be unavailable. Off by default."
+        "onlyEncryptedHint": "Older devices and shares still using the older connection will be unavailable. Off by default.",
+        "peerSwitch": {
+          "row": {
+            "toAgentNet": "Switching to Agent-Net…",
+            "toDeviceLink": "Switching to Device Link…"
+          },
+          "status": {
+            "toAgentNet": "Switching to Agent-Net",
+            "toDeviceLink": "Switching to Device Link"
+          },
+          "reconnecting": "Reconnecting",
+          "toAgentNet": "Switch to Agent-Net",
+          "toDeviceLink": "Switch to Device Link",
+          "retry": "Try again",
+          "hint": "The connection to it becomes end-to-end encrypted. If it does not reconnect within 60 seconds, it goes back to Device Link.",
+          "steps": {
+            "request": {
+              "agentNet": "Asking it to enable Agent-Net",
+              "deviceLink": "Asking it to disable Agent-Net"
+            },
+            "reconnect": "Reconnecting",
+            "confirm": {
+              "agentNet": "Waiting for it to reconnect over Agent-Net",
+              "deviceLink": "Waiting for it to reconnect over Device Link"
+            },
+            "revert": "No reconnection within 60 seconds, going back to Device Link"
+          },
+          "closeHint": "You can close this card; you will be told how it went.",
+          "reverted": "Not switched: it did not reconnect over Agent-Net within 60 seconds, so it went back to Device Link.",
+          "unsupported": "It runs an older Cindy that cannot be switched from here. Update Cindy on that computer and try again.",
+          "done": {
+            "toAgentNet": "Switched to Agent-Net. The connection is end-to-end encrypted.",
+            "toDeviceLink": "Switched back to Device Link."
+          },
+          "blocked": {
+            "mobile": "Phones cannot be controlled remotely. Enable Agent-Net on the phone itself.",
+            "peer-control-off": "It has not allowed control from devices on your account. Switch it on that computer.",
+            "control-off": "You disabled control of it on this computer. Enable control to switch from here."
+          },
+          "toast": {
+            "toAgentNet": "“{{name}}” switched to Agent-Net",
+            "toDeviceLink": "“{{name}}” switched back to Device Link",
+            "reverted": "“{{name}}” did not switch and went back to Device Link",
+            "unsupported": "“{{name}}” runs an older Cindy and cannot be switched remotely",
+            "not-ready": "“{{name}}” cannot enable Agent-Net right now",
+            "busy": "“{{name}}” is handling another switch. Try again shortly.",
+            "failed": "Could not switch “{{name}}”.",
+            "encryption-required": "Disable “Use Only Agent-Net” on “{{name}}” before switching back",
+            "controller-encryption-required": "Disable “Use Only Agent-Net” here before switching “{{name}}” back",
+            "agent-net-only-relay": "The connection to “{{name}}” only supports Agent-Net and cannot switch to Device Link"
+          },
+          "checking": "Checking whether it can switch…",
+          "notReady": {
+            "not-signed-in": "It is not signed in to Cindy. It can enable Agent-Net after signing in.",
+            "secure-storage": "Secure storage is unavailable on that computer, so Agent-Net cannot be turned on. Fix it on that computer.",
+            "relay-identity": "That computer has not set up Agent-Net for its current relay. Set it up on that computer first."
+          },
+          "batch": {
+            "toAgentNet": "Switch all to Agent-Net",
+            "toDeviceLink": "Switch all back to Device Link",
+            "confirmTitleAgentNet": "Switch these computers to Agent-Net?",
+            "confirmTitleDeviceLink": "Switch these computers back to Device Link?",
+            "ready": "Ready",
+            "checking": "Checking",
+            "skipReason": {
+              "unsupported": "Needs a Cindy update",
+              "not-ready": "Cannot enable Agent-Net now",
+              "unreachable": "Not reachable now",
+              "encryption-required": "Use Only Agent-Net",
+              "controller-encryption-required": "Only Agent-Net here",
+              "agent-net-only-relay": "Agent-Net-only network"
+            },
+            "canaryNote": "The first computer switches first; the rest follow once it reconnects. Any computer that does not reconnect within 60 seconds goes back on its own.",
+            "rollbackNote": "Switching back removes end-to-end encryption. Computers that require Agent-Net must have that restriction disabled locally first.",
+            "run": "Switch {{count}}",
+            "cancel": "Cancel",
+            "close": "Done",
+            "state": {
+              "waiting": "Waiting",
+              "running": "Switching",
+              "done": "Switched",
+              "reverted": "Went back",
+              "skipped": "Not switched",
+              "failed": "Not switched"
+            },
+            "stopped": "The first computer did not switch, so the rest were left as they were.",
+            "finished": "{{done}} switched",
+            "finishedWithRevert": "{{done}} switched, {{reverted}} did not switch"
+          },
+          "changedBy": {
+            "on": "Turned on remotely by “{{name}}” at {{time}}",
+            "off": "Turned off remotely by “{{name}}” at {{time}}"
+          },
+          "unreachable": "Could not reach that computer this time. Open the card again later.",
+          "encryptionRequired": "This computer requires Agent-Net. Disable “Use Only Agent-Net” on that computer before switching back to Device Link.",
+          "disableBlocked": {
+            "controller-encryption-required": "This computer has “Use Only Agent-Net” enabled. Disable it here before switching the other computer back to Device Link.",
+            "agent-net-only-relay": "This connection uses a network that only supports Agent-Net. Choose a route that supports Device Link before switching back."
+          }
+        }
       }
     },
     "tina": {

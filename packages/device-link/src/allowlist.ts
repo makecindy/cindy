@@ -26,6 +26,7 @@
  */
 import { FILE_PEER_CHANNEL } from './filePeer.js';
 import { MACHINE_STATUS_CHANNEL } from './machineStatus.js';
+import { AGENT_NET_SWITCH_CHANNEL, AGENT_NET_SWITCH_TIMEOUT_MS } from './agentNetSwitch.js';
 import { PROVIDER_GROUP_REMOTE_CHANNEL } from './providerGroup.js';
 import { REMOTE_AGENT_CHANNEL } from './remoteAgent.js';
 import {
@@ -410,6 +411,12 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 在这台电脑能连上的服务器上授权。被控端必须由人在本机确认(显示请求电脑、逐项名称与校验码)
   // 后才执行;密钥只以本次请求的临时公钥加密返回。OAuth 登录与私钥不经此通道。同样只给同账号电脑。
   SETUP_TRANSFER_CHANNEL,
+  // 远程切换连接方式(docs/product-rules/agent-net.md「远程切换其他电脑的连接方式」,2026-11-12 用户确认):
+  // 同账号电脑问这台电脑能不能打开 Agent-Net,并请它打开 / 关闭自己的「Agent-Net (Beta)」开关。
+  // 开了远程控制的电脑本来就能被远程跑 Agent,不多给权限;「仅使用 Agent-Net」从不远程改。被控端 dispatch
+  // 拦截执行，只给同账号电脑(共享任务访客与供应商分享受邀者再拒一次)。打开后必须在期限内经 Agent-Net
+  // 收到同一发起端的确认，否则被控端自己退回。老版本无 handler → CHANNEL_NOT_ALLOWED,发起端显示需要更新。
+  AGENT_NET_SWITCH_CHANNEL,
   // 远程 Agent(被控端 dispatch 拦截执行，不落 ipcMain handler)：在被控端用它自己的登录与
   // 供应商运行 Agent，文件、命令与 Cindy 工具回到控制端执行。准入同 fs:list-dir 的论证：
   // 同账号 + 被控端显式打开远程控制时，控制端本就能驱动被控端的 Agent；不进共享任务白名单。
@@ -973,6 +980,7 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   [SETUP_SNAPSHOT_CHANNEL]: SETUP_SNAPSHOT_TIMEOUT_MS,
   // 要等那台电脑上的人确认(最多 2 分钟),再逐台连接 SSH 服务器授权新公钥。
   [SETUP_TRANSFER_CHANNEL]: SETUP_TRANSFER_TIMEOUT_MS,
+  [AGENT_NET_SWITCH_CHANNEL]: AGENT_NET_SWITCH_TIMEOUT_MS,
   // listing tier 轻量 DB 读:毫秒级查询,12s 仍等不到只能是链路问题,快速失败喂给熔断器。
   // 12s 同时覆盖被控端冷启动 DB 迁移的常见时长(那类失败是快速返回的 DbClient not ready,
   // 不吃满超时),不会误伤首拉重试。
