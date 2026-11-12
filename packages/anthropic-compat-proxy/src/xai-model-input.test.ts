@@ -9,6 +9,9 @@ import {
   supportsXaiReasoningModel,
 } from "./xai-model-input.js";
 
+const toolImageUrl =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aMesAAAAASUVORK5CYII=";
+
 describe("looksLikeXaiResponsesModel", () => {
   it.each([
     "grok-4.5",
@@ -526,6 +529,128 @@ describe("createXaiModelInputSanitizeTransform", () => {
     expect(transform(body, ctx)).toBeNull();
   });
 
+  it.each([
+    { type: "custom_tool_call_output", call_id: "call_image" },
+    { type: "function_call_output", call_id: "call_image" },
+    { type: "tool_result", tool_use_id: "call_image" },
+    { role: "tool", tool_call_id: "call_image" },
+    { type: "message", role: "function", tool_call_id: "call_image" },
+  ])("preserves tool-returned images for $type / $role", (resultItem) => {
+    const output = [
+      { type: "input_text", text: "Script completed" },
+      {
+        type: "input_image",
+        image_url: toolImageUrl,
+        detail: "high",
+      },
+    ];
+    const body = {
+      model: "x-ai-grok/grok-4.7",
+      input: [
+        {
+          type: "function_call",
+          call_id: "call_image",
+          name: "view_image",
+          arguments: "{}",
+        },
+        {
+          ...resultItem,
+          ...("role" in resultItem || resultItem.type === "tool_result"
+            ? { content: output }
+            : { output }),
+        },
+      ],
+    };
+    const expected = {
+      ...body,
+      input: [
+        body.input[0],
+        { type: "function_call_output", call_id: "call_image", output },
+      ],
+    };
+    const out = transform(body, ctx) ?? body;
+    expect(out).toEqual(expected);
+    // Direct subscriptions and recovery may sanitize the same body again.
+    expect(transform(out, ctx)).toBeNull();
+    expect(transform({ ...body, model: "gpt-5.5" }, ctx)).toBeNull();
+  });
+
+  it("normalizes mixed tool attachments without losing their order or source", () => {
+    const file = { type: "input_file", file_id: "file_123" };
+    const body = {
+      model: "grok-4.7",
+      input: [
+        {
+          type: "function_call_output",
+          call_id: "call_image",
+          output: [
+            "first image",
+            {
+              type: "input_image",
+              image_url: { url: "https://example.com/a.png", detail: "low" },
+              internal: "discard",
+            },
+            { type: "output_text", text: "then file" },
+            file,
+            { type: "input_image", file_id: "file_image" },
+            { type: "input_image" },
+            { type: "encrypted_content", encrypted_content: "unreadable" },
+          ],
+        },
+      ],
+    };
+    const out = transform(body, ctx);
+    expect(out).toEqual({
+      ...body,
+      input: [
+        {
+          type: "function_call_output",
+          call_id: "call_image",
+          output: [
+            { type: "input_text", text: "first image" },
+            {
+              type: "input_image",
+              image_url: "https://example.com/a.png",
+              detail: "low",
+            },
+            { type: "input_text", text: "then file" },
+            file,
+            { type: "input_image", file_id: "file_image" },
+          ],
+        },
+      ],
+    });
+    expect(transform(out, ctx)).toBeNull();
+  });
+
+  it("keeps the text fallback when a tool image has no source", () => {
+    const out = transform(
+      {
+        model: "grok-4.7",
+        input: [
+          {
+            type: "function_call_output",
+            call_id: "call_image",
+            output: [
+              { type: "input_text", text: "Image unavailable" },
+              { type: "input_image" },
+            ],
+          },
+        ],
+      },
+      ctx,
+    );
+    expect(out).toMatchObject({
+      input: [
+        {
+          type: "function_call_output",
+          call_id: "call_image",
+          output: "Image unavailable",
+        },
+      ],
+    });
+  });
+
   it("drops reasoning on gateway coding models without an explicit override", () => {
     const out = transform(
       {
@@ -551,6 +676,29 @@ describe("createXaiModelInputSanitizeTransform", () => {
 
 describe("createXaiModelInputRecoveryRule", () => {
   const rule = createXaiModelInputRecoveryRule();
+
+  it("preserves image-only and file-only results when recovering a ModelInput 422", () => {
+    const input = [
+      {
+        type: "custom_tool_call_output",
+        call_id: "call_image",
+        output: [{ type: "input_image", image_url: toolImageUrl }],
+      },
+      {
+        type: "custom_tool_call_output",
+        call_id: "call_file",
+        output: [{ type: "input_file", file_id: "file_123" }],
+      },
+    ];
+    const stripped = rule.strip(
+      Buffer.from(JSON.stringify({ model: "hidden-alias", input })),
+    );
+    expect(stripped).not.toBeNull();
+    expect(JSON.parse(stripped!.toString("utf8")).input).toEqual(
+      input.map((item) => ({ ...item, type: "function_call_output" })),
+    );
+    expect(rule.strip(stripped!)).toBeNull();
+  });
 
   it("matches the LiteLLM-wrapped xAI 422 the client actually surfaces", () => {
     const error =

@@ -33,6 +33,14 @@ Composer scroll masking must align with the same wallpaper instead of introducin
 Built-in SVG wallpapers are decorative assets, not new semantic UI colors.
 Verify actual Light/Dark screenshots across host pages and the expanded tool pane.
 
+Data-only v2 theme packages may supply wallpaper defaults through the same
+AppearanceService and media ingestion/decoding used by settings and approved
+fixed plugin operations. Explicit wallpaper overrides win; clearing the named
+override follows the selected theme. No second canvas, media protocol or per-theme
+glass styles are introduced. The shared renderer canvas lives in
+`renderer/appearance/WallpaperPresenter.ts`; the original hook is a thin export.
+Theme motion 0 also reduces transitions/playback, and OS Reduce motion always wins.
+
 The built-in picker lists 13 artworks (user curation, 2026-10-17): the Cindy group —
 Whisper, Night Glance, Scarlet Stroll, Neon Silhouette, Prism Shards — followed by
 Night Launch, Silent Orbits, Dune Dawn, Planet Dawn, Indigo Folds, Dune Sphere,
@@ -51,7 +59,8 @@ and preview fallback; only manifest entries with video metadata offer motion. Do
 as a 3px bottom track inside the selected thumbnail (user choice, 2026-10-19), with no visible
 percentage or separate row. Its transform interpolates the precise byte ratio over
 the base motion tier, linearly for this transfer indicator to avoid restarting an
-ease-in/out on every progress sample; reduced motion updates immediately.
+ease-in/out on every progress sample (registered narrow exception, `DESIGN.md` §14.4);
+reduced motion updates immediately.
 It follows real transfer progress and disappears once ready;
 cache hits show the original directly. A failed tile shows a retry icon and supports click,
 Enter and Space to retry, preserving the grid's single Tab stop and selected border.
@@ -134,7 +143,14 @@ theme-tinted frost rather than clear glass. Because that strength is fixed,
 the Windows desktop blur control is a Switch rather than a slider (artwork blur
 stays a slider); turning it on restores the last nonzero shared blur value;
 systems without a native material retain clear transparency. The hint describes
-system-default fallback where adjustable blur is unavailable. A successful native
+system-default fallback where adjustable blur is unavailable. On Windows 11 22H2+ a
+window is created transparent only when the last session ended on a clear desktop
+(blur off); otherwise it is a regular frameless window, because a transparent window
+carrying Acrylic flickers (2026-11-11; see the research document's Windows device
+finding). `transparent` is fixed at creation, so turning desktop blur off in a regular
+window keeps Acrylic until the next launch, and turning it on in a transparent window
+may flicker until then; the switch hint tells users to restart after turning it off.
+Systems without a system backdrop always create transparent windows. A successful native
 call alone is not visual acceptance; keep the research document's validation limits.
 Selecting artwork restores the image/video controls. Reset removes these overrides.
 While a window's opaque in-app wallpaper canvas is active, disable its covered
@@ -245,7 +261,8 @@ and permit retry. The download and cache contract is defined in
 Decode one local video
 per window, suspend playback while hidden/minimized, and use the original still for
 reduced motion or playback failure. Static / Dynamic switches crossfade the video
-over the retained high-resolution still using base/ease-move (200ms), starting
+over the retained high-resolution still using fast/ease-move (150ms, the same pair as the
+still-image crossfade; maintainer ruling D-11, 2026-11-11), starting
 only after playback is ready. Switching back to Static releases the video after
 the fade; rapid toggles reverse it without adding a decoder. Reduced motion
 bypasses the transition and releases the video immediately.
@@ -278,4 +295,3 @@ up the entire frame to shorten a blink, which also accelerates curtains, hair an
 shadows (user correction, 2026-10-02). Avoid mid-blink reopening, alternating-frame
 holds and doubled eyelid outlines. Decoder frame counts alone do not establish natural
 motion; inspect the complete action and loop boundary before accepting an asset.
-

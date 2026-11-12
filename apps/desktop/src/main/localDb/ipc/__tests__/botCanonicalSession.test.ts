@@ -14,6 +14,8 @@ import type { ProviderView } from '@cindy/model-providers';
 import { createHash } from 'node:crypto';
 import { createCompanionCloudHost } from '../../../companion-cloud/host';
 import { materializeCompanion } from '../../../companion-cloud/materialize';
+import { companionHomes, companionSnapshot } from '../../../companion-cloud/homes';
+import { startCompanionCloud } from '../../../companion-cloud/runtime';
 import { fakeApi, memoryState } from '../../../companion-cloud/__tests__/fakes';
 import { clearSessionPersistState, noteSessionAgentKind, getAssistantSamplingRuntimeId } from '../../../messagePersistBroadcaster.desktop';
 import { join, resolve } from 'node:path';
@@ -1099,6 +1101,59 @@ describe('Bot canonical Session lifecycle', () => {
   describe('cloud take-over next to a same-named local companion', () => {
     const names = () => h.sqlite!.prepare("SELECT id FROM bot_profiles WHERE display_name = 'Release Bot' ORDER BY id").pluck().all();
 
+    // #9960: the runtime preflight and the real host/SQLite creation must agree. The old
+    // materializer projection had no worker singleton, so relaxing only preflight was insufficient.
+    // DB tier; synthetic cloud, isolated SQLite; no Electron app or real account involved.
+    it.each(['missing', 'remote', 'local', 'unregistered'] as const)('handles a local Cindy copy during take-over: %s', async location => {
+      h.sqlite!.prepare('UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = ?')
+        .run(JSON.stringify({ templateId: 'cindy' }), 'bot-1');
+      const original = await invoke('local-db:bots:get', 'bot-1');
+      const actor = { id: 'incoming-actor', kind: 'bot', externalId: 'incoming_cindy', name: 'Cloud Cindy', avatar: null, homeDeviceId: 'old-home' };
+      const actors = [actor, ...(['missing', 'unregistered'].includes(location) ? [] : [{ id: 'old-actor', kind: 'bot', externalId: 'bot-1', name: 'Old Cindy', avatar: null,
+        homeDeviceId: location === 'local' ? 'self' : 'elsewhere' }])];
+      const { state } = memoryState();
+      if (location !== 'unregistered') state.update('bot-1', 'old-actor', entry => { entry.demoted = true; });
+      const host = createCompanionCloudHost({ deliverToCanonical: async () => ({ ok: true }),
+        ensureCanonicalSession: async () => 'unused', rebuildContext: async () => 'rebuilt', listDevices: async () => [] });
+      host.openState = () => state;
+      const publish = () => host.homes.update(companionSnapshot({ enabled: true, selfDeviceId: 'self', humanActorId: 'human', actors,
+        demotedBotIds: state.demotedBotIds() }));
+      const { api, calls } = fakeApi((route, method) => {
+        if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', revision: 1, value: {
+          name: 'Cloud Cindy', description: '', soul: 'Cloud identity', systemPrompt: '', user: '', templateId: 'cindy',
+        } }] : { revision: 1 };
+        if (route === '/conversations') return { id: '10000000-0000-4000-8000-000000000001' };
+        if (route.includes('/messages?')) return [];
+        return {};
+      });
+      publish();
+      const runtime = startCompanionCloud({ api, host, endpoint: 'https://synthetic.invalid', humanActorId: 'human', selfDeviceId: 'self',
+        current: () => true, bots: () => [], actors: () => actors, publish, initialKick: false });
+      try {
+        const result = await runtime.takeOver(actor.externalId);
+        if (location === 'local' || location === 'unregistered') {
+          expect(result).toEqual({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'bot-1', conflictingDeviceId: 'self' });
+          // The original active+absent/empty-state orphan remains protected, but the exact
+          // profile is readable through the settings route even when absent from cloud merge.
+          expect(await invoke('local-db:bots:list', {})).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'bot-1' })]));
+          expect(calls.every(call => call.method === 'GET')).toBe(true);
+          expect(actor.homeDeviceId).toBe('old-home');
+        } else {
+          expect(result).toEqual({ ok: true });
+          expect(await invoke('local-db:bots:get', actor.externalId)).toMatchObject({ id: actor.externalId, name: 'Cloud Cindy', status: 'active' });
+          expect(actor.homeDeviceId).toBe('self');
+          // Recovery also takes the existing-copy path, without duplicating or changing the orphan.
+          expect(await runtime.takeOver(actor.externalId)).toEqual({ ok: true });
+          expect(state.isDemoted(actor.externalId)).toBe(false);
+          // Ordinary creation must return the effective local Cindy, not the hidden old one.
+          expect(await invoke('local-db:bots:create', { id: 'another_cindy', name: 'Another Cindy', templateId: 'cindy' }))
+            .toMatchObject({ id: actor.externalId });
+        }
+        expect(await invoke('local-db:bots:get', 'bot-1')).toEqual(original);
+        expect(state.isDemoted('bot-1')).toBe(location !== 'unregistered');
+      } finally { runtime.dispose(); companionHomes.reset(); }
+    });
+
     // Regression (cloud-companions.md §6): the actual host + SQLite singleton must distinguish
     // the exact externalId from a different Cindy, including legacy identity fingerprints.
     // The pure materializer tests have no DB uniqueness constraint. DB tier; no user data/network.
@@ -1178,12 +1233,20 @@ describe('Bot canonical Session lifecycle', () => {
 
     it('does not let a renderer or model body switch the name check off', async () => {
       const { createBotProfile } = await import('../bots');
-      for (const flag of ['allowSameName', 'allowDuplicateName']) {
+      for (const flag of ['allowSameName', 'allowDuplicateName', 'inactiveCindyIds']) {
         await expect(invoke('local-db:bots:create', { id: 'import_other', name: 'Release Bot', [flag]: true }))
           .rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
         await expect(createBotProfile({ id: 'import_other', name: 'Release Bot', [flag]: true })).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
       }
       expect(names()).toEqual(['bot-1']);
+    });
+
+    it('does not let a public request supply inactive Cindy identities', async () => {
+      await invoke('local-db:bots:create', { id: 'local-cindy', name: 'Cindy', templateId: 'cindy' });
+      const { createBotProfile } = await import('../bots');
+      await expect(createBotProfile({ id: 'forged_cindy', name: 'Another', inactiveCindyIds: ['local-cindy'] },
+        { templateId: 'cindy', allowSameName: true })).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
+      expect(h.sqlite!.prepare("SELECT COUNT(*) FROM bot_profiles WHERE id = 'forged_cindy'").pluck().get()).toBe(0);
     });
 
     it('keeps the default Cindy unique for a take-over', async () => {
@@ -3699,7 +3762,7 @@ describe('Bot canonical Session lifecycle', () => {
     });
     expect(opts.botRuntimeProfile?.mcpPolicy.configured).toContain('cindy_scheduler');
     expect(opts.botProfileContextPrompt).toContain('你能建普通自动化');
-    expect(opts.botProfileContextPrompt).toContain('你能看、能管主人的任务');
+    expect(opts.botProfileContextPrompt).toContain('你能看、能管用户的任务');
   });
 
   it('refreshes canonical MCP generations and Toolset versions in place', async () => {

@@ -15,7 +15,25 @@ import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Passthrough: only the Windows timeout case below replaces execFile; every other case
+// (including the real Git smoke) runs the real one.
+const childProcess = vi.hoisted(() => ({
+  execFile: null as null | ((file: string, args: string[], ...rest: unknown[]) => unknown),
+}));
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  const custom = Symbol.for('nodejs.util.promisify.custom');
+  const execFile = Object.assign(
+    (...args: unknown[]) =>
+      childProcess.execFile
+        ? childProcess.execFile(...(args as [string, string[], ...unknown[]]))
+        : (actual.execFile as (...a: unknown[]) => unknown)(...args),
+    { [custom]: (actual.execFile as unknown as Record<symbol, unknown>)[custom] },
+  );
+  return { ...actual, execFile };
+});
 
 import {
   __clearMemoryScopeKeyCacheForTests,
@@ -296,6 +314,50 @@ describe('resolveMemoryScopeKey — fake probe 回落与缓存', () => {
       expect(key).toBe('C:\\repo\\apps\\a');
     },
   );
+});
+
+/*
+ * 测试价值
+ * - 生产入口与可观察结果：resolveMemoryScopeKey（agent 启动与 memory 工具都 await 它）在 Windows
+ *   上 git 探测超时后必须有界返回，回落为 cwd 原样。
+ * - Bug／规则依据：PR #10043 review P1：taskkill 成功但树里有进程漏杀、仍占着输出管道时，
+ *   execFile 回调永不触发，探测永久挂起；模块契约「宁可回落也不卡 spawn」。
+ * - 现有覆盖缺口：其余用例注入 execGit，绕过真实的 Windows 执行与超时路径。
+ * - 最小失败输入：Windows、目录带 .git、git 永不结束且管道不关、taskkill 报成功。
+ * - tier：unit（fake timers + 替换 execFile，无真实进程与等待）；Windows 真实杀树另见 PR 手工验证。
+ * - 实测耗时：整个文件约 1 秒。
+ */
+describe('resolveMemoryScopeKey — Windows 探测超时', () => {
+  it('taskkill 后管道仍被占住时也有界回落为 cwd', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'scope-timeout-'));
+    await fs.mkdir(path.join(dir, '.git'));
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    let gitStarted = false;
+    childProcess.execFile = (file, _args, _options, callback) => {
+      if (file === 'taskkill') {
+        queueMicrotask(() => (callback as (error: Error | null) => void)(null));
+        return {};
+      }
+      gitStarted = true;
+      // A git whose pipes stay open: execFile's own callback never comes.
+      return { pid: 4242, exitCode: null, stdout: { destroy() {} }, stderr: { destroy() {} }, kill() {} };
+    };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+    try {
+      let key: string | undefined;
+      void resolveMemoryScopeKey(dir).then((value) => { key = value; });
+      await vi.waitFor(() => expect(gitStarted).toBe(true));
+      await vi.advanceTimersByTimeAsync(3_000);
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(key).toBe(dir);
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+      vi.useRealTimers();
+      childProcess.execFile = null;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // 默认 unit tier 唯一一条真实 Git smoke (§3.1): 端到端打通「真实 git 探测 +

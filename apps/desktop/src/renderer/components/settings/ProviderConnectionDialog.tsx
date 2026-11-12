@@ -1,3 +1,4 @@
+import { useFirstRunGuideConnectionDialog } from '@/features/first-run-guide/firstRunGuideStore';
 import { withSpeechApiPresets } from '../../../shared/speechProviderSetup';
 import { ProviderNameSearch } from './ProviderNameSearch';
 import { providerSearchChoices, type ProviderSearchTarget } from './providerSearch';
@@ -488,8 +489,15 @@ export function ProviderConnectionDialog({
   const dialog = useDialogExit(returnFocusRef);
   const suspendedRef = useRef(suspended);
   useLayoutEffect(() => { suspendedRef.current = suspended; }, [suspended]);
-  const onClose = useCallback(() => dialog.close(notifyClosed), [dialog.close, notifyClosed]);
-  const onSaved = useCallback(() => dialog.close(notifySaved), [dialog.close, notifySaved]);
+  const { complete: completeGuideConnection, cancel: cancelGuideConnection } = useFirstRunGuideConnectionDialog();
+  const onClose = useCallback(() => dialog.close(() => {
+    cancelGuideConnection();
+    notifyClosed();
+  }), [cancelGuideConnection, dialog.close, notifyClosed]);
+  const onSaved = useCallback(() => dialog.close(() => {
+    completeGuideConnection();
+    notifySaved();
+  }), [completeGuideConnection, dialog.close, notifySaved]);
   const editing = !!initial;
   const simpleAdding = !editing && !!onDetected;
   const [manualOpen, setManualOpen] = useState(false);

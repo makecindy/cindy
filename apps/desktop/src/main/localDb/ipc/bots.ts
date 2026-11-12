@@ -11,6 +11,7 @@ import { botLinkedProjectAccess } from '../../maker-ipc/botLinkedProjects.js';
 import { listBotSkillsForBot } from '../../maker-ipc/botSkillService.js';
 import { provisionDefaultBot } from '../../maker-ipc/botDefaultProvisioning.js';
 import { BOT_TEMPLATE_PRESET_AVATARS, CINDY_DEFAULT_IDENTITY } from '../../../shared/botTemplatePreset.js';
+import { companionHomes, inactiveCompanionCopyIds } from '../../companion-cloud/homes.js';
 import fs from 'node:fs/promises';
 import { chooseAvatarSource } from '../../profileEdit.js';
 import { toSdrAvatarImage } from '../../hdrAvatarToSdr.js';
@@ -1812,7 +1813,7 @@ export async function recoverActiveTeammateInvitations(): Promise<void> {
     owner.assertCurrent();
     for (const { id } of profiles) queueBotInvitation(id);
   } catch (cause) {
-    log.warn('recover pending teammate invitations failed', {
+    log.warn('recover pending buddy invitations failed', {
       error: cause instanceof Error ? cause.name : typeof cause,
     });
   }
@@ -1826,7 +1827,7 @@ export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer
   const db = client.drizzle;
     const [current] = await db.select().from(botProfiles).where(eq(botProfiles.id, botId)).limit(1);
     if (!current) throwIpcError('NOT_FOUND', 'Bot 不存在');
-    if (expectedVersion !== undefined && current.currentVersion !== expectedVersion) throwIpcError('PRECONDITION_FAILED', 'Teammate changed');
+    if (expectedVersion !== undefined && current.currentVersion !== expectedVersion) throwIpcError('PRECONDITION_FAILED', 'Buddy changed');
     if (current.status === 'archived') {
       throwIpcError('PRECONDITION_FAILED', '已停止的 Bot 不能修改头像');
     }
@@ -1997,6 +1998,8 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
     identitySource,
     capabilitiesJson: safeJson(persistedCapabilities),
     ...(restored?.allowSameName === true ? { allowDuplicateName: true } : {}),
+    // Main-owned projection, never read from the renderer/model request body.
+    inactiveCindyIds: inactiveCompanionCopyIds(companionHomes.snapshot()),
     now,
   });
   } catch (error) {
@@ -2015,7 +2018,7 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
   try {
     await newTeammateSetup?.(id, creationOwnerBoundary.userDataDir, assertCreationOwnerStillCurrent);
   } catch (error) {
-    log.warn('new teammate V2 setup failed; retries on next start', { botId: id, error: String(error) });
+    log.warn('new buddy V2 setup failed; retries on next start', { botId: id, error: String(error) });
   }
   assertCreationOwnerStillCurrent();
   if (prepareInvitation) {
@@ -2245,6 +2248,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
         ...(acceptsModelSelection ? { clearScheduledModelBaseline: true } : {}),
         ...(changesPermissions ? { canonicalPermissionMode: botSessionPermissionMode(normalizedNextConfig) } : {}),
         ...(restored?.allowSameName === true ? { allowDuplicateName: true } : {}),
+        ...(restored?.templateId === 'cindy' ? { inactiveCindyIds: inactiveCompanionCopyIds(companionHomes.snapshot()) } : {}),
         ...(patch.displayName !== undefined ? { displayName: patch.displayName } : {}),
         ...(patch.description !== undefined ? { description: patch.description } : {}),
         ...(patch.avatar !== undefined ? { avatar: patch.avatar } : {}),
@@ -2326,7 +2330,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
       ownerRoot: owner.userDataDir,
       legacyUserDataDir: app.getPath('userData'),
     }).catch((error) => {
-      log.warn('teammate project preparation failed', { botId: id, error: String(error) });
+      log.warn('buddy project preparation failed', { botId: id, error: String(error) });
       return null;
     });
     owner.assertCurrent();
@@ -2334,7 +2338,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     if (prepared) {
       const [route] = await readEffectiveBotModelChain(normalizedNextConfig).catch(() => []);
       await ensureBotProjectAutomations({ botId: id, displayName, workingDir: prepared.workingDir, route })
-        .catch((error) => log.warn('teammate project automations failed', { botId: id, error: String(error) }));
+        .catch((error) => log.warn('buddy project automations failed', { botId: id, error: String(error) }));
       owner.assertCurrent();
     }
   } else if (readBotProjectMode(normalizedNextConfig) && patch.displayName !== undefined
@@ -2369,8 +2373,10 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
 }
 
 async function findExistingCindy(client: ReturnType<typeof getDbClient>) {
-  const rows = await client.drizzle.select({ id: botProfiles.id, config: botProfileVersions.capabilitiesJson, identity: botProfileVersions.identitySource }).from(botProfiles).innerJoin(botProfileVersions, and(eq(botProfileVersions.botId, botProfiles.id), eq(botProfileVersions.version, botProfiles.currentVersion))).where(ne(botProfiles.status, 'archived')).orderBy(botProfiles.createdAt);
-  const existing = rows.find(row => parseJson(row.config).templateId === 'cindy' || inferBotTemplatePresetId(row.identity) === 'cindy');
+  const rows = await client.drizzle.select({ id: botProfiles.id, status: botProfiles.status, config: botProfileVersions.capabilitiesJson, identity: botProfileVersions.identitySource }).from(botProfiles).innerJoin(botProfileVersions, and(eq(botProfileVersions.botId, botProfiles.id), eq(botProfileVersions.version, botProfiles.currentVersion))).where(ne(botProfiles.status, 'archived')).orderBy(botProfiles.createdAt);
+  const inactive = new Set(inactiveCompanionCopyIds(companionHomes.snapshot()));
+  const existing = rows.find(row => (row.status === 'deleting' || !inactive.has(row.id))
+    && (parseJson(row.config).templateId === 'cindy' || inferBotTemplatePresetId(row.identity) === 'cindy'));
   return existing ? readProfile(client, existing.id) : null;
 }
 

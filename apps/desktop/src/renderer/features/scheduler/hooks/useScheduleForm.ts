@@ -28,7 +28,7 @@ import {
   resolveTemplateAgentFields,
 } from '../lib/scheduleFormLogic';
 import type { ScheduleFormState, RunMode, RememberedBinding } from '../lib/scheduleFormLogic';
-import { parseWebhookFormatText, webhookSourceFormFields } from '../lib/scheduleFormLogic';
+import { parseWebhookFormatText, webhookSourceFormFields, validGithubRepositories } from '../lib/scheduleFormLogic';
 import { DEFAULT_SCHEDULE_WEBHOOK_PRESET } from '@cindy/maker-scheduler/webhook-formats';
 
 // 类型与 effort 白名单已迁入 lib/scheduleFormLogic(纯函数层,node 环境可测);
@@ -525,6 +525,9 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     }
     if (form.webhookEnabled && form.webhookPreset === 'custom' && !parseWebhookFormatText(form.webhookFormat)) {
       return { key: 'scheduler.editor.webhook.customInvalid' };
+    }
+    if (form.webhookEnabled && form.webhookPreset === 'github-app' && !validGithubRepositories(form.webhookRepositories)) {
+      return { key: 'scheduler.editor.webhook.repositoriesInvalid' };
     }
     return null;
   }, [form]);

@@ -1,14 +1,16 @@
 # Electron 客户端模式（阶段 5 进行中）
 
-默认行为：**本机有 Host 在跑时自动进入客户端模式**（Host 在启动时写 `host-endpoint.json`，
-Desktop 校验 pid 存活即接管），无需任何环境变量；`CINDY_HOST_API` 仍可显式指定目标。
-Host 未运行时回退到内嵌 Runtime；`pnpm dev:host` 会先确保 Host 在跑（复用或拉起），
-打包版的常驻由 systemd unit 负责。
+默认 Desktop 不发现或自动接管 Host。只有显式设置 `CINDY_HOST_API` 才进入客户端模式；
+`pnpm dev:host` 会验证并复用或启动 profile 的后台 Host，再为子窗口注入地址与
+`CINDY_HOST_INSTANCE`。窗口或启动终端退出不停止后台。
+
+本次后台生命周期、平台 RPC 与换窗合同见[窗口交接地基](client-handoff-foundation.md)。
+整机迁移声明保持 `ready: false`，不能由窗口测试推断完整桌面功能已经迁移。
 
 Host 也可不指定 owner：profile 内只有一个 `cindy-<owner>.db` 时自动采用该账号，
 多账号 profile 会明确拒绝猜测（`CINDY_HOST_OWNER` 仍可显式指定）。
 
-设置 `CINDY_HOST_API`（或自动发现）后，Desktop 不再装配自己的 Runtime，而是把已迁移的 renderer
+设置 `CINDY_HOST_API` 后，Desktop 不再装配自己的 Runtime，而是把已迁移的 renderer
 通道转发到 `cindy-host`，并把宿主的事件流回灌到同一 push 通道。
 
 ```bash
@@ -16,6 +18,7 @@ Host 也可不指定 owner：profile 内只有一个 `cindy-<owner>.db` 时自�
 CINDY_HOST_DATA_DIR=<profile> CINDY_HOST_OWNER=<owner> pnpm start-host
 # 2) Desktop 以客户端模式启动
 CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
+# 上例兼容 HTTP/SSE，不启用平台 RPC；需电脑/浏览器执行时使用 pnpm dev:host。
 ```
 
 启动日志会打印 `client mode: delegating to …` 与已接管通道列表。
@@ -85,9 +88,21 @@ Host 直接复用 Desktop 的 `GhostManager`（同一实现），只注入 owner
 ## 明确未迁移（客户端模式下会显式失败）
 
 `maker:send`、`maker:list-active`、中断/告警、MCP、插件执行、scheduler、device-link、
-Orca 协同、记忆与文件工具等仍由 Desktop 内 Runtime 提供；客户端模式下调用这些通道会
-返回 `UNSUPPORTED_CAPABILITY: cindy-host owns this profile; this channel is not proxied yet`，
-不会静默回落到第二套 Runtime。
+Orca 协同、记忆与文件工具等仍由 Desktop 内 Runtime 提供，不会静默回落到第二套 Runtime。
+客户端模式下没有处理者的 `maker:*` 通道返回
+`UNSUPPORTED_CAPABILITY: Capability <通道> is not supported in host client mode`；其它前缀的
+未接通道保持 Electron 原错误（`No handler registered`）。两类都会计数，每个通道首次出现时
+记一行日志，退出时打印调用最多的 30 个。全量清单与真实使用排行见
+[channel-coverage.md](channel-coverage.md)。
+
+2026-11-12 之前，兜底只改写了 `_invokeHandlers.get()`，而 Electron 在 invoke 时先查
+`has()`，所以 `maker:*` 实际上也只回 `No handler registered`；现已一并应答 `has()`，
+并且不影响桌面之后注册的 `maker:*` 通道。
+
+注意：本该留在窗口的通道里有 12 个在客户端模式下没有注册（`maker:computer:*` 10 个、
+`maker:browser:*` 2 个），因为它们注册在客户端模式跳过的 `registerMakerIpcsAfterSplash` 里；
+`update-relaunch:*` 两个同理，但它们问的是 Host 持有的运行状态。清单
+（[channel-coverage.md](channel-coverage.md)）的「窗口类但客户端模式下未注册」列出全部，尚未修改。
 
 在把这些通道全部改为 Host API 之前，「Electron 不参与 Runtime」不视为达成。
 
