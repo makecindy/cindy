@@ -12,7 +12,7 @@
  * - 最小失败输入：挂起一次部署或退出请求，换账号，再让原请求完成；同一设备另起一把公钥来申请；
  *   同一邀请码下一真一假两条其他账号的申请；对方先拒绝再同意；主人电脑不回话 / 回过「收到」的两次同账号加入。
  * - tier：unit；SSH、存储、账号记录、中转 V2 接口和 Electron 为进程内 fake，无网络、磁盘或真实等待。
- * - 单文件实测：3.27 秒（23 例，测试体 66ms，Windows，含命令启动与转译）。
+ * - 单文件实测：2.95 秒（25 例，测试体 61ms，Windows，含命令启动与转译）。
  */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { RelayConfig } from '../selfHostedRelayConfig';
@@ -37,6 +37,8 @@ const h = vi.hoisted(() => ({
   uninstall: vi.fn(),
   startServer: vi.fn(),
   onlyEncrypted: false,
+  agentNetEnabled: false,
+  invoke: vi.fn(),
   /** 账号私有记录(Chat Server preferences)的进程内替身。 */
   prefs: new Map<string, unknown>(),
   /** 某个中转上的秘密(带 V2 身份或只走 V2 时);没有登记的按旧版凭证处理。 */
@@ -72,7 +74,7 @@ vi.mock('../../utils/ipcValidate.js', () => ({ throwIpcError: (code: string) => 
 vi.mock('../invoke-context.js', () => ({ getDeviceLinkInvokeContext: () => null }));
 vi.mock('../deviceName.js', () => ({ deviceName: () => 'Test computer' }));
 vi.mock('../providerShareApi.js', () => ({ providerShareLinkApp: () => 'cindy' }));
-vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ keepAwake: true, agentNetOnlyEncrypted: h.onlyEncrypted }),
+vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ keepAwake: true, agentNetEnabled: h.agentNetEnabled, agentNetOnlyEncrypted: h.onlyEncrypted }),
   writeDeviceLinkSetting: async (key: string, value: boolean) => { if (key === 'agentNetOnlyEncrypted') h.onlyEncrypted = value; },
 }));
 vi.mock('../selfHostedRelayFrameAuth.js', () => ({ refreshRelayCertificatesSoon: vi.fn() }));
@@ -85,6 +87,7 @@ vi.mock('../relayAccountPreferences.js', () => ({
 }));
 vi.mock('../index.js', () => ({
   broadcast: vi.fn(), getDeviceLinkConnectionIssue: () => null,
+  remoteBackgroundInvoke: h.invoke,
   getDeviceLinkPeerLinks: () => ({ links: [] }),
   restartDeviceLinkForRelayChange: h.restart, setKeepAwakeEnabled: vi.fn(),
 }));
@@ -169,6 +172,8 @@ async function switchOwner(owner: string) {
 beforeEach(async () => {
   resetClientEndpointsForTest(TEST_CLIENT_ENDPOINTS);
   h.onlyEncrypted = false;
+  h.agentNetEnabled = false;
+  h.invoke.mockResolvedValue({ ok: true, result: { enabled: false, confirmWithinMs: null } });
   h.prefs = new Map();
   h.secrets = new Map();
   h.agentNet.mockReset();
@@ -187,6 +192,39 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 const deploymentOf = (owner = 'account-a', sshHostId = 'test-server') =>
   h.config.get(owner)!.deployments.find((deployment) => deployment.sshHostId === sshHostId);
+
+// 独立审查 #10095：发起端禁止 V1 时，不能先关闭目标再丢掉唯一可用控制通道。真实 IPC，tier:unit。
+it('refuses to send a disable when the controller cannot reconnect over Device Link', async () => {
+  h.agentNetEnabled = true;
+  h.onlyEncrypted = true;
+  const probe = await command({ type: 'peer-agent-net', deviceId: 'target', request: { action: 'status' } });
+  expect(probe.peer).toMatchObject({ ok: true, controllerBlock: 'ENCRYPTION_REQUIRED' });
+  h.invoke.mockClear();
+  const result = await command({ type: 'peer-agent-net', deviceId: 'target', request: { action: 'set', enabled: false, switchId: 'switch-strict-controller' } });
+  expect(result.peer).toMatchObject({ ok: false, message: expect.stringContaining('[AGENT_NET_SWITCH_CONTROLLER_ENCRYPTION_REQUIRED]') });
+  expect(h.invoke).not.toHaveBeenCalled();
+  expect(h.onlyEncrypted).toBe(true);
+});
+
+it('exposes and enforces the V2-only relay restriction on both ends of a switch-back', async () => {
+  h.agentNetEnabled = true;
+  h.config.get('account-a')!.active = {
+    relayId: 'v2-only-relay', name: 'Shared network', baseUrl: 'https://relay.invalid', origin: 'join', role: 'member',
+    deviceId: 'test-device', ownerPublicKey: 'A'.repeat(43),
+  };
+  h.secrets.set('v2-only-relay', { credential: '', seed: 'fixture-seed', agentNet: {} });
+  const target = agentNetSwitchRemoteHandler()!;
+  await expect(target.handle({ action: 'status' }, 'controller', 'Other computer')).resolves.toMatchObject({ disableBlocked: 'V2_ONLY_RELAY' });
+  const probe = await command({ type: 'peer-agent-net', deviceId: 'target', request: { action: 'status' } });
+  expect(probe.peer).toMatchObject({ ok: true, controllerBlock: 'V2_ONLY_RELAY' });
+  h.invoke.mockClear();
+  const request = { action: 'set' as const, enabled: false, switchId: 'switch-v2-only-relay' };
+  await expect(target.handle(request, 'controller', 'Other computer')).rejects.toThrow('[AGENT_NET_SWITCH_V2_ONLY_RELAY]');
+  const result = await command({ type: 'peer-agent-net', deviceId: 'target', request });
+  expect(result.peer).toMatchObject({ ok: false, message: expect.stringContaining('[AGENT_NET_SWITCH_V2_ONLY_RELAY]') });
+  expect(h.invoke).not.toHaveBeenCalled();
+  expect(h.agentNetEnabled).toBe(true);
+});
 
 // #10095 discussion_r4546067871：旧链接加入的中转没有 V2 身份，不能宣称已具备切换前提。
 // 真实远程 handler；已有部署/配对测试没有运行其只读探测。最小输入：member 仅有 V1 凭证。tier:unit。

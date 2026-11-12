@@ -31,11 +31,14 @@ export type AgentNetSwitchRequest =
 
 /** Why the target cannot enable Agent-Net right now; disabling also respects onlyEncrypted. */
 export type AgentNetSwitchBlock = 'NOT_SIGNED_IN' | 'SECURE_STORAGE_UNAVAILABLE' | 'RELAY_IDENTITY_MISSING';
+/** A saved local choice or a relay with no Device Link route. Optional on older targets. */
+export type AgentNetSwitchDisableBlock = 'ENCRYPTION_REQUIRED' | 'V2_ONLY_RELAY';
 
 export interface AgentNetSwitchStatus {
   version: number;
   enabled: boolean;
   onlyEncrypted: boolean;
+  disableBlocked?: AgentNetSwitchDisableBlock | null;
   blocked: AgentNetSwitchBlock | null;
   /** A remote switch on this target is waiting for its confirmation. */
   pending: boolean;
@@ -62,6 +65,8 @@ export type AgentNetSwitchErrorCode =
   | 'AGENT_NET_SWITCH_INVALID'
   | 'AGENT_NET_SWITCH_NOT_READY'
   | 'AGENT_NET_SWITCH_ENCRYPTION_REQUIRED'
+  | 'AGENT_NET_SWITCH_CONTROLLER_ENCRYPTION_REQUIRED'
+  | 'AGENT_NET_SWITCH_V2_ONLY_RELAY'
   | 'AGENT_NET_SWITCH_BUSY'
   | 'AGENT_NET_SWITCH_STALE'
   | 'AGENT_NET_SWITCH_NOT_ON_AGENT_NET'
@@ -94,6 +99,8 @@ export function parseAgentNetSwitchStatus(value: unknown): AgentNetSwitchStatus 
     version: typeof root.version === 'number' ? root.version : AGENT_NET_SWITCH_VERSION,
     enabled: root.enabled,
     onlyEncrypted: root.onlyEncrypted === true,
+    ...(root.disableBlocked === 'V2_ONLY_RELAY' || root.disableBlocked === 'ENCRYPTION_REQUIRED'
+      ? { disableBlocked: root.disableBlocked } : {}),
     blocked,
     pending: root.pending === true,
     ...(typeof root.encrypted === 'boolean' ? { encrypted: root.encrypted } : {}),

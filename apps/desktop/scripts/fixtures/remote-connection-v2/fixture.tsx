@@ -59,7 +59,7 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
     }
     return { devices, links, relayRttMs: 25 };
   }
-  if (name === 'remote-switch' || name === 'remote-switch-batch') {
+  if (name.startsWith('remote-switch')) {
     // 原型:在拓扑卡片里远程切换连接方式。每台设备一种情况(见 ui-page.mjs 的 remote-switch)。
     const enc = (l: Link, encrypted: boolean): Link => ({ ...l, encrypted });
     return {
@@ -67,6 +67,7 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
         SELF,
         device({ deviceId: 'work', name: 'Work PC', platform: 'win32', deviceInfo: { modelLabel: 'ThinkPad X1' } }),
         device({ deviceId: 'build', name: 'Build Server', platform: 'linux' }),
+        device({ deviceId: 'vault', name: 'Archive Server', platform: 'linux' }),
         device({ deviceId: 'lab', name: 'Lab Mac', deviceInfo: { modelLabel: 'Mac mini' } }),
         device({ deviceId: 'phone', name: 'iPhone', platform: 'ios' }),
         device({ deviceId: 'home', name: 'Home PC', platform: 'win32' }),
@@ -78,6 +79,7 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
       links: [
         enc(link('work', 'direct', 4), false),
         enc(link('build', 'direct', 3), true),
+        enc(link('vault', 'direct', 5), true),
         enc(link('lab', 'direct', 2), false),
         enc(link('phone', 'direct', 18), false),
         enc(link('home', 'relay', 46), false),
@@ -133,18 +135,20 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
 }
 
 const data = scenario(ctx.case);
+if (ctx.case === 'remote-switch-controller-strict') data.links = data.links.filter((l) => l.encrypted);
 /**
  * 远程切换连接方式的模拟对端(remote-switch):代替那台电脑回答 `peer-agent-net`,并像真实切换一样
  * 让与它的连接先断开、再以新方式连回来。MacBook Air 是旧版 Cindy(不认识这个请求)，Spare PC 在当前中转上
  * 没有 Agent-Net 身份；Agent-Net 不通的那台(单台场景 Home PC、批量场景 Lab Mac)连回来的仍是 Device Link，
  * 在它给出的期限后显示已退回。
  */
-const peerPlan: Record<string, { status?: 'unsupported' | 'NOT_SIGNED_IN' | 'SECURE_STORAGE_UNAVAILABLE' | 'RELAY_IDENTITY_MISSING'; agentNetFails?: boolean; onlyEncrypted?: boolean }> =
-  ctx.case === 'remote-switch' || ctx.case === 'remote-switch-batch'
+const peerPlan: Record<string, { status?: 'unsupported' | 'NOT_SIGNED_IN' | 'SECURE_STORAGE_UNAVAILABLE' | 'RELAY_IDENTITY_MISSING'; agentNetFails?: boolean; onlyEncrypted?: boolean; relayOnly?: boolean }> =
+  ctx.case.startsWith('remote-switch')
     ? {
         air: { status: 'unsupported' },
         spare: { status: 'RELAY_IDENTITY_MISSING' },
-        build: { onlyEncrypted: true },
+        build: { onlyEncrypted: ctx.case !== 'remote-switch-controller-strict' },
+        vault: { relayOnly: true },
         // 单台：Home PC 退回；批量：第一台 Home PC 成功，Lab Mac 退回，Work PC 成功。
         [ctx.case === 'remote-switch' ? 'home' : 'lab']: { agentNetFails: true },
       }
@@ -158,7 +162,9 @@ async function simulatePeer(command: Extract<SelfHostedRelayCommand, { type: 'pe
   await wait(request.action === 'status' ? 800 : 300);
   if (plan.status === 'unsupported') return { ok: false, code: 'CHANNEL_NOT_ALLOWED', message: 'channel not allowed remotely' };
   if (request.action === 'status') {
-    return { ok: true, result: { version: 1, enabled: link?.encrypted === true, encrypted: link?.encrypted === true,
+    return { ok: true, controllerBlock: ctx.case === 'remote-switch-controller-strict' ? 'ENCRYPTION_REQUIRED' : null,
+      result: { version: 1, enabled: link?.encrypted === true, encrypted: link?.encrypted === true,
+      disableBlocked: plan.relayOnly ? 'V2_ONLY_RELAY' : null,
       onlyEncrypted: plan.onlyEncrypted === true, blocked: plan.status ?? null, pending: (pendingDeadline.get(command.deviceId) ?? 0) > Date.now() } };
   }
   if (request.action === 'confirm') {
@@ -171,6 +177,8 @@ async function simulatePeer(command: Extract<SelfHostedRelayCommand, { type: 'pe
     pendingDeadline.delete(command.deviceId);
     return { ok: true, result: { version: 1, switchId: request.switchId, confirmed: true } };
   }
+  if (!request.enabled && ctx.case === 'remote-switch-controller-strict') return { ok: false, code: 'IPC_ERROR', message: '[AGENT_NET_SWITCH_CONTROLLER_ENCRYPTION_REQUIRED] controller requires encryption' };
+  if (!request.enabled && plan.relayOnly) return { ok: false, code: 'IPC_ERROR', message: '[AGENT_NET_SWITCH_V2_ONLY_RELAY] network requires encryption' };
   if (!request.enabled && plan.onlyEncrypted) return { ok: false, code: 'IPC_ERROR', message: '[AGENT_NET_SWITCH_ENCRYPTION_REQUIRED] target requires encryption' };
   if (request.enabled && plan.status) return { ok: false, code: 'IPC_ERROR', message: '[AGENT_NET_SWITCH_NOT_READY] agent-net switch failed' };
   if (link) {
@@ -217,7 +225,7 @@ void mountPage({
         state: {
           available: true,
           agentNetEnabled: ctx.case !== 'legacy-off',
-          agentNetOnlyEncrypted: ctx.case === 'empty',
+          agentNetOnlyEncrypted: ctx.case === 'empty' || ctx.case === 'remote-switch-controller-strict',
           // 被切的那台电脑:开关下面写「由谁在几点远程打开」。
           agentNetChangedBy: ctx.case === 'switched-here'
             ? { deviceId: 'mbp', deviceName: 'MacBook Pro', at: new Date(2026, 10, 12, 10, 32).getTime(), enabled: true }

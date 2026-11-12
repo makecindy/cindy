@@ -22,6 +22,7 @@ import {
   parseAgentNetSwitchRequest,
   type AgentNetSwitchAccepted,
   type AgentNetSwitchBlock,
+  type AgentNetSwitchDisableBlock,
   type AgentNetSwitchConfirmed,
   type AgentNetSwitchErrorCode,
   type AgentNetSwitchStatus,
@@ -57,6 +58,8 @@ export interface AgentNetRemoteSwitchPorts {
   writePending(value: AgentNetPendingSwitch | null): Promise<void>;
   /** 现在能不能打开 Agent-Net；关闭另受本机「仅使用 Agent-Net」选择约束。 */
   readiness(): AgentNetSwitchBlock | null;
+  /** 目标当前网络是否根本没有 Device Link 路线；本机仅加密选择另在此对象内核对。 */
+  disableBlock?(): AgentNetSwitchDisableBlock | null;
   /** 与本机开关同一条路径：保存开关并重连。切不了时返回错误码(它自己已恢复原值)。 */
   apply(enabled: boolean): Promise<string | null>;
   /** 这台电脑到 deviceId 的连接此刻是不是 Agent-Net(端到端加密)。 */
@@ -102,12 +105,18 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
   };
   const serially = (task: () => Promise<void>): Promise<void> => enqueue(task).catch(() => undefined);
 
+  function disableBlock(): AgentNetSwitchDisableBlock | null {
+    const settings = ports.readSettings();
+    return ports.disableBlock?.() ?? (settings.agentNetEnabled === true && settings.agentNetOnlyEncrypted === true ? 'ENCRYPTION_REQUIRED' : null);
+  }
+
   function status(controllerId?: string): AgentNetSwitchStatus {
     const settings = ports.readSettings();
     return {
       version: AGENT_NET_SWITCH_VERSION,
       enabled: settings.agentNetEnabled === true,
       onlyEncrypted: settings.agentNetEnabled === true && settings.agentNetOnlyEncrypted === true,
+      disableBlocked: disableBlock(),
       blocked: ports.readiness(),
       pending: !!settings.agentNetPendingSwitch,
       ...(controllerId ? { encrypted: ports.linkIsAgentNet(controllerId) } : {}),
@@ -139,10 +148,10 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
 
   async function set(enabled: boolean, switchId: string, controllerId: string, controllerName: string): Promise<AgentNetSwitchAccepted> {
     const epoch = localChangeEpoch;
-    const initialSettings = ports.readSettings();
-    if (!enabled && initialSettings.agentNetEnabled === true && initialSettings.agentNetOnlyEncrypted === true) {
+    const offBlock = !enabled ? disableBlock() : null;
+    if (offBlock) {
       // 在任何取消、归因或计时器改动之前拒绝，不能用远程总开关绕过本机的加密选择。
-      throw new AgentNetSwitchError('AGENT_NET_SWITCH_ENCRYPTION_REQUIRED', 'release Only Agent-Net on the target computer first');
+      throw new AgentNetSwitchError(offBlock === 'V2_ONLY_RELAY' ? 'AGENT_NET_SWITCH_V2_ONLY_RELAY' : 'AGENT_NET_SWITCH_ENCRYPTION_REQUIRED', 'the target requires Agent-Net');
     }
     let pending = ports.readSettings().agentNetPendingSwitch;
     if (pending) {
@@ -188,7 +197,7 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
       if (delayedEpoch !== delayedChangeEpoch) return;
       if (enabled && ports.readSettings().agentNetPendingSwitch?.switchId !== switchId) return;
       const current = ports.readSettings();
-      if (!enabled && current.agentNetEnabled === true && current.agentNetOnlyEncrypted === true) {
+      if (!enabled && disableBlock()) {
         // 回答离开后的延迟窗口中，本机(含另一实例)也可能刚刚选了仅使用 Agent-Net。
         clearDeadline();
         if (pending && current.agentNetPendingSwitch?.switchId === pending.switchId) await ports.writePending(null);

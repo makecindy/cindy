@@ -9,11 +9,13 @@
 
 - **请求**：`{ action: 'status' }`（只读）、`{ action: 'set', enabled, switchId }`、`{ action: 'confirm', switchId }`。
   `switchId` 由发起端生成（8–64 位字母数字、`_`、`-`）。
-- **status**：`{ version, enabled, onlyEncrypted, blocked, pending, encrypted? }`。`encrypted` 表示与请求电脑的实际链路，
+- **status**：`{ version, enabled, onlyEncrypted, blocked, pending, encrypted?, disableBlocked? }`。`encrypted` 表示与请求电脑的实际链路，
   旧端可省略，不能从 `enabled` 推断。`blocked` 为 `NOT_SIGNED_IN` / `SECURE_STORAGE_UNAVAILABLE` /
   `RELAY_IDENTITY_MISSING` / `null`，只说明现在能不能打开。`onlyEncrypted: true` 则禁止远程关闭，须先在目标电脑解除。
   当前中转缺少 Agent-Net 身份时明确拒绝，
   本机中转的主人可沿原启用路径自动补身份。
+  可选 `disableBlocked` 为 `ENCRYPTION_REQUIRED` / `V2_ONLY_RELAY` / `null`，后者反映没有 V1 凭证、只走 V2 的实际网络限制；
+  它不受 Beta 开关影响，不能用 `enabled: false` 代表已切回 Device Link。旧状态缺此字段仍按原字段处理。
 - **set**：先回答 `{ version, switchId, enabled, confirmWithinMs }`，再在 400ms 后走与本机开关相同的保存与重连路径。
   打开时 `confirmWithinMs` 为 60 秒：被控端在此期限内没有收到同一发起端经 Agent-Net（端到端加密链路）发来的
   `confirm`，就自己退回原值。关闭与「本来就是这个状态」返回 `null`，不需要确认。另一个打开还在等确认时，
@@ -22,7 +24,8 @@
   否则分别回 `[AGENT_NET_SWITCH_STALE]` / `[AGENT_NET_SWITCH_NOT_ON_AGENT_NET]`。发起端主动发确认（不等连接自己回来：
   它没在控制那台电脑时连接不会自己重建，确认请求本身会建起后台连接），期限内每秒最多一次；关闭后同样每秒最多问一次
   status，最长 30 秒。这些请求只在一次切换期间发生、点对点经中转转发，不经服务端业务接口。
-  关闭只有读到开关已关闭才算完成，超时为失败；本来已开启的目标也必须核实 `encrypted: true` 才算切到 Agent-Net。
+  关闭只有读到开关已关闭、`encrypted: false` 且没有 pending 才算完成，超时为失败；本来已开启的目标也必须核实
+  `encrypted: true` 才算切到 Agent-Net。旧端没提供实际链路时无法核实，不推断成功。
   确认回包丢失导致重试返回 `STALE` 时补读一次实际链路；期限结束后同样补读一次，只在读到原状态时报告已退回，
   无法核实则报告切换未完成。两条补读不增加持续轮询。
 - **不远程改**「仅使用 Agent-Net」。目标开启该限制时，`set(enabled: false)` 在改动任何待确认记录、归因或计时器前
@@ -30,6 +33,9 @@
   发起端单台显示原因，批量在两个方向都先探测并排除受限目标；探测后状态变化仍由目标强制拦截。
   本机修改该选择会取消未执行的远程切换（与本机修改总开关同样以人为准）。新错误码是追加项，旧发起端按失败处理，
   不改帧格式与版本；旧目标的 `onlyEncrypted` 字段继续照常解析。
+- **发起端限制**：本机命令转发前也检查自身能否回到 Device Link；不能时不发送 `set(false)`，回
+  `[AGENT_NET_SWITCH_CONTROLLER_ENCRYPTION_REQUIRED]` 或 `[AGENT_NET_SWITCH_V2_ONLY_RELAY]`。本机 IPC 的成功探测回复追加
+  可选 `controllerBlock`（同 `disableBlocked` 枚举）给界面解释；该字段不发往目标。目标也拒绝 V2-only 网络的远程关闭。
 - **持久化**：被控端把待确认记录与「由谁打开」写进 `device-link-settings.json` 的 `agentNetPendingSwitch` /
   `agentNetChangedBy`（只在发生过时出现，旧文件形状不变）。启动时记录它的进程已不在就直接退回；
   恢复原开关完成后才清除待确认记录，中途退出仍可继续恢复。本机的人改开关会清掉两条记录，并使打开、关闭两个方向

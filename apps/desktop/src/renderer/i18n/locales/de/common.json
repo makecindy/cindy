@@ -6825,7 +6825,9 @@
             "not-ready": "„{{name}}“ kann Agent-Net gerade nicht einschalten",
             "busy": "„{{name}}“ bearbeitet gerade einen anderen Wechsel. Versuche es gleich erneut.",
             "failed": "„{{name}}“ konnte nicht umgeschaltet werden.",
-            "encryption-required": "Deaktiviere auf „{{name}}“ zuerst „Nur Agent-Net verwenden“"
+            "encryption-required": "Deaktiviere auf „{{name}}“ zuerst „Nur Agent-Net verwenden“",
+            "controller-encryption-required": "Deaktiviere hier „Nur Agent-Net verwenden“, bevor du „{{name}}“ zurückwechselst",
+            "agent-net-only-relay": "Die Verbindung zu „{{name}}“ unterstützt nur Agent-Net und kann nicht zu Device Link wechseln"
           },
           "checking": "Prüfe, ob ein Wechsel möglich ist…",
           "notReady": {
@@ -6844,7 +6846,9 @@
               "unsupported": "Cindy-Update nötig",
               "not-ready": "Agent-Net derzeit nicht möglich",
               "unreachable": "Derzeit nicht erreichbar",
-              "encryption-required": "Nur Agent-Net verwenden"
+              "encryption-required": "Nur Agent-Net verwenden",
+              "controller-encryption-required": "Hier nur Agent-Net",
+              "agent-net-only-relay": "Netzwerk nur für Agent-Net"
             },
             "canaryNote": "Zuerst wechselt ein Computer; die übrigen folgen, sobald er neu verbunden ist. Jeder Computer, der sich nicht innerhalb von 60 Sekunden neu verbindet, kehrt selbst zurück.",
             "rollbackNote": "Beim Zurückwechseln entfällt die Ende-zu-Ende-Verschlüsselung. Computer, die nur Agent-Net verwenden, müssen diese Einschränkung zuerst dort deaktivieren.",
@@ -6868,7 +6872,11 @@
             "off": "Per Fernzugriff ausgeschaltet von „{{name}}“ um {{time}}"
           },
           "unreachable": "Der Computer war diesmal nicht erreichbar. Öffne die Karte später erneut.",
-          "encryptionRequired": "Dieser Computer verwendet nur Agent-Net. Deaktiviere dort „Nur Agent-Net verwenden“, bevor du zu Device Link zurückwechselst."
+          "encryptionRequired": "Dieser Computer verwendet nur Agent-Net. Deaktiviere dort „Nur Agent-Net verwenden“, bevor du zu Device Link zurückwechselst.",
+          "disableBlocked": {
+            "controller-encryption-required": "Auf diesem Computer ist „Nur Agent-Net verwenden“ aktiviert. Deaktiviere es hier, bevor du den anderen Computer zu Device Link zurückwechselst.",
+            "agent-net-only-relay": "Diese Verbindung nutzt ein Netzwerk, das nur Agent-Net unterstützt. Wähle zuerst einen Verbindungsweg, der Device Link unterstützt."
+          }
         }
       }
     },

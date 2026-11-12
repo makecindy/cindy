@@ -33,6 +33,10 @@ export default {
       about: 'Prototype: this computer was switched to Agent-Net remotely; the switch hint says by whom and when',
       storage: V2_ON,
     },
+    'remote-switch-controller-strict': {
+      about: 'Controller requires Agent-Net: card and batch explain why it cannot switch a peer to Device Link',
+      storage: V2_ON,
+    },
   },
   async check(page, ui) {
     await page.getByRole('switch', { name: await ui.t('settings.remoteControl.v2.switch.title') }).waitFor();
@@ -40,9 +44,22 @@ export default {
       await page.getByText('MacBook Pro', { exact: false }).first().waitFor();
       return;
     }
-    if (ui.case === 'remote-switch' || ui.case === 'remote-switch-batch') {
+    if (ui.case.startsWith('remote-switch')) {
       const t = (key) => ui.t(`settings.remoteControl.v2.peerSwitch.${key}`);
       await page.getByRole('button', { name: /^Work PC/ }).waitFor();
+      if (ui.case === 'remote-switch-controller-strict') {
+        await page.getByRole('button', { name: /^Build Server/ }).click();
+        await page.getByText(await t('disableBlocked.controller-encryption-required'), { exact: true }).waitFor();
+        if (await page.getByRole('button', { name: await t('toDeviceLink'), exact: true }).count()) throw new Error('strict controller offers an unreachable switch-back');
+        await ui.capture('card-controller-encryption-required');
+        await page.keyboard.press('Escape');
+        await page.getByRole('button', { name: await t('batch.toDeviceLink'), exact: true }).click();
+        await page.getByText(await t('batch.skipReason.controller-encryption-required'), { exact: true }).waitFor();
+        if (!(await page.getByRole('dialog').getByRole('button').last().isDisabled())) throw new Error('strict controller can start a switch-back batch');
+        await ui.capture('batch-controller-encryption-required');
+        await page.keyboard.press('Escape');
+        return;
+      }
       if (ui.case === 'remote-switch') {
         const open = async (name, shot, { wait = 1000 } = {}) => {
           await page.getByRole('button', { name: new RegExp(`^${name}`) }).click();
@@ -60,6 +77,11 @@ export default {
         await page.getByText(await t('encryptionRequired'), { exact: true }).waitFor();
         if (await page.getByRole('button', { name: await t('toDeviceLink'), exact: true }).count()) throw new Error('encrypted-only target offers a remote downgrade');
         await ui.capture('card-encryption-required');
+        await page.keyboard.press('Escape');
+        await page.getByRole('button', { name: /^Archive Server/ }).click();
+        await page.getByText(await t('disableBlocked.agent-net-only-relay'), { exact: true }).waitFor();
+        if (await page.getByRole('button', { name: await t('toDeviceLink'), exact: true }).count()) throw new Error('V2-only relay offers a Device Link switch-back');
+        await ui.capture('card-agent-net-only-relay');
         await page.keyboard.press('Escape');
         // 单台切换：点了先列三步；Home PC 的 Agent-Net 不通，期限过后显示已退回。
         await page.getByRole('button', { name: /^Home PC/ }).click();
@@ -90,6 +112,8 @@ export default {
       await page.getByRole('button', { name: await t('batch.toDeviceLink'), exact: true }).click();
       await page.getByRole('dialog').waitFor();
       await page.getByText(await t('batch.skipReason.encryption-required'), { exact: true }).waitFor();
+      await page.getByText(await t('batch.skipReason.agent-net-only-relay'), { exact: true }).waitFor();
+      await page.getByRole('dialog').locator('button:enabled').nth(1).waitFor();
       await ui.capture('rollback-confirm');
       await page.keyboard.press('Escape');
       return;

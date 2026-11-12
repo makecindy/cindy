@@ -6782,7 +6782,9 @@
             "not-ready": "「{{name}}」은(는) 지금 Agent-Net을 켤 수 없습니다",
             "busy": "「{{name}}」이(가) 다른 전환을 처리 중입니다. 잠시 후 다시 시도하세요",
             "failed": "「{{name}}」의 연결을 전환하지 못했습니다",
-            "encryption-required": "먼저 “{{name}}”에서 “Agent-Net만 사용”을 끈 뒤 되돌려 주세요"
+            "encryption-required": "먼저 “{{name}}”에서 “Agent-Net만 사용”을 끈 뒤 되돌려 주세요",
+            "controller-encryption-required": "“{{name}}”을 되돌리려면 먼저 이 컴퓨터에서 “Agent-Net만 사용”을 꺼 주세요",
+            "agent-net-only-relay": "“{{name}}” 연결은 Agent-Net만 지원하므로 Device Link로 되돌릴 수 없습니다"
           },
           "checking": "전환할 수 있는지 확인하는 중…",
           "notReady": {
@@ -6801,7 +6803,9 @@
               "unsupported": "Cindy 업데이트 필요",
               "not-ready": "지금 Agent-Net을 켤 수 없음",
               "unreachable": "지금 응답 없음",
-              "encryption-required": "Agent-Net만 사용"
+              "encryption-required": "Agent-Net만 사용",
+              "controller-encryption-required": "이 컴퓨터는 Agent-Net만 사용",
+              "agent-net-only-relay": "Agent-Net 전용 네트워크"
             },
             "canaryNote": "먼저 한 대를 전환하고 다시 연결되는 것을 확인한 뒤 나머지를 함께 전환합니다. 60초 안에 다시 연결되지 않는 컴퓨터는 스스로 돌아갑니다.",
             "rollbackNote": "되돌리면 연결의 종단 간 암호화가 해제됩니다. “Agent-Net만 사용”이 켜진 컴퓨터는 먼저 해당 컴퓨터에서 이 설정을 꺼야 합니다.",
@@ -6825,7 +6829,11 @@
             "off": "「{{name}}」이(가) {{time}}에 원격으로 끔"
           },
           "unreachable": "이번에는 그 컴퓨터에 확인하지 못했습니다. 잠시 후 카드를 다시 열어 보세요.",
-          "encryptionRequired": "이 컴퓨터는 “Agent-Net만 사용”이 켜져 있습니다. Device Link로 되돌리려면 먼저 해당 컴퓨터에서 이 설정을 꺼 주세요."
+          "encryptionRequired": "이 컴퓨터는 “Agent-Net만 사용”이 켜져 있습니다. Device Link로 되돌리려면 먼저 해당 컴퓨터에서 이 설정을 꺼 주세요.",
+          "disableBlocked": {
+            "controller-encryption-required": "이 컴퓨터는 “Agent-Net만 사용”이 켜져 있습니다. 다른 컴퓨터를 Device Link로 되돌리려면 먼저 여기에서 이 설정을 꺼 주세요.",
+            "agent-net-only-relay": "이 연결의 네트워크는 Agent-Net만 지원합니다. 되돌리려면 먼저 Device Link를 지원하는 연결 경로로 바꿔 주세요."
+          }
         }
       }
     },

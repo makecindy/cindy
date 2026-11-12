@@ -196,8 +196,9 @@ function useSwitchArea(
   }
   if (probe.kind === 'unsupported') return { body: hint(t('settings.remoteControl.v2.peerSwitch.unsupported')), action: null };
   if (probe.kind === 'unreachable') return { body: hint(t('settings.remoteControl.v2.peerSwitch.unreachable')), action: null };
-  if (switchProbeKind(probe, onAgentNet ? 'device-link' : 'agent-net') === 'encryption-required') {
-    return { body: hint(t('settings.remoteControl.v2.peerSwitch.encryptionRequired')), action: null };
+  const disableBlock = switchProbeKind(probe, onAgentNet ? 'device-link' : 'agent-net');
+  if (disableBlock === 'encryption-required' || disableBlock === 'controller-encryption-required' || disableBlock === 'agent-net-only-relay') {
+    return { body: hint(t(disableBlock === 'encryption-required' ? 'settings.remoteControl.v2.peerSwitch.encryptionRequired' : `settings.remoteControl.v2.peerSwitch.disableBlocked.${disableBlock}`)), action: null };
   }
   if (probe.kind === 'not-ready' && !onAgentNet) {
     return { body: hint(t(`settings.remoteControl.v2.peerSwitch.notReady.${probe.reason}`)), action: null };

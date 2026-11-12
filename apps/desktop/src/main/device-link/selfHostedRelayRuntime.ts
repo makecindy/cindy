@@ -93,6 +93,8 @@ import {
 } from './index.js';
 import { AGENT_NET_SWITCH_CHANNEL } from '@cindy/device-link';
 import { createAgentNetRemoteSwitch, type AgentNetRemoteSwitch } from './agentNetRemoteSwitch.js';
+import { isAgentNetOnlyRelay } from './selfHostedRelayRouting.js';
+import type { AgentNetSwitchDisableBlock } from '@cindy/device-link';
 import { getDeviceLinkInvokeContext } from './invoke-context.js';
 import { providerShareLinkApp } from './providerShareApi.js';
 import {
@@ -1838,6 +1840,12 @@ async function applyAgentNet(enabled: boolean): Promise<CommandResult> {
  */
 let remoteSwitch: AgentNetRemoteSwitch | null = null;
 
+function agentNetSwitchDisableBlock(): AgentNetSwitchDisableBlock | null {
+  if (isAgentNetOnlyRelay(activeSelfHostedRelay())) return 'V2_ONLY_RELAY';
+  const settings = readDeviceLinkSettings();
+  return settings.agentNetEnabled === true && settings.agentNetOnlyEncrypted === true ? 'ENCRYPTION_REQUIRED' : null;
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -1852,6 +1860,7 @@ function installAgentNetRemoteSwitch(): void {
   const switchLog = createLogger('agent-net:remote-switch');
   remoteSwitch = createAgentNetRemoteSwitch({
     readSettings: readDeviceLinkSettings,
+    disableBlock: agentNetSwitchDisableBlock,
     // 「由谁打开」写好就推给本机窗口，开关下面立刻显示。
     writeChangedBy: async (value) => {
       await writeDeviceLinkSetting('agentNetChangedBy', value);
@@ -1899,10 +1908,16 @@ export function agentNetSwitchRemoteHandler(): { handle(raw: unknown, controller
 }
 
 async function askPeerAgentNet(deviceId: string, request: PeerAgentNetRequest): Promise<PeerAgentNetReply> {
+  const controllerBlock = agentNetSwitchDisableBlock();
+  if (request.action === 'set' && !request.enabled && controllerBlock) {
+    // 发起端自己拒绝旧连接时，不能先关掉对方，再因无法重连把已执行的关闭报告为失败。
+    const code = controllerBlock === 'V2_ONLY_RELAY' ? 'AGENT_NET_SWITCH_V2_ONLY_RELAY' : 'AGENT_NET_SWITCH_CONTROLLER_ENCRYPTION_REQUIRED';
+    return { ok: false, code: 'IPC_ERROR', message: `[${code}] this computer cannot reconnect over Device Link` };
+  }
   try {
     const reply = await remoteBackgroundInvoke(deviceId, AGENT_NET_SWITCH_CHANNEL, [request]);
     return reply.ok
-      ? { ok: true, result: reply.result }
+      ? { ok: true, result: reply.result, ...(request.action === 'status' ? { controllerBlock: agentNetSwitchDisableBlock() } : {}) }
       : { ok: false, code: reply.error.code, message: reply.error.message };
   } catch (error) {
     const code = typeof (error as { code?: unknown }).code === 'string' ? (error as { code: string }).code : 'NOT_CONNECTED';

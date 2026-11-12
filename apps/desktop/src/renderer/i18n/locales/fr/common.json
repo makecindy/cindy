@@ -6892,7 +6892,9 @@
             "not-ready": "« {{name}} » ne peut pas activer Agent-Net pour le moment",
             "busy": "« {{name}} » traite un autre changement. Réessayez dans un instant.",
             "failed": "Impossible de basculer « {{name}} ».",
-            "encryption-required": "Désactivez « Utiliser uniquement Agent-Net » sur « {{name}} » avant de revenir"
+            "encryption-required": "Désactivez « Utiliser uniquement Agent-Net » sur « {{name}} » avant de revenir",
+            "controller-encryption-required": "Désactivez « Utiliser uniquement Agent-Net » ici avant de remettre « {{name}} » sur Device Link",
+            "agent-net-only-relay": "La connexion à « {{name}} » prend uniquement en charge Agent-Net et ne peut pas revenir à Device Link"
           },
           "checking": "Vérification de la possibilité de basculer…",
           "notReady": {
@@ -6911,7 +6913,9 @@
               "unsupported": "Mise à jour de Cindy requise",
               "not-ready": "Agent-Net impossible pour le moment",
               "unreachable": "Injoignable pour le moment",
-              "encryption-required": "Utiliser uniquement Agent-Net"
+              "encryption-required": "Utiliser uniquement Agent-Net",
+              "controller-encryption-required": "Agent-Net uniquement ici",
+              "agent-net-only-relay": "Réseau Agent-Net uniquement"
             },
             "canaryNote": "Un premier ordinateur bascule d’abord ; les autres suivent une fois qu’il est reconnecté. Tout ordinateur qui ne se reconnecte pas dans les 60 secondes revient de lui-même.",
             "rollbackNote": "Le retour supprime le chiffrement de bout en bout. Les ordinateurs qui utilisent uniquement Agent-Net doivent d’abord désactiver cette restriction localement.",
@@ -6935,7 +6939,11 @@
             "off": "Désactivé à distance par « {{name}} » à {{time}}"
           },
           "unreachable": "Impossible de joindre cet ordinateur cette fois. Rouvrez la carte plus tard.",
-          "encryptionRequired": "Cet ordinateur utilise uniquement Agent-Net. Désactivez « Utiliser uniquement Agent-Net » sur cet ordinateur avant de revenir à Device Link."
+          "encryptionRequired": "Cet ordinateur utilise uniquement Agent-Net. Désactivez « Utiliser uniquement Agent-Net » sur cet ordinateur avant de revenir à Device Link.",
+          "disableBlocked": {
+            "controller-encryption-required": "Cet ordinateur a activé « Utiliser uniquement Agent-Net ». Désactivez cette option ici avant de remettre l’autre ordinateur sur Device Link.",
+            "agent-net-only-relay": "Cette connexion utilise un réseau qui prend uniquement en charge Agent-Net. Choisissez un itinéraire compatible avec Device Link avant de revenir."
+          }
         }
       }
     },

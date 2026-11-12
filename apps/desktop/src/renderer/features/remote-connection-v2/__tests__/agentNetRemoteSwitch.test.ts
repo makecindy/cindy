@@ -14,6 +14,18 @@ beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe('remote Agent-Net switch result on the requesting computer', () => {
+  // 独立审查 #10095：V2-only 网络即使保存 enabled=false，实际链路仍为 Agent-Net，不得报切回成功。
+  it('does not treat a disabled flag on an encrypted connection as a completed Device Link switch', async () => {
+    const command = vi.fn(async (input: SelfHostedRelayCommand) => ({ state: {}, peer: { ok: true, result:
+      input.type === 'peer-agent-net' && input.request.action === 'set'
+        ? { enabled: false, confirmWithinMs: null }
+        : { enabled: false, encrypted: true, pending: false } } }));
+    vi.stubGlobal('window', { setTimeout: globalThis.setTimeout, electronAPI: { selfHostedRelay: { command } } });
+    const result = startRemoteSwitch('disabled-but-encrypted', 'device-link');
+    await vi.advanceTimersByTimeAsync(32_000);
+    await expect(result).resolves.toBe('failed');
+  });
+
   it('reports the target encryption restriction without retrying a rejected disable', async () => {
     const command = vi.fn(async () => ({ state: {}, peer: { ok: false, code: 'IPC_ERROR', message: '[AGENT_NET_SWITCH_ENCRYPTION_REQUIRED] local choice' } }));
     vi.stubGlobal('window', { setTimeout: globalThis.setTimeout, electronAPI: { selfHostedRelay: { command } } });
@@ -72,7 +84,7 @@ describe('remote Agent-Net switch result on the requesting computer', () => {
       if (input.type !== 'peer-agent-net') throw new Error('unexpected command');
       return { state: {}, peer: { ok: true, result: input.request.action === 'set'
         ? { switchId: input.request.switchId, enabled: false, confirmWithinMs: null }
-        : { enabled: ++statuses < 2 } } };
+        : { enabled: ++statuses < 2, encrypted: statuses < 2 } } };
     });
     vi.stubGlobal('window', { setTimeout: globalThis.setTimeout, electronAPI: { selfHostedRelay: { command } } });
     const result = startRemoteSwitch('reconnected', 'device-link');

@@ -2,7 +2,7 @@
  * 自建中转服务:main / preload / renderer 共用的 IPC 契约。
  * 方案见 docs/self-hosted-relay-plan.md。只接受本机应用窗口调用,不经设备互联代理。
  */
-import type { RelayJoinErrorCode } from '@cindy/device-link';
+import type { AgentNetSwitchDisableBlock, RelayJoinErrorCode } from '@cindy/device-link';
 
 export const SELF_HOSTED_RELAY_IPC = {
   COMMAND: 'self-hosted-relay:command',
@@ -444,7 +444,7 @@ export type PeerAgentNetRequest =
   | { action: 'confirm'; switchId: string };
 
 /** 那台电脑的回答;`code` 是 device-link 错误码(旧版本是 CHANNEL_NOT_ALLOWED),`message` 里带 [AGENT_NET_SWITCH_*]。 */
-export type PeerAgentNetReply = { ok: true; result: unknown } | { ok: false; code: string; message: string };
+export type PeerAgentNetReply = { ok: true; result: unknown; controllerBlock?: AgentNetSwitchDisableBlock | null } | { ok: false; code: string; message: string };
 
 export interface SelfHostedRelayCommandResult {
   state: SelfHostedRelayState;

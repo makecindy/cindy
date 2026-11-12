@@ -18,7 +18,7 @@ import { APPLY_DELAY_MS, createAgentNetRemoteSwitch, type AgentNetPendingSwitch,
 const CONTROLLER = 'controller-device';
 const SWITCH = 'switch-0001';
 
-function setup(initial: { enabled?: boolean; onlyEncrypted?: boolean; pending?: AgentNetPendingSwitch; pid?: number } = {}) {
+function setup(initial: { enabled?: boolean; onlyEncrypted?: boolean; relayOnly?: boolean; pending?: AgentNetPendingSwitch; pid?: number } = {}) {
   const settings: {
     agentNetEnabled: boolean;
     agentNetOnlyEncrypted: boolean;
@@ -34,6 +34,7 @@ function setup(initial: { enabled?: boolean; onlyEncrypted?: boolean; pending?: 
     writeChangedBy: async (value) => { settings.agentNetChangedBy = value; },
     writePending: async (value) => { settings.agentNetPendingSwitch = value; },
     readiness: () => block,
+    disableBlock: () => initial.relayOnly ? 'V2_ONLY_RELAY' : null,
     apply,
     linkIsAgentNet: (deviceId) => agentNetLinks.has(deviceId),
     now: () => Date.now(),
@@ -49,6 +50,16 @@ beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); });
 
 describe('remote Agent-Net switch on the switched computer', () => {
+  // 独立审查 #10095：V2-only 网络不受 Beta 开关影响，远程关闭不能伪装成切回 V1。
+  it('refuses a switch-back on an Agent-Net-only relay even when the user preference is not strict', async () => {
+    const { service, settings, apply } = setup({ enabled: true, relayOnly: true });
+    expect(service.status()).toMatchObject({ disableBlocked: 'V2_ONLY_RELAY' });
+    await expect(service.handle({ action: 'set', enabled: false, switchId: SWITCH }, CONTROLLER, 'Studio Mac')).rejects.toThrow('[AGENT_NET_SWITCH_V2_ONLY_RELAY]');
+    await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS);
+    expect(settings.agentNetEnabled).toBe(true);
+    expect(apply).not.toHaveBeenCalled();
+  });
+
   // 2026-11-12 用户裁决：本机选择仅使用 Agent-Net 后，必须先在本机解除，远程关闭不能降级连接。
   it('requires the target to release its encrypted-only choice before a remote disable', async () => {
     const { service, settings, apply } = setup({ enabled: true, onlyEncrypted: true });

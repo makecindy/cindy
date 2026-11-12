@@ -6782,7 +6782,9 @@
             "not-ready": "「{{name}}」今不能啟 Agent-Net",
             "busy": "「{{name}}」方理他轉，稍後再試",
             "failed": "「{{name}}」未能轉接",
-            "encryption-required": "須先於「{{name}}」解「唯用 Agent-Net」之限，乃可返"
+            "encryption-required": "須先於「{{name}}」解「唯用 Agent-Net」之限，乃可返",
+            "controller-encryption-required": "須先解本機「唯用 Agent-Net」之限，乃可使「{{name}}」返",
+            "agent-net-only-relay": "「{{name}}」之連線唯通 Agent-Net，不可返 Device Link"
           },
           "checking": "方詢彼能轉與否…",
           "notReady": {
@@ -6801,7 +6803,9 @@
               "unsupported": "須更新 Cindy",
               "not-ready": "今不能啟 Agent-Net",
               "unreachable": "暫詢不至",
-              "encryption-required": "唯用 Agent-Net"
+              "encryption-required": "唯用 Agent-Net",
+              "controller-encryption-required": "本機唯用 Agent-Net",
+              "agent-net-only-relay": "網絡唯通 Agent-Net"
             },
             "canaryNote": "先轉首機，驗其復連，乃並轉其餘。各機六十秒內未復連者皆自返。",
             "rollbackNote": "返後連線不復端到端加密。已選「唯用 Agent-Net」之機，須先於本機解此限。",
@@ -6825,7 +6829,11 @@
             "off": "「{{name}}」於 {{time}} 遠閉之"
           },
           "unreachable": "此次未詢至彼機，稍後再啟此卡試之。",
-          "encryptionRequired": "彼機已選「唯用 Agent-Net」。須先於彼機解此限，乃可返 Device Link。"
+          "encryptionRequired": "彼機已選「唯用 Agent-Net」。須先於彼機解此限，乃可返 Device Link。",
+          "disableBlocked": {
+            "controller-encryption-required": "本機已選「唯用 Agent-Net」。須先於本機解此限，乃可使彼機返 Device Link。",
+            "agent-net-only-relay": "此連線之網絡唯通 Agent-Net，不可返 Device Link。須先改用支援 Device Link 之線路。"
+          }
         }
       }
     },

@@ -756,6 +756,8 @@ Desktop `features/remote-connection-v2`, behind the per-computer 「Agent-Net (B
 
 Remote switch-back respects the target's 「仅使用 Agent-Net」 choice (owner decision 2026-11-12): its card replaces the switch-back button with a neutral explanation to disable that option on the target first. Both batch directions probe before selection; the switch-back list labels strict targets 「仅使用 Agent-Net」 and excludes them from the count and first-computer trial. The note explains the local step; longer labels wrap within the existing popover in both themes.
 
+When the initiating computer itself only accepts encrypted connections, the same card/batch area explains that its local choice must be disabled before switch-back; Main also prevents sending the request. A V2-only network has a separate explanation to select a route that supports Device Link. These restrictions never automatically change either computer's encryption choice, and Device Link success requires a verified legacy link.
+
 ## 5. Layout Principles
 
 ### Spacing System

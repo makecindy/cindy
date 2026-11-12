@@ -6825,7 +6825,9 @@
             "not-ready": "“{{name}}” cannot enable Agent-Net right now",
             "busy": "“{{name}}” is handling another switch. Try again shortly.",
             "failed": "Could not switch “{{name}}”.",
-            "encryption-required": "Disable “Use Only Agent-Net” on “{{name}}” before switching back"
+            "encryption-required": "Disable “Use Only Agent-Net” on “{{name}}” before switching back",
+            "controller-encryption-required": "Disable “Use Only Agent-Net” here before switching “{{name}}” back",
+            "agent-net-only-relay": "The connection to “{{name}}” only supports Agent-Net and cannot switch to Device Link"
           },
           "checking": "Checking whether it can switch…",
           "notReady": {
@@ -6844,7 +6846,9 @@
               "unsupported": "Needs a Cindy update",
               "not-ready": "Cannot enable Agent-Net now",
               "unreachable": "Not reachable now",
-              "encryption-required": "Use Only Agent-Net"
+              "encryption-required": "Use Only Agent-Net",
+              "controller-encryption-required": "Only Agent-Net here",
+              "agent-net-only-relay": "Agent-Net-only network"
             },
             "canaryNote": "The first computer switches first; the rest follow once it reconnects. Any computer that does not reconnect within 60 seconds goes back on its own.",
             "rollbackNote": "Switching back removes end-to-end encryption. Computers that require Agent-Net must have that restriction disabled locally first.",
@@ -6868,7 +6872,11 @@
             "off": "Turned off remotely by “{{name}}” at {{time}}"
           },
           "unreachable": "Could not reach that computer this time. Open the card again later.",
-          "encryptionRequired": "This computer requires Agent-Net. Disable “Use Only Agent-Net” on that computer before switching back to Device Link."
+          "encryptionRequired": "This computer requires Agent-Net. Disable “Use Only Agent-Net” on that computer before switching back to Device Link.",
+          "disableBlocked": {
+            "controller-encryption-required": "This computer has “Use Only Agent-Net” enabled. Disable it here before switching the other computer back to Device Link.",
+            "agent-net-only-relay": "This connection uses a network that only supports Agent-Net. Choose a route that supports Device Link before switching back."
+          }
         }
       }
     },

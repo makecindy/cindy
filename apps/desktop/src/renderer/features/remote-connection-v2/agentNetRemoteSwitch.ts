@@ -27,11 +27,12 @@ export type RemoteSwitchEntry =
 
 /** 对方的回答。unsupported:旧版 Cindy 没有这个入口；not-ready:有入口但现在打不开；unreachable:这次没问到。 */
 export type PeerNotReadyReason = 'not-signed-in' | 'secure-storage' | 'relay-identity';
+export type PeerDisableBlock = 'encryption-required' | 'controller-encryption-required' | 'agent-net-only-relay';
 export type PeerProbe =
   | { kind: 'checking' }
-  | { kind: 'ready'; onlyEncrypted: boolean }
+  | { kind: 'ready'; disableBlock: PeerDisableBlock | null }
   | { kind: 'unsupported' }
-  | { kind: 'not-ready'; reason: PeerNotReadyReason; onlyEncrypted: boolean }
+  | { kind: 'not-ready'; reason: PeerNotReadyReason; disableBlock: PeerDisableBlock | null }
   | { kind: 'unreachable' };
 
 export type RemoteSwitchBlock = 'mobile' | 'peer-control-off' | 'control-off';
@@ -105,18 +106,21 @@ function readProbe(reply: PeerAgentNetReply): PeerProbe {
   if (!reply.ok) return reply.code === 'CHANNEL_NOT_ALLOWED' ? { kind: 'unsupported' } : { kind: 'unreachable' };
   const status = reply.result && typeof reply.result === 'object' ? reply.result as Record<string, unknown> : null;
   if (!status || typeof status.enabled !== 'boolean') return { kind: 'unreachable' };
-  const onlyEncrypted = status.onlyEncrypted === true;
-  if (status.blocked === 'NOT_SIGNED_IN') return { kind: 'not-ready', reason: 'not-signed-in', onlyEncrypted };
-  if (status.blocked === 'RELAY_IDENTITY_MISSING') return { kind: 'not-ready', reason: 'relay-identity', onlyEncrypted };
-  if (typeof status.blocked === 'string') return { kind: 'not-ready', reason: 'secure-storage', onlyEncrypted };
-  return { kind: 'ready', onlyEncrypted };
+  const disableBlock: PeerDisableBlock | null = status.disableBlocked === 'V2_ONLY_RELAY' || reply.controllerBlock === 'V2_ONLY_RELAY'
+    ? 'agent-net-only-relay'
+    : reply.controllerBlock === 'ENCRYPTION_REQUIRED' ? 'controller-encryption-required'
+      : status.onlyEncrypted === true || status.disableBlocked === 'ENCRYPTION_REQUIRED' ? 'encryption-required' : null;
+  if (status.blocked === 'NOT_SIGNED_IN') return { kind: 'not-ready', reason: 'not-signed-in', disableBlock };
+  if (status.blocked === 'RELAY_IDENTITY_MISSING') return { kind: 'not-ready', reason: 'relay-identity', disableBlock };
+  if (typeof status.blocked === 'string') return { kind: 'not-ready', reason: 'secure-storage', disableBlock };
+  return { kind: 'ready', disableBlock };
 }
 
 /** 开启前提只约束打开；切回则须尊重目标电脑自己的仅加密选择。单台与批量共用。 */
-export function switchProbeKind(probe: PeerProbe | undefined, target: RemoteSwitchTarget): PeerProbe['kind'] | 'encryption-required' {
+export function switchProbeKind(probe: PeerProbe | undefined, target: RemoteSwitchTarget): PeerProbe['kind'] | PeerDisableBlock {
   if (!probe) return 'checking';
   if (target === 'device-link' && (probe.kind === 'ready' || probe.kind === 'not-ready')) {
-    return probe.onlyEncrypted ? 'encryption-required' : 'ready';
+    return probe.disableBlock ?? 'ready';
   }
   return probe.kind;
 }
@@ -143,7 +147,7 @@ export function probePeer(deviceId: string): Promise<PeerProbe> {
   return run;
 }
 
-export type RemoteSwitchResult = 'done' | 'reverted' | 'unsupported' | 'not-ready' | 'encryption-required' | 'busy' | 'failed';
+export type RemoteSwitchResult = 'done' | 'reverted' | 'unsupported' | 'not-ready' | PeerDisableBlock | 'busy' | 'failed';
 
 const RETRY_MS = 1_000;
 /** 关闭后等待对方明确回答开关已关闭的上限；超时不能当成完成。 */
@@ -169,7 +173,7 @@ function readStatus(reply: PeerAgentNetReply): Record<string, unknown> | null {
 
 function reachedState(reply: PeerAgentNetReply, enabled: boolean): boolean {
   const status = readStatus(reply);
-  return status?.enabled === enabled && (!enabled || (status.encrypted === true && status.pending !== true));
+  return status?.enabled === enabled && status.encrypted === enabled && status.pending !== true;
 }
 
 export function startRemoteSwitch(deviceId: string, target: RemoteSwitchTarget): Promise<RemoteSwitchResult> {
@@ -188,10 +192,13 @@ async function runSwitch(deviceId: string, target: RemoteSwitchTarget): Promise<
   if (!reply.ok) {
     set(deviceId, null);
     const code = switchErrorCode(reply);
-    if (code === 'AGENT_NET_SWITCH_ENCRYPTION_REQUIRED') {
-      probes.set(deviceId, { kind: 'ready', onlyEncrypted: true });
+    const disableBlock: PeerDisableBlock | null = code === 'AGENT_NET_SWITCH_ENCRYPTION_REQUIRED' ? 'encryption-required'
+      : code === 'AGENT_NET_SWITCH_CONTROLLER_ENCRYPTION_REQUIRED' ? 'controller-encryption-required'
+        : code === 'AGENT_NET_SWITCH_V2_ONLY_RELAY' ? 'agent-net-only-relay' : null;
+    if (disableBlock) {
+      probes.set(deviceId, { kind: 'ready', disableBlock });
       publish();
-      return 'encryption-required';
+      return disableBlock;
     }
     if (reply.code === 'CHANNEL_NOT_ALLOWED') {
       probes.set(deviceId, { kind: 'unsupported' });
@@ -217,11 +224,12 @@ async function runSwitch(deviceId: string, target: RemoteSwitchTarget): Promise<
     let reached = false;
     while (Date.now() < until) {
       const status = await ask(deviceId, { action: 'status' });
-      if (!enabled && readStatus(status)?.onlyEncrypted === true) {
+      const probe = !enabled ? readProbe(status) : null;
+      if (probe && (probe.kind === 'ready' || probe.kind === 'not-ready') && probe.disableBlock) {
         set(deviceId, null);
-        probes.set(deviceId, { kind: 'ready', onlyEncrypted: true });
+        probes.set(deviceId, probe);
         publish();
-        return 'encryption-required';
+        return probe.disableBlock;
       }
       if (reachedState(status, enabled)) {
         reached = true;
