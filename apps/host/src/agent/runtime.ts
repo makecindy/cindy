@@ -29,6 +29,7 @@ import type { createHostProviderConfig } from './provider-config.js';
 import type { createHostMcpRuntime } from './mcp-runtime.js';
 import type { createHostCodexRuntime } from './codex-runtime.js';
 import { createHostModelContext } from './model-context.js';
+import { createHostStartOptions } from './start-options.js';
 
 type HostProviderConfig = ReturnType<typeof createHostProviderConfig>;
 
@@ -250,6 +251,10 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   const modelContext = options.codexRuntime?.modelContext ?? createHostModelContext({
     readGatewayKey: () => options.gateway?.credential || null, hasCodexOAuthLogin: () => false,
   });
+  // The desktop start hook's steps that apply to a task the Host runs (start-options.ts).
+  const startOptions = createHostStartOptions({
+    modelContext, fastPolicies: options.codexRuntime?.fastPolicies ?? null, logger: LOGGER,
+  });
   const claudeModelResolvers = createClaudeModelResolvers({
     getCatalog: modelContext.getSelectableCatalog, resolveContextProviderId: modelContext.resolveContextProviderId,
   });
@@ -320,7 +325,10 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   const maker = new Maker({
     agents,
     storage: options.storage,
-    lifecycleHooks: { onClose: async id => {
+    lifecycleHooks: {
+      prepareStartOptions: startOptions.prepareStartOptions,
+      onClose: async id => {
+      startOptions.onClose(id);
       try { await options.codexRuntime?.closeSession(id); }
       finally { await options.onSessionClose?.(id); }
     } },

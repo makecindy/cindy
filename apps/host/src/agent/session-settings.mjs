@@ -1,3 +1,4 @@
+import { setSessionFastMode } from '../../../desktop/src/main/maker-host/session-effort-store.js';
 const appliedSettings = new WeakMap();
 
 /** Initial facts come from the same options that constructed the live Session. */
@@ -47,6 +48,8 @@ export async function applyLiveSessionSettings(live, patch, stored) {
   }
   if (typeof patch.fastMode === 'boolean' || patch.fastMode === 'ultrafast') {
     await live.setFastMode(patch.fastMode);
+    // Pi's price tier reads this store, as on the desktop (start-options.ts).
+    if (typeof live.id === 'string') setSessionFastMode(live.id, patch.fastMode);
     remember({ fastMode: patch.fastMode });
   }
   if (typeof patch.planModeEnabled === 'boolean') {

@@ -108,7 +108,7 @@ export function createHostCodexRuntime(options: {
       return { accessToken: auth.accessToken, chatgptAccountId: auth.accountId };
     },
   };
-  return { deps, proxy, native, readRoute, modelContext, closeSession: proxy.unregister,
+  return { deps, proxy, native, readRoute, modelContext, fastPolicies: policies, closeSession: proxy.unregister,
     async close() { closed = true; await proxy.disposeCodexProxy(); },
   };
 }

@@ -121,4 +121,6 @@ test('every engine the Host assembles resolves per-model context the way the des
   }
   assert.equal(typeof graph.pi.deps.resolveModelContextLimit, 'function');
   assert.equal(typeof graph.pi.deps.resolveModelCompactionPct, 'function');
+  // The desktop start hook's Host steps run for every start (start-options.ts, tested there).
+  assert.equal(typeof graph.maker.lifecycleHooks?.prepareStartOptions, 'function');
 });
