@@ -231,6 +231,47 @@ it('keeps the account catalogue error and refresh until a successful empty read'
   expect(reusableAccounts).toHaveBeenCalledTimes(2);
 });
 
+// #10130 / 5c89: initial-state cases miss an enabled flip after empty hiding.
+// Unit tier: use the real section to expose newly available choices and discard
+// a disabled catalogue reply, while retaining the existing Stop action.
+it.each(['empty', 'pending'] as const)('reloads the account catalogue when enabling from %s', async initial => {
+  let finish!: (value: unknown) => void;
+  const reusableAccounts = vi.fn().mockImplementationOnce(() => initial === 'empty' ? Promise.resolve([])
+    : new Promise(resolve => { finish = resolve; }))
+    .mockResolvedValue([{ key: 'google', label: 'Google', accounts: [], options: [
+      { instanceKey: 'source', secretKey: 'google', accountId: 'original', pluginName: 'Source', scopes: ['read'] },
+    ] }]);
+  Object.assign(window.electronAPI, { ghosts: { reusableAccounts, reuseAccount: vi.fn() } });
+  const { container, rerender } = render(<GhostAccountReuseSection ghostId="consumer" declared enabled={false} />);
+  await act(async () => {});
+  expect(container.childElementCount).toBe(0);
+  rerender(<GhostAccountReuseSection ghostId="consumer" declared enabled />);
+  await act(async () => {});
+  expect(reusableAccounts).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole('combobox')).toBeTruthy();
+  if (initial === 'pending') {
+    await act(async () => { finish([]); });
+    expect(screen.getByRole('combobox')).toBeTruthy();
+  }
+});
+
+it('keeps Stop using functional after disabling with an existing reference', async () => {
+  let connected = true;
+  const reusableAccounts = vi.fn(async () => [{ key: 'google', label: 'Google', options: [],
+    accounts: connected ? [{ id: 'reference', label: 'Used account', status: 'connected' as const }] : [] }]);
+  const reuseAccount = vi.fn(async () => { connected = false; return { ok: true }; });
+  Object.assign(window.electronAPI, { ghosts: { reusableAccounts, reuseAccount } });
+  const { rerender } = render(<GhostAccountReuseSection ghostId="consumer" declared enabled />);
+  await act(async () => {});
+  rerender(<GhostAccountReuseSection ghostId="consumer" declared enabled={false} />);
+  await act(async () => {});
+  const stop = screen.getByRole('button', { name: 'settings.ghosts.detail.reuseAccountStop' }) as HTMLButtonElement;
+  expect(stop.disabled).toBe(false);
+  await act(async () => { fireEvent.click(stop); });
+  expect(reuseAccount).toHaveBeenCalledWith('consumer', { kind: 'disconnect', secretKey: 'google', accountId: 'reference' });
+  expect(screen.queryByRole('button', { name: 'settings.ghosts.detail.reuseAccountStop' })).toBeNull();
+});
+
 it.each([undefined, 'secret', 'connection'] as const)('selects an existing Host account or %s credential and stops only its consumer reference', async (kind) => {
   const scroll = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
   Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });

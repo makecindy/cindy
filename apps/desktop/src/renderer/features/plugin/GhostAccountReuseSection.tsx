@@ -10,7 +10,7 @@ const choiceKey = (source: GhostAccountReuseGroup['options'][number]) => JSON.st
 
 export function GhostAccountReuseSection(props: { ghostId: string; declared: boolean; enabled: boolean }) {
   if (!props.declared) return null;
-  return <AccountReuseControls {...props} />;
+  return <AccountReuseControls key={props.enabled ? 'enabled' : 'disabled'} {...props} />;
 }
 
 function AccountReuseControls({ ghostId, enabled }: { ghostId: string; enabled: boolean }) {
