@@ -56,7 +56,7 @@ export function registerSubscriptionAccountsIpc(): void {
     const session = parseSubscriptionSessionAccountQuery(raw);
     if (session) {
       try {
-        return await readSubscriptionSessionAccount(session.providerId, session);
+        return await readSubscriptionSessionAccount(session.providerId, session, { remote: !!context });
       } catch {
         throwIpcError('SUBSCRIPTION_ACCOUNT_FAILED', 'Could not read the task account');
       }

@@ -12,6 +12,7 @@ import {
 import type { RemoteInvoke } from "@/device-link/mobileMakerTransport";
 import { installPeerFileDownload } from "@/device-link/peerFileRegistry";
 const fileCache = vi.hoisted(() => ({ readLatest: vi.fn(), readInline: vi.fn(), storeInline: vi.fn(), invalidate: vi.fn(), download: vi.fn() }));
+vi.mock('@/device-link/peerMediaStream', () => ({ openPeerMediaStream: async () => null }));
 vi.mock('@/device-link/peerFileCache', () => ({ createPeerFileCache: async () => fileCache }));
 import { isDirectPreviewableMediaUrl, resolveMobileRemoteMedia } from "@/session/remoteMedia";
 import { fetchRemoteAbsFileOnce } from '@/session/remoteAbsFileFetch';

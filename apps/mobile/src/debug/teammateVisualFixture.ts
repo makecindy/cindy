@@ -128,9 +128,9 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
     },
   };
   if (channel === 'git-context:pr-refs:list') return args[0] === `${UI_MOCK_ID_PREFIX}rich-answer`
-    ? [{ id: 'visual-pr', sessionId: args[0], owner: 'example', repo: 'demo', prNumber: 7, lastSeenAt: now }] : [];
-  if (channel === 'git-context:pr-status') return [{ owner: 'example', repo: 'demo', prNumber: 7, ok: true,
-    status: 'merged', title: '修复登录页在窄窗口下的布局' }];
+    ? [{ id: 'visual-pr', sessionId: args[0], owner: 'makecindy', repo: 'cindy', prNumber: 9826, lastSeenAt: now }] : [];
+  if (channel === 'git-context:pr-status') return [{ owner: 'makecindy', repo: 'cindy', prNumber: 9826, ok: true,
+    status: 'merged', title: 'fix(mobile): 补齐任务移动项目入口' }];
   if (channel === 'maker:bot-delegations:list') {
     const bot = teammates.find(item => args[0] === `${VISUAL_TEAMMATE_SESSION_ID}:${item.id}`);
     const ids = bot?.id === 'cindy-default' ? ['visual-running', `${UI_MOCK_ID_PREFIX}rich-answer`]

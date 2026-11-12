@@ -236,9 +236,11 @@ describe('subscription management boundary', () => {
   it('serves the task-account read to the owner only, with validated ids', async () => {
     const query = { action: 'session', providerId: 'openai', sessionId: 'task-1', nativeSessionId: 'sdk-1' };
     await expect(invoke(query)).resolves.toEqual({ providerId: 'anthropic', state: 'legacy' });
-    expect(h.sessionRead).toHaveBeenCalledExactlyOnceWith('openai', query);
+    expect(h.sessionRead).toHaveBeenCalledExactlyOnceWith('openai', query, { remote: false });
     h.context = {};
-    await invoke({ action: 'session', providerId: 'anthropic', nativeSessionId: 'sdk-1' });
+    const remoteQuery = { action: 'session', providerId: 'anthropic', nativeSessionId: 'sdk-1', model: 'claude-sonnet' };
+    await invoke(remoteQuery);
+    expect(h.sessionRead).toHaveBeenLastCalledWith('anthropic', remoteQuery, { remote: true });
     h.context = { sharedTask: {} };
     await expect(invoke(query)).rejects.toThrow('PERMISSION_DENIED');
     h.context = null;
@@ -247,6 +249,7 @@ describe('subscription management boundary', () => {
       { action: 'session', providerId: 'anthropic', sessionId: '' },
       { action: 'session', providerId: 'anthropic', sessionId: 'x'.repeat(257) },
       { action: 'session', providerId: 'anthropic-second', sessionId: 'task-1' },
+      ...['', ' ', 1, {}, 'x'.repeat(513)].map(model => ({ ...query, model })),
     ])
       await expect(invoke(bad)).rejects.toThrow('INVALID_PARAMS');
     h.sessionRead.mockRejectedValue(new Error('fixture-private-path'));

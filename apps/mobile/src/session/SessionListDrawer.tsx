@@ -56,15 +56,15 @@ export function useSessionListDrawerMotion(initialProgress = 0): SessionListDraw
 
 /** A rightward swipe on the task pulls the floating list out under the finger.
  * onOpen mounts it at once; releasing short of a third settles it back via onCancel.
- * onSettle follows either outcome. Keep `enabled` true until then: disabling a
- * running gesture cancels it. */
+ * onSettle reports whether the release committed the opening. Keep `enabled`
+ * true until then: disabling a running gesture cancels it. */
 export function useSessionListDrawerOpenGesture({ motion, enabled, width, onOpen, onCancel, onSettle }: {
   motion: SessionListDrawerMotion;
   enabled: boolean;
   width: number;
   onOpen(): void;
   onCancel(): void;
-  onSettle(): void;
+  onSettle(opened: boolean): void;
 }) {
   const insets = useSafeAreaInsets();
   const panelWidth = Math.max(1, width + insets.left);
@@ -97,7 +97,8 @@ export function useSessionListDrawerOpenGesture({ motion, enabled, width, onOpen
         // The release can carry the last movement before onUpdate delivered it.
         const released = Math.max(0, Math.min(1, event.translationX / panelWidth));
         progress.value = released;
-        if (released > DRAWER_OPEN_DISTANCE_RATIO || event.velocityX > DRAWER_OPEN_VELOCITY) {
+        const opened = released > DRAWER_OPEN_DISTANCE_RATIO || event.velocityX > DRAWER_OPEN_VELOCITY;
+        if (opened) {
           settling.value = reduceMotion === false && released < 1;
           progress.value = settling.value
             ? withTiming(1, { duration: motionDuration.enter * (1 - released), easing: Easing.bezier(...motionEasing.out) }, () => {
@@ -107,14 +108,14 @@ export function useSessionListDrawerOpenGesture({ motion, enabled, width, onOpen
         } else {
           runOnJS(onCancel)();
         }
-        runOnJS(onSettle)();
+        runOnJS(onSettle)(opened);
       })
       .onFinalize(() => {
         'worklet';
         if (!tracking.value) return;
         tracking.value = false;
         runOnJS(onCancel)();
-        runOnJS(onSettle)();
+        runOnJS(onSettle)(false);
       });
   }, [enabled, motion, onCancel, onOpen, onSettle, panelWidth, reduceMotion]);
 }

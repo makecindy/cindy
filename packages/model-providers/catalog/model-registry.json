@@ -1,6 +1,6 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-11-09T03:15:49.561Z",
+  "updatedAt": "2026-11-12T05:18:43.000Z",
   "models": [
     {
       "id": "openai/gpt-6.1-sol",
@@ -749,6 +749,24 @@
       ],
       "nativeApi": "openai-responses",
       "modelRef": "openai/gpt-6-astra"
+    },
+    {
+      "id": "anthropic/claude-fable-5-2",
+      "name": "Fable 5.2",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "anthropic",
+          "modelId": "claude-fable-5-2",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-fable-5-2"
     },
     {
       "id": "anthropic/claude-fable-5-1",
@@ -5464,6 +5482,77 @@
                 "verifiedAt": "2026-09-07"
               },
               "minInputTokens": 272001
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "anthropic/claude-fable-5-2",
+      "aliases": [
+        "claude-fable-5-2"
+      ],
+      "defaults": {
+        "name": "Fable 5.2",
+        "description": "Claude Fable 5.2 for demanding reasoning and long-horizon agentic work",
+        "group": "anthropic",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "medium",
+        "supportsImageInput": true
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 8,
+              "outputPerMtok": 40,
+              "effectiveFrom": "2026-11-09",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+                "verifiedAt": "2026-11-12"
+              },
+              "cacheReadPerMtok": 0.2,
+              "cacheWritePerMtok": 10,
+              "cacheWrite1hPerMtok": 16
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 16,
+              "outputPerMtok": 80,
+              "effectiveFrom": "2026-11-09",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+                "verifiedAt": "2026-11-12"
+              },
+              "cacheReadPerMtok": 0.4,
+              "cacheWritePerMtok": 20,
+              "cacheWrite1hPerMtok": 32
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 4,
+              "outputPerMtok": 20,
+              "effectiveFrom": "2026-11-09",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+                "verifiedAt": "2026-11-12"
+              }
             }
           ]
         }

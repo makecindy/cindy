@@ -85,8 +85,9 @@ describe.each(['new.tsx', '[sessionId].tsx'])('%s voice startup feedback', (page
     const pendingSeq = { current: 0 };
     const startupSeq = { current: 1 };
     const setVoiceError = vi.fn();
+    const playHaptic = vi.fn();
     const run = callbacks({
-      startupSeq: 1, voiceStartupSeqRef: startupSeq, setVoiceError,
+      startupSeq: 1, voiceStartupSeqRef: startupSeq, setVoiceError, playHaptic,
       setVoiceState: (value: MobileVoiceState) => run.setVoiceState(value),
       creating: false, voiceIsProcessing: false, voiceState: 'idle',
       selectedDeviceId: 'host', deviceId: 'host',
@@ -106,7 +107,7 @@ describe.each(['new.tsx', '[sessionId].tsx'])('%s voice startup feedback', (page
     });
     return {
       press: run.handleVoiceButtonPressIn, state: run.setVoiceState, recording,
-      controllerState: run.onStateChanged, controllerError: run.onError, startupSeq, setVoiceError,
+      controllerState: run.onStateChanged, controllerError: run.onError, startupSeq, setVoiceError, playHaptic,
       startup: () => startup,
       nextStartup: () => { startup = deferred(); },
       cardExpanded: () => run.cardActive(pending, state === 'listening' || state === 'submitting' || state === 'refining'),
@@ -186,6 +187,7 @@ describe.each(['new.tsx', '[sessionId].tsx'])('%s voice startup feedback', (page
     const run = setup();
     run.press();
     run.controllerState('listening');
+    expect(run.playHaptic.mock.calls).toEqual([['commit']]);
     expect(run.view()).toEqual({ expanded: true, counting: true, pending: false });
     run.state('idle');
     run.startupSeq.current += 1; // task/device switch invalidates the old controller
@@ -195,6 +197,7 @@ describe.each(['new.tsx', '[sessionId].tsx'])('%s voice startup feedback', (page
     run.controllerError('old capture failed during cancellation');
     expect(run.view()).toEqual({ expanded: true, counting: false, pending: true });
     expect(run.setVoiceError).not.toHaveBeenCalled();
+    expect(run.playHaptic).toHaveBeenCalledTimes(1);
   });
 
   it('still surfaces an error from the current controller', () => {

@@ -110,3 +110,33 @@ it("rejects a closed receive without writing queued data after an outstanding br
   await rejected;
   expect(write).toHaveBeenCalledOnce();
 });
+
+// Unit: high-bitrate playback must not pay one IPC round trip per 16 KiB frame.
+// Batch only the trusted local read; an old receiver still gets identical credit-bound frames.
+it('batches source reads while retaining wire framing, credit and EOF', async () => {
+  let pc: any;
+  class SourcePeer extends Peer {
+    ondatachannel?: (event: unknown) => void;
+    constructor() { super(); pc = this; }
+    async createAnswer() { return { type: 'answer', sdp: 'v=0' }; }
+    async setRemoteDescription() {}
+  }
+  vi.stubGlobal('RTCPeerConnection', SourcePeer);
+  const bytes = Buffer.alloc(33 * 16384 + 7, 42);
+  const frames: ArrayBuffer[] = [];
+  const dc = { label: 'files-v2', readyState: 'open', binaryType: '', onmessage: undefined as any,
+    send: (data: ArrayBuffer) => frames.push(data), close() { this.readyState = 'closed'; } };
+  const readBatch = vi.fn(async (_id, _ticket, offset, maxBytes) => bytes.subarray(offset, offset + maxBytes).toString('base64'));
+  const runtime = createFilePeerRuntime({ read: vi.fn(), readBatch, write: async () => {} });
+  try {
+    await runtime.accept('a', [], 'v=0'); pc.ondatachannel({ channel: dc });
+    dc.onmessage({ data: JSON.stringify({ ticket: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', offset: 0, credit: 16 }) });
+    await vi.waitFor(() => expect(frames).toHaveLength(16));
+    expect(readBatch).toHaveBeenCalledOnce();
+    dc.onmessage({ data: JSON.stringify({ credit: 32 }) });
+    await vi.waitFor(() => expect(frames.at(-1)?.byteLength).toBe(0));
+    expect(frames.every(frame => frame.byteLength <= 16384)).toBe(true);
+    expect(Buffer.concat(frames.map(frame => Buffer.from(frame))).equals(bytes)).toBe(true);
+    expect(readBatch).toHaveBeenCalledTimes(4);
+  } finally { runtime.dispose(); }
+});

@@ -8,12 +8,19 @@
  * is signed out moves the task to another usable account chosen by the pool policy. The running
  * turn is never interrupted, and with nowhere to go the message is sent to the original account.
  *
- * Paused or removed accounts are handled by their own pre-send handoff, not here.
+ * Paused or removed accounts are handled by their own pre-send handoff, not here. A same-account
+ * remote Agent task is handed off by the native-session recovery before send
+ * (`needsSubscriptionAccountHandoff`); its executing computer picks the replacement account.
  */
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import type { SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { readAccountBinding, readLegacyCodexProviderId, readPool } from './store.js';
-import { acquireSubscriptionAccount, readSubscriptionAccountBlocked } from './runtime.js';
+import {
+  acquireSubscriptionAccount,
+  readRemoteSubscriptionAccountSwitch,
+  readSubscriptionAccountBlocked,
+  type RemoteSubscriptionInvoke,
+} from './runtime.js';
 
 export interface AccountFailoverSession {
   status: string;
@@ -69,23 +76,46 @@ function hasMultiAccountPool(): boolean {
   });
 }
 
-/** Whether another account can take this task right now (used to continue a failed turn at once). */
-export async function canSwitchSubscriptionAccount(
+/**
+ * The bound account this task would move away from when another account can take it right now
+ * (used to continue a failed turn at once); null otherwise. A same-account remote Agent task asks
+ * its executing computer, whose next fresh start picks the replacement; SSH and provider shares
+ * never move. The token only identifies the account within this task (no identity or directory).
+ */
+export async function readSubscriptionAccountSwitch(
   sessionId: string,
   readSession: AccountFailoverDeps['readSession'],
-): Promise<boolean> {
-  if (!hasMultiAccountPool()) return false;
+  invokeRemote?: RemoteSubscriptionInvoke,
+): Promise<string | null> {
+  const local = hasMultiAccountPool();
+  // Most tasks have no multi-account pool anywhere: skip the session read entirely.
+  if (!local && !invokeRemote) return null;
   const row = await readSession(sessionId);
-  const bound = row && boundAccount(sessionId, row);
-  if (!bound || !readSubscriptionAccountBlocked(bound.provider, bound.accountId, bound.model)) return false;
+  if (!row || row.status === 'deleted' || row.remoteHostId) return null;
+  if (row.agentDeviceId) {
+    return invokeRemote
+      ? readRemoteSubscriptionAccountSwitch({ ...row, agentKind: row.agentKind ?? '' }, invokeRemote)
+      : null;
+  }
+  const bound = local ? boundAccount(sessionId, row) : null;
+  if (!bound || !readSubscriptionAccountBlocked(bound.provider, bound.accountId, bound.model)) return null;
   try {
     await acquireSubscriptionAccount(bound.provider, bound.model, [], false, {
       exclude: new Set([bound.accountId]), dryRun: true,
     });
-    return true;
+    return `local#${bound.provider}:${bound.accountId}`;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** Whether another account can take this task right now (used to continue a failed turn at once). */
+export async function canSwitchSubscriptionAccount(
+  sessionId: string,
+  readSession: AccountFailoverDeps['readSession'],
+  invokeRemote?: RemoteSubscriptionInvoke,
+): Promise<boolean> {
+  return (await readSubscriptionAccountSwitch(sessionId, readSession, invokeRemote)) !== null;
 }
 
 /** Called under the ordinary send lock before lazy bootstrap or reuse of a live runtime. */

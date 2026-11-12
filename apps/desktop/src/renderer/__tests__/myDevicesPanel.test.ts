@@ -169,7 +169,9 @@ describe('MyDevicesPanel device focus deep link', () => {
     });
   };
 
-  it('scrolls the focused device into view and briefly highlights it', async () => {
+  // 用户反馈 2026-11-12:设备定位保留滚动,移除借用搜索样式的黄色高亮。
+  // 生产入口 MyDevicesPanel;最小输入为一条设备深链。沿用 unit 的目标行与重复定位覆盖。
+  it('scrolls the focused device into view', async () => {
     render(
       createElement(MyDevicesPanel, {
         s: settings(),
@@ -182,13 +184,6 @@ describe('MyDevicesPanel device focus deep link', () => {
 
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
     expect(scrollIntoView.mock.contexts[0]).toBe(row('phone-1'));
-    expect(row('phone-1')?.classList.contains('settings-search-target-highlight')).toBe(true);
-    expect(row('pad-1')?.classList.contains('settings-search-target-highlight')).toBe(false);
-
-    await act(async () => {
-      vi.advanceTimersByTime(1600);
-    });
-    expect(row('phone-1')?.classList.contains('settings-search-target-highlight')).toBe(false);
   });
 
   it('focuses each request once and again for a new request key', async () => {

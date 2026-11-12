@@ -1,3 +1,4 @@
+vi.mock('@/platform/haptics', () => ({ playHaptic: vi.fn() }));
 vi.mock('@/session/TaskDrawerPresentation', () => ({ useTaskDrawerPresentation: () => null }));
 // @vitest-environment jsdom
 import * as React from 'react';

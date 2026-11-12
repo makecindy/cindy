@@ -3,7 +3,7 @@
  * ---------------------------------------------------------------------------
  * 拓扑图只管拓扑(用户裁决 2026-11-07):卡片只展示连接信息——名字、型号 / 系统 / 版本、状态、路径、
  * 消息、最近测得的往返、最后在线、谁在控制本机,能远程时给「远程桌面」;这台电脑的卡片是与中转的连接、
- * 连接问题与待机说明,「管理设备…」定位到上方「我的设备」的本机卡片(其它设备不再列在那里)。
+ * 连接问题与待机说明。本机设置直接使用同页上方「我的设备」的本机卡片。
  * 原型(规则见 agent-net.md「远程切换其他电脑的连接方式」):设备卡片底部可以远程切换对方的连接方式
  * (切到 Agent-Net / 切回 Device Link)。打开卡片先问对方能不能切；切换中列出三步，没连回来时写已自动退回；
  * 切不了的写原因。见 agentNetRemoteSwitch.ts。
@@ -325,8 +325,6 @@ export function HubNodePopover({
   linkStatus,
   issue,
   standby,
-  selfDeviceId,
-  onManage,
 }: {
   model: TopologyModel;
   linkStatus: DeviceLinkLinkStatus;
@@ -334,8 +332,6 @@ export function HubNodePopover({
   issue: string | null;
   /** 本机另一个 Cindy 实例占着远程连接 */
   standby: boolean;
-  selfDeviceId: string | null;
-  onManage: (deviceId: string) => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -358,13 +354,6 @@ export function HubNodePopover({
         {issue ? <span className="text-12 text-[var(--error-fg)]">{issue}</span> : null}
         {standby ? <span className="text-12 text-[var(--text-tertiary)]">{t('settings.devices.standbyHint')}</span> : null}
       </div>
-      {selfDeviceId ? (
-        <div className="flex justify-end">
-          <Button variant="secondary" size="sm" compact onClick={() => onManage(selfDeviceId)}>
-            {t('settings.remoteControl.v2.popover.manage')}
-          </Button>
-        </div>
-      ) : null}
     </div>
   );
 }

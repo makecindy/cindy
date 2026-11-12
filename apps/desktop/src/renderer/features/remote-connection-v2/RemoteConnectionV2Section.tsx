@@ -5,7 +5,7 @@
  * 图标(点开是最近上下线的弹出层)→ 拓扑图(离线多时底下一行显示 / 收起离线设备)。没有单独的「需要处理」
  * 卡片(用户裁决 2026-11-07):有问题的设备在拓扑里是红色,点开卡片就写着原因;总开关和连接问题在上方本机卡片。
  * 拓扑图只管拓扑(用户裁决 2026-11-07):外层页面在它上面放「我的设备」的本机卡片(改名、开关、远程桌面),
- * 其它设备不再列出;这台电脑的卡片上「管理设备…」定位到本机卡片。设备深链(消息上的设备标签等)指向
+ * 其它设备不再列出。设备深链(消息上的设备标签等)指向
  * 其它设备时,在这里打开那台设备的卡片,离线折叠着就先展开。
  *
  * 数据:设备目录与开关来自 useDeviceLinkSettings(与「我的设备」同一份);本机已建链对端的路径 / 往返 /
@@ -191,12 +191,10 @@ export function RemoteConnectionV2Section({
             <RemoteConnectionTopology
               model={model}
               linkStatus={s.linkStatus}
-              selfDeviceId={self?.deviceId ?? null}
               issue={activeIssue ? t(`settings.devices.connectionIssue.${activeIssue.kind}`) : null}
               standby={s.standby}
               onToggleOffline={() => setShowOffline((v) => !v)}
               onRemoteDesktop={onRemoteDesktop}
-              onManage={deepLink.openDevice}
               focusDeviceId={focusDeviceId}
               focusRequestKey={deepLink.focusRequestKey}
               ready={s.devices !== null && peerLinks.takenAt > 0}

@@ -1,3 +1,4 @@
+import { playHaptic } from '@/platform/haptics';
 import { useTaskDrawerPresentation } from './TaskDrawerPresentation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BackHandler, Platform } from 'react-native';
@@ -17,12 +18,14 @@ export function useConversationTaskDrawer({ enabled, persistent, width }: { enab
   const sessionListDrawerClosingRef = useRef(false);
   // overlayMounted for gesture callbacks that can arrive before it renders.
   const sessionListDrawerShownRef = useRef(false);
-  const openSessionListDrawer = useCallback(() => {
-    if (!enabled || persistent || sessionListDrawerClosingRef.current) return;
+  const showSessionListDrawer = useCallback((feedback: boolean) => {
+    if (!enabled || persistent || sessionListDrawerClosingRef.current || sessionListDrawerShownRef.current) return;
+    if (feedback) playHaptic('commit');
     sessionListDrawerShownRef.current = true;
     setSessionListDrawerOverlayMounted(true);
     setSessionListDrawerOpen(true);
   }, [persistent, enabled]);
+  const openSessionListDrawer = useCallback(() => showSessionListDrawer(true), [showSessionListDrawer]);
   // Floating mode: a rightward swipe on the task pulls the list out instead of
   // going back; let go too early and it slides back.
   const sessionListDrawerFloating = enabled && !persistent;
@@ -52,9 +55,12 @@ export function useConversationTaskDrawer({ enabled, persistent, width }: { enab
   const [sessionListDrawerPulling, setSessionListDrawerPulling] = useState(false);
   const pullSessionListDrawer = useCallback(() => {
     setSessionListDrawerPulling(true);
-    openSessionListDrawer();
-  }, [openSessionListDrawer]);
-  const endSessionListDrawerPull = useCallback(() => setSessionListDrawerPulling(false), []);
+    showSessionListDrawer(false);
+  }, [showSessionListDrawer]);
+  const endSessionListDrawerPull = useCallback((opened: boolean) => {
+    setSessionListDrawerPulling(false);
+    if (opened && sessionListDrawerShownRef.current && !sessionListDrawerClosingRef.current) playHaptic('commit');
+  }, []);
   const sessionListDrawerPullGesture = useSessionListDrawerOpenGesture({
     motion: sessionListDrawerMotion,
     enabled: sessionListDrawerFloating && (!sessionListDrawerOverlayMounted || sessionListDrawerPulling),

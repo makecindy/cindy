@@ -6,6 +6,8 @@ export interface FilePeerRuntimeBridge {
   /** Local lifecycle event, never a wire message. */
   closed?(connection: string, reason?: FilePeerCloseReason): void;
   read(connection: string, ticket: string, offset: number): Promise<string>;
+  /** Local read batching only; wire frames and receive credit stay unchanged. */
+  readBatch?(connection: string, ticket: string, offset: number, maxBytes: number): Promise<string>;
   write(sink: string, offset: number, base64: string): Promise<void>;
   /** Local bridge capability only; coalesces already-arrived frames up to 256 KiB. */
   writeBatch?(sink: string, offset: number, base64: string): Promise<void>;
@@ -331,16 +333,16 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
       throw new Error("FILE_PEER_CLOSED");
     return pc.localDescription.sdp;
   }
-  function decode(text: string) {
+  function decode(text: string, limit = chunkBytes) {
     if (
-      text.length > 22000 ||
+      text.length > Math.ceil(limit / 3) * 4 ||
       !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
         text,
       )
     )
       throw new Error("FILE_PEER_BLOCK");
     const s = atob(text);
-    if (s.length > chunkBytes) throw new Error("FILE_PEER_BLOCK");
+    if (s.length > limit) throw new Error("FILE_PEER_BLOCK");
     return Uint8Array.from(s, (c) => c.charCodeAt(0));
   }
   async function offer(id: string, servers: RTCIceServer[], streaming = false) {
@@ -381,13 +383,17 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
           try {
             while (source && source.credit > 0) {
               const current = source;
-              current.credit--;
+              const limit = bridge.readBatch ? Math.min(current.credit, 16) * chunkBytes : chunkBytes;
               const readStartedAt = Date.now();
-              const bytes = decode(
-                await bridge.read(id, current.ticket, current.offset),
-              );
+              const bytes = decode(bridge.readBatch
+                ? await bridge.readBatch(id, current.ticket, current.offset, limit)
+                : await bridge.read(id, current.ticket, current.offset), limit);
               if (peers.get(id) !== p || channel.readyState !== "open") return;
-              channel.send(bytes.buffer);
+              if (bytes.length > limit) throw new Error('FILE_PEER_BLOCK');
+              for (let at = 0; at < Math.max(1, bytes.length); at += chunkBytes) {
+                channel.send(bytes.slice(at, at + chunkBytes).buffer);
+                current.credit--;
+              }
               current.offset += bytes.length;
               if (p.send) {
                 const ms = Date.now() - readStartedAt;

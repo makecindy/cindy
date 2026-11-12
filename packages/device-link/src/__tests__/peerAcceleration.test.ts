@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createPeerTransferCooldown } from "../peerTransferCooldown.js";
-import { canUsePeerInvoke } from "../peerInvoke.js";
+import { canUsePeerInvoke, canServePeerInvoke } from "../peerInvoke.js";
+import { FILE_PEER_CHANNEL } from '../filePeer.js';
 import { REMOTE_DESKTOP_CHANNEL } from "../remoteDesktop.js";
 import {
   uploadPeerAttachment,
@@ -11,6 +12,13 @@ import {
 } from "../peerAttachment.js";
 
 describe("peer acceleration policy", () => {
+  it('serves range ticket opens on the file connection without authorizing control-channel replay', () => {
+    const request = [{ action: 'open', range: { start: 0, end: 3, version: 'a'.repeat(64) } }];
+    expect(canServePeerInvoke(FILE_PEER_CHANNEL, request)).toBe(true);
+    expect(canUsePeerInvoke(FILE_PEER_CHANNEL, request)).toBe(false);
+    expect(canServePeerInvoke(FILE_PEER_CHANNEL, [{ action: 'offer' }])).toBe(false);
+    expect(canServePeerInvoke(FILE_PEER_CHANNEL, [{ action: 'open' }])).toBe(false);
+  });
   it("backs off only the failing device, caps delay and recovers after success", () => {
     let time = 0;
     const cd = createPeerTransferCooldown(() => time);

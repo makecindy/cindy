@@ -108,6 +108,11 @@ export interface SubscriptionSessionAccountQuery {
   sessionId?: string;
   /** The task's native Claude / Codex session id. */
   nativeSessionId?: string;
+  /**
+   * Optional (2026-11-12): the task model. Newer hosts then report whether the bound account can
+   * take it right now (`blocked`); older hosts ignore it.
+   */
+  model?: string;
 }
 export interface SubscriptionSessionAccount {
   isDefault: boolean;
@@ -118,6 +123,14 @@ export interface SubscriptionSessionAccount {
   paused: boolean;
   status: SubscriptionAccountView['status'];
   usage?: SubscriptionAccountUsage;
+  /**
+   * Only for a `model` query on a newer host: the bound account cannot take that model now
+   * (remembered failure, exhausted trusted quota or signed out). Replacement admission is reported
+   * separately by `switchAvailable`. Absent means usable or unknown; never set for paused accounts.
+   */
+  blocked?: true;
+  /** For a blocked account, whether the executor can actually select another account, including concurrency and route grants. */
+  switchAvailable?: boolean;
 }
 export type SubscriptionSessionAccountView =
   /** No pool, only the CLI default, or a pre-pool task: the provider's original readers apply. */
@@ -165,6 +178,9 @@ export function parseSubscriptionSessionAccountView(
       ...(usage && typeof usage === 'object' && !Array.isArray(usage)
         ? { usage: usage as SubscriptionAccountUsage }
         : {}),
+      ...(account.blocked === true && account.paused !== true ? { blocked: true as const } : {}),
+      ...(account.blocked === true && account.paused !== true && typeof account.switchAvailable === 'boolean'
+        ? { switchAvailable: account.switchAvailable } : {}),
     },
   };
 }

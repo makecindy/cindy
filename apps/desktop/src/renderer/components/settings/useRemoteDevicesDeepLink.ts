@@ -3,11 +3,10 @@
  * ---------------------------------------------------------------------------
  * 从 RemoteControlSection 抽出,旧版列表页与新版拓扑页共用同一套规则:
  *  - 深链 `?section=devices` / `?section=remoteControl.devices` 首帧就是展开态;
- *  - `&device=<id>` 只在 devices 段深链下生效,展开后把那一行滚入视野并短暂高亮(MyDevicesPanel);
+ *  - `&device=<id>` 只在 devices 段深链下生效,展开后把那一行滚入视野(MyDevicesPanel);
  *    同一深链再次进入(location.key 变)也重新聚焦;
  *  - 设置搜索命中「设备列表」时展开;
  *  - 用户主动收起时把 section / device 参数摘掉,否则刷新 / 返回还会再展开一次。
- * 拓扑浮层的「管理设备…」走同一条深链(push 导航),于是展开 + 定位 + 高亮全部复用。
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -31,8 +30,6 @@ export interface RemoteDevicesDeepLink {
   toggleDevices: () => void;
   focusDeviceId: string | null;
   focusRequestKey: string | null;
-  /** 展开列表并定位到某台设备(拓扑浮层「管理设备…」)。 */
-  openDevice: (deviceId: string) => void;
 }
 
 export function useRemoteDevicesDeepLink(): RemoteDevicesDeepLink {
@@ -86,16 +83,5 @@ export function useRemoteDevicesDeepLink(): RemoteDevicesDeepLink {
     );
   }, [devicesOpen, location.pathname, location.search, navigate]);
 
-  const openDevice = useCallback(
-    (deviceId: string) => {
-      const next = new URLSearchParams(location.search);
-      next.set('section', 'devices');
-      next.set('device', deviceId);
-      // push 而非 replace:location.key 变化才会让同一台设备再次聚焦。
-      navigate({ pathname: location.pathname, search: `?${next.toString()}` });
-    },
-    [location.pathname, location.search, navigate],
-  );
-
-  return { devicesOpen, toggleDevices, focusDeviceId, focusRequestKey, openDevice };
+  return { devicesOpen, toggleDevices, focusDeviceId, focusRequestKey };
 }
