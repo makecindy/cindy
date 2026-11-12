@@ -50,6 +50,7 @@ vi.mock('../../device-link/index', () => ({
   getSelfDeviceId: () => 'local',
   getDeviceLinkStatus: () => 'online',
   getUnresponsiveDeviceIds: () => ['a'],
+  retainForegroundLink: () => () => {},
   remoteInvoke: vi.fn(async (...args: any[]) => {
     args[3]?.preSend?.();
     fixture.calls.push(args);

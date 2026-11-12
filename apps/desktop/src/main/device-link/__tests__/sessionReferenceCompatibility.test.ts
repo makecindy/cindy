@@ -23,6 +23,15 @@ function queuedWithReference() {
   };
 }
 
+it.each(['local-db:sessions:list', 'maker:schedule:list-sidebar-index-runs',
+  'maker:schedule:list', 'maker:get-capabilities'])(
+  'marks passive %s reads without changing their scheduling priority', async (channel) => {
+    const invoke = vi.fn<DeviceLinkIpcDeps['invoke']>().mockResolvedValue({ ok: true, result: [] });
+    await handleInvoke(depsForInvoke(invoke), 'target-device', channel, []);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('target-device', channel, [], { passiveLink: true });
+  },
+);
+
 describe('device-link target session-reference capability gate', () => {
   it('sends raw link text when an old target cannot consume trusted reference fields', async () => {
     const invoke = vi
