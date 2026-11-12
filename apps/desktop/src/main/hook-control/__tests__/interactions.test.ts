@@ -261,7 +261,7 @@ describe('hook card copy follows the UI language', () => {
       toolName: 'Bash',
       input: { command: 'ls' },
     } as InteractionRequest);
-    expect(composed?.card.title).toBe('🔐 Permission Request: Bash');
+    expect(composed?.card.title).toBe('🔐 Permission request: Bash');
     expect(composed?.card.buttons.map((b) => b.label)).toEqual([
       'Allow once',
       'Always allow for this session',
