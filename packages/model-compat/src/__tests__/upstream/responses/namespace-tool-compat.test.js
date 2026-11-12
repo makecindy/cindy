@@ -356,6 +356,28 @@ describe("Responses namespace tool compatibility", () => {
         expect(rewritten.body.input[0].tools).toEqual([]);
         expect([...rewritten.aliases.keys()].sort()).toEqual(["workspace.read", "workspace__read_3"]);
     });
+    // A disambiguating suffix must not take a name a later sibling legitimately owns. Reserving
+    // every real name first makes the outcome independent of declaration order.
+    test("reserves real names before handing out a disambiguating suffix", () => {
+        for (const order of [["read", "read_2"], ["read_2", "read"]]) {
+            const rewritten = rewriteRoutedNamespaceToolsForUpstream({
+                tools: [
+                    { type: "function", name: "workspace__read", parameters: {} },
+                    {
+                        type: "namespace",
+                        name: "workspace",
+                        tools: order.map(name => ({ type: "function", name, parameters: {} })),
+                    },
+                ],
+            });
+            expect(rewritten.body.tools.map(tool => tool.name)).toEqual([
+                "workspace__read",
+                ...order.map(name => (name === "read" ? "workspace__read_3" : "workspace__read_2")),
+            ]);
+            expect(rewritten.aliases.get("workspace__read_3")).toMatchObject({ namespace: "workspace", name: "read" });
+            expect(rewritten.aliases.get("workspace__read_2")).toMatchObject({ namespace: "workspace", name: "read_2" });
+        }
+    });
     test("rewrites a selector to the disambiguated wire name", () => {
         const rewritten = rewriteRoutedNamespaceToolsForUpstream({
             tools: [

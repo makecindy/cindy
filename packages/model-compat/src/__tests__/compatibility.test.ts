@@ -80,4 +80,29 @@ describe('provider policy boundaries across harnesses', () => {
   it('does not inherit compatibility by a familiar model name on an unknown gateway', () => {
     expect(resolveProviderCompatibilityProfile({ harness: 'codex', protocol: 'openai-responses', model: 'deepseek-v4-pro', upstreamBase: 'https://gateway.example/v1' })).toBeNull();
   });
+  it('keeps a displaced bare declaration out of the custom restore', () => {
+    const body = {
+      tools: [
+        { type: 'function', name: 'collaboration__run', parameters: {} },
+        { type: 'namespace', name: 'collaboration', tools: [{ type: 'custom', name: 'run', description: 'Run raw input' }] },
+      ],
+    };
+    const prepared = prepareResponsesCompatibility(body, { customTools: 'functions', namespaceTools: 'functions' });
+    expect((prepared.body as { tools: { name: string }[] }).tools.map(tool => tool.name))
+      .toEqual(['collaboration__run', 'collaboration__run_2']);
+
+    // The bare declaration keeps its own name; its ordinary call must not be rewritten into a
+    // custom-tool call just because a displaced namespace child used to own that wire name.
+    const bare = JSON.stringify({ output: [{ type: 'function_call', name: 'collaboration__run', call_id: 'call_bare', arguments: '{"input":"echo bare"}' }] });
+    expect(prepared.restoreJson(bare)).toBe(bare);
+
+    // The displaced custom child still restores through its namespace identity and kind.
+    const rewritten = JSON.stringify({ output: [{ type: 'function_call', name: 'collaboration__run_2', call_id: 'call_custom', arguments: '{"input":"echo custom"}' }] });
+    expect((JSON.parse(prepared.restoreJson(rewritten)) as { output: Record<string, unknown>[] }).output[0]).toMatchObject({
+      type: 'custom_tool_call',
+      name: 'run',
+      namespace: 'collaboration',
+      input: 'echo custom',
+    });
+  });
 });

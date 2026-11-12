@@ -40,7 +40,12 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
     : { body: custom.body, names: new Set<string>() };
   const namespace = policy.namespaceTools === 'functions'
     ? rewriteRoutedNamespaceToolsForUpstream(search.body, custom.names)
-    : { body: search.body, aliases: new Map() };
+    : { body: search.body, aliases: new Map(), renamedWireNames: new Map<string, string>() };
+  // A namespace child that a bare declaration displaced keeps its record in `custom.names`: after
+  // namespace restoration the item carries `{namespace, name}` and resolves to that same preferred
+  // wire name. What must not happen is the bare declaration itself claiming it, so the displaced
+  // names are excluded for items that carry no namespace.
+  const bareDisplacedNames = new Set(namespace.renamedWireNames.keys());
   const schemas = policy.repairFunctionArguments ? collectFunctionCallRepairSchemas(body) : new Map();
   const declared = collectDeclaredWireToolNames(body);
   const scrubAuthorization = collectSelfNamedNamespaceScrubAuthorization(body, new Set([...custom.names, ...custom.repairNames]), new Set(schemas.keys()));
@@ -56,7 +61,7 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
       }
       if (policy.snapshotRepair) next = repairResponsesSnapshotJson(next, body);
       if (policy.contentChannelReasoning) next = rewriteReasoningSummaryInJsonString(next);
-      next = restoreRoutedCustomCallsInJson(next, custom.names, custom.repairNames, declared);
+      next = restoreRoutedCustomCallsInJson(next, custom.names, custom.repairNames, declared, bareDisplacedNames);
       next = restoreRoutedToolSearchCallsInJson(next, search.names);
       next = repairFunctionCallsInJson(next, schemas);
       return policy.backfillResponseFields ? backfillResponsesFieldsJson(next) : next;
@@ -66,7 +71,7 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
       const stages: SseBlockRewrite[] = [
         payloadRewriteAsBlockRewrite(createSelfNamedToolCallNamespaceScrubRewrite(scrubAuthorization)),
         payloadRewriteAsBlockRewrite(restoreNamespace),
-        createRoutedCustomToolRestoreBlockRewrite(custom.names, budget, custom.repairNames, declared),
+        createRoutedCustomToolRestoreBlockRewrite(custom.names, budget, custom.repairNames, declared, bareDisplacedNames),
         createRoutedToolSearchRestoreBlockRewrite(search.names, budget),
         createResponsesFunctionToolRepairBlockRewrite(schemas, budget),
       ];

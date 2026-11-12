@@ -71,10 +71,19 @@ export function routedCustomToolTargetName(
   value: unknown,
   names: ReadonlySet<string>,
   declaredNames?: ReadonlySet<string>,
+  bareDisplacedNames?: ReadonlySet<string>,
 ): string | undefined {
   const wireName = routedCustomToolWireName(value);
   if (wireName === undefined) return undefined;
-  if (names.has(wireName)) return wireName;
+  if (names.has(wireName)) {
+    // A wire name a namespace child was displaced from now belongs to the bare declaration that
+    // displaced it. Only an item that already carries the namespace — which is what restoring the
+    // namespace child produces — may still claim it; the bare declaration's own call must not be
+    // rewritten into a custom-tool call.
+    const carriesNamespace = isPlainObject(value) && typeof value.namespace === "string";
+    if (!carriesNamespace && bareDisplacedNames?.has(wireName)) return undefined;
+    return wireName;
+  }
   if (!isPlainObject(value) || typeof value.namespace === "string") return undefined;
   const normalized = normalizeDeclaredToolName(wireName, declaredNames);
   return normalized !== wireName && names.has(normalized) ? normalized : undefined;
@@ -269,13 +278,14 @@ export function restoreRoutedCustomCalls(
   names: ReadonlySet<string>,
   repairNames: ReadonlySet<string> = new Set(),
   declaredNames?: ReadonlySet<string>,
+  bareDisplacedNames?: ReadonlySet<string>,
 ): { value: unknown; changed: boolean } {
   if (!isPlainObject(value)) return { value, changed: false };
 
   const restoreItem = (item: unknown): { value: unknown; changed: boolean } => {
     if (!isPlainObject(item)) return { value: item, changed: false };
     const wireName = routedCustomToolWireName(item);
-    const targetName = routedCustomToolTargetName(item, names, declaredNames);
+    const targetName = routedCustomToolTargetName(item, names, declaredNames, bareDisplacedNames);
     if (
       (item.type === "function_call" || item.type === "custom_tool_call")
       && typeof item.name === "string"
@@ -365,7 +375,7 @@ export function restoreRoutedCustomCalls(
     && value.type.startsWith("response.")
     && isPlainObject(value.response)
   ) {
-    const response = restoreRoutedCustomCalls(value.response, names, repairNames, declaredNames);
+    const response = restoreRoutedCustomCalls(value.response, names, repairNames, declaredNames, bareDisplacedNames);
     if (response.changed) {
       restored.response = response.value;
       changed = true;
@@ -380,6 +390,7 @@ export function restoreRoutedCustomCallsInJson(
   names: ReadonlySet<string>,
   repairNames: ReadonlySet<string> = new Set(),
   declaredNames?: ReadonlySet<string>,
+  bareDisplacedNames?: ReadonlySet<string>,
 ): string {
   if (names.size === 0 && repairNames.size === 0) return text;
   let payload: unknown;
@@ -388,7 +399,7 @@ export function restoreRoutedCustomCallsInJson(
   } catch {
     return text;
   }
-  const restored = restoreRoutedCustomCalls(payload, names, repairNames, declaredNames);
+  const restored = restoreRoutedCustomCalls(payload, names, repairNames, declaredNames, bareDisplacedNames);
   return restored.changed ? JSON.stringify(restored.value) : text;
 }
 
