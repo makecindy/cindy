@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
+import { prepareTeammateAvatarImage } from '../teammateAvatarImage.js';
 import {
   readIccCicp,
   readPngHdrChunks,
@@ -495,5 +496,51 @@ describe('toSdrAvatarImage — SDR passthrough', () => {
       const image = { buffer, mimeType: 'image/png' };
       expect(await toSdrAvatarImage(image)).toBe(image);
     }
+  });
+});
+
+// #9433 P2: the binding entry crops in oriented ORIGINAL pixels, even when HDR
+// conversion downsizes. Existing tests checked the converter and PNG size only.
+// Unit, real pixels: non-integral scaling, an in-bounds wrong-region crop, a far
+// edge crop and EXIF orientation. Reuse the HDR fixture helpers above.
+describe('prepareTeammateAvatarImage source-coordinate boundary', () => {
+  async function blocks(width: number, height: number, orientation?: number) {
+    let image = sharp({ create: { width, height, channels: 4, background: { r: 190, g: 0, b: 0, alpha: 0.5 } } })
+      .composite([{ input: { create: { width: Math.floor(width / 2), height, channels: 4, background: { r: 0, g: 190, b: 0, alpha: 1 } } }, left: Math.ceil(width / 2), top: 0 }]);
+    if (orientation) image = image.withMetadata({ orientation });
+    return image.png().toBuffer();
+  }
+  it.each([undefined, 6])('keeps HDR crop location and far edges with orientation %s', async orientation => {
+    const input = insertAfterIhdr(await blocks(4097, 2049, orientation), pngChunk('cICP', Buffer.from([1, 16, 0, 1])));
+    // x=1500..1800 is red in the source but green if used unchanged after downscaling.
+    const crop = orientation ? { left: 100, top: 1500, width: 300, height: 300 } : { left: 1500, top: 100, width: 300, height: 300 };
+    const result = await prepareTeammateAvatarImage(input, { crop });
+    const meta = await expectNoHdrSignal(result.buffer);
+    expect([meta.width, meta.height]).toEqual([256, 256]);
+    const [pixel] = await rgbaAt(result.buffer, [128], 128);
+    expect(pixel[0]).toBeGreaterThan(pixel[1] + 50);
+    expect(pixel[3]).toBeCloseTo(128, -1);
+    const edge = orientation ? { left: 1749, top: 3797, width: 300, height: 300 } : { left: 3797, top: 1749, width: 300, height: 300 };
+    const last = await prepareTeammateAvatarImage(input, { crop: edge });
+    const [green] = await rgbaAt(last.buffer, [128], 128);
+    expect(green[1]).toBeGreaterThan(green[0] + 50);
+    if (!orientation) {
+      const tiny = await prepareTeammateAvatarImage(input, { crop: { left: 4096, top: 2048, width: 1, height: 1 } });
+      const [edgePixel] = await rgbaAt(tiny.buffer, [128], 128);
+      expect(edgePixel[1]).toBeGreaterThan(edgePixel[0] + 50);
+    }
+    await expect(prepareTeammateAvatarImage(input, { crop: { ...edge, width: 301, height: 301 } })).rejects.toThrow();
+  });
+  it('keeps SDR orientation and alpha, and rejects invalid rectangles and corrupt pixels', async () => {
+    const source = await blocks(40, 20, 6);
+    const result = await prepareTeammateAvatarImage(source, { crop: { left: 0, top: 0, width: 20, height: 20 } });
+    const [pixel] = await rgbaAt(result.buffer, [128], 128);
+    expect(pixel[0]).toBeGreaterThan(pixel[1] + 50);
+    expect(pixel[3]).toBeCloseTo(128, -1);
+    for (const crop of [{ left: 0, top: 0, width: 21, height: 21 }, { left: -1, top: 0, width: 10, height: 10 }, { left: 0.5, top: 0, width: 10, height: 10 }, { left: 0, top: 0, width: 10, height: 9 }])
+      await expect(prepareTeammateAvatarImage(source, { crop })).rejects.toThrow();
+    await expect(prepareTeammateAvatarImage(source.subarray(0, 50))).rejects.toThrow();
+    // Tiny valid edge crops remain at least one decoded pixel after resizing.
+    expect((await sharp((await prepareTeammateAvatarImage(source, { crop: { left: 19, top: 39, width: 1, height: 1 } })).buffer).metadata()).width).toBe(256);
   });
 });

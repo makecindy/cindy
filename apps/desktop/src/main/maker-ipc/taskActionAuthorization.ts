@@ -8,6 +8,9 @@ type Decision = Awaited<ReturnType<ToolCallAuthorizer>>;
 
 /** These names describe effects, not tool visibility or an Agent permission mode. */
 export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
+  'create_teammate',
+  'update_teammate_configuration',
+  'set_target_teammate_avatar',
   'set_teammate_project',
   'send_to_session',
   'steer_session',

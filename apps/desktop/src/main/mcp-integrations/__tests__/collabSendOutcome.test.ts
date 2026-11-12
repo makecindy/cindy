@@ -152,6 +152,7 @@ import {
 } from '../codexBuiltinToolPolicy.js';
 
 const botCapabilities = {
+  createTeammate: vi.fn(async () => ({ ok: false as const, errorCode: 'UNAVAILABLE', message: 'Not exercised by this fixture' })),
   list: vi.fn(async () => ({ ok: true as const, capabilities: [] })),
   select: vi.fn(async () => ({ ok: true as const, joined: true, effective: 'next-turn' as const })),
 };
@@ -302,6 +303,19 @@ describe('collab send outcome semantics', () => {
     mockState.invitationInput = null;
     mockState.invitationOwner = true;
     vi.clearAllMocks();
+  });
+
+  // #9433 P1, unit: the production provider must pass an ordinary task to the
+  // shared creation service. Registry tests miss the old Bot-only SQL adapter.
+  it('routes ordinary-task teammate creation through the shared host service', async () => {
+    const createTeammate = vi.fn(async () => ({ ok: true as const, bot: { id: 'created', name: 'New partner', description: '' } }));
+    createDesktopMcpProviders({ botCapabilities: { ...botCapabilities, createTeammate }, getMakerMemoryManager: vi.fn(), lspPool: {} as never,
+      pluginRegistry: { isEnabled: () => true, getPlugins: () => [] } as never, invokeRemote: vi.fn(),
+    });
+    const profiles = (mockState.capturedProvidersConfig!.xdtHelper as XdtHelperMcpDeps).botProfiles!;
+    const input = { callerSessionId: 'ordinary-task', name: 'New partner', description: '', identitySource: '', welcomeMessage: '' };
+    expect(await profiles.create(input)).toMatchObject({ ok: true, bot: { id: 'created' } });
+    expect(createTeammate).toHaveBeenCalledExactlyOnceWith(input);
   });
 
   // Unit: actual Desktop provider + worker DB. Host tests inject caller facts;

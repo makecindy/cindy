@@ -1,3 +1,4 @@
+import { registerBotAvatarTools, type TeammateAvatarCallbacks } from './xdt-helper/bot_avatar.js';
 import { registerListAvailableModelsTool, type ListAvailableModelsDeps } from './xdt-helper/list_available_models.js';
 import { registerPiRuntimeTools, type PiRuntimeCallbacks } from './xdt-helper/pi_runtime.js';
 import { createControlReader } from './xdt-helper/control-catalog.js';
@@ -232,7 +233,9 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
     `本机。`,
   ].join(''),
   bots: [
-    '伙伴：资料、能力、关联项目（list_teammate_projects / set_teammate_project，仅自身）、发现伙伴与主力电脑。',
+    '伙伴：普通任务与伙伴共用本机名单与原生创建（list_teammates / create_teammate）、',
+    '目标配置（inspect_teammate_configuration / update_teammate_configuration）与头像（set_target_teammate_avatar）；',
+    '自身资料、能力、关联项目（list_teammate_projects / set_teammate_project，仅自身）、发现伙伴与主力电脑。',
     '发现伙伴（list_agents，返回伙伴主对话的 session_id，发消息用 handoff 类的 send_to_session）与主力电脑（get_teammate_home / move_teammate_home）可跨电脑；',
     '其余本机。',
   ].join(''),
@@ -256,6 +259,16 @@ function cindyAvailableForSession(sessionCtx: XdtHelperMcpSessionCtx): boolean {
   // Remote Pi tunnels the in-process cindy gateway over the MCP bridge.
   return !ctx.remoteHostId || ctx.agentKind === 'pi';
 }
+
+// Target management also belongs to ordinary local tasks. Self-management and
+// memory still require a companion identity.
+const LOCAL_TEAMMATE_MANAGEMENT = new Set([
+  'create_teammate',
+  'inspect_teammate_configuration',
+  'list_teammates',
+  'set_target_teammate_avatar',
+  'update_teammate_configuration',
+]);
 
 interface HelperSurfaceAllow {
   /** null means every registered category. An empty set means none. */
@@ -535,6 +548,7 @@ export interface XdtHelperMcpDeps {
   modelSettings?: AppModelsCallbacks;
   appModels?: Pick<BotCapabilityCallbacks, 'models' | 'setDefaultModel'>;
   botCapabilities?: BotCapabilityCallbacks;
+  botAvatar?: TeammateAvatarCallbacks;
   /** Which computer runs a teammate, and moving it to another (cloud companions). */
   teammateHome?: TeammateHomeCallbacks;
   /** What machines this account has and their live resources. */
@@ -608,7 +622,10 @@ export function createXdtHelperMcpServer(
     }
     const allow = (categories: ReadonlySet<string>): HelperSurfaceAllow => ({
       categories,
-      ...(sessionId && !remoteBotOnly ? { tools: new Set(['list_agents']) } : {}),
+      ...(sessionId && !remoteBotOnly ? { tools: new Set([
+        'list_agents',
+        ...(!context.remoteHostId ? LOCAL_TEAMMATE_MANAGEMENT : []),
+      ]) } : {}),
     });
     if (!sessionId) return allow(remoteBotOnly ? new Set() : defaultCategories);
     if (!deps.resolveSurface) return allow(remoteBotOnly ? new Set(['auth', 'cindy']) : defaultCategories);
@@ -804,6 +821,9 @@ export function createXdtHelperMcpServer(
     getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
     callbacks: deps.appModels, category: 'settings',
   });
+  if (deps.botAvatar) registerBotAvatarTools(registry, {
+    getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx), callbacks: deps.botAvatar,
+  });
   if (deps.botCapabilities) {
     registerBotCapabilityTools(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
@@ -932,7 +952,7 @@ export function createXdtHelperMcpServer(
         description: definition.description, inputSchema: z.strictObject(definition.inputShape),
       }, async (args) => {
         const allowed = await allowedSurface();
-        if (!allowed.categories?.has('bots') || !toolAllowed(allowed, definition)) {
+        if (!toolAllowed(allowed, definition)) {
           return errorPayload('CAPABILITY_NOT_AVAILABLE', '这个工具不属于当前任务的能力面。');
         }
         const sessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
@@ -966,8 +986,10 @@ export function createXdtHelperMcpServer(
         ...(await asyncQuestionListing()),
         ...(await handoffListing()),
         ...(await machineListing()),
-        ...(allowed.categories?.has('bots')
-          ? withCindyGatedBotToolDescriptions(botTools, cindyAvailableForSession(sessionCtx)) : []),
+        ...withCindyGatedBotToolDescriptions(
+          botTools.filter((tool) => toolAllowed(allowed, { ...tool, category: 'bots' })),
+          cindyAvailableForSession(sessionCtx),
+        ),
       ] };
     });
   }

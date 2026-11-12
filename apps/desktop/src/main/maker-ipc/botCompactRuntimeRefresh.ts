@@ -1,3 +1,5 @@
+import { ScheduledModelSelectionBusyError } from './scheduledModelSelection.js';
+
 export interface BotCompactRuntimeSession {
   readonly id: string;
   readonly instanceId: string;
@@ -13,11 +15,11 @@ export interface BotCompactBoundary {
   readonly boundaryCount: number;
 }
 
-export type BotCompactRuntimeRefreshOutcome = 'refreshed' | 'not-bot' | 'deferred';
+export type BotCompactRuntimeRefreshOutcome = 'refreshed' | 'not-bot' | 'deferred' | 'failed';
 
 /** Send admission adds one outcome: the refresh stays pending, but the input
  * may run on the current runtime because only background jobs block it. */
-export type BotCapabilityEpochSendOutcome = BotCompactRuntimeRefreshOutcome | 'kept-current-runtime';
+export type BotCapabilityEpochSendOutcome = Exclude<BotCompactRuntimeRefreshOutcome, 'failed'> | 'kept-current-runtime';
 
 /** Model switching may already bootstrap the latest Profile. Do not close that
  * fresh handle again: a native thread may not persist a rollout until its first
@@ -29,7 +31,13 @@ export async function refreshBotRuntimeAfterModelSelection<T>(deps: {
   refresh(session: T): Promise<BotCompactRuntimeRefreshOutcome>;
 }): Promise<BotCompactRuntimeRefreshOutcome> {
   const before = deps.current();
-  await deps.select();
+  try { await deps.select(); }
+  catch (error) {
+    // The native route applier has accepted the choice but cannot apply it in
+    // the running turn. Preserve that queued intent; real failures still escape.
+    if (error instanceof ScheduledModelSelectionBusyError) return 'deferred';
+    throw error;
+  }
   const after = deps.current();
   if (!after || after !== before) return 'not-bot';
   return deps.refresh(after);
@@ -124,7 +132,7 @@ export function createBotCompactRuntimeRefreshCoordinator(
     const operation = (async () => deps.refresh(session, entry.boundary))()
       .then((outcome) => {
         if (
-          outcome !== 'deferred'
+          (outcome === 'refreshed' || outcome === 'not-bot')
           && pending.get(session.id) === entry
         ) {
           pending.delete(session.id);
@@ -133,7 +141,7 @@ export function createBotCompactRuntimeRefreshCoordinator(
       })
       .catch((error) => {
         deps.onError?.(session.id, error);
-        return 'deferred' as const;
+        return 'failed' as const;
       })
       .finally(() => {
         if (inFlight.get(session.id)?.operation === operation) inFlight.delete(session.id);
@@ -207,6 +215,9 @@ export async function prepareBotCapabilityEpochBeforeSend<T extends {
     coordinator.noteBoundary(session);
   }
   const outcome = await coordinator.attempt(session);
+  // A failed bootstrap can close the old handle (and clear its pending marker).
+  // Keep send admission blocked even though the configuration receipt reports failure.
+  if (outcome === 'failed') return 'deferred';
   if (!coordinator.hasPending(session.id, session)) return outcome;
   return coordinator.isBlockedOnlyByBackgroundTasks(session) ? 'kept-current-runtime' : 'deferred';
 }

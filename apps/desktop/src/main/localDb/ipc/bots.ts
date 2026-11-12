@@ -71,7 +71,7 @@ import {
   writeBotProfileFolder,
 } from '../../maker-ipc/botProfileFolder.js';
 import { syncBotProfileFromFolder } from '../../maker-ipc/botProfileFolderSync.js';
-import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
+import { requestBotRuntimeEpochRefresh, requestBotRuntimeEpochRefreshOutcome } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
 import { createLogger } from '../../logger.js';
 import { collectTaskResponsibilityScopes } from '../../maker-ipc/botTaskResponsibility.js';
 import { ensureBotProjectAutomations, nameBotProject, prepareBotProjectWorkspace } from '../../maker-ipc/botProjectMode.js';
@@ -224,11 +224,13 @@ async function syncBotProfileFolder(
   botId: string,
   patch: { identitySource?: string; userContextSource?: string },
   userDataDir = ownerScopedUserDataPath(),
-): Promise<void> {
+): Promise<boolean> {
   try {
     await writeBotProfileFolder(userDataDir, botId, patch);
+    return true;
   } catch (cause) {
     log.warn('write bot profile folder failed', { botId, error: String(cause) });
+    return false;
   }
 }
 import { buildDefaultBotIdentity } from '../../../shared/botProfileDefaults.js';
@@ -1821,7 +1823,8 @@ export async function recoverActiveTeammateInvitations(): Promise<void> {
 
 
 /** Shared image write; callers supply validated bytes, never a remote filesystem path. */
-export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer; mimeType: string }, expectedVersion?: number, expectedAvatar?: string) {
+export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer; mimeType: string }, expectedVersion?: number, expectedAvatar?: string,
+  guard?: { assertCurrent(): void; beforeCommit(): Promise<void>; onCommitted(receipt: { currentVersion: number }, avatar: string): void }) {
   const ownerBoundary = captureBotOperationOwner();
   const client = getDbClient();
   const db = client.drizzle;
@@ -1852,7 +1855,10 @@ export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer
     const clearsFallback = capabilities.cloudAvatarFallback === true;
     delete capabilities.cloudAvatarFallback;
     const now = Date.now();
-    await client.tx('bots.updateProfile', {
+    await guard?.beforeCommit();
+    ownerBoundary.assertCurrent();
+    guard?.assertCurrent();
+    const committed = await client.tx('bots.updateProfile', {
       id: botId,
       avatar: written.url,
       identitySource: version.identitySource,
@@ -1864,6 +1870,7 @@ export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer
       now,
     });
     ownerBoundary.assertCurrent();
+    guard?.onCommitted(committed, written.url);
     const profile = await readProfile(client, botId);
     ownerBoundary.assertCurrent();
     broadcastBotProfileChanged({ botId, change: 'updated' });
@@ -1881,7 +1888,9 @@ export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer
 export interface RestoredBotOrigin { templateId?: unknown; avatarFallback?: boolean; replacesUnfinishedMeeting?: true; allowSameName?: true }
 
 /** Main-owned creation path shared by the renderer and Bot runtime tools. */
-export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigin) {
+export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigin,
+  guard?: { assertCurrent(): void; beforeCommit(): Promise<void>; onCommitted(bot: { id: string; name: string; description: string }): void }) {
+  guard?.assertCurrent();
   const body =
     raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const draftEntry = body.creationDraftToken ? readBotCreationDraft(body.creationDraftToken) : undefined;
@@ -1983,11 +1992,14 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
   }
   const selectedImage = avatarImage ?? (!requestedAvatar ? await readDefaultTeammatePortrait(existingIds.length) : null);
   if (selectedImage) {
-    const written = await storeTeammateAvatarImage(selectedImage, db, assertCreationOwnerStillCurrent);
+    const written = await storeTeammateAvatarImage(selectedImage, db, () => { assertCreationOwnerStillCurrent(); guard?.assertCurrent(); });
     avatar = written.url;
     botAvatarRef = { id: randomUUID(), hash: written.hash, createdAt: now };
   }
   try {
+  await guard?.beforeCommit();
+  assertCreationOwnerStillCurrent();
+  guard?.assertCurrent();
   await client.tx('bots.createProfile', {
     id,
     ...(botAvatarRef ? { botAvatarRef } : {}),
@@ -2002,6 +2014,7 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
     inactiveCindyIds: inactiveCompanionCopyIds(companionHomes.snapshot()),
     now,
   });
+  guard?.onCommitted({ id, name, description });
   } catch (error) {
     assertCreationOwnerStillCurrent();
     if (templateId === 'cindy' && (error as { code?: string }).code === 'ALREADY_EXISTS') {
@@ -2072,7 +2085,9 @@ export async function prepareImportedBotInvitation(botId: string, requestId: str
 
 /** Shared profile mutation for trusted settings and owner-bound capability selection. */
 export async function updateBotProfile(raw: unknown, expectedVersion?: number,
-  validateAdditions?: (update: BotCapabilityUpdate) => Promise<void>, restored?: RestoredBotOrigin) {
+  validateAdditions?: (update: BotCapabilityUpdate) => Promise<void>, restored?: RestoredBotOrigin,
+  guard?: { assertCurrent(): void; beforeCommit(): Promise<void>; onCommitted(receipt: { currentVersion: number }): void;
+    onRuntimeRefresh?(outcome: Awaited<ReturnType<typeof requestBotRuntimeEpochRefreshOutcome>>): void }) {
   const body =
     raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const id = readText(body.id, 'botId', 128, true);
@@ -2243,7 +2258,10 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
       // Hold send locks only through persistence/invalidation, not runtime
       // permission refresh, which may wait for the current turn to finish.
       owner.assertCurrent();
-      await client.tx('bots.updateProfile', {
+      await guard?.beforeCommit();
+      owner.assertCurrent();
+      guard?.assertCurrent();
+      const committed = await client.tx('bots.updateProfile', {
         id,
         ...(acceptsModelSelection ? { clearScheduledModelBaseline: true } : {}),
         ...(changesPermissions ? { canonicalPermissionMode: botSessionPermissionMode(normalizedNextConfig) } : {}),
@@ -2266,6 +2284,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
           !isManagedBotAvatarUrl(patch.avatar),
         now,
       });
+      guard?.onCommitted(committed);
     });
     owner.assertCurrent();
     if (changesPermissions) {
@@ -2317,7 +2336,10 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   await ensureBotProfileFolderSeeded(id, nextIdentitySource, normalizedNextConfig, owner.userDataDir);
   owner.assertCurrent();
   if (Object.keys(folderPatch).length > 0) {
-    await syncBotProfileFolder(id, folderPatch, owner.userDataDir);
+    const projected = await syncBotProfileFolder(id, folderPatch, owner.userDataDir);
+    // Target tools must retain the DB receipt and report this partial result.
+    // Do not claim next-turn adoption when the user's SOUL.md still contains old text.
+    if (!projected && guard) throwIpcError('PRECONDITION_FAILED', '配置已保存，但身份文件同步失败');
     owner.assertCurrent();
   }
   // Project mode (experimental): turning it on makes the workspace a registered,
@@ -2350,6 +2372,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     if (projectDir) await nameBotProject(id, projectDir, patch.displayName, current.displayName);
     owner.assertCurrent();
   }
+  let runtimeRefreshUnconfirmed = false;
   if (profileContentChanged || acceptsSavedModel) {
     const [canonical] = await db
       .select({ sessionId: botSessionLinks.sessionId })
@@ -2363,12 +2386,22 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
       )
     .limit(1);
     owner.assertCurrent();
-    if (canonical) requestBotRuntimeEpochRefresh(canonical.sessionId,
-      acceptsModelSelection ? 'model' : 'profile');
+    if (canonical) {
+      const reason = acceptsModelSelection ? 'model' : 'profile';
+      if (guard) {
+        // Persistence already committed. Busy/cold runtimes may adopt on the next
+        // turn, but a failed rebuild must reach the target tool's saved receipt.
+        const outcome = await requestBotRuntimeEpochRefreshOutcome(canonical.sessionId, reason);
+        owner.assertCurrent();
+        guard.onRuntimeRefresh?.(outcome);
+        runtimeRefreshUnconfirmed = outcome === 'failed' || outcome === 'unavailable';
+      } else void requestBotRuntimeEpochRefresh(canonical.sessionId, reason);
+    }
   }
   const profile = await readProfile(client, id);
   owner.assertCurrent();
   broadcastBotProfileChanged({ botId: id, change: 'updated' });
+  if (runtimeRefreshUnconfirmed) throwIpcError('PRECONDITION_FAILED', '配置已保存，但运行刷新未确认');
   return profile;
 }
 

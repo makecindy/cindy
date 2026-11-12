@@ -13,7 +13,7 @@ export interface CreateTeammateCallbacks {
     description: string;
     identitySource: string;
     welcomeMessage: string;
-  }): Promise<ControlResult<{ bot: { id: string; name: string; description: string } }, string>>;
+  }): Promise<ControlResult<{ bot: { id: string; name: string; description: string }; warning?: string }, string>>;
 }
 
 export function registerCreateTeammateTool(
@@ -26,7 +26,7 @@ export function registerCreateTeammateTool(
   registry.register({
     name: 'create_teammate',
     category: 'bots',
-    description: "Create a new Cindy Bot teammate directly when the user asks for one. Do not write a template file or tell the user to create it manually. Only a name is required. Follow the user’s Cindy default model chain and shared Bot baseline. Leave unspecified identity details open; the new teammate speaks for itself using its own runtime and memory. To message it, take its main chat session_id from list_agents and use send_to_session; creation alone does not start hidden work.",
+    description: "Create a new Cindy Bot teammate directly when the user asks for one. Do not write a template file or tell the user to create it manually. Only a name is required. Follow the user’s Cindy default model chain and shared Bot baseline. Leave unspecified identity details open; the new teammate speaks for itself using its own runtime and memory. The returned bot id can be read with inspect_teammate_configuration. Available to ordinary local tasks and teammates. Creation uses the native invitation; while its chat is preparing, configuration remains readable and its model choice can be repaired. Runtime status not-prepared is not a reason to recreate the teammate. To message it, take its main chat session_id from list_agents and use send_to_session; creation alone does not start hidden work.",
     inputShape: {
       name: z.string().min(1).max(200).describe('Display name for the new teammate.'),
       description: z.string().max(4000).optional().describe('Role or purpose, only if the user supplied it.'),
@@ -41,7 +41,7 @@ export function registerCreateTeammateTool(
     }) => {
       const callerSessionId = deps.getSessionContext().sessionId;
       if (!callerSessionId) {
-        return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定 Cindy 伙伴任务。');
+        return errorPayload('NO_SESSION_CONTEXT', '当前调用未绑定任务。');
       }
       const callerSessionInstanceId = deps.getSessionContext().sessionInstanceId;
       const result = await deps.callbacks.create({
@@ -53,7 +53,7 @@ export function registerCreateTeammateTool(
         welcomeMessage: '',
       });
       return result.ok
-        ? okPayload({ action: 'created', bot: result.bot })
+        ? okPayload({ action: 'created', bot: result.bot, ...(result.warning ? { warning: result.warning } : {}) })
         : errorPayload(result.errorCode, result.message);
     },
   });

@@ -108,6 +108,12 @@ export function createDesktopTaskActionAuthorizer(deps: {
           .limit(1);
         if (!caller) throw new Error('TASK_UNAVAILABLE');
         const input = deps.input(sessionId);
+        const configurationWrite = ['create_teammate', 'update_teammate_configuration', 'set_target_teammate_avatar'].includes(call.tool);
+        if (configurationWrite &&
+          (input.permission?.permissionMode === 'plan' || input.permission?.planModeEnabled === true || deps.getSession(sessionId)?.stablePlanModeState?.enabled === true)) {
+          rejectedDecision = { ok: false, errorCode: 'TASK_ACTION_PLAN_MODE', message: '计划模式下只读取伙伴配置；退出计划模式后再应用修改。' };
+          return null;
+        }
         const scheduled = !caller.botId && caller.source !== 'bot' &&
           deps.getSession(sessionId)?.getCurrentTurnOrigin()?.kind === 'scheduler';
         // User-authored ordinary work retains the existing Agent permission flow.
@@ -115,7 +121,7 @@ export function createDesktopTaskActionAuthorizer(deps: {
           !caller.botId &&
           caller.source !== 'bot' &&
           caller.source !== 'scheduler' &&
-          !input.automatic && !scheduled
+          !input.automatic && !scheduled && !configurationWrite
         )
           return null;
         if (caller.botId && (caller.botStatus !== 'active' || caller.archivedAt !== null))
@@ -218,6 +224,10 @@ export function createDesktopTaskActionAuthorizer(deps: {
           assertSameOwner('OWNER_SCOPE_CHANGED');
         };
         const assertCurrentSync = () => {
+          if (configurationWrite && (deps.input(sessionId).permission?.permissionMode === 'plan'
+            || deps.input(sessionId).permission?.planModeEnabled === true
+            || deps.getSession(sessionId)?.stablePlanModeState?.enabled === true))
+            throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
           runtime?.assertInputCurrent();
           assertPermissionCurrent();
           const current = deps.input(sessionId);
