@@ -65,6 +65,20 @@ import {
   readLegacyCodexProviderAccount,
   loginLegacyCodexProviderAccount,
 } from './nativeCli.js';
+import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
+
+const log = desktopMakerLogger.child('subscription-accounts');
+
+/** 成功快照的复用窗口。 */
+const ACCOUNT_SNAPSHOT_TTL_MS = 30_000;
+/**
+ * 读取失败只复用这么短：一次读不到**不是**「已登出」或「不可用」的证据。官方 CLI 冷启动、
+ * app-server 抢占、owner 边界都可能让重启后的第一次读失败，按成功快照一样缓存 30 秒会把
+ * 启动瞬间的一次抖动变成半分钟发不出去(2026-11-12 实测：OpenAI 池里第一个账号额度用尽时，
+ * 第二个有额度的账号也被判不可用，整池无账号可选)。并发读取仍由 `state.flights` 合并，
+ * 缩短失败窗口不会反复 spawn CLI。
+ */
+const ACCOUNT_SNAPSHOT_FAILURE_TTL_MS = 3_000;
 
 type Usage = {
   claudeUsage?: ReturnType<typeof parseClaudeSdkRateLimitInfo>;
@@ -305,7 +319,8 @@ async function snapshot(
   assertOwner(state);
   const key = keyOf(provider, id);
   const cached = state.cache.get(key);
-  if (!force && cached && Date.now() - cached.at < 30_000) return cached;
+  const ttl = cached?.unavailable ? ACCOUNT_SNAPSHOT_FAILURE_TTL_MS : ACCOUNT_SNAPSHOT_TTL_MS;
+  if (!force && cached && Date.now() - cached.at < ttl) return cached;
   const pending = state.flights.get(key);
   if (pending) {
     if (!forceUsage || pending.forceUsage) return pending.promise;
@@ -316,6 +331,7 @@ async function snapshot(
   }
   const directory = directoryFor(provider, id);
   const flight = (async (): Promise<AccountSnapshot> => {
+    const startedAt = Date.now();
     let result: AccountSnapshot;
     if (id === 'default' && !defaultAccountBound(provider)) {
       result = { auth: { authenticated: false }, at: Date.now() };
@@ -421,10 +437,20 @@ async function snapshot(
           usageAt: reuseUsage ? current?.usageAt
             : eventDuringRead && usage === latest?.usage ? latest?.usageAt : Date.now(),
         };
-      } catch {
+      } catch (error) {
         const account = provider === 'anthropic'
           ? readPool(provider)?.accounts.find((account) => account.id === id) : undefined;
         const identity = account?.reloginIdentity ?? account?.lastConfirmedIdentity;
+        // 这条日志是「重启后发不出去」唯一可查的线索。**不记 error.message**：读取链里有
+        // auth.json 的 JSON.parse，解析失败的 message 会带上文件片段(可能含 token)。
+        // 耗时与错误类型已足够分辨：近 0ms 多为 CLI 未就绪 / spawn 失败，15s 是读超时，
+        // SyntaxError 指向 auth.json 损坏。
+        log.warn('subscription account read failed', {
+          provider,
+          accountId: id,
+          elapsedMs: Date.now() - startedAt,
+          error: error instanceof Error ? error.name : typeof error,
+        });
         result = { auth: { authenticated: false, ...(identity ? { identity } : {}) }, unavailable: true, at: Date.now() };
       }
     }
@@ -447,6 +473,14 @@ export function hasConnectedSubscriptionPool(provider: SubscriptionProvider): bo
   if (!pool || pool.disconnected) return false;
   const state = currentRuntime();
   return pool.accounts.some((a) => state.cache.get(keyOf(provider, a.id))?.auth.authenticated);
+}
+/** Cached read evidence only; disconnected/unconfigured/paused pools never request UI recovery. */
+export function hasUnavailableSubscriptionPoolAccount(provider: SubscriptionProvider): boolean {
+  const pool = readPool(provider);
+  if (!pool || pool.disconnected) return false;
+  const state = currentRuntime();
+  return pool.accounts.some(account => !account.paused
+    && state.cache.get(keyOf(provider, account.id))?.unavailable === true);
 }
 export async function disconnectSubscriptionPool(provider: SubscriptionProvider): Promise<void> {
   const pool = readPool(provider);

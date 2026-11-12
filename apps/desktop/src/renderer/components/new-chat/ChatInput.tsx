@@ -2485,6 +2485,9 @@ export function ChatInput({
         return false; // 不拦截默认插入
       },
       attributes: {
+        role: 'textbox',
+        'aria-multiline': 'true',
+        'aria-label': resolvedPlaceholder,
         class: cn(
           // py + 负 my:.ProseMirror 自身是 overflow 裁剪容器,inline 装饰
           // (ghost-cmd-pill 的 padding/border)会超出 22px 行盒 1~3px,padding

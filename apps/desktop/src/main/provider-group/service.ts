@@ -1717,7 +1717,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         await restoreBindingAfterFailedSwitch(sessionId, source, binding.providerId, config);
         // 与失败本身同一个判定：目标电脑的问题(连不上、分享暂停、Agent 起不来等)换下一台；任务在运行、
         // 已删除、用户已接手等与目标无关的失败直接结束，不冷却任何电脑。
-        const target = decide(sessionId, providerGroupFailureSignals(error), 'target', pick.member.key);
+        const targetSignals = providerGroupFailureSignals(error);
+        const target = decide(sessionId, targetSignals, 'target', pick.member.key);
         if (target.action !== 'switch' || !isCurrent()) {
           deps.log.info('provider group: switching computer stopped', { sessionId, error: errorText(error) });
           handBack();
@@ -1729,7 +1730,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
           error: errorText(error),
         });
         router.markTried(sessionId, pick.member.key);
-        if (target.cool) source.cool(binding.providerId, pick.member.key, target.cause, null, row.model);
+        if (target.cool) source.cool(binding.providerId, pick.member.key, target.cause, deps.readResetAt(targetSignals), row.model);
         skipped.failed(pick.member, isUnreachableTarget(target));
         continue;
       }
@@ -1986,7 +1987,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     },
 
     async nextAfterStartFailure(context, error) {
-      const decision = decide(context.sessionId, providerGroupFailureSignals(error), 'start', context.member.key);
+      const signals = providerGroupFailureSignals(error);
+      const decision = decide(context.sessionId, signals, 'start', context.member.key);
       const source = sourceFor(context.groupDeviceId);
       if (decision.action !== 'switch' || !source) return null;
       const { cause } = decision;
@@ -2009,7 +2011,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         return null;
       }
       if (!config?.autoSwitch) return null;
-      if (decision.cool) source.cool(context.groupProviderId, context.member.key, cause, null, context.model);
+      if (decision.cool) source.cool(context.groupProviderId, context.member.key, cause, deps.readResetAt(signals), context.model);
       source.invalidate(context.member);
       const tried = router.markTried(context.sessionId, context.member.key);
       const pick = await source.pick({
@@ -2237,7 +2239,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
           } catch (error) {
             await restoreBindingAfterFailedSwitch(sessionId, source, binding.providerId, config);
             // 与失败本身同一个判定：目标电脑的问题换下一台；与目标无关的失败(任务在运行、已删除等)照常发到原电脑。
-            const target = decide(sessionId, providerGroupFailureSignals(error), 'target', pick.member.key);
+            const targetSignals = providerGroupFailureSignals(error);
+            const target = decide(sessionId, targetSignals, 'target', pick.member.key);
             if (target.action !== 'switch' || !isCurrent()) {
               deps.log.warn('provider group: moving a task before sending failed', { sessionId, error: errorText(error) });
               if (failedTargets.length > 0 && isCurrent()) preSendFailed.set(sessionId, { keys: failedTargets, at: deps.now() });
@@ -2250,7 +2253,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
             });
             if (!failedTargets.includes(pick.member.key)) failedTargets.push(pick.member.key);
             router.markTried(sessionId, pick.member.key);
-            if (target.cool) source.cool(binding.providerId, pick.member.key, target.cause, null, row.model);
+            if (target.cool) source.cool(binding.providerId, pick.member.key, target.cause, deps.readResetAt(targetSignals), row.model);
             skipped.failed(pick.member, isUnreachableTarget(target));
           }
         }

@@ -97,6 +97,7 @@ export interface ProviderServiceDeps {
   genericOAuthConnected?: (providerId: string) => boolean;
   codexAccountConnected?: (providerId: string) => boolean;
   subscriptionAccountConnected?: (providerId: string) => boolean;
+  subscriptionReadUnavailable?: (providerId: string) => boolean;
   subscriptionAccountInfo?: (providerId: string) => Promise<ProviderView['subscriptionAccount']>;
   openAiAccountInfo?: (providerId: string) => Promise<ProviderView['openAiAccount']>;
   /**
@@ -250,6 +251,8 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       // Deletion disconnects first. A live binding wins over a stale removed flag if
       // restoring display preferences failed after authentication was committed.
       ...(provider.connected ? { removed: false } : {}),
+      ...(!provider.connected && deps.subscriptionReadUnavailable?.(provider.id)
+        ? { subscriptionReadUnavailable: true as const } : {}),
     })).map(
       (provider) =>
         media === undefined
