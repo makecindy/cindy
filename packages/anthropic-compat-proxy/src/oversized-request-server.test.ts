@@ -1,15 +1,15 @@
-import { createServer, request } from 'node:http';
+import { Agent, createServer, request } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createAnthropicCompatProxy } from './server.js';
 import type { LocalRequestHandler } from './types.js';
 import { recoverInlineAttachments as recover, type RecoveredAttachment } from './oversized-attachments.js';
-import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
+import { closeTestConnections, fetchOverTestConnections as fetch, listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 const recoverInlineAttachments = (body: Parameters<typeof recover>[0], limit: number, prepare: (a: RecoveredAttachment) => Promise<string>) =>
   recover(body, limit, { prepare, commit: async () => {} });
 
 const cleanup: Array<() => Promise<void>> = [];
-afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
+afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); await closeTestConnections(); });
 
 it.each(['recover', 'still-413', 'storage-failure', 'text', 'not-smaller'] as const)(
   'handles upstream 413 below the local limit without an unbounded retry: %s', async mode => {
@@ -114,9 +114,11 @@ it.each(['/v1/responses', '/v1/responses/compact', '/v1/messages', '/v1/chat/com
   });
   cleanup.push(() => proxy.dispose());
   const raw = JSON.stringify({ model: 'gpt-test', input: [{ role: 'user', content: [{ type: 'input_image', image_url: `data:image/png;base64,${original.toString('base64')}` }] }] });
+  const agent = new Agent({ keepAlive: true });
+  cleanup.push(async () => agent.destroy());
   for (const chunked of [false, true]) {
     const response = await new Promise<{ status: number; text: string }>((resolve, reject) => {
-      const req = request(`${proxy.url}${endpoint}`, { method: 'POST', headers: { 'content-type': 'application/json', ...(chunked ? {} : { 'content-length': Buffer.byteLength(raw) }) } }, res => {
+      const req = request(`${proxy.url}${endpoint}`, { method: 'POST', agent, headers: { 'content-type': 'application/json', ...(chunked ? {} : { 'content-length': Buffer.byteLength(raw) }) } }, res => {
         let text = '';
         res.on('data', chunk => { text += chunk; });
         res.on('end', () => resolve({ status: res.statusCode!, text }));
