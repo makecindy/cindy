@@ -2,7 +2,7 @@ import type { NativeEnginePort } from './nativeTransport.js';
 import { openNativeMediaReader, type NativeMediaApi, type NativeMediaOptions } from './nativeMedia.js';
 import { toBase64Url } from './portableBytes.js';
 
-export interface NativeMediaStream { url: string; size: number; isOpen(): boolean; close(): Promise<void>; }
+export interface NativeMediaStream { url: string; size: number; isOpen(): boolean; close(): Promise<void>; retain?(): () => void; }
 /** Takes ownership of a dedicated native engine. Loopback requests carry only
  * an opaque random path; all upstream fetching remains signed and Root-bound.
  * Native limits concurrent players to four 1 MiB jobs. A bad AEAD block closes
@@ -24,6 +24,7 @@ export async function openNativeByteStream(engine: NativeEnginePort, contentType
   options: NativeMediaOptions = {}): Promise<NativeMediaStream> {
   let reader: NativeByteReader | undefined;
   let closed = false, timer: ReturnType<typeof setTimeout> | undefined, lastRequest = Date.now();
+  let consumers = 0;
   const jobs = new Set<number>(), controller = new AbortController();
   const assertCurrent = () => {
     if (closed || options.signal?.aborted) throw new Error('MEDIA_CLOSED');
@@ -63,7 +64,7 @@ export async function openNativeByteStream(engine: NativeEnginePort, contentType
             throw new Error('INVALID_MEDIA_STREAM_REQUEST');
           lastRequest = Date.now(); jobs.add(r.id); void work(r);
         }
-        if (!jobs.size && Date.now() - lastRequest > 5 * 60_000) { await close(); return; }
+        if (!consumers && !jobs.size && Date.now() - lastRequest > 5 * 60_000) { await close(); return; }
       } catch { await close(); }
       if (!closed) {
         timer = setTimeout(() => { void poll(); }, jobs.size ? 10 : Date.now() - lastRequest > 1000 ? 200 : 25);
@@ -71,6 +72,10 @@ export async function openNativeByteStream(engine: NativeEnginePort, contentType
       }
     };
     void poll();
-    return { url: result.url, size: reader.size, isOpen: () => !closed, close };
+    return { url: result.url, size: reader.size, isOpen: () => !closed, close, retain: () => {
+      assertCurrent(); consumers++;
+      let released = false;
+      return () => { if (!released) { released = true; consumers--; lastRequest = Date.now(); } };
+    } };
   } catch (error) { await close(); throw error; }
 }

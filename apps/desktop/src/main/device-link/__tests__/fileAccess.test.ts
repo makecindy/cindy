@@ -2,11 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 const peer = vi.hoisted(() => vi.fn());
+const rangePeer = vi.hoisted(() => vi.fn());
 const remove = vi.hoisted(() => vi.fn());
 const owner = vi.hoisted(() => ({ current: true }));
 const cache = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), invalidate: vi.fn() }));
 vi.mock('../remoteFileVersionCache', () => ({ remoteFileVersionCache: () => cache }));
-vi.mock('../filePeer', () => ({ tryPeerFile: peer }));
+vi.mock('../filePeer', () => ({ tryPeerFile: peer, tryPeerFileRange: rangePeer }));
 vi.mock('../mediaTransfer.desktop', () => ({ removeRemote: remove }));
 vi.mock('../broadcast-tap', () => ({
   captureDataOwnerBroadcastScope: () => ({}),
@@ -298,4 +299,38 @@ describe('desktop shared file access', () => {
     ).toBe('video');
     expect(peer).not.toHaveBeenCalled();
   });
+});
+
+// Unit: protocol requests independently call fileAccess for each seek. Previously
+// each call transferred the first MiB again. Metadata must still be revalidated.
+it('reuses a versioned playback reader for seeks but replaces changed or revoked sources', async () => {
+  invalidateFilePeerScopes();
+  let version = 'a'.repeat(64);
+  const metadata = () => ({ ossKey: '', size: 2 * 1024 * 1024 + 9, mimeType: 'video/mp4', version, transferRequired: true });
+  const invoke = vi.fn(async () => ({ ok: true as const, result: metadata() }));
+  const dispose = vi.fn(async () => {});
+  rangePeer.mockImplementation(async (_device, _url, _invoke, range) => ({ path: range, dispose }));
+  const read = vi.spyOn(fs, 'readFile').mockImplementation(async (range: any) => Buffer.alloc(range.end - range.start + 1) as any);
+  const open = () => readRemoteDeviceFile('seek-review-device', 'xdt-video://session/seek.mp4', invoke, { stream: true, playback: true });
+  try {
+    const first = await open();
+    expect('kind' in first && first.kind).toBe('peer-stream');
+    const second = await open();
+    expect(second).toBe(first);
+    expect(invoke).toHaveBeenCalledTimes(2); // freshness/auth metadata remains checked
+    expect(rangePeer).toHaveBeenCalledTimes(1);
+    if (!('serve' in second)) throw new Error('expected peer stream');
+    const response = await second.serve('bytes=-9');
+    expect((await response.arrayBuffer()).byteLength).toBe(9);
+    expect(rangePeer).toHaveBeenCalledTimes(2);
+    expect(rangePeer.mock.calls[1][3].start).toBe(metadata().size - 9);
+    version = 'b'.repeat(64);
+    expect(await open()).not.toBe(first);
+    expect(rangePeer).toHaveBeenCalledTimes(3);
+    invalidateFilePeerScopes('seek-review-device');
+    expect(await open()).not.toBe(second);
+    expect(rangePeer).toHaveBeenCalledTimes(4);
+    owner.current = false;
+    await expect(second.serve(null)).rejects.toThrow('FILE_PEER_CANCELLED');
+  } finally { read.mockRestore(); invalidateFilePeerScopes(); }
 });

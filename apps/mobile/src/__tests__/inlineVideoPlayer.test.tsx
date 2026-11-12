@@ -119,3 +119,9 @@ it('rejects a non-video response and previews direct video without remote file a
   expect(container.querySelector('video')?.src).toBe(result.url);
   expect(h.player.autoPlay).toBe(false);
 });
+
+// Unit: a loopback URL has no extension; export must retain host MIME metadata.
+it.each(['video/webm', 'video/quicktime'])('passes %s to the inline download action', async mimeType => {
+  await act(async () => render(vi.fn().mockResolvedValue({ ...result, mimeType, url: 'http://127.0.0.1:10000/opaque' })));
+  expect(h.download).toMatchObject({ source: 'http://127.0.0.1:10000/opaque', mimeType });
+});

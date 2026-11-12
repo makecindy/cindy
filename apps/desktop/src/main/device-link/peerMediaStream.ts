@@ -5,6 +5,7 @@ import { tryPeerFileRange } from './filePeer';
 
 export interface PeerStreamFileResult extends DeviceFileResult {
   kind: 'peer-stream';
+  isAvailable(): boolean;
   serve(range: string | null, signal?: AbortSignal): Promise<Response>;
 }
 /** Seekable byte stream over the file data channel. Small signaling replies carry
@@ -29,6 +30,7 @@ export async function openRemotePeerMediaStream(device: string, url: string,
   let first = await read(0, Math.min(metadata.size, FILE_PEER_RANGE_BYTES) - 1, signal);
   if (!first) return null;
   return { ...metadata, kind: 'peer-stream', ossKey: '',
+    isAvailable: () => current() && !signal?.aborted,
     async serve(header, signal) {
       if (!current() || signal?.aborted) throw new Error('FILE_PEER_CANCELLED');
       const range = parseRangeHeader(header, metadata.size);

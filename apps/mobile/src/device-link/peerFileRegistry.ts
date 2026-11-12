@@ -123,7 +123,7 @@ export async function tryMobilePeerFileRange(device: string, url: string, range:
   return download?.(device, url, signal, undefined, undefined, undefined, range) ?? null;
 }
 
-interface PeerMediaPlayback { url: string; isOpen(): boolean; close(): Promise<void>; }
+type PeerMediaPlayback = Pick<import('@cindy/agent-net/portable').NativeMediaStream, 'url' | 'isOpen' | 'close' | 'retain'>;
 const streamReceipts = new WeakMap<object, PeerMediaPlayback>();
 export function recordPeerMediaPlayback(result: object, stream: PeerMediaPlayback) { streamReceipts.set(result, stream); }
 export const peerMediaPlayback = (value: object) => streamReceipts.get(value);

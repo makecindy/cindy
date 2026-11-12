@@ -530,3 +530,33 @@ describe("mobile remote media", () => {
     expect(formatRemoteMediaSize(2 * 1024 * 1024)).toBe("2.0 MB");
   });
 });
+
+// Unit: existing stream test only exercised release, not native idle shutdown.
+// Jump the clock past five minutes, then drive one real production poll.
+it('keeps a leased file player alive across native idle expiry, then closes on release', async () => {
+  const { openNativeByteStream } = await import('@cindy/agent-net/portable');
+  const { recordPeerMediaPlayback } = await import('@/device-link/peerFileRegistry');
+  vi.useFakeTimers();
+  const command = vi.fn(async (request: { op: string }) => request.op === 'httpMediaStart'
+    ? { url: 'http://127.0.0.1:10000/' + 'a'.repeat(43) } : []);
+  const destroy = vi.fn(async () => {});
+  let release: (() => void) | undefined;
+  try {
+    const playback = await openNativeByteStream({ command: command as any, destroy }, 'video/mp4', async () => ({
+      size: 12, read: async () => {}, close: async () => {},
+    }));
+    const fetched = { ossKey: '', size: 12, mimeType: 'video/mp4' };
+    recordPeerMediaPlayback(fetched, playback);
+    const result = await resolveMobileRemoteMedia({ kind: 'video', url: 'xdt-video://session/idle.mp4' },
+      { fetchRemoteMedia: async () => fetched, presignGet: vi.fn() });
+    release = result.protectLocalFile!();
+    vi.setSystemTime(Date.now() + 6 * 60_000);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(playback.isOpen()).toBe(true);
+    expect(destroy).not.toHaveBeenCalled();
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(playback.isOpen()).toBe(false);
+    expect(destroy).toHaveBeenCalledOnce();
+  } finally { release?.(); vi.useRealTimers(); }
+});

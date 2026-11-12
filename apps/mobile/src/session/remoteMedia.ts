@@ -271,11 +271,13 @@ export async function resolveMobileRemoteMedia(
     previewable: true, expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
     isAvailable: () => playback.isOpen(),
     protectLocalFile: () => {
+      const releaseIdleProtection = playback.retain?.();
       consumers++;
       let released = false;
       return () => {
         if (released) return;
         released = true;
+        releaseIdleProtection?.();
         if (--consumers === 0) void playback.close();
       };
     },

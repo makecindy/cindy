@@ -25,6 +25,7 @@ export function InlineVideoPlayer({ url, label, width, visible, resolve, onOpen 
   const focused = useIsFocused();
   const historyActive = useMessageHistoryActive();
   const [foreground, setForeground] = useState(AppState.currentState === 'active');
+  const [mimeType, setMimeType] = useState<string | undefined>();
   const [source, setSource] = useState<string | null>(null);
   const [videoSize, setVideoSize] = useState<{ width: number; height: number } | null>(null);
   const [started, setStarted] = useState(false);
@@ -48,6 +49,7 @@ export function InlineVideoPlayer({ url, label, width, visible, resolve, onOpen 
     setLoading(true);
     try {
       let next = url;
+      let nextMime: string | undefined;
       let protectLocalFile: (() => () => void) | undefined;
       if (!isDirectPreviewableMediaUrl(url)) {
         if (!resolve) throw new Error('No media resolver');
@@ -55,11 +57,13 @@ export function InlineVideoPlayer({ url, label, width, visible, resolve, onOpen 
           { front: false, signal: controller.signal });
         if (!media.previewable || !media.mimeType.startsWith('video/')) throw new Error('Not video');
         next = media.url;
+        nextMime = media.mimeType;
         protectLocalFile = media.protectLocalFile;
       }
       if (!controller.signal.aborted) {
         releaseSource.current?.();
         releaseSource.current = protectLocalFile?.();
+        setMimeType(nextMime);
         setSource(next);
       }
     } catch {
@@ -106,6 +110,6 @@ export function InlineVideoPlayer({ url, label, width, visible, resolve, onOpen 
       </View> : null}
     </Pressable> : null}
     </View>
-    {source ? <VideoDownloadButton source={source} active={active} /> : null}
+    {source ? <VideoDownloadButton source={source} mimeType={mimeType} active={active} /> : null}
   </View>;
 }

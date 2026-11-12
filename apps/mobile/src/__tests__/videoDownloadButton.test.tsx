@@ -39,6 +39,12 @@ it('exports a local copy with the video format and disables unresolved media', a
   expect(h.download).toHaveBeenCalledWith('file:///clip.mov', 'video/quicktime', 'video.mov', expect.any(AbortSignal), expect.any(Function));
   expect(h.share).toHaveBeenCalledWith('file:///share/video.mov', { mimeType: 'video/quicktime' });
 });
+// Unit: opaque file-channel URLs must export the resolved format, not default MP4.
+it('exports an extensionless stream using its explicit WebM type', async () => {
+  render('http://127.0.0.1:10000/opaque', true, 'video/webm'); await click();
+  expect(h.download).toHaveBeenCalledWith('http://127.0.0.1:10000/opaque', 'video/webm', 'video.webm', expect.any(AbortSignal), expect.any(Function));
+  expect(h.share).toHaveBeenCalledWith('file:///share/video.mov', { mimeType: 'video/webm' });
+});
 // Unit #8085: a data URL has no filename extension; retain its declared video
 // MIME so the OS receives a playable MOV rather than a mislabeled MP4.
 it('preserves the MIME and extension declared by a data-video source', async () => {
