@@ -5,6 +5,8 @@
  * 必须有单测钉住。check-i18n-glossary.mjs 只做编排与 IO。
  */
 
+import { createHash } from 'node:crypto';
+
 /**
  * ASCII 术语的词边界字符集。
  *
@@ -492,11 +494,24 @@ export function makeEnglishCopyExemptChecker(exempt) {
 }
 
 /**
+ * 文案摘要:整条文案 sha256 的前 12 位。根门禁 baseline 指纹与手写 catalog 的存量清单
+ * 共用这一份,口径不能分叉。
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+export function textDigest(text) {
+  return createHash('sha256').update(text ?? '').digest('hex').slice(0, 12);
+}
+
+/**
  * 手写英文文案(原生菜单、OAuth 结果页、登录页等不走 locale JSON 的 catalog)的英文写法审计。
  *
  * 根门禁只读 locale JSON,这些 catalog 由各自的测试把关。它们的既有问题单独冻结在调用方
- * 的 `known` 清单里(`key\trule`),口径与 baseline 一致:新增违规报 added,已修好却仍挂在
- * 清单上的报 stale——只减不增。
+ * 的 `known` 清单里,指纹与根门禁 baseline 同口径:`key\trule\t命中次数\t文案摘要`。
+ * 只按 key + rule 冻结的话,已冻结的文案再追加一处同类违规(please×1 → please×2)也会被当
+ * 成存量放行;带上次数与摘要后,文案任何改动都会让旧条目失效,迫使重新确认——只减不增。
+ * 新增违规报 added,已修好或文案已变而仍挂在清单上的报 stale。
  *
  * entries 只传 en 文案:[{ key, value }]。
  *
@@ -511,11 +526,11 @@ export function auditEnglishCopy(entries, { isExempt = () => false, known = [] }
   for (const { key, value } of entries) {
     for (const issue of findEnglishCopyIssues(value)) {
       if (isExempt(issue.rule, key)) continue;
-      const id = `${key}\t${issue.rule}`;
-      if (knownSet.has(id)) hit.add(id);
+      const fingerprint = `${key}\t${issue.rule}\t${issue.detail}\t${textDigest(value)}`;
+      if (knownSet.has(fingerprint)) hit.add(fingerprint);
       else added.push(`${key}: ${issue.rule}(${issue.detail})— ${value}`);
     }
   }
-  const stale = [...knownSet].filter((id) => !hit.has(id)).sort();
+  const stale = [...knownSet].filter((fingerprint) => !hit.has(fingerprint)).sort();
   return { added, stale };
 }

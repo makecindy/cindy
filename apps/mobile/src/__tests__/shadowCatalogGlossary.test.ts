@@ -56,25 +56,26 @@ const glossary = JSON.parse(
 };
 
 /**
- * 引入英文写法规则(DESIGN.md §11.1 / §11.2)时这些手写 catalog 的既有问题,`key\trule`。
+ * 引入英文写法规则(DESIGN.md §11.1 / §11.2)时这些手写 catalog 的既有问题,指纹为
+ * `key\trule\t命中次数\t文案摘要`(与根门禁 baseline 同口径,见 auditEnglishCopy)。
  * 只减不增:修好一条就删一条,新增违规直接失败。
  */
 const KNOWN_ENGLISH_COPY_ISSUES: readonly string[] = [
-  "mobile/authErrorMessages:CAPTCHA_INVALID\ten-please",
-  "mobile/authErrorMessages:CAPTCHA_REQUIRED\ten-please",
-  "mobile/authErrorMessages:CAPTCHA_UNAVAILABLE\ten-please",
-  "mobile/authErrorMessages:INVALID_AUTH_CODE\ten-please",
-  "mobile/authErrorMessages:INVALID_BIND_TICKET\ten-please",
-  "mobile/authErrorMessages:INVALID_LOGIN_TICKET\ten-please",
-  "mobile/authErrorMessages:INVALID_PARAMS\ten-please",
-  "mobile/authErrorMessages:RATE_LIMITED\ten-please",
-  "mobile/authErrorMessages:REQUEST_TIMEOUT\ten-please",
-  "mobile/authErrorMessages:STATE_MISMATCH\ten-please",
-  "mobile/loginMessages:errorFallback\ten-please",
-  "mobile/loginMessages:invalidEmail\ten-please",
-  "mobile/loginMessages:invalidPhone\ten-please",
-  "mobile/loginMessages:orgDetected\ten-straight-quote",
-  "mobile/loginMessages:ssoOrgDetected\ten-straight-quote",
+  "mobile/authErrorMessages:CAPTCHA_INVALID\ten-please\tplease×1\t2239888f2752",
+  "mobile/authErrorMessages:CAPTCHA_REQUIRED\ten-please\tplease×1\te13f3f7e2c9d",
+  "mobile/authErrorMessages:CAPTCHA_UNAVAILABLE\ten-please\tplease×1\t4001474bda5c",
+  "mobile/authErrorMessages:INVALID_AUTH_CODE\ten-please\tplease×1\t07176ea9e991",
+  "mobile/authErrorMessages:INVALID_BIND_TICKET\ten-please\tplease×1\t096990e5a167",
+  "mobile/authErrorMessages:INVALID_LOGIN_TICKET\ten-please\tplease×1\tafefe4a80055",
+  "mobile/authErrorMessages:INVALID_PARAMS\ten-please\tplease×1\t933aea06f050",
+  "mobile/authErrorMessages:RATE_LIMITED\ten-please\tplease×1\td1de3635fd27",
+  "mobile/authErrorMessages:REQUEST_TIMEOUT\ten-please\tplease×1\t0cd6b7ea0693",
+  "mobile/authErrorMessages:STATE_MISMATCH\ten-please\tplease×1\t0912b0fa87d3",
+  "mobile/loginMessages:errorFallback\ten-please\tplease×1\t451642148e0a",
+  "mobile/loginMessages:invalidEmail\ten-please\tplease×1\tb00f7e3ae5e8",
+  "mobile/loginMessages:invalidPhone\ten-please\tplease×1\td5d64643417d",
+  "mobile/loginMessages:orgDetected\ten-straight-quote\t\"×2\t41e7b1ffaa6b",
+  "mobile/loginMessages:ssoOrgDetected\ten-straight-quote\t\"×2\t8ada013c7603",
 ];
 
 /**

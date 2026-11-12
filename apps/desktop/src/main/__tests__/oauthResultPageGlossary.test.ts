@@ -66,12 +66,13 @@ const glossary = JSON.parse(readFileSync(resolve(REPO_ROOT, 'i18n/glossary.json'
 };
 
 /**
- * 引入英文写法规则(DESIGN.md §11.1 / §11.2)时本 catalog 的既有问题,`key\trule`。
+ * 引入英文写法规则(DESIGN.md §11.1 / §11.2)时本 catalog 的既有问题,指纹为
+ * `key\trule\t命中次数\t文案摘要`(与根门禁 baseline 同口径,见 auditEnglishCopy)。
  * 只减不增:修好一条就删一条,新增违规直接失败。
  */
 const KNOWN_ENGLISH_COPY_ISSUES: readonly string[] = [
-  'desktop:oauthResultPage.ghost.errors.internal\ten-please',
-  'desktop:oauthResultPage.ghost.errors.invalid-callback\ten-please',
+  'desktop:oauthResultPage.ghost.errors.internal\ten-please\tplease×1\t31aaff145ea8',
+  'desktop:oauthResultPage.ghost.errors.invalid-callback\ten-please\tplease×1\td53f3921b575',
 ];
 
 /** 该模块用 'zh' 作语言键,术语表用 'zh-CN';不映射的话 zh 分支整段扫不到。 */

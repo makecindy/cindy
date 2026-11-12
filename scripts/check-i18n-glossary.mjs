@@ -37,7 +37,6 @@
  * (src/auth/loginMessages.ts 等 .ts 文件),本脚本只扫 locale JSON,不解析这些 TS。
  * 它们由各自的编译期 Record 类型 + parity 单测保证结构,但术语一致性目前是盲区。
  */
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,6 +55,7 @@ import {
   findEnglishCopyIssues,
   findHalfWidthPunct,
   makeEnglishCopyExemptChecker,
+  textDigest,
   hasAsciiEllipsis,
   normalizeForPunctuation,
   makeExemptChecker,
@@ -228,7 +228,7 @@ function truncate(text, max) {
  * 安全得多——baseline 的全部意义就是「已知且冻结」,文案变了就不再是同一件事。
  */
 function makeViolation({ locale, key, rule, detail, severity, hint, text }) {
-  const digest = crypto.createHash('sha256').update(text ?? '').digest('hex').slice(0, 12);
+  const digest = textDigest(text);
   return {
     locale,
     key,

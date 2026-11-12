@@ -21,6 +21,7 @@ import {
   hasAsciiEllipsis,
   makeEnglishCopyExemptChecker,
   makeExemptChecker,
+  textDigest,
   occursIn,
   stripNonProse,
   normalizeForPunctuation,
@@ -213,20 +214,27 @@ test('makeEnglishCopyExemptChecker: 只豁免登记的规则与精确 key', () =
 });
 
 // review(PR #10026):手写 catalog 不走根门禁,既有问题单独冻结,新增与已修好未摘都要报出来。
-test('auditEnglishCopy: 报新增违规与失效存量,豁免项不计', () => {
-  const { added, stale } = auditEnglishCopy(
+// 冻结指纹必须带命中次数与文案摘要:只按 key + rule 冻结时,给已冻结的
+// `mobile/loginMessages:invalidEmail` 再追加一句 Please,please×1 → ×2 也会被当存量放行。
+test('auditEnglishCopy: 冻结按次数与摘要,已冻结文案再加同类违规也报新增', () => {
+  const key = 'mobile/loginMessages:invalidEmail';
+  const frozen = 'Please enter a valid email address';
+  const known = [`${key}\ten-please\tplease×1\t${textDigest(frozen)}`];
+
+  assert.deepEqual(auditEnglishCopy([{ key, value: frozen }], { known }), { added: [], stale: [] });
+
+  const grown = auditEnglishCopy([{ key, value: `${frozen}. Please check your account.` }], { known });
+  assert.deepEqual(grown.added.map((line) => line.split(': ')[1].split('—')[0]), ['en-please(please×2)']);
+  assert.deepEqual(grown.stale, known);
+
+  const exempted = auditEnglishCopy(
     [
-      { key: 'desktop:a', value: 'Please retry' },
       { key: 'desktop:b', value: 'Use {"source": "local"}' },
       { key: 'desktop:c', value: 'Pushed successfully' },
     ],
-    {
-      isExempt: makeEnglishCopyExemptChecker({ 'en-straight-quote': ['desktop:b'] }),
-      known: ['desktop:a\ten-please', 'desktop:gone\ten-please'],
-    },
+    { isExempt: makeEnglishCopyExemptChecker({ 'en-straight-quote': ['desktop:b'] }) },
   );
-  assert.deepEqual(added.map((line) => line.split(':').slice(0, 2).join(':')), ['desktop:c']);
-  assert.deepEqual(stale, ['desktop:gone\ten-please']);
+  assert.deepEqual(exempted.added.map((line) => line.split(': ')[0]), ['desktop:c']);
 });
 
 // ---------------------------------------------------------------------------

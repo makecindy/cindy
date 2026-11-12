@@ -57,7 +57,8 @@ const glossary = JSON.parse(
 };
 
 /**
- * 引入英文写法规则(DESIGN.md §11.1 / §11.2)时本 catalog 的既有问题,`key\trule`。
+ * 引入英文写法规则(DESIGN.md §11.1 / §11.2)时本 catalog 的既有问题,指纹为
+ * `key\trule\t命中次数\t文案摘要`(与根门禁 baseline 同口径,见 auditEnglishCopy)。
  * 只减不增:修好一条就删一条,新增违规直接失败。
  */
 const KNOWN_ENGLISH_COPY_ISSUES: readonly string[] = [];

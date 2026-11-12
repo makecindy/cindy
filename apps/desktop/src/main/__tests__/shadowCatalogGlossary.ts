@@ -91,7 +91,8 @@ export function flattenShadowCatalog(
  * 对一份摊平后的影子 catalog 跑完整术语门禁。
  *
  * `surface` 只进断言与告警文案,用来在失败输出里区分是哪份 catalog 出的问题。
- * `knownEnglishCopyIssues` 冻结该 catalog 引入英文写法规则时的既有问题(`key\trule`),
+ * `knownEnglishCopyIssues` 冻结该 catalog 引入英文写法规则时的既有问题(指纹
+ * `key\trule\t命中次数\t文案摘要`,见 auditEnglishCopy),
  * 只减不增:新增违规与已修好却仍挂着的条目都会失败。
  */
 export function describeShadowCatalogGlossary(

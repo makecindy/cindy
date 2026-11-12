@@ -292,8 +292,8 @@ PR 门禁必须在 Windows 上用多个并行分片（当前为 4 个）完整�
     i18n 后两个都要跑（CI 已强制）。
 - **影子 catalog**：有几批不走 i18next 的手写多语 catalog，根脚本只扫 locale JSON、扫不到
   这些 `.ts`。它们由 vitest 直接 import 运行时对象覆盖，复用
-  `scripts/shared/glossary-rules.mjs` 的同一套判定（含英文写法规则，各自的既有问题冻结在
-  测试内的清单里、只减不增），随 `test:unit` 阻断：
+  `scripts/shared/glossary-rules.mjs` 的同一套判定（含英文写法规则，各自的既有问题按命中次数与文案摘要
+  冻结在测试内的清单里、只减不增），随 `test:unit` 阻断：
   - mobile：`src/auth/loginMessages.ts`、`src/session/newSessionMessages.ts`、
     `src/session/fullAccessConfirmationCopy.ts`（Full access 高风险权限提示）→
     `apps/mobile/src/__tests__/shadowCatalogGlossary.test.ts`
