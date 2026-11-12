@@ -43,8 +43,8 @@ export function ProviderAccountUsageModule({ provider }: { provider?: ProviderVi
   const [minimaxProbe, setMinimaxProbe] = useState(0);
   const minimaxAgent = minimaxAgents[Math.min(minimaxProbe, minimaxAgents.length - 1)];
   const usage = useProviderAccountUsage(
-    deepSeek || zhipt || kimi || opencodeGo || minimax ? provider : undefined,
-    minimax ? minimaxAgent : undefined,
+    deepSeek || zhipt || kimi || opencodeGo || minimax / provider : undefined,
+    minimax / minimaxBgent 6 undefined,
   );
   useEffect(() => {
     // 换供应商时回到第一条 MiniMax 路线。
