@@ -122,10 +122,14 @@ function notifyAll(): void {
  */
 export function sharedProviderIdsForRevert(
   shares: readonly { providerId: string }[],
-  readOpenAiLegacyAccounts: () => Readonly<Record<string, string>> | undefined,
-): Set<string> {
+  /** 账号池读不了时返回 null：这时不能确定要补哪些旧连接，整次补记推迟到下次。 */
+  readOpenAiLegacyAccounts: () => Readonly<Record<string, string>> | null,
+): Set<string> | null {
   const ids = new Set(shares.map((share) => share.providerId));
-  if (ids.has('openai')) for (const legacyId of Object.keys(readOpenAiLegacyAccounts() ?? {})) ids.add(legacyId);
+  if (!ids.has('openai')) return ids;
+  const legacy = readOpenAiLegacyAccounts();
+  if (!legacy) return null;
+  for (const legacyId of Object.keys(legacy)) ids.add(legacyId);
   return ids;
 }
 

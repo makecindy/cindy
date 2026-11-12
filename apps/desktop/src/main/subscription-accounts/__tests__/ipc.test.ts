@@ -250,11 +250,12 @@ describe('subscription management boundary', () => {
   it('serves the task-account read to the owner only, with validated ids', async () => {
     const query = { action: 'session', providerId: 'openai', sessionId: 'task-1', nativeSessionId: 'sdk-1' };
     await expect(invoke(query)).resolves.toEqual({ providerId: 'anthropic', state: 'legacy' });
-    expect(h.sessionRead).toHaveBeenCalledExactlyOnceWith('openai', query, { remote: false });
-    h.context = {};
+    expect(h.sessionRead).toHaveBeenCalledExactlyOnceWith('openai', query, { remote: false, ownComputer: false });
+    h.context = { controllerDeviceId: 'own-mac' };
     const remoteQuery = { action: 'session', providerId: 'anthropic', nativeSessionId: 'sdk-1', model: 'claude-sonnet' };
     await invoke(remoteQuery);
-    expect(h.sessionRead).toHaveBeenLastCalledWith('anthropic', remoteQuery, { remote: true });
+    // PR #10150 review: the account-switch probe for the owner's other computer honours the own-computer switch.
+    expect(h.sessionRead).toHaveBeenLastCalledWith('anthropic', remoteQuery, { remote: true, ownComputer: true });
     h.context = { sharedTask: {} };
     await expect(invoke(query)).rejects.toThrow('PERMISSION_DENIED');
     h.context = null;

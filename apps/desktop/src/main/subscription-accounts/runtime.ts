@@ -604,7 +604,8 @@ const ACCOUNT_SWITCH_PROBE_BUDGET_MS = 2_000;
 export async function readSubscriptionSessionAccount(
   provider: SubscriptionProvider,
   keys: { sessionId?: string; nativeSessionId?: string; model?: string },
-  options: { remote?: boolean } = {},
+  /** ownComputer：远程读取来自自己的其他电脑(不是受邀者)，换号探测也认「让我的其他电脑用本机模型」。 */
+  options: { remote?: boolean; ownComputer?: boolean } = {},
 ): Promise<SubscriptionSessionAccountView> {
   // Replacement admission is optional. Share a short budget with the original bound-account
   // read so a slow original read never starts another long CLI wait before returning its view.
@@ -661,7 +662,8 @@ export async function readSubscriptionSessionAccount(
       // actual slot and the grants used by a fresh start. The probe reserves and binds nothing.
       switchAvailable = await Promise.race([
         acquireSubscriptionAccount(provider, keys.model, [], false, {
-          remote: options.remote === true, exclude: new Set([config.id]), dryRun: true,
+          remote: options.remote === true, ownComputer: options.ownComputer === true,
+          exclude: new Set([config.id]), dryRun: true,
         }).then(() => true),
         new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), switchBudget); }),
       ]);
