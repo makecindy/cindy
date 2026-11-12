@@ -11975,6 +11975,8 @@
       "takeOverConflict": "{{name}} ya se trasladó a “{{device}}”",
       "takeOverOffline": "No se puede conectar con el servidor, por lo que {{name}} no puede continuar aquí en este momento",
       "takeOverFailed": "No se pudo tomar el control de {{name}} en esta computadora",
+      "profileIdentityTooLong": "La personalidad en la nube supera los {{limit}} caracteres y no se puede restaurar. Acórtala, sincronízala y vuelve a intentarlo. Los datos existentes se conservan.",
+      "profileUserTooLong": "El contexto del usuario en la nube supera los {{limit}} caracteres y no se puede restaurar. Acórtalo, sincronízalo y vuelve a intentarlo. Los datos existentes se conservan.",
       "localCindyConflict": "La computadora que toma el relevo ya tiene otra Cindy. Adminístrala en sus ajustes o elige otra computadora principal",
       "localCindyConflictAction": "Abrir ajustes de la Cindy local",
       "notEnabled": "Este servidor no admite cambiar la computadora principal",
@@ -12041,7 +12043,20 @@
       "transferred": "{{name}} se movió a “{{device}}”",
       "transferConflict": "La computadora principal de {{name}} ya cambió, por lo que no fue movida",
       "transferOffline": "No se puede acceder al servidor. {{name}} sigue ejecutándose en esta computadora",
-      "transferFailed": "No se pudo mover a {{name}} a “{{device}}”"
+      "transferFailed": "No se pudo mover a {{name}} a “{{device}}”",
+      "repair": {
+        "action": "Editar perfil y reintentar",
+        "title": "Corregir perfil del compañero",
+        "description": "Al guardar, este compañero se restaurará en este ordenador. Primero se guardará aquí una copia del perfil original.",
+        "save": "Guardar y restaurar",
+        "count": "{{count}} / {{limit}} caracteres",
+        "over": "Sobran {{count}} caracteres. Acorta el texto antes de guardar.",
+        "changed": "El perfil o el ordenador principal ha cambiado. Recarga el perfil antes de editarlo.",
+        "loadFailed": "No se pudo leer el perfil. Inténtalo de nuevo.",
+        "backupFailed": "No se pudo guardar una copia del perfil original y no se aplicó la corrección. Comprueba el espacio libre y reintenta.",
+        "saveFailed": "El compañero aún no se ha restaurado. Tus cambios siguen aquí; inténtalo de nuevo.",
+        "reload": "Volver a cargar"
+      }
     },
     "market": {
       "heading": "Descubrir amigos",

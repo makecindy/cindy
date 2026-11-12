@@ -1,4 +1,5 @@
 import { emitSessionCreated } from './sessionCreatedBroadcast.js';
+import { readBotProfileSource } from '../../../shared/botProfileSources.js';
 import { isSubagentParentToolUseId } from '@cindy/maker-shared/message-render';
 import { loadBotReadState, loadAcknowledgedBotReadState, readBotReadPosition } from '../../maker-ipc/botReadStateStore.js';
 import { registerBotReadStateIpc } from '../../maker-ipc/botReadStateIpc.js';
@@ -1950,7 +1951,7 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
   const avatarImage = decodeBotAvatarImage(body.avatarImageBase64);
   const avatarColor = readText(body.avatarColor, 'avatarColor', 32) || 'violet';
   const identitySource =
-    (draftEntry ? `${draftEntry.draft.background}\n\n${draftEntry.draft.conversationStyle}\n\nCurrent profile:\n${name}\n${description}` : readText(body.identitySource, 'identitySource', 12000)) || buildDefaultBotIdentity(name, description);
+    (draftEntry ? `${draftEntry.draft.background}\n\n${draftEntry.draft.conversationStyle}\n\nCurrent profile:\n${name}\n${description}` : readBotProfileSource(body.identitySource, 'identitySource')) || buildDefaultBotIdentity(name, description);
   const skills = draftEntry ? draftEntry.draft.skillRefs : Array.isArray(body.skills)
     ? body.skills.filter((item): item is string => typeof item === 'string').slice(0, 100)
     : [];
@@ -1961,7 +1962,7 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
   const requestedCapabilities = hasRequestedCapabilities
     ? (body.capabilities as Record<string, unknown>)
     : {};
-  const userContextSource = readText(body.userContextSource, 'userContextSource', 12000);
+  const userContextSource = readBotProfileSource(body.userContextSource, 'userContextSource');
   const gender = readBotGender(body.gender);
   // Old clients may still submit retired template ids with a complete profile.
   // Accept those as ordinary teammates, without installing or reconstructing a template.
@@ -2239,7 +2240,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   if (restored?.avatarFallback ?? (previous.cloudAvatarFallback === true)) nextConfig.cloudAvatarFallback = true;
   else delete nextConfig.cloudAvatarFallback;
   if (Object.prototype.hasOwnProperty.call(body, 'userContextSource')) {
-    nextConfig.userContextSource = readText(body.userContextSource, 'userContextSource', 12000);
+    nextConfig.userContextSource = readBotProfileSource(body.userContextSource, 'userContextSource');
   }
   // 没显式传就保持原值(mergeBotProfileCapabilities 已经把 previous 整份带过来了),
   // 显式传脏值则清掉 —— 与 readBotGender 的口径一致。
@@ -2265,7 +2266,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   }
   const nextIdentitySource =
     body.identitySource !== undefined
-      ? readText(body.identitySource, 'identitySource', 12000) ||
+      ? readBotProfileSource(body.identitySource, 'identitySource') ||
         buildDefaultBotIdentity(patch.displayName ?? current.displayName, patch.description ?? current.description)
       : (version?.identitySource ?? '');
   const profileContentChanged = botProfileContentChanged({
