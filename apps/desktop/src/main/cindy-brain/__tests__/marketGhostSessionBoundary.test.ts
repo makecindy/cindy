@@ -344,6 +344,7 @@ describe('market Ghost session boundary', () => {
     expect(managerUpdateIndex).toBeGreaterThan(oauthLockIndex);
     expect(helperBody).toContain('marketLedger.restoreInstallation(');
     expect(helperBody).toContain('...deliveryNamespaceFields(previousGhost)');
+    expect(helperBody).toContain('expectedInstalledInstanceId: instanceId,');
     expect(helperBody).not.toContain('marketLedger.isDefaultInstallSuppressed(');
     expect(helperBody).not.toContain('marketInstallSubject');
     expect(helperBody).toContain('用户显式卸载，不得产生 default-install opt-out');
@@ -396,6 +397,7 @@ describe('market Ghost session boundary', () => {
       'await getGhostNodeRuntimeBroker().stopAndWait(installedGhostStoragePart(installed));',
     );
     expect(body).toContain('runtime.resetFuse(installedGhostStoragePart(result.ghost));');
+    expect(body).toContain('...(!previousRelId ? { expectedInstalledInstanceId: installedGhostStoragePart(installed) } : {}),');
     expect(body).not.toContain(
       'pluginStoragePart(createPluginLogicalIdentity(expected.namespace ?? null, expected.ghostId))',
     );

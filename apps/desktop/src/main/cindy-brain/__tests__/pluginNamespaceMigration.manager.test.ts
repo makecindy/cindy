@@ -1193,6 +1193,103 @@ describe('GhostManager namespace migration census', () => {
     expect(fs.existsSync(path.join(rootDir, '_ns', 'acme', 'hello'))).toBe(false);
   });
 
+  // Unit, #9896 / plugin-security-and-authoring §1.1: an old client can remove
+  // receipt.namespace while the registry retains the original instance. Existing
+  // legacy-update cases kept that field and did not exercise a selected instance.
+  // Keep a same-name root beside the legacy organization to catch cross-ns writes.
+  it('updates the selected legacy organization after a receipt rewrite without touching a same-name root', async () => {
+    await stampLegacyOrganizationInstall();
+    await manager.setEnabled('hello', false);
+    await manager.install(await makeCindy('hello'), { namespace: null });
+    const store = receiptStore(mutateSnapshot);
+    const approved = store.read('hello');
+    if (approved.state !== 'approved') throw new Error('expected approved legacy install');
+    const { namespace, ...oldClientReceipt } = approved.receipt;
+    expect(namespace).toBe('acme');
+    await store.write(oldClientReceipt, { relId: 'hello', skillSourceDir: path.join(rootDir, 'hello') });
+    const legacy = manager.list().find(ghost => ghost.namespace === 'acme')!;
+    const sibling = manager.list().find(ghost => ghost.namespace === null)!;
+    expect(legacy.namespaceState).toBe('unconfirmed');
+    expect(manager.readDeliveryNamespace(installedGhostStoragePart(legacy))).toBeUndefined();
+    const rootApproval = sibling.approval;
+    const pkg = await writeTestCindyPackage(path.join(workDir, 'next.cindy'), { ...manifest(), version: '2.0.0' });
+
+    expect(await manager.update(pkg, {
+      namespace: 'acme', expectedInstalledInstanceId: installedGhostStoragePart(legacy),
+      expectedInstalledApproval: ghostInstallApprovalToken(legacy.approval),
+    })).toMatchObject({ ghost: { namespace: 'acme', dir: path.join(rootDir, 'hello'), enabled: false,
+      instanceKey: installedGhostStoragePart(legacy), manifest: { version: '2.0.0' } } });
+    expect(manager.list().find(ghost => ghost.namespace === null)).toMatchObject({
+      dir: sibling.dir, approval: rootApproval, manifest: { version: '1.0.0' },
+    });
+    expect(fs.existsSync(path.join(rootDir, '_ns', 'acme', 'hello'))).toBe(false);
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { namespace: 'acme' } });
+  });
+
+  it.each(['different-namespace', 'different-plugin', 'missing-instance', 'stale-approval'] as const)(
+    'rejects a selected update with %s instead of falling through to a same-name installation', async scenario => {
+      await stampLegacyOrganizationInstall();
+      await manager.install(await makeCindy('hello'), { namespace: null });
+      await manager.install(await makeCindy('other'), { namespace: null });
+      const before = manager.list();
+      const root = before.find(ghost => ghost.manifest.id === 'hello' && ghost.namespace === null)!;
+      const organization = before.find(ghost => ghost.namespace === 'acme')!;
+      const other = before.find(ghost => ghost.manifest.id === 'other')!;
+      const target = scenario === 'different-namespace' ? installedGhostStoragePart(organization)
+        : scenario === 'different-plugin' ? installedGhostStoragePart(other)
+          : scenario === 'missing-instance' ? 'missing' : installedGhostStoragePart(root);
+      const pkg = await writeTestCindyPackage(path.join(workDir, 'next.cindy'), { ...manifest(), version: '2.0.0' });
+      expect(await manager.update(pkg, { namespace: null, expectedInstalledInstanceId: target,
+        expectedInstalledApproval: scenario === 'stale-approval' ? 'stale' : ghostInstallApprovalToken(root.approval),
+      })).toMatchObject({ rejection: { code: 'state-changed' } });
+      expect(manager.list()).toEqual(before);
+    },
+  );
+
+  it('rejects a selected update when the receipt explicitly contradicts the retained namespace', async () => {
+    await stampLegacyOrganizationInstall();
+    const store = receiptStore(mutateSnapshot);
+    const approval = store.read('hello');
+    if (approval.state !== 'approved') throw new Error('expected approved legacy install');
+    await store.write({ ...approval.receipt, namespace: null }, { relId: 'hello', requireSkillSnapshot: false });
+    const before = manager.list();
+    const legacy = before[0]!;
+    expect(legacy).toMatchObject({ namespace: 'acme', namespaceState: 'unconfirmed' });
+
+    expect(await manager.update(await makeCindy('hello'), {
+      namespace: 'acme', expectedInstalledInstanceId: installedGhostStoragePart(legacy),
+      expectedInstalledApproval: ghostInstallApprovalToken(legacy.approval),
+    })).toMatchObject({ rejection: { code: 'state-changed' } });
+    expect(manager.list()).toEqual(before);
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { namespace: null } });
+  });
+
+  it.each([undefined, null, 'acme'] as const)(
+    'keeps a selected pending update unlabeled rather than claiming namespace %s', async namespace => {
+      await plantLegacyInstall('hello');
+      const before = manager.list();
+      const legacy = before[0]!;
+      expect(legacy.namespaceState).toBe('pending');
+      const pkg = await writeTestCindyPackage(path.join(workDir, 'next.cindy'), { ...manifest(), version: '2.0.0' });
+      const result = await manager.update(pkg, {
+        ...(namespace !== undefined ? { namespace } : {}),
+        expectedInstalledInstanceId: installedGhostStoragePart(legacy),
+        expectedInstalledApproval: ghostInstallApprovalToken(legacy.approval),
+      });
+      if (namespace === undefined) {
+        expect(result).toMatchObject({ ghost: { dir: legacy.dir, manifest: { version: '2.0.0' } } });
+        expect(manager.list()[0]).toMatchObject({ namespaceState: 'pending' });
+        const receipt = receiptStore().read('hello');
+        expect(receipt).toMatchObject({ state: 'approved', receipt: { manifest: { version: '2.0.0' } } });
+        if (receipt.state !== 'approved') throw new Error('expected approved legacy install');
+        expect(receipt.receipt).not.toHaveProperty('namespace');
+      } else {
+        expect(result).toMatchObject({ rejection: { code: 'state-changed' } });
+        expect(manager.list()).toEqual(before);
+      }
+    },
+  );
+
   it('does not let an absent new root instance mutate a same-name legacy root', async () => {
     await plantLegacyInstall('hello');
     manager.list();
