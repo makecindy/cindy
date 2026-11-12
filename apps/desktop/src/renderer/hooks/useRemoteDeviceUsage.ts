@@ -59,6 +59,13 @@ const codexAccountMirror = createRemoteDeviceUsageMirror<RemoteCodexAccountUsage
 const codexNativeRateLimitsMirror = createRemoteDeviceUsageMirror<MobileCodexRateLimitsResult>({
   refreshOnReconnect: true,
   invokeChannel: 'maker:usage:codex-rate-limits',
+  // Group cards use this richer native result for the default account. An
+  // unscoped read returns usable pool quota and can borrow another account.
+  read: (deviceId, providerId = 'openai', scheduling) => window.electronAPI.deviceLink.invoke(
+    deviceId, 'maker:usage:codex-rate-limits', providerId === 'openai'
+      ? [providerId, DEFAULT_ACCOUNT_USAGE_SCOPE] : [providerId],
+    ...(scheduling ? [scheduling] : []),
+  ),
   pushChannel: 'usage:codex-account-changed',
   defaultProviderId: 'openai',
   providerPushChannel: 'usage:codex-provider-account-changed',
