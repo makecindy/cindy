@@ -85,6 +85,50 @@ describe('private report recovery', () => {
 });
 
 describe('take over', () => {
+  // #10112: old preferences can remain while a larger profile lives in the store.
+  // Unit tier: the real runtime must select the same revision as materialization.
+  it.each([false, true])('uses the current store profile for validation (corrected: %s)', async corrected => {
+    vi.useFakeTimers();
+    try {
+      let prefRevision = 1;
+      const key = 'companion.profile.v1';
+      const stored = { key, revision: 1, cursor: '1', deleted: false, hash: 'synthetic', size: 72000,
+        value: { companionStore: 1, prefRevision: 1, value: { ...MIA,
+          soul: corrected ? 'corrected' : 'x'.repeat(70000), systemPrompt: 'p'.repeat(70000) } } };
+      const t = setup({ home: 'laptop', store: { enabled: () => true }, handler: (route, method) => {
+        if (route === '/preferences') return method === 'GET' ? [{ key, revision: prefRevision,
+          value: { ...MIA, soul: corrected && prefRevision === 1 ? 'x'.repeat(12001) : 'ok' } }] : { revision: prefRevision };
+        if (route.startsWith('/companion-store/changes')) return { entries: [stored], cursor: '1', hasMore: false };
+        if (route.startsWith('/companion-store/entry?')) return stored;
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+      if (corrected) {
+        expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+        expect(t.local.host.createProfile).toHaveBeenCalledWith(expect.objectContaining({ identitySource: 'corrected' }), expect.anything());
+        return;
+      }
+      expect(await t.runtime.takeOver('bot_mia')).toMatchObject({ ok: false, profileFailure: { field: 'identitySource' } });
+      expect(t.actors[0]!.homeDeviceId).toBe('laptop');
+      expect(t.calls.every(call => call.method === 'GET')).toBe(true);
+      // Simulate a legacy hand-over that already selected this computer.
+      t.actors[0]!.homeDeviceId = 'desk';
+      t.runtime.reconcile([]);
+      await vi.advanceTimersByTimeAsync(0);
+      const writes = t.calls.filter(call => call.method !== 'GET');
+      await vi.advanceTimersByTimeAsync(60_000);
+      t.runtime.reconcile([]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.calls.filter(call => call.method !== 'GET')).toEqual(writes);
+      expect(t.local.host.createProfile).not.toHaveBeenCalled();
+      // A newer small edit supersedes the retained large store value.
+      prefRevision = 2;
+      expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+      expect(t.local.host.createProfile).toHaveBeenCalledWith(expect.objectContaining({ identitySource: 'ok' }), expect.anything());
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
   // #10112: an overlong cloud soul was rejected by the real profile writer on every
   // reconcile. Unit tier: verify the public runtime stops writes, exposes the reason,
   // and recovers when the source changes (the DB suite covers the writer boundary).

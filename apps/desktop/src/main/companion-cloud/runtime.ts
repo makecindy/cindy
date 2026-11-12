@@ -26,7 +26,7 @@ import { isCindyCompanion, mergeCompanionsInto, readProfileSnapshot } from './me
 import { importCloudHistory } from './materialize.js';
 import type { CompanionCloudState } from './state.js';
 import { chatRejection, errorCode, isUnreachable, type CompanionApi, type CompanionLog } from './types.js';
-import { createCompanionStore, readCompanionValue, readPreference, type CompanionStoreTransfer } from './store.js';
+import { createCompanionStore, readCompanionRestoreValue, readPreference, type CompanionStoreTransfer } from './store.js';
 import { COMPANION_PROFILE_KEY, COMPANION_READ_INCOMPLETE, COMPANION_VALUE_TOO_LARGE, canonicalJson, createCompanionUploader, isCompanionProfileSnapshot, type CompanionPreferenceValue } from './uploader.js';
 
 /** Electron/database side of the feature, wired in register.ts. */
@@ -452,9 +452,9 @@ export function startCompanionCloud(input: {
     }
     return true;
   }
-  async function checkProfileSources(actor: CompanionRuntimeActor, explicit: boolean) {
+  async function checkProfileSources(actor: CompanionRuntimeActor) {
     const actorId = actor.id;
-    const profile = await readCompanionValue(input.api, store, actorId, COMPANION_PROFILE_KEY, { probe: explicit });
+    const profile = await readCompanionRestoreValue(input.api, store, actorId, COMPANION_PROFILE_KEY);
     fence.assertCurrent();
     if (actorOf(actor.externalId)?.id !== actorId) throw new Error('COMPANION_CHANGED');
     if (!profile || !isCompanionProfileSnapshot(profile.value)) throw new Error('PROFILE_SNAPSHOT_MISSING');
@@ -565,7 +565,7 @@ export function startCompanionCloud(input: {
       identityConflicts.delete(botId);
       // The existing retry cadence reads only the profile until it is valid. Do not
       // reclaim the home/installation or replay all files for unchanged bad text.
-      if (profileFailures.get(botId)?.actorId === actorId) await checkProfileSources(actor, false);
+      if (profileFailures.get(botId)?.actorId === actorId) await checkProfileSources(actor);
       fence.assertCurrent();
       await backgroundIdentityApi(`/actors/${actor.id}`, 'PATCH', { homeDeviceId: input.selfDeviceId, expectedHomeDeviceId: input.selfDeviceId });
       // Automatic: never take the companion from the other installation on this computer.
@@ -836,7 +836,7 @@ export function startCompanionCloud(input: {
       // Never move the home before the companion's profile snapshot is in the cloud: without it
       // this copy could not be built, and the old home would already be demoted.
       try {
-        const profile = await checkProfileSources(actor, true);
+        const profile = await checkProfileSources(actor);
         await assertCompanionIdentity(input.host.materializer, actor.externalId,
           (profile as { templateId?: unknown }).templateId, fence);
         identityConflicts.delete(actor.externalId);
