@@ -13295,6 +13295,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "Utiliser le Texte Original",
     "rateLimited": "Trop de requêtes vocales. Patientez un instant, puis réessayez.",
     "status": {
       "listening": "Saisie vocale",

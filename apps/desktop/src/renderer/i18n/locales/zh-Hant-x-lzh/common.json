@@ -13136,6 +13136,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "用原文",
     "rateLimited": "聲請過頻，請稍候再試。",
     "status": {
       "listening": "方聽聲",
