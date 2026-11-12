@@ -13299,6 +13299,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "Originaltext Verwenden",
     "rateLimited": "Zu viele Sprachanfragen. Warte kurz und versuche es erneut.",
     "status": {
       "listening": "Spracheingabe",
@@ -17700,6 +17701,7 @@
       "dingtalkBotDisconnectFailed": "DingTalk-Bot-Verknüpfung konnte nicht aufgehoben werden"
     },
     "errors": {
+      "piStartupCloudFile": "Eine nur in der Cloud verfügbare Anweisungsdatei verzögert möglicherweise den Start von Pi: {{path}}. Lade diese Datei im Finder herunter, warte, bis sie lokal verfügbar ist, und versuche es erneut. Die Zeitüberschreitung kann eine andere Ursache haben.",
       "openFileFailed": "Datei kann nicht mit dem System geöffnet werden",
       "emptyResponse": "Das Modell hat keinen Inhalt zurückgegeben. Versuche es erneut. Wechsle bei sehr langem Kontext das Modell.",
       "turnFailed": "Die Aufgabe ist fehlgeschlagen (das Modell hat keine Fehlerdetails zurückgegeben) — versuche es erneut.",
@@ -19622,6 +19624,11 @@
     }
   },
   "pluginUi": {
+    "settings": "Plugin-Einstellungen",
+    "save": "Speichern",
+    "settingsFailed": "Die Plugin-Einstellungen konnten nicht geladen oder gespeichert werden. Öffne diese Seite erneut.",
+    "invalidSetting": "Prüfe die markierten Werte anhand der erlaubten Grenzen.",
+    "attachmentFailed": "Das Plugin konnte „{{name}}“ nicht verarbeiten. Der ursprüngliche Anhang bleibt erhalten.",
     "display": "Darstellung",
     "original": "Original",
     "menu": "Plugin-Ansichten und Befehle",

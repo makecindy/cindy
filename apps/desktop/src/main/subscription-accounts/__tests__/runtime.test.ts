@@ -115,7 +115,8 @@ import { withSubscriptionAccounts } from '../agent.js';
 import { getSessionSubscriptionAccount } from '../session.js';
 import { prepareSubscriptionAccountForSend } from '../prepareSend.js';
 import type { SessionRowSnapshot } from '../../localDb/sessionDispatchSnapshot.js';
-import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover } from '../failover.js';
+import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch } from '../failover.js';
+import { UsageLimitAutoResume, USAGE_LIMIT_RESUME_BUFFER_MS } from '../../maker-ipc/usageLimitAutoResume.js';
 import { createProviderGroupDirectory } from '../../provider-group/directory.js';
 import { createProviderGroupRouter, type ProviderGroupPersistedCooling } from '../../provider-group/router.js';
 import { createProviderGroupService, type ProviderGroupSessionRow } from '../../provider-group/service.js';
@@ -393,7 +394,7 @@ describe('paused account next-turn handoff', () => {
       .mockResolvedValueOnce({ ok: true, result: { providerId: 'anthropic', model: 'claude-sonnet', available: true } });
     const row = { providerId: 'anthropic', model: 'claude-sonnet', agentKind: 'cc', sdkSessionId: 'remote-native', agentDeviceId: 'my-other-computer' };
     expect(await needsSubscriptionAccountHandoff('task', row)).toBe(true);
-    expect(h.remote.mock.calls[0][2]).toEqual([{ action: 'session', providerId: 'anthropic', nativeSessionId: 'remote-native' }]);
+    expect(h.remote.mock.calls[0][2]).toEqual([{ action: 'session', providerId: 'anthropic', nativeSessionId: 'remote-native', model: 'claude-sonnet' }]);
     expect(h.bindings.size).toBe(0);
     h.remote.mockClear();
     expect(await needsSubscriptionAccountHandoff('task', { ...row, agentDeviceId: 'share:someone' })).toBe(false);
@@ -1237,6 +1238,129 @@ describe('native account assignment on the executing computer', () => {
     expect(await prepareSubscriptionAccountFailover('other-model', { readSession: async () => ({ ...row, model: 'claude-opus' }),
       isRunning: () => false, rebuild })).toBe(false);
   });
+  // 2026-11-12 incident (unit): after the group moved a task to another computer, the fresh native
+  // session there kept the task's exhausted account (SUBSCRIPTION_ACCOUNT_LIMITED) although a second
+  // account was ready. Minimal input: the bound account remembers a usage limit for the task model.
+  it('starts a fresh native session of a bound task on another account when the bound one is blocked', async () => {
+    h.pools.anthropic!.accounts = [{ ...account('default'), limit: 4 }, { ...account('second'), limit: 4 }];
+    const model = 'claude-sonnet';
+    const failed = await acquireSubscriptionAccount('anthropic', model, []);
+    await failed!.bind(['task:moved', 'native:old']);
+    failed!.observeFailure({ sdkError: 'rate_limit' }, model, 'run');
+    failed!.release();
+    // The executing computer reports the same judgment to the controller only for a model query.
+    expect(await readSubscriptionSessionAccount('anthropic', { sessionId: 'moved', model }))
+      .toMatchObject({ state: 'bound', account: { number: 1, blocked: true, switchAvailable: true } });
+    expect(await readSubscriptionSessionAccount('anthropic', { sessionId: 'moved' })).not.toHaveProperty('account.blocked');
+    const start = vi.fn(async () => ({ id: 'native-new', events: async function* () {}, send: vi.fn(), close: vi.fn() }) as unknown as AgentSessionHandle);
+    const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: start } as unknown as BaseAgent);
+    await agent.startSession({ providerId: 'anthropic', sessionId: 'moved', model } as StartSessionOptions);
+    expect((start.mock.calls[0] as unknown as [StartSessionOptions])[0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('anthropic/second');
+    expect(h.bindings.get('task:moved')).toMatchObject({ accountId: 'second' });
+    expect(h.bindings.get('native:old')).toMatchObject({ accountId: 'default' });
+    // Every other account blocked too: the task keeps its own account instead of failing as full.
+    const second = await acquireSubscriptionAccount('anthropic', model, ['task:moved']);
+    second!.observeFailure({ sdkError: 'rate_limit' }, model, 'run');
+    second!.release();
+    h.bindings.set('task:stay', { providerId: 'anthropic', accountId: 'default' });
+    await agent.startSession({ providerId: 'anthropic', sessionId: 'stay', model } as StartSessionOptions);
+    expect((start.mock.calls[1] as unknown as [StartSessionOptions])[0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('anthropic/default');
+  });
+  // 2026-11-12 incident (unit): a same-account remote task stayed on its exhausted account although
+  // its computer had another one; pre-send and immediate continuation only handled local tasks.
+  it('hands a remote task off an account its computer reports blocked, only when that computer can continue', async () => {
+    const row = { status: 'active', providerId: 'anthropic', agentKind: 'cc', model: 'claude-sonnet',
+      sdkSessionId: 'remote-native', agentDeviceId: 'mac-mini' };
+    const bound = (extra: object) => ({ ok: true, result: { providerId: 'anthropic', state: 'bound',
+      account: { isDefault: true, number: 1, paused: false, status: 'ready', ...extra } } });
+    // The executor returns actual admission in the existing session read. A quota request would
+    // fail here: an optional replacement probe must not add a new timeout that blocks sending.
+    h.remote.mockImplementation(async (_device, channel) => {
+      if (channel !== 'maker:subscription-accounts') throw new Error('quota timeout');
+      return bound({ blocked: true, switchAvailable: true });
+    });
+    expect(await needsSubscriptionAccountHandoff('t', row)).toBe(true);
+    expect(h.remote.mock.calls[0][2]).toEqual([{ action: 'session', providerId: 'anthropic',
+      nativeSessionId: 'remote-native', model: 'claude-sonnet' }]);
+    // No other account there: the message still goes to the original account, the send is not failed.
+    h.remote.mockResolvedValueOnce(bound({ blocked: true, switchAvailable: false }));
+    expect(await needsSubscriptionAccountHandoff('t', row)).toBe(false);
+    // Missing or malformed admission never authorizes retiring context, including older replies.
+    for (const extra of [{}, { blocked: true }, { blocked: true, switchAvailable: 'true' }]) {
+      h.remote.mockReset().mockResolvedValueOnce(bound(extra));
+      expect(await needsSubscriptionAccountHandoff('t', row)).toBe(false);
+      expect(h.remote).toHaveBeenCalledTimes(1);
+    }
+    // A usage-limit failure continues at once on the same evidence; shared providers never move.
+    h.remote.mockResolvedValueOnce(bound({ blocked: true, switchAvailable: true }));
+    expect(await canSwitchSubscriptionAccount('t', async () => row, h.remote)).toBe(true);
+    expect(await canSwitchSubscriptionAccount('t', async () => ({ ...row, agentDeviceId: 'share:someone' }), h.remote)).toBe(false);
+    expect(h.remote).toHaveBeenCalledTimes(2);
+    h.remote.mockImplementationOnce(async () => {
+      h.owner += '-changed';
+      return bound({ blocked: true, switchAvailable: true });
+    });
+    await expect(needsSubscriptionAccountHandoff('t', row)).rejects.toThrow('owner changed');
+  });
+  // PR #10152 review, unit: quota alone is not admission. The healthy replacement may already
+  // occupy its only slot; exercise executor selection and controller handoff together.
+  it('preserves a remote native session when every replacement account is full', async () => {
+    const model = 'claude-sonnet';
+    h.pools.anthropic!.accounts = [account('default'), { ...account('second'), limitSet: true }];
+    const failed = await acquireSubscriptionAccount('anthropic', model, []);
+    await failed!.bind(['task:remote-full', 'native:remote-full']);
+    failed!.observeFailure({ sdkError: 'rate_limit' }, model, 'run');
+    failed!.release();
+    const competing = await acquireSubscriptionAccount('anthropic', model, ['task:competing']);
+    const now = Date.now();
+    h.usage.mockResolvedValue({ claudeUsage: { updatedAt: now,
+      fiveHour: { utilization: 10, resetsAt: now / 1000 + 3600 },
+      sevenDay: { utilization: 20, resetsAt: now / 1000 + 86400 }, scoped: [] } });
+    h.remote.mockImplementation(async (_device, channel, args) => ({ ok: true,
+      result: channel === 'maker:subscription-accounts'
+        ? await readSubscriptionSessionAccount('anthropic', args[0] as { nativeSessionId: string; model: string })
+        : { providerId: 'anthropic', model, available: true },
+    }));
+    const row = { status: 'active', providerId: 'anthropic', agentKind: 'cc', model,
+      sdkSessionId: 'remote-full', agentDeviceId: 'other-computer' };
+    expect(await needsSubscriptionAccountHandoff('remote-full', row)).toBe(false);
+    expect(await canSwitchSubscriptionAccount('remote-full', async () => row, h.remote)).toBe(false);
+    competing!.release();
+    expect(await needsSubscriptionAccountHandoff('remote-full', row)).toBe(true);
+    expect(h.bindings.get('native:remote-full')?.accountId).toBe('default');
+    expect((await readSubscriptionPool('anthropic')).accounts.map(a => a.running)).toEqual([0, 0]);
+  });
+  // PR #10152 independent review, unit: optional replacement reads must not extend the original
+  // account query past its transport deadline. Fake time covers both a slow bound read and a
+  // cold replacement; late completion must never move a binding.
+  it.each([0, 15_000])('bounds optional replacement admission after a %s ms bound-account read', async (accountDelay) => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const model = 'claude-sonnet';
+      const failed = await acquireSubscriptionAccount('anthropic', model, []);
+      await failed!.bind(['task:slow-probe', 'native:slow-probe']);
+      failed!.observeFailure({ sdkError: 'rate_limit' }, model, 'run');
+      failed!.release();
+      await vi.advanceTimersByTimeAsync(31_000);
+      h.read.mockImplementation(async (_provider, directory) => {
+        await new Promise(resolve => setTimeout(resolve, directory.endsWith('default') ? accountDelay : 20_000));
+        if (directory.endsWith('default') && accountDelay) throw new Error('native status timed out');
+        return { authenticated: true, identity: 'fixture@example.test' };
+      });
+      let view: unknown;
+      const query = readSubscriptionSessionAccount('anthropic', { nativeSessionId: 'slow-probe', model })
+        .then(result => { view = result; });
+      await vi.advanceTimersByTimeAsync(Math.max(accountDelay, 2_000));
+      expect(view).toMatchObject({ state: 'bound', account: { blocked: true, switchAvailable: false } });
+      await vi.runAllTimersAsync();
+      await query;
+      expect(h.bindings.get('task:slow-probe')?.accountId).toBe('default');
+      expect(h.bindings.get('native:slow-probe')?.accountId).toBe('default');
+    } finally {
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
+  });
   // PR review: selection happens before any process exists, so Maker must release startup resources.
   it('classifies an unavailable pool as a stopped startup without calling the native agent', async () => {
     h.pools.anthropic!.disconnected = true;
@@ -1678,6 +1802,88 @@ describe('native account assignment on the executing computer', () => {
     await expect(acquireSubscriptionAccount('anthropic', model, ['native:old'])).rejects.toThrow('[SUBSCRIPTION_ACCOUNT_LIMITED]');
     expect(h.bindings.get('native:old')?.accountId).toBe('default');
     expect(switchAgentLocation).not.toHaveBeenCalled();
+  });
+  // 2026-11-12 incident (unit): the group cooled the failing computer and gave up ("no computer left")
+  // although that computer still had a healthy account. Real service → router → account pool with
+  // one computer and two accounts; the executing account remembers its limit as agent.ts records it.
+  it('continues a failed group task on another account of the same computer before giving up', async () => {
+    const now = Date.now();
+    const model = 'claude-sonnet-5-5';
+    h.pools.anthropic!.accounts = [{ ...account('default'), limit: 4 }, { ...account('second'), limit: 4 }];
+    h.usage.mockResolvedValue({ claudeUsage: { updatedAt: now, fiveHour: { utilization: 10, resetsAt: now / 1000 + 3600 },
+      sevenDay: { utilization: 20, resetsAt: now / 1000 + 86400 }, scoped: [] } });
+    const failed = await acquireSubscriptionAccount('anthropic', model, []);
+    await failed!.bind(['task:old', 'native:old']);
+    failed!.observeFailure({ sdkError: 'rate_limit' }, model, 'run');
+    failed!.release();
+    const config = normalizeProviderGroupConfig({ members: [{ kind: 'local' }] }, 'anthropic')!;
+    const directory = createProviderGroupDirectory({
+      listLocalProviders: async () => [{ id: 'anthropic', name: 'Anthropic', connected: true,
+        agents: ['claude-code'], auth: { method: 'oauth', native: 'claude' },
+        models: { 'claude-code': [{ id: model, name: model, efforts: [], defaultEffort: null }] },
+        routing: { 'claude-code': {} },
+      } as unknown as ProviderView],
+      localDeviceName: () => 'local', listDevices: async () => [], readDeviceProviders: async () => [],
+      listReceivedShares: () => [], isMobilePlatform: () => false,
+      readClaudeUsage: async () => (await readSubscriptionPoolUsage('anthropic'))?.claudeUsage ?? null,
+      now: () => now,
+    });
+    const bindings = new Map<string, ProviderGroupBinding>([['old', { providerId: 'anthropic', memberKey: 'local', at: now }]]);
+    const router = createProviderGroupRouter({ directory, readGroup: () => config,
+      listBindings: () => Object.fromEntries(bindings), isTurnRunning: () => false, now: () => now, random: () => 0,
+      readPoolModelAvailability: async () => readSubscriptionPoolModelAvailability('anthropic', model),
+      coolingStore: { read: (): ProviderGroupPersistedCooling => ({}), write: vi.fn() },
+    });
+    const taskRow = { status: 'active', providerId: 'anthropic', agentKind: 'cc', model, sdkSessionId: 'old',
+      agentDeviceId: null, remoteHostId: null };
+    const continueSession = vi.fn(async () => 'resumed' as const);
+    const accountProbe = vi.fn((id: string) => readSubscriptionAccountSwitch(id, async () => taskRow));
+    const arm = vi.fn(() => true);
+    const waiting = new UsageLimitAutoResume({
+      now: () => now, random: () => 0, setTimer: vi.fn(), clearTimer: vi.fn(),
+      isEligible: async () => true, resolveResetAt: async () => now + 60_000,
+      canSwitchAccount: async id => (await accountProbe(id)) !== null,
+      arm, isCurrent: () => true, cancel: vi.fn(), continueSession, log: vi.fn(),
+    });
+    let fallbackRun: Promise<boolean> | undefined;
+    const fallback = vi.fn((id: string, signals: Parameters<UsageLimitAutoResume['onTurnError']>[1], token: number,
+      options?: { accountSwitchChecked?: true }) => { fallbackRun = waiting.onTurnError(id, signals, token, options); });
+    const switchAgentLocation = vi.fn();
+    const service = createProviderGroupService({ router, directory, readGroup: () => config,
+      readBinding: (id) => bindings.get(id) ?? null,
+      writeBinding: async (id, binding) => {
+        if (binding) bindings.set(id, { providerId: binding.providerId, memberKey: binding.memberKey, at: now });
+        else bindings.delete(id);
+      },
+      isReleased: () => false, markReleased: vi.fn(),
+      readSessionRow: async () => ({ agentKind: 'claude-code', model, providerId: 'anthropic',
+        agentDeviceId: null, remoteHostId: null, sdkSessionId: 'old' }),
+      resolveImplicitProvider: async () => 'anthropic', persistRoute: vi.fn(), hasAssistantHistory: async () => true,
+      isFailoverEligible: async () => true, leaseRecovery: () => ({}), isLeaseCurrent: () => true,
+      rearmContinue: () => 2, cancelContinue: vi.fn(), switchAgentLocation, isTurnRunning: () => false, hasLiveSession: () => false,
+      readAccountSwitch: accountProbe,
+      continueSession, fallback, readResetAt: () => null,
+      now: () => now, sleep: async () => {}, log: { info: vi.fn(), warn: vi.fn() },
+    });
+    await service.onTurnError('old', { sdkError: 'rate_limit' }, 1);
+    expect(continueSession).toHaveBeenCalledTimes(1);
+    expect((continueSession.mock.calls[0] as unknown[])[2]).not.toHaveProperty('agentSwitch');
+    expect(switchAgentLocation).not.toHaveBeenCalled();
+    expect(fallback).not.toHaveBeenCalled();
+    // The computer still serves the model through its other account: no group cooldown.
+    expect(router.coolingUntil('anthropic', 'local', model)).toBeNull();
+    // The continuation's ordinary pre-send check hands the task to that account.
+    const rebuild = vi.fn(async () => undefined);
+    expect(await prepareSubscriptionAccountFailover('old', { readSession: async () => taskRow, isRunning: () => false, rebuild })).toBe(true);
+    expect(h.bindings.get('task:old')).toMatchObject({ accountId: 'second' });
+    // The same account failing again in this round means the move did not take: switch computers as before.
+    h.bindings.set('task:old', { providerId: 'anthropic', accountId: 'default' });
+    await service.onTurnError('old', { sdkError: 'rate_limit' }, 2);
+    await fallbackRun;
+    expect(continueSession).toHaveBeenCalledTimes(1);
+    expect(fallback).toHaveBeenCalledTimes(1);
+    expect(accountProbe).toHaveBeenCalledTimes(2);
+    expect(arm).toHaveBeenCalledWith('old', 2, now + 60_000 + USAGE_LIMIT_RESUME_BUFFER_MS);
   });
   // PR #9837 / unit: an actual CLI failure without account_usage must outrank
   // optimistic cached quota. The previous group regression pre-exhausted it.

@@ -176,7 +176,8 @@ describe("DS-8 production source", () => {
       ts.forEachChild(node, visit);
     };
     visit(source);
-    // The approved provenance marks add eight roles; all prior IDs remain governed.
+    // The approved provenance marks add eight roles; legacy IDs remain available
+    // for local theme compatibility even when built-in UI no longer consumes them.
     expect(new Set(ids).size).toBe(584);
     expect(
       [

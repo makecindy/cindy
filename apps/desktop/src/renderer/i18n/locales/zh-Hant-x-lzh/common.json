@@ -13247,6 +13247,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "用原文",
     "rateLimited": "聲請過頻，請稍候再試。",
     "status": {
       "listening": "方聽聲",
@@ -17633,6 +17634,7 @@
       "dingtalkBotDisconnectFailed": "釘釘機器人解綁未成"
     },
     "errors": {
+      "piStartupCloudFile": "發現僅在雲端的指令檔案：{{path}}。它可能使 Pi 啟動等待。請在 Finder 中下載該檔案，確認已儲存在本機後重試；逾時也可能另有原因。",
       "openFileFailed": "無從於系統中啟此卷",
       "emptyResponse": "模型無所答。請再試；上下文甚長者，亦可易一模型。",
       "turnFailed": "差事行之未成（模型未報謬誤詳情），請再試。",
@@ -19550,6 +19552,11 @@
     }
   },
   "pluginUi": {
+    "settings": "法器設定",
+    "save": "存定",
+    "settingsFailed": "法器設定未能讀取或存定，請重開此頁。",
+    "invalidSetting": "請核所標之值，勿逾允限。",
+    "attachmentFailed": "法器未能處理「{{name}}」，原附件仍存。",
     "display": "示法",
     "original": "原文",
     "menu": "法器頁面與指令",

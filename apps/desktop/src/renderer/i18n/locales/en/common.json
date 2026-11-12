@@ -13299,6 +13299,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "Use Original Text",
     "rateLimited": "Too many voice requests. Wait a moment, then try again.",
     "status": {
       "listening": "Voice input",
@@ -17700,6 +17701,7 @@
       "dingtalkBotDisconnectFailed": "Failed to unbind DingTalk bot"
     },
     "errors": {
+      "piStartupCloudFile": "A cloud-only instruction file may be delaying Pi startup: {{path}}. Download this file in Finder, wait until it is available locally, then retry. The timeout may have another cause.",
       "openFileFailed": "Cannot open file in system",
       "emptyResponse": "The model returned no content. Try again. If the context is very long, switch models.",
       "turnFailed": "The task failed (the model returned no error detail) — please retry.",
@@ -19622,6 +19624,11 @@
     }
   },
   "pluginUi": {
+    "settings": "Plugin settings",
+    "save": "Save",
+    "settingsFailed": "Could not load or save the plugin settings. Reopen this page to try again.",
+    "invalidSetting": "Check the highlighted values against the allowed limits.",
+    "attachmentFailed": "The plugin could not process “{{name}}”. The original attachment is kept.",
     "display": "Display",
     "original": "Original",
     "menu": "Plugin views and commands",

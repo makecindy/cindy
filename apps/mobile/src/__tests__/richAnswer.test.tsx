@@ -18,6 +18,8 @@ vi.mock('react-native', () => ({
   ActivityIndicator: () => null,
 }));
 vi.mock('expo-router', () => ({ useIsFocused: () => true }));
+// Export's native dependencies are covered by videoDownloadButton.test.tsx.
+vi.mock('@/session/VideoDownloadButton', () => ({ VideoDownloadButton: () => null }));
 vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: ({ url }: any) => <video src={url} /> }));
 vi.mock('@/components/AppText', () => ({
   Text: ({ children }: any) => <span>{children}</span>,

@@ -22,6 +22,8 @@ export function assertFileReadActive(signal?: AbortSignal): void {
 export async function readDeviceFile<T extends DeviceFileResult>(options: {
   prepare(): Promise<DeviceFileResult>;
   peer(metadata: DeviceFileResult): Promise<T | null>;
+  /** Retained seekable reader over the file data channel, capability negotiated. */
+  peerStream?(metadata: DeviceFileResult): Promise<T | null>;
   fallback(): Promise<DeviceFileResult>;
   /** Metadata-only preparation is opt-in; old hosts may still return bytes. */
   inline?(): Promise<DeviceFileResult>;
@@ -102,6 +104,12 @@ export async function readDeviceFile<T extends DeviceFileResult>(options: {
   const inlineMediaStream = mediaStream && !prepared.ossKey &&
     typeof prepared.inlineBase64 === "string";
   if (prepared.transferRequired !== true && !inlineMediaStream) return prepared;
+  if (/^(audio|video)\//i.test(prepared.mimeType) && prepared.transferRequired === true && options.peerStream) {
+    const direct = await options.peerStream(prepared);
+    if (direct && !active()) return discardCancelled(direct);
+    assertActive();
+    if (direct) return direct;
+  }
   const needsFallback = mediaStream || (options.stream && options.peerResultIsTransient);
   const direct = needsFallback ? null : await options.peer(prepared);
   if (direct && !active()) return discardCancelled(direct);
