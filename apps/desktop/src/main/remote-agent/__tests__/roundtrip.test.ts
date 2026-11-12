@@ -1827,6 +1827,46 @@ describe('shared startup lease budget', () => {
     await resumed.close();
   });
 
+  it('reconnects after a queued done and idle reclaim arrive in one poll', async () => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    const session = new Session({ id: 'historical', agentKind: 'codex', workDir: project,
+      handle, capabilities: {} as never, logger: historyLogger as never, turnStallMs: 0 });
+    try {
+      expect(await session.send('first')).toMatchObject({ accepted: true });
+      const run = [...f.runs.values()].at(-1)!;
+      run.onData(Buffer.from([
+        JSON.stringify({ t: 'event', event: { type: 'done', source: 'codex', data: {} } }),
+        JSON.stringify({ t: 'closed', reason: 'closed', idleReclaimed: true }), '',
+      ].join('\n')), false);
+      await flush();
+      expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done', generation: 1 });
+      expect(f.disposed).toEqual([]);
+      expect(await session.send('second')).toMatchObject({ accepted: true });
+      expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
+      expect(f.disposed).toEqual([]);
+    } finally { await session.close(); }
+  });
+
+  it.each([false, true])('preserves a live run close receipt through the real starter (idle reclaim=%s)', async idleReclaimed => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    try {
+      await handle.send({ type: 'user', content: 'work' });
+      const run = [...f.runs.values()].at(-1)!;
+      f.emit(run, { t: 'state', state: { turnRunning: false } });
+      f.emit(run, { t: 'closed', reason: idleReclaimed ? 'closed' : 'ended', idleReclaimed });
+      const events: AgentEvent[] = [];
+      for await (const event of handle.events()) events.push(event);
+      expect(events.filter(event => event.type === 'error')).toEqual([
+        expect.objectContaining({ data: expect.objectContaining({ reason: 'remote_agent_closed',
+          remoteCloseReason: idleReclaimed ? 'closed' : 'ended', remoteRunId: run.runId,
+          sdkError: expect.stringContaining(run.runId) }) }),
+      ]);
+      expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
+    } finally { await handle.close(); }
+  });
+
   it('ends an already running direct task on a known pause and requires fresh authorization after resume', async () => {
     const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
     const handle = await f.open('historical');

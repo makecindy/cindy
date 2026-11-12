@@ -18,9 +18,11 @@ import { describe, expect, it } from 'vitest';
 import {
   ELLIPSIS_LOCALES,
   HALFWIDTH_PUNCT_LOCALES,
+  auditEnglishCopy,
   findCaseMismatch,
   findHalfWidthPunct,
   hasAsciiEllipsis,
+  makeEnglishCopyExemptChecker,
   makeExemptChecker,
   normalizeForPunctuation,
   occursIn,
@@ -49,6 +51,7 @@ const glossary = JSON.parse(
   locales: string[];
   sourceLocale: string;
   punctuationExempt?: string[];
+  englishCopyExempt?: Record<string, string[]>;
   terms: GlossaryTerm[];
 };
 
@@ -88,11 +91,15 @@ export function flattenShadowCatalog(
  * 对一份摊平后的影子 catalog 跑完整术语门禁。
  *
  * `surface` 只进断言与告警文案,用来在失败输出里区分是哪份 catalog 出的问题。
+ * `knownEnglishCopyIssues` 冻结该 catalog 引入英文写法规则时的既有问题(指纹
+ * `key\trule\t命中次数\t文案摘要`,见 auditEnglishCopy),
+ * 只减不增:新增违规与已修好却仍挂着的条目都会失败。
  */
 export function describeShadowCatalogGlossary(
   title: string,
   entries: readonly ShadowCatalogEntry[],
   surface: string,
+  knownEnglishCopyIssues: readonly string[] = [],
 ): void {
   /** 标点豁免:与根门禁同源,只作用于半角标点检查(不含省略号)。 */
   const isHalfWidthExempt = makeExemptChecker(glossary.punctuationExempt);
@@ -177,6 +184,16 @@ export function describeShadowCatalogGlossary(
         }
       }
       expect(violations, `${surface}标点不符:\n${violations.join('\n')}`).toEqual([]);
+    });
+
+    it('英文写法符合 DESIGN.md §11.1 / §11.2', () => {
+      // 根门禁只读 locale JSON,手写 catalog 的英文写法规则由这里把关,口径与豁免同源。
+      const { added, stale } = auditEnglishCopy(
+        entries.filter((e) => e.locale === glossary.sourceLocale),
+        { isExempt: makeEnglishCopyExemptChecker(glossary.englishCopyExempt), known: knownEnglishCopyIssues },
+      );
+      expect(added, `${surface}英文写法违规:\n${added.join('\n')}`).toEqual([]);
+      expect(stale, `${surface}已修好的英文写法存量请从清单删除`).toEqual([]);
     });
   });
 }
