@@ -46,6 +46,9 @@ boundaries.
   install a plugin.
 - Saved settings are not proof of visible application. Inspect the actual view,
   loaded font and displayed media; record saved-only and failed states accurately.
+- Explicit package selection prepares resources before saving or applying colors.
+  Rejection keeps the previous choice and colors and shows the existing toast;
+  superseded results do not commit. Agent selection receipts reflect that result.
 - A cold package restore failure retains selection and original settings, logs a
   warning and shows no toast. Explicitly reselecting the same package reports the
   rejection. Neither case should block the window or rewrite user preferences.

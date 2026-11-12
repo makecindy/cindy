@@ -131,7 +131,7 @@ describe('built-in Skills', () => {
 
   // Unit: older releases shipped three Skills. A missing new resource must not
   // make those authenticated, already-active Skills disappear during upgrade.
-  it.each([83, 97, 98, 99, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111].flatMap(bundleVersion => ['success', 'missing-source'].map(mode => ({ bundleVersion, mode }))))('upgrades the pre-theme bundle $bundleVersion without losing existing Skills ($mode)', async ({ bundleVersion, mode }) => {
+  it.each([83, 97, 98, 99, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112].flatMap(bundleVersion => ['success', 'missing-source'].map(mode => ({ bundleVersion, mode }))))('upgrades the pre-theme bundle $bundleVersion without losing existing Skills ($mode)', async ({ bundleVersion, mode }) => {
     const input = fixture();
     const previous = await prepareBuiltInSkills({ ...input, bundleVersion });
     const theme = previous.descriptors.find((item) => item.name === 'cindy-theme-creator')!;

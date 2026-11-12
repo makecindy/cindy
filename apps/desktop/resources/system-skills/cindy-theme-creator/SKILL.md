@@ -87,9 +87,11 @@ path can launch another build and cannot verify the running instance.
 
 Import adds the theme to the list; selection applies its defaults. **Explicit user
 settings and approved fixed-operation overrides take priority**, including fonts
-and wallpaper. Selection keeps Cindy's existing local preference path. Colors
-apply synchronously; bundled fonts and wallpaper prepare afterward, so wait for
-their actual appearance before verifying them. Read back the effective appearance. If a requested theme field is
+and wallpaper. Selection keeps Cindy's existing local preference path. Explicit
+package selection prepares resources before saving the choice and applying colors;
+a rejected preparation leaves the current choice unchanged. Cold startup applies
+saved colors and original settings synchronously, then prepares package resources.
+Wait for actual font and wallpaper readiness before verifying the appearance. If a requested theme field is
 masked, identify that override; use the corresponding existing “Restore default”
 control only when the user wants to follow the theme there. Never silently reset
 all appearance settings. With a package active, reset removes the named override
