@@ -349,7 +349,7 @@ try {
   const requestsBeforeReview = requests.length;
   const loopDecision = await graph.autoReview.toolLoopReviewer({
     sessionId: 'loop-review', agentKind: 'pi', model: 'fixture-model', userIntent: 'Fix the build',
-    verdict: { reason: 'same call', count: 8, toolName: 'bash' },
+    verdict: { reason: 'consecutive', count: 8, toolName: 'bash' },
     evidence: [0, 1, 2].map(i => ({ toolName: 'bash', input: { command: 'make' }, output: 'error: missing header', isError: true, startedAt: i, finishedAt: i + 1 })),
   }, { signal: AbortSignal.timeout(90_000) });
   await fs.rm(chainFile, { force: true });
