@@ -3,6 +3,11 @@ export interface PluginUiTarget { sessionId?: string | null; clientId?: string }
 export interface PluginUiInterest extends PluginUiTarget { instanceId: string; id: string }
 export interface PluginUiControlState { title?: string; value?: string; disabled?: boolean; visible?: boolean }
 export interface PluginUiStateChange { key: string; revision: number; state: PluginUiControlState }
+export interface PluginUiAttachmentResult {
+  handled: boolean;
+  text?: string;
+  files?: { name: string; path: string; size: number; mimeType: string; url?: string }[];
+}
 export const PLUGIN_UI_INTEREST_LIMIT = 512;
 export const PLUGIN_UI_STATE_BATCH_LIMIT = 512;
 export const PLUGIN_UI_REGIONS = ['workspace', 'sidebar', 'header', 'messages', 'composer', 'tools', 'windowControls'] as const;

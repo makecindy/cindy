@@ -8250,7 +8250,91 @@
         "mcpAppOnly": "ページ専用",
         "uiPageAccess": "ページ：{{pages}}、ドメイン：{{domains}}、ページから呼び出せるツール：{{tools}}",
         "uiHost": "Cindy に画面とホスト操作を追加",
-        "uiHostAccess": "{{subject}}: {{access}}"
+        "uiHostAccess": "{{subject}}: {{access}}",
+        "hostUi": {
+          "view": "リソース「{{name}}」で{{scope}}ページを表示する",
+          "resource": "{{kind}}リソース「{{name}}」を使用する",
+          "contribution": "{{position}}に{{kind}}を表示する",
+          "command": "プラグインのコマンドを提供する",
+          "namedAccess": "「{{name}}」：{{details}}",
+          "setting": "設定項目を提供（{{type}}）",
+          "settingTypes": {
+            "boolean": "オン／オフ",
+            "string": "テキスト",
+            "number": "数値"
+          },
+          "minimum": "最小値：{{value}}",
+          "maximum": "最大値：{{value}}",
+          "maxLength": "最大文字数：{{value}}",
+          "extensions": "許可する拡張子：{{value}}",
+          "mimeTypes": "許可するファイル形式：{{value}}",
+          "trigger": "補完の開始文字：{{value}}",
+          "openView": "ページ「{{name}}」を開く",
+          "tool": "ツール「{{name}}」を実行する",
+          "arguments": "パラメーター：{{value}}",
+          "listValue": "リスト [{{value}}]",
+          "fieldsValue": "項目 ({{value}})",
+          "nullValue": "値なし",
+          "shortcut": "ショートカット：{{value}}",
+          "popover": "入口の横にページを開く",
+          "roles": "対象のメッセージ送信者：{{value}}",
+          "tools": "対象のツール：{{value}}",
+          "plugins": "対象のプラグイン：{{value}}",
+          "options": "選択できる値：{{value}}",
+          "yes": "はい",
+          "no": "いいえ",
+          "unavailable": "この権限の詳細を表示できません",
+          "capabilities": {
+            "context": "現在のタスクと選択したテキストを読み取る",
+            "draft": "入力欄の下書きを読み書きする",
+            "appearance": "宣言された外観設定を変更する",
+            "visibility": "ウィンドウと宣言された画面領域を表示・非表示にする"
+          },
+          "fields": {
+            "uiFont": "画面のフォントを変更する",
+            "codeFont": "コードのフォントを変更する",
+            "bodyFont": "本文のフォントを変更する",
+            "wallpaper": "壁紙を変更する",
+            "theme": "メッセージの配色を変更する",
+            "reading": "本文の幅と行間を変更する",
+            "contentStyle": "メッセージの間隔と吹き出しを変更する"
+          },
+          "positions": {
+            "composer_toolbar": "入力欄のツールバー",
+            "session_header": "タスクのヘッダー",
+            "statusbar": "ステータスバー",
+            "message_actions": "メッセージの操作バー",
+            "message_menu": "メッセージのその他メニュー",
+            "turn_footer": "返信の下部",
+            "message_body": "メッセージの本文",
+            "tool_body": "ツールの結果",
+            "sidebar_navigation": "サイドバーナビゲーション",
+            "session_menu": "タスクメニュー",
+            "settings_section": "設定ページ",
+            "composer_completion": "入力補完",
+            "composer_attachment": "添付ファイルの操作",
+            "sidebar_section": "サイドバーのコンテンツ",
+            "window_titlebar": "ウィンドウのタイトルバー"
+          },
+          "kinds": {
+            "button": "ボタン",
+            "select": "選択リスト",
+            "status": "状態テキスト"
+          },
+          "scopes": {
+            "global": "グローバル",
+            "task": "現在のタスクの"
+          },
+          "resources": {
+            "font": "フォント",
+            "image": "画像",
+            "video": "動画"
+          },
+          "speakers": {
+            "user": "ユーザー",
+            "assistant": "アシスタント"
+          }
+        }
       },
       "connections": {
         "confirmTitle": "接続先の追加",
@@ -11138,7 +11222,8 @@
         "capability": {
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} のツールは実行されませんでした。グループの許可が失効しているか、この操作が許可されていません。仲間の所有者がこのグループで改めて依頼してください。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}} のグループでの許可を確認できず、ツールは実行されませんでした。接続が回復してから再試行してください。",
-          "ATTACHMENTS_UNAVAILABLE": "ダウンロードの失敗または添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。"
+          "ATTACHMENTS_UNAVAILABLE": "ダウンロードの失敗または添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}} さん、Cindy に代わりに作業してもらうには、あなたの Cindy を接続してください（現在オンラインの Cindy がありません）。"
         }
       },
       "settings": {
@@ -11263,6 +11348,38 @@
           "failed": "失敗",
           "cancelled": "キャンセル済み",
           "timed-out": "タイムアウト"
+        },
+        "label": "タスク",
+        "untitled": "無題のタスク",
+        "askedBy": "{{requester}} の依頼",
+        "pr": "PR #{{number}}",
+        "open": "タスク「{{title}}」を開く",
+        "live": {
+          "running": "進行中",
+          "waiting": "返信待ち",
+          "idle": "待機中",
+          "failed": "エラー"
+        },
+        "othersSaid": "スレッドでの他の人の発言"
+      },
+      "assistant": {
+        "groupRecent": "グループの最近のメッセージ",
+        "groupNew": "グループの新しいメッセージ",
+        "threadRecent": "スレッドの最近のメッセージ",
+        "threadNew": "スレッドの新しいメッセージ",
+        "replyingTo": "「{{name}}」への返信：{{text}}",
+        "earlierOmitted": "（それ以前のメッセージは省略）",
+        "actingFor": "{{name}} · {{person}} の代わり",
+        "checkout": {
+          "gitMissing": "（Cindy）このグループのプロジェクト {{repo}} はまだこのコンピュータにありません：git がインストールされていません。{{guide}}インストール後にもう一度 @Cindy すると、Cindy がプロジェクトをダウンロードしてその中で作業します。",
+          "signInOpened": "（Cindy）このグループのプロジェクト {{repo}} はまだこのコンピュータにありません：先に GitHub アカウントを接続してください。Cindy がこのコンピュータで GitHub のサインインを開きました。サインイン後にもう一度 @Cindy すると、プロジェクトを自動でダウンロードします。",
+          "signIn": "（Cindy）このグループのプロジェクト {{repo}} はまだこのコンピュータにありません：先に GitHub アカウントを接続してください。このコンピュータの Cindy で GitHub にサインインしてから、もう一度 @Cindy してください。",
+          "unavailable": "（Cindy）このグループのプロジェクト {{repo}} をこのコンピュータにダウンロードできませんでした：GitHub アカウントにこのリポジトリの権限がないか、ネットワークに接続できません。GitHub でリポジトリを開けることを確認してから、もう一度 @Cindy してください。",
+          "installGit": {
+            "darwin": "「ターミナル」で xcode-select --install を実行し、案内に従ってインストールしてください。",
+            "win32": "https://git-scm.com/download/win から Git をダウンロードし、既定の設定でインストールしてください。",
+            "linux": "システムのパッケージマネージャーで git をインストールしてください（例：sudo apt install git）。"
+          }
         }
       },
       "files": {
@@ -11466,10 +11583,21 @@
           "accessTools": "ツールと情報を利用可",
           "replies": "仲間の返信",
           "replyModeMentionedNote": "@ されない限り、仲間は返信しません。",
+          "assistant": "グループの Cindy",
+          "assistantHint": "@ した人のパソコンで動きます。",
+          "replyModeAssistant": "Cindy が返信",
+          "replyModeAssistantNote": "グループの Cindy が返信します。",
           "work": "役割分担",
           "ownFolder": "グループ専用フォルダ",
-          "projectDirHint": "役割分担のとき、仲間がここで作業します。",
+          "projectDirHint": "このコンピュータでのみ有効です。",
           "projectDirClearHint": "グループ専用フォルダに戻します",
+          "project": "プロジェクト",
+          "projectCaption": "仲間はグループでの返信も役割分担もこのプロジェクトで行います。リポジトリはグループで共有され、フォルダはこのコンピュータにだけ保存されます。",
+          "githubRepo": "GitHub リポジトリ",
+          "githubRepoHint": "owner/name の形式で入力します。フォルダを選んでいないコンピュータは、自分の中のこのプロジェクトを使い、なければダウンロードします。",
+          "githubRepoSaveFailed": "リポジトリを保存できませんでした。確認してもう一度お試しください。",
+          "projectFolder": "このコンピュータのフォルダ",
+          "projectDirAutoHint": "リポジトリから自動で見つけたプロジェクトです。",
           "organizerHint": "誰がどのステップを担当するかを決めます。既定は最初の仲間です。",
           "autoContinueHint": "オフのときは、各ステップで「続ける」を押すまで待ちます。",
           "workCaption": "git プロジェクトを選ぶと、役割分担ごとに新しいブランチを作るので手元のコードには触れません。プロジェクトフォルダと自動の引き継ぎは、このコンピュータでのみ有効です。",
@@ -11779,6 +11907,8 @@
       "takeOverConflict": "{{name}} はすでに「{{device}}」に移っています",
       "takeOverOffline": "サーバーに接続できないため、今はこのパソコンで続けられません",
       "takeOverFailed": "このパソコンで {{name}} を引き継げませんでした",
+      "profileIdentityTooLong": "クラウドの人格情報が {{limit}} 文字を超えているため、引き継げません。内容を短くして同期した後、再試行してください。既存のデータは保持されています。",
+      "profileUserTooLong": "クラウドのユーザー情報が {{limit}} 文字を超えているため、引き継げません。内容を短くして同期した後、再試行してください。既存のデータは保持されています。",
       "localCindyConflict": "引き継ぎ先のコンピューターには別の Cindy がいます。その Cindy の設定で管理するか、別のメインコンピューターを選んでください",
       "localCindyConflictAction": "このコンピューターの Cindy の設定を開く",
       "notEnabled": "このサーバーはメインのパソコンの変更に対応していません",
@@ -11845,7 +11975,20 @@
       "transferred": "{{name}} を「{{device}}」に移しました",
       "transferConflict": "{{name}} のメインのパソコンはすでに変わっているため、移しませんでした",
       "transferOffline": "サーバーに接続できません。{{name}} は引き続きこのパソコンで動作します",
-      "transferFailed": "{{name}} を「{{device}}」に移せませんでした"
+      "transferFailed": "{{name}} を「{{device}}」に移せませんでした",
+      "repair": {
+        "action": "資料を編集して再試行",
+        "title": "仲間の資料を修正",
+        "description": "保存すると、このコンピューターで仲間を復元します。元の資料は先にこのコンピューターにバックアップされます。",
+        "save": "保存して復元",
+        "count": "{{count}} / {{limit}} 文字",
+        "over": "{{count}} 文字超過しています。短くしてから保存してください。",
+        "changed": "資料またはメインコンピューターが変更されました。再読み込みして修正してください。",
+        "loadFailed": "資料を読み込めませんでした。再試行してください。",
+        "backupFailed": "元の資料をバックアップできず、修正は適用されていません。ディスクの空き容量を確認して再試行してください。",
+        "saveFailed": "仲間はまだ復元されていません。編集内容はここに残っています。再試行してください。",
+        "reload": "再読み込み"
+      }
     },
     "market": {
       "heading": "仲間を探す",
@@ -14215,6 +14358,8 @@
       "sessionSentNamed": "セッション「{{name}}」から送信",
       "sessionViewSource": "送信元のセッションを表示",
       "botSentNamed": "仲間「{{name}}」から送信",
+      "groupThreadSent": "「{{name}}」がグループチャット「{{group}}」のスレッドから送信",
+      "groupRequestSent": "グループ「{{group}}」から · {{name}}",
       "orcaFromLead": "Lead からのメッセージ",
       "orcaFromWorker": "Worker からのメッセージ",
       "orcaFromWorkerBatch": "システムから報告された {{count}} 件の Worker 結果",
@@ -17635,6 +17780,7 @@
       "dingtalkBotDisconnectFailed": "DingTalk ボットの連携解除に失敗しました"
     },
     "errors": {
+      "piStartupCloudFile": "クラウド上にのみある指示ファイルが Pi の起動を遅らせている可能性があります：{{path}}。Finder でこのファイルをダウンロードし、ローカルで利用できることを確認してから再試行してください。タイムアウトには別の原因がある可能性もあります。",
       "openFileFailed": "システムでファイルを開けません",
       "emptyResponse": "モデルから内容が返りませんでした。再試行してください。文脈が長い場合は、モデルを変えてみてください。",
       "turnFailed": "タスクの実行に失敗しました（モデルからエラーの詳細が返されませんでした）。再試行してください。",
@@ -19552,6 +19698,11 @@
     }
   },
   "pluginUi": {
+    "settings": "プラグイン設定",
+    "save": "保存",
+    "settingsFailed": "プラグイン設定を読み込むか保存できませんでした。このページを開き直してください。",
+    "invalidSetting": "強調表示された値が許容範囲内か確認してください。",
+    "attachmentFailed": "プラグインで「{{name}}」を処理できませんでした。元の添付ファイルは保持されます。",
     "display": "表示方法",
     "original": "元の表示",
     "menu": "プラグインのビューとコマンド",

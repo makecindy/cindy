@@ -8221,6 +8221,90 @@
         "uiPageAccess": "頁面：{{pages}}；網域：{{domains}}；頁面可召之工具：{{tools}}",
         "uiHost": "於 Cindy 提供介面及宿主操作",
         "uiHostAccess": "{{subject}}：{{access}}",
+        "hostUi": {
+          "view": "顯示{{scope}}頁面，使用資源「{{name}}」",
+          "resource": "使用{{kind}}資源「{{name}}」",
+          "contribution": "在{{position}}顯示{{kind}}",
+          "command": "提供法器命令",
+          "namedAccess": "「{{name}}」：{{details}}",
+          "setting": "提供設定項（{{type}}）",
+          "settingTypes": {
+            "boolean": "開關",
+            "string": "文字",
+            "number": "數字"
+          },
+          "minimum": "最小值：{{value}}",
+          "maximum": "最大值：{{value}}",
+          "maxLength": "最多字元數：{{value}}",
+          "extensions": "接受的副檔名：{{value}}",
+          "mimeTypes": "接受的檔案類型：{{value}}",
+          "trigger": "補全觸發字元：{{value}}",
+          "openView": "開啟頁面「{{name}}」",
+          "tool": "呼叫工具「{{name}}」",
+          "arguments": "參數：{{value}}",
+          "listValue": "清單 [{{value}}]",
+          "fieldsValue": "欄位 ({{value}})",
+          "nullValue": "未設定",
+          "shortcut": "快捷鍵：{{value}}",
+          "popover": "在入口旁開啟頁面",
+          "roles": "適用訊息來源：{{value}}",
+          "tools": "適用工具：{{value}}",
+          "plugins": "適用法器：{{value}}",
+          "options": "可選值：{{value}}",
+          "yes": "是",
+          "no": "否",
+          "unavailable": "暫時無法顯示這項權限的詳情",
+          "capabilities": {
+            "context": "讀取目前任務與選取文字",
+            "draft": "讀寫輸入框草稿",
+            "appearance": "修改已宣告的外觀設定",
+            "visibility": "顯示或隱藏視窗與已宣告的介面區域"
+          },
+          "fields": {
+            "uiFont": "修改介面字型",
+            "codeFont": "修改程式碼字型",
+            "bodyFont": "修改正文字型",
+            "wallpaper": "修改桌布",
+            "theme": "修改訊息配色",
+            "reading": "修改閱讀寬度與行距",
+            "contentStyle": "修改訊息間距與氣泡樣式"
+          },
+          "positions": {
+            "composer_toolbar": "輸入框工具列",
+            "session_header": "任務標題列",
+            "statusbar": "狀態列",
+            "message_actions": "訊息操作列",
+            "message_menu": "訊息更多選單",
+            "turn_footer": "回覆底部",
+            "message_body": "訊息正文",
+            "tool_body": "工具結果",
+            "sidebar_navigation": "側邊導覽列",
+            "session_menu": "任務選單",
+            "settings_section": "設定頁面",
+            "composer_completion": "輸入補全入口",
+            "composer_attachment": "附件操作區",
+            "sidebar_section": "側欄內容區",
+            "window_titlebar": "視窗標題列"
+          },
+          "kinds": {
+            "button": "按鈕",
+            "select": "下拉選項",
+            "status": "狀態文字"
+          },
+          "scopes": {
+            "global": "全域",
+            "task": "目前任務"
+          },
+          "resources": {
+            "font": "字型",
+            "image": "圖片",
+            "video": "影片"
+          },
+          "speakers": {
+            "user": "使用者",
+            "assistant": "助手"
+          }
+        },
         "subscribeRoutineRun": "可於君所擇之同伴例行差事運行前行檢",
         "subscribeRoutineRunDetail": "凡於「預檢」擇之之例行差事，每番觸發必先詢之。其可見差事之指令与觸發事件之內容，可令此番略過或止之，不能代君准允。",
         "subscribeScheduleRun": "可於君所擇之自動化運行前行檢",
@@ -11138,7 +11222,8 @@
         "capability": {
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
-          "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。"
+          "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。",
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，連君之 Cindy，而後 Cindy 可代君行事（君之電腦今無在線之 Cindy）。"
         }
       },
       "settings": {
@@ -11263,6 +11348,38 @@
           "failed": "未成",
           "cancelled": "已罷",
           "timed-out": "逾時矣"
+        },
+        "label": "事",
+        "untitled": "無題之事",
+        "askedBy": "{{requester}} 所託",
+        "pr": "PR #{{number}}",
+        "open": "啟「{{title}}」之事",
+        "live": {
+          "running": "方行",
+          "waiting": "待復",
+          "idle": "閒",
+          "failed": "有誤"
+        },
+        "othersSaid": "話題中他人之言"
+      },
+      "assistant": {
+        "groupRecent": "群中近言",
+        "groupNew": "群中新言",
+        "threadRecent": "話題近言",
+        "threadNew": "話題新言",
+        "replyingTo": "答「{{name}}」：{{text}}",
+        "earlierOmitted": "（更早之言略之）",
+        "actingFor": "{{name}} · 代 {{person}}",
+        "checkout": {
+          "gitMissing": "（Cindy）此群之項目 {{repo}} 未至此機：此機未裝 git。{{guide}}裝畢，再 @Cindy，Cindy 自取項目而治之。",
+          "signInOpened": "（Cindy）此群之項目 {{repo}} 未至此機：須先連君之 GitHub。Cindy 已於此機啟 GitHub 登入，登畢再 @Cindy，Cindy 自取項目。",
+          "signIn": "（Cindy）此群之項目 {{repo}} 未至此機：須先連君之 GitHub。請於此機之 Cindy 登 GitHub，而後再 @Cindy。",
+          "unavailable": "（Cindy）此群之項目 {{repo}} 未能取至此機：君之 GitHub 或無此庫之權，或網路不通。能於 GitHub 啟此庫，再 @Cindy。",
+          "installGit": {
+            "darwin": "於「終端機」行 xcode-select --install，循其示而裝。",
+            "win32": "自 https://git-scm.com/download/win 取 Git 而裝，皆從其預設。",
+            "linux": "以系統之套件管理裝 git（如 sudo apt install git）。"
+          }
         }
       },
       "files": {
@@ -11455,10 +11572,21 @@
           "accessTools": "可用器與資",
           "replies": "同伴如何接話",
           "replyModeMentionedNote": "不 @ 人時，同伴不接話。",
+          "assistant": "群中 Cindy",
+          "assistantHint": "誰 @ 之，即於其人之電腦行事。",
+          "replyModeAssistant": "Cindy 答之",
+          "replyModeAssistantNote": "群中 Cindy 答之。",
           "work": "分職",
           "ownFolder": "群自有之卷匣",
-          "projectDirHint": "分工時，同伴於此勞作。",
+          "projectDirHint": "唯此機有效。",
           "projectDirClearHint": "改用群自有之卷匣",
+          "project": "案",
+          "projectCaption": "同僚於群中應答、分工，皆於此案行之。庫為全群所共，資料夾唯存此機。",
+          "githubRepo": "GitHub 庫",
+          "githubRepoHint": "書 owner/name。未擇資料夾之機，用本機此案；無之，則自取一份。",
+          "githubRepoSaveFailed": "庫未存，請察而再試。",
+          "projectFolder": "此機之資料夾",
+          "projectDirAutoHint": "依庫自尋之本機案。",
           "organizerHint": "排定誰行何步；預設為首位同伴。",
           "autoContinueHint": "停之，則每步皆候君點「續」。",
           "workCaption": "擇 git 專案時，每次分工皆開新分支，不動君手中之程式碼。案之卷匣與自動交接僅於此機生效。",
@@ -11779,6 +11907,8 @@
       "takeOverConflict": "{{name}} 已移至「{{device}}」續行",
       "takeOverOffline": "連不上伺服器，暫不能於此機續之",
       "takeOverFailed": "未能於此機接手 {{name}}",
+      "profileIdentityTooLong": "雲端人格資料逾 {{limit}} 字元，未能接手。請縮短資料並同步後再試；原有資料皆存。",
+      "profileUserTooLong": "雲端使用者資料逾 {{limit}} 字元，未能接手。請縮短資料並同步後再試；原有資料皆存。",
       "localCindyConflict": "接手之機已有另一 Cindy。請於其設定中處置，或另擇主力電腦",
       "localCindyConflictAction": "查看本機 Cindy 設定",
       "notEnabled": "今之伺服器不支援更換主機",
@@ -11845,7 +11975,20 @@
       "transferred": "{{name}} 已交予「{{device}}」",
       "transferConflict": "{{name}} 之主機已變，此番未交",
       "transferOffline": "連不上伺服器，{{name}} 仍行於此機",
-      "transferFailed": "未能將 {{name}} 交予「{{device}}」"
+      "transferFailed": "未能將 {{name}} 交予「{{device}}」",
+      "repair": {
+        "action": "改資料再試",
+        "title": "更正夥伴資料",
+        "description": "存後於此機恢復夥伴，原資料先備份於此。",
+        "save": "存並恢復",
+        "count": "{{count}} / {{limit}} 字",
+        "over": "超 {{count}} 字，請刪簡後存。",
+        "changed": "資料或主力電腦已變，請重讀後更正。",
+        "loadFailed": "資料暫不可讀，請再試。",
+        "backupFailed": "原資料備份未成，更正未用。請查磁碟餘量後再試。",
+        "saveFailed": "夥伴未恢復，所改仍存於此，請稍後再試。",
+        "reload": "重新讀取"
+      }
     },
     "market": {
       "heading": "訪同伴",
@@ -14206,6 +14349,8 @@
       "sessionSentNamed": "差事「{{name}}」所遣",
       "sessionViewSource": "觀來源差事",
       "botSentNamed": "同伴「{{name}}」所遣",
+      "groupThreadSent": "「{{name}}」於群聊「{{group}}」之話題所遣",
+      "groupRequestSent": "自群「{{group}}」· {{name}}",
       "orcaFromLead": "Lead 之訊",
       "orcaFromWorker": "Worker 之訊",
       "orcaFromWorkerBatch": "系統所報 Worker 結果凡 {{count}}",
@@ -17635,6 +17780,7 @@
       "dingtalkBotDisconnectFailed": "釘釘機器人解綁未成"
     },
     "errors": {
+      "piStartupCloudFile": "發現僅在雲端的指令檔案：{{path}}。它可能使 Pi 啟動等待。請在 Finder 中下載該檔案，確認已儲存在本機後重試；逾時也可能另有原因。",
       "openFileFailed": "無從於系統中啟此卷",
       "emptyResponse": "模型無所答。請再試；上下文甚長者，亦可易一模型。",
       "turnFailed": "差事行之未成（模型未報謬誤詳情），請再試。",
@@ -19552,6 +19698,11 @@
     }
   },
   "pluginUi": {
+    "settings": "法器設定",
+    "save": "存定",
+    "settingsFailed": "法器設定未能讀取或存定，請重開此頁。",
+    "invalidSetting": "請核所標之值，勿逾允限。",
+    "attachmentFailed": "法器未能處理「{{name}}」，原附件仍存。",
     "display": "示法",
     "original": "原文",
     "menu": "法器頁面與指令",
