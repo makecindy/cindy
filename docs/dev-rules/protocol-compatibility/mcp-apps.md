@@ -104,3 +104,19 @@ fingerprint，须遵守 [冷更边界](../mobile-development.md#原生配置与-
 实现：mcp-apps/viewState.ts、viewStateStore.ts、host.ts、service.ts；DB事务在
 localDb/worker/opHandlers/mcpAppViewState.ts，由文件worker与inline worker共用。
 回归：viewState.test.ts及localDb/client的tx.test.ts，覆盖回执、合并、读取失败、恢复与删除。
+
+## 内置页面状态辅助模块
+
+临时 `McpAppDocument.sdk` 新增可选 `addons['cindy/view-state']: { source, reactSource }`，
+由执行端提供固定的两个 ESM 模块；不改变官方 `sdk.source`，不写卡片、不改状态 RPC。
+新 Desktop/Mobile 查看端将它们按同源固定路径供给，importmap 名称为 `@cindy/ext-apps`、
+`@cindy/ext-apps/react`。作者 exact/prefix/null/scopes 映射保留；不注入 React 或替换官方 SDK。
+远程预算先移除 addons，再沿既有 SDK/HTML 预算降级；坏 addons 元数据不丢原 SDK。
+旧查看端忽略 addons，旧执行端不提供 addons；模块缺失时页面用动态 import catch 保持本地 UI。
+模块存在仍须按初始化能力保存，读失败未声明能力时不写。隐藏后停止计时器与新请求。
+
+沿用既有 open/invoke-result 业务 payload 和 invokeTransfer 压缩，不改 device-link 顶层字段、
+allowlist、签名或 relay 解析。官方和自建中转均透明转发既有加密消息，无新增中转适配；
+服务端不参与模块解析。执行端与查看端可独立升级，完整模块使用需要双方支持。
+Mobile 只增加现有原生 startApp manifest 的两个 JS 文件和共享 importmap，原生 API 不变；
+发版判断仍以同环境 fingerprint 对比为准。PAGE-GENERATION 的 CDN 随对应客户端发版更新。
