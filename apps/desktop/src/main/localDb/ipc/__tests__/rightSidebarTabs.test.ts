@@ -35,7 +35,7 @@ vi.mock('../../client/current.js', () => ({
   getDbClient: () => ({ drizzle: h.db }),
 }));
 
-import { registerRightSidebarTabsIpc } from '../rightSidebarTabs.js';
+import { registerRightSidebarTabsIpc } from '../rightSidebarTabs.desktop.js';
 import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
 
 function createDb(): Database.Database {

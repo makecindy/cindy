@@ -29,7 +29,7 @@ import {
   getComputerDriverStatus,
   isComputerDriverPermissionProbePaused,
   resumeComputerDriverPermissionProbe,
-} from '../mcp-integrations/computer.js';
+} from '../mcp-integrations/computer.desktop.js';
 import {
   closeComputerUseSwitchLocator,
   locateComputerUseSwitchTarget,

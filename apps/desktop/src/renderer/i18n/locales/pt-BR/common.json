@@ -1926,6 +1926,15 @@
     },
     "remote": {
       "title": "Máquinas remotas",
+      "hostKeyError": {
+        "missing": "A verificação da chave de host SSH não está configurada. Conexão recusada.",
+        "read": "Cindy não conseguiu ler as chaves de host confiáveis: {{reason}}. Conexão recusada.",
+        "write": "Cindy não conseguiu salvar a chave de host confiável: {{reason}}. Conexão recusada.",
+        "mismatch": "A chave de host de {{host}} mudou ({{fingerprint}}) e não corresponde mais à impressão digital em que Cindy confiava. Isso pode significar que o servidor foi reinstalado ou um ataque man-in-the-middle. Conexão recusada.",
+        "file": "Arquivo de chaves de host confiáveis:\n{{filePath}}",
+        "repair": "Cindy não lê ~/.ssh/known_hosts. A impressão digital antiga está armazenada em:\n{{filePath}}\nA chave da entrada é \"{{host}}\".\nSe você confirmou que esta alteração é confiável, feche Cindy, remova apenas esta entrada, mantenha o arquivo e todos os outros hosts e conecte-se novamente. A nova impressão digital será salva na primeira conexão. Não exclua o arquivo inteiro.",
+        "verifyChange": "Confirme a alteração com o administrador do servidor antes de atualizar o registro de chaves de host confiáveis."
+      },
       "footnote": "Fase A: apenas gerenciamento de conexões SSH. A execução de agents na máquina remota chegará em uma atualização futura.",
       "viaAuth": "via {{label}}",
       "readOnlyFromSshConfig": "Os detalhes da conexão vêm da configuração SSH",
@@ -11801,6 +11810,8 @@
       "takeOverConflict": "{{name}} já foi transferido para “{{device}}”",
       "takeOverOffline": "Não foi possível acessar o servidor, então {{name}} não pode continuar aqui agora",
       "takeOverFailed": "Não foi possível assumir {{name}} neste computador",
+      "localCindyConflict": "O computador que assume já tem outra Cindy. Gerencie essa Cindy nas configurações dela ou escolha outro computador principal",
+      "localCindyConflictAction": "Abrir configurações da Cindy local",
       "notEnabled": "Este servidor não permite alterar o computador principal",
       "readOnlyNote": "Esta conversa está salva na nuvem e é somente leitura",
       "empty": "Ainda não há conversa na nuvem",
@@ -19967,12 +19978,6 @@
       "from": "Transferido de “{{name}}”",
       "closeChecklist": "Fechar lista"
     },
-    "suggestion": {
-      "title": "Usar o assistente de migração para transferir de “{{name}}”?",
-      "description": "Você pode configurar este computador com os plugins, habilidades, configurações e conexões do outro. Tudo o que precisar de um novo login ou permissão aqui fica listado para você. Você também pode abri-lo depois em Configurações → Geral → Assistente de migração.",
-      "confirm": "Abrir o assistente de migração",
-      "later": "Agora não"
-    },
     "walkthrough": {
       "progress": "Lista de configuração {{current}} / {{total}}",
       "open": "Abrir",
@@ -19994,6 +19999,103 @@
         "allow": "Permitir",
         "deny": "Recusar"
       }
+    }
+  },
+  "firstRunGuide": {
+    "title": {
+      "new": "Boas-vindas ao Cindy",
+      "returning": "Que bom ter você de volta"
+    },
+    "stepsLabel": "Etapas do guia",
+    "close": "Fechar o guia",
+    "next": "Avançar",
+    "skip": "Pular",
+    "preparing": "Preparando…",
+    "steps": {
+      "legacy": "Dados anteriores",
+      "intro": "Conheça o Cindy",
+      "migration": "Migrar",
+      "models": "Conectar um modelo",
+      "import": "Trazer o que você já tem",
+      "finish": "Concluído"
+    },
+    "legacy": {
+      "title": "Seus dados da versão anterior já estão aqui",
+      "body": "As sessões anteriores, os arquivos de mídia e os logins do navegador do Agent foram movidos para esta versão e estão prontos para uso.",
+      "note": "As chaves e credenciais de terceiros que você autorizou não são movidas com os dados. Autorize ou informe-as novamente nas Configurações."
+    },
+    "intro": {
+      "lead": "O Cindy é o assistente de IA que ajuda você a tornar realidade o que tem em mente.",
+      "work": {
+        "title": "Deixe o trabalho com ele",
+        "body": "Ele trabalha diretamente nas suas pastas e aplicativos, em vez de apenas responder a perguntas."
+      },
+      "connect": {
+        "title": "Use os modelos e as ferramentas que você já tem",
+        "body": "Conecte sua própria assinatura ou chave de API e adicione plugins e Skills quando precisar."
+      },
+      "continue": {
+        "title": "Continue de qualquer lugar",
+        "body": "Pelo celular, inicie, acompanhe e continue as sessões do seu computador."
+      },
+      "start": "Começar",
+      "next": "A seguir"
+    },
+    "migration": {
+      "title": "Traga o Cindy do seu outro computador",
+      "body": "Outro computador da sua conta já está configurado. O Assistente de migração copia os plugins, Skills, configurações e conexões dele para este computador; as chaves só são copiadas depois que você escolher Permitir naquele computador.",
+      "manualBody": "Se você já usou o Cindy em outro computador, o Assistente de migração pode copiar os plugins, Skills, configurações e conexões dele para este computador.",
+      "done": "Migrado de “{{name}}”",
+      "from": "Computador antigo",
+      "to": "Este computador"
+    },
+    "models": {
+      "title": "Dê um modelo ao Cindy",
+      "body": "Você pode usar as duas opções juntas.",
+      "cindy": {
+        "badge": "Serviço oficial",
+        "body": "O serviço de modelos oferecido pelo Cindy. Ele já vem com a sua conta, sem nada para ativar. Contas novas recebem um saldo gratuito para experimentar; depois de pagar, quase todos os modelos ficam disponíveis, e sem pagar a gama de modelos é menor.",
+        "active": "Incluído na sua conta e pronto para usar",
+        "freeBalance": "Valor gratuito de presente: fique à vontade para experimentar"
+      },
+      "own": {
+        "title": "Use seu próprio plano",
+        "badge": "Mais em conta",
+        "body": "Já tem uma assinatura do Claude ou do ChatGPT, ou uma chave de API? Recomendamos muito conectá-la e usá-la junto com o Cindy AI para ter a melhor experiência.",
+        "more": "Outros provedores e chaves de API",
+        "connected": "Conectado"
+      }
+    },
+    "import": {
+      "title": "Traga o que já está neste computador",
+      "body": "Isto é o que o Cindy encontrou em outras ferramentas de IA neste computador. O Cindy apenas lê os originais e nunca os altera.",
+      "empty": "Nada para importar foi encontrado neste computador.",
+      "tasksHeading": "Sessões",
+      "tasksHint": "Selecione ferramentas para trazer as sessões delas para o Cindy e continuar trabalhando.",
+      "pick": "Escolher uma a uma",
+      "started": "A importação começou em segundo plano. Acompanhe o progresso em Configurações → Importação de sessões.",
+      "startFailed": "A importação não começou. Importe novamente em Configurações → Importação de sessões.",
+      "teammatesHeading": "Colegas",
+      "teammatesHint": "Importe um Agent de outra ferramenta como colega, com a memória, as Skills e as automações dele.",
+      "importTeammate": "Importar como colega"
+    },
+    "finish": {
+      "title": "Tudo pronto",
+      "legacy": "Os dados da versão anterior foram movidos para esta versão",
+      "modelReady": "Há um modelo conectado",
+      "modelMissing": "Nenhum modelo está conectado ainda. Você pode conectar um quando iniciar uma sessão.",
+      "importStarted": "As sessões de outras ferramentas estão sendo importadas em segundo plano",
+      "native": "Suas Skills e seus servidores MCP do Claude Code e do Codex funcionam aqui diretamente; não há nada para importar.",
+      "start": "Iniciar sua primeira sessão"
+    },
+    "resume": {
+      "label": "Guia em andamento · {{step}}",
+      "back": "Voltar ao guia"
+    },
+    "settings": {
+      "title": "Guia de introdução",
+      "description": "Veja novamente como conhecer o Cindy, migrar de outro computador, conectar um modelo e trazer o que você já tem.",
+      "open": "Abrir o guia"
     }
   },
   "forwardedRequest": {
