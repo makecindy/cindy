@@ -966,6 +966,13 @@ describe('被控端控制链路生命周期', () => {
         expect.objectContaining({ id: 'openai', remoteInvocationEnabled: true, runningTurns: 2 }),
       ]);
       expect(listed.result.providers[0]).toMatchObject({ id: 'anthropic', remoteInvocationEnabled: false });
+      // PR #10150 review: a computer whose 「用本机模型」 is off stays refused for a grouped provider opened one by one.
+      registry.register('maker:provider:list', () => ({
+        providers: [{ id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: true }],
+      }));
+      ownComputers = false;
+      expect(await runInvoke('ctrl-no-models', { channel: 'maker:provider:list', args: [] }))
+        .toMatchObject({ ok: true, result: { providers: [{ id: 'anthropic', remoteInvocationEnabled: false }] } });
     } finally { setRemoteAgentHandler(null); setProviderGroupRemoteHandler(null); }
   });
 

@@ -4810,7 +4810,8 @@ function projectOwnComputerModelUse(src: string, result: unknown): unknown {
 
 /**
  * 本机建了供应商组的供应商不随「让我的其他电脑用本机模型」打开(组内选电脑仍按逐个供应商的开关，见
- * remote-agent host 的 ownComputersMayUse)：补完组摘要后，把这类供应商还原成原来的标记与运行数。
+ * remote-agent host 的 ownComputersMayUse)：补完组摘要后，把只因新开关而打开的这类供应商还原成原来的
+ * 标记与运行数。逐台撤权得到的不可用不在此还原。
  */
 function restoreGroupedOwnComputerModelUse(original: unknown, decorated: unknown): unknown {
   const before = new Map<string, ProviderEntry>();
@@ -4819,9 +4820,10 @@ function restoreGroupedOwnComputerModelUse(original: unknown, decorated: unknown
     return entry;
   });
   return mapProviderEntries(decorated, (entry) => {
-    if (!entry.group || typeof entry.id !== 'string') return entry;
+    // 只撤回新开关带来的打开；逐台关掉「用本机模型」得到的不可用一律保留。
+    if (!entry.group || typeof entry.id !== 'string' || entry.remoteInvocationEnabled !== true) return entry;
     const previous = before.get(entry.id);
-    if (!previous || previous.remoteInvocationEnabled === entry.remoteInvocationEnabled) return entry;
+    if (!previous || previous.remoteInvocationEnabled === true) return entry;
     const restored: ProviderEntry = { ...entry, remoteInvocationEnabled: previous.remoteInvocationEnabled };
     if (previous.remoteInvocationEnabled !== true) delete restored[PROVIDER_RUNNING_TURNS_FIELD];
     return restored;
