@@ -56,6 +56,7 @@ export const APP_SHORTCUT_IDS = [
   'browser-reload',
   'cycle-permission-mode',
   'region-screenshot',
+  'away-guard',
   'switch-session-1',
   'switch-session-2',
   'switch-session-3',
@@ -201,6 +202,16 @@ export const APP_SHORTCUT_DEFINITIONS: ReadonlyArray<AppShortcutDefinition> = [
       platform === 'darwin'
         ? [combo('KeyA', { ctrl: true, shift: true })]
         : [combo('KeyA', { alt: true, shift: true })],
+  },
+  {
+    id: 'away-guard',
+    scope: 'global',
+    labelKey: 'settings.shortcuts.items.away-guard.label',
+    descriptionKey: 'settings.shortcuts.items.away-guard.description',
+    rebindable: true,
+    platforms: ['darwin'],
+    yieldsToUserBindings: true,
+    getDefaultCombos: () => [combo('KeyL', { ctrl: true, shift: true })],
   },
   {
     id: 'cycle-permission-mode',

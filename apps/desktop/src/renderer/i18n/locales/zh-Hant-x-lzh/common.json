@@ -7394,6 +7394,10 @@
         "globalOccupied": "已為他應用程式所佔，請另擇組合鍵"
       },
       "items": {
+        "away-guard": {
+          "label": "離席續作",
+          "description": "三秒後蔽屏，離席亦可續作。本機有輸入則鎖屏。須 macOS 14 或更新版本。"
+        },
         "region-screenshot": {
           "label": "截圖",
           "description": "於任一應用程式中截圖，可加標註、釘於螢幕，或交 {{appName}} 處置"

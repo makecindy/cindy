@@ -69,6 +69,7 @@ export class AwayGuardController {
   private ownerInputAt: number;
   private retryAt = 0;
   private previewUntil = 0;
+  private manuallyActivated = false;
   private displayAddedWhileShowing = false;
   private ticking = false;
 
@@ -115,8 +116,33 @@ export class AwayGuardController {
     this.deps.log('preview shown');
   }
 
+  /** 主人主动离开：不等待空闲、不受试用时限影响，也不改变自动离开偏好。 */
+  async activate(): Promise<void> {
+    if (this.deps.screenLocked()) return;
+    // 已有试用遮罩时将其转为持续遮罩；重复触发不重建窗口。
+    if (this.mask === 'shown') {
+      this.previewUntil = 0;
+      this.manuallyActivated = true;
+      return;
+    }
+    if (this.mask !== 'none') return;
+    this.beginShowing();
+    try {
+      await this.deps.showMasks();
+    } catch (error) {
+      if ((this.mask as MaskState) === 'showing') this.mask = 'none';
+      this.deps.keepDisplayAwake(false);
+      throw error;
+    }
+    if (!(await this.finishShowing())) return;
+    this.manuallyActivated = true;
+    this.deps.keepDisplayAwake(true);
+    this.deps.log('manual cover shown');
+  }
+
   /** The masks or the helper went away on their own (input lock, window loss). */
   masksEnded(): void {
+    this.manuallyActivated = false;
     this.previewUntil = 0;
     if (this.mask === 'none') return;
     this.mask = 'none';
@@ -163,7 +189,7 @@ export class AwayGuardController {
       this.previewUntil = 0;
       if (this.mask === 'shown') return this.end(false, 'preview ended');
     }
-    if (!deps.enabled()) return this.standDown(true, 'disabled');
+    if (!deps.enabled() && !this.manuallyActivated) return this.standDown(true, 'disabled');
     if (this.mask !== 'none') {
       deps.keepDisplayAwake(this.mask !== 'ending');
       return;
@@ -193,6 +219,7 @@ export class AwayGuardController {
   }
 
   private async standDown(lock: boolean, reason: string): Promise<void> {
+    this.manuallyActivated = false;
     if (this.mask === 'shown' || this.mask === 'showing') {
       if (lock) {
         await this.end(true, reason);
@@ -207,6 +234,7 @@ export class AwayGuardController {
 
   private async end(lock: boolean, reason: string): Promise<void> {
     this.mask = 'ending';
+    this.manuallyActivated = false;
     this.previewUntil = 0;
     try {
       if (lock) await this.deps.lockAndHideMasks();

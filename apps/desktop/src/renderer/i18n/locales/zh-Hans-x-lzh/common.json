@@ -7394,6 +7394,10 @@
         "globalOccupied": "已为他应用程序所占，请另择组合键"
       },
       "items": {
+        "away-guard": {
+          "label": "离席续作",
+          "description": "三秒后蔽屏，离席亦可续作。本机有输入则锁屏。须 macOS 14 或更新版本。"
+        },
         "region-screenshot": {
           "label": "截图",
           "description": "于任一应用程序中截屏，可加标注、钉于屏幕，或交 {{appName}} 处置"

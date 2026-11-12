@@ -205,6 +205,46 @@ describe('AwayGuardController', () => {
     expect(state.awake).toBe(false);
   });
 
+  // 主动离开必须持续遮屏，不能复用两分钟后会露出桌面的试用路径。
+  it('manually covers with auto-away off until the owner returns, without changing the preference', async () => {
+    const { state, guard, away } = setup();
+    state.enabled = false;
+    await guard.activate();
+    await guard.activate();
+    await away(AWAY_GUARD_PREVIEW_MS * 3);
+    expect(state.events).toEqual(['show']);
+    expect(state.awake).toBe(true);
+    expect(state.enabled).toBe(false);
+    guard.masksEnded();
+    await guard.tick();
+    expect(state.awake).toBe(false);
+    expect(guard.masked).toBe(false);
+  });
+
+  it('does not manually cover a locked screen and releases the display if covering fails', async () => {
+    const { state, guard } = setup();
+    state.locked = true;
+    await guard.activate();
+    expect(state.events).toEqual([]);
+    state.locked = false;
+    state.showFails = true;
+    await expect(guard.activate()).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE');
+    expect(state.awake).toBe(false);
+    expect(guard.masked).toBe(false);
+  });
+
+  it('locks a manual cover when a display is added and does not re-cover with auto-away off', async () => {
+    const { state, guard, away } = setup();
+    state.enabled = false;
+    await guard.activate();
+    await guard.displaysChanged();
+    expect(state.events).toEqual(['show', 'lock']);
+    state.locked = false;
+    await away(AWAY_MS * 3);
+    expect(guard.masked).toBe(false);
+    expect(state.awake).toBe(false);
+  });
+
   it('reads this user\'s lock state from the console session list', () => {
     const user = (uid: number, extra: string) =>
       `{"kCGSSessionOnConsoleKey"=Yes,"kCGSSessionUserIDKey"=${uid}${extra}}`;
