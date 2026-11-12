@@ -431,7 +431,7 @@ function markdownBlockParts(
           : taskMarker
         : block.marker;
       return [
-        { text: `${marker} ` },
+        { text: `${"\u2003".repeat(block.depth ?? 0)}${marker} ` },
         ...markdownInlineParts(block.inlines, images),
       ];
     }

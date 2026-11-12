@@ -62,7 +62,7 @@ export type MobileMarkdownBlock =
   | { type: 'paragraph'; key: string; srcLine?: number; inlines: MobileMarkdownInline[] }
   | { type: 'heading'; key: string; srcLine?: number; level: number; inlines: MobileMarkdownInline[] }
   | { type: 'blockquote'; key: string; srcLine?: number; inlines: MobileMarkdownInline[] }
-  | { type: 'list_item'; key: string; srcLine?: number; ordered: boolean; marker: string; checked?: boolean; inlines: MobileMarkdownInline[] }
+  | { type: 'list_item'; key: string; srcLine?: number; ordered: boolean; marker: string; depth?: number; checked?: boolean; inlines: MobileMarkdownInline[] }
   | { type: 'table'; key: string; srcLine?: number; header: MobileMarkdownInline[][]; rows: MobileMarkdownTableRow[] }
   | { type: 'mermaid'; key: string; srcLine?: number; text: string }
   // display LaTeX 公式块($$ 围栏,text 为 LaTeX 源码)。渲染走 WebView KaTeX
@@ -92,6 +92,8 @@ export interface ParseMobileMarkdownOptions {
   blockIndexOffset?: number;
   charOffset?: number;
   sourceIsNormalized?: boolean;
+  /** List indentation context when parsing an append-only suffix. */
+  listIndents?: readonly number[];
   /** Previous committed parse, used only for immutable paragraph inline prefixes. */
   previous?: MobileMarkdownParseResult;
 }
@@ -108,6 +110,7 @@ export interface MobileMarkdownParseCheckpoint {
   lineIndex: number;
   /** Number of blocks already emitted at this boundary. */
   blockCount: number;
+  listIndents?: readonly number[];
 }
 
 export interface MobileMarkdownParseResult {
@@ -218,10 +221,12 @@ export function parseMobileMarkdownDocument(
     if (snapshot) previousParagraphs.set(options!.previous!.ranges[index].startLine, snapshot);
   });
   let reusedInlineUtf16Length = 0;
+  const listIndents = [...(options?.listIndents ?? [])];
   const checkpoints: MobileMarkdownParseCheckpoint[] = [{
     charOffset,
     lineIndex: lineOffset,
     blockCount: blockIndexOffset,
+    ...(listIndents.length ? { listIndents: [...listIndents] } : {}),
   }];
   const lineNumber = (index: number) => lineOffset + index;
   const blockNumber = () => blockIndexOffset + blocks.length;
@@ -240,6 +245,7 @@ export function parseMobileMarkdownDocument(
     startLine: number,
     endLineExclusive: number,
   ): void => {
+    if (block.type !== 'list_item') listIndents.length = 0;
     blocks.push(block);
     ranges.push({
       startLine: lineNumber(startLine),
@@ -301,6 +307,7 @@ export function parseMobileMarkdownDocument(
           charOffset: lineEndOffset(index),
           lineIndex: lineNumber(index + 1),
           blockCount: blockNumber(),
+          ...(listIndents.length ? { listIndents: [...listIndents] } : {}),
         });
       } else {
         code.lines.push(stripCodeFenceIndent(line, code.indent));
@@ -321,6 +328,7 @@ export function parseMobileMarkdownDocument(
             charOffset: lineEndOffset(index),
             lineIndex: lineNumber(index + 1),
             blockCount: blockNumber(),
+            ...(listIndents.length ? { listIndents: [...listIndents] } : {}),
           });
         } else {
           // 空围栏($$ 与 $$ 之间无内容):没有可渲染的公式,保持原文段落。
@@ -381,6 +389,7 @@ export function parseMobileMarkdownDocument(
           charOffset: lineEndOffset(index),
           lineIndex: lineNumber(index + 1),
           blockCount: blockNumber(),
+          ...(listIndents.length ? { listIndents: [...listIndents] } : {}),
         });
       }
       continue;
@@ -461,6 +470,13 @@ export function parseMobileMarkdownDocument(
     const list = line.match(/^(\s*)([-*]|\d+[.)])\s+(.+)$/);
     if (list) {
       flushParagraph(index);
+      // Use observed indentation levels rather than assuming two/four spaces:
+      // both conventions (and tab stops) must yield the same parent/sibling tree.
+      let indent = 0;
+      for (const character of list[1]) indent += character === '\t' ? 4 - indent % 4 : 1;
+      while (listIndents.length && listIndents[listIndents.length - 1] > indent) listIndents.pop();
+      if (listIndents.at(-1) !== indent) listIndents.push(indent);
+      const depth = listIndents.length - 1;
       const marker = list[2];
       const task = list[3].match(/^\[([ xX])\]\s+(.+)$/);
       pushBlock({
@@ -469,6 +485,7 @@ export function parseMobileMarkdownDocument(
         ...(withSrc ? { srcLine: lineNumber(index) } : {}),
         ordered: /^\d/.test(marker),
         marker,
+        ...(depth ? { depth } : {}),
         checked: task ? task[1].toLowerCase() === 'x' : undefined,
         inlines: parseMobileMarkdownInlines(task ? task[2] : list[3], lineStartsInComment),
       }, index, index + 1);
@@ -574,6 +591,7 @@ export function parseMobileMarkdownIncremental(
     suffix,
     {
       sourceIsNormalized: true,
+      listIndents: checkpoint.listIndents,
       lineOffset: checkpoint.lineIndex,
       blockIndexOffset: checkpoint.blockCount,
       charOffset: suffixCharOffset,
@@ -961,9 +979,12 @@ function mobileMarkdownTextRunBlockPrefixLength(block: MobileMarkdownTextRunBloc
   return mobileMarkdownListMarkerText(block).length;
 }
 
-function mobileMarkdownListMarkerText(block: Extract<MobileMarkdownTextRunBlock, { type: 'list_item' }>): string {
-  if (typeof block.checked === 'boolean') return block.checked ? '☑ ' : '☐ ';
-  return block.ordered ? `${block.marker} ` : '• ';
+/** Exact visible prefix shared by native rendering and UTF-16 run budgets. */
+export function mobileMarkdownListMarkerText(block: Extract<MobileMarkdownBlock, { type: 'list_item' }>): string {
+  const depth = block.depth ?? 0;
+  const marker = typeof block.checked === 'boolean' ? (block.checked ? '☑' : '☐')
+    : block.ordered ? block.marker : ['•', '◦', '▪'][depth % 3];
+  return `${'\u2003'.repeat(depth)}${marker} `;
 }
 
 function cloneTextRunBlockChunk(

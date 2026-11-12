@@ -420,3 +420,27 @@ vi.mock('expo-sharing', () => ({ shareAsync: vi.fn() }));
 vi.mock('@/session/SheetModal', () => ({ SheetModal: () => null }));
 vi.mock('@/session/PdfDocumentPreview', () => ({ PdfDocumentPreview: () => null }));
 vi.mock('@/session/ModelDocumentPreview', () => ({ ModelDocumentPreview: () => null }));
+
+// #8603 / unit: mount the real MarkdownBody on native host substitutes. The
+// parser-only tests cannot catch a renderer that still emits identical bullets.
+it('renders nested reply levels inside one selectable text run', async () => {
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  await act(async () => root!.render(createElement(MarkdownBody, {
+    layout: buildMessageContentLayout({ screenWidth: 390 }), selectable: true,
+    text: '- A\n  - B\n    - C\n  - D\n- E',
+  })));
+  expect(host.textContent).toBe('• A\n\n\u2003◦ B\n\n\u2003\u2003▪ C\n\n\u2003◦ D\n\n• E');
+  expect(host.querySelectorAll('[data-testid="message.markdownTextRun"]')).toHaveLength(1);
+});
+
+it('retains nesting when an inline image puts a reply item on the single-block path', async () => {
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  await act(async () => root!.render(createElement(MarkdownBody, {
+    layout: buildMessageContentLayout({ screenWidth: 390 }), selectable: true,
+    text: '- A\n  - B ![pic](https://example.invalid/nested.png)',
+  })));
+  const marker = [...host.querySelectorAll('div')].find(e => e.textContent === '◦');
+  expect(marker).toBeDefined();
+  expect(marker!.parentElement!.style.paddingLeft).toBe('17px');
+  expect(marker!.parentElement!.textContent).toContain('B');
+});

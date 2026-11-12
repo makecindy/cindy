@@ -243,6 +243,7 @@ import {
 } from '@/session/filePreview';
 import {
   groupMobileMarkdownSelectableBlocks,
+  mobileMarkdownListMarkerText,
   mobileMarkdownManagedImagePreviewUrl,
   isMobileMarkdownImageDirectUrl,
   mobileMarkdownImageAltChipText,
@@ -6297,11 +6298,9 @@ function MarkdownBodyBase({
       ? [styles.markdownHeading, headingSizeStyle(styles, block.level)]
       : styles.messageText;
     if (block.type === 'list_item' && !('textRunContinuation' in block && block.textRunContinuation)) {
-      const task = typeof block.checked === 'boolean';
       spans.push(
         <RunSpan key={`${block.key}:marker`} style={[styles.messageText, styles.markdownListMarkerInline]}>
-          {task ? block.checked ? '☑ ' : '☐ '
-              : block.ordered ? `${block.marker} ` : '• '}
+          {mobileMarkdownListMarkerText(block)}
         </RunSpan>,
       );
     }
@@ -6437,7 +6436,7 @@ function MarkdownBodyBase({
       return (
         <View
           key={block.key}
-          style={[styles.markdownListRow, { gap: layout.markdownListGap }]}
+          style={[styles.markdownListRow, { gap: layout.markdownListGap, paddingLeft: (block.depth ?? 0) * typeScale.bodyLarge }]}
           testID={task ? 'message.markdownTaskItem' : undefined}
         >
           <Text style={[
@@ -6446,7 +6445,7 @@ function MarkdownBodyBase({
             task && styles.markdownTaskMarker,
           ]}>
             {task ? block.checked ? '✓' : ''
-                : block.ordered ? block.marker : '•'}
+                : mobileMarkdownListMarkerText(block).trim()}
           </Text>
           <MarkdownSelectableText
             allowIosUITextView={singleBlockAllowsIosUITextView}
