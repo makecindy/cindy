@@ -363,12 +363,19 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
   const settleStretch = useCallback(() => {
     stretch.value = withTiming(0, { duration: motionDuration.base, easing: Easing.bezier(...motionEasing.out) });
   }, [stretch]);
+  // One live coordinate for the visible panel and both gesture boundaries.
+  // Reading it at touch-down also covers interrupted opening/closing rebounds.
+  const getEdgeLeft = useCallback(() => {
+    'worklet';
+    return panelWidth + (persistent ? 0 : Math.max(-panelWidth,
+      Math.min(0, (progress.value - 1) * panelWidth + dragX.value)));
+  }, [dragX, panelWidth, persistent, progress]);
   // The floating drawer's right edge resizes it without a visible grip. Its
   // gesture sits on the overlay, above both the panel and the dimmed area, so
   // taps near the edge still reach list rows and close the drawer.
   const edge = useSessionPaneDivider({
     enabled: !persistent && open && !!resize, width, bounds: resize?.bounds ?? null,
-    left: panelWidth, top: topInset ?? insets.top, bottom: insets.bottom,
+    left: panelWidth, getLeft: getEdgeLeft, top: topInset ?? insets.top, bottom: insets.bottom,
     onResize: resize?.onResize ?? ignoreResize, elastic: { onStretch: stretchTo, onSettle: settleStretch },
   });
   // Where a rightward drag on the dimmed area becomes Home, and whether it has.
@@ -422,7 +429,11 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
     // The dimmed area takes both directions: left slides the panel away like the
     // panel itself; right stretches the list and, a short way on, becomes Home.
     const scrim = Gesture.Pan().enabled(!persistent)
-      .hitSlop({ left: edgeInset ? -(panelWidth + edgeInset) : 0 })
+      .onTouchesDown((event, manager) => {
+        'worklet';
+        const touch = event.allTouches[0];
+        if (edgeInset && touch && touch.x < getEdgeLeft() + edgeInset) manager.fail();
+      })
       .activeOffsetX([-16, 16])
       .failOffsetY([-16, 16])
       .onStart((event) => {
@@ -458,7 +469,7 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
         settleSlide(event.translationX, event.velocityX);
       });
     return { panel, scrim };
-  }, [closeFromGesture, dragX, edgeInset, enterHome, home, homeAt, homeEntered, panelWidth, persistent, progress, stretch]);
+  }, [closeFromGesture, dragX, edgeInset, enterHome, getEdgeLeft, home, homeAt, homeEntered, panelWidth, persistent, progress, stretch]);
 
   const scrimStyle = useAnimatedStyle(() => ({
     opacity: Math.max(0, Math.min(1, progress.value + dragX.value / panelWidth)),
@@ -466,10 +477,7 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
   const panelStyle = useAnimatedStyle(() => ({
     transform: [
       {
-        translateX: persistent ? 0 : Math.max(
-          -panelWidth,
-          Math.min(0, (progress.value - 1) * panelWidth + dragX.value),
-        ),
+        translateX: getEdgeLeft() - panelWidth,
       },
     ],
   }));

@@ -13,7 +13,7 @@ import { motionDuration } from '@/theme/tokens';
 import type { MobileHomeProps } from '@/session/HomeSurface';
 const native = vi.hoisted(() => ({ home: null as MobileHomeProps | null, widths: [] as number[], mounts: 0, unmounts: 0, instances: 0, residentAvailable: true, sharedAvailable: true, handoffAvailable: false, dock: null as (() => void) | null, activeEffects: 0, reduceMotion: true,
   attachedGestures: new Set<unknown>(), routeFocused: true, routeListeners: {} as Record<string, Set<() => void>>,
-  timings: [] as { to: number; config: { duration: number }; done?: (finished: boolean) => void }[], values: [] as { value: any }[], divider: null as any, pans: {} as Record<string, Record<string, (event?: any) => void>>, gesture: {} as Record<string, (event?: any) => void>, cancel: vi.fn() }));
+  timings: [] as { to: number; config: { duration: number }; done?: (finished: boolean) => void }[], values: [] as { value: any }[], divider: null as any, pans: {} as Record<string, Record<string, (...args: any[]) => void>>, gesture: {} as Record<string, (event?: any) => void>, cancel: vi.fn() }));
 vi.mock('@/session/HomeSurface', async () => {
   const { useCallback, useContext, useEffect, useState, useSyncExternalStore } = await import('react');
   const { NavigationContext } = await import('expo-router/react-navigation');
@@ -157,6 +157,7 @@ vi.mock("@/platform/gestureHandler", async () => {
       const chain = {
         enabled: () => chain,
         hitSlop: (slop: unknown) => { handlers.hitSlop = slop; return chain; },
+        onTouchesDown: (callback: (...args: any[]) => void) => { handlers.touchesDown = callback; return chain; },
         activeOffsetX: (offset: number | number[]) => {
           const kind = Array.isArray(offset) ? 'scrim' : offset < 0 ? 'panel' : 'open';
           if (kind === 'panel') native.gesture = handlers; else native.pans[kind] = handlers;
@@ -567,7 +568,22 @@ describe('shared Home drawer host', () => {
     // A coarse move can satisfy every recognizer at once and the deeper one wins:
     // the close and dimmed-area gestures leave the edge's 24pt band to resizing.
     expect(native.gesture.hitSlop).toEqual({ right: -24 });
-    expect(native.pans.scrim.hitSlop).toEqual({ left: -(320 + 24) });
+    const [progress, dragX] = native.values;
+    // PR #10153 / discussion_r4548014936, unit: the old test only covered fully
+    // open geometry. A half-open rebound must move both resize and scrim gates
+    // without a React render; otherwise visible scrim drags fall into a dead zone.
+    progress!.value = 0.75;
+    dragX!.value = -20;
+    expect(native.divider.getLeft()).toBe(220);
+    const fail = vi.fn();
+    native.pans.scrim.touchesDown({ allTouches: [{ x: 230 }] }, { fail });
+    expect(fail).toHaveBeenCalledOnce();
+    fail.mockClear();
+    native.pans.scrim.touchesDown({ allTouches: [{ x: 250 }] }, { fail });
+    expect(fail).not.toHaveBeenCalled();
+    // At the original edge there is now scrim, so it must remain draggable.
+    native.pans.scrim.touchesDown({ allTouches: [{ x: 320 }] }, { fail });
+    expect(fail).not.toHaveBeenCalled();
     // Mid-exit the drawer is still mounted; its edge must not take a new drag.
     await act(async () => root.render(<SessionListDrawer {...props} resize={resize} open={false} />));
     expect(native.divider.enabled).toBe(false);

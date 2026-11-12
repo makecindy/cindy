@@ -1,5 +1,6 @@
 import { createContext, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
 import { PanResponder, StyleSheet, View } from 'react-native';
+import { runOnJS } from 'react-native-reanimated';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Gesture } from '@/platform/gestureHandler';
 import { useTranslation } from 'react-i18next';
@@ -28,6 +29,8 @@ type PaneResize = {
   /** Edge position and vertical extent, in the coordinates of the view the
    * returned gesture is attached to. */
   left: number;
+  /** UI-thread coordinate while the containing panel is animating. */
+  getLeft?: () => number;
   top: number;
   bottom: number;
   bounds: { min: number; max: number } | null;
@@ -45,7 +48,7 @@ type PaneResize = {
  * topmost view. `edge` is the invisible adjustable element for assistive
  * technology; render it inside the same container.
  */
-export function useSessionPaneDivider({ enabled, width, left, top, bottom, bounds, onResize, elastic }: PaneResize) {
+export function useSessionPaneDivider({ enabled, width, left, getLeft, top, bottom, bounds, onResize, elastic }: PaneResize) {
   const { t } = useTranslation();
   const [dragging, setDragging] = useState(false);
   const latest = useRef({ width, bounds, onResize, elastic });
@@ -78,16 +81,22 @@ export function useSessionPaneDivider({ enabled, width, left, top, bottom, bound
     };
   }, []);
   const gesture = useMemo(() => Gesture.Pan().enabled(active)
-    // Width updates already commit React layout; keep the callbacks on JS.
-    .runOnJS(true)
-    .hitSlop({ left: -Math.max(0, band.left - PANE_DIVIDER_BAND / 2), width: PANE_DIVIDER_BAND, top: -band.top, bottom: -band.bottom })
+    // A moving edge cannot use a React-rendered hitSlop. Gate it on the UI
+    // thread at touch-down; width updates still commit through JS below.
+    .hitSlop(getLeft ? { top: -band.top, bottom: -band.bottom }
+      : { left: -Math.max(0, band.left - PANE_DIVIDER_BAND / 2), width: PANE_DIVIDER_BAND, top: -band.top, bottom: -band.bottom })
+    .onTouchesDown((event, manager) => {
+      'worklet';
+      const touch = event.allTouches[0];
+      if (getLeft && touch && Math.abs(touch.x - getLeft()) > PANE_DIVIDER_BAND / 2) manager.fail();
+    })
     // Ahead of row swipes and the drawer's 16pt close/stretch gestures.
     .activeOffsetX([-ACTIVE_OFFSET, ACTIVE_OFFSET]).failOffsetY([-ACTIVE_OFFSET, ACTIVE_OFFSET])
-    .onStart(drag.start)
-    .onUpdate(event => drag.move(event.translationX))
-    .onEnd(event => drag.end(event.translationX))
-    .onFinalize((_event, successful) => { if (!successful) drag.cancel(); }),
-  [active, band.bottom, band.left, band.top, drag]);
+    .onStart(() => { 'worklet'; runOnJS(drag.start)(); })
+    .onUpdate(event => { 'worklet'; runOnJS(drag.move)(event.translationX); })
+    .onEnd(event => { 'worklet'; runOnJS(drag.end)(event.translationX); })
+    .onFinalize((_event, successful) => { 'worklet'; if (!successful) runOnJS(drag.cancel)(); }),
+  [active, band.bottom, band.left, band.top, drag, getLeft]);
   // Expo Go has no gesture handler: keep a JS overlay there. It still covers
   // the band, so taps under it only pass through in development builds.
   const fallback = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;

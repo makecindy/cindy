@@ -6,6 +6,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 import { useSessionPaneDivider } from '../session/SessionPaneDivider';
 
 const state = vi.hoisted(() => ({ native: {} as Record<string, (...args: any[]) => any> }));
+vi.mock('react-native-reanimated', () => ({ runOnJS: (fn: unknown) => fn }));
 vi.mock('expo-constants', () => ({ default: { executionEnvironment: 'standalone' }, ExecutionEnvironment: { StoreClient: 'storeClient' } }));
 vi.mock('@/platform/gestureHandler', () => ({
   Gesture: { Pan: () => {
@@ -71,4 +72,25 @@ it('clamps the stored width, reports the overshoot and rolls back only an interr
   // A vertical/tap rejection never activated the resize and must not reset it.
   act(() => state.native.onFinalize({}, false));
   expect(onSettle).toHaveBeenCalledTimes(2);
+});
+
+// PR #10153 / discussion_r4548014936, unit: a touch near the visible moving
+// edge must resize, while the former edge must yield to the scrim. Existing
+// elastic tests only start at a fixed edge. No render occurs between touches.
+it('gates new drags against the current animated edge', () => {
+  let left = 400;
+  const onResize = vi.fn();
+  const root = createRoot(document.createElement('div')); roots.push(root);
+  act(() => root.render(<Edge width={400} getLeft={() => left} bounds={{ min: 300, max: 529 }} onResize={onResize} />));
+  const handlers = state.native;
+  left = 220;
+  const fail = vi.fn();
+  handlers.onTouchesDown({ allTouches: [{ x: 400 }] }, { fail });
+  expect(fail).toHaveBeenCalledOnce();
+  fail.mockClear();
+  handlers.onTouchesDown({ allTouches: [{ x: 230 }] }, { fail });
+  expect(fail).not.toHaveBeenCalled();
+  act(() => handlers.onStart());
+  act(() => handlers.onUpdate({ translationX: 40 }));
+  expect(onResize).toHaveBeenLastCalledWith(440);
 });
