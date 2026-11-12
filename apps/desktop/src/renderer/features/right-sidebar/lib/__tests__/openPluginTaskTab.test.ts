@@ -66,7 +66,7 @@ describe('openPluginTaskTab', () => {
     if (route === 'stale-context') await expect(opening).rejects.toThrow('MCP_APP_HOST_NOT_READY');
     else await opening;
     expect(routeSidebarCommand).toHaveBeenCalledWith({ type: 'open-plugin-view', instanceId: 'sim',
-      resourceViewId: 'board', resourceInput: { selected: 'one' } });
+      resourceViewId: 'board', resourceInput: { selected: 'one' } }, { userInitiated: true });
     const target = getGlobalTabs().find(tab => (tab.state as { resourceViewId?: string } | null)?.resourceViewId === 'board');
     expect(getActiveGlobalTabId()).toBe(route === 'attached' ? target!.id : previous.id);
     if (route !== 'attached') expect(target).toBeUndefined();

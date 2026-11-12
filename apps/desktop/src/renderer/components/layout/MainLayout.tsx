@@ -2062,6 +2062,7 @@ export function MainLayout() {
                 rightSidebarPaneAvailable && rsbWindow.loaded && !rsbDetached && rightTabsRestored
               }
               rightTabsUserToggle={rightTabsUserToggle}
+              rightTabsSessionKey={rightSidebarSessionId ?? ''}
               rightTabsCollapsed={
                 !rightSidebarMounted || isRightSidebarCollapsed || rightSidebarForceCollapsed
               }

@@ -21,8 +21,9 @@ export async function openPluginUiView(
   const view = ghost?.enabled && getApprovedGhostHostUi(ghost)?.views?.find(view => view.id === viewId);
   if (!ghost || !view) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
   if (view.scope !== 'task') {
+    // 分离形态下由控制器决定要不要 show + focus，来源必须一起带过去。
     const route = await routeSidebarCommand({ type: 'open-plugin-view', instanceId, resourceViewId: viewId,
-      ...(input === undefined ? {} : { resourceInput: input }) });
+      ...(input === undefined ? {} : { resourceInput: input }) }, { userInitiated });
     if (route !== 'attached' && route !== 'routed') throw new Error('MCP_APP_HOST_NOT_READY');
     if (route === 'attached') {
       const tab = addGlobalPluginTab(instanceId, { ghost, resourceViewId: viewId, resourceInput: input });
