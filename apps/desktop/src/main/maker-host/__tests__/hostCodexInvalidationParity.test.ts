@@ -408,3 +408,47 @@ describe('an owner change during the invalidation cleanup', () => {
     expect(afterHost).toEqual({ authFile: false, modelsCache: true, nextOwnerBound: true, marker: 'token_revoked' });
   });
 });
+
+/**
+ * The desktop announces an invalidation only if it is still the current one when its cleanup
+ * ends (oauthInvalidatedReason and scope unchanged). Here a login replaces the rejected
+ * credential while the local Codex host is retired: neither side announces the old failure.
+ * Without that, both announce once, with the credential's scope.
+ */
+describe('an invalidation superseded during its cleanup', () => {
+  for (const loginDuringCleanup of [false, true]) {
+    it(loginDuringCleanup ? 'is not announced on either side' : 'is announced once on both sides', async () => {
+      const byDesktop = profile();
+      const adapter = new DesktopCodexAuthAdapter();
+      await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({ authenticated: true });
+      const desktopAnnounced: string[] = [];
+      adapter.setOnInvalidatedBroadcast((_reason, scope) => { desktopAnnounced.push(scope); });
+      const finishSuccessfulCodexLogin = (adapter as unknown as { finishSuccessfulCodexLogin(): Promise<AuthState> })
+        .finishSuccessfulCodexLogin.bind(adapter);
+      adapter.setOnLogoutSuccess(async () => {
+        if (!loginDuringCleanup) return;
+        byDesktop.write('fixture-token-2');
+        await finishSuccessfulCodexLogin();
+      });
+      await adapter.invalidate('token_revoked', { credentialGeneration: JSON.stringify(currentCodexCredentialGeneration(byDesktop.authPath)) });
+
+      const byHost = profile();
+      const hostAnnounced: string[] = [];
+      await host.invalidateHostCodexLogin({ codexHome: byHost.codexHome, reason: 'token_revoked',
+        credentialGeneration: JSON.stringify(currentCodexCredentialGeneration(byHost.authPath)),
+        onInvalidated: scope => { hostAnnounced.push(scope); },
+        disposeLocalHost: async () => {
+          if (!loginDuringCleanup) return;
+          // The Host's login commit (codex-account-auth.ts): a new auth.json renamed into place.
+          const next = `${byHost.authPath}.next`;
+          fs.writeFileSync(next, JSON.stringify({ account: { email: 'fixture@example.test' },
+            tokens: { access_token: 'fixture-token-2', account_id: 'fixture-workspace' } }), { mode: 0o600 });
+          fs.renameSync(next, byHost.authPath);
+          bindNativeProviderAuth('openai', { instanceIsolated: true });
+        } });
+
+      expect(hostAnnounced).toEqual(desktopAnnounced);
+      expect(hostAnnounced).toEqual(loginDuringCleanup ? [] : ['instance-isolated']);
+    });
+  }
+});

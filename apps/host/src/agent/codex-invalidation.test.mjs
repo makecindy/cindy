@@ -297,6 +297,25 @@ test('without a system login path, a codex-home linked to ~/.codex keeps ~/.code
   assert.equal(fs.readFileSync(systemAuth, 'utf8'), before);
 });
 
+// As the desktop's guard (reason and scope unchanged when the cleanup ends): the Host reads the
+// marker instead of memory. A marker rewritten during the cleanup with another reason or another
+// scope means a newer invalidation owns the announcement.
+test('an invalidation whose marker changes during the cleanup is not announced', async t => {
+  for (const [reason, scope, announced] of [['token_revoked', 'instance-isolated', true], ['other_reason', 'instance-isolated', false],
+    ['token_revoked', 'unknown', false]]) {
+    const p = profile(t);
+    const seen = [];
+    await invalidateHostCodexLogin({ codexHome: p.codexHome, reason: 'token_revoked',
+      credentialGeneration: JSON.stringify(currentCodexCredentialGeneration(p.authPath)),
+      disposeLocalHost: async () => {
+        assert.equal(writeInvalidatedSystemCodexAuthMarker(p.codexHome, path.join(p.codexHome, 'missing-system-auth.json'),
+          reason, p.authPath, scope), true);
+      },
+      onInvalidated: value => { seen.push(value); } });
+    assert.deepEqual(seen, announced ? ['instance-isolated'] : [], `${reason}/${scope}`);
+  }
+});
+
 test('HOME stays empty: the system Codex login is never read or written', () => {
   assert.deepEqual(fs.readdirSync(emptyHome), []);
 });

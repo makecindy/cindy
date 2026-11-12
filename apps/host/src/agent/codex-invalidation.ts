@@ -152,6 +152,18 @@ export async function invalidateHostCodexLogin(input: {
     log.warn('early unbind after Codex invalidation failed', { error: errorText(error) });
   }
   await cleanUpAfterInvalidation(input, authPath, committed || fallbackCommitted);
+  // As the desktop: no announcement once the invalidation is no longer the current one (a later
+  // invalidation with another reason or scope, a login that replaced the credential, an explicit
+  // disconnect). The desktop compares its in-memory reason and scope; the Host keeps no state and
+  // reads the marker as getState does. Without a committed marker there is nothing newer to
+  // compare with, and it announces as the desktop does from memory.
+  if (committed) {
+    const now = readHostCodexInvalidation(input.codexHome, input.systemAuthPath);
+    if (now?.reason !== input.reason || now.credentialScope !== credentialScope) {
+      log.info('Codex invalidation superseded during cleanup; not announcing', { reason: input.reason });
+      return 'invalidated';
+    }
+  }
   await announce(input, credentialScope);
   return committed || fallbackCommitted ? 'invalidated' : 'failed';
 }
