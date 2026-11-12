@@ -13,7 +13,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AGENT_NET_SWITCH_CONFIRM_MS } from '@cindy/device-link';
 
-import { APPLY_DELAY_MS, createAgentNetRemoteSwitch, type AgentNetPendingSwitch, type AgentNetRemoteChange } from '../agentNetRemoteSwitch.js';
+import { APPLY_DELAY_MS, createAgentNetRemoteSwitch, type AgentNetPendingSwitch, type AgentNetRemoteChange, type AgentNetRemoteSwitchPorts } from '../agentNetRemoteSwitch.js';
 
 const CONTROLLER = 'controller-device';
 const SWITCH = 'switch-0001';
@@ -31,7 +31,7 @@ function setup(initial: { enabled?: boolean; onlyEncrypted?: boolean; relayOnly?
   const apply = vi.fn(async (enabled: boolean): Promise<string | null> => { settings.agentNetEnabled = enabled; return null; });
   const writePending = vi.fn(async (value: AgentNetPendingSwitch | null) => { settings.agentNetPendingSwitch = value; });
   const writeChangedBy = vi.fn(async (value: AgentNetRemoteChange | null) => { settings.agentNetChangedBy = value; });
-  const service = createAgentNetRemoteSwitch({
+  const ports: AgentNetRemoteSwitchPorts = {
     captureScope: () => () => {},
     readSettings: () => settings,
     writeChangedBy,
@@ -44,9 +44,10 @@ function setup(initial: { enabled?: boolean; onlyEncrypted?: boolean; relayOnly?
     pid: initial.pid ?? 100,
     isProcessAlive: (pid) => alive.has(pid),
     log: { info: () => undefined, warn: () => undefined },
-  });
+  };
+  const service = createAgentNetRemoteSwitch(ports);
   const turnOn = () => service.handle({ action: 'set', enabled: true, switchId: SWITCH }, CONTROLLER, 'Studio Mac');
-  return { service, settings, agentNetLinks, alive, apply, writePending, writeChangedBy, blockWith: (value: 'NOT_SIGNED_IN') => { block = value; }, turnOn };
+  return { service, anotherInstance: () => createAgentNetRemoteSwitch(ports), settings, agentNetLinks, alive, apply, writePending, writeChangedBy, blockWith: (value: 'NOT_SIGNED_IN') => { block = value; }, turnOn };
 }
 
 beforeEach(() => { vi.useFakeTimers(); });
@@ -144,6 +145,19 @@ describe('remote Agent-Net switch on the switched computer', () => {
     await service.onLocalChange();
     await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS);
     expect(settings).toMatchObject({ agentNetEnabled: true, agentNetPendingSwitch: null, agentNetChangedBy: null });
+  });
+
+  // 独立重审 E：dev/release 共用 profile；另一实例的本机开关也必须取消尚未执行的远程关闭。
+  it('honors a local change in another instance before the delayed remote disable starts', async () => {
+    const { service, anotherInstance, settings, apply } = setup({ enabled: true });
+    await service.handle({ action: 'set', enabled: false, switchId: SWITCH }, CONTROLLER, 'Studio Mac');
+    const local = anotherInstance();
+    await local.onLocalChange(); settings.agentNetEnabled = false;
+    await vi.advanceTimersByTimeAsync(100);
+    await local.onLocalChange(); settings.agentNetEnabled = true;
+    await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS - 100);
+    expect(settings).toMatchObject({ agentNetEnabled: true, agentNetChangedBy: null });
+    expect(apply).not.toHaveBeenCalled();
   });
 
   it('refuses to turn on when the computer cannot, and allows another computer only to turn it off', async () => {

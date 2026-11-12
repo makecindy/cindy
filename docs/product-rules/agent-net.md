@@ -124,7 +124,8 @@
 被切电脑一侧在 `apps/desktop/src/main/device-link/agentNetRemoteSwitch.ts`，发起一侧与界面在
 `apps/desktop/src/renderer/features/remote-connection-v2/`（`agentNetRemoteSwitch.ts`、`RemoteSwitchBatch.tsx`），界面登记见 DESIGN.md §4。
 界面场景：`pnpm ui:check --page remote-connection-v2 --case remote-switch,remote-switch-batch,switched-here`。
-未覆盖：手机作为发起端；两台真机之间的端到端验收待做。
+未覆盖：手机作为发起端；两台真机之间的端到端验收待做。设置页与拓扑已实现，Agent 可发现的本机/跨电脑切换工具尚未接入，
+属于同权能力待补的缺口，不是禁止 Agent 操作，也不宣称本次已经交付工具入口。
 
 ## 待裁决
 

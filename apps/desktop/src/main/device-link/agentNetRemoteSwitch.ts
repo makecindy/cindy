@@ -224,6 +224,9 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
       if (delayedEpoch !== delayedChangeEpoch) return;
       if (enabled && ports.readSettings().agentNetPendingSwitch?.switchId !== switchId) return;
       const current = ports.readSettings();
+      // 共用同一 profile 的另一实例也能接收本机操作；它清掉归因后，旧回调同样失效。
+      const change = current.agentNetChangedBy;
+      if (!change || change.deviceId !== controllerId || change.at !== now || change.enabled !== enabled) return;
       if (!enabled && disableBlock()) {
         // 回答离开后的延迟窗口中，本机(含另一实例)也可能刚刚选了仅使用 Agent-Net。
         await ports.writeChangedBy(null);
