@@ -11182,7 +11182,8 @@
         "capability": {
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} could not run this tool: group authorization has expired or does not allow this action. The buddy’s owner can make the request again in this group.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "Group authorization for {{name}} could not be verified, so this tool did not run. Try again after the connection recovers.",
-          "ATTACHMENTS_UNAVAILABLE": "Some attachments were not delivered to {{name}} because of a download failure or attachment limit. Resend the attachments needed for this request."
+          "ATTACHMENTS_UNAVAILABLE": "Some attachments were not delivered to {{name}} because of a download failure or attachment limit. Resend the attachments needed for this request.",
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connect your Cindy so Cindy can work for you (none of your computers has Cindy online right now)."
         }
       },
       "settings": {
@@ -11307,6 +11308,38 @@
           "failed": "Failed",
           "cancelled": "Cancelled",
           "timed-out": "Timed out"
+        },
+        "label": "Task",
+        "untitled": "Untitled task",
+        "askedBy": "Asked by {{requester}}",
+        "pr": "PR #{{number}}",
+        "open": "Open task “{{title}}”",
+        "live": {
+          "running": "In progress",
+          "waiting": "Waiting for a reply",
+          "idle": "Idle",
+          "failed": "Failed"
+        },
+        "othersSaid": "Others said in the thread"
+      },
+      "assistant": {
+        "groupRecent": "Recent messages in the group",
+        "groupNew": "New messages in the group",
+        "threadRecent": "Recent messages in the thread",
+        "threadNew": "New messages in the thread",
+        "replyingTo": "Replying to \"{{name}}\": {{text}}",
+        "earlierOmitted": "(Earlier messages omitted)",
+        "actingFor": "{{name}} · for {{person}}",
+        "checkout": {
+          "gitMissing": "(Cindy) The group's project {{repo}} is not on this computer yet: git is not installed here. {{guide}} Once it is installed, @Cindy again and Cindy will download the project and work in it.",
+          "signInOpened": "(Cindy) The group's project {{repo}} is not on this computer yet: connect your GitHub account first. Cindy opened GitHub sign-in on this computer; once you are signed in, @Cindy again and Cindy will download the project.",
+          "signIn": "(Cindy) The group's project {{repo}} is not on this computer yet: connect your GitHub account first. Sign in to GitHub in Cindy on this computer, then @Cindy again.",
+          "unavailable": "(Cindy) The group's project {{repo}} could not be downloaded to this computer: your GitHub account may not have access to it, or the network is unavailable. Make sure you can open the repository on GitHub, then @Cindy again.",
+          "installGit": {
+            "darwin": "In Terminal, run xcode-select --install and follow the prompts.",
+            "win32": "Download and install Git from https://git-scm.com/download/win with the default options.",
+            "linux": "Install git with your system's package manager (for example, sudo apt install git)."
+          }
         }
       },
       "files": {
@@ -11510,10 +11543,21 @@
           "accessTools": "Can use tools and info",
           "replies": "How buddies reply",
           "replyModeMentionedNote": "Buddies stay quiet unless someone @mentions them.",
+          "assistant": "Group Cindy",
+          "assistantHint": "Works on the computer of whoever @mentions it.",
+          "replyModeAssistant": "Cindy Replies",
+          "replyModeAssistantNote": "Group Cindy replies.",
           "work": "Work splits",
           "ownFolder": "Group's own folder",
-          "projectDirHint": "Where buddies work during a work split.",
+          "projectDirHint": "Applies on this computer only.",
           "projectDirClearHint": "Use the group's own folder instead",
+          "project": "Project",
+          "projectCaption": "Buddies reply and do work splits in this project. The repository is shared with the group; the folder stays on this computer.",
+          "githubRepo": "GitHub repository",
+          "githubRepoHint": "Enter owner/name. Computers without a chosen folder use their own copy of this project, or download one.",
+          "githubRepoSaveFailed": "The repository wasn’t saved. Check it and try again.",
+          "projectFolder": "Folder on this computer",
+          "projectDirAutoHint": "Found from the repository among your projects.",
           "organizerHint": "Decides who does each step. Defaults to the first buddy.",
           "autoContinueHint": "When off, each step waits for you to continue.",
           "workCaption": "With a git project, each work split gets its own branch, so your code stays untouched. The project folder and automatic handoffs apply on this computer only.",
@@ -14271,6 +14315,8 @@
       "sessionSentNamed": "Sent by session \"{{name}}\"",
       "sessionViewSource": "View source session",
       "botSentNamed": "Sent by buddy \"{{name}}\"",
+      "groupThreadSent": "Sent by \"{{name}}\" in a thread of \"{{group}}\"",
+      "groupRequestSent": "From group \"{{group}}\" · {{name}}",
       "orcaFromLead": "Message from Lead",
       "orcaFromWorker": "Message from Worker",
       "orcaFromWorkerBatch": "System report: {{count}} Worker results",

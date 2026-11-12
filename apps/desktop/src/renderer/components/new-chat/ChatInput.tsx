@@ -10036,17 +10036,20 @@ export function ChatInput({
                   dense={effectiveDenseToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                 />
-                <PermissionSelector
-                  footer={sessionId && !getSessionDeviceId(sessionId) && !deviceLinkDeviceId && !sharedGuest ? <PluginWriteAccessRecovery key={sessionId} sessionId={sessionId} onGranted={onPermissionModeDidChange} /> : undefined}
-                  permissionMode={activePermissionMode}
-                  onPermissionModeChange={handlePermissionModeChange}
-                  vendorKey={vendorKey}
-                  deviceId={deviceLinkDeviceId ?? undefined}
-                  disabled={composerEditorLocked || settingsLocked || sharedGuest}
-                  dense={effectiveDenseToolbar}
-                  iconOnly={useUltraCompactToolbar}
-                  visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
-                />
+                {/* 裸图标没有外圈，任务内向加号靠近 4px 作视觉间距补偿。 */}
+                <div className={cn('min-w-0 shrink', sessionId && '-ml-1')}>
+                  <PermissionSelector
+                    footer={sessionId && !getSessionDeviceId(sessionId) && !deviceLinkDeviceId && !sharedGuest ? <PluginWriteAccessRecovery key={sessionId} sessionId={sessionId} onGranted={onPermissionModeDidChange} /> : undefined}
+                    permissionMode={activePermissionMode}
+                    onPermissionModeChange={handlePermissionModeChange}
+                    vendorKey={vendorKey}
+                    deviceId={deviceLinkDeviceId ?? undefined}
+                    disabled={composerEditorLocked || settingsLocked || sharedGuest}
+                    dense={effectiveDenseToolbar}
+                    iconOnly={Boolean(sessionId) || useUltraCompactToolbar}
+                    visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
+                  />
+                </div>
                 {useNarrowToolbar && !useCompactMiddleToolbar && <>{middleToolbarSlot}</>}
               </div>
               {hasPluginToolbar && (
