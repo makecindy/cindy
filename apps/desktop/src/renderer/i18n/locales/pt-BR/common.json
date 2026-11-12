@@ -6774,6 +6774,7 @@
         "confirm": "Revogar acesso"
       },
       "v2": {
+        "sectionTitle": "Rede experimental de Agent",
         "switch": {
           "title": "Agent-Net (Beta)",
           "hint": "Mostra a topologia das conexões e a atividade recente. A conexão é criptografada quando os dois dispositivos ativam o Agent-Net e foram pareados pelo Agent-Net. Os demais dispositivos usam a conexão habitual. Aplica-se apenas a este computador."

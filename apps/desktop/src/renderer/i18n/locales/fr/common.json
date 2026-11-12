@@ -6774,6 +6774,7 @@
         "confirm": "Révoquer l'accès"
       },
       "v2": {
+        "sectionTitle": "Réseau Agent expérimental",
         "switch": {
           "title": "Agent-Net (Beta)",
           "hint": "Affiche la topologie des connexions et l’activité récente. La connexion est chiffrée si Agent-Net est activé sur les deux appareils et qu’ils sont associés via Agent-Net. Les autres appareils conservent leur connexion habituelle. Ce réglage concerne uniquement cet ordinateur."

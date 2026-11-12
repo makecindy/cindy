@@ -6664,6 +6664,7 @@
         "confirm": "撤销访问权限"
       },
       "v2": {
+        "sectionTitle": "实验性 Agent 网络",
         "switch": {
           "title": "Agent-Net (Beta)",
           "hint": "显示连接拓扑和最近活动。双方都开启并完成 Agent-Net 配对时使用加密连接，其它设备沿用原有连接。只影响这台电脑。"

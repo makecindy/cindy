@@ -6774,6 +6774,7 @@
         "confirm": "Revocar acceso"
       },
       "v2": {
+        "sectionTitle": "Red experimental de Agent",
         "switch": {
           "title": "Agent-Net (Beta)",
           "hint": "Muestra la topología de conexiones y la actividad reciente. La conexión se cifra cuando ambos dispositivos activan Agent-Net y se han vinculado mediante Agent-Net. Los demás dispositivos usan la conexión habitual. Solo afecta a esta computadora."

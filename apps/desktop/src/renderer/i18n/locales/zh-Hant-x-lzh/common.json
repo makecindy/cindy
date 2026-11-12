@@ -6664,6 +6664,7 @@
         "confirm": "撤存取權"
       },
       "v2": {
+        "sectionTitle": "試行 Agent 網絡",
         "switch": {
           "title": "Agent-Net (Beta)",
           "hint": "顯連接之圖，錄近事。兩端皆啟用且已完成 Agent-Net 配對，方用加密連接；其餘裝置循舊途。唯施於此機。"

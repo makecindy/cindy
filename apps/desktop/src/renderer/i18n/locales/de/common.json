@@ -6707,6 +6707,7 @@
         "confirm": "Zugriff widerrufen"
       },
       "v2": {
+        "sectionTitle": "Experimentelles Agent-Netzwerk",
         "switch": {
           "title": "Agent-Net (Beta)",
           "hint": "Zeigt die Verbindungstopologie und die letzte Aktivität. Verbindungen sind verschlüsselt, wenn Agent-Net auf beiden Geräten aktiviert ist und die Geräte über Agent-Net gekoppelt wurden. Andere Geräte verwenden die bisherige Verbindung. Gilt nur für diesen Computer."

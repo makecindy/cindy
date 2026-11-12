@@ -6664,6 +6664,7 @@
         "confirm": "撤访问权"
       },
       "v2": {
+        "sectionTitle": "试行 Agent 网络",
         "switch": {
           "title": "Agent-Net (Beta)",
           "hint": "显连接之图，录近事。两端皆启用且已完成 Agent-Net 配对，方用加密连接；其余装置循旧途。唯施于此机。"
