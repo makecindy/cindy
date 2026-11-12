@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { applyPluginAppearance, applyPluginAppearanceInWindow, usePluginAppearance } from '../usePluginAppearance';
 import { normalizeAppearanceSettings } from '@/../shared/appearanceSettings';
 import { applyFontSettings } from '@/hooks/useFontSettings';
-import { installAppearancePresenter } from '@/appearance/AppearancePresenter';
+import { installAppearancePresenter, presentTheme } from '@/appearance/AppearancePresenter';
 const themeFailureNotice = vi.hoisted(() => vi.fn());
 vi.mock('../../lib/toast', () => ({ toast: { error: themeFailureNotice } }));
 vi.mock('../../i18n', () => ({ default: { t: (key: string) => key } }));
@@ -24,6 +24,31 @@ function options() {
     current: () => true, applyFonts: applyFontSettings };
 }
 describe('plugin appearance renderer', () => {
+  // Package-only startup contract, unit through the real presenter: restoration
+  // failure logs without a toast; explicitly retrying that same family notifies.
+  // Font decode tests below do not exercise selection rejection or readonly hosts.
+  it('keeps cold package restore quiet and reports a rejected explicit reselection', async () => {
+    const theme = { id: 'paper-light-local', family: 'paper', name: 'Paper', type: 'light' as const,
+      colors: {}, packageSha256: 'a'.repeat(64), appearance: { density: 0.9 } };
+    window.electronAPI = { appearanceSettings: { getSync: () => normalizeAppearanceSettings({}) } } as never;
+    expect(() => presentTheme(theme, false)).not.toThrow(); // A read-only utility never prepares resources.
+    const selectTheme = vi.fn().mockRejectedValue(new Error('Resource unavailable'));
+    const logToMain = vi.fn();
+    window.electronAPI = { appearanceSettings: { selectTheme }, logToMain } as never;
+    presentTheme(theme, false);
+    await act(async () => {});
+    expect(logToMain).toHaveBeenCalledExactlyOnceWith('warn', 'renderer/appearance', expect.stringContaining('saved selection retained'));
+    expect(themeFailureNotice).not.toHaveBeenCalled();
+    presentTheme(theme);
+    await waitFor(() => expect(themeFailureNotice).toHaveBeenCalledExactlyOnceWith('settings.appearance.themeApplyFailed'));
+    expect(selectTheme.mock.calls).toEqual([
+      [{ mode: 'light', familyId: 'paper-local' }], [{ mode: 'light', familyId: 'paper-local' }],
+    ]);
+    selectTheme.mockResolvedValue(normalizeAppearanceSettings({}));
+    presentTheme({ id: 'default', name: 'Default', type: 'light', colors: {} });
+    await act(async () => {});
+  });
+
   // Unit, real shared consumer: one browser decode failure must not leave the
   // previous theme's CSS or prevent another valid font role from loading.
   it('falls back only the rejected theme font and still applies other roles and styles', async () => {

@@ -10,7 +10,7 @@ import type { ThemeSelection } from '../../shared/appearanceDefinition';
 let packageSelection: ThemeSelection | undefined;
 
 /** Preserve synchronous palette application; only packages prepare extra defaults. */
-export function presentTheme(theme: Theme): void {
+export function presentTheme(theme: Theme, notifyFailure = true): void {
   themeService.applyTheme(theme);
   const previous = packageSelection;
   packageSelection = theme.packageSha256 && theme.appearance ? {
@@ -19,7 +19,10 @@ export function presentTheme(theme: Theme): void {
   } : undefined;
   if (!packageSelection && !previous) return;
   void window.electronAPI?.appearanceSettings?.selectTheme?.(packageSelection ?? null)
-    .catch(() => notifyThemeAppearanceFailure());
+    .catch(() => {
+      if (notifyFailure) notifyThemeAppearanceFailure();
+      else window.electronAPI?.logToMain?.('warn', 'renderer/appearance', 'Theme package restore failed; saved selection retained');
+    });
 }
 
 /** Errors use the existing toast; translation/notice modules stay off the default path. */

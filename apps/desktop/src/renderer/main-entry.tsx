@@ -130,7 +130,7 @@ if (import.meta.env.DEV) {
 }
 
 bootstrapLocalThemesSync();
-presentTheme(getInitialThemeVariant().theme);
+presentTheme(getInitialThemeVariant().theme, false);
 applyFontSettings(getInitialFontSettings());
 
 const rootElement = document.getElementById('root');

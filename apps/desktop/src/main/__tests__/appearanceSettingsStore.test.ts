@@ -174,9 +174,15 @@ describe('terminal appearance overrides', () => {
     expect(read.mock.calls.filter(([file]) => file === fs.realpathSync.native(path.join(packageDir, 'body.ttf')))).toHaveLength(1);
     read.mockRestore();
     expect(appearanceService.read()).toMatchObject({ uiFamily: 'Inter', uiSize: 17, terminalFamily: 'Menlo', wallpaperId: 'cindy-night-glance', density: 0.9, motion: 0.5 });
+    const file = path.join(fixture.userData, 'appearance-settings.json');
+    const originalSettings = fs.readFileSync(file);
+    await appearanceService.select(null);
+    expect(appearanceService.read()).toMatchObject({ uiFamily: '', uiSize: 17,
+      terminalFamily: 'Menlo', wallpaperId: 'cindy-night-glance', density: 1, motion: 1 });
+    expect(fs.readFileSync(file)).toEqual(originalSettings);
+    await appearanceService.select({ mode: 'light', familyId: 'paper-local' });
     expect(Buffer.from((await readSelectedThemeFont('bodyFont'))!.bytes)).toEqual(font);
     await updateAppearanceSettingsAtomic((_current, overrides) => appearanceDefinitionToOverrides(overrides, { reading: { maxWidth: 800 } }));
-    const file = path.join(fixture.userData, 'appearance-settings.json');
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).not.toHaveProperty('themeSelection');
     expect(JSON.parse(fs.readFileSync(file, 'utf8')).reading).toEqual({ maxWidth: 800 });
     await appearanceService.select({ mode: 'dark', familyId: 'paper-local' });

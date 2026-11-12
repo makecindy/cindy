@@ -127,13 +127,13 @@ describe('terminal font settings isolation', () => {
     expect(result.current.codeSize).toBe(18);
 
     act(() => result.current.resetTerminalFamily());
-    await waitFor(() => expect(bridge.resetFields).toHaveBeenCalledTimes(1));
-    expect(bridge.resetFields).toHaveBeenLastCalledWith(['terminalFamily', 'terminalFontResource']);
+    await waitFor(() => expect(bridge.setPatch).toHaveBeenCalledTimes(3));
+    expect(bridge.setPatch).toHaveBeenLastCalledWith({ terminalFamily: '' });
     expect(result.current.terminalSize).toBe(20);
     act(() => result.current.resetTerminalSize());
-    await waitFor(() => expect(bridge.resetFields).toHaveBeenCalledTimes(2));
-    expect(bridge.resetFields).toHaveBeenLastCalledWith(['terminalSize']);
-    expect(bridge.setPatch).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(bridge.setPatch).toHaveBeenCalledTimes(4));
+    expect(bridge.setPatch).toHaveBeenLastCalledWith({ terminalSize: 13 });
+    expect(bridge.resetFields).not.toHaveBeenCalled();
     expect(result.current.terminalFamily).toBe('');
     expect(result.current.terminalSize).toBe(13);
     expect([document.documentElement.style.cssText, document.body.style.cssText]).toEqual(
