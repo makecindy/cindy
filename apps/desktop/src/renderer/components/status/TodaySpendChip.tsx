@@ -1470,8 +1470,20 @@ export function TodaySpendChip({
         resetPending: isResetPending(w.resetsAt, windowLabelNowMs),
         level: quotaLevelFromUsed(w.usedPercent),
       })) : [])
-    : usesOpenCodeGoForm || usesMiniMaxPlanForm
-    ? (((usesOpenCodeGoForm && providerAccountSnapshot?.kind === 'opencode-go-quota') || (usesMiniMaxPlanForm && providerAccountSnapshot?.kind === 'minimax-plan-quota')) && providerAccountUsage.result?.status === 'ready' && !providerAccountUsage.result.stale
+    : usesMiniMaxPlanForm
+    // MiniMax 旧式响应按型号给独立额度：紧凑摘要必须带上型号归属，
+    // 否则另一型号的额度会被读成当前任务的额度。
+    ? (providerAccountSnapshot?.kind === 'minimax-plan-quota' && providerAccountUsage.result?.status === 'ready' && !providerAccountUsage.result.stale
+      ? providerAccountSnapshot.windows.map(w => ({
+        key: w.id,
+        label: [w.model, formatCompactTimeUntilReset(w.resetsAt === null ? null : w.resetsAt / 1000, windowLabelNowMs, t, opencodeGoUsageWindowMinutes(w.id)) ?? t(w.id === 'rolling' ? 'providerAccountUsage.kimi.limit_5h' : 'providerAccountUsage.kimi.limit_7d')].filter(Boolean).join(' · '),
+        remainingPercent: 100 - w.usedPercent,
+        resetsAtMs: w.resetsAt,
+        resetPending: isResetPending(w.resetsAt, windowLabelNowMs),
+        level: quotaLevelFromUsed(w.usedPercent),
+      })) : [])
+    : usesOpenCodeGoForm
+    ? (providerAccountSnapshot?.kind === 'opencode-go-quota' && providerAccountUsage.result?.status === 'ready' && !providerAccountUsage.result.stale
       ? providerAccountSnapshot.windows.map(w => ({
         key: w.id,
         label: w.id === 'monthly'

@@ -325,7 +325,29 @@ it.each([true, false])('shows the task MiniMax account and advances its closed c
   expect(mocks.fetchProviderAccountUsage).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'mixed-minimax', agent: 'codex' }));
 });
 
-// PR #7031: replace the brittle three-route source regex with actual navigation.
+// PR #9894 review: MiniMax legacy responses report per-model pools. The compact
+// summary must keep the model attribution, or another model's quota reads as this
+// task's own quota.
+it('keeps the MiniMax model attribution in the compact summary', async () => {
+  vi.setSystemTime(new Date('2026-11-12T00:00:00Z'));
+  mocks.providers = [{
+    id: 'model-minimax', connected: true, auth: { method: 'apiKey' },
+    routing: { codex: { upstream: 'https://api.minimaxi.com/v1', authStrategy: 'api-key-header' } },
+  } as ProviderView];
+  mocks.fetchProviderAccountUsage.mockResolvedValue({
+    status: 'ready', stale: false, agent: 'codex',
+    snapshot: { kind: 'minimax-plan-quota', fetchedAt: Date.now(), noPlan: false,
+      weeklyUnlimited: false, boostedWeeklyRemainingPercent: null,
+      windows: [{ id: 'rolling', model: 'MiniMax-M2.5', usedPercent: 70, resetsAt: Date.now() + 180_000 }],
+    },
+  });
+  await act(async () => { render(<TodaySpendChip vendorKey="codex" providerId="model-minimax" sessionId="minimax-model" />); });
+  const trigger = screen.getByTestId('task-usage-trigger');
+  expect(trigger.textContent).toContain('MiniMax-M2.5');
+  expect(trigger.textContent).toContain('30%');
+});
+
+
 // Unit/jsdom: each selected provider has its own observable URL; gateway stays local.
 it.each<{
   vendorKey: 'cc' | 'codex' | 'pi';

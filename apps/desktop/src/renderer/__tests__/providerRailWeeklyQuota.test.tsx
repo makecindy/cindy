@@ -147,6 +147,27 @@ describe('provider weekly quota identity and windows', () => {
       expect(local).toHaveBeenCalledTimes(1);
     } finally { hook.unmount(); vi.unstubAllGlobals(); }
   });
+  // PR #9894 review: the settings-only MiniMax preference must not leak into the
+  // rail / model-details read, or a mixed connection loses its visible Kimi quota.
+  it('keeps Kimi weekly quota for a mixed Kimi/MiniMax connection without asking for MiniMax routes', async () => {
+    reads.codex.mockReturnValue({ snapshot: null });
+    const local = vi.fn().mockResolvedValue({ status: 'ready', stale: false,
+      snapshot: { kind: 'kimi-coding-quota', fetchedAt: Date.now(),
+        windows: [{ id: 'limit_7d', usedPercent: 30, resetsAt: null }] } });
+    vi.stubGlobal('electronAPI', { maker: { fetchProviderAccountUsage: local }, deviceLink: { invoke: vi.fn() } });
+    const mixed = provider('mixed-kimi-minimax', { auth: { method: 'apiKey' },
+      routing: {
+        'claude-code': { upstream: 'https://api.kimi.com/coding/v1', authStrategy: 'api-key-header' },
+        codex: { upstream: 'https://api.minimaxi.com/v1', authStrategy: 'api-key-header' },
+      } });
+    const hook = renderHook(() => useProviderWeeklyQuota(mixed, { deviceId: null }));
+    try {
+      await act(async () => {});
+      expect(hook.result.current?.usedPercent).toBe(30);
+      expect(local).toHaveBeenCalledExactlyOnceWith({ providerId: 'mixed-kimi-minimax', forceRefresh: false });
+    } finally { hook.unmount(); vi.unstubAllGlobals(); }
+  });
+
   it('selects only the weekly generic bucket, not the latest promotion or short window', () => {
     const data = snapshot(79);
     expect(codexWeeklyQuota(localCodexQuotaView(data), Date.now())?.usedPercent).toBe(79);

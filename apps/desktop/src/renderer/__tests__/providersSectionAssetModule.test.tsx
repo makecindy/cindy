@@ -291,15 +291,39 @@ it('shows MiniMax plan windows and refreshes the matching runtime in a mixed con
     },
   } as ProviderView} />);
   await screen.findByText('MiniMax');
-  // Main owns credential availability; settings must allow it to choose a keyed
-  // MiniMax route instead of pinning the first URL-matching runtime.
-  await waitFor(() => expect(fetchUsage).toHaveBeenCalledWith({ providerId: 'plan-copy', forceRefresh: false }));
+  // 设置页必须点名 MiniMax 路线，让 Main 只用那条路线自己的密钥；
+  // 缺省 agent 的其它调用方仍按路线顺序读（混合连接的 Kimi 配额不被改判）。
+  await waitFor(() => expect(fetchUsage).toHaveBeenCalledWith({ providerId: 'plan-copy', forceRefresh: false, agent: 'codex' }));
   expect(screen.getByText('providerAccountUsage.kimi.limit_5h')).toBeTruthy();
   expect(screen.getByText('providerAccountUsage.kimi.limit_7d')).toBeTruthy();
   const refresh = screen.getByRole('button', { name: 'providerAccountUsage.kimi.refresh' });
   await waitFor(() => expect(refresh.hasAttribute('disabled')).toBe(false));
   fireEvent.click(refresh);
-  await waitFor(() => expect(fetchUsage).toHaveBeenLastCalledWith({ providerId: 'plan-copy', forceRefresh: true }));
+  await waitFor(() => expect(fetchUsage).toHaveBeenLastCalledWith({ providerId: 'plan-copy', forceRefresh: true, agent: 'codex' }));
+});
+
+// PR #9894 review: MiniMax 路线各自属于不同引擎的账户。第一条路线没有密钥时，
+// 设置页要换下一条 MiniMax 路线继续读，而不是借用其它引擎或其它供应商的密钥。
+it('falls back to the next MiniMax route when the first one has no key', async () => {
+  const fetchUsage = vi.fn(async (input: { agent?: string }) => (input.agent === 'claude-code'
+    ? { status: 'unavailable', error: 'no-credentials' }
+    : {
+      status: 'ready', stale: false, agent: 'codex',
+      snapshot: { kind: 'minimax-plan-quota', fetchedAt: Date.now(), noPlan: false,
+        weeklyUnlimited: false, boostedWeeklyRemainingPercent: null,
+        windows: [{ id: 'rolling', model: null, usedPercent: 20, resetsAt: null }] },
+    }));
+  Object.assign(window.electronAPI.maker, { fetchProviderAccountUsage: fetchUsage });
+  render(<ProviderAccountUsageModule provider={{
+    id: 'two-minimax-routes', connected: true, auth: { method: 'apiKey' },
+    routing: {
+      'claude-code': { upstream: 'https://api.minimaxi.com/anthropic', authStrategy: 'api-key-header' },
+      codex: { upstream: 'https://api.minimaxi.com/v1', authStrategy: 'api-key-header' },
+    },
+  } as ProviderView} />);
+  await screen.findByText('MiniMax');
+  await waitFor(() => expect(fetchUsage).toHaveBeenCalledWith({ providerId: 'two-minimax-routes', forceRefresh: false, agent: 'codex' }));
+  expect(screen.getByText('providerAccountUsage.kimi.limit_5h')).toBeTruthy();
 });
 
 it('keeps the manual refresh action after the first OpenCode Go quota snapshot', async () => {

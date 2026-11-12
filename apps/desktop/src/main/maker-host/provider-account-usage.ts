@@ -32,7 +32,7 @@ import {
 } from '../../shared/providerAccountUsage.js';
 import { isKimiCodingProvider, kimiCodingUsageEndpoint, parseKimiCodingUsage } from '../../shared/kimiCodingUsage.js';
 import { isOpenCodeGoProvider, parseOpenCodeGoUsage } from '../../shared/opencodeGoUsage.js';
-import { isMiniMaxPlanProvider, minimaxPlanUsageEndpoint, MiniMaxPlanUsageError, parseMiniMaxPlanUsage } from '../../shared/minimaxPlanUsage.js';
+import { minimaxPlanUsageEndpoint, MiniMaxPlanUsageError, parseMiniMaxPlanUsage } from '../../shared/minimaxPlanUsage.js';
 import { createMakerLogger } from './logger-adapter.js';
 
 const log = createMakerLogger('provider-account-usage');
@@ -107,6 +107,7 @@ export interface ProviderAccountUsageResolution {
 type ProviderReader = (providerId: string) => Provider | undefined;
 type KeyReader = (providerId: string, agent: AgentKind) => string | null;
 type OwnerStampReader = () => { dataOwnerId: string | null; generation: number };
+type RouteStateReader = (providerId: string) => { inProgress: boolean; revision: number };
 
 let oauthReader: KeyReader = () => null;
 let prepareOAuth: (providerId: string) => Promise<void> = async () => {};
@@ -118,7 +119,13 @@ export function setAccountUsageOAuthReader(read: KeyReader, prepare: typeof prep
 let providerReader: ProviderReader = () => undefined;
 let keyReader: KeyReader = () => null;
 let ownerStampReader: OwnerStampReader = () => ({ dataOwnerId: null, generation: 0 });
+let routeStateReader: RouteStateReader = () => ({ inProgress: false, revision: 0 });
 let fetchImpl: typeof fetch = globalThis.fetch;
+
+/** Host injects the existing provider transaction fence without loading its routing graph. */
+export function setAccountUsageRouteStateReader(reader: RouteStateReader): void {
+  routeStateReader = reader;
+}
 
 /** host 注册期接通真实目录读取（active-catalog）。 */
 export function setAccountUsageProviderReader(reader: ProviderReader): void {
@@ -226,6 +233,11 @@ export function parseDeepSeekAccountUsage(
  * 认领规则：apiKey 鉴权 + 某 runtime 的 baseUrl 与官方端点同域且路径匹配。
  * https 之外一律不认领（规则同 provider-route 的上游判定，不做子串包含）。
  * 智谱只认领 Coding Plan 接入路径，按量付费（/api/paas）同域也不认领。
+ *
+ * 缺省 agent 按 claude-code → codex → pi 取第一条能读出密钥的路线：调用方若要某个
+ * 供应商的套餐，就显式传入那条路线的 agent（例如设置页的 MiniMax 卡）。这里不按
+ * 供应商类型改写缺省语义 —— 混合连接（同一连接同时配 Kimi 与 MiniMax）的供应商周配额
+ * 仍读 Kimi，不会被整体改判成 MiniMax。
  */
 export function resolveProviderAccountUsage(
   providerId: string,
@@ -236,11 +248,7 @@ export function resolveProviderAccountUsage(
   // 指定 agent 时只认领该 runtime：同一供应商各引擎可用不同账户的独立密钥，
   // 会话查询必须对准当前会话实际路由的账户。
   const agents = agent ? [agent] : PROVIDER_ACCOUNT_USAGE_AGENTS;
-  // Settings displays MiniMax when present. Choose its first keyed route here,
-  // where credentials are available, and never fall through to another vendor.
-  const miniMaxSettings = !agent && isMiniMaxPlanProvider(provider);
   for (const agent of agents) {
-    if (miniMaxSettings && !isMiniMaxPlanProvider(provider, agent)) continue;
     const upstream = provider.routing[agent]?.upstream;
     if (!upstream || provider.routing[agent]?.disabled) continue;
     let url: URL;
@@ -470,49 +478,63 @@ async function fetchAccountJson<T>(
 export async function readProviderAccountUsage(
   request: ProviderAccountUsageRequest,
 ): Promise<ProviderAccountUsageResult> {
+  const routeState = routeStateReader(request.providerId);
+  if (routeState.inProgress) return { status: 'unavailable', error: 'updating' };
+  const dispatchCurrent = () => {
+    const latest = routeStateReader(request.providerId);
+    return !latest.inProgress && latest.revision === routeState.revision;
+  };
   const ownerStamp = ownerStampReader();
   const provider = providerReader(request.providerId);
   const kimi = isKimiCodingProvider(provider, request.agent);
-  const minimax = isMiniMaxPlanProvider(provider, request.agent);
-  const guardedQuota = kimi || minimax;
-  const scope = `${ownerStamp.dataOwnerId}:${ownerStamp.generation}:${request.providerId}:${request.agent ?? ''}`;
   const epoch = kimiMutationEpoch;
-  // Names, models and unrelated routes do not change this MiniMax account.
-  // Keep auth/route/removal changes in the fence, including absent->present ABA.
+  if (kimi && provider?.auth.method === 'oauth') {
+    const before = JSON.stringify(provider);
+    try { await prepareOAuth(request.providerId); }
+    catch {
+      kimiIdentities.delete(`${ownerStamp.dataOwnerId}:${ownerStamp.generation}:${request.providerId}:${request.agent ?? ''}`);
+      return { status: 'unavailable', error: 'auth' };
+    }
+    if (!dispatchCurrent() || epoch !== kimiMutationEpoch
+      || JSON.stringify(ownerStampReader()) !== JSON.stringify(ownerStamp)
+      || JSON.stringify(providerReader(request.providerId)) !== before) {
+      return { status: 'unavailable', error: 'updating' };
+    }
+  }
+  const resolution = resolveProviderAccountUsage(request.providerId, request.agent);
+  if (!dispatchCurrent()) return { status: 'unavailable', error: 'updating' };
+  const minimax = resolution?.integrationId === 'minimax-plan-quota-v1';
+  // Implicit settings and explicit task reads of one MiniMax route must share
+  // identity, cache, in-flight work and upstream Retry-After.
+  const quotaRequest = minimax ? { ...request, agent: resolution.agent } : request;
+  const guardedQuota = kimi || minimax;
+  const scope = `${ownerStamp.dataOwnerId}:${ownerStamp.generation}:${request.providerId}:${quotaRequest.agent ?? ''}`;
+  // Transaction revisions fence dispatch/results. Presentation-only edits must
+  // not invalidate the reusable cache of the selected MiniMax account.
   const configOf = (value: typeof provider) => JSON.stringify(minimax ? [
-    value?.auth,
-    (request.agent ? [request.agent] : PROVIDER_ACCOUNT_USAGE_AGENTS).map(agent =>
-      isMiniMaxPlanProvider(value, agent) ? [agent, value?.routing[agent]] : [agent, null]),
+    value?.auth, value?.routing[quotaRequest.agent!],
   ] : value);
   const config = configOf(provider);
   const ownerCurrent = () => JSON.stringify(ownerStampReader()) === JSON.stringify(ownerStamp)
     && configOf(providerReader(request.providerId)) === config;
-  if (kimi && provider?.auth.method === 'oauth') {
-    try { await prepareOAuth(request.providerId); }
-    catch {
-      kimiIdentities.delete(scope);
-      return { status: 'unavailable', error: 'auth' };
-    }
-    if (!ownerCurrent() || epoch !== kimiMutationEpoch) return { status: 'unavailable', error: 'updating' };
-  }
-  const resolution = resolveProviderAccountUsage(request.providerId, request.agent);
   const identity = resolution ? createHash('sha256').update(JSON.stringify([config, resolution])).digest('hex') : null;
   if (guardedQuota && kimiIdentities.get(scope)?.identity !== identity) {
     kimiIdentities.set(scope, { identity, revision: ++kimiRevision });
   }
   const generation = kimiIdentities.get(scope);
-  const current = () => !guardedQuota || (ownerCurrent() && kimiIdentities.get(scope) === generation
-    && JSON.stringify(resolveProviderAccountUsage(request.providerId, request.agent)) === JSON.stringify(resolution));
-  if (minimax && generation) generation.miniMaxCurrent = current;
+  const accountCurrent = () => !guardedQuota || (ownerCurrent() && kimiIdentities.get(scope) === generation
+    && JSON.stringify(resolveProviderAccountUsage(request.providerId, quotaRequest.agent)) === JSON.stringify(resolution));
+  const current = () => dispatchCurrent() && accountCurrent();
+  if (minimax && generation) generation.miniMaxCurrent = accountCurrent;
   if (!resolution) {
-    // 没认领到官方端点，或 key 读不到。区分「本来就没有接口」与「有接口但 key 缺失」。
     if (providerAccountUsageSupported(request.providerId)) {
       return { status: 'unavailable', error: 'no-credentials' };
     }
     return { status: 'unsupported' };
   }
-  const run = () => readResolvedAccountUsage(request, resolution, ownerStamp, current, guardedQuota ? String(generation?.revision) : '');
-  const flightKey = `${scope}:${identity}:${generation?.revision}`;
+  const run = () => readResolvedAccountUsage(quotaRequest, resolution, ownerStamp, current,
+    guardedQuota ? String(generation?.revision) : '', accountCurrent);
+  const flightKey = `${scope}:${identity}:${generation?.revision}:${routeState.revision}`;
   let pending = guardedQuota ? kimiInFlight.get(flightKey) : undefined;
   if (!pending) {
     pending = run();
@@ -532,6 +554,7 @@ async function readResolvedAccountUsage(
   ownerStamp: ReturnType<OwnerStampReader>,
   current: () => boolean,
   revision: string,
+  cacheCurrent: () => boolean,
 ): Promise<ProviderAccountUsageResult> {
   // 缓存键含凭证指纹：同一供应商下换 key（不同账户）后旧账户快照绝不复用。
   const keyFingerprint = createHash('sha256').update(resolution.key).digest('hex').slice(0, 12);
@@ -540,7 +563,7 @@ async function readResolvedAccountUsage(
   const record = cache.get(cacheKey);
   const save = (value: CacheRecord) => cache.set(cacheKey, {
     ...value,
-    ...(resolution.integrationId === 'minimax-plan-quota-v1' ? { isCurrent: current } : {}),
+    ...(resolution.integrationId === 'minimax-plan-quota-v1' ? { isCurrent: cacheCurrent } : {}),
   });
   const structuredQuota = resolution.integrationId === 'kimi-coding-quota-v1'
     || resolution.integrationId === 'minimax-plan-quota-v1'
@@ -577,6 +600,7 @@ async function readResolvedAccountUsage(
   ) {
     return { status: 'ready', snapshot: record.snapshot, stale: false, agent: resolution.agent };
   }
+  if (!current()) return { status: 'unavailable', error: 'updating' };
   try {
     const snapshot =
       resolution.integrationId === 'minimax-plan-quota-v1'
@@ -669,6 +693,7 @@ export function resetProviderAccountUsageForTest(): void {
   providerReader = () => undefined;
   keyReader = () => null;
   ownerStampReader = () => ({ dataOwnerId: null, generation: 0 });
+  routeStateReader = () => ({ inProgress: false, revision: 0 });
   fetchImpl = globalThis.fetch;
   accountUsageNow = Date.now;
 }
