@@ -44,7 +44,8 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
 - 首次接触本仓、需要定位功能代码位置或判断新代码归属模块时，先读仓库地图
   `docs/dev-rules/repo-map.md`。
 - 只为检查界面而需要启动 Desktop 或 Mobile 模拟器、且不需要真实账号时，用 `--mock`
-  免登录模拟数据启动；新增或修改模拟任务、`--mock` 行为前先读 `docs/dev-rules/ui-mock-data.md`。
+  免登录模拟数据启动。`--mock` 不阻止 Desktop 调用真实模型（会沿用本机命令行登录），只看
+  界面时不要在里面发送消息；新增或修改模拟任务、`--mock` 行为前先读 `docs/dev-rules/ui-mock-data.md`。
 - 首次安装、修复依赖或准备新 worktree 时，必须先读
   `docs/dev-rules/environment-setup.md`。
 - 首次理解模型配置架构，新增模型／供应商，更新模型窗口／价格／推理档位／默认值／本地推荐，
