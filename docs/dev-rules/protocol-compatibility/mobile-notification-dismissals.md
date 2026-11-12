@@ -57,7 +57,10 @@ outbox 恢复与批次确认、APNs 静默载荷预算、系统事件标识隔�
 桌面和服务端类型检查通过；iOS 通知扩展的三份 Swift 源码通过 simulator SDK typecheck，
 Expo autolinking 能找到新模块和 subscriber。这些检查不等于完整原生构建。
 
-手机全量类型检查仍在未修改的 agent-net／agent-net-relay 定时器 `unref` 类型处失败；
-聊天数据库集成测试因本机没有 `pg_config` 未能运行（包含新增的私聊已读提交／回滚回归）。
-上线前须补齐 PostgreSQL 集成测试、iOS／Android 原生构建，并在真机覆盖前台、后台、
+手机全量类型检查在同一代码的隔离检出中通过。嵌套 worktree 曾向上解析到主检出残留的
+Expo 57／React Native 0.86 类型，造成定时器 `unref` 误报；用干净主分支与功能分支对照验证，
+避免将开发目录依赖污染误当作跨端代码问题。
+聊天数据库集成测试已在临时 PostgreSQL 18.6／Redis 7.4.2 的私有 Unix socket 实例上完成，
+合计 653 项通过，包含新增的私聊已读提交／回滚／重放回归。
+上线前仍须补齐 iOS／Android 原生构建，并在真机覆盖前台、后台、
 断网后恢复、同任务新通知并发到达和切换账号。Android 本次仅提供前台补偿。
