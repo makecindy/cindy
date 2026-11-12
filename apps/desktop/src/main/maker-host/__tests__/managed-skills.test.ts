@@ -70,6 +70,7 @@ vi.mock('../../cindy-brain/index.js', () => ({
 }));
 import { listCindyManagedSkills, prepareCindyCodexSkills, markCindyOfficialSkills } from '../managed-skills.js';
 import { codexManagedSkillLinkName } from '../codex-global-skills.js';
+import { configureAppDataDir, configureUserDataDir } from '../../userDataPath.js';
 
 async function writeSkill(root: string, slot: string, name: string) {
   const dir = path.join(root, 'skills', slot);
@@ -82,6 +83,9 @@ async function writeSkill(root: string, slot: string, name: string) {
 
 beforeEach(async () => {
   state.root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-managed-skill-catalog-'));
+  // Desktop startup injects the roots Electron reports (main/userDataPath.ts).
+  configureUserDataDir(state.root);
+  configureAppDataDir(state.root);
   state.owner = 'a';
   state.pending = false;
   state.enabled = true;
