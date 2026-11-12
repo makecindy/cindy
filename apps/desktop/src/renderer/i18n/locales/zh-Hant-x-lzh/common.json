@@ -15351,6 +15351,16 @@
             "recheck": "察連線",
             "summary": "掌 GitHub 儲存庫、Issues、PR 與 Actions。",
             "otherMethods": "他種連線之法"
+          },
+          "app": {
+            "title": "倉庫之變",
+            "description": "連 Cindy GitHub App，評審或 CI 有變，則更新所隨之 PR。",
+            "connected": "已連 {{login}} · 所察倉庫 {{count}} 個",
+            "missing": "請核此倉之 App 安裝及存取權限：{{repositories}}",
+            "error": "未能驗其連接，請重試。",
+            "repositories": "擇倉庫",
+            "disconnect": "斷事件之連",
+            "connect": "連 GitHub App"
           }
         },
         "unresolved": "{{count}} 條未決之 review 評論",
@@ -16085,7 +16095,11 @@
             "payments": "付款",
             "checkout": "結帳",
             "invoices": "帳單",
-            "subscriptions": "訂閱"
+            "subscriptions": "訂閱",
+            "reviewComments": "評審留言",
+            "reviewThreads": "評審議論",
+            "checkRuns": "檢查運行",
+            "commitStatus": "提交狀態"
           },
           "actions": {
             "all": "全部變化",
@@ -16107,7 +16121,12 @@
             "failed": "失敗",
             "paid": "已付款"
           }
-        }
+        },
+        "repositoriesLabel": "倉庫",
+        "repositoriesHint": "每行一 owner/repository。倉庫須授權予此 GitHub App，方能啟動任務。",
+        "repositoriesInvalid": "請填一至五十個有效之 owner/repository 倉庫名。",
+        "githubAppHint": "於執行此任務之電腦連接 GitHub App，授權所列倉庫，無須另設 Webhook 位址或金鑰。",
+        "githubAppPaused": "任務已暫停，事件不啟之。"
       },
       "trigger": {
         "label": "觸發方式",

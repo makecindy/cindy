@@ -15351,6 +15351,16 @@
             "recheck": "연결 확인",
             "summary": "GitHub 저장소, 이슈, PR 및 Actions를 관리합니다.",
             "otherMethods": "다른 연결 방법"
+          },
+          "app": {
+            "title": "저장소 이벤트",
+            "description": "Cindy GitHub App을 연결하면 리뷰나 CI가 변경될 때 추적 중인 PR이 업데이트됩니다.",
+            "connected": "{{login}} 계정으로 연결됨 · 저장소 {{count}}개 추적 중",
+            "missing": "다음 저장소의 App 설치 및 접근 권한을 확인하세요: {{repositories}}",
+            "error": "연결을 확인하지 못했습니다. 다시 시도하세요.",
+            "repositories": "저장소 선택",
+            "disconnect": "이벤트 연결 해제",
+            "connect": "GitHub App 연결"
           }
         },
         "unresolved": "미해결 리뷰 코멘트: {{count}}건",
@@ -16085,7 +16095,11 @@
             "payments": "결제",
             "checkout": "체크아웃",
             "invoices": "청구서",
-            "subscriptions": "구독"
+            "subscriptions": "구독",
+            "reviewComments": "검토 댓글",
+            "reviewThreads": "검토 스레드",
+            "checkRuns": "검사 실행",
+            "commitStatus": "커밋 상태"
           },
           "actions": {
             "all": "모든 변경",
@@ -16107,7 +16121,12 @@
             "failed": "실패",
             "paid": "결제됨"
           }
-        }
+        },
+        "repositoriesLabel": "저장소",
+        "repositoriesHint": "한 줄에 owner/repository 하나를 입력하세요. 이 GitHub App에 승인한 저장소만 작업을 시작할 수 있습니다.",
+        "repositoriesInvalid": "owner/repository 형식의 유효한 저장소 이름을 1–50개 입력하세요.",
+        "githubAppHint": "이 작업을 실행하는 컴퓨터에서 GitHub App에 연결하고 해당 저장소를 승인하세요. 별도의 Webhook URL이나 비밀 키는 필요하지 않습니다.",
+        "githubAppPaused": "이 작업은 일시 중지되었습니다. 이벤트가 작업을 시작하지 않습니다."
       },
       "trigger": {
         "label": "트리거 방식",
