@@ -162,3 +162,19 @@ export class MobileNotifyDeduper {
     }
   }
 }
+
+/**
+ * Whether an actually-live controller is watching this session (#9218).
+ * A stale topic alone is not enough: after the phone locks or backgrounds the
+ * app, the subscription entry lingers while the link is gone.
+ */
+export function hasActiveSessionWatcher(args: {
+  subscriberIds: readonly string[];
+  isLinkReady: (deviceId: string) => boolean;
+  isExplicitlyOffline: (deviceId: string) => boolean;
+}): boolean {
+  const { subscriberIds, isLinkReady, isExplicitlyOffline } = args;
+  return subscriberIds.some(
+    (deviceId) => isLinkReady(deviceId) && !isExplicitlyOffline(deviceId),
+  );
+}

@@ -167,6 +167,7 @@ import {
 import { onVoiceInputDictionaryChanged } from '../voice-input/VoiceInputDataStore';
 import { resetAll as resetSubscriptionRefs, snapshotSubscriptions } from './subscriptionRefcount';
 import { getControllersForTopic } from './subscriptions';
+import { hasActiveSessionWatcher } from './mobileNotify';
 import { getKnownControllerIds } from './subscriptions';
 import { startSharedTaskRuntime, stopSharedTaskRuntime, authorizeSharedTaskTransportRequest } from './sharedTaskRuntime.js';
 import { startProviderShareRuntime, stopProviderShareRuntime } from './providerShareRuntime.js';
@@ -2574,8 +2575,9 @@ const mobileNotifyDeduper = new MobileNotifyDeduper();
  * 静默跳过的场景(返回 false):
  *  - relay 未连接 / server 未声明 notify capability(老 relay,黑洞防护)
  *  - 该任务开了「消息免打扰」(含代输入等不走会话终态路径的调用方)
- *  - 有控制端正订阅该会话的实时流(session:<id> topic)——人已经在手机上看着这
- *    个会话,系统推送只会重复打扰
+ *  - 有链路就绪的控制端正订阅该会话的实时流(session:<id> topic)——人确实
+ *    在手机上看着这个会话,系统推送只会重复打扰。仅凭订阅表不足以判定:
+ *    手机锁屏/切后台后 topic 不会立即注销,须同时校验链路状态与在线证据。
  *  - 同 session + kind 5s 短窗去重
  * 手机端是否收得到由手机侧开关决定(注册/注销 token),桌面端不再设第二个开关。
  */
@@ -2616,7 +2618,15 @@ export function sendMobileSessionNotify(payload: {
   }
   const selfDeviceId = client.getSelfDeviceId();
   if (!selfDeviceId) return false;
-  if (getControllersForTopic(`session:${payload.sessionId}`).length > 0) {
+  // A stale subscription is not a live viewer. When the phone locks or
+  // backgrounds the app its session:<id> topic stays in the registry for a
+  // while, but the link is no longer ready; treating that as "watching"
+  // suppresses the very push that should wake the phone (#9218).
+  if (hasActiveSessionWatcher({
+    subscriberIds: getControllersForTopic(`session:${payload.sessionId}`),
+    isLinkReady: (deviceId) => client.isLinkReady(deviceId),
+    isExplicitlyOffline: (deviceId) => isPresenceExplicitlyOffline(deviceId),
+  })) {
     log.debug(
       `mobile notify skipped: session ${payload.sessionId.slice(0, 8)} is being watched remotely`,
     );
