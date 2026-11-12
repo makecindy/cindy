@@ -22,7 +22,8 @@ const authMock = vi.hoisted(() => ({ owner: 'owner-1' as string | null }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: authMock.owner }) }));
 // A non-empty installed roster marks the plugin list as loaded (Main sends none mid-switch).
 const installedMock = vi.hoisted(() => ({ ghosts: [{ manifest: { id: 'bundled' } }] as unknown[] }));
-vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => installedMock.ghosts }));
+vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => installedMock.ghosts,
+  readInstalledGhostsSnapshot: () => installedMock.ghosts }));
 const SITES: MainViewMock = {
   ghostId: 'xd-sites', instanceId: 'xd-sites', title: '站点', icon: 'globe', manifest: { name: 'XD Sites' },
 };

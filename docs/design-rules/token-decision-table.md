@@ -199,7 +199,7 @@ export const loginColors = {
 | 档 | Light | Dark | 用途 |
 |---|---|---|---|
 | 柔和 hover | 3.5% | 4% | `surface-hover-soft`、设置退出 hover、计划行 hover |
-| 悬停 / 标签底 | 5% | 6% | `surface-hover`、`surface-chip`、菜单 hover、命令面板行 hover、下拉行 hover 等 |
+| 悬停 / 标签底 | 5% | 6% | `surface-hover`、`surface-chip`、`sidebar-item-hover`（菜单 / Select / 侧栏行，Dark 原为白 9%，2026-11-11 维护者裁决 E-02 并入）、菜单 hover、命令面板行 hover、下拉行 hover 等 |
 | 选中 / 按下 | 8% | 10% | 弹层选中、设置菜单选中、计划大纲激活、提问卡标签 |
 | 弱档 | 10% | 13% | file-chip / 滚动条 hover |
 | 边框 / 分割线 | 8% | 10% | `border-default` 及各组件边框、分割线 |

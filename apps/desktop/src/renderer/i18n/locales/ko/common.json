@@ -11137,7 +11137,8 @@
         "capability": {
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}}의 도구가 실행되지 않았습니다. 그룹 권한이 만료되었거나 이 작업을 허용하지 않습니다. 동반자 소유자가 이 그룹에서 다시 요청해 주세요.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}}의 그룹 권한을 확인할 수 없어 도구가 실행되지 않았습니다. 연결이 복구되면 다시 시도해 주세요.",
-          "ATTACHMENTS_UNAVAILABLE": "다운로드 실패 또는 첨부 개수 제한으로 일부 첨부 파일이 {{name}}에게 전달되지 않았습니다. 이번 요청에 필요한 파일을 다시 보내 주세요."
+          "ATTACHMENTS_UNAVAILABLE": "다운로드 실패 또는 첨부 개수 제한으로 일부 첨부 파일이 {{name}}에게 전달되지 않았습니다. 이번 요청에 필요한 파일을 다시 보내 주세요.",
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}님, Cindy가 대신 일하게 하려면 내 Cindy를 연결하세요(지금 온라인인 Cindy가 없습니다)."
         }
       },
       "settings": {
@@ -11262,6 +11263,38 @@
           "failed": "실패",
           "cancelled": "취소됨",
           "timed-out": "시간 초과"
+        },
+        "label": "작업",
+        "untitled": "제목 없는 작업",
+        "askedBy": "{{requester}} 님의 요청",
+        "pr": "PR #{{number}}",
+        "open": "작업 '{{title}}' 열기",
+        "live": {
+          "running": "진행 중",
+          "waiting": "답장 대기",
+          "idle": "대기 중",
+          "failed": "오류"
+        },
+        "othersSaid": "스레드에서 다른 사람이 한 말"
+      },
+      "assistant": {
+        "groupRecent": "그룹의 최근 메시지",
+        "groupNew": "그룹의 새 메시지",
+        "threadRecent": "스레드의 최근 메시지",
+        "threadNew": "스레드의 새 메시지",
+        "replyingTo": "\"{{name}}\" 님에게 답장: {{text}}",
+        "earlierOmitted": "(이전 메시지는 생략)",
+        "actingFor": "{{name}} · {{person}} 대신",
+        "checkout": {
+          "gitMissing": "(Cindy) 이 그룹의 프로젝트 {{repo}}가 아직 이 컴퓨터에 없습니다: git이 설치되어 있지 않습니다. {{guide}} 설치한 뒤 다시 @Cindy를 부르면 Cindy가 프로젝트를 내려받아 그 안에서 작업합니다.",
+          "signInOpened": "(Cindy) 이 그룹의 프로젝트 {{repo}}가 아직 이 컴퓨터에 없습니다: 먼저 GitHub 계정을 연결해야 합니다. Cindy가 이 컴퓨터에서 GitHub 로그인을 열었습니다. 로그인한 뒤 다시 @Cindy를 부르면 프로젝트를 자동으로 내려받습니다.",
+          "signIn": "(Cindy) 이 그룹의 프로젝트 {{repo}}가 아직 이 컴퓨터에 없습니다: 먼저 GitHub 계정을 연결해야 합니다. 이 컴퓨터의 Cindy에서 GitHub에 로그인한 뒤 다시 @Cindy를 불러 주세요.",
+          "unavailable": "(Cindy) 이 그룹의 프로젝트 {{repo}}를 이 컴퓨터로 내려받지 못했습니다: GitHub 계정에 이 저장소 권한이 없거나 네트워크에 연결할 수 없습니다. GitHub에서 저장소를 열 수 있는지 확인한 뒤 다시 @Cindy를 불러 주세요.",
+          "installGit": {
+            "darwin": "터미널에서 xcode-select --install을 실행하고 안내에 따라 설치하세요.",
+            "win32": "https://git-scm.com/download/win 에서 Git을 내려받아 기본 설정으로 설치하세요.",
+            "linux": "시스템 패키지 관리자로 git을 설치하세요(예: sudo apt install git)."
+          }
         }
       },
       "files": {
@@ -11465,10 +11498,21 @@
           "accessTools": "도구와 정보 사용 가능",
           "replies": "동반자 답변 방식",
           "replyModeMentionedNote": "@하지 않으면 동반자가 답하지 않아요.",
+          "assistant": "그룹의 Cindy",
+          "assistantHint": "@한 사람의 컴퓨터에서 실행돼요.",
+          "replyModeAssistant": "Cindy가 답함",
+          "replyModeAssistantNote": "그룹의 Cindy가 답해요.",
           "work": "역할 분담",
           "ownFolder": "그룹 전용 폴더",
-          "projectDirHint": "역할 분담 때 동반자가 여기서 작업해요.",
+          "projectDirHint": "이 컴퓨터에서만 적용돼요.",
           "projectDirClearHint": "그룹 전용 폴더를 대신 사용해요",
+          "project": "프로젝트",
+          "projectCaption": "동반자는 그룹에서 답장하거나 역할을 분담할 때 이 프로젝트에서 작업해요. 저장소는 그룹 전체가 공유하고, 폴더는 이 컴퓨터에만 저장돼요.",
+          "githubRepo": "GitHub 저장소",
+          "githubRepoHint": "owner/name 형식으로 입력하세요. 폴더를 고르지 않은 컴퓨터는 그 컴퓨터의 이 프로젝트를 쓰고, 없으면 내려받아요.",
+          "githubRepoSaveFailed": "저장소를 저장하지 못했어요. 확인 후 다시 시도하세요.",
+          "projectFolder": "이 컴퓨터의 폴더",
+          "projectDirAutoHint": "저장소로 자동으로 찾은 프로젝트예요.",
           "organizerHint": "누가 어느 단계를 맡을지 정해요. 기본은 첫 번째 동반자예요.",
           "autoContinueHint": "끄면 단계마다 ‘계속’을 누를 때까지 기다려요.",
           "workCaption": "git 프로젝트를 고르면 역할 분담마다 새 브랜치를 만들어 내 코드는 건드리지 않아요. 프로젝트 폴더와 자동 넘기기는 이 컴퓨터에서만 적용돼요.",
@@ -11778,6 +11822,8 @@
       "takeOverConflict": "{{name}}은(는) 이미 '{{device}}'(으)로 옮겨졌습니다",
       "takeOverOffline": "서버에 연결할 수 없어 지금은 이 컴퓨터에서 계속할 수 없습니다",
       "takeOverFailed": "이 컴퓨터에서 {{name}}을(를) 이어받지 못했습니다",
+      "profileIdentityTooLong": "클라우드의 성격 정보가 {{limit}}자를 초과하여 가져올 수 없습니다. 내용을 줄이고 동기화한 후 다시 시도하세요. 기존 데이터는 보존되었습니다.",
+      "profileUserTooLong": "클라우드의 사용자 정보가 {{limit}}자를 초과하여 가져올 수 없습니다. 내용을 줄이고 동기화한 후 다시 시도하세요. 기존 데이터는 보존되었습니다.",
       "localCindyConflict": "인계받을 컴퓨터에 이미 다른 Cindy가 있습니다. 해당 Cindy의 설정에서 관리하거나 다른 주 컴퓨터를 선택하세요",
       "localCindyConflictAction": "이 컴퓨터의 Cindy 설정 열기",
       "notEnabled": "이 서버는 주 컴퓨터 변경을 지원하지 않습니다",
@@ -11844,7 +11890,20 @@
       "transferred": "{{name}}을(를) '{{device}}'(으)로 옮겼습니다",
       "transferConflict": "{{name}}의 주 컴퓨터가 이미 바뀌어 옮기지 않았습니다",
       "transferOffline": "서버에 연결할 수 없습니다. {{name}}은(는) 계속 이 컴퓨터에서 실행됩니다",
-      "transferFailed": "{{name}}을(를) '{{device}}'(으)로 옮기지 못했습니다"
+      "transferFailed": "{{name}}을(를) '{{device}}'(으)로 옮기지 못했습니다",
+      "repair": {
+        "action": "자료 수정 후 다시 시도",
+        "title": "동료 자료 수정",
+        "description": "저장하면 이 컴퓨터에서 동료를 복원합니다. 원본 자료는 먼저 이 컴퓨터에 백업됩니다.",
+        "save": "저장하고 복원",
+        "count": "{{count}} / {{limit}}자",
+        "over": "{{count}}자 초과했습니다. 내용을 줄인 후 저장하세요.",
+        "changed": "자료 또는 주 컴퓨터가 변경되었습니다. 다시 읽은 후 수정하세요.",
+        "loadFailed": "자료를 읽지 못했습니다. 다시 시도하세요.",
+        "backupFailed": "원본 자료를 백업하지 못해 수정 사항을 적용하지 않았습니다. 디스크 여유 공간을 확인하고 다시 시도하세요.",
+        "saveFailed": "동료가 아직 복원되지 않았습니다. 수정 내용은 여기에 남아 있습니다. 다시 시도하세요.",
+        "reload": "다시 읽기"
+      }
     },
     "market": {
       "heading": "동반자 찾기",
@@ -13247,6 +13306,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "원문 사용",
     "rateLimited": "음성 요청이 너무 많습니다. 잠시 후 다시 시도하세요.",
     "status": {
       "listening": "음성 입력 중",
@@ -13591,7 +13651,7 @@
       "claudeSubscriptionSwitchFailed": "Claude.ai로 전환하거나 이 세션을 다시 시도할 수 없습니다: {{msg}}",
       "codexAppServerRetired": "Codex 서비스가 다시 시작되었거나 교체되었습니다. 현재 요청이 중단되었으므로 다시 실행해 주세요.",
       "codexAuthMissing": "원격 Codex가 아직 로그인되지 않았습니다(401 Unauthorized). 「인증 동기화」를 클릭하여 로컬 Codex 자격 증명을 원격 Cindy Codex home으로 푸시한 후 다시 시도하세요.",
-      "codexAuthMissingLocal": "Codex 자격 증명이 없거나 만료되었습니다(401 Unauthorized). {{appName}} 설정 → Codex에서 다시 로그인하거나(로그인 시 app-server가 자동 재시작) 터미널에서 `codex login` 실행 후 설정에서 인증 모드를 한 번 전환하여 app-server를 재시작한 다음 새 세션을 시작하세요.",
+      "codexAuthMissingLocal": "이 컴퓨터의 “{{provider}}” 연결을 인증하지 못했습니다. 설정에서 해당 연결의 로그인 상태를 확인하고 연결을 복구한 뒤 이 세션으로 돌아와 계속하세요.",
       "codexSessionExpired": "OpenAI 연결을 업데이트해야 합니다. ChatGPT를 다시 연결하면 계속할 수 있습니다. {{appName}}에서 시스템 Codex CLI를 로그아웃하거나 다른 모델 소스의 재연결을 요구하지 않습니다.",
       "codexAuthSynced": "인증이 동기화되었습니다. 「다시 시도」를 클릭하여 다시 보내세요.",
       "syncAuth": "인증 동기화",
@@ -14213,6 +14273,8 @@
       "sessionSentNamed": "세션 \"{{name}}\"에서 보냄",
       "sessionViewSource": "보낸 세션 보기",
       "botSentNamed": "동반자 \"{{name}}\"에서 보냄",
+      "groupThreadSent": "\"{{name}}\" 님이 그룹 채팅 \"{{group}}\"의 스레드에서 보냄",
+      "groupRequestSent": "그룹 \"{{group}}\"에서 · {{name}}",
       "orcaFromLead": "Lead에서 온 메시지",
       "orcaFromWorker": "Worker에서 온 메시지",
       "orcaFromWorkerBatch": "시스템이 반환한 Worker 결과 {{count}}개",
@@ -17633,6 +17695,7 @@
       "dingtalkBotDisconnectFailed": "DingTalk 봇 연동 해제 실패"
     },
     "errors": {
+      "piStartupCloudFile": "클라우드에만 있는 지침 파일 때문에 Pi 시작이 지연될 수 있습니다: {{path}}. Finder에서 이 파일을 다운로드하고 로컬에서 사용할 수 있는지 확인한 후 다시 시도하세요. 시간 초과의 원인이 다를 수도 있습니다.",
       "openFileFailed": "시스템에서 파일을 열 수 없습니다",
       "emptyResponse": "모델이 내용을 반환하지 않았습니다. 다시 시도해 주세요. 맥락이 길면 모델을 바꿔 보세요.",
       "turnFailed": "작업 실행에 실패했습니다(모델이 오류 상세 정보를 반환하지 않았습니다). 다시 시도해 주세요.",
@@ -19550,6 +19613,11 @@
     }
   },
   "pluginUi": {
+    "settings": "플러그인 설정",
+    "save": "저장",
+    "settingsFailed": "플러그인 설정을 불러오거나 저장하지 못했습니다. 이 페이지를 다시 열어 주세요.",
+    "invalidSetting": "표시된 값이 허용 범위 안에 있는지 확인해 주세요.",
+    "attachmentFailed": "플러그인이 '{{name}}'을(를) 처리하지 못했습니다. 원본 첨부 파일은 유지됩니다.",
     "display": "표시 방식",
     "original": "원본",
     "menu": "플러그인 보기 및 명령",

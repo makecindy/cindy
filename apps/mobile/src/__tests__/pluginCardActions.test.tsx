@@ -6,6 +6,12 @@ import { PluginCardActions } from "../plugins/PluginCardActions";
 import { pluginCardPlainText } from "../plugins/pluginCardText";
 import { pendingGhostCardFormDelivery } from "@cindy/maker-shared/ghost-card-form";
 import { MobileMailHtmlPreview } from '../plugins/MobileMailHtmlPreview';
+import { pluginPreviewFixture, PREVIEW_FIXTURE_PLUGIN } from '../debug/pluginPreviewFixture';
+
+vi.mock('../plugins/PluginNativeIntent', () => ({ PluginNativeIntent: (props: any) => {
+  h.preview = props;
+  return createElement('button', { 'data-testid': 'plugin-preview', onClick: props.onClose }, props.intent.url);
+} }));
 
 vi.mock('react-native-webview', () => ({ WebView: forwardRef((props: any, ref) => {
   h.web = props;
@@ -22,7 +28,7 @@ vi.mock('lucide-react-native', async () => {
   return Object.fromEntries(['Settings', 'ChevronDown', 'ExternalLink', 'GitPullRequest', 'GitMerge', 'GitPullRequestClosed', 'GitPullRequestDraft', 'Check', 'CircleMinus', 'CircleX', 'Clock'].map((name) => [name, icon(name)]));
 });
 
-const h = vi.hoisted(() => ({ noticeFrame: { y: 400, height: 24 }, invoke: vi.fn(), pick: vi.fn(), resolve: vi.fn(), inject: vi.fn(), web: {} as any, mode: 'light' }));
+const h = vi.hoisted(() => ({ noticeFrame: { y: 400, height: 24 }, invoke: vi.fn(), pick: vi.fn(), resolve: vi.fn(), inject: vi.fn(), web: {} as any, preview: {} as any, mode: 'light', focused: true, status: 'online', appStateChange: (_state: string) => {} }));
 vi.mock("react-native", () => {
   // The notice's frame comes from h.noticeFrame; every other View ignores its ref.
   const View = ({ children, ref }: { children?: ReactNode; ref?: { current: unknown } }) =>
@@ -60,7 +66,10 @@ vi.mock("react-native", () => {
     StyleSheet: { create: (value: unknown) => value },
     AppState: {
       currentState: "active",
-      addEventListener: () => ({ remove: () => {} }),
+      addEventListener: (_event: string, listener: (state: string) => void) => {
+        h.appStateChange = listener;
+        return { remove: () => {} };
+      },
     },
     Alert: { alert: vi.fn() },
     Linking: { openURL: vi.fn(async () => true) },
@@ -107,9 +116,9 @@ vi.mock("@/theme", async () => ({
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
-vi.mock("expo-router", () => ({ useIsFocused: () => true }));
+vi.mock("expo-router", () => ({ useIsFocused: () => h.focused }));
 vi.mock("@/device-link/DeviceLinkContext", () => ({
-  useDeviceLink: () => ({ invoke: h.invoke, status: "online" }),
+  useDeviceLink: () => ({ invoke: h.invoke, status: h.status }),
 }));
 vi.mock("@/auth/authOwnerGeneration", () => ({
   getMobileAuthOwner: () => ({ accountKey: "owner" }),
@@ -120,7 +129,10 @@ let unmount: (() => void) | undefined;
 afterEach(() => {
   unmount?.();
   unmount = undefined;
+  vi.useRealTimers();
   h.mode = 'light';
+  h.focused = true;
+  h.status = 'online';
   h.noticeFrame = { y: 400, height: 24 };
   vi.clearAllMocks();
 });
@@ -784,6 +796,81 @@ it('hides superseded mail entirely instead of showing another draft-updated card
   expect(h.invoke).not.toHaveBeenCalled();
 });
 
+
+// Unit regression: a card action returns a preview intent, which the card poll used to discard.
+it('opens and acknowledges the computer preview requested by a card action', async () => {
+  vi.useFakeTimers();
+  const intent = { id: 'preview-1', kind: 'preview', pluginId: 'design', ghostName: 'Design', url: 'http://localhost:1234/draft' };
+  h.invoke.mockImplementation(async (_device, _channel, [request]) => ({ result:
+    request.actionId === 'open-interaction' ? { pageId: 'card-page' } :
+    request.actionId === 'poll' ? { confirms: [], intents: [intent] } : {} }));
+  const container = document.createElement('div'), root = createRoot(container);
+  unmount = () => act(() => root.unmount());
+  await act(async () => root.render(createElement(PluginCardActions, {
+    deviceId: 'device', sessionId: 's', callId: 'c',
+    data: { pluginId: 'design', revision: '1', items: [{ id: 'preview', label: 'Open draft', disabled: false }] },
+  })));
+  await act(async () => [...container.querySelectorAll('button')].find(button => button.textContent === 'Open draft')!.click());
+  const preview = container.querySelector<HTMLButtonElement>('[data-testid="plugin-preview"]');
+  expect(preview?.textContent).toBe(intent.url);
+  await h.preview.readPreview(intent.url, 49152, 'revision');
+  expect(h.invoke).toHaveBeenCalledWith('device', expect.any(String), [expect.objectContaining({
+    actionId: 'preview:fetch', resourceRef: { collectionId: 'plugins', kind: 'plugin', id: 'design' },
+    input: { pageId: 'card-page', intentId: 'preview-1', url: intent.url, offset: 49152, revision: 'revision' },
+  })]);
+  await act(async () => preview!.click());
+  expect(container.querySelector('[data-testid="plugin-preview"]')).toBeNull();
+  expect(h.invoke).toHaveBeenCalledWith('device', expect.any(String), [expect.objectContaining({
+    actionId: 'intent:ack', input: { pageId: 'card-page', intentId: 'preview-1' },
+  })]);
+  // A poll captured before acknowledgement must not reopen the dismissed viewer.
+  await act(async () => vi.advanceTimersByTimeAsync(1000));
+  expect(container.querySelector('[data-testid="plugin-preview"]')).toBeNull();
+});
+
+// Unit: #10069 review found that a resumed card reopened a host-invalidated preview
+// before its fresh poll. The open/close test above never leaves the foreground.
+// Pause each visibility gate with a preview open, then hold the resume receipt.
+it.each(['background', 'blur', 'offline'])('waits for a fresh preview receipt after %s', async (reason) => {
+  vi.useFakeTimers();
+  let holdPoll = false;
+  let resumePoll: ((value: unknown) => void) | undefined;
+  h.invoke.mockImplementation(async (_device, channel, args) => {
+    if (holdPoll && args[0].actionId === 'poll') return new Promise(resolve => { resumePoll = resolve; });
+    return pluginPreviewFixture(channel, args);
+  });
+  const container = document.createElement('div'), root = createRoot(container);
+  unmount = () => act(() => root.unmount());
+  const render = () => root.render(createElement(PluginCardActions, {
+    deviceId: 'device', sessionId: 'qa-preview', callId: 'qa-preview-card',
+    data: { pluginId: PREVIEW_FIXTURE_PLUGIN, revision: '1', items: [{ id: 'editor', label: 'Open draft', disabled: false }] },
+  }));
+  await act(async () => render());
+  await act(async () => [...container.querySelectorAll('button')].find(button => button.textContent === 'Open draft')!.click());
+  await act(async () => vi.advanceTimersByTimeAsync(1000));
+  expect(container.querySelector('[data-testid="plugin-preview"]')).not.toBeNull();
+  await act(async () => {
+    if (reason === 'background') h.appStateChange('background');
+    if (reason === 'blur') h.focused = false;
+    if (reason === 'offline') h.status = 'offline';
+    render();
+  });
+  expect(container.querySelector('[data-testid="plugin-preview"]')).toBeNull();
+  holdPoll = true;
+  await act(async () => {
+    h.appStateChange('active');
+    h.focused = true;
+    h.status = 'online';
+    render();
+  });
+  expect(resumePoll).toBeDefined();
+  expect(container.querySelector('[data-testid="plugin-preview"]')).toBeNull();
+  await act(async () => resumePoll!(pluginPreviewFixture('maker:remote-resources:invoke', [{
+    resourceRef: { id: PREVIEW_FIXTURE_PLUGIN }, actionId: 'poll',
+  }])));
+  // An offline link cannot suspend the host; only its fresh receipt may reopen that preview.
+  expect(!!container.querySelector('[data-testid="plugin-preview"]')).toBe(reason === 'offline');
+});
 
 it('opens in-card task links through task navigation without a browser or plugin action', async () => {
   h.invoke.mockImplementation(async () => ({ result: { confirms: [] } }));

@@ -2199,6 +2199,25 @@ describe('nested mobile lists (#8603)', () => {
     expect(depths(source)).toEqual([0, 1, 2, 1, 0, 0]);
     expect(result.blocks.filter(b => b.type === 'list_item')[1]).toMatchObject({ checked: true });
   });
+  // PR #10103: unit / real parser. Previous nesting tests skipped all child
+  // content blocks, so flushing a continuation silently flattened later items.
+  it.each([
+    ['continuation', '- A\n  - B\n    explanation\n  - C', [0, 1, 1]],
+    ['loose paragraph', '- A\n\n  explanation\n\n  - B', [0, 1]],
+    ['fence', '- A\n\n  ```text\nnot indented inside fence\n  ```\n\n  - B', [0, 1]],
+    ['mermaid fence', '- A\n\n  ```mermaid\nflowchart LR\nA-->B\n  ```\n\n  - B', [0, 1]],
+    ['quote', '- A\n\n  > explanation\n\n  - B', [0, 1]],
+    ['ancestor continuation', '- A\n  - B\n    - C\n  explanation for A\n  - D', [0, 1, 2, 1]],
+    ['exit through paragraph', '- A\n  - B\n\noutside\n\n  - new list', [0, 1, 0]],
+    ['paragraph dedent', '- A\n\n  explanation\noutside\n\n  - new list', [0, 0]],
+  ] as const)('retains only enclosing list context through %s', (_name, source, expected) => {
+    expect(depths(source)).toEqual(expected);
+    let result = parseMobileMarkdownIncremental('');
+    for (let n = 1; n <= source.length; n++) {
+      result = parseMobileMarkdownIncremental(source.slice(0, n), result);
+      expect(result.blocks).toEqual(parseMobileMarkdownDocument(source.slice(0, n)).blocks);
+    }
+  });
 });
 
 // #8603: run limits must count the exact prefix used by native selection, and

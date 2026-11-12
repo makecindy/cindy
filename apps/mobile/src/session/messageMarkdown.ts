@@ -181,6 +181,16 @@ interface ParsedOpeningCodeFence {
   indent: string;
 }
 
+function leadingIndentColumns(line: string): number {
+  let columns = 0;
+  for (const character of line) {
+    if (character === '\t') columns += 4 - columns % 4;
+    else if (character === ' ') columns += 1;
+    else break;
+  }
+  return columns;
+}
+
 export function parseMobileMarkdown(
   input: string,
   options?: ParseMobileMarkdownOptions,
@@ -245,7 +255,19 @@ export function parseMobileMarkdownDocument(
     startLine: number,
     endLineExclusive: number,
   ): void => {
-    if (block.type !== 'list_item') listIndents.length = 0;
+    if (block.type !== 'list_item' && listIndents.length) {
+      // Child paragraphs, quotes and fences do not end their enclosing list.
+      // Keep only ancestors whose marker starts left of the block's content.
+      // A fence's body is literal text: its indentation cannot exit the list.
+      const contextEnd = block.type === 'code' || block.type === 'mermaid' || block.type === 'math'
+        ? startLine + 1
+        : endLineExclusive;
+      let indent = Infinity;
+      for (let line = startLine; line < contextEnd; line++) {
+        if (lines[line]?.trim()) indent = Math.min(indent, leadingIndentColumns(lines[line]));
+      }
+      while (listIndents.length && listIndents[listIndents.length - 1] >= indent) listIndents.pop();
+    }
     blocks.push(block);
     ranges.push({
       startLine: lineNumber(startLine),
@@ -472,8 +494,7 @@ export function parseMobileMarkdownDocument(
       flushParagraph(index);
       // Use observed indentation levels rather than assuming two/four spaces:
       // both conventions (and tab stops) must yield the same parent/sibling tree.
-      let indent = 0;
-      for (const character of list[1]) indent += character === '\t' ? 4 - indent % 4 : 1;
+      const indent = leadingIndentColumns(list[1]);
       while (listIndents.length && listIndents[listIndents.length - 1] > indent) listIndents.pop();
       if (listIndents.at(-1) !== indent) listIndents.push(indent);
       const depth = listIndents.length - 1;

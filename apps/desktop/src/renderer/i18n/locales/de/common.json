@@ -11182,7 +11182,8 @@
         "capability": {
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} konnte dieses Werkzeug nicht ausführen: Die Gruppenberechtigung ist abgelaufen oder erlaubt diese Aktion nicht. Der Besitzer des Freundes kann die Anfrage in dieser Gruppe erneut stellen.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "Die Gruppenberechtigung für {{name}} konnte nicht überprüft werden. Dieses Werkzeug wurde daher nicht ausgeführt. Versuche es erneut, sobald die Verbindung wiederhergestellt ist.",
-          "ATTACHMENTS_UNAVAILABLE": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers oder der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut."
+          "ATTACHMENTS_UNAVAILABLE": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers oder der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut.",
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, verbinde dein Cindy, damit Cindy für dich arbeiten kann (gerade ist kein Cindy von dir online)."
         }
       },
       "settings": {
@@ -11307,6 +11308,38 @@
           "failed": "Fehlgeschlagen",
           "cancelled": "Abgebrochen",
           "timed-out": "Zeitüberschreitung"
+        },
+        "label": "Aufgabe",
+        "untitled": "Unbenannte Aufgabe",
+        "askedBy": "Angefragt von {{requester}}",
+        "pr": "PR #{{number}}",
+        "open": "Aufgabe „{{title}}“ öffnen",
+        "live": {
+          "running": "Läuft",
+          "waiting": "Wartet auf Antwort",
+          "idle": "Inaktiv",
+          "failed": "Fehlgeschlagen"
+        },
+        "othersSaid": "Andere im Thread schrieben"
+      },
+      "assistant": {
+        "groupRecent": "Neueste Nachrichten in der Gruppe",
+        "groupNew": "Neue Nachrichten in der Gruppe",
+        "threadRecent": "Neueste Nachrichten im Thread",
+        "threadNew": "Neue Nachrichten im Thread",
+        "replyingTo": "Antwort an „{{name}}“: {{text}}",
+        "earlierOmitted": "(Ältere Nachrichten ausgelassen)",
+        "actingFor": "{{name}} · für {{person}}",
+        "checkout": {
+          "gitMissing": "(Cindy) Das Projekt {{repo}} der Gruppe ist noch nicht auf diesem Computer: git ist hier nicht installiert. {{guide}} Danach @Cindy erneut, dann lädt Cindy das Projekt herunter und arbeitet darin.",
+          "signInOpened": "(Cindy) Das Projekt {{repo}} der Gruppe ist noch nicht auf diesem Computer: Verbinde zuerst dein GitHub-Konto. Cindy hat die GitHub-Anmeldung auf diesem Computer geöffnet; nach der Anmeldung @Cindy erneut, dann lädt Cindy das Projekt herunter.",
+          "signIn": "(Cindy) Das Projekt {{repo}} der Gruppe ist noch nicht auf diesem Computer: Verbinde zuerst dein GitHub-Konto. Melde dich in Cindy auf diesem Computer bei GitHub an und @Cindy dann erneut.",
+          "unavailable": "(Cindy) Das Projekt {{repo}} der Gruppe konnte nicht auf diesen Computer geladen werden: Dein GitHub-Konto hat eventuell keinen Zugriff darauf, oder das Netzwerk ist nicht erreichbar. Prüfe, ob du das Repository auf GitHub öffnen kannst, und @Cindy dann erneut.",
+          "installGit": {
+            "darwin": "Führe im Terminal xcode-select --install aus und folge den Hinweisen.",
+            "win32": "Lade Git von https://git-scm.com/download/win herunter und installiere es mit den Standardoptionen.",
+            "linux": "Installiere git mit der Paketverwaltung deines Systems (zum Beispiel sudo apt install git)."
+          }
         }
       },
       "files": {
@@ -11499,10 +11532,21 @@
           "accessTools": "Kann Tools und Informationen nutzen",
           "replies": "Antwortverhalten der Freunde",
           "replyModeMentionedNote": "Freunde bleiben still, solange sie niemand mit @ erwähnt.",
+          "assistant": "Gruppen-Cindy",
+          "assistantHint": "Arbeitet auf dem Computer der Person, die sie mit @ erwähnt.",
+          "replyModeAssistant": "Cindy antwortet",
+          "replyModeAssistantNote": "Die Gruppen-Cindy antwortet.",
           "work": "Arbeitsteilung",
           "ownFolder": "Gruppeneigener Ordner",
-          "projectDirHint": "Hier arbeiten die Freunde während einer Arbeitsteilung.",
+          "projectDirHint": "Gilt nur auf diesem Computer.",
           "projectDirClearHint": "Stattdessen den gruppeneigenen Ordner verwenden",
+          "project": "Projekt",
+          "projectCaption": "Freunde antworten und arbeiten bei Arbeitsteilungen in diesem Projekt. Das Repository teilt die ganze Gruppe; der Ordner bleibt auf diesem Computer.",
+          "githubRepo": "GitHub-Repository",
+          "githubRepoHint": "owner/name eingeben. Computer ohne gewählten Ordner verwenden ihre eigene Kopie dieses Projekts oder laden eine herunter.",
+          "githubRepoSaveFailed": "Das Repository wurde nicht gespeichert. Bitte prüfen und erneut versuchen.",
+          "projectFolder": "Ordner auf diesem Computer",
+          "projectDirAutoHint": "Anhand des Repositorys unter deinen Projekten gefunden.",
           "organizerHint": "Legt fest, wer die einzelnen Schritte übernimmt. Standardmäßig der erste Freund.",
           "autoContinueHint": "Wenn deaktiviert, wartet jeder Schritt, bis du fortfährst.",
           "workCaption": "Bei einem Git-Projekt erhält jede Arbeitsteilung einen eigenen Branch, damit dein Code unverändert bleibt. Projektordner und automatische Übergaben gelten nur auf diesem Computer.",
@@ -11823,6 +11867,8 @@
       "takeOverConflict": "{{name}} ist bereits auf „{{device}}“ umgezogen",
       "takeOverOffline": "Der Server ist nicht erreichbar, daher kann {{name}} hier gerade nicht fortfahren",
       "takeOverFailed": "{{name}} konnte auf diesem Computer nicht übernommen werden",
+      "profileIdentityTooLong": "Die Persona in der Cloud überschreitet {{limit}} Zeichen und kann nicht wiederhergestellt werden. Kürze und synchronisiere sie, und versuche es erneut. Vorhandene Daten bleiben erhalten.",
+      "profileUserTooLong": "Der Benutzerkontext in der Cloud überschreitet {{limit}} Zeichen und kann nicht wiederhergestellt werden. Kürze und synchronisiere ihn, und versuche es erneut. Vorhandene Daten bleiben erhalten.",
       "localCindyConflict": "Auf dem übernehmenden Computer gibt es bereits eine andere Cindy. Verwalte sie in ihren Einstellungen oder wähle einen anderen Hauptcomputer",
       "localCindyConflictAction": "Lokale Cindy-Einstellungen öffnen",
       "notEnabled": "Dieser Server unterstützt keinen Wechsel des Hauptcomputers",
@@ -11889,7 +11935,20 @@
       "transferred": "{{name}} wurde auf „{{device}}“ verschoben",
       "transferConflict": "Der Hauptcomputer von {{name}} wurde bereits geändert, daher wurde nichts verschoben",
       "transferOffline": "Server nicht erreichbar. {{name}} läuft weiterhin auf diesem Computer",
-      "transferFailed": "{{name}} konnte nicht auf „{{device}}“ verschoben werden"
+      "transferFailed": "{{name}} konnte nicht auf „{{device}}“ verschoben werden",
+      "repair": {
+        "action": "Profil bearbeiten und erneut versuchen",
+        "title": "Begleiterprofil korrigieren",
+        "description": "Beim Speichern wird dieser Begleiter auf diesem Computer wiederhergestellt. Das ursprüngliche Profil wird zuerst hier gesichert.",
+        "save": "Speichern und wiederherstellen",
+        "count": "{{count}} / {{limit}} Zeichen",
+        "over": "{{count}} Zeichen zu viel. Kürzen Sie den Text vor dem Speichern.",
+        "changed": "Das Profil oder der Hauptcomputer hat sich geändert. Laden Sie das Profil vor dem Bearbeiten neu.",
+        "loadFailed": "Das Profil konnte nicht gelesen werden. Versuchen Sie es erneut.",
+        "backupFailed": "Das ursprüngliche Profil konnte nicht gesichert werden. Die Korrektur wurde nicht angewendet. Prüfen Sie den freien Speicherplatz und versuchen Sie es erneut.",
+        "saveFailed": "Der Begleiter wurde noch nicht wiederhergestellt. Ihre Änderungen bleiben hier erhalten. Versuchen Sie es erneut.",
+        "reload": "Neu laden"
+      }
     },
     "market": {
       "heading": "Freunde entdecken",
@@ -13299,6 +13358,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "Originaltext Verwenden",
     "rateLimited": "Zu viele Sprachanfragen. Warte kurz und versuche es erneut.",
     "status": {
       "listening": "Spracheingabe",
@@ -13611,7 +13671,7 @@
       "claudeSubscriptionSwitchFailed": "Wechsel zu Claude.ai oder erneuter Versuch dieser Sitzung fehlgeschlagen: {{msg}}",
       "codexAppServerRetired": "Der Codex-Dienst wurde neu gestartet oder ersetzt. Die aktuelle Anfrage wurde unterbrochen; führe sie erneut aus.",
       "codexAuthMissing": "Remote-Codex ist noch nicht angemeldet (401 Unauthorized). Klicke auf „Authentifizierung synchronisieren“, um deine lokalen Codex-Zugangsdaten in das entfernte Cindy-Codex-Home-Verzeichnis zu übertragen, und versuch es dann erneut.",
-      "codexAuthMissingLocal": "Codex-Zugangsdaten fehlen oder sind abgelaufen (401 Unauthorized). Melde dich unter {{appName}} Einstellungen → Codex erneut an (der app-server startet bei der Anmeldung automatisch neu), oder führe `codex login` im Terminal aus und schalte den Authentifizierungsmodus in den Einstellungen einmal um, um den app-server neu zu starten. Starte anschließend eine neue Sitzung.",
+      "codexAuthMissingLocal": "Die Verbindung „{{provider}}“ auf diesem Computer konnte nicht authentifiziert werden. Prüfe ihren Anmeldestatus in den Einstellungen und kehre nach der Wiederherstellung zu dieser Sitzung zurück.",
       "codexSessionExpired": "Die OpenAI-Verbindung muss aktualisiert werden. Verbinde ChatGPT erneut, um fortzufahren. {{appName}} meldet deine systemweite Codex CLI nicht ab und fordert dich nicht auf, andere Modellquellen erneut zu verbinden.",
       "codexAuthSynced": "Authentifizierung synchronisiert. Klicke zum erneuten Senden auf „Erneut versuchen“.",
       "syncAuth": "Authentifizierung synchronisieren",
@@ -14233,6 +14293,8 @@
       "sessionSentNamed": "Von der Sitzung „{{name}}“ gesendet",
       "sessionViewSource": "Ursprüngliche Sitzung anzeigen",
       "botSentNamed": "Von Freund „{{name}}“ gesendet",
+      "groupThreadSent": "Von „{{name}}“ in einem Thread von „{{group}}“ gesendet",
+      "groupRequestSent": "Aus der Gruppe „{{group}}“ · {{name}}",
       "orcaFromLead": "Nachricht vom Lead",
       "orcaFromWorker": "Nachricht vom Worker",
       "orcaFromWorkerBatch": "Systemrückmeldung: {{count}} Worker-Ergebnisse",
@@ -17700,6 +17762,7 @@
       "dingtalkBotDisconnectFailed": "DingTalk-Bot-Verknüpfung konnte nicht aufgehoben werden"
     },
     "errors": {
+      "piStartupCloudFile": "Eine nur in der Cloud verfügbare Anweisungsdatei verzögert möglicherweise den Start von Pi: {{path}}. Lade diese Datei im Finder herunter, warte, bis sie lokal verfügbar ist, und versuche es erneut. Die Zeitüberschreitung kann eine andere Ursache haben.",
       "openFileFailed": "Datei kann nicht mit dem System geöffnet werden",
       "emptyResponse": "Das Modell hat keinen Inhalt zurückgegeben. Versuche es erneut. Wechsle bei sehr langem Kontext das Modell.",
       "turnFailed": "Die Aufgabe ist fehlgeschlagen (das Modell hat keine Fehlerdetails zurückgegeben) — versuche es erneut.",
@@ -19622,6 +19685,11 @@
     }
   },
   "pluginUi": {
+    "settings": "Plugin-Einstellungen",
+    "save": "Speichern",
+    "settingsFailed": "Die Plugin-Einstellungen konnten nicht geladen oder gespeichert werden. Öffne diese Seite erneut.",
+    "invalidSetting": "Prüfe die markierten Werte anhand der erlaubten Grenzen.",
+    "attachmentFailed": "Das Plugin konnte „{{name}}“ nicht verarbeiten. Der ursprüngliche Anhang bleibt erhalten.",
     "display": "Darstellung",
     "original": "Original",
     "menu": "Plugin-Ansichten und Befehle",
