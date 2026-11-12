@@ -110,6 +110,7 @@
       "expo-apple-authentication",
       "expo-notifications",
       "./plugins/with-communication-notifications",
+      "./plugins/with-notification-content",
       "./plugins/with-usage-widgets",
       "expo-secure-store",
       "expo-web-browser",

@@ -171,7 +171,11 @@
       "auto": "自动",
       "on": "常启",
       "off": "关闭"
-    }
+    },
+    "actionReplyPlaceholder": "书覆",
+    "actionNotDelivered": "未达电脑，请启 Cindy 处之。",
+    "actionReplyNotDelivered": "覆未发出，请启 Cindy 再发：{{text}}",
+    "actionRequestEnded": "此请已决，或已逾期。"
   },
   "about": {
     "sectionTitle": "关于此手机",

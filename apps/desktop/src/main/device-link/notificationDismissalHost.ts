@@ -41,4 +41,3 @@ export function onMobileNotificationDismissalsChanged(listener: () => void): () 
   changed = listener;
   return () => { if (changed === listener) changed = undefined; };
 }
-

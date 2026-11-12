@@ -171,7 +171,11 @@
       "auto": "自動",
       "on": "常にオン",
       "off": "オフ"
-    }
+    },
+    "actionReplyPlaceholder": "返信を入力",
+    "actionNotDelivered": "コンピューターに届きませんでした。Cindy を開いて対応してください。",
+    "actionReplyNotDelivered": "返信を送信できませんでした。Cindy を開いて再送してください：{{text}}",
+    "actionRequestEnded": "このリクエストはすでに処理済みか、期限切れです。"
   },
   "about": {
     "sectionTitle": "このスマートフォンについて",

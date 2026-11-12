@@ -171,7 +171,11 @@
       "auto": "自動",
       "on": "常啟",
       "off": "關閉"
-    }
+    },
+    "actionReplyPlaceholder": "書覆",
+    "actionNotDelivered": "未達電腦，請啟 Cindy 處之。",
+    "actionReplyNotDelivered": "覆未發出，請啟 Cindy 再發：{{text}}",
+    "actionRequestEnded": "此請已決，或已逾期。"
   },
   "about": {
     "sectionTitle": "關於此手機",

@@ -1245,6 +1245,7 @@ import {
 import { UsageLimitAutoResume } from './usageLimitAutoResume.js';
 import { createUsageLimitRecoveryStore, type SavedUsageLimitWait } from './usageLimitRecoveryStore.js';
 import { type MakerSessionCreateOpts, createSessionStderrOptions, isSessionRunningError } from './sessionRequest.js';
+import { createScheduledSessionBootstrap, type ScheduledSessionBootstrap } from './scheduledSessionBootstrap.js';
 import { persistAndHydrateSessionProvider } from './sessionProviderBootstrap.js';
 import { registerMakerSessionSendHandler } from './sessionSendHandler.js';
 import {
@@ -4020,6 +4021,23 @@ function resolvePendingInteraction(requestId: string, decision: InteractionDecis
   return true;
 }
 
+/**
+ * The request a phone alert may describe and answer for this task: the only
+ * interaction waiting in it, still owned by this host, and of a kind an alert
+ * can answer (a tool permission or a question). With anything else also
+ * waiting, the alert cannot say which one a tap answers.
+ */
+export function pendingRequestForAlert(sessionId: string): InteractionRequest | undefined {
+  let only: InteractionRequest | undefined;
+  for (const entry of pendingInteractionResolvers.values()) {
+    if (entry.sessionId !== sessionId) continue;
+    if (only || entry.migrated || entry.deferredDecision) return undefined;
+    if (entry.kind !== 'permission' && entry.kind !== 'ask_user_question') return undefined;
+    only = entry.request;
+  }
+  return only;
+}
+
 function resolvePendingPermissionFromAgentIsland(
   requestId: string,
   decision: Extract<InteractionDecision, { kind: 'permission' }>,
@@ -4737,13 +4755,13 @@ let pendingAgentSwitchApplyHolder:
   ) => Promise<{ release: () => void; selection?: ScheduledModelSelection }>) | null = null;
 let cancelPendingAgentSwitchHolder: ((sessionId: string) => void) | null = null;
 let prepareScheduledModelPreferencesHolder: ((sessionId: string, override: boolean) => Promise<void>) | null = null;
-let scheduledSessionBootstrapHolder: ((options: Parameters<Maker['createSession']>[0], signal?: AbortSignal) => ReturnType<Maker['createSession']>) | null = null;
+let scheduledSessionBootstrapHolder: ScheduledSessionBootstrap | null = null;
 let recordDispatchedModelHolder: ((sessionId: string, clientId: string) => void) | null = null;
 
 /** Automations use the same startup/allocation boundary as ordinary tasks. */
-export function bootstrapScheduledSession(options: Parameters<Maker['createSession']>[0], signal?: AbortSignal): ReturnType<Maker['createSession']> {
+export function bootstrapScheduledSession(options: Parameters<Maker['createSession']>[0], signal?: AbortSignal, assertOwner?: () => void): ReturnType<Maker['createSession']> {
   if (!scheduledSessionBootstrapHolder) throw new Error('Scheduled session startup is not initialized');
-  return scheduledSessionBootstrapHolder(options, signal);
+  return scheduledSessionBootstrapHolder(options, signal, assertOwner);
 }
 
 export function recordDispatchedModel(sessionId: string, clientId: string): void {
@@ -12138,20 +12156,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (override) await scheduledModelScope.begin(sessionId);
     else await scheduledModelScope.restore(sessionId);
   };
-  const scheduledSessionOwnerScope = captureDataOwnerBroadcastScope();
-  scheduledSessionBootstrapHolder = async (createOpts, signal) => {
-    const assertCurrent = () => {
-      signal?.throwIfAborted();
-      if (!isDataOwnerBroadcastScopeCurrent(scheduledSessionOwnerScope)) throw new Error('Scheduled session owner changed');
-    };
-    assertCurrent();
-    const prepared: MakerSessionCreateOpts = { ...createOpts };
-    const { session } = await bootstrapSession(prepared, assertCurrent);
-    // Keep the caller's routing metadata aligned with the group-selected member.
-    createOpts.agentDeviceId = prepared.agentDeviceId;
-    createOpts.providerId = prepared.providerId;
-    return session;
-  };
+  // 数据归属快照必须按每轮 fire 取，不能在 handler 注册时取一次：maker IPC 在启动阶段
+  // 注册，而恢复账号的 app session commit 可能更晚（更新重启、冷启动较慢）。注册时的快照
+  // 会永久过期，之后每次自动化都报 'Scheduled session owner changed'，直到应用重启。
+  scheduledSessionBootstrapHolder = createScheduledSessionBootstrap((options, assertAccess) =>
+    bootstrapSession(options as MakerSessionCreateOpts, assertAccess));
   let recoverRenamedSessionModelOnSend: (sessionId: string) => Promise<void> = async () => {
     throw new Error('session model recovery is not ready');
   };

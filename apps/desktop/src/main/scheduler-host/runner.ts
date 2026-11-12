@@ -268,7 +268,7 @@ export interface MakerScheduleRunnerDeps {
   maker: Maker;
   /** Use the ordinary task startup funnel, including provider-group allocation.
    * The funnel may update the options to the member it actually selected. */
-  bootstrapSession?: (options: Parameters<Maker['createSession']>[0], signal?: AbortSignal) => ReturnType<Maker['createSession']>;
+  bootstrapSession?: (options: Parameters<Maker['createSession']>[0], signal?: AbortSignal, assertOwner?: () => void) => ReturnType<Maker['createSession']>;
   getDb: () => SchedulerDrizzleDb;
   notifier: Notifier;
   logger: Logger;
@@ -520,10 +520,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
     private readonly runtime: SchedulerRunnerRuntime,
   ) {}
 
-  private createSession(options: Parameters<Maker['createSession']>[0], signal?: AbortSignal): ReturnType<Maker['createSession']> {
+  private createSession(options: Parameters<Maker['createSession']>[0], signal?: AbortSignal, assertOwner?: () => void): ReturnType<Maker['createSession']> {
     signal?.throwIfAborted();
     return this.deps.bootstrapSession
-      ? this.deps.bootstrapSession(options, signal)
+      ? this.deps.bootstrapSession(options, signal, assertOwner)
       : this.deps.maker.createSession(options);
   }
 
@@ -882,7 +882,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         fastMode: undefined, modelAgentKind: undefined,
       };
     }
-    const holder: EphemeralSessionHolder = {};
+    const holder: EphemeralSessionHolder = { assertOwner: ctx.assertFireContext };
     const closeQuietOutput = hidesScheduledTranscript(schedule)
       ? beginQuietScheduledOutput(schedule.id, ctx.runId)
       : undefined;
@@ -1687,7 +1687,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     };
     let session: Awaited<ReturnType<Maker['createSession']>>;
     try {
-      session = await this.createSession(createSessionOpts, ctx.signal);
+      session = await this.createSession(createSessionOpts, ctx.signal, holder.assertOwner);
       if (this.deps.bootstrapSession) {
         agentDeviceId = createSessionOpts.agentDeviceId ?? null;
         createProviderId = createSessionOpts.providerId ?? null;
@@ -1749,7 +1749,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
               model,
               providerId: reusedPiRouteProviderId,
               resumeSessionId: latest?.sdkSessionId ?? undefined,
-            }, ctx.signal);
+            }, ctx.signal, holder.assertOwner);
           }
         } else {
           await session.setModel(model);
@@ -2023,7 +2023,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             model: runtimeModel,
             providerId: verdict.providerId,
             resumeSessionId: latest?.sdkSessionId ?? undefined,
-          }, ctx.signal);
+          }, ctx.signal, holder.assertOwner);
         }
         setSessionProvider(session.id, verdict.providerId);
       }
@@ -4136,6 +4136,7 @@ function throwIfFireAborted(signal: AbortSignal, stage: FireAbortStage): void {
  * 用 per-call 对象而非实例字段:并发 fire(多任务同 tick 触发)互不串扰。
  */
 interface EphemeralSessionHolder {
+  assertOwner?: () => void;
   preRunHookOutput?: string;
   /** 与引擎写进 run 记录的同一份放行结果；本轮之后的失败通知要带上它，去重才对得上。 */
   preRunHookResult?: ScheduleRun['preRunHookResult'];

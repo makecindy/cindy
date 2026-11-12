@@ -13,6 +13,7 @@ vi.mock('expo-notifications', () => ({
   addNotificationReceivedListener: vi.fn(),
   getDevicePushTokenAsync: vi.fn(), addPushTokenListener: vi.fn(), addNotificationResponseReceivedListener: vi.fn(),
   getLastNotificationResponseAsync: vi.fn(), clearLastNotificationResponseAsync: vi.fn(),
+  setNotificationCategoryAsync: vi.fn(), scheduleNotificationAsync: vi.fn(),
   setNotificationChannelAsync: vi.fn(), AndroidImportance: { HIGH: 4 }, AndroidNotificationVisibility: { PRIVATE: 0 },
 }));
 

@@ -21,4 +21,6 @@ export type NativeNotificationsApi = Pick<
   | 'addNotificationResponseReceivedListener'
   | 'getLastNotificationResponseAsync'
   | 'clearLastNotificationResponseAsync'
+  | 'setNotificationCategoryAsync'
+  | 'scheduleNotificationAsync'
 >;

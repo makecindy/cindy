@@ -29,8 +29,10 @@ vi.mock('@/notifications/nativeNotifications', () => ({ default: {
   addNotificationResponseReceivedListener: () => ({ remove() {} }),
   getLastNotificationResponseAsync: async () => null,
 } }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
+vi.mock('@/notifications/notificationActionRunner', () => ({ handleNotificationActionResponse: () => false }));
 vi.mock('@/notifications/pushNotifications', () => ({
-  configureForegroundNotificationBehavior() {}, isPushSupported: () => true,
+  configureForegroundNotificationBehavior() {}, registerNotificationActionCategories: async () => {}, isPushSupported: () => true,
   readPushEnabled: async () => state.enabled, retryPendingUnregister: async () => {},
   syncPushRegistration: async (opts: { deviceToken?: { type: 'ios'; data: string } }) => {
     let token = opts.deviceToken;
