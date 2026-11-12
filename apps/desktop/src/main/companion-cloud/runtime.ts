@@ -105,7 +105,7 @@ export interface CompanionCloudRuntime {
   syncNow: () => Promise<void>;
   /** Demote local copies homed elsewhere and materialize companions handed to this computer. */
   reconcile: (localProfiles: Array<{ id: string; status: string }>) => void;
-  takeOver: (botId: string, correction?: ProfileCorrection) => Promise<CompanionCloudActionResult>;
+  takeOver: (botId: string, correction?: ProfileCorrection & { actorId: string; home: string | null }) => Promise<CompanionCloudActionResult>;
   repairProfile: (botId: string, request: CompanionProfileRepairRequest) => Promise<CompanionProfileRepairResult>;
   transfer: (botId: string, targetDeviceId: string, options?: CompanionSwitchOptions) => Promise<CompanionCloudActionResult>;
   transferTargets: () => Promise<CompanionTransferTarget[]>;
@@ -835,9 +835,9 @@ export function startCompanionCloud(input: {
 
     async repairProfile(botId, request) {
       if (!live() || !input.selfDeviceId || !input.host.materializer) return { ok: false, code: 'NOT_ENABLED' };
+      if (await input.host.isBotBusy?.(botId)) return { ok: false, code: 'BUSY' };
       const actor = actorOf(botId);
       if (!actor || actor.disabled) return { ok: false, code: 'FAILED', profileRepairError: 'changed' };
-      if (await input.host.isBotBusy?.(botId)) return { ok: false, code: 'BUSY' };
       // Recheck after the asynchronous busy probe so simultaneous saves cannot both enter.
       if (repairing.has(botId) || autoPending.has(botId) || materializing.has(botId)) return { ok: false, code: 'BUSY' };
       // Reads also own this guard: an older pending read must not release a newer save's guard.
@@ -857,7 +857,8 @@ export function startCompanionCloud(input: {
         const draft = repairDrafts.get(botId);
         if (request?.action !== 'save' || !draft || request.token !== draft.token || actor.id !== draft.actorId
           || (actor.homeDeviceId ?? null) !== draft.home) throw new CompanionProfileRepairError('changed');
-        const result = await mirrors.exclusive(() => uploads.exclusive(() => runtime.takeOver(botId, { version: draft.version, values: request.values })));
+        const result = await mirrors.exclusive(() => uploads.exclusive(() => runtime.takeOver(botId,
+          { version: draft.version, values: request.values, actorId: draft.actorId, home: draft.home })));
         if (result.ok) repairDrafts.delete(botId);
         return result;
       } catch (error) { return actionFailure(error); }
@@ -875,12 +876,20 @@ export function startCompanionCloud(input: {
       }
       if (!actor) return homeActionFailure('takeOver', botId, new Error('COMPANION_NOT_FOUND'));
       const actorId = actor.id;
+      const assertRepairHome = () => {
+        if (!correction) return;
+        const current = actorOf(botId);
+        if (!current || current.disabled || current.id !== correction.actorId
+          || (current.homeDeviceId ?? null) !== correction.home) throw new CompanionProfileRepairError('changed');
+      };
       // Never move the home before the companion's profile snapshot is in the cloud: without it
       // this copy could not be built, and the old home would already be demoted.
       try {
+        assertRepairHome();
         const profile = await checkProfileSources(actor, correction);
         await assertCompanionIdentity(input.host.materializer, actor.externalId,
           (profile as { templateId?: unknown }).templateId, fence);
+        assertRepairHome();
         identityConflicts.delete(actor.externalId);
       } catch (error) {
         recordProfileFailure(actor, actorId, error);
@@ -889,7 +898,8 @@ export function startCompanionCloud(input: {
       // Always compare-and-set, even when the cached home already says "here": the cache may be
       // stale (another computer took over while this one was offline). Unchanged homes are a no-op.
       try {
-        await input.api(`/actors/${actor.id}`, 'PATCH', { homeDeviceId: self, expectedHomeDeviceId: actor.homeDeviceId ?? null });
+        await input.api(`/actors/${actor.id}`, 'PATCH', { homeDeviceId: self,
+          expectedHomeDeviceId: correction ? correction.home : actor.homeDeviceId ?? null });
       } catch (error) {
         const failure = homeActionFailure('takeOver', botId, error);
         if (!failure.ok && failure.code === 'HOME_CONFLICT') {

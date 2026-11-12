@@ -174,6 +174,40 @@ describe('take over', () => {
     } finally { runtime?.dispose(); vi.useRealTimers(); }
   });
 
+  // #10112: a refreshed actor replaces the old object while an editor save awaits the host/network.
+  // The owner's stale draft must not take the buddy back from its newly selected home.
+  it.each(['busy-probe', 'profile-read'] as const)('rejects a draft when home changes during %s', async phase => {
+    vi.useFakeTimers();
+    try {
+      let saving = false;
+      let entered!: () => void;
+      let release!: () => void;
+      const waiting = new Promise<void>(resolve => { entered = resolve; });
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const rows = [{ key: 'companion.profile.v1', revision: 1, value: { ...MIA, soul: 'x'.repeat(12001) } }];
+      const t = setup({ home: 'desk', handler: (route, method) => {
+        if (route === '/preferences' && method === 'GET') {
+          if (saving && phase === 'profile-read') { entered(); return gate.then(() => rows); }
+          return rows;
+        }
+        return {};
+      } });
+      t.host.materializer!.backupProfileSource = vi.fn(async () => undefined);
+      const opened = await t.runtime.repairProfile('bot_mia', { action: 'read' });
+      if (!opened.ok || !opened.draft) throw new Error('missing draft');
+      if (phase === 'busy-probe') t.host.isBotBusy = async () => { entered(); await gate; return false; };
+      saving = true;
+      const save = t.runtime.repairProfile('bot_mia', { action: 'save', token: opened.draft.token, values: { identitySource: 'owner edit' } });
+      await waiting;
+      t.actors[0] = { ...t.actors[0]!, homeDeviceId: 'new-home' };
+      release();
+      expect(await save).toEqual({ ok: false, code: 'FAILED', profileRepairError: 'changed' });
+      expect(t.calls.every(call => call.method === 'GET')).toBe(true);
+      expect(t.local.host.createProfile).not.toHaveBeenCalled();
+      expect(t.host.materializer!.backupProfileSource).not.toHaveBeenCalled();
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
   it('corrects the authoritative large store profile without replacing its other fields', async () => {
     vi.useFakeTimers();
     try {
