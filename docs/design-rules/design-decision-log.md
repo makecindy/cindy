@@ -1109,3 +1109,14 @@ Switch 解耦。插件插槽挂载同一个媒体组件，不再维护单独拖�
 - 伙伴聊天里的 V1 后台任务卡只读：不再有停止与补一句，未落终态的旧卡按子任务实际状态或「状态未知」显示（`desktop-bot-delegation-status.md`）。伙伴间私信不再产生新的单行入口，历史入口照常打开只读往来页。
 
 现行落点：`DESIGN.md` §3 例外色、「Teammate capability page」、「Desktop and Mobile task creator filters」、「伙伴内部通讯入口」；产品规则 `cindy-bots-runtime.md`。
+
+## 2026-11-11 · 组件与控件：输入框默认高度、选框、图标按钮、窄下拉（维护者裁决 C-08、B-10、C-07、C-12）
+
+设计规范审核发现四处规范与组件不一致，维护者裁决：
+
+- **C-08（A）**：共享 `Input` 默认尺寸从 40px（lg）改为 36px（md），与同一行默认 `Select`、`Button lg` 等高；40px 只给需要宽松的字段显式传 `size="lg"`。
+- **B-10（B）**：「边框不超过 1px」只管容器与分隔线，不管控件描边；手绘的复选框改用共享 `Checkbox`（系统原生样式，外观会变）；思考强度滑块 2.5px 描边登记为例外。没有共享组件的单选圆点、编辑框焦点框、头像/状态点镂空环和加载圈不在迁移范围。
+- **C-07（A）**：共享 `Button` 的正方形用法（28 / 32 / 36px，无框 quiet 或带边框 secondary）就是通用图标按钮；原有 28×24 的扁图标按钮改成 28px 正方形。
+- **C-12（A）**：设置页里与其他控件同行的短选项下拉（并发上限、权重、文言文字体）新增 120px 窄档 `width="xs"`；高度用 `size`、宽度用 `width`，不再用 className 自定。
+
+现行规则见 `DESIGN.md` §4 Buttons、Desktop settings controls、Inputs & Forms、§7、§14.6、§15.18。

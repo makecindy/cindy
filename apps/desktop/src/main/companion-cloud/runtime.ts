@@ -153,6 +153,7 @@ const union = (left: Only, right: Set<string> | null): Only =>
 export { isUnreachable };
 
 function actionFailure(error: unknown, fallback: 'FAILED' | 'OFFLINE' = 'FAILED'): CompanionCloudActionResult {
+  if (error instanceof CompanionIdentityConflict) return { ok: false, code: 'LOCAL_CINDY_CONFLICT' };
   const conflict = chatRejection(error, 409, 'HOME_DEVICE_CONFLICT');
   if (conflict) return { ok: false, code: 'HOME_CONFLICT', homeDeviceId: typeof conflict.homeDeviceId === 'string' ? conflict.homeDeviceId : null };
   return { ok: false, code: isUnreachable(error) ? 'OFFLINE' : fallback };
@@ -290,6 +291,19 @@ export function startCompanionCloud(input: {
     const key = [...state.demotedBotIds(), ...[...installs].flatMap(([botId, value]) => value.owner === 'other' ? [botId] : [])].sort().join('|');
     if (key !== shadowKey) { shadowKey = key; input.onShadowChanged?.(); }
   };
+
+  /** Explicit home actions must leave a diagnostic, without logging response text or paths. */
+  function homeActionFailure(action: 'takeOver' | 'transfer' | 'switchHome', botId: string, error: unknown,
+    fallback: 'FAILED' | 'OFFLINE' = 'FAILED'): CompanionCloudActionResult {
+    const result = actionFailure(error, fallback);
+    const reason = errorCode(error);
+    input.log?.warn('Companion home change failed', { action, botId,
+      code: /^[A-Z][A-Z0-9_]{0,79}$/.test(reason) ? reason : (result.ok ? 'FAILED' : result.code),
+      ...(error instanceof CompanionIdentityConflict ? { conflictingBotId: error.conflictingBotId } : {}),
+    });
+    return !result.ok && error instanceof CompanionIdentityConflict
+      ? { ...result, conflictingBotId: error.conflictingBotId, conflictingDeviceId: input.selfDeviceId } : result;
+  }
 
   function loop(run: (only: Set<string> | null) => Promise<void>, intervalMs: number, debounceMs: number) {
     let busy: Promise<void> | undefined;
@@ -707,7 +721,7 @@ export function startCompanionCloud(input: {
     try {
       await input.api(`/actors/${actor.id}`, 'PATCH', { homeDeviceId: targetDeviceId, expectedHomeDeviceId: input.selfDeviceId });
     } catch (error) {
-      const failure = actionFailure(error);
+      const failure = homeActionFailure('transfer', actor.externalId, error);
       if (!failure.ok && failure.code === 'HOME_CONFLICT') await refreshForeground?.().catch(() => undefined);
       return failure;
     }
@@ -779,25 +793,25 @@ export function startCompanionCloud(input: {
       if (!self || !live() || !input.host.materializer) return { ok: false, code: 'NOT_ENABLED' };
       let actor = actorOf(botId);
       if (!actor) {
-        try { await refreshForeground?.(); } catch (error) { return actionFailure(error); }
+        try { await refreshForeground?.(); } catch (error) { return homeActionFailure('takeOver', botId, error); }
         actor = actorOf(botId);
       }
-      if (!actor) return { ok: false, code: 'FAILED' };
+      if (!actor) return homeActionFailure('takeOver', botId, new Error('COMPANION_NOT_FOUND'));
       // Never move the home before the companion's profile snapshot is in the cloud: without it
       // this copy could not be built, and the old home would already be demoted.
       try {
         const profile = await readCompanionValue(input.api, store, actor.id, COMPANION_PROFILE_KEY, { probe: true });
-        if (!hasProfileSnapshot(profile ? [profile] : [])) return { ok: false, code: 'FAILED' };
+        if (!hasProfileSnapshot(profile ? [profile] : [])) return homeActionFailure('takeOver', botId, new Error('PROFILE_SNAPSHOT_MISSING'));
         await assertCompanionIdentity(input.host.materializer, actor.externalId,
           (profile!.value as { templateId?: unknown }).templateId, fence);
         identityConflicts.delete(actor.externalId);
-      } catch (error) { return actionFailure(error); }
+      } catch (error) { return homeActionFailure('takeOver', botId, error); }
       // Always compare-and-set, even when the cached home already says "here": the cache may be
       // stale (another computer took over while this one was offline). Unchanged homes are a no-op.
       try {
         await input.api(`/actors/${actor.id}`, 'PATCH', { homeDeviceId: self, expectedHomeDeviceId: actor.homeDeviceId ?? null });
       } catch (error) {
-        const failure = actionFailure(error);
+        const failure = homeActionFailure('takeOver', botId, error);
         if (!failure.ok && failure.code === 'HOME_CONFLICT') {
           actor.homeDeviceId = failure.homeDeviceId ?? null;
           await refreshForeground?.().catch(() => undefined);
@@ -809,13 +823,12 @@ export function startCompanionCloud(input: {
       try {
         // Taking over from this installation also takes it from another install on the same device.
         demoteNow(actor);
-        if (await claimInstall(actor, 'takeover', input.api) !== 'mine') return { ok: false, code: 'FAILED' };
+        if (await claimInstall(actor, 'takeover', input.api) !== 'mine') return homeActionFailure('takeOver', botId, new Error('INSTALL_CLAIM_LOST'));
         await materialize(actor);
         identityConflicts.delete(actor.externalId);
       } catch (error) {
-        input.log?.warn('Companion take-over could not finish locally', { actorId: actor.id, code: errorCode(error) });
         publish();
-        return actionFailure(error);
+        return homeActionFailure('takeOver', botId, error);
       }
       publish(); mirrors.kick(actor.externalId); uploads.kick(actor.externalId);
       return { ok: true };
@@ -834,7 +847,10 @@ export function startCompanionCloud(input: {
       const self = input.selfDeviceId;
       if (!self || !live()) return { ok: false, code: 'NOT_ENABLED' };
       const actor = actorOf(botId);
-      if (!actor || actor.homeDeviceId !== self) return { ok: false, code: 'FAILED', homeDeviceId: actor?.homeDeviceId ?? null };
+      if (!actor || actor.homeDeviceId !== self) {
+        homeActionFailure('transfer', botId, new Error(actor ? 'NOT_HOME' : 'COMPANION_NOT_FOUND'));
+        return { ok: false, code: 'FAILED', homeDeviceId: actor?.homeDeviceId ?? null };
+      }
       const devices = await input.host.listDevices?.().catch(() => []) ?? [];
       const target = devices.find(device => device.deviceId === targetDeviceId && isCompanionTransferTarget(device));
       const targetVersionNow = target ? await targetVersion(targetDeviceId) : 0;
@@ -890,10 +906,11 @@ export function startCompanionCloud(input: {
         // A lost answer may still have moved it: show where it runs now.
         await refreshForeground?.().catch(() => undefined);
         publish();
-        return actionFailure(error, 'OFFLINE');
+        return homeActionFailure('switchHome', botId, error, 'OFFLINE');
       }
       // Moved here: re-read homes now so the automatic take-over starts without waiting for the push.
       if (result.ok || result.code === 'HOME_CONFLICT') await refreshForeground?.().catch(() => undefined);
+      if (!result.ok) homeActionFailure('switchHome', botId, new Error(result.code));
       publish();
       return result;
     },

@@ -506,7 +506,7 @@ function MemberRow({
               }))}
               onValueChange={(value) => onChange(concurrencyLimitPatch(concurrencyLimitFromOption(value)))}
               disabled={disabled}
-              className="w-[104px]"
+              width="xs"
             />
             {strategy === 'weight' && (
               <Select
@@ -515,8 +515,8 @@ function MemberRow({
                 options={WEIGHT_OPTIONS.map((value) => ({ value, label: t('providerGroup.member.weightOption', { weight: value }) }))}
                 onValueChange={(value) => onChange({ weight: Number(value) })}
                 disabled={disabled}
-                /* 权重最大 100，各语言的「权重 100」都比「上限 16」长：按内容定宽，避免 trigger 自己截断。 */
-                className="w-[120px]"
+                /* 窄档 120px 按最长的「权重 100」定（各语言都比「上限 16」长），避免 trigger 自己截断。 */
+                width="xs"
               />
             )}
             <Switch

@@ -76,7 +76,8 @@ export function LanguageSection() {
                   }))}
                   onValueChange={(next) => setLocale(next as ClassicalLocale)}
                   label={t('settings.language.classical.scriptAriaLabel')}
-                  className="w-[112px] shrink-0"
+                  width="xs"
+                  className="shrink-0"
                 />
                 <Select
                   data-setting-id={languageSettings.classical.id}
