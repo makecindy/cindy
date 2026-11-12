@@ -15,9 +15,37 @@ await fs.mkdir(process.env.HOME);
 for (const key of ['XDT_OFFICIAL_SHARED_PROFILE', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_HOME', 'XDT_CODEX_API_KEY']) delete process.env[key];
 const requests = [];
 let onNextResponse;
+// The OAuth token and revoke endpoints Codex is pointed at (CODEX_*_URL_OVERRIDE below): a
+// refresh or revoke attempt lands here and is counted, and never reaches the real service.
+const oauthCalls = [];
+// CONNECT tunnels (HTTPS through the proxy variables) are counted by host and refused.
+const connects = [];
+// When set, the fixture first answers with an `exec` tool call that runs `env`, then captures its output.
+let toolScenario = null;
+const responsesStream = events => events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
 const upstream = createServer(async (req, res) => {
   let raw = '';
   for await (const chunk of req) raw += chunk;
+  if (req.url?.startsWith('/oauth/')) {
+    oauthCalls.push(req.url);
+    res.writeHead(400, { 'content-type': 'application/json' }).end('{"error":"invalid_grant"}');
+    return;
+  }
+  if (toolScenario && req.url?.endsWith('/responses')) {
+    const body = JSON.parse(raw);
+    requests.push({ url: req.url, authorization: req.headers.authorization, body });
+    const output = (body.input ?? []).find(item => item?.call_id === 'call-env' && /_output$/.test(item.type ?? ''));
+    const id = `fixture-tool-${requests.length}`;
+    const item = output
+      ? { type: 'message', role: 'assistant', id: `msg-${id}`, content: [{ type: 'output_text', text: 'synthetic complete' }] }
+      : { type: 'function_call', id: `fc-${id}`, call_id: 'call-env', name: 'exec',
+          arguments: JSON.stringify({ input: "const r = await tools.exec_command({ cmd: 'env' });\ntext(typeof r === 'string' ? r : JSON.stringify(r));" }) };
+    if (output) toolScenario.output = typeof output.output === 'string' ? output.output : JSON.stringify(output.output);
+    res.writeHead(200, { 'content-type': 'text/event-stream', connection: 'close' });
+    res.end(responsesStream([{ type: 'response.created', response: { id } }, { type: 'response.output_item.done', item },
+      { type: 'response.completed', response: { id, usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } }]));
+    return;
+  }
   if (!req.url?.endsWith('/responses')) {
     res.writeHead(404, { 'content-type': 'application/json' }).end('{"error":{"message":"No optional endpoint in fixture"}}');
     return;
@@ -36,8 +64,11 @@ const upstream = createServer(async (req, res) => {
   res.writeHead(200, { 'content-type': 'text/event-stream', connection: 'close' });
   res.end(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''));
 });
+upstream.on('connect', (req, socket) => { connects.push(req.url ?? ''); socket.destroy(); });
 await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
 const endpoint = `http://127.0.0.1:${upstream.address().port}`;
+process.env.CODEX_REFRESH_TOKEN_URL_OVERRIDE = `${endpoint}/oauth/token`;
+process.env.CODEX_REVOKE_TOKEN_URL_OVERRIDE = `${endpoint}/oauth/revoke`;
 // Any optional native network probe is kept within the fixture too.
 process.env.HTTP_PROXY = process.env.HTTPS_PROXY = process.env.ALL_PROXY = endpoint;
 process.env.NO_PROXY = '127.0.0.1,localhost';
@@ -60,6 +91,9 @@ const { setSessionProvider, clearSessionProvider } = await import('../../desktop
 const { customProviderSecretStorageKey } = await import('../../desktop/src/shared/providerSecrets.ts');
 const { dataOwnerStorageKey } = await import('../../desktop/src/main/dataOwnerPath.ts');
 const { initLogger } = await import('../../desktop/src/main/logger.ts');
+const { CODEX_PROXY_TOKEN_ENV, CODEX_PROXY_TOKEN_HEADER } = await import('../src/agent/codex-proxy-inbound.ts');
+const { bindNativeProviderAuth } = await import('../../desktop/src/main/maker-host/nativeProviderAuthBinding.ts');
+const { readInvalidatedSystemCodexAuthMarker } = await import('../../desktop/src/main/maker-host/codex-auth-invalidation.ts');
 const { eq } = await import('drizzle-orm');
 const { sessions, messages } = await import('../../desktop/src/main/localDb/schema.ts');
 const { markSessionTurnStarted, markSessionTurnEnded, drainSessionActiveTurnWrites } = await import('../../desktop/src/main/localDb/sessionActiveTurn.ts');
@@ -73,6 +107,7 @@ const profile = path.join(root, 'profile');
 const ownerId = 'native-runtime-fixture';
 let database, config, modelAccess, mcp, runtime, graph, queue, chatServer;
 let releaseBlockedResponse;
+let stripProxyToken = false;
 const handles = [];
 try {
   await fs.mkdir(profile, { recursive: true });
@@ -102,6 +137,20 @@ try {
   runtime = createHostCodexRuntime({ profileDir: profile, binaryPath: binary, config, modelAccess, mcp,
     availabilityPolicy: createAvailabilityPolicy(async () => { throw new Error('Unexpected share mutation'); }), publish: () => {},
   });
+  // For one step below: a Codex process started without the proxy token, as any other
+  // local process would look to the loopback proxy.
+  const realPrepare = runtime.deps.prepareCodexExtraSpawnConfig;
+  runtime.deps.prepareCodexExtraSpawnConfig = async (...args) => {
+    const value = await realPrepare(...args);
+    if (!stripProxyToken) return value;
+    const extraArgs = [];
+    for (let i = 0; i < value.extraArgs.length; i++) {
+      if (value.extraArgs[i] === '-c' && value.extraArgs[i + 1]?.includes(`.env_http_headers.${CODEX_PROXY_TOKEN_HEADER}=`)) { i++; continue; }
+      extraArgs.push(value.extraArgs[i]);
+    }
+    const { [CODEX_PROXY_TOKEN_ENV]: _withheld, ...extraEnv } = value.extraEnv ?? {};
+    return { ...value, extraArgs, extraEnv };
+  };
   graph = createHostAgentGraph({ userDataDir: profile, providerConfig: config, gateway: modelAccess.gateway,
     codexBinaryPath: binary, codexRuntime: runtime, mcpRuntime: mcp, mcpProviders: [],
     storage: new OwnerSessionStorage({ db: () => database }),
@@ -244,6 +293,95 @@ try {
     'Codex upstream request carries the Cindy product prompt');
   console.log('PASS the Codex upstream request carries the Cindy product system prompt');
   console.log('PASS native Codex + production Host: gateway and custom provider turns; key rotation during a live turn preserves completion and the next gateway task uses the new key');
+
+  // ---- The Host's Codex loopback proxies require inbound credentials ----
+  const logText = async () => {
+    let all = '';
+    for (const file of await fs.readdir(path.join(root, 'logs')).catch(() => [])) all += await fs.readFile(path.join(root, 'logs', file), 'utf8').catch(() => '');
+    return all;
+  };
+  const count = (text, needle) => text.split(needle).length - 1;
+  const rejectedCount = text => count(text, 'inbound request rejected') + count(text, 'inbound upgrade rejected');
+  const waitFor = async (predicate, ms) => {
+    const deadline = Date.now() + ms;
+    // real-wait: the native process reaches the proxy on its own schedule.
+    while (Date.now() < deadline) { if (await predicate()) return true; await new Promise(resolve => setTimeout(resolve, 250)); }
+    return false;
+  };
+  const startNative = async (sessionId, providerId, model) => {
+    setSessionProvider(sessionId, providerId);
+    const handle = await graph.codex.startSession({ sessionId, providerId, model, workingDir: root });
+    handles.push(handle);
+    const events = [];
+    const ended = (async () => {
+      for await (const event of handle.events()) { events.push(event); if (event.type === 'done' || event.type === 'error') return event; }
+      return null;
+    })();
+    void ended.catch(() => {});
+    void handle.send({ type: 'user', content: 'return synthetic complete' }).catch(error => events.push({ type: 'error', data: String(error) }));
+    return { handle, events, ended, close: async () => { await handle.close().catch(() => {}); runtime.closeSession(sessionId); clearSessionProvider(sessionId); } };
+  };
+  const bounded = (promise, ms) => Promise.race([promise, new Promise(resolve => setTimeout(() => resolve('timeout'), ms))]);
+  assert.equal(rejectedCount(await logText()), 0, 'no request from a Cindy-started Codex was refused');
+
+  // 1. What the task's own tool commands see: they run inside the task, so they can read the token
+  //    variable; the token is valid only on this runtime's loopback proxies. Recorded as a fact.
+  toolScenario = { output: null };
+  const envTurn = await startNative('native-env-tool', 'xd', 'fixture-model');
+  const envEnd = await bounded(envTurn.ended, 60_000);
+  await envTurn.close();
+  assert.equal(envEnd?.type, 'done', JSON.stringify(envEnd ?? envTurn.events.at(-1)));
+  assert.ok(toolScenario.output, 'the exec tool ran env and returned its output');
+  assert.match(toolScenario.output, /HOME=/, 'the output is the environment listing');
+  const visible = toolScenario.output.includes(CODEX_PROXY_TOKEN_ENV);
+  toolScenario = null;
+  console.log(`PASS a Codex tool command ran inside the task; it ${visible ? 'can' : 'cannot'} read ${CODEX_PROXY_TOKEN_ENV}, which only this runtime's loopback proxies accept`);
+
+  // A synthetic ChatGPT login in the profile, so the next host uses cindy_openai with WebSockets.
+  // Token and revoke URLs point at the fixture; HTTPS goes through the fixture, which refuses tunnels.
+  const codexHome = path.join(profile, 'codex-home');
+  const jwt = payload => `${[{ alg: 'none', typ: 'JWT' }, payload].map(part => Buffer.from(JSON.stringify(part)).toString('base64url')).join('.')}.`;
+  const claims = { exp: Math.floor(Date.now() / 1000) + 3600,
+    'https://api.openai.com/auth': { chatgpt_account_id: 'synthetic-workspace', chatgpt_plan_type: 'plus', chatgpt_user_id: 'synthetic-user' } };
+  await fs.mkdir(codexHome, { recursive: true });
+  await fs.writeFile(path.join(codexHome, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: null,
+    tokens: { id_token: jwt({ ...claims, email: 'fixture@example.test' }), access_token: jwt(claims), refresh_token: 'synthetic-refresh-token', account_id: 'synthetic-workspace' },
+    last_refresh: new Date().toISOString() }), { mode: 0o600 });
+  bindNativeProviderAuth('openai', { instanceIsolated: true });
+
+  // 2. The WebSocket handshake of a Cindy-started Codex carries the token: it passes the gate and is
+  //    forwarded towards the subscription backend (whose tunnel the fixture refuses).
+  let text = await logText();
+  const forwardedBefore = count(text, '▶ upgrade to upstream');
+  const wsTurn = await startNative('native-oauth-ws', 'openai', 'gpt-5.4');
+  const forwarded = await waitFor(async () => count(await logText(), '▶ upgrade to upstream') > forwardedBefore, 30_000);
+  await wsTurn.close();
+  text = await logText();
+  assert.ok(forwarded, `the WebSocket upgrade was forwarded (events: ${JSON.stringify(wsTurn.events.slice(-2)).slice(0, 400)})`);
+  assert.equal(count(text, 'inbound upgrade rejected'), 0, 'the handshake was not refused');
+  console.log(`PASS the WebSocket handshake of a Cindy-started Codex carries the proxy token (${count(text, '▶ upgrade to upstream') - forwardedBefore} upgrade(s) forwarded)`);
+
+  // 3. A Codex process without the token is refused with 403 before routing; Codex neither refreshes
+  //    nor invalidates the login, and the profile keeps it.
+  await graph.codex.forceDisposeLocalHostForAuthChange('e2e: a Codex process without the proxy token', { preserveExternalAuth: true });
+  stripProxyToken = true;
+  const rejectedBefore = rejectedCount(text);
+  const before = { requests: requests.length, oauth: oauthCalls.length, authTunnels: connects.filter(c => c.startsWith('auth.openai.com')).length };
+  const refusedTurn = await startNative('native-oauth-no-token', 'openai', 'gpt-5.4');
+  const refusedSeen = await waitFor(async () => rejectedCount(await logText()) > rejectedBefore, 30_000);
+  const refusedEnd = await bounded(refusedTurn.ended, 30_000);
+  await refusedTurn.close();
+  stripProxyToken = false;
+  await graph.codex.forceDisposeLocalHostForAuthChange('e2e: back to Codex processes with the proxy token', { preserveExternalAuth: true });
+  text = await logText();
+  assert.ok(refusedSeen, 'the tokenless Codex was refused at the gate');
+  assert.equal(requests.length, before.requests, 'nothing reached the model upstream');
+  assert.equal(oauthCalls.length, before.oauth, `no token refresh or revoke: ${JSON.stringify(oauthCalls)}`);
+  assert.equal(connects.filter(c => c.startsWith('auth.openai.com')).length, before.authTunnels, 'no tunnel to the OAuth service');
+  assert.equal(readInvalidatedSystemCodexAuthMarker(codexHome), null, 'the login was not invalidated');
+  assert.equal(runtime.native.hasLogin(), true, 'the profile keeps its login');
+  console.log(`PASS a Codex process without the proxy token is refused with 403 (${rejectedCount(text) - rejectedBefore} refusal(s)); no refresh, no revoke, no invalidation; turn ${refusedEnd === 'timeout' ? 'still retrying after 30s' : `ended with ${refusedEnd?.type}`}`);
+  console.log(`oauth endpoint calls: ${oauthCalls.length}; tunnels: ${JSON.stringify(connects)}`);
 } catch (error) {
   // The application logger owns uncaughtException handling. Preserve a failed
   // acceptance command's exit status even when that handler consumes the throw.
