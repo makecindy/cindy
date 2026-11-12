@@ -4011,6 +4011,23 @@ function resolvePendingInteraction(requestId: string, decision: InteractionDecis
   return true;
 }
 
+/**
+ * The request a phone alert may describe and answer for this task: the only
+ * interaction waiting in it, still owned by this host, and of a kind an alert
+ * can answer (a tool permission or a question). With anything else also
+ * waiting, the alert cannot say which one a tap answers.
+ */
+export function pendingRequestForAlert(sessionId: string): InteractionRequest | undefined {
+  let only: InteractionRequest | undefined;
+  for (const entry of pendingInteractionResolvers.values()) {
+    if (entry.sessionId !== sessionId) continue;
+    if (only || entry.migrated || entry.deferredDecision) return undefined;
+    if (entry.kind !== 'permission' && entry.kind !== 'ask_user_question') return undefined;
+    only = entry.request;
+  }
+  return only;
+}
+
 function resolvePendingPermissionFromAgentIsland(
   requestId: string,
   decision: Extract<InteractionDecision, { kind: 'permission' }>,

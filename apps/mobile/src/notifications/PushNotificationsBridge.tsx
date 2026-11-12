@@ -1,6 +1,7 @@
 import { useGlobalSearchParams, usePathname, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef } from 'react';
 import { AppState } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthContext';
 import { useSelfHostedRelay } from '@/device-link/selfHostedRelay';
 import { useMobileAgentNetPreferences } from '@/device-link/agentNetPreferences';
@@ -8,8 +9,10 @@ import { mobileAgentNetPushScope, mobileAgentNetPushSelected, subscribeMobileAge
 import Notifications from './nativeNotifications';
 import { ChatBackgroundBridge } from './ChatBackgroundBridge';
 import { notificationRecoveryRoute, parseNotificationResponseDeepLink } from './pushRegistrationModel';
+import { handleNotificationActionResponse } from './notificationActionRunner';
 import {
   configureForegroundNotificationBehavior,
+  registerNotificationActionCategories,
   isPushSupported,
   readPushEnabled,
   retryPendingUnregister,
@@ -32,6 +35,7 @@ type NotificationResponse = Parameters<
  */
 export function PushNotificationsBridge() {
   const auth = useAuth();
+  const { i18n: { language } } = useTranslation();
   const router = useRouter();
   const pathname = usePathname();
   const { threadRootId } = useGlobalSearchParams<{ threadRootId?: string }>();
@@ -64,6 +68,12 @@ export function PushNotificationsBridge() {
       return visibleChat.current.pathname === path && visibleChat.current.threadRootId === thread;
     });
   }, []);
+
+  // 通知上的按钮(允许一次 / 拒绝 / 回复):按当前界面语言向系统登记,换语言后重新登记。
+  useEffect(() => {
+    if (!isPushSupported()) return;
+    void registerNotificationActionCategories().catch(() => undefined);
+  }, [language]);
 
   // 登录态就绪后同步注册状态(开关关闭 / 从未注册时是 no-op)
   useEffect(() => {
@@ -126,6 +136,9 @@ export function PushNotificationsBridge() {
   useEffect(() => {
     if (!isPushSupported()) return;
     const consumeResponse = (response: NotificationResponse): void => {
+      // A button on the alert (allow / deny / reply) is carried out in the background;
+      // only an ordinary tap navigates.
+      if (handleNotificationActionResponse(response)) return;
       const deepLink = parseNotificationResponseDeepLink(response);
       if (!deepLink) return;
       const identifier = response.notification.request.identifier;
