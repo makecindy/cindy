@@ -13247,6 +13247,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "採用原文",
     "rateLimited": "語音請求過於頻繁，請稍後再試。",
     "status": {
       "listening": "語音輸入中",
@@ -13590,7 +13591,7 @@
       "claudeSubscriptionSwitchFailed": "無法切換到 Claude.ai 或重試當前任務：{{msg}}",
       "codexAppServerRetired": "Codex 服務已重新啟動或更換；目前的請求已中斷，請重新執行。",
       "codexAuthMissing": "遠端 Codex 還沒同步登入態（401 Unauthorized）。點選右側「同步登入態」把本機 Codex 憑證推到遠端 Cindy Codex home，然後重試傳送。",
-      "codexAuthMissingLocal": "Codex 憑證缺失或失效（401 Unauthorized）。請在 {{appName}} 設定 → Codex 重新登入（登入後會自動重啟 Codex app-server），或在終端跑 `codex login`，再到設定切換一次鑑權模式來重啟 app-server，然後新建任務再發。",
+      "codexAuthMissingLocal": "本機的「{{provider}}」連線未通過驗證。請前往該連線的設定檢查登入狀態，修復後回到此任務繼續。",
       "codexSessionExpired": "OpenAI 連線需要更新。重新連線 ChatGPT 後即可繼續；{{appName}} 不會退出系統 Codex CLI，也不會要求你重新連線其他模型來源。",
       "codexAuthSynced": "登入態已同步，請點選「重試」重新傳送。",
       "syncAuth": "同步登入態",

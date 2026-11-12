@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
+import path from 'node:path';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Maker } from '@cindy/maker-core';
 
 const h = vi.hoisted(() => ({
@@ -19,12 +20,24 @@ vi.mock('../../localDb/client/current.js', () => ({
   getDbClient: () => ({ drizzle: h.db, tx: h.tx }),
 }));
 
+// The coordinator's deletion port is injected below; avoid loading the unrelated IPC graph.
+vi.mock('../../localDb/ipc/sessions.js', () => ({
+  deleteBotProfileAndDetachSessionsInDb: vi.fn(),
+}));
+
 vi.mock('../botRemoteResourceInvalidation.js', () => ({
   broadcastBotRemoteResourceChanged: h.broadcastRemoteResourceChanged,
 }));
 
+vi.mock('../botProfileFolder.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../botProfileFolder.js')>(),
+  removeBotProfileFolder: vi.fn(),
+}));
+
 import { createBotLifecycleService } from '../botLifecycleService.js';
+import * as botProjectMemory from '../botProjectMemory.js';
 import { teammateWorkspaceDir } from '../botProjectMemory.js';
+import * as appSessionState from '../../appSessionState.js';
 import { ownerScopedUserDataPath } from '../../appSessionState.js';
 import { normalizeRecentWorkdirPath } from '../../localDb/ipc/recentWorkdirsCore.js';
 import { tx as runWorkerTx } from '../../localDb/worker/opHandlers/tx.js';
@@ -123,6 +136,12 @@ describe('Bot lifecycle coordinator', () => {
       }
       sqlite.prepare('DELETE FROM bot_profiles WHERE id = ?').run(botId);
     });
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   function service(hooks: Partial<import('../botLifecycleService.js').BotLifecycleServiceDeps> = {}) {
@@ -411,5 +430,74 @@ describe('Bot lifecycle coordinator', () => {
     expect(closeSession).not.toHaveBeenCalledWith('neighbour');
     expect(sqlite.prepare('SELECT path FROM recent_workdirs').pluck().all()).toEqual([listed[1]]);
     expect(result).toMatchObject({ status: 'deleted', affected: { sessions: 4 } });
+  });
+
+  // #10098: run the coordinator's SQL selection and the real deletion transaction together.
+  // Existing coverage stored native paths and only inspected a mocked deletion callback.
+  // Minimum regression: a native Windows root with one slash-normalized project_dir.
+  // Tier: unit (in-memory SQLite; file cleanup is stubbed, no user data or real filesystem writes).
+  describe.each([
+    { name: 'Windows drive', platform: 'win32', owner: String.raw`C:\Users\Fixture_é%！!\owners\owner` },
+    { name: 'Windows UNC', platform: 'win32', owner: String.raw`\\server\share\Fixture\owners\owner` },
+    { name: 'Windows long drive', platform: 'win32', owner: String.raw`\\?\C:\Users\Fixture\owners\owner` },
+    { name: 'Windows long UNC', platform: 'win32', owner: String.raw`\\?\UNC\server\share\Fixture\owners\owner` },
+    { name: 'POSIX case and literal backslash', platform: 'linux', owner: String.raw`/Owners/Fixture_%!\literal/owner` },
+  ])('$name project deletion', ({ platform, owner }) => {
+    it.each([true, false])('keeps only matching tasks in the deletion transaction (history=%s)', async (keepTaskHistory) => {
+      const pathApi = platform === 'win32' ? path.win32 : path.posix;
+      const project = pathApi.join(owner, 'bots', 'bot-1', 'workspace');
+      // Exercise a target platform explicitly: never combine a platform stub with host path.join.
+      vi.stubGlobal('process', { ...process, platform });
+      vi.spyOn(appSessionState, 'ownerScopedUserDataPath').mockReturnValue(owner);
+      vi.spyOn(botProjectMemory, 'teammateWorkspaceDir').mockReturnValue(project);
+      // This is the DB storage spelling, deliberately independent of the production normalizer.
+      const stored = platform === 'win32'
+        ? project.replace(/^\\\\\?\\UNC\\/, '//').replace(/^\\\\\?\\/, '').replace(/\\/g, '/')
+        : project;
+      const insert = sqlite.prepare('INSERT INTO sessions (id, source, status, updated_at, working_dir, project_dir) VALUES (?, ?, ?, 1, ?, ?)');
+      insert.run('project-only', 'desktop', 'active', '/unrelated/worktree', stored);
+      insert.run('working-only', 'scheduler', 'active', stored, null);
+      insert.run('nested', 'desktop', 'active', `${stored}/notes/subdir`, null);
+      insert.run('case-variant', 'desktop', 'active', null, stored.toUpperCase());
+      insert.run('nested-case', 'desktop', 'active', `${stored.toUpperCase()}/notes`, null);
+      insert.run('native', 'desktop', 'active', pathApi.join(project, 'native'), null);
+      insert.run('neighbour', 'desktop', 'active', `${stored}-other/notes`, `${stored}-other`);
+      insert.run('other-owner', 'desktop', 'active', stored.replace('Fixture', 'Other'), null);
+      insert.run('other-project', 'desktop', 'active', '/unrelated/worktree', '/unrelated');
+      insert.run('deleted', 'desktop', 'deleted', stored, stored);
+      if (platform !== 'win32') {
+        insert.run('backslash-is-not-separator', 'desktop', 'active', `${stored}\\notes`, null);
+        insert.run('different-literal', 'desktop', 'active', stored.replace('\\literal', '/literal'), null);
+      }
+      const deletion = vi.fn(async (botId: string, sessionIds: string[], keep: boolean, projectSessionIds?: string[]) => {
+        await runWorkerTx(sqlite, { name: 'bots.deleteProfile', args: {
+          botId, sessionIds, keepTaskHistory: keep, projectSessionIds, at: 10,
+        } });
+      });
+
+      const result = await service({ deleteProfileAndDetachSessions: deletion }).run({
+        botId: 'bot-1', action: 'delete', confirmName: 'Helper', keepTaskHistory,
+      });
+
+      const matched = ['project-only', 'working-only', 'nested', 'native'];
+      const untouched = ['neighbour', 'other-owner', 'other-project'];
+      (platform === 'win32' ? matched : untouched).push('case-variant', 'nested-case');
+      if (platform !== 'win32') untouched.push('backslash-is-not-separator', 'different-literal');
+      const expectedStatus = keepTaskHistory ? 'archived' : 'deleted';
+      for (const id of matched) {
+        expect(row(sqlite, 'sessions', id), id).toMatchObject({ status: expectedStatus, updated_at: 10 });
+        expect(closeSession).toHaveBeenCalledWith(id);
+      }
+      for (const id of untouched) {
+        expect(row(sqlite, 'sessions', id), id).toMatchObject({ status: 'active', updated_at: 1 });
+        expect(closeSession).not.toHaveBeenCalledWith(id);
+      }
+      expect(row(sqlite, 'sessions', 'deleted')).toMatchObject({ status: 'deleted', updated_at: 1 });
+      expect(closeSession).not.toHaveBeenCalledWith('deleted');
+      expect(deletion.mock.calls[0][3]?.sort()).toEqual(matched.sort());
+      expect(row(sqlite, 'sessions', 'canonical').status).toBe(expectedStatus);
+      expect(row(sqlite, 'bot_profiles', 'bot-1')).toBeUndefined();
+      expect(result).toMatchObject({ status: 'deleted', affected: { sessions: matched.length + 2 } });
+    });
   });
 });
