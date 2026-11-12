@@ -4761,13 +4761,13 @@
         "workingDirFailed": "作業ディレクトリを更新できませんでした。もう一度選択してください。"
       },
       "companion": {
-        "assigned": "連携したチームメイトが返信します",
-        "description": "WeChat で {{name}} と話し、記憶とメインタスクを共有します。このパソコンの WeChat 接続を連携できるチームメイトは一度に 1 人です。",
-        "other": "WeChat は別のチームメイトと連携しています。そのチームメイトの接続設定、または個人 WeChat の設定で先に連携を解除してください。",
-        "permissionNote": "あなたが WeChat で送るメッセージには、完全アクセスを含むチームメイトの権限設定が適用されます。権限は Cindy のチームメイトとのチャット入力欄の下で変更できます。他の人のメッセージには引き続き権限制限が適用されます。",
-        "remove": "チームメイトとの連携を解除",
+        "assigned": "連携した仲間が返信します",
+        "description": "WeChat で {{name}} と話し、記憶とメインタスクを共有します。このパソコンの WeChat 接続を連携できる仲間は一度に 1 人です。",
+        "other": "WeChat は別の仲間と連携しています。その仲間の接続設定、または個人 WeChat の設定で先に連携を解除してください。",
+        "permissionNote": "あなたが WeChat で送るメッセージには、完全アクセスを含む仲間の権限設定が適用されます。権限は Cindy の仲間とのチャット入力欄の下で変更できます。他の人のメッセージには引き続き権限制限が適用されます。",
+        "remove": "仲間との連携を解除",
         "useExisting": "接続済みの WeChat で {{name}} と話す",
-        "updateFailed": "連携を更新できませんでした。WeChat のタスクが終わってから再試行し、チームメイトが利用可能か確認してください。"
+        "updateFailed": "連携を更新できませんでした。WeChat のタスクが終わってから再試行し、仲間が利用可能か確認してください。"
       }
     },
     "discordBot": {
@@ -6673,6 +6673,7 @@
         "confirm": "アクセス権を撤回"
       },
       "v2": {
+        "sectionTitle": "実験的な Agent ネットワーク",
         "switch": {
           "title": "Agent-Net (Beta)",
           "hint": "接続トポロジーと最近のアクティビティを表示します。両方のデバイスで Agent-Net を有効にし、Agent-Net でペアリング済みの場合は暗号化接続を使用します。他のデバイスは従来の接続を使用します。このコンピューターだけに適用されます。"
@@ -8175,7 +8176,7 @@
         "subscribeAssistantReplyDetail": "AI の返信が完了するたびに処理します。本文を推敲・書き換えたり(直接置き換えられ、原文は残りません)、返信の吹き出しを独自に描画したカードに差し替えることがあります(カード差し替えの場合は原文が保持され、ワンタップで確認できます)。",
         "subscribeScheduleRun": "選んだ自動化の実行前にチェックできます",
         "subscribeScheduleRunDetail": "「事前チェック」でこのプラグインを選んだ自動化は、実行前に先に確認します。自動化の名前と指示を参照でき、今回をスキップまたは停止できますが、代わりに承認することはできません。",
-        "subscribeRoutineRun": "選んだチームメイトのルーティンの実行前にチェックできます",
+        "subscribeRoutineRun": "選んだ仲間のルーティンの実行前にチェックできます",
         "subscribeRoutineRunDetail": "「事前チェック」でこのプラグインを選んだルーティンは、トリガーされるたびに先に確認します。ルーティンの指示とトリガーしたイベントの内容を参照でき、今回をスキップまたは停止できますが、代わりに承認することはできません。",
         "systemPrompt": "選択したタスクにシステム指示を追加できます",
         "systemPromptDetail": "以下の静的な文章を、このプラグインを選択したタスクに限り Cindy の固定指示の後へ追加します。順序と対応エンジンはパッケージで指定します。変更は次のメッセージから反映され、エラーはタスクの設定に従います。",
@@ -10640,7 +10641,7 @@
         "memoryReviewName": "{{name}} · 記憶を整理",
         "carryover": {
           "title": "アップグレード前の未完了事項",
-          "intro": "このチームメイトをアップグレードした時点で未完了だった事項です。必要なものは続け、不要なものは削除してください。旧版の記録はチームメイトのフォルダ内の v1-archive に残っています。",
+          "intro": "この仲間をアップグレードした時点で未完了だった事項です。必要なものは続け、不要なものは削除してください。旧版の記録は仲間のフォルダ内の v1-archive に残っています。",
           "todos": "未完了のToDo",
           "work": "ワークベンチ",
           "threads": "進行中",
@@ -10762,7 +10763,7 @@
       "working": "更新中…",
       "actionFailed": "操作が完了しませんでした。しばらくしてから再試行してください。",
       "deleteFailed": "削除は完了しませんでした。",
-      "restart": "チームメイトを再起動",
+      "restart": "仲間を再起動",
       "restartDescription": "現在の実行を停止して再開の準備をします。会話履歴、メモリ、ファイルは保持されます。",
       "restarting": "再起動中…",
       "restarted": "再起動しました。メッセージを送信して続けられます。"
@@ -10833,7 +10834,7 @@
       "description": "パートナー全体に共通する設定です。個々のパートナーの設定は、その子のページにあります。",
       "rosterNote": "あらかじめ用意された顔ぶれは、バージョンごとに増えていきます。",
       "showReplyTarget": "返信の対象メッセージを表示",
-      "showReplyTargetHint": "チームメイトの返信の上に、どのメッセージへの返信かを表示します。以前の返信には表示されません。"
+      "showReplyTargetHint": "仲間の返信の上に、どのメッセージへの返信かを表示します。以前の返信には表示されません。"
     },
     "session": {
       "ownedByBot": "{{name}} が開いたタスク",
@@ -11576,14 +11577,14 @@
         "title": "代理入力",
         "description": "サインイン情報、パスワード、確認コードなど本人の入力が必要なとき、この仲間がいずれかのデバイスでの入力を依頼できます。入力した内容が仲間に渡ることはありません。"
       },
-      "intro": "このチームメイトが使えるスキル、ツール、MCP を選びます。次のメッセージから反映されます。",
+      "intro": "この仲間が使えるスキル、ツール、MCP を選びます。次のメッセージから反映されます。",
       "alwaysOn": "常にオン",
       "core": {
         "group": "コアスキル",
-        "name": "チームメイトのコア",
-        "hint": "タスク、ほかのチームメイト、モデル、ツールとプラグイン、記憶。Cindy と一緒に更新。",
-        "meta": "全チームメイト共通 · 常にオン · Cindy と一緒に更新",
-        "note": "すべてのチームメイトが持つ段取りの力で、オフや編集はできません。やり方を変えたいときはチャットで伝えれば、自分のスキルとして覚えます。",
+        "name": "仲間のコア",
+        "hint": "タスク、ほかの仲間、モデル、ツールとプラグイン、記憶。Cindy と一緒に更新。",
+        "meta": "全仲間共通 · 常にオン · Cindy と一緒に更新",
+        "note": "すべての仲間が持つ段取りの力で、オフや編集はできません。やり方を変えたいときはチャットで伝えれば、自分のスキルとして覚えます。",
         "covers": "含まれるもの",
         "raw": "原文を表示",
         "items": {
@@ -11592,8 +11593,8 @@
             "body": "操作できるタスクと利用可能なコンピューターを把握し、依頼に応じてタスクを進め、結果を届けます。別のコンピューターで作業する前に、対応する操作を確認します。"
           },
           "teammates": {
-            "title": "ほかのチームメイト",
-            "body": "ほかのチームメイトに連絡したり、新しく作成したりします。"
+            "title": "ほかの仲間",
+            "body": "ほかの仲間に連絡したり、新しく作成したりします。"
           },
           "models": {
             "title": "モデルとツール",
@@ -11813,7 +11814,7 @@
       "switchOffline": "接続できません。{{name}} のメインのパソコンは変わっていません",
       "switchFailed": "{{name}} を「{{device}}」に移せませんでした",
       "homeOutdated": "メインのパソコン「{{device}}」の Cindy が古いバージョンです。更新するか、そのパソコンで変更してください",
-      "arrivingLater": "{{name}} はこのパソコンに移り、準備中です。まもなくチームメイト一覧に表示されます",
+      "arrivingLater": "{{name}} はこのパソコンに移り、準備中です。まもなく仲間一覧に表示されます",
       "arrivalPermissions": "{{name}} はこのパソコンの既定の権限で動作します。",
       "arrivalModel": "{{name}} の保存済みモデルはこのパソコンでは使えないため、このパソコンの既定モデルを使います。",
       "busyTitle": "{{name}} はまだ返信中です",
@@ -13590,7 +13591,7 @@
       "claudeSubscriptionSwitchFailed": "Claude.ai への切り替えまたはこのセッションの再試行に失敗しました：{{msg}}",
       "codexAppServerRetired": "Codex サービスが再起動または交換されました。現在のリクエストは中断されたため、もう一度実行してください。",
       "codexAuthMissing": "リモートの Codex がまだサインインしていません（401 Unauthorized）。「認証情報を同期」をクリックしてローカルの Codex 認証情報をリモートの Cindy Codex home にプッシュし、再試行してください。",
-      "codexAuthMissingLocal": "Codex 認証情報がないか期限切れです（401 Unauthorized）。{{appName}} 設定 → Codex から再ログインする（ログイン時に app-server が自動再起動）か、ターミナルで `codex login` 実行後、設定で認証モードを一度切り替えて app-server を再起動してから、新しいセッションを開始してください。",
+      "codexAuthMissingLocal": "このコンピューターの「{{provider}}」接続を認証できませんでした。設定でこの接続のログイン状態を確認し、接続を復旧してからこのセッションに戻って続行してください。",
       "codexSessionExpired": "OpenAI 接続の更新が必要です。ChatGPT に再接続すると続行できます。{{appName}} がシステムの Codex CLI からサインアウトしたり、他のモデルソースへの再接続を求めたりすることはありません。",
       "codexAuthSynced": "認証情報が同期されました。「再試行」をクリックして再送信してください。",
       "syncAuth": "認証情報を同期",
@@ -14040,7 +14041,7 @@
           "plugins": "プラグイン一覧",
           "memoryRules": "メモリの指示",
           "memoryIndex": "メモリ索引",
-          "profile": "チームメイトのプロフィール",
+          "profile": "仲間のプロフィール",
           "user": "ユーザーの指示",
           "directories": "追加ディレクトリ",
           "native": "Pi の指示",
@@ -14857,7 +14858,7 @@
       "selectFolderFailed": "フォルダーを選択できませんでした。もう一度お試しください。",
       "projectsToggleExpand": "すべてのプロジェクトセッションを展開",
       "projectsToggleCollapse": "すべてのプロジェクトセッションを折りたたむ",
-      "filterAria": "サイドバー表示設定（ステータス：{{status}}、Harness：{{vendor}}、最終アクティビティ：{{lastActivity}}、グループ：{{groupBy}}、並び替え：{{sortBy}}、プロジェクト：{{projects}}、チームメイト：{{creators}}）",
+      "filterAria": "サイドバー表示設定（ステータス：{{status}}、Harness：{{vendor}}、最終アクティビティ：{{lastActivity}}、グループ：{{groupBy}}、並び替え：{{sortBy}}、プロジェクト：{{projects}}、仲間：{{creators}}）",
       "organizeSidebar": "サイドバー表示設定",
       "filterAllText": "すべて",
       "filterSelectedProjects": "{{count}} 件選択",
@@ -14922,7 +14923,7 @@
       "filterProjectOrderTip": {
         "custom": "マウスでプロジェクト行をドラッグして並び替え。中のセッションは上の並び替えに従う"
       },
-      "filterCreatorsHeading": "チームメイト",
+      "filterCreatorsHeading": "仲間",
       "filterCreatorsAny": "すべて",
       "filterCreatorsNone": "すべて非表示",
       "filterSelectedCreators": "{{count}} 人を選択",
@@ -17692,11 +17693,14 @@
       "voiceDirectApiKeyAuthDescription": "現在の音声入力プロバイダーには直接接続用の API Key が必要です。API Keys で追加しますか？",
       "codexVoiceAuthTitle": "ChatGPT への接続が必要です",
       "codexVoiceAuthDescription": "音声入力は、接続済みの ChatGPT アカウントで GPT リアルタイム音声認識を使用します。アカウントが未接続か、接続の更新が必要です。モデルプロバイダーを開いて ChatGPT に接続しますか？",
+      "ccBinaryMissingTitle": "Claude Code コンポーネントの準備ができていません",
+      "ccBinaryMissingDescription": "Claude Code コンポーネントがまだインストールされていないため、この機能は使用できません。ネットワークに接続してから「設定 → 情報」を開くと、インストールが始まります。",
       "codexBinaryMissingTitle": "Codex コンポーネントの準備ができていません",
       "codexBinaryMissingDescription": "Codex コンポーネントの準備がまだできていないため、この機能は使用できません。しばらくしてから再試行するか、「設定 → プロバイダー」で Codex の接続状態を確認してください。",
       "piBinaryMissingTitle": "Pi コンポーネントの準備ができていません",
       "piBinaryMissingDescription": "Pi コンポーネントの準備がまだできていないため、この機能は使用できません。しばらくしてから再試行するか、「設定 → 情報」で Pi を管理または復元してください。",
       "goToSettings": "設定を開く",
+      "remoteCcBinaryMissingTitle": "リモートデバイスの Claude Code コンポーネントが未準備です",
       "remoteCodexBinaryMissingTitle": "リモートデバイスの Codex コンポーネントが未準備です",
       "remotePiBinaryMissingTitle": "リモートデバイスの Pi コンポーネントが未準備です",
       "remoteAuthDescription": "リモートデバイス「{{device}}」で設定を完了してから、ここでセッションを開始できます。そのデバイスで設定してから再試行してください。",
