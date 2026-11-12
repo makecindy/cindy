@@ -1312,6 +1312,8 @@
     "handoffWindow": "대리 입력 · {{app}}"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
+    "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "이 SSH 작업에서는 Harness를 전환할 수 없습니다. 현재 Harness의 모델을 선택하거나 필요한 Harness로 새 SSH 작업을 만드세요.",
     "MODEL_SELECTION_UNAVAILABLE": "선택한 제공자의 모델을 더 이상 사용할 수 없습니다. 설정에서 연결을 확인하거나 사용 가능한 모델을 다시 선택하세요.",
     "HARNESS_SWITCH_NOT_READY": "Harness 전환이 완료되지 않았습니다. 오류 세부 정보를 확인하고 Harness가 준비되면 다시 시도하세요.",
@@ -1705,7 +1707,7 @@
       "activityWaiting": "확인 대기",
       "activityCompleted": "완료",
       "activityError": "확인 필요",
-      "privateCompanion": "동료 메시지",
+      "privateCompanion": "동반자 메시지",
       "untitledTask": "제목 없는 작업",
       "activityNow": "방금",
       "activityMinutes": "{{n}}분 전",
@@ -2144,7 +2146,16 @@
       },
       "sidebarAndPanels": "사이드바 및 패널",
       "themeLabel": "테마",
+      "createTheme": {
+        "label": "테마 만들기",
+        "hint": "원하는 스타일이나 참고 이미지로 Cindy의 외관을 만듭니다",
+        "prompt": "공유할 수 있는 Cindy 테마 패키지를 미리 보기와 검증을 포함해 만들어 주세요. 원하는 스타일:",
+        "unavailable": "테마 제작 스킬을 사용할 수 없습니다. 스킬에서 활성화되어 있는지 확인하세요",
+        "startFailed": "테마 제작 작업을 열지 못했습니다"
+      },
       "themeAriaLabel": "테마 선택",
+      "themeApplyFailed": "테마를 적용하지 못했습니다. 현재 모양은 유지됩니다.",
+      "themeFontFailed": "테마 글꼴을 불러오지 못했습니다. 기본 글꼴을 사용합니다.",
       "localBadge": "(로컬)",
       "localThemes": {
         "title": "로컬 테마",
@@ -2824,7 +2835,7 @@
         "dbSlimmingIncludeActiveLabel": "보관되지 않은 세션 정리",
         "dbSlimmingIncludeActiveDescription": "선택한 기간보다 오래된 보관되지 않은 세션도 정리하고 세션 목록에서 제거합니다",
         "dbSlimmingIncludeActiveConfirmTitle": "보관되지 않은 작업도 데이터베이스 정리 대상에 포함할까요?",
-        "dbSlimmingIncludeActiveConfirmDescription": "선택한 기간보다 오래된 보관되지 않은 작업도 아직 실행 중일 수 있습니다. 정리는 작업이 중지될 때까지 기다리지 않으며 스캔 후 추가된 메시지도 삭제될 수 있습니다. 사용하면 선택한 기간보다 오래 업데이트되지 않은 미보관, 보관 및 소프트 삭제 작업이 정리됩니다. 대상 보관되지 않은 세션의 기록과 Agent 컨텍스트가 삭제되며 일반 세션 항목도 목록에서 제거됩니다. 동료의 기본 세션은 유지됩니다. 데이터베이스 백업으로 작업과 메시지 데이터는 복구할 수 있습니다. 백업을 만들지 않으면 해당 데이터도 복구할 수 없습니다. 해당 메시지의 파일 변경 사항을 검토하거나 실행 취소하는 데 사용되는 기록은 데이터베이스 백업에 포함되지 않으며 복구할 수 없습니다.",
+        "dbSlimmingIncludeActiveConfirmDescription": "선택한 기간보다 오래된 보관되지 않은 작업도 아직 실행 중일 수 있습니다. 정리는 작업이 중지될 때까지 기다리지 않으며 스캔 후 추가된 메시지도 삭제될 수 있습니다. 사용하면 선택한 기간보다 오래 업데이트되지 않은 미보관, 보관 및 소프트 삭제 작업이 정리됩니다. 대상 보관되지 않은 세션의 기록과 Agent 컨텍스트가 삭제되며 일반 세션 항목도 목록에서 제거됩니다. 동반자의 기본 세션은 유지됩니다. 데이터베이스 백업으로 작업과 메시지 데이터는 복구할 수 있습니다. 백업을 만들지 않으면 해당 데이터도 복구할 수 없습니다. 해당 메시지의 파일 변경 사항을 검토하거나 실행 취소하는 데 사용되는 기록은 데이터베이스 백업에 포함되지 않으며 복구할 수 없습니다.",
         "dbSlimmingIncludeActiveConfirmButton": "보관되지 않은 작업 포함",
         "dbSlimmingIncludeActiveCancelButton": "보관되지 않은 작업 유지",
         "dbSlimmingBackupLabel": "정리 전 데이터베이스 백업",
@@ -6662,6 +6673,7 @@
         "confirm": "액세스 권한 철회"
       },
       "v2": {
+        "sectionTitle": "실험용 Agent 네트워크",
         "switch": {
           "title": "Agent-Net (Beta)",
           "hint": "연결 토폴로지와 최근 활동을 표시합니다. 양쪽 기기에서 Agent-Net을 켜고 Agent-Net 페어링을 완료하면 암호화된 연결을 사용합니다. 다른 기기는 기존 연결을 사용합니다. 이 컴퓨터에만 적용됩니다."
@@ -6735,7 +6747,106 @@
           "deviceLink": "Device Link"
         },
         "onlyEncrypted": "Agent-Net만 사용",
-        "onlyEncryptedHint": "켜면 이전 버전 기기와 이전 연결을 사용하는 공유를 사용할 수 없습니다. 기본값은 꺼짐입니다."
+        "onlyEncryptedHint": "켜면 이전 버전 기기와 이전 연결을 사용하는 공유를 사용할 수 없습니다. 기본값은 꺼짐입니다.",
+        "peerSwitch": {
+          "row": {
+            "toAgentNet": "Agent-Net으로 전환 중…",
+            "toDeviceLink": "Device Link로 되돌리는 중…"
+          },
+          "status": {
+            "toAgentNet": "Agent-Net으로 전환 중",
+            "toDeviceLink": "Device Link로 되돌리는 중"
+          },
+          "reconnecting": "다시 연결 중",
+          "toAgentNet": "Agent-Net으로 전환",
+          "toDeviceLink": "Device Link로 되돌리기",
+          "retry": "다시 시도",
+          "hint": "전환하면 이 기기와의 연결이 종단 간 암호화됩니다. 60초 안에 다시 연결되지 않으면 자동으로 Device Link로 돌아갑니다.",
+          "steps": {
+            "request": {
+              "agentNet": "상대에게 Agent-Net 켜기 요청",
+              "deviceLink": "상대에게 Agent-Net 끄기 요청"
+            },
+            "reconnect": "상대가 다시 연결 중",
+            "confirm": {
+              "agentNet": "Agent-Net으로 다시 연결되기를 기다리는 중",
+              "deviceLink": "Device Link로 다시 연결되기를 기다리는 중"
+            },
+            "revert": "60초 안에 다시 연결되지 않아 Device Link로 되돌리는 중"
+          },
+          "closeHint": "이 카드를 닫아도 됩니다. 결과는 따로 알려 드립니다.",
+          "reverted": "전환하지 못했습니다: 60초 안에 Agent-Net으로 다시 연결되지 않아 자동으로 Device Link로 돌아갔습니다.",
+          "unsupported": "상대의 Cindy 버전이 오래되어 여기서 전환할 수 없습니다. 그 컴퓨터에서 Cindy를 업데이트한 뒤 다시 시도하세요.",
+          "done": {
+            "toAgentNet": "Agent-Net으로 전환했습니다. 연결이 종단 간 암호화됩니다.",
+            "toDeviceLink": "Device Link로 되돌렸습니다."
+          },
+          "blocked": {
+            "mobile": "휴대폰은 원격 제어를 받지 않습니다. 휴대폰에서 직접 Agent-Net을 켜세요.",
+            "peer-control-off": "상대가 「같은 계정 기기의 이 기기 제어 허용」을 켜지 않았습니다. 그 컴퓨터에서 전환하세요.",
+            "control-off": "이 컴퓨터에서 해당 기기 제어를 꺼 두었습니다. 켜면 여기서 전환할 수 있습니다."
+          },
+          "toast": {
+            "toAgentNet": "「{{name}}」을(를) Agent-Net으로 전환했습니다",
+            "toDeviceLink": "「{{name}}」을(를) Device Link로 되돌렸습니다",
+            "reverted": "「{{name}}」을(를) 전환하지 못해 자동으로 Device Link로 돌아갔습니다",
+            "unsupported": "「{{name}}」의 Cindy 버전이 오래되어 원격으로 전환할 수 없습니다",
+            "not-ready": "「{{name}}」은(는) 지금 Agent-Net을 켤 수 없습니다",
+            "busy": "「{{name}}」이(가) 다른 전환을 처리 중입니다. 잠시 후 다시 시도하세요",
+            "failed": "「{{name}}」의 연결을 전환하지 못했습니다",
+            "encryption-required": "먼저 “{{name}}”에서 “Agent-Net만 사용”을 끈 뒤 되돌려 주세요",
+            "controller-encryption-required": "“{{name}}”을 되돌리려면 먼저 이 컴퓨터에서 “Agent-Net만 사용”을 꺼 주세요",
+            "agent-net-only-relay": "“{{name}}” 연결은 Agent-Net만 지원하므로 Device Link로 되돌릴 수 없습니다"
+          },
+          "checking": "전환할 수 있는지 확인하는 중…",
+          "notReady": {
+            "not-signed-in": "상대가 Cindy에 로그인하지 않았습니다. 로그인 후 Agent-Net을 켤 수 있습니다.",
+            "secure-storage": "상대 컴퓨터의 보안 저장소를 사용할 수 없어 Agent-Net을 켤 수 없습니다. 그 컴퓨터에서 해결해야 합니다.",
+            "relay-identity": "상대 컴퓨터에 현재 중계 서버의 Agent-Net 연결이 설정되어 있지 않습니다. 먼저 그 컴퓨터에서 설정하세요."
+          },
+          "batch": {
+            "toAgentNet": "모두 Agent-Net으로 전환",
+            "toDeviceLink": "모두 Device Link로 되돌리기",
+            "confirmTitleAgentNet": "이 컴퓨터들을 Agent-Net으로 전환할까요?",
+            "confirmTitleDeviceLink": "이 컴퓨터들을 Device Link로 되돌릴까요?",
+            "ready": "전환 가능",
+            "checking": "확인 중",
+            "skipReason": {
+              "unsupported": "Cindy 업데이트 필요",
+              "not-ready": "지금 Agent-Net을 켤 수 없음",
+              "unreachable": "지금 응답 없음",
+              "encryption-required": "Agent-Net만 사용",
+              "controller-encryption-required": "이 컴퓨터는 Agent-Net만 사용",
+              "agent-net-only-relay": "Agent-Net 전용 네트워크"
+            },
+            "canaryNote": "먼저 한 대를 전환하고 다시 연결되는 것을 확인한 뒤 나머지를 함께 전환합니다. 60초 안에 다시 연결되지 않는 컴퓨터는 스스로 돌아갑니다.",
+            "rollbackNote": "되돌리면 연결의 종단 간 암호화가 해제됩니다. “Agent-Net만 사용”이 켜진 컴퓨터는 먼저 해당 컴퓨터에서 이 설정을 꺼야 합니다.",
+            "run": "{{count}}대 전환",
+            "cancel": "취소",
+            "close": "완료",
+            "state": {
+              "waiting": "대기 중",
+              "running": "전환 중",
+              "done": "전환됨",
+              "reverted": "자동으로 돌아감",
+              "skipped": "전환 안 함",
+              "failed": "전환 못 함"
+            },
+            "stopped": "첫 번째 컴퓨터를 전환하지 못해 나머지는 그대로 두었습니다.",
+            "finished": "{{done}}대 전환됨",
+            "finishedWithRevert": "{{done}}대 전환됨, {{reverted}}대는 전환하지 못함"
+          },
+          "changedBy": {
+            "on": "「{{name}}」이(가) {{time}}에 원격으로 켬",
+            "off": "「{{name}}」이(가) {{time}}에 원격으로 끔"
+          },
+          "unreachable": "이번에는 그 컴퓨터에 확인하지 못했습니다. 잠시 후 카드를 다시 열어 보세요.",
+          "encryptionRequired": "이 컴퓨터는 “Agent-Net만 사용”이 켜져 있습니다. Device Link로 되돌리려면 먼저 해당 컴퓨터에서 이 설정을 꺼 주세요.",
+          "disableBlocked": {
+            "controller-encryption-required": "이 컴퓨터는 “Agent-Net만 사용”이 켜져 있습니다. 다른 컴퓨터를 Device Link로 되돌리려면 먼저 여기에서 이 설정을 꺼 주세요.",
+            "agent-net-only-relay": "이 연결의 네트워크는 Agent-Net만 지원합니다. 되돌리려면 먼저 Device Link를 지원하는 연결 경로로 바꿔 주세요."
+          }
+        }
       }
     },
     "tina": {
@@ -7984,7 +8095,7 @@
         "usageStartTask": "사용 방법: 새 작업의 모델 선택기에서 이 플러그인이 제공하는 모델을 고르세요.",
         "points": {
           "will-schedule-run": "자동화 실행 전",
-          "will-routine-run": "동료의 루틴 실행 전",
+          "will-routine-run": "동반자의 루틴 실행 전",
           "will-start-task": "새 작업을 시작할 때"
         },
         "inactive": "아직 사용할 수 없습니다. 이 플러그인을 업데이트하거나 다시 설치할 때 허용하세요."
@@ -8026,9 +8137,9 @@
         "agentObserve": "로컬 프로젝트의 세션 목록과 상태를 볼 수 있음",
         "agentObserveDetail": "등록된 로컬 프로젝트에 있는 세션의 제목, Agent 종류, 보관 여부와 상태(실행 중, 확인 필요, 최근 활동 시간)를 확인하고 메인 창에서 세션을 열 수 있습니다. 메시지, 계획, 파일을 읽거나 메시지를 보내거나 세션을 변경할 수는 없습니다.",
         "agentObserveRequest": "세션 보기 권한 확인",
-        "agentCompanions": "동료와 동료의 상태, 최근 대화를 볼 수 있음",
-        "agentCompanionsDetail": "모든 동료(다른 컴퓨터에서 실행 중인 동료 포함)의 이름, 설명, 아바타와 상태(작업 중, 처리 대기, 대기 중, 오프라인), 하고 있는 작업의 종류(생각 중, 도구 실행 중 등), 처리를 기다리는 요청의 내용(질문, 실행할 명령, 계획 — 대화에 보이는 것과 같음), 메인 대화의 최근 내용(내 메시지와 동료의 답장 최대 50개, 도구 실행 과정 제외)을 확인하고 메인 창에서 동료의 대화를 열 수 있습니다. 메시지 전달 권한도 있으면 플러그인에서 입력한 답을 동료에게 전달할 수 있습니다(질문 답변, 요청 거절, 계획 의견). 실행 허용은 Cindy 자체 확인 창에서 직접 눌러야 합니다. 파일, 도구 실행 과정, 생각 내용은 읽을 수 없습니다.",
-        "agentCompanionsRequest": "동료 보기 권한 확인",
+        "agentCompanions": "동반자와 동반자의 상태, 최근 대화를 볼 수 있음",
+        "agentCompanionsDetail": "모든 동반자(다른 컴퓨터에서 실행 중인 동반자 포함)의 이름, 설명, 아바타와 상태(작업 중, 처리 대기, 대기 중, 오프라인), 하고 있는 작업의 종류(생각 중, 도구 실행 중 등), 처리를 기다리는 요청의 내용(질문, 실행할 명령, 계획 — 대화에 보이는 것과 같음), 메인 대화의 최근 내용(내 메시지와 동반자의 답장 최대 50개, 도구 실행 과정 제외)을 확인하고 메인 창에서 동반자의 대화를 열 수 있습니다. 메시지 전달 권한도 있으면 플러그인에서 입력한 답을 동반자에게 전달할 수 있습니다(질문 답변, 요청 거절, 계획 의견). 실행 허용은 Cindy 자체 확인 창에서 직접 눌러야 합니다. 파일, 도구 실행 과정, 생각 내용은 읽을 수 없습니다.",
+        "agentCompanionsRequest": "동반자 보기 권한 확인",
         "agentHiddenTasks": "세션 목록에 표시되지 않는 백그라운드 세션을 만들 수 있음",
         "agentHiddenTasksDetail": "이 플러그인이 만든 세션을 세션 목록, 검색, 알림에 표시하지 않을 수 있습니다. 플러그인 상세의 「백그라운드 세션」에서 언제든지 확인하고 열거나 세션 목록에 표시할 수 있으며, 플러그인을 제거하면 다시 표시됩니다.",
         "agentErrand": "작업을 만들고 실행하며 결과를 읽을 수 있습니다",
@@ -8065,7 +8176,7 @@
         "subscribeAssistantReplyDetail": "AI 답변이 완료될 때마다 처리합니다. 본문을 다듬거나 고쳐 쓸 수 있고(직접 교체되어 원문은 남지 않음), 답변 말풍선을 직접 렌더링한 카드로 교체할 수도 있습니다(카드로 교체된 경우 원문이 보존되며 한 번의 탭으로 확인할 수 있습니다).",
         "subscribeScheduleRun": "선택한 자동화가 실행되기 전에 확인할 수 있음",
         "subscribeScheduleRunDetail": "'사전 검사'에서 이 플러그인을 선택한 자동화는 실행 전에 먼저 확인합니다. 자동화의 이름과 지시를 볼 수 있고 이번 실행을 건너뛰거나 중지할 수 있지만 대신 승인할 수는 없습니다.",
-        "subscribeRoutineRun": "선택한 팀원 루틴이 실행되기 전에 확인할 수 있음",
+        "subscribeRoutineRun": "선택한 동반자 루틴이 실행되기 전에 확인할 수 있음",
         "subscribeRoutineRunDetail": "'사전 검사'에서 이 플러그인을 선택한 루틴은 실행될 때마다 먼저 확인합니다. 루틴의 지시와 이를 실행한 이벤트 내용을 볼 수 있고 이번 실행을 건너뛰거나 중지할 수 있지만 대신 승인할 수는 없습니다.",
         "systemPrompt": "선택한 작업에 시스템 지시를 추가할 수 있음",
         "systemPromptDetail": "아래 정적 문구는 이 플러그인을 선택한 작업에서만 Cindy의 고정 지시 뒤에 추가됩니다. 순서와 엔진 범위는 패키지에서 정합니다. 변경은 다음 메시지부터 적용되며 오류는 작업 설정을 따릅니다.",
@@ -8768,7 +8879,7 @@
         "createTitle": "MCP 서버 추가",
         "editTitle": "MCP 서버 편집",
         "desc": "원격 http / sse 형식의 MCP만 지원합니다. 저장 후 새 세션에서 호출할 수 있으며 진행 중인 세션에는 영향을 주지 않습니다.",
-        "teammateDesc": "원격 http / sse 형식의 MCP만 지원합니다. 저장하면 동료가 자신의 도구에 추가하고, 이 채팅의 다음 메시지부터 사용할 수 있습니다. 새 세션은 필요 없습니다."
+        "teammateDesc": "원격 http / sse 형식의 MCP만 지원합니다. 저장하면 동반자가 자신의 도구에 추가하고, 이 채팅의 다음 메시지부터 사용할 수 있습니다. 새 세션은 필요 없습니다."
       },
       "fields": {
         "name": "표시 이름",
@@ -10271,9 +10382,9 @@
       "activityNameJoinerPair": ", ",
       "activityNameJoinerLast": ", ",
       "activity": {
-        "companion": "동료의 답장이",
-        "companionOne": "동료 {{names}}의 답장이",
-        "companionOther": "동료 {{names}}의 답장이",
+        "companion": "동반자의 답장이",
+        "companionOne": "동반자 {{names}}의 답장이",
+        "companionOther": "동반자 {{names}}의 답장이",
         "conversation": "진행 중인 채팅이",
         "backgroundCommand": "백그라운드 명령이",
         "scheduledTask": "예약 작업이",
@@ -10392,7 +10503,7 @@
       "skillhub": "SkillHub",
       "plugins": "플러그인",
       "issues": "이슈",
-      "bots": "동료"
+      "bots": "동반자"
     },
     "navigation": {
       "more": "더 보기",
@@ -10406,7 +10517,7 @@
       "items": {
         "automations": "자동화",
         "plugins": "플러그인",
-        "bots": "동료",
+        "bots": "동반자",
         "search": "검색"
       }
     },
@@ -10515,22 +10626,22 @@
     },
     "creationName": "이름",
     "settingsBack": "설정으로 돌아가기",
-    "title": "동료",
-    "add": "동료 추가",
+    "title": "동반자",
+    "add": "동반자 추가",
     "createWizard": {
-      "createFailed": "동료를 만들 수 없습니다. 다시 시도하세요."
+      "createFailed": "동반자를 만들 수 없습니다. 다시 시도하세요."
     },
     "homeFolder": {
       "title": "고급 설정",
-      "description": "동료는 기억과 익힌 작업 방식을 스스로 관리합니다. 바로잡을 때만 폴더를 직접 여세요.",
+      "description": "동반자는 기억과 익힌 작업 방식을 스스로 관리합니다. 바로잡을 때만 폴더를 직접 여세요.",
       "contents": "SOUL.md, USER.md, system_prompt.md, skills/, memories/가 들어 있습니다. 모델, 권한과 연결은 Cindy가 관리합니다.",
       "open": "폴더 열기",
-      "openFailed": "동료 폴더를 열 수 없습니다.",
+      "openFailed": "동반자 폴더를 열 수 없습니다.",
       "projectMode": {
         "memoryReviewName": "{{name}} · 기억 정리",
         "carryover": {
           "title": "업그레이드 전 남은 일",
-          "intro": "이 팀원을 업그레이드할 때 아직 끝나지 않은 항목입니다. 필요한 것은 계속하고 나머지는 삭제하세요. 이전 기록 전체는 팀원 폴더의 v1-archive에 남아 있습니다.",
+          "intro": "이 동반자를 업그레이드할 때 아직 끝나지 않은 항목입니다. 필요한 것은 계속하고 나머지는 삭제하세요. 이전 기록 전체는 동반자 폴더의 v1-archive에 남아 있습니다.",
           "todos": "열린 할 일",
           "work": "워크벤치 항목",
           "threads": "진행 중",
@@ -10563,8 +10674,8 @@
       "unread": "읽지 않은 메시지 {{count}}개",
       "search": "파트너 또는 그룹 채팅 검색",
       "searchPlaceholder": "파트너 또는 그룹 채팅 검색…",
-      "showHidden": "숨긴 동료 표시",
-      "hideHidden": "숨긴 동료 접기",
+      "showHidden": "숨긴 동반자 표시",
+      "hideHidden": "숨긴 동반자 접기",
       "hidden": "숨김({{count}})",
       "hide": "숨기기",
       "unhideNamed": "{{name}} 숨기기 해제",
@@ -10572,11 +10683,11 @@
       "unpin": "고정 해제",
       "pinned": "고정됨",
       "needsAttention": "확인 필요",
-      "duplicate": "동료 복제",
+      "duplicate": "동반자 복제",
       "moreActions": "{{name}} 추가 작업",
-      "sectionExpand": "동료 펼치기",
+      "sectionExpand": "동반자 펼치기",
       "showLess": "접기",
-      "sectionCollapse": "동료 접기",
+      "sectionCollapse": "동반자 접기",
       "noResults": "검색과 일치하는 파트너나 그룹이 없어요"
     },
     "cancel": "취소",
@@ -10587,17 +10698,17 @@
       "retry": "다시 저장"
     },
     "retry": "다시 시도",
-    "backToBot": "동료로 돌아가기",
-    "sessionLoadFailedTitle": "이 동료 작업을 불러올 수 없습니다",
-    "sessionLoadFailedDescription": "작업 연결은 남아 있지만 Cindy가 동료 상태를 읽지 못했습니다. 다시 시도하거나 동료 개요로 돌아가세요.",
-    "sessionUnavailableTitle": "이 동료 작업은 더 이상 사용할 수 없습니다",
+    "backToBot": "동반자로 돌아가기",
+    "sessionLoadFailedTitle": "이 동반자 작업을 불러올 수 없습니다",
+    "sessionLoadFailedDescription": "작업 연결은 남아 있지만 Cindy가 동반자 상태를 읽지 못했습니다. 다시 시도하거나 동반자 개요로 돌아가세요.",
+    "sessionUnavailableTitle": "이 동반자 작업은 더 이상 사용할 수 없습니다",
     "sessionUnavailableDescription": "이 작업이 없어졌거나 삭제되었거나 더 이상 이 파트너의 것이 아닐 수 있습니다. 돌아가면 복구된 기본 작업을 열 수 있어요.",
     "settings": "설정",
     "settingsTabs": {
       "model": "모델"
     },
     "model": {
-      "description": "이 팀원이 사용할 모델을 선택합니다.",
+      "description": "이 동반자가 사용할 모델을 선택합니다.",
       "primary": "기본 모델",
       "restoreDefault": "기본 모델로 되돌리기"
     },
@@ -10609,7 +10720,7 @@
       "remove": "이 후보 제거",
       "moveUp": "위로 이동",
       "moveDown": "아래로 이동",
-      "description": "모델을 최대 5개까지 설정할 수 있습니다. 현재 후보를 사용할 수 없으면 팀원이 다음 후보로 자동 전환하므로 작업 전환이나 수동 재시도가 필요하지 않습니다.",
+      "description": "모델을 최대 5개까지 설정할 수 있습니다. 현재 후보를 사용할 수 없으면 동반자가 다음 후보로 자동 전환하므로 작업 전환이나 수동 재시도가 필요하지 않습니다.",
       "options": "예비 모델 ({{count}})"
     },
     "actions": {
@@ -10617,42 +10728,42 @@
       "addToGroup": "그룹에 추가",
       "export": "내보내기"
     },
-    "emptyTitle": "아직 동료가 없습니다",
-    "emptyDescription": "역할을 정해 동료를 만들고 필요한 도구와 메시지 채널을 연결하세요.",
+    "emptyTitle": "아직 동반자가 없습니다",
+    "emptyDescription": "역할을 정해 동반자를 만들고 필요한 도구와 메시지 채널을 연결하세요.",
     "sessions": "개 작업",
     "open": "열기",
     "archived": "보관됨",
     "historyTitle": "보관된 기록",
-    "historyEmpty": "보관된 동료 작업이 아직 없습니다.",
+    "historyEmpty": "보관된 동반자 작업이 아직 없습니다.",
     "historySearch": {
-      "title": "동료 기록 검색",
-      "description": "이 동료의 이전 메시지, 백그라운드 작업 및 보관 기록을 검색합니다.",
+      "title": "동반자 기록 검색",
+      "description": "이 동반자의 이전 메시지, 백그라운드 작업 및 보관 기록을 검색합니다.",
       "placeholder": "무엇을 논의했는지 기억하시나요?",
       "search": "검색",
       "searching": "검색 중…",
-      "failed": "동료 기록을 검색하지 못했습니다. 다시 시도하세요.",
-      "empty": "일치하는 동료 기록이 없습니다."
+      "failed": "동반자 기록을 검색하지 못했습니다. 다시 시도하세요.",
+      "empty": "일치하는 동반자 기록이 없습니다."
     },
     "lifecycle": {
       "restartHint": "답장이 오지 않나요?",
-      "stoppedBots": "확인이 필요한 동료",
-      "title": "동료 관리",
-      "description": "동료를 일시 중지하거나 재개하고 이전 메시지와 결과를 찾습니다.",
-      "activeTitle": "동료 실행 중",
-      "activeDescription": "메시지를 받고 백그라운드 작업을 실행하며 다른 동료에게 연락할 수 있습니다.",
-      "pausedTitle": "동료 일시 중지됨",
-      "pausedDescription": "새 작업을 받지 않습니다. 사용자가 직접 중지한 자동화는 동료 재개 후에도 중지 상태를 유지합니다.",
-      "stoppedTitle": "동료가 중지됨",
+      "stoppedBots": "확인이 필요한 동반자",
+      "title": "동반자 관리",
+      "description": "동반자를 일시 중지하거나 재개하고 이전 메시지와 결과를 찾습니다.",
+      "activeTitle": "동반자 실행 중",
+      "activeDescription": "메시지를 받고 백그라운드 작업을 실행하며 다른 동반자에게 연락할 수 있습니다.",
+      "pausedTitle": "동반자 일시 중지됨",
+      "pausedDescription": "새 작업을 받지 않습니다. 사용자가 직접 중지한 자동화는 동반자 재개 후에도 중지 상태를 유지합니다.",
+      "stoppedTitle": "동반자가 중지됨",
       "stoppedDescription": "이전 버전에서 남은 중지 상태입니다. 영구 삭제할 때 작업 기록은 계속 보관할 수 있습니다.",
-      "pause": "동료 일시 중지",
-      "resume": "동료 재개",
+      "pause": "동반자 일시 중지",
+      "resume": "동반자 재개",
       "delete": "영구 삭제",
-      "deleteTitle": "동료 영구 삭제",
+      "deleteTitle": "동반자 영구 삭제",
       "deleteDescription": "{{name}}을(를) 삭제하면 프로필, 메모리, 작업 디렉터리, 채널 연결 및 자동화 작업이 영구적으로 삭제됩니다. 작업 기록과 별도의 worktree는 유지됩니다.",
       "working": "업데이트 중…",
       "actionFailed": "작업이 완료되지 않았습니다. 잠시 후 다시 시도하세요.",
       "deleteFailed": "삭제가 완료되지 않았습니다.",
-      "restart": "팀원 다시 시작",
+      "restart": "동반자 다시 시작",
       "restartDescription": "현재 실행을 중지하고 새로 시작할 준비를 합니다. 대화 기록, 메모리, 파일은 유지됩니다.",
       "restarting": "다시 시작하는 중…",
       "restarted": "다시 시작했습니다. 메시지를 보내 계속하세요."
@@ -10697,17 +10808,17 @@
       "discard": "변경 사항 버리기",
       "continueEditing": "계속 편집"
     },
-    "profileSaveFailed": "동료 설정을 저장하지 못했습니다. 변경 사항은 적용되지 않았습니다.",
-    "profileSaveOffline": "동료가 있는 컴퓨터에 연결할 수 없습니다. 다시 연결한 후 저장해 주세요.",
+    "profileSaveFailed": "동반자 설정을 저장하지 못했습니다. 변경 사항은 적용되지 않았습니다.",
+    "profileSaveOffline": "동반자가 있는 컴퓨터에 연결할 수 없습니다. 다시 연결한 후 저장해 주세요.",
     "modelLabel": "모델",
     "modelUnavailable": "{{model}}(현재 사용할 수 없음)",
     "codexAutomaticCompact": "Codex 파트너는 스스로 맥락을 압축하고 /new 를 써도 지금 작업이 유지됩니다. 정말 새로 시작해야 할 때만 새 작업을 여세요.",
     "image": "이미지 추가",
     "send": "메시지 보내기",
     "roster": {
-      "create": "동료 초대하기",
-      "customNamePlaceholder": "동료의 이름을 지어 주세요",
-      "customTitle": "새로운 동료 만나기"
+      "create": "동반자 초대하기",
+      "customNamePlaceholder": "동반자의 이름을 지어 주세요",
+      "customTitle": "새로운 동반자 만나기"
     },
     "chat": {
       "newMessagesBoundary": "NEW",
@@ -10773,12 +10884,12 @@
       "sentTo": "{{name}}에게 메시지를 보냄",
       "receivedFrom": "{{name}}의 메시지",
       "exchangeCount": "{{name}}와 주고받은 메시지 {{count}}개",
-      "open": "동료 간 대화 보기",
+      "open": "동반자 간 대화 보기",
       "readOnly": "이 대화는 보기 전용입니다",
       "close": "대화 닫기",
-      "unavailable": "이 동료 간 대화를 더 이상 사용할 수 없습니다.",
+      "unavailable": "이 동반자 간 대화를 더 이상 사용할 수 없습니다.",
       "empty": "아직 볼 수 있는 메시지가 없습니다.",
-      "limitReached": "이번 동료 간 대화가 한도에 도달해 양쪽 모두 각자의 기본 작업으로 돌아갔습니다",
+      "limitReached": "이번 동반자 간 대화가 한도에 도달해 양쪽 모두 각자의 기본 작업으로 돌아갔습니다",
       "sentHeader": "{{name}}에게 보냄",
       "receivedHeader": "{{name}}의 메시지",
       "expandThread": "주고받은 메시지 펼치기",
@@ -10788,7 +10899,7 @@
       "expand": "펼치기",
       "collapse": "접기",
       "fullThread": "전체 대화",
-      "threadClosed": "이번 동료 간 대화가 끝났습니다 · 보기 전용"
+      "threadClosed": "이번 동반자 간 대화가 끝났습니다 · 보기 전용"
     },
     "groupChat": {
       "mask": {
@@ -10891,9 +11002,9 @@
       "nameLabel": "그룹 이름",
       "waitingConfirm": "{{name}} 님이 확인을 기다리고 있어요",
       "loadFailedTitle": "이 그룹 채팅을 불러올 수 없습니다",
-      "loadFailedDescription": "Cindy가 지금 이 그룹 채팅을 읽을 수 없습니다. 다시 시도하거나 동료 페이지로 돌아가세요.",
+      "loadFailedDescription": "Cindy가 지금 이 그룹 채팅을 읽을 수 없습니다. 다시 시도하거나 동반자 페이지로 돌아가세요.",
       "unavailableTitle": "이 그룹 채팅을 더 이상 사용할 수 없습니다",
-      "unavailableDescription": "삭제되었을 수 있습니다. 동료 페이지로 돌아가 다른 그룹 채팅이나 동료를 열어 보세요.",
+      "unavailableDescription": "삭제되었을 수 있습니다. 동반자 페이지로 돌아가 다른 그룹 채팅이나 동반자를 열어 보세요.",
       "sidebar": {
         "title": "그룹 채팅",
         "empty": "아직 메시지가 없습니다",
@@ -10913,14 +11024,14 @@
       },
       "create": {
         "title": "새 그룹 채팅",
-        "description": "동료 몇 명을 한 그룹에 모아 보세요. 한마디 하면 동료들이 함께 이어서 답합니다.",
+        "description": "동반자 몇 명을 한 그룹에 모아 보세요. 한마디 하면 동반자들이 함께 이어서 답합니다.",
         "namePlaceholder": "예: 주말 나들이",
         "nameRequired": "그룹 이름을 입력하세요",
-        "membersLabel": "동료 선택",
+        "membersLabel": "동반자 선택",
         "selectedCount_one": "{{count}}명 선택됨, 최대 {{max}}명",
         "selectedCount_other": "{{count}}명 선택됨, 최대 {{max}}명",
-        "minMembers": "동료를 {{min}}명 이상 선택하세요",
-        "notEnoughBots": "그룹 채팅을 만들려면 사용할 수 있는 동료가 {{min}}명 이상 필요합니다. 먼저 동료를 추가하세요.",
+        "minMembers": "동반자를 {{min}}명 이상 선택하세요",
+        "notEnoughBots": "그룹 채팅을 만들려면 사용할 수 있는 동반자가 {{min}}명 이상 필요합니다. 먼저 동반자를 추가하세요.",
         "submit": "그룹 채팅 만들기",
         "failed": "그룹 채팅을 만들지 못했습니다. 잠시 후 다시 시도하세요."
       },
@@ -10931,22 +11042,22 @@
       "mention": {
         "all": "모두",
         "allHint": "사람만",
-        "label": "동료 멘션",
-        "allBots": "모든 동료",
-        "allBotsHint": "동료만"
+        "label": "동반자 멘션",
+        "allBots": "모든 동반자",
+        "allBotsHint": "동반자만"
       },
       "composer": {
         "label": "그룹 채팅 메시지",
-        "placeholder": "그룹에 말을 걸어 보세요. @로 동료를 지정하면 그 동료만 답합니다…",
-        "noMembers": "지금 답할 수 있는 동료가 없습니다. 그룹 설정에서 동료를 추가하세요",
+        "placeholder": "그룹에 말을 걸어 보세요. @로 동반자를 지정하면 그 동반자만 답합니다…",
+        "noMembers": "지금 답할 수 있는 동반자가 없습니다. 그룹 설정에서 동반자를 추가하세요",
         "tooLong": "메시지가 너무 깁니다. 최대 {{max}}자까지 보낼 수 있습니다",
         "sendFailed": "메시지를 보내지 못했습니다. 잠시 후 다시 시도하세요",
         "stopFailed": "이번 라운드를 멈추지 못했습니다. 다시 시도하세요",
         "stop": "이번 라운드 중지",
         "more": "더 보기",
         "division": "역할 분담하기",
-        "divisionDescription": "담당자가 먼저 역할을 나누고, 동료들이 한 단계씩 진행합니다",
-        "divisionDescriptionSteps": "적은 단계대로, 또는 담당자가 나눠서 동료들이 한 단계씩 진행합니다",
+        "divisionDescription": "담당자가 먼저 역할을 나누고, 동반자들이 한 단계씩 진행합니다",
+        "divisionDescriptionSteps": "적은 단계대로, 또는 담당자가 나눠서 동반자들이 한 단계씩 진행합니다",
         "divisionBusy": "역할 분담이 진행 중입니다. 끝내거나 중지한 뒤 새로 시작하세요",
         "divisionTag": "역할 분담",
         "removeDivision": "역할 분담 해제",
@@ -10978,8 +11089,8 @@
         "loadEarlier": "이전 메시지 보기",
         "loadEarlierFailed": "이전 메시지를 불러오지 못했습니다. 다시 시도하세요",
         "emptyTitle": "이 그룹에는 아직 메시지가 없습니다",
-        "emptyDescription": "한마디 하면 동료들이 이어서 대화합니다. @로 동료를 지정하면 그 동료만 답합니다.",
-        "roundEnded": "동료들이 말을 마쳤습니다",
+        "emptyDescription": "한마디 하면 동반자들이 이어서 대화합니다. @로 동반자를 지정하면 그 동반자만 답합니다.",
+        "roundEnded": "동반자들이 말을 마쳤습니다",
         "stepTag": "{{count}}단계",
         "sending": "보내는 중",
         "continue": "토론 계속하기",
@@ -11011,10 +11122,10 @@
           "unclaimed_timeout": "{{name}}이(가) 대기 시간 내에 처리를 시작하지 못해 이번 요청이 종료되었습니다.\n파트너의 소유자에게 해당 컴퓨터에서 Cindy가 정상 실행 중이고 네트워크에 연결되어 있는지 확인해 달라고 요청하세요."
         },
         "runtimeFailure": {
-          "REMOTE_DEVICE_LIMIT": "{{name}}이(가) 답장할 수 없습니다. 이 동료가 있는 기기의 원격 세션 수가 한도에 도달했습니다.\n동료의 소유자에게 사용하지 않는 세션을 보관해 달라고 요청하거나, 원격 컴퓨터의 소유자에게 원격 및 공유에서 한도를 높여 달라고 요청하세요.",
+          "REMOTE_DEVICE_LIMIT": "{{name}}이(가) 답장할 수 없습니다. 이 동반자가 있는 기기의 원격 세션 수가 한도에 도달했습니다.\n동반자의 소유자에게 사용하지 않는 세션을 보관해 달라고 요청하거나, 원격 컴퓨터의 소유자에게 원격 및 공유에서 한도를 높여 달라고 요청하세요.",
           "REMOTE_TOTAL_LIMIT": "{{name}}이(가) 답장할 수 없습니다. 원격 컴퓨터의 전체 원격 세션 수가 한도에 도달했습니다.\n해당 컴퓨터의 소유자에게 불필요한 세션을 해제하거나 원격 및 공유에서 한도를 높여 달라고 요청하세요.",
           "IMAGE_INPUT_UNSUPPORTED": "{{name}}이(가) 답변하지 못했습니다. 현재 모델은 이미지를 지원하지 않습니다.\n이미지 지원 모델로 전환하거나 설정 → 개인화 → 비전 브리지에서 비전 모델을 활성화하고 설정한 뒤 메시지를 다시 보내세요.",
-          "MODEL_UNAVAILABLE": "{{name}}이(가) 답변하지 못했습니다. 사용 가능한 모델이 없습니다.\n동료 설정에서 연결된 사용 가능한 모델을 선택한 뒤 메시지를 다시 보내세요.",
+          "MODEL_UNAVAILABLE": "{{name}}이(가) 답변하지 못했습니다. 사용 가능한 모델이 없습니다.\n동반자 설정에서 연결된 사용 가능한 모델을 선택한 뒤 메시지를 다시 보내세요.",
           "AUTH_REQUIRED": "{{name}}이(가) 답변하지 못했습니다. 모델 연결에 재인증이 필요합니다.\n설정에서 모델 제공자에 다시 연결한 뒤 메시지를 다시 보내세요.",
           "RATE_LIMITED": "{{name}}이(가) 답변하지 못했습니다. 모델 요청이 너무 많습니다.\n잠시 후 메시지를 다시 보내거나 다른 사용 가능한 모델을 선택하세요.",
           "UPSTREAM_OVERLOADED": "{{name}}이(가) 답변할 수 없습니다. 모델 서비스가 일시적으로 혼잡합니다.\n잠시 후 메시지를 다시 보내거나 다른 사용 가능한 모델을 선택해 주세요.",
@@ -11024,7 +11135,7 @@
           "RUNTIME_ERROR": "{{name}}이(가) 이번에는 답변하지 못했습니다.\n메시지를 다시 보내세요. 계속 실패하면 로그를 확인하고 문제를 신고하세요."
         },
         "capability": {
-          "GROUP_AUTHORIZATION_REQUIRED": "{{name}}의 도구가 실행되지 않았습니다. 그룹 권한이 만료되었거나 이 작업을 허용하지 않습니다. 동료 소유자가 이 그룹에서 다시 요청해 주세요.",
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}}의 도구가 실행되지 않았습니다. 그룹 권한이 만료되었거나 이 작업을 허용하지 않습니다. 동반자 소유자가 이 그룹에서 다시 요청해 주세요.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}}의 그룹 권한을 확인할 수 없어 도구가 실행되지 않았습니다. 연결이 복구되면 다시 시도해 주세요.",
           "ATTACHMENTS_UNAVAILABLE": "다운로드 실패 또는 첨부 개수 제한으로 일부 첨부 파일이 {{name}}에게 전달되지 않았습니다. 이번 요청에 필요한 파일을 다시 보내 주세요."
         }
@@ -11035,44 +11146,44 @@
         "members": "멤버",
         "remove": "내보내기",
         "removeNamed": "{{name}} 님을 그룹에서 내보내기",
-        "minMembers": "그룹 채팅에는 동료가 {{min}}명 이상 있어야 합니다",
+        "minMembers": "그룹 채팅에는 동반자가 {{min}}명 이상 있어야 합니다",
         "maxMembers": "최대 {{max}}명",
-        "noMoreBots": "추가할 수 있는 다른 동료가 없습니다",
+        "noMoreBots": "추가할 수 있는 다른 동반자가 없습니다",
         "nameSaveFailed": "그룹 이름을 저장하지 못해 이전 이름으로 되돌렸습니다",
         "membersSaveFailed": "멤버를 업데이트하지 못했습니다. 다시 시도하세요",
         "replyMode": "아무도 @멘션되지 않았을 때",
         "replyModeAll": "누구나 답할 수 있음",
-        "replyModeMentioned": "@된 동료만 답함",
-        "replyModeNote": "더 보탤 말이 없는 동료는 말하지 않습니다. 한 라운드는 최대 3바퀴, 메시지 10개까지이며, 그 후에는 ‘토론 계속하기’를 누를 때까지 기다립니다.",
+        "replyModeMentioned": "@된 동반자만 답함",
+        "replyModeNote": "더 보탤 말이 없는 동반자는 말하지 않습니다. 한 라운드는 최대 3바퀴, 메시지 10개까지이며, 그 후에는 ‘토론 계속하기’를 누를 때까지 기다립니다.",
         "replyModeSaveFailed": "답변 방식을 저장하지 못했습니다. 다시 시도하세요",
         "delete": "그룹 채팅 삭제",
-        "deleteNote": "이 그룹 채팅과 그 안의 메시지만 삭제됩니다. 동료 자체와 동료의 기억, 개인 대화에는 영향이 없습니다.",
+        "deleteNote": "이 그룹 채팅과 그 안의 메시지만 삭제됩니다. 동반자 자체와 동반자의 기억, 개인 대화에는 영향이 없습니다.",
         "deleteConfirmTitle": "‘{{name}}’을(를) 삭제할까요?",
         "deleteFailed": "그룹 채팅을 삭제하지 못했습니다. 잠시 후 다시 시도하세요",
         "speakingMode": "발언 순서",
         "speakingModeAuto": "자동",
         "speakingModeSequential": "항상 차례대로",
-        "speakingModeAutoNote": "멘션이 없거나 @모든 동료이면 첫 라운드는 동시에 생각하고 이후에는 번갈아 답합니다. 동료를 멘션하면 멘션 순서대로 답합니다.",
-        "speakingModeSequentialNote": "한 번에 한 동료만 말하며, 뒤에 말하는 동료는 앞의 답을 보고 답합니다.",
+        "speakingModeAutoNote": "멘션이 없거나 @모든 동반자이면 첫 라운드는 동시에 생각하고 이후에는 번갈아 답합니다. 동반자를 멘션하면 멘션 순서대로 답합니다.",
+        "speakingModeSequentialNote": "한 번에 한 동반자만 말하며, 뒤에 말하는 동반자는 앞의 답을 보고 답합니다.",
         "speakingModeSaveFailed": "발언 순서를 저장하지 못했습니다. 다시 시도해 주세요.",
         "setOrganizer": "담당자로 지정",
         "setOrganizerNamed": "{{name}} 님을 담당자로 지정",
-        "organizerNote": "담당자가 각 단계를 누가 맡을지 정합니다. 기본값은 첫 번째 동료입니다.",
+        "organizerNote": "담당자가 각 단계를 누가 맡을지 정합니다. 기본값은 첫 번째 동반자입니다.",
         "organizerSaveFailed": "담당자를 바꾸지 못했습니다. 다시 시도하세요",
         "projectDir": "프로젝트 폴더",
         "projectDirNone": "선택 안 함",
         "projectDirChoose": "폴더 선택",
         "projectDirChange": "폴더 변경",
         "projectDirClear": "지우기",
-        "projectDirNote": "역할 분담으로 일할 때 동료들이 여기서 작업합니다. 선택하지 않아도 되며, 그러면 이 그룹 채팅 전용 폴더를 사용합니다. git 프로젝트를 선택하면 역할 분담마다 새 worktree와 브랜치를 만들어, 지금 작업 중인 코드는 건드리지 않습니다.",
+        "projectDirNote": "역할 분담으로 일할 때 동반자들이 여기서 작업합니다. 선택하지 않아도 되며, 그러면 이 그룹 채팅 전용 폴더를 사용합니다. git 프로젝트를 선택하면 역할 분담마다 새 worktree와 브랜치를 만들어, 지금 작업 중인 코드는 건드리지 않습니다.",
         "autoContinueSaveFailed": "단계 넘기기를 저장하지 못했습니다. 다시 시도해 주세요.",
         "projectDirSaveFailed": "프로젝트 폴더를 저장하지 못했습니다. 폴더가 아직 있는지 확인한 뒤 다시 시도하세요",
-        "allowMentionAllBots": "모든 동료 멘션 허용",
-        "allowMentionAllBotsHint": "그룹 소유자만 변경할 수 있습니다. 모든 동료가 답할 수 있으므로 큰 그룹에서는 신중하게 켜세요. 본인을 대신하는 AI 답변에는 영향을 주지 않습니다."
+        "allowMentionAllBots": "모든 동반자 멘션 허용",
+        "allowMentionAllBotsHint": "그룹 소유자만 변경할 수 있습니다. 모든 동반자가 답할 수 있으므로 큰 그룹에서는 신중하게 켜세요. 본인을 대신하는 AI 답변에는 영향을 주지 않습니다."
       },
       "errors": {
-        "memberLimit": "그룹 채팅에는 동료가 2~6명 필요합니다",
-        "memberUnavailable": "사용할 수 없는 동료가 있습니다. 다른 동료를 골라 다시 시도하세요",
+        "memberLimit": "그룹 채팅에는 동반자가 2~6명 필요합니다",
+        "memberUnavailable": "사용할 수 없는 동반자가 있습니다. 다른 동반자를 골라 다시 시도하세요",
         "mentionUnavailable": "멘션한 멤버를 더 이상 사용할 수 없습니다. 다시 선택한 후 보내세요.",
         "notFound": "이 그룹 채팅은 더 이상 존재하지 않습니다",
         "hostNotReady": "Cindy가 아직 준비 중입니다. 잠시 후 다시 시도하세요",
@@ -11096,8 +11207,8 @@
         "lifecycleUnavailable": "현재 서버 또는 컴퓨터에서 아직 이 작업을 지원하지 않습니다.",
         "groupDissolved": "이 그룹은 해산되었습니다. 열람 권한이 있는 기록은 계속 볼 수 있습니다.",
         "lastOwner": "나가기 전에 소유권을 이전하거나 그룹을 해산하세요.",
-        "allBotsMentionDisabled": "그룹 소유자가 모든 동료 멘션을 켜지 않았습니다.",
-        "turnAlreadyStarted": "이 동료는 이미 실행을 시작하여 건너뛸 수 없습니다"
+        "allBotsMentionDisabled": "그룹 소유자가 모든 동반자 멘션을 켜지 않았습니다.",
+        "turnAlreadyStarted": "이 동반자는 이미 실행을 시작하여 건너뛸 수 없습니다"
       },
       "organizer": "담당자",
       "plan": {
@@ -11117,7 +11228,7 @@
         "stepRunning": "진행 중",
         "stepFailed": "끝내지 못함",
         "stepPending": "시작 전",
-        "stepMenuTitle": "이 단계를 맡을 동료",
+        "stepMenuTitle": "이 단계를 맡을 동반자",
         "removeStep": "이 단계 삭제",
         "keepOneStep": "최소 한 단계는 남겨야 합니다",
         "startFailed": "역할 분담을 시작하지 못했습니다. 다시 시도하세요",
@@ -11310,7 +11421,7 @@
           "removeTitle": "{{name}}을 그룹에서 내보낼까요?",
           "removeHint": "메시지를 읽거나 보낼 수 없게 됩니다. 해당 멤버의 파트너도 나갑니다.",
           "leave": "그룹 나가기",
-          "leaveHint": "나와 내 동료가 이 그룹에서 나갑니다. 새 메시지를 받지 못하며 그룹 기록을 볼 수 없게 됩니다.",
+          "leaveHint": "나와 내 동반자가 이 그룹에서 나갑니다. 새 메시지를 받지 못하며 그룹 기록을 볼 수 없게 됩니다.",
           "soleOwnerHint": "그룹에 나만 남았어요. 그룹을 보관하면 기록을 유지하고 나중에 다시 사용할 수 있어요.",
           "archive": "그룹 보관",
           "archiveHint": "그룹을 보관하면 모든 멤버의 새 메시지와 파트너 실행이 중지돼요. 기록은 유지돼요. 그룹을 검색해 기록을 보거나 보관을 해제할 수 있어요.",
@@ -11328,15 +11439,15 @@
           "inviteFriendsItem": "사람 초대",
           "inviteFriendsItemHint": "공유할 링크 만들기",
           "inviteFriendsLocked": "그룹 소유자와 관리자만 사람을 초대할 수 있어요",
-          "inviteBotsItem": "동료 추가",
-          "inviteBotsItemHint": "내 동료를 골라 바로 추가",
-          "searchTeammates": "동료 검색",
-          "inviteBotsCount": "추가할 수 있는 동료 {{count}}명",
-          "inviteBotsAllIn": "내 동료가 모두 이미 들어와 있어요",
-          "inviteBotsNoMatch": "‘{{query}}’와 일치하는 동료가 없어요",
+          "inviteBotsItem": "동반자 추가",
+          "inviteBotsItemHint": "내 동반자를 골라 바로 추가",
+          "searchTeammates": "동반자 검색",
+          "inviteBotsCount": "추가할 수 있는 동반자 {{count}}명",
+          "inviteBotsAllIn": "내 동반자가 모두 이미 들어와 있어요",
+          "inviteBotsNoMatch": "‘{{query}}’와 일치하는 동반자가 없어요",
           "inviteBotsAdded": "{{name}}을(를) 그룹에 추가했어요",
-          "noTeammates": "아직 동료가 없어요",
-          "createTeammate": "동료 만들기",
+          "noTeammates": "아직 동반자가 없어요",
+          "createTeammate": "동반자 만들기",
           "back": "그룹 설정으로 돌아가기",
           "about": "그룹 소개",
           "edit": "편집",
@@ -11347,41 +11458,41 @@
           "you": "나",
           "searchMembers": "멤버 검색",
           "membersNoMatch": "‘{{query}}’와 일치하는 멤버가 없어요",
-          "teammateTag": "동료",
+          "teammateTag": "동반자",
           "paused": "일시 중지됨",
           "accessNone": "소유자만 사용",
           "accessChat": "그룹 내 대화만",
           "accessTools": "도구와 정보 사용 가능",
-          "replies": "동료 답변 방식",
-          "replyModeMentionedNote": "@하지 않으면 동료가 답하지 않아요.",
+          "replies": "동반자 답변 방식",
+          "replyModeMentionedNote": "@하지 않으면 동반자가 답하지 않아요.",
           "work": "역할 분담",
           "ownFolder": "그룹 전용 폴더",
-          "projectDirHint": "역할 분담 때 동료가 여기서 작업해요.",
+          "projectDirHint": "역할 분담 때 동반자가 여기서 작업해요.",
           "projectDirClearHint": "그룹 전용 폴더를 대신 사용해요",
-          "organizerHint": "누가 어느 단계를 맡을지 정해요. 기본은 첫 번째 동료예요.",
+          "organizerHint": "누가 어느 단계를 맡을지 정해요. 기본은 첫 번째 동반자예요.",
           "autoContinueHint": "끄면 단계마다 ‘계속’을 누를 때까지 기다려요.",
           "workCaption": "git 프로젝트를 고르면 역할 분담마다 새 브랜치를 만들어 내 코드는 건드리지 않아요. 프로젝트 폴더와 자동 넘기기는 이 컴퓨터에서만 적용돼요.",
           "me": "이 그룹에서의 나",
           "profileHint": "이 그룹에서만 보이는 닉네임과 사진",
-          "maskHint": "누가 나를 @하면 내 동료가 대신 답해요",
-          "myTeammates": "내 동료",
-          "myTeammatesCaption": "다른 멤버가 내 동료를 어떻게 쓸 수 있는지 정해요.",
+          "maskHint": "누가 나를 @하면 내 동반자가 대신 답해요",
+          "myTeammates": "내 동반자",
+          "myTeammatesCaption": "다른 멤버가 내 동반자를 어떻게 쓸 수 있는지 정해요.",
           "manage": "그룹 관리",
           "manageHintOwner": "답변 방식, 담당자, 역할 분담, 보관과 해산",
           "manageHintAdmin": "답변 방식, 담당자, 역할 분담, 보관",
           "manageCaption": "이 페이지는 그룹 소유자와 관리자만 볼 수 있어요.",
           "hideHint": "나가지 않고 내 목록에서만 숨겨요",
-          "leaveRowHint": "내 동료도 함께 나가요",
+          "leaveRowHint": "내 동반자도 함께 나가요",
           "leaveRowHintAlone": "새 메시지를 받지 않고 기록도 볼 수 없어요",
           "leaveBlocked": "나가려면 먼저 그룹 소유자를 넘겨주세요",
           "archiveRowHint": "모두에게 그룹을 멈추고 기록은 남겨요",
-          "unarchiveRowHint": "메시지와 동료 작업을 다시 시작해요",
+          "unarchiveRowHint": "메시지와 동반자 작업을 다시 시작해요",
           "dissolveRowHint": "되돌릴 수 없고 아무도 메시지를 보낼 수 없어요",
           "editTitle": "그룹 정보 편집",
           "topicHint": "그룹 소개 맨 위에 표시돼요",
-          "descriptionHint": "동료는 답할 때마다 최신 소개를 참고해요.",
+          "descriptionHint": "동반자는 답할 때마다 최신 소개를 참고해요.",
           "companionTitle": "이 그룹의 {{name}}",
-          "yourTeammate": "내 동료",
+          "yourTeammate": "내 동반자",
           "accessQuestion": "다른 멤버가 {{name}}을(를) 어떻게 쓸 수 있나요?",
           "defaultTag": "기본",
           "accessNoneTitle": "나만",
@@ -11400,7 +11511,7 @@
         "hide": "내 목록에서 제거",
         "hideNote": "내 모든 기기의 목록에서 이 채팅을 제거합니다. 멤버 자격, 기록, 진행 중인 작업 및 다른 멤버에게 영향을 주지 않습니다.",
         "leave": "그룹 나가기",
-        "leaveNote": "나와 내 동료가 이 그룹에서 나갑니다. 새 메시지를 받지 못하며 그룹 기록을 볼 수 없게 됩니다.",
+        "leaveNote": "나와 내 동반자가 이 그룹에서 나갑니다. 새 메시지를 받지 못하며 그룹 기록을 볼 수 없게 됩니다.",
         "unavailable": "현재 서버 또는 컴퓨터에서 아직 이 작업을 지원하지 않습니다.",
         "dissolved": "이 그룹은 해산되었습니다. 열람 권한이 있는 기록은 계속 볼 수 있습니다.",
         "failed": "작업을 완료하지 못했습니다. 다시 시도하세요.",
@@ -11420,7 +11531,7 @@
       "done": "완료",
       "placeholder": "담당할 일, 먼저 추진할 일, 사전 확인이 필요한 결정, 원하는 소통 방식.",
       "empty": "책임과 경계가 아직 정의되지 않았습니다.",
-      "footnote": "이 내용은 동료의 정체성 문맥에 포함됩니다. 빠른 성격 설정은 별도로 저장되며 여기를 바꿔도 유지됩니다."
+      "footnote": "이 내용은 동반자의 정체성 문맥에 포함됩니다. 빠른 성격 설정은 별도로 저장되며 여기를 바꿔도 유지됩니다."
     },
     "welcome": {
       "generic": "안녕하세요, {{name}}이에요. 앞으로 필요한 게 있으면 바로 말씀하세요. 그동안 저는 여기부터 익혀 둘게요.",
@@ -11464,16 +11575,16 @@
       "empty_skill": "선택할 수 있는 스킬이 없습니다.",
       "inputHandoff": {
         "title": "대리 입력",
-        "description": "로그인 정보, 비밀번호, 인증 코드처럼 본인 입력이 필요할 때 이 동료가 어느 기기에서든 입력을 요청할 수 있습니다. 입력한 내용은 동료에게 전달되지 않습니다."
+        "description": "로그인 정보, 비밀번호, 인증 코드처럼 본인 입력이 필요할 때 이 동반자가 어느 기기에서든 입력을 요청할 수 있습니다. 입력한 내용은 동반자에게 전달되지 않습니다."
       },
-      "intro": "이 팀원이 쓸 수 있는 스킬, 도구, MCP를 선택하세요. 다음 메시지부터 적용됩니다.",
+      "intro": "이 동반자가 쓸 수 있는 스킬, 도구, MCP를 선택하세요. 다음 메시지부터 적용됩니다.",
       "alwaysOn": "항상 켜짐",
       "core": {
         "group": "핵심 스킬",
-        "name": "팀원 핵심",
-        "hint": "작업, 다른 팀원, 모델, 도구와 플러그인, 기억. Cindy와 함께 업데이트.",
-        "meta": "모든 팀원 공통 · 항상 켜짐 · Cindy와 함께 업데이트",
-        "note": "모든 팀원이 가진 조율 능력으로, 끄거나 수정할 수 없습니다. 방식을 바꾸고 싶다면 채팅으로 알려 주세요. 자기 스킬로 기억합니다.",
+        "name": "동반자 핵심",
+        "hint": "작업, 다른 동반자, 모델, 도구와 플러그인, 기억. Cindy와 함께 업데이트.",
+        "meta": "모든 동반자 공통 · 항상 켜짐 · Cindy와 함께 업데이트",
+        "note": "모든 동반자가 가진 조율 능력으로, 끄거나 수정할 수 없습니다. 방식을 바꾸고 싶다면 채팅으로 알려 주세요. 자기 스킬로 기억합니다.",
         "covers": "포함 내용",
         "raw": "원문 보기",
         "items": {
@@ -11482,8 +11593,8 @@
             "body": "제어할 수 있는 작업과 사용 가능한 컴퓨터를 파악하고, 요청에 따라 작업을 배정하고 진행 상황과 결과를 전달합니다. 다른 컴퓨터에서 작업하기 전에 지원 범위를 확인합니다."
           },
           "teammates": {
-            "title": "다른 팀원",
-            "body": "다른 팀원에게 메시지를 보내거나 새 팀원을 만들어 줍니다."
+            "title": "다른 동반자",
+            "body": "다른 동반자에게 메시지를 보내거나 새 동반자를 만들어 줍니다."
           },
           "models": {
             "title": "모델과 도구",
@@ -11580,7 +11691,7 @@
       }
     },
     "import": {
-      "title": "동료 가져오기",
+      "title": "동반자 가져오기",
       "entry": "Agent에서 가져오기",
       "description": "Hermes 또는 OpenClaw에서 가져올 내용을 선택하세요.",
       "empty": "이 컴퓨터에서 설치된 Agent를 찾지 못했습니다.",
@@ -11595,7 +11706,7 @@
       "takeoverNote": "데이터 연결 확인 후 원본 작업을 중지합니다. 필요한 항목을 제외하면 원본 작업은 계속 실행됩니다.",
       "submit": "가져오기",
       "back": "이전",
-      "open": "동료 열기",
+      "open": "동반자 열기",
       "running": "가져오기 및 연결 확인 중…",
       "complete": "가져온 내용을 저장했습니다",
       "attention": "확인이 필요한 항목이 있습니다. 아래 내용을 확인하세요.",
@@ -11640,14 +11751,14 @@
       "automationInvalid": "자동화 정의를 변환할 수 없어 생성되지 않았습니다.",
       "itemFailed": "아직 완료되지 않은 항목입니다. 다시 시도하거나 세부 정보를 확인하세요.",
       "chatPartial": "파트너가 생성되었지만 일부 자료는 완전히 저장되지 않았습니다. 아래 항목은 추가 처리가 필요하며 다른 내용과 채팅은 계속 사용할 수 있습니다.",
-      "imBotOwnerMissing": "소유자 사용자 ID를 찾지 못했습니다. 동료의 메시지 플랫폼 페이지에서 이 봇을 연결하세요.",
+      "imBotOwnerMissing": "소유자 사용자 ID를 찾지 못했습니다. 동반자의 메시지 플랫폼 페이지에서 이 봇을 연결하세요.",
       "imBotGatewayRunning": "기존 게이트웨이가 아직 이 봇을 사용 중입니다. 중지한 다음 메시지 플랫폼에서 연결하세요.",
-      "imBotInUse": "이 봇은 이미 이 컴퓨터에서 사용 중입니다 (설정 → IM 봇, 또는 다른 동료).",
-      "imBotConnectFailed": "이 봇에 연결하지 못했습니다. 동료의 메시지 플랫폼 페이지에서 다시 시도하세요.",
-      "imBotSourceStopUnconfirmed": "기존 봇이 아직 멈추지 않아 동료에게 넘기지 않았습니다. 나중에 동료의 메시지 플랫폼 페이지에서 연결할 수 있습니다.",
+      "imBotInUse": "이 봇은 이미 이 컴퓨터에서 사용 중입니다 (설정 → IM 봇, 또는 다른 동반자).",
+      "imBotConnectFailed": "이 봇에 연결하지 못했습니다. 동반자의 메시지 플랫폼 페이지에서 다시 시도하세요.",
+      "imBotSourceStopUnconfirmed": "기존 봇이 아직 멈추지 않아 동반자에게 넘기지 않았습니다. 나중에 동반자의 메시지 플랫폼 페이지에서 연결할 수 있습니다.",
       "imBotSourceChanged": "미리보기 후 기존 봇이 바뀌어 중지하지 않았습니다. 다시 읽은 뒤 가져오세요.",
       "bots": "메시지 봇",
-      "botsNote": "가져온 후 {{source}}의 이 봇들은 중지되고 동료가 이어받습니다.",
+      "botsNote": "가져온 후 {{source}}의 이 봇들은 중지되고 동반자가 이어받습니다.",
       "sourceDisabled": "원래 사용 중지됨",
       "botOwner": "소유자 ID {{id}}"
     },
@@ -11687,7 +11798,7 @@
       "targetOutdatedItem": "“{{device}}”(으)로 옮기기 · 이전 버전 Cindy",
       "targetOutdatedMeta": "이전 버전 Cindy",
       "olderTargetNote": "“{{device}}”의 Cindy가 이전 버전이라 {{name}}은(는) 그곳에서 기존 방식으로 동작합니다. 채팅 기록은 계속 동기화되지만 프로젝트 규칙과 자동화는 그곳에서 적용되지 않습니다.",
-      "shadowTitle": "이 동료는 '{{device}}'에서 실행 중입니다",
+      "shadowTitle": "이 동반자는 '{{device}}'에서 실행 중입니다",
       "shadowHint": "여기 대화는 보기만 할 수 있습니다.",
       "openOnHome": "'{{device}}'에서 열기",
       "runsOn": "“{{device}}”에서 실행 중",
@@ -11703,7 +11814,7 @@
       "switchOffline": "연결할 수 없습니다. {{name}}의 주 컴퓨터는 바뀌지 않았습니다",
       "switchFailed": "{{name}}을(를) “{{device}}”(으)로 옮기지 못했습니다",
       "homeOutdated": "주 컴퓨터 “{{device}}”의 Cindy가 이전 버전입니다. 업데이트하거나 그 컴퓨터에서 변경하세요",
-      "arrivingLater": "{{name}}이(가) 이 컴퓨터로 옮겨졌고 아직 준비 중입니다. 곧 팀원 목록에 표시됩니다",
+      "arrivingLater": "{{name}}이(가) 이 컴퓨터로 옮겨졌고 아직 준비 중입니다. 곧 동반자 목록에 표시됩니다",
       "arrivalPermissions": "{{name}}은(는) 이 컴퓨터의 기본 권한으로 실행됩니다.",
       "arrivalModel": "{{name}}에 저장된 모델을 이 컴퓨터에서 사용할 수 없어 이 컴퓨터의 기본 모델을 사용합니다.",
       "busyTitle": "{{name}}이(가) 아직 답장 중입니다",
@@ -11736,18 +11847,18 @@
       "transferFailed": "{{name}}을(를) '{{device}}'(으)로 옮기지 못했습니다"
     },
     "market": {
-      "heading": "동료 찾기",
-      "description": "방법과 스킬을 갖춘 동료와 함께 일을 진행하세요.",
+      "heading": "동반자 찾기",
+      "description": "방법과 스킬을 갖춘 동반자와 함께 일을 진행하세요.",
       "invite": "초대하기",
-      "open": "동료 열기",
-      "remove": "동료 삭제",
+      "open": "동반자 열기",
+      "remove": "동반자 삭제",
       "back": "목록으로 돌아가기",
-      "loading": "동료 불러오는 중…",
-      "empty": "동료를 찾을 수 없습니다",
-      "loadFailed": "동료를 불러오지 못했습니다. 나중에 다시 열어 주세요.",
+      "loading": "동반자 불러오는 중…",
+      "empty": "동반자를 찾을 수 없습니다",
+      "loadFailed": "동반자를 불러오지 못했습니다. 나중에 다시 열어 주세요.",
       "installFailed": "추가가 완료되지 않았습니다. 저장된 내용은 유지되니 다시 시도할 수 있습니다.",
-      "nameExists": "같은 이름의 동료가 있습니다. 동료 설정에서 이름을 바꾼 다음 초대하세요.",
-      "installing": "동료 프로필과 스킬 저장 중…",
+      "nameExists": "같은 이름의 동반자가 있습니다. 동반자 설정에서 이름을 바꾼 다음 초대하세요.",
+      "installing": "동반자 프로필과 스킬 저장 중…",
       "memoryDisabled": "메모리가 꺼져 있어 참고 지식을 가져오지 않았습니다. 메모리는 꺼진 상태로 유지됩니다.",
       "knowledge": "지식과 메모리",
       "skills": "스킬",
@@ -11767,7 +11878,7 @@
         "unknown": "저장하지 못한 항목이 있습니다."
       },
       "partialReady": "나머지 내용은 준비되어 있어 바로 사용할 수 있습니다.",
-      "partialUnsaved": "동료가 아직 저장되지 않았습니다. 다시 저장해 주세요.",
+      "partialUnsaved": "동반자가 아직 저장되지 않았습니다. 다시 저장해 주세요.",
       "retry": "다시 저장"
     },
     "starterOptions": "시작 옵션",
@@ -11794,7 +11905,7 @@
       "removeAria": "{{platform}} 제거",
       "empty": "기존 봇을 추가하거나 아래에서 개인 WeChat을 연결하면 {{name}}이 그곳에서 답장합니다.",
       "externalNote": "연결 후 Telegram과 Feishu/Lark의 개인 메시지는 소유자에게서만 받습니다. 그룹 참여는 각 플랫폼의 설정을 따르며, 도구는 {{name}}의 권한으로 실행됩니다. 별도 세션에서도 자료와 메모리는 공유됩니다.",
-      "sharedMemoryNote": "{{name}}은(는) 여기의 정보와 다른 대화의 정보를 함께 사용합니다. 기억을 분리하려면 다른 동료를 사용하세요.",
+      "sharedMemoryNote": "{{name}}은(는) 여기의 정보와 다른 대화의 정보를 함께 사용합니다. 기억을 분리하려면 다른 동반자를 사용하세요.",
       "groups": {
         "title": "그룹",
         "hint": "{{name}}이(가) 참여한 그룹이 여기에 표시됩니다. 「항상」= 모든 메시지를 읽고 {{name}}이(가) 끼어들지 스스로 판단합니다(매번 토큰 소모).",
@@ -11900,7 +12011,7 @@
           "invalidDingtalk": "Client ID와 Client Secret을 모두 입력하세요.",
           "invalidDiscordToken": "Bot Token 형식이 아닌 것 같습니다.",
           "invalidDiscordOwner": "사용자 ID는 17–20자리 숫자여야 합니다.",
-          "conflict": "이 봇은 이미 이 컴퓨터에서 사용 중입니다 (설정 → IM 봇, 또는 다른 동료).",
+          "conflict": "이 봇은 이미 이 컴퓨터에서 사용 중입니다 (설정 → IM 봇, 또는 다른 동반자).",
           "botUnavailable": "{{name}}은(는) 지금 사용할 수 없습니다. 복구된 뒤 다시 시도하세요.",
           "connectFailed": "연결하지 못했습니다: {{reason}}",
           "failed": "완료하지 못했습니다. 잠시 후 다시 시도하세요.",
@@ -12781,7 +12892,7 @@
       "sessionSenderFallback": "다른 세션",
       "pluginRowAria": "플러그인 \"{{sender}}\"에서 온 대기 메시지",
       "pluginSenderFallback": "플러그인",
-      "botRowAria": "동료 \"{{sender}}\"에서 온 대기 메시지",
+      "botRowAria": "동반자 \"{{sender}}\"에서 온 대기 메시지",
       "dragAria": "큐의 {{index}}번째 메시지를 드래그해 순서 변경",
       "steerAction": "끼어들기",
       "steerRunningTip": "실행 중인 작업을 중단하지 않고 끼어듭니다. 현재 동작이 끝난 후 이 메시지를 우선 처리합니다",
@@ -13480,7 +13591,7 @@
       "claudeSubscriptionSwitchFailed": "Claude.ai로 전환하거나 이 세션을 다시 시도할 수 없습니다: {{msg}}",
       "codexAppServerRetired": "Codex 서비스가 다시 시작되었거나 교체되었습니다. 현재 요청이 중단되었으므로 다시 실행해 주세요.",
       "codexAuthMissing": "원격 Codex가 아직 로그인되지 않았습니다(401 Unauthorized). 「인증 동기화」를 클릭하여 로컬 Codex 자격 증명을 원격 Cindy Codex home으로 푸시한 후 다시 시도하세요.",
-      "codexAuthMissingLocal": "Codex 자격 증명이 없거나 만료되었습니다(401 Unauthorized). {{appName}} 설정 → Codex에서 다시 로그인하거나(로그인 시 app-server가 자동 재시작) 터미널에서 `codex login` 실행 후 설정에서 인증 모드를 한 번 전환하여 app-server를 재시작한 다음 새 세션을 시작하세요.",
+      "codexAuthMissingLocal": "이 컴퓨터의 “{{provider}}” 연결을 인증하지 못했습니다. 설정에서 해당 연결의 로그인 상태를 확인하고 연결을 복구한 뒤 이 세션으로 돌아와 계속하세요.",
       "codexSessionExpired": "OpenAI 연결을 업데이트해야 합니다. ChatGPT를 다시 연결하면 계속할 수 있습니다. {{appName}}에서 시스템 Codex CLI를 로그아웃하거나 다른 모델 소스의 재연결을 요구하지 않습니다.",
       "codexAuthSynced": "인증이 동기화되었습니다. 「다시 시도」를 클릭하여 다시 보내세요.",
       "syncAuth": "인증 동기화",
@@ -13930,7 +14041,7 @@
           "plugins": "플러그인 목록",
           "memoryRules": "메모리 지침",
           "memoryIndex": "메모리 색인",
-          "profile": "팀원 프로필",
+          "profile": "동반자 프로필",
           "user": "사용자 지침",
           "directories": "추가 디렉터리",
           "native": "Pi 지침",
@@ -14101,7 +14212,7 @@
       "sessionSent": "다른 세션에서 보냄",
       "sessionSentNamed": "세션 \"{{name}}\"에서 보냄",
       "sessionViewSource": "보낸 세션 보기",
-      "botSentNamed": "동료 \"{{name}}\"에서 보냄",
+      "botSentNamed": "동반자 \"{{name}}\"에서 보냄",
       "orcaFromLead": "Lead에서 온 메시지",
       "orcaFromWorker": "Worker에서 온 메시지",
       "orcaFromWorkerBatch": "시스템이 반환한 Worker 결과 {{count}}개",
@@ -14120,7 +14231,7 @@
         "localApp": "앱 ID: {{id}}",
         "mcpApp": "$t(mcpApps.serverId)",
         "session": "세션 ID: {{id}}",
-        "teammate": "동료 ID: {{id}}",
+        "teammate": "동반자 ID: {{id}}",
         "automation": "자동화 ID: {{id}}",
         "plugin": "플러그인 ID: {{id}}",
         "device": "기기 ID: {{id}}",
@@ -14747,7 +14858,7 @@
       "selectFolderFailed": "폴더를 선택하지 못했습니다. 다시 시도해 주세요.",
       "projectsToggleExpand": "모든 프로젝트 세션 펼치기",
       "projectsToggleCollapse": "모든 프로젝트 세션 접기",
-      "filterAria": "사이드바 표시 설정(상태: {{status}}, Harness: {{vendor}}, 최근 활동: {{lastActivity}}, 그룹: {{groupBy}}, 정렬: {{sortBy}}, 프로젝트: {{projects}}, 팀원: {{creators}})",
+      "filterAria": "사이드바 표시 설정(상태: {{status}}, Harness: {{vendor}}, 최근 활동: {{lastActivity}}, 그룹: {{groupBy}}, 정렬: {{sortBy}}, 프로젝트: {{projects}}, 동반자: {{creators}})",
       "organizeSidebar": "사이드바 표시 설정",
       "filterAllText": "전체",
       "filterSelectedProjects": "{{count}}개 선택됨",
@@ -14812,7 +14923,7 @@
       "filterProjectOrderTip": {
         "custom": "마우스로 프로젝트 행을 끌어 순서를 바꿉니다. 안의 세션은 위 정렬을 따릅니다."
       },
-      "filterCreatorsHeading": "팀원",
+      "filterCreatorsHeading": "동반자",
       "filterCreatorsAny": "전체",
       "filterCreatorsNone": "모두 숨기기",
       "filterSelectedCreators": "{{count}}명 선택",
@@ -15250,6 +15361,16 @@
             "recheck": "연결 확인",
             "summary": "GitHub 저장소, 이슈, PR 및 Actions를 관리합니다.",
             "otherMethods": "다른 연결 방법"
+          },
+          "app": {
+            "title": "저장소 이벤트",
+            "description": "Cindy GitHub App을 연결하면 리뷰나 CI가 변경될 때 추적 중인 PR이 업데이트됩니다.",
+            "connected": "{{login}} 계정으로 연결됨 · 저장소 {{count}}개 추적 중",
+            "missing": "다음 저장소의 App 설치 및 접근 권한을 확인하세요: {{repositories}}",
+            "error": "연결을 확인하지 못했습니다. 다시 시도하세요.",
+            "repositories": "저장소 선택",
+            "disconnect": "이벤트 연결 해제",
+            "connect": "GitHub App 연결"
           }
         },
         "unresolved": "미해결 리뷰 코멘트: {{count}}건",
@@ -15651,7 +15772,7 @@
         "openConfigFailed": "파일 열기 실패",
         "reload": "다시 로드",
         "reloadAria": "프로젝트 자동화 다시 로드",
-        "teammate": "{{name}} · 동료"
+        "teammate": "{{name}} · 동반자"
       },
       "promote": {
         "menu": "프로젝트 자동화로 승격",
@@ -15984,7 +16105,11 @@
             "payments": "결제",
             "checkout": "체크아웃",
             "invoices": "청구서",
-            "subscriptions": "구독"
+            "subscriptions": "구독",
+            "reviewComments": "검토 댓글",
+            "reviewThreads": "검토 스레드",
+            "checkRuns": "검사 실행",
+            "commitStatus": "커밋 상태"
           },
           "actions": {
             "all": "모든 변경",
@@ -16006,7 +16131,12 @@
             "failed": "실패",
             "paid": "결제됨"
           }
-        }
+        },
+        "repositoriesLabel": "저장소",
+        "repositoriesHint": "한 줄에 owner/repository 하나를 입력하세요. 이 GitHub App에 승인한 저장소만 작업을 시작할 수 있습니다.",
+        "repositoriesInvalid": "owner/repository 형식의 유효한 저장소 이름을 1–50개 입력하세요.",
+        "githubAppHint": "이 작업을 실행하는 컴퓨터에서 GitHub App에 연결하고 해당 저장소를 승인하세요. 별도의 Webhook URL이나 비밀 키는 필요하지 않습니다.",
+        "githubAppPaused": "이 작업은 일시 중지되었습니다. 이벤트가 작업을 시작하지 않습니다."
       },
       "trigger": {
         "label": "트리거 방식",
@@ -16819,6 +16949,9 @@
       },
       "pluginCreator": {
         "description": "Cindy 플러그인을 생성, 수정, 디버깅, 패키징하고 요청에 따라 게시합니다."
+      },
+      "themeCreator": {
+        "description": "Cindy의 색상, 시각 자료, 외관 설정을 만들고 검증합니다."
       }
     },
     "common": {
@@ -17560,11 +17693,14 @@
       "voiceDirectApiKeyAuthDescription": "현재 음성 입력 provider는 직접 연결용 API Key가 필요합니다. API Keys에서 추가하시겠습니까?",
       "codexVoiceAuthTitle": "ChatGPT 연결 필요",
       "codexVoiceAuthDescription": "음성 입력은 연결된 ChatGPT 계정으로 GPT 실시간 음성 인식을 사용합니다. 계정이 연결되지 않았거나 연결을 업데이트해야 합니다. 모델 제공자를 열어 ChatGPT를 연결하시겠습니까?",
+      "ccBinaryMissingTitle": "Claude Code 구성 요소가 준비되지 않음",
+      "ccBinaryMissingDescription": "Claude Code 구성 요소가 아직 설치되지 않아 이 기능을 사용할 수 없습니다. 네트워크에 연결한 후 설정 → 정보를 열면 설치가 시작됩니다.",
       "codexBinaryMissingTitle": "Codex 구성 요소가 준비되지 않음",
       "codexBinaryMissingDescription": "Codex 구성 요소가 아직 준비되지 않아 이 기능을 사용할 수 없습니다. 잠시 후 다시 시도하거나 설정 → 제공자에서 Codex 연결 상태를 확인하세요.",
       "piBinaryMissingTitle": "Pi 구성 요소가 준비되지 않음",
       "piBinaryMissingDescription": "Pi 구성 요소가 아직 준비되지 않아 이 기능을 사용할 수 없습니다. 잠시 후 다시 시도하거나 설정 → 정보에서 Pi를 관리하거나 복원하세요.",
       "goToSettings": "설정 열기",
+      "remoteCcBinaryMissingTitle": "원격 기기의 Claude Code 구성 요소가 준비되지 않음",
       "remoteCodexBinaryMissingTitle": "원격 기기의 Codex 구성 요소가 준비되지 않음",
       "remotePiBinaryMissingTitle": "원격 기기의 Pi 구성 요소가 준비되지 않음",
       "remoteAuthDescription": "원격 기기 \"{{device}}\"에서 설정을 완료해야 여기에서 세션을 시작할 수 있습니다. 해당 기기에서 설정한 후 다시 시도하세요.",
@@ -17937,7 +18073,7 @@
     "exit": "계획 모드 종료"
   },
   "globalDrop": {
-    "cindyHint": "놓아서 플러그인 설치",
+    "cindyHint": "놓아서 Cindy 파일 가져오기",
     "cshareHint": "놓아서 공유 세션 가져오기"
   },
   "sessionShare": {
@@ -19355,7 +19491,7 @@
       "plugin": "{{companion}}이(가) “{{tool}}”을(를) 사용하도록 허용할까요?",
       "tool": "{{companion}}이(가) {{tool}}을(를) 사용하도록 허용할까요?"
     },
-    "source": "플러그인 “{{plugin}}”에서 허용을 선택해 {{appName}}이(가) 여기서 한 번 더 확인합니다. 허용하면 동료가 작업을 계속합니다.",
+    "source": "플러그인 “{{plugin}}”에서 허용을 선택해 {{appName}}이(가) 여기서 한 번 더 확인합니다. 허용하면 동반자가 작업을 계속합니다.",
     "allow": "허용",
     "cancel": "취소"
   },
@@ -19967,6 +20103,15 @@
     "lineNumbers": "줄 번호"
   },
   "subscriptionAccounts": {
+    "loginIdentityUnknown": "이 계정의 기존 정보를 확인할 수 없습니다. 계정 추가를 통해 새로 연결하세요.",
+    "loginExpiresInDays": "약 {{days}}일 후 로그인 만료",
+    "loginExpiresSoon": "로그인이 곧 만료됩니다",
+    "loginMayHaveExpired": "로그인이 만료되었을 수 있습니다",
+    "loginExpiryUnknown": "로그인 만료일 알 수 없음",
+    "loginExpiryDetail": "예상 만료일: {{date}}. Claude가 제공한 추정치이며 더 일찍 만료될 수 있습니다.",
+    "loginAccountAria": "{{name}}에 다시 로그인",
+    "loginIdentityMismatchStatus": "로그인 계정 불일치",
+    "loginIdentityMismatch": "선택한 계정과 다른 계정으로 로그인했습니다. 다시 로그인하여 이 행에 표시된 계정을 선택하세요.",
     "unassigned": "계정 미배정",
     "boundUnavailable": "계정을 사용할 수 없음",
     "providerManagedAuth": "현재 Codex 제공자에서는 ChatGPT 계정 정보를 확인할 수 없습니다. 제공자를 추가할 때 ‘$t(subscriptionAccounts.signIn.anotherAccount)’를 선택하면 별도 폴더를 사용할 수 있습니다.",
@@ -20047,6 +20192,13 @@
     "detail": "요청 기기: {{device}}\n목적: {{purpose}}\n\n활성화하면 같은 계정의 기기에서 작업 실행 및 파일 접근을 포함하여 이 컴퓨터를 제어할 수 있습니다. 설정에서 끌 때까지 유지됩니다.",
     "decline": "나중에",
     "enable": "원격 제어 활성화"
+  },
+  "cindyFiles": {
+    "unsupported": "현재 버전에서는 이 파일을 지원하지 않습니다. Cindy를 업데이트한 후 다시 시도하세요",
+    "invalid": "이 Cindy 파일이 유효하지 않거나 손상되었습니다. 파일을 다시 받으세요",
+    "failed": "파일을 가져오지 못했습니다. 다시 시도하세요",
+    "themeInstalled": "테마가 추가되었습니다. 모양 설정에서 선택하세요",
+    "refreshFailed": "테마가 설치되었지만 목록을 새로 고치지 못했습니다. 모양 설정에서 새로 고치세요"
   },
   "modelGroups": {
     "title": "모델 그룹",

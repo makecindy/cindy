@@ -361,7 +361,7 @@ it('round-trips permissions, private projection and live revocation through the 
     release = resolve;
   });
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(15_000);
   });
   await act(async () => {
     vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
