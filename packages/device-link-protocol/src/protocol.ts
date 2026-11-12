@@ -197,6 +197,10 @@ export interface NotifyAction {
  * fire-and-forget:成功无响应;失败回 relay-error(RATE_LIMITED / BAD_REQUEST / INTERNAL)。
  */
 export interface NotifyPayload {
+  /** Exact alert identity; older relays may omit it. */
+  notificationId?: string;
+  /** Encrypted Agent-Net recipient binding; official relays derive this from authentication. */
+  recipientId?: string;
   category: NotifyCategory;
   /** 通知标题(建议:会话标题) */
   title: string;

@@ -310,10 +310,14 @@ PR 门禁必须在 Windows 上用多个并行分片（当前为 4 个）完整�
   新增同类手写 catalog 时记得加进对应测试的 `collectEntries()`。**catalog 要单独成模块**：
   原先这两份分别嵌在 `bootstrap-electron.ts` 与 `fullAccessConfirmation.ts` 里，测试一 import
   就会拉起整个 Electron 主进程 / react-native，根本跑不起来——这也是它们长期是盲区的原因。
-- **Slack / IM 侧的文案不在任何 locale 文件里**：`src/main/hook-control/interactions.ts` 的
-  权限卡片按钮是硬编码中文，与应用内 `permissions.alwaysAllowForSession` 是同一个动作。
-  改产品术语时这类「同一动作、两处独立文案」要一起找出来，否则用户在 Slack 和 App 里
-  看到两种说法。
+- **IM 控制文案同样走 locale**（2026-11-12 起）：个人 bot（飞书、Telegram、Discord、微信、企业微信、
+  钉钉、iMessage）、官方 hook（Slack／Telegram／X）和 `packages/lizi-im` 传输层发给 IM 用户的命令回执、
+  状态、卡片按钮与错误说明，放在 `imBot.text.<渠道>.*`，经 `src/main/im/shared/imText.ts` 按主人的
+  Cindy 界面语言现取；lizi-im 经 `setTransportTextResolver` 注入，缺 key 时回退包内中文。Agent 正文
+  仍随来信语言，发给模型的上下文不走这里。新增 IM 文案时 12 种语言一起补，测试里断言中文的用
+  `setMainLocale('zh-CN')` 固定语言。Slack 权限卡片按钮与应用内 `permissions.alwaysAllowForSession`
+  是同一个动作，改产品术语时这类「同一动作、两处文案」要一起改，否则用户在 Slack 和 App 里看到
+  两种说法。
 - **批量改术语时覆盖相关文案断言，完整单测由 CI 兜底**：仓库里有若干测试直接断言中文文案
   （`automationGeneratedSessions.test.ts`、`builtinToolsCollabDescriptionI18n.test.ts`、
   mobile 的 `sessionMenu.test.ts` 等）。它们是有意的文案锁，改词后要同步更新期望值，

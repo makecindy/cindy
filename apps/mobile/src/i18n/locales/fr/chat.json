@@ -91,7 +91,7 @@
       "ghPrCreate": "Créer une pull request",
       "ghPrEdit": "Modifier la pull request",
       "ghPrComment": "Commenter la pull request",
-      "ghPrReview": "Revue de la pull request",
+      "ghPrReview": "Relire la pull request",
       "ghPrMerge": "Fusionner la pull request",
       "ghPrClose": "Fermer la pull request",
       "ghPrReopen": "Rouvrir la pull request",

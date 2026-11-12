@@ -162,7 +162,7 @@ private struct AgentActivityFamilyContent: View {
 @MainActor
 private enum AgentActivityPresentation {
   // Use the installed app's scheme (including CN/beta variants), not the task
-  // URL from the latest push. A collapsed island represents the whole app.
+  // URL from the latest push, for the stale Lock Screen fallback.
   private static var homeURL: URL? {
     guard let scheme = Bundle.main.object(forInfoDictionaryKey: "CindyURLScheme") as? String else { return nil }
     return URL(string: "\(scheme):///")
@@ -184,8 +184,7 @@ private enum AgentActivityPresentation {
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    // Keep text inside the bottom region's rounded mask. Include the padding
-    // in the task link's hit area, leaving the mascot/counts as Home shortcuts.
+    // Keep text inside the bottom region's rounded mask.
     .padding(.horizontal, 12)
     .padding(.bottom, 8)
     .contentShape(Rectangle())
@@ -211,13 +210,7 @@ private enum AgentActivityPresentation {
           AgentActivityCounts(state: context.state, size: 20, stale: context.isStale).padding(.trailing, 4)
         }
         DynamicIslandExpandedRegion(.bottom) {
-          if let destination = taskURL(context) {
-            Link(destination: destination) {
-              expandedTask(context)
-            }
-          } else {
-            expandedTask(context)
-          }
+          expandedTask(context)
         }
       } compactLeading: {
         AgentActivityMascot(state: context.state, size: 20, stale: context.isStale)
@@ -227,7 +220,7 @@ private enum AgentActivityPresentation {
         AgentActivityMascot(state: context.state, size: 20, stale: context.isStale, showBadge: true)
       }
       .keylineTint(context.state.tint)
-      .widgetURL(homeURL)
+      // No URL or Link: let iOS foreground the app without changing its route.
     }
   }
 }
