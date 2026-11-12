@@ -394,7 +394,8 @@ html:lang(ko) {
    without decoration-owned width measurements. */
 [data-chat-input-root] .ProseMirror :is(ul, ol) {
   margin: 0;
-  --composer-list-padding: 1.5em;
+    /* Keep the one-digit ASCII marker ("1.") inside the editor's clipped edge. */
+    --composer-list-padding: 1.9em;
   --composer-list-marker-extra: 0em;
   padding-inline-start: calc(
     var(--composer-list-padding, 1.5em) + var(--composer-list-marker-extra, 0em)

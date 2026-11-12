@@ -230,6 +230,7 @@ describe('composer structured list input rules', () => {
       /\[data-chat-input-root\]\s+\.ProseMirror\s+ol\[data-marker='、'\]\s*\{([\s\S]*?)\r?\n\s*\}/,
     )?.[1];
     expect(baseListRule).toContain('--composer-list-marker-extra: 0em;');
+    expect(baseListRule).toContain('--composer-list-padding: 1.9em;');
     expect(baseListRule).toContain(
       'var(--composer-list-padding, 1.5em) + var(--composer-list-marker-extra, 0em)',
     );
@@ -243,6 +244,7 @@ describe('composer structured list input rules', () => {
 
     expect(editor.view.dom.querySelector('ol')?.getAttribute('data-marker-digits')).toBe('6');
   });
+
 
   it.each([
     {
