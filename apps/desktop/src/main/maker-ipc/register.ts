@@ -18671,12 +18671,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const createdAt = Date.now();
       void enqueueDurableWrite(`turn-model:${sessionId}:${clientId}`, async () => {
         if (!isDataOwnerBroadcastScopeCurrent(owner)) return;
-        const [input] = await db.select({ content: messages.content }).from(messages)
+        const [input] = await db.select({ content: messages.content, meta: messages.agentMeta }).from(messages)
           .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId),
             eq(messages.role, 'user'), isNull(messages.rewindAt))).limit(1);
-        // Hidden coordination/routine inputs must not leak a visible model boundary.
-        if (!input || input.content.startsWith(UI_ACTION_TRIGGER_PREFIX)) return;
+        if (!input) return;
         await recordTurnModelChange(current, {
+          input: { content: input.content, autoResume: isAutoResumeUserMessage(input.meta ? JSON.parse(input.meta) : null) },
           readPrevious: async () => {
             const [previous] = await db.select({ meta: messages.agentMeta }).from(messages)
               .innerJoin(sessions, eq(sessions.id, messages.sessionId))
@@ -19323,7 +19323,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (grant.sessionId === null) {
       // Explicitly taskless: never inherit an Agent's ambient authority or focused task.
       const deps = getCindyGhostsMcpDeps(undefined, {}, grant);
-      const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal });
+      const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal,
+        ...(grant.attachments ? { attachments: grant.attachments } : {}) });
       await grant.assertCurrent();
       assertOwner();
       return result.ok ? pluginAppResult(result.result) : { isError: true,
@@ -19348,7 +19349,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { ...snapshot, permissionMode: permissionModeOrAsk(snapshot.permissionMode), isCurrent: () => !snapshot.planModeEnabled && snapshot.permissionMode !== 'plan' && snapshot.isCurrent?.() === true };
       },
     }, grant);
-    const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal });
+    const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal,
+      ...(grant.attachments ? { attachments: grant.attachments } : {}) });
     await grant.assertCurrent();
     return result.ok ? pluginAppResult(result.result) : { isError: true,
       content: [{ type: 'text', text: JSON.stringify(result) }] };
