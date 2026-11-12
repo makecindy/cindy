@@ -263,9 +263,12 @@ it('keeps six computers compact, expands all copies and switches only after clos
   await act(async () => (host.querySelector('[data-testid="companion.glance.computer.pc-2"]') as HTMLButtonElement).click());
   expect(onClose).toHaveBeenCalledOnce();
   expect(onOpenCindy).not.toHaveBeenCalled();
+  await render(false);
+  // The native sheet retains its children during exit: keep expanded rows until onClosed.
+  expect(host.textContent).toContain('Computer 0');
   await act(async () => h.closed?.());
   expect(onOpenCindy).toHaveBeenCalledWith(h.copies[2]);
-  await render(false); await render(true);
+  await render(true);
   expect(host.textContent).not.toContain('Computer 0');
   expect(host.textContent).toContain('Recent task stays available');
 });

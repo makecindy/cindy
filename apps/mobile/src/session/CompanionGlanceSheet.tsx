@@ -67,17 +67,18 @@ export function CompanionGlanceSheet({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { accountGeneration } = useAuth();
+  const [closedVersion, setClosedVersion] = useState(0);
   // Row actions that leave the sheet run once it has closed, so nothing is presented over it.
   const pending = useRef<(() => void) | null>(null);
   const afterClose = (action: () => void) => { pending.current = action; onClose(); };
   return <CompanionSheet visible={visible} onClose={onClose} title="" contentScrolls testID="companion.glance"
-    onClosed={() => { const action = pending.current; pending.current = null; action?.(); }}>
+    onClosed={() => { setClosedVersion(value => value + 1); const action = pending.current; pending.current = null; action?.(); }}>
     <ScrollView contentContainerStyle={styles.content}>
       <View style={styles.header}>
         <RemoteCompanionAvatar avatar={avatar} name={name} deviceId={deviceId} online={online} size={HEADER_AVATAR} framed />
         <Text numberOfLines={1} style={styles.headerName}>{name}</Text>
       </View>
-      <Computers key={`${deviceId}:${visible}`} botId={botId} deviceId={deviceId} deviceName={deviceName} online={online} cloudHome={cloudHome}
+      <Computers key={`${deviceId}:${closedVersion}`} botId={botId} deviceId={deviceId} deviceName={deviceName} online={online} cloudHome={cloudHome}
         onOpenCindy={hosted => afterClose(() => onOpenCindy(hosted))} onSwitchHome={() => afterClose(onSwitchHome)} />
       {visible ? <Activity key={`${accountGeneration}:${deviceId}:${botId}`} botId={botId} deviceId={deviceId} deviceName={deviceName} sessionId={sessionId} online={online}
         onOpenTask={(taskId, taskDeviceId) => afterClose(() => onOpenTask(taskId, taskDeviceId))} /> : null}
