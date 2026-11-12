@@ -146,3 +146,24 @@ it('keeps unread pins visible and reacts to remote feedback while collapsed', ()
   fireEvent.click(header);
   expect(screen.getByText('local')).toBeTruthy();
 });
+
+// Unit regression for review #4555472387: a read persisted interruption must
+// remain reachable without notification/activity mirrors. Existing cases only
+// cover those volatile mirrors. One task, direct or project pin, local or remote.
+it.each([
+  ['session', null], ['session', 'device-a'],
+  ['project', null], ['project', 'device-a'],
+] as const)('keeps persisted interruptions in collapsed %s pins (device: %s)', (kind, deviceId) => {
+  const interrupted = {
+    ...session('interrupted', deviceId), status: 'active',
+    activeTurnStartedAt: 1000, interruptedTurnStartedAt: 1000, lastTurnEndedAt: 900,
+  } as Session;
+  const entries = (task: Session): PinnedSidebarEntry[] => kind === 'session'
+    ? [entry(task)]
+    : [{ kind: 'project', id: 'project', project: { sessions: [task] }, displaySessions: [task] } as PinnedSidebarEntry];
+  const page = render(<PinnedSection {...props(entries(interrupted))} />);
+  fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.pinned' }));
+  expect(screen.getByText('interrupted')).toBeTruthy();
+  page.rerender(<PinnedSection {...props(entries({ ...interrupted, lastTurnEndedAt: 1000 }))} />);
+  expect(screen.queryByText('interrupted')).toBeNull();
+});

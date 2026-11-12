@@ -70,6 +70,7 @@ import { useSessionAttentionKinds } from '@/lib/sessionAttentionStore';
 import { remoteLampOf } from '../../lib/sessionLampAggregation';
 import { useRemoteSessionActivityRevision } from '@/features/device-link/remoteSessionActivityStore';
 import { absorbSessionStarting } from '@/lib/sessionStartingStore';
+import { hasPendingSessionInterruption } from '@cindy/maker-shared/session-activity';
 
 const HEADER_HOVER_ACTION_CLASS = cn(
   'pointer-events-none opacity-0 transition-opacity duration-150',
@@ -214,7 +215,8 @@ export function PinnedSection({
   const activities = useAgentIslandActivityMap();
   const attentionKinds = useSessionAttentionKinds();
   useRemoteSessionActivityRevision();
-  const needsAttention = (session: Session) => notifications.has(session.id)
+  const needsAttention = (session: Session) => hasPendingSessionInterruption(session)
+    || notifications.has(session.id)
     || attentionKinds.has(session.id)
     || activities.get(session.id)?.phase === 'needs-interaction'
     || remoteLampOf(session.id, session.deviceLinkDeviceId)?.tone != null;
