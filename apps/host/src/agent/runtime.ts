@@ -17,7 +17,10 @@ import { readCodexLocalAuthState } from '../../../desktop/src/main/maker-host/co
 import { createPiAuthAdapter } from '../../../desktop/src/main/maker-host/pi-auth.js';
 import { subscriptionAccountKind } from '../../../desktop/src/main/maker-host/subscription-account-kind.js';
 import { getActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.js';
-import { resolveModelContextProviderId } from '../../../desktop/src/main/maker-host/catalog-to-descriptors.js';
+import { deriveAvailableModels, refreshCatalogDerivedModels, resolveModelContextProviderId } from '../../../desktop/src/main/maker-host/catalog-to-descriptors.js';
+import { DESKTOP_CAPABILITY_ROUTING_POLICY } from '../../../desktop/src/main/maker-host/capability-routing.js';
+import { createCodexCapabilityRouting } from '../../../desktop/src/main/maker-host/codexCapabilityRouting.js';
+import { createPluginRegistry } from '../../../desktop/src/main/maker-host/plugins/index.js';
 import { createClaudeModelResolvers, createCodexModelResolvers, createPiModelResolvers } from '../../../desktop/src/main/maker-host/engineModelResolvers.js';
 import { isNativeProviderAuthBound, bindNativeProviderAuth, unbindNativeProviderAuth } from '../../../desktop/src/main/maker-host/nativeProviderAuthBinding.js';
 
@@ -59,6 +62,8 @@ export interface HostAgentGraphOptions {
   wakeSession?: (id: string, reason: string) => void;
   /** Applies the account's provider models to the active catalog before a task starts. */
   ensureProviderCatalog?: () => Promise<unknown>;
+  /** The plugin roster section from the Host plugin gateway. */
+  getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
 }
 
 export const LOGGER = createMakerLogger('maker');
@@ -259,6 +264,15 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   const startOptions = createHostStartOptions({
     modelContext, fastPolicies: options.codexRuntime?.fastPolicies ?? null, logger: LOGGER,
     ensureProviderCatalog: options.ensureProviderCatalog,
+    // Engines read these lists at start; refresh them against the catalog just applied.
+    refreshModels: () => refreshCatalogDerivedModels(maker, modelContext.getSelectableCatalog()),
+    reloadCodexSkills: workingDir => codex ? codex.listAgentSkills({ workingDir, forceReload: true }) : Promise.resolve(),
+  });
+  // Model lists derived from the selectable catalog, as the desktop injects them.
+  const availableModels = (agent: AgentKind) => ({ availableModels: deriveAvailableModels(modelContext.getSelectableCatalog(), agent) });
+  const codexCapabilityRouting = createCodexCapabilityRouting({
+    getBridgeServerNames: () => options.mcpRuntime.getActiveCodexBridgeServerNames(),
+    getDisabledRuntimePluginIds: workingDir => createPluginRegistry().getDisabledRuntimePluginIds(workingDir),
   });
   const claudeModelResolvers = createClaudeModelResolvers({
     getCatalog: modelContext.getSelectableCatalog, resolveContextProviderId: modelContext.resolveContextProviderId,
@@ -282,6 +296,9 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
     // Skills the user disabled in Cindy, from the profile's activation preferences.
     getDisabledSkillPaths: readDisabledSkillPaths,
+    ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
+    capabilityRouting: DESKTOP_CAPABILITY_ROUTING_POLICY,
+    capabilityAdditions: availableModels('claude-code'),
     ...claudeModelResolvers,
     ...(mcpProviders.length > 0 ? { mcpProviders } : {}),
     ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
@@ -293,6 +310,11 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         ...options.codexRuntime?.deps,
         ...codexModelResolvers,
         getDisabledSkillPaths: readDisabledSkillPaths,
+        // A getter, as on the desktop: evaluated after the MCP bridge is prepared.
+        get capabilityRouting() { return codexCapabilityRouting.capabilityRouting(); },
+        resolveCapabilityRouting: codexCapabilityRouting.resolveCapabilityRouting,
+        capabilityAdditions: availableModels('codex'),
+        ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
         runtimeConfig: {},
         binaryPath: options.codexBinaryPath,
         logger: LOGGER,
@@ -316,6 +338,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         resolvePiNativeProviders: () => options.providerConfig.piNativeProviders(),
         ...piModelResolvers,
         getDisabledSkillPaths: readDisabledSkillPaths,
+        capabilityAdditions: availableModels('pi'),
+        ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
         ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
       })
     : null;
@@ -336,6 +360,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     storage: options.storage,
     lifecycleHooks: {
       prepareStartOptions: startOptions.prepareStartOptions,
+      onBeforeStart: startOptions.onBeforeStart,
       onClose: async id => {
       startOptions.onClose(id);
       try { await options.codexRuntime?.closeSession(id); }
@@ -360,5 +385,6 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     logger: LOGGER,
   });
   return { maker, agent, codex, pi, gatewayRestart, capabilitiesByAgent, instances: agents,
+    refreshModels: () => refreshCatalogDerivedModels(maker, modelContext.getSelectableCatalog()),
     agents: Object.keys(agents) as AgentKind[] };
 }

@@ -228,6 +228,7 @@ import {
 } from './catalog-to-descriptors.js';
 import { resolveDesktopModelContextProviderId, readStoredSessionContextWindowBudget, resolveConfiguredContextWindow, applySessionContextWindowBudgetToCreateOpts } from './model-context-settings.js';
 import { createClaudeModelResolvers, createCodexModelResolvers } from './engineModelResolvers.js';
+import { createCodexCapabilityRouting } from './codexCapabilityRouting.js';
 import {
   prepareCodexCustomContextCatalog,
   prepareCodexGuestModelCatalog,
@@ -416,7 +417,6 @@ import {
 import { mapCodexAppServerModelsToCatalog } from './codex-model-discovery.js';
 import { prepareSharedProjectSkillLinks } from './shared-global-skills.js';
 import {
-  buildDesktopCapabilityRoutingPolicy,
   DESKTOP_CAPABILITY_ROUTING_POLICY,
 } from './capability-routing.js';
 import {
@@ -1755,6 +1755,11 @@ export function getMaker(): Maker {
       cindyMakeProvider,
     ];
     _mcpProviders.codex = codexMcpProviders;
+    // Shared with the Node Host (codexCapabilityRouting.ts); both read on every call.
+    const codexCapabilityRouting = createCodexCapabilityRouting({
+      getBridgeServerNames: () => getActiveCodexBridgeServerNames(),
+      getDisabledRuntimePluginIds: (workingDir) => getPluginRegistry().getDisabledRuntimePluginIds(workingDir),
+    });
     const codexAgent = new CodexAgent({
       resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
@@ -1775,35 +1780,9 @@ export function getMaker(): Maker {
       // The bridge snapshot is the applied capability surface; the preference
       // alone can be ahead of it while a busy Codex turn defers refresh.
       get capabilityRouting() {
-        return buildDesktopCapabilityRoutingPolicy({
-          cindyComputerAvailable:
-            getActiveCodexBridgeServerNames()?.includes('cindy_computer') === true,
-        });
+        return codexCapabilityRouting.capabilityRouting();
       },
-      resolveCapabilityRouting: async ({
-        workingDir,
-        remoteHostId,
-        vendorOptions,
-        codexBrowserUseProvisioned,
-        ensureCodexBrowserUseReady,
-      }) => {
-        const disabledPluginIds =
-          readDisabledBuiltinPluginIds(vendorOptions) ??
-          getPluginRegistry().getDisabledRuntimePluginIds(workingDir);
-        const cindyBrowserEnabled = !disabledPluginIds.includes('browser');
-        let connectedCodexBrowserUse = codexBrowserUseProvisioned;
-        if (!remoteHostId && !cindyBrowserEnabled && connectedCodexBrowserUse) {
-          connectedCodexBrowserUse = await ensureCodexBrowserUseReady();
-        }
-        return buildDesktopCapabilityRoutingPolicy({
-          cindyComputerAvailable:
-            getActiveCodexBridgeServerNames()?.includes('cindy_computer') === true,
-          cindyBrowserEnabled,
-          codexBrowserUseAvailable: connectedCodexBrowserUse,
-          codexBrowserUseProvisioned,
-          remoteHostId,
-        });
-      },
+      resolveCapabilityRouting: codexCapabilityRouting.resolveCapabilityRouting,
       makerMemory: makerMemoryManager,
       getGhostRosterPrompt,
       // 模型清单 SSoT = 目录（providers.json，OSS 运行时真源 / bundled 兜底）。maker-core 的

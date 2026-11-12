@@ -33,6 +33,8 @@ export function createHostMcpRuntime(ports: { appServerIds(): string[]; getRemot
     codexDeps,
     piDeps,
     prepareCodexMcp: codex.getCodexExtraSpawnConfig,
+    /** Server names of the applied Codex MCP bridge (desktop capability routing reads the same). */
+    getActiveCodexBridgeServerNames: codex.getActiveCodexBridgeServerNames,
     async close() {
       const settled = await Promise.allSettled([codex.shutdownCodexEnvironment(), pi.shutdownPiEnvironment()]);
       const errors = settled.flatMap(result => result.status === 'rejected' ? [result.reason] : []);

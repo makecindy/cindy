@@ -6,8 +6,8 @@
  * Deliberately absent here, with where they land:
  * - remote-device lookup, Orca and teammate preparation: Host rejects those tasks
  *   before start (send-preflight.ts); they arrive with M3;
- * - worktree runtime lease, shared project Skill links and disabled plugin ids:
- *   later M1 steps;
+ * - worktree runtime lease: a later M1 step; the teammate parts of the shared
+ *   Skill links and disabled plugin ids (bot toolsets) arrive with M3;
  * - account-model discovery barrier: the desktop waits for its account provider
  *   discovery (ensureCurrentAccountProviderReadiness). The Host's equivalent is its
  *   provider catalog refresh, which applies the account's gateway models to the
@@ -29,6 +29,9 @@ import { getSessionFastMode, setSessionFastMode } from '../../../desktop/src/mai
 import type { createSubscriptionFastPolicies } from '../../../desktop/src/main/maker-host/subscriptionFastPolicyCore.js';
 import { ownerScopedPath } from '../../../desktop/src/main/ownerContext.js';
 import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../../desktop/src/shared/accountProviderReadiness.js';
+import { prepareSharedProjectSkillLinks } from '../../../desktop/src/main/maker-host/shared-global-skills.js';
+import { createPluginRegistry } from '../../../desktop/src/main/maker-host/plugins/index.js';
+import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../../../desktop/src/main/mcp-integrations/codexBuiltinToolPolicy.js';
 import type { HostModelContext } from './model-context.js';
 
 export interface HostStartOptionsPorts {
@@ -38,6 +41,10 @@ export interface HostStartOptionsPorts {
   logger: { warn(message: string, fields?: Record<string, unknown>): void };
   /** Applies the account's provider models to the active catalog (Host listProviders). */
   ensureProviderCatalog?: () => Promise<unknown>;
+  /** Re-derives each engine's model list from the selectable catalog. */
+  refreshModels?: () => void;
+  /** Codex caches skills/list per cwd; drop it after new shared Skill links. */
+  reloadCodexSkills?: (workingDir: string) => Promise<unknown>;
 }
 
 function providerNotReady(): Error {
@@ -71,6 +78,9 @@ export function createHostStartOptions(ports: HostStartOptionsPorts) {
       // The desktop rechecks the owner after its wait; so does the Host.
       if (!ownerCurrent()) throw providerNotReady();
     }
+    // The desktop refreshes these lists on every catalog change; the Host at least
+    // before each start, against the catalog it just applied.
+    ports.refreshModels?.();
     // The dispatch boundary every creation path shares; providerId is final here.
     freezeSessionProviderAtStart(sessionId, opts.providerId);
     const interfaceProvider = getActiveCatalog().providers.find(p => p.id === opts.providerId);
@@ -98,10 +108,33 @@ export function createHostStartOptions(ports: HostStartOptionsPorts) {
     if (opts.agentKind === 'pi') {
       opts.getPriceVariant = () => (getSessionFastMode(sessionId) ? 'priority' : 'standard');
     }
+    if (!opts.remoteHostId && opts.workingDir) {
+      const result = await prepareSharedProjectSkillLinks({ workingDir: opts.workingDir });
+      for (const warning of result.warnings) {
+        ports.logger.warn('shared project skill link warning', { workingDir: opts.workingDir, warning });
+      }
+    }
+    // Plugins the user disabled for this workdir; the desktop adds a teammate's toolsets (M3).
+    const disabledPluginIds = [...new Set(createPluginRegistry().getDisabledRuntimePluginIds(opts.workingDir))];
+    opts.vendorOptions = {
+      ...(opts.vendorOptions ?? {}),
+      [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: disabledPluginIds,
+    };
+  }
+
+  /** The desktop's onBeforeStart Skill-link step (its Codex deferred restart lives in the Host input queue). */
+  async function onBeforeStart(context: { agentKind: string; workingDir?: string; remoteHostId?: string }): Promise<void> {
+    if (context.remoteHostId || !context.workingDir) return;
+    const result = await prepareSharedProjectSkillLinks({ workingDir: context.workingDir });
+    for (const warning of result.warnings) {
+      ports.logger.warn('shared project skill link warning', { workingDir: context.workingDir, warning });
+    }
+    if (context.agentKind === 'codex' && result.changed) await ports.reloadCodexSkills?.(context.workingDir);
   }
 
   return {
     prepareStartOptions,
+    onBeforeStart,
     onClose(sessionId: string): void {
       clearUsagePricing(sessionId);
     },

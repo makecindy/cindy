@@ -414,7 +414,11 @@ let mcpRuntime: ReturnType<typeof createHostMcpRuntime> | null = null;
 let agentAuth: ReturnType<typeof createHostAgentAuth> | null = null;
 const listProviders = createProviderCatalog({
   readProviders: connected => providerConfig?.publicViews(connected) ?? Promise.resolve([]),
-  applyModels: setXdGatewayModels,
+  // Keep each engine's model list in step with the account's models (the desktop refreshes on catalog change).
+  applyModels: (models: Parameters<typeof setXdGatewayModels>[0], options: Parameters<typeof setXdGatewayModels>[1]) => {
+    setXdGatewayModels(models, options);
+    agentGraph?.refreshModels();
+  },
   fetchModels: async () => {
     const baseUrl = readAuthEndpoints((account.realm ?? resolveHostRegion()) as 'cn' | 'global').modelAccessApiBaseUrl;
     if (!baseUrl) throw new Error('Model access endpoint is unavailable');
@@ -665,6 +669,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       wakeSession: (id: string, reason: string) => inputQueue.wakeSession(id, reason),
       // A task restored at startup waits for the account's models, as on the desktop.
       ensureProviderCatalog: () => listProviders({ gateway: currentGateway(), ownerId: runtime.owner }),
+      getGhostRosterPrompt: pluginGateway.rosterPrompt,
       resolveProviderRoute: createProviderRouteResolver({
         catalog: () => listProviders({ gateway, ownerId }),
         store: await createCredentialStore({ userDataDir: dataDir }),

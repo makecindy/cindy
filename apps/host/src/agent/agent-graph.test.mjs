@@ -123,17 +123,32 @@ test('every engine the Host assembles resolves per-model context the way the des
   assert.equal(typeof graph.pi.deps.resolveModelCompactionPct, 'function');
   // The desktop start hook's Host steps run for every start (start-options.ts, tested there).
   assert.equal(typeof graph.maker.lifecycleHooks?.prepareStartOptions, 'function');
+  assert.equal(typeof graph.maker.lifecycleHooks?.onBeforeStart, 'function');
+
+  // Model lists derived from the selectable catalog, and the desktop's capability routing.
+  const { deriveAvailableModels } = await import('../../../desktop/src/main/maker-host/catalog-to-descriptors.ts');
+  const { DESKTOP_CAPABILITY_ROUTING_POLICY } = await import('../../../desktop/src/main/maker-host/capability-routing.ts');
+  for (const [kind, agent] of [['claude-code', graph.agent], ['codex', graph.codex], ['pi', graph.pi]]) {
+    const expected = deriveAvailableModels(catalog, kind).map(model => model.id);
+    assert.ok(expected.length > 0, `the catalog has ${kind} models`);
+    assert.deepEqual(agent.capabilities.availableModels.map(model => model.id), expected, `${kind} model list`);
+  }
+  assert.equal(graph.agent.deps.capabilityRouting, DESKTOP_CAPABILITY_ROUTING_POLICY);
+  assert.equal(typeof Object.getOwnPropertyDescriptor(graph.codex.deps, 'capabilityRouting')?.get, 'function',
+    'Codex routing stays a getter, evaluated after the MCP bridge is prepared');
+  assert.equal(typeof graph.codex.deps.resolveCapabilityRouting, 'function');
 });
 
 /*
  * 测试价值（第三条）
- * - 可观察结果：Host 组装出的三个引擎读到的 getDisabledSkillPaths 返回用户在 Cindy 里禁用的 Skill。
+ * - 可观察结果：Host 组装出的三个引擎读到的 getDisabledSkillPaths 返回用户在 Cindy 里禁用的 Skill，
+ *   getGhostRosterPrompt 是 Host 插件网关给的花名册。
  * - 规则依据：桌面三个构造点都注入 readDisabledSkillPaths（maker-host/index.ts、pi-host.ts）；
  *   Host 之前没有注入，用户在桌面禁用的 Skill 在 Host 任务里仍会被加载。
  * - 最小失败输入：任一引擎缺这个依赖。
  * - tier：unit（只构造实例，偏好写进临时 profile）。
  */
-test('every engine the Host assembles skips the Skills the user disabled', async t => {
+test('every engine the Host assembles skips the Skills the user disabled and gets the plugin roster', async t => {
   const { setCindySkillEnabled } = await import('../../../desktop/src/main/skillhub/activationPreferences.ts');
   const { configureAppDataDir } = await import('../../../desktop/src/main/userDataPath.ts');
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-agent-graph-'));
@@ -147,8 +162,9 @@ test('every engine the Host assembles skips the Skills the user disabled', async
   await setCindySkillEnabled(skill, false);
   const mcp = createHostMcpRuntime({ appServerIds: () => [], getRemoteMcpBridgeToken: () => null });
   t.after(() => mcp.close());
+  const rosterPrompt = ({ workingDir }) => `roster for ${workingDir}`;
   const graph = createHostAgentGraph({
-    userDataDir: profile, gateway: null,
+    userDataDir: profile, gateway: null, getGhostRosterPrompt: rosterPrompt,
     binaryPath: path.join(profile, 'claude'), codexBinaryPath: path.join(profile, 'codex'), piBinaryPath: path.join(profile, 'pi'),
     mcpRuntime: mcp, mcpProviders: [], storage: {},
     providerConfig: {
@@ -163,5 +179,7 @@ test('every engine the Host assembles skips the Skills the user disabled', async
   for (const [kind, agent] of [['claude-code', graph.agent], ['codex', graph.codex], ['pi', graph.pi]]) {
     assert.equal(typeof agent.deps.getDisabledSkillPaths, 'function', kind);
     assert.ok(agent.deps.getDisabledSkillPaths().includes(disabled), `${kind} sees the disabled Skill`);
+    // The desktop gives all three engines the plugin roster (maker-host/index.ts, pi-host.ts).
+    assert.equal(agent.deps.getGhostRosterPrompt, rosterPrompt, `${kind} plugin roster`);
   }
 });

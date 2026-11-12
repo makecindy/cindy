@@ -25,8 +25,9 @@ import { writeSessionContextWindowBudget } from '../../../desktop/src/main/maker
 import { createSessionContextBudget } from '../../../desktop/src/main/maker-host/sessionContextBudgetCore.ts';
 import { readSessionContextWindowBudget } from '../../../desktop/src/main/maker-host/session-context-budget-store.ts';
 import { getActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.ts';
+import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../../../desktop/src/main/mcp-integrations/codexBuiltinToolPolicy.ts';
 
-function setup(t, ownerId, ensureProviderCatalog) {
+function setup(t, ownerId, ensureProviderCatalog, refreshModels) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-start-options-'));
   t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
   configureHostOwner({ userDataDir: profile, ownerId });
@@ -41,7 +42,7 @@ function setup(t, ownerId, ensureProviderCatalog) {
     },
   };
   const warnings = [];
-  const start = createHostStartOptions({ modelContext, fastPolicies, ensureProviderCatalog,
+  const start = createHostStartOptions({ modelContext, fastPolicies, ensureProviderCatalog, refreshModels,
     logger: { warn: (message) => warnings.push(message) } });
   return { start, modelContext, policies, warnings };
 }
@@ -137,4 +138,17 @@ test('a start whose catalog refresh fails, or whose owner changes during it, is 
   await assert.rejects(switching.start.prepareStartOptions('switch-task', { agentKind: 'codex', providerId: 'openai', model: 'm' }),
     error => error.code === 'ACCOUNT_PROVIDER_NOT_READY');
   assert.equal(getSessionProvider('switch-task'), null);
+});
+
+test('a start refreshes the model lists after the catalog wait and passes the disabled plugins', async t => {
+  const order = [];
+  const { start } = setup(t, 'start-options-plugins', async () => { order.push('catalog'); }, () => { order.push('models'); });
+  const workingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-start-options-work-'));
+  t.after(() => fs.rmSync(workingDir, { recursive: true, force: true }));
+  const opts = { agentKind: 'claude-code', providerId: 'xd', model: 'fixture-model', workingDir, vendorOptions: { kept: true } };
+  await start.prepareStartOptions('plugins-task', opts);
+  assert.deepEqual(order, ['catalog', 'models']);
+  assert.equal(opts.vendorOptions.kept, true);
+  // The workdir's disabled plugins (none here), set for every engine as on the desktop.
+  assert.deepEqual(opts.vendorOptions[CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY], []);
 });
