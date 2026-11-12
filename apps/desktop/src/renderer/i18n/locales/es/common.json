@@ -13406,6 +13406,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "Usar Texto Original",
     "rateLimited": "Demasiadas solicitudes de voz. Espere un momento y vuelva a intentarlo.",
     "status": {
       "listening": "Entrada de voz",
@@ -19796,6 +19797,11 @@
     }
   },
   "pluginUi": {
+    "settings": "Ajustes de complementos",
+    "save": "Guardar",
+    "settingsFailed": "No se pudieron cargar o guardar los ajustes del complemento. Vuelve a abrir esta página.",
+    "invalidSetting": "Comprueba que los valores marcados estén dentro de los límites permitidos.",
+    "attachmentFailed": "El complemento no pudo procesar «{{name}}». Se conserva el archivo adjunto original.",
     "display": "Visualización",
     "original": "Original",
     "menu": "Vistas y comandos del complemento",

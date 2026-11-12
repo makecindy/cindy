@@ -8,6 +8,8 @@ import { describe, expect, it, vi } from 'vitest';
 // Native calls are mocked at the SDK boundary; adapter surface remains checked.
 vi.mock('expo-notifications', () => ({
   setNotificationHandler: vi.fn(), getPermissionsAsync: vi.fn(), requestPermissionsAsync: vi.fn(),
+  setBadgeCountAsync: vi.fn(), dismissAllNotificationsAsync: vi.fn(),
+  addNotificationReceivedListener: vi.fn(),
   getDevicePushTokenAsync: vi.fn(), addPushTokenListener: vi.fn(), addNotificationResponseReceivedListener: vi.fn(),
   getLastNotificationResponseAsync: vi.fn(), clearLastNotificationResponseAsync: vi.fn(),
   setNotificationChannelAsync: vi.fn(), AndroidImportance: { HIGH: 4 }, AndroidNotificationVisibility: { PRIVATE: 0 },

@@ -630,6 +630,44 @@ Swift 源码和打包头像显式进入 fingerprint。首次发布需要原生�
 服务端须先支持可选发送者透传和 `aps.mutable-content = 1`，未升级双方保持普通推送。
 这不是 OTA 可独立交付的功能，仍受下述冷更审核门约束。
 
+### 应用图标角标
+
+角标数字为账号汇总中「等待回答／授权 + 已完成／出错但未读」的任务数，运行中不计入。
+同一电脑的同一任务只计一次，归档、待本地创建、缓存占位和已读结果不计入。它不是消息条数，
+也不按收到的推送次数累加。已有的任务内容展示与已读回执推进任务状态后，角标随之减少；
+只进入页面或划掉系统通知不会直接把任务判成已读。
+
+`TaskBadgeBridge` 在 iOS 和 Android 独立于 ActivityKit 运行。与灵动岛共用服务端账号汇总，
+不从手机 Home 分页、筛选、选中的电脑或缓存列表推算总数。等待 2、未读结果 4、运行 3 时，
+角标为 6，灵动岛可显示「6 · 3」。群聊消息数不混入任务口径。
+
+登录、进入前台或通知偏好变化时，从当前账号区域的 `deviceLinkApiBaseUrl` 请求一次
+`GET /api/device-link/task-activity`，使用现有账号 Bearer；并发刷新共用在途请求，无轮询或
+定时重试。返回 `{schemaVersion:1,accountId,version,waitingCount,unreadCount,runningCount,
+badgeCount,complete}`，`accountId` 为已验签 membershipId，`version` 是账号内持久单调的
+十进制整数字符串，不转成 JS Number。推送携带同形 `taskActivity`。仅完整汇总允许写入
+绝对数字（包括 0），新版本不完整数据只推进版本水位，保留已有角标；乱序、其它账号、
+无效数字和退出后的响应被丢弃。接口 404/405 后本生命周期停止请求；离线保留原值，
+自建中转不调用官方汇总接口。旧服务端不会降级为从部分列表猜总数。
+
+普通推送注册仅向 device-link 附带可选 `taskBadgeVersion:1`：iOS 支持系统 `aps.badge`，
+Android 须检测到 `CindyChatNotifications` 新原生方法才声明。服务端仅向声明支持的安装
+发送 badge-only，旧 Android 包保持原通知，避免空白提醒。普通通知开关与 ActivityKit
+独立令牌互不注销。退出账号、关闭通知时清理角标；不把划掉通知当成任务已读。
+
+iOS 后台由系统应用无声 APNs `aps.badge`，不需要 JS 运行；前台按汇总版本核对。
+APNs 可能延迟、丢弃或乱序，不能承诺后台绝对即时一致，重新进入前台会请求校正。
+Android 的 `TaskBadgeDelivery` 在已有 FCM receiver 中消费 data-only `task-badge`，不展示
+空通知；复用 ShortcutBadger，按持久账号／版本拒绝旧值，JS 前台写入也经过同一原生入口。
+只保存账号标识、版本和数字，不落盘令牌或任务内容；0 值不顺带清除群聊通知。
+启动器及系统权限决定显示数字、圆点或不支持；FCM 不可用的设备仍只能在前台核对。
+
+Android 原生接收器修改需要新安装包，旧包不能靠 OTA 获得后台处理能力；此 PR 必须按
+冷更规则确认，并与配套服务端部署协调。实现与上线分开核验：需真实 APNs／FCM、杀进程、
+跨电脑已读和关闭通知测试。纯 Kotlin 回归入口 `scripts/test-task-badge-android.mjs`
+通过 `CINDY_BADGE_TEST_KOTLINC`、`CINDY_BADGE_TEST_JDK_HOME`、`CINDY_BADGE_TEST_JSON_JAR`
+指定本机工具链，验证真实生产接收器的账号、版本、不完整数据、零值与退出行为。
+
 ### iOS 桌面与锁屏小组件
 
 `plugins/with-usage-widgets.js` 生成 `CindyHomeWidgets` WidgetKit 扩展（订阅余量、每日用量，iOS 17+），

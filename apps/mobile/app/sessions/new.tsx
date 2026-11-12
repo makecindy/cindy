@@ -1,3 +1,4 @@
+import { playHaptic } from '@/platform/haptics';
 import { TaskArchiveUndoSlot } from '@/session/TaskArchiveUndoNotice';
 import { useComposerDragOpen } from '@/session/useComposerDragOpen';
 import { ResizableComposerInputRow } from '@/session/ResizableComposerInputRow';
@@ -3177,6 +3178,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         onStateChanged: (next) => {
           // 旧 controller 的取消可晚于新启动完成,只允许本次启动交接 UI 状态。
           if (voiceStartupSeqRef.current !== startupSeq) return;
+          if (next === 'listening') playHaptic('commit');
           setVoiceState(next);
         },
         onError: (message) => {
@@ -3403,7 +3405,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       }}
       disabled={!canCreate}
       hitSlop={10}
-      onPress={() => void create()}
+      onPress={() => { playHaptic('commit'); void create(); }}
       style={({ pressed }) => [
         styles.sendButton,
         !canCreate && styles.sendButtonDisabled,
