@@ -1,16 +1,19 @@
-import { type ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 
 import type { ProviderView } from '@cindy/model-providers';
 
 import { Select } from '@/components/ui/select';
-import { useProviderBorrow } from '@/hooks/useProviderBorrow';
+import { useProviderBorrow, type BorrowedProviderCatalog } from '@/hooks/useProviderBorrow';
 import {
   effectiveRunLocation,
   RUN_LOCATION_LOCAL,
   type RunLocationCandidate,
 } from '@/lib/providerRunLocation';
+import { refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
+
+import { ReadOnlyProviderModelSection, readOnlyProviderModels } from './ReadOnlyProviderModels';
 
 type LocatedProvider = ProviderView & { runLocation?: string };
 
@@ -77,6 +80,47 @@ function ProviderRunLocationPicker({
         onValueChange={choose}
       />
     </span>
+  );
+}
+
+/** 借用时那台电脑开放的模型数，左栏计数与详情用同一口径。 */
+export function borrowedProviderModelCount(catalog: BorrowedProviderCatalog): number {
+  return readOnlyProviderModels(catalog.provider, catalog.modelVisibilityOverrides).length;
+}
+
+/**
+ * 借用另一台电脑时的模型区：清单、开关与刷新都属于「运行于」那台电脑，本机没登录也照常显示。
+ * 开关与排序由那台电脑决定，这里只读；刷新重新读取那台电脑的目录，不调用本机的 CLI。
+ */
+export function BorrowedProviderModels({ catalog, device }: {
+  catalog: BorrowedProviderCatalog;
+  device: RunLocationCandidate;
+}) {
+  const { t } = useTranslation();
+  const models = useMemo(
+    () => readOnlyProviderModels(catalog.provider, catalog.modelVisibilityOverrides),
+    [catalog.provider, catalog.modelVisibilityOverrides],
+  );
+  return (
+    <>
+      <div
+        className="shrink-0 border-t px-5 py-3"
+        style={{ borderColor: 'var(--settings-theme-card-border)' }}
+      >
+        <p className="text-13 leading-[1.5]" style={{ color: 'var(--settings-section-desc)' }}>
+          {t('settings.providers.remote.detailNote', { device: device.name })}
+        </p>
+      </div>
+      <ReadOnlyProviderModelSection
+        title={t('settings.providers.remote.modelsTitle')}
+        models={models}
+        note={models.length === 0 ? t('settings.providers.remote.modelsEmpty') : null}
+        onRefresh={() => void refreshRemoteCatalogSnapshot(device.deviceId)
+          .catch(() => toast.error(t('settings.providers.models.refreshFailed')))}
+        refreshing={catalog.loading}
+        testId="borrowed-provider-models"
+      />
+    </>
   );
 }
 
