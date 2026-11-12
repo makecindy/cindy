@@ -141,6 +141,7 @@ describe('authentication does not wait for optional plugin provisioning', () => 
     }).outputText;
     let initialize!: () => Promise<unknown>;
     const deps = {
+      hostClientMode: false,
     authRefreshOverride: null,
       ipcMain: {
         handle: (_channel: string, handler: typeof initialize) => {

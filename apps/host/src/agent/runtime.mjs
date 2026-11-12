@@ -1,3 +1,4 @@
+import { getDesktopMcpToolApprovalPolicy } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
 import { CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY } from '../../../desktop/src/main/maker-host/codex-gateway-config.js';
 /** Node assembly of the shared Maker agents, provider configuration and MCP transports.
  * Native login, settings and platform integrations are assembled by the owning runtime. */
@@ -222,6 +223,7 @@ export function createHostAgentGraph(options) {
     },
     binaryPath: options.binaryPath,
     logger: LOGGER,
+    getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
     ...(mcpProviders.length > 0 ? { mcpProviders } : {}),
     ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
   }) : null;
@@ -233,6 +235,7 @@ export function createHostAgentGraph(options) {
         runtimeConfig: {},
         binaryPath: options.codexBinaryPath,
         logger: LOGGER,
+        getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
         mcpProviders,
         ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
       })
@@ -246,6 +249,7 @@ export function createHostAgentGraph(options) {
         },
         binaryPath: options.piBinaryPath,
         logger: LOGGER,
+        getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
         mcpProviders,
         resolvePiAgentHome: () => path.join(options.userDataDir, 'pi-agent-home'),
         resolvePiNativeProviders: () => options.providerConfig.piNativeProviders(),
@@ -267,7 +271,10 @@ export function createHostAgentGraph(options) {
   const maker = new Maker({
     agents,
     storage: options.storage,
-    lifecycleHooks: { onClose: id => options.codexRuntime?.closeSession(id) },
+    lifecycleHooks: { onClose: async id => {
+      try { await options.codexRuntime?.closeSession(id); }
+      finally { await options.onSessionClose?.(id); }
+    } },
     logger: LOGGER,
     ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
   });
