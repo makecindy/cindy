@@ -443,6 +443,7 @@ describe('provider catalog realm reload', () => {
           } },
         ] } } };
       const owner = h.owner;
+      h.owner = 'source-recovery-' + outcome;
       const previous = getActiveCatalog();
       let respond!: (response: Response) => void;
       h.sourceFetch.mockImplementationOnce(() => new Promise(resolve => { respond = resolve; }));
@@ -487,6 +488,40 @@ describe('provider catalog realm reload', () => {
       }
     },
   );
+  it('backs off failed source discovery per connection and retries after cooldown or credential changes', async () => {
+    const config: CustomProviderConfig = { id: 'source-retry', name: 'Gateway', auth: { method: 'none' },
+      runtimes: { pi: { baseUrl: 'http://127.0.0.1:43210/v1', wireProtocol: 'openai-chat', models: [
+        { id: 'supplier/model', name: 'Model', discoveredSource: { kind: 'magpie', providerId: 'supplier', snapshotId: 'old:receipt' } },
+      ] } } };
+    const owner = h.owner;
+    const previous = getActiveCatalog();
+    const clock = vi.spyOn(Date, 'now');
+    let now = 1000;
+    clock.mockImplementation(() => now);
+    h.owner = 'source-retry-owner';
+    h.customProviderRead.mockResolvedValue([config]);
+    h.sourceFetch.mockImplementation(async () => new Response('{}', { status: 503 }));
+    try {
+      setCustomProviders([buildUserProvider(config)]);
+      await refreshCustomProviderModelSources();
+      await refreshCustomProviderModelSources();
+      expect(h.sourceFetch).toHaveBeenCalledOnce();
+      now += 5 * 60_000;
+      await refreshCustomProviderModelSources();
+      expect(h.sourceFetch).toHaveBeenCalledTimes(2);
+      h.credentialRevision++;
+      await refreshCustomProviderModelSources();
+      expect(h.sourceFetch).toHaveBeenCalledTimes(3);
+    } finally {
+      clock.mockRestore();
+      h.owner = owner;
+      h.credentialRevision = 0;
+      h.customProviderRead.mockReset();
+      h.sourceFetch.mockReset().mockRejectedValue(new Error('offline'));
+      setCustomProviders([]);
+      setActiveCatalog(previous);
+    }
+  });
   // #10405, unit: merging A(a1,a2) into B must not remove a2-only m2 from a saved
   // schedule's strict route resolver. Picker/guest membership still cannot borrow B's m3.
   it.each(['healthy', 'origin-signed-out', 'bound-paused', 'builtin-signed-out', 'builtin-disconnected'] as const)(
@@ -637,11 +672,6 @@ describe('provider catalog realm reload', () => {
       h.pool = null;
       h.placement = {};
       h.refreshed.clear();
-      setCustomProviders([]);
-      setActiveCatalog(previous);
-    }
-  });
-
   // #10405, unit: owner reset and a failed next-owner DB read must remove account-derived
   // provider names too. Previous owner-reset coverage only injected custom configurations.
   it.each(['owner-reset', 'read-failure'] as const)('clears created subscription providers on %s', async reason => {
