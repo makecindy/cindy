@@ -1279,6 +1279,8 @@
     "handoffWindow": "Giriş devri · {{app}}"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
+    "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Bu SSH görevi Harness değiştiremez. Geçerli Harness'ında bir model seçin veya ihtiyacınız olan Harness ile yeni bir SSH görevi oluşturun.",
     "MODEL_SELECTION_UNAVAILABLE": "Seçilen model artık sağlayıcısından kullanılamıyor. Ayarlar'dan bağlantıyı kontrol edin veya kullanılabilir başka bir model seçin.",
     "HARNESS_SWITCH_NOT_READY": "Harness değişimi hazır değil. Başka bir model seçin.",
@@ -19992,6 +19994,15 @@
     }
   },
   "subscriptionAccounts": {
+    "loginIdentityUnknown": "Bu hesabın orijinal kimliği bilinmiyor. Yeni bir hesap bağlamak için Hesap Ekle'yi kullanın.",
+    "loginExpiresInDays": "Oturum açma süresi yaklaşık {{days}} gün içinde dolacak",
+    "loginExpiresSoon": "Oturum açma süresi yakında dolacak",
+    "loginMayHaveExpired": "Oturum açma süresi dolmuş olabilir",
+    "loginExpiryUnknown": "Oturum açma son kullanma tarihi bilinmiyor",
+    "loginExpiryDetail": "Tahmini son kullanma tarihi: {{date}}. Bu tahmin Claude tarafından sağlanır; oturum açma süresi daha erken dolabilir.",
+    "loginAccountAria": "{{name}} hesabında tekrar oturum açın",
+    "loginIdentityMismatchStatus": "Oturum açılan hesap eşleşmiyor",
+    "loginIdentityMismatch": "Farklı bir hesapla oturum açtınız. Tekrar oturum açın ve bu satırda gösterilen hesabı seçin.",
     "signIn": {
       "checking": "Yerel hesap kontrol ediliyor…",
       "detected": "Oturum açılmış hesap bulundu",
