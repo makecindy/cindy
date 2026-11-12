@@ -22,7 +22,7 @@ it('offers native package transfer to Agents and plugins through the same regist
   expect(server.hostTools.describe('import_session')).toMatchObject({ category: 'control' });
   expect(parsePayload(await server.hostTools.call('export_session', { session_id: 'local::target' })))
     .toMatchObject({ ok: true, attachment_ref: expect.stringMatching(/^handoff:/) });
-  expect(sessionShare.export).toHaveBeenCalledWith({ sessionId: 'target', excludeMedia: false, outputPath: undefined }, plugin);
+  expect(sessionShare.export).toHaveBeenCalledWith({ sessionId: 'target', excludeMedia: false }, plugin);
   expect(parsePayload(await server.hostTools.call('import_session', { attachment_ref: 'handoff:00000000-0000-4000-8000-000000000000' })))
     .toMatchObject({ ok: true, session_id: 'imported' });
   expect(parsePayload(await server.hostTools.call('export_session', { session_id: 'target', output_path: '/private/export.cshare' })))

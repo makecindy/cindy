@@ -6,7 +6,7 @@ import { resolveHistoryScope } from './_history_scope.js';
 import { errorPayload, okPayload } from './_payload.js';
 
 export interface SessionShareCallbacks {
-  export(params: { sessionId: string; outputPath?: string; excludeMedia: boolean }, context: LiziMcpSessionContext): Promise<ControlResult<Record<string, unknown>, string>>;
+  export(params: { sessionId: string; excludeMedia: boolean }, context: LiziMcpSessionContext): Promise<ControlResult<Record<string, unknown>, string>>;
   import(params: { filePath?: string; attachmentRef?: string; workingDir?: string; useWorktree: boolean; overwrite: boolean }, context: LiziMcpSessionContext): Promise<ControlResult<Record<string, unknown>, string>>;
 }
 
@@ -17,16 +17,14 @@ export function registerSessionShareTools(registry: XdtHelperToolRegistry, deps:
 }): void {
   registry.register({
     name: 'export_session', category: 'history',
-    description: 'Export an explicit local task as a native .cshare package with history, available attachments and engine transcripts. Requires per-call approval. Agent output_path must stay inside this task’s working directory, including resolved symlink targets and parents; relative paths resolve from that directory. To place the file elsewhere, move it afterward with native file tools and their existing authorization. Omitting output_path uses the unrestricted native save dialog, including tasks without a working directory. Plugins receive an instance-bound attachment_ref and must not supply output_path. The package is unencrypted. Reports fidelity and missing content; a running task may not include its last turn. Remote tasks are unsupported.',
+    description: 'Export an explicit local task as a native .cshare package with history, available attachments and engine transcripts. Requires per-call approval. For Agent calls, the user selects the export location in the native save dialog and the final file_path is returned; the Agent cannot specify a destination path. Plugins receive an instance-bound attachment_ref, never a host path. The package is unencrypted. Reports fidelity and missing content; a running task may not include its last turn. Remote tasks are unsupported.',
     inputShape: {
       session_id: z.string().min(1),
-      output_path: z.string().min(1).optional(),
       exclude_media: z.boolean().default(false),
     },
     handler: async args => {
       const context = deps.getSessionContext();
       if (!context.sessionId && context.hostCaller?.kind !== 'plugin') return errorPayload('NO_SESSION_CONTEXT', 'No task is bound to this call.');
-      if (context.hostCaller && args.output_path !== undefined) return errorPayload('INVALID_ARGS', 'Plugins receive a handoff reference, not a filesystem path.');
       const sessionId = args.session_id.startsWith('local::') ? args.session_id.slice(7) : args.session_id;
       if (!sessionId || sessionId.includes('::')) return errorPayload('UNSUPPORTED_CAPABILITY', 'Only local task export is supported.');
       if (deps.history) {
@@ -34,7 +32,7 @@ export function registerSessionShareTools(registry: XdtHelperToolRegistry, deps:
         if (!scope.ok) return errorPayload(scope.errorCode, scope.message);
         if (scope.deniedSessionIds.length) return errorPayload('HISTORY_SCOPE_DENIED', 'The task is outside the current history scope.');
       }
-      const result = await deps.callbacks.export({ sessionId, outputPath: args.output_path, excludeMedia: args.exclude_media }, context);
+      const result = await deps.callbacks.export({ sessionId, excludeMedia: args.exclude_media }, context);
       return result.ok ? okPayload(result) : errorPayload(result.errorCode, result.message);
     },
   });

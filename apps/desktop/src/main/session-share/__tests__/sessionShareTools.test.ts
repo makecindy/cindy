@@ -3,6 +3,8 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { XdtHelperToolRegistry } from '../../../../../../packages/lizi-mcps/src/lizi_xdtHelperToolRegistry.js';
+import { registerSessionShareTools } from '../../../../../../packages/lizi-mcps/src/xdt-helper/session_share.js';
 import { createSessionShareToolCallbacks } from '../sessionShareTools.js';
 
 // Unit, capability list #10/#15 and plugin authoring §4: a native export must
@@ -60,63 +62,32 @@ describe('native package Host tools', () => {
       .toMatchObject({ ok: true, status: 'imported', session_id: 'imported' });
     expect(f.ports.inspectShare).toHaveBeenCalledWith(path.join(directory, 'source.cshare'), Buffer.from('package'));
   });
-  it('keeps Agent filesystem paths on the existing native path', async () => {
+  // Unit regression for #9979: the public schema must reject caller-selected
+  // export paths; only a location chosen through the native dialog reaches the
+  // packer. Existing native roundtrips do not cover this MCP-to-Host boundary.
+  it('rejects an Agent-provided export path and uses the native save dialog', async () => {
     const f = fixture(), context = { agentKind: 'codex', sessionId: 'caller', workingDir: directory };
-    expect(await f.callbacks.export({ sessionId: 'task', excludeMedia: true }, context))
+    const registry = new XdtHelperToolRegistry();
+    registerSessionShareTools(registry, { callbacks: f.callbacks, getSessionContext: () => context });
+    const supplied = path.join(directory, 'agent-selected.cshare');
+    const rejected = (await registry.call('export_session', { session_id: 'task', output_path: supplied })).content[0];
+    expect(rejected.type).toBe('text');
+    if (rejected.type === 'text') expect(JSON.parse(rejected.text)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(f.ports.chooseExportPath).not.toHaveBeenCalled();
+    expect(f.ports.exportShare).not.toHaveBeenCalled();
+    const exported = (await registry.call('export_session', { session_id: 'task', exclude_media: true })).content[0];
+    expect(exported.type).toBe('text');
+    if (exported.type === 'text') expect(JSON.parse(exported.text))
       .toMatchObject({ ok: true, file_path: path.join(directory, 'chosen.cshare') });
+    expect(f.ports.chooseExportPath).toHaveBeenCalledWith('task');
+    expect(await fs.readFile(path.join(directory, 'chosen.cshare'), 'utf8')).toBe('package');
+    await expect(fs.stat(supplied)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await f.callbacks.import({ filePath: 'source.cshare', overwrite: false, useWorktree: false }, context))
       .toMatchObject({ ok: true, status: 'imported', session_id: 'imported' });
     expect(f.ports.inspectShare).toHaveBeenCalledWith(path.join(directory, 'source.cshare'));
     expect(f.ports.commitShare).toHaveBeenCalledWith(expect.objectContaining({ draftId: 'draft', overwrite: false }), expect.any(Function));
     expect(f.handoff.import).not.toHaveBeenCalled();
     expect(f.handoff.open).not.toHaveBeenCalled();
-  });
-  // Unit regression for #9979's export-path security review: native roundtrips
-  // do not cover an Agent-supplied destination escaping its task workdir. These
-  // public callbacks must reject the smallest absolute/traversal/symlink escape
-  // before the packer writes, while preserving valid paths and the native dialog.
-  it.each(['relative', 'absolute'] as const)('exports to a %s path inside the Agent workdir', async kind => {
-    const f = fixture(), workingDir = path.join(directory, 'workspace');
-    await fs.mkdir(workingDir);
-    const target = path.join(workingDir, 'task.cshare');
-    await fs.writeFile(target, 'previous');
-    const result = await f.callbacks.export({ sessionId: 'task', excludeMedia: false,
-      outputPath: kind === 'relative' ? 'task.cshare' : target }, { agentKind: 'codex', sessionId: 'caller', workingDir });
-    expect(result).toMatchObject({ ok: true, file_path: path.join(await fs.realpath(workingDir), 'task.cshare') });
-    expect(await fs.readFile(target, 'utf8')).toBe('package');
-    expect(f.ports.chooseExportPath).not.toHaveBeenCalled();
-  });
-  it.for(['absolute', 'parent traversal', 'symlink parent', 'symlink target'] as const)(
-    'rejects an Agent export escaping through %s before writing', async (kind, { skip }) => {
-      const f = fixture(), workingDir = path.join(directory, 'workspace'), outside = path.join(directory, 'workspace-sibling');
-      await Promise.all([fs.mkdir(workingDir), fs.mkdir(outside)]);
-      const target = path.join(outside, 'task.cshare');
-      await fs.writeFile(target, 'untouched');
-      let outputPath = kind === 'parent traversal' ? path.join('..', 'workspace-sibling', 'task.cshare') : target;
-      if (kind === 'symlink parent' || kind === 'symlink target') {
-        const link = path.join(workingDir, kind === 'symlink parent' ? 'linked' : 'linked.cshare');
-        try { await fs.symlink(kind === 'symlink parent' ? outside : target, link, kind === 'symlink parent' ? 'junction' : 'file'); }
-        catch (error) {
-          if (['EPERM', 'EACCES', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) { skip(); return; }
-          throw error;
-        }
-        outputPath = kind === 'symlink parent' ? path.join(link, 'task.cshare') : link;
-      }
-      const result = await f.callbacks.export({ sessionId: 'task', outputPath, excludeMedia: false },
-        { agentKind: 'codex', sessionId: 'caller', workingDir });
-      expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
-      if (!result.ok) expect(result.message).toContain('working directory');
-      expect(f.ports.exportShare).not.toHaveBeenCalled();
-      expect(await fs.readFile(target, 'utf8')).toBe('untouched');
-    });
-  it('keeps the native save dialog available without a workdir and rejects an explicit path', async () => {
-    const f = fixture(), context = { agentKind: 'codex', sessionId: 'caller', workingDir: '' };
-    expect(await f.callbacks.export({ sessionId: 'task', outputPath: 'task.cshare', excludeMedia: false }, context))
-      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
-    expect(f.ports.exportShare).not.toHaveBeenCalled();
-    expect(await f.callbacks.export({ sessionId: 'task', excludeMedia: false }, context))
-      .toMatchObject({ ok: true, file_path: path.join(directory, 'chosen.cshare') });
-    expect(await fs.readFile(path.join(directory, 'chosen.cshare'), 'utf8')).toBe('package');
   });
   it('rejects expired or foreign handoff references before inspecting any file', async () => {
     const f = fixture(); f.handoff.open.mockResolvedValueOnce(null as never);
@@ -163,9 +134,8 @@ describe('native package Host tools', () => {
     expect(f.handoff.import).not.toHaveBeenCalled();
     await expect(fs.stat(f.ports.exportShare.mock.calls[0][0].targetPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
-  it('rejects plugin paths and SSH filesystem calls even at the Host callback boundary', async () => {
+  it('rejects plugin import paths and SSH filesystem calls even at the Host callback boundary', async () => {
     const f = fixture();
-    expect(await f.callbacks.export({ sessionId: 'task', outputPath: '/private/export', excludeMedia: false }, plugin)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
     expect(await f.callbacks.import({ filePath: '/private/import', overwrite: false, useWorktree: false }, plugin)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
     expect(await f.callbacks.import({ filePath: 'task.cshare', overwrite: false, useWorktree: false },
       { agentKind: 'codex', workingDir: directory, sessionId: 'caller', remoteHostId: 'ssh' })).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
