@@ -643,6 +643,7 @@ export async function refreshDiscoveredCodexModels(
 // older DB read must never publish after a newer one or a persisted capability can disappear from
 // the in-memory routing catalog until the next full app restart.
 let customProviderCatalogRefreshGeneration = 0;
+let pendingSourceProjection: { owner: string } | undefined;
 
 const revalidateModelSources = createModelSourceRevalidator({
   credentialRevision: getProviderRouteCredentialRevision,
@@ -659,12 +660,13 @@ const revalidateModelSources = createModelSourceRevalidator({
   async fetchModels(config, agent, isCurrent) {
     const runtime = config.runtimes[agent];
     if (!runtime || runtime.headersState === 'unknown' || !isCurrent()) return null;
+    const sourceRecoveryScope = JSON.stringify([activeOwnerScopeKey(), config.id, getProviderRouteCredentialRevision(config.id)]);
     const guardedFetch: typeof fetch = (url, init) => {
       if (!isCurrent()) return Promise.reject(new Error('Model source context changed'));
       return outboundFetch(url, init);
     };
     if (config.auth?.method === 'oauth') {
-      const result = await fetchSavedOAuthProviderModels(buildUserProvider(config), agent, config.id, isCurrent, guardedFetch, runtime.headers, { requireComplete: true, sourceRecovery: true });
+      const result = await fetchSavedOAuthProviderModels(buildUserProvider(config), agent, config.id, isCurrent, guardedFetch, runtime.headers, { requireComplete: true, sourceRecovery: true, sourceRecoveryScope });
       return result.ok ? result.models ?? null : result.retryAt ? { retryAt: result.retryAt } : null;
     }
     const authMethod = config.auth?.method ?? 'apiKey';
@@ -672,7 +674,7 @@ const revalidateModelSources = createModelSourceRevalidator({
     if (authMethod === 'apiKey' && !apiKey && !Object.keys(runtime.headers ?? {}).length) return null;
     const result = await fetchProviderModels({
       agent, baseUrl: runtime.baseUrl, modelsUrl: runtime.modelsUrl, wireProtocol: runtime.wireProtocol,
-      authMethod, apiKey, headers: runtime.headers, redirect: 'error', allowEmpty: true, requireComplete: true, sourceRecovery: true,
+      authMethod, apiKey, headers: runtime.headers, redirect: 'error', allowEmpty: true, requireComplete: true, sourceRecovery: true, sourceRecoveryScope,
     }, guardedFetch);
     return result.ok ? result.models ?? null : result.retryAt ? { retryAt: result.retryAt } : null;
   },
@@ -691,7 +693,10 @@ async function recoverCustomProviderModelSources(
   // DB state through the usual catalog path and its existing change broadcast.
   await revalidateModelSources(configs, JSON.stringify([owner.dataOwnerId, owner.generation]), isCurrent,
     JSON.stringify([owner.mode, owner.dataOwnerId])).then(async changed => {
-    if (changed && isCurrent()) await refreshCustomProvidersIntoCatalog(isCurrent, { preserveOnFailure: true });
+    if (changed && isCurrent()) {
+      pendingSourceProjection = { owner: JSON.stringify([owner.mode, owner.dataOwnerId]) };
+      await refreshCustomProvidersIntoCatalog(isCurrent, { preserveOnFailure: true });
+    }
   }).catch(() => {
     log.warn('custom provider model source recovery failed');
   });
@@ -706,6 +711,11 @@ export async function refreshCustomProviderModelSources(): Promise<void> {
     const current = getActiveAppSession();
     return owner.mode === current.mode && owner.dataOwnerId === current.dataOwnerId && owner.generation === current.generation;
   };
+  if (pendingSourceProjection?.owner === JSON.stringify([owner.mode, owner.dataOwnerId])) {
+    await refreshCustomProvidersIntoCatalog(isCurrent, { preserveOnFailure: true });
+    return;
+  }
+  pendingSourceProjection = undefined;
   const configs = await listCustomProvidersWithSecureHeaders();
   if (isCurrent()) await recoverCustomProviderModelSources(configs, isCurrent);
 }
@@ -721,6 +731,10 @@ export async function refreshCustomProvidersIntoCatalog(
   const generation = ++customProviderCatalogRefreshGeneration;
   const owner = getActiveAppSession();
   const ownerScope = activeOwnerScopeKey();
+  const pendingProjection = pendingSourceProjection;
+  const projectionPublished = () => {
+    if (pendingSourceProjection === pendingProjection) pendingSourceProjection = undefined;
+  };
   const ownerIsCurrent = (): boolean => {
     const current = getActiveAppSession();
     // The readiness barrier can adopt same-owner work across a generation bump.
@@ -771,12 +785,14 @@ export async function refreshCustomProvidersIntoCatalog(
         return;
       }
       setCustomProviderConfigs(fresh, { skipUnchanged: true });
+      projectionPublished();
       void recoverCustomProviderModelSources(fresh, ownerIsCurrent);
       requestCodexApiModelProbe();
       log.info('custom providers merged into active catalog after cas miss', { count: fresh.length });
       return;
     }
     setCustomProviderConfigs(next, { skipUnchanged: true });
+    projectionPublished();
     void recoverCustomProviderModelSources(next, ownerIsCurrent);
     // Publish old routes first: imported accounts retain these IDs for history and revocation.
     const access = readModelDisableOverrides();

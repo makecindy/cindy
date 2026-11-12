@@ -52,6 +52,25 @@ it.each(['https://api.individual.githubcopilot.com.evil.test', 'https://custom.e
 });
 
 describe('import discovery limits', () => {
+  // #9882, unit: real fetch entry shares identical background requests across
+  // agents, but effective headers and ownership scopes still isolate credentials.
+  it.each(['same', 'headers', 'scope'] as const)('shares background discovery with %s context', async difference => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const fetcher = vi.fn(async () => { await gate; return fakeResponse(200, JSON.stringify({ data: ['one'] })); });
+    const request = spec({ wireProtocol: 'openai-chat', sourceRecovery: true, requireComplete: true, sourceRecoveryScope: 'owner:connection:1' });
+    const first = fetchProviderModels(request, fetcher);
+    const second = fetchProviderModels({ ...request, agent: 'pi',
+      ...(difference === 'headers' ? { apiKey: 'other-fake-key' } : {}),
+      ...(difference === 'scope' ? { sourceRecoveryScope: 'owner:connection:2' } : {}),
+    }, fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(difference === 'same' ? 1 : 2);
+    release();
+    expect((await Promise.all([first, second])).every(result => result.ok)).toBe(true);
+    await fetchProviderModels(request, fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(difference === 'same' ? 2 : 3);
+  });
+
   // #9882, unit: background discovery must not evict a pending Settings receipt
   // or authorize a Settings commit. 33 recoveries cross the existing receipt cap.
   it('keeps background freshness separate from Settings receipts', async () => {

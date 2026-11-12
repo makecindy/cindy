@@ -99,6 +99,8 @@ export interface ProviderModelsFetchSpec {
   requireComplete?: boolean;
   /** Main-only background recovery: freshness stamp without a Settings receipt. */
   sourceRecovery?: boolean;
+  /** Main-only owner/generation/provider/credential revision, for in-flight sharing. */
+  sourceRecoveryScope?: string;
 }
 
 /** 结构化结果（查询型返回：renderer 需要 code 渲染分类文案，不走 throwIpcError）。 */
@@ -124,7 +126,7 @@ export async function fetchSavedOAuthProviderModels(
   isCurrent: () => boolean,
   fetchImpl: typeof fetch = outboundFetch,
   headers?: Record<string, string>,
-  options: Pick<ProviderModelsFetchSpec, 'requireComplete' | 'sourceRecovery'> = {},
+  options: Pick<ProviderModelsFetchSpec, 'requireComplete' | 'sourceRecovery' | 'sourceRecoveryScope'> = {},
 ): Promise<ProviderModelsFetchResult> {
   const oauth = provider?.auth.oauth;
   const route = provider?.routing[agent];
@@ -308,13 +310,12 @@ async function readLimitedBody(res: Response, limit: number): Promise<string> {
 }
 
 /** 拉一次模型列表并分类结果。fetch 可注入（单测）。 */
+const sourceRecoveryReads = new Map<string, Promise<ProviderModelsFetchResult>>();
+
 export async function fetchProviderModels(
   spec: ProviderModelsFetchSpec,
   fetchImpl: typeof fetch = outboundFetch,
 ): Promise<ProviderModelsFetchResult> {
-  // Background provenance recovery requires bounded reads from its first byte,
-  // including OAuth callers. Keep ordinary manual discovery's existing policy.
-  const responseByteLimit = spec.responseByteLimit ?? (spec.requireComplete ? 8 * 1024 * 1024 : undefined);
   if (
     spec.authMethod === 'none' &&
     (!isLoopbackProviderUrl(spec.baseUrl) ||
@@ -332,6 +333,25 @@ export async function fetchProviderModels(
   } catch {
     return { ok: false, code: 'UNKNOWN', detail: INVALID_DISCOVERY_URL };
   }
+  if (!spec.sourceRecovery || !spec.sourceRecoveryScope) return fetchProviderModelsRequest(spec, fetchImpl, request);
+  // Only background results are agent-independent; Settings receipts never share.
+  // Hash the effective wire request, not runtime metadata, and retain it only in flight.
+  const signature = modelSourceRequestSignature(JSON.stringify([spec.sourceRecoveryScope, request.url,
+    request.init.method, request.init.redirect, spec.allowEmpty, spec.requireComplete, spec.responseByteLimit]), request.init);
+  let pending = sourceRecoveryReads.get(signature);
+  if (!pending) {
+    pending = fetchProviderModelsRequest(spec, fetchImpl, request);
+    sourceRecoveryReads.set(signature, pending);
+  }
+  try { return await pending; } finally {
+    if (sourceRecoveryReads.get(signature) === pending) sourceRecoveryReads.delete(signature);
+  }
+}
+
+async function fetchProviderModelsRequest(
+  spec: ProviderModelsFetchSpec, fetchImpl: typeof fetch, request: ReturnType<typeof buildModelsFetchRequest>,
+): Promise<ProviderModelsFetchResult> {
+  const responseByteLimit = spec.responseByteLimit ?? (spec.requireComplete ? 8 * 1024 * 1024 : undefined);
   const { url, init } = request;
   let retryAt: number | undefined;
   const captureRetryAfter = (response: Response) => {

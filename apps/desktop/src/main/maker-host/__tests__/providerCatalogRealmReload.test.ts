@@ -387,8 +387,10 @@ describe('provider catalog realm reload', () => {
   // suppression/manual recovery. One old-epoch route per engine is sufficient;
   // use the real HTTP parser and catalog projection, with in-memory persistence.
   // Standalone file: 7.49s on 2026-11-10 (1.57s tests; existing service imports dominate).
-  it('automatically restores saved Magpie sources after restart without changing model settings', async () => {
-    let saved: CustomProviderConfig = { id: 'magpie-restart', name: 'Magpie', auth: { method: 'none' }, runtimes: {} };
+  // #9882: extend the real three-engine restart path to a failed post-CAS read;
+  // the next hint must publish current persisted sources without rediscovery.
+  it.each([false, true])('restores saved Magpie sources with transient reload failure %s', async failReload => {
+    let saved: CustomProviderConfig = { id: `magpie-restart-${failReload}`, name: 'Magpie', auth: { method: 'none' }, runtimes: {} };
     for (const agent of ['claude-code', 'codex', 'pi'] as const) {
       saved.runtimes[agent] = { baseUrl: 'http://127.0.0.1:3425/v1', modelsUrl: 'http://127.0.0.1:3425/v1/models', wireProtocol: 'openai-chat', models: [
         { id: 'deepseek/deepseek-v4-flash', name: 'My model', nameExplicit: true, contextWindow: 123456, defaultEnabled: false, opaqueModelId: true,
@@ -396,10 +398,13 @@ describe('provider catalog realm reload', () => {
       ] };
     }
     const before = structuredClone(saved);
+    h.warn.mockClear();
+    h.outboundFetch.mockClear();
     h.customProviderRead.mockImplementation(async () => [saved]);
     h.casUpdate.mockImplementation(async (_id, expected, next) => {
       if (JSON.stringify(expected) !== JSON.stringify(saved)) return false;
       saved = next as CustomProviderConfig;
+      if (failReload) h.customProviderRead.mockRejectedValueOnce(new Error('transient reload read'));
       return true;
     });
     h.outboundFetch.mockImplementation(async () => new Response(JSON.stringify({ data: [
@@ -408,6 +413,12 @@ describe('provider catalog realm reload', () => {
     ] }), { status: 200 }));
     try {
       await refreshCustomProvidersIntoCatalog();
+      if (failReload) {
+        await vi.waitFor(() => expect(h.warn).toHaveBeenCalledWith('failed to reload recovered sources; retained current owner catalog snapshot'));
+        expect(getActiveCatalog().providers.some(provider => provider.id === saved.id)).toBe(true);
+        h.generation++; // Same-owner repair must not lose the pending projection.
+        await refreshCustomProviderModelSources();
+      }
       await vi.waitFor(() => {
         const provider = getActiveCatalog().providers.find(p => p.id === saved.id)!;
         for (const agent of ['claude-code', 'codex', 'pi'] as const) {
@@ -421,6 +432,7 @@ describe('provider catalog realm reload', () => {
         expect(saved.runtimes[agent]!.models).toHaveLength(1);
       }
       const reads = h.outboundFetch.mock.calls.length;
+      expect(reads).toBe(1);
       await refreshCustomProvidersIntoCatalog();
       expect(h.outboundFetch).toHaveBeenCalledTimes(reads);
     } finally {
