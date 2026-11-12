@@ -3552,12 +3552,21 @@ function broadcastToRenderers(channel: string, payload: unknown): void {
   const ownerStamp = getActiveDataOwnerPushStamp();
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
-    try {
-      if (ownerStamp === undefined) win.webContents.send(channel, payload);
-      else win.webContents.send(channel, payload, ownerStamp);
-    } catch (err) {
-      log.warn(`broadcast '${channel}' to window failed (non-fatal)`, err);
-    }
+    sendToRenderer(win.webContents, channel, payload, ownerStamp);
+  }
+}
+
+function sendToRenderer(
+  webContents: Electron.WebContents,
+  channel: string,
+  payload: unknown,
+  ownerStamp: ReturnType<typeof getActiveDataOwnerPushStamp>,
+): void {
+  try {
+    if (ownerStamp === undefined) webContents.send(channel, payload);
+    else webContents.send(channel, payload, ownerStamp);
+  } catch (err) {
+    log.warn(`broadcast '${channel}' to window failed (non-fatal)`, err);
   }
 }
 
@@ -3632,6 +3641,15 @@ function snapshotLoggedOutAuthState(ownerBoundaryPending = false): AuthState {
 
 function notifyRenderer(): void {
   broadcastToRenderers('auth:state-change', snapshotAuthState());
+}
+
+/**
+ * 把当前登录态单独补发给一个窗口,格式与广播相同(含数据归属戳)。用于主进程提前
+ * 完成冷启动鉴权、广播早于窗口订阅的情况(见 bootstrap 的 auth:initialize)。
+ */
+export function replayAuthStateTo(webContents: Electron.WebContents): void {
+  if (webContents.isDestroyed()) return;
+  sendToRenderer(webContents, 'auth:state-change', snapshotAuthState(), getActiveDataOwnerPushStamp());
 }
 
 function notifyRendererAuthBoundaryPending(): void {

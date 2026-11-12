@@ -481,6 +481,12 @@ export interface InboundDispatchPorts {
   projectInteractionDismissedForRemote: typeof projectInteractionDismissedForRemote;
   projectInteractionRequestForRemote: typeof projectInteractionRequestForRemote;
   remoteWorkingDirRejectionToIpcError: typeof remoteWorkingDirRejectionToIpcError;
+  /**
+   * owner 数据库是否已打开、以及有界等待它打开。不提供的 Host 不做启动期等待
+   * (见 STARTUP_DB_WAIT_CHANNELS)。
+   */
+  isOwnerDatabaseReady?: () => boolean;
+  waitForOwnerDatabase?: (timeoutMs: number) => Promise<boolean>;
 }
 
 export function createInboundDispatch(ports: InboundDispatchPorts) {
@@ -539,6 +545,8 @@ export function createInboundDispatch(ports: InboundDispatchPorts) {
     projectInteractionDismissedForRemote,
     projectInteractionRequestForRemote,
     remoteWorkingDirRejectionToIpcError,
+    isOwnerDatabaseReady,
+    waitForOwnerDatabase,
   } = ports;
 
 
@@ -1271,6 +1279,15 @@ const BACKGROUND_REMOTE_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
   // 用量历史跨设备合并:其它电脑周期性增量拉取本机全量用量行,属后台同步。
   'maker:usage:device-rows',
 ]);
+/**
+ * 冷启动时主进程先完成鉴权、device-link 先上线,owner 数据库要等 renderer 挂载后才打开。
+ * 这段空档里控制端随上线发来的任务列表首拉会立刻得到 DbClient not ready;控制端重试
+ * 只覆盖几秒,界面慢时会放弃首拉,要等周期对账才补上。这里在回复前有界地等数据库就绪。
+ * 上限低于 Desktop / Mobile 控制端对该通道 12s 的超时,超时会被熔断计为对端无响应。
+ * 等不到就照常走未就绪错误,由控制端原有的重试接着等。
+ */
+const STARTUP_DB_WAIT_CHANNELS: ReadonlySet<string> = new Set(['local-db:sessions:list']);
+const STARTUP_DB_WAIT_MS = 8_000;
 /** Include pre/post authorization and cached delivery, not only the IPC handler. */
 function withRemoteDbAdmission<T>(channel: string | undefined, fn: () => T): T {
   return channel && BACKGROUND_REMOTE_INVOKE_CHANNELS.has(channel) ? runAsBackgroundDbRpc(fn) : fn();
@@ -5193,6 +5210,16 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
   let handlerCompleted = false;
   try {
     let args = payload.args ?? [];
+    if (STARTUP_DB_WAIT_CHANNELS.has(payload.channel) && waitForOwnerDatabase && isOwnerDatabaseReady?.() === false) {
+      await waitForOwnerDatabase(STARTUP_DB_WAIT_MS);
+      // 等待期间可能关了远控或撤销了这台控制端:与入口同一组判据复验。
+      if (!readDeviceLinkSettings().remoteControlEnabled) {
+        return { ok: false, error: { code: 'REMOTE_DISABLED', message: 'remote control disabled' } };
+      }
+      if (isControllerRevoked(src)) {
+        return { ok: false, error: { code: 'ACCESS_REVOKED', message: 'access revoked by target device' } };
+      }
+    }
     const invocationOwner = broadcastTap.captureDataOwnerBroadcastScope();
     // 参数级收敛:新建任务按实际执行端探测目录;worktree 等其它入口仍只接受本地目录。
     // SSH 历史记录只能解析端点,不能替代实时探测;解析结果必须传入真正的创建 handler。

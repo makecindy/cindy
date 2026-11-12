@@ -4,6 +4,7 @@ import { configureStandbyGuestCleanup } from './providerShareAvailabilityGuests.
 import { prepareShareAvailability } from './providerShareAvailability.js';
 import { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage } from '../maker-host/provider-account-usage.js';
 import { executeTaskTags, TASK_TAG_CHANNEL } from '../localDb/ipc/taskTags.js';
+import { tryGetDbClient, waitForDbClient } from '../localDb/client/current.js';
 import { requestFilePeer, stopFilePeers } from './filePeer';
 import { requestTaskMigration } from '../task-migration/service';
 import { delegatedProviderShareGuestAccess, delegatedProviderShareLeases, invalidateProviderShareDelegation } from './providerShareDelegatedAccess.js';
@@ -163,5 +164,8 @@ export const {
   sanitizeBotAuthorizationMetaForRemote: (...args) => sanitizeBotAuthorizationMetaForRemote(...args),
   projectInteractionDismissedForRemote: (...args) => projectInteractionDismissedForRemote(...args),
   projectInteractionRequestForRemote: (...args) => projectInteractionRequestForRemote(...args),
-  remoteWorkingDirRejectionToIpcError: (...args) => remoteWorkingDirRejectionToIpcError(...args)
+  remoteWorkingDirRejectionToIpcError: (...args) => remoteWorkingDirRejectionToIpcError(...args),
+  // owner 数据库由 renderer 挂载后打开;冷启动时远端首拉可能早于它(见 STARTUP_DB_WAIT_CHANNELS)。
+  isOwnerDatabaseReady: () => tryGetDbClient() !== null,
+  waitForOwnerDatabase: (timeoutMs) => waitForDbClient(timeoutMs),
 });

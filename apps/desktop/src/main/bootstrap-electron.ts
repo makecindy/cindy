@@ -652,6 +652,7 @@ import {
 } from './remote-desktop/linuxClipboardNative';
 import { initHeartbeatService } from './heartbeatService';
 import { markStartupMilestone } from './startupTimeline';
+import { createStartupInFlightCall } from './startupInFlightCall';
 import { registerRemoteDesktopIpc } from './remote-desktop';
 import { isAwayCoverUp, registerAwayGuardIpc, startAwayGuard } from './remote-desktop/awayGuardService';
 import {
@@ -3706,6 +3707,15 @@ const authCredentialRecovery = createAuthCredentialRecovery({
   onEvent: (event) => authCredentialRecoveryLog.info(event),
 });
 
+// app ready 末尾由主进程提前发起冷启动鉴权,renderer 的首个 auth:initialize 接上在途的
+// 那次,鉴权不再等窗口和渲染进程启动(见 startupInFlightCall.ts)。
+const startupAuthInitialize = createStartupInFlightCall<
+  authManager.AuthState,
+  Electron.IpcMainInvokeEvent
+>();
+// 主窗口是否已补发过提前鉴权错过的登录广播(只补一次,见 auth:initialize)。
+let startupAuthStateReplayed = false;
+
 let windowsTray: Tray | null = null;
 // 当前的托盘菜单。语言切换时置 null,下一次右键按新语言重建。
 let windowsTrayMenu: Menu | null = null;
@@ -6649,7 +6659,9 @@ const registerIpcHandlers = () => {
 
   // ── Auth IPC handlers (delegated to authManager) ──
 
-  ipcMain.handle('auth:initialize', async () => {
+  // 首个调用可能是 app ready 末尾的主进程提前发起(startupAuthInitialize.start()),
+  // renderer 随后接上那次在途的结果;以下执行体对两种来源完全相同。
+  ipcMain.handle('auth:initialize', startupAuthInitialize.handle(async (event) => {
     try {
       let pendingCompletion: Promise<authManager.AuthState> | null = null;
       const state = await authManager
@@ -6684,6 +6696,20 @@ const registerIpcHandlers = () => {
       } catch (analyticsErr) {
         console.warn('[analytics] cold-start consent migration failed', analyticsErr);
       }
+      // 提前那次在任何窗口订阅之前就落定时,它的登录广播没人收到;TapDB 的首次账号
+      // 绑定只认这条广播(身份补种刻意不上报),会漏计这次启动的账号活跃。主窗口首次
+      // 调用时在回复之前单独补发一次,恢复「冷启动广播晚于主窗口订阅」的原时序。
+      // 只补已登录态:超时待定的未登录投影若先于回复推过去,会盖掉 splash 的 pending。
+      if (
+        event &&
+        state.isAuthenticated &&
+        !startupAuthStateReplayed &&
+        startupAuthInitialize.settledUnobserved() &&
+        event.sender === mainWindowRef?.webContents
+      ) {
+        startupAuthStateReplayed = true;
+        authManager.replayAuthStateTo(event.sender);
+      }
       return state;
     } catch (err) {
       if (!app.isPackaged) {
@@ -6697,7 +6723,7 @@ const registerIpcHandlers = () => {
       }
       throw err;
     }
-  });
+  }));
 
   ipcMain.handle('auth:get-login-state', async () => authManager.getLoginState());
 
@@ -10645,6 +10671,12 @@ app.on('ready', async () => {
     });
     onQuit('main-heap-sampling', stopHeapSampling, 'sync');
   }
+
+  // 冷启动鉴权不等 renderer:窗口刚建好、渲染进程还在加载,这里就开始跑 auth:initialize
+  // 的同一个执行体,renderer 挂载后接上在途结果。必须放在 ready 处理的最后、所有
+  // onAuthStateChange 订阅方(device-link 等)登记之后:createWindow 到这里没有 await,
+  // renderer 的 IPC 只能在此之后被处理,所以不会比原来更早触达任何订阅方。
+  if (startupAuthInitialize.start()) markStartupMilestone('auth-initialize-started');
 });
 
 // ---------------------------------------------------------------------------
