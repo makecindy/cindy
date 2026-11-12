@@ -146,20 +146,54 @@ it('keeps a programmatic reveal unexpanded across a route gap', async () => {
 });
 
 // Bug: 就绪空档里换了任务（例如在设置页从系统岛跳到另一个任务），落到的那个任务的
-// 记忆状态不是用户这次要开栏，不能拉宽窗口；回到同一任务仍要重新展开。
-it('keeps the standalone width when a readiness gap lands on another task', async () => {
+// 记忆状态不是用户这次要开栏，不能拉宽窗口；用户直接点名展开的落回仍要展开。
+it('keeps the standalone width when a readiness gap lands on another task passively', async () => {
   const resize = vi.fn(async (requested: number) => (requested > 0 ? 401 : 0));
   window.electronAPI = { windowSidebarExpansion: resize } as never;
   const { result, rerender } = renderHook(
-    ({ ready, session }) => useSidebarPresentation(root, false, ready, () => 400, true, session),
+    ({ ready, session, userToggle }) => useSidebarPresentation(root, false, ready, () => 400, userToggle, session),
+    { initialProps: { ready: true, session: 'task-a', userToggle: true } },
+  );
+  await act(async () => undefined);
+  expect(resize).toHaveBeenCalledExactlyOnceWith(400);
+  // 设置页接管：收回窗口，sessionKey 在这期间会被清空。
+  await act(async () => { rerender({ ready: false, session: '', userToggle: true }); });
+  expect(resize).toHaveBeenLastCalledWith(0);
+  resize.mockClear();
+  // 空档里由系统岛跳到任务 B：被动落回，窗口保持独立宽度。
+  await act(async () => { rerender({ ready: true, session: 'task-b', userToggle: false }); });
+  expect(resize).not.toHaveBeenCalled();
+  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 800 });
+});
+
+// Bug: 空档里被清空的 sessionKey 不能顶替原任务；同一任务从设置页回来仍要重新展开。
+it('keeps the pre-gap task when the readiness gap clears the session key', async () => {
+  const resize = vi.fn(async (requested: number) => (requested > 0 ? 401 : 0));
+  window.electronAPI = { windowSidebarExpansion: resize } as never;
+  const { rerender } = renderHook(
+    ({ ready, session }) => useSidebarPresentation(root, false, ready, () => 400, false, session),
     { initialProps: { ready: true, session: 'task-a' } },
   );
   await act(async () => undefined);
   expect(resize).toHaveBeenCalledExactlyOnceWith(400);
-  await act(async () => { rerender({ ready: false, session: 'task-a' }); });
+  await act(async () => { rerender({ ready: false, session: '' }); });
   expect(resize).toHaveBeenLastCalledWith(0);
   resize.mockClear();
-  await act(async () => { rerender({ ready: true, session: 'task-b' }); });
-  expect(resize).not.toHaveBeenCalled();
-  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 800 });
+  await act(async () => { rerender({ ready: true, session: 'task-a' }); });
+  expect(resize).toHaveBeenLastCalledWith(400);
+});
+
+// Bug: 空档期间用户直接点名展开（userToggle=true）时，落回哪台任务都要展开。
+it('expands when a readiness gap ends in a direct reveal', async () => {
+  const resize = vi.fn(async (requested: number) => (requested > 0 ? 401 : 0));
+  window.electronAPI = { windowSidebarExpansion: resize } as never;
+  const { rerender } = renderHook(
+    ({ ready, session, userToggle }) => useSidebarPresentation(root, false, ready, () => 400, userToggle, session),
+    { initialProps: { ready: true, session: 'task-a', userToggle: true } },
+  );
+  await act(async () => undefined);
+  await act(async () => { rerender({ ready: false, session: '', userToggle: true }); });
+  resize.mockClear();
+  await act(async () => { rerender({ ready: true, session: 'task-b', userToggle: true }); });
+  expect(resize).toHaveBeenLastCalledWith(400);
 });
