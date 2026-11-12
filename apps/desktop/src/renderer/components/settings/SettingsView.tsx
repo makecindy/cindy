@@ -76,6 +76,7 @@ const SubagentModelSection = lazy(() => import('./SubagentModelSection').then(mo
 const AuxiliaryModelSection = lazy(() => import('./AuxiliaryModelSection').then(module => ({ default: module.AuxiliaryModelSection })));
 const VisionBridgeSection = lazy(() => import('./VisionBridgeSection').then(module => ({ default: module.VisionBridgeSection })));
 const ProvidersSection = lazy(() => import('./ProvidersSection').then(module => ({ default: module.ProvidersSection })));
+const ModelGroupsSection = lazy(() => import('./ModelGroupsSection').then(module => ({ default: module.ModelGroupsSection })));
 const McpServersSection = lazy(() => import('./McpServersSection').then(module => ({ default: module.McpServersSection })));
 const RemoteControlSection = lazy(() => import('./RemoteControlSection').then(module => ({ default: module.RemoteControlSection })));
 const LocalAgentSection = lazy(() => import('./LocalAgentSection').then(module => ({ default: module.LocalAgentSection })));
@@ -675,6 +676,12 @@ function SettingsViewContent() {
                 <section aria-label={t(keyboardShortcutsSettings.shortcuts.sectionKey)}>
                   <KeyboardShortcutsSection />
                 </section>
+              </div>
+            )}
+
+            {activeTab === 'model-groups' && (
+              <div role="tabpanel" id="settings-panel-model-groups" aria-labelledby="settings-tab-model-groups">
+                <ModelGroupsSection />
               </div>
             )}
 

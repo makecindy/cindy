@@ -961,7 +961,9 @@ describe('PI native subscription forwarding', () => {
     },
   );
 
-  it('sanitizes native xAI Responses input before forwarding', async () => {
+  // #9469: capture bytes at the native forwarding fetch boundary. Previous
+  // ModelInput fixtures exercised only text/reasoning, missing image-only results.
+  it('sanitizes native xAI Responses input and forwards Pi tool images', async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response('event: done\n\n', {
       status: 200,
       headers: { 'content-type': 'text/event-stream' },
@@ -975,6 +977,10 @@ describe('PI native subscription forwarding', () => {
         { type: 'message', role: 'user', content: 'go' },
         { type: 'agent_message', author: '/root', content: 'done' },
         { type: 'reasoning', id: 'rs_1', content: null, encrypted_content: 'BLOB' },
+        { type: 'function_call', name: 'read', arguments: '{"path":"/fixture.png"}', call_id: 'read_image' },
+        { type: 'function_call_output', call_id: 'read_image', output: [
+          { type: 'input_image', image_url: 'data:image/png;base64,AA==' },
+        ] },
       ],
     };
 
@@ -999,6 +1005,10 @@ describe('PI native subscription forwarding', () => {
         content: [{ type: 'output_text', text: '[collab /root]\ndone' }],
       },
       { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'BLOB' },
+      { type: 'function_call', name: 'read', arguments: '{"path":"/fixture.png"}', call_id: 'read_image' },
+      { type: 'function_call_output', call_id: 'read_image', output: [
+        { type: 'input_image', image_url: 'data:image/png;base64,AA==' },
+      ] },
     ]);
     expect(request.tools).toEqual([{ type: 'x_search' }]);
   });

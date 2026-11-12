@@ -19,6 +19,7 @@ import {
 } from '../../shared/subscriptionAccounts.js';
 import {
   acquireSubscriptionAccount,
+  codexSubscriptionAccountForHistoryHome,
   observeSubscriptionAccountUsage,
   type SubscriptionAccountLease,
 } from './runtime.js';
@@ -32,6 +33,8 @@ interface SubscriptionRouteOptions {
   model?: string;
 }
 interface SubscriptionAccountRouting extends Pick<AuthAdapter, 'getState'> {
+  /** Host-owned thread history lookup; no credential reads or history relocation. */
+  resolveCodexHistoryHome?(threadId: string): Promise<string | undefined>;
   /** Codex can use an OAuth host while routing an implicit model elsewhere. */
   resolveDefaultProvider?(model?: string): string | null | Promise<string | null>;
 }
@@ -81,6 +84,32 @@ export async function resolveSubscriptionPoolProvider(
   const provider = await providerFor(agent, options, auth);
   assertOwnerCurrent(owner);
   return provider && readPool(provider) ? provider : null;
+}
+/** Existing native history proves its login independently of the old default auth.
+ * Share this gate between resume and fork so implicit routes keep the same boundaries.
+ */
+async function historicalCodexAccount(
+  agent: Pick<BaseAgent, 'kind'>,
+  options: SubscriptionRouteOptions,
+  threadId: string | undefined,
+  keys: string[],
+  auth?: SubscriptionAccountRouting,
+): Promise<string | undefined> {
+  const requested = options.providerId?.trim() || null;
+  if (agent.kind !== 'codex' || options.remoteHostId || !threadId || !readPool('openai') ||
+      (requested && requested !== 'openai')) return;
+  const owner = activeOwnerScopeKey();
+  if (!requested) {
+    if (resolveAgentCredentialMode({ agentKind: 'codex', model: options.model })) return;
+    const source = await auth?.resolveDefaultProvider?.(options.model);
+    assertOwnerCurrent(owner);
+    if (source && source !== 'openai') return;
+  }
+  const binding = keys.map(key => readAccountBinding(key, 'openai')).find(Boolean);
+  if (binding) return binding.accountId;
+  const home = await auth?.resolveCodexHistoryHome?.(threadId);
+  assertOwnerCurrent(owner);
+  return home ? codexSubscriptionAccountForHistoryHome(home) : undefined;
 }
 function legacyConnectionAccount(providerId: string | null | undefined, keys: string[], agentKind: string): string | undefined {
   const account = providerId ? readLegacyCodexAccountId(providerId) : undefined;
@@ -252,14 +281,16 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
           let provider: SubscriptionProvider | null = null;
           let imported: string | undefined;
           try {
-            provider = await resolveSubscriptionPoolProvider(target, options, auth);
+            imported = await historicalCodexAccount(target, options, options.resumeSessionId, keys, auth);
+            provider = imported ? 'openai' : await resolveSubscriptionPoolProvider(target, options, auth);
             if (!provider) return startLegacy();
             const resolved = provider;
-            imported = legacyConnectionAccount(options.providerId?.trim(), keys, target.kind);
+            imported ??= legacyConnectionAccount(options.providerId?.trim(), keys, target.kind);
             if (!imported && options.resumeSessionId && !keys.some((key) => readAccountBinding(key, resolved))) {
-              // Legacy Codex may use Cindy's private home, not ~/.codex. Keep that route.
-              if (provider === 'openai') return startLegacy();
-              await writeAccountBindings(keys, provider, 'default');
+              if (provider === 'openai') {
+                // Unknown private homes retain their legacy route; never pick another account.
+                return startLegacy();
+              } else await writeAccountBindings(keys, provider, 'default');
             }
           } catch (error) {
             // No underlying runtime has been started; Maker may release its worktree lease.
@@ -338,13 +369,15 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
         };
       if (property === 'forkSdkSession')
         return async (options: ForkSdkSessionOptions) => {
-          const provider = await resolveSubscriptionPoolProvider(target, options, auth);
-          if (!provider) return target.forkSdkSession(options);
           const key = `native:${options.sourceSdkSessionId}`;
-          const imported = legacyConnectionAccount(options.providerId?.trim(), [key], target.kind);
+          let imported = await historicalCodexAccount(target, options, options.sourceSdkSessionId, [key], auth);
+          const provider = imported ? 'openai' : await resolveSubscriptionPoolProvider(target, options, auth);
+          if (!provider) return target.forkSdkSession(options);
+          imported ??= legacyConnectionAccount(options.providerId?.trim(), [key], target.kind);
           if (!imported && !readAccountBinding(key, provider)) {
-            if (provider === 'openai') return target.forkSdkSession(options);
-            await writeAccountBindings([key], provider, 'default');
+            if (provider === 'openai') {
+              return target.forkSdkSession(options);
+            } else await writeAccountBindings([key], provider, 'default');
           }
           const lease = await acquireSubscriptionAccount(provider, options.model, [key], true, { accountId: imported, resuming: true });
           if (!lease) return target.forkSdkSession(options);
