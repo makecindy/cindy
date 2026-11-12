@@ -24,6 +24,7 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  CINDY_BG_CMD_HINT,
   CINDY_BRIDGE_EXTENSION_SOURCE,
   CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS,
   CINDY_PI_BASH_MAX_TIMEOUT_SECONDS,
@@ -2997,4 +2998,68 @@ it('leaves a direct tool alone when its required name is not the Cindy envelope'
     .rejects.toThrow(/write_file failed/);
   expect(requests).toHaveLength(1);
   expect(requests[0].params).toEqual({ name: 'write_file', arguments: { content: 'text' } });
+});
+
+describe('background command discovery', () => {
+  it('appends the run_command_background hint to both bash and powershell descriptions, and keeps the module-level hint in sync with the bridge source', () => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    // 模板内 const 定义 + bash 拼接 + powershell 拼接:三处引用缺一即失效。
+    const occurrences = source.match(/CINDY_BG_CMD_HINT/g) ?? [];
+    expect(occurrences.length).toBeGreaterThanOrEqual(3);
+    // 模块级 hint 与模板内 hint 逐字一致(bridge 运行时副本手工维护,契约测试防漂移)。
+    expect(source.includes(CINDY_BG_CMD_HINT)).toBe(true);
+    // 文案要点:pi 侧模型可见的 MCP 入口是 cindy_mcp_call_tool,调用形态必须是完整三层信封;
+    // 并点名 sleep / gh run view 轮询。
+    expect(CINDY_BG_CMD_HINT).toContain(
+      'cindy_mcp_call_tool({server:"cindy_helper", tool:"call_tool", args:{name:"run_command_background", args:{command:"..."}}})',
+    );
+    expect(CINDY_BG_CMD_HINT).toContain('gh run view');
+  });
+
+  it('blocks the third same-turn gh run view of one run id via the registered handler, resets per turn, and ignores non-polling shapes', () => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    const start = source.indexOf('const ghRunViewRepeatCounts');
+    const end = source.indexOf("pi.on('tool_call', async", start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const compiled = ts.transpileModule(source.slice(start, end), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    const sandbox: any = { result: undefined as any, callbacks: [] as Array<[string, (event?: any) => any]> };
+    sandbox.pi = { on: (name: string, fn: (event?: any) => any) => sandbox.callbacks.push([name, fn]) };
+    runInNewContext(compiled + '\nresult = { onToolCall: callbacks[1][1], bumpTurn: callbacks[0][1] };', sandbox);
+    expect(sandbox.callbacks.map(([name]: string) => name)).toEqual(['before_agent_start', 'tool_call']);
+    // 走注册链路:handler 自己读闭包里的回合号,这里不手工传参,防止接线回归假绿。
+    const onToolCall = sandbox.result.onToolCall as (event: any) => any;
+    const bumpTurn = sandbox.result.bumpTurn as () => void;
+    const view = (id: string) => `gh run view ${id}`;
+    const run = (cmd: string) => onToolCall({ toolName: 'bash', input: { command: cmd } });
+    // 同回合:第 1、2 次放行(状态、日志两步是合理的),第 3 次起拦截。
+    expect(run(view('12345678'))).toBeUndefined();
+    expect(run(view('12345678'))).toBeUndefined();
+    const third = run(view('12345678'));
+    expect(third && third.block).toBe(true);
+    expect(third.reason).toContain('run_command_background');
+    expect(third.reason).toContain('cindy_mcp_call_tool');
+    // 第 4 次仍拦(回合内持续),换 run id 不受影响。
+    expect(run(view('12345678'))?.block).toBe(true);
+    expect(run(view('99999999'))).toBeUndefined();
+    // 回合切换:同一 run id 重新从第 1 次放行计数(bumpTurn 真实生效才可能放行)。
+    bumpTurn();
+    expect(run(view('12345678'))).toBeUndefined();
+    // powershell 同样覆盖;其它命令与非 shell 工具不过闸。
+    const runPs = (cmd: string) => onToolCall({ toolName: 'powershell', input: { command: cmd } });
+    expect(runPs(view('55555555'))).toBeUndefined();
+    expect(onToolCall({ toolName: 'bash', input: { command: 'gh pr view 7846' } })).toBeUndefined();
+    expect(onToolCall({ toolName: 'read', input: { command: view('55555555') } })).toBeUndefined();
+    expect(onToolCall({ toolName: 'bash', input: {} })).toBeUndefined();
+    // 宁漏不误拦:日志排障、引文里的字样、flag 形态、URL 形态都不计数。
+    expect(run('gh run view 12345678 --log')).toBeUndefined();
+    expect(run('gh run view 12345678 --log-failed')).toBeUndefined();
+    expect(run('git commit -m "see gh run view 12345678"')).toBeUndefined();
+    expect(run("grep 'gh run view 12345678' notes.md")).toBeUndefined();
+    expect(run('gh run view --log')).toBeUndefined();
+    expect(run('gh run view --repo o/r 12345678')).toBeUndefined();
+    expect(run('gh run view https://github.com/o/r/actions/runs/12345678')).toBeUndefined();
+  });
 });
