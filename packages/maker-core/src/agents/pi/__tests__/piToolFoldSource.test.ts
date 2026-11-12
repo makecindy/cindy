@@ -154,6 +154,49 @@ describe('cindy-tool-fold extension source', () => {
     expect(String(recovered.content![0].text)).toContain('docs mention');
   });
 
+  it('recovers a folded result whose tail merely looks like a not-retained marker', async () => {
+    const { context, tool } = loadExtension();
+    const messages = pairs(40);
+    // The old guard accepted any trailing "full text not retained" wording; this text is a
+    // literal quote, not a marker this extension wrote.
+    messages[11] = {
+      role: 'toolResult',
+      toolCallId: 'call-5',
+      toolName: 'read',
+      content: [{ type: 'text', text: 'body ok [truncated 5 of 9 chars; full text not retained]' }],
+    };
+    projection(context, messages);
+    const recovered = await tool.execute('t1', { call_id: 'call-5' });
+    expect(recovered.isError).toBeUndefined();
+    expect(String(recovered.content![0].text)).toContain('body ok');
+  });
+
+  it('keeps a pinned call verbatim while its parallel siblings stay folded', async () => {
+    const { context, tool } = loadExtension();
+    const trip: Message = {
+      role: 'assistant',
+      content: [
+        { type: 'toolCall', id: 'par-a', name: 'bash', arguments: { command: 'run a' } },
+        { type: 'toolCall', id: 'par-b', name: 'bash', arguments: { command: 'run b' } },
+      ],
+    };
+    const messages: Message[] = [
+      trip,
+      result('par-a', 'bash', `a ${'x'.repeat(2000)}`),
+      result('par-b', 'bash', `b ${'y'.repeat(2000)}`),
+      ...pairs(40),
+    ];
+    projection(context, messages);
+    await tool.execute('t1', { call_id: 'par-a' });
+    const pinned = projection(context, messages);
+    const foldedIdsIn = (message: Message) => (message.content ?? [])
+      .filter((block) => (block.arguments as Record<string, unknown> | undefined)?.__folded === true)
+      .map((block) => String(block.id));
+    expect(foldedIdsIn(pinned[0])).toEqual(['par-b']);
+    expect(pinned[1]).toBe(messages[1]);
+    expect(String(pinned[2].content![0].text)).toContain('[folded]');
+  });
+
   it('rejects recovery when only the truncated preview of this id remains', async () => {
     const { context, toolResult, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_GIANTS: '8' });
     // 9 giants: giant-0 gets evicted from the registry by FIFO rotation.

@@ -251,9 +251,13 @@ export default function (pi) {
     return { role: 'toolResult', toolCallId: result.toolCallId, toolName: result.toolName, isError: result.isError, content: [{ type: 'text', text: summary }] };
   }
 
-  function allFolded(trip) {
-    for (var i = 0; i < trip.calls.length; i++) if (foldedIds[String(trip.calls[i].id)] === undefined) return false;
+  function allFolded(unit) {
+    for (var i = 0; i < unit.calls.length; i++) if (!isFoldedCall(unit.calls[i])) return false;
     return true;
+  }
+
+  function foldable(id) {
+    return foldedIds[id] !== undefined && !pinned.has(id);
   }
 
   /** Admit a giant payload; evict oldest entries until the aggregate bound holds. */
@@ -273,11 +277,6 @@ export default function (pi) {
     return giants.get(id) === text;
   }
 
-  function tripPinned(trip) {
-    for (var i = 0; i < trip.calls.length; i++) if (pinned.has(String(trip.calls[i].id))) return true;
-    return false;
-  }
-
   // -----------------------------------------------------------------------
   // Ingestion truncation: a giant result never enters the transcript in full, so it
   // is never cached and never folded — truncating before the first send is free.
@@ -294,7 +293,7 @@ export default function (pi) {
         + '\n[truncated ' + (content.length - INGEST_KEEP) + ' of ' + content.length
         + ' chars; ' + (sidRetained
           ? 'toolfold_read("' + sid + '") returns the full text]'
-          : 'full text not retained; re-run if needed]') }] };
+          : 'full text not retained (call "' + sid + '"); re-run if needed]') }] };
     }
     if (!Array.isArray(content)) return undefined;
     var hasImage = false;
@@ -325,7 +324,7 @@ export default function (pi) {
     parts.push({ type: 'text', text: '[truncated ' + truncated + ' of ' + total
       + ' chars; ' + (retained
         ? 'toolfold_read("' + id + '") returns the full text]'
-        : 'full text not retained; re-run if needed]') });
+        : 'full text not retained (call "' + id + '"); re-run if needed]') });
     var out = { content: parts };
     if (Object.prototype.hasOwnProperty.call(event, 'structuredContent')) out.structuredContent = event.structuredContent;
     return out;
@@ -354,21 +353,23 @@ export default function (pi) {
           resultMsg = message;
           var resultText = textOf(message.content);
           // Ingestion truncation appends exactly one marker and it is the last thing in
-          // the result. Matching the id inside a marker that ENDS the text keeps ordinary
-          // results that merely quote the marker text recoverable — the preview is only
-          // ambiguous when the whole result is just the preview. Two marker shapes exist:
-          // "toolfold_read(...) returns the full text" (payload may still be retained) and
-          // "full text not retained" (payload was never admitted to the registry).
+          // the result. Only that full shape for this call id counts as a preview (plus the
+          // pre-id legacy shape from earlier experimental builds): a result that merely
+          // quotes the wording stays recoverable.
           var marker = '[truncated ';
+          var shape = /^\[truncated \d+ of \d+ chars; (.+)\]$/;
           var markerAt = resultText.indexOf(marker);
           while (markerAt !== -1) {
             var markerEnd = resultText.indexOf(']', markerAt);
             if (markerEnd !== -1) {
               var markerBody = resultText.slice(markerAt, markerEnd + 1);
               var endsText = resultText.slice(markerEnd + 1).trim().length === 0;
-              var namesThisCall = markerBody.indexOf('toolfold_read("' + key + '")') !== -1;
-              var notRetained = markerBody.indexOf('full text not retained') !== -1;
-              if (endsText && (namesThisCall || notRetained)) truncatedPreview = markerBody;
+              var tail = shape.exec(markerBody);
+              var tailText = tail ? tail[1] : '';
+              var named = 'toolfold_read("' + key + '") returns the full text';
+              var evictedNow = 'full text not retained (call "' + key + '"); re-run if needed';
+              if (endsText && (tailText === named || tailText === evictedNow
+                || tailText === 'full text not retained; re-run if needed')) truncatedPreview = markerBody;
             }
             markerAt = resultText.indexOf(marker, markerAt + 1);
           }
@@ -519,27 +520,32 @@ export default function (pi) {
     var out = null;
     for (var g = 0; g < trips.length; g++) {
       var unit = trips[g];
-      if (!allFolded(unit)) continue;
       if (unit.hasImage || unit.chars < 80) continue;
-      if (tripPinned(unit)) continue;
       var assistant = messages[unit.start];
       var blocks = assistant.content;
       var nextContent = [];
-      var callsById = {};
+      var callsById = Object.create(null);
+      var foldedAny = false;
       for (var k = 0; k < blocks.length; k++) {
         var block = blocks[k];
-        if (block && block.type === 'toolCall') {
+        if (block && block.type === 'toolCall' && foldable(String(block.id))) {
           var replaced = foldedCall(block);
-          callsById[block.id] = replaced;
+          callsById[String(block.id)] = replaced;
           nextContent.push(replaced);
+          foldedAny = true;
         } else {
           nextContent.push(block);
         }
       }
+      // Fold per call, not per trip: a pinned call keeps its own payload verbatim while
+      // its parallel siblings stay folded.
+      if (!foldedAny) continue;
       if (out === null) out = messages.slice();
       out[unit.start] = Object.assign({}, assistant, { content: nextContent });
       for (var r = 0; r < unit.results.length; r++) {
-        out[unit.indexes[r]] = foldedResult(unit.results[r], callsById[unit.results[r].toolCallId]);
+        var result = unit.results[r];
+        var foldedCallNow = callsById[String(result.toolCallId)];
+        if (foldedCallNow) out[unit.indexes[r]] = foldedResult(result, foldedCallNow);
       }
     }
 
