@@ -7,6 +7,8 @@ import {
   subscribeAppShortcutRecording,
 } from '../app-shortcuts';
 import { createLogger } from '../logger';
+import { onAppSessionCommitted } from '../appSessionState';
+import { onVoiceShortcutRegistrationChanged } from '../voice-input/shortcutRegistrationEvents';
 import { voiceInputDataStore } from '../voice-input/VoiceInputDataStore';
 
 const log = createLogger('remote-desktop:away-shortcut');
@@ -56,9 +58,13 @@ export function installAwayGuardShortcut(activate: () => Promise<void>): () => v
   const unsubscribe = store.subscribe(changed);
   const unsubscribeRecording = subscribeAppShortcutRecording(changed);
   const unsubscribeVoice = voiceInputDataStore.subscribeShortcut(changed);
+  const unsubscribeOwner = onAppSessionCommitted(changed);
+  const unsubscribeVoiceRegistration = onVoiceShortcutRegistrationChanged(changed);
   sync();
   return () => {
     generation++;
+    unsubscribeOwner();
+    unsubscribeVoiceRegistration();
     unsubscribeVoice();
     unsubscribe();
     unsubscribeRecording();

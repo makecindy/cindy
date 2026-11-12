@@ -12,7 +12,7 @@ vi.mock('electron', () => ({
 }));
 
 vi.mock('../logger.js', () => ({
-  createLogger: () => ({ info: vi.fn() }),
+  createLogger: () => ({ info: vi.fn(), error: vi.fn() }),
 }));
 
 vi.mock('../maker-host/override-settings-file.js', () => ({
@@ -29,6 +29,7 @@ vi.mock('../authBoundaryQuarantine.js', () => ({
 import {
   beginAppSessionBoundary,
   onAppSessionInvalidated,
+  onAppSessionCommitted,
   commitActiveAppSession,
   commitVolatileAppSession,
   getActiveAppSession,
@@ -75,6 +76,25 @@ describe('application session boundary isolation', () => {
     const nextRelease = beginAppSessionBoundary();
     nextRelease();
     expect(observed).toEqual([initial.generation, initial.generation, initial.generation + 1]);
+  });
+
+  // PR #10218：旧失效钩子看到的是前一个 owner，快捷键需在新 owner 可读后仲裁。
+  it.each([commitActiveAppSession, commitVolatileAppSession])('notifies after publishing a new owner and supports unsubscribe', (commit) => {
+    const original = getActiveAppSession();
+    const observed: string[] = [];
+    const unsubscribe = onAppSessionCommitted(() => observed.push(activeOwnerScopeKey()));
+    try {
+      const next = commit('cloud', 'shortcut-owner', true);
+      expect(observed).toEqual([`cloud:shortcut-owner:${next.generation}`]);
+      commit('cloud', 'shortcut-owner');
+      expect(observed).toHaveLength(1);
+      unsubscribe();
+      commit('local');
+      expect(observed).toHaveLength(1);
+    } finally {
+      unsubscribe();
+      commit(original.mode, original.dataOwnerId);
+    }
   });
 
   it('does not treat a different durable Ghost projection owner as an App transition', () => {
