@@ -8,12 +8,9 @@
  * time is therefore stale for the whole process, and every automation then fails with
  * "Scheduled session owner changed" until the app restarts.
  *
- * The runner takes the snapshot at fire entry. It catches a real owner switch: `assertAccess` is called
- * between the awaits inside the bootstrap, so an account switch mid-creation aborts.
- * Account switches that go through authManager's owner commit also tear the scheduler
- * down and abort in-flight fires, so this guard covers one bootstrap window. Volatile
- * owner commits on the passive/host-delegated paths do not reset the scheduler; there
- * the maker start gate (`ACCOUNT_PROVIDER_NOT_READY`) is what stops a stale fire.
+ * The scheduler captures the owner at fire entry and passes its guard through the
+ * host checks into this bootstrap. `assertAccess` runs between bootstrap awaits,
+ * so switching accounts during preparation or creation cannot start under a new owner.
  */
 import type { Maker } from '@cindy/maker-core';
 

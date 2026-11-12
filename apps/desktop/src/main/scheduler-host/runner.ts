@@ -269,7 +269,6 @@ export interface MakerScheduleRunnerDeps {
   /** Use the ordinary task startup funnel, including provider-group allocation.
    * The funnel may update the options to the member it actually selected. */
   bootstrapSession?: (options: Parameters<Maker['createSession']>[0], signal?: AbortSignal, assertOwner?: () => void) => ReturnType<Maker['createSession']>;
-  captureOwnerGuard?: () => () => void;
   getDb: () => SchedulerDrizzleDb;
   notifier: Notifier;
   logger: Logger;
@@ -883,7 +882,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         fastMode: undefined, modelAgentKind: undefined,
       };
     }
-    const holder: EphemeralSessionHolder = { assertOwner: this.deps.captureOwnerGuard?.() };
+    const holder: EphemeralSessionHolder = { assertOwner: ctx.assertFireContext };
     const closeQuietOutput = hidesScheduledTranscript(schedule)
       ? beginQuietScheduledOutput(schedule.id, ctx.runId)
       : undefined;

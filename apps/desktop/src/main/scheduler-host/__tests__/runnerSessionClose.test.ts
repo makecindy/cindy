@@ -215,15 +215,14 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
       assertOwner?.();
       return h.session;
     });
+    const context = createFireContext();
+    const captured = owner;
+    context.assertFireContext = () => { if (owner !== captured) throw new Error('owner changed'); };
     const { runner } = createRunnerHarness(h.session, {
-      captureOwnerGuard: () => {
-        const captured = owner;
-        return () => { if (owner !== captured) throw new Error('owner changed'); };
-      },
       findUsageLimitWait: async () => { owner = 'b'; return null; },
       bootstrapSession,
     });
-    await expect(runner.fire(baseSchedule(), createFireContext())).rejects.toThrow('owner changed');
+    await expect(runner.fire(baseSchedule(), context)).rejects.toThrow('owner changed');
     expect(bootstrapSession).toHaveBeenCalledOnce();
   });
 

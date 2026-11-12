@@ -77,7 +77,6 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
     const promptRunner = new MakerScheduleRunner({
       maker: deps.maker,
       bootstrapSession: bootstrapScheduledSession,
-      captureOwnerGuard: captureScheduledOwnerGuard,
       getDb: deps.getDb,
       notifier,
       logger: deps.logger,
@@ -141,6 +140,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
     return { notifier, promptRunner, scriptRunner };
   },
   // A teammate's project automations run only on its main computer (handed away: skipped here).
+  captureFireContext: captureScheduledOwnerGuard,
   wrapRunner: runner => withTeammateHomeGuard(runner, () => companionHomes.snapshot().demotedBotIds, ownTeammateProjectState),
   isOwnTeammateProject: async workingDir => (await ownTeammateProjectState(workingDir)) !== null,
   isPassive: () => !app.isPackaged && process.env.XDT_SCHEDULER_PASSIVE === '1',
