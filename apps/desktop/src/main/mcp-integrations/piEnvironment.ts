@@ -177,7 +177,11 @@ async function getPiExtraSpawnConfig(
     config.refreshMcpConfig = async (knownRevision) => {
       if (knownRevision === environmentEpoch) return null;
       const next = await getPiExtraSpawnConfig(providers, logger, sessionCtx);
-      return { revision: next?.configRevision ?? environmentEpoch, config: next };
+      // A failed bridge build (null) is not "no services": reporting it as an applied empty
+      // catalog would record this revision and make the task lose MCP until the next save.
+      // Returning null keeps the applied revision, so discovery retries later.
+      if (!next) return null;
+      return { revision: next.configRevision ?? environmentEpoch, config: next };
     };
     return config;
   }

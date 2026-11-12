@@ -3795,6 +3795,21 @@ export class PiAgent extends BaseAgent {
         try { oldest.dispose(); } catch { /* best-effort release */ }
       }
     };
+    /** Release every retired generation now. Task teardown must not wait for a timer:
+     *  the bridge keeps accepting the old URL/token and holding shared connections. */
+    const disposeRetiredSessionCtx = (): void => {
+      while (retiredSessionCtx.length > 0) {
+        const entry = retiredSessionCtx.pop();
+        if (!entry) break;
+        clearTimeout(entry.timer);
+        try { entry.dispose(); } catch { /* best-effort release */ }
+      }
+    };
+    const disposeSessionState = (): void => {
+      try { disposeSessionCtx?.(); } catch { /* best-effort: cleanup failure must not mask the caller's error */ }
+      disposeSessionCtx = undefined;
+      disposeRetiredSessionCtx();
+    };
     const registeredMcpServerNames = new Set<string>();
     // 远端会话:host 可 gate 掉 in-process MCP bridge(loopback URL 远端够不到;
     // Phase 1 不桥 orca/memory/ghost)。外部 HTTP MCP 直连不受影响。
@@ -4046,12 +4061,7 @@ export class PiAgent extends BaseAgent {
           // Projection runs after config/runtime files and the MCP session route
           // exist, but before a handle owns their normal close path. Roll back
           // exactly that unpublished startup state before surfacing the failure.
-          try {
-            disposeSessionCtx?.();
-          } catch {
-            /* best-effort: cleanup failure must not mask package-state failure */
-          }
-          disposeSessionCtx = undefined;
+          disposeSessionState();
           cleanupConfigHome();
           cleanupRuntimeFiles();
           // Do not substitute Cindy's static analyzer as an allowlist or launch
@@ -4213,12 +4223,8 @@ export class PiAgent extends BaseAgent {
       }
       assertPiSpawnArgvFitsPlatform(args);
     } catch (error) {
-      try {
-        disposeSessionCtx?.();
-      } catch {
-        /* best-effort: cleanup failure must not mask Skill setup / argv failure */
-      }
-      disposeSessionCtx = undefined;
+      // Best-effort cleanup; failure here must not mask the Skill setup / argv failure.
+      disposeSessionState();
       await cleanupConfigHome();
       cleanupRuntimeFiles();
       throw error;
@@ -5358,6 +5364,9 @@ export class PiAgent extends BaseAgent {
       if (sessionContextDisposed) return;
       sessionContextDisposed = true;
       disposeSessionCtx?.();
+      // Task teardown must release retired generations too; their grace timers may never
+      // fire once this handle is gone, leaving MCP identities and transports registered.
+      disposeRetiredSessionCtx();
     };
     const disposeProxyRegistration = (): void => {
       if (!proxyRegistrationOwned) return;
