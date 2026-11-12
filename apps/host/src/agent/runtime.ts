@@ -283,6 +283,9 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
     invalidate?: NonNullable<AuthAdapter['invalidate']>;
     /** After every login and logout, as the desktop's auth handler (maker-ipc/auth.ts). */
     onAuthBoundary?: () => void;
+    /** The desktop adapter's onLoginSuccess and onLogoutSuccess (codex-auth-boundary.ts). */
+    afterLogin?: () => Promise<void>;
+    afterLogout?: () => Promise<void>;
   }) {
   const invalidate = native?.invalidate;
   if (!codexHome || !path.isAbsolute(codexHome)) throw new Error('Codex requires an explicit isolated profile');
@@ -326,6 +329,7 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
         if (!result.ok || !current()) return { authenticated: false, errorReason: result.reason ?? 'owner_changed' };
         try { bindNativeProviderAuth('openai', { instanceIsolated: true }); }
         catch (error) { result.rollbackCredentials?.(); throw error; }
+        if (current()) await native?.afterLogin?.();
         return accounts.codexAccountState('openai');
       } finally { if (current()) native?.onAuthBoundary?.(); }
     },
@@ -335,6 +339,7 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
       try {
         unbindNativeProviderAuth('openai', { revoked: true });
         await accounts.logoutCodexAccount('openai');
+        if (current()) await native?.afterLogout?.();
       } finally { if (current()) native?.onAuthBoundary?.(); }
     },
     async getAuthEnv(opts?: AuthAdapterOptions) {
@@ -365,10 +370,12 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     options.codexRuntime ? {
       invalidate: (reason, context) => options.codexRuntime!.invalidateNative(reason, context),
       onAuthBoundary: () => options.codexRuntime!.subscriptions.bridge.clearChatgptBridgeCredentialCache(),
+      afterLogin: () => options.codexRuntime!.authBoundary.afterLogin(),
+      afterLogout: () => options.codexRuntime!.authBoundary.afterLogout(),
     } : undefined);
-  // The desktop retires its local Codex host when the login is invalidated (maker-host/index.ts).
-  options.codexRuntime?.setLocalHostDisposer(async reason => {
-    await codex?.forceDisposeLocalHostForAuthChange(`Codex credential invalidated: ${reason}`, { preserveExternalAuth: true });
+  // The desktop retires every local Codex host at an auth boundary (maker-host/index.ts).
+  options.codexRuntime?.setLocalHostRetirement(async reason => {
+    await codex?.forceDisposeLocalHostForAuthChange(reason, { preserveExternalAuth: true });
   });
   const config = options.providerConfig;
   const piAuth = bindAuthOwner(createPiAuthAdapter({
