@@ -4,6 +4,17 @@
 
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件只记录这一项能力的协议约定。
 
+2026-11-12 Claude 登录到期：owner 账号管理视图可选追加 `loginExpiresAt?: string`（官方 CLI 的 ISO 到期估计），
+以及 `authIssue: 'claude-account-mismatch'` 和固定错误码 `SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH`、`SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN`。
+新增字段只属于账号管理，不进入匿名分享用量或任务选号协议；登录命令仍只传原来的 `accountId`，目录与期望身份由执行电脑解析。
+旧控制端忽略字段，未知错误按通用失败展示；新控制端面对旧执行电脑或旧 CLI 时显示到期未知，继续使用原登录命令，不承诺旧端具备身份复核。
+本机 owner 元数据追加可选 `lastConfirmedIdentity`，在正常 CLI 认证读取后保存，退出登录或重启不清除；
+`reloginIdentity` 保护一次未完成的重登，确认原身份成功后删除。两者不进入账号视图，也不搬移或改写官方凭证。
+原身份无法确认时不启动重登，提示通过添加账号重新连接；初次 `add` / `connect` 不受该限制。
+降级旧版本会恢复旧的登录行为，旧版本不认识身份保护元数据；未完成的重登应在新版确认原账号后再降级。
+没有新增 channel、allowlist、订阅或轮询，也不改变 invoke/push 包装与中转签名；官方及自建中转继续透传原 JSON，无需中转升级。
+回归覆盖新旧字段、owner IPC、所选目录、错误身份与取消后重启恢复；真实双账号浏览器授权仍需安装包验收。
+
 Codex 所选目录由当前供应商管理认证、无法提供 ChatGPT 账号时，管理操作使用追加的
 `SUBSCRIPTION_CODEX_PROVIDER_AUTH` 错误码。新版控制端显示独立账号指引，旧控制端仍按通用账号失败呈现；
 新版连接旧宿主仍接受旧错误。账号视图可选追加 `authIssue: 'codex-provider-managed-auth'`，让新向导

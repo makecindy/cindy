@@ -1312,6 +1312,8 @@
     "handoffWindow": "대리 입력 · {{app}}"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
+    "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "이 SSH 작업에서는 Harness를 전환할 수 없습니다. 현재 Harness의 모델을 선택하거나 필요한 Harness로 새 SSH 작업을 만드세요.",
     "MODEL_SELECTION_UNAVAILABLE": "선택한 제공자의 모델을 더 이상 사용할 수 없습니다. 설정에서 연결을 확인하거나 사용 가능한 모델을 다시 선택하세요.",
     "HARNESS_SWITCH_NOT_READY": "Harness 전환이 완료되지 않았습니다. 오류 세부 정보를 확인하고 Harness가 준비되면 다시 시도하세요.",
@@ -19967,6 +19969,15 @@
     "lineNumbers": "줄 번호"
   },
   "subscriptionAccounts": {
+    "loginIdentityUnknown": "이 계정의 기존 정보를 확인할 수 없습니다. 계정 추가를 통해 새로 연결하세요.",
+    "loginExpiresInDays": "약 {{days}}일 후 로그인 만료",
+    "loginExpiresSoon": "로그인이 곧 만료됩니다",
+    "loginMayHaveExpired": "로그인이 만료되었을 수 있습니다",
+    "loginExpiryUnknown": "로그인 만료일 알 수 없음",
+    "loginExpiryDetail": "예상 만료일: {{date}}. Claude가 제공한 추정치이며 더 일찍 만료될 수 있습니다.",
+    "loginAccountAria": "{{name}}에 다시 로그인",
+    "loginIdentityMismatchStatus": "로그인 계정 불일치",
+    "loginIdentityMismatch": "선택한 계정과 다른 계정으로 로그인했습니다. 다시 로그인하여 이 행에 표시된 계정을 선택하세요.",
     "unassigned": "계정 미배정",
     "boundUnavailable": "계정을 사용할 수 없음",
     "providerManagedAuth": "현재 Codex 제공자에서는 ChatGPT 계정 정보를 확인할 수 없습니다. 제공자를 추가할 때 ‘$t(subscriptionAccounts.signIn.anotherAccount)’를 선택하면 별도 폴더를 사용할 수 있습니다.",
