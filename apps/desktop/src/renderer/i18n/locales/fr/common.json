@@ -13450,6 +13450,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "Utiliser le Texte Original",
     "rateLimited": "Trop de requêtes vocales. Patientez un instant, puis réessayez.",
     "status": {
       "listening": "Saisie vocale",
@@ -13773,7 +13774,7 @@
       "claudeSubscriptionSwitchFailed": "Impossible de passer à Claude.ai ou de réessayer cette session : {{msg}}",
       "codexAppServerRetired": "Le service Codex a été redémarré ou remplacé. La requête en cours a été interrompue ; relancez-la.",
       "codexAuthMissing": "Codex distant n'est pas encore connecté (401 Unauthorized). Cliquez sur « Synchroniser l'authentification » pour envoyer vos identifiants Codex locaux vers le répertoire Codex de Cindy distant, puis réessayez.",
-      "codexAuthMissingLocal": "Identifiants Codex manquants ou expirés (401 Unauthorized). Reconnectez-vous dans Paramètres de {{appName}} → Codex (l'app-server redémarrera automatiquement à la connexion), ou exécutez `codex login` dans votre terminal puis changez une fois le mode d'authentification dans les paramètres pour redémarrer l'app-server. Démarrez ensuite une nouvelle session.",
+      "codexAuthMissingLocal": "La connexion « {{provider}} » sur cet ordinateur n’a pas pu être authentifiée. Vérifiez son état de connexion dans les paramètres, puis revenez à cette session après l’avoir rétablie.",
       "codexSessionExpired": "La connexion OpenAI doit être mise à jour. Reconnectez ChatGPT pour continuer ; {{appName}} ne déconnectera pas la CLI Codex de votre système et ne vous demandera pas de reconnecter d'autres sources de modèles.",
       "codexAuthSynced": "Authentification synchronisée. Cliquez sur « Réessayer » pour renvoyer.",
       "syncAuth": "Synchroniser l'authentification",

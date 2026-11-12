@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Keyboard, StyleSheet, View } from 'react-native';
+import { LayoutGrid } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText, type RemoteResource } from '@cindy/device-link';
 import { useAuth } from '@/auth/AuthContext';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
-import { radius, spacing, useThemedStyles, type ThemeColors } from '@/theme';
-import { CHAT_HEADER_MARK_SIZE, ChatIdentityHeader, ChatIdentitySubtitle } from './ChatIdentityHeader';
+import { iconSize, radius, spacing, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { CHAT_HEADER_GLYPH_STROKE, CHAT_HEADER_MARK_SIZE, ChatIdentityHeader, ChatIdentitySubtitle } from './ChatIdentityHeader';
+import { HomeHeaderGlassButton } from './HomeHeaderGlassButton';
 import { CompanionGlanceSheet } from './CompanionGlanceSheet';
 import { CompanionPresenceRing } from './CompanionPresenceRing';
 import { CompanionProfileSheet } from './CompanionProfileSheet';
@@ -19,7 +21,7 @@ const PRESENCE_DOT = 6;
 
 /**
  * 伙伴私聊顶栏（C1，与群聊顶栏同一个 ChatIdentityHeader）：返回 + 身份（32 头像、名字、在线点与
- * 电脑名）+ 伙伴设置。点身份区打开伙伴近况（电脑 / 输出内容），设置按钮打开伙伴资料。
+ * 电脑名）+ 近况 + 伙伴设置。四宫格与身份区打开同一近况，设置按钮打开伙伴资料。
  */
 export function CompanionHeader(props: {
   nativeHeader?: boolean;
@@ -37,6 +39,7 @@ export function CompanionHeader(props: {
 
 function CompanionHeaderContent({ nativeHeader, resource, deviceId, deviceName, online, working = false, sessionId, onSearch, onBack, settingsRequest }: Parameters<typeof CompanionHeader>[0]) {
   const { t, i18n } = useTranslation();
+  const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const navigation = useTeammateNavigation();
   const router = useRouter();
@@ -67,6 +70,10 @@ function CompanionHeaderContent({ nativeHeader, resource, deviceId, deviceName, 
       </View>}
       identityLabel={[name, deviceName, connection].filter(Boolean).join(', ')}
       identityHint={t('devices.glance.open', { name })}
+      accessory={<HomeHeaderGlassButton testID="companion.glance.open" accessibilityLabel={t('devices.glance.open', { name })}
+        onPress={() => { Keyboard.dismiss(); setGlance(true); }}>
+        <LayoutGrid size={iconSize.lg} strokeWidth={CHAT_HEADER_GLYPH_STROKE} color={colors.textPrimary} />
+      </HomeHeaderGlassButton>}
       onBack={onBack}
       onOpenIdentity={() => setGlance(true)}
       onOpenSettings={() => { setInitialPage('home'); setProfile(true); }}
