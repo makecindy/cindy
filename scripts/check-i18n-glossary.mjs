@@ -55,6 +55,7 @@ import {
   findCaseMismatch,
   findEnglishCopyIssues,
   findHalfWidthPunct,
+  makeEnglishCopyExemptChecker,
   hasAsciiEllipsis,
   normalizeForPunctuation,
   makeExemptChecker,
@@ -408,8 +409,19 @@ const EN_COPY_HINTS = {
   'en-straight-quote': '英文正文用弯引号 “ ”,不用直引号 "(DESIGN.md §11.2)',
   'en-bare-action': '按钮要写清对什么做什么,不用无宾动词 Confirm / OK / Submit(DESIGN.md §11.1)',
 };
-for (const [key, value] of corpus.get(glossary.sourceLocale) ?? []) {
+// 必须原样展示的格式字面量(JSON 示例等)按规则、按精确 key 豁免,见 glossary.json 的
+// englishCopyExempt 与 makeEnglishCopyExemptChecker。豁免的 key 改成不再命中时报失效,
+// 与 baseline 同样只减不增;不在本语料里的 key 属于手写 catalog,由各自的测试核对。
+const englishCopyExempt = glossary.englishCopyExempt ?? {};
+const isEnglishCopyExempt = makeEnglishCopyExemptChecker(englishCopyExempt);
+const englishCopyExemptUsed = new Set();
+const sourceCorpus = corpus.get(glossary.sourceLocale) ?? new Map();
+for (const [key, value] of sourceCorpus) {
   for (const issue of findEnglishCopyIssues(value)) {
+    if (isEnglishCopyExempt(issue.rule, key)) {
+      englishCopyExemptUsed.add(`${issue.rule}\t${key}`);
+      continue;
+    }
     violations.push(
       makeViolation({
         locale: glossary.sourceLocale,
@@ -423,6 +435,12 @@ for (const [key, value] of corpus.get(glossary.sourceLocale) ?? []) {
     );
   }
 }
+
+const englishCopyExemptStale = Object.entries(englishCopyExempt)
+  .flatMap(([rule, keys]) => keys.map((key) => [rule, key]))
+  .filter(([rule, key]) => sourceCorpus.has(key) && !englishCopyExemptUsed.has(`${rule}\t${key}`))
+  .map(([rule, key]) => `${rule} / ${key}`)
+  .sort();
 
 violations.sort((a, b) => a.fingerprint.localeCompare(b.fingerprint));
 
@@ -549,6 +567,14 @@ if (stale.length > 0) {
   );
 }
 
+if (englishCopyExemptStale.length > 0) {
+  console.error(
+    `\n[check-i18n-glossary] ❌ englishCopyExempt 有 ${englishCopyExemptStale.length} 条豁免已不再命中(文案已不含该写法):`,
+  );
+  for (const item of englishCopyExemptStale) console.error(`  ${item}`);
+  console.error('\n请从 i18n/glossary.json 的 englishCopyExempt 删除上述 key,豁免只覆盖仍需原样展示的格式字面量。');
+}
+
 // GLOSSARY.md 是给人和 AI 查阅的入口,过期比不存在更糟——大家会照着过期的表写文案。
 // 用与生成器完全相同的渲染函数比对,不做「差不多就行」的模糊校验。
 const docStale = fs.existsSync(DOC_PATH)
@@ -569,9 +595,10 @@ if (REPORT_ONLY) {
   process.exit(0);
 }
 
-if (blocking.length > 0 || stale.length > 0 || docStale) {
+if (blocking.length > 0 || stale.length > 0 || englishCopyExemptStale.length > 0 || docStale) {
   console.error(
     `\n[check-i18n-glossary] 失败:新增违规 ${blocking.length} / baseline 失效 ${stale.length}` +
+      `${englishCopyExemptStale.length > 0 ? ` / 豁免失效 ${englishCopyExemptStale.length}` : ''}` +
       `${docStale ? ' / 文档过期' : ''}。术语裁决见 i18n/glossary.json,人读版 i18n/GLOSSARY.md。`,
   );
   process.exit(1);

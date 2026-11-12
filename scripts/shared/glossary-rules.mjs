@@ -437,12 +437,15 @@ export function hasAsciiEllipsis(text) {
  *  - en-successfully:用 "successfully" 当结果填充词。少数句子里它承载真实语义
  *    (`the last successfully loaded hosts`),这类留在 baseline;新文案换个说法即可。
  *  - en-straight-quote:正文里的直双引号(应为 “ ”)。插值、URL、文件名先剥离;
- *    格式字面量(JSON 字段值、非法字符清单)属于合理存量,留在 baseline。
+ *    必须原样展示的格式字面量(JSON 示例、非法字符清单、shell 命令)按 key 登记进
+ *    glossary.json 的 englishCopyExempt,见 makeEnglishCopyExemptChecker。
  *  - en-bare-action:整条文案只有一个无宾动词 Confirm / OK / Submit——按钮必须说明对什么做什么。
  *
  * 「默认附加 Try again」是否有依据无法机检,不在这里拦。
  * 返回 [{ rule, detail }],detail 带命中次数,口径与其余规则的指纹一致。
  */
+export const ENGLISH_COPY_RULES = Object.freeze(['en-please', 'en-successfully', 'en-straight-quote', 'en-bare-action']);
+
 const EN_PLEASE = /(?<![A-Za-z])please(?![A-Za-z])/gi;
 const EN_SUCCESSFULLY = /(?<![A-Za-z])successfully(?![A-Za-z])/gi;
 const EN_BARE_ACTION = /^(?:confirm|ok|okay|submit)$/i;
@@ -458,4 +461,61 @@ export function findEnglishCopyIssues(text) {
   if (quotes > 0) issues.push({ rule: 'en-straight-quote', detail: `"×${quotes}` });
   if (EN_BARE_ACTION.test(text.trim())) issues.push({ rule: 'en-bare-action', detail: text.trim() });
   return issues;
+}
+
+/**
+ * 英文写法规则的豁免判定:按规则、按**精确 key**。
+ *
+ * 用途只有一种——整条文案必须原样展示格式字面量,例如插件市场说明里的
+ * `{"source": "local", "path": "…"}`:换成弯引号示例就失效,静态扫描又分不出它与正文
+ * 引号。登记进 baseline 不行:baseline 指纹带文案摘要,说明文字一改就失配,新内容
+ * 只能再登记成「存量违规」。
+ *
+ * 刻意不接受子树前缀(以 `.` 结尾):一个前缀会把整段未来新增的文案一起放过。
+ * 未知规则名同样直接报错,免得拼错的规则名让豁免静默失效。
+ *
+ * @param {Readonly<Record<string, readonly string[]>> | undefined} exempt
+ * @returns {(rule: string, key: string) => boolean}
+ */
+export function makeEnglishCopyExemptChecker(exempt) {
+  const byRule = new Map();
+  for (const [rule, keys] of Object.entries(exempt ?? {})) {
+    if (!ENGLISH_COPY_RULES.includes(rule)) {
+      throw new Error(`englishCopyExempt 的规则名未知:${rule}(可选 ${ENGLISH_COPY_RULES.join(' / ')})`);
+    }
+    for (const key of keys) {
+      if (key.endsWith('.')) throw new Error(`englishCopyExempt 只接受精确 key,不接受前缀:${key}`);
+    }
+    byRule.set(rule, new Set(keys));
+  }
+  return (rule, key) => byRule.get(rule)?.has(key) ?? false;
+}
+
+/**
+ * 手写英文文案(原生菜单、OAuth 结果页、登录页等不走 locale JSON 的 catalog)的英文写法审计。
+ *
+ * 根门禁只读 locale JSON,这些 catalog 由各自的测试把关。它们的既有问题单独冻结在调用方
+ * 的 `known` 清单里(`key\trule`),口径与 baseline 一致:新增违规报 added,已修好却仍挂在
+ * 清单上的报 stale——只减不增。
+ *
+ * entries 只传 en 文案:[{ key, value }]。
+ *
+ * @param {readonly { key: string, value: string }[]} entries
+ * @param {{ isExempt?: (rule: string, key: string) => boolean, known?: readonly string[] }} [options]
+ * @returns {{ added: string[], stale: string[] }}
+ */
+export function auditEnglishCopy(entries, { isExempt = () => false, known = [] } = {}) {
+  const knownSet = new Set(known);
+  const hit = new Set();
+  const added = [];
+  for (const { key, value } of entries) {
+    for (const issue of findEnglishCopyIssues(value)) {
+      if (isExempt(issue.rule, key)) continue;
+      const id = `${key}\t${issue.rule}`;
+      if (knownSet.has(id)) hit.add(id);
+      else added.push(`${key}: ${issue.rule}(${issue.detail})— ${value}`);
+    }
+  }
+  const stale = [...knownSet].filter((id) => !hit.has(id)).sort();
+  return { added, stale };
 }

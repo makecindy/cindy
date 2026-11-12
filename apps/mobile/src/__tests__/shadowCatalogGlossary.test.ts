@@ -19,9 +19,11 @@ import { FULL_ACCESS_CONFIRMATION_COPY } from "@/session/fullAccessConfirmationC
 import {
   ELLIPSIS_LOCALES,
   HALFWIDTH_PUNCT_LOCALES,
+  auditEnglishCopy,
   findCaseMismatch,
   findHalfWidthPunct,
   hasAsciiEllipsis,
+  makeEnglishCopyExemptChecker,
   makeExemptChecker,
   occursIn,
   normalizeForPunctuation,
@@ -49,8 +51,31 @@ const glossary = JSON.parse(
   locales: string[];
   sourceLocale: string;
   punctuationExempt?: string[];
+  englishCopyExempt?: Record<string, string[]>;
   terms: GlossaryTerm[];
 };
+
+/**
+ * 引入英文写法规则(DESIGN.md §11.1 / §11.2)时这些手写 catalog 的既有问题,`key\trule`。
+ * 只减不增:修好一条就删一条,新增违规直接失败。
+ */
+const KNOWN_ENGLISH_COPY_ISSUES: readonly string[] = [
+  "mobile/authErrorMessages:CAPTCHA_INVALID\ten-please",
+  "mobile/authErrorMessages:CAPTCHA_REQUIRED\ten-please",
+  "mobile/authErrorMessages:CAPTCHA_UNAVAILABLE\ten-please",
+  "mobile/authErrorMessages:INVALID_AUTH_CODE\ten-please",
+  "mobile/authErrorMessages:INVALID_BIND_TICKET\ten-please",
+  "mobile/authErrorMessages:INVALID_LOGIN_TICKET\ten-please",
+  "mobile/authErrorMessages:INVALID_PARAMS\ten-please",
+  "mobile/authErrorMessages:RATE_LIMITED\ten-please",
+  "mobile/authErrorMessages:REQUEST_TIMEOUT\ten-please",
+  "mobile/authErrorMessages:STATE_MISMATCH\ten-please",
+  "mobile/loginMessages:errorFallback\ten-please",
+  "mobile/loginMessages:invalidEmail\ten-please",
+  "mobile/loginMessages:invalidPhone\ten-please",
+  "mobile/loginMessages:orgDetected\ten-straight-quote",
+  "mobile/loginMessages:ssoOrgDetected\ten-straight-quote",
+];
 
 /**
  * 把影子 catalog 摊平成 (source, locale, key, value)。
@@ -241,5 +266,18 @@ describe("影子 catalog 术语一致性", () => {
       violations,
       `影子 catalog 标点不规范:\n${violations.join("\n")}`,
     ).toEqual([]);
+  });
+
+  it("英文写法符合 DESIGN.md §11.1 / §11.2", () => {
+    // 根门禁只读 locale JSON,登录页等手写 catalog 的英文写法规则由这里把关,豁免与根门禁同源。
+    const { added, stale } = auditEnglishCopy(
+      entries.filter((e) => e.locale === glossary.sourceLocale),
+      {
+        isExempt: makeEnglishCopyExemptChecker(glossary.englishCopyExempt),
+        known: KNOWN_ENGLISH_COPY_ISSUES,
+      },
+    );
+    expect(added, `影子 catalog 英文写法违规:\n${added.join("\n")}`).toEqual([]);
+    expect(stale, "已修好的英文写法存量请从清单删除").toEqual([]);
   });
 });

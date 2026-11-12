@@ -14,10 +14,12 @@ import {
   ELLIPSIS_LOCALES,
   HALFWIDTH_PUNCT_LOCALES,
   FULL_WIDTH_PUNCT,
+  auditEnglishCopy,
   findCaseMismatch,
   findEnglishCopyIssues,
   findHalfWidthPunct,
   hasAsciiEllipsis,
+  makeEnglishCopyExemptChecker,
   makeExemptChecker,
   occursIn,
   stripNonProse,
@@ -196,6 +198,35 @@ test('findEnglishCopyIssues: 命中正文违规,不误伤插值、近形词与�
   assert.deepEqual(rules('OK'), ['en-bare-action']);
   assert.deepEqual(rules('{{please}} pleased https://x.test/?q="a" Installed “{{name}}”'), []);
   assert.deepEqual(rules('Submit issue'), []);
+});
+
+// review(PR #10026):必须原样展示的 JSON 示例改了说明文字也不能变成「新增违规」,豁免只能
+// 按规则、按精确 key 生效,不能顺带放过同一 key 的其他规则或整段子树。
+test('makeEnglishCopyExemptChecker: 只豁免登记的规则与精确 key', () => {
+  const key = 'desktop:settings.ghosts.market.sources.guide.manifestBody';
+  const isExempt = makeEnglishCopyExemptChecker({ 'en-straight-quote': [key] });
+  assert.equal(isExempt('en-straight-quote', key), true);
+  assert.equal(isExempt('en-please', key), false);
+  assert.equal(isExempt('en-straight-quote', `${key}Extra`), false);
+  assert.throws(() => makeEnglishCopyExemptChecker({ 'en-straight-quote': ['desktop:settings.'] }), /精确 key/);
+  assert.throws(() => makeEnglishCopyExemptChecker({ 'en-straight-qoute': [key] }), /规则名未知/);
+});
+
+// review(PR #10026):手写 catalog 不走根门禁,既有问题单独冻结,新增与已修好未摘都要报出来。
+test('auditEnglishCopy: 报新增违规与失效存量,豁免项不计', () => {
+  const { added, stale } = auditEnglishCopy(
+    [
+      { key: 'desktop:a', value: 'Please retry' },
+      { key: 'desktop:b', value: 'Use {"source": "local"}' },
+      { key: 'desktop:c', value: 'Pushed successfully' },
+    ],
+    {
+      isExempt: makeEnglishCopyExemptChecker({ 'en-straight-quote': ['desktop:b'] }),
+      known: ['desktop:a\ten-please', 'desktop:gone\ten-please'],
+    },
+  );
+  assert.deepEqual(added.map((line) => line.split(':').slice(0, 2).join(':')), ['desktop:c']);
+  assert.deepEqual(stale, ['desktop:gone\ten-please']);
 });
 
 // ---------------------------------------------------------------------------
@@ -753,6 +784,15 @@ test('findHalfWidthPunct: 半角标点后有空格再接中文同样算违规', 
   // 空白不影响排除纯 ASCII 的本意
   assert.equal(findHalfWidthPunct('a=1, b=2 的形式'), null);
   assert.equal(findHalfWidthPunct('GPT-4, Claude 两者'), null);
+});
+
+test('glossary.json: englishCopyExempt 可加载且不滥用', () => {
+  const exempt = glossary.englishCopyExempt ?? {};
+  // 规则名或前缀写错时这里直接抛错,不让豁免静默失效
+  makeEnglishCopyExemptChecker(exempt);
+  const total = Object.values(exempt).reduce((sum, keys) => sum + keys.length, 0);
+  // 正当用途只有必须原样展示的格式字面量,数量失控说明在拿豁免绕规则
+  assert.ok(total <= 12, `英文写法豁免已达 ${total} 条,请复核是否在用豁免绕过规则`);
 });
 
 test('glossary.json: punctuationExempt 格式合法且不滥用', () => {
