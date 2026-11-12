@@ -382,6 +382,19 @@ relay 原有 60 秒主动续期节流保持不变。
   `apps/desktop/src/main/mcp-integrations/browser-backend/rsb-webview-upload-policy.ts`；
   回归见对应上传策略测试和 `packages/lizi-mcps/src/browser/opencli-recipes.test.ts`。
 
+## Telegram 群准入记录
+
+个人与伙伴 Telegram 连接复用宿主加密 KV，以连接前缀下的
+`telegram-group-admission-v1` 保存 bot ID、绑定用户 ID、群 ID、群标题、邀请人名称与 ID、
+批准/拒绝/待批状态和随机按钮 token；不存群消息正文。记录不是可关闭的偏好设置。
+未知/损坏记录不授予群访问；先保存批准再反馈成功，保存失败保持未批准。
+解绑先删除并用三态读取确认记录缺失，无法确认则保持凭证、报存储错误并停止轮询。
+成员变更必须保存成功后才允许下次 getUpdates 确认消费；失败停止轮询并保留原 offset，
+恢复连接时从 Telegram 重放该事件，不依赖尽力删除来撤销旧授权。
+初始化和销毁都会丢弃准入缓存，确保宿主切换 Cindy 账号后重新读取当前账号记录。
+换 bot 或绑定用户时不继承不匹配身份的记录。
+实现与测试见 `packages/lizi-im/src/telegram/groupAdmission.ts`、`telegramIM.test.ts`。
+
 ## Review 清单
 
 截图翻译语言覆盖存于 `userData/screenshot-translation-settings.json`，仅保存
