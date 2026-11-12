@@ -1,5 +1,12 @@
 {
   "githubPrs": {
+    "status": {
+      "open": "开放",
+      "draft": "草",
+      "merged": "已并",
+      "closed": "已阖"
+    },
+    "statusUnavailable": "尚未取状态",
     "title": "掌 PR 链接",
     "hint": "顶列至多示 3 个，固定之 PR 居先",
     "empty": "贴 GitHub PR 或 GitLab MR 链接即可增之",
@@ -664,6 +671,8 @@
     "taskAlreadyCreated": "机上已立此差事，已存之讯将于原差事中续遣。"
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_FULL": "可行此务之账号或电脑，并行皆已至上限。俟运行之务毕，或于供应商设置中增其上限。",
+    "SUBSCRIPTION_ACCOUNTS_FULL": "可行此务之账号或电脑，并行皆已至上限。俟运行之务毕，或于供应商设置中增其上限。",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暂不支持切换 Harness。请择当前 Harness 下之模型，或以所需 Harness 另立新 SSH 差事。",
     "MODEL_SELECTION_UNAVAILABLE": "所选模型于该供方下已不可用。请于规制中察连接，或另择可用之模型。",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未切换毕。请察谬误详情，待 Harness 就绪后再试。",

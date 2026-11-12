@@ -1,5 +1,12 @@
 {
   "githubPrs": {
+    "status": {
+      "open": "Aberto",
+      "draft": "Rascunho",
+      "merged": "Mesclado",
+      "closed": "Fechado"
+    },
+    "statusUnavailable": "Status ainda não carregado",
     "title": "Gerenciar links de PRs",
     "hint": "Até 3 no cabeçalho; PRs fixados aparecem primeiro",
     "empty": "Cole um link de PR do GitHub ou MR do GitLab para adicioná-lo",
@@ -253,7 +260,7 @@
           "plugins": "Catálogo de plugins",
           "memoryRules": "Instruções de memória",
           "memoryIndex": "Índice de memória",
-          "profile": "Perfil do colega",
+          "profile": "Perfil do amigo",
           "user": "Instruções do usuário",
           "directories": "Diretórios adicionais",
           "native": "Instruções do Pi",
@@ -667,6 +674,8 @@
     "taskAlreadyCreated": "Esta tarefa já existe no computador. Suas mensagens salvas serão retomadas lá."
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_FULL": "Todas as contas ou computadores que podem executar esta tarefa atingiram o limite de tarefas simultâneas. Aguarde uma tarefa em andamento terminar ou aumente o limite nas configurações do provedor.",
+    "SUBSCRIPTION_ACCOUNTS_FULL": "Todas as contas ou computadores que podem executar esta tarefa atingiram o limite de tarefas simultâneas. Aguarde uma tarefa em andamento terminar ou aumente o limite nas configurações do provedor.",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarefa SSH não pode trocar de Harness. Escolha um modelo no Harness atual ou crie uma nova tarefa SSH com o Harness necessário.",
     "MODEL_SELECTION_UNAVAILABLE": "O modelo selecionado não está mais disponível no provedor. Verifique a conexão em Configurações ou escolha outro modelo disponível.",
     "HARNESS_SWITCH_NOT_READY": "A troca de Harness não está pronta. Verifique os detalhes do erro e tente novamente quando o Harness estiver pronto.",

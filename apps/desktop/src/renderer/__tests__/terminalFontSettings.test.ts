@@ -3,7 +3,9 @@
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FontSettingsProvider, useFontSettings } from '@/hooks/useFontSettings';
+import { applyFontSettings, FontSettingsProvider, useFontSettings } from '@/hooks/useFontSettings';
+import { installAppearancePresenter } from '@/appearance/AppearancePresenter';
+import { WallpaperSettingsProvider } from '@/hooks/useWallpaperSettings';
 import {
   DEFAULT_APPEARANCE_SETTINGS,
   type AppearanceSettings,
@@ -20,6 +22,14 @@ function installBridge(initial: AppearanceSettings) {
     snapshot = { ...snapshot, ...patch };
     onChanged?.(snapshot);
   });
+  const resetFields = vi.fn(async (fields: string[]) => {
+    for (const key of fields) {
+      if (key === 'terminalFamily') snapshot = { ...snapshot, terminalFamily: initial.terminalFamily };
+      if (key === 'terminalSize') snapshot = { ...snapshot, terminalSize: initial.terminalSize };
+    }
+    onChanged?.(snapshot);
+    return snapshot;
+  });
   const logToMain = vi.fn();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
@@ -27,18 +37,20 @@ function installBridge(initial: AppearanceSettings) {
       appearanceSettings: {
         getSync: () => snapshot,
         setPatch,
-        onChanged: (callback: typeof onChanged) => {
+        resetFields,
+        onChanged: vi.fn((callback: typeof onChanged) => {
           onChanged = callback;
           return () => {
             onChanged = undefined;
           };
-        },
+        }),
       },
       logToMain,
     },
   });
   return {
     setPatch,
+    resetFields,
     logToMain,
     broadcast: (next: Partial<AppearanceSettings>) => {
       snapshot = { ...snapshot, ...next };
@@ -50,6 +62,29 @@ function installBridge(initial: AppearanceSettings) {
 beforeEach(() => {
   document.documentElement.removeAttribute('style');
   document.body.removeAttribute('style');
+});
+
+it('uses the existing single appearance subscription for default and plugin settings', () => {
+  installBridge(DEFAULT_APPEARANCE_SETTINGS);
+  const stop = vi.fn();
+  const bridge = window.electronAPI.appearanceSettings;
+  vi.mocked(bridge.onChanged).mockReturnValue(stop);
+  // Main-entry's first-frame presenter must reuse the provider's fan-out.
+  const disposeStartup = installAppearancePresenter(applyFontSettings, false);
+  expect(bridge.onChanged).not.toHaveBeenCalled();
+  const hook = renderHook(() => useFontSettings(), { wrapper });
+  expect(bridge.onChanged).toHaveBeenCalledTimes(1);
+  hook.unmount();
+  expect(stop).toHaveBeenCalledTimes(1);
+  // Main also has a wallpaper reader. Only detached roots pass its appearance
+  // forwarding callback, so the existing two main subscriptions remain two.
+  const mainWrapper = ({ children }: { children: ReactNode }) => createElement(FontSettingsProvider, null,
+    createElement(WallpaperSettingsProvider, { desktopBackground: false, children }));
+  const main = renderHook(() => useFontSettings(), { wrapper: mainWrapper });
+  expect(bridge.onChanged).toHaveBeenCalledTimes(3); // One earlier mount plus two main readers.
+  main.unmount();
+  expect(stop).toHaveBeenCalledTimes(3);
+  disposeStartup();
 });
 
 afterEach(() => {
@@ -98,6 +133,7 @@ describe('terminal font settings isolation', () => {
     act(() => result.current.resetTerminalSize());
     await waitFor(() => expect(bridge.setPatch).toHaveBeenCalledTimes(4));
     expect(bridge.setPatch).toHaveBeenLastCalledWith({ terminalSize: 13 });
+    expect(bridge.resetFields).not.toHaveBeenCalled();
     expect(result.current.terminalFamily).toBe('');
     expect(result.current.terminalSize).toBe(13);
     expect([document.documentElement.style.cssText, document.body.style.cssText]).toEqual(

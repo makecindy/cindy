@@ -70,6 +70,46 @@ export function mockAppHtml() {
   return htmlPromise;
 }
 
+/** Browser integration fixture: official SDK parses initialization before the first render. */
+export async function viewStateAppHtml() {
+  const bundle = await build({
+    bundle: true,
+    write: false,
+    format: 'iife',
+    minify: true,
+    stdin: {
+      resolveDir: path.dirname(fileURLToPath(import.meta.url)),
+      contents: `
+      import { App } from '@modelcontextprotocol/ext-apps/app-with-deps';
+      import { EmptyResultSchema } from '@modelcontextprotocol/sdk/types.js';
+      const app = new App({name:'View state browser fixture',version:'1.0.0'},{});
+      const output = document.querySelector('output');
+      const renders = [];
+      const render = state => { output.textContent=JSON.stringify(state);renders.push(output.textContent); };
+      app.onteardown = async () => ({});
+      window.stateProbe = {
+        renders,
+        ready: (async () => {
+          await app.connect();
+          const context=app.getHostContext();
+          const capabilities=app.getHostCapabilities();
+          const saved=context?.['cindy/view-state'];
+          render(saved?.version===1?saved:{version:1,page:1,filter:''});
+          return {context,capabilities};
+        })(),
+        save: async state => {
+          const result=await app.request({method:'cindy/view-state/set',params:{state}},EmptyResultSchema);
+          render(state);
+          return result;
+        },
+      };
+      `,
+    },
+  });
+  return '<!doctype html><html><body><output></output><script>' +
+    bundle.outputFiles[0].text.replace(/<\/script/gi, '<\\/script') + '</script></body></html>';
+}
+
 export function createMockAppServer({ instructions } = {}) {
   const server = new McpServer({ name: 'cindy-mcp-apps-mock', version: '1.0.0' }, { instructions });
   let count = 0;

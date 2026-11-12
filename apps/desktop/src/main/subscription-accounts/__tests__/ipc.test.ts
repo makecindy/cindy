@@ -7,10 +7,11 @@ import { homedir } from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SubscriptionPoolConfig } from '../../../shared/subscriptionAccounts.js';
 const h = vi.hoisted(() => ({
-  handlers: new Map<string, (event: unknown, arg: unknown) => Promise<unknown>>(),
+  handlers: new Map<string, (event: unknown, arg: unknown, model?: unknown) => Promise<unknown>>(),
   context: null as null | { sharedTask?: object },
   trusted: true,
   execute: vi.fn(),
+  availability: vi.fn(),
   sessionRead: vi.fn(),
   owner: 'owner-a',
   generation: 1,
@@ -74,12 +75,13 @@ vi.mock('../service.js', () => ({ executeSubscriptionAccountCommand: h.execute }
 vi.mock('../runtime.js', () => ({
   onSubscriptionAccountsChanged: vi.fn(),
   readSubscriptionPoolUsage: vi.fn(async () => undefined),
+  readSubscriptionPoolModelAvailability: h.availability,
   readLegacySubscriptionPoolUsage: vi.fn(async () => undefined),
   readSubscriptionSessionUsage: vi.fn(async () => undefined),
   readSubscriptionSessionAccount: h.sessionRead,
 }));
 import { registerSubscriptionAccountsIpc } from '../ipc.js';
-import { accountDirectory, accountOwnerPrefix, migrateLegacyCodexAccounts, readBoundClaudeConfigDir, readLegacyCodexAccountId } from '../store.js';
+import { accountDirectory, accountOwnerPrefix, migrateLegacyCodexAccounts, readBoundClaudeConfigDir, readLegacyCodexAccountId, normalizePoolFile } from '../store.js';
 import { SUBSCRIPTION_ACCOUNTS_CHANNEL } from '../../../shared/subscriptionAccounts.js';
 import { mapIpcErrorToI18nKey } from '../../../shared/ipcError.js';
 import { legacyCodexAccountCanRun, setLegacyCodexAccountPaused } from '../legacyAccountAccess.js';
@@ -97,6 +99,7 @@ beforeEach(() => {
   h.remoteAllowed.clear();
   h.remoteModels = null;
   h.execute.mockReset().mockResolvedValue({ accounts: [] });
+  h.availability.mockReset().mockResolvedValue(true);
   h.sessionRead.mockReset().mockResolvedValue({ providerId: 'anthropic', state: 'legacy' });
 });
 
@@ -173,6 +176,41 @@ describe('legacy Codex account upgrade', () => {
   });
 });
 describe('subscription management boundary', () => {
+  // #9833, unit: new optional model query keeps old caller shape and the
+  // owner-only boundary. An aggregate/guest reply cannot authorize recovery.
+  // PR #9837 review: local grants cannot authorize a remote cooldown recovery.
+  it('supports model availability without changing old quota replies or admitting guests', async () => {
+    const quota = h.handlers.get('maker:subscription-pool:quota')!;
+    expect(await quota({}, 'anthropic')).toEqual({ providerId: 'anthropic', pooled: false, usage: null });
+    h.availability.mockImplementation(async (_provider, _model, options) => options?.remote !== true);
+    expect(await quota({}, 'openai', 'gpt-model')).toEqual({ providerId: 'openai', model: 'gpt-model', available: true });
+    h.context = {};
+    expect(await quota({}, 'openai', 'gpt-model')).toEqual({ providerId: 'openai', model: 'gpt-model', available: false });
+    for (const model of ['', ' ', 1, {}, 'x'.repeat(513)])
+      await expect(quota({}, 'anthropic', model)).rejects.toThrow('INVALID_PARAMS');
+    h.context = { sharedTask: {} };
+    await expect(quota({}, 'anthropic', 'sonnet')).rejects.toThrow('PERMISSION_DENIED');
+    h.context = null;
+    h.trusted = false;
+    await expect(quota({}, 'anthropic', 'sonnet')).rejects.toThrow('untrusted');
+    expect(h.availability).toHaveBeenCalledTimes(2);
+  });
+
+  // Standard: a wrong browser account must survive IPC as an actionable error,
+  // and its original identity guard must survive metadata normalization/restart.
+  it.each([
+    ['account_mismatch', 'SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH'],
+    ['account_identity_unknown', 'SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN'],
+  ])('preserves Claude identity metadata and the owner-facing %s error', async (reason, code) => {
+    const account = { id: 'default', paused: false, limit: 4, weight: 1,
+      reloginIdentity: 'original@example.test', lastConfirmedIdentity: 'original@example.test' };
+    const normalized = normalizePoolFile({ pools: { anthropic: { strategy: 'least', accounts: [account] } } });
+    expect(normalized.pools.anthropic?.accounts[0]).toEqual(account);
+    h.execute.mockRejectedValue(new Error(reason));
+    const error = await invoke({ action: 'login', providerId: 'anthropic', accountId: 'default', loginKey: 'renew' }).catch(error => error);
+    expect(mapIpcErrorToI18nKey(error)).toBe(`ipcError.${code}`);
+  });
+
   // #9517, unit: CLI provider-managed auth must survive the real handler and
   // renderer decoder as actionable copy, not the generic CLI/network failure.
   it('reports provider-managed authentication through the owner IPC error protocol', async () => {
@@ -198,9 +236,11 @@ describe('subscription management boundary', () => {
   it('serves the task-account read to the owner only, with validated ids', async () => {
     const query = { action: 'session', providerId: 'openai', sessionId: 'task-1', nativeSessionId: 'sdk-1' };
     await expect(invoke(query)).resolves.toEqual({ providerId: 'anthropic', state: 'legacy' });
-    expect(h.sessionRead).toHaveBeenCalledExactlyOnceWith('openai', query);
+    expect(h.sessionRead).toHaveBeenCalledExactlyOnceWith('openai', query, { remote: false });
     h.context = {};
-    await invoke({ action: 'session', providerId: 'anthropic', nativeSessionId: 'sdk-1' });
+    const remoteQuery = { action: 'session', providerId: 'anthropic', nativeSessionId: 'sdk-1', model: 'claude-sonnet' };
+    await invoke(remoteQuery);
+    expect(h.sessionRead).toHaveBeenLastCalledWith('anthropic', remoteQuery, { remote: true });
     h.context = { sharedTask: {} };
     await expect(invoke(query)).rejects.toThrow('PERMISSION_DENIED');
     h.context = null;
@@ -209,6 +249,7 @@ describe('subscription management boundary', () => {
       { action: 'session', providerId: 'anthropic', sessionId: '' },
       { action: 'session', providerId: 'anthropic', sessionId: 'x'.repeat(257) },
       { action: 'session', providerId: 'anthropic-second', sessionId: 'task-1' },
+      ...['', ' ', 1, {}, 'x'.repeat(513)].map(model => ({ ...query, model })),
     ])
       await expect(invoke(bad)).rejects.toThrow('INVALID_PARAMS');
     h.sessionRead.mockRejectedValue(new Error('fixture-private-path'));
@@ -224,6 +265,8 @@ describe('subscription management boundary', () => {
       { action: 'connect', target: 'new', loginKey: '../callback' },
       { action: 'connect', loginKey: 'login' },
       { action: 'configure', accountId: 'default', limit: 0 },
+      { action: 'configure', accountId: 'default', limit: 'unlimited' },
+      { action: 'configure', limit: null },
       { action: 'configure', paused: false },
       { action: 'configure', strategy: 'unknown' },
       { action: 'read', taskId: '../other-owner' },
@@ -233,6 +276,14 @@ describe('subscription management boundary', () => {
         'INVALID_PARAMS',
       );
     expect(h.execute).not.toHaveBeenCalled();
+  });
+  // Unit, 2026-11-11: "No limit" clears the account setting; null must survive the owner parser.
+  it('passes a cleared concurrency limit and a chosen limit through to the account service', async () => {
+    for (const limit of [null, 16]) {
+      const command = { action: 'configure', providerId: 'anthropic', accountId: 'default', limit };
+      await expect(invoke(command)).resolves.toEqual({ accounts: [] });
+      expect(h.execute).toHaveBeenLastCalledWith(expect.objectContaining({ action: 'configure', accountId: 'default', limit }));
+    }
   });
   // The new intent must survive the real owner IPC parser. An old "add" fallback
   // could silently attach the detected default instead of opening another login.

@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CustomProviderConfig, ModelRegistry, ProviderView } from '@cindy/model-providers';
 import { createIpcError } from '../../shared/ipc-errors';
 import { toast } from '@/lib/toast';
+import { evictDeviceProviders, prefetchDeviceProviders } from '@/hooks/useDeviceProviders';
 
 const {
   refreshBuiltinModelsSpy,
@@ -48,9 +49,32 @@ const {
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, options?: { count?: number }) =>
-      key === 'settings.providers.models.manage.selected' ? `${key}:${options?.count}` : key,
+      key === 'settings.providers.models.manage.selected' || key === 'settings.providers.models.modelCount'
+        ? `${key}:${options?.count}`
+        : key,
     i18n: { language: 'zh-CN' },
   }),
+}));
+
+// 同账号的其他电脑及其供应商目录。缺省没有其他电脑，与测试环境里真实 hook 的结果相同。
+const ownDevicesState = vi.hoisted(() => ({
+  devices: [] as Array<{ deviceId: string; name: string; platform: string | null }>,
+  catalogs: new Map<string, unknown>(),
+}));
+vi.mock('@/hooks/useControllableDevices', () => ({
+  useControllableDevices: () => ownDevicesState.devices,
+}));
+vi.mock('@/hooks/useDevicesProviders', () => ({
+  useDevicesProviders: (ids: readonly string[]) =>
+    new Map(ids.flatMap((id) => {
+      const catalog = ownDevicesState.catalogs.get(id);
+      return catalog ? [[id, catalog]] : [];
+    })),
+}));
+const refreshRemoteCatalogSpy = vi.hoisted(() => vi.fn<(deviceId: string) => Promise<void>>(async () => undefined));
+vi.mock('@/lib/remoteCatalogSnapshot', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/remoteCatalogSnapshot')>(),
+  refreshRemoteCatalogSnapshot: refreshRemoteCatalogSpy,
 }));
 
 vi.mock('@/hooks/useProviders', () => ({
@@ -175,6 +199,7 @@ vi.mock('@/lib/customProviders', async (importOriginal) => ({
 
 vi.mock('@/lib/providerModels', () => ({
   providerMonogram: () => 'X',
+  isDeviceModelVisible: () => true,
 }));
 
 vi.mock('@/lib/providerSubtitle', () => ({
@@ -219,6 +244,8 @@ beforeEach(() => {
   providerSnapshotState.loading = false;
   providerSnapshotState.error = null;
   providerSnapshotState.order = ['anthropic', 'xd', 'custom'];
+  ownDevicesState.devices = [];
+  ownDevicesState.catalogs = new Map();
   scanResult = { detections: [] };
   confirmSpy.mockReset().mockResolvedValue(false);
   vi.mocked(updateCustomProvider).mockResolvedValue({ ok: true });
@@ -245,6 +272,21 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 双栏管理', () => {
+  // Unit: an opaque enterprise UUID has no inferred brand. The settings rail
+  // must still render the host-supplied artwork instead of a name initial.
+  it('renders explicit organization artwork in the provider list', async () => {
+    providerSnapshotState.customOverride = {
+      id: 'byok-test', name: 'Enterprise Codex', source: 'organization',
+      auth: { method: 'managed' }, agents: ['codex'], routing: {}, models: { codex: [] },
+      connected: true, logoKind: 'openai-spectrum',
+    };
+    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    const row = await screen.findByRole('button', { name: /Enterprise Codex/ });
+    const gradient = row.querySelector('linearGradient');
+    expect(gradient).not.toBeNull();
+    expect(row.querySelector('path[fill^="url"]')?.getAttribute('fill')).toBe(`url(#${gradient!.id})`);
+  });
+
   it('batches a saved Hinoki refresh before waiting and preserves manual models', async () => {
     const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'hinoki')!;
     const config: CustomProviderConfig = {
@@ -753,6 +795,84 @@ describe('ProvidersSection — 双栏管理', () => {
       );
     });
     expect(refreshBuiltinModelsSpy).toHaveBeenCalledWith('xd');
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ProvidersSection；本机没登录 Claude、由同账号另一台电脑运行时，
+  //   详情列出那台电脑开放的模型，刷新重新读取那台电脑的目录，不再调用本机 Claude Code。
+  // - Bug／规则依据：PR #9740(0.1.133)把另一台电脑的供应商合进本机条目后，模型区仍读本机空目录、
+  //   刷新走本机 CLI 必然失败；provider-sharing.md「同账号借用与运行于」要求整页按能用显示。
+  // - 现有覆盖缺口：本文件只覆盖本机目录；借用状态此前没有任何设置页用例。
+  // - 最小失败输入：本机 Anthropic 未连接 + 一台在线电脑提供已连接、开放远程调用的 Anthropic。
+  // - tier：unit(jsdom，内存 fake)。
+  // 失败分支：真实目录预取吞掉请求异常时仍提示失败，模型区卸载后提示中的重试仍指向原电脑。
+  it.each(['success', 'prefetch-error'])(
+    '本机没登录、借用另一台电脑时，模型清单与刷新都按那台电脑（%s）', async (outcome) => {
+    ownDevicesState.devices = [{ deviceId: 'starforce', name: 'Starforce', platform: 'darwin' }];
+    ownDevicesState.catalogs = new Map([['starforce', {
+      providers: [{
+        id: 'anthropic',
+        name: 'Anthropic',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'oauth' },
+        routing: {},
+        connected: true,
+        remoteInvocationEnabled: true,
+        models: {
+          'claude-code': [
+            { id: 'claude-opus-5-5', name: 'Opus 5.5', contextWindow: 200_000, efforts: [], defaultEffort: null },
+            { id: 'claude-haiku-5-5', name: 'Haiku 5.5', contextWindow: 200_000, efforts: [], defaultEffort: null },
+          ],
+        },
+      } satisfies ProviderView],
+      loading: false,
+      error: null,
+    }]]);
+    const view = render(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
+
+    // 左栏这一项按那台电脑的模型计数。
+    const row = (await screen.findAllByText('Anthropic'))
+      .map((label) => label.closest('button[aria-current]'))
+      .find((button): button is HTMLButtonElement => button !== null)!;
+    expect(row.textContent).toContain('settings.providers.models.modelCount:2');
+    await act(async () => { fireEvent.click(row); });
+
+    const models = await screen.findByTestId('borrowed-provider-models');
+    expect(models.textContent).toContain('Opus 5.5');
+    expect(models.textContent).toContain('Haiku 5.5');
+    expect(screen.queryByText('settings.providers.detail.emptyModels')).toBeNull();
+
+    if (outcome === 'prefetch-error') {
+      evictDeviceProviders('starforce');
+      (window.electronAPI as unknown as { deviceLink: unknown }).deviceLink = {
+        invoke: vi.fn(async () => { throw new Error('remote catalog unavailable'); }),
+      };
+      refreshRemoteCatalogSpy.mockImplementationOnce(async (deviceId) => {
+        await prefetchDeviceProviders(deviceId);
+      });
+    }
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'settings.providers.models.refreshBuiltinAria' }),
+      );
+    });
+    expect(refreshRemoteCatalogSpy).toHaveBeenCalledWith('starforce');
+    expect(refreshBuiltinModelsSpy).not.toHaveBeenCalled();
+    if (outcome === 'prefetch-error') {
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
+        'settings.providers.models.refreshFailed',
+        expect.objectContaining({ action: expect.objectContaining({ label: 'settings.providers.button.retry' }) }),
+      ));
+      const retry = vi.mocked(toast.error).mock.lastCall?.[1]?.action;
+      ownDevicesState.catalogs.clear();
+      view.rerender(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+      expect(screen.queryByTestId('borrowed-provider-models')).toBeNull();
+      await act(async () => { retry!.onClick(); });
+      expect(refreshRemoteCatalogSpy).toHaveBeenCalledTimes(2);
+      expect(refreshRemoteCatalogSpy).toHaveBeenLastCalledWith('starforce');
+      expect(refreshBuiltinModelsSpy).not.toHaveBeenCalled();
+    }
   });
 
   it('同一事件循环内连续点击刷新只启动一个请求', async () => {

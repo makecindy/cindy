@@ -1,3 +1,4 @@
+import type { PeerStreamFileResult } from './peerMediaStream';
 import { readRemoteDeviceFile } from './fileAccess';
 /**
  * remoteMediaProtocol.ts — 控制端 `cindy-remote-media://` 自定义 scheme(入方向媒体)。
@@ -31,7 +32,7 @@ import * as ledger from '../cindy-media/ledger';
 import { buildRangedMediaResponse } from '../cindy-media/rangeResponse';
 import { remoteInvoke } from './index';
 import { DL_MEDIA_FETCH_CHANNEL } from '@cindy/device-link';
-import { downloadToBuffer, openMediaStream, removeRemote } from './mediaTransfer';
+import { downloadToBuffer, openMediaStream, removeRemote } from './mediaTransfer.desktop';
 import * as cache from './remoteMediaCacheStore';
 import type { RemoteMediaEntry, StreamEntry } from './remoteMediaCacheStore';
 import { activeOwnerScopeKey } from '../appSessionState';
@@ -100,14 +101,14 @@ async function serveLocalCindyMediaBlob(
 }
 
 /** 同 key 取件去重:首次取件期间的并发请求复用同一 Promise。 */
-const inflight = new Map<string, Promise<RemoteMediaEntry>>();
+const inflight = new Map<string, Promise<RemoteMediaEntry | PeerStreamFileResult>>();
 
 function inflightKeyOf(deviceId: string, origUrl: string): string {
   return `${activeOwnerScopeKey()} ${deviceId} ${origUrl}`;
 }
 
 /** 取得缓存条目:命中直接返回,未命中向被控端取件并落缓存(并发去重)。 */
-async function ensureEntry(deviceId: string, origUrl: string): Promise<RemoteMediaEntry> {
+async function ensureEntry(deviceId: string, origUrl: string): Promise<RemoteMediaEntry | PeerStreamFileResult> {
   const hit = cache.lookup(deviceId, origUrl);
   // A path can change in place. Let the existing host stat/version cache validate it.
   if (hit && (hit.kind === 'stream' || isImmutableRemoteMedia(origUrl))) return hit;
@@ -159,7 +160,7 @@ async function downloadLocalEntry(
   origUrl: string,
   fetched: MediaFetchResult,
   assertCurrent: () => void,
-): Promise<RemoteMediaEntry> {
+): Promise<RemoteMediaEntry | PeerStreamFileResult> {
   let versioned: ReturnType<typeof remoteFileVersionCache> = null;
   try { versioned = remoteFileVersionCache(deviceId, origUrl, { ...fetched, assertCacheCurrent: assertCurrent }); } catch { /* Optional cache. */ }
   try {
@@ -178,7 +179,7 @@ function toEntry(
   origUrl: string,
   fetched: MediaFetchResult,
   assertCurrent: () => void,
-): Promise<RemoteMediaEntry> {
+): Promise<RemoteMediaEntry | PeerStreamFileResult> {
   if (fetched.inlineBase64 !== undefined) {
     assertCurrent();
     return Promise.resolve(
@@ -199,13 +200,15 @@ function toEntry(
   return downloadLocalEntry(deviceId, origUrl, fetched, assertCurrent);
 }
 
-async function fetchAndCache(deviceId: string, origUrl: string, assertCacheCurrent: () => void): Promise<RemoteMediaEntry> {
+async function fetchAndCache(deviceId: string, origUrl: string, assertCacheCurrent: () => void): Promise<RemoteMediaEntry | PeerStreamFileResult> {
   const assertCurrent = captureRemoteMediaOwner();
   const fetched = await readRemoteDeviceFile(deviceId, origUrl, remoteInvoke, {
     maxPeerBytes: LOCAL_BUFFER_MAX,
     stream: true,
+    playback: true,
     assertCacheCurrent,
   });
+  if ('kind' in fetched && fetched.kind === 'peer-stream') return fetched;
   if ('path' in fetched) {
     try {
       const bytes = await fs.readFile(fetched.path);
@@ -376,6 +379,7 @@ async function handleRemoteMedia(
     }
     const entry = await ensureEntry(deviceId, parsed.origUrl);
     assertCurrent();
+    if (entry.kind === 'peer-stream') return entry.serve(rangeHeader, signal);
     if (entry.kind === 'local') return serveLocal(entry, rangeHeader);
     try {
       return await serveStream(entry, rangeHeader, signal);
@@ -404,7 +408,7 @@ async function handleRemoteMedia(
       const joined = inflight.get(k);
       if (joined) {
         const fresh = await joined;
-        return fresh.kind === 'local'
+        return fresh.kind === 'peer-stream' ? await fresh.serve(rangeHeader, signal) : fresh.kind === 'local'
           ? serveLocal(fresh, rangeHeader)
           : await serveStream(fresh, rangeHeader, signal);
       }
@@ -434,7 +438,7 @@ async function handleRemoteMedia(
       })().finally(() => inflight.delete(k));
       inflight.set(k, p);
       const fresh = await p;
-      return fresh.kind === 'local'
+      return fresh.kind === 'peer-stream' ? await fresh.serve(rangeHeader, signal) : fresh.kind === 'local'
         ? serveLocal(fresh, rangeHeader)
         : await serveStream(fresh, rangeHeader, signal);
     }

@@ -1,6 +1,8 @@
+import { FirstRunGuide } from '@/features/first-run-guide/FirstRunGuide';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { PerformanceTrace, openPerformanceTrace } from '@/components/performance-trace/PerformanceTrace';
 import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
+import { usePluginUiWindowCandidates, PluginUiSlotControls } from '@/cindy-brain/PluginUiContributions';
 import { installedGhostStoragePart, resolvePluginInstanceQuery } from '../../../shared/pluginIdentity';
 import { drainPendingDeepLinks } from '@/lib/pendingDeepLinks';
 import { ChatInviteHost, reportMalformedChatInvite, requestChatInvite } from '@/features/bots/ChatInviteHost';
@@ -255,7 +257,7 @@ function SidebarPinSpacer({ width }: { width: number }) {
   return (
     <div
       aria-hidden
-      className="h-full shrink-0 transition-[width] duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:duration-0"
+      className="h-full shrink-0 transition-[width] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:duration-0"
       style={{ width: animatedWidth }}
     />
   );
@@ -897,7 +899,7 @@ export function MainLayout() {
   }, []);
 
   // RightSidebar 的命令式句柄。toggle 按钮 onClick 时主动调 requestAnimateNextChange()
-  // 告诉 RightSidebar "这次 prop 变化走 250ms 动画"。其它任何 isCollapsed 变化路径
+  // 告诉 RightSidebar "这次 prop 变化走 200ms 动画"。其它任何 isCollapsed 变化路径
   // (sessionId 切换 / 草稿切换 / init)都不调,RightSidebar 默认走"直接同步"无动画。
   const rightSidebarRef = useRef<RightSidebarHandle>(null);
 
@@ -957,7 +959,7 @@ export function MainLayout() {
 
   // 关掉右侧栏最后一个 tab 时自动收起(由 RightSidebarShell 在 tab 数 >0→0 时回调)。
   // detached 子窗口形态不在此处理(那时主窗根本不渲染内嵌 Shell,也收不到此回调)。
-  // 走 requestAnimateNextChange 让收起有 250ms 动画,与用户手动折叠观感一致(规则 7)。
+  // 走 requestAnimateNextChange 让收起有 200ms 动画,与用户手动折叠观感一致(规则 7)。
   // sessionId 用 ref 取最新值,避免回调闭包捕获旧 session。
   const handleRightSidebarEmptied = useCallback(() => {
     if (rsbDetached) return;
@@ -1153,7 +1155,7 @@ export function MainLayout() {
   useEffect(() => {
     if (isSecondaryWindow()) return;
     return window.electronAPI.rightSidebarWindow.onCommand((command) => {
-      if (command.sessionId !== rightSidebarSessionIdRef.current) return;
+      if (command.type !== 'open-plugin-view' && command.sessionId !== rightSidebarSessionIdRef.current) return;
       void executeSidebarCommand(command).catch((err) => {
         applicationMenuLog.warn('execute attached sidebar command failed', err);
       });
@@ -1695,8 +1697,11 @@ export function MainLayout() {
 
   // Session/tool-pane declarations update Shell state during navigation. Keep
   // unrelated updates from invalidating the entire routed conversation again.
+  const { settings: pluginSettings, sidebarSections: pluginSidebarSections,
+    titlebarEntries: pluginTitlebarEntries, onGhostsChanged: handleInstalledGhostsChange } = usePluginUiWindowCandidates();
   const outletContext = useMemo(() => ({
     sidebarWidth,
+    pluginSettings,
     rightSidebarCollapsed: rsbDetached || isRightSidebarCollapsed,
     onToggleRightSidebar: handleOpenRightSidebar,
     rightSidebarSide,
@@ -1704,7 +1709,7 @@ export function MainLayout() {
     setRightSidebarSessionId: declareRightSidebarSessionId,
     setRightSidebarWorkdir,
   }), [
-    sidebarWidth, rsbDetached, isRightSidebarCollapsed, handleOpenRightSidebar,
+    sidebarWidth, pluginSettings, rsbDetached, isRightSidebarCollapsed, handleOpenRightSidebar,
     rightSidebarSide, declareRightSidebarSessionId, setRightSidebarWorkdir,
   ]);
 
@@ -1728,10 +1733,12 @@ export function MainLayout() {
     <FeatureSidebarSlotProvider
       isCollapsed={sidebarPeek.isPeekVisible ? false : isSidebarCollapsed || isRailMode}
     >
+      <FirstRunGuide />
       <ScheduleSessionIndexOwner />
       {!isSecondaryWindow() && <PerformanceTrace statusContainer={performanceTraceStatusHost} />}
       <div
         ref={rowRef}
+        data-plugin-ui-element="workspace"
         className={cn(
           'relative flex h-screen bg-content-area text-foreground',
           isDragging && 'select-none cursor-col-resize',
@@ -1742,12 +1749,14 @@ export function MainLayout() {
             flex + shrink-0 与 aside 原有的 flex child 行为一致,不改变布局;
             peek 期 aside 变 fixed 出流,wrapper 宽度自然等于流内 spacer 宽。 */}
         {!isSettingsRoute && (
-          <div ref={sidebarBlockRef} className="flex shrink-0">
+          <div ref={sidebarBlockRef} className="flex shrink-0" data-plugin-ui-element="sidebar">
             {/* pinning 冻结期的流内占位:抽屉保持 fixed 不动,由本 spacer 跑 0→W 的
-                250ms 宽度动画把主区推开;动画结束(peekState 回 idle)后同一帧内
+                200ms 宽度动画把主区推开;动画结束(peekState 回 idle)后同一帧内
                 spacer 卸载、aside 摘掉 fixed 落回流内 —— 两者矩形一致,交换无跳变。 */}
             {sidebarPeek.peekState === 'pinning' && <SidebarPinSpacer width={sidebarWidth} />}
             <Sidebar
+              pluginSections={pluginSidebarSections}
+              pluginSessionId={rightSidebarSessionId}
               isCollapsed={isSidebarCollapsed}
               // peek 抽屉恒以展开态呈现(预览完整列表),rail 视觉在 peek 期强制关闭。
               isRail={sidebarPeek.isPeekVisible ? false : isRailMode}
@@ -1831,7 +1840,11 @@ export function MainLayout() {
                   // mac:远程桌面入口落在顶栏右端,紧挨窗口右上角的右栏开关(右栏展开时
                   // 仍在聊天区顶栏右端)。Windows 走下方内容区 chip 栈。
                   trailing={
-                    isMac && remoteDesktopDeviceId ? (
+                    pluginTitlebarEntries.length > 0 ? <>
+                      <PluginUiSlotControls entries={pluginTitlebarEntries} sessionId={rightSidebarSessionId} appearance="titlebar" />
+                      {isMac && remoteDesktopDeviceId && <TaskRemoteDesktopButton key={remoteDesktopDeviceId}
+                        deviceId={remoteDesktopDeviceId} className={rightSidebarAvailable ? 'mr-1' : 'mr-2'} />}
+                    </> : isMac && remoteDesktopDeviceId ? (
                       <TaskRemoteDesktopButton
                         key={remoteDesktopDeviceId}
                         deviceId={remoteDesktopDeviceId}
@@ -1947,6 +1960,7 @@ export function MainLayout() {
               不再逐像素回灌 React；设置页接管时非 chat 面板统一歇业。 */}
           <TabGroupHostProvider value={tabGroupHost}>
             <LayoutRoot
+              onInstalledGhostsChange={handleInstalledGhostsChange}
               suppressNonChatPanels={isSettingsRoute}
               sidebarExpansionReady={rightSidebarAvailable && rsbWindow.loaded && !rsbDetached}
               rightTabsCollapsed={
@@ -1990,6 +2004,7 @@ export function MainLayout() {
         {!isMac && (
           <div
             className="absolute right-0 top-0 z-50 flex h-[46px] items-center pr-2"
+            data-plugin-ui-element="windowControls"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
             <WindowControls />

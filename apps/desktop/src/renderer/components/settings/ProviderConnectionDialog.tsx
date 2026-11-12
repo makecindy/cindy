@@ -1,9 +1,10 @@
+import { useFirstRunGuideConnectionDialog } from '@/features/first-run-guide/firstRunGuideStore';
 import { withSpeechApiPresets } from '../../../shared/speechProviderSetup';
 import { ProviderNameSearch } from './ProviderNameSearch';
 import { providerSearchChoices, type ProviderSearchTarget } from './providerSearch';
 import { useDialogExit } from '@/hooks/useDialogExit';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
-import { providerEndpointBindings, canonicalProviderEndpoint, BUNDLED_CATALOG, mergeModelMetadata } from '@cindy/model-providers';
+import { providerEndpointBindings, canonicalProviderEndpoint, BUNDLED_CATALOG, mergeModelMetadata, type ProviderVideoApi } from '@cindy/model-providers';
 import { matchOfficialProviders, bindDetectedProvider, isAgentSelectableModel, isLoopbackProviderUrl } from '@cindy/model-providers';
 import type { ProviderConnectionTestResult } from '../../../shared/providerConnectionTest';
 import type { DetectedProviderDraft, DetectionCatalog } from '../../../shared/providerDetection';
@@ -234,7 +235,7 @@ interface RuntimeFields extends RuntimeFillDraft {
   supportsImageGeneration: boolean;
   /** Standalone Images API, independent of the Codex Responses hosted tool. */
   imageApi?: 'openai-images';
-  videoApi?: 'xai-videos';
+  videoApi?: ProviderVideoApi;
 }
 
 function followsDefaultConnection(agent: DialogAgentKind, value: RuntimeFields, source: RuntimeFields): boolean {
@@ -488,8 +489,15 @@ export function ProviderConnectionDialog({
   const dialog = useDialogExit(returnFocusRef);
   const suspendedRef = useRef(suspended);
   useLayoutEffect(() => { suspendedRef.current = suspended; }, [suspended]);
-  const onClose = useCallback(() => dialog.close(notifyClosed), [dialog.close, notifyClosed]);
-  const onSaved = useCallback(() => dialog.close(notifySaved), [dialog.close, notifySaved]);
+  const { complete: completeGuideConnection, cancel: cancelGuideConnection } = useFirstRunGuideConnectionDialog();
+  const onClose = useCallback(() => dialog.close(() => {
+    cancelGuideConnection();
+    notifyClosed();
+  }), [cancelGuideConnection, dialog.close, notifyClosed]);
+  const onSaved = useCallback(() => dialog.close(() => {
+    completeGuideConnection();
+    notifySaved();
+  }), [completeGuideConnection, dialog.close, notifySaved]);
   const editing = !!initial;
   const simpleAdding = !editing && !!onDetected;
   const [manualOpen, setManualOpen] = useState(false);
@@ -3108,32 +3116,41 @@ export function ProviderConnectionDialog({
 
                 {!simpleAdding && authMode !== 'oauth' && (
                   <div className="flex flex-col gap-1.5 border-t border-[var(--border-default)] pt-3">
-                    <label className="flex cursor-pointer items-center gap-2 text-13 text-[var(--settings-section-title)]">
-                      <Checkbox data-settings-search-action="Make this runtime the xAI Videos connection of the provider draft"
-                        id={fieldId(`${activeTab}:video-api`)}
-                        aria-describedby={fieldId(`${activeTab}:video-api-hint`)}
-                        checked={f.videoApi === 'xai-videos'}
-                        onChange={(event) => {
-                          const enabled = event.currentTarget.checked;
-                          // One explicit media owner per provider; other chat routes and keys stay intact.
-                          setRtSynced((prev) => Object.fromEntries(
-                            Object.entries(prev).map(([agent, runtime]) => [agent, {
-                              ...runtime,
-                              videoApi: agent === activeTab && enabled
-                                ? 'xai-videos'
-                                : enabled || agent === activeTab ? undefined : runtime.videoApi,
-                            }]),
-                          ) as Record<DialogAgentKind, RuntimeFields>);
-                        }}
-                      />
-                      {t('settings.providers.custom.fields.xaiVideos')}
-                    </label>
-                    <p
-                      id={fieldId(`${activeTab}:video-api-hint`)}
-                      className="text-12 leading-5 text-[var(--settings-section-desc)]"
-                    >
-                      {t('settings.providers.custom.fields.xaiVideosHint')}
-                    </p>
+                    {([
+                      ['xai-videos', 'video-api', t('settings.providers.custom.fields.xaiVideos'), t('settings.providers.custom.fields.xaiVideosHint')],
+                      ['minimax-videos', 'minimax-video-api', t('settings.providers.custom.fields.minimaxVideos'), t('settings.providers.custom.fields.minimaxVideosHint')],
+                      ['openai-videos', 'openai-video-api', t('settings.providers.custom.fields.openaiVideos'), t('settings.providers.custom.fields.openaiVideosHint')],
+                    ] as const).map(([api, idSuffix, label, hint]) => (
+                      <div key={api} className="flex flex-col gap-1.5">
+                        <label className="flex cursor-pointer items-center gap-2 text-13 text-[var(--settings-section-title)]">
+                          <Checkbox
+                            data-settings-search-action="Choose this connection's video API inside the provider dialog; search entry providers.videoApi opens the providers panel"
+                            id={fieldId(`${activeTab}:${idSuffix}`)}
+                            aria-describedby={fieldId(`${activeTab}:${idSuffix}-hint`)}
+                            checked={f.videoApi === api}
+                            onChange={(event) => {
+                              const enabled = event.currentTarget.checked;
+                              // One explicit media owner and one video API per provider; other chat routes and keys stay intact.
+                              setRtSynced((prev) => Object.fromEntries(
+                                Object.entries(prev).map(([agent, runtime]) => [agent, {
+                                  ...runtime,
+                                  videoApi: agent === activeTab && enabled
+                                    ? api
+                                    : enabled || agent === activeTab ? undefined : runtime.videoApi,
+                                }]),
+                              ) as Record<DialogAgentKind, RuntimeFields>);
+                            }}
+                          />
+                          {label}
+                        </label>
+                        <p
+                          id={fieldId(`${activeTab}:${idSuffix}-hint`)}
+                          className="text-12 leading-5 text-[var(--settings-section-desc)]"
+                        >
+                          {hint}
+                        </p>
+                      </div>
+                    ))}
                   </div>
                 )}
 

@@ -700,9 +700,9 @@ export interface AgentDeps {
   auth: AuthAdapter;
   runtimeConfig: AgentRuntimeConfig;
   /**
-   * Agent CLI 二进制绝对路径。host 在构造 agent 前必须已经把二进制 provisioned 好
-   * (splash 阶段下载/解压); maker-core 自己不下载、不解析 manifest, 拿到就用。
-   * 缺省 / 空串 → BaseAgent 构造期立即抛错, 不让 session 进半就绪状态。
+   * Agent CLI 的绝对路径，由 host 准备，maker-core 不下载或解析 manifest。
+   * 可由 getter 延迟解析，使缺少运行环境时仍能构造本地服务；getter 必须在
+   * 实际使用时返回已准备好的路径或抛错。普通空值仍在构造期拒绝。
    */
   binaryPath: string;
   logger: Logger;
@@ -1954,7 +1954,10 @@ export interface LocalAgentClient {
   storageDirectory?: string;
 }
 
+export const TASK_SYSTEM_PROMPT = Symbol('cindy.task-system-prompt');
 export interface StartSessionOptions {
+  /** Host-owned task instructions, appended after the native fixed prompt. */
+  readonly [TASK_SYSTEM_PROMPT]?: string;
   [NATIVE_SUBSCRIPTION_ACCOUNT]?: NativeSubscriptionAccount;
   [LOCAL_AGENT_CLIENT]?: LocalAgentClient;
   /**
@@ -2210,7 +2213,29 @@ export interface MainOwnedSendContext {
  */
 export const PI_CACHE_RECOVERY_EXPECTATION = Symbol('pi-cache-recovery-expectation');
 
+/** Host-owned, call-local model request interception. Never accepted from wire options. */
+export { assembleSystemPromptSections, type SystemPromptSection } from './shared/system-prompt-sections.js';
+export const MODEL_REQUEST_CONTROL = Symbol('cindy.model-request-control');
+export interface ModelRequestRoute {
+  model: string;
+  providerId: string;
+  effort?: string;
+  fastMode?: boolean | 'ultrafast';
+}
+export interface ModelRequestInput extends ModelRequestRoute {
+  phase: 'select' | 'payload';
+  request?: Record<string, unknown>;
+  /** Host transport failed before plugin delivery; no partial request is exposed. */
+  failure?: 'request-too-large';
+}
+export type ModelRequestControl = (input: ModelRequestInput) => Promise<{
+  skip?: true;
+  route?: ModelRequestRoute;
+  request?: Record<string, unknown>;
+}>;
+
 export interface SendOptions {
+  readonly [MODEL_REQUEST_CONTROL]?: ModelRequestControl;
   readonly [PI_CACHE_RECOVERY_EXPECTATION]?: import('./pi/cache-compatibility.js').PiCacheCompatibility;
   readonly [ASYNC_QUESTION_ANSWER]?: true;
   readonly [SUPERSEDE_ASYNC_QUESTIONS]?: true;
@@ -2779,7 +2804,9 @@ export abstract class BaseAgent {
   protected memoryOverride: boolean | undefined;
 
   constructor(protected deps: AgentDeps) {
-    if (!deps.binaryPath) {
+    // Hosts may supply a live getter: local browsing must work before an
+    // optional runtime is installed. The getter validates on actual use.
+    if (!Object.getOwnPropertyDescriptor(deps, 'binaryPath')?.get && !deps.binaryPath) {
       throw new Error(
         `${this.constructor.name}: binaryPath is required at construction (host must provision binary before instantiating agent)`,
       );

@@ -1,5 +1,12 @@
 {
   "githubPrs": {
+    "status": {
+      "open": "Offen",
+      "draft": "Entwurf",
+      "merged": "Zusammengeführt",
+      "closed": "Geschlossen"
+    },
+    "statusUnavailable": "Status noch nicht geladen",
     "title": "PR-Links verwalten",
     "hint": "Bis zu 3 in der Kopfzeile; angeheftete PRs erscheinen zuerst",
     "empty": "Füge zum Hinzufügen einen GitHub-PR- oder GitLab-MR-Link ein",
@@ -253,7 +260,7 @@
           "plugins": "Plugin-Katalog",
           "memoryRules": "Speicheranweisungen",
           "memoryIndex": "Speicherindex",
-          "profile": "Teammitglied-Profil",
+          "profile": "Freund-Profil",
           "user": "Benutzeranweisungen",
           "directories": "Zusätzliche Verzeichnisse",
           "native": "Pi-Anweisungen",
@@ -664,6 +671,8 @@
     "taskAlreadyCreated": "Diese Aufgabe existiert bereits auf dem Computer. Ihre gespeicherten Nachrichten werden dort fortgesetzt."
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_FULL": "Alle Konten bzw. Computer, die diese Aufgabe ausführen können, haben ihr Parallelitätslimit erreicht. Warte, bis eine laufende Aufgabe endet, oder erhöhe das Limit in den Anbietereinstellungen.",
+    "SUBSCRIPTION_ACCOUNTS_FULL": "Alle Konten bzw. Computer, die diese Aufgabe ausführen können, haben ihr Parallelitätslimit erreicht. Warte, bis eine laufende Aufgabe endet, oder erhöhe das Limit in den Anbietereinstellungen.",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Bei dieser SSH-Aufgabe lässt sich der Harness nicht wechseln. Wähle ein Modell im aktuellen Harness oder erstelle eine neue SSH-Aufgabe mit dem benötigten Harness.",
     "MODEL_SELECTION_UNAVAILABLE": "Das ausgewählte Modell ist bei seinem Anbieter nicht mehr verfügbar. Prüfe die Verbindung in den Einstellungen oder wähle ein anderes verfügbares Modell.",
     "HARNESS_SWITCH_NOT_READY": "Der Harness-Wechsel ist noch nicht bereit. Prüfe die Fehlerdetails und versuche es erneut, sobald der Harness bereit ist.",

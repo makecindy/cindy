@@ -1,5 +1,12 @@
 {
   "githubPrs": {
+    "status": {
+      "open": "열림",
+      "draft": "초안",
+      "merged": "병합됨",
+      "closed": "닫힘"
+    },
+    "statusUnavailable": "아직 상태 정보가 없습니다",
     "title": "PR 링크 관리",
     "hint": "상단에 최대 3개 표시하며 고정한 PR이 먼저 표시됩니다",
     "empty": "GitHub PR 또는 GitLab MR 링크를 붙여넣어 추가하세요",
@@ -237,7 +244,7 @@
           "plugins": "플러그인 목록",
           "memoryRules": "메모리 지침",
           "memoryIndex": "메모리 색인",
-          "profile": "팀원 프로필",
+          "profile": "동반자 프로필",
           "user": "사용자 지침",
           "directories": "추가 디렉터리",
           "native": "Pi 지침",
@@ -648,6 +655,8 @@
     "taskAlreadyCreated": "이 세션은 컴퓨터에 이미 생성되어 있습니다. 저장된 메시지는 기존 세션에서 전송을 재개합니다."
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_FULL": "이 작업을 실행할 수 있는 계정 또는 컴퓨터가 모두 동시 실행 한도에 도달했습니다. 실행 중인 작업이 끝날 때까지 기다리거나 제공자 설정에서 한도를 올리세요.",
+    "SUBSCRIPTION_ACCOUNTS_FULL": "이 작업을 실행할 수 있는 계정 또는 컴퓨터가 모두 동시 실행 한도에 도달했습니다. 실행 중인 작업이 끝날 때까지 기다리거나 제공자 설정에서 한도를 올리세요.",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "이 SSH 작업에서는 Harness를 전환할 수 없습니다. 현재 Harness의 모델을 선택하거나 필요한 Harness로 새 SSH 작업을 만드세요.",
     "MODEL_SELECTION_UNAVAILABLE": "선택한 제공자의 모델을 더 이상 사용할 수 없습니다. 설정에서 연결을 확인하거나 사용 가능한 모델을 다시 선택하세요.",
     "HARNESS_SWITCH_NOT_READY": "Harness 전환이 완료되지 않았습니다. 오류 세부 정보를 확인하고 Harness가 준비되면 다시 시도하세요.",

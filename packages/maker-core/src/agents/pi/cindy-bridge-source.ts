@@ -1,5 +1,6 @@
 import { PI_CACHE_RECOVERY_SOURCE } from './cache-recovery-source.js';
 import { PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from './native-provider-adapter-source.js';
+import { MAX_JSONL_BUFFER_CHARS } from './rpc-limits.js';
 /**
  * cindy-bridge —— 写进 pi agentHome/extensions/ 的扩展源码(字符串常量)。
  *
@@ -55,6 +56,7 @@ const SENSITIVE_CREDENTIAL_SELECTOR_GLOBS = [...new Set(
 
 export const CINDY_BRIDGE_EXTENSION_FILENAME = "cindy-bridge.ts";
 export const CINDY_PI_TEXT_ONLY_INPUT_PREFIX = '[CINDY_TEXT_ONLY_INPUT]:';
+export const CINDY_PI_MODEL_REQUEST_INPUT_PREFIX = '[CINDY_MODEL_REQUEST]:';
 export const CINDY_PI_TEXT_ONLY_READY_PREFIX = 'cindy:text-only-ready:';
 export const CINDY_PI_TEXT_ONLY_CLOSED_PREFIX = 'cindy:text-only-unavailable:';
 export const CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX = 'cindy:provider-request:';
@@ -187,6 +189,7 @@ const SECRET_ENV_NAMES = new Set<string>([
   'CINDY_PI_SECRET_ENV_NAMES',
   'CINDY_PI_PERMISSION_FILE',
   'CINDY_PI_MODEL_REQUEST_PREFS_FILE',
+  'CINDY_PI_TASK_SYSTEM_PROMPT_FILE',
   'CINDY_PI_FAST_MODELS',
   'CINDY_PI_TURN_TOOL_POLICY',
   PI_PACKAGE_MANAGEMENT_ENV,
@@ -1856,22 +1859,33 @@ function commandReadsProcessEnviron(command: unknown): boolean {
 }
 
 let textOnlyTurnActive = false;
+let modelRequestControlActive = false;
 function toolsDisabledForTurn(): boolean { return textOnlyTurnActive; }
 
-function installTextOnlyTurnPolicy(pi: any): void {
+function installTextOnlyTurnPolicy(pi: any, prepareRuntimeControl?: (ctx: any) => Promise<void> | undefined): void {
   const token = process.env.CINDY_PI_TURN_TOOL_POLICY;
   if (!token) return;
   const prefix = ${JSON.stringify(CINDY_PI_TEXT_ONLY_INPUT_PREFIX)} + token + '\n';
+  const modelPrefix = ${JSON.stringify(CINDY_PI_MODEL_REQUEST_INPUT_PREFIX)} + token + '\n';
   pi.on('input', (event: any, ctx: any) => {
     if (event.source !== 'rpc' || typeof event.text !== 'string') return;
-    if (!event.text.startsWith(prefix)) {
+    let text = event.text;
+    const wasControlled = modelRequestControlActive;
+    const controlled = text.startsWith(modelPrefix);
+    if (controlled) text = text.slice(modelPrefix.length);
+    if (ctx.isIdle() && !event.streamingBehavior) modelRequestControlActive = controlled;
+    if (controlled) modelRequestControlActive = true;
+    const prepared = controlled || wasControlled ? prepareRuntimeControl?.(ctx) : undefined;
+    if (!text.startsWith(prefix)) {
       // Aborted/failed turns may omit agent_settled. Only a fresh idle RPC input
       // resets their latch; steer, follow-ups and extension continuations retain it.
       if (ctx.isIdle() && !event.streamingBehavior) textOnlyTurnActive = false;
-      return;
+      const result = controlled ? { action: 'transform', text, images: event.images } : undefined;
+      return prepared ? prepared.then(() => result) : result;
     }
     textOnlyTurnActive = true;
-    return { action: 'transform', text: event.text.slice(prefix.length), images: event.images };
+    const result = { action: 'transform', text: text.slice(prefix.length), images: event.images };
+    return prepared ? prepared.then(() => result) : result;
   });
   // agent_end is too early: native retries, compaction and follow-ups retain the policy.
   pi.on('agent_settled', (_event: any, ctx: any) => {
@@ -1883,6 +1897,81 @@ function installTextOnlyTurnPolicy(pi: any): void {
   pi.on('session_shutdown', (_event: any, ctx: any) => {
     ctx.ui.notify(${JSON.stringify(CINDY_PI_TEXT_ONLY_CLOSED_PREFIX)} + token, 'info');
   });
+}
+
+// Native virtual routing preserves the user's selected physical model while each
+// assistant message records the model actually dispatched by this request.
+function installRuntimeModelControl(pi: any) {
+  const provider = 'cindy-runtime-router';
+  const id = 'selected-task';
+  let baseline: any;
+  let baselineThinking: any;
+  let dispatched: any;
+  let requestFast: boolean | undefined;
+  let registered = false;
+  const prepare = (ctx: any): Promise<void> | undefined => {
+    if (ctx.model?.provider !== provider) {
+      baseline = ctx.model;
+    }
+    baselineThinking = ctx.thinkingLevel;
+    dispatched = undefined;
+    requestFast = undefined;
+    if (!modelRequestControlActive) {
+      if (ctx.model?.provider === provider && baseline) {
+        return pi.setModel(baseline).then((ok: boolean) => {
+          if (!ok) throw new Error('Cannot restore the selected model');
+          pi.setThinkingLevel(baselineThinking);
+        });
+      }
+      return;
+    }
+    if (!registered) {
+      pi.registerVirtualModel({ provider, id, name: 'Selected task routing',
+        thinkingLevels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+        contextWindow: baseline?.contextWindow, maxTokens: baseline?.maxTokens,
+        route: async (request: any, routeCtx: any) => {
+          const response = await runtimeModelControl(routeCtx, {
+            phase: 'select', provider: baseline.provider, model: baseline.id,
+            thinkingLevel: request.thinkingLevel,
+          });
+          const route = response.route;
+          const model = route ? routeCtx.modelRegistry.find(route.provider, route.model) : baseline;
+          if (!model) throw new Error('Requested model is unavailable');
+          dispatched = model;
+          requestFast = typeof route?.fastMode === 'boolean' ? route.fastMode : undefined;
+          return { model, thinkingLevel: route?.thinkingLevel ?? request.thinkingLevel ?? baselineThinking };
+        },
+      });
+      registered = true;
+    }
+    const router = ctx.modelRegistry.find(provider, id);
+    if (!router) throw new Error('Model request routing is unavailable');
+    return pi.setModel(router).then((ok: boolean) => {
+      if (!ok) throw new Error('Model request routing is unavailable');
+    });
+  };
+  return { prepare, requestModel: () => modelRequestControlActive ? { model: dispatched ?? baseline, fast: requestFast } : undefined };
+}
+
+async function runtimeModelControl(ctx: any, input: any): Promise<any> {
+  let serialized = JSON.stringify(input);
+  // The placeholder is itself JSON-encoded in an extension UI frame. Keep room
+  // for the native envelope and report transport failure without sending a
+  // truncated request. The host applies the selected task's existing policy.
+  const frameBudget = ${MAX_JSONL_BUFFER_CHARS - 4096};
+  if (input.phase === 'payload' && serialized.length > frameBudget / 2
+    && JSON.stringify(serialized).length > frameBudget) {
+    serialized = JSON.stringify({ phase: 'payload', provider: input.provider, model: input.model,
+      failure: 'request-too-large' });
+  }
+  const raw = await ctx.ui.input('cindy:model-request-control', serialized);
+  const result = typeof raw === 'string' ? JSON.parse(raw) : null;
+  if (result?.skip === true) {
+    ctx.abort();
+    throw new Error('Selected task plugin skipped this request');
+  }
+  if (!result || result.error) throw new Error(result?.error ?? 'Model request control is unavailable');
+  return result;
 }
 
 function currentPermissionState(): {
@@ -4316,7 +4405,7 @@ function astraResponsesPayload(payload, model) {
   return out;
 }
 
-async function nativeFastPayload(payload, model, ctx) {
+async function nativeFastPayload(payload, model, ctx, requestFast?: boolean) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
   if (!model || !['openai-responses', 'azure-openai-responses', 'openai-completions', 'openai-codex-responses'].includes(model.api)) return undefined;
   let models;
@@ -4324,6 +4413,10 @@ async function nativeFastPayload(payload, model, ctx) {
   if (!Array.isArray(models) || !models.some(item => item.provider === model.provider && item.id === model.id)) return undefined;
   const out = { ...payload };
   delete out.service_tier;
+  if (requestFast !== undefined) {
+    if (requestFast) out.service_tier = 'priority';
+    return out;
+  }
   let timer;
   try {
     // No UI is shown: Cindy answers this internal query from current host memory.
@@ -4516,6 +4609,13 @@ export default async function cindyBridge(piApi: any) {
     ? createCindyGuestToolGate(piApi, [${JSON.stringify(CINDY_SUBAGENT_TOOL_NAME)}])
     : null;
   const pi = guestToolGate ? guestToolGate.pi : piApi;
+  const taskSystemPromptFile = process.env.CINDY_PI_TASK_SYSTEM_PROMPT_FILE;
+  // switch_session reloads extensions. Keep the launch path in this Pi only;
+  // shell environments and independent subagents strip it before spawning.
+  const taskSystemPrompt = taskSystemPromptFile ? readFileSync(taskSystemPromptFile, 'utf8') : '';
+  if (taskSystemPrompt) pi.on('before_agent_start', (event: any) => ({
+    systemPrompt: event.systemPrompt + '\n\n' + taskSystemPrompt,
+  }));
   if (localHostToolsOnly) {
     const allowed = new Set(['cindy_mcp_list_tools', 'cindy_mcp_call_tool']);
     const isolate = () => pi.setActiveTools([...allowed]);
@@ -4532,7 +4632,9 @@ export default async function cindyBridge(piApi: any) {
       if (allowed.length !== active.length) pi.setActiveTools(allowed);
     });
   }
-  installTextOnlyTurnPolicy(pi);
+  const runtimeModelRouting = installRuntimeModelControl(pi);
+  installTextOnlyTurnPolicy(pi, runtimeModelRouting.prepare);
+  const runtimeRequestModel = runtimeModelRouting.requestModel;
   const cacheRecovery = installCindyCacheRecovery(pi);
   const nativeProviderAdapters = await registerCindyNativeProviderAdapters(pi, cacheRecovery);
   const initialNativeSettings = typeof pi.getSettings === 'function' ? undefined
@@ -4587,8 +4689,15 @@ export default async function cindyBridge(piApi: any) {
   if (!currentPermissionState().reviewOnly) registerCindyQuestionTool(pi);
   pi.on('before_provider_request', async (event, ctx) => {
     const preparationStarted = performance.now();
-    const payload = astraResponsesPayload(event.payload, ctx.model) ?? event.payload;
-    const next = (await nativeFastPayload(payload, ctx.model, ctx)) ?? payload;
+    const runtimeRequest = runtimeRequestModel();
+    const model = runtimeRequest?.model ?? ctx.model;
+    const payload = astraResponsesPayload(event.payload, model) ?? event.payload;
+    let next = (await nativeFastPayload(payload, model, ctx, runtimeRequest?.fast)) ?? payload;
+    if (modelRequestControlActive) {
+      const response = await runtimeModelControl(ctx, { phase: 'payload', provider: model.provider,
+        model: model.id, request: next });
+      next = response.request ?? next;
+    }
     // A one-way native notification adds no host round trip. This is the payload
     // preparation hook, not proof that HTTP was sent or accepted upstream.
     const token = process.env.CINDY_PI_TURN_TOOL_POLICY;
