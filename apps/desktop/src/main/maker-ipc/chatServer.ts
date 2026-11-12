@@ -495,15 +495,19 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let supportsTeammateMentions = false;
   // Registered project folders whose origin is a repository, briefly cached: settings reads and
   // every group reply resolve the folder, and each lookup reads the git remotes of local projects.
-  const repositoryFolders = new Map<string, { at: number; dir: Promise<string | null> }>();
+  // A found folder is kept for minutes; a miss only briefly, counted from when the lookup ends, so
+  // a reply burst shares one lookup while a checkout registered or cloned just now is found soon.
+  const repositoryFolders = new Map<string, { until: number; dir: Promise<string | null> }>();
   function repositoryFolder(repo: string): Promise<string | null> {
     const key = repo.toLowerCase();
     const cached = repositoryFolders.get(key);
-    if (cached && Date.now() - cached.at < 5 * 60_000) return cached.dir;
-    const dir = (deps.findProjectDirsForRepo?.(repo) ?? Promise.resolve([]))
-      .then(dirs => dirs.length === 1 ? dirs[0]! : null, () => null);
-    repositoryFolders.set(key, { at: Date.now(), dir });
-    return dir;
+    if (cached && Date.now() < cached.until) return cached.dir;
+    const entry: { until: number; dir: Promise<string | null> } = { until: Date.now() + 5 * 60_000, dir: Promise.resolve(null) };
+    entry.dir = (deps.findProjectDirsForRepo?.(repo) ?? Promise.resolve([]))
+      .then(dirs => dirs.length === 1 ? dirs[0]! : null, () => null)
+      .then(dir => { if (!dir) entry.until = Date.now() + 20_000; return dir; });
+    repositoryFolders.set(key, entry);
+    return entry.dir;
   }
   /**
    * The group's project folder on this computer: the folder chosen here, else the one registered

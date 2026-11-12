@@ -1369,6 +1369,34 @@ describe('Chat Server result delivery and refresh', () => {
     expect(shown.group).toMatchObject({ projectDir: '/projects/cindy', projectDirAuto: true, supportsGroupProject: true, project });
     expect(deps.findProjectDirsForRepo).toHaveBeenCalledWith('makecindy/cindy');
   });
+  // #10009 real run: a miss was cached like a found folder, so a checkout registered after the
+  // repository was set stayed unused for 5 minutes and replies worked in Home. A miss is retried
+  // after seconds; a found folder is still served from the cache without reading git again.
+  it('finds a checkout registered after a miss within seconds and keeps a found folder for minutes', async () => {
+    deps.findProjectDirsForRepo = vi.fn().mockResolvedValueOnce([]).mockResolvedValue(['/projects/cindy']);
+    deps.validateProjectDir = vi.fn(async (dir: string) => ({ ok: true as const, dir }));
+    let next: Record<string, unknown> | null = { ...execution, access_mode: 'tools' };
+    fixture.handle.mockImplementation(route => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupProject: 1 } } };
+      if (route === '/executions/claim') { const claim = next; next = null; return { body: { execution: claim } }; }
+      if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), project: { kind: 'github', repo: 'makecindy/cindy' } }, members: [], messages: [], cursor: '1' } };
+      return response(route);
+    });
+    const shownDir = async () => { const shown = await service.getGroup(roomId); if (!shown.ok) throw new Error(shown.errorCode); return shown.group.projectDir; };
+    await start();
+    expect(vi.mocked(deps.ensureLane).mock.calls[0][0]).not.toHaveProperty('projectDir');
+    await service.settleLaneTurn(terminal);
+    expect(await shownDir()).toBeNull();
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(await shownDir()).toBe('/projects/cindy');
+    expect(deps.findProjectDirsForRepo).toHaveBeenCalledTimes(2);
+    next = { ...execution, id: '40000000-0000-4000-8000-000000000002', access_mode: 'tools' };
+    await vi.advanceTimersByTimeAsync(4 * 60_000);
+    expect(deps.dispatch).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(deps.ensureLane).mock.calls[1][0]).toMatchObject({ projectDir: '/projects/cindy' });
+    expect(await shownDir()).toBe('/projects/cindy');
+    expect(deps.findProjectDirsForRepo).toHaveBeenCalledTimes(2);
+  });
   // bot-group-chat.md §7.5 (#10009 review): a folder set for the group but gone now made the reply
   // run in Home and could archive the project lane. It fails this round instead; a folder found from
   // the repository (cached for minutes) is looked up again afterwards.
