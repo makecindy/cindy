@@ -127,7 +127,7 @@ function StatusText({
       errorCode === 'RG_UNAVAILABLE'
         ? t('ccAgent.workdirBrowse.searchPanel.rgUnavailable')
         : (errorMessage ?? t('ccAgent.workdirBrowse.searchPanel.failed'));
-    return <span className="text-red-600 dark:text-red-400">{text}</span>;
+    return <span className="text-[var(--error-fg)]">{text}</span>;
   }
   if (status === 'truncated') {
     return <>{t('ccAgent.workdirBrowse.searchPanel.truncated', { max: maxMatches, files: totalFiles })}</>;

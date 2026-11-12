@@ -4704,7 +4704,7 @@ export function ModelSelector({
           'ml-1 shrink-0',
           isCreateAgentVariant
             ? 'text-[var(--create-agent-control-icon)]'
-            : 'text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]',
+            : 'text-[var(--composer-pill-icon)]',
         )}
       />
     </span>
@@ -4781,7 +4781,7 @@ export function ModelSelector({
                   ? 'w-[148px] min-w-[72px]'
                   : 'min-w-[72px] max-w-[min(320px,100%)]',
               'border border-transparent bg-transparent',
-              'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg,#FCFCFC)] dark:hover:bg-[var(--composer-pill-bg,#393838)]',
+              'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg)]',
             ),
         // device-link 远程切换 in-flight:置灰 + 禁用点击(复用本文件 disabled 行的 opacity-50 习惯)。
         (switching || disabled) && 'pointer-events-none opacity-50',
@@ -5019,7 +5019,7 @@ export function ModelSelector({
                 'ml-0.5 shrink-0',
                 isCreateAgentVariant
                   ? 'text-[var(--create-agent-control-icon)]'
-                  : 'text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]',
+                  : 'text-[var(--composer-pill-icon)]',
               )}
             />
           )}
@@ -5042,7 +5042,7 @@ export function ModelSelector({
           'shrink-0',
           isCreateAgentVariant
             ? 'text-[var(--create-agent-control-icon)]'
-            : 'text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]' /* spec 2026-07-17, token by 一哥 */,
+            : 'text-[var(--composer-pill-icon)]' /* spec 2026-07-17, token by 一哥 */,
           isFieldTrigger && 'ml-auto',
         )}
       />

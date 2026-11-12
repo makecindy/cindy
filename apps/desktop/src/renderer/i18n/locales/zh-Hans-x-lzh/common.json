@@ -11137,7 +11137,8 @@
         "capability": {
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
-          "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。"
+          "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。",
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连君之 Cindy，而后 Cindy 可代君行事（君之电脑今无在线之 Cindy）。"
         }
       },
       "settings": {
@@ -11262,6 +11263,38 @@
           "failed": "未成",
           "cancelled": "已罢",
           "timed-out": "逾时矣"
+        },
+        "label": "事",
+        "untitled": "无题之事",
+        "askedBy": "{{requester}} 所托",
+        "pr": "PR #{{number}}",
+        "open": "启「{{title}}」之事",
+        "live": {
+          "running": "方行",
+          "waiting": "待复",
+          "idle": "闲",
+          "failed": "有误"
+        },
+        "othersSaid": "话题中他人之言"
+      },
+      "assistant": {
+        "groupRecent": "群中近言",
+        "groupNew": "群中新言",
+        "threadRecent": "话题近言",
+        "threadNew": "话题新言",
+        "replyingTo": "答「{{name}}」：{{text}}",
+        "earlierOmitted": "（更早之言略之）",
+        "actingFor": "{{name}} · 代 {{person}}",
+        "checkout": {
+          "gitMissing": "（Cindy）此群之项目 {{repo}} 未至此机：此机未装 git。{{guide}}装毕，再 @Cindy，Cindy 自取项目而治之。",
+          "signInOpened": "（Cindy）此群之项目 {{repo}} 未至此机：须先连君之 GitHub。Cindy 已于此机启 GitHub 登录，登毕再 @Cindy，Cindy 自取项目。",
+          "signIn": "（Cindy）此群之项目 {{repo}} 未至此机：须先连君之 GitHub。请于此机之 Cindy 登 GitHub，而后再 @Cindy。",
+          "unavailable": "（Cindy）此群之项目 {{repo}} 未能取至此机：君之 GitHub 或无此库之权，或网路不通。能于 GitHub 启此库，再 @Cindy。",
+          "installGit": {
+            "darwin": "于「终端」行 xcode-select --install，循其示而装。",
+            "win32": "自 https://git-scm.com/download/win 取 Git 而装，皆从其默认。",
+            "linux": "以系统之包管装 git（如 sudo apt install git）。"
+          }
         }
       },
       "files": {
@@ -11454,10 +11487,21 @@
           "accessTools": "可用器与资",
           "replies": "同伴如何接话",
           "replyModeMentionedNote": "不 @ 人时，同伴不接话。",
+          "assistant": "群中 Cindy",
+          "assistantHint": "谁 @ 之，即于其人之电脑行事。",
+          "replyModeAssistant": "Cindy 答之",
+          "replyModeAssistantNote": "群中 Cindy 答之。",
           "work": "分职",
           "ownFolder": "群自有之卷匣",
-          "projectDirHint": "分工时，同伴于此劳作。",
+          "projectDirHint": "唯此机有效。",
           "projectDirClearHint": "改用群自有之卷匣",
+          "project": "案",
+          "projectCaption": "同僚于群中应答、分工，皆于此案行之。库为全群所共，文件夹唯存此机。",
+          "githubRepo": "GitHub 库",
+          "githubRepoHint": "书 owner/name。未择文件夹之机，用本机此案；无之，则自取一份。",
+          "githubRepoSaveFailed": "库未存，请察而再试。",
+          "projectFolder": "此机之文件夹",
+          "projectDirAutoHint": "依库自寻之本机案。",
           "organizerHint": "排定谁行何步；预设为首位同伴。",
           "autoContinueHint": "停之，则每步皆候君点「续」。",
           "workCaption": "择 git 项目时，每次分工皆开新分支，不动君手中之代码。案之卷匣与自动交接仅于此机生效。",
@@ -14205,6 +14249,8 @@
       "sessionSentNamed": "差事「{{name}}」所遣",
       "sessionViewSource": "观来源差事",
       "botSentNamed": "同伴「{{name}}」所遣",
+      "groupThreadSent": "「{{name}}」于群聊「{{group}}」之话题所遣",
+      "groupRequestSent": "自群「{{group}}」· {{name}}",
       "orcaFromLead": "Lead 之讯",
       "orcaFromWorker": "Worker 之讯",
       "orcaFromWorkerBatch": "系统所报 Worker 结果凡 {{count}}",
@@ -17634,6 +17680,7 @@
       "dingtalkBotDisconnectFailed": "钉钉机器人解绑未成"
     },
     "errors": {
+      "piStartupCloudFile": "发现仅在云端的指令文件：{{path}}。它可能使 Pi 启动等待。请在访达中下载该文件，确认已保存在本机后重试；超时也可能另有原因。",
       "openFileFailed": "无从于系统中启此卷",
       "emptyResponse": "模型无所答。请再试；上下文甚长者，亦可易一模型。",
       "turnFailed": "差事行之未成（模型未报谬误详情），请再试。",
@@ -19551,6 +19598,11 @@
     }
   },
   "pluginUi": {
+    "settings": "法器设定",
+    "save": "存定",
+    "settingsFailed": "法器设定未能读取或存定，请重开此页。",
+    "invalidSetting": "请核所标之值，勿逾允限。",
+    "attachmentFailed": "法器未能处理「{{name}}」，原附件仍存。",
     "display": "示法",
     "original": "原文",
     "menu": "法器页面与指令",

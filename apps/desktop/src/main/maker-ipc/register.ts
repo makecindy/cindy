@@ -2,7 +2,7 @@ import { needsSubscriptionAccountHandoff } from '../subscription-accounts/runtim
 import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
 import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
-import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, type AccountFailoverDeps } from '../subscription-accounts/failover.js';
+import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch, type AccountFailoverDeps } from '../subscription-accounts/failover.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
 import { createTaskRuntimePlugins } from './runtimePlugins.js';
 import { RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
@@ -711,8 +711,14 @@ import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
 import { getEffectiveAuxiliaryModelChainSnapshot, getEffectiveAuxiliaryModelRefs } from '../utility-model/resolveAuxiliaryModelChain.js';
 import { auxiliaryChainSessionCandidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen } from './pluginTaskDefaultRoute.js';
 import { validateExistingLocalProjectDirectory } from '../mcp-integrations/createProject.js';
+import { findRepositoryFolders } from './groupProjectFolder.js';
+import { listRecentWorkdirs } from '../localDb/ipc/recentWorkdirsCore.js';
+import { runGit } from '../git-review/gitRunner.js';
+import { createDesktopGroupProjectCheckouts } from './groupProjectCheckout.desktop.js';
+import { markGroupCindyTask } from './groupCollaborationSkill.js';
+import { listPrRefs } from '../git-context/prRefsStore.js';
 import { gitExec } from '../worktree/gitExec.js';
-import { BOT_GROUP_CLIENT_ID_PREFIX } from '../../shared/botGroupChat.js';
+import { BOT_GROUP_CLIENT_ID_PREFIX, botGroupLiveTaskStateOfPhase } from '../../shared/botGroupChat.js';
 import { syncBotLanePermission, syncBotLinkedLanePermissions } from './botPermissionSync.js';
 import { ensureBotGroupLaneSession } from '../localDb/ipc/bots.js';
 import { restartBotRuntime } from './botRuntimeRestart.js';
@@ -1912,7 +1918,9 @@ const usageLimitAutoResume = new UsageLimitAutoResume({
   clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
   isEligible: isUsageLimitAutoResumeEligible,
   resolveResetAt: resolveSessionUsageResetAt,
-  canSwitchAccount: (sessionId) => canSwitchSubscriptionAccount(sessionId, getSessionRowSnapshotStrict),
+  // Same-account remote Agent tasks ask their executing computer (subscription-account-pools.md 账号间自动换号).
+  canSwitchAccount: (sessionId) =>
+    canSwitchSubscriptionAccount(sessionId, getSessionRowSnapshotStrict, remoteBackgroundInvoke),
   arm: (sessionId, token, resumeAt) =>
     agentInputCoordinatorHolder?.armUsageLimitWait(sessionId, token, resumeAt) ?? false,
   isCurrent: (sessionId, token) =>
@@ -4977,9 +4985,10 @@ export function getSessionInputProvenance(sessionId: string) {
 
 /**
  * Capture from the caller's accepted input before any asynchronous target work. A turn that
- * speaks for the owner (their own input, its continuation or relay, or an IM turn the owner
- * spoke in) hands its request on as is; any task can already open a Full Access task, so a
- * second review would not protect anything (2026-11-08). Plan mode sends without authority.
+ * speaks for the owner (their own input, its continuation or relay, an IM turn the owner
+ * spoke in, or a companion group round the owner's own message started) hands its request on
+ * as is; any task can already open a Full Access task, so a second review would not protect
+ * anything (2026-11-08). Plan mode sends without authority.
  */
 export async function captureSessionAgentRequest(sessionId: string, supplement: string,
   target?: DelegationTarget): Promise<CapturedAgentRequest> {
@@ -11847,7 +11856,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ? coordinator.continueAfterProviderGroupRecovery(sessionId, token, info)
         : 'superseded';
     },
-    fallback: (sessionId, signals, token) => usageLimitAutoResume.onTurnError(sessionId, signals, token),
+    // 撞限／登录失效的只是那台电脑上的一个账号：账号池里另一个账号能接时可原地换号(由执行电脑判断)。
+    readAccountSwitch: (sessionId) =>
+      readSubscriptionAccountSwitch(sessionId, getSessionRowSnapshotStrict, remoteBackgroundInvoke),
+    fallback: (sessionId, signals, token, recovery) => usageLimitAutoResume.onTurnError(sessionId, signals, token, recovery),
     // 组内电脑的报错用那台机器的本地时间：不带时区的钟点不按本机时区理解。
     readResetAt: (signals) => readTurnUsageResetAt(signals, Date.now(), { localTimeZoneTrusted: false }),
     // 任务里选过「以后自动换」的换号(provider-groups.md §6.2「任务进行中换号」)。
@@ -13373,6 +13385,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     autoReviewUserText?: AgentInputQueuedMessage['autoReviewUserText'];
     targetSessionId: string;
     dispatcherSessionId?: string;
+    /** Host-stamped source when there is no dispatching task (a group member's words for a task card's task). */
+    origin?: AgentInputQueuedMessage['origin'];
     authorizationGuard?: BotAuthorizationInputGuard;
     toolsDisabled?: boolean;
     retry?: boolean;
@@ -13475,6 +13489,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           dispatcherSessionId: params.dispatcherSessionId,
           ...(await readSenderIdentity(params.dispatcherSessionId)),
           message: params.message,
+          explicitOrigin: params.origin,
         }),
       });
       // Chat-only dispatch allocates a queue id; keep the server execution identity
@@ -13682,14 +13697,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { ok: false as const, errorCode: 'LANE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error) };
       }
     },
-    dispatch: ({ targetSessionId, message, persistedContent, autoReviewUserText, clientId, attachments, toolsDisabled, onQueued, onAccepted }) =>
+    dispatch: ({ targetSessionId, message, persistedContent, autoReviewUserText, origin, clientId, attachments, toolsDisabled, resumeWithStoredPermissionMode, onQueued, onAccepted }) =>
       dispatchBotSessionMessage({
         targetSessionId,
         message,
         persistedContent,
         autoReviewUserText,
+        ...(origin ? { origin } : {}),
         clientId,
         toolsDisabled,
+        ...(resumeWithStoredPermissionMode ? { resumeWithStoredPermissionMode } : {}),
         onQueued,
         // Same attachment shape as a task message: images by their media address, files by path.
         ...(attachments && attachments.length > 0
@@ -13729,6 +13746,50 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { ok: false as const, message: '项目文件夹不存在' };
       }
     },
+    // The group's Cindy (bot-group-chat.md §9): one ordinary visible task per group, opened
+    // like a new task of this user's (new-task model and permission), titled with the group's name.
+    ensureGroupAssistantSession: async ({ sessionId, title, projectDir }) => {
+      try {
+        if (sessionId) {
+          const [row] = await getDbClient().drizzle.select({ status: sessions.status })
+            .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+          if (row?.status === 'active') return { ok: true as const, sessionId, created: false };
+        }
+        const route = getSelectedNewMakerRoute(activeOwnerScopeKey());
+        const agentKind = route ? (route.harness === 'claude' ? 'claude-code' : route.harness) : undefined;
+        const { row } = await openSession({ body: {
+          title, projectDir, workspaceKind: projectDir ? 'project' : 'dialogue', workingDir: projectDir ?? undefined,
+          ...(route && agentKind ? { agentKind: agentKind === 'claude-code' ? 'cc' as const : agentKind, model: route.model,
+            providerId: route.providerId, effort: route.effort || '', fastMode: route.fastMode } : {}),
+          permissionMode: permissionModeOrAsk(agentKind ? getRemoteNewMakerDefaults(agentKind).permissionMode : undefined),
+        } });
+        // Before its first turn starts, so the task starts with the 群协作 Skill.
+        markGroupCindyTask(row.id);
+        broadcastSessionCreated(row.id);
+        return { ok: true as const, sessionId: row.id, created: true };
+      } catch (error) {
+        return { ok: false as const, errorCode: 'LANE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    // A group task card follows its task (bot-group-chat.md §10): title, live phase and recorded PR.
+    readGroupTaskStatus: async (taskId) => {
+      const [row] = await getDbClient().drizzle.select({ title: sessions.title, status: sessions.status })
+        .from(sessions).where(eq(sessions.id, taskId)).limit(1);
+      if (!row || row.status === 'deleted') return null;
+      const runtime = await tryGetOrcaCollabService()?.getSessionRuntime({ targetSessionId: taskId }).catch(() => undefined);
+      const phase = runtime?.ok && typeof runtime.runtime.phase === 'string' ? runtime.runtime.phase : 'idle';
+      const pr = (await listPrRefs(taskId).catch(() => [])).find(ref => /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(ref.url));
+      const state = botGroupLiveTaskStateOfPhase(phase);
+      return { title: row.title, ...(state ? { state } : {}), ...(pr ? { prUrl: pr.url } : {}) };
+    },
+    // A group's GitHub repository without a registered checkout gets Cindy's own.
+    groupCheckouts: createDesktopGroupProjectCheckouts(log),
+    // A group's GitHub repository picks this computer's checkout among the registered projects.
+    findProjectDirsForRepo: async (repo) => findRepositoryFolders(
+      (await listRecentWorkdirs()).filter(row => row.exists).map(row => row.path), repo, {
+        origin: async (dir) => (await runGit(['remote', 'get-url', 'origin'], { cwd: dir, timeoutMs: 3000, allowedExitCodes: [0, 2, 128] })).stdout.trim() || null,
+        isMainCheckout: async (dir) => (await fsp.stat(path.join(dir, '.git'))).isDirectory(),
+      }),
     captureOwnerScope: captureDataOwnerBroadcastScope,
     isOwnerScopeCurrent: (scope) =>
       isDataOwnerBroadcastScopeCurrent(scope as ReturnType<typeof captureDataOwnerBroadcastScope>),
@@ -18649,12 +18710,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const createdAt = Date.now();
       void enqueueDurableWrite(`turn-model:${sessionId}:${clientId}`, async () => {
         if (!isDataOwnerBroadcastScopeCurrent(owner)) return;
-        const [input] = await db.select({ content: messages.content }).from(messages)
+        const [input] = await db.select({ content: messages.content, meta: messages.agentMeta }).from(messages)
           .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId),
             eq(messages.role, 'user'), isNull(messages.rewindAt))).limit(1);
-        // Hidden coordination/routine inputs must not leak a visible model boundary.
-        if (!input || input.content.startsWith(UI_ACTION_TRIGGER_PREFIX)) return;
+        if (!input) return;
         await recordTurnModelChange(current, {
+          input: { content: input.content, autoResume: isAutoResumeUserMessage(input.meta ? JSON.parse(input.meta) : null) },
           readPrevious: async () => {
             const [previous] = await db.select({ meta: messages.agentMeta }).from(messages)
               .innerJoin(sessions, eq(sessions.id, messages.sessionId))
@@ -19301,7 +19362,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (grant.sessionId === null) {
       // Explicitly taskless: never inherit an Agent's ambient authority or focused task.
       const deps = getCindyGhostsMcpDeps(undefined, {}, grant);
-      const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal });
+      const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal,
+        ...(grant.attachments ? { attachments: grant.attachments } : {}) });
       await grant.assertCurrent();
       assertOwner();
       return result.ok ? pluginAppResult(result.result) : { isError: true,
@@ -19326,7 +19388,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { ...snapshot, permissionMode: permissionModeOrAsk(snapshot.permissionMode), isCurrent: () => !snapshot.planModeEnabled && snapshot.permissionMode !== 'plan' && snapshot.isCurrent?.() === true };
       },
     }, grant);
-    const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal });
+    const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal,
+      ...(grant.attachments ? { attachments: grant.attachments } : {}) });
     await grant.assertCurrent();
     return result.ok ? pluginAppResult(result.result) : { isError: true,
       content: [{ type: 'text', text: JSON.stringify(result) }] };
