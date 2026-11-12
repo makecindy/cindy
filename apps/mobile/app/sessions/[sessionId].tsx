@@ -25,6 +25,7 @@ import { RunningTokenRatePopover } from '@/session/RunningTokenRatePopover';
 import { companionProcessItems } from '@/session/companionConversationPresentation';
 import { useRunningTokenRateHistory } from '@/session/useRunningTokenRateHistory';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
+import { SessionStackActions, SessionStackHeader } from '@/session/SessionStackHeader';
 import { HomeNewTaskButton } from '@/session/HomeNewTaskButton';
 import { RecentMessageHistories, MessageHistoryOverlay } from '@/session/RecentMessageHistories';
 import { rememberRecentTask } from '@/session/recentTasks';
@@ -11917,42 +11918,14 @@ function SessionHeaderBar({
   // Let UINavigationBar align controls with the system status area, including Duo portrait.
   if (horizontalSystemHeader) {
     const files = overview?.actions.find((action) => action.id === 'files');
-    return (
-      <>
-      <Stack.Screen options={{ headerShown: true, headerTransparent: true,
-        headerShadowVisible: false, headerBackVisible: false, headerTitleAlign: 'center',
-        headerStyle: { backgroundColor: 'transparent' }, headerTintColor: colors.textPrimary,
-        // Route-owned options survive the title component's unmount during a pop transition.
-        headerTitle: () => (
-          <View style={{ width: nativeTitleMaxWidth, height: navigationChrome.target,
-            // Reserve the toolbar gaps in the width budget, outside the title.
-            minWidth: 0, flexShrink: 1, overflow: 'hidden', justifyContent: 'center' }}>
-            <SessionHeaderNativeTitle title={title} pinned={!messageOnly && !!currentSession?.pinnedAt}
-              tags={isDeviceAccessRevoked ? undefined : currentSession?.tags} onTagsPress={onOpenSettings}
-              onTitleDoubleTap={titleDoubleTap}
-              syncing={syncing} syncingImmediately={syncingImmediately} notice={notice} />
-          </View>
-        ),
-      }} />
-      <Stack.Toolbar placement="left">
-        <Stack.Toolbar.View hidesSharedBackground>
-          <SessionHeaderNativeBack label={t('shared.back')} onPress={onBack} />
-        </Stack.Toolbar.View>
-        {sessionListButton ? <Stack.Toolbar.View hidesSharedBackground>{sessionListButton}</Stack.Toolbar.View> : null}
-      </Stack.Toolbar>
-      <Stack.Toolbar placement="right">
-        <Stack.Toolbar.View hidesSharedBackground>
-          <SessionHeaderNativeActions available={!!currentSession}
-            desktopLabel={t('remoteDesktop.title')}
-            filesLabel={t('session.presentation.overview.actions.files.a11y')}
-            moreLabel={t('session.menu.details')} files={files} detailsOnly={workerHeader}
-            onDetails={onOpenSettings} onDesktop={onOpenRemoteDesktop}
-            screen={liveScreen}
-            onAction={(id) => actionHandlers[id]()} />
-        </Stack.Toolbar.View>
-      </Stack.Toolbar>
-    </>
-    );
+    return <SessionStackHeader titleMaxWidth={nativeTitleMaxWidth}
+      title={title} pinned={!messageOnly && !!currentSession?.pinnedAt}
+      tags={isDeviceAccessRevoked ? undefined : currentSession?.tags} onTagsPress={onOpenSettings}
+      onTitleDoubleTap={titleDoubleTap} syncing={syncing} syncingImmediately={syncingImmediately} notice={notice}
+      available={!!currentSession} detailsOnly={workerHeader}
+      filesDisabled={!files || files.disabled} filesDisabledReason={files?.disabledReason}
+      onFiles={onOpenFiles} onDetails={onOpenSettings} onDesktop={onOpenRemoteDesktop}
+      screen={liveScreen} onBack={onBack} onOpenSessionList={onOpenSessionList} />;
   }
 
   // 分享选择模式只保留全选；底部关闭按钮负责退出。
@@ -11976,24 +11949,9 @@ function SessionHeaderBar({
       <SystemNavigationBack label={t('shared.back')} onPress={onBack} />
       {sessionListButton}
       {systemBack ? (
-        <Stack.Toolbar placement="right">
-        {workerHeader ? null : (
-            <Stack.Toolbar.Button icon={require('../../assets/navigation/monitor.png')} iconRenderingMode="template"
-          accessibilityLabel={t('remoteDesktop.title')} disabled={!currentSession} onPress={onOpenRemoteDesktop} />
-          )}
-        {workerHeader ? null : liveScreen ? (
-            <Stack.Toolbar.Button icon="iphone" accessibilityLabel={liveScreen.label}
-              disabled={!currentSession} onPress={liveScreen.onPress} />
-          ) : (
-            <Stack.Toolbar.Button icon={require('../../assets/navigation/folder.png')} iconRenderingMode="template"
-          accessibilityLabel={t('session.presentation.overview.actions.files.a11y')}
-          disabled={!currentSession || !overview?.actions.some(
-                  (action) => action.id === 'files' && !action.disabled)}
-          onPress={onOpenFiles} />
-          )}
-        <Stack.Toolbar.Button icon="ellipsis" accessibilityLabel={t('session.menu.details')}
-          disabled={!currentSession} onPress={onOpenSettings} />
-      </Stack.Toolbar>
+        <SessionStackActions available={!!currentSession} detailsOnly={workerHeader}
+          filesDisabled={!overview?.actions.some((action) => action.id === 'files' && !action.disabled)}
+          onFiles={onOpenFiles} onDetails={onOpenSettings} onDesktop={onOpenRemoteDesktop} screen={liveScreen} />
       ) : null}
       {systemBack ? null : nativeHeader ? (
         <SessionHeaderNativeBack label={t('shared.back')} onPress={onBack} />
