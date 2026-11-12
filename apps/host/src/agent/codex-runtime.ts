@@ -27,6 +27,7 @@ import { chatgptAccountIdFromTokens } from '../../../desktop/src/main/maker-host
 import { createHostCodexCredentials } from './codex-credentials.js';
 import { invalidateHostCodexLogin } from './codex-invalidation.js';
 import { createCodexAuthBoundary } from './codex-auth-boundary.js';
+import { createCodexProxyInbound } from './codex-proxy-inbound.js';
 import { createLogger } from '../../../desktop/src/main/logger.js';
 import { createHostModelContext } from './model-context.js';
 import { hostOutbound, resolveHostOutboundProxy } from '../outbound.mjs';
@@ -69,7 +70,10 @@ export function createHostCodexRuntime(options: {
   const credential = () => { check(); return options.modelAccess.gateway.credential || null; };
   const endpoint = () => { check(); return options.modelAccess.gateway.endpoint; };
   const native = createHostCodexCredentials(options.profileDir, options.config.codexAccounts);
+  // The Host's Codex loopback proxies require inbound credentials (codex-proxy-inbound.ts).
+  const inbound = createCodexProxyInbound(current);
   const proxy = createCodexProxyHost({
+    authorizeInbound: ctx => inbound.authorizeInbound(ctx),
     bearerKeyFromHeaders, reportCindyGatewayKeyRejected: options.modelAccess.reportRejectedKey,
     ...createAttachmentRecoveryService({ getUserDataDir, media: { ...hostBlobStore, ...hostMediaIngest, ...hostMediaJournal } }), ...requestPolicy,
     peekGrokAccessToken: options.config.grok.peekGrokAccessToken,
@@ -138,8 +142,18 @@ export function createHostCodexRuntime(options: {
   };
   const modelContext = createHostModelContext({ readGatewayKey: credential, hasCodexOAuthLogin: native.hasLogin,
     codexAccountState: id => options.config.codexAccounts.codexAccountState(id), check });
+  // The spawn config reads proxy endpoints through this view, so only endpoints of running
+  // proxies of this runtime are recorded; a gateway fallback endpoint never is.
+  const spawnProxy: typeof proxy = {
+    ...proxy,
+    getCodexProxyEndpoint: () => inbound.track(proxy.getCodexProxyEndpoint(), proxy.isCodexProxyHandleReady()),
+    getCodexControlPlaneProxyEndpoint: mode =>
+      inbound.track(proxy.getCodexControlPlaneProxyEndpoint(mode), proxy.isCodexControlPlaneProxyHandleReady(mode)),
+    getCodexCustomContextProxyEndpoint: key =>
+      inbound.track(proxy.getCodexCustomContextProxyEndpoint(key), proxy.isCodexCustomContextProxyHandleReady(key)),
+  };
   const prepare = createCodexSpawnConfig({
-    binaryPath: options.binaryPath, proxy,
+    binaryPath: options.binaryPath, proxy: spawnProxy,
     getCodexHome: () => { check(); return path.join(options.profileDir, 'codex-home'); },
     getCodexExtraSpawnConfig: options.mcp.prepareCodexMcp,
     broadcastCodexRuntimeRoute: async () => publish(MAKER_PUSH.CODEX_RUNTIME_ROUTE_CHANGED, readRoute()),
@@ -153,7 +167,7 @@ export function createHostCodexRuntime(options: {
     prepareRemote: async () => { throw new Error('SSH Codex transport is not configured in this Host'); },
   });
   const deps: Partial<AgentDeps> = {
-    prepareCodexExtraSpawnConfig: async (...args) => { check(); const value = await prepare(...args); check(); return value; },
+    prepareCodexExtraSpawnConfig: async (...args) => { check(); const value = inbound.withToken(await prepare(...args)); check(); return value; },
     disableCodexPluginRuntime: true,
     onCodexLocalModelsListed: createCodexLocalModelSink(options.config.list),
     resolveCodexSubagentRoutingSignature: createCodexRoutingSignature(() => options.config.publicViews(Boolean(credential()))),
@@ -175,6 +189,8 @@ export function createHostCodexRuntime(options: {
   };
   return { deps, proxy, native, readRoute, modelContext, fastPolicies: policies, fastRequestPolicy: requestPolicy, closeSession: proxy.unregister,
     invalidateNative, authBoundary,
+    /** What this runtime's Codex processes carry to its proxies (tests; never logged). */
+    inboundToken: () => inbound.token(),
     /** How this runtime retires the local Codex hosts (the agent graph's CodexAgent). */
     setLocalHostRetirement(handler: (reason: string) => Promise<void>) { retireLocalHosts = handler; },
     /** For the Claude and Pi proxy; also cleared on every Codex login and logout, as on the desktop. */
