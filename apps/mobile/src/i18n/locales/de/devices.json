@@ -61,9 +61,9 @@
       "filterAvailable": "Steuerbare Geräte",
       "filterEmpty": "Keine steuerbaren Geräte",
       "filterMeta": "{{available}} verfügbar",
-      "filterMetaWithUnavailable": "{{available}} verfügbar · {{unavailable}} erfordern deine Aufmerksamkeit",
+      "filterMetaWithUnavailable": "{{available}} verfügbar · {{unavailable}} mit Handlungsbedarf",
       "showUnavailableReason": "Klappe ein Gerät auf, um zu sehen, warum es nicht verfügbar ist",
-      "emptyCopy": "Melde dich auf deinem Computer mit demselben Konto an und aktiviere unter Einstellungen → Remote-Verbindung die Option „Geräten mit demselben Konto erlauben, diesen Computer zu steuern“.",
+      "emptyCopy": "Melde dich auf deinem Computer mit demselben Konto an und aktiviere unter Einstellungen → Remote-Verbindung die Option „Geräten mit demselben Konto die Steuerung dieses Computers erlauben“.",
       "emptyTitle": "Noch keine Computer vorhanden",
       "hideUnavailableA11y": "Nicht verfügbare Computer ausblenden",
       "showUnavailableA11y": "Nicht verfügbare Computer anzeigen",
@@ -356,7 +356,7 @@
       "dialogueFolder": "Chat",
       "search": "Suchen",
       "settings": "Einstellungen",
-      "remoteSettings": "Remoteverbindungseinstellungen",
+      "remoteSettings": "Remote-Verbindungseinstellungen",
       "displaySettings": "Anzeigeeinstellungen",
       "groupHeading": "Gruppe",
       "sortHeading": "Aufgabensortierung",
@@ -374,7 +374,7 @@
       },
       "sortByPriorityTip": "Zuerst auf dich wartende, dann ungelesene, dann laufende, dann nach Zeit",
       "projectOrder": {
-        "activity": "Aufgaben folgen",
+        "activity": "Nach Aufgaben",
         "custom": "Manuell"
       },
       "status": {
@@ -544,7 +544,7 @@
       "pinning": "Wird angeheftet",
       "unpinning": "Wird gelöst",
       "archiving": "Wird archiviert",
-      "restoring": "Wird aus Archiv wiederhergestellt",
+      "restoring": "Wird wiederhergestellt",
       "deleting": "Wird gelöscht",
       "pinA11y": "Ausgewählte Sitzungen anheften",
       "unpinA11y": "Ausgewählte Sitzungen lösen",
@@ -629,7 +629,7 @@
     "directUnavailable": "Diese Unterhaltung zwischen Freunden ist nicht mehr verfügbar.",
     "unread": "Neue Antwort",
     "status": {
-      "queued": "Erste Schritte",
+      "queued": "Wird gestartet",
       "running": "Wird ausgeführt",
       "waiting": "Wartet auf Eingabe",
       "completed": "Abgeschlossen",
@@ -780,7 +780,7 @@
     "chat": "Chat",
     "showReplyTarget": "Anzeigen, auf welche Nachricht sich eine Antwort bezieht",
     "showReplyTargetHint": "Zeige über der Antwort eines Freundes, auf welche deiner Nachrichten sie sich bezieht. Gilt für alle Freunde. Bei älteren Antworten wird dies nicht angezeigt.",
-    "channels": "Nachrichtenplattformen",
+    "channels": "Messaging-Plattformen",
     "channelsEmpty": "Keine Messaging-Plattformen verbunden",
     "channelTasksEmpty": "Noch keine Aufgaben",
     "channelPlatforms": {
@@ -902,7 +902,7 @@
     "moveTo": "Auf „{{device}}“ verschieben",
     "moveTitle": "{{name}} auf „{{device}}“ ausführen?",
     "moveDescription": "Ab jetzt läuft {{name}} auf „{{device}}“ und der Chatverlauf zieht mit um. Arbeitsverzeichnisse, Verbindungen und lokale Dateien bleiben auf ihrem bisherigen Computer.",
-    "olderTarget": "Ältere Cindy",
+    "olderTarget": "Ältere Cindy-Version",
     "olderTargetNote": "Auf „{{device}}“ läuft eine ältere Cindy-Version, daher arbeitet {{name}} dort wie bisher: Der Chatverlauf wird weiter synchronisiert, Projektregeln und Automatisierungen gelten dort aber nicht.",
     "moveAction": "Auf „{{device}}“ verschieben",
     "moving": "{{name}} wird zu „{{device}}“ verschoben…",
@@ -974,6 +974,6 @@
     "title": "Aus anderen Werkzeugen importieren"
   },
   "liveActivity": {
-    "waitingForUpdate": "Warte auf Aktualisierung"
+    "waitingForUpdate": "Wartet auf Aktualisierung"
   }
 }

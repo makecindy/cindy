@@ -1,3 +1,5 @@
+import { tt } from "../transportText.js";
+
 export interface RemoteMarkdownImage {
   alt: string;
   url: string;
@@ -39,6 +41,8 @@ export function replaceUploadedRemoteImages(
   uploadedUrls: ReadonlySet<string>,
 ): string {
   return text.replace(REMOTE_MARKDOWN_IMAGE, (raw, alt: string, url: string) =>
-    uploadedUrls.has(url) ? alt.trim() || "图片" : raw,
+    uploadedUrls.has(url)
+      ? alt.trim() || tt("imBot.text.transport.dingtalk.uploadedImageAlt", "图片")
+      : raw,
   );
 }

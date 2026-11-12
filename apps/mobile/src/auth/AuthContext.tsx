@@ -70,7 +70,7 @@ import {
   resetMobileSessionRealm,
 } from '@/config/env';
 import { syncCanaryChannelAfterAuth } from '@/auth/canaryChannelSync';
-import { ensureDeviceId, hasStoredDeviceId } from '@/auth/deviceId';
+import { ensureDeviceId, hasStoredDeviceId, isCredentialStoreReadable } from '@/auth/deviceId';
 import { decodeJwtOrgSlug, isAccessTokenExpiring } from '@/auth/jwt';
 import {
   maybeEnableNonXdOrgBetaDefault,
@@ -92,6 +92,7 @@ import {
   setSecureItem,
 } from '@/auth/secureStorage';
 import {
+  LOGIN_CREDENTIAL_STORAGE,
   clearMobileLoginCredentialsForLogout,
   commitMobileLoginSessions,
   commitMobileRuntimeResourceSession,
@@ -1251,7 +1252,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             clearPersistedSession: () => deleteSecureItem(AUTH_SESSION_KEY),
           }),
         ).catch(() => null);
-        if (!reconciledAuth) return null;
+        if (!reconciledAuth) {
+          // A locked phone refuses Keychain reads. That is not a missing login: callers
+          // treat `null` as signed out and clear local data, so report it as a failure
+          // to retry instead. Reachable since notification buttons run the app in the
+          // background, until both login items are stored "after first unlock".
+          if (!(await isCredentialStoreReadable())) throw authCodeError('AUTH_STORAGE_LOCKED');
+          return null;
+        }
         const persistedVault = reconciledAuth.vault;
         const activeResourceAtStart = persistedVault?.activeAccountKey
           ? {
@@ -1686,7 +1694,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (token) return;
         let storedSession: AuthSessionRecord | null;
         try {
-          storedSession = await readPersistedAuthSession();
+          // Strict: an unreadable Keychain must reach the catch below. The lenient
+          // read turns it into "no session", which signs the person out.
+          storedSession = await readPersistedAuthSessionStrict();
         } catch {
           scheduleNext();
           return;
@@ -3636,6 +3646,7 @@ async function writePersistedAuthSession(
   await setSecureItem(
     AUTH_SESSION_KEY,
     serializeAuthSessionRecord(realm, refreshToken),
+    LOGIN_CREDENTIAL_STORAGE,
   );
 }
 
@@ -3643,7 +3654,7 @@ async function restorePersistedAuthSessionRaw(raw: string | null): Promise<void>
   if (raw === null) {
     await deleteSecureItem(AUTH_SESSION_KEY);
   } else {
-    await setSecureItem(AUTH_SESSION_KEY, raw);
+    await setSecureItem(AUTH_SESSION_KEY, raw, LOGIN_CREDENTIAL_STORAGE);
   }
 }
 

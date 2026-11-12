@@ -72,6 +72,8 @@ import {
 import { fetchPublicImageBytes } from './publicImageFetch';
 import { buildPersonalBotCommandMenu } from './shared/botCommands';
 import { shouldAnnounceFeishuLifecycle } from './feishu/lifecycleAnnouncements';
+// lizi-im 传输层文案随界面语言：注册一次解析器，缺 key 时回退包内中文。
+import './transportText';
 
 const log = createLogger('im/host');
 
@@ -216,12 +218,12 @@ export const discordIm = createDiscordIM(host, {
   channelAccess: discordChannelAccessStore,
   ownerOnlyCardNotice: () => t('settings.discordBot.channels.ownerOnlyCardNotice'),
   resolveImageUrl: resolveManagedImageAbsPath,
-  expiredCardNotice: discordUiText.expiredCardNotice,
+  expiredCardNotice: () => discordUiText.expiredCardNotice,
   ownerNoticeText: (phase) => t(`settings.discordBot.ownerNotice.${phase}`),
 });
 export const telegramIm = createTelegramIM(host, {
   resolveImageUrl: resolveManagedImageAbsPath,
-  expiredCardNotice: telegramUiText.expiredCardNotice,
+  expiredCardNotice: () => telegramUiText.expiredCardNotice,
   ownerNoticeText: (phase) => t(`settings.telegramBot.ownerNotice.${phase}`),
   // 行为配置 getter: transport 每次使用时现读 → 设置卡改动即生效。
   behavior: readTelegramBehavior,
@@ -241,7 +243,7 @@ export function createBotTelegramIM(
 ): TelegramIM {
   return createTelegramIM(host, {
     resolveImageUrl: resolveManagedImageAbsPath,
-    expiredCardNotice: telegramUiText.expiredCardNotice,
+    expiredCardNotice: () => telegramUiText.expiredCardNotice,
     ownerNoticeText: (phase) => t(`settings.telegramBot.ownerNotice.${phase}`),
     behavior: options.behavior,
     commandMenu: buildPersonalBotCommandMenu((key) => t(key), { surface: 'companion' }),
@@ -277,7 +279,7 @@ export function createBotDiscordIM(
     ...(options.channelAccess ? { channelAccess: options.channelAccess } : {}),
     ownerOnlyCardNotice: () => t('settings.discordBot.channels.ownerOnlyCardNotice'),
     resolveImageUrl: resolveManagedImageAbsPath,
-    expiredCardNotice: discordUiText.expiredCardNotice,
+    expiredCardNotice: () => discordUiText.expiredCardNotice,
     ownerNoticeText: (phase) => t(`settings.discordBot.ownerNotice.${phase}`),
     secretKeyPrefix,
     ipc: false,
