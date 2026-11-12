@@ -19,7 +19,6 @@ export interface ThemeSelection {
   mode: 'system' | 'light' | 'dark';
   familyId: string;
 }
-export const DEFAULT_THEME_SELECTION: ThemeSelection = { mode: 'system', familyId: 'cindy' };
 
 export function parseThemeSelection(raw: unknown): ThemeSelection | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;

@@ -32,8 +32,9 @@ const store = createOverrideSettingsFile<AppearanceSettings>({
   mergeOverrides: ({ patch, next, defaults, overrides }) => {
     const result = { ...overrides };
     for (const key of Object.keys(patch) as Array<keyof AppearanceSettings>) {
-      if (patch[key] === undefined || patch[key] === null ||
-          key !== 'themeSelection' && !next.themeSelection && JSON.stringify(next[key]) === JSON.stringify(defaults[key])) delete result[key];
+      if (appearanceService.hasThemeDefaults()
+        ? patch[key] === undefined || patch[key] === null
+        : JSON.stringify(next[key]) === JSON.stringify(defaults[key])) delete result[key];
       else result[key] = next[key];
     }
     return result;
@@ -76,7 +77,6 @@ export async function resetAppearanceSettings(): Promise<AppearanceSettings> {
   return appearanceService.reset();
 }
 
-export const migrateAppearanceThemeSelection = (selection: unknown) => appearanceService.select(selection, true);
 export function readSelectedThemeFont(role: string) {
   if (!['uiFont', 'codeFont', 'bodyFont', 'terminalFont'].includes(role)) throw new Error('INVALID_PARAMS');
   const resource = readAppearanceSettings()[`${role}Resource` as 'uiFontResource'];
@@ -91,7 +91,7 @@ export const __testing = {
 /** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
 const portableAppearance = portableOverrideSettings(store, {
   // Host-owned media reference; a custom wallpaper image is not copied.
-  omitKeys: ['customWallpaperUrl', 'customWallpaperFallbackUrl', 'uiFontResource', 'codeFontResource', 'bodyFontResource', 'terminalFontResource', 'themeSelection'],
+  omitKeys: ['customWallpaperUrl', 'customWallpaperFallbackUrl', 'uiFontResource', 'codeFontResource', 'bodyFontResource', 'terminalFontResource'],
   optionalKeys: ['wallpaperBlur', 'wallpaperVisibility', 'desktopVisibility'],
   filter: (values) => {
     if (values.wallpaperId !== 'custom') return values;

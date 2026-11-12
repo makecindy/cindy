@@ -140,7 +140,7 @@ export function FontSettingsProvider({ children }: { children: ReactNode }) {
   const applyPluginSettings = usePluginAppearance(applyFontSettings, initial);
   const [settings, setSettings] = useState<ConfigurableFontSettings>(() => {
     return {
-      customizedKeys: initial.customizedKeys,
+      ...(initial.customizedKeys ? { customizedKeys: initial.customizedKeys } : {}),
       uiFamily: initial.uiFamily,
       codeFamily: initial.codeFamily,
       uiSize: initial.uiSize,
@@ -170,7 +170,7 @@ export function FontSettingsProvider({ children }: { children: ReactNode }) {
       const normalized = normalizeAppearanceSettings(next);
       applyPluginSettings(normalized);
       const confirmed = {
-        customizedKeys: normalized.customizedKeys,
+        ...(normalized.customizedKeys ? { customizedKeys: normalized.customizedKeys } : {}),
         uiFamily: normalized.uiFamily,
         codeFamily: normalized.codeFamily,
         uiSize: normalized.uiSize,
@@ -212,7 +212,7 @@ export function FontSettingsProvider({ children }: { children: ReactNode }) {
           pendingWritesRef.current = pendingWritesRef.current.filter(
             (pending) => pending.id !== requestId,
           );
-          if (result) {
+          if (resetFields && result) {
             const confirmed = normalizeAppearanceSettings(result);
             confirmedSettingsRef.current = confirmed;
             const optimistic = pendingWritesRef.current.reduce(
@@ -264,10 +264,11 @@ export function FontSettingsProvider({ children }: { children: ReactNode }) {
     (size: number) => patch({ terminalSize: clampAppearanceTerminalSize(size) }),
     [patch],
   );
-  // Without a Host this is only a local preview. Persisted resets always delete
-  // named overrides and take their effective values from the common owner.
+  // Only package defaults need deletion-based resets. Existing settings keep
+  // their original static-default writes and optimistic update behavior.
   const reset = useCallback((fields: string[], preview: Partial<ConfigurableFontSettings>) => {
-    patch(getBridge() ? {} : preview, fields);
+    if (getBridge() && settingsRef.current.customizedKeys) patch({}, fields);
+    else patch(preview);
   }, [patch]);
   const resetTerminalFamily = useCallback(() => reset(['terminalFamily', 'terminalFontResource'], { terminalFamily: '' }), [reset]);
   const resetTerminalSize = useCallback(() => reset(['terminalSize'], { terminalSize: DEFAULT_TERMINAL_FONT_SIZE }), [reset]);

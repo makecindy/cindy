@@ -225,7 +225,8 @@ describe('theme package installation and loading', () => {
   it('loads both variants and local assets, preserves old themes, and repeats without duplication', async () => {
     const dir = getLocalThemesDir();
     fs.mkdirSync(dir, { recursive: true });
-    const legacy = JSON.stringify({ ...light, id: 'unrelated', family: 'unrelated', brand: undefined }, null, 4) + '\n';
+    const legacy = JSON.stringify({ ...light, id: 'unrelated', family: 'unrelated', brand: undefined,
+      appearance: { unknown: true, density: 99 } }, null, 4) + '\n';
     fs.writeFileSync(path.join(dir, 'old.json'), legacy);
     const inspected = await packageFile();
     expect(await installThemePackage(inspected, dir)).toEqual(['Mist']);
@@ -233,7 +234,9 @@ describe('theme package installation and loading', () => {
     const result = await loadLocalThemes();
     expect(result.diagnostics).toEqual([]);
     expect(result.themes).toHaveLength(3);
-    expect(result.themes.find(theme => theme.id === 'unrelated-local')).toBeDefined();
+    expect(result.themes.find(theme => theme.id === 'unrelated-local')).toEqual({
+      id: 'unrelated-local', name: 'Mist', type: 'light', family: 'unrelated', colors: light.colors,
+    });
     const added = result.themes.filter(theme => theme.id !== 'unrelated-local');
     expect(new Set(added.map(theme => theme.family)).size).toBe(1);
     expect(added[0].family).toBe('mist');

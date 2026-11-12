@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, nativeTheme } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import { extractIpcError } from '../shared/ipcError.js';
 
 import {
@@ -32,7 +32,6 @@ import {
   updateAppearanceSettingsAtomic,
   writeAppearanceSettingsPatch,
   appearanceService,
-  migrateAppearanceThemeSelection,
   readSelectedThemeFont,
 } from './appearance-settings-store.js';
 import { parseThemeSelection } from '../shared/appearanceDefinition.js';
@@ -40,7 +39,6 @@ import { APPEARANCE_RESET_FIELDS, appearanceResetPatch } from './appearance/defi
 import { applyDockIcon } from './app-icon.js';
 import { pluginAppearanceRevision } from './cindy-brain/pluginAppearanceRevision.js';
 import { LOCAL_THEME_SUFFIX } from '../shared/local-themes.js';
-import { createLogger } from './logger.js';
 
 export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
 
@@ -141,18 +139,17 @@ export function registerAppearanceSettingsIpc(): void {
     return resetAppearanceFromSettings();
   });
 
-  for (const [channel, migrate] of [['appearance-settings:select-theme', false], ['appearance-settings:migrate-theme', true]] as const) {
-    ipcMain.handle(channel, async (event, raw: unknown) => {
-      assertTrustedAppRendererEvent(event);
-      const selection = parseThemeSelection(raw);
-      if (!selection) throwIpcError('INVALID_PARAMS', 'Invalid theme selection');
-      try {
-        const settings = migrate ? await migrateAppearanceThemeSelection(selection) : await appearanceService.select(selection);
-        publishAppearanceFromOwner(settings);
-        return settings;
-      } catch { throwIpcError('INTERNAL', 'Unable to save theme selection'); }
-    });
-  }
+  ipcMain.handle('appearance-settings:select-theme', async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const selection = raw === null ? null : parseThemeSelection(raw);
+    if (raw !== null && (!selection || !selection.familyId.endsWith(LOCAL_THEME_SUFFIX)))
+      throwIpcError('INVALID_PARAMS', 'Invalid theme package selection');
+    try {
+      const settings = await appearanceService.select(selection);
+      publishAppearanceFromOwner(settings);
+      return settings;
+    } catch { throwIpcError('INTERNAL', 'Unable to prepare theme package'); }
+  });
   ipcMain.handle('appearance-settings:reset-fields', async (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (!Array.isArray(raw) || !raw.length || raw.length > APPEARANCE_RESET_FIELDS.length ||
@@ -403,42 +400,20 @@ export const __testing = { parsePatch };
 
 /** Plugin settings use the same profile owner and existing window broadcast. */
 export function publishAppearanceFromOwner(settings: AppearanceSettings): void {
-  followSystemTheme(settings);
   applyAppearanceToWindows(settings);
   applyDockIcon(settings);
   broadcast(settings);
 }
 
-/** Rebuild the active theme before the first window or a catalog/mode refresh. */
+/** Refresh only a package projection already requested by the renderer. */
 export function refreshAppearanceTheme(): Promise<AppearanceSettings> | undefined {
   const preparation = appearanceService.refresh();
   if (!preparation) return undefined;
   const previous = pluginAppearanceRevision(readAppearanceSettings());
   return preparation.then(settings => {
     if (pluginAppearanceRevision(settings) !== previous) publishAppearanceFromOwner(settings);
-    else followSystemTheme(settings);
     return settings;
   });
-}
-
-let followingSystemTheme = false, lastSystemDark: boolean;
-function onSystemThemeUpdated(): void {
-  const dark = nativeTheme.shouldUseDarkColors;
-  if (dark === lastSystemDark) return;
-  lastSystemDark = dark;
-  void refreshAppearanceTheme()?.catch(() => createLogger('appearance').warn('Unable to refresh theme appearance; current appearance retained'));
-}
-function followSystemTheme(settings: AppearanceSettings): void {
-  const selection = settings.themeSelection;
-  const required = selection?.mode === 'system' && selection.familyId.endsWith(LOCAL_THEME_SUFFIX);
-  if (required && !followingSystemTheme) {
-    lastSystemDark = nativeTheme.shouldUseDarkColors;
-    nativeTheme.on('updated', onSystemThemeUpdated);
-    followingSystemTheme = true;
-  } else if (!required && followingSystemTheme) {
-    nativeTheme.removeListener('updated', onSystemThemeUpdated);
-    followingSystemTheme = false;
-  }
 }
 
 /** UI and Agent edits share validation, persistence, live windows and broadcasts. */

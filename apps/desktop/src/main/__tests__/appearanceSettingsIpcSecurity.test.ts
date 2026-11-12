@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   ensureVideo: vi.fn(),
   fromWebContents: vi.fn(),
   refreshTheme: vi.fn(),
+  selectTheme: vi.fn(),
   themeOn: vi.fn(),
   themeOff: vi.fn(),
   systemDark: false,
@@ -60,8 +61,7 @@ vi.mock('../appearance-settings-store.js', () => ({
   writeAppearanceSettingsPatch: mocks.writeAppearanceSettingsPatch,
   resetAppearanceSettings: mocks.resetAppearanceSettings,
   updateAppearanceSettingsAtomic: mocks.updateAppearanceSettingsAtomic,
-  appearanceService: { select: vi.fn(), refresh: mocks.refreshTheme },
-  migrateAppearanceThemeSelection: vi.fn(),
+  appearanceService: { select: mocks.selectTheme, refresh: mocks.refreshTheme },
   readSelectedThemeFont: vi.fn(() => null),
 }));
 
@@ -85,8 +85,8 @@ const persisted = {
 
 describe('appearance settings IPC authorization', () => {
   // Unit performance contract: no default refresh publication/subscription;
-  // active OS following publishes one snapshot per window only when it changes.
-  it('bounds system-theme refresh to one active listener and one publication per changed window', async () => {
+  // package refresh publishes once per changed window, with no new OS listener.
+  it('keeps refresh inactive without a package and publishes only changed package defaults', async () => {
     const windows = Array.from({ length: 4 }, () => ({ isDestroyed: () => false,
       webContents: { isDestroyed: () => false, send: vi.fn() } }));
     mocks.allWindows.push(...windows); mocks.trustedReadWindow.mockReturnValue(true);
@@ -94,30 +94,36 @@ describe('appearance settings IPC authorization', () => {
     expect(refreshAppearanceTheme()).toBeUndefined();
     expect(mocks.themeOn).not.toHaveBeenCalled();
     expect(windows.every(win => win.webContents.send.mock.calls.length === 0)).toBe(true);
-    const selected = normalizeAppearanceSettings({ themeSelection: { mode: 'system', familyId: 'paper-local' } });
+    const selected = normalizeAppearanceSettings({ uiSize: 18 });
     mocks.readAppearanceSettings.mockReturnValue(selected);
-    try {
-      publishAppearanceFromOwner(selected);
-      publishAppearanceFromOwner(selected);
-      expect(mocks.themeOn).toHaveBeenCalledTimes(1);
-      windows.forEach(win => win.webContents.send.mockClear());
-      const updated = mocks.themeOn.mock.calls[0][1];
-      updated();
-      expect(mocks.refreshTheme).toHaveBeenCalledTimes(1); // only the startup check
-      mocks.refreshTheme.mockResolvedValue(selected);
-      mocks.systemDark = true;
-      updated(); await Promise.resolve();
-      expect(windows.every(win => win.webContents.send.mock.calls.length === 0)).toBe(true);
-      const changed = normalizeAppearanceSettings({ ...selected, uiSize: 19 });
-      mocks.refreshTheme.mockResolvedValue(changed);
-      mocks.systemDark = false;
-      updated(); await Promise.resolve();
-      for (const win of windows) expect(win.webContents.send).toHaveBeenCalledExactlyOnceWith('appearance-settings:changed', expect.objectContaining({ uiSize: 19, themeSelection: selected.themeSelection }));
-    } finally {
-      mocks.allWindows.length = 0;
-      publishAppearanceFromOwner(normalizeAppearanceSettings({}));
+    mocks.refreshTheme.mockResolvedValue(selected);
+    await refreshAppearanceTheme();
+    expect(windows.every(win => win.webContents.send.mock.calls.length === 0)).toBe(true);
+    const changed = normalizeAppearanceSettings({ ...selected, uiSize: 19 });
+    mocks.refreshTheme.mockResolvedValue(changed);
+    await refreshAppearanceTheme();
+    const { customWallpaperUrl: _privateUrl, ...publicSettings } = changed;
+    for (const win of windows) expect(win.webContents.send).toHaveBeenCalledExactlyOnceWith('appearance-settings:changed', publicSettings);
+    expect(mocks.themeOn).not.toHaveBeenCalled();
+    expect(mocks.themeOff).not.toHaveBeenCalled();
+    expect(mocks.writeAppearanceSettingsPatch).not.toHaveBeenCalled();
+  });
+  // Unit: the package-only preparation endpoint must never become another
+  // builtin selection owner; returning to builtin uses its existing null form.
+  it('prepares only local packages and clears their in-memory layer without writing selection', async () => {
+    const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === 'appearance-settings:select-theme')![1];
+    for (const selection of [{ mode: 'dark', familyId: 'cindy' }, { mode: 'invalid', familyId: 'paper-local' }]) {
+      await expect(handler({}, selection)).rejects.toThrow('Invalid theme package selection');
     }
-    expect(mocks.themeOff).toHaveBeenCalledTimes(1);
+    expect(mocks.selectTheme).not.toHaveBeenCalled();
+    mocks.selectTheme.mockResolvedValue(persisted);
+    const selection = { mode: 'dark', familyId: 'paper-local' };
+    await expect(handler({}, selection)).resolves.toEqual(persisted);
+    expect(mocks.selectTheme).toHaveBeenLastCalledWith(selection);
+    await expect(handler({}, null)).resolves.toEqual(persisted);
+    expect(mocks.selectTheme).toHaveBeenLastCalledWith(null);
+    expect(mocks.writeAppearanceSettingsPatch).not.toHaveBeenCalled();
+    expect(mocks.ipcHandle.mock.calls.some(([name]) => name === 'appearance-settings:migrate-theme')).toBe(false);
   });
   // Theme defaults must survive a single-row reset. Unit: the real trusted IPC
   // deletes only the named overrides, while unknown or state-owner fields fail.
@@ -133,7 +139,7 @@ describe('appearance settings IPC authorization', () => {
     }
     expect(mocks.writeAppearanceSettingsPatch).toHaveBeenCalledTimes(1);
   });
-  it.each(['select-theme', 'migrate-theme', 'reset-fields'])('keeps %s unavailable to untrusted windows', async channel => {
+  it.each(['select-theme', 'reset-fields'])('keeps %s unavailable to untrusted windows', async channel => {
     mocks.assertTrustedAppRendererEvent.mockImplementation(() => { throw new Error('untrusted app renderer'); });
     const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === `appearance-settings:${channel}`)?.[1];
     await expect(handler({}, { mode: 'dark', familyId: 'cindy' })).rejects.toThrow('untrusted app renderer');
@@ -291,7 +297,7 @@ describe('appearance settings IPC authorization', () => {
   });
 
   beforeEach(() => {
-    mocks.refreshTheme.mockReset(); mocks.themeOn.mockClear(); mocks.themeOff.mockClear(); mocks.systemDark = false;
+    mocks.refreshTheme.mockReset(); mocks.selectTheme.mockReset(); mocks.themeOn.mockClear(); mocks.themeOff.mockClear(); mocks.systemDark = false;
     mocks.owner = 'owner-a:1';
     mocks.boundaryPending = false;
     mocks.importWallpaper.mockReset();

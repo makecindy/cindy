@@ -1265,8 +1265,7 @@ interface ElectronAPI {
       patch: Partial<import('../shared/appearanceSettings').AppearanceSettings>,
     ) => Promise<import('../shared/appearanceSettings').AppearanceSettings>;
     reset: () => Promise<import('../shared/appearanceSettings').AppearanceSettings>;
-    selectTheme?: (selection: import('../shared/appearanceDefinition').ThemeSelection) => Promise<import('../shared/appearanceSettings').AppearanceSettings>;
-    migrateTheme?: (selection: import('../shared/appearanceDefinition').ThemeSelection) => Promise<import('../shared/appearanceSettings').AppearanceSettings>;
+    selectTheme?: (selection: import('../shared/appearanceDefinition').ThemeSelection | null) => Promise<import('../shared/appearanceSettings').AppearanceSettings>;
     resetFields?: (fields: string[]) => Promise<import('../shared/appearanceSettings').AppearanceSettings>;
     onChanged: (
       callback: (settings: import('../shared/appearanceSettings').AppearanceSettings) => void,

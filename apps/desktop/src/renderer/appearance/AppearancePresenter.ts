@@ -4,9 +4,23 @@ import type { PluginAppearanceColor } from '@cindy/plugin-protocol/appearance';
 import { themeService } from '../themes/theme-service';
 import type { Theme } from '../themes/types';
 import { SCALABLE_APPEARANCE_TOKENS } from '../styles/generated/token-mappings';
+import { LOCAL_THEME_SUFFIX } from '../../shared/local-themes';
+import type { ThemeSelection } from '../../shared/appearanceDefinition';
 
-/** Palette application is one part of the shared document presenter. */
-export function presentTheme(theme: Theme): void { themeService.applyTheme(theme); }
+let packageSelection: ThemeSelection | undefined;
+
+/** Preserve synchronous palette application; only packages prepare extra defaults. */
+export function presentTheme(theme: Theme): void {
+  themeService.applyTheme(theme);
+  const previous = packageSelection;
+  packageSelection = theme.packageSha256 && theme.appearance ? {
+    mode: theme.type,
+    familyId: theme.family ? `${theme.family}${LOCAL_THEME_SUFFIX}` : theme.id,
+  } : undefined;
+  if (!packageSelection && !previous) return;
+  void window.electronAPI?.appearanceSettings?.selectTheme?.(packageSelection ?? null)
+    .catch(() => notifyThemeAppearanceFailure());
+}
 
 /** Errors use the existing toast; translation/notice modules stay off the default path. */
 export function notifyThemeAppearanceFailure(font = false): void {

@@ -20,7 +20,6 @@ import {
   appearancePortableSettings,
   readAppearanceSettingsState,
   writeAppearanceSettingsPatch,
-  migrateAppearanceThemeSelection,
   resetAppearanceSettings,
   appearanceService,
   updateAppearanceSettingsAtomic,
@@ -40,7 +39,10 @@ describe('terminal appearance overrides', () => {
   beforeEach(() => {
     fixture.userData = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-terminal-appearance-')));
   });
-  afterEach(() => fs.rmSync(fixture.userData, { recursive: true, force: true }));
+  afterEach(async () => {
+    await appearanceService.select(null);
+    fs.rmSync(fixture.userData, { recursive: true, force: true });
+  });
 
   // Unit performance regression: the default startup path used to await media
   // cleanup and every cached read added an appearance-file stat and SHA snapshot.
@@ -71,7 +73,7 @@ describe('terminal appearance overrides', () => {
     const file = path.join(fixture.userData, 'appearance-settings.json');
     fs.writeFileSync(file, JSON.stringify(oldOverrides));
     const state = readAppearanceSettingsState();
-    expect(state.value).toEqual({ ...DEFAULT_APPEARANCE_SETTINGS, ...oldOverrides, customizedKeys: Object.keys(oldOverrides) });
+    expect(state.value).toEqual({ ...DEFAULT_APPEARANCE_SETTINGS, ...oldOverrides });
     expect(state.customizedKeys).not.toContain('terminalFamily');
     expect(state.customizedKeys).not.toContain('terminalSize');
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual(oldOverrides);
@@ -93,7 +95,7 @@ describe('terminal appearance overrides', () => {
 
     await writeAppearanceSettingsPatch({ terminalSize: 13 });
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual(otherOverrides);
-    expect(readAppearanceSettingsState().value).toEqual({ ...DEFAULT_APPEARANCE_SETTINGS, ...otherOverrides, customizedKeys: Object.keys(otherOverrides) });
+    expect(readAppearanceSettingsState().value).toEqual({ ...DEFAULT_APPEARANCE_SETTINGS, ...otherOverrides });
   });
 
   it('does not persist a defaults snapshot when restoring the only terminal override', async () => {
@@ -105,25 +107,26 @@ describe('terminal appearance overrides', () => {
     expect(readAppearanceSettingsState().isCustomized).toBe(false);
   });
 
-  // Upgrade contract: once-only theme adoption must never rewrite old font or
-  // wallpaper overrides. Existing tests exercise no renderer selection migration.
-  it('adopts the old theme selection atomically and ignores subsequent legacy values', async () => {
+  // Compatibility contract, unit through the real disk owner: an intermediate
+  // build's saved projection is unknown data, never a source of appearance.
+  it('ignores an old persisted selection without rewriting original settings on cold startup', () => {
     const old = { uiFamily: 'Inter', uiSize: 17, terminalSize: 18, wallpaperId: 'cindy-night-glance', wallpaperVisibility: 0.37 };
     const file = path.join(fixture.userData, 'appearance-settings.json');
-    fs.writeFileSync(file, JSON.stringify(old));
-    const selection = { mode: 'dark' as const, familyId: 'default' };
-    expect((await migrateAppearanceThemeSelection(selection)).themeSelection).toEqual(selection);
-    expect((await migrateAppearanceThemeSelection({ mode: 'light', familyId: 'cindy' })).themeSelection).toEqual(selection);
-    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ ...old, themeSelection: selection });
-    expect(readAppearanceSettingsState().value).toMatchObject({ ...old, themeSelection: selection });
+    const saved = JSON.stringify({ ...old, themeSelection: { mode: 'dark', familyId: 'missing-local' } });
+    fs.writeFileSync(file, saved);
+    expect(readAppearanceSettingsState().value).toEqual({ ...DEFAULT_APPEARANCE_SETTINGS, ...old });
+    expect(appearanceService.refresh()).toBeUndefined();
+    expect(appearanceService.hasThemeDefaults()).toBe(false);
+    expect(fs.readFileSync(file, 'utf8')).toBe(saved);
   });
 
-  it('preserves unreadable settings and leaves theme migration retryable after a write failure', async () => {
+  it('preserves unreadable settings without preparing a theme or writing a migration', async () => {
     const file = path.join(fixture.userData, 'appearance-settings.json');
     fs.writeFileSync(file, '{broken');
-    await expect(migrateAppearanceThemeSelection({ mode: 'dark', familyId: 'default' })).rejects.toThrow();
+    expect(appearanceService.refresh()).toBeUndefined();
+    await expect(writeAppearanceSettingsPatch({ uiSize: 17 })).rejects.toThrow();
     expect(fs.readFileSync(file, 'utf8')).toBe('{broken');
-    expect(readAppearanceSettingsState().value.themeSelection).toBeUndefined();
+    expect(readAppearanceSettingsState().value).not.toHaveProperty('themeSelection');
   });
 
   // Reset recovery existed before the theme owner. Ordinary writes/migration
@@ -166,7 +169,7 @@ describe('terminal appearance overrides', () => {
     await installThemePackage(inspected, getLocalThemesDir());
     await writeAppearanceSettingsPatch({ uiSize: 17, terminalFamily: 'Menlo', wallpaperId: 'cindy-night-glance' });
     const read = vi.spyOn(fs.promises, 'open');
-    await migrateAppearanceThemeSelection({ mode: 'light', familyId: 'paper-local' });
+    await appearanceService.select({ mode: 'light', familyId: 'paper-local' });
     const packageDir = path.join(getLocalThemesDir(), '.packages', inspected.packageSha256);
     expect(read.mock.calls.filter(([file]) => file === fs.realpathSync.native(path.join(packageDir, 'body.ttf')))).toHaveLength(1);
     read.mockRestore();
@@ -174,6 +177,7 @@ describe('terminal appearance overrides', () => {
     expect(Buffer.from((await readSelectedThemeFont('bodyFont'))!.bytes)).toEqual(font);
     await updateAppearanceSettingsAtomic((_current, overrides) => appearanceDefinitionToOverrides(overrides, { reading: { maxWidth: 800 } }));
     const file = path.join(fixture.userData, 'appearance-settings.json');
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).not.toHaveProperty('themeSelection');
     expect(JSON.parse(fs.readFileSync(file, 'utf8')).reading).toEqual({ maxWidth: 800 });
     await appearanceService.select({ mode: 'dark', familyId: 'paper-local' });
     expect(appearanceService.read()).toMatchObject({ uiFamily: 'Helvetica', uiSize: 17, reading: { bodyLineHeight: 1.6, maxWidth: 800 } });
@@ -198,28 +202,44 @@ describe('terminal appearance overrides', () => {
         fs.writeFileSync(path.join(packageDir, asset), Buffer.alloc(bytes.length));
         expect(loadLocalThemesSync().themes).toHaveLength(2);
         if (asset === 'body.ttf') {
-          // Cold restore has no in-memory defaults. A failed restore retains
-          // the saved choice; explicitly reselecting that same package rejects.
+          // Cold startup reads only user settings. Renderer selection rebuilds
+          // the package layer later; corruption still rejects that request.
           const restartedStore = createOverrideSettingsFile({ filePath: () => file,
             defaults: DEFAULT_APPEARANCE_SETTINGS, normalize: normalizeAppearanceSettings,
             log: { info() {}, warn() {} }, label: 'appearance-restart' });
           const restarted = new AppearanceService({ store: restartedStore, resolveTheme: resolveThemeAppearance, wallpaper: () => ({ url: '' }) });
-          await expect(restarted.refresh()).rejects.toThrow();
-          expect(restarted.read()).toMatchObject({ themeSelection: snapshot.settings.themeSelection, uiFamily: '' });
-          await expect(restarted.select(snapshot.settings.themeSelection)).rejects.toThrow();
+          expect(restarted.refresh()).toBeUndefined();
+          expect(restarted.read()).toMatchObject({ uiFamily: '' });
+          expect(restarted.read()).not.toHaveProperty('themeSelection');
+          await expect(restarted.select({ mode: 'dark', familyId: 'paper-local' })).rejects.toThrow();
         }
         await expect(appearanceService.select({ mode: 'light', familyId: 'paper-local' })).rejects.toThrow();
         expect(appearanceService.snapshot()).toEqual(snapshot);
         expect(fs.readFileSync(file)).toEqual(saved);
       } finally { fs.writeFileSync(path.join(packageDir, asset), bytes); }
     }
+    // Switching back removes only the derived defaults, preserving the user's
+    // original choices and serialized overrides for old-version rollback.
+    await appearanceService.select(null);
+    expect(appearanceService.read()).toMatchObject({ uiFamily: '', uiSize: 14, terminalFamily: 'Menlo', wallpaperId: 'none', density: 1, motion: 1 });
+    expect(appearanceService.read()).not.toHaveProperty('customizedKeys');
+    expect(fs.readFileSync(file)).toEqual(saved);
+    const restarted = new AppearanceService({
+      store: createOverrideSettingsFile({ filePath: () => file, defaults: DEFAULT_APPEARANCE_SETTINGS,
+        normalize: normalizeAppearanceSettings, log: { info() {}, warn() {} }, label: 'appearance-restart' }),
+      wallpaper: () => ({ url: '' }), resolveTheme: resolveThemeAppearance,
+    });
+    expect(restarted.read().uiFamily).toBe('');
+    await restarted.select({ mode: 'dark', familyId: 'paper-local' });
+    expect(restarted.read()).toMatchObject({ uiFamily: 'Helvetica', uiSize: 20 });
     await appearanceService.reset();
-    expect((await migrateAppearanceThemeSelection({ mode: 'dark', familyId: 'paper-local' })).themeSelection).toEqual({ mode: 'system', familyId: 'cindy' });
+    expect(fs.existsSync(file)).toBe(false);
+    expect(appearanceService.read()).toEqual(DEFAULT_APPEARANCE_SETTINGS);
     expect(readAppearanceSettingsState().isCustomized).toBe(false);
   });
 
   // Resource preparation is asynchronous: a late old selection must not undo
-  // a newer selection or reset. No existing test exercises this ordering. Unit.
+  // a newer selection or package exit. No existing test exercises this ordering. Unit.
   it('keeps the newest choice when older theme resource preparation finishes later', async () => {
     const completions = new Map<string, (value: { uiFamily: string }) => void>();
     const store = createOverrideSettingsFile({ filePath: () => path.join(fixture.userData, 'race.json'),
@@ -227,15 +247,16 @@ describe('terminal appearance overrides', () => {
       log: { info() {}, warn() {} }, label: 'appearance-race' });
     const service = new AppearanceService({ store, wallpaper: () => ({ url: '' }),
       resolveTheme: selection => new Promise(resolve => { completions.set(selection.familyId, resolve); }) });
-    const older = service.select({ mode: 'light', familyId: 'older' });
-    const newer = service.select({ mode: 'dark', familyId: 'newer' });
-    completions.get('newer')!({ uiFamily: 'Helvetica' }); await newer;
-    completions.get('older')!({ uiFamily: 'Inter' }); await older;
-    expect(service.read()).toMatchObject({ themeSelection: { mode: 'dark', familyId: 'newer' }, uiFamily: 'Helvetica' });
-    const pending = service.select({ mode: 'light', familyId: 'older' });
-    await service.reset();
-    completions.get('older')!({ uiFamily: 'Inter' }); await pending;
-    expect(service.read()).toMatchObject({ themeSelection: { mode: 'system', familyId: 'cindy' }, uiFamily: '' });
+    const older = service.select({ mode: 'light', familyId: 'older-local' });
+    const newer = service.select({ mode: 'dark', familyId: 'newer-local' });
+    completions.get('newer-local')!({ uiFamily: 'Helvetica' }); await newer;
+    completions.get('older-local')!({ uiFamily: 'Inter' }); await older;
+    expect(service.read().uiFamily).toBe('Helvetica');
+    const pending = service.select({ mode: 'light', familyId: 'older-local' });
+    await service.select(null);
+    completions.get('older-local')!({ uiFamily: 'Inter' }); await pending;
+    expect(service.read()).toEqual(DEFAULT_APPEARANCE_SETTINGS);
+    expect(fs.existsSync(path.join(fixture.userData, 'race.json'))).toBe(false);
   });
 
   // PR #9496 / discussion_r4537053002: exporting no resource pointer must not

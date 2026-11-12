@@ -1,6 +1,5 @@
 import { DEFAULT_FONT_SIZES } from './generated/appearance-tokens';
 import { normalizePluginAppearanceSettings, type PluginAppearanceSettingsFields } from './pluginAppearance';
-import { parseThemeSelection, type ThemeSelection } from './appearanceDefinition';
 import type { AppearanceFontResource } from './pluginAppearance';
 
 /**
@@ -11,7 +10,6 @@ import type { AppearanceFontResource } from './pluginAppearance';
  */
 
 export interface AppearanceOverrides extends PluginAppearanceSettingsFields {
-  themeSelection?: ThemeSelection;
   density?: number;
   motion?: number;
   terminalFontResource?: AppearanceFontResource;
@@ -58,8 +56,6 @@ export interface WallpaperDownloadProgress {
 export interface AppearanceSettings extends PluginAppearanceSettingsFields {
   /** Read-only projection from the Host override owner, never a writable field. */
   customizedKeys?: readonly string[];
-  /** Present after the one-time adoption of the old renderer selection. */
-  themeSelection?: ThemeSelection;
   density: number;
   motion: number;
   terminalFontResource?: AppearanceFontResource;
@@ -263,7 +259,6 @@ export function normalizeAppearanceSettings(raw: unknown): AppearanceSettings {
     ...normalizePluginAppearanceSettings(value),
     ...(Array.isArray(value.customizedKeys) && value.customizedKeys.length <= 128 && value.customizedKeys.every(key => typeof key === 'string')
       ? { customizedKeys: value.customizedKeys as string[] } : {}),
-    ...(parseThemeSelection(value.themeSelection) ? { themeSelection: parseThemeSelection(value.themeSelection)! } : {}),
     density: typeof value.density === 'number' && Number.isFinite(value.density) ? Math.min(1.25, Math.max(0.75, value.density)) : 1,
     motion: typeof value.motion === 'number' && Number.isFinite(value.motion) ? Math.min(2, Math.max(0, value.motion)) : 1,
     ...(value.terminalFontResource ? { terminalFontResource: normalizePluginAppearanceSettings({ codeFontResource: value.terminalFontResource }).codeFontResource } : {}),

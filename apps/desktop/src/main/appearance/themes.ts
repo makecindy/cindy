@@ -15,7 +15,7 @@ export async function resolveThemeAppearance(selection: ThemeSelection, retainWa
   const requested = selection.mode === 'system' ? nativeTheme?.shouldUseDarkColors ? 'dark' : 'light' : selection.mode;
   const family = loadLocalThemesSync().themes.filter(theme => (theme.family ? `${theme.family}${LOCAL_THEME_SUFFIX}` : theme.id) === selection.familyId);
   const theme = family.find(value => value.type === requested) ?? family[0];
-  if (!theme?.appearance) return {};
+  if (!theme?.packageSha256 || !theme.appearance) return {};
   const assets: Partial<Record<typeof APPEARANCE_FONT_ROLES[number], ThemeFontResource>> = {};
   const fonts = new Map<string, Promise<{ hash: string; packageSha256: string }>>();
   let packageSha256: string | undefined;

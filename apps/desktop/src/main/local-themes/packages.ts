@@ -23,7 +23,7 @@ const THEME_MAX_BYTES = 1024 * 1024;
 export const THEME_BRAND_MAX_BYTES = 20 * 1024 * 1024;
 export const THEME_BRAND_MAX_PIXELS = 8_000_000;
 
-export type PackagedThemeEntry = { file: string; theme: LocalThemeDocument; assetRoot: string } | { file: string; error: string };
+export type PackagedThemeEntry = { file: string; theme: LocalThemeDocument; assetRoot: string; packageSha256: string } | { file: string; error: string };
 
 /** Only the user's themes root may be redirected, never managed child paths. */
 function packageFilePath(root: string, relative: string): string {
@@ -52,7 +52,7 @@ function packageDirectory(parent: string, name: string): string {
 
 function parseTheme(raw: unknown, manifest: CindyThemePackageManifest): LocalThemeDocument {
   try {
-    const theme = parseLocalThemeDocument(raw);
+    const theme = parseLocalThemeDocument(raw, true);
     if (theme.appearance && manifest.formatVersion !== 2) throw new CindyFileError('invalid');
     for (const asset of Object.values(theme.brand ?? {})) {
       if (!isCindyPackagePath(asset)) throw new CindyFileError('invalid');
@@ -148,6 +148,7 @@ export function readPackagedThemesSync(themesDir: string): PackagedThemeEntry[] 
       const entries = themes.map((theme, i): PackagedThemeEntry => ({
         file: path.join(PACKAGES_DIR, hash, references[i].themePath),
         assetRoot: dir,
+        packageSha256: hash,
         theme: {
           ...theme,
           ...(theme.brand ? { brand: Object.fromEntries(Object.entries(theme.brand).map(([key, relative]) => [key, packageFilePath(dir, relative)])) } : {}),

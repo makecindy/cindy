@@ -198,6 +198,7 @@ function processEntries(
       themes.push({
         ...parsed,
         id,
+        ...('theme' in entry ? { packageSha256: entry.packageSha256 } : {}),
         ...(brandBounds ? { brandBounds } : {}),
         ...(brandRevisions ? { brandRevisions } : {}),
       });

@@ -256,8 +256,10 @@ describe('application wallpaper lifecycle', () => {
       expect(root.style.getPropertyValue('--app-wallpaper-blur')).toBe('');
       fireEvent.click(screen.getByText('Reset'));
       await waitFor(() =>
-        expect(resetFields).toHaveBeenCalledExactlyOnceWith(['wallpaper', 'desktopVisibility']),
+        expect(setPatch).toHaveBeenLastCalledWith({ wallpaperId: 'none', wallpaperOverlay: 0.2,
+          wallpaperVisibility: null, desktopVisibility: null, wallpaperBlur: null, wallpaperMotion: 'static' }),
       );
+      expect(resetFields).not.toHaveBeenCalled();
       expect(root.dataset.wallpaperBlur).toBeUndefined();
       unmount();
       expect(root.style.getPropertyValue('--app-wallpaper-blur')).toBe('');
@@ -562,8 +564,10 @@ describe('application wallpaper lifecycle', () => {
     fireEvent.click(screen.getByText('Animate'));
     fireEvent.click(screen.getByText('Reset'));
     await waitFor(() =>
-      expect(resetFields).toHaveBeenCalledExactlyOnceWith(['wallpaper', 'desktopVisibility']),
+      expect(setPatch).toHaveBeenLastCalledWith({ wallpaperId: 'none', wallpaperOverlay: 0.2,
+        wallpaperVisibility: null, desktopVisibility: null, wallpaperBlur: null, wallpaperMotion: 'static' }),
     );
+    expect(resetFields).not.toHaveBeenCalled();
     expect(screen.getByTestId('motion').textContent).toBe('static');
     expect(document.documentElement.dataset.wallpaperActive).toBeUndefined();
   });
@@ -576,7 +580,8 @@ describe('application wallpaper lifecycle', () => {
     const resetFields = vi.fn().mockResolvedValue(theme);
     const setPatch = vi.fn();
     vi.stubGlobal('electronAPI', { appearanceSettings: {
-      getSync: () => DEFAULT_APPEARANCE_SETTINGS, onChanged: () => () => {}, resetFields, setPatch,
+      getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, customizedKeys: ['wallpaperId'] }),
+      onChanged: () => () => {}, resetFields, setPatch,
     } });
     render(<WallpaperSettingsProvider><Controls /></WallpaperSettingsProvider>);
     await act(async () => { fireEvent.click(screen.getByText('Reset')); });

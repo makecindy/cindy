@@ -259,49 +259,18 @@ describe('createOverrideSettingsFile', () => {
     }
   });
 
-  it.each(['sync', 'atomic'] as const)('%s reset without retained fields removes the override file', async kind => {
+  it('reset removes the override file so future defaults can flow through', () => {
     const { dir, file, store } = createTempStore();
     try {
       store.writePatch({ enabled: false });
       expect(fs.existsSync(file)).toBe(true);
 
-      expect(kind === 'sync' ? store.reset() : await store.resetAtomic()).toEqual(DEFAULTS);
+      expect(store.reset()).toEqual(DEFAULTS);
       expect(fs.existsSync(file)).toBe(false);
       expect(store.readState().isCustomized).toBe(false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
-  });
-
-  // Theme reset must retain its migration marker from the locked disk snapshot,
-  // not an older cache. Existing reset tests covered only deleting every field.
-  // Unit, real settings file: a default-valued retained key must stay explicit.
-  it('atomically retains only requested reset fields from the current file', async () => {
-    const { dir, file, store } = createTempStore();
-    try {
-      store.writePatch({ enabled: false, limit: 9 });
-      fs.writeFileSync(file, JSON.stringify({ enabled: true, limit: 8 }));
-      await store.resetAtomic(current => ({ enabled: current.value.enabled }));
-      expect(store.read()).toEqual(DEFAULTS);
-      expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ enabled: true });
-    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-  });
-
-  // Explicit reset is the recovery boundary; preservation still blocks ordinary
-  // writes. Exercise both parsing and size failures through the production API.
-  it.each(['{broken', ' '.repeat(65)])('recovers an unreadable file when resetting with retained fields (%#)', async contents => {
-    const { dir, file, store } = createTempStore(undefined, { preserveUnreadableFile: true, maxBytes: 64 });
-    try {
-      store.writePatch({ enabled: false });
-      fs.writeFileSync(file, contents);
-      await expect(store.writePatchAtomic({ limit: 8 })).rejects.toThrow(/unreadable/);
-      expect(fs.readFileSync(file, 'utf8')).toBe(contents);
-      await store.resetAtomic(current => current.customizedKeys.includes('enabled') ? { enabled: current.value.enabled } : {});
-      expect(store.read()).toEqual(DEFAULTS);
-      expect(fs.existsSync(file)).toBe(false);
-      await store.writePatchAtomic({ enabled: false });
-      expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ enabled: false });
-    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 
   it('invalidateIfChanged reloads after external file edits and is a no-op otherwise', () => {

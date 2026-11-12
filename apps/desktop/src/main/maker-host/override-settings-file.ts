@@ -26,8 +26,8 @@ export interface OverrideSettingsFile<T> {
     options?: { preserveDefaults?: boolean },
   ): Promise<T>;
   reset(): T;
-  /** 跨进程锁内重置；可从现读快照保留少量显式字段，坏文件仍可恢复。 */
-  resetAtomic(retain?: (current: OverrideSettingsState<T>) => Partial<T>): Promise<T>;
+  /** 跨进程锁内删除 override 文件。 */
+  resetAtomic(): Promise<T>;
   /**
    * 文件被进程外修改(用户/agent 手改配置)时失效缓存,下次 read 现读。
    * 文件身份守卫(dev/ino/size/mtime):文件没变时零开销(一次 stat),不重读不重复打 loaded 日志。
@@ -304,7 +304,7 @@ export function createOverrideSettingsFile<T>(options: {
     return cached.value;
   }
 
-  async function resetAtomic(retain?: (current: OverrideSettingsState<T>) => Partial<T>): Promise<T> {
+  async function resetAtomic(): Promise<T> {
     const file = options.filePath();
     const scopeKey = options.scopeKey?.();
     fs.mkdirSync(pathDirname(file), { recursive: true });
@@ -321,12 +321,6 @@ export function createOverrideSettingsFile<T>(options: {
           );
         }
         invalidate();
-        if (retain) {
-          // Explicit reset may replace unreadable data; ordinary writes still
-          // go through readWritableState. Keep retained fields in this same lock.
-          writeOverrides(retain(readState()) as Record<string, unknown>);
-          return readState().value;
-        }
         return reset();
       },
     );

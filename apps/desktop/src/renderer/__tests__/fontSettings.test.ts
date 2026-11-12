@@ -262,12 +262,36 @@ describe('font settings', () => {
     }
   });
 
+  // Compatibility, unit through the real provider: no package means the old
+  // static reset writes, even if a Host offers the new package-only reset API.
+  it('keeps original font reset writes when no package defaults are active', async () => {
+    const originalElectronApi = window.electronAPI;
+    const resetFields = vi.fn(() => { throw new Error('Package reset must stay inactive'); });
+    const setPatch = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { appearanceSettings: {
+      getSync: () => ({ uiFamily: 'Old Font', uiSize: 18 }), onChanged: () => () => {}, setPatch, resetFields,
+    } } });
+    try {
+      const wrapper = ({ children }: { children: ReactNode }) => createElement(FontSettingsProvider, null, children);
+      const { result, unmount } = renderHook(() => useFontSettings(), { wrapper });
+      await act(async () => { result.current.resetUiFamily(); result.current.resetUiSize(); });
+      expect(setPatch.mock.calls).toEqual([[{ uiFamily: '' }], [{ uiSize: DEFAULT_UI_FONT_SIZE }]]);
+      expect(resetFields).not.toHaveBeenCalled();
+      expect(result.current).not.toHaveProperty('customizedKeys');
+      expect(result.current).toMatchObject({ uiFamily: '', uiSize: DEFAULT_UI_FONT_SIZE });
+      unmount();
+    } finally {
+      Object.defineProperty(window, 'electronAPI', { configurable: true, value: originalElectronApi });
+    }
+  });
+
   // Unit, real provider: a theme's terminal family/size differ from built-ins.
   // Existing resets checked only static defaults and could silently mask themes.
   it('resets only the chosen override and displays the effective theme font', async () => {
     const originalElectronApi = window.electronAPI;
     const setPatch = vi.fn();
-    let current = { uiSize: 18, terminalFamily: 'User Mono', terminalSize: 20 };
+    let current = { uiSize: 18, terminalFamily: 'User Mono', terminalSize: 20,
+      customizedKeys: ['terminalFamily', 'terminalSize'] };
     const resetFields = vi.fn(async (fields: string[]) => {
       current = { ...current, ...(fields.includes('terminalFamily') ? { terminalFamily: 'Theme Mono' } : {}),
         ...(fields.includes('terminalSize') ? { terminalSize: 16 } : {}) };

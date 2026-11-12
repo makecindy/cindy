@@ -1186,7 +1186,6 @@ import {
   installWindowZoomRestoration,
   registerAppearanceSettingsIpc,
   updatePersistedWindowZoom,
-  refreshAppearanceTheme,
 } from './appearance-settings-ipc.js';
 import { applyDockIcon } from './app-icon.js';
 import { registerBillingIpc } from './billing/index.js';
@@ -10622,9 +10621,6 @@ app.on('ready', async () => {
     await warmStaleProcessProvenance();
   }
   startupWindowCreationAllowed = true;
-  // Resolve selected theme defaults and media before preload's first snapshot.
-  const themePreparation = refreshAppearanceTheme();
-  if (themePreparation) await themePreparation.catch(() => createLogger('appearance').warn('Unable to prepare selected theme appearance; saved selection retained'));
   createWindow();
   markStartupMilestone('main-window-created');
   // The macOS release watcher stays disarmed until a task drag begins. Start

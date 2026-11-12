@@ -35,6 +35,8 @@ export interface LocalThemeWire {
    */
   family?: string;
   colors: Record<string, string>;
+  /** Only installed packages carry source and extended appearance metadata. */
+  packageSha256?: string;
   appearance?: AppearanceDefinition;
   /** 新版品牌区配置；renderer 装载时把路径转成 xdt-file:// URL。 */
   brand?: LocalThemeBrandConfig;
@@ -127,7 +129,7 @@ function parseBrand(value: unknown): LocalThemeBrandConfig | undefined {
     : undefined;
 }
 
-export function parseLocalThemeDocument(raw: unknown): LocalThemeDocument {
+export function parseLocalThemeDocument(raw: unknown, packageDocument = false): LocalThemeDocument {
   if (!isRecord(raw)) {
     throw new Error('Invalid theme JSON: expected object.');
   }
@@ -150,7 +152,7 @@ export function parseLocalThemeDocument(raw: unknown): LocalThemeDocument {
   }
 
   const brand = parseBrand(raw.brand);
-  const appearance = raw.appearance === undefined ? undefined : parseAppearanceDefinition(raw.appearance);
+  const appearance = !packageDocument || raw.appearance === undefined ? undefined : parseAppearanceDefinition(raw.appearance);
   if (appearance === null) throw new Error("Invalid 'appearance': expected a supported appearance definition.");
   // family 只认非空字符串;缺省/空白一律视为"不配对"(每个文件各自成家族),
   // 保持引入该字段前的行为。

@@ -23,10 +23,9 @@ import {
 import { LocaleProvider } from './hooks/useLocale';
 import {
   getInitialThemeVariant,
-  migrateStoredThemeSelection,
   ThemeProvider,
 } from './hooks/useTheme';
-import { applyFontSettings } from './hooks/useFontSettings';
+import { applyFontSettings, getInitialFontSettings } from './hooks/useFontSettings';
 import { ConfirmDialogProvider } from './components/ui/confirm-dialog-provider';
 import { bootstrapChatEmbeddingFromMain } from './lib/chatEmbeddingStore';
 import { bootstrapGitSafetySettingsFromMain } from './lib/gitSafetySettingsStore';
@@ -132,6 +131,7 @@ if (import.meta.env.DEV) {
 
 bootstrapLocalThemesSync();
 presentTheme(getInitialThemeVariant().theme);
+applyFontSettings(getInitialFontSettings());
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -140,11 +140,6 @@ if (!rootElement) {
 const root = createRoot(rootElement);
 
 void (async () => {
-  const migration = migrateStoredThemeSelection();
-  if (typeof migration !== 'boolean') {
-    await migration;
-    presentTheme(getInitialThemeVariant().theme);
-  }
   const disposeAppearancePresenter = installAppearancePresenter(applyFontSettings,
     isComputerPermissionView || isVoiceInputOverlay || isVoiceInputDictionaryToast);
   import.meta.hot?.dispose(disposeAppearancePresenter);

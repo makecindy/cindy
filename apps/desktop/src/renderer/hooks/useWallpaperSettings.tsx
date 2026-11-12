@@ -76,7 +76,7 @@ function getInitialWallpaperSettings(): WallpaperSettings {
 
 function pickWallpaperSettings(settings: AppearanceSettings): WallpaperSettings {
   return {
-    customizedKeys: settings.customizedKeys,
+    ...(settings.customizedKeys ? { customizedKeys: settings.customizedKeys } : {}),
     wallpaperId: settings.wallpaperId,
     wallpaperOverlay: settings.wallpaperOverlay,
     wallpaperVisibility: settings.wallpaperVisibility,
@@ -222,7 +222,7 @@ export function WallpaperSettingsProvider({
             ? await bridge.resetFields!(resetFields)
             : await bridge.setPatch(next);
           pendingRef.current = pendingRef.current.filter((pending) => pending.id !== id);
-          if (result) {
+          if (resetFields && result) {
             confirmedRef.current = pickWallpaperSettings(normalizeAppearanceSettings(result));
             const optimistic = pendingRef.current.reduce(
               (current, pending) => ({ ...current, ...pending.patch }), confirmedRef.current,
@@ -284,14 +284,16 @@ export function WallpaperSettingsProvider({
   const resetWallpaper = useCallback(() => {
     setBlurPreview(null);
     setVisibilityPreview(null);
-    patch(getBridge() ? {} : {
+    const preview: Partial<WallpaperSettings> = {
       wallpaperId: DEFAULT_APPEARANCE_SETTINGS.wallpaperId,
       wallpaperOverlay: DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay,
       wallpaperVisibility: null,
       desktopVisibility: null,
       wallpaperBlur: null,
       wallpaperMotion: DEFAULT_APPEARANCE_SETTINGS.wallpaperMotion,
-    }, ['wallpaper', 'desktopVisibility']);
+    };
+    if (getBridge() && settingsRef.current.customizedKeys) patch({}, ['wallpaper', 'desktopVisibility']);
+    else patch(preview);
   }, [patch]);
 
   const value = useMemo<WallpaperSettingsContextValue>(

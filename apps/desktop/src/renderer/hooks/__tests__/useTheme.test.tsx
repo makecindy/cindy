@@ -2,24 +2,21 @@
 
 /**
  * useTheme 跨窗口主题同步(D2-3,计划 §2 D2-3):
- * - 其他窗口切 theme/familyId → 宿主外观快照 → 本窗口 state + applyTheme 跟随
- * - 旧 localStorage 只作为一次升级来源，不再接收运行时写入
+ * - 其他窗口切 theme/familyId → localStorage storage 事件 → 本窗口 state + applyTheme 跟随
+ * - 本窗口 setItem 不触发 storage(storage 事件语义),不会循环
  * - 非法值/无关 key 不触发
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 
 import '../../themes/colors';
-import { bootstrapLocalThemesSync } from '../../themes/local-themes';
+import { bootstrapLocalThemesSync, getLocalThemes } from '../../themes/local-themes';
 import { themeService } from '../../themes/theme-service';
+import { tryGetFamily } from '../../themes/families';
+import { DEFAULT_APPEARANCE_SETTINGS } from '../../../shared/appearanceSettings';
 import type { LocalThemesResult } from '../../../shared/local-themes';
-import { normalizeAppearanceSettings, type AppearanceSettings } from '../../../shared/appearanceSettings';
-import { useReducedMotion } from '../useReducedMotion';
-const themeFailureNotice = vi.hoisted(() => vi.fn());
-vi.mock('../../lib/toast', () => ({ toast: { error: themeFailureNotice } }));
-vi.mock('../../i18n', () => ({ default: { t: (key: string) => key } }));
 import {
   __resetLoginFirstLaunchLightGateForTest,
   endLoginFirstLaunchLightGate,
@@ -27,17 +24,10 @@ import {
   getInitialThemeVariant,
   ThemeProvider,
   useTheme,
-  migrateStoredThemeSelection,
-  getStoredTheme,
-  getStoredFamilyId,
 } from '../useTheme';
 
 const applyVibrancyMock = vi.fn();
 let systemPrefersDark = false;
-let hostSnapshot: AppearanceSettings | undefined;
-const hostListeners = new Set<(settings: AppearanceSettings) => void>();
-const selectThemeMock = vi.fn();
-const migrateThemeMock = vi.fn();
 
 // jsdom 无 matchMedia,ThemeProvider 初始化与 system 模式需要它。
 vi.stubGlobal('matchMedia', (q: string) => ({
@@ -55,168 +45,102 @@ function utilityWindowWrapper({ children }: { children: ReactNode }) {
   return createElement(ThemeProvider, { children, syncWindowVibrancy: false });
 }
 
-function dispatchOwnerSelection(key: string, newValue: string | null) {
-  if (key !== 'theme' && key !== 'theme.familyId') return;
-  hostSnapshot = normalizeAppearanceSettings({ themeSelection: { mode: getStoredTheme(), familyId: getStoredFamilyId(),
-    [key === 'theme' ? 'mode' : 'familyId']: newValue } });
-  for (const receive of hostListeners) receive(hostSnapshot);
+// 构造 storage 事件:用普通 Event + 显式 key/newValue,避免依赖 jsdom 对
+// StorageEvent 构造函数第二参数(init)的重载支持(CodeQL: superfluous trailing arguments)。
+// useTheme 的 storage 监听只读 event.key / event.newValue,语义完全等价。
+function dispatchStorage(key: string, newValue: string | null) {
+  const event = new Event('storage');
+  Object.defineProperty(event, 'key', { value: key });
+  Object.defineProperty(event, 'newValue', { value: newValue });
+  window.dispatchEvent(event);
 }
 
 describe('useTheme 跨窗口主题同步(D2-3)', () => {
   beforeEach(() => {
     __resetLoginFirstLaunchLightGateForTest();
-    themeFailureNotice.mockClear();
     systemPrefersDark = false;
     localStorage.clear();
-    hostSnapshot = undefined; hostListeners.clear();
-    selectThemeMock.mockReset().mockImplementation(async selection => {
-      hostSnapshot = normalizeAppearanceSettings({ themeSelection: selection });
-      for (const receive of hostListeners) receive(hostSnapshot);
-      return hostSnapshot;
-    });
-    migrateThemeMock.mockReset().mockImplementation(selectThemeMock);
     delete document.documentElement.dataset.theme;
     delete document.documentElement.dataset.wallpaperActive;
     document.documentElement.classList.remove('dark');
     vi.spyOn(themeService, 'applyTheme').mockImplementation(() => {});
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       theme: { applyVibrancy: applyVibrancyMock },
-      appearanceSettings: { getSync: () => hostSnapshot ?? null, selectTheme: selectThemeMock, migrateTheme: migrateThemeMock,
-        onChanged: (receive: (settings: AppearanceSettings) => void) => { hostListeners.add(receive); return () => hostListeners.delete(receive); } },
     };
     applyVibrancyMock.mockClear();
   });
 
-  // Unit: the Agent needs the confirmed selection from the existing Host write,
-  // even before any React projection or preload notification has caught up.
-  it('returns the committed selection only after the Host completes its write', async () => {
-    hostSnapshot = normalizeAppearanceSettings({ themeSelection: { mode: 'light', familyId: 'default' } });
-    let finish!: (settings: AppearanceSettings) => void;
-    selectThemeMock.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
-    const hook = renderHook(() => useTheme(), { wrapper });
-    let pending!: Promise<unknown>;
-    act(() => { pending = hook.result.current.setSelection({ mode: 'dark', familyId: 'cindy' }); });
-    expect(selectThemeMock).toHaveBeenCalledExactlyOnceWith({ mode: 'dark', familyId: 'cindy' });
-    expect(hook.result.current.theme).toBe('light');
-    finish(normalizeAppearanceSettings({ themeSelection: { mode: 'dark', familyId: 'cindy' } }));
-    await expect(pending).resolves.toEqual({ mode: 'dark', familyId: 'cindy' });
-    hook.unmount();
-  });
-
-  // Actual theme selection failure used to be logged without a user notice.
-  // Unit: rejected Host preparation must keep the current family and explain it.
-  it('keeps the current selection and notifies the user when theme assets cannot be applied', async () => {
-    hostSnapshot = normalizeAppearanceSettings({ themeSelection: { mode: 'light', familyId: 'cindy' } });
-    selectThemeMock.mockRejectedValueOnce(new Error('Invalid font'));
-    const hook = renderHook(() => useTheme(), { wrapper });
-    await act(async () => hook.result.current.setFamily('cindy'));
-    expect(selectThemeMock).toHaveBeenCalledExactlyOnceWith({ mode: 'light', familyId: 'cindy' });
-    expect(hook.result.current.familyId).toBe('cindy');
-    await waitFor(() => expect(themeFailureNotice).toHaveBeenCalledExactlyOnceWith('settings.appearance.themeApplyFailed'));
-    hook.unmount();
-  });
-
-  // Unit performance regression: 100 real consumers previously added 100 Host
-  // subscriptions. Unrelated font writes must not rerender motion or palette users.
-  it('shares the existing Host subscription across motion consumers and isolates unrelated updates', async () => {
-    hostSnapshot = normalizeAppearanceSettings({ themeSelection: { mode: 'light', familyId: 'default' } });
-    let motionRenders = 0, paletteRenders = 0, reduced = false;
-    function MotionConsumer() { motionRenders++; reduced = useReducedMotion(); return null; }
-    function PaletteConsumer() { paletteRenders++; useTheme(); return null; }
-    const view = render(createElement(ThemeProvider, null,
-      ...Array.from({ length: 100 }, (_, key) => createElement(MotionConsumer, { key })),
-      createElement(PaletteConsumer),
-    ));
-    expect(hostListeners.size).toBe(1);
-    expect(reduced).toBe(false);
-    const initialMotion = motionRenders, initialPalette = paletteRenders;
-    await act(async () => {
-      hostSnapshot = normalizeAppearanceSettings({ ...hostSnapshot, uiSize: 19 });
-      for (const receive of hostListeners) receive(hostSnapshot);
-    });
-    expect(motionRenders).toBe(initialMotion);
-    await act(async () => {
-      hostSnapshot = normalizeAppearanceSettings({ ...hostSnapshot, motion: 0 });
-      for (const receive of hostListeners) receive(hostSnapshot);
-    });
-    expect(reduced).toBe(true);
-    expect(motionRenders).toBe(initialMotion + 100);
-    expect(paletteRenders).toBe(initialPalette);
-    view.unmount();
-    expect(hostListeners.size).toBe(0);
-  });
-
-  // Performance: completed migration must be a synchronous startup branch;
-  // font-only publications must not rewrite the real palette or rerender users.
-  it('returns synchronously after migration and applies a changed palette only once', async () => {
-    hostSnapshot = normalizeAppearanceSettings({ themeSelection: { mode: 'light', familyId: 'default' } });
-    expect(migrateStoredThemeSelection()).toBe(true);
-    expect(migrateThemeMock).not.toHaveBeenCalled();
-    vi.mocked(themeService.applyTheme).mockRestore();
-    const apply = vi.spyOn(themeService, 'applyTheme');
-    let renders = 0;
-    const hook = renderHook(() => { renders++; return useTheme(); }, { wrapper });
-    apply.mockClear();
-    const initialRenders = renders;
-    await act(async () => {
-      hostSnapshot = normalizeAppearanceSettings({ ...hostSnapshot, uiSize: 18 });
-      for (const receive of hostListeners) receive(hostSnapshot);
-    });
-    expect(apply).not.toHaveBeenCalled();
-    expect(renders).toBe(initialRenders);
-    await act(async () => {
-      hostSnapshot = normalizeAppearanceSettings({ ...hostSnapshot, themeSelection: { mode: 'dark', familyId: 'default' } });
-      for (const receive of hostListeners) receive(hostSnapshot);
-    });
-    expect(apply).toHaveBeenCalledTimes(1);
-    hook.unmount();
-  });
-
-  // Upgrade entry, real hook/readers: preserve old choices on failure and never
-  // read legacy values again after the Host confirms the one-time migration.
-  it('migrates the stored selection once and keeps later choices in the Host only', async () => {
-    localStorage.setItem('theme', 'dark'); localStorage.setItem('theme.familyId', 'default');
-    expect(await migrateStoredThemeSelection()).toBe(true);
-    expect(await migrateStoredThemeSelection()).toBe(true);
-    expect(migrateThemeMock).toHaveBeenCalledExactlyOnceWith({ mode: 'dark', familyId: 'default' });
-    const read = vi.spyOn(Storage.prototype, 'getItem'); read.mockClear();
-    expect(getStoredTheme()).toBe('dark'); expect(getStoredFamilyId()).toBe('default');
-    expect(read.mock.calls.filter(([key]) => key.startsWith('theme'))).toEqual([]);
-    const { result } = renderHook(() => useTheme(), { wrapper });
-    await act(async () => result.current.setTheme('light'));
-    expect(selectThemeMock).toHaveBeenLastCalledWith({ mode: 'light', familyId: 'default' });
-    expect(result.current.theme).toBe('light');
-    expect(localStorage.getItem('theme')).toBe('dark');
-  });
-
-  it('keeps the old selection and storage bytes when the Host cannot save the migration', async () => {
-    localStorage.setItem('theme', 'dark'); localStorage.setItem('theme.familyId', 'default');
-    migrateThemeMock.mockRejectedValueOnce(new Error('Save failed'));
-    expect(await migrateStoredThemeSelection()).toBe(false);
-    expect(getStoredTheme()).toBe('dark'); expect(getStoredFamilyId()).toBe('default');
-    expect(localStorage.getItem('theme')).toBe('dark'); expect(localStorage.getItem('theme.familyId')).toBe('default');
-  });
-
-  // Upgrade first frame: empty renderer storage must not reactivate the login
-  // light gate when the Host already owns a dark selection. Unit, real reader.
-  it('keeps a migrated dark selection on the first frame with empty renderer storage', async () => {
-    hostSnapshot = normalizeAppearanceSettings({ themeSelection: { mode: 'dark', familyId: 'default' } });
-    expect(getInitialThemeVariant().theme.type).toBe('dark');
-    expect(await migrateStoredThemeSelection()).toBe(true);
-    expect(migrateThemeMock).not.toHaveBeenCalled();
-    expect(localStorage.getItem('theme')).toBeNull();
-  });
-
-  it('retains a temporarily unavailable legacy family instead of persisting its visual fallback', async () => {
+  // Unit, real ThemeProvider/setters and browser storage: old users must not
+  // depend on the Host appearance file to start or switch builtin themes.
+  // Earlier migration tests asserted the replacement ownership, not this
+  // compatibility contract. A throwing Host plus an old dark/default choice
+  // reproduces both the startup regression and the lost synchronous setter.
+  it('starts and switches builtin themes from legacy storage even when Host settings are unreadable', () => {
+    const unavailable = vi.fn(() => { throw new Error('Appearance file unreadable'); });
+    Object.assign(window.electronAPI, { appearanceSettings: {
+      getSync: unavailable, selectTheme: unavailable, migrateTheme: unavailable,
+      onChanged: unavailable,
+    } });
     localStorage.setItem('theme', 'dark');
-    localStorage.setItem('theme.familyId', 'temporarily-unavailable-local');
-    await migrateStoredThemeSelection();
-    expect(migrateThemeMock).toHaveBeenCalledWith({ mode: 'dark', familyId: 'temporarily-unavailable-local' });
-    expect(hostSnapshot?.themeSelection?.familyId).toBe('temporarily-unavailable-local');
-    expect(getStoredFamilyId()).toBe('cindy');
+    localStorage.setItem('theme.familyId', 'default');
+    expect(getInitialThemeVariant().theme.type).toBe('dark');
     const { result } = renderHook(() => useTheme(), { wrapper });
-    await act(async () => { result.current.setTheme('light'); });
-    expect(selectThemeMock).toHaveBeenLastCalledWith({ mode: 'light', familyId: 'temporarily-unavailable-local' });
+    expect(result.current.familyId).toBe('default');
+    expect(localStorage.getItem('theme')).toBe('dark');
+    for (const mode of ['system', 'light', 'dark'] as const) {
+      act(() => result.current.setTheme(mode));
+      expect(result.current.theme).toBe(mode);
+      expect(localStorage.getItem('theme')).toBe(mode);
+    }
+    act(() => result.current.setFamily('cindy'));
+    expect(result.current.familyId).toBe('cindy');
+    expect(localStorage.getItem('theme.familyId')).toBe('cindy');
+    expect(unavailable).not.toHaveBeenCalled();
+  });
+
+  // Unit through the real cache and ThemeProvider: a package adds metadata and
+  // async preparation without changing old Theme objects or stored selection.
+  // Minimum: one local package then a builtin; legacy storage tests miss this exit.
+  it('prepares packages after synchronous palette selection and clears defaults only when leaving a package', async () => {
+    vi.mocked(themeService.applyTheme).mockRestore();
+    localStorage.setItem('theme', 'light');
+    localStorage.setItem('theme.familyId', 'default');
+    const builtin = structuredClone(tryGetFamily('cindy'));
+    const loose = { id: 'loose-local', name: 'Loose', type: 'light' as const, colors: {} };
+    const install = (themes: LocalThemesResult['themes']) => {
+      Object.assign(window.electronAPI, { localThemes: {
+        listSync: () => ({ success: true, themes, diagnostics: [] }), onChanged: () => () => {},
+      } });
+      bootstrapLocalThemesSync();
+    };
+    install([loose]);
+    const originalLoose = getLocalThemes()[0];
+    install([{ ...loose, appearance: { density: 0.9 } }, {
+      id: 'paper-light-local', family: 'paper', name: 'Paper', type: 'light', colors: {},
+      packageSha256: 'a'.repeat(64), appearance: { uiFont: { family: 'Theme Font' }, motion: 0 },
+    }]);
+    expect(getLocalThemes()[0]).toEqual(originalLoose);
+    expect(tryGetFamily('cindy')).toEqual(builtin);
+    let complete!: (value: typeof DEFAULT_APPEARANCE_SETTINGS) => void;
+    const selectTheme = vi.fn(() => new Promise<typeof DEFAULT_APPEARANCE_SETTINGS>(resolve => { complete = resolve; }));
+    Object.assign(window.electronAPI, { appearanceSettings: {
+      getSync: () => DEFAULT_APPEARANCE_SETTINGS, onChanged: () => () => {}, selectTheme,
+    } });
+    const { result, unmount } = renderHook(() => useTheme(), { wrapper });
+    expect(selectTheme).not.toHaveBeenCalled();
+    act(() => result.current.setFamily('paper-local'));
+    expect(document.documentElement.dataset.theme).toBe('paper-light-local');
+    expect(localStorage.getItem('theme.familyId')).toBe('paper-local');
+    expect(selectTheme).toHaveBeenCalledExactlyOnceWith({ mode: 'light', familyId: 'paper-local' });
+    await act(async () => { complete(DEFAULT_APPEARANCE_SETTINGS); });
+    selectTheme.mockResolvedValue(DEFAULT_APPEARANCE_SETTINGS);
+    await act(async () => { result.current.setFamily('default'); });
+    expect(selectTheme).toHaveBeenLastCalledWith(null);
+    expect(selectTheme).toHaveBeenCalledTimes(2);
+    await act(async () => { result.current.setFamily('loose-local'); result.current.setTheme('dark'); });
+    expect(selectTheme).toHaveBeenCalledTimes(2);
+    expect(localStorage.getItem('theme.familyId')).toBe('loose-local');
+    unmount();
   });
 
   it('把应用主题模式同步给 main 作为下次 Windows 创建期 backing 镜像', () => {
@@ -253,11 +177,11 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', true, 'system', true, false, null);
   });
 
-  it('其他窗口切 theme → 宿主推送 → 本窗口 theme state 跟随并重应用', () => {
+  it('其他窗口切 theme → storage 事件 → 本窗口 theme state 跟随并重应用', () => {
     const { result } = renderHook(() => useTheme(), { wrapper });
     expect(result.current.theme).toBe('system');
     act(() => {
-      dispatchOwnerSelection('theme', 'dark');
+      dispatchStorage('theme', 'dark');
     });
     expect(result.current.theme).toBe('dark');
     expect(themeService.applyTheme).toHaveBeenCalled();
@@ -307,7 +231,7 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     const { result } = renderHook(() => useTheme(), { wrapper });
     expect(result.current.familyId).toBe('cindy');
     act(() => {
-      dispatchOwnerSelection('theme.familyId', 'default');
+      dispatchStorage('theme.familyId', 'default');
     });
     expect(result.current.familyId).toBe('default');
   });
@@ -336,7 +260,7 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     const { result } = renderHook(() => useTheme(), { wrapper });
     const before = result.current.theme;
     act(() => {
-      dispatchOwnerSelection('theme', 'garbage');
+      dispatchStorage('theme', 'garbage');
     });
     expect(result.current.theme).toBe(before);
   });
@@ -345,7 +269,7 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     const { result } = renderHook(() => useTheme(), { wrapper });
     const before = result.current.familyId;
     act(() => {
-      dispatchOwnerSelection('theme.familyId', 'no-such-family');
+      dispatchStorage('theme.familyId', 'no-such-family');
     });
     expect(result.current.familyId).toBe(before);
   });
@@ -357,7 +281,7 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     const beforeTheme = result.current.theme;
     const beforeFamily = result.current.familyId;
     act(() => {
-      dispatchOwnerSelection('unrelated.key', 'x');
+      dispatchStorage('unrelated.key', 'x');
     });
     expect(result.current.theme).toBe(beforeTheme);
     expect(result.current.familyId).toBe(beforeFamily);
