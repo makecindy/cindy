@@ -46,6 +46,23 @@ export function createHostSubscriptionFastPolicies(availabilityPolicy: ReturnTyp
 
 const log = createLogger('host-codex-runtime');
 
+/**
+ * The subscription bridge's native token read, as the desktop adapter's getAccessToken: the
+ * native OpenAI login is reconciled with the system login before the token is read.
+ */
+export function createBridgeTokenReader(options: {
+  check(): void;
+  systemLogin: { reconcile(): Promise<void> };
+  readAccessToken(providerId?: string): Promise<string | null> | string | null;
+}) {
+  return async (providerId?: string): Promise<string | null> => {
+    options.check();
+    if (!providerId || providerId === 'openai') await options.systemLogin.reconcile();
+    options.check();
+    return options.readAccessToken(providerId);
+  };
+}
+
 /** Same Codex proxy and spawn policy as desktop, assembled with owner-bound Node IO. */
 export function createHostCodexRuntime(options: {
   profileDir: string; binaryPath: string;
@@ -112,12 +129,7 @@ export function createHostCodexRuntime(options: {
     invalidateXaiBridgeAuth: (...args) => xai.invalidateXaiBridgeAuth(...args),
     chatgptAccountIdFromTokens: (...args) => chatgptAccountIdFromTokens(...args),
     desktopCodexAuthAdapter: {
-      // As the desktop adapter's getAccessToken: reconcile before reading the native token.
-      getAccessToken: async providerId => {
-        check();
-        if (!providerId || providerId === 'openai') await systemLogin.reconcile();
-        check(); return native.readAccessToken(providerId);
-      },
+      getAccessToken: createBridgeTokenReader({ check, systemLogin, readAccessToken: providerId => native.readAccessToken(providerId) }),
       // The bridge has just matched the rejected token against getAccessToken above.
       invalidate: reason => invalidateNative(reason),
       captureOAuthDispatchProof: (accessToken, accountId, providerId) => native.captureDispatchProof(accessToken, accountId, providerId),
