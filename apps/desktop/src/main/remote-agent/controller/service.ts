@@ -27,6 +27,7 @@ import type {
 } from '@cindy/maker-core';
 import {
   LOCAL_AGENT_CLIENT,
+  isolatedBotProfile,
   resolveAllowedManagedSkills,
   resolveMemoryScopeKey,
   snapshotManagedSkillGrants,
@@ -255,8 +256,12 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       }
     }
     // 插件工具同样经隧道回到本机：花名册也按本机真实工作目录现算一次(会话内恒定)。
-    // 外部应用只开放它自己的工具，伙伴另有发现规则，都不带。
-    if (opts.ghostRosterSnapshot === undefined && deps.ghostRosterPrompt && !opts[LOCAL_AGENT_CLIENT] && !opts.botRuntimeProfile) {
+    // 与本机引擎同一判断：隔离运行的伙伴另有发现规则，带空花名册(不带时对方会回退到它自己的插件)；
+    // V2 伙伴在自己项目里的对话按普通任务，照常带。外部应用只开放它自己的工具，不带。
+    const isolatedBot = isolatedBotProfile(opts.botRuntimeProfile);
+    if (opts.ghostRosterSnapshot === undefined && isolatedBot) {
+      opts.ghostRosterSnapshot = '';
+    } else if (opts.ghostRosterSnapshot === undefined && deps.ghostRosterPrompt && !opts[LOCAL_AGENT_CLIENT]) {
       try {
         opts.ghostRosterSnapshot = deps.ghostRosterPrompt(opts.workingDir);
       } catch (error) {
@@ -534,14 +539,15 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       // Codex 建线程时沿上级目录逐级查找 .git 与插件清单：先把有没有报过去，对方不再逐个经设备互联来问。
       ...(input.agentKind === 'codex' ? { collectAncestorMarkers } : {}),
       collectPersonal: async (kind, projectFiles, agent) => {
-        // 与本机任务同一规则：伙伴按授权挑托管 Skill，停用的不带；个人 Skill 只按停用过滤。
+        // 与本机引擎同一规则：隔离运行的伙伴按授权挑托管 Skill；V2 伙伴在自己项目里的对话按普通任务，
+        // 不套伙伴授权。停用的都不带；个人 Skill 只按停用过滤。
         const disabledSkillPaths = [...(deps.disabledSkillPaths?.() ?? [])];
         let managedSkills: LocalManagedSkill[] | undefined;
         if (deps.managedSkills) {
           try {
             managedSkills = resolveAllowedManagedSkills(
               await deps.managedSkills(),
-              snapshotManagedSkillGrants(opts.botRuntimeProfile?.skillPolicy),
+              snapshotManagedSkillGrants(isolatedBot?.skillPolicy),
               disabledSkillPaths,
             ).flatMap((skill) => skill.path ? [{ command: skill.claudeCommandName, dir: path.dirname(skill.path) }] : []);
           } catch (error) {
@@ -551,7 +557,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         }
         return collectPersonalConfig(kind, projectFiles, {
           ...collect,
-          ...(opts.botRuntimeProfile ? {} : { disabledSkillPaths }),
+          ...(isolatedBot ? {} : { disabledSkillPaths }),
           ...(managedSkills ? { managedSkills } : {}),
           ...(managedSkills && agent?.managedSkillDigests ? { agentDigests: agent.managedSkillDigests } : {}),
         });

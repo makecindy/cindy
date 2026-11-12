@@ -1,5 +1,12 @@
 {
   "githubPrs": {
+    "status": {
+      "open": "Aberto",
+      "draft": "Rascunho",
+      "merged": "Integrado",
+      "closed": "Fechado"
+    },
+    "statusUnavailable": "Estado ainda não carregado",
     "title": "Gerir ligações de PR",
     "hint": "Até 3 no cabeçalho; os PRs fixados aparecem primeiro",
     "empty": "Cole uma ligação de PR do GitHub ou MR do GitLab para o adicionar",
