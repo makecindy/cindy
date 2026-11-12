@@ -4317,6 +4317,7 @@
           "ariaLabel": "Allow your other computers and the people you share with to use this provider",
           "writeFailed": "Couldn’t save the remote access setting. Try again."
         },
+        "ownComputersCanUse": "Available to my other computers",
         "moreActionsAria": "More Actions",
         "runLocation": {
           "label": "Run on",
@@ -6939,6 +6940,11 @@
       "description": "Devices signed in with the same Feishu account can discover each other. Once \"Allow control\" is on, your other devices can remotely control {{appName}} on this machine.",
       "allowControl": "Allow same-account devices to control this machine",
       "allowControlHint": "When enabled, other devices signed in with the same account can control this machine without per-connection approval. A visible indicator is shown while being controlled, and you can disconnect at any time.",
+      "ownModelAccess": {
+        "title": "Let my other computers use this computer’s models",
+        "hint": "When on, your other computers can use the providers on this computer. The Agent runs here, using this computer’s sign-in and quota. Nothing is shared with other people.",
+        "writeFailed": "Couldn't save this setting. Try again."
+      },
       "keepAwake": "Keep computer awake",
       "keepAwakeHint": "When enabled, this machine won't go to sleep, so background agents and scheduled tasks keep running (you can still turn off the display or lock the screen).",
       "linkStatus": {
@@ -15508,7 +15514,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "This Agent isn't available on the other computer. Install or sign in to it there, or pick another Agent.",
       "REMOTE_AGENT_INVALID": "Something went wrong talking to the computer running the Agent. Try again; if it keeps happening, update Cindy on both computers.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "This model has reached the model share limit set by its owner. Choose another available model to continue.",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t granted you remote access to this provider or the selected model. Ask its owner to adjust access in Remote & Sharing, or pick another model.",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t opened this provider or the selected model to you. If it’s your own computer, switch on “Let my other computers use this computer’s models” in its Remote Connection settings; if someone shared it with you, ask them to adjust access in Remote & Sharing. Or pick another model.",
       "REMOTE_AGENT_FORK_FAILED": "The computer running the Agent couldn’t start a new session from here. Try again, or try a different message.",
       "REMOTE_AGENT_SHARE_PAUSED": "The owner has paused this share for you, so these models can’t be used until it’s resumed. Switch to another model to continue.",
       "REMOTE_AGENT_SHARE_REMOVED": "This share is no longer available (the owner removed it or you left). Switch to another model to continue.",

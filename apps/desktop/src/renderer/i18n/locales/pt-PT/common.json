@@ -4373,6 +4373,7 @@
           "ariaLabel": "Permitir que os seus outros computadores e as pessoas com quem partilha usem este fornecedor",
           "writeFailed": "Não foi possível guardar a definição de acesso remoto. Tente novamente."
         },
+        "ownComputersCanUse": "Disponível para os meus outros computadores",
         "moreActionsAria": "Mais ações",
         "runLocation": {
           "label": "Executar em",
@@ -7006,6 +7007,11 @@
       "description": "Os dispositivos com sessão iniciada na mesma conta Feishu podem detetar-se mutuamente. Quando «Permitir controlo» está ativado, os seus outros dispositivos podem controlar remotamente o {{appName}} nesta máquina.",
       "allowControl": "Permitir que dispositivos da mesma conta controlem esta máquina",
       "allowControlHint": "Quando ativado, outros dispositivos com sessão iniciada na mesma conta podem controlar esta máquina sem aprovação por ligação. É apresentado um indicador visível durante o controlo, e pode desligar a qualquer momento.",
+      "ownModelAccess": {
+        "title": "Permitir que os meus outros computadores usem os modelos deste",
+        "hint": "Quando ativado, os seus outros computadores podem usar os fornecedores deste computador. O Agent é executado aqui, com a sessão e a quota deste computador. Nada é partilhado com outras pessoas.",
+        "writeFailed": "Não foi possível guardar esta definição. Tente novamente."
+      },
       "keepAwake": "Manter o computador ativo",
       "keepAwakeHint": "Quando ativado, esta máquina não entra em suspensão, para que os Agents em segundo plano e as tarefas agendadas continuem a ser executados (pode continuar a desligar o monitor ou bloquear o ecrã).",
       "linkStatus": {
@@ -15612,7 +15618,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "Este Agent não está disponível no outro computador. Instale-o ou inicie sessão nele nesse computador, ou escolha outro Agent.",
       "REMOTE_AGENT_INVALID": "Ocorreu um erro na comunicação com o computador que executa o Agent. Tente novamente; se o problema persistir, atualize o Cindy em ambos os computadores.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo atingiu o limite de partilha definido pelo proprietário. Escolha outro modelo disponível para continuar.",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esse computador não lhe concedeu acesso remoto a este fornecedor ou ao modelo selecionado. Peça ao proprietário para ajustar o acesso em Acesso remoto e partilha ou escolha outro modelo.",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esse computador não lhe abriu este fornecedor ou o modelo selecionado. Se for o seu próprio computador, ative “Permitir que os meus outros computadores usem os modelos deste” na ligação remota dele. Se alguém o partilhou consigo, peça ao proprietário para ajustar o acesso em Acesso remoto e partilha. Também pode escolher outro modelo.",
       "REMOTE_AGENT_FORK_FAILED": "O computador que executa o Agent não conseguiu iniciar uma nova sessão a partir daqui. Tenta novamente ou tenta uma mensagem diferente.",
       "REMOTE_AGENT_SHARE_PAUSED": "O proprietário colocou esta partilha em pausa para si, pelo que estes modelos não podem ser usados até ser retomada. Mude para outro modelo para continuar.",
       "REMOTE_AGENT_SHARE_REMOVED": "Esta partilha já não está disponível (o proprietário removeu-a ou o utilizador saiu dela). Mude para outro modelo para continuar.",

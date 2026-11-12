@@ -6150,6 +6150,9 @@ interface ElectronAPI {
       providerId: string;
       enabled: boolean;
     }) => Promise<{ ok: true; enabled: boolean }>;
+    /** 「远程连接」里的「让我的其他电脑用本机模型」：默认关闭，与供应商分享无关。 */
+    getOwnComputerModelUse: () => Promise<{ enabled: boolean }>;
+    setOwnComputerModelUse: (input: { enabled: boolean }) => Promise<{ ok: true; enabled: boolean }>;
     /** 供应商「运行于」：deviceId、'local'，或 null 回到默认；写入后经 PROVIDER_CHANGED 刷新。 */
     setProviderRunLocation: (input: { providerId: string; location: string | null }) => Promise<{ ok: true }>;
     /** Persist the visible provider order only if the active owner still matches. */

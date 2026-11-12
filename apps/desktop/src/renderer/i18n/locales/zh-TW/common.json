@@ -4274,6 +4274,7 @@
           "ariaLabel": "允許你的其他電腦和你分享的人呼叫此供應商",
           "writeFailed": "遠端呼叫設定未能儲存，請重試"
         },
+        "ownComputersCanUse": "我的其他電腦可用",
         "moreActionsAria": "更多操作",
         "runLocation": {
           "label": "在哪台電腦執行",
@@ -6896,6 +6897,11 @@
       "description": "同一飛書帳號登入的裝置可以互相發現；開啟「允許控制」後，你的其它裝置可以遠端連線本機的 {{appName}}。",
       "allowControl": "允許同帳號裝置控制本機",
       "allowControlHint": "開啟後，使用同一帳號登入的其它裝置無需逐次確認即可控制本機；本機會顯示遠端控制提示，可隨時斷開。",
+      "ownModelAccess": {
+        "title": "讓我的其他電腦用本機模型",
+        "hint": "開啟後，你的其他電腦可以用這臺電腦上的模型供應商，Agent 在這臺電腦上執行，用這臺電腦的登入和配額。不會分享給別人。",
+        "writeFailed": "設定未能儲存，請重試"
+      },
       "keepAwake": "保持電腦喚醒",
       "keepAwakeHint": "開啟後本機不會進入休眠，背景中的 Agent 與定時任務可持續執行（仍可關閉顯示器或鎖定螢幕）。",
       "linkStatus": {
@@ -15442,7 +15448,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "那臺電腦上這個 Agent 無法使用。在那臺電腦上安裝或登入後再試，或換一個 Agent。",
       "REMOTE_AGENT_INVALID": "與執行 Agent 的電腦通訊時出錯。請重試；如果持續出現，請把兩臺電腦上的 Cindy 都更新到最新版。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已達到分享者設定的模型占比上限。請選擇其他可用模型繼續。",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那臺電腦未向你開放這個供應商或所選模型。請讓電腦主人在「遠端與分享」中調整開放範圍，或換一個模型。",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那臺電腦未向你開放這個供應商或所選模型。是你自己的電腦時，在那臺電腦的「遠端連線」裡開啟「讓我的其他電腦用本機模型」；別人分享給你的，請對方在「遠端與分享」中調整。也可以換一個模型。",
       "REMOTE_AGENT_FORK_FAILED": "執行 Agent 的電腦沒能從這裡開啟新任務。請重試，或換一則訊息再試。",
       "REMOTE_AGENT_SHARE_PAUSED": "對方已暫停對你的分享，恢復前不能使用這些模型。可以換成其他模型繼續。",
       "REMOTE_AGENT_SHARE_REMOVED": "這個分享已無法使用（對方刪除了分享或你已退出）。可以換成其他模型繼續。",

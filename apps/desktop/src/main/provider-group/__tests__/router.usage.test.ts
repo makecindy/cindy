@@ -141,6 +141,18 @@ describe('provider-group quota routing', () => {
       .toBe(kind === 'member' ? null : NOW + 100_000);
   });
 
+  // PR #10150 review, unit: a same-account pick launches with the own-computer grant, so its cooling probe of the
+  // local pool must use the same grant; picks for guests keep the strict one.
+  it('probes the local pool with the own-computer grant only for same-account picks', async () => {
+    const h = harness(async (_member, _model, options) => options?.ownComputer === true);
+    const exclude = new Set([h.config.members[1].key]);
+    h.router.markCooling('anthropic', 'local', NOW + 100_000, OPUS);
+    expect(await h.router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: OPUS, exclude }))
+      .toMatchObject({ kind: 'unavailable' });
+    expect(await h.router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: OPUS, ownComputer: true, exclude }))
+      .toMatchObject({ kind: 'member', member: { key: 'local' } });
+  });
+
   // #9833, unit: recovery must not erase newer failures or unrelated scopes.
   // Previous cooldown tests had no asynchronous pool confirmation in pick().
   it('recovers only the confirmed model and retains newer failures while sharing an in-flight read', async () => {
