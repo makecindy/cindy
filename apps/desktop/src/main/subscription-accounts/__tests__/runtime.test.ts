@@ -2103,13 +2103,56 @@ describe('native account assignment on the executing computer', () => {
     expect(start).not.toHaveBeenCalled();
     expect(h.read).not.toHaveBeenCalled();
   });
+  // Unit regression: an unbound old thread already lives in an imported account
+  // home, but legacy startup checks the disconnected default login (no_oauth).
+  // Exercise resume/fork through the real wrapper and persist only the proven owner.
+  it.each(['resume', 'fork'] as const)('recovers the original imported account for an unbound %s', async operation => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second'), account('imported')],
+      legacyCodexAccounts: { 'openai-old': 'imported' } };
+    h.legacyRead.mockResolvedValue({ authenticated: false, errorReason: 'no_oauth' });
+    const start = vi.fn(async (_options: StartSessionOptions) => ({ id: 'legacy', close: async () => {} }));
+    const fork = vi.fn(async (_options: ForkSdkSessionOptions) => ({ newSdkSessionId: 'forked' }));
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: start, forkSdkSession: fork } as unknown as BaseAgent, {
+      getState: h.legacyRead,
+      resolveCodexHistoryHome: async () => 'openai/imported',
+    });
+    if (operation === 'resume') {
+      const handle = await agent.startSession({ providerId: 'openai', sessionId: 'old-task', resumeSessionId: 'legacy' } as StartSessionOptions);
+      expect(start.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/imported');
+      expect(h.bindings.get('task:old-task')?.accountId).toBe('imported');
+      await handle.close();
+    } else {
+      await agent.forkSdkSession({ providerId: 'openai', sourceSdkSessionId: 'legacy' } as ForkSdkSessionOptions);
+      expect(fork.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/imported');
+      expect(h.bindings.get('native:forked')?.accountId).toBe('imported');
+    }
+    expect(h.bindings.get('native:legacy')?.accountId).toBe('imported');
+  });
+  it.each(['removed', 'paused', 'signed-out', 'owner-changed', 'lookup-failed'] as const)('does not replace the historical account when %s', async failure => {
+    h.pools.openai = { strategy: 'order', accounts: [account('second'), ...(failure === 'removed' ? [] : [account('imported')])],
+      legacyCodexAccounts: { 'openai-old': 'imported' } };
+    if (failure === 'paused') h.pools.openai.accounts[1].paused = true;
+    if (failure === 'signed-out') h.importedRead.mockResolvedValue({ authenticated: false });
+    const start = vi.fn();
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: start } as unknown as BaseAgent, {
+      getState: h.legacyRead,
+      resolveCodexHistoryHome: async () => {
+        if (failure === 'lookup-failed') throw new Error('History index unavailable');
+        if (failure === 'owner-changed') h.owner = 'other-owner';
+        return 'openai/imported';
+      },
+    });
+    await expect(agent.startSession({ providerId: 'openai', sessionId: 'old-task', resumeSessionId: 'legacy' } as StartSessionOptions)).rejects.toThrow();
+    expect(start).not.toHaveBeenCalled();
+    expect(h.bindings.size).toBe(0);
+  });
   it('preserves a pre-pool Codex resume on its legacy home instead of silently selecting ~/.codex', async () => {
     h.pools.openai = { strategy: 'round', accounts: [account('default'), account('second')] };
     const start = vi.fn(async () => ({ id: 'legacy' }));
     const agent = withSubscriptionAccounts({
       kind: 'codex',
       startSession: start,
-    } as unknown as BaseAgent);
+    } as unknown as BaseAgent, { getState: h.legacyRead, resolveCodexHistoryHome: async () => '/unregistered-private-home' });
     const options = {
       providerId: 'openai',
       resumeSessionId: 'legacy',
