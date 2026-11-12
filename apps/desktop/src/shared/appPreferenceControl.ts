@@ -24,7 +24,7 @@ export interface AppPreferenceRequest {
   requestId: string;
   ownerStamp: DataOwnerPushStamp;
   expiresAt: number;
-  operation: 'get' | 'update' | 'reset' | 'model-visibility';
+  operation: 'get' | 'update' | 'reset' | 'model-visibility' | 'refresh-themes';
   modelVisibility?: { target: { providerId: string; agent: 'claude-code' | 'codex' | 'pi'; modelId: string }; visible: boolean | null; defaultEnabled?: boolean };
   patch?: AppPreferencePatch;
 }

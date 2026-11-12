@@ -1,3 +1,4 @@
+import { reconcileDeletedTaskViewState } from '../../desktop/src/main/mcp-apps/viewStateStore.js';
 import { clientMigrationContract } from './client-migration-contract.mjs';
 import { createRightSidebarTabsService } from '../../desktop/src/main/localDb/ipc/rightSidebarTabs.js';
 import { createHostPlatformTools } from './platform/tools.js';
@@ -496,6 +497,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   // installing it here keeps them on the same connection as the host runtime.
   setCurrentDbClient(client, ownerId);
   activeOwner = ownerId;
+  await reconcileDeletedTaskViewState(client, () => activeOwner === ownerId);
   closeStorage = async () => { clearCurrentDbClient(client); await client.dispose(); };
   configureProvisionalSessions(dataDir, { onSwept: sessionId => eventHub.publish({ type: 'session_changed', action: 'delete', sessionId }) });
   await sweepLeftoverProvisionalSessions();

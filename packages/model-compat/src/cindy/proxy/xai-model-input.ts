@@ -185,11 +185,38 @@ function functionCallOutputFrom(
     item: {
       type: "function_call_output",
       call_id: callId,
-      output:
-        typeof output === "string" ? output : textFromResponsesContent(output),
+      output: normalizeFunctionCallOutput(output),
     },
     changed: true,
   };
+}
+
+function isToolAttachment(part: unknown): boolean {
+  return (
+    isPlainObject(part) &&
+    (part.type === "input_image" || part.type === "input_file")
+  );
+}
+
+function normalizeFunctionCallOutput(output: unknown): string | unknown[] {
+  if (Array.isArray(output) && output.some(isToolAttachment)) {
+    // xAI accepts input_text / input_image / input_file arrays in tool outputs.
+    // Reuse message-part normalization, but keep the media attached to its call_id
+    // instead of flattening it to text or inventing a user message.
+    const { item } = normalizeXaiInputItem({
+      type: "message",
+      role: "user",
+      content: output,
+    });
+    if (
+      isPlainObject(item) &&
+      Array.isArray(item.content) &&
+      item.content.some(isToolAttachment)
+    ) {
+      return item.content;
+    }
+  }
+  return textFromResponsesContent(output);
 }
 
 function functionCallFrom(
@@ -331,14 +358,11 @@ function normalizeXaiInputItem(item: unknown): {
     const next: Record<string, unknown> = {
       type: "function_call_output",
       call_id: callId,
-      output:
-        typeof base.output === "string"
-          ? base.output
-          : textFromResponsesContent(base.output),
+      output: normalizeFunctionCallOutput(base.output),
     };
     const changed =
       typedFromEasy ||
-      typeof base.output !== "string" ||
+      next.output !== base.output ||
       typeof base.call_id !== "string" ||
       Object.keys(base).some(
         (key) => !["type", "call_id", "output"].includes(key),

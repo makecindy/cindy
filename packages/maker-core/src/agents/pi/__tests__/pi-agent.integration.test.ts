@@ -625,6 +625,57 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     } finally { rmSync(workingDir, { recursive: true, force: true }); }
   });
 
+  // #9803 regression, integration: App rebuilds the native session when the
+  // selected static fragments change. Fresh-only coverage misses switch_session
+  // reinitializing extensions before the next real provider request.
+  it('restores static fragments after selecting, deselecting and reselecting on resumed history', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-static-prompt-reselect-'));
+    const runtimeHome = path.join(workingDir, 'runtime');
+    const agent = new PiAgent({ ...buildDeps(), resolvePiAgentHome: () => runtimeHome });
+    const fragment = 'SELECTED_TASK_SYSTEM_FRAGMENT';
+    const systems: string[] = [];
+    let resumeSessionId: string | undefined;
+    let handle: AgentSessionHandle | undefined;
+    try {
+      for (const selected of [true, false, true]) {
+        handle = await agent.startSession({ sessionId: 'static-prompt-reselect', workingDir,
+          model: 'pi-test-model', permissionMode: 'bypassPermissions', userPrompt: 'Original task instructions',
+          resumeSessionId, ...(selected ? { [TASK_SYSTEM_PROMPT]: fragment } : {}) });
+        const configHomes = readdirSync(path.join(runtimeHome, 'run-tmp'));
+        expect(configHomes).toHaveLength(1);
+        const configHome = path.join(runtimeHome, 'run-tmp', configHomes[0]);
+        const promptFile = path.join(configHome, 'task-system-prompt.md');
+        expect(existsSync(promptFile)).toBe(selected);
+        if (selected) expect(readFileSync(promptFile, 'utf8')).toBe(fragment);
+        const before = seenRequests.length;
+        const done = (async () => { for await (const event of handle!.events()) {
+          if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+          if (event.type === 'done') return;
+        } })();
+        await handle.send({ type: 'user', content: 'Reply briefly.' });
+        await done;
+        const body = JSON.parse(seenRequests[before].body);
+        const system = typeof body.system === 'string' ? body.system
+          : body.system.map((block: { text: string }) => block.text).join('\n\n');
+        systems.push(system);
+        expect(system.includes(fragment), 'turn ' + systems.length).toBe(selected);
+        expect(JSON.stringify(body.messages)).not.toContain(fragment);
+        // Resume must retain the earlier turns rather than silently starting fresh.
+        expect(body.messages.filter((message: { role: string }) => message.role === 'user')).toHaveLength(systems.length);
+        resumeSessionId = handle.id;
+        await handle.close();
+        expect(existsSync(configHome)).toBe(false);
+        expect(existsSync(promptFile)).toBe(false);
+        handle = undefined;
+      }
+      expect(systems[0]).toBe(systems[1] + '\n\n' + fragment);
+      expect(systems[2]).toBe(systems[0]);
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
   // #8887, integration: the real runtime generates the retry lifecycle after
   // a completed tool request, a real HTTP 502 and successful recovery.
   it('preserves paid request usage across a real native 502 retry', { timeout: 60_000 }, async () => {

@@ -277,10 +277,10 @@ describe('authorization Host live plugin policy', () => {
     const host = await state.deps.adapter('session', hostTarget);
     state.profileStatus = status; // canonical Session remains active
     for (const [adapter, cardTarget] of [[plugin, target], [host, hostTarget]] as const) {
-      await expect(state.deps.adapter('session', cardTarget)).rejects.toThrow('teammate is unavailable');
-      await expect(adapter.assess()).rejects.toThrow('teammate is unavailable');
-      await expect(adapter.execute({ id: 'connect', kind: 'oauth_connect' }, undefined)).rejects.toThrow('teammate is unavailable');
-      await expect(state.deps.resume({ sessionId: 'session', target: cardTarget } as BotAuthorizationCard, () => {})).rejects.toThrow('teammate is unavailable');
+      await expect(state.deps.adapter('session', cardTarget)).rejects.toThrow('buddy is unavailable');
+      await expect(adapter.assess()).rejects.toThrow('buddy is unavailable');
+      await expect(adapter.execute({ id: 'connect', kind: 'oauth_connect' }, undefined)).rejects.toThrow('buddy is unavailable');
+      await expect(state.deps.resume({ sessionId: 'session', target: cardTarget } as BotAuthorizationCard, () => {})).rejects.toThrow('buddy is unavailable');
     }
     expect(state.execute).not.toHaveBeenCalled();
     expect(state.login).not.toHaveBeenCalled();
