@@ -30,7 +30,7 @@ export function ProviderAccountUsageModule({ provider }: { provider?: ProviderVi
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? i18n.language;
   const deepSeek = hasDeepSeekOfficialRouteView(provider);
-  const zhipt = isZhipuCodingPlanProviderView(provider);
+  const zhipu = isZhipuCodingPlanProviderView(provider);
   const kimi = isKimiCodingProviderView(provider);
   const opencodeGo = isOpenCodeGoProviderView(provider);
   const minimax = isMiniMaxPlanProvider(provider);
