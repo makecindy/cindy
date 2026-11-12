@@ -152,7 +152,7 @@ export function ModelGroupsPickerSection({
                     }}
                     onKeyDown={(event) => event.stopPropagation()}
                     className={cn(
-                      'ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] transition-opacity duration-[var(--motion-fast)] ease-[var(--motion-ease-out)]',
+                      'ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded-lg transition-opacity duration-[var(--motion-fast)] ease-[var(--motion-ease-out)]',
                       favorite
                         ? 'text-[var(--favorite-star)] opacity-100'
                         : 'text-[var(--text-tertiary)] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-[var(--favorite-star)]',
