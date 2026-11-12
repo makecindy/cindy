@@ -1,9 +1,16 @@
 import { mountPage, subscription, forbid } from '../../ui-page/harness';
 import { RemoteSection } from '../../../src/renderer/components/settings/RemoteSection';
 import { ToastContainer } from '../../../src/renderer/components/ui/toast/ToastContainer';
+import i18n from '../../../src/renderer/i18n';
+
+const agentErrorKeys: Record<string, string> = {
+  'agent-configured-unset': 'settings.remote.agentError.environmentUnset',
+  'agent-configured-empty': 'settings.remote.agentError.endpointEmpty',
+  'agent-configured-unavailable': 'settings.remote.agentError.endpointUnavailable',
+};
 
 void mountPage({
-  host: () => ({
+  host: (ctx) => ({
     remoteSsh: {
       list: async () => ({ hosts: [{
         config: {
@@ -16,7 +23,10 @@ void mountPage({
       }] }),
       onStatusChanged: subscription('sshStatus'),
       onHostsChanged: subscription('sshHosts'),
-      connect: async () => { throw new Error('[SSH_AGENT_UNAVAILABLE] Agent connection failed'); },
+      connect: async () => {
+        const key = agentErrorKeys[ctx.case] ?? 'ipcError.SSH_AGENT_UNAVAILABLE';
+        throw new Error(`[SSH_AGENT_UNAVAILABLE] ${i18n.t(key)}`);
+      },
       listLocalKeys: async () => ({ keys: [{
         privateKeyPath: '/fixture/.ssh/example_key', pubkeyPath: '/fixture/.ssh/example_key.pub',
         type: 'ed25519', comment: 'UI scenario', fingerprintSha256: null,

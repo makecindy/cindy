@@ -1871,7 +1871,12 @@
       "footnote": "初版仅支持 SSH 连接管理；于远程行 Agent 之能，将于后续版本增之。",
       "viaAuth": "经 {{label}} 认证",
       "readOnlyFromSshConfig": "连接信息出自 SSH 设置",
-      "importedAgentHint": "用本机 SSH 密钥代理（ssh-agent），不直读 IdentityFile 私钥。终端 ssh 虽可通，未必代理已备。",
+      "importedAgentHint": "由本机 SSH 密钥代理（ssh-agent）验身。终端 ssh 虽可通，未必代理已备。",
+      "agentError": {
+        "environmentUnset": "IdentityAgent 所引环境变量，Cindy 尚未设。请为 Cindy 设之，或正 SSH 配置之 IdentityAgent",
+        "endpointEmpty": "IdentityAgent 解析之端点为空。请正 SSH 配置之 IdentityAgent",
+        "endpointUnavailable": "IdentityAgent 所定 SSH 密钥代理端点不可用。请察该端点及其代理；默认 ssh-agent 或用别端点"
+      },
       "configWarning": "SSH 设置中有若干规则 Cindy 无法解析，主机列表或连接信息或与终端 SSH 不一。",
       "configDiagnostic": {
         "io": "Cindy 无法读取 SSH 设置。此处仍显上次读取成功之主机；请查卷之权柄，再重新加载。",

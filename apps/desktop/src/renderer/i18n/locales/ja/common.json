@@ -1871,7 +1871,12 @@
       "footnote": "Phase A は SSH 接続管理のみ。リモートでのエージェント実行は今後のアップデートで対応します。",
       "viaAuth": "{{label}} で認証",
       "readOnlyFromSshConfig": "接続情報は SSH 設定から読み込まれています",
-      "importedAgentHint": "このコンピューターの SSH 鍵エージェント（ssh-agent）を使用し、IdentityFile の秘密鍵は直接読み込みません。ターミナルの ssh で接続できても、エージェントが利用可能とは限りません。",
+      "importedAgentHint": "このコンピューターの SSH 鍵エージェント（ssh-agent）で認証します。ターミナルの ssh で接続できても、エージェントが利用可能とは限りません。",
+      "agentError": {
+        "environmentUnset": "IdentityAgent が参照する環境変数が Cindy に設定されていません。その変数を Cindy に設定するか、SSH 設定の IdentityAgent を修正してください。",
+        "endpointEmpty": "IdentityAgent の展開後の接続先が空です。SSH 設定の IdentityAgent を修正してください。",
+        "endpointUnavailable": "IdentityAgent に設定された SSH 鍵エージェントの接続先を利用できません。その接続先とエージェントを確認してください。既定の ssh-agent は別の接続先を使っている場合があります。"
+      },
       "configWarning": "一部の SSH 設定ルールを Cindy では評価できません。ホスト一覧や接続情報がターミナルの SSH と異なる場合があります。",
       "configDiagnostic": {
         "io": "Cindy は SSH 設定を読み込めませんでした。最後に正常に読み込んだホストを引き続き表示しています。ファイルのアクセス権を確認して、再読み込みしてください。",

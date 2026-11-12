@@ -35,7 +35,8 @@ const h = vi.hoisted(() => ({
   connectError: null as Error | null,
 }));
 
-vi.mock('ssh2', () => ({
+vi.mock('ssh2', async (importOriginal) => ({
+  ...await importOriginal<typeof import('ssh2')>(),
   Client: vi.fn(() => {
     h.client = new FakeClient();
     return h.client;
@@ -54,6 +55,7 @@ vi.mock('../credentials.js', () => ({
 
 import { RemoteHost } from '../RemoteHost.js';
 import { resolveAuth } from '../credentials.js';
+import { resolveAgentEndpoint } from '../sshAuthentication.js';
 import type { HostConfig } from '../types.js';
 
 const HOST_CONFIG: HostConfig = {
@@ -97,7 +99,7 @@ describe('RemoteHost concurrent connect preserves resolveAuth error code', () =>
   // only exercise preflight key-file failures, not ssh2's Windows pipe failure.
   // Minimal regression input: ssh2 emits Error with level='agent'. Tier: unit,
   // in-memory client; no real agent, network, credentials or service changes.
-  // Standalone run: 916 ms (Vitest), 4 tests.
+  // Standalone run: 1.37 s (Vitest), 7 tests.
   it.each(['preflight', 'ssh2'] as const)('preserves %s local agent failure semantics and localized guidance for both callers', async (stage) => {
     const cause = Object.assign(new Error('Failed to connect to agent'),
       stage === 'ssh2' ? { level: 'agent' } : { code: 'SSH_AGENT_UNAVAILABLE' });
@@ -128,4 +130,50 @@ describe('RemoteHost concurrent connect preserves resolveAuth error code', () =>
     expect(host.snapshot().lastError).toBe(h.connectError.message);
     expect(error).not.toHaveProperty('code', 'SSH_AGENT_UNAVAILABLE');
   });
+
+  // PR #10108: generic agent guidance hid an invalid configured IdentityAgent.
+  // Existing coverage only asserted generic copy. Real endpoint resolution for
+  // an unset/empty variable is the smallest failing input; connect() must keep
+  // its diagnosis in both concurrent rejections and the visible row. Tier: unit.
+  it.each(['environment-unset', 'endpoint-empty', 'endpoint-unavailable'] as const)(
+    'retains the configured IdentityAgent %s diagnosis', async (reason) => {
+      let cause: Error;
+      if (reason === 'endpoint-unavailable') {
+        // Windows validates a named pipe inside ssh2, after resolveAuth succeeds.
+        cause = Object.assign(new Error('Failed to connect to agent'), { level: 'agent' });
+        vi.mocked(resolveAuth).mockResolvedValueOnce({ agent: 'test-agent', label: 'agent' });
+        h.connectError = cause;
+      } else {
+        vi.stubEnv('CINDY_TEST_IDENTITY_AGENT', reason === 'environment-unset' ? undefined : '');
+        try {
+          cause = await resolveAgentEndpoint('$CINDY_TEST_IDENTITY_AGENT').then(
+            () => { throw new Error('Expected an invalid IdentityAgent to fail'); },
+            (err: Error) => err,
+          );
+        } finally {
+          vi.unstubAllEnvs();
+        }
+        vi.mocked(resolveAuth).mockRejectedValueOnce(cause);
+      }
+      const guidance = `IdentityAgent: ${reason}`;
+      const host = new RemoteHost({
+        ...HOST_CONFIG, authMethod: 'agent',
+        sshAuthentication: {
+          configuredIdentityFiles: [], identityAgent: '$CINDY_TEST_IDENTITY_AGENT',
+          identitiesOnly: false, identityFileDirectiveSeen: false, identityFileNoneSeen: false,
+        },
+      }, {
+        logger: noopLogger,
+        formatAgentUnavailableError: (actualReason?: string) => actualReason === reason ? guidance : 'generic guidance',
+      });
+      const results = await Promise.allSettled([host.connect(), host.connect()]);
+      for (const result of results) {
+        expect(result).toMatchObject({
+          status: 'rejected',
+          reason: { code: 'SSH_AGENT_UNAVAILABLE', message: guidance, cause },
+        });
+      }
+      expect(host.snapshot()).toMatchObject({ status: 'failed', lastError: guidance });
+    },
+  );
 });

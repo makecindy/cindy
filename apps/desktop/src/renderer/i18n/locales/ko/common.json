@@ -1871,7 +1871,12 @@
       "footnote": "Phase A 는 SSH 연결 관리만 지원합니다. 원격에서 에이전트 실행은 다음 업데이트에서 제공됩니다.",
       "viaAuth": "{{label}} 로 인증",
       "readOnlyFromSshConfig": "연결 정보는 SSH 설정에서 가져옵니다",
-      "importedAgentHint": "이 컴퓨터의 SSH 키 에이전트(ssh-agent)를 사용하며 IdentityFile 개인 키를 직접 읽지 않습니다. 터미널 ssh 연결에 성공해도 에이전트가 준비되었다는 뜻은 아닙니다.",
+      "importedAgentHint": "이 컴퓨터의 SSH 키 에이전트(ssh-agent)를 통해 인증합니다. 터미널 ssh 연결에 성공해도 에이전트가 준비되었다는 뜻은 아닙니다.",
+      "agentError": {
+        "environmentUnset": "IdentityAgent가 참조하는 환경 변수가 Cindy에 설정되어 있지 않습니다. Cindy에 해당 변수를 설정하거나 SSH 설정의 IdentityAgent를 수정하세요.",
+        "endpointEmpty": "IdentityAgent를 해석한 엔드포인트가 비어 있습니다. SSH 설정의 IdentityAgent를 수정하세요.",
+        "endpointUnavailable": "IdentityAgent에 설정된 SSH 키 에이전트 엔드포인트를 사용할 수 없습니다. 해당 엔드포인트와 에이전트를 확인하세요. 기본 ssh-agent는 다른 엔드포인트를 사용할 수 있습니다."
+      },
       "configWarning": "Cindy에서 일부 SSH 설정 규칙을 해석할 수 없습니다. 호스트 목록이나 연결 정보가 터미널 SSH와 다를 수 있습니다.",
       "configDiagnostic": {
         "io": "Cindy에서 SSH 설정을 읽을 수 없습니다. 마지막으로 정상적으로 불러온 호스트를 계속 표시합니다. 파일 권한을 확인한 후 다시 불러오세요.",

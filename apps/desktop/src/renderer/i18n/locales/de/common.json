@@ -1901,7 +1901,12 @@
       "footnote": "Phase A: nur SSH-Verbindungsverwaltung. Das Ausführen von Agents auf dem Remote-Rechner folgt in einem späteren Update.",
       "viaAuth": "über {{label}}",
       "readOnlyFromSshConfig": "Verbindungsdetails stammen aus der SSH-Konfiguration",
-      "importedAgentHint": "Verwendet den lokalen SSH-Schlüsselagenten (ssh-agent), ohne den privaten IdentityFile-Schlüssel direkt zu lesen. Eine erfolgreiche ssh-Verbindung im Terminal bedeutet nicht, dass der Agent bereit ist.",
+      "importedAgentHint": "Authentifiziert über den lokalen SSH-Schlüsselagenten (ssh-agent). Eine erfolgreiche ssh-Verbindung im Terminal bedeutet nicht, dass der Agent bereit ist.",
+      "agentError": {
+        "environmentUnset": "Die von IdentityAgent referenzierte Umgebungsvariable ist für Cindy nicht gesetzt. Setze sie oder korrigiere IdentityAgent in deiner SSH-Konfiguration.",
+        "endpointEmpty": "IdentityAgent ergibt einen leeren Endpunkt. Korrigiere IdentityAgent in deiner SSH-Konfiguration.",
+        "endpointUnavailable": "Der durch IdentityAgent konfigurierte SSH-Schlüsselagent-Endpunkt ist nicht verfügbar. Prüfe diesen Endpunkt und seinen Agenten; der Standard-ssh-agent verwendet möglicherweise einen anderen Endpunkt."
+      },
       "configWarning": "Cindy kann einige SSH-Konfigurationsregeln nicht auswerten. Die Hostliste bzw. Verbindungsdetails können vom Terminal SSH abweichen.",
       "configDiagnostic": {
         "io": "Cindy konnte deine SSH-Konfiguration nicht lesen. Die zuletzt erfolgreich geladenen Hosts werden weiterhin angezeigt. Prüfe die Dateiberechtigungen und lade neu.",

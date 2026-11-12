@@ -1114,9 +1114,10 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
         ipc?.code === 'SSH_HOST_KEY_MISMATCH'
         || ipc?.code === 'SSH_AUTH_FAILED'
         || ipc?.code === 'SSH_CONNECT_FAILED'
+        || ipc?.code === 'SSH_AGENT_UNAVAILABLE'
       ) {
         // Preserve the actual connection failure, including localized host-key
-        // diagnostics and the backing store path, rather than a generic toast.
+        // diagnostics, configured IdentityAgent failures and backing store paths.
         toast.error(ipc.message);
       } else if (ipc?.code === 'SSH_KEY_FILE_NOT_FOUND') {
         // Local key-path problem (fs ENOENT on the configured identityFile),

@@ -22,6 +22,7 @@ import { Client, type ConnectConfig, type ClientChannel, type TcpConnectionDetai
 
 import type { HostConfig, HostSnapshot, RemoteStatus } from './types.js';
 import { resolveAuth } from './credentials.js';
+import type { AgentUnavailableReason } from './sshAuthentication.js';
 import { type HostKeyStore, hostKeyFingerprint, hostKeyId, decideHostKey } from './hostKeys.js';
 
 export interface RemoteHostDeps {
@@ -40,14 +41,25 @@ export interface RemoteHostDeps {
   /** Localized host-key diagnostics; the standalone package defaults to English. */
   formatHostKeyError?: (details: HostKeyErrorDetails) => string;
   /** Local SSH key-agent diagnostics, shared by status rows and connect errors. */
-  formatAgentUnavailableError?: () => string;
+  formatAgentUnavailableError?: (reason?: AgentUnavailableReason) => string;
 }
 
-function agentUnavailableError(cause: Error, format?: () => string): Error {
-  const message = format?.() ??
-    'The local SSH key agent (ssh-agent) is unavailable. Check that it is running and that ssh-add -l lists the required key, then retry. See Manage keys for troubleshooting.';
+function agentUnavailableError(
+  cause: Error,
+  format?: RemoteHostDeps['formatAgentUnavailableError'],
+  reason?: AgentUnavailableReason,
+): Error {
+  const defaultMessage = reason === 'environment-unset'
+    ? 'The environment variable referenced by IdentityAgent is not set for Cindy. Set it or correct IdentityAgent in your SSH config.'
+    : reason === 'endpoint-empty'
+      ? 'IdentityAgent resolves to an empty endpoint. Correct IdentityAgent in your SSH config.'
+      : reason === 'endpoint-unavailable'
+        ? 'The SSH key agent endpoint configured by IdentityAgent is unavailable. Check that endpoint and its agent; the default ssh-agent may use a different endpoint.'
+        : 'The local SSH key agent (ssh-agent) is unavailable. Check that it is running and that ssh-add -l lists the required key, then retry. See Manage keys for troubleshooting.';
+  const message = format?.(reason) ?? defaultMessage;
   return Object.assign(new Error(message), {
     code: 'SSH_AGENT_UNAVAILABLE',
+    agentUnavailableReason: reason,
     cause,
   });
 }
@@ -1262,7 +1274,8 @@ export class RemoteHost {
     } catch (err) {
       if (!isCurrentAttempt()) throw cancelledError();
       const authError = (err as { code?: string }).code === 'SSH_AGENT_UNAVAILABLE'
-        ? agentUnavailableError(err as Error, this.formatAgentUnavailableError)
+        ? agentUnavailableError(err as Error, this.formatAgentUnavailableError,
+          (err as Error & { agentUnavailableReason?: AgentUnavailableReason }).agentUnavailableReason)
         : err;
       const msg = (authError as Error).message;
       this.lastError = msg;
@@ -1362,7 +1375,8 @@ export class RemoteHost {
         // ssh2 tags local agent initialization/signing errors itself. Do not
         // infer this from message text, which may also come from the server.
         agentError = !this.hostKeyError && (err as Error & { level?: string }).level === 'agent'
-          ? agentUnavailableError(err, this.formatAgentUnavailableError)
+          ? agentUnavailableError(err, this.formatAgentUnavailableError,
+            attemptConfig.sshAuthentication?.identityAgent !== undefined ? 'endpoint-unavailable' : undefined)
           : undefined;
         this.lastError = this.hostKeyError
           ? this.hostKeyError

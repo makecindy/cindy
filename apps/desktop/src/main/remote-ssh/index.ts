@@ -58,6 +58,7 @@ import {
   type ManagedConfigWriteToken,
   type ReadSshConfigResult,
   type RemoteAgentKind,
+  type AgentUnavailableReason,
 } from '@cindy/maker-remote-ssh';
 
 import { createLogger } from '../logger.js';
@@ -137,6 +138,15 @@ import { RemoteHostHydrationQueue } from './hydration-queue.js';
 export { redactSshSensitiveText };
 
 const log = createLogger('remote-ssh/ipc');
+
+function formatAgentUnavailableError(reason?: AgentUnavailableReason): string {
+  switch (reason) {
+    case 'environment-unset': return t('settings.remote.agentError.environmentUnset');
+    case 'endpoint-empty': return t('settings.remote.agentError.endpointEmpty');
+    case 'endpoint-unavailable': return t('settings.remote.agentError.endpointUnavailable');
+    default: return t('ipcError.SSH_AGENT_UNAVAILABLE');
+  }
+}
 
 // Shared by manual and silent installation inside their existing per-host install lock.
 async function installRemoteAgent(
@@ -317,7 +327,7 @@ function getPool(): ConnectionPool {
       logger: poolLogger,
       hostKeys: getSharedHostKeyStore(),
       formatHostKeyError,
-      formatAgentUnavailableError: () => t('ipcError.SSH_AGENT_UNAVAILABLE'),
+      formatAgentUnavailableError,
     });
   }
   return pool;
@@ -1459,7 +1469,7 @@ export function registerRemoteSshIpc(): void {
         logger: poolLogger,
         hostKeys: getSharedHostKeyStore(),
         formatHostKeyError,
-        formatAgentUnavailableError: () => t('ipcError.SSH_AGENT_UNAVAILABLE'),
+        formatAgentUnavailableError,
       }),
     getMainHost: (hostId) => getPool().get(hostId) ?? null,
   });

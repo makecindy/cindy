@@ -1871,7 +1871,12 @@
       "footnote": "第一版僅支援 SSH 連線管理。在遠端執行 Agent 的能力將在後續版本中加入。",
       "viaAuth": "透過 {{label}} 認證",
       "readOnlyFromSshConfig": "連線資訊來自 SSH 設定",
-      "importedAgentHint": "使用本機 SSH 金鑰代理程式（ssh-agent），不會直接讀取 IdentityFile 私鑰。終端機 ssh 能連線，不代表代理程式已就緒。",
+      "importedAgentHint": "使用本機 SSH 金鑰代理程式（ssh-agent）完成驗證。終端機 ssh 能連線，不代表代理程式已就緒。",
+      "agentError": {
+        "environmentUnset": "IdentityAgent 引用的環境變數未在 Cindy 中設定。請為 Cindy 設定該變數，或修正 SSH 設定中的 IdentityAgent",
+        "endpointEmpty": "IdentityAgent 解析後的端點為空。請修正 SSH 設定中的 IdentityAgent",
+        "endpointUnavailable": "IdentityAgent 設定的 SSH 金鑰代理程式端點無法使用。請檢查該端點及其代理程式；預設 ssh-agent 可能使用不同端點"
+      },
       "configWarning": "部分 SSH 設定規則 Cindy 無法解析，主機列表或連線資訊可能與終端 SSH 不一致。",
       "configDiagnostic": {
         "io": "Cindy 無法讀取 SSH 設定。這裡仍顯示上次成功讀取的主機；請檢查檔案權限，然後重新載入。",
