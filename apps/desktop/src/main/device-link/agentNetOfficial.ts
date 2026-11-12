@@ -44,13 +44,15 @@ function client(base: string, secrets: RelaySecrets): AgentNetClient | null {
   });
 }
 export function currentOfficialAgentNetClient(): AgentNetClient | null {
-  return isAppSessionBoundaryPending() ? null : outgoingOfficialAgentNetClient();
+  return isAppSessionBoundaryPending() || activeSelfHostedRelay() ? null : outgoingOfficialAgentNetClient();
 }
 /** Account-handover close only: the boundary is pending but the outgoing owner
  * has not been replaced yet. The caller must verify the outgoing scope is still
- * current and capture the client synchronously, before the owner commit. */
+ * current, match the result against the persisted route, and capture it
+ * synchronously before the owner commit. Not gated on the selected relay: a
+ * task hosted on the official service stays there after a relay switch. */
 export function outgoingOfficialAgentNetClient(): AgentNetClient | null {
-  if (!getCurrentUserId() || activeSelfHostedRelay()) return null;
+  if (!getCurrentUserId()) return null;
   const base = officialAgentNetBase(); if (!base) return null;
   const stored = readRelaySecrets(officialAgentNetSlot(base)); return stored ? client(base, stored) : null;
 }

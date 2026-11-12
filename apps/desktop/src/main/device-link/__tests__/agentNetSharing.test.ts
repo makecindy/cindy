@@ -269,6 +269,16 @@ it('closes an already-hosted task through the old owner authority while the acco
   await expect(captureAgentNetSharingBoundaryClose('unit-outgoing-access', 'https://auth.example.test')('hosted-task'))
     .resolves.toMatchObject({ status: 'closed' });
   expect(state.writes.every(file => file.startsWith('/unit-only-vault/owner-a/'))).toBe(true);
+  // Cold vault holding a self-hosted LAN (non-loopback http) host route: its
+  // validation must use the outgoing authority too, or the whole vault is
+  // rejected and the share is skipped.
+  const lan = { ...route, server: 'http://192.168.1.20:3348', resourceId: 'lan-task' };
+  state.files.set('/unit-only-vault/owner-a/sharing.enc', Buffer.from('unit-vault:' + JSON.stringify(
+    { version: 2, seed: randomBytes(32).toString('base64url'), routes: [lan] })).toString('base64'));
+  state.http.mockResolvedValueOnce(Response.json({ sharedTaskId: 'lan-task', status: 'closed' }));
+  await expect(captureAgentNetSharingBoundaryClose('unit-outgoing-access', 'https://auth.example.test')('lan-task'))
+    .resolves.toMatchObject({ status: 'closed' });
+  expect(state.http.mock.calls.at(-1)?.[0]).toBe(state.api.base + '/api/agent-net/sharing/shared-tasks/lan-task/close');
 });
 it('observes an outgoing committed create and closes it with captured credentials after the account changes', async () => {
   const route = selectedAgentNetSharingRoute('shared-task')!; rememberAgentNetSharingService(route);

@@ -70,13 +70,13 @@ function publicReceipt(route: AgentNetSharingRoute, invitation: string): AgentNe
   return { v: route.v, kind: route.kind, resourceId: route.resourceId, networkId: route.networkId,
     rootPublicKey: route.rootPublicKey, hostDeviceId: route.hostDeviceId, region: route.region, invitation };
 }
-function routeValid(route: AgentNetSharingRoute): boolean {
+function routeValid(route: AgentNetSharingRoute, outgoing = false): boolean {
   try {
     const { server, memberId, seed, aliases } = route;
     encodeAgentNetSharingInvitation(publicReceipt(route, 'A'.repeat(43)));
     const url = new URL(server);
     const secure = url.protocol === 'https:' || url.protocol === 'http:' &&
-      (['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || !memberId && !!hostClient(route));
+      (['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || !memberId && !!hostClient(route, outgoing));
     return secure && !url.username && !url.password && !url.hash && !url.search
       && server === server.replace(/\/+$/, '') && (memberId === undefined || /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(memberId))
       && (seed === undefined || seedValid(seed)) && (memberId === undefined) === (seed === undefined)
@@ -105,8 +105,9 @@ function owner(): Session {
   session = { key, file, vault, guard, clients: new Map(), connections: new Map(), leases: new Set(), committed: new Map(), sockets: new Map(), lists: new Map() };
   return session;
 }
-/** Reads the current owner's sharing vault; never writes or publishes a session. */
-function readVault(): { file: string; vault: Vault } {
+/** Reads the current owner's sharing vault; never writes or publishes a session.
+ * `outgoing` validates LAN host routes with the handover-close authority. */
+function readVault(outgoing = false): { file: string; vault: Vault } {
   const file = relayDataPath('agent-net', 'sharing-v2.enc');
   let vault: Vault;
   if (fs.existsSync(file)) {
@@ -114,8 +115,8 @@ function readVault(): { file: string; vault: Vault } {
     try { vault = JSON.parse(safeStorage.decryptString(Buffer.from(fs.readFileSync(file, 'utf8'), 'base64'))); }
     catch { throw new Error('AGENT_NET_SHARING_VAULT_UNREADABLE'); }
     if (vault.version !== 2 || !seedValid(vault.seed) || !Array.isArray(vault.routes) || vault.routes.length > 1024
-      || vault.routes.some(route => !routeValid(route)) || new Set(vault.routes.map(r => keyOf(r.kind, r.resourceId))).size !== vault.routes.length
-      || vault.services !== undefined && (!Array.isArray(vault.services) || vault.services.length > 1024 || vault.services.some(route => !routeValid(route))))
+      || vault.routes.some(route => !routeValid(route, outgoing)) || new Set(vault.routes.map(r => keyOf(r.kind, r.resourceId))).size !== vault.routes.length
+      || vault.services !== undefined && (!Array.isArray(vault.services) || vault.services.length > 1024 || vault.services.some(route => !routeValid(route, outgoing))))
       throw new Error('AGENT_NET_SHARING_VAULT_UNREADABLE');
   } else vault = { version: 2, seed: randomBytes(32).toString('base64url'), routes: [] };
   return { file, vault };
@@ -378,7 +379,7 @@ export async function checkAgentNetProviderExecutor(input: SharingExecutorInput,
 export function captureAgentNetSharingBoundaryClose(token: string, authBase: string) {
   const live = session?.key === activeOwnerScopeKey() ? session : null;
   let vault = live?.vault ?? null;
-  if (!vault && getCurrentUserId()) { try { vault = readVault().vault; } catch { /* Unreadable vault: legacy close and journal retry still apply. */ } }
+  if (!vault && getCurrentUserId()) { try { vault = readVault(true).vault; } catch { /* Unreadable vault: legacy close and journal retry still apply. */ } }
   if (!vault) return () => null;
   const committed = live?.committed ?? new Map<string, { route: AgentNetSharingRoute; member: AgentNetClient }>();
   const routes = vault.routes.filter(r => r.kind === 'shared-task' && !r.memberId);
