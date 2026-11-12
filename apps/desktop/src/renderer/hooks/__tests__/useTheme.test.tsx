@@ -217,7 +217,7 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
   // Unit: two successful preparations complete out of order, or a synchronous
   // builtin/loose selection cancels one. Existing rejection tests miss late
   // success overwriting a newer choice. Deferred IPC keeps the test under 5s.
-  it.each(['package', 'builtin', 'loose', 'same-mode'] as const)(
+  it.each(['package', 'builtin', 'loose', 'same-mode', 'storage'] as const)(
     'discards a successful package preparation superseded by %s', async next => {
       vi.mocked(themeService.applyTheme).mockRestore();
       localStorage.setItem('theme', 'light');
@@ -238,11 +238,17 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
       const { result, unmount } = renderHook(() => useTheme(), { wrapper });
       act(() => { result.current.setFamily('first-local'); });
       act(() => {
-        if (next === 'same-mode') result.current.setTheme('light');
+        if (next === 'storage') {
+          localStorage.setItem('theme.familyId', 'cindy');
+          dispatchStorage('theme.familyId', 'cindy');
+        } else if (next === 'same-mode') result.current.setTheme('light');
         else result.current.setFamily(next === 'package' ? 'last-local' : next === 'builtin' ? 'cindy' : 'loose-local');
       });
-      if (next === 'package') await act(async () => { complete[1](DEFAULT_APPEARANCE_SETTINGS); });
-      const expected = next === 'package' ? 'last-local' : next === 'builtin' ? 'cindy' : next === 'loose' ? 'loose-local' : 'default';
+      if (next === 'package') {
+        expect(result.current.familyId).toBe('default');
+        await act(async () => { complete[1](DEFAULT_APPEARANCE_SETTINGS); });
+      }
+      const expected = next === 'package' ? 'last-local' : next === 'builtin' || next === 'storage' ? 'cindy' : next === 'loose' ? 'loose-local' : 'default';
       const palette = themeService.getCurrentTheme();
       expect(result.current.familyId).toBe(expected);
       await act(async () => { complete[0](DEFAULT_APPEARANCE_SETTINGS); });
