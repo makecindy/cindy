@@ -739,6 +739,60 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(providers[0].models[0].baseUrl ?? providers[0].baseUrl).toBe(baseUrl);
   });
 
+  // #10200: discovered models absent from the static native catalog still use
+  // Chat. Exercise the launch builder, including explicit per-model routing.
+  it.each([
+    { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', store: false },
+    { baseUrl: 'https://generativelanguage.googleapis.com/v1/openai/', store: false },
+    { baseUrl: 'https://proxy.example/v1beta/openai', store: undefined },
+    { baseUrl: 'https://generativelanguage.googleapis.com.example/v1beta/openai', store: undefined },
+    { baseUrl: 'https://generativelanguage.googleapis.com:8443/v1beta/openai', store: undefined },
+    { baseUrl: 'https://generativelanguage.googleapis.com/custom/openai', store: undefined },
+  ])('scopes Google Chat store compatibility to $baseUrl', ({ baseUrl, store }) => {
+    const config = { id: 'google-discovered', name: 'Google', runtimes: { pi: {
+      catalogPresetId: 'google-gemini-api', baseUrl, wireProtocol: 'openai-chat' as const,
+      models: [{ id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' }],
+    } } };
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, buildUserProvider(config)] };
+    const { providers } = buildPiNativeProvidersFromConfigs([config], () => 'fixture-key', undefined, undefined, catalog);
+    const provider = providers[0];
+    const model = provider.models[0];
+    expect(model.api ?? provider.api).toBe('openai-completions');
+    expect(model.baseUrl ?? provider.baseUrl).toBe(baseUrl);
+    expect(model.compat?.supportsStore).toBe(store);
+  });
+
+  it('uses the final model endpoint for Google Chat compat and preserves explicit APIs and other compat', () => {
+    const official = 'https://generativelanguage.googleapis.com/v1beta/openai';
+    const proxy = 'https://proxy.example/v1';
+    const models = [
+      { id: 'explicit-chat', piApi: 'openai-completions' as const },
+      { id: 'proxy-chat', route: { baseUrl: proxy, wireProtocol: 'openai-chat' as const } },
+      { id: 'native-google', piApi: 'google-generative-ai' as const },
+      { id: 'custom-path', route: { baseUrl: official, wireProtocol: 'openai-chat' as const, requestPath: '/custom/chat' } },
+      { id: 'bundled-chat' },
+    ];
+    const bundled = new Map([['fixture', new Map([['bundled-chat', {
+      id: 'bundled-chat', api: 'openai-completions' as const, baseUrl: official,
+      name: 'Bundled', reasoning: true, input: ['text'] as Array<'text' | 'image'>,
+      contextWindow: 128_000, maxTokens: 4096,
+      compat: { supportsDeveloperRole: false, maxTokensField: 'max_tokens' },
+    }]])]]);
+    const { providers } = buildPiNativeProvidersFromConfigs([
+      { id: 'official', name: 'Official', runtimes: { pi: { baseUrl: official, wireProtocol: 'openai-chat', models } } },
+      { id: 'proxy', name: 'Proxy', runtimes: { pi: { baseUrl: proxy, wireProtocol: 'openai-chat',
+        models: [{ id: 'routed-google', route: { baseUrl: official, wireProtocol: 'openai-chat' } }] } } },
+    ], () => 'fixture-key', undefined, bundled);
+    expect(providers[0].models[0]).toMatchObject({ api: 'openai-completions', compat: { supportsStore: false } });
+    expect(providers[0].models[1]).toMatchObject({ baseUrl: proxy });
+    expect(providers[0].models[1].compat?.supportsStore).toBeUndefined();
+    expect(providers[0].models[2]).toMatchObject({ api: 'google-generative-ai', baseUrl: 'https://generativelanguage.googleapis.com/v1beta' });
+    expect(providers[0].models[2].compat?.supportsStore).toBeUndefined();
+    expect(providers[0].models[3].compat?.supportsStore).toBeUndefined();
+    expect(providers[0].models[4].compat).toEqual({ supportsDeveloperRole: false, maxTokensField: 'max_tokens', supportsStore: false });
+    expect(providers[1].models[0]).toMatchObject({ baseUrl: official, compat: { supportsStore: false } });
+  });
+
   it('strips inherited /v1 only for an Anthropic model without its own route (#7258)', () => {
     // The production launch mapper materializes models.json. A same-address model route may be
     // intentional, so only the API-only override may inherit a corrected Anthropic SDK root.
