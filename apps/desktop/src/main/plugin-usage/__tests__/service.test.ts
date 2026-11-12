@@ -81,6 +81,15 @@ it('records invocation kinds without counting a tool and its child delivery twic
   ]);
 });
 
+it('binds once for concurrent first readers and reuses the handle', async () => {
+  const bind = vi.spyOn(service, 'bind');
+  const [first, second] = await Promise.all([service.ensure(identity), service.ensure(identity)]);
+  expect(bind).toHaveBeenCalledTimes(1);
+  expect(first?.subjectId).toBe(second?.subjectId);
+  await service.ensure(identity);
+  expect(bind).toHaveBeenCalledTimes(1);
+});
+
 it('keeps one SQLite subject when a detail request overlaps the committed local upgrade', async () => {
   await service.bind(identity);
   const old = capture();

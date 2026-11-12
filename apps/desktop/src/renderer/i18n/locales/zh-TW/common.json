@@ -1312,6 +1312,8 @@
     "handoffWindow": "代輸入 · {{app}}"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
+    "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任務暫不支援切換 Harness。請選擇目前 Harness 下的模型，或使用所需 Harness 建立新的 SSH 任務。",
     "MODEL_SELECTION_UNAVAILABLE": "所選模型在該供應商下已無法使用。請在設定中檢查連線，或重新選擇可用模型。",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切換。請查看錯誤詳細資訊，待 Harness 就緒後重試。",
@@ -1855,7 +1857,7 @@
       "windowBehavior": "應用行為",
       "shortcuts": "鍵盤快捷鍵",
       "mcpServers": "自定義 MCP",
-      "bots": "伙伴"
+      "bots": "夥伴"
     },
     "remote": {
       "title": "遠端機器",
@@ -2144,7 +2146,16 @@
       },
       "sidebarAndPanels": "側邊欄與面板",
       "themeLabel": "主題",
+      "createTheme": {
+        "label": "製作主題",
+        "hint": "描述風格或提供參考圖，製作整套外觀",
+        "prompt": "幫我製作一套可分享的 Cindy 主題包，預覽並驗證效果。我想要的風格是：",
+        "unavailable": "主題製作技能無法使用，請在技能中檢查是否啟用",
+        "startFailed": "無法開啟主題製作任務"
+      },
       "themeAriaLabel": "主題選擇",
+      "themeApplyFailed": "無法套用此主題，目前外觀已保留",
+      "themeFontFailed": "主題字體無法載入，已使用預設字體",
       "localBadge": "(本地)",
       "localThemes": {
         "title": "本地主題",
@@ -6662,6 +6673,7 @@
         "confirm": "撤銷訪問權限"
       },
       "v2": {
+        "sectionTitle": "實驗性 Agent 網路",
         "switch": {
           "title": "Agent-Net (Beta)",
           "hint": "顯示連線拓撲與最近活動。雙方都開啟並完成 Agent-Net 配對時使用加密連線，其他裝置沿用原有連線。只影響這臺電腦。"
@@ -6735,7 +6747,106 @@
           "deviceLink": "Device Link"
         },
         "onlyEncrypted": "僅使用 Agent-Net",
-        "onlyEncryptedHint": "開啟後，舊版裝置及仍使用舊連線的分享將無法使用。預設關閉。"
+        "onlyEncryptedHint": "開啟後，舊版裝置及仍使用舊連線的分享將無法使用。預設關閉。",
+        "peerSwitch": {
+          "row": {
+            "toAgentNet": "正在切到 Agent-Net…",
+            "toDeviceLink": "正在切回 Device Link…"
+          },
+          "status": {
+            "toAgentNet": "正在切到 Agent-Net",
+            "toDeviceLink": "正在切回 Device Link"
+          },
+          "reconnecting": "重新連線中",
+          "toAgentNet": "切到 Agent-Net",
+          "toDeviceLink": "切回 Device Link",
+          "retry": "重試",
+          "hint": "切換後，和它之間的連線會端對端加密。對方 60 秒內沒連回來會自動退回 Device Link。",
+          "steps": {
+            "request": {
+              "agentNet": "請對方開啟 Agent-Net",
+              "deviceLink": "請對方關閉 Agent-Net"
+            },
+            "reconnect": "對方重新連線",
+            "confirm": {
+              "agentNet": "等對方經 Agent-Net 連回來",
+              "deviceLink": "等對方經 Device Link 連回來"
+            },
+            "revert": "60 秒內沒連回來，正在退回 Device Link"
+          },
+          "closeHint": "可以先關掉這張卡片，結果會另外提示。",
+          "reverted": "沒切成：60 秒內沒有經 Agent-Net 連回來，已自動退回 Device Link。",
+          "unsupported": "對方的 Cindy 版本較舊，還不能在這裡切換。在那台電腦上更新 Cindy 後再試。",
+          "done": {
+            "toAgentNet": "已切到 Agent-Net，連線端對端加密。",
+            "toDeviceLink": "已切回 Device Link。"
+          },
+          "blocked": {
+            "mobile": "手機不接受遠端控制，請在這支手機上開啟 Agent-Net。",
+            "peer-control-off": "對方沒有開啟「允許同帳號裝置控制本機」，需要在那台電腦上切換。",
+            "control-off": "這台電腦關閉了對它的控制，開啟後才能在這裡切換。"
+          },
+          "toast": {
+            "toAgentNet": "「{{name}}」已切到 Agent-Net",
+            "toDeviceLink": "「{{name}}」已切回 Device Link",
+            "reverted": "「{{name}}」沒切成，已自動退回 Device Link",
+            "unsupported": "「{{name}}」的 Cindy 版本較舊，還不能遠端切換",
+            "not-ready": "「{{name}}」現在無法開啟 Agent-Net",
+            "busy": "「{{name}}」正在處理另一次切換，稍後再試",
+            "failed": "未能切換「{{name}}」的連線方式",
+            "encryption-required": "請先在「{{name}}」關閉「僅使用 Agent-Net」，再切回",
+            "controller-encryption-required": "請先關閉這台電腦的「僅使用 Agent-Net」，再把「{{name}}」切回",
+            "agent-net-only-relay": "「{{name}}」的連線僅支援 Agent-Net，無法切回 Device Link"
+          },
+          "checking": "正在確認對方能不能切換…",
+          "notReady": {
+            "not-signed-in": "對方沒有登入 Cindy，登入後才能開啟 Agent-Net。",
+            "secure-storage": "對方電腦的系統安全儲存無法使用，打不開 Agent-Net。需要在那台電腦上處理。",
+            "relay-identity": "對方尚未設定目前中轉的 Agent-Net 連線，請先在那台電腦上設定。"
+          },
+          "batch": {
+            "toAgentNet": "全部切到 Agent-Net",
+            "toDeviceLink": "全部切回 Device Link",
+            "confirmTitleAgentNet": "把這些電腦切到 Agent-Net？",
+            "confirmTitleDeviceLink": "把這些電腦切回 Device Link？",
+            "ready": "可以切換",
+            "checking": "確認中",
+            "skipReason": {
+              "unsupported": "需要更新 Cindy",
+              "not-ready": "現在打不開 Agent-Net",
+              "unreachable": "暫時問不到",
+              "encryption-required": "僅使用 Agent-Net",
+              "controller-encryption-required": "本機僅使用 Agent-Net",
+              "agent-net-only-relay": "網路僅支援 Agent-Net"
+            },
+            "canaryNote": "先切第一台，確認能連回來再同時切其餘的。每台 60 秒內沒連回來都會自己退回。",
+            "rollbackNote": "切回後連線不再端到端加密。開啟「僅使用 Agent-Net」的電腦，須先在那台電腦關閉此選項。",
+            "run": "切換 {{count}} 台",
+            "cancel": "取消",
+            "close": "完成",
+            "state": {
+              "waiting": "等待",
+              "running": "切換中",
+              "done": "已切換",
+              "reverted": "已自動退回",
+              "skipped": "未切換",
+              "failed": "未能切換"
+            },
+            "stopped": "第一台沒切成，其餘的沒有切換。",
+            "finished": "已切換 {{done}} 台",
+            "finishedWithRevert": "已切換 {{done}} 台，{{reverted}} 台未切換"
+          },
+          "changedBy": {
+            "on": "由「{{name}}」在 {{time}} 遠端開啟",
+            "off": "由「{{name}}」在 {{time}} 遠端關閉"
+          },
+          "unreachable": "這次沒問到那台電腦，稍後再開啟卡片試試。",
+          "encryptionRequired": "對方開啟了「僅使用 Agent-Net」。請先在那台電腦關閉此選項，再切回 Device Link。",
+          "disableBlocked": {
+            "controller-encryption-required": "這台電腦開啟了「僅使用 Agent-Net」。請先在這台電腦關閉此選項，才能把對方切回 Device Link。",
+            "agent-net-only-relay": "此連線使用僅支援 Agent-Net 的網路，無法切回 Device Link。請先改用支援 Device Link 的連線路線。"
+          }
+        }
       }
     },
     "tina": {
@@ -10591,7 +10702,7 @@
     "sessionLoadFailedTitle": "無法載入這個夥伴任務",
     "sessionLoadFailedDescription": "任務關聯仍然存在，但 Cindy 暫時無法讀取夥伴狀態。你可以重試，或返回夥伴總覽。",
     "sessionUnavailableTitle": "這個夥伴任務已無法使用",
-    "sessionUnavailableDescription": "這條任務可能已遺失、被刪除，或不再屬於這個伙伴。返回後會開啟已復原的主任務。",
+    "sessionUnavailableDescription": "這條任務可能已遺失、被刪除，或不再屬於這個夥伴。返回後會開啟已復原的主任務。",
     "settings": "設定",
     "settingsTabs": {
       "model": "模型"
@@ -10701,7 +10812,7 @@
     "profileSaveOffline": "無法連線至夥伴所在的電腦，請恢復連線後重新儲存。",
     "modelLabel": "模型",
     "modelUnavailable": "{{model}}（目前無法使用）",
-    "codexAutomaticCompact": "Codex 伙伴會自己壓縮上下文，/new 也會保留目前任務。只有確實需要從頭開始時，才去開新任務。",
+    "codexAutomaticCompact": "Codex 夥伴會自己壓縮上下文，/new 也會保留目前任務。只有確實需要從頭開始時，才去開新任務。",
     "image": "新增圖片",
     "send": "傳送訊息",
     "roster": {
@@ -10719,8 +10830,8 @@
       "restoreFailed": "恢復預設失敗，請重試。",
       "defaultModel": "預設模型",
       "defaultModelHint": "僅用於夥伴，與新任務的模型選擇獨立。個別夥伴可以另選。",
-      "title": "伙伴",
-      "description": "和伙伴有關的通用設定。單個伙伴的設定在{{pronoun}}自己的頁面裡。",
+      "title": "夥伴",
+      "description": "和夥伴有關的通用設定。單個夥伴的設定在{{pronoun}}自己的頁面裡。",
       "rosterNote": "預置陣容會隨版本更新。",
       "showReplyTarget": "顯示回覆對應的訊息",
       "showReplyTargetHint": "夥伴回覆上方標出它回的是你哪則訊息。較早的回覆不顯示。"
@@ -11310,7 +11421,7 @@
           "removeTitle": "將 {{name}} 移出群組？",
           "removeHint": "該成員將無法繼續查看或傳送訊息；其夥伴也會退出。",
           "leave": "退出群組",
-          "leaveHint": "你和你的伙伴將退出此群聊，不再接收新訊息，也無法查看群歷史。",
+          "leaveHint": "你和你的夥伴將退出此群聊，不再接收新訊息，也無法查看群歷史。",
           "soleOwnerHint": "群組裡只剩你。可以封存群組，保留歷史記錄，以後再恢復使用。",
           "archive": "封存群組",
           "archiveHint": "封存會對所有成員停用本群組，停止新訊息與夥伴執行。歷史記錄保留，之後可透過搜尋找到本群組、查看歷史並取消封存。",
@@ -11400,7 +11511,7 @@
         "hide": "從我的列表移除",
         "hideNote": "從你所有裝置的列表中移除此群聊。不改變成員關係，不刪除歷史訊息、不停止進行中的工作，也不影響其他成員。",
         "leave": "退出群聊",
-        "leaveNote": "你和你的伙伴將退出此群聊，不再接收新訊息，也無法查看群歷史。",
+        "leaveNote": "你和你的夥伴將退出此群聊，不再接收新訊息，也無法查看群歷史。",
         "unavailable": "目前伺服器或電腦尚不支援此操作。",
         "dissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
         "failed": "操作未完成，請重試。",
@@ -13136,6 +13247,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "採用原文",
     "rateLimited": "語音請求過於頻繁，請稍後再試。",
     "status": {
       "listening": "語音輸入中",
@@ -13479,7 +13591,7 @@
       "claudeSubscriptionSwitchFailed": "無法切換到 Claude.ai 或重試當前任務：{{msg}}",
       "codexAppServerRetired": "Codex 服務已重新啟動或更換；目前的請求已中斷，請重新執行。",
       "codexAuthMissing": "遠端 Codex 還沒同步登入態（401 Unauthorized）。點選右側「同步登入態」把本機 Codex 憑證推到遠端 Cindy Codex home，然後重試傳送。",
-      "codexAuthMissingLocal": "Codex 憑證缺失或失效（401 Unauthorized）。請在 {{appName}} 設定 → Codex 重新登入（登入後會自動重啟 Codex app-server），或在終端跑 `codex login`，再到設定切換一次鑑權模式來重啟 app-server，然後新建任務再發。",
+      "codexAuthMissingLocal": "本機的「{{provider}}」連線未通過驗證。請前往該連線的設定檢查登入狀態，修復後回到此任務繼續。",
       "codexSessionExpired": "OpenAI 連線需要更新。重新連線 ChatGPT 後即可繼續；{{appName}} 不會退出系統 Codex CLI，也不會要求你重新連線其他模型來源。",
       "codexAuthSynced": "登入態已同步，請點選「重試」重新傳送。",
       "syncAuth": "同步登入態",
@@ -15250,6 +15362,16 @@
             "recheck": "檢查連接",
             "summary": "管理 GitHub 儲存庫、Issues、PR 和 Actions。",
             "otherMethods": "其他連線方式"
+          },
+          "app": {
+            "title": "儲存庫事件",
+            "description": "連接 Cindy GitHub App，在審查或 CI 變更時更新正在跟進的 PR。",
+            "connected": "已連接 {{login}} · 正在關注 {{count}} 個儲存庫",
+            "missing": "請檢查這些儲存庫的 App 安裝與存取權限：{{repositories}}",
+            "error": "無法檢查連線，請重試。",
+            "repositories": "選擇儲存庫",
+            "disconnect": "中斷事件連線",
+            "connect": "連接 GitHub App"
           }
         },
         "unresolved": "{{count}} 條未解決的 review 評論",
@@ -15984,7 +16106,11 @@
             "payments": "付款",
             "checkout": "結帳",
             "invoices": "帳單",
-            "subscriptions": "訂閱"
+            "subscriptions": "訂閱",
+            "reviewComments": "評審評論",
+            "reviewThreads": "評審討論",
+            "checkRuns": "檢查執行",
+            "commitStatus": "提交狀態"
           },
           "actions": {
             "all": "全部變化",
@@ -16006,7 +16132,12 @@
             "failed": "失敗",
             "paid": "已付款"
           }
-        }
+        },
+        "repositoriesLabel": "倉庫",
+        "repositoriesHint": "每行填寫一個 owner/repository。只有已授權給此 GitHub App 的倉庫才能觸發任務。",
+        "repositoriesInvalid": "請填寫 1–50 個有效的 owner/repository 倉庫名稱。",
+        "githubAppHint": "請在執行此任務的電腦上連接 GitHub App，並授權這些倉庫，無需另設 Webhook 位址或金鑰。",
+        "githubAppPaused": "此任務已暫停，事件不會啟動它。"
       },
       "trigger": {
         "label": "觸發方式",
@@ -16819,6 +16950,9 @@
       },
       "pluginCreator": {
         "description": "建立、修改、偵錯與打包 Cindy 插件，也可按需發佈。"
+      },
+      "themeCreator": {
+        "description": "製作並驗證 Cindy 的配色、素材與外觀設定。"
       }
     },
     "common": {
@@ -17560,11 +17694,14 @@
       "voiceDirectApiKeyAuthDescription": "語音輸入當前使用直連供應商，需要先配置對應 API Key。是否前往「API Keys」新增？",
       "codexVoiceAuthTitle": "需要連線 ChatGPT",
       "codexVoiceAuthDescription": "語音輸入需要使用已連線的 ChatGPT 帳號呼叫 GPT 即時語音識別。當前帳號尚未連線或需要更新，是否前往「模型供應商」連線 ChatGPT？",
+      "ccBinaryMissingTitle": "Claude Code 元件未就緒",
+      "ccBinaryMissingDescription": "Claude Code 元件尚未安裝，暫時無法使用這個功能。連接網路後，前往「設定 → 關於」開始安裝。",
       "codexBinaryMissingTitle": "Codex 元件未就緒",
       "codexBinaryMissingDescription": "Codex 元件尚未準備好，暫時無法使用這個功能。請稍後重試，或前往「模型供應商」檢查 Codex 連線狀態。",
       "piBinaryMissingTitle": "Pi 元件未就緒",
       "piBinaryMissingDescription": "Pi 元件尚未準備好，暫時無法使用這個功能。請稍後重試，或前往「設定 → 關於」管理或恢復 Pi。",
       "goToSettings": "前往設定",
+      "remoteCcBinaryMissingTitle": "遠端電腦 Claude Code 元件未就緒",
       "remoteCodexBinaryMissingTitle": "遠端電腦 Codex 元件未就緒",
       "remotePiBinaryMissingTitle": "遠端電腦 Pi 元件未就緒",
       "remoteAuthDescription": "需要在遠端裝置「{{device}}」上完成配置後，才能在這裡新建並執行任務。請在該裝置上配置後重試。",
@@ -17937,7 +18074,7 @@
     "exit": "退出計劃模式"
   },
   "globalDrop": {
-    "cindyHint": "鬆開安裝插件",
+    "cindyHint": "鬆開匯入 Cindy 檔案",
     "cshareHint": "鬆開匯入分享的任務"
   },
   "sessionShare": {
@@ -19967,6 +20104,15 @@
     "lineNumbers": "行號"
   },
   "subscriptionAccounts": {
+    "loginIdentityUnknown": "無法確認此帳號的原身分，請透過「新增帳號」重新連線",
+    "loginExpiresInDays": "登入預計 {{days}} 天後到期",
+    "loginExpiresSoon": "登入即將到期",
+    "loginMayHaveExpired": "登入可能已到期",
+    "loginExpiryUnknown": "登入到期時間未知",
+    "loginExpiryDetail": "預計到期：{{date}}。這是 Claude 提供的估計時間，登入可能提早失效。",
+    "loginAccountAria": "重新登入 {{name}}",
+    "loginIdentityMismatchStatus": "登入帳號不符",
+    "loginIdentityMismatch": "登入的帳號與所選帳號不一致。請重新登入，選擇列表中的這個帳號。",
     "unassigned": "帳號待分配",
     "boundUnavailable": "帳號已無法使用",
     "providerManagedAuth": "Codex 目前的供應商未提供 ChatGPT 帳號資訊。請在新增供應商時選擇「$t(subscriptionAccounts.signIn.anotherAccount)」，使用獨立目錄",
@@ -20047,6 +20193,13 @@
     "detail": "請求來自「{{device}}」\n用途：{{purpose}}\n\n開啟後，同帳號裝置可以遠端控制這台電腦，包括執行任務和存取檔案。此設定持續有效，可隨時在設定中關閉。",
     "decline": "暫不開啟",
     "enable": "開啟遠端控制"
+  },
+  "cindyFiles": {
+    "unsupported": "目前版本不支援此檔案，請更新 Cindy 後重試",
+    "invalid": "此 Cindy 檔案無效或已損毀，請重新取得檔案",
+    "failed": "無法匯入此檔案，請重試",
+    "themeInstalled": "主題已加入清單，請在外觀設定中選擇",
+    "refreshFailed": "主題已載入，但清單無法重新整理，請在外觀設定中重新整理"
   },
   "modelGroups": {
     "title": "模型組",
