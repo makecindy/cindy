@@ -500,11 +500,28 @@ class Builder {
   }
 
   /** Short name under a tube and in sentences: the other computer, else the account handle, else the brand. */
-  private who(source: MenubarSourceInput): string {
+  private baseName(source: MenubarSourceInput): string {
     if (source.kind === 'subscription') return this.sharedIdentity(source)?.label ??
       (source.pooled ? this.handle(source) ?? source.device?.name : source.device?.name ?? this.handle(source)) ?? source.brand;
     if (source.kind === 'balance') return this.t('balance.short');
     return source.name;
+  }
+
+  private who(source: MenubarSourceInput): string {
+    const name = this.baseName(source);
+    if (source.kind !== 'subscription' || !source.pooled || source.shared) return name;
+    const peers = this.input.sources.filter((candidate): candidate is MenubarSubscriptionInput =>
+      candidate.kind === 'subscription' && !!candidate.pooled && !candidate.shared && this.baseName(candidate) === name);
+    if (peers.length < 2) return name;
+    const plan = source.plan?.trim() || '';
+    const samePlan = peers.filter(candidate => (candidate.plan?.trim() || '') === plan);
+    // Prefix the distinguishing part so narrow tubes do not truncate it away. Use
+    // opaque source IDs only for stable ordering, never as user-facing identity.
+    const ordinal = samePlan.length > 1
+      ? String(samePlan.map(candidate => candidate.id).sort().indexOf(source.id) + 1)
+      : '';
+    const qualifier = [plan, ordinal].filter(Boolean).join(' ');
+    return qualifier ? `${qualifier} · ${name}` : name;
   }
 
   private sourceTitle(source: MenubarSourceInput): string {
