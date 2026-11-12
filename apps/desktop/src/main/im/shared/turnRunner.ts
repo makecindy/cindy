@@ -102,6 +102,8 @@ import type {
 import type {
   IMAttachment,
   IMMessageEvent,
+  ImFinalOutput,
+  ImProgressHandle,
   InteractiveCardSpec,
   StreamingProcessRecord,
   StreamingTextHandle,
@@ -164,7 +166,11 @@ import {
 } from './fbotTitle';
 import { localTaskImagePath, rewriteTaskImageReferences, taskImageReferences } from '../../cindy-media/taskImageMarkdown';
 import { materializeLocalMarkdownImageRefs, materializeLocalMarkdownImages } from './localMarkdownImages';
-import { unlinkLocalFileLinks } from './localFileLinks';
+import {
+  collectLocalFileLinks,
+  resolveLocalFileAttachments,
+  unlinkLocalFileLinks,
+} from './localFileLinks';
 import {
   applyStatusTokenRate,
   buildActivityRecord,
@@ -181,6 +187,7 @@ import {
 import { isQuotaExhaustionFailure, terminalErrorText, turnRetryNotice } from './turnRetryNotice';
 import { resolveSessionErrorContext } from './sessionProviderLabel';
 import { createTurnPresenter, DEFAULT_PRESENTER_POLICY, type TurnPresenter } from './turnPresenter';
+import { renderPublicStage } from './publicProgress';
 import {
   toCoreAgentKind,
   readPermissionMode,
@@ -313,6 +320,11 @@ interface TurnState {
   terminalErrorCode: string | null;
   /** Whether a callback-bound text response has already been reserved. */
   chunkedReplyBegun: boolean;
+  /**
+   * chunked-text 渠道的可选过程反馈面(企业微信流式进度)。
+   * 一轮一个, 收口时先 close 再交付终稿 —— 迟到的进度绝不能覆盖终稿。
+   */
+  progressHandle: ImProgressHandle | null;
   queueMode: 'internal' | 'external';
   /**
    * 授权检查通过的「将要运行」路由(渠道默认跟随会切过去的那条; 未跟随则为 null)。
@@ -1240,6 +1252,7 @@ export function createTurnRunner(
       terminalKind: 'done',
       terminalErrorCode: null,
       chunkedReplyBegun: false,
+      progressHandle: null,
       queueMode: args.queueMode,
       followAuthRoute: followTarget ?? null,
       terminalPromise,
@@ -1704,8 +1717,7 @@ export function createTurnRunner(
         if (index >= 0) state.queue.splice(index, 1);
         if (output.kind === 'chunked-text' && item.turn.chunkedReplyBegun) {
           try {
-            await output.commitFinal({
-              userId,
+            await commitChunkedFinal(item.turn, {
               text: ui.agent.stopDone(0),
               terminal: 'aborted',
               threadTs: item.turn.scopeKey,
@@ -2012,8 +2024,7 @@ export function createTurnRunner(
             item.turn.chunkedReplyBegun
           ) {
             try {
-              await output.commitFinal({
-                userId,
+              await commitChunkedFinal(item.turn, {
                 text: ui.agent.sendInternalError('session_detaching'),
                 terminal: 'error',
                 threadTs: item.turn.scopeKey,
@@ -2078,10 +2089,100 @@ export function createTurnRunner(
     }
     turn.chunkedReplyBegun = true;
     try {
-      await output.beginReply(turn.userId);
+      // 渠道可以选择返回一个过程反馈面(企业微信流式进度);
+      // 旧的 beginReply 实现返回 void, 一律按“本轮没有过程面”处理。
+      const handle = await output.beginReply(turn.userId, { turnId: turn.turnId });
+      turn.progressHandle = handle ?? null;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`chunked-text beginReply failed (active-send fallback): ${msg}`);
+    }
+  }
+
+  /**
+   * chunked-text 的终稿交付: **先关过程面再交终稿**。
+   *
+   * - close() 返回后不可能再有进度帧落地(实现内部串行等已发出的帧), 所以终稿
+   *   不会被迟到的“正在处理”覆盖;
+   * - 交付结果再交给 settle(), 让过程面收敛成终态(企业微信由 close/settle 收口);
+   * - 返回值/提示看**真实交付边界**: `sent` 才算已送达; `durable` 是已持久受理、
+   *   仍有未确认步骤(会自动补发); `failed` 是既没送达也没受理。不拿抛错假装
+   *   “Agent 执行失败”, 也不用“已受理”冒充“已送达”。
+   */
+  async function commitChunkedFinal(
+    turn: TurnState,
+    final: Omit<ImFinalOutput, 'userId' | 'turnId'>,
+  ): Promise<boolean> {
+    if (output.kind !== 'chunked-text') return false;
+    const progress = turn.progressHandle;
+    turn.progressHandle = null;
+    if (progress) {
+      try {
+        await progress.close();
+      } catch {
+        // 过程面收口失败不能阻止终稿。
+      }
+    }
+    let delivered = false;
+    try {
+      const outcome = (await output.commitFinal({
+        userId: turn.userId,
+        turnId: turn.turnId,
+        ...final,
+      })) ?? { status: 'sent' as const, unresolved: 0, retrying: 0 };
+      delivered = outcome.status === 'sent';
+      if (outcome.status !== 'sent') {
+        await notifyDeliveryGap(turn, outcome);
+      }
+      return delivered;
+    } finally {
+      if (progress?.settle) {
+        try {
+          await progress.settle({ delivered, terminal: final.terminal });
+        } catch {
+          // 终态提示是尽力而为。
+        }
+      }
+    }
+  }
+
+  /** 渠道没有定制交付提示时的默认说法(与各渠道口径一致)。 */
+  function defaultDeliveryNotice(outcome: {
+    status: 'durable' | 'failed';
+    unresolved: number;
+    retrying: number;
+  }): string {
+    if (outcome.status === 'failed') return '⚠️ 本轮输出未能送达，请稍后重试。';
+    return outcome.retrying > 0
+      ? `⚠️ 有 ${outcome.unresolved} 项内容尚未确认送达，会在网络恢复后自动补发。`
+      : `⚠️ 有 ${outcome.unresolved} 项内容未确认送达，不会自动重发；若未收到请重新发送。`;
+  }
+
+  /**
+   * 终稿有未确认送达的部分时, 给用户一句可观察的说法。这只是一条短提示:
+   * 发送失败不影响终稿已经交付的那部分, 也不能把“已受理”说成“已送达”。
+   */
+  async function notifyDeliveryGap(
+    turn: TurnState,
+    outcome: { status: 'sent' | 'durable' | 'failed'; unresolved: number; retrying: number },
+  ): Promise<void> {
+    const noticeArgs = {
+      status: outcome.status === 'durable' ? ('durable' as const) : ('failed' as const),
+      unresolved: outcome.unresolved,
+      retrying: outcome.retrying,
+    };
+    // 渠道没定制文案时用同一口径的默认说法 —— 交付未确认必须有可观察反馈,
+    // 不能只落日志; 也不能把“已受理”说成“已送达”或“Agent 执行失败”。
+    const copy =
+      adapter.ui.agent.deliveryNotice?.(noticeArgs) ?? defaultDeliveryNotice(noticeArgs);
+    try {
+      await output.im.sendMarkdownText(turn.userId, copy, { threadTs: turn.scopeKey });
+    } catch (err) {
+      log.warn(
+        `[${channel}/turn] delivery notice send failed (non-fatal): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
     }
   }
 
@@ -3107,6 +3208,34 @@ export function createTurnRunner(
     return final && !body.trim() && hasRichAnswer(source) ? t('richAnswer.incomplete') : body;
   }
 
+  /**
+   * 终稿正文里的本机文件链接 → 受控附件（绝对路径，已 realpath 且在允许根内）。
+   *
+   * 回答里的 `[下载 report.pdf](report.pdf)` 这种相对链接以前被投影成纯文本、对方
+   * 什么也收不到；现在由宿主在**任务工作目录**下解析、校验后交给渠道文件通道，
+   * 不要求模型改用 `xdt-file://`。远程任务允许根为空，此时不产生本机附件。
+   */
+  async function resolveTurnFileAttachments(turn: TurnState): Promise<string[]> {
+    if (turn.allowedFileRoots.length === 0) return [];
+    // 没有本机链接时不做任何 IO: 绝大多数轮次的终稿时序与以前完全一致。
+    if (collectLocalFileLinks(turn.presenter.wholeText()).length === 0) return [];
+    try {
+      const attachments = await resolveLocalFileAttachments({
+        text: turn.presenter.wholeText(),
+        baseDir: turn.allowedFileRoots[0]!,
+        allowedRoots: turn.allowedFileRoots,
+      });
+      return attachments.map((attachment) => attachment.absPath);
+    } catch (err) {
+      log.warn(
+        `[${channel}/turn] local file link resolution failed (non-fatal): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return [];
+    }
+  }
+
   /** tool_use → 过程区时间线推进 + 卡片刷新(渠道 handle 自带节流兜底)。 */
   function handleToolUseEvent(turn: TurnState, event: AgentEvent): void {
     if (!turn.presenter.applyToolUse(event)) return;
@@ -3380,8 +3509,8 @@ export function createTurnRunner(
       const base = composeTranspondView(state, t, true);
       const body = errMsg ? [base, ui.agent.runtimeError(errMsg)].filter(Boolean).join('\n\n') : base;
       if (output.kind === 'chunked-text') {
-        // 微信等文本渠道由适配器解析当前账号下该聊天最近的有效回复上下文。
-        // 不伪造入站 taskId，也不占用另一次用户消息的 durable final。
+        // 后台轮次转播不产生用户轮次, 因此**不**经过持久出箱, 也没有过程面:
+        // 它直接发正文/附件, 重启或断链期间的结果不补发(第一批有意保留)。
         if (body) await im.sendMarkdownText(state.userId, body, { threadTs: state.scopeKey });
         for (const absPath of t.mediaAbsPaths.slice(0, 4)) {
           if (sessionStates.get(state.makerSession.id) !== state) return;
@@ -3624,8 +3753,7 @@ export function createTurnRunner(
             output.kind === 'chunked-text' &&
             failure.turn.chunkedReplyBegun
           ) {
-            await output.commitFinal({
-              userId,
+            await commitChunkedFinal(failure.turn, {
               text: message,
               terminal: 'error',
               threadTs: failure.turn.scopeKey,
@@ -3822,22 +3950,28 @@ export function createTurnRunner(
         // TurnState.buffer is the source of truth; chunked channels do not stream.
       },
       replace() {
-        // Best-effort progress remains in memory until terminal commit.
+        // 过程面可选: 只有支持真实进度反馈的渠道(企业微信流式)
+        // 会拿到 progressHandle。这里只推**公开**进度(阶段行 + 已产出正文),
+        // 不推思考与工具参数; 渠道自己节流。
+        if (closed || !turn.progressHandle || turn.done) return;
+        turn.progressHandle.replace({
+          stage: renderPublicStage(turn.presenter.activity, Date.now()),
+          body: composeOutboundBody(turn.presenter.wholeText(), false),
+        });
       },
       async finalize(finalText: string) {
         if (closed) return;
         closed = true;
-        if (output.kind === 'chunked-text') {
-          await output.commitFinal({
-            userId: turn.userId,
-            text: finalText,
-            terminal: turn.terminalKind,
-            threadTs: turn.scopeKey,
-            ...(turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
-            allowedFileRoots: turn.allowedFileRoots,
-            ...(turn.terminalErrorCode ? { errorCode: turn.terminalErrorCode } : {}),
-          });
-        }
+        const fileAbsPaths = await resolveTurnFileAttachments(turn);
+        await commitChunkedFinal(turn, {
+          text: finalText,
+          terminal: turn.terminalKind,
+          threadTs: turn.scopeKey,
+          ...(turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
+          ...(fileAbsPaths.length > 0 ? { fileAbsPaths } : {}),
+          allowedFileRoots: turn.allowedFileRoots,
+          ...(turn.terminalErrorCode ? { errorCode: turn.terminalErrorCode } : {}),
+        });
       },
       addExtraImageAbsPath(absPath: string) {
         if (!turn.mediaAbsPaths.includes(absPath)) turn.mediaAbsPaths.push(absPath);
@@ -3933,8 +4067,7 @@ export function createTurnRunner(
     } else if (!finalView.trim() && turn.mediaAbsPaths.length === 0) {
       try {
         if (output.kind === 'chunked-text') {
-          await output.commitFinal({
-            userId,
+          await commitChunkedFinal(turn, {
             text: '',
             terminal: turn.terminalKind,
             threadTs: turn.scopeKey,
@@ -3957,12 +4090,16 @@ export function createTurnRunner(
       try {
         const fallbackText = composeStreamingView(turn);
         if (output.kind === 'chunked-text') {
-          await output.commitFinal({
-            userId,
+          const fileAbsPaths = await resolveTurnFileAttachments(turn);
+          await commitChunkedFinal(turn, {
             text: fallbackText,
             terminal: turn.terminalKind,
             threadTs: turn.scopeKey,
             ...(turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
+            ...(fileAbsPaths.length > 0 ? { fileAbsPaths } : {}),
+            // 与正常 finalize 传同一份授权根: 渠道 prepare 会用它**再校验**一次,
+            // 漏传等于把合法附件全拒掉。
+            allowedFileRoots: turn.allowedFileRoots,
           });
         } else {
           if (fallbackText.trim()) {
@@ -4053,14 +4190,15 @@ export function createTurnRunner(
     } else if (!turn.streamingOutputInvalidated) {
       try {
         if (output.kind === 'chunked-text') {
-          await output.commitFinal({
-            userId,
+          // turn 可能已从 queue 弹出(这里仍保有引用); 过程面同样要先收口。
+          const final: Omit<ImFinalOutput, 'userId' | 'turnId'> = {
             text: `❌ 错误：${msg}`,
             terminal: 'error',
             threadTs: turn.scopeKey,
             errorCode: turn?.terminalErrorCode ?? 'agent_turn_error',
             ...(turn && turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
-          });
+          };
+          await commitChunkedFinal(turn, final);
         } else {
           const errorText = `❌ 错误：${msg}`;
           const triggerId = output.im.getPendingOpenerTrigger?.(userId);

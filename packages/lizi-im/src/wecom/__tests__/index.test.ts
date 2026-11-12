@@ -16,6 +16,14 @@ type IpcHandler = (payload?: unknown) => Promise<unknown> | unknown;
 class FakeClient {
   readonly handlers = new Map<string, Handler[]>();
   readonly sendMessage = vi.fn(async () => ({}));
+  readonly replyTemplateCard = vi.fn(async (_frame: unknown, card: unknown) => {
+    assertValidTemplateCard(card);
+    return {};
+  });
+  readonly updateTemplateCard = vi.fn(async (_frame: unknown, card: unknown) => {
+    assertValidTemplateCard(card);
+    return {};
+  });
   readonly sendMediaMessage = vi.fn(async () => ({}));
   readonly replyStream = vi.fn<
     (
@@ -60,6 +68,54 @@ class FakeClient {
 
   emit(event: string, payload?: unknown) {
     for (const handler of this.handlers.get(event) ?? []) handler(payload);
+  }
+}
+
+/**
+ * 模拟平台的卡片结构校验: 空 `button_list` 的 `button_interaction` 会被拒绝
+ * (真机 errcode=40016 invalid button size)。测试替身不能对所有结构无条件成功,
+ * 否则会把平台不支持的形状当成正确。
+ */
+function assertValidTemplateCard(card: unknown): void {
+  const record = card as {
+    card_type?: unknown;
+    button_list?: unknown;
+    card_action?: unknown;
+  } | null;
+  if (!record || typeof record.card_type !== 'string') {
+    throw Object.assign(new Error('errcode=40016 errmsg=invalid card'), { errcode: 40016 });
+  }
+  if (record.card_type === 'text_notice') {
+    // 真机 2026-11-12 15:24:13 / 15:50:05 两次更新均被拒 42045; 官方社区确认该
+    // 卡型的更新只接受跳转 1/2, 无跳转(0)同样不合法。测试替身按此拒绝 —— 任何把
+    // 无跳转通知卡当“撤按钮”的方案都不该在单测里“成功”。
+    const action = record.card_action as { type?: unknown; url?: unknown; appid?: unknown } | undefined;
+    const type = action?.type;
+    if (!action || (type !== 1 && type !== 2)) {
+      throw Object.assign(
+        new Error('errcode=42045 errmsg=Template_Card card_action Missing or Invalid'),
+        { errcode: 42045 },
+      );
+    }
+    if (type === 1 && typeof action.url !== 'string') {
+      throw Object.assign(
+        new Error('errcode=42045 errmsg=Template_Card card_action Invalid'),
+        { errcode: 42045 },
+      );
+    }
+    if (type === 2 && typeof action.appid !== 'string') {
+      throw Object.assign(
+        new Error('errcode=42045 errmsg=Template_Card card_action Invalid'),
+        { errcode: 42045 },
+      );
+    }
+    return;
+  }
+  if (record.card_type !== 'button_interaction') return;
+  if (!Array.isArray(record.button_list) || record.button_list.length === 0) {
+    throw Object.assign(new Error('errcode=40016 errmsg=invalid button size'), {
+      errcode: 40016,
+    });
   }
 }
 
@@ -207,6 +263,259 @@ describe("WecomIM routing and ownership", () => {
       msgtype: "markdown",
       markdown: { content: "**active**" },
     });
+  });
+
+  it("turns host-resolved file attachments into file steps (and rejects escaping ones)", async () => {
+    const { host, secrets } = createHost();
+    secrets.set("wecom-owner-user-id", "owner");
+    const client = new FakeClient();
+    const dir = join(tmpdir(), `cindy-wecom-file-step-${randomUUID()}`);
+    const outsideDir = join(tmpdir(), `cindy-wecom-file-outside-${randomUUID()}`);
+    const filePath = join(dir, "imbot-live.txt");
+    const outsidePath = join(outsideDir, "secret.txt");
+    const im = new WecomIM(host, { clientFactory: () => client as never });
+    await mkdir(dir, { recursive: true });
+    await mkdir(outsideDir, { recursive: true });
+    await writeFile(filePath, "IMBOT-FILE-OK");
+    await writeFile(outsidePath, "secret");
+    try {
+      await im.init();
+      const plan = await im.prepareFinal({
+        userId: "owner",
+        text: "已创建文件。\n下载 imbot-live.txt",
+        terminal: "done",
+        fileAbsPaths: [filePath, outsidePath],
+        allowedFileRoots: [dir],
+      });
+      // 宿主解析过的文件成为独立 file step; 越界的直接丢弃并写进正文提示。
+      expect(plan.steps.filter((step) => step.kind === "file")).toEqual([
+        expect.objectContaining({ kind: "file", displayName: "imbot-live.txt" }),
+      ]);
+      expect(plan.steps.some((step) => step.kind === "text")).toBe(true);
+      expect(plan.steps[0]?.kind === "text" ? plan.steps[0].text : "").toContain(
+        "有 1 个文件附件未发送",
+      );
+      await im.dispose();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+      await rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("answers a click once and never calls the platform card update", async () => {
+    const { host, secrets } = createHost();
+    secrets.set("wecom-owner-user-id", "owner");
+    const client = new FakeClient();
+    const im = new WecomIM(host, {
+      clientFactory: () => client as never,
+      now: () => 1_000,
+    });
+    await im.init();
+    const actions: unknown[] = [];
+    im.onCardAction((event) => actions.push(event));
+    const frame = message({ id: "m-click", sender: "owner", text: "approve?" });
+    client.emit("message.text", frame);
+    await flush();
+    const card = await im.sendInteractiveCard("owner", {
+      title: "需要确认操作",
+      body: "需要确认工具「Bash」的这次操作。",
+      buttons: [
+        { id: "allow", label: "允许本次操作", payload: { value: "允许" } },
+        { id: "deny", label: "拒绝本次操作", payload: { value: "拒绝" } },
+      ],
+    });
+    const sentCard = client.replyTemplateCard.mock.calls[0]?.[1] as {
+      task_id: string;
+      button_list: Array<{ key: string }>;
+    };
+
+    const click = (taskId: string, key: string) => {
+      client.emit("event.template_card_event", {
+        cmd: "aibot_event_callback",
+        headers: { req_id: "req-click" },
+        body: {
+          msgid: "evt-click",
+          create_time: 1_000,
+          aibotid: "bot-1",
+          from: { userid: "owner" },
+          msgtype: "event",
+          event: { eventtype: "template_card_event", task_id: taskId, event_key: key },
+        },
+      });
+    };
+    click(sentCard.task_id, sentCard.button_list[0]!.key);
+    await flush();
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({ messageId: card.messageId, payload: { value: "允许" } });
+
+    // 重复/迟到点击不再提交第二份选择。
+    click(sentCard.task_id, sentCard.button_list[0]!.key);
+    await flush();
+    expect(actions).toHaveLength(1);
+
+    // 收口不依赖平台更新: 平台对该类更新只接受跳转 1/2, 我们没有合规结构,
+    // 因此不发起无效请求(替身会按真机 42045 拒绝任何无跳转通知卡)。
+    expect(client.updateTemplateCard).not.toHaveBeenCalled();
+
+    // 桌面/手机先决定: 传输层被要求作废一张还没被点过的卡 → 只做本地失效,
+    // 之后的(迟到)点击不再产交互事件, 也不调用平台更新。
+    client.emit("message.text", message({ id: "m-click-2", sender: "owner", text: "approve?" }));
+    await flush();
+    const second = await im.sendInteractiveCard("owner", {
+      title: "计划待批准",
+      body: "Agent 提交了一份执行计划。",
+      buttons: [
+        { id: "approve", label: "批准计划", payload: { value: "批准" } },
+        { id: "reject", label: "拒绝计划", payload: { value: "拒绝" } },
+      ],
+    });
+    const secondCard = client.replyTemplateCard.mock.calls[1]?.[1] as {
+      task_id: string;
+      button_list: Array<{ key: string }>;
+    };
+    await im.updateInteractiveCard(second.messageId, {
+      body: "这个确认已失效，无需再处理。",
+      buttons: [],
+    });
+    click(secondCard.task_id, secondCard.button_list[0]!.key);
+    await flush();
+    expect(actions).toHaveLength(1);
+    expect(client.updateTemplateCard).not.toHaveBeenCalled();
+    await im.dispose();
+  });
+
+  it("reports the card identity before the platform ack, so an early click is not lost", async () => {
+    const { host, secrets } = createHost();
+    secrets.set("wecom-owner-user-id", "owner");
+    const client = new FakeClient();
+    let releaseReply!: () => void;
+    client.replyTemplateCard.mockImplementationOnce(
+      () =>
+        new Promise<Record<string, never>>((resolve) => {
+          releaseReply = () => resolve({});
+        }),
+    );
+    const im = new WecomIM(host, { clientFactory: () => client as never, now: () => 1_000 });
+    await im.init();
+    const actions: Array<{ messageId?: string; payload?: { value?: string } }> = [];
+    im.onCardAction((event) => actions.push(event));
+    client.emit("message.text", message({ id: "m-early", sender: "owner", text: "approve?" }));
+    await flush();
+
+    const registered: string[] = [];
+    const sending = im.sendInteractiveCard(
+      "owner",
+      {
+        title: "需要确认操作",
+        body: "需要确认工具「Bash」的这次操作。",
+        buttons: [
+          { id: "allow", label: "允许本次操作", payload: { value: "允许" } },
+          { id: "deny", label: "拒绝本次操作", payload: { value: "拒绝" } },
+        ],
+      },
+      { onCardId: (messageId) => registered.push(messageId) },
+    );
+    await flush();
+    // 卡身份在 IO 之前就交给调用方: 业务可以在点击到达前绑定本请求。
+    expect(registered).toHaveLength(1);
+    const sentCard = client.replyTemplateCard.mock.calls[0]?.[1] as {
+      task_id: string;
+      button_list: Array<{ key: string }>;
+    };
+    client.emit("event.template_card_event", {
+      cmd: "aibot_event_callback",
+      headers: { req_id: "req-early" },
+      body: {
+        msgid: "evt-early",
+        create_time: 1_000,
+        aibotid: "bot-1",
+        from: { userid: "owner" },
+        msgtype: "event",
+        event: {
+          eventtype: "template_card_event",
+          task_id: sentCard.task_id,
+          event_key: sentCard.button_list[0]!.key,
+        },
+      },
+    });
+    await flush();
+    // 回执还没返回, 但点击已经能命中这张确定身份的卡。
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({ messageId: registered[0], payload: { value: "允许" } });
+
+    releaseReply();
+    await expect(sending).resolves.toEqual({ messageId: registered[0] });
+    // 回执晚到不复活卡片, 重复点击也不再产事件。
+    client.emit("event.template_card_event", {
+      cmd: "aibot_event_callback",
+      headers: { req_id: "req-early" },
+      body: {
+        msgid: "evt-early",
+        create_time: 1_000,
+        aibotid: "bot-1",
+        from: { userid: "owner" },
+        msgtype: "event",
+        event: {
+          eventtype: "template_card_event",
+          task_id: sentCard.task_id,
+          event_key: sentCard.button_list[0]!.key,
+        },
+      },
+    });
+    await flush();
+    expect(actions).toHaveLength(1);
+    await im.dispose();
+  });
+
+  it("streams public progress into the reserved reply before the final answer", async () => {
+    const { host, secrets } = createHost();
+    secrets.set("wecom-owner-user-id", "owner");
+    const client = new FakeClient();
+    const im = new WecomIM(host, {
+      clientFactory: () => client as never,
+      now: () => 1_000,
+    });
+
+    await im.init();
+    const frame = message({ id: "m-progress", sender: "owner", text: "task" });
+    client.emit("message.text", frame);
+    await flush();
+
+    const progress = await im.beginReply("owner", { turnId: "turn-1" });
+    expect(progress).not.toBeNull();
+    progress!.replace({ stage: "⚙️ 正在处理 · 1s", body: "" });
+    await flush();
+
+    const streamId = client.replyStream.mock.calls[0]?.[1];
+    // 占位 + 一帧真实过程, 同一个 streamId。
+    expect(client.replyStream).toHaveBeenNthCalledWith(1, frame, streamId, " ", false);
+    expect(client.replyStream).toHaveBeenNthCalledWith(
+      2,
+      frame,
+      streamId,
+      "⚙️ 正在处理 · 1s",
+      false,
+    );
+
+    // 同一轮必须带同一个 turnId 才能领回自己的窗口。
+    await im.commitFinal({
+      userId: "owner",
+      text: "final answer",
+      terminal: "done",
+      turnId: "turn-1",
+    });
+    // 终稿收口之后, 迟到的进度不得再刷新这条消息。
+    progress!.replace({ stage: "⚙️ 迟到的进度", body: "" });
+    await flush();
+
+    expect(client.replyStream).toHaveBeenLastCalledWith(
+      frame,
+      streamId,
+      "final answer",
+      true,
+    );
+    expect(client.replyStream).toHaveBeenCalledTimes(3);
+    await im.dispose();
   });
 
   it("starts a passive stream before the turn and finalizes the same stream", async () => {

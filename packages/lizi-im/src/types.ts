@@ -421,6 +421,16 @@ export interface StreamingTextHandle {
 
 export interface SendFileResult {
   ok: boolean;
-  reason?: 'NOT_FOUND' | 'EMPTY' | 'TOO_LARGE' | 'UPLOAD_FAIL' | 'SEND_FAIL';
+  /**
+   * NOT_CONNECTED: 确定没发起(连接不可用); UPLOAD_FAIL: 确定没发出(上传阶段失败);
+   * SEND_FAIL: 已发起但没拿到接受证据 —— 调用方不得盲目重发。
+   */
+  reason?:
+    | 'NOT_FOUND'
+    | 'EMPTY'
+    | 'TOO_LARGE'
+    | 'NOT_CONNECTED'
+    | 'UPLOAD_FAIL'
+    | 'SEND_FAIL';
   messageId?: string;
 }

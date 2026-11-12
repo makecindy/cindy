@@ -20,6 +20,7 @@ vi.mock('../../../localDb/client/current', () => ({
 }));
 
 import { buildWecomAdapter } from '../adapter';
+import { buildImChannelNote } from '../../shared/channelNote';
 import type { WecomTextInteractions } from '../textInteractions';
 import { WECOM_PERSONAL_GROUP_WINDOW } from '../../shared/channelGroupWindow';
 
@@ -48,6 +49,48 @@ describe('wecom teammate-owned connection', () => {
       companionBotId: 'bot-mia',
     });
     expect(unbound.companionLane?.('zhangsan')).toEqual({ kind: 'guest-dm', userId: 'zhangsan' });
+  });
+});
+
+describe('wecom channel note', () => {
+  it('tells the model that the host auto-delivers linked files (without promising delivery)', async () => {
+    const im = { getOwnerUserId: () => 'zhangsan' } as unknown as WecomIM;
+    const adapter = buildWecomAdapter(im, interactions, CONFIG);
+
+    const direct = await adapter.channelNoteSourceFor?.({
+      channelName: 'wecom',
+      senderId: 'zhangsan',
+      chatId: 'zhangsan',
+      contextId: 'bot-1',
+      messageId: 'm-1',
+      text: 'hi',
+      attachments: [],
+      unsupported: [],
+    });
+    expect(direct?.chatKind).toBe('direct');
+    expect(direct?.toolsHint).toContain('自动投递附件');
+    const note = buildImChannelNote('wecom', direct!);
+    // 事实: 不需要工具、宿主自动发; 同时不得替平台承诺送达或让模型声称缺少能力。
+    expect(note).toContain('不需要调用工具');
+    expect(note).toContain('不要保证一定送达');
+    expect(note).toContain('不要声称自己缺少发送能力');
+
+    // 群里仍然保留群与发言人的来源事实。
+    const group = await adapter.channelNoteSourceFor?.({
+      channelName: 'wecom',
+      senderId: encodeWecomGroupLane('chat-1'),
+      chatId: 'chat-1',
+      contextId: 'bot-1',
+      messageId: 'm-2',
+      text: '@bot hi',
+      invoked: true,
+      speaker: { id: 'zhangsan', name: '张三', isOwner: true },
+      attachments: [],
+      unsupported: [],
+    });
+    expect(group?.chatKind).toBe('group');
+    expect(group?.chatId).toBe('chat-1');
+    expect(group?.toolsHint).toContain('自动投递附件');
   });
 });
 

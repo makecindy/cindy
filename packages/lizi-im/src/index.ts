@@ -19,10 +19,20 @@ export type {
   TextChannelIM,
   RichChannelIM,
   ImFinalOutput,
+  ImFinalCommitOutcome,
+  ImFinalStep,
+  ImFinalTextStep,
+  ImFinalAttachmentStep,
+  ImFinalDeliveryPlan,
+  ImFinalDeliveryResult,
+  ImDeliveryState,
+  ImProgressHandle,
+  ImProgressView,
   ImOutputDriver,
 } from './channelIM.js';
 
 export type { Logger } from './logger.js';
+export { resolveAllowedOutboundFile } from './outboundFile.js';
 
 export type {
   IMHost,
