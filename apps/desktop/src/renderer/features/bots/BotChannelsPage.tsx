@@ -133,6 +133,7 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
   const { confirm } = useConfirmDialog();
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<{ id: string; config: BotIMessageConfig } | null>(null);
+  const [groupVersions, setGroupVersions] = useState<Record<string, number>>({});
   const [loadingEdit, setLoadingEdit] = useState<string | null>(null);
   const edit = async (id: string) => {
     if (!im?.getIMessageConfig || loadingEdit) return;
@@ -256,7 +257,7 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                   })}</p>
                 ) : null}
                 {(view.channel === 'telegram' || view.channel === 'imessage') && view.botContextId && botImConnectionGroupsSupported(im) ? (
-                  <ConnectionGroups api={im} connectionId={view.id} botName={bot.name} />
+                  <ConnectionGroups api={im} connectionId={view.id} botName={bot.name} refreshVersion={groupVersions[view.id] ?? 0} />
                 ) : null}
                 {view.channel === 'discord' && im && botImConnectionDiscordChannelsSupported(im) ? (
                   <ConnectionDiscordChannels api={im} connectionId={view.id} botName={bot.name} deviceId={target.deviceId} />
@@ -295,7 +296,10 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
         {t('bots.channels.sharedMemoryNote', { name: bot.name })}
       </p>
       {editing ? (
-        <BotChannelAddDialog bot={bot} api={im} editing={editing} onApplied={apply}
+        <BotChannelAddDialog bot={bot} api={im} editing={editing} onApplied={(next) => {
+          apply(next);
+          setGroupVersions((versions) => ({ ...versions, [editing.id]: (versions[editing.id] ?? 0) + 1 }));
+        }}
           onOpenChange={(open) => { if (!open) setEditing(null); }} />
       ) : null}
       {adding ? (
@@ -309,7 +313,7 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
  * 一条 Telegram 连接的「群聊」小节: 机器人进过的群 + 每群参与模式(仅 @ / 全响应)。
  * 与 设置 → IM 机器人 的同名设置各管各的 bot; 乐观更新, 保存失败回读正本并提示。
  */
-function ConnectionGroups({ api, connectionId, botName }: { api: BotImConnectionApi | null; connectionId: string; botName: string }) {
+function ConnectionGroups({ api, connectionId, botName, refreshVersion }: { api: BotImConnectionApi | null; connectionId: string; botName: string; refreshVersion: number }) {
   const { t } = useBotTranslation();
   const [groups, setGroups] = useState<BotImConnectionGroup[] | null>(null);
   const [error, setError] = useState<'load' | 'save' | null>(null);
@@ -331,7 +335,7 @@ function ConnectionGroups({ api, connectionId, botName }: { api: BotImConnection
     return () => {
       cancelled = true;
     };
-  }, [connectionId, reloadToken]);
+  }, [connectionId, reloadToken, refreshVersion]);
 
   const setMode = useCallback(
     (chatId: string, mode: BotImGroupActivationMode) => {
