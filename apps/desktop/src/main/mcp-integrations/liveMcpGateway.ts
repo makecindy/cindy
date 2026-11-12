@@ -26,6 +26,8 @@ interface LiveConnection {
   server: McpServer;
   client: Client;
   lastUsed: number;
+  /** Requests currently awaiting the upstream server; such a session is never idle. */
+  active: number;
 }
 
 /** Per-call facade: never reuse another task's credentials, policy or connection.
@@ -67,6 +69,7 @@ export function createLiveMcpGateway(deps: {
     const idleMs = deps.idleMs ?? DEFAULT_IDLE_MS;
     const now = Date.now();
     for (const [key, connection] of connections) {
+      if (connection.active > 0) continue;
       if (now - connection.lastUsed > idleMs) dropConnection(key);
     }
   };
@@ -119,7 +122,7 @@ export function createLiveMcpGateway(deps: {
               void config.instance.close().catch(() => {});
               throw error;
             }
-            const opened: LiveConnection = { signature, server: config.instance, client, lastUsed: Date.now() };
+            const opened: LiveConnection = { signature, server: config.instance, client, lastUsed: Date.now(), active: 0 };
             // A save may have landed while connecting; only the latest revision may publish.
             if (desired.get(key) !== signature) { closeConnection(opened); return null; }
             connections.set(key, opened);
@@ -132,23 +135,30 @@ export function createLiveMcpGateway(deps: {
         assertCurrent();
       }
       connection.lastUsed = Date.now();
-      if (request.action === 'list') {
-        const result = await connection.client.listTools(request.cursor ? { cursor: request.cursor } : {},
-          { signal, timeout: 15_000 });
+      connection.active += 1;
+      try {
+        if (request.action === 'list') {
+          const result = await connection.client.listTools(request.cursor ? { cursor: request.cursor } : {},
+            { signal, timeout: 15_000 });
+          assertCurrent();
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: true, server: request.server, ...result }) }] };
+        }
+        // Native helper approval has already reviewed this exact server/tool/arguments.
+        // The existing facade enforces the current upstream schema and model visibility.
+        const result = await connection.client.callTool({ name: request.tool, arguments: request.arguments }, undefined,
+          { signal, timeout: 120_000 });
         assertCurrent();
-        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, server: request.server, ...result }) }] };
+        return result as Awaited<ReturnType<Invoke>>;
+      } finally {
+        connection.active -= 1;
+        connection.lastUsed = Date.now();
       }
-      // Native helper approval has already reviewed this exact server/tool/arguments.
-      // The existing facade enforces the current upstream schema and model visibility.
-      const result = await connection.client.callTool({ name: request.tool, arguments: request.arguments }, undefined,
-        { signal, timeout: 120_000 });
-      assertCurrent();
-      connection.lastUsed = Date.now();
-      return result as Awaited<ReturnType<Invoke>>;
     } catch (error) {
       // A rejected tool name or schema never reaches the upstream session; evicting there
       // would throw away a healthy session's state (database selection, transactions).
-      if (!isRecoverableMcpRejection(error)) dropConnection(key);
+      // Only evict the session this request used: a newer revision may already own the key.
+      const cached = connections.get(key);
+      if (!isRecoverableMcpRejection(error) && cached?.signature === signature) dropConnection(key);
       return failure(signal?.aborted ? 'MCP_GATEWAY_CANCELLED' : 'MCP_GATEWAY_REQUEST_FAILED');
     }
   };

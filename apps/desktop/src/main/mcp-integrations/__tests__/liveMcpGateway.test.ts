@@ -149,6 +149,27 @@ describe('stable live MCP entry', () => {
     expect(await second).toMatchObject({ content: [{ type: 'text', text: '1' }] });
     expect(f.created()).toBe(2);
   });
+  it('never reaps a connection while one of its calls is still in flight', async () => {
+    let release!: () => void;
+    const slow = new Promise<void>(resolve => { release = resolve; });
+    let created = 0;
+    const resolve = vi.fn(() => ({ isCurrent: () => true, signature: () => 'config-1', create: () => {
+      created += 1;
+      const instance = new McpServer({ name: 'slow', version: '1' });
+      instance.registerTool('wait', { inputSchema: {} }, async () => {
+        await slow;
+        return { content: [{ type: 'text' as const, text: 'done' }] };
+      });
+      return { type: 'sdk', instance };
+    } }));
+    // A 1ms idle window would reap the session if in-flight work did not protect it.
+    const gateway = createLiveMcpGateway({ resolve, idleMs: 1 });
+    const pending = gateway(context, { action: 'call', server: 'custom_example', tool: 'wait', arguments: {} });
+    await new Promise(resolveTimer => setTimeout(resolveTimer, 30));
+    release();
+    expect(await pending).toMatchObject({ content: [{ type: 'text', text: 'done' }] });
+    expect(created).toBe(1);
+  });
   it('does not start a cancelled call or return data after task invalidation', async () => {
     const f = fixture(); f.save();
     const abort = new AbortController(); abort.abort();
