@@ -21,6 +21,19 @@ const netFetchMock = vi.hoisted(() => vi.fn());
 /** globalThis.fetch(Node undici):OSS PUT 主路径。 */
 const undiciFetchMock = vi.hoisted(() => vi.fn());
 vi.mock('electron', () => ({ net: { fetch: netFetchMock } }));
+vi.mock('../agentNetDeviceDirectory.js', () => ({ readCurrentDeviceDirectory: vi.fn() }));
+// The API assembly imports these modules statically. Media requests never read
+// device-management secrets or enumerate devices; fail if that boundary changes.
+vi.mock('../agentNetRuntime.js', () => ({
+  agentNetClientForRelay: () => { throw new Error('unexpected device-management runtime'); },
+}));
+vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => { throw new Error('unexpected device-management owner read'); },
+  isAppSessionBoundaryPending: () => { throw new Error('unexpected device-management boundary read'); },
+}));
+vi.mock('../selfHostedRelayConfig.js', () => ({
+  readRelaySecrets: () => { throw new Error('unexpected device-management secret read'); },
+}));
 vi.stubGlobal('fetch', undiciFetchMock);
 
 const apiFetch = vi.hoisted(() => vi.fn());
@@ -67,8 +80,9 @@ import {
   openMediaStream,
   removeRemote,
   __testing,
-} from '../mediaTransfer.js';
+} from '../mediaTransfer.desktop.js';
 import { setSelfHostedRelaySource } from '../selfHostedRelayRouting.js';
+import { installAgentNetMediaBackend, type AgentNetMediaBackend } from '../agentNetMediaRouting.js';
 
 const PUT_PATH = '/api/device-link/media/presign-put';
 const GET_PATH = '/api/device-link/media/presign-get';
@@ -97,6 +111,30 @@ beforeEach(() => {
   renameMock.mockResolvedValue(undefined);
   rmMock.mockResolvedValue(undefined);
   createWriteStreamMock.mockImplementation(() => new PassThrough());
+});
+afterEach(() => installAgentNetMediaBackend(null));
+
+// Gap: the legacy orchestration tests did not run the installed V2 media port. Preserve the public
+// mediaTransfer entry and ensure neither encrypted traffic nor encrypted-only failures use a legacy presign.
+it('uploads through the encrypted backend and never requests a legacy object URL', async () => {
+  const backend: AgentNetMediaBackend = { guard: () => () => {}, available: () => true, cacheScope: () => 'test',
+    async upload(size, contentType, read) {
+      expect(Buffer.from(await read(0, size))).toEqual(Buffer.from('private-attachment'));
+      return { key: 'agent-net-v3/encrypted-reference', size, contentType, sha256: 'verified-hash' };
+    }, open: async () => new Response('private-attachment', { headers: { 'content-type': 'image/png' } }), remove: async () => {} };
+  installAgentNetMediaBackend(backend);
+  const uploaded = await uploadBuffer(Buffer.from('private-attachment'), { ext: 'png' });
+  expect(uploaded.key).toBe('agent-net-v3/encrypted-reference');
+  expect((await downloadToBuffer(uploaded.key)).bytes.toString()).toBe('private-attachment');
+  expect(apiFetch).not.toHaveBeenCalled(); expect(netFetchMock).not.toHaveBeenCalled(); expect(undiciFetchMock).not.toHaveBeenCalled();
+});
+it('rejects legacy media before fetching a presign when encrypted-only is required', async () => {
+  installAgentNetMediaBackend({ guard: () => () => {}, available: () => false, cacheScope: () => '',
+    assertLegacyAllowed() { throw new Error('AGENT_NET_ENCRYPTED_MEDIA_REQUIRED'); },
+    upload: async () => null, open: async () => new Response(), remove: async () => {} });
+  await expect(uploadBuffer(Buffer.from('private-attachment'), { ext: 'png' })).rejects.toThrow('AGENT_NET_ENCRYPTED_MEDIA_REQUIRED');
+  await expect(downloadToBuffer(KEY)).rejects.toThrow('AGENT_NET_ENCRYPTED_MEDIA_REQUIRED');
+  expect(apiFetch).not.toHaveBeenCalled(); expect(netFetchMock).not.toHaveBeenCalled(); expect(undiciFetchMock).not.toHaveBeenCalled();
 });
 
 // docs/self-hosted-relay-plan.md §7:共享任务附件的成员授权在官方服务,走自建中转时不能向中转换地址。

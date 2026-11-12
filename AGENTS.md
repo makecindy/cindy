@@ -67,6 +67,9 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
   `maker:setup-transfer` 协议、计划与应用规则或一次性配置清单，或新增一类可迁移的设置前，必须先读
   `docs/product-rules/new-device-setup-migration.md`：密钥只在原电脑的人允许后一次性加密复制，
   OAuth 登录与私钥不复制，写入只走本机原有安装器与设置存储，不覆盖本机已改过的设置。
+- 修改开始引导（首次登录后的综合引导）的出现条件、步骤与顺序、各步骤复用的能力，或它与旧版数据
+  迁移的衔接前，必须先读 `docs/product-rules/first-run-guide.md`：引导只发现和带路、不代做，
+  Global 与中国大陆版流程一致，旧版数据迁移的区域边界是数据归属、不得顺手放开。
 - 修改共享任务、跨账号访客邀请、共享上下文或共享成员权限前，必须先读
   `docs/product-rules/shared-task-mode.md`；复用 device-link，同账号远控行为不变。
 - 修改 IM 工具授权、来源消息、多端确认或暂停期间的确认回执，或新增 IM 渠道前，
@@ -77,17 +80,20 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
   `docs/product-rules/input-handoff.md`：主人填写的值只交给宿主执行，不进模型、记录、日志、IM 与推送。
 - 新增或修改自动化任务的 Webhook 触发条件、接收服务、事件排队、密钥或相关界面前，必须先读
   `docs/product-rules/schedule-webhook-trigger.md`：事件只是门铃，正文不进任务，密钥不进任务记录。
+- 新增或修改模型组（把模型供应商里已有的来源合成路线与模式）的配置、选路、选择器入口、任务里的说明，
+  或要让它在新任务以外的地方生效前，必须先读 `docs/product-rules/model-groups.md`：模型供应商页原样保留、
+  模型组只做加法，只决定新任务用哪个已连接的模型，排序与供应商组共用同一把尺子。
 - 修改账号用量上限的判定、重置时刻来源，或普通任务／目标模式撞上限额后的等待与自动继续前，
   必须先读 `docs/product-rules/usage-limit-auto-continue.md`。
 - 新增或修改自动发送／远程发送消息的路径、消息来源标签，或发给模型的来源说明前，必须先读
   `docs/product-rules/message-source.md`：界面标签与模型说明同源，两侧一起改。
-- 修改伙伴（Bot）的身份、Session 生命周期、模型 fallback、工作目录、Skill / MCP 装配、
-  委派协作或伙伴设置前，必须先读 `docs/product-rules/cindy-bots-runtime.md`。
-- 新增或修改只对伙伴生效的工具、提示词规则、回执或例行任务等专属机制前，先读
+- 修改伙伴（Bot）的身份、伙伴项目、Session 生命周期、模型 fallback、工作目录、Skill / MCP 装配、
+  伙伴间协作或伙伴设置前，必须先读 `docs/product-rules/cindy-bots-runtime.md`。
+- 新增或修改只对伙伴生效的工具、提示词规则、回执或定时工作等专属机制前，先读
   `docs/product-rules/teammate-capability-ledger.md`：伙伴的工作方式属于伙伴自己的规则，先判断
   普通任务或项目能力能否做到；做不到时优先补成通用能力。这是引导，不是审批。
-- 修改伙伴调用任务写工具的身份判定（主人代办 / 受托 / 自主）、自主轮可做的范围、转达主人原话的
-  核实凭证，或伙伴提示词里对应的说法前，必须先读 `docs/product-rules/teammate-authority.md`。
+- 修改伙伴调用任务写工具的权限（2026-11-08 起不设伙伴专属权限门）、转达主人原话的来源记录，
+  或伙伴提示词里对应的说法前，必须先读 `docs/product-rules/teammate-authority.md`。
 - 修改伙伴的跨电脑身份、主力电脑（登记、接管、交出、降级）、云端对话层与资料上传，或
   `apps/desktop/src/main/companion-cloud/`、Chat Server 的伙伴 actor／1:1 房间合同前，必须先读
   `docs/product-rules/cloud-companions.md`。
@@ -147,9 +153,9 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
   或变成不可逆流程；显式用户命令即授权。Cindy 只能增加可跳过的提示和更顺畅的 GUI，不能让
   Cindy Pi 比同版本原生 Pi 更难用。完整裁决见 `docs/dev-rules/pi-harness.md`「Pi 上游 GUI
   非退化红线」。
-- 修改插件（`.cindy`）运行时、沙箱、权限、能力 slot、面板供片、网络／凭证／文件交接，
-  或身份卡、管子协议、打包与编写手册前，必须先读
-  `docs/dev-rules/plugin-security-and-authoring.md`。其中**存量插件兼容是红线**：任何
+- 修改插件（`.cindy`）运行时、沙箱、权限、能力 slot、面板供片、网络／凭证／文件交接、
+  插件市场分页读取、安装扫描、实例核对或使用统计，或身份卡、管子协议、打包与编写手册前，
+  必须先读 `docs/dev-rules/plugin-security-and-authoring.md`。其中**存量插件兼容是红线**：任何
   插件系统改动（含批准状态 schema、指纹格式、manifest 校验、安装布局、包格式）都必须
   向下兼容——用户升级后什么都不做，已装、已批准、已启用的插件必须照旧可用，**绝不允许
   要求用户重新安装、重新确认权限或重新配置**。做不到就必须自带从旧版数据的自动迁移；
@@ -168,9 +174,12 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
   `docs/dev-rules/plugin-library-storage.md`。
 - 修改客户端自动更新链路（`cindy-updater` 或 Electron 侧更新服务）前，必须先读
   `docs/dev-rules/cindy-updater.md`。
-- 新增或修改 Desktop 日志、IPC 错误处理、main 侧业务逻辑与测试、跨平台（macOS／
-  Windows）行为，或任何 UI 文案的 i18n 落地前，必须先读
+- 新增或修改 Desktop 日志、IPC 错误处理、main 侧业务逻辑与测试、客户端本地读取／扫描、
+  缓存与轮询性能、跨平台（macOS／Windows）行为，或任何 UI 文案的 i18n 落地前，必须先读
   `docs/dev-rules/engineering-conventions.md`。
+- 新增一处每个功能都要来登记的列表、台账、注册表或版本号前，先读
+  `docs/dev-rules/engineering-conventions.md` §9：不规定「加在开头／末尾」，不让多个 PR
+  改同一行；一项一个文件、按键排序或从内容推导。
 - 新增或改写任一测试前，必须先读
   `docs/dev-rules/engineering-conventions.md` §3.2「新增测试的价值门槛」。测试必须通过
   真实生产入口验证可观察结果，并说明 Bug／规则依据、现有覆盖缺口、最小失败输入和 tier；
@@ -190,6 +199,10 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
 - 修改本地协议 package、插件分发来源边界或 device-link 协议／relay／隧道
   payload／IPC allowlist，或任何改动跨端 wire protocol 前，必须先读
   `docs/dev-rules/protocol-compatibility.md`。
+- 新增或修改 agent-net（Agent 网络）的传输核心、节点模型、能力清单、加密、中继选择、网络分享或拓扑界面前，
+  必须先读 `docs/product-rules/agent-net.md` 与 `docs/agent-net-plan.md`：两节点之间任何路径都必须
+  端到端加密、不允许明文降级，用户自建中继是一等能力，现有 device-link 能力不得退化；
+  `packages/agent-net-core` 是通用的可靠 UDP 协议层，不得写入 Cindy 专属设计。
 - 修改 Device Link 客户端、协议、relay、设备／媒体接口、能力协商或连接恢复行为前，必须先读
   `docs/dev-rules/protocol-compatibility.md` 的「自建中转同步维护」：凡影响自建中转的改动，
   必须在同一次改动中完成必要的同步适配与互通验证，不得留到后续。

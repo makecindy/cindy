@@ -1,6 +1,10 @@
 {
   "progress": {
-    "stop": "停止"
+    "stop": "停止",
+    "stopMine": "自分の依頼を停止",
+    "stopAll": "すべて停止",
+    "stopAllHint": "他の人の依頼も含みます",
+    "step": "ステップ {{step}}/{{total}}"
   },
   "title": "グループチャット",
   "memberSeparator": "、",
@@ -79,7 +83,8 @@
     "planDone_one": "{{count}} ステップすべて完了しました",
     "planDone_other": "{{count}} ステップすべて完了しました",
     "planDoneGeneric": "役割分担が完了しました",
-    "olderOnComputer": "それより前のメッセージはパソコンで確認できます"
+    "olderOnComputer": "それより前のメッセージはパソコンで確認できます",
+    "endTalk": "終了"
   },
   "quote": {
     "label": "{{name}} を引用：{{summary}}",
@@ -176,6 +181,8 @@
     "start": "開始する",
     "dismiss": "今回はやめる",
     "editHint": "担当や手順を変えたいときは、そのまま話しかけてください",
+    "autoContinue": "終わったら自動で次のステップへ",
+    "autoContinueSaveFailed": "ステップの引き継ぎを保存できませんでした。もう一度お試しください。",
     "autoNote": "ステップが終わると自動で次へ進みます。",
     "pauseNote": "1 ステップ終わるごとに止まり、「次へ進む」を押すまで待ちます。",
     "superseded": "更新済み",
@@ -219,12 +226,6 @@
     "stopping": "停止中…",
     "planning": "役割分担を考えています…",
     "step": "作業中…"
-  },
-  "work": {
-    "queued": "待機中 {{count}}",
-    "active": "進行中 {{count}}",
-    "expand": "チームメイトの状況を展開",
-    "collapse": "チームメイトの状況を折りたたむ"
   },
   "task": {
     "state": {
@@ -331,7 +332,9 @@
     "groupDissolved": "このグループは解散しました。閲覧権限のある履歴は引き続き確認できます。",
     "lastOwner": "退出する前にオーナーを譲渡するか、グループを解散してください。",
     "allBotsMentionDisabled": "グループ所有者がすべての仲間への @ を有効にしていません。",
-    "turnAlreadyStarted": "この仲間はすでに実行を開始しているため、スキップできません"
+    "turnAlreadyStarted": "この仲間はすでに実行を開始しているため、スキップできません",
+    "stopOwnershipUnknown": "一部の作業を停止できませんでした。依頼者を確認できません。",
+    "nothingToStop": "停止できる進行中の作業はありません。"
   },
   "followUp": {
     "next": "分担 · 次のステップ",
@@ -630,5 +633,6 @@
       "uncertain": "参加結果を確認できていません"
     },
     "externalFormatError": "元のメッセージから完全なリンクを開き直してください。"
-  }
+  },
+  "waitingForOwner": "所有者の確認待ち"
 }

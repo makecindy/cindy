@@ -26,6 +26,7 @@ import notifications from '../../../resources/system-skills/cindy-plugin-creator
 import filesAndLibrary from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-files-and-library.md?raw';
 import agentTasks from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-agent-tasks.md?raw';
 import interactivePages from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-interactive-pages.md?raw';
+import hostUi from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-host-ui.md?raw';
 import nodeWorker from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-node-worker.md?raw';
 import sessionContext from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-session-context.md?raw';
 import directoryPicker from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-directory-picker.md?raw';
@@ -82,6 +83,7 @@ export const FORGE_GUIDE = [
   taskView,
   recommendations,
   interactivePages,
+  hostUi,
   panels,
   mobilePages,
   sandbox,

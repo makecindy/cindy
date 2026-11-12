@@ -11,10 +11,13 @@ vi.mock('electron', () => ({ app: { getPath: () => root } }));
 vi.mock('../../logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn() }) }));
 beforeAll(async () => {
   const bundledRoot = path.join(root, 'bundled');
-  for (const name of ['cindy-skill-creator', 'learn', 'cindy-plugin-creator']) {
+  for (const name of ['cindy-skill-creator', 'learn', 'cindy-plugin-creator', 'cindy-theme-creator']) {
     fs.mkdirSync(path.join(bundledRoot, name), { recursive: true });
     fs.writeFileSync(path.join(bundledRoot, name, 'SKILL.md'), `# ${name}\n`);
   }
+  // The bundle version is counted from its record files; a bundle without one is refused.
+  fs.mkdirSync(path.join(bundledRoot, '_versions'));
+  fs.writeFileSync(path.join(bundledRoot, '_versions', 'fixture.md'), 'fixture bundle\n');
   const { prepareBuiltInSkills } = await import('../../maker-host/built-in-skills');
   const result = await prepareBuiltInSkills({
     userDataDir: root, appDataDir: root, homeDir: path.join(root, 'fixture-home'), bundledRoot,

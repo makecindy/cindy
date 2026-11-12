@@ -1190,6 +1190,96 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     setCustomProviders([]);
   });
 
+  // #10024: the local Chat handler bypasses transformRequest. Exercise the real
+  // routing/dispatch entry, not just the gateway transform. Unit tier, fake auth
+  // and transport only. Parallel results separated by an assistant message used
+  // to replace the second real result with an "unrecorded" Chat placeholder.
+  it.each([
+    { auth: 'oauth', model: 'k3' },
+    { auth: 'oauth', model: 'k3[1m]' },
+    { auth: 'api-key', model: 'k3' },
+    { auth: 'api-key', model: 'k3[1m]' },
+    { auth: 'api-key', model: 'k3[1m]', child: true },
+    { auth: 'api-key', model: 'k3', native: true },
+    { auth: 'api-key', model: 'k3', upstream: 'https://api.openai.com/v1' },
+    { auth: 'oauth', model: 'k3', upstream: 'https://api.kimi.com.evil.example/coding/v1' },
+    { auth: 'api-key', model: 'k3', upstream: 'https://api.kimi.com/coding/v10', child: true },
+  ])('orders Kimi local bridge history for $auth / $model / child=$child / upstream=$upstream / native=$native', async ({ auth, model, child, upstream, native }) => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider, providerPresetOAuth } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader, setOAuthTokenReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([buildUserProvider({
+      id: 'kimi-history', name: 'Kimi',
+      ...(auth === 'oauth' ? { auth: { method: 'oauth' as const, oauth: providerPresetOAuth('kimi')! } } : {}),
+      runtimes: { codex: { baseUrl: upstream ?? 'https://api.kimi.com/coding/v1', wireProtocol: 'openai-chat', models: [
+        { id: model, name: model, ...(native ? { api: 'openai-completions' as const } : {}) },
+      ] } },
+    })]);
+    setCustomProviderKeyReader(() => 'fixture-kimi-key');
+    setOAuthTokenReader(() => 'fixture-kimi-oauth');
+    host.registerComposed('session-kimi-history', 'thread-kimi-history', 'PRODUCT_PROMPT',
+      child ? { subagentRoute: { providerId: 'kimi-history', catalogModel: model } } : undefined);
+    setSessionProvider('session-kimi-history', child ? 'openai' : 'kimi-history');
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    const call = { type: 'function_call', name: 'read', call_id: 'exec:83', arguments: '{}' };
+    const assistant = { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Checking.' }] };
+    const output = { type: 'function_call_output', call_id: 'exec:83', output: 'result' };
+    const second = { ...call, call_id: 'exec:84' };
+    const secondOutput = { ...output, call_id: 'exec:84', output: 'second result' };
+    try {
+      for (const scenario of [
+        { url: '/responses', input: [call, second, output, assistant, secondOutput],
+          expected: upstream ? [call, second, output, assistant, secondOutput] : [call, second, output, secondOutput, assistant] },
+        { url: '/responses', input: [assistant], expected: [assistant] },
+        { url: '/responses/compact', input: [call, assistant, output], expected: [call, assistant, output] },
+      ]) {
+        mockState.handlePiProviderRequest.mockClear();
+        const body = { model: child ? 'gpt-5.6-sol' : model, input: scenario.input };
+        const snapshot = structuredClone(body);
+        const headers: Record<string, string> = child ? {
+          'thread-id': 'thread-kimi-history-child', 'x-openai-subagent': 'collab_spawn',
+          'x-codex-parent-thread-id': 'thread-kimi-history',
+        } : { 'thread-id': 'thread-kimi-history' };
+        const ctx = { reqId: 10024, method: 'POST', url: scenario.url, headers };
+        const decision = await host.createModelRoutingTransform()(body, ctx);
+        if (!decision?.localHandler) throw new Error('expected Kimi local handler');
+        await decision.localHandler({ rawBody: Buffer.from(JSON.stringify(body)), parsedBody: body, ctx, res: {} as never });
+        if (native) {
+          expect(mockState.handlePiProviderRequest).toHaveBeenCalledWith(expect.any(Function),
+            expect.objectContaining({ model, input: scenario.expected }), expect.anything());
+        } else {
+          const bridge = mockState.createResponsesChatHandler.mock.results.at(-1)?.value;
+          if (!upstream && scenario.expected.length === 5 && scenario.url === '/responses') {
+            const sent = bridge!.handle.mock.calls.at(-1)![0].parsedBody;
+            const chat = translateResponsesRequest(sent);
+            expect(chat.messages.filter(message => message.role === 'tool')).toEqual([
+              { role: 'tool', tool_call_id: 'exec:83', content: 'result' },
+              { role: 'tool', tool_call_id: 'exec:84', content: 'second result' },
+            ]);
+            expect(chat.messages.slice(-4)).toMatchObject([
+              { role: 'assistant', tool_calls: [{ id: 'exec:83' }, { id: 'exec:84' }] },
+              { role: 'tool', tool_call_id: 'exec:83' },
+              { role: 'tool', tool_call_id: 'exec:84' },
+              { role: 'assistant', content: 'Checking.' },
+            ]);
+          }
+          expect(bridge?.handle).toHaveBeenCalledWith(expect.objectContaining({
+            parsedBody: expect.objectContaining({ model, input: scenario.expected }),
+          }));
+        }
+        expect(body).toEqual(snapshot);
+      }
+    } finally {
+      host.unregister('session-kimi-history');
+      clearSessionProvider('session-kimi-history');
+      setCustomProviderKeyReader(() => null);
+      setOAuthTokenReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
   it('strips agent message ciphertext before a cross-provider Chat bridge request', async () => {
     const host = await freshCodexProxyHost();
     const { buildUserProvider } = await import('@cindy/model-providers');
@@ -5957,7 +6047,9 @@ describe('codex proxy host', () => {
     });
   });
 
-  it('sanitizes ModelInput for gateway grok without an xAI subscription session', async () => {
+  // #9469: exercise the host's full transform chain, including the custom-tool
+  // adapter before ModelInput cleanup; earlier history fixtures contained no images.
+  it('sanitizes ModelInput for gateway grok and preserves Codex tool images', async () => {
     const host = await freshCodexProxyHost();
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
@@ -5971,6 +6063,7 @@ describe('codex proxy host', () => {
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
     let current: unknown = {
       model: 'x-ai/grok-4.5',
+      tools: [{ type: 'custom', name: 'exec', format: { type: 'text' } }],
       input: [
         { type: 'message', role: 'user', content: 'go' },
         {
@@ -5984,6 +6077,11 @@ describe('codex proxy host', () => {
           content: null,
           encrypted_content: 'BLOB',
         },
+        { type: 'custom_tool_call', name: 'exec', call_id: 'read_image', input: 'view_image()' },
+        { type: 'custom_tool_call_output', call_id: 'read_image', output: [
+          { type: 'input_text', text: 'Script completed' },
+          { type: 'input_image', image_url: 'data:image/png;base64,AA==' },
+        ] },
       ],
     };
     const ctx = {
@@ -6005,7 +6103,14 @@ describe('codex proxy host', () => {
         content: [{ type: 'output_text', text: '[collab /root]\ndone' }],
       },
       { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'BLOB' },
+      { type: 'function_call_output', call_id: 'read_image', output: [
+        { type: 'input_text', text: 'Script completed' },
+        { type: 'input_image', image_url: 'data:image/png;base64,AA==' },
+      ] },
     ]));
+    expect(input.filter(item => item.type === 'function_call')).toEqual([
+      expect.objectContaining({ call_id: 'read_image' }),
+    ]);
     expect(input.some((item) => item.type === 'agent_message')).toBe(false);
     expect(JSON.stringify(current)).not.toContain('"content":null');
     clearSessionProvider('session-gateway-grok');
@@ -6744,6 +6849,271 @@ describe('codex proxy host', () => {
     }
 
     expect(current).toEqual(original);
+  });
+
+  it.each([
+    ['x-ai-grok/grok-4.7', 'application/json'],
+    ['x-ai-grok/grok-4.7', 'text/event-stream'],
+    ['deepseek/deepseek-v4.1-flash', 'application/json'],
+    ['deepseek/deepseek-v4.1-flash', 'text/event-stream'],
+  ])('round-trips XD Gateway namespace tools for %s (%s)', async (model, contentType) => {
+    const host = await freshCodexProxyHost();
+    const { setXdGatewayModels } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setXdGatewayModels([{ id: model, agents: ['codex'] }]);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-grok-47', 'thread-grok-47', 'PRODUCT_PROMPT');
+    setSessionProvider('session-grok-47', 'xd');
+    try {
+      const config = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0];
+      let current: unknown = {
+        model,
+        tools: [{ type: 'namespace', name: 'files', tools: [{
+          type: 'function', name: 'read', parameters: { type: 'object', properties: {} },
+        }] }],
+        tool_choice: { type: 'function', namespace: 'files', name: 'read' },
+        input: [{ role: 'user', content: 'read a file' }],
+      };
+      const ctx = {
+        reqId: 9401,
+        method: 'POST',
+        url: '/responses',
+        upstreamBase: XD_GATEWAY_BASE_URL + '/v1',
+        headers: { 'thread-id': 'thread-grok-47' },
+      };
+      for (const transform of config.transformRequest) current = transform(current, ctx) ?? current;
+      expect(current).toMatchObject({
+        tools: [expect.objectContaining({ type: 'function', name: 'files__read' })],
+        tool_choice: { type: 'function', name: 'files__read' },
+      });
+
+      const responseTransform = config.transformResponse({
+        reqId: 9401,
+        responseHeaders: { 'content-type': contentType },
+      });
+      expect(responseTransform).not.toBeNull();
+      const chunks: Buffer[] = [];
+      responseTransform.on('data', (chunk: Buffer) => chunks.push(chunk));
+      const completed = new Promise<void>((resolve, reject) => {
+        responseTransform.once('end', resolve);
+        responseTransform.once('error', reject);
+      });
+      const upstreamResponse = { output: [{
+        type: 'function_call', name: 'files__read', call_id: 'call_read', arguments: '{}',
+      }] };
+      const wire = contentType === 'text/event-stream'
+        ? 'data: ' + JSON.stringify({ type: 'response.completed', response: upstreamResponse }) + '\n\n'
+        : JSON.stringify(upstreamResponse);
+      responseTransform.end(wire);
+      await completed;
+      const transformed = Buffer.concat(chunks).toString('utf8');
+      const parsed = JSON.parse(contentType === 'text/event-stream' ? transformed.trim().slice(6) : transformed);
+      const output = contentType === 'text/event-stream' ? parsed.response.output : parsed.output;
+      expect(output[0]).toMatchObject({
+        type: 'function_call', namespace: 'files', name: 'read', call_id: 'call_read',
+      });
+    } finally {
+      host.unregister('session-grok-47');
+      clearSessionProvider('session-grok-47');
+      setXdGatewayModels([]);
+    }
+  });
+
+  it('normalizes interleaved DeepSeek V4.1 Responses history but preserves compact', async () => {
+    const host = await freshCodexProxyHost();
+    const { setXdGatewayModels } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const model = 'deepseek/deepseek-v4.1-flash';
+    setXdGatewayModels([{ id: model, agents: ['codex'] }]);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-deepseek-41', 'thread-deepseek-41', 'PRODUCT_PROMPT');
+    setSessionProvider('session-deepseek-41', 'xd');
+    try {
+      const config = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0];
+      const calls = [
+        { type: 'function_call', name: 'first', call_id: 'call_1', arguments: '{}' },
+        { type: 'function_call', name: 'second', call_id: 'call_2', arguments: '{}' },
+      ];
+      const outputs = [
+        { type: 'function_call_output', call_id: 'call_1', output: 'first result' },
+        { type: 'function_call_output', call_id: 'call_2', output: 'second result' },
+      ];
+      const developer = { type: 'message', role: 'developer', content: 'context' };
+      const input = [...calls, outputs[0], developer, outputs[1]];
+      const expectedInput = [...calls, ...outputs, developer];
+      for (const url of ['/responses', '/responses/compact']) {
+        let current: unknown = { model, input };
+        const ctx = {
+          reqId: url === '/responses' ? 9402 : 9403,
+          method: 'POST',
+          url,
+          upstreamBase: XD_GATEWAY_BASE_URL + '/v1',
+          headers: { 'thread-id': 'thread-deepseek-41' },
+        };
+        for (const transform of config.transformRequest) current = transform(current, ctx) ?? current;
+        expect(current).toMatchObject({ input: url === '/responses' ? expectedInput : input });
+      }
+    } finally {
+      host.unregister('session-deepseek-41');
+      clearSessionProvider('session-deepseek-41');
+      setXdGatewayModels([]);
+    }
+  });
+
+  it.each(['x-ai-grok/grok-4.7', 'deepseek/deepseek-v4.1-flash'])(
+    'keeps namespace tool choices narrowed for %s', async (model) => {
+      const host = await freshCodexProxyHost();
+      const { setXdGatewayModels } = await import('../active-catalog.js');
+      const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+      setXdGatewayModels([{ id: model, agents: ['codex'] }]);
+      mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+        url: 'http://127.0.0.1:43210',
+        dispose: vi.fn(async () => undefined),
+      });
+      await host.ensureCodexProxyReady();
+      host.registerComposed('session-choice', 'thread-choice', 'PRODUCT_PROMPT');
+      setSessionProvider('session-choice', 'xd');
+      try {
+        const config = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0];
+        let current: unknown = {
+          model,
+          tools: [{ type: 'namespace', name: 'files', tools: [
+            { type: 'function', name: 'read', parameters: { type: 'object' } },
+            { type: 'function', name: 'write', parameters: { type: 'object' } },
+          ] }],
+          tool_choice: {
+            type: 'allowed_tools', mode: 'required',
+            tools: [{ type: 'function', namespace: 'files', name: 'read' }],
+          },
+        };
+        const ctx = {
+          reqId: 9404, method: 'POST', url: '/responses',
+          upstreamBase: XD_GATEWAY_BASE_URL + '/v1',
+          headers: { 'thread-id': 'thread-choice' },
+        };
+        for (const transform of config.transformRequest) current = transform(current, ctx) ?? current;
+        expect(current).toMatchObject({
+          tool_choice: { type: 'allowed_tools', mode: 'required', tools: [{ type: 'function', name: 'files__read' }] },
+        });
+
+        const responseTransform = config.transformResponse({
+          reqId: 9404, responseHeaders: { 'content-type': 'application/json' },
+        });
+        const chunks: Buffer[] = [];
+        responseTransform.on('data', (chunk: Buffer) => chunks.push(chunk));
+        const completed = new Promise<void>((resolve, reject) => {
+          responseTransform.once('end', resolve);
+          responseTransform.once('error', reject);
+        });
+        responseTransform.end(JSON.stringify({ output: [
+          { type: 'function_call', name: 'files__read', call_id: 'read', arguments: '{}' },
+          { type: 'function_call', name: 'files__write', call_id: 'write', arguments: '{}' },
+        ] }));
+        await completed;
+        const output = JSON.parse(Buffer.concat(chunks).toString('utf8')).output;
+        expect(output[0]).toMatchObject({ namespace: 'files', name: 'read' });
+        expect(output[1]).toMatchObject({ name: 'files__write' });
+        expect(output[1]).not.toHaveProperty('namespace');
+      } finally {
+        host.unregister('session-choice');
+        clearSessionProvider('session-choice');
+        setXdGatewayModels([]);
+      }
+    },
+  );
+
+  it.each(['x-ai-grok/grok-4.7', 'deepseek/deepseek-v4.1-flash'])(
+    'does not apply XD namespace lowering to another provider or endpoint for %s', async (model) => {
+      const host = await freshCodexProxyHost();
+      const { buildUserProvider } = await import('@cindy/model-providers');
+      const { setCustomProviders, setXdGatewayModels } = await import('../active-catalog.js');
+      const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+      setXdGatewayModels([{ id: model, agents: ['codex'] }]);
+      setCustomProviders([buildUserProvider({
+        id: 'same-endpoint-provider', name: 'Other provider',
+        runtimes: { codex: {
+          baseUrl: XD_GATEWAY_BASE_URL + '/v1', wireProtocol: 'openai-responses',
+          models: [{ id: model, name: 'Same model' }],
+        } },
+      })]);
+      mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+        url: 'http://127.0.0.1:43210',
+        dispose: vi.fn(async () => undefined),
+      });
+      await host.ensureCodexProxyReady();
+      host.registerComposed('session-scope', 'thread-scope', 'PRODUCT_PROMPT');
+      try {
+        const config = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0];
+        const tools = [{ type: 'namespace', name: 'files', tools: [
+          { type: 'function', name: 'read', parameters: { type: 'object' } },
+        ] }];
+        const cases = [
+          { provider: 'same-endpoint-provider', upstream: XD_GATEWAY_BASE_URL + '/v1' },
+          { provider: 'same-endpoint-provider', upstream: undefined },
+          { provider: 'xd', upstream: 'https://other-gateway.invalid/v1' },
+          { provider: 'xd', upstream: XD_GATEWAY_BASE_URL + '/v1/other' },
+          { provider: 'xd', upstream: XD_GATEWAY_BASE_URL + '/v1?route=other' },
+        ];
+        for (const [index, testCase] of cases.entries()) {
+          setSessionProvider('session-scope', testCase.provider);
+          let current: unknown = { model, tools };
+          const ctx = {
+            reqId: 9410 + index, method: 'POST', url: '/responses',
+            upstreamBase: testCase.upstream,
+            headers: { 'thread-id': 'thread-scope' },
+          };
+          for (const transform of config.transformRequest) current = transform(current, ctx) ?? current;
+          expect(current).toMatchObject({ model, tools });
+        }
+      } finally {
+        host.unregister('session-scope');
+        clearSessionProvider('session-scope');
+        setCustomProviders([]);
+        setXdGatewayModels([]);
+      }
+    },
+  );
+
+  it.each([
+    { auth: 'env-key', provider: 'openai' },
+    { auth: 'provider-oauth', provider: 'xai' },
+  ] as const)('lowers Grok tools when $provider falls back to XD under $auth', async ({ auth, provider }) => {
+    const host = await freshCodexProxyHost();
+    const { setXdGatewayModels } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const model = 'x-ai-grok/grok-4.7';
+    setXdGatewayModels([{ id: model, agents: ['codex'] }]);
+    host.setCodexProxyAuthInjection(auth);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-fallback', 'thread-fallback', 'PRODUCT_PROMPT');
+    setSessionProvider('session-fallback', provider);
+    try {
+      const config = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0];
+      let current: unknown = { model, tools: [{ type: 'namespace', name: 'files', tools: [
+        { type: 'function', name: 'read', parameters: { type: 'object' } },
+      ] }] };
+      const ctx = {
+        reqId: 9420, method: 'POST', url: '/responses', upstreamBase: XD_GATEWAY_BASE_URL + '/v1',
+        headers: { 'thread-id': 'thread-fallback' },
+      };
+      for (const transform of config.transformRequest) current = transform(current, ctx) ?? current;
+      expect(current).toMatchObject({ tools: [expect.objectContaining({ type: 'function', name: 'files__read' })] });
+    } finally {
+      host.unregister('session-fallback');
+      clearSessionProvider('session-fallback');
+      setXdGatewayModels([]);
+    }
   });
 
   it('drops Codex namespace tools for XD Gateway Grok models', async () => {

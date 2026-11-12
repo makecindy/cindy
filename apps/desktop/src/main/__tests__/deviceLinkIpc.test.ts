@@ -42,6 +42,7 @@ vi.mock('../serverApiClient.desktop', () => {
 });
 vi.mock('./index', () => ({
   getDeviceLinkStatus: () => 'online',
+  getDeviceLinkPeerLinks: () => ({ links: [], relayRttMs: null }),
   hasOfflineDirectPath: () => false,
   isDeviceDataPathAvailable: dataPath.available,
   getDirectDataDeviceIds: () => [],
@@ -78,6 +79,7 @@ vi.mock('./index', () => ({
 }));
 vi.mock('../device-link/index', () => ({
   getDeviceLinkStatus: () => 'online',
+  getDeviceLinkPeerLinks: () => ({ links: [], relayRttMs: null }),
   hasOfflineDirectPath: () => false,
   isDeviceDataPathAvailable: dataPath.available,
   clearDeviceResponsiveness: vi.fn(),
@@ -88,6 +90,7 @@ vi.mock('../device-link/index', () => ({
   setKeepAwakeEnabled: vi.fn(),
   providerShareHostInvoke: vi.fn(),
   revokeController: vi.fn(),
+  setControllerModelUse: vi.fn(),
   restoreController: vi.fn(),
   beginControllerDisplayNameDirectoryRefresh: () => 1,
   isLatestControllerDisplayNameDirectoryRefresh: () => true,
@@ -189,6 +192,7 @@ function makeDeps(overrides?: Partial<DeviceLinkIpcDeps>): DeviceLinkIpcDeps {
       disabledControlDeviceIds: [],
       unresponsiveDeviceIds: [],
     }),
+    getPeerLinks: vi.fn(() => ({ links: [], relayRttMs: null })),
     setEnabled: vi.fn(),
     setKeepAwake: vi.fn(),
     apiFetch: vi.fn().mockResolvedValue({ devices: [] }),
@@ -200,6 +204,7 @@ function makeDeps(overrides?: Partial<DeviceLinkIpcDeps>): DeviceLinkIpcDeps {
     disconnectAll: vi.fn(),
     revoke: vi.fn(),
     restore: vi.fn(),
+    setModelUse: vi.fn(),
     setDeviceControlEnabled: vi.fn(async () => []),
     clearDeviceResponsiveness: vi.fn(),
     broadcast: vi.fn(),
@@ -296,6 +301,7 @@ describe('device-link IPC handlers', () => {
       standby: false,
       controlledBy: [],
       revokedControllers: [],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       unresponsiveDeviceIds: [],
     });
@@ -1570,6 +1576,31 @@ describe('device-link controller handlers', () => {
     expect(refcountTesting.refCount('dev-2', 'sessions')).toBe(0);
   });
 
+  // #8979 r4523117284 / unit: renderer ACK reuse depends on Main retaining the
+  // newer registration. Existing single-request failures miss this ordering.
+  it.each(['throw', 'result'])('旧 subscribe 迟到失败不撤销恢复后的新订阅 (%s)', async failure => {
+    let failOld!: () => void;
+    const old = new Promise<Awaited<ReturnType<DeviceLinkIpcDeps['subscribe']>>>((resolve, reject) => {
+      failOld = () => failure === 'throw'
+        ? reject(new DeviceLinkError('INVOKE_TIMEOUT', 'old request'))
+        : resolve({ ok: false, error: { code: 'INVOKE_TIMEOUT', message: 'old request' } });
+    });
+    const deps = makeDeps({ subscribe: vi.fn().mockReturnValueOnce(old)
+      .mockResolvedValue({ ok: true, result: { ok: true } }) });
+    const oldResult = handleSubscribe(deps, 'dev-2', ['session:s1'], 1).catch(error => error);
+    handleCloseLink(deps, 'dev-2');
+    await handleSubscribe(deps, 'dev-2', ['session:s1'], 1);
+    await handleSubscribe(deps, 'dev-2', ['session:s1'], 2);
+    failOld();
+    expect(await oldResult).toBeInstanceOf(Error);
+    expect(refcountTesting.refCount('dev-2', 'session:s1')).toBe(2);
+    expect(refcountTesting.snapshotSubscriptions('dev-2')).toEqual([{ deviceId: 'dev-2', topics: ['session:s1'] }]);
+    await handleUnsubscribe(deps, 'dev-2', ['session:s1'], 2);
+    expect(deps.unsubscribe).not.toHaveBeenCalled();
+    await handleUnsubscribe(deps, 'dev-2', ['session:s1'], 1);
+    expect(deps.unsubscribe).toHaveBeenCalledExactlyOnceWith('dev-2', ['session:s1']);
+  });
+
   it('订阅失败不留残留 ref:失败窗口不计数,后续成功窗口 unsubscribe 仍正常转发', async () => {
     // 窗口 1 订阅失败(ACCESS_REVOKED):handler 抛错,且**不应**记引用计数。
     const deps = makeDeps({
@@ -1645,34 +1676,46 @@ describe('device-link revoke / restore handlers', () => {
 describe('device-link settings normalize', () => {
   it('非法输入回落默认值,布尔严格校验', () => {
     expect(settingsTesting.normalize(null)).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: {},
     });
     expect(settingsTesting.normalize({})).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: {},
     });
     expect(settingsTesting.normalize({ remoteControlEnabled: 'true' })).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: {},
     });
     expect(settingsTesting.normalize({ remoteControlEnabled: true })).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteDesktopEnabled: false,
       remoteControlEnabled: true,
       keepAwake: false,
       revokedControllers: [],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: {},
     });
@@ -1684,10 +1727,13 @@ describe('device-link settings normalize', () => {
         disabledControlDeviceIds: [' dev-1 ', 'dev-1', '', 42, 'dev-2'],
       }),
     ).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: ['dev-1', 'dev-2'],
       lastKnownDeviceNames: {},
     });
@@ -1704,10 +1750,13 @@ describe('device-link settings normalize', () => {
         },
       }),
     ).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: { 'dev-1': 'MacBook Pro' },
     });

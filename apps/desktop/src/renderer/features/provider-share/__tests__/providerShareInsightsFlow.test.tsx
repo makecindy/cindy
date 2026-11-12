@@ -87,6 +87,8 @@ vi.mock('../../../../main/device-link/settings-store.desktop.js', async (origina
 vi.mock('../../../../main/device-link/providerShareHost.js', () => ({
   startProviderShareHost: vi.fn(),
   stopProviderShareHost: vi.fn(),
+  getProviderShareHostLoadedSnapshot: () => null,
+  onProviderShareHostChanged: () => () => {},
   providerShareAccessRevision: () => 1,
   ownedProviderShareGuestAccess: () =>
     state.active ? { shareId: 'flow', memberId: 'guest', providerId: 'anthropic' } : null,
@@ -359,7 +361,7 @@ it('round-trips permissions, private projection and live revocation through the 
     release = resolve;
   });
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(15_000);
   });
   await act(async () => {
     vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');

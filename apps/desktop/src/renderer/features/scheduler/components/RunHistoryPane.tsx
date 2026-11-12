@@ -31,7 +31,8 @@ import { clearSessionAttentionMany } from '@/lib/sessionAttentionStore';
 import { useRuns } from '../hooks/useRuns';
 import { useSessionReferences } from '../hooks/useSessionReferences';
 import { cronToConfig, summarizeConfig } from '../lib/cronCodexPreset';
-import { basenameOf, describeDestination, humanizeAgentKind } from '../lib/formatters';
+import { describeDestination, humanizeAgentKind } from '../lib/formatters';
+import { useProjectLabel } from '../hooks/useProjectLabel';
 import { groupRunsForHistory } from '../lib/runHistoryGrouping';
 
 import { RunHistoryCard } from './RunHistoryCard';
@@ -62,6 +63,7 @@ export function RunHistoryPane({
   runNowBusy = false,
 }: Props) {
   const { t } = useTranslation();
+  const projectLabel = useProjectLabel();
   // 展示策略（避免切任务闪烁）：
   // - hasLoaded=false（应用启动后第一次都没拉过）→ 整块 run 区域不挂载
   // - hasLoaded=true 但 runsScheduleId !== s.id → 切任务过渡期，runs 还是上一个
@@ -258,7 +260,7 @@ export function RunHistoryPane({
                 )}
               >
                 {dest.prefix}
-                {basenameOf(dest.workingDir)}
+                {dest.workingDir ? projectLabel(dest.workingDir) : null}
               </button>
             ) : (
               dest.prefix

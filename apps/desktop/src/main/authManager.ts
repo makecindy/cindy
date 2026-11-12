@@ -340,6 +340,7 @@ const stableOwnerPostCommitCoordinator = new StableOwnerPostCommitCoordinator({
 
 /** Queue optional owner-scoped provisioning without holding authentication or the app shell. */
 export function requestStableOwnerPostCommit(reason: string): void {
+  if (authRefreshOverride !== null) return; // Host is the only durable owner writer.
   if (isPassiveSharedUserDataInstance()) return;
   void stableOwnerPostCommitCoordinator.ensure(reason);
 }
@@ -3961,6 +3962,20 @@ async function expireRuntimeAuth(
  */
 export function invalidateSession(reason: string): Promise<void> {
   if (sessionInvalidationPromise) return sessionInvalidationPromise;
+  if (authRefreshOverride !== null) {
+    // A UI-only client holds no resource credential. Its incidental 401 cannot
+    // delete the Host's credentials, commit signed-out to the shared profile or
+    // tear down the Host's owner. Re-read the authority; offline keeps its last
+    // projection and the connection banner rather than fabricating a logout.
+    const run = refresh().then(() => undefined, error => {
+      log.warn('Host auth recheck unavailable; keeping delegated owner state', error);
+    });
+    sessionInvalidationPromise = run;
+    void run.finally(() => {
+      if (sessionInvalidationPromise === run) sessionInvalidationPromise = null;
+    });
+    return run;
+  }
 
   const rejectedAccountKey =
     currentUser && !isPassiveSharedUserDataInstance()
@@ -5942,7 +5957,16 @@ async function runLoginAction(
     }
     const code = error instanceof AuthApiError ? error.code : 'AUTH_REQUEST_FAILED';
     const status = error instanceof AuthApiError ? error.statusCode : 0;
-    log.warn(`login action failed action=${action.type} status=${status} code=${code}`);
+    // #9356: keep RATE_LIMITED as the category, and record whether the server
+    // named its own code, gave a usable wait, and a correlation id. Missing
+    // fields stay explicit so a later log can be matched to the auth request
+    // without guessing a window or copying the response body.
+    const serverCode = error instanceof AuthApiError ? (error.serverCode ?? 'none') : 'none';
+    const retryKnown = error instanceof AuthApiError && error.retryAt !== undefined ? 'yes' : 'no';
+    const requestId = error instanceof AuthApiError ? (error.requestId ?? 'none') : 'none';
+    log.warn(
+      `login action failed action=${action.type} status=${status} code=${code} serverCode=${serverCode} retryKnown=${retryKnown} requestId=${requestId}`,
+    );
     const flowCannotRetry = [
       'INVALID_LOGIN_TICKET',
       'INVALID_BIND_TICKET',

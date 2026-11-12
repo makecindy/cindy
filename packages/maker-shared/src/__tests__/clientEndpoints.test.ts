@@ -14,6 +14,7 @@ const VALID_MANIFEST = {
   authDesktopCallbackUrl: 'https://auth.example.com/api/auth/desktop/callback',
   chatApiBaseUrl: 'https://chat.example.com',
   deviceLinkApiBaseUrl: 'https://device-link.example.com',
+  agentNetApiBaseUrl: 'https://agent-net.example.com',
   oauthBrokerApiBaseUrl: 'https://oauth.example.com',
   ossApiBaseUrl: 'https://oss.example.com',
   heartbeatUrl: 'https://heartbeat.example.com',

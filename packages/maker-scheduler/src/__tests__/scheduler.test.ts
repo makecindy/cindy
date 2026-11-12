@@ -590,6 +590,7 @@ interface Harness {
 function makeHarness(opts?: {
   runnerImpl?: (s: Schedule, ctx: FireContext) => Promise<FireResult>;
   isManagedWorkspaceDir?: (dir: string) => boolean;
+  validateModelSelection?: (schedule: Schedule, previous?: Schedule) => Promise<void>;
   validateTargetSession?: (
     targetSessionId: string,
     operation: 'create' | 'update' | 'fire',
@@ -628,6 +629,7 @@ function makeHarness(opts?: {
     tickIntervalMs: 60_000_000, // effectively disabled; tests call tick() manually
     isManagedWorkspaceDir: opts?.isManagedWorkspaceDir,
     validateTargetSession: opts?.validateTargetSession,
+    validateModelSelection: opts?.validateModelSelection,
     passive: opts?.passive,
     maxConcurrentRuns: opts?.maxConcurrentRuns,
     runStallMs: opts?.runStallMs,
@@ -822,6 +824,27 @@ describe('Scheduler', () => {
     // 空白串 workingDir 等同未传 → dialogue
     const blankDir = await h.scheduler.create({ ...baseInput, workingDir: '  ' });
     expect(blankDir.workspaceKind).toBe('dialogue');
+  });
+
+  // Unit: model admission must fail before persistence, not at the first timer fire.
+  // Previous target validation covered Harness changes, not model/location tuples.
+  it('keeps storage unchanged when model admission rejects create or update', async () => {
+    const validateModelSelection = vi.fn(async (candidate: Schedule, previous?: Schedule) => {
+      if (candidate.model === 'unavailable') throw new Error('invalid model location');
+      if (previous) expect(previous.model).toBe('available');
+    });
+    const h = makeHarness({ validateModelSelection });
+    await expect(h.scheduler.create({ ...baseInput, model: 'unavailable' }))
+      .rejects.toThrow('invalid model location');
+    expect(h.storage.schedules.size).toBe(0);
+    const saved = await h.scheduler.create({ ...baseInput, model: 'available' });
+    await expect(h.scheduler.update(saved.id, { model: 'unavailable' }))
+      .rejects.toThrow('invalid model location');
+    expect(await h.storage.get(saved.id)).toEqual(saved);
+    await h.scheduler.update(saved.id, { name: 'renamed' });
+    expect(validateModelSelection).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: 'renamed', model: 'available' }), saved);
+    expect(h.fireCalls).toHaveLength(0);
   });
 
   it('passes the complete candidate Harness to host validation before saving and firing', async () => {
@@ -1531,6 +1554,38 @@ describe('Scheduler', () => {
     expect(manual.webhookTrigger).toBeDefined();
     const sch = await h.scheduler.create({ ...baseInput, webhookTrigger: {} });
     await expect(h.scheduler.update(sch.id, { recurring: false })).rejects.toThrow('recurring');
+  });
+
+  // The managed source is configured through the same Scheduler entry as UI, MCP and remote edits.
+  it('preserves GitHub App subscriptions and invalidates queued scope when repositories change', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, manual: true,
+      webhookTrigger: { source: { preset: 'github-app', repositories: ['Example/Project', 'example/project'] }, events: ['issue_comment.created'] } });
+    expect(sch.webhookTrigger?.source).toEqual({ preset: 'github-app', repositories: ['example/project'] });
+    const retained = await h.scheduler.update(sch.id, { webhookTrigger: { events: ['issue_comment.created'] } });
+    expect(retained.webhookTrigger?.endpointId).toBe(sch.webhookTrigger?.endpointId);
+    const changed = await h.scheduler.update(sch.id, { webhookTrigger: {
+      source: { preset: 'github-app', repositories: ['other/project'] }, events: ['issue_comment.created'] } });
+    expect(changed.webhookTrigger?.endpointId).not.toBe(sch.webhookTrigger?.endpointId);
+    await expect(h.scheduler.update(sch.id, { webhookTrigger: { events: ['invoice.paid'] } })).rejects.toThrow('unsupported GitHub App');
+    await expect(h.scheduler.update(sch.id, { webhookTrigger: { source: { preset: 'github-app', repositories: ['https://github.com/owner/repo'] } } })).rejects.toThrow('repository');
+  });
+
+  // PR #9378: UI deselect/reselect changes array order, not the subscription.
+  // Real Scheduler updates, unit tier: preserve the route for equivalent sets.
+  it('keeps GitHub App queue identity for equivalent repository and event sets', async () => {
+    const source = { preset: 'github-app' as const, repositories: ['example/project', 'other/project'] };
+    const events = ['issues.opened', 'release.published'];
+    const sch = await h.scheduler.create({ ...baseInput, manual: true, webhookTrigger: { source, events } });
+    for (const trigger of [
+      { source, events: [...events].reverse() },
+      { source: { ...source, repositories: [...source.repositories].reverse() }, events },
+      { source: { ...source, repositories: ['Other/Project', 'Example/Project', 'example/project'] }, events: [...events, events[0]!] },
+    ]) {
+      const updated = await h.scheduler.update(sch.id, { webhookTrigger: trigger });
+      expect(updated.webhookTrigger?.endpointId).toBe(sch.webhookTrigger?.endpointId);
+    }
+    const changed = await h.scheduler.update(sch.id, { webhookTrigger: { source, events: ['issues.opened'] } });
+    expect(changed.webhookTrigger?.endpointId).not.toBe(sch.webhookTrigger?.endpointId);
   });
 
   it('rejects malformed webhook event filters', async () => {

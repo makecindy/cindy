@@ -355,9 +355,10 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
       beforeDispatch: async () => isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot),
     });
     if (!isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return;
-    const beforeSessionAgentDispatch = async () => {
+    // `route.model` 是 agent 实际选中的模型(Codex 默认模型在 thread/start 后才知道)。
+    const beforeSessionAgentDispatch = async (route?: { model?: string }) => {
       if (!isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot)) return false;
-      if (await isAgentOneShotRouteDisabled(agentKind)) return false;
+      if (await isAgentOneShotRouteDisabled(agentKind, route?.model)) return false;
       return isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot);
     };
     // 停用轴:agent one-shot 兜底是新的付费调用,该 agent 的默认路由被停用时不派发

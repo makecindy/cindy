@@ -1,0 +1,60 @@
+{
+ "uplink": "agent-net",
+ "udp": "udp",
+ "gatherMs": 75,
+ "connectMs": 22,
+ "timeline": [
+  {
+   "atMs": 35,
+   "path": "relay"
+  }
+ ],
+ "echoFirst150": {
+  "lost": 0,
+  "relay": {
+   "n": 150,
+   "p50": 5.24,
+   "p95": 5.74,
+   "max": 13.1
+  }
+ },
+ "echoAfterBulk": {
+  "lost": 0,
+  "relay": {
+   "n": 100,
+   "p50": 4.92,
+   "p95": 5.41,
+   "max": 8.51
+  }
+ },
+ "upload": {
+  "path": "relay",
+  "mbitPerSecond": 154.2,
+  "intact": true
+ },
+ "download": {
+  "path": "relay",
+  "mbitPerSecond": 5.4,
+  "intact": true
+ },
+ "relayDatagramsSent": 18393,
+ "directAddressKind": "relay",
+ "stats": {
+  "srttUs": 4783,
+  "minRttUs": 4584,
+  "bandwidth": 24828375,
+  "packetsSent": 18504,
+  "packetsReceived": 13145,
+  "wireBytesSent": 17554680,
+  "wireBytesReceived": 17516870,
+  "retransmittedSegments": 2,
+  "handshakeRttUs": 16306,
+  "unauthenticatedPackets": 0,
+  "replayedPackets": 0,
+  "pathChallenges": 0,
+  "migrations": 0,
+  "pathProbes": 56,
+  "fallbackProbes": 0,
+  "alternatesKept": 0
+ }
+}

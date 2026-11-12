@@ -116,6 +116,8 @@ export class ProjectAutomationLoader {
       storage: DrizzleScheduleStorage;
       getDb: () => SchedulerDrizzleDb;
       logger: Logger;
+      /** A project of one of this account's teammates: Cindy's own folder, synced without asking. */
+      isOwnTeammateProject?: (workingDir: string) => Promise<boolean>;
     },
   ) {}
 
@@ -199,7 +201,10 @@ export class ProjectAutomationLoader {
       const current = byConfigId.get(config.id);
       return !current || schedulesDiffer(current, config, workingDir);
     });
-    if (changed && approvedHash !== read.configHash) {
+    // A teammate's project is Cindy's own folder, not something brought in from elsewhere: sync it
+    // directly. Only a real teammate project of this account: a folder that merely looks like one asks.
+    if (changed && approvedHash !== read.configHash
+      && !(await this.deps.isOwnTeammateProject?.(workingDir).catch(() => false))) {
       const pendingImport = {
         workingDir, configHash: read.configHash, schedules: read.schedules,
         removedNames: removed.map((s) => s.name),
@@ -260,6 +265,8 @@ export class ProjectAutomationLoader {
   async upsertSchedule(
     workingDir: string,
     config: ProjectScheduleConfig,
+    /** Host writers (a teammate's own automations) must not replace a file they cannot read whole. */
+    options: { keepUnreadable?: boolean } = {},
   ): Promise<ReconcileResult> {
     if (!isProjectScheduleConfig(config)) {
       throwInvalidParams('invalid project schedule config');
@@ -268,6 +275,11 @@ export class ProjectAutomationLoader {
       throwInvalidParams('project schedule id must be kebab-case ascii');
     }
     const read = await this.readProjectAutomationsFromDisk(workingDir);
+    if (options.keepUnreadable && read.kind !== 'loaded' && read.kind !== 'missing') {
+      const err = new Error(`project automations unreadable (${read.kind}); left as it is`);
+      (err as { code?: string }).code = 'PRECONDITION_FAILED';
+      throw err;
+    }
     const schedules = read.kind === 'loaded' ? read.schedules : [];
     const next: ProjectAutomationsFile = {
       version: 1,
@@ -276,14 +288,21 @@ export class ProjectAutomationLoader {
         config,
       ],
     };
-    await this.writeProjectAutomationsFile(workingDir, next);
+    const writtenContent = await this.writeProjectAutomationsFile(workingDir, next);
     // The save action approves this one definition, not unrelated repository data.
     const current = (await this.deps.storage.list()).find((s) => s.source === 'project'
       && sameWorkingDir(s.workingDir, workingDir) && s.projectConfigId === config.id);
     const inserted = current ? 0 : 1;
     const updated = current && schedulesDiffer(current, config, workingDir) ? 1 : 0;
-    if (!current) await this.deps.scheduler.create(scheduleConfigToCreateInput(config, workingDir));
-    else if (updated) await this.deps.scheduler.update(current.id, scheduleConfigToUpdateInput(config, workingDir));
+    try {
+      if (!current) await this.deps.scheduler.create(scheduleConfigToCreateInput(config, workingDir));
+      else if (updated) await this.deps.scheduler.update(current.id, scheduleConfigToUpdateInput(config, workingDir));
+    } catch (err) {
+      // A rejected save (e.g. a model its computer cannot run) must not leave the rejected
+      // choice in the project file while the saved automation keeps its old configuration.
+      await this.restoreProjectAutomationsFile(workingDir, read, writtenContent);
+      throw err;
+    }
     this.emit({ type: 'reconciled', workingDir, inserted, updated, deleted: 0,
       isFirstTime: !current, hashChanged: true });
     return { workingDir, inserted, updated, deleted: 0, skipped: null };
@@ -391,10 +410,48 @@ export class ProjectAutomationLoader {
     }
   }
 
+  /** Best effort: restore only our own write, never a later edit seen after validation settles. */
+  private async restoreProjectAutomationsFile(
+    workingDir: string, read: CachedRead, writtenContent: string,
+  ): Promise<void> {
+    const filePath = path.join(workingDir, AUTOMATIONS_REL_PATH);
+    let tmpPath: string | undefined;
+    try {
+      if (read.kind !== 'loaded' && read.kind !== 'missing') return;
+      if (read.kind === 'loaded') {
+        tmpPath = `${filePath}.tmp.${randomUUID()}`;
+        await fs.writeFile(tmpPath, read.content, 'utf8');
+      }
+      // Compare raw bytes, not parsed configs: even a partial external edit must survive.
+      // Stage the restoration before this check so its I/O cannot hide a newer write.
+      if (await fs.readFile(filePath, 'utf8') !== writtenContent) return;
+      if (tmpPath) {
+        await fs.rename(tmpPath, filePath);
+      } else {
+        await fs.rm(filePath, { force: true });
+      }
+    } catch (restoreErr) {
+      // Deleting the file while validation was pending is also a later user decision.
+      if ((restoreErr as NodeJS.ErrnoException).code === 'ENOENT') return;
+      this.deps.logger.warn?.('[project-automation] restore after rejected save failed', {
+        workingDir,
+        error: restoreErr instanceof Error ? restoreErr.message : String(restoreErr),
+      });
+    } finally {
+      this.cache.delete(path.resolve(workingDir));
+      if (tmpPath) await fs.rm(tmpPath, { force: true }).catch((cleanupErr: unknown) => {
+        this.deps.logger.warn?.('[project-automation] restore temp cleanup failed', {
+          workingDir,
+          error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+        });
+      });
+    }
+  }
+
   private async writeProjectAutomationsFile(
     workingDir: string,
     file: ProjectAutomationsFile,
-  ): Promise<void> {
+  ): Promise<string> {
     const filePath = path.join(workingDir, AUTOMATIONS_REL_PATH);
     const dir = path.dirname(filePath);
     await fs.mkdir(dir, { recursive: true });
@@ -402,6 +459,9 @@ export class ProjectAutomationLoader {
     const content = `${JSON.stringify(file, null, 2)}\n`;
     await fs.writeFile(tmpPath, content, 'utf8');
     await fs.rename(tmpPath, filePath);
+    // A read cached before this write (e.g. "no file yet") must not hide it.
+    this.cache.delete(path.resolve(workingDir));
+    return content;
   }
 
   private async listKnownWorkingDirs(): Promise<string[]> {

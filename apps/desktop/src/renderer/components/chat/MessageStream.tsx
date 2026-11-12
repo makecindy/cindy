@@ -2,6 +2,7 @@ import { appendPendingQueueItems } from './pendingQueueItems';
 import { AttachmentCollectionContext, type AttachmentCollectionItem } from './AttachmentCollection';
 import { attachmentPreviewKind, previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { TeammateProcessStatus } from '@/features/bots/TeammateProcessStatus';
+import { usePluginUiMessageCandidates, type PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
 import { historyAfter } from './historyAfter';
 import { readGhostCardSupersededBy, readMailCard } from '@cindy/maker-shared/ghost-card-form';
@@ -332,6 +333,7 @@ function hasNestedScrollableAncestorThatCanScrollDown(
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 import { MessageSourceLabels } from './MessageSourceLabels';
+import { attachBotStartedTasks, BotStartedTasks, collectBotStartedTasks } from './BotStartedTasks';
 import { BotMessageTimelineHeader } from './BotMessageTimelineHeader';
 import { AskUserQuestionBubble } from './AskUserQuestionBubble';
 import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
@@ -442,7 +444,7 @@ import { hasReviewableTurnChanges, type TurnChangeSetSummary } from '../../../sh
 
 interface MessageStreamProps {
   pendingMessages?: readonly ChatMessage[];
-  renderPendingMessage?: (message: ChatMessage) => ReactNode;
+  renderPendingMessage?: (message: ChatMessage, pluginUi: PluginUiMessageCandidates) => ReactNode;
   /** Content before history, sharing its scrolling and measured content height. */
   header?: ReactNode;
   /** Host forms share the measured scroll area, outside message virtualization. */
@@ -1893,6 +1895,12 @@ export function buildRenderItems(
     }
 
     const slice = originalTurnSlice(lo, hi);
+    if (opts?.botSessionId) {
+      const startedTasks = collectBotStartedTasks(slice);
+      if (startedTasks.length > 0) {
+        items.push({ type: 'bot_started_tasks', key: `started-tasks-${messages[lo].clientId}`, tasks: startedTasks });
+      }
+    }
     const generatedByPath = new Map<string, GeneratedFileRef>();
     if (opts?.botSessionId) {
       for (const changeSet of changeSets) {
@@ -2783,6 +2791,7 @@ function ShareableToolMedia({
 function renderWorkGroupChild(
   item: Exclude<WorkChildItem, ToolSegmentRenderItem>,
   props: {
+    pluginUi: PluginUiMessageCandidates;
     workingDir: string;
     sessionId?: string;
     sessionTitle?: string | null;
@@ -2831,6 +2840,7 @@ function renderWorkGroupChild(
   return (
     <div data-message-client-id={item.message.clientId}>
       <MessageItem
+        pluginUi={props.pluginUi}
         message={item.message}
         toolResult={props.singleResultMap.get(item.message.clientId)}
         workingDir={props.workingDir}
@@ -2917,6 +2927,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
   const childItems = item.children.map(toWorkGroupChild);
   const block = (
     <WorkGroupBlock
+      pluginUi={context.pluginUi}
       // 单层前缀约定 `work:<clientId>` — item.key 形如 `work-<cid>`,
       // 去掉 `work-` 后拼 `<role>:<id>`,与 agent: / thinking: 同构。
       blockId={`work:${item.key.slice('work-'.length)}`}
@@ -2998,6 +3009,7 @@ export function MessageStream({
   onInlinePlanVisibilityChange,
 }: MessageStreamProps) {
   const { i18n, t } = useTranslation();
+  const pluginUi = usePluginUiMessageCandidates(sessionId);
   const historyView = sessionId ? getRemoteHistoryView(sessionId) : undefined;
   const fullHistorySnapshot = useSyncExternalStore(
     historyView?.subscribe ?? (() => () => undefined),
@@ -3367,7 +3379,7 @@ export function MessageStream({
     );
     return appendPendingQueueItems(
       simplifiedBotConversation
-        ? botProcessItems(grouped, isSessionStreaming, botTailReplyIds)
+        ? attachBotStartedTasks(botProcessItems(grouped, isSessionStreaming, botTailReplyIds))
         : grouped,
       pendingMessages ?? [],
       messages,
@@ -3523,7 +3535,10 @@ export function MessageStream({
     const items = itemsRef.current;
     if (!container || !items) return null;
     const cTop = container.getBoundingClientRect().top;
-    const children = items.children;
+    const indexedRow = messageViewportRef.current?.getViewportTopRow();
+    // The viewport connects during mount; retain the DOM fallback until its
+    // index is available. Normal scrolling reads only the indexed visible row.
+    const children = indexedRow ? [indexedRow] : items.children;
     for (let i = 0; i < children.length; i++) {
       const itemElement = children[i] as HTMLElement;
       const rect = itemElement.getBoundingClientRect();
@@ -6345,6 +6360,7 @@ export function MessageStream({
   );
   const workGroupRenderContext = useMemo<WorkGroupRenderContext>(
     () => ({
+      pluginUi,
       workingDir,
       sessionId,
       sessionTitle,
@@ -6366,6 +6382,7 @@ export function MessageStream({
       userTurnUsageDetailsByAssistantId,
     }),
     [
+      pluginUi,
       workingDir,
       sessionId,
       sessionTitle,
@@ -6602,6 +6619,13 @@ export function MessageStream({
                       );
                     }
 
+                    if (item.type === 'bot_started_tasks') {
+                      const tasks = <BotStartedTasks tasks={item.tasks} hostSessionId={sessionId} />;
+                      return botReplyColumnSpacer
+                        ? withAssistantAvatar(botReplyColumnSpacer, tasks, item.key)
+                        : <div key={item.key} data-render-item-key={item.key}>{tasks}</div>;
+                    }
+
                     if (item.type === 'generated_files') {
                       return (
                         <GeneratedFilesCard
@@ -6623,6 +6647,7 @@ export function MessageStream({
                     if (item.type === 'tool_segment') {
                       return (
                         <AgentActionsBlock
+                          pluginUi={pluginUi}
                           key={item.key}
                           renderItemKey={item.key}
                           toolCalls={item.toolCalls}
@@ -6758,8 +6783,9 @@ export function MessageStream({
                     // 选择模式时 remount(mermaid 重渲、GhostToolCard iframe 重载)。
                     const pending = item.pending === true;
                     const shareable = !pending && Boolean(sessionId) && Boolean(msg.clientId) && isShareableMessage(msg);
-                    const messageNode = pending && renderPendingMessage ? renderPendingMessage(msg) : (
+                    const messageNode = pending && renderPendingMessage ? renderPendingMessage(msg, pluginUi) : (
                       <MessageItem
+                        pluginUi={pluginUi}
                         message={msg}
                         toolResult={singleResultMap.get(msg.clientId)}
                         workingDir={workingDir}
@@ -6952,6 +6978,7 @@ export function withAssistantAvatar(
 }
 
 const MessageItem = memo(function MessageItem({
+  pluginUi,
   message,
   toolResult,
   workingDir,
@@ -6977,6 +7004,7 @@ const MessageItem = memo(function MessageItem({
   sessionSource,
   onDiagnoseError,
 }: {
+  pluginUi: PluginUiMessageCandidates;
   message: ChatMessage;
   toolResult?: string;
   workingDir: string;
@@ -7065,6 +7093,7 @@ const MessageItem = memo(function MessageItem({
       return (
         <>
           <UserMessage
+            pluginUi={pluginUi}
             sharedAuthorName={message.sharedAuthorName}
             sharedAuthorMemberId={message.sharedAuthorMemberId}
             workingDir={workingDir}
@@ -7140,6 +7169,7 @@ const MessageItem = memo(function MessageItem({
         <>
           <MessageSourceLabels sourceGroup={message.sourceGroup} align="start" />
           <AssistantMessage
+            pluginUi={pluginUi}
             workingDir={workingDir}
             localFileRefs={localFileRefs}
             currentSessionId={sessionId}
@@ -7172,6 +7202,7 @@ const MessageItem = memo(function MessageItem({
             botStarterOptions={message.botStarterOptions}
             starterOptionsLocked={starterOptionsLocked}
             botTaskResults={message.turnCompleted === true ? message.botTaskResults : undefined}
+            botStartedTasks={message.botStartedTasks}
           />
         </>,
       );

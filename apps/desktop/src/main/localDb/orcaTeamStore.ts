@@ -1,5 +1,5 @@
 import { BrowserWindow } from 'electron';
-import { and, desc, eq, gt, inArray, isNotNull, isNull, ne } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { orcaWorkerSessionTitle } from '@cindy/maker-shared/orca-team';
 import type { OrcaRemotePendingReport } from '../../shared/orcaRemoteWorker.js';
@@ -461,7 +461,8 @@ export type OrcaWorkerIdentityUpdateResult =
  * 更新 worker 的 role/label；当 worker session 的标题仍是「上一个生成标题」时同步改写。
  *
  * 标题同步只认 `Worker · role · label` 这一生成形态：用户自定义/重命名过的标题保持不动。
- * label 唯一性由 `uniq_orca_workers_team_label` 在 UPDATE 时最终把关（含已归档 worker）。
+ * label 唯一性由 `uniq_orca_workers_team_label` 在 UPDATE 时最终把关；已归档／已删除任务的 Worker
+ * 先让出同名 label（改成带自身 id 的唯一值），所以只会与仍在团队里的 Worker 冲突。
  */
 export async function updateWorkerIdentity(input: {
   workerId: string;
@@ -473,11 +474,24 @@ export async function updateWorkerIdentity(input: {
   const db = getDbClient().drizzle;
   const now = Date.now();
   const [existing] = await db
-    .select({ id: orcaWorkers.id, sessionId: orcaWorkers.sessionId })
+    .select({ id: orcaWorkers.id, sessionId: orcaWorkers.sessionId, teamId: orcaWorkers.teamId })
     .from(orcaWorkers)
     .where(eq(orcaWorkers.id, input.workerId))
     .limit(1);
   if (!existing) return { ok: false, errorCode: 'NOT_FOUND' };
+
+  if (input.label !== null) {
+    // 与创建时一致（orca.reserveWorkerCreation）：已归档／已删除任务的 Worker 让出名字。
+    await db
+      .update(orcaWorkers)
+      .set({ label: sql`${orcaWorkers.label} || '~' || ${orcaWorkers.id}`, updatedAt: now })
+      .where(and(
+        eq(orcaWorkers.teamId, existing.teamId),
+        ne(orcaWorkers.id, input.workerId),
+        sql`lower(${orcaWorkers.label}) = ${input.label.toLowerCase()}`,
+        sql`${orcaWorkers.sessionId} IN (SELECT id FROM sessions WHERE status != 'active')`,
+      ));
+  }
 
   try {
     await db

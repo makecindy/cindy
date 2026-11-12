@@ -64,6 +64,8 @@ export interface DispatchOrcaInterAgentMessageParams {
   source: OrcaInterAgentMessageSource;
   senderLabel: string;
   workerId?: string;
+  /** 宿主盖章：仅系统兜底回报可进入 Lead 队列合批；主动回报/派单不设置。 */
+  autoBridge?: true;
   /** 发送方显式选择；缺省排队。steer 只在目标正在运行时插进当前 turn。 */
   delivery?: 'queue' | 'steer';
   /** 可选, 随消息发给目标的本机图片绝对路径; 仅本机 session 支持, SSH 远端目标拒绝。 */
@@ -191,6 +193,11 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   withSendToSessionLock?: <T>(sessionId: string, task: () => Promise<T>) => Promise<T>;
   /** 直发前与 sendToSessionInternal 共用同一套满窗 / compact 失败换窗预检。 */
   prepareUnhealthySession?: (sessionId: string) => Promise<boolean | void>;
+  /**
+   * 项目资源漂移时的 runtime 回收(空闲口径, pi only)。true=已按 runtime-refresh
+   * 关闭旧 runtime,调用方应转 queued/lazy 路径重建投递,不拿旧 argv 跑这一轮。
+   */
+  recycleProjectResourceRuntime?: (sessionId: string) => Promise<boolean>;
   /**
    * 直发前补齐 Orca 装载：目标在 runtime 已启动后才成为 Lead/Worker（例如从协同面板
    * 开启协同）时，live handle 还没有 Orca 说明与工具。与用户发送共用同一套重建；
@@ -433,6 +440,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         senderLabel,
         displayText: params.rawContent,
         ...(senderSessionId ? { senderSessionId } : {}),
+        ...(params.autoBridge ? { autoBridge: true } : {}),
       };
     };
     let steerFallbackReason: OrcaSteerFallbackReason | undefined;
@@ -625,6 +633,11 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         }
         const live = deps.getLiveSession(params.targetSessionId);
         if (!live) return null;
+        // 项目资源漂移:回收旧 runtime 后转 queued/lazy 路径(sendToSessionInternal
+        // 的 lazy-resume 会重扫重算 argv 重建),不在旧 argv 上跑这一轮。
+        if (await deps.recycleProjectResourceRuntime?.(params.targetSessionId) === true) {
+          return null;
+        }
         const origin = await resolveOrigin();
         const result = await sendPersistedUserMessageToSession(deps, {
           session: live,

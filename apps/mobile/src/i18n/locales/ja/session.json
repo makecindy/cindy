@@ -1,5 +1,12 @@
 {
   "githubPrs": {
+    "status": {
+      "open": "オープン",
+      "draft": "ドラフト",
+      "merged": "マージ済み",
+      "closed": "クローズ済み"
+    },
+    "statusUnavailable": "ステータスはまだ取得していません",
     "title": "PR リンクを管理",
     "hint": "上部に最大 3 件表示。固定した PR を優先します",
     "empty": "GitHub PR または GitLab MR のリンクを貼り付けて追加",
@@ -241,7 +248,7 @@
           "plugins": "プラグイン一覧",
           "memoryRules": "メモリの指示",
           "memoryIndex": "メモリ索引",
-          "profile": "チームメイトのプロフィール",
+          "profile": "仲間のプロフィール",
           "user": "ユーザーの指示",
           "directories": "追加ディレクトリ",
           "native": "Pi の指示",
@@ -470,6 +477,11 @@
     "worktreeCleanupPending": "前回の worktree はまだクリーンアップ待ちです。デバイスを再接続してから再試行してください。"
   },
   "menu": {
+    "moveToProject": "タスクを移動",
+    "moveFailed": "タスクの移動に失敗しました",
+    "moveRunning": "このタスクは実行中です。完了後に移動してください。",
+    "moveWorktree": "このタスクの作業ディレクトリは worktree のため、他のプロジェクトへは移動できません",
+    "moveUnsupported": "タスクを移動するには、接続先のコンピューターで Cindy を更新してください。",
     "details": "セッションの詳細",
     "chipPinned": "ピン留め済み",
     "chipArchived": "アーカイブ済み",
@@ -647,6 +659,8 @@
     "taskAlreadyCreated": "このセッションはコンピューターに作成済みです。保存されたメッセージは元のセッションで送信を再開します。"
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_FULL": "このタスクを実行できるアカウントまたはパソコンはすべて同時実行数の上限に達しています。実行中のタスクが終わるのを待つか、プロバイダー設定で上限を引き上げてください。",
+    "SUBSCRIPTION_ACCOUNTS_FULL": "このタスクを実行できるアカウントまたはパソコンはすべて同時実行数の上限に達しています。実行中のタスクが終わるのを待つか、プロバイダー設定で上限を引き上げてください。",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "この SSH タスクでは Harness を切り替えられません。現在の Harness のモデルを選ぶか、必要な Harness で新しい SSH タスクを作成してください。",
     "MODEL_SELECTION_UNAVAILABLE": "選択したプロバイダーのモデルは利用できなくなりました。設定で接続を確認するか、利用可能なモデルを選び直してください。",
     "HARNESS_SWITCH_NOT_READY": "Harness の切り替えが完了していません。エラーの詳細を確認し、Harness の準備ができてから再試行してください。",
@@ -689,6 +703,7 @@
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "そのパソコンでは、このプロバイダーのリモート利用が許可されていません。そのパソコンの「設定 → モデルプロバイダー」で「リモート利用を許可」をオンにするか、別のモデルを選んでください。",
     "REMOTE_AGENT_FORK_FAILED": "Agent を実行しているパソコンで、ここから新しいセッションを始められませんでした。もう一度試すか、別のメッセージでお試しください。",
     "REMOTE_AGENT_SHARE_PAUSED": "共有した人があなたへの共有を一時停止したため、再開されるまでこれらのモデルは使えません。別のモデルに切り替えて続けられます。",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "これは旧方式の共有のため、「Agent-Net のみ使用」がオンの間は使えません。オフにすると続けられます。別のモデルに切り替えることもできます。",
     "REMOTE_AGENT_SHARE_REMOVED": "この共有は利用できなくなりました（共有した人が削除したか、あなたが退出しました）。別のモデルに切り替えて続けられます。",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "共有されたプロバイダーは一時的に利用できません。共有した人のパソコンがオフラインか、共有が一時的にオフになっている可能性があります。後でもう一度試すか、別のモデルに切り替えて続けられます。"
   },
@@ -714,21 +729,34 @@
     "remoteDirPathHint": "実行デバイスでディレクトリを確認します。存在しない場合はエラーになり、Lead のディレクトリには切り替わりません。",
     "remoteDirInvalid": "実行デバイスの絶対パスを入力してください。",
     "roleLabel": "ロール名",
-    "roleHint": "複数の協力者を見分けるための名前で、能力は変わりません",
-    "customRole": "カスタム",
-    "customRolePlaceholder": "カスタムロール名",
-    "customRolePredefinedError": "カスタムロール名にプリセットのロール名は使えません",
+    "taskLabel": "Worker に任せること",
+    "enableHint": "このタスクが Lead となり、作業の割り振りと確認を担当します。Worker は別の独立した Agent で、作業を実行して結果を報告します。",
+    "roles": {
+      "reviewer": {
+        "name": "レビュー",
+        "task": "Lead の作業を確認して、いくつか提案してください。"
+      },
+      "developer": {
+        "name": "開発"
+      },
+      "tester": {
+        "name": "テスト",
+        "task": "Lead のここまでの成果をテストし、失敗した項目と再現手順を報告してください。"
+      }
+    },
+    "addRole": "ロールを追加",
+    "removeRoleHint": "長押しで削除",
+    "removeRoleConfirmTitle": "「{{role}}」を削除しますか？",
+    "removeRoleConfirmDesc": "「ロールを追加」からいつでも追加し直せます。",
+    "removeRoleConfirm": "ロールを削除",
+    "moreSettings": "その他の設定",
     "agentLabel": "Agent",
-    "modelLabel": "モデル",
     "modelDefault": "デフォルト",
     "modelDefaultHint": "コンピューター側の Worker 既定モデルを使います",
-    "permissionLabel": "権限モード",
     "permissionAuto": "自動承認",
     "permissionFull": "フルアクセス",
-    "permissionAutoHint": "ワークスペース内の読み書きを許可し、権限昇格を自動承認します。高リスクの操作は拒否または確認が必要になることがあります。",
-    "permissionFullHint": "任意のファイル変更やネットワークコマンドを確認なしで実行できます。最もリスクが高く、信頼できるタスク向けです。",
     "initialTaskLabel": "最初のタスク（任意）",
-    "initialTaskPlaceholder": "この Worker に任意で渡す最初のタスク",
+    "initialTaskPlaceholder": "最初に任せることを入力。空欄の場合は待機し、Lead が割り振ります",
     "workerCountSummary_one": "Worker {{count}} 件 · 実行中 {{running}}",
     "workerCountSummary_other": "Worker {{count}} 件 · 実行中 {{running}}",
     "loading": "Worker を読み込み中…",
@@ -803,12 +831,6 @@
     "hint": "いずれかの条件で、期限が近いカードから使用します。全配分が満量の場合は使用しません。このパソコンで Cindy の起動中に実行します。",
     "failed": "保存できませんでした。再試行してください。",
     "restore": "既定に戻す"
-  },
-  "followUp": {
-    "title": "セッションのフォローを始めましょうか？",
-    "start": "フォローを開始",
-    "notNow": "今はしない",
-    "saveFailed": "保存できませんでした。もう一度お試しください"
   },
   "providerGroupRebalance": {
     "title": "{{label}} に切り替えて続けますか？",

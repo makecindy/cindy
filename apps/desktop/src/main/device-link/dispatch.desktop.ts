@@ -61,6 +61,7 @@ export const {
   setProviderGroupRemoteHandler,
   setSetupSnapshotRemoteHandler,
   setSetupTransferRemoteHandler,
+  setAgentNetSwitchRemoteHandler,
   setRemoteTurnChangeAction,
   setRemoteSubscriptionPoolQuotaReader,
   setRemoteClaudeSubscriptionUsageReader,
@@ -96,6 +97,8 @@ export const {
   hasProviderShares,
   providerShareActiveControllers,
   revokeProviderShareControllers,
+  revokeControllerModelUse,
+  notifyControllerModelUseRestored,
   abortProviderShareReshareRuns,
   __testing,
   remoteAgentLimitUsage

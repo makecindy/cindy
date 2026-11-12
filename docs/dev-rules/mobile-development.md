@@ -181,17 +181,32 @@ Desktop 仅在官方连接在线时上传本机完整活动摘要，排除远程
 显示 TTL 限制；一秒合并变化，相同摘要在一分钟心跳之前不重复发送，最多一条请求在途。
 服务端保存每台电脑的一份摘要和账号单调版本；角标只接受全部电脑在线且快照新鲜的完整汇总。
 灵动岛可展示在线电脑的任务；部分离线且在线任务为空时不发送结束，保留旧内容。
-服务端 APNs 内容的 `staleDate` 为发送时间加 150 秒；没有后续更新时，沿用最后一次内容的过期时间。
+服务端配套 PR #1318（4ddf9601a）的 APNs 内容采用 5 分钟 `staleDate`、同内容 2 分钟续期；
+没有后续更新时保留原过期时间。该实现尚不能作为已部署的证据。
 账号切换／退出先清本地活动，再等待已发注册收尾并注销旧注册；原生用「端点＋账号」scope
 拒绝迟到的旧账号活动。离线注销不能撤回已被 APNs 接受的消息，新账号 token 注册会转移旧归属。
 用户手动移除活动后，本地与服务端均抑制重新创建，直到任务清空或重新登录；更新与结束不发提醒。
 原生将已观察到的移除账号 scope 保存在现有 UserDefaults 偏好中，进程重启后恢复；不保存 token。
 任务清空、账号清理或切换时同时清除该标记，旧账号迟到的移除事件不改写当前账号偏好。
 后台启动由系统决定，APNs 可能延迟、限频或丢失，不能承诺强杀后持续实时更新。
-本地降级模式的 `staleDate` 为更新时加 120 秒，前台每分钟续期，检测到连接中断则立即标记过期；
-账号清理与无任务结束不等待一秒合并。
+本地降级模式按聚合任务有效期续期：包含运行中任务为 15 分钟，仅等待操作为 1 小时，
+仅未读结果为 4 小时。这是容纳长任务与日常锁屏的产品默认值，不是推送延迟的实测保证。
+前台每分钟确认，前台无法确认连接时立即标记过期。后台本地 store 事件和进入后台前排队的
+写入均不结束、续期或提前标记过期，保留最后确认的内容与原有效期，让系统自然到期；
+账号退出／切换仍直接清理原生活动，不受此门控影响。回到前台立即核对并恢复／结束活动。
+后台 APNs 仍由系统正常接收；此处只约束本地镜像，不干预服务端内容或有效期。
+原生为每次本地确认写入可选 Unix 秒 `confirmedAt`；锁屏与展开态过期后保留最后一次状态，
+另显示上次更新时间，计数改为次要颜色。旧活动／服务端未提供时间时显示本地化“等待更新”，
+不伪造时间，不把到期当作刷新失败。服务端期限不由客户端覆写。
+前台恢复或前台观察到活动刚过期时，通过既有注册 PUT 请求服务端重新同步；同一个同步器
+30 秒内至多一次额外刷新，不增加定时网络轮询。新原生包未过期时不额外请求；旧包缺少
+`isStale` 观察值时在前台恢复做受限刷新。`isStale` 仅在 native/JS 间使用，不发送给服务器。
+成功注册后的刷新失败保留服务端汇总所有权，禁止用可能不完整的 Home 列表替换／结束活动；
+首次注册失败仍降级本地同步。账号清理与无任务结束不等待一秒合并。
+本地诊断记录注册结果／HTTP 状态、过期转换和本地确认；原生系统日志记录内容到达及有效期，
+不记录 token、账号、标题、深链或正文。网络接收成功不等于 APNs 已送达，仍需签名真机验证。
 
-接口与发布顺序见[协议兼容的任务汇总与实时活动](protocol-compatibility.md#任务汇总与-activitykit-push2026-11-10未发布)。
+接口与发布顺序见[协议兼容的任务汇总与实时活动](protocol-compatibility/task-activity-summary-activitykit-push.md)。
 定向验证覆盖 token 轮换、旧服务端、自建中转跳过、账号切换与在途注册后注销；服务端另有真实
 PostgreSQL 的多电脑、版本、设备移除和活动 start/update/end 集成测试。原生编译不是系统
 推送验收：后台／冷启动、跨端已读与真实 APNs 仍需在部署后的签名安装包上核验。
@@ -199,7 +214,25 @@ PostgreSQL 的多电脑、版本、设备移除和活动 start/update/end 集成
 改变 Android 指纹（虽然没有新增 Android 功能），应随计划内双端原生发版交付；两端存量
 安装均需升级对应原生包才能继续接收新指纹的 OTA，PR 须按冷更边界写明原因、影响与发版节奏。
 原生验收需检查紧凑／展开／锁屏、浅深模式、点击任务定位、账号切换、后台过期和关闭实时活动。
-TypeScript 测试不能替代这些原生验收。
+TypeScript 测试不能替代这些原生验收。`node apps/mobile/scripts/test-agent-activity-native.mjs`
+直接编译并执行生产 Codable 数据模型，验证旧 payload 解码、混合任务有效期和时间戳往返；
+测试仅替换 macOS 不可用的 ActivityKit 标记协议，不替代真实 iOS ActivityKit／界面验收。
+此次界面与原生状态改动不可由 OTA 单独交付；指纹比对显示 iOS / Android 均变化，应随计划内
+双端新安装包发布，旧指纹继续保留原更新轨道，不能向旧安装推送不兼容 OTA。
+
+### 推送 token 事件与验收
+
+iOS 每次 `getDevicePushTokenAsync()` 完成都会发出 token 事件，不代表 token 已轮换。
+`PushNotificationsBridge` 的监听器必须直接把事件携带的 token 交给注册函数，不能再次
+读取原生 token；否则“读取 → 事件 → 注册 → 读取”会持续向两个推送端点重复注册。
+事件注册必须持有本代次非事件注册成功产生的内存许可；相同 token 不再请求，真实轮换
+仍注册。注销同步撤销许可，注册全过程复查 AuthOwner，防止 React 仍显示已登录的清理
+窗口重新 PUT 旧账号。原生读取在注销时产生的事件也只能 skipped。
+回归分别由 `pushNotificationsBridge.test.ts`（事件接线与去重）和
+`pushNotificationsRealm.test.ts`（真实注册函数与端点请求）覆盖。
+
+注册 API 成功、桌面提交 notify 帧成功都不是 APNs 送达证明。验收需分别记录签名环境、
+手机注册结果、服务端 APNs 回执（可取得时）和真机是否实际收到，不能用本地通知代替。
 
 Release 构建必须使用 `NODE_ENV=production BABEL_ENV=production`，包括手动调用
 `xcodebuild`、Gradle 或 `expo export:embed --dev false`。Expo 会保留父进程的环境变量，
@@ -226,6 +259,32 @@ pnpm --filter mobile test:smoke
 [手机消息渲染的共享优化](../../apps/mobile/docs/mobile-render-performance.md)。
 
 ## 专项入口
+
+### 线上崩溃日志的读法
+
+- **iOS 符号**：崩溃日志里 App 自身的调用帧只有在本机能找到该版本的 dSYM 时才会还原成
+  函数名。`build-ios.mjs` 把 archive 里的 dSYM 打成与 `.ipa` 同名的 `.dSYMs.zip`
+  （`--out` 时一并拷出）；archive 建在临时目录里，这份 zip 是该版本符号的唯一留存，须与
+  安装包一起保管。没有它，日志里只剩「二进制 + 偏移」。
+- **没有符号时按调用链形状归类**（同一份原生二进制的偏移相同，可跨版本比对）：
+
+  | 日志特征 | 含义 |
+  | --- | --- |
+  | `objc_exception_throw` ← App 三帧 ← `-[NSInvocation invoke]` ← App 两帧 | 首屏出现 10 秒之后的 JS 致命错误：RN 把它转成原生异常抛出，日志不带 JS 报错内容 |
+  | `-[NSException raise]` ← 连续 App 帧 ← dispatch | 启动监控窗口内的 JS 致命错误：expo-updates 的错误恢复放弃后主动崩溃 |
+  | `Termination Reason: RUNNINGBOARD 0xdead10cc` | 被挂起时仍持有 App Group 里的文件锁。入站分享读取暂存区时持锁，所以后台启动时不读取，等回到前台（`IncomingShareBridge`） |
+
+- **JS 报错兜底**：启动稳定后（根布局首次提交 20 秒后），页面树的渲染报错由
+  `RootErrorBoundary`（包在 `NavigationGate` 外、`AuthProvider` / `DeviceLinkProvider` 内，重新加载不会
+  重建登录与设备连接）显示可重新加载的错误页，回调与定时器里的未捕获报错由 `jsErrorGuard`
+  降为非致命、App 继续运行。**窗口内两者都保持致命**：expo-updates 的错误恢复靠「首屏出现后
+  10 秒内的致命报错」回滚坏掉的热更，20 秒的窗口严格覆盖它，改动这两处时不得缩短或绕过。
+  开发构建不启用降级，保留红屏。开启本机诊断记录时会写入 `js error` 事件，只含报错类型与
+  打包文件里的行列号（要用对应版本的源码映射还原位置），不含报错文本与堆栈原文。
+- **Android**：`ExpoImageView.draw` → `BaseCanvas.throwIfCannotDraw` 与
+  `Editor.startDragAndDrop: Drag shadow dimensions must be positive` 两类的原因和规避见
+  [`dependency-patches/README.md`](../../dependency-patches/README.md) 的 `expo-image`、
+  `expo-paste-input` 两行。
 
 ### Android 组字与发送快照
 
@@ -540,6 +599,23 @@ A、B、L1、R1 会占用其原有操作，设置页有明确提示。
 偏好与跨页按住交接回归：`src/__tests__/handheldMode.test.ts`。Android 窗口按键拦截和换屏
 必须随新原生包交付，仍受下文冷更审核门约束。
 
+## 手机推送排障：注册不等于投递
+
+`cindy.push.enabled` 只记录偏好；`cindy.push.registered` 是请求前写入的注销补偿标记，
+不能证明服务器注册成功。Desktop 的 `sendNotify()` 返回 true 也只说明已向 relay 发送，
+不是 APNs 接受或手机展示的回执。不要据此宣布推送恢复。
+
+手机在 AsyncStorage `cindy.push.lastRegistration` 保留最近一次启用注册尝试的单条状态，
+CindyDev 按 `.dev` / `.release` 分开。状态记录时间、账号区域（不含身份）、签名对应的
+APNs 环境、失败阶段和 device-link/chat 分别接受、失败或不支持的结果及 HTTP 状态码。
+它不依赖调试日志开关，不含 token、账号 ID、地址、正文或原始错误；写入失败不影响注册。
+这是有时间戳的历史尝试，关闭推送或切换账号后不能当作当前订阅状态；`registered` 只证明
+注册 API 请求完成，不能替代实际通知验收。回归见 `pushNotificationsRealm.test.ts`。
+
+若注册成功仍无通知，继续核对签名 team/topic 与服务端配置、服务端 token 选择及 APNs
+响应，最后核对手机的系统通知展示条件。本地服务器源码不能证明线上部署；缺少投递日志时
+保留“尚未确定”的结论，不让用户反复切开关，也不通过不断广播测试通知替代定位。
+
 ## 原生配置与 runtime fingerprint(冷更边界)
 
 ### 伙伴通信通知
@@ -553,6 +629,44 @@ Xcode 自动签名会以 entitlement 无法写入 profile 拒绝构建。
 Swift 源码和打包头像显式进入 fingerprint。首次发布需要原生新包和重新生成的签名配置；
 服务端须先支持可选发送者透传和 `aps.mutable-content = 1`，未升级双方保持普通推送。
 这不是 OTA 可独立交付的功能，仍受下述冷更审核门约束。
+
+### 应用图标角标
+
+角标数字为账号汇总中「等待回答／授权 + 已完成／出错但未读」的任务数，运行中不计入。
+同一电脑的同一任务只计一次，归档、待本地创建、缓存占位和已读结果不计入。它不是消息条数，
+也不按收到的推送次数累加。已有的任务内容展示与已读回执推进任务状态后，角标随之减少；
+只进入页面或划掉系统通知不会直接把任务判成已读。
+
+`TaskBadgeBridge` 在 iOS 和 Android 独立于 ActivityKit 运行。与灵动岛共用服务端账号汇总，
+不从手机 Home 分页、筛选、选中的电脑或缓存列表推算总数。等待 2、未读结果 4、运行 3 时，
+角标为 6，灵动岛可显示「6 · 3」。群聊消息数不混入任务口径。
+
+登录、进入前台或通知偏好变化时，从当前账号区域的 `deviceLinkApiBaseUrl` 请求一次
+`GET /api/device-link/task-activity`，使用现有账号 Bearer；并发刷新共用在途请求，无轮询或
+定时重试。返回 `{schemaVersion:1,accountId,version,waitingCount,unreadCount,runningCount,
+badgeCount,complete}`，`accountId` 为已验签 membershipId，`version` 是账号内持久单调的
+十进制整数字符串，不转成 JS Number。推送携带同形 `taskActivity`。仅完整汇总允许写入
+绝对数字（包括 0），新版本不完整数据只推进版本水位，保留已有角标；乱序、其它账号、
+无效数字和退出后的响应被丢弃。接口 404/405 后本生命周期停止请求；离线保留原值，
+自建中转不调用官方汇总接口。旧服务端不会降级为从部分列表猜总数。
+
+普通推送注册仅向 device-link 附带可选 `taskBadgeVersion:1`：iOS 支持系统 `aps.badge`，
+Android 须检测到 `CindyChatNotifications` 新原生方法才声明。服务端仅向声明支持的安装
+发送 badge-only，旧 Android 包保持原通知，避免空白提醒。普通通知开关与 ActivityKit
+独立令牌互不注销。退出账号、关闭通知时清理角标；不把划掉通知当成任务已读。
+
+iOS 后台由系统应用无声 APNs `aps.badge`，不需要 JS 运行；前台按汇总版本核对。
+APNs 可能延迟、丢弃或乱序，不能承诺后台绝对即时一致，重新进入前台会请求校正。
+Android 的 `TaskBadgeDelivery` 在已有 FCM receiver 中消费 data-only `task-badge`，不展示
+空通知；复用 ShortcutBadger，按持久账号／版本拒绝旧值，JS 前台写入也经过同一原生入口。
+只保存账号标识、版本和数字，不落盘令牌或任务内容；0 值不顺带清除群聊通知。
+启动器及系统权限决定显示数字、圆点或不支持；FCM 不可用的设备仍只能在前台核对。
+
+Android 原生接收器修改需要新安装包，旧包不能靠 OTA 获得后台处理能力；此 PR 必须按
+冷更规则确认，并与配套服务端部署协调。实现与上线分开核验：需真实 APNs／FCM、杀进程、
+跨电脑已读和关闭通知测试。纯 Kotlin 回归入口 `scripts/test-task-badge-android.mjs`
+通过 `CINDY_BADGE_TEST_KOTLINC`、`CINDY_BADGE_TEST_JDK_HOME`、`CINDY_BADGE_TEST_JSON_JAR`
+指定本机工具链，验证真实生产接收器的账号、版本、不完整数据、零值与退出行为。
 
 ### iOS 桌面与锁屏小组件
 
@@ -743,8 +857,20 @@ JS OTA 仍按现有通道检查，设置页手动检查只报告内容更新。�
 `FCM_PROJECT_ID` 与 ADC（例如仓库外 `GOOGLE_APPLICATION_CREDENTIALS`）。不要把密钥提交到仓库。
 
 `cindy-chat-notifications` 是 Android Expo 本地模块，复用 Expo 的 token、通知点击和冷启动响应；
-FCM data 消息与显式开启的前台服务都通过同一通知入口，按账号／消息去重。预览关闭时本机再次去除内容与
+FCM data 消息与后台连接都通过同一通知入口，按账号／消息去重。普通任务以服务器生成的 notificationId 去重，聊天仍按消息 ID 去重。预览关闭时本机再次去除内容与
 发送者头像。群通知使用 MessagingStyle；伙伴回复有发送者时也使用 Person。普通任务仍沿用原通知。
+
+Android 后台连接默认「自动」：中国大陆账号、设备地区 CN、上海／重庆时区，或 FCM 获取／注册尚未成功时启用。
+地区和时区仅作为启用补充通道的信号，不用于修改账号区域或端点。FCM token 获取最多等 8 秒；缓存 token 不证明大陆网络可达，
+因此大陆信号仍保留直连。自动模式只有在任务与聊天两路云推送注册都成功时才允许停掉共用后台服务；
+旧聊天注册接口 404／405 仅兼容为任务注册成功，不代表聊天推送可用。
+用户可选始终开启／关闭，原有显式 1／0 偏好保持，通知栏停止也持续生效；总通知开关与系统通知权限始终优先。
+
+普通任务通过当前账号区域的 device-link `/api/device-link/push-stream` HTTPS SSE 接收，聊天继续走 Chat Server。
+两者连接独立，不占用手机远控 socket；聊天服务不可用不阻断普通任务。SSE 仅携带当前设备绑定的短期 token。
+聊天身份按账号及区域绑定；同账号短暂查询失败保留已有身份与本轮已知聊天配置，切换账号或退出时清除，防止跨账号接收。
+断线按 1–60 秒加抖动重连，服务端 5 分钟内主动换连以重新验证认证；本机仅保存账号范围内的游标与去重 ID。
+预览关闭时服务端及本机均删除正文／发送者信息。自建中转不把自建任务凭证转发到官方 SSE；当前自建中转的已有推送路径不变。
 
 后台连接声明 `specialUse` 前台服务，持续显示运行通知和停止按钮；没有开机启动、隐藏重启或凭证落盘。
 发行到 Play 前须完成对应前台服务用途申报。Doze、厂商电池策略和强行停止可能中断连接；FCM 也需要 Google
@@ -753,3 +879,12 @@ FCM data 消息与显式开启的前台服务都通过同一通知入口，按�
 本次 Swift 扩展、Android 原生模块和头像资源都需要新原生包，不能只发 OTA；PR 须按冷更边界写明原因、
 存量装机影响与发版节奏。上线顺序为服务端兼容接口／通道配置、各端原生包，
 再验证 token 注册、前后台、拒绝权限、预览关闭、停止后台连接、断网重连、通知点击定位及人／伙伴头像。旧服务端没有 chat push API 时手机保留已有任务通知。
+
+普通任务直连新增 Android 原生接收器，必须随新 APK 冷更；旧包通过可选 native 方法检测继续使用原聊天接口，不能靠 OTA 获得任务直连。
+配套服务端先部署 SSE 和通知 ID，再发布 Android 新包。旧服务端 404 时后台退避一分钟并保留 FCM，不能把该状态记成直连可用。
+
+### 手动 APNs 诊断（iOS）
+
+「设置 → 开发者 → 推送诊断」仅在用户点击「读取推送状态」后读取系统通知权限、签名中的 APNs 环境和当前设备令牌。它不请求或变更通知权限，不写入诊断日志或持久存储，也不自行发送服务端请求；原生读取可能触发已有 token 事件，该事件继续遵守推送注册的账号围栏和去重。页面离开、应用进入后台或读取超时后丢弃结果，迟到的原生回调不能重新展示令牌。复制是独立的显式操作，剪贴板内容不会随页面退出自动清除。
+
+排查个人签名包时，应先核对该页的应用 ID、构建号和环境，再使用同一 Apple 开发者团队的 Push Notifications Console 给该设备令牌发送匹配环境的通知。不要把 ActivityKit token 当作 APNs device token，不把令牌粘贴到任务日志或提交到仓库；不要以「注册成功」或「服务端已发送」代替真机收到通知的验收。此入口只依赖现有 Expo 模块，不改变原生指纹、登录存储或应用身份。

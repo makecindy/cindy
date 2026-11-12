@@ -14,6 +14,7 @@ vi.mock('../../authManager.js', () => ({ getAuthState: () => ({ isAuthenticated:
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => api.endpoint }));
 vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: api.fetch }));
 vi.mock('../../utils/ipcValidate.js', () => ({ throwIpcError: (code: string) => { throw new Error(code); } }));
+vi.mock('../agentNetSharing.js', () => ({ checkAgentNetProviderExecutor: async () => null }));
 
 const input = { shareId: 'share', memberId: 'member', guestDeviceId: 'guest', executorDeviceId: 'executor' };
 const approved = { active: true, ownerDeviceId: 'owner', generation: 'generation-1', expiresAt: 1_800_000 };

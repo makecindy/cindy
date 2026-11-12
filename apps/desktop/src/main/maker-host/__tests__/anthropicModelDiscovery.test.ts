@@ -301,15 +301,17 @@ describe('mapAnthropicSdkModels', () => {
     expect(out[4]!.model.discoveredMetadata?.name).toBe('Opus 4.5');
   });
 
-  it('目录未登记的新版本照样显示,id 与名称按说明里的版本生成(Fable 5.2 不被显示成 5.1)', () => {
+  // 最初的回归是 Fable 5.2 登记进目录之前被显示成 5.1。用目录不会收录的 9.9 作例子,
+  // 这样目录以后补登记新型号时,这条用例仍然在测「未登记」的分支。
+  it('目录未登记的新版本照样显示,id 与名称按说明里的版本生成(不被显示成已登记的旧版本)', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     const out = mapAnthropicSdkModels([
-      // 简称指向目录还不认识的 5.2:按说明生成 claude-fable-5-2,不映射到已登记的 5.1。
-      { value: 'fable', displayName: 'Fable', description: 'Fable 5.2 · Newest' },
+      // 简称指向目录还不认识的 9.9:按说明生成 claude-fable-9-9,不映射到已登记的 5.1。
+      { value: 'fable', displayName: 'Fable', description: 'Fable 9.9 · Newest' },
       { value: 'claude-fable-5-1', displayName: 'Fable', description: 'Fable 5.1 · Previous' },
     ]);
     expect(out.map(({ model }) => [model.id, model.name])).toEqual([
-      ['claude-fable-5-2', 'Fable 5.2'],
+      ['claude-fable-9-9', 'Fable 9.9'],
       ['claude-fable-5-1', 'Fable 5.1'],
     ]);
     // 目录未知:资料用未知模型默认值,窗口不标记为已核实。
@@ -317,10 +319,10 @@ describe('mapAnthropicSdkModels', () => {
 
     // 显式 id 形态同理,名称按 id 推导,不取目录里 5.1 的名称。
     const explicit = mapAnthropicSdkModels([
-      { value: 'claude-fable-5-2[1m]', displayName: 'Fable', description: 'Fable 5.2 · Newest' },
+      { value: 'claude-fable-9-9[1m]', displayName: 'Fable', description: 'Fable 9.9 · Newest' },
     ]);
     expect(explicit.map(({ model }) => [model.id, model.name])).toEqual([
-      ['claude-fable-5-2', 'Fable 5.2'],
+      ['claude-fable-9-9', 'Fable 9.9'],
     ]);
   });
 

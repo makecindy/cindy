@@ -4,6 +4,15 @@ import type { BotGroupMemberView, BotGroupMention } from '../../../shared/botGro
 import { BotAvatar } from './BotAvatar';
 import { botGroupMemberDisplayName } from './BotGroupTimelineModel';
 
+// Keep sent broadcasts intact across reader locales and the Buddy rename.
+// The timeline and identity resolver must recognize the same complete labels.
+export const BOT_GROUP_BOT_BROADCAST_LABELS = [
+  '所有伙伴', '所有夥伴', 'すべての仲間', '모든 동반자', 'All buddies',
+  'Alle Freunde', 'Tous les amis', 'Todos los amigos', 'Todos os amigos', '诸同伴', '諸同伴',
+  'All teammates', '모든 동료', 'Alle Teammitglieder', 'Tous les coéquipiers',
+  'Todos los compañeros', 'Todos os colegas', '诸同僚', '諸同僚', 'bots',
+] as const;
+
 const key = (name: string) => `bots.groupChat.server.settings.${name}`;
 
 /**
@@ -17,7 +26,7 @@ export function botGroupMentionMember(label: string, members: readonly BotGroupM
   // The sender's locale can differ from the reader's; cover every shipped broadcast label.
   const broadcast = [allLabel, '所有人', '全員', '모두', 'all', 'everyone'].some((label) => label.toLowerCase() === name.toLowerCase());
   if ((mentions.all || fallback) && broadcast) return undefined;
-  const botBroadcast = ['所有伙伴', '所有夥伴', 'すべての仲間', '모든 동료', 'all teammates', 'bots'].some(label => label.toLowerCase() === name.toLowerCase());
+  const botBroadcast = BOT_GROUP_BOT_BROADCAST_LABELS.some(label => label.toLowerCase() === name.toLowerCase());
   if ((mentions.allBots || fallback) && botBroadcast) return undefined;
   const mentioned = new Set(mentions.botIds);
   const matches = members.filter((member) => (fallback || mentioned.has(member.botId))

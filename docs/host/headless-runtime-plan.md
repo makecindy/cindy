@@ -445,3 +445,814 @@ withAccountFreeOwnerCommit：主线 notify=false 只发 pending，分支补发�
 `ui:check --changed --theme all` 的 Electron 测试进程提前退出；保留失败记录。
 改用脚本支持的 Chromium 引擎定向运行 host-connection 全部四种状态，亮暗共八个
 场景通过，包括 320px 配对提示；已检查生成图。此夹具不覆盖完整桌面、登录或模型。
+
+
+### 合入后的自动隔离验收（2026-11-11）
+
+优先验证普通桌面；Host 网页缺口不借此扩大桌面改动。基于 main `6888c3fde5`
+及本次启动修复，在 macOS arm64 自动执行，没有使用正式账号或正式 profile：
+
+- 桌面远程升级提示在 EnvCheckGuard 完成后订阅与读取，去掉猜测 IPC 注册时间的
+  定时重试，保留推送对旧快照的优先级与卸载隔离。启动/协议定向测试 105 项通过，
+  Desktop、Host 类型检查通过。
+- 两组过期 UI 夹具补齐账号/设备宿主事实；群聊使用仓内媒体验证当前富媒体呈现。
+  先前失败的 32 项在同一批次和倒序批次均通过，覆盖亮/暗模式；未放宽 CSP 或沙箱。
+  此前单跑通过、整批偶发的 20 项本次未复现，根因仍未确认；不是 934 项全量重跑。
+- 版本无关桌面包构建及 ad-hoc 签名验证完成；核对包内 33 个 main/preload 入口，
+  `nodeRuntimeWorkerProcess.desktop.js` 及主进程引用正确，worker 仅依赖 Node 内置模块。
+  packaged smoke 原本在 ready 前注册系统链接，本次使既有 `--smoke-test` 跳过注册，
+  普通 packaged 启动保持原行为。
+- 打包运行仍未验收通过：全新数据目录的 smoke 进程阻塞在 macOS Keychain 访问；
+  采样确认 `SecItemCopyMatching` / `SecKeychainItemCopyContent` / SecurityServer decrypt。
+  数据目录隔离不等于系统钥匙串隔离。停止并清理测试实例，没有绕过授权或禁用沙箱，
+  不把静态入口检查当作 utilityProcess 在打包运行时通过。
+- 源码目录外独立 Host 使用自带 Node 在临时工作目录通过启动、网页适配脚本读取、
+  重复实例拒绝、受认证停止、信号退出和重启。Host 185 项通过，包含 HTTP/SSE 补收、
+  一次权限回答、停止和 SQLite 队列恢复；Agent 为替身，不是真实模型验收。
+- 使用产物 Chromium、Node worker 和 page bridge 的插件沙箱集成通过；另外验证已安装
+  插件的 MCP 通道、加密状态、权限拒绝和重启恢复，以及共享 scheduler 的真实脚本进程、
+  SQLite 历史与停止/重启不重放。未验收真实账号、手机和 Windows。
+
+证据保存在本机 `artifacts/desktop-isolated-20261111/report.md` 及其日志目录；
+各结果绑定上述源码版本，后续主线变化须以新增验证记录为准。
+
+发布前同步 main `7fa3bda908`，合并检查点 `fa2a99d1fe`：Desktop/Host 类型检查、
+桌面启动与协议 105 项、Host 185 项、文档合同 10 项、测试规范及 DCO 均通过。
+两个修改的单测文件单独运行分别为 1.18 秒（deepLink，93 项）及 0.812 秒
+（ccMgrUpgradeStore，3 项）。UI 批次和独立构建产物仍绑定前述构建版本，
+没有把同步后的定向检查写成重新执行了打包运行或全量桌面验收。
+
+
+## 下一阶段：共用发送与任务启动（2026-11-11）
+
+基线 `5bac2112a9`。本节是实施计划，不是功能已完成声明。保持普通桌面默认行为，
+同一功能一个 PR、按可复核提交分段；不预先拆成三个 PR。先完成发送/插话，再按依赖
+推进启动配置与后台生命周期，不为一次交付扩大伙伴、IM、远程执行或凭证边界。
+
+### 已核对的依赖与修正
+
+- 两端已共用 `AgentInputCoordinator`，差异在发送/插话端口；不要另造队列。
+- 发送事务原有 **66** 个依赖端口（不是 65）。本检查点新增语言、文体、MCP App 上下文
+  三个必需端口，共 69；发送接线再增加可选的异步启动前持久钩子，共 70。
+  桌面在原位置注入原实现，按调用时读取，不冻结模块加载时的值；桌面不注入新钩子。
+- 除 `i18n.desktop` 外，`mcp-apps/runtime → sandboxProtocol → electron` 也是实际运行期
+  依赖。必须把 App 上下文读取交给启动器，不能只改语言 import 后声称可在 Node 使用。
+- Host gateway 已持有独立 `createMcpAppsRuntime`，使用 `pluginGateway.modelContext`，不再建
+  registry。此上下文仍是外部应用数据，不等于用户授权。用户已确认授权规则对齐桌面，
+  现注入 `readAutoReviewHistory`：普通输入、调度、委托与 MCP App 回合沿用桌面的历史意图恢复。
+  只读取当前任务有效边界内的用户回执；外部上下文和自动触发文本本身不构成授权。
+- `main.ts` 尚未构造 `createSchedulerHost`；现有 `schedulerQueue()` 与 scheduler e2e
+  只是队列桥和隔离服务验证，不能称正式 Host 自动化已启动。
+
+### 端口对照（目标接法；实际已接与剩余项见本节末尾）
+
+「真实实现」指必须接到实际服务，**不是已经实现**；「不适用」可以不注入，但只在注明
+的能力范围内成立；「暂不支持」需要从当前 owner 的持久任务事实判断并明确拒绝，不能
+以空实现返回成功。落地前核对现有入口，新增拒绝若收窄已经支持的产品能力，先讨论。
+绝不能只检查客户端传入的 createOpts：composeInput 的字段白名单可能已丢掉任务类型。
+
+| 端口 | 合同 | Host 目标处理 | 依据/边界 |
+| --- | --- | --- | --- |
+| `getResolvedMainLocale` | 必需 | 真实实现 | 桌面动态读原值；Host 尚未接入界面语言偏好时返回 null，不把服务器 OS 语言冒充用户选择。 |
+| `getMainClassicalStyle` | 必需 | 真实实现 | 同上，保留当前经典文体偏好。 |
+| `readMcpAppModelContext` | 必需 | 真实实现 | 注入各启动器已有 App registry；Host 使用 pluginGateway.modelContext，不能新建第二份 registry 或借此恢复历史授权。 |
+| `getSession` | 必需 | 真实实现 | 现有 Maker.getSession，保留精确 runtime 身份。 |
+| `closeSession` | 必需 | 真实实现 | 只解绑旧监听并关闭 Maker runtime；不得结算或删除当前 turn，也不清历史持久状态。 |
+| `closeSessionIfCurrent` | 必需 | 真实实现 | 复用 runtime-refresh 关闭语义和 rehydrate 抑制，不能当作任务终止。 |
+| `preflightBotRuntimeResources` | 必需 | 暂不支持 | 先按持久任务来源判定伙伴任务；不得用空函数放行。 |
+| `getSessionMeta` | 必需 | 真实实现 | 现有 Maker.getSessionMeta。 |
+| `readAutoReviewHistory` | 可选 | 真实实现 | 用户已确认与桌面对齐；先排空 Host 持久写队列，再调用共享历史读取（authorization 投影），保留 clear/rewind/子任务边界。 |
+| `readScheduledPermissions` | 可选 | 真实实现 | 读当前持久 permissionMode / planModeEnabled，不沿用队列过期值。 |
+| `assertScheduledDispatchRoute` | 可选 | 真实实现 | 核对最终本机路由；非本机/供应商组执行明确拒绝，不静默改成本机。 |
+| `ensureRemoteReadyForSessionStart` | 必需 | 暂不支持 | 非空 remoteHostId 不能直接本机执行；入口准入和恢复快照都须核对。 |
+| `checkWorkDirExists` | 必需 | 真实实现 | 复用现有工作目录预检工厂；不能用 true 跳过路径检查。 |
+| `resolveRecoveredWorkingDir` | 可选 | 真实实现 | 复用工作目录恢复服务的已确认映射。 |
+| `isPersistedWorktreeFallback` | 可选 | 真实实现 | 识别 Host 自己的恢复根，不借桌面 profile。 |
+| `statDirectory` | 必需 | 真实实现 | 本机 fs.stat，仅用于已确认本机执行的任务。 |
+| `readSessionWorkingDirFromDb` | 必需 | 真实实现 | 当前 owner DB 的权威目录。 |
+| `readSessionWorkingDirState` | 可选 | 真实实现 | 区分缺行与显式空目录。 |
+| `isOrcaMcpHydrated` | 必需 | 暂不支持 | 首批不启动 Orca；拒绝后此分支不可达，不伪装为已注入。 |
+| `buildCreateOptsWithStderr` | 必需 | 真实实现 | 原 stderr 包装器已移到 sessionRequest，共用同一逻辑、各注入自己的 logger。 |
+| `synthesizeOrcaVendorOptionsFromDb` | 必需 | 暂不支持 | 同 Orca 准入；不能返回 false 后继续发送 Orca 任务。 |
+| `readSessionExtraDirsFromDb` | 必需 | 真实实现 | 复用既有目录读取服务；不丢只读授权。 |
+| `readSessionWritableDirsFromDb` | 可选 | 真实实现 | 读持久可写授权，禁止信任 wire 自报。 |
+| `withRehydrateCloseSuppressed` | 必需 | 真实实现 | 复用既有共享模块。 |
+| `bootstrapSession` | 必需 | 真实实现 | 首批 Host createSession + listen + 配置快照；bootstrap 和 onVendorTurnReserved 都绑定实际 Session，创建的 signal 传给 Maker 第二个参数。完整启动后续抽取。 |
+| `markOrcaRoleIfNeeded` | 必需 | 暂不支持 | 非空角色拒绝；普通任务无角色时才允许无操作。 |
+| `broadcastSessionCreated` | 必需 | 真实实现 | 只发布已有任务的 session_changed，不标 action:create，不重复创建 DB 行。 |
+| `prepareSendUserMessage` | 必需 | 真实实现 | Host 已装配共享归一化器，发送/插话统一解析本机文件、cindy-media、xdt-image 和内存图片块；远程引用在入队前明确拒绝。 |
+| `materializeDirectSendOssAttachments` | 可选 | 暂不支持 | 当前 Host 只有共享队列发送入口，本机图片在入队前调用共享 materializer；未接 OSS/Peer 传输，不提供绕过队列的直发物化。 |
+| `createDbMessage` | 必需 | 真实实现 | 现有 persistMessage / durable write，完整透传 agentMeta、清空边界及广播条件。 |
+| `captureCindyLearnInvocation` | 可选 | 暂不支持 | 未接入原捕获器前不授予 /learn 的隐式能力；不伪造授权。 |
+| `rewindPersistedUserMessageAfterClear` | 可选 | 真实实现 | 复用消息回退持久服务，清空竞态不得残留已失效用户行。 |
+| `isClearBoundaryCurrent` | 可选 | 真实实现 | 同一 coordinator 的 clear token 与 generation。 |
+| `linkPiUserEntry` | 可选 | 真实实现 | 同一持久队列 patch agentMeta.piEntryId。 |
+| `readPiUserEntry` | 可选 | 真实实现 | 复用 Pi 已持久消息入口；无条目为 undefined，读取失败不能吞成空。 |
+| `beforeDispatchDirectUserTurn` | 可选 | 不适用 | Host 当前无 Git 保存点服务；本批不宣称支持文件回退，不能生成伪造保存点。 |
+| `prepareProductTurn` | 可选 | 不适用 | Cindy Make 升级产品生命周期不在 Host 首批，相关任务需准入核对。 |
+| `beforeProviderStart` | 可选 | 真实实现 | Host 在 provider 启动前 await markStarted 落盘，失败/取消不执行；桌面不注入。 |
+| `assertBeforeVendorDispatch` | 可选 | 真实实现 | owner、停止信号、clear、generation 最后同步闸门；不能在最后一个 await 之前检查完就放行。 |
+| `onUndispatchedDirectUserTurn` | 可选 | 不适用 | 与 Git 保存点成对；未装配就不产生该生命周期。 |
+| `ackInterruptedTurnDispatched` | 可选 | 真实实现 | 直接注入 ackSessionTurnEndedDurable，只确认旧的中断边界，不用 markEnded 拼装。 |
+| `previewUserPrompt` | 可选 | 不适用 | 桌面提示预览 UI；不替代用户消息持久事件。 |
+| `dispatchUserPromptPreview` | 可选 | 不适用 | 同一桌面预览事务，无预览时省略。 |
+| `commitUserPromptPreview` | 可选 | 不适用 | 同上。 |
+| `rollbackUserPromptPreview` | 可选 | 不适用 | 同上。 |
+| `isSessionRunningError` | 必需 | 真实实现 | 抽取/复用原错误判据，保持 coordinator 的排队与拒绝语义。 |
+| `reconcileCreateOptsWithDb` | 可选 | 真实实现 | 与桌面共用任务行对账；网页选择器已先落库，排队项不覆盖模型/权限。冷启动、重建和已有运行时都在执行前读最新任务设置。 |
+| `applyPendingAgentSwitch` | 可选 | 真实实现 | 先核对现有 Host 切引擎路径；沿用已选配置，不能丢交接或授权。 |
+| `onModelDispatched` | 可选 | 真实实现 | 复用实际派发模型落库，不能用界面选择值回填历史。 |
+| `prepareUnhealthySession` | 可选 | 真实实现 | 复用不健康 runtime 关闭与恢复；避免对旧 handle 发送。 |
+| `prepareExternalInput` | 可选 | 暂不支持 | 外部本机应用接管未接线，按任务来源拒绝；不是无操作接管。 |
+| `restoreArchivedSessionForSend` | 可选 | 真实实现 | 复用原归档恢复服务，不只改内存状态。 |
+| `peekPendingHandoff` | 可选 | 真实实现 | 同一 agentHandoff 注册表，失败不消费。 |
+| `consumePendingHandoff` | 可选 | 真实实现 | 只在已受理后消费。 |
+| `peekWorkingDirectoryRecoveryNote` | 可选 | 真实实现 | 读取工作目录恢复服务本轮说明。 |
+| `readWorkingDirectoryRecoveryCreateOpts` | 必需 | 真实实现 | 从当前 owner 的任务行恢复 cwd、最新配置与同引擎 resume 身份；完整启动偏好仍待后续共用。 |
+| `consumeWorkingDirectoryRecoveryNote` | 可选 | 真实实现 | 只在受理后消费对应说明。 |
+| `peekPlanReconcileNote` | 可选 | 真实实现 | 复用计划对账服务，不能把缺端口当作无计划。 |
+| `consumeSealedPlanReconcileNote` | 可选 | 真实实现 | 沿用计划对账的一次性消费语义。 |
+| `peekGoalInactiveNote` | 可选 | 真实实现 | 复用目标状态服务；若任务类型尚不支持则入口拒绝，不虚报目标状态。 |
+| `isMobileClientInvoke` | 可选 | 真实实现 | 已有认证 invoke context 的体验分流；不用于授权。 |
+| `readHostDeviceIdentity` | 可选 | 真实实现 | Host 自己的设备身份，不取控制端/桌面身份。 |
+| `readTaskSource` | 可选 | 真实实现 | 从持久任务行读取 source，界面归属与模型说明同源。 |
+| `readReplyQuoteNote` | 可选 | 真实实现 | 复用原引用读取；先确认 Host 可达任务类型，禁止把任意引用当成可信原话。 |
+| `readBotThreadNote` | 可选 | 暂不支持 | 伙伴私聊话题首批不执行；须由任务来源准入保证不可达。 |
+| `readInputHandoffOwnerNote` | 可选 | 暂不支持 | Host 代输入未接通，不能伪造完成说明。 |
+| `inputHandoffOwnerNoteDelivered` | 可选 | 暂不支持 | 与代输入成对；没有真实交付不消费。 |
+| `planRepeatableWireNotes` | 可选 | 真实实现 | 同一 wireNoteMemory 供发送和插话使用；runtime 重建、clear、压缩时重置，受理后提交。 |
+| `log` | 必需 | 真实实现 | 注入现有 logger，保持 scope 与隐私白名单不变。 |
+| `workdirDiagnostics` | 可选 | 真实实现 | 注入既有工作目录诊断，不记录消息正文或凭证。 |
+
+### 提交顺序与第二批函数级拆分清单
+
+1. **纯依赖检查点**：语言/文体/App context 端口，桌面原装配接回；保留全部现有测试断言。
+   Node 真实加载成功只能证明依赖可用，不能证明 Host 已使用该事务。
+2. **发送前置与接线**：先搬 `buildCreateOptsWithStderr`、`isSessionRunningError`、
+   `readSessionSource`，加入可选的启动前持久钩子；Host 准入、runtime-only 关闭、turn 绑定
+   就绪后切换发送。任务设置与历史授权已按本节末尾的新合同分别提交，对齐桌面。
+3. **插话与媒体/历史服务**：`steerToAgentAccepted` 单独提交，只搬原函数体和依赖；
+   从 `normalizeAttachments.ts`、`localDb/ipc/messages.ts`、`localDb/ipc/sessions.ts`
+   抽取实际依赖 Electron 的最小边界，再接附件物化、清空回退、Pi 条目与归档恢复。
+4. **配置与启动事务**：`bootstrapSession` 的 325 行闭包最后分步拆，保留目录授权、
+   供应商/账号代次、监听和失败清理；复用 `sessionProviderBootstrap` 与
+   `sessionRuntimeCleanup` 的创建取消机制。`reconcileCreateOptsAgainstDb` 可抽成共享模块，
+   但 Host 是否采用 DB 优先仍需决定。`createUserMessageDurably` 不整体搬给 Host，
+   避免连带桌面用量/自动恢复单例；Host 自己的持久队列补元数据与 clear 闸门。
+   这一步完成前，不宣称九字段 `storedSessionOptions` 已被完整替代。
+5. **后台生命周期**：在同一 owner 创建/切换/退出服务图上装配调度器，停止先阻止新任务，
+   再排空持久写入与结束子进程。伙伴主力电脑和 IM 单实例归属继续独立核实，不能由
+   调度器接线顺便决定。无客户端连接时仍运行，从发行产物重复验证，不只测 fixture。
+
+### 验收门槛
+
+- 桌面发送、插话和协调器现有回归保持原断言通过，Desktop 类型检查；不跑整仓凑数量。
+- Host 测试、类型检查及真实 Node 加载；input-queue 既有 App 授权、停止、回调、来源
+  与 SQLite 恢复回归不削弱。新测试只覆盖新行为，例如 UUID 持久行、说明去重和失败不消费。
+- 先做隔离端到端：真实 Host/数据库/HTTP 和受控 Agent 进程，发送、插话、停止及重启。
+  真实模型/真实账号属于另外的证据；无法自动完成时标未验证，不借正式凭证测试。
+- SSH 路径不落本机 fs；本轮不新增 wire 通道，现有手机入口走同一共用事务；
+  不改设备共享连接重试、relay 或授权协议。失败只影响该任务/请求，不重建全设备连接。
+
+### 依赖检查点的实际结果（2026-11-11）
+
+仅完成发送工厂的三个启动器端口与桌面装配；Host executor 尚未切换，插话和启动闭包
+尚未抽取。所有现有业务断言保留，未改权限、队列、落库或供应商选择逻辑。
+
+- Desktop 类型检查通过；发送事务 298 项、协调器 680 项通过（同一次定向运行，16.29 秒）。
+- Host 类型检查及 186 项通过，包含新增的 Node 真实加载边界用例；该用例并入既有
+  `boundary.test.mjs`，保护架构约定 §5，弥补只扫描 Host 直接 import 看不到传递 Electron
+  依赖的缺口。该文件单独运行 0.72 秒，无 Electron mock、真实账号或网络。
+- 文档合同 11 项、测试规范检查通过。相关日志为本机 `/tmp/cindy-shared-send-*.log`。
+- `codexRouteTransaction.integration.test.ts` 的 36 项因未配置
+  `CINDY_TEST_CODEX_BINARY` 全部跳过，**不是通过**；没有自动寻找正式安装的运行时或凭证。
+- 尚未做本批 Host 实际发送/插话/停止、真实模型与打包运行。已有隔离验收属于上一批，
+  不可当作本次接线的证据。正式 Cindy 未重启、正式 profile 未使用。
+
+
+### 发送接线检查点（2026-11-11，b75adc4b38 已独立复核）
+
+Host 发送已调用 `createMakerSendTransaction`，不再自行拼发送的权限、设备与来源说明。
+插话仍待抽为共用工厂；本检查点只修正原 Host 插话对 Session 返回值的错误判断。
+以下是该提交当时的合同；其中输入设置优先与不恢复历史授权，已由后续两个检查点取代。
+
+- 运行时刷新只关闭旧 Session，不清当前 turn/历史；新建和复用 Session 都重新绑定事件。
+  目录或项目资源漂移后，新回复能落库、旧 Session 终态不释放新队列。
+- Host 在模型启动前等待 active-turn 标记持久化，写入失败不执行；桌面不注入此钩子。
+  共享事务的取消、App 撤权和落库失败回归先红后绿；旧中断确认使用原 durable ack。
+- 每条输入选择继续优先，已存活 Session 仍应用队列选择；不注入桌面的 DB 配置覆盖。
+  当前 owner 的任务行、伙伴关联、组配置及绑定用于准入。普通供应商 ID 不代表供应商组。
+- 用户行补共享 UUID/来源元数据，等待前序回复写入，并附已有 assistant transcriptParentUuid；
+  设备说明按原生上下文去重，压缩/重建后重新发送。正式入口读已有 pluginGateway 的 App
+  上下文；未初始化或无 App 返回空上下文，未增加历史授权。
+- 真实原生测试发现 `Session.steer()` 成功返回 void，原 Host 错判为拒绝，导致已送达插话
+  不落库。已按真实合同处理，取消/授权钩子继续传到异步准备之后的最终执行边界。
+- 本机绝对路径附件仍保留；缓存、OSS、base64 物化、Pi 条目读写、归档恢复、完整启动
+  配置、工作目录恢复与交接/目标/计划说明仍未全部接通。Host 当前没有历史清空入口；
+  只接了 coordinator 的 clear/generation 检查，消息回退端口须随历史服务抽取落地。
+  以上缺口不代表桌面功能降级，也不构成 Host 全功能完成声明。
+
+验证记录（完整日志在本机 `/tmp/cindy-host-shared-send-*.log`）：
+
+- 既有 Host 输入回归原行为断言通过；新增目录/资源刷新、持久标记失败、实际任务准入、
+  UUID、设备说明去重和附件引用行为覆盖。原 Node 单独加载测试已被真实 Host 发送入口
+  的加载与执行覆盖，移除重复用例；原静态 Electron 边界检查保留。
+- Host 全部 198 项通过（4.81 秒），Host 类型检查通过；测试规范检查通过，文件数保持
+  346 个且未上调基线。文档合同 11 项通过。
+- Desktop 发送事务 302 项、sessionRequest 12 项、协调器 680 项、语言说明 7 项通过。
+  Desktop 类型检查通过（`/tmp/cindy-host-shared-send-desktop-types-confirmed.log`）。
+  本批没有跑桌面全量，未把上一批的全量结果当成本批证据。
+- 扩展已有 `codex-runtime.e2e.mjs`：真实 Codex 二进制 + HTTP/chat + Host 队列/Maker +
+  隔离 SQLite + 本机模拟上游，发送/回复落库/UUID/插话/运行时重开/停止通过。
+  插话断言先失败，修正后通过；模拟上游不是真实模型，运行时重开不是进程重启。
+- 源码 Host 独立临时 profile 的启动、重复实例排斥、受保护停止、信号退出与进程重启通过。
+  未使用正式 profile、真实登录和凭证，未重启正式 Cindy。Windows、手机和本批打包版未验收。
+
+
+### 任务设置对齐桌面（2026-11-11）
+
+模型、供应商、推理档位、Fast 与权限统一以任务设置为准，取代上一检查点的
+“每条输入选择优先”。网页选择器原本已调用 `/sessions/update` 落库；本批去掉输入携带的
+旧设置优先层，不把旧输入快照再写回任务。排队期间改选模型或收紧权限，尚未执行的两条
+消息都使用最新任务设置。计划模式沿用桌面例外：每条输入保留入队时的计划意图，
+适用于普通输入及定时输入。冷启动运行时的计划状态按任务行初始化，不能反过来覆盖本条意图。
+
+`reconcileCreateOptsAgainstDb` 抽为 `sessionOptionsReconciler`，桌面保留原查询及赋值规则；
+Host 通过当前账号的任务准入读取接线，执行前也应用于现有 Session，切引擎按原关闭重建
+流程处理。历史原生 resume/fork/thread 清理、providerId 的 null/undefined 区别保留。
+
+验证中有意修改“输入选择覆盖任务行”的两处旧合同断言，另按新合同更新运行时刷新用例的
+预期模型；不把它们说成未改断言。新增真实队列的存活/冷启动两种情况：两条待发消息在
+任务改成新模型、较严权限后均使用最新设置。三条新合同断言先红；接线后输入队列 61 项、
+桌面发送与对账 356 项通过。桌面原 guard 中已抽出的函数改为调用实际生产入口，保留
+权限、Plan 与三态供应商路由断言。日志位于 `/tmp/cindy-task-settings-*.log`。
+
+Host 全部 199 项、两端类型检查、测试规范及文档合同检查通过。
+历史授权恢复尚未在本提交接入，作为下一独立提交实施和审阅。
+
+### 历史授权对齐桌面（2026-11-11）
+
+用户确认两端采用相同授权规则。本检查点独立于任务设置提交：Host 普通发送、调度、
+委托输入及 MCP App 消息，均通过桌面发送事务恢复历史用户意图；插话调用同一个
+`restoreAutoReviewSteerIntent`。这是有意改变 Host 先前不使用历史的边界，不改变桌面规则。
+App 页面内容、调度提示词和其他外部文本仍不是用户原话；已有拒绝或限制也参与恢复。
+
+- `listMessagesForAgentHandoff` 原函数移到 Node 可加载的 `localDb/agentHandoffHistory.ts`，
+  原 IPC 模块保留导出。查询与解析函数体逐字不变，clear、rewind、侧任务、授权回执的
+  时间排序与过滤保持原行为；没有改数据库结构或迁移。
+- 读取前排空本任务的 Host 历史持久队列，读取前后核对账号边界；插话异步恢复后及
+  provider 启动前核对取消信号、Session 身份与回合 generation，避免送入已替换的回合。
+- 原 App「一律空授权」断言按新合同改为「恢复历史用户请求及限制，页面文字不授权」；
+  来源、委托标记与用户行落库断言继续保留。新增用例覆盖普通、调度、插话、持久队列
+  未排空和委托历史读取失败；并入既有 `input-queue.test.mjs`，未增加测试文件或基线。
+
+测试价值：生产入口为 Host 输入队列与共享发送/插话意图恢复；依据是用户确认的桌面
+一致性合同。此前只验证空历史，不能发现授权恢复遗漏及落盘时序问题。最小输入是历史
+「允许部署、禁止删除」加当前「继续」或 App「删除全部」；以受控历史 IO 和模型边界
+验证最终授权内容、阻止派发及等待落盘的可观察行为，tier 为 unit。桌面原有 SQLite
+用例继续验证历史查询的真实边界，不另写一套查询测试。
+
+验证记录（本机 `/tmp/cindy-history-parity-*.log`）：
+
+- Host 全部 204 项通过（4.65 秒），类型检查通过；新授权合同先红后绿，输入队列 66 项通过。
+- 桌面 `messagesListCursor`、`makerSendTransaction`、`autoReviewUserIntent` 共 427 项通过；
+  桌面类型检查通过，未修改这些测试断言。
+- 隔离 profile 的真实 Host HTTP、队列、SQLite 和原生 Codex：发送、回复与 UUID 落库、
+  插话、运行时重开、停止通过；网关/自定义供应商及运行中 key 轮换用例通过。
+  上游为本机模拟服务，凭证是测试值；不等于真实账号/模型验证，运行时重开不是进程重启。
+- 真实账号、真实模型、打包运行、Windows 与移动端仍未验收。本批未推送或发布；
+  完整插话工厂、媒体/清空/归档服务、完整启动与正式调度器装配仍是后续工作。
+
+### 复核修正：保留逐条计划意图（2026-11-11）
+
+独立复核确认历史授权与桌面一致，但发现上一设置提交把普通排队消息的 Plan 意图也
+替换成了最新任务值。桌面发送事务明确保留逐条快照，因此修正前文合同并恢复这个例外。
+Host 对账后保留原输入的 `planMode`；更新已有 Session 的模型等设置时不设置 Plan。
+选择器仍能立即修改运行时状态，冷启动仍由共享事务对副本进行任务行对账。
+
+测试价值：既有设置用例扩成计划开关双向、已有/冷启动两种情况，四项均先红；验证
+排队的「只做计划」不会因后来关闭开关而变成执行，也验证反向不会误启计划。
+每次发送的 Plan 选项与当前运行时状态分别断言，不把两者混为一个设置。tier 为 unit，
+生产入口是原 Host 输入队列；不新增文件或上调基线。
+
+另补一项从 Host 实际写出的用户行恢复下一轮授权的用例，使用 harness 默认持久写入和
+读取端口，不手工构造历史行，防止用户回执元数据变化导致历史约束丢失。
+
+本检查点 Host 207 项通过（4.60 秒）、Host 类型检查、文档合同与测试规范通过，桌面文件
+没有变化。日志 `/tmp/cindy-plan-snapshot-host-tests2.log` 与同前缀的 types/hygiene/docs 文件。
+原生隔离重跑在停止后的 SSE 等待上超时（`/tmp/cindy-plan-snapshot-native.log`，退出 1），
+不能算实跑通过：provider 无终态事件时，队列已结算而 HTTP 流仍等待 `done`；后续单独修复。
+
+后续已确认缺口：Host `updateSession` 直接写入新的 `agentKind`，未同步清理旧引擎的
+`sdkSessionId`，`applyPendingAgentSwitch` 也调用此入口。该问题早于本轮对账抽取；完整
+切引擎接线需使用桌面的原生会话交接/关闭/落库合同，并补切换后的首条发送验收，不能
+把当前路由更新及假依赖的 HTTP 测试称为已验证引擎切换。
+
+### 隔离实跑发现的停止收尾修复（2026-11-11）
+
+上个检查点的超时已修复。provider 在 abort 后进入 idle 却没有发出 `done` 时，原 Host
+只结算队列，`/chat` 仍等待供应商终态。现在在持久写队列排空后，为这条输入发布已有
+`input_receipt` 合同的 `interrupted` 回执；HTTP 流按精确输入 ID 结束，不伪造成功答复。
+provider 尚未确认 idle、持久写入尚在进行时，以及旧账号或关闭中的运行时，均不提前
+发出该回执。写入失败仍保留队列暂停和恢复状态；「中断」不宣称回复已完整保存。
+
+测试价值：扩充原「晚到 idle 与持久写入」用例，验证写完前没有回执、写完后只结算旧输入；
+失败 abort 仍无回执。既有 chat 测试文件增加按输入 ID 关闭流的用例，明确不产生 `done`。
+两个新增行为断言先红后绿（`/tmp/cindy-stop-receipt-red.log`），分别覆盖真实队列生产入口
+和 HTTP 处理器，模型与响应 IO 为假依赖，tier 为 unit。
+
+- Host 全部 208 项通过（4.61 秒），类型检查通过；桌面生产文件与测试均未改变。
+- 原生隔离流程重新通过发送、UUID/回复落库、插话、运行时重开与停止，以及网关/自定义
+  供应商和运行中 key 轮换；日志 `/tmp/cindy-stop-receipt-native.log`，退出 0、两条 PASS。
+  这次仍为真实 Host/SQLite/原生 Codex 加模拟上游，不代替真实账号、模型或打包运行验收。
+- 完整日志为 `/tmp/cindy-stop-receipt-{host-tests,host-types,native}.log`；该修复独立提交，
+  未推送。后续切引擎及其他装配缺口不因本次实跑通过而视作已完成。
+
+网页适配层已显式忽略 `input_receipt`，不再把传输回执转成 Agent 消息；排队投影仍正常更新。
+既有真实 shim bundle 的事件测试增加回执与后续文字帧，先红后绿：
+`/tmp/cindy-stop-shim-red.log`、`/tmp/cindy-stop-shim-green.log`。未做浏览器实机目检。
+
+### 插话工厂抽取检查点（2026-11-11）
+
+`steerToAgentAccepted` 已移为 `createMakerSteerTransaction`。桌面原位置装配原有准入、
+清空/代次边界、消息归一化、历史授权、App 上下文与代输入服务；定义较晚的检查函数
+通过箭头函数延迟调用，不在启动阶段提前读取。新工厂 import 放在原静态 imports 末尾。
+除两个宿主检查端口和允许 Host 无界面语言偏好的空值分支外，原插话函数体逐字保留；
+桌面的语言值始终非空。消息诊断摘要函数一并移动并保留原调用，不增加日志内容。
+
+既有 GoalController 测试由源码切片执行改为直接调用真实工厂，不改原行为断言；原来源
+及输入边界 guard 跟随实现位置，三个派发位置的检查总数不变。桌面 339 项定向回归通过，
+新工厂在 Node 实际加载通过（`/tmp/cindy-steer-desktop-tests.log`、
+`/tmp/cindy-steer-node-load.log`）；函数体比对见 `/tmp/cindy-steer-extraction-check.log`。
+本检查点只完成抽取，Host 接线和新增的插话可观察行为需要后续独立验证。
+
+### Host 接入共用插话（2026-11-11）
+
+Host 的队列端口现调用同一个 `createMakerSteerTransaction`，删除原先自行恢复授权后
+直接 `Session.steer` 的分支。授权历史、引用说明、来源说明、App 上下文与提问分类
+由共用事务处理；消息 UUID、用户名称及宿主专用上下文按协调器原有合同透传。
+发送与插话使用同一份 `wireNoteMemory`，已送达的设备/语言说明不重复，压缩后重新附带。
+说明只进入模型输入，不改变落库原文。
+
+Host 装配保留准入、当前账号、清空边界、输入代次、Session 身份/回合代次及取消检查；
+在异步准备前固定本次插话的 Session，在供应商开始前再次检查。App 上下文仍来自现有
+插件 gateway，消费和授权检查沿用共用事务。没有代输入服务时不生成代输入说明；
+完整附件归一化仍未接入，本机绝对文件路径沿用现状，缓存/OSS/base64 引用明确拒绝。
+
+桌面此步仅将设备身份端口的返回类型允许为空，原装配继续返回实际设备身份，没有
+改变桌面运行逻辑。桌面工厂抽取与 Host 接线分别保存为本地提交，便于独立审阅。
+
+测试价值：既有 `input-queue.test.mjs` 通过真实队列与共用工厂验证插话的提问回复标记、
+普通输入替代待答提问的标记、执行器 UUID 与落库 UUID 一致，以及发送到插话的说明
+去重/压缩重发。旧 Host 未透传这些字段，最小的「运行中任务收到一条提问回答」先红后绿。
+另外在 App 上下文读取处暂停，分别换号、推进回合或撤销上下文，验证返回拒绝且不送达、
+不落库、不消费上下文；这覆盖新接线增加的异步边界。模型与 App IO 为进程内假依赖，
+tier 为 unit，并入既有文件。队列合同是返回 `false`，初版测试误用 `assert.rejects`，
+已按实际接口修正；未修改生产拒绝行为来迁就测试。
+
+- Host 212 项全部通过（4.63 秒），Host 和桌面类型检查通过。
+  日志 `/tmp/cindy-shared-steer-host-tests3.log`、`/tmp/cindy-shared-steer-host-types.log`、
+  `/tmp/cindy-shared-steer-desktop-types.log`；新元数据断言红/绿日志分别为
+  `/tmp/cindy-shared-steer-host-red.log` 和 `/tmp/cindy-shared-steer-host-green.log`。
+- 隔离 Host HTTP/SQLite/原生 Codex 验证发送、回复与 UUID 落库、插话、运行时重开及停止，
+  以及网关/自定义供应商、运行中 key 轮换，两条 PASS、退出 0：
+  `/tmp/cindy-shared-steer-native.log`。上游为本机模拟服务，凭证为测试值，未使用正式 profile。
+- 真实账号、真实模型、打包运行、Windows、手机仍未验收；浏览器无实机目检。
+  完整媒体/清空回退/归档服务、引擎切换、启动闭包与正式调度器装配仍未完成。
+  本检查点未推送、未开 PR；原有的切引擎后首条续接风险仍在，不算本次插话验收范围。
+
+### 共用清空回退与 Pi 重试身份（2026-11-11）
+
+桌面的 `rewindPersistedUserMessageAfterClear` 抽成不依赖 Electron 的工厂，原 IPC 模块
+在原位置注入已有服务；除把账号范围传给清理端口外，函数体不变，桌面端口仍调用原实现。
+可见 Pi 用户条目的查询搬入已有 `messageMutations`，查询条件与长度校验不变，桌面
+保留原导出入口。没有数据库结构或迁移变化，也没有改变桌面的清空、重试或媒体存储格式。
+
+Host 为发送事务和共享协调器接入同一清空回退服务。消息行按原事务写回退标记，调度
+丢弃路径按原事务删除；媒体清理绑定发起时的数据库，账号切换后不向新账号发布事件。
+回退只影响对应用户行，不重建上下文、不重置原生 Session、不删除其它回合。
+这是共享发送中的清空竞态回退端口，不等于 Host 的完整「清空历史」API；现有队列
+`clearSession` 本身不推进持久历史边界。
+
+Host 的 Pi 发送现在把原生用户条目 ID 通过现有持久写队列补入同一消息的 `agentMeta`，
+保留 UUID、送达类型和授权回执。显式重试读取同一可见行的 ID，不用消息文本匹配；
+被清空或回退的行不再用于续接。失败处理仍由共享发送事务决定，不另建重试队列。
+
+测试价值：扩充现有 `sessions.test.mjs`，使用真实内存 SQLite 及生产事务验证普通回退、
+调度丢弃、幂等事件、媒体引用释放，以及两个账号使用相同任务/输入 ID 时的写后换号隔离。
+Pi 用例验证补丁保留既有元数据、清空/回退边界和缺失行；现有输入队列测试另验证
+「原生接受后关联条目 → 出错 → 用户显式重试」会复用原 ID，用户行只写一次。
+过去的 Host 没有接这些端口；这些新增断言覆盖新的持久化和重试结果，不改变既有断言。
+tier 为 unit；数据库是真实 SQL，Session 是假依赖，不等于真实 Pi 进程验收。
+
+- Host 全部 217 项通过（4.67 秒），两端类型检查通过；桌面原有清空竞态、消息读写和
+  发送事务共 325 项通过，未改这些测试。
+  日志 `/tmp/cindy-input-recovery-host-tests.log`、`/tmp/cindy-input-recovery-host-types-final.log`、
+  `/tmp/cindy-input-recovery-desktop-types.log`、`/tmp/cindy-input-recovery-desktop-tests.log`。
+- 抽取前后函数体与 Pi 查询比对通过：`/tmp/cindy-input-recovery-extraction.log`。
+  Node Host 测试实际加载了新增共享模块，没有 Electron 装配依赖。
+- 隔离 Host HTTP/SQLite/原生 Codex 的发送、插话、运行时重开、停止及供应商/key 轮换
+  回归通过：`/tmp/cindy-input-recovery-native.log`。仍使用模拟上游与测试凭证，不接触正式 profile。
+- 完整附件归一化、归档恢复、引擎切换、启动闭包与正式调度器装配仍未完成。
+  归档恢复依赖桌面的生命周期写入和副作用，不能用直接改状态字段代替。
+  真实模型/账号、真实 Pi 重试、打包运行、Windows 和手机仍未验收；本检查点未推送或开 PR。
+
+### 复核修正：Pi 辅助关联失败不暂停正文持久化（2026-11-11）
+
+独立复核复现：Host 把 Pi 条目关联放进现有持久队列后，`SQLITE_BUSY` 会进入该任务的
+失败写入列表，暂停后续回复保存和消息派发。发送虽仍被接受，但这与桌面「关联失败
+只降级为旧式 Pi 恢复」不一致。现保留 FIFO 顺序，在关联写入函数内部捕获并记录失败，
+不把可选元数据失败交给队列的暂停机制；正文持久化和开始标记的保护不变。
+
+测试价值：既有输入队列测试通过真实队列/发送事务/持久核心，模拟 Pi 接受后关联写入
+抛错或目标行缺失，断言回复保存、下一条派发、原用户行只写一次，退出能排空。
+`SQLITE_BUSY` 用例先红后绿；原有正文写失败暂停及恢复用例也通过，没有弱化断言。
+tier 为 unit，原生 Session 与数据库错误为假依赖，未代替真实 Pi 验收。
+
+Host 全部 219 项通过，Host 类型检查通过；本次未改桌面或共享包。
+日志 `/tmp/cindy-pi-link-failure-{red,green,host-tests,host-types}.log`。
+
+### 附件归一化工厂抽取（2026-11-11，仅完成抽取）
+
+`normalizeAttachments.ts` 的主体留在原路径，改为 `createAttachmentNormalizer`；
+桌面新增 `normalizeAttachments.desktop.ts`，在原有调用位置接回既有临时目录、图片缓存、
+媒体仓、引用账本及远程传输服务。端口通过箭头函数延迟读取，缓存和媒体仓没有第二个实例。
+每个归一化器持有自己的临时附件目录、进程身份和清理状态；桌面仍只构造一次。
+原临时文件权限、存活探测、旧引用兼容、校验失败、接受前后清理规则均保持原实现。
+
+主体没有整体重新缩进或搬到新 Core 文件。函数体逐字比对除导出变成工厂返回值、公共类型
+移到外层以及临时目录读取改为端口外一致：`/tmp/cindy-normalizer-extraction.log`。
+静态闭包 18 个模块，Electron、桌面装配和相应动态引用均为 0；实际 Node 加载成功。
+主进程静态顺序模拟的 5701 个共有条目中有 9 个位置不同，来自附件常量、目录归档和
+文件夹解包三个模块相对远程传输依赖后移，不能声称整个加载顺序逐项一致。
+这三个模块未新增初始化 I/O；静态模拟不替代桌面启动实测。
+
+原有附件传输/临时目录的 38 项桌面测试通过（1.11 秒），只改测试导入路径，未改断言；
+Host 219 项测试和两端类型检查通过。日志为
+`/tmp/cindy-normalizer-{desktop-tests,desktop-types,host-tests,host-types,node-load,static}.log`。
+未新增测试文件或放宽测试基线。
+
+Host 生产入口尚未使用此工厂，附件接受范围仍按前述检查点。接线前须把同一账号的
+媒体入库、远程取件和拒绝清理连成完整流程，不能用空实现让引用假装已经落地。
+此抽取没有修改 Device Link 协议或中转服务，没有做新的桌面 GUI、打包或真机验收。
+
+### 附件操作的账号绑定准备（2026-11-11，Host 尚未接线）
+
+归一化工厂新增可选的 `captureIO`：在一次准备开始、首个异步操作之前，捕获这一操作的
+媒体入库、缓存、远程取件及清理依赖。归一化循环和返回的延迟清理闭包始终沿用这份依赖，
+不在清理时重读当前账号。桌面不提供这个端口，继续调用原来的单实例装配；另外注明
+装配模块不能反向依赖入口文件，避免顶层读取导出时遇到循环初始化。
+
+测试价值：既有附件临时目录测试增加一个 unit 用例，通过真实工厂及隔离文件系统，
+模拟两个账号的 IO。第一张图入库期间换号，后续图片仍使用原绑定；新账号同任务准备
+完成后执行旧清理，新账号的引用和字节删除端口不受影响。另覆盖远程取件期间换号后，
+同一消息中托管图片的解析及远程删除仍使用原绑定。此前用例只有单个桌面 store，无法
+发现此问题。将同一用例运行在 `b9e6dbf724` 的工厂上失败，恢复修改后通过；未改旧断言。
+
+附件 39 项（原有 38 项加上述用例）、Host 219 项及两端类型检查通过。日志：
+`/tmp/cindy-attachment-owner-baseline-red.log`、`/tmp/cindy-attachment-owner-desktop-tests2.log`、
+`/tmp/cindy-attachment-owner-{desktop-types,host-tests,host-types}.log`。
+这仅验证工厂能保持调用方提供的绑定，不代表真实账号数据库或 Host 附件全链路已验收。
+Host 装配还须捕获实际 owner/DbClient、跨异步边界检查有效性，并处理取消和队列持有期；
+不得仅凭某一个账号的零引用状态直接删除共用字节。现有 Host 附件接受范围暂未改变。
+
+### 本批同步主线后的回归（2026-11-11）
+
+附件账号绑定检查点 `485cc4188a` 之后合入主线 `85945e519a`（97 个提交），无冲突。
+主线修改 356 个文件，其中 351 个仅主线修改的文件与主线 blob 完全相同；5 个双侧修改
+文件为桌面两个启动入口、`register.ts`、消息 IPC 与会话树测试。主线的历史动作恢复、
+瞬态关闭副作用保护、空回复预览和 Windows 主题处理均保留，本批共享发送/插话和
+附件装配仍保留。对照记录：`/tmp/cindy-host-parity-merge-audit.log`。
+
+- 桌面发送、协调器、插话调用方、附件、历史动作与关闭保护 11 文件、1,400 项通过；
+  Host 全部 219 项通过，两端类型检查通过。
+  日志 `/tmp/cindy-host-parity-merge-{desktop-tests,desktop-types,host-tests,host-types}.log`。
+- 隔离 Host HTTP/SQLite/原生 Codex 回归两条 PASS：发送、回复及 UUID 落库、插话、
+  运行时重开、停止、网关与自定义供应商、运行中 key 轮换。
+  `/tmp/cindy-host-parity-merge-native.log`。临时 profile、本机模拟上游、测试凭证；
+  没有使用正式登录或正式数据，不等于真实模型/账号验收。
+- 未跑桌面全量；没有新的桌面 GUI、打包版、Windows 或手机实测。
+  Host 附件装配及其余未完成项不因主线同步视为完成；仍未推送或开 PR。
+
+### Host 本机附件接线（2026-11-11）
+
+`createHostAttachments` 已接到正式启动器的输入队列，发送和插话使用同一个共享归一化器。
+本机路径图片在入队前经现有 `ingestMedia` 与补偿日志入仓，队列及历史引用都改成托管地址；
+普通本机文件保留路径。已有 `cindy-media://` 读取先核对捕获账号的媒体账目；
+`xdt-image://` 沿用现有缓存目录和解析服务，内存图片块沿用私有临时文件流程。
+这不是网页上传功能，HTTP `/chat` 的文本合同未改；OSS/Peer 引用及不认识的地址在准备阶段
+明确拒绝，尚未接共享中转服务，不宣称远程附件可用。
+
+附件生命周期复用 `QueuedAttachmentOwnershipRegistry`：重复入队不重复导入，编辑保留仍被
+引用的附件，丢弃须等替换快照成功落盘；用户行写入后转交历史持有，失败可重试时不清理。
+快照失败保留旧引用及字节，不凭内存中已经移除就删除可恢复内容。停止发生在准备期间时，
+准备代次检查拒绝接受并撤回本次引用；换号后的清理使用原 DbClient，不读取新账号数据库。
+
+**物理回收的边界**：当前不同账号仍共用 profile 下的媒体字节根。Host 准备失败或队列
+丢弃只删除自己创建的引用，不删零引用 blob 记录或物理字节；否则无法证明另一个账号
+没有引用同一哈希。正式 recycler 尚未共用，保留下来的零引用内容会占用磁盘，不能记成
+已回收。旧数据库关闭导致撤引用失败时同样保留内容，现有补偿/任务媒体清理另行处理。
+没有新增媒体根目录、表、协议或额外持久清理状态，桌面的清理行为未改。
+
+每个现有 owner 输入运行时持有独立临时根，所有实例使用同一个进程存活身份；这样孤儿
+扫描不会互删，同一进程内不同账号出现相同任务 ID 也不会共用任务临时目录。完整任务关闭
+和 owner 运行时销毁清理临时文件，工作目录漂移引起的 runtime-only 刷新不清理。
+
+新增验证通过真实队列、隔离文件系统及内存 SQLite 覆盖图片/文件发送和插话、编辑保留、
+快照失败、入库失败、停止回滚、换号后的引用/字节保护，以及同任务 ID 的临时目录隔离。
+原有测试未删除或弱化。把输入队列和执行器恢复到上一提交后，新发送用例失败于缺少托管
+图片地址；恢复接线后通过。原生 Codex 验收额外断言本地模拟上游收到 PNG 图片字节和文件
+路径，真实 SQLite 历史里保存托管地址。
+
+本检查点门禁：Host 225 项通过（4.68 秒），Host 类型检查通过；桌面附件/发送/插话调用方
+4 文件 577 项通过；原生 Codex 隔离实跑三条 PASS。Host 队列单文件 82 项为 2.87 秒。
+日志在 `/tmp/cindy-host-local-attachments-final-host-tests.log`、
+`/tmp/cindy-host-local-attachments-final-host-types.log`、
+`/tmp/cindy-host-local-attachments-final-desktop-tests.log`、
+`/tmp/cindy-host-local-attachments-native.log`，先红证据在
+`/tmp/cindy-host-local-attachments-baseline-red.log`。本次未重跑整仓或桌面类型检查，
+上一检查点的桌面类型检查记录保留，不能当作本次新增实跑。
+
+仍未验证真实账号、真实模型、真实 Pi、打包版、Windows、手机，以及真实桌面附件操作。
+附件归一化主体和桌面装配在本检查点没有改动。归档恢复、完整引擎切换、启动闭包和正式
+调度器装配继续按前述计划推进；本检查点仍仅本地提交，未推送或开 PR。
+
+Orca Worker 在 `3eb486ea64` 补跑五个隔离场景：导入前/后换号、第二张图期间换号、旧库
+关闭后回滚，以及编辑准备期间原消息已派发。均按预期拒绝过期输入或撤回未采用的引用，
+新账号不被写入；日志 `/tmp/cindy-w9-probe-attach.log`。这是真实文件/内存 SQLite/补偿日志
+与假 Session 的验证，不是真实模型或真实账号验收。
+
+前端地址形态的静态核对：网页共用 `messageAttachmentPayload.ts`，只有 URL 图片进入
+`persistImageRefs`，内存 base64 不生成 `clipboard://` 历史引用；网页 shim 的本地选文件路径
+仍返回明确不支持。手机 `attachments.ts` 与 `inputProjection.ts` 把上传完成的 OSS/Peer 引用
+或被控端文件路径写入历史，前两者在当前 Host 明确拒绝。这不等于网页/手机实际上传已测。
+`xdt-image://` 只复用旧缓存的路径解析，缓存按任务而非账号分目录，不能宣称具有
+`cindy-media://` 的账号账本校验。
+
+完整关闭失败时暂存文件有意保留：`executor.close()` 可能在排空回复写入时就抛错，尚未
+调用 Maker 关闭运行时，因此不能无条件在 finally 删除仍可能被模型使用的文件。
+正常关闭仍即时清理；异常残留由进程退出后的下一次孤儿扫描处理。
+
+### 远程媒体传输的共用准备（2026-11-11，Host 远程附件尚未开放）
+
+`mediaTransfer.ts` 主体留在原路径，改为 `createMediaTransfer` 工厂；桌面经唯一的
+`mediaTransfer.desktop.ts` 实例接回原网络与 API。下载和备用上传仍使用 Electron
+`net.fetch`，主上传仍使用原生 fetch；网络失败切换、按目标缓存传输偏好、共享任务走
+官方媒体接口、自建中转路由及完整性检查均未改。Host 未来装配须接自身出站代理，不能
+把原桌面网络语义直接替换为无代理直连。当前仍拒绝 OSS/Peer 附件，不因能加载此工厂
+就视为远程收件可用；账号绑定和 Device Link API 的中转选择仍是接线前置。
+
+静态核对：17 个原有函数体除网络端口读取外相同；调用方和原有测试只修改导入路径，
+测试断言未改。主进程共有 5,709 个模块的相对顺序完全一致，只新增桌面装配；所有使用方
+都在函数调用时读取新导出，包括归一化器的箭头函数包装，没有模块顶层取值。此前自查
+把对象属性名误计为读取，Orca Worker 的独立 AST 复核纠正了这一点；没有形成初始化循环。
+共用传输静态闭包 104 个模块，Electron、桌面装配及相应动态引用为 0。
+日志 `/tmp/cindy-media-transfer-{body-audit,initialization-audit,order-diff,core-closure}.log`。
+
+新增测试价值（unit，合入现有 Host `boundary.test.mjs`）：实际在 Node 加载工厂并下载到
+隔离目录，断言字节校验通过后发布文件；同长度错误哈希不得替换已存在文件，也不得留下
+半成品。它保护架构约定 §5 的 Node 运行边界，已有桌面测试模拟 Electron，不能发现
+误接桌面依赖导致 Node 加载失败；最小输入是一份文件和一份同长度损坏响应。
+
+门禁：桌面相关 17 文件 554 项通过（21.61 秒）；Host 226 项通过（5.22 秒）；共享客户端
+60 文件 1,254 项、自建中转 4 文件 50 项通过，隔离真实中转与生产客户端的加入、签名通信
+和重连互通通过。传输/API 的方法、请求体、凭证与路由选择没有变化，自建中转无需新增
+服务端适配；媒体接口和上传栈切换由原有 77 项传输测试覆盖。日志
+`/tmp/cindy-media-transfer-{desktop-callers,host-tests,client-tests,relay-tests,relay-interop}.log`。
+桌面与 Host 类型检查通过，日志 `/tmp/cindy-media-transfer-{desktop,host}-types-final.log`；
+文档合同和测试卫生检查通过，日志 `/tmp/cindy-media-transfer-{docs,hygiene}.log`。
+
+没有重启正式应用，也未做真实桌面附件、手机上传、真实账号/模型、打包版或 Windows 实测；
+静态加载与隔离互通结果不能替代这些验收。本检查点仍仅本地准备，未推送或开 PR。
+
+### 设备互联 API 的共用准备（2026-11-11，Host 尚未接线）
+
+`deviceLinkApi.ts` 保留选路主体，`createDeviceLinkApi` 接收官方端点、账号请求、当前中转、
+设备目录和加密网络依赖；桌面唯一实例在 `deviceLinkApi.desktop.ts` 接回原服务。官方请求
+仍在每次请求/刷新时读官方端点，自建中转使用独立 `CindyRelay` 凭证且禁止账号刷新/登出，
+只走加密网络的设备操作保持身份检查和路由代次检查。没有增加 API、改变 wire 字段或
+把共享任务媒体送到自建中转，自建服务端无需同步实现变更。
+
+原来的三类动态模块读取变为可等待的准备端口。桌面通过静态 namespace import 提供已经
+被设备目录加载的模块，不新增运行时模块加载；所有原来的 await 边界及其后的账号/路由
+检查保留。静态顺序模拟中 5,710 个共有模块相对顺序完全一致，只增加 API 装配。五个原有
+函数体除了端口读取没有其他差异，使用方无顶层取值；这不是对运行时微任务时序逐拍相同的
+证明。日志 `/tmp/cindy-device-api-{body-audit,order-before,order-after,order-diff}.log`。
+
+Host 边界测试新增一个 unit 场景，实际在 Node 加载 API 工厂并调用共享账号请求客户端，
+验证自建中转返回 401 时请求只含中转凭证、账号 token 不被读取且不刷新/登出；同一实例的
+显式官方请求仍发往官方地址并携带账号 token；设备操作准备期间改变路由后零发送。
+依据为自建中转规则 §5.2/§8 与架构约定 §5，已有 Desktop 用例模拟 Electron，不能发现
+Node 加载边界与装配问题；最小失败输入为自建路由上的 401，以及异步准备期间的路由变化。
+Node 静态闭包仅两个模块，无 Electron、桌面装配或动态模块加载。
+
+桌面媒体测试首次因原有目录 mock 屏蔽了传递依赖而无法加载新显式 import；已为三组
+设备管理依赖补上“被调用即失败”的隔离替身，路由、传输和权限断言未改。修正后 API/媒体/
+远程目录 3 文件 103 项通过（1.46 秒），Host 227 项通过（4.81 秒），两端类型检查通过。
+日志 `/tmp/cindy-device-api-desktop-tests{,2}.log`、`/tmp/cindy-device-api-host-tests.log`、
+`/tmp/cindy-device-api-{desktop,host}-types.log`。共享客户端 1,254 项、自建中转 50 项及真实
+中转互通重跑通过，日志 `/tmp/cindy-device-api-{client-tests,relay-tests,relay-interop}.log`。
+文件 Peer、镜像 IPC 边界和远程桌面边界另 3 文件 173 项通过（20.51 秒），日志
+`/tmp/cindy-device-api-additional-callers.log`；文档合同和测试卫生通过，日志
+`/tmp/cindy-device-api-{docs,hygiene}.log`。没有新增真实等待或扩大测试超时。
+
+Host 生产接线继续保留：不能只给 REST 换地址却让 WebSocket 仍带账号 token；加密网络与
+设备目录还需要 Node 装配。另核实 `disableShareAvailability` 在桌面是官方跨账号服务，
+不能直接改为跟随自建中转，后续应复用显式官方服务入口。未验证项仍同上一检查点；没有
+开放 Host 远程附件、没有改正式应用或 profile，本检查点未推送或开 PR。
+
+### 本批收尾与主线同步（2026-11-11）
+
+本批交付范围收在发送、插话、历史授权、消息回退与本机附件的共用实现。远程媒体传输和
+设备互联 API 已抽成可在 Node 加载的工厂，但 Host 生产装配仍未接通。剩余工作涉及
+加密网络运行时、中转凭证存储、设备目录，以及 WebSocket/REST 的一致选路，不能只接
+下载函数或回退到官方端点后宣称支持自建中转。本批不继续扩展这组生命周期；远程附件、
+完整引擎切换、归档恢复、工作目录恢复和正式调度器装配仍按上述未完成项推进。
+
+同步 main `83ebe1811d`（相对上次同步新增 41 个提交、92 个文件），无冲突。与本分支
+重叠的三个文件是 `register.ts`、`bootstrap-electron.ts` 和
+`sessionRuntimeControlWiring.test.ts`；main 的引擎切换回调与冒烟窗口参数均完整保留。
+在添加本段验证记录之前，暂存树与 `git merge-tree` 的机械合并结果完全相同，日志
+`/tmp/cindy-host-parity-final-merge-audit.log`。
+
+合并后验证：
+
+- PASS Desktop 定向 Vitest：11 个文件、1,667 项，15.33 秒，覆盖发送、插话、协调器、
+  历史授权、引擎切换、附件和设备 API。日志
+  `/tmp/cindy-host-parity-final-merge-desktop-tests.log`。
+- PASS Desktop 类型检查（复用独立的临时 tsbuildinfo）；日志
+  `/tmp/cindy-host-parity-final-merge-desktop-types.log`。
+- PASS Host 全部 227 项测试和类型检查；日志
+  `/tmp/cindy-host-parity-final-merge-host-tests.log`、
+  `/tmp/cindy-host-parity-final-merge-host-types.log`。
+- PASS `apps/host/scripts/codex-runtime.e2e.mjs`：真实原生 Codex 进程、生产 Host HTTP/队列、
+  SQLite 与附件装配，在隔离 profile、测试凭证和本机合成上游下验证发送、UUID 与回复
+  落库、插话、运行时重开、停止，以及图片字节到达上游、文件路径保留和媒体地址落库；
+  原有网关/自定义供应商与运行中换 key 场景也通过。日志
+  `/tmp/cindy-host-parity-final-merge-native.log`。这不是真实账号或真实模型验收。
+
+Orca Worker 已逐批复核所有实现检查点至 `0a9ed3e0ec`，未报告未解决的阻断项；本次
+无冲突主线同步由 Lead 核对并重跑上述门禁。静态模块顺序、函数体比对、隔离进程实跑与
+真实桌面 GUI 是不同证据；真实登录桌面附件/设备互联、真实 Pi、打包运行、Windows 和
+手机仍未验收。正式 Cindy 与正式 profile 未被重启或用于本批测试。
+
+为 PR 的测试价值说明单独运行改写或新增用例所在的文件，全部通过。命令墙钟耗时：
+Desktop `makerSendTransaction` 10.92 秒、`normalizeAttachmentsTemp` 1.57 秒、
+`goal-host/controller` 9.52 秒、`sendToSessionLazyResumePermission` 4.06 秒、
+`sessionTreeProviderResume` 1.95 秒；Host `input-queue` 2.54 秒、`boundary` 0.29 秒、
+`chat.interactions` 1.43 秒、`chat` 0.41 秒、`sessions` 1.03 秒、`web-shim` 0.26 秒。
+发送事务文件的 Vitest 自报总时长 10.24 秒，其中收集/转换 8.87 秒、302 项用例执行
+313 毫秒；超过 10 秒来自既有大模块的加载成本，没有新增真实等待或放宽超时。
+日志 `/tmp/cindy-host-parity-single-{desktop,host}-*.log`；文档合同与测试卫生检查均通过，
+日志 `/tmp/cindy-host-parity-final-{docs,hygiene}.log`。
+
+### PR #9963 首轮 CI 与审阅修复（2026-11-11）
+
+Greptile 的 P1 确认成立：生产 `markStarted` 以前使用尽力而为的桌面开始标记，
+写入失败被内部吞掉，等待 drain 也不能证明成功。新增显式的
+`markSessionTurnStartedDurable`，仅 Host 接入：本次数据库错误返回调用方，冻结或无库时
+拒绝，后续串行写链仍可继续；Desktop 原入口仍是原来的吞错/日志行为。
+Host 队列用真实 SQLite trigger 拒绝开始 UPDATE 的回归先红后绿：没有派发、没有用户行，
+输入保留在队首；解除故障后 durable 标记可正常写入。既有 mock 抛错用例不能覆盖这个生产
+装配缺口，新增用例并入 `input-queue.test.mjs`，tier 为 unit，无新增真实等待。
+
+CI 的三类测试位置问题同时修正：模型对账/手机说明 guard 指向抽取后的共享模块，原字段
+断言保留；插件插话的六项授权/撤权测试改为调用完整 `createMakerSteerTransaction`，
+不再剪取 register.ts 的旧代码。原授权结果、撤权零执行与零 consume 断言保留，完整事务
+现在覆盖派发前和启动前两次 message guard。Windows Host 交互测试用 `os.tmpdir()`
+替代 `/tmp`，使工作目录在运行平台上实际存在，没有跳过生产路径检查。
+
+验证：Host 228 项通过（约 4.8 秒）；Desktop 开始标记与三组 CI 失败文件 4 文件 105 项
+通过（6.67 秒），插件授权完整工厂 24 项另行通过，日志
+`/tmp/cindy-9963-r1-{host-final,desktop,authorship-final}.log`。生产 SQLite 回归的先红/后绿
+日志为 `/tmp/cindy-9963-marker-{red,green}.log`；原生隔离 E2E 三条 PASS，日志
+`/tmp/cindy-9963-r1-native.log`。真实 Windows 执行仍须等新提交的 CI，不能用 macOS
+定向运行代替；其余未验收边界同上。
+
+本轮两端类型检查及测试卫生通过，日志
+`/tmp/cindy-9963-r1-host-types.log`、`/tmp/cindy-9963-r1-desktop-types-final.log`、
+`/tmp/cindy-9963-r1-hygiene.log`。插件授权单文件运行 5.64 秒（24 项，执行 77 毫秒）；
+没有增加测试基线额度，也没有新增源码文本断言。
+
+## 第 0 批：通道覆盖度量（2026-11-12）
+
+后续各批按真实使用排序，不靠估计。两份结果都由脚本生成：
+
+- **全量清单** [`channel-coverage.md`](channel-coverage.md)，由
+  `node scripts/host-channel-coverage.mjs` 生成。用 TypeScript 类型检查器解析桌面主进程
+  每个 `ipcMain.handle/on` 及包装函数的通道名（字面量、常量对象、模板字符串、
+  `as const` 循环、`Object.entries` 处理器表、透传参数的包装函数），0 处未解析。
+  清单只写文件不写行号（行号在 `--json` 输出里），避免一合并就过期；也不加“清单必须
+  最新”的 CI，这个仓每天有大量 PR 动 IPC。
+- **真实使用**：`--mock` 界面夹具（隔离沙箱 `host-usage`，没有登录 Cindy 账号）里用
+  `apps/desktop/scripts/host-client-usage-tour.mjs` 走一遍 25 个夹具任务、20 个设置页、
+  10 个主页面并新建任务发送一次，主进程按 `CINDY_IPC_USAGE_FILE` 计数（仅源码运行）。
+  这是旧版脚本的历史采样；当前巡检只导航读取，不填入或发送消息。两份证据未重录，
+  不代表当前只导航版本的采样。
+  报告存为 [`evidence/channel-usage-mock-tour.json`](evidence/channel-usage-mock-tour.json)，
+  清单脚本默认读它排序。这一轮共调用 253 个通道（1862 次）。
+- **更正（2026-11-12）：这次采样调用了真实模型。** 之前写的“免登录本地数据”“没有使用
+  真实账号”不实。沙箱启动时自动沿用了这台电脑上的命令行登录（订阅）：`codex-home/auth.json`
+  是指向本机 `~/.codex/auth.json` 的链接，Claude 沿用钥匙串里 Claude Code 的登录，
+  沙箱 `native-provider-auth.json` 里两家的来源都是 `native-harness-inherited`。
+  沙箱库 `daily_model_usage` 的记录：
+  - Codex `gpt-6.1-sol`：两次“发送一次”各跑了一个回合（2026-11-11 12:43、13:16 UTC），
+    合计输入 34,170、输出 376、读缓存 101,248 个 token。
+  - Claude：沙箱启动约 11 秒后伙伴自动写邀请问候，早于巡检连上。Opus 5.5 输入 2、输出 195、
+    读缓存 13,279、写缓存 18,890；Haiku 5.5 输入 2,005、输出 18。
+  - 按参考价估算约 0.24 美元，用的是订阅额度，不是 API 密钥计费。
+
+  当时没有核实启动进程的环境变量，也没有检查沙箱里的模型登录来源。`--mock` 与隔离
+  profile 都挡不住这种沿用，只把 `HOME` 指到临时目录也不够（钥匙串不随 `HOME` 变）。
+  本机 `~/.codex/auth.json` 最后修改时间早于沙箱创建，沙箱运行期间没有经这个链接写入。
+  在启动前的模型隔离有硬性保证之前，不再启动带界面的沙箱。
+- **计数格式**：计数报告从 v2 起按 `(kind, channel)` 分别记 invoke 与 event。上面两份证据
+  是 v2 之前录的旧格式，没有重录，脚本按每条记录的 `kind` 读取。旧格式只按通道名记数，同名的
+  invoke 与 event 混在一条里，事后拆不开，需要分开时只能重新采样。今天同名的只有
+  `ghosts:workdir-prefs` 一对（同步事件 S·镜像 + 异步调用 A），两份证据里都没有它的调用，
+  所以排行与 133 个（722 次）不受影响。
+
+**归属**（主进程共 1456 个通道；规则表见清单「归属规则」，正本是脚本的 `OWNERSHIP_RULES`）：
+
+| 分类 | 含义 | 通道数 |
+| --- | --- | ---: |
+| 已代理 | 合同 75、客户端模式自有 2 | 77 |
+| A | 必须由后台处理：读写后台持有的数据或运行状态 | 912 |
+| B | 永久留在窗口：窗口外壳、对话框／剪贴板／系统外壳／通知、截屏录屏与远程桌面、电脑控制与浏览器、输入设备与语音、安装包更新与诊断 | 353 |
+| W | 窗口本地设置：侧栏设置与项目顺序，窗口直接读写同一份 profile | 6 |
+| S | 同步通道（处理函数给 `event.returnValue` 赋值，AST 自动识别）：S·本地 8（界面设置与登录首帧提示，窗口本地读 profile）；S·镜像 6（`ghosts:*`，数据归 Host） | 14 |
+| R | 回执通道：主进程向界面要数据、界面回执（`model-favorites:host-*`、`setup-migration:host-*`、`app-preferences:reply`） | 6 |
+| C | C-后台 32（终端、任务范围文件操作）、C-两段式 41（选择框／访达／确认框后写后台）、C-窗口本地 11（本窗口选择的本机文件、进程监视）、C-专项设计 4（`input-handoff:*`、`device-link:invoke`） | 88 |
+
+依赖判定：A 领域的处理函数及其调用的两层桌面源码函数（含参数默认值，不含被调函数里的嵌套回调）
+若用到窗口 API（对话框、系统外壳、剪贴板、`BrowserWindow.fromWebContents` 等），改判 C-两段式；
+未登记前缀同理，否则判 A。发送方校验（`src/main/security/`）与发给某个窗口的推送不算窗口 API。
+扫描从参数默认值起算后，唯一改判的是 `git-review:open-file`：A（git 与工作树）→ C-两段式
+（`openReviewFile` 第 4 个参数默认值是 `shell.openPath`）。它在 A 与 C-两段式之间移动，原口径 990 不变。
+
+**总口径：真正要 Host 做的 = A + C-后台 + C-两段式 = 912 + 32 + 41 = 985**；夹具巡检实际调用到
+其中 **132 个（709 次）**，这是“还差多少”的下限，巡检没有覆盖真实模型回合、附件、新建自动化、
+Orca、伙伴与 IM、远程执行。S 与 R 已从 A 中单列，C-窗口本地与 C-专项设计不计入。后续各批的
+范围与“还差多少”以此为准。
+
+合入包含 #9991 的 main `8f1869c46f` 后重生成：总数 1456，已登记合同通道 75，A 912，Host 待接 985。证据未重录；旧采样在新归属下覆盖 132 个待接通道（709 次），原来的 133 个（722 次）是合入前口径。Windows 路径统一后，真实 `openReviewFile` 回归同时覆盖斜杠与反斜杠路径。
+
+合同一侧的通道名改为全部静态解析：#9991 用 `Object.entries(HOST_BROWSER_SETTINGS_ACTIONS).map(([action]) => …)` 生成的 8 个 `browser-backend:*` 写法是模板字符串，脚本原先读不出就悄悄跳过，把它们误列为 B（窗口本地）。现在脚本能解析这种写法；任何解析不出的合同通道名都会让生成直接失败，不再跳过。改判的只有这 8 个（B → 已代理，巡检调用 2 次），合同 67 → 75、B 361 → 353、窗口类 386 → 378，Host 待接 985 不变。
+
+**窗口类在客户端模式下**（窗口类 = B + W + S·本地 + C-窗口本地，共 378；对照客户端模式登录页
+[`evidence/channel-usage-client-login.json`](evidence/channel-usage-client-login.json) 与普通模式
+巡检后两份主进程处理者快照）：已注册 **364**；未注册 **12**——`maker:computer:*` 10 个与
+`maker:browser:*` 2 个，只在客户端模式跳过的 `registerMakerIpcsAfterSplash` → `registerMakerIpc`
+里注册，今天返回 `UNSUPPORTED_CAPABILITY`（拖拽开始是事件，无人监听）。**未实现**；#9991 不接，
+归本任务第 1a 批：#9991 合并后，把这 12 个注册拆成客户端模式也会调用的函数。另 2 个插件页面通道
+注册在 `webContents.ipc` 上，快照不覆盖。
+
+**剩余项（本批记录，不在本批处理）**：
+
+- `update-relaunch:blocking-activity` / `blocking-summary`（“现在重启会打断哪些任务”）是 Host
+  持有的运行状态，归 A 的“升级与交接”领域；它注册在客户端模式跳过的
+  `registerMakerIpcsAfterSplash` 里，今天返回 `No handler registered`。客户端模式下的答案取决于
+  交接合同，**归交接任务留在原工作区的升级流程**，不归本计划的各批。
+- **Host 没有免账号本地模式**：桌面有 `auth:enter-local`，Host 只有云端账号一种登录态，所以
+  隔离 profile 里客户端模式窗口停在登录页，无法在不碰真实凭证的情况下做完整客户端验收。
+- **S·镜像 6 个**（`ghosts:recommendations`、`unread`、`recent-usage`、`builtin-status`、
+  `errand-prefs`、`workdir-prefs`）需要“窗口缓存镜像”
+  （Host 经事件流推送，窗口同步回答缓存）或把界面改成异步，是一个单独的小设计，放进插件那一
+  小批，不混进 1a。S·本地 8 个由窗口本地读同一份 profile；其中
+  `auth:has-persisted-session-hint-sync` 只在第一帧之前读存量会话标记，登录状态本身仍以 Host 为准。
+- **R 回执通道 6 个**：数据在界面本地存储，Host 要用需经窗口往返一次，先标出来，不排期。
+- **C-专项设计 4 个**涉及“用户填写的值只交给宿主执行”和远程控制派发的安全边界，先读
+  `docs/product-rules/input-handoff.md`，方案出来前不动。
+- 启动时同步被丢（见下文“巡检顺带发现”）是既有问题，另开小修复。
+
+**为什么排行用普通模式而不是客户端模式**：Host 只有云端账号一种登录态，没有桌面的
+免账号本地模式；隔离 profile 里没有登录 Cindy 账号，窗口以客户端模式启动后停在登录页，
+而真实登录会动到钥匙串凭证。所以客户端模式只实测了启动与登录页：隔离 Host（新沙箱
+`host-client`）+ 客户端模式开发窗口，页面落在 `#/login`，唯一一次未接调用
+`maker:remote-ssh:cc-mgr-list-pending-upgrades` 返回 `UNSUPPORTED_CAPABILITY` 并计入报告，
+之后桌面再注册 `maker:*` 通道没有出现“重复注册”错误。两种模式的渲染层相同，未接通道在
+客户端模式下没有处理者，所以普通模式的调用集合就是客户端模式会落空的集合。
+`host-client` 沙箱当时同样没有检查模型登录来源，用完已删除，无法事后核对；那次没有发送
+任务，Host 也没有登录、没有数据 owner。
+
+**修掉的客户端模式缺陷**：Electron 42 在 invoke 时先查 `_invokeHandlers.has(channel)`，
+查不到直接回“No handler registered”，根本不会走到 `get()`。原兜底只改写了 `get()`，
+单测直接调 `get()` 所以一直是绿的，实际客户端模式下未接的 `maker:*` 从来没有返回过
+`UNSUPPORTED_CAPABILITY`（隔离 Electron 42.11.12 探针复现）。现在同时应答 `has()`，
+并用注册守卫区分“invoke 查询”和“`handle()` 注册前的查询”，否则后注册的 `maker:*`
+通道会被误判为重复注册而中断后续注册。真实 Electron 探针与实机客户端窗口都已验证。
+非 `maker:*` 的未接通道仍保持 Electron 原错误，只计数。
+
+**巡检顺带发现**（普通模式也存在，未在本批修改）：`maker:sync-worker-creation-prefs`
+（两轮巡检均为一半左右，最近一轮 5 次里 3 次）与 `maker:sync-provider-model-memory`（1 次）
+在主进程注册监听之前就由渲染层发出，这几次同步被丢弃；`host-client:observe` 只在客户端
+模式有监听，普通模式发出属预期。
+
+重新测量：`CINDY_IPC_USAGE_FILE=<文件> XDT_CDP_PORT=9333 pnpm restart:desktop:remote --
+--mock --isolated=host-usage`，再跑巡检脚本（`--cdp=… --profile=<沙箱目录>`，只接受开发
+实例登记为隔离沙箱的进程），把报告覆盖到 `evidence/channel-usage-mock-tour.json`。客户端
+模式快照：在新的空沙箱目录上用 `CINDY_HOST_DATA_DIR=<沙箱> CINDY_HOST_PORT=0` 启动 Host，
+再用 `CINDY_HOST_API=<Host 地址> CINDY_IPC_USAGE_FILE=<文件> pnpm restart:desktop:remote --
+--isolated=<同名沙箱>` 启动窗口，停在登录页后取报告覆盖到
+`evidence/channel-usage-client-login.json`。两份报告都带写入时的主进程处理者快照，最后重新
+生成清单。restart 脚本为此转发 `CINDY_IPC_USAGE_FILE` 与 `CINDY_HOST_API` 两个变量。

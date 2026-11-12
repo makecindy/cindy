@@ -59,7 +59,7 @@ describe('communication notification extension', () => {
     expect(mainEntitlements.modResults['com.apple.developer.usernotifications.communication']).toBe(true);
     expect(configured.extra.eas.build.experimental.ios.appExtensions).toEqual([{
       targetName: 'CindyNotificationService', bundleIdentifier: `${bundleIdentifier}.CindyNotificationService`,
-      entitlements: {},
+      entitlements: { 'keychain-access-groups': [`$(AppIdentifierPrefix)${bundleIdentifier}.agent-net-notifications`] },
     }]);
   });
 });
