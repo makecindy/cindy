@@ -4637,6 +4637,10 @@ export default async function cindyBridge(piApi: any) {
   // Tool-efficiency policy: the split has to be stated where the model will read it, in both
   // directions — with only the "don't script" half, codemode never gets picked. Only injected
   // when codemode is actually active; guests and review sessions never reach this branch.
+  const PI_TOOL_EFFICIENCY_GUIDELINES = [
+    'Put independent tool calls in the same message: Pi runs them in parallel and they cost one round trip.',
+    'A codemode script pays off when the calls are already known and their raw output needs filtering or cross-checking; return only the fields you need, never the raw output; when each result decides the next call, or for one or two small calls, issue the calls directly.',
+  ];
   pi.on('before_agent_start', (event: any) => {
     if (guestToolGate && guestToolGate.blocks('codemode')) return;
     if (typeof pi.getActiveTools !== 'function') return;
@@ -4644,10 +4648,10 @@ export default async function cindyBridge(piApi: any) {
     if (!active.includes('codemode')) return;
     const options = event && event.systemPromptOptions;
     if (!options || !Array.isArray(options.promptGuidelines)) return;
-    options.promptGuidelines.push(
-      'Put independent tool calls in the same message: Pi runs them in parallel and they cost one round trip.',
-      'A codemode script pays off when the calls are already known and their raw output needs filtering or cross-checking; return only the fields you need, never the raw output; when each result decides the next call, or for one or two small calls, issue the calls directly.',
-    );
+    // Idempotent: before_agent_start can fire more than once for a session, and a duplicated
+    // guideline would grow the cached prefix on every turn.
+    if (options.promptGuidelines.includes(PI_TOOL_EFFICIENCY_GUIDELINES[0])) return;
+    options.promptGuidelines.push(...PI_TOOL_EFFICIENCY_GUIDELINES);
   });
   installTextOnlyTurnPolicy(pi, runtimeModelRouting.prepare);
   const cacheRecovery = installCindyCacheRecovery(pi);

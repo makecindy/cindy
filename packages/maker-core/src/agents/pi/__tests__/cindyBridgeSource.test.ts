@@ -2475,7 +2475,9 @@ it('injects the parallel-vs-codemode split only when codemode is active', () => 
   handlers.get('before_agent_start')!(event);
   expect(event.systemPromptOptions.promptGuidelines).toEqual(['base rule']);
 
+  // A duplicate would grow the cached prefix on every turn.
   sandbox.activeTools = ['codemode'];
+  handlers.get('before_agent_start')!(event);
   handlers.get('before_agent_start')!(event);
   expect(event.systemPromptOptions.promptGuidelines).toEqual([
     'base rule',
