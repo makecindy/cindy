@@ -3011,7 +3011,7 @@ describe('background command discovery', () => {
     }).outputText;
     const sandbox: any = { result: undefined as any, callbacks: [] as Array<[string, (event?: any) => any]> };
     sandbox.pi = { on: (name: string, fn: (event?: any) => any) => sandbox.callbacks.push([name, fn]) };
-    runInNewContext(compiled + '\nresult = { onToolCall: callbacks[1][1], bumpTurn: callbacks[0][1] };', sandbox);
+    runInNewContext(compiled + '\nresult = { onToolCall: callbacks[1][1], bumpTurn: callbacks[0][1], counts: repeatCallCounts };', sandbox);
     expect(sandbox.callbacks.map(([name]: string) => name)).toEqual(['before_agent_start', 'tool_call']);
     // 走注册链路:handler 自己读闭包里的回合号，这里不手工传参，防止接线回归假绿。
     const onToolCall = sandbox.result.onToolCall as (event: any) => any;
@@ -3033,8 +3033,10 @@ describe('background command discovery', () => {
     expect(run('gh run view 12345678')).toBeUndefined();
     expect(run('sleep 60 && gh run view 12345678')).toBeUndefined();
     expect(run('gh pr checks 7846')).toBeUndefined();
-    // 回合切换:同一命令重新从第 1 次放行计数(bumpTurn 真实生效才可能放行)。
+    // 回合切换:同一命令重新从第 1 次放行计数(bumpTurn 真实生效才可能放行)，
+    // 旧回合的命令文本不残留(clear，防长寿命任务里无界增长)。
     bumpTurn();
+    expect(sandbox.result.counts.size).toBe(0);
     expect(run('gh run watch 12345678 --exit-status')).toBeUndefined();
     // powershell 同样覆盖;其它工具、空命令不过闸。
     expect(run('Get-Content log.txt', 'powershell')).toBeUndefined();

@@ -5048,11 +5048,13 @@ export default async function cindyBridge(piApi: any) {
   // 解析——规范化空白后逐字相等即视为同一命令：一模一样的命令跑第三遍几乎必然
   // 是等待循环，reason 指路后台命令，并给非轮询场景留出口(措辞微调即可通行)。
   // 宁漏不误拦:block 是硬打断，误伤代价远大于漏拦。回合号防残留：agent_end 偶发
-  // 不触发时，下一回合回合号变化即重置计数。
+  // 不触发时，下一回合回合号变化即重置计数。旧回合条目不再参与判定，新回合
+  // 一律清空——命令文本可能很长，不清理会在长寿命任务里无界增长。
   const repeatCallCounts: Map<string, { turn: number; count: number }> = new Map();
   let repeatCallTurnSeq = 0;
   pi.on('before_agent_start', () => {
     repeatCallTurnSeq += 1;
+    repeatCallCounts.clear();
   });
   function cindyRepeatCallGate(toolName: string, command: unknown, turnSeq: number) {
     if (toolName !== 'bash' && toolName !== 'powershell') return undefined;
