@@ -870,6 +870,7 @@
       "limitAria": "Task limit for {{name}}",
       "limitOption_one": "{{count}} task",
       "limitOption_other": "{{count}} tasks",
+      "limitUnlimited": "No limit",
       "weightAria": "Weight for {{name}}",
       "weightOption": "Weight {{weight}}",
       "assignAria": "Assign tasks to {{name}}",
@@ -1887,6 +1888,15 @@
     },
     "remote": {
       "title": "Remote machines",
+      "hostKeyError": {
+        "missing": "SSH host key verification is not configured. Connection refused.",
+        "read": "Cindy could not read the trusted host keys: {{reason}}. Connection refused.",
+        "write": "Cindy could not save the trusted host key: {{reason}}. Connection refused.",
+        "mismatch": "The host key for {{host}} changed ({{fingerprint}}) and no longer matches the fingerprint previously trusted by Cindy. This may mean the server was reinstalled or a man-in-the-middle attack. Connection refused.",
+        "file": "Trusted host keys file:\n{{filePath}}",
+        "repair": "Cindy does not read ~/.ssh/known_hosts. The old fingerprint is stored in:\n{{filePath}}\nThe entry key is \"{{host}}\".\nIf you have verified that this change is trustworthy, quit Cindy, remove only this entry, keep the file and all other hosts, then reconnect. The new fingerprint will be saved on first connection. Do not delete the entire file.",
+        "verifyChange": "Verify the change with the server administrator before updating the trusted host key store."
+      },
       "footnote": "Phase A: SSH connection management only. Running agents on the remote arrives in a later update.",
       "viaAuth": "via {{label}}",
       "readOnlyFromSshConfig": "Connection details come from SSH configuration",
@@ -2299,7 +2309,7 @@
         "desktopVisibilityHint": "Reveal the desktop and windows behind Cindy. Text and controls stay clear.",
         "desktopBlurLabel": "Desktop Blur",
         "desktopBlurHint": "Blur the desktop behind the window. 0 turns it off; higher values increase blur. Systems without adjustable blur use their default effect.",
-        "desktopBlurSwitchHint": "Blur the desktop behind the window with the Windows system effect. Requires Windows 11 version 22H2 or later.",
+        "desktopBlurSwitchHint": "Blur the desktop behind the window with the Windows system effect. Requires Windows 11 version 22H2 or later. After turning it off, restart the app for the change to take effect.",
         "blurLabel": "Wallpaper Blur",
         "blurHint": "Blur only the wallpaper. Set to 0 to turn off. Blurring animated wallpaper increases GPU usage.",
         "motionLabel": "Display",
@@ -8169,7 +8179,9 @@
         "mcpUi": "Display interactive pages in the conversation",
         "mcpUiDomains": "Page network domains: {{domains}}",
         "mcpAppOnly": "Page only",
-        "uiPageAccess": "Pages: {{pages}}; domains: {{domains}}; tools available to pages: {{tools}}"
+        "uiPageAccess": "Pages: {{pages}}; domains: {{domains}}; tools available to pages: {{tools}}",
+        "uiHost": "Provide interfaces and Host actions in Cindy",
+        "uiHostAccess": "{{subject}}: {{access}}"
       },
       "connections": {
         "confirmTitle": "Add connection address",
@@ -11699,6 +11711,8 @@
       "takeOverConflict": "{{name}} has already moved to “{{device}}”",
       "takeOverOffline": "Can’t reach the server, so {{name}} can’t continue here right now",
       "takeOverFailed": "Couldn’t take over {{name}} on this computer",
+      "localCindyConflict": "The computer taking over already has another Cindy. Manage that Cindy in its settings, or choose a different main computer",
+      "localCindyConflictAction": "Open Local Cindy Settings",
       "notEnabled": "This server doesn’t support changing the main computer",
       "readOnlyNote": "This conversation is saved in the cloud and is read only",
       "empty": "No conversation in the cloud yet",
@@ -14295,6 +14309,8 @@
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "This is a legacy share, and it can't be used while \"Use Only Agent-Net\" is on. Turn that switch off to continue, or switch to another model.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "The available accounts for this model have reached their usage limit. Switch models or continue when the quota resets.",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "No computer in the provider group can run this task right now. They may be offline, paused, cooling down, or missing this model. Check the group on this provider’s Remote & Sharing page.",
+      "REMOTE_AGENT_GROUP_FULL": "Every account or computer that can run this task has reached its concurrency limit. Wait for a running task to finish, or raise the limit in the provider settings.",
+      "SUBSCRIPTION_ACCOUNTS_FULL": "Every account or computer that can run this task has reached its concurrency limit. Wait for a running task to finish, or raise the limit in the provider settings.",
       "REMOTE_AGENT_DEVICE_LIMIT": "This device has reached its remote session limit. Archive unused sessions or ask the provider owner to raise the limit in Remote & sharing.",
       "REMOTE_AGENT_TOTAL_LIMIT": "The provider computer has reached its total remote session limit. Ask the owner to release unused sessions or raise the limit in Remote & sharing.",
       "REMOTE_AGENT_RESUME_LOST": "The earlier conversation on the other computer could not be reconnected, so the agent continues without that context.",
@@ -14492,6 +14508,14 @@
       "replied": "replied",
       "toggle": "Show or hide the reply from “{{title}}”",
       "openTask": "Open task"
+    },
+    "subscriptionAccountError": {
+      "limited": "The subscription account used by this task has reached its usage limit. Wait for the limit to reset or choose another model source. This task stays with its assigned account.",
+      "limitedUntil": "The subscription account used by this task has reached its usage limit. Expected reset: {{resetAt}}. Wait until then or choose another model source. This task stays with its assigned account.",
+      "loginRequired": "The subscription account used by this task needs sign-in. Sign in again on the computer running the task, then retry.",
+      "signingIn": "The subscription account used by this task is signing in. Retry after sign-in finishes.",
+      "unavailable": "The subscription account assigned to this task is unavailable for this request. Check the account in model provider settings on the computer running the task, or choose another model source.",
+      "legacy": "The subscription account assigned to this task is unavailable. Check its sign-in and usage status on the computer running the task, or choose another model source. This task does not switch accounts automatically."
     }
   },
   "ccAgent": {
@@ -19479,6 +19503,12 @@
       "restore": "Restore defaults"
     }
   },
+  "pluginUi": {
+    "display": "Display",
+    "original": "Original",
+    "menu": "Plugin views and commands",
+    "actionFailed": "This plugin action could not be completed. Try again."
+  },
   "mcpApps": {
     "sharedTaskReadOnly": "Only the session owner can interact with this card.",
     "retry": "Reload",
@@ -19777,12 +19807,6 @@
       "from": "Moved from “{{name}}”",
       "closeChecklist": "Close List"
     },
-    "suggestion": {
-      "title": "Use Migration Assistant to move from “{{name}}”?",
-      "description": "You can set up this computer with the plugins, skills, settings and connections from that one. Anything that needs a new sign-in or permission here is listed for you. You can also open it later in Settings → General → Migration Assistant.",
-      "confirm": "Open Migration Assistant",
-      "later": "Not Now"
-    },
     "walkthrough": {
       "progress": "Setup checklist {{current}} / {{total}}",
       "open": "Open",
@@ -19804,6 +19828,103 @@
         "allow": "Allow",
         "deny": "Deny"
       }
+    }
+  },
+  "firstRunGuide": {
+    "title": {
+      "new": "Welcome to Cindy",
+      "returning": "Welcome back"
+    },
+    "stepsLabel": "Guide steps",
+    "close": "Close guide",
+    "next": "Next",
+    "skip": "Skip",
+    "preparing": "Getting ready…",
+    "steps": {
+      "legacy": "Earlier data",
+      "intro": "Meet Cindy",
+      "migration": "Migrate",
+      "models": "Connect a model",
+      "import": "Bring in your work",
+      "finish": "Done"
+    },
+    "legacy": {
+      "title": "Your data from the previous version is here",
+      "body": "Past sessions, media files and the Agent browser sign-ins have moved to this version and are ready to use.",
+      "note": "Third-party keys and credentials you authorized do not move with the data. Authorize or enter them again in Settings."
+    },
+    "intro": {
+      "lead": "Cindy is the AI assistant that turns what you have in mind into reality.",
+      "work": {
+        "title": "Hand work over",
+        "body": "It works directly in your folders and apps instead of only answering questions."
+      },
+      "connect": {
+        "title": "Use the models and tools you already have",
+        "body": "Connect your own subscription or API key, and add plugins and skills when you need them."
+      },
+      "continue": {
+        "title": "Pick up anywhere",
+        "body": "Start, check and continue sessions on your computer from your phone."
+      },
+      "start": "Get started",
+      "next": "Next"
+    },
+    "migration": {
+      "title": "Bring Cindy over from your other computer",
+      "body": "Another computer on your account is already set up. Migration Assistant copies its plugins, skills, settings and connections to this computer; keys are copied only after you choose Allow on that computer.",
+      "manualBody": "If you have used Cindy on another computer, Migration Assistant can copy its plugins, skills, settings and connections to this computer.",
+      "done": "Migrated from “{{name}}”",
+      "from": "Old computer",
+      "to": "This computer"
+    },
+    "models": {
+      "title": "Give Cindy a model",
+      "body": "You can use both of these together.",
+      "cindy": {
+        "badge": "Official service",
+        "body": "The model service provided by Cindy. It comes with your account, with nothing to turn on. New accounts get a free balance to try it; once you pay, almost every model is available, and without paying the range of models is smaller.",
+        "active": "Included with your account and ready to use",
+        "freeBalance": "A free amount to start with. Welcome to try it out."
+      },
+      "own": {
+        "title": "Use your own plan",
+        "badge": "Better value",
+        "body": "Already have a Claude or ChatGPT subscription, or an API key? We strongly recommend connecting it and using it alongside Cindy AI for the best experience.",
+        "more": "Other providers and API keys",
+        "connected": "Connected"
+      }
+    },
+    "import": {
+      "title": "Bring in what is already on this computer",
+      "body": "This is what Cindy found in other AI tools on this computer. Cindy only reads the originals and never changes them.",
+      "empty": "Nothing to import was found on this computer.",
+      "tasksHeading": "Sessions",
+      "tasksHint": "Select tools to bring their sessions into Cindy and keep working.",
+      "pick": "Choose one by one",
+      "started": "Import started in the background. Check progress in Settings → Session Import.",
+      "startFailed": "The import did not start. Import again from Settings → Session Import.",
+      "teammatesHeading": "Teammates",
+      "teammatesHint": "Import an Agent from another tool as a teammate, with its memory, skills and automations.",
+      "importTeammate": "Import as a teammate"
+    },
+    "finish": {
+      "title": "You are all set",
+      "legacy": "Data from the previous version moved to this version",
+      "modelReady": "A model is connected",
+      "modelMissing": "No model is connected yet. You can connect one whenever you start a session.",
+      "importStarted": "Sessions from other tools are importing in the background",
+      "native": "Your skills and MCP servers in Claude Code and Codex work here directly; there is nothing to import.",
+      "start": "Start your first session"
+    },
+    "resume": {
+      "label": "Guide in progress · {{step}}",
+      "back": "Back to guide"
+    },
+    "settings": {
+      "title": "Get-started guide",
+      "description": "See again how to meet Cindy, migrate from another computer, connect a model and bring in existing work.",
+      "open": "Open guide"
     }
   },
   "forwardedRequest": {

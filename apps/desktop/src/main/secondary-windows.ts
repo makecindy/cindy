@@ -30,7 +30,14 @@ import {
   type ScreenPoint,
 } from './windowBounds.js';
 import { readWindowBehaviorSettings } from './window-behavior-settings-store.js';
-import { resolveVibrancyConfig, resolveWindowVibrancyConfig } from './vibrancyConfig.js';
+import {
+  fitWindowsBackdropToWindow,
+  isWindowsTransparentWindow,
+  markWindowsTransparentWindow,
+  resolveVibrancyConfig,
+  resolveWindowVibrancyConfig,
+  resolveWindowsWindowTransparent,
+} from './vibrancyConfig.js';
 import {
   createWindowBackdropMaterialArgument,
   WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
@@ -124,6 +131,10 @@ export function openSessionInNewWindow(
     isDark,
     process.platform,
   );
+  // Windows: a transparent window flickers under a system backdrop (see vibrancyConfig).
+  const windowTransparent =
+    process.platform !== 'win32' ||
+    resolveWindowsWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow);
 
   const base = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null;
   const requestedSize = base
@@ -155,7 +166,7 @@ export function openSessionInNewWindow(
     autoHideMenuBar: true,
     show: false,
     backgroundColor: bgColor,
-    transparent: true,
+    transparent: windowTransparent,
     ...(process.platform === 'win32' && winBackdropConfig.backgroundMaterial
       ? {
           backgroundMaterial: winBackdropConfig.backgroundMaterial,
@@ -176,6 +187,7 @@ export function openSessionInNewWindow(
     },
   });
   markAppContentWindow(win);
+  if (process.platform === 'win32' && windowTransparent) markWindowsTransparentWindow(win);
   installWindowsTransparentTitleBar(win);
   applyAppearanceToWindow(win);
   win.webContents.on('did-finish-load', () => {
@@ -287,7 +299,11 @@ export function isSecondaryAppWindow(win: BrowserWindow | null | undefined): boo
 export function applyVibrancyToSecondaryWindows(familyId: string, isDark: boolean): void {
   for (const win of secondaryWindows) {
     if (win.isDestroyed()) continue;
-    const config = resolveWindowVibrancyConfig(win, familyId, isDark, process.platform);
+    const requested = resolveWindowVibrancyConfig(win, familyId, isDark, process.platform);
+    const config =
+      process.platform === 'win32'
+        ? fitWindowsBackdropToWindow(requested, isWindowsTransparentWindow(win))
+        : requested;
 
     // Windows 11:副窗口与主窗口一致地应用 acrylic/mica 材质;切回非 CINDY family 时
     // config.backgroundMaterial 为 'none',显式复位,避免会话副窗口残留上一次的毛玻璃材质。

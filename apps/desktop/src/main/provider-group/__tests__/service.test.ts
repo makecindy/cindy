@@ -44,7 +44,8 @@ function view(id: string, model: Record<string, unknown> = {}): ProviderView {
 
 function member(kind: ProviderGroupMember['kind'], agentDeviceId: string | null, providerId: string): ProviderGroupMember {
   const key = kind === 'local' ? 'local' : `${kind}:${agentDeviceId!.replace(/^share:/, '')}:${providerId}`;
-  return { key, kind, agentDeviceId, providerId, limit: 4, weight: 1, paused: false };
+  // An explicit limit: unset limits are unlimited, and these fixtures exercise a full target.
+  return { key, kind, agentDeviceId, providerId, limit: 4, limitSet: true, weight: 1, paused: false };
 }
 
 const LEASE = { recovery: 'lease' };

@@ -3,7 +3,7 @@
  * 正式来源是 webhook-server（需要 Cindy 账号）；本机接收服务只在开发版显式开启时启动，
  * 只监听 127.0.0.1，密钥存在本机。规则见 docs/product-rules/schedule-webhook-trigger.md。
  */
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import path from 'node:path';
@@ -21,6 +21,7 @@ import {
 } from '@cindy/maker-scheduler';
 import { ownerScopedUserDataPath } from '../../appSessionState.js';
 import { oauthSecureStorageAvailable } from '../../plugin-oauth/identityStore.js';
+import { atomicWriteFileSync, readAtomicFileSync } from '../../utils/atomicWriteFile.js';
 import { createWebhookIngress, type WebhookDeliveryOutcome } from './ingress.js';
 import type { GithubAppStatus } from './github';
 import {
@@ -85,16 +86,11 @@ interface Logger {
   warn?: (message: string, meta?: Record<string, unknown>) => void;
 }
 
+// Windows can briefly lock an existing target, so a plain rename fails on
+// replacement. The shared writer retries and swaps; read with readAtomicFileSync.
 function writeAtomically(file: string, content: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const tmp = `${file}.${randomUUID()}.tmp`;
-  try {
-    fs.writeFileSync(tmp, content, { mode: 0o600, flag: 'wx' });
-    fs.renameSync(tmp, file);
-  } catch (error) {
-    fs.rmSync(tmp, { force: true });
-    throw error;
-  }
+  atomicWriteFileSync(file, content);
 }
 
 /** whsec 形式给 Standard Webhooks 系发送方（如 GitLab 签名令牌），其余用十六进制。 */
@@ -113,29 +109,23 @@ function secureStorageAvailable(): boolean {
 }
 
 function loadState(file: string): ScheduleWebhookQueueState {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<ScheduleWebhookQueueState>;
-    return { port: parsed.port, endpoints: parsed.endpoints ?? {} };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    return { endpoints: {} };
-  }
+  const raw = readAtomicFileSync(file);
+  if (raw === null) return { endpoints: {} };
+  const parsed = JSON.parse(raw) as Partial<ScheduleWebhookQueueState>;
+  return { port: parsed.port, endpoints: parsed.endpoints ?? {} };
 }
 
 function remoteIdentityStore(file: string): NonNullable<ScheduleWebhookRemoteDeps['identityStore']> {
   return {
     load: () => {
-      try {
-        const value: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
-        if (!value || typeof value !== 'object' || Array.isArray(value)
-          || Object.values(value).some((identity) => typeof identity !== 'string' || !identity)) {
-          throw new Error('Invalid webhook identity store');
-        }
-        return value as Record<string, string>;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
-        throw error;
+      const raw = readAtomicFileSync(file);
+      if (raw === null) return {};
+      const value: unknown = JSON.parse(raw);
+      if (!value || typeof value !== 'object' || Array.isArray(value)
+        || Object.values(value).some((identity) => typeof identity !== 'string' || !identity)) {
+        throw new Error('Invalid webhook identity store');
       }
+      return value as Record<string, string>;
     },
     save: (identities) => writeAtomically(file, JSON.stringify(identities)),
   };
@@ -398,12 +388,13 @@ export class ScheduleWebhookHost {
   private readSecret(endpointId: string): string | null {
     const cached = this.secrets.get(endpointId);
     if (cached) return cached;
-    let raw: string;
+    let raw: string | null;
     try {
-      raw = fs.readFileSync(this.secretFile(endpointId), 'utf8');
+      raw = readAtomicFileSync(this.secretFile(endpointId));
     } catch {
       return null;
     }
+    if (raw === null) return null;
     try {
       const secret = safeStorage.decryptString(Buffer.from(raw, 'base64'));
       this.secrets.set(endpointId, secret);

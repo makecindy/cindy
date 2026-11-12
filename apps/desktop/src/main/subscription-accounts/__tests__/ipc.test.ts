@@ -247,6 +247,8 @@ describe('subscription management boundary', () => {
       { action: 'connect', target: 'new', loginKey: '../callback' },
       { action: 'connect', loginKey: 'login' },
       { action: 'configure', accountId: 'default', limit: 0 },
+      { action: 'configure', accountId: 'default', limit: 'unlimited' },
+      { action: 'configure', limit: null },
       { action: 'configure', paused: false },
       { action: 'configure', strategy: 'unknown' },
       { action: 'read', taskId: '../other-owner' },
@@ -256,6 +258,14 @@ describe('subscription management boundary', () => {
         'INVALID_PARAMS',
       );
     expect(h.execute).not.toHaveBeenCalled();
+  });
+  // Unit, 2026-11-11: "No limit" clears the account setting; null must survive the owner parser.
+  it('passes a cleared concurrency limit and a chosen limit through to the account service', async () => {
+    for (const limit of [null, 16]) {
+      const command = { action: 'configure', providerId: 'anthropic', accountId: 'default', limit };
+      await expect(invoke(command)).resolves.toEqual({ accounts: [] });
+      expect(h.execute).toHaveBeenLastCalledWith(expect.objectContaining({ action: 'configure', accountId: 'default', limit }));
+    }
   });
   // The new intent must survive the real owner IPC parser. An old "add" fallback
   // could silently attach the detected default instead of opening another login.

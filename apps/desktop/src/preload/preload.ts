@@ -7,6 +7,7 @@ import { createMicrophonePermissionSnapshot } from './microphonePermissionSnapsh
 import { createVoiceInputDataSnapshot } from './voiceInputDataSnapshot';
 import type { VoiceInputDataSnapshot } from '../shared/voiceInputData';
 import { createWallpaperAssetsBridge } from './wallpaperAssets';
+import { createPluginFontReader } from './appearanceSnapshot';
 import type { CompanionImportApi, CompanionImportSelection } from '@cindy/maker-shared/companion-import';
 import { TASK_MIGRATION_LOCAL_CHANNEL } from '@cindy/device-link';
 import type { PluginModelSelection } from '@cindy/device-link';
@@ -1244,6 +1245,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     apply: (request) => ipcRenderer.invoke(SETUP_MIGRATION_IPC.APPLY, request),
     state: () => ipcRenderer.invoke(SETUP_MIGRATION_IPC.STATE),
     dismiss: (request) => ipcRenderer.invoke(SETUP_MIGRATION_IPC.DISMISS, request),
+    firstRunGuide: () => ipcRenderer.invoke(SETUP_MIGRATION_IPC.FIRST_RUN_GUIDE),
     onProgress: (listener) => {
       const receive = (_event: Electron.IpcRendererEvent, progress: SetupMigrationProgress) =>
         listener(progress);
@@ -1328,6 +1330,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   pageZoomReset: (): Promise<{ ok: true; zoomFactor: number }> =>
     ipcRenderer.invoke('page-zoom:reset'),
   appearanceSettings: {
+    ...createPluginFontReader(),
     importWallpaper: () => ipcRenderer.invoke('appearance-settings:import-wallpaper'),
     ...createWallpaperAssetsBridge(),
     removeWallpaper: () => ipcRenderer.invoke('appearance-settings:remove-wallpaper'),
@@ -7010,7 +7013,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onLocalModelPullProgress: fanOutMakerLocalModelPullProgress,
     onLocalModelInstallProgress: fanOutMakerLocalModelInstallProgress,
 
-    mcpApps: (sessionId: string, input: unknown): Promise<unknown> => ipcRenderer.invoke('maker:mcp-apps:v1', sessionId, input),
+    mcpApps: (sessionId: string | null, input: unknown): Promise<unknown> => ipcRenderer.invoke('maker:mcp-apps:v1', sessionId, input),
+    onPluginUiAction: (callback: (input: unknown) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, input: unknown) => callback(input);
+      ipcRenderer.on('plugin-ui:action', listener);
+      return () => ipcRenderer.removeListener('plugin-ui:action', listener);
+    },
+    onPluginUiState: (callback: (input: { epoch: string; updates: import('../shared/pluginUi').PluginUiStateChange[] }) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, input: { epoch: string; updates: import('../shared/pluginUi').PluginUiStateChange[] }) => callback(input);
+      ipcRenderer.on('plugin-ui:state', listener);
+      return () => ipcRenderer.removeListener('plugin-ui:state', listener);
+    },
     // 自定义 MCP 服务器配置 CRUD（可选 bearer token 另走通用 safeStorage IPC，不经这里）。
     listCustomMcpServers: (
       context?: import('../shared/customMcp').CustomMcpListContext,

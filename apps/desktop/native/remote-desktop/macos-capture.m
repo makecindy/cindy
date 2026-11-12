@@ -286,6 +286,13 @@ static NSDictionary *readCursor(CGRect bounds) {
 
 int main(int argc, const char *argv[]) {
   @autoreleasepool {
+    // SkyLight can deadlock in initDisplayState() on some macOS 13 systems
+    // (seen on dual-GPU MacBookPro14,3) when a display-status query is the
+    // first display API call in a process: CGDisplayIsOnline() below resolves
+    // to SLSDisplayStatusQuery, which then hangs forever on an internal lock.
+    // Any plain CG display call completes the connection setup first and
+    // avoids it, so warm up before validating the display id.
+    CGMainDisplayID();
     // Local recordings opt into deferred encoding; existing invocations stay eager.
     // Overlay: <display> cursor-overlay[-demand] <fps> <quality> <physical max edge, 0 = logical> <max JPEG bytes> [excluded | window:<id>]
     BOOL onRequest = (argc == 7 || argc == 8) && strcmp(argv[2], "cursor-overlay-demand") == 0;
