@@ -60,6 +60,23 @@ function input(sources: MenubarSourceInput[], options: { locale?: SupportedLocal
 }
 
 describe('buildMenubarView', () => {
+  // #10110, unit: two accounts on one peer must have distinct labels in both panel and
+  // widget. Provider-only fixtures could not catch identical device labels or a task
+  // action falsely promising to pick the displayed pool account.
+  it('names pooled peer accounts individually and keeps new-task actions at provider scope', () => {
+    const peer = { id: 'peer', name: 'Same computer' };
+    const sources = [codex('alpha', 80, { pooled: true, device: peer }), codex('beta', 20, { pooled: true, device: peer }),
+      codex('local', 40, { pooled: true, providerId: 'openai' })];
+    const view = buildMenubarView(input(sources, { settings: { privacy: false } }));
+    expect(view.sources.map(source => source.name)).toEqual(expect.arrayContaining(['alpha', 'beta', 'local']));
+    expect(view.details.local.action).toEqual({ kind: 'new-task', providerId: 'openai' });
+    expect(view.details.local.actionLabel).not.toContain('local');
+    expect(buildUsageWidgetSnapshot(view, NOW, key => rawMainString(key, 'en'))?.sources.map(source => source.name))
+      .toEqual(expect.arrayContaining(['alpha', 'beta', 'local']));
+    const privateView = buildMenubarView(input(sources, { settings: { privacy: true } }));
+    expect(JSON.stringify(privateView)).not.toContain('alpha@example.com');
+    expect(privateView.sources.find(source => source.id === 'alpha')?.name).toBe('a•••a');
+  });
   it('recommends the source with the most room and outlines its tube', () => {
     const view = buildMenubarView(input([codex('alpha', 80), codex('beta', 20)]));
     expect(view.headlinePrimary).toBe('beta has the most left.');
