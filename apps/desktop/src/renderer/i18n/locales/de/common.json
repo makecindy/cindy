@@ -14540,7 +14540,7 @@
       "claudeSubscriptionSwitchFailed": "Wechsel zu Claude.ai oder erneuter Versuch dieser Sitzung fehlgeschlagen: {{msg}}",
       "codexAppServerRetired": "Der Codex-Dienst wurde neu gestartet oder ersetzt. Die aktuelle Anfrage wurde unterbrochen; führe sie erneut aus.",
       "codexAuthMissing": "Remote-Codex ist noch nicht angemeldet (401 Unauthorized). Klicke auf „Authentifizierung synchronisieren“, um deine lokalen Codex-Zugangsdaten in das entfernte Cindy-Codex-Home-Verzeichnis zu übertragen, und versuch es dann erneut.",
-      "codexAuthMissingLocal": "Codex-Zugangsdaten fehlen oder sind abgelaufen (401 Unauthorized). Melde dich unter {{appName}} Einstellungen → Codex erneut an (der app-server startet bei der Anmeldung automatisch neu), oder führe `codex login` im Terminal aus und schalte den Authentifizierungsmodus in den Einstellungen einmal um, um den app-server neu zu starten. Starte anschließend eine neue Sitzung.",
+      "codexAuthMissingLocal": "Die Verbindung „{{provider}}“ auf diesem Computer konnte nicht authentifiziert werden. Prüfe ihren Anmeldestatus in den Einstellungen und kehre nach der Wiederherstellung zu dieser Sitzung zurück.",
       "codexSessionExpired": "Die OpenAI-Verbindung muss aktualisiert werden. Verbinde ChatGPT erneut, um fortzufahren. {{appName}} meldet deine systemweite Codex CLI nicht ab und fordert dich nicht auf, andere Modellquellen erneut zu verbinden.",
       "codexAuthSynced": "Authentifizierung synchronisiert. Klicke zum erneuten Senden auf „Erneut versuchen“.",
       "syncAuth": "Authentifizierung synchronisieren",

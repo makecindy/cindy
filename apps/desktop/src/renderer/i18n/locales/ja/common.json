@@ -14512,7 +14512,7 @@
       "claudeSubscriptionSwitchFailed": "Claude.ai への切り替えまたはこのセッションの再試行に失敗しました：{{msg}}",
       "codexAppServerRetired": "Codex サービスが再起動または交換されました。現在のリクエストは中断されたため、もう一度実行してください。",
       "codexAuthMissing": "リモートの Codex がまだサインインしていません（401 Unauthorized）。「認証情報を同期」をクリックしてローカルの Codex 認証情報をリモートの Cindy Codex home にプッシュし、再試行してください。",
-      "codexAuthMissingLocal": "Codex 認証情報がないか期限切れです（401 Unauthorized）。{{appName}} 設定 → Codex から再ログインする（ログイン時に app-server が自動再起動）か、ターミナルで `codex login` 実行後、設定で認証モードを一度切り替えて app-server を再起動してから、新しいセッションを開始してください。",
+      "codexAuthMissingLocal": "このコンピューターの「{{provider}}」接続を認証できませんでした。設定でこの接続のログイン状態を確認し、接続を復旧してからこのセッションに戻って続行してください。",
       "codexSessionExpired": "OpenAI 接続の更新が必要です。ChatGPT に再接続すると続行できます。{{appName}} がシステムの Codex CLI からサインアウトしたり、他のモデルソースへの再接続を求めたりすることはありません。",
       "codexAuthSynced": "認証情報が同期されました。「再試行」をクリックして再送信してください。",
       "syncAuth": "認証情報を同期",

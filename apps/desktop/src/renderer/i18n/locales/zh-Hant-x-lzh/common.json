@@ -14503,7 +14503,7 @@
       "claudeSubscriptionSwitchFailed": "未能易為 Claude.ai 或再試此差事：{{msg}}",
       "codexAppServerRetired": "Codex 之服已重啟或更替；今之請求已斷，請再行之。",
       "codexAuthMissing": "遠端 Codex 尚未同步登入之態（401 Unauthorized）。點右側「同步登入」，將此機 Codex 憑證推至遠端 Cindy Codex home，再試遣之。",
-      "codexAuthMissingLocal": "Codex 憑證缺失或失效（401 Unauthorized）。請於 {{appName}} 規制 → Codex 重新登入（登入後將自重啟 Codex app-server），或於終端執行 `codex login`，並於規制中易一次鑑權之式以重啟 app-server；然後新開差事再遣。",
+      "codexAuthMissingLocal": "本機的「{{provider}}」連線未通過驗證。請前往該連線的設定檢查登入狀態，修復後回到此差事繼續。",
       "codexSessionExpired": "OpenAI 連線須更新。重連 ChatGPT 即可續之；{{appName}} 不會令系統 Codex CLI 登出，亦不請君重連他模型來源。",
       "codexAuthSynced": "登入之態已同步，請點「再試」重遣。",
       "syncAuth": "同步登入",
