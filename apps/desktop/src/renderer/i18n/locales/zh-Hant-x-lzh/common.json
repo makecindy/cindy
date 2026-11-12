@@ -20209,8 +20209,8 @@
   "modelGroups": {
     "title": "模型組",
     "description": "合模型供方已有之數源為一項。擇模型時於「模型組」取之，此番用何源，由 Cindy 定奪。",
-    "routes": "路線",
-    "routesDescription": "一路線納數源，新差事起時，依擇法取其一。",
+    "routes": "模式",
+    "routesDescription": "一模式納數源，新差事起時，依擇法取其一。",
     "sourceCount_other": "{{count}} 源",
     "strategy": {
       "expiring": {
@@ -20231,8 +20231,10 @@
       }
     },
     "picker": {
-      "empty": "尚無模型組。於設定合數源為一路線，即可於此擇之。",
-      "manage": "理模型組"
+      "empty": "尚無模型組。於設定合數源為一模式，即可於此擇之。",
+      "manage": "理模型組",
+      "switched": "「{{name}}」已將此差事易為 {{model}}",
+      "switchUnavailable": "「{{name}}」今無可供此差事之源，模型未易。"
     },
     "why": {
       "expiringQuota": "限額尚餘 {{left}}%，{{reset}} 重設，故先用之",
@@ -20244,7 +20246,7 @@
       "soonestUntil": "諸源限額皆盡，彼最先復（{{reset}}）",
       "standby": "此番未及",
       "standbyQuota": "限額尚餘 {{left}}%，{{reset}} 方重設，姑留之",
-      "off": "已於此路線停用",
+      "off": "已於此模式停用",
       "unavailable": "未連線，或此模型今不可擇",
       "limited": "限額已盡",
       "limitedUntil": "限額已盡，{{reset}} 復",
@@ -20258,10 +20260,10 @@
       "separator": "；"
     },
     "settings": {
-      "newRoute": "立路線",
-      "newRouteName": "新路線",
-      "routesEmpty": "尚無路線。立其一，納數源於中。",
-      "scopeNote": "模型組用於此機所起之新差事：起時定一源，差事行中不易。",
+      "newRoute": "立模式",
+      "newRouteName": "新模式",
+      "routesEmpty": "尚無模式。立其一，納數源於中。",
+      "scopeNote": "模型組用於此機之差事：起新差事時定一源；於行中之差事擇之，即時易一次，此後不自易。",
       "back": "歸模型組",
       "name": "名",
       "nameHint": "擇模型時顯此名。",
@@ -20273,14 +20275,14 @@
       "sources": "可用之源",
       "sourcesHint": "可納不同模型；實用何者，書於差事之中。",
       "sourcesEmpty": "尚無源。於下增已連線之模型。",
-      "sourcesFull": "一路線至多 {{count}} 源。",
+      "sourcesFull": "一模式至多 {{count}} 源。",
       "addSource": "增源",
       "chooseModel": "擇一模型",
       "notConnected": "未連線",
       "moveUp": "上移",
       "moveDown": "下移",
-      "remove": "逐出此路線",
-      "useSource": "令此路線用 {{name}}",
+      "remove": "逐出此模式",
+      "useSource": "令此模式用 {{name}}",
       "try": {
         "title": "試之",
         "hint": "觀今起新差事將用何者。不遣訊，不耗限額。",
@@ -20288,11 +20290,11 @@
         "picked": "用之",
         "standby": "備用",
         "skipped": "略過",
-        "unavailable": "此路線今無可用之源，新差事將用君原擇之模型。"
+        "unavailable": "此模式今無可用之源，新差事將用君原擇之模型。"
       },
-      "deleteRoute": "刪此路線",
+      "deleteRoute": "刪此模式",
       "deleteRouteConfirmTitle": "刪「{{name}}」？",
-      "deleteRouteConfirmDescription": "他路線中改行此路之時段例外將一併刪除。已起之差事不受影響。",
+      "deleteRouteConfirmDescription": "他模式中改行此式之時段例外將一併刪除。已起之差事不受影響。",
       "delete": "刪除",
       "cancel": "罷",
       "saveFailed": "未能存之，請再試。",
@@ -20313,17 +20315,17 @@
         "addHours": "增",
         "sameHour": "起訖不可同時。",
         "full": "至多 {{count}} 條例外。",
-        "needOtherRoute": "再立一路線，方可依時段改行之。"
+        "needOtherRoute": "再立一模式，方可依時段改行之。"
       }
     },
     "overview": {
       "mapTitle": "今如何行",
-      "mapDescription": "自左而右：行何路線，終落何源。點路線可修之。",
+      "mapDescription": "自左而右：行何模式，終落何源。點模式可修之。",
       "columnSources": "源",
       "columnEmpty": "尚無",
-      "openRoute": "啟路線「{{name}}」",
+      "openRoute": "啟模式「{{name}}」",
       "recentTitle": "近日所擇",
-      "recentEmpty": "尚無差事用過路線。",
+      "recentEmpty": "尚無差事用過模式。",
       "keptOriginal": "其中今無可用之模型，仍用原擇之模型。",
       "keptOriginalShort": "仍用原模型",
       "latest": "近一差事所行之路"

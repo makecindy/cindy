@@ -117,10 +117,18 @@ export function registerModelGroupsIpc(): void {
     const selection = sanitizeModelGroupSelection(value.selection);
     if (!selection) throwIpcError('INVALID_PARAMS', 'model group selection is required');
     const context = value.context && typeof value.context === 'object' ? value.context as Record<string, unknown> : null;
+    const rawLocation = value.location && typeof value.location === 'object' ? value.location as Record<string, unknown> : null;
+    const locationId = rawLocation
+      ? rawLocation.agentDeviceId === null || rawLocation.agentDeviceId === undefined ? null : modelGroupAgentDeviceId(rawLocation.agentDeviceId)
+      : null;
+    if (rawLocation && rawLocation.agentDeviceId !== null && rawLocation.agentDeviceId !== undefined && !locationId) {
+      throwIpcError('INVALID_PARAMS', 'model group location is invalid');
+    }
     const request: ModelGroupResolveRequest = {
       selection,
       dryRun: value.dryRun === true,
       ...(context?.hasImages === true ? { context: { hasImages: true } } : {}),
+      ...(rawLocation ? { location: { agentDeviceId: locationId } } : {}),
     };
     const scope = activeOwnerScopeKey();
     const result = await resolver.resolve(request);

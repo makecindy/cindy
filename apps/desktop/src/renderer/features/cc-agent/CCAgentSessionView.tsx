@@ -96,7 +96,8 @@ import {
   SessionSubscriptionAccountProvider,
   sessionSubscriptionPoolProvider,
 } from '@/components/new-chat/SessionSubscriptionAccount';
-import { bindModelGroupSession, isModelGroupSwitchOfferCurrent, useModelGroupSwitchOffer } from '@/features/model-groups/modelGroupsClient';
+import { bindModelGroupSession, isModelGroupSwitchOfferCurrent, resolveModelGroup, useModelGroups, useModelGroupSwitchOffer } from '@/features/model-groups/modelGroupsClient';
+import type { ModelGroupSelection } from '../../../shared/modelGroups';
 import { CindyMakeComposerMask } from '@/components/cindy-make/CindyMakeComposerMask';
 import {
   getCindyMakeTestRecovery,
@@ -2627,6 +2628,34 @@ function CCAgentSessionContent({
       },
     };
   }, [modelGroupSwitchOffer, sessionId, t]);
+  // 进行中的任务里选模式(model-groups.md §5)：只在任务所在的运行位置里按规则当场挑一个，走选择器同一条换模型路径
+  // 换过去；之后不会自己再换。远程控制别的电脑、SSH 与伙伴对话不提供，条件与撞配额的换来源提议相同。
+  const modelGroupsInTask = !!sessionId && !readOnly && !botChatIdentity && !remoteDeviceId && !session?.remoteHostId;
+  const { config: modelGroupsConfig } = useModelGroups(modelGroupsInTask);
+  const taskLocation = session?.agentDeviceId ?? null;
+  const switchTaskByModelGroup = useCallback(async (selection: ModelGroupSelection) => {
+    if (!sessionId) return;
+    const result = await resolveModelGroup(selection, undefined, { agentDeviceId: taskLocation });
+    if (!result || result.outcome !== 'routed') {
+      if (result) toast.warning(t('modelGroups.picker.switchUnavailable', { name: result.groupName }));
+      return;
+    }
+    const pick = sessionModelPickRef.current;
+    if (!pick) return;
+    const applied = await pick({ agent: dbToMakerAgentKind(result.route.agentKind), providerId: result.route.providerId, modelId: result.route.model });
+    if (!applied) return;
+    // 记下是经哪个模式换的：之后撞配额，接着提议这个模式里的下一个来源。
+    bindModelGroupSession(sessionId, selection, result);
+    toast.success(t('modelGroups.picker.switched', { name: result.groupName, model: `${result.modelName} · ${result.sourceName}` }));
+  }, [sessionId, taskLocation, t]);
+  const taskModelGroups = useMemo(() => (modelGroupsInTask
+    ? {
+        config: modelGroupsConfig,
+        active: null,
+        onSelect: (selection: ModelGroupSelection) => { void switchTaskByModelGroup(selection); },
+        onManage: () => navigate('/settings?tab=model-groups'),
+      }
+    : undefined), [modelGroupsInTask, modelGroupsConfig, switchTaskByModelGroup, navigate]);
   // 本地隐藏态:点主按钮后立即隐藏,不等新消息入流(视觉连续性,规则 7)。
   // 「忽略/关闭」走 store 的乐观 errorDismissed 更新,无需本地态。
   // 按错误行 clientId 归属(不是 sessionId,review P2):续跑后同一会话再次以
@@ -6247,6 +6276,7 @@ function CCAgentSessionContent({
                 >
                 <ChatInput
                   sessionModelPickRef={sessionModelPickRef}
+                  {...(taskModelGroups ? { modelGroups: taskModelGroups } : {})}
                   modelPickerRequest={sharedTaskRecovery.modelPickerRequest}
                   onModelPickerRequestConsumed={sharedTaskRecovery.consumeModelPickerRequest}
                   topSlot={cindyMakeRecoveryId && session ? (

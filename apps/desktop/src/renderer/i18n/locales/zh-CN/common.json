@@ -20209,8 +20209,8 @@
   "modelGroups": {
     "title": "模型组",
     "description": "把模型供应商里已有的几个来源合成一个可选项。选模型时在「模型组」里选它，由 Cindy 决定这次用哪个来源。",
-    "routes": "路线",
-    "routesDescription": "一条路线里放几个来源，开新任务时按选法挑一个。",
+    "routes": "模式",
+    "routesDescription": "一个模式里放几个来源，开新任务时按选法挑一个。",
     "sourceCount_other": "{{count}} 个来源",
     "strategy": {
       "expiring": {
@@ -20231,8 +20231,10 @@
       }
     },
     "picker": {
-      "empty": "还没有模型组。在设置里把几个来源合成一条路线，就能在这里选它。",
-      "manage": "管理模型组"
+      "empty": "还没有模型组。在设置里把几个来源合成一个模式，就能在这里选它。",
+      "manage": "管理模型组",
+      "switched": "「{{name}}」把这个任务换成了 {{model}}",
+      "switchUnavailable": "「{{name}}」里现在没有能给这个任务用的来源，模型没换。"
     },
     "why": {
       "expiringQuota": "还剩 {{left}}% 配额，{{reset}} 重置，先用它",
@@ -20244,7 +20246,7 @@
       "soonestUntil": "所有来源的配额都用完了，它最早恢复（{{reset}}）",
       "standby": "这次没轮到",
       "standbyQuota": "还剩 {{left}}% 配额，{{reset}} 才重置，先留着",
-      "off": "已在这条路线里停用",
+      "off": "已在这个模式里停用",
       "unavailable": "没有连接，或这个模型现在不可选",
       "limited": "配额用完了",
       "limitedUntil": "配额用完了，{{reset}} 恢复",
@@ -20258,10 +20260,10 @@
       "separator": "；"
     },
     "settings": {
-      "newRoute": "新建路线",
-      "newRouteName": "新路线",
-      "routesEmpty": "还没有路线。新建一条，把几个来源放进去。",
-      "scopeNote": "模型组用于在这台电脑上开的新任务：开始时选定一个来源，任务进行中不会换。",
+      "newRoute": "新建模式",
+      "newRouteName": "新模式",
+      "routesEmpty": "还没有模式。新建一个，把几个来源放进去。",
+      "scopeNote": "模型组用于这台电脑上的任务：开新任务时选定一个来源；在进行中的任务里选它，会当场换一次，之后不会自己换。",
       "back": "返回模型组",
       "name": "名字",
       "nameHint": "选模型时显示这个名字。",
@@ -20273,14 +20275,14 @@
       "sources": "可以用的来源",
       "sourcesHint": "可以放不同的模型；实际用了哪个会写在任务里。",
       "sourcesEmpty": "还没有来源。从下面添加已经连接的模型。",
-      "sourcesFull": "一条路线最多 {{count}} 个来源。",
+      "sourcesFull": "一个模式最多 {{count}} 个来源。",
       "addSource": "添加来源",
       "chooseModel": "选一个模型",
       "notConnected": "没有连接",
       "moveUp": "上移",
       "moveDown": "下移",
-      "remove": "移出这条路线",
-      "useSource": "让这条路线使用 {{name}}",
+      "remove": "移出这个模式",
+      "useSource": "让这个模式使用 {{name}}",
       "try": {
         "title": "试一下",
         "hint": "看看现在开新任务会用谁。不发消息，不花配额。",
@@ -20288,11 +20290,11 @@
         "picked": "用它",
         "standby": "备用",
         "skipped": "跳过",
-        "unavailable": "这条路线里现在没有能用的来源，新任务会用你原来选的模型。"
+        "unavailable": "这个模式里现在没有能用的来源，新任务会用你原来选的模型。"
       },
-      "deleteRoute": "删除这条路线",
+      "deleteRoute": "删除这个模式",
       "deleteRouteConfirmTitle": "删除「{{name}}」？",
-      "deleteRouteConfirmDescription": "别的路线里改走它的时段例外会一起删除。已经开始的任务不受影响。",
+      "deleteRouteConfirmDescription": "别的模式里改走它的时段例外会一起删除。已经开始的任务不受影响。",
       "delete": "删除",
       "cancel": "取消",
       "saveFailed": "没有保存成功，请重试。",
@@ -20313,17 +20315,17 @@
         "addHours": "添加",
         "sameHour": "开始和结束不能是同一个时刻。",
         "full": "最多 {{count}} 条例外。",
-        "needOtherRoute": "再建一条路线，才能按时段改走它。"
+        "needOtherRoute": "再建一个模式，才能按时段改走它。"
       }
     },
     "overview": {
       "mapTitle": "现在怎么走",
-      "mapDescription": "从左到右：走哪条路线，最后落到哪个来源。点路线可以修改。",
+      "mapDescription": "从左到右：走哪个模式，最后落到哪个来源。点模式可以修改。",
       "columnSources": "来源",
       "columnEmpty": "还没有",
-      "openRoute": "打开路线「{{name}}」",
+      "openRoute": "打开模式「{{name}}」",
       "recentTitle": "最近的选择",
-      "recentEmpty": "还没有任务用过路线。",
+      "recentEmpty": "还没有任务用过模式。",
       "keptOriginal": "里面没有现在能用的模型，沿用了原来选的模型。",
       "keptOriginalShort": "沿用原来的模型",
       "latest": "最近一次任务走的路"
