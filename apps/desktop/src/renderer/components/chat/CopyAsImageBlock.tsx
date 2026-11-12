@@ -84,7 +84,10 @@ export function CopyAsImageBlock({
     'inline-flex h-7 w-7 items-center justify-center',
     'rounded-md border border-[var(--msg-code-block-border)]',
     'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
-    'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
+    // hover token 带 alpha,叠在实色底之上而非替换 background-color,
+    // 否则悬浮在表格表头上时下方文字会透出来(见 #10177)。
+    'hover:[background-image:linear-gradient(var(--cmd-palette-item-hover),var(--cmd-palette-item-hover))]',
+    'hover:text-[var(--msg-assistant-text)]',
   );
 
   return (
