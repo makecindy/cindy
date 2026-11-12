@@ -1,5 +1,12 @@
 {
   "githubPrs": {
+    "status": {
+      "open": "Ouverte",
+      "draft": "Brouillon",
+      "merged": "Fusionnée",
+      "closed": "Fermée"
+    },
+    "statusUnavailable": "Statut pas encore chargé",
     "title": "Gérer les liens de PR",
     "hint": "Jusqu’à 3 dans l’en-tête ; les PR épinglées apparaissent en premier",
     "empty": "Collez un lien de PR GitHub ou de MR GitLab pour l’ajouter",
@@ -253,7 +260,7 @@
           "plugins": "Catalogue des plugins",
           "memoryRules": "Instructions de mémoire",
           "memoryIndex": "Index de mémoire",
-          "profile": "Profil du coéquipier",
+          "profile": "Profil de l’ami",
           "user": "Instructions utilisateur",
           "directories": "Répertoires supplémentaires",
           "native": "Instructions Pi",

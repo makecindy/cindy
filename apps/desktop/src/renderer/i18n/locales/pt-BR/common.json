@@ -1925,7 +1925,7 @@
       "windowBehavior": "Comportamento do aplicativo",
       "shortcuts": "Atalhos de teclado",
       "mcpServers": "MCP personalizado",
-      "bots": "Colegas"
+      "bots": "Amigos"
     },
     "remote": {
       "title": "Máquinas remotas",
@@ -2214,7 +2214,16 @@
       },
       "sidebarAndPanels": "Barra lateral e painéis",
       "themeLabel": "Tema",
+      "createTheme": {
+        "label": "Criar tema",
+        "hint": "Descreva um estilo ou adicione uma imagem de referência para personalizar a aparência do Cindy.",
+        "prompt": "Ajude-me a criar um pacote de tema do Cindy para compartilhar, com prévia e verificação. O estilo que quero é:",
+        "unavailable": "A Skill de criação de temas não está disponível. Verifique nas Skills se ela está ativada.",
+        "startFailed": "Não foi possível abrir a tarefa de criação de tema"
+      },
       "themeAriaLabel": "Seleção de tema",
+      "themeApplyFailed": "Não foi possível aplicar o tema. A aparência atual foi mantida.",
+      "themeFontFailed": "Não foi possível carregar a fonte do tema. A fonte padrão está em uso.",
       "localBadge": "(Local)",
       "localThemes": {
         "title": "Temas locais",
@@ -2426,7 +2435,7 @@
         "video": "Vídeo",
         "file": "Arquivo",
         "message": "Nova mensagem",
-        "teammate": "Colega",
+        "teammate": "Amigo",
         "sender": "Remetente desconhecido",
         "mention": "Mencionou você",
         "reply": "Respondeu a você",
@@ -2894,7 +2903,7 @@
         "dbSlimmingIncludeActiveLabel": "Limpar tarefas não arquivadas",
         "dbSlimmingIncludeActiveDescription": "Também limpar tarefas não arquivadas mais antigas que o período selecionado e removê-las da lista de tarefas",
         "dbSlimmingIncludeActiveConfirmTitle": "Incluir tarefas não arquivadas na limpeza do banco de dados?",
-        "dbSlimmingIncludeActiveConfirmDescription": "Uma tarefa não arquivada pode ainda estar em execução mesmo sendo mais antiga que o período selecionado. A limpeza não espera que ela pare, e as mensagens que ela adicionar após a verificação também poderão ser removidas. Quando esta opção estiver ativada, serão limpas as tarefas não arquivadas, arquivadas e marcadas como excluídas que não foram atualizadas no período selecionado. O histórico será removido das tarefas não arquivadas elegíveis, e seu contexto do Agent será redefinido; as entradas de tarefas comuns também serão removidas da lista, mas as tarefas principais dos colegas permanecerão. Um backup do banco de dados pode restaurar os dados de tarefas e mensagens; sem ele, esses dados também não poderão ser restaurados. Os registros usados para revisar ou desfazer alterações em arquivos feitas a partir dessas mensagens não são incluídos no backup do banco de dados e não podem ser restaurados.",
+        "dbSlimmingIncludeActiveConfirmDescription": "Uma tarefa não arquivada pode ainda estar em execução mesmo sendo mais antiga que o período selecionado. A limpeza não espera que ela pare, e as mensagens que ela adicionar após a verificação também poderão ser removidas. Quando esta opção estiver ativada, serão limpas as tarefas não arquivadas, arquivadas e marcadas como excluídas que não foram atualizadas no período selecionado. O histórico será removido das tarefas não arquivadas elegíveis, e seu contexto do Agent será redefinido; as entradas de tarefas comuns também serão removidas da lista, mas as tarefas principais dos amigos permanecerão. Um backup do banco de dados pode restaurar os dados de tarefas e mensagens; sem ele, esses dados também não poderão ser restaurados. Os registros usados para revisar ou desfazer alterações em arquivos feitas a partir dessas mensagens não são incluídos no backup do banco de dados e não podem ser restaurados.",
         "dbSlimmingIncludeActiveConfirmButton": "Incluir tarefas não arquivadas",
         "dbSlimmingIncludeActiveCancelButton": "Manter tarefas não arquivadas",
         "dbSlimmingBackupLabel": "Fazer backup do banco de dados antes da limpeza",
@@ -4632,7 +4641,7 @@
         "more": "Mais modelos de fala ({{count}})",
         "manual": "Insira um ID de modelo de fala",
         "modelId": "ID do modelo de fala",
-        "modelsHint": "Salvar modelos de fala não inicia a síntese de fala. Escolha vozes e a reprodução de frases nas configurações de voz do companheiro.",
+        "modelsHint": "Salvar modelos de fala não inicia a síntese de fala. Escolha vozes e a reprodução de frases nas configurações de voz do amigo.",
         "otherModels": "Conversa e outros modelos",
         "separateKey": "A fala exige uma chave de API. Isso cria uma conexão separada e mantém sua conexão por assinatura ou código de dispositivo.",
         "fetchFailed": "O catálogo de modelos está indisponível. Você ainda pode adicionar modelos de referência.",
@@ -4851,13 +4860,13 @@
         "workingDirFailed": "Não foi possível atualizar o diretório de trabalho. Selecione-o novamente."
       },
       "companion": {
-        "assigned": "As respostas vêm do colega vinculado",
-        "description": "Converse com {{name}} no WeChat, compartilhando a memória e a tarefa principal. A conexão do WeChat deste computador só pode pertencer a um colega por vez.",
-        "other": "O WeChat está vinculado a outro colega. Primeiro remova esse vínculo nas configurações de conexão dele ou nas configurações do WeChat pessoal.",
-        "permissionNote": "Suas mensagens do WeChat para este colega usam as configurações de permissão dele, incluindo Acesso total. Altere as permissões abaixo do campo de mensagem do colega no Cindy. Mensagens de outras pessoas continuam restritas.",
-        "remove": "Remover vínculo com colega",
+        "assigned": "As respostas vêm do amigo vinculado",
+        "description": "Converse com {{name}} no WeChat, compartilhando a memória e a tarefa principal. A conexão do WeChat deste computador só pode pertencer a um amigo por vez.",
+        "other": "O WeChat está vinculado a outro amigo. Primeiro remova esse vínculo nas configurações de conexão dele ou nas configurações do WeChat pessoal.",
+        "permissionNote": "Suas mensagens do WeChat para este amigo usam as configurações de permissão dele, incluindo Acesso total. Altere as permissões abaixo do campo de mensagem do amigo no Cindy. Mensagens de outras pessoas continuam restritas.",
+        "remove": "Remover vínculo com amigo",
         "useExisting": "Usar o WeChat conectado com {{name}}",
-        "updateFailed": "Não foi possível atualizar o vínculo. Aguarde as tarefas do WeChat terminarem, tente novamente e verifique se o colega está disponível."
+        "updateFailed": "Não foi possível atualizar o vínculo. Aguarde as tarefas do WeChat terminarem, tente novamente e verifique se o amigo está disponível."
       }
     },
     "discordBot": {
@@ -6774,6 +6783,7 @@
         "confirm": "Revogar acesso"
       },
       "v2": {
+        "sectionTitle": "Rede experimental de Agent",
         "switch": {
           "title": "Agent-Net (Beta)",
           "hint": "Mostra a topologia das conexões e a atividade recente. A conexão é criptografada quando os dois dispositivos ativam o Agent-Net e foram pareados pelo Agent-Net. Os demais dispositivos usam a conexão habitual. Aplica-se apenas a este computador."
@@ -6847,7 +6857,106 @@
           "deviceLink": "Device Link"
         },
         "onlyEncrypted": "Usar apenas Agent-Net",
-        "onlyEncryptedHint": "Dispositivos antigos e compartilhamentos que usam a conexão anterior ficarão indisponíveis. Desativado por padrão."
+        "onlyEncryptedHint": "Dispositivos antigos e compartilhamentos que usam a conexão anterior ficarão indisponíveis. Desativado por padrão.",
+        "peerSwitch": {
+          "row": {
+            "toAgentNet": "Mudando para Agent-Net…",
+            "toDeviceLink": "Voltando para Device Link…"
+          },
+          "status": {
+            "toAgentNet": "Mudando para Agent-Net",
+            "toDeviceLink": "Voltando para Device Link"
+          },
+          "reconnecting": "Reconectando",
+          "toAgentNet": "Mudar para Agent-Net",
+          "toDeviceLink": "Voltar para Device Link",
+          "retry": "Tentar de novo",
+          "hint": "A conexão com este dispositivo passa a ter criptografia de ponta a ponta. Se ele não reconectar em 60 segundos, volta para Device Link.",
+          "steps": {
+            "request": {
+              "agentNet": "Pedindo para ativar o Agent-Net",
+              "deviceLink": "Pedindo para desativar o Agent-Net"
+            },
+            "reconnect": "Reconectando",
+            "confirm": {
+              "agentNet": "Aguardando reconexão pelo Agent-Net",
+              "deviceLink": "Aguardando reconexão pelo Device Link"
+            },
+            "revert": "Sem reconexão em 60 segundos, voltando para Device Link"
+          },
+          "closeHint": "Você pode fechar este cartão; o resultado será avisado.",
+          "reverted": "Não mudou: não reconectou pelo Agent-Net em 60 segundos, então voltou para Device Link.",
+          "unsupported": "Ele usa uma versão antiga do Cindy que não pode ser alterada daqui. Atualize o Cindy naquele computador e tente de novo.",
+          "done": {
+            "toAgentNet": "Mudou para Agent-Net. A conexão tem criptografia de ponta a ponta.",
+            "toDeviceLink": "Voltou para Device Link."
+          },
+          "blocked": {
+            "mobile": "Celulares não aceitam controle remoto. Ative o Agent-Net no próprio celular.",
+            "peer-control-off": "Ele não permite controle pelos dispositivos da sua conta. Mude naquele computador.",
+            "control-off": "Você desativou o controle dele neste computador. Ative para mudar daqui."
+          },
+          "toast": {
+            "toAgentNet": "“{{name}}” mudou para Agent-Net",
+            "toDeviceLink": "“{{name}}” voltou para Device Link",
+            "reverted": "“{{name}}” não mudou e voltou para Device Link",
+            "unsupported": "“{{name}}” usa uma versão antiga do Cindy e não pode ser alterado remotamente",
+            "not-ready": "“{{name}}” não consegue ativar o Agent-Net agora",
+            "busy": "“{{name}}” está processando outra mudança. Tente de novo em instantes.",
+            "failed": "Não foi possível mudar a conexão de “{{name}}”.",
+            "encryption-required": "Desative “Usar apenas Agent-Net” em “{{name}}” antes de voltar",
+            "controller-encryption-required": "Desative “Usar apenas Agent-Net” aqui antes de voltar “{{name}}” para Device Link",
+            "agent-net-only-relay": "A conexão com “{{name}}” só oferece suporte a Agent-Net e não pode voltar para Device Link"
+          },
+          "checking": "Verificando se ele pode mudar…",
+          "notReady": {
+            "not-signed-in": "Ele não está conectado ao Cindy. Poderá ativar o Agent-Net após entrar.",
+            "secure-storage": "O armazenamento seguro não está disponível naquele computador, então o Agent-Net não pode ser ativado. Resolva naquele computador.",
+            "relay-identity": "Esse computador ainda não configurou o Agent-Net para o relay atual. Configure-o primeiro nesse computador."
+          },
+          "batch": {
+            "toAgentNet": "Mudar todos para Agent-Net",
+            "toDeviceLink": "Voltar todos para Device Link",
+            "confirmTitleAgentNet": "Mudar estes computadores para Agent-Net?",
+            "confirmTitleDeviceLink": "Voltar estes computadores para Device Link?",
+            "ready": "Pronto",
+            "checking": "Verificando",
+            "skipReason": {
+              "unsupported": "Precisa atualizar o Cindy",
+              "not-ready": "Não pode ativar o Agent-Net agora",
+              "unreachable": "Sem resposta agora",
+              "encryption-required": "Usar apenas Agent-Net",
+              "controller-encryption-required": "Apenas Agent-Net aqui",
+              "agent-net-only-relay": "Rede apenas Agent-Net"
+            },
+            "canaryNote": "Primeiro um computador muda; os demais seguem quando ele reconectar. Qualquer computador que não reconectar em 60 segundos volta sozinho.",
+            "rollbackNote": "Ao voltar, a conexão deixa de ter criptografia de ponta a ponta. Os computadores que usam apenas Agent-Net precisam desativar primeiro essa restrição no próprio computador.",
+            "run": "Mudar {{count}}",
+            "cancel": "Cancelar",
+            "close": "Concluído",
+            "state": {
+              "waiting": "Aguardando",
+              "running": "Mudando",
+              "done": "Mudou",
+              "reverted": "Voltou",
+              "skipped": "Não mudou",
+              "failed": "Não mudou"
+            },
+            "stopped": "O primeiro computador não mudou, então os demais ficaram como estavam.",
+            "finished": "{{done}} mudaram",
+            "finishedWithRevert": "{{done}} mudaram, {{reverted}} não mudaram"
+          },
+          "changedBy": {
+            "on": "Ativado remotamente por “{{name}}” às {{time}}",
+            "off": "Desativado remotamente por “{{name}}” às {{time}}"
+          },
+          "unreachable": "Não foi possível contatar esse computador desta vez. Abra o cartão de novo mais tarde.",
+          "encryptionRequired": "Este computador usa apenas Agent-Net. Desative “Usar apenas Agent-Net” nesse computador antes de voltar para Device Link.",
+          "disableBlocked": {
+            "controller-encryption-required": "Este computador está com “Usar apenas Agent-Net” ativado. Desative essa opção aqui antes de voltar o outro computador para Device Link.",
+            "agent-net-only-relay": "Esta conexão usa uma rede que só oferece suporte a Agent-Net. Escolha primeiro uma rota compatível com Device Link."
+          }
+        }
       }
     },
     "tina": {
@@ -8101,7 +8210,7 @@
         "usageStartTask": "Para usar, escolha um modelo oferecido por ele no seletor de modelos de uma nova tarefa.",
         "points": {
           "will-schedule-run": "Antes de executar uma automação",
-          "will-routine-run": "Antes de executar uma rotina de um colega",
+          "will-routine-run": "Antes de executar uma rotina de um amigo",
           "will-start-task": "Ao iniciar uma nova tarefa"
         },
         "inactive": "Ainda indisponível. Permita ao atualizar ou reinstalar este plugin."
@@ -8136,16 +8245,16 @@
         "agentTasksRequest": "Revisar permissão de tarefas",
         "agentTasks": "Pode criar e gerenciar suas próprias tarefas da Cindy",
         "agentTasksDetail": "O plugin pode enviar mensagens às próprias tarefas, ler seus resultados e interrompê-las. As tarefas permanecem visíveis para você, usam as configurações de IA do plugin e podem gerar cobranças de modelo. Os Agents nessas tarefas podem usar ferramentas conectadas, incluindo acesso a outras tarefas e dados de contas, sujeitos às permissões das tarefas e à titularidade das contas.",
-        "agentDelegation": "Pode delegar tarefas com escopo definido a companheiros",
-        "agentDelegationDetail": "Os companheiros podem executar a tarefa delegada sob revisão automática. Não se passa pelo proprietário nem altera as permissões dos companheiros.",
-        "agentTargets": "Pode enviar mensagens a projetos, tarefas existentes e companheiros",
-        "agentTargetsDetail": "Pode visualizar diretórios de projetos locais e nomes e IDs de tarefas e companheiros, criar tarefas em projetos e enviar texto e imagens a tarefas existentes e companheiros. Pode iniciar execuções de IA e gerar cobranças de modelo. Esta API de envio, por si só, não pode ler o histórico de outras tarefas, alterar suas configurações nem interrompê-las.",
+        "agentDelegation": "Pode delegar tarefas com escopo definido a amigos",
+        "agentDelegationDetail": "Os amigos podem executar a tarefa delegada sob revisão automática. Não se passa pelo proprietário nem altera as permissões dos amigos.",
+        "agentTargets": "Pode enviar mensagens a projetos, tarefas existentes e amigos",
+        "agentTargetsDetail": "Pode visualizar diretórios de projetos locais e nomes e IDs de tarefas e amigos, criar tarefas em projetos e enviar texto e imagens a tarefas existentes e amigos. Pode iniciar execuções de IA e gerar cobranças de modelo. Esta API de envio, por si só, não pode ler o histórico de outras tarefas, alterar suas configurações nem interrompê-las.",
         "agentObserve": "Pode ver a lista e o status das sessões de projetos locais",
         "agentObserveDetail": "Pode ver o título, o tipo de agente, se está arquivada e o status (em execução, precisa de atenção, última atividade) das sessões dos projetos locais registrados, e abrir uma sessão na janela principal. Não pode ler mensagens, planos ou arquivos, nem enviar mensagens ou alterar sessões.",
         "agentObserveRequest": "Revisar permissão para ver sessões",
-        "agentCompanions": "Pode ver os colegas, o status e a conversa recente deles",
-        "agentCompanionsDetail": "Pode ver todos os colegas, inclusive os que rodam nos seus outros computadores: nome, descrição, avatar, status (trabalhando, aguardando você, inativo, offline), o tipo de etapa em que cada um está (como pensando ou executando uma ferramenta), as solicitações que aguardam você do jeito que os cartões as mostram (perguntas, comandos a executar, planos) e a conversa recente do chat principal (até 50 das suas mensagens e das respostas deles, sem as etapas de ferramentas); e abrir a conversa de um colega na janela principal. Com a permissão de entregar mensagens também, pode repassar as respostas que você der no plugin: responder perguntas, recusar solicitações e comentar planos. Para permitir uma etapa, você ainda clica na confirmação do próprio Cindy. Não pode ler arquivos, etapas de ferramentas nem raciocínios.",
-        "agentCompanionsRequest": "Revisar permissão para ver colegas",
+        "agentCompanions": "Pode ver os amigos, o status e a conversa recente deles",
+        "agentCompanionsDetail": "Pode ver todos os amigos, inclusive os que rodam nos seus outros computadores: nome, descrição, avatar, status (trabalhando, aguardando você, inativo, offline), o tipo de etapa em que cada um está (como pensando ou executando uma ferramenta), as solicitações que aguardam você do jeito que os cartões as mostram (perguntas, comandos a executar, planos) e a conversa recente do chat principal (até 50 das suas mensagens e das respostas deles, sem as etapas de ferramentas); e abrir a conversa de um amigo na janela principal. Com a permissão de entregar mensagens também, pode repassar as respostas que você der no plugin: responder perguntas, recusar solicitações e comentar planos. Para permitir uma etapa, você ainda clica na confirmação do próprio Cindy. Não pode ler arquivos, etapas de ferramentas nem raciocínios.",
+        "agentCompanionsRequest": "Revisar permissão para ver amigos",
         "agentHiddenTasks": "Pode criar tarefas em segundo plano ocultas da lista de tarefas",
         "agentHiddenTasksDetail": "As tarefas criadas por este plugin podem ficar fora da lista de tarefas, da busca e das notificações. Você sempre pode visualizá-las, abri-las ou exibi-las na lista de tarefas em Tarefas em segundo plano, na página deste plugin; desinstalar o plugin volta a exibi-las.",
         "agentErrand": "Criar tarefas, executar trabalho e ler resultados",
@@ -8182,7 +8291,7 @@
         "subscribeAssistantReplyDetail": "Processa cada resposta da IA após sua conclusão: pode aprimorar ou reescrever o texto (substituindo-o diretamente, sem manter o original) ou substituir o balão de resposta por seu próprio cartão renderizado (nesse caso, o texto original é mantido e pode ser visto com um toque).",
         "subscribeScheduleRun": "Pode verificar automações escolhidas antes de executarem",
         "subscribeScheduleRunDetail": "As automações em que você o escolher em Verificação prévia consultam-no primeiro. Ele vê o nome e as instruções e pode pular ou parar essa execução, mas não aprovar nada por você.",
-        "subscribeRoutineRun": "Pode verificar rotinas de colegas escolhidas antes de executarem",
+        "subscribeRoutineRun": "Pode verificar rotinas de amigos escolhidas antes de executarem",
         "subscribeRoutineRunDetail": "As rotinas em que você o escolher em Verificação prévia consultam-no primeiro. Ele vê as instruções e os eventos que as acionaram e pode pular ou parar essa execução, mas não aprovar nada por você.",
         "systemPrompt": "Pode adicionar instruções de sistema às tarefas selecionadas",
         "systemPromptDetail": "Os textos estáticos abaixo vêm após as instruções fixas da Cindy apenas nas tarefas que selecionam este plugin. O pacote define a ordem e os mecanismos. As alterações valem a partir da próxima mensagem; os erros seguem a configuração da tarefa.",
@@ -8885,7 +8994,7 @@
         "createTitle": "Adicionar servidor MCP",
         "editTitle": "Editar servidor MCP",
         "desc": "Apenas MCP remoto http / sse. Novas Sessões poderão chamá-lo após salvar; Sessões em andamento não serão afetadas.",
-        "teammateDesc": "Apenas MCP remoto http / sse. Depois de salvar, seu colega o adiciona às ferramentas dele e pode usá-lo a partir da próxima mensagem desta conversa, sem precisar de uma nova Sessão."
+        "teammateDesc": "Apenas MCP remoto http / sse. Depois de salvar, seu amigo o adiciona às ferramentas dele e pode usá-lo a partir da próxima mensagem desta conversa, sem precisar de uma nova Sessão."
       },
       "fields": {
         "name": "Nome de exibição",
@@ -10398,7 +10507,7 @@
       "activityNameJoinerPair": " e ",
       "activityNameJoinerLast": ", e ",
       "activity": {
-        "companion": "a resposta de um colega",
+        "companion": "a resposta de um amigo",
         "companionOne": "a resposta de {{names}}",
         "companionOther": "as respostas de {{names}}",
         "conversation": "uma conversa em andamento",
@@ -10519,7 +10628,7 @@
       "skillhub": "SkillHub",
       "plugins": "Plugins",
       "issues": "Issues",
-      "bots": "Colegas"
+      "bots": "Amigos"
     },
     "navigation": {
       "more": "Mais",
@@ -10533,7 +10642,7 @@
       "items": {
         "automations": "Automações",
         "plugins": "Plugins",
-        "bots": "Colegas",
+        "bots": "Amigos",
         "search": "Pesquisar"
       }
     },
@@ -10646,22 +10755,22 @@
     },
     "creationName": "Nome",
     "settingsBack": "Voltar às Configurações",
-    "title": "Colegas",
-    "add": "Adicionar colega",
+    "title": "Amigos",
+    "add": "Adicionar amigo",
     "createWizard": {
-      "createFailed": "Não foi possível criar o colega. Tente novamente."
+      "createFailed": "Não foi possível criar o amigo. Tente novamente."
     },
     "homeFolder": {
       "title": "Configuração avançada",
-      "description": "O colega mantém sua própria memória e formas reutilizáveis de trabalhar. Abra a pasta dele apenas quando algo precisar de correção.",
+      "description": "O amigo mantém sua própria memória e formas reutilizáveis de trabalhar. Abra a pasta dele apenas quando algo precisar de correção.",
       "contents": "Contém SOUL.md, USER.md, system_prompt.md, skills/ e memories/. Modelos, permissões e conexões continuam sendo gerenciados pelo Cindy.",
       "open": "Abrir pasta",
-      "openFailed": "Não foi possível abrir a pasta do colega.",
+      "openFailed": "Não foi possível abrir a pasta do amigo.",
       "projectMode": {
         "memoryReviewName": "{{name}} · Organizar memória",
         "carryover": {
           "title": "Trazido de antes da atualização",
-          "intro": "O que ainda estava aberto quando este colega foi atualizado. Continue o que ainda importa e apague o resto. Os registros antigos completos ficam na pasta v1-archive do colega.",
+          "intro": "O que ainda estava aberto quando este amigo foi atualizado. Continue o que ainda importa e apague o resto. Os registros antigos completos ficam na pasta v1-archive do amigo.",
           "todos": "Tarefas abertas",
           "work": "Bancada",
           "threads": "Em andamento",
@@ -10682,20 +10791,20 @@
       "avatarSelectionFailed": "Não foi possível ler a imagem. Escolha uma imagem PNG, JPEG ou WebP de até 5 MB.",
       "personality": "Personalidade e conversa"
     },
-    "nameLabel": "Como devemos chamar esse colega?",
+    "nameLabel": "Como devemos chamar esse amigo?",
     "close": "Fechar",
     "list": {
       "createMenu": "Criar",
-      "createTeammate": "Novo colega",
+      "createTeammate": "Novo amigo",
       "joinWithLink": "Inserir link de convite…",
       "startChat": "Iniciar a conversa",
-      "selectChat": "Selecione um colega ou uma conversa em grupo para começar a conversar",
+      "selectChat": "Selecione um amigo ou uma conversa em grupo para começar a conversar",
       "typing": "Digitando…",
       "unread": "{{count}} mensagens não lidas",
-      "search": "Buscar colegas ou conversas em grupo",
-      "searchPlaceholder": "Buscar colegas ou conversas em grupo…",
-      "showHidden": "Mostrar colegas ocultos",
-      "hideHidden": "Recolher colegas ocultos",
+      "search": "Buscar amigos ou conversas em grupo",
+      "searchPlaceholder": "Buscar amigos ou conversas em grupo…",
+      "showHidden": "Mostrar amigos ocultos",
+      "hideHidden": "Recolher amigos ocultos",
       "hidden": "Ocultos ({{count}})",
       "hide": "Ocultar",
       "unhideNamed": "Mostrar {{name}}",
@@ -10703,12 +10812,12 @@
       "unpin": "Desafixar",
       "pinned": "Fixadas",
       "needsAttention": "Precisa de atenção",
-      "duplicate": "Duplicar colega",
+      "duplicate": "Duplicar amigo",
       "moreActions": "Mais ações para {{name}}",
-      "sectionExpand": "Expandir colegas",
+      "sectionExpand": "Expandir amigos",
       "showLess": "Mostrar menos",
-      "sectionCollapse": "Recolher colegas",
-      "noResults": "Nenhum colega ou grupo correspondente"
+      "sectionCollapse": "Recolher amigos",
+      "noResults": "Nenhum amigo ou grupo correspondente"
     },
     "cancel": "Cancelar",
     "save": "Salvar",
@@ -10718,17 +10827,17 @@
       "retry": "Salvar novamente"
     },
     "retry": "Tentar novamente",
-    "backToBot": "Voltar ao colega",
-    "sessionLoadFailedTitle": "Não foi possível carregar esta tarefa do colega",
-    "sessionLoadFailedDescription": "O link da tarefa é válido, mas Cindy não conseguiu ler o estado do colega. Tente novamente ou volte à visão geral do colega.",
-    "sessionUnavailableTitle": "Esta tarefa do colega não está mais disponível",
-    "sessionUnavailableDescription": "Esta tarefa pode estar ausente, ter sido excluída ou não pertencer mais a este colega. Volte para abrir a tarefa principal recuperada.",
+    "backToBot": "Voltar ao amigo",
+    "sessionLoadFailedTitle": "Não foi possível carregar esta tarefa do amigo",
+    "sessionLoadFailedDescription": "O link da tarefa é válido, mas Cindy não conseguiu ler o estado do amigo. Tente novamente ou volte à visão geral do amigo.",
+    "sessionUnavailableTitle": "Esta tarefa do amigo não está mais disponível",
+    "sessionUnavailableDescription": "Esta tarefa pode estar ausente, ter sido excluída ou não pertencer mais a este amigo. Volte para abrir a tarefa principal recuperada.",
     "settings": "Configurações",
     "settingsTabs": {
       "model": "Modelo"
     },
     "model": {
-      "description": "Escolha os modelos que este colega usa.",
+      "description": "Escolha os modelos que este amigo usa.",
       "primary": "Modelo principal",
       "restoreDefault": "Restaurar modelo padrão"
     },
@@ -10740,7 +10849,7 @@
       "remove": "Remover este candidato",
       "moveUp": "Mover para cima",
       "moveDown": "Mover para baixo",
-      "description": "Configure até 5 modelos. Se um estiver indisponível, o colega continuará automaticamente com o próximo — sem trocar de tarefa nem tentar novamente manualmente.",
+      "description": "Configure até 5 modelos. Se um estiver indisponível, o amigo continuará automaticamente com o próximo — sem trocar de tarefa nem tentar novamente manualmente.",
       "options": "Modelos de reserva ({{count}})"
     },
     "actions": {
@@ -10748,42 +10857,42 @@
       "addToGroup": "Adicionar ao grupo",
       "export": "Exportar"
     },
-    "emptyTitle": "Ainda não há colegas",
-    "emptyDescription": "Crie um colega com uma função clara e conecte as ferramentas e os canais de que ele precisa.",
+    "emptyTitle": "Ainda não há amigos",
+    "emptyDescription": "Crie um amigo com uma função clara e conecte as ferramentas e os canais de que ele precisa.",
     "sessions": "tarefas",
     "open": "Abrir",
     "archived": "Arquivadas",
     "historyTitle": "Histórico arquivado",
-    "historyEmpty": "Ainda não há tarefas de colegas arquivadas.",
+    "historyEmpty": "Ainda não há tarefas de amigos arquivadas.",
     "historySearch": {
-      "title": "Buscar no histórico do colega",
-      "description": "Busque mensagens anteriores, tarefas em segundo plano e registros arquivados deste colega.",
+      "title": "Buscar no histórico do amigo",
+      "description": "Busque mensagens anteriores, tarefas em segundo plano e registros arquivados deste amigo.",
       "placeholder": "Sobre o que você se lembra de ter conversado?",
       "search": "Pesquisar",
       "searching": "Pesquisando…",
-      "failed": "Não foi possível buscar no histórico do colega. Tente novamente.",
-      "empty": "Nenhum histórico correspondente do colega foi encontrado."
+      "failed": "Não foi possível buscar no histórico do amigo. Tente novamente.",
+      "empty": "Nenhum histórico correspondente do amigo foi encontrado."
     },
     "lifecycle": {
       "restartHint": "Ainda sem resposta?",
-      "stoppedBots": "Colegas que precisam de atenção",
-      "title": "Gerenciamento de colegas",
-      "description": "Pause ou retome este colega e encontre mensagens e resultados anteriores.",
-      "activeTitle": "O colega está ativo",
-      "activeDescription": "Pode receber mensagens, executar tarefas em segundo plano e contatar outros colegas.",
-      "pausedTitle": "O colega está pausado",
-      "pausedDescription": "Novos trabalhos estão bloqueados. As automações pausadas pelo usuário continuam pausadas depois que o colega retoma as atividades.",
-      "stoppedTitle": "O colega foi interrompido",
+      "stoppedBots": "Amigos que precisam de atenção",
+      "title": "Gerenciamento de amigos",
+      "description": "Pause ou retome este amigo e encontre mensagens e resultados anteriores.",
+      "activeTitle": "O amigo está ativo",
+      "activeDescription": "Pode receber mensagens, executar tarefas em segundo plano e contatar outros amigos.",
+      "pausedTitle": "O amigo está pausado",
+      "pausedDescription": "Novos trabalhos estão bloqueados. As automações pausadas pelo usuário continuam pausadas depois que o amigo retoma as atividades.",
+      "stoppedTitle": "O amigo foi interrompido",
       "stoppedDescription": "Este é um estado de interrupção legado. Você ainda pode manter as transcrições das tarefas ao excluí-lo permanentemente.",
-      "pause": "Pausar colega",
-      "resume": "Retomar colega",
+      "pause": "Pausar amigo",
+      "resume": "Retomar amigo",
       "delete": "Excluir permanentemente",
-      "deleteTitle": "Excluir colega permanentemente",
-      "deleteDescription": "Excluir {{name}} remove permanentemente o perfil, a memória, o diretório de trabalho, as conexões de canais e as tarefas automatizadas do colega. O histórico de tarefas e os worktrees separados são mantidos.",
+      "deleteTitle": "Excluir amigo permanentemente",
+      "deleteDescription": "Excluir {{name}} remove permanentemente o perfil, a memória, o diretório de trabalho, as conexões de canais e as tarefas automatizadas do amigo. O histórico de tarefas e os worktrees separados são mantidos.",
       "working": "Atualizando…",
       "actionFailed": "A ação não foi concluída. Tente novamente em instantes.",
-      "deleteFailed": "O colega não foi excluído.",
-      "restart": "Reiniciar colega",
+      "deleteFailed": "O amigo não foi excluído.",
+      "restart": "Reiniciar amigo",
       "restartDescription": "Interrompa a execução atual e prepare um novo início. O histórico da conversa, as memórias e os arquivos são mantidos.",
       "restarting": "Reiniciando…",
       "restarted": "Reiniciado. Envie uma mensagem para continuar."
@@ -10828,16 +10937,16 @@
       "discard": "Descartar alterações",
       "continueEditing": "Continuar editando"
     },
-    "profileSaveFailed": "Não foi possível salvar as configurações do colega. Nenhuma alteração foi aplicada.",
-    "profileSaveOffline": "Não foi possível conectar ao computador do colega. Restabeleça a conexão e salve novamente.",
+    "profileSaveFailed": "Não foi possível salvar as configurações do amigo. Nenhuma alteração foi aplicada.",
+    "profileSaveOffline": "Não foi possível conectar ao computador do amigo. Restabeleça a conexão e salve novamente.",
     "modelLabel": "Modelo",
     "modelUnavailable": "{{model}} (indisponível no momento)",
-    "codexAutomaticCompact": "Colegas Codex compactam o contexto por conta própria, e /new mantém a tarefa atual. Só inicie uma nova tarefa quando realmente precisar começar do zero.",
+    "codexAutomaticCompact": "Amigos Codex compactam o contexto por conta própria, e /new mantém a tarefa atual. Só inicie uma nova tarefa quando realmente precisar começar do zero.",
     "image": "Adicionar imagem",
     "send": "Enviar mensagem",
     "roster": {
       "create": "Convidar companhia",
-      "customNamePlaceholder": "Dê um nome ao seu colega",
+      "customNamePlaceholder": "Dê um nome ao seu amigo",
       "customTitle": "Conheça alguém novo"
     },
     "chat": {
@@ -10846,15 +10955,15 @@
       "composerPlaceholderLatin": "Diga algo para {{name}}…"
     },
     "globalSettings": {
-      "restoreHint": "Restaure o modelo recomendado para colegas. Os modelos personalizados de cada colega permanecem inalterados.",
+      "restoreHint": "Restaure o modelo recomendado para amigos. Os modelos personalizados de cada amigo permanecem inalterados.",
       "restoreFailed": "Não foi possível restaurar os padrões. Tente novamente.",
       "defaultModel": "Modelo padrão",
-      "defaultModelHint": "Para colegas, independentemente dos modelos escolhidos para novas tarefas. Cada colega pode escolher outro modelo.",
-      "title": "Colegas",
-      "description": "Configurações compartilhadas por todos os colegas. Tudo sobre um colega específico fica na página dele.",
+      "defaultModelHint": "Para amigos, independentemente dos modelos escolhidos para novas tarefas. Cada amigo pode escolher outro modelo.",
+      "title": "Amigos",
+      "description": "Configurações compartilhadas por todos os amigos. Tudo sobre um amigo específico fica na página dele.",
       "rosterNote": "A lista incluída cresce a cada versão.",
       "showReplyTarget": "Mostrar a qual mensagem uma resposta se refere",
-      "showReplyTargetHint": "Acima da resposta de um colega, mostre a qual das suas mensagens ele está respondendo. Respostas antigas não mostram isso."
+      "showReplyTargetHint": "Acima da resposta de um amigo, mostre a qual das suas mensagens ele está respondendo. Respostas antigas não mostram isso."
     },
     "session": {
       "ownedByBot": "Aberta por {{name}}",
@@ -10906,12 +11015,12 @@
       "sentTo": "Mensagem enviada para {{name}}",
       "receivedFrom": "Mensagem de {{name}}",
       "exchangeCount": "{{count}} mensagens com {{name}}",
-      "open": "Ver a conversa entre colegas",
+      "open": "Ver a conversa entre amigos",
       "readOnly": "Esta conversa é somente para visualização",
       "close": "Fechar conversa",
-      "unavailable": "Esta conversa entre colegas não está mais disponível.",
+      "unavailable": "Esta conversa entre amigos não está mais disponível.",
       "empty": "Ainda não há mensagens para visualizar.",
-      "limitReached": "Esta conversa entre colegas atingiu o limite; ambos voltaram às suas tarefas principais",
+      "limitReached": "Esta conversa entre amigos atingiu o limite; ambos voltaram às suas tarefas principais",
       "sentHeader": "Para {{name}}",
       "receivedHeader": "De {{name}}",
       "expandThread": "Mostrar troca de mensagens",
@@ -10921,7 +11030,7 @@
       "expand": "Mostrar",
       "collapse": "Ocultar",
       "fullThread": "Conversa completa",
-      "threadClosed": "Esta conversa entre colegas terminou · somente visualização",
+      "threadClosed": "Esta conversa entre amigos terminou · somente visualização",
       "exchangeCountShort_many": "{{count}} mensagens"
     },
     "groupChat": {
@@ -10938,8 +11047,8 @@
         },
         "title": "Modo de resposta da IA",
         "settings": "Configurações de resposta da IA",
-        "companion": "Meu colega",
-        "choose": "Escolher um colega",
+        "companion": "Meu amigo",
+        "choose": "Escolher um amigo",
         "enabled": "Respostas automáticas",
         "triggerLabel": "Gatilho",
         "resumeAfter": "Retomar após ausência",
@@ -10968,8 +11077,8 @@
           "off": "As respostas automáticas estão desativadas",
           "offline": "Respostas pausadas · Computador offline",
           "waiting": "Aguardando você iniciar",
-          "unbound": "Nenhum colega selecionado",
-          "enabled": "Seu colega está pronto para responder por você."
+          "unbound": "Nenhum amigo selecionado",
+          "enabled": "Seu amigo está pronto para responder por você."
         },
         "trigger": {
           "always": "Sempre ativado",
@@ -10986,7 +11095,7 @@
         "attribution": "{{name}} respondeu por {{owner}}",
         "digestNow": "Resumir agora",
         "digestWorking": "Resumindo…",
-        "digestSent": "Enviado à conversa com seu colega",
+        "digestSent": "Enviado à conversa com seu amigo",
         "digestFailed": "Não foi possível resumir. Tente novamente.",
         "digestEmpty": "Nada novo para resumir",
         "joinSetup": "Configurar respostas de IA após entrar",
@@ -11025,9 +11134,9 @@
       "nameLabel": "Nome do grupo",
       "waitingConfirm": "{{name}} está aguardando sua autorização",
       "loadFailedTitle": "Não foi possível carregar esta conversa em grupo",
-      "loadFailedDescription": "Cindy não consegue ler esta conversa em grupo agora. Tente novamente ou volte para Colegas.",
+      "loadFailedDescription": "Cindy não consegue ler esta conversa em grupo agora. Tente novamente ou volte para Amigos.",
       "unavailableTitle": "Esta conversa em grupo não está mais disponível",
-      "unavailableDescription": "Ela pode ter sido excluída. Volte para Colegas para abrir outra conversa em grupo ou colega.",
+      "unavailableDescription": "Ela pode ter sido excluída. Volte para Amigos para abrir outra conversa em grupo ou amigo.",
       "sidebar": {
         "title": "Conversas em grupo",
         "empty": "Nenhuma mensagem ainda",
@@ -11047,14 +11156,14 @@
       },
       "create": {
         "title": "Nova conversa em grupo",
-        "description": "Reúna alguns colegas em um grupo. Diga algo e eles participarão juntos.",
+        "description": "Reúna alguns amigos em um grupo. Diga algo e eles participarão juntos.",
         "namePlaceholder": "Ex.: Viagem de fim de semana",
         "nameRequired": "Insira um nome para o grupo",
-        "membersLabel": "Escolher colegas",
+        "membersLabel": "Escolher amigos",
         "selectedCount_one": "{{count}} selecionados, até {{max}}",
         "selectedCount_other": "{{count}} selecionados, até {{max}}",
-        "minMembers": "Escolha pelo menos {{min}} colegas",
-        "notEnoughBots": "Você precisa de pelo menos {{min}} colegas disponíveis para iniciar uma conversa em grupo. Adicione um colega primeiro.",
+        "minMembers": "Escolha pelo menos {{min}} amigos",
+        "notEnoughBots": "Você precisa de pelo menos {{min}} amigos disponíveis para iniciar uma conversa em grupo. Adicione um amigo primeiro.",
         "submit": "Criar conversa em grupo",
         "failed": "Não foi possível criar a conversa em grupo. Tente novamente em instantes.",
         "selectedCount_many": "{{count}} selecionados, até {{max}}"
@@ -11066,22 +11175,22 @@
       "mention": {
         "all": "Todos",
         "allHint": "Apenas pessoas",
-        "label": "Mencionar um colega",
-        "allBots": "Todos os colegas",
-        "allBotsHint": "Apenas colegas"
+        "label": "Mencionar um amigo",
+        "allBots": "Todos os amigos",
+        "allBotsHint": "Apenas amigos"
       },
       "composer": {
         "label": "Mensagem da conversa em grupo",
-        "placeholder": "Diga algo ao grupo. Use @ para mencionar um colega e só ele responder…",
-        "noMembers": "Nenhum colega aqui pode responder agora. Adicione um nas configurações do grupo.",
+        "placeholder": "Diga algo ao grupo. Use @ para mencionar um amigo e só ele responder…",
+        "noMembers": "Nenhum amigo aqui pode responder agora. Adicione um nas configurações do grupo.",
         "tooLong": "Esta mensagem é longa demais. O limite é de {{max}} caracteres.",
         "sendFailed": "Mensagem não enviada. Tente novamente em instantes.",
         "stopFailed": "Não foi possível parar esta rodada. Tente novamente.",
         "stop": "Parar esta rodada",
         "more": "Mais ações",
         "division": "Dividir o trabalho",
-        "divisionDescription": "O organizador divide o trabalho primeiro, depois os colegas o executam passo a passo",
-        "divisionDescriptionSteps": "Siga as etapas que você escrever ou deixe o organizador dividir o trabalho; os colegas avançam etapa por etapa",
+        "divisionDescription": "O organizador divide o trabalho primeiro, depois os amigos o executam passo a passo",
+        "divisionDescriptionSteps": "Siga as etapas que você escrever ou deixe o organizador dividir o trabalho; os amigos avançam etapa por etapa",
         "divisionBusy": "Uma divisão de trabalho está em andamento. Conclua ou pare antes de iniciar outra.",
         "divisionTag": "Divisão de trabalho",
         "removeDivision": "Remover divisão de trabalho",
@@ -11113,8 +11222,8 @@
         "loadEarlier": "Mostrar mensagens anteriores",
         "loadEarlierFailed": "Não foi possível carregar as mensagens anteriores. Tente novamente.",
         "emptyTitle": "Nenhuma mensagem neste grupo ainda",
-        "emptyDescription": "Diga algo para começar e seus colegas participarão. Use @ para mencionar um colega e só ele responder.",
-        "roundEnded": "Os colegas terminaram",
+        "emptyDescription": "Diga algo para começar e seus amigos participarão. Use @ para mencionar um amigo e só ele responder.",
+        "roundEnded": "Os amigos terminaram",
         "stepTag": "Etapa {{count}}",
         "sending": "Enviando",
         "continue": "Continuar discussão",
@@ -11147,10 +11256,10 @@
           "unclaimed_timeout": "{{name}} não começou a processar dentro do prazo de espera. Esta solicitação foi encerrada.\nPeça ao proprietário do parceiro para verificar se a Cindy está funcionando e se o computador está conectado à rede."
         },
         "runtimeFailure": {
-          "REMOTE_DEVICE_LIMIT": "{{name}} não pode responder: o dispositivo do colega atingiu o limite de sessões remotas.\nPeça ao proprietário do colega para arquivar as sessões não utilizadas ou ao proprietário do computador remoto para aumentar o limite em Acesso remoto e compartilhamento.",
+          "REMOTE_DEVICE_LIMIT": "{{name}} não pode responder: o dispositivo do amigo atingiu o limite de sessões remotas.\nPeça ao proprietário do amigo para arquivar as sessões não utilizadas ou ao proprietário do computador remoto para aumentar o limite em Acesso remoto e compartilhamento.",
           "REMOTE_TOTAL_LIMIT": "{{name}} não pode responder: o computador remoto atingiu o limite total de sessões remotas.\nPeça ao proprietário desse computador para liberar as sessões não utilizadas ou aumentar o limite em Acesso remoto e compartilhamento.",
           "IMAGE_INPUT_UNSUPPORTED": "{{name}} não conseguiu responder: o modelo atual não oferece suporte a imagens.\nEscolha um modelo compatível com imagens ou ative e configure o Vision Bridge em Configurações → Personalização e envie sua mensagem novamente.",
-          "MODEL_UNAVAILABLE": "{{name}} não conseguiu responder: nenhum modelo está disponível.\nEscolha um modelo conectado e disponível nas configurações do colega e envie sua mensagem novamente.",
+          "MODEL_UNAVAILABLE": "{{name}} não conseguiu responder: nenhum modelo está disponível.\nEscolha um modelo conectado e disponível nas configurações do amigo e envie sua mensagem novamente.",
           "AUTH_REQUIRED": "{{name}} não conseguiu responder: a conexão do modelo precisa de autenticação.\nReconecte o provedor do modelo em Configurações e envie sua mensagem novamente.",
           "RATE_LIMITED": "{{name}} não conseguiu responder: há solicitações demais ao modelo.\nEnvie sua mensagem novamente mais tarde ou escolha outro modelo disponível.",
           "UPSTREAM_OVERLOADED": "{{name}} não conseguiu responder: o serviço do modelo está temporariamente sobrecarregado.\nTente enviar novamente mais tarde ou escolha outro modelo disponível.",
@@ -11160,7 +11269,7 @@
           "RUNTIME_ERROR": "{{name}} não conseguiu responder desta vez.\nEnvie sua mensagem novamente. Se a falha persistir, verifique os logs e relate o problema."
         },
         "capability": {
-          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do colega pode repetir o pedido neste grupo.",
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do amigo pode repetir o pedido neste grupo.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, por isso a ferramenta não foi executada. Tente novamente quando a conexão for restabelecida.",
           "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha no download ou ao limite de anexos. Reenvie os anexos necessários para este pedido."
         }
@@ -11171,44 +11280,44 @@
         "members": "Membros",
         "remove": "Remover",
         "removeNamed": "Remover {{name}} do grupo",
-        "minMembers": "Uma conversa em grupo precisa de pelo menos {{min}} colegas",
+        "minMembers": "Uma conversa em grupo precisa de pelo menos {{min}} amigos",
         "maxMembers": "Até {{max}}",
-        "noMoreBots": "Nenhum outro colega disponível para adicionar",
+        "noMoreBots": "Nenhum outro amigo disponível para adicionar",
         "nameSaveFailed": "Não foi possível salvar o nome do grupo. O nome anterior foi mantido.",
         "membersSaveFailed": "Não foi possível atualizar os membros. Tente novamente.",
         "replyMode": "Quando ninguém é @mencionado",
         "replyModeAll": "Qualquer um pode responder",
         "replyModeMentioned": "Somente @mencionados respondem",
-        "replyModeNote": "Colegas que não têm nada a acrescentar ficam em silêncio. Cada rodada tem até 3 passagens e 10 mensagens e depois espera você clicar em “Continuar discussão”.",
+        "replyModeNote": "Amigos que não têm nada a acrescentar ficam em silêncio. Cada rodada tem até 3 passagens e 10 mensagens e depois espera você clicar em “Continuar discussão”.",
         "replyModeSaveFailed": "Não foi possível salvar a configuração de resposta. Tente novamente.",
         "delete": "Excluir conversa em grupo",
-        "deleteNote": "Somente esta conversa em grupo e suas mensagens serão excluídas. Os colegas, suas memórias e suas conversas privadas não serão afetados.",
+        "deleteNote": "Somente esta conversa em grupo e suas mensagens serão excluídas. Os amigos, suas memórias e suas conversas privadas não serão afetados.",
         "deleteConfirmTitle": "Excluir “{{name}}”?",
         "deleteFailed": "Não foi possível excluir a conversa em grupo. Tente novamente em instantes.",
         "speakingMode": "Ordem de fala",
         "speakingModeAuto": "Automática",
         "speakingModeSequential": "Um de cada vez",
-        "speakingModeAutoNote": "Sem menções ou com @Todos os colegas: primeiro pensam ao mesmo tempo, depois respondem um por um. Quando mencionados, seguem a ordem das menções.",
-        "speakingModeSequentialNote": "Um colega fala por vez, e cada um vê as respostas anteriores.",
+        "speakingModeAutoNote": "Sem menções ou com @Todos os amigos: primeiro pensam ao mesmo tempo, depois respondem um por um. Quando mencionados, seguem a ordem das menções.",
+        "speakingModeSequentialNote": "Um amigo fala por vez, e cada um vê as respostas anteriores.",
         "speakingModeSaveFailed": "Não foi possível salvar a ordem de fala. Tente novamente.",
         "setOrganizer": "Tornar organizador",
         "setOrganizerNamed": "Tornar {{name}} o organizador",
-        "organizerNote": "O organizador decide quem faz cada etapa. Por padrão, é o primeiro colega.",
+        "organizerNote": "O organizador decide quem faz cada etapa. Por padrão, é o primeiro amigo.",
         "organizerSaveFailed": "Não foi possível alterar o organizador. Tente novamente.",
         "projectDir": "Pasta do projeto",
         "projectDirNone": "Nenhuma selecionada",
         "projectDirChoose": "Escolher pasta",
         "projectDirChange": "Alterar pasta",
         "projectDirClear": "Limpar pasta",
-        "projectDirNote": "Os colegas trabalham aqui quando dividem o trabalho. Você pode deixar em branco para que usem a pasta desta conversa em grupo. Se você escolher um projeto git, cada divisão de trabalho recebe um novo worktree e uma nova branch, mantendo seu código intacto.",
+        "projectDirNote": "Os amigos trabalham aqui quando dividem o trabalho. Você pode deixar em branco para que usem a pasta desta conversa em grupo. Se você escolher um projeto git, cada divisão de trabalho recebe um novo worktree e uma nova branch, mantendo seu código intacto.",
         "autoContinueSaveFailed": "Não foi possível salvar as transições entre etapas. Tente novamente.",
         "projectDirSaveFailed": "Não foi possível salvar a pasta do projeto. Verifique se a pasta ainda existe e tente novamente.",
-        "allowMentionAllBots": "Permitir @todos os colegas",
-        "allowMentionAllBotsHint": "Só o proprietário do grupo pode alterar. Todos os colegas podem responder; cuidado em grupos grandes. Não afeta a IA que responde em seu nome."
+        "allowMentionAllBots": "Permitir @todos os amigos",
+        "allowMentionAllBotsHint": "Só o proprietário do grupo pode alterar. Todos os amigos podem responder; cuidado em grupos grandes. Não afeta a IA que responde em seu nome."
       },
       "errors": {
-        "memberLimit": "Uma conversa em grupo precisa de 2 a 6 colegas",
-        "memberUnavailable": "Um destes colegas está indisponível. Escolha outro e tente novamente.",
+        "memberLimit": "Uma conversa em grupo precisa de 2 a 6 amigos",
+        "memberUnavailable": "Um destes amigos está indisponível. Escolha outro e tente novamente.",
         "mentionUnavailable": "Um membro mencionado não está mais disponível. Escolha quem mencionar antes de enviar novamente.",
         "notFound": "Esta conversa em grupo não existe mais",
         "hostNotReady": "Cindy ainda está se preparando. Tente novamente em instantes.",
@@ -11232,8 +11341,8 @@
         "lifecycleUnavailable": "O servidor ou computador atual ainda não oferece suporte a esta ação.",
         "groupDissolved": "Este grupo foi dissolvido. Você ainda pode ler o histórico disponível.",
         "lastOwner": "Transfira a propriedade ou dissolva este grupo antes de sair.",
-        "allBotsMentionDisabled": "O proprietário do grupo ainda não ativou @Todos os colegas.",
-        "turnAlreadyStarted": "Este colega já começou e não pode ser pulado"
+        "allBotsMentionDisabled": "O proprietário do grupo ainda não ativou @Todos os amigos.",
+        "turnAlreadyStarted": "Este amigo já começou e não pode ser pulado"
       },
       "organizer": "Organizador",
       "plan": {
@@ -11262,11 +11371,11 @@
         "talkTurn": "Compartilhar uma visualização",
         "stepSpeaking": "Falando",
         "stepSpoken": "Concluído",
-        "allTurns_one": "Todos os {{count}} colega",
-        "allTurns_other": "Todos os {{count}} colegas",
+        "allTurns_one": "Todos os {{count}} amigo",
+        "allTurns_other": "Todos os {{count}} amigos",
         "foldTurns": "Mostrar menos",
         "intro_many": "Isso leva {{count}} etapas. Veja quem faz o quê:",
-        "allTurns_many": "Todos os {{count}} colegas",
+        "allTurns_many": "Todos os {{count}} amigos",
         "stepQueued": "Aguardando início",
         "stepExecuting": "Em execução",
         "stepSkipped": "Ignorado",
@@ -11361,7 +11470,7 @@
           "newReplies_many": "{{count}} novas respostas",
           "hintMany_many": "Novas respostas em {{count}} discussões"
         },
-        "replyPlaceholder": "Responda a esta mensagem; use @ para mencionar um companheiro…",
+        "replyPlaceholder": "Responda a esta mensagem; use @ para mencionar um amigo…",
         "sendReply": "Enviar resposta",
         "addReaction": "Adicionar reação",
         "reactionCount": "{{emoji}} · {{count}} reações",
@@ -11384,7 +11493,7 @@
         "readerUnknown": "Membro desconhecido",
         "invite": "Convidar para o grupo",
         "groupCreated": "Conversa em grupo criada",
-        "inviteFriends": "Convide amigos para entrar e trabalhar com seu colega.",
+        "inviteFriends": "Convide amigos para entrar e trabalhar com seu amigo.",
         "generatingLink": "Gerando link de convite…",
         "join": "Entrar no grupo",
         "revokeLink": "Revogar este link",
@@ -11412,7 +11521,7 @@
         "loginRequired": "Entre na sua conta e tente novamente.",
         "requestFailed": "O serviço de conversa está indisponível. Tente novamente em instantes.",
         "copyFailed": "Não foi possível copiar. Selecione o link e copie-o manualmente.",
-        "createDescription": "Escolha companheiros ou crie o grupo primeiro e convide pessoas para entrar.",
+        "createDescription": "Escolha amigos ou crie o grupo primeiro e convide pessoas para entrar.",
         "settings": {
           "name": "Nome do grupo",
           "topic": "Assunto",
@@ -11429,9 +11538,9 @@
           "admin": "Administrador",
           "member": "Membro",
           "guest": "Convidado",
-          "companionOf": "Companheiro de {{name}}",
-          "toolsHint": "Os membros poderão usar as ferramentas existentes e as informações privadas deste companheiro. Os resultados ficam visíveis para todos. As regras de aprovação existentes continuam em vigor. A revogação interrompe solicitações ativas, mas não pode desfazer ações concluídas.",
-          "ownerOnly": "Somente o proprietário deste companheiro pode alterar esta permissão.",
+          "companionOf": "Amigo de {{name}}",
+          "toolsHint": "Os membros poderão usar as ferramentas existentes e as informações privadas deste amigo. Os resultados ficam visíveis para todos. As regras de aprovação existentes continuam em vigor. A revogação interrompe solicitações ativas, mas não pode desfazer ações concluídas.",
+          "ownerOnly": "Somente o proprietário deste amigo pode alterar esta permissão.",
           "authorizeTitle": "Permitir que este grupo use as ferramentas e informações de {{name}}?",
           "makeAdmin": "Tornar administrador",
           "removeAdmin": "Remover função de administrador",
@@ -11439,17 +11548,17 @@
           "transferTitle": "Transferir a propriedade para {{name}}?",
           "transferHint": "Essa pessoa se tornará proprietária e você se tornará administrador.",
           "removeTitle": "Remover {{name}} deste grupo?",
-          "removeHint": "Essa pessoa perderá o acesso às mensagens. Os companheiros dela também sairão.",
+          "removeHint": "Essa pessoa perderá o acesso às mensagens. Os amigos dela também sairão.",
           "leave": "Sair do grupo",
-          "leaveHint": "Você e seus companheiros sairão deste grupo. Você não receberá mais novas mensagens nem terá acesso ao histórico.",
+          "leaveHint": "Você e seus amigos sairão deste grupo. Você não receberá mais novas mensagens nem terá acesso ao histórico.",
           "soleOwnerHint": "Você é o único membro restante. Arquive este grupo para manter o histórico e restaurá-lo depois.",
           "archive": "Arquivar grupo",
-          "archiveHint": "Arquivar desativa este grupo para todos os membros, impedindo novas mensagens e execuções de colegas. O histórico é mantido. Pesquise o grupo para ver seu histórico ou desarquivá-lo.",
+          "archiveHint": "Arquivar desativa este grupo para todos os membros, impedindo novas mensagens e execuções de amigos. O histórico é mantido. Pesquise o grupo para ver seu histórico ou desarquivá-lo.",
           "confirm": "Confirmar",
           "lastOwner": "Transfira a propriedade para outro membro antes de sair ou remover o proprietário atual.",
           "conflict": "Alguém atualizou este grupo. Atualize e tente novamente.",
           "unarchive": "Desarquivar grupo",
-          "unarchiveHint": "Retomar mensagens e atividades dos companheiros.",
+          "unarchiveHint": "Retomar mensagens e atividades dos amigos.",
           "archived": "Este grupo está arquivado. O histórico continua disponível.",
           "capabilityScope": "Estas são as ferramentas e o acesso de {{name}}, não configurações exclusivas deste grupo.",
           "tabSettings": "Configurações",
@@ -11459,15 +11568,15 @@
           "inviteFriendsItem": "Convidar pessoas",
           "inviteFriendsItemHint": "Obter um link para compartilhar",
           "inviteFriendsLocked": "Só o proprietário e os administradores podem convidar pessoas",
-          "inviteBotsItem": "Adicionar colegas",
-          "inviteBotsItemHint": "Escolher entre seus colegas",
-          "searchTeammates": "Buscar colegas",
+          "inviteBotsItem": "Adicionar amigos",
+          "inviteBotsItemHint": "Escolher entre seus amigos",
+          "searchTeammates": "Buscar amigos",
           "inviteBotsCount": "É possível adicionar {{count}}",
-          "inviteBotsAllIn": "Todos os seus colegas já estão aqui",
-          "inviteBotsNoMatch": "Nenhum colega corresponde a “{{query}}”",
+          "inviteBotsAllIn": "Todos os seus amigos já estão aqui",
+          "inviteBotsNoMatch": "Nenhum amigo corresponde a “{{query}}”",
           "inviteBotsAdded": "{{name}} foi adicionado ao grupo",
-          "noTeammates": "Você ainda não tem nenhum colega",
-          "createTeammate": "Criar colega",
+          "noTeammates": "Você ainda não tem nenhum amigo",
+          "createTeammate": "Criar amigo",
           "back": "Voltar às configurações do grupo",
           "about": "Sobre",
           "edit": "Editar",
@@ -11478,41 +11587,41 @@
           "you": "Você",
           "searchMembers": "Buscar membros",
           "membersNoMatch": "Nenhum membro corresponde a “{{query}}”",
-          "teammateTag": "Colega",
+          "teammateTag": "Amigo",
           "paused": "Pausado",
           "accessNone": "Somente o proprietário",
           "accessChat": "Somente a conversa do grupo",
           "accessTools": "Pode usar ferramentas e informações",
-          "replies": "Como os colegas respondem",
-          "replyModeMentionedNote": "Os colegas ficam em silêncio, a menos que alguém os @mencione.",
+          "replies": "Como os amigos respondem",
+          "replyModeMentionedNote": "Os amigos ficam em silêncio, a menos que alguém os @mencione.",
           "work": "Divisão do trabalho",
           "ownFolder": "Pasta própria do grupo",
-          "projectDirHint": "Onde os colegas trabalham durante uma divisão do trabalho.",
+          "projectDirHint": "Onde os amigos trabalham durante uma divisão do trabalho.",
           "projectDirClearHint": "Usar a pasta própria do grupo",
-          "organizerHint": "Decide quem executa cada etapa. Por padrão, essa função fica com o primeiro colega.",
+          "organizerHint": "Decide quem executa cada etapa. Por padrão, essa função fica com o primeiro amigo.",
           "autoContinueHint": "Quando desativado, cada etapa espera você continuar.",
-          "workCaption": "Em um projeto git, cada divisão do trabalho recebe sua própria branch, mantendo seu código intacto. A pasta do projeto e as transferências automáticas entre colegas se aplicam apenas a este computador.",
+          "workCaption": "Em um projeto git, cada divisão do trabalho recebe sua própria branch, mantendo seu código intacto. A pasta do projeto e as transferências automáticas entre amigos se aplicam apenas a este computador.",
           "me": "Você neste grupo",
           "profileHint": "Seu apelido e sua foto, exibidos só neste grupo",
-          "maskHint": "Seu colega responde quando alguém @menciona você",
-          "myTeammates": "Seus colegas",
-          "myTeammatesCaption": "Escolha como outros membros podem usar seus colegas.",
+          "maskHint": "Seu amigo responde quando alguém @menciona você",
+          "myTeammates": "Seus amigos",
+          "myTeammatesCaption": "Escolha como outros membros podem usar seus amigos.",
           "manage": "Gerenciamento do grupo",
           "manageHintOwner": "Respostas, organizador, divisão do trabalho, arquivamento e dissolução",
           "manageHintAdmin": "Respostas, organizador, divisão do trabalho e arquivamento",
           "manageCaption": "Só o proprietário e os administradores podem ver esta página.",
           "hideHint": "Continue no grupo, apenas oculte-o da sua lista",
-          "leaveRowHint": "Seus colegas saem com você",
+          "leaveRowHint": "Seus amigos saem com você",
           "leaveRowHintAlone": "Você deixará de receber mensagens e perderá o acesso ao histórico",
           "leaveBlocked": "Transfira a propriedade antes de sair",
           "archiveRowHint": "Pausa o grupo para todos; o histórico é mantido",
-          "unarchiveRowHint": "Retomar mensagens e o trabalho dos colegas",
+          "unarchiveRowHint": "Retomar mensagens e o trabalho dos amigos",
           "dissolveRowHint": "Não pode ser desfeito; ninguém poderá enviar mensagens",
           "editTitle": "Editar informações do grupo",
           "topicHint": "Exibido primeiro na seção Sobre",
-          "descriptionHint": "Os colegas leem a descrição mais recente sempre que respondem.",
+          "descriptionHint": "Os amigos leem a descrição mais recente sempre que respondem.",
           "companionTitle": "{{name}} neste grupo",
-          "yourTeammate": "Seu colega",
+          "yourTeammate": "Seu amigo",
           "accessQuestion": "Como outros membros podem usar {{name}}?",
           "defaultTag": "Padrão",
           "accessNoneTitle": "Só você",
@@ -11545,7 +11654,7 @@
         "hide": "Remover da minha lista",
         "hideNote": "Remova esta conversa da sua lista em todos os seus dispositivos. Isso não altera a participação no grupo, exclui o histórico, interrompe trabalhos em andamento nem afeta outros membros.",
         "leave": "Sair do grupo",
-        "leaveNote": "Você e seus companheiros sairão deste grupo. Você não receberá mais novas mensagens nem terá acesso ao histórico.",
+        "leaveNote": "Você e seus amigos sairão deste grupo. Você não receberá mais novas mensagens nem terá acesso ao histórico.",
         "unavailable": "O servidor ou computador atual ainda não oferece suporte a esta ação.",
         "dissolved": "Este grupo foi dissolvido. Você ainda pode ler o histórico disponível.",
         "failed": "Não foi possível concluir esta ação. Tente novamente.",
@@ -11566,7 +11675,7 @@
       "done": "Concluído",
       "placeholder": "O que fica sob sua responsabilidade, o que deve avançar proativamente, quais decisões exigem aprovação e como deve se comunicar.",
       "empty": "As responsabilidades e os limites não foram definidos.",
-      "footnote": "Isso faz parte do contexto de identidade do colega. As configurações rápidas de personalidade são armazenadas separadamente e preservadas quando este texto muda."
+      "footnote": "Isso faz parte do contexto de identidade do amigo. As configurações rápidas de personalidade são armazenadas separadamente e preservadas quando este texto muda."
     },
     "welcome": {
       "generic": "Oi, sou {{name}}. De agora em diante, me diga o que precisar — enquanto isso, vou me situar.",
@@ -11593,7 +11702,7 @@
       "offline": "Offline",
       "thisDevice": "Este computador",
       "offlineDescription": "{{name}} está offline. Reconecte {{device}} para continuar.",
-      "preparing": "Aguardando este colega ficar pronto…"
+      "preparing": "Aguardando este amigo ficar pronto…"
     },
     "capabilities": {
       "title": "Capacidades",
@@ -11610,16 +11719,16 @@
       "empty_skill": "Nenhuma Skill disponível para selecionar.",
       "inputHandoff": {
         "title": "Transferência de controle de entrada",
-        "description": "Quando este colega encontrar um login, senha ou código que não consegue digitar, ele poderá pedir que você o digite em qualquer um dos seus dispositivos. Os valores digitados nunca são compartilhados com ele."
+        "description": "Quando este amigo encontrar um login, senha ou código que não consegue digitar, ele poderá pedir que você o digite em qualquer um dos seus dispositivos. Os valores digitados nunca são compartilhados com ele."
       },
-      "intro": "Escolha quais Skills, ferramentas e servidores MCP este colega pode usar. As mudanças valem a partir da próxima mensagem.",
+      "intro": "Escolha quais Skills, ferramentas e servidores MCP este amigo pode usar. As mudanças valem a partir da próxima mensagem.",
       "alwaysOn": "Sempre ativa",
       "core": {
         "group": "Skill principal",
-        "name": "Núcleo do colega",
-        "hint": "Tarefas, outros colegas, modelos, ferramentas e plugins, memória. Atualizado com o Cindy.",
-        "meta": "Comum a todos os colegas · Sempre ativo · Atualizado com o Cindy",
-        "note": "A coordenação que todo colega tem. Não pode ser desativada nem editada. Para mudar o jeito de trabalhar dele, diga no chat e ele guardará isso como Skill própria.",
+        "name": "Núcleo do amigo",
+        "hint": "Tarefas, outros amigos, modelos, ferramentas e plugins, memória. Atualizado com o Cindy.",
+        "meta": "Comum a todos os amigos · Sempre ativo · Atualizado com o Cindy",
+        "note": "A coordenação que todo amigo tem. Não pode ser desativada nem editada. Para mudar o jeito de trabalhar dele, diga no chat e ele guardará isso como Skill própria.",
         "covers": "Inclui",
         "raw": "Ver texto original",
         "items": {
@@ -11628,8 +11737,8 @@
             "body": "Conhece as tarefas que pode controlar e os computadores disponíveis. Organiza e acompanha tarefas a seu pedido, traz os resultados e verifica as operações compatíveis antes de trabalhar em outro computador."
           },
           "teammates": {
-            "title": "Outros colegas",
-            "body": "Manda mensagem a outros colegas ou cria um novo para você."
+            "title": "Outros amigos",
+            "body": "Manda mensagem a outros amigos ou cria um novo para você."
           },
           "models": {
             "title": "Modelos e ferramentas",
@@ -11660,7 +11769,7 @@
         "saveFailed": "Não foi possível salvar. Tente novamente mais tarde.",
         "deleteFailed": "Não foi possível excluir. Tente novamente mais tarde.",
         "deleteTitle": "Excluir “{{name}}”?",
-        "deleteBody": "O colega deixará de usar esta Skill e o conteúdo não poderá ser recuperado. Se precisar dela depois, peça no chat que ele lembre o método de novo.",
+        "deleteBody": "O amigo deixará de usar esta Skill e o conteúdo não poderá ser recuperado. Se precisar dela depois, peça no chat que ele lembre o método de novo.",
         "unsavedTitle": "Alterações não salvas",
         "unsavedDescription": "Sair descartará estas alterações na Skill.",
         "discard": "Descartar alterações",
@@ -11683,16 +11792,16 @@
       "officialInherited": "Oficial da Cindy · Segue as configurações deste computador"
     },
     "guided": {
-      "title": "Criar um colega",
-      "reviewTitle": "Seu novo colega",
+      "title": "Criar um amigo",
+      "reviewTitle": "Seu novo amigo",
       "question": "Descreva brevemente suas expectativas.",
       "placeholder": "Por exemplo, me ajude a praticar inglês com conversas do dia a dia e correções cuidadosas.",
-      "generate": "Criar colega",
-      "generating": "Dando forma ao seu colega…",
-      "generationFailed": "Não foi possível gerar seu colega. Sua ideia continua aqui; tente novamente.",
+      "generate": "Criar amigo",
+      "generating": "Dando forma ao seu amigo…",
+      "generationFailed": "Não foi possível gerar seu amigo. Sua ideia continua aqui; tente novamente.",
       "modelRequired": "Escolha um modelo disponível acima para continuar.",
-      "modelFollowsDefault": "Segue o modelo padrão de colegas.",
-      "modelForThisBot": "Esta seleção vale apenas para este colega.",
+      "modelFollowsDefault": "Segue o modelo padrão de amigos.",
+      "modelForThisBot": "Esta seleção vale apenas para este amigo.",
       "cindyDescription": "Posso ajudar você a usar Cindy, conectar suas ferramentas e realizar coisas juntos.",
       "cindySummary": "Gerencie Cindy, conecte ferramentas e realize coisas.",
       "openCindy": "Abrir Cindy",
@@ -11702,10 +11811,10 @@
       "duplicateName": "Esse nome já está em uso. Escolha um nome fácil de distinguir.",
       "introduction": "Sobre mim",
       "editIntroduction": "Editar apresentação",
-      "refine": "Ajustar colega",
+      "refine": "Ajustar amigo",
       "refinePlaceholder": "O que você mudaria? Por exemplo, menos formal e um pouco mais divertido.",
       "back": "Voltar",
-      "invite": "Convidar colega",
+      "invite": "Convidar amigo",
       "portrait": "Retrato {{number}}",
       "upload": "Enviar imagem",
       "generateAvatar": "Gerar retrato",
@@ -11726,7 +11835,7 @@
       }
     },
     "import": {
-      "title": "Importar um colega",
+      "title": "Importar um amigo",
       "entry": "Importar um Agent",
       "description": "Escolha o que trazer do Hermes ou do OpenClaw.",
       "empty": "Nenhum Agent instalado foi encontrado neste computador.",
@@ -11741,7 +11850,7 @@
       "takeoverNote": "As tarefas de origem só são pausadas após a verificação das conexões de dados. Dependências não selecionadas mantêm a tarefa de origem em execução.",
       "submit": "Importar",
       "back": "Voltar",
-      "open": "Abrir colega",
+      "open": "Abrir amigo",
       "running": "Importando e verificando conexões…",
       "complete": "Importação salva",
       "attention": "Alguns itens precisam de atenção. Veja os detalhes abaixo.",
@@ -11782,18 +11891,18 @@
       "attachmentUnsupported": "Este formato de anexo ainda não é compatível. O original permanece na origem.",
       "diskFull": "Espaço em disco insuficiente. Libere espaço e tente novamente.",
       "permissionDenied": "Falta permissão para ler ou salvar este item. Corrija as permissões e tente novamente.",
-      "setupDeferred": "Continue o login e a verificação na conversa com o colega.",
+      "setupDeferred": "Continue o login e a verificação na conversa com o amigo.",
       "automationInvalid": "Não foi possível converter a definição da automação; ela não foi criada.",
       "itemFailed": "Este item está incompleto. Tente novamente ou veja os detalhes da importação.",
-      "chatPartial": "Seu colega foi criado, mas parte do conteúdo não foi totalmente salva. Os itens abaixo ainda precisam de atenção; os demais conteúdos e a conversa continuam disponíveis.",
-      "imBotOwnerMissing": "Nenhum ID de usuário do proprietário foi encontrado. Conclua a conexão deste bot na página Plataformas de mensagens do colega.",
+      "chatPartial": "Seu amigo foi criado, mas parte do conteúdo não foi totalmente salva. Os itens abaixo ainda precisam de atenção; os demais conteúdos e a conversa continuam disponíveis.",
+      "imBotOwnerMissing": "Nenhum ID de usuário do proprietário foi encontrado. Conclua a conexão deste bot na página Plataformas de mensagens do amigo.",
       "imBotGatewayRunning": "O gateway original ainda está usando este bot. Pare-o e conecte o bot em Plataformas de mensagens.",
-      "imBotInUse": "Este bot já está conectado neste computador, em Configurações → Bots de mensagens ou em outro colega.",
-      "imBotConnectFailed": "Não foi possível conectar este bot. Tente novamente na página Plataformas de mensagens do colega.",
-      "imBotSourceStopUnconfirmed": "O bot original ainda não parou, por isso não foi transferido para o colega. Você pode conectá-lo depois na página Plataformas de mensagens do colega.",
+      "imBotInUse": "Este bot já está conectado neste computador, em Configurações → Bots de mensagens ou em outro amigo.",
+      "imBotConnectFailed": "Não foi possível conectar este bot. Tente novamente na página Plataformas de mensagens do amigo.",
+      "imBotSourceStopUnconfirmed": "O bot original ainda não parou, por isso não foi transferido para o amigo. Você pode conectá-lo depois na página Plataformas de mensagens do amigo.",
       "imBotSourceChanged": "O bot original mudou após a prévia, por isso não foi parado. Recarregue a prévia e importe novamente.",
       "bots": "Bots de mensagens",
-      "botsNote": "Após a importação, estes bots são parados em {{source}} e o colega assume o controle deles.",
+      "botsNote": "Após a importação, estes bots são parados em {{source}} e o amigo assume o controle deles.",
       "sourceDisabled": "Já desativado",
       "botOwner": "ID do proprietário {{id}}"
     },
@@ -11835,7 +11944,7 @@
       "targetOutdatedItem": "Mover para “{{device}}” · Cindy antigo",
       "targetOutdatedMeta": "Cindy antigo",
       "olderTargetNote": "“{{device}}” executa uma versão antiga do Cindy, então {{name}} vai funcionar lá do jeito anterior: o histórico do chat continua sincronizado, mas as regras e automações do projeto não se aplicam lá.",
-      "shadowTitle": "Este colega agora funciona em “{{device}}”",
+      "shadowTitle": "Este amigo agora funciona em “{{device}}”",
       "shadowHint": "A conversa aqui é somente leitura.",
       "openOnHome": "Abrir em “{{device}}”",
       "runsOn": "Executado em “{{device}}”",
@@ -11851,7 +11960,7 @@
       "switchOffline": "Não foi possível conectar. O computador principal de {{name}} não mudou",
       "switchFailed": "Não foi possível transferir {{name}} para “{{device}}”",
       "homeOutdated": "O computador principal “{{device}}” executa uma versão mais antiga do Cindy. Atualize-a ou altere o computador principal por lá",
-      "arrivingLater": "{{name}} foi transferido para este computador e ainda está sendo preparado. Em breve aparecerá entre seus colegas",
+      "arrivingLater": "{{name}} foi transferido para este computador e ainda está sendo preparado. Em breve aparecerá entre seus amigos",
       "arrivalPermissions": "{{name}} agora usa as permissões padrão deste computador.",
       "arrivalModel": "O modelo salvo de {{name}} não está disponível neste computador, por isso ele segue o modelo padrão deste computador.",
       "busyTitle": "{{name}} ainda está respondendo",
@@ -11884,18 +11993,18 @@
       "transferFailed": "Não foi possível transferir {{name}} para “{{device}}”"
     },
     "market": {
-      "heading": "Descobrir colegas",
+      "heading": "Descobrir amigos",
       "description": "Métodos práticos e Skills para avançar no trabalho em conjunto.",
       "invite": "Convidar",
       "open": "Abrir",
-      "remove": "Remover colega",
+      "remove": "Remover amigo",
       "back": "Voltar à lista",
-      "loading": "Carregando colegas…",
-      "empty": "Nenhum colega encontrado",
-      "loadFailed": "Não foi possível carregar os colegas. Tente reabrir mais tarde.",
-      "installFailed": "A adição do colega não foi concluída. O conteúdo salvo foi mantido; você pode tentar novamente.",
-      "nameExists": "Um colega já tem este nome. Altere o nome dele nas configurações de colegas antes de convidar.",
-      "installing": "Salvando perfil e Skills do colega…",
+      "loading": "Carregando amigos…",
+      "empty": "Nenhum amigo encontrado",
+      "loadFailed": "Não foi possível carregar os amigos. Tente reabrir mais tarde.",
+      "installFailed": "A adição do amigo não foi concluída. O conteúdo salvo foi mantido; você pode tentar novamente.",
+      "nameExists": "Um amigo já tem este nome. Altere o nome dele nas configurações de amigos antes de convidar.",
+      "installing": "Salvando perfil e Skills do amigo…",
       "memoryDisabled": "A memória está desativada, então o conhecimento de referência não foi importado. A memória continua desativada.",
       "knowledge": "Conhecimento e memória",
       "skills": "Skills",
@@ -11914,8 +12023,8 @@
         "other": "Não foi possível salvar “{{name}}”.",
         "unknown": "Não foi possível salvar um item."
       },
-      "partialReady": "Todo o resto está pronto, então você já pode começar a usar o colega.",
-      "partialUnsaved": "O colega ainda não foi salvo. Salve novamente para concluir.",
+      "partialReady": "Todo o resto está pronto, então você já pode começar a usar o amigo.",
+      "partialUnsaved": "O amigo ainda não foi salvo. Salve novamente para concluir.",
       "retry": "Salvar novamente"
     },
     "starterOptions": "Opções iniciais",
@@ -11942,7 +12051,7 @@
       "removeAria": "Remover {{platform}}",
       "empty": "Adicione um bot que você já tem ou conecte seu WeChat pessoal abaixo, e {{name}} responderá por lá.",
       "externalNote": "Após a vinculação, Telegram e Feishu/Lark só aceitam mensagens privadas do proprietário. Os grupos seguem as configurações de participação de cada plataforma e as permissões de ferramentas de {{name}}. Tarefas separadas compartilham arquivos e memória.",
-      "sharedMemoryNote": "{{name}} usa informações daqui e de outras conversas em conjunto. Para manter as memórias separadas, use outro colega.",
+      "sharedMemoryNote": "{{name}} usa informações daqui e de outras conversas em conjunto. Para manter as memórias separadas, use outro amigo.",
       "groups": {
         "title": "Grupos",
         "hint": "Os grupos dos quais {{name}} participa aparecem aqui. “Sempre” = ler todas as mensagens e deixar {{name}} decidir se deve participar (cada mensagem consome tokens).",
@@ -12050,7 +12159,7 @@
           "invalidDingtalk": "Preencha o Client ID e o Client Secret.",
           "invalidDiscordToken": "Isso não parece um token de bot.",
           "invalidDiscordOwner": "O ID de usuário deve ter de 17 a 20 dígitos.",
-          "conflict": "Este bot já está conectado neste computador, em Configurações → Bots de mensagens ou em outro colega.",
+          "conflict": "Este bot já está conectado neste computador, em Configurações → Bots de mensagens ou em outro amigo.",
           "botUnavailable": "{{name}} está indisponível no momento. Tente novamente quando voltar.",
           "connectFailed": "Não foi possível conectar: {{reason}}",
           "failed": "Não foi possível concluir. Tente novamente mais tarde.",
@@ -12088,17 +12197,17 @@
         "ok": "OK"
       },
       "officialX": {
-        "bind": "Atribuir a este colega",
-        "remove": "Remover atribuição do colega",
+        "bind": "Atribuir a este amigo",
+        "remove": "Remover atribuição do amigo",
         "bindTitle": "Deixar {{name}} responder às perguntas no X?",
-        "bindBody": "Suas perguntas públicas para @askmycindy usarão a identidade, as ferramentas, a memória compartilhada e o espaço de trabalho de {{name}}. As respostas são públicas. A sequência no X é separada do seu histórico de conversa privado. Isso substitui qualquer atribuição existente a um colega.",
+        "bindBody": "Suas perguntas públicas para @askmycindy usarão a identidade, as ferramentas, a memória compartilhada e o espaço de trabalho de {{name}}. As respostas são públicas. A sequência no X é separada do seu histórico de conversa privado. Isso substitui qualquer atribuição existente a um amigo.",
         "removeTitle": "Remover a atribuição do X?",
         "removeBody": "Sua conta do X continuará conectada. As próximas perguntas se tornarão tarefas comuns. As respostas já em andamento serão concluídas.",
         "bound": "As perguntas no X estão atribuídas a {{name}}. Ative o X e autorize sua conta para começar.",
-        "boundElsewhere": "O X está atribuído a outro colega. Atribuí-lo aqui substituirá esse colega.",
+        "boundElsewhere": "O X está atribuído a outro amigo. Atribuí-lo aqui substituirá esse amigo.",
         "unbound": "Deixe {{name}} responder às suas perguntas para o bot oficial @askmycindy.",
-        "managed": "Um colega responde às perguntas no X. Altere a atribuição nas configurações de plataforma de mensagens desse colega.",
-        "riskBody": "As perguntas no X usam a memória compartilhada, as ferramentas e o espaço de trabalho do colega, e as respostas são públicas. Não use o X para informações privadas. A sequência no X não usa diretamente seu histórico de conversa privado."
+        "managed": "Um amigo responde às perguntas no X. Altere a atribuição nas configurações de plataforma de mensagens desse amigo.",
+        "riskBody": "As perguntas no X usam a memória compartilhada, as ferramentas e o espaço de trabalho do amigo, e as respostas são públicas. Não use o X para informações privadas. A sequência no X não usa diretamente seu histórico de conversa privado."
       }
     },
     "voiceMode": {
@@ -12123,8 +12232,8 @@
       "settingsTitle": "Voz",
       "openSettings": "Configurações de voz",
       "startConversation": "Iniciar conversa por voz",
-      "settingsHint": "Escolha o modelo de fala e a voz deste companheiro e inicie uma conversa por voz no campo de mensagem.",
-      "previewNeedsChat": "Inicie uma conversa com este companheiro para ouvir uma prévia da voz.",
+      "settingsHint": "Escolha o modelo de fala e a voz deste amigo e inicie uma conversa por voz no campo de mensagem.",
+      "previewNeedsChat": "Inicie uma conversa com este amigo para ouvir uma prévia da voz.",
       "voiceId": "ID da voz",
       "manualVoice": "Insira um ID de voz",
       "refreshVoices": "Atualizar vozes",
@@ -12159,7 +12268,7 @@
       "modelUnavailable": "O modelo de fala salvo está indisponível. Escolha outro modelo.",
       "noModels": "Nenhum modelo de conversão de texto em fala disponível.",
       "noModelsSupportedProtocols": "Compatível com as APIs HTTP de MiniMax, ElevenLabs, Qwen / CosyVoice e provedores de conversão de texto em fala compatíveis com OpenAI.",
-      "noModelsSetupHint": "Conecte um provedor e ative um modelo de fala para configurar a voz do seu companheiro.",
+      "noModelsSetupHint": "Conecte um provedor e ative um modelo de fala para configurar a voz do seu amigo.",
       "openProviders": "Abrir provedores de modelos",
       "catalogError": "Não foi possível carregar ou salvar as configurações de fala. Tente novamente.",
       "start": "Começar a falar",
@@ -12202,7 +12311,7 @@
       "speedValue": "{{speed}}×",
       "sentencePlayback": "Ler por frase",
       "sentencePlaybackHint": "Comece a ler frases completas conforme a resposta chega. Desative esta opção para aguardar a resposta completa. A leitura aguarda quando é necessário processar a resposta.",
-      "preferenceHint": "As configurações de voz são salvas apenas para este colega.",
+      "preferenceHint": "As configurações de voz são salvas apenas para este amigo.",
       "resetPreference": "Usar padrões",
       "preferenceError": "Não foi possível carregar ou salvar as configurações de voz. Tente novamente.",
       "protocol": "API de fala",
@@ -12215,12 +12324,12 @@
       "callRecord": "Chamada de voz",
       "callHistoryTitle": "Chamada de voz",
       "you": "Você",
-      "companion": "Companheiro",
+      "companion": "Amigo",
       "callInProgress": "Em chamada",
       "callSendFailed": "Não foi possível enviar. Suas palavras foram mantidas.",
       "handoff": {
         "sending": "Transferindo…",
-        "accepted": "Transferido para seu companheiro",
+        "accepted": "Transferido para seu amigo",
         "failed": "Não foi possível transferir. Suas palavras foram mantidas.",
         "completed": "Resultado recebido"
       },
@@ -12931,7 +13040,7 @@
       "sessionSenderFallback": "Outra sessão",
       "pluginRowAria": "Mensagem do plugin \"{{sender}}\" na fila",
       "pluginSenderFallback": "Plugin",
-      "botRowAria": "Mensagem do colega \"{{sender}}\" na fila",
+      "botRowAria": "Mensagem do amigo \"{{sender}}\" na fila",
       "dragAria": "Arraste a mensagem {{index}} da fila para reordenar",
       "steerAction": "Orientar",
       "steerRunningTip": "Encaminhar esta mensagem para a tarefa em execução sem interrompê-la; será processada quando a ação atual terminar",
@@ -13299,6 +13408,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "Usar Texto Original",
     "rateLimited": "Muitas solicitações de voz. Aguarde um momento e tente novamente.",
     "status": {
       "listening": "Entrada por voz",
@@ -13622,7 +13732,7 @@
       "claudeSubscriptionSwitchFailed": "Não foi possível mudar para Claude.ai ou tentar novamente nesta sessão: {{msg}}",
       "codexAppServerRetired": "O serviço do Codex foi reiniciado ou substituído. A solicitação atual foi interrompida; execute-a novamente.",
       "codexAuthMissing": "O Codex remoto ainda não está conectado (401 Unauthorized). Clique em \"Sincronizar autenticação\" para enviar suas credenciais locais do Codex ao diretório do Cindy Codex remoto e tente novamente.",
-      "codexAuthMissingLocal": "Credenciais do Codex ausentes ou expiradas (401 Unauthorized). Entre novamente nas Configurações de {{appName}} → Codex (o app-server reiniciará automaticamente ao entrar), ou execute `codex login` no terminal e alterne o modo de autenticação nas Configurações uma vez para reiniciar o app-server. Depois, inicie uma nova sessão.",
+      "codexAuthMissingLocal": "Não foi possível autenticar a conexão “{{provider}}” neste computador. Verifique o estado de login nas configurações e volte a esta sessão após restabelecer a conexão.",
       "codexSessionExpired": "A conexão com a OpenAI precisa de uma atualização. Reconecte o ChatGPT para continuar; {{appName}} não desconectará o Codex CLI do sistema nem pedirá que você reconecte outras fontes de modelos.",
       "codexAuthSynced": "Autenticação sincronizada. Clique em \"Tentar novamente\" para reenviar.",
       "syncAuth": "Sincronizar autenticação",
@@ -14079,7 +14189,7 @@
           "plugins": "Catálogo de plugins",
           "memoryRules": "Instruções de memória",
           "memoryIndex": "Índice de memória",
-          "profile": "Perfil do colega",
+          "profile": "Perfil do amigo",
           "user": "Instruções do usuário",
           "directories": "Diretórios adicionais",
           "native": "Instruções do Pi",
@@ -14250,7 +14360,7 @@
       "sessionSent": "Enviado por outra sessão",
       "sessionSentNamed": "Enviado pela sessão \"{{name}}\"",
       "sessionViewSource": "Ver sessão de origem",
-      "botSentNamed": "Enviado pelo colega \"{{name}}\"",
+      "botSentNamed": "Enviado pelo amigo \"{{name}}\"",
       "orcaFromLead": "Mensagem do Lead",
       "orcaFromWorker": "Mensagem do Worker",
       "orcaFromWorkerBatch": "Relatório do sistema: {{count}} resultados de Worker",
@@ -14269,7 +14379,7 @@
         "localApp": "ID do aplicativo: {{id}}",
         "mcpApp": "$t(mcpApps.serverId)",
         "session": "ID da sessão: {{id}}",
-        "teammate": "ID do colega: {{id}}",
+        "teammate": "ID do amigo: {{id}}",
         "automation": "ID da automação: {{id}}",
         "plugin": "ID do plugin: {{id}}",
         "device": "ID do dispositivo: {{id}}",
@@ -14957,7 +15067,7 @@
       "selectFolderFailed": "Não foi possível selecionar a pasta. Tente novamente.",
       "projectsToggleExpand": "Expandir todas as sessões do projeto",
       "projectsToggleCollapse": "Recolher todas as sessões do projeto",
-      "filterAria": "Configurações da barra lateral (Status: {{status}}, Harness: {{vendor}}, Última atividade: {{lastActivity}}, Agrupar por: {{groupBy}}, Ordenar por: {{sortBy}}, Projetos: {{projects}}, Colegas: {{creators}})",
+      "filterAria": "Configurações da barra lateral (Status: {{status}}, Harness: {{vendor}}, Última atividade: {{lastActivity}}, Agrupar por: {{groupBy}}, Ordenar por: {{sortBy}}, Projetos: {{projects}}, Amigos: {{creators}})",
       "organizeSidebar": "Configurações da barra lateral",
       "filterAllText": "todos",
       "filterSelectedProjects": "{{count}} selecionadas",
@@ -15022,7 +15132,7 @@
       "filterProjectOrderTip": {
         "custom": "Arraste as linhas dos projetos com o mouse para reordenar. As sessões dentro deles continuam seguindo a ordenação acima."
       },
-      "filterCreatorsHeading": "Colegas",
+      "filterCreatorsHeading": "Amigos",
       "filterCreatorsAny": "Todas",
       "filterCreatorsNone": "Ocultar tudo",
       "filterSelectedCreators": "{{count}} selecionadas",
@@ -15466,6 +15576,16 @@
             "recheck": "Verificar conexão",
             "summary": "Gerencie repositórios, issues, pull requests e Actions do GitHub.",
             "otherMethods": "Outros métodos de conexão"
+          },
+          "app": {
+            "title": "Eventos dos repositórios",
+            "description": "Conecte a GitHub App da Cindy para atualizar os PRs acompanhados quando as revisões ou a CI mudarem.",
+            "connected": "Conectado como {{login}} · Repositórios acompanhados: {{count}}",
+            "missing": "Verifique a instalação do App e o acesso a: {{repositories}}",
+            "error": "Não foi possível verificar a conexão. Tente novamente.",
+            "repositories": "Escolher repositórios",
+            "disconnect": "Desconectar eventos",
+            "connect": "Conectar GitHub App"
           }
         },
         "unresolved": "Discussões de revisão não resolvidas: {{count}}",
@@ -15870,7 +15990,7 @@
         "openConfigFailed": "Falha ao abrir arquivo",
         "reload": "Recarregar",
         "reloadAria": "Recarregar automação do projeto",
-        "teammate": "{{name}} · Colega"
+        "teammate": "{{name}} · Amigo"
       },
       "promote": {
         "menu": "Promover a automação de projeto",
@@ -16203,7 +16323,11 @@
             "payments": "Pagamentos",
             "checkout": "Finalização da compra",
             "invoices": "Faturas",
-            "subscriptions": "Assinaturas"
+            "subscriptions": "Assinaturas",
+            "reviewComments": "Comentários de revisão",
+            "reviewThreads": "Discussões de revisão",
+            "checkRuns": "Execuções de verificação",
+            "commitStatus": "Status do commit"
           },
           "actions": {
             "all": "Todas as alterações",
@@ -16225,7 +16349,12 @@
             "failed": "Falha",
             "paid": "Pago"
           }
-        }
+        },
+        "repositoriesLabel": "Repositórios",
+        "repositoriesHint": "Insira owner/repository, um por linha. Apenas os repositórios autorizados para esta GitHub App podem iniciar a tarefa.",
+        "repositoriesInvalid": "Insira de 1 a 50 nomes de repositório válidos no formato owner/repository.",
+        "githubAppHint": "Conecte a GitHub App no computador que executa esta tarefa e autorize esses repositórios. Não é necessário um URL de Webhook ou segredo separado.",
+        "githubAppPaused": "Esta tarefa está pausada. Os eventos não a iniciarão."
       },
       "trigger": {
         "label": "Modo de acionamento",
@@ -17044,6 +17173,9 @@
       },
       "pluginCreator": {
         "description": "Crie, edite, depure e empacote plugins do Cindy ou publique-os quando solicitado."
+      },
+      "themeCreator": {
+        "description": "Crie e verifique as cores, os recursos visuais e as configurações de aparência do Cindy."
       }
     },
     "common": {
@@ -17797,11 +17929,14 @@
       "voiceDirectApiKeyAuthDescription": "O provedor de entrada de voz atual exige uma chave de API direta. Adicioná-la em Chaves de API para iniciar a entrada de voz?",
       "codexVoiceAuthTitle": "Conexão com o ChatGPT necessária",
       "codexVoiceAuthDescription": "A entrada de voz usa uma conta ChatGPT conectada para reconhecimento de fala em tempo real com GPT. A conta não está conectada ou precisa de atualização. Abrir Provedores de modelos para conectar o ChatGPT?",
+      "ccBinaryMissingTitle": "Componente do Claude Code não está pronto",
+      "ccBinaryMissingDescription": "O componente do Claude Code ainda não está instalado, então este recurso não pode ser usado. Conecte-se à rede e abra Configurações → Sobre para instalá-lo.",
       "codexBinaryMissingTitle": "Componente do Codex não está pronto",
       "codexBinaryMissingDescription": "O componente do Codex ainda não está pronto, então este recurso não pode ser usado. Tente novamente mais tarde ou verifique a conexão do Codex em Configurações → Provedores.",
       "piBinaryMissingTitle": "Componente do Pi não está pronto",
       "piBinaryMissingDescription": "O componente do Pi ainda não está pronto, então este recurso não pode ser usado. Tente novamente mais tarde ou abra Configurações → Sobre para gerenciar ou restaurar o Pi.",
       "goToSettings": "Abrir configurações",
+      "remoteCcBinaryMissingTitle": "Componente do Claude Code não está pronto no dispositivo remoto",
       "remoteCodexBinaryMissingTitle": "Componente do Codex não está pronto no dispositivo remoto",
       "remotePiBinaryMissingTitle": "Componente do Pi não está pronto no dispositivo remoto",
       "remoteAuthDescription": "Você precisa concluir a configuração no dispositivo remoto \"{{device}}\" antes de iniciar uma sessão aqui. Configure-o nesse dispositivo e tente novamente.",
@@ -18176,7 +18311,7 @@
     "exit": "Sair do modo de planejamento"
   },
   "globalDrop": {
-    "cindyHint": "Solte para instalar o plugin",
+    "cindyHint": "Solte para importar o arquivo do Cindy",
     "cshareHint": "Solte para importar a sessão compartilhada"
   },
   "sessionShare": {
@@ -19605,16 +19740,16 @@
       "plugin": "Permitir que {{companion}} use “{{tool}}”?",
       "tool": "Permitir que {{companion}} use {{tool}}?"
     },
-    "source": "Você escolheu Permitir no plugin “{{plugin}}”. O {{appName}} confirma aqui mais uma vez; depois, o colega continua.",
+    "source": "Você escolheu Permitir no plugin “{{plugin}}”. O {{appName}} confirma aqui mais uma vez; depois, o amigo continua.",
     "allow": "Permitir",
     "cancel": "Cancelar"
   },
   "groupTools": {
-    "authorizationRequired": "A autorização do grupo expirou ou não permite esta ação. Peça ao proprietário do colega para fazer uma nova solicitação neste grupo.",
-    "localPeersOnly": "As mensagens do grupo só podem ser direcionadas a colegas neste dispositivo e nesta conta.",
+    "authorizationRequired": "A autorização do grupo expirou ou não permite esta ação. Peça ao proprietário do amigo para fazer uma nova solicitação neste grupo.",
+    "localPeersOnly": "As mensagens do grupo só podem ser direcionadas a amigos neste dispositivo e nesta conta.",
     "ownerChanged": "A conta mudou. Tente novamente.",
     "invalidMessage": "O identificador da mensagem ou da nova tentativa é inválido.",
-    "privateUnavailable": "A conversa privada deste colega está indisponível. Tente novamente mais tarde.",
+    "privateUnavailable": "A conversa privada deste amigo está indisponível. Tente novamente mais tarde.",
     "idempotencyConflict": "Este identificador de nova tentativa já foi usado para outra mensagem.",
     "privateUnconfirmed": "A entrega da mensagem privada não foi confirmada. Tente novamente com o mesmo identificador.",
     "verificationUnavailable": "Não foi possível verificar a autorização do grupo. Tente novamente quando a conexão for restabelecida."
@@ -20319,6 +20454,13 @@
     "detail": "Solicitação de {{device}}\nFinalidade: {{purpose}}\n\nOs dispositivos da sua conta poderão controlar este computador, executar tarefas e acessar arquivos. A opção permanece ativa até você desativá-la nas configurações.",
     "decline": "Agora não",
     "enable": "Ativar controle remoto"
+  },
+  "cindyFiles": {
+    "unsupported": "Esta versão não oferece suporte a este arquivo. Atualize o Cindy e tente novamente.",
+    "invalid": "Este arquivo do Cindy é inválido ou está danificado. Obtenha uma nova cópia.",
+    "failed": "Não foi possível importar este arquivo. Tente novamente.",
+    "themeInstalled": "Tema adicionado. Selecione-o nas configurações de aparência.",
+    "refreshFailed": "O tema foi instalado, mas não foi possível atualizar a lista. Atualize-a nas configurações de aparência."
   },
   "modelGroups": {
     "title": "Grupos de modelos",

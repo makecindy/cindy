@@ -1887,7 +1887,7 @@
       "windowBehavior": "App Behavior",
       "shortcuts": "Keyboard Shortcuts",
       "mcpServers": "Custom MCP",
-      "bots": "Teammates"
+      "bots": "Buddies"
     },
     "remote": {
       "title": "Remote machines",
@@ -2176,7 +2176,16 @@
       },
       "sidebarAndPanels": "Sidebar & panels",
       "themeLabel": "Theme",
+      "createTheme": {
+        "label": "Create Theme",
+        "hint": "Describe a style or add a reference image to design Cindy’s appearance.",
+        "prompt": "Help me create a shareable Cindy theme package, with a preview and verification. The style I have in mind is:",
+        "unavailable": "The theme creation Skill is unavailable. Check whether it is enabled in Skills.",
+        "startFailed": "Could not open the theme creation task"
+      },
       "themeAriaLabel": "Theme selection",
+      "themeApplyFailed": "Couldn’t apply this theme. Your current appearance is unchanged.",
+      "themeFontFailed": "Couldn’t load the theme font. Using the default font.",
       "localBadge": "(Local)",
       "localThemes": {
         "title": "Local themes",
@@ -2388,7 +2397,7 @@
         "video": "Video",
         "file": "File",
         "message": "New message",
-        "teammate": "Teammate",
+        "teammate": "Buddy",
         "sender": "Unknown sender",
         "mention": "Mentioned you",
         "reply": "Replied to you",
@@ -2856,7 +2865,7 @@
         "dbSlimmingIncludeActiveLabel": "Clean Unarchived Tasks",
         "dbSlimmingIncludeActiveDescription": "Also clean unarchived tasks older than the selected period and remove them from the task list",
         "dbSlimmingIncludeActiveConfirmTitle": "Include unarchived tasks in database cleanup?",
-        "dbSlimmingIncludeActiveConfirmDescription": "An unarchived task may still be running even when it is older than the selected period. Cleanup does not wait for it to stop, and messages it adds after the scan may also be removed. When enabled, unarchived, archived, and soft-deleted tasks not updated for the selected period will be cleaned. History will be removed from eligible unarchived tasks and their Agent context will be reset; ordinary task entries will also be removed from the list, while teammates’ main tasks remain. A database backup can restore task and message data; without one, that data cannot be restored either. Records used to review or undo file changes from those messages are not included in the database backup and cannot be restored.",
+        "dbSlimmingIncludeActiveConfirmDescription": "An unarchived task may still be running even when it is older than the selected period. Cleanup does not wait for it to stop, and messages it adds after the scan may also be removed. When enabled, unarchived, archived, and soft-deleted tasks not updated for the selected period will be cleaned. History will be removed from eligible unarchived tasks and their Agent context will be reset; ordinary task entries will also be removed from the list, while buddies’ main tasks remain. A database backup can restore task and message data; without one, that data cannot be restored either. Records used to review or undo file changes from those messages are not included in the database backup and cannot be restored.",
         "dbSlimmingIncludeActiveConfirmButton": "Include unarchived tasks",
         "dbSlimmingIncludeActiveCancelButton": "Keep unarchived tasks",
         "dbSlimmingBackupLabel": "Back up database before cleanup",
@@ -4795,13 +4804,13 @@
         "workingDirFailed": "Could not update the working directory. Select it again."
       },
       "companion": {
-        "assigned": "Replies come from the linked teammate",
-        "description": "Chat with {{name}} on WeChat, sharing memory and the main task. This computer’s WeChat connection can belong to one teammate at a time.",
-        "other": "WeChat is linked to another teammate. Remove that link in their connection settings or Personal WeChat settings first.",
-        "permissionNote": "Your WeChat messages to this teammate use its permission settings, including Full access. Change permissions below the teammate’s chat input in Cindy. Messages from other people remain restricted.",
-        "remove": "Remove teammate link",
+        "assigned": "Replies come from the linked buddy",
+        "description": "Chat with {{name}} on WeChat, sharing memory and the main task. This computer’s WeChat connection can belong to one buddy at a time.",
+        "other": "WeChat is linked to another buddy. Remove that link in their connection settings or Personal WeChat settings first.",
+        "permissionNote": "Your WeChat messages to this buddy use its permission settings, including Full access. Change permissions below the buddy’s chat input in Cindy. Messages from other people remain restricted.",
+        "remove": "Remove buddy link",
         "useExisting": "Use connected WeChat with {{name}}",
-        "updateFailed": "Could not update the link. Wait for WeChat tasks to finish, then retry and check that the teammate is available."
+        "updateFailed": "Could not update the link. Wait for WeChat tasks to finish, then retry and check that the buddy is available."
       }
     },
     "discordBot": {
@@ -6707,6 +6716,7 @@
         "confirm": "Revoke access"
       },
       "v2": {
+        "sectionTitle": "Experimental Agent network",
         "switch": {
           "title": "Agent-Net (Beta)",
           "hint": "Shows the connection topology and recent activity. Connections are encrypted when both devices enable Agent-Net and have paired through Agent-Net. Other devices use the existing connection. Applies only to this computer."
@@ -6780,7 +6790,106 @@
           "deviceLink": "Device Link"
         },
         "onlyEncrypted": "Use Only Agent-Net",
-        "onlyEncryptedHint": "Older devices and shares still using the older connection will be unavailable. Off by default."
+        "onlyEncryptedHint": "Older devices and shares still using the older connection will be unavailable. Off by default.",
+        "peerSwitch": {
+          "row": {
+            "toAgentNet": "Switching to Agent-Net…",
+            "toDeviceLink": "Switching to Device Link…"
+          },
+          "status": {
+            "toAgentNet": "Switching to Agent-Net",
+            "toDeviceLink": "Switching to Device Link"
+          },
+          "reconnecting": "Reconnecting",
+          "toAgentNet": "Switch to Agent-Net",
+          "toDeviceLink": "Switch to Device Link",
+          "retry": "Try again",
+          "hint": "The connection to it becomes end-to-end encrypted. If it does not reconnect within 60 seconds, it goes back to Device Link.",
+          "steps": {
+            "request": {
+              "agentNet": "Asking it to enable Agent-Net",
+              "deviceLink": "Asking it to disable Agent-Net"
+            },
+            "reconnect": "Reconnecting",
+            "confirm": {
+              "agentNet": "Waiting for it to reconnect over Agent-Net",
+              "deviceLink": "Waiting for it to reconnect over Device Link"
+            },
+            "revert": "No reconnection within 60 seconds, going back to Device Link"
+          },
+          "closeHint": "You can close this card; you will be told how it went.",
+          "reverted": "Not switched: it did not reconnect over Agent-Net within 60 seconds, so it went back to Device Link.",
+          "unsupported": "It runs an older Cindy that cannot be switched from here. Update Cindy on that computer and try again.",
+          "done": {
+            "toAgentNet": "Switched to Agent-Net. The connection is end-to-end encrypted.",
+            "toDeviceLink": "Switched back to Device Link."
+          },
+          "blocked": {
+            "mobile": "Phones cannot be controlled remotely. Enable Agent-Net on the phone itself.",
+            "peer-control-off": "It has not allowed control from devices on your account. Switch it on that computer.",
+            "control-off": "You disabled control of it on this computer. Enable control to switch from here."
+          },
+          "toast": {
+            "toAgentNet": "“{{name}}” switched to Agent-Net",
+            "toDeviceLink": "“{{name}}” switched back to Device Link",
+            "reverted": "“{{name}}” did not switch and went back to Device Link",
+            "unsupported": "“{{name}}” runs an older Cindy and cannot be switched remotely",
+            "not-ready": "“{{name}}” cannot enable Agent-Net right now",
+            "busy": "“{{name}}” is handling another switch. Try again shortly.",
+            "failed": "Could not switch “{{name}}”.",
+            "encryption-required": "Disable “Use Only Agent-Net” on “{{name}}” before switching back",
+            "controller-encryption-required": "Disable “Use Only Agent-Net” here before switching “{{name}}” back",
+            "agent-net-only-relay": "The connection to “{{name}}” only supports Agent-Net and cannot switch to Device Link"
+          },
+          "checking": "Checking whether it can switch…",
+          "notReady": {
+            "not-signed-in": "It is not signed in to Cindy. It can enable Agent-Net after signing in.",
+            "secure-storage": "Secure storage is unavailable on that computer, so Agent-Net cannot be turned on. Fix it on that computer.",
+            "relay-identity": "That computer has not set up Agent-Net for its current relay. Set it up on that computer first."
+          },
+          "batch": {
+            "toAgentNet": "Switch all to Agent-Net",
+            "toDeviceLink": "Switch all back to Device Link",
+            "confirmTitleAgentNet": "Switch these computers to Agent-Net?",
+            "confirmTitleDeviceLink": "Switch these computers back to Device Link?",
+            "ready": "Ready",
+            "checking": "Checking",
+            "skipReason": {
+              "unsupported": "Needs a Cindy update",
+              "not-ready": "Cannot enable Agent-Net now",
+              "unreachable": "Not reachable now",
+              "encryption-required": "Use Only Agent-Net",
+              "controller-encryption-required": "Only Agent-Net here",
+              "agent-net-only-relay": "Agent-Net-only network"
+            },
+            "canaryNote": "The first computer switches first; the rest follow once it reconnects. Any computer that does not reconnect within 60 seconds goes back on its own.",
+            "rollbackNote": "Switching back removes end-to-end encryption. Computers that require Agent-Net must have that restriction disabled locally first.",
+            "run": "Switch {{count}}",
+            "cancel": "Cancel",
+            "close": "Done",
+            "state": {
+              "waiting": "Waiting",
+              "running": "Switching",
+              "done": "Switched",
+              "reverted": "Went back",
+              "skipped": "Not switched",
+              "failed": "Not switched"
+            },
+            "stopped": "The first computer did not switch, so the rest were left as they were.",
+            "finished": "{{done}} switched",
+            "finishedWithRevert": "{{done}} switched, {{reverted}} did not switch"
+          },
+          "changedBy": {
+            "on": "Turned on remotely by “{{name}}” at {{time}}",
+            "off": "Turned off remotely by “{{name}}” at {{time}}"
+          },
+          "unreachable": "Could not reach that computer this time. Open the card again later.",
+          "encryptionRequired": "This computer requires Agent-Net. Disable “Use Only Agent-Net” on that computer before switching back to Device Link.",
+          "disableBlocked": {
+            "controller-encryption-required": "This computer has “Use Only Agent-Net” enabled. Disable it here before switching the other computer back to Device Link.",
+            "agent-net-only-relay": "This connection uses a network that only supports Agent-Net. Choose a route that supports Device Link before switching back."
+          }
+        }
       }
     },
     "tina": {
@@ -8029,7 +8138,7 @@
         "usageStartTask": "To use it, choose a model it provides in a new task’s model picker.",
         "points": {
           "will-schedule-run": "Before an automation runs",
-          "will-routine-run": "Before a teammate routine runs",
+          "will-routine-run": "Before a buddy routine runs",
           "will-start-task": "When a new task starts"
         },
         "inactive": "Not available yet. Allow it when you update or reinstall this plugin."
@@ -8071,9 +8180,9 @@
         "agentObserve": "Can view task lists and status in local projects",
         "agentObserveDetail": "Can view the titles, agent type, archive state and status (running, needs attention, last activity) of tasks in registered local projects, and open a task in the main window. Cannot read messages, plans or files, send messages, or change tasks.",
         "agentObserveRequest": "Review task viewing permission",
-        "agentCompanions": "Can view your teammates, their status and recent conversation",
-        "agentCompanionsDetail": "Can view all your teammates, including those running on your other computers: name, description, avatar, status (working, waiting for you, idle, offline), what kind of step each is on (such as thinking or running a tool), the requests waiting for you as their cards show them (questions, commands to run, plans), and the recent conversation in each teammate’s main chat (up to 50 of your messages and their replies, without tool steps); and open a teammate’s conversation in the main window. With the message delivery permission as well, it can pass on the answers you give in the plugin: answer questions, decline requests, and give feedback on plans. Allowing a step still takes your click in Cindy’s own confirmation. Cannot read files, tool steps or thinking.",
-        "agentCompanionsRequest": "Review teammate viewing permission",
+        "agentCompanions": "Can view your buddies, their status and recent conversation",
+        "agentCompanionsDetail": "Can view all your buddies, including those running on your other computers: name, description, avatar, status (working, waiting for you, idle, offline), what kind of step each is on (such as thinking or running a tool), the requests waiting for you as their cards show them (questions, commands to run, plans), and the recent conversation in each buddy’s main chat (up to 50 of your messages and their replies, without tool steps); and open a buddy’s conversation in the main window. With the message delivery permission as well, it can pass on the answers you give in the plugin: answer questions, decline requests, and give feedback on plans. Allowing a step still takes your click in Cindy’s own confirmation. Cannot read files, tool steps or thinking.",
+        "agentCompanionsRequest": "Review buddy viewing permission",
         "agentHiddenTasks": "Can create background tasks hidden from the task list",
         "agentHiddenTasksDetail": "Tasks this plugin creates can stay out of the task list, search and notifications. You can always view, open or show them in the task list from Background Tasks on this plugin’s page; uninstalling the plugin shows them again.",
         "agentErrand": "Create tasks, perform work, and read results",
@@ -8110,7 +8219,7 @@
         "subscribeAssistantReplyDetail": "Processes each AI reply after it completes: it may polish or rewrite the text (replacing it directly, without keeping the original), or replace the reply bubble with its own rendered card (in that case the original text is kept and can be viewed with one tap).",
         "subscribeScheduleRun": "Can check chosen automations before they run",
         "subscribeScheduleRunDetail": "Automations where you choose it under Pre-run check ask it first. It sees the automation's name and instructions and can skip or stop that run, but can't approve anything for you.",
-        "subscribeRoutineRun": "Can check chosen teammate routines before they run",
+        "subscribeRoutineRun": "Can check chosen buddy routines before they run",
         "subscribeRoutineRunDetail": "Routines where you choose it under Pre-run check ask it first. It sees the routine's instructions and the events that triggered it, and can skip or stop that run, but can't approve anything for you.",
         "systemPrompt": "Can add system instructions to selected tasks",
         "systemPromptDetail": "The static fragments below are added after Cindy’s fixed instructions only in tasks where you select this plugin. Order and engine scope come from the package. Changes apply from the next message; errors follow the task setting.",
@@ -8813,7 +8922,7 @@
         "createTitle": "Add MCP server",
         "editTitle": "Edit MCP server",
         "desc": "Remote http / sse MCP only. New sessions can call it after saving; in-flight sessions are unaffected.",
-        "teammateDesc": "Remote http / sse MCP only. After saving, your teammate adds it to their tools and can use it from the next message in this chat, with no new session needed."
+        "teammateDesc": "Remote http / sse MCP only. After saving, your buddy adds it to their tools and can use it from the next message in this chat, with no new session needed."
       },
       "fields": {
         "name": "Display name",
@@ -10316,7 +10425,7 @@
       "activityNameJoinerPair": " and ",
       "activityNameJoinerLast": ", and ",
       "activity": {
-        "companion": "a teammate's reply",
+        "companion": "a buddy's reply",
         "companionOne": "{{names}}'s reply",
         "companionOther": "{{names}}'s replies",
         "conversation": "a chat in progress",
@@ -10437,7 +10546,7 @@
       "skillhub": "SkillHub",
       "plugins": "Plugins",
       "issues": "Issues",
-      "bots": "Teammates"
+      "bots": "Buddies"
     },
     "navigation": {
       "more": "More",
@@ -10451,7 +10560,7 @@
       "items": {
         "automations": "Automations",
         "plugins": "Plugins",
-        "bots": "Teammates",
+        "bots": "Buddies",
         "search": "Search"
       }
     },
@@ -10562,22 +10671,22 @@
     },
     "creationName": "Name",
     "settingsBack": "Back to Settings",
-    "title": "Teammates",
-    "add": "Add teammate",
+    "title": "Buddies",
+    "add": "Add buddy",
     "createWizard": {
-      "createFailed": "The teammate could not be created. Try again."
+      "createFailed": "The buddy could not be created. Try again."
     },
     "homeFolder": {
       "title": "Advanced configuration",
-      "description": "The teammate maintains its own memory and reusable ways of working. Open its folder only when something needs correcting.",
+      "description": "The buddy maintains its own memory and reusable ways of working. Open its folder only when something needs correcting.",
       "contents": "Contains SOUL.md, USER.md, system_prompt.md, skills/, and memories/. Models, permissions, and connections remain managed by Cindy.",
       "open": "Open folder",
-      "openFailed": "The teammate folder could not be opened.",
+      "openFailed": "The buddy folder could not be opened.",
       "projectMode": {
         "memoryReviewName": "{{name}} · Review memory",
         "carryover": {
           "title": "Carried over from before the upgrade",
-          "intro": "Things still open when this teammate was upgraded. Keep working on what still matters and delete the rest. The full old records stay in the v1-archive folder in the teammate's folder.",
+          "intro": "Things still open when this buddy was upgraded. Keep working on what still matters and delete the rest. The full old records stay in the v1-archive folder in the buddy's folder.",
           "todos": "Open todos",
           "work": "Workbench items",
           "threads": "In progress",
@@ -10602,16 +10711,16 @@
     "close": "Close",
     "list": {
       "createMenu": "Create",
-      "createTeammate": "New teammate",
+      "createTeammate": "New buddy",
       "joinWithLink": "Enter Invite Link…",
       "startChat": "Start the conversation",
-      "selectChat": "Select a teammate or group chat to start chatting",
+      "selectChat": "Select a buddy or group chat to start chatting",
       "typing": "Typing…",
       "unread": "{{count}} unread messages",
-      "search": "Search teammates or group chats",
-      "searchPlaceholder": "Search teammates or group chats…",
-      "showHidden": "Show hidden teammates",
-      "hideHidden": "Collapse hidden teammates",
+      "search": "Search buddies or group chats",
+      "searchPlaceholder": "Search buddies or group chats…",
+      "showHidden": "Show hidden buddies",
+      "hideHidden": "Collapse hidden buddies",
       "hidden": "Hidden ({{count}})",
       "hide": "Hide",
       "unhideNamed": "Unhide {{name}}",
@@ -10619,12 +10728,12 @@
       "unpin": "Unpin",
       "pinned": "Pinned",
       "needsAttention": "Needs attention",
-      "duplicate": "Duplicate teammate",
+      "duplicate": "Duplicate buddy",
       "moreActions": "More actions for {{name}}",
-      "sectionExpand": "Expand teammates",
+      "sectionExpand": "Expand buddies",
       "showLess": "Show less",
-      "sectionCollapse": "Collapse teammates",
-      "noResults": "No matching teammates or groups"
+      "sectionCollapse": "Collapse buddies",
+      "noResults": "No matching buddies or groups"
     },
     "cancel": "Cancel",
     "save": "Save",
@@ -10634,17 +10743,17 @@
       "retry": "Save Again"
     },
     "retry": "Retry",
-    "backToBot": "Back to teammate",
-    "sessionLoadFailedTitle": "This teammate task could not be loaded",
-    "sessionLoadFailedDescription": "The task link is valid, but Cindy could not read the teammate state. Retry or return to the teammate overview.",
-    "sessionUnavailableTitle": "This teammate task is no longer available",
-    "sessionUnavailableDescription": "This task may be missing, deleted, or no longer belong to this teammate. Go back to open the recovered main task.",
+    "backToBot": "Back to buddy",
+    "sessionLoadFailedTitle": "This buddy task could not be loaded",
+    "sessionLoadFailedDescription": "The task link is valid, but Cindy could not read the buddy state. Retry or return to the buddy overview.",
+    "sessionUnavailableTitle": "This buddy task is no longer available",
+    "sessionUnavailableDescription": "This task may be missing, deleted, or no longer belong to this buddy. Go back to open the recovered main task.",
     "settings": "Settings",
     "settingsTabs": {
       "model": "Model"
     },
     "model": {
-      "description": "Choose the models this teammate uses.",
+      "description": "Choose the models this buddy uses.",
       "primary": "Primary Model",
       "restoreDefault": "Restore default model"
     },
@@ -10656,7 +10765,7 @@
       "remove": "Remove this candidate",
       "moveUp": "Move up",
       "moveDown": "Move down",
-      "description": "Configure up to 5 models. If one is unavailable, the teammate automatically continues with the next one—no task switching or manual retry.",
+      "description": "Configure up to 5 models. If one is unavailable, the buddy automatically continues with the next one—no task switching or manual retry.",
       "options": "Backup models ({{count}})"
     },
     "actions": {
@@ -10664,42 +10773,42 @@
       "addToGroup": "Add to group",
       "export": "Export"
     },
-    "emptyTitle": "No teammates yet",
-    "emptyDescription": "Create a teammate with a clear role, then connect the tools and channels it needs.",
+    "emptyTitle": "No buddies yet",
+    "emptyDescription": "Create a buddy with a clear role, then connect the tools and channels it needs.",
     "sessions": "tasks",
     "open": "Open",
     "archived": "Archived",
     "historyTitle": "Archived history",
-    "historyEmpty": "No archived teammate tasks yet.",
+    "historyEmpty": "No archived buddy tasks yet.",
     "historySearch": {
-      "title": "Search teammate history",
-      "description": "Search this teammate’s past messages, background tasks, and archived records.",
+      "title": "Search buddy history",
+      "description": "Search this buddy’s past messages, background tasks, and archived records.",
       "placeholder": "What do you remember discussing?",
       "search": "Search",
       "searching": "Searching…",
-      "failed": "Teammate history could not be searched. Try again.",
-      "empty": "No matching teammate history was found."
+      "failed": "Buddy history could not be searched. Try again.",
+      "empty": "No matching buddy history was found."
     },
     "lifecycle": {
       "restartHint": "No reply yet?",
-      "stoppedBots": "Teammates needing attention",
-      "title": "Teammate Management",
-      "description": "Pause or resume this teammate and find past messages and results.",
-      "activeTitle": "Teammate is active",
-      "activeDescription": "Can receive messages, run background tasks, and contact other teammates.",
-      "pausedTitle": "Teammate is paused",
-      "pausedDescription": "New work is blocked. User-paused automations remain paused after the teammate resumes.",
-      "stoppedTitle": "Teammate has stopped",
+      "stoppedBots": "Buddies needing attention",
+      "title": "Buddy Management",
+      "description": "Pause or resume this buddy and find past messages and results.",
+      "activeTitle": "Buddy is active",
+      "activeDescription": "Can receive messages, run background tasks, and contact other buddies.",
+      "pausedTitle": "Buddy is paused",
+      "pausedDescription": "New work is blocked. User-paused automations remain paused after the buddy resumes.",
+      "stoppedTitle": "Buddy has stopped",
       "stoppedDescription": "This is a legacy stopped state. You can still keep its task transcripts when permanently deleting it.",
-      "pause": "Pause teammate",
-      "resume": "Resume teammate",
+      "pause": "Pause buddy",
+      "resume": "Resume buddy",
       "delete": "Delete permanently",
-      "deleteTitle": "Permanently delete teammate",
-      "deleteDescription": "Deleting {{name}} permanently removes the teammate’s profile, memory, working directory, channel connections and automated tasks. Task history and separate worktrees are retained.",
+      "deleteTitle": "Permanently delete buddy",
+      "deleteDescription": "Deleting {{name}} permanently removes the buddy’s profile, memory, working directory, channel connections and automated tasks. Task history and separate worktrees are retained.",
       "working": "Updating…",
       "actionFailed": "The action did not finish. Try again shortly.",
-      "deleteFailed": "The teammate was not deleted.",
-      "restart": "Restart teammate",
+      "deleteFailed": "The buddy was not deleted.",
+      "restart": "Restart buddy",
       "restartDescription": "Stop the current run and prepare a fresh start. Conversation history, memories, and files are kept.",
       "restarting": "Restarting…",
       "restarted": "Restarted. Send a message to continue."
@@ -10744,16 +10853,16 @@
       "discard": "Discard Changes",
       "continueEditing": "Keep Editing"
     },
-    "profileSaveFailed": "Teammate settings could not be saved. No changes were applied.",
-    "profileSaveOffline": "Cannot connect to the teammate’s computer. Reconnect, then save again.",
+    "profileSaveFailed": "Buddy settings could not be saved. No changes were applied.",
+    "profileSaveOffline": "Cannot connect to the buddy’s computer. Reconnect, then save again.",
     "modelLabel": "Model",
     "modelUnavailable": "{{model}} (currently unavailable)",
-    "codexAutomaticCompact": "Codex teammates compact context on their own, and /new keeps the current task. Only start a new task when you actually need a clean slate.",
+    "codexAutomaticCompact": "Codex buddies compact context on their own, and /new keeps the current task. Only start a new task when you actually need a clean slate.",
     "image": "Add image",
     "send": "Send message",
     "roster": {
       "create": "Invite companion",
-      "customNamePlaceholder": "Give your teammate a name",
+      "customNamePlaceholder": "Give your buddy a name",
       "customTitle": "Meet someone new"
     },
     "chat": {
@@ -10762,15 +10871,15 @@
       "composerPlaceholderLatin": "Say something to {{name}}…"
     },
     "globalSettings": {
-      "restoreHint": "Restore the recommended teammate model. Individual teammates’ custom models stay unchanged.",
+      "restoreHint": "Restore the recommended buddy model. Individual buddies’ custom models stay unchanged.",
       "restoreFailed": "Could not restore defaults. Try again.",
       "defaultModel": "Default model",
-      "defaultModelHint": "For teammates, independently of new-task model choices. Each teammate can choose another model.",
-      "title": "Teammates",
-      "description": "Settings shared by all teammates. Anything about one teammate lives on their own page.",
+      "defaultModelHint": "For buddies, independently of new-task model choices. Each buddy can choose another model.",
+      "title": "Buddies",
+      "description": "Settings shared by all buddies. Anything about one buddy lives on their own page.",
       "rosterNote": "The shipped roster grows with each release.",
       "showReplyTarget": "Show which message a reply answers",
-      "showReplyTargetHint": "Above a teammate’s reply, show which of your messages it answers. Older replies don’t show this."
+      "showReplyTargetHint": "Above a buddy’s reply, show which of your messages it answers. Older replies don’t show this."
     },
     "session": {
       "ownedByBot": "Opened by {{name}}",
@@ -10820,12 +10929,12 @@
       "sentTo": "Sent a message to {{name}}",
       "receivedFrom": "Message from {{name}}",
       "exchangeCount": "{{count}} messages with {{name}}",
-      "open": "View the conversation between teammates",
+      "open": "View the conversation between buddies",
       "readOnly": "This conversation is view-only",
       "close": "Close conversation",
-      "unavailable": "This teammate conversation is no longer available.",
+      "unavailable": "This buddy conversation is no longer available.",
       "empty": "There are no messages to view yet.",
-      "limitReached": "This teammate conversation reached its limit; both teammates returned to their main tasks",
+      "limitReached": "This buddy conversation reached its limit; both buddies returned to their main tasks",
       "sentHeader": "To {{name}}",
       "receivedHeader": "From {{name}}",
       "expandThread": "Show exchange",
@@ -10835,7 +10944,7 @@
       "expand": "Show",
       "collapse": "Hide",
       "fullThread": "Full conversation",
-      "threadClosed": "This teammate conversation has ended · view only"
+      "threadClosed": "This buddy conversation has ended · view only"
     },
     "groupChat": {
       "mask": {
@@ -10851,8 +10960,8 @@
         },
         "title": "AI reply mode",
         "settings": "AI reply settings",
-        "companion": "My teammate",
-        "choose": "Choose a teammate",
+        "companion": "My buddy",
+        "choose": "Choose a buddy",
         "enabled": "Automatic replies",
         "triggerLabel": "Trigger",
         "resumeAfter": "Resume after being away",
@@ -10881,8 +10990,8 @@
           "off": "Automatic replies are off",
           "offline": "Replies paused · Computer offline",
           "waiting": "Waiting for you to start",
-          "unbound": "No teammate selected",
-          "enabled": "Your teammate is ready to reply for you."
+          "unbound": "No buddy selected",
+          "enabled": "Your buddy is ready to reply for you."
         },
         "trigger": {
           "always": "Always enabled",
@@ -10899,7 +11008,7 @@
         "attribution": "{{name}} replied for {{owner}}",
         "digestNow": "Summarize now",
         "digestWorking": "Summarizing…",
-        "digestSent": "Sent to your teammate chat",
+        "digestSent": "Sent to your buddy chat",
         "digestFailed": "Could not summarize. Try again.",
         "digestEmpty": "Nothing new to summarize",
         "joinSetup": "Set up AI replies after joining",
@@ -10938,9 +11047,9 @@
       "nameLabel": "Group Name",
       "waitingConfirm": "{{name}} is waiting for your go-ahead",
       "loadFailedTitle": "Couldn’t Load This Group Chat",
-      "loadFailedDescription": "Cindy can’t read this group chat right now. Try again, or go back to Teammates.",
+      "loadFailedDescription": "Cindy can’t read this group chat right now. Try again, or go back to Buddies.",
       "unavailableTitle": "This Group Chat Is No Longer Available",
-      "unavailableDescription": "It may have been deleted. Go back to Teammates to open another group chat or teammate.",
+      "unavailableDescription": "It may have been deleted. Go back to Buddies to open another group chat or buddy.",
       "sidebar": {
         "title": "Group Chats",
         "empty": "No messages yet",
@@ -10960,14 +11069,14 @@
       },
       "create": {
         "title": "New Group Chat",
-        "description": "Put a few teammates in one group. Say something and they’ll chime in together.",
+        "description": "Put a few buddies in one group. Say something and they’ll chime in together.",
         "namePlaceholder": "e.g. Weekend Trip",
         "nameRequired": "Enter a group name",
-        "membersLabel": "Choose Teammates",
+        "membersLabel": "Choose Buddies",
         "selectedCount_one": "{{count}} selected, up to {{max}}",
         "selectedCount_other": "{{count}} selected, up to {{max}}",
-        "minMembers": "Choose at least {{min}} teammates",
-        "notEnoughBots": "You need at least {{min}} available teammates to start a group chat. Add a teammate first.",
+        "minMembers": "Choose at least {{min}} buddies",
+        "notEnoughBots": "You need at least {{min}} available buddies to start a group chat. Add a buddy first.",
         "submit": "Create Group Chat",
         "failed": "Couldn’t create the group chat. Try again in a moment."
       },
@@ -10978,22 +11087,22 @@
       "mention": {
         "all": "Everyone",
         "allHint": "People only",
-        "label": "Mention a teammate",
-        "allBots": "All teammates",
-        "allBotsHint": "Teammates only"
+        "label": "Mention a buddy",
+        "allBots": "All buddies",
+        "allBotsHint": "Buddies only"
       },
       "composer": {
         "label": "Group chat message",
-        "placeholder": "Say something to the group. @ a teammate to have only them reply…",
-        "noMembers": "No teammates here can reply right now. Add one in group settings.",
+        "placeholder": "Say something to the group. @ a buddy to have only them reply…",
+        "noMembers": "No buddies here can reply right now. Add one in group settings.",
         "tooLong": "This message is too long. The limit is {{max}} characters.",
         "sendFailed": "Message not sent. Try again in a moment.",
         "stopFailed": "Couldn’t stop this round. Try again.",
         "stop": "Stop This Round",
         "more": "More Actions",
         "division": "Split the Work",
-        "divisionDescription": "The organizer splits the work first, then teammates take it step by step",
-        "divisionDescriptionSteps": "Follow the steps you write, or let the organizer split the work; teammates take it step by step",
+        "divisionDescription": "The organizer splits the work first, then buddies take it step by step",
+        "divisionDescriptionSteps": "Follow the steps you write, or let the organizer split the work; buddies take it step by step",
         "divisionBusy": "A work split is underway. Finish or stop it before starting another.",
         "divisionTag": "Work split",
         "removeDivision": "Remove Work Split",
@@ -11025,8 +11134,8 @@
         "loadEarlier": "Show Earlier Messages",
         "loadEarlierFailed": "Couldn’t load earlier messages. Try again.",
         "emptyTitle": "No messages in this group yet",
-        "emptyDescription": "Say something to get started and your teammates will join in. @ a teammate to have only them reply.",
-        "roundEnded": "Teammates are done",
+        "emptyDescription": "Say something to get started and your buddies will join in. @ a buddy to have only them reply.",
+        "roundEnded": "Buddies are done",
         "stepTag": "Step {{count}}",
         "sending": "Sending",
         "continue": "Continue Discussion",
@@ -11055,13 +11164,13 @@
         "stepTimeout": "{{name}} took too long, so this step was stopped",
         "stepUnavailable": "{{name}} is unavailable and can’t do this step",
         "runtimeFailureReason": {
-          "unclaimed_timeout": "{{name}} did not start processing within the waiting period. This request has ended.\nAsk the teammate’s owner to check that Cindy is running and the network is connected on its computer."
+          "unclaimed_timeout": "{{name}} did not start processing within the waiting period. This request has ended.\nAsk the buddy’s owner to check that Cindy is running and the network is connected on its computer."
         },
         "runtimeFailure": {
-          "REMOTE_DEVICE_LIMIT": "{{name}} can’t reply: the teammate’s device has reached its remote session limit.\nAsk the teammate’s owner to archive unused sessions, or ask the remote computer’s owner to raise the limit in Remote & sharing.",
+          "REMOTE_DEVICE_LIMIT": "{{name}} can’t reply: the buddy’s device has reached its remote session limit.\nAsk the buddy’s owner to archive unused sessions, or ask the remote computer’s owner to raise the limit in Remote & sharing.",
           "REMOTE_TOTAL_LIMIT": "{{name}} can’t reply: the remote computer has reached its total remote session limit.\nAsk that computer’s owner to release unused sessions or raise the limit in Remote & sharing.",
           "IMAGE_INPUT_UNSUPPORTED": "{{name}} could not reply: the current model does not support images.\nChoose an image-capable model, or enable and configure Vision Bridge in Settings → Personalization, then send your message again.",
-          "MODEL_UNAVAILABLE": "{{name}} could not reply: no model is available.\nChoose a connected, available model in the teammate settings, then send your message again.",
+          "MODEL_UNAVAILABLE": "{{name}} could not reply: no model is available.\nChoose a connected, available model in the buddy settings, then send your message again.",
           "AUTH_REQUIRED": "{{name}} could not reply: the model connection needs authentication.\nReconnect the model provider in Settings, then send your message again.",
           "RATE_LIMITED": "{{name}} could not reply: too many model requests.\nSend your message again later, or choose another available model.",
           "UPSTREAM_OVERLOADED": "{{name}} couldn't reply: the model service is temporarily overloaded.\nTry sending again later, or choose another available model.",
@@ -11071,7 +11180,7 @@
           "RUNTIME_ERROR": "{{name}} could not reply this time.\nSend your message again. If it still fails, check the logs and report the issue."
         },
         "capability": {
-          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} could not run this tool: group authorization has expired or does not allow this action. The teammate’s owner can make the request again in this group.",
+          "GROUP_AUTHORIZATION_REQUIRED": "{{name}} could not run this tool: group authorization has expired or does not allow this action. The buddy’s owner can make the request again in this group.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "Group authorization for {{name}} could not be verified, so this tool did not run. Try again after the connection recovers.",
           "ATTACHMENTS_UNAVAILABLE": "Some attachments were not delivered to {{name}} because of a download failure or attachment limit. Resend the attachments needed for this request."
         }
@@ -11082,44 +11191,44 @@
         "members": "Members",
         "remove": "Remove",
         "removeNamed": "Remove {{name}} from the group",
-        "minMembers": "A group chat needs at least {{min}} teammates",
+        "minMembers": "A group chat needs at least {{min}} buddies",
         "maxMembers": "Up to {{max}}",
-        "noMoreBots": "No other teammates are available to add",
+        "noMoreBots": "No other buddies are available to add",
         "nameSaveFailed": "Couldn’t save the group name. The previous name was kept.",
         "membersSaveFailed": "Couldn’t update members. Try again.",
         "replyMode": "When No One Is @Mentioned",
         "replyModeAll": "Anyone Can Reply",
         "replyModeMentioned": "Only @Mentioned Reply",
-        "replyModeNote": "Teammates with nothing to add stay quiet. Each round runs up to 3 passes and 10 messages, then waits for you to click “Continue Discussion”.",
+        "replyModeNote": "Buddies with nothing to add stay quiet. Each round runs up to 3 passes and 10 messages, then waits for you to click “Continue Discussion”.",
         "replyModeSaveFailed": "Couldn’t save the reply setting. Try again.",
         "delete": "Delete Group Chat",
-        "deleteNote": "Only this group chat and its messages are deleted. The teammates, their memory, and their private chats aren’t affected.",
+        "deleteNote": "Only this group chat and its messages are deleted. The buddies, their memory, and their private chats aren’t affected.",
         "deleteConfirmTitle": "Delete “{{name}}”?",
         "deleteFailed": "Couldn’t delete the group chat. Try again in a moment.",
         "speakingMode": "Speaking order",
         "speakingModeAuto": "Automatic",
         "speakingModeSequential": "One at a time",
-        "speakingModeAutoNote": "No mentions or @All teammates: think simultaneously on the first pass, then reply one by one. Mentioned teammates reply in mention order.",
-        "speakingModeSequentialNote": "One teammate speaks at a time, and each one sees the replies before it.",
+        "speakingModeAutoNote": "No mentions or @All buddies: think simultaneously on the first pass, then reply one by one. Mentioned buddies reply in mention order.",
+        "speakingModeSequentialNote": "One buddy speaks at a time, and each one sees the replies before it.",
         "speakingModeSaveFailed": "Couldn't save the speaking order. Try again.",
         "setOrganizer": "Make Organizer",
         "setOrganizerNamed": "Make {{name}} the organizer",
-        "organizerNote": "The organizer decides who does each step. By default, it’s the first teammate.",
+        "organizerNote": "The organizer decides who does each step. By default, it’s the first buddy.",
         "organizerSaveFailed": "Couldn’t change the organizer. Try again.",
         "projectDir": "Project Folder",
         "projectDirNone": "None selected",
         "projectDirChoose": "Choose Folder",
         "projectDirChange": "Change Folder",
         "projectDirClear": "Clear Folder",
-        "projectDirNote": "Teammates work here when they split the work. You can leave it empty and they’ll use this group chat’s own folder. If you choose a git project, each work split gets a new worktree and branch, so your own code stays untouched.",
+        "projectDirNote": "Buddies work here when they split the work. You can leave it empty and they’ll use this group chat’s own folder. If you choose a git project, each work split gets a new worktree and branch, so your own code stays untouched.",
         "autoContinueSaveFailed": "Couldn’t save step handoffs. Try again.",
         "projectDirSaveFailed": "Couldn’t save the project folder. Make sure the folder still exists, then try again.",
-        "allowMentionAllBots": "Allow @all teammates",
-        "allowMentionAllBotsHint": "Only the group owner can change this. Teammates may all reply; use with care in large groups. AI replies on your behalf are independent."
+        "allowMentionAllBots": "Allow @all buddies",
+        "allowMentionAllBotsHint": "Only the group owner can change this. Buddies may all reply; use with care in large groups. AI replies on your behalf are independent."
       },
       "errors": {
-        "memberLimit": "A group chat needs 2–6 teammates",
-        "memberUnavailable": "One of these teammates is unavailable. Choose another and try again.",
+        "memberLimit": "A group chat needs 2–6 buddies",
+        "memberUnavailable": "One of these buddies is unavailable. Choose another and try again.",
         "mentionUnavailable": "A mentioned member is no longer available. Choose who to mention before sending again.",
         "notFound": "This group chat no longer exists",
         "hostNotReady": "Cindy is still getting ready. Try again in a moment.",
@@ -11143,8 +11252,8 @@
         "lifecycleUnavailable": "The current server or computer does not support this action yet.",
         "groupDissolved": "This group has been dissolved. You can still read the available history.",
         "lastOwner": "Transfer ownership or dissolve this group before leaving.",
-        "allBotsMentionDisabled": "The group owner has not enabled @all teammates.",
-        "turnAlreadyStarted": "This teammate has already started and cannot be skipped"
+        "allBotsMentionDisabled": "The group owner has not enabled @all buddies.",
+        "turnAlreadyStarted": "This buddy has already started and cannot be skipped"
       },
       "organizer": "Organizer",
       "plan": {
@@ -11173,8 +11282,8 @@
         "talkTurn": "Share a view",
         "stepSpeaking": "Speaking",
         "stepSpoken": "Done",
-        "allTurns_one": "All {{count}} teammate",
-        "allTurns_other": "All {{count}} teammates",
+        "allTurns_one": "All {{count}} buddy",
+        "allTurns_other": "All {{count}} buddies",
         "foldTurns": "Show fewer",
         "stepQueued": "Waiting to Start",
         "stepExecuting": "Running",
@@ -11289,7 +11398,7 @@
         "readerUnknown": "Unknown member",
         "invite": "Invite to group",
         "groupCreated": "Group Chat Created",
-        "inviteFriends": "Invite friends to join and work with your teammate.",
+        "inviteFriends": "Invite friends to join and work with your buddy.",
         "generatingLink": "Generating invitation link…",
         "join": "Join group",
         "revokeLink": "Revoke this link",
@@ -11360,7 +11469,7 @@
           "leaveHint": "You and your companions will leave this group. You will no longer receive new messages or have access to its history.",
           "soleOwnerHint": "You’re the only member left. Archive this group to keep its history and restore it later.",
           "archive": "Archive Group",
-          "archiveHint": "Archiving disables this group for all members, stopping new messages and teammate runs. History is kept. Search for the group to view its history or unarchive it.",
+          "archiveHint": "Archiving disables this group for all members, stopping new messages and buddy runs. History is kept. Search for the group to view its history or unarchive it.",
           "confirm": "Confirm",
           "lastOwner": "Transfer ownership to another member before leaving or removing the current owner.",
           "conflict": "Someone updated this group. Refresh and try again.",
@@ -11375,15 +11484,15 @@
           "inviteFriendsItem": "Invite people",
           "inviteFriendsItemHint": "Get a link to share",
           "inviteFriendsLocked": "Only the owner and admins can invite people",
-          "inviteBotsItem": "Add teammates",
-          "inviteBotsItemHint": "Pick from your teammates",
-          "searchTeammates": "Search teammates",
+          "inviteBotsItem": "Add buddies",
+          "inviteBotsItemHint": "Pick from your buddies",
+          "searchTeammates": "Search buddies",
           "inviteBotsCount": "{{count}} can be added",
-          "inviteBotsAllIn": "All your teammates are already here",
-          "inviteBotsNoMatch": "No teammates match “{{query}}”",
+          "inviteBotsAllIn": "All your buddies are already here",
+          "inviteBotsNoMatch": "No buddies match “{{query}}”",
           "inviteBotsAdded": "Added {{name}} to the group",
-          "noTeammates": "You don't have a teammate yet",
-          "createTeammate": "Create teammate",
+          "noTeammates": "You don't have a buddy yet",
+          "createTeammate": "Create buddy",
           "back": "Back to Group Settings",
           "about": "About",
           "edit": "Edit",
@@ -11394,41 +11503,41 @@
           "you": "You",
           "searchMembers": "Search members",
           "membersNoMatch": "No members match “{{query}}”",
-          "teammateTag": "Teammate",
+          "teammateTag": "Buddy",
           "paused": "Paused",
           "accessNone": "Owner only",
           "accessChat": "Group chat only",
           "accessTools": "Can use tools and info",
-          "replies": "How teammates reply",
-          "replyModeMentionedNote": "Teammates stay quiet unless someone @mentions them.",
+          "replies": "How buddies reply",
+          "replyModeMentionedNote": "Buddies stay quiet unless someone @mentions them.",
           "work": "Work splits",
           "ownFolder": "Group's own folder",
-          "projectDirHint": "Where teammates work during a work split.",
+          "projectDirHint": "Where buddies work during a work split.",
           "projectDirClearHint": "Use the group's own folder instead",
-          "organizerHint": "Decides who does each step. Defaults to the first teammate.",
+          "organizerHint": "Decides who does each step. Defaults to the first buddy.",
           "autoContinueHint": "When off, each step waits for you to continue.",
           "workCaption": "With a git project, each work split gets its own branch, so your code stays untouched. The project folder and automatic handoffs apply on this computer only.",
           "me": "You in this group",
           "profileHint": "Group nickname and photo, shown only here",
-          "maskHint": "Your teammate replies when someone @mentions you",
-          "myTeammates": "Your teammates",
-          "myTeammatesCaption": "Choose how other members can use your teammates.",
+          "maskHint": "Your buddy replies when someone @mentions you",
+          "myTeammates": "Your buddies",
+          "myTeammatesCaption": "Choose how other members can use your buddies.",
           "manage": "Group management",
           "manageHintOwner": "Replies, organizer, work splits, archive and dissolve",
           "manageHintAdmin": "Replies, organizer, work splits and archive",
           "manageCaption": "Only the owner and admins can see this page.",
           "hideHint": "Stay in the group, just hide it from your list",
-          "leaveRowHint": "Your teammates leave with you",
+          "leaveRowHint": "Your buddies leave with you",
           "leaveRowHintAlone": "You'll stop getting messages and lose access to the history",
           "leaveBlocked": "Transfer ownership before you leave",
           "archiveRowHint": "Pauses the group for everyone; history is kept",
-          "unarchiveRowHint": "Resume messages and teammate work",
+          "unarchiveRowHint": "Resume messages and buddy work",
           "dissolveRowHint": "Can't be undone; no one can send messages",
           "editTitle": "Edit Group Info",
           "topicHint": "Shown first in the About section",
-          "descriptionHint": "Teammates read the latest description every time they reply.",
+          "descriptionHint": "Buddies read the latest description every time they reply.",
           "companionTitle": "{{name}} in this group",
-          "yourTeammate": "Your teammate",
+          "yourTeammate": "Your buddy",
           "accessQuestion": "How can other members use {{name}}?",
           "defaultTag": "Default",
           "accessNoneTitle": "Only you",
@@ -11467,7 +11576,7 @@
       "done": "Done",
       "placeholder": "What they own, what they should advance proactively, which decisions require approval, and how they should communicate.",
       "empty": "Responsibilities and boundaries have not been defined.",
-      "footnote": "This enters the teammate's identity context. Quick personality settings are stored separately and are preserved when this text changes."
+      "footnote": "This enters the buddy's identity context. Quick personality settings are stored separately and are preserved when this text changes."
     },
     "welcome": {
       "generic": "Hi, I'm {{name}}. Tell me anything you need from now on — I will get my bearings in the meantime.",
@@ -11494,7 +11603,7 @@
       "offline": "Offline",
       "thisDevice": "This computer",
       "offlineDescription": "{{name}} is offline. Reconnect {{device}} to continue.",
-      "preparing": "Waiting for this teammate to get ready…"
+      "preparing": "Waiting for this buddy to get ready…"
     },
     "capabilities": {
       "title": "Capabilities",
@@ -11511,16 +11620,16 @@
       "empty_skill": "No skills are available to select.",
       "inputHandoff": {
         "title": "Input Handoff",
-        "description": "When this teammate reaches a sign-in, password or code it can't type itself, it may ask you to type it on any of your devices. Your values are never shared with it."
+        "description": "When this buddy reaches a sign-in, password or code it can't type itself, it may ask you to type it on any of your devices. Your values are never shared with it."
       },
-      "intro": "Choose which skills, tools and MCP servers this teammate can use. Changes apply from the next message.",
+      "intro": "Choose which skills, tools and MCP servers this buddy can use. Changes apply from the next message.",
       "alwaysOn": "Always on",
       "core": {
         "group": "Core skill",
-        "name": "Teammate core",
-        "hint": "Tasks, other teammates, models, tools and plugins, memory. Updated with Cindy.",
-        "meta": "Shared by all teammates · Always on · Updated with Cindy",
-        "note": "The orchestration every teammate has. It can’t be turned off or edited. To change how this teammate works, tell it in chat and it will keep that as its own skill.",
+        "name": "Buddy core",
+        "hint": "Tasks, other buddies, models, tools and plugins, memory. Updated with Cindy.",
+        "meta": "Shared by all buddies · Always on · Updated with Cindy",
+        "note": "The orchestration every buddy has. It can’t be turned off or edited. To change how this buddy works, tell it in chat and it will keep that as its own skill.",
         "covers": "Covers",
         "raw": "View source",
         "items": {
@@ -11529,8 +11638,8 @@
             "body": "Knows which tasks it can control and which computers are available. Arranges and follows up on tasks as you request, brings results back, and checks supported operations before working across computers."
           },
           "teammates": {
-            "title": "Other teammates",
-            "body": "Messages other teammates or creates a new one for you."
+            "title": "Other buddies",
+            "body": "Messages other buddies or creates a new one for you."
           },
           "models": {
             "title": "Models and tools",
@@ -11561,7 +11670,7 @@
         "saveFailed": "Couldn’t save. Try again later.",
         "deleteFailed": "Couldn’t delete. Try again later.",
         "deleteTitle": "Delete “{{name}}”?",
-        "deleteBody": "The teammate will stop using this skill and its content can’t be restored. If you need it later, ask it to remember the method again.",
+        "deleteBody": "The buddy will stop using this skill and its content can’t be restored. If you need it later, ask it to remember the method again.",
         "unsavedTitle": "Unsaved Changes",
         "unsavedDescription": "Leaving will discard these changes to the skill.",
         "discard": "Discard Changes",
@@ -11584,16 +11693,16 @@
       "officialInherited": "Cindy official · Follows this computer’s settings"
     },
     "guided": {
-      "title": "Create a teammate",
-      "reviewTitle": "Your new teammate",
+      "title": "Create a buddy",
+      "reviewTitle": "Your new buddy",
       "question": "Briefly describe your expectations.",
       "placeholder": "For example, help me practice English through everyday conversation and thoughtful corrections.",
-      "generate": "Create teammate",
-      "generating": "Shaping your teammate…",
-      "generationFailed": "Could not generate your teammate. Your idea is still here; please try again.",
+      "generate": "Create buddy",
+      "generating": "Shaping your buddy…",
+      "generationFailed": "Could not generate your buddy. Your idea is still here; please try again.",
       "modelRequired": "Choose an available model above to continue.",
-      "modelFollowsDefault": "Follows the default teammate model.",
-      "modelForThisBot": "This selection applies only to this teammate.",
+      "modelFollowsDefault": "Follows the default buddy model.",
+      "modelForThisBot": "This selection applies only to this buddy.",
       "cindyDescription": "I can help you use Cindy, connect your tools, and get things done together.",
       "cindySummary": "Manage Cindy, connect tools, and get things done.",
       "openCindy": "Open Cindy",
@@ -11603,10 +11712,10 @@
       "duplicateName": "That name is taken. Choose a name you can easily tell apart.",
       "introduction": "About me",
       "editIntroduction": "Edit introduction",
-      "refine": "Adjust teammate",
+      "refine": "Adjust buddy",
       "refinePlaceholder": "What would you change? For example, less formal and a little more playful.",
       "back": "Back",
-      "invite": "Invite teammate",
+      "invite": "Invite buddy",
       "portrait": "Portrait {{number}}",
       "upload": "Upload image",
       "generateAvatar": "Generate portrait",
@@ -11627,7 +11736,7 @@
       }
     },
     "import": {
-      "title": "Import a teammate",
+      "title": "Import a buddy",
       "entry": "Import an Agent",
       "description": "Choose what to bring from Hermes or OpenClaw.",
       "empty": "No installed Agent was found on this computer.",
@@ -11642,7 +11751,7 @@
       "takeoverNote": "Source tasks pause only after their data connections are verified. Unselected dependencies keep the source task running.",
       "submit": "Import",
       "back": "Back",
-      "open": "Open teammate",
+      "open": "Open buddy",
       "running": "Importing and checking connections…",
       "complete": "Import saved",
       "attention": "Some items need attention. See the details below.",
@@ -11683,18 +11792,18 @@
       "attachmentUnsupported": "This attachment format is not supported yet. The original remains at the source.",
       "diskFull": "Disk space is insufficient. Free space, then retry.",
       "permissionDenied": "Permission to read or save this item is missing. Fix permissions, then retry.",
-      "setupDeferred": "Continue sign-in and verification in the teammate chat.",
+      "setupDeferred": "Continue sign-in and verification in the buddy chat.",
       "automationInvalid": "The automation definition could not be converted; it was not created.",
       "itemFailed": "This item is unfinished. Retry or view import details.",
-      "chatPartial": "Your teammate is created, but some content was not fully saved. The items below still need attention; other content and chat remain available.",
-      "imBotOwnerMissing": "No owner user ID was found. Finish connecting this bot on the teammate’s Messaging platforms page.",
+      "chatPartial": "Your buddy is created, but some content was not fully saved. The items below still need attention; other content and chat remain available.",
+      "imBotOwnerMissing": "No owner user ID was found. Finish connecting this bot on the buddy’s Messaging platforms page.",
       "imBotGatewayRunning": "The original gateway is still using this bot. Stop it, then connect the bot on Messaging platforms.",
-      "imBotInUse": "This bot is already connected on this computer, in Settings → IM bots or on another teammate.",
-      "imBotConnectFailed": "Couldn’t connect this bot. Try again on the teammate’s Messaging platforms page.",
-      "imBotSourceStopUnconfirmed": "The original bot hasn’t stopped yet, so it wasn’t handed to the teammate. You can connect it later on the teammate’s Messaging platforms page.",
+      "imBotInUse": "This bot is already connected on this computer, in Settings → IM bots or on another buddy.",
+      "imBotConnectFailed": "Couldn’t connect this bot. Try again on the buddy’s Messaging platforms page.",
+      "imBotSourceStopUnconfirmed": "The original bot hasn’t stopped yet, so it wasn’t handed to the buddy. You can connect it later on the buddy’s Messaging platforms page.",
       "imBotSourceChanged": "The original bot changed after the preview, so it wasn’t stopped. Reload the preview and import again.",
       "bots": "Messaging bots",
-      "botsNote": "After import, these bots stop in {{source}} and the teammate takes them over.",
+      "botsNote": "After import, these bots stop in {{source}} and the buddy takes them over.",
       "sourceDisabled": "Already off",
       "botOwner": "Owner ID {{id}}"
     },
@@ -11736,7 +11845,7 @@
       "targetOutdatedItem": "Move to “{{device}}” · older Cindy",
       "targetOutdatedMeta": "Older Cindy",
       "olderTargetNote": "“{{device}}” runs an older Cindy, so {{name}} works the older way there: the chat history still syncs, but project rules and automations don’t apply there.",
-      "shadowTitle": "This teammate now runs on “{{device}}”",
+      "shadowTitle": "This buddy now runs on “{{device}}”",
       "shadowHint": "The conversation here is read only.",
       "openOnHome": "Open on “{{device}}”",
       "runsOn": "Runs on “{{device}}”",
@@ -11752,7 +11861,7 @@
       "switchOffline": "Couldn’t connect. {{name}}’s main computer hasn’t changed",
       "switchFailed": "Couldn’t move {{name}} to “{{device}}”",
       "homeOutdated": "The main computer “{{device}}” runs an older Cindy. Update it, or change the main computer there",
-      "arrivingLater": "{{name}} moved to this computer and is still getting ready. It will appear in your teammates soon",
+      "arrivingLater": "{{name}} moved to this computer and is still getting ready. It will appear in your buddies soon",
       "arrivalPermissions": "{{name}} now uses this computer’s default permissions.",
       "arrivalModel": "{{name}}’s saved model isn’t available on this computer, so it follows this computer’s default model.",
       "busyTitle": "{{name}} is still replying",
@@ -11785,18 +11894,18 @@
       "transferFailed": "Couldn’t move {{name}} to “{{device}}”"
     },
     "market": {
-      "heading": "Discover Teammates",
+      "heading": "Discover Buddies",
       "description": "Practical methods and skills for moving work forward together.",
       "invite": "Invite",
       "open": "Open",
-      "remove": "Remove Teammate",
+      "remove": "Remove Buddy",
       "back": "Back to List",
-      "loading": "Loading teammates…",
-      "empty": "No teammates found",
-      "loadFailed": "Teammates could not load. Try reopening this later.",
-      "installFailed": "Adding the teammate wasn't finished. Saved content is kept; you can try again.",
-      "nameExists": "A teammate already has this name. Rename them in teammate settings before inviting.",
-      "installing": "Saving teammate profile and skills…",
+      "loading": "Loading buddies…",
+      "empty": "No buddies found",
+      "loadFailed": "Buddies could not load. Try reopening this later.",
+      "installFailed": "Adding the buddy wasn't finished. Saved content is kept; you can try again.",
+      "nameExists": "A buddy already has this name. Rename them in buddy settings before inviting.",
+      "installing": "Saving buddy profile and skills…",
       "memoryDisabled": "Memory is off, so reference knowledge was not imported. Memory stays off.",
       "knowledge": "Knowledge and Memory",
       "skills": "Skills",
@@ -11815,8 +11924,8 @@
         "other": "“{{name}}” could not be saved.",
         "unknown": "One item could not be saved."
       },
-      "partialReady": "Everything else is ready, so you can start using the teammate.",
-      "partialUnsaved": "The teammate is not saved yet. Save again to finish.",
+      "partialReady": "Everything else is ready, so you can start using the buddy.",
+      "partialUnsaved": "The buddy is not saved yet. Save again to finish.",
       "retry": "Save Again"
     },
     "starterOptions": "Starter options",
@@ -11843,7 +11952,7 @@
       "removeAria": "Remove {{platform}}",
       "empty": "Add a bot you already have, or connect personal WeChat below, and {{name}} will reply there.",
       "externalNote": "After binding, Telegram and Feishu/Lark accept private messages only from the owner. Groups follow each platform’s participation settings and {{name}}’s tool permissions. Separate tasks share files and memory.",
-      "sharedMemoryNote": "{{name}} uses information from here and from other conversations together. To keep memories separate, use another teammate.",
+      "sharedMemoryNote": "{{name}} uses information from here and from other conversations together. To keep memories separate, use another buddy.",
       "groups": {
         "title": "Groups",
         "hint": "Groups {{name}} has joined show up here. “Always” = read every message and let {{name}} decide whether to chime in (each one costs tokens).",
@@ -11950,7 +12059,7 @@
           "invalidDingtalk": "Fill in both the Client ID and the Client Secret.",
           "invalidDiscordToken": "That doesn’t look like a bot token.",
           "invalidDiscordOwner": "The user ID should be 17–20 digits.",
-          "conflict": "This bot is already connected on this computer, in Settings → IM bots or on another teammate.",
+          "conflict": "This bot is already connected on this computer, in Settings → IM bots or on another buddy.",
           "botUnavailable": "{{name}} is unavailable right now. Try again once it’s back.",
           "connectFailed": "Couldn’t connect: {{reason}}",
           "failed": "Couldn’t finish. Try again later.",
@@ -11988,17 +12097,17 @@
         "ok": "OK"
       },
       "officialX": {
-        "bind": "Assign to this teammate",
-        "remove": "Remove teammate assignment",
+        "bind": "Assign to this buddy",
+        "remove": "Remove buddy assignment",
         "bindTitle": "Let {{name}} handle X questions?",
-        "bindBody": "Your public questions to @askmycindy will use {{name}}’s identity, tools, shared memory and workspace. Replies are public. The X thread is separate from your private chat history. This replaces any existing teammate assignment.",
+        "bindBody": "Your public questions to @askmycindy will use {{name}}’s identity, tools, shared memory and workspace. Replies are public. The X thread is separate from your private chat history. This replaces any existing buddy assignment.",
         "removeTitle": "Remove the X assignment?",
         "removeBody": "Your X account stays connected. Future questions become ordinary tasks. Replies already in progress will finish.",
         "bound": "X questions are assigned to {{name}}. Enable X and authorize your account to start.",
-        "boundElsewhere": "X is assigned to another teammate. Assigning it here replaces that teammate.",
+        "boundElsewhere": "X is assigned to another buddy. Assigning it here replaces that buddy.",
         "unbound": "Let {{name}} handle your questions to the official @askmycindy bot.",
-        "managed": "A teammate handles X questions. Change the assignment in that teammate’s message platform settings.",
-        "riskBody": "X questions use the teammate’s shared memory, tools and workspace, and replies are public. Do not use X for private information. The X thread does not directly use your private chat history."
+        "managed": "A buddy handles X questions. Change the assignment in that buddy’s message platform settings.",
+        "riskBody": "X questions use the buddy’s shared memory, tools and workspace, and replies are public. Do not use X for private information. The X thread does not directly use your private chat history."
       }
     },
     "voiceMode": {
@@ -12102,7 +12211,7 @@
       "speedValue": "{{speed}}×",
       "sentencePlayback": "Read by sentence",
       "sentencePlaybackHint": "Start reading complete sentences as the reply arrives. Disable this option to wait for the full reply. Reading waits when reply processing is required.",
-      "preferenceHint": "Voice settings are saved for this teammate only.",
+      "preferenceHint": "Voice settings are saved for this buddy only.",
       "resetPreference": "Use defaults",
       "preferenceError": "Could not load or save voice settings. Please try again.",
       "protocol": "Speech API",
@@ -12831,7 +12940,7 @@
       "sessionSenderFallback": "Another session",
       "pluginRowAria": "Queued message from plugin \"{{sender}}\"",
       "pluginSenderFallback": "Plugin",
-      "botRowAria": "Queued message from teammate \"{{sender}}\"",
+      "botRowAria": "Queued message from buddy \"{{sender}}\"",
       "dragAria": "Drag queued message {{index}} to reorder",
       "steerAction": "Steer",
       "steerRunningTip": "Steer this message into the running task without interrupting it; handled once the current action finishes",
@@ -13192,6 +13301,7 @@
     }
   },
   "voiceInputOverlay": {
+    "useOriginal": "Use Original Text",
     "rateLimited": "Too many voice requests. Wait a moment, then try again.",
     "status": {
       "listening": "Voice input",
@@ -13541,7 +13651,7 @@
       "claudeSubscriptionSwitchFailed": "Couldn’t switch to Claude.ai or retry this session: {{msg}}",
       "codexAppServerRetired": "The Codex service was restarted or replaced. The current request was interrupted; run it again.",
       "codexAuthMissing": "Remote Codex hasn't been signed in yet (401 Unauthorized). Click \"Sync auth\" to push your local Codex credentials to the remote Cindy Codex home, then retry.",
-      "codexAuthMissingLocal": "Codex credentials missing or expired (401 Unauthorized). Re-login in {{appName}} Settings → Codex (the app-server will auto-restart on login), or run `codex login` in your terminal and toggle the auth mode in Settings once to restart the app-server. Then start a new session.",
+      "codexAuthMissingLocal": "The “{{provider}}” connection on this computer could not authenticate. Check its sign-in status in settings, then return to this task after restoring the connection.",
       "codexSessionExpired": "The OpenAI connection needs an update. Reconnect ChatGPT to continue; {{appName}} won’t sign your system Codex CLI out or ask you to reconnect other model sources.",
       "codexAuthSynced": "Auth synced. Click \"Retry\" to resend.",
       "syncAuth": "Sync auth",
@@ -13991,7 +14101,7 @@
           "plugins": "Plugin catalogue",
           "memoryRules": "Memory instructions",
           "memoryIndex": "Memory index",
-          "profile": "Teammate profile",
+          "profile": "Buddy profile",
           "user": "User instructions",
           "directories": "Additional directories",
           "native": "Pi instructions",
@@ -14162,7 +14272,7 @@
       "sessionSent": "Sent by another session",
       "sessionSentNamed": "Sent by session \"{{name}}\"",
       "sessionViewSource": "View source session",
-      "botSentNamed": "Sent by teammate \"{{name}}\"",
+      "botSentNamed": "Sent by buddy \"{{name}}\"",
       "orcaFromLead": "Message from Lead",
       "orcaFromWorker": "Message from Worker",
       "orcaFromWorkerBatch": "System report: {{count}} Worker results",
@@ -14181,7 +14291,7 @@
         "localApp": "App ID: {{id}}",
         "mcpApp": "$t(mcpApps.serverId)",
         "session": "Session ID: {{id}}",
-        "teammate": "Teammate ID: {{id}}",
+        "teammate": "Buddy ID: {{id}}",
         "automation": "Automation ID: {{id}}",
         "plugin": "Plugin ID: {{id}}",
         "device": "Device ID: {{id}}",
@@ -14817,7 +14927,7 @@
       "selectFolderFailed": "Could not select folder. Try again.",
       "projectsToggleExpand": "Expand all project sessions",
       "projectsToggleCollapse": "Collapse all project sessions",
-      "filterAria": "Sidebar settings (Status: {{status}}, Harness: {{vendor}}, Last activity: {{lastActivity}}, Group by: {{groupBy}}, Sort by: {{sortBy}}, Projects: {{projects}}, Teammates: {{creators}})",
+      "filterAria": "Sidebar settings (Status: {{status}}, Harness: {{vendor}}, Last activity: {{lastActivity}}, Group by: {{groupBy}}, Sort by: {{sortBy}}, Projects: {{projects}}, Buddies: {{creators}})",
       "organizeSidebar": "Sidebar settings",
       "filterAllText": "all",
       "filterSelectedProjects": "{{count}} selected",
@@ -14882,7 +14992,7 @@
       "filterProjectOrderTip": {
         "custom": "Drag project rows with the mouse to reorder. Sessions inside still follow the sort above."
       },
-      "filterCreatorsHeading": "Teammates",
+      "filterCreatorsHeading": "Buddies",
       "filterCreatorsAny": "All",
       "filterCreatorsNone": "Hide all",
       "filterSelectedCreators": "{{count}} selected",
@@ -15320,6 +15430,16 @@
             "recheck": "Check connection",
             "summary": "Manage GitHub repositories, issues, pull requests, and Actions.",
             "otherMethods": "Other connection methods"
+          },
+          "app": {
+            "title": "Repository events",
+            "description": "Connect the Cindy GitHub App to update followed PRs when reviews or CI change.",
+            "connected": "Connected as {{login}} · Repositories watched: {{count}}",
+            "missing": "Check App installation and access for: {{repositories}}",
+            "error": "Could not check the connection. Try again.",
+            "repositories": "Choose repositories",
+            "disconnect": "Disconnect events",
+            "connect": "Connect GitHub App"
           }
         },
         "unresolved": "Unresolved review threads: {{count}}",
@@ -15721,7 +15841,7 @@
         "openConfigFailed": "Failed to open file",
         "reload": "Reload",
         "reloadAria": "Reload project automation",
-        "teammate": "{{name}} · Teammate"
+        "teammate": "{{name}} · Buddy"
       },
       "promote": {
         "menu": "Promote to project automation",
@@ -16054,7 +16174,11 @@
             "payments": "Payments",
             "checkout": "Checkout",
             "invoices": "Invoices",
-            "subscriptions": "Subscriptions"
+            "subscriptions": "Subscriptions",
+            "reviewComments": "Review comments",
+            "reviewThreads": "Review threads",
+            "checkRuns": "Check runs",
+            "commitStatus": "Commit status"
           },
           "actions": {
             "all": "All changes",
@@ -16076,7 +16200,12 @@
             "failed": "Failed",
             "paid": "Paid"
           }
-        }
+        },
+        "repositoriesLabel": "Repositories",
+        "repositoriesHint": "Enter owner/repository, one per line. Only repositories authorized for this GitHub App can trigger the task.",
+        "repositoriesInvalid": "Enter 1–50 valid repository names in owner/repository format.",
+        "githubAppHint": "Connect GitHub App on the computer running this task and authorize these repositories. No separate Webhook URL or secret is needed.",
+        "githubAppPaused": "This task is paused. Events will not start it."
       },
       "trigger": {
         "label": "Trigger mode",
@@ -16890,6 +17019,9 @@
       },
       "pluginCreator": {
         "description": "Create, edit, debug, and package Cindy plugins, or publish them when requested."
+      },
+      "themeCreator": {
+        "description": "Create and verify Cindy colors, visual assets, and appearance settings."
       }
     },
     "common": {
@@ -17631,11 +17763,14 @@
       "voiceDirectApiKeyAuthDescription": "The current voice input provider requires a direct API key. Add it in API Keys to start voice input?",
       "codexVoiceAuthTitle": "ChatGPT Connection Required",
       "codexVoiceAuthDescription": "Voice input uses a connected ChatGPT account for GPT realtime speech recognition. The account is not connected or needs an update. Open Model Providers to connect ChatGPT?",
+      "ccBinaryMissingTitle": "Claude Code component not ready",
+      "ccBinaryMissingDescription": "The Claude Code component is not installed yet, so this feature cannot be used. Connect to the network, then open Settings → About to install it.",
       "codexBinaryMissingTitle": "Codex component not ready",
       "codexBinaryMissingDescription": "The Codex component is not ready yet, so this feature cannot be used. Try again later or check the Codex connection in Settings → Providers.",
       "piBinaryMissingTitle": "Pi component not ready",
       "piBinaryMissingDescription": "The Pi component is not ready yet, so this feature cannot be used. Try again later, or open Settings → About to manage or restore Pi.",
       "goToSettings": "Open Settings",
+      "remoteCcBinaryMissingTitle": "Claude Code component not ready on the remote device",
       "remoteCodexBinaryMissingTitle": "Codex component not ready on the remote device",
       "remotePiBinaryMissingTitle": "Pi component not ready on the remote device",
       "remoteAuthDescription": "You need to finish setup on the remote device \"{{device}}\" before you can start a session here. Configure it on that device and try again.",
@@ -18009,7 +18144,7 @@
     "exit": "Exit plan mode"
   },
   "globalDrop": {
-    "cindyHint": "Drop to install plugin",
+    "cindyHint": "Drop to import Cindy file",
     "cshareHint": "Drop to import shared session"
   },
   "sessionShare": {
@@ -19431,16 +19566,16 @@
       "plugin": "Allow {{companion}} to use “{{tool}}”?",
       "tool": "Allow {{companion}} to use {{tool}}?"
     },
-    "source": "You chose Allow in the plugin “{{plugin}}”. {{appName}} asks once more here; after you allow, the teammate continues.",
+    "source": "You chose Allow in the plugin “{{plugin}}”. {{appName}} asks once more here; after you allow, the buddy continues.",
     "allow": "Allow",
     "cancel": "Cancel"
   },
   "groupTools": {
-    "authorizationRequired": "Group authorization has expired or does not allow this action. Ask the teammate owner to make a new request in this group.",
-    "localPeersOnly": "Group messages can only target teammates on this device and account.",
+    "authorizationRequired": "Group authorization has expired or does not allow this action. Ask the buddy owner to make a new request in this group.",
+    "localPeersOnly": "Group messages can only target buddies on this device and account.",
     "ownerChanged": "The account changed. Please try again.",
     "invalidMessage": "The message or retry identifier is invalid.",
-    "privateUnavailable": "This teammate’s private chat is unavailable. Please try again later.",
+    "privateUnavailable": "This buddy’s private chat is unavailable. Please try again later.",
     "idempotencyConflict": "This retry identifier was already used for a different message.",
     "privateUnconfirmed": "Private message delivery is unconfirmed. Retry with the same identifier.",
     "verificationUnavailable": "Group authorization could not be verified. Try again when the connection recovers."
@@ -20132,6 +20267,13 @@
     "detail": "Request from {{device}}\nPurpose: {{purpose}}\n\nEnabling this setting lets devices on your account control this computer, including running tasks and accessing files. It stays enabled until you turn it off in Settings.",
     "decline": "Not now",
     "enable": "Enable remote control"
+  },
+  "cindyFiles": {
+    "unsupported": "This version does not support this file. Update Cindy and try again.",
+    "invalid": "This Cindy file is invalid or damaged. Get a new copy.",
+    "failed": "Could not import this file. Try again.",
+    "themeInstalled": "Theme added. Select it in Appearance settings.",
+    "refreshFailed": "Theme installed, but the list could not refresh. Refresh it in Appearance settings."
   },
   "modelGroups": {
     "title": "Model groups",
