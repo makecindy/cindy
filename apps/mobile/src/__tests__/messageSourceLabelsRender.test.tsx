@@ -666,18 +666,40 @@ describe("sender source labels", () => {
 });
 
 describe("IM source card", () => {
-  it("renders local IM rows as a left-aligned Cindy card with the localized platform name", () => {
+  // #9266 unit/jsdom regression: render a real local iMessage row through the
+  // model and MessageRenderer; the existing Feishu case missed this platform.
+  it.each([
+    ["feishu", "飞书"],
+    ["imessage", "iMessage"],
+  ])("renders local %s rows as a left-aligned Cindy card", (im, platform) => {
     const html = render([
       msg("im", "clean text", {
         imSource: {
-          im: "feishu",
+          im,
           userText: "clean text",
           contentFormat: "user-text",
         },
       }),
     ]);
     expect(html).toContain("message.hookSource");
-    expect(html).toContain("Cindy · 来自 飞书");
+    expect(html).toContain(`Cindy · 来自 ${platform}`);
+    expect(html).toContain("message.agentBubble");
+    expect(html).not.toContain("message.userBubble");
+  });
+
+  // #9266 unit/jsdom: a host can persist an empty caption with attachments.
+  // Text-only cases miss the bubble gate that also hides the source header.
+  it.each([
+    ["imessage", "iMessage"],
+    ["feishu", "飞书"],
+  ])("retains the %s source header on attachment-only messages", (im, platform) => {
+    const html = render([
+      msg("im-file", { text: "", files: [{ name: "sample.txt", path: "/tmp/sample.txt" }] }, {
+        imSource: { im, userText: "", contentFormat: "user-text" },
+      }),
+    ]);
+    expect(html).toContain(`Cindy · 来自 ${platform}`);
+    expect(html).toContain("sample.txt");
     expect(html).toContain("message.agentBubble");
     expect(html).not.toContain("message.userBubble");
   });
@@ -694,7 +716,7 @@ describe("IM source card", () => {
         first,
         msg("im", "clean text", {
           imSource: {
-            im: "slack",
+            im: "imessage",
             userText: "clean text",
             contentFormat: "user-text",
           },
@@ -954,3 +976,21 @@ describe("table-heavy assistant replies", () => {
 });
 
 vi.mock('@/session/RemoteAttachmentPreview', () => ({ RemoteAttachmentPreview: () => null }));
+
+// Regression: tapping a cross-device source must reach the page's routing callback intact.
+it('opens cross-device source labels while redacted sources remain inert', () => {
+  const onOpenOriginSession = vi.fn();
+  const items = buildMobileMessageRenderItems([
+    msg('cross', 'go', { origin: { kind: 'session', senderSessionId: 'dev-A::task-1', senderSessionTitle: 'Source' } }),
+    msg('redacted', 'go', { origin: { kind: 'session' } }),
+  ], {}).filter(item => item.type === 'message');
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  act(() => root.render(<MessageRenderer items={items} onOpenOriginSession={onOpenOriginSession} />));
+  const labels = host.querySelectorAll('[data-testid="message.sessionOrigin"]');
+  expect(labels.length).toBe(2);
+  act(() => labels.forEach(label => label.dispatchEvent(new MouseEvent('click', { bubbles: true }))));
+  expect(onOpenOriginSession).toHaveBeenCalledExactlyOnceWith('dev-A::task-1');
+  act(() => root.unmount());
+});

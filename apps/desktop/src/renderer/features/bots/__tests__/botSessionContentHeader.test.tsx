@@ -117,12 +117,6 @@ describe('BotSessionContentHeader', () => {
     expect(navigate).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps routine management out of the chat header', () => {
-    render(<BotSessionContentHeader bot={bot} />);
-    expect(screen.queryByRole('button', { name: 'routines.title' })).toBeNull();
-    expect(screen.getAllByRole('button')).toHaveLength(2);
-  });
-
   it('opens settings on the remote route from both entry points', () => {
     deviceData.pathname = '/bots/remote/remote-1/bot-1';
     render(<BotSessionContentHeader bot={{ ...bot, deviceId: 'remote-1', deviceName: 'Office' }} />);
@@ -133,7 +127,6 @@ describe('BotSessionContentHeader', () => {
       ['/bots/remote/remote-1/bot-1?settings=1'],
       ['/bots/remote/remote-1/bot-1?settings=1'],
     ]);
-    expect(screen.queryByRole('button', { name: 'routines.title' })).toBeNull();
     expect(screen.queryByText('Office')).toBeNull();
   });
 

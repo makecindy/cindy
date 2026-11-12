@@ -14,6 +14,7 @@ export type SettingsTab =
   | 'usage'
   | 'personalization'
   | 'providers'
+  | 'model-groups'
   | 'api-keys'
   | 'voice-input'
   | 'shortcuts'
@@ -44,6 +45,9 @@ export const TAB_IDS = [
   // 「用量历史」紧随计费:两者都回答"我用了多少",但分工明确 —— billing 管账单与账户
   // 信息,usage 只统计本机 Cindy 内产生的 token 消耗(#2785 维护者裁决)。
   'usage',
+  // 「模型组」：把模型供应商里已有的来源合成路线与模式。供应商页原样保留，这里只做加法；
+  // 计费、用量历史紧随供应商是既有裁决，所以排在它们之后。
+  'model-groups',
   // 「工具密钥」(api-keys)已于 2026-07-13 下架:面板里最后一把 mivo key 随
   // XD Mivo 意识化改由意识设置页收单(官方别名映射同一存储键)。id 仍留在
   // SettingsTab 类型与 TAB_LABEL_KEY 保留,供旧深链重定向到插件分区。
@@ -81,6 +85,7 @@ export const TAB_LABEL_KEY: Record<SettingsTab, string> = {
   import: 'settings.tabs.import',
   connections: 'settings.tabs.connections',
   providers: 'settings.tabs.providers',
+  'model-groups': 'settings.tabs.modelGroups',
   'remote-control': 'settings.tabs.remoteControl',
   'shared-tasks': 'sharedTask.title',
   tina: 'settings.tabs.tina',

@@ -11,7 +11,7 @@ vi.mock('electron', () => ({
   BrowserWindow: { fromWebContents: () => parent },
   dialog: { showMessageBox, showOpenDialog },
 }));
-vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: assertTrusted }));
 
 import { selectReviewWorkspace, shouldSelectReviewWorkspace } from '../reviewWorkspaceSelection.js';

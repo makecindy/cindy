@@ -4,7 +4,7 @@ import type { AgentEvent, Session } from '@cindy/maker-core';
 import { buildTurnUsageDetails } from '../../shared/turnUsageDetails.js';
 
 import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
-import { getCodexProxyAuthInjection } from '../maker-host/codex-proxy-host.js';
+import { getCodexProxyAuthInjection } from '../maker-host/codex-proxy-host.desktop.js';
 import { recordSessionTurnSpend, recordSessionTurnTokens } from '../sessionSpendBroadcaster.js';
 import {
   codexUsageToTokens,

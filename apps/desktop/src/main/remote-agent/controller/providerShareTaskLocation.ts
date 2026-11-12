@@ -15,6 +15,9 @@ const GRANT_ID = /^[0-9a-f-]{36}$/;
 type RetainedTask = SharedTaskAuthorization & { agentKind: RemoteAgentKind; model: string; current(): boolean };
 const retainedTasks = new Map<string, RetainedTask>();
 const taskKey = (ownerRoute: string, sessionId: string) => JSON.stringify([ownerRoute, sessionId]);
+/** The owner paused or removed the share, or this computer's encrypted-only switch blocks an older one:
+ * that reason already has precise copy and a model-switch action. Wrapping it as an unknown machine-recovery failure would hide why the task cannot run. */
+const isShareStateError = (error: unknown) => error instanceof Error && /^\[REMOTE_AGENT_SHARE_(?:PAUSED|REMOVED|LEGACY_DISABLED)\]/.test(error.message);
 
 /** Process-local affinity + an existing task grant. Restart, expiry or explicit link close cannot create a grant. */
 export function rememberSharedTaskAuthorization(ownerRoute: string, sessionId: string, agentKind: RemoteAgentKind,
@@ -54,6 +57,14 @@ export function rememberSharedTaskAuthorization(ownerRoute: string, sessionId: s
 export function forgetSharedTaskAuthorization(ownerRoute: string, sessionId: string, expectedGeneration?: string): void {
   if (expectedGeneration !== undefined && retainedTasks.get(taskKey(ownerRoute, sessionId))?.generation !== expectedGeneration) return;
   retainedTasks.delete(taskKey(ownerRoute, sessionId));
+}
+
+/** Capture the exact existing grant, without renewing it or keeping a live handle open. */
+export function captureSharedTaskAuthorizationCheck(ownerRoute: string, sessionId: string,
+  agentKind: RemoteAgentKind, model: string, target: string): (() => boolean) | null {
+  const retained = retainedTasks.get(taskKey(ownerRoute, sessionId));
+  return retained?.agentKind === agentKind && retained.model === model && retained.target === target
+    && retained.current() ? retained.current : null;
 }
 
 /** O reports remaining time, so G never compares clocks on different computers. Missing means legacy O. */
@@ -112,6 +123,7 @@ export async function authorizeSharedTaskExecutor(
       op: 'allocate', sessionId, agentKind, model, preferredExecutorDeviceId: deviceId,
     }])).catch(error => {
     signal?.throwIfAborted();
+    if (isShareStateError(error)) throw error;
     if (error instanceof Error && sharedTaskRecoveryReason(error.message)) throw error;
     throw sharedTaskRecoveryError('allocation', sharedTaskFailureReason(error), error);
   });
@@ -232,6 +244,7 @@ export async function authorizeSharedTaskHistory(
     if (code === 'REMOTE_AGENT_INVALID' || code === 'REMOTE_AGENT_PEER_TOO_OLD' || code === 'PEER_TOO_OLD') {
       return { target: agentDeviceId, direct: false };
     }
+    if (isShareStateError(error)) throw error;
     if (error instanceof Error && sharedTaskRecoveryReason(error.message)) throw error;
     throw sharedTaskRecoveryError('owner', sharedTaskFailureReason(error), error);
   }

@@ -14,6 +14,7 @@ export function buildMobileHistoryRenderItems(options: {
   streaming: boolean;
   sessionId: string;
   sessionSource?: string | null;
+  pendingQuestionIds?: ReadonlySet<string>;
   pendingHandoff?: ReadonlySet<string>;
   staleTail?: ReadonlySet<string>;
   localUserClientIds?: ReadonlySet<string>;
@@ -30,6 +31,7 @@ export function buildMobileHistoryRenderItems(options: {
       isSessionStreaming: streaming,
       sessionId: options.sessionId,
       sessionSource: options.sessionSource,
+      pendingQuestionIds: options.pendingQuestionIds,
       preserveSourceOrder: true,
     }, options.taskUpdates),
     structure: {

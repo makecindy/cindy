@@ -37,6 +37,7 @@ export interface WallpaperSettings {
   wallpaperBlur?: number | null;
   wallpaperMotion: WallpaperMotion;
   customWallpaperUrl?: string;
+  customWallpaperFallbackUrl?: string;
 }
 
 interface WallpaperSettingsContextValue extends WallpaperSettings {
@@ -46,6 +47,8 @@ interface WallpaperSettingsContextValue extends WallpaperSettings {
   downloadProgress: number;
   retryDownload: () => void;
   visibility: number;
+  /** Last nonzero saved blur; survives settings-section remounts (default 10). */
+  lastBlur: number;
   setWallpaper: (id: WallpaperId) => void;
   setVisibility: (value: number) => void;
   previewVisibility: (value: number | null) => void;
@@ -79,6 +82,7 @@ function pickWallpaperSettings(settings: AppearanceSettings): WallpaperSettings 
     wallpaperBlur: settings.wallpaperBlur,
     wallpaperMotion: settings.wallpaperMotion,
     customWallpaperUrl: settings.customWallpaperUrl,
+    customWallpaperFallbackUrl: settings.customWallpaperFallbackUrl,
   };
 }
 
@@ -95,6 +99,8 @@ export function WallpaperSettingsProvider({
   const [blurPreview, setBlurPreview] = useState<number | null>(null);
   const [visibilityPreview, setVisibilityPreview] = useState<number | null>(null);
   const [failedUrl, setFailedUrl] = useState('');
+  const lastBlurRef = useRef(10);
+  if (settings.wallpaperBlur) lastBlurRef.current = settings.wallpaperBlur;
   const onPlaybackFailure = useCallback(
     () => setFailedUrl(settings.customWallpaperUrl ?? ''),
     [settings.customWallpaperUrl],
@@ -125,7 +131,7 @@ export function WallpaperSettingsProvider({
     settings.wallpaperId === 'custom'
       ? customUrl
         ? isCustomWallpaperVideo(customUrl)
-          ? 'none'
+          ? settings.customWallpaperFallbackUrl ? `url("${normalizeCustomWallpaperUrl(settings.customWallpaperFallbackUrl)}")` : 'none'
           : `url("${customUrl}")`
         : undefined
       : imageAsset.url
@@ -133,10 +139,9 @@ export function WallpaperSettingsProvider({
         : getBuiltinWallpaperBackground(settings.wallpaperId);
   useWallpaperBackground({
     background,
-    // Only macOS has an independent native sidebar material. Elsewhere 0% keeps the
-    // original window backdrop (Windows 11 Acrylic, otherwise opaque) until opt-in.
-    desktopBackground: desktopBackground && settings.wallpaperId === 'none' &&
-      (visibility > 0 || window.electronAPI?.platform === 'darwin'),
+    // 0% keeps the original window backdrop (frosted sidebar over the theme material)
+    // until opt-in; above it, the sidebar tint follows the same transparency.
+    desktopBackground: desktopBackground && settings.wallpaperId === 'none' && visibility > 0,
     visibility,
     blur: blurPreview ?? settings.wallpaperBlur ?? 0,
     reducedMotion,
@@ -278,6 +283,7 @@ export function WallpaperSettingsProvider({
       ...settings,
       wallpaperBlur: blurPreview ?? settings.wallpaperBlur,
       visibility,
+      lastBlur: lastBlurRef.current,
       playbackFailed: !!failedUrl && failedUrl === settings.customWallpaperUrl,
       downloadPending,
       downloadFailed,
@@ -301,6 +307,7 @@ export function WallpaperSettingsProvider({
       blurPreview,
       setWallpaper,
       settings,
+      settings.wallpaperBlur,
       failedUrl,
       visibility,
       downloadPending,

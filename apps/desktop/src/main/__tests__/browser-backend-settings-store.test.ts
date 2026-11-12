@@ -9,7 +9,7 @@ vi.mock('electron', () => ({ app: { getPath: () => paths.userData } }));
 import {
   __testing, readBrowserBackendSettingsState, resetBrowserBackendSettings,
   writeBrowserBackendKind, writeBrowserUseRealProfile,
-} from '../browser-backend-settings-store.js';
+} from '../browser-backend-settings-store.desktop.js';
 
 describe('browser-backend explicit preferences', () => {
   beforeEach(() => { paths.userData = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-settings-')); });

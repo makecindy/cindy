@@ -248,7 +248,9 @@ describe('translateRequest', () => {
     expect(out.input).toEqual([{ type: 'function_call_output', call_id: 'c1', output: 'r1\nr2' }]);
   });
 
-  it('tool_result 图像块降级为带说明的占位文案,图像数据不外泄 (#795)', () => {
+  // Regression: #9469. Text-only coverage missed images returned by Read/MCP.
+  // Exercise the production translator; preserve bytes, order and tool provenance.
+  it('preserves base64 and URL images inside the original tool result', () => {
     const req: AnthropicMessagesRequest = {
       model: 'gpt-5.5',
       messages: [
@@ -261,6 +263,8 @@ describe('translateRequest', () => {
               content: [
                 { type: 'text', text: 'screenshot below' },
                 { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAABBBB' } },
+                { type: 'text', text: 'second image' },
+                { type: 'image', source: { type: 'url', url: 'https://example.com/fixture.png' } },
               ],
             },
           ],
@@ -268,18 +272,41 @@ describe('translateRequest', () => {
       ],
     };
     const out = translateRequest(req, { model: 'gpt-5.5' });
-    // 先断言长度再取元素:input 缺失时给出清晰断言失败而不是 TypeError。
-    expect(out.input).toHaveLength(1);
-    const item = out.input![0] as { type: string; output: string };
-    expect(item.type).toBe('function_call_output');
-    expect(item.output).toContain('screenshot below');
-    // 占位文案要素:确认有图、说明送不到是路由限制、禁止臆测、给出改走 user 消息的出路。
-    expect(item.output).toContain('[image omitted:');
-    expect(item.output).toContain('Do NOT guess');
-    expect(item.output).toContain('attach the image');
-    // 图像字节与旧版裸占位符都不应出现。
-    expect(item.output).not.toContain('AAAABBBB');
-    expect(item.output).not.toContain('[image]');
+    expect(out.input).toEqual([{
+      type: 'function_call_output', call_id: 'c1', output: [
+        { type: 'input_text', text: 'screenshot below' },
+        { type: 'input_image', image_url: 'data:image/png;base64,AAAABBBB' },
+        { type: 'input_text', text: 'second image' },
+        { type: 'input_image', image_url: 'https://example.com/fixture.png' },
+      ],
+    }]);
+  });
+
+  it('preserves an image-only result separately from a sibling text-only error result', () => {
+    const out = translateRequest({ model: 'xai/grok-4.7', messages: [{ role: 'user', content: [
+      { type: 'tool_result', tool_use_id: 'image', content: [
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'AA==' } },
+      ] },
+      { type: 'tool_result', tool_use_id: 'error', is_error: true, content: [
+        { type: 'text', text: 'File not found' }, { type: 'text', text: 'Retry another path' },
+      ] },
+    ] }] }, { model: 'grok-4.7' });
+    expect(out.input).toEqual([
+      { type: 'function_call_output', call_id: 'image', output: [
+        { type: 'input_image', image_url: 'data:image/jpeg;base64,AA==' },
+      ] },
+      { type: 'function_call_output', call_id: 'error', output: 'File not found\nRetry another path' },
+    ]);
+  });
+
+  it('reports a missing image source without serializing the image block as text', () => {
+    const out = translateRequest({ model: 'xai/grok-4.7', messages: [{ role: 'user', content: [
+      { type: 'tool_result', tool_use_id: 'c1', content: [
+        { type: 'text', text: 'screenshot' }, { type: 'image', source: { type: 'base64' } },
+      ] },
+    ] }] }, { model: 'grok-4.7' });
+    expect(out.input).toEqual([{ type: 'function_call_output', call_id: 'c1',
+      output: 'screenshot\n[image omitted: missing or unsupported image source]' }]);
   });
 
   it('serverSideTools 恒定追加在 function tools 之后(位置固定 → 前缀稳定)', () => {

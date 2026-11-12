@@ -18,9 +18,13 @@ import {
   isHookSchedulerOrigin,
 } from '@/lib/messageAutomationOrigin';
 import { joinSourceTooltip } from '@/lib/messageSourceLabel';
-import { isCrossDeviceSourceSessionId } from '@cindy/maker-shared/message-source';
+import { parseSourceSessionTarget } from '@cindy/maker-shared/message-source';
 import { sessionsStore } from '@/lib/sessionsStore';
 import { cn } from '@/lib/utils';
+import { toast } from '@/lib/toast';
+
+import { buildSessionDeepLink } from '@/lib/deepLink';
+import { useSessionLinkTarget } from './SessionLinkChip';
 
 import { imLabel } from './HookTaskCard';
 
@@ -114,16 +118,20 @@ export function AutomationOriginBadge({
   const navigationMode = useSessionNavigationMode();
   const senderSessionId =
     automationOrigin.kind === 'session' ? automationOrigin.senderSessionId : undefined;
+  const sourceTarget = parseSourceSessionTarget(senderSessionId);
+  const { openTarget: openCrossDeviceTarget } = useSessionLinkTarget(
+    sourceTarget?.deviceId ? buildSessionDeepLink(sourceTarget.sessionId, { deviceId: sourceTarget.deviceId }) : '',
+  );
   const botProfiles = useBotProfiles();
   // 远程任务的来源任务与伙伴资料都在那台设备上，本机同 id 资料不可信（与 BotDirectMessageCard 同口径）。
   // 粘滞归属：relay 瞬时重连会清空镜像索引，此窗口内仍要把远程任务当远程处理，
   // 否则来源任务会被当成本机任务打开。
   const hostDeviceId = getStickySessionDeviceId(hostSessionId);
-  const liveSenderTitle = useLiveSessionTitle(senderSessionId, Boolean(hostDeviceId));
+  const liveSenderTitle = useLiveSessionTitle(sourceTarget?.deviceId ? undefined : senderSessionId, Boolean(hostDeviceId));
   const senderBot =
     automationOrigin.kind === 'session' && automationOrigin.senderBotId
       ? (() => {
-          const profile = hostDeviceId
+          const profile = hostDeviceId || sourceTarget?.deviceId
             ? undefined
             : botProfiles.find((item) => item.id === automationOrigin.senderBotId);
           return {
@@ -167,8 +175,12 @@ export function AutomationOriginBadge({
     if (targetSessionId) {
       idLines.push(t('chat.userMessage.sourceIds.session', { id: targetSessionId }));
     }
-    // 另一台电脑上的来源任务（deviceId::sessionId）不是这里能直接打开的任务：只显示来源与 id。
-    open = targetSessionId && !isCrossDeviceSourceSessionId(targetSessionId)
+    // 带设备的来源复用任务深链导航，支持返回本机及打开尚未同步的远程任务。
+    open = sourceTarget?.deviceId
+      ? () => {
+          void openCrossDeviceTarget(false).catch(() => toast.error(t('chat.markdownRenderer.openLinkFailed')));
+        }
+      : targetSessionId && sourceTarget
       ? () => {
           // 其余来源任务与当前任务在同一台设备上：远程任务的来源任务也在那台设备上。
           if (hostDeviceId) remoteProjectsStore.pinSessionOrigin(hostDeviceId, targetSessionId);
