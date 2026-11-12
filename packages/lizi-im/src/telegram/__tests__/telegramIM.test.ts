@@ -3632,25 +3632,132 @@ describe('TelegramIM mandatory group admission', () => {
     expect(JSON.parse(ctx.secrets.get(`companion:${admissionKey}`)!).groups['-100200'].status).toBe('pending');
   });
 
-  it('退群撤销写入失败时清掉旧批准，重启也不能恢复旧授权', async () => {
+  it('撤销无法写入或删除时停止轮询且不确认成员变更，重启后先重放撤销', async () => {
     await connect();
     api.pushUpdates([membership(450, 111)]);
     await drained(450);
     const write = ctx.host.secrets.write;
+    const remove = ctx.host.secrets.remove;
     ctx.host.secrets.write = (key, value) => key === admissionKey ? false : write(key, value);
-    api.pushUpdates([membership(451, 222, false)]);
-    await drained(451);
-    expect(ctx.secrets.has(admissionKey)).toBe(false);
+    ctx.host.secrets.remove = (key) => { if (key !== admissionKey) remove(key); };
+    const revoked = membership(451, 222, false);
+    api.pushUpdates([revoked, membership(452), groupMessage({ text: 'must not run', fromId: 222, messageId: 453, mentionBot: true })]);
+    await vi.waitFor(() => expect(im.getStatus()).toMatchObject({ kind: 'error', code: 'secret-unavailable' }));
+    expect(api.calls.filter((c) => c.method === 'getUpdates').every((c) => Number(c.params.offset) <= 451)).toBe(true);
+    expect(ctx.secrets.get('telegram-updates-offset')).toBe('999:451');
+    expect(JSON.parse(ctx.secrets.get(admissionKey)!).groups['-100200'].status).toBe('approved');
     ctx.host.secrets.write = write;
+    ctx.host.secrets.remove = remove;
     await im.dispose();
     api = createFakeApi();
     im = new TelegramIM(ctx.host, { apiFactory: () => api });
     const messages: IMMessageEvent[] = [];
     im.onMessage((m) => messages.push(m));
+    // Telegram retains this batch because no request acknowledged offset > 451.
+    api.pushUpdates([revoked, membership(452), groupMessage({ text: 'old grant', fromId: 222, messageId: 453, mentionBot: true })]);
     await im.init();
-    api.pushUpdates([groupMessage({ text: 'old grant', fromId: 222, messageId: 452, mentionBot: true })]);
-    await drained(452);
+    await drained(453);
     expect(messages).toHaveLength(0);
+    expect(JSON.parse(ctx.secrets.get(admissionKey)!).groups['-100200'].status).toBe('pending');
+  });
+
+  it('同一实例换 Cindy 账号再 init，不继承相同 Telegram 身份的批准或按钮', async () => {
+    await connect();
+    api.pushUpdates([membership(460)]);
+    await drained(460);
+    const button = approvalButton();
+    api.pushUpdates([click(button, 461)]);
+    await drained(461);
+    await im.dispose();
+    ctx.secrets.delete(admissionKey); // Host has switched to another account's store.
+    await im.init();
+    api.pushUpdates([click(button, 462), groupMessage({ text: 'new account', fromId: 222, messageId: 463, mentionBot: true })]);
+    await drained(463);
+    expect(JSON.parse(ctx.secrets.get(admissionKey)!).groups['-100200'].status).toBe('pending');
+  });
+
+  it('解绑确认删除群批准后才清理凭证，删除失败仍显示错误', async () => {
+    await connect();
+    api.pushUpdates([membership(470, 111)]);
+    await drained(470);
+    const remove = ctx.host.secrets.remove;
+    ctx.host.secrets.remove = (key) => { if (key !== admissionKey) remove(key); };
+    await im.disconnect();
+    expect(im.getStatus()).toMatchObject({ kind: 'error', code: 'secret-unavailable' });
+    expect(ctx.secrets.has('telegram-bot-token')).toBe(true);
+    ctx.host.secrets.remove = remove;
+    await im.disconnect();
+    expect(im.getStatus().kind).toBe('idle');
+    expect(ctx.secrets.has(admissionKey)).toBe(false);
+    expect(ctx.secrets.has('telegram-bot-token')).toBe(false);
+  });
+
+  it('通知失败尊重 Telegram retry_after，不在 60 秒后提前重发', async () => {
+    const clock = vi.spyOn(Date, 'now');
+    const started = Date.now();
+    try {
+      clock.mockReturnValue(started);
+      await connect();
+      api.failNextCall('sendMessage', new TelegramApiError('sendMessage', 429, 'rate limited', 300));
+      api.pushUpdates([membership(480)]);
+      await drained(480);
+      const count = () => api.calls.filter((c) => c.method === 'sendMessage' && c.params.reply_markup).length;
+      expect(count()).toBe(1);
+      clock.mockReturnValue(started + 120_000);
+      api.pushUpdates([groupMessage({ text: 'wait', fromId: 222, messageId: 481, mentionBot: true })]);
+      await drained(481);
+      expect(count()).toBe(1);
+      clock.mockReturnValue(started + 300_000);
+      api.pushUpdates([groupMessage({ text: 'retry', fromId: 222, messageId: 482, mentionBot: true })]);
+      await drained(482);
+      expect(count()).toBe(2);
+    } finally { clock.mockRestore(); }
+  });
+
+  it('准入通知超时后释放聊天链，用户自己的消息仍可继续', async () => {
+    await connect();
+    const timeout = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeout.signal);
+    const original = api.call.bind(api);
+    let waiting = false;
+    api.call = async (name, params, signal) => {
+      if (name !== 'sendMessage' || !params?.reply_markup) return original(name, params, signal);
+      waiting = true;
+      return new Promise((_, reject) => signal?.addEventListener('abort', () => reject(new Error('timeout')), { once: true }));
+    };
+    const messages: IMMessageEvent[] = [];
+    im.onMessage((m) => messages.push(m));
+    try {
+      api.pushUpdates([groupMessage({ text: 'owner', fromId: 111, messageId: 483, mentionBot: true })]);
+      await vi.waitFor(() => expect(waiting).toBe(true));
+      expect(timeoutSpy).toHaveBeenCalledWith(4_500);
+      timeout.abort();
+      await drained(483);
+      await vi.waitFor(() => expect(messages).toHaveLength(1));
+      expect(messages[0].speaker?.isOwner).toBe(true);
+    } finally { timeoutSpy.mockRestore(); }
+  });
+
+  it.each(['sendMessage', 'answerCallbackQuery', 'editMessageText'])('dispose 取消挂起的准入 %s 请求并释放更新链', async (method) => {
+    await connect();
+    if (method !== 'sendMessage') {
+      api.pushUpdates([membership(490)]);
+      await drained(490);
+    }
+    const original = api.call.bind(api);
+    let captured: AbortSignal | undefined;
+    api.call = async (name, params, signal) => {
+      if (name !== method) return original(name, params, signal);
+      captured = signal;
+      return new Promise((_, reject) => {
+        if (signal?.aborted) reject(new Error('aborted'));
+        else signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      });
+    };
+    api.pushUpdates([method === 'sendMessage' ? membership(491) : click(approvalButton(), 491)]);
+    await vi.waitFor(() => expect(captured).toBeDefined());
+    await im.dispose();
+    expect(captured!.aborted).toBe(true);
   });
 
   it('批准保存失败不放行，换绑定用户后旧批准和旧按钮均无效', async () => {

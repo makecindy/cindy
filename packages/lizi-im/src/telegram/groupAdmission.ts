@@ -1,7 +1,14 @@
 import { randomUUID } from 'node:crypto';
 
 import type { IMHost } from '../types.js';
-import type { TelegramApiClient, TgCallbackQuery, TgChat } from './api.js';
+import {
+  TelegramApiError,
+  type TelegramApiClient,
+  type TgCallbackQuery,
+  type TgChat,
+} from './api.js';
+
+export class TelegramGroupAdmissionStorageError extends Error {}
 
 type GroupDecision = {
   status: 'pending' | 'approved' | 'denied';
@@ -91,19 +98,46 @@ export class TelegramGroupAdmission {
     // Rejoining requires a fresh invitation/approval; old buttons must not activate it.
     const next = { ...this.groups, [id]: entry };
     if (!this.save(next)) {
-      this.groups = { ...next, [id]: { ...entry, status: 'denied' } };
-      // Best-effort removal prevents a restart from restoring a stale grant if writing failed.
-      // Losing other grants is fail-closed: those groups can request approval again.
-      this.secrets.remove(this.key);
-      throw new Error('telegram group admission could not be saved');
+      // Do not remember this update as committed: the same event must be retried after recovery.
+      this.groups = {
+        ...next,
+        [id]: { ...entry, status: 'denied', membershipUpdateId: undefined },
+      };
+      throw new TelegramGroupAdmissionStorageError(
+        'telegram group admission could not be saved',
+      );
     }
     this.noticeAttempts.delete(id);
+  }
+
+  clear(): boolean {
+    this.groups = Object.create(null);
+    try {
+      this.secrets.remove(this.key);
+      return this.secrets.readResult?.(this.key).kind === 'missing';
+    } catch {
+      return false;
+    }
+  }
+
+  private call(
+    api: TelegramApiClient,
+    method: string,
+    params: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<unknown> {
+    return api.call(
+      method,
+      params,
+      AbortSignal.any([signal, AbortSignal.timeout(4_500)]),
+    );
   }
 
   async request(
     chat: TgChat,
     api: TelegramApiClient,
     isCurrent: () => boolean,
+    signal: AbortSignal,
   ): Promise<void> {
     if (!this.ownerId || !isCurrent()) return;
     const id = String(chat.id);
@@ -118,25 +152,46 @@ export class TelegramGroupAdmission {
     }
     if (entry.status !== 'pending' || entry.notified === true) return;
     const last = this.noticeAttempts.get(id);
-    if (last !== undefined && Date.now() - last < 60_000) return;
-    this.noticeAttempts.set(id, Date.now());
+    if (last !== undefined && Date.now() < last) return;
+    this.noticeAttempts.set(id, Date.now() + 60_000);
     try {
-      await api.call('sendMessage', {
-        chat_id: this.ownerId,
-        text: `群「${entry.title.slice(0, 200)}」等待你批准（chat_id: ${id}）。\n${entry.inviter ? `邀请人 / Invited by: ${entry.inviter.slice(0, 200)}。` : '无法确认原邀请人 / Original inviter unknown.'}\n批准后，群成员可以召唤此机器人并使用你的模型额度。批准前只响应你本人，其他成员的消息不会进入 AI 或群上下文。\nApproving lets group members use this bot and your model quota. Until then, only your own messages are accepted; other messages are not sent to AI or saved as group context.`,
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: '批准 / Approve', callback_data: `ga:y:${entry.token}` },
-              { text: '拒绝 / Deny', callback_data: `ga:n:${entry.token}` },
+      await this.call(
+        api,
+        'sendMessage',
+        {
+          chat_id: this.ownerId,
+          text: `群「${entry.title.slice(0, 200)}」等待你批准（chat_id: ${id}）。\n${entry.inviter ? `邀请人 / Invited by: ${entry.inviter.slice(0, 200)}。` : '无法确认原邀请人 / Original inviter unknown.'}\n批准后，群成员可以召唤此机器人并使用你的模型额度。批准前只响应你本人，其他成员的消息不会进入 AI 或群上下文。\nApproving lets group members use this bot and your model quota. Until then, only your own messages are accepted; other messages are not sent to AI or saved as group context.`,
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text: '批准 / Approve',
+                  callback_data: `ga:y:${entry.token}`,
+                },
+                { text: '拒绝 / Deny', callback_data: `ga:n:${entry.token}` },
+              ],
             ],
-          ],
+          },
         },
-      });
+        signal,
+      );
       if (isCurrent() && this.groups[id] === entry) {
         this.save({ ...this.groups, [id]: { ...entry, notified: true } });
       }
-    } catch {
+    } catch (err) {
+      if (
+        err instanceof TelegramApiError &&
+        err.errorCode === 429 &&
+        isCurrent()
+      ) {
+        this.noticeAttempts.set(
+          id,
+          Math.max(
+            this.noticeAttempts.get(id) ?? 0,
+            Date.now() + (err.retryAfterSec ?? 0) * 1_000,
+          ),
+        );
+      }
       // A later incoming event can retry a failed notice; no background polling.
     }
   }
@@ -145,16 +200,20 @@ export class TelegramGroupAdmission {
     q: TgCallbackQuery,
     api: TelegramApiClient,
     isCurrent: () => boolean,
+    signal: AbortSignal,
   ): Promise<boolean> {
     if (!q.data?.startsWith('ga:')) return false;
     const answer = async (text: string) => {
-      await api
-        .call('answerCallbackQuery', {
+      await this.call(
+        api,
+        'answerCallbackQuery',
+        {
           callback_query_id: q.id,
           text,
           show_alert: true,
-        })
-        .catch(() => undefined);
+        },
+        signal,
+      ).catch(() => undefined);
     };
     if (
       !isCurrent() ||
@@ -192,14 +251,17 @@ export class TelegramGroupAdmission {
     }
     const text = approved ? '已批准 / Approved' : '已拒绝 / Denied';
     // Persist before acknowledging. Failed rendering never undoes the decision.
-    const edited = api
-      .call('editMessageText', {
+    const edited = this.call(
+      api,
+      'editMessageText',
+      {
         chat_id: this.ownerId,
         message_id: q.message.message_id,
         text: `群「${entry.title.slice(0, 200)}」（chat_id: ${id}）：${text}`,
         reply_markup: { inline_keyboard: [] },
-      })
-      .catch(() => undefined);
+      },
+      signal,
+    ).catch(() => undefined);
     await Promise.all([answer(text), edited]);
     return true;
   }

@@ -60,7 +60,7 @@ import {
   normalizeMessage,
   type TelegramGroupWindowEntry,
 } from './inbound.js';
-import { TelegramGroupAdmission } from './groupAdmission.js';
+import { TelegramGroupAdmission, TelegramGroupAdmissionStorageError } from './groupAdmission.js';
 import { markdownToTelegramHtml } from './markdown.js';
 import { TELEGRAM_PERSONAL_CAPABILITIES } from './presentationCapabilities.js';
 import {
@@ -399,7 +399,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const generation = this.configVersion;
     const api = this.api;
     if (api) await this.groupAdmission().request(chat, api,
-      () => !this.disposing && generation === this.configVersion);
+      () => !this.disposing && generation === this.configVersion, this.outboundAbortSignal());
   }
 
   private pollAbort: AbortController | null = null;
@@ -492,6 +492,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   // ── lifecycle ──────────────────────────────────────────────────────────────
 
   async init(): Promise<void> {
+    this.groupAdmissionState = undefined;
     this.disposing = false;
     this.resetLifetimeAbort();
     const tokenResult = this.secretReadResult(this.secretKey(TOKEN_SECRET_KEY));
@@ -610,6 +611,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   // 生命周期静默: dispose / 重连不向 owner 发任何播报(桌面端频繁重启会刷屏)。
   async dispose(): Promise<void> {
+    this.groupAdmissionState = undefined;
     this.disposing = true;
     // 在途的 429 退避等待就此收口 —— 否则一个最长一分钟的定时器会活过 dispose。
     this.lifetimeAbort.abort();
@@ -759,6 +761,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         })
         .catch(() => {});
     }
+    // Unbinding cannot succeed while a persisted group grant could survive it.
+    if (!this.groupAdmission().clear()) {
+      await this.stopPolling();
+      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      return { status: this.status };
+    }
     this.ownerUserId = '';
     await this.sendOwnerNoticeWithTimeout(
       disconnectedOwnerUserId,
@@ -768,7 +776,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     );
     this.host.secrets.remove(this.secretKey(TOKEN_SECRET_KEY));
     this.host.secrets.remove(this.secretKey(OWNER_USER_ID_SECRET_KEY));
-    this.host.secrets.remove(this.secretKey(GROUP_ADMISSION_SECRET_KEY));
     this.groupAdmissionState = undefined;
     this.host.secrets.remove(this.secretKey(LEGACY_RUNTIME_ACTIVE_SECRET_KEY));
     this.host.secrets.remove(this.secretKey(UPDATES_OFFSET_SECRET_KEY));
@@ -1452,12 +1459,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           this.setStatus({ kind: 'connected', appId: String(this.botId) });
         }
         for (const update of updates) {
+          if (abort.signal.aborted || this.configVersion !== generation) return;
+          // Membership is an authorization barrier: commit its decision before the next
+          // getUpdates can acknowledge it. Other messages retain concurrent per-chat dispatch.
+          if (update.my_chat_member) await this.dispatchUpdate(update, generation);
+          else void this.dispatchUpdate(update, generation);
+          if (abort.signal.aborted || this.configVersion !== generation) return;
           offset = Math.max(offset, update.update_id + 1);
           this.lastSeenOffset = offset;
-          if (abort.signal.aborted || this.configVersion !== generation) return;
-          // 只分发不等待: 处理进 per-chat 串行链, 循环立即消费下一条 —
-          // 一个 chat 的相册下载/顺序门不会拖住其它 chat(#1098 review P1/P2)。
-          this.dispatchUpdate(update, generation);
         }
         // 持久化游标走低水位: 不越过任何在途(分发未收口)update 与缓冲中
         // 相册 — 各任务收口时在 finally 里自行补写(getUpdates 的内存 offset
@@ -1465,6 +1474,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         if (updates.length > 0) this.persistOffsetCapped();
       } catch (err) {
         if (abort.signal.aborted || this.configVersion !== generation) return;
+        if (err instanceof TelegramGroupAdmissionStorageError) {
+          // Keep the last committed offset. Reconnecting replays this membership event.
+          this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+          abort.abort();
+          return;
+        }
         if (err instanceof TelegramApiError && err.errorCode === 409) {
           this.setStatus({ kind: 'conflict', appId: String(this.botId) });
           await sleep(POLL_CONFLICT_RETRY_MS, abort.signal);
@@ -1506,7 +1521,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * 时移除在途 id 并补写低水位游标 — 进程在任何点退出, 重启都从"最早未
    * 完成的 update"续读, 不丢消息(at-least-once)。
    */
-  private dispatchUpdate(update: TgUpdate, generation: number): void {
+  private dispatchUpdate(update: TgUpdate, generation: number): Promise<void> {
     const chatId =
       update.message?.chat.id ??
       update.callback_query?.message?.chat.id ??
@@ -1522,6 +1537,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         try {
           await this.handleUpdate(update);
         } catch (err) {
+          if (err instanceof TelegramGroupAdmissionStorageError) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           this.log.warn(`telegram update handling failed: ${msg}`);
         }
@@ -1532,6 +1548,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         if (!this.disposing && this.configVersion === generation) this.persistOffsetCapped();
       });
     this.chatQueues.set(key, next);
+    return next;
   }
 
   private async handleUpdate(update: TgUpdate): Promise<void> {
@@ -1901,7 +1918,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     if (!api) return;
     const generation = this.configVersion;
     if (await this.groupAdmission().handleCallback(q, api,
-      () => !this.disposing && generation === this.configVersion)) return;
+      () => !this.disposing && generation === this.configVersion, this.outboundAbortSignal())) return;
     if (this.disposing || generation !== this.configVersion) return;
     // 应答只有一次机会: 同一个 callback_query_id 二次 answer 会被 Telegram 拒掉。
     // 先无条件发一次空 answer 消 loading, 会把后面那条「已过期」alert 一起吞掉 ——
