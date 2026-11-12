@@ -41,6 +41,7 @@ import { captureKnownFileBefore, noteOpaqueTurnChange } from '../../../desktop/s
 import { readCodexHistoryHasProductPrompt, writeCodexHistoryHasProductPrompt } from '../../../desktop/src/main/maker-host/session-storage.js';
 import { buildPiRuntimeConfig, claudeUpstreamEndpoint, createAgentRuntimeConfigs } from '../../../desktop/src/main/maker-host/runtimeConfigsCore.js';
 import { hostRuntimeLayout } from '../runtime-layout.mjs';
+import { createHostAutoReview } from './auto-review.js';
 
 type HostProviderConfig = ReturnType<typeof createHostProviderConfig>;
 
@@ -79,6 +80,8 @@ export interface HostAgentGraphOptions {
   getManagedSkills?: AgentDeps['getManagedSkills'];
   /** Directory holding the bundled harnesses, including `ripgrep-bin`. Defaults to the Host layout. */
   harnessRoot?: string;
+  /** The account gateway's rejected-key report (model-access.ts), for the one-shot review requests. */
+  reportGatewayKeyRejected?: (key: string) => void;
 }
 
 export const LOGGER = createMakerLogger('maker');
@@ -378,6 +381,13 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     await codex?.forceDisposeLocalHostForAuthChange(reason, { preserveExternalAuth: true });
   });
   const config = options.providerConfig;
+  // The desktop's Auto-review and tool-loop review (maker-host/index.ts), handed to the same
+  // engines under the same keys (auto-review.ts).
+  const autoReview = createHostAutoReview({
+    userDataDir: options.userDataDir, getMaker: () => maker, gateway: options.gateway,
+    reportGatewayKeyRejected: options.reportGatewayKeyRejected, providerConfig: config,
+    bridge: () => options.codexRuntime?.subscriptions.bridge ?? null, logger: LOGGER,
+  });
   const piAuth = bindAuthOwner(createPiAuthAdapter({
     subscriptionAccountKind,
     subscriptionAccountState: id => subscriptionAccountKind(id) === 'claude'
@@ -440,6 +450,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     binaryPath: options.binaryPath,
     logger: LOGGER,
     getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+    reviewAutoPermissionAction: autoReview.reviewAutoPermissionAction,
+    toolLoopReviewer: autoReview.toolLoopReviewer,
     // Skills the user disabled in Cindy, from the profile's activation preferences.
     getDisabledSkillPaths: readDisabledSkillPaths,
     ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
@@ -469,6 +481,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         binaryPath: options.codexBinaryPath,
         logger: LOGGER,
         getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+        reviewAutoPermissionAction: autoReview.reviewAutoPermissionAction,
         mcpProviders,
         ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
       })
@@ -486,6 +499,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         binaryPath: options.piBinaryPath,
         logger: LOGGER,
         getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+        reviewAutoPermissionAction: autoReview.reviewAutoPermissionAction,
         mcpProviders,
         resolvePiAgentHome: () => path.join(options.userDataDir, 'pi-agent-home'),
         // Pi's loopback requests carry a per-session token the proxy checks (pi-host.ts).
@@ -530,6 +544,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
       finally { await options.onSessionClose?.(id); }
     } },
     logger: LOGGER,
+    // Pi and Codex sessions read the tool-loop reviewer from Maker, as on the desktop.
+    toolLoopReviewer: autoReview.toolLoopReviewer,
     ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
   });
   const owner = activeOwnerScopeKey();
@@ -547,7 +563,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     onQueueGateReleased: createDeferredRestartSettledWake({ wakeSession: options.wakeSession ?? (() => {}) }),
     logger: LOGGER,
   });
-  return { maker, agent, codex, pi, gatewayRestart, capabilitiesByAgent, instances: agents,
+  return { maker, agent, codex, pi, gatewayRestart, capabilitiesByAgent, instances: agents, autoReview,
     refreshModels: () => refreshCatalogDerivedModels(maker, modelContext.getSelectableCatalog()),
     agents: Object.keys(agents) as AgentKind[] };
 }

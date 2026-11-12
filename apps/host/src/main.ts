@@ -713,6 +713,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       storage: sessionStorage,
       gateway,
       makerMemory,
+      reportGatewayKeyRejected: key => modelAccess?.reportRejectedKey(key),
       mcpProviders: await pluginGateway.prepareMcpProviders([...createHostMemoryMcpProviders(makerMemory), ...platformTools.providers, pluginGateway.provider]),
       userDataDir: dataDir,
     });
