@@ -1,6 +1,7 @@
 import { isSafeGhostRelativePath } from './internal/ghostPath.js';
 import { validateCspDomains } from './appCsp.js';
 import { parseGhostHostUi, type GhostHostUi } from './hostUi.js';
+import { GHOST_TOOLS_MAX } from './internal/toolsLimit.js';
 /** First release with plugin pages; authoring floor, never a client install gate. */
 export const PLUGIN_UI_MIN_CINDY_VERSION = '0.1.122-beta';
 export interface GhostUiResource {
@@ -29,7 +30,7 @@ export function parseGhostMcpApps(raw: unknown, tools: readonly { name: string }
 }
 export function parseGhostUi(raw: unknown, tools: readonly { name: string }[], hosts: readonly string[], safePath: (value: unknown) => boolean): GhostUiNeeds | null {
   if (!object(raw) || !Array.isArray(raw.resources) || !object(raw.tools) || (!raw.resources.length && !Object.keys(raw.tools).length) ||
-      raw.resources.length > 16 || Object.keys(raw.tools).length > 16) return null;
+      raw.resources.length > 16 || Object.keys(raw.tools).length > GHOST_TOOLS_MAX) return null;
   const uris = new Set<string>();
   for (const resource of raw.resources) {
     if (!object(resource) || typeof resource.uri !== 'string' || !resource.uri.startsWith('ui://') ||

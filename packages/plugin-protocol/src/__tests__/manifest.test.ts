@@ -1,4 +1,4 @@
-import { getPluginToolUi, pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '../toolUi.js';
+import { getPluginToolUi, parseGhostUi, pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '../toolUi.js';
 import { hostUiApprovalSubjects } from '../hostUi.js';
 import { describe, expect, it } from 'vitest';
 import {
@@ -10,6 +10,7 @@ import {
   GHOST_MANIFEST_SCHEMA_VERSION,
   GHOST_MAIN_VIEW_ICONS,
   GHOST_OAUTH_SCOPES_MAX,
+  GHOST_TOOLS_MAX,
   LEGACY_GHOST_SLOTS,
   compareCindyVersions,
   ghostManifestUsesOidcToken,
@@ -211,6 +212,17 @@ describe('Ghost manifest contract', () => {
     expect(GHOST_MANUAL_ENTRY_FILE).toBe('MANUAL.md');
     expect(GHOST_MANUAL_MD_MAX_BYTES).toBe(64 * 1024);
     expect(GHOST_MANUAL_DESCRIPTION_MAX_CHARS).toBe(300);
+  });
+
+  it('accepts up to GHOST_TOOLS_MAX tools and rejects more', () => {
+    const tools = (count: number) =>
+      Array.from({ length: count }, (_, i) => ({ name: `t${i}`, description: 'y' }));
+    expect(GHOST_TOOLS_MAX).toBe(48);
+    expect(validateGhostManifest({ ...validManifest, tools: tools(GHOST_TOOLS_MAX) }).ok).toBe(true);
+    expect(validateGhostManifest({ ...validManifest, tools: tools(GHOST_TOOLS_MAX + 1) })).toEqual({
+      ok: false,
+      reason: 'tools 必须是 1–48 项的数组',
+    });
   });
 
   it('accepts and normalizes a valid schema v2 manifest', () => {
@@ -2118,6 +2130,22 @@ describe('interactive page declarations', () => {
     { capabilities: ['context', 'context'] },
   ])('rejects invalid host UI authority: %j', host => {
     expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(false);
+  });
+  it('lets every declared tool carry UI up to the shared tools limit', () => {
+    const names = Array.from({ length: GHOST_TOOLS_MAX }, (_, i) => `t${i}`);
+    const tools = names.map((name) => ({ name, description: 'y' }));
+    expect(validateGhostManifest({
+      ...base,
+      tools,
+      mcpApps: { ui: { resources: [], tools: Object.fromEntries(names.map((name) => [name, { visibility: ['app'] }])) } },
+    }).ok).toBe(true);
+
+    // The UI map has its own count gate; check it directly since the manifest tools gate fires first.
+    const over = [...names, 'extra'];
+    const ui = (keys: string[]) => ({ resources: [], tools: Object.fromEntries(keys.map((name) => [name, { visibility: ['app'] }])) });
+    const overTools = over.map((name) => ({ name }));
+    expect(parseGhostUi(ui(names), overTools, [], isSafeGhostRelativePath)).not.toBeNull();
+    expect(parseGhostUi(ui(over), overTools, [], isSafeGhostRelativePath)).toBeNull();
   });
   it.each([
     { resources: [{
