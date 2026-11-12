@@ -6,9 +6,10 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { syncBuiltinESMExports } from 'node:module';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { setTimeout as delay } from 'node:timers/promises';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import { _electron } from 'playwright-core';
 import { runPlan } from './run.mjs';
 import { adhocPage } from './registry.mjs';
@@ -374,7 +375,8 @@ test('captures exact viewports and overviews in a hidden Electron window', async
 // #10254: previous interrupt tests only stopped an already-published runtime.
 // Hold the second real launch's result at the asynchronous process boundary;
 // runPlan must not finish/delete its profile while that owned process is pending.
-// Dedicated Electron E2E tier: the waits cover the runner's real settling grace.
+// Dedicated Electron E2E tier: a controlled Node clock advances timeout/settling
+// deadlines while process launch, IPC and filesystem cleanup remain real.
 test('timeout and interrupt wait for an in-flight Electron relaunch', async (t) => {
   for (const mode of ['interrupt', 'timeout']) {
     const file = await entry(`relaunch-${mode}`, 'mountPage({ render: () => <div>Ready</div> });');
@@ -385,10 +387,26 @@ test('timeout and interrupt wait for an in-flight Electron relaunch', async (t) 
     const gate = Promise.withResolvers();
     const runtimes = [];
     const children = [];
+    let clockActive = false;
+    const resetClock = () => {
+      if (!clockActive) return;
+      t.mock.timers.reset();
+      syncBuiltinESMExports();
+      clockActive = false;
+    };
     let checks = 0;
     definition.check = async () => {
       checks++;
-      if (mode === 'timeout') options.timeout = 1000;
+      if (checks !== 1) return;
+      // The first variant already has a native deadline. Keep its cancellation
+      // working when the next variant switches to controlled numeric timer IDs.
+      const clearNative = globalThis.clearTimeout;
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+      clockActive = true;
+      syncBuiltinESMExports();
+      const clearControlled = globalThis.clearTimeout;
+      globalThis.clearTimeout = timer => typeof timer === 'object'
+        ? clearNative(timer) : clearControlled(timer);
     };
     const launch = _electron.launch.bind(_electron);
     const mocked = t.mock.method(_electron, 'launch', async (launchOptions) => {
@@ -404,18 +422,21 @@ test('timeout and interrupt wait for an in-flight Electron relaunch', async (t) 
     const running = runPlan(
       { pages: [{ definition, variants: variantsFor(definition, options) }] }, options, controller.signal,
     );
+    let finished = false;
+    void running.then(() => { finished = true; });
     try {
       const profile = await Promise.race([
         held.promise,
         running.then(() => { throw new Error('run ended before the second launch'); }),
       ]);
       if (mode === 'interrupt') controller.abort(new Error('selftest interrupt during relaunch'));
-      const state = await Promise.race([
-        running.then(() => 'finished'),
-        delay(mode === 'interrupt' ? 2500 : 4500).then(() => 'pending'),
-      ]);
-      assert.equal(state, 'pending', 'cleanup waits for the owned in-flight launch');
+      else t.mock.timers.tick(options.timeout);
+      await nextTurn();
+      t.mock.timers.tick(Math.min(options.timeout, 10000) + 2000);
+      await nextTurn();
+      assert.equal(finished, false, 'cleanup waits for the owned in-flight launch');
       assert.ok(existsSync(profile), 'the live process keeps its profile until shutdown');
+      resetClock();
       gate.resolve();
       const summary = await running;
       assert.equal(summary.status, 'failed');
@@ -430,6 +451,7 @@ test('timeout and interrupt wait for an in-flight Electron relaunch', async (t) 
       t.diagnostic(JSON.stringify({ mode, pids: children.map(child => child.pid), cleanup: summary.cleanup }));
     } finally {
       // The red regression must also close the real process it deliberately withheld.
+      resetClock();
       controller.abort();
       gate.resolve();
       await running;
