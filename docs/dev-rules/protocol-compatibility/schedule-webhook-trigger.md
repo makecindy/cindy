@@ -36,3 +36,10 @@ REST 的地址保存请求新增必填 `format`，密钥改为客户端生成或
 `maker:schedule:webhook-receiver`；`webhook-status` 的返回增加 `receiver`、`connected`、`problem`、`quotaLimit`、
 `quotaResetAt`。长连接新增 `quota` 帧，只在接收次数用完时出现，没有恢复帧，客户端按 `resetAt` 自行解除。功能尚未发布，
 没有存量客户端。服务端先部署并验证，再把清单字段填上。
+
+`webhook-status.problem` 再纯增 `unsupported`：服务器退回端点定义的 400／422（只有发送方格式版本不一致这一种），
+或本机认不出发送方格式时用它，不再混进 `failed`（「接收地址暂时不可用」，暗示重试会自愈）。值只增不改：
+同账号 invoke `maker:schedule:webhook-status` 仍按原样把 `problem` 转给控制端，所以旧控制端可能读到不认识的取值——
+此时它不匹配任何提示、直接落到已收到／未收到的摘要，不会显示成暂时不可用；旧宿主不会发出该值，新控制端读到的仍是旧取值。
+官方与自建中转沿用通用 invoke 转发，帧、鉴权、白名单与重连协议都没有变化，无需改中转内核。`problem` 只决定界面那一句提示
+（以及 `released` 时是否显示重新连接），地址、密钥与事件投递都不读它，所以跨版本只剩提示差异。

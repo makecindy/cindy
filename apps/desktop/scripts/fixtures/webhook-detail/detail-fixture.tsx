@@ -6,6 +6,7 @@ import { RunHistoryPane } from '../../../src/renderer/features/scheduler/compone
 
 const initial = ctx.case === 'initial';
 const released = ctx.case === 'released';
+const unsupported = ctx.case === 'unsupported';
 const time = Date.now() - 60_000;
 const schedule: Schedule = {
   id: 'fixture', name: 'GitHub 项目动态', prompt: '检查项目的新动态并总结。',
@@ -49,7 +50,7 @@ mountPage({
     webhookStatus: async () => ({ receiver: 'cloud', connected: ctx.case !== 'offline' && ctx.case !== 'app-disconnected',
       url: released ? undefined : 'https://webhook.example.test/hooks/fixture',
       hasSecret: !initial, lastReceivedAt: initial ? undefined : time, ignored: 0,
-      problem: released ? 'released' : undefined,
+      problem: released ? 'released' : unsupported ? 'unsupported' : undefined,
     }),
     webhookAccount: async () => ({ used: released ? 1 : 2, limit: 10, endpoints: [] }),
     setWebhookSecret: forbid('setWebhookSecret'),
