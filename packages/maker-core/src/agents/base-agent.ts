@@ -2078,9 +2078,7 @@ export interface StartSessionOptions {
    * 缺省 / undefined → fallback 到 runtimeConfig.makerMemoryEnabled (host 静态配置, 一般为
    * undefined / false), 实际效果就是不启用 maker memory。
    *
-   * 启用时 agent.startSession 会:
-   *   1. 拼 system prompt 时注入 memory rules + MEMORY.md 索引
-   *   2. 创建 MemoryFlushController 监听 token usage
+   * 启用时 agent.startSession 拼 system prompt 时注入 memory rules + MEMORY.md 索引。
    * 共享 manager 的 enablement 由 host setting 控制，不由 session flag 改写。
    */
   makerMemoryEnabled?: boolean;

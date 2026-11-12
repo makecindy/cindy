@@ -17,7 +17,7 @@ import { createBetterSqliteDatabase } from '../../../desktop/src/main/localDb/be
 import { LOGGER } from './runtime.mjs';
 import { getActiveAppSession, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.ts';
 
-const DEFAULTS = Object.freeze({ maker: true, claudeCode: true, codex: true, pi: true });
+const DEFAULTS = Object.freeze({ maker: true, claudeCode: true, codex: true });
 
 /** `<ownerRoot>/memory-settings.json`, same file Desktop writes. */
 export function readMemorySettings(ownerRoot) {

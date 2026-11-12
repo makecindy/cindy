@@ -409,8 +409,18 @@ export interface MemoryMcpDeps {
   searchProviders?: (query: string, opts: { type?: 'user' | 'feedback' | 'project' | 'reference'; limit?: number },
     context: LiziMcpSessionContext | undefined) => Promise<MemoryProviderHit[] | MemoryProviderSearchResult> | undefined;
   withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
-  /** Host captures the source turn before storage; invoked only for a successful write. */
-  beginWrite?: (context: LiziMcpSessionContext | undefined) => ((receipt: { key: string; title: string; action: 'created' | 'updated' }) => void);
+  /**
+   * Host captures the source turn before storage; invoked only for a successful write.
+   * `scope` names which of the task's memories was written (`user` = about the user, every
+   * project; `project` = this repository or folder). It is a name, never a path: receipts
+   * are stored on the message and travel wherever the message does.
+   */
+  beginWrite?: (context: LiziMcpSessionContext | undefined) => ((receipt: {
+    key: string;
+    title: string;
+    action: 'created' | 'updated';
+    scope?: 'user' | 'project';
+  }) => void);
 
   getManager(): import('@cindy/maker-core').MakerMemoryManager;
   workdir: string;

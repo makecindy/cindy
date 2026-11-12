@@ -3407,6 +3407,7 @@
         "desktop:settings.computerUse.directControl.toggleHint",
         "desktop:settings.lspMode.toast.disabled",
         "desktop:settings.memory.agent.toast.takesEffectSuffix",
+        "desktop:settings.memory.entries.description",
         "desktop:settings.sessionImport.description",
         "desktop:settings.sessionImport.summary.filteredHint",
         "desktop:settings.mcp.dialog.desc",

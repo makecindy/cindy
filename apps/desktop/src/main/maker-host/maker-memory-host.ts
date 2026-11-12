@@ -20,6 +20,8 @@ import {
   type SqliteFactory,
 } from '@cindy/maker-core';
 
+import path from 'node:path';
+
 import { app } from 'electron';
 
 import { desktopMakerLogger } from './logger-adapter.js';
@@ -33,6 +35,20 @@ import {
 } from '../appSessionState.js';
 import { botProfileMemoryDir } from '../maker-ipc/botProfileFolder.js';
 import { teammateProjectMemoryStorageDir } from '../maker-ipc/botProjectMemory.js';
+import { dialogueWorkspaceRoots } from '../dialogue-workspace-settings.js';
+
+/**
+ * 一次性对话的目录不属于任何项目: 目录用完即弃, 记在它名下的内容以后的任务都读不到,
+ * 所以这类任务只用账号级记忆。判定用对话目录的全部根 (当前的、用户换过的旧的)。
+ */
+function isDialogueWorkdir(scopeKey: string): boolean {
+  if (!path.isAbsolute(scopeKey)) return false;
+  const target = path.normalize(scopeKey);
+  return dialogueWorkspaceRoots().some((root) => {
+    const rel = path.relative(path.normalize(root), target);
+    return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+  });
+}
 
 const sqliteFactory: SqliteFactory = (filePath) => {
   // better-sqlite3 sync open. WAL 让多 session 并发读写更稳, busyTimeout 防小撞锁。
@@ -66,6 +82,7 @@ export function createDesktopMakerMemoryManager(
     sqliteFactory,
     logger: desktopMakerLogger.child('maker-memory'),
     botMemoryDir: botProfileMemoryDir,
+    isProjectlessScope: isDialogueWorkdir,
     isOneShotRouteDisabled: (agent) => isAgentOneShotRouteDisabled(agent),
     reviewAgent: 'claude-code',
     ...(options.reviewOneShot ? { reviewOneShot: options.reviewOneShot } : {}),

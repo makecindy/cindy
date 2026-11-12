@@ -84,7 +84,6 @@ import { preparePinnedClaudeSkillInvocation } from './pinned-skill-invocation.js
 import { isBotMcpServerAllowed } from '../shared/bot-runtime-policy.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
 import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
-import { MemoryFlushController } from '../../memory/flush-controller.js';
 import { resolveMemoryScopeKey } from '../../memory/scope-resolver.js';
 import type {
   Capabilities,
@@ -1787,7 +1786,6 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 失败 (manager 没注入 / store init 抛错) 静默跳过, agent 仍能跑。
     let makerMemoryRules = '';
     let makerMemoryIndex = '';
-    let memoryFlushController: MemoryFlushController | null = null;
     let mutableModel = opts.model;
     let mutableProviderId = opts.providerId ?? null;
     const getAutoCompactThresholdPct = (
@@ -1824,16 +1822,11 @@ export class ClaudeCodeAgent extends BaseAgent {
     if (makerMemoryEnabled && makerMemory) {
       try {
         // 设备托管：记忆在任务所在电脑上，只用随启动选项带来的快照，不打开本机记忆库。
-        const store = hosted ? null : await makerMemory.getStore(memoryScopeKey);
         makerMemoryRules = opts.makerMemoryScopeKey?.startsWith('bot:')
           ? ''
           : MAKER_MEMORY_RULES;
-        makerMemoryIndex = opts.makerMemoryIndexSnapshot ?? (store ? await store.getIndex() : '');
-        memoryFlushController = new MemoryFlushController({
-          logger: log.child('memory-flush'),
-          workdir: memoryScopeKey,
-          agentKind: 'claude-code',
-        });
+        makerMemoryIndex = opts.makerMemoryIndexSnapshot
+          ?? (hosted ? '' : await makerMemory.getPromptIndex(memoryScopeKey));
         log.debug('maker memory loaded for session', {
           rulesBytes: makerMemoryRules.length,
           indexBytes: makerMemoryIndex.length,
@@ -6069,16 +6062,14 @@ export class ClaudeCodeAgent extends BaseAgent {
                 // 归零立即 arm: ball 回上游, 不等下一条 SDK message 起表 (会留 idle 窗口)。
                 if (pendingToolIds.size === 0) armUpstreamResponseIdle();
               },
-              ...(memoryFlushController || autoCompactController
+              ...(autoCompactController
                 ? {
                     onUsageUpdate: (used, window) => {
-                      memoryFlushController?.onUsageUpdate(used, window);
-                      autoCompactController?.onUsageUpdate(used, window);
+                      autoCompactController.onUsageUpdate(used, window);
                     },
                     onCompactBoundary: () => {
                       hostAutoCompactInFlight = false;
-                      memoryFlushController?.onCompactBoundary();
-                      autoCompactController?.onCompactBoundary();
+                      autoCompactController.onCompactBoundary();
                     },
                   }
                 : {}),

@@ -13,7 +13,10 @@
  * thread 的真实 workingDir。
  */
 
+import { z } from 'zod';
+
 import {
+  MemoryError,
   resolveMemoryScopeKey,
   type MakerMemoryManager,
   type MakerMemoryStore,
@@ -36,10 +39,78 @@ export function buildJsonResult(payload: unknown, isError = false): MemoryToolRe
  */
 export type WithStoreContext = {
   store: MakerMemoryStore;
-  /** 解析后的 session scope key (linked worktree 已归一到主仓)。 */
+  /** 解析后的 session scope key (已归一到仓库根)。 */
   scopeKey: string;
   manager: MakerMemoryManager;
+  /** 这次任务有哪几份记忆 (见 MakerMemoryManager.memoryScopesFor)。 */
+  scopes: { user: string | null; project: string | null };
+  /** 打开其中一份; 这次任务没有那一份时返回 null。 */
+  open(scope: MemoryScopeName): Promise<MakerMemoryStore | null>;
 };
+
+/**
+ * 普通任务有两份记忆: `user` 关于用户本人、每个项目都生效; `project` 只属于当前
+ * 仓库或目录。伙伴和一次性对话只有一份, 传了 scope 也落在那一份上。
+ */
+export type MemoryScopeName = 'user' | 'project';
+const SCOPE_NAMES: readonly MemoryScopeName[] = ['project', 'user'];
+
+export const memoryScopeArg = z
+  .enum(['user', 'project'])
+  .optional()
+  .describe('哪一份记忆: user = 关于用户本人、每个项目都生效; project = 只属于当前仓库或目录');
+
+async function holds(store: MakerMemoryStore, filename: string): Promise<boolean> {
+  try {
+    await store.read(filename);
+    return true;
+  } catch (err) {
+    if (err instanceof MemoryError && err.code === 'not-found') return false;
+    throw err;
+  }
+}
+
+/**
+ * 新条目写到哪一份: 调用方指定的优先; 没指定时 `user` 类进账号级, 其余进项目。
+ * 这次任务没有那一份 (伙伴 / 一次性对话) 就落在仅有的那一份上。
+ */
+export async function storeForNew(
+  ctx: WithStoreContext,
+  scope: MemoryScopeName | undefined,
+  type: string,
+): Promise<{ store: MakerMemoryStore; scope: MemoryScopeName }> {
+  const wanted = scope ?? (type === 'user' ? 'user' : 'project');
+  const name = ctx.scopes[wanted] ? wanted : wanted === 'user' ? 'project' : 'user';
+  return { store: (await ctx.open(name))!, scope: name };
+}
+
+/**
+ * 已有文件在哪一份。没指定 scope 时两份都找: 只在一份里就用那一份; 两份都没有时
+ * 落到第一份, 让后续操作按原样报 NOT_FOUND; 两份都有时要求调用方指明。
+ */
+export async function storeHolding(
+  ctx: WithStoreContext,
+  filename: string,
+  scope?: MemoryScopeName,
+): Promise<{ store: MakerMemoryStore; scope: MemoryScopeName }> {
+  const names = SCOPE_NAMES.filter((name) => ctx.scopes[name] && (!scope || name === scope));
+  const candidates = names.length > 0 ? names : SCOPE_NAMES.filter((name) => ctx.scopes[name]);
+  const found: Array<{ store: MakerMemoryStore; scope: MemoryScopeName }> = [];
+  let first: { store: MakerMemoryStore; scope: MemoryScopeName } | null = null;
+  for (const name of candidates) {
+    const store = (await ctx.open(name))!;
+    first ??= { store, scope: name };
+    if (candidates.length === 1) return first;
+    if (await holds(store, filename)) found.push({ store, scope: name });
+  }
+  if (found.length > 1) {
+    throw new MemoryError(
+      'invalid-filename',
+      `${filename} 在 user 和 project 两份记忆里都有; 传 scope 指明要操作哪一份`,
+    );
+  }
+  return found[0] ?? first!;
+}
 
 export async function withStore(
   deps: MemoryMcpDeps,
@@ -48,6 +119,7 @@ export async function withStore(
   let store: MakerMemoryStore;
   let manager: MakerMemoryManager;
   let scopeKey: string;
+  let scopes: WithStoreContext['scopes'];
   let scopeAtEntry: string | null = null;
   try {
     manager = deps.getManager();
@@ -86,13 +158,29 @@ export async function withStore(
         true,
       );
     }
-    store = await manager.getStore(scopeKey);
+    scopes = manager.memoryScopesFor(scopeKey);
+    store = await manager.getStore(scopes.project ?? scopes.user!);
   } catch (err) {
     const { code, message } = classifyMemoryError(err);
     return buildJsonResult({ ok: false, code, message }, true);
   }
   try {
-    const data = await fn(store, { store, scopeKey, manager });
+    const opened = manager;
+    // 一次工具调用可能先后打开两份记忆 (账号级、项目)。每次打开都会按「当时」的账号
+    // 重新绑定, 所以必须在每一次打开前按入口账号复核: 否则 A 账号发起的操作会在中途
+    // 切换后落到 B 账号的同名文件上, 事后的最终复核只能报错、撤不回已经做完的删除。
+    const open = async (scope: MemoryScopeName): Promise<MakerMemoryStore | null> => {
+      const key = scopes[scope];
+      if (!key) return null;
+      if (scopeAtEntry !== null && deps.getManager().currentOwnerScopeKey?.() !== scopeAtEntry) {
+        throw new MemoryError(
+          'not-ready',
+          'owner scope changed during async memory operation; aborting (retry against current scope)',
+        );
+      }
+      return opened.getStore(key);
+    };
+    const data = await fn(store, { store, scopeKey, manager, scopes, open });
     // 操作后复核: owner 在 fn 执行期间切换 → 结果不可信, 不得按成功返回。
     if (scopeAtEntry !== null && deps.getManager().currentOwnerScopeKey?.() !== scopeAtEntry) {
       return buildJsonResult(

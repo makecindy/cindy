@@ -487,30 +487,6 @@ class PiImageInputUnsupportedError extends Error {
 }
 
 /**
- * digest 分片 body 的**字节**上限(硬上限 8192,留 headroom)。存储层按 UTF-8 字节
- * 卡 hardShardBytes,故截断必须按字节而非字符 —— 否则中文摘要(每字 3 字节)会在
- * 字符数远未到阈值时就超字节硬上限,write 抛 shard-too-large 被吞掉,digest 静默丢失。
- */
-const PI_DIGEST_MAX_BODY_BYTES = 7000;
-
-/** 按 UTF-8 字节预算截断(码点安全,不切断多字节字符);超预算时补省略号。 */
-function truncateToByteBudget(text: string, maxBytes: number): string {
-  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
-  const ellipsis = '\n…';
-  const budget = maxBytes - Buffer.byteLength(ellipsis, 'utf8');
-  let bytes = 0;
-  let out = '';
-  for (const ch of text) {
-    const chBytes = Buffer.byteLength(ch, 'utf8');
-    if (bytes + chBytes > budget) break;
-    bytes += chBytes;
-    out += ch;
-  }
-  return out + ellipsis;
-}
-
-/** 任意串 → memory slug 片段([a-z0-9-],截断)。 */
-/**
  * 轮 42 P1:远端会话 spawn env 路径的稳定派生段 —— sha256(sessionId) 前 12 hex。
  * 同 session 断链重连/恢复复用同一路径 → env 稳定 → envHash 稳定 → daemon
  * 纯 attach 保活。匿名会话(无 sessionId)无法跨 startSession 复用, 回落
@@ -534,20 +510,6 @@ function derivePiSubagentRouteToken(parentToken: string, sourceProviderId: strin
   return createHmac('sha256', parentToken)
     .update(`cindy.pi.subagent-route\0${sourceProviderId}`)
     .digest('base64url');
-}
-
-function slugifyForMemory(input: string, maxLen: number): string {
-  const s = input
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  return (s || 'anon').slice(0, maxLen);
-}
-
-/** 摘要正文 → 一行 description(折叠空白、去换行、截断)。 */
-function oneLineDescription(text: string, maxLen: number): string {
-  const line = text.replace(/\s+/g, ' ').trim();
-  return line.length > maxLen ? line.slice(0, maxLen - 1) + '…' : line;
 }
 
 /**
@@ -2701,14 +2663,13 @@ export class PiAgent extends BaseAgent {
       && (botMemoryScope || (this.memoryOverride ?? true));
     // 设备托管：记忆存在任务所在的电脑上(经 Cindy 工具读写)，本机记忆库不参与；提示里的
     // 记忆索引只用对方随启动选项带来的快照。
-    const compactionMemoryEnabled = sessionMemoryEnabled && !!this.deps.makerMemory && !opts.deviceHosted;
     const makerMemoryPromptEnabled =
       sessionMemoryEnabled &&
       (opts.makerMemoryIndexSnapshot !== undefined || (!!this.deps.makerMemory && !opts.deviceHosted));
     // Maker Memory 关闭时跳过 git 探测 (Codex #2399 P1): 解析结果不会被用。
     // 解析必须发生在 MCP ctx 注册之前, 并把结果冻进 ctx, 避免工具侧 60s TTL
     // 后再解析漂移到 raw worktree 路径 (Codex #2399 P2)。
-    const memoryScopeKey = (compactionMemoryEnabled || makerMemoryPromptEnabled)
+    const memoryScopeKey = makerMemoryPromptEnabled
       ? (opts.makerMemoryScopeKey ?? (await resolveMemoryScopeKey(opts.workingDir, opts.remoteHostId)))
       : (opts.makerMemoryScopeKey ?? opts.workingDir);
     const remote = Boolean(opts.remoteHostId);
@@ -3847,51 +3808,18 @@ export class PiAgent extends BaseAgent {
       { mcpServerCount: registeredMcpServerNames.size },
     );
 
-    // 压缩即记忆:makerMemory 开启时,把 pi 压缩上下文时丢弃内容的摘要沉淀成 `digest`
-    // 记忆(进 FTS 可 memory_search 检索,但排除出 MEMORY.md / system prompt,不污染
-    // curated 记忆)。gate 与 CC 同口径;best-effort,失败只 warn,绝不阻断会话。
-    // memoryScopeKey / compactionMemoryEnabled 已在 MCP 注册前解析并冻进 ctx。
+    // memoryScopeKey 已在 MCP 注册前解析并冻进 ctx。
     let makerMemoryIndex = '';
     if (makerMemoryPromptEnabled) {
       try {
         makerMemoryIndex = opts.makerMemoryIndexSnapshot
-          ?? await (await this.deps.makerMemory!.getStore(memoryScopeKey)).getIndex();
+          ?? await this.deps.makerMemory!.getPromptIndex(memoryScopeKey);
       } catch (err) {
         this.deps.logger.warn('pi maker memory load failed at session start (skipping injection)', {
           message: err instanceof Error ? err.message : String(err),
         });
       }
     }
-    const digestSlugBase = slugifyForMemory(opts.sessionId ?? `pi-${process.pid}`, 24);
-    let digestSeq = 0;
-    const writeCompactionDigest = async (summary: string, reason: string): Promise<void> => {
-      const manager = this.deps.makerMemory;
-      if (!compactionMemoryEnabled || !manager) return;
-      const body = truncateToByteBudget(summary, PI_DIGEST_MAX_BODY_BYTES);
-      const seq = ++digestSeq;
-      // slug 唯一:sessionId 片段 + 递增序号;resume/跨会话用 Date.now 防撞名(create 模式撞名会抛)。
-      const slug = slugifyForMemory(`digest-${digestSlugBase}-${Date.now()}-${seq}`, 64);
-      try {
-        await manager.write(memoryScopeKey, {
-          type: 'digest',
-          name: slug,
-          // reason 收敛(去换行 + 截断):防某版本 pi 给出长 reason 撑爆 maxTitleLen(100)被吞。
-          title: `PI compaction digest (${oneLineDescription(reason, 40)})`,
-          description: oneLineDescription(summary, 180),
-          body,
-          mode: 'create',
-        });
-        this.deps.logger.debug('pi compaction digest saved to memory', {
-          slug,
-          reason,
-        });
-      } catch (err) {
-        this.deps.logger.warn('pi compaction digest write failed (non-fatal)', {
-          message: err instanceof Error ? err.message : String(err),
-        });
-      }
-    };
-
     // 追加而非替换:pi 默认 prompt(工具用法/工程约定)原样保留,只追加 host 产品段
     // 与用户段。前缀稳定(默认 prompt 静态),易变内容禁止进入(缓存规则 3.1)。
     // 设备托管(含受邀者)用任务所在电脑给的花名册：插件工具经隧道在那台，本机装的插件不进这个任务。
@@ -6068,15 +5996,6 @@ export class PiAgent extends BaseAgent {
               },
             }));
             return;
-          }
-          // 压缩即记忆:compaction_end 带摘要正文时沉淀 digest(auto/manual 都触发,pi
-          // 文档:两种压缩都发此事件)。fire-and-forget,不阻塞事件流。
-          if (event.type === 'compaction_end' && compactionMemoryEnabled) {
-            const summary = (event.result as { summary?: unknown } | null)?.summary;
-            if (typeof summary === 'string' && summary.trim().length > 0) {
-              const reason = typeof event.reason === 'string' ? event.reason : 'auto';
-              void writeCompactionDigest(summary.trim(), reason);
-            }
           }
           // Pi 的真实 turn 终态是 agent_settled；auto-retry 耗尽则先发 terminal error。
           // 两条路径都必须立即清本轮 host policy，避免它泄漏到后续 Desktop turn。

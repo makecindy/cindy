@@ -7198,7 +7198,9 @@ const MessageItem = memo(function MessageItem({
             failedSamplingAttempt={message.failedSamplingAttempt}
             ghostReplyPending={message.ghostReplyPending}
             simplifiedBotConversation={simplifiedBotConversation}
-            botLearning={message.botLearning}
+            // 保存回执：伙伴对话里指向伙伴设置，普通任务里指向 Cindy 记忆。伙伴的 Session 被当作
+            // 普通任务打开时不显示——那里的回执属于伙伴，不能指向 Cindy 记忆。
+            botLearning={simplifiedBotConversation || sessionSource !== 'bot' ? message.botLearning : undefined}
             botStarterOptions={message.botStarterOptions}
             starterOptionsLocked={starterOptionsLocked}
             botTaskResults={message.turnCompleted === true ? message.botTaskResults : undefined}

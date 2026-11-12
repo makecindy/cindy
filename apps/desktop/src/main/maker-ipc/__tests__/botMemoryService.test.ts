@@ -20,6 +20,7 @@ import {
 import { BOT_MEMORY_CHANGED } from '../../../shared/botMemory';
 import { importFailureCode } from '../../bot-import/types.js';
 import { botMemoryDescriptionFromBody, createBotMemoryService } from '../botMemoryService';
+import { createMakerMemoryEntriesService } from '../makerMemoryEntriesService';
 
 let dir = '';
 let storage: MemoryStorage;
@@ -220,6 +221,137 @@ describe('bot memory service', () => {
     await service.delete({ botId: 'bot-1', filename: current.filename, expectedUpdatedAt: current.updatedAt });
     flushTimers();
     expect(requestRefresh).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 测试价值(Cindy 记忆「查看记忆」页, docs/product-rules/cindy-memory.md §4)
+ * - 生产入口与可观察结果: `maker:memory-entries:*` 的 handler 业务体
+ *   (createMakerMemoryEntriesService): 范围列表的显示字段、读改删落盘、错误码。
+ * - 规则依据: renderer 带回的 scopeKey 必须在 listScopes() 里, 否则不打开存储; 总开关关闭时
+ *   已存的记忆仍可看和删(skipDisabledCheck); 保存 / 删除前比对 updatedAt。
+ * - 现有覆盖缺口: 上面的用例只经伙伴入口(botId), 不经范围校验与 Cindy 记忆的开关豁免。
+ * - 最小失败输入: 不在列表里的路径; 打开之后被任务改过的那条记忆。
+ * - tier: unit(真实 MemoryStorage 落在 mkdtemp 目录, 与本文件其余用例同一 fixture)。
+ */
+describe('Cindy memory entries service', () => {
+  const PROJECT = path.join(os.tmpdir(), 'cindy-memory-project');
+  const FILE = 'feedback_verify-before-claiming.md';
+
+  function setupEntries(options: { owner?: () => void; taskScopeKey?: string | null } = {}) {
+    const store = {
+      list: () => storage.list(),
+      read: (filename: string) => storage.read(filename),
+      update: (...args: Parameters<MemoryStorage['update']>) => storage.update(...args),
+      delete: (...args: Parameters<MemoryStorage['delete']>) => storage.delete(...args),
+      search: vi.fn(async () => hits),
+    } as unknown as MakerMemoryStore;
+    const getStore = vi.fn<(scopeKey: string, opts?: { skipDisabledCheck?: boolean }) => Promise<MakerMemoryStore>>(
+      async () => store,
+    );
+    const listScopes = vi.fn(async () => [
+      { scopeKey: 'user:account', kind: 'user' as const, count: 0 },
+      { scopeKey: PROJECT, kind: 'project' as const, count: 1 },
+      { scopeKey: 'ssh:build%20box:/srv/app', kind: 'project' as const, count: 2 },
+    ]);
+    const service = createMakerMemoryEntriesService({
+      getManager: () => ({ listScopes, getStore }),
+      resolveTaskScopeKey: async () => options.taskScopeKey ?? null,
+      captureOwner: () => ({ assertCurrent: options.owner ?? (() => {}) }),
+    });
+    return { service, getStore };
+  }
+
+  it('lists the account scope first, then projects with a folder name, path and SSH host', async () => {
+    expect(await setupEntries().service.scopes()).toEqual({
+      scopes: [
+        { scopeKey: 'user:account', kind: 'user', count: 0 },
+        { scopeKey: PROJECT, kind: 'project', count: 1, name: 'cindy-memory-project', path: PROJECT },
+        // 远程路径是稳定的 POSIX 形态(SSH 范围键的一部分), 不跟随本机分隔符。
+        { scopeKey: 'ssh:build%20box:/srv/app', kind: 'project', count: 2, name: 'app', path: '/srv/app', host: 'build box' },
+      ],
+      taskScopeKey: null,
+    });
+  });
+
+  it('points a task at its project only when that project is one of the listed scopes', async () => {
+    // 保存回执只带「写进了项目记忆」, 页面带回任务的工作目录; 解析结果只用来在列表里挑一项。
+    const task = { workingDir: path.join(PROJECT, 'packages', 'app') };
+    expect((await setupEntries({ taskScopeKey: PROJECT }).service.scopes(task)).taskScopeKey).toBe(PROJECT);
+    const unlisted = path.join(os.tmpdir(), 'no-memories-yet');
+    expect((await setupEntries({ taskScopeKey: unlisted }).service.scopes(task)).taskScopeKey).toBeNull();
+    await expect(setupEntries().service.scopes({ workingDir: 'relative/dir' })).rejects.toThrow('[INVALID_PARAMS]');
+  });
+
+  it('reads, edits and deletes a memory of a listed scope even while memory is switched off', async () => {
+    const { service, getStore } = setupEntries();
+    expect((await service.list(PROJECT)).map((entry) => entry.filename)).toEqual([FILE]);
+    const opened = await service.read(PROJECT, FILE);
+    const saved = await service.update({
+      scopeKey: PROJECT,
+      filename: FILE,
+      title: '先核实再说',
+      body: '区分已实现与已验证。其余照旧。',
+      expectedUpdatedAt: opened.updatedAt,
+    });
+    expect(saved).toMatchObject({ title: '先核实再说', body: '区分已实现与已验证。其余照旧。' });
+    expect((await storage.read(FILE)).frontmatter.description).toBe('区分已实现与已验证。');
+    await service.delete({ scopeKey: PROJECT, filename: FILE, expectedUpdatedAt: saved.updatedAt });
+    await expect(storage.read(FILE)).rejects.toThrow();
+    // 每次都按「清理路径」打开: 总开关关闭也不拒绝。
+    expect(getStore.mock.calls.every(([key, opts]) => key === PROJECT && opts?.skipDisabledCheck === true)).toBe(true);
+  });
+
+  it('never opens a store for a scope key that is not listed', async () => {
+    const { service, getStore } = setupEntries();
+    const stray = path.join(os.tmpdir(), 'somewhere-else');
+    const version = (await storage.read(FILE)).frontmatter.updatedAt;
+    await expect(service.list(stray)).rejects.toThrow('[NOT_FOUND]');
+    await expect(service.read(stray, FILE)).rejects.toThrow('[NOT_FOUND]');
+    await expect(
+      service.update({ scopeKey: stray, filename: FILE, title: 't', body: 'b', expectedUpdatedAt: version }),
+    ).rejects.toThrow('[NOT_FOUND]');
+    await expect(
+      service.delete({ scopeKey: stray, filename: FILE, expectedUpdatedAt: version }),
+    ).rejects.toThrow('[NOT_FOUND]');
+    await expect(service.list(undefined)).rejects.toThrow('[INVALID_PARAMS]');
+    expect(getStore).not.toHaveBeenCalled();
+    expect((await storage.read(FILE)).frontmatter.title).toBe('说结论前核实');
+  });
+
+  it('refuses to overwrite or delete a memory a task changed after it was opened', async () => {
+    const { service } = setupEntries();
+    const opened = await service.read(PROJECT, FILE);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await storage.write({
+      type: 'feedback',
+      name: 'verify-before-claiming',
+      title: '任务改过',
+      description: '任务改过',
+      body: '任务改过的正文',
+      mode: 'update',
+    });
+    const conflict = `[PRECONDITION_FAILED] ${BOT_MEMORY_CHANGED}`;
+    await expect(
+      service.update({ scopeKey: PROJECT, filename: FILE, title: 'mine', body: 'mine', expectedUpdatedAt: opened.updatedAt }),
+    ).rejects.toThrow(conflict);
+    await expect(
+      service.delete({ scopeKey: PROJECT, filename: FILE, expectedUpdatedAt: opened.updatedAt }),
+    ).rejects.toThrow(conflict);
+    expect((await storage.read(FILE)).body).toBe('任务改过的正文');
+  });
+
+  it('does not open a store or hand back memories once the account has changed', async () => {
+    let switched = false;
+    const { service, getStore } = setupEntries({
+      owner: () => {
+        if (switched) throw new Error('account changed');
+      },
+    });
+    switched = true;
+    await expect(service.list(PROJECT)).rejects.toThrow('account changed');
+    await expect(service.scopes()).rejects.toThrow('account changed');
+    expect(getStore).not.toHaveBeenCalled();
   });
 });
 

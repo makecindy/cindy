@@ -5210,59 +5210,66 @@
     },
     "memory": {
       "title": "Memory",
-      "description": "Powers workspace-scoped memory. After changing settings you usually need to start a new agent session for it to take effect. If memory misbehaves, click Reset or turn it off.",
+      "description": "Lets agents remember things about you and your projects across sessions. Memories are stored only on this computer. Switch changes take effect on the next agent session.",
+      "entries": {
+        "open": "View Memories",
+        "title": "Saved Memories",
+        "description": "Memories under “About you” apply in every project. A project’s memories apply only in that repository or folder. Edits and deletions take effect on the next agent session.",
+        "disabledNotice": "Cindy memory is off, so memories aren't read or saved. You can still view, edit, and delete saved memories.",
+        "scope": "Choose which memories to view",
+        "userScope": "About you",
+        "userScopeNote": "Applies in every project",
+        "deleteConfirm": "Cindy will no longer refer to “{{title}}”.",
+        "changed": "Cindy just updated this memory"
+      },
       "maker": {
         "label": "Cindy",
-        "description": "Memory is managed by the agent entry, not by each model. Claude Code and Codex sessions can share memory within the same working directory.",
+        "description": "Shared by Claude Code, Codex and Pi. One memory about you, plus one for each project.",
         "toggleAria": "Toggle Cindy memory",
-        "resetAria": "Reset Cindy memories",
+        "resetAria": "Clear Cindy memories",
         "resetConfirm": {
-          "title": "Reset Cindy memories?",
-          "description": "This will permanently delete all Cindy memories across every project (stored under user-data, not in your repos). This action cannot be undone.",
-          "confirm": "Reset",
+          "title": "Clear Cindy Memories?",
+          "description": "This permanently deletes the memories about you and every project’s memories. They can’t be recovered. Teammates’ memories and the files in your projects aren’t affected.",
+          "confirm": "Clear Memories",
           "cancel": "Cancel"
         },
         "toast": {
-          "enabled": "Cindy memory enabled",
-          "disabled": "Cindy memory disabled",
-          "deferredSuffix": " — running Codex sessions will apply this after their current task finishes",
-          "toggleFailed": "Failed to toggle Cindy memory",
-          "resetSuccess_one": "Cindy memories reset — removed {{count}} workdir",
-          "resetSuccess_other": "Cindy memories reset — removed {{count}} workdirs",
-          "resetFailed": "Failed to reset Cindy memories"
+          "enabled": "Cindy memory turned on",
+          "disabled": "Cindy memory turned off",
+          "deferredSuffix": " — running Codex sessions will apply this after their current turn finishes",
+          "toggleFailed": "Couldn’t change the Cindy memory switch",
+          "resetSuccess_one": "Cindy memories cleared",
+          "resetSuccess_other": "Cindy memories cleared",
+          "resetFailed": "Couldn’t clear Cindy memories"
         }
       },
       "agents": {
         "claude-code": {
           "label": "Claude Code",
-          "description": "All models used through the Claude Code entry share the same memory."
+          "description": "When Cindy memory is off, Claude Code uses its own built-in memory."
         },
         "codex": {
           "label": "Codex",
-          "description": "All models used through the Codex entry share the same memory."
-        },
-        "pi": {
-          "label": "Pi",
-          "description": "Saves long-session compression summaries to Cindy memory for future Pi sessions."
+          "description": "When Cindy memory is off, Codex uses its own built-in memory."
         }
       },
       "agent": {
         "toggleAria": "Toggle {{label}} memory",
-        "resetAria": "Reset {{label}} memories",
+        "resetAria": "Clear {{label}} memories",
         "toast": {
-          "enabled": "{{label}} memory enabled",
-          "disabled": "{{label}} memory disabled",
+          "enabled": "{{label}} memory turned on",
+          "disabled": "{{label}} memory turned off",
           "takesEffectSuffix": " — takes effect on the next agent session",
-          "toggleFailed": "Failed to update memory setting",
-          "resetSuccess_one": "{{label}} memories reset — removed {{count}} entry",
-          "resetSuccess_other": "{{label}} memories reset — removed {{count}} entries",
-          "resetSuccessGeneric": "{{label}} memories reset",
-          "resetFailed": "Failed to reset memory"
+          "toggleFailed": "Couldn’t change the memory switch",
+          "resetSuccess_one": "{{label}} memories cleared — {{count}} entry removed",
+          "resetSuccess_other": "{{label}} memories cleared — {{count}} entries removed",
+          "resetSuccessGeneric": "{{label}} memories cleared",
+          "resetFailed": "Couldn’t clear memories"
         },
         "resetConfirm": {
-          "title": "Reset {{label}} memories?",
-          "description": "This will permanently delete all memories {{label}} has accumulated across every project. This action cannot be undone.",
-          "confirm": "Reset",
+          "title": "Clear {{label}} Memories?",
+          "description": "This permanently deletes all of {{label}}’s own memories. They can’t be recovered. Memories it saved while you used {{label}} outside Cindy may be deleted too.",
+          "confirm": "Clear Memories",
           "cancel": "Cancel"
         }
       }

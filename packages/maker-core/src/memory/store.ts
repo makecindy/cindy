@@ -17,6 +17,9 @@
  *  storage 按目录串行变更，界面条件更新/删除与伙伴工具写入共享同一互斥。
  */
 
+import { promises as fs } from 'node:fs';
+import * as path from 'node:path';
+
 import type Database from 'better-sqlite3';
 
 import { MemoryFts } from './fts.js';
@@ -78,9 +81,12 @@ export class MakerMemoryStore {
   private readonly fts: MemoryFts;
   private readonly logger: Logger;
   private initialized = false;
+  /** 生效配置 (默认值 + 宿主覆盖)。 */
+  readonly config: MemoryConfig;
 
   constructor(private readonly deps: MakerMemoryStoreDeps) {
     const config = { ...DEFAULT_MEMORY_CONFIG, ...(deps.config ?? {}) };
+    this.config = config;
     this.storage = new MemoryStorage(
       deps.storageDir,
       config,
@@ -275,7 +281,7 @@ export class MakerMemoryStore {
     // tryReadRaw 与 entry check 之间有 await 窗口 — 写 target 前再复核一次
     // (review #2388 Codex 7th P1), 边界不得写入旧 owner 文件。
     this.assertScopeOk();
-    const writeRes = await this.storage.write(writeOpts);
+    const writeRes = await this.storage.write(writeOpts, sourcesToDelete);
 
     // 删源 — 每次删除前复核 scope (review #2388 Codex 7th P1): target write 与
     // 删源之间有 await, 边界若在窗口内发生, 裸 storage.delete 仍会变更旧 owner

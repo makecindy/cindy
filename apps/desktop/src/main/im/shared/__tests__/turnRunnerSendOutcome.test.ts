@@ -30,6 +30,8 @@ import { createTelegramGuestTurnPermissionPolicy } from '../../telegram/permissi
 import { createDingTalkTurnPermissionPolicy } from '../../dingtalk/permissionPolicy';
 import { createFeishuGroupTurnPermissionPolicy } from '../../feishu/permissionPolicy';
 import { createWechatTurnPermissionPolicy } from '../../wechat/permissionPolicy';
+import { withGuestMemoryConfirmation } from '../channelToolPolicy';
+import { forgetNotedChannelSessionsForTest, noteSessionStartAccountIndex } from '../channelSessionLanes';
 import { enqueueAskCardPatch } from '../askCardPatchQueue';
 import { createSerializedConnectionLifecycle } from '../../connectionLifecycle';
 
@@ -1701,7 +1703,11 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         } else {
           expect(result.kind).toBe('accepted');
           expect(runtime.mode).toBe('auto');
-          expect(h.send.mock.calls[0]?.[1]?.turnPermissionPolicy).toBe(policy);
+          // 访客轮次、渠道自有任务: 渠道给的策略保留, 另加「记忆调用要主人确认」
+          // (cindy-memory.md §7), 所以不再是同一个对象。
+          const sentPolicy = h.send.mock.calls[0]?.[1]?.turnPermissionPolicy;
+          expect(sentPolicy).toEqual({ ...policy, forceConfirmToolCall: expect.any(Function) });
+          expect(sentPolicy?.forceConfirmToolCall('Read', {})).toBe(true);
           expect(h.releaseTurnLease).not.toHaveBeenCalled();
           if (ending === 'user-change') runtime = { mode: 'ask', generation: runtime.generation + 1 };
           if (ending === 'dispose') localRunner.disposeAllSessions();
@@ -1718,12 +1724,14 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
   );
 
   it.each([
-    ['telegram', () => createTelegramGuestTurnPermissionPolicy('guest', false)],
-    ['dingtalk', () => createDingTalkTurnPermissionPolicy('guest', false)],
-    ['dingtalk-owner', () => createDingTalkTurnPermissionPolicy('owner', true)],
-    ['feishu', () => createFeishuGroupTurnPermissionPolicy('guest', false)],
-    ['wechat', () => createWechatTurnPermissionPolicy('unknown')],
-  ] as const)('retains the %s policy and keeps the real Session occupied through Auto restoration', async (_channel, makePolicy) => {
+    // 第三列: 这一轮里读主人的记忆要不要主人确认 (cindy-memory.md §7)。访客要; 主人自己、
+    // 个人微信 (私聊、身份恒为 unknown) 不要。
+    ['telegram', () => createTelegramGuestTurnPermissionPolicy('guest', false), true],
+    ['dingtalk', () => createDingTalkTurnPermissionPolicy('guest', false), true],
+    ['dingtalk-owner', () => createDingTalkTurnPermissionPolicy('owner', true), false],
+    ['feishu', () => createFeishuGroupTurnPermissionPolicy('guest', false), true],
+    ['wechat', () => createWechatTurnPermissionPolicy('unknown'), false],
+  ] as const)('retains the %s policy and keeps the real Session occupied through Auto restoration', async (_channel, makePolicy, memoryNeedsOwner) => {
     const terminal = deferred<void>();
     const ended = deferred<void>();
     const restoreStarted = deferred<void>();
@@ -1774,7 +1782,14 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       });
       expect(result.kind).toBe('accepted');
       expect(handle.send).toHaveBeenCalledOnce();
-      expect(handle.validateSendOptions).toHaveBeenCalledWith(expect.objectContaining({ turnPermissionPolicy: policy }));
+      // 访客轮次的策略多带一条记忆规则, 其余字段是渠道给的那一份。
+      expect(handle.validateSendOptions).toHaveBeenCalledWith(
+        expect.objectContaining({ turnPermissionPolicy: withGuestMemoryConfirmation(policy) }),
+      );
+      const sentPolicy = vi.mocked(handle.validateSendOptions!).mock.calls[0]![0]!.turnPermissionPolicy!;
+      expect(sentPolicy.forceConfirmToolCall('mcp__cindy_memory__call_tool', { name: 'memory_read', args: {} }))
+        .toBe(memoryNeedsOwner);
+      if (!memoryNeedsOwner) expect(sentPolicy).toBe(policy);
       expect(mode).toBe('auto');
       terminal.resolve();
       await restoreStarted.promise;
@@ -1936,6 +1951,75 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect.objectContaining({ title: expect.any(String) }),
       { deliverToOwnerDm: true },
     );
+  });
+
+  // 评审 (Codex P1): 对话在任务启动之后才变成别人也能说话的 (把运行中的桌面任务接管到群里)。
+  // 已经写进提示词的账号级记忆索引逐轮确认管不到, 所以派发前先重启任务 (cindy-memory.md §7)。
+  it.each([
+    { label: 'a task that started with the account memory index', startedWithIndex: true, restarted: true },
+    { label: 'a task that started without it', startedWithIndex: false, restarted: false },
+  ])('restarts $label before a shared-conversation turn is sent', async ({ startedWithIndex, restarted }) => {
+    const order: string[] = [];
+    const oldSession = createSessionHarness(async () => {
+      order.push('send-old');
+      return { accepted: true };
+    });
+    const rebuilt = createSessionHarness(async () => {
+      order.push('send-rebuilt');
+      return { accepted: true };
+    });
+    let live: Session | undefined = oldSession.session;
+    const maker = {
+      createSession: vi.fn(async () => {
+        if (live) return live;
+        order.push('recreate');
+        live = rebuilt.session;
+        return rebuilt.session;
+      }),
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
+      closeSessionIfCurrent: vi.fn(async (session: Session, reason: string) => {
+        order.push(`close:${reason}`);
+        live = undefined;
+        emitMakerEvent({ type: 'session:closed', sessionId: 'feishu-session', session, reason: 'runtime-refresh' });
+        return 'closed' as const;
+      }),
+      getSession: vi.fn(() => live),
+      on: vi.fn((listener: (event: MakerEvent) => void) => {
+        makerEventListeners.push(listener);
+        return () => {
+          makerEventListeners = makerEventListeners.filter((candidate) => candidate !== listener);
+        };
+      }),
+    };
+    mocks.getMaker.mockReturnValue(maker);
+    forgetNotedChannelSessionsForTest();
+    // 任务启动钩子在启动时登记的事实: 这个任务的提示词里有没有账号级索引。
+    noteSessionStartAccountIndex('feishu-session', startedWithIndex);
+    const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+      acquirePendingAgentSwitch: vi.fn(async () => vi.fn()),
+    });
+
+    try {
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: `msg-shared-${startedWithIndex}`,
+        text: 'what do you know about the owner?',
+        attachments: [],
+        channelNoteSource: { chatKind: 'group' },
+      });
+
+      if (restarted) {
+        expect(maker.closeSessionIfCurrent).toHaveBeenCalledWith(oldSession.session, 'runtime-refresh');
+        expect(order).toEqual(['close:runtime-refresh', 'recreate', 'send-rebuilt']);
+      } else {
+        expect(maker.closeSessionIfCurrent).not.toHaveBeenCalled();
+        expect(order).toEqual(['send-old']);
+      }
+    } finally {
+      localRunner.disposeAllSessions();
+      forgetNotedChannelSessionsForTest();
+    }
   });
 
   it('does not suppress a requested close during no-op switch acquisition', async () => {

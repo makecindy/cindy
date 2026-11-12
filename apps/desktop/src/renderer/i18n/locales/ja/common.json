@@ -5167,59 +5167,66 @@
     },
     "memory": {
       "title": "メモリ",
-      "description": "ワークスペース単位のメモリを実現します。設定を変更したら、新しい Agent セッションを開始してから反映されます。メモリに問題があれば Reset するか OFF にしてください。",
+      "description": "Agent がセッションをまたいで、あなたやプロジェクトについてのことを覚えておけるようにします。メモリはこのパソコンにのみ保存されます。スイッチの変更は次回 Agent セッションから反映されます。",
+      "entries": {
+        "open": "メモリを表示",
+        "title": "保存済みのメモリ",
+        "description": "「あなたについて」のメモリはすべてのプロジェクトで使われます。プロジェクトのメモリは、そのリポジトリまたはフォルダでのみ使われます。編集と削除は次回 Agent セッションから反映されます。",
+        "disabledNotice": "Cindy メモリはオフのため、メモリの読み取りも保存もしません。保存済みのメモリは引き続き表示・編集・削除できます。",
+        "scope": "表示するメモリを選択",
+        "userScope": "あなたについて",
+        "userScopeNote": "すべてのプロジェクトで使われます",
+        "deleteConfirm": "Cindy は今後「{{title}}」を参照しません。",
+        "changed": "Cindy がこのメモリを更新しました"
+      },
       "maker": {
         "label": "Cindy",
-        "description": "メモリはモデルごとではなく Agent の入口ごとに管理されます。同じ作業ディレクトリでは、Claude Code と Codex の入口から開始した Session がメモリを共有します",
+        "description": "Claude Code、Codex、Pi で共有します。あなたについてのメモリが 1 つ、プロジェクトごとに 1 つずつあります",
         "toggleAria": "Cindy メモリを切り替え",
-        "resetAria": "Cindy メモリをリセット",
+        "resetAria": "Cindy メモリを消去",
         "resetConfirm": {
-          "title": "Cindy メモリをリセットしますか？",
-          "description": "すべてのプロジェクトの Cindy メモリを完全に削除します（user-data 配下に保存、リポジトリ内ではありません）。この操作は取り消せません。",
-          "confirm": "リセット",
+          "title": "Cindy メモリを消去しますか？",
+          "description": "あなたに関するメモリと、すべてのプロジェクトのメモリを完全に削除します。元に戻すことはできません。パートナーのメモリとプロジェクト内のファイルには影響しません。",
+          "confirm": "メモリを消去",
           "cancel": "キャンセル"
         },
         "toast": {
-          "enabled": "Cindy メモリを有効化しました",
-          "disabled": "Cindy メモリを無効化しました",
-          "deferredSuffix": " — 実行中の Codex セッションには現在のタスク終了後に適用されます",
-          "toggleFailed": "Cindy メモリの切り替えに失敗しました",
-          "resetSuccess_one": "Cindy メモリをリセットしました — {{count}} 件の作業ディレクトリを削除",
-          "resetSuccess_other": "Cindy メモリをリセットしました — {{count}} 件の作業ディレクトリを削除",
-          "resetFailed": "Cindy メモリのリセットに失敗しました"
+          "enabled": "Cindy メモリをオンにしました",
+          "disabled": "Cindy メモリをオフにしました",
+          "deferredSuffix": " — 実行中の Codex セッションには現在のターンの終了後に反映されます",
+          "toggleFailed": "Cindy メモリのスイッチを変更できませんでした",
+          "resetSuccess_one": "Cindy メモリを消去しました",
+          "resetSuccess_other": "Cindy メモリを消去しました",
+          "resetFailed": "Cindy メモリを消去できませんでした"
         }
       },
       "agents": {
         "claude-code": {
           "label": "Claude Code",
-          "description": "Claude Code の入口から使用するすべてのモデルで、同じメモリを共有します"
+          "description": "Cindy メモリがオフのとき、Claude Code は自身の組み込みメモリを使います"
         },
         "codex": {
           "label": "Codex",
-          "description": "Codex の入口から使用するすべてのモデルで、同じメモリを共有します"
-        },
-        "pi": {
-          "label": "Pi",
-          "description": "長いセッションの圧縮要約を Cindy メモリに保存し、今後の Pi セッションで利用します"
+          "description": "Cindy メモリがオフのとき、Codex は自身の組み込みメモリを使います"
         }
       },
       "agent": {
         "toggleAria": "{{label}} メモリを切り替え",
-        "resetAria": "{{label}} メモリをリセット",
+        "resetAria": "{{label}} メモリを消去",
         "toast": {
-          "enabled": "{{label}} メモリを有効化しました",
-          "disabled": "{{label}} メモリを無効化しました",
+          "enabled": "{{label}} メモリをオンにしました",
+          "disabled": "{{label}} メモリをオフにしました",
           "takesEffectSuffix": " — 次回 Agent セッションから反映されます",
-          "toggleFailed": "メモリ設定の更新に失敗しました",
-          "resetSuccess_one": "{{label}} メモリをリセットしました — {{count}} 件削除",
-          "resetSuccess_other": "{{label}} メモリをリセットしました — {{count}} 件削除",
-          "resetSuccessGeneric": "{{label}} メモリをリセットしました",
-          "resetFailed": "メモリのリセットに失敗しました"
+          "toggleFailed": "メモリのスイッチを変更できませんでした",
+          "resetSuccess_one": "{{label}} メモリを消去しました — {{count}} 件削除",
+          "resetSuccess_other": "{{label}} メモリを消去しました — {{count}} 件削除",
+          "resetSuccessGeneric": "{{label}} メモリを消去しました",
+          "resetFailed": "メモリを消去できませんでした"
         },
         "resetConfirm": {
-          "title": "{{label}} メモリをリセットしますか？",
-          "description": "すべてのプロジェクトで {{label}} が蓄積したメモリを完全に削除します。この操作は取り消せません。",
-          "confirm": "リセット",
+          "title": "{{label}} メモリを消去しますか？",
+          "description": "{{label}} 自身のメモリをすべて完全に削除します。元に戻すことはできません。Cindy の外で {{label}} を使ったときに保存されたメモリも削除される場合があります。",
+          "confirm": "メモリを消去",
           "cancel": "キャンセル"
         }
       }

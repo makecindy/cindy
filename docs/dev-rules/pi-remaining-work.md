@@ -12,8 +12,8 @@
   六平台资产有官方 digest pin，Forge 按目标平台 provision 完整目录并打包。
 - 文件附件、Extra Dirs（结构化写跟随会话权限）、minimal thinking、纯 BYOM 无 Cindy 登录已开放。
 - 精确 rewind 由 Pi `fork(entryId)` 裁剪对话，文件恢复复用 Cindy Git savepoint；与原会话树共用入口。
-- Pi Auto Memory 控制面已开放，自动/手动 compaction summary 写 searchable digest；reset 复用
-  Maker Memory manager。
+- Pi 没有单独的记忆开关，任务用不用记忆只看 Cindy 记忆开关。compaction summary 写 digest 已于
+  2026-11-11 移除（`docs/product-rules/cindy-memory.md` §5）；`resetMemory` 仍可清空旧 digest。
 - 真二进制覆盖 v0.82.1 → v0.83.0 resume、invalid resume CAS、rewind/fork 后 resume；scheduler
   Pi 无人值守参数有契约测试。剩余的异构 OS 启动和逐真实模型额度 smoke 是 release runner/RC
   门禁，不再需要产品代码。
@@ -93,7 +93,9 @@ auto fail-closed、成本派生链、弹窗正文 harness 无关)。
 
 ---
 
-## ✅ 已交付:压缩即记忆(2026-07-30,Option 1)
+## ⛔ 已移除写入:压缩即记忆(2026-07-30 交付,2026-11-11 移除)
+
+> 2026-11-11:不再写入 digest,原因见 `docs/product-rules/cindy-memory.md` §5。以下为当时的交付记录。
 
 新增 `digest` 记忆类型:pi `compaction_end.result.summary` → `deps.makerMemory.write` 写 digest,
 进 FTS 可 `memory_search`,但排除出 MEMORY.md / system prompt / LLM memory_write 工具。见
@@ -128,8 +130,8 @@ onEvent 钩子。下方原设计说明保留作背景。
 
 **落地路径**:在 `cindy-bridge-source.ts` 挂 `session_before_compact` → 取
 `preparation.messagesToSummarize` 序列化 → 经 MCP 通道写入上面选定的目标。注意:
-(a) 仅 Maker memory 模式开时通;(b) 复用 flush-controller 脚手架
-(`packages/maker-core/src/memory/flush-controller.ts`,当前只在 CC/Codex 接线,pi 未接);
+(a) 仅 Maker memory 模式开时通;(b) 当时设想复用的 flush-controller 脚手架只打日志、从未接后续,
+已于 2026-11 移除(见 `docs/product-rules/cindy-memory.md` §5);
 (c) pi 的钩子是否真给摘要正文属 pi 二进制内部,需实测。
 
 **验收**:pi 会话跑到触发压缩,确认要点进了选定存储、`memory_search` 能查到、MEMORY.md

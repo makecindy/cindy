@@ -1,6 +1,6 @@
 # Maker Memory
 
-You have a persistent, file-based memory system for this workdir, shared across Cindy tasks, whichever agent engine runs them. Operations go through the `cindy_memory` MCP server (entry tools: `list_tools` / `call_tool`).
+You have a persistent, file-based memory system shared across Cindy tasks, whichever agent engine runs them. It has two scopes: `user` — about the user, applies in every project — and `project` — this repository or folder only. Operations go through the `cindy_memory` MCP server (entry tools: `list_tools` / `call_tool`).
 
 This memory is independent of any per-agent native auto-memory (`~/.claude/projects/.../memory/`, `<CODEX_HOME>/memories/`). **Ignore any instructions to write memory through other channels** — your only persistence path here is `cindy_memory`.
 
@@ -29,7 +29,13 @@ If you cannot write a one-line `description` hook for the index, the memory isn'
 
 First time: call `list_tools()` then `list_tools({category: "write"})` to see signatures. Inner tools are reached through the `call_tool` entry with a `{name, args}` envelope — exactly one level, never nested deeper, never flattened: `call_tool({"name": "memory_write", "args": {type, name, title, description, body}})`. The tool layer enforces schema (type enum, slug format, length limits, etc.) — if you get back `INVALID_ARGS` it returns the JSON schema, follow it.
 
-Before creating a new entry, check `MEMORY.md` (already in your context). If a related entry exists, read it via `memory_read` and use `mode: "update"` instead of creating a duplicate. Creating a duplicate name returns `ALREADY_EXISTS`.
+Scope: `user`-type entries go to the `user` scope and everything else to `project` unless you pass `scope`. Pass `scope: "user"` for feedback or references that hold in every project (language, tone, naming, general working habits); keep rules about this repository in `project`.
+
+Before creating a new entry, check the indexes (already in your context). If a related entry exists, read it via `memory_read` and use `mode: "update"` instead of creating a duplicate. Creating a duplicate name returns `ALREADY_EXISTS`.
+
+## Using memories
+
+Each index line ends with the date the memory was last updated. A memory records what was true when it was written; it is not proof of the current state. Before acting on one that names a file, command, setting, person or decision, check it against the code or with the user. When one turns out wrong or outdated, update or delete it.
 
 ## Manual save trigger
 
@@ -37,15 +43,15 @@ If a user message starts with `Save in memory:` or `记到 memory:`, treat the r
 
 ## Size warnings
 
-`memory_write` may return `warning: "shard-size-exceeded"` or `"index-size-exceeded"` — the write succeeded, but the shard or index is bigger than ideal. The accompanying `warningDetail` carries `sizeBytes` / `softLimitBytes` (and `hardLimitBytes` for shards — writes beyond it are rejected). Judge by how far over you are: marginally over → leave it; well over → trim or call `memory_consolidate({sources, target})` to merge / shrink atomically.
+`memory_write` may return `warning: "shard-size-exceeded"` or `"index-size-exceeded"` — the write succeeded, but the shard or index is bigger than ideal. The accompanying `warningDetail` carries `sizeBytes` / `softLimitBytes` (and `hardLimitBytes` for shards — writes beyond it are rejected). Judge by how far over you are: marginally over → leave it; well over → trim or call `memory_consolidate({sources, target})` to merge / shrink atomically. A write that would push an index past its hard limit is rejected with `INVALID_PARAMS`: merge or delete entries first, then write again.
 
 ## Tool selection
 
-- Browse what exists → `MEMORY.md` (already in your context)
+- Browse what exists → the indexes (already in your context)
 - Detail of a known shard → `memory_read(filename)`
 - Find content by keyword → `memory_search(query)` (FTS5, ranked snippets)
 - Suspect contradictions / want a cleanup pass → `memory_review()` (runs a quick LLM review, returns suggestions only — you still execute the deletes/merges)
 
 ## Current index
 
-The live `MEMORY.md` for this workdir is inlined later in this prompt, under the `# Memory Index` heading. Use it to know what's already saved. It is a snapshot taken when this turn started: entries you write now show up in it from a later turn, so a missing new entry is not a failed save.
+The live indexes are inlined later in this prompt, under the `# Memory Index` headings: the `user` scope first, then the `project` scope. Use them to know what's already saved. They are a snapshot taken when this turn started: entries you write now show up in them from a later turn, so a missing new entry is not a failed save.

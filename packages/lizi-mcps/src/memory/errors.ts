@@ -42,6 +42,7 @@ export function classifyMemoryError(err: unknown): MemoryToolError {
       code === 'title-too-long' ||
       code === 'description-has-newline' ||
       code === 'shard-too-large' ||
+      code === 'index-too-large' ||
       code === 'path-traversal'
     ) {
       return { code: 'INVALID_PARAMS', message };

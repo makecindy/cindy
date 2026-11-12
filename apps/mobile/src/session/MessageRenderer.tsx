@@ -4209,9 +4209,10 @@ function MessageBubble({
         <CompanionThreadSummary message={item.message} topics={actions.companionThreads} />
       </View>
       ) : null}
-      {actions.companion && item.message.kind === 'assistant' && item.message.body.trim() ? (
+      {/* 保存回执：伙伴对话里点开伙伴设置；普通任务的记忆页只在电脑上，这里只显示一行文字。 */}
+      {item.message.kind === 'assistant' && item.message.body.trim() ? (
         <CompanionLearningFooter receipts={item.message.source.agentMeta?.botLearning}
-          onOpenSettings={actions.onOpenCompanionSettings} />
+          onOpenSettings={actions.companion ? actions.onOpenCompanionSettings : undefined} />
       ) : null}
       {actions.companion && item.message.kind === 'assistant' && item.message.turnCompleted === true
         && item.message.body.trim() ? readBotTaskResults(item.message.source.agentMeta?.botTaskResults).map(

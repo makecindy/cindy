@@ -32,6 +32,7 @@ import { SettingsSidebarNav } from './SettingsSidebarNav';
 import { isLegacyAppearanceDeepLink, resolveSettingsSearchEntry } from './settingsSearchCatalog';
 import { SettingsCard, SettingsPageScope, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { SettingsSearchNavigationContext } from './SettingsSearchNavigation';
+import { MEMORY_ENTRIES_PANEL, MEMORY_ENTRIES_PARAMS, readMemoryEntriesTask } from './memoryEntriesRoute';
 import type { SettingsSearchContext } from './settingsSearchTypes';
 import { useSettingsSectionTarget } from './useSettingsSectionTarget';
 import { useSettingsEscape } from './useSettingsEscape';
@@ -87,6 +88,7 @@ const WorktreeRecycleCard = lazy(() => import('./WorktreeRecycleCard').then(modu
 const StorageManagementCard = lazy(() => import('./StorageManagementCard').then(module => ({ default: module.StorageManagementCard })));
 const UserPromptSection = lazy(() => import('./UserPromptSection').then(module => ({ default: module.UserPromptSection })));
 const MemorySection = lazy(() => import('./MemorySection').then(module => ({ default: module.MemorySection })));
+const MemoryEntriesPanel = lazy(() => import('./MemoryEntriesPanel').then(module => ({ default: module.MemoryEntriesPanel })));
 const StreamFadeSection = lazy(() => import('./StreamFadeSection').then(module => ({ default: module.StreamFadeSection })));
 const SessionImportSection = lazy(() => import('./SessionImportSection').then(module => ({ default: module.SessionImportSection })));
 const HelpSection = lazy(() => import('./HelpSection').then(module => ({ default: module.HelpSection })));
@@ -194,6 +196,23 @@ function SettingsViewContent() {
     activeTab === 'general' &&
     (rawTab === 'pi-extensions' || searchParams.get('openPanel') === 'pi-extensions');
 
+  // 「查看记忆」子页（Cindy 记忆）：个性化页里的一层，返回 / Esc 先在子页内回退。
+  const memoryPanelOpen =
+    activeTab === 'personalization' && searchParams.get('openPanel') === MEMORY_ENTRIES_PANEL;
+  // 保存回执带来的任务位置：子页据此先选中那个任务的项目记忆。
+  const memoryPanelTask = useMemo(() => readMemoryEntriesTask(searchParams), [searchParams]);
+  const memoryBackRef = useRef<(() => Promise<boolean>) | null>(null);
+  const memoryLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
+  /**
+   * 离开子页前把正在编辑的记忆落盘；保存不了时由用户决定放弃还是留下（留下则不执行 run）。
+   * 子页没开时同步执行，其余出口的行为不变。
+   */
+  const afterMemoryPanelLeave = useCallback((run: () => void) => {
+    const leave = memoryLeaveRef.current;
+    if (!leave) run();
+    else void leave().then((ok) => { if (ok) run(); });
+  }, []);
+
   useEffect(() => {
     if (rawTab !== 'billing' || canAccessBilling) return;
     const next = new URLSearchParams(searchParams);
@@ -226,13 +245,14 @@ function SettingsViewContent() {
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     contentScrollRef.current?.scrollTo({ top: 0 });
-  }, [activeTab, piExtensionsPanelOpen]);
+  }, [activeTab, memoryPanelOpen, piExtensionsPanelOpen]);
 
   const handleSelectTab = useCallback(
-    (tab: SettingsTab) => {
-      if (tab === activeTab && !piExtensionsPanelOpen && !isTabPending) return;
+    (tab: SettingsTab) => afterMemoryPanelLeave(() => {
+      if (tab === activeTab && !piExtensionsPanelOpen && !memoryPanelOpen && !isTabPending) return;
       const next = new URLSearchParams(searchParams);
       next.delete('openPanel');
+      for (const key of MEMORY_ENTRIES_PARAMS) next.delete(key);
       next.delete('ghost');
       next.delete('panel');
       next.delete('imGroup');
@@ -248,23 +268,23 @@ function SettingsViewContent() {
         next.set('tab', tab);
       }
       startTransition(() => setSearchParams(next, { replace: true }));
-    },
-    [activeTab, isTabPending, piExtensionsPanelOpen, searchParams, setSearchParams],
+    }),
+    [activeTab, afterMemoryPanelLeave, isTabPending, memoryPanelOpen, piExtensionsPanelOpen, searchParams, setSearchParams],
   );
 
   const handleSelectSearchResult = useCallback(
-    ({ tab, sectionId }: { tab: SettingsTab; sectionId: string }) => {
+    ({ tab, sectionId }: { tab: SettingsTab; sectionId: string }) => afterMemoryPanelLeave(() => {
       setSearchActivation((value) => value + 1);
       const next = new URLSearchParams(searchParams);
-      for (const key of ['openPanel', 'ghost', 'panel', 'imGroup', 'connect', 'wizard', 'intent']) {
+      for (const key of ['openPanel', ...MEMORY_ENTRIES_PARAMS, 'ghost', 'panel', 'imGroup', 'connect', 'wizard', 'intent']) {
         next.delete(key);
       }
       if (tab === 'general') next.delete('tab');
       else next.set('tab', tab);
       next.set('section', sectionId);
       startTransition(() => setSearchParams(next, { replace: true }));
-    },
-    [searchParams, setSearchParams],
+    }),
+    [afterMemoryPanelLeave, searchParams, setSearchParams],
   );
 
   const handleOpenPiExtensions = useCallback(() => {
@@ -281,15 +301,29 @@ function SettingsViewContent() {
     startTransition(() => setSearchParams(next, { replace: true }));
   }, [searchParams, setSearchParams]);
 
+  // 「查看记忆」子页的返回：编辑 → 详情 → 列表 → 个性化，一次退一层。
+  const handleMemoryPanelBack = useCallback(async () => {
+    if (await memoryBackRef.current?.()) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('openPanel');
+    for (const key of MEMORY_ENTRIES_PARAMS) next.delete(key);
+    startTransition(() => setSearchParams(next, { replace: true }));
+  }, [searchParams, setSearchParams]);
+
   // 设置是主窗口里的路由，Esc 与左上角返回按钮走同一出口，不关窗。
-  const exitSettings = useCallback(() => navigate('/'), [navigate]);
+  const exitSettings = useCallback(
+    () => afterMemoryPanelLeave(() => navigate('/')),
+    [afterMemoryPanelLeave, navigate],
+  );
   const settingsRootRef = useRef<HTMLDivElement | null>(null);
 
-  // Esc 逐层返回：PI 扩展子页先回到「通用」，其余退出设置；帮助面板开着时归它。
+  // Esc 逐层返回：PI 扩展子页先回到「通用」、「查看记忆」子页先在页内回退，其余退出设置；
+  // 帮助面板开着时归它。
   const handleSettingsEscape = useCallback(() => {
     if (piExtensionsPanelOpen) handleClosePiExtensions();
+    else if (memoryPanelOpen) void handleMemoryPanelBack();
     else exitSettings();
-  }, [exitSettings, handleClosePiExtensions, piExtensionsPanelOpen]);
+  }, [exitSettings, handleClosePiExtensions, handleMemoryPanelBack, memoryPanelOpen, piExtensionsPanelOpen]);
   useSettingsEscape(settingsRootRef, !helpAssistantOpen, handleSettingsEscape);
 
   useEffect(() => {
@@ -339,7 +373,7 @@ function SettingsViewContent() {
     } : undefined,
   }), [locale, wallpaperMotionAvailable, mode, user?.membershipKind, voiceModelSelection.ready, voiceModelSelection.selection, voiceRefinementEnabled, speakerFilterStatus?.supported, speakerFilterStatus?.enrolled, agentIslandEnabled, agentIslandSupported, agentIslandSoundEnabled, agentIslandLiveActivitySupported, agentIslandLiveActivity]);
   const requestedEntry = resolveSettingsSearchEntry(activeTab, searchParams.get('section'));
-  const searchEntry = piExtensionsPanelOpen || (requestedEntry?.isVisible && !requestedEntry.isVisible(searchContext))
+  const searchEntry = piExtensionsPanelOpen || memoryPanelOpen || (requestedEntry?.isVisible && !requestedEntry.isVisible(searchContext))
     ? null : requestedEntry;
   const searchNavigation = useMemo(() => ({ entry: searchEntry, activation: searchActivation }), [searchEntry, searchActivation]);
   useSettingsSectionTarget(searchEntry?.targetId ?? null, contentScrollRef, searchParams.toString() + ':' + searchActivation, searchEntry?.fallbackTargetId);
@@ -417,7 +451,7 @@ function SettingsViewContent() {
               forces a fresh fallback and React delays revealing even cached-fast loads. */}
           <Suspense fallback={<div role="status" className="py-6 text-sm text-[var(--text-secondary)]">{t('ccAgent.common.loading')}</div>}>
           <div
-            key={`${activeTab}:${piExtensionsPanelOpen ? 'pi-extensions' : 'root'}`}
+            key={`${activeTab}:${piExtensionsPanelOpen ? 'pi-extensions' : memoryPanelOpen ? 'memory' : 'root'}`}
             className={cn(
               'mx-auto w-full min-w-0 max-w-[920px] px-1 animate-fade-in',
               activeTab === 'import' || activeTab === 'ghosts' || activeTab === 'providers'
@@ -617,6 +651,14 @@ function SettingsViewContent() {
                 id={personalizationSettings.personalization.targetId}
                 aria-labelledby="settings-tab-personalization"
               >
+                {memoryPanelOpen ? (
+                  <MemoryEntriesPanel
+                    initialTask={memoryPanelTask}
+                    onBack={() => void handleMemoryPanelBack()}
+                    backRef={memoryBackRef}
+                    leaveRef={memoryLeaveRef}
+                  />
+                ) : (
                 <SettingsSection variant="page" title={t('settings.personalization.title')}>
                   <section id={personalizationSettings.userPrompt.targetId} aria-label={t(personalizationSettings.userPrompt.titleKey)}>
                     <UserPromptSection />
@@ -650,6 +692,7 @@ function SettingsViewContent() {
                     <TipsSection />
                   </section>
                 </SettingsSection>
+                )}
               </div>
             )}
 

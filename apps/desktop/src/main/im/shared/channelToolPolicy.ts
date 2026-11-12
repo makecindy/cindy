@@ -12,6 +12,8 @@
  * 渠道用同一份工具词表判定,不会出现"为某渠道实现、别的渠道意外开闸"。
  */
 
+import type { TurnPermissionPolicy } from '@cindy/maker-core';
+
 import {
   checkDestructiveToolCall,
   type GuardResult,
@@ -196,4 +198,78 @@ export function channelForceConfirmMutatingToolCall(toolName: string, input: unk
     return inners.some((inner) => !isReadOnlyChannelToolName(inner.name));
   }
   return !isReadOnlyChannelToolName(toolName);
+}
+
+// ── 访客轮次里的 Cindy 记忆 ──────────────────────────────────────────────────
+//
+// 渠道自有任务用的是 Cindy 记忆, 其中「关于你」那一份是主人账号级的、每个项目都生效。
+// 群成员 / 外部用户触发的轮次里, 对这份记忆的读写必须进入审批链由主人确认
+// (docs/product-rules/cindy-memory.md §7): cindy_memory 是可信 server, 不拦的话
+// 访客一句话就能让 Agent 把主人的记忆读出来回到群里。
+
+/** 记忆 server 里的动作名; 不同包装下外层名字各异, 内层动作名是稳定的。 */
+const MEMORY_ACTION_NAME_RE = /^memory_[a-z_]+$/;
+
+/**
+ * 是不是对 cindy_memory 的一次调用 (只读的发现入口 list_tools 除外)。覆盖三种形态:
+ * Claude / Pi 的 `mcp__cindy_memory__<tool>`、Codex 的 `mcp:cindy_memory` + toolParams、
+ * 以及任何包装里内层动作名是 `memory_*` 的调用。认不准时按「是」处理 (多确认一次)。
+ */
+export function isCindyMemoryToolCall(toolName: string, input: unknown): boolean {
+  const normalized = toolName.toLowerCase();
+  if (normalized.startsWith('mcp__cindy_memory__')) {
+    return normalized !== 'mcp__cindy_memory__list_tools';
+  }
+  if (normalized === 'mcp:cindy_memory') {
+    const inner = record(record(input)?.toolParams)?.name;
+    return !(typeof inner === 'string' && inner.toLowerCase() === 'list_tools');
+  }
+  if (MEMORY_ACTION_NAME_RE.test(toolLeafName(toolName))) return true;
+  for (const inner of unwrapInnerCalls(toolName, input)) {
+    if (MEMORY_ACTION_NAME_RE.test(inner.name.toLowerCase())) return true;
+  }
+  return false;
+}
+
+/**
+ * 这一轮的发起人不是宿主核实过的主人: 访客, 或群里身份没能核实的人。
+ * 私聊里身份未知 (个人微信恒为 unknown) 不算 —— 那里对话的另一端就是用它的人,
+ * 逐次确认只会让主人自己每次用记忆都被打断。
+ */
+export function isGuestTurnAuthority(
+  context: TurnPermissionPolicy['autoReviewContext'] | undefined,
+): boolean {
+  if (!context) return false;
+  return context.requesterAuthority === 'guest'
+    || (context.requesterAuthority === 'unknown' && context.source === 'group');
+}
+
+/** channelForceConfirmToolCall + 记忆调用; 访客轮次用。函数身份固定, 远程协议按它编码。 */
+export function channelGuestForceConfirmToolCall(toolName: string, input: unknown): boolean {
+  return channelForceConfirmToolCall(toolName, input) || isCindyMemoryToolCall(toolName, input);
+}
+
+/** channelForceConfirmMutatingToolCall + 记忆调用; 访客轮次用。 */
+export function channelGuestForceConfirmMutatingToolCall(toolName: string, input: unknown): boolean {
+  return channelForceConfirmMutatingToolCall(toolName, input) || isCindyMemoryToolCall(toolName, input);
+}
+
+/**
+ * 访客轮次的策略加上「记忆调用要主人确认」。主人的轮次原样返回。
+ * 只用于渠道自有任务: 伙伴任务用的是伙伴自己的记忆, 不经过这里。
+ */
+export function withGuestMemoryConfirmation(policy: TurnPermissionPolicy): TurnPermissionPolicy {
+  if (!isGuestTurnAuthority(policy.autoReviewContext)) return policy;
+  const current = policy.forceConfirmToolCall;
+  if (current === channelGuestForceConfirmToolCall || current === channelGuestForceConfirmMutatingToolCall) {
+    return policy;
+  }
+  const next: TurnPermissionPolicy['forceConfirmToolCall'] =
+    current === channelForceConfirmToolCall
+      ? channelGuestForceConfirmToolCall
+      : current === channelForceConfirmMutatingToolCall
+        ? channelGuestForceConfirmMutatingToolCall
+        : (toolName, input) =>
+            current.call(policy, toolName, input) || isCindyMemoryToolCall(toolName, input);
+  return { ...policy, forceConfirmToolCall: next };
 }

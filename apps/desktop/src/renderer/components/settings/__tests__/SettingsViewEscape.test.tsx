@@ -107,6 +107,21 @@ vi.mock('../ImBotSection', () => ({
 vi.mock('../PiPackagesSection', () => ({
   PiPackagesSection: () => <p>PI packages</p>,
 }));
+// 「查看记忆」子页：替身把页内回退（backRef）交给用例控制，验证设置页一次只退一层。
+const memoryPanel = vi.hoisted(() => ({ inDetail: false }));
+vi.mock('../MemoryEntriesPanel', () => ({
+  MemoryEntriesPanel: ({ backRef, initialTask }: {
+    backRef: { current: (() => Promise<boolean>) | null };
+    initialTask?: { workingDir: string } | null;
+  }) => {
+    backRef.current = async () => {
+      if (!memoryPanel.inDetail) return false;
+      memoryPanel.inDetail = false;
+      return true;
+    };
+    return <p>Saved memories: {initialTask?.workingDir}</p>;
+  },
+}));
 vi.mock('../HelpSection', () => ({
   HelpSection: ({ onAskHelp }: { onAskHelp: () => void }) => (
     <button type="button" onClick={onAskHelp}>
@@ -415,6 +430,25 @@ describe('SettingsView Escape', () => {
     pressEscape();
     expect(location()).toBe('/');
     expect(screen.getByText('Home')).toBeTruthy();
+  });
+
+  // 保存回执把用户带到这里(docs/product-rules/cindy-memory.md §4): Esc 先在子页内回退,
+  // 再回到「个性化」, 最后才离开设置; 回执带来的任务位置交给子页。
+  it('steps back inside the saved memories page, then to Personalization, before leaving Settings', async () => {
+    memoryPanel.inDetail = true;
+    renderSettings('/settings?tab=personalization&openPanel=memory&memoryTask=%2Frepo');
+    expect(await screen.findByText('Saved memories: /repo')).toBeTruthy();
+
+    pressEscape();
+    await waitFor(() => expect(memoryPanel.inDetail).toBe(false));
+    expect(location()).toBe('/settings?tab=personalization&openPanel=memory&memoryTask=%2Frepo');
+
+    pressEscape();
+    await waitFor(() => expect(location()).toBe('/settings?tab=personalization'));
+    expect(screen.queryByText(/Saved memories/)).toBeNull();
+
+    pressEscape();
+    expect(location()).toBe('/');
   });
 
   it('closes the Help panel before leaving Settings', async () => {

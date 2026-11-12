@@ -15,6 +15,7 @@ import type { AgentEvent, MakerEvent, Session, SessionSendResult, TurnPermission
 import type { ChannelIM } from '@cindy/im';
 
 const mocks = vi.hoisted(() => ({
+  noteSharedChannelSession: vi.fn(),
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   im: {
     reactToMessage: vi.fn(),
@@ -78,6 +79,11 @@ vi.mock('../pendingInteractions', () => ({
   rejectAllPending: mocks.rejectAllPending,
 }));
 vi.mock('../apiKey', () => ({ readXdGatewayApiKey: mocks.readXdGatewayApiKey }));
+// 只替换落盘登记这一个出口, 判定逻辑 (isSharedChannelTurn) 用真的。
+vi.mock('../channelSessionLanes', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../channelSessionLanes')>()),
+  noteSharedChannelSession: mocks.noteSharedChannelSession,
+}));
 
 import { createTurnRunner, type ImTurnRunner } from '../turnRunner';
 import type { ImCardBuilders } from '../cardBuilders';
@@ -704,6 +710,56 @@ describe('turnRunner: connection handed to a companion bot', () => {
     const send = harnesses.get(id)!.send;
     expect(send).toHaveBeenCalledOnce();
     expect(send.mock.calls[0]![1]?.turnPermissionPolicy).toBe(forced ? policy : undefined);
+  });
+
+  // 访客轮次里的记忆 (cindy-memory.md §7): 伙伴用的是它自己的记忆, 策略原样; 伙伴不可用、
+  // 回落到渠道自有任务时用的是 Cindy 记忆 (含主人账号级的那一份), 读写要主人确认。
+  it.each([
+    { route: 'companion', memoryNeedsOwner: false },
+    { route: 'paused', memoryNeedsOwner: true },
+  ])('asks the owner before a guest reads Cindy memory, not a teammate\'s own memory: %j', async ({ route, memoryNeedsOwner }) => {
+    if (route === 'paused') {
+      companion.resolveSession.mockResolvedValue({ ok: false, errorCode: 'TARGET_BOT_INACTIVE', message: 'paused' });
+    }
+    const policy: TurnPermissionPolicy = {
+      origin: { kind: 'im', channel: 'telegram' },
+      autoReviewContext: { requesterAuthority: 'guest', source: 'group' },
+      confirmationSurface: 'channel',
+      forceConfirmToolCall: () => false,
+    };
+    await runner.runAgentTurn({
+      botContextId: BOT_CONTEXT, userId: OWNER, userMessageId: 'guest-memory',
+      text: 'what do you know about the owner?', attachments: [], requesterIsOwner: false,
+      turnPermissionPolicy: policy, inheritCompanionOwnerPermissions: true,
+    });
+    const id = route === 'companion' ? 'mimi-main' : legacyIdFor(BOT_CONTEXT, OWNER);
+    const sent = harnesses.get(id)!.send.mock.calls[0]![1]?.turnPermissionPolicy;
+    expect(sent?.forceConfirmToolCall('mcp__cindy_memory__call_tool', { name: 'memory_read', args: {} }))
+      .toBe(memoryNeedsOwner);
+    if (!memoryNeedsOwner) expect(sent).toBe(policy);
+  });
+
+  // 任务启动前登记「这段对话里别人也能说话」(cindy-memory.md §7): 登记过的任务启动时不带
+  // 主人账号级记忆的索引。伙伴任务用自己的记忆, 不登记; 主人的私聊不登记。
+  it.each([
+    { label: 'a group turn on the channel\'s own task', route: 'paused', chatKind: 'group', noted: true },
+    { label: 'the owner\'s private chat', route: 'paused', chatKind: 'direct', noted: false },
+    { label: 'a group turn on a teammate task', route: 'companion', chatKind: 'group', noted: false },
+  ] as const)('marks the conversation as shared before the task starts: $label', async ({ route, chatKind, noted }) => {
+    mocks.noteSharedChannelSession.mockClear();
+    if (route === 'paused') {
+      companion.resolveSession.mockResolvedValue({ ok: false, errorCode: 'TARGET_BOT_INACTIVE', message: 'paused' });
+    }
+    await runner.runAgentTurn({
+      botContextId: BOT_CONTEXT, userId: OWNER, userMessageId: `lane-${route}-${chatKind}`,
+      text: 'hello', attachments: [], requesterIsOwner: true,
+      channelNoteSource: { chatKind },
+    });
+    if (noted) {
+      expect(mocks.noteSharedChannelSession).toHaveBeenCalledWith(legacyIdFor(BOT_CONTEXT, OWNER));
+    } else {
+      expect(mocks.noteSharedChannelSession).not.toHaveBeenCalled();
+    }
   });
 
   it('falls back to the channel’s own routing when the bot cannot be resolved, warning once', async () => {

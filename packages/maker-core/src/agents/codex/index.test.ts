@@ -35768,13 +35768,12 @@ describe('CodexAgent compaction storm escalation', () => {
     expect(message).not.toContain('model-b');
   });
 
-  it('开着 Maker Memory 时同样熔断(改成无条件回调没打断 flush 路径)', async () => {
-    // 上面两条用例走的是默认的 makerMemory 关闭态 —— 那正是改动前的空洞:
-    // onCompactBoundary 只在 memoryFlushController 存在时注册, 关掉 Maker Memory
-    // 的用户连压缩边界都收不到。这条补另一侧: 开着 memory 时熔断照旧, memory flush
-    // 的通知语义没被无条件化改坏。
-    // 记 debug 日志确认真的走进了 memory 开启分支 —— stub 形状不对时代码会静默
-    // 退回 controller=null, 这条用例就会悄悄退化成上面那条的副本。
+  it('开着 Maker Memory 时同样熔断(压缩边界回调与 Maker Memory 开关无关)', async () => {
+    // 上面的用例走的是默认的 makerMemory 关闭态。压缩边界回调曾经只在 Maker Memory
+    // 开启时才注册, 关掉的用户连熔断一起失去; 改成无条件注册后, 这条补另一侧:
+    // 开着 memory (会话启动时注入了记忆索引) 时熔断照旧。
+    // 记 debug 日志确认真的走进了 memory 开启分支 —— stub 形状不对时启动路径会静默
+    // 跳过记忆注入, 这条用例就会悄悄退化成上面那条的副本。
     const debugMessages: string[] = [];
     const spyLogger: Logger = {
       trace() {}, debug(msg: string) { debugMessages.push(msg); }, info() {},
@@ -35787,9 +35786,7 @@ describe('CodexAgent compaction storm escalation', () => {
         {
           logger: spyLogger,
           makerMemory: {
-            async getStore() {
-              return { async getIndex() { return ''; } };
-            },
+            async getPromptIndex() { return ''; },
           },
         } as never,
       ),

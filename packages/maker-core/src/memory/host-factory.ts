@@ -37,6 +37,8 @@ export interface MakerMemoryHostContext {
   logger: Logger;
   /** Bot scopes keep their records inside the Bot Home. */
   botMemoryDir?(ownerRoot: string, botId: string): string;
+  /** Task directories that belong to no project (Desktop: one-off dialogue folders). */
+  isProjectlessScope?(scopeKey: string): boolean;
   /**
    * A project that keeps its memory inside its own folder (a V2 teammate's project), versioned
    * with it and switched by its own setting: that folder, or null for the historical place.
@@ -89,6 +91,7 @@ export function createMakerMemoryManagerForHost(ctx: MakerMemoryHostContext): Ma
           },
         }
       : {}),
+    ...(ctx.isProjectlessScope ? { isProjectlessScope: ctx.isProjectlessScope } : {}),
     sqliteFactory: ctx.sqliteFactory,
     agents: {},
     logger: ctx.logger,

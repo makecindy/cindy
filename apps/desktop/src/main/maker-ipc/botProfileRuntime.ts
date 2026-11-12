@@ -30,7 +30,6 @@ import { BOT_BASELINE_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 import { BOT_IM_CHANNELS_VENDOR_KEY, type BotImChannel } from '../../shared/botImConnection.js';
 import businessOwnershipPrompt from '../maker-host/business-ownership-prompt.md?raw';
 import { readBotProjectMode } from '../../shared/botProjectMode.js';
-import { botLearningTracker } from './botLearningTracker.js';
 
 const log = createLogger('maker-ipc:bot-profile-runtime');
 
@@ -620,7 +619,6 @@ export async function hydrateBotProfileRuntime(
   // by the teammate's own memory setting rather than the global one.
   // Every V2 lane (group and plan lanes too, wherever they run) shares that one project memory.
   const projectMode = !!workspaceDir && readBotProjectMode(config);
-  if (projectMode && opts.id) botLearningTracker.markProjectTeammate(opts.id);
   // V2 (2026-11-10, owner): one capability set in every session of the teammate — its own chats,
   // group and IM lanes, 分工 — so the capability selection no longer narrows any of them. Its Skills
   // are the project's own; lanes still never take the owner's personal Skills, and a chat-only

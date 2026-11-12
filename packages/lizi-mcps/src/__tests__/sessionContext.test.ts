@@ -25,6 +25,21 @@ function parse(result: { content: Array<{ type: string; text?: string }> }) {
   return JSON.parse(block.text);
 }
 
+/**
+ * cindy_memory 的 manager stub 用: 与真 manager 的 memoryScopesFor 一致 ——
+ * 伙伴 (bot: 键) 只有自己那一份, 其余任务有账号级 + 这次任务的项目两份。
+ */
+const memoryScopesFor = (scopeKey: string) => scopeKey.startsWith('bot:')
+  ? { user: null, project: scopeKey }
+  : { user: 'user:account', project: scopeKey };
+
+/** 上一次工具调用打开过哪几份记忆 (去重排序), 读完清零。 */
+function openedMemoryScopes(getStore: { mock: { calls: unknown[][] }; mockClear(): unknown }): string[] {
+  const keys = [...new Set(getStore.mock.calls.map(([key]) => String(key)))].sort();
+  getStore.mockClear();
+  return keys;
+}
+
 function tools(server: unknown) {
   return (
     server as {
@@ -846,6 +861,7 @@ describe('dynamic lizi MCP session context', () => {
     const getManager = () => ({
       isEnabled: () => true,
       getStore,
+      memoryScopesFor,
     }) as never;
     const provider = createLiziMcpProviders({ memory: { getManager } })
       .find((p) => p.name === 'cindy_memory');
@@ -863,14 +879,16 @@ describe('dynamic lizi MCP session context', () => {
     });
 
     expect(parse(result as never)).toMatchObject({ ok: true, data: [] });
-    expect(getStore).toHaveBeenLastCalledWith('/claude-repo');
+    // 项目那一份按绑定的 workingDir 定位; 账号级那一份与目录无关。
+    expect(openedMemoryScopes(getStore)).toEqual(['/claude-repo', 'user:account']);
   });
 
   it('lets cindy_memory resolve the current Codex workingDir dynamically', async () => {
     const getStore = vi.fn(async (workdir: string) => {
       if (!workdir) throw new Error('MakerMemoryManager.getStore: absWorkdir required');
       return {
-        list: vi.fn(async () => [
+        // 只有 /repo 的项目记忆里有一条; 账号级那一份是空的。
+        list: vi.fn(async () => workdir !== '/repo' ? [] : [
           {
             filename: 'project_codex-memory.md',
             frontmatter: {
@@ -887,6 +905,7 @@ describe('dynamic lizi MCP session context', () => {
     const getManager = () => ({
       isEnabled: () => true,
       getStore,
+      memoryScopesFor,
     }) as never;
     const provider = createLiziMcpProviders({ memory: { getManager } })
       .find((p) => p.name === 'cindy_memory');
@@ -907,7 +926,7 @@ describe('dynamic lizi MCP session context', () => {
       ok: false,
       code: 'INTERNAL',
     });
-    expect(getStore).toHaveBeenLastCalledWith('');
+    expect(openedMemoryScopes(getStore)).toEqual(['']);
 
     const withCtx = await runWithLiziMcpSessionContext(
       {
@@ -927,6 +946,7 @@ describe('dynamic lizi MCP session context', () => {
       ok: true,
       data: [
         {
+          scope: 'project',
           filename: 'project_codex-memory.md',
           type: 'project',
           title: 'Codex memory',
@@ -936,7 +956,7 @@ describe('dynamic lizi MCP session context', () => {
         },
       ],
     });
-    expect(getStore).toHaveBeenLastCalledWith('/repo');
+    expect(openedMemoryScopes(getStore)).toEqual(['/repo', 'user:account']);
   });
 
   it('scopes cindy_memory stores by remoteHostId for SSH remote session contexts', async () => {
@@ -949,6 +969,7 @@ describe('dynamic lizi MCP session context', () => {
     const getManager = () => ({
       isEnabled: () => true,
       getStore,
+      memoryScopesFor,
     }) as never;
     const provider = createLiziMcpProviders({ memory: { getManager } })
       .find((p) => p.name === 'cindy_memory');
@@ -972,7 +993,8 @@ describe('dynamic lizi MCP session context', () => {
       () => tools(server).call_tool.handler({ name: 'memory_list', args: {} }),
     );
     expect(parse(remote as never)).toMatchObject({ ok: true, data: [] });
-    expect(getStore).toHaveBeenLastCalledWith('ssh:my-ssh-host:/home/me/proj');
+    // 项目那一份是 ssh 复合键, 绝不是裸的远端路径 (会与本地同名目录互串)。
+    expect(openedMemoryScopes(getStore)).toEqual(['ssh:my-ssh-host:/home/me/proj', 'user:account']);
 
     // 本地 ctx (无 remoteHostId) 保持原样键 — 既有存储目录不迁移。
     const local = await runWithLiziMcpSessionContext(
@@ -985,7 +1007,7 @@ describe('dynamic lizi MCP session context', () => {
       () => tools(server).call_tool.handler({ name: 'memory_list', args: {} }),
     );
     expect(parse(local as never)).toMatchObject({ ok: true, data: [] });
-    expect(getStore).toHaveBeenLastCalledWith('/home/me/proj');
+    expect(openedMemoryScopes(getStore)).toEqual(['/home/me/proj', 'user:account']);
   });
 
   it('uses the host-owned Bot memory scope instead of the route workdir', async () => {
@@ -995,6 +1017,7 @@ describe('dynamic lizi MCP session context', () => {
     const getManager = () => ({
       isEnabled: () => true,
       getStore,
+      memoryScopesFor,
     }) as never;
     const provider = createLiziMcpProviders({ memory: { getManager } })
       .find((p) => p.name === 'cindy_memory');
@@ -1013,7 +1036,8 @@ describe('dynamic lizi MCP session context', () => {
     });
 
     expect(parse(result as never)).toMatchObject({ ok: true, data: [] });
-    expect(getStore).toHaveBeenLastCalledWith('bot:release-helper');
+    // 只打开伙伴自己那一份: 不落到路由的 /project-a, 也不读账号级的 Cindy 记忆。
+    expect(openedMemoryScopes(getStore)).toEqual(['bot:release-helper']);
   });
 
   it('passes host-owned Bot identity to session_search without exposing it as tool input', async () => {

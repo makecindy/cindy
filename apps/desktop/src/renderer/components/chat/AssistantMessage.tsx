@@ -506,7 +506,18 @@ export const AssistantMessage = memo(function AssistantMessage({
       ) : null}
       {simplifiedBotConversation && !isStreaming && content.trim() && botStarterOptions?.length
         ? <BotStarterOptions options={botStarterOptions} locked={starterOptionsLocked === true} /> : null}
-      {simplifiedBotConversation && !isStreaming && content.trim() && <BotLearningFooter receipts={botLearning} />}
+      {/* 保存回执：本条回复写入了记忆（伙伴还可能是技能）。普通任务的记忆在任务所在的电脑上，
+          本机任务点开设置里的「查看记忆」，远程 / 共享任务只显示一行文字。 */}
+      {!isStreaming && content.trim()
+        && (simplifiedBotConversation || (Array.isArray(botLearning) && botLearning.length > 0)) && (
+        <BotLearningFooter
+          receipts={botLearning}
+          surface={simplifiedBotConversation
+            ? 'teammate'
+            : originDeviceId(sessionFileOrigin) ? 'task-readonly' : 'task'}
+          task={workingDir ? { workingDir, remoteHostId } : undefined}
+        />
+      )}
       {simplifiedBotConversation && !isStreaming && botTaskResults?.length ? (
         <div className="w-full max-w-[560px] min-w-0" data-bot-task-results>
           {botTaskResults.map(card => <BotSessionTaskResultCard key={botTaskResultKey(card)}

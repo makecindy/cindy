@@ -5167,59 +5167,66 @@
     },
     "memory": {
       "title": "記憶",
-      "description": "用於幫助使用者實現基於工作區的記憶，改變設定之後理論上需要新建 Agent 會話才會生效，如果覺得記憶系統出現問題可以點選 Reset 或者關閉。",
+      "description": "讓 Agent 長期記住關於你和專案的事。記憶只存在這台電腦上，變更開關後在下次 Agent 會話生效。",
+      "entries": {
+        "open": "查看記憶",
+        "title": "已存的記憶",
+        "description": "「關於你」的記憶在每個專案裡都生效，專案的記憶只在那個倉庫或資料夾裡生效。修改和刪除在下次 Agent 會話生效。",
+        "disabledNotice": "Cindy 記憶已關閉，不會讀取或儲存記憶。已存的記憶仍可查看、修改和刪除。",
+        "scope": "選擇要查看的記憶",
+        "userScope": "關於你",
+        "userScopeNote": "在每個專案裡都生效",
+        "deleteConfirm": "Cindy 之後不會再參考「{{title}}」。",
+        "changed": "Cindy 剛更新了這條記憶"
+      },
       "maker": {
         "label": "Cindy",
-        "description": "記憶按 Agent 入口管理，而不是按具體模型管理；同一工作目錄下，Claude Code 和 Codex 入口的任務可以共享記憶",
+        "description": "Claude Code、Codex 和 Pi 共用。一份關於你，每個專案另有一份",
         "toggleAria": "切換 Cindy 記憶",
-        "resetAria": "重置 Cindy 記憶",
+        "resetAria": "清空 Cindy 記憶",
         "resetConfirm": {
-          "title": "重置 Cindy 記憶？",
-          "description": "將永久刪除所有專案下的 Cindy 記憶（存放在 user-data 目錄下，不在你的程式碼倉庫裡）。此操作不可撤銷。",
-          "confirm": "重置",
+          "title": "清空 Cindy 記憶？",
+          "description": "將永久刪除「關於你」的記憶和所有專案的記憶，無法恢復。夥伴的記憶和專案裡的檔案不受影響。",
+          "confirm": "清空記憶",
           "cancel": "取消"
         },
         "toast": {
-          "enabled": "Cindy 記憶已啟用",
-          "disabled": "Cindy 記憶已停用",
-          "deferredSuffix": " — 執行中的 Codex 任務將在當前執行結束後應用",
-          "toggleFailed": "切換 Cindy 記憶失敗",
-          "resetSuccess_one": "Cindy 記憶已重置 — 已移除 {{count}} 個工作目錄",
-          "resetSuccess_other": "Cindy 記憶已重置 — 已移除 {{count}} 個工作目錄",
-          "resetFailed": "重置 Cindy 記憶失敗"
+          "enabled": "Cindy 記憶已開啟",
+          "disabled": "Cindy 記憶已關閉",
+          "deferredSuffix": "，執行中的 Codex 任務在本輪結束後生效",
+          "toggleFailed": "未能變更 Cindy 記憶開關",
+          "resetSuccess_one": "已清空 Cindy 記憶",
+          "resetSuccess_other": "已清空 Cindy 記憶",
+          "resetFailed": "未能清空 Cindy 記憶"
         }
       },
       "agents": {
         "claude-code": {
           "label": "Claude Code",
-          "description": "透過 Claude Code 入口使用的所有模型，會共享同一份記憶"
+          "description": "Cindy 記憶關閉時，Claude Code 使用它自帶的記憶"
         },
         "codex": {
           "label": "Codex",
-          "description": "透過 Codex 入口使用的所有模型，會共享同一份記憶"
-        },
-        "pi": {
-          "label": "Pi",
-          "description": "將長任務的壓縮摘要儲存到 Cindy 記憶，供後續 Pi 任務繼續使用"
+          "description": "Cindy 記憶關閉時，Codex 使用它自帶的記憶"
         }
       },
       "agent": {
         "toggleAria": "切換 {{label}} 記憶",
-        "resetAria": "重置 {{label}} 記憶",
+        "resetAria": "清空 {{label}} 記憶",
         "toast": {
-          "enabled": "{{label}} 記憶已啟用",
-          "disabled": "{{label}} 記憶已停用",
-          "takesEffectSuffix": " — 下次 Agent 會話生效",
-          "toggleFailed": "更新記憶設定失敗",
-          "resetSuccess_one": "{{label}} 記憶已重置 — 已移除 {{count}} 條",
-          "resetSuccess_other": "{{label}} 記憶已重置 — 已移除 {{count}} 條",
-          "resetSuccessGeneric": "{{label}} 記憶已重置",
-          "resetFailed": "重置記憶失敗"
+          "enabled": "{{label}} 記憶已開啟",
+          "disabled": "{{label}} 記憶已關閉",
+          "takesEffectSuffix": "，下次 Agent 會話生效",
+          "toggleFailed": "未能變更記憶開關",
+          "resetSuccess_one": "已清空 {{label}} 記憶，共 {{count}} 條",
+          "resetSuccess_other": "已清空 {{label}} 記憶，共 {{count}} 條",
+          "resetSuccessGeneric": "已清空 {{label}} 記憶",
+          "resetFailed": "未能清空記憶"
         },
         "resetConfirm": {
-          "title": "重置 {{label}} 記憶？",
-          "description": "將永久刪除 {{label}} 在所有專案中累積的全部記憶。此操作不可撤銷。",
-          "confirm": "重置",
+          "title": "清空 {{label}} 記憶？",
+          "description": "將永久刪除 {{label}} 自帶的全部記憶，無法恢復。在 Cindy 之外使用 {{label}} 時存下的記憶也可能一併刪除。",
+          "confirm": "清空記憶",
           "cancel": "取消"
         }
       }

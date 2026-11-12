@@ -5,6 +5,9 @@
  *  - ownerScopeKey 变化 (登录/登出/切账号) 必须关闭旧 store 池并重建到新根,
  *    杜绝旧 db 句柄与新 owner 数据混用;
  *  - 无 resolveBasePath/ownerScopeKey 的静态 basePath 宿主行为不变。
+ *
+ * 文件末尾另有一组「账号级与项目两份记忆」(docs/product-rules/cindy-memory.md §1/§2):
+ * 任务启动时注入哪几份索引、「清空全部」的范围、伙伴记忆不设索引硬上限。
  */
 
 import { existsSync } from 'node:fs';
@@ -17,7 +20,7 @@ import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MakerMemoryManager } from './manager.js';
-import { buildBotMemoryScopeKey, memoryScopeDirName } from './storage.js';
+import { buildBotMemoryScopeKey, memoryScopeDirName, USER_MEMORY_SCOPE_KEY } from './storage.js';
 import type { Logger } from '../interfaces/logger.js';
 
 const noopLogger: Logger = {
@@ -351,6 +354,42 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
     manager.dispose();
   });
 
+  // 评审 (Codex P1): 账号级和项目两份索引分两次打开, 中间切账号不能拼出两个账号的记忆。
+  it('getPromptIndex 读两份索引期间账号切换: 拒绝, 不拼出旧账号的账号级加新账号的项目记忆', async () => {
+    let currentRoot = rootA;
+    let currentScope = 'cloud:abc:1';
+    const manager = new MakerMemoryManager({
+      basePath: rootA,
+      resolveBasePath: () => currentRoot,
+      ownerScopeKey: () => currentScope,
+      sqliteFactory: trackingSqlite().factory,
+      agents: {},
+      logger: noopLogger,
+      initialEnabled: true,
+    });
+    await manager.write(USER_MEMORY_SCOPE_KEY, {
+      type: 'user', name: 'tone', title: 'tone', description: 'account a tone', body: 'a',
+    });
+    await manager.write(WORKDIR, {
+      type: 'project', name: 'arch', title: 'arch', description: 'account a arch', body: 'a',
+    });
+
+    const realGetStore = manager.getStore.bind(manager);
+    let calls = 0;
+    vi.spyOn(manager, 'getStore').mockImplementation(async (...args) => {
+      calls += 1;
+      // 账号级索引已读完, 打开项目 store 之前切换: 这一次打开会重新绑定到新账号。
+      if (calls === 2) {
+        currentRoot = rootB;
+        currentScope = 'cloud:abc:2';
+      }
+      return realGetStore(...args);
+    });
+
+    await expect(manager.getPromptIndex(WORKDIR)).rejects.toThrow(/not-ready|owner scope changed/);
+    manager.dispose();
+  });
+
   it('无 resolveBasePath/ownerScopeKey 的静态 basePath 宿主行为不变 (回归)', async () => {
     const sqlite = trackingSqlite();
     const manager = new MakerMemoryManager({
@@ -654,5 +693,205 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
     await expect(store.search('a')).rejects.toThrow(/memory:not-ready/);
     await expect(store.getIndex()).rejects.toThrow(/memory:not-ready/);
     manager.dispose();
+  });
+});
+
+/**
+ * 账号级与项目两份记忆 (docs/product-rules/cindy-memory.md §1/§2)。
+ *
+ * 入口是 agent 启动会话时调的 `getPromptIndex(scopeKey)` 与设置页的 `resetAll()`。
+ * 保护的规则: 普通任务两份索引都注入且账号级在前; 一次性对话目录只用账号级, 不为它
+ * 建项目记忆; 伙伴只读自己那份 (伙伴记忆与 Cindy 记忆互不注入);「清空全部」连账号级
+ * 一起清; 伙伴记忆不设索引硬上限。
+ */
+describe('MakerMemoryManager · 账号级与项目两份记忆', () => {
+  const BOT_SCOPE = buildBotMemoryScopeKey('bot-a');
+  const DIALOGUE_DIR = path.join(path.sep, 'dialogues', 'one-off');
+  let manager: MakerMemoryManager;
+
+  /** 宿主接线与 desktop 一致: 伙伴是独立作用域, 一次性对话目录不属于任何项目。 */
+  function createManager(config?: { hardIndexBytes: number }): MakerMemoryManager {
+    return new MakerMemoryManager({
+      basePath: rootA,
+      sqliteFactory: trackingSqlite().factory,
+      agents: {},
+      logger: noopLogger,
+      initialEnabled: true,
+      isIndependentScope: (scope) => scope === BOT_SCOPE,
+      isProjectlessScope: (scope) => scope === DIALOGUE_DIR,
+      ...(config ? { config } : {}),
+    });
+  }
+
+  const record = (type: 'user' | 'project', name: string) => ({
+    type, name, title: `title-${name}`, description: `about ${name}`, body: `body of ${name}`,
+  });
+
+  /** 每份索引的标题行; 标题里带着 memory 工具的 scope 取值, 模型靠它知道往哪一份写。 */
+  const headings = (index: string) => index.split('\n').filter((line) => line.startsWith('# '));
+
+  beforeEach(() => {
+    manager = createManager();
+  });
+  afterEach(() => {
+    manager.dispose();
+  });
+
+  async function seedAllThree(): Promise<void> {
+    await (await manager.getStore(USER_MEMORY_SCOPE_KEY)).write(record('user', 'tone'));
+    await (await manager.getStore(WORKDIR)).write(record('project', 'arch'));
+    await (await manager.getStore(BOT_SCOPE)).write(record('user', 'bot-habit'));
+  }
+
+  it('普通任务: 账号级索引在前、项目索引在后, 各带自己的 scope 标题, 不含伙伴记忆', async () => {
+    await seedAllThree();
+    const index = await manager.getPromptIndex(WORKDIR);
+
+    const [userHeading, projectHeading, ...rest] = headings(index);
+    expect(rest).toEqual([]);
+    expect(userHeading).toContain('scope "user"');
+    expect(projectHeading).toContain('scope "project"');
+    // 每条记忆落在自己那份的标题之下。
+    const at = (needle: string) => index.indexOf(needle);
+    expect(at(userHeading!)).toBeLessThan(at('[user_tone.md]'));
+    expect(at('[user_tone.md]')).toBeLessThan(at(projectHeading!));
+    expect(at(projectHeading!)).toBeLessThan(at('[project_arch.md]'));
+    expect(index).not.toContain('bot-habit');
+  });
+
+  it('一次性对话目录: 只注入账号级索引, 也不为这个目录建项目记忆', async () => {
+    await seedAllThree();
+    const index = await manager.getPromptIndex(DIALOGUE_DIR);
+
+    expect(headings(index)).toEqual([expect.stringContaining('scope "user"')]);
+    expect(index).toContain('[user_tone.md]');
+    expect(index).not.toContain('[project_arch.md]');
+    expect(existsSync(path.join(rootA, 'maker-memory', memoryScopeDirName(DIALOGUE_DIR)))).toBe(false);
+  });
+
+  it('伙伴: 只注入它自己那份索引, 读不到账号级记忆', async () => {
+    await seedAllThree();
+    const index = await manager.getPromptIndex(BOT_SCOPE);
+
+    expect(index).toBe(await (await manager.getStore(BOT_SCOPE)).getIndex());
+    expect(index).toContain('[user_bot-habit.md]');
+    expect(index).not.toContain('[user_tone.md]');
+    expect(index).not.toContain('scope "user"');
+  });
+
+  it('withholdUser: 账号级索引不进提示词, 只留一句说明; 项目索引照常', async () => {
+    // 对话里别人也能说话的任务 (cindy-memory.md §7): 索引里的标题和摘要不能交给访客。
+    await (await manager.getStore(USER_MEMORY_SCOPE_KEY)).write(record('user', 'home-address'));
+    await (await manager.getStore(WORKDIR)).write(record('project', 'arch'));
+
+    const index = await manager.getPromptIndex(WORKDIR, { withholdUser: true });
+
+    expect(index).not.toContain('home-address');
+    expect(index).toContain('scope "user"');
+    expect(index).toContain('memory_list');
+    expect(index).toContain('[project_arch.md]');
+    // 一次性对话只有账号级一份: 提示词里只剩说明。
+    const dialogue = await manager.getPromptIndex(DIALOGUE_DIR, { withholdUser: true });
+    expect(dialogue).not.toContain('home-address');
+    expect(dialogue).toContain('memory_list');
+    // 伙伴只有自己那一份, 不受影响。
+    await (await manager.getStore(BOT_SCOPE)).write(record('user', 'bot-habit'));
+    expect(await manager.getPromptIndex(BOT_SCOPE, { withholdUser: true })).toContain('[user_bot-habit.md]');
+  });
+
+  it('resetAll 连账号级记忆一起清空', async () => {
+    await (await manager.getStore(USER_MEMORY_SCOPE_KEY)).write(record('user', 'tone'));
+    await (await manager.getStore(WORKDIR)).write(record('project', 'arch'));
+    expect(existsSync(path.join(rootA, 'user-memory', 'user_tone.md'))).toBe(true);
+
+    // 账号级目录 + 一个项目目录。
+    expect(await manager.resetAll()).toEqual({ removedCount: 2 });
+    expect(existsSync(path.join(rootA, 'user-memory'))).toBe(false);
+    expect(await (await manager.getStore(USER_MEMORY_SCOPE_KEY)).list()).toEqual([]);
+  });
+
+  it('索引硬上限只管 Cindy 记忆: 同一配置下项目写入被拒, 伙伴写入照常', async () => {
+    // 伙伴有自己的整理流程和导入入口, 硬上限会让一次导入中途被拒。
+    manager.dispose();
+    manager = createManager({ hardIndexBytes: 1 });
+
+    await expect((await manager.getStore(WORKDIR)).write(record('project', 'arch')))
+      .rejects.toThrow(/memory:index-too-large/);
+    const written = await (await manager.getStore(BOT_SCOPE)).write(record('user', 'bot-habit'));
+    expect(written.ok).toBe(true);
+  });
+
+  it('升级前记在一次性对话目录名下的记忆并入账号级, 之后不再作为项目列出', async () => {
+    // 这类任务现在只读写账号级记忆; 不并入的话旧版本记下的内容再也读不到
+    // (cindy-memory.md §1「存量数据迁移」)。
+    const legacy = new MakerMemoryManager({
+      basePath: rootA, sqliteFactory: trackingSqlite().factory, agents: {}, logger: noopLogger, initialEnabled: true,
+    });
+    await (await legacy.getStore(DIALOGUE_DIR)).write(record('project', 'from-dialogue'));
+    await (await legacy.getStore(WORKDIR)).write(record('project', 'arch'));
+    legacy.dispose();
+
+    const scopes = await manager.listScopes();
+    expect(scopes.map((s) => `${s.kind}:${s.count}`)).toEqual(['user:1', 'project:1']);
+    expect(scopes[1]?.scopeKey).toBe(WORKDIR);
+    expect(await manager.getPromptIndex(DIALOGUE_DIR)).toContain('[project_from-dialogue.md]');
+    // 再开一次不产生副本。
+    manager.dispose();
+    manager = createManager();
+    expect((await (await manager.getStore(USER_MEMORY_SCOPE_KEY)).list()).map((r) => r.filename))
+      .toEqual(['project_from-dialogue.md']);
+  });
+
+  it('同名分片的后缀 -2…-99 都被占用时继续找空名, 不丢分片也不提前写回执', async () => {
+    // 旧版本在许多对话目录里各存过一份同名分片时, 并入要给每一份找到名字;
+    // 悄悄跳过并写回执, 这份记忆就既不在账号级里、也不再被列出。
+    const legacy = new MakerMemoryManager({
+      basePath: rootA, sqliteFactory: trackingSqlite().factory, agents: {}, logger: noopLogger, initialEnabled: true,
+    });
+    await (await legacy.getStore(DIALOGUE_DIR)).write(record('project', 'from-dialogue'));
+    legacy.dispose();
+    const userDir = path.join(rootA, 'user-memory');
+    await mkdir(userDir, { recursive: true });
+    for (let n = 1; n < 100; n += 1) {
+      const suffix = n === 1 ? '' : `-${n}`;
+      await writeFile(path.join(userDir, `project_from-dialogue${suffix}.md`), `occupied ${n}\n`, 'utf8');
+    }
+
+    await manager.getPromptIndex(DIALOGUE_DIR);
+
+    expect(existsSync(path.join(userDir, 'project_from-dialogue-100.md'))).toBe(true);
+    const receipt = path.join(rootA, 'maker-memory', memoryScopeDirName(DIALOGUE_DIR), '.cindy-memory-merged-v1.json');
+    expect(existsSync(receipt)).toBe(true);
+  });
+
+  it('普通文件夹 (不是 Git 仓库) 里已删除的子文件夹不并入上级', async () => {
+    // 普通文件夹按目录各存一份。并入的话, 在主目录开过任务的人, 所有已删除项目的
+    // 记忆都会涌进主目录那一份。仓库内已删除子目录的并入见 git-integration 测试。
+    const gone = path.join(WORKDIR, 'deleted-project');
+    await (await manager.getStore(gone)).write(record('project', 'old'));
+    manager.dispose();
+    manager = createManager();
+
+    expect(await (await manager.getStore(WORKDIR)).list()).toEqual([]);
+    expect((await manager.listScopes()).map((s) => s.scopeKey)).toContain(gone);
+  });
+
+  it('索引已到硬上限时仍能合并: 来源马上被删, 不按「先写结果」那一刻的大小拒绝', async () => {
+    // 合并是先写结果再删来源; 硬上限若按中间态算, 超限的库连整理都做不了,
+    // 而拒绝写入时给模型的指引正是「先合并」(cindy-memory.md §2)。
+    const first = await manager.getStore(WORKDIR);
+    await first.write(record('project', 'a'));
+    await first.write(record('project', 'b'));
+    const full = await first.getIndexSize();
+    manager.dispose();
+    manager = createManager({ hardIndexBytes: full });
+
+    const store = await manager.getStore(WORKDIR);
+    await expect(store.write(record('project', 'c'))).rejects.toThrow(/memory:index-too-large/);
+    await store.consolidate({
+      sources: ['project_a.md', 'project_b.md'],
+      target: record('project', 'ab'),
+    });
+    expect((await store.list()).map((r) => r.filename)).toEqual(['project_ab.md']);
   });
 });

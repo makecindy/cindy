@@ -13,7 +13,8 @@
  *
  * 覆盖的五环:
  *  1. 形成 — 模型调 memory_write,不需要任何 bot 专属工具;
- *  2. 存   — 分片落在 `bot:<botId>` 的 store 目录,项目 store 一条都没有;
+ *  2. 存   — 分片落在 `bot:<botId>` 的 store 目录,项目 store 一条都没有,
+ *            账号级的 Cindy 记忆(`user-memory/`)也不会被伙伴碰到;
  *  3. 取   — 下一次会话启动读的 `store.getIndex()`(= host 的 readMemoryIndex,
  *            hydrateBotProfileRuntime 把它拼进 makerMemoryIndexSnapshot)含这条;
  *  4. 用   — 伙伴自己读到的 `store.list()` 与引擎同一份,且 `learned-`
@@ -21,6 +22,10 @@
  *  5. 删   — 删除 / 清空后引擎侧真没了,且下一次会话装配的索引里也不再出现。
  *
  * 无法在这里离线验证的:真 LLM 是否愿意写记忆、Electron IPC 布线、渲染层。
+ *
+ * 文件末尾另有一组「普通任务的两份记忆」:同一套真 manager + 真 MCP 分发,验证
+ * memory 工具在账号级(user)与项目(project)两份之间的路由。放在这里是因为它要的
+ * 正是这套不 mock 存储的 harness,另起文件只会把同样的初始化再付一遍。
  */
 
 import { existsSync } from 'node:fs';
@@ -50,6 +55,7 @@ import {
   buildMemoryScopeKey,
   memoryScopeDirName,
   parseBotMemoryScopeKey,
+  USER_MEMORY_SCOPE_KEY,
   type Logger,
   type MemoryRecord,
 } from '@cindy/maker-core';
@@ -86,15 +92,20 @@ let databases: DatabaseCtor.Database[];
 let ownerAvailable = true;
 let memoryEnabled = true;
 
-function createManager(independentBots = false): MakerMemoryManager {
+/**
+ * 伙伴作用域一律按宿主的接线声明为独立作用域(host-factory 对每个有伙伴的宿主都这么做):
+ * 伙伴只有自己那一份记忆,不读写账号级的 Cindy 记忆。`botHome` 只决定落盘位置 ——
+ * 默认留在 `maker-memory/` 下的旧位置,true 时放进伙伴的家。
+ */
+function createManager(botHome = false): MakerMemoryManager {
   return new MakerMemoryManager({
     basePath: root,
     resolveBasePath: () => (ownerAvailable ? root : null),
     ownerScopeKey: () => (ownerAvailable ? 'local:owner-a:1' : 'local:none:1'),
     reloadEnabled: () => memoryEnabled,
     initialEnabled: memoryEnabled,
-    ...(independentBots ? {
-      isIndependentScope: (scopeKey: string) => parseBotMemoryScopeKey(scopeKey) !== null,
+    isIndependentScope: (scopeKey: string) => parseBotMemoryScopeKey(scopeKey) !== null,
+    ...(botHome ? {
       resolveStorageDir: (scopeKey: string) => {
         const botId = parseBotMemoryScopeKey(scopeKey);
         return botId ? path.join(root, 'bots', botId, 'memories') : null;
@@ -291,6 +302,8 @@ describe('Cindy Bot 记忆全链(形成 → 存 → 取 → 用 → 删)', () =>
     expect(existsSync(botDir)).toBe(true);
     expect(existsSync(projectDir)).toBe(false);
     expect(await readdir(botDir)).toEqual(expect.arrayContaining(['user_chris-cadence.md']));
+    // 伙伴写的 `user` 类记忆留在伙伴自己那份里,不进账号级的 Cindy 记忆。
+    expect(existsSync(path.join(root, 'user-memory'))).toBe(false);
 
     // 项目 store 里一条都没有 —— 这是「两张皮」回归的直接哨兵。
     const projectStore = await manager.getStore(buildMemoryScopeKey(PROJECT_DIR));
@@ -491,8 +504,9 @@ describe('Cindy Bot 记忆全链(形成 → 存 → 取 → 用 → 删)', () =>
     expect((await botMemoryList(OTHER_BOT_ID)).map((r) => r.slug)).toEqual(['shared-slug']);
   });
 
-  it('回归:ctx 丢了 memoryScopeKey 就会写进项目记忆(这正是修好的那条缝)', async () => {
-    // 故意模拟修复前的 piEnvironment / cc-remote-mcp:ctx 只有 workingDir。
+  it('回归:ctx 丢了 memoryScopeKey 就会写进 Cindy 自己的记忆(这正是修好的那条缝)', async () => {
+    // 故意模拟修复前的 piEnvironment / cc-remote-mcp:ctx 只有 workingDir,
+    // 工具把它当成 PROJECT_DIR 的普通任务。
     const session = await connectBotSession({ agentKind: 'pi', sessionId: 'session-legacy' });
     try {
       await modelWritesMemory(session.client, {
@@ -506,8 +520,11 @@ describe('Cindy Bot 记忆全链(形成 → 存 → 取 → 用 → 删)', () =>
       await session.cleanup();
     }
     expect(await botMemoryList(BOT_ID)).toEqual([]);
+    // 普通任务的 `user` 类记忆进账号级那一份(每个项目都生效),不进项目那一份。
+    const userStore = await manager.getStore(USER_MEMORY_SCOPE_KEY);
+    expect((await userStore.list()).map((r) => r.slug)).toEqual(['stray']);
     const projectStore = await manager.getStore(buildMemoryScopeKey(PROJECT_DIR));
-    expect((await projectStore.list()).map((r) => r.slug)).toEqual(['stray']);
+    expect(await projectStore.list()).toEqual([]);
   });
 
   it('未登录:owner 未就绪时不静默落临时目录,而是明确报 MAKER_MEMORY_NOT_READY', async () => {
@@ -555,5 +572,131 @@ describe('Cindy Bot 记忆全链(形成 → 存 → 取 → 用 → 删)', () =>
       await back.cleanup();
     }
     expect((await botMemoryList(BOT_ID)).map((r) => r.slug)).toEqual(['signed-in']);
+  });
+});
+
+/**
+ * 普通任务的两份记忆(docs/product-rules/cindy-memory.md §1)。
+ *
+ * 入口:模型经 `call_tool` 调 memory_write / read / list / search / delete / consolidate,
+ * 会话是一次普通项目任务(ctx 没有 memoryScopeKey,workingDir 是项目目录)。
+ * 保护的规则:写到哪一份由 `scope` 决定,不传时 `user` 类进账号级、其余进项目;
+ * 读、删不传 `scope` 时两份都找、跟着文件走;两份里有同名文件时必须指明,不替模型猜;
+ * 合并可以把另一份里的来源收进来并从那一份删掉。这些规则写在工具里,不靠提示词。
+ */
+describe('Cindy 记忆工具:账号级与项目两份之间的路由', () => {
+  let session: Awaited<ReturnType<typeof connectBotSession>>;
+
+  beforeEach(async () => {
+    session = await connectBotSession({ agentKind: 'codex', sessionId: 'project-task' });
+  });
+  afterEach(async () => {
+    await session.cleanup();
+  });
+
+  async function call(name: string, args: Record<string, unknown>): Promise<Envelope> {
+    return parseEnvelope(
+      await session.client.callTool({ name: 'call_tool', arguments: { name, args } }),
+    );
+  }
+  const data = (envelope: Envelope) => (envelope as { data: Record<string, unknown> }).data;
+  const entry = (type: string, name: string, extra: Record<string, unknown> = {}) => ({
+    type, name, title: `title ${name}`, description: `about ${name}`, body: `body of ${name}`, ...extra,
+  });
+  /** 两份记忆各自落盘了哪些文件(直接问 manager,不经被测工具)。 */
+  async function stored(): Promise<{ user: string[]; project: string[] }> {
+    const filenames = async (scopeKey: string) =>
+      (await (await manager.getStore(scopeKey)).list()).map((r) => r.filename);
+    return {
+      user: await filenames(USER_MEMORY_SCOPE_KEY),
+      project: await filenames(buildMemoryScopeKey(PROJECT_DIR)),
+    };
+  }
+
+  it('写:user 类默认进账号级,其余默认进项目,显式 scope 优先;list / search 标出每条在哪一份', async () => {
+    expect(data(await call('memory_write', entry('user', 'nickname')))).toMatchObject({ scope: 'user' });
+    expect(data(await call('memory_write', entry('feedback', 'repo-style')))).toMatchObject({ scope: 'project' });
+    expect(data(await call('memory_write', entry('feedback', 'everywhere-style', { scope: 'user' }))))
+      .toMatchObject({ scope: 'user' });
+
+    expect(await stored()).toEqual({
+      user: ['feedback_everywhere-style.md', 'user_nickname.md'],
+      project: ['feedback_repo-style.md'],
+    });
+
+    const listed = data(await call('memory_list', {})) as unknown as Array<{ scope: string; filename: string }>;
+    expect(listed.map((r) => `${r.scope}:${r.filename}`).sort()).toEqual([
+      'project:feedback_repo-style.md',
+      'user:feedback_everywhere-style.md',
+      'user:user_nickname.md',
+    ]);
+    const { hits } = data(await call('memory_search', { query: 'style' })) as unknown as {
+      hits: Array<{ scope: string; filename: string }>;
+    };
+    expect(hits.map((h) => `${h.scope}:${h.filename}`).sort()).toEqual([
+      'project:feedback_repo-style.md',
+      'user:feedback_everywhere-style.md',
+    ]);
+  });
+
+  it('读 / 删不传 scope:两份都找,跟着文件所在的那一份走', async () => {
+    await call('memory_write', entry('user', 'nickname'));
+    await call('memory_write', entry('feedback', 'repo-style'));
+
+    expect(data(await call('memory_read', { filename: 'user_nickname.md' })))
+      .toMatchObject({ scope: 'user', body: expect.stringContaining('body of nickname') });
+    expect(data(await call('memory_read', { filename: 'feedback_repo-style.md' })))
+      .toMatchObject({ scope: 'project', body: expect.stringContaining('body of repo-style') });
+
+    expect(data(await call('memory_delete', { filename: 'user_nickname.md' })))
+      .toEqual({ deleted: 'user_nickname.md', scope: 'user' });
+    expect(await stored()).toEqual({ user: [], project: ['feedback_repo-style.md'] });
+  });
+
+  it('两份里有同名文件:不传 scope 报 INVALID_PARAMS 且什么都不动,指明 scope 后照常', async () => {
+    await call('memory_write', entry('feedback', 'style', { body: 'project copy' }));
+    await call('memory_write', entry('feedback', 'style', { body: 'user copy', scope: 'user' }));
+
+    for (const tool of ['memory_read', 'memory_delete']) {
+      expect(await call(tool, { filename: 'feedback_style.md' }), tool)
+        .toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
+    }
+    expect(await stored()).toEqual({ user: ['feedback_style.md'], project: ['feedback_style.md'] });
+
+    expect(data(await call('memory_read', { filename: 'feedback_style.md', scope: 'user' })))
+      .toMatchObject({ scope: 'user', body: expect.stringContaining('user copy') });
+  });
+
+  it('合并:来源在另一份记忆里时,合并成功后从那一份删掉', async () => {
+    // 项目里记了一条其实是通用偏好的 feedback;把它和账号级已有的一条并成 user 类。
+    await call('memory_write', entry('feedback', 'concise-here'));
+    await call('memory_write', entry('feedback', 'concise-everywhere', { scope: 'user' }));
+
+    const merged = await call('memory_consolidate', {
+      sources: ['feedback_concise-here.md', 'feedback_concise-everywhere.md'],
+      target: entry('user', 'concise'),
+    });
+    expect(data(merged)).toMatchObject({ scope: 'user', filename: 'user_concise.md' });
+    expect([...(data(merged).deletedSources as string[])].sort()).toEqual([
+      'feedback_concise-everywhere.md', 'feedback_concise-here.md',
+    ]);
+    expect(await stored()).toEqual({ user: ['user_concise.md'], project: [] });
+  });
+
+  // 评审 (Greptile P1): 目标在两份里都有又没指明 scope 时, 不替调用方挑一份去覆盖。
+  it('合并的目标在两份里都有同名文件:不传 scope 报 INVALID_PARAMS 且什么都不动,指明 scope 后照常', async () => {
+    await call('memory_write', entry('feedback', 'style', { body: 'project copy' }));
+    await call('memory_write', entry('feedback', 'style', { body: 'user copy', scope: 'user' }));
+    await call('memory_write', entry('feedback', 'extra', { body: 'extra' }));
+
+    const args = { sources: ['feedback_extra.md'], target: entry('feedback', 'style', { body: 'merged' }) };
+    expect(await call('memory_consolidate', args)).toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
+    expect(await stored()).toEqual({ user: ['feedback_style.md'], project: ['feedback_extra.md', 'feedback_style.md'] });
+    expect(data(await call('memory_read', { filename: 'feedback_style.md', scope: 'user' })))
+      .toMatchObject({ body: expect.stringContaining('user copy') });
+
+    expect(data(await call('memory_consolidate', { ...args, scope: 'project' })))
+      .toMatchObject({ scope: 'project', filename: 'feedback_style.md' });
+    expect(await stored()).toEqual({ user: ['feedback_style.md'], project: ['feedback_style.md'] });
   });
 });

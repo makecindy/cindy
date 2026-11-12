@@ -13,14 +13,19 @@ it('merges selected provider memories through memory_search and preserves local 
   const searchProviders = vi.fn<NonNullable<MemoryMcpDeps['searchProviders']>>(async () => [{ id: 'remote', title: 'Provider', content: 'Full provider memory',
     sourcePlugin: { id: 'selected', name: 'Selected' } }]);
   const deps = { workdir: '/unused', getSessionContext: () => context, searchProviders,
-    getManager: () => ({ isEnabled: () => true, getStore: async () => ({ search }) }),
+    // 这个会话只有一份记忆 (与伙伴 / 独立作用域同形): 本地命中带上它来自哪一份。
+    getManager: () => ({
+      isEnabled: () => true,
+      memoryScopesFor: (scopeKey: string) => ({ user: null, project: scopeKey }),
+      getStore: async () => ({ search }),
+    }),
   } as unknown as MemoryMcpDeps;
   const registry = new MemoryToolRegistry();
   registerMemorySearchTool(registry, deps);
   const result = await registry.call('memory_search', { query: 'word', limit: 2 });
   expect(result.isError).not.toBe(true);
   const data = JSON.parse((result.content[0] as { text: string }).text).data;
-  expect(data.hits).toEqual([own[0], { id: 'remote', title: 'Provider', content: 'Full provider memory', sourcePlugin: { id: 'selected', name: 'Selected' } }]);
+  expect(data.hits).toEqual([{ ...own[0], scope: 'project' }, { id: 'remote', title: 'Provider', content: 'Full provider memory', sourcePlugin: { id: 'selected', name: 'Selected' } }]);
   expect(data.count).toBe(2);
   expect(searchProviders).toHaveBeenCalledWith('word', { limit: 2 }, context);
   const cut = { id: 'cut', title: 'Cut', content: 'bounded', truncated: true, sourcePlugin: { id: 'selected', name: 'Selected' } };

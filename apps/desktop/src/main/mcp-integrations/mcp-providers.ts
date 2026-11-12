@@ -654,8 +654,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       withAccountDataAccess,
       getManager: deps.getMakerMemoryManager,
       searchProviders: searchGhostRuntimeMemories,
+      // 伙伴与普通任务的记忆写入都留保存回执 (Cindy 记忆的回执带 scope: 写的是账号级还是项目那一份);
+      // 落到哪条回复、哪些任务可见由 learningReceiptPublisher 判定。
       beginWrite: (context) => {
-        const saved = botLearningTracker.capture(botLearningTracker.learnsFrom(context?.sessionId, context?.memoryScopeKey));
+        const saved = botLearningTracker.capture(context?.sessionId ?? '');
         return receipt => saved({ ...receipt, kind: 'memory' });
       },
       searchSessions: async (query, opts = {}) => {

@@ -632,7 +632,9 @@ Pi home 复用。settings/packages/extensions 仍属于后续独立安全评审�
   接通;本次补齐 UI(CreateWorkerPopover / composer「+」菜单协同项 / draft 映射)、两个
   main IPC coercion(WORKER_CREATE / SESSION_ENABLE_ORCA)、worker 展示(π 而非 Claude 脸)。
   注:pi 二进制缺失时 buildPiAgent 返回 null,pi 不进 agents map,建 pi worker 会抛错。
-- ✅ **压缩即记忆**(已交付):新增 `digest` 记忆类型(与 curated 解耦)。pi `compaction_end`
+- ⛔ **压缩即记忆**(2026-07-30 交付,2026-11-11 移除写入;见 `docs/product-rules/cindy-memory.md` §5:
+  摘要是对话内容的不可见副本,删除任务后仍在;`digest` 类型保留只为识别与清空旧数据)。原说明:
+  新增 `digest` 记忆类型(与 curated 解耦)。pi `compaction_end`
   带 `result.summary` 时经 `deps.makerMemory.write` 写 digest —— 进 FTS 可 `memory_search`,
   但排除出 MEMORY.md / system prompt / LLM 的 memory_write 工具,**不污染 curated 记忆**。
   gate 同 CC(makerMemoryEnabled + manager),fire-and-forget。见 `memory/types.ts`

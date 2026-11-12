@@ -1,9 +1,14 @@
 /**
- * resolveMemoryScopeKey — worktree 归一化 (#2379) 的单元测试 (默认 unit tier)。
+ * resolveMemoryScopeKey — 项目记忆按仓库共用一份的单元测试 (默认 unit tier)。
+ *
+ * 规则: 本地 cwd 归到它所在仓库的主工作树根 (子目录 / linked worktree /
+ * submodule 都不再各有一份); 不在 git 仓库里或探测失败时按 cwd 原样。
+ * 历史: #2379 只把 linked worktree 根换回主仓根、子目录仍各自隔离; 2026-11 起
+ * 子目录也归到仓库根。
  *
  * 默认层只保留进程内 fake probe 全量覆盖 + 一条真实 Git smoke
  * (engineering-conventions §3.1); 完整真实 Git 矩阵 (多 worktree /
- * separate-git-dir / 主仓内 cwd 等组合语义) 在
+ * separate-git-dir / submodule 等组合语义) 在
  * scope-resolver.git-integration.test.ts, 由 `pnpm test:git-integration` 执行。
  *
  * 与 scope-key.test.ts 的分工: 那边固定 buildMemoryScopeKey 的同步契约
@@ -54,18 +59,20 @@ describe('resolveMemoryScopeKey — SSH 与空输入旁路', () => {
     expect(await resolveMemoryScopeKey('')).toBe('');
   });
 
-  it('已是 bot: / ssh: 复合键时原样透传且不 spawn git', async () => {
-    let probeCalls = 0;
-    const probe: GitProbe = async () => {
-      probeCalls += 1;
-      throw new Error('should not be called');
-    };
-    await expect(resolveMemoryScopeKey('bot:cindy', null, { execGit: probe })).resolves.toBe('bot:cindy');
-    await expect(
-      resolveMemoryScopeKey('ssh:my-host:%2Fhome%2Fme', null, { execGit: probe }),
-    ).resolves.toBe('ssh:my-host:%2Fhome%2Fme');
-    expect(probeCalls).toBe(0);
-  });
+  // user:account 是账号级记忆的键 (storage.ts USER_MEMORY_SCOPE_KEY): 和 bot: / ssh:
+  // 一样不是本地路径, 当成路径去探测 git 会把它改写成别的键。
+  it.each(['bot:cindy', 'ssh:my-host:%2Fhome%2Fme', 'user:account'])(
+    '已是复合键 %s 时原样透传且不 spawn git',
+    async (key) => {
+      let probeCalls = 0;
+      const probe: GitProbe = async () => {
+        probeCalls += 1;
+        throw new Error('should not be called');
+      };
+      await expect(resolveMemoryScopeKey(key, null, { execGit: probe })).resolves.toBe(key);
+      expect(probeCalls).toBe(0);
+    },
+  );
 });
 
 describe('resolveMemoryScopeKey — fake probe 回落与缓存', () => {
@@ -78,9 +85,9 @@ describe('resolveMemoryScopeKey — fake probe 回落与缓存', () => {
   /**
    * resolver 的两种探测: rev-parse 单次返回 toplevel/git-dir/common-dir/
    * superproject 四行 (无 superproject 时第四行为空);
-   * 仅在真 linked worktree 或 worktree 内 submodule 时再调
-   * `worktree list --porcelain` 取主仓根。不传 mainRoot 表示该用例不允许
-   * 出现第二次 spawn (在更早的分支就已回落)。
+   * 仅在 linked worktree 或 submodule 时再调 `worktree list --porcelain`
+   * 取主工作树根。不传 mainRoot 表示该用例不允许出现第二次 spawn
+   * (仓库根在 rev-parse 这一步就已确定)。
    */
   const probeFor =
     (
@@ -98,62 +105,46 @@ describe('resolveMemoryScopeKey — fake probe 回落与缓存', () => {
       return `${toplevel}\n${gitDir}\n${commonDir}\n${superproject}\n`;
     };
 
-  it('git 不存在 (ENOENT) → 原样返回', async () => {
-    const probe = failingProbe(() => Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }));
-    expect(await resolveMemoryScopeKey('/fake/no-git', null, { execGit: probe })).toBe('/fake/no-git');
+  // git 探测的任何失败都不得阻断记忆: 按 cwd 原样当 scope。
+  it.each([
+    ['git 不存在 (ENOENT)', () => Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' })],
+    ['非 git 目录 (exit 128)', () => Object.assign(new Error('not a git repository'), { code: 128 })],
+    ['探测超时', () => Object.assign(new Error('timed out'), { killed: true })],
+  ] as const)('%s → 原样返回', async (_label, makeErr) => {
+    expect(
+      await resolveMemoryScopeKey('/fake/dir/sub', null, { execGit: failingProbe(makeErr) }),
+    ).toBe('/fake/dir/sub');
   });
 
-  it('非 git 目录 (exit 128) → 原样返回', async () => {
-    const probe = failingProbe(() => Object.assign(new Error('not a git repository'), { code: 128 }));
-    expect(await resolveMemoryScopeKey('/fake/not-repo', null, { execGit: probe })).toBe(
-      '/fake/not-repo',
-    );
+  // 普通 clone 与 `git clone --separate-git-dir` 的 checkout 都是 gitdir == common-dir
+  // 且无 superproject: 仓库根就是 toplevel, 子目录不再各有一份。不得再问
+  // `git worktree list` (probeFor 不传 mainRoot 即断言这一点): separate-git-dir 不写
+  // core.worktree, git 会把 gitdir 的父目录报成主工作树 (Codex review on #2399)。
+  // 期望值按调用方的写法: 根本身原样返回, 子目录是它上溯到根的那一段
+  // (path.normalize 只为 Windows 上的分隔符, POSIX 下就是 '/fake/checkout')。
+  it.each([
+    ['普通 clone 的根', '/fake/checkout/.git', '/fake/checkout', '/fake/checkout'],
+    ['普通 clone 的子目录', '/fake/checkout/.git', '/fake/checkout/apps/a', path.normalize('/fake/checkout')],
+    ['separate-git-dir checkout 的子目录', '/some/storage/.git', '/fake/checkout/apps/a', path.normalize('/fake/checkout')],
+  ])('%s → 仓库根 (toplevel)', async (_label, gitDir, cwd, expected) => {
+    const probe = probeFor('/fake/checkout', gitDir, gitDir);
+    expect(await resolveMemoryScopeKey(cwd, null, { execGit: probe })).toBe(expected);
   });
 
-  it('探测超时 → 原样返回', async () => {
-    const probe = failingProbe(() => Object.assign(new Error('timed out'), { killed: true }));
-    expect(await resolveMemoryScopeKey('/fake/timeout', null, { execGit: probe })).toBe(
-      '/fake/timeout',
-    );
+  // submodule 的记忆跟外层项目走: 主仓里的归到主仓根; linked worktree 里的
+  // gitdir == common-dir (都是 `<主仓>/.git/worktrees/<wt>/modules/<sub>`), 不能当普通
+  // clone 处理, 要先找到外层 worktree 再归到主工作树根 (Codex #2399 P1)。
+  // 两行在 POSIX 下都是 '/main'; 主仓内的沿用调用方写法, worktree 内的是 git 报的
+  // 主工作树路径 (Windows 上后者带盘符)。
+  it.each([
+    ['主仓内 submodule', '/main/mod', '/main/.git/modules/mod', '/main', path.normalize('/main')],
+    ['linked worktree 内 submodule', '/wt/mod', '/main/.git/worktrees/wt/modules/mod', '/wt', path.resolve('/main')],
+  ])('%s → 外层项目的主工作树根', async (_label, cwd, gitDir, superproject, expected) => {
+    const probe = probeFor(cwd, gitDir, gitDir, '/main', superproject);
+    expect(await resolveMemoryScopeKey(cwd, null, { execGit: probe })).toBe(expected);
   });
 
-  it('separate-git-dir checkout (gitdir == common-dir 且 basename 为 .git) → 原样返回', async () => {
-    // `git clone --separate-git-dir=/some/storage/.git` 的 common-dir basename
-    // 恰好也是 .git, 不做 gitdir ≠ common-dir 区分会把主仓根错误推导到 git
-    // 存储目录 (Codex review on #2399)。
-    const probe = probeFor('/fake/checkout', '/some/storage/.git', '/some/storage/.git');
-    expect(await resolveMemoryScopeKey('/fake/checkout', null, { execGit: probe })).toBe(
-      '/fake/checkout',
-    );
-  });
-
-  it('主仓内 submodule (gitdir == common-dir + superproject == 主仓根) → 原样返回', async () => {
-    // 有 superproject 时仍会调 worktree list 确认外层不是 linked worktree;
-    // 主仓根与 superproject 相同则保持原路径。
-    const probe = probeFor(
-      '/main/mod',
-      '/main/.git/modules/mod',
-      '/main/.git/modules/mod',
-      '/main',
-      '/main',
-    );
-    expect(await resolveMemoryScopeKey('/main/mod', null, { execGit: probe })).toBe('/main/mod');
-  });
-
-  it('linked worktree 内 submodule → 主仓 submodule 路径 (Codex #2399 P1)', async () => {
-    const probe = probeFor(
-      '/wt/mod',
-      '/main/.git/worktrees/wt/modules/mod',
-      '/main/.git/worktrees/wt/modules/mod',
-      '/main',
-      '/wt',
-    );
-    expect(await resolveMemoryScopeKey('/wt/mod', null, { execGit: probe })).toBe(
-      path.join(path.resolve('/main'), 'mod'),
-    );
-  });
-
-  it('linked worktree 内二级 submodule 沿 superproject 链归一到主仓 (Codex #2399 P1)', async () => {
+  it('linked worktree 内二级 submodule 沿 superproject 链归到最外层项目的主工作树根 (Codex #2399 P1)', async () => {
     const abs = (p: string) => path.resolve(p);
     const inner = abs('/wt/mod/inner');
     const parentMod = abs('/wt/mod');
@@ -179,34 +170,42 @@ describe('resolveMemoryScopeKey — fake probe 回落与缓存', () => {
         superproject: '',
       },
     };
+    // 只在最外层 worktree 上回答 `worktree list`: 在中间那层 submodule 上问,
+    // 真实 git 会把 `.git` 元数据目录报成唯一 worktree。
     const probe: GitProbe = async (args, cwd) => {
-      if (args.includes('worktree')) return `worktree ${main}\n`;
+      if (args.includes('worktree')) {
+        if (path.normalize(cwd) !== wt) throw new Error(`worktree list asked at ${cwd}`);
+        return `worktree ${main}\n`;
+      }
       const rec = byCwd[path.normalize(cwd)] ?? byCwd[cwd];
       if (!rec) throw new Error(`unexpected cwd ${cwd}`);
       return `${rec.toplevel}\n${rec.gitDir}\n${rec.commonDir}\n${rec.superproject}\n`;
     };
-    expect(await resolveMemoryScopeKey(inner, null, { execGit: probe })).toBe(
-      path.join(main, 'mod', 'inner'),
+    expect(await resolveMemoryScopeKey(inner, null, { execGit: probe })).toBe(main);
+  });
+
+  // linked worktree 找不到主工作树可归时 (bare repo 的 worktree: common-dir 是
+  // `<name>.git`, 根本没有主工作树; 或 `worktree list` 没给出记录), 用这个 worktree
+  // 自己的根, 子目录同样不再各有一份。
+  it.each([
+    ['bare repo 的 linked worktree', '/fake/repo.git/worktrees/x', '/fake/repo.git', undefined],
+    ['worktree list 取不到主工作树', '/main/.git/worktrees/w', '/main/.git', ''],
+  ])('%s → 该 worktree 自己的根', async (_label, gitDir, commonDir, worktreeList) => {
+    const probe: GitProbe = async (args) => {
+      if (args.includes('worktree')) {
+        if (worktreeList === undefined) throw new Error('worktree list should not be spawned');
+        return `${worktreeList}\n`;
+      }
+      return `/fake/wt\n${gitDir}\n${commonDir}\n`;
+    };
+    expect(await resolveMemoryScopeKey('/fake/wt/apps/a', null, { execGit: probe })).toBe(
+      path.normalize('/fake/wt'),
     );
   });
 
-  it('common-dir 非 <root>/.git 形态 (bare/非常规布局) → 原样返回', async () => {
-    const probe = probeFor('/fake/bare-wt', '/fake/repo.git/worktrees/x', '/fake/repo.git');
-    expect(await resolveMemoryScopeKey('/fake/bare-wt', null, { execGit: probe })).toBe(
-      '/fake/bare-wt',
-    );
-  });
-
-  it('cwd 不在 toplevel 下 (relative 逃逸) → 原样返回', async () => {
-    const probe = probeFor('/totally/other', '/main/.git/worktrees/w', '/main/.git', '/main');
-    expect(await resolveMemoryScopeKey('/fake/escape', null, { execGit: probe })).toBe(
-      '/fake/escape',
-    );
-  });
-
-  it('主仓本身是 separate-git-dir 布局: linked worktree 映射到真实主 checkout', async () => {
+  it('主仓本身是 separate-git-dir 布局: linked worktree 归到真实主 checkout 的根', async () => {
     // common-dir 是 git 存储目录 (/storage/.git), dirname 不是工作树;
-    // 主仓根必须来自 `worktree list --porcelain` 第一条 (Codex review 第二轮)。
+    // 主工作树根必须来自 `worktree list --porcelain` 第一条 (Codex review 第二轮)。
     const probe = probeFor(
       '/fake/wt',
       '/storage/.git/worktrees/w',
@@ -214,16 +213,41 @@ describe('resolveMemoryScopeKey — fake probe 回落与缓存', () => {
       '/real/checkout',
     );
     expect(await resolveMemoryScopeKey('/fake/wt/apps/a', null, { execGit: probe })).toBe(
-      path.join(path.resolve('/real/checkout'), 'apps', 'a'),
+      path.resolve('/real/checkout'),
     );
   });
 
-  it('worktree list 取不到主仓根 → 原样返回', async () => {
-    const probe: GitProbe = async (args) => {
-      if (args.includes('worktree')) return '\n'; // 无 worktree 记录
-      return '/fake/wt\n/main/.git/worktrees/w\n/main/.git\n';
-    };
-    expect(await resolveMemoryScopeKey('/fake/wt', null, { execGit: probe })).toBe('/fake/wt');
+  // git 报的是物理路径。调用方经符号链接进入仓库时 (macOS `/tmp` → `/private/tmp`),
+  // 仓库根要沿用调用方的写法: 换成 git 的写法等于给同一个仓库换了 scope key,
+  // 升级前按 cwd 原样记下的记忆就读不到了。
+  it(
+    '经符号链接进入仓库: 仓库根沿用调用方的路径写法',
+    async () => {
+      const tmp = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'scope-resolver-link-')));
+      try {
+        const physicalRepo = path.join(tmp, 'physical', 'repo');
+        await fs.mkdir(path.join(physicalRepo, 'apps', 'a'), { recursive: true });
+        // 'junction': Windows 上不需要管理员权限就能建目录链接; POSIX 忽略这个参数。
+        await fs.symlink(path.join(tmp, 'physical'), path.join(tmp, 'link'), 'junction');
+        const gitDir = path.join(physicalRepo, '.git');
+        const probe = probeFor(physicalRepo, gitDir, gitDir);
+        expect(
+          await resolveMemoryScopeKey(path.join(tmp, 'link', 'repo', 'apps', 'a'), null, {
+            execGit: probe,
+          }),
+        ).toBe(path.join(tmp, 'link', 'repo'));
+      } finally {
+        await fs.rm(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('cwd 与 git 报的仓库根对不上 (物理路径也对不上) → 用 git 报的仓库根', async () => {
+    // 无法按调用方的写法上溯时不猜: 仓库身份以 git 的回答为准。
+    const probe = probeFor('/totally/other', '/totally/other/.git', '/totally/other/.git');
+    expect(await resolveMemoryScopeKey('/fake/escape', null, { execGit: probe })).toBe(
+      path.resolve('/totally/other'),
+    );
   });
 
   it('同 cwd 重复解析只 spawn 一轮 git (正结果缓存)', async () => {
@@ -247,7 +271,7 @@ describe('resolveMemoryScopeKey — fake probe 回落与缓存', () => {
     const second = await resolveMemoryScopeKey(abs('/repo/.cindy-worktrees/feat/apps/a'), null, {
       execGit: probe,
     });
-    expect(first).toBe(path.join(abs('/repo'), 'apps', 'a'));
+    expect(first).toBe(path.normalize(abs('/repo')));
     expect(second).toBe(first);
     expect(calls).toBe(2); // rev-parse + worktree list 各一次, 第二轮全缓存
   });
@@ -293,13 +317,13 @@ describe('resolveMemoryScopeKey — fake probe 回落与缓存', () => {
       const key = await resolveMemoryScopeKey('C:\\repo\\.cindy-worktrees\\feat\\apps\\a', null, {
         execGit: probe,
       });
-      expect(key).toBe('C:\\repo\\apps\\a');
+      expect(key).toBe('C:\\repo');
     },
   );
 });
 
 // 默认 unit tier 唯一一条真实 Git smoke (§3.1): 端到端打通「真实 git 探测 +
-// 映射」主路径。组合矩阵见 scope-resolver.git-integration.test.ts。
+// 归到主工作树根」主路径。组合矩阵见 scope-resolver.git-integration.test.ts。
 describe.skipIf(!gitAvailable())('resolveMemoryScopeKey — 真实 Git smoke', () => {
   let tmpRoot: string | undefined;
   let repoRoot: string;
@@ -333,7 +357,17 @@ describe.skipIf(!gitAvailable())('resolveMemoryScopeKey — 真实 Git smoke', (
     }
   });
 
-  it('linked worktree 子目录 cwd → 主仓根 + 相对子路径', async () => {
-    expect(await resolveMemoryScopeKey(sub)).toBe(path.join(repoRoot, 'apps', 'a'));
+  it('linked worktree 子目录 cwd → 主工作树根', async () => {
+    expect(await resolveMemoryScopeKey(sub)).toBe(repoRoot);
+  });
+
+  it('仓库根带结尾分隔符 → 与从子目录解析出的是同一把钥匙', async () => {
+    // 否则 `/repo/` 和 `/repo` 落到两个目录, 同一仓库的记忆被拆开。
+    expect(await resolveMemoryScopeKey(`${repoRoot}${path.sep}`)).toBe(repoRoot);
+  });
+
+  it('仓库根后面跟着大量连续分隔符: 去干净, 仍是同一把钥匙', async () => {
+    // 去掉结尾分隔符改成了逐字符回退 (原来的正则被 CodeQL 判为多项式时间); 行为必须不变。
+    expect(await resolveMemoryScopeKey(`${repoRoot}${path.sep.repeat(20_000)}`)).toBe(repoRoot);
   });
 });

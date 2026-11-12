@@ -6,6 +6,7 @@ import type { MutableRefObject } from 'react';
 
 import { createIpcError } from '../../../../shared/ipc-errors';
 import { BOT_MEMORY_CHANGED, type BotMemoryDetail, type BotMemorySummary } from '../../../../shared/botMemory';
+import type { MakerMemoryTaskLocation } from '../../../../shared/makerMemoryEntries';
 
 const translate = (key: string, opts?: Record<string, unknown>) =>
   opts ? `${key}:${JSON.stringify(opts)}` : key;
@@ -17,15 +18,19 @@ const mocks = vi.hoisted(() => ({
   confirm: vi.fn(async () => true),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
+  toastInfo: vi.fn(),
 }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: mocks.confirm }),
 }));
 vi.mock('@/components/ui/toast', () => ({
-  toast: { success: mocks.toastSuccess, error: mocks.toastError },
+  toast: { success: mocks.toastSuccess, error: mocks.toastError, info: mocks.toastInfo },
 }));
 
 import { BotMemorySettings } from '../BotMemorySettings';
+import { MemoryEntriesPanel } from '@/components/settings/MemoryEntriesPanel';
+import { MemoryEntriesView, type MemoryEntriesSource } from '@/components/memory/MemoryEntriesView';
+import { setMakerMemoryEnabled } from '@/lib/memorySettingsStore';
 
 const summaries: BotMemorySummary[] = [
   { filename: 'user_quiet.md', type: 'user', title: '检查没事不说话', preview: '无变化时不播报。', updatedAt: '2026-09-23T09:35:33.152Z' },
@@ -40,7 +45,7 @@ const detail: BotMemoryDetail = {
 };
 
 const api = {
-  list: vi.fn(async (_botId: string, _query?: string) => summaries),
+  list: vi.fn<(botId: string, query?: string) => Promise<BotMemorySummary[]>>(async () => summaries),
   read: vi.fn(async () => detail),
   update: vi.fn(async (input: { title: string; body: string }) => ({
     ...detail,
@@ -80,6 +85,7 @@ beforeEach(() => {
   mocks.confirm.mockReset().mockResolvedValue(true);
   mocks.toastSuccess.mockReset();
   mocks.toastError.mockReset();
+  mocks.toastInfo.mockReset();
   (window as unknown as { electronAPI: unknown }).electronAPI = { localDb: { bots: { memory: api } } };
 });
 
@@ -325,5 +331,112 @@ describe('BotMemorySettings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'bots.memory.delete' }));
     await waitFor(() => expect(mocks.confirm).toHaveBeenCalled());
     expect(api.delete).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 测试价值(Cindy 记忆「查看记忆」页, docs/product-rules/cindy-memory.md §4)
+ * - 生产入口与可观察结果: 真实的 MemoryEntriesPanel + 共用的 MemoryEntriesView;
+ *   断言发给主机的范围键、版本, 以及页面显示。
+ * - 规则依据: 回执点开落在写入任务的项目; 读改删带当前范围键; 项目不在列表里时落在「关于你」。
+ * - 现有覆盖缺口: 上面的用例只经伙伴的数据来源(botId), 不经范围选择。
+ * - 最小失败输入: 回执带来的任务位置; 一个还没有记忆的项目。
+ * - tier: unit(jsdom, 与本文件共用替身; 列表 / 详情 / 编辑本身由上面的用例覆盖, 这里不重复)。
+ */
+describe('MemoryEntriesPanel (Cindy memory)', () => {
+  const TASK: MakerMemoryTaskLocation = { workingDir: '/repo/packages/app' };
+  const entries = {
+    // 任务的项目解析到 /repo 时指向它; 解析不到(还没有记忆)为 null。
+    scopes: vi.fn(async (task?: MakerMemoryTaskLocation) => ({
+      scopes: [
+        { scopeKey: 'user:account', kind: 'user' as const, count: 0 },
+        { scopeKey: '/repo', kind: 'project' as const, count: 2, name: 'repo', path: '/repo' },
+      ],
+      taskScopeKey: task?.workingDir.startsWith('/repo') ? '/repo' : null,
+    })),
+    list: vi.fn<(scopeKey: string, query?: string) => Promise<BotMemorySummary[]>>(async () => summaries),
+    read: vi.fn(async () => detail),
+    update: vi.fn(),
+    delete: vi.fn(async () => undefined),
+  };
+  const renderPanel = (initialTask: MakerMemoryTaskLocation | null) =>
+    render(
+      <MemoryEntriesPanel
+        initialTask={initialTask}
+        onBack={vi.fn()}
+        backRef={{ current: null }}
+        leaveRef={{ current: null }}
+      />,
+    );
+
+  beforeEach(() => {
+    for (const fn of Object.values(entries)) fn.mockClear();
+    entries.list.mockImplementation(async () => summaries);
+    setMakerMemoryEnabled(true);
+    (window as unknown as { electronAPI: unknown }).electronAPI = { maker: { memoryEntries: entries } };
+  });
+
+  it('opens on the project of the task a receipt came from and deletes with that scope and the opened version', async () => {
+    renderPanel(TASK);
+    await openDetail();
+    expect(entries.scopes).toHaveBeenCalledWith(TASK);
+    expect(entries.list).toHaveBeenCalledWith('/repo', undefined);
+    expect(entries.read).toHaveBeenCalledWith('/repo', 'feedback_verify.md');
+    fireEvent.click(screen.getByRole('button', { name: 'bots.memory.delete' }));
+    await waitFor(() => expect(entries.delete).toHaveBeenCalledWith({
+      scopeKey: '/repo',
+      filename: 'feedback_verify.md',
+      expectedUpdatedAt: detail.updatedAt,
+    }));
+    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({
+      description: 'settings.memory.entries.deleteConfirm:{"title":"说结论前核实"}',
+    }));
+    // 条数变了: 回到列表并重新读取范围; 任务位置只在第一次带。
+    await waitFor(() => expect(entries.scopes).toHaveBeenCalledTimes(2));
+    expect(entries.scopes).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('falls back to About you when the task has no project memory yet and shows an emptied scope as empty', async () => {
+    entries.list.mockRejectedValue(createIpcError('NOT_FOUND', 'Memory scope not found'));
+    renderPanel({ workingDir: '/gone' });
+    expect(await screen.findByText('bots.memory.empty')).toBeTruthy();
+    expect(entries.list).toHaveBeenCalledWith('user:account', undefined);
+    expect(screen.getByText('settings.memory.entries.userScopeNote')).toBeTruthy();
+  });
+});
+
+/**
+ * 测试价值(共用列表 MemoryEntriesView 切换范围, Greptile 评审)
+ * - 生产入口与可观察结果: 渲染 MemoryEntriesView, 把 source.key 换成另一份记忆; 断言新结果到达之前
+ *   旧范围的条目不再显示 (也就点不到), 到达后显示新范围的条目。
+ * - 规则依据: 列表只显示属于当前范围的条目; 旧条目可点会拿旧文件名去读新范围 (没有同名文件就突然退回
+ *   列表, 有同名文件则打开另一条内容)。
+ * - 现有覆盖缺口: 上面的用例都不切换范围。
+ * - 最小失败输入: 范围 A 已加载, 换成范围 B 而 B 的列表还没回来。
+ * - tier: unit(jsdom)。
+ */
+describe('MemoryEntriesView switching to another memory', () => {
+  const entry = (filename: string, title: string): BotMemorySummary => ({
+    filename, type: 'feedback', title, preview: '', updatedAt: '2026-09-17T05:01:04.387Z',
+  });
+  const sourceOf = (key: string, list: MemoryEntriesSource['list']): MemoryEntriesSource => ({
+    key, list, read: vi.fn(), update: vi.fn(), delete: vi.fn(),
+  });
+  const refs = { backRef: { current: null }, leaveRef: { current: null } };
+  const texts = { deleteDescription: () => '', changed: '' };
+
+  it('does not keep showing (or opening) the previous memory while the new one loads', async () => {
+    let finishB!: (items: BotMemorySummary[]) => void;
+    const a = sourceOf('scope-a', async () => [entry('feedback_only-in-a.md', '只在 A 里')]);
+    const b = sourceOf('scope-b', () => new Promise((resolve) => { finishB = resolve; }));
+    const view = render(<MemoryEntriesView source={a} texts={texts} {...refs} />);
+    expect(await screen.findByText('只在 A 里')).toBeTruthy();
+
+    view.rerender(<MemoryEntriesView source={b} texts={texts} {...refs} />);
+    expect(screen.queryByText('只在 A 里')).toBeNull();
+
+    await act(async () => finishB([entry('feedback_only-in-b.md', '只在 B 里')]));
+    expect(await screen.findByText('只在 B 里')).toBeTruthy();
+    expect(screen.queryByText('只在 A 里')).toBeNull();
   });
 });

@@ -8,12 +8,18 @@ it('captures ownership before storage, emits only successful write and consolida
     write = vi.fn(async () => ({ ok: true, filename: 'feedback_test.md' }));
   const context = { sessionId: 'origin', memoryScopeKey: 'bot:test', workingDir: '/unused' };
   const beginWrite = vi.fn(() => receipt);
-  const store = { write, consolidate: write };
+  // read: 工具先查文件在哪一份记忆里, 再决定写到哪; 这里目标与来源都当作已存在。
+  const store = { write, consolidate: write, read: async () => ({}) };
   const deps = {
     beginWrite,
     workdir: '/unused',
     getSessionContext: () => context,
-    getManager: () => ({ isEnabled: () => true, getStore: async () => store }),
+    getManager: () => ({
+      isEnabled: () => true,
+      getStore: async () => store,
+      // 伙伴作用域只有它自己那一份记忆。
+      memoryScopesFor: (scopeKey: string) => ({ user: null, project: scopeKey }),
+    }),
   } as unknown as MemoryMcpDeps;
   const registry = new MemoryToolRegistry();
   registerMemoryWriteTool(registry, deps);

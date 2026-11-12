@@ -5167,59 +5167,66 @@
     },
     "memory": {
       "title": "메모리",
-      "description": "워크스페이스 단위 메모리를 구현합니다. 설정 변경 후에는 일반적으로 새 Agent 세션을 시작해야 적용됩니다. 메모리에 문제가 있다면 Reset하거나 끄세요.",
+      "description": "Agent가 세션이 바뀌어도 나와 프로젝트에 관한 내용을 기억하게 합니다. 메모리는 이 컴퓨터에만 저장됩니다. 스위치 변경은 다음 Agent 세션부터 적용됩니다.",
+      "entries": {
+        "open": "메모리 보기",
+        "title": "저장된 메모리",
+        "description": "“나에 대해”의 메모리는 모든 프로젝트에 적용됩니다. 프로젝트의 메모리는 해당 리포지토리 또는 폴더에만 적용됩니다. 수정과 삭제는 다음 Agent 세션부터 적용됩니다.",
+        "disabledNotice": "Cindy 메모리가 꺼져 있어 메모리를 읽거나 저장하지 않습니다. 저장된 메모리는 계속 보고, 수정하고, 삭제할 수 있습니다.",
+        "scope": "볼 메모리 선택",
+        "userScope": "나에 대해",
+        "userScopeNote": "모든 프로젝트에 적용됩니다",
+        "deleteConfirm": "Cindy는 앞으로 “{{title}}”을(를) 참고하지 않습니다.",
+        "changed": "Cindy가 방금 이 메모리를 업데이트했습니다"
+      },
       "maker": {
         "label": "Cindy",
-        "description": "메모리는 개별 모델이 아니라 Agent 진입점별로 관리됩니다. 동일한 작업 디렉터리에서 Claude Code와 Codex 진입점으로 시작한 Session은 메모리를 공유합니다",
+        "description": "Claude Code, Codex, Pi가 함께 사용합니다. 나에 대한 메모리 하나와 프로젝트마다 하나씩 있습니다",
         "toggleAria": "Cindy 메모리 전환",
-        "resetAria": "Cindy 메모리 재설정",
+        "resetAria": "Cindy 메모리 비우기",
         "resetConfirm": {
-          "title": "Cindy 메모리를 재설정하시겠습니까?",
-          "description": "모든 프로젝트의 Cindy 메모리를 영구적으로 삭제합니다(user-data 아래에 저장되며 리포지토리 안에는 없습니다). 이 작업은 취소할 수 없습니다.",
-          "confirm": "재설정",
+          "title": "Cindy 메모리를 비우시겠습니까?",
+          "description": "나에 대한 메모리와 모든 프로젝트의 메모리를 영구적으로 삭제합니다. 복구할 수 없습니다. 파트너의 메모리와 프로젝트의 파일은 영향을 받지 않습니다.",
+          "confirm": "메모리 비우기",
           "cancel": "취소"
         },
         "toast": {
-          "enabled": "Cindy 메모리가 활성화되었습니다",
-          "disabled": "Cindy 메모리가 비활성화되었습니다",
-          "deferredSuffix": " — 실행 중인 Codex 세션에는 현재 작업이 끝난 후 적용됩니다",
-          "toggleFailed": "Cindy 메모리 전환 실패",
-          "resetSuccess_one": "Cindy 메모리가 재설정되었습니다 — {{count}}개의 작업 디렉터리가 제거됨",
-          "resetSuccess_other": "Cindy 메모리가 재설정되었습니다 — {{count}}개의 작업 디렉터리가 제거됨",
-          "resetFailed": "Cindy 메모리 재설정 실패"
+          "enabled": "Cindy 메모리를 켰습니다",
+          "disabled": "Cindy 메모리를 껐습니다",
+          "deferredSuffix": " — 실행 중인 Codex 세션에는 현재 턴이 끝난 후 적용됩니다",
+          "toggleFailed": "Cindy 메모리 스위치를 변경하지 못했습니다",
+          "resetSuccess_one": "Cindy 메모리를 비웠습니다",
+          "resetSuccess_other": "Cindy 메모리를 비웠습니다",
+          "resetFailed": "Cindy 메모리를 비우지 못했습니다"
         }
       },
       "agents": {
         "claude-code": {
           "label": "Claude Code",
-          "description": "Claude Code 입구를 통해 사용하는 모든 모델이 같은 메모리를 공유합니다"
+          "description": "Cindy 메모리가 꺼져 있으면 Claude Code는 자체 내장 메모리를 사용합니다"
         },
         "codex": {
           "label": "Codex",
-          "description": "Codex 입구를 통해 사용하는 모든 모델이 같은 메모리를 공유합니다"
-        },
-        "pi": {
-          "label": "Pi",
-          "description": "긴 세션의 압축 요약을 Cindy 메모리에 저장해 이후 Pi 세션에서 사용합니다"
+          "description": "Cindy 메모리가 꺼져 있으면 Codex는 자체 내장 메모리를 사용합니다"
         }
       },
       "agent": {
         "toggleAria": "{{label}} 메모리 전환",
-        "resetAria": "{{label}} 메모리 재설정",
+        "resetAria": "{{label}} 메모리 비우기",
         "toast": {
-          "enabled": "{{label}} 메모리가 활성화되었습니다",
-          "disabled": "{{label}} 메모리가 비활성화되었습니다",
+          "enabled": "{{label}} 메모리를 켰습니다",
+          "disabled": "{{label}} 메모리를 껐습니다",
           "takesEffectSuffix": " — 다음 Agent 세션부터 적용됩니다",
-          "toggleFailed": "메모리 설정 업데이트 실패",
-          "resetSuccess_one": "{{label}} 메모리가 재설정되었습니다 — {{count}}개 항목 제거됨",
-          "resetSuccess_other": "{{label}} 메모리가 재설정되었습니다 — {{count}}개 항목 제거됨",
-          "resetSuccessGeneric": "{{label}} 메모리가 재설정되었습니다",
-          "resetFailed": "메모리 재설정 실패"
+          "toggleFailed": "메모리 스위치를 변경하지 못했습니다",
+          "resetSuccess_one": "{{label}} 메모리를 비웠습니다 — {{count}}개 항목 제거됨",
+          "resetSuccess_other": "{{label}} 메모리를 비웠습니다 — {{count}}개 항목 제거됨",
+          "resetSuccessGeneric": "{{label}} 메모리를 비웠습니다",
+          "resetFailed": "메모리를 비우지 못했습니다"
         },
         "resetConfirm": {
-          "title": "{{label}} 메모리를 재설정하시겠습니까?",
-          "description": "모든 프로젝트에서 {{label}}이(가) 누적한 모든 메모리를 영구적으로 삭제합니다. 이 작업은 취소할 수 없습니다.",
-          "confirm": "재설정",
+          "title": "{{label}} 메모리를 비우시겠습니까?",
+          "description": "{{label}}의 자체 메모리를 모두 영구적으로 삭제합니다. 복구할 수 없습니다. Cindy 밖에서 {{label}}을(를) 사용할 때 저장된 메모리도 함께 삭제될 수 있습니다.",
+          "confirm": "메모리 비우기",
           "cancel": "취소"
         }
       }

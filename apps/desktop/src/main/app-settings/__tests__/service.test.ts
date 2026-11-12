@@ -40,15 +40,15 @@ describe('app settings service', () => {
 // Unit: production memory updater + real restart executor, in-memory settings.
 describe('combined memory settings', () => {
   it.each([false, true])('keeps the final native flags when Codex busy=%s', async busy => {
-    let value = { maker: true, claudeCode: true, codex: true, pi: true };
+    let value = { maker: true, claudeCode: true, codex: true };
     let enabled = true;
-    const live = { claudeCode: true, codex: true, pi: true };
+    const live = { claudeCode: true, codex: true };
     let pending: (() => Promise<void>) | undefined;
-    const setAgentMemory = vi.fn(async (kind: 'claude-code' | 'codex' | 'pi', next: boolean) => {
+    const setAgentMemory = vi.fn(async (kind: 'claude-code' | 'codex', next: boolean) => {
       live[kind === 'claude-code' ? 'claudeCode' : kind] = next;
     });
     const defaults = { ...value };
-    const result = await updateMakerMemorySettings(false, { codex: false, claudeCode: false, pi: false }, {
+    const result = await updateMakerMemorySettings(false, { codex: false, claudeCode: false }, {
       makerMemory: {
         isEnabled: () => enabled,
         enable: async () => { enabled = true; return { effective: 'next-session' }; },
@@ -68,15 +68,14 @@ describe('combined memory settings', () => {
       invalidateBridge: async () => {},
     });
     expect(result.codexRestartDeferred).toBe(busy);
-    expect(value).toEqual({ maker: false, claudeCode: false, codex: false, pi: false });
+    expect(value).toEqual({ maker: false, claudeCode: false, codex: false });
     expect(live.claudeCode).toBe(false);
-    expect(live.pi).toBe(false);
     if (busy) {
       expect(setAgentMemory.mock.calls.some(([kind]) => kind === 'codex')).toBe(false);
       expect(pending).toBeTypeOf('function');
       await pending!();
     }
-    expect(live).toEqual({ claudeCode: false, codex: false, pi: false });
+    expect(live).toEqual({ claudeCode: false, codex: false });
     expect(setAgentMemory.mock.calls.filter(([kind]) => kind === 'codex')).toEqual([['codex', false]]);
   });
 });

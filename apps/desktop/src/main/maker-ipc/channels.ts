@@ -419,6 +419,16 @@ export const MAKER_INVOKE = {
   MAKER_MEMORY_SET_ENABLED: 'maker:maker-memory:set-enabled',
   MAKER_MEMORY_RESET: 'maker:maker-memory:reset',
   /**
+   * Cindy 记忆「查看记忆」页: 列出记忆范围 (账号级 + 各项目), 读 / 搜 / 改 / 删其中的记忆。
+   * 仅本机可信窗口可调, 不进设备互联白名单; scopeKey 每次对照 manager.listScopes() 校验。
+   * 见 makerMemoryEntriesService.ts。
+   */
+  MEMORY_ENTRIES_SCOPES: 'maker:memory-entries:scopes',
+  MEMORY_ENTRIES_LIST: 'maker:memory-entries:list',
+  MEMORY_ENTRIES_READ: 'maker:memory-entries:read',
+  MEMORY_ENTRIES_UPDATE: 'maker:memory-entries:update',
+  MEMORY_ENTRIES_DELETE: 'maker:memory-entries:delete',
+  /**
    * 启动期 renderer 同步 main 持久化的三个 memory 开关 (maker / claudeCode / codex)。
    * main 的 <userData>/memory-settings.json 是 source of truth, renderer localStorage
    * 只是 UI 即时态镜像 — 启动时拉一次 + 用户 toggle 时同步, 保证刷新/重启后 UI 跟实际对齐。
