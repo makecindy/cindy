@@ -479,7 +479,7 @@ export function startCompanionCloud(input: {
     if (!profile || !isCompanionProfileSnapshot(profile.value)) throw new Error('PROFILE_SNAPSHOT_MISSING');
     return correctedProfile(profile, correction);
   }
-  /** An active home already holds the current files. Replaying cloud data here would erase local edits. */
+  /** An owned home already holds the current files, even while paused. Replaying cloud data would erase local edits. */
   async function repairOwnProfile(actor: CompanionRuntimeActor, correction: ProfileCorrection & { actorId: string; home: string | null }) {
     const botId = actor.externalId;
     const repairFence: CompanionWriteFence = { ...fence, assertCurrent: () => {
@@ -930,7 +930,7 @@ export function startCompanionCloud(input: {
           const correction = { version: draft.version, values: request.values, actorId: draft.actorId, home: draft.home };
           const local = await input.host.materializer!.readProfile(botId);
           fence.assertCurrent();
-          if (local?.status === 'active' && draft.home === input.selfDeviceId && !state.isDemoted(botId) && installOwner(botId) === 'mine') {
+          if (local && local.status !== 'deleting' && draft.home === input.selfDeviceId && !state.isDemoted(botId) && installOwner(botId) === 'mine') {
             return repairOwnProfile(actor, correction);
           }
           return runtime.takeOver(botId, correction);

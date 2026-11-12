@@ -1103,10 +1103,15 @@ describe('Bot canonical Session lifecycle', () => {
 
     // #10205 review, DB tier: the real host must use a source-only versioned update on
     // the current home. Runtime fakes cannot prove local-file conflict detection or preservation.
-    it.each(['identitySource', 'userContextSource'] as const)('edits only the rejected local %s and refuses a stale source', async field => {
+    it.each([
+      { field: 'identitySource', status: 'active' }, { field: 'userContextSource', status: 'active' },
+      { field: 'identitySource', status: 'paused' }, { field: 'userContextSource', status: 'paused' },
+    ] as const)('edits only the rejected local $field ($status) and refuses a stale source', async ({ field, status }) => {
       const id = `repair-local-${field.toLowerCase()}`;
       await invoke('local-db:bots:create', { id, name: 'Local name', description: 'Local description',
         identitySource: 'Keep identity', userContextSource: 'Keep user context' });
+      if (status === 'paused') await invoke('local-db:bots:update', { id, enabled: false });
+      expect(await invoke('local-db:bots:get', id)).toMatchObject({ status });
       const home = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), 'bots', id);
       const file = join(home, field === 'identitySource' ? 'SOUL.md' : 'memories/USER.md');
       const untouched = join(home, field === 'identitySource' ? 'memories/USER.md' : 'SOUL.md');
@@ -1119,7 +1124,7 @@ describe('Bot canonical Session lifecycle', () => {
       await host.repairProfileSources!(id, fields, { [field]: 'Owner correction' }, { assertCurrent() {} });
       expect(readFileSync(file, 'utf8').trim()).toBe('Owner correction');
       expect(readFileSync(untouched, 'utf8')).toBe(kept);
-      expect(await invoke('local-db:bots:get', id)).toMatchObject({ name: 'Local name', description: 'Local description' });
+      expect(await invoke('local-db:bots:get', id)).toMatchObject({ status, name: 'Local name', description: 'Local description' });
       writeFileSync(file, 'New edit while the draft was open');
       await expect(host.repairProfileSources!(id, fields, { [field]: 'Stale correction' }, { assertCurrent() {} }))
         .rejects.toMatchObject({ reason: 'changed' });

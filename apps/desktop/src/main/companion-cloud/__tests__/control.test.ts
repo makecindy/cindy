@@ -88,7 +88,8 @@ describe('take over', () => {
   // #10205 review, unit: the public repair action must not replay an old cloud snapshot
   // over edits made on the current home after opening the draft. Previous coverage only
   // repaired a missing local copy; a pending local memory/name edit is the minimal regression.
-  it('repairs only the rejected fields on the current home, preserving unsynced local edits', async () => {
+  // Pausing after opening the draft must not turn that repair into a full restore either.
+  it.each(['active', 'paused'] as const)('repairs only the rejected fields on the %s current home, preserving unsynced local edits', async status => {
     const original = { ...MIA, soul: 'x'.repeat(12001) };
     const t = setup({ home: 'desk', handler: route => route === '/preferences'
       ? [{ key: 'companion.profile.v1', revision: 1, value: original },
@@ -100,15 +101,15 @@ describe('take over', () => {
     Object.assign(t.host, { repairProfileSources: write });
     const opened = await t.runtime.repairProfile('bot_mia', { action: 'read' });
     if (!opened.ok || !opened.draft) throw new Error('missing draft');
-    t.local.setProfile({ status: 'active', displayName: 'New local name', description: 'new local description' });
+    t.local.setProfile({ status, displayName: 'New local name', description: 'new local description' });
     t.local.memories.set('note.md', 'new local memory');
     t.local.skills.set('skill', 'new local skill');
     expect(await t.runtime.repairProfile('bot_mia', { action: 'save', token: opened.draft.token,
       values: { identitySource: 'corrected' } })).toEqual({ ok: true });
-    expect(write).toHaveBeenCalledWith('bot_mia', opened.draft.fields, { identitySource: 'corrected' }, expect.anything());
-    expect(await t.local.host.readProfile('bot_mia')).toMatchObject({ displayName: 'New local name', description: 'new local description' });
+    expect(await t.local.host.readProfile('bot_mia')).toMatchObject({ status, displayName: 'New local name', description: 'new local description' });
     expect(t.local.memories.get('note.md')).toBe('new local memory');
     expect(t.local.skills.get('skill')).toBe('new local skill');
+    expect(write).toHaveBeenCalledWith('bot_mia', opened.draft.fields, { identitySource: 'corrected' }, expect.anything());
     expect(t.local.host.updateProfile).not.toHaveBeenCalled();
     expect(t.local.host.rebuildContext).not.toHaveBeenCalled();
     expect(t.state.isDemoted('bot_mia')).toBe(false);
