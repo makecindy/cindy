@@ -26,12 +26,32 @@ const sse = (model) => [
   ['message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 2 } }],
   ['message_stop', { type: 'message_stop' }],
 ].map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join('');
+const responsesSse = [
+  { type: 'response.created', response: { id: 'resp_fixture', model: 'gpt-5.4' } },
+  { type: 'response.output_item.added', output_index: 0, item: { type: 'message' } },
+  { type: 'response.output_text.delta', output_index: 0, delta: 'synthetic complete' },
+  { type: 'response.output_item.done', output_index: 0, item: { type: 'message' } },
+  { type: 'response.completed', response: { status: 'completed', usage: { input_tokens: 1, output_tokens: 1 } } },
+];
+let chatgptRejects = false;
 const upstream = createServer(async (req, res) => {
   let raw = '';
   for await (const chunk of req) raw += chunk;
   let body = null;
   try { body = raw ? JSON.parse(raw) : null; } catch { /* opaque */ }
-  requests.push({ url: req.url, apiKey: req.headers['x-api-key'], authorization: req.headers.authorization, model: body?.model });
+  requests.push({ url: req.url, apiKey: req.headers['x-api-key'], authorization: req.headers.authorization, model: body?.model,
+    accountId: req.headers['chatgpt-account-id'] });
+  // The ChatGPT subscription backend (the bridge's https://chatgpt.com/ is redirected here).
+  if (req.url?.startsWith('/chatgpt/')) {
+    if (chatgptRejects) {
+      res.writeHead(401, { 'content-type': 'application/json' })
+        .end('{"error":{"code":"token_revoked","message":"Your authentication token has been revoked."}}');
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream', connection: 'close' });
+    res.end(responsesSse.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''));
+    return;
+  }
   if (req.url?.includes('/count_tokens')) {
     res.writeHead(200, { 'content-type': 'application/json' }).end('{"input_tokens":1}');
     return;
@@ -59,8 +79,11 @@ const { configureHostOwner } = await import('../src/agent/claude-auth.mjs');
 const { configureAppDataDir } = await import('../../desktop/src/main/userDataPath.ts');
 const { createHostProviderConfig } = await import('../src/agent/provider-config.ts');
 const { createHostModelAccess } = await import('../src/agent/model-access.ts');
-const { createHostSubscriptionFastPolicies } = await import('../src/agent/codex-runtime.ts');
 const { createHostClaudeProxyRuntime } = await import('../src/agent/claude-proxy-runtime.ts');
+const { createHostCodexRuntime } = await import('../src/agent/codex-runtime.ts');
+const { hostOutbound } = await import('../src/outbound.mjs');
+const { bindNativeProviderAuth } = await import('../../desktop/src/main/maker-host/nativeProviderAuthBinding.ts');
+const { readInvalidatedSystemCodexAuthMarker } = await import('../../desktop/src/main/maker-host/codex-auth-invalidation.ts');
 const { createHostMcpRuntime } = await import('../src/agent/mcp-runtime.ts');
 const { createHostAgentGraph } = await import('../src/agent/runtime.ts');
 const { createCredentialStore } = await import('../src/credentials/store.mjs');
@@ -80,7 +103,7 @@ initLogger({ logDir: path.join(root, 'logs'), isDev: true, level: 'debug' });
 const profile = path.join(root, 'profile');
 const ownerId = 'claude-proxy-fixture';
 const gatewayKey = 'synthetic-gateway-key';
-let database, config, modelAccess, mcp, proxy, graph;
+let database, config, modelAccess, mcp, proxy, graph, codexRuntime;
 const handles = [];
 try {
   await fs.mkdir(profile, { recursive: true });
@@ -104,14 +127,29 @@ try {
   credentials.write(`owner_${dataOwnerStorageKey(ownerId)}_${customProviderSecretStorageKey('cprov-claude', 'claude-code')}`, 'synthetic-custom-key');
   await config.list();
   mcp = createHostMcpRuntime({ appServerIds: () => [], getRemoteMcpBridgeToken: config.remoteBridgeToken });
+  // A synthetic ChatGPT login in this profile's own codex-home, as an explicit Cindy login leaves it.
+  const codexHome = path.join(profile, 'codex-home');
+  await fs.mkdir(codexHome, { recursive: true });
+  await fs.writeFile(path.join(codexHome, 'auth.json'), JSON.stringify({
+    tokens: { access_token: 'synthetic-chatgpt-token', account_id: 'synthetic-workspace' } }), { mode: 0o600 });
+  bindNativeProviderAuth('openai', { instanceIsolated: true });
+  // The bridge's upstream is https://chatgpt.com/; send it to the fixture instead.
+  const realFetch = hostOutbound.outboundFetch;
+  hostOutbound.outboundFetch = (url, ...rest) => {
+    const target = String(url instanceof Request ? url.url : url);
+    return realFetch(target.startsWith('https://chatgpt.com/') ? `${endpoint}/chatgpt/${target.slice('https://chatgpt.com/'.length)}` : url, ...rest);
+  };
+  // The Codex runtime owns the subscription bridge; no Codex process is started here.
+  codexRuntime = createHostCodexRuntime({ profileDir: profile, binaryPath: path.join(root, 'no-codex-binary'), config, modelAccess, mcp,
+    availabilityPolicy: createAvailabilityPolicy(async () => { throw new Error('Unexpected share mutation'); }), publish: () => {} });
   proxy = createHostClaudeProxyRuntime({ profileDir: profile, gateway: () => modelAccess.gateway,
-    fastRequestPolicy: createHostSubscriptionFastPolicies(createAvailabilityPolicy(async () => { throw new Error('Unexpected share mutation'); })).requestPolicy,
+    fastRequestPolicy: codexRuntime.fastRequestPolicy, subscriptions: codexRuntime.subscriptions,
     isOpenAiSubscriptionProviderId: id => config.codexAccounts.isOpenAiSubscriptionProviderId(id),
     resolveTaskId: sdk => graph?.maker.listActiveSessions().find(session => session.requestSessionId === sdk)?.id ?? null });
   await proxy.ready();
   assert.equal(new URL(proxy.endpoint()).hostname, '127.0.0.1');
   graph = createHostAgentGraph({ userDataDir: profile, providerConfig: config, gateway: modelAccess.gateway,
-    binaryPath: binary, claudeProxy: proxy, mcpRuntime: mcp, mcpProviders: [],
+    binaryPath: binary, claudeProxy: proxy, codexRuntime, mcpRuntime: mcp, mcpProviders: [],
     storage: new OwnerSessionStorage({ db: () => database }) });
 
   const runTurn = async ({ sessionId, providerId, model }) => {
@@ -165,12 +203,40 @@ try {
   assert.ok(requests.every(r => r.apiKey !== proxy.inboundSecret() && !String(r.authorization ?? '').includes(proxy.inboundSecret())));
   console.log(`PASS custom provider: ${customRequests.length} request(s) to the provider path with its key; the runtime secret never left the Host`);
 
-  // 3. Subscription route (row 24b): refused locally, nothing reaches the upstream.
+  // 3. ChatGPT subscription: the bridge carries the profile's own login to the ChatGPT backend; nothing reaches the gateway.
   before = requests.length;
   const subscription = await runTurn({ sessionId: 'claude-subscription', providerId: null, model: 'chatgpt/gpt-5.4' });
-  assert.notEqual(subscription.last.type, 'done', 'a subscription route must not complete before row 24b');
-  assert.equal(requests.slice(before).filter(r => r.model === 'chatgpt/gpt-5.4').length, 0);
-  console.log(`PASS subscription route refused: ${JSON.stringify(subscription.last?.data ?? subscription.last).slice(0, 160)}`);
+  assert.equal(subscription.last.type, 'done', JSON.stringify(subscription.last));
+  const chatgptRequests = requests.slice(before).filter(r => r.url.startsWith('/chatgpt/'));
+  assert.ok(chatgptRequests.length > 0);
+  for (const request of chatgptRequests) {
+    assert.ok(request.url.startsWith('/chatgpt/backend-api/codex/responses'), request.url);
+    assert.equal(request.authorization, 'Bearer synthetic-chatgpt-token');
+    assert.equal(request.accountId, 'synthetic-workspace');
+  }
+  assert.equal(requests.slice(before).filter(r => r.url.includes('/v1/messages') && !r.url.includes('count_tokens')).length, 0);
+  console.log(`PASS ChatGPT subscription: ${chatgptRequests.length} request(s) to the ChatGPT backend with the profile's login, none to the gateway`);
+
+  // 4. The backend revokes that login: the bridge invalidates it in the profile, and the next turn does not reuse it.
+  chatgptRejects = true;
+  before = requests.length;
+  const revoked = await runTurn({ sessionId: 'claude-subscription-revoked', providerId: null, model: 'chatgpt/gpt-5.4' });
+  assert.notEqual(revoked.last.type, 'done');
+  const marker = readInvalidatedSystemCodexAuthMarker(codexHome);
+  assert.equal(marker?.reason, 'token_revoked');
+  assert.equal(marker?.credentialScope, 'instance-isolated');
+  await assert.rejects(fs.access(path.join(codexHome, 'auth.json')));
+  // The next ChatGPT request (as the CLI would send it) finds no login and sends nothing upstream.
+  // (A full CLI turn here only retries the local failure with backoff, as on the desktop.)
+  const afterRevoked = requests.length;
+  const next = await fetch(new URL('/v1/messages', proxy.endpoint()), { method: 'POST',
+    headers: { 'content-type': 'application/json', 'anthropic-version': '2023-06-01', 'x-api-key': gatewayKey },
+    body: JSON.stringify({ model: 'chatgpt/gpt-5.4', max_tokens: 8, messages: [{ role: 'user', content: 'hi' }] }) });
+  assert.ok(next.status >= 400, String(next.status));
+  await next.text();
+  assert.equal(requests.length, afterRevoked);
+  assert.equal(requests.slice(before).filter(r => r.url.includes('/v1/messages') && !r.url.includes('count_tokens')).length, 0);
+  console.log(`PASS revoked login: marker ${marker.reason}, auth.json removed, the next request got ${next.status} and sent nothing upstream`);
 } catch (error) {
   process.exitCode = 1;
   throw error;
@@ -178,6 +244,7 @@ try {
   for (const handle of handles) await handle.close().catch(() => {});
   await graph?.maker.shutdown();
   await proxy?.close();
+  await codexRuntime?.close();
   await mcp?.close();
   modelAccess?.close();
   await config?.close();

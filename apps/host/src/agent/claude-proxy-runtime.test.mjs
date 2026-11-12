@@ -3,7 +3,7 @@
  * - 可观察结果：Host 的 Claude 与 Pi 回环代理（claude-proxy-runtime.ts，用桌面的共用核心）：
  *   只监听 127.0.0.1；入站只放行 Pi 会话 token、当前网关 key 与本运行时发给自家 CLI 的密钥，
  *   其余（含公开的占位常量）一律 401，且模拟上游一次请求都收不到；运行时密钥在路由前换成
- *   占位常量，上游永远看不到它；订阅路线在本地明确拒绝，不落到网关；运行时关闭后它服务过的
+ *   占位常量，上游永远看不到它；订阅路线交给 Codex 运行时的订阅桥，没有 Codex 运行时时在本地明确拒绝，都不落到网关；运行时关闭后它服务过的
  *   任务的路由登记、Pi token 都读不到，新运行时换新密钥、旧密钥被拒；Auto 分类器请求失败时
  *   错误原样回给调用方，不变成成功。
  * - 规则依据：放行表第 24 行与第二节（Host 的回环代理要求入站凭据；关闭时按任务 id 清登记）。
@@ -53,8 +53,8 @@ async function fixture(t, owner) {
   t.after(() => new Promise(resolve => upstream.close(resolve)));
   const gatewayEndpoint = `http://127.0.0.1:${upstream.address().port}`;
   const tasks = new Map();
-  const start = async () => {
-    const runtime = createHostClaudeProxyRuntime({ profileDir: profile,
+  const start = async (extra = {}) => {
+    const runtime = createHostClaudeProxyRuntime({ ...extra, profileDir: profile,
       gateway: () => ({ credential: GATEWAY_KEY, endpoint: gatewayEndpoint }),
       fastRequestPolicy: { subscriptionRequestAllowsFast: () => false, withSubscriptionFastRequestPolicy: decision => decision },
       isOpenAiSubscriptionProviderId: id => id === 'openai',
@@ -131,7 +131,7 @@ test('the public provider placeholder is not an inbound credential on the Host',
   assert.equal(env.requests.length, 0);
 });
 
-test('subscription routes are refused locally and never reach the gateway', async t => {
+test('without a Codex runtime, subscription routes are refused locally and never reach the gateway', async t => {
   const env = await fixture(t, 'claude-proxy-subscription');
   const runtime = await env.start();
   const claude = await post(runtime, { 'x-api-key': GATEWAY_KEY }, { model: 'chatgpt/gpt-5.4', max_tokens: 8, messages: [{ role: 'user', content: 'hi' }] });
@@ -144,6 +144,44 @@ test('subscription routes are refused locally and never reach the gateway', asyn
   assert.equal(pi.status, 403);
   assert.equal((await pi.json()).error.code, 'subscription_route_unavailable');
   assert.equal(env.requests.length, 0);
+});
+
+test('with the subscription bridge, the proxy hands ChatGPT routes to it and never to the gateway', async t => {
+  const env = await fixture(t, 'claude-proxy-bridge');
+  const calls = [];
+  const answer = (res, lane) => {
+    calls.push(lane);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ bridged: lane }));
+  };
+  // The Codex runtime's bridge (codex-runtime.ts), reduced to the handlers the proxy asks for.
+  const subscriptions = {
+    bridge: {
+      getResponsesBridgeHandler: () => ({ handle: async ({ res }) => answer(res, 'claude') }),
+      getPiNativeSubscriptionHandler: () => async ({ res }) => answer(res, 'pi'),
+    },
+    piWebSocket: {
+      resolvePiWebSocketUpstream: () => null,
+      createPiWebSocketRequestPreparer: () => async () => {},
+      piWebSocketTransforms: () => [],
+    },
+  };
+  const runtime = await env.start({ subscriptions });
+  const claude = await post(runtime, { 'x-api-key': GATEWAY_KEY }, { model: 'chatgpt/gpt-5.4', max_tokens: 8, messages: [{ role: 'user', content: 'hi' }] });
+  assert.equal(claude.status, 200);
+  assert.deepEqual(await claude.json(), { bridged: 'claude' });
+  const release = runtime.registerPiProxySession('task-bridge', 'pi-bridge-token', () => 'openai');
+  t.after(release);
+  const pi = await post(runtime, { 'x-cindy-pi-session-id': 'task-bridge', 'x-cindy-pi-session-token': 'pi-bridge-token',
+    'x-cindy-pi-provider-id': 'openai' }, { model: 'gpt-5.4', input: [] });
+  assert.equal(pi.status, 200);
+  assert.deepEqual(await pi.json(), { bridged: 'pi' });
+  assert.deepEqual(calls, ['claude', 'pi']);
+  // A Claude model still goes to the gateway, and the inbound gate still runs first.
+  assert.equal((await post(runtime, { 'x-api-key': GATEWAY_KEY })).status, 200);
+  assert.equal(env.requests.length, 1);
+  assert.equal((await post(runtime, {}, { model: 'chatgpt/gpt-5.4', max_tokens: 8, messages: [] })).status, 401);
+  assert.deepEqual(calls, ['claude', 'pi']);
 });
 
 test('closing the runtime forgets the route records and Pi tokens of its tasks; the next runtime has a new secret', async t => {

@@ -680,6 +680,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
         gateway: () => modelAccess?.gateway ?? null,
         fastRequestPolicy: codexRuntime?.fastRequestPolicy ?? createHostSubscriptionFastPolicies(availabilityPolicy!).requestPolicy,
         isOpenAiSubscriptionProviderId: id => providerConfig?.codexAccounts.isOpenAiSubscriptionProviderId(id) ?? false,
+        subscriptions: codexRuntime?.subscriptions ?? null,
         resolveTaskId: sdkSessionId => agentGraph?.maker.listActiveSessions()
           .find(session => session.requestSessionId === sdkSessionId)?.id ?? null,
       });

@@ -21,6 +21,9 @@ import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from '../
 import { bearerKeyFromHeaders } from '../../../desktop/src/main/model-access/gatewayKeyRejectionCore.js';
 import { captureCodexLocalAuthPolicy } from '../../../desktop/src/main/maker-host/provider-route.js';
 import { registerCodexTextOnlyPolicy } from '../../../desktop/src/main/maker-host/codex-text-only-policy.js';
+import { createAnthropicResponsesBridgeHost } from '../../../desktop/src/main/maker-host/anthropicResponsesBridgeHostCore.js';
+import { createPiSubscriptionWebSocket } from '../../../desktop/src/main/maker-host/piSubscriptionWebSocketCore.js';
+import { chatgptAccountIdFromTokens } from '../../../desktop/src/main/maker-host/codexCredentialRead.js';
 import { createHostCodexCredentials } from './codex-credentials.js';
 import { invalidateHostCodexLogin } from './codex-invalidation.js';
 import { createLogger } from '../../../desktop/src/main/logger.js';
@@ -78,6 +81,37 @@ export function createHostCodexRuntime(options: {
     ...createSilentEncryptedRetryStore({ getUserDataDir }), ...usage, ...routes,
     setAppliedCustomProviderRoutes: routes.setCodexAppliedCustomProviderRoutes,
   });
+  // The ChatGPT and SuperGrok subscription bridge the Claude and Pi proxy routes through
+  // (desktop: anthropic-responses-bridge-host.ts, pi-subscription-websocket.ts), with this
+  // profile's credentials. Ports resolve at call time.
+  const accounts = options.config.codexAccounts;
+  const bridge = createAnthropicResponsesBridgeHost({
+    subscriptionRequestAllowsFast: (...args) => requestPolicy.subscriptionRequestAllowsFast(...args),
+    isXaiSubscriptionProviderId: (...args) => isXaiSubscriptionProviderId(...args),
+    app: { getPath: () => getUserDataDir() },
+    outboundFetch: (...args) => hostOutbound.outboundFetch(...args),
+    getGrokAccessToken: (...args) => options.config.grok.getGrokAccessToken(...args),
+    peekGrokAccessToken: (...args) => options.config.grok.peekGrokAccessToken(...args),
+    invalidateXaiBridgeAuth: (...args) => xai.invalidateXaiBridgeAuth(...args),
+    chatgptAccountIdFromTokens: (...args) => chatgptAccountIdFromTokens(...args),
+    desktopCodexAuthAdapter: {
+      getAccessToken: async providerId => { check(); return native.readAccessToken(providerId); },
+      // The bridge has just matched the rejected token against getAccessToken above.
+      invalidate: reason => invalidateNative(reason),
+      captureOAuthDispatchProof: (accessToken, accountId, providerId) => native.captureDispatchProof(accessToken, accountId, providerId),
+    },
+    codexAccountHome: (...args) => accounts.codexAccountHome(...args),
+    codexAccountState: (...args) => accounts.codexAccountState(...args),
+    invalidateCodexAccount: (...args) => accounts.invalidateCodexAccount(...args),
+    isOpenAiSubscriptionProviderId: (...args) => accounts.isOpenAiSubscriptionProviderId(...args),
+    recordXaiRateLimitSnapshot: (...args) => usage.recordXaiRateLimitSnapshot(...args),
+  });
+  const piWebSocket = createPiSubscriptionWebSocket({
+    subscriptionRequestAllowsFast: (...args) => requestPolicy.subscriptionRequestAllowsFast(...args),
+    getChatgptBridgeAuthForDispatch: (...args) => bridge.getChatgptBridgeAuthForDispatch(...args),
+    invalidateChatgptBridgeAuth: (...args) => bridge.invalidateChatgptBridgeAuth(...args),
+    isOpenAiSubscriptionProviderId: (...args) => accounts.isOpenAiSubscriptionProviderId(...args),
+  });
   // Server-side invalidation of the profile's native login with the desktop's two hooks
   // (maker-host/index.ts): onLogoutSuccess retires the local host and the proxy's injection,
   // onInvalidatedBroadcast retires the host and tells the agents Codex is signed out.
@@ -93,7 +127,10 @@ export function createHostCodexRuntime(options: {
         options.mcp.invalidatePiEnvironment();
       },
       onInvalidated: async credentialScope => {
-        try { await disposeLocalHost?.(reason); } catch (error) {
+        try {
+          await disposeLocalHost?.(reason);
+          bridge.clearChatgptBridgeCredentialCache();
+        } catch (error) {
           log.warn('Codex invalidation host retirement failed', { error: error instanceof Error ? error.message : String(error) });
         }
         publish(MAKER_PUSH.AUTH_STATE_CHANGED, { agentKind: 'codex', authenticated: false, errorReason: reason, credentialScope });
@@ -116,7 +153,8 @@ export function createHostCodexRuntime(options: {
     listProviders: () => options.config.publicViews(Boolean(credential())),
     getDesktopSelectableCatalog: modelContext.getSelectableCatalog,
     resolveDesktopModelContextProviderId: modelContext.resolveContextProviderId,
-    readSubagentOAuth: native.readForDispatch,
+    // The desktop reads subagent OAuth through the same bridge (maker-host/index.ts readSubagentOAuth).
+    readSubagentOAuth: (...args) => bridge.getChatgptBridgeAuthForDispatch(...args),
     prepareRemote: async () => { throw new Error('SSH Codex transport is not configured in this Host'); },
   });
   const deps: Partial<AgentDeps> = {
@@ -142,6 +180,8 @@ export function createHostCodexRuntime(options: {
   };
   return { deps, proxy, native, readRoute, modelContext, fastPolicies: policies, fastRequestPolicy: requestPolicy, closeSession: proxy.unregister,
     invalidateNative, setLocalHostDisposer(handler: (reason: string) => Promise<void>) { disposeLocalHost = handler; },
+    /** For the Claude and Pi proxy; also cleared on every Codex login and logout, as on the desktop. */
+    subscriptions: { bridge, piWebSocket },
     async close() { closed = true; await proxy.disposeCodexProxy(); },
   };
 }
