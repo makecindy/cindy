@@ -30,7 +30,8 @@ function setup(t, ownerId) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-start-options-'));
   t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
   configureHostOwner({ userDataDir: profile, ownerId });
-  const modelContext = createHostModelContext({ readGatewayKey: () => null, hasCodexOAuthLogin: () => false });
+  const modelContext = createHostModelContext({ readGatewayKey: () => null, hasCodexOAuthLogin: () => false,
+    codexAccountState: () => ({ authenticated: false }) });
   const policies = [];
   const fastPolicies = {
     createSubscriptionFastPolicy: (sessionId, resolveProvider) => {

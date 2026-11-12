@@ -73,7 +73,8 @@ export function createHostCodexRuntime(options: {
     check();
     return { authInjection: proxy.getCodexProxyAuthInjectionState() ?? (native.hasLogin() ? 'oauth-bearer' : 'env-key') };
   };
-  const modelContext = createHostModelContext({ readGatewayKey: credential, hasCodexOAuthLogin: native.hasLogin, check });
+  const modelContext = createHostModelContext({ readGatewayKey: credential, hasCodexOAuthLogin: native.hasLogin,
+    codexAccountState: id => options.config.codexAccounts.codexAccountState(id), check });
   const prepare = createCodexSpawnConfig({
     binaryPath: options.binaryPath, proxy,
     getCodexHome: () => { check(); return path.join(options.profileDir, 'codex-home'); },

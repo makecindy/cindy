@@ -250,6 +250,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   // The same per-model resolvers the desktop gives each engine (engineModelResolvers.ts).
   const modelContext = options.codexRuntime?.modelContext ?? createHostModelContext({
     readGatewayKey: () => options.gateway?.credential || null, hasCodexOAuthLogin: () => false,
+    codexAccountState: id => options.providerConfig.codexAccounts.codexAccountState(id),
   });
   // The desktop start hook's steps that apply to a task the Host runs (start-options.ts).
   const startOptions = createHostStartOptions({
