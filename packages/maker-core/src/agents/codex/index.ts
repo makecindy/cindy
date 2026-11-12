@@ -11027,11 +11027,15 @@ assertRouteCurrent();
       // As with the shared signal extractor, require a field/phrase boundary:
       // a forbidden upstream status must beat the wrapper's bad-request code.
       const forbiddenResponse = /(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?|code)["']?\s*(?:[:=]\s*)?["']?403["']?(?=$|[\s,;:}\]])|\brequest\s+rejected\s*\(\s*403\s*\)/i.test(text);
+      // A compact rejection is a provider failure, not a tool error. Preserve
+      // the existing provider auth markers without widening the translator.
+      const authenticationFailure = /invalid.{0,10}(api.?key|token)|authentication_error|unauthorized|api key not valid|令牌|鉴权失败/i.test(text);
       const uncertainTransport = tag === 'responseStreamDisconnected' || tag === 'responseStreamConnectionFailed'
         || [contextualStatus, httpStatus].some(status => status === 408 || status === 504)
         || /timeout|timed out|ECONNRESET|ECONNREFUSED|ENOTFOUND|connection reset|network error|stream disconnected/i.test(text);
       return !uncertainTransport
         && !isAuthRelatedErrorMessage(text)
+        && !authenticationFailure
         && !matchesDeterministicUsageExhaustionText(text)
         && !paymentRequired
         && !forbiddenResponse

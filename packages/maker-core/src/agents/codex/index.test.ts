@@ -11802,6 +11802,11 @@ describe('CodexAgent MCP thread context hooks', () => {
       { message: '{"code":"400","status":408}' },
       { message: '{"code":"400","status":409}' },
       { message: '{"code":"400","type":"authentication_error"}' },
+      { message: '{"code":"400","type":"unauthorized"}' },
+      { message: '{"code":"400","message":"Unauthorized"}', codexErrorInfo: 'badRequest' },
+      { message: '{"code":"400","message":"invalid token"}' },
+      { message: '{"code":"400","message":"鉴权失败"}' },
+      { message: '{"code":"400","message":"令牌无效"}' },
       { message: '{"code":"400"}', codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } } },
       { message: '{"code":"400"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 504 } } },
       { message: '{"code":"400"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 403 } } },
@@ -11843,6 +11848,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       { message: '{"code":"400","status":403}', codexErrorInfo: 'other' as const },
       { message: '{"code":"400","status_code":504}', codexErrorInfo: 'other' as const },
       { message: '{"code":"400"}', codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 504 } } },
+      { message: '{"code":"400","type":"unauthorized"}', codexErrorInfo: 'badRequest' as const },
     ])('rechecks a recorded summary recovery against the authoritative error: %j', async (error) => {
       const { host, handle, events } = await start();
       try {
