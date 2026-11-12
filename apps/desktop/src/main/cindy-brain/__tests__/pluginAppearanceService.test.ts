@@ -18,7 +18,7 @@ function fixture(fields = ['uiFont', 'reading', 'theme']) {
   let apply: () => Promise<{ status: 'applied' | 'saved' | 'failed'; reason?: string }> = async () => ({ status: 'saved', reason: 'NO_VIEWING_WINDOW' });
   const createService = () => new PluginAppearanceService({ ready: () => true, current: id => instance?.id === id ? instance : null,
     files: { describe: async () => null, read: async () => new Response(null, { status: 404 }) },
-    read: () => settings, update: async updater => { beforeUpdate(); settings = normalizeAppearanceSettings({ ...settings, ...updater(settings) }); return settings; },
+    read: () => settings, update: async updater => { beforeUpdate(); settings = normalizeAppearanceSettings({ ...settings, ...updater(settings, settings) }); return settings; },
     saveWallpaper, revokeWallpaper: async () => false,
     publish: () => {}, apply: rendererApply,
   });

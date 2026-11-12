@@ -1,5 +1,7 @@
 import { createRequire } from 'node:module';
 import { GhostManager } from '../../../desktop/src/main/cindy-brain/GhostManager.js';
+import { GhostBrowserExtensionSlot } from '../../../desktop/src/main/cindy-brain/browserExtensionSlot.js';
+import { hostRuntimeLayout } from '../runtime-layout.mjs';
 import { GhostRuntime } from '../../../desktop/src/main/cindy-brain/runtime/GhostRuntime.js';
 import { GhostPipeDispatcher } from '../../../desktop/src/main/cindy-brain/pipeDispatcher.js';
 import { createGhostExecutionPipe } from '../../../desktop/src/main/cindy-brain/executionPipe.js';
@@ -197,6 +199,18 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
       },
     },
   });
+  // The execution owner, not a UI attachment, owns the browser bridge. The same
+  // slot keeps pairing/provenance rules and stops accepted jobs on owner change.
+  const browserExtensions = new GhostBrowserExtensionSlot({
+    getGhost, policyDir: () => root('browser-extension'), ownerScopeKey: () => owner,
+    isVerifiedOfficial: ghost => !hostRuntimeLayout().packaged || identity.isVerifiedPublicMarket(installedGhostStoragePart(ghost)),
+    sendToGhost: async (id, payload) => { assertCurrent(); return sandbox.deliver(id, payload, { failOnUncertain: true }); },
+    wake: async id => { const ghost = getGhost(id); return Boolean(ghost?.enabled && (await runtime.spawn(ghost)).ok); },
+    // No trusted native confirmation surface is attached to Node Host yet. A
+    // conflicting native registration is retained; never approve a takeover.
+    confirmNativeTakeover: async () => false,
+    log,
+  });
   const ownerScope = { capture: () => owner, isCurrent: (value: unknown) => value === owner && current(), isStable: (value: unknown) => value === owner && current() };
   const node = createHostNodeRuntimeBroker(assets.nodeWorker!, { getGhost, ownerScope,
     readSecret: secret.readGhostSecret, secretSaved: secret.ghostSecretSaved,
@@ -227,6 +241,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
       const result = pipe(id, payload, () => isCurrent(ghost));
       if (result) return track(result);
       const request = payload as { type?: string; kind?: string } | null;
+      if (request?.type === 'browser-extension-request') return track(browserExtensions.handleRequest(id, payload));
       if (request?.type === 'card-update') { cards.handleCardUpdate(id, payload); return Promise.resolve({ ok: true }); }
       if (request?.type === 'host-request' && request.kind === 'app-context') return Promise.resolve(options.appContext());
       if (request?.type === 'notify') return Promise.resolve(notify.handleNotify(id, payload));
@@ -287,6 +302,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   async function reconcileInstalled() {
     assertCurrent();
     const ghosts = await options.manager.listAsync(); assertCurrent();
+    browserExtensions.reconcile(ghosts.map(ghost => getGhost(installedGhostStoragePart(ghost)) ?? { ...ghost, enabled: false }));
     for (const [id, previous] of known) {
       if (previous === revision(getGhost(id))) continue;
       authorization.changes.emit(id, { source: 'manifest' });
@@ -317,6 +333,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
         // Requests from old pages lose authority immediately, even if writing the
         // disabled receipt fails. Re-enabling is an explicit new transaction.
         suspended.add(key);
+        browserExtensions.reconcile(options.manager.list().map(ghost => getGhost(installedGhostStoragePart(ghost)) ?? { ...ghost, enabled: false }));
         runtime.stop(key);
         await node.stopAndWait(key);
         await library.disposeGhost(key);
@@ -336,6 +353,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     closed = true; stopSignal.abort(); runtime.destroyAll();
     const errors: unknown[] = [];
     const finish = async (work: () => Promise<unknown>) => { try { await work(); } catch (error) { errors.push(error); } };
+    await finish(() => browserExtensions.dispose());
     await finish(() => authorization.close());
     await finish(() => enableChanges);
     await finish(() => reconciliation);
@@ -352,6 +370,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   }
   return {
     list: () => options.manager.listAsync(), reconcile, cards, library, fsSlot, network, secret, node, authorization,
+    browserExtensions,
     manager: options.manager, getGhost, current, assertCurrent, dispatcher, handoff, files,
     captureMutationOwner() { assertCurrent(); return getActiveAppSession(); },
     acquireMutationLease(expected: ActiveAppSession) {

@@ -77,6 +77,8 @@ import {
   type SelfHostedRelayState,
   type SelfHostedRelayTenantView,
   type RelayDeployProgressMessage,
+  type PeerAgentNetReply,
+  type PeerAgentNetRequest,
   type RelayDeployStep,
 } from '../../shared/selfHostedRelay.js';
 import { deviceName } from './deviceName.js';
@@ -84,9 +86,15 @@ import { readAccountPreference, updateAccountPreference } from './relayAccountPr
 import {
   broadcast,
   getDeviceLinkConnectionIssue,
+  getDeviceLinkPeerLinks,
+  remoteBackgroundInvoke,
   restartDeviceLinkForRelayChange,
   setKeepAwakeEnabled,
 } from './index.js';
+import { AGENT_NET_SWITCH_CHANNEL } from '@cindy/device-link';
+import { createAgentNetRemoteSwitch, type AgentNetRemoteSwitch } from './agentNetRemoteSwitch.js';
+import { isAgentNetOnlyRelay } from './selfHostedRelayRouting.js';
+import type { AgentNetSwitchDisableBlock } from '@cindy/device-link';
 import { getDeviceLinkInvokeContext } from './invoke-context.js';
 import { providerShareLinkApp } from './providerShareApi.js';
 import {
@@ -121,7 +129,7 @@ import { hostJoinBaseUrl, suggestedRelayUrls as suggestedUrls } from './selfHost
 import { AgentNetClientError, submitJoin, pollJoin, submitTenantJoin, pollTenantJoin, type AgentNetClient } from '@cindy/agent-net-relay/client';
 import { startRelayGateway } from '@cindy/agent-net';
 import { agentNetClientForRelay, approveAgentNetMember, createAgentNetTenantRequest, isAgentNetActive, ensureOwnerAgentNetBootstrap, memberAgentNetIdentity, memberAgentNetSecrets } from './agentNetRuntime.js';
-import { readDeviceLinkSettings, writeDeviceLinkSetting } from './settings-store.desktop.js';
+import { readDeviceLinkSettings, updateDeviceLinkSetting, type DeviceLinkSettings } from './settings-store.desktop.js';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidated } from '../appSessionState.js';
 
 async function sharingAuthConfig(): Promise<SharingAuthConfig> {
@@ -225,6 +233,7 @@ export function getState(): SelfHostedRelayState {
   return {
     agentNetEnabled: readDeviceLinkSettings().agentNetEnabled === true,
     agentNetOnlyEncrypted: readDeviceLinkSettings().agentNetOnlyEncrypted === true,
+    agentNetChangedBy: readDeviceLinkSettings().agentNetChangedBy ?? null,
     available: authManager.getAuthState().isAuthenticated && secureStorageAvailable(),
     mode: relay ? 'self-hosted' : 'official',
     relay: relay && origin
@@ -803,6 +812,7 @@ async function revokeTenant(tenantId: string): Promise<CommandResult> {
 type CommandResult = {
   state: SelfHostedRelayState;
   error?: SelfHostedRelayErrorCode;
+  peer?: PeerAgentNetReply;
   check?: SelfHostedRelayServerCheck;
   deploymentStatus?: SelfHostedRelayDeploymentStatus;
 };
@@ -1795,37 +1805,163 @@ async function deploymentStatus(relayId: string): Promise<CommandResult> {
   return { state: getState(), deploymentStatus: status };
 }
 
+/** Agent-Net 写入在实际拿到设置文件锁后核验账号代次，不让过期操作先提交再报错。 */
+async function writeAgentNetSetting<K extends 'agentNetEnabled' | 'agentNetOnlyEncrypted' | 'agentNetChangedBy' | 'agentNetPendingSwitch'>(
+  key: K, value: DeviceLinkSettings[K], assertOwner = captureOwner(),
+): Promise<void> {
+  // updater 在设置文件实际写锁内执行；等待队列/锁期间失效的账号不能先落盘再被拒绝。
+  await updateDeviceLinkSetting(key, () => { assertOwner(); return value; });
+  // 提交后由调用方核验：初次 pending 必须先挂恢复期限，再拒绝失效请求的后续处理。
+}
+
+/** 本机与远程共用保存、重启本机中转和重连路径；起不来时恢复原值并返回原因。 */
+async function applyAgentNet(enabled: boolean): Promise<CommandResult> {
+  const notReady = enabled ? requireReady() : null;
+  if (notReady) return { state: getState(), error: notReady };
+  const assertOwner = captureOwner();
+  const previous = readDeviceLinkSettings().agentNetEnabled === true;
+  if (previous === enabled) return { state: getState() };
+  await writeAgentNetSetting('agentNetEnabled', enabled, assertOwner); assertOwner();
+  try {
+    if (readRelayConfig().host.enabled) {
+      await startHost(readRelayConfig()); assertOwner();
+      if (!host) throw new Error('AGENT_NET_HOST_START_FAILED');
+    }
+  } catch (error) {
+    if (error instanceof RelayOperationExpired) throw error;
+    const reason = hostError ?? 'START_FAILED';
+    await writeAgentNetSetting('agentNetEnabled', previous, assertOwner); assertOwner();
+    if (readRelayConfig().host.enabled) { await startHost(readRelayConfig()); assertOwner(); }
+    restartDeviceLinkForRelayChange();
+    return { state: getState(), error: reason };
+  }
+  restartDeviceLinkForRelayChange();
+  return { state: getState() };
+}
+
+/**
+ * 远程切换连接方式(docs/product-rules/agent-net.md「远程切换其他电脑的连接方式」)的两头：
+ * - 被切的这台电脑：remoteSwitch 处理同账号电脑发来的请求(准入在 dispatch)，开关仍走 applyAgentNet；
+ * - 发起的这台电脑：askPeerAgentNet 只把请求转给那台电脑并原样带回回答，不改本机任何设置。
+ */
+let remoteSwitch: AgentNetRemoteSwitch | null = null;
+
+function agentNetSwitchDisableBlock(): AgentNetSwitchDisableBlock | null {
+  if (isAgentNetOnlyRelay(activeSelfHostedRelay())) return 'V2_ONLY_RELAY';
+  const settings = readDeviceLinkSettings();
+  return settings.agentNetEnabled === true && settings.agentNetOnlyEncrypted === true ? 'ENCRYPTION_REQUIRED' : null;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+function installAgentNetRemoteSwitch(): void {
+  if (remoteSwitch) return;
+  const switchLog = createLogger('agent-net:remote-switch');
+  remoteSwitch = createAgentNetRemoteSwitch({
+    captureScope: captureOwner,
+    readSettings: readDeviceLinkSettings,
+    disableBlock: agentNetSwitchDisableBlock,
+    // 「由谁打开」写好就推给本机窗口，开关下面立刻显示。
+    writeChangedBy: async (value) => {
+      await writeAgentNetSetting('agentNetChangedBy', value);
+      broadcast(SELF_HOSTED_RELAY_IPC.CHANGED, getState());
+    },
+    writePending: (value) => writeAgentNetSetting('agentNetPendingSwitch', value),
+    readiness: () => {
+      const notReady = requireReady();
+      if (notReady) return notReady === 'NOT_SIGNED_IN' ? 'NOT_SIGNED_IN' : 'SECURE_STORAGE_UNAVAILABLE';
+      const relay = activeSelfHostedRelay();
+      // 本机中转主人在启用时可以补身份；加入的/部署的中转必须先有该网络的身份。
+      const canBootstrapHere = relay?.role === 'owner' && activeRelayOrigin() === 'host' && readRelayConfig().host.enabled;
+      return relay && !readRelaySecrets(relay.relayId)?.agentNet && !canBootstrapHere ? 'RELAY_IDENTITY_MISSING' : null;
+    },
+    apply: async (enabled) => {
+      try {
+        const result = await applyAgentNet(enabled);
+        emitChanged();
+        return result.error ?? null;
+      } catch (error) {
+        return error instanceof RelayOperationExpired ? 'NOT_SIGNED_IN' : 'START_FAILED';
+      }
+    },
+    linkIsAgentNet: (deviceId) => getDeviceLinkPeerLinks().links.some((link) => link.deviceId === deviceId && link.open && link.encrypted === true),
+    now: () => Date.now(),
+    pid: process.pid,
+    isProcessAlive,
+    log: switchLog,
+  });
+  const service = remoteSwitch;
+  // 上次在等确认时应用退出了：等启动稳定后退回(记录它的进程还在运行时留给那个实例)。
+  const timer = setTimeout(() => {
+    void service.recover().catch((error: unknown) => switchLog.warn('recovering an interrupted remote agent-net switch failed', { error: String(error) }));
+  }, 3_000);
+  timer.unref?.();
+}
+
+/**
+ * 被切电脑一侧的处理入口，bootstrap 交给 dispatch(setAgentNetSwitchRemoteHandler)。在 registerSelfHostedRelayIpc 之后调用。
+ * 不在本模块直接引用 dispatch，避免把整个 dispatch 拉进中转运行时。
+ */
+export function agentNetSwitchRemoteHandler(): { handle(raw: unknown, controllerDeviceId: string, controllerName: string): Promise<unknown> } | null {
+  const service = remoteSwitch;
+  return service ? { handle: (raw, controllerDeviceId, controllerName) => service.handle(raw, controllerDeviceId, controllerName) } : null;
+}
+
+async function askPeerAgentNet(deviceId: string, request: PeerAgentNetRequest): Promise<PeerAgentNetReply> {
+  const controllerBlock = agentNetSwitchDisableBlock();
+  if (request.action === 'set' && !request.enabled && controllerBlock) {
+    // 发起端自己拒绝旧连接时，不能先关掉对方，再因无法重连把已执行的关闭报告为失败。
+    const code = controllerBlock === 'V2_ONLY_RELAY' ? 'AGENT_NET_SWITCH_V2_ONLY_RELAY' : 'AGENT_NET_SWITCH_CONTROLLER_ENCRYPTION_REQUIRED';
+    return { ok: false, code: 'IPC_ERROR', message: `[${code}] this computer cannot reconnect over Device Link` };
+  }
+  try {
+    const reply = await remoteBackgroundInvoke(deviceId, AGENT_NET_SWITCH_CHANNEL, [request]);
+    return reply.ok
+      ? { ok: true, result: reply.result, ...(request.action === 'status' ? { controllerBlock: agentNetSwitchDisableBlock() } : {}) }
+      : { ok: false, code: reply.error.code, message: reply.error.message };
+  } catch (error) {
+    const code = typeof (error as { code?: unknown }).code === 'string' ? (error as { code: string }).code : 'NOT_CONNECTED';
+    return { ok: false, code, message: error instanceof Error ? error.message : 'unavailable' };
+  }
+}
+
 async function execute(command: SelfHostedRelayCommand): Promise<CommandResult> {
   switch (command.type) {
     case 'set-agent-net-encryption': {
       const assertOwner = captureOwner();
-      await writeDeviceLinkSetting('agentNetOnlyEncrypted', command.enabled); assertOwner();
-      restartDeviceLinkForRelayChange();
+      // 本机的加密选择同样优先于已经接受、还未执行的远程切换。
+      const change = async () => {
+        assertOwner();
+        await writeAgentNetSetting('agentNetOnlyEncrypted', command.enabled, assertOwner); assertOwner();
+        restartDeviceLinkForRelayChange();
+        return true;
+      };
+      if (remoteSwitch) await remoteSwitch.onLocalChange(change); else await change();
+      assertOwner();
       return { state: getState() };
     }
     case 'set-agent-net': {
-      const notReady = command.enabled ? requireReady() : null;
-      if (notReady) return { state: getState(), error: notReady };
       const assertOwner = captureOwner();
-      const previous = readDeviceLinkSettings().agentNetEnabled === true;
-      if (previous === command.enabled) return { state: getState() };
-      await writeDeviceLinkSetting('agentNetEnabled', command.enabled); assertOwner();
-      try {
-        if (readRelayConfig().host.enabled) {
-          await startHost(readRelayConfig()); assertOwner();
-          if (!host) throw new Error('AGENT_NET_HOST_START_FAILED');
-        }
-      } catch (error) {
-        if (error instanceof RelayOperationExpired) throw error;
-        const reason = hostError ?? 'START_FAILED';
-        await writeDeviceLinkSetting('agentNetEnabled', previous); assertOwner();
-        if (readRelayConfig().host.enabled) await startHost(readRelayConfig());
-        restartDeviceLinkForRelayChange();
-        return { state: getState(), error: reason };
-      }
-      restartDeviceLinkForRelayChange();
-      return { state: getState() };
+      // 这台电脑上的人自己改了开关：以人为准，丢掉待确认的远程切换与「由谁打开」的说明。
+      let result!: CommandResult;
+      const change = async () => {
+        assertOwner();
+        result = await applyAgentNet(command.enabled); assertOwner();
+        return !result.error;
+      };
+      if (remoteSwitch) await remoteSwitch.onLocalChange(change); else await change();
+      assertOwner();
+      return { ...result, state: getState() };
     }
+    case 'peer-agent-net':
+      return { state: getState(), peer: await askPeerAgentNet(command.deviceId, command.request) };
     case 'state':
       return { state: getState() };
     case 'enable-host':
@@ -1882,6 +2018,7 @@ async function execute(command: SelfHostedRelayCommand): Promise<CommandResult> 
 export function registerSelfHostedRelayIpc(): void {
   // 先登记中转来源:之后 device-link 每次建连都按当前账号的选择走官方或自建中转。
   installSelfHostedRelayRouting();
+  installAgentNetRemoteSwitch();
   ipcMain.handle(SELF_HOSTED_RELAY_IPC.COMMAND, async (event, raw: unknown) => {
     // 账号级本机设置:只接受本机应用窗口,不经设备互联代理。
     if (getDeviceLinkInvokeContext()) throwIpcError('PERMISSION_DENIED', 'Self-hosted relay settings are local only');
@@ -1897,7 +2034,7 @@ export function registerSelfHostedRelayIpc(): void {
     }
     // 只读查询不改状态,不向所有窗口广播(重读同账号中转有变化时由它自己推送)。
     if (command.type !== 'state' && command.type !== 'check-server' && command.type !== 'deployment-status'
-      && command.type !== 'refresh-account-relays') emitChanged();
+      && command.type !== 'refresh-account-relays' && command.type !== 'peer-agent-net') emitChanged();
     return result;
   });
 

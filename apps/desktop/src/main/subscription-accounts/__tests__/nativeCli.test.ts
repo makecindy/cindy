@@ -44,6 +44,7 @@ import {
   readLegacyCodexProviderAccount,
   loginLegacyCodexProviderAccount,
 } from '../nativeCli.js';
+import { refreshClaudeCliLoginStatus, runClaudeCliLogin } from '../../maker-host/claude-native-cli.desktop.js';
 
 const children: (EventEmitter & {
   stdin: EventEmitter & { write: ReturnType<typeof vi.fn> };
@@ -101,6 +102,25 @@ beforeEach(() => {
   });
 });
 afterEach(() => vi.useRealTimers());
+// Standard: expiry and renewal belong to the selected native profile, never the
+// system default. Previous coverage exercised only Codex's RPC account reader.
+describe('Claude profile renewal', () => {
+  it('reads the selected profile expiry and forwards a verified renewal request', async () => {
+    vi.mocked(refreshClaudeCliLoginStatus).mockResolvedValueOnce({ loggedIn: true,
+      email: 'second@example.test', loginExpiresAt: '2030-01-05T00:00:00.000Z' });
+    expect(await readNativeAccount('anthropic', '/fixture/claude-second', { force: true })).toMatchObject({
+      authenticated: true, identity: 'second@example.test', loginExpiresAt: '2030-01-05T00:00:00.000Z',
+    });
+    expect(refreshClaudeCliLoginStatus).toHaveBeenLastCalledWith({ configDir: '/fixture/claude-second', force: true, requireFresh: true });
+    const signal = new AbortController().signal;
+    vi.mocked(runClaudeCliLogin).mockResolvedValueOnce({ ok: true, status: { loggedIn: true, email: 'second@example.test' } });
+    await loginNativeAccount('anthropic', '/fixture/claude-second', signal, { renew: true, expectedEmail: 'second@example.test' });
+    expect(runClaudeCliLogin).toHaveBeenLastCalledWith(signal, '/fixture/claude-second', { renew: true, expectedEmail: 'second@example.test' });
+    vi.mocked(runClaudeCliLogin).mockResolvedValueOnce({ ok: false, reason: 'account_mismatch' });
+    await expect(loginNativeAccount('anthropic', '/fixture/claude-second', signal, { renew: true, expectedEmail: 'second@example.test' }))
+      .rejects.toThrow('account_mismatch');
+  });
+});
 describe('official Codex profiles', () => {
   // Upgrade 2026-11-11, standard: a revoked imported login cannot be resurrected
   // by reading its still-present token file; successful reads keep the old native profile.

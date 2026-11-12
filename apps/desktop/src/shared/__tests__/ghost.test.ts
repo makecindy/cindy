@@ -57,6 +57,24 @@ import {
 
 // Real receipt projection: new resources/fields never inherit an older capability grant.
 describe('host appearance approval', () => {
+  // Unit, #9987 compatibility: exercise the real installed-reader and receipt,
+  // which the protocol-only tests cannot cover. Invalid new fields stay inert.
+  it('retains approved legacy entries and tokens beside invalid historical extensions', () => {
+    const host: GhostHostUi = { contributions: [{ id: 'old', title: 'Toolbar', position: 'composer.toolbar', tool: 'help' }],
+      commands: [{ id: 'open', title: 'Command', tool: 'help', shortcut: 'Mod+Shift+H' }] };
+    const manifest: GhostManifest = { schemaVersion: 3, minCindyVersion: '0.1.61', id: 'example', name: 'Example',
+      version: '1', kind: 'chip', entry: 'main.js', tools: [{ name: 'help', description: 'Help' }], mcpApps: { host } };
+    const approvedHostUi = ghostHostUiApprovalTokens(manifest);
+    const stored = validateInstalledGhostManifest({ ...manifest, mcpApps: { host: { ...host, settings: { vendor: true },
+      contributions: [...host.contributions!, { id: 'future', title: 'Future', position: 'composer.completion', tool: 'help' }] } } });
+    if (!stored.ok) throw new Error(stored.reason);
+    const ghost = { manifest: stored.manifest, approvedHostUi, approval: { state: 'approved', revision: 'one' } } as InstalledGhost;
+    expect(getApprovedGhostHostUi(ghost)).toMatchObject(host);
+    expect(getApprovedGhostHostUi(ghost)?.contributions).toHaveLength(1);
+    expect(getApprovedGhostHostUi(ghost)?.settings).toBeUndefined();
+    expect(ghostHostUiApprovalTokens(stored.manifest)).toEqual(approvedHostUi);
+    expect(ghostHostUiNeedsApproval(ghost)).toBe(false);
+  });
   it('requires approval for each new field and resource while preserving existing views', () => {
     const host: GhostHostUi = { capabilities: ['appearance'], appearance: { fields: ['uiFont'] },
       views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board' }] };

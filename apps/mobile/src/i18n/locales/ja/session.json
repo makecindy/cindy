@@ -1,5 +1,12 @@
 {
   "githubPrs": {
+    "status": {
+      "open": "オープン",
+      "draft": "ドラフト",
+      "merged": "マージ済み",
+      "closed": "クローズ済み"
+    },
+    "statusUnavailable": "ステータスはまだ取得していません",
     "title": "PR リンクを管理",
     "hint": "上部に最大 3 件表示。固定した PR を優先します",
     "empty": "GitHub PR または GitLab MR のリンクを貼り付けて追加",
@@ -241,7 +248,7 @@
           "plugins": "プラグイン一覧",
           "memoryRules": "メモリの指示",
           "memoryIndex": "メモリ索引",
-          "profile": "チームメイトのプロフィール",
+          "profile": "仲間のプロフィール",
           "user": "ユーザーの指示",
           "directories": "追加ディレクトリ",
           "native": "Pi の指示",
