@@ -399,6 +399,8 @@ function CardControls({
   useEffect(() => {
     if (!lease) return;
     if (!focused || !foreground || status !== "online") {
+      // The host discards preview resources on suspend. Resume only from a fresh receipt.
+      setPreviewIntent(undefined);
       if (current() && status === "online")
         void invokePlugin(invoke, deviceId, pluginId, "suspend", {
           pageId: lease,

@@ -17,8 +17,7 @@ export function pluginPreviewFixture(channel: string, args: unknown[]): unknown 
   switch (request.actionId) {
     case 'open-interaction': return { result: { pageId: 'qa-preview-page' } };
     case 'poll': return { result: { confirms: [], intents: intent ? [intent] : [] } };
-    case 'intent:ack': case 'close': intent = undefined; return { effects: [] };
-    case 'suspend': return { effects: [] };
+    case 'intent:ack': case 'close': case 'suspend': intent = undefined; return { effects: [] };
     case 'preview:fetch': {
       if (!intent || intent.kind !== 'preview' || request.input?.intentId !== intent.id || request.input?.url !== intent.url) throw new Error('INVALID_QA_PREVIEW');
       const title = intent.url.includes('/editor/') ? 'Editor loaded' : 'Canvas loaded';
