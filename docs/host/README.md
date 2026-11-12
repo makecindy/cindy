@@ -20,6 +20,7 @@
 | [maintenance-plan.md](maintenance-plan.md) | PR #9246 合并后的维护计划与逐批验收边界 |
 | [feature-parity.md](feature-parity.md) | 原 PR 阶段的逐项功能记录与审计，保留历史验证范围 |
 | [electron-client-mode.md](electron-client-mode.md) | Electron 以客户端模式运行：通道代理表、安全边界、未迁移清单 |
+| [channel-coverage.md](channel-coverage.md) | 脚本生成：桌面主进程全部 IPC 通道的归属（A 后台／B 窗口／W 窗口设置／S 同步／R 回执／C 待定）、要 Host 做的总数与真实使用排行、客户端模式行为 |
 | [systemd.md](systemd.md) | user unit 安装与运维 |
 | [maker-assembly-extraction-plan.md](maker-assembly-extraction-plan.md) | Runtime 装配抽离计划 |
 | [evidence/](evidence) | 脱敏的端到端证据（阶段 2 / 阶段 4） |

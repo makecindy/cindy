@@ -23,6 +23,7 @@ import { resetCompanionCloudStoreForTests } from '../companionCloudStore';
 import { botGroupWorkPreview, BotGroupProcessNotes } from '../BotGroupLivePreview';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { WorkGroupBlock } from '@/components/chat/WorkGroupBlock';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { BotGroupChatView } from '../BotGroupChatView';
 import { BotGroupProcess } from '../BotGroupProcess';
 import { ControlledBanner, __resetControlledBannerForTests } from '../../remote-device/ControlledBanner';
@@ -5364,7 +5365,7 @@ it('keeps inspected tool details open when group work becomes history', async ()
     { clientId: 'tool', role: 'tool_use', content: { toolName: 'Read', input: { file_path: '/repo/notes.md' } } },
     { clientId: 'final', role: 'assistant', content: 'Answer', agentMeta: { turnCompleted: true } }]);
   try {
-    const view = render(<Tooltip.Provider><WorkGroupBlock journal isStreaming blockId={`group-process:${process.executionId}`}
+    const view = render(<Tooltip.Provider><WorkGroupBlock pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} journal isStreaming blockId={`group-process:${process.executionId}`}
       childItems={[{ kind: 'rendered', key: 'notes', renderNode: () =>
         <BotGroupProcessNotes sessionId={process.sessionId} executionId={process.executionId} since={0} /> }]} /></Tooltip.Provider>);
     const segment = () => view.container.querySelector('[data-teammate-segment] > button');

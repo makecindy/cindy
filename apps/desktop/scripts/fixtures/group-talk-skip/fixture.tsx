@@ -1,3 +1,4 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { useState } from 'react';
 import { ctx, mountPage } from '../../ui-page/harness';
 import { BotGroupTimelineItem } from '../../../src/renderer/features/bots/BotGroupTimelineItem';
@@ -20,7 +21,7 @@ const initial: BotGroupPlanView = {
 function Fixture() {
   const [plan, setPlan] = useState(initial);
   const [pending, setPending] = useState<'edit' | null>(ctx.case === 'busy' ? 'edit' : null);
-  return <main className="p-4"><BotGroupTimelineItem plan={plan} members={[]}
+  return <main className="p-4"><BotGroupTimelineItem pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} plan={plan} members={[]}
     message={{ id: 'queue-message', sequence: 1, kind: 'plan', authorKind: 'bot',
       authorBotId: 'bot-0', authorName: names[0], content: '', mentions: { all: false, botIds: [] },
       noticeCode: null, planId: plan.id, files: [], attachments: [], createdAt: 1 }}

@@ -73,6 +73,9 @@ Desktop 信任来源已经完成的版本选择，不再按 `minCindyVersion` �
 
 `mcpApps.ui` 声明页面资源与工具可见性，完整写法见[§4.23](plugin-interactive-pages.md)。
 
+可选 `mcpApps.host` 声明具名视图、原生位置、命令和宿主能力，见[插件界面扩展](plugin-host-ui.md)。
+只激活用户已批准的已知声明；未知扩展保留为数据，原页面批准不会自动授予新增宿主能力。
+
 `systemPrompt` 可选，声明包内静态系统提示词片段：
 `[{ "id": "style", "text": "Use the documented terminology.", "order": 100, "scope": "selected-task", "agentKinds": ["cc", "codex", "pi"] }]`。
 安装确认展示完整原文，用户在任务设置中选择后才生效；不进入其它任务或全局提示词。

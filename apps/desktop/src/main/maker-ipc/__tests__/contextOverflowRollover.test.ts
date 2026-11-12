@@ -374,6 +374,30 @@ describe('createContextOverflowRollover', () => {
     };
   }
 
+  // Unit, 2026-11-11: a paused account needs handoff even with a healthy or
+  // empty context. Existing tests required overflow. Verify no replay/close while busy.
+  it.each([false, true])('hands off a paused account before sending (empty=%s)', async empty => {
+    const deps = makeDeps(empty ? [] : [msg('user', 'Keep this goal', 'u1'), msg('assistant', 'Finished step one', 'a1')]);
+    const needsNativeSessionHandoff = vi.fn(async () => true);
+    const rollover = createContextOverflowRollover({ ...deps, needsNativeSessionHandoff });
+    deps.getLiveSession.mockReturnValue({ isTurnRunning: () => true });
+    expect(await rollover.prepareUnhealthySession('s1')).toBe(false);
+    expect(needsNativeSessionHandoff).not.toHaveBeenCalled();
+    deps.getLiveSession.mockReturnValue({ isTurnRunning: () => false });
+    expect(await rollover.prepareUnhealthySession('s1')).toBe(true);
+    expect(deps.commitRebuild).toHaveBeenCalledWith('s1', expect.any(String), expect.objectContaining({ reason: 'native-session-recovery' }), expect.any(AbortSignal));
+    if (!empty) expect(deps.setPendingHandoff.mock.calls[0][1]).toContain('Finished step one');
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('preserves the original runtime if no replacement account is available', async () => {
+    const deps = makeDeps([msg('user', 'Keep working', 'u1')]);
+    const rollover = createContextOverflowRollover({ ...deps, needsNativeSessionHandoff: async () => { throw new Error('No subscription account is available'); } });
+    await expect(rollover.prepareUnhealthySession('s1')).rejects.toThrow('No subscription account');
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+  });
+
   it.each(['cc', 'pi'])('recovers a full %s companion through the ordinary Session guard, retaining outcomes without replay', async (agentKind) => {
     const deps = makeDeps([
       msg('user', 'Keep the game keyboard accessible', 'u1'),
@@ -680,7 +704,15 @@ describe('createContextOverflowRollover', () => {
   it.each(['cc', 'pi'] as const)(
     'rebuilds %s native context before a pressured 500K → 272K model switch',
     async (agentKind) => {
+      // #9973, unit: exercise the real smaller-window entry with an early long
+      // request; the former two short rows never exercised lossy early history.
+      const initial = `${'background '.repeat(25)}Keep the production database read-only.${'context '.repeat(25)}`;
       const deps = makeDeps([
+        msg('user', initial, 'initial', 0),
+        ...Array.from({ length: 3 }, (_, i) => [
+          msg('user', `Progress ${i}`, `early-u${i}`, i + 1),
+          msg('assistant', 'Checking', `early-a${i}`, i + 1),
+        ]).flat(),
         msg('user', '先做 A', 'u1', 1),
         msg('assistant', '做完 A', 'a1', 2),
       ]);
@@ -718,6 +750,7 @@ describe('createContextOverflowRollover', () => {
       );
       const commitCalls = deps.commitRebuild.mock.calls as unknown as Array<[string, string]>;
       const handoff = String(commitCalls[0]?.[1] ?? '');
+      expect(handoff).toContain(initial);
       expect(handoff).toContain('switching to a model with a smaller context window');
       expect(handoff).not.toContain("exceeded the model's context window");
       expect(deps.setPendingHandoff).toHaveBeenCalled();

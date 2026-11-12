@@ -7,7 +7,7 @@ export type AppRpc = {
   params?: Record<string, unknown>;
   [key: string]: unknown;
 };
-export type AppInvoker = (sessionId: string, input: Record<string, unknown>) => Promise<unknown>;
+export type AppInvoker = (sessionId: string | null, input: Record<string, unknown>) => Promise<unknown>;
 let nextOpenId = 0;
 
 /** The UI is a transport only; official negotiation, schemas and permissions live on the Host. */
@@ -30,17 +30,19 @@ export class McpAppController {
   private readonly openId = `${Date.now()}:${++nextOpenId}`;
   constructor(
     private readonly invoke: AppInvoker,
-    readonly sessionId: string,
+    readonly sessionId: string | null,
     readonly clientId: string,
     private readonly post: (message: AppRpc) => void,
     private readonly onState: (message: AppRpc) => void,
     private readonly onError: (error: unknown) => void,
     private readonly openLink?: (url: string) => Promise<void>,
+    private readonly resourceSource?: { instanceId: string; viewId: string },
   ) {}
 
   async open(context: Record<string, unknown>): Promise<McpAppOpenResult | undefined> {
     const document = (await this.invoke(this.sessionId, {
-      op: 'open',
+      op: this.resourceSource ? 'open-resource' : 'open',
+      ...(this.resourceSource ? { source: this.resourceSource } : {}),
       openId: this.openId,
       clientId: this.clientId,
       context,

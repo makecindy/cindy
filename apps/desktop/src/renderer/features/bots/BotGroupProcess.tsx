@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { SESSION_SYNC_CHANNEL } from '@cindy/device-link';
 import { projectBotGroupProcess, readBotGroupProcessMessages, type BotGroupProcessRef, type BotGroupProcessMessage, type BotGroupMemberView } from '../../../shared/botGroupChat';
 import { WorkGroupBlock, TeammateWorkSegment, type WorkGroupChild } from '@/components/chat/WorkGroupBlock';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
@@ -133,7 +134,7 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
   const failed = result?.failed || subscriptionFailed;
   // Resolve availability before advertising a disclosure, just like private chat.
   if (!result) return null;
-  return <WorkGroupBlock blockId={`group-process:${process.executionId}`} journal durationMs={process.durationMs ?? projection.durationMs}
+  return <WorkGroupBlock pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} blockId={`group-process:${process.executionId}`} journal durationMs={process.durationMs ?? projection.durationMs}
     childItems={[{ kind: 'rendered', key: process.executionId, renderNode: () => <>
       {loading && <Spinner size={14} />}
       {failed && !loading && <>
@@ -152,7 +153,7 @@ export function BotGroupProcessEntries({ messages, id, running = false }: { mess
   return <div data-testid="bot-group-process-notes" className="flex min-w-0 flex-col gap-3">
     {projection.segments.map((segment, index) => segment.kind === 'content'
       ? <MarkdownRenderer key={segment.key} content={segment.item.text ?? ''} workingDir="" />
-      : <TeammateWorkSegment key={segment.key} blockId={`${id}:${segment.key}`} active={running && index === projection.segments.length - 1}
+      : <TeammateWorkSegment pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} key={segment.key} blockId={`${id}:${segment.key}`} active={running && index === projection.segments.length - 1}
           childItems={segment.items.map(item => item.kind === 'thinking'
             ? { kind: 'thinking', key: item.key, message: { clientId: item.key, role: 'thinking', content: '' } }
             : { kind: 'tools', key: item.key, toolCalls: (item.toolCalls ?? []).map(message => ({ ...message, role: 'tool_use' as const })), resultMap: item.resultMap ?? new Map(), settledIds: item.settledIds ?? new Set() }) as WorkGroupChild[]} />)}

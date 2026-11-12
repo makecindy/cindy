@@ -17,6 +17,13 @@ describe('thread share card', () => {
     expect(buildBotGroupThreadShareCard({ messageId: reply, threadRootId: root, authorName: '', text: '' }).fallback).toBe('↪ …');
   });
 
+  it('never splits a surrogate pair at the clip point', () => {
+    const text = `${'x'.repeat(279)}😀 tail`;
+    const fallback = buildBotGroupThreadShareCard({ messageId: reply, threadRootId: root, authorName: 'A', text }).fallback;
+    expect(fallback).toBe(`↪ A: ${'x'.repeat(279)}…`);
+    expect(fallback).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  });
+
   it('uses one deterministic operation per reply', () => {
     expect(botGroupThreadShareOperationId(reply)).toBe(`thread-share:${reply}`);
     expect(botGroupThreadShareOperationId(reply)).toMatch(/^[a-zA-Z0-9_.:-]{8,160}$/);
