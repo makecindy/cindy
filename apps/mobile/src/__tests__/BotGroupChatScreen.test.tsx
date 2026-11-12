@@ -14,6 +14,8 @@ const testThemeContext = createContext('light');
 const h = vi.hoisted(() => ({
   window: { width: 390, height: 844, fontScale: 1, scale: 3 },
   processRead: vi.fn(),
+  processSubscribe: vi.fn(async () => {}),
+  processUnsubscribe: vi.fn(async () => {}),
   textRender: vi.fn(),
   translate: null as null | ((key: string, options?: Record<string, unknown>) => string),
   chat: null as any, pngExport: vi.fn(async () => 'encoded'), sharedImage: vi.fn(async () => {}), exported: [] as any[],
@@ -166,7 +168,7 @@ vi.mock('@/theme', async () => {
   return { ...tokens, useThemedStyles: (makeStyles: any) => makeStyles(useColors()),
     useTheme: () => ({ mode: useContext(testThemeContext), colors: useColors() }), monoFont: 'mono' };
 });
-vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.processRead, getPresenceAvailability: () => true }) }));
+vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.processRead, subscribe: h.processSubscribe, unsubscribe: h.processUnsubscribe, getPresenceAvailability: () => true }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({
   user: { id: 'owner' }, accountGeneration: 1, getAccessToken: async () => 'token', apiFetch: async () => ({}),
 }) }));
@@ -341,6 +343,7 @@ vi.mock('@/session/MessageRenderer', async () => {
     const send = useSessionQuickSend();
     return el('button', { 'data-testid': 'rich-group-send', disabled: !send, onClick: () => send?.('Visible rich reply') }, richAnswerText(text));
   },
+  WorkToolActivityRow: ({ activity }: any) => el('div', { 'data-testid': 'private-tool-row' }, activity.message.normalized.label, activity.toolResult),
   MessagePayloadModal: ({ payload, onClose }: any) => payload
     ? el('div', { 'data-testid': 'diagramModal', 'data-source': payload.body },
       el('button', { 'data-testid': 'diagramModal.close', onClick: onClose }, '关闭'))
@@ -2768,7 +2771,7 @@ it.each([
     { clientId: 'seal', role: 'assistant', content: 'Final answer', agentMeta: { turnCompleted: true } }]);
   h.chat.server = true;
   await render(data, 'ready', threadRootId, '');
-  expect(h.processRead).toHaveBeenCalledWith(deviceId ?? 'owner-mac', 'local-db:messages:around-client-id', ['lane', 'source', { radius: 80 }]);
+  expect(h.processRead).toHaveBeenCalledWith(deviceId ?? 'owner-mac', 'local-db:messages:around-client-id', ['lane', 'source', { radius: 80 }], { background: true, preSend: expect.any(Function) });
   expect(node.textContent).toContain('Progress note');
   const record = [...node.querySelectorAll('section')].find(section => section.textContent?.includes('Progress note'))!;
   expect(record.textContent).not.toContain('Final answer');
@@ -3302,6 +3305,26 @@ vi.mock('@/session/ModelDocumentPreview', () => ({ ModelDocumentPreview: () => n
 vi.mock('@/session/BotGroupTextAttachmentPreview', () => ({ BotGroupTextAttachmentPreview: () => null, botGroupTextAttachmentPreviewKind: () => null }));
 vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
 vi.mock('@/session/mediaPlayerWebView', () => ({ RemoteMediaPlayerWebView: () => null }));
+
+// Unit: main's empty-record explanation stays separate from the final reply.
+// Exercise the production group timeline; only the native disclosure shell is adapted.
+it('keeps the final answer separate from the empty historical process explanation', async () => {
+  const process = { groupId: 'g1', executionId: 'empty', sessionId: 'lane', clientId: 'source' };
+  h.processRead.mockResolvedValue([{ clientId: 'source', role: 'user', content: 'Help' },
+    { clientId: 'seal', role: 'assistant', content: 'Final answer', agentMeta: { turnCompleted: true } }]);
+  h.chat.server = true;
+  await render(group({ plans: [], openPlan: null,
+    members: [{ ...group().members[0], isOwned: true, homeDeviceId: 'owner-mac' }],
+    messages: [message('result', 2, { authorBotId: 'mimi', content: 'Final answer', process })],
+  }), 'ready', undefined, '');
+  expect(h.processRead).toHaveBeenCalled();
+  expect(node.textContent).toContain('Final answer');
+  const record = node.querySelector('section');
+  expect(record).not.toBeNull();
+  expect(record!.textContent).toContain('chat.teammateProcess.empty');
+  expect(record!.textContent).not.toContain('chat.teammateProcess.unavailable');
+  expect(record!.textContent).not.toContain('Final answer');
+});
 
 // Unit: verify the group screen supplies its own sender in both main and thread surfaces.
 // Rich controls themselves are exercised in BotGroupMarkdownText.test.tsx.

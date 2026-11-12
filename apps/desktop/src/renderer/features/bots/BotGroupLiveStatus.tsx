@@ -70,8 +70,8 @@ export function BotGroupSpeakingLine({ speaker, showStatus = true }: { speaker: 
   }
   return (
     <article data-testid="bot-group-speaking" data-activity={speakerActivity} className="mt-3.5 flex min-w-0 items-start gap-2.5">
-      <div className="flex h-5 w-7 shrink-0 items-center justify-end">
-        <BotAvatar bot={member} size="xs" />
+      <div className="flex h-7 w-7 shrink-0 items-center justify-end">
+        <BotAvatar bot={member} size="sm" />
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         {showStatus ? (
@@ -199,13 +199,13 @@ function BotGroupSingleProgressStrip({
       : t('chat.teammateProcess.processing')}</span>
   </span>;
   return <div data-testid="bot-group-work" className="mt-3 flex min-w-0 items-start gap-2.5">
-    {member ? <div className="flex h-8 w-7 shrink-0 items-center"><BotAvatar bot={member} size="xs" /></div> : null}
+    {member ? <div className="flex h-8 w-7 shrink-0 items-center"><BotAvatar bot={member} size="sm" /></div> : null}
     <div data-testid="bot-group-progress" className="min-w-0 flex-1">
       <WorkGroupBlock pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} journal isStreaming blockId={`group-process:${lead?.executionId ?? sessionId ?? name}`}
         journalTitle={title} childItems={[{ kind: 'rendered', key: 'notes', renderNode: () => <>
           {workStep ? <p className="text-13 text-[var(--text-secondary)]">{t('bots.groupChat.progress.step', { step: workStep.index, total: workStep.total })} · {workStep.step.task}</p> : null}
-          {sessionId && processSince !== undefined ? lead?.target ? <BotGroupRemoteProcessNotes sessionId={sessionId} deviceId={lead.target.deviceId} since={processSince} />
-            : <BotGroupProcessNotes sessionId={sessionId} since={processSince} /> : action ? <p className="break-words text-13 text-[var(--text-secondary)]">{action}</p> : null}
+          {sessionId && processSince !== undefined ? lead?.target ? <BotGroupRemoteProcessNotes sessionId={sessionId} executionId={lead?.executionId} deviceId={lead.target.deviceId} since={processSince} />
+            : <BotGroupProcessNotes sessionId={sessionId} executionId={lead?.executionId} since={processSince} /> : action ? <p className="break-words text-13 text-[var(--text-secondary)]">{action}</p> : null}
         </> }]} />
           <span className="flex shrink-0 items-center gap-1">
             {canView ? (

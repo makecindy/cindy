@@ -15563,6 +15563,16 @@
             "recheck": "Verificar conexão",
             "summary": "Gerencie repositórios, issues, pull requests e Actions do GitHub.",
             "otherMethods": "Outros métodos de conexão"
+          },
+          "app": {
+            "title": "Eventos dos repositórios",
+            "description": "Conecte a GitHub App da Cindy para atualizar os PRs acompanhados quando as revisões ou a CI mudarem.",
+            "connected": "Conectado como {{login}} · Repositórios acompanhados: {{count}}",
+            "missing": "Verifique a instalação do App e o acesso a: {{repositories}}",
+            "error": "Não foi possível verificar a conexão. Tente novamente.",
+            "repositories": "Escolher repositórios",
+            "disconnect": "Desconectar eventos",
+            "connect": "Conectar GitHub App"
           }
         },
         "unresolved": "Discussões de revisão não resolvidas: {{count}}",
@@ -16300,7 +16310,11 @@
             "payments": "Pagamentos",
             "checkout": "Finalização da compra",
             "invoices": "Faturas",
-            "subscriptions": "Assinaturas"
+            "subscriptions": "Assinaturas",
+            "reviewComments": "Comentários de revisão",
+            "reviewThreads": "Discussões de revisão",
+            "checkRuns": "Execuções de verificação",
+            "commitStatus": "Status do commit"
           },
           "actions": {
             "all": "Todas as alterações",
@@ -16322,7 +16336,12 @@
             "failed": "Falha",
             "paid": "Pago"
           }
-        }
+        },
+        "repositoriesLabel": "Repositórios",
+        "repositoriesHint": "Insira owner/repository, um por linha. Apenas os repositórios autorizados para esta GitHub App podem iniciar a tarefa.",
+        "repositoriesInvalid": "Insira de 1 a 50 nomes de repositório válidos no formato owner/repository.",
+        "githubAppHint": "Conecte a GitHub App no computador que executa esta tarefa e autorize esses repositórios. Não é necessário um URL de Webhook ou segredo separado.",
+        "githubAppPaused": "Esta tarefa está pausada. Os eventos não a iniciarão."
       },
       "trigger": {
         "label": "Modo de acionamento",

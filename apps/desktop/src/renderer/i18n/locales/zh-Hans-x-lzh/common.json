@@ -15351,6 +15351,16 @@
             "recheck": "察连接",
             "summary": "掌 GitHub 保存库、Issues、PR 与 Actions。",
             "otherMethods": "他种连接之法"
+          },
+          "app": {
+            "title": "仓库之变",
+            "description": "连 Cindy GitHub App，评审或 CI 有变，则更新所随之 PR。",
+            "connected": "已连 {{login}} · 所察仓库 {{count}} 个",
+            "missing": "请核此仓之 App 安装及访问权限：{{repositories}}",
+            "error": "未能验其连接，请重试。",
+            "repositories": "择仓库",
+            "disconnect": "断事件之连",
+            "connect": "连 GitHub App"
           }
         },
         "unresolved": "{{count}} 条未决之 review 评论",
@@ -16085,7 +16095,11 @@
             "payments": "付款",
             "checkout": "結账",
             "invoices": "账单",
-            "subscriptions": "订阅"
+            "subscriptions": "订阅",
+            "reviewComments": "评审留言",
+            "reviewThreads": "评审议论",
+            "checkRuns": "检查运行",
+            "commitStatus": "提交状态"
           },
           "actions": {
             "all": "全部變化",
@@ -16107,7 +16121,12 @@
             "failed": "失败",
             "paid": "已付款"
           }
-        }
+        },
+        "repositoriesLabel": "仓库",
+        "repositoriesHint": "每行一 owner/repository。仓库须授权予此 GitHub App，方能启动任务。",
+        "repositoriesInvalid": "请填一至五十个有效之 owner/repository 仓库名。",
+        "githubAppHint": "于执行此任务之电脑连接 GitHub App，授权所列仓库，无须另设 Webhook 地址或密钥。",
+        "githubAppPaused": "任务已暂停，事件不启之。"
       },
       "trigger": {
         "label": "触发方式",
