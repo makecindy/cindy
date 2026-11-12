@@ -4,11 +4,12 @@ import { subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { PluginManagementRequestError, pluginManagementErrorCode,
   type PluginManagementBegin, type PluginManagementClient } from './pluginManagementClient';
 import { marketItemMatchesPlugin, pluginApprovalToken, type ManagedMarketDetail, type ManagedPlugin,
-  type PluginManagementReceipt, type PluginManagementSnapshot } from './pluginManagementTypes';
+  type PluginManagementReceipt, type PluginManagementSnapshot, type PluginUiConsentItem, type PluginUiConsentSnapshot } from './pluginManagementTypes';
 
 export interface PluginManagementState {
   capability: 'unknown' | 'supported' | 'unsupported';
   snapshot: PluginManagementSnapshot | null;
+  uiConsent?: PluginUiConsentSnapshot | null;
   receipt: PluginManagementReceipt | null;
   operationId: string | null;
   busy: boolean;
@@ -26,11 +27,12 @@ export interface PluginManagementControllerOptions {
   pollIntervalMs?: number;
 }
 type BeginIntent = PluginManagementBegin extends infer T ? T extends PluginManagementBegin ? Omit<T, 'operationId'> : never : never;
+type ConsentIntent = { kind: 'approve-ui' | 'defer-ui'; installed: PluginUiConsentItem };
 const terminal = (receipt: PluginManagementReceipt) => ['succeeded', 'cancelled', 'failed'].includes(receipt.phase);
 
 /** One controller per selected Host/owner. Dispose when changing targets. No persisted writes or replay queue. */
 export function createPluginManagementController(client: PluginManagementClient, options: PluginManagementControllerOptions = {}) {
-  let state: PluginManagementState = { capability: 'unknown', snapshot: null, receipt: null,
+  let state: PluginManagementState = { capability: 'unknown', snapshot: null, uiConsent: null, receipt: null,
     operationId: null, busy: false, online: options.online ?? true, outcome: 'idle', errorCode: null };
   let disposed = false, epoch = 0, refreshSequence = 0, snapshotSequence = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -80,12 +82,12 @@ export function createPluginManagementController(client: PluginManagementClient,
       if (options.readDisplay) {
         const snapshotToken = ++snapshotSequence;
         const display = await options.readDisplay();
-        if (current(token) && sequence === refreshSequence && snapshotToken === snapshotSequence) publish({ ...display, errorCode: null });
+        if (current(token) && sequence === refreshSequence && snapshotToken === snapshotSequence) publish({ ...display, uiConsent: display.uiConsent ?? null, errorCode: null });
         return;
       }
       const capability = await client.capability();
       if (!current(token) || sequence !== refreshSequence) return;
-      publish({ capability, errorCode: null, ...(capability === 'unsupported' ? { snapshot: null } : {}) });
+      publish({ capability, uiConsent: null, errorCode: null, ...(capability === 'unsupported' ? { snapshot: null } : {}) });
       if (capability === 'supported') {
         const snapshotToken = ++snapshotSequence;
         const snapshot = await client.snapshot();
@@ -95,7 +97,7 @@ export function createPluginManagementController(client: PluginManagementClient,
       if (current(token) && sequence === refreshSequence) publish({ errorCode: pluginManagementErrorCode(error) });
     }
   }
-  async function start(intent: BeginIntent) {
+  async function start(intent: BeginIntent | ConsentIntent) {
     if (disposed || !client.isCurrent()) return;
     if (!state.online) { publish({ errorCode: 'DEVICE_OFFLINE' }); return; }
     if (state.busy || (state.operationId && !['succeeded', 'cancelled', 'failed'].includes(state.outcome))) return;
@@ -103,10 +105,12 @@ export function createPluginManagementController(client: PluginManagementClient,
     const token = ++epoch;
     let began = false;
     publish({ busy: true, errorCode: null, operationId: null, receipt: null, outcome: 'idle' });
-    receiver = intent.installed;
+    const installed = intent.installed;
+    if (!installed && intent.kind !== 'install') { publish({ busy: false, outcome: 'failed', errorCode: 'PLUGIN_INSTALL_CHANGED' }); return; }
+    receiver = installed && 'manifest' in installed ? installed : undefined;
     installDetail = intent.kind === 'install' ? intent.detail : undefined;
     try {
-      let request: BeginIntent = intent;
+      let request: BeginIntent = intent as BeginIntent;
       if (intent.kind === 'install') {
         const detail = await client.detail(intent.detail.pluginId);
         if (!current(token)) return;
@@ -117,6 +121,11 @@ export function createPluginManagementController(client: PluginManagementClient,
       }
       const snapshot = await readSnapshot(token);
       if (!current(token)) return;
+      if (!receiver && installed && 'instanceKey' in installed) {
+        receiver = snapshot.ghosts.find(g => g.instanceKey === installed.instanceKey);
+        if (!receiver) throw new Error('PLUGIN_INSTALL_CHANGED');
+        request = { ...intent, installed: receiver } as BeginIntent;
+      }
       if (!receiverCurrent(snapshot)) throw new Error('PLUGIN_INSTALL_CHANGED');
       if ((intent.kind === 'approve-ui' || intent.kind === 'defer-ui') && !snapshot.uiCapabilityApproval)
         throw new PluginManagementRequestError('PLUGIN_UI_APPROVAL_UNSUPPORTED');
@@ -177,7 +186,7 @@ export function createPluginManagementController(client: PluginManagementClient,
   const unsubscribeOwner = subscribeMobileAuthOwner(() => {
     if (client.isCurrent()) return;
     ++epoch; stopPolling();
-    publish({ capability: 'unknown', snapshot: null, receipt: null, operationId: null, busy: false, outcome: 'idle', errorCode: null });
+    publish({ capability: 'unknown', snapshot: null, uiConsent: null, receipt: null, operationId: null, busy: false, outcome: 'idle', errorCode: null });
   });
   return {
     getState: () => state,
@@ -188,6 +197,8 @@ export function createPluginManagementController(client: PluginManagementClient,
     setEnabled: (installed: ManagedPlugin, enabled: boolean) => start({ kind: enabled ? 'enable' : 'disable', installed }),
     approveUi: (installed: ManagedPlugin) => start({ kind: 'approve-ui', installed }),
     deferUi: (installed: ManagedPlugin) => start({ kind: 'defer-ui', installed }),
+    approveUiFromConsent: (installed: PluginUiConsentItem) => start({ kind: 'approve-ui', installed }),
+    deferUiFromConsent: (installed: PluginUiConsentItem) => start({ kind: 'defer-ui', installed }),
     answer, cancel, reconcile,
     setOnline(online: boolean) {
       if (disposed || state.online === online) return;

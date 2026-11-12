@@ -6,7 +6,7 @@ import { createPluginPromptReads } from '@/plugins/pluginPromptReads';
 import { createPluginManagementController } from '@/plugins/pluginManagementController';
 import { isBoundedPluginResponse, parsePluginManagementDetail, parsePluginManagementReceipt,
   parsePluginManagementSnapshot, marketItemMatchesPlugin, pluginNeedsUiApproval, type ManagedPlugin,
-  type ManagedMarketDetail, type PluginManagementReceipt, type PluginManagementSnapshot } from '@/plugins/pluginManagementTypes';
+  parsePluginUiConsent, type ManagedMarketDetail, type PluginManagementReceipt, type PluginManagementSnapshot } from '@/plugins/pluginManagementTypes';
 
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'operation-1' }));
 
@@ -357,6 +357,57 @@ it.each([null, 'legacy', [], { ui: { resources: [{ uri: 'ui://run', file: '../pa
 // Production readers/controllers, real protocol envelopes: switches previously downloaded
 // the complete plugin market for every chat hint. Display reuse must never authorize a write.
 describe('shared chat plugin hints', () => {
+  it('uses the lightweight consent action when the Host advertises it', async () => {
+    const requests: Envelope[] = [];
+    const invoke = vi.fn(async (_id: string, channel: string, args?: unknown[]) => {
+      if (channel.endsWith(':manifest')) return { protocolVersion: 1, collections: [{ id: 'plugins', actions: [
+        { id: 'management:snapshot' }, { id: 'management:ui-consent' },
+      ] }] };
+      const request = args?.[0] as Envelope;
+      requests.push(request);
+      return { effects: [], result: request.actionId === 'management:ui-consent'
+        ? { version: 1, uiCapabilityApproval: true, item: { instanceKey: '_root__demo', name: 'Demo', approvalToken: `approved:${plugin.approval.state === 'approved' ? plugin.approval.revision : 'invalid'}` } }
+        : snapshot() };
+    }) as unknown as PluginManagementInvoke;
+    const reads = createPluginPromptReads(invoke, () => true);
+    const display = await reads.read('host-1');
+    expect(requests.map(request => request.actionId)).toEqual(['management:ui-consent']);
+    expect(display.snapshot).toBeNull();
+    expect(display.uiConsent).toMatchObject({ version: 1, uiCapabilityApproval: true, item: { instanceKey: '_root__demo' } });
+    expect(parsePluginUiConsent(display.uiConsent)).toEqual(display.uiConsent);
+  });
+  it('falls back to the full snapshot for an older Host', async () => {
+    const h = host(); const reads = createPluginPromptReads(h.invoke, () => true);
+    const display = await reads.read('host-1');
+    expect(h.requests.map(request => request.actionId)).toEqual(['management:snapshot']);
+    expect(display.snapshot?.ghosts).toEqual([]);
+    expect(display.uiConsent).toBeUndefined();
+  });
+  it('re-reads full Host facts by exact instance before a lightweight hint mutation', async () => {
+    const needsUi = { ...plugin, manifest: { ...plugin.manifest, tools: [{ name: 'run' }],
+      mcpApps: { ui: { resources: [{ uri: 'ui://run', file: 'page.html' }], tools: { run: {} } } } } };
+    const actions: string[] = [];
+    const invoke = vi.fn(async (_id: string, channel: string, args?: unknown[]) => {
+      if (channel.endsWith(':manifest')) return { protocolVersion: 1, collections: [{ id: 'plugins', actions: [
+        { id: 'management:snapshot' }, { id: 'management:ui-consent' },
+      ] }] };
+      const request = args?.[0] as Envelope; actions.push(request.actionId);
+      if (request.actionId === 'management:ui-consent') return { effects: [], result: { version: 1,
+        uiCapabilityApproval: true, item: { instanceKey: needsUi.instanceKey, name: needsUi.manifest.name,
+          approvalToken: `approved:${plugin.approval.state === 'approved' ? plugin.approval.revision : 'invalid'}` } } };
+      if (request.actionId === 'management:snapshot') return { effects: [], result: { ...snapshot([needsUi]), uiCapabilityApproval: true } };
+      return { effects: [], result: receipt('succeeded') };
+    }) as unknown as PluginManagementInvoke;
+    const client = createPluginManagementClient({ deviceId: 'host-1', invoke });
+    const reads = createPluginPromptReads(invoke, () => true);
+    const c = createPluginManagementController(client, { readDisplay: () => reads.read('host-1'), createOperationId: () => 'operation-1' });
+    controllers.push(c); await c.refresh();
+    const item = c.getState().uiConsent?.item;
+    expect(item?.instanceKey).toBe(needsUi.instanceKey);
+    await c.approveUiFromConsent(item!);
+    expect(actions).toEqual(['management:ui-consent', 'management:snapshot', 'management:begin', 'management:snapshot']);
+    expect(c.getState().outcome).toBe('succeeded');
+  });
   it('shares concurrent and sequential switches, drops market data, and invalidates on changes/expiry', async () => {
     vi.useFakeTimers();
     const h = host(); const reads = createPluginPromptReads(h.invoke, () => true);
@@ -369,11 +420,20 @@ describe('shared chat plugin hints', () => {
     reads.invalidate('host-1', event);
     const fresh = reads.read('host-1');
     reads.invalidate('host-1', event); // Provider + visible consumer see the same push.
+    await vi.advanceTimersByTimeAsync(250);
     await fresh;
     expect(h.requests).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(30001);
     await reads.read('host-1');
     expect(h.requests).toHaveLength(3);
+  });
+  it('coalesces a notification burst and keeps one in-flight refresh', async () => {
+    vi.useFakeTimers(); const h = host(); const reads = createPluginPromptReads(h.invoke, () => true);
+    await reads.read('host-1'); h.requests.length = 0;
+    const event = {}; reads.invalidate('host-1', event); const first = reads.read('host-1');
+    reads.invalidate('host-1', event); const second = reads.read('host-1');
+    expect(second).toBe(first); await vi.advanceTimersByTimeAsync(250); await first;
+    expect(h.requests).toHaveLength(1);
   });
   it('rejects invalidated in-flight replies and retries after a read failure', async () => {
     const h = host(); const pending = deferred<unknown>();
