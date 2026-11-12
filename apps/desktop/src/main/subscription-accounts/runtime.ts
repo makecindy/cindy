@@ -72,7 +72,7 @@ type Usage = {
   codexCredits?: NonNullable<SubscriptionAccountUsage['codex']>['credits'];
 };
 interface AccountSnapshot {
-  auth: AuthState & { plan?: string };
+  auth: AuthState & { plan?: string; loginExpiresAt?: string };
   usage?: Usage;
   unavailable?: boolean;
   at: number;
@@ -314,11 +314,26 @@ async function snapshot(
     } else {
       try {
         const imported = provider === 'openai' ? readLegacyCodexProviderId(id) : undefined;
+        const expectedIdentity = provider === 'anthropic'
+          ? readPool(provider)?.accounts.find((account) => account.id === id)?.reloginIdentity
+          : undefined;
         let auth = imported
           ? await readLegacyCodexProviderAccount(imported, directory)
           : id === 'default' && legacyCodexDefault(provider)
             ? await readLegacyCodexAccount()
-            : await readNativeAccount(provider, directory);
+            : expectedIdentity
+              ? await readNativeAccount(provider, directory, { force: true })
+              : await readNativeAccount(provider, directory);
+        if (expectedIdentity && (!auth.authenticated
+          || auth.identity?.trim().toLowerCase() !== expectedIdentity.toLowerCase())) {
+          // A cancelled/wrong browser login may already have changed the native profile.
+          // Keep the original identity until that same account has been confirmed again.
+          auth = {
+            authenticated: false,
+            identity: expectedIdentity,
+            ...(auth.authenticated ? { errorReason: 'account_mismatch' } : {}),
+          };
+        }
         const invalidated = state.invalidated.get(key);
         if (provider === 'openai' && invalidated && auth.authenticated) {
           const current = await readNativeCodexTokens(directory);
@@ -381,7 +396,9 @@ async function snapshot(
             : eventDuringRead && usage === latest?.usage ? latest?.usageAt : Date.now(),
         };
       } catch {
-        result = { auth: { authenticated: false }, unavailable: true, at: Date.now() };
+        const identity = provider === 'anthropic'
+          ? readPool(provider)?.accounts.find((account) => account.id === id)?.reloginIdentity : undefined;
+        result = { auth: { authenticated: false, ...(identity ? { identity } : {}) }, unavailable: true, at: Date.now() };
       }
     }
     assertOwner(state);
@@ -739,9 +756,13 @@ export async function readSubscriptionPool(
         ...(account.id === 'default' && legacyCodexDefault(provider) ? { legacy: true } : {}),
         identity: info.auth.identity,
         plan: info.auth.plan,
+        ...(provider === 'anthropic' && !pool.disconnected && info.auth.authenticated
+          && info.auth.loginExpiresAt ? { loginExpiresAt: info.auth.loginExpiresAt } : {}),
         ...(info.auth.errorReason === 'codex_provider_managed_auth'
           ? { authIssue: 'codex-provider-managed-auth' as const }
-          : {}),
+          : info.auth.errorReason === 'account_mismatch'
+            ? { authIssue: 'claude-account-mismatch' as const }
+            : {}),
         status:
           pool.disconnected && !preview
             ? ('signed-out' as const)
@@ -1220,8 +1241,9 @@ export async function runSubscriptionAccountCommand(
       // Only an explicit default-account choice (or legacy Add) may attach the
       // detected login. "New" always uses a fresh, host-generated directory.
       const legacy = accountId === 'default' && legacyCodexDefault(provider);
+      const renewClaude = provider === 'anthropic' && command.action === 'login';
       const currentAuth =
-        (adding && accountId === 'default') || (provider === 'openai' && !legacy)
+        (adding && accountId === 'default') || (provider === 'openai' && !legacy) || renewClaude
           ? await (legacy
               ? readLegacyCodexAccount()
               : readNativeAccount(provider, directory))
@@ -1230,26 +1252,68 @@ export async function runSubscriptionAccountCommand(
       if (abort.signal.aborted) throw new Error('login_cancelled');
       if (currentAuth?.errorReason === 'codex_provider_managed_auth')
         throw new Error('codex_provider_managed_auth');
+      // Derive identity on the execution computer; the caller only supplies the account ID.
+      const expectedEmail = renewClaude
+        ? initial?.accounts.find((account) => account.id === accountId)?.reloginIdentity
+          ?? state.cache.get(keyOf(provider, accountId))?.auth.identity
+          ?? currentAuth?.identity
+        : undefined;
+      if (expectedEmail) {
+        await updatePool(provider, (pool) => ({
+          ...pool,
+          accounts: pool.accounts.map((account) => account.id === accountId
+            ? { ...account, reloginIdentity: expectedEmail } : account),
+        }));
+        assertOwner(state);
+        if (abort.signal.aborted) throw new Error('login_cancelled');
+      }
       const attachDefault = adding && accountId === 'default' && currentAuth?.authenticated;
       if (!attachDefault) {
         const imported = provider === 'openai' ? readLegacyCodexProviderId(accountId) : undefined;
         if (imported) await loginLegacyCodexProviderAccount(imported, abort.signal);
         else if (accountId === 'default' && legacyCodexDefault(provider))
           await loginLegacyCodexAccount(abort.signal);
+        else if (renewClaude)
+          await loginNativeAccount(provider, directory, abort.signal, { renew: true, expectedEmail });
         else await loginNativeAccount(provider, directory, abort.signal);
       }
       assertOwner(state);
       if (abort.signal.aborted) throw new Error('login_cancelled');
       if (accountId === 'default' && !legacyCodexDefault(provider))
         bindNativeProviderAuth(provider, { sharedSystem: true });
-      await updatePool(provider, (pool) => ({ ...pool, disconnected: false }));
+      // Do not let a pre-login read land after the post-login identity check.
+      await state.flights.get(keyOf(provider, accountId))?.catch(() => {});
       assertOwner(state);
       state.cache.delete(keyOf(provider, accountId));
+      // Codex's previous rejected credential must not invalidate the newly logged-in account.
       state.invalidated.delete(keyOf(provider, accountId));
+      const verified = await snapshot(state, provider, accountId, true);
+      if (abort.signal.aborted) throw new Error('login_cancelled');
+      if (expectedEmail) {
+        if (verified.auth.errorReason === 'account_mismatch') throw new Error('account_mismatch');
+        if (!verified.auth.authenticated) throw new Error('login_failed');
+        await updatePool(provider, (pool) => ({
+          ...pool,
+          accounts: pool.accounts.map((account) => {
+            if (account.id !== accountId) return account;
+            const { reloginIdentity: _expected, ...confirmed } = account;
+            return confirmed;
+          }),
+        }));
+        assertOwner(state);
+      }
+      await updatePool(provider, (pool) => ({ ...pool, disconnected: false }));
+      assertOwner(state);
       state.quotaCooling.delete(keyOf(provider, accountId));
       await clearSubscriptionAccountCooling(provider, accountId);
       assertOwner(state);
-      await snapshot(state, provider, accountId, true);
+    } catch (error) {
+      // The CLI owns its credentials even on failure/cancel. Re-read only this slot;
+      // its persisted identity guard prevents a wrong account becoming usable later.
+      await state.flights.get(keyOf(provider, accountId))?.catch(() => {});
+      state.cache.delete(keyOf(provider, accountId));
+      if (state.owner === activeOwnerScopeKey()) changed(provider);
+      throw error;
     } finally {
       state.logins.delete(key);
     }

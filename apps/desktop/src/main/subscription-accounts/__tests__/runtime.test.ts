@@ -149,6 +149,68 @@ beforeEach(() => {
   h.clearCooling.mockReset().mockResolvedValue(undefined);
 });
 
+// Standard: explicit Claude re-login used to be a no-op for connected accounts.
+// Two independent profiles expose cross-account renewal and wrong-browser-account
+// regressions that the existing add/connect tests did not exercise.
+describe('Claude account renewal', () => {
+  const firstExpiry = '2030-02-01T00:00:00.000Z';
+  const secondExpiry = '2030-01-05T00:00:00.000Z';
+  const renewedExpiry = '2030-02-05T00:00:00.000Z';
+  it('renews only the selected account and keeps the other expiry and settings', async () => {
+    let renewed = false;
+    h.read.mockImplementation(async (_provider, directory) => ({
+      authenticated: true,
+      identity: directory === 'anthropic/default' ? 'first@example.test' : 'second@example.test',
+      loginExpiresAt: directory === 'anthropic/default' ? firstExpiry : renewed ? renewedExpiry : secondExpiry,
+    }));
+    const before = await readSubscriptionPool('anthropic');
+    h.login.mockImplementation(async () => { renewed = true; });
+    const after = await runSubscriptionAccountCommand({
+      action: 'login', providerId: 'anthropic', accountId: 'second', loginKey: 'renew-second',
+    });
+    expect(h.login).toHaveBeenCalledExactlyOnceWith('anthropic', 'anthropic/second', expect.any(AbortSignal),
+      { renew: true, expectedEmail: 'second@example.test' });
+    expect(after.accounts[0]).toEqual(before.accounts[0]);
+    expect(after.accounts[1]).toMatchObject({ identity: 'second@example.test', loginExpiresAt: renewedExpiry, status: 'ready' });
+    expect(h.pools.anthropic?.accounts[1].reloginIdentity).toBeUndefined();
+    expect(h.clearCooling).toHaveBeenCalledExactlyOnceWith('anthropic', 'second');
+  });
+
+  it.each(['account_mismatch', 'login_cancelled'])('keeps the selected identity after %s, including a restart and retry', async reason => {
+    let secondIdentity = 'second@example.test';
+    h.read.mockImplementation(async (_provider, directory) => ({
+      authenticated: true,
+      identity: directory === 'anthropic/default' ? 'first@example.test' : secondIdentity,
+      loginExpiresAt: firstExpiry,
+    }));
+    await readSubscriptionPool('anthropic');
+    h.usage.mockClear();
+    h.login.mockImplementationOnce(async () => {
+      secondIdentity = 'wrong@example.test';
+      throw new Error(reason);
+    });
+    await expect(runSubscriptionAccountCommand({ action: 'login', providerId: 'anthropic', accountId: 'second', loginKey: 'wrong' }))
+      .rejects.toThrow(reason);
+    h.owner = 'owner-a:' + ++generation; // Rebuild in-memory state from the saved pool.
+    const after = await readSubscriptionPool('anthropic');
+    expect(after.accounts[0]).toMatchObject({ status: 'ready', identity: 'first@example.test', loginExpiresAt: firstExpiry });
+    expect(after.accounts[1]).toMatchObject({ status: 'signed-out', identity: 'second@example.test', authIssue: 'claude-account-mismatch' });
+    expect(after.accounts[1].loginExpiresAt).toBeUndefined();
+    expect(h.usage).not.toHaveBeenCalledWith('anthropic', 'anthropic/second');
+    const lease = await acquireSubscriptionAccount('anthropic', 'claude-sonnet', []);
+    expect(lease?.account.configDir).toBe('anthropic/default');
+    lease?.release();
+    h.login.mockImplementationOnce(async (_provider, _directory, _signal, options) => {
+      expect(options.expectedEmail).toBe('second@example.test');
+      secondIdentity = 'second@example.test';
+    });
+    const retried = await runSubscriptionAccountCommand({ action: 'login', providerId: 'anthropic', accountId: 'second', loginKey: 'correct' });
+    expect(retried.accounts[1]).toMatchObject({ status: 'ready', identity: 'second@example.test' });
+    expect(retried.accounts[1].authIssue).toBeUndefined();
+    expect(h.pools.anthropic?.accounts[1].reloginIdentity).toBeUndefined();
+  });
+});
+
 // PR #9998 review, unit: prior tests released preparation leases immediately and
 // never tried a competing start between account binding and runtime takeover.
 // Two accounts with limit 1 reproduce both the handoff gap and first-send gap.

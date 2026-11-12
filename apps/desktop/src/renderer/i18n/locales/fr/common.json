@@ -1343,6 +1343,7 @@
     "idleMinutes_many": "{{count}} minutes"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Cette tâche SSH ne peut pas changer de Harness. Choisissez un modèle dans son Harness actuel, ou créez une nouvelle tâche SSH avec le Harness souhaité.",
     "MODEL_SELECTION_UNAVAILABLE": "Le modèle sélectionné n'est plus disponible auprès de son fournisseur. Vérifiez la connexion dans les Paramètres ou choisissez un autre modèle disponible.",
     "HARNESS_SWITCH_NOT_READY": "Le changement de Harness n'est pas prêt. Consultez le détail de l'erreur et réessayez une fois le Harness prêt.",
@@ -20226,6 +20227,14 @@
     "lineNumbers": "Numéros de ligne"
   },
   "subscriptionAccounts": {
+    "loginExpiresInDays": "Connexion valable encore environ {{days}} jours",
+    "loginExpiresSoon": "La connexion expire bientôt",
+    "loginMayHaveExpired": "La connexion a peut-être expiré",
+    "loginExpiryUnknown": "Expiration de la connexion inconnue",
+    "loginExpiryDetail": "Expiration estimée : {{date}}. Cette estimation provient de Claude ; la connexion peut expirer plus tôt.",
+    "loginAccountAria": "Se reconnecter à {{name}}",
+    "loginIdentityMismatchStatus": "Le compte ne correspond pas",
+    "loginIdentityMismatch": "Vous avez utilisé un autre compte. Reconnectez-vous avec le compte affiché sur cette ligne.",
     "unassigned": "Compte non attribué",
     "boundUnavailable": "Compte indisponible",
     "providerManagedAuth": "Le fournisseur actuel de Codex ne permet pas de consulter le compte ChatGPT. Lors de l’ajout du fournisseur, choisissez « $t(subscriptionAccounts.signIn.anotherAccount) » pour utiliser un dossier séparé.",

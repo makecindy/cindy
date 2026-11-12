@@ -71,6 +71,11 @@ export function registerSubscriptionAccountsIpc(): void {
           'SUBSCRIPTION_CODEX_PROVIDER_AUTH',
           'The active Codex provider does not expose a ChatGPT account',
         );
+      if (reason === 'account_mismatch')
+        throwIpcError(
+          'SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH',
+          'Sign in again with the selected Claude account',
+        );
       throwIpcError(
         reason === 'login_cancelled'
           ? 'SUBSCRIPTION_LOGIN_CANCELLED'

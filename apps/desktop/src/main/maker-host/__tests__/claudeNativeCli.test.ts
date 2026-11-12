@@ -116,6 +116,15 @@ beforeEach(() => {
 });
 
 describe('parseClaudeCliLoginStatus', () => {
+  // Login expiry is advisory metadata from the official CLI, never an auth verdict.
+  it.each(['2026-12-01T12:00:00.000Z', '2020-01-01T00:00:00.000Z'])('preserves a valid login deadline without signing the account out (%s)', (loginExpiresAt) => {
+    expect(parseClaudeCliLoginStatus(JSON.stringify({ ...JSON.parse(SUBSCRIPTION), loginExpiresAt })))
+      .toMatchObject({ loggedIn: true, loginExpiresAt });
+  });
+  it.each([undefined, null, '', 'not-a-date', 123])('omits an unknown login deadline (%s)', (loginExpiresAt) => {
+    expect(parseClaudeCliLoginStatus(JSON.stringify({ ...JSON.parse(SUBSCRIPTION), loginExpiresAt })))
+      .not.toHaveProperty('loginExpiresAt');
+  });
   it('isolates concurrent custom profiles without publishing them as the default CLI login', async () => {
     h.spawn.mockImplementation((_binary: string, _args: string[], options: { env: Record<string, string> }) =>
       fakeChild({ stdout: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai', email: options.env.CLAUDE_CONFIG_DIR ?? 'default' }) }));
@@ -202,6 +211,28 @@ describe('claudeCliNetworkEnv', () => {
 });
 
 describe('登录态读取', () => {
+  // Standard: identity verification must not accept stale default metadata, and
+  // a forced post-login read must run after any earlier in-flight profile read.
+  it('requires a fresh default identity while ordinary display retains its fallback', async () => {
+    h.spawn.mockImplementationOnce(() => fakeChild({ stdout: SUBSCRIPTION }));
+    await refreshClaudeCliLoginStatus();
+    h.spawn.mockImplementationOnce(() => fakeChild({ error: new Error('offline') }));
+    await expect(refreshClaudeCliLoginStatus({ requireFresh: true })).rejects.toThrow('unavailable');
+    await expect(refreshClaudeCliLoginStatus()).resolves.toMatchObject({ loggedIn: true });
+  });
+  it.each([undefined, '/profiles/second'])('does not reuse an in-flight status as a fresh identity (%s)', async configDir => {
+    const child = fakeChild('hang');
+    h.spawn.mockImplementationOnce(() => child)
+      .mockImplementationOnce(() => fakeChild({ stdout: LOGGED_OUT, code: 1 }));
+    const previous = refreshClaudeCliLoginStatus({ configDir });
+    await vi.waitFor(() => expect(h.spawn).toHaveBeenCalledTimes(1));
+    const fresh = refreshClaudeCliLoginStatus({ configDir, requireFresh: true });
+    child.stdout.emit('data', Buffer.from(SUBSCRIPTION));
+    child.emit('close', 0);
+    await expect(previous).resolves.toMatchObject({ loggedIn: true });
+    await expect(fresh).resolves.toEqual({ loggedIn: false });
+    expect(h.spawn).toHaveBeenCalledTimes(2);
+  });
   // KFJS unit regression: a worker dying before its response must release the
   // in-flight status query and keep the previous login result (no hung refresh).
   it('worker 提前退出时保留上次状态，force 可以重新查询', async () => {
@@ -263,6 +294,41 @@ describe('登录态读取', () => {
 });
 
 describe('runClaudeCliLogin', () => {
+  // The explicit renew action used to return the still-valid login without opening
+  // the official flow. Its directory and expected identity must survive all three calls.
+  it('renews only the selected profile and checks its identity and new deadline', async () => {
+    const loginExpiresAt = '2026-12-12T00:00:00.000Z';
+    h.spawn
+      .mockImplementationOnce(() => fakeChild({ stdout: SUBSCRIPTION }))
+      .mockImplementationOnce(() => fakeChild({ code: 0 }))
+      .mockImplementationOnce(() => fakeChild({ stdout: JSON.stringify({ ...JSON.parse(SUBSCRIPTION), loginExpiresAt }) }));
+    await expect(runClaudeCliLogin(new AbortController().signal, '/profiles/second', {
+      renew: true, expectedEmail: 'user@example.com',
+    })).resolves.toMatchObject({ ok: true, status: { email: 'user@example.com', loginExpiresAt } });
+    expect(argsOf(h.spawn.mock.calls[1])).toEqual(['auth', 'login', '--claudeai', '--email', 'user@example.com']);
+    expect(h.spawn.mock.calls.map(call => call[2].env.CLAUDE_CONFIG_DIR)).toEqual([
+      '/profiles/second', '/profiles/second', '/profiles/second',
+    ]);
+    expect(peekClaudeCliLoginStatus()).toBeNull();
+  });
+  it.each(['another@example.com', undefined])('rejects renewal when the resulting identity is not the selected account (%s)', async email => {
+    h.spawn
+      .mockImplementationOnce(() => fakeChild({ stdout: SUBSCRIPTION }))
+      .mockImplementationOnce(() => fakeChild({ code: 0 }))
+      .mockImplementationOnce(() => fakeChild({ stdout: JSON.stringify({ ...JSON.parse(SUBSCRIPTION), email }) }));
+    await expect(runClaudeCliLogin(new AbortController().signal, '/profiles/second', {
+      renew: true, expectedEmail: 'user@example.com',
+    })).resolves.toEqual({ ok: false, reason: 'account_mismatch' });
+  });
+  it('does not call a cached default login proof of successful renewal after the status read fails', async () => {
+    h.spawn
+      .mockImplementationOnce(() => fakeChild({ stdout: SUBSCRIPTION }))
+      .mockImplementationOnce(() => fakeChild({ code: 0 }))
+      .mockImplementationOnce(() => fakeChild({ error: new Error('status unavailable') }));
+    await expect(runClaudeCliLogin(new AbortController().signal, undefined, {
+      renew: true, expectedEmail: 'user@example.com',
+    })).resolves.toEqual({ ok: false, reason: 'local_unavailable' });
+  });
   it('已登录直接返回,不拉起登录', async () => {
     h.spawn.mockImplementation(() => fakeChild({ stdout: SUBSCRIPTION }));
     await expect(runClaudeCliLogin(new AbortController().signal)).resolves.toMatchObject({ ok: true });
