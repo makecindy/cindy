@@ -116,6 +116,7 @@ import { getSessionSubscriptionAccount } from '../session.js';
 import { prepareSubscriptionAccountForSend } from '../prepareSend.js';
 import type { SessionRowSnapshot } from '../../localDb/sessionDispatchSnapshot.js';
 import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch } from '../failover.js';
+import { UsageLimitAutoResume, USAGE_LIMIT_RESUME_BUFFER_MS } from '../../maker-ipc/usageLimitAutoResume.js';
 import { createProviderGroupDirectory } from '../../provider-group/directory.js';
 import { createProviderGroupRouter, type ProviderGroupPersistedCooling } from '../../provider-group/router.js';
 import { createProviderGroupService, type ProviderGroupSessionRow } from '../../provider-group/service.js';
@@ -1329,6 +1330,37 @@ describe('native account assignment on the executing computer', () => {
     expect(h.bindings.get('native:remote-full')?.accountId).toBe('default');
     expect((await readSubscriptionPool('anthropic')).accounts.map(a => a.running)).toEqual([0, 0]);
   });
+  // PR #10152 independent review, unit: optional replacement reads must not extend the original
+  // account query past its transport deadline. Fake time covers both a slow bound read and a
+  // cold replacement; late completion must never move a binding.
+  it.each([0, 15_000])('bounds optional replacement admission after a %s ms bound-account read', async (accountDelay) => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const model = 'claude-sonnet';
+      const failed = await acquireSubscriptionAccount('anthropic', model, []);
+      await failed!.bind(['task:slow-probe', 'native:slow-probe']);
+      failed!.observeFailure({ sdkError: 'rate_limit' }, model, 'run');
+      failed!.release();
+      await vi.advanceTimersByTimeAsync(31_000);
+      h.read.mockImplementation(async (_provider, directory) => {
+        await new Promise(resolve => setTimeout(resolve, directory.endsWith('default') ? accountDelay : 20_000));
+        if (directory.endsWith('default') && accountDelay) throw new Error('native status timed out');
+        return { authenticated: true, identity: 'fixture@example.test' };
+      });
+      let view: unknown;
+      const query = readSubscriptionSessionAccount('anthropic', { nativeSessionId: 'slow-probe', model })
+        .then(result => { view = result; });
+      await vi.advanceTimersByTimeAsync(Math.max(accountDelay, 2_000));
+      expect(view).toMatchObject({ state: 'bound', account: { blocked: true, switchAvailable: false } });
+      await vi.runAllTimersAsync();
+      await query;
+      expect(h.bindings.get('task:slow-probe')?.accountId).toBe('default');
+      expect(h.bindings.get('native:slow-probe')?.accountId).toBe('default');
+    } finally {
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
+  });
   // PR review: selection happens before any process exists, so Maker must release startup resources.
   it('classifies an unavailable pool as a stopped startup without calling the native agent', async () => {
     h.pools.anthropic!.disconnected = true;
@@ -1805,7 +1837,17 @@ describe('native account assignment on the executing computer', () => {
     const taskRow = { status: 'active', providerId: 'anthropic', agentKind: 'cc', model, sdkSessionId: 'old',
       agentDeviceId: null, remoteHostId: null };
     const continueSession = vi.fn(async () => 'resumed' as const);
-    const fallback = vi.fn();
+    const accountProbe = vi.fn((id: string) => readSubscriptionAccountSwitch(id, async () => taskRow));
+    const arm = vi.fn(() => true);
+    const waiting = new UsageLimitAutoResume({
+      now: () => now, random: () => 0, setTimer: vi.fn(), clearTimer: vi.fn(),
+      isEligible: async () => true, resolveResetAt: async () => now + 60_000,
+      canSwitchAccount: async id => (await accountProbe(id)) !== null,
+      arm, isCurrent: () => true, cancel: vi.fn(), continueSession, log: vi.fn(),
+    });
+    let fallbackRun: Promise<boolean> | undefined;
+    const fallback = vi.fn((id: string, signals: Parameters<UsageLimitAutoResume['onTurnError']>[1], token: number,
+      options?: { accountSwitchChecked?: true }) => { fallbackRun = waiting.onTurnError(id, signals, token, options); });
     const switchAgentLocation = vi.fn();
     const service = createProviderGroupService({ router, directory, readGroup: () => config,
       readBinding: (id) => bindings.get(id) ?? null,
@@ -1819,7 +1861,7 @@ describe('native account assignment on the executing computer', () => {
       resolveImplicitProvider: async () => 'anthropic', persistRoute: vi.fn(), hasAssistantHistory: async () => true,
       isFailoverEligible: async () => true, leaseRecovery: () => ({}), isLeaseCurrent: () => true,
       rearmContinue: () => 2, cancelContinue: vi.fn(), switchAgentLocation, isTurnRunning: () => false, hasLiveSession: () => false,
-      readAccountSwitch: (id) => readSubscriptionAccountSwitch(id, async () => taskRow),
+      readAccountSwitch: accountProbe,
       continueSession, fallback, readResetAt: () => null,
       now: () => now, sleep: async () => {}, log: { info: vi.fn(), warn: vi.fn() },
     });
@@ -1837,8 +1879,11 @@ describe('native account assignment on the executing computer', () => {
     // The same account failing again in this round means the move did not take: switch computers as before.
     h.bindings.set('task:old', { providerId: 'anthropic', accountId: 'default' });
     await service.onTurnError('old', { sdkError: 'rate_limit' }, 2);
+    await fallbackRun;
     expect(continueSession).toHaveBeenCalledTimes(1);
     expect(fallback).toHaveBeenCalledTimes(1);
+    expect(accountProbe).toHaveBeenCalledTimes(2);
+    expect(arm).toHaveBeenCalledWith('old', 2, now + 60_000 + USAGE_LIMIT_RESUME_BUFFER_MS);
   });
   // PR #9837 / unit: an actual CLI failure without account_usage must outrank
   // optimistic cached quota. The previous group regression pre-exhausted it.

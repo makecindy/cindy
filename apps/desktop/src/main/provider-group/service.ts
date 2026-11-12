@@ -22,6 +22,7 @@
  * 依赖全部注入，由 maker-ipc/register 装配；这里不直接碰数据库、会话与输入协调器。
  */
 import type { AgentKind } from '@cindy/maker-core';
+import type { UsageLimitRecoveryOptions } from '../maker-ipc/usageLimitAutoResume.js';
 
 import {
   USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
@@ -253,7 +254,7 @@ export interface ProviderGroupServiceDeps {
    */
   readAccountSwitch?(sessionId: string): Promise<string | null>;
   /** 不换电脑时交回原有处理(额度重置后自动继续等)。 */
-  fallback(sessionId: string, signals: InterruptedTurnErrorSignals, token: number): void;
+  fallback(sessionId: string, signals: InterruptedTurnErrorSignals, token: number, options?: UsageLimitRecoveryOptions): void;
   /** 报错里的重置时刻(unix ms)。 */
   readResetAt(signals: InterruptedTurnErrorSignals): number | null;
   now(): number;
@@ -1265,18 +1266,22 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     lease: object,
     run: { superseded: boolean },
     hooks: ProviderGroupTurnErrorHooks | undefined,
-    body: (isCurrent: () => boolean, handBack: () => void) => Promise<void>,
+    body: (isCurrent: () => boolean, handBack: () => void, setAccountSwitchChecked: (checked: boolean) => void) => Promise<void>,
   ): Promise<void> {
     const isCurrent = () => !run.superseded && deps.isLeaseCurrent(sessionId, lease);
     if (!isCurrent()) return;
+    let accountSwitchChecked = false;
     const handBack = () => {
       if (!isCurrent()) return;
       hooks?.beforeFallback?.();
       const fallbackToken = deps.leaseRecovery(sessionId, token) ? token : deps.rearmContinue(sessionId, lease, null);
-      if (fallbackToken !== null) deps.fallback(sessionId, signals, fallbackToken);
+      if (fallbackToken !== null) {
+        if (accountSwitchChecked) deps.fallback(sessionId, signals, fallbackToken, { accountSwitchChecked: true });
+        else deps.fallback(sessionId, signals, fallbackToken);
+      }
     };
     try {
-      await body(isCurrent, handBack);
+      await body(isCurrent, handBack, checked => { accountSwitchChecked = checked; });
     } catch (error) {
       deps.log.warn('provider group: automatic switch failed', { sessionId, error: errorText(error) });
       handBack();
@@ -1371,7 +1376,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     // 用户已接手时什么都不做。
     if (!lease) return true;
     const boundRow = { ...row, model: row.model };
-    await withSwitchRun(sessionId, signals, token, lease, run, hooks, async (isCurrent, handBack) => {
+    await withSwitchRun(sessionId, signals, token, lease, run, hooks, async (isCurrent, handBack, setAccountSwitchChecked) => {
       // 连不上先等那台恢复：恢复了留在原电脑继续这一轮(不交接)，等不到再换。
       if (decision.connection) {
         let waited = false;
@@ -1392,6 +1397,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       }
       await switchUntilSettled({
         sessionId, signals, decision, binding, source, config, row: boundRow, current, lease, isCurrent, handBack, hooks,
+        setAccountSwitchChecked,
       });
     });
     return true;
@@ -1630,6 +1636,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     lease: object;
     isCurrent: () => boolean;
     handBack: () => void;
+    setAccountSwitchChecked: (checked: boolean) => void;
     hooks: ProviderGroupTurnErrorHooks | undefined;
   }): Promise<void> {
     const { sessionId, signals, decision, binding, source, config, row, current, lease, isCurrent, handBack, hooks } = input;
@@ -1640,6 +1647,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     const accountSwitch = askAccounts ? await readAccountSwitch(sessionId) : null;
     // 查询期间用户已接手：不冷却、不换电脑。
     if (askAccounts && !isCurrent()) return;
+    if (askAccounts) input.setAccountSwitchChecked(true);
     if (decision.cool && !accountSwitch) source.cool(binding.providerId, current.key, cause, deps.readResetAt(signals), row.model);
     source.invalidate(current);
     const triedOnce = accountSwitch ? null : router.markTried(sessionId, current.key);
@@ -1689,6 +1697,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         deps.log.info('provider group: continuing with another account on the same computer', {
           sessionId, cause, member: current.key,
         });
+        input.setAccountSwitchChecked(false);
         await continueWithAnotherAccount(sessionId, lease, isCurrent, hooks);
         return;
       }
@@ -1697,6 +1706,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       // 先写绑定再交接：交接会重建会话，分配入口据绑定认出它已归组，不会重新分配。
       await deps.writeBinding(sessionId, bindingFor(source, binding.providerId, pick.member.key));
       try {
+        input.setAccountSwitchChecked(false);
         await deps.switchAgentLocation(sessionId, {
           agentKind: row.agentKind,
           model: row.model,

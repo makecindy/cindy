@@ -549,6 +549,8 @@ export async function readSubscriptionPoolModelAvailability(
   });
 }
 
+const ACCOUNT_SWITCH_PROBE_BUDGET_MS = 2_000;
+
 /**
  * The account an existing task is pinned to, for the task's usage display (model list and
  * the usage under the composer). Bindings are looked up in the same order a resume uses, so the
@@ -559,6 +561,9 @@ export async function readSubscriptionSessionAccount(
   keys: { sessionId?: string; nativeSessionId?: string; model?: string },
   options: { remote?: boolean } = {},
 ): Promise<SubscriptionSessionAccountView> {
+  // Replacement admission is optional. Share a short budget with the original bound-account
+  // read so a slow original read never starts another long CLI wait before returning its view.
+  const switchDeadline = performance.now() + ACCOUNT_SWITCH_PROBE_BUDGET_MS;
   const state = currentRuntime();
   assertOwner(state);
   const pool = readPool(provider);
@@ -603,16 +608,22 @@ export async function readSubscriptionSessionAccount(
     && !(provider === 'openai' && readLegacyCodexProviderId(config.id))
     && readSubscriptionAccountBlocked(provider, config.id, keys.model);
   let switchAvailable = false;
-  if (blocked) {
+  const switchBudget = switchDeadline - performance.now();
+  if (blocked && switchBudget > 0) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       // Quota alone cannot authorize retiring native history: another account also needs an
       // actual slot and the grants used by a fresh start. The probe reserves and binds nothing.
-      await acquireSubscriptionAccount(provider, keys.model, [], false, {
-        remote: options.remote === true, exclude: new Set([config.id]), dryRun: true,
-      });
-      switchAvailable = true;
+      switchAvailable = await Promise.race([
+        acquireSubscriptionAccount(provider, keys.model, [], false, {
+          remote: options.remote === true, exclude: new Set([config.id]), dryRun: true,
+        }).then(() => true),
+        new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), switchBudget); }),
+      ]);
     } catch {
       // A full/unreadable replacement keeps the original send path. Owner changes still reject.
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
     }
     assertOwner(state);
   }
