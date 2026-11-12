@@ -94,12 +94,12 @@ fingerprint，须遵守 [冷更边界](../mobile-development.md#原生配置与-
 不能把跨端可选字段兼容当作数据库可降级，也不得删除migration或手改schema版本绕过准入。
 
 新增消息仍装进既有op:message，初始化响应仍走现有poll；remoteViews仅清理链接状态，
-不投影掉扩展字段。手机／远程查看无新增操作、白名单、资源模块或原生配置。
+不投影掉扩展字段。原始状态请求不需要手机／远程查看新增操作、白名单、资源模块或原生配置。
 新执行端+旧查看端按既有JSON透传可用；旧执行端不声明能力，新页面必须降级。
 自建中转继续透明转发已有加密invoke/invoke-result，不新增relay帧或服务端字段；
 官方／自建中转的手机和双控制端互通仍需实机验收，单元测试不能替代该验收。
 请求失败只影响本次保存，不关闭peer或共享relay、不发起后台重放；一台查看端静默不得影响另一台。
-执行端先升级即可使用原始请求；本次不供应任何新的JS／React辅助模块。
+执行端先升级即可使用原始请求；JS／React 辅助模块的查看端供给与兼容见下节。
 
 实现：mcp-apps/viewState.ts、viewStateStore.ts、host.ts、service.ts；DB事务在
 localDb/worker/opHandlers/mcpAppViewState.ts，由文件worker与inline worker共用。

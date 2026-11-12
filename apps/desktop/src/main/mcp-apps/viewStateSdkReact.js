@@ -7,38 +7,40 @@ export function createViewStateHooks({ useState, useRef, useEffect, useCallback 
     const defaults = useRef(initial);
     const slot = useRef();
     if (!slot.current || slot.current.app !== app) {
-      slot.current = { app, controller: app ? createViewState(app, defaults.current, options) : null, mounts: 0, edited: false };
+      const previous = slot.current;
+      const controller = app ? createViewState(app, defaults.current, options) : null;
+      slot.current = { app, controller, mounts: 0, edited: previous?.edited ?? false,
+        value: previous?.edited ? previous.value : controller?.get() ?? defaults.current };
     }
     const current = slot.current;
-    const [local, update] = useState(() => ({ app, value: current.controller?.get() ?? defaults.current, edited: false }));
-    let value = local.value;
-    if (local.app !== app) {
-      value = local.edited ? local.value : current.controller?.get() ?? defaults.current;
-      // A same-component render update is applied before React commits any DOM.
-      update({ ...local, app, value });
-    }
-    const set = useCallback(next => update(previous => ({ ...previous, edited: true,
-      value: typeof next === 'function' ? next(previous.value) : next })), []);
+    const [, update] = useState(0);
+    const set = useCallback(next => {
+      const current = slot.current;
+      // Publish before React schedules a render: a same-event flush must see this
+      // edit. Evaluate functional updates once, outside React's replayable updater.
+      current.value = typeof next === 'function' ? next(current.value) : next;
+      current.edited = true;
+      current.controller?.set(current.value);
+      update(revision => revision + 1);
+    }, []);
     useEffect(() => {
-      if (local.edited && current.controller) {
-        current.edited = true;
-        current.controller.set(value);
-      }
-    }, [current, value, local.edited]);
+      // Only the connection transition needs an effect, for edits made with app=null.
+      if (current.edited) current.controller?.set(current.value);
+    }, [current]);
     useEffect(() => {
       current.mounts++;
       return () => {
         current.mounts--;
-        // StrictMode replays setup immediately; do not dispose its live controller.
+        // StrictMode replays setup immediately; do not flush its live controller.
         queueMicrotask(() => {
           if (current.mounts) return;
-          if (current.edited && app?.transport) {
-            void current.controller?.flush().catch(() => {}).finally(() => current.controller?.dispose());
-          } else current.controller?.dispose();
+          if (current.edited && app?.transport) void current.controller?.flush().catch(() => {});
+          // The App, not this component, owns the shared controller. Page teardown
+          // disposes it; a late save must not dispose a newly mounted editor.
         });
       };
     }, [current]);
-    return [value, set];
+    return [current.value, set];
   }
   return { useViewState };
 }

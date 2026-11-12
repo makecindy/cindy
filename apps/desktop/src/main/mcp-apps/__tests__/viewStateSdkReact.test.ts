@@ -9,7 +9,7 @@ const { useViewState } = createViewStateHooks(React);
 const initial = { version: 1, page: 1 };
 function app() {
   return { transport: {}, getHostCapabilities: () => ({ experimental: { 'cindy/view-state': {} } }),
-    getHostContext: () => ({ 'cindy/view-state': { version: 1, page: 7 } }), request: vi.fn(async () => ({})) };
+    getHostContext: () => ({ 'cindy/view-state': { version: 1, page: 7 } }), request: vi.fn(async (_request: unknown, _schema: unknown) => ({})) };
 }
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 // React unit tier: actual hook renders and StrictMode lifecycle; core RPC tests cannot
@@ -34,4 +34,58 @@ it.each([false, true])('restores on connection unless the user has edited first 
   hook.rerender({ connected: true });
   expect(renders.filter(([connected]) => connected).every(([, page]) => page === (edited ? 2 : 7))).toBe(true);
   await act(() => vi.advanceTimersByTimeAsync(500)); expect(host.request).toHaveBeenCalledTimes(edited ? 1 : 0);
+});
+
+// Review regression: a setter and flush in one React event must submit the new
+// value before effects run. Existing act-separated coverage flushed after effects.
+it('flushes synchronous and functional edits in the same batched event without flushSync', async () => {
+  vi.useFakeTimers(); const host = app();
+  const hook = renderHook(() => useViewState(host, initial),
+    { wrapper: ({ children }) => React.createElement(React.StrictMode, null, children) });
+  await act(() => flushViewState(host)); // The old snapshot is already confirmed.
+  host.request.mockClear();
+  const updater = vi.fn((s: typeof initial) => ({ ...s, page: s.page + 1 }));
+  await act(async () => {
+    hook.result.current[1]({ version: 1, page: 8 });
+    hook.result.current[1](updater);
+    hook.result.current[1](updater);
+    await flushViewState(host);
+    expect(host.request).toHaveBeenCalledTimes(1);
+    expect(host.request.mock.calls[0][0]).toMatchObject({ method: 'cindy/view-state/set', params: { state: { version: 1, page: 10 } } });
+  });
+  expect(updater).toHaveBeenCalledTimes(2);
+  expect(hook.result.current[0].page).toBe(10);
+  await act(() => vi.advanceTimersByTimeAsync(1000));
+  expect(host.request).toHaveBeenCalledTimes(1);
+});
+
+// Same connected App retains its page-local draft across a component lifetime;
+// saved-state and in-flight-state variants protect remount and delayed cleanup.
+it.each(['saved', 'in-flight'] as const)('remounts the latest %s draft without cancelling or duplicating saves', async mode => {
+  vi.useFakeTimers(); const host = app();
+  const first = renderHook(() => useViewState(host, initial));
+  act(() => first.result.current[1]({ version: 1, page: 8 }));
+  let finish!: () => void;
+  if (mode === 'in-flight') host.request.mockImplementationOnce(async () => {
+    await new Promise<void>(resolve => { finish = resolve; }); return {};
+  });
+  const flushed = flushViewState(host);
+  await act(() => vi.advanceTimersByTimeAsync(0));
+  if (mode === 'saved') await flushed;
+  first.unmount();
+  await act(() => vi.advanceTimersByTimeAsync(0)); // Old cleanup must not drop the App cache.
+  const second = renderHook(() => useViewState(host, initial));
+  expect(second.result.current[0]).toEqual({ version: 1, page: 8 });
+  if (mode === 'in-flight') {
+    finish(); await act(() => flushed);
+    await act(() => vi.advanceTimersByTimeAsync(0)); // Late completion cannot dispose the remount.
+  }
+  await act(() => vi.advanceTimersByTimeAsync(500));
+  expect(host.request).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    second.result.current[1](s => ({ ...s, page: s.page + 1 }));
+    await flushViewState(host);
+  });
+  expect(host.request.mock.calls.at(-1)?.[0]).toMatchObject({ params: { state: { version: 1, page: 9 } } });
+  expect(host.request).toHaveBeenCalledTimes(2);
 });

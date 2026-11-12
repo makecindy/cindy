@@ -50,6 +50,10 @@ function snapshot(value) {
  * @returns {import('@cindy/ext-apps').ViewState<T>}
  */
 export function createViewState(app, initial, { debounceMs = 500 } = {}) {
+  // Initialization is only the first snapshot. Component remounts share the
+  // App's current draft, acknowledgements and single-flight writer.
+  const existing = controllers.get(app);
+  if (existing) return existing;
   const route = channel(app);
   let value = initial;
   const saved = route && app.getHostContext()?.[route.key];

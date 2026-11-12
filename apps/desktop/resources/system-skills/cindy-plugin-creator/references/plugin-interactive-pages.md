@@ -363,7 +363,10 @@ function Editor({ app }) {
 }
 ```
 
-每页只创建一个 controller 或 hook，不与自行发送状态 RPC 混用。
+同一 App 实例共用一份 controller 和最新页面状态，不与自行发送状态 RPC 混用。
+重复调用 createViewState 或组件卸载再挂载不会退回初始化快照，默认值和防抖设置沿用首次创建；
+组件卸载不取消已发出的保存，页面关闭时再 dispose。React setter 会同步交出最新值，
+同一事件中随后调用 flushViewState 会确认这份值，不需要 flushSync。
 React 的 `app` 在连接前传 null，已连接后传 App；连接前用户已编辑时以编辑值为准。
 要首屏就是恢复值，先等 connect 完成再挂载业务界面；app 为 null 时不承诺隐藏默认界面。
 正常组件卸载且 App 仍连接时会尽力发送已修改值；页面关闭后不继续请求，未收到成功回执的最后输入不保证保存。

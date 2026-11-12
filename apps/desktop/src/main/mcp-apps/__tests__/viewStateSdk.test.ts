@@ -107,3 +107,18 @@ it('cancels a queued flush when teardown happens before its request is sent', as
   await expect(flushed).rejects.toThrow('VIEW_STATE_DISPOSED');
   expect(f.save).not.toHaveBeenCalled();
 });
+
+// Review regression / unit: a second caller on one App must see the confirmed
+// page-local draft, not the immutable initialization context, and share its writer.
+it('shares the current value and writer when createViewState is called again on the same App', async () => {
+  const f = await fixture({ version: 1, page: 3 });
+  f.state.set({ version: 1, page: 4 }); await f.state.flush();
+  const again = createViewState(f.app, { version: 1, page: 1 });
+  cleanup.push(() => again.dispose());
+  expect(again.get()).toEqual({ version: 1, page: 4 });
+  await again.flush(); expect(f.save).toHaveBeenCalledTimes(1);
+  again.set(s => ({ ...s, page: s.page + 1 }));
+  expect(f.state.get()).toEqual({ version: 1, page: 5 });
+  await flushViewState(f.app);
+  expect(f.save.mock.calls).toEqual([[{ version: 1, page: 4 }], [{ version: 1, page: 5 }]]);
+});
