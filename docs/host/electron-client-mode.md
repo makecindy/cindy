@@ -99,7 +99,7 @@ Host 直接复用 Desktop 的 `GhostManager`（同一实现），只注入 owner
 - `maker:browser:status`、`maker:browser:open-for-login` 不在窗口注册，继续返回
   `UNSUPPORTED_CAPABILITY`。客户端模式下 Agent 用的浏览器由 Host 自己的浏览器运行时管理
   （`profileDir/browser-runtime`），窗口再开一个会争用同一个 Chrome 用户目录，以后由 Host 提供。
-  通道清单（`scripts/host-channel-coverage.mjs`）合入后，这两个改归“要 Host 做的”，Host 待接总数 985 → 987。
+  通道清单里它们归“要 Host 做的”（A，领域“Agent 浏览器”）。
 - 启用开关走插件开关（`maker:plugins:set-enabled`），客户端模式下仍未支持，所以设置页里只有
   状态、安装、更新与授权可用。
 - 驱动安装、更新与授权引导在窗口进程里执行。客户端升级换窗口时，释放检查（`host-platform/client.desktop.ts`
@@ -119,10 +119,12 @@ Orca 协同、记忆与文件工具等仍由 Desktop 内 Runtime 提供，不会
 `has()`，所以 `maker:*` 实际上也只回 `No handler registered`；现已一并应答 `has()`，
 并且不影响桌面之后注册的 `maker:*` 通道。
 
-注意：本该留在窗口的通道里有 12 个在客户端模式下没有注册（`maker:computer:*` 10 个、
-`maker:browser:*` 2 个），因为它们注册在客户端模式跳过的 `registerMakerIpcsAfterSplash` 里；
-`update-relaunch:*` 两个同理，但它们问的是 Host 持有的运行状态。清单
-（[channel-coverage.md](channel-coverage.md)）的「窗口类但客户端模式下未注册」列出全部，尚未修改。
+注意：`registerMakerIpcsAfterSplash` 在客户端模式下只调用它 `if (hostClientMode)` 分支里的注册函数。
+本该留在窗口的 `maker:computer:*` 10 个已移进 `registerComputerUseIpc`，在这个分支里注册（见上文
+“窗口本地处理的‘电脑使用’通道”）；`maker:browser:*` 2 个归 Host，仍回 `UNSUPPORTED_CAPABILITY`；
+`update-relaunch:*` 两个问的是 Host 持有的运行状态，归交接任务，今天仍回 `No handler registered`。
+清单（[channel-coverage.md](channel-coverage.md)）从源码读出这个分支调用的注册函数：客户端快照录制之后
+新加的窗口本地注册记为“源码判定”，重录快照后以快照为准；分支被改名或挪走时清单生成直接失败。
 
 在把这些通道全部改为 Host API 之前，「Electron 不参与 Runtime」不视为达成。
 

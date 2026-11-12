@@ -9,8 +9,9 @@
  * is generated rather than maintained by hand.
  *
  * Each channel lands in one category:
- *   contract  — proxied to cindy-host (HOST_CONTRACT_CHANNELS and the extra
- *               client-mode proxies in host-delegation.ts)
+ *   contract  — proxied to cindy-host (HOST_CONTRACT_CHANNELS, the extra
+ *               client-mode proxies in host-delegation.ts, and the entries of
+ *               the Host's generic IPC route in maker-shared hostIpcEntries/)
  *   client    — registered by client mode itself (connection status, retry)
  *   A         — must be served by the backend (reads or writes data or runtime
  *               state the backend owns)
@@ -75,7 +76,7 @@ export const OWNERSHIP_RULES = [
   {
     owner: 'B',
     reason: '图形能力，由窗口替 Agent 执行（平台 RPC）',
-    channel: /^(maker:computer|maker:browser|browser-backend|rsb-browser-bridge|rsb-native-popup)/,
+    channel: /^(maker:computer|browser-backend|rsb-browser-bridge|rsb-native-popup)/,
     module: /^(rsb-browser-bridge)\b/,
   },
   {
@@ -135,6 +136,11 @@ export const OWNERSHIP_RULES = [
     owner: 'A',
     reason: '升级与交接（归交接任务：它留在原工作区的升级流程）',
     channel: /^update-relaunch:/,
+  },
+  {
+    owner: 'A',
+    reason: 'Agent 浏览器：客户端模式下归 Host 的浏览器运行时（窗口再开一个会争用同一个 Chrome 用户目录）',
+    channel: /^maker:browser:/,
   },
   { owner: 'A', reason: '任务、消息与输入队列', channel: /^(local-db:(sessions|messages|history|session-share|session-import|right-sidebar-tabs|recent-workdirs|subagent-runs|conversations|task-tags|project-aliases|ensure-ready|maintenance)|maker:(session|input|send|steer|create-session|close-session|abort-session|fork|rewind|compact|message|get-session|navigate-session|side-chat|goal|turn-change|persist-turn|working-status|any-session|export-session|generate-title|regenerate-title|auto-title|predict-prompt|switch-session-agent|write-plan-file|images|list-desktop-commands|execute-desktop-command|get-context|set-))/ },
   { owner: 'A', reason: '自动化', channel: /^maker:schedule/ },
@@ -612,7 +618,12 @@ export function collectInventory() {
     visit(sf);
   }
 
-  return { registrations, unresolved, adapters, contract: readContract(program, checker, constValues) };
+  const bootstrap = program.getSourceFile(path.join(mainRoot, 'bootstrap-electron.ts'));
+  return {
+    registrations, unresolved, adapters,
+    contract: readContract(program, checker, constValues),
+    clientRegistrars: [...clientModeRegistrars(bootstrap)].sort(),
+  };
 }
 
 function findNode(sf, pos) {
@@ -695,17 +706,56 @@ export function requireResolvedContract(unresolved) {
   throw new Error(`host channel contract has ${unresolved.length} channel name(s) the scanner cannot resolve; teach the scanner or write them as literals:\n  ${sites}`);
 }
 
+export const HOST_IPC_ENTRIES_PREFIX = 'packages/maker-shared/src/hostIpcEntries/';
+
+/**
+ * Functions the client-mode branch of `registerMakerIpcsAfterSplash` calls.
+ * Their registrations run in client mode too. Read from source, so a
+ * window-local registration added after the client snapshot is not reported
+ * as rejected; generation stops if the branch can no longer be found.
+ */
+export function clientModeRegistrars(sf) {
+  const names = new Set();
+  let found = false;
+  const collectCalls = (node) => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) names.add(node.expression.text);
+    ts.forEachChild(node, collectCalls);
+  };
+  const findBranch = (node) => {
+    if (ts.isIfStatement(node) && ts.isIdentifier(node.expression) && node.expression.text === 'hostClientMode') {
+      found = true;
+      collectCalls(node.thenStatement);
+      return;
+    }
+    ts.forEachChild(node, findBranch);
+  };
+  const visit = (node) => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === 'registerMakerIpcsAfterSplash' && node.initializer) {
+      findBranch(node.initializer);
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  if (!found) throw new Error('client-mode branch (`if (hostClientMode)`) of registerMakerIpcsAfterSplash not found');
+  return names;
+}
+
 /** Channels the client proxies to cindy-host, read from the same sources the client uses. */
 function readContract(program, checker, constValues) {
   const contractFile = program.getSourceFiles().find((sf) => rel(sf.fileName) === 'packages/maker-shared/src/hostChannelContract.ts');
   const delegationFile = program.getSourceFile(path.join(mainRoot, 'host-delegation.ts'));
   const bootstrapFile = program.getSourceFile(path.join(mainRoot, 'bootstrap-electron.ts'));
   if (!contractFile || !delegationFile || !bootstrapFile) throw new Error('host channel contract sources not found');
+  // Channels the Host serves through its generic route, one family per file.
+  const registryFiles = program.getSourceFiles().filter((sf) => rel(sf.fileName).startsWith(HOST_IPC_ENTRIES_PREFIX));
+  if (!registryFiles.length) throw new Error(`host IPC registry entries (${HOST_IPC_ENTRIES_PREFIX}) not found`);
   const parts = [
     collectContractChannels(contractFile, 'desktopChannel', constValues),
     collectContractChannels(delegationFile, 'channel', constValues),
     // Sync channels prefetched from the host at client-mode start.
     collectContractChannels(bootstrapFile, 'channel', constValues, 'installHostClientMode'),
+    ...registryFiles.map((sf) => collectContractChannels(sf, 'channel', constValues)),
   ];
   requireResolvedContract(parts.flatMap((part) => part.unresolved));
   const proxied = new Set(parts.flatMap((part) => part.values));
@@ -720,6 +770,8 @@ export function owningFile(registration) {
   if (registration.file.startsWith(MAIN_PREFIX) || !registration.registeredAt) return registration.file;
   return registration.registeredAt.replace(/:\d+$/, '');
 }
+
+const UNLISTED_DOMAIN = '未登记前缀';
 
 /**
  * contract / client first, then ownership. `basis` says which part decided:
@@ -747,14 +799,14 @@ export function classify(registration, contract) {
       reason: `同步通道·${rule.reason}：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计`,
     };
   }
-  if (rule && rule.owner !== 'A') return { category: rule.owner, sub: rule.sub, reason: rule.reason, basis: 'rule' };
+  if (rule && rule.owner !== 'A') return { category: rule.owner, sub: rule.sub, reason: rule.reason, domain: rule.reason, basis: 'rule' };
   const gui = registration.gui ?? [];
-  const domain = rule?.reason ?? '未登记前缀';
+  const domain = rule?.reason ?? UNLISTED_DOMAIN;
   if (gui.length) {
-    return { category: 'C', sub: 'two-phase', reason: `${domain}，但处理函数用到窗口 API：${gui.join('、')}；窗口做界面动作，数据那一半调 Host`, basis: 'dependency' };
+    return { category: 'C', sub: 'two-phase', domain, reason: `${domain}，但处理函数用到窗口 API：${gui.join('、')}；窗口做界面动作，数据那一半调 Host`, basis: 'dependency' };
   }
-  if (rule) return { category: 'A', reason: domain, basis: 'rule' };
-  return { category: 'A', reason: '未登记前缀，处理函数没有用到窗口 API', basis: 'default' };
+  if (rule) return { category: 'A', reason: domain, domain, basis: 'rule' };
+  return { category: 'A', reason: '未登记前缀，处理函数没有用到窗口 API', domain, basis: 'default' };
 }
 
 export function moduleGroup(file) {
@@ -832,9 +884,11 @@ export function rankUsage(rows, usage, filter = isHostWork) {
  * What a window-class channel does in client mode today, from the handler
  * snapshots of a client-mode run and an embedded run. Absent from the client
  * snapshot but present in the embedded one means the window rejects it although
- * it should answer locally.
+ * it should answer locally. A channel registered by a function the client-mode
+ * branch calls (`clientRegistrars`) is local from source even when the snapshot
+ * predates it.
  */
-export function clientBehavior(row, clientReport, embeddedReport) {
+export function clientBehavior(row, clientReport, embeddedReport, clientRegistrars = new Set()) {
   if (row.perWebContents) return 'per-webcontents';
   const has = (report) => {
     const registered = report?.registered;
@@ -842,8 +896,9 @@ export function clientBehavior(row, clientReport, embeddedReport) {
     return (row.kind === 'invoke' ? registered.invoke : registered.event).includes(row.channel);
   };
   const client = has(clientReport);
-  if (client === null) return 'unknown';
   if (client) return 'local';
+  if (row.enclosing && clientRegistrars.has(row.enclosing)) return 'local-source';
+  if (client === null) return 'unknown';
   if (has(embeddedReport) === false) return 'not-registered-either';
   if (row.kind === 'event') return 'dropped';
   return row.channel.startsWith('maker:') ? 'unsupported' : 'no-handler';
@@ -851,6 +906,7 @@ export function clientBehavior(row, clientReport, embeddedReport) {
 
 export const CLIENT_BEHAVIOR_LABELS = {
   local: '窗口本地照常处理',
+  'local-source': '窗口本地照常处理（源码判定：客户端分支调用其注册函数；客户端快照早于这次改动，未实测）',
   unsupported: '被拒：UNSUPPORTED_CAPABILITY',
   'no-handler': '被拒：No handler registered',
   dropped: '消息无人监听（被丢弃）',
@@ -860,7 +916,38 @@ export const CLIENT_BEHAVIOR_LABELS = {
 };
 const REJECTED = new Set(['unsupported', 'no-handler', 'dropped']);
 
-export function summarize({ registrations, unresolved, adapters = [], contract }, usage, clientUsage = null) {
+const LOCAL = new Set(['local', 'local-source']);
+
+/**
+ * Host work grouped by domain (the A-rule or C-rule reason): channels of one
+ * domain usually need the same Host service, so batches are cut by domain.
+ * Ranked by real calls, then by channel count.
+ */
+export function hostFamilies(hostRows, usage) {
+  const families = new Map();
+  for (const row of hostRows) {
+    const domain = row.domain ?? row.reason;
+    const family = families.get(domain) ?? { domain, total: 0, used: 0, calls: 0, groups: new Map() };
+    family.total += 1;
+    if (row.used) {
+      family.used += 1;
+      family.calls += row.used;
+    }
+    family.groups.set(row.group, (family.groups.get(row.group) ?? 0) + 1);
+    families.set(domain, family);
+  }
+  return [...families.values()]
+    .map((family) => ({
+      ...family,
+      used: usage ? family.used : null,
+      calls: usage ? family.calls : null,
+      groups: [...family.groups].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])),
+    }))
+    .sort((a, b) => (b.calls ?? 0) - (a.calls ?? 0) || b.total - a.total || a.domain.localeCompare(b.domain));
+}
+
+export function summarize({ registrations, unresolved, adapters = [], contract, clientRegistrars = [] }, usage, clientUsage = null) {
+  const registrars = new Set(clientRegistrars);
   const channels = new Map();
   for (const registration of registrations) {
     const key = `${registration.kind}:${registration.channel}`;
@@ -902,7 +989,7 @@ export function summarize({ registrations, unresolved, adapters = [], contract }
   const counts = usageCounts(usage);
   for (const row of rows) {
     row.used = counts.get(channelKey(row.kind, row.channel)) ?? 0;
-    if (isWindowClass(row)) row.clientBehavior = clientBehavior(row, clientUsage, usage);
+    if (isWindowClass(row)) row.clientBehavior = clientBehavior(row, clientUsage, usage, registrars);
   }
   let usedTotals = null;
   if (usage) {
@@ -928,15 +1015,17 @@ export function summarize({ registrations, unresolved, adapters = [], contract }
     calls: ranking ? ranking.reduce((sum, entry) => sum + entry.count, 0) : null,
     usedA: ranking ? ranking.filter((e) => e.category === 'A' || e.category === 'unregistered').length : null,
   };
+  const families = hostFamilies(hostRows, usage);
   const windowRows = rows.filter(isWindowClass);
   const windowStatus = {
     total: windowRows.length,
-    registered: windowRows.filter((row) => row.clientBehavior === 'local').length,
+    registered: windowRows.filter((row) => LOCAL.has(row.clientBehavior)).length,
+    fromSource: windowRows.filter((row) => row.clientBehavior === 'local-source').length,
     unregistered: windowRows.filter((row) => REJECTED.has(row.clientBehavior)).length,
-    other: windowRows.filter((row) => row.clientBehavior !== 'local' && !REJECTED.has(row.clientBehavior)).length,
+    other: windowRows.filter((row) => !LOCAL.has(row.clientBehavior) && !REJECTED.has(row.clientBehavior)).length,
   };
   return {
-    rows, totals, subs, basis, usedTotals, ranking, hostWork, windowStatus,
+    rows, totals, subs, basis, usedTotals, ranking, hostWork, windowStatus, families,
     groups: [...groups.values()].sort((a, b) => b.A - a.A || a.group.localeCompare(b.group)),
     unresolved, adapters, missingContract,
   };
@@ -963,7 +1052,7 @@ function code(text) {
 const label = (row) => (subKey(row) ? SUB_LABELS[subKey(row)] : row.category);
 
 export function renderMarkdown(summary, { usageSource, clientSource } = {}) {
-  const { rows, totals, subs, basis, groups, unresolved, adapters, missingContract, ranking, usedTotals, hostWork, windowStatus } = summary;
+  const { rows, totals, subs, basis, groups, unresolved, adapters, missingContract, ranking, usedTotals, hostWork, windowStatus, families = [] } = summary;
   const lines = [];
   const push = (...items) => lines.push(...items);
   const used = (key) => (usedTotals ? `（巡检调用 ${usedTotals[key]}）` : '');
@@ -979,7 +1068,7 @@ export function renderMarkdown(summary, { usageSource, clientSource } = {}) {
     + (ranking ? `；巡检实际调用到 **${hostWork.used}** 个（${hostWork.calls} 次，其中 A ${hostWork.usedA}）。` : '。'));
   push('同步通道（S）与回执通道（R）已单列，不在 A 里；C-窗口本地与 C-专项设计不计入。', '');
   push('| 分类 | 含义 | 通道数 |', '|---|---|---:|');
-  push(`| contract | 已在 Host 通道合同里，窗口做客户端时转发给 Host | ${totals.contract}${used('contract')} |`);
+  push(`| contract | 已在 Host 通道合同或通用路由登记表里，窗口做客户端时转发给 Host | ${totals.contract}${used('contract')} |`);
   push(`| client | 客户端模式自己的通道（连接状态、重连） | ${totals.client}${used('client')} |`);
   push(`| **A** | 必须由后台处理：读写后台持有的数据或运行状态 | ${totals.A}${used('A')} |`);
   push(`| **B** | 永久留在窗口：只能在 Electron／图形界面里做 | ${totals.B}${used('B')} |`);
@@ -992,10 +1081,12 @@ export function renderMarkdown(summary, { usageSource, clientSource } = {}) {
   for (const key of ['C:backend', 'C:two-phase', 'C:window', 'C:special']) push(`| 　${SUB_LABELS[key]} | | ${subs[key]}${used(key)} |`);
   push(`| 合计 | | ${rows.length} |`, '');
   push('**窗口类**（B + W + S·本地 + C-窗口本地）在客户端模式下：');
-  push(`已注册 **${windowStatus.registered}**、未注册 **${windowStatus.unregistered}**（今天被拒或无人监听，见下文）、快照无法判断 ${windowStatus.other}。`, '');
+  push(`已注册 **${windowStatus.registered}**`
+    + (windowStatus.fromSource ? `（其中 ${windowStatus.fromSource} 个只有源码判定，客户端快照里还没有）` : '')
+    + `、未注册 **${windowStatus.unregistered}**（今天被拒或无人监听，见下文）、快照无法判断 ${windowStatus.other}。`, '');
   push(`判定依据：${Object.entries(basis).sort().map(([key, count]) => `${key} ${count}`).join('、')}`
     + '（rule = 规则表，dependency = 窗口 API 或同步返回值判定，default = 未登记前缀且没用窗口 API）。', '');
-  push('合同一侧（`hostChannelContract.ts`、`host-delegation.ts`、客户端模式预取）的通道名全部静态解析：解析不出任何一个时脚本直接失败，不会生成本清单。', '');
+  push('合同一侧（`hostChannelContract.ts`、`host-delegation.ts`、客户端模式预取、Host 通用路由的登记表 `hostIpcEntries/`）的通道名全部静态解析：解析不出任何一个时脚本直接失败，不会生成本清单。', '');
   if (unresolved.length) {
     push(`未能静态解析通道名的注册点 ${unresolved.length} 处（不计入上表）：`, '');
     for (const entry of unresolved) push(`- \`${fileOnly(entry.file)}\` — ${code(entry.expression)}`);
@@ -1027,6 +1118,18 @@ export function renderMarkdown(summary, { usageSource, clientSource } = {}) {
     + `成员 ${Object.entries(GUI_MEMBERS).flatMap(([owner, members]) => [...members].map((m) => code(`${owner}.${m}`))).join('、')}；`
     + '以及 `new BrowserWindow`。不计入：发送方校验（`src/main/security/`，客户端模式下由 Host 令牌鉴权），'
     + '以及发给某个窗口的推送（`webContents.fromId`、`event.sender`，客户端模式下推送走 Host 事件流）。', '');
+
+  if (families.length) {
+    push('## 要 Host 做的：按领域排行', '');
+    push('领域取自归属规则的原因（A 规则与 C 规则）；同一领域的通道通常共用一个 Host 服务，各批按领域切。'
+      + '按巡检调用次数排序，次数相同按通道数。“主要模块”是该领域通道最多的三个注册模块。', '');
+    push('| # | 领域 | 通道数 | 巡检调用到 | 调用次数 | 主要模块 |', '|---:|---|---:|---:|---:|---|');
+    families.forEach((family, index) => {
+      const top = family.groups.slice(0, 3).map(([group, count]) => `${group} ${count}`).join('、');
+      push(`| ${index + 1} | ${family.domain} | ${family.total} | ${family.used ?? '-'} | ${family.calls ?? '-'} | ${top} |`);
+    });
+    push('');
+  }
 
   if (ranking) {
     push('## 要 Host 做的：实际调用排行', '');
@@ -1063,7 +1166,9 @@ export function renderMarkdown(summary, { usageSource, clientSource } = {}) {
   push('## 窗口类在客户端模式下的实际行为', '');
   push(`来源：${clientSource ?? '没有客户端模式快照'}；对照 ${usageSource ?? '没有普通模式快照'}。`);
   push('两份快照都是报告写入时主进程已注册的处理者；客户端快照里没有、普通模式快照里有，就是该在窗口本地处理却没有注册的通道。');
-  push('客户端快照取在登录页（Host 没有免账号模式），登录后才注册的处理者不在其中。', '');
+  push('客户端快照取在登录页（Host 没有免账号模式），登录后才注册的处理者不在其中。');
+  push('快照之后客户端分支新调用的注册函数从源码读出（`registerMakerIpcsAfterSplash` 的 `if (hostClientMode)` 分支），'
+    + '其通道记为“源码判定”，下次录制客户端快照后以快照为准。', '');
   push('| 行为 | 通道数 |', '|---|---:|');
   for (const [key, text] of Object.entries(CLIENT_BEHAVIOR_LABELS)) if (behaviorCounts[key]) push(`| ${text} | ${behaviorCounts[key]} |`);
   push('');
@@ -1076,7 +1181,7 @@ export function renderMarkdown(summary, { usageSource, clientSource } = {}) {
     }
     push('');
   }
-  const unclear = windowRows.filter((row) => row.clientBehavior !== 'local' && !REJECTED.has(row.clientBehavior));
+  const unclear = windowRows.filter((row) => !LOCAL.has(row.clientBehavior) && !REJECTED.has(row.clientBehavior));
   if (unclear.length) {
     push(`快照无法判断的窗口类通道（${unclear.length}）：${unclear.map((row) => `${code(row.channel)}（${CLIENT_BEHAVIOR_LABELS[row.clientBehavior]}）`).join('、')}`, '');
   }
