@@ -50,7 +50,9 @@ function collectBareCustomToolNames(body: unknown): Set<string> {
     for (const item of input) {
       if (!item || typeof item !== 'object') continue;
       const { type, tools } = item as { type?: unknown; tools?: unknown };
-      if (type === 'additional_tools' || type === 'tool_search_output') groups.push(tools);
+      // Replay history never participates in namespace allocation, so it must not decide who owns a
+      // bare name either; only live `additional_tools` joins the live catalog.
+      if (type === 'additional_tools') groups.push(tools);
     }
   }
   for (const group of groups) {
@@ -96,7 +98,14 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
   const displacement = displacedKinds.size > 0
     ? { bareCustomNames, displacedKinds }
     : undefined;
-  const schemas = policy.repairFunctionArguments ? collectFunctionCallRepairSchemas(body, namespace.renamedWireNames) : new Map();
+  const schemas = policy.repairFunctionArguments
+    ? collectFunctionCallRepairSchemas(body, {
+        renamedWireNames: namespace.renamedWireNames,
+        loweredToolChoice: namespace.body && typeof namespace.body === 'object'
+          ? (namespace.body as { tool_choice?: unknown }).tool_choice
+          : undefined,
+      })
+    : new Map();
   const declared = collectDeclaredWireToolNames(body);
   const scrubAuthorization = collectSelfNamedNamespaceScrubAuthorization(body, new Set([...custom.names, ...custom.repairNames]), new Set(schemas.keys()));
   const restoreNamespace = (text: string) => restoreRoutedNamespaceCallsInJson(text, namespace.aliases);

@@ -800,4 +800,71 @@ describe("dotted namespace restoration uses the declaration collision boundary",
             arguments: '{"line":12}',
         });
     });
+
+    // The repair catalog must follow the forwarded request, not a plan rebuilt from combined
+    // history: a replayed sibling would otherwise shift the allocated suffix and the live child's
+    // selector would stop matching its own schema.
+    test("keeps the repair selector on the request allocation with replayed siblings", () => {
+        const parameters = { type: "object", properties: { line: { type: "integer" } } };
+        const body = {
+            tools: [
+                { type: "function", name: "workspace__read", parameters },
+                { type: "namespace", name: "workspace", tools: [{ type: "function", name: "read", parameters }] },
+            ],
+            input: [{
+                type: "tool_search_output",
+                tools: [{ type: "namespace", name: "workspace", tools: [{ type: "function", name: "read_2", parameters }] }],
+            }],
+            tool_choice: { type: "function", name: "read" },
+        };
+        const prepared = prepareResponsesCompatibility(body, {
+            customTools: "functions",
+            namespaceTools: "functions",
+            repairFunctionArguments: true,
+        });
+        const child = JSON.stringify({ type: "response.completed", response: { status: "completed", output: [{ type: "function_call", name: "workspace__read_2", call_id: "call_child", arguments: '{"line":12.0}' }] } });
+        expect(JSON.parse(prepared.restoreJson(child)).response.output[0]).toMatchObject({
+            name: "read",
+            namespace: "workspace",
+            arguments: '{"line":12}',
+        });
+    });
+
+    // Replayed history never took part in the allocation, so it cannot decide that a live bare
+    // declaration is a custom tool.
+    test("lets replay history leave the live bare owner's kind alone", () => {
+        const body = {
+            tools: [
+                { type: "function", name: "workspace__run", parameters: {} },
+                { type: "namespace", name: "workspace", tools: [{ type: "custom", name: "run", description: "Child custom" }] },
+            ],
+            input: [{
+                type: "tool_search_output",
+                tools: [{ type: "custom", name: "workspace__run", description: "Old bare custom" }],
+            }],
+        };
+        const prepared = prepareResponsesCompatibility(body, { customTools: "functions", namespaceTools: "functions" });
+        const bare = JSON.stringify({ output: [{ type: "function_call", name: "workspace__run", call_id: "call_bare", arguments: '{"input":"echo bare"}' }] });
+        expect(prepared.restoreJson(bare)).toBe(bare);
+    });
+
+    // Two replayed declarations that disagree are still ambiguous; live-over-history precedence
+    // must not turn every conflict into "first one wins".
+    test("keeps a same-source conflict ambiguous even with a live declaration present", () => {
+        const live = { type: "function", name: "foo", parameters: { type: "object", properties: { v: { type: "string" } } } };
+        const body = {
+            tools: [live],
+            input: [
+                { type: "tool_search_output", tools: [{ ...live }] },
+                { type: "tool_search_output", tools: [{ type: "function", name: "foo", parameters: { type: "object", properties: { v: { type: "number" } } } }] },
+            ],
+        };
+        const prepared = prepareResponsesCompatibility(body, {
+            customTools: "functions",
+            namespaceTools: "functions",
+            repairFunctionArguments: true,
+        });
+        const call = JSON.stringify({ type: "response.completed", response: { status: "completed", output: [{ type: "function_call", name: "foo", call_id: "call_foo", arguments: '{"v":5}' }] } });
+        expect(prepared.restoreJson(call)).toBe(call);
+    });
 });

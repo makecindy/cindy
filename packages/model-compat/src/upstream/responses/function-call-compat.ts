@@ -48,34 +48,45 @@ function selectorAllows(
 }
 
 /** Caller supplies currentTurnWireToolCatalogBody BEFORE provider schema lowering. */
+export interface FunctionCallRepairPlan {
+  /** Wire names the live request allocated for displaced namespace children. */
+  renamedWireNames: ReadonlyMap<string, string>;
+  /** `tool_choice` after the request's own lowering, so selectors match the forwarded body. */
+  loweredToolChoice?: unknown;
+}
+
 export function collectFunctionCallRepairSchemas(
   body: unknown,
-  requestRenames?: ReadonlyMap<string, string>,
+  plan?: FunctionCallRepairPlan,
 ): Map<string, FunctionCallRepairSchema> {
   const schemas = new Map<string, FunctionCallRepairSchema>();
   if (!isObject(body)) return schemas;
-  const groups = collectResponsesToolGroups(body);
+  const liveGroups: unknown[][] = [];
+  if (Array.isArray(body.tools)) liveGroups.push(body.tools);
+  const replayedGroups: unknown[][] = [];
   if (Array.isArray(body.input)) {
     for (const entry of body.input) {
-      if (isObject(entry) && entry.type === "tool_search_output" && Array.isArray(entry.tools)) groups.push(entry.tools);
+      if (!isObject(entry) || !Array.isArray(entry.tools)) continue;
+      if (entry.type === "tool_search_output") replayedGroups.push(entry.tools);
+      else if (entry.type === "additional_tools") liveGroups.push(entry.tools);
     }
   }
-  // Reuse namespace selector resolution, retaining schemas from the original objects below.
-  // This local catalog view includes loaded definitions without revisiting replay history or
-  // teaching the shared tool-group collector a new transport-wide interpretation.
-  const loweredResult = rewriteRoutedNamespaceToolsForUpstream({ ...body, tools: groups.flat(), input: [] });
-  const lowered = loweredResult.body;
-  // A displaced child answers to the wire name the flattening pass allocated, not the preferred
-  // name a bare declaration now owns. Without this the catalog keys both declarations to the same
-  // name, marks it ambiguous, and neither tool gets its argument repair.
-  // The request's own allocation is authoritative: this local catalog view also folds in
-  // historical `tool_search_output` definitions, which must not change how the live request
-  // distributed wire names.
-  const renamedWireNames = requestRenames ?? loweredResult.renamedWireNames;
+  // The forwarded request owns both the wire names and the lowered selector. Rebuilding them from
+  // a combined catalog would let replayed history change either, which the request itself never
+  // did; only a caller without a plan falls back to the local view.
+  let loweredChoice: unknown;
+  let renamedWireNames: ReadonlyMap<string, string>;
+  if (plan) {
+    loweredChoice = plan.loweredToolChoice;
+    renamedWireNames = plan.renamedWireNames;
+  } else {
+    const derived = rewriteRoutedNamespaceToolsForUpstream({ ...body, tools: [...liveGroups, ...replayedGroups].flat(), input: [] });
+    loweredChoice = isObject(derived.body) ? derived.body.tool_choice : undefined;
+    renamedWireNames = derived.renamedWireNames;
+  }
   const choice = body.tool_choice;
-  const loweredChoice = isObject(lowered) ? lowered.tool_choice : undefined;
-  const occupied = new Map<string, { kind: unknown; identity: FunctionCallRepairSchema } | null>();
-  const register = (tool: unknown, namespace?: string): void => {
+  const occupied = new Map<string, { kind: unknown; identity: FunctionCallRepairSchema; live: boolean } | null>();
+  const register = (tool: unknown, namespace: string | undefined, live: boolean): void => {
     if (!isObject(tool) || typeof tool.name !== "string" || tool.name.length === 0) return;
     const identity: FunctionCallRepairSchema = {
       name: tool.name,
@@ -89,27 +100,41 @@ export function collectFunctionCallRepairSchemas(
     if (occupied.has(key)) {
       const previous = occupied.get(key);
       if (!previous) return;
-      const same = previous.kind === tool.type
-        && previous.identity.namespace === namespace
-        && previous.identity.name === tool.name
-        && sameSchemaValue(previous.identity.parameters, identity.parameters);
-      if (same) return;
-      // With the request's allocation in hand the live catalog was registered first, so a
-      // historical definition claiming the same wire name is the one that steps aside.
-      if (requestRenames) return;
-      // Conflicting duplicate declarations cannot choose a schema by insertion order.
+      const sameIdentity = previous.identity.namespace === namespace
+        && previous.identity.name === tool.name;
+      if (sameIdentity) {
+        // One tool declared twice: identical declarations collapse, contradictory ones cannot be
+        // ordered by which catalog happened to carry them.
+        const same = previous.kind === tool.type
+          && sameSchemaValue(previous.identity.parameters, identity.parameters);
+        if (!same) occupied.set(key, null);
+        return;
+      }
+      // Two different tools want one wire name. The live catalog owns it; replayed history —
+      // which never took part in the allocation — steps aside. Two tools from the same source
+      // cannot be ordered, so that stays ambiguous.
+      if (previous.live !== live) {
+        if (live) occupied.set(key, { kind: tool.type, identity, live });
+        return;
+      }
       occupied.set(key, null);
-    } else occupied.set(key, { kind: tool.type, identity });
+      return;
+    }
+    occupied.set(key, { kind: tool.type, identity, live });
   };
-  for (const group of groups) {
+  const groups: [unknown[], boolean][] = [
+    ...liveGroups.map(group => [group, true] as [unknown[], boolean]),
+    ...replayedGroups.map(group => [group, false] as [unknown[], boolean]),
+  ];
+  for (const [group, live] of groups) {
     for (const tool of group) {
       if (!isObject(tool)) continue;
       if (tool.type === "namespace") {
         if (typeof tool.name !== "string" || !tool.name || !Array.isArray(tool.tools)) continue;
-        for (const child of tool.tools) register(child, namespaceOf(tool.name));
+        for (const child of tool.tools) register(child, namespaceOf(tool.name), live);
       } else if (tool.type === "function" && isObject(tool.function)) {
-        register({ ...tool.function, type: "function" });
-      } else register(tool);
+        register({ ...tool.function, type: "function" }, undefined, live);
+      } else register(tool, undefined, live);
     }
   }
   for (const [key, entry] of occupied) {
