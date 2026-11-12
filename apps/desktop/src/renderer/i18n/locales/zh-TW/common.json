@@ -2146,7 +2146,16 @@
       },
       "sidebarAndPanels": "側邊欄與面板",
       "themeLabel": "主題",
+      "createTheme": {
+        "label": "製作主題",
+        "hint": "描述風格或提供參考圖，製作整套外觀",
+        "prompt": "幫我製作一套可分享的 Cindy 主題包，預覽並驗證效果。我想要的風格是：",
+        "unavailable": "主題製作技能無法使用，請在技能中檢查是否啟用",
+        "startFailed": "無法開啟主題製作任務"
+      },
       "themeAriaLabel": "主題選擇",
+      "themeApplyFailed": "無法套用此主題，目前外觀已保留",
+      "themeFontFailed": "主題字體無法載入，已使用預設字體",
       "localBadge": "(本地)",
       "localThemes": {
         "title": "本地主題",
@@ -15351,6 +15360,16 @@
             "recheck": "檢查連接",
             "summary": "管理 GitHub 儲存庫、Issues、PR 和 Actions。",
             "otherMethods": "其他連線方式"
+          },
+          "app": {
+            "title": "儲存庫事件",
+            "description": "連接 Cindy GitHub App，在審查或 CI 變更時更新正在跟進的 PR。",
+            "connected": "已連接 {{login}} · 正在關注 {{count}} 個儲存庫",
+            "missing": "請檢查這些儲存庫的 App 安裝與存取權限：{{repositories}}",
+            "error": "無法檢查連線，請重試。",
+            "repositories": "選擇儲存庫",
+            "disconnect": "中斷事件連線",
+            "connect": "連接 GitHub App"
           }
         },
         "unresolved": "{{count}} 條未解決的 review 評論",
@@ -16085,7 +16104,11 @@
             "payments": "付款",
             "checkout": "結帳",
             "invoices": "帳單",
-            "subscriptions": "訂閱"
+            "subscriptions": "訂閱",
+            "reviewComments": "評審評論",
+            "reviewThreads": "評審討論",
+            "checkRuns": "檢查執行",
+            "commitStatus": "提交狀態"
           },
           "actions": {
             "all": "全部變化",
@@ -16107,7 +16130,12 @@
             "failed": "失敗",
             "paid": "已付款"
           }
-        }
+        },
+        "repositoriesLabel": "倉庫",
+        "repositoriesHint": "每行填寫一個 owner/repository。只有已授權給此 GitHub App 的倉庫才能觸發任務。",
+        "repositoriesInvalid": "請填寫 1–50 個有效的 owner/repository 倉庫名稱。",
+        "githubAppHint": "請在執行此任務的電腦上連接 GitHub App，並授權這些倉庫，無需另設 Webhook 位址或金鑰。",
+        "githubAppPaused": "此任務已暫停，事件不會啟動它。"
       },
       "trigger": {
         "label": "觸發方式",
@@ -16920,6 +16948,9 @@
       },
       "pluginCreator": {
         "description": "建立、修改、偵錯與打包 Cindy 插件，也可按需發佈。"
+      },
+      "themeCreator": {
+        "description": "製作並驗證 Cindy 的配色、素材與外觀設定。"
       }
     },
     "common": {
@@ -18038,7 +18069,7 @@
     "exit": "退出計劃模式"
   },
   "globalDrop": {
-    "cindyHint": "鬆開安裝插件",
+    "cindyHint": "鬆開匯入 Cindy 檔案",
     "cshareHint": "鬆開匯入分享的任務"
   },
   "sessionShare": {
@@ -20157,6 +20188,13 @@
     "detail": "請求來自「{{device}}」\n用途：{{purpose}}\n\n開啟後，同帳號裝置可以遠端控制這台電腦，包括執行任務和存取檔案。此設定持續有效，可隨時在設定中關閉。",
     "decline": "暫不開啟",
     "enable": "開啟遠端控制"
+  },
+  "cindyFiles": {
+    "unsupported": "目前版本不支援此檔案，請更新 Cindy 後重試",
+    "invalid": "此 Cindy 檔案無效或已損毀，請重新取得檔案",
+    "failed": "無法匯入此檔案，請重試",
+    "themeInstalled": "主題已加入清單，請在外觀設定中選擇",
+    "refreshFailed": "主題已載入，但清單無法重新整理，請在外觀設定中重新整理"
   },
   "modelGroups": {
     "title": "模型組",

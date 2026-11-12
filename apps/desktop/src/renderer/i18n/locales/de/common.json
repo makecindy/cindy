@@ -2176,7 +2176,16 @@
       },
       "sidebarAndPanels": "Seitenleiste und Bereiche",
       "themeLabel": "Design",
+      "createTheme": {
+        "label": "Design erstellen",
+        "hint": "Beschreibe einen Stil oder füge ein Referenzbild hinzu, um Cindys Erscheinungsbild zu gestalten.",
+        "prompt": "Hilf mir, ein teilbares Cindy-Themenpaket mit Vorschau und Prüfung zu erstellen. Mein gewünschter Stil:",
+        "unavailable": "Der Skill zum Erstellen von Designs ist nicht verfügbar. Prüfe unter Skills, ob er aktiviert ist.",
+        "startFailed": "Die Aufgabe zum Erstellen eines Designs konnte nicht geöffnet werden"
+      },
       "themeAriaLabel": "Designauswahl",
+      "themeApplyFailed": "Das Design konnte nicht angewendet werden. Das bisherige Erscheinungsbild bleibt erhalten.",
+      "themeFontFailed": "Die Designschrift konnte nicht geladen werden. Die Standardschrift wird verwendet.",
       "localBadge": "(Lokal)",
       "localThemes": {
         "title": "Lokale Designs",
@@ -15417,6 +15426,16 @@
             "recheck": "Verbindung prüfen",
             "summary": "Verwalte GitHub-Repositories, Issues, Pull Requests und Actions.",
             "otherMethods": "Andere Verbindungsmethoden"
+          },
+          "app": {
+            "title": "Repository-Ereignisse",
+            "description": "Verbinde die Cindy GitHub App, um verfolgte PRs bei Änderungen an Reviews oder CI zu aktualisieren.",
+            "connected": "Verbunden als {{login}} · Beobachtete Repositorys: {{count}}",
+            "missing": "App-Installation und Zugriff prüfen: {{repositories}}",
+            "error": "Verbindung konnte nicht geprüft werden. Versuche es erneut.",
+            "repositories": "Repositorys auswählen",
+            "disconnect": "Ereignisse trennen",
+            "connect": "GitHub App verbinden"
           }
         },
         "unresolved": "Ungelöste Review-Threads: {{count}}",
@@ -16151,7 +16170,11 @@
             "payments": "Zahlungen",
             "checkout": "Checkout",
             "invoices": "Rechnungen",
-            "subscriptions": "Abonnements"
+            "subscriptions": "Abonnements",
+            "reviewComments": "Review-Kommentare",
+            "reviewThreads": "Review-Diskussionen",
+            "checkRuns": "Prüfläufe",
+            "commitStatus": "Commit-Status"
           },
           "actions": {
             "all": "Alle Änderungen",
@@ -16173,7 +16196,12 @@
             "failed": "Fehlgeschlagen",
             "paid": "Bezahlt"
           }
-        }
+        },
+        "repositoriesLabel": "Repositorys",
+        "repositoriesHint": "Gib owner/repository ein, eines pro Zeile. Nur für diese GitHub App autorisierte Repositorys können die Aufgabe auslösen.",
+        "repositoriesInvalid": "Gib 1–50 gültige Repository-Namen im Format owner/repository ein.",
+        "githubAppHint": "Verbinde GitHub App auf dem Computer, der diese Aufgabe ausführt, und autorisiere diese Repositorys. Eine eigene Webhook-URL oder ein eigenes Secret ist nicht erforderlich.",
+        "githubAppPaused": "Diese Aufgabe ist pausiert. Ereignisse starten sie nicht."
       },
       "trigger": {
         "label": "Auslöseart",
@@ -16987,6 +17015,9 @@
       },
       "pluginCreator": {
         "description": "Erstelle, bearbeite, debugge und packe Cindy-Plugins oder veröffentliche sie auf Wunsch."
+      },
+      "themeCreator": {
+        "description": "Cindys Farben, Bildmaterial und Darstellungseinstellungen erstellen und prüfen."
       }
     },
     "common": {
@@ -18106,7 +18137,7 @@
     "exit": "Planmodus beenden"
   },
   "globalDrop": {
-    "cindyHint": "Zum Installieren des Plugins ablegen",
+    "cindyHint": "Zum Importieren der Cindy-Datei ablegen",
     "cshareHint": "Zum Importieren der geteilten Sitzung ablegen"
   },
   "sessionShare": {
@@ -20229,6 +20260,13 @@
     "detail": "Anfrage von {{device}}\nZweck: {{purpose}}\n\nGeräte Ihres Kontos können diesen Computer steuern, Aufgaben ausführen und auf Dateien zugreifen. Die Einstellung bleibt aktiv, bis Sie sie in den Einstellungen deaktivieren.",
     "decline": "Jetzt nicht",
     "enable": "Fernsteuerung aktivieren"
+  },
+  "cindyFiles": {
+    "unsupported": "Diese Version unterstützt diese Datei nicht. Aktualisiere Cindy und versuche es erneut.",
+    "invalid": "Diese Cindy-Datei ist ungültig oder beschädigt. Lade sie erneut herunter.",
+    "failed": "Diese Datei konnte nicht importiert werden. Versuche es erneut.",
+    "themeInstalled": "Theme hinzugefügt. Wähle es in den Darstellungseinstellungen aus.",
+    "refreshFailed": "Das Theme wurde installiert, aber die Liste konnte nicht aktualisiert werden. Aktualisiere sie in den Darstellungseinstellungen."
   },
   "modelGroups": {
     "title": "Modellgruppen",

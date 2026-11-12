@@ -2214,7 +2214,16 @@
       },
       "sidebarAndPanels": "Barra lateral e painéis",
       "themeLabel": "Tema",
+      "createTheme": {
+        "label": "Criar tema",
+        "hint": "Descreva um estilo ou adicione uma imagem de referência para personalizar a aparência da Cindy.",
+        "prompt": "Ajuda-me a criar um pacote de tema da Cindy para partilhar, com pré-visualização e verificação. O estilo que pretendo é:",
+        "unavailable": "A Skill de criação de temas não está disponível. Verifique nas Skills se está ativada.",
+        "startFailed": "Não foi possível abrir a tarefa de criação de tema"
+      },
       "themeAriaLabel": "Seleção de tema",
+      "themeApplyFailed": "Não foi possível aplicar o tema. A aparência atual foi mantida.",
+      "themeFontFailed": "Não foi possível carregar o tipo de letra do tema. É utilizado o tipo de letra predefinido.",
       "localBadge": "(Local)",
       "localThemes": {
         "title": "Temas locais",
@@ -15563,6 +15572,16 @@
             "recheck": "Verificar ligação",
             "summary": "Gerir repositórios, issues, pull requests e Actions do GitHub.",
             "otherMethods": "Outros métodos de ligação"
+          },
+          "app": {
+            "title": "Eventos dos repositórios",
+            "description": "Liga a GitHub App da Cindy para atualizar os PR acompanhados quando as revisões ou a CI mudarem.",
+            "connected": "Ligado como {{login}} · Repositórios acompanhados: {{count}}",
+            "missing": "Verifique a instalação da App e o acesso a: {{repositories}}",
+            "error": "Não foi possível verificar a ligação. Tenta novamente.",
+            "repositories": "Escolher repositórios",
+            "disconnect": "Desligar eventos",
+            "connect": "Ligar GitHub App"
           }
         },
         "unresolved": "Discussões de revisão por resolver: {{count}}",
@@ -16300,7 +16319,11 @@
             "payments": "Pagamentos",
             "checkout": "Finalização da compra",
             "invoices": "Faturas",
-            "subscriptions": "Subscrições"
+            "subscriptions": "Subscrições",
+            "reviewComments": "Comentários de revisão",
+            "reviewThreads": "Discussões de revisão",
+            "checkRuns": "Execuções de verificação",
+            "commitStatus": "Estado do commit"
           },
           "actions": {
             "all": "Todas as alterações",
@@ -16322,7 +16345,12 @@
             "failed": "Falha",
             "paid": "Pago"
           }
-        }
+        },
+        "repositoriesLabel": "Repositórios",
+        "repositoriesHint": "Introduza owner/repository, um por linha. Apenas os repositórios autorizados para esta GitHub App podem iniciar a tarefa.",
+        "repositoriesInvalid": "Introduza 1–50 nomes de repositório válidos no formato owner/repository.",
+        "githubAppHint": "Ligue a GitHub App no computador que executa esta tarefa e autorize estes repositórios. Não é necessário um URL Webhook ou segredo separado.",
+        "githubAppPaused": "Esta tarefa está em pausa. Os eventos não a iniciam."
       },
       "trigger": {
         "label": "Modo de acionamento",
@@ -17141,6 +17169,9 @@
       },
       "pluginCreator": {
         "description": "Criar, editar, depurar e empacotar plugins da Cindy ou publicá-los quando solicitado."
+      },
+      "themeCreator": {
+        "description": "Criar e verificar as cores, os recursos visuais e as definições de aparência da Cindy."
       }
     },
     "common": {
@@ -18273,7 +18304,7 @@
     "exit": "Sair do modo de planeamento"
   },
   "globalDrop": {
-    "cindyHint": "Largar para instalar o plugin",
+    "cindyHint": "Largar para importar o ficheiro Cindy",
     "cshareHint": "Largar para importar a sessão partilhada"
   },
   "sessionShare": {
@@ -20416,6 +20447,13 @@
     "detail": "Pedido de {{device}}\nFinalidade: {{purpose}}\n\nOs dispositivos da sua conta poderão controlar este computador, executar tarefas e aceder a ficheiros. A opção mantém-se ativa até a desativar nas definições.",
     "decline": "Agora não",
     "enable": "Ativar controlo remoto"
+  },
+  "cindyFiles": {
+    "unsupported": "Esta versão não suporta este ficheiro. Atualiza o Cindy e tenta novamente.",
+    "invalid": "Este ficheiro Cindy é inválido ou está danificado. Obtém uma nova cópia.",
+    "failed": "Não foi possível importar este ficheiro. Tenta novamente.",
+    "themeInstalled": "Tema adicionado. Seleciona-o nas definições de aparência.",
+    "refreshFailed": "O tema foi instalado, mas não foi possível atualizar a lista. Atualiza-a nas definições de aparência."
   },
   "modelGroups": {
     "title": "Grupos de modelos",

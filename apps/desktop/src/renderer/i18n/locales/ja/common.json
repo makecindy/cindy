@@ -2146,7 +2146,16 @@
       },
       "sidebarAndPanels": "サイドバーとパネル",
       "themeLabel": "テーマ",
+      "createTheme": {
+        "label": "テーマを作成",
+        "hint": "スタイルや参考画像をもとに Cindy の外観を作成します",
+        "prompt": "共有できる Cindy テーマパッケージを、プレビューと検証付きで作成してください。希望するスタイル：",
+        "unavailable": "テーマ作成スキルを利用できません。スキルで有効になっているか確認してください",
+        "startFailed": "テーマ作成タスクを開けませんでした"
+      },
       "themeAriaLabel": "テーマの選択",
+      "themeApplyFailed": "このテーマを適用できませんでした。現在の外観は変更されていません。",
+      "themeFontFailed": "テーマのフォントを読み込めませんでした。既定のフォントを使用しています。",
       "localBadge": "(ローカル)",
       "localThemes": {
         "title": "ローカルテーマ",
@@ -15351,6 +15360,16 @@
             "recheck": "接続を確認",
             "summary": "GitHub のリポジトリ、Issue、PR、Actions を管理。",
             "otherMethods": "その他の接続方法"
+          },
+          "app": {
+            "title": "リポジトリのイベント",
+            "description": "Cindy GitHub App を接続すると、レビューや CI の変更時に追跡中の PR が更新されます。",
+            "connected": "{{login}} として接続済み · {{count}} 件のリポジトリを追跡中",
+            "missing": "次のリポジトリの App インストールとアクセス権を確認してください：{{repositories}}",
+            "error": "接続を確認できませんでした。もう一度お試しください。",
+            "repositories": "リポジトリを選択",
+            "disconnect": "イベント接続を解除",
+            "connect": "GitHub App を接続"
           }
         },
         "unresolved": "未解決のレビューコメント: {{count}} 件",
@@ -16085,7 +16104,11 @@
             "payments": "支払い",
             "checkout": "チェックアウト",
             "invoices": "請求書",
-            "subscriptions": "サブスクリプション"
+            "subscriptions": "サブスクリプション",
+            "reviewComments": "レビューコメント",
+            "reviewThreads": "レビュースレッド",
+            "checkRuns": "チェック実行",
+            "commitStatus": "コミットの状態"
           },
           "actions": {
             "all": "すべての変更",
@@ -16107,7 +16130,12 @@
             "failed": "失敗",
             "paid": "支払済み"
           }
-        }
+        },
+        "repositoriesLabel": "リポジトリ",
+        "repositoriesHint": "owner/repository を1行に1つ入力します。この GitHub App に許可したリポジトリのみがタスクを開始できます。",
+        "repositoriesInvalid": "有効な owner/repository 形式のリポジトリ名を1～50件入力してください。",
+        "githubAppHint": "このタスクを実行するコンピュータで GitHub App に接続し、これらのリポジトリを許可してください。個別の Webhook URL やシークレットは不要です。",
+        "githubAppPaused": "このタスクは一時停止中です。イベントでは開始されません。"
       },
       "trigger": {
         "label": "トリガー方式",
@@ -16920,6 +16948,9 @@
       },
       "pluginCreator": {
         "description": "Cindy のプラグインを作成・編集・デバッグ・パッケージ化し、必要に応じて公開します。"
+      },
+      "themeCreator": {
+        "description": "Cindy の配色、画像素材、外観設定を作成・検証します。"
       }
     },
     "common": {
@@ -18038,7 +18069,7 @@
     "exit": "計画モードを終了"
   },
   "globalDrop": {
-    "cindyHint": "ドロップしてプラグインをインストール",
+    "cindyHint": "ドロップして Cindy ファイルをインポート",
     "cshareHint": "ドロップして共有セッションをインポート"
   },
   "sessionShare": {
@@ -20157,6 +20188,13 @@
     "detail": "要求元：{{device}}\n目的：{{purpose}}\n\n有効にすると、同じアカウントのデバイスからタスクの実行やファイルへのアクセスなど、このコンピューターを操作できます。設定で無効にするまで有効です。",
     "decline": "今はしない",
     "enable": "リモート操作を有効にする"
+  },
+  "cindyFiles": {
+    "unsupported": "このバージョンではこのファイルに対応していません。Cindy を更新して再試行してください",
+    "invalid": "この Cindy ファイルは無効か破損しています。ファイルを再取得してください",
+    "failed": "ファイルをインポートできませんでした。再試行してください",
+    "themeInstalled": "テーマを追加しました。外観設定で選択してください",
+    "refreshFailed": "テーマはインストールされましたが、一覧を更新できませんでした。外観設定で更新してください"
   },
   "modelGroups": {
     "title": "モデルグループ",

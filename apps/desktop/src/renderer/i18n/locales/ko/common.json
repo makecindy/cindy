@@ -2146,7 +2146,16 @@
       },
       "sidebarAndPanels": "사이드바 및 패널",
       "themeLabel": "테마",
+      "createTheme": {
+        "label": "테마 만들기",
+        "hint": "원하는 스타일이나 참고 이미지로 Cindy의 외관을 만듭니다",
+        "prompt": "공유할 수 있는 Cindy 테마 패키지를 미리 보기와 검증을 포함해 만들어 주세요. 원하는 스타일:",
+        "unavailable": "테마 제작 스킬을 사용할 수 없습니다. 스킬에서 활성화되어 있는지 확인하세요",
+        "startFailed": "테마 제작 작업을 열지 못했습니다"
+      },
       "themeAriaLabel": "테마 선택",
+      "themeApplyFailed": "테마를 적용하지 못했습니다. 현재 모양은 유지됩니다.",
+      "themeFontFailed": "테마 글꼴을 불러오지 못했습니다. 기본 글꼴을 사용합니다.",
       "localBadge": "(로컬)",
       "localThemes": {
         "title": "로컬 테마",
@@ -15351,6 +15360,16 @@
             "recheck": "연결 확인",
             "summary": "GitHub 저장소, 이슈, PR 및 Actions를 관리합니다.",
             "otherMethods": "다른 연결 방법"
+          },
+          "app": {
+            "title": "저장소 이벤트",
+            "description": "Cindy GitHub App을 연결하면 리뷰나 CI가 변경될 때 추적 중인 PR이 업데이트됩니다.",
+            "connected": "{{login}} 계정으로 연결됨 · 저장소 {{count}}개 추적 중",
+            "missing": "다음 저장소의 App 설치 및 접근 권한을 확인하세요: {{repositories}}",
+            "error": "연결을 확인하지 못했습니다. 다시 시도하세요.",
+            "repositories": "저장소 선택",
+            "disconnect": "이벤트 연결 해제",
+            "connect": "GitHub App 연결"
           }
         },
         "unresolved": "미해결 리뷰 코멘트: {{count}}건",
@@ -16085,7 +16104,11 @@
             "payments": "결제",
             "checkout": "체크아웃",
             "invoices": "청구서",
-            "subscriptions": "구독"
+            "subscriptions": "구독",
+            "reviewComments": "검토 댓글",
+            "reviewThreads": "검토 스레드",
+            "checkRuns": "검사 실행",
+            "commitStatus": "커밋 상태"
           },
           "actions": {
             "all": "모든 변경",
@@ -16107,7 +16130,12 @@
             "failed": "실패",
             "paid": "결제됨"
           }
-        }
+        },
+        "repositoriesLabel": "저장소",
+        "repositoriesHint": "한 줄에 owner/repository 하나를 입력하세요. 이 GitHub App에 승인한 저장소만 작업을 시작할 수 있습니다.",
+        "repositoriesInvalid": "owner/repository 형식의 유효한 저장소 이름을 1–50개 입력하세요.",
+        "githubAppHint": "이 작업을 실행하는 컴퓨터에서 GitHub App에 연결하고 해당 저장소를 승인하세요. 별도의 Webhook URL이나 비밀 키는 필요하지 않습니다.",
+        "githubAppPaused": "이 작업은 일시 중지되었습니다. 이벤트가 작업을 시작하지 않습니다."
       },
       "trigger": {
         "label": "트리거 방식",
@@ -16920,6 +16948,9 @@
       },
       "pluginCreator": {
         "description": "Cindy 플러그인을 생성, 수정, 디버깅, 패키징하고 요청에 따라 게시합니다."
+      },
+      "themeCreator": {
+        "description": "Cindy의 색상, 시각 자료, 외관 설정을 만들고 검증합니다."
       }
     },
     "common": {
@@ -18038,7 +18069,7 @@
     "exit": "계획 모드 종료"
   },
   "globalDrop": {
-    "cindyHint": "놓아서 플러그인 설치",
+    "cindyHint": "놓아서 Cindy 파일 가져오기",
     "cshareHint": "놓아서 공유 세션 가져오기"
   },
   "sessionShare": {
@@ -20157,6 +20188,13 @@
     "detail": "요청 기기: {{device}}\n목적: {{purpose}}\n\n활성화하면 같은 계정의 기기에서 작업 실행 및 파일 접근을 포함하여 이 컴퓨터를 제어할 수 있습니다. 설정에서 끌 때까지 유지됩니다.",
     "decline": "나중에",
     "enable": "원격 제어 활성화"
+  },
+  "cindyFiles": {
+    "unsupported": "현재 버전에서는 이 파일을 지원하지 않습니다. Cindy를 업데이트한 후 다시 시도하세요",
+    "invalid": "이 Cindy 파일이 유효하지 않거나 손상되었습니다. 파일을 다시 받으세요",
+    "failed": "파일을 가져오지 못했습니다. 다시 시도하세요",
+    "themeInstalled": "테마가 추가되었습니다. 모양 설정에서 선택하세요",
+    "refreshFailed": "테마가 설치되었지만 목록을 새로 고치지 못했습니다. 모양 설정에서 새로 고치세요"
   },
   "modelGroups": {
     "title": "모델 그룹",

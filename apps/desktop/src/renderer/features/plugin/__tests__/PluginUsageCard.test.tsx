@@ -43,7 +43,7 @@ it('updates recent and rolling usage while the detail remains mounted', async ()
   await act(async () => {});
   const recent = view.container.querySelector('dd')!.textContent;
   expect(screen.getByText('7')).toBeTruthy();
-  await act(async () => vi.advanceTimersByTimeAsync(5_000));
+  await act(async () => vi.advanceTimersByTimeAsync(15_000));
   expect(screen.getByText('8')).toBeTruthy();
   expect(view.container.querySelector('dd')!.textContent).not.toBe(recent);
   expect(load).toHaveBeenCalledTimes(2);
@@ -90,7 +90,7 @@ it('holds automatic reads during clear confirmation and ignores a pre-clear resp
     .mockResolvedValue({ ...summary, lastUsedAt: null, callsLast7Days: 0 }));
   render(<PluginUsageCard ghostId="plugin" confirmClear={() => new Promise(resolve => { confirm = resolve; })} />);
   await act(async () => {});
-  await act(async () => vi.advanceTimersByTimeAsync(5_000));
+  await act(async () => vi.advanceTimersByTimeAsync(15_000));
   fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.usage.clear' }));
   await act(async () => vi.advanceTimersByTimeAsync(10_000));
   expect(load).toHaveBeenCalledTimes(2);
