@@ -11813,6 +11813,8 @@
       "takeOverConflict": "{{name}} já foi transferido para “{{device}}”",
       "takeOverOffline": "Não é possível contactar o servidor, pelo que {{name}} não pode continuar aqui neste momento",
       "takeOverFailed": "Não foi possível assumir a execução de {{name}} neste computador",
+      "profileIdentityTooLong": "A personalidade na nuvem excede {{limit}} caracteres e não pode ser restaurada. Encurte-a, sincronize-a e tente novamente. Os dados existentes foram preservados.",
+      "profileUserTooLong": "O contexto do utilizador na nuvem excede {{limit}} caracteres e não pode ser restaurado. Encurte-o, sincronize-o e tente novamente. Os dados existentes foram preservados.",
       "localCindyConflict": "O computador que assume já tem outra Cindy. Gira essa Cindy nas definições dela ou escolha outro computador principal",
       "localCindyConflictAction": "Abrir definições da Cindy local",
       "notEnabled": "Este servidor não permite alterar o computador principal",

@@ -11669,6 +11669,8 @@
       "takeOverConflict": "{{name}} 已移至「{{device}}」续行",
       "takeOverOffline": "连不上服务器，暂不能于此机续之",
       "takeOverFailed": "未能于此机接手 {{name}}",
+      "profileIdentityTooLong": "云端人格资料逾 {{limit}} 字元，未能接手。请缩短资料并同步后再试；原有资料皆存。",
+      "profileUserTooLong": "云端使用者资料逾 {{limit}} 字元，未能接手。请缩短资料并同步后再试；原有资料皆存。",
       "localCindyConflict": "接手之机已有另一 Cindy。请于其设置中处置，或另择主力电脑",
       "localCindyConflictAction": "查看本机 Cindy 设置",
       "notEnabled": "今之服务器不支持更换主机",

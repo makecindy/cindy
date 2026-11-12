@@ -7,6 +7,7 @@
  * automatic take-over retries it.
  */
 import type { CompanionMirrorCursor, CompanionMirrorRow } from './mirror.js';
+import { validateCompanionProfileSources } from '../../shared/botProfileSources.js';
 import { COMPANION_HISTORY_CLIENT_PREFIX } from './mirror.js';
 import { parseCompanionCapabilities, type CompanionArrivalNotice, type CompanionCapabilitiesValue } from './capabilities.js';
 import { directRoomSourceId } from './directRoom.js';
@@ -215,6 +216,7 @@ export async function materializeCompanion(input: {
   // Without the home's profile snapshot this copy's own (or empty) profile would be published as
   // the companion's identity: wait (demoted, retried) until the home has uploaded one.
   if (!profile) throw new Error('PROFILE_SNAPSHOT_MISSING');
+  validateCompanionProfileSources(profile);
   const templateId = text(record(profile)?.templateId);
   // The cloud externalId is the only reusable local identity. Another Cindy (even one with
   // the same name) must not be overwritten, re-keyed or silently merged into this actor.

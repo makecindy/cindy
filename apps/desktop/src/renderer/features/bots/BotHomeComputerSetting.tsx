@@ -66,12 +66,15 @@ export function companionArrivedHere(cloud: CompanionCloudSnapshot, botId: strin
 }
 
 /** Wait until the automatic take-over here finished (or time out). */
-async function waitForArrival(botId: string, isCurrent: () => boolean): Promise<boolean> {
+async function waitForArrival(botId: string, isCurrent: () => boolean): Promise<boolean | NonNullable<CompanionCloudSnapshot['actors'][number]['profileFailure']>> {
   const deadline = Date.now() + ARRIVAL_TIMEOUT_MS;
   while (isCurrent() && Date.now() < deadline) {
     const profiles = await ensureBotProfilesLoaded(true).catch(() => []);
     const local = profiles.filter((profile) => profile.status === 'active').map((profile) => profile.id);
-    if (companionArrivedHere(getCompanionCloudSnapshot(), botId, local)) return true;
+    const cloud = getCompanionCloudSnapshot();
+    const failure = cloud.actors.find(actor => actor.externalId === botId)?.profileFailure;
+    if (failure) return failure;
+    if (companionArrivedHere(cloud, botId, local)) return true;
     refreshCompanionCloud();
     await new Promise((resolve) => setTimeout(resolve, ARRIVAL_POLL_MS));
   }
@@ -139,7 +142,8 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
         return;
       }
       if (!result.ok) {
-        report(t(SWITCH_ERROR_KEYS[result.code] ?? 'bots.cloud.switchFailed', { name: bot.name, device }), conflict.report(result));
+        report(result.profileFailure ? t(result.profileFailure.field === 'identitySource' ? 'bots.cloud.profileIdentityTooLong' : 'bots.cloud.profileUserTooLong', { limit: result.profileFailure.maxLength })
+          : t(SWITCH_ERROR_KEYS[result.code] ?? 'bots.cloud.switchFailed', { name: bot.name, device }), conflict.report(result));
         refreshCompanionCloud();
         return;
       }
@@ -151,7 +155,14 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
       // Asked from another computer: this one builds the companion once the move reaches it.
       if (choices?.mode === 'remote') {
         toast.info(t('bots.cloud.takingOver', { name: bot.name }));
-        if (!(await waitForArrival(bot.id, current))) {
+        const arrival = await waitForArrival(bot.id, current);
+        if (!current()) return;
+        if (typeof arrival === 'object') {
+          report(t(arrival.field === 'identitySource' ? 'bots.cloud.profileIdentityTooLong' : 'bots.cloud.profileUserTooLong', { limit: arrival.maxLength }));
+          navigate(`/bots/remote/${encodeURIComponent(target.deviceId)}/${encodeURIComponent(bot.id)}`);
+          return;
+        }
+        if (!arrival) {
           if (current()) toast.info(t('bots.cloud.arrivingLater', { name: bot.name }));
           return;
         }

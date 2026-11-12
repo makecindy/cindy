@@ -1101,6 +1101,50 @@ describe('Bot canonical Session lifecycle', () => {
   describe('cloud take-over next to a same-named local companion', () => {
     const names = () => h.sqlite!.prepare("SELECT id FROM bot_profiles WHERE display_name = 'Release Bot' ORDER BY id").pluck().all();
 
+    // #10112: fakeLocal never ran readText's 12000-character boundary. DB tier:
+    // real host creation/update and runtime recovery must agree, without losing text.
+    it.each(['identitySource', 'userContextSource'] as const)('preserves the real source boundary through take-over: %s', async field => {
+      const actor = { id: 'profile-actor', kind: 'bot', externalId: 'profile-limit', name: 'Profile limit', avatar: null, homeDeviceId: 'old-home' };
+      let source = 'x'.repeat(12001);
+      const { state } = memoryState();
+      const host = createCompanionCloudHost({ deliverToCanonical: async () => ({ ok: true }),
+        ensureCanonicalSession: async () => 'unused', rebuildContext: async () => 'rebuilt', listDevices: async () => [] });
+      host.openState = () => state;
+      const failure = { field, maxLength: 12000 };
+      const draft = () => ({ id: actor.externalId, name: actor.name, description: '', identitySource: '', userContextSource: '', avatar: null, [field]: source });
+      await expect(host.materializer!.createProfile(draft(), { assertCurrent() {} }))
+        .rejects.toMatchObject({ code: 'INVALID_PARAMS', failure });
+      const { api, calls } = fakeApi((route, method) => {
+        if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', revision: 1, value: {
+          name: actor.name, description: '', soul: field === 'identitySource' ? source : '',
+          systemPrompt: '', user: field === 'userContextSource' ? source : '',
+        } }] : { revision: 1 };
+        if (route === '/conversations') return { id: '10000000-0000-4000-8000-000000000001' };
+        if (route.includes('/messages?')) return [];
+        return {};
+      });
+      const runtime = startCompanionCloud({ api, host, endpoint: 'https://synthetic.invalid', humanActorId: 'human', selfDeviceId: 'self',
+        current: () => true, bots: () => [], actors: () => [actor], initialKick: false });
+      try {
+        expect(await runtime.takeOver(actor.externalId)).toEqual({ ok: false, code: 'FAILED', profileFailure: failure });
+        expect(calls.every(call => call.method === 'GET')).toBe(true);
+        expect(actor.homeDeviceId).toBe('old-home');
+        expect(h.sqlite!.prepare('SELECT id FROM bot_profiles WHERE id = ?').get(actor.externalId)).toBeUndefined();
+        source = `  ${'x'.repeat(12000)}  `;
+        expect(await runtime.takeOver(actor.externalId)).toEqual({ ok: true });
+        const original = await invoke('local-db:bots:get', actor.externalId);
+        source = 'x'.repeat(12001);
+        await expect(host.materializer!.updateProfile(draft(), { assertCurrent() {} }))
+          .rejects.toMatchObject({ code: 'INVALID_PARAMS', failure });
+        expect(await invoke('local-db:bots:get', actor.externalId)).toEqual(original);
+        expect(await runtime.takeOver(actor.externalId)).toEqual({ ok: false, code: 'FAILED', profileFailure: failure });
+        source = 'y'.repeat(12000);
+        expect(await runtime.takeOver(actor.externalId)).toEqual({ ok: true });
+        expect(state.isDemoted(actor.externalId)).toBe(false);
+        expect(runtime.profileFailure(actor.externalId)).toBeUndefined();
+      } finally { runtime.dispose(); companionHomes.reset(); }
+    });
+
     // #9960: the runtime preflight and the real host/SQLite creation must agree. The old
     // materializer projection had no worker singleton, so relaxing only preflight was insufficient.
     // DB tier; synthetic cloud, isolated SQLite; no Electron app or real account involved.

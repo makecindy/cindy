@@ -1,7 +1,7 @@
 /**
  * Background sync and home changes owned by one Chat Server instance (one account +
  * endpoint). Started only when the server announces companion homes; background
- * failures are logged and retried, never surfaced to chat.
+ * transient failures are retried; rejected profile sources are surfaced without replaying writes.
  */
 import type {
   CompanionCindyCopy,
@@ -14,6 +14,7 @@ import type {
   CompanionTransferTarget,
 } from '../../shared/companionCloud.js';
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
+import { BotProfileSourceTooLong, validateCompanionProfileSources, type BotProfileSourceFailure } from '../../shared/botProfileSources.js';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import type { CompanionHomeRegistry } from './homes.js';
 import type { CompanionArrivalNotice } from './capabilities.js';
@@ -120,6 +121,7 @@ export interface CompanionCloudRuntime {
   flushHere: (botId: string) => Promise<CompanionCloudActionResult>;
   /** What the last move to this computer could not keep of the companion's setup, until dismissed. */
   arrivalNotices: (botId: string) => CompanionArrivalNotice[];
+  profileFailure: (botId: string) => BotProfileSourceFailure | undefined;
   dismissArrivalNotices: (botId: string) => void;
   /** One of the files in the companion's room, brought to this computer. */
   attachment: (botId: string, mediaId: string) => Promise<CompanionHistoryAttachment>;
@@ -153,6 +155,7 @@ const union = (left: Only, right: Set<string> | null): Only =>
 export { isUnreachable };
 
 function actionFailure(error: unknown, fallback: 'FAILED' | 'OFFLINE' = 'FAILED'): CompanionCloudActionResult {
+  if (error instanceof BotProfileSourceTooLong) return { ok: false, code: 'FAILED', profileFailure: error.failure };
   if (error instanceof CompanionIdentityConflict) return { ok: false, code: 'LOCAL_CINDY_CONFLICT' };
   const conflict = chatRejection(error, 409, 'HOME_DEVICE_CONFLICT');
   if (conflict) return { ok: false, code: 'HOME_CONFLICT', homeDeviceId: typeof conflict.homeDeviceId === 'string' ? conflict.homeDeviceId : null };
@@ -437,6 +440,27 @@ export function startCompanionCloud(input: {
   const autoRetryAt = new Map<string, number>();
   const autoPending = new Set<string>();
   const identityConflicts = new Map<string, { actorId: string; conflictingBotId: string }>();
+  const profileFailures = new Map<string, { actorId: string; failure: BotProfileSourceFailure }>();
+  function recordProfileFailure(actor: CompanionRuntimeActor, actorId: string, error: unknown): boolean {
+    if (!(error instanceof BotProfileSourceTooLong)) return false;
+    if (!live() || actorOf(actor.externalId)?.id !== actorId || actor.homeDeviceId !== input.selfDeviceId || !state.isDemoted(actor.externalId)) return true;
+    const previous = profileFailures.get(actor.externalId);
+    profileFailures.set(actor.externalId, { actorId, failure: error.failure });
+    if (previous?.actorId !== actorId || previous.failure.field !== error.failure.field) {
+      input.log?.warn('Companion take-over waiting for corrected profile', { actorId, code: error.code, ...error.failure });
+      publish();
+    }
+    return true;
+  }
+  async function checkProfileSources(actor: CompanionRuntimeActor, explicit: boolean) {
+    const actorId = actor.id;
+    const profile = await readCompanionValue(input.api, store, actorId, COMPANION_PROFILE_KEY, { probe: explicit });
+    fence.assertCurrent();
+    if (actorOf(actor.externalId)?.id !== actorId) throw new Error('COMPANION_CHANGED');
+    if (!profile || !isCompanionProfileSnapshot(profile.value)) throw new Error('PROFILE_SNAPSHOT_MISSING');
+    validateCompanionProfileSources(profile.value);
+    return profile.value;
+  }
   function materialize(actor: CompanionRuntimeActor): Promise<CompanionMaterializeResult> {
     const materializer = input.host.materializer;
     if (!materializer) return Promise.reject(new Error('MATERIALIZE_UNAVAILABLE'));
@@ -522,6 +546,7 @@ export function startCompanionCloud(input: {
 
   function scheduleAuto(actor: CompanionRuntimeActor) {
     const botId = actor.externalId;
+    const actorId = actor.id;
     if (autoPending.has(botId) || materializing.has(botId) || Date.now() < (autoRetryAt.get(botId) ?? 0)) return;
     autoPending.add(botId);
     autoRetryAt.set(botId, Date.now() + AUTO_RETRY_MS);
@@ -538,6 +563,9 @@ export function startCompanionCloud(input: {
         await assertCompanionIdentity(input.host.materializer!, botId, 'cindy', fence);
       }
       identityConflicts.delete(botId);
+      // The existing retry cadence reads only the profile until it is valid. Do not
+      // reclaim the home/installation or replay all files for unchanged bad text.
+      if (profileFailures.get(botId)?.actorId === actorId) await checkProfileSources(actor, false);
       fence.assertCurrent();
       await backgroundIdentityApi(`/actors/${actor.id}`, 'PATCH', { homeDeviceId: input.selfDeviceId, expectedHomeDeviceId: input.selfDeviceId });
       // Automatic: never take the companion from the other installation on this computer.
@@ -545,10 +573,12 @@ export function startCompanionCloud(input: {
       return materialize(actor);
     })().then(result => {
       autoRetryAt.delete(botId);
+      profileFailures.delete(botId);
       input.log?.info?.('Companion moved to this computer', { actorId: actor.id, created: result.created, inserted: result.inserted, rebuild: result.rebuild });
       publish(); mirrors.kick(botId); uploads.kick(botId);
     }, error => {
       autoRetryAt.set(botId, Date.now() + AUTO_RETRY_MS);
+      if (recordProfileFailure(actor, actorId, error)) return;
       if (error instanceof CompanionIdentityConflict) {
         const previous = identityConflicts.get(botId);
         identityConflicts.set(botId, { actorId: actor.id, conflictingBotId: error.conflictingBotId });
@@ -745,6 +775,11 @@ export function startCompanionCloud(input: {
       for (const actor of input.actors?.() ?? []) {
         if (actor.kind !== 'bot') continue;
         const botId = actor.externalId;
+        const failure = profileFailures.get(botId);
+        if (failure && (failure.actorId !== actor.id || actor.disabled || actor.homeDeviceId !== self)) {
+          profileFailures.delete(botId);
+          autoRetryAt.delete(botId);
+        }
         const local = localProfiles.find(profile => profile.id === botId);
         let entry = state.bot(botId);
         // A local id may now refer to a different cloud actor. In particular, an old
@@ -772,7 +807,7 @@ export function startCompanionCloud(input: {
           }
           continue;
         }
-        if (actor.homeDeviceId === self && local) checkInstall(actor);
+        if (actor.homeDeviceId === self && local && !profileFailures.has(botId)) checkInstall(actor);
         if (actor.homeDeviceId && actor.homeDeviceId !== self) {
           identityConflicts.delete(botId);
           if (local && local.status !== 'deleting' && !entry?.demoted) {
@@ -797,15 +832,18 @@ export function startCompanionCloud(input: {
         actor = actorOf(botId);
       }
       if (!actor) return homeActionFailure('takeOver', botId, new Error('COMPANION_NOT_FOUND'));
+      const actorId = actor.id;
       // Never move the home before the companion's profile snapshot is in the cloud: without it
       // this copy could not be built, and the old home would already be demoted.
       try {
-        const profile = await readCompanionValue(input.api, store, actor.id, COMPANION_PROFILE_KEY, { probe: true });
-        if (!hasProfileSnapshot(profile ? [profile] : [])) return homeActionFailure('takeOver', botId, new Error('PROFILE_SNAPSHOT_MISSING'));
+        const profile = await checkProfileSources(actor, true);
         await assertCompanionIdentity(input.host.materializer, actor.externalId,
-          (profile!.value as { templateId?: unknown }).templateId, fence);
+          (profile as { templateId?: unknown }).templateId, fence);
         identityConflicts.delete(actor.externalId);
-      } catch (error) { return homeActionFailure('takeOver', botId, error); }
+      } catch (error) {
+        recordProfileFailure(actor, actorId, error);
+        return homeActionFailure('takeOver', botId, error);
+      }
       // Always compare-and-set, even when the cached home already says "here": the cache may be
       // stale (another computer took over while this one was offline). Unchanged homes are a no-op.
       try {
@@ -826,7 +864,10 @@ export function startCompanionCloud(input: {
         if (await claimInstall(actor, 'takeover', input.api) !== 'mine') return homeActionFailure('takeOver', botId, new Error('INSTALL_CLAIM_LOST'));
         await materialize(actor);
         identityConflicts.delete(actor.externalId);
+        profileFailures.delete(actor.externalId);
+        autoRetryAt.delete(actor.externalId);
       } catch (error) {
+        recordProfileFailure(actor, actorId, error);
         publish();
         return homeActionFailure('takeOver', botId, error);
       }
@@ -1000,6 +1041,12 @@ export function startCompanionCloud(input: {
     },
 
     arrivalNotices: botId => state.bot(botId)?.arrivalNotices ?? [],
+    profileFailure: botId => {
+      if (!live()) return undefined;
+      const actor = actorOf(botId);
+      const failure = profileFailures.get(botId);
+      return actor && actor.homeDeviceId === input.selfDeviceId && failure?.actorId === actor.id ? failure.failure : undefined;
+    },
     dismissArrivalNotices(botId) {
       const entry = state.bot(botId);
       if (!entry?.arrivalNotices) return;

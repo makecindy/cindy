@@ -11669,6 +11669,8 @@
       "takeOverConflict": "{{name}}은(는) 이미 '{{device}}'(으)로 옮겨졌습니다",
       "takeOverOffline": "서버에 연결할 수 없어 지금은 이 컴퓨터에서 계속할 수 없습니다",
       "takeOverFailed": "이 컴퓨터에서 {{name}}을(를) 이어받지 못했습니다",
+      "profileIdentityTooLong": "클라우드의 성격 정보가 {{limit}}자를 초과하여 가져올 수 없습니다. 내용을 줄이고 동기화한 후 다시 시도하세요. 기존 데이터는 보존되었습니다.",
+      "profileUserTooLong": "클라우드의 사용자 정보가 {{limit}}자를 초과하여 가져올 수 없습니다. 내용을 줄이고 동기화한 후 다시 시도하세요. 기존 데이터는 보존되었습니다.",
       "localCindyConflict": "인계받을 컴퓨터에 이미 다른 Cindy가 있습니다. 해당 Cindy의 설정에서 관리하거나 다른 주 컴퓨터를 선택하세요",
       "localCindyConflictAction": "이 컴퓨터의 Cindy 설정 열기",
       "notEnabled": "이 서버는 주 컴퓨터 변경을 지원하지 않습니다",

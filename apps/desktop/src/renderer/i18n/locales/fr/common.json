@@ -11813,6 +11813,8 @@
       "takeOverConflict": "{{name}} a déjà été déplacé vers « {{device}} »",
       "takeOverOffline": "Impossible de joindre le serveur, {{name}} ne peut donc pas continuer ici pour le moment",
       "takeOverFailed": "Impossible de reprendre {{name}} sur cet ordinateur",
+      "profileIdentityTooLong": "La personnalité dans le cloud dépasse {{limit}} caractères et ne peut pas être restaurée. Raccourcissez-la, synchronisez-la, puis réessayez. Les données existantes sont conservées.",
+      "profileUserTooLong": "Le contexte utilisateur dans le cloud dépasse {{limit}} caractères et ne peut pas être restauré. Raccourcissez-le, synchronisez-le, puis réessayez. Les données existantes sont conservées.",
       "localCindyConflict": "L’ordinateur qui prend le relais a déjà une autre Cindy. Gérez-la dans ses réglages ou choisissez un autre ordinateur principal",
       "localCindyConflictAction": "Ouvrir les réglages de la Cindy locale",
       "notEnabled": "Ce serveur ne permet pas de changer d'ordinateur principal",

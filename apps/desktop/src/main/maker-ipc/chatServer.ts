@@ -1105,7 +1105,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       try { host.shadows?.write(shadows); savedShadows = key; } catch (error) { deps.log?.warn('Companion shadow list not saved', chatErrorDiagnostic(error)); }
     }
     if (key !== JSON.stringify(host.homes.persistedShadows())) host.homes.setPersistedShadows(shadows);
-    host.homes.update(companionSnapshot({ enabled: true, selfDeviceId, humanActorId: selfId, actors, demotedBotIds: shadows }));
+    host.homes.update(companionSnapshot({ enabled: true, selfDeviceId, humanActorId: selfId, actors, demotedBotIds: shadows,
+      profileFailure: companion.profileFailure }));
   }
   /** Publish name and avatar now (before handing `botId` over); unlike refreshHomes, its failure surfaces. */
   async function syncActorProfiles(botId: string) {

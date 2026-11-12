@@ -11669,6 +11669,8 @@
       "takeOverConflict": "{{name}} はすでに「{{device}}」に移っています",
       "takeOverOffline": "サーバーに接続できないため、今はこのパソコンで続けられません",
       "takeOverFailed": "このパソコンで {{name}} を引き継げませんでした",
+      "profileIdentityTooLong": "クラウドの人格情報が {{limit}} 文字を超えているため、引き継げません。内容を短くして同期した後、再試行してください。既存のデータは保持されています。",
+      "profileUserTooLong": "クラウドのユーザー情報が {{limit}} 文字を超えているため、引き継げません。内容を短くして同期した後、再試行してください。既存のデータは保持されています。",
       "localCindyConflict": "引き継ぎ先のコンピューターには別の Cindy がいます。その Cindy の設定で管理するか、別のメインコンピューターを選んでください",
       "localCindyConflictAction": "このコンピューターの Cindy の設定を開く",
       "notEnabled": "このサーバーはメインのパソコンの変更に対応していません",

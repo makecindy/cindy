@@ -25,7 +25,7 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
   readValues?: () => Promise<Array<{ key: string; value: unknown }>>; syncProfile?: (botId: string) => Promise<void>;
   turnActive?: () => boolean; homeLink?: CompanionCloudHost['homeLink']; stopBotTurns?: CompanionCloudHost['stopBotTurns'];
   canonicalSession?: CompanionCloudHost['canonicalSession']; paused?: (botId: string) => boolean; refreshForeground?: () => Promise<void>;
-  store?: Parameters<typeof startCompanionCloud>[0]['store']; savedState?: string; upgradeArrived?: CompanionCloudHost['upgradeArrived'] }) {
+  store?: Parameters<typeof startCompanionCloud>[0]['store']; savedState?: string; upgradeArrived?: CompanionCloudHost['upgradeArrived']; current?: () => boolean }) {
   const actors: CompanionRuntimeActor[] = [{ id: 'actor-1', kind: 'bot', externalId: 'bot_mia', name: 'Mia', avatar: null, homeDeviceId: options.home }];
   const { api, calls } = fakeApi(options.handler ?? ((route, method) => {
     // The home has uploaded the profile snapshot a take-over builds from.
@@ -57,7 +57,7 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
   };
   runtime = startCompanionCloud({ api, ...(options.backgroundIdentityApi ? { backgroundIdentity: {
     api: options.backgroundIdentityApi, isDeferred: options.identityDeferred ?? (() => false) } } : {}),
-    store: options.store, host, endpoint: 'https://chat', humanActorId: 'human', selfDeviceId: 'desk', current: () => true,
+    store: options.store, host, endpoint: 'https://chat', humanActorId: 'human', selfDeviceId: 'desk', current: options.current ?? (() => true),
     bots: () => actors.filter(a => a.homeDeviceId === 'desk' && !state.isDemoted(a.externalId)).map(a => ({ botId: a.externalId, actorId: a.id, name: a.name })),
     actors: () => actors, refresh, refreshForeground: options.refreshForeground, publish, onShadowChanged, log, ...(options.syncProfile ? { syncProfile: options.syncProfile } : {}),
     ...(options.paused ? { paused: options.paused } : {}) });
@@ -85,6 +85,85 @@ describe('private report recovery', () => {
 });
 
 describe('take over', () => {
+  // #10112: an overlong cloud soul was rejected by the real profile writer on every
+  // reconcile. Unit tier: verify the public runtime stops writes, exposes the reason,
+  // and recovers when the source changes (the DB suite covers the writer boundary).
+  it.each(['automatic', 'explicit'] as const)('holds invalid profile sources and recovers through %s retry', async retry => {
+    vi.useFakeTimers();
+    try {
+      let soul = 'x'.repeat(12001);
+      const t = setup({ home: 'desk', installationId: 'this-install', handler: (route, method) => {
+        if (route === '/preferences') return method === 'GET'
+          ? [{ key: 'companion.profile.v1', value: { ...MIA, soul }, revision: 1 }]
+          : { revision: 1 };
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+      t.runtime.reconcile([]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.runtime.profileFailure('bot_mia')).toEqual({ field: 'identitySource', maxLength: 12000 });
+      expect(t.state.isDemoted('bot_mia')).toBe(true);
+      const writes = t.calls.filter(call => call.method !== 'GET');
+      for (let i = 0; i < 3; i++) {
+        await vi.advanceTimersByTimeAsync(60_000);
+        t.runtime.reconcile([]);
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(t.calls.filter(call => call.method !== 'GET')).toEqual(writes);
+      expect(t.local.host.createProfile).not.toHaveBeenCalled();
+      expect(t.local.host.updateProfile).not.toHaveBeenCalled();
+      soul = 'x'.repeat(12000);
+      if (retry === 'automatic') {
+        await vi.advanceTimersByTimeAsync(60_000);
+        t.runtime.reconcile([]);
+        t.runtime.reconcile([]);
+        await vi.advanceTimersByTimeAsync(0);
+      } else {
+        expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+      }
+      expect(t.runtime.profileFailure('bot_mia')).toBeUndefined();
+      expect(t.state.isDemoted('bot_mia')).toBe(false);
+      expect(t.local.host.createProfile).toHaveBeenCalledOnce();
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
+  it('rejects an invalid source before moving the original home', async () => {
+    const t = setup({ home: 'laptop', handler: (route, method) => {
+      if (route === '/preferences' && method === 'GET') return [{ key: 'companion.profile.v1', value: { ...MIA, soul: 'x'.repeat(12001) }, revision: 1 }];
+      return {};
+    } });
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED', profileFailure: { field: 'identitySource', maxLength: 12000 } });
+    expect(t.actors[0]!.homeDeviceId).toBe('laptop');
+    expect(t.calls.every(call => call.method === 'GET')).toBe(true);
+    expect(t.local.host.createProfile).not.toHaveBeenCalled();
+  });
+
+  it('does not carry a rejected source across actor, home or account boundaries', async () => {
+    vi.useFakeTimers();
+    try {
+      let current = true;
+      const t = setup({ home: 'desk', current: () => current, handler: (route, method) => {
+        if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', value: { ...MIA, soul: 'x'.repeat(12001) }, revision: 1 }] : {};
+        return {};
+      } });
+      t.runtime.reconcile([]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.runtime.profileFailure('bot_mia')).toBeDefined();
+      current = false;
+      expect(t.runtime.profileFailure('bot_mia')).toBeUndefined();
+      expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'NOT_ENABLED' });
+      current = true;
+      t.actors[0]!.homeDeviceId = 'elsewhere';
+      expect(t.runtime.profileFailure('bot_mia')).toBeUndefined();
+      t.actors[0]!.homeDeviceId = 'desk';
+      t.actors[0]!.id = 'replacement';
+      expect(t.runtime.profileFailure('bot_mia')).toBeUndefined();
+      t.runtime.dispose();
+      expect(t.runtime.profileFailure('bot_mia')).toBeUndefined();
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
   // Regression: a different local Cindy made automatic take-over recreate the same missing
   // profile every minute. Existing tests only used an unconstrained in-memory profile.
   // Unit tier: drive real takeOver/reconcile; conflicting identities never overwrite or upload.

@@ -60,6 +60,11 @@ pnpm restart:desktop:remote -- --mock --isolated=<名字>   # 另开一份模拟
   `ui-mock/claude/.claude.json` 的 `mcpServers`，不读取真实 Claude Code 用户配置。
   可写入虚拟 HTTP/SSE 地址，再通过设置添加对应的 Cindy MCP，验证选择与持久化。
   该文件只用于设置页验收，真实 Agent 的连接装配仍按实际运行环境解析。
+- 伙伴资料恢复：在隔离沙箱的 `ui-mock/companion-profile.json` 写入合成 JSON
+  `{"soul":"…"}`，重开页面后从伙伴列表打开 `Profile recovery`。12001 个非空白字符
+  展示资料校验失败，点击重试仍保留错误和云端记录；将文件缩短到 12000 个字符再重试，
+  经真实本机资料创建入口恢复。此场景只替换该合成伙伴的数据和服务回执，不访问账号或服务器；
+  删除该合成文件即退出场景（恢复状态在进程内，重启重置）。
 
 ## Mobile 模拟器
 

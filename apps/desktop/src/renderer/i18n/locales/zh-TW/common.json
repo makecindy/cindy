@@ -11669,6 +11669,8 @@
       "takeOverConflict": "{{name}} 已經換到「{{device}}」繼續了",
       "takeOverOffline": "連不上伺服器，暫時無法在這台電腦繼續",
       "takeOverFailed": "未能在這台電腦上接手 {{name}}",
+      "profileIdentityTooLong": "雲端人格資料超過 {{limit}} 字元，無法接手。請縮短資料並同步後重試；現有資料已保留。",
+      "profileUserTooLong": "雲端使用者資料超過 {{limit}} 字元，無法接手。請縮短資料並同步後重試；現有資料已保留。",
       "localCindyConflict": "接手的電腦上已有另一位 Cindy。請先在那位 Cindy 的設定中處理，或選擇其他主力電腦",
       "localCindyConflictAction": "查看本機 Cindy 設定",
       "notEnabled": "目前的伺服器不支援更換主力電腦",
