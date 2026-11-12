@@ -26,6 +26,40 @@ export type CodexCredentialGeneration = {
   sha256: string;
 };
 
+const DECIMAL_FILE_ID_RE = /^(0|[1-9]\d*)$/;
+
+export function parseCodexCredentialGeneration(
+  value: string | null | undefined,
+): CodexCredentialGeneration | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as Partial<Record<keyof CodexCredentialGeneration, unknown>>;
+    const parseFileId = (candidate: unknown): string | null => {
+      if (typeof candidate === 'string' && DECIMAL_FILE_ID_RE.test(candidate)) return candidate;
+      if (typeof candidate === 'number' && Number.isSafeInteger(candidate) && candidate >= 0) {
+        return String(candidate);
+      }
+      return null;
+    };
+    const dev = parseFileId(parsed.dev);
+    const ino = parseFileId(parsed.ino);
+    if (
+      dev === null ||
+      ino === null ||
+      typeof parsed.size !== 'number' ||
+      !Number.isFinite(parsed.size) ||
+      typeof parsed.mtimeMs !== 'number' ||
+      !Number.isFinite(parsed.mtimeMs) ||
+      typeof parsed.sha256 !== 'string' ||
+      !/^[0-9a-f]{64}$/i.test(parsed.sha256)
+    )
+      return null;
+    return { dev, ino, size: parsed.size, mtimeMs: parsed.mtimeMs, sha256: parsed.sha256 };
+  } catch {
+    return null;
+  }
+}
+
 
 
 export function currentCodexCredentialGeneration(authPath: string): CodexCredentialGeneration | null {
