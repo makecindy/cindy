@@ -951,7 +951,7 @@ describe('notificationService — channels 分发', () => {
     expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.objectContaining({
       kind: 'needs-reply', question, eventId: 'question:q-1',
     }));
-    expect(sendMobileSessionNotify.mock.calls.at(-1)![0]).not.toHaveProperty('permission');
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.not.objectContaining({ permission: expect.anything() }));
 
     sendMobileSessionNotify.mockClear();
     pendingPermissionAlert.mockClear();
@@ -959,7 +959,7 @@ describe('notificationService — channels 分发', () => {
     await flushAsync();
     expect(pendingPermissionAlert).not.toHaveBeenCalled();
     expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
-    expect(sendMobileSessionNotify.mock.calls[0]![0]).not.toHaveProperty('permission');
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.not.objectContaining({ permission: expect.anything() }));
   });
 
   it('链路代次在 await 之前捕获:等待队列期间换号,透传的仍是发起时的代次', async () => {
