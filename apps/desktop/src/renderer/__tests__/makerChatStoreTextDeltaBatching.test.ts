@@ -757,6 +757,39 @@ describe('makerChatStore text delta batching', () => {
     }
   });
 
+  // #10198 review: restored Pi runtimes know the window before the first
+  // request's usage. Consecutive unknown zeros must not erase persisted usage
+  // (standard tier; covers both idle and optimistically running consumers).
+  it.each([false, true])('preserves restored usage through Pi startup statuses (already running=%s)', async (isRunning) => {
+    onEvent?.({ sessionId: SESSION_ID, event: { type: 'status', source: 'pi', data: {
+      status: 'Done', isRunning: false, tokenUsage: 0, contextTokens: 579216, contextWindow: 272000,
+    } } });
+    if (isRunning) onEvent?.({ sessionId: SESSION_ID, event: { type: 'status', source: 'pi', data: {
+      status: 'Working…', isRunning: true, tokenUsage: 0, contextTokens: 579216, contextWindow: 272000,
+    } } });
+    const logger = { trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), fatal: vi.fn() } as unknown as Logger;
+    const ctx = createPiTranslateContext(logger);
+    ctx.contextWindow = 272000;
+    const queue = createAsyncQueue<AgentEvent>();
+    try {
+      for (const event of [{ type: 'agent_start' }, { type: 'message_start', message: { role: 'assistant' } }]) {
+        translatePiEvent(event, queue, ctx);
+        const iterator = queue[Symbol.asyncIterator]();
+        while (queue.pending) {
+          const { value } = await iterator.next();
+          onEvent?.({ sessionId: SESSION_ID, event: value });
+        }
+        await iterator.return?.();
+        expect(makerChatStore.getSnapshot(SESSION_ID).agentStatus).toMatchObject({
+          contextTokens: 579216, contextWindow: 272000, isRunning: true,
+        });
+      }
+    } finally {
+      queue.end();
+      disposePiTranslateContext(ctx);
+    }
+  });
+
   it.each([true, false])('keeps the Pi reply through early persistence and history reload (DB first=%s)', async (dbFirst) => {
     const persisted = [
       serverMessage({

@@ -7578,7 +7578,8 @@ function handleStatusUpdate(
   }
 
   // Completion and mid-turn compaction carry authoritative context snapshots.
-  // A new turn's initial zero or an unknown 0/0 must preserve the last value.
+  // Startup and generation statuses can keep reporting unknown zero until
+  // message_end; only a confirmed snapshot may clear the last known value.
   const isTurnComplete = !update.isRunning && update.status === 'Done';
   // Detect new turn start: isRunning flips from false → true.
   const isTurnStart = update.isRunning && !state.agentStatus.isRunning;
@@ -7598,7 +7599,8 @@ function handleStatusUpdate(
     Number.isFinite(update.contextTokens) &&
     update.contextTokens >= 0;
   const ct =
-    (!isTurnStart && hasContextSnapshot) || (update.contextTokens && update.contextTokens > 0)
+    ((isTurnComplete || update.contextSnapshotAuthoritative === true) && hasContextSnapshot)
+      || (update.contextTokens && update.contextTokens > 0)
       ? update.contextTokens
       : state.agentStatus.contextTokens;
   const cw =

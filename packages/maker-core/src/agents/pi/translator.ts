@@ -458,12 +458,15 @@ function pushStatus(
   ctx: PiTranslateContext,
   text: string,
   isRunning: boolean,
-  extras?: Pick<AgentEvent, 'turnScope'>,
+  extras?: Pick<AgentEvent, 'turnScope'> & { contextSnapshotAuthoritative?: true },
 ): void {
   if (isRunning) ctx.lastRunningStatus = text;
   queue.push({
     type: 'status',
-    data: { status: text, ...usageSnapshotOf(ctx), isRunning },
+    data: {
+      status: text, ...usageSnapshotOf(ctx), isRunning,
+      ...(extras?.contextSnapshotAuthoritative ? { contextSnapshotAuthoritative: true } : {}),
+    },
     source: 'pi',
     ...(extras?.turnScope ? { turnScope: extras.turnScope } : {}),
   });
@@ -1412,7 +1415,7 @@ export function translatePiEvent(
       } else if (hasCurrentSnapshot && ctx.isStreaming && compactScope?.turnScope !== 'background') {
         // A compaction is not a turn terminal. Publish the lower watermark now,
         // using the applied runtime window and keeping subsequent tools alive.
-        pushStatus(queue, ctx, 'Working…', true);
+        pushStatus(queue, ctx, 'Working…', true, { contextSnapshotAuthoritative: true });
       }
       return;
     }

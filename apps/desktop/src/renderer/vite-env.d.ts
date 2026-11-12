@@ -858,6 +858,8 @@ interface CCAgentStatusUpdate {
   costUsd?: number;
   contextTokens: number;
   contextWindow: number;
+  /** A confirmed mid-turn snapshot may be zero; old hosts omit this flag. */
+  contextSnapshotAuthoritative?: boolean;
   outputTokens?: number;
   generationDurationMs?: number;
   generationActive?: boolean;
