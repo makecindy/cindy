@@ -41,6 +41,7 @@ import { isPiImageInputUnsupportedError } from '../../shared/inputError.js';
 import { isAccountUsageLimitError } from './usageLimitAutoResume.js';
 import type { UsageLimitRecoverySnapshot } from './usageLimitRecoveryStore.js';
 import { createLogger } from '../logger.js';
+import { AUTO_BRIDGE_BATCH_HEADER_RESERVE, AUTO_BRIDGE_BATCH_MAX_CHARS, AUTO_BRIDGE_BATCH_MAX_ITEMS, AUTO_BRIDGE_BATCH_SEPARATOR, autoBridgeReportCount, buildOrcaAutoBridgeBatch, isOrcaAutoBridgeQueueItem, sameAutoBridgeDispatchOptions } from './orcaAutoBridgeBatch.js';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText } from './autoReviewUserIntent.js';
 import type { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
 import { REPLY_QUOTE_SOURCE_CONTENT } from './chatReplyQuoteNote.js';
@@ -4462,7 +4463,8 @@ export class AgentInputCoordinator {
   }
 
   /**
-   * @param opts.preserveInputBoundary 为 true 时跳过 abortInputBoundary。
+   * @param opts.preserveInputBoundary 为 true 时跳过 abortInputBoundary。发送准备中尚未预留
+   * vendor turn 时，旧运行时的关闭不作为这条新输入的 done；由发送自身的成功／失败收口。
    * @param opts.preserveAutoResumeIntent 为 true 时保留当前自动续跑接管态。
    *   用于 provider rebuild / unexpected close 交棒：waiting timer、in-flight
    *   callback、已因 SESSION_RUNNING 回队、以及已进入 drain 但尚未 vendor
@@ -4515,7 +4517,7 @@ export class AgentInputCoordinator {
     if (preserveUndispatchedAutoResume && active?.sendStarted) {
       // sendToAgent 已在飞：status=closed 可能早于 send promise。vendor 已
       // accept 时再入队会二次 CONTINUE；等 outcome 再决定 commit 还是交回。
-      this.recordActiveTurnClosedBeforeSendOutcome(state, active);
+      this.recordActiveTurnClosedBeforeSendOutcome(state, active, opts?.preserveInputBoundary === true);
       state.queueAbortPending = false;
       state.abortBoundaryToken = null;
       this.clearAllSteeringMarkers(state);
@@ -4526,7 +4528,7 @@ export class AgentInputCoordinator {
       this.requeuePreservedUndispatchedAutoResume(sessionId, state, active);
     } else if (active && !isActiveTurnDispatched(active)) {
       if (active.sendStarted) {
-        this.recordActiveTurnClosedBeforeSendOutcome(state, active);
+        this.recordActiveTurnClosedBeforeSendOutcome(state, active, opts?.preserveInputBoundary === true);
       } else {
         this.handleActiveTurnClosedBeforeDispatch(sessionId, state, active);
       }
@@ -5107,6 +5109,36 @@ export class AgentInputCoordinator {
     return null;
   }
 
+  /** Lead drain 前只合并队首连续的系统兜底回报；失败/异常来源保留原条目逐条派发。 */
+  private coalesceAutoBridgeHead(
+    sessionId: string,
+    state: SessionInputState,
+    head: AgentInputQueuedMessage,
+  ): AgentInputQueuedMessage {
+    if (!isOrcaAutoBridgeQueueItem(head)) return head;
+    const targets = [head];
+    let batchReports = autoBridgeReportCount(head);
+    // 预估最终正文长度：计入批次头与分隔符，避免包装把字符预算撑破。
+    let projectedChars = AUTO_BRIDGE_BATCH_HEADER_RESERVE + head.text.length;
+    for (const item of state.pendingQueue.slice(1)) {
+      if (!isOrcaAutoBridgeQueueItem(item) || !sameAutoBridgeDispatchOptions(head, item)) break;
+      // 上限双闸：按真实报告数累计（已合批项按其 count，而非队列行数）+ 含包装的字符预算；超出的留到下一轮 drain。队首必发，不在此拦截。
+      if (batchReports + autoBridgeReportCount(item) > AUTO_BRIDGE_BATCH_MAX_ITEMS) break;
+      if (projectedChars + AUTO_BRIDGE_BATCH_SEPARATOR.length + item.text.length > AUTO_BRIDGE_BATCH_MAX_CHARS) break;
+      targets.push(item);
+      batchReports += autoBridgeReportCount(item);
+      projectedChars += AUTO_BRIDGE_BATCH_SEPARATOR.length + item.text.length;
+    }
+    if (targets.length < 2) return head;
+    if (targets.some((item) => state.queueEditLocks.includes(item.clientId))) return head;
+    const result = this.mergeQueuedMessagesAtomically(
+      sessionId,
+      targets.map((item) => item.clientId),
+      buildOrcaAutoBridgeBatch,
+    );
+    return result.merged ? state.pendingQueue[0] ?? head : head;
+  }
+
   private getDrainableHead(
     sessionId: string,
     state: SessionInputState,
@@ -5188,8 +5220,8 @@ export class AgentInputCoordinator {
       await this.dispatchCompact(sessionId, compact, reason);
       return;
     }
-    const head = this.getDrainableHead(sessionId, state);
-    if (!head) {
+    const drainHead = this.getDrainableHead(sessionId, state);
+    if (!drainHead) {
       const hasRunnableWork =
         state.pendingQueue.length > 0 ||
         state.pendingCompacts.some((item) => item.waitForClientIds.length === 0);
@@ -5235,6 +5267,7 @@ export class AgentInputCoordinator {
       this.scheduleExternalTurnRetryIfNeeded(sessionId, state, `drain-blocked:${reason}`);
       return;
     }
+    const head = this.coalesceAutoBridgeHead(sessionId, state, drainHead);
     state.staleLiveIdleSinceMs = null;
     state.pendingQueue = state.pendingQueue.slice(1);
     this.removePendingCompactWaitClientId(state, head.clientId);
@@ -5711,6 +5744,16 @@ export class AgentInputCoordinator {
     // 会重试的分支同理:重试的是**新** turn,旧 error 不会再被接管。
     this.discardDeferredResumableCandidate(sessionId, active);
     const latest = this.getState(sessionId);
+    if (result.kind === 'host-send' && result.code === 'PLUGIN_TURN_SKIPPED') {
+      latest.activeTurn = null;
+      this.notifyRejectedUserTurn(sessionId, item);
+      if (active.persisted) this.notifyUndispatchedUserTurn(sessionId, item, 'cancelled');
+      else this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+      this.emit(sessionId);
+      this.scheduleDrain(sessionId, 'runtime-plugin-skipped');
+      this.deps.onQueueEmptied?.(sessionId);
+      return;
+    }
     if (this.requeuePreservedAutoResumeIfAttemptCurrent(sessionId, latest, active, result)) {
       return;
     }
@@ -6227,7 +6270,14 @@ export class AgentInputCoordinator {
   private recordActiveTurnClosedBeforeSendOutcome(
     state: SessionInputState,
     active: ActiveTurn,
+    preserveInputBoundary: boolean,
   ): void {
+    // A planned close/rebuild inside send preparation belongs to the old
+    // runtime, not this input: the replacement has not reserved its turn yet.
+    // Synthesizing done here would retire the new input as soon as send
+    // succeeds, losing both manual retry and quota waiting on a later error.
+    // Once reserved (or for an explicit close), retain normal close handling.
+    if (preserveInputBoundary && active.vendorTurnGeneration === null) return;
     recordPendingTerminalEvent(active, { type: 'done' });
     state.error = null;
     clearErrorProjectionSignals(state);
@@ -6883,9 +6933,13 @@ export class AgentInputCoordinator {
     preferProviderGroup = true,
   ): AutoResumeInfo | null {
     if (!this.deps.onResumableTurnError) return null;
-    // 容量错误已经走到终态：组能接管时直接交接，不再叠加主进程的同机重试。
+    // 容量/额度错误到达终态时先交给供应商组；组异步拒绝后，
+    // resumeAfterProviderGroupDeclined 以 preferProviderGroup=false 回到原有恢复。
     // 其他中断仍先走自愈(如断线后在原电脑恢复)；不能交给组的输入也保持原有处理。
-    if (preferProviderGroup && this.getProviderGroupSwitchCandidate(sessionId, item, message, signals) === 'overload') return null;
+    if (preferProviderGroup) {
+      const cause = this.getProviderGroupSwitchCandidate(sessionId, item, message, signals);
+      if (cause === 'overload' || cause === 'usage-limit') return null;
+    }
     try {
       return (
         this.deps.onResumableTurnError(sessionId, { ...(signals ?? {}), message }, item) ?? null

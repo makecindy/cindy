@@ -223,9 +223,17 @@ describe('buildPiAgent roster prompt assembly', () => {
     });
     const promptIndex = state.args.indexOf('--append-system-prompt');
     expect(promptIndex).toBeGreaterThan(-1);
-    expect(readFileSync(state.args[promptIndex + 1]!, 'utf8')).toContain(
+    const prompt = readFileSync(state.args[promptIndex + 1]!, 'utf8');
+    expect(prompt).toContain(
       '<ghost-roster>\n{"id":"art"}\n</ghost-roster>',
     );
+    // Production startup must carry the shared plan guidance once, while keeping
+    // Pi's MCP gateway instructions and native prompt. Previously Pi missed plans.
+    expect(prompt.match(/## User-facing plans/gu)).toHaveLength(1);
+    expect(prompt).toContain('Name the real action and visible result instead.');
+    expect(prompt).toContain('cindy_mcp_list_tools');
+    expect(prompt).not.toContain('## Skill source precedence');
+    expect(state.args).not.toContain('--system-prompt');
     expect(getGhostRosterPrompt).toHaveBeenCalledWith({ workingDir });
     expect(readFileSync(path.join(state.env.PI_CODING_AGENT_DIR!, 'AGENTS.md'), 'utf8'))
       .toBe('host global context canary');

@@ -4,7 +4,7 @@
 
 Cindy 托管 Skill（2026-11-03）：内置 Skill 与插件带的 Skill 以任务所在电脑为准，用远程供应商与本机体验一致。
 `open.personal` 追加可选数组 `managedSkills: [{ command, dir }]`：任务所在电脑按本机任务同一来源列出托管 Skill，
-用本机停用偏好与伙伴授权过滤（`resolveAllowedManagedSkills`），本机停用的个人 Skill 也不再同步。文件随
+用本机停用偏好与伙伴授权过滤（`resolveAllowedManagedSkills`），本机停用的个人 Skill 也不再同步。伙伴授权只对隔离运行的伙伴（`isolatedBotProfile`）生效，与本机引擎一致：V2 伙伴在自己项目里的对话按普通任务带全部启用的托管 Skill，个人 Skill 同样按停用过滤。文件随
 `personal.files` 放在 Agent 找项目 Skill 的位置（Claude Code 为 `.claude/skills/<插件>-<Skill>`，Codex / Pi 为
 `.agents/skills/...`）。目录名为 `<插件>-<Skill>`；两段里有 `-` 时追加整条命令的 8 位哈希，避免 `a-b:c` 与 `a:b-c`
 拍平成同一个目录；该目录已被项目或个人的同名 Skill（本机里是不同命令）占用时同样换成带哈希的目录共存，不丢托管的。
@@ -38,7 +38,7 @@ Cindy 托管 Skill（2026-11-03）：内置 Skill 与插件带的 Skill 以任�
   `device-hosted-guest` 测试。
 
 插件花名册（2026-11-01）：`open` 的 `options` 追加可选字符串 `ghostRosterSnapshot`，由任务所在电脑按真实
-工作目录生成（与本机任务同一 formatter 与过滤），空串表示“那台没有可召回的插件”，同样要带。沿用
+工作目录生成（与本机任务同一 formatter 与过滤），空串表示“那台没有可召回的插件”，同样要带。隔离运行的伙伴在本机也不注入花名册，控制端带空串；V2 伙伴在自己项目里的对话按普通任务现算。沿用
 `maker:remote-agent:v1`，不加能力位、错误码或 relay 接口；供应商组中转随 `options` 原样透传。旧运行端
 解码时丢弃该字段，行为不变；新运行端遇到旧控制端（字段缺省）时，受邀者照旧不注入花名册，同账号照旧用
 运行端自己的花名册，均不劣于升级前。运行端只在隧道确实提供 `cindy` MCP 时注入，绝不读自己的已装插件
@@ -164,7 +164,11 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
 - **幂等**：`poll` 按游标幂等，只有它在 peer reset 后自动重读(`isPeerResetRetryableInvoke`)；
   `open` 按 runId、`call` 按 callId、`reply` 按 requestId、`push` 按 seq 去重，不自动重放；
   该 channel 的结果不进全局去重缓存。
-- **大小**：内联载荷 1MB，更大的 gzip 后按 512KB 分段 `upload`(单个载荷 64MB)；单次 `poll`
+- **大小**：接收端仍接受最多 1Mi 字符的内联载荷、每块最多 512KiB 的 `upload`、最多 128 块和单个 gzip 载荷 64MiB。
+  控制端发送偏好（2026-11-10）为内联 JSON 最多 64KiB UTF-8，更大的先 gzip、优先按 64KiB 分块；
+  大载荷按压缩后大小增大分块以保持不超过原 128 块上限，不缩小既有容量。偏好只在发送端生效，
+  旧控制端的大块仍正常接收，新控制端的小块也符合旧接收端的原协议；不新增字段、能力位或重试。
+  官方与自建中转继续转发原有 invoke，无需服务端或中转升级。单次 `poll`
   每个任务最多 512KB、合计 1.5MB(B 轮流决定从哪个任务开始取，积压多的任务不会一直挤占额度)；`push` 单帧 1MB、单次合计 3MB，超长 WebSocket 消息拆段(`more: true`)。
 - **前向兼容**：A 解析事件流时忽略不认识的行类型；B 对不认识的 op / 方法回 `REMOTE_AGENT_INVALID`
   / `REMOTE_AGENT_UNSUPPORTED`。旧版 B 回 `CHANNEL_NOT_ALLOWED`，A 提示对方版本过旧，不回退到本机运行。
@@ -236,6 +240,16 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   命令。此增量不修改 channel、relay、协议版本或服务器，也不是 OS 虚拟化。
   本机 MCP 的 snake_case / camelCase 路径参数（含工作目录、插件目录交接、文档输入输出）在 A 执行前还原；
   参数复用结果侧的路径字段判据，覆盖 `output_dir`、`screenshot_out_file`、`out_file`、`absPath` 等已有字段，并兼容 `debug_image_out`；还原后的路径仍由各本机工具执行原有的目录范围与权限检查。
+  MCP／插件的 `message`、`commit_message`（含 camelCase）、`body`、`content`、`text`、`description`
+  在 A 转发到真实工具前还原已知路径别名，覆盖 `ghost_call → call_tool → args`（对象或 JSON 字符串）及嵌套数组。
+  复用事件正文的 JSON／文件链接／源码分隔符处理，HTTP 与媒体 URL、未知业务字符串保持原样；
+  含 NUL 的正文及显式非文本 `encoding` 载荷不改写、不解码（缺省、`text`、`utf8`、`utf-8` 为文本）。
+  有 `content` 时编码只约束它，否则约束 `message`／`body`／`text`；同级 `commit_message` 等正文仍还原。
+  序列化正文（含嵌套 JSON／逐行 JSON）发现 NUL 或非文本编码时整段保留，包括其中的普通文字，不猜测内部载荷 schema。
+  原有仅保留正文的策略会使插件写入影子路径，而 JSON／SSE 读回又掩盖错误（#9718）；回归直接核对工具边界与存储字节。
+  指定派活服务的 `message`／`initial_task` 与 `prompt` 仍优先按任务交接规则还原；其它服务的 `initial_task` 不套用该规则。
+  不新增路径别名、权限、插件声明或线上字段；存量插件无需重装或重新确认。官方／自建中转仍透传既有 HTTP 请求字节，
+  还原只发生在任务所在电脑的 MCP 转发入口，不改变中转、握手或连接恢复。旧版任务电脑继续沿用旧行为。
   `get_current_session_id` 等工具的 JSON 文本及 Skill/命令的 JSON 输出先解码字符串再投影，保持合法转义与原有格式。
   MCP 的 JSON/SSE 结构化结果保留路径字段语义，并传给路径字段内嵌的数组；普通正文仍逐路径 token 投影，避免空格后的分隔符漏转或正文被当成完整路径。
   已明确为路径的参数、路径字段内嵌的数组与命令内的完整路径保留中文和空格，空格之后的子路径也必须转换成目标电脑的分隔符。

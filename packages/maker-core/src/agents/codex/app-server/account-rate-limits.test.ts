@@ -10,9 +10,9 @@ describe('native account rate limit renewal', () => {
     const request = vi.fn().mockRejectedValueOnce(expired).mockResolvedValueOnce({}).mockResolvedValueOnce(result);
     await expect(readAccountRateLimitsWithRefresh(request)).resolves.toEqual(result);
     expect(request.mock.calls).toEqual([
-      [Method.AccountRateLimitsRead],
+      [Method.AccountRateLimitsRead, undefined, { timeoutMs: 15_000 }],
       ['account/read', { refreshToken: true }, { timeoutMs: 8_000 }],
-      [Method.AccountRateLimitsRead],
+      [Method.AccountRateLimitsRead, undefined, { timeoutMs: 15_000 }],
     ]);
   });
 

@@ -1,5 +1,12 @@
 {
   "githubPrs": {
+    "status": {
+      "open": "オープン",
+      "draft": "ドラフト",
+      "merged": "マージ済み",
+      "closed": "クローズ済み"
+    },
+    "statusUnavailable": "ステータスはまだ取得していません",
     "title": "PR リンクを管理",
     "hint": "上部に最大 3 件表示。固定した PR を優先します",
     "empty": "GitHub PR または GitLab MR のリンクを貼り付けて追加",
@@ -241,7 +248,7 @@
           "plugins": "プラグイン一覧",
           "memoryRules": "メモリの指示",
           "memoryIndex": "メモリ索引",
-          "profile": "チームメイトのプロフィール",
+          "profile": "仲間のプロフィール",
           "user": "ユーザーの指示",
           "directories": "追加ディレクトリ",
           "native": "Pi の指示",
@@ -652,6 +659,8 @@
     "taskAlreadyCreated": "このセッションはコンピューターに作成済みです。保存されたメッセージは元のセッションで送信を再開します。"
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_FULL": "このタスクを実行できるアカウントまたはパソコンはすべて同時実行数の上限に達しています。実行中のタスクが終わるのを待つか、プロバイダー設定で上限を引き上げてください。",
+    "SUBSCRIPTION_ACCOUNTS_FULL": "このタスクを実行できるアカウントまたはパソコンはすべて同時実行数の上限に達しています。実行中のタスクが終わるのを待つか、プロバイダー設定で上限を引き上げてください。",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "この SSH タスクでは Harness を切り替えられません。現在の Harness のモデルを選ぶか、必要な Harness で新しい SSH タスクを作成してください。",
     "MODEL_SELECTION_UNAVAILABLE": "選択したプロバイダーのモデルは利用できなくなりました。設定で接続を確認するか、利用可能なモデルを選び直してください。",
     "HARNESS_SWITCH_NOT_READY": "Harness の切り替えが完了していません。エラーの詳細を確認し、Harness の準備ができてから再試行してください。",

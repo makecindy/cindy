@@ -172,6 +172,19 @@ function markReady(controller: RsbWindowController, win: FakeWindow): void {
 
 const ctx = { sessionId: 's1', workdir: '/w', remoteHostId: null, available: true };
 
+// A global view must reach the ready detached renderer without adopting a task.
+// Real controller and delivery target, native window boundary only. tier: unit.
+it('routes a global plugin view to the detached host without changing its task', async () => {
+  const h = makeHarness({ detached: true }); h.controller.setContext(ctx);
+  h.controller.open(); markReady(h.controller, h.windows[0]);
+  h.sends.length = 0; h.sendTargets.length = 0;
+  const command = { type: 'open-plugin-view' as const, instanceId: 'sim', resourceViewId: 'board', resourceInput: { selected: 'one' } };
+  await expect(h.controller.routeCommand({ command, allowOpen: true, userInitiated: true })).resolves.toBe('routed');
+  expect(h.sends.filter(entry => entry.channel === 'cmd-channel')).toEqual([{ channel: 'cmd-channel', payload: command }]);
+  expect(h.sendTargets.at(-1)).toBe(h.windows[0].webContents.id);
+  expect(h.controller.getContext()?.sessionId).toBe('s1');
+});
+
 beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); });
 

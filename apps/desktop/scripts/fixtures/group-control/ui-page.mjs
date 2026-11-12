@@ -35,8 +35,11 @@ export default {
   viewport: { width: 1280, height: 800 },
   real: 'BotGroupChatView (timeline, composer, send button, header registration), ControlledBanner, ContentHeader shell, Markdown, theme, fonts and translations',
   notCovered:
-    'Account sign-in, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, plans and attachment IO; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
+    'Account sign-in, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
   cases: {
+    'plan-read-talk': { about: '#9398: delayed plan details never flash an organizer or missing bubble; talk is independent', data: { ...base, sidebar: false, messages: 1, planRead: 'talk' } },
+    'plan-read-work': { about: '#9398: delayed work details preserve the selected organizer', data: { ...base, sidebar: false, messages: 1, planRead: 'work' } },
+    'plan-read-missing': { about: '#9398: a confirmed missing plan has a neutral visible fallback', data: { ...base, sidebar: false, messages: 1, planRead: 'missing' } },
     'share-pending': {
       about: 'Pending topic copy appears in the main chat while the host receipt is unresolved',
       data: { ...base, bubbles: true, threadPanel: true, sharePending: true },
@@ -55,6 +58,7 @@ export default {
     'process-history': { about: 'Owned teammate historical process, final reply outside', data: { ...base, sidebar: false, processRecord: true, workRemote: true } },
     'process-empty': { about: 'Final-only reply explains the empty process', data: { ...base, sidebar: false, processRecord: true, processEmpty: true, workRemote: true } },
     'process-unavailable': { about: 'Unavailable process shows a retry action', data: { ...base, sidebar: false, processRecord: true, processUnavailable: true, workRemote: true } },
+    'process-late': { about: 'Thinking persisted after the final seal remains inspectable', data: { ...base, sidebar: false, processRecord: true, processVariant: 'late', workRemote: true } },
     'process-other-owner': { about: 'Other members never receive a private process entry', data: { ...base, sidebar: false, processRecord: true, processOtherOwner: true, workRemote: true } },
     'work-thinking': { about: 'Actual group work status, scenario data: thinking', data: { ...base, messages: 2, workState: 'thinking' } },
     'work-tools': { about: 'Actual group work status, scenario data: command execution', data: { ...base, messages: 2, workState: 'testing' } },
@@ -177,11 +181,60 @@ export default {
   },
   async check(page, ui) {
     const definition = this.cases[ui.case];
+    if (definition.data.planRead) {
+      const missing = page.getByText(await ui.t('bots.groupChat.plan.missing'), { exact: true });
+      const organizer = page.getByText(await ui.t('bots.groupChat.organizer'), { exact: true });
+      await page.evaluate(() => window.dispatchEvent(new Event('fixture-plan-hold')));
+      await ui.emit('botGroupChanged', { groupId: 'fixture-group', change: 'messages', historyRevision: 'fixture-live', messages: [
+        { id: 'p1-card', sequence: 2, kind: 'plan', planId: 'p1', authorKind: 'user', authorBotId: null,
+          authorName: 'You', content: '', mentions: { all: false, botIds: [] }, noticeCode: null, files: [], attachments: [], createdAt: 1700000000000 },
+        { id: 'ordinary-delta', sequence: 10, kind: 'message', planId: null, authorKind: 'bot', authorBotId: 'a',
+          authorName: 'Aster', content: '普通消息无需等待安排详情。', mentions: { all: false, botIds: [] }, noticeCode: null, files: [], attachments: [], createdAt: 1700000000000 },
+      ] });
+      await page.getByText('普通消息无需等待安排详情。', { exact: true }).waitFor();
+      await ui.capture('details-pending');
+      assert.equal(await missing.count(), 0);
+      assert.equal(await organizer.count(), 0);
+      await page.evaluate(() => window.dispatchEvent(new Event('fixture-plan-ready')));
+      if (definition.data.planRead === 'missing') {
+        await missing.waitFor();
+        assert.equal(await organizer.count(), 0);
+        assert.equal(await missing.locator('xpath=ancestor::article').count(), 0);
+      } else if (definition.data.planRead === 'talk') {
+        const card = page.getByTestId('bot-group-arrangement');
+        await card.waitFor();
+        assert.equal(await organizer.count(), 0);
+        assert.equal(await card.locator('xpath=ancestor::article').count(), 0);
+      } else {
+        await organizer.waitFor();
+        assert.match(await organizer.locator('..').innerText(), /Nova/);
+      }
+      if (definition.data.planRead !== 'missing') assert.equal(await missing.count(), 0);
+      await ui.capture('details-settled');
+      return;
+    }
     if (definition.data.processRecord) {
       const journal = page.locator('[data-teammate-process]');
       await page.getByText('任务与 PR 的进展已整理，以下是需要跟进的事项。').waitFor();
       if (definition.data.processOtherOwner) { assert.equal(await journal.count(), 0); return; }
       await journal.waitFor();
+      // 2026-11-09: one group-message identity precedes its process and reply.
+      // Use the real group row; private-chat MessageStream is outside this scenario.
+      const assertReplyOwnership = async () => {
+        const row = page.locator('[data-bot-group-message-id="process-answer"]');
+        const portrait = row.locator('article > div').first();
+        const reply = row.getByTestId('bot-group-bubble');
+        const author = row.locator('article > div').nth(1).locator(':scope > span').first();
+        const [recordBox, portraitBox, authorBox, replyBox] = await Promise.all([journal.boundingBox(), portrait.boundingBox(), author.boundingBox(), reply.boundingBox()]);
+        assert.ok(portraitBox.y <= recordBox.y + 0.5, 'The shared avatar precedes the process, never below it');
+        assert.ok(authorBox.y + authorBox.height <= recordBox.y + 0.5, 'The author header precedes the process');
+        assert.ok(recordBox.y + recordBox.height <= replyBox.y + 0.5, 'The process precedes the reply body');
+        assert.ok(Math.abs(recordBox.x - replyBox.x) <= 0.5, 'The group record and reply share the same content column');
+        assert.equal(await row.locator('article [data-teammate-process]').count(), 1, 'Process and reply belong to the same message article');
+        assert.equal(await portrait.locator(':scope > span').count(), 1, 'Only the shared message identity owns an avatar');
+        assert.equal(await row.locator('article').count(), 1, 'The record stays owned by one reply row');
+      };
+      await assertReplyOwnership();
       const heading = journal.locator(':scope > button');
       assert.equal(await heading.getAttribute('aria-expanded'), 'false');
       await heading.click();
@@ -193,8 +246,18 @@ export default {
         assert.equal(await heading.getAttribute('aria-expanded'), 'false');
         await ui.capture('process-collapsed');
         return;
+      } else if (definition.data.processVariant === 'late') {
+        await journal.getByText(await ui.t('chat.teammateProcess.thought'), { exact: true }).waitFor();
+        assert.equal(await journal.getByText('Hidden reasoning').count(), 0);
+        await ui.capture('late-work-expanded');
+        await heading.click();
+        await heading.click();
+        await journal.getByText(await ui.t('chat.teammateProcess.thought'), { exact: true }).waitFor();
+        await ui.capture('late-work-reopened');
+        return;
       }
       await journal.getByText('我先核对任务的最近进展，再看未完成 PR 的阻塞点。').waitFor();
+      await assertReplyOwnership();
       await ui.capture('history-expanded');
       const endError = await journal.evaluate(root => {
         const rail = root.querySelector('[data-process-guide]').getBoundingClientRect();
@@ -203,6 +266,7 @@ export default {
       });
       assert.ok(endError <= 0.5, `Group guide footer alignment error: ${endError}`);
       await heading.click();
+      await assertReplyOwnership();
       await ui.capture('history-collapsed');
       return;
     }
@@ -279,6 +343,14 @@ export default {
         startedAtMs: definition.data.workNoStart ? null : Date.now() - 83_000, lastActivityAtMs: Date.now(), attention: false,
         gracefulStopState: state === 'stopping' ? 'requested' : 'none', source: 'live' }]);
       await page.getByTestId('bot-group-progress').first().waitFor();
+      const avatars = page.locator('[data-testid="bot-group-work"] > div:first-child > span');
+      assert.ok(await avatars.count(), 'running work shows its teammate avatar');
+      for (const avatar of await avatars.all()) {
+        const box = await avatar.boundingBox();
+        assert.ok(box, 'work avatar is visible');
+        assert.equal(box.width, 28, 'work avatar matches the final reply avatar width');
+        assert.equal(box.height, 28, 'work avatar matches the final reply avatar height');
+      }
       if (definition.data.workQueuedStep) {
         const header = await page.getByTestId('bot-group-content-header').innerText();
         const sidebar = await page.getByTestId('bot-group-running').innerText();
@@ -634,9 +706,12 @@ export default {
         const bar = document.querySelector(`${row} [data-bot-group-message-actions]`).getBoundingClientRect();
         const bubble = document.querySelector(`${row} [data-testid="bot-group-bubble"]`).getBoundingClientRect();
         const timeline = document.querySelector('[data-testid="bot-group-timeline"]').getBoundingClientRect();
-        return { gap: bar.left - bubble.right, inside: bar.right <= timeline.right };
+        const narrow = document.querySelector(`${row} .chat-bubble-layout`).getBoundingClientRect().width <= 480;
+        return { gap: bar.left - bubble.right, inside: bar.right <= timeline.right, narrow,
+          below: bar.top > bubble.top && bar.left >= bubble.left && bar.right <= bubble.right };
       }, row);
-      assert.ok(geometry.gap >= 0 && geometry.gap <= 32, `toolbar sits beside the bubble (gap ${geometry.gap}px)`);
+      assert.ok(geometry.narrow ? geometry.below : geometry.gap >= 0 && geometry.gap <= 32,
+        `toolbar stays below narrow content or beside wide content: ${JSON.stringify(geometry)}`);
       assert.ok(geometry.inside, 'toolbar stays inside the timeline');
       assert.ok(await toolbar.isVisible());
       // Reactions wider than a short message's text stay over its own bubble and inside the timeline.
@@ -648,12 +723,14 @@ export default {
         const bar = document.querySelector(`${row} [data-bot-group-message-actions]`).getBoundingClientRect();
         const timeline = document.querySelector('[data-testid="bot-group-timeline"]').getBoundingClientRect();
         return { id, left: corner.left - bubble.left, right: corner.right - bubble.right, inside: corner.left >= timeline.left && corner.right <= timeline.right,
+          narrow: document.querySelector(`${row} .chat-bubble-layout`).getBoundingClientRect().width <= 480,
           toolbarTop: bar.top - bubble.top, wrapped: corner.height > reactions.firstElementChild.getBoundingClientRect().height };
       }));
       for (const c of corners) {
         assert.ok(c.inside, `${c.id} reactions stay inside the timeline`);
         assert.ok(c.left >= -12 && c.right <= 12, `${c.id} reactions stay over the bubble (${c.left}, ${c.right})`);
-        assert.ok(Math.abs(c.toolbarTop) <= 1, `${c.id} toolbar aligns with bubble top (${c.toolbarTop}px)`);
+        assert.ok(c.narrow ? c.toolbarTop > 0 : Math.abs(c.toolbarTop) <= 1,
+          `${c.id} toolbar follows the available content width (${c.toolbarTop}px)`);
         if (ui.case === 'bubbles-wrapped') assert.ok(c.wrapped, `${c.id} exercises multiple reaction rows`);
       }
       // r4324819612: the opposite of the long-root case — the entry is wider

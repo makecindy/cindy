@@ -11,6 +11,14 @@ import {
 } from '../filePreview.js';
 
 describe('file preview shared model', () => {
+  // #10143, unit: newly recognized text must survive remote preview/attachment classification.
+  it.each(['Directory.Build.props', 'App.CSPROJ.USER', '.globalconfig', 'Page.razor', 'Page.axaml',
+    'Module.vb', 'script.csx', 'query.gql', 'api.http', 'schema.thrift', 'schema.avsc'])(
+    'recognizes .NET text file %s', name => expect(remoteFilePreviewKind(name)).toBe('text'),
+  );
+  it('does not classify NuGet zip packages as text', () => {
+    expect(remoteFilePreviewKind('package.nupkg')).toBe('binary');
+  });
   it('formats preview status without implying eager file reads', () => {
     expect(textPreviewStatusText({ status: 'idle' }, true)).toContain('按需读取远程文本预览');
     expect(textPreviewStatusText({ status: 'loading' }, true)).toBe('正在从远程电脑读取文本预览');

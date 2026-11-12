@@ -30,7 +30,7 @@ vi.mock('../../appSessionState.js', () => ({
 }));
 vi.mock('../../localDb/ipc/sessions.js', () => ({ getSessionRowSnapshotStrict: async () => mocks.row }));
 vi.mock('../../device-link/index.js', () => ({ remoteInvoke: mocks.remoteInvoke }));
-vi.mock('../../device-link/deviceLinkApi.js', () => ({ deviceLinkApiFetch: mocks.deviceList }));
+vi.mock('../../device-link/deviceLinkApi.desktop.js', () => ({ deviceLinkApiFetch: mocks.deviceList }));
 vi.mock('../../remote-ssh/index.js', () => ({ getRemoteSshPoolHydrated: async () => ({ list: () => mocks.hosts.map(config => ({ config })) }) }));
 vi.mock('../../maker-host/override-settings-file.js', () => ({
   createOverrideSettingsFile: () => ({

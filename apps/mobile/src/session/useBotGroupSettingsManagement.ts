@@ -26,6 +26,7 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
   const writing = useRef<symbol | null>(null);
   const [state, setState] = useState<{ binding: typeof binding; settings?: Settings; loading: boolean; failed: boolean }>();
   const pending = useRef<{ binding: typeof binding; key: string; operationId: string; managerId: string | undefined; action: ChatGroupSettingsAction } | null>(null);
+  const pendingInvite = useRef<{ binding: typeof binding; managerId: string; operationId: string } | null>(null);
   const valid = useCallback(() => enabled && api.enabled && api.current() && active.current === binding, [api, enabled, binding]);
   const refresh = useCallback(async () => {
     if (!valid()) return;
@@ -123,10 +124,16 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
   const invite = useCallback(async (revoke?: string) => {
     const current = verified.current?.binding === binding ? verified.current.settings : undefined;
     if (!valid() || !current?.managerId || current.group.dissolvedAt || current.group.archived) throw new Error('PERMISSION_DENIED');
-    const operationId = randomUUID();
-    if (revoke) { await api.client.revokeInvite(groupId, current.managerId, revoke, operationId); return null; }
-    const link = await api.client.createInvite(groupId, current.managerId, operationId);
+    if (revoke) { await api.client.revokeInvite(groupId, current.managerId, revoke, randomUUID()); return null; }
+    // Share publication may fail after the invite was created. Retry its original
+    // receipt so the Chat Server returns the same token instead of another invite.
+    const prior = pendingInvite.current;
+    const operation = prior?.binding === binding && prior.managerId === current.managerId ? prior
+      : { binding, managerId: current.managerId, operationId: randomUUID() };
+    pendingInvite.current = operation;
+    const link = await api.client.createInvite(groupId, operation.managerId, operation.operationId);
     if (!valid()) throw new Error('OWNER_CHANGED');
+    if (pendingInvite.current === operation) pendingInvite.current = null;
     return link;
   }, [api, binding, groupId, valid]);
   const own = state?.binding === binding;

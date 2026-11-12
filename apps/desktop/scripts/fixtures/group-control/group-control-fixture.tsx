@@ -22,7 +22,10 @@ if (!crypto.randomUUID) {
 }
 
 interface GroupData {
+  /** #9398: message-only push, then an explicitly released full plan read. */
+  planRead?: 'talk' | 'work' | 'missing';
   processRecord?: boolean;
+  processVariant?: 'empty' | 'late';
   processEmpty?: boolean;
   processUnavailable?: boolean;
   processOtherOwner?: boolean;
@@ -377,7 +380,20 @@ void mountPage({
   route: '/bots/groups/fixture-group',
   host: (ctx) => {
     const data = ctx.data as unknown as GroupData;
-    const group = groupFrom(data);
+    let group = { ...groupFrom(data), ...(data.planRead ? { serverBacked: true, historyRevision: 'fixture-live', organizerBotId: 'b' } : {}) };
+    let planReadHeld = false;
+    const planReads: Array<() => void> = [];
+    if (data.planRead) {
+      window.addEventListener('fixture-plan-hold', () => { planReadHeld = true; }, { once: true });
+      window.addEventListener('fixture-plan-ready', () => {
+        const ready = groupFrom({ ...data, arrangement: 'running', workMentioned: data.planRead === 'work' });
+        group = { ...ready, historyRevision: 'fixture-live', organizerBotId: 'b',
+          plans: data.planRead === 'missing' ? [] : ready.plans.map(plan => ({ ...plan, organizerBotId: 'b', organizerName: 'Nova' })),
+          ...(data.planRead === 'missing' ? { openPlan: null } : {}) };
+        planReadHeld = false;
+        for (const finish of planReads.splice(0)) finish();
+      }, { once: true });
+    }
     if (data.processRecord) {
       Object.assign(group, { serverBacked: true, members: group.members.map(member => ({ ...member, isOwned: !data.processOtherOwner, homeDeviceId: 'fixture-mac' })),
         messages: [message({ id: 'process-answer', sequence: 1, authorKind: 'bot', authorBotId: 'a', authorName: 'Aster',
@@ -414,7 +430,10 @@ void mountPage({
         onCompanionCloudChanged: subscription('companionCloudChanged'),
         polishWorkingStatus: async () => null,
         listBotGroups: async () => ({ ok: true, groups: (ctx.data as unknown as GroupData).settings ? [group] : [] }),
-        getBotGroup: async () => ({ ok: true, group }),
+        getBotGroup: async () => {
+          if (planReadHeld) return new Promise(resolve => { planReads.push(() => resolve({ ok: true, group })); });
+          return { ok: true, group };
+        },
         onBotGroupChanged: subscription('botGroupChanged'),
         sendBotGroupMessage: data.sendStatus ? (input: { text: string; clientId: string }) => new Promise((resolve) => {
           window.addEventListener('fixture-send-receipt', (event) => {
@@ -460,9 +479,10 @@ void mountPage({
         onStatusChanged: subscription('deviceLinkStatus'),
         onPresenceChanged: subscription('deviceLinkPresence'),
         onResponsivenessChanged: subscription('deviceLinkResponsiveness'),
-        invoke: async (_device: string, _channel: string, args: Array<{ ref?: { collectionId?: string } }>) => _channel === 'local-db:messages:around-client-id' ? data.processUnavailable ? Promise.reject(new Error('Process unavailable')) : data.processEmpty ? [
+        invoke: async (_device: string, _channel: string, args: Array<{ ref?: { collectionId?: string } }>) => _channel === 'local-db:messages:around-client-id' ? data.processUnavailable ? Promise.reject(new Error('Process unavailable')) : (data.processEmpty || data.processVariant ? [
           { clientId: 'fixture-source', role: 'user', content: 'Request' },
           { clientId: 'fixture-end', role: 'assistant', content: 'Result', agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } },
+          ...(data.processVariant === 'late' ? [{ clientId: 'fixture-late', role: 'thinking', content: 'Hidden reasoning' }] : []),
         ] : [
           { clientId: 'fixture-source', role: 'user', content: 'Request' },
           { clientId: 'fixture-thought', role: 'thinking', content: 'Hidden reasoning' },
@@ -471,7 +491,7 @@ void mountPage({
           { clientId: 'fixture-result', role: 'tool_result', toolUseId: 'fixture-tool', content: 'Task records' },
           { clientId: 'fixture-note2', role: 'assistant', content: '已经继续获取任务信息，接下来核对未完成 PR 的当前状态。', agentMeta: { assistantPhase: 'commentary' } },
           { clientId: 'fixture-end', role: 'assistant', content: 'Result', agentMeta: { turnCompleted: true } },
-        ] : args[0]?.ref?.collectionId === 'bot-groups' ? {
+        ]).map(row => ({ ...row, agentMeta: { ...row.agentMeta, botPrivateReply: true, botGroupLane: true } })) : args[0]?.ref?.collectionId === 'bot-groups' ? {
           ref: { collectionId: 'bot-groups', kind: 'bot-group', id: group.id },
           blocks: [{ primitive: 'bot-group-chat', data: { ...group, round: { ...group.round, speakers: [{ ...group.round.speakers[0], sessionId: 'fixture-work' }] } } }],
         } : { blocks: [] },

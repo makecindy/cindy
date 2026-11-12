@@ -17,6 +17,7 @@ import type {
   InteractionRequest,
   InteractionResolver,
   SendOptions,
+  StartSessionOptions,
   UserMessage,
 } from '@cindy/maker-core';
 import { LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, Session } from '@cindy/maker-core';
@@ -86,6 +87,15 @@ vi.mock('../controller/projectFiles', () => ({
   collectInstructionImports: async () => [], collectPersonalConfig,
   collectProjectInstructionFiles: async () => [],
 }));
+
+/** 伙伴运行配置：`projectContext` 为 V2 伙伴在自己项目里的对话，否则为隔离运行(群、IM 专线)。授权均为空。 */
+function teammateProfile(projectContext: boolean): NonNullable<StartSessionOptions['botRuntimeProfile']> {
+  const empty = { mode: 'allowlist' as const, configured: [], catalog: [] };
+  return {
+    botId: 'teammate', profileVersion: 1, skillPolicy: empty, mcpPolicy: empty, toolsetPolicy: empty,
+    ...(projectContext ? { projectContext: true } : {}),
+  };
+}
 
 const RG = path.resolve(__dirname, '../../../../../ripgrep-bin', `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'rg.exe' : 'rg');
 const CONTROLLER = 'controller-device-1';
@@ -1380,24 +1390,31 @@ describe('remote agent round trip', () => {
 
   // #6420: a new remote run carries the task Host clear epoch, independent of source clocks.
   // 插件工具经隧道回到本机：花名册按本机真实工作目录现算，经 open 带到 Agent 的启动选项。
-  // 空花名册也要带到，否则对方会回退到它自己的插件。
+  // 空花名册也要带到，否则对方会回退到它自己的插件。伙伴与本机引擎同一判断：V2 伙伴在自己项目里的
+  // 对话按普通任务带本机花名册；隔离运行的伙伴(群、IM 专线)带空花名册，不能让对方用它自己装的插件。
   it('brings this computer\'s plugin roster, even an empty one, to the agent computer', async () => {
     const host = createHost();
     const invoke = makeDeps(host).invoke;
     const log = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+    const roster = 'TASK COMPUTER GHOST ROSTER';
     try {
-      for (const roster of ['TASK COMPUTER GHOST ROSTER', '']) {
-        const ghostRosterPrompt = vi.fn(() => roster);
+      for (const [name, local, botRuntimeProfile, expected, readsRoster] of [
+        ['ordinary', roster, undefined, roster, true],
+        ['empty', '', undefined, '', true],
+        ['v2-project', roster, teammateProfile(true), roster, true],
+        ['isolated-teammate', roster, teammateProfile(false), '', false],
+      ] as const) {
+        const ghostRosterPrompt = vi.fn(() => local);
         const start = createDeviceAgentStarter({
           remoteInvoke: async (_deviceId, _channel, args) => ({ ok: true, result: await invoke(args) }),
           rgPath: () => RG, mcpProviders: () => [], prepareMcpBridge: async () => null, makerMemory: () => undefined,
           ghostRosterPrompt, captureKnownFileBefore: async () => {}, noteOpaqueTurnChange: () => {}, logger: log,
         });
         const handle = await start({ agentKind: 'claude-code', deviceId: 'agent-computer', options: {
-          sessionId: `roster-${roster.length}`, workingDir: project, model: 'm',
+          sessionId: `roster-${name}`, workingDir: project, model: 'm', ...(botRuntimeProfile ? { botRuntimeProfile } : {}),
         } });
-        expect(ghostRosterPrompt).toHaveBeenCalledWith(project);
-        expect(hostedStartOptions(hostInputs.at(-1)!).ghostRosterSnapshot).toBe(roster);
+        expect(ghostRosterPrompt, name).toHaveBeenCalledTimes(readsRoster ? 1 : 0);
+        expect(hostedStartOptions(hostInputs.at(-1)!).ghostRosterSnapshot, name).toBe(expected);
         await handle.close({ reason: 'navigation' });
       }
     } finally { await host.dispose(); }
@@ -1417,8 +1434,8 @@ describe('remote agent round trip', () => {
     };
     const pr = skill('pr');
     const learn = skill('learn');
-    // 收集器本身见 mirror.test.ts：这里按收到的托管 Skill 原样产出同步内容。
-    collectPersonalConfig.mockImplementationOnce(async (...args: unknown[]) => {
+    // 收集器本身见 mirror.test.ts：这里按收到的托管 Skill 原样产出同步内容(两个伙伴任务 + 一个普通任务)。
+    const syncReceived = async (...args: unknown[]) => {
       const { managedSkills = [] } = args[2] as { managedSkills?: Array<{ command: string; dir: string }> };
       return {
         personal: {
@@ -1429,7 +1446,8 @@ describe('remote agent round trip', () => {
         },
         roots: [],
       };
-    });
+    };
+    for (let run = 0; run < 3; run += 1) collectPersonalConfig.mockImplementationOnce(syncReceived);
     try {
       const start = createDeviceAgentStarter({
         remoteInvoke: async (_deviceId, _channel, args) => ({ ok: true, result: await invoke(args) }),
@@ -1437,6 +1455,21 @@ describe('remote agent round trip', () => {
         managedSkills: async () => [pr, learn], disabledSkillPaths: () => [learn.path],
         captureKnownFileBefore: async () => {}, noteOpaqueTurnChange: () => {}, logger: log,
       });
+      // V2 伙伴在自己项目里的对话与普通任务一样带全部启用的托管 Skill：它的伙伴授权为空，本机引擎也不套用。
+      // 隔离运行的伙伴仍只带授权过的(这里没有)。
+      for (const [name, botRuntimeProfile, expected] of [
+        ['v2-project', teammateProfile(true), ['cindy:pr']],
+        ['isolated-teammate', teammateProfile(false), []],
+      ] as const) {
+        const teammate = await start({ agentKind: 'claude-code', deviceId: 'agent-computer', options: {
+          sessionId: `managed-skills-${name}`, workingDir: project, model: 'm', botRuntimeProfile,
+        } });
+        const collected = collectPersonalConfig.mock.calls.at(-1)?.[2] as
+          { managedSkills?: Array<{ command: string }>; disabledSkillPaths?: string[] } | undefined;
+        expect(collected?.managedSkills?.map((skill) => skill.command), name).toEqual(expected);
+        expect(collected?.disabledSkillPaths, name).toEqual(name === 'v2-project' ? [learn.path] : undefined);
+        await teammate.close({ reason: 'navigation' });
+      }
       const handle = await start({ agentKind: 'claude-code', deviceId: 'agent-computer', options: {
         sessionId: 'managed-skills', workingDir: project, model: 'm',
       } });
@@ -1626,6 +1659,33 @@ describe('shared startup lease budget', () => {
     expect(f.disposed).toEqual(['historical', 'historical']);
     await resumed.close();
   });
+
+  // Unit, direct group quota recovery: capture through the real starter, then
+  // close its handle. Existing history cases tested reopen, not the recovery
+  // capability which must survive runtime drain without surviving user/grant boundaries.
+  it.each(['runtime-close', 'explicit-close', 'revoked', 'link-closed', 'expired', 'replaced'] as const)(
+    'retains the original direct recovery grant only across runtime close: %s', async mode => {
+      const f = fixture(); f.state.ready = true; f.state.duration = 60_000;
+      const handle = await f.open('historical');
+      const recovery = liveDirectGuestSession('historical')?.captureRecovery?.();
+      expect(recovery?.isCurrent()).toBe(true);
+      await handle.close({ reason: mode === 'explicit-close' ? 'account-boundary' : 'navigation' });
+      expect(liveDirectGuestSession('historical')).toBeNull();
+      let replacement: AgentSessionHandle | undefined;
+      try {
+        if (mode === 'revoked') guestPermission.epoch++;
+        if (mode === 'link-closed') historyCloseEpoch.mockReturnValue(1);
+        if (mode === 'expired') await vi.advanceTimersByTimeAsync(60_001);
+        if (mode === 'replaced') replacement = await f.open('historical');
+        expect(recovery?.isCurrent()).toBe(mode === 'runtime-close');
+        if (mode !== 'runtime-close') {
+          const before = f.calls.length;
+          expect(await recovery?.requestSwitch()).toBeUndefined();
+          expect(f.calls).toHaveLength(before);
+        }
+      } finally { await replacement?.close({ reason: 'account-boundary' }); }
+    },
+  );
 
   it('does not renew a reused historical grant after its original renewal window', async () => {
     const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
@@ -2341,7 +2401,7 @@ describe('shared startup lease budget upload cancellation', () => {
       onEvent() {}, onState() {}, onWs() {}, onClosed() {},
       onRequest: async () => ({ type: 'error', error: { code: 'UNUSED', message: 'fixture' } }),
     }, randomUUID);
-    // Just crosses the inline threshold; gzip is a bounded two-chunk fixture above.
+    // Large payload; gzip completion and its bounded output are controlled above.
     const payload = { sessionId: 'upload-task', text: 'x'.repeat(1024 * 1024) };
     return { client, payload, requests, reply, hold: () => { hold = true; } };
   }
@@ -2367,13 +2427,15 @@ describe('shared startup lease budget upload cancellation', () => {
     expect(f.requests).toEqual([]);
   });
 
-  it('completes both chunks when not cancelled and rejects an already-closed payload before compression', async () => {
+  it('completes the upload when not cancelled and rejects an already-closed payload before compression', async () => {
     const f = fixture();
-    await expect(f.client.payload(f.payload)).resolves.toMatchObject({ chunks: 2, bytes: 512 * 1024 + 1 });
-    expect(f.requests.map(request => request.index)).toEqual([0, 1]);
+    const payload = await f.client.payload(f.payload);
+    expect(payload).toMatchObject({ bytes: 512 * 1024 + 1 });
+    if ('json' in payload) throw new Error('Expected an uploaded payload');
+    expect(f.requests.map(request => request.index)).toEqual(Array.from({ length: payload.chunks }, (_, index) => index));
     f.client.abandon('closed');
     await expect(f.client.payload(f.payload)).rejects.toThrow('REMOTE_AGENT_EXPIRED');
     expect(payloadCompression.calls).toBe(1);
-    expect(f.requests).toHaveLength(2);
+    expect(f.requests).toHaveLength(payload.chunks);
   });
 });

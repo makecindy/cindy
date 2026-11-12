@@ -85,6 +85,28 @@ function createLogger() {
   return logger;
 }
 
+describe('Maker atomic idle close', () => {
+  it('records runtime refresh only after an idle close is accepted', async () => {
+    let busy = true;
+    const handle = createHandle({ id: 'idle-thread' });
+    handle.hasPendingHostOperation = () => busy;
+    const close = vi.spyOn(handle, 'close');
+    const maker = new Maker({ agents: { codex: createAgent(async () => handle) },
+      storage: createStorage(), logger: createLogger() });
+    const session = await maker.createSession({ id: 'idle-task', agentKind: 'codex', workingDir: '/repo', model: 'm' });
+    const closed = vi.fn();
+    maker.on(event => { if (event.type === 'session:closed') closed(event); });
+    try {
+      expect(await maker.closeSessionIfCurrent(session, 'runtime-refresh', { onlyIfIdle: true })).toBeUndefined();
+      expect(close).not.toHaveBeenCalled();
+      expect(maker.getSessionCloseReason(session)).toBe('unexpected');
+      busy = false;
+      expect(await maker.closeSessionIfCurrent(session, 'runtime-refresh', { onlyIfIdle: true })).toBe('closed');
+      expect(closed).toHaveBeenCalledWith(expect.objectContaining({ session, reason: 'runtime-refresh' }));
+    } finally { await maker.shutdown(); }
+  });
+});
+
 describe('Maker agent status', () => {
   it('represents an optional unregistered runtime as binary-missing', async () => {
     const maker = new Maker({
@@ -96,6 +118,23 @@ describe('Maker agent status', () => {
       binaryReady: false,
       binaryPath: null,
       authReady: false,
+    });
+  });
+
+  // Unit regression: offline startup registers agents with a lazy runtime getter.
+  // Status must report the missing install instead of rejecting the IPC.
+  it('reports a registered agent whose lazy runtime is not installed as binary-missing', async () => {
+    const agent = createAgent(async () => undefined, 'claude-code');
+    Object.assign(agent, {
+      getBinaryPath: () => { throw new Error('Claude Code is not installed'); },
+      getAuthState: async () => ({ authenticated: true }),
+    });
+    const maker = new Maker({ agents: { 'claude-code': agent }, storage: createStorage(), logger: createLogger() });
+    await expect(maker.getAgentStatus('claude-code')).resolves.toEqual({
+      binaryReady: false,
+      binaryPath: null,
+      authReady: true,
+      identity: undefined,
     });
   });
 
@@ -1513,6 +1552,35 @@ describe('Maker session close events', () => {
       sessionId: 'session-1',
       session,
       reason: 'agent-switch',
+    });
+  });
+
+  it('hands the close facts sampled at close request to onClose, not a post-close query', async () => {
+    const hookGate = createDeferred();
+    const onClose = vi.fn(async () => { await hookGate.promise; });
+    const transientSamples: boolean[] = [];
+    let transient = true;
+    const maker = new Maker({
+      agents: { pi: createAgent(async () => createHandle({ id: 'transient-thread', agentKind: 'pi' }), 'pi') },
+      storage: createStorage(),
+      logger: createLogger(),
+      lifecycleHooks: {
+        isTransientCloseRequest: () => { transientSamples.push(transient); return transient; },
+        onClose,
+      },
+    });
+    const session = await maker.createSession({ id: 'transient-thread', agentKind: 'pi', workingDir: '/repo', model: 'm' });
+
+    await maker.closeSession(session.id, 'runtime-refresh');
+    // 请求入口只问一次：调用方的抑制窗口在 close 返回后即释放，到钩子里再问必然错过。
+    expect(transientSamples).toEqual([true]);
+    transient = false;
+    hookGate.resolve();
+
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(onClose).toHaveBeenCalledWith(session.id, expect.anything(), {
+      reason: 'runtime-refresh',
+      transient: true,
     });
   });
 

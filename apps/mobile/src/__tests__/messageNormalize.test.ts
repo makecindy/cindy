@@ -1394,7 +1394,9 @@ describe('normalizeRemoteMessages', () => {
     ]);
   });
 
-  it.each(['telegram', 'slack', 'x', 'feishu', 'lark', 'discord', 'wechat', 'wecom', 'dingtalk'])(
+  // #9266 unit regression: imSource.im='imessage' used to lose its card/align.
+  // Extend the real normalize entry's existing long-body/attachment matrix.
+  it.each(['telegram', 'slack', 'x', 'feishu', 'lark', 'discord', 'wechat', 'wecom', 'dingtalk', 'imessage'])(
     'renders local %s IM source as a Cindy card while keeping ordinary user actions and content',
     (im) => {
       const text = 'a'.repeat(20_100);
@@ -1426,7 +1428,7 @@ describe('normalizeRemoteMessages', () => {
         role: 'user',
         content: 'clean text',
         agentMeta: {
-          imSource: { im: 'feishu', userText: 'clean text', contentFormat: 'user-text' },
+          imSource: { im: 'imessage', userText: 'clean text', contentFormat: 'user-text' },
           hookSource: { im: 'slack', userText: 'legacy' },
         },
       }),
@@ -1437,7 +1439,7 @@ describe('normalizeRemoteMessages', () => {
         agentMeta: { imSource: { im: 'myspace', userText: 'spoofed', contentFormat: 'user-text' } },
       }),
     ]);
-    expect(both.hookSource).toMatchObject({ im: 'feishu', userTextContent: true });
+    expect(both.hookSource).toMatchObject({ im: 'imessage', userTextContent: true });
     expect(both.body).toBe('clean text');
     expect(unknown.hookSource).toBeUndefined();
     expect(unknown).toMatchObject({ body: 'plain', align: 'user' });
@@ -1775,4 +1777,14 @@ it('projects forwarded machine history without rewriting human text or persisted
   expect(composerDocumentFromSerializedMessage(rows[0].draftBody!).nodes).toEqual([{ type: 'text', text: content }]);
   expect(rows[1].body).toBe(content);
   expect(rows[1].draftBody).toBeUndefined();
+});
+
+
+it.each(['AskUserQuestion', 'ExitPlanMode'])('retains %s only for process-only tool views', toolName => {
+  const rows = [message({ id: 'call', role: 'tool_use', content: { toolName, input: { note: 'Question or plan detail' }, toolUseId: 'tool-id' }, toolUseId: 'tool-id' }),
+    message({ id: 'result', role: 'tool_result', content: 'Confirmed interaction', toolUseId: 'tool-id' })];
+  expect(normalizeRemoteMessages(rows)).toEqual([]);
+  expect(normalizeRemoteMessages(rows, { includeInteractionTools: true })).toMatchObject([
+    { kind: 'tool', label: toolName, secondaryBody: 'Confirmed interaction', toolSettled: true },
+  ]);
 });

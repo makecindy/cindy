@@ -1,3 +1,4 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { BotAvatar } from '../../../src/renderer/features/bots/BotAvatar';
 import { ThreadPanel } from '../../../src/renderer/features/bots/ThreadPanel';
 import { useState } from 'react';
@@ -88,7 +89,7 @@ function RefreshingProcess({ running }: { running: boolean }) {
       <Button data-testid="refresh-end" onClick={() => setLoading(false)}>Finish loading</Button>
       <Button data-testid="refresh-fail" onClick={() => { setLoading(false); setFailed(true); }}>Fail loading</Button>
     </div>
-    <WorkGroupBlock journal blockId="refreshing-process" isStreaming={running} durationMs={25000}
+    <WorkGroupBlock pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} journal blockId="refreshing-process" isStreaming={running} durationMs={25000}
       childItems={[{ kind: 'rendered', key: 'note', renderNode: () => <p>正在核对任务进展。</p> }]}
       deferred={{ key: 'details', expanded: true, loading, failed,
         toggle: () => undefined, retry: () => { setFailed(false); setLoading(true); } }} />
@@ -100,10 +101,10 @@ const disclosureHistory: ChatMessage[] = Array.from({ length: 8 }, (_, index) =>
   { ...text(`history-answer-${index}`, '记录已经核对。\n\n已完成的内容保持可查，未完成的事项继续跟进。', 'final_answer'), turnCompleted: true },
 ]).flat();
 
-function Subject({ done, retry, artifactCase, refresh, disclosure }: { done: boolean; retry: boolean; artifactCase?: string; refresh?: boolean; disclosure?: boolean }) {
+function Subject({ done, retry, artifactCase, refresh, disclosure, switched }: { done: boolean; retry: boolean; switched?: boolean; artifactCase?: string; refresh?: boolean; disclosure?: boolean }) {
   const [finished, setFinished] = useState(done);
   const [revision, setRevision] = useState(0);
-  const rows = retry ? retryMessages : messages;
+  const rows = retry ? retryMessages : switched ? [...messages.slice(0, 7), { ...text('model-switch', ''), systemCardType: 'agent-switch' as const, systemCardData: { modelOnly: true, fromModel: 'quota-test', toModel: 'gpt-6.1-sol', fromAgentKind: 'pi', toAgentKind: 'codex' } }, ...messages.slice(7)] : messages;
   if (refresh) return <RefreshingProcess running={!done} />;
   if (artifactCase) return <ArtifactStream artifactCase={artifactCase} />;
   return <div className="flex h-screen w-full min-w-0 flex-col bg-[var(--surface)]" data-ui-page-subject>
@@ -125,5 +126,5 @@ void mountPage({
       return { kind: missing ? 'missing' : 'file', birthtimeMs: Date.now() - 46000, mtimeMs: Date.now() - 46000 };
     } },
   }),
-  render: ctx => <Subject done={ctx.data.done === true} retry={ctx.data.retry === true} refresh={ctx.data.refresh === true} disclosure={ctx.data.disclosure === true} artifactCase={ctx.case.startsWith('artifacts-') ? ctx.case : undefined} />,
+  render: ctx => <Subject switched={ctx.data.switched === true} done={ctx.data.done === true} retry={ctx.data.retry === true} refresh={ctx.data.refresh === true} disclosure={ctx.data.disclosure === true} artifactCase={ctx.case.startsWith('artifacts-') ? ctx.case : undefined} />,
 });

@@ -1,4 +1,5 @@
 import { findRemoteHistoryView } from '@/session/remoteHistoryViews';
+import { pluginPreviewFixture } from './pluginPreviewFixture';
 import { groupExecutionVisualFixture } from './groupExecutionVisualFixture';
 import { attachmentPreviewFixture } from "./attachmentPreviewFixture";
 import { githubPrVisualFixture } from './githubPrVisualFixture';
@@ -29,6 +30,7 @@ import type {
   RemoteTextFilePreviewResult,
 } from '@/device-link/mobileMakerTransport';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import { pluginVisualFixture } from '@/debug/pluginVisualFixture';
 import { prCardVisualFixture } from '@/debug/prCardVisualFixture';
 import { mailDraftCardFixture, mailVisualFixture, VISUAL_MAIL_DRAFT_CALL_ID, VISUAL_MAIL_DRAFT_SESSION_ID } from '@/debug/mailVisualFixture';
@@ -173,6 +175,13 @@ export function visualMockDevices(): DeviceView[] {
       remoteControlEnabled: true,
       isSelf: false,
     },
+    // Opt-in six-computer glance scene; regular mocks and imported data stay unchanged.
+    ...(!realData && !awaitingRealData && process.env.EXPO_PUBLIC_CINDY_GLANCE_MULTI_DEVICE_DEMO === '1'
+      ? ['Studio', 'MacBook Pro', 'Windows PC', 'Mac mini', 'Linux Desktop'].map((name, index) => ({
+        deviceId: `visual-glance-computer-${index}`, name: `Demo ${name}`,
+        platform: 'darwin', appVersion: '0.0.0-visual-mock', lastSeenAt: ISO_NOW,
+        online: true, busy: false, remoteControlEnabled: true, isSelf: false,
+      })) : []),
     {
       deviceId: VISUAL_MOCK_OFFLINE_DEVICE_ID,
       name: 'CINDY Offline Mock Mac',
@@ -194,6 +203,10 @@ export function seedVisualMockStore(): void {
   const seededRealData = seedRealDataStore(realDataSnapshot);
   if (seededRealData) return;
 
+  // The mock auth owner is generation zero. Establish its empty in-memory roster cache
+  // before the six-host scene's ordinary roster replies populate it.
+  if (process.env.EXPO_PUBLIC_CINDY_GLANCE_MULTI_DEVICE_DEMO === '1')
+    readRemoteCollectionCache(`${visualMockUser.id}:0`, 'teammates');
   const sessions = visualMockSessions();
   remoteSessionStore.setDeviceIdentity(visualMockDevices().map((device) => ({
     deviceId: device.deviceId,
@@ -253,7 +266,8 @@ export function createVisualMockDeviceLinkContext(): DeviceLinkContextValue {
       lastSeenAt: NOW,
     },
     getPresenceAvailability: (candidateDeviceId: string) =>
-      candidateDeviceId === deviceId ? true : null,
+      candidateDeviceId === deviceId ? true
+        : visualMockDevices().find(device => device.deviceId === candidateDeviceId)?.online === true ? true : null,
     openLink: async (): Promise<LinkAcceptPayload> => ({
       appVersion: '0.0.0-visual-mock',
       allowlistHash: 'visual-mock',
@@ -276,6 +290,12 @@ async function visualMockInvoke<T = unknown>(
   channel: string,
   args: unknown[] = [],
 ): Promise<T> {
+  // The extra computers have no recent work; sample tasks belong to their original host.
+  if (_deviceId.startsWith('visual-glance-computer-')) {
+    if (channel === 'local-db:sessions:list') return [] as T;
+    if (channel === 'local-db:history:query') return { ok: true, sessions: [], hasMore: false } as T;
+    if (channel === 'maker:bot-delegations:list') return { ok: true, delegations: [] } as T;
+  }
   if (channel === 'local-db:messages:around-client-id' && typeof args[0] === 'string' && args[0].startsWith('qa-process-')) {
     if (args[0] === 'qa-process-unavailable') throw new Error('Process unavailable');
     return [
@@ -350,6 +370,8 @@ async function visualMockInvoke<T = unknown>(
     return { accepted: true } as T;
   }
   const realData = await loadVisualRealDataSnapshot();
+  const previewResult = realData ? undefined : pluginPreviewFixture(channel, args);
+  if (previewResult !== undefined) return previewResult as T;
   const mailResult = realData ? undefined : (mailVisualFixture(channel, args) ?? mailDraftCardFixture(channel, args));
   if (mailResult !== undefined) return mailResult as T;
   const pluginResult = realData ? undefined : pluginVisualFixture(channel, args);
@@ -774,6 +796,7 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
     message(sessionId, 'fixture-read', 'tool_use', { toolName: 'Read', input: { file_path: '/repo/tasks.md' }, toolUseId: 'fixture-read' }, -65000),
     message(sessionId, 'fixture-read-result', 'tool_result', 'Error: file not found', -64000, { toolUseId: 'fixture-read' }),
     message(sessionId, 'fixture-note2', 'assistant', '刚才的读取没有完成。我会保留已有记录，换一种方式继续核对。', -60000, { agentMeta: { assistantPhase: 'commentary' } }),
+    message(sessionId, 'fixture-model-switch', 'agent_switch', { fromAgentKind: 'pi', toAgentKind: 'codex', fromModel: 'quota-test', toModel: 'gpt-6.1-sol' }, -55000),
     message(sessionId, 'fixture-second-work', 'thinking', { text: '继续核对当前状态', durationMs: 1000 }, -50000),
     message(sessionId, 'fixture-search', 'tool_use', { toolName: 'Grep', input: { pattern: 'task', path: '/repo' }, toolUseId: 'fixture-search' }, -45000),
     message(sessionId, 'fixture-search-result', 'tool_result', 'Found task records', -44000, { toolUseId: 'fixture-search' }),
@@ -994,6 +1017,8 @@ function visualMockCapabilities(): unknown {
     permissionModes: [
       { id: 'ask', displayName: 'Ask' },
       { id: 'acceptEdits', displayName: 'Accept Edits' },
+      { id: 'auto', displayName: 'Auto Approval' },
+      { id: 'bypassPermissions', displayName: 'Full Access' },
       { id: 'plan', displayName: 'Plan' },
     ],
     // 模拟电脑支持协同：+ 面板里的「协同模式」表单可以直接看，不显示「版本过旧」。

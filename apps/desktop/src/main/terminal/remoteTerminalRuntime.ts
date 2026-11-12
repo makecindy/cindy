@@ -3,7 +3,7 @@ import { isSharedTaskPeer, isProviderSharePeer } from '@cindy/device-link';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidated, ownerScopedUserDataPath } from '../appSessionState.js';
 import { getSessionRowSnapshotStrict } from '../localDb/ipc/sessions.js';
 import { remoteInvoke } from '../device-link/index.js';
-import { deviceLinkApiFetch } from '../device-link/deviceLinkApi.js';
+import { deviceLinkApiFetch } from '../device-link/deviceLinkApi.desktop.js';
 import { getRemoteSshPoolHydrated } from '../remote-ssh/index.js';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
 import { createLogger } from '../logger.js';

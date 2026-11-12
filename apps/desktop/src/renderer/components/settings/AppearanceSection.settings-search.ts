@@ -85,6 +85,7 @@ export const appearanceSettings = defineSettings({
       'settings.appearance.wallpaper.desktopVisibilityHint',
       'settings.appearance.wallpaper.desktopBlurLabel',
       'settings.appearance.wallpaper.desktopBlurHint',
+      'settings.appearance.wallpaper.desktopBlurSwitchHint',
 
     ],
     options: [
@@ -123,6 +124,15 @@ export const appearanceSettings = defineSettings({
     tab: 'appearance',
     targetId: 'settings-search-settings-appearance-themeLabel',
     titleKey: 'settings.appearance.themeLabel',
+    sectionKey: 'settings.appearance.themeLabel',
+  },
+  createTheme: {
+    id: 'appearance.createTheme',
+    tab: 'appearance',
+    targetId: 'settings-search-target-appearance-create-theme',
+    fallbackTargetId: 'settings-search-target-appearance-theme',
+    titleKey: 'settings.appearance.createTheme.label',
+    descriptionKey: 'settings.appearance.createTheme.hint',
     sectionKey: 'settings.appearance.themeLabel',
   },
   wallpaperTitle: {

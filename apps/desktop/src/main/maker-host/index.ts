@@ -39,7 +39,7 @@ import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { setSessionArchiveSyncRequester } from '../localDb/sessionArchiveSync.js';
 import { getActiveAppSession, activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { remoteCodexProvider } from './ssh-codex-models.js';
-import { getActiveAuthRealm } from '../authManager.js';
+import { getActiveAuthRealm, getAuthState } from '../authManager.js';
 import { getCustomProvider, updateCustomProviderIfUnchanged } from './custom-provider-store.js';
 import { refreshCustomProvidersIntoCatalog } from './createDesktopProviderService.js';
 import { hasCodexApiConnections, setCodexApiModelProbe } from './codex-api-model-capabilities.js';
@@ -102,7 +102,7 @@ import { getWorkerLink, updateWorkerStatus, getRemoteOrcaSession, listWorkersByL
 import { createOrcaRemoteWorkerBridge } from '../maker-ipc/orcaRemoteWorkerBridge.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { makerStartupGate } from './startup-gate.js';
-import { cleanupSessionTempAttachments } from '../maker-ipc/normalizeAttachments.js';
+import { cleanupSessionTempAttachments } from '../maker-ipc/normalizeAttachments.desktop.js';
 import { resolveGhostFsSessionSnapshot } from '../maker-ipc/ghostFsSessionSnapshot.js';
 import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
 import { getActiveInteractionRoute, requestHostInteraction } from '../maker-ipc/interactionRouter.js';
@@ -191,7 +191,7 @@ import {
 import { createToolResultImageDescriptor } from '../vision-bridge/tool-result-image-descriptor.js';
 import * as blobStore from '../cindy-media/blobStore.desktop.js';
 import { buildPiVisionBridgeEnv } from '../vision-bridge/pi-vision-bridge-env.js';
-import { captureCodexLocalAuthPolicy, resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
+import { captureCodexLocalAuthPolicy, resolveConnectedDefaultProviderIdForModel, resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
 import { resolveSessionCcDebugFile, trackSessionCcDebugFile } from '../logger.js';
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { getThinkingEnabledFromMemory } from './newMakerDefaultsCache.js';
@@ -321,7 +321,7 @@ import {
   ESSENTIAL_PLUGIN_IDS,
   resolveBotAllowedBuiltinPluginIds,
 } from './plugins/types.js';
-import { cleanupComputerDriverSession } from '../mcp-integrations/computer.js';
+import { cleanupComputerDriverSession } from '../mcp-integrations/computer.desktop.js';
 import { createPluginRegistry, resetPluginRegistry } from './plugins/index.js';
 import {
   withCodexMcpDiscoveryContext,
@@ -402,6 +402,7 @@ import { createMemoryReviewOneShot } from './memory-review-one-shot.js';
 import { prepareExternalCodexSessionForResume } from './codex-local-sessions.js';
 import {
   rehydrateCloseSuppression,
+  shouldSkipOnCloseSideEffects,
   withRehydrateCloseSuppressed,
 } from './rehydrateCloseSuppression.js';
 import {
@@ -1020,26 +1021,27 @@ export function getMaker(): Maker {
   }
   if (!_maker) {
     makerStartupGate.assertComplete();
-    // splash 已经 prepare 过, 这里只是同步读 cache 路径; 任一缺失说明 bootstrap
-    // 顺序错了, 早抛比 session.start 时再炸更清晰。
-    const claudePath = getReadyBinaryPath('claude-code');
-    if (!claudePath) {
-      throw new Error(
-        'getMaker: Claude binary not provisioned (bootstrap must run agent-binaries.prepare("claude-code") before getMaker)',
-      );
-    }
-    const codexPath = getCachedBinaryStatus('codex').binaryPath;
-    if (!codexPath) {
-      throw new Error(
-        'getMaker: Codex binary not provisioned (bootstrap must run agent-binaries.prepare("codex") before getMaker)',
-      );
-    }
-    ensureCodexCliLauncher(codexPath);
-    // bundled ripgrep 检查与上面 claude/codex 二进制同层:真正的启动期 fail-fast
-    // 在 splash check-environment(Phase 2.5,缺 rg 时 splash 进失败态可重试);
-    // 这里是防御性断言 —— 走到本函数说明 bootstrap 已完成环境检查,缺 rg 即顺序
-    // 错误,早抛比 spawn 时再炸清晰(throw 会被 bootstrap 的 register catch 兜住
-    // 并留 ERROR 日志,与 claude/codex 缺失的处理一致)。
+    // Resolve paths only when an agent is used. A fresh offline install still
+    // needs Maker's local history/settings IPCs, and background installation can
+    // make an agent available without rebuilding Maker or disturbing sessions.
+    const requireBinary = (kind: 'claude-code' | 'codex'): string => {
+      const binary = getReadyBinaryPath(kind);
+      if (!binary) {
+        const name = kind === 'claude-code' ? 'Claude Code' : 'Codex';
+        throw new Error(`${name} is not installed. Connect to the network, then open Settings → About to install it.`);
+      }
+      return binary;
+    };
+    // The launcher only changes with the resolved install; avoid file IO per spawn.
+    let codexLauncherFor: string | undefined;
+    const codexPath = (): string => {
+      const binary = requireBinary('codex');
+      if (codexLauncherFor !== binary) {
+        ensureCodexCliLauncher(binary);
+        codexLauncherFor = binary;
+      }
+      return binary;
+    };
     ensureBundledRipgrepReady();
 
     // 图片送进模型前的 last-mile resize (省 vision token)。host 注入 logger
@@ -1058,11 +1060,6 @@ export function getMaker(): Maker {
       // 链上没产出再由 manager 回退默认路由。
       reviewOneShot: createMemoryReviewOneShot(),
     });
-
-    // Plugin registry — 先于 agent 构造, 让 createDesktopMcpProviders 拿 registry
-    // 包进每个 MCP provider 的 isEnabled 闭包里。registry 内部读 <userData>/plugin-prefs.json
-    // 和项目 .claude/settings.json, mtime-based 缓存, 只在 session start 时同步检查。
-    const pluginRegistry = createPluginRegistry();
 
     const makerMemoryProviderDeps = {
       runtimeCapabilities: async (context: import('@cindy/mcps').LiziMcpSessionContext, query: AgentCapabilityQuery) => {
@@ -1107,7 +1104,9 @@ export function getMaker(): Maker {
       getAppVersion: () => app.getVersion(),
       getMakerMemoryManager: () => makerMemoryManager,
       lspPool: getLspPool(),
-      pluginRegistry,
+      // Maker can initialize before login commits its owner. Resolve on every
+      // read so long-lived providers never retain the no-owner/previous owner registry.
+      get pluginRegistry() { return createPluginRegistry(); },
       invokeRemote: remoteInvoke,
       captureSharedTaskCommand: (sessionId: string, assertCurrent: () => void) => captureSharedTaskAgentCommand(sessionId, assertCurrent, {
         ready: waitForSharedTaskRelay, online: isSharedTaskRelayOnline, available: isSharedTaskAvailable,
@@ -1461,7 +1460,7 @@ export function getMaker(): Maker {
       scanLocalCustomizations,
       auth: desktopClaudeAuthAdapter,
       runtimeConfig: buildDesktopClaudeRuntimeConfig(getClaudeEndpoint),
-      binaryPath: claudePath,
+      get binaryPath() { return requireBinary('claude-code'); },
       logger: desktopMakerLogger,
       turnChangeCapture: {
         beforeKnownFileWrite: captureKnownFileBefore,
@@ -1618,7 +1617,7 @@ export function getMaker(): Maker {
             ensureForward: ensureRemoteMcpForward,
             // collab 全局禁用 (Tier 4) 时整个不注入 — bridge 名单不反映
             // 开关 (codex-connector R20 P2, 与 codex daemon 侧同闸门)。
-            isCollabEnabled: () => pluginRegistry.isEnabled('collab'),
+            isCollabEnabled: () => createPluginRegistry().isEnabled('collab'),
             onOptionalInjectionError: (err) => {
               desktopMakerLogger.warn('cc remote MCP injection skipped', {
                 remoteHostId,
@@ -1784,7 +1783,7 @@ export function getMaker(): Maker {
       prepareCodexSkills: prepareCindyCodexSkills,
       auth: desktopCodexAuthAdapter,
       runtimeConfig: desktopCodexRuntimeConfig,
-      binaryPath: codexPath,
+      get binaryPath() { return codexPath(); },
       logger: desktopMakerLogger,
       disableCodexPluginRuntime: true,
       registerLocalCodexAppServerProcess: ({ pid, role }) => registerCodexProcessRole(pid, role),
@@ -1848,9 +1847,9 @@ export function getMaker(): Maker {
         resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'codex',
           resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'codex', providerId, modelId), modelId),
       resolveCodexContextWindowInfo: (modelId, config, reportedUsableWindow, codexHome) =>
-        readCodexContextWindowInfo({ codexHome: codexHome ?? getCodexHome(), binaryPath: codexPath, modelId, config, reportedUsableWindow }),
+        readCodexContextWindowInfo({ codexHome: codexHome ?? getCodexHome(), binaryPath: codexPath(), modelId, config, reportedUsableWindow }),
       prepareCodexHostToolCatalog: async (modelId, contextWindow) => {
-        let catalog = await readNativeCodexCatalog(codexPath, getCodexHome());
+        let catalog = await readNativeCodexCatalog(codexPath(), getCodexHome());
         if (!findCodexCatalogModel(catalog, modelId)) catalog.models.push(nativeCodexFallbackModel(modelId));
         if (contextWindow !== null) catalog = patchCodexModelMaxContextWindow(catalog, modelId, contextWindow);
         const restricted = { ...catalog, models: catalog.models.map(model => ({...model, apply_patch_tool_type: null, supports_search_tool: false})) };
@@ -1912,7 +1911,7 @@ export function getMaker(): Maker {
       resolveCodexSubagentRoutingSignature: createCodexRoutingSignature(() =>
         getDesktopProviderService().listProviders({ allowSideEffects: false })),
       prepareCodexExtraSpawnConfig: createCodexSpawnConfig({
-        binaryPath: codexPath,
+        get binaryPath() { return codexPath(); },
         getCodexHome, getCodexExtraSpawnConfig, broadcastCodexRuntimeRoute, readClaudeApiKey, isReplacedCindyGatewayKey, getDesktopSelectableCatalog, resolveDesktopModelContextProviderId,
         hasCodexOAuthLogin: () => desktopCodexAuthAdapter.hasCodexOAuthLogin(),
         listProviders: () => getDesktopProviderService().listProviders({ allowSideEffects: false }),
@@ -1927,7 +1926,7 @@ export function getMaker(): Maker {
               buildRemoteCodexSessionMcpConfig(ctx.remoteHostId!, instance, {
                 bridgeInstanceId: getActiveCodexBridgeInstanceId(),
                 serverNames: getActiveCodexBridgeServerNames() ?? [],
-                collabEnabled: pluginRegistry.isEnabled('collab'),
+                collabEnabled: createPluginRegistry().isEnabled('collab'),
                 makerMemoryEnabled: _maker?.makerMemory?.isEnabled() ?? false,
                 vendorOptions: session?.vendorOptions,
               }),
@@ -2122,8 +2121,12 @@ export function getMaker(): Maker {
     // 装配第二步: 把 agents 引用挂回 manager (manager.enable() 时遍历 setMemory(false))。
     // 保留同一份可变 map，供可选 Pi runtime 在 Maker 构造后动态注册。
     const makerAgents: ConstructorParameters<typeof Maker>[0]['agents'] = {
-      'claude-code': withSubscriptionAccounts(claudeAgent),
-      codex: withSubscriptionAccounts(codexAgent),
+      'claude-code': withSubscriptionAccounts(claudeAgent, desktopClaudeAuthAdapter),
+      codex: withSubscriptionAccounts(codexAgent, {
+        getState: desktopCodexAuthAdapter.getState.bind(desktopCodexAuthAdapter),
+        resolveCodexHistoryHome: async threadId => (await readCodexThreadStorageReadOnly(threadId))?.historyHome,
+        resolveDefaultProvider: model => model ? resolveConnectedDefaultProviderIdForModel(model, 'codex') : null,
+      }),
     };
     attachAgentsToMakerMemory(makerMemoryManager, makerAgents);
     if (makerMemoryManager.isEnabled()) {
@@ -2561,6 +2564,7 @@ export function getMaker(): Maker {
     });
 
     const buildBotRuntimeDeps = (skillLinksChanged = false): BotProfileRuntimeDeps => ({
+      getUserName: () => getAuthState().user?.name,
       listSkills: async ({ agentKind, workingDir, remoteHostId }) => {
         if (!_maker) throw new Error('Maker is not ready while hydrating Bot runtime');
         const result = await _maker.listAgentSkills(agentKind, {
@@ -2904,12 +2908,16 @@ export function getMaker(): Maker {
         onCodexProductPromptDelivery: async ({ sessionId, historyHasProductPrompt }) => {
           await writeCodexHistoryHasProductPrompt(sessionId, historyHasProductPrompt);
         },
-        onClose: async (sessionId, options) => {
-          // 抑制态必须在首个 await 前取样:Maker.close 不等 onClose,调用方(漂移
-          // 回收包裹/任务移动/桌面发送 seam)的抑制窗口会在 close 返回后即释放,
-          // 而本钩子先等 worktree lease 的文件操作才查抑制表 —— 重查会错过窗口,
-          // 让重建期间的 close 照删暂存附件(Greptile P1,2026-11-10)。
-          const rehydrateSuppressedAtClose = rehydrateCloseSuppression.isSuppressed(sessionId);
+        isTransientCloseRequest: (sessionId) => rehydrateCloseSuppression.isSuppressed(sessionId),
+        onClose: async (sessionId, options, close) => {
+          // 瞬态重建（任务移动/桌面发送 seam/漂移回收/切模等）不能释放 worktree、
+          // 不能清暂存附件：重建后的 turn 还要用。走 Maker close 请求的有固化事实；
+          // 自关闭（handle 在 preflight 里自己退出）没有事实，只能靠钩子入口的窗口快照。
+          // 两者都必须在首个 await 前取：close 不等本钩子，窗口随时会释放。
+          const transient = shouldSkipOnCloseSideEffects(
+            close,
+            rehydrateCloseSuppression.isSuppressed(sessionId),
+          );
           clearUsagePricing(sessionId);
           const lease = worktreeRuntimeLeases.get(options);
           if (lease) {
@@ -2929,13 +2937,14 @@ export function getMaker(): Maker {
             // 这)。回收只由会话显式删除/归档驱动,见 localDb/ipc/sessions.ts →
             // worktree/sessionRemovalRecycle.ts。
             await WorktreePool.releaseWorktree(sessionId).catch(() => undefined);
-          }, { forceSkip: rehydrateSuppressedAtClose });
+          }, { skip: transient });
         },
       },
     });
-    // 漂移回收的 close 必须在抑制窗口内:直发链路(IM turnRunner/hook/scheduler/goal)
-    // 回收后立刻按 DB 行重建同一任务,窗口内 onClose 跳过临时附件清理与 worktree
-    // 释放 —— 否则重建后的 turn 会丢转录里引用的暂存附件(Codex P2,2026-11-10)。
+    // 漂移回收的 close 仍在抑制窗口内：直发链路(IM turnRunner/hook/scheduler/goal)
+    // 回收后立刻按 DB 行重建同一任务，窗口内 register 的关闭编排不把它当用户主动
+    // 关闭（输入边界、再续令牌留给重建后的 runtime）。onClose 的重副作用由 close
+    // 事实（runtime-refresh）独立保证，不再依赖这个窗口的时序。
     // 桌面发送事务的同一 close 在 register.ts 的 deps seam 处已各自包裹,此处收口
     // 其余全部直发调用方(getMaker 侧不经过 seam)。
     const baseRecyclePiRuntimeIfResourcesDrifted

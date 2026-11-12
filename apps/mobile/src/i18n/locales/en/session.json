@@ -1,5 +1,12 @@
 {
   "githubPrs": {
+    "status": {
+      "open": "Open",
+      "draft": "Draft",
+      "merged": "Merged",
+      "closed": "Closed"
+    },
+    "statusUnavailable": "Status not loaded yet",
     "title": "Manage PR Links",
     "hint": "Up to 3 in the header; pinned PRs appear first",
     "empty": "Paste a GitHub PR or GitLab MR URL to add it",
@@ -241,7 +248,7 @@
           "plugins": "Plugin catalogue",
           "memoryRules": "Memory instructions",
           "memoryIndex": "Memory index",
-          "profile": "Teammate profile",
+          "profile": "Buddy profile",
           "user": "User instructions",
           "directories": "Additional directories",
           "native": "Pi instructions",
@@ -652,6 +659,8 @@
     "taskAlreadyCreated": "This task already exists on the computer. Its saved messages will resume there."
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_FULL": "Every account or computer that can run this task has reached its concurrency limit. Wait for a running task to finish, or raise the limit in the provider settings.",
+    "SUBSCRIPTION_ACCOUNTS_FULL": "Every account or computer that can run this task has reached its concurrency limit. Wait for a running task to finish, or raise the limit in the provider settings.",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "This SSH task cannot switch Harness. Choose a model in its current Harness, or create a new SSH task with the Harness you need.",
     "MODEL_SELECTION_UNAVAILABLE": "The selected model is no longer available from its provider. Check the connection in Settings or choose another available model.",
     "HARNESS_SWITCH_NOT_READY": "The Harness switch is not ready. Check the error details and retry after the Harness is ready.",

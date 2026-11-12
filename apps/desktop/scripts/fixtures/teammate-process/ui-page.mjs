@@ -9,6 +9,7 @@ export default {
   real: 'MessageStream, ThreadPanel with compact styles, BotSessionTaskResultCard, teammate grouping, WorkGroupBlock, GeneratedFilesCard and SheetPreview, Markdown, theme and i18n',
   notCovered: 'Full CCAgentSessionView, login, host execution, document opening, native mobile layout and transport',
   cases: { default: { about: 'Live private turn with stage notes and initial thinking', data: { done: false } }, finished: { about: 'Completed private turn with final answer outside', data: { done: true } }, retry: { about: 'Two failed attempts followed by a running read: current action stays visible', data: { done: false, retry: true } },
+    'model-switch': { about: 'The existing switch notice stays visible between collapsed process records', data: { done: true, switched: true } },
     disclosure: { about: 'Frame-by-frame disclosure stability in a long companion conversation', data: { done: true, disclosure: true } },
     'disclosure-live': { about: 'Inspection survives completion, late updates and explicit follow', data: { disclosure: true } },
     'disclosure-reduced': { about: 'Reduced motion preserves the same reading position', data: { done: true, disclosure: true, reduced: true } },
@@ -23,6 +24,21 @@ export default {
     'artifacts-missing': { about: 'Missing files leave no empty avatar row' },
   },
   async check(page, ui) {
+    if (ui.data.switched) {
+      const notice = page.getByRole('separator');
+      await notice.waitFor();
+      assert.match(await notice.innerText(), /quota-test.*gpt-6\.1-sol/s);
+      const headings = page.locator('[data-teammate-process] > button');
+      assert.equal(await headings.count(), 2);
+      for (const heading of await headings.all()) assert.equal(await heading.getAttribute('aria-expanded'), 'false');
+      assert.equal(await notice.locator('xpath=ancestor::*[@data-teammate-process]').count(), 0);
+      await ui.capture('visible-switch');
+      await headings.first().click();
+      assert.equal(await notice.isVisible(), true);
+      await headings.first().click();
+      assert.equal(await notice.isVisible(), true);
+      return;
+    }
     if (ui.data.disclosure) {
       // Browser integration: a long history plus an expanded tail reproduces
       // scroll-range clamping. Sample animation frames; endpoint screenshots

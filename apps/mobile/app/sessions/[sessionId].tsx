@@ -1,3 +1,4 @@
+import { playHaptic } from '@/platform/haptics';
 import { parseSourceSessionTarget } from '@cindy/maker-shared/message-source';
 import { TaskArchiveUndoSlot } from '@/session/TaskArchiveUndoNotice';
 import { composerRowChrome } from '@/session/composerGeometry';
@@ -119,7 +120,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { Text, TextInput } from '@/components/AppText';
-import { usePendingQuestionScroll } from '@/session/usePendingQuestionScroll';
+import { PendingAnswerTrailingInsetContext, usePendingQuestionScroll } from '@/session/usePendingQuestionScroll';
 import Reanimated, { useAnimatedStyle } from 'react-native-reanimated';
 import { MobileAgentMark } from '@/components/MobileAgentMark';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
@@ -418,7 +419,6 @@ import { QuoteCapsule } from '@/session/QuoteCapsule';
 import { formatQuotesForSend, stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
-import { confirmFullAccessChange } from '@/session/fullAccessConfirmation';
 import {
   confirmAgentLocationForPick,
   confirmMobileSessionAgentSwitch,
@@ -2076,8 +2076,16 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             };
           }
         }
+        let retainedImage = false;
         const resolved = await resolveMobileRemoteMedia(media, {
           fetchRemoteMedia: deps.maker.fetchRemoteMedia,
+          ...(diskCache ? { retainLocalImage: async (image: MobileResolvedRemoteMedia) => {
+            const stored = await diskCache.store(bareDiskSource, image.url, image.mimeType, image.size);
+            const copy = stored ? await diskCache.lookup(bareDiskSource) : null;
+            if (!copy) throw new Error('IMAGE_CACHE_FAILED');
+            retainedImage = true;
+            return { ...image, url: copy.uri, expiresAt: REMOTE_MEDIA_NEVER_EXPIRES };
+          } } : {}),
           ...(diskCache ? { retainLocalVideo: async (video: MobileResolvedRemoteMedia) => {
             const stored = await diskCache.store(bareDiskSource, video.url, video.mimeType, video.size);
             const copy = stored ? await diskCache.lookup(bareDiskSource) : null;
@@ -2107,7 +2115,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             previewable: resolved.previewable,
           };
         }
-        if (media.kind === 'image' && resolved.previewable && diskCache) {
+        if (media.kind === 'image' && resolved.previewable && diskCache && !retainedImage) {
           // 登记落盘 promise(按 ossKey):退屏 DELETE 会先等它结束再删对象。
           // 传 size:超出缓存预算的对象直接跳过落盘,不白下载整个对象。
           // 走到这里的都是完整原图字节(inline 缩略图已在上面 return):即便请求方
@@ -5760,6 +5768,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           onStateChanged: (next) => {
             // 旧 controller 的取消可晚于新启动完成,只允许本次启动交接 UI 状态。
             if (voiceStartupSeqRef.current !== startupSeq) return;
+            if (next === 'listening') playHaptic('commit');
             setVoiceState(next);
           },
           onError: (message) => {
@@ -7871,7 +7880,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           disabled={composerSendDisabled}
           hitSlop={COMPOSER_CONTROL_HIT_SLOP}
           onLayout={measureSendButtonTarget}
-          onPress={send}
+          onPress={() => { playHaptic('commit'); void send(); }}
           pressInFallback
           pressedStyle={styles.sendButtonPressed}
           style={[
@@ -8838,14 +8847,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       : (runtimeOptions?.permissionOptions.find((option) => option.id !== 'plan')?.id ?? 'ask')
     : (currentSession?.permissionMode ?? 'ask');
   // 权限模式独立浮窗(2026-07-29 用户裁决,对齐 Codex 与新建页):composer 左侧图标钮
-  // 点开;选择走既有 confirmFullAccessChange + maker:set-permission-mode 链路。
+  // 点开;选择走既有 maker:set-permission-mode 链路。
   const displayPermissionLabel =
     runtimeOptions?.permissionOptions.find((option) => option.id === displayPermissionMode)?.label
       ?? displayPermissionMode;
   const selectSessionPermissionMode = useCallback((mode: string) => {
     void (async () => {
       if (!currentSession) return;
-      if (!(await confirmFullAccessChange(currentSession.permissionMode, mode))) return;
       await runControlAction(
         () => maker.setPermissionMode(sessionId, mode),
         { permissionMode: mode },
@@ -10802,6 +10810,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         <MountOnFirstOpen open={modelSheetOpen && canConfigureSessionModel}>{() =>
               currentSession && canConfigureSessionModel && runtimeOptions && modelSheetSelection && modelSheetRuntimeOptions ? (
           <ModelPickerSheet
+            subscriptionTaskId={sessionId}
             unified={{
               currentSelection: { agentKind: sessionAgentKind, activeModelId: currentSession.model, selectedProviderId: currentSession.providerId ?? null, selectedEffort: currentSession.effort ?? '', selectedFastMode: currentSession.fastMode ?? false,
                     },
@@ -10937,7 +10946,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           />
         ) : null}</MountOnFirstOpen>
         {/* 权限模式独立浮窗(composer 权限图标钮点开)。两端同一语义:点选先关浮窗,关闭完成后
-            再走 confirmFullAccessChange + maker:set-permission-mode。 */}
+            再走 maker:set-permission-mode。 */}
         {currentSession && runtimeOptions ? (
           <NativePermissionSheet
             visible={permissionSheetOpen && canUseRemoteSessionControls}
@@ -11379,10 +11388,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   nestedScrollEnabled
                   onFocus={pendingQuestionScroll.onFocus}
                   onBlur={pendingQuestionScroll.onBlur}
-                  onLayout={pendingQuestionScroll.reveal}
-                  onContentSizeChange={pendingQuestionScroll.reveal}
+                  onLayout={pendingQuestionScroll.onLayout}
+                  onContentSizeChange={pendingQuestionScroll.onContentSizeChange}
                   testID="interaction.bottomScroll"
                 >
+                <PendingAnswerTrailingInsetContext.Provider value={pendingQuestionScroll.setTrailingInset}>
                 <InteractionPanel
                   fileContext={chatFilePathContextValue}
                   companion={companionChat}
@@ -11398,6 +11408,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   onPlanViewerStateChange={setPendingPlanViewerState}
                   onError={setError}
                 />
+                </PendingAnswerTrailingInsetContext.Provider>
                 </ScrollView>
               )}
             </View>

@@ -152,6 +152,11 @@ import {
   type QuotaLevel,
 } from '@cindy/maker-shared/quota-level';
 import { QUOTA_TEXT_COLOR_CLASSES } from './QuotaBar';
+import {
+  sessionAccountCodexPayload,
+  sessionAccountDisplay,
+  useSessionSubscriptionAccount,
+} from '../new-chat/SessionSubscriptionAccount';
 
 // XD 网关 / 托管账号之前会跳到内部用量看板(内部域名)—— 开源前移除该硬编码。
 // 登录随凭据只下发 { endpoint, apiKey }(见 main/model-access/credentialsSync.ts),不含
@@ -439,6 +444,22 @@ function getCodexApiEmptyState(
 // ── Claude 订阅 (Anthropic OAuth) 形态 ───────────────────────────────────────
 // 主 chip 方案 B: 5h 剩余% · 当前模型周限剩余% (weekly_scoped 按模型家族匹配, 匹配
 // 不到回退总周限并标注口径) · 本会话价值 $。utilization 语义 = 已用百分比 (0-100)。
+
+/** Account-wide rejection must not leak another model's exhausted quota into this task. */
+function isClaudeSessionRejected(
+  snapshot: ClaudeSubscriptionUsageSnapshot | null,
+  modelId: string | null | undefined,
+): boolean {
+  if (snapshot?.rateLimitStatus?.trim().toLowerCase() !== 'rejected') return false;
+  // An explicit rejection of a shared window still applies even before its usage reaches 100%.
+  if (snapshot.representativeClaim === 'five_hour' || snapshot.representativeClaim === 'seven_day') return true;
+  const exhausted = (window: ClaudeUsageWindow | null | undefined) =>
+    !!window && Number.isFinite(window.utilization) && window.utilization >= 100;
+  const scoped = matchScopedWindowForModel(snapshot.scoped, modelId);
+  if ([snapshot.fiveHour, snapshot.sevenDay, scoped].some(exhausted)) return true;
+  // Retain unclassified rejections when there is no model-specific exhaustion to explain them.
+  return !snapshot.scoped?.some(exhausted);
+}
 
 /**
  * 当前会话生效的周限窗口: 命中当前模型的 weekly_scoped 条目优先 (label 带模型名,
@@ -1105,7 +1126,20 @@ export function TodaySpendChip({
         !isClaudeSubscription &&
         !isSubscriptionBridge &&
         (providerId == null || providerId === 'xd')));
-  const shouldReadLocalCodexAccountUsage = usesCodexQuotaForm && !isAnyRemoteSession;
+  // 账号池：任务固定在一个账号上，用量与账号名只读那个账号，不读默认账号或下一个待分配的账号。
+  // 默认账号、没有账号池或旧任务时 taskAccount 不替换用量，原来的读取就是这个账号。
+  const taskAccount = sessionAccountDisplay(
+    useSessionSubscriptionAccount(
+      !accountUnreadable && (usesCodexQuotaForm || (isClaudeSubscription && !isSubscriptionBridge))
+        ? providerId
+        : null,
+      accountDeviceId,
+    ),
+    t,
+  );
+  const readsTaskAccountUsage = taskAccount?.replacesUsage === true;
+  const shouldReadLocalCodexAccountUsage =
+    usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage;
   // 会话金额只由已发生的 turn 决定，不由当前选中的 provider/模型决定。实际费用从
   // session ledger 读取，订阅价值从消息明细重建，再统一汇总成“本对话”投影。
   const sessionUsage = useSessionUsageMoney(sessionId, sessionInitialMoney, sessionInitialCostUsd);
@@ -1135,18 +1169,34 @@ export function TodaySpendChip({
   // device-link 远程 codex / chatgpt-bridge:账号所在电脑的权威组合 payload 镜像,选槽 / 选桶
   // 与本机同口径在消费点执行(selectRemoteCodexAccountUsage)。
   const remoteCodexAccountPayload = useRemoteCodexAccountUsage(
-    isDeviceLinkRemote && usesCodexQuotaForm ? accountDeviceId : null,
+    isDeviceLinkRemote && usesCodexQuotaForm && !readsTaskAccountUsage ? accountDeviceId : null,
     providerId ?? 'openai',
   );
-  const accountUsage = isDeviceLinkRemote
-    ? selectRemoteCodexAccountUsage(
-        remoteCodexAccountPayload,
-        isChatgptBridge ? 'openai-web' : 'app-server',
-        modelId,
-      )
-    : localAccountUsage;
-  const { snapshot: codexRateLimits, refresh: refreshCodexRateLimits } = useCodexRateLimits(
-    usesCodexQuotaForm && !isAnyRemoteSession,
+  const taskAccountCodexPayload = React.useMemo(
+    () =>
+      readsTaskAccountUsage && usesCodexQuotaForm
+        ? sessionAccountCodexPayload(taskAccount?.usage ?? null)
+        : null,
+    [readsTaskAccountUsage, usesCodexQuotaForm, taskAccount?.usage],
+  );
+  const accountUsage =
+    isDeviceLinkRemote || readsTaskAccountUsage
+      ? selectRemoteCodexAccountUsage(
+          readsTaskAccountUsage ? taskAccountCodexPayload : remoteCodexAccountPayload,
+          isChatgptBridge && !readsTaskAccountUsage ? 'openai-web' : 'app-server',
+          readsTaskAccountUsage && isChatgptBridge
+            ? modelId?.slice(CHATGPT_MODEL_PREFIX.length)
+            : modelId,
+        )
+      : localAccountUsage;
+  // 重置次数属于默认账号；任务用的是账号池里的其他账号时不显示。
+  const {
+    snapshot: codexRateLimits,
+    refresh: refreshCodexRateLimits,
+    failed: codexQuotaReadFailed,
+    refreshing: codexQuotaRefreshing,
+  } = useCodexRateLimits(
+    usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage,
     providerId ?? 'openai',
   );
   const manualReset = useCodexRateLimitReset(codexRateLimits, refreshCodexRateLimits, providerId ?? 'openai');
@@ -1186,16 +1236,20 @@ export function TodaySpendChip({
   // 优先(不消耗 Claude 订阅额度),此时不读。device-link 远程会话 / 远程 Agent 读账号所在
   // 电脑的镜像,本机快照与其无关(额度事实在那台),两个 hook 的 enabled 互斥。
   const localClaudeSubscriptionUsage = useClaudeSubscriptionUsage(
-    isClaudeSubscription && !isSubscriptionBridge && !isDeviceLinkRemote,
+    isClaudeSubscription && !isSubscriptionBridge && !isDeviceLinkRemote && !readsTaskAccountUsage,
     providerId ?? 'anthropic',
   );
   const remoteClaudeSubscriptionUsage = useRemoteClaudeSubscriptionUsage(
-    isDeviceLinkRemoteClaudeSubscription && !isSubscriptionBridge ? accountDeviceId : null,
+    isDeviceLinkRemoteClaudeSubscription && !isSubscriptionBridge && !readsTaskAccountUsage
+      ? accountDeviceId
+      : null,
     providerId ?? 'anthropic',
   );
-  const claudeSubscriptionUsage = isDeviceLinkRemote
-    ? remoteClaudeSubscriptionUsage
-    : localClaudeSubscriptionUsage;
+  const claudeSubscriptionUsage = readsTaskAccountUsage
+    ? (taskAccount?.usage?.claude ?? null)
+    : isDeviceLinkRemote
+      ? remoteClaudeSubscriptionUsage
+      : localClaudeSubscriptionUsage;
   const latestTurnUsage = useLatestTurnUsageSummary(sessionId);
   const quotaCardSessionUsage = toQuotaHoverCardSessionUsage(sessionUsage, sessionTokens);
   const quotaCardTurnUsage = toQuotaHoverCardTurnUsage(latestTurnUsage, t);
@@ -1705,7 +1759,7 @@ export function TodaySpendChip({
       ...(usesDeepSeekAccountForm && deepSeekBalanceSegment ? [deepSeekBalanceSegment] : []),
       ...windowSegments,
     ];
-    if (isClaudeSubscription && claudeSubscriptionUsage?.rateLimitStatus?.trim().toLowerCase() === 'rejected') {
+    if (isClaudeSubscription && isClaudeSessionRejected(claudeSubscriptionUsage, modelId)) {
       chipSegments.push(
         <span key="claude-rejected" className="text-[var(--error-fg)]">
           {t('todaySpend.claude.temporarilyLimited')}
@@ -1764,9 +1818,12 @@ export function TodaySpendChip({
             provider.id ===
             (providerId ?? (usesCodexQuotaForm ? 'openai' : usesXaiQuotaForm ? 'xai' : 'anthropic')),
         );
-        account.identity = usesCodexQuotaForm
-          ? identityProvider?.openAiAccount?.identity
-          : identityProvider?.subscriptionAccount?.identity;
+        // 账号池里的任务写它实际在用的账号，不写默认账号。
+        account.identity = taskAccount
+          ? taskAccount.identity
+          : usesCodexQuotaForm
+            ? identityProvider?.openAiAccount?.identity
+            : identityProvider?.subscriptionAccount?.identity;
       }
     }
   } else {
@@ -1898,7 +1955,11 @@ export function TodaySpendChip({
       ref={chipRef}
       className={cn('inline-flex items-center gap-3', isClaudeSubscription ? 'min-h-5 min-w-0 max-w-full' : 'h-5 shrink-0')}
       onMouseEnter={refreshCodexRateLimits}
-      onFocusCapture={refreshCodexRateLimits}
+      onFocusCapture={(event) => {
+        // Focusing Retry inside the portal must not start a read and disable
+        // that button before the user can activate it.
+        if (event.target === quotaPopoverTriggerRef.current) refreshCodexRateLimits();
+      }}
     >
       <Popover
         open={quotaPopoverOpen && !resetListOpen}
@@ -1999,14 +2060,17 @@ export function TodaySpendChip({
           className="w-auto max-w-[calc(100vw-16px)] border-0 bg-transparent p-0 shadow-none"
         >
           <QuotaHoverCard
-            account={account}
+            account={codexQuotaReadFailed ? {
+              ...account,
+              refreshFailure: { retry: refreshCodexRateLimits, retrying: codexQuotaRefreshing },
+            } : account}
             nowMs={windowLabelNowMs}
             sessionUsage={quotaCardSessionUsage}
             turnUsage={quotaCardTurnUsage}
             dashboardLabel={usageDashboardLabel}
             onOpenDashboard={handleClick}
             dashboardButtonRef={quotaPopoverDashboardButtonRef}
-            windowAction={usesCodexQuotaForm && !isAnyRemoteSession && (codexRateLimits?.rateLimitResetCredits || manualReset.canRetry) ? (
+            windowAction={usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage && (codexRateLimits?.rateLimitResetCredits || manualReset.canRetry) ? (
               <Button size="xs" compact tone="quiet" aria-label={t('codexResets.title')} title={t('codexResets.title')}
                 onClick={() => {
                   quotaPopoverFocusTakenRef.current = false;
@@ -2021,7 +2085,7 @@ export function TodaySpendChip({
           </QuotaHoverCard>
         </PopoverContent>
       </Popover>
-      <Dialog.Root open={resetListOpen && usesCodexQuotaForm && !isAnyRemoteSession} onOpenChange={setResetListOpen}>
+      <Dialog.Root open={resetListOpen && usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage} onOpenChange={setResetListOpen}>
         <Dialog.Portal>
           <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
           <Dialog.Content

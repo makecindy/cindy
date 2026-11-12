@@ -45,7 +45,7 @@ vi.mock('../../maker-host/override-settings-file.js', () => ({
 }));
 vi.mock('../../localDb/ipc/sessions.js', () => ({ getSessionRowSnapshotStrict: vi.fn() }));
 vi.mock('../../device-link/index.js', () => ({ remoteInvoke: vi.fn() }));
-vi.mock('../../device-link/deviceLinkApi.js', () => ({ deviceLinkApiFetch: vi.fn() }));
+vi.mock('../../device-link/deviceLinkApi.desktop.js', () => ({ deviceLinkApiFetch: vi.fn() }));
 vi.mock('../../remote-ssh/index.js', () => ({ getRemoteSshPoolHydrated: vi.fn() }));
 import { beginAppSessionBoundary, commitActiveAppSession, getActiveAppSession } from '../../appSessionState';
 import { createRemoteTerminalRuntime } from '../../terminal/remoteTerminalRuntime';

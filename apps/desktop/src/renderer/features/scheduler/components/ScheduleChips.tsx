@@ -1,5 +1,6 @@
 import { deviceDisplayName } from '@/lib/deviceName';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import * as React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -239,35 +240,24 @@ export function ScheduleSettingsButton({
 
         {!lockEnabled && (
         <Tip text={switchDisabled && cantUseReason ? cantUseReason : null} side="top" contentClassName="z-[10020]">
-          <button
-            type="button"
-            onClick={() => !switchDisabled && onEnabledChange(!enabled)}
-            disabled={switchDisabled}
+          <label
             className={cn(
               'flex h-8 w-full items-center gap-2 rounded-md px-2 text-13 transition-colors',
-              'hover:bg-[var(--surface-hover)] dark:hover:bg-[var(--settings-btn-secondary-hover-bg)]',
-              'disabled:cursor-not-allowed disabled:opacity-50',
+              switchDisabled
+                ? 'cursor-not-allowed opacity-50'
+                : 'cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-[var(--settings-btn-secondary-hover-bg)]',
               enabled ? 'text-[var(--msg-assistant-text)] dark:text-[var(--msg-assistant-text)]' : 'text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]',
             )}
-            aria-pressed={enabled}
-            aria-label={t('scheduler.chips.useWorktreeAria')}
           >
-            <span
-              className={cn(
-                'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded border-[1.5px] transition-colors',
-                enabled
-                  ? 'border-[var(--lightbox-cta-bg)] bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]'
-                  : 'border-[var(--cmd-palette-item-meta)] bg-transparent',
-              )}
-            >
-              {enabled && (
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2.5} className="h-[10px] w-[10px]">
-                  <path d="M3 8l3.5 3.5L13 5" />
-                </svg>
-              )}
-            </span>
+            <Checkbox
+              checked={enabled}
+              disabled={switchDisabled}
+              onChange={() => onEnabledChange(!enabled)}
+              aria-label={t('scheduler.chips.useWorktreeAria')}
+              className="disabled:opacity-100"
+            />
             <span>{t('scheduler.chips.worktree')}</span>
-          </button>
+          </label>
         </Tip>
         )}
       </PopoverContent>

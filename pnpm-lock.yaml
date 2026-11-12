@@ -22,11 +22,14 @@ patchedDependencies:
   '@expo/cli@58.1.19':
     hash: bf44a5f353700b074164286e0005bf9d5f218a067b6639b5c6a6fb8a1e056298
     path: dependency-patches/@expo__cli@58.1.19.patch
+  expo-image@58.0.18:
+    hash: 46725ea274130be1df9de144759f1febf5a92bbf85cd36919059c16de2f7469c
+    path: dependency-patches/expo-image@58.0.18.patch
   expo-modules-core@58.0.30:
     hash: 1a53965ceba6ed84ab514b4de51ccbaab45a9492be23de1f14843dd11826c353
     path: dependency-patches/expo-modules-core@58.0.30.patch
   expo-paste-input@0.2.2:
-    hash: 53be555646735a171c1624f074ef30e5ca897a7b8893724bc2d0d51682f769d8
+    hash: 7125922aa9772f1ac949d034fe120e8837c3708fe6912e1aec5db0d3c5ed91ae
     path: dependency-patches/expo-paste-input@0.2.2.patch
   expo-router@58.0.30:
     hash: 611a9b0644099d0a9725be517184f1b9e7d96ad5058c8445d90cc106012afebe
@@ -392,6 +395,9 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
+      cm6-graphql:
+        specifier: ^1.0.0
+        version: 1.0.0(@codemirror/autocomplete@6.20.3)(@codemirror/language@6.12.4)(@codemirror/lint@6.9.7)(@codemirror/state@6.7.1)(@codemirror/view@6.43.6)(@lezer/highlight@1.2.3)(graphql@17.1.0)
       diff:
         specifier: ^8.0.4
         version: 8.0.4
@@ -452,6 +458,9 @@ importers:
       loudness:
         specifier: ^0.4.2
         version: 0.4.2
+      lowlight:
+        specifier: ^3.3.0
+        version: 3.3.0
       lucide-react:
         specifier: ^0.468.0
         version: 0.468.0(react@19.2.3)
@@ -643,8 +652,8 @@ importers:
         specifier: ^29.1.1
         version: 29.1.1(@noble/hashes@1.8.0)
       playwright-core:
-        specifier: 1.60.0
-        version: 1.60.0
+        specifier: 1.63.0
+        version: 1.63.0
       postcss:
         specifier: ^8.4.49
         version: 8.5.19
@@ -684,6 +693,9 @@ importers:
       '@cindy/auth-client':
         specifier: workspace:*
         version: link:../../packages/auth-client
+      '@cindy/browser-control-runtime':
+        specifier: workspace:*
+        version: link:../../packages/browser-control-runtime
       '@cindy/device-link':
         specifier: workspace:*
         version: link:../../packages/device-link
@@ -709,8 +721,8 @@ importers:
         specifier: ^1.1.12
         version: 1.1.12
       playwright-core:
-        specifier: 1.60.0
-        version: 1.60.0
+        specifier: 1.63.0
+        version: 1.63.0
       ws:
         specifier: ^8.18.0
         version: 8.21.1
@@ -819,7 +831,7 @@ importers:
         version: 58.0.5(expo@58.0.23)(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
       expo-image:
         specifier: ~58.0.18
-        version: 58.0.18(expo@58.0.23)(react-native-web@0.21.4(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
+        version: 58.0.18(patch_hash=46725ea274130be1df9de144759f1febf5a92bbf85cd36919059c16de2f7469c)(expo@58.0.23)(react-native-web@0.21.4(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
       expo-image-manipulator:
         specifier: ~58.0.16
         version: 58.0.16(expo@58.0.23)(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
@@ -843,7 +855,7 @@ importers:
         version: 58.1.8(expo@58.0.23)(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)(typescript@6.0.3)
       expo-paste-input:
         specifier: 0.2.2
-        version: 0.2.2(patch_hash=53be555646735a171c1624f074ef30e5ca897a7b8893724bc2d0d51682f769d8)(expo@58.0.23)(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
+        version: 0.2.2(patch_hash=7125922aa9772f1ac949d034fe120e8837c3708fe6912e1aec5db0d3c5ed91ae)(expo@58.0.23)(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
       expo-router:
         specifier: ~58.0.30
         version: 58.0.30(patch_hash=611a9b0644099d0a9725be517184f1b9e7d96ad5058c8445d90cc106012afebe)(e55e201996914484c5cb4495ce8822dc)
@@ -1072,6 +1084,9 @@ importers:
       typescript-eslint:
         specifier: ^8.0.0
         version: 8.64.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
+      undici:
+        specifier: ^8.3.0
+        version: 8.7.0
       vitest:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.33.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
@@ -1123,8 +1138,8 @@ importers:
         specifier: ^2.4.0
         version: 2.4.0
       playwright-core:
-        specifier: 1.60.0
-        version: 1.60.0
+        specifier: 1.63.0
+        version: 1.63.0
       sharp:
         specifier: ^0.35.0
         version: 0.35.3(@types/node@25.9.5)
@@ -1440,8 +1455,8 @@ importers:
   packages/maker-cc-manager:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
-        specifier: 0.3.292
-        version: 0.3.292(@anthropic-ai/sdk@0.93.0(zod@4.3.6))(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(zod@4.3.6)
+        specifier: 0.3.321
+        version: 0.3.321(@anthropic-ai/sdk@0.93.0(zod@4.3.6))(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(zod@4.3.6)
     devDependencies:
       '@types/node':
         specifier: '*'
@@ -1459,8 +1474,8 @@ importers:
   packages/maker-core:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
-        specifier: 0.3.292
-        version: 0.3.292(@anthropic-ai/sdk@0.93.0(zod@4.3.6))(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(zod@4.3.6)
+        specifier: 0.3.321
+        version: 0.3.321(@anthropic-ai/sdk@0.93.0(zod@4.3.6))(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(zod@4.3.6)
       '@anthropic-ai/sdk':
         specifier: 0.93.0
         version: 0.93.0(zod@4.3.6)
@@ -1906,53 +1921,53 @@ packages:
   '@antfu/install-pkg@1.1.0':
     resolution: {integrity: sha512-MGQsmw10ZyI+EJo45CdSER4zEb+p31LpDAFp2Z3gkSd1yqVZGi0Ebx++YTEMonJy4oChEMLsxZ64j8FH6sSqtQ==}
 
-  '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.292':
-    resolution: {integrity: sha512-VbE0eqQoAast5oQW0ZQleVkX/hJhjuTJfVrFlTlF7b7gdybl08UguRugezVS8fAZfePVo0rJYAnkafxL0API+g==}
+  '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.321':
+    resolution: {integrity: sha512-r718mW98hvRbmCa0TtSgImHkgyPUjPXSHOsORrehn2a8Z0FU1A2RkX9gCjY7EzZgL0RNbZXsBbkuab//kUjzJw==}
     cpu: [arm64]
     os: [darwin]
 
-  '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.292':
-    resolution: {integrity: sha512-z1ChVMQC5uFrCsMUleQ67B1w+v8vLJNoHjl/qowv0DqVbTLWQ8Qz1ejQWdrZPezdT10BTpyss8kNf8G4wOrsOA==}
+  '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.321':
+    resolution: {integrity: sha512-C08vEnnDylWDaFprx/B1B13RZK3la1HOqR986igkZSwhY//Yxsk5eRI+gz7sxMfhcLZX2NS8PftCOiXr3S74/Q==}
     cpu: [x64]
     os: [darwin]
 
-  '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.292':
-    resolution: {integrity: sha512-6UIxxeHsQQcHheip8P+6q1kf5UQ1D7RJgso423IZeMjyBX1pMlX6LII8b59/1sBfaO1Q5YZ8JKDGr7f4+GtE0A==}
+  '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.321':
+    resolution: {integrity: sha512-+8zFXMpJT2r+0j4E1v9BgRf+Qjtmmp4IG/3mDLT6jB6iA+9UvG9RLex+cqct09d+7xP2mDP8kL4cD1WtKUFX1w==}
     cpu: [arm64]
     os: [linux]
     libc: [musl]
 
-  '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.292':
-    resolution: {integrity: sha512-ziGXVP0Kjjg531fUNZh/1lkT8MQKc77qFinqvQ7N7ZbR7Kr/wVRhs3kSb2s7A1+z/3TNsPiQJManEmbw61U+Hw==}
+  '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.321':
+    resolution: {integrity: sha512-vdk9tON09SnsSh/6ULzYTBgsKRat6FyIaqnh4snYl3uy3qX0jpv5UuFUWgS5tvQ1ewI0qYF2k+D78El4gi7/iQ==}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.292':
-    resolution: {integrity: sha512-5XA1nW1/OAUBxaJNFmttfJov9CrqYanOqlmP6yvXWx+iSEWKICNv2ghnnipYEJXUeof6JjZlarS8IHaJol1trA==}
+  '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.321':
+    resolution: {integrity: sha512-ils3IGsNKIDiURuOgSWorLsjMOlKcMdXQCQyaygEycdtPFItPoIBIYDVjoC1I0XV4tlfXXCHfUvNrs23g4HKNw==}
     cpu: [x64]
     os: [linux]
     libc: [musl]
 
-  '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.292':
-    resolution: {integrity: sha512-dnMVyLxpg8mUzEqAtxhv+5oBxdiYjCLIBHLPFM4z7cuk+Se6SwgyHPRGipp8rOociJBS8yyB7QXJh+RO41y+Kg==}
+  '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.321':
+    resolution: {integrity: sha512-i/Y8Ps4q68SRwWB54yFXyItBwn5YHIOYY4R1gla6p4UwF/pM+xxrHycv+yecbC7oU30ShuBYKWN9mRIZ/BCMqw==}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.292':
-    resolution: {integrity: sha512-feA6NlAVnbGBGgnJ6VkYldofuCwW5H6wt+6sWuLDVIasn013X3sWrCSS4awseN3tyey4/0UKG/+ElNATaZaN4w==}
+  '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.321':
+    resolution: {integrity: sha512-v6/8ikUcYRSYhH5PSGcHq8L6+DKRq/M4I3BzFckis6kMh3degvSuUD1u3+M/oSJ/bcSOA8tXbUgTTwKrlOgvwQ==}
     cpu: [arm64]
     os: [win32]
 
-  '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.292':
-    resolution: {integrity: sha512-hIXHmaaV1FIH7AVhw7PFX7TW13hPRGsSj/wP/Bio9N03sqbaOg6lLidKn4qC8xtvAlDTpC+6nGieLjjQQB7SwA==}
+  '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.321':
+    resolution: {integrity: sha512-9i7ziCR+Wg47cRhYONHnUpTGxUgxfy/+J3N3/4F8YGqz7WLSNH3hpGRj6uJzNK4EMyEhFsca532uD2we0ZMckQ==}
     cpu: [x64]
     os: [win32]
 
-  '@anthropic-ai/claude-agent-sdk@0.3.292':
-    resolution: {integrity: sha512-C5XI/19uArTg3jjgayN9CSQxJilRciBko007AdPmHXwQqbAzdUldaPUQtDp8Pm6QJg5Aw3jI1G1eIJOBrx4xKQ==}
-    engines: {node: '>=18.0.0'}
+  '@anthropic-ai/claude-agent-sdk@0.3.321':
+    resolution: {integrity: sha512-Smer/h/jQLTtT+l4sxaAUwZq7wif/9RzzuqltS5Gy+kAFo/iP89H7JHa8avhVT0xGkPBvBD/1Bbdg3pcArhQcw==}
+    engines: {node: '>=18.14.0'}
     peerDependencies:
       '@anthropic-ai/sdk': 0.93.0
       '@modelcontextprotocol/sdk': ^1.29.0
@@ -6535,6 +6550,17 @@ packages:
     resolution: {integrity: sha512-eYm0QWBtUrBWZWG0d386OGAw16Z995PiOVo2B7bjWSbHedGl5e0ZWaq65kOGgUSNesEIDkB9ISbTg/JK9dhCZA==}
     engines: {node: '>=6'}
 
+  cm6-graphql@1.0.0:
+    resolution: {integrity: sha512-nOiWqjXN2J9qv32NjCOd8RN5kjIOSySjU6Y02xTGqAPboDyn86hfaAwvTwY2w3p9OA6klQW2jhc8M7+/Pxblvg==}
+    peerDependencies:
+      '@codemirror/autocomplete': ^6.0.0
+      '@codemirror/language': ^6.0.0
+      '@codemirror/lint': ^6.9.7
+      '@codemirror/state': ^6.0.0
+      '@codemirror/view': ^6.0.0
+      '@lezer/highlight': ^1.0.0
+      graphql: ^16.11.0 || ^17.0.0
+
   cn-font-split@6.0.3:
     resolution: {integrity: sha512-j1fDT78CTxsCNql93wbzoHYfxYb+tRC4RuDVm7Q5GHdtSO4aB75x0ggbEZfKXEBkH8vtXCHe2LoqKAfXLJekjA==}
     hasBin: true
@@ -6937,6 +6963,9 @@ packages:
   debounce-fn@4.0.0:
     resolution: {integrity: sha512-8pYCQiL9Xdcg0UPSD3d+0KMlOjp+KGU5EPwYddgzQ7DATsg4fuUDjQtsYLmWjnk2obnNHgV3vE2Y4jejSOJVBQ==}
     engines: {node: '>=10'}
+
+  debounce-promise@3.1.2:
+    resolution: {integrity: sha512-rZHcgBkbYavBeD9ej6sP56XfG53d51CD4dnaw989YX/nZ/ZJfgRx/9ePKmTNiUiyQvh4mtrMoS3OAWW+yoYtpg==}
 
   debug@2.6.9:
     resolution: {integrity: sha512-bC7ElrdJaJnPbAP+1EotYvqZsb3ecl5wi6Bfi6BJTUcNowp6cvspg0jXznRTKDjm/E7AdgFBVeAPVMNcKGsHMA==}
@@ -8290,6 +8319,15 @@ packages:
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
+  graphql-language-service@6.0.1:
+    resolution: {integrity: sha512-f+/kcxErsGlv/wbmm1PbaNWEL6nTNyUMpkZffQpiSWisuD07AUGQKE/6t3GtYuPhB/mbbWTuaJXkyE0zv+qHnQ==}
+    peerDependencies:
+      graphql: ^16.11.0 || ^17.0.0
+
+  graphql@17.1.0:
+    resolution: {integrity: sha512-JKCOa7rSQNrket/JFhuua86hljUO+IIpyUHfKxlKD6FEfbrLX8jc1FDrA0KPKI+s8OspBCF/5npYccAICHXPpQ==}
+    engines: {node: ^22.0.0 || ^24.0.0 || >=26.0.0}
+
   gray-matter@4.0.3:
     resolution: {integrity: sha512-5v6yZd4JK3eMI3FqqCouswVqwugaA9r4dNZB1wwcmrD02QkV5H0y7XBQW8QwQqEaZY1pM9aqORSORhJRdNK44Q==}
     engines: {node: '>=6.0'}
@@ -9635,11 +9673,6 @@ packages:
     resolution: {integrity: sha512-FP+p8RB8OWpF3YZBCrP5gtADmtXApB5AMLn+vdyA+PyxCjrCs00mjyUozssO33cwDeT3wNGdLxJ5M//YqtHAJw==}
     hasBin: true
 
-  mkdirp@1.0.4:
-    resolution: {integrity: sha512-vVqVZQyf3WLx2Shd0qJ9xuvqgAyKPLAiqITEtqW0oIUjzo3PePDd6fW9iFz30ef7Ysp/oiWqbhszeGWW2T6Gzw==}
-    engines: {node: '>=10'}
-    hasBin: true
-
   mlly@1.8.2:
     resolution: {integrity: sha512-d+ObxMQFmbt10sretNDytwt85VrbkhhUA/JBGm1MPaWJ65Cl4wOgLaB1NYvJSZ0Ef03MMEU/0xpPMXUIQ29UfA==}
 
@@ -10098,9 +10131,9 @@ packages:
   platform@1.3.6:
     resolution: {integrity: sha512-fnWVljUchTro6RiCFvCXBbNhJc2NijN7oIQxbwsyL0buWJPG85v81ehlHI9fXrJsMNgTofEoWIQeClKpgxFLrg==}
 
-  playwright-core@1.60.0:
-    resolution: {integrity: sha512-9bW6zvX/m0lEbgTKJ6YppOKx8H3VOPBMOCFh2irXFOT4BbHgrx5hPjwJYLT40Lu+4qtD36qKc/Hn56StUW57IA==}
-    engines: {node: '>=18'}
+  playwright-core@1.63.0:
+    resolution: {integrity: sha512-rYCsBF/M5HjUch52bbtVONEFjv6Xu8sm8h72dNlR5bzIE1fvC/bxgspzkjSfU+MweEMmPM8KJebG6nnyxo5mCg==}
+    engines: {node: '>=20'}
     hasBin: true
 
   plist@3.1.1:
@@ -11801,6 +11834,9 @@ packages:
     resolution: {integrity: sha512-Dhxzh5HZuiHQhbvTW9AMetFfBHDMYpo23Uo9btPXgdYP+3T5S+p+jgNy7spra+veYhBP2dCSgxR/i2Y02h5/6w==}
     engines: {node: '>=0.10.0'}
 
+  vscode-languageserver-types@3.18.5:
+    resolution: {integrity: sha512-kPd6+JQNz3HMJvjKlqUxERSlZHAntl/aGpsk7ImwIh0ewDKDcjgAEyVSYciPiOJD3ftbK9IrfiqUeTZLSbCizw==}
+
   w3c-keyname@2.2.8:
     resolution: {integrity: sha512-dpojBhNsCNN7T82Tm7k26A6G9ML3NkhDsnw9n/eoxSRlVBB4CEtIQ/KTCLI2Fwf3ataSXRhYFkQi3SlnFwPvPQ==}
 
@@ -12096,44 +12132,44 @@ snapshots:
       package-manager-detector: 1.7.0
       tinyexec: 1.2.4
 
-  '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.292':
+  '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.321':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.292':
+  '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.321':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.292':
+  '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.321':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.292':
+  '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.321':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.292':
+  '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.321':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.292':
+  '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.321':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.292':
+  '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.321':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.292':
+  '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.321':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk@0.3.292(@anthropic-ai/sdk@0.93.0(zod@4.3.6))(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(zod@4.3.6)':
+  '@anthropic-ai/claude-agent-sdk@0.3.321(@anthropic-ai/sdk@0.93.0(zod@4.3.6))(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(zod@4.3.6)':
     dependencies:
       '@anthropic-ai/sdk': 0.93.0(zod@4.3.6)
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.3.6)
       zod: 4.3.6
     optionalDependencies:
-      '@anthropic-ai/claude-agent-sdk-darwin-arm64': 0.3.292
-      '@anthropic-ai/claude-agent-sdk-darwin-x64': 0.3.292
-      '@anthropic-ai/claude-agent-sdk-linux-arm64': 0.3.292
-      '@anthropic-ai/claude-agent-sdk-linux-arm64-musl': 0.3.292
-      '@anthropic-ai/claude-agent-sdk-linux-x64': 0.3.292
-      '@anthropic-ai/claude-agent-sdk-linux-x64-musl': 0.3.292
-      '@anthropic-ai/claude-agent-sdk-win32-arm64': 0.3.292
-      '@anthropic-ai/claude-agent-sdk-win32-x64': 0.3.292
+      '@anthropic-ai/claude-agent-sdk-darwin-arm64': 0.3.321
+      '@anthropic-ai/claude-agent-sdk-darwin-x64': 0.3.321
+      '@anthropic-ai/claude-agent-sdk-linux-arm64': 0.3.321
+      '@anthropic-ai/claude-agent-sdk-linux-arm64-musl': 0.3.321
+      '@anthropic-ai/claude-agent-sdk-linux-x64': 0.3.321
+      '@anthropic-ai/claude-agent-sdk-linux-x64-musl': 0.3.321
+      '@anthropic-ai/claude-agent-sdk-win32-arm64': 0.3.321
+      '@anthropic-ai/claude-agent-sdk-win32-x64': 0.3.321
 
   '@anthropic-ai/sdk@0.93.0(zod@4.3.6)':
     dependencies:
@@ -17754,6 +17790,17 @@ snapshots:
 
   clsx@2.1.1: {}
 
+  cm6-graphql@1.0.0(@codemirror/autocomplete@6.20.3)(@codemirror/language@6.12.4)(@codemirror/lint@6.9.7)(@codemirror/state@6.7.1)(@codemirror/view@6.43.6)(@lezer/highlight@1.2.3)(graphql@17.1.0):
+    dependencies:
+      '@codemirror/autocomplete': 6.20.3
+      '@codemirror/language': 6.12.4
+      '@codemirror/lint': 6.9.7
+      '@codemirror/state': 6.7.1
+      '@codemirror/view': 6.43.6
+      '@lezer/highlight': 1.2.3
+      graphql: 17.1.0
+      graphql-language-service: 6.0.1(graphql@17.1.0)
+
   cn-font-split@6.0.3(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2):
     dependencies:
       '@chinese-fonts/font-contours': 1.0.0
@@ -18195,6 +18242,8 @@ snapshots:
   debounce-fn@4.0.0:
     dependencies:
       mimic-fn: 3.1.0
+
+  debounce-promise@3.1.2: {}
 
   debug@2.6.9:
     dependencies:
@@ -19021,7 +19070,7 @@ snapshots:
       expo: 58.0.23(@babel/core@7.29.7)(@expo/dom-webview@58.0.2)(@expo/metro-runtime@58.0.17)(expo-router@58.0.30)(react-dom@19.3.0(react@19.3.0))(react-native-web@0.21.4(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-native-webview@14.0.1(patch_hash=a5418ce60809f2cb171596780f5fd8f3399172512bec33f6cf6238fdfff3142f)(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0))(react-native-worklets@0.13.0(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0))(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)(typescript@6.0.3)
       expo-image-loader: 58.0.3(expo@58.0.23)
 
-  expo-image@58.0.18(expo@58.0.23)(react-native-web@0.21.4(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0):
+  expo-image@58.0.18(patch_hash=46725ea274130be1df9de144759f1febf5a92bbf85cd36919059c16de2f7469c)(expo@58.0.23)(react-native-web@0.21.4(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0):
     dependencies:
       expo: 58.0.23(@babel/core@7.29.7)(@expo/dom-webview@58.0.2)(@expo/metro-runtime@58.0.17)(expo-router@58.0.30)(react-dom@19.3.0(react@19.3.0))(react-native-web@0.21.4(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-native-webview@14.0.1(patch_hash=a5418ce60809f2cb171596780f5fd8f3399172512bec33f6cf6238fdfff3142f)(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0))(react-native-worklets@0.13.0(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0))(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)(typescript@6.0.3)
       react: 19.3.0
@@ -19120,7 +19169,7 @@ snapshots:
       - supports-color
       - typescript
 
-  expo-paste-input@0.2.2(patch_hash=53be555646735a171c1624f074ef30e5ca897a7b8893724bc2d0d51682f769d8)(expo@58.0.23)(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0):
+  expo-paste-input@0.2.2(patch_hash=7125922aa9772f1ac949d034fe120e8837c3708fe6912e1aec5db0d3c5ed91ae)(expo@58.0.23)(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0):
     dependencies:
       expo: 58.0.23(@babel/core@7.29.7)(@expo/dom-webview@58.0.2)(@expo/metro-runtime@58.0.17)(expo-router@58.0.30)(react-dom@19.3.0(react@19.3.0))(react-native-web@0.21.4(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-native-webview@14.0.1(patch_hash=a5418ce60809f2cb171596780f5fd8f3399172512bec33f6cf6238fdfff3142f)(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0))(react-native-worklets@0.13.0(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0))(react-native@0.88.1(@babel/core@7.29.7)(@react-native/metro-config@0.88.1(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)(typescript@6.0.3)
       react: 19.3.0
@@ -19830,6 +19879,14 @@ snapshots:
       responselike: 2.0.1
 
   graceful-fs@4.2.11: {}
+
+  graphql-language-service@6.0.1(graphql@17.1.0):
+    dependencies:
+      debounce-promise: 3.1.2
+      graphql: 17.1.0
+      vscode-languageserver-types: 3.18.5
+
+  graphql@17.1.0: {}
 
   gray-matter@4.0.3:
     dependencies:
@@ -21553,8 +21610,6 @@ snapshots:
     dependencies:
       minimist: 1.2.8
 
-  mkdirp@1.0.4: {}
-
   mlly@1.8.2:
     dependencies:
       acorn: 8.19.0
@@ -21967,7 +22022,7 @@ snapshots:
 
   platform@1.3.6: {}
 
-  playwright-core@1.60.0: {}
+  playwright-core@1.63.0: {}
 
   plist@3.1.1:
     dependencies:
@@ -24214,6 +24269,8 @@ snapshots:
   vlq@1.0.1: {}
 
   void-elements@3.1.0: {}
+
+  vscode-languageserver-types@3.18.5: {}
 
   w3c-keyname@2.2.8: {}
 

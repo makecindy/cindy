@@ -340,6 +340,7 @@ const stableOwnerPostCommitCoordinator = new StableOwnerPostCommitCoordinator({
 
 /** Queue optional owner-scoped provisioning without holding authentication or the app shell. */
 export function requestStableOwnerPostCommit(reason: string): void {
+  if (authRefreshOverride !== null) return; // Host is the only durable owner writer.
   if (isPassiveSharedUserDataInstance()) return;
   void stableOwnerPostCommitCoordinator.ensure(reason);
 }
@@ -3961,6 +3962,20 @@ async function expireRuntimeAuth(
  */
 export function invalidateSession(reason: string): Promise<void> {
   if (sessionInvalidationPromise) return sessionInvalidationPromise;
+  if (authRefreshOverride !== null) {
+    // A UI-only client holds no resource credential. Its incidental 401 cannot
+    // delete the Host's credentials, commit signed-out to the shared profile or
+    // tear down the Host's owner. Re-read the authority; offline keeps its last
+    // projection and the connection banner rather than fabricating a logout.
+    const run = refresh().then(() => undefined, error => {
+      log.warn('Host auth recheck unavailable; keeping delegated owner state', error);
+    });
+    sessionInvalidationPromise = run;
+    void run.finally(() => {
+      if (sessionInvalidationPromise === run) sessionInvalidationPromise = null;
+    });
+    return run;
+  }
 
   const rejectedAccountKey =
     currentUser && !isPassiveSharedUserDataInstance()

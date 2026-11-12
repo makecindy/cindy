@@ -3946,7 +3946,7 @@ function MessageBubble({
     />
   ) : null;
   const hasBubbleContent = !!(
-    item.message.systemCardType || displayBubbleBody || item.message.secondaryBody ||
+    hookSource || item.message.systemCardType || displayBubbleBody || item.message.secondaryBody ||
     // A quote or reply target alone still needs the bubble, e.g. an attachment-only reply.
     (companionQuote && (replyQuote || replyTarget))
   );
@@ -4551,12 +4551,14 @@ type ToolDetailActions = Pick<MessageActions,
 function ToolActionRow({
   actions,
   contentLayout,
+  onOpenInput,
   row,
   rowKey,
   tool,
 }: {
   actions: ToolDetailActions;
   contentLayout: MessageContentLayout;
+  onOpenInput?: () => void;
   row: ToolRowPresentation;
   rowKey?: string;
   tool: NormalizedRemoteMessage;
@@ -4565,7 +4567,7 @@ function ToolActionRow({
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   // 明确交付媒体仍由 ToolMediaBlock 承载；原生过程媒体留在所属工具步骤内。
-  const hasDetails = !!(row.detail || tool.body || tool.diff || tool.secondaryBody);
+  const hasDetails = !!(row.detail || tool.body || tool.diff || tool.secondaryBody || onOpenInput);
   const [expanded, toggleExpanded] = useFoldableExpandedState(`toolrow-${rowKey ?? tool.key}`, false);
   const showDetails = expanded && hasDetails;
   const chevronNode = hasDetails
@@ -4616,6 +4618,17 @@ function ToolActionRow({
               actions={actions}
               projection={tool.toolInputProjection}
             />
+          ) : onOpenInput ? (
+            <MessageContentOpenButton
+              accessibilityLabel={t('message.renderer.viewToolInput')}
+              onPress={onOpenInput}
+              style={styles.toolInputPreview}
+              testID="message.toolInputPayloadButton"
+            >
+              <View style={styles.toolInputActionRow}>
+                <Text style={styles.toolInputActionText}>{t('message.renderer.viewToolInput')}</Text>
+              </View>
+            </MessageContentOpenButton>
           ) : null}
           {tool.diff ? (
             <DiffPreview diff={tool.diff} layout={contentLayout} onOpen={actions.onOpenPayload} />
@@ -5316,14 +5329,16 @@ function WorkGroupElapsed({ sinceIso }: { sinceIso: string | undefined }) {
   );
 }
 
-const WorkToolActivityRow = memo(function WorkToolActivityRow({
+export const WorkToolActivityRow = memo(function WorkToolActivityRow({
   actions,
   activity,
   contentLayout,
+  onOpenInput,
 }: {
   actions: ToolDetailActions & Pick<MessageActions, 'isSessionStreaming'>;
   activity: MobileProjectedToolActivity;
   contentLayout: MessageContentLayout;
+  onOpenInput?: () => void;
 }) {
   const { i18n } = useTranslation();
   const tool = activity.message.normalized;
@@ -5337,6 +5352,7 @@ const WorkToolActivityRow = memo(function WorkToolActivityRow({
     <ToolActionRow
       actions={actions}
       contentLayout={contentLayout}
+      onOpenInput={onOpenInput}
       row={row}
       rowKey={activity.key}
       tool={tool}
@@ -5345,6 +5361,7 @@ const WorkToolActivityRow = memo(function WorkToolActivityRow({
 }, (previous, next) =>
     previous.actions === next.actions
   && previous.contentLayout === next.contentLayout
+  && previous.onOpenInput === next.onOpenInput
   && sameMobileWorkToolActivity(previous.activity, next.activity));
 
 const ExpandedWorkThinkingRow = memo(function ExpandedWorkThinkingRow({

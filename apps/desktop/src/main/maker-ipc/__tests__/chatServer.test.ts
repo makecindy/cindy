@@ -1343,6 +1343,112 @@ describe('Chat Server result delivery and refresh', () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(deps.dispatch).toHaveBeenCalledOnce();
   }
+
+  // #9909: a group turn can end with nothing published. Each such ending now leaves a trace,
+  // so the next report can tell "the companion skipped" from "this computer never ran it".
+  describe('silent group turns keep a local trace', () => {
+    const posts = () => fixture.handle.mock.calls.filter(([route, method]) =>
+      route === `/conversations/${roomId}/messages` && method === 'POST').length;
+    const notWarned = (warn: ReturnType<typeof vi.fn>, message: string) =>
+      warn.mock.calls.filter(([entry]) => entry === message);
+    const withLogger = () => {
+      const warn = vi.fn();
+      (deps as unknown as { log: unknown }).log = { warn, info: vi.fn() };
+      return warn;
+    };
+
+    // The server refused the answer, then refused the failure notice built from it (#8598 ladder).
+    // §4.4 promises a light notice; when that is refused too, only a local line can say what happened.
+    it('records a refusal that could not reach the group at all', async () => {
+      const warn = withLogger();
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (body?.action === 'complete') return { status: 400, body: { error: { code: 'INVALID_INPUT' } } };
+        if (body?.action === 'fail') return { status: 403, body: { error: { code: 'PERMISSION_DENIED' } } };
+        return response(route);
+      });
+      await start();
+      await service.settleLaneTurn(terminal);
+      await vi.advanceTimersByTimeAsync(180_000);
+      expect(posts()).toBe(0);
+      const ended = notWarned(warn, 'Group turn ended without publishing a result');
+      expect(ended).toHaveLength(1);
+      expect(ended[0][1]).toMatchObject({ groupId: roomId, executionId: execution.id, outcome: 'error', code: 'PERMISSION_DENIED', status: 403 });
+    });
+
+    // A published result is not a silent ending: the common cleanup must not leave this line.
+    it('stays quiet when the group actually received the result', async () => {
+      const warn = withLogger();
+      await start();
+      await service.settleLaneTurn(terminal);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(notWarned(warn, 'Group turn ended without publishing a result')).toHaveLength(0);
+      expect(deliveries()).toHaveLength(1);
+    });
+
+    // A queued execution for an actor no local profile answers for is never claimed: the room
+    // stays empty and nothing is refused. The pushed notice is the one place a trace can come from.
+    it('records queued work for a companion whose local identity no longer resolves', async () => {
+      const warn = withLogger();
+      const renamedActor = '20000000-0000-4000-8000-000000000009';
+      fixture.profiles = [{ id: 'renamed-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+      fixture.handle.mockImplementation((route, method) => {
+        if (route === '/actors') return { body: [{ id: botId, kind: 'bot', externalId: 'local-bot', name: 'Bot' },
+          { id: renamedActor, kind: 'bot', externalId: 'renamed-bot', name: 'Bot' }] };
+        if (route === '/executions/claim') return { body: { execution: null } };
+        return response(route);
+      });
+      await vi.advanceTimersByTimeAsync(2000);
+      const socket = fixture.sockets[0]!;
+      Object.defineProperty(socket, 'readyState', { value: 1 });
+      socket.emit('message', JSON.stringify({ type: 'ready' }));
+      expect((await service.getGroup(roomId)).ok).toBe(true);
+      for (const cursor of ['8', '9']) socket.emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${roomId}`, cursor,
+        changes: [{ type: 'execution.changed', entityId: execution.id, data: { status: 'queued', botId } }] }));
+      await vi.advanceTimersByTimeAsync(1000);
+      // Once per actor: a busy group must not turn this into a log flood.
+      const reported = notWarned(warn, 'Group work queued for a companion this installation cannot resolve');
+      expect(reported).toHaveLength(1);
+      expect(reported[0][1]).toMatchObject({ actorId: botId, groupId: roomId });
+      expect(deps.dispatch).not.toHaveBeenCalled();
+      expect(posts()).toBe(0);
+    });
+
+    // A paused companion is deliberately not claimed; only an unresolved identity is a fault.
+    it('stays quiet for a companion the owner paused', async () => {
+      const warn = withLogger();
+      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'paused' }];
+      fixture.handle.mockImplementation((route) => route === '/executions/claim' ? { body: { execution: null } } : response(route));
+      await vi.advanceTimersByTimeAsync(2000);
+      const socket = fixture.sockets[0]!;
+      Object.defineProperty(socket, 'readyState', { value: 1 });
+      socket.emit('message', JSON.stringify({ type: 'ready' }));
+      expect((await service.getGroup(roomId)).ok).toBe(true);
+      socket.emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${roomId}`, cursor: '8',
+        changes: [{ type: 'execution.changed', entityId: execution.id, data: { status: 'queued', botId } }] }));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(notWarned(warn, 'Group work queued for a companion this installation cannot resolve')).toHaveLength(0);
+      expect(deps.dispatch).not.toHaveBeenCalled();
+    });
+
+    // Claimed work for an actor that resolves to no local companion cannot run at all; the claim
+    // is dropped instead of being settled, so nothing else would ever mention it.
+    it('records a claimed execution it cannot resolve to a companion', async () => {
+      const warn = withLogger();
+      fixture.profiles = [{ id: 'renamed-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+      let delivered = false;
+      fixture.handle.mockImplementation((route, method) => {
+        if (route === '/actors') return { body: [{ id: '20000000-0000-4000-8000-000000000009', kind: 'bot', externalId: 'renamed-bot', name: 'Bot' }] };
+        if (route === '/executions/claim') { const value = delivered ? null : execution; delivered = true; return { body: { execution: value } }; }
+        return response(route);
+      });
+      await vi.advanceTimersByTimeAsync(2000);
+      const dropped = notWarned(warn, 'Group execution claimed for a companion this installation cannot resolve');
+      expect(dropped).toHaveLength(1);
+      expect(dropped[0][1]).toMatchObject({ groupId: roomId, executionId: execution.id, actorId: botId });
+      expect(deps.dispatch).not.toHaveBeenCalled();
+    });
+  });
+
   it.each([[false, 0], [true, 0], [false, 1], [true, 1], [true, 3]] as const)('posts a validation failure as the companion without settling or replaying its turn (temporary: %s, retry: %s)', async (temporary, retry) => {
     const posted: unknown[] = [];
     let invalid = false;
@@ -3835,7 +3941,7 @@ describe('Chat Server result delivery and refresh', () => {
             return new Promise(resolve => { finishSnapshot = () => resolve(targetSnapshot()); });
           }
           if (newMembers) return { body: { ...targetSnapshot().body,
-            members: [selfMember, { ...botMember, id: peerId, name: 'New teammate' }] } };
+            members: [selfMember, { ...botMember, id: peerId, name: "New buddy" }] } };
         }
         return base(route, method, data);
       });
@@ -3858,7 +3964,7 @@ describe('Chat Server result delivery and refresh', () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(routesSince(from)).toContain(`GET /conversations/${targetRoom}/snapshot`);
       expect(deps.decidePlan).toHaveBeenCalledWith(expect.objectContaining({
-        organizerName: 'New teammate', members: [{ botId: peerId, name: 'New teammate', description: '' }],
+        organizerName: "New buddy", members: [{ botId: peerId, name: "New buddy", description: '' }],
       }), expect.any(AbortSignal));
       finishList();
       await vi.advanceTimersByTimeAsync(0);

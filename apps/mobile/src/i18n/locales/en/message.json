@@ -36,7 +36,7 @@
     "automationOriginNamed": "Sent by automation task “{{name}}”",
     "automationOrigin": "Sent by an automation task",
     "sessionOriginNamed": "Sent by session “{{name}}”",
-    "botOriginNamed": "Sent by teammate “{{name}}”",
+    "botOriginNamed": "Sent by buddy “{{name}}”",
     "sessionOrigin": "Sent by another session",
     "openSessionOrigin": "Opens the source session",
     "sourceDeviceMobileNamed": "Sent from phone “{{name}}”",
@@ -45,7 +45,7 @@
     "sourceDeviceDesktop": "Sent from a computer",
     "sourceDeviceId": "Device ID: {{id}}",
     "sourceSessionId": "Session ID: {{id}}",
-    "sourceTeammateId": "Teammate ID: {{id}}",
+    "sourceTeammateId": "Buddy ID: {{id}}",
     "sourceAutomationId": "Automation ID: {{id}}",
     "sourcePluginId": "Plugin ID: {{id}}",
     "sourceMemberId": "Member ID: {{id}}",
@@ -64,7 +64,8 @@
       "discord": "Discord",
       "wechat": "WeChat",
       "wecom": "WeCom",
-      "dingtalk": "DingTalk"
+      "dingtalk": "DingTalk",
+      "imessage": "iMessage"
     },
     "modelMismatch": "This turn was answered by {{actual}} instead of the selected {{selected}} (temporary server-side downgrade)",
     "copyStateCopying": "Copying",
