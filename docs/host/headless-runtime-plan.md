@@ -1404,4 +1404,7 @@ cd apps/host && pnpm run test:ipc-route
 - 如果用户以后允许带界面运行，每份带界面运行的报告都要写一行用量核对：沙箱数据库里
   `daily_model_usage`、`daily_session_usage`、`pi_usage_receipts` 三张表的行数和涉及的模型，如实报告
   调用了什么。没有隔离开关，启动器的检查保证不了不调用模型，原计划的启动器 PR 已取消。
-- Pi MCP 桥的键名错误单独修。
+- Pi MCP 桥的键名错误单独修（分支 `cindy/host-pi-mcp-bridge`），同时加一条守护：`runtime.mjs` 交给引擎与
+  Maker 的键必须是 `AgentDeps`／`MakerDeps` 里有的键。
+- 以后单独做：让 `apps/host/src/agent/runtime.mjs` 受类型检查。它是 JS，引擎构造参数里写错的键今天只有上面
+  那条守护能拦；直接加 `// @ts-check` 会在这个文件里报 33 个现有的类型错误，要先逐个补类型。
