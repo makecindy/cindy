@@ -33,7 +33,7 @@ export const SUPPORTED_TEXT_EXTS = new Set<string>([
   '.sh', '.bash', '.zsh', '.fish', '.ps1', '.psm1', '.bat', '.cmd',
   // Web / markup
   '.html', '.htm', '.xhtml', '.css', '.scss', '.sass', '.less', '.styl',
-  '.vue', '.svelte', '.astro', '.svg',
+  '.vue', '.svelte', '.astro', '.svg', '.razor', '.cshtml',
   // Data / config
   '.json', '.json5', '.jsonc', '.jsonl', '.ndjson', '.geojson',
   '.yaml', '.yml', '.xml', '.toml', '.ini', '.conf', '.cfg', '.properties',
@@ -50,6 +50,14 @@ export const SUPPORTED_TEXT_EXTS = new Set<string>([
   '.po', '.pot',
   // Project / build files
   '.sln', '.csproj', '.vbproj', '.fsproj', '.gemspec', '.podspec', '.cabal',
+  // .NET project/configuration sources and related schema formats (text only).
+  '.vbhtml', '.vb', '.csx', '.cake', '.linq', '.props',
+  '.targets', '.slnx', '.slnf', '.config', '.resx', '.settings',
+  '.manifest', '.nuspec', '.runsettings', '.globalconfig', '.http', '.rest',
+  '.xaml', '.axaml', '.resw', '.rdlc', '.rdl', '.pubxml',
+  '.ruleset', '.dotsettings', '.testsettings', '.filters', '.gql', '.graphqls',
+  '.psd1', '.ps1xml', '.psql', '.bicep', '.fbs', '.thrift',
+  '.capnp', '.avsc', '.csproj.user', '.fsproj.user', '.vbproj.user',
   // DB / API
   '.sql', '.graphql', '.proto', '.dockerfile',
   // Feeds
@@ -69,6 +77,7 @@ export const SUPPORTED_TEXT_EXTS = new Set<string>([
  */
 export const COMPOUND_EXTS: string[] = [
   '.env.example', '.env.local', '.env.development', '.env.production',
+  '.csproj.user', '.fsproj.user', '.vbproj.user',
 ];
 
 /**
