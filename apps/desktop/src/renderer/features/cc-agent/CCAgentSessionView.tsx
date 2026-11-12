@@ -2642,7 +2642,11 @@ function CCAgentSessionContent({
     }
     const pick = sessionModelPickRef.current;
     if (!pick) return;
-    const applied = await pick({ agent: dbToMakerAgentKind(result.route.agentKind), providerId: result.route.providerId, modelId: result.route.model });
+    const applied = await pick({
+      agent: dbToMakerAgentKind(result.route.agentKind), providerId: result.route.providerId, modelId: result.route.model,
+      // 模式指定了推理强度且选中的模型支持时一起换(选路时已按目录核对过)。
+      ...(result.route.effort ? { effort: result.route.effort as Effort } : {}),
+    });
     if (!applied) return;
     // 记下是经哪个模式换的：之后撞配额，接着提议这个模式里的下一个来源。
     bindModelGroupSession(sessionId, selection, result);
