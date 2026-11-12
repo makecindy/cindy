@@ -13591,7 +13591,7 @@
       "claudeSubscriptionSwitchFailed": "Claude.ai로 전환하거나 이 세션을 다시 시도할 수 없습니다: {{msg}}",
       "codexAppServerRetired": "Codex 서비스가 다시 시작되었거나 교체되었습니다. 현재 요청이 중단되었으므로 다시 실행해 주세요.",
       "codexAuthMissing": "원격 Codex가 아직 로그인되지 않았습니다(401 Unauthorized). 「인증 동기화」를 클릭하여 로컬 Codex 자격 증명을 원격 Cindy Codex home으로 푸시한 후 다시 시도하세요.",
-      "codexAuthMissingLocal": "Codex 자격 증명이 없거나 만료되었습니다(401 Unauthorized). {{appName}} 설정 → Codex에서 다시 로그인하거나(로그인 시 app-server가 자동 재시작) 터미널에서 `codex login` 실행 후 설정에서 인증 모드를 한 번 전환하여 app-server를 재시작한 다음 새 세션을 시작하세요.",
+      "codexAuthMissingLocal": "이 컴퓨터의 “{{provider}}” 연결을 인증하지 못했습니다. 설정에서 해당 연결의 로그인 상태를 확인하고 연결을 복구한 뒤 이 세션으로 돌아와 계속하세요.",
       "codexSessionExpired": "OpenAI 연결을 업데이트해야 합니다. ChatGPT를 다시 연결하면 계속할 수 있습니다. {{appName}}에서 시스템 Codex CLI를 로그아웃하거나 다른 모델 소스의 재연결을 요구하지 않습니다.",
       "codexAuthSynced": "인증이 동기화되었습니다. 「다시 시도」를 클릭하여 다시 보내세요.",
       "syncAuth": "인증 동기화",
