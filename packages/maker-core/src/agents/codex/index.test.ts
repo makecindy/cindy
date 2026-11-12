@@ -11785,6 +11785,8 @@ describe('CodexAgent MCP thread context hooks', () => {
       { message: 'code: provider_invalid_request / 400: request timed out' },
       { message: 'code: provider_invalid_request / 400: invalid_encrypted_content' },
       { message: '{"code":"400","message":"insufficient_quota"}' },
+      { message: '{"code":"400","type":"insufficient_balance_error"}' },
+      { message: 'code: provider_invalid_request / 400: insufficient_balance_error' },
       { message: '{"code":"400","type":"authentication_error"}' },
       { message: '{"code":"400"}', codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } } },
       { message: '{"code":"400"}', codexErrorInfo: { responseStreamDisconnected: {} } },
