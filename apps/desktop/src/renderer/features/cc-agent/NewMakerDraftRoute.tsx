@@ -3868,14 +3868,18 @@ export function NewMakerDraftRoute() {
       // 兜底值(model / effort / permission / provider),而不是那台设备自己保存的草稿值;
       // 会话一旦建出来,晚到的响应也修不回去了。
       // 选了模型组时先选路：路线可能选到别处，只有沿用原模型时才要求草稿那台的目录就绪(见下方选路之后)。
-      if (usesDeviceCatalog && remoteModelListStatus !== 'ready' && !modelGroupAtSend) {
-        if (remoteModelListStatus === 'error') {
-          toast.error(t('newChat.modelSelector.remoteLoadFailed'));
-        } else {
-          toast.warning(t('ccAgent.draft.deviceStillLoading'));
+      const draftCatalogReady = () => {
+        if (usesDeviceCatalog && remoteModelListStatus !== 'ready') {
+          if (remoteModelListStatus === 'error') {
+            toast.error(t('newChat.modelSelector.remoteLoadFailed'));
+          } else {
+            toast.warning(t('ccAgent.draft.deviceStillLoading'));
+          }
+          return false;
         }
-        return false;
-      }
+        return true;
+      };
+      if (!modelGroupAtSend && !draftCatalogReady()) return false;
       if (isDeviceLinkDraft && remoteDraftState.status === 'error') {
         setRemoteDraftRetryEpoch((value) => value + 1);
         toast.error(t('ccAgent.draft.remoteDefaultsLoadFailed'));
@@ -3993,11 +3997,7 @@ export function NewMakerDraftRoute() {
             ? pluginRoute.route
             : modelGroupRoute?.outcome === 'routed' ? modelGroupRoute.route : null;
           // 模型组没选出来源、沿用原模型时，原模型所在那台的目录照样要就绪(与上面没选模型组时同一检查)。
-          if (modelGroupAtSend && !routedTo && usesDeviceCatalog && remoteModelListStatus !== 'ready') {
-            if (remoteModelListStatus === 'error') toast.error(t('newChat.modelSelector.remoteLoadFailed'));
-            else toast.warning(t('ccAgent.draft.deviceStillLoading'));
-            return;
-          }
+          if (modelGroupAtSend && !routedTo && !draftCatalogReady()) return;
           const routeAgentDeviceId = routedTo ? routedTo.agentDeviceId : effectiveAgentDeviceId;
           const persistedAgentKind = routedTo?.agentKind ?? sendBaseRoute.persistedAgentKind;
           const authVendor = persistedAgentKind;
