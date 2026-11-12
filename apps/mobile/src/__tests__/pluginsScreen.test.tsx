@@ -1273,9 +1273,9 @@ function consentReceiptHost(action: 'defer-ui' | 'approve-ui', running = false) 
   const originalItem = { instanceKey: h.plugin.instanceKey, name: h.plugin.manifest.name,
     approvalToken: 'approved:12345678-1234-4123-8123-123456789abc' };
   let item = originalItem, fullReads = 0;
-  let finish!: (value: unknown) => void, failReadback!: (error: Error) => void;
+  let finish!: (value: unknown) => void, failReadback!: (error: Error) => void, completeReadback!: (value: unknown) => void;
   const begin = new Promise(resolve => { finish = resolve; });
-  const readback = new Promise((_resolve, reject) => { failReadback = reject; });
+  const readback = new Promise((resolve, reject) => { completeReadback = resolve; failReadback = reject; });
   let delayedConsent: Promise<unknown> | undefined;
   fixture.wire.mockImplementation(async (id, channel, args, options) => {
     options?.preSend?.();
@@ -1305,6 +1305,10 @@ function consentReceiptHost(action: 'defer-ui' | 'approve-ui', running = false) 
       await vi.advanceTimersByTimeAsync(0);
     }),
     failReadback: async () => act(async () => { failReadback(new Error('INVOKE_TIMEOUT')); await vi.advanceTimersByTimeAsync(0); }),
+    completeReadback: async () => act(async () => {
+      completeReadback({ result: { ...h.snapshot, ghosts: [{ ...h.plugin, uiPromptSuppressed: true }] } });
+      await vi.advanceTimersByTimeAsync(0);
+    }),
     delayConsent: () => {
       let release!: () => void;
       delayedConsent = new Promise<void>(resolve => { release = resolve; });
@@ -1379,3 +1383,72 @@ it('consent receipt fences an older in-flight hint but allows a later lightweigh
     expect(fixture.props.get('observedManagement').state.uiConsent.item).toEqual(newer);
   } finally { act(() => localRoot.unmount()); fixture.promptReads = null; vi.useRealTimers(); }
 });
+
+// PR #10206 R5: an operation-time notification can discover a different pending
+// revision. A failed newer full readback must not discard that already-requested
+// result; successful readback still wins. Unit, real prompt chain, fake clock.
+it.each([
+  ['other-instance', false], ['new-revision', false], ['consumed', false],
+  ['other-instance', true], ['new-revision', true], ['consumed', true],
+] as const)('failed readback recovers the displaced %s hint (readback fails first=%s)', async (identity, failsFirst) => {
+  vi.useFakeTimers();
+  const h = consentReceiptHost('approve-ui', true);
+  const container = document.createElement('div'); const localRoot = createRoot(container);
+  try {
+    await act(async () => localRoot.render(createElement(PluginUiEnablePrompt, {
+      deviceId: 'mac', deviceName: 'Mac', online: true, active: true,
+    })));
+    await act(async () => { fixture.props.get('plugins.uiApproval').actions[0].onPress(); await vi.advanceTimersByTimeAsync(0); });
+    const next = { ...h.originalItem, ...(identity === 'other-instance'
+      ? { instanceKey: '_ns__other__demo' }
+      : identity === 'new-revision' ? { approvalToken: 'approved:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' } : {}) };
+    h.show(next);
+    const release = h.delayConsent(); await h.refresh();
+    await h.finish('succeeded');
+    if (failsFirst) await h.failReadback();
+    await release();
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    if (!failsFirst) {
+      expect(container.textContent).not.toContain('plugins.uiApproval.title');
+      await h.failReadback();
+    }
+    expect(fixture.props.get('observedManagement').state).toMatchObject({ outcome: 'succeeded', errorCode: 'INVOKE_TIMEOUT' });
+    expect(container.textContent.includes('plugins.uiApproval.title')).toBe(identity !== 'consumed');
+    if (identity !== 'consumed') expect(fixture.props.get('observedManagement').state.uiConsent.item).toEqual(next);
+    // Success/readback invalidations already coalesce one shared follow-up to R1.
+    // Recovering its result must not add any further state request or retry loop.
+    const count = fixture.wire.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:ui-consent').length;
+    expect(count).toBe(3);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(fixture.wire.mock.calls.filter(c => c[2]?.[0]?.actionId === 'management:ui-consent')).toHaveLength(count);
+  } finally { act(() => localRoot.unmount()); fixture.promptReads = null; vi.useRealTimers(); }
+});
+
+it.each(['full-success', 'newer-lightweight'] as const)(
+  'displaced hint recovery does not override %s', async winner => {
+    vi.useFakeTimers();
+    const h = consentReceiptHost('approve-ui', true);
+    const container = document.createElement('div'); const localRoot = createRoot(container);
+    try {
+      await act(async () => localRoot.render(createElement(PluginUiEnablePrompt, {
+        deviceId: 'mac', deviceName: 'Mac', online: true, active: true,
+      })));
+      await act(async () => { fixture.props.get('plugins.uiApproval').actions[0].onPress(); await vi.advanceTimersByTimeAsync(0); });
+      h.show({ ...h.originalItem, instanceKey: 'pending-b' });
+      const release = h.delayConsent(); await h.refresh();
+      await h.finish('succeeded'); await release();
+      await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+      if (winner === 'full-success') {
+        await h.completeReadback();
+        expect(container.textContent).not.toContain('plugins.uiApproval.title');
+        expect(fixture.props.get('observedManagement').state.uiConsent).toBeNull();
+      } else {
+        const latest = { ...h.originalItem, instanceKey: 'pending-c' };
+        h.show(latest); await h.refresh();
+        await h.failReadback();
+        expect(container.textContent).toContain('plugins.uiApproval.title');
+        expect(fixture.props.get('observedManagement').state.uiConsent.item).toEqual(latest);
+      }
+    } finally { act(() => localRoot.unmount()); fixture.promptReads = null; vi.useRealTimers(); }
+  },
+);

@@ -35,6 +35,7 @@ export function createPluginManagementController(client: PluginManagementClient,
   let state: PluginManagementState = { capability: 'unknown', snapshot: null, uiConsent: null, receipt: null,
     operationId: null, busy: false, online: options.online ?? true, outcome: 'idle', errorCode: null };
   let disposed = false, epoch = 0, refreshSequence = 0, snapshotSequence = 0;
+  let pendingDisplay: { token: number; sequence: number; promise: Promise<PluginPromptDisplay> } | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let receiver: ManagedPlugin | undefined;
   let uiConsentOperation = false;
@@ -72,6 +73,11 @@ export function createPluginManagementController(client: PluginManagementClient,
   }
   async function acceptReceipt(receipt: PluginManagementReceipt, token: number) {
     if (!current(token) || receipt.operationId !== state.operationId) return;
+    const consumed = receipt.phase === 'succeeded' && uiConsentOperation ? receiver : undefined;
+    // Keep only the latest in-flight display read displaced by this successful
+    // receipt. It is a fallback for failed readback, never a new remote request.
+    const displacedDisplay = consumed && pendingDisplay?.token === token
+      && pendingDisplay.sequence === snapshotSequence ? pendingDisplay.promise : undefined;
     const prompt: Partial<PluginManagementState> = {};
     if (receipt.phase === 'succeeded' && uiConsentOperation && receiver) {
       // The committed decision consumes this revision, even if readback fails.
@@ -89,7 +95,22 @@ export function createPluginManagementController(client: PluginManagementClient,
     if (terminal(receipt)) {
       // A cancel racing commit must still show succeeded. Refresh facts, without changing the receipt on read failure.
       stopPolling();
-      try { await readSnapshot(token); } catch (error) { if (current(token)) publish({ errorCode: pluginManagementErrorCode(error) }); }
+      const readback = readSnapshot(token), readbackSequence = snapshotSequence;
+      try { await readback; } catch (error) {
+        if (current(token)) publish({ errorCode: pluginManagementErrorCode(error) });
+        if (displacedDisplay && consumed) {
+          try {
+            const display = await displacedDisplay;
+            const item = display.uiConsent?.item;
+            // A later read/operation still wins. Only an unrelated pending item
+            // can be recovered; the committed instance revision cannot revive.
+            if (current(token) && snapshotSequence === readbackSequence && item
+              && (item.instanceKey !== consumed.instanceKey || item.approvalToken !== pluginApprovalToken(consumed))) {
+              publish({ ...display });
+            }
+          } catch { /* Preserve the readback error; neither failed read retries itself. */ }
+        }
+      }
     } else schedulePoll();
   }
   async function refresh() {
@@ -98,8 +119,12 @@ export function createPluginManagementController(client: PluginManagementClient,
     try {
       if (options.readDisplay) {
         const snapshotToken = ++snapshotSequence;
-        const display = await options.readDisplay();
-        if (current(token) && sequence === refreshSequence && snapshotToken === snapshotSequence) publish({ ...display, uiConsent: display.uiConsent ?? null, errorCode: null });
+        const reading = { token, sequence: snapshotToken, promise: options.readDisplay() };
+        pendingDisplay = reading;
+        try {
+          const display = await reading.promise;
+          if (current(token) && sequence === refreshSequence && snapshotToken === snapshotSequence) publish({ ...display, uiConsent: display.uiConsent ?? null, errorCode: null });
+        } finally { if (pendingDisplay === reading) pendingDisplay = undefined; }
         return;
       }
       const capability = await client.capability();
