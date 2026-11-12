@@ -182,11 +182,15 @@ public class XdtMobileRealtimeAudioModule: Module {
     let session = AVAudioSession.sharedInstance()
     let previousHaptics = previousRecordingHaptics
     previousRecordingHaptics = nil
+    // The recording preference is ours even when playback has taken over the
+    // session category. Restore it on both exit paths without deactivating playback.
+    defer {
+      if let previousHaptics { try? session.setAllowHapticsAndSystemSoundsDuringRecording(previousHaptics) }
+    }
     // iOS may add mixWithOthers implicitly when duckOthers is requested.
     guard session.category == .playAndRecord, session.mode == .measurement,
           session.categoryOptions.subtracting(.mixWithOthers) == [.duckOthers, .defaultToSpeaker] else { return }
     try? session.setActive(false, options: .notifyOthersOnDeactivation)
-    if let previousHaptics { try? session.setAllowHapticsAndSystemSoundsDuringRecording(previousHaptics) }
   }
 
   // Must run on sessionStateQueue.
@@ -253,7 +257,9 @@ public class XdtMobileRealtimeAudioModule: Module {
       try session.setCategory(.playAndRecord, mode: .measurement, options: [.duckOthers, .defaultToSpeaker])
       // A preference, not a promise: report the actual period after activation.
       try? session.setPreferredIOBufferDuration(0.010)
-      let previousHaptics = session.allowHapticsAndSystemSoundsDuringRecording
+      // A playback takeover can be followed by another recording before the
+      // keep-alive cleanup. Preserve the first snapshot across that reacquisition.
+      let previousHaptics = previousRecordingHaptics ?? session.allowHapticsAndSystemSoundsDuringRecording
       // Voice prewarm/capture otherwise suppresses ALL UI haptics, including send.
       // This changes neither category nor activation during capture; never play a start sound.
       try? session.setAllowHapticsAndSystemSoundsDuringRecording(true)
