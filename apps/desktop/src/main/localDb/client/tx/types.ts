@@ -784,11 +784,18 @@ export interface BotGroupsCreateLaneArgs {
   groupId: string;
   routeKey: string;
   session: BotsReplaceCanonicalSessionArgs['session'];
+  /**
+   * The lane must work in `session.workingDir` (the group's project folder, or back in the
+   * Home workspace): an active lane elsewhere is archived and replaced by this one.
+   */
+  replaceOtherWorkingDir?: boolean;
 }
 
 export interface BotGroupsCreateLaneResult {
   sessionId: string;
   created: boolean;
+  /** The lane archived because it worked in another folder. */
+  replacedSessionId?: string;
   /** Existing runtimes must follow a canonical permission repaired during creation. */
   permissionRepairCanonicalSessionId?: string;
 }
