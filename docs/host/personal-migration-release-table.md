@@ -48,8 +48,8 @@
 | 19 | 引擎专有项（Claude、Codex、Pi 各一组） | maker-host 构造点 | 未做（第 8 步） | — | 无 |
 | 20 | 诊断：进程登记、cc-debug、出口路径事实 | maker-host 构造点 | 未做（第 7 步） | — | 无 |
 | 21 | 启动时清掉从终端继承的 Anthropic 凭据与端点变量 | `main/index.ts` `stripSensitiveAnthropicEnv` | 已对齐（m1-cp5b）：`main.ts` 第一个导入执行同一步，保留导入用的 Claude 配置目录 | Host `boot-env.test.mjs` | 无 |
-| 22 | Cindy 内置工具服务 | `mcp-integrations/mcp-providers.ts` `createLiziMcpProviders` | 未排期（待定归属）。Host 现在只有 browser、computer、cindy_memory 和插件网关；缺 cindy_helper、cindy_docs、cindy_lsp、cindy_ssh、cindy_scheduler、android、cindy_orca、飞书/微信/Slack/iMessage/Telegram 机器人和群聊记录。Host 任务看不到这些工具，但系统提示与能力路由仍会提到 cindy_helper | — | 无 |
-| 23 | 引擎运行时配置（`runtimeConfig`） | `maker-host/runtime-configs.ts`；`pi-host.ts` `buildDesktopPiRuntimeConfig` → `runtimeConfigsCore.ts` | 已对齐（m1-cp5c）：产品系统提示、回答呈现提示、`behaviorFlags`、`taskShellEnv`、压缩阈值、换模型时的上下文评估、子代理模型、记忆设置（每次读取）、`userDataPath`、内置 ripgrep。Host 的 endpoint 仍是账号网关，见第 24 行；代输入的环境变量在 Host 上恒为空，见第二节 | Host `agent-graph.test.mjs`（系统提示按桌面拼法从源文件独立拼出比对）；desktop 相关 25 个测试文件 | 无 |
+| 22 | Cindy 内置工具服务 | `mcp-integrations/mcp-providers.ts` `createLiziMcpProviders` | 未做，归属已定：M1 做 cindy_helper 里任务相关的一组、cindy_lsp、cindy_ssh（排在 M1 靠后，动手前先交分组清单）；M2 做设置类、cindy_scheduler、cindy_docs、inputHandoff；M3 做伙伴、Orca、IM 机器人、群聊记录、android、sessionImport、远程任务状态。Host 现在只有 browser、computer、cindy_memory 和插件网关。系统提示与桌面逐字相同、不裁剪，所以在对应工具补齐之前，Host 任务会被提示引导去用尚不存在的工具；**这一行必须在开放迁移前清零** | — | 无 |
+| 23 | 引擎运行时配置（`runtimeConfig`） | `maker-host/runtime-configs.ts`；`pi-host.ts` `buildDesktopPiRuntimeConfig` → `runtimeConfigsCore.ts` | 已对齐（m1-cp5c）：产品系统提示、回答呈现提示、`behaviorFlags`、`taskShellEnv`、压缩阈值、换模型时的上下文评估、子代理模型、记忆设置（每次读取）、`userDataPath`、内置 ripgrep。Host 的 endpoint 仍是账号网关，见第 24 行；代输入的环境变量在 Host 上恒为空，见第二节 | desktop `hostRuntimeConfigParity.test.ts`：同一组输入分别走桌面装配与 Host 装配，逐字比较 systemPrompt、answerDeliveryPrompt，函数项按输入矩阵比较输出，允许不同的只有写死的 endpoint；Host `agent-graph.test.mjs`（含缺 ripgrep 时与桌面同样报错）；`codex-runtime.e2e.mjs` 断言真实 Codex 请求带产品提示 | 无 |
 | 24 | Claude 与 Pi 的本机兼容代理 | `maker-host/anthropic-compat-proxy-host.ts`（`getClaudeEndpoint`） | 未排期（待定归属）。Host 的 Claude 与 Pi 直连账号网关，相当于桌面代理没起来时的退路；代理负责的按模型路由与字段适配（给非 Claude 模型去掉 Anthropic 专有字段）在 Host 上没有 | — | 无 |
 
 ## 二、与桌面不同（已知差异）
@@ -65,7 +65,7 @@
 | Pi 思考开关记忆（M2 之前） | 读渲染层镜像 | 镜像为空 | 用模型默认值 |
 | 用量记录（2e 之前） | 记录 | 不记录 | Host 期间的用量丢失；Host 侧 e2e 的「三张用量表行数」核对不适用 |
 | 代输入（sudo、ssh、git 密码提示） | 任务的 shell 带代输入的 askpass 环境变量，提示转给用户 | 同一个 `taskShellEnv`，但 Host 不启动 askpass，返回空 | 这些提示在 Host 任务里照命令行默认行为失败，不会转给用户；随代输入一起补 |
-| 内置 ripgrep 的位置 | 打包版 `resources/tools/ripgrep`，开发时在检出目录 | `hostRuntimeLayout().harnessRoot/ripgrep-bin/<平台>`（发布版在 `resources/harnesses`） | 同一个 rg；找不到时同样报错 |
+| 内置 ripgrep 的位置 | 打包版 `resources/tools/ripgrep`；开发时 `apps/ripgrep-bin/<平台>`（`pnpm install:ripgrep` 安装） | `hostRuntimeLayout().harnessRoot/ripgrep-bin/<平台>`：开发时就是同一个 `apps/ripgrep-bin/<平台>`；发布版是 `apps/host/scripts/build.mjs` 从 `apps/ripgrep-bin` 拷进 `resources/harnesses` 的同一个文件 | 同一个 rg 二进制；找不到时与桌面抛同一条错误（Pi 在构造时，Codex 在启动读 PATH 前缀时） |
 
 ## 三、Host 会写到 profile 之外的位置
 

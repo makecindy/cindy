@@ -291,3 +291,33 @@ test('every engine the Host assembles gets the desktop runtime config: product p
   assert.equal(offline.agent.deps.runtimeConfig.endpoint, undefined);
   assert.equal(offline.pi.deps.runtimeConfig.endpoint, undefined);
 });
+
+/*
+ * 测试价值（第五条）
+ * - 可观察结果：Host 找不到内置 ripgrep 时与桌面同样失败：Pi 在构造时抛错，Codex 在启动读取
+ *   PATH 前缀时抛错，报错文字与桌面相同（同一份 runtimeConfigsCore.ts）。
+ * - 规则依据：桌面缺 rg 时不静默退化（runtime-configs.ts 注释，issue #1956）；Host 的 rg 来自
+ *   `<harnessRoot>/ripgrep-bin/<平台>`（开发时为检出目录的 apps/ripgrep-bin，发布版为 resources/harnesses）。
+ * - 最小失败输入：harnessRoot 下没有 ripgrep-bin。
+ * - tier：unit。
+ */
+test('without the bundled ripgrep the Host fails the way the desktop does', async t => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-agent-graph-'));
+  t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
+  configureHostOwner({ userDataDir: profile, ownerId: 'agent-graph-no-ripgrep' });
+  const mcp = createHostMcpRuntime({ appServerIds: () => [], getRemoteMcpBridgeToken: () => null });
+  t.after(() => mcp.close());
+  const missing = path.join(profile, 'no-harnesses');
+  const message = `Bundled ripgrep not found for ${process.platform}-${process.arch}. Run "pnpm install:ripgrep" before starting desktop dev or packaging.`;
+  const providerConfig = {
+    grok: { hasGrokOAuthLogin: () => false, grokAccountIdentity: () => null },
+    list: async () => [], readKey: () => null,
+    oauth: { readCachedGenericOAuthAccessToken: () => null },
+    piNativeProviders: () => ({ providers: [], env: {} }),
+    codexAccounts: { setCodexAccountRetirement: () => {}, isCodexAccountProvider: () => false, codexAccountState: () => ({ authenticated: false }) },
+  };
+  const base = { userDataDir: profile, harnessRoot: missing, gateway: null, mcpRuntime: mcp, mcpProviders: [], storage: {}, providerConfig };
+  assert.throws(() => createHostAgentGraph({ ...base, piBinaryPath: path.join(profile, 'pi') }), { message });
+  const graph = createHostAgentGraph({ ...base, codexBinaryPath: path.join(profile, 'codex') });
+  assert.throws(() => graph.codex.deps.runtimeConfig.pathPrepends, { message });
+});
