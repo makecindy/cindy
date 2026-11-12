@@ -434,7 +434,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     const beforeInterruption = interruption;
     const previousOwnerOptions = sendOwnerOptions;
     if (method === 'send') {
-      terminalOwnership.beginSend(activeTurn || abortRequested);
+      terminalOwnership.beginSend(activeTurn || abortRequested, callId);
       sendOwnerOptions = opts;
       abortRequested = false;
       terminalEventDelivered = false;
@@ -443,6 +443,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     try {
       // Keep Session cancellation local; AbortSignal is never part of the wire payload.
       await client.callWithId(callId, method, [wireMessage, encoded.wire], opts?.signal);
+      if (method === 'send') terminalOwnership.acceptSend(callId);
     } catch (error) {
       // The ordered error/done below already settles this send. Do not race it with
       // a second send rejection that can replace the host-owned recovery receipt.

@@ -2265,6 +2265,29 @@ describe('provider group "switch to another computer" for shared users', () => {
     } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
   });
 
+  it.each(['local', 'member'] as const)('accepts result-only completion after a terminal error on %s', async placement => {
+    const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+      { kind: 'member', ...MEMBER_STUDIO }], switchWorthy: failure => failure.usageLimit === true });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    try {
+      await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+      const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+      record.emit({ type: 'error', source: 'claude-code', data: { isTerminal: true, message: 'prompt is too long' } } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'error'));
+      expect(env.relay.noteRunFailure).toHaveBeenCalledOnce();
+      expect(switchTokenIn(guest.stream)).toBeUndefined();
+      const nextTurnStart = guest.stream.length;
+      await guest.client.call('send', [{ content: 'second', attachments: [] }, {}]);
+      record.emit({ type: 'done', source: 'claude-code', data: {} } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'done'));
+      record.end();
+      await waitFor(() => guest.isClosed());
+      expect(env.relay.noteRunFailure).toHaveBeenCalledOnce();
+      expect(switchTokenIn(guest.stream.slice(nextTurnStart))).toBeUndefined();
+      expect(record.sends).toHaveLength(2);
+    } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+  });
+
   it.each(['local', 'member'] as const)('accepts running then zero-output completion after an unsettled %s turn', async placement => {
     const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
       { kind: 'member', ...MEMBER_STUDIO }] });

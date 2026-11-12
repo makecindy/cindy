@@ -7,6 +7,7 @@ import { createRemoteAgentHandle, type RemoteAgentHandleController } from '../co
 import { RemoteAgentRunClient } from '../controller/runClient';
 import type { RemoteAgentPoller } from '../controller/poller';
 import { ExecutorWorkspace } from '../executor/workspace';
+import { RemoteTurnTerminalOwnership } from '../turnLifecycle';
 
 function fixture(agentKind: 'codex' | 'claude-code' = 'codex') {
   let controller!: RemoteAgentHandleController;
@@ -47,6 +48,51 @@ function fixture(agentKind: 'codex' | 'claude-code' = 'codex') {
 }
 
 describe('remote stream close settles the product turn', () => {
+  it('keeps the prior-error tail fence only until its own send is accepted', () => {
+    const owner = new RemoteTurnTerminalOwnership();
+    const error: AgentEvent = { type: 'error', source: 'codex', data: { isTerminal: true, message: 'prior failure' } };
+    const done: AgentEvent = { type: 'done', source: 'codex', data: {} };
+    owner.beginSend(false, 'first');
+    expect(owner.observe(error)).toBe(true);
+    owner.beginSend(false, 'second');
+    owner.acceptSend('first');
+    expect(owner.observe(done)).toBe(false);
+    expect(owner.observe(error)).toBe(true);
+    owner.beginSend(false, 'third');
+    owner.acceptSend('third');
+    expect(owner.observe(done)).toBe(true);
+    owner.beginSend(true, 'fourth');
+    owner.acceptSend('fourth');
+    expect(owner.observe(done)).toBe(false);
+    expect(owner.observe(error)).toBe(true);
+    owner.observe({ type: 'text', source: 'codex', data: { text: 'automatic new turn' } });
+    owner.beginSend(true, 'fifth');
+    owner.acceptSend('fifth');
+    expect(owner.observe(done)).toBe(false);
+  });
+
+  it('becomes quiet after an accepted result-only done following a terminal error', async () => {
+    const f = fixture();
+    try {
+      await f.session.send('first');
+      f.deliver({ t: 'event', event: { type: 'error', source: 'codex', data: { isTerminal: true, message: 'prompt is too long' } } });
+      await vi.waitFor(() => expect(f.session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'error', generation: 1 }));
+      // Codex idle releases Session's terminal-error drain without supplying
+      // the missing paired done; keep the real send admission gate intact.
+      f.deliver({ t: 'event', event: { type: 'status', source: 'codex', data: { isRunning: false } } });
+      await vi.waitFor(() => expect(f.seen.some(e => e.type === 'status')).toBe(true));
+      expect(await f.session.send('second')).toMatchObject({ accepted: true });
+      f.deliver({ t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+      await vi.waitFor(() => expect(f.session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done', generation: 2 }));
+      expect(f.controller.hasActiveTurn()).toBe(false);
+      expect(f.controller.isQuiet()).toBe(true);
+      f.deliver({ t: 'closed', reason: 'ended' });
+      await f.finish();
+      expect(f.seen.filter(e => e.type === 'error')).toHaveLength(1);
+      expect(f.restartRecovery).not.toHaveBeenCalled();
+    } finally { await f.session.close(); }
+  });
+
   it.each(['provider-restarting', 'error'])('does not recover when Stop follows a queued foreground event (%s)', async reason => {
     const f = fixture();
     let stop: Promise<unknown> | undefined;

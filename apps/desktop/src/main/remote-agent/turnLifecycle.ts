@@ -23,12 +23,25 @@ export class RemoteTurnTerminalOwnership {
   private generation = 0;
   private priorGeneration: number | null = null;
   private terminalKind: 'done' | 'error' | null = null;
+  private priorError = false;
+  private dispatchId: string | undefined;
 
-  beginSend(unsettled: boolean): void {
+  beginSend(unsettled: boolean, dispatchId: string): void {
+    this.priorError = !unsettled && this.terminalKind === 'error';
+    this.dispatchId = dispatchId;
     this.priorGeneration = this.generation > 0 && (unsettled || this.terminalKind === 'error')
       ? this.generation : null;
     this.generation += 1;
     this.terminalKind = null;
+  }
+
+  acceptSend(dispatchId: string): void {
+    // Session only fences a prior error's missing done during dispatch. Once
+    // accepted, a result-only done belongs to the new send. Unsettled turns
+    // still retain their old-tail fence, and an older RPC cannot clear it.
+    if (this.dispatchId !== dispatchId) return;
+    if (this.priorError) this.priorGeneration = null;
+    this.priorError = false;
   }
 
   observe(event: AgentEvent): boolean {

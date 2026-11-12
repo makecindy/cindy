@@ -2116,7 +2116,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       run.activeTurn = false;
     }
     if (method === 'send') {
-      (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).beginSend(run.activeTurn === true || run.abortRequested === true);
+      (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).beginSend(run.activeTurn === true || run.abortRequested === true, callId);
       run.abortRequested = false;
       run.activeTurn = true;
       run.quotaFailure = undefined;
@@ -2502,6 +2502,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         callArgs = [args[0], { ...opts, providerId: relay.member.providerId }, ...args.slice(2)];
       }
       const value = await relay.client.callWithId(callId, method, callArgs);
+      if (method === 'send') run.terminalOwnership?.acceptSend(callId);
       if (method === 'setModel' && typeof args[0] === 'string') run.authorizedModel = args[0];
       if (method === 'commitRewindFiles' && run.kind === 'claude-code') run.rewindPending = true;
       append(run, { t: 'result', callId, ok: true, ...(value !== undefined ? { value: JSON.parse(JSON.stringify(value)) } : {}) });
@@ -2782,6 +2783,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       }
       try {
         value = await (target as (...a: unknown[]) => unknown).apply(handle, callArgs);
+        if (method === 'send') run.terminalOwnership?.acceptSend(callId);
       } catch (error) {
         rollbackProvider?.();
         throw error;
