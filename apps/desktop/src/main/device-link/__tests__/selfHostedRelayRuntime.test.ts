@@ -12,7 +12,7 @@
  * - 最小失败输入：挂起一次部署或退出请求，换账号，再让原请求完成；同一设备另起一把公钥来申请；
  *   同一邀请码下一真一假两条其他账号的申请；对方先拒绝再同意；主人电脑不回话 / 回过「收到」的两次同账号加入。
  * - tier：unit；SSH、存储、账号记录、中转 V2 接口和 Electron 为进程内 fake，无网络、磁盘或真实等待。
- * - 单文件实测：3.23 秒（26 例，测试体 70ms，Windows，含命令启动与转译）。
+ * - 单文件实测：2.88 秒（29 例，测试体 61ms，Windows，含命令启动与转译）。
  */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { RelayConfig } from '../selfHostedRelayConfig';
@@ -42,6 +42,8 @@ const h = vi.hoisted(() => ({
   /** device-link-settings.json 是电脑本地设置；各账号共用同一份恢复记录。 */
   switchSettings: {} as Record<string, unknown>,
   switchMetadataWrite: vi.fn(),
+  settingsCommitGate: vi.fn(),
+  settingsCommitted: vi.fn(),
   /** 账号私有记录(Chat Server preferences)的进程内替身。 */
   prefs: new Map<string, unknown>(),
   /** 某个中转上的秘密(带 V2 身份或只走 V2 时);没有登记的按旧版凭证处理。 */
@@ -77,16 +79,30 @@ vi.mock('../../utils/ipcValidate.js', () => ({ throwIpcError: (code: string) => 
 vi.mock('../invoke-context.js', () => ({ getDeviceLinkInvokeContext: () => null }));
 vi.mock('../deviceName.js', () => ({ deviceName: () => 'Test computer' }));
 vi.mock('../providerShareApi.js', () => ({ providerShareLinkApp: () => 'cindy' }));
-vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ keepAwake: true, agentNetEnabled: h.agentNetEnabled, agentNetOnlyEncrypted: h.onlyEncrypted, ...h.switchSettings }),
-  writeDeviceLinkSetting: async (key: string, value: unknown) => {
-    if (key === 'agentNetChangedBy') await h.switchMetadataWrite(value);
+vi.mock('../settings-store.desktop.js', () => {
+  const read = (): Record<string, unknown> => ({ keepAwake: true, agentNetEnabled: h.agentNetEnabled, agentNetOnlyEncrypted: h.onlyEncrypted, ...h.switchSettings });
+  const waitForCommit = async (key: string) => {
+    if (key === 'agentNetChangedBy') await h.switchMetadataWrite();
+    await h.settingsCommitGate(key);
+  };
+  const commit = (key: string, value: unknown) => {
     if (key === 'agentNetOnlyEncrypted') h.onlyEncrypted = value === true;
     if (key === 'agentNetEnabled') h.agentNetEnabled = value === true;
     if (key === 'agentNetPendingSwitch' || key === 'agentNetChangedBy') {
       h.switchSettings[key] = value;
     }
-  },
-}));
+    h.settingsCommitted(key, value);
+  };
+  return { readDeviceLinkSettings: read,
+    writeDeviceLinkSetting: async (key: string, value: unknown) => { await waitForCommit(key); commit(key, value); },
+    updateDeviceLinkSetting: async (key: string, updater: (value: unknown) => unknown) => {
+      await waitForCommit(key);
+      const value = updater(read()[key]);
+      commit(key, value);
+      return value;
+    },
+  };
+});
 vi.mock('../selfHostedRelayFrameAuth.js', () => ({ refreshRelayCertificatesSoon: vi.fn() }));
 vi.mock('../relayAccountPreferences.js', () => ({
   readAccountPreference: async (key: string) => ({ value: structuredClone(h.prefs.get(key) ?? null), revision: 0 }),
@@ -186,6 +202,8 @@ beforeEach(async () => {
   h.switchSettings = {};
   h.switchMetadataWrite.mockReset();
   h.switchMetadataWrite.mockResolvedValue(undefined);
+  h.settingsCommitGate.mockReset(); h.settingsCommitGate.mockResolvedValue(undefined);
+  h.settingsCommitted.mockReset();
   h.invoke.mockResolvedValue({ ok: true, result: { enabled: false, confirmWithinMs: null } });
   h.prefs = new Map();
   h.secrets = new Map();
@@ -261,6 +279,55 @@ it('rejects an old account local switch queued behind a remote write without ena
   expect.soft(h.switchSettings.agentNetPendingSwitch).toEqual(pending);
   expect.soft(h.agentNetEnabled).toBe(false);
   expect.soft(h.restart).not.toHaveBeenCalled();
+});
+
+// Greptile #10095 discussion_r4547215636：真实 IPC；等待设置提交时换账号，未确认打开不能失去恢复。
+// 缺口：前例只在归因写入时换账号。最小输入：pending 清理等待；以及清理已提交、await 尚未恢复。tier:unit。
+it('keeps recovery when the account expires while a local cancellation waits to commit', async () => {
+  await agentNetSwitchRemoteHandler()!.handle({ action: 'set', enabled: true, switchId: 'switch-clear-owner' }, 'controller', 'Other computer');
+  await vi.advanceTimersByTimeAsync(400);
+  const pending = structuredClone(h.switchSettings.agentNetPendingSwitch);
+  const entered = deferred<void>(); const release = deferred<void>();
+  h.settingsCommitGate.mockImplementation(async (key: string) => {
+    if (key === 'agentNetPendingSwitch') { entered.resolve(); await release.promise; }
+  });
+  const local = command({ type: 'set-agent-net', enabled: false });
+  await entered.promise;
+  h.invalidated(); h.owner = 'account-b'; h.generation += 1; h.authChanged();
+  release.resolve();
+  expect((await local).error).toBe('NOT_SIGNED_IN');
+  expect(h.switchSettings.agentNetPendingSwitch).toEqual(pending);
+  await vi.advanceTimersByTimeAsync(75_000);
+  expect(h.agentNetEnabled).toBe(false);
+  expect(h.switchSettings.agentNetPendingSwitch).toBeNull();
+});
+
+// 初次 pending 已有效提交后才换号：必须先挂设备期限，再拒绝原账号后续步骤，避免无计时的 BUSY 记录。
+it('arms recovery when the account expires just after the initial pending record commits', async () => {
+  h.settingsCommitted.mockImplementation((key: string, value: unknown) => {
+    if (key === 'agentNetPendingSwitch' && value !== null) {
+      h.invalidated(); h.owner = 'account-b'; h.generation += 1; h.authChanged();
+    }
+  });
+  await expect(agentNetSwitchRemoteHandler()!.handle({ action: 'set', enabled: true, switchId: 'switch-initial-commit' }, 'controller', 'Other computer')).rejects.toThrow();
+  h.settingsCommitted.mockReset();
+  expect(h.agentNetEnabled).toBe(false);
+  await vi.advanceTimersByTimeAsync(75_000);
+  expect(h.switchSettings.agentNetPendingSwitch).toBeNull();
+});
+
+it('does not discard recovery before applying a local selection when the account expires after cleanup commits', async () => {
+  await agentNetSwitchRemoteHandler()!.handle({ action: 'set', enabled: true, switchId: 'switch-clear-resume' }, 'controller', 'Other computer');
+  await vi.advanceTimersByTimeAsync(400);
+  h.settingsCommitted.mockImplementation((key: string, value: unknown) => {
+    if (key === 'agentNetPendingSwitch' && value === null) {
+      h.invalidated(); h.owner = 'account-b'; h.generation += 1; h.authChanged();
+    }
+  });
+  const result = await command({ type: 'set-agent-net', enabled: false });
+  expect(result.error).toBe('NOT_SIGNED_IN');
+  await vi.advanceTimersByTimeAsync(75_000);
+  expect(h.agentNetEnabled).toBe(false);
 });
 
 // #10095 discussion_r4546067871：旧链接加入的中转没有 V2 身份，不能宣称已具备切换前提。

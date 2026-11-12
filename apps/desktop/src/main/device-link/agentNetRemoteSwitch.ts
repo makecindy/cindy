@@ -311,16 +311,24 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
       if (ports.isProcessAlive(pending.pid)) return;
       await revert(pending.switchId, 'interrupted');
     },
-    /** 这台电脑上的人自己改了开关：丢掉待确认的远程切换与「由谁打开」的说明。 */
-    async onLocalChange(): Promise<void> {
+    /** 本机修改也在同一队列中执行；成功接手之后才清待确认记录，失败仍由设备恢复。 */
+    async onLocalChange(change: () => Promise<boolean> = async () => true): Promise<void> {
       const assertScope = ports.captureScope();
       localChangeEpoch++;
       await enqueue(async () => {
         assertScope();
         const settings = ports.readSettings();
-        // 取消成功后才撤计时；写失败向本机操作传播，不能带着旧恢复记录继续保存新选择。
+        // 先取消其它实例尚未执行的回调；保存/重连成功后才丢掉恢复记录。
         if (settings.agentNetChangedBy) { await ports.writeChangedBy(null); assertScope(); }
-        if (settings.agentNetPendingSwitch) { await ports.writePending(null); assertScope(); }
+        const applied = await change(); assertScope();
+        if (!applied) {
+          const pending = ports.readSettings().agentNetPendingSwitch;
+          if (pending) armDeadline(pending);
+          return;
+        }
+        if (settings.agentNetPendingSwitch && ports.readSettings().agentNetPendingSwitch?.switchId === settings.agentNetPendingSwitch.switchId) {
+          await ports.writePending(null); assertScope();
+        }
         clearDeadline();
       }).catch((error: unknown) => {
         // 正在恢复的操作可能已因本机代次变化停掉重试；取消没落盘时重新接回设备兜底。

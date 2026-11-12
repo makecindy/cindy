@@ -221,6 +221,17 @@ describe('remote Agent-Net switch on the switched computer', () => {
     expect(settings).toMatchObject({ agentNetEnabled: false, agentNetPendingSwitch: null });
   });
 
+  // 本机保存/重连失败不是成功接管，不能提前清掉未确认远程打开的恢复记录。
+  it('retains recovery when applying the local selection fails', async () => {
+    const { service, settings, turnOn } = setup();
+    await turnOn();
+    await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS);
+    await service.onLocalChange(async () => false);
+    expect(settings.agentNetPendingSwitch).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(AGENT_NET_SWITCH_CONFIRM_MS + 15_000);
+    expect(settings).toMatchObject({ agentNetEnabled: false, agentNetPendingSwitch: null });
+  });
+
   // 本机请求在恢复执行中排队，恢复和取消均失败时仍须兜底；已有用例没有这次队列交错。
   it('rearms recovery when both an in-flight restore and its queued local cancellation fail', async () => {
     const { service, settings, turnOn, apply, writePending } = setup();

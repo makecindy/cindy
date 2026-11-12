@@ -129,7 +129,7 @@ import { hostJoinBaseUrl, suggestedRelayUrls as suggestedUrls } from './selfHost
 import { AgentNetClientError, submitJoin, pollJoin, submitTenantJoin, pollTenantJoin, type AgentNetClient } from '@cindy/agent-net-relay/client';
 import { startRelayGateway } from '@cindy/agent-net';
 import { agentNetClientForRelay, approveAgentNetMember, createAgentNetTenantRequest, isAgentNetActive, ensureOwnerAgentNetBootstrap, memberAgentNetIdentity, memberAgentNetSecrets } from './agentNetRuntime.js';
-import { readDeviceLinkSettings, writeDeviceLinkSetting } from './settings-store.desktop.js';
+import { readDeviceLinkSettings, updateDeviceLinkSetting, type DeviceLinkSettings } from './settings-store.desktop.js';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidated } from '../appSessionState.js';
 
 async function sharingAuthConfig(): Promise<SharingAuthConfig> {
@@ -1805,17 +1805,23 @@ async function deploymentStatus(relayId: string): Promise<CommandResult> {
   return { state: getState(), deploymentStatus: status };
 }
 
-/**
- * 打开 / 关闭这台电脑的 Agent-Net。本机开关与同账号电脑的远程切换共用这一条路径：保存开关、按需重启
- * 本机中转、重连；本机中转起不来时恢复原值并返回原因。
- */
+/** Agent-Net 写入在实际拿到设置文件锁后核验账号代次，不让过期操作先提交再报错。 */
+async function writeAgentNetSetting<K extends 'agentNetEnabled' | 'agentNetOnlyEncrypted' | 'agentNetChangedBy' | 'agentNetPendingSwitch'>(
+  key: K, value: DeviceLinkSettings[K], assertOwner = captureOwner(),
+): Promise<void> {
+  // updater 在设置文件实际写锁内执行；等待队列/锁期间失效的账号不能先落盘再被拒绝。
+  await updateDeviceLinkSetting(key, () => { assertOwner(); return value; });
+  // 提交后由调用方核验：初次 pending 必须先挂恢复期限，再拒绝失效请求的后续处理。
+}
+
+/** 本机与远程共用保存、重启本机中转和重连路径；起不来时恢复原值并返回原因。 */
 async function applyAgentNet(enabled: boolean): Promise<CommandResult> {
   const notReady = enabled ? requireReady() : null;
   if (notReady) return { state: getState(), error: notReady };
   const assertOwner = captureOwner();
   const previous = readDeviceLinkSettings().agentNetEnabled === true;
   if (previous === enabled) return { state: getState() };
-  await writeDeviceLinkSetting('agentNetEnabled', enabled); assertOwner();
+  await writeAgentNetSetting('agentNetEnabled', enabled, assertOwner); assertOwner();
   try {
     if (readRelayConfig().host.enabled) {
       await startHost(readRelayConfig()); assertOwner();
@@ -1824,7 +1830,7 @@ async function applyAgentNet(enabled: boolean): Promise<CommandResult> {
   } catch (error) {
     if (error instanceof RelayOperationExpired) throw error;
     const reason = hostError ?? 'START_FAILED';
-    await writeDeviceLinkSetting('agentNetEnabled', previous); assertOwner();
+    await writeAgentNetSetting('agentNetEnabled', previous, assertOwner); assertOwner();
     if (readRelayConfig().host.enabled) await startHost(readRelayConfig());
     restartDeviceLinkForRelayChange();
     return { state: getState(), error: reason };
@@ -1864,10 +1870,10 @@ function installAgentNetRemoteSwitch(): void {
     disableBlock: agentNetSwitchDisableBlock,
     // 「由谁打开」写好就推给本机窗口，开关下面立刻显示。
     writeChangedBy: async (value) => {
-      await writeDeviceLinkSetting('agentNetChangedBy', value);
+      await writeAgentNetSetting('agentNetChangedBy', value);
       broadcast(SELF_HOSTED_RELAY_IPC.CHANGED, getState());
     },
-    writePending: (value) => writeDeviceLinkSetting('agentNetPendingSwitch', value),
+    writePending: (value) => writeAgentNetSetting('agentNetPendingSwitch', value),
     readiness: () => {
       const notReady = requireReady();
       if (notReady) return notReady === 'NOT_SIGNED_IN' ? 'NOT_SIGNED_IN' : 'SECURE_STORAGE_UNAVAILABLE';
@@ -1931,16 +1937,27 @@ async function execute(command: SelfHostedRelayCommand): Promise<CommandResult> 
     case 'set-agent-net-encryption': {
       const assertOwner = captureOwner();
       // 本机的加密选择同样优先于已经接受、还未执行的远程切换。
-      await remoteSwitch?.onLocalChange(); assertOwner();
-      await writeDeviceLinkSetting('agentNetOnlyEncrypted', command.enabled); assertOwner();
-      restartDeviceLinkForRelayChange();
+      const change = async () => {
+        assertOwner();
+        await writeAgentNetSetting('agentNetOnlyEncrypted', command.enabled, assertOwner); assertOwner();
+        restartDeviceLinkForRelayChange();
+        return true;
+      };
+      if (remoteSwitch) await remoteSwitch.onLocalChange(change); else await change();
+      assertOwner();
       return { state: getState() };
     }
     case 'set-agent-net': {
       const assertOwner = captureOwner();
       // 这台电脑上的人自己改了开关：以人为准，丢掉待确认的远程切换与「由谁打开」的说明。
-      await remoteSwitch?.onLocalChange(); assertOwner();
-      const result = await applyAgentNet(command.enabled);
+      let result!: CommandResult;
+      const change = async () => {
+        assertOwner();
+        result = await applyAgentNet(command.enabled); assertOwner();
+        return !result.error;
+      };
+      if (remoteSwitch) await remoteSwitch.onLocalChange(change); else await change();
+      assertOwner();
       return { ...result, state: getState() };
     }
     case 'peer-agent-net':
