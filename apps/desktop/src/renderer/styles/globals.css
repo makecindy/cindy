@@ -396,9 +396,7 @@ html:lang(ko) {
   margin: 0;
   --composer-list-padding: 1.5em;
   --composer-list-marker-extra: 0em;
-  padding-inline-start: calc(
-    var(--composer-list-padding, 1.5em) + var(--composer-list-marker-extra, 0em)
-  );
+  padding-inline-start: 0;
 }
 /* The ideographic comma is a full-width glyph, unlike the period / closing
    parenthesis in the other ordered markers. Keep its extra width separate
@@ -443,8 +441,18 @@ html:lang(ko) {
   content: counter(list-item) '、';
 }
 [data-chat-input-root] .ProseMirror li {
+  direction: ltr;
+  margin-inline-start: calc(
+    var(--composer-list-padding, 1.5em) + var(--composer-list-marker-extra, 0em)
+  );
   padding-inline-start: 0.15em;
   overflow-wrap: anywhere;
+}
+/* Each paragraph already has dir=auto. A parent li with dir=auto skips that
+   directional subtree, so follow the first paragraph's native direction.
+   Reserve marker space per item, including mixed and nested lists. */
+[data-chat-input-root] .ProseMirror li:has(> p:first-child:dir(rtl)) {
+  direction: rtl;
 }
 [data-chat-input-root] .ProseMirror li > p {
   margin: 0;
