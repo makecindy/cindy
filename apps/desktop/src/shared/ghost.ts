@@ -1948,6 +1948,8 @@ export interface InstalledGhost {
   retirement?: import('./featureRetirements').InstalledFeatureRetirement;
   /** Host receipt fact, not a manifest declaration. Missing means tasks need confirmation. */
   taskCapabilityApproved?: true;
+  /** Host consent for the task-status metadata channel; historical declarations grant nothing. */
+  taskStatusCapabilityApproved?: true;
   /** Independent Host consent for cross-task/companion target access. */
   targetCapabilityApproved?: true;
   uiCapabilityApproved?: true;
@@ -2999,6 +3001,9 @@ export function diffInstalledGhostPermissionItems(
           ui: installed.uiCapabilityApproved === true ? getPluginToolUi(installed.manifest) : undefined,
           host: getApprovedGhostHostUi(installed) }
         : undefined,
+      // Historical status declarations never granted the new task metadata channel.
+      taskView: installed.manifest.taskView && installed.taskStatusCapabilityApproved !== true
+        ? { ...installed.manifest.taskView, statusBar: undefined } : installed.manifest.taskView,
       // 同理：声明了但用户从没确认过的控制节点不算旧权限，更新时作为新增项复核。
       subscribe: withoutUnapprovedControlPoints(installed),
       systemPrompt: installed.approvedControlPoints?.includes('system-prompt') ? installed.manifest.systemPrompt : undefined,

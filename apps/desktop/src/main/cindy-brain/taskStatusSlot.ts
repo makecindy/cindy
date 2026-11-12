@@ -1,9 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { ghostInstallApprovalToken, type InstalledGhost } from '../../shared/ghost.js';
-import type { GhostTaskStatusReply, GhostTaskStatusRequest } from '../../shared/ghostTaskStatus.js';
+import type { GhostTaskStatus, GhostTaskStatusReply, GhostTaskStatusRequest } from '../../shared/ghostTaskStatus.js';
 import { sanitizeGhostNoticeText } from './notifySlot.js';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
-import type { GhostTaskStatus } from '../../shared/ghostTaskStatus.js';
 import type { IpcMainInvokeEvent } from 'electron';
 import { throwIpcError } from '../utils/ipcValidate.js';
 
@@ -87,6 +86,7 @@ export function createGhostTaskStatusHandler(deps: {
       return (
         ghost?.enabled === true &&
         ghost.approval?.state === 'approved' &&
+        ghost.taskStatusCapabilityApproved === true &&
         ghost.manifest.taskView?.statusBar === true &&
         !deps.disabled(status.instanceId, latest.workingDir) &&
         tokens.get(status.instanceId) === ghostInstallApprovalToken(ghost.approval)
@@ -126,6 +126,7 @@ export class GhostTaskStatusSlot {
       !allowed() ||
       !ghost?.enabled ||
       ghost.approval?.state !== 'approved' ||
+      ghost.taskStatusCapabilityApproved !== true ||
       ghost.manifest.taskView?.statusBar !== true
     )
       return null;
@@ -137,6 +138,7 @@ export class GhostTaskStatusSlot {
         allowed() &&
         owner === this.deps.ownerScope() &&
         latest?.enabled === true &&
+        latest.taskStatusCapabilityApproved === true &&
         latest.manifest.taskView?.statusBar === true &&
         latest.approval?.state === 'approved' &&
         token === ghostInstallApprovalToken(latest.approval)

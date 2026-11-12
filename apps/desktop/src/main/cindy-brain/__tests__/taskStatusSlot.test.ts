@@ -11,6 +11,7 @@ function setup() {
   const ghost = {
     manifest: { taskView: { html: 'task.html', statusBar: true } },
     enabled: true,
+    taskStatusCapabilityApproved: true,
     approval: { state: 'approved', revision: 'one' },
   } as InstalledGhost;
   let owner = 'owner';
@@ -43,6 +44,20 @@ function setup() {
     },
   };
 }
+
+it('does not wake historical status declarations until task metadata access is approved', async () => {
+  const { slot, ghost, wake, send } = setup();
+  delete ghost.taskStatusCapabilityApproved;
+  const result = slot.query('local-demo', 'task');
+  try {
+    expect(wake).not.toHaveBeenCalled();
+  } finally {
+    slot.cancel('local-demo');
+  }
+  expect(await result).toBeNull();
+  expect(send).not.toHaveBeenCalled();
+  expect(ghost.manifest.taskView?.html).toBe('task.html');
+});
 afterEach(() => vi.useRealTimers());
 
 it('accepts sanitized text from the actual instance once', async () => {
@@ -111,6 +126,7 @@ it('re-queries after a wake that cancels the request synchronously', async () =>
   const ghost = {
     manifest: { taskView: { html: 'task.html', statusBar: true } },
     enabled: true,
+    taskStatusCapabilityApproved: true,
     approval: { state: 'approved', revision: 'one' },
   } as InstalledGhost;
   const send = vi.fn(() => true);

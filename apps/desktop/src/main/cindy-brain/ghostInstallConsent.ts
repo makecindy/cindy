@@ -40,6 +40,7 @@ export type GhostInstallConsentPrompt = ((
   /** Main-owned negotiation: legacy remote controllers cannot approve page capabilities. */
   uiCapabilityApproval?: boolean;
   hostUiCapabilityApproval?: boolean;
+  taskStatusCapabilityApproval?: boolean;
 };
 
 export type GhostInstallConsentPolicy =
@@ -60,12 +61,24 @@ export type GhostInstallConsentPolicy =
 
 /** 求得的确认结论；随安装请求一路交到安装锁内复核。 */
 export type GhostInstallConsentDecision =
-  | { mode: 'confirmed'; key: string; forced?: true; uiCapabilityUnsupported?: true; hostUiCapabilityUnsupported?: true }
+  | { mode: 'confirmed'; key: string; forced?: true; uiCapabilityUnsupported?: true; hostUiCapabilityUnsupported?: true; taskStatusCapabilityUnsupported?: true }
   /** 求确认时判定无需确认；落位前必须仍然无需确认。 */
   | { mode: 'unprompted' }
   | { mode: 'exempt'; reason: 'server-default-install' };
 
 const pendingPromptAborts = new Set<AbortController>();
+
+/** Only a supporting confirmation UI can grant the new task metadata channel. */
+export function confirmedTaskStatusCapability(
+  decision: GhostInstallConsentDecision,
+  installed: InstalledGhost | null | undefined,
+  next: GhostManifest,
+): true | undefined {
+  if (decision.mode !== 'confirmed' || decision.taskStatusCapabilityUnsupported) return;
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return shown?.some(item => item.key === 'task-view' && item.detailKey === 'taskViewStatusDetail') ? true : undefined;
+}
 
 /** Use only after assertGhostInstallConsent binds the confirmed facts to this package/receiver. */
 export function confirmedTaskCapability(
@@ -189,6 +202,7 @@ export async function obtainGhostInstallConsent(
   return {
     mode: 'confirmed',
     ...(policy.prompt.uiCapabilityApproval === false ? { uiCapabilityUnsupported: true as const } : {}),
+    ...(manifest.taskView?.statusBar === true && policy.prompt.taskStatusCapabilityApproval !== true ? { taskStatusCapabilityUnsupported: true as const } : {}),
     ...(ghostHostUiApprovalTokens(manifest).length && policy.prompt.hostUiCapabilityApproval !== true ? { hostUiCapabilityUnsupported: true as const } : {}),
     ...(forced ? { forced: true as const } : {}),
     key: ghostInstallConsentKey(

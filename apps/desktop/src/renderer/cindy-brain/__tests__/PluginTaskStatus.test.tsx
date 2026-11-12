@@ -6,6 +6,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest';
 import { PluginTaskStatus } from '../PluginTaskStatus';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { OrcaSplitView } from '@/features/cc-agent/OrcaSplitView';
 
 const mocks = vi.hoisted(() => ({
   open: vi.fn(),
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
     {
       manifest: { id: 'demo', name: 'Demo', taskView: { html: 'task.html', statusBar: true } },
       enabled: true,
+      taskStatusCapabilityApproved: true,
       approval: { state: 'approved', revision: 'one' },
     },
   ],
@@ -30,6 +32,16 @@ vi.mock('@/features/right-sidebar/lib/openPluginTaskTab', () => ({
 }));
 vi.mock('@/components/ui/tooltip', () => ({
   Tip: ({ children }: { children: React.ReactNode }) => children,
+}));
+vi.mock('@/hooks/useCCSessions', () => ({ useCCSessions: () => ({ sessions: [{ id: 'lead' }, { id: 'worker' }] }) }));
+vi.mock('@/features/device-link/remoteProjectsStore', () => ({ useRemoteProjectSessions: () => [] }));
+vi.mock('@/features/cc-agent/hooks/useOrcaWorkerSelection', () => ({ useOrcaWorkerSelection: () => ({ workerSessionId: 'worker' }) }));
+vi.mock('@/features/cc-agent/hooks/useStopOrcaCollab', () => ({ useStopOrcaCollabWithoutNavigation: () => ({ requestStop: vi.fn() }) }));
+vi.mock('@/features/cc-agent/lib/workerAttentionStore', () => ({ useWorkerAttentionSnapshot: () => 0, clearWorkerAttention: vi.fn() }));
+vi.mock('@/hooks/useAgentIslandSettings', () => ({ isAgentIslandSupported: () => false }));
+vi.mock('@/features/cc-agent/CCAgentSessionView', () => ({
+  CCAgentSessionView: ({ sessionIdProp, sidebarTargetSessionId }: { sessionIdProp: string; sidebarTargetSessionId?: string }) =>
+    <PluginTaskStatus sessionId={sessionIdProp} sidebarTargetSessionId={sidebarTargetSessionId} />,
 }));
 
 const originalGhosts = mocks.ghosts;
@@ -141,6 +153,29 @@ it('hides the launcher when the sidebar belongs to another task', async () => {
   const request = vi.fn(async () => status('50%'));
   bridge(request);
   render(<PluginTaskStatus sessionId="worker" sidebarTargetSessionId="lead" />);
+  await act(async () => {});
+  expect(request).not.toHaveBeenCalled();
+  expect(screen.queryByRole('button')).toBeNull();
+});
+
+it('keeps the file-browser Worker launcher out of the Lead sidebar', async () => {
+  const request = vi.fn(async () => status('50%'));
+  bridge(request);
+  render(<OrcaSplitView leadSessionId="lead" />);
+  await act(async () => {});
+  expect(screen.getByRole('button', { name: 'Demo: 50%' })).toBeTruthy();
+  request.mockClear();
+  fireEvent.click(screen.getAllByRole('tab')[1]);
+  await act(async () => {});
+  expect(request).not.toHaveBeenCalled();
+  expect(screen.queryByRole('button', { name: 'Demo: 50%' })).toBeNull();
+});
+
+it('does not poll an old declaration without a task-status approval', async () => {
+  const request = vi.fn(async () => status('50%'));
+  bridge(request);
+  mocks.ghosts = mocks.ghosts.map(g => ({ ...g, taskStatusCapabilityApproved: false }));
+  render(<PluginTaskStatus sessionId="one" />);
   await act(async () => {});
   expect(request).not.toHaveBeenCalled();
   expect(screen.queryByRole('button')).toBeNull();

@@ -3075,6 +3075,7 @@ export class GhostManager {
           ...(retirement ? { retirement } : {}),
           approval: { state: 'approved', revision: receipt.revision },
           ...(receipt.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
+          ...(receipt.taskStatusCapabilityApproved === true ? { taskStatusCapabilityApproved: true as const } : {}),
           ...(receipt.uiCapabilityApproved === true && pluginHasToolUi(localizedManifest) ? { uiCapabilityApproved: true as const } : {}),
           ...(receipt.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
           ...(receipt.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
@@ -4029,6 +4030,7 @@ export class GhostManager {
     lizFilePath: string,
     opts?: {
       taskCapabilityApproved?: true;
+      taskStatusCapabilityApproved?: true;
       targetCapabilityApproved?: true;
       uiCapabilityApproved?: boolean;
       approvedHostUi?: readonly string[];
@@ -4065,6 +4067,7 @@ export class GhostManager {
     lizFilePath: string,
     opts?: {
       taskCapabilityApproved?: true;
+      taskStatusCapabilityApproved?: true;
       targetCapabilityApproved?: true;
       uiCapabilityApproved?: boolean;
       approvedHostUi?: readonly string[];
@@ -4256,6 +4259,7 @@ export class GhostManager {
           ...(opts?.approvedControlPoints?.length ? { approvedControlPoints: opts.approvedControlPoints } : {}),
           ...(opts?.approvedHostUi?.length ? { approvedHostUi: opts.approvedHostUi } : {}),
           ...(opts?.approvedAutoTools?.length ? { approvedAutoTools: opts.approvedAutoTools } : {}),
+          ...(opts?.taskStatusCapabilityApproved === true && approvedManifest.taskView?.statusBar === true ? { taskStatusCapabilityApproved: true as const } : {}),
           ...(opts?.observeCapabilityApproved === true && approvedManifest.agent?.observe === true ? {observeCapabilityApproved:true as const} : {}),
           ...(opts?.companionsCapabilityApproved === true && approvedManifest.agent?.companions === true ? { companionsCapabilityApproved: true as const } : {}),
           trust,
@@ -4380,6 +4384,7 @@ export class GhostManager {
     lizFilePath: string,
     opts: {
       taskCapabilityApproved?: true;
+      taskStatusCapabilityApproved?: true;
       targetCapabilityApproved?: true;
       uiCapabilityApproved?: boolean;
       approvedHostUi?: readonly string[];
@@ -4413,6 +4418,7 @@ export class GhostManager {
     lizFilePath: string,
     opts: {
       taskCapabilityApproved?: true;
+      taskStatusCapabilityApproved?: true;
       targetCapabilityApproved?: true;
       uiCapabilityApproved?: boolean;
       approvedHostUi?: readonly string[];
@@ -4720,6 +4726,8 @@ export class GhostManager {
           ...(opts.approvedAutoTools ?? []),
           ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedAutoTools ?? [] : []),
         ],
+        ...((opts.taskStatusCapabilityApproved === true || (archiveId === undefined && approvalResult.state === 'approved' && approvalResult.receipt.taskStatusCapabilityApproved === true)) &&
+          approvedManifest.taskView?.statusBar === true ? { taskStatusCapabilityApproved: true as const } : {}),
         ...((opts.observeCapabilityApproved === true || (archiveId === undefined && approvalResult.state === 'approved' && approvalResult.receipt.observeCapabilityApproved === true)) &&
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
         ...((opts.companionsCapabilityApproved === true || (archiveId === undefined && approvalResult.state === 'approved' && approvalResult.receipt.companionsCapabilityApproved === true)) &&
@@ -5142,6 +5150,8 @@ export class GhostManager {
         approvedControlPoints: [...new Set([...(approvedManifest.subscribe?.hooks ?? []), ...declaredGhostControlPoints(approvedManifest)])],
         approvedHostUi: current.state === 'approved' ? current.receipt.approvedHostUi : undefined,
         approvedAutoTools: declaredAutoApproveTools(approvedManifest),
+        ...(current.state === 'approved' && current.receipt.taskStatusCapabilityApproved === true &&
+          approvedManifest.taskView?.statusBar === true ? { taskStatusCapabilityApproved: true as const } : {}),
         ...(current.state === 'approved' && current.receipt.observeCapabilityApproved === true &&
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
         ...(current.state === 'approved' && current.receipt.companionsCapabilityApproved === true &&

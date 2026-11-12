@@ -547,6 +547,7 @@ import {
   abortAllGhostInstallConsentPrompts,
   assertGhostInstallConsent,
   confirmedTaskCapability,
+  confirmedTaskStatusCapability,
   confirmedAutoTools,
   confirmedControlPoints,
   confirmedUiCapability,
@@ -4243,6 +4244,7 @@ export function createWindowGhostInstallConsentPrompt(
     );
   };
   prompt.hostUiCapabilityApproval = true;
+  prompt.taskStatusCapabilityApproval = true;
   return prompt;
 }
 
@@ -7775,6 +7777,7 @@ async function installAndDockLocked(
   const result = await manager.install(lizFilePath, {
     manifestSource: opts.manifestSource,
     taskCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest),
+    taskStatusCapabilityApproved: confirmedTaskStatusCapability(opts.consent.decision, installedBefore, opts.consent.manifest),
     targetCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'targets'),
     uiCapabilityApproved: confirmedUiCapability(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedHostUi: confirmedHostUiPermissions(opts.consent.decision, installedBefore, opts.consent.manifest),
@@ -7975,6 +7978,7 @@ async function updateLocalGhostPackageLocked(
           manager.update(cindyFilePath, {
           manifestSource,
           taskCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest),
+          taskStatusCapabilityApproved: confirmedTaskStatusCapability(consent, previousGhost, inspected.manifest),
           targetCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'targets'),
           uiCapabilityApproved: confirmedUiCapability(consent, previousGhost, inspected.manifest),
           approvedHostUi: confirmedHostUiPermissions(consent, previousGhost, inspected.manifest),
@@ -8560,6 +8564,7 @@ async function installOrUpdateMarketGhostPackageLocked(
         manager.update(cindyFilePath, {
           manifestSource: expected.pendingMarketRecord?.source === 'market' ? 'stored-release' : undefined,
           taskCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest),
+          taskStatusCapabilityApproved: confirmedTaskStatusCapability(expected.consent, installed, inspected.manifest),
           targetCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'targets'),
           uiCapabilityApproved: confirmedUiCapability(expected.consent, installed, inspected.manifest),
           approvedHostUi: confirmedHostUiPermissions(expected.consent, installed, inspected.manifest),

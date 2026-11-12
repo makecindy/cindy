@@ -202,6 +202,7 @@ export function OrcaSplitView({
           <CCAgentSessionView
             key={workerSession.id}
             sessionIdProp={workerSession.id}
+            sidebarTargetSessionId={leadSessionId}
             compact
             orcaMode
             showRsbToggle

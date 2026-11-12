@@ -14,6 +14,7 @@ const ghost: InstalledGhost = {
   },
   dir: '/fixture/quota-demo',
   enabled: true,
+  taskStatusCapabilityApproved: true,
   approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
 };
 

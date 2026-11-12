@@ -15,6 +15,7 @@ import {
   confirmedControlPoints,
   confirmedAutoTools,
   confirmedTaskCapability,
+  confirmedTaskStatusCapability,
   confirmedUiCapability,
   confirmedHostUiPermissions,
   type GhostInstallConsentPrompt,
@@ -22,6 +23,24 @@ import {
   obtainGhostInstallConsent,
   trackGhostInstallConsentPrompt,
 } from '../ghostInstallConsent.js';
+
+// Regression: an old declaration is not evidence that the user saw the new metadata channel.
+it('grants task status only when a supporting prompt actually confirmed that permission', async () => {
+  const next: GhostManifest = { ...manifest(['api.weather.test']), taskView: { html: 'task.html', statusBar: true } };
+  const old = installed(next);
+  const prompt: GhostInstallConsentPrompt = Object.assign(vi.fn(async () => true), { taskStatusCapabilityApproval: true });
+  const decision = await obtainGhostInstallConsent({
+    mode: 'prompt', prompt, initiator: 'user', origin: 'local-file',
+  }, old, next, 'package');
+  expect(confirmedTaskStatusCapability(decision, old, next)).toBe(true);
+  expect(prompt).toHaveBeenCalledOnce();
+  expect(confirmedTaskStatusCapability({ mode: 'unprompted' }, old, next)).toBeUndefined();
+  prompt.taskStatusCapabilityApproval = false;
+  const legacy = await obtainGhostInstallConsent({
+    mode: 'prompt', prompt, initiator: 'user', origin: 'local-file',
+  }, old, next, 'package');
+  expect(confirmedTaskStatusCapability(legacy, old, next)).toBeUndefined();
+});
 
 function manifest(hosts: string[], version = '1.0.0'): GhostManifest {
   const result = validateGhostManifest({

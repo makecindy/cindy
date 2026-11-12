@@ -31,6 +31,7 @@ export function PluginTaskStatus({
     (g) =>
       g.enabled &&
       g.approval?.state === 'approved' &&
+      g.taskStatusCapabilityApproved === true &&
       g.manifest.taskView?.statusBar === true &&
       disabled &&
       !disabled.has(installedGhostStoragePart(g)),
