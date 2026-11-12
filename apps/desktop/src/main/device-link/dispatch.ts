@@ -11,6 +11,7 @@ import type { executeTaskTags, TASK_TAG_CHANNEL } from '../localDb/ipc/taskTags.
 import { encodeMessageBodies, versionMessageBody } from './sessionMessageReuse.js';
 import type { TaskTagRequest } from '@cindy/maker-shared';
 import {
+  AGENT_NET_SWITCH_CHANNEL,
   FILE_PEER_CHANNEL,
   REMOTE_AGENT_CHANNEL,
   SETUP_SNAPSHOT_CHANNEL,
@@ -259,6 +260,14 @@ export interface SetupSnapshotRemoteHandler {
  */
 export interface SetupTransferRemoteHandler {
   handle(raw: unknown, controllerDeviceId: string): Promise<unknown>;
+}
+
+/**
+ * 远程切换连接方式(docs/product-rules/agent-net.md「远程切换其他电脑的连接方式」):同账号电脑问这台电脑
+ * 能不能打开 Agent-Net、请它打开 / 关闭。Main 在 bootstrap 注入，未就绪时明确拒绝。
+ */
+export interface AgentNetSwitchRemoteHandler {
+  handle(raw: unknown, controllerDeviceId: string, controllerName: string): Promise<unknown>;
 }
 
 // Local renderer IPC keeps its sender guard; remote mutations enter the shared action here.
@@ -806,6 +815,11 @@ let setupTransferRemoteHandler: SetupTransferRemoteHandler | null = null;
 
 function setSetupTransferRemoteHandler(handler: SetupTransferRemoteHandler | null): void {
   setupTransferRemoteHandler = handler;
+}
+let agentNetSwitchRemoteHandler: AgentNetSwitchRemoteHandler | null = null;
+
+function setAgentNetSwitchRemoteHandler(handler: AgentNetSwitchRemoteHandler | null): void {
+  agentNetSwitchRemoteHandler = handler;
 }
 
 /** 组摘要只给同账号电脑：分享受邀者与共享任务访客是其他账号，看不到组内电脑。 */
@@ -4940,6 +4954,26 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       return { ok: false, error: { code: 'IPC_ERROR', message: `[${code}] setup transfer unavailable` } };
     }
   }
+  if (payload.channel === AGENT_NET_SWITCH_CHANNEL) {
+    // 只给同账号电脑：共享任务访客与供应商分享受邀者是其他账号，不能改这台电脑的连接方式。
+    if (!isSameAccountController(src)) {
+      return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${payload.channel}' not allowed` } };
+    }
+    const handler = agentNetSwitchRemoteHandler;
+    if (!handler) return { ok: false, error: { code: 'IPC_ERROR', message: '[AGENT_NET_SWITCH_UNAVAILABLE] not ready yet' } };
+    try {
+      const name = resolveControllerName(src, undefined) ?? src.slice(0, 8);
+      const result = await runDeviceLinkInvokeContext(
+        { controllerDeviceId: src, channel: payload.channel },
+        () => timing.measure('handler', () => handler.handle(payload.args?.[0], src, name)),
+      );
+      return { ok: true, result };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      const code = /\bAGENT_NET_SWITCH_[A-Z_]+\b/.exec(message)?.[0] ?? 'AGENT_NET_SWITCH_UNAVAILABLE';
+      return { ok: false, error: { code: 'IPC_ERROR', message: `[${code}] agent-net switch failed` } };
+    }
+  }
   if (payload.channel === PLUGIN_OAUTH_CHANNEL) {
     if (payload.args?.length !== 1) return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] Invalid OAuth transaction' } };
     try { return { ok: true, result: await requestPluginOauth(src, payload.args[0]) }; }
@@ -5457,6 +5491,7 @@ return {
   setProviderGroupRemoteHandler,
   setSetupSnapshotRemoteHandler,
   setSetupTransferRemoteHandler,
+  setAgentNetSwitchRemoteHandler,
   setRemoteTurnChangeAction,
   setRemoteSubscriptionPoolQuotaReader,
   setRemoteClaudeSubscriptionUsageReader,

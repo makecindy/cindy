@@ -6847,7 +6847,106 @@
           "deviceLink": "Device Link"
         },
         "onlyEncrypted": "Usar solo Agent-Net",
-        "onlyEncryptedHint": "Los dispositivos antiguos y los recursos compartidos que usen la conexión anterior no estarán disponibles. Desactivado por defecto."
+        "onlyEncryptedHint": "Los dispositivos antiguos y los recursos compartidos que usen la conexión anterior no estarán disponibles. Desactivado por defecto.",
+        "peerSwitch": {
+          "row": {
+            "toAgentNet": "Cambiando a Agent-Net…",
+            "toDeviceLink": "Volviendo a Device Link…"
+          },
+          "status": {
+            "toAgentNet": "Cambiando a Agent-Net",
+            "toDeviceLink": "Volviendo a Device Link"
+          },
+          "reconnecting": "Reconectando",
+          "toAgentNet": "Cambiar a Agent-Net",
+          "toDeviceLink": "Volver a Device Link",
+          "retry": "Reintentar",
+          "hint": "La conexión con este dispositivo pasa a tener cifrado de extremo a extremo. Si no se reconecta en 60 segundos, vuelve a Device Link.",
+          "steps": {
+            "request": {
+              "agentNet": "Pidiendo que active Agent-Net",
+              "deviceLink": "Pidiendo que desactive Agent-Net"
+            },
+            "reconnect": "Reconectando",
+            "confirm": {
+              "agentNet": "Esperando la reconexión por Agent-Net",
+              "deviceLink": "Esperando la reconexión por Device Link"
+            },
+            "revert": "Sin reconexión en 60 segundos, volviendo a Device Link"
+          },
+          "closeHint": "Puedes cerrar esta tarjeta; te avisaremos del resultado.",
+          "reverted": "No se cambió: no se reconectó por Agent-Net en 60 segundos, así que volvió a Device Link.",
+          "unsupported": "Usa una versión antigua de Cindy que no se puede cambiar desde aquí. Actualiza Cindy en ese ordenador y vuelve a intentarlo.",
+          "done": {
+            "toAgentNet": "Cambiado a Agent-Net. La conexión tiene cifrado de extremo a extremo.",
+            "toDeviceLink": "Vuelto a Device Link."
+          },
+          "blocked": {
+            "mobile": "Los teléfonos no aceptan control remoto. Activa Agent-Net en el propio teléfono.",
+            "peer-control-off": "No permite el control desde los dispositivos de tu cuenta. Cámbialo en ese ordenador.",
+            "control-off": "Desactivaste su control en este ordenador. Actívalo para cambiarlo desde aquí."
+          },
+          "toast": {
+            "toAgentNet": "«{{name}}» cambió a Agent-Net",
+            "toDeviceLink": "«{{name}}» volvió a Device Link",
+            "reverted": "«{{name}}» no cambió y volvió a Device Link",
+            "unsupported": "«{{name}}» usa una versión antigua de Cindy y no se puede cambiar a distancia",
+            "not-ready": "«{{name}}» no puede activar Agent-Net ahora",
+            "busy": "«{{name}}» está procesando otro cambio. Inténtalo en un momento.",
+            "failed": "No se pudo cambiar la conexión de «{{name}}».",
+            "encryption-required": "Desactiva «Usar solo Agent-Net» en «{{name}}» antes de volver",
+            "controller-encryption-required": "Desactiva «Usar solo Agent-Net» aquí antes de volver «{{name}}» a Device Link",
+            "agent-net-only-relay": "La conexión a «{{name}}» solo admite Agent-Net y no puede volver a Device Link"
+          },
+          "checking": "Comprobando si puede cambiar…",
+          "notReady": {
+            "not-signed-in": "No ha iniciado sesión en Cindy. Podrá activar Agent-Net después de iniciar sesión.",
+            "secure-storage": "El almacenamiento seguro no está disponible en ese ordenador, así que no puede activar Agent-Net. Resuélvelo en ese ordenador.",
+            "relay-identity": "Ese equipo aún no ha configurado Agent-Net para su relé actual. Configúralo primero en ese equipo."
+          },
+          "batch": {
+            "toAgentNet": "Cambiar todos a Agent-Net",
+            "toDeviceLink": "Volver todos a Device Link",
+            "confirmTitleAgentNet": "¿Cambiar estos ordenadores a Agent-Net?",
+            "confirmTitleDeviceLink": "¿Volver estos ordenadores a Device Link?",
+            "ready": "Listo",
+            "checking": "Comprobando",
+            "skipReason": {
+              "unsupported": "Requiere actualizar Cindy",
+              "not-ready": "No puede activar Agent-Net ahora",
+              "unreachable": "Sin respuesta ahora",
+              "encryption-required": "Usar solo Agent-Net",
+              "controller-encryption-required": "Solo Agent-Net aquí",
+              "agent-net-only-relay": "Red solo para Agent-Net"
+            },
+            "canaryNote": "Primero cambia un ordenador; el resto lo hace cuando este se reconecta. Cualquier ordenador que no se reconecte en 60 segundos vuelve por sí solo.",
+            "rollbackNote": "Al volver, la conexión deja de estar cifrada de extremo a extremo. Los ordenadores que usan solo Agent-Net deben desactivar primero esa restricción en el propio ordenador.",
+            "run": "Cambiar {{count}}",
+            "cancel": "Cancelar",
+            "close": "Listo",
+            "state": {
+              "waiting": "En espera",
+              "running": "Cambiando",
+              "done": "Cambiado",
+              "reverted": "Volvió",
+              "skipped": "Sin cambiar",
+              "failed": "Sin cambiar"
+            },
+            "stopped": "El primer ordenador no cambió, así que el resto se quedó igual.",
+            "finished": "{{done}} cambiado(s)",
+            "finishedWithRevert": "{{done}} cambiado(s), {{reverted}} sin cambiar"
+          },
+          "changedBy": {
+            "on": "Activado a distancia por «{{name}}» a las {{time}}",
+            "off": "Desactivado a distancia por «{{name}}» a las {{time}}"
+          },
+          "unreachable": "Esta vez no se pudo contactar con ese ordenador. Vuelve a abrir la tarjeta más tarde.",
+          "encryptionRequired": "Este ordenador usa solo Agent-Net. Desactiva «Usar solo Agent-Net» en ese ordenador antes de volver a Device Link.",
+          "disableBlocked": {
+            "controller-encryption-required": "Este ordenador tiene activado «Usar solo Agent-Net». Desactívalo aquí antes de volver el otro ordenador a Device Link.",
+            "agent-net-only-relay": "Esta conexión usa una red que solo admite Agent-Net. Elige una ruta compatible con Device Link antes de volver."
+          }
+        }
       }
     },
     "tina": {

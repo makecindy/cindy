@@ -6737,7 +6737,106 @@
           "deviceLink": "Device Link"
         },
         "onlyEncrypted": "Agent-Net만 사용",
-        "onlyEncryptedHint": "켜면 이전 버전 기기와 이전 연결을 사용하는 공유를 사용할 수 없습니다. 기본값은 꺼짐입니다."
+        "onlyEncryptedHint": "켜면 이전 버전 기기와 이전 연결을 사용하는 공유를 사용할 수 없습니다. 기본값은 꺼짐입니다.",
+        "peerSwitch": {
+          "row": {
+            "toAgentNet": "Agent-Net으로 전환 중…",
+            "toDeviceLink": "Device Link로 되돌리는 중…"
+          },
+          "status": {
+            "toAgentNet": "Agent-Net으로 전환 중",
+            "toDeviceLink": "Device Link로 되돌리는 중"
+          },
+          "reconnecting": "다시 연결 중",
+          "toAgentNet": "Agent-Net으로 전환",
+          "toDeviceLink": "Device Link로 되돌리기",
+          "retry": "다시 시도",
+          "hint": "전환하면 이 기기와의 연결이 종단 간 암호화됩니다. 60초 안에 다시 연결되지 않으면 자동으로 Device Link로 돌아갑니다.",
+          "steps": {
+            "request": {
+              "agentNet": "상대에게 Agent-Net 켜기 요청",
+              "deviceLink": "상대에게 Agent-Net 끄기 요청"
+            },
+            "reconnect": "상대가 다시 연결 중",
+            "confirm": {
+              "agentNet": "Agent-Net으로 다시 연결되기를 기다리는 중",
+              "deviceLink": "Device Link로 다시 연결되기를 기다리는 중"
+            },
+            "revert": "60초 안에 다시 연결되지 않아 Device Link로 되돌리는 중"
+          },
+          "closeHint": "이 카드를 닫아도 됩니다. 결과는 따로 알려 드립니다.",
+          "reverted": "전환하지 못했습니다: 60초 안에 Agent-Net으로 다시 연결되지 않아 자동으로 Device Link로 돌아갔습니다.",
+          "unsupported": "상대의 Cindy 버전이 오래되어 여기서 전환할 수 없습니다. 그 컴퓨터에서 Cindy를 업데이트한 뒤 다시 시도하세요.",
+          "done": {
+            "toAgentNet": "Agent-Net으로 전환했습니다. 연결이 종단 간 암호화됩니다.",
+            "toDeviceLink": "Device Link로 되돌렸습니다."
+          },
+          "blocked": {
+            "mobile": "휴대폰은 원격 제어를 받지 않습니다. 휴대폰에서 직접 Agent-Net을 켜세요.",
+            "peer-control-off": "상대가 「같은 계정 기기의 이 기기 제어 허용」을 켜지 않았습니다. 그 컴퓨터에서 전환하세요.",
+            "control-off": "이 컴퓨터에서 해당 기기 제어를 꺼 두었습니다. 켜면 여기서 전환할 수 있습니다."
+          },
+          "toast": {
+            "toAgentNet": "「{{name}}」을(를) Agent-Net으로 전환했습니다",
+            "toDeviceLink": "「{{name}}」을(를) Device Link로 되돌렸습니다",
+            "reverted": "「{{name}}」을(를) 전환하지 못해 자동으로 Device Link로 돌아갔습니다",
+            "unsupported": "「{{name}}」의 Cindy 버전이 오래되어 원격으로 전환할 수 없습니다",
+            "not-ready": "「{{name}}」은(는) 지금 Agent-Net을 켤 수 없습니다",
+            "busy": "「{{name}}」이(가) 다른 전환을 처리 중입니다. 잠시 후 다시 시도하세요",
+            "failed": "「{{name}}」의 연결을 전환하지 못했습니다",
+            "encryption-required": "먼저 “{{name}}”에서 “Agent-Net만 사용”을 끈 뒤 되돌려 주세요",
+            "controller-encryption-required": "“{{name}}”을 되돌리려면 먼저 이 컴퓨터에서 “Agent-Net만 사용”을 꺼 주세요",
+            "agent-net-only-relay": "“{{name}}” 연결은 Agent-Net만 지원하므로 Device Link로 되돌릴 수 없습니다"
+          },
+          "checking": "전환할 수 있는지 확인하는 중…",
+          "notReady": {
+            "not-signed-in": "상대가 Cindy에 로그인하지 않았습니다. 로그인 후 Agent-Net을 켤 수 있습니다.",
+            "secure-storage": "상대 컴퓨터의 보안 저장소를 사용할 수 없어 Agent-Net을 켤 수 없습니다. 그 컴퓨터에서 해결해야 합니다.",
+            "relay-identity": "상대 컴퓨터에 현재 중계 서버의 Agent-Net 연결이 설정되어 있지 않습니다. 먼저 그 컴퓨터에서 설정하세요."
+          },
+          "batch": {
+            "toAgentNet": "모두 Agent-Net으로 전환",
+            "toDeviceLink": "모두 Device Link로 되돌리기",
+            "confirmTitleAgentNet": "이 컴퓨터들을 Agent-Net으로 전환할까요?",
+            "confirmTitleDeviceLink": "이 컴퓨터들을 Device Link로 되돌릴까요?",
+            "ready": "전환 가능",
+            "checking": "확인 중",
+            "skipReason": {
+              "unsupported": "Cindy 업데이트 필요",
+              "not-ready": "지금 Agent-Net을 켤 수 없음",
+              "unreachable": "지금 응답 없음",
+              "encryption-required": "Agent-Net만 사용",
+              "controller-encryption-required": "이 컴퓨터는 Agent-Net만 사용",
+              "agent-net-only-relay": "Agent-Net 전용 네트워크"
+            },
+            "canaryNote": "먼저 한 대를 전환하고 다시 연결되는 것을 확인한 뒤 나머지를 함께 전환합니다. 60초 안에 다시 연결되지 않는 컴퓨터는 스스로 돌아갑니다.",
+            "rollbackNote": "되돌리면 연결의 종단 간 암호화가 해제됩니다. “Agent-Net만 사용”이 켜진 컴퓨터는 먼저 해당 컴퓨터에서 이 설정을 꺼야 합니다.",
+            "run": "{{count}}대 전환",
+            "cancel": "취소",
+            "close": "완료",
+            "state": {
+              "waiting": "대기 중",
+              "running": "전환 중",
+              "done": "전환됨",
+              "reverted": "자동으로 돌아감",
+              "skipped": "전환 안 함",
+              "failed": "전환 못 함"
+            },
+            "stopped": "첫 번째 컴퓨터를 전환하지 못해 나머지는 그대로 두었습니다.",
+            "finished": "{{done}}대 전환됨",
+            "finishedWithRevert": "{{done}}대 전환됨, {{reverted}}대는 전환하지 못함"
+          },
+          "changedBy": {
+            "on": "「{{name}}」이(가) {{time}}에 원격으로 켬",
+            "off": "「{{name}}」이(가) {{time}}에 원격으로 끔"
+          },
+          "unreachable": "이번에는 그 컴퓨터에 확인하지 못했습니다. 잠시 후 카드를 다시 열어 보세요.",
+          "encryptionRequired": "이 컴퓨터는 “Agent-Net만 사용”이 켜져 있습니다. Device Link로 되돌리려면 먼저 해당 컴퓨터에서 이 설정을 꺼 주세요.",
+          "disableBlocked": {
+            "controller-encryption-required": "이 컴퓨터는 “Agent-Net만 사용”이 켜져 있습니다. 다른 컴퓨터를 Device Link로 되돌리려면 먼저 여기에서 이 설정을 꺼 주세요.",
+            "agent-net-only-relay": "이 연결의 네트워크는 Agent-Net만 지원합니다. 되돌리려면 먼저 Device Link를 지원하는 연결 경로로 바꿔 주세요."
+          }
+        }
       }
     },
     "tina": {
