@@ -138,6 +138,52 @@ describe('local catalog recovery lifecycle', () => {
     } finally { prefs.__resetForTest(); }
   });
 
+  // Unit, restart/read-failure regression: a successful catalog can still contain
+  // a disconnected native provider after a CLI failure. Existing recovery only
+  // covered rejected IPC/storage reads. Returning to the window must re-read it,
+  // publish the recovered connection, and leave no polling after unmount.
+  it.each(['focus', 'online', 'visibilitychange'])('rechecks a disconnected native provider on %s even after a successful catalog read', async signal => {
+    const disconnected = { ...snapshot, providers: [{ id: 'openai', connected: false } as ProviderView] };
+    const recovered = { ...snapshot, providers: [{ id: 'openai', connected: true } as ProviderView] };
+    mocks.cachedProviders.mockReturnValue(disconnected);
+    mocks.loadProviders.mockResolvedValue(recovered);
+    mocks.initializeVisibility.mockResolvedValue(true);
+    (signal === 'visibilitychange' ? document : events).dispatchEvent(new Event(signal));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.commitProviders).toHaveBeenCalledWith(1, recovered);
+    expect(getLocalCatalogFailure()).toBeNull();
+    stop();
+    stop = () => {};
+    mocks.loadProviders.mockClear();
+    events.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.loadProviders).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('refreshes an account change and removes the subscription with the recovery lifecycle', async () => {
+    stop();
+    let onChanged: (() => void) | undefined;
+    const off = vi.fn();
+    Object.assign(events, { electronAPI: { subscriptionAccounts: { onChanged: (listener: () => void) => {
+      onChanged = listener;
+      return off;
+    } } } });
+    stop = startLocalCatalogRecovery();
+    mocks.initializeVisibility.mockResolvedValue(true);
+    mocks.cachedProviders.mockReturnValue(snapshot);
+    events.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.loadProviders).not.toHaveBeenCalled();
+    onChanged!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.commitProviders).toHaveBeenCalledWith(1, snapshot);
+    stop();
+    stop = () => {};
+    expect(off).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('bounds automatic retries and recovers when the user returns after fixing storage', async () => {
     mocks.initializationFailure.mockReturnValue('storage-quota');
     await refreshLocalCatalogSnapshot();

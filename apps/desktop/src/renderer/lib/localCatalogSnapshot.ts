@@ -74,10 +74,15 @@ export function startLocalCatalogRecovery(): () => void {
   const retry = (): void => {
     const owner = getDataOwnerGeneration();
     const snapshot = getCachedProvidersSnapshot();
+    // A native CLI read failure is returned as connected=false, so the catalog
+    // itself can have succeeded. Revisit that conclusion on recovery signals
+    // without polling or turning one provider's failure into a catalog error.
+    const nativeDisconnected = snapshot?.providers.some(provider =>
+      (provider.id === 'openai' || provider.id === 'anthropic') && !provider.connected);
     // An owner-generation change hides the previous failure. A foreground
     // retry may still be needed if this account has no current complete snapshot.
     if (getLocalCatalogFailure() || (owner.dataOwnerId && (!snapshot
-      || snapshot.ownerGeneration !== owner.generation))) void refreshLocalCatalogSnapshot();
+      || snapshot.ownerGeneration !== owner.generation || nativeDisconnected))) void refreshLocalCatalogSnapshot();
   };
   const onVisible = (): void => {
     if (document.visibilityState === 'visible') retry();
@@ -85,11 +90,15 @@ export function startLocalCatalogRecovery(): () => void {
   window.addEventListener('focus', retry);
   window.addEventListener('online', retry);
   document.addEventListener('visibilitychange', onVisible);
+  const offAccounts = window.electronAPI?.subscriptionAccounts?.onChanged?.(() => {
+    if (getDataOwnerGeneration().dataOwnerId) void refreshLocalCatalogSnapshot();
+  });
   return () => {
     recoveryOwners -= 1;
     window.removeEventListener('focus', retry);
     window.removeEventListener('online', retry);
     document.removeEventListener('visibilitychange', onVisible);
+    offAccounts?.();
     if (!recoveryOwners) cancelRecovery();
   };
 }
