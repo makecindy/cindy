@@ -1814,7 +1814,8 @@
       "about": "关于",
       "imBot": "IM 机器人",
       "ghosts": "法器",
-      "cindyMake": "Cindy Make"
+      "cindyMake": "Cindy Make",
+      "modelGroups": "模型组"
     },
     "sections": {
       "user": "用者",
@@ -20065,5 +20066,131 @@
     "detail": "请求来自「{{device}}」\n所为：{{purpose}}\n\n启用后，同账号设备可远控此机，执行任务、访问文件。此设长效，可随时于设置中关闭。",
     "decline": "暂不开启",
     "enable": "开启远程控制"
+  },
+  "modelGroups": {
+    "title": "模型组",
+    "description": "合模型供方已有之数源为一项。择模型时于「模型组」取之，此番用何源，由 Cindy 定夺。",
+    "routes": "路线",
+    "routesDescription": "一路线纳数源，新差事起时，依择法取其一。",
+    "sourceCount_other": "{{count}} 源",
+    "strategy": {
+      "expiring": {
+        "title": "将废者先用",
+        "hint": "订阅限额余多而将重设者先用，不使虚掷；限额不可读之源居后。"
+      },
+      "order": {
+        "title": "依序",
+        "hint": "居前者不可用，方用其次。"
+      },
+      "rotate": {
+        "title": "轮值",
+        "hint": "每一新差事易一源，均其劳。"
+      },
+      "cheapest": {
+        "title": "最省",
+        "hint": "订阅尚有限额者先用，不另费钱；余者依标价由低至高，无标价者居后。"
+      }
+    },
+    "picker": {
+      "empty": "尚无模型组。于设定合数源为一路线，即可于此择之。",
+      "manage": "理模型组"
+    },
+    "why": {
+      "expiringQuota": "限额尚余 {{left}}%，{{reset}} 重设，故先用之",
+      "expiring": "依限额居首",
+      "order": "居首之可用者",
+      "rotate": "此番轮至彼",
+      "only": "今唯彼可用",
+      "soonest": "诸源限额皆尽，彼最先复",
+      "soonestUntil": "诸源限额皆尽，彼最先复（{{reset}}）",
+      "standby": "此番未及",
+      "standbyQuota": "限额尚余 {{left}}%，{{reset}} 方重设，姑留之",
+      "off": "已于此路线停用",
+      "unavailable": "未连线，或此模型今不可择",
+      "limited": "限额已尽",
+      "limitedUntil": "限额已尽，{{reset}} 复",
+      "tight": "五小时限额将满，姑不用",
+      "cheapest": "标价最低",
+      "cheapestFree": "订阅尚有限额，不另费钱",
+      "noVision": "讯中有图，彼不能观图",
+      "exceptionImage": "讯中有图，唯于能观图之源中择",
+      "exceptionImageFallback": "讯中有图，然无能观图之源，照常择之",
+      "exceptionHours": "此时段改行「{{name}}」",
+      "separator": "；"
+    },
+    "settings": {
+      "newRoute": "立路线",
+      "newRouteName": "新路线",
+      "routesEmpty": "尚无路线。立其一，纳数源于中。",
+      "scopeNote": "模型组用于此机所起之新差事：起时定一源，差事行中不易。",
+      "back": "归模型组",
+      "name": "名",
+      "nameHint": "择模型时显此名。",
+      "routeShownAs": "择模型时见于「模型组」。",
+      "pick": "此番用何者",
+      "effort": "思之深浅",
+      "effortUnset": "不指定",
+      "effortHint": "所择模型不支此档时，依其常例而行。",
+      "sources": "可用之源",
+      "sourcesHint": "可纳不同模型；实用何者，书于差事之中。",
+      "sourcesEmpty": "尚无源。于下增已连线之模型。",
+      "sourcesFull": "一路线至多 {{count}} 源。",
+      "addSource": "增源",
+      "chooseModel": "择一模型",
+      "notConnected": "未连线",
+      "moveUp": "上移",
+      "moveDown": "下移",
+      "remove": "逐出此路线",
+      "useSource": "令此路线用 {{name}}",
+      "try": {
+        "title": "试之",
+        "hint": "观今起新差事将用何者。不遣讯，不耗限额。",
+        "run": "观其所择",
+        "picked": "用之",
+        "standby": "备用",
+        "skipped": "略过",
+        "unavailable": "此路线今无可用之源，新差事将用君原择之模型。"
+      },
+      "deleteRoute": "删此路线",
+      "deleteRouteConfirmTitle": "删「{{name}}」？",
+      "deleteRouteConfirmDescription": "他路线中改行此路之时段例外将一并删除。已起之差事不受影响。",
+      "delete": "删除",
+      "cancel": "罢",
+      "saveFailed": "未能存之，请再试。",
+      "exceptions": {
+        "title": "例外",
+        "hint": "依择法之前，先察此数事，自上而下。",
+        "empty": "尚无例外，每一新差事皆依上之择法。",
+        "imageRule": "讯中有图时，唯用能观图之源",
+        "hoursRule": "{{from}}–{{to}} 改行「{{name}}」",
+        "remove": "删此例外",
+        "add": "增例外",
+        "choose": "择一情形",
+        "kindImage": "讯中有图",
+        "kindHours": "某时段",
+        "from": "自",
+        "to": "至",
+        "useRoute": "改行",
+        "addHours": "增",
+        "sameHour": "起讫不可同时。",
+        "full": "至多 {{count}} 条例外。",
+        "needOtherRoute": "再立一路线，方可依时段改行之。"
+      }
+    },
+    "overview": {
+      "mapTitle": "今如何行",
+      "mapDescription": "自左而右：行何路线，终落何源。点路线可修之。",
+      "columnSources": "源",
+      "columnEmpty": "尚无",
+      "openRoute": "启路线「{{name}}」",
+      "recentTitle": "近日所择",
+      "recentEmpty": "尚无差事用过路线。",
+      "keptOriginal": "其中今无可用之模型，仍用原择之模型。",
+      "keptOriginalShort": "仍用原模型",
+      "latest": "近一差事所行之路"
+    },
+    "switchOffer": {
+      "action": "易用 {{model}} 续之"
+    }
   }
 }
