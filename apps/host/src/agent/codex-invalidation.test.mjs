@@ -101,7 +101,7 @@ test('independent accounts and logged-out profiles change nothing', async t => {
   const before = fs.readFileSync(p.authPath, 'utf8');
   let called = false;
   const result = await invalidateHostCodexLogin({ codexHome: p.codexHome, reason: 'token_revoked',
-    providerId: 'openai-account-fixture',
+    providerId: 'openai-account-fixture', isCodexAccountProvider: id => id === 'openai-account-fixture',
     disposeLocalHost: async () => { called = true; }, onInvalidated: () => { called = true; } });
   assert.equal(result, 'not-native');
   assert.equal(called, false);
@@ -232,6 +232,28 @@ test('the Host invalidation takes only the context maker-core reports', async ()
   visit(source('apps/host/src/agent/codex-runtime.ts'));
   assert.deepEqual(core, ['credentialAttribution', 'credentialGeneration', 'providerId']);
   assert.deepEqual(host, core);
+});
+
+// As the desktop (auth-adapters.ts invalidate): only an independent account is left to the account
+// service; a task on the gateway or a custom provider reporting a ChatGPT login failure
+// invalidates the native login.
+test('a failure reported by a task on the gateway or a custom provider invalidates the native login', async t => {
+  for (const providerId of ['xd', 'cprov-fixture']) {
+    const p = profile(t);
+    let scope = null;
+    const result = await invalidateHostCodexLogin({ codexHome: p.codexHome, reason: 'token_revoked', providerId,
+      credentialAttribution: 'unproven', loginInProgress: () => false,
+      isCodexAccountProvider: () => false, onInvalidated: value => { scope = value; } });
+    assert.equal(result, 'unproven', providerId);
+    assert.equal(scope, 'instance-isolated', providerId);
+    assert.equal(readInvalidatedSystemCodexAuthMarker(p.codexHome)?.unprovenCredentialAttribution, true, providerId);
+  }
+});
+
+// The runtime hands the account service's predicate, without the native connection.
+test('the Codex runtime passes the account service predicate to the invalidation', async () => {
+  const source = fs.readFileSync(new URL('./codex-runtime.ts', import.meta.url), 'utf8');
+  assert.ok(source.includes("isCodexAccountProvider: id => id !== 'openai' && options.config.codexAccounts.isCodexAccountProvider(id),"));
 });
 
 test('HOME stays empty: the system Codex login is never read or written', () => {

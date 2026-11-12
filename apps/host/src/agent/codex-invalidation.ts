@@ -68,8 +68,13 @@ export async function invalidateHostCodexLogin(input: {
   /** Reported by the engine with its context, as the desktop's invalidate(reason, context). */
   hostBound?: boolean;
   reason: string;
-  /** Independent accounts are invalidated through the account store, never here. */
+  /** The provider of the reporting task, as maker-core reports it. */
   providerId?: string;
+  /**
+   * The desktop's isCodexAccountProvider: an independent Codex account retires its own host and
+   * is invalidated through the account service, never here.
+   */
+  isCodexAccountProvider: (providerId: string) => boolean;
   /** maker-core's credential generation (JSON of the rejected auth.json fingerprint). */
   credentialGeneration?: string | null;
   credentialAttribution?: 'unproven';
@@ -80,7 +85,9 @@ export async function invalidateHostCodexLogin(input: {
   /** The desktop's onInvalidatedBroadcast, called last, after the marker write and cleanup. */
   onInvalidated?: (credentialScope: CredentialScope) => void | Promise<void>;
 }): Promise<HostCodexInvalidationResult> {
-  if (input.providerId && input.providerId !== 'openai') return 'not-native';
+  // As the desktop: only an independent account is left to the account service. A task on the
+  // gateway or a custom provider that reports a ChatGPT login failure invalidates the native login.
+  if (input.providerId && input.isCodexAccountProvider(input.providerId)) return 'not-native';
   const authPath = path.join(input.codexHome, 'auth.json');
   if (input.credentialAttribution === 'unproven') return invalidateUnattributed(input, authPath);
   const existing = readInvalidatedSystemCodexAuthMarker(input.codexHome);

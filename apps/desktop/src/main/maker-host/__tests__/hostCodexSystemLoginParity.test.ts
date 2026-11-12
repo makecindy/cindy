@@ -462,7 +462,7 @@ describe('the Host reconciles with the system Codex login as the installed deskt
         const f = fixture({ local: 'symlink', binding: 'shared' });
         if (side === 'desktop') await new DesktopCodexAuthAdapter().invalidate('token_revoked', engine ? { providerId: 'openai' } : undefined);
         else await hostInvalidation.invalidateHostCodexLogin({ codexHome: f.codexHome, systemAuthPath: f.systemAuth, reason: 'token_revoked',
-          ...(engine ? { hostBound: true, providerId: 'openai' } : {}) });
+          ...(engine ? { hostBound: true, providerId: 'openai', isCodexAccountProvider: () => false } : {}) });
         const marker = readInvalidatedSystemCodexAuthMarker(f.codexHome);
         const shape = marker && { scope: marker.credentialScope ?? null, recoveryOwner: Boolean(marker.recoveryOwnerId), keys: Object.keys(marker).sort(),
           system: [marker.dev, marker.ino].map(value => (value === 0 ? 0 : 'set')) };

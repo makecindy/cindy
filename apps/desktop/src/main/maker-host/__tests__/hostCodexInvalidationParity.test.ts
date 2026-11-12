@@ -15,11 +15,12 @@ import { configureOwnerContext } from '../../ownerContext.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { AuthState } from '@cindy/maker-core';
 // Load the adapter graph (and the real session module it wraps) before this file installs
 // its owner context below, as codexAuthInvalidation.test.ts does.
 import { DesktopCodexAuthAdapter } from '../auth-adapters.js';
+import { getActiveCatalog, setActiveCatalog } from '../active-catalog.js';
 import { readInvalidatedSystemCodexAuthMarker } from '../codex-auth-invalidation.js';
 import { currentCodexCredentialGeneration } from '../codexCredentialRead.js';
 import { bindNativeProviderAuth, isNativeProviderAuthBound, isNativeProviderAuthRevoked } from '../nativeProviderAuthBinding.js';
@@ -53,6 +54,7 @@ type HostInvalidation = {
   invalidateHostCodexLogin(input: {
     codexHome: string; reason: string; credentialGeneration?: string | null;
     credentialAttribution?: 'unproven'; loginInProgress?: () => boolean; hostBound?: boolean;
+    providerId?: string; isCodexAccountProvider?: (providerId: string) => boolean;
     onInvalidated?: (credentialScope: string) => void;
   }): Promise<string>;
 };
@@ -325,3 +327,44 @@ describe('a failure reported for a generation the profile login no longer has', 
     expect(outcome).toMatchObject(untouched);
   });
 });
+
+/**
+ * The desktop's entry check (auth-adapters.ts invalidate): only an independent Codex account is
+ * left alone; the gateway or a custom provider reporting a ChatGPT login failure invalidates the
+ * native login. The Host's predicate is its account service's (provider-config.ts isProvider,
+ * without the native connection, as codex-runtime.ts passes it).
+ */
+describe('a failure reported with the provider of the task', () => {
+  const ACCOUNT = 'fixture-codex-account';
+  const hostIsCodexAccountProvider = (id: string) => id !== 'openai' && getActiveCatalog().providers.some(
+    (provider) => provider.id === id && provider.source === 'user' && provider.auth.native === 'codex');
+  let restoreCatalog: (() => void) | null = null;
+  beforeAll(() => {
+    const previous = getActiveCatalog();
+    const openai = previous.providers.find((provider) => provider.id === 'openai');
+    if (!openai) throw new Error('fixture catalog has no openai provider');
+    setActiveCatalog({ ...previous, providers: [...previous.providers,
+      { ...openai, id: ACCOUNT, source: 'user', auth: { method: 'oauth', native: 'codex' } }] });
+    restoreCatalog = () => setActiveCatalog(previous);
+  });
+  afterAll(() => restoreCatalog?.());
+
+  for (const [providerId, expectInvalidated] of [['xd', true], ['cprov-fixture', true], [ACCOUNT, false]] as const) {
+    it(`${providerId}: ${expectInvalidated ? 'the native login is invalidated' : 'nothing changes'} on both`, async () => {
+      const byDesktop = profile();
+      const adapter = new DesktopCodexAuthAdapter();
+      await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({ authenticated: true });
+      await adapter.invalidate('token_revoked', { providerId, credentialAttribution: 'unproven' });
+      const afterDesktop = await desktopView(byDesktop);
+
+      const byHost = profile();
+      await host.invalidateHostCodexLogin({ codexHome: byHost.codexHome, reason: 'token_revoked', providerId,
+        credentialAttribution: 'unproven', loginInProgress: () => false, isCodexAccountProvider: hostIsCodexAccountProvider });
+      const afterHost = await desktopView(byHost);
+
+      expect(afterHost).toEqual(afterDesktop);
+      expect(afterHost.marker !== null).toBe(expectInvalidated);
+    });
+  }
+});
+

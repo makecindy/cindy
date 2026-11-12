@@ -160,6 +160,8 @@ export function createHostCodexRuntime(options: {
   const invalidateNative = async (reason: string, context?: { providerId?: string; credentialGeneration?: string | null; credentialAttribution?: 'unproven' }) => {
     check();
     await invalidateHostCodexLogin({ codexHome: path.join(options.profileDir, 'codex-home'), systemAuthPath, reason, ...context,
+      // The account service's predicate, without the native connection (as runtime.ts gives CodexAgent).
+      isCodexAccountProvider: id => id !== 'openai' && options.config.codexAccounts.isCodexAccountProvider(id),
       // The engine reports with a context; the subscription bridge reports without one.
       hostBound: context !== undefined,
       loginInProgress: () => options.config.codexAccounts.isCodexAccountLoginActive('openai'),
