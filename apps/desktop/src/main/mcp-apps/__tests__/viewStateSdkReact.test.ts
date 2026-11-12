@@ -133,3 +133,54 @@ it.each(['native', 'legacy', 'unsupported'] as const)('shares live edits and sub
     expect(host.request).toHaveBeenCalledTimes(mode === 'unsupported' ? 0 : 4);
   } finally { view.unmount(); state.dispose(); }
 });
+
+// Tester regression / React DOM unit: changing a mounted hook's App identity
+// must not transplant the old connected draft. Prior tests only covered null->App
+// and different Apps mounted side by side. Inputs: A=7, edited=8, B=70.
+it.each([false, true].flatMap(legacy =>
+  (['saved', 'pending', 'via-null', 'noop-null', 'edited-null'] as const).map(route => ({ legacy, route })),
+))('isolates App transitions ($route, legacy=$legacy)', async ({ legacy, route }) => {
+  vi.useFakeTimers();
+  const a = app(), b = app();
+  b.getHostContext = () => ({ 'cindy/view-state': { version: 1, page: 70 } });
+  const hooks = createViewStateHooks(legacy ? { ...React, useSyncExternalStore: undefined } : React);
+  let set!: (next: typeof initial | ((previous: typeof initial) => typeof initial)) => void;
+  function Editor({ host }: { host: ReturnType<typeof app> | null }) {
+    const [value, update] = hooks.useViewState(host, initial);
+    set = update;
+    return React.createElement('output', { 'data-testid': 'page' }, value.page);
+  }
+  const view = render(React.createElement(Editor, { host: a }));
+  const shown = () => view.getByTestId('page').textContent;
+  const aState = createViewState(a, initial);
+  const bState = createViewState(b, initial);
+  try {
+    expect(shown()).toBe('7');
+    act(() => set(s => ({ ...s, page: 8 })));
+    if (route === 'saved') await act(() => flushViewState(a));
+    else expect(a.request).not.toHaveBeenCalled(); // Leave A's debounce unexpired.
+    if (route === 'via-null' || route === 'noop-null' || route === 'edited-null') {
+      view.rerender(React.createElement(Editor, { host: null }));
+      expect(shown()).toBe('1'); // A's connected value is not an unconnected draft.
+      if (route === 'edited-null') act(() => set(s => ({ ...s, page: 9 })));
+      if (route === 'noop-null') act(() => set(s => s));
+    }
+    view.rerender(React.createElement(Editor, { host: b }));
+    const expected = route === 'edited-null' ? 9 : 70;
+    expect(shown()).toBe(String(expected));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(a.request).toHaveBeenCalledTimes(1); // Cleanup flushes A before its debounce expires.
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(a.request).toHaveBeenCalledTimes(1);
+    expect(a.request.mock.calls[0][0]).toMatchObject({ params: { state: { version: 1, page: 8 } } });
+    expect(aState.get().page).toBe(8);
+    expect(bState.get().page).toBe(expected);
+    expect(b.request).toHaveBeenCalledTimes(route === 'edited-null' ? 1 : 0);
+    if (route === 'edited-null') expect(b.request.mock.calls[0][0]).toMatchObject({ params: { state: { version: 1, page: 9 } } });
+    // Discarding B's component also must not flush its untouched restored value:
+    // the old edited flag belongs to A, except for a real null-stage edit handed to B.
+    view.unmount();
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(b.request).toHaveBeenCalledTimes(route === 'edited-null' ? 1 : 0);
+  } finally { view.unmount(); aState.dispose(); bState.dispose(); }
+});

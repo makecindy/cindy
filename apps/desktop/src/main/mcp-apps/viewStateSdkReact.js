@@ -39,9 +39,11 @@ export function createViewStateHooks({ useState, useRef, useEffect, useCallback,
     const slot = useRef();
     if (!slot.current || slot.current.app !== app) {
       const previous = slot.current;
-      const seed = previous?.edited ? previous.controller.get() : undefined;
+      // Only edits made without an App can cross the connection boundary.
+      // Connected drafts and their dirty flag remain owned by the previous App.
+      const seed = previous?.app === null && previous.edited ? previous.controller.get() : undefined;
       const controller = app ? createViewState(app, defaults.current, options) : disconnected(seed ?? defaults.current);
-      slot.current = { app, controller, seed: app ? seed : undefined, mounts: 0, edited: previous?.edited ?? false };
+      slot.current = { app, controller, seed: app ? seed : undefined, mounts: 0, edited: seed !== undefined };
     }
     const current = slot.current;
     const value = useStore(current.controller.subscribe, current.controller.get, current.controller.get);
@@ -51,10 +53,11 @@ export function createViewStateHooks({ useState, useRef, useEffect, useCallback,
         const seed = current.seed; current.seed = undefined;
         current.controller.set(seed);
       }
-      current.edited = true;
+      const before = current.controller.get();
       // The controller computes functional updates from the one shared snapshot,
       // then notifies all JS/React subscribers before a same-event flush can run.
       current.controller.set(next);
+      current.edited ||= !Object.is(before, current.controller.get());
     }, []);
     const visible = current.seed ?? value;
     useEffect(() => {
