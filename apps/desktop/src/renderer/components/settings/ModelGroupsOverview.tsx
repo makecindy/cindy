@@ -250,7 +250,7 @@ function RelationMap({ config, decisions, onOpenRoute, namesOf }: {
   return (
     <div ref={containerRef} className="relative grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] gap-x-12 px-4 pb-4 pt-3" data-testid="model-groups-map">
       {/* 连线跟在格子后面淡入；动的是外层 HTML 元素，不在 SVG 上做动画。 */}
-      <div className="pointer-events-none absolute inset-0 animate-fade-in motion-reduce:animate-none" style={{ animationDelay: '220ms', animationFillMode: 'both' }} aria-hidden>
+      <div className="pointer-events-none absolute inset-0 animate-fade-in motion-reduce:animate-none" style={{ animationDelay: 'var(--motion-enter)', animationFillMode: 'both' }} aria-hidden>
       <svg className="absolute inset-0 size-full overflow-visible">
         {paths.map((path) => (
           <path
