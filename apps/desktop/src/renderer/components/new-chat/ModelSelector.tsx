@@ -3679,7 +3679,7 @@ function ModelSelectorContentView({
           <UnifiedModelPanel
             {...(!deviceId && !providersOverride && localProviders.loading && !localProviders.error && providers.length === 0
               ? {
-                  catalogNotice: (
+                  emptyCatalogNotice: (
                     <div role="status" className="flex items-center justify-center gap-1.5 px-3 py-6 text-13 text-[var(--text-tertiary)]">
                       <Spinner size={14} />
                       {t('newChat.modelSelector.trigger.loading')}

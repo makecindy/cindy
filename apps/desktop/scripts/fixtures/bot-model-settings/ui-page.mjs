@@ -8,7 +8,8 @@ export default {
   notCovered: 'Live catalog discovery, remote devices, persistence and model execution; fixture supplies providers and local component state',
   stubs: {
     'src/renderer/hooks/useModelRouteDevices': `export const useModelRouteDevices = ({ leadAgentDeviceId }) => ({
-      devices: leadAgentDeviceId ? [{ deviceId: leadAgentDeviceId, name: 'Shared models' }] : undefined,
+      devices: JSON.parse(document.getElementById('ui-page-context').textContent).case === 'loading-remote-favorite' ? [{ deviceId: 'fixture-device', name: 'Other computer' }]
+        : leadAgentDeviceId ? [{ deviceId: leadAgentDeviceId, name: 'Shared models' }] : undefined,
       leadAgentDeviceId: leadAgentDeviceId ?? null,
     });`,
   },
@@ -16,6 +17,7 @@ export default {
     default: { about: 'Unavailable primary and backup; status belongs to the model' },
     available: { about: 'Long available name with reasoning effort; no unavailable status on this model' },
     loading: { about: '#10207: local first snapshot pending, then ready while the saved model picker stays open' },
+    'loading-remote-favorite': { about: '#10207 review: ready other-computer favorite remains selectable while local catalog is pending' },
     'four-backups': { about: 'Four visible backups with unbroken IDs and working reorder/remove controls' },
     'global-settings': { about: 'Global settings row uses the same wrapped picker' },
     'shared-only': { about: 'Shared-only Gemini/Terra labels resolve in primary and backup triggers' },
@@ -31,6 +33,18 @@ export default {
   },
   async check(page, ui) {
     const pickers = page.locator('[data-model-settings-fixture] button[aria-haspopup="listbox"]');
+    if (ui.case === 'loading-remote-favorite') {
+      await pickers.first().click();
+      const list = page.getByRole('listbox');
+      await list.getByText('Shared Gemini', { exact: true }).waitFor();
+      assert.equal(await list.getByRole('status').count(), 0);
+      await ui.capture('ready-favorite-local-pending');
+      await page.locator('[data-rail-item="favorites"]').click();
+      await list.getByText('Shared Gemini', { exact: true }).click();
+      await pickers.first().getByText('Shared Gemini', { exact: true }).waitFor();
+      await ui.capture('selected-remote-favorite');
+      return;
+    }
     if (ui.case === 'loading') {
       await pickers.first().click();
       const list = page.getByRole('listbox');

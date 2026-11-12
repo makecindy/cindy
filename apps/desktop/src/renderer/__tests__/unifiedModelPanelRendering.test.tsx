@@ -389,6 +389,34 @@ describe('分享模型收藏', () => {
     vi.restoreAllMocks();
   });
 
+  // #10207 review: local pending must not mask a ready favorite from another source.
+  // Existing loading cases had no cross-source rows. Minimal input: empty local
+  // snapshot plus one ready shared favorite; tier: unit, real selector/panel path.
+  it('keeps a ready shared favorite selectable while the local catalog is pending', async () => {
+    const readyProviders = providersRef.providers;
+    addModelFavorite({ providerId: providerShareFavoriteSource(received), modelId: 'claude-opus-5', agent: 'cc', effort: 'medium' });
+    providersRef.providers = [];
+    providersRef.loading = true;
+    onTestFinished(() => { providersRef.providers = readyProviders; providersRef.loading = false; });
+    const onUnifiedSelect = vi.fn();
+    renderPanel({
+      remoteAgent: { devices: [{ deviceId: 'share:s1', name: 'Shared models' }], selectedDeviceId: null },
+      onUnifiedSelect,
+    });
+    for (const rail of ['all', 'favorites']) {
+      await act(async () => fireEvent.click(document.querySelector(`[data-rail-item="${rail}"]`)!));
+      const row = rowFor('Opus 5');
+      expect(row.getAttribute('aria-disabled')).not.toBe('true');
+      expect(screen.queryByText('newChat.modelSelector.trigger.loading')).toBeNull();
+      await act(async () => fireEvent.click(row));
+      expect(onUnifiedSelect).toHaveBeenLastCalledWith(expect.objectContaining({
+        providerId: 'anthropic', modelId: 'claude-opus-5',
+        agentDevice: expect.objectContaining({ deviceId: 'share:s1' }),
+      }));
+    }
+    expect(onUnifiedSelect).toHaveBeenCalledTimes(2);
+  });
+
   it('点击收藏后可见、可重新选择，完整配置保存在受邀者账号', async () => {
     const onUnifiedSelect = vi.fn();
     renderPanel({ deviceId: 'share:s1', onUnifiedSelect });
