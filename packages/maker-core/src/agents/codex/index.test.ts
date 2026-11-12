@@ -8665,6 +8665,61 @@ describe('CodexAgent MCP thread context hooks', () => {
     } finally { await agent.dispose(); }
   });
 
+  it.each(['environment', 'initialize', 'skills'])('stops credential-free discovery during %s when disposed', async (phase) => {
+    let release = () => {};
+    let reached!: () => void;
+    const blocked = new Promise<void>(resolve => { reached = resolve; });
+    const pause = () => new Promise<void>(resolve => { release = resolve; reached(); });
+    const deps = createDeps();
+    deps.auth = { ...deps.auth, getState: async () => ({ authenticated: false }), getAuthEnv: async () => {
+      if (phase === 'environment') await pause();
+      return { CODEX_HOME: path.join(os.tmpdir(), 'codex-skill-home') };
+    } };
+    if (phase === 'initialize') MockCodexTransport.beforeInitializeResponse = pause;
+    if (phase === 'skills') MockCodexTransport.beforeSkillsListResponse = pause;
+    const agent = new CodexAgent(deps);
+    const result = agent.listAgentSkills({}).catch(error => error);
+    try {
+      await blocked;
+      await agent.dispose();
+      release();
+      if (phase !== 'environment') expect(createdTransports[0].closed).toBe(true);
+      expect(await result).toBeInstanceOf(Error);
+      if (phase === 'environment') expect(createdTransports).toHaveLength(0);
+    } finally {
+      release();
+      await Promise.all(createdTransports.map(transport => transport.close()));
+      await agent.dispose();
+      await result;
+    }
+  });
+
+  it.each(['initialize', 'skills'])('bounds credential-free discovery during %s and closes its process', async (phase) => {
+    vi.useFakeTimers();
+    let release = () => {};
+    let reached!: () => void;
+    const blocked = new Promise<void>(resolve => { reached = resolve; });
+    const pause = () => new Promise<void>(resolve => { release = resolve; reached(); });
+    if (phase === 'initialize') MockCodexTransport.beforeInitializeResponse = pause;
+    else MockCodexTransport.beforeSkillsListResponse = pause;
+    const deps = createDeps();
+    deps.auth = { ...deps.auth, getState: async () => ({ authenticated: false }), getAuthEnv: async () => ({ CODEX_HOME: path.join(os.tmpdir(), 'codex-skill-home') }) };
+    const agent = new CodexAgent(deps);
+    const result = agent.listAgentSkills({}).catch(error => error);
+    try {
+      await blocked;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(createdTransports[0].closed).toBe(true);
+      expect(await result).toMatchObject({ message: expect.stringMatching(/timed out|timeout/) });
+    } finally {
+      release();
+      await Promise.all(createdTransports.map(transport => transport.close()));
+      await agent.dispose();
+      await result;
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps an installed skill-creator ahead of the native system fallback', async () => {
     const home = os.homedir();
     const installedPath = path.join(home, '.agents', 'skills', 'skill-creator', 'SKILL.md');
