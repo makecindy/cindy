@@ -21,6 +21,11 @@ import { AppPreferenceControl } from '../AppPreferenceControl';
 import { ThemeProvider, __resetLoginFirstLaunchLightGateForTest } from '../../hooks/useTheme';
 import { bootstrapLocalThemesSync } from '../../themes/local-themes';
 import { getThemeFamilies } from '../../themes/families';
+import { themeService } from '../../themes/theme-service';
+import { DEFAULT_APPEARANCE_SETTINGS } from '../../../shared/appearanceSettings';
+
+vi.mock('../../lib/toast', () => ({ toast: { error: vi.fn() } }));
+vi.mock('../../i18n', () => ({ default: { t: (key: string) => key } }));
 
 let receive: (request: AppPreferenceRequest) => Promise<void>;
 const request = (): AppPreferenceRequest => ({ requestId: 'refresh', operation: 'refresh-themes',
@@ -57,12 +62,70 @@ describe('theme refresh confirmation', () => {
   // when the Agent initiates a change. Minimum input: one builtin update; unit.
   it('applies an Agent selection through the original setters and confirms browser storage', async () => {
     const input = { ...request(), operation: 'update' as const, patch: { theme: 'dark' as const, themeFamily: 'default' } };
-    await act(async () => { await receive(input); });
+    let pending!: Promise<void>;
+    act(() => { pending = receive(input); });
+    expect(state.reply).toHaveBeenCalledTimes(1); // Builtins retain the synchronous request path.
+    await pending;
     expect(state.reply).toHaveBeenCalledWith(expect.objectContaining({ ok: true,
       state: expect.objectContaining({ theme: 'dark', themeFamily: 'default' }) }));
     expect(localStorage.getItem('theme')).toBe('dark');
     expect(localStorage.getItem('theme.familyId')).toBe('default');
   });
+
+  // Unit through the mounted Agent bridge and real ThemeProvider: a mixed
+  // mode/family update must wait before either write, then return its actual
+  // result. Old persistence-only coverage confirmed a rejected package too early.
+  // One deferred preparation also covers owner/deadline cancellation at commit.
+  it.each(['success', 'failure', 'owner', 'deadline', 'superseded'] as const)(
+    'confirms package preparation before committing an Agent update (%s)', async outcome => {
+      const selectTheme = vi.fn().mockResolvedValue(DEFAULT_APPEARANCE_SETTINGS);
+      let complete!: (value: typeof DEFAULT_APPEARANCE_SETTINGS) => void;
+      let reject!: (error: Error) => void;
+      selectTheme.mockImplementationOnce(() => new Promise((resolve, fail) => { complete = resolve; reject = fail; }));
+      Object.assign(window.electronAPI, { appearanceSettings: { selectTheme,
+        getSync: () => DEFAULT_APPEARANCE_SETTINGS, onChanged: () => () => {},
+      } });
+      window.electronAPI.localThemes.listSync = () => ({ ...payload(), themes: [
+        ...payload().themes,
+        ...(['light', 'dark'] as const).map(type => ({ id: `paper-${type}-local`, family: 'paper',
+          name: 'Paper', type, colors: {}, packageSha256: 'a'.repeat(64), appearance: { density: 0.9 } })),
+      ] });
+      bootstrapLocalThemesSync();
+      const originalTheme = themeService.getCurrentTheme();
+      const writes = vi.spyOn(Storage.prototype, 'setItem');
+      const input = { ...request(), operation: 'update' as const,
+        patch: { theme: 'dark' as const, themeFamily: 'paper-local' } };
+      let pending!: Promise<void>;
+      act(() => { pending = receive(input); });
+      expect(state.reply).not.toHaveBeenCalled();
+      expect(writes).not.toHaveBeenCalled();
+      expect(localStorage.getItem('theme')).toBe('system');
+      expect(localStorage.getItem('theme.familyId')).toBe('old-local');
+      expect(themeService.getCurrentTheme()).toBe(originalTheme);
+      if (outcome === 'owner') state.current = false;
+      if (outcome === 'deadline') vi.spyOn(Date, 'now').mockReturnValue(input.expiresAt + 1);
+      if (outcome === 'superseded') {
+        await act(async () => { await receive({ ...request(), requestId: 'newer', operation: 'update',
+          patch: { themeFamily: 'default' } }); });
+        state.reply.mockClear();
+      }
+      await act(async () => {
+        if (outcome === 'failure') reject(new Error('Invalid theme resource'));
+        else complete(DEFAULT_APPEARANCE_SETTINGS);
+        await pending;
+      });
+      const success = outcome === 'success';
+      expect(state.reply).toHaveBeenCalledExactlyOnceWith(success ? expect.objectContaining({
+        requestId: input.requestId, ok: true,
+        state: expect.objectContaining({ theme: 'dark', themeFamily: 'paper-local' }),
+      }) : { requestId: input.requestId, ok: false });
+      expect(localStorage.getItem('theme')).toBe(success ? 'dark' : 'system');
+      expect(localStorage.getItem('theme.familyId')).toBe(success ? 'paper-local' : outcome === 'superseded' ? 'default' : 'old-local');
+      if (!success && outcome !== 'superseded') expect(writes).not.toHaveBeenCalled();
+      if (outcome === 'owner' || outcome === 'deadline') expect(selectTheme).toHaveBeenLastCalledWith(null);
+      if (outcome === 'failure') expect(themeService.getCurrentTheme()).toBe(originalTheme);
+    },
+  );
 
   it('does not confirm a theme write when original browser storage rejects it', async () => {
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('Quota exceeded'); });

@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useState } from 'react';
 import { createElement, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 
 import {
   DEFAULT_FAMILY_ID,
@@ -8,17 +9,19 @@ import {
   tryGetFamily,
 } from '../themes/families';
 import { onLocalThemesChange } from '../themes/local-themes';
-import { presentTheme } from '../appearance/AppearancePresenter';
+import { prepareThemeSelection, presentTheme } from '../appearance/AppearancePresenter';
 import { AppearanceMotionContext } from '../appearance/AppearanceMotionContext';
 import type { ThemeType } from '../themes/types';
 
 export type Theme = 'system' | 'light' | 'dark';
+type ThemeChoice = { theme?: Theme; familyId?: string };
 
 interface ThemeContextValue {
   theme: Theme;
   setTheme: (theme: Theme) => void;
   familyId: string;
   setFamily: (familyId: string) => void;
+  setSelection: (choice: ThemeChoice, current?: () => boolean) => void | Promise<boolean>;
   /**
    * 当前家族在请求 type 下没变体, 已 fallback 到另一个 type 时, 这里
    * 返回 "请求的 type" (供 UI 显示 "无浅色 / 无深色" 提示)。否则 null。
@@ -128,7 +131,7 @@ function disableTransitionsTemporarily(): void {
   });
 }
 
-export function applyThemeClass(theme: Theme, force = false, rollback?: () => void, prepare = true): void {
+export function applyThemeClass(theme: Theme, force = false, prepare = true): void {
   const root = document.documentElement;
   const wasDark = root.classList.contains('dark');
   // 首启亮色门激活期间(pre-login 会话)一律按亮色解析——ThemeProvider 挂载
@@ -144,7 +147,7 @@ export function applyThemeClass(theme: Theme, force = false, rollback?: () => vo
     disableTransitionsTemporarily();
   }
 
-  presentTheme(nextTheme, true, rollback, prepare);
+  presentTheme(nextTheme, true, prepare);
 }
 
 /** 无 ThemeProvider 的窗口用。 */
@@ -282,48 +285,29 @@ export function ThemeProvider({
     applyThemeClass(getStoredTheme(), true);
   }), []);
 
-  const capturePackageRollback = useCallback((family: ReturnType<typeof tryGetFamily>) => {
-    if (![family?.light, family?.dark].some(variant => variant?.packageSha256 && variant.appearance)) return;
-    const previousMode = getStoredTheme(), previousFamily = getStoredFamilyId();
-    let storedMode: string | null = null, storedFamily: string | null = null;
-    try { storedMode = localStorage.getItem(STORAGE_KEY); storedFamily = localStorage.getItem(FAMILY_KEY); } catch { /* unavailable */ }
-    return () => {
-      setThemeState(previousMode); setFamilyIdState(previousFamily);
-      try {
-        if (storedMode === null) localStorage.removeItem(STORAGE_KEY); else localStorage.setItem(STORAGE_KEY, storedMode);
-        if (storedFamily === null) localStorage.removeItem(FAMILY_KEY); else localStorage.setItem(FAMILY_KEY, storedFamily);
-      } catch { /* localStorage may be unavailable */ }
-      applyThemeClass(previousMode, true, undefined, false);
-    };
-  }, []);
-
-  const setTheme = useCallback((next: Theme) => {
-    const rollback = capturePackageRollback(tryGetFamily(familyId));
-    setThemeState(next);
-    try {
-      localStorage.setItem(STORAGE_KEY, next);
-    } catch {
-      // localStorage may be unavailable
-    }
-    applyThemeClass(next, false, rollback);
-  }, [capturePackageRollback, familyId]);
-
-  const setFamily = useCallback(
-    (next: string) => {
-      const family = tryGetFamily(next);
-      if (!family) return;
-      const rollback = capturePackageRollback(family);
-      setFamilyIdState(next);
-      try {
-        localStorage.setItem(FAMILY_KEY, next);
-      } catch {
-        // localStorage may be unavailable
+  const setSelection = useCallback((choice: ThemeChoice, current?: () => boolean) => {
+    if (choice.familyId !== undefined && !tryGetFamily(choice.familyId)) return;
+    const commit = (prepare = true) => {
+      if (choice.theme !== undefined) {
+        setThemeState(choice.theme);
+        try { localStorage.setItem(STORAGE_KEY, choice.theme); } catch { /* localStorage may be unavailable */ }
+        applyThemeClass(choice.theme, false, prepare);
       }
-      // 本地主题可在 ID 不变时刷新配置，必须重新 apply 才会更新 CSS 与品牌素材订阅者。
-      applyThemeClass(theme, true, rollback);
-    },
-    [capturePackageRollback, theme],
-  );
+      if (choice.familyId !== undefined) {
+        setFamilyIdState(choice.familyId);
+        try { localStorage.setItem(FAMILY_KEY, choice.familyId); } catch { /* localStorage may be unavailable */ }
+        // A local theme can change without changing its ID; always reapply it.
+        applyThemeClass(choice.theme ?? theme, true, prepare);
+      }
+    };
+    const mode = firstLaunchLightSession === true ? 'light' : choice.theme ?? theme;
+    const variant = resolveFamilyVariant(choice.familyId ?? getStoredFamilyId(), resolveIsDark(mode) ? 'dark' : 'light').theme;
+    const pending = prepareThemeSelection(variant, () => flushSync(() => commit(false)), current);
+    if (pending) return pending;
+    commit();
+  }, [theme]);
+  const setTheme = useCallback((next: Theme) => setSelection({ theme: next }), [setSelection]);
+  const setFamily = useCallback((next: string) => setSelection({ familyId: next }), [setSelection]);
 
   // setFamily / setTheme 各自已经调过 applyThemeClass; 这个 effect 只处理
   // 初始挂载和 mode 变化 (setTheme 内部 set state 之后这里再跑一次也无害, 因为
@@ -442,6 +426,7 @@ export function ThemeProvider({
           setTheme,
           familyId,
           setFamily,
+          setSelection,
           fallbackFromType,
         },
       },

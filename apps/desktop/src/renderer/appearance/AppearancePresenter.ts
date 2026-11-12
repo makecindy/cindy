@@ -7,37 +7,63 @@ import { SCALABLE_APPEARANCE_TOKENS } from '../styles/generated/token-mappings';
 import { LOCAL_THEME_SUFFIX } from '../../shared/local-themes';
 import type { ThemeSelection } from '../../shared/appearanceDefinition';
 
-let packageSelection: { value: ThemeSelection; rollback?: () => void } | undefined;
+let packageSelection: ThemeSelection | undefined;
 
-/** Preserve synchronous palette application; only packages prepare extra defaults. */
-export function presentTheme(theme: Theme, notifyFailure = true, rollbackSelection?: () => void, prepare = true): void {
-  const previous = packageSelection;
-  const value: ThemeSelection | undefined = theme.packageSha256 && theme.appearance ? {
+function packageThemeSelection(theme: Theme): ThemeSelection | undefined {
+  return theme.packageSha256 && theme.appearance ? {
     mode: theme.type,
     familyId: theme.family ? `${theme.family}${LOCAL_THEME_SUFFIX}` : theme.id,
   } : undefined;
-  const previousTheme = value && notifyFailure && prepare ? themeService.getCurrentTheme() : null;
+}
+
+/** Explicit package choices prepare before committing browser storage or palette. */
+export function prepareThemeSelection(theme: Theme, commit: () => void, current: () => boolean = () => true): Promise<boolean> | undefined {
+  const value = packageThemeSelection(theme);
+  if (!value) {
+    // Even choosing the current builtin cancels an in-flight package choice.
+    if (packageSelection) {
+      packageSelection = undefined;
+      void window.electronAPI?.appearanceSettings?.selectTheme?.(null).catch(() => {
+        if (!packageSelection) notifyThemeAppearanceFailure();
+      });
+    }
+    return;
+  }
+  const requested = packageSelection = value;
+  const bridge = window.electronAPI?.appearanceSettings;
+  if (!bridge?.selectTheme) { notifyThemeAppearanceFailure(); return Promise.resolve(false); }
+  return bridge.selectTheme(value).then(() => {
+    if (packageSelection !== requested) return false;
+    if (!current()) {
+      // An expired Agent request never becomes the saved choice. Rebuild only
+      // the Host defaults from the palette that is still selected.
+      const active = themeService.getCurrentTheme();
+      if (active) presentTheme(active, false);
+      return false;
+    }
+    commit();
+    return true;
+  }).catch(() => {
+    if (packageSelection === requested && current()) notifyThemeAppearanceFailure();
+    return false;
+  });
+}
+
+/** Preserve synchronous palette application; only packages prepare extra defaults. */
+export function presentTheme(theme: Theme, notifyFailure = true, prepare = true): void {
+  const previous = packageSelection;
+  const value = packageThemeSelection(theme);
   themeService.applyTheme(theme);
-  packageSelection = value ? { value } : undefined;
-  if (!prepare) return; // Reverting a rejected preparation leaves the Host's previous defaults intact.
+  packageSelection = value;
+  if (!prepare) return;
   if (!packageSelection && !previous) return;
   const bridge = window.electronAPI?.appearanceSettings;
   if (!bridge?.selectTheme) return;
   const requested = packageSelection;
-  if (requested && notifyFailure) {
-    // Rapid, unconfirmed choices share one undo point. Release it on success;
-    // localStorage remains the selection owner, never a persisted rollback log.
-    requested.rollback = previous?.rollback ?? (() => {
-      packageSelection = previous;
-      if (rollbackSelection) rollbackSelection();
-      else if (previousTheme) themeService.applyTheme(previousTheme);
-    });
-  }
   void bridge.selectTheme(value ?? null)
-    .then(() => { if (requested && packageSelection === requested) delete requested.rollback; })
     .catch(() => {
       if (packageSelection !== requested) return;
-      if (notifyFailure) { requested?.rollback?.(); notifyThemeAppearanceFailure(); }
+      if (notifyFailure) notifyThemeAppearanceFailure();
       else window.electronAPI?.logToMain?.('warn', 'renderer/appearance', 'Theme package restore failed; saved selection retained');
     });
 }
