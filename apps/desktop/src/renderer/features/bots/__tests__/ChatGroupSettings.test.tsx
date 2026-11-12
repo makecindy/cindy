@@ -334,26 +334,35 @@ it('saves the group repository from the project section', async () => {
   expect(mocks.updateBotGroup).toHaveBeenCalledOnce();
 });
 
-// bot-group-chat.md §4.0/§7.1 (2026-11-11): in a project group the organizer answers messages that
-// @ nobody, except where only @mentioned teammates reply. The unaddressed row must say who answers
-// (it used to promise a discussion queue), and the organizer row leads the project section; without
-// a project both read as before and the organizer stays under 分工.
+// bot-group-chat.md「群里的 Cindy」(2026-11-12, replaces the 2026-11-11 「负责人回答」 layout): a server
+// with the group's own Cindy has its switch in group management, saved with the group; while it is on,
+// 「大家都可以接话」 means Cindy answers and says so. Switched off, or on an older server, the rows read as
+// before. The organizer stays under 分工 either way and never offers the group's Cindy.
 const SHARED = 'bots.groupChat.settings.';
 const sectionOf = (element: HTMLElement) => element.closest('section')!.querySelector('h2, h3')!.textContent;
 it.each([
-  ['a project, anyone may reply', { kind: 'github' as const, repo: 'makecindy/cindy' }, 'all', 'project', 'organizerProjectHint', key('replyModeOrganizer'), key('replyModeOrganizerNote')],
-  ['a project, only @mentioned reply', { kind: 'github' as const, repo: 'makecindy/cindy' }, 'mentioned', 'project', 'organizerHint', key('replyModeOrganizer'), key('replyModeMentionedNote')],
-  ['no project', null, 'all', 'work', 'organizerHint', `${SHARED}replyModeAll`, `${SHARED}replyModeNote`],
-] as const)('describes who answers and places the organizer for %s', (_case, project, replyMode, section, hint, allLabel, replyHint) => {
-  renderAt({ ...group(true), singleSpeaker: true, supportsGroupProject: true, project, replyMode, autoContinue: false }, 'manage');
-  const organizer = screen.getByRole('combobox', { name: 'bots.groupChat.organizer' });
-  expect(sectionOf(organizer)).toBe(key(section));
-  expect(screen.getByText(key(hint))).toBeTruthy();
+  ['an older server', undefined, `${SHARED}replyModeAll`, `${SHARED}replyModeNote`],
+  ['the group Cindy on', true, key('replyModeAssistant'), key('replyModeAssistantNote')],
+  ['the group Cindy off', false, `${SHARED}replyModeAll`, `${SHARED}replyModeNote`],
+] as const)('describes who answers unaddressed messages on %s', async (_case, enabled, allLabel, replyHint) => {
+  const cindy = { actorId: 'cindy', botId: 'cindy', actorKind: 'bot' as const, assistant: true, name: 'Cindy', avatar: '', avatarColor: 'violet', status: 'active' as const, role: 'member' as const };
+  const members = group(true).members.map(member => ({ ...member, status: 'active' as const }));
+  renderAt({ ...group(true), singleSpeaker: true, supportsGroupProject: true, project: { kind: 'github', repo: 'makecindy/cindy' },
+    replyMode: 'all', autoContinue: false, organizerBotId: 'bot',
+    members: enabled === undefined ? members : [...members, cindy], ...(enabled === undefined ? {} : { supportsGroupAssistant: true, assistantEnabled: enabled }) }, 'manage');
   expect(screen.getByText(replyHint)).toBeTruthy();
+  const organizer = screen.getByRole('combobox', { name: 'bots.groupChat.organizer' });
+  expect(sectionOf(organizer)).toBe(key('work'));
+  fireEvent.click(organizer);
+  expect(screen.getAllByRole('option').map(option => option.textContent)).toEqual(['Partner']);
+  fireEvent.keyDown(screen.getAllByRole('option')[0]!, { key: 'Escape' });
   fireEvent.click(screen.getByRole('combobox', { name: `${SHARED}replyMode` }));
   expect(screen.getByRole('option', { name: allLabel })).toBeTruthy();
-  // 分工 keeps its remaining row either way.
-  expect(sectionOf(screen.getByTestId('bot-group-auto-continue'))).toBe(key('work'));
+  const toggle = screen.queryByTestId('bot-group-assistant');
+  if (enabled === undefined) { expect(toggle).toBeNull(); return; }
+  fireEvent.keyDown(screen.getAllByRole('option')[0]!, { key: 'Escape' });
+  fireEvent.click(toggle!);
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: expect.objectContaining({ type: 'update', assistant: !enabled, expectedRevision: 1 }) }));
 });
 
 it('does not offer leaving when this account owns every group owner, including its companion', () => {
