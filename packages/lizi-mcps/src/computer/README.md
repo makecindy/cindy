@@ -94,6 +94,9 @@ This uses the same snapshot, secure-field, session, input-ownership and user-act
 guards as existing Computer Use calls. The host credits actual CUA keyboard paths
 (`click_type_fg`, `click_select_fg`, `click_type_mpx`, `click_select_mpx`) as Agent
 input, while AX-only writes retain the existing user-input protection.
+While `set_value` is pending, its route is not known: owner activity is reported
+as unknown so the away guard defers. After an AX result, the real idle clock is
+used again; a reported keyboard path receives the existing Agent-input credit.
 
 MCP dispatch and activity regressions live in
 [computerMcpServer.test.ts](computerMcpServer.test.ts) and Desktop's

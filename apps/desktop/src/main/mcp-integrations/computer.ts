@@ -3705,6 +3705,7 @@ const USER_INPUT_ACTIVE_WINDOW_MS = 3_000;
 const AGENT_INPUT_ATTRIBUTION_SLACK_MS = 1_500;
 let lastAgentInputEndedAt = 0;
 let agentInputsInFlight = 0;
+let unclassifiedInputsInFlight = 0;
 let screenLockedByEvent: boolean | undefined;
 let powerMonitorHooked = false;
 
@@ -3732,8 +3733,12 @@ function isRefusedDriverResult(result: unknown): boolean {
  */
 async function trackAgentInputDispatch<T>(name: string, run: () => Promise<T>): Promise<T> {
   const isSetValue = name === 'set_value';
-  if (!HID_SYNTHESIZING_TOOLS.has(name) && !isSetValue) return run();
-  agentInputsInFlight += 1;
+  const knownHidInput = HID_SYNTHESIZING_TOOLS.has(name);
+  if (!knownHidInput && !isSetValue) return run();
+  // A pending set_value may use AX or keyboard input. Claiming HID ownership
+  // before its result would hide real owner activity from the away guard.
+  if (knownHidInput) agentInputsInFlight += 1;
+  else unclassifiedInputsInFlight += 1;
   let attributable = false;
   try {
     const result = await run();
@@ -3752,7 +3757,8 @@ async function trackAgentInputDispatch<T>(name: string, run: () => Promise<T>): 
     attributable = !isSetValue && (err as { outcomeUnknown?: unknown } | null)?.outcomeUnknown === true;
     throw err;
   } finally {
-    agentInputsInFlight -= 1;
+    if (knownHidInput) agentInputsInFlight -= 1;
+    else unclassifiedInputsInFlight -= 1;
     if (attributable) lastAgentInputEndedAt = Date.now();
   }
 }
@@ -3760,6 +3766,7 @@ async function trackAgentInputDispatch<T>(name: string, run: () => Promise<T>): 
 function resetDesktopInputGuardStateForTests(): void {
   lastAgentInputEndedAt = 0;
   agentInputsInFlight = 0;
+  unclassifiedInputsInFlight = 0;
   screenLockedByEvent = undefined;
 }
 
@@ -3810,6 +3817,9 @@ function msSinceForeignDesktopInput(now = Date.now()): number | null {
     return null;
   }
   if (!Number.isFinite(idleSeconds) || idleSeconds < 0) return null;
+  // No attested route yet: neither declare the owner absent nor count possible
+  // Agent keystrokes as owner input. AwayGuard already defers on unknown state.
+  if (unclassifiedInputsInFlight > 0) return null;
   // Another Agent input is still being delivered: its events are ours.
   if (agentInputsInFlight > 0) return Number.POSITIVE_INFINITY;
   // The idle clock is floored to whole seconds: the last input happened at or before

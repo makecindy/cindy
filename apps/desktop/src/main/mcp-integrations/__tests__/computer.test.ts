@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { app } from 'electron';
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { AwayGuardController } from '../../remote-desktop/awayGuard';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { COMPUTER_TOOLS } from '@cindy/mcps/computer';
 import { readForRecovery } from '../../../../../../packages/lizi-mcps/src/computer/recovery';
@@ -137,6 +138,7 @@ import {
   pickLatestCuaDriverVersion,
   resetComputerDriverPermissionProbeCacheForTests,
   resetAtMentionWindowCacheForTests,
+  msSinceForeignDesktopInput,
   resetDesktopInputGuardStateForTests,
   seedDesktopScreenLocked,
   resetComputerDriverUpdateStateForTests,
@@ -4673,6 +4675,66 @@ describe('foreground input while the person is using this computer', () => {
       await expect(callComputerDriverTool('click', { ...target, x: 1, y: 1, delivery_mode: 'foreground' }, context))
         .rejects.toMatchObject({ code: 'USER_INPUT_ACTIVE' });
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // PR #10121 P1: a pending AX write was counted as active HID input, hiding
+  // real owner activity from AwayGuard. Exercise both production entry points;
+  // completed-write tests did not cover this in-flight state. Tier: unit.
+  it.each([
+    { outcome: 'AX completion', path: 'ax', mode: 'background', idleAfter: 0, coversAfter: 0 },
+    { outcome: 'keyboard completion', path: 'click_type_fg', mode: 'foreground', idleAfter: Number.POSITIVE_INFINITY, coversAfter: 1 },
+    { outcome: 'driver failure', path: undefined, mode: 'background', idleAfter: 0, coversAfter: 0 },
+  ] as const)('defers owner attribution until set_value ends: $outcome', async (input) => {
+    vi.useFakeTimers();
+    const started = createDeferred<void>();
+    const pending = createDeferred<unknown>();
+    let write: Promise<unknown> | undefined;
+    try {
+      await callComputerDriverTool('get_window_state', target, context);
+      const showMasks = vi.fn(async () => {});
+      const guard = new AwayGuardController({
+        enabled: () => true, screenLocked: () => false,
+        msSinceOwnerInput: () => msSinceForeignDesktopInput(),
+        awayAfterMs: () => 30_000,
+        keepDisplayAwake: vi.fn(), showMasks,
+        lockAndHideMasks: vi.fn(async () => {}), hideMasks: vi.fn(),
+        now: () => Date.now(), log: vi.fn(),
+      });
+      vi.advanceTimersByTime(29_000);
+      mcpCallToolMock.mockImplementation(async ({ name }) => {
+        if (name === 'set_value') {
+          started.resolve();
+          return pending.promise;
+        }
+        return { structuredContent: { ok: true, effect: 'confirmed' } };
+      });
+      write = callComputerDriverTool('set_value', {
+        ...target, element_index: 0, value: 'hi', delivery_mode: input.mode,
+      }, context);
+      await started.promise;
+      vi.advanceTimersByTime(1_001);
+      // An AX write has real owner input here; a keyboard fallback has its own
+      // HID events. The host cannot distinguish them until the result arrives.
+      powerMonitorState.idleSeconds = 0;
+      expect(msSinceForeignDesktopInput()).toBeNull();
+      await guard.tick();
+      expect(showMasks).not.toHaveBeenCalled();
+
+      if (input.path === undefined) {
+        pending.reject(new Error('AX write failed'));
+        await expect(write).rejects.toThrow('AX write failed');
+      } else {
+        pending.resolve({ structuredContent: { ok: true, path: input.path, effect: 'confirmed' } });
+        await write;
+      }
+      expect(msSinceForeignDesktopInput()).toBe(input.idleAfter);
+      await guard.tick();
+      expect(showMasks).toHaveBeenCalledTimes(input.coversAfter);
+    } finally {
+      pending.resolve({ structuredContent: { ok: true, path: input.path, effect: 'confirmed' } });
+      if (write) await write.catch(() => undefined);
       vi.useRealTimers();
     }
   });
