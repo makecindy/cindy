@@ -411,14 +411,34 @@ export const SCHEDULE_WEBHOOK_PRESETS: readonly ScheduleWebhookPreset[] = [
 
 export const DEFAULT_SCHEDULE_WEBHOOK_PRESET: ScheduleWebhookPresetId = 'github';
 
+/** Managed App delivery is metadata-only; ordinary GitHub Webhooks keep their own format. */
+export const GITHUB_APP_EVENTS = [
+  'pull_request', 'pull_request_review', 'pull_request_review_comment', 'pull_request_review_thread',
+  'issue_comment', 'check_run', 'check_suite', 'status', 'issues', 'push', 'workflow_run', 'release',
+] as const;
+
 export function scheduleWebhookPreset(id: string): ScheduleWebhookPreset | undefined {
   return SCHEDULE_WEBHOOK_PRESETS.find((preset) => preset.id === id);
 }
 
 /** 任务保存的发送方。缺省等于 GitHub 预设并签名。 */
 export type ScheduleWebhookSource =
+  | { preset: 'github-app'; repositories: string[] }
   | { preset: ScheduleWebhookPresetId; signed?: boolean }
   | { preset: 'custom'; format: WebhookFormat };
+
+/** Presentation order is not part of a managed subscription's queue identity. */
+export function sameGithubAppScope(
+  a: { source?: ScheduleWebhookSource; events?: readonly string[] },
+  b: { source?: ScheduleWebhookSource; events?: readonly string[] },
+): boolean {
+  if (a.source?.preset !== 'github-app' || b.source?.preset !== 'github-app') return false;
+  const canonical = (repositories: readonly string[], events: readonly string[] = []) => JSON.stringify([
+    [...new Set(repositories.map(repo => repo.trim().toLowerCase()))].sort(),
+    [...new Set(events.map(event => event.trim()).filter(Boolean))].sort(),
+  ]);
+  return canonical(a.source.repositories, a.events) === canonical(b.source.repositories, b.events);
+}
 
 /**
  * 校验调用方提交的发送方；不合法时抛错，错误信息可直接给用户或 Agent。
@@ -426,6 +446,14 @@ export type ScheduleWebhookSource =
  */
 export function normalizeScheduleWebhookSource(value: unknown): ScheduleWebhookSource {
   if (!isObject(value) || typeof value.preset !== 'string') throw new Error('invalid webhook source');
+  if (value.preset === 'github-app') {
+    if (!hasOnlyKeys(value, ['preset', 'repositories']) || !Array.isArray(value.repositories)
+      || !value.repositories.length || value.repositories.length > 50 || value.repositories.some(repo =>
+        typeof repo !== 'string' || !/^[a-z\d][a-z\d-]{0,38}\/[a-z\d_.-]{1,100}$/i.test(repo))) {
+      throw new Error('GitHub App requires 1–50 repository names (owner/repository)');
+    }
+    return { preset: 'github-app', repositories: [...new Set((value.repositories as string[]).map(repo => repo.toLowerCase()))] };
+  }
   if (value.preset === 'custom') {
     if (!hasOnlyKeys(value, ['preset', 'format'])) throw new Error('invalid webhook source');
     const format = parseWebhookFormat(value.format);
@@ -441,6 +469,7 @@ export function normalizeScheduleWebhookSource(value: unknown): ScheduleWebhookS
 /** 发给服务器的格式。来自更新版本、本机认不出的预设返回 null，这时不改服务器上的格式。 */
 export function resolveScheduleWebhookFormat(source: ScheduleWebhookSource | undefined): WebhookFormat | null {
   if (!source) return scheduleWebhookPreset(DEFAULT_SCHEDULE_WEBHOOK_PRESET)!.format;
+  if (source.preset === 'github-app') return null;
   if (source.preset === 'custom') return parseWebhookFormat(source.format);
   const preset = scheduleWebhookPreset(source.preset);
   if (!preset) return null;

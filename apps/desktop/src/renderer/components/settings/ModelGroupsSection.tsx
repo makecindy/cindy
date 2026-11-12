@@ -6,7 +6,6 @@
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, Check, CornerDownRight, Minus, Play, Plus, Waypoints, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import type { ProviderView } from '@cindy/model-providers';
 
 import { ModelSelector, ProviderMark } from '@/components/new-chat/ModelSelector';
 import { Button } from '@/components/ui/button';
@@ -23,8 +22,14 @@ import {
 } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
-import { modelGroupExceptionText, modelGroupWhyText, saveModelGroups, useModelGroups } from '@/features/model-groups/modelGroupsClient';
-import { useProviders } from '@/hooks/useProviders';
+import {
+  modelGroupExceptionText,
+  modelGroupWhyText,
+  saveModelGroups,
+  useModelGroupCandidateNames,
+  useModelGroups,
+} from '@/features/model-groups/modelGroupsClient';
+import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
 import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -49,20 +54,6 @@ const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const UNSET_EFFORT = '__unset__';
 
 type View = { kind: 'list' } | { kind: 'route'; id: string };
-
-function useCandidateNames(providers: readonly ProviderView[]) {
-  return useCallback((candidate: Pick<ModelGroupCandidate, 'agentKind' | 'providerId' | 'model'>) => {
-    const agent = candidate.agentKind === 'cc' ? 'claude-code' : candidate.agentKind;
-    const provider = providers.find((item) => item.id === candidate.providerId);
-    const model = provider?.models[agent]?.find((item) => item.id === candidate.model);
-    return {
-      provider,
-      modelName: model?.name ?? candidate.model,
-      sourceName: provider?.name ?? candidate.providerId,
-      connected: !!provider?.connected && !provider.suspended && !!model,
-    };
-  }, [providers]);
-}
 
 /** 行尾的小图标按钮：32px 热区，带可见提示。 */
 function RowIconButton({ label, onClick, disabled, children }: { label: string; onClick(): void; disabled?: boolean; children: ReactNode }) {
@@ -115,8 +106,11 @@ export function ModelGroupsSection() {
   const locale = i18n.resolvedLanguage ?? i18n.language;
   const { confirm } = useConfirmDialog();
   const { config, loaded } = useModelGroups();
-  const { providers } = useProviders();
-  const namesOf = useCandidateNames(providers);
+  // 时段例外可能改走别的路线：「试一下」里会出现别的路线的来源，名字一起备好。
+  const allCandidates = useMemo(() => config.routes.flatMap((item) => item.candidates), [config]);
+  const namesOf = useModelGroupCandidateNames(allCandidates);
+  // 「添加来源」与其它设置页一样列出其他电脑与分享来的供应商；选中哪一行，来源就连同运行位置一起存。
+  const routeDevices = useModelRouteDevices({ controlledDeviceId: null, leadAgentDeviceId: null });
   const [view, setView] = useState<View>({ kind: 'list' });
   const [preview, setPreview] = useState<{ routeId: string; result: ModelGroupResolveResult } | null>(null);
   const [previewing, setPreviewing] = useState(false);
@@ -245,7 +239,7 @@ export function ModelGroupsSection() {
               <SettingsCard>
                 {route.candidates.map((candidate, index) => {
                   const names = namesOf(candidate);
-                  const label = `${names.modelName} · ${names.sourceName}`;
+                  const label = `${names.modelName} · ${names.sourceLabel}`;
                   return (
                     <SettingsRow
                       key={modelGroupCandidateKey(candidate)}
@@ -262,7 +256,7 @@ export function ModelGroupsSection() {
                       }
                       title={names.modelName}
                       tag={names.connected ? undefined : t('modelGroups.settings.notConnected')}
-                      hint={names.sourceName}
+                      hint={names.sourceLabel}
                       className={cn(candidate.off && '[&>span:nth-child(-n+2)]:opacity-60')}
                       trailing={
                         <span className="flex shrink-0 items-center gap-1">
@@ -277,7 +271,12 @@ export function ModelGroupsSection() {
                             aria-label={t('modelGroups.settings.useSource', { name: label })}
                             onCheckedChange={(on) => void updateRoute(route.id, (current) => ({
                               ...current,
-                              candidates: current.candidates.map((item, i) => (i === index ? { agentKind: item.agentKind, providerId: item.providerId, model: item.model, ...(on ? {} : { off: true }) } : item)),
+                              candidates: current.candidates.map((item, i) => {
+                                if (i !== index) return item;
+                                const { off: _off, ...rest } = item;
+                                void _off;
+                                return on ? rest : { ...rest, off: true };
+                              }),
                             }))}
                           />
                         </span>
@@ -296,7 +295,7 @@ export function ModelGroupsSection() {
                     <div className="w-[280px] max-w-full">
                       <ModelSelector
                         data-setting-id={modelGroupsSettings.routes.id}
-                        localOnlyReason="model-group-local-source"
+                        remoteAgent={routeDevices.devices && { devices: routeDevices.devices, selectedDeviceId: null }}
                         disabled={full}
                         modelId=""
                         effort=""
@@ -307,8 +306,11 @@ export function ModelGroupsSection() {
                         popoverSide="bottom"
                         ariaContext={t('modelGroups.settings.addSource')}
                         fallbackOption={{ active: true, label: t('modelGroups.settings.chooseModel'), onSelect: () => undefined }}
-                        onUnifiedSelect={({ engine, providerId, modelId }) => {
-                          const added: ModelGroupCandidate = { agentKind: engine, providerId, model: modelId };
+                        onUnifiedSelect={({ engine, providerId, modelId, agentDevice }) => {
+                          const added: ModelGroupCandidate = {
+                            agentKind: engine, providerId, model: modelId,
+                            ...(agentDevice ? { agentDeviceId: agentDevice.deviceId } : {}),
+                          };
                           if (route.candidates.some((item) => modelGroupCandidateKey(item) === modelGroupCandidateKey(added))) return true;
                           return updateRoute(route.id, (current) => ({ ...current, candidates: [...current.candidates, added] }));
                         }}
@@ -353,12 +355,15 @@ export function ModelGroupsSection() {
                     const picked = shown.trace.find((item) => item.state === 'picked');
                     const sameQuota = entry.state === 'standby' && !!picked?.quota && !!entry.quota
                       && picked.quota.resetAtMs === entry.quota.resetAtMs && picked.quota.usedPercent === entry.quota.usedPercent;
+                    // 名字与路线里那一行相同(含运行位置)；设置页还没读到那边的目录时用这次选路读到的。
+                    const names = namesOf(entry, entry);
+                    const title = `${names.modelName} · ${names.sourceLabel}`;
                     return (
                       <SettingsRow
                         key={modelGroupCandidateKey(entry)}
                         data-model-group-trace={entry.state}
                         lead={<Icon size={15} aria-hidden className={entry.state === 'picked' ? 'text-[var(--text-primary)]' : 'text-[var(--text-tertiary)]'} />}
-                        title={`${entry.modelName} · ${entry.sourceName}`}
+                        title={title}
                         tag={t(`modelGroups.settings.try.${entry.state}`)}
                         hint={modelGroupWhyText(sameQuota ? { ...entry, quota: null } : entry, t, locale)}
                       />

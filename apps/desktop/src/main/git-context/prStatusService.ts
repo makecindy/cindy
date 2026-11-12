@@ -77,6 +77,8 @@ export interface PrStatusServiceDeps {
   fetchPr: (token: string, q: PrStatusQuery) => Promise<PrRemoteState>;
   /** 缓存 TTL,默认 60s。测试可注小值。 */
   cacheTtlMs?: number;
+  /** Event-covered PRs may reuse successful summaries longer; evaluated on every read. */
+  eventCacheTtlMs?: (query: PrStatusQuery) => number | undefined;
   /**
    * 过期后仍可直接回答的时长,默认 10 分钟:过期条目先原样返回,再后台向 GitHub 复核,
    * 下一次查询拿到新值。PR 状态变化以分钟计,但每次 60s 过期都让侧栏 / 手机等一次
@@ -99,6 +101,7 @@ export function mapRemoteToStatus(remote: PrRemoteState): PrStatusKind {
 
 interface CacheEntry {
   result: PrStatusResult;
+  fetchedAt: number;
   expiresAt: number;
   /** 过期后到此刻之前仍可直接回答(后台复核);之后必须同步重查。 */
   staleUntil: number;
@@ -181,6 +184,13 @@ export class PrStatusService {
     );
   }
 
+  /** Matching doorbells never causes a network read of unrelated PRs. Account-scoped. */
+  async cachedStatuses(queries: readonly PrStatusQuery[]): Promise<(PrStatusResult | undefined)[]> {
+    const scope = (await this.deps.scope?.()) ?? '';
+    if (scope !== this.scope) return queries.map(() => undefined);
+    return queries.map(q => this.cache.get(prStatusKey(q))?.result);
+  }
+
   private async getOne(
     q: PrStatusQuery,
     waitForFresh = false,
@@ -189,7 +199,10 @@ export class PrStatusService {
     const key = prStatusKey(q);
     const cached = this.cache.get(key);
     const now = this.now();
-    if (!refresh && cached && cached.expiresAt > now) return cached.result;
+    const eventTtl = cached?.result.ok ? this.deps.eventCacheTtlMs?.(q) : undefined;
+    const expiresAt = cached && eventTtl !== undefined
+      ? cached.fetchedAt + Math.max(this.ttlMs, eventTtl) : cached?.expiresAt;
+    if (!refresh && cached && expiresAt! > now) return cached.result;
     if (!refresh && !waitForFresh && cached && cached.staleUntil > now) {
       // Stale-while-revalidate: answer now, refresh once in the background.
       void this.revalidate(key, q).catch(() => undefined);
@@ -218,6 +231,7 @@ export class PrStatusService {
             this.cache.delete(this.cache.keys().next().value!);
           this.cache.set(key, {
             result,
+            fetchedAt,
             expiresAt: fetchedAt + this.ttlMs,
             staleUntil: fetchedAt + this.ttlMs + this.staleTtlMs,
           });
