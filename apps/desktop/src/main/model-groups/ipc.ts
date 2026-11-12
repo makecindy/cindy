@@ -27,7 +27,7 @@ import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { recordModelGroupDecision } from './decisionLog.js';
 import { createModelGroupResolver, modelGroupQuotaKey, MODEL_GROUP_REMOTE_WAIT_MS } from './resolver.js';
-import { bindModelGroupSession, clearModelGroupSessionBinding, readModelGroupSessionBinding } from './sessionBindings.js';
+import { bindModelGroupSession, readModelGroupSessionBinding } from './sessionBindings.js';
 import { readModelGroupsConfig, writeModelGroupsConfig } from './store.js';
 import { computeModelGroupSwitchOffer } from './switchOffer.js';
 
@@ -80,7 +80,6 @@ const resolver = createModelGroupResolver({
 
 const switchOfferDeps = {
   readBinding: readModelGroupSessionBinding,
-  clearBinding: clearModelGroupSessionBinding,
   readSession: getSessionRowSnapshot,
   isShared: isSessionSharedTaskActive,
   // 目标还没就绪时说不清这个任务有没有目标：按有处理，不提议。

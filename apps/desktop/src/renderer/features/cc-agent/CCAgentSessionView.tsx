@@ -97,6 +97,7 @@ import {
   sessionSubscriptionPoolProvider,
 } from '@/components/new-chat/SessionSubscriptionAccount';
 import { bindModelGroupSession, isModelGroupSwitchOfferCurrent, resolveModelGroup, useModelGroups, useModelGroupSwitchOffer } from '@/features/model-groups/modelGroupsClient';
+import { beginAgentSwitchOperation, hasPendingAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
 import type { ModelGroupSelection } from '../../../shared/modelGroups';
 import { CindyMakeComposerMask } from '@/components/cindy-make/CindyMakeComposerMask';
 import {
@@ -2638,25 +2639,33 @@ function CCAgentSessionContent({
     : session?.agentDeviceId ?? null;
   const switchTaskByModelGroup = useCallback(async (selection: ModelGroupSelection) => {
     if (!sessionId) return;
-    // 选路期间切到了别的任务：换模型的入口已属于那个任务，这次作废，不动任何一个。
-    const navigationVersion = sessionNavigationVersionRef.current;
-    const result = await resolveModelGroup(selection, undefined, { agentDeviceId: taskLocation });
-    if (sessionNavigationVersionRef.current !== navigationVersion) return;
-    if (!result || result.outcome !== 'routed') {
-      if (result) toast.warning(t('modelGroups.picker.switchUnavailable', { name: result.groupName }));
-      return;
+    // 和在选择器里点一行同一个顺序保证：已经点了发送就不再换；选路期间占住这个任务的切换门，
+    // 这时点发送会等换完，而不是先用旧模型发出去。
+    if (hasPendingAgentSendDispatch(sessionId)) return;
+    const finishSwitch = beginAgentSwitchOperation(sessionId);
+    try {
+      // 选路期间切到了别的任务：换模型的入口已属于那个任务，这次作废，不动任何一个。
+      const navigationVersion = sessionNavigationVersionRef.current;
+      const result = await resolveModelGroup(selection, undefined, { agentDeviceId: taskLocation });
+      if (sessionNavigationVersionRef.current !== navigationVersion) return;
+      if (!result || result.outcome !== 'routed') {
+        if (result) toast.warning(t('modelGroups.picker.switchUnavailable', { name: result.groupName }));
+        return;
+      }
+      const pick = sessionModelPickRef.current;
+      if (!pick) return;
+      const applied = await pick({
+        agent: dbToMakerAgentKind(result.route.agentKind), providerId: result.route.providerId, modelId: result.route.model,
+        // 模式指定了推理强度且选中的模型支持时一起换(选路时已按目录核对过)。
+        ...(result.route.effort ? { effort: result.route.effort as Effort } : {}),
+      });
+      if (!applied) return;
+      // 记下是经哪个模式换的：之后撞配额，接着提议这个模式里的下一个来源。
+      bindModelGroupSession(sessionId, selection, result);
+      toast.success(t('modelGroups.picker.switched', { name: result.groupName, model: `${result.modelName} · ${result.sourceName}` }));
+    } finally {
+      finishSwitch();
     }
-    const pick = sessionModelPickRef.current;
-    if (!pick) return;
-    const applied = await pick({
-      agent: dbToMakerAgentKind(result.route.agentKind), providerId: result.route.providerId, modelId: result.route.model,
-      // 模式指定了推理强度且选中的模型支持时一起换(选路时已按目录核对过)。
-      ...(result.route.effort ? { effort: result.route.effort as Effort } : {}),
-    });
-    if (!applied) return;
-    // 记下是经哪个模式换的：之后撞配额，接着提议这个模式里的下一个来源。
-    bindModelGroupSession(sessionId, selection, result);
-    toast.success(t('modelGroups.picker.switched', { name: result.groupName, model: `${result.modelName} · ${result.sourceName}` }));
   }, [sessionId, taskLocation, t]);
   const taskModelGroups = useMemo(() => (modelGroupsInTask
     ? {
