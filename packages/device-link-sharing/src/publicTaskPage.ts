@@ -25,10 +25,11 @@ export const invitationScript = String.raw`(() => {
     "zh-CN": ["正在打开 Cindy","在浏览器提示中打开应用，加入共享任务。","再次打开","复制邀请链接","下载 Cindy","邀请链接无效，请向房主获取新的链接。","邀请链接无效","邀请链接已复制","复制失败，请从浏览器地址栏复制链接。"],
     "zh-TW": ["正在開啟 Cindy","在瀏覽器提示中開啟應用程式，加入共享任務。","再次開啟","複製邀請連結","下載 Cindy","邀請連結無效，請向房主取得新的連結。","邀請連結無效","邀請連結已複製","複製失敗，請從瀏覽器網址列複製連結。"],
     "ja": ["Cindy を開いています","ブラウザーの案内に従ってアプリを開き、共有タスクに参加してください。","もう一度開く","リンクをコピー","Cindy をダウンロード","招待リンクが無効です。ホストに新しいリンクを依頼してください。","招待リンクが無効です","招待リンクをコピーしました","コピーできませんでした。ブラウザーのアドレスバーからリンクをコピーしてください。"],
-    "ko": ["Cindy를 여는 중","브라우저 안내에 따라 앱을 열고 공유 작업에 참여하세요.","다시 열기","링크 복사","Cindy 다운로드","유효하지 않은 초대 링크입니다. 호스트에게 새 링크를 요청하세요.","유효하지 않은 초대 링크","초대 링크를 복사했습니다","복사하지 못했습니다. 브라우저 주소창에서 링크를 복사하세요."]
+    "ko": ["Cindy를 여는 중","브라우저 안내에 따라 앱을 열고 공유 작업에 참여하세요.","다시 열기","링크 복사","Cindy 다운로드","유효하지 않은 초대 링크입니다. 호스트에게 새 링크를 요청하세요.","유효하지 않은 초대 링크","초대 링크를 복사했습니다","복사하지 못했습니다. 브라우저 주소창에서 링크를 복사하세요."],
+    "tr": ["Cindy açılıyor","Bu paylaşılan göreve katılmak için uygulamada devam edin.","Tekrar aç","Bağlantıyı kopyala","Cindy'yi İndir","Bu davet bağlantısı geçersiz. Ana makine sahibinden yeni bir bağlantı isteyin.","Davet kullanılamıyor","Davet bağlantısı kopyalandı","Kopyalanamadı. Bağlantıyı tarayıcınızın adres çubuğundan kopyalayın."]
   };
   const language = (navigator.language || 'en').toLowerCase();
-  const locale = language.startsWith('zh') ? (/tw|hk|hant/.test(language) ? 'zh-TW' : 'zh-CN') : language.startsWith('ja') ? 'ja' : language.startsWith('ko') ? 'ko' : 'en';
+  const locale = language.startsWith('zh') ? (/tw|hk|hant/.test(language) ? 'zh-TW' : 'zh-CN') : language.startsWith('ja') ? 'ja' : language.startsWith('ko') ? 'ko' : language.startsWith('tr') ? 'tr' : 'en';
   const text = copy[locale];
   // Platform-specific next steps: only mobile automatically recognizes clipboard invitations.
   const guidance = {
@@ -36,7 +37,8 @@ export const invitationScript = String.raw`(() => {
     'zh-CN': ['在 Cindy 中加入共享任务','打开 App，继续与伙伴一起完成任务。','没有打开？','再打开 Cindy，确认即可加入。','前往 Cindy，粘贴链接手动加入。','已复制。现在打开 Cindy，会提示你确认加入。','已复制。前往 Cindy → 设置 → 共享任务 → 加入共享任务，粘贴链接。','仍无法加入？','如果打开 App 后没有出现邀请提示，前往 Cindy → 设置 → 共享任务 → 共享管理 → 加入共享任务，粘贴链接。','前往 Cindy → 设置 → 共享任务 → 加入共享任务，粘贴链接。','打开 Cindy'],
     'zh-TW': ['在 Cindy 中加入共享任務','開啟 App，繼續與夥伴一起完成任務。','沒有開啟？','再開啟 Cindy，確認即可加入。','前往 Cindy，貼上連結手動加入。','已複製。現在開啟 Cindy，會提示你確認加入。','已複製。前往 Cindy → 設定 → 共享任務 → 加入共享任務，貼上連結。','仍無法加入？','若開啟 App 後沒有出現邀請提示，前往 Cindy → 設定 → 共享任務 → 共享管理 → 加入共享任務，貼上連結。','前往 Cindy → 設定 → 共享任務 → 加入共享任務，貼上連結。','開啟 Cindy'],
     'ja': ['Cindy で共有タスクに参加','アプリを開いて、パートナーとタスクを続けましょう。','開きませんでしたか？','Cindy を開き、参加を確認してください。','Cindy でリンクを貼り付けて参加してください。','コピーしました。Cindy を開くと招待が表示され、参加を確認できます。','コピーしました。Cindy → 設定 → 共有タスク → 共有タスクに参加でリンクを貼り付けてください。','参加できない場合','招待が表示されない場合は、Cindy → 設定 → 共有タスク → 共有管理 → 共有タスクに参加でリンクを貼り付けてください。','Cindy → 設定 → 共有タスク → 共有タスクに参加でリンクを貼り付けてください。','Cindy を開く'],
-    'ko': ['Cindy에서 공유 작업 참여','앱을 열고 동료와 함께 작업을 이어가세요.','열리지 않나요?','Cindy를 열고 참여를 확인하세요.','Cindy에서 링크를 붙여넣어 직접 참여하세요.','복사했습니다. Cindy를 열면 초대가 표시되고 참여를 확인할 수 있습니다.','복사했습니다. Cindy → 설정 → 공유 작업 → 공유 작업 참여에서 링크를 붙여넣으세요.','아직 참여할 수 없나요?','초대가 표시되지 않으면 Cindy → 설정 → 공유 작업 → 공유 관리 → 공유 작업 참여에서 링크를 붙여넣으세요.','Cindy → 설정 → 공유 작업 → 공유 작업 참여에서 링크를 붙여넣으세요.','Cindy 열기']
+    'ko': ['Cindy에서 공유 작업 참여','앱을 열고 동료와 함께 작업을 이어가세요.','열리지 않나요?','Cindy를 열고 참여를 확인하세요.','Cindy에서 링크를 붙여넣어 직접 참여하세요.','복사했습니다. Cindy를 열면 초대가 표시되고 참여를 확인할 수 있습니다.','복사했습니다. Cindy → 설정 → 공유 작업 → 공유 작업 참여에서 링크를 붙여넣으세요.','아직 참여할 수 없나요?','초대가 표시되지 않으면 Cindy → 설정 → 공유 작업 → 공유 관리 → 공유 작업 참여에서 링크를 붙여넣으세요.','Cindy → 설정 → 공유 작업 → 공유 작업 참여에서 링크를 붙여넣으세요.','Cindy 열기'],
+    'tr': ['Cindy’de paylaşılan bir göreve katılın','Ekip arkadaşınızla çalışmaya devam etmek için uygulamayı açın.','Açılmadı mı?','Ardından Cindy’yi açın ve katılmayı onaylayın.','Ardından elle katılmak için Cindy’ye yapıştırın.','Kopyalandı. Daveti görmek ve katılmayı onaylamak için Cindy’yi açın.','Kopyalandı. Cindy → Ayarlar → Paylaşılan görevler → Paylaşılan göreve katıl bölümüne gidin ve bağlantıyı yapıştırın.','Hâlâ yardıma mı ihtiyacınız var?','Davet görünmüyorsa Cindy → Ayarlar → Paylaşılan görevler → Paylaşılan göreve katıl bölümüne gidin ve bağlantıyı yapıştırın.','Cindy → Ayarlar → Paylaşılan görevler → Paylaşılan göreve katıl bölümüne gidin ve bağlantıyı yapıştırın.','Cindy’yi Aç']
   }[locale];
   const el = id => document.getElementById(id);
   document.documentElement.lang = locale;

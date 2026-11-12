@@ -19869,9 +19869,9 @@
         "action": "Etkinleştir"
       },
       "ssh": {
-        "title_one": "{{count}} uzak makinenin SSH anahtarlarını ve yapılandırmasını kopyalayın",
-        "title_other": "{{count}} uzak makinenin SSH anahtarlarını ve yapılandırmasını kopyalayın",
-        "detail": "~/.ssh içindeki anahtarlar ve yapılandırma otomatik aktarılmaz; bu bilgisayara kopyalayın",
+        "title_one": "{{count}} uzak sunucu için SSH bağlantısını yeniden yapılandırın",
+        "title_other": "{{count}} uzak sunucu için SSH bağlantılarını yeniden yapılandırın",
+        "detail": "Özel anahtarlar aktarılmaz; bu bilgisayarda yeni anahtar oluşturup sunucularda yeniden yetkilendirin",
         "action": "Uzaktan Bağlantıyı Aç"
       },
       "ssh-host": {
