@@ -1,6 +1,8 @@
+import { needsSubscriptionAccountHandoff } from '../subscription-accounts/runtime.js';
 import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
 import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
+import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, type AccountFailoverDeps } from '../subscription-accounts/failover.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
 import { createTaskRuntimePlugins } from './runtimePlugins.js';
 import { RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
@@ -193,7 +195,7 @@ import { ensureBotCanonicalSession } from './botCanonicalSessionEnsure.js';
 import { readCodexContextWindowInfo } from '../maker-host/codex-context-window.js';
 import { readSshCodexModelList, assertSshCodexModel, isVerifiedSshCodexResume } from '../remote-ssh/codex-model-list.js';
 import { prepareCodexCustomContextCatalog } from '../maker-host/codex-custom-context-catalog.js';
-import { inferProviderIdForModel } from '../maker-host/provider-route.js';
+import { resolveConnectedDefaultProviderIdForModel } from '../maker-host/provider-route.js';
 import { bindGroupFastPolicy } from '../provider-group/fastPolicyRuntime.js';
 import { resolveConfiguredContextWindow, contextWindowBudgetChangesEffectiveWindow, resolveDesktopModelContextProviderId, resolveSessionContextWindowBounds, readStoredSessionContextWindowBudget, applySessionContextWindowBudgetToCreateOpts } from '../maker-host/model-context-settings.js';
 import { isSessionContextWindowBudgetCustomized, readSessionContextWindowBudget } from '../maker-host/session-context-budget-store.js';
@@ -378,7 +380,7 @@ import {
   clearUserBrowserMarksForSession,
   getBrowserAvailability,
   openBrowserForLogin,
-} from '../mcp-integrations/browser.js';
+} from '../mcp-integrations/browser.desktop.js';
 import { readComputerStatusForSettings, type ComputerStatusRequest } from './computerStatusHandler.js';
 import { isBrowserOpenForLoginError } from '../../shared/browserBackend.js';
 import {
@@ -400,7 +402,7 @@ import {
   listComputerWindowsForAtMention,
   pauseComputerDriverPermissionProbe,
   updateComputerDriver,
-} from '../mcp-integrations/computer.js';
+} from '../mcp-integrations/computer.desktop.js';
 import { getRsbBrowserBridge } from '../rsb-browser-bridge/index.js';
 import {
   closeComputerPermissionGuideWindow,
@@ -653,6 +655,7 @@ import {
   desktopCodexAuthAdapter,
   readClaudeApiKey,
 } from '../maker-host/auth-adapters.js';
+import { resolveSubscriptionPoolProvider } from '../subscription-accounts/agent.js';
 import { prepareSharedProjectSkillLinks } from '../maker-host/shared-global-skills.js';
 import {
   activeCindyBuiltInAgentSkills,
@@ -1910,6 +1913,7 @@ const usageLimitAutoResume = new UsageLimitAutoResume({
   clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
   isEligible: isUsageLimitAutoResumeEligible,
   resolveResetAt: resolveSessionUsageResetAt,
+  canSwitchAccount: (sessionId) => canSwitchSubscriptionAccount(sessionId, getSessionRowSnapshotStrict),
   arm: (sessionId, token, resumeAt) =>
     agentInputCoordinatorHolder?.armUsageLimitWait(sessionId, token, resumeAt) ?? false,
   isCurrent: (sessionId, token) =>
@@ -3164,7 +3168,7 @@ async function companionCloudPeerVersion(deviceId: string): Promise<number> {
   } catch { return 0; } finally { clearTimeout(timer); }
 }
 const COMPANION_FAILURE_CODES: ReadonlySet<CompanionCloudFailureCode> = new Set<CompanionCloudFailureCode>(
-  ['HOME_CONFLICT', 'OFFLINE', 'NOT_ENABLED', 'FAILED', 'TARGET_UNAVAILABLE', 'BUSY', 'HOME_OUTDATED', 'PAUSED', 'TARGET_OUTDATED']);
+  ['HOME_CONFLICT', 'LOCAL_CINDY_CONFLICT', 'OFFLINE', 'NOT_ENABLED', 'FAILED', 'TARGET_UNAVAILABLE', 'BUSY', 'HOME_OUTDATED', 'PAUSED', 'TARGET_OUTDATED']);
 /** Kept and merged Cindy ids from a request (local IPC or another computer). */
 function companionMergeIds(keepBotId: unknown, fromBotIds: unknown): { keep: string; from: string[] } {
   if (typeof keepBotId !== 'string' || !keepBotId || keepBotId.length > 200) throwIpcError('INVALID_PARAMS', 'keepBotId required');
@@ -5099,22 +5103,34 @@ export async function acquirePendingAgentSwitchForDirectSend(
   return { release: lease.release, selection: lease.selection };
 }
 
-/** 直发路径在 createSession / 重读 live session 之前关掉不健康原生会话。 */
+/**
+ * 订阅账号的发送前换号共用同一套运行时判定与交接：暂停／移出走 prepareSend；绑定账号此刻接不了这个模型
+ * (撞限、登录失效、过载)时按供应商组口径换到账号池选出的另一个账号(failover.ts，provider-groups.md §5/§6.1)。
+ */
+const subscriptionAccountRecoveryDeps = {
+  readSession: getSessionRowSnapshotStrict,
+  isRunning: (id: string) => {
+    const live = getMaker().getSession(id);
+    return isSessionInTurn(id) || !!live?.isTurnRunning() || (live?.listBackgroundTasks().length ?? 0) > 0;
+  },
+  rebuild: async (id: string, assertCurrent: () => void) => {
+    const recovery = contextOverflowRolloverHolder;
+    if (!recovery) throw new Error('Subscription account recovery is not ready');
+    await recovery.prepareNativeSessionRecovery(id, 'retain-route', assertCurrent,
+      agentInputCoordinatorHolder?.getInputAbortSignal(id));
+  },
+  log: (message: string, fields: Record<string, unknown>) => log.info(message, fields),
+} satisfies AccountFailoverDeps;
+
+/** 直发路径在 createSession / 重读 live session 之前换掉不能用的订阅账号、关掉不健康原生会话。 */
 export async function prepareUnhealthySessionForSend(sessionId: string): Promise<boolean> {
   const switched = await prepareSubscriptionAccountForSend(sessionId, {
-    readSession: getSessionRowSnapshotStrict,
-    isRunning: (id) => {
-      const live = getMaker().getSession(id);
-      return isSessionInTurn(id) || !!live?.isTurnRunning() || (live?.listBackgroundTasks().length ?? 0) > 0;
-    },
+    ...subscriptionAccountRecoveryDeps,
     rebuild: async (id, assertCurrent) => {
-      const recovery = contextOverflowRolloverHolder;
-      if (!recovery) throw new Error('Subscription account recovery is not ready');
-      await recovery.prepareNativeSessionRecovery(id, 'retain-route', assertCurrent,
-        agentInputCoordinatorHolder?.getInputAbortSignal(id));
+      await subscriptionAccountRecoveryDeps.rebuild(id, assertCurrent);
       agentInputCoordinatorHolder?.cancelUsageLimitWait(id);
     },
-  });
+  }) || await prepareSubscriptionAccountFailover(sessionId, subscriptionAccountRecoveryDeps);
   return switched || (await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId) ?? false);
 }
 
@@ -9328,6 +9344,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertAccess?.();
     await hydrateProviderIdBeforeSessionStart(o);
     assertAccess?.();
+    // Persist a fresh implicit subscription's actual source, so its account
+    // display and later resumes follow the same pool as this first execution.
+    if (!agentOnOtherDevice && !o.providerId && !o.resumeSessionId) {
+      const auth = o.agentKind === 'claude-code' ? desktopClaudeAuthAdapter : {
+        getState: desktopCodexAuthAdapter.getState.bind(desktopCodexAuthAdapter),
+        resolveDefaultProvider: (model?: string) => model ? resolveConnectedDefaultProviderIdForModel(model, 'codex') : null,
+      };
+      const provider = await resolveSubscriptionPoolProvider({ kind: o.agentKind }, o, auth);
+      assertAccess?.();
+      if (provider) o.providerId = provider;
+    }
     /** 本机运行时的启动准入(Agent 在另一台电脑运行时由那台按它自己的目录裁决)。 */
     const admitLocalRoute = async (): Promise<void> => {
       await ensureManagedOllamaReadyForSession({
@@ -18938,6 +18965,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         botHiddenAt: botProfiles.hiddenAt,
         agentKind: sessions.agentKind,
         remoteHostId: sessions.remoteHostId,
+        agentDeviceId: sessions.agentDeviceId,
         clearedAt: sessions.clearedAt,
         sdkSessionId: sessions.sdkSessionId,
         contextTokens: sessions.contextTokens,
@@ -18962,6 +18990,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     hasExternalRecoveryOwner: (sessionId) =>
       isHeadlessGhostSetupTurn(sessionId) || !!bindingStore.findByTarget(sessionId),
     getSessionRow: readContextRecoverySession,
+    needsNativeSessionHandoff: (id, row) => needsSubscriptionAccountHandoff(id, row, remoteBackgroundInvoke),
     classifyCodexHistory: async (threadId) => {
       const ownerScope = captureDataOwnerBroadcastScope();
       const dbSnapshot = getCurrentDbClientSnapshot();

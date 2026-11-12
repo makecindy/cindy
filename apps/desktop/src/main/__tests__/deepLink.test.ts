@@ -84,10 +84,10 @@ describe('OS deep-link registration', () => {
     expect(registerWindowsDeepLinkName).not.toHaveBeenCalled();
   });
 
-  it('preserves installed handlers during a packaged smoke test', () => {
+  it.each(['--smoke-test', '--no-protocol-registration'])('preserves installed handlers for %s', flag => {
     vi.spyOn(app, 'isPackaged', 'get').mockReturnValue(true);
     const argv = process.argv;
-    process.argv = ['cindy', '--smoke-test'];
+    process.argv = ['cindy', flag];
     try {
       registerDeepLinkProtocol();
       expect(app.setAsDefaultProtocolClient).not.toHaveBeenCalled();
