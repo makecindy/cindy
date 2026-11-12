@@ -1831,7 +1831,7 @@ async function applyAgentNet(enabled: boolean): Promise<CommandResult> {
     if (error instanceof RelayOperationExpired) throw error;
     const reason = hostError ?? 'START_FAILED';
     await writeAgentNetSetting('agentNetEnabled', previous, assertOwner); assertOwner();
-    if (readRelayConfig().host.enabled) await startHost(readRelayConfig());
+    if (readRelayConfig().host.enabled) { await startHost(readRelayConfig()); assertOwner(); }
     restartDeviceLinkForRelayChange();
     return { state: getState(), error: reason };
   }
