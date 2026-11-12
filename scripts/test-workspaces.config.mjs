@@ -175,11 +175,14 @@ const desktopGuardInclude = [
   'src/main/__tests__/sessionRuntimeControlWiring.test.ts',
   // Orca queued acceptance must keep using delivery-scoped authority, not the round guard.
   'src/main/maker-ipc/__tests__/orcaDeliveryWiring.contract.test.ts',
+  // Orca auto-bridge batching: host-only stamping and wire-mark stripping are trust boundaries.
+  'src/main/maker-ipc/__tests__/orcaAutoBridgeBatch.contract.test.ts',
   'src/main/localDb/ipc/__tests__/sessionCreatedBroadcast.test.ts',
   'src/renderer/__tests__/promptRecommendationBadge.test.ts',
   'src/renderer/__tests__/sessionHeaderMenuParity.test.ts',
   'src/renderer/__tests__/typographyDiscipline.test.ts',
   'src/renderer/__tests__/designEffectsDiscipline.test.ts',
+  'src/renderer/__tests__/motionDiscipline.test.ts',
   'src/renderer/__tests__/windowBackdropAcrylic.test.ts',
   // Existing credential/permission/protocol contracts, separated from runtime units.
   'src/main/__tests__/analyticsConsentMigrationGuards.test.ts',
@@ -247,7 +250,6 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/markdownTargetRendererContract.test.ts',
   'src/renderer/__tests__/bulkSessionStatusRouting.test.ts',
   'src/renderer/__tests__/homeUsageDashboardSource.test.ts',
-  'src/renderer/features/plugin/__tests__/unreadDotMotion.test.ts',
   'src/renderer/__tests__/workdirBrowseRemoteSafety.test.ts',
   'src/renderer/__tests__/remoteAgentRelocationWiring.test.ts',
   'src/renderer/features/bots/__tests__/botPermissionSwitch.test.ts',

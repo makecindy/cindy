@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   validateGhostManifest,
+  ghostControlPointActive,
   type GhostInstallApproval,
   type GhostManifest,
   type InstalledGhost,
@@ -37,6 +38,20 @@ function installed(
 }
 
 describe('plugin install consent', () => {
+  // Static system text is itself reviewed capability content: changing it must
+  // trigger update consent, even when the capability name stays the same.
+  it('shows static system fragments and asks again when their content changes', () => {
+    const fragments = [{ id: 'style', text: 'Original static instructions', order: 10, scope: 'selected-task' }];
+    const base = manifest({ systemPrompt: fragments });
+    const old = { ...installed(base), approvedControlPoints: ['system-prompt' as const] };
+    expect(ghostControlPointActive(old, 'system-prompt')).toBe(true);
+    expect(ghostControlPointActive(installed(base), 'system-prompt')).toBe(false);
+    const next = manifest({ systemPrompt: [{ ...fragments[0], text: 'Changed static instructions' }] });
+    expect(evaluateGhostInstallConsent(old, next)).toMatchObject({ kind: 'update',
+      added: [expect.objectContaining({ key: 'system-prompt', detail: expect.stringContaining('Changed static instructions') })],
+    });
+    expect(evaluateGhostInstallConsent(old, base)).toBeNull();
+  });
   it('requires consent when an ordinary plugin switches a saved PAT to shared gh login', () => {
     const secret = { key: 'github_pat', label: 'GitHub', inject: {
       header: 'Authorization', format: 'Bearer {value}', hosts: ['api.github.com'],

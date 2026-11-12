@@ -32,7 +32,7 @@ import {
 } from './transform.js';
 import { createXaiModelInputRecoveryRule } from './xai-model-input.js';
 import { createAnthropicEffortCompatibilityRule } from './anthropic-effort-compatibility.js';
-import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
+import { closeTestConnections, fetchOverTestConnections as fetch, listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import { createThreadStripController } from './thread-strip-controller.js';
 import type { ProxyHandle, RequestTransform } from './types.js';
 
@@ -108,6 +108,7 @@ let upstreamClose: (() => Promise<void>) | null = null;
 
 afterEach(async () => {
   if (proxy) { await proxy.dispose(); proxy = null; }
+  await closeTestConnections();
   if (upstreamClose) { await upstreamClose(); upstreamClose = null; }
 });
 

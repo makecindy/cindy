@@ -654,6 +654,32 @@ describe('Kimi Code subscription quota', () => {
   afterEach(resetProviderAccountUsageForTest);
   const read = (forceRefresh = false) => readKimiCodingAccountUsage({ providerId: 'kimi-custom', forceRefresh });
 
+  // PR #9894 / r4547969519, unit: real settings and picker request shapes.
+  // Prior Kimi cases used only implicit reads, hiding duplicated dispatch and
+  // a second engine-specific cache bypassing the same account's Retry-After.
+  it('shares Kimi in-flight reads, cache and Retry-After across settings and picker aliases', async () => {
+    const implicit = () => readProviderAccountUsage({ providerId: current.id });
+    const explicit = (forceRefresh = false) => readProviderAccountUsage({ providerId: current.id, agent: 'pi', forceRefresh });
+    let finish!: (value: Response) => void;
+    fetcher.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const first = implicit();
+    const second = explicit();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    finish(jsonRes(payload));
+    expect(await first).toMatchObject({ status: 'ready', agent: 'pi' });
+    expect(await second).toMatchObject({ status: 'ready', agent: 'pi' });
+    await explicit();
+    await implicit();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    nowMs += 300_001;
+    fetcher.mockResolvedValueOnce(jsonRes({}, 429, { 'Retry-After': '3600' }));
+    const limited = await implicit();
+    expect(limited).toMatchObject({ status: 'ready', stale: true, error: 'rate-limited' });
+    nowMs += 16_000;
+    expect(await explicit(true)).toMatchObject({ status: 'ready', stale: true, error: 'rate-limited', retryAt: expect.any(Number) });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   // PR #7721: the dedicated remote/menu-bar reader must not return another
   // integration when a mixed provider's earlier runtime points to DeepSeek.
   it('pins implicit reads to Kimi and preserves explicit runtime selection', async () => {

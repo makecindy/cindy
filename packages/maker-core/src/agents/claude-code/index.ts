@@ -1507,7 +1507,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 必须早于下面的 configuredWindows （窗口表在 buildQuery 之前就要用它，
     // 否则会撞 TDZ）。
     let mutableContextWindowBudget: number | null = opts.contextWindowBudget ?? null;
-    const binaryPath = this.deps.binaryPath;
+    const binaryPath = opts.remoteHostId ? undefined : this.deps.binaryPath;
     const providerRoutedModels = this.capabilities.availableModels.filter((model) =>
       isProviderRoutedModel(model.id),
     );
@@ -6489,6 +6489,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     let idleResumeRebuildGate: Promise<void> | null = null;
     // Idle-resume recovery and cancelled-continuation rebuilds have independent gates.
     let cancellationRebuildGate: Promise<void> | null = null;
+    let rewindOperationsInFlight = 0;
     // runtime control request 可写性判定: commitRewindFiles 后旧 Query 已 close、新 Query
     // 等下一次 send 重建;或 bridge Stop/watchdog 已 close 当前 Query、等待下一次
     // send 从同一 rewind point 重建。这些窗口里对 q 发 control request 会抛
@@ -8128,6 +8129,14 @@ export class ClaudeCodeAgent extends BaseAgent {
 
       isPreparingUserTurn: bridgeStateActive,
 
+      hasPendingHostOperation(): boolean {
+        // Rewind closes the CLI before the next send applies its in-memory
+        // resume point. Keep this lightweight controller until that send has
+        // rebuilt the Query; closing it would resume the unrewound transcript.
+        return rewindOperationsInFlight > 0 || controlRequestsBlocked() || cancellationRebuildGate !== null ||
+          activeBridgeRewindResumeAt !== undefined;
+      },
+
       isTurnRunning(): boolean {
         // 前台 result/done 到后台 wake 任务自动续 turn 之间，SDK 会短暂把
         // turnInFlight 清成 false，但从产品/Session 视角 Agent 仍未执行结束。
@@ -8137,42 +8146,47 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async previewRewindFiles(userUuid: string): Promise<RewindFilesResult> {
-        // invalid-resume 重建期间 q 是死掉/半替换的旧 query:与 send 同款等待门禁,
-        // 替换 query 就绪后再操作(dryRun 在全新会话上自然返回 canRewind:false 软拒绝)。
-        while (idleResumeRebuildGate) {
-          await idleResumeRebuildGate;
-        }
-        if (continuationCancellationRequiresQueryRebuild) {
-          // Stop may have already closed the old Query while leaving the
-          // cancellation rebuild tombstone for the next explicit turn. A
-          // rewind preview is also a valid next control action: install an
-          // isolated fresh Query first, but do not inject the send-only
-          // /compact bridge or start a product turn.
-          await rebuildCancelledContinuationQuery(undefined, { queueCompactBridge: false });
-        }
-        log.info('previewRewindFiles', { userUuid, sdkSessionId });
+        rewindOperationsInFlight++;
         try {
-          const result = await q.rewindFiles(userUuid, { dryRun: true });
-          log.info('previewRewindFiles result', {
-            canRewind: result.canRewind,
-            filesCount: result.filesChanged?.length ?? 0,
-            insertions: result.insertions,
-            deletions: result.deletions,
-            error: result.error ?? null,
-          });
-          return result;
-        } catch (err) {
-          // SDK 抛错 (老 session 没开 checkpointing 等) 包成软拒绝, UI 走 Empty/Error 态。
-          // 业务层 (Dialog) 仍可让用户继续 commit, 由 forkSession=true 兜底。
-          const errMsg = err instanceof Error ? err.message : String(err);
-          log.warn('previewRewindFiles SDK threw', { error: errMsg });
-          return {
-            canRewind: false,
-            error: errMsg,
-            filesChanged: [],
-            insertions: 0,
-            deletions: 0,
-          };
+          // invalid-resume 重建期间 q 是死掉/半替换的旧 query:与 send 同款等待门禁,
+          // 替换 query 就绪后再操作(dryRun 在全新会话上自然返回 canRewind:false 软拒绝)。
+          while (idleResumeRebuildGate) {
+            await idleResumeRebuildGate;
+          }
+          if (continuationCancellationRequiresQueryRebuild) {
+            // Stop may have already closed the old Query while leaving the
+            // cancellation rebuild tombstone for the next explicit turn. A
+            // rewind preview is also a valid next control action: install an
+            // isolated fresh Query first, but do not inject the send-only
+            // /compact bridge or start a product turn.
+            await rebuildCancelledContinuationQuery(undefined, { queueCompactBridge: false });
+          }
+          log.info('previewRewindFiles', { userUuid, sdkSessionId });
+          try {
+            const result = await q.rewindFiles(userUuid, { dryRun: true });
+            log.info('previewRewindFiles result', {
+              canRewind: result.canRewind,
+              filesCount: result.filesChanged?.length ?? 0,
+              insertions: result.insertions,
+              deletions: result.deletions,
+              error: result.error ?? null,
+            });
+            return result;
+          } catch (err) {
+            // SDK 抛错 (老 session 没开 checkpointing 等) 包成软拒绝, UI 走 Empty/Error 态。
+            // 业务层 (Dialog) 仍可让用户继续 commit, 由 forkSession=true 兜底。
+            const errMsg = err instanceof Error ? err.message : String(err);
+            log.warn('previewRewindFiles SDK threw', { error: errMsg });
+            return {
+              canRewind: false,
+              error: errMsg,
+              filesChanged: [],
+              insertions: 0,
+              deletions: 0,
+            };
+          }
+        } finally {
+          rewindOperationsInFlight--;
         }
       },
 
@@ -8181,66 +8195,71 @@ export class ClaudeCodeAgent extends BaseAgent {
         priorAssistantUuid: string,
         rewindOpts?: RewindCommitOptions,
       ): Promise<undefined> {
-        // 同 previewRewindFiles:重建窗口内不得对死掉/半替换的 q 做 rewindFiles/close,
-        // 否则 pendingRewindTo 会指向一个已不存在的会话时点。等替换 query 就绪再走。
-        while (idleResumeRebuildGate) {
-          await idleResumeRebuildGate;
-        }
-        if (continuationCancellationRequiresQueryRebuild) {
-          // See previewRewindFiles: rebuild the fenced Query without the
-          // compact bridge so rewindFiles retains its checkpoint semantics.
-          await rebuildCancelledContinuationQuery(undefined, { queueCompactBridge: false });
-        }
-        log.info('commitRewindFiles ▶', { userUuid, priorAssistantUuid, sdkSessionId });
-        // ① 立即把文件回滚到 target 时点 (失败 warn + 继续, forkSession=true 兜底)
+        rewindOperationsInFlight++;
         try {
-          await q.rewindFiles(userUuid, { dryRun: false });
-          log.debug('commitRewindFiles: SDK rewindFiles ok');
-        } catch (err) {
-          if (rewindOpts?.rewindsToNativeThreadStart) {
-            // 只回滚文件的路径没有下一次 send 的 forkSession 兜底重试,吞掉错误会让
-            // 宿主继续关闭会话、软删消息,用户看到回退成功但文件没恢复。
-            log.warn('commitRewindFiles: rewindFiles failed on files-only rewind', {
+          // 同 previewRewindFiles:重建窗口内不得对死掉/半替换的 q 做 rewindFiles/close,
+          // 否则 pendingRewindTo 会指向一个已不存在的会话时点。等替换 query 就绪再走。
+          while (idleResumeRebuildGate) {
+            await idleResumeRebuildGate;
+          }
+          if (continuationCancellationRequiresQueryRebuild) {
+            // See previewRewindFiles: rebuild the fenced Query without the
+            // compact bridge so rewindFiles retains its checkpoint semantics.
+            await rebuildCancelledContinuationQuery(undefined, { queueCompactBridge: false });
+          }
+          log.info('commitRewindFiles ▶', { userUuid, priorAssistantUuid, sdkSessionId });
+          // ① 立即把文件回滚到 target 时点 (失败 warn + 继续, forkSession=true 兜底)
+          try {
+            await q.rewindFiles(userUuid, { dryRun: false });
+            log.debug('commitRewindFiles: SDK rewindFiles ok');
+          } catch (err) {
+            if (rewindOpts?.rewindsToNativeThreadStart) {
+              // 只回滚文件的路径没有下一次 send 的 forkSession 兜底重试,吞掉错误会让
+              // 宿主继续关闭会话、软删消息,用户看到回退成功但文件没恢复。
+              log.warn('commitRewindFiles: rewindFiles failed on files-only rewind', {
+                error: err instanceof Error ? err.message : String(err),
+              });
+              throw err;
+            }
+            log.warn('commitRewindFiles: rewindFiles failed, continuing (forkSession on next send will retry)', {
               error: err instanceof Error ? err.message : String(err),
             });
-            throw err;
           }
-          log.warn('commitRewindFiles: rewindFiles failed, continuing (forkSession on next send will retry)', {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-        if (rewindOpts?.rewindsToNativeThreadStart) {
-          // 目标之前没有可续接的 assistant:不设续接点,由宿主关闭会话并清掉原生
-          // 会话 id,下次发送开全新原生会话。
-          log.info('commitRewindFiles ◀ files only; host restarts the native session');
+          if (rewindOpts?.rewindsToNativeThreadStart) {
+            // 目标之前没有可续接的 assistant:不设续接点,由宿主关闭会话并清掉原生
+            // 会话 id,下次发送开全新原生会话。
+            log.info('commitRewindFiles ◀ files only; host restarts the native session');
+            return undefined;
+          }
+          // ② **先**设 rewind transition 再 close —— q.close() 会让正在跑的 forward loop
+          //    for-await 抛 "Claude Code process aborted by user", 这是预期行为不是错误。
+          //    pendingRewindTo 是共享标记,会在新 q 接管后清掉;因此还要把当前 q 放进
+          //    per-query transition 集合,确保旧 forward loop 迟到退出时仍静音,不误关新 q。
+          //    顺序很重要 —— catch 是 microtask, q.close() 同步触发, 标记必须先设上。
+          pendingRewindTo = priorAssistantUuid;
+          rewindTransitionQueries.add(q);
+          try {
+            q.close();
+            log.debug('commitRewindFiles: q.close() ok');
+          } catch (err) {
+            log.warn('commitRewindFiles: q.close() threw', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+          // turn 没在跑了, 清守卫标记 (rewind 必然在 idle 时调, 但兜底一把)
+          turnInFlight = false;
+          // close 会连 CLI 子进程一起杀,后台任务(含后台命令)随之终止:与其它 close 路径同口径立即清表。
+          // 不等下次 send 换 Query 时清,否则宿主在这段空窗里读到的快照仍带着已死的任务。
+          runningBackgroundTasks.clear();
+          terminalBackgroundTaskIds.clear();
+          // bridge counter 兜底: rewind idle 时应该已经归零, 但如果上一轮 bridge 中途异常
+          // (SDK 崩 / abort 未 drain result) counter 可能残留, 会污染 rebuild 后的第一 turn。
+          clearBridgeState();
+          log.info('commitRewindFiles ◀ pendingRewindTo set, awaiting next send to rebuild');
           return undefined;
+        } finally {
+          rewindOperationsInFlight--;
         }
-        // ② **先**设 rewind transition 再 close —— q.close() 会让正在跑的 forward loop
-        //    for-await 抛 "Claude Code process aborted by user", 这是预期行为不是错误。
-        //    pendingRewindTo 是共享标记,会在新 q 接管后清掉;因此还要把当前 q 放进
-        //    per-query transition 集合,确保旧 forward loop 迟到退出时仍静音,不误关新 q。
-        //    顺序很重要 —— catch 是 microtask, q.close() 同步触发, 标记必须先设上。
-        pendingRewindTo = priorAssistantUuid;
-        rewindTransitionQueries.add(q);
-        try {
-          q.close();
-          log.debug('commitRewindFiles: q.close() ok');
-        } catch (err) {
-          log.warn('commitRewindFiles: q.close() threw', {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-        // turn 没在跑了, 清守卫标记 (rewind 必然在 idle 时调, 但兜底一把)
-        turnInFlight = false;
-        // close 会连 CLI 子进程一起杀,后台任务(含后台命令)随之终止:与其它 close 路径同口径立即清表。
-        // 不等下次 send 换 Query 时清,否则宿主在这段空窗里读到的快照仍带着已死的任务。
-        runningBackgroundTasks.clear();
-        terminalBackgroundTaskIds.clear();
-        // bridge counter 兜底: rewind idle 时应该已经归零, 但如果上一轮 bridge 中途异常
-        // (SDK 崩 / abort 未 drain result) counter 可能残留, 会污染 rebuild 后的第一 turn。
-        clearBridgeState();
-        log.info('commitRewindFiles ◀ pendingRewindTo set, awaiting next send to rebuild');
-        return undefined;
       },
     };
 

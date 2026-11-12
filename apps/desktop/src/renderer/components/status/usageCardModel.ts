@@ -50,6 +50,8 @@ export interface UsageCardAccount {
   notices?: Array<{ text: string; tone: 'warn' | 'crit' }>;
   emptyText?: string;
   updatedAt?: number | null;
+  /** Optional recovery for a failed read; counters and other usage stay intact. */
+  refreshFailure?: { retry: () => void; retrying: boolean };
 }
 
 /** Compact surfaces lead with time remaining; round up to minutes and show

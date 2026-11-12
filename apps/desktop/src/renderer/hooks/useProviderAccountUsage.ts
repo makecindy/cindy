@@ -97,11 +97,14 @@ export function useProviderAccountUsage(
   provider: ProviderView | undefined,
   agent?: AgentKind,
   deviceId: string | null = null,
-  options: { live?: boolean; active?: boolean; refreshEpoch?: number } = {},
+  options: { live?: boolean; active?: boolean; refreshEpoch?: number; onCredentialsChanged?: () => void } = {},
 ): ProviderAccountUsageState {
   const live = options.live === true;
   const active = !live || options.active !== false;
   const refreshEpoch = live ? options.refreshEpoch : undefined;
+  // Route-probing callers must restart before this hook reloads the changed account.
+  const credentialsChanged = useRef(options.onCredentialsChanged);
+  credentialsChanged.current = options.onCredentialsChanged;
   const owner = getDataOwnerGeneration();
   const [revision, setRevision] = useState(0);
   const kimi = isKimiCodingProviderView(provider, agent);
@@ -234,6 +237,7 @@ export function useProviderAccountUsage(
     const changed = () => {
       lifecycle.liveRefreshes.clear();
       requestId.current += 1;
+      credentialsChanged.current?.();
       setRevision(value => value + 1);
     };
     if (deviceId) return window.electronAPI.deviceLink.onRemotePush?.((push, stamp) => {

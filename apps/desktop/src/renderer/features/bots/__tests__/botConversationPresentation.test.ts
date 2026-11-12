@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { groupWorkRuns, type MessageRenderItem, type ToolSegmentRenderItem, type RenderItem } from '@/components/chat/messageWorkGroups';
+import { readBotGroupProcessMessages, projectBotGroupProcess, type BotGroupProcessMessage } from '@cindy/maker-shared/botGroupChat';
 import { botProcessItems, botTurnContinuations, latestSettledAssistantMs, simplifyBotRenderItems, tailReplyClientIds } from '../botConversationPresentation';
 
 const message = (id: string, role: ChatMessage['role'], content = id,
@@ -20,6 +21,21 @@ const shape = (items: readonly RenderItem[]): string => items.map((item) => item
   ? `${item.key}${item.isStreaming ? '*' : ''}[${shape(item.children)}]` : item.key).join(', ');
 const project = (items: RenderItem[], streaming: boolean) =>
   simplifyBotRenderItems(groupWorkRuns(items, streaming), streaming);
+
+it('shows a historical scheduled final result so opening the chat can mark it read (#9835)', () => {
+  const previous = message('previous', 'assistant', 'Earlier answer', {
+    turnCompleted: true, createdAt: '2026-11-10T10:00:00.000Z',
+  });
+  const scheduled = message('schedule-result:run-1', 'assistant', 'Scheduled result', {
+    createdAt: '2026-11-10T10:01:00.000Z',
+  });
+  const visible = botProcessItems(groupWorkRuns([previous, scheduled], false), false);
+  expect(proseIds(visible)).toEqual(['previous', 'schedule-result:run-1']);
+  expect(latestSettledAssistantMs(visible)).toBe(Date.parse('2026-11-10T10:01:00.000Z'));
+  expect(proseIds(project([previous, { ...scheduled, message: {
+    ...scheduled.message, turnCompleted: false,
+  } }], false))).toEqual(['previous']);
+});
 
 // Unit regression: same production grouping and projection as MessageStream.
 // Existing tests expected progress to disappear; exercise the metadata handoff.
@@ -447,6 +463,32 @@ describe('continuous teammate process', () => {
     expect(result.filter(item => item.type === 'work_group')).toHaveLength(2);
   });
 });
+
+// Unit parity for the reported empty completed group process. Both sides use
+// their production readers/grouping with the same input; do not define separate
+// expected group behavior. The late thinking case was absent from group coverage.
+it.each(['answer-only', 'thinking-before-answer', 'thinking-after-answer', 'stage-note'] as const)(
+  'matches private-chat completed process contents for %s', async scenario => {
+    const ref = { groupId: 'group', executionId: 'execution', sessionId: 'lane', clientId: 'source' };
+    const source: BotGroupProcessMessage = { clientId: 'source', role: 'user', content: 'Request' };
+    const final: BotGroupProcessMessage = { clientId: 'final', role: 'assistant', content: 'Final answer', agentMeta: { turnCompleted: true } };
+    const thought: BotGroupProcessMessage = { clientId: 'thought', role: 'thinking', content: 'Thinking' };
+    const note: BotGroupProcessMessage = { clientId: 'note', role: 'assistant', content: 'Checking', agentMeta: { assistantPhase: 'commentary' } };
+    const rows = scenario === 'answer-only' ? [source, final]
+      : scenario === 'thinking-after-answer' ? [source, final, thought]
+      : [source, scenario === 'stage-note' ? note : thought, final];
+    const privateItems = botProcessItems(groupWorkRuns(rows.map(row => message(row.clientId, row.role as ChatMessage['role'], row.content as string, {
+      turnCompleted: row.agentMeta?.turnCompleted === true,
+      assistantPhase: row.agentMeta?.assistantPhase as ChatMessage['assistantPhase'],
+    })), false), false);
+    const privateProcessKeys = privateItems.flatMap(item => item.type === 'work_group' ? allKeys(item.children).map(key => key.replace(/^msg-/, '')) : []);
+    const groupRows = rows.map(row => ({ ...row, agentMeta: { ...row.agentMeta, botPrivateReply: true, botGroupLane: true } }));
+    const groupMessages = await readBotGroupProcessMessages(ref, async () => groupRows, () => false);
+    const groupProcessKeys = projectBotGroupProcess(groupMessages, false).segments.flatMap(segment =>
+      segment.kind === 'work' ? segment.items.map(item => item.key) : [segment.item.key]);
+    expect(groupProcessKeys).toEqual(privateProcessKeys);
+  },
+);
 
 describe('companion closing reply and read position', () => {
   // #8629 + codex P2: 主进程 `canonicalReplyVisibility` 把「未封口、但有后续工具之前」

@@ -21,6 +21,7 @@ import {
   hasDeepSeekOfficialRouteView,
   isZhipuCodingPlanProviderView,
 } from '../../lib/providerAccountUsageView';
+import { getDataOwnerGeneration } from '../../contexts/dataOwnerGeneration';
 import { useProviderAccountUsage } from '../../hooks/useProviderAccountUsage';
 import { Button } from '../ui/button';
 import { QuotaHoverCard } from '../status/QuotaHoverCard';
@@ -40,22 +41,28 @@ export function ProviderAccountUsageModule({ provider }: { provider?: ProviderVi
     () => (minimax ? PROVIDER_ACCOUNT_USAGE_AGENTS.filter(agent => isMiniMaxPlanProvider(provider, agent)) : []),
     [minimax, provider],
   );
-  const [minimaxProbe, setMinimaxProbe] = useState(0);
+  const minimaxIdentity = JSON.stringify([
+    getDataOwnerGeneration(), provider?.id, provider?.connected, provider?.auth, provider?.routing,
+  ]);
+  const [probe, setProbe] = useState({ identity: minimaxIdentity, index: 0 });
+  const minimaxProbe = probe.identity === minimaxIdentity ? probe.index : 0;
   const minimaxAgent = minimaxAgents[Math.min(minimaxProbe, minimaxAgents.length - 1)];
   const usage = useProviderAccountUsage(
     deepSeek || zhipu || kimi || opencodeGo || minimax ? provider : undefined,
     minimax ? minimaxAgent : undefined,
+    null,
+    { onCredentialsChanged: () => setProbe({ identity: minimaxIdentity, index: 0 }) },
   );
   useEffect(() => {
-    // 换供应商时回到第一条 MiniMax 路线。
-    setMinimaxProbe(0);
-  }, [provider?.id]);
+    // 同一连接重连或改配置也必须重新选择第一条路线。
+    setProbe(previous => previous.identity === minimaxIdentity ? previous : { identity: minimaxIdentity, index: 0 });
+  }, [minimaxIdentity]);
   useEffect(() => {
     // 当前 MiniMax 路线没有密钥：换下一条 MiniMax 路线继续试，不跨供应商借密钥。
     if (!minimax || usage.result?.status !== 'unavailable' || usage.result.error !== 'no-credentials') return;
     if (minimaxProbe + 1 >= minimaxAgents.length) return;
-    setMinimaxProbe(minimaxProbe + 1);
-  }, [minimax, usage.result, minimaxProbe, minimaxAgents.length]);
+    setProbe({ identity: minimaxIdentity, index: minimaxProbe + 1 });
+  }, [minimax, usage.result, minimaxProbe, minimaxAgents.length, minimaxIdentity]);
   const dashboardUrl = usage.result?.dashboardUrl ?? getProviderAccountUsageDashboardUrlView(provider, minimaxAgent);
   if (!deepSeek && !zhipu && !kimi && !opencodeGo && !minimax) return null;
   const snapshot = usage.result?.status === 'ready' ? usage.result.snapshot : null;

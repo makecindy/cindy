@@ -320,7 +320,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     updatedAt: new Date(row.updatedAt).toISOString(),
     _count: { messages: row.messageCount },
     preview:
-      row.listPreview != null
+      row.listPreview
         ? finalizePlainPreview(row.listPreview, row.listPreviewRole)
         : row.latestMessageExtract != null
           ? finalizePlainPreview(row.latestMessageExtract, row.latestMessageRole)

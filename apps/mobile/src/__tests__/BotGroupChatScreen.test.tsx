@@ -14,6 +14,8 @@ const testThemeContext = createContext('light');
 const h = vi.hoisted(() => ({
   window: { width: 390, height: 844, fontScale: 1, scale: 3 },
   processRead: vi.fn(),
+  processSubscribe: vi.fn(async () => {}),
+  processUnsubscribe: vi.fn(async () => {}),
   textRender: vi.fn(),
   translate: null as null | ((key: string, options?: Record<string, unknown>) => string),
   chat: null as any, pngExport: vi.fn(async () => 'encoded'), sharedImage: vi.fn(async () => {}), exported: [] as any[],
@@ -166,7 +168,7 @@ vi.mock('@/theme', async () => {
   return { ...tokens, useThemedStyles: (makeStyles: any) => makeStyles(useColors()),
     useTheme: () => ({ mode: useContext(testThemeContext), colors: useColors() }), monoFont: 'mono' };
 });
-vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.processRead, getPresenceAvailability: () => true }) }));
+vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.processRead, subscribe: h.processSubscribe, unsubscribe: h.processUnsubscribe, getPresenceAvailability: () => true }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({
   user: { id: 'owner' }, accountGeneration: 1, getAccessToken: async () => 'token', apiFetch: async () => ({}),
 }) }));
@@ -341,6 +343,7 @@ vi.mock('@/session/MessageRenderer', async () => {
     const send = useSessionQuickSend();
     return el('button', { 'data-testid': 'rich-group-send', disabled: !send, onClick: () => send?.('Visible rich reply') }, richAnswerText(text));
   },
+  WorkToolActivityRow: ({ activity }: any) => el('div', { 'data-testid': 'private-tool-row' }, activity.message.normalized.label, activity.toolResult),
   MessagePayloadModal: ({ payload, onClose }: any) => payload
     ? el('div', { 'data-testid': 'diagramModal', 'data-source': payload.body },
       el('button', { 'data-testid': 'diagramModal.close', onClick: onClose }, '关闭'))
@@ -580,13 +583,25 @@ describe('group timeline', () => {
   // PR #8818 / component: the identity matcher cannot reject a complete foreign
   // broadcast if the real Timeline splits it at a shorter member name first.
   // French send parser + English Screen: @Tous is personal, the longer broadcast is not.
-  it.each([true, false])('keeps a French broadcast whole beside a shorter personal mention (own=%s)', async own => {
+  // #9990 / unit: renamed catalogs no longer contain sent historical labels.
+  // Real Screen -> Timeline must keep the full legacy mention styled and inert.
+  it.each([
+    [true, 'fr', 'Tous', undefined], [false, 'fr', 'Tous', undefined],
+    [true, 'de', 'Al', 'Alle Teammitglieder'],
+    [true, 'fr', 'Tous', 'Tous les coéquipiers'],
+    [true, 'es', 'Todos', 'Todos los compañeros'],
+    [true, 'pt-PT', 'Tod', 'Todos os colegas'],
+    [true, 'pt-BR', 'Tod', 'Todos os colegas'],
+    [true, 'zh-Hans-x-lzh', '诸', '诸同僚'],
+    [true, 'zh-Hant-x-lzh', '諸', '諸同僚'],
+    [true, 'en', 'Al', 'All teammates'],
+    [true, 'ko', '모든', '모든 동료'],
+  ] as const)('keeps a %s/%s broadcast whole beside %s (legacy=%s)', async (own, locale, name, legacyLabel) => {
     h.translate = (key, options) => i18n.t(key, { ...options, lng: 'en' });
-    const name = 'Tous';
-    const broadcastLabel = i18n.t('groupChat.mention.allBots', { lng: 'fr' });
+    const broadcastLabel = legacyLabel ?? i18n.t('groupChat.mention.allBots', { lng: locale });
     const content = `@${name} @${broadcastLabel}`;
     const mentions = resolveBotGroupMentions(content, { members: [{ botId: 'mimi', name }],
-      allLabels: [i18n.t('groupChat.mention.all', { lng: 'fr' })], allBotLabels: [broadcastLabel] });
+      allLabels: [i18n.t('groupChat.mention.all', { lng: locale })], allBotLabels: [broadcastLabel] });
     expect(mentions).toEqual({ all: false, allBots: true, botIds: ['mimi'] });
     const data = group({ serverBacked: true, messages: [message('prefix-broadcast', 1, {
       authorKind: 'user', isSelf: own, content, mentions,
@@ -596,10 +611,10 @@ describe('group timeline', () => {
     const spans = () => [...node.querySelectorAll('span')];
     const broadcast = spans().find(span => span.textContent === `@${broadcastLabel}`)!;
     expect(broadcast).toBeDefined();
-    expect(spans().filter(span => span.textContent === '@Tous')).toHaveLength(1);
+    expect(spans().filter(span => span.textContent === `@${name}`)).toHaveLength(1);
     await act(async () => broadcast.click());
     expect(byId('botGroup.mention.identity')).toBeNull();
-    await act(async () => spans().find(span => span.textContent === '@Tous')!.click());
+    await act(async () => spans().find(span => span.textContent === `@${name}`)!.click());
     expect(byId('botGroup.mention.identity')?.textContent).toContain(name);
     await click('botGroup.mention.identity.close');
     data.messages[0]!.mentions = { all: false, botIds: [] };
@@ -1432,6 +1447,26 @@ describe('group timeline', () => {
     expect(card.querySelectorAll('[data-testid="botGroup.plan.step"]')[1]?.querySelector('[data-testid="botGroup.plan.skipTurn"]')).toBeNull();
     await click('botGroup.plan.skipTurn');
     expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 2, action: 'skip', executionId: undefined });
+  });
+
+  // #9909: a turn that answered NO_REPLY posts no group message at all, so the queue must say it
+  // was skipped instead of spoken — same rule as the desktop card and the shared step state.
+  it('marks a discussion turn that published nothing as skipped', async () => {
+    const data = group();
+    data.openPlan = { id: 'p1', status: 'running', currentStep: 1, stepCount: 3, currentBotName: '阿布', currentStepStatus: 'running' };
+    data.plans[0] = { ...data.plans[0]!, kind: 'talk', status: 'running', currentStep: 1, canManage: true,
+      steps: [
+        { position: 0, botId: 'mimi', botName: '咪咪', task: '', status: 'done', resultMessageId: null },
+        { position: 1, botId: 'abu', botName: '阿布', task: '', status: 'running' },
+        { position: 2, botId: 'xiaoman', botName: '小满', task: '', status: 'pending' },
+      ] };
+    // Through the computer's projection: an explicit null must survive parsing, not become "missing".
+    await render(parseBotGroupChatData(data)!);
+    const steps = [...byId('botGroup.plan')!.querySelectorAll('[data-testid="botGroup.plan.step"]')];
+    // The skipped turn keeps its mark and label; nothing claims it spoke.
+    expect(steps[0]?.textContent).toContain('groupChat.plan.stepSkipped');
+    expect(steps[0]?.textContent).not.toContain('groupChat.plan.stepSpoken');
+    expect(steps[1]?.textContent).toContain('groupChat.plan.stepExecuting');
   });
 
   it('shows one row per speaker with its lane session', async () => {
@@ -2748,7 +2783,7 @@ it.each([
     { clientId: 'seal', role: 'assistant', content: 'Final answer', agentMeta: { turnCompleted: true } }]);
   h.chat.server = true;
   await render(data, 'ready', threadRootId, '');
-  expect(h.processRead).toHaveBeenCalledWith(deviceId ?? 'owner-mac', 'local-db:messages:around-client-id', ['lane', 'source', { radius: 80 }]);
+  expect(h.processRead).toHaveBeenCalledWith(deviceId ?? 'owner-mac', 'local-db:messages:around-client-id', ['lane', 'source', { radius: 80 }], { background: true, preSend: expect.any(Function) });
   expect(node.textContent).toContain('Progress note');
   const record = [...node.querySelectorAll('section')].find(section => section.textContent?.includes('Progress note'))!;
   expect(record.textContent).not.toContain('Final answer');
@@ -3282,6 +3317,26 @@ vi.mock('@/session/ModelDocumentPreview', () => ({ ModelDocumentPreview: () => n
 vi.mock('@/session/BotGroupTextAttachmentPreview', () => ({ BotGroupTextAttachmentPreview: () => null, botGroupTextAttachmentPreviewKind: () => null }));
 vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
 vi.mock('@/session/mediaPlayerWebView', () => ({ RemoteMediaPlayerWebView: () => null }));
+
+// Unit: main's empty-record explanation stays separate from the final reply.
+// Exercise the production group timeline; only the native disclosure shell is adapted.
+it('keeps the final answer separate from the empty historical process explanation', async () => {
+  const process = { groupId: 'g1', executionId: 'empty', sessionId: 'lane', clientId: 'source' };
+  h.processRead.mockResolvedValue([{ clientId: 'source', role: 'user', content: 'Help' },
+    { clientId: 'seal', role: 'assistant', content: 'Final answer', agentMeta: { turnCompleted: true } }]);
+  h.chat.server = true;
+  await render(group({ plans: [], openPlan: null,
+    members: [{ ...group().members[0], isOwned: true, homeDeviceId: 'owner-mac' }],
+    messages: [message('result', 2, { authorBotId: 'mimi', content: 'Final answer', process })],
+  }), 'ready', undefined, '');
+  expect(h.processRead).toHaveBeenCalled();
+  expect(node.textContent).toContain('Final answer');
+  const record = node.querySelector('section');
+  expect(record).not.toBeNull();
+  expect(record!.textContent).toContain('chat.teammateProcess.empty');
+  expect(record!.textContent).not.toContain('chat.teammateProcess.unavailable');
+  expect(record!.textContent).not.toContain('Final answer');
+});
 
 // Unit: verify the group screen supplies its own sender in both main and thread surfaces.
 // Rich controls themselves are exercised in BotGroupMarkdownText.test.tsx.

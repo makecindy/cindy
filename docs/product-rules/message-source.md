@@ -35,6 +35,7 @@
 - 现有说明：`[客户端说明]`（手机 / 另一台电脑）、`[消息来源]`（任务 / 伙伴 / 插件 /
   共享成员）、`[Scheduled run context]` 内的 `schedule:` 行、Orca
   `[From Orca Lead]` / `[From Orca Worker <角色> (worker_id: …)]`、IM `[渠道说明]`。
+  Orca 系统兜底合批另加 `[Auto-bridged batch: N worker reports]`，界面用数量型标题，不把整批归到首个 Worker。
 - 切换引擎、上下文滚动、重建式分叉从落库数据重建交接摘要时，按 `agentMeta` 重新生成
   来源标记；`[UI_ACTION_TRIGGER]` 合成行仍不进交接。
 
@@ -48,7 +49,7 @@
 
 ## 另一台电脑上的任务发来的消息
 
-Agent 用 `send_to_session` 把消息发给另一台电脑上的既有任务时（2026-10-14），接收电脑按任务来源
+Agent 用 `send_to_session` 把消息发给另一台电脑上的任务时（包括 2026-11-11 新增的 `device` 远程创建首条消息）（2026-10-14），接收电脑按任务来源
 盖章，界面标签与 `[消息来源]` 说明都是「由任务「X」发送」，不是「用户在另一台电脑上操作」，
 因此不写 `sourceDevice`。来源任务 id 记为 `deviceId::sessionId`：设备前缀由接收电脑按服务端认证的
 控制端设备 id 填写，发送方自带的前缀被拒绝；接收方 Agent 可原样用这个 id 回信。任务标题来自

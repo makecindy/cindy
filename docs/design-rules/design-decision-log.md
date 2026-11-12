@@ -12,6 +12,10 @@
 
 ## 2026-11
 
+- **11-11 动效一组：面板宽度回到 base 档，循环指示器逐个登记或移除（2026-11-11 维护者裁决：D-04 方案 A、D-05 方案 C、D-06 方案 C、D-07 方案 A、D-11 方案 B、D-16 方案 A）**——设计规范矛盾审核（基准 `6b8468f37c`）发现动效规范、开发规范与代码三方不一致。D-04：左右侧栏、标题栏红绿灯让位与浮动按钮簇、文件浏览聊天栏的宽度动画写死 250ms，比面板开合的 base 档（200ms）慢；Toast 列表重排写死 300ms + 浏览器默认 ease-out。现行：全部改用 `--motion-base` / `--motion-ease-move`（侧栏开合快 50ms），开发规范不再写死数值；新增守卫禁止 renderer 的 `.ts` / `.tsx` 写死时长与 `cubic-bezier`，存量 67 个文件 117 处登记为只减不增的基线。D-05：语音「整理中」转圈与麦克风波形在 SVG 内部做循环动画，违反「SVG 上不做动画」红线，但改到 HTML 层会让多行文字每帧重绘抖动；登记为 SVG 例外，转圈从 0.9s 改为共用的 `--motion-spinner-cycle`（1 秒）。D-06：Thinking 三点与 GhostTool 运行扫光登记为循环例外；插件页唯一一处呼吸脉冲未读点改为与其他未读点一致的静态点（`AttentionDot` 去掉 `breathing`）；已无人使用的 `session-card-prog`、`session-running-dot-wave` 残留样式删除。D-07：Agent Island 设置页吉祥物预览登记为品牌例外，代码与参数保持现状。D-11：壁纸视频 Static / Dynamic 淡入淡出从 base（200ms）改为与预览图相同的 fast / ease-move（150ms），下载进度条的 base + linear 登记为窄例外（以 #9828 后的现状为准，只改时长）。D-16：菜单栏面板任务列表的运行中图标扩散环（2.2s）与呼吸点（0.8s）补登记，代码不动。被取代：§14.4 菜单栏「持续动效只有液面涟漪与份额条高光两种」的说法、`wallpaper.md`「视频淡入淡出 base/ease-move (200ms)」、`desktop-development.md`「250ms 宽度动画」。落点：`DESIGN.md` §14.4（Panel width and list reorder、Registered looping indicators、红线、菜单栏段落、Application wallpaper）、§15.7（Agent Island mascot preview）；`wallpaper.md`、`macos-menu-bar-quota.md`、`desktop-development.md`；守卫 `motionDiscipline.test.ts`。
+
+- **11-11 固定行高的定义扩展到 rem 与 Tailwind 数字档（维护者裁决：方案 A）**——设计规范矛盾审核（基准 `6b8468f37c`，B-01）发现：§3 只把 `text-<n>` + `leading-[Mpx]` 算作固定行高缺陷，§4 DS-11 却要求行框随字号设置增长；而 Tailwind 自带的 `leading-3…10` 是 rem 长度，字号设置只改写 `--text-*`、不改根字号，UI 字号 24 时 `text-13` 变成 22px 而 `leading-5` 仍是 20px，多行文字几乎贴住。守卫只匹配 `leading-[数字px]`，renderer 中同类组合约 370 处，包括共享的 ErrorNotice 与 DownloadToast。维护者在三个方案中选 A：补规范和守卫，先改共享组件，存量分批。现行：固定行高 = `leading-[Mpx]` / `leading-[Nrem]` / `leading-3…10`，一律改无单位比例（原 px ÷ 默认字号）；守卫只拦新增，存量 119 个文件 375 处登记为只减不增的基线，按区域分五批迁移。被取代：#1553「只有 px 行高算缺陷」的口径。落点：`DESIGN.md §3` 排版 non-goals 行高例外条款；`typographyDiscipline.test.ts` 的 `fixed-leading` 规则与 `FIXED_LEADING_DEBT`；`components/ui/error-notice.tsx`、`components/ui/toast/DownloadToast.tsx`。
+
 - **11-10 交互回答输入框统一全宽、操作放框内**——用户指出撤回补充卡中语音和长文字发送按钮挤占输入宽度，要求所有交互输入一起优化。普通回答、自定义回答、多选补充、撤回补充与计划反馈改用全宽输入区，已有语音及发送操作位于框内下方；发送复用主消息输入框的纸飞机图标，动作名通过提示和无障碍标签保留。多选自定义输入只保留一个发送入口。落点：`DESIGN.md §4 Inputs & Forms`、桌面 `AskUserQuestionPrompt` / `PlanActionCard`、手机 `InteractionPanel`；证据：`ask-user-question` 的 withdrawn / input-free / input-custom / input-multi / input-plan 窄屏深浅色场景。
 
 - **11-06 桌面伙伴展开行与任务列表模式的任务行统一**——用户发现展开后的伙伴行比列表模式的一条任务高（头像外层是行内盒，落在文字基线上把行撑到 66px），要求「和任务一样高」，看过选中对比图后要求选中样式也统一。现行：伙伴、远程伙伴、多电脑 Cindy 与群行共用任务行的高度（`SIDEBAR_LIST_ROW_HEIGHT_CLASS`，默认约 59px，随界面字号缩放，头像仍为 44px）与选中样式（`SIDEBAR_LIST_ROW_ACTIVE_CLASS`：实色底 + 文字色 + 1px 内描边），行间距由 4px 改为与任务一致的 2px，行圆角由 12px 改为任务行的 8px（悬停与选中底色同形）。被取代：10-29「伙伴选中用淡色表面、不用任务侧栏选中底色」。收起头像行的圆形描边选中不变，手机端不变。落点：`cc-agent/sidebar/listRowStyle.ts`、`desktop-bot-list-status.md`；守护：`teammatesSectionSpacing.test.ts`、`teammates-section` 单页验证。
@@ -1105,3 +1109,14 @@ Switch 解耦。插件插槽挂载同一个媒体组件，不再维护单独拖�
 - 伙伴聊天里的 V1 后台任务卡只读：不再有停止与补一句，未落终态的旧卡按子任务实际状态或「状态未知」显示（`desktop-bot-delegation-status.md`）。伙伴间私信不再产生新的单行入口，历史入口照常打开只读往来页。
 
 现行落点：`DESIGN.md` §3 例外色、「Teammate capability page」、「Desktop and Mobile task creator filters」、「伙伴内部通讯入口」；产品规则 `cindy-bots-runtime.md`。
+
+## 2026-11-11 · 组件与控件：输入框默认高度、选框、图标按钮、窄下拉（维护者裁决 C-08、B-10、C-07、C-12）
+
+设计规范审核发现四处规范与组件不一致，维护者裁决：
+
+- **C-08（A）**：共享 `Input` 默认尺寸从 40px（lg）改为 36px（md），与同一行默认 `Select`、`Button lg` 等高；40px 只给需要宽松的字段显式传 `size="lg"`。
+- **B-10（B）**：「边框不超过 1px」只管容器与分隔线，不管控件描边；手绘的复选框改用共享 `Checkbox`（系统原生样式，外观会变）；思考强度滑块 2.5px 描边登记为例外。没有共享组件的单选圆点、编辑框焦点框、头像/状态点镂空环和加载圈不在迁移范围。
+- **C-07（A）**：共享 `Button` 的正方形用法（28 / 32 / 36px，无框 quiet 或带边框 secondary）就是通用图标按钮；原有 28×24 的扁图标按钮改成 28px 正方形。
+- **C-12（A）**：设置页里与其他控件同行的短选项下拉（并发上限、权重、文言文字体）新增 120px 窄档 `width="xs"`；高度用 `size`、宽度用 `width`，不再用 className 自定。
+
+现行规则见 `DESIGN.md` §4 Buttons、Desktop settings controls、Inputs & Forms、§7、§14.6、§15.18。

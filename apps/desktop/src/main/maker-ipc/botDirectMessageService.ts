@@ -171,11 +171,18 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
   const listAgents = async (callerSessionId: string) => {
     const scope = deps.captureOwnerScope?.();
     const caller = await loadCaller(callerSessionId);
-    if (!caller || caller.linkArchivedAt !== null
-      || caller.sessionSource !== 'bot' || caller.sessionStatus !== 'active' || caller.botStatus !== 'active') {
-      return { ok: false as const, errorCode: 'NOT_A_BOT_SESSION', message: 'An active teammate task is required' };
+    if (caller) {
+      if (caller.linkArchivedAt !== null || caller.sessionStatus !== 'active' || caller.botStatus !== 'active')
+        return { ok: false as const, errorCode: 'NOT_A_BOT_SESSION', message: 'The calling buddy is inactive' };
+    } else {
+      const [task] = await getDbClient().drizzle.select({ status: sessions.status }).from(sessions)
+        .where(eq(sessions.id, callerSessionId)).limit(1);
+      if (task?.status !== 'active')
+        return { ok: false as const, errorCode: 'NOT_FOUND', message: 'An active Cindy task is required' };
     }
-    const local = (await activeRoster()).filter(row => row.id !== caller.botId)
+    if (scope !== undefined && deps.isOwnerScopeCurrent && !deps.isOwnerScopeCurrent(scope))
+      return { ok: false as const, errorCode: 'OWNER_CHANGED', message: 'Account changed' };
+    const local = (await activeRoster()).filter(row => row.id !== caller?.botId)
       .map(({ sessionId, ...row }) => ({ ...row, local: true, ...(sessionId ? { session_id: sessionId } : {}) }));
     let remote: Awaited<ReturnType<TeammateDirectory['list']>> = { agents: [], unavailableDevices: [] };
     let discoveryError: string | undefined;

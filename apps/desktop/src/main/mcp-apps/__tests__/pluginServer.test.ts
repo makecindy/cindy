@@ -39,7 +39,7 @@ async function fixture() {
   const started = new Promise<void>((resolve) => {
     called = resolve;
   });
-  const events: string[] = [];
+  const events: Array<string | null> = [];
   const assertCurrent = () => {
     if (!current) throw new Error('MCP_APP_SERVER_CHANGED');
   };

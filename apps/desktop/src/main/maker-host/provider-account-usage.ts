@@ -504,9 +504,10 @@ export async function readProviderAccountUsage(
   const resolution = resolveProviderAccountUsage(request.providerId, request.agent);
   if (!dispatchCurrent()) return { status: 'unavailable', error: 'updating' };
   const minimax = resolution?.integrationId === 'minimax-plan-quota-v1';
-  // Implicit settings and explicit task reads of one MiniMax route must share
+  // Implicit settings and explicit picker/task reads of one quota route must share
   // identity, cache, in-flight work and upstream Retry-After.
-  const quotaRequest = minimax ? { ...request, agent: resolution.agent } : request;
+  const quotaRequest = minimax || resolution?.integrationId === 'kimi-coding-quota-v1'
+    ? { ...request, agent: resolution.agent } : request;
   const guardedQuota = kimi || minimax;
   const scope = `${ownerStamp.dataOwnerId}:${ownerStamp.generation}:${request.providerId}:${quotaRequest.agent ?? ''}`;
   // Transaction revisions fence dispatch/results. Presentation-only edits must

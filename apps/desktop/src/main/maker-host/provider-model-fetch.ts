@@ -1,5 +1,5 @@
 import { issueModelSourceSnapshot, modelSourceRequestSignature } from './model-source-snapshots.js';
-import { resolveCopilotAccountUrl } from './copilot-account-url.js';
+import { copilotModelsRequest, resolveCopilotAccountUrl } from './copilot-account-url.js';
 import { collectModelDiscoveryPages } from './model-discovery-pages.js';
 import type { DiscoveredModel } from '@cindy/model-providers';
 /**
@@ -200,11 +200,13 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
   const googleCatalog = (!explicit || /^https:\/\/generativelanguage\.googleapis\.com\/v1(?:beta)?\/openai\/models\/?$/.test(explicit)) && baseUrl.origin === 'https://generativelanguage.googleapis.com'
     && /^\/v1(?:beta)?(?:\/openai)?\/?$/.test(baseUrl.pathname);
   const googleProtocol = googleCatalog || spec.wireProtocol === 'google-generative-ai';
-  const discoveryUrl = googleCatalog
+  const configuredDiscoveryUrl = googleCatalog
     ? `${baseUrl.origin}${baseUrl.pathname.replace(/\/openai\/?$/, '').replace(/\/+$/, '')}/models`
     : explicit && modelsUrl?.origin === baseUrl.origin
     ? explicit : spec.wireProtocol === 'google-generative-ai'
       ? `${spec.baseUrl.replace(/\/+$/, '')}/models` : deriveModelsDiscoveryUrl(spec.baseUrl);
+  const copilot = copilotModelsRequest(configuredDiscoveryUrl);
+  const discoveryUrl = copilot?.url ?? configuredDiscoveryUrl;
   const mustStripCredentialHeaders =
     !!spec.apiKey || spec.authMethod === 'none' || spec.authMethod === 'oauth';
   const headers: Record<string, string> = mustStripCredentialHeaders
@@ -216,7 +218,13 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
   const discoveryEndpoint = new URL(discoveryUrl);
   const longcatOpenAiCatalog = discoveryEndpoint.origin === 'https://api.longcat.chat'
     && discoveryEndpoint.pathname.replace(/\/+$/, '') === '/openai/v1/models';
-  if (discoveryEndpoint.origin === 'https://api.elevenlabs.io'
+  if (copilot) {
+    Object.assign(headers, copilot.headers);
+    delete headers['anthropic-version'];
+    delete headers['anthropic-beta'];
+    delete headers['x-api-key'];
+    if (spec.apiKey) headers.authorization = `Bearer ${spec.apiKey}`;
+  } else if (discoveryEndpoint.origin === 'https://api.elevenlabs.io'
     && discoveryEndpoint.pathname.replace(/\/+$/, '') === '/v1/models') {
     // ElevenLabs discovery uses xi-api-key, independently of the chat runtime slot.
     delete headers.authorization;

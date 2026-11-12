@@ -20,7 +20,7 @@ Your computer then shows up on the phone automatically. If the phone says the co
 - Send messages (messages sent while the agent is working are queued), **Stop**, attach photos, files, or screenshots, use voice input, and switch model, reasoning effort, and permission mode. **Plan Mode** and **Goal Mode** are available too.
 - Approve permission prompts, answer the agent's questions, and review plans.
 - Rewind (**Back to here**), fork (**Start new session from here**), ask in a side chat, and manage Collaboration workers.
-- Browse a task's files (read-only), use plugins, and chat with Teammates.
+- Browse a task's files (read-only), use plugins, and chat with Buddies.
 - Share a task with other accounts, or join one (**Settings > Share Task > Manage Sharing** on the phone; see the Sharing tasks topic).
 - On iPhone, share content from other apps into Cindy; it's placed in the composer, not sent automatically.
 - The phone can't change the computer's global settings, sign-in, or API keys, and it can't be controlled itself.

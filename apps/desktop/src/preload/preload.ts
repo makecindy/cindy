@@ -7,6 +7,7 @@ import { createMicrophonePermissionSnapshot } from './microphonePermissionSnapsh
 import { createVoiceInputDataSnapshot } from './voiceInputDataSnapshot';
 import type { VoiceInputDataSnapshot } from '../shared/voiceInputData';
 import { createWallpaperAssetsBridge } from './wallpaperAssets';
+import { createPluginFontReader } from './appearanceSnapshot';
 import type { CompanionImportApi, CompanionImportSelection } from '@cindy/maker-shared/companion-import';
 import { TASK_MIGRATION_LOCAL_CHANNEL } from '@cindy/device-link';
 import type { PluginModelSelection } from '@cindy/device-link';
@@ -221,6 +222,7 @@ import type {
   LocalThemeWriteResult,
 } from '../shared/local-themes';
 import type { LocalThemeImportResult } from '../shared/theme-import/types';
+import type { CindyFileOpenResult } from '../shared/cindyFile';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from '../shared/locale';
 import type { RawReleaseNotes } from '../shared/releaseNotesContent';
 import {
@@ -1244,6 +1246,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     apply: (request) => ipcRenderer.invoke(SETUP_MIGRATION_IPC.APPLY, request),
     state: () => ipcRenderer.invoke(SETUP_MIGRATION_IPC.STATE),
     dismiss: (request) => ipcRenderer.invoke(SETUP_MIGRATION_IPC.DISMISS, request),
+    firstRunGuide: () => ipcRenderer.invoke(SETUP_MIGRATION_IPC.FIRST_RUN_GUIDE),
     onProgress: (listener) => {
       const receive = (_event: Electron.IpcRendererEvent, progress: SetupMigrationProgress) =>
         listener(progress);
@@ -1328,6 +1331,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   pageZoomReset: (): Promise<{ ok: true; zoomFactor: number }> =>
     ipcRenderer.invoke('page-zoom:reset'),
   appearanceSettings: {
+    ...createPluginFontReader(),
     importWallpaper: () => ipcRenderer.invoke('appearance-settings:import-wallpaper'),
     ...createWallpaperAssetsBridge(),
     removeWallpaper: () => ipcRenderer.invoke('appearance-settings:remove-wallpaper'),
@@ -1336,6 +1340,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setPatch: (patch: Partial<AppearanceSettings>): Promise<AppearanceSettings> =>
       ipcRenderer.invoke('appearance-settings:set-patch', patch),
     reset: (): Promise<AppearanceSettings> => ipcRenderer.invoke('appearance-settings:reset'),
+    selectTheme: (selection: import('../shared/appearanceDefinition').ThemeSelection | null): Promise<AppearanceSettings> =>
+      ipcRenderer.invoke('appearance-settings:select-theme', selection),
+    resetFields: (fields: string[]): Promise<AppearanceSettings> => ipcRenderer.invoke('appearance-settings:reset-fields', fields),
     onChanged: fanOutAppearanceSettingsChanged,
   },
   onApplicationMenuCommand: (callback: (command: ApplicationMenuCommand) => void): (() => void) =>
@@ -1376,6 +1383,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** 开屏卡住时上报一次启动门快照;main 校验字段后写进可上传的诊断日志。 */
   reportStartupGateStall: (snapshot: StartupGateStallSnapshot): void =>
     ipcRenderer.send(STARTUP_GATE_STALL_CHANNEL, snapshot),
+
+  cindyFiles: {
+    open: (filePath: string): Promise<CindyFileOpenResult> => ipcRenderer.invoke('cindy-files:open', filePath),
+  },
 
   localThemes: {
     listSync: (): LocalThemesResult => {
@@ -1452,6 +1463,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 意识仓库 (shared/ghost.ts)。listSync 走 sendSync:意识面板要与内置
   // 面板同帧注册进布局引擎(规则 7 无跳变);目录扫描极小,同步读不卡启动。
+  /** 模型组：路线与模式的配置，以及把选中的一项解析成现在能用的具体模型。 */
+  modelGroups: {
+    get: (): Promise<import('../shared/modelGroups').ModelGroupsConfig> => ipcRenderer.invoke('model-groups:get'),
+    set: (config: import('../shared/modelGroups').ModelGroupsConfig): Promise<import('../shared/modelGroups').ModelGroupsConfig> =>
+      ipcRenderer.invoke('model-groups:set', config),
+    resolve: (request: import('../shared/modelGroups').ModelGroupResolveRequest): Promise<import('../shared/modelGroups').ModelGroupResolveResult> =>
+      ipcRenderer.invoke('model-groups:resolve', request),
+    /** 最近几次新任务从路线或模式里选了谁，最新在前。 */
+    decisions: (): Promise<import('../shared/modelGroupDecisions').ModelGroupDecision[]> => ipcRenderer.invoke('model-groups:decisions'),
+    /** 记下这个任务是经哪条路线或模式建的、现在用着哪个候选。 */
+    bindSession: (request: {
+      sessionId: string;
+      selection: import('../shared/modelGroups').ModelGroupSelection;
+      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model'>;
+    }): Promise<void> => ipcRenderer.invoke('model-groups:bind-session', request),
+    /** 撞配额时同一条路线里还能接着用的下一个来源；没有为 null。 */
+    switchOffer: (request: { sessionId: string }): Promise<import('../shared/modelGroups').ModelGroupSwitchOffer | null> =>
+      ipcRenderer.invoke('model-groups:switch-offer', request),
+  },
+
   ghosts: {
     activateBrowser: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('ghosts:activate-browser', id),
     mailPreview: (sessionId: string, url: string, read: boolean, opened = false, providerId?: string) => ipcRenderer.invoke('ghosts:mail-preview', sessionId, url, read, opened, providerId),
@@ -1573,8 +1604,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getControlPoints: (id: string): Promise<GhostControlPointInfo[]> =>
       ipcRenderer.invoke('ghosts:control-points:get', id),
     /** 任务「前置检查」可选的插件(仅本机窗口,不进 device-link)。 */
-    listControlPointCandidates: (point: 'will-schedule-run' | 'will-routine-run' | 'will-start-task'): Promise<GhostControlPointCandidate[]> =>
+    listControlPointCandidates: (point: import('../shared/ghost').GhostControlPointId): Promise<GhostControlPointCandidate[]> =>
       ipcRenderer.invoke('ghosts:control-points:candidates', point),
+    runtimePlugins: (sessionId: string, settings?: import('../shared/pluginRuntime').RuntimePluginSettings): Promise<import('../shared/pluginRuntime').RuntimePluginSettings> =>
+      ipcRenderer.invoke('maker:runtime-plugins', sessionId, settings),
     /** 新任务「让插件选」：第一条消息发出前问一次插件用哪个模型(仅本机窗口)。 */
     /** 新任务模型选择器里的插件模型(仅本机窗口,不进 device-link)。 */
     listPickerModels: (): Promise<GhostPickerModel[]> => ipcRenderer.invoke('ghosts:models:list'),
@@ -5142,6 +5175,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onChanged: fanOutSubscriptionAccountsChanged,
     command: (command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView> =>
       ipcRenderer.invoke('maker:subscription-accounts', command),
+    // 已建立任务实际在用的账号(只读，用量显示用)。
+    sessionAccount: (query: import('../shared/subscriptionAccounts').SubscriptionSessionAccountQuery): Promise<unknown> =>
+      ipcRenderer.invoke('maker:subscription-accounts', query),
   },
   providerGroup: {
     command: (command: ProviderGroupCommand): Promise<unknown> =>
@@ -5690,19 +5726,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:hook-control:revoke-team', { teamId }),
     cancelPendingBind: (): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:cancel-pending-bind'),
-    providerBindStart: (provider: 'telegram' | 'x' | 'feishu'): Promise<{ hook: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:provider-bind-start', { provider }),
+    providerBindStart: (provider: 'telegram' | 'x' | 'feishu', scopeId?: string): Promise<{ hook: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:provider-bind-start', { provider, ...(scopeId ? { scopeId } : {}) }),
     providerBindCancel: (provider: 'telegram' | 'x' | 'feishu'): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:provider-bind-cancel', { provider }),
-    providerBindSelect: (provider: 'telegram' | 'x' | 'feishu'): Promise<{ hook: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:provider-bind-select', { provider }),
-    providerBindRevoke: (provider: 'telegram' | 'x' | 'feishu'): Promise<{ hook: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:provider-bind-revoke', { provider }),
+    providerBindSelect: (provider: 'telegram' | 'x' | 'feishu', bindingId?: string): Promise<{ hook: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:provider-bind-select', { provider, ...(bindingId === undefined ? {} : { bindingId }) }),
+    providerBindRevoke: (provider: 'telegram' | 'x' | 'feishu', bindingId?: string): Promise<{ hook: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:provider-bind-revoke', { provider, ...(bindingId === undefined ? {} : { bindingId }) }),
     openProviderAction: (
       provider: 'telegram' | 'x' | 'feishu',
       action: 'connect' | 'provider' | 'add-to-group',
+      scopeId?: string,
     ): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('maker:hook-control:provider-open-action', { provider, action }),
+      ipcRenderer.invoke('maker:hook-control:provider-open-action', { provider, action, ...(scopeId ? { scopeId } : {}) }),
     // 目录偏好本机读写(正本在本地; 连上后镜像到 hook server 供 /model 卡使用;
     // teamId 为 multi-team 下的归属 team, 单绑定缺省)
     getWorkspacePrefs: (): Promise<{ prefs: unknown }> =>
@@ -5768,6 +5805,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     starCindy: (): Promise<boolean | null> => ipcRenderer.invoke('git-context:github-star:add'),
     readGithub: (method: import('@cindy/maker-shared').GithubReadMethod, args: unknown): Promise<unknown> =>
       ipcRenderer.invoke('git-context:github-read', { method, args }),
+    githubAppStatus: (): Promise<import('../shared/githubSetup').GithubAppConnectionState> => ipcRenderer.invoke('git-context:github-app:status'),
+    connectGithubApp: (): Promise<void> => ipcRenderer.invoke('git-context:github-app:connect'),
+    installGithubApp: (): Promise<void> => ipcRenderer.invoke('git-context:github-app:install'),
+    disconnectGithubApp: (): Promise<void> => ipcRenderer.invoke('git-context:github-app:disconnect'),
     githubConnection: (): Promise<import('../shared/githubSetup').GithubConnectionState> =>
       ipcRenderer.invoke('git-context:github-setup:connection'),
     githubSetupStatus: (): Promise<import('../shared/githubSetup').GithubSetupState> =>
@@ -7000,7 +7041,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onLocalModelPullProgress: fanOutMakerLocalModelPullProgress,
     onLocalModelInstallProgress: fanOutMakerLocalModelInstallProgress,
 
-    mcpApps: (sessionId: string, input: unknown): Promise<unknown> => ipcRenderer.invoke('maker:mcp-apps:v1', sessionId, input),
+    mcpApps: (sessionId: string | null, input: unknown): Promise<unknown> => ipcRenderer.invoke('maker:mcp-apps:v1', sessionId, input),
+    onPluginUiAction: (callback: (input: unknown) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, input: unknown) => callback(input);
+      ipcRenderer.on('plugin-ui:action', listener);
+      return () => ipcRenderer.removeListener('plugin-ui:action', listener);
+    },
+    onPluginUiState: (callback: (input: { epoch: string; updates: import('../shared/pluginUi').PluginUiStateChange[] }) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, input: { epoch: string; updates: import('../shared/pluginUi').PluginUiStateChange[] }) => callback(input);
+      ipcRenderer.on('plugin-ui:state', listener);
+      return () => ipcRenderer.removeListener('plugin-ui:state', listener);
+    },
     // 自定义 MCP 服务器配置 CRUD（可选 bearer token 另走通用 safeStorage IPC，不经这里）。
     listCustomMcpServers: (
       context?: import('../shared/customMcp').CustomMcpListContext,
@@ -7091,6 +7142,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:provider:oauth:cancel', providerId, options),
     importProviderFile: (): Promise<string | string[] | null> =>
       ipcRenderer.invoke('maker:provider:import:file'),
+    scanLocalProviderImports: (): Promise<import('../shared/localProviderImport').LocalProviderImportScan> =>
+      ipcRenderer.invoke('maker:provider:import:local-scan'),
+    editLocalProviderImport: (id: string, input: import('../shared/localProviderImport').LocalProviderImportEdit): Promise<import('../shared/localProviderImport').LocalProviderImportItem> =>
+      ipcRenderer.invoke('maker:provider:import:local-edit', id, input),
     previewProviderImport: (
       importId: string,
       targetProviderId?: string,

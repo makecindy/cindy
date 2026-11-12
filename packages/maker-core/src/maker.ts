@@ -1464,9 +1464,17 @@ export class Maker {
   async closeSessionIfCurrent(
     session: Session,
     reason: Exclude<MakerSessionCloseReason, 'unexpected'> = 'requested',
-    opts?: { afterCurrentTurn?: boolean; failureEvent?: () => AgentEvent },
+    opts?: { afterCurrentTurn?: boolean; failureEvent?: () => AgentEvent; onlyIfIdle?: boolean },
   ): Promise<'closed' | 'deferred' | void> {
     if (this.activeSessions.get(session.id) !== session) return;
+    let idleClose: Promise<boolean> | undefined;
+    if (opts?.onlyIfIdle) {
+      if (session.hasStartedClosing()) return;
+      // closeIfIdle synchronously reserves teardown or refuses it. Record the
+      // cause only for an accepted close, before its first async completion.
+      idleClose = session.closeIfIdle();
+      if (!session.hasStartedClosing()) return;
+    }
     // Deferred internal retirement is only intent. An explicit closer may
     // take ownership until Session actually starts teardown; after that the
     // cause stays fixed even if exit confirmation fails or another close races.
@@ -1480,6 +1488,10 @@ export class Maker {
         reason,
         transient: this.lifecycleHooks.isTransientCloseRequest?.(session.id) ?? false,
       });
+    }
+    if (idleClose) {
+      await idleClose;
+      return 'closed';
     }
     if (opts?.afterCurrentTurn) return session.closeAfterCurrentTurn(opts);
     await session.close();
@@ -1852,7 +1864,7 @@ export class Maker {
    * 用途: 起标题 / 命名 / 总结摘要 / skillReview 等 "纯文本 → 文本" 任务,
    * 不需要 session 生命周期 / 事件流 / 持久化。
    *
-   * 各 agent 默认模型 (Claude → haiku-4-5, Codex → gpt-5.4-mini), 鉴权与正常 session 同源。
+   * 各 agent 默认模型 (Claude → haiku-4-5, Codex → app-server 自身默认), 鉴权与正常 session 同源。
    * 失败抛 OneShotError (reason: timeout/auth/network/malformed) —— 调用方按 reason
    * 决定 swallow (起标题) 还是上报 (skillReview)。
    */
@@ -1958,10 +1970,17 @@ export class Maker {
     if (!agent) {
       return { binaryReady: false, binaryPath: null, authReady: false };
     }
+    // A host may resolve the runtime lazily; a missing install is a status, not an IPC error.
+    let binaryPath: string | null = null;
+    try {
+      binaryPath = agent.getBinaryPath() || null;
+    } catch {
+      binaryPath = null;
+    }
     const auth = await agent.getAuthState();
     return {
-      binaryReady: !!agent.getBinaryPath(),
-      binaryPath: agent.getBinaryPath(),
+      binaryReady: binaryPath !== null,
+      binaryPath,
       authReady: auth.authenticated,
       identity: auth.identity,
     };

@@ -64,6 +64,8 @@ export interface DispatchOrcaInterAgentMessageParams {
   source: OrcaInterAgentMessageSource;
   senderLabel: string;
   workerId?: string;
+  /** 宿主盖章：仅系统兜底回报可进入 Lead 队列合批；主动回报/派单不设置。 */
+  autoBridge?: true;
   /** 发送方显式选择；缺省排队。steer 只在目标正在运行时插进当前 turn。 */
   delivery?: 'queue' | 'steer';
   /** 可选, 随消息发给目标的本机图片绝对路径; 仅本机 session 支持, SSH 远端目标拒绝。 */
@@ -438,6 +440,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         senderLabel,
         displayText: params.rawContent,
         ...(senderSessionId ? { senderSessionId } : {}),
+        ...(params.autoBridge ? { autoBridge: true } : {}),
       };
     };
     let steerFallbackReason: OrcaSteerFallbackReason | undefined;

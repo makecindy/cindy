@@ -251,7 +251,7 @@ export interface RemoteAgentHandleController {
   onEvent(event: unknown): void;
   onState(state: Record<string, unknown>): void;
   onRequest(request: RemoteAgentReverseRequest): Promise<RemoteAgentReply> | null;
-  onClosed(reason: string, message?: string): void;
+  onClosed(reason: string, message?: string, runId?: string): void;
   /** Supplier process disappeared; keep the local executor and let host recovery own the next send. */
   onInterrupted(): void;
   hasActiveTurn(): boolean;
@@ -282,6 +282,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   let state: Record<string, unknown> = { ...started.state };
   let resolver: InteractionResolver | null = null;
   let disposed = false;
+  let teardownRequested = false;
   let disposal: Promise<void> | null = null;
   const sendCallbacks = new Map<string, {
     onTranscriptUserEntry?: (entryId: string) => void | Promise<void>;
@@ -297,6 +298,8 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   // A later transport teardown must close the handle without replacing that error.
   let terminalErrorDelivered = false;
   let activeTurn = state.turnRunning === true;
+  // Abort can resolve before the remote turn ends; busy snapshots may still arrive.
+  let turnAbortRequested = false;
   let interruption = 0;
 
   const dispose = (): Promise<void> => {
@@ -313,6 +316,8 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   };
 
   const teardown = async (mode: 'close' | 'detach', opts?: AgentSessionTeardownOptions) => {
+    teardownRequested = true;
+    activeTurn = false;
     deps.cancelPendingConfirmations?.();
     const reason = opts?.reason ?? 'navigation';
     // 远端会话无项目资源启动快照,永不漂移,不存在资源回收关闭;资源刷新关闭由
@@ -409,10 +414,12 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     const beforeInterruption = interruption;
     if (method === 'send') {
       terminalErrorDelivered = false;
+      turnAbortRequested = false;
       activeTurn = true;
     }
     try {
-      await client.callWithId(callId, method, [wireMessage, encoded.wire]);
+      // Keep Session cancellation local; AbortSignal is never part of the wire payload.
+      await client.callWithId(callId, method, [wireMessage, encoded.wire], opts?.signal);
     } catch (error) {
       // The ordered error/done below already settles this send. Do not race it with
       // a second send rejection that can replace the host-owned recovery receipt.
@@ -466,6 +473,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     steer: (message, opts) => sendLikeTracked('steer', message, opts),
     // 已让出名额时对方没有在跑的回合，停止什么也不用做。
     abort: async () => {
+      turnAbortRequested = true;
       activeTurn = false;
       deps.cancelPendingConfirmations?.();
       await callIfLive('abort');
@@ -697,15 +705,24 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       // the executor. The coordinator owns cancellation, provenance and continuation.
       queue.push({ type: 'done', source: started.agentKind, data: { reason: 'remote_agent_restarted' } });
     },
-    onClosed(reason, message) {
+    onClosed(reason, message, runId = deps.client?.runId) {
+      if (disposed) return;
       for (const projected of projection.flush()) queue.push(projected);
-      // 'superseded'：同一任务被重新打开、旧实例让位给新实例，不是错误，静默收起。
-      if (!terminalErrorDelivered && reason !== 'closed' && reason !== 'detached' && reason !== 'ended' && reason !== 'superseded') {
+      // A transport end (including supersession) is not a foreground terminal.
+      // Local teardown and already settled turns keep their quiet close semantics.
+      const normalClose = reason === 'closed' || reason === 'detached' || reason === 'ended' || reason === 'superseded';
+      if (!teardownRequested && !terminalErrorDelivered && ((activeTurn && !turnAbortRequested) || !normalClose)) {
+        // The close error owns the pending send too, just as onInterrupted does.
+        // Do not let its RPC rejection race in and replace the terminal details.
+        interruption += 1;
+        terminalErrorDelivered = true;
         queue.push({
           type: 'error',
           data: {
             message: message ?? `[REMOTE_AGENT_UNAVAILABLE] The agent on the other computer stopped (${reason}).`,
             isTerminal: true,
+            remoteCloseReason: reason,
+            ...(runId ? { remoteRunId: runId } : {}),
             // 拉不到那台(连续 2 分钟)只说明连接断了，那台本身可能没事：供应商组先等它恢复、恢复了留在原电脑继续；
             // 其余(对方出错收尾、撤权、流不可信等)是那台那边的问题(provider-group/failurePolicy)。
             // An explicit provider-owner disconnect is a user decision, not an

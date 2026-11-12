@@ -3061,7 +3061,7 @@ function scheduleSessionListProjectionBackfill(rows: readonly SessionListRow[]):
   for (const row of rows) {
     const sessionId = row.session.id;
     const item = pendingSessionListProjectionBackfill.get(sessionId) ?? { id: sessionId };
-    if (row.session.listPreview == null && row.latestMessageExtract != null) {
+    if (!row.session.listPreview && row.latestMessageExtract != null) {
       const preview = finalizePlainPreview(row.latestMessageExtract, row.latestMessageRole);
       if (preview != null) {
         item.preview = preview;

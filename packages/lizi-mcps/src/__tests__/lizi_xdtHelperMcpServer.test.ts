@@ -210,11 +210,19 @@ describe("cindy_helper MCP server", () => {
       name: 'call_tool', arguments: { name, args: {} },
     }));
     try {
+      // Unit regression: natural update requests must discover the existing
+      // install path without executing it; previously "更新 Cindy" returned none.
+      for (const query of ['更新 Cindy', '升级 Cindy', 'update Cindy', 'upgrade Cindy']) {
+        expect(parsePayload(await client.callTool({ name: 'list_tools', arguments: { query } })))
+          .toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ key: 'application.update' })]) });
+      }
       const tools = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'app_update' } }));
       expect((tools.tools as Array<{ name: string }>).map((tool) => tool.name)).toEqual([
         'check_app_update',
       ]);
       expect(await call('check_app_update')).toMatchObject({ status: 'available', targetVersion: '0.1.90' });
+      const detail = parsePayload(await client.callTool({ name: 'list_tools', arguments: { key: 'application.update' } }));
+      expect(detail).toMatchObject({ control: { missingOperations: ['install_app_update'], notes: expect.any(String) } });
       expect(await call('install_app_update')).toMatchObject({ ok: false, errorCode: 'UNKNOWN_TOOL' });
       expect(check).toHaveBeenCalledOnce();
       current = false;
@@ -231,7 +239,7 @@ describe("cindy_helper MCP server", () => {
     let current = true;
     const caller = { sessionId: 'local-task', sessionInstanceId: 'instance-1' };
     const check = vi.fn(async () => ({ status: 'available', currentVersion: '0.1.86', targetVersion: '0.1.90' }));
-    const install = vi.fn(async () => ({ status: 'started', targetVersion: '0.1.90' }));
+    const install = vi.fn(async (): Promise<Record<string, unknown>> => ({ status: 'started', targetVersion: '0.1.90' }));
     const setAutoUpdate = vi.fn(async (_caller: unknown, enabled: boolean) => enabled
       ? { status: 'updated', autoUpdateEnabled: true }
       : { ok: false, errorCode: 'OWNER_TURN_REQUIRED', message: 'owner only' });
@@ -262,9 +270,23 @@ describe("cindy_helper MCP server", () => {
         ok: false, errorCode: 'OWNER_TURN_REQUIRED', data: { hint: 'owner only' },
       });
       expect(setAutoUpdate).toHaveBeenNthCalledWith(1, caller, true);
+      // The update receipt carries recovery guidance after the global prompt
+      // removal, preserving the host's status/reason and actual error code.
+      check.mockImplementationOnce(async () => ({ status: 'idle', currentVersion: '0.1.90', targetVersion: '0.1.90', reason: 'channel_current' }));
+      expect(await call('check_app_update')).toMatchObject({
+        status: 'idle', reason: 'channel_current', guidance: expect.any(String),
+      });
+      install.mockResolvedValueOnce({ status: 'unsupported', reason: 'installation_unsupported' });
+      expect(await call('install_app_update')).toMatchObject({
+        status: 'unsupported', reason: 'installation_unsupported', guidance: expect.any(String),
+      });
+      install.mockResolvedValueOnce({ ok: false, errorCode: 'UPDATE_UNAVAILABLE', message: 'no installer' });
+      expect(await call('install_app_update')).toMatchObject({
+        ok: false, errorCode: 'UPDATE_UNAVAILABLE', data: { hint: 'no installer', guidance: expect.any(String) },
+      });
       current = false;
       expect(await call('install_app_update')).toMatchObject({ ok: false, errorCode: 'STALE_SESSION' });
-      expect(install).toHaveBeenCalledOnce();
+      expect(install).toHaveBeenCalledTimes(3);
     } finally {
       await client.close();
       await server.close();
@@ -478,13 +500,31 @@ describe("cindy_helper MCP server", () => {
     }
   });
 
+  // Unit/runtime surface: ordinary tasks need the model catalog even when Orca is disabled.
+  it.each(['codex', 'pi', 'claude-code'] as const)('exposes the shared model catalog to ordinary %s tasks without worker tools', async agentKind => {
+    const listAvailableModels = vi.fn(async () => ({ ok: true as const, codex: [{ id: 'gpt-model', label: 'Test' }] }));
+    const server = createXdtHelperMcpServer({ listAvailableModels, resolveSurface: async () => 'default' },
+      { agentKind, workingDir: '/repo', sessionId: 'ordinary' });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'ordinary-model-catalog', version: '1' });
+    await Promise.all([server.connect(b), client.connect(a)]);
+    try {
+      const catalog = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'control' } }));
+      expect(catalog.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'list_available_models' })]));
+      expect(catalog.tools).not.toEqual(expect.arrayContaining([expect.objectContaining({ name: 'create_worker' })]));
+      expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'list_available_models',
+        args: { device: 'destination', provider_device_id: 'local' } } }))).toMatchObject({ ok: true, device: 'destination' });
+      expect(listAvailableModels).toHaveBeenCalledWith({ agent: undefined, callerSessionId: 'ordinary', executionDeviceId: 'destination', agentDeviceId: null });
+    } finally { await client.close(); await server.close(); }
+  });
+
   // V2 retired send_to_agent / check_agent_message; teammates are reached through
   // send_to_session with the main-chat address list_agents returns.
-  it("discovers teammates through the scoped helper entry without the retired message tools", async () => {
+  it.each(["bot", "default"] as const)("discovers teammates from %s without the retired message tools", async surface => {
     const listAgents = vi.fn(async () => ({ ok: true as const,
       agents: [{ id: 'studio::bot-b', name: 'Mimi', deviceName: 'Studio', session_id: 'studio::b-main' }], unavailableDevices: [] }));
     const server = createXdtHelperMcpServer(
-      { resolveSurface: async () => "bot", botMessaging: { listAgents } },
+      { resolveSurface: async () => surface, botMessaging: { listAgents } },
       { agentKind: "claude-code", workingDir: "/repo", sessionId: "bot-a-main" },
     );
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -682,7 +722,7 @@ describe("cindy_helper MCP server", () => {
     } finally { await client.close(); await server.close(); }
   });
 
-  it.each(["default", "restricted", "error", "unbound"] as const)("hides and blocks all companion commands on %s surface", async (surface) => {
+  it.each(["default", "restricted", "error", "unbound"] as const)("limits companion self-management on %s surface", async (surface) => {
     const callback = vi.fn(async () => ({ ok: false as const, errorCode: "UNEXPECTED", message: "must not run" }));
     const server = createXdtHelperMcpServer({
       resolveSurface: async () => {
@@ -698,8 +738,9 @@ describe("cindy_helper MCP server", () => {
     try {
       expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual(["call_tool", "list_tools"]);
       const discovery = parsePayload(await client.callTool({ name: "list_tools", arguments: { category: "bots" } }));
-      expect(discovery).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
-      for (const name of ["list_agents", "send_to_user", "create_teammate"]) {
+      if (surface === 'default') expect(discovery).toMatchObject({ ok: true, tools: [{ name: 'list_agents' }] });
+      else expect(discovery).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
+      for (const name of [...(surface === 'default' ? [] : ['list_agents']), "send_to_user", "create_teammate"]) {
         const result = parsePayload(await client.callTool({ name: "call_tool", arguments: { name, args: {} } }));
         expect(result).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
       }
@@ -805,8 +846,8 @@ describe("cindy_helper MCP server", () => {
       const afterReclassification = parsePayload(await client.callTool({
         name: "call_tool", arguments: { name: "list_agents", args: {} },
       }));
-      expect(afterReclassification).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
-      expect(listAgents).not.toHaveBeenCalled();
+      expect(afterReclassification).toMatchObject({ ok: true });
+      expect(listAgents).toHaveBeenCalledOnce();
     } finally {
       await client.close();
       await server.close();
@@ -1241,6 +1282,46 @@ it('forwards connection tool cancellation to the host in all three harnesses', a
       controller.abort();
       await rejected;
       await aborted;
+    } finally { await client.close(); await server.close(); }
+  }
+});
+
+// Screenshot regression: an authored theme could be dropped into the UI, but
+// its task could not discover an importer and launched another Cindy instead.
+// Unit, real MCP wire: existing settings tests never import theme files. One
+// .cindy path must be discoverable/callable; wrong types, SSH and guests cannot write.
+it('discovers theme imports in each harness and keeps them on the authorized local host', async () => {
+  for (const agentKind of ['codex', 'claude-code', 'pi'] as const) {
+    let restricted = false;
+    let remoteHostId: string | undefined;
+    const install = vi.fn(async () => ({ status: 'installed', refreshed: true, names: ['Mist'] }));
+    const server = createXdtHelperMcpServer({ themePackages: { import: install },
+      resolveSurface: async () => restricted ? 'restricted' : 'default' }, {
+      agentKind, workingDir: '/fixture', sessionId: 'theme-owner',
+      getSessionContext: () => ({ agentKind, workingDir: '/fixture', sessionId: 'theme-owner', remoteHostId }),
+    });
+    const client = new Client({ name: 'theme-import-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    const call = (filePath: string) => client.callTool({ name: 'call_tool', arguments: { name: 'import_theme_package', args: { filePath } } });
+    try {
+      const search = parsePayload(await client.callTool({ name: 'list_tools', arguments: { query: '导入主题' } }));
+      const item = (search.items as any[]).find(item => item.key === 'appearance.themes');
+      expect(item).toMatchObject({ availability: 'available' });
+      const detail = parsePayload(await client.callTool({ name: 'list_tools', arguments: { key: item.key } })).control as any;
+      expect(detail.operations).toEqual([expect.objectContaining({ name: 'import_theme_package' })]);
+      expect(install).not.toHaveBeenCalled();
+      expect(parsePayload(await call('/fixture/mist.cindy'))).toMatchObject({ ok: true, status: 'installed', refreshed: true });
+      expect(install).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: 'theme-owner', workingDir: '/fixture', agentKind }), '/fixture/mist.cindy');
+      expect(parsePayload(await call('/fixture/mist.json'))).toMatchObject({ ok: false });
+      expect(install).toHaveBeenCalledTimes(1);
+      remoteHostId = 'ssh-host';
+      expect(parsePayload(await call('/fixture/mist.cindy'))).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      expect(install).toHaveBeenCalledTimes(1);
+      remoteHostId = undefined;
+      restricted = true;
+      expect(parsePayload(await call('/fixture/mist.cindy'))).toMatchObject({ ok: false });
+      expect(install).toHaveBeenCalledTimes(1);
     } finally { await client.close(); await server.close(); }
   }
 });

@@ -36,6 +36,27 @@ export async function loginLegacyCodexAccount(signal: AbortSignal): Promise<void
   }
 }
 
+/** Imported connections keep their original revocation checks and native login lifecycle. */
+export async function readLegacyCodexProviderAccount(providerId: string, directory: string) {
+  const { codexAccountState } = await import('../maker-host/codex-account-auth.desktop.js');
+  const state = codexAccountState(providerId);
+  return state.authenticated ? readNativeAccount('openai', directory) : state;
+}
+
+export async function loginLegacyCodexProviderAccount(providerId: string, signal: AbortSignal): Promise<void> {
+  const { loginCodexAccount, cancelCodexAccountLogin } = await import('../maker-host/codex-account-auth.desktop.js');
+  if (signal.aborted) throw new Error('login_cancelled');
+  const cancel = () => cancelCodexAccountLogin(providerId);
+  signal.addEventListener('abort', cancel, { once: true });
+  try {
+    const result = await loginCodexAccount(providerId, () => !signal.aborted);
+    if (signal.aborted) throw new Error('login_cancelled');
+    if (!result.ok) throw new Error(result.reason ?? 'login_failed');
+  } finally {
+    signal.removeEventListener('abort', cancel);
+  }
+}
+
 function codexProfileEnv(directory: string): Record<string, string> {
   const env = { ...cleanProcessEnv() };
   const replaced = new Set([
@@ -56,16 +77,19 @@ function codexProfileEnv(directory: string): Record<string, string> {
 export async function readNativeAccount(
   provider: SubscriptionProvider,
   directory: string,
-): Promise<AuthState & { plan?: string }> {
+  options?: { force?: boolean },
+): Promise<AuthState & { plan?: string; loginExpiresAt?: string }> {
   if (provider === 'anthropic') {
     const result = await refreshClaudeCliLoginStatus({
       configDir: directory === path.join(homedir(), '.claude') ? undefined : directory,
+      ...(options?.force ? { force: true, requireFresh: true } : {}),
     });
     return {
       authenticated: result.loggedIn,
       identity: result.email,
       authSource: 'oauth',
       plan: result.subscriptionType,
+      ...(result.loginExpiresAt ? { loginExpiresAt: result.loginExpiresAt } : {}),
     };
   }
   const result = (await codexAccountRpc(directory, 'account/read', { refreshToken: false })) as {
@@ -234,11 +258,13 @@ export async function loginNativeAccount(
   provider: SubscriptionProvider,
   directory: string,
   signal: AbortSignal,
+  options?: { renew?: boolean; expectedEmail?: string },
 ): Promise<void> {
   if (provider === 'anthropic') {
     const result = await runClaudeCliLogin(
       signal,
       directory === path.join(homedir(), '.claude') ? undefined : directory,
+      options,
     );
     if (!result.ok) throw new Error(result.reason);
     return;

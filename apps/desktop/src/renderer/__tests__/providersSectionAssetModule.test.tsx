@@ -10,7 +10,7 @@
  *   4. 正常态版面上不出现「重试 / 重新获取凭据 / 轮换密钥」这类按钮 —— 它们退进「···」菜单。
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { createInstance } from 'i18next';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
@@ -355,6 +355,34 @@ it('falls back to the next MiniMax route when the first one has no key', async (
   await screen.findByText('MiniMax');
   await waitFor(() => expect(fetchUsage).toHaveBeenCalledWith({ providerId: 'two-minimax-routes', forceRefresh: false, agent: 'codex' }));
   expect(screen.getByText('providerAccountUsage.kimi.limit_5h')).toBeTruthy();
+});
+
+// PR #9894 / r4547969506, unit UI: keep the real card/hook mounted after
+// fallback. Existing cases only mounted once, missing same-ID reconnection and
+// credential broadcasts that restore the first route's own account.
+it.each(['reconnect', 'credential-broadcast'])('restarts MiniMax route selection after %s', async change => {
+  const listeners = new Set<() => void>();
+  let firstAvailable = false;
+  const fetchUsage = vi.fn(async (input: { agent?: string }) => !firstAvailable && input.agent === 'claude-code'
+    ? { status: 'unavailable', error: 'no-credentials' }
+    : { status: 'ready', stale: false, agent: input.agent,
+      snapshot: { kind: 'minimax-plan-quota', fetchedAt: Date.now(), noPlan: false,
+        weeklyUnlimited: false, boostedWeeklyRemainingPercent: null,
+        windows: [{ id: 'rolling', model: null, usedPercent: input.agent === 'claude-code' ? 12 : 78, resetsAt: null }] } });
+  Object.assign(window.electronAPI.maker, { fetchProviderAccountUsage: fetchUsage,
+    onProvidersChanged: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; } });
+  const source = { id: 'reconnected-plan', connected: true, auth: { method: 'apiKey' }, routing: {
+    'claude-code': { upstream: 'https://api.minimaxi.com/anthropic', authStrategy: 'api-key-header' },
+    codex: { upstream: 'https://api.minimaxi.com/v1', authStrategy: 'api-key-header' },
+  } } as ProviderView;
+  const view = render(<ProviderAccountUsageModule provider={source} />);
+  await screen.findByText('22%');
+  if (change === 'reconnect') view.rerender(<ProviderAccountUsageModule provider={{ ...source, connected: false }} />);
+  firstAvailable = true;
+  if (change === 'reconnect') view.rerender(<ProviderAccountUsageModule provider={{ ...source, connected: true }} />);
+  else await act(async () => { for (const listener of [...listeners]) listener(); });
+  await screen.findByText('88%');
+  expect(fetchUsage).toHaveBeenLastCalledWith({ providerId: source.id, agent: 'claude-code', forceRefresh: false });
 });
 
 it('keeps the manual refresh action after the first OpenCode Go quota snapshot', async () => {

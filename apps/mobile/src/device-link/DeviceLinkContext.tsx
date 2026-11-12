@@ -6,7 +6,7 @@ import { findRemoteHistoryView } from '@/session/remoteHistoryView';
 import { createBackgroundConnection } from './backgroundConnection';
 import { invokeWithHistoryViewCapability } from './historyViewCapability';
 import { createRecoveryDiagnostics, settleMeasuredSnapshot, type RecoveryPhase } from './recoveryDiagnostics';
-import { confirmTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
+import { confirmTrackedSubscription, releaseTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
 import { AppState, Platform } from 'react-native';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { dispatchCredentialSwitchOutcome } from '@/session/credentialSwitchOutcome';
@@ -319,6 +319,11 @@ export function subscribeRemoteTaskTagsChanged(
   return () => {
     remoteTaskTagsChangedListeners.delete(listener);
   };
+}
+const remoteSubscriptionAccountsChangedListeners = new Set<(deviceId: string) => void>();
+export function subscribeRemoteSubscriptionAccountsChanged(listener: (deviceId: string) => void): () => void {
+  remoteSubscriptionAccountsChangedListeners.add(listener);
+  return () => { remoteSubscriptionAccountsChangedListeners.delete(listener); };
 }
 const remoteFavoritesChangedListeners = new Set<(deviceId: string) => void>();
 const remoteProjectAliasesChangedListeners = new Set<(deviceId: string) => void>();
@@ -780,9 +785,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     topics = sharedTaskTopics(deviceId, topics);
     const record = recoveryDiagnostics.get(client)?.capture(deviceId, connectionEpochFor(deviceId));
     await confirmTrackedSubscription({
+      share: { scope: client, deviceId },
       isCurrent: () => presenceAvailableByDeviceRef.current.get(deviceId) !== false && !backgroundReleaseInFlightRef.current
         && backgroundReleaseGenerationRef.current === releaseGeneration && clientRef.current === client,
-      generation: () => `${connectionEpochFor(deviceId)}:${remoteSubscribedTopicsRef.current.generation(deviceId)}`,
+      generation: () => `${releaseGeneration}:${connectionEpochFor(deviceId)}:${remoteSubscribedTopicsRef.current.generation(deviceId, topics)}`,
       missing: () => topicsMissingRemoteAck(remoteSubscribedTopicsRef.current, deviceId, topics)
         .filter((topic) => registryRef.current.hasTopic(deviceId, topic)),
       send: (toSend) => sendSubscribeWithAccessHandling(
@@ -2060,17 +2066,20 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const staleUnheld = topics.filter((topic) =>
       isDeviceLinkTopic(topic) && !releasedSet.has(topic) && !registryRef.current.hasTopic(deviceId, topic));
     const toSend = normalizeDeviceLinkTopics([...new Set([...released, ...staleUnheld])]);
-    markRemoteTopicsUnsubscribed(remoteSubscribedTopicsRef.current, deviceId, toSend);
+    // A pending first ACK has no table entry yet. Fence it before releasing
+    // the last owner so a replacement cannot reuse the obsolete acquisition.
+    remoteSubscribedTopicsRef.current.release(deviceId, released);
     suspendRemoteProjectAliasesForReleasedTopics(deviceId, toSend);
     noteSessionLiveStreamsInterrupted(toSend);
     if (toSend.length === 0 || presenceAvailableByDeviceRef.current.get(deviceId) === false) return;
-    await sendUnsubscribe(
-      requireClient(clientRef.current),
-      deviceId,
-      toSend,
-      (topic) => presenceAvailableByDeviceRef.current.get(deviceId) !== false && !registryRef.current.hasTopic(deviceId, topic),
-    );
-  }, []);
+    const client = requireClient(clientRef.current);
+    await releaseTrackedSubscription({
+      share: { scope: client, deviceId }, topics: toSend,
+      generation: topic => `${backgroundReleaseGenerationRef.current}:${connectionEpochFor(deviceId)}:${remoteSubscribedTopicsRef.current.generation(deviceId, [topic])}`,
+      send: topics => sendUnsubscribe(client, deviceId, topics,
+        topic => clientRef.current === client && presenceAvailableByDeviceRef.current.get(deviceId) !== false && !registryRef.current.hasTopic(deviceId, topic)),
+    });
+  }, [connectionEpochFor]);
 
   const getPresenceAvailability = useCallback((deviceId: string): boolean | null => (
     isSharedTaskPeer(deviceId) ? clientRef.current?.isLinkReady(deviceId) ?? false
@@ -2213,6 +2222,10 @@ export function routeFrame(env: Envelope, handlers: RouteFrameHandlers = {}): vo
     );
     for (const listener of remoteTaskTagsChangedListeners)
       listener(env.src, (push.payload as { tags?: unknown })?.tags);
+  }
+  if (push.channel === 'subscription-accounts:changed') {
+    for (const listener of remoteSubscriptionAccountsChangedListeners) listener(env.src);
+    return;
   }
   if (push.channel === 'maker:model-favorites:changed') {
     for (const listener of remoteFavoritesChangedListeners) listener(env.src);
