@@ -217,6 +217,20 @@ it.each(['empty', 'available', 'in-use'] as const)('shows account reuse controls
   }
 });
 
+// A failed catalogue read is not a successful empty result: preserve the
+// existing error and refresh path, then hide only after an empty read succeeds.
+it('keeps the account catalogue error and refresh until a successful empty read', async () => {
+  const reusableAccounts = vi.fn().mockRejectedValueOnce(new Error('PRECONDITION_FAILED')).mockResolvedValue([]);
+  Object.assign(window.electronAPI, { ghosts: { reusableAccounts, reuseAccount: vi.fn() } });
+  const { container } = render(<GhostAccountReuseSection ghostId="consumer" declared enabled />);
+  expect(await screen.findByText('settings.ghosts.detail.reuseAccountLoadFailed')).toBeTruthy();
+  const refresh = screen.getByRole('button', { name: 'settings.ghosts.detail.reuseAccountRefresh' }) as HTMLButtonElement;
+  expect(refresh.disabled).toBe(false);
+  fireEvent.click(refresh);
+  await waitFor(() => expect(container.childElementCount).toBe(0));
+  expect(reusableAccounts).toHaveBeenCalledTimes(2);
+});
+
 it.each([undefined, 'secret', 'connection'] as const)('selects an existing Host account or %s credential and stops only its consumer reference', async (kind) => {
   const scroll = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
   Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
