@@ -57,6 +57,35 @@
 | 26 | Codex 原生登录被服务端作废 | `auth-adapters.ts` `DesktopCodexAuthAdapter.invalidate`（实例隔离分支）与 `maker-host/index.ts` 的 `setOnLogoutSuccess`、`setOnInvalidatedBroadcast` | 已对齐（24b；登录、登出收口 m1-cp9），迁移来的共享登录也已对齐（m1-cp13；用户 2026-11-13 决定，原话「和桌面完全一样」）：安装版 Host 像已打包桌面一样与系统 Codex 登录对账，链接、认领、作废后在系统重新登录时自动恢复（`codex-system-login.ts`）；与桌面的差别见第二节。原为既有缺口，24b 补上：之前 Host 的 Codex 适配器没有 `invalidate`，服务端判定登录失效后不落标记、不清凭证。安装版 Host 读系统 `~/.codex/auth.json` 并把 profile 的 codex-home/auth.json 链接过去（与已打包桌面相同），源码运行不读系统登录；标记按检测到的凭据范围写，共享系统登录时记恢复 owner；迁移来的 profile 里 codex-home/auth.json 若是指向系统登录的链接，Host 平常经这个链接读写系统那份登录（订阅桥刷新令牌、Codex 自己刷新都是），与桌面相同，作废只删 profile 里的链接，外面那份文件不变。能指明被拒凭证的失效：凭证代次与当前 auth.json 一致才按被拒的那份记标记；文件换了（inode 不同）或登录进行中不动；同一文件就地改写时记不带指纹的标记、压住当前这份（m1-cp15a 起，与桌面相同；代次用桌面同一个解析函数读）。顺序与桌面相同，标记 → 解除授权 → 删 auth.json → 退役本机 Codex 进程与代理注入 → 删模型缓存 → 通知界面并让 Pi 的 MCP 桥失效。子进程没说明是哪一份凭证的失效（maker-core 目前都报这一种）：与桌面相同，凭证原样保留，写抑制标记，登录进行中或显式断开后不动；为此账号登录服务加了只读的 `isCodexAccountLoginActive`（共用模块，桌面不调用）。两种都与桌面同一份标记位置与格式，写不进时同桌面改写撤销标记兜底；m1-cp15b 按桌面 invalidate 的分支对应表补齐五处：只有独立账号的 providerId 不作废（网关、自定义供应商的任务报失效时照样作废原生登录）；去掉 Host 独有、无调用方的被拒令牌入参；收口中途 owner 变了就在桌面同样的位置停下；codex-home 本身是或链接到 `~/.codex` 时不删 auth.json；收口结束时重读标记，仍是这次的原因和范围才播报。m1-cp16 按桌面显式登出的分支对应表对齐 Host 的原生登出：取消进行中的登录，写桌面同一个持久断开标记（写不进就登出失败），保留 auth.json（共享登录的链接留在原地，对账由标记停住），退役本机进程，删模型缓存，结束前再写一次标记，最后撤销授权；每一步之前查 owner，第二次登出并入第一次，登出期间开始的登录等它结束，登出期间完成的登录不绑定。Host 不再经账号服务的 `logoutCodexAccount`，不再写账号服务自己的 `disconnected` 文件（原生连接只有登录成功后才读它，那时已被删除）。随后与桌面相同：profile 里的 auth.json 已经不在时，迟到的失效照样重新记作废并播报，登录占着这段空窗时不动；凭据范围读不出时用标记记下的上一次范围（桌面重启后同样从标记恢复）；作废时登录正在进行、两次写盘都失败、日志先后三处不改，见第二节；读登录态时与桌面一样报出作废原因，直到重新登录。登录成功、登出、作废三处收口逐步对应桌面 `setOnLoginSuccess`、`setOnLogoutSuccess`、`setOnInvalidatedBroadcast`（m1-cp9 补上登录与登出：退役所有持本机登录的 Codex 进程、清代理注入、发路由变化、让 Pi 的 MCP 桥失效） | desktop `hostCodexSystemLoginParity.test.ts`（每个场景两边各建一份、各用一个假 HOME：8 种继承登录的作废与系统重新登录组合、全新 profile 链接认领、无系统登录、硬链接换符号链接、Cindy 里登录的保留、账号不同的旧版显式归属、同账号本地文件重链、显式断开、登录进行中与登录中途开始、owner 中途变更、同进程与重启、getAuthEnv 三种模式、启动时单次对账、恢复只给原 owner、遗留硬链接的作废、共享登录就地改写后的作废、两种 relink 失败；比较登录态、链接形态、绑定与标记，假系统登录的字节、inode、修改时间不变）；Host `agent/codex-system-login.test.mjs`（三种运行方式的系统登录路径）、`agent/codex-invalidation.test.mjs`；桌面 `hostCodexInvalidationParity.test.ts`（代次与当前文件不一致的三种情形两边结果相同；双向：两种失效下 Host 作废后桌面读到的与桌面自己作废后相同；桌面作废并重新登录后 Host 先读到作废原因、再读到已登录；HOME 为空目录且跑完仍为空）；Host `agent/codex-auth-boundary.test.mjs`（三处收口逐步对照桌面；登出与并行的登录、收口中途改写标记的作废）；m1-cp16 登出的对照（cp13 的“显式断开”一例改跑 Host 自己的登出；先作废再登出、保留 auth.json 删模型缓存、作废收口中登出两边都不播报、登出后在 Cindy 里重新登录，Host 经自己的账号服务和假的 Codex CLI 登录；auth.json 已不在时的迟到失效）；m1-cp15b 五处补齐的对照（`hostCodexInvalidationParity.test.ts`：网关、自定义供应商、独立账号三种 providerId，收口中途换 owner，收口中途被登录取代不播报；`hostCodexSystemLoginParity.test.ts`：codex-home 链接到假系统 `~/.codex` 时系统文件字节、inode、修改时间不变；Host `codex-invalidation.test.mjs`：入参与 maker-core 上下文一致、没有系统登录路径时同样不删 `~/.codex/auth.json`、标记被改写成别的原因或范围时不播报）、`codex-invalidation.test.mjs` 的链接用例（指向 profile 外的硬链接、符号链接，两种作废，外面的文件内容、inode、修改时间不变） | 无 |
 | 27 | Learn 宿主 | `learn-host/`（`controller.ts`、`staging.ts`、`apply.ts`、`runStore.ts` 等，约 4200 行） | 未做，归属待定：到第 22 行交 cindy_helper 分组清单时与 `start_skill_learning` 一起定，届时说明哪些部分依赖 Electron 或窗口、apply 与 Skill 投影（第 25 行）的先后、它写到 profile 之外的位置。**迁移前必须有结论** | — | 无 |
 
+### 第 26 行：Codex 原生登录的对齐记录与索引
+
+三张分支对应表（每个分支：桌面做什么、Host 做什么、哪条测试覆盖）：
+
+- `docs/host/codex-system-login-branch-map.md`：与系统 Codex 登录对账（链接、认领、恢复 owner、读登录态、spawn 环境）；
+- `docs/host/codex-invalidation-branch-map.md`：服务端作废（入口、未归属分支、归属分支、收口、播报）；
+- `docs/host/codex-logout-branch-map.md`：显式登出。
+
+各检查点对齐的内容：
+
+| 检查点 | 内容 |
+|---|---|
+| 24b | Host 的 Codex 适配器接上服务端作废：实例隔离分支和未归属分支，同一份标记位置与格式；标记写不进时写撤销兜底；收口顺序与桌面相同 |
+| m1-cp9 | 登录、登出、作废三处收口钩子（退役本机 Codex 进程、清代理注入、发路由、让 Pi 的 MCP 桥失效） |
+| m1-cp13 | 安装版 Host 与系统 Codex 登录对账：链接、认领、恢复只给原 owner、按检测到的凭据范围记标记；三种运行方式的系统登录路径 |
+| m1-cp14 | 引擎上报、共享系统登录、没有凭据代次时记 unknown 范围；订阅桥读令牌前和登录之后的对账；“需要恢复”标注的实际效果 |
+| m1-cp15a | 凭据代次与当前文件不一致：换 inode 或登录进行中不动，就地改写时不带指纹压住当前文件；代次用桌面同一个解析函数 |
+| m1-cp15b | 只跳过独立账号的 providerId；去掉无调用方的被拒令牌入参；收口中途换 owner 就停下；codex-home 本身是或链接到 `~/.codex` 时不删 auth.json；收口结束时仍是这次的原因和范围才播报 |
+| m1-cp16 | 显式登出照桌面：持久断开标记、保留 auth.json、删模型缓存、最后撤销授权、与登录和作废并行时以登出为准；auth.json 已不在时迟到的失效照样重新记作废；凭据范围读不出时用标记里记下的范围 |
+
+剩下的差异（都在第二节，不改代码）：
+- 差4：作废时原生登录正在进行；
+- 差8：标记和撤销兜底都写不进时的具体后果；
+- 差9：日志先后。
+
+挂到后面的事项：
+- 显式登出时的订阅池，随 M2 的供应商视图；
+- 作废后“需要恢复”的账号接口确认（`verifyRecoveryWithAccountRpc`），随 2e（第 13 行）。
+
 ## 二、与桌面不同（已知差异）
 
 | 项 | 桌面 | Host | 后果 |
