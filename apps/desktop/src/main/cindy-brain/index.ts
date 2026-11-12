@@ -8006,6 +8006,10 @@ async function updateLocalGhostPackageLocked(
       throwInstallError(result.rejection);
     }
     runtime.resetFuse(instanceId);
+    if (result.ghost.namespaceState === 'unconfirmed') {
+      recheckOwner();
+      result = { ghost: await manager.confirmUpdatedInstanceNamespace(result.ghost) };
+    }
     await bindPluginUsage(result.ghost,
       !detachMarketRecord && previousGhost?.approval.state === 'approved' ? previousGhost.approval.revision : undefined);
     spawnIfResident(result.ghost);
@@ -8596,6 +8600,11 @@ async function installOrUpdateMarketGhostPackageLocked(
     }
     runtime.resetFuse(installedGhostStoragePart(result.ghost));
     await expected.afterCommitInLock?.(result.ghost, commitEvidence);
+    if (result.ghost.namespaceState === 'unconfirmed') {
+      recheckOwner();
+      result = { ghost: await manager.confirmUpdatedInstanceNamespace(result.ghost,
+        expected.sourceChanged && expected.pendingMarketRecord?.source === 'market' ? expected.pluginId : undefined) };
+    }
     spawnIfResident(result.ghost);
     await bindPluginUsage(result.ghost);
     return result.ghost;

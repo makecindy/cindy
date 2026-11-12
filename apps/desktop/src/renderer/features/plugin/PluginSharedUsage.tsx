@@ -14,9 +14,12 @@ function formatDownloadCount(count: bigint): string {
 export function PluginSharedUsage({
   detail,
   variant = 'detail',
+  onClick,
 }: {
   detail: PluginMarketItem;
   variant?: 'detail' | 'list';
+  /** Forward clicks when metadata sits above a sibling card-detail button. */
+  onClick?: () => void;
 }) {
   const { t, i18n } = useTranslation();
   if (detail.sourceType !== 'server' || detail.scope === 'personal') return null;
@@ -56,6 +59,7 @@ export function PluginSharedUsage({
             role="group"
             aria-label={label}
             aria-description={description}
+            onClick={onClick}
             tabIndex={variant === 'detail' ? 0 : undefined}
             className={`inline-flex min-w-0 items-center gap-1 rounded-full tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] ${variant === 'detail' ? '-mx-1 min-h-7 px-1' : 'pointer-events-auto relative z-[1]'}`}
           >

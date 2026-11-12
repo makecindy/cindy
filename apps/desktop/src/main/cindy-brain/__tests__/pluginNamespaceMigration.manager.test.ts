@@ -22,7 +22,8 @@ import {
 import { runGhostSnapshotWorkerRequest } from '../ghostSnapshotWorkerProcess.js';
 import { writeTestCindyPackage } from './cindyPackageFixture.js';
 import { installedGhostStoragePart, pluginStoragePart } from '../../../shared/pluginIdentity.js';
-import { pluginInstanceRegistryPath } from '../pluginInstanceRegistry.js';
+import { pluginInstanceRegistryPath, type PluginInstanceRecord } from '../pluginInstanceRegistry.js';
+import { buildUnconfirmedConfirmationEvidence } from '../pluginInstanceConfirmation.js';
 
 let workDir: string;
 let rootDir: string;
@@ -1225,6 +1226,70 @@ describe('GhostManager namespace migration census', () => {
     expect(fs.existsSync(path.join(rootDir, '_ns', 'acme', 'hello'))).toBe(false);
     expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { namespace: 'acme' } });
   });
+
+  // Unit: package placement alone leaves runtime namespace unavailable. Confirm
+  // only the selected update after its market route commits; other rows stay put.
+  it.each(['matching', 'wrong-organization', 'wrong-package', 'replacement', 'unapproved-replacement'] as const)(
+    'confirms only the updated instance after fresh %s market evidence', async evidence => {
+      const originalPluginId = 'c' + 'e'.repeat(24);
+      const replacementPluginId = 'c' + 'f'.repeat(24);
+      const ledger = new PluginMarketLedger(path.join(workDir, 'market', 'ledger.v1.json'));
+      const readEvidence = vi.fn((record: PluginInstanceRecord) => {
+        const lookup = ledger.lookupInstallationsForNamespaceMigration(record.ghostId);
+        return buildUnconfirmedConfirmationEvidence({
+          record, rows: lookup.kind === 'found' ? lookup.records : [],
+          currentOrganization: { organizationId: evidence === 'wrong-organization' ? 'org-other' : 'org-acme', orgSlug: 'acme' },
+          packageSha256: manager.approvedInstallEvidence(record.instanceKey)?.packageSha256 ?? null,
+          forgeSelfTest: false,
+        });
+      });
+      manager = createManager({ mutateSnapshot, readUnconfirmedConfirmationEvidence: readEvidence,
+        marketIdentityForInstance: instance => instance.ghostId === 'hello'
+          ? { pluginId: originalPluginId, source: 'market' } : null });
+      await stampLegacyOrganizationInstall();
+      await manager.install(await makeCindy('other'), { namespace: 'acme' });
+      const store = receiptStore(mutateSnapshot);
+      for (const relId of ['hello', '_ns/acme/other']) {
+        const approval = store.read(relId);
+        if (approval.state !== 'approved') throw new Error('expected approved install');
+        const { namespace: _namespace, ...rewritten } = approval.receipt;
+        await store.write(rewritten, { relId, requireSkillSnapshot: false });
+      }
+      const selected = manager.list().find(ghost => ghost.manifest.id === 'hello')!;
+      const unrelated = manager.list().find(ghost => ghost.manifest.id === 'other')!;
+      const result = await manager.update(await makeCindy('hello'), {
+        namespace: 'acme', expectedInstalledInstanceId: installedGhostStoragePart(selected),
+        expectedInstalledApproval: ghostInstallApprovalToken(selected.approval),
+      });
+      if (!('ghost' in result)) throw new Error('expected successful update');
+      expect(result.ghost.namespaceState).toBe('unconfirmed');
+      const waiting = await manager.confirmUpdatedInstanceNamespace(result.ghost);
+      expect(waiting.namespaceState).toBe('unconfirmed');
+      const approval = store.read('hello');
+      if (approval.state !== 'approved') throw new Error('expected updated receipt');
+      ledger.upsertInstallation({
+        pluginId: evidence.includes('replacement') ? replacementPluginId : originalPluginId,
+        ghostId: 'hello', releaseId: 'release-next', version: '1.0.0',
+        namespace: 'acme', scope: 'organization', organizationId: 'org-acme', source: 'market',
+        installed: true, sha256: evidence === 'wrong-package' ? 'ab'.repeat(32) : approval.receipt.packageSha256!,
+        updatedAt: '2026-11-12T00:00:00.000Z',
+      });
+      const confirmed = await manager.confirmUpdatedInstanceNamespace(waiting,
+        evidence === 'replacement' ? replacementPluginId : undefined);
+      const shouldConfirm = evidence === 'matching' || evidence === 'replacement';
+      expect(confirmed).toMatchObject({
+        dir: selected.dir, instanceKey: installedGhostStoragePart(selected),
+        namespaceState: shouldConfirm ? 'confirmed' : 'unconfirmed',
+      });
+      expect(manager.readDeliveryNamespace(installedGhostStoragePart(selected)))
+        .toBe(shouldConfirm ? 'acme' : undefined);
+      const registry = JSON.parse(fs.readFileSync(pluginInstanceRegistryPath(path.join(workDir, 'ghosts-install-state')), 'utf8'));
+      expect(registry.instances[installedGhostStoragePart(selected)].pluginId)
+        .toBe(evidence === 'replacement' ? replacementPluginId : originalPluginId);
+      expect(manager.findInstalledInstance(installedGhostStoragePart(unrelated))).toEqual(unrelated);
+      expect(readEvidence.mock.calls.every(([record]) => record.instanceKey === installedGhostStoragePart(selected))).toBe(true);
+    },
+  );
 
   it.each(['different-namespace', 'different-plugin', 'missing-instance', 'stale-approval'] as const)(
     'rejects a selected update with %s instead of falling through to a same-name installation', async scenario => {

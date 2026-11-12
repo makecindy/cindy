@@ -2327,7 +2327,7 @@ export function MarketPluginCard({
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1 text-11 text-[var(--text-tertiary)]">
             <span>{t(`settings.ghosts.page.origin.${origin}`)}</span>
             {author ? <><span aria-hidden="true">·</span><span className="min-w-0 max-w-[120px] truncate">{author}</span></> : null}
-            <PluginSharedUsage detail={item} variant="list" />
+            <PluginSharedUsage detail={item} variant="list" onClick={unavailable ? undefined : onSelect} />
           </div>
           {onInstall ? <Button className="pointer-events-auto relative z-[1] shrink-0" variant="secondary" size="sm" compact
             loading={pending} disabled={unavailable} onClick={onInstall}

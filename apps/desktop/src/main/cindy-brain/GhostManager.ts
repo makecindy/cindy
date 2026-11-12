@@ -1195,7 +1195,15 @@ export class GhostManager {
   }
 
 
-  private async confirmUnconfirmedInstances(refresh?: GhostBackgroundRefresh): Promise<void> {
+  /** After the update's source ledger commits, restore only this instance using positive evidence. */
+  async confirmUpdatedInstanceNamespace(ghost: InstalledGhost, replacementPluginId?: string): Promise<InstalledGhost> {
+    if (ghost.namespaceState !== 'unconfirmed') return ghost;
+    const instanceKey = installedGhostStoragePart(ghost);
+    await this.confirmUnconfirmedInstances(undefined, instanceKey, replacementPluginId);
+    return this.findInstalledInstance(instanceKey) ?? ghost;
+  }
+
+  private async confirmUnconfirmedInstances(refresh?: GhostBackgroundRefresh, instanceKey?: string, replacementPluginId?: string): Promise<void> {
     const result = await confirmUnconfirmedInstances({
       readEvidence: this.options.readUnconfirmedConfirmationEvidence,
       isBlocked: () => this.instanceRegistryService.isBlocked(),
@@ -1226,7 +1234,7 @@ export class GhostManager {
         this.instanceRegistryStore().write(registry);
         this.instanceRegistryService.replaceCache(registry);
       },
-    });
+    }, instanceKey, replacementPluginId);
     if (result.mutationFailures > 0) {
       throw new Error('plugin instance namespace confirmation failed');
     }
