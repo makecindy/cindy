@@ -1,10 +1,12 @@
-import { useMemo, type ReactNode } from 'react';
+import { useMemo, useRef, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 
 import type { ProviderView } from '@cindy/model-providers';
 
 import { Select } from '@/components/ui/select';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { subscribeDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useProviderBorrow, type BorrowedProviderCatalog } from '@/hooks/useProviderBorrow';
 import {
   effectiveRunLocation,
@@ -101,6 +103,34 @@ export function BorrowedProviderModels({ catalog, device }: {
     () => readOnlyProviderModels(catalog.provider, catalog.modelVisibilityOverrides),
     [catalog.provider, catalog.modelVisibilityOverrides],
   );
+  const pending = useRef(false);
+  const refresh = async () => {
+    if (pending.current) return;
+    pending.current = true;
+    const owner = getDataOwnerGeneration();
+    let failed = false;
+    // 预取会吞掉读取异常；订阅共享目录的实际结果，不为判断成败再发一次请求。
+    const unsubscribe = subscribeDeviceProviders(device.deviceId, (event) => {
+      failed = event.status === 'error';
+    });
+    try {
+      await refreshRemoteCatalogSnapshot(device.deviceId);
+    } catch {
+      failed = true;
+    } finally {
+      unsubscribe();
+      pending.current = false;
+    }
+    if (failed && isDataOwnerGenerationCurrent(owner)) {
+      toast.error(t('settings.providers.models.refreshFailed'), {
+        action: {
+          label: t('settings.providers.button.retry'),
+          // 失败会清掉目录并卸载模型区；重试仍属于原电脑，且不能跨账号继续。
+          onClick: () => { if (isDataOwnerGenerationCurrent(owner)) void refresh(); },
+        },
+      });
+    }
+  };
   return (
     <>
       <div
@@ -115,8 +145,7 @@ export function BorrowedProviderModels({ catalog, device }: {
         title={t('settings.providers.remote.modelsTitle')}
         models={models}
         note={models.length === 0 ? t('settings.providers.remote.modelsEmpty') : null}
-        onRefresh={() => void refreshRemoteCatalogSnapshot(device.deviceId)
-          .catch(() => toast.error(t('settings.providers.models.refreshFailed')))}
+        onRefresh={() => void refresh()}
         refreshing={catalog.loading}
         testId="borrowed-provider-models"
       />

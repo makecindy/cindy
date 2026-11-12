@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CustomProviderConfig, ModelRegistry, ProviderView } from '@cindy/model-providers';
 import { createIpcError } from '../../shared/ipc-errors';
 import { toast } from '@/lib/toast';
+import { evictDeviceProviders, prefetchDeviceProviders } from '@/hooks/useDeviceProviders';
 
 const {
   refreshBuiltinModelsSpy,
@@ -70,7 +71,7 @@ vi.mock('@/hooks/useDevicesProviders', () => ({
       return catalog ? [[id, catalog]] : [];
     })),
 }));
-const refreshRemoteCatalogSpy = vi.hoisted(() => vi.fn(async () => undefined));
+const refreshRemoteCatalogSpy = vi.hoisted(() => vi.fn<(deviceId: string) => Promise<void>>(async () => undefined));
 vi.mock('@/lib/remoteCatalogSnapshot', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/lib/remoteCatalogSnapshot')>(),
   refreshRemoteCatalogSnapshot: refreshRemoteCatalogSpy,
@@ -804,7 +805,9 @@ describe('ProvidersSection — 双栏管理', () => {
   // - 现有覆盖缺口：本文件只覆盖本机目录；借用状态此前没有任何设置页用例。
   // - 最小失败输入：本机 Anthropic 未连接 + 一台在线电脑提供已连接、开放远程调用的 Anthropic。
   // - tier：unit(jsdom，内存 fake)。
-  it('本机没登录、借用另一台电脑时，模型清单与刷新都按那台电脑', async () => {
+  // 失败分支：真实目录预取吞掉请求异常时仍提示失败，模型区卸载后提示中的重试仍指向原电脑。
+  it.each(['success', 'prefetch-error'])(
+    '本机没登录、借用另一台电脑时，模型清单与刷新都按那台电脑（%s）', async (outcome) => {
     ownDevicesState.devices = [{ deviceId: 'starforce', name: 'Starforce', platform: 'darwin' }];
     ownDevicesState.catalogs = new Map([['starforce', {
       providers: [{
@@ -826,7 +829,7 @@ describe('ProvidersSection — 双栏管理', () => {
       loading: false,
       error: null,
     }]]);
-    render(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
+    const view = render(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
 
     // 左栏这一项按那台电脑的模型计数。
     const row = (await screen.findAllByText('Anthropic'))
@@ -840,6 +843,15 @@ describe('ProvidersSection — 双栏管理', () => {
     expect(models.textContent).toContain('Haiku 5.5');
     expect(screen.queryByText('settings.providers.detail.emptyModels')).toBeNull();
 
+    if (outcome === 'prefetch-error') {
+      evictDeviceProviders('starforce');
+      (window.electronAPI as unknown as { deviceLink: unknown }).deviceLink = {
+        invoke: vi.fn(async () => { throw new Error('remote catalog unavailable'); }),
+      };
+      refreshRemoteCatalogSpy.mockImplementationOnce(async (deviceId) => {
+        await prefetchDeviceProviders(deviceId);
+      });
+    }
     await act(async () => {
       fireEvent.click(
         screen.getByRole('button', { name: 'settings.providers.models.refreshBuiltinAria' }),
@@ -847,6 +859,20 @@ describe('ProvidersSection — 双栏管理', () => {
     });
     expect(refreshRemoteCatalogSpy).toHaveBeenCalledWith('starforce');
     expect(refreshBuiltinModelsSpy).not.toHaveBeenCalled();
+    if (outcome === 'prefetch-error') {
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
+        'settings.providers.models.refreshFailed',
+        expect.objectContaining({ action: expect.objectContaining({ label: 'settings.providers.button.retry' }) }),
+      ));
+      const retry = vi.mocked(toast.error).mock.lastCall?.[1]?.action;
+      ownDevicesState.catalogs.clear();
+      view.rerender(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+      expect(screen.queryByTestId('borrowed-provider-models')).toBeNull();
+      await act(async () => { retry!.onClick(); });
+      expect(refreshRemoteCatalogSpy).toHaveBeenCalledTimes(2);
+      expect(refreshRemoteCatalogSpy).toHaveBeenLastCalledWith('starforce');
+      expect(refreshBuiltinModelsSpy).not.toHaveBeenCalled();
+    }
   });
 
   it('同一事件循环内连续点击刷新只启动一个请求', async () => {
