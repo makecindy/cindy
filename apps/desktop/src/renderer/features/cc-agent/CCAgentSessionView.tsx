@@ -2632,7 +2632,8 @@ function CCAgentSessionContent({
   // 进行中的任务里选模式(model-groups.md §5)：只在任务所在的运行位置里按规则当场挑一个，走选择器同一条换模型路径
   // 换过去；之后不会自己再换。远程控制别的电脑、SSH 与伙伴对话不提供，条件与撞配额的换来源提议相同。
   const modelGroupsInTask = !!sessionId && !readOnly && !botChatIdentity && !remoteDeviceId && !session?.remoteHostId;
-  const { config: modelGroupsConfig } = useModelGroups(modelGroupsInTask);
+  // 任务视图挂着但看不见(聊天栏收起)时不读配置，重新看得见时再读。
+  const { config: modelGroupsConfig } = useModelGroups(modelGroupsInTask && viewVisible);
   // 已挂着「下一条消息换到另一台电脑」时，按那个即将生效的位置挑：换模型时会沿用它，两边必须是同一台。
   const taskLocation = agentSwitchIntent && agentSwitchIntent.agentDeviceId !== undefined
     ? agentSwitchIntent.agentDeviceId ?? null

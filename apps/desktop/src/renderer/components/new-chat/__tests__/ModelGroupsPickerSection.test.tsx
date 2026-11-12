@@ -41,5 +41,11 @@ describe('ModelGroupsPickerSection', () => {
     fireEvent.click(screen.getByText('Cheap'));
     expect(onSelect).toHaveBeenCalledWith({ type: 'route', id: 'cheap' });
     favorites.unmount();
+
+    // 选择器都关着时，同账号的另一个窗口取消了收藏(本窗口这时不听 storage 事件)：再打开要看到最新的。
+    localStorage.setItem('cindy:modelGroupFavorites:v1:owner-a', '[]');
+    const reopened = render(<ModelGroupsPickerSection picker={picker} query="" onPicked={vi.fn()} variant="all" />);
+    expect(reopened.container.querySelector('[data-model-group-favorite="cheap"]')?.getAttribute('aria-pressed')).toBe('false');
+    reopened.unmount();
   });
 });

@@ -39,6 +39,8 @@ function emit(): void {
 }
 
 function subscribe(listener: () => void): () => void {
+  // 没人订阅时本窗口不听别的窗口的改动：重新有人订阅时先丢掉缓存，补上这段时间别处的收藏变化。
+  if (listeners.size === 0) cache = null;
   listeners.add(listener);
   const onStorage = (event: StorageEvent) => {
     if (event.key !== storageKey()) return;
