@@ -15,7 +15,7 @@ import { assertHostTaskExecutionSupported, prepareHostUserMessage } from './send
 import { createHostEventPersistence } from './event-persistence.ts';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { isTerminalTurnErrorEvent } from '../../../desktop/src/main/maker-ipc/sessionTurnActivityTracker.ts';
-import { finalizeTurnChangeSet, noteTurnDiffEvent } from '../../../desktop/src/main/turn-change-set/store.ts';
+import { clearPendingTurnChangeSets, finalizeTurnChangeSet, noteTurnDiffEvent } from '../../../desktop/src/main/turn-change-set/store.ts';
 import { setSessionProvider, clearSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import { applyQueuedSessionSettings, rememberLiveSessionSettings } from './session-settings.mjs';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
@@ -86,8 +86,19 @@ export function createTurnExecutor(deps) {
     return turn.settlement;
   }
 
+  // Desktop's exact-instance binding (sessionBindingLifecycle.ts): when the bound
+  // instance closes, the snapshot state is released, then the unfinished turn
+  // change record; a replaced instance only drops its record, and a late close of
+  // an instance that is no longer bound changes nothing.
+  function releaseBinding(sessionId) {
+    if (!bindings.has(sessionId)) return;
+    deps.getGitSnapshot?.()?.onSessionClosed(sessionId);
+    clearPendingTurnChangeSets(sessionId);
+  }
+
   function listen(sessionId, session) {
     if (bindings.get(sessionId)?.session === session) return;
+    if (bindings.has(sessionId)) clearPendingTurnChangeSets(sessionId);
     bindings.get(sessionId)?.unsubscribe();
     const history = historyFor(sessionId);
     history.noteSessionAgentKind(sessionId, dbKind(session.agentKind ?? turns.get(sessionId)?.dbKind));
@@ -104,7 +115,7 @@ export function createTurnExecutor(deps) {
       if (event.type === 'compact_boundary') wireNotes.reset(sessionId);
       // Desktop records Codex's native turn diff from the event stream (register.ts)
       // and closes the turn change record at the turn's end (sessionEventPreparation.ts).
-      noteTurnDiffEvent(sessionId, event, false);
+      noteTurnDiffEvent(sessionId, event, session.remoteHostId !== null);
       if (event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) {
         const rawTurn = event.data?.raw;
         // Desktop settles a silent-stop done once its guard declines to resume
@@ -128,7 +139,10 @@ export function createTurnExecutor(deps) {
         void finish(sessionId, turn, error, event);
       }
     });
-    bindings.set(sessionId, { session, unsubscribe });
+    const unsubscribeStatus = session.onStatusChange?.(status => {
+      if (status === 'closed' && bindings.get(sessionId)?.session === session) releaseBinding(sessionId);
+    });
+    bindings.set(sessionId, { session, unsubscribe: () => { unsubscribe(); unsubscribeStatus?.(); } });
   }
 
   async function readExecutionSession(id) {
@@ -157,6 +171,8 @@ export function createTurnExecutor(deps) {
     const maker = deps.getMaker();
     const session = maker.getSession(id);
     deps.interactions?.detach(id);
+    // The bound instance closes here; release it before the binding goes away.
+    releaseBinding(id);
     bindings.get(id)?.unsubscribe();
     bindings.delete(id);
     wireNotes.reset(id);
@@ -508,6 +524,7 @@ export function createTurnExecutor(deps) {
       const history = histories.get(id);
       await history?.drain();
       if (history?.hasFailedWrites()) throw new Error(turn?.persistenceError || 'Reply persistence is incomplete');
+      releaseBinding(id);
       bindings.get(id)?.unsubscribe();
       bindings.delete(id);
       history?.clearSessionPersistState(id);

@@ -1670,29 +1670,124 @@ test('a queued user turn opens its change record and Git baseline between the us
   await h.queue.dispose();
 });
 
-test('a durable user turn that is not dispatched drops its change record and Git baseline', async () => {
+async function changeRecordFixture(t) {
+  const { configureUserDataDir } = await import('../../../desktop/src/main/userDataPath.ts');
+  const store = await import('../../../desktop/src/main/turn-change-set/store.ts');
+  const { turnChangeSetSessionDirectory } = await import('../../../desktop/src/main/turn-change-set/storagePaths.ts');
+  const profile = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-turn-change-'));
+  const workDir = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-turn-work-'));
+  t.after(() => { rmSync(profile, { recursive: true, force: true }); rmSync(workDir, { recursive: true, force: true }); });
+  configureUserDataDir(profile);
+  writeFileSync(path.join(workDir, 'a.txt'), 'one\n');
   const calls = [];
   const gitSnapshot = {
     async onTurnStart(id) { calls.push(['start', id]); },
     onTurnAbort(id) { calls.push(['abort', id]); },
     async onTurnEnd(id) { calls.push(['end', id]); },
-    onSessionClosed() {},
+    onSessionClosed(id) { calls.push(['closed', id]); },
   };
-  const h = createHarness({ getGitSnapshot: () => gitSnapshot });
+  const readSession = async id => ({ id, status: 'active', agentKind: 'claude-code', model: 'stored-model',
+    workingDir: workDir, providerId: 'xd', permissionMode: 'ask', planModeEnabled: false });
+  const capture = id => store.captureKnownFileBefore({ sessionId: id, provider: 'claude-code', cwd: workDir,
+    targetPath: path.join(workDir, 'a.txt') });
+  const entries = async id => {
+    await store.waitForTurnChangeSetPersistence();
+    const file = path.join(turnChangeSetSessionDirectory(profile, id), 'index.json');
+    return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')).entries : [];
+  };
+  return { calls, gitSnapshot, readSession, capture, entries, workDir, store };
+}
+
+// The Host finalize is the desktop rule from sessionEventPreparation.ts, written in
+// turn-executor.mjs; each terminal shape lands in the state the desktop records.
+for (const [label, terminal, state] of [
+  ['a completed native turn', { type: 'done', data: { raw: { id: 'turn-1', status: 'completed' } } }, 'complete'],
+  ['a native turn that did not complete', { type: 'done', data: { raw: { id: 'turn-2', status: 'interrupted' } } }, 'partial'],
+  ['a terminal error', { type: 'error', data: { message: 'provider failed', isTerminal: true } }, 'partial'],
+  ['a silent-stop done', { type: 'done', data: { silentStop: true } }, 'complete'],
+]) {
+  test(`the change record of ${label} is stored as ${state}`, async t => {
+    const f = await changeRecordFixture(t);
+    const h = createHarness({ getGitSnapshot: () => f.gitSnapshot, readSession: f.readSession });
+    const id = `task-${state}-${label.length}`;
+    await enqueue(h, id, { clientId: `u-${label.length}`, text: 'edit a.txt' });
+    await f.capture(id);
+    writeFileSync(path.join(f.workDir, 'a.txt'), 'two\n');
+    h.maker.getSession(id).emit(terminal);
+    await waitFor(() => !h.queue.projection(id).turnInProgress);
+    assert.deepEqual((await f.entries(id)).map(entry => [entry.anchorClientId, entry.state]), [[`u-${label.length}`, state]]);
+    // A done carrying native turn data also stores the Codex plan through the DB,
+    // which this queue fixture does not open; that write is outside this check.
+    await h.queue.dispose().catch(() => {});
+  });
+}
+
+test('a durable user turn that is not dispatched drops its change record and Git baseline', async t => {
+  const f = await changeRecordFixture(t);
+  const h = createHarness({ getGitSnapshot: () => f.gitSnapshot, readSession: f.readSession });
   const create = h.maker.createSession;
   h.maker.createSession = async opts => {
     const session = await create(opts);
-    // The vendor refuses after the user row and the dispatch hooks ran.
+    // The vendor refuses after the user row and the dispatch hooks ran; the
+    // record already holds a captured file at that point.
     session.send = async (_text, sendOpts = {}) => {
       sendOpts.onTurnReserved?.(++session.generation);
       await sendOpts.beforeProviderStart?.();
       await sendOpts.onAccepted?.(sendOpts.signal);
+      await f.capture(opts.id);
+      writeFileSync(path.join(f.workDir, 'a.txt'), 'refused edit\n');
       return { accepted: false };
     };
     return session;
   };
   await h.queue.enqueue('s-undispatched', { clientId: 'never-dispatched', text: 'refused' });
-  await waitFor(() => calls.some(call => call[0] === 'abort'));
-  assert.deepEqual(calls, [['start', 's-undispatched'], ['abort', 's-undispatched']]);
+  await waitFor(() => f.calls.some(call => call[0] === 'abort'));
+  assert.deepEqual(f.calls, [['start', 's-undispatched'], ['abort', 's-undispatched']]);
+  // Nothing is left to persist: a finalize now writes no record.
+  await f.store.finalizeTurnChangeSet('s-undispatched', null, 'complete');
+  assert.deepEqual(await f.entries('s-undispatched'), []);
+  await h.queue.dispose();
+});
+
+// Desktop sessionBindingLifecycle.ts: close cleanup runs only for the bound instance;
+// a replacement drops the previous instance's unfinished record; a late close of an
+// instance that is no longer bound changes nothing.
+test('close cleanup follows the bound instance, not the task id', async t => {
+  const f = await changeRecordFixture(t);
+  const h = createHarness({ getGitSnapshot: () => f.gitSnapshot, readSession: f.readSession });
+  const create = h.maker.createSession;
+  const statusListeners = new Map();
+  h.maker.createSession = async opts => {
+    const session = await create(opts);
+    const listeners = new Set();
+    session.onStatusChange = listener => { listeners.add(listener); return () => listeners.delete(listener); };
+    statusListeners.set(session, listeners);
+    return session;
+  };
+  const closeInstance = session => { for (const listener of [...statusListeners.get(session)]) listener('closed'); };
+
+  await enqueue(h, 'task-swap', { clientId: 'u-first', text: 'first' });
+  const first = h.maker.getSession('task-swap');
+  first.emit({ type: 'done', data: {} });
+  await waitFor(() => !h.queue.projection('task-swap').turnInProgress);
+  // The engine drops the first instance without a Host close.
+  h.maker.sessions.delete('task-swap');
+  closeInstance(first);
+  assert.deepEqual(f.calls.filter(call => call[0] === 'closed'), [['closed', 'task-swap']]);
+
+  await h.queue.enqueue('task-swap', { clientId: 'u-second', text: 'second' });
+  await waitFor(() => h.maker.getSession('task-swap')?.sent.length > 0);
+  const second = h.maker.getSession('task-swap');
+  assert.notEqual(second, first);
+  await f.capture('task-swap');
+  writeFileSync(path.join(f.workDir, 'a.txt'), 'second\n');
+  // A late, repeated close of the replaced instance must not release the new one.
+  closeInstance(first);
+  assert.deepEqual(f.calls.filter(call => call[0] === 'closed'), [['closed', 'task-swap']]);
+  second.emit({ type: 'done', data: {} });
+  await waitFor(() => !h.queue.projection('task-swap').turnInProgress);
+  assert.deepEqual((await f.entries('task-swap')).map(entry => entry.anchorClientId), ['u-second']);
+  closeInstance(second);
+  assert.deepEqual(f.calls.filter(call => call[0] === 'closed'), [['closed', 'task-swap'], ['closed', 'task-swap']]);
   await h.queue.dispose();
 });

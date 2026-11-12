@@ -60,7 +60,7 @@ import { configureHostOwner, readClaudeSubscriptionState } from './agent/claude-
 import { attachAgentsToMakerMemory, createHostMemoryManager, createHostMemoryMcpProviders } from './agent/memory.mjs';
 import { createHostAgentGraph } from './agent/runtime.js';
 import { createHostGitSnapshot, type HostGitSnapshot } from './agent/git-snapshot.js';
-import { clearPendingTurnChangeSets, removeTurnChangeSetsForSession } from '../../desktop/src/main/turn-change-set/store.js';
+import { removeTurnChangeSetsForSession } from '../../desktop/src/main/turn-change-set/store.js';
 import { removeSessionModelInterface } from '../../desktop/src/main/maker-host/session-model-interface.js';
 import { reconcileSavepointRefsForDeletedSessions } from '../../desktop/src/main/git-snapshot/savepointCleanup.js';
 import { createHostMcpRuntime } from './agent/mcp-runtime.js';
@@ -674,13 +674,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       publish: (channel, payload) => eventHub.publish({ type: 'plugin_push', channel, payload }),
     });
     agentGraph = createHostAgentGraph({
-      onSessionClose: (id: string) => {
-        // Desktop session close: drop the unfinished turn change record, then the
-        // snapshot coordinator's per-task state (register.ts disposers, cleanupClosedSessionRuntime).
-        clearPendingTurnChangeSets(id);
-        gitSnapshot?.onSessionClosed(id);
-        return platformTools?.closeSession(id);
-      },
+      onSessionClose: (id: string) => platformTools?.closeSession(id),
       codexRuntime,
       providerConfig,
       mcpRuntime,
