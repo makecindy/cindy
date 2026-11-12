@@ -120,7 +120,7 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
     await codexAccounts.close();
   };
   const api = {
-    list, readKey, oauth, grok, builtinStore, codexAccounts, claudeNative, cancelLogins,
+    list, readKey, oauth, grok, builtinStore, recipeSecretIo: oauthStorage, codexAccounts, claudeNative, cancelLogins,
     async close() {
       closed = true;
       await cancelLogins();

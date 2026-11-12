@@ -1950,6 +1950,14 @@ function visibleChipGhosts(
 }
 
 
+/** A cold registry cannot prove absence; list() restores it before exact matching. */
+function findInstalledGhostForToolCall(instanceId: string): InstalledGhost | undefined {
+  const manager = getGhostManager();
+  return manager.findInstalledInstance(instanceId)
+    ?? findInstalledGhostByInstanceId(manager.list(), instanceId);
+}
+
+
 const ghostVisibilityDeps = {
   listGhosts: () => getGhostManager().list(),
   findInstalledInstance: (id: string) => getGhostManager().findInstalledInstance(id),
@@ -2458,7 +2466,10 @@ function getCindyGhostsMcpDeps(
       const sessionIdForConfirm = sessionContext?.sessionId ?? null;
       const sessionInstanceIdForGrant = sessionContext?.sessionInstanceId ?? null;
       const sessionWorkdir = sessionContext?.workingDir ?? null;
-      const installed = await listInstalledGhostsAsync();
+      // Page authority already binds a physical instance; do not rediscover
+      // every installed plugin for each page interaction.
+      const pageGhost = pageCall ? findInstalledGhostForToolCall(pageCall.instance) : undefined;
+      const installed = pageCall ? (pageGhost ? [pageGhost] : []) : await listInstalledGhostsAsync();
       const initialVisibility = classifyGhostVisibility(
         ghostId,
         sessionWorkdir,
@@ -2469,7 +2480,7 @@ function getCindyGhostsMcpDeps(
       const target = { ...initialVisibility.ghost };
       if (pageCall && (pageCall.instance !== installedGhostStoragePart(target) || pageCall.tool !== tool ||
           target.approval.state !== 'approved' || target.approval.revision !== pageCall.revision ||
-          pageCall.sessionId !== sessionContext?.sessionId)) return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'Page call authorization changed' };
+          pageCall.sessionId !== (sessionContext?.sessionId ?? null))) return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'Page call authorization changed' };
       const instanceId = installedGhostStoragePart(target);
       // Capture result privacy from this approved revision before any async work.
       // Missing historical HTML disables pages, not the original view-only data boundary.
@@ -2827,10 +2838,7 @@ function getCindyGhostsMcpDeps(
       // a same-ID plugin replacement removing the declaration during the await.
       if (preDispatch.manifest.sessionContext === true) {
         const ctx = await buildGhostSessionContext(sessionIdForConfirm, sessionWorkdir);
-        const postCtxManifest = findInstalledGhostByInstanceId(
-          getGhostManager().list(),
-          instanceId,
-        )?.manifest;
+        const postCtxManifest = findInstalledGhostForToolCall(instanceId)?.manifest;
         if (postCtxManifest?.sessionContext === true) {
           mergedArgs = { ...mergedArgs, session_context: ctx };
         }

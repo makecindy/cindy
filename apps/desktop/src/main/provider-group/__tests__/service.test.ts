@@ -44,7 +44,8 @@ function view(id: string, model: Record<string, unknown> = {}): ProviderView {
 
 function member(kind: ProviderGroupMember['kind'], agentDeviceId: string | null, providerId: string): ProviderGroupMember {
   const key = kind === 'local' ? 'local' : `${kind}:${agentDeviceId!.replace(/^share:/, '')}:${providerId}`;
-  return { key, kind, agentDeviceId, providerId, limit: 4, weight: 1, paused: false };
+  // An explicit limit: unset limits are unlimited, and these fixtures exercise a full target.
+  return { key, kind, agentDeviceId, providerId, limit: 4, limitSet: true, weight: 1, paused: false };
 }
 
 const LEASE = { recovery: 'lease' };
@@ -1695,6 +1696,82 @@ describe('onTurnError for a shared user (the sharer’s group picks the computer
     expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
     expect(h.deps.fallback).toHaveBeenCalledTimes(1);
   });
+
+  // Unit, provider-sharing-direct-execution §7: the live-handle case never
+  // closed M while reading eligibility or waiting for O's switch token.
+  // Retain only the failed input's grant; cancellation/replacement still fence it.
+  it.each(['before-lookup', 'during-request', 'input-cancelled', 'grant-replaced', 'no-grant'] as const)(
+    'fences direct quota recovery across runtime close: %s', async mode => {
+      const h = guestHarness();
+      let grantCurrent = true;
+      const requestSwitch = vi.fn(async () => {
+        live = null;
+        if (mode === 'input-cancelled') h.deps.isLeaseCurrent.mockReturnValue(false);
+        if (mode === 'grant-replaced') grantCurrent = false;
+        return 'token-direct-aaaaaaaaaaaa';
+      });
+      const direct = { ownerRoute: SHARE_ROUTE, requestSwitch,
+        captureRecovery: () => mode === 'no-grant' ? null : ({
+          ownerRoute: SHARE_ROUTE, requestSwitch, isCurrent: () => grantCurrent,
+        }) };
+      let live: typeof direct | null = direct;
+      if (mode === 'before-lookup') h.deps.isFailoverEligible.mockImplementation(async () => {
+        live = null;
+        return true;
+      });
+      const service = createProviderGroupService({ ...h.deps, guestSwitch: h.guestSwitch,
+        directGuestSession: () => live });
+      await service.onTurnError('s1', { message: 'You have hit your usage limit' }, 7);
+      const recovered = mode === 'before-lookup' || mode === 'during-request';
+      expect(requestSwitch).toHaveBeenCalledTimes(mode === 'no-grant' ? 0 : 1);
+      expect(h.deps.switchAgentLocation).toHaveBeenCalledTimes(recovered ? 1 : 0);
+      expect(h.deps.continueSession).toHaveBeenCalledTimes(recovered ? 1 : 0);
+      expect(h.guestSwitch.takeForOpen('s1')).toBe(recovered ? 'token-direct-aaaaaaaaaaaa' : undefined);
+    },
+  );
+
+  // Unit, #9854: O's token can arrive before the send lock/history wait ends.
+  // Earlier close-during-request cases did not invalidate the grant after receipt
+  // or distinguish our own close from user takeover.
+  it.each(['expired-wait', 'gate-expired', 'own-close', 'user-takeover', 'missing-grant-with-offer'] as const)(
+    'keeps direct authorization until relocation admission: %s', async mode => {
+      const h = guestHarness();
+      let clock = 0, grantActive = true;
+      const mutations: string[] = [];
+      const validity: boolean[] = [];
+      const direct = { ownerRoute: SHARE_ROUTE,
+        requestSwitch: vi.fn(async () => 'token-direct-aaaaaaaaaaaa'),
+        captureRecovery: () => mode === 'missing-grant-with-offer' ? null : ({
+          ownerRoute: SHARE_ROUTE, requestSwitch: async () => direct.requestSwitch(),
+          isCurrent: () => grantActive && clock < 10,
+        }),
+      };
+      const move = vi.fn<ProviderGroupServiceDeps['switchAgentLocation']>(async (_id, _route, options) => {
+        await Promise.resolve(); // the production adapter may wait for the send lock
+        if (mode === 'expired-wait') clock = 11;
+        validity.push(options?.isCurrent?.() === true);
+        if (!validity.at(-1)) throw new Error(PROVIDER_GROUP_SUPERSEDED_ERROR);
+        if (mode === 'gate-expired') clock = 11;
+        options?.onRelocationMutationStart?.();
+        mutations.push('close');
+        grantActive = false;
+        if (mode === 'user-takeover') h.deps.isLeaseCurrent.mockReturnValue(false);
+        validity.push(options?.isCurrent?.() === true);
+        if (!validity.at(-1)) throw new Error(PROVIDER_GROUP_SUPERSEDED_ERROR);
+        mutations.push('db');
+      });
+      if (mode === 'missing-grant-with-offer') h.guestSwitch.offer('s1', 'token-direct-aaaaaaaaaaaa');
+      const service = createProviderGroupService({ ...h.deps, guestSwitch: h.guestSwitch,
+        directGuestSession: () => direct, switchAgentLocation: move });
+      await service.onTurnError('s1', { message: 'You have hit your usage limit' }, 7);
+      expect(validity).toEqual(mode === 'own-close' ? [true, true] : mode === 'user-takeover' ? [true, false]
+        : mode === 'expired-wait' ? [false] : mode === 'gate-expired' ? [true] : []);
+      expect(mutations).toEqual(mode === 'own-close' ? ['close', 'db'] : mode === 'user-takeover' ? ['close'] : []);
+      expect(h.deps.continueSession).toHaveBeenCalledTimes(mode === 'own-close' ? 1 : 0);
+      expect(h.guestSwitch.takeForOpen('s1')).toBe(mode === 'own-close' ? 'token-direct-aaaaaaaaaaaa' : undefined);
+      expect(h.deps.fallback).toHaveBeenCalledTimes(['expired-wait', 'gate-expired', 'missing-grant-with-offer'].includes(mode) ? 1 : 0);
+    },
+  );
 
   it('ignores a stale token, a token the user already took over from, and failures any computer would hit', async () => {
     const stale = guestHarness();

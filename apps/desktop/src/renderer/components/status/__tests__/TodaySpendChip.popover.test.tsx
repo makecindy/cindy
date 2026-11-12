@@ -11,7 +11,7 @@ function render(ui: ReactElement) {
   return renderUI(ui, { wrapper: ConfirmDialogProvider });
 }
 
-import type { ClaudeSubscriptionUsageSnapshot } from '../../../../shared/claudeSubscriptionUsage';
+import { mergeClaudeSubscriptionUsageSnapshot, parseClaudeSdkRateLimitInfo, type ClaudeSubscriptionUsageSnapshot } from '../../../../shared/claudeSubscriptionUsage';
 import type { RateLimitSnapshot } from '@/hooks/useAccountUsage';
 import type { XaiSubscriptionUsageSnapshot } from '../../../../shared/xaiSubscriptionUsage';
 import type { ClaudeAccountUsageSnapshot } from '@/hooks/useClaudeAccountUsage';
@@ -43,6 +43,8 @@ const mocks = vi.hoisted(() => ({
   resetSnapshot: null as MobileCodexRateLimitsResult | null,
   consumeReset: vi.fn(),
   fetchProviderAccountUsage: vi.fn(),
+  codexQuotaReadFailed: false,
+  codexQuotaRefreshing: false,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -155,6 +157,8 @@ vi.mock('@/hooks/useCodexRateLimits', () => ({
   useCodexRateLimits: () => ({
     snapshot: mocks.resetSnapshot,
     refresh: mocks.refreshCodexRateLimits,
+    failed: mocks.codexQuotaReadFailed,
+    refreshing: mocks.codexQuotaRefreshing,
   }),
 }));
 // device-link 远程会话读被控端镜像 hook(#3789);本文件不铺隧道 API,镜像一律返回 null →
@@ -269,6 +273,8 @@ beforeEach(() => {
   mocks.codexSnapshot = null;
   mocks.resetSnapshot = null;
   mocks.consumeReset.mockReset();
+  mocks.codexQuotaReadFailed = false;
+  mocks.codexQuotaRefreshing = false;
   mocks.xaiSnapshot = null;
   mocks.gatewaySnapshot = null;
   mocks.creditSnapshot = null;
@@ -438,6 +444,33 @@ describe('TodaySpendChip credit snapshot time', () => {
 });
 
 describe('TodaySpendChip Claude subscription popover', () => {
+  // F13 unit: exercise the task entry, where quota data and read details come
+  // from separate hooks. A detail read failure must keep the available meter.
+  it('keeps task quota visible and connects its failed-read retry action', () => {
+    mocks.codexAuthInjection = 'oauth-bearer';
+    mocks.codexQuotaReadFailed = true;
+    mocks.codexSnapshot = {
+      source: 'codex-app-server',
+      primary: { usedPercent: 25, windowMinutes: 300 },
+    };
+    const props = { vendorKey: 'codex' as const, providerId: 'openai', sessionId: 'f13-codex' };
+    const view = render(<TodaySpendChip {...props} />);
+    fireEvent.mouseEnter(screen.getByRole('button', { name: '用量明细' }));
+    act(() => vi.advanceTimersByTime(300));
+    const card = screen.getByTestId('quota-hover-card');
+    expect(within(card).getByRole('status').textContent).toContain('quotaCard.codexRefreshFailed');
+    expect(within(card).getByRole('progressbar').getAttribute('aria-valuenow')).toBe('75');
+    mocks.refreshCodexRateLimits.mockClear();
+    const retryButton = within(card).getByRole('button', { name: 'quotaCard.retryQuota' });
+    fireEvent.focus(retryButton);
+    expect(mocks.refreshCodexRateLimits).not.toHaveBeenCalled();
+    fireEvent.click(retryButton);
+    expect(mocks.refreshCodexRateLimits).toHaveBeenCalledTimes(1);
+    mocks.codexQuotaReadFailed = false;
+    view.rerender(<TodaySpendChip {...props} />);
+    expect(within(card).queryByRole('status')).toBeNull();
+  });
+
   it.each(['accountId', 'source', 'limitId'] as const)(
     'does not celebrate a Codex %s switch as a reset',
     (field) => {
@@ -614,6 +647,49 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(trigger.querySelector('[class*="quota-bar-warn"]')?.textContent).toBe('25%');
     const { card } = openCardFromHover();
     expect(within(card).getByText('已触发套餐限额')).toBeTruthy();
+  });
+
+  // Regression: an account-wide rejection caused by Fable must not label an Opus task limited.
+  // Existing coverage only exercised allowed_warning; this uses the real chip (unit/jsdom).
+  it.each(['five_hour', 'seven_day'])('旧 %s 事件后分模型拒绝仍跟随当前模型', (oldClaim) => {
+    const now = Date.now();
+    const endpoint: ClaudeSubscriptionUsageSnapshot = {
+      source: 'oauth-endpoint', updatedAt: now,
+      fiveHour: { utilization: 52 }, sevenDay: { utilization: 61 },
+      scoped: [{ modelDisplayName: 'Fable', utilization: 100 }],
+    };
+    const previous = mergeClaudeSubscriptionUsageSnapshot(endpoint, parseClaudeSdkRateLimitInfo({
+      status: 'allowed', rateLimitType: oldClaim, utilization: oldClaim === 'five_hour' ? 0.52 : 0.61,
+    }, now + 1)!);
+    mocks.claudeSnapshot = mergeClaudeSubscriptionUsageSnapshot(previous, parseClaudeSdkRateLimitInfo({
+      status: 'rejected', rateLimitType: 'seven_day_overage_included',
+    }, now + 2)!);
+    const props = { vendorKey: 'cc' as const, providerId: 'anthropic', sessionId: 'session-1' };
+    const { rerender } = render(<TodaySpendChip {...props} modelId="claude-opus-5-5" />);
+    const trigger = screen.getByTestId('task-usage-trigger');
+    expect(trigger.textContent).not.toContain('暂时受限');
+    expect(trigger.textContent).toContain('5h 剩余 48%');
+    expect(trigger.textContent).toContain('周限 剩余 39%');
+    rerender(<TodaySpendChip {...props} modelId="claude-fable-5[1m]" />);
+    expect(trigger.textContent).toContain('暂时受限');
+    rerender(<TodaySpendChip {...props} modelId="claude-opus-5-5" />);
+    expect(trigger.textContent).not.toContain('暂时受限');
+  });
+
+  it.each([
+    { fiveHour: { utilization: 100 } },
+    { sevenDay: { utilization: 100 } },
+    { representativeClaim: 'five_hour' },
+    { representativeClaim: 'seven_day' },
+  ])('其它模型用满时仍显示公共窗口的拒绝：%j', (sharedLimit) => {
+    mocks.claudeSnapshot = {
+      source: 'unified-headers', rateLimitStatus: 'rejected',
+      fiveHour: { utilization: 52 }, sevenDay: { utilization: 61 },
+      scoped: [{ modelDisplayName: 'Fable', utilization: 100 }],
+      ...sharedLimit,
+    };
+    renderClaudeSubscriptionChip();
+    expect(screen.getByTestId('task-usage-trigger').textContent).toContain('暂时受限');
   });
 
   it('显示吃紧的总周额度，恢复后收起，分模型额度和价值不继承颜色', () => {

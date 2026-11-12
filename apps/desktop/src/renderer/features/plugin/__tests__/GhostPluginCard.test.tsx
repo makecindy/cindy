@@ -215,6 +215,10 @@ const mainViewPlugin: GhostPluginListItem = {
   mainViewTitle: 'Workspace',
 };
 
+/** 未读角标点:AttentionDot 渲染的 aria-hidden 圆点,颜色走 `--card-status-*` token。 */
+const unreadDot = (container: HTMLElement) =>
+  container.querySelector<HTMLElement>('span[aria-hidden][class*="--card-status-"]');
+
 const marketPlugin: PluginMarketItem = {
   pluginId: 'release-google-calendar',
   ghostId: 'google-calendar',
@@ -525,17 +529,17 @@ describe('GhostPluginCard', () => {
     const { container } = render(
       <GhostPluginCard item={commandPlugin} onPrimary={vi.fn()} onManage={vi.fn()} />,
     );
-    expect(container.querySelector('.session-card-dot')).toBeNull();
+    expect(unreadDot(container)).toBeNull();
     expect(screen.getByText('Google services')).toBeTruthy();
   });
 
-  it('有未读时:呼吸绿点 + 摘要顶替静态描述', () => {
+  it('有未读时:绿点 + 摘要顶替静态描述', () => {
     __ingestGhostBadgeForTest('filo-google', { unread: true, summary: '2 封新邮件', at: 1 });
     const { container } = render(
       <GhostPluginCard item={commandPlugin} onPrimary={vi.fn()} onManage={vi.fn()} />,
     );
-    // 单条卡片走呼吸形态(session-card-dot 带呼吸关键帧),绿色走 done token。
-    const dot = container.querySelector('.session-card-dot');
+    // 静态绿点(2026-11-11 D-06:不再呼吸),绿色走 done token。
+    const dot = unreadDot(container);
     expect(dot).toBeTruthy();
     expect(dot?.className).toContain('var(--card-status-done)');
     // 摘要顶替静态描述:静态描述用户早读过了,"新内容是什么"才是这一刻的信息。
@@ -548,7 +552,7 @@ describe('GhostPluginCard', () => {
     const { container } = render(
       <GhostPluginCard item={commandPlugin} showLocalUnread={false} onPrimary={vi.fn()} onManage={vi.fn()} />,
     );
-    expect(container.querySelector('.session-card-dot')).toBeNull();
+    expect(unreadDot(container)).toBeNull();
     expect(screen.queryByText('local private summary')).toBeNull();
     expect(screen.getByText('Google services')).toBeTruthy();
   });
@@ -558,7 +562,7 @@ describe('GhostPluginCard', () => {
     const { container } = render(
       <GhostPluginCard item={commandPlugin} onPrimary={vi.fn()} onManage={vi.fn()} />,
     );
-    expect(container.querySelector('.session-card-dot')).toBeTruthy();
+    expect(unreadDot(container)).toBeTruthy();
     expect(screen.getByText('Google services')).toBeTruthy();
   });
 
@@ -567,7 +571,7 @@ describe('GhostPluginCard', () => {
     const { container } = render(
       <GhostPluginCard item={commandPlugin} onPrimary={vi.fn()} onManage={vi.fn()} />,
     );
-    expect(container.querySelector('.session-card-dot')).toBeNull();
+    expect(unreadDot(container)).toBeNull();
     expect(screen.getByText('Google services')).toBeTruthy();
   });
 });

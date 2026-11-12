@@ -1,8 +1,27 @@
 import { piSupportedEfforts } from "../../packages/model-providers/src/piThinkingLevels.mjs";
 
+// Copilot rejects Astra on /chat/completions (makecindy/cindy#9863).
+// Correct this exact source route on both bundle imports and online refreshes;
+// nativeApi describes model identity and is not a general execution override.
+// Responses adapter metadata: earendil-works/pi#9253 (generate-models.ts).
+function correctCopilotAstraApi(row) {
+  return row.provider === 'github-copilot' && row.id === 'gpt-6-astra' &&
+    row.baseUrl === 'https://api.individual.githubcopilot.com' && row.api === 'openai-completions'
+    ? {
+        ...row, api: 'openai-responses',
+        thinkingLevelMap: {
+          off: null, minimal: null, low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max',
+        },
+        // Chat compatibility flags must not survive a change of adapter.
+        compat: { supportsOpenAIGrammarTools: true },
+      }
+    : row;
+}
+
 /** Pi is an import source. Persist Cindy's public field names, with transport-specific data
  * confined to execution.pi. Never copy credentials or arbitrary headers into a public catalog. */
 export function toCindyProviderModel(row) {
+  row = correctCopilotAstraApi(row);
   // Exact known routes only: Gemini 3.8 Flash rejects minimal. Keep the correction
   // in the import path so both online refreshes and bundle imports retain it.
   // https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash
@@ -108,8 +127,9 @@ export function toCindyCatalog(providers, generatedAt, { previous, onError, inco
             const prior = new Map((previous?.providers?.[id] ?? []).map(row => [row.id, row]));
             const converted = new Map();
             let complete = !incomplete.has(id);
-            for (const row of models) {
+            for (const sourceRow of models) {
               try {
+                const row = correctCopilotAstraApi(sourceRow);
                 const old = prior.get(row?.id);
                 const sameConnection = old?.upstream === (row.baseUrl ?? '') && old?.execution.pi.api === row.api;
                 const adapterDefaults = sameConnection ? old.execution.pi : {};

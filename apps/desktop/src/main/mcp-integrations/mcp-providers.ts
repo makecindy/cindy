@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
+import { gateBuiltinMcpProviders } from './provider-gate.js';
 import { createIMessageMcpServer } from './imessageMcpServer';
 import { createDiscordMcpServer } from './discordMcpServer';
 import { DiscordOperationError } from '@cindy/im';
+import { searchGhostRuntimeMemories } from '../cindy-brain/index.js';
 import { getPiKernelManager } from '../agent-binaries/index.js';
 import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
 import { manageAppSettings } from '../app-settings/sections.js';
@@ -64,8 +66,8 @@ import { renderHtmlToPdf } from '../doc-tools/htmlPdfRenderer.js';
 import { writeDocsOutput } from '../doc-tools/docsOutputWriter.js';
 import { inspectPdf } from '../doc-tools/pdfInspector.js';
 import { getAndroidMcpDeps } from './android.js';
-import { getBrowserMcpDeps } from './browser.js';
-import { getComputerMcpDeps } from './computer.js';
+import { getBrowserMcpDeps } from './browser.desktop.js';
+import { getComputerMcpDeps } from './computer.desktop.js';
 import { discordIm, feishuIm, wechatIm } from '../im';
 import { getBotFeishuTransport } from '../im/shared/botImConnectionRuntime';
 import { createFeishuTransportResolver } from './feishuTransportRouting';
@@ -130,9 +132,7 @@ import { isInputHandoffDisabledForSession } from '../input-handoff/botPolicy.js'
 import { readHandoffPicture } from '../input-handoff/pictureRef.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import type { PluginRegistry } from '../maker-host/plugins/plugin-registry.js';
-import { BUILTIN_LIZI_MCP_IDS, pluginIdForProviderName } from '../maker-host/plugins/builtin-plugins.js';
-import { isFrozenBuiltinPluginAllowed } from './codexBuiltinToolPolicy.js';
-import { GLOBAL_PLUGIN_IDS } from '../maker-host/plugins/types.js';
+import { BUILTIN_LIZI_MCP_IDS } from '../maker-host/plugins/builtin-plugins.js';
 import {
   readChatHistoryMessages,
   type ChatHistoryReaderDeps,
@@ -160,8 +160,8 @@ export interface DesktopMcpProvidersDeps {
   getAppVersion?: () => string;
   getMakerMemoryManager: () => MakerMemoryManager;
   lspPool: LspServerPool;
-  /** 按会话控制启用状态的 plugin registry。 */
-  pluginRegistry: PluginRegistry;
+  /** Current owner's registry; may be a getter, so do not capture it at construction. */
+  readonly pluginRegistry: PluginRegistry;
   /** Device-link transport stays host-injected so provider tests do not load Electron runtime services. */
   invokeRemote: (
     deviceId: string,
@@ -224,7 +224,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
   setSessionPathAuthorizer((request) =>
     authorizeDesktopSessionPath(request, deps.getLiveSessionGrantState),
   );
-  const { pluginRegistry } = deps;
   // 代输入 gates shared by window and picture handoffs: a current local task,
   // the service, and the teammate switch (unknown policy fails closed).
   const admitInputHandoff = async (context: { sessionId?: string; sessionInstanceId?: string }) => {
@@ -406,12 +405,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         // Codex provider presence is the bridge-creation enablement snapshot.
         // Keep that snapshot for a busy turn when a disable refresh is deferred;
         // a successfully rebuilt bridge omits this provider via the outer gate.
-        context?.agentKind === 'codex' || pluginRegistry.isEnabled('android'),
+        context?.agentKind === 'codex' || deps.pluginRegistry.isEnabled('android'),
     }),
     browser: getBrowserMcpDeps(),
     computer: getComputerMcpDeps({
       isComputerUseEnabled: (context) =>
-        context?.agentKind === 'codex' || pluginRegistry.isEnabled('computer'),
+        context?.agentKind === 'codex' || deps.pluginRegistry.isEnabled('computer'),
     }),
     // lizi_feishu 已于 2026-07-16 摘壳:飞书能力(44 精品 + 123 只读直通)迁入
     // 内置意识 xd-feishu;2026-07-17 起授权切到意识 OAuth broker
@@ -656,6 +655,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     memory: {
       withAccountDataAccess,
       getManager: deps.getMakerMemoryManager,
+      searchProviders: searchGhostRuntimeMemories,
       beginWrite: (context) => {
         const saved = botLearningTracker.capture(botLearningTracker.learnsFrom(context?.sessionId, context?.memoryScopeKey));
         return receipt => saved({ ...receipt, kind: 'memory' });
@@ -1420,49 +1420,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
   // 用 plugin registry gate 包装每个 provider 的 isEnabled。
   // essential plugin 始终放行；非 essential plugin 按 project → user → default 判定。
   // provider name(如 'lizi_jira') 会先映射成用户可见的 plugin id(如 'jira')。
-  const gated: LiziMcpProvider[] = providers.map((p) => {
-    const originalIsEnabled = p.isEnabled;
-    const pluginId = pluginIdForProviderName(p.name);
-    const declaration = pluginRegistry.getPlugins().find((entry) => entry.id === pluginId);
-    return {
-      ...p,
-      capability: {
-        title: declaration?.name ?? p.name,
-        description: declaration?.description ?? '',
-        source: 'builtin' as const,
-      },
-      isEnabled: (ctx: LiziMcpSessionContext) => {
-        // Codex 与 Pi 的共享 app-server / bridge 在还没有 thread/workdir 的阶段构建
-        // MCP 工具清单。普通工具必须先全部注册，真正调用时由 HTTP bridge 按新会话
-        // 冻结的策略阻断；否则某个用户默认会错误地影响所有项目（空 workdir 快照被缓存后，
-        // 全局启用但项目停用的工具仍暴露、反向配置则永久缺席，codex review）。机器级工具
-        // 仍沿用现有 spawn-time gate + 环境重建语义。
-        const deferOrdinaryGate =
-          (ctx.agentKind === 'codex' || ctx.agentKind === 'pi')
-          && !ctx.workingDir
-          && !GLOBAL_PLUGIN_IDS.has(pluginId);
-        // Orca 工具面必须在会话生命周期内保持稳定：Claude query 不会在项目策略
-        // 动态启用后重建 MCP。创建入口仍由 Main 按调用时的项目策略 fail closed。
-        const keepOrcaProviderStable = pluginId === 'collab';
-        // Stable providers may ignore a live global/project toggle so an
-        // already-running ordinary task can recover, but a Bot Profile is an
-        // immutable per-runtime capability boundary and must always win.
-        if (!isFrozenBuiltinPluginAllowed(ctx.vendorOptions, pluginId)) {
-          return false;
-        }
-        // Plugin gate：registry 负责 essential / machine / project / user / default 判定。
-        if (
-          !keepOrcaProviderStable &&
-          !deferOrdinaryGate &&
-          !pluginRegistry.isEnabled(pluginId, ctx.workingDir)
-        ) {
-          return false;
-        }
-        // 继续走原 provider gate，例如 memory manager check、feishu bot source check。
-        return originalIsEnabled?.(ctx) ?? true;
-      },
-    };
-  });
+  const gated = gateBuiltinMcpProviders(providers, () => deps.pluginRegistry);
 
   // cindy:意识总机(cindy-tools;网关模式,
   // docs/dev-rules/plugin-security-and-authoring.md;2026-07-12 由 cindy_ghosts 更名——server 名进
