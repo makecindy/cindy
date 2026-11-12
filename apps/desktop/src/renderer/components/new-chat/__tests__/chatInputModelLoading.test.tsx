@@ -415,6 +415,29 @@ it('sends a remote-only Codex model when the controller has no connected provide
   expect(onSend.mock.calls[0][6]).toEqual(expect.objectContaining({ providerId: 'openai' }));
 });
 
+// #10084, unit through real ChatInput: a new task routed by a model group or plugin picks its own
+// model at send time, so the draft model having no connected source must not grey out Send or
+// stop Enter. Without a router the same draft stays blocked. The send callback rechecks the kept model.
+it.each([
+  ['model group', true, { modelGroups: { config: { routes: [] }, active: { type: 'route', id: 'r1' }, onSelect: noOp, onManage: noOp } }],
+  ['plugin model', true, { pluginModels: { models: [], active: { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' }, onSelect: noOp } }],
+  ['no router', false, {}],
+] as const)('new task with %s and a draft model without a connected source can send: %s', async (_name, sends, router) => {
+  const onSend = vi.fn().mockResolvedValue(true);
+  const view = render(<ChatInput {...props} sessionId={undefined} deviceLinkDeviceId={null}
+    initialModel="draft-only" initialEffort="low" onSend={onSend}
+    {...(router as Partial<ComponentProps<typeof ChatInput>>)} />);
+  await waitFor(() => expect(view.container.querySelector('[contenteditable]')).not.toBeNull());
+  await act(async () => { h.editor!.commands.setContent('<p>Route me</p>'); });
+  expect((screen.getByRole('button', { name: 'newChat.sendButton.send' }) as HTMLButtonElement).disabled).toBe(!sends);
+  await act(async () => {
+    fireEvent.keyDown(view.container.querySelector('[contenteditable]')!, { key: 'Enter', code: 'Enter' });
+  });
+  if (!sends) return expect(onSend).not.toHaveBeenCalled();
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  expect(h.confirm).not.toHaveBeenCalled();
+});
+
 // 回归：投影 effort 为 null（目录误判/不可调档）时选择器回落会话已持久化档位，
 // 不能兜底成字面量 'low'；投影有值时仍优先投影值。
 it.each([
