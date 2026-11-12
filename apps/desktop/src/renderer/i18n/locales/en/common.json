@@ -1325,6 +1325,8 @@
     "handoffWindow": "Input handoff · {{app}}"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
+    "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "This SSH task cannot switch Harness. Choose a model in its current Harness, or create a new SSH task with the Harness you need.",
     "MODEL_SELECTION_UNAVAILABLE": "The selected model is no longer available from its provider. Check the connection in Settings or choose another available model.",
     "HARNESS_SWITCH_NOT_READY": "The Harness switch is not ready. Check the error details and retry after the Harness is ready.",
@@ -20040,6 +20042,15 @@
     "lineNumbers": "Line numbers"
   },
   "subscriptionAccounts": {
+    "loginIdentityUnknown": "The original identity of this account is unknown. Use Add Account to connect a new account.",
+    "loginExpiresInDays": "Sign-in expires in about {{days}} days",
+    "loginExpiresSoon": "Sign-in expires soon",
+    "loginMayHaveExpired": "Sign-in may have expired",
+    "loginExpiryUnknown": "Sign-in expiry unknown",
+    "loginExpiryDetail": "Estimated expiry: {{date}}. Claude provides this estimate; sign-in may expire earlier.",
+    "loginAccountAria": "Sign in again to {{name}}",
+    "loginIdentityMismatchStatus": "Sign-in account mismatch",
+    "loginIdentityMismatch": "You signed in to a different account. Sign in again and choose the account shown in this row.",
     "unassigned": "Account not assigned",
     "boundUnavailable": "Account unavailable",
     "providerManagedAuth": "The current Codex provider does not expose a ChatGPT account. When adding the provider, choose “$t(subscriptionAccounts.signIn.anotherAccount)” to use a separate folder.",

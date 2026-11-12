@@ -1312,6 +1312,8 @@
     "handoffWindow": "代书 · {{app}}"
   },
   "ipcError": {
+    "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
+    "SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH": "$t(subscriptionAccounts.loginIdentityMismatch)",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暂不支持易 Harness。请择今 Harness 下之模型，或以所需 Harness 新立 SSH 差事。",
     "MODEL_SELECTION_UNAVAILABLE": "所择模型于此供方下已不可用。请于规制中察连接，或另择可用之模型。",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未易毕。请察错误详情，俟 Harness 就绪而后再试。",
@@ -19968,6 +19970,15 @@
     }
   },
   "subscriptionAccounts": {
+    "loginIdentityUnknown": "无法确认此账号的原身份，请通过「添加账号」重新连接",
+    "loginExpiresInDays": "登入约 {{days}} 日后期满",
+    "loginExpiresSoon": "登入将届期",
+    "loginMayHaveExpired": "登入或已期满",
+    "loginExpiryUnknown": "登入期限未详",
+    "loginExpiryDetail": "约于 {{date}} 期满。此为 Claude 估期，亦或先失效。",
+    "loginAccountAria": "重登 {{name}}",
+    "loginIdentityMismatchStatus": "登入账号不符",
+    "loginIdentityMismatch": "所登非所选账号。请重登，选此列所示账号。",
     "unassigned": "账号待定",
     "boundUnavailable": "账号已不可用",
     "providerManagedAuth": "Codex 目前供方未提供 ChatGPT 账号资讯。请于新增供方时选「$t(subscriptionAccounts.signIn.anotherAccount)」，另用独立目录",
