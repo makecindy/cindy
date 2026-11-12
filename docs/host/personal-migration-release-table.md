@@ -32,8 +32,8 @@
 | 6b | Claude 按模型的思考档位 | `resolveModelEfforts` | 已对齐（m1-cp2a） | desktop `engineModelResolvers.test.ts` | 无 |
 | 6c | 思考开关写通道 | `register.ts` `SET_THINKING_ENABLED` | 未做（第 10 步） | — | 无 |
 | 6d | Pi 思考开关记忆 | `newMakerDefaultsCache.ts` | 部分：读取已接（m1-cp2b）；镜像由渲染层推送，客户端模式下推给窗口进程，Host 一直为空，要等 M2 的推送通道 | Host `start-options.test.mjs` | 无 |
-| 7 | 回合改动记录 | `turn-change-set/store.ts` | 已对齐（m1-cp5a，Claude 与 Pi） | Host `agent-graph.test.mjs` | 无 |
-| 7b | Git 保存点与文件回退 | `git-snapshot-host.ts` | 未做（5b） | — | 无 |
+| 7 | 回合改动记录 | `turn-change-set/store.ts` | 部分（m1-cp5c 更正）：m1-cp5a 只接了引擎侧的写前捕获（Claude 与 Pi）。桌面在派发时开记录（`beginTurnChangeSetAtDispatch`）、从事件流记 Codex 的原生改动（`noteTurnDiffEvent`）、回合结束时落盘（`finalizeTurnChangeSet`）、未派发或关闭时清掉（`clearPendingTurnChangeSets`），Host 这四处都没接，捕获内容只留在内存里、不落盘。与 7b 同一批回合钩子一起补 | Host `agent-graph.test.mjs`（只覆盖引擎侧） | 无 |
+| 7b | Git 保存点与文件回退 | `git-snapshot-host.ts` | 未做（下一步，切断清单待审）。回退入口 `maker:rewind:preview`、`maker:rewind:commit` 在 Host 上没有注册，按约定随 M2 的界面通道一起接；这一步只接建保存点 | — | 无 |
 | 8 | 工作树租约 | `worktree/runtimeLeases.ts` | 未做（第 7 步） | — | 无 |
 | 9 | Codex 产品提示标记 | `maker-host/session-storage.ts` | 已对齐（m1-cp5a） | Host `agent-graph.test.mjs`；`codex-runtime.e2e.mjs` 数据库往返 | 无 |
 | 10 | 读图钩子、电脑操作防护、Bash 并发闸门 | `claudeHooks` | 未做（第 6 步） | — | 无 |
@@ -75,7 +75,8 @@
 |---|---|---|---|
 | 共享项目 Skill 链接 | 任务工作目录（用户仓库） | 每次启动任务前两处 | m1-cp3b |
 | 工作树租约 | 工作树运行时目录 | 任务运行期间 | 第 7 步（未做） |
-| Git 保存点 | 用户仓库的影子引用 | 每个用户回合开始前 | 5b（未做） |
+| Git 保存点 | 用户仓库的 `refs/cindy/savepoints/<任务 id>` 及其对象，与桌面同名同位置 | 每个用户回合开始前 | 7b（未做） |
+| 空文件夹初始化为 Git 仓库 | 任务工作目录（`git init`），仅在用户开了「自动初始化项目 Git」时 | 每个用户回合开始前 | 7b（未做） |
 
 ## 四、移出 M1
 
