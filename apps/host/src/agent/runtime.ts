@@ -320,8 +320,14 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
       if (invalidated) return { authenticated: false, errorReason: invalidated.reason, credentialScope: invalidated.credentialScope };
       const native = isNativeProviderAuthBound('openai') ? await readCodexLocalAuthState(codexHome) : null;
       if (native?.authenticated && native.authSource === 'oauth') return native;
-      if (opts?.providerId === 'openai' || opts?.credentialMode === 'oauth-bearer')
+      if (opts?.providerId === 'openai' || opts?.credentialMode === 'oauth-bearer') {
+        if (opts?.credentialMode === 'oauth-bearer') {
+          // As the desktop's oauth-bearer readState: the local file's own reason, else no_oauth.
+          const local = native ?? await readCodexLocalAuthState(codexHome);
+          return { authenticated: false, errorReason: (local.authenticated ? undefined : local.errorReason) ?? 'no_oauth' };
+        }
         return { authenticated: false, errorReason: native?.errorReason ?? 'oauth_not_bound' };
+      }
       return gatewayState;
     },
     async triggerLogin(options?: AuthLoginOptions) {
