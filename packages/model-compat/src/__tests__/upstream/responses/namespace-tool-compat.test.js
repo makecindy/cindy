@@ -1,3 +1,6 @@
+// Locally maintained: upstream's generated copy of this test is no longer imported (see
+// `UPSTREAM.json`), because Cindy intentionally diverges on wire-name collisions. Keep the rest of
+// this file aligned with the pinned upstream test when syncing.
 import { describe, expect, test } from "vitest";
 import { restoreRoutedCustomCalls, rewriteRoutedCustomToolsForUpstream } from "../../../upstream/responses/custom-tool-compat";
 import { createRoutedNamespaceCallRestoreRewrite, restoreRoutedNamespaceCalls, restoreRoutedNamespaceCallsInJson, rewriteRoutedNamespaceToolsForUpstream, } from "../../../upstream/responses/namespace-tool-compat";
@@ -311,95 +314,17 @@ describe("Responses namespace tool compatibility", () => {
             expect(aliases.get(wireName)).toBeDefined();
         });
     });
-    // A bare declaration may legitimately spell out the flattened name of a namespace child: Codex
-    // emits both shapes when one of its code-mode tools shares a name with a runtime namespace
-    // child. Failing the request costs the whole turn — the strict gateway rejects the request, not
-    // one tool — so the child is renamed and stays restorable through its request-local alias.
-    test("renames a namespace child whose flattened wire name a bare declaration claims", () => {
+    // Local divergence from upstream: a declared tool that already spells the flattened wire name
+    // of a namespace child is disambiguated instead of failing the whole request. Regression
+    // coverage lives in `src/__tests__/namespace-tool-collision.test.js`.
+    test("disambiguates a namespace child whose wire name a declared tool already uses", () => {
         const rewritten = rewriteRoutedNamespaceToolsForUpstream({
             tools: [
-                { type: "function", name: "collaboration__followup_task", parameters: {} },
-                { type: "namespace", name: "collaboration", tools: [{ type: "function", name: "followup_task", parameters: {} }] },
+                { type: "function", name: "workspace__read" },
+                { type: "namespace", name: "workspace", tools: [{ type: "function", name: "read" }] },
             ],
-            input: [{ type: "function_call", namespace: "collaboration", name: "followup_task", call_id: "call_1", arguments: "{}" }],
         });
-        const body = rewritten.body;
-        expect(body.tools.map(tool => tool.name)).toEqual([
-            "collaboration__followup_task",
-            "collaboration__followup_task_2",
-        ]);
-        expect(body.input[0]).toMatchObject({ name: "collaboration__followup_task_2", call_id: "call_1" });
-        expect([...rewritten.aliases]).toEqual([
-            ["collaboration__followup_task_2", { namespace: "collaboration", name: "followup_task", kind: "function" }],
-            ["collaboration.followup_task", { namespace: "collaboration", name: "followup_task", kind: "function" }],
-        ]);
-        expect(restoreRoutedNamespaceCalls({ type: "function_call", name: "collaboration__followup_task_2", arguments: "{}" }, rewritten.aliases).value)
-            .toEqual({ type: "function_call", name: "followup_task", namespace: "collaboration", arguments: "{}" });
-    });
-    test("keeps allocating free wire names and reuses one per logical tool", () => {
-        const child = { type: "function", name: "read", parameters: {} };
-        const rewritten = rewriteRoutedNamespaceToolsForUpstream({
-            tools: [
-                { type: "function", name: "workspace__read", parameters: {} },
-                { type: "function", name: "workspace__read_2", parameters: {} },
-                { type: "namespace", name: "workspace", tools: [child] },
-            ],
-            // The same logical tool declared in a second container keeps the name the first one
-            // allocated instead of consuming another suffix.
-            input: [{ type: "additional_tools", tools: [{ type: "namespace", name: "workspace", tools: [{ ...child }] }] }],
-        });
-        expect(rewritten.body.tools.map(tool => tool.name)).toEqual([
-            "workspace__read",
-            "workspace__read_2",
-            "workspace__read_3",
-        ]);
-        expect(rewritten.body.input[0].tools).toEqual([]);
-        expect([...rewritten.aliases.keys()].sort()).toEqual(["workspace.read", "workspace__read_3"]);
-    });
-    // A disambiguating suffix must not take a name a later sibling legitimately owns. Reserving
-    // every real name first makes the outcome independent of declaration order.
-    test("reserves real names before handing out a disambiguating suffix", () => {
-        for (const order of [["read", "read_2"], ["read_2", "read"]]) {
-            const rewritten = rewriteRoutedNamespaceToolsForUpstream({
-                tools: [
-                    { type: "function", name: "workspace__read", parameters: {} },
-                    {
-                        type: "namespace",
-                        name: "workspace",
-                        tools: order.map(name => ({ type: "function", name, parameters: {} })),
-                    },
-                ],
-            });
-            expect(rewritten.body.tools.map(tool => tool.name)).toEqual([
-                "workspace__read",
-                ...order.map(name => (name === "read" ? "workspace__read_3" : "workspace__read_2")),
-            ]);
-            expect(rewritten.aliases.get("workspace__read_3")).toMatchObject({ namespace: "workspace", name: "read" });
-            expect(rewritten.aliases.get("workspace__read_2")).toMatchObject({ namespace: "workspace", name: "read_2" });
-        }
-    });
-    test("rewrites a selector to the disambiguated wire name", () => {
-        const rewritten = rewriteRoutedNamespaceToolsForUpstream({
-            tools: [
-                { type: "function", name: "workspace__read", parameters: {} },
-                { type: "namespace", name: "workspace", tools: [{ type: "function", name: "read", parameters: {} }] },
-            ],
-            tool_choice: { type: "function", namespace: "workspace", name: "read" },
-        });
-        expect(rewritten.body.tool_choice).toEqual({ type: "function", name: "workspace__read_2" });
-        expect(rewritten.aliases.get("workspace__read_2"))
-            .toEqual({ namespace: "workspace", name: "read", kind: "function" });
-    });
-    // Two namespace children that flatten to one wire name are a genuine declaration ambiguity:
-    // their dotted spellings alias each other, so renaming one would make the other's restoration
-    // dependent on which container was rewritten first. That case keeps failing closed.
-    test("still fails closed when two namespace children flatten to one wire name", () => {
-        expect(() => rewriteRoutedNamespaceToolsForUpstream({
-            tools: [
-                { type: "namespace", name: "workspace__read", tools: [{ type: "function", name: "x" }] },
-                { type: "namespace", name: "workspace", tools: [{ type: "function", name: "read__x" }] },
-            ],
-        })).toThrow('namespace tool wire-name collision for "workspace__read__x"');
+        expect(rewritten.body.tools.map(tool => tool.name)).toEqual(["workspace__read", "workspace__read_2"]);
     });
     // Relaying `type: "namespace"` is what the strict gateway rejects, and it rejects the request
     // rather than the tool — so a group this layer cannot represent costs every tool in the turn.

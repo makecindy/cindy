@@ -18,6 +18,30 @@ import { createTranslatorBudget } from './upstream/lib/translator-budget';
 import { collectDeclaredWireToolNames } from './upstream/server/responses-undeclared-tool-guard';
 import { composeSseBlockRewrites, payloadRewriteAsBlockRewrite, nextSseBlock, type SseBlockRewrite } from './upstream/server/sse-payload-rewrite';
 
+/** Bare custom declarations keep their own restore path even when a displaced child used the name. */
+function collectBareCustomToolNames(body: unknown): Set<string> {
+  const names = new Set<string>();
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return names;
+  const groups: unknown[] = [(body as { tools?: unknown }).tools];
+  const input = (body as { input?: unknown }).input;
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      if (!item || typeof item !== 'object') continue;
+      const { type, tools } = item as { type?: unknown; tools?: unknown };
+      if (type === 'additional_tools' || type === 'tool_search_output') groups.push(tools);
+    }
+  }
+  for (const group of groups) {
+    if (!Array.isArray(group)) continue;
+    for (const tool of group) {
+      if (!tool || typeof tool !== 'object') continue;
+      const { type, name } = tool as { type?: unknown; name?: unknown };
+      if (type === 'custom' && typeof name === 'string') names.add(name);
+    }
+  }
+  return names;
+}
+
 /** Selected from the actual route; native OpenAI and non-Responses traffic do not enter this adapter. */
 export interface ResponsesCompatibilityPolicy {
   customTools?: 'native' | 'functions' | 'preserve-apply-patch';
@@ -32,6 +56,7 @@ export interface ResponsesCompatibilityPolicy {
 
 /** One request owns both forward conversion and reverse tool identities. */
 export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCompatibilityPolicy) {
+  const bareCustomNames = collectBareCustomToolNames(body);
   const custom = policy.customTools && policy.customTools !== 'native'
     ? rewriteRoutedCustomToolsForUpstream(body, policy.customTools === 'functions' ? false : undefined)
     : { body, names: new Set<string>(), repairNames: new Set<string>() };
@@ -39,13 +64,20 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
     ? rewriteRoutedToolSearchForUpstream(custom.body)
     : { body: custom.body, names: new Set<string>() };
   const namespace = policy.namespaceTools === 'functions'
-    ? rewriteRoutedNamespaceToolsForUpstream(search.body, custom.names)
+    ? rewriteRoutedNamespaceToolsForUpstream(search.body, custom.names, bareCustomNames)
     : { body: search.body, aliases: new Map(), renamedWireNames: new Map<string, string>() };
   // A namespace child that a bare declaration displaced keeps its record in `custom.names`: after
   // namespace restoration the item carries `{namespace, name}` and resolves to that same preferred
-  // wire name. What must not happen is the bare declaration itself claiming it, so the displaced
-  // names are excluded for items that carry no namespace.
-  const bareDisplacedNames = new Set(namespace.renamedWireNames.keys());
+  // wire name. What must not happen is the bare declaration itself claiming it, or an ordinary
+  // function child coming back as a custom-tool call — the recorded kind decides which applies.
+  const displacedKinds = new Map<string, 'function' | 'custom'>();
+  for (const [preferred, allocated] of namespace.renamedWireNames) {
+    const kind = namespace.aliases.get(allocated)?.kind as 'function' | 'custom' | undefined;
+    if (kind) displacedKinds.set(preferred, kind);
+  }
+  const displacement = displacedKinds.size > 0
+    ? { bareCustomNames, displacedKinds }
+    : undefined;
   const schemas = policy.repairFunctionArguments ? collectFunctionCallRepairSchemas(body) : new Map();
   const declared = collectDeclaredWireToolNames(body);
   const scrubAuthorization = collectSelfNamedNamespaceScrubAuthorization(body, new Set([...custom.names, ...custom.repairNames]), new Set(schemas.keys()));
@@ -61,7 +93,7 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
       }
       if (policy.snapshotRepair) next = repairResponsesSnapshotJson(next, body);
       if (policy.contentChannelReasoning) next = rewriteReasoningSummaryInJsonString(next);
-      next = restoreRoutedCustomCallsInJson(next, custom.names, custom.repairNames, declared, bareDisplacedNames);
+      next = restoreRoutedCustomCallsInJson(next, custom.names, custom.repairNames, declared, displacement);
       next = restoreRoutedToolSearchCallsInJson(next, search.names);
       next = repairFunctionCallsInJson(next, schemas);
       return policy.backfillResponseFields ? backfillResponsesFieldsJson(next) : next;
@@ -71,7 +103,7 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
       const stages: SseBlockRewrite[] = [
         payloadRewriteAsBlockRewrite(createSelfNamedToolCallNamespaceScrubRewrite(scrubAuthorization)),
         payloadRewriteAsBlockRewrite(restoreNamespace),
-        createRoutedCustomToolRestoreBlockRewrite(custom.names, budget, custom.repairNames, declared, bareDisplacedNames),
+        createRoutedCustomToolRestoreBlockRewrite(custom.names, budget, custom.repairNames, declared, displacement),
         createRoutedToolSearchRestoreBlockRewrite(search.names, budget),
         createResponsesFunctionToolRepairBlockRewrite(schemas, budget),
       ];

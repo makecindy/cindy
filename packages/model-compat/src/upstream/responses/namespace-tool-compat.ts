@@ -427,6 +427,7 @@ function rewriteInputItem(item: unknown, plan: NamespaceRewritePlan, emitted: Se
 export function rewriteRoutedNamespaceToolsForUpstream(
   body: unknown,
   convertedCustomToolNames?: ReadonlySet<string>,
+  bareCustomNames?: ReadonlySet<string>,
 ): {
   body: unknown;
   aliases: Map<string, RoutedNamespaceToolIdentity>;
@@ -464,13 +465,16 @@ export function rewriteRoutedNamespaceToolsForUpstream(
       && !ambiguousDotted.has(dotted) && !plan.bareWireNames.has(dotted)
       && !aliases.has(dotted)) aliases.set(dotted, identity);
   }
-  // The adapter lowers custom tools before namespaces. Preserve their declared
-  // kind only in already-authorized response aliases; wire selectors remain lowered.
-  // A renamed child no longer owns its preferred name — that name now belongs to the bare
-  // declaration that displaced it — so the custom record cannot describe this child any more.
+  // The adapter lowers custom tools before namespaces, which rewrites a `custom` child declaration
+  // into a `function` one. The declared kind is still recorded in `convertedCustomToolNames`, keyed
+  // by wire name — and a bare custom tool of the same name is recorded there too, so that name only
+  // describes this child when it is not a bare custom declaration.
   for (const [wireName, identity] of aliases) {
-    if (wireName !== namespacedToolName(identity.namespace, identity.name)) continue;
-    if (convertedCustomToolNames?.has(wireName)) identity.kind = "custom";
+    const preferred = namespacedToolName(identity.namespace, identity.name);
+    const source = wireName === preferred ? wireName : preferred;
+    if (!convertedCustomToolNames?.has(source)) continue;
+    if (bareCustomNames?.has(source)) continue;
+    identity.kind = "custom";
   }
   return {
     body: {

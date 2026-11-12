@@ -315,7 +315,54 @@
 -}
 --- a/src/responses/custom-tool-compat.ts
 +++ b/src/responses/custom-tool-compat.ts
-@@ -153,7 +153,9 @@
+@@ -67,14 +67,45 @@
+ }
+ 
+ /** Resolve a provider-emitted wire name to the routed custom tool the client declared. */
++/**
++ * Wire names a namespace flattening pass moved away from their preferred spelling.
++ *
++ * `bareCustomNames` separates a bare declaration that genuinely is a custom tool from a name that
++ * only looks custom because a displaced child used to own it; `displacedKinds` says what the child
++ * itself was declared as. Together they keep the custom restore from claiming a call that belongs
++ * to the bare declaration or from turning an ordinary function into a custom-tool call.
++ */
++export interface CustomRestoreDisplacement {
++  bareCustomNames: ReadonlySet<string>;
++  displacedKinds: ReadonlyMap<string, "function" | "custom">;
++}
++
+ export function routedCustomToolTargetName(
+   value: unknown,
+   names: ReadonlySet<string>,
+   declaredNames?: ReadonlySet<string>,
++  displacement?: CustomRestoreDisplacement,
+ ): string | undefined {
+   const wireName = routedCustomToolWireName(value);
+   if (wireName === undefined) return undefined;
+-  if (names.has(wireName)) return wireName;
++  if (names.has(wireName)) {
++    if (displacement) {
++      const carriesNamespace = isPlainObject(value) && typeof value.namespace === "string";
++      if (carriesNamespace) {
++        // Restoring the child is what puts the namespace on the item; an ordinary function child
++        // must stay a function call rather than come back as a custom-tool call.
++        if (displacement.displacedKinds.get(wireName) === "function") return undefined;
++      } else if (
++        displacement.displacedKinds.has(wireName)
++        && !displacement.bareCustomNames.has(wireName)
++      ) {
++        // The bare declaration that claimed this name is not a custom tool, so its own call is not
++        // a custom-tool call.
++        return undefined;
++      }
++    }
++    return wireName;
++  }
+   if (!isPlainObject(value) || typeof value.namespace === "string") return undefined;
+   const normalized = normalizeDeclaredToolName(wireName, declaredNames);
+   return normalized !== wireName && names.has(normalized) ? normalized : undefined;
+@@ -153,7 +184,9 @@
      ) {
        names.add(value.name);
      }
@@ -326,7 +373,7 @@
    };
    visit(body);
    return names;
-@@ -173,7 +175,7 @@
+@@ -173,7 +206,7 @@
    ) {
      out.add(value.call_id);
    }
@@ -335,7 +382,7 @@
  }
  
  function rewriteForUpstream(
-@@ -234,7 +236,8 @@
+@@ -234,7 +267,8 @@
    let changed = false;
    const next: Record<string, unknown> = {};
    for (const [key, entry] of Object.entries(value)) {
@@ -345,6 +392,48 @@
      next[key] = rewritten;
      changed ||= rewritten !== entry;
    }
+@@ -266,13 +300,14 @@
+   names: ReadonlySet<string>,
+   repairNames: ReadonlySet<string> = new Set(),
+   declaredNames?: ReadonlySet<string>,
++  displacement?: CustomRestoreDisplacement,
+ ): { value: unknown; changed: boolean } {
+   if (!isPlainObject(value)) return { value, changed: false };
+ 
+   const restoreItem = (item: unknown): { value: unknown; changed: boolean } => {
+     if (!isPlainObject(item)) return { value: item, changed: false };
+     const wireName = routedCustomToolWireName(item);
+-    const targetName = routedCustomToolTargetName(item, names, declaredNames);
++    const targetName = routedCustomToolTargetName(item, names, declaredNames, displacement);
+     if (
+       (item.type === "function_call" || item.type === "custom_tool_call")
+       && typeof item.name === "string"
+@@ -362,7 +397,7 @@
+     && value.type.startsWith("response.")
+     && isPlainObject(value.response)
+   ) {
+-    const response = restoreRoutedCustomCalls(value.response, names, repairNames, declaredNames);
++    const response = restoreRoutedCustomCalls(value.response, names, repairNames, declaredNames, displacement);
+     if (response.changed) {
+       restored.response = response.value;
+       changed = true;
+@@ -377,6 +412,7 @@
+   names: ReadonlySet<string>,
+   repairNames: ReadonlySet<string> = new Set(),
+   declaredNames?: ReadonlySet<string>,
++  displacement?: CustomRestoreDisplacement,
+ ): string {
+   if (names.size === 0 && repairNames.size === 0) return text;
+   let payload: unknown;
+@@ -385,7 +421,7 @@
+   } catch {
+     return text;
+   }
+-  const restored = restoreRoutedCustomCalls(payload, names, repairNames, declaredNames);
++  const restored = restoreRoutedCustomCalls(payload, names, repairNames, declaredNames, displacement);
+   return restored.changed ? JSON.stringify(restored.value) : text;
+ }
+ 
 --- a/src/server/relay.ts
 +++ b/src/server/relay.ts
 @@ -1,1484 +1,2 @@
@@ -1959,3 +2048,252 @@
 -} from "./types/accounts";
 +export * from "./types/tools";
 +export type * from "./types/provider";
+--- a/src/responses/namespace-tool-compat.ts
++++ b/src/responses/namespace-tool-compat.ts
+@@ -102,10 +102,57 @@
+   bareWireNames: Set<string>;
+   identities: Map<string, string>;
+   selectors: Map<string, string | null>;
++  /**
++   * Preferred wire name -> allocated name, for children displaced by a bare declaration. The
++   * custom-tool layer records wire names before this pass runs, so a displaced custom child has to
++   * move its record too: the preferred name now belongs to the bare declaration, and leaving it in
++   * that set would restore the bare tool's ordinary call as a custom-tool call.
++   */
++  renamedWireNames: Map<string, string>;
+ };
+ 
+ /** Two distinct logical tools would occupy one wire name; the caller maps this to a 400. */
+ export class NamespaceToolCollisionError extends Error {}
++
++/**
++ * Upper bound for the disambiguating suffix. A catalog still colliding after this many candidates
++ * is malformed rather than merely unlucky, and the request keeps failing closed.
++ */
++const MAX_WIRE_NAME_SUFFIX = 64;
++
++/**
++ * Pick a wire name for a namespace child whose flattened form a bare declaration already claims.
++ *
++ * Codex emits both shapes when one of its own code-mode tools is spelled like a namespace child:
++ * the flat declaration `collaboration__followup_task` alongside the group `collaboration` holding
++ * `followup_task`. These are distinct logical tools, so one of them has to move. Failing the
++ * request costs the entire turn — the strict gateway rejects the request, not the single tool —
++ * while renaming the child keeps both reachable.
++ *
++ * Renaming stays request-local: `aliases` maps the new wire name back to `{namespace, name}`, so
++ * replay and response restoration are unchanged, and the renamed entry is authorized by
++ * `tool_choice` through exactly the same path as an unrenamed one.
++ */
++function allocateLoweredWireName(
++  wireOwners: ReadonlyMap<string, string>,
++  preferred: string,
++): string {
++  for (let suffix = 2; suffix <= MAX_WIRE_NAME_SUFFIX; suffix += 1) {
++    const candidate = `${preferred}_${suffix}`;
++    if (!wireOwners.has(candidate)) return candidate;
++  }
++  throw new NamespaceToolCollisionError(
++    `namespace tool wire-name collision for "${preferred}"; no free disambiguated name`,
++  );
++}
++
++type LoweredNamespaceChild = {
++  namespace: string;
++  child: Record<string, unknown>;
++  childName: string;
++  identity: string;
++  preferred: string;
++};
+ 
+ function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
+   const aliases = new Map<string, RoutedNamespaceToolIdentity>();
+@@ -113,6 +160,7 @@
+   const identities = new Map<string, string>();
+   const selectors = new Map<string, string | null>();
+   const wireOwners = new Map<string, string>();
++  const renamedWireNames = new Map<string, string>();
+ 
+   for (const group of groups) {
+     for (const tool of group) {
+@@ -127,6 +175,10 @@
+     }
+   }
+ 
++  const children: LoweredNamespaceChild[] = [];
++  // Which identities want each preferred wire name. The same logical tool may be declared in
++  // several containers, so identity — not declaration — is what makes a name contested.
++  const wantedBy = new Map<string, Set<string>>();
+   for (const group of groups) {
+     for (const tool of group) {
+       const parsed = parseNamespaceGroup(tool);
+@@ -134,29 +186,60 @@
+       for (const child of parsed.children) {
+         const childName = child.name as string;
+         const identity = loweredIdentity(parsed.namespace, childName);
+-        const wireName = loweredWireName(parsed.namespace, childName);
+-        const owner = wireOwners.get(wireName);
+-        if (owner !== undefined && owner !== identity) {
+-          throw new NamespaceToolCollisionError(
+-            `namespace tool wire-name collision for "${wireName}"; rename one of the colliding tools`,
+-          );
+-        }
+-        wireOwners.set(wireName, identity);
+-        identities.set(identity, wireName);
+-        addSelector(selectors, wireName, wireName);
+-        addSelector(selectors, `${parsed.namespace}.${childName}`, wireName);
+-        addSelector(selectors, childName, wireName);
+-        if (parsed.namespace !== BUILTIN_FUNCTIONS_NAMESPACE) {
+-          // A child declared `custom` stays custom; everything else lowers to a
+-          // function, which is how `buildTools` flattens it upstream.
+-          const kind = child.type === "custom" ? "custom" : "function";
+-          aliases.set(wireName, { namespace: parsed.namespace, name: childName, kind });
+-        }
++        const preferred = loweredWireName(parsed.namespace, childName);
++        children.push({ namespace: parsed.namespace, child, childName, identity, preferred });
++        const wanted = wantedBy.get(preferred);
++        if (wanted) wanted.add(identity);
++        else wantedBy.set(preferred, new Set([identity]));
+       }
+     }
+   }
+ 
+-  return { aliases, bareWireNames, identities, selectors };
++  // Two different logical tools that both want one wire name are a declaration ambiguity: their
++  // dotted spellings alias each other, so restoration would depend on which container happened to
++  // be rewritten first. Reject it before any suffix is handed out.
++  for (const [preferred, wanted] of wantedBy) {
++    if (wanted.size > 1) {
++      throw new NamespaceToolCollisionError(
++        `namespace tool wire-name collision for "${preferred}"; rename one of the colliding tools`,
++      );
++    }
++  }
++
++  // Reserve every name a child legitimately owns before allocating any suffix. Deciding this in a
++  // second pass keeps a disambiguated name from stealing a sibling's real name: given a bare
++  // `workspace__read` plus children `read` and `read_2`, `read` must not take `workspace__read_2`.
++  for (const entry of children) {
++    if (identities.has(entry.identity)) continue;
++    const owner = wireOwners.get(entry.preferred);
++    if (owner !== undefined && owner !== entry.identity) continue;
++    identities.set(entry.identity, entry.preferred);
++    wireOwners.set(entry.preferred, entry.identity);
++  }
++
++  // Only a bare declaration displaces a child; every remaining child takes the first free suffix
++  // after all real names are reserved.
++  for (const entry of children) {
++    if (identities.has(entry.identity)) continue;
++    const allocated = allocateLoweredWireName(wireOwners, entry.preferred);
++    identities.set(entry.identity, allocated);
++    wireOwners.set(allocated, entry.identity);
++    renamedWireNames.set(entry.preferred, allocated);
++  }
++
++  for (const entry of children) {
++    const wireName = identities.get(entry.identity)!;
++    addSelector(selectors, wireName, wireName);
++    addSelector(selectors, `${entry.namespace}.${entry.childName}`, wireName);
++    addSelector(selectors, entry.childName, wireName);
++    if (entry.namespace === BUILTIN_FUNCTIONS_NAMESPACE) continue;
++    // A child declared `custom` stays custom; everything else lowers to a function, which is how
++    // `buildTools` flattens it upstream.
++    const kind = entry.child.type === "custom" ? "custom" : "function";
++    aliases.set(wireName, { namespace: entry.namespace, name: entry.childName, kind });
++  }
++
++  return { aliases, bareWireNames, identities, selectors, renamedWireNames };
+ }
+ 
+ /**
+@@ -344,11 +427,14 @@
+ export function rewriteRoutedNamespaceToolsForUpstream(
+   body: unknown,
+   convertedCustomToolNames?: ReadonlySet<string>,
++  bareCustomNames?: ReadonlySet<string>,
+ ): {
+   body: unknown;
+   aliases: Map<string, RoutedNamespaceToolIdentity>;
++  /** Preferred wire name -> allocated name, for children a bare declaration displaced. */
++  renamedWireNames: Map<string, string>;
+ } {
+-  if (!isPlainObject(body)) return { body, aliases: new Map() };
++  if (!isPlainObject(body)) return { body, aliases: new Map(), renamedWireNames: new Map() };
+   const groups = collectResponsesToolGroups(body);
+   const plan = buildRewritePlan(groups);
+ 
+@@ -379,10 +465,16 @@
+       && !ambiguousDotted.has(dotted) && !plan.bareWireNames.has(dotted)
+       && !aliases.has(dotted)) aliases.set(dotted, identity);
+   }
+-  // The adapter lowers custom tools before namespaces. Preserve their declared
+-  // kind only in already-authorized response aliases; wire selectors remain lowered.
+-  for (const identity of aliases.values()) {
+-    if (convertedCustomToolNames?.has(namespacedToolName(identity.namespace, identity.name))) identity.kind = "custom";
++  // The adapter lowers custom tools before namespaces, which rewrites a `custom` child declaration
++  // into a `function` one. The declared kind is still recorded in `convertedCustomToolNames`, keyed
++  // by wire name — and a bare custom tool of the same name is recorded there too, so that name only
++  // describes this child when it is not a bare custom declaration.
++  for (const [wireName, identity] of aliases) {
++    const preferred = namespacedToolName(identity.namespace, identity.name);
++    const source = wireName === preferred ? wireName : preferred;
++    if (!convertedCustomToolNames?.has(source)) continue;
++    if (bareCustomNames?.has(source)) continue;
++    identity.kind = "custom";
+   }
+   return {
+     body: {
+@@ -392,6 +484,7 @@
+       ...(toolChoice !== body.tool_choice ? { tool_choice: toolChoice } : {}),
+     },
+     aliases,
++    renamedWireNames: plan.renamedWireNames,
+   };
+ }
+ 
+--- a/src/server/responses-custom-tool-repair.ts
++++ b/src/server/responses-custom-tool-repair.ts
+@@ -8,6 +8,7 @@
+   routedCustomToolTargetName,
+   routedCustomToolWireName,
+   unwrapRoutedCustomToolArguments,
++  type CustomRestoreDisplacement,
+ } from "../responses/custom-tool-compat";
+ import {
+   replaceSseDataPayload,
+@@ -91,6 +92,7 @@
+   budget?: TranslatorBudget,
+   repairNames: ReadonlySet<string> = new Set(),
+   declaredNames?: ReadonlySet<string>,
++  displacement?: CustomRestoreDisplacement,
+ ): SseBlockRewrite {
+   const itemNames = new Map<string, { name: string; aliased: boolean; namespace?: string }>();
+   // Native helper aliases and genuine bare code-mode exec calls share completion repair.
+@@ -207,7 +209,7 @@
+       const repairable = wireName !== undefined && repairNames.has(wireName);
+       if (upstreamItemId && repairable) repairItemNames.set(upstreamItemId, parsed.item.name);
+       const restored = repairable || aliased || codeModeExec
+-        ? restoreRoutedCustomCalls(parsed, names, repairNames, declaredNames)
++        ? restoreRoutedCustomCalls(parsed, names, repairNames, declaredNames, displacement)
+         : { value: parsed, changed: false };
+       if (type === "response.output_item.done" && upstreamItemId) releaseCall(upstreamItemId);
+       return restored.changed
+@@ -247,7 +249,7 @@
+       if (upstreamItemId && pending.length > 0 && !openCalls.has(upstreamItemId)) {
+         openCalls.set(upstreamItemId, { argumentsText: "", emittedInput: "", retainedBytes: 0 });
+       }
+-      const restored = restoreRoutedCustomCalls(parsed, names, repairNames, declaredNames);
++      const restored = restoreRoutedCustomCalls(parsed, names, repairNames, declaredNames, displacement);
+       const restoredBlock = restored.changed
+         ? replaceSseDataPayload(block, JSON.stringify(restored.value))
+         : block;
+@@ -387,7 +389,7 @@
+       return [replaceSseDataPayload(replaceSseEventName(block, nextType), JSON.stringify(next))];
+     }
+ 
+-    const restored = restoreRoutedCustomCalls(parsed, names, repairNames, declaredNames);
++    const restored = restoreRoutedCustomCalls(parsed, names, repairNames, declaredNames, displacement);
+     const terminal = type === "response.completed" || type === "response.failed" || type === "response.incomplete";
+     if (terminal) releaseAll();
+     return restored.changed

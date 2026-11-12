@@ -8,6 +8,7 @@ import {
   routedCustomToolTargetName,
   routedCustomToolWireName,
   unwrapRoutedCustomToolArguments,
+  type CustomRestoreDisplacement,
 } from "../responses/custom-tool-compat";
 import {
   replaceSseDataPayload,
@@ -91,7 +92,7 @@ export function createRoutedCustomToolRestoreBlockRewrite(
   budget?: TranslatorBudget,
   repairNames: ReadonlySet<string> = new Set(),
   declaredNames?: ReadonlySet<string>,
-  bareDisplacedNames?: ReadonlySet<string>,
+  displacement?: CustomRestoreDisplacement,
 ): SseBlockRewrite {
   const itemNames = new Map<string, { name: string; aliased: boolean; namespace?: string }>();
   // Native helper aliases and genuine bare code-mode exec calls share completion repair.
@@ -208,7 +209,7 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       const repairable = wireName !== undefined && repairNames.has(wireName);
       if (upstreamItemId && repairable) repairItemNames.set(upstreamItemId, parsed.item.name);
       const restored = repairable || aliased || codeModeExec
-        ? restoreRoutedCustomCalls(parsed, names, repairNames, declaredNames, bareDisplacedNames)
+        ? restoreRoutedCustomCalls(parsed, names, repairNames, declaredNames, displacement)
         : { value: parsed, changed: false };
       if (type === "response.output_item.done" && upstreamItemId) releaseCall(upstreamItemId);
       return restored.changed
@@ -248,7 +249,7 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       if (upstreamItemId && pending.length > 0 && !openCalls.has(upstreamItemId)) {
         openCalls.set(upstreamItemId, { argumentsText: "", emittedInput: "", retainedBytes: 0 });
       }
-      const restored = restoreRoutedCustomCalls(parsed, names, repairNames, declaredNames, bareDisplacedNames);
+      const restored = restoreRoutedCustomCalls(parsed, names, repairNames, declaredNames, displacement);
       const restoredBlock = restored.changed
         ? replaceSseDataPayload(block, JSON.stringify(restored.value))
         : block;
@@ -388,7 +389,7 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       return [replaceSseDataPayload(replaceSseEventName(block, nextType), JSON.stringify(next))];
     }
 
-    const restored = restoreRoutedCustomCalls(parsed, names, repairNames, declaredNames, bareDisplacedNames);
+    const restored = restoreRoutedCustomCalls(parsed, names, repairNames, declaredNames, displacement);
     const terminal = type === "response.completed" || type === "response.failed" || type === "response.incomplete";
     if (terminal) releaseAll();
     return restored.changed

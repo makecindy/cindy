@@ -78,7 +78,7 @@
       "source": "src/responses/custom-tool-compat.ts",
       "target": "src/upstream/responses/custom-tool-compat.ts",
       "upstreamSha256": "1545dee0ee7f29d0c489dc4bf3975984fd9648dbca5de50effc97f7df9adc024",
-      "portedSha256": "d223fcb889bf3e529dcc4b7535edd0605f7068c37af5ae0a78482bfe65940500"
+      "portedSha256": "66c85b83d7782b50d9ac8840629c821c29e056c70a0065aa20da65a80a731ce9"
     },
     {
       "source": "src/responses/function-call-compat.ts",
@@ -90,7 +90,7 @@
       "source": "src/responses/namespace-tool-compat.ts",
       "target": "src/upstream/responses/namespace-tool-compat.ts",
       "upstreamSha256": "29ab7614e0757cde8bf81ad86da407afc8cb6d05027da22375fcca9a95de63b0",
-      "portedSha256": "29ab7614e0757cde8bf81ad86da407afc8cb6d05027da22375fcca9a95de63b0"
+      "portedSha256": "f800c45270f37d2222613a346fb8087c4bbb1519ca43d5372010fbd5d0a515fa"
     },
     {
       "source": "src/responses/tool-groups.ts",
@@ -120,7 +120,7 @@
       "source": "src/server/responses-custom-tool-repair.ts",
       "target": "src/upstream/server/responses-custom-tool-repair.ts",
       "upstreamSha256": "9b29bc429d83cd5ab46b358eed46356514b88f9508716afa8080b93dca848f84",
-      "portedSha256": "9b29bc429d83cd5ab46b358eed46356514b88f9508716afa8080b93dca848f84"
+      "portedSha256": "8802e432008dc515e8deaf6fb1d72b13e36dc3fec9bb11063a8a9f640e3d9324"
     },
     {
       "source": "src/server/responses-function-tool-repair.ts",
@@ -308,13 +308,6 @@
       "target": "src/__tests__/upstream/responses/legacy-shell-compat.test.js",
       "upstreamSha256": "76c49010d3b1f7afc9bfe9411d3fdebcbc4af777b1de2ea0f24f06700c65ebf3",
       "portedSha256": "e7e06a465f953bb6b252a764bde8013a7d75c997d8b31f189cba2d1fe2f52540",
-      "adaptation": "Bun test imports to Vitest; TypeScript transpile to ES2022 (assertions unchanged)"
-    },
-    {
-      "source": "tests/responses/namespace-tool-compat.test.ts",
-      "target": "src/__tests__/upstream/responses/namespace-tool-compat.test.js",
-      "upstreamSha256": "3ab46d5c76aade93ea82758e68d732bcc4eb53ac4ff8307fb48cdaad4750573e",
-      "portedSha256": "6c92dfa1dbcfe24f2eddd4415e1dc718e45c6563ad7788dda6265874e12bb0a6",
       "adaptation": "Bun test imports to Vitest; TypeScript transpile to ES2022 (assertions unchanged)"
     },
     {
