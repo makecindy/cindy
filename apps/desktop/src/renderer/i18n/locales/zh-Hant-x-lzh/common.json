@@ -11906,6 +11906,8 @@
       "takeOverConflict": "{{name}} 已移至「{{device}}」續行",
       "takeOverOffline": "連不上伺服器，暫不能於此機續之",
       "takeOverFailed": "未能於此機接手 {{name}}",
+      "profileIdentityTooLong": "雲端人格資料逾 {{limit}} 字元，未能接手。請縮短資料並同步後再試；原有資料皆存。",
+      "profileUserTooLong": "雲端使用者資料逾 {{limit}} 字元，未能接手。請縮短資料並同步後再試；原有資料皆存。",
       "localCindyConflict": "接手之機已有另一 Cindy。請於其設定中處置，或另擇主力電腦",
       "localCindyConflictAction": "查看本機 Cindy 設定",
       "notEnabled": "今之伺服器不支援更換主機",
@@ -11972,7 +11974,20 @@
       "transferred": "{{name}} 已交予「{{device}}」",
       "transferConflict": "{{name}} 之主機已變，此番未交",
       "transferOffline": "連不上伺服器，{{name}} 仍行於此機",
-      "transferFailed": "未能將 {{name}} 交予「{{device}}」"
+      "transferFailed": "未能將 {{name}} 交予「{{device}}」",
+      "repair": {
+        "action": "改資料再試",
+        "title": "更正夥伴資料",
+        "description": "存後於此機恢復夥伴，原資料先備份於此。",
+        "save": "存並恢復",
+        "count": "{{count}} / {{limit}} 字",
+        "over": "超 {{count}} 字，請刪簡後存。",
+        "changed": "資料或主力電腦已變，請重讀後更正。",
+        "loadFailed": "資料暫不可讀，請再試。",
+        "backupFailed": "原資料備份未成，更正未用。請查磁碟餘量後再試。",
+        "saveFailed": "夥伴未恢復，所改仍存於此，請稍後再試。",
+        "reload": "重新讀取"
+      }
     },
     "market": {
       "heading": "訪同伴",

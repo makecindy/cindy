@@ -11906,6 +11906,8 @@
       "takeOverConflict": "{{name}} 已经换到「{{device}}」继续了",
       "takeOverOffline": "连不上服务器，暂时无法在这台电脑继续",
       "takeOverFailed": "未能在这台电脑上接手 {{name}}",
+      "profileIdentityTooLong": "云端人格资料超过 {{limit}} 字符，无法接手。请缩短资料并同步后重试；现有资料已保留。",
+      "profileUserTooLong": "云端用户资料超过 {{limit}} 字符，无法接手。请缩短资料并同步后重试；现有资料已保留。",
       "localCindyConflict": "接手的电脑上已有另一位 Cindy。请先在那位 Cindy 的设置中处理，或选择其他主力电脑",
       "localCindyConflictAction": "查看本机 Cindy 设置",
       "notEnabled": "当前服务器不支持更换主力电脑",
@@ -11972,7 +11974,20 @@
       "transferred": "{{name}} 已交给「{{device}}」",
       "transferConflict": "{{name}} 的主力电脑已经变了，这次没有交出",
       "transferOffline": "连不上服务器，{{name}} 仍在这台电脑运行",
-      "transferFailed": "未能把 {{name}} 交给「{{device}}」"
+      "transferFailed": "未能把 {{name}} 交给「{{device}}」",
+      "repair": {
+        "action": "修改资料并重试",
+        "title": "更正伙伴资料",
+        "description": "保存后将在这台电脑恢复伙伴。原始资料会先备份到这台电脑。",
+        "save": "保存并恢复",
+        "count": "{{count}} / {{limit}} 字",
+        "over": "超出 {{count}} 字，请缩短后保存。",
+        "changed": "资料或主力电脑已变化，请重新读取后更正。",
+        "loadFailed": "暂时无法读取资料，请重试。",
+        "backupFailed": "原始资料备份失败，尚未应用更正。请检查可用磁盘空间后重试。",
+        "saveFailed": "伙伴尚未恢复，你填写的内容仍保留在这里。请稍后重试。",
+        "reload": "重新读取"
+      }
     },
     "market": {
       "heading": "发现伙伴",

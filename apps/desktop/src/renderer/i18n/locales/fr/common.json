@@ -12050,6 +12050,8 @@
       "takeOverConflict": "{{name}} a déjà été déplacé vers « {{device}} »",
       "takeOverOffline": "Impossible de joindre le serveur, {{name}} ne peut donc pas continuer ici pour le moment",
       "takeOverFailed": "Impossible de reprendre {{name}} sur cet ordinateur",
+      "profileIdentityTooLong": "La personnalité dans le cloud dépasse {{limit}} caractères et ne peut pas être restaurée. Raccourcissez-la, synchronisez-la, puis réessayez. Les données existantes sont conservées.",
+      "profileUserTooLong": "Le contexte utilisateur dans le cloud dépasse {{limit}} caractères et ne peut pas être restauré. Raccourcissez-le, synchronisez-le, puis réessayez. Les données existantes sont conservées.",
       "localCindyConflict": "L’ordinateur qui prend le relais a déjà une autre Cindy. Gérez-la dans ses réglages ou choisissez un autre ordinateur principal",
       "localCindyConflictAction": "Ouvrir les réglages de la Cindy locale",
       "notEnabled": "Ce serveur ne permet pas de changer d'ordinateur principal",
@@ -12116,7 +12118,20 @@
       "transferred": "{{name}} a été déplacé vers « {{device}} »",
       "transferConflict": "L'ordinateur principal de {{name}} a déjà changé, il n'a donc pas été déplacé",
       "transferOffline": "Impossible de joindre le serveur. {{name}} s'exécute toujours sur cet ordinateur",
-      "transferFailed": "Impossible de déplacer {{name}} vers « {{device}} »"
+      "transferFailed": "Impossible de déplacer {{name}} vers « {{device}} »",
+      "repair": {
+        "action": "Modifier et réessayer",
+        "title": "Corriger le profil du compagnon",
+        "description": "L’enregistrement restaure ce compagnon sur cet ordinateur. Le profil d’origine sera d’abord sauvegardé ici.",
+        "save": "Enregistrer et restaurer",
+        "count": "{{count}} / {{limit}} caractères",
+        "over": "{{count}} caractères en trop. Raccourcissez le texte avant d’enregistrer.",
+        "changed": "Le profil ou l’ordinateur principal a changé. Rechargez le profil avant de le corriger.",
+        "loadFailed": "Impossible de lire le profil. Réessayez.",
+        "backupFailed": "Impossible de sauvegarder le profil d’origine ; la correction n’a pas été appliquée. Vérifiez l’espace disque disponible et réessayez.",
+        "saveFailed": "Le compagnon n’est pas encore restauré. Vos modifications sont conservées ici ; réessayez.",
+        "reload": "Recharger"
+      }
     },
     "market": {
       "heading": "Découvrir des amis",
