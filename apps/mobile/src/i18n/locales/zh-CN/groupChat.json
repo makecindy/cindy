@@ -171,7 +171,8 @@
     "capability": {
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
-      "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。"
+      "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。",
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连接你的 Cindy 后才能让 Cindy 替你干活（你的电脑上现在没有在线的 Cindy）。"
     }
   },
   "plan": {

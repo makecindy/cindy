@@ -886,19 +886,26 @@ function botsCreateGroupLane(db: Database.Database, args: BotGroupsCreateLaneArg
     if (!profile || profile.status !== 'active') {
       throw Object.assign(new Error('伙伴当前不可用'), { code: 'MEMBER_UNAVAILABLE' });
     }
-    const existing = db.prepare(`SELECT l.session_id AS sessionId FROM bot_session_links l
+    const existing = db.prepare(`SELECT l.session_id AS sessionId, s.working_dir AS workingDir FROM bot_session_links l
       INNER JOIN sessions s ON s.id = l.session_id
       WHERE l.bot_id = ? AND l.role = 'group' AND l.route_key = ? AND l.archived_at IS NULL
         AND s.source = 'bot' AND s.status = 'active'
-      LIMIT 1`).get(botId, routeKey) as { sessionId: string } | undefined;
-    if (existing) return { sessionId: existing.sessionId, created: false };
+      LIMIT 1`).get(botId, routeKey) as { sessionId: string; workingDir: string | null } | undefined;
+    const replace = existing && p.replaceOtherWorkingDir === true && existing.workingDir !== (s.workingDir ?? null);
+    if (existing && !replace) return { sessionId: existing.sessionId, created: false };
+    if (existing) {
+      // The group's project folder changed on this computer: the lane moves with it.
+      db.prepare('UPDATE bot_session_links SET archived_at = ? WHERE session_id = ?').run(createdAt, existing.sessionId);
+      db.prepare(`UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active'`)
+        .run(createdAt, existing.sessionId);
+    }
     insertBotSession(db, s);
     db.prepare(`INSERT INTO bot_session_links
       (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
       VALUES (?, ?, ?, ?, 'group', ?, ?, NULL)`)
       .run(`${botId}:${sessionId}`, botId, sessionId, profile.version, routeKey, createdAt);
     const permission = botsReconcileLanePermission(db, { sessionId });
-    return { sessionId, created: true,
+    return { sessionId, created: true, ...(existing ? { replacedSessionId: existing.sessionId } : {}),
       ...(permission.canonicalSessionId ? { permissionRepairCanonicalSessionId: permission.canonicalSessionId } : {}) };
   })();
 }

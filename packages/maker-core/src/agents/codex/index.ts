@@ -5720,6 +5720,11 @@ assertRouteCurrent();
         reviewMode ? undefined : botRuntimeSkillPolicy(opts.botRuntimeProfile),
       ),
     );
+    // Host Skills of this session (e.g. 群协作 for a group's Cindy task) as explicit per-thread paths,
+    // like a Bot's own Skills: Codex has no plugin-root mount. Local, non-Review threads only.
+    const hostSkillPaths = reviewMode || hostedGuest || opts.remoteHostId ? [] : (opts.hostSkills ?? []).map((skill) => skill.filePath);
+    if (hostSkillPaths.length) capabilityRoutingConfig = mergeCodexSkillConfigOverrides(capabilityRoutingConfig,
+      { 'skills.config': hostSkillPaths.map((skillPath) => ({ path: skillPath, enabled: true })) });
     // 受邀者(另一个账号)不读本机用户的技能停用偏好(本机技能在上面已整体关闭)。
     const disabledSkillPaths = opts.remoteHostId || isolatedBotProfile(opts.botRuntimeProfile) || reviewMode || hostedGuest
       ? [] : [...(this.deps.getDisabledSkillPaths?.() ?? [])];

@@ -1,4 +1,5 @@
 import { stat } from 'node:fs/promises';
+import path from 'node:path';
 
 import { app } from 'electron';
 import { and, eq } from 'drizzle-orm';
@@ -104,6 +105,23 @@ export async function prepareBotWorkspaceRuntime(
   const legacyUserDataPath = deps.legacyUserDataPath ?? (() => app.getPath('userData'));
 
   const workingDir = await ensureWorkspaceDir(ownerUserDataPath(), botId, legacyUserDataPath());
+  // A V2 group or Thread lane created in the group's project folder keeps working there, like an
+  // ordinary task in that folder (bot-group-chat.md §7.5). Its stored folder must still exist.
+  if (groupRouteKey) {
+    const [lane] = await db.select({ workingDir: sessions.workingDir, projectDir: sessions.projectDir })
+      .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    const home = path.dirname(path.resolve(workingDir));
+    const dir = lane?.projectDir && lane.workingDir === lane.projectDir ? path.resolve(lane.workingDir) : null;
+    if (dir && dir !== home && !dir.startsWith(home + path.sep)) {
+      const isDirectory = deps.isDirectory ?? isExistingDirectory;
+      if (!(await isDirectory(dir))) throw new BotPlanWorkDirUnavailableError();
+      opts.workingDir = dir;
+      opts.workspaceKind = 'project';
+      opts.projectDir = dir;
+      opts.remoteHostId = undefined;
+      return;
+    }
+  }
   opts.workingDir = workingDir;
   opts.remoteHostId = undefined;
   // V2 (project mode): the workspace is the teammate's project, so its chats are

@@ -374,13 +374,23 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   `locations`，`create_worker` / `create_workers` 可选 `agent_device_id`(`"local"` = 任务所在电脑)。同账号 allowlist 新增上述 models 查询；共享任务清单不变。回归见 `orcaWorkerCreationService.test.ts`、`CreateWorkerPopover.test.tsx`、Mobile
   `orcaTeam.test.ts` / `useOrcaWorkerForm.test.tsx`。
 - **被控电脑上的协同任务换 Agent 位置**(2026-11-04)：A 从 v0.1.112 起接受给它上面的协同 Lead / 本机 Worker
-  发带 `agentDeviceId` 的 `maker:switch-session-agent`(运行设备 Worker 仍回 `UNSUPPORTED_CAPABILITY`)；v0.1.104–v0.1.110
+  发带 `agentDeviceId` 的 `maker:switch-session-agent`(运行设备 Worker 见下一条)；v0.1.104–v0.1.110
   的 A 在登记意图前就回 `UNSUPPORTED_CAPABILITY`。A 在 `maker:get-capabilities` 声明 `supportsOrcaAgentRelocation: true`
   后，桌面与 Mobile 控制端才对这类任务列其他电脑与分享、走与普通任务相同的换电脑事务；缺省 false 时维持原样，不出现能点却必失败的
   选项。协议位是整台 A 的，控制端读到任一已注册 Agent 的快照带这一位即可。通道与参数不变，只新增可选能力位；中转只按通道名
   放行(`packages/device-link/src/allowlist.ts`)、不解析能力字段，自建中转无需同步修改。Mobile 经 `normalizeMobileAgentCapabilities` 读
   这一位(makecindy/cindy#8841)。回归见 `sessionAgentSwitchRemoteRouting.test.ts`、`remoteAgentRelocationWiring.test.ts`、
   `sessionRuntimeControlWiring.test.ts`，Mobile `orcaModelSelection.test.ts`、`sessionAgentSwitchWiring.test.ts`。
+- **运行设备 Worker 换 Agent 位置**(2026-11-12 用户裁决)：运行设备 Worker(`sessions.orca_remote_lead`，Lead 在另一台电脑)
+  的任务就在它所在的电脑(B)上，B 从本版起与普通任务一样接受带 `agentDeviceId` 的 `maker:switch-session-agent`(登记意图，
+  下一次发送边界全量交接后在新位置重建；协同身份由 `orca_remote_lead` 在重建时恢复)。更早的 B 对这类任务回
+  `UNSUPPORTED_CAPABILITY`(只接受供应商组内部引擎与模型都不变的换电脑)。B 在 `maker:get-capabilities` 声明
+  `supportsOrcaRemoteWorkerAgentRelocation: true` 后，远程查看这类 Worker 的桌面与 Mobile 控制端才列其他电脑与分享；
+  在 B 本机打开时由本机这一版直接开放。缺省 false 时维持原样。Lead 所在电脑(A)无需改动：A 只经 `maker:input:enqueue`
+  派活、按派出消息之后的 assistant 回复收尾，B 的分隔行(`agent_switch`)不进回报读取，换位置期间 `turnInProgress` 挡住收尾；
+  A 的代理行只记录创建时的 `agentDeviceId`，换位置后 A 的 Worker 列表可能仍显示创建时的位置。通道与参数不变，只新增可选
+  能力位，自建中转无需同步修改。回归见 `sessionAgentSwitchHandler.test.ts`(运行设备 Worker 登记与落地、定时任务入口)、
+  `sessionAgentSwitchRemoteRouting.test.ts`、`sessionRuntimeControlWiring.test.ts`，Mobile `sessionAgentSwitchWiring.test.ts`。
 - **账号余量**(2026-10-09)：这一轮消耗的是 Agent 所在那台(B)的账号，桌面底部用量 chip 与手机任务菜单都改读 B 的
   余量，不读任务所在电脑(本机或被控电脑)的同名账号。直接经 device-link 调 B 已有的 `maker:usage:*` 读取与推送
   (与模型选择器读 B 的余量同一份镜像)，不新增 channel；任务价值与上下文仍读任务所在电脑。远程控制的任务把 Agent

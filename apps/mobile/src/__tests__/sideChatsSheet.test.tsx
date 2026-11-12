@@ -79,6 +79,7 @@ if (!actionIds) throw new Error('Missing header action IDs');
 const headerPlatform = { OS: 'android' };
 const icon = () => null;
 const nativeActions = vi.fn((_props: unknown) => null);
+const nativeTitle = vi.fn((_props: unknown) => null);
 const toolbar = Object.assign(native, { View: native });
 const headerBindings = {
   ...bindings, summarizeSessionOverview, projectMobileSessionActions, Platform: headerPlatform,
@@ -88,7 +89,10 @@ const headerBindings = {
   compactSessionHeaderNotice: () => null, useDoubleTap: () => undefined,
   useSystemNavigationBack: () => false, ScreenBackButton: () => null,
   SystemNavigationBack: () => null, SessionHeaderNativeBack: () => null,
-  SessionHeaderNativeTitle: () => null, SessionHeaderNativeActions: nativeActions,
+  SessionHeaderNativeTitle: nativeTitle, SessionHeaderNativeActions: nativeActions,
+  // The extracted system header is exercised with the real iOS controls in
+  // SessionStackHeader.test.tsx; here the page's projection is the boundary.
+  SessionStackHeader: (props: unknown) => { nativeTitle(props); return nativeActions(props); },
   TaskTagDots: () => null, QuietSyncIndicator: () => null,
   Monitor: icon, Folder: icon, List: icon, Search: icon, Ellipsis: icon,
   spacing: { lg: 16, sm: 8, xs: 4 }, navigationChrome: { target: 44 }, iconSize: {}, iconStroke: {},
@@ -101,6 +105,23 @@ const compiledHeader = ts.transpileModule(`${actionIds.getText(headerSource)}\n$
 const Header = new Function(...Object.keys(headerBindings), compiledHeader)(...Object.values(headerBindings));
 
 describe('Worker and side-chat task headers', () => {
+  // Replaces the old source-count assertion for title tags: both page branches
+  // must forward live tags/settings and remove tags after access is revoked.
+  it.each([false, true])('keeps tags and their action current (system header: %s)', horizontalSystemHeader => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    headerPlatform.OS = 'ios';
+    const root = createRoot(document.createElement('div'));
+    const tags = [{ id: 'tag', name: 'Tag', color: 'red' }];
+    const onOpenSettings = vi.fn();
+    const props = { horizontalSystemHeader, onOpenSettings, title: 'Task', messageCount: 1,
+      currentSession: { id: 'task', status: 'active', workingDir: '/repo', tags } };
+    try {
+      act(() => root.render(<Header {...props} />));
+      expect(nativeTitle.mock.lastCall![0]).toMatchObject({ tags, onTagsPress: onOpenSettings });
+      act(() => root.render(<Header {...props} isDeviceAccessRevoked />));
+      expect(nativeTitle.mock.lastCall![0]).toMatchObject({ tags: undefined });
+    } finally { act(() => root.unmount()); }
+  });
   it.each([
     ['android', false], ['ios', false], ['ios', true],
   ] as const)('keeps details available and hides unrelated task tools on %s (system header: %s)', (platform, horizontalSystemHeader) => {

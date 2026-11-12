@@ -60,6 +60,9 @@ interface BotToolsetCatalogItem {
   version?: string;
 }
 
+/** An owner-access group lane or its Thread lane (not a 分工, queue, AI reply or digest lane). */
+const OWNER_GROUP_LANE = /^group:[^:]+:access:owner:[1-9][0-9]*(?::thread:[^:]+)?$/;
+
 export interface BotProfileRuntimeSnapshot {
   snapshotId: string;
   botId: string;
@@ -612,8 +615,14 @@ export async function hydrateBotProfileRuntime(
   // Only the owner's own chats run as an ordinary project task. IM lanes (other people, groups,
   // topics) and group lanes keep the existing channel isolation: they never load the owner's
   // personal instructions, settings, Skills or native memories, only the teammate's project memory.
-  const projectContext = !!workspaceDir && readBotProjectMode(config) && ownerChat
-    && path.resolve(opts.workingDir) === workspaceDir;
+  // A V2 teammate answering its owner in a group whose project folder is on this computer works
+  // there like an ordinary task in that folder (bot-group-chat.md §7.5). Other members' requests
+  // keep the isolated lane in Home.
+  const ownerGroupProjectLane = row.role === 'group' && OWNER_GROUP_LANE.test(row.routeKey ?? '')
+    && !!workspaceDir && path.resolve(opts.workingDir) !== workspaceDir
+    && !path.resolve(opts.workingDir).startsWith(path.dirname(workspaceDir) + path.sep);
+  const projectContext = !!workspaceDir && readBotProjectMode(config)
+    && (ownerChat ? path.resolve(opts.workingDir) === workspaceDir : ownerGroupProjectLane);
   const fullLane = ownerChat;
   // Bot Memory belongs to the Bot Home and is independent from Cindy's global
   // Maker Memory switch. The profile can still explicitly disable its own memory.

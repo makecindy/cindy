@@ -67,6 +67,16 @@ export function openGithubSignIn(): boolean {
   return true;
 }
 
+const connectedListeners = new Set<() => void>();
+/**
+ * Called whenever this computer's GitHub sign-in may have changed (Cindy's sign-in finished, the
+ * GitHub plugin's token changed). Main-side waiters re-read the connection themselves.
+ */
+export function onGithubConnectionChanged(listener: () => void): () => void {
+  connectedListeners.add(listener);
+  return () => { connectedListeners.delete(listener); };
+}
+
 /** Local app UI only. These channels intentionally have no device-link grant:
  * authorizing this machine's GitHub identity is not a shared-task capability. */
 export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
@@ -75,6 +85,9 @@ export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
   const changed = () => {
     getSharedGhCliTokenSource().invalidate();
     invalidateStatuses();
+    for (const listener of [...connectedListeners]) {
+      try { listener(); } catch { /* a waiter's failure never blocks the sign-in */ }
+    }
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send('git-context:github-connected');
     }

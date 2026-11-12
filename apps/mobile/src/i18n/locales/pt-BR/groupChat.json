@@ -174,7 +174,8 @@
     "capability": {
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do amigo pode repetir o pedido neste grupo.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, por isso a ferramenta não foi executada. Tente novamente quando a conexão for restabelecida.",
-      "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha no download ou ao limite de anexos. Reenvie os anexos necessários para este pedido."
+      "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha no download ou ao limite de anexos. Reenvie os anexos necessários para este pedido.",
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecte seu Cindy para que o Cindy possa trabalhar por você (nenhum Cindy seu está online agora)."
     }
   },
   "plan": {

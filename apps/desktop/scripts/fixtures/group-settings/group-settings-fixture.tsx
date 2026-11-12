@@ -16,6 +16,8 @@ interface Data {
   noAbout?: boolean;
   /** Teammates of yours that are not in the group yet, offered by 邀请伙伴. */
   spare?: number;
+  /** A server with the group's own Cindy (bot-group-chat.md §9): on, or switched off. */
+  assistant?: 'on' | 'off';
 }
 
 const data = ctx.data as unknown as Data;
@@ -38,12 +40,16 @@ const members = data.alone ? [me] : [
   teammate('aster', 'Aster', true, { guestAccess: 'tools' }),
   teammate('pico', 'Pico', true, { status: 'paused' }),
   teammate('nova', 'Nova', false),
+  ...(data.assistant ? [{ actorId: 'group-cindy', botId: 'group-cindy', actorKind: 'bot', assistant: true, name: 'Cindy', displayName: 'Cindy',
+    role: 'member', isOwned: false, avatar: 'cindy://avatar/preset/cindy', avatarColor: 'violet', status: 'active', avatarUrl: null }] : []),
 ];
 const group = {
   id: groupId, name: 'Cindy 发布小组', serverBacked: true, revision: 3, selfActorId: 'me',
   topic: data.noAbout ? '' : '周四发版前收口 Android 更新卡与伙伴群聊',
   description: data.noAbout ? '' : '这里讨论每周发版：确认要合并的 PR、跑完回归、整理更新说明。\n\n需要谁处理就直接 @ 他；不确定的事情先发在群里，别私下拍板。\n发版当天由负责人统一确认，其他人只补充事实。\n周五回顾这一周的问题。',
-  replyMode: 'mentioned', speakingMode: 'auto', singleSpeaker: false, members,
+  replyMode: data.assistant ? 'all' : 'mentioned', speakingMode: 'auto', singleSpeaker: !!data.assistant, members,
+  ...(data.assistant ? { supportsGroupAssistant: true, assistantEnabled: data.assistant === 'on', supportsGroupProject: true,
+    project: { kind: 'github', repo: 'makecindy/cindy' } } : {}),
   organizerBotId: data.alone ? null : 'aster', projectDir: data.role === 'member' ? null : '/Users/nana/Projects/cindy', autoContinue: false,
   supportsMentionAudiences: true, allowMentionAllBots: true,
   supportsDissolve: true, supportsGroupLeave: true, supportsListRemoval: true, supportsMemberAvatar: true,

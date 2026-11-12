@@ -305,7 +305,7 @@ const responsesReasoningContentRecoveryRule = createResponsesReasoningContentRec
 const duplicateResponsesToolCallRecoveryRule: RecoveryRule = {
   id: 'duplicate_responses_tool_call',
   enabled: () => true,
-  matches: (errorText) => /duplicate\s+function_call_output\s+for\s+call_id/i.test(errorText),
+  matches: (errorText) => /duplicate\s+(?:function_call_output|tool\s+output)\s+for\s+call_id\b/i.test(errorText),
   strip: normalizeRepeatedResponseToolCallIdsFromBody,
   onRetry: (threadId, model) => responsesToolCallHistoryStripController.markActive(threadId, model),
   useUpstreamModel: true,

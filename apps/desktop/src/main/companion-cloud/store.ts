@@ -180,6 +180,25 @@ export async function readCompanionValue(api: CompanionApi, store: CompanionStor
   }
 }
 
+function storeRowWins(row: CompanionRow, prefRevision: number | undefined): boolean {
+  if (prefRevision === undefined) return true;
+  if (preferenceFits(row.key, canonicalJson(row.value))) return false;
+  return row.prefRevision === undefined || prefRevision <= row.prefRevision;
+}
+
+/** One key for a restore preflight, using the same source and read order as a full restore. */
+export async function readCompanionRestoreValue(api: CompanionApi, store: CompanionStore | undefined, actorId: string, key: string): Promise<CompanionRow | undefined> {
+  store?.retryNow();
+  let stored: CompanionRow | undefined;
+  if (store?.active()) {
+    try { stored = await store.valueOf(actorId, key); }
+    catch (error) { if (store.active()) throw error; }
+  }
+  // Read preferences after the store: a shrinking edit writes preferences before deleting its store copy.
+  const row = await readPreference(api, actorId, key);
+  return stored && storeRowWins(stored, row?.revision) ? stored : row;
+}
+
 /**
  * Everything a restore or merge needs: the preference rows, plus from the store only the keys
  * the preferences could not hold (absent there, or too large for them).
@@ -201,12 +220,8 @@ export async function readCompanionRows(api: CompanionApi, store: CompanionStore
   // A large store value wins over its preference row unless that row is newer than the value
   // (a deletion or small value written while the store was off).
   const prefRevisions = new Map(rows.map(row => [row.key, row.revision]));
-  const extra = stored.filter(row => {
-    const prefRevision = prefRevisions.get(row.key);
-    if (prefRevision === undefined) return true;
-    if (preferenceFits(row.key, canonicalJson(row.value))) return false;
-    return row.prefRevision === undefined || prefRevision <= row.prefRevision;
-  }).map(row => ({ ...row, fromStore: true as const }));
+  const extra = stored.filter(row => storeRowWins(row, prefRevisions.get(row.key)))
+    .map(row => ({ ...row, fromStore: true as const }));
   const replaced = new Set(extra.map(row => row.key));
   return [...rows.filter(row => !replaced.has(row.key)), ...extra];
 }

@@ -871,8 +871,11 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     expect(capabilities.passthroughFields).not.toContain('top_logprobs');
   });
 
-  // #7906: first 400 repairs the persisted history pair, then only that thread is pre-cleaned.
-  it('recovers duplicate Responses call IDs and keeps later turns from repeating the 400', async () => {
+  // #7906/#10176: real loopback proxy entry, with only the upstream faked. The old
+  // repeated-call case missed notify's one-call/multiple-output history and Nova's
+  // error dialect. Assert the transmitted results and bounded recovery, not regexes.
+  it.each(['calls', 'notify-first', 'notify-last-sse', 'unrelated', 'valid', 'retry-fails'] as const)(
+    'recovers duplicate Responses history without losing results or retrying unrelated errors: %s', async mode => {
     const host = await freshCodexProxyHost(true);
     const actual = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
     const requests: Array<Record<string, unknown>> = [];
@@ -886,9 +889,15 @@ describe('chatBridgeCapabilitiesForRoute', () => {
       const outputIds = input.filter(item => item.type === 'function_call_output' || item.type === 'custom_tool_call_output').map(item => item.call_id);
       const hasDuplicateCall = new Set(callIds).size !== callIds.length;
       const hasDuplicateOutput = new Set(outputIds).size !== outputIds.length;
-      if (hasDuplicateCall || hasDuplicateOutput) {
-        res.writeHead(400, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: "Duplicate function_call_output for call_id 'call_retry'. Each function_call must have exactly one matching function_call_output" } }));
+      if (hasDuplicateCall || hasDuplicateOutput || mode === 'valid' || mode === 'retry-fails') {
+        const message = mode === 'calls'
+          ? "Duplicate function_call_output for call_id 'call_retry'. Each function_call must have exactly one matching function_call_output"
+          : mode === 'unrelated' ? 'Invalid model'
+            : 'litellm.BadRequestError: NovaException - Duplicate tool output for call_id: call_exec';
+        const error = JSON.stringify({ error: { message } });
+        const sse = mode === 'notify-last-sse';
+        res.writeHead(400, { 'content-type': sse ? 'text/event-stream' : 'application/json' });
+        res.end(sse ? `event: error\ndata: ${error}\n\n` : error);
         return;
       }
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -904,16 +913,30 @@ describe('chatBridgeCapabilitiesForRoute', () => {
         routingTransform: async (body, ctx) => ({ ...(await opts.routingTransform?.(body, ctx)), upstreamOverride: upstreamUrl }),
       }),
     );
-    const input = [
+    const repeatedCalls = [
       { type: 'function_call', id: 'fc_1', call_id: 'call_retry', name: 'write', arguments: '{}' },
       { type: 'function_call_output', id: 'fco_1', call_id: 'call_retry', output: 'failed' },
       { type: 'function_call', id: 'fc_2', call_id: 'call_retry', name: 'write', arguments: '{}' },
       { type: 'function_call_output', id: 'fco_2', call_id: 'call_retry', output: 'succeeded' },
     ];
-    const post = () => new Promise<number | undefined>((resolve, reject) => {
+    const progress = { type: 'custom_tool_call_output', call_id: 'call_exec', output: 'Still working' };
+    const final = { ...progress, output: 'Script running with cell ID 42\nGenerated result' };
+    const outputs = mode === 'notify-last-sse' ? [final, progress] : [progress, final];
+    const reasoning = { type: 'reasoning', id: 'rs_history', encrypted_content: 'opaque-history', summary: [] };
+    const history = mode === 'calls' ? repeatedCalls : [
+      { type: 'custom_tool_call', call_id: 'call_exec', name: 'exec', input: 'script' },
+      ...(mode === 'valid' ? [final] : outputs),
+    ];
+    const input = [reasoning, ...history];
+    const expectedInput = [reasoning, ...(mode === 'calls' ? [
+      repeatedCalls[0], repeatedCalls[1],
+      { ...repeatedCalls[2], call_id: 'call_retry__cindy_dup_2' },
+      { ...repeatedCalls[3], call_id: 'call_retry__cindy_dup_2' },
+    ] : [history[0], { ...outputs[0], output: outputs.map(item => item.output).join('\n\n') }])];
+    const post = (threadId = 'thread-7906') => new Promise<number | undefined>((resolve, reject) => {
       const req = httpRequest(host.getCodexProxyEndpoint() + '/v1/responses', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'thread-id': 'thread-7906' },
+        headers: { 'content-type': 'application/json', 'thread-id': threadId },
       }, res => {
         res.resume();
         res.once('end', () => resolve(res.statusCode));
@@ -924,21 +947,34 @@ describe('chatBridgeCapabilitiesForRoute', () => {
 
     try {
       await host.ensureCodexProxyReady();
-      expect(await post()).toBe(200);
+      if (mode === 'unrelated' || mode === 'valid') {
+        expect(await post()).toBe(400);
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.input).toEqual(input);
+        expect(await post()).toBe(400);
+        expect(requests).toHaveLength(2);
+        expect(requests[1]?.input).toEqual(input);
+        return;
+      }
+      expect(await post()).toBe(mode === 'retry-fails' ? 400 : 200);
       expect(requests).toHaveLength(2);
-      expect(requests[1]?.input).toEqual([
-        input[0], input[1],
-        { ...input[2], call_id: 'call_retry__cindy_dup_2' },
-        { ...input[3], call_id: 'call_retry__cindy_dup_2' },
-      ]);
+      expect(requests[0]?.input).toEqual(input);
+      expect(requests[1]?.input).toEqual(expectedInput);
 
-      expect(await post()).toBe(200);
+      expect(await post()).toBe(mode === 'retry-fails' ? 400 : 200);
       expect(requests).toHaveLength(3);
       expect(requests[2]?.input).toEqual(requests[1]?.input);
+      if (mode === 'notify-first') {
+        expect(await post('thread-unaffected')).toBe(200);
+        expect(requests).toHaveLength(5);
+        expect(requests[3]?.input).toEqual(input);
+        expect(requests[4]?.input).toEqual(expectedInput);
+      }
     } finally {
       host.unregister('session-7906');
       const { responsesToolCallHistoryStripController } = await import('../thread-strip-controllers.js');
       responsesToolCallHistoryStripController.clear('thread-7906');
+      responsesToolCallHistoryStripController.clear('thread-unaffected');
       await host.disposeCodexProxy();
       upstream.closeAllConnections();
       await new Promise<void>(resolve => upstream.close(() => resolve()));

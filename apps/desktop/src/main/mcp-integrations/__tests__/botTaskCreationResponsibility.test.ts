@@ -14,8 +14,8 @@ function fixture() {
   const record = vi.fn(async (_id: string) => { void _id; });
   const capture = vi.fn(async (_caller: string) => { void _caller; return record; });
   const send = vi.fn(async (_params: unknown) => { void _params; return { ok: true, wakeKind: 'created', targetSessionId: 'new-task' }; });
-  const call = new Function('tryGetOrcaCollabService', 'captureBotCreatedTaskResponsibility', wired)(
-    () => ({ sendToSession: send }), capture,
+  const call = new Function('tryGetOrcaCollabService', 'captureBotCreatedTaskResponsibility', 'reportGroupTaskCreated', wired)(
+    () => ({ sendToSession: send }), capture, vi.fn(),
   ) as (params: { targetSessionId?: string; dispatcherSessionId: string; message: string; workingDir?: string }) => Promise<Record<string, unknown>>;
   return { call, record, capture, send };
 }

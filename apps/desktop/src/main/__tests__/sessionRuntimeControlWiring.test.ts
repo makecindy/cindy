@@ -303,6 +303,8 @@ describe('session runtime control wiring', () => {
     expect(capabilities).toContain('supportsModelWindowSwitchGuard: true');
     // Controllers only offer moving a controlled Orca Lead / local Worker's Agent when this is declared.
     expect(capabilities).toContain('supportsOrcaAgentRelocation: true');
+    // Same for an execution-device Worker whose Lead is on another computer.
+    expect(capabilities).toContain('supportsOrcaRemoteWorkerAgentRelocation: true');
   });
 
   it('authenticates Desktop package-command entry points before minting Main context', () => {

@@ -40,6 +40,10 @@ function RemoteBotSessionGate() {
   const cloud = useCompanionCloud();
   const deviceList = useDeviceLinkDeviceList();
   const cloudActor = cloudCompanionAt(cloud, deviceId, botId);
+  const homeActor = cloud.enabled ? cloud.actors.find(actor => actor.externalId === botId) : undefined;
+  const rejectedHere = homeActor?.homeDeviceId === cloud.selfDeviceId && !!homeActor?.profileFailure;
+  const recoveringHere = useRef(false);
+  if (rejectedHere) recoveringHere.current = true;
   const [ready, setReady] = useState<(RemoteBot & { sessionId: string; canonicalChat: true }) | null>(() => {
     if (!bot?.sessionId || !deviceId || (requestedSessionId && requestedSessionId !== bot.sessionId)
       || remoteProjectsStore.getSessionDeviceId(bot.sessionId) !== deviceId) return null;
@@ -145,20 +149,26 @@ function RemoteBotSessionGate() {
     query.set('device', deviceId);
     return <Navigate to={`${standardSessionRoute(requestedSessionId)}?${query}`} state={location.state} replace />;
   }
+  if (!requestedSessionId && recoveringHere.current && homeActor?.homeDeviceId === cloud.selfDeviceId
+    && !rejectedHere && !cloud.demotedBotIds.includes(botId!)) {
+    return <Navigate to={`/bots/${encodeURIComponent(botId!)}`} replace />;
+  }
+  const offlineActor = !requestedSessionId && rejectedHere ? homeActor : cloudActor;
   // Its main computer is offline (or never reachable here): read the cloud conversation
   // and offer to continue on this computer instead of a stale read-only mirror.
-  if (cloudActor && deviceId && botId && homeAway && (!liveChat || homeAwayLong)) {
+  if (offlineActor && deviceId && botId && (rejectedHere || (homeAway && (!liveChat || homeAwayLong)))) {
     return (
       <Suspense fallback={<main className="flex h-full items-center justify-center bg-[var(--surface)]"><Spinner size={18} /></main>}>
       <CloudCompanionOfflineView
         key={`${deviceId}:${botId}`}
         botId={botId}
         deviceId={deviceId}
-        name={bot?.name || cloudActor.name}
-        avatar={bot?.avatar || cloudActor.avatar}
+        name={bot?.name || offlineActor.name}
+        avatar={bot?.avatar || offlineActor.avatar}
         avatarColor={bot?.avatarColor}
-        deviceName={bot?.deviceName || cloudActor.homeDevice?.name || ''}
-        controlOff={!bot && homeControlOff(cloudActor, deviceList)}
+        deviceName={bot?.deviceName || offlineActor.homeDevice?.name || ''}
+        controlOff={!bot && homeControlOff(offlineActor, deviceList)}
+        profileFailure={offlineActor.profileFailure}
       />
       </Suspense>
     );

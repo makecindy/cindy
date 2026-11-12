@@ -451,7 +451,7 @@
   - 换过去之后任务固定在新电脑上，原电脑恢复后也不换回去（每换一次都要重新交接）。
   - **协同任务**（2026-10-10）：Lead 与 Worker 都按上面的规则分配和换电脑，引擎与模型不变、只换 Agent 所在电脑；
     用户也可以像普通任务一样在模型列表里给 Lead 与 Worker 换模型、换位置（2026-10-16 用户裁决；运行设备 Worker
-    除外，见 `docs/dev-rules/orca-team-architecture.md` 第 11 条）。
+    2026-11-12 起同样可以，见 `docs/dev-rules/orca-team-architecture.md` 第 11 条）。
     - 新建的 Worker 跟普通新任务一样按组策略选电脑。Worker 跟着 Lead（没另选位置，或选的就是 Lead 现在所在那台）
       而 Lead 用的是组那一项时，Worker 跟的是这个组，不是 Lead 这次落到的那台；组那一项不提供所选模型时照旧跟 Lead
       所在那台。Lead 的 `list_available_models` 不指定位置时同样列组那一项所在电脑的模型。

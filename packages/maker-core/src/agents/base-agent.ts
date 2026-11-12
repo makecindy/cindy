@@ -1959,6 +1959,8 @@ export interface LocalAgentClient {
 }
 
 export const TASK_SYSTEM_PROMPT = Symbol('cindy.task-system-prompt');
+export interface HostSessionSkill { name: string; description: string; path: string; filePath: string; pluginRoot: string }
+
 export interface StartSessionOptions {
   /** Host-owned task instructions, appended after the native fixed prompt. */
   readonly [TASK_SYSTEM_PROMPT]?: string;
@@ -2075,6 +2077,13 @@ export interface StartSessionOptions {
    * it must never be converted into natural-language capability claims.
    */
   botRuntimeProfile?: BotRuntimeProfile;
+  /**
+   * Host-owned Skills mounted for this session only, such as Cindy's 「群协作」 Skill for the task of a
+   * group's Cindy. Each is a versioned directory Cindy manages (`path` holds `SKILL.md`, `pluginRoot`
+   * is its Claude Code local plugin). Never written to user or project discovery directories; local,
+   * non-Review sessions only.
+   */
+  hostSkills?: HostSessionSkill[];
   /**
    * 是否启用 Maker Memory (本次 session 内). 跟 userPrompt 同模式 — renderer 启 session
    * 时透传当前 memoryMode='maker' → true, 'native' / 'off' → false。main 不持久化。

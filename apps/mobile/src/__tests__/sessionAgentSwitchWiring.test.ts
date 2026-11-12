@@ -78,26 +78,35 @@ describe('session Agent switch UI wiring', () => {
     expect(writer).toContain('nextIntent.agentDeviceId !== undefined');
     expect(writer).toContain('? { agentDeviceId: nextIntent.agentDeviceId }');
     // Orca 可以切 Agent；Lead / 本机 Worker 要被控电脑声明 supportsOrcaAgentRelocation 才能挪运行位置，
-    // 运行设备 Worker 与共享任务访客一样始终不能挪。
+    // 运行设备 Worker 要声明 supportsOrcaRemoteWorkerAgentRelocation(2026-11-12)；共享任务访客始终不能挪。
     expect(source).toContain('const agentLocationMovable = sessionAgentSwitchSupported');
     const locationGate = source.slice(source.indexOf('const agentLocationMovable ='),
       source.indexOf('/** Agent 现在所在的电脑'));
     expect(locationGate).toContain('&& !orcaAgentLocationLocked');
-    expect(locationGate).toContain('&& !currentSession.orcaRemoteLead');
+    expect(locationGate).toContain('&& !orcaRemoteWorkerLocationLocked');
     const expression = locationGate.match(/const agentLocationMovable = ([\s\S]*?);/)?.[1];
     expect(expression).toBeDefined();
     const lockExpression = source.match(/const orcaAgentLocationLocked = ([\s\S]*?);/)?.[1];
     expect(lockExpression).toBeDefined();
+    const remoteWorkerLockExpression = source.match(/const orcaRemoteWorkerLocationLocked = ([\s\S]*?);/)?.[1];
+    expect(remoteWorkerLockExpression).toBeDefined();
     const movable = new Function('currentSession', 'capabilities',
       `const sessionAgentSwitchSupported = true, deviceId = 'host', isSharedTaskPeer = () => false;
        const orcaAgentLocationLocked = ${lockExpression};
+       const orcaRemoteWorkerLocationLocked = ${remoteWorkerLockExpression};
        return !!(${expression});`);
     const worker = { agentDeviceId: null, orcaRole: null,
       orcaRemoteLead: { leadDeviceId: 'lead', leadSessionId: 'lead-s1', workerLabel: 'worker' } };
     const relocation = { supportsOrcaAgentRelocation: true };
+    const remoteWorkerRelocation = { supportsOrcaAgentRelocation: true, supportsOrcaRemoteWorkerAgentRelocation: true };
+    // 旧被控端(没声明运行设备 Worker 换位置)仍不开放，避免点了被拒。
     expect(movable(worker)).toBe(false);
     expect(movable(worker, relocation)).toBe(false);
     expect(movable({ ...worker, orcaRemoteLead: { ...worker.orcaRemoteLead, releasedAt: 1 } })).toBe(false);
+    // 声明后运行设备 Worker(含已结束协同的)与普通任务一样可换电脑。
+    expect(movable(worker, remoteWorkerRelocation)).toBe(true);
+    expect(movable({ ...worker, orcaRemoteLead: { ...worker.orcaRemoteLead, releasedAt: 1 } }, remoteWorkerRelocation))
+      .toBe(true);
     expect(movable({ ...worker, orcaRemoteLead: null })).toBe(true);
     expect(movable(null)).toBe(false);
     for (const orcaRole of ['lead', 'worker']) {
