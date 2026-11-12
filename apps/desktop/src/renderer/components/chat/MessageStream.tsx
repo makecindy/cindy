@@ -332,7 +332,7 @@ function hasNestedScrollableAncestorThatCanScrollDown(
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 import { MessageSourceLabels } from './MessageSourceLabels';
-import { attachBotStartedTasks, BotStartedTasks, collectBotStartedTasks } from './BotStartedTasks';
+import { attachBotStartedTasks, BotStartedTasks, collectBotStartedTasks, collectMessageStatusQueries } from './BotStartedTasks';
 import { BotMessageTimelineHeader } from './BotMessageTimelineHeader';
 import { AskUserQuestionBubble } from './AskUserQuestionBubble';
 import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
@@ -1519,6 +1519,9 @@ export function buildRenderItems(
         : 'other';
     });
   }
+  // get_message_status 的结果索引按「目标会话 + 消息 ID」成对匹配；每次构建只
+  // 收集一次，各轮次 collectBotStartedTasks 共享，没有发送的轮次不再扫历史。
+  const botStatusQueries = opts?.botSessionId ? collectMessageStatusQueries(allMessages) : null;
   // ── Pass -1: 剔除子代理内部消息 ──
   // 后台 Agent/Task 跑起来后,SDK 会把子代理自己的 thinking / 正文 / 工具调用一并
   // echo 回主流(每条都带 parent_tool_use_id)。这些是**子任务内部的经过**,不是父
@@ -1895,7 +1898,7 @@ export function buildRenderItems(
 
     const slice = originalTurnSlice(lo, hi);
     if (opts?.botSessionId) {
-      const startedTasks = collectBotStartedTasks(slice, allMessages);
+      const startedTasks = collectBotStartedTasks(slice, botStatusQueries);
       if (startedTasks.length > 0) {
         items.push({ type: 'bot_started_tasks', key: `started-tasks-${messages[lo].clientId}`, tasks: startedTasks });
       }

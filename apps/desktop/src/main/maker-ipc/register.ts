@@ -17933,6 +17933,34 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   /**
+   * 未派发即被移除的排队消息回执证据（撤回 / 清理 / 拦截 / 合并）。
+   * get_message_status 需要把「有效回执、消息已不会送达」与「ID 无效」区分开，
+   * 但这类移除不产生落库消息行，这里按 sessionId + clientId 留痕。
+   * 只记内存、不封 clientId 名空间：同一 id 之后允许重新入队（届时队列与
+   * 持久化查询的结果自然覆盖本表）；恢复快照里的陈旧项丢弃时同样走
+   * onDiscardedQueuedMessage，进程重启后本表随新一轮丢弃自然重建。
+   */
+  const DISCARDED_STATUS_EVIDENCE_PER_SESSION = 256;
+  const DISCARDED_STATUS_EVIDENCE_SESSIONS = 512;
+  const discardedMessageStatusEvidence = new Map<string, Set<string>>();
+  const noteDiscardedMessageStatus = (sessionId: string, clientId: string): void => {
+    const ids = discardedMessageStatusEvidence.get(sessionId) ?? new Set<string>();
+    ids.delete(clientId);
+    const oldest = ids.keys().next().value;
+    if (ids.size >= DISCARDED_STATUS_EVIDENCE_PER_SESSION && oldest !== undefined) {
+      ids.delete(oldest);
+    }
+    ids.add(clientId);
+    discardedMessageStatusEvidence.delete(sessionId);
+    discardedMessageStatusEvidence.set(sessionId, ids);
+    while (discardedMessageStatusEvidence.size > DISCARDED_STATUS_EVIDENCE_SESSIONS) {
+      const staleSession = discardedMessageStatusEvidence.keys().next().value;
+      if (staleSession === undefined) break;
+      discardedMessageStatusEvidence.delete(staleSession);
+    }
+  };
+
+  /**
    * get_message_status 的本机实现：队列快照（含崩溃恢复）→ active turn →
    * messages 表持久化行与首个回复行，归并成 queued/processing/dispatched/
    * consumed/failed。device-link 远程入口复用同一函数，保证两侧口径一致。
@@ -18044,6 +18072,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         firstReply,
       });
       if (!snapshot) {
+        // 队列与 messages 表都查不到、但宿主记录过它在派发前被移除：
+        // 这是有效回执对应的 failed，不是「ID 无效」的 NOT_FOUND。
+        if (discardedMessageStatusEvidence.get(sessionId)?.has(messageId)) {
+          return {
+            ok: true,
+            status: 'failed',
+            detail: '消息在派发前被撤回或清理，不会再送达。',
+          };
+        }
         return {
           ok: false,
           errorCode: 'NOT_FOUND',
@@ -20893,6 +20930,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       buildOrcaQueueDispatchNote(item, pendingQueue),
     // 队列项未派发即被丢弃(stop/remove/clearSession) → 释放暂存的 accepted 副作用, 防回调表泄漏。
     onDiscardedQueuedMessage: (sessionId, item) => {
+      noteDiscardedMessageStatus(sessionId, item.clientId);
       void settleTaskActionInput(item).catch(() => undefined);
       notePluginTaskLifecycle(service => service.discard(sessionId, item, 'cancelled'));
       if (item.durableDelivery === true) {

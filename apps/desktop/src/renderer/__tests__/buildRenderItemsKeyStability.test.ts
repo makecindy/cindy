@@ -873,8 +873,8 @@ describe('buildRenderItems — key stability', () => {
       mkUser('u1'),
       mkTool('send-1', 'mcp__cindy_helper__call_tool', { name: 'send_to_session', args: { title: 'Fix bug' } }),
       mkResult('send-1-r', 'tu-send-1', receipt('s-1', 'queued', 'Fix bug', 'q-msg-1')),
-      mkTool('status-1', 'mcp__cindy_helper__call_tool', { name: 'get_message_status', args: { message_id: 'q-msg-1' } }),
-      mkResult('status-1-r', 'tu-status-1', statusResult('q-msg-1', 'processing')),
+      mkTool('status-1', 'mcp__cindy_helper__call_tool', { name: 'get_message_status', args: { session_id: 's-1', message_id: 'q-msg-1' } }),
+      mkResult('status-1-r', 'tu-status-1', statusResult('q-msg-1', 'processing', 's-1')),
       mkUser('u2'),
     ];
 
@@ -894,6 +894,38 @@ describe('buildRenderItems — key stability', () => {
     expect(reply?.type === 'message' ? reply.message.botStartedTasks : null).toEqual([
       { sessionId: 's-1', title: 'Fix bug', created: false, queuedMessageId: 'q-msg-1', status: 'processing' },
     ]);
+  });
+
+  it('does not let a later unqueried send inherit the earlier message badge', () => {
+    // 回归（PR #10007 review）：同会话第二条发送未查询时不得继承
+    // 前一条已回复的徽章——状态必须按「目标会话 + 消息 ID」成对匹配。
+    const receipt = (id: string, wake: string, title: string, qId?: string) =>
+      JSON.stringify({ ok: true, target_session_id: id, wake_kind: wake, target_title: title, ...(qId ? { queued_message_id: qId } : {}) });
+    const statusResult = (msgId: string, status: string, sessId: string) =>
+      JSON.stringify({ ok: true, session_id: sessId, message_id: msgId, status });
+
+    const messages = [
+      mkUser('u1'),
+      mkTool('send-1', 'mcp__cindy_helper__call_tool', { name: 'send_to_session', args: {} }),
+      mkResult('send-1-r', 'tu-send-1', receipt('s-1', 'queued', 'Fix bug', 'q-msg-1')),
+      mkTool('status-1', 'mcp__cindy_helper__call_tool', { name: 'get_message_status', args: { session_id: 's-1', message_id: 'q-msg-1' } }),
+      mkResult('status-1-r', 'tu-status-1', statusResult('q-msg-1', 'consumed', 's-1')),
+      mkTool('send-2', 'mcp__cindy_helper__call_tool', { name: 'send_to_session', args: {} }),
+      mkResult('send-2-r', 'tu-send-2', receipt('s-1', 'queued', 'Fix bug', 'q-msg-2')),
+      mkUser('u2'),
+    ];
+
+    const expectedTasks = [
+      { sessionId: 's-1', title: 'Fix bug', created: false, queuedMessageId: 'q-msg-2' },
+    ];
+    const started = buildRenderItems(messages, undefined, undefined, { botSessionId: 'bot-chat' })
+      .items.filter((item) => item.type === 'bot_started_tasks');
+    expect(started).toEqual([{ type: 'bot_started_tasks', key: 'started-tasks-u1', tasks: expectedTasks }]);
+
+    const withReply = [...messages.slice(0, -1), mkAssistant('reply', 'Done.'), mkUser('u2')];
+    const attached = attachBotStartedTasks(buildRenderItems(withReply, undefined, undefined, { botSessionId: 'bot-chat' }).items, withReply);
+    const reply = attached.find((item) => item.type === 'message' && item.message.clientId === 'reply');
+    expect(reply?.type === 'message' ? reply.message.botStartedTasks : null).toEqual(expectedTasks);
   });
 
   describe('bot sessions hand the turn over to deliverables', () => {

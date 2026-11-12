@@ -68,7 +68,16 @@ function receiptOf(content: unknown): Record<string, unknown> | null {
   return receipt?.ok === true && (typeof receipt.target_session_id === 'string' || typeof receipt.session_id === 'string') ? receipt : null;
 }
 
-/** 提取 turn/session 中的 get_message_status 工具查询结果（messageId/sessionId -> status）。 */
+/** 送达状态徽章的匹配键：目标会话 + 消息 ID 成对，缺一不构成有效条目。 */
+function messageStatusQueryKey(sessionId: string, messageId: string): string {
+  return JSON.stringify([sessionId, messageId]);
+}
+
+/**
+ * 提取 turn/session 中的 get_message_status 工具查询结果。键是「目标会话 +
+ * 消息 ID」的配对：状态只落到被查询的那条消息上，同会话里未查询的消息不得
+ * 继承徽章（不允许会话级兜底）。
+ */
 export function collectMessageStatusQueries(messages: readonly ChatMessage[]): Map<string, BotStartedTaskStatus> {
   const queries = new Map<string, BotStartedTaskStatus>();
   const statusCalls = new Map<string, { sessionId?: string; messageId?: string }>();
@@ -96,8 +105,7 @@ export function collectMessageStatusQueries(messages: readonly ChatMessage[]): M
     const rawStatus = payload.status.trim() as BotStartedTaskStatus;
     const sessionId = (typeof payload.session_id === 'string' ? payload.session_id.trim() : undefined) ?? call.sessionId;
     const messageId = (typeof payload.message_id === 'string' ? payload.message_id.trim() : undefined) ?? call.messageId;
-    if (messageId) queries.set(messageId, rawStatus);
-    if (sessionId) queries.set(sessionId, rawStatus);
+    if (sessionId && messageId) queries.set(messageStatusQueryKey(sessionId, messageId), rawStatus);
   }
 
   return queries;
@@ -108,6 +116,10 @@ export function collectMessageStatusQueries(messages: readonly ChatMessage[]): M
  * 与 messageSourceNote.ts 保持一致：
  *   [消息来源] 本条由任务「标题」(session_id: id) 发送，不是用户本人输入。
  *   [消息来源] 本条由任务 (session_id: id) 发送，不是用户本人输入。
+ *
+ * 注意：落库正文里的这一行只是不可信文本（该说明只进当次 wire 正文、本就不该
+ * 落库），解析结果不能用于判定消息发送方——归属只看 agentMeta.origin 的宿主
+ * 盖章。
  */
 export function parseMessageSourceNote(content: string): { title?: string; sessionId?: string; cleanBody: string } | null {
   if (!content || !content.startsWith('[消息来源]')) return null;
@@ -125,11 +137,19 @@ export function parseMessageSourceNote(content: string): { title?: string; sessi
   };
 }
 
-/** The tasks one turn started or sent work to, in order, once each. */
-export function collectBotStartedTasks(turn: readonly ChatMessage[], allMessages?: readonly ChatMessage[]): BotStartedTask[] {
-  const statusQueries = collectMessageStatusQueries(allMessages ?? turn);
+/**
+ * The tasks one turn started or sent work to, in order, once each.
+ * `statusQueries` 由调用方按全量消息构建一次并传入（buildRenderItems 各轮次共享
+ * 同一份映射）；缺省时本轮不做查询状态匹配，也不再退回扫描消息历史。
+ */
+export function collectBotStartedTasks(
+  turn: readonly ChatMessage[],
+  statusQueries?: ReadonlyMap<string, BotStartedTaskStatus> | null,
+): BotStartedTask[] {
   const sends = new Set(turn.filter((message) => message.role === 'tool_use' && isSendToSession(message))
     .map((message) => message.toolUseId).filter((id): id is string => typeof id === 'string'));
+  // 轮次没有任何 send_to_session 时直接返回，不做状态匹配。
+  if (sends.size === 0) return [];
   const tasks = new Map<string, BotStartedTask>();
   for (const message of turn) {
     if (message.role !== 'tool_result' || !message.toolUseId || !sends.has(message.toolUseId)) continue;
@@ -140,12 +160,13 @@ export function collectBotStartedTasks(turn: readonly ChatMessage[], allMessages
     const queuedMessageId = typeof receipt.queued_message_id === 'string' && receipt.queued_message_id.trim()
       ? receipt.queued_message_id.trim()
       : previous?.queuedMessageId;
-    const statusFromQuery = (queuedMessageId ? statusQueries.get(queuedMessageId) : undefined)
-      ?? statusQueries.get(sessionId);
+    const statusFromQuery = queuedMessageId
+      ? statusQueries?.get(messageStatusQueryKey(sessionId, queuedMessageId))
+      : undefined;
     const statusFromReceipt = typeof receipt.status === 'string'
       ? (receipt.status.trim() as BotStartedTaskStatus)
       : undefined;
-    const status = statusFromQuery ?? previous?.status ?? statusFromReceipt;
+    const status = statusFromQuery ?? statusFromReceipt;
     tasks.set(sessionId, {
       sessionId,
       title: typeof receipt.target_title === 'string' && receipt.target_title.trim()
@@ -325,9 +346,9 @@ export function attachBotStartedTasks(items: RenderItem[], allMessages?: readonl
     if (item.type !== 'bot_started_tasks') { result.push(item); continue; }
     const tasks = statusQueries
       ? item.tasks.map((task) => {
-          const status = (task.queuedMessageId ? statusQueries.get(task.queuedMessageId) : undefined)
-            ?? statusQueries.get(task.sessionId)
-            ?? task.status;
+          const status = (task.queuedMessageId
+            ? statusQueries.get(messageStatusQueryKey(task.sessionId, task.queuedMessageId))
+            : undefined) ?? task.status;
           return status ? { ...task, status } : task;
         })
       : item.tasks;

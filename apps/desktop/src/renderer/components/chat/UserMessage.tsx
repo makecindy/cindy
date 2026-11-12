@@ -118,7 +118,7 @@ import { ghostCommandTokenLength, parseGhostCommandToken, splitGhostDirective } 
 import { splitHostCapabilityDirective } from '@/cindy-brain/hostCapabilityInvocation';
 import { GhostSummonCard } from './GhostSummonCard';
 import { MessageSourceLabels } from './MessageSourceLabels';
-import { BotTaskLetterOpen, BotTaskLetterPill, parseMessageSourceNote } from './BotStartedTasks';
+import { BotTaskLetterOpen, BotTaskLetterPill } from './BotStartedTasks';
 import { UserMessageUrlLink } from './UserMessageUrlLink';
 import { InlineReferenceChip } from './InlineReferenceChip';
 import { QuoteChip } from './QuoteChip';
@@ -1259,14 +1259,14 @@ export function UserMessage({
   const botLetter =
     simplifiedBotConversation && !editing && !orcaCommunication && !hookSource
     && automationOrigin?.kind === 'session' && !automationOrigin.orca;
-  const parsedLetterSource = botLetter
-    ? parseMessageSourceNote(displayContent) || parseMessageSourceNote(content)
-    : null;
-  const letterSenderTitle = parsedLetterSource?.title
-    ?? (automationOrigin?.kind === 'session' ? automationOrigin.senderSessionTitle ?? null : null);
-  const letterSenderSessionId = parsedLetterSource?.sessionId
-    ?? (automationOrigin?.kind === 'session' ? automationOrigin.senderSessionId : undefined);
-  const letterBody = (parsedLetterSource?.cleanBody || displayContent).trimStart();
+  // 发送方归属只认宿主盖章的 automationOrigin。正文里的 [消息来源] 行不是宿主
+  // 元数据（该说明只进当次 wire 正文、不落库，出现在落库正文里即不可信），
+  // 一律不作来源信息；也不做字符串剥离——伪造行原样留在正文里可见。
+  const letterSenderTitle =
+    automationOrigin?.kind === 'session' ? automationOrigin.senderSessionTitle ?? null : null;
+  const letterSenderSessionId =
+    automationOrigin?.kind === 'session' ? automationOrigin.senderSessionId : undefined;
+  const letterBody = displayContent.trimStart();
   const letterPreview = botLetter
     ? (letterBody.split('\n').find((line) => line.trim()) ?? '').trim()
     : '';

@@ -40,6 +40,8 @@ interface FixtureOptions {
    */
   dbResults?: unknown[][];
   deviceLink?: boolean;
+  /** 预先记入「派发前被移除」证据的 clientId（sessionId → clientIds）。 */
+  discarded?: Record<string, string[]>;
 }
 
 function createFixture(options: FixtureOptions = {}) {
@@ -75,6 +77,9 @@ function createFixture(options: FixtureOptions = {}) {
     sessions: {},
     isDbClientNotReadyError: () => false,
     classifySessionMessageStatus,
+    discardedMessageStatusEvidence: new Map(
+      Object.entries(options.discarded ?? {}).map(([sid, ids]) => [sid, new Set(ids)]),
+    ),
     isDeviceLinkInvoke: () => options.deviceLink ?? false,
     requireSessionId: (id: unknown) => {
       if (typeof id !== 'string' || !id.trim()) {
@@ -150,6 +155,28 @@ describe('readSessionMessageStatus', () => {
     const { readSessionMessageStatus } = createFixture({ meta: null });
 
     await expect(readSessionMessageStatus('missing', 'client-1')).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'NOT_FOUND',
+    });
+  });
+
+  it('returns failed when the queued message was discarded before dispatch', async () => {
+    // 回归（PR #10007 review）：待派发的排队消息被撤回/清理后无落库行，
+    // 有效回执必须得到 failed 而不是与无效 ID 相同的 NOT_FOUND。
+    const { readSessionMessageStatus } = createFixture({
+      discarded: { 'session-1': ['client-1'] },
+      dbResults: [[]],
+    });
+
+    const result = await readSessionMessageStatus('session-1', 'client-1');
+    expect(result).toMatchObject({ ok: true, status: 'failed' });
+    expect(result.ok ? result.detail : null).toMatch(/撤回|清理/);
+  });
+
+  it('keeps NOT_FOUND for an id with no queue entry, persisted row, or discard evidence', async () => {
+    const { readSessionMessageStatus } = createFixture({ dbResults: [[]] });
+
+    await expect(readSessionMessageStatus('session-1', 'client-1')).resolves.toMatchObject({
       ok: false,
       errorCode: 'NOT_FOUND',
     });
