@@ -4335,7 +4335,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   return validateGhostManifestInput(value, false, false);
 }
 
-/** Stored market releases retain historical mcpApps and parameter sizes; other fields remain strict. */
+/** Stored releases retain historical mcpApps, wallpaper data and parameter sizes; agent declarations remain strict. */
 export function validateStoredGhostManifest(value: unknown): ManifestValidation {
   return validateWithStoredMcpApps(value, raw => validateGhostManifestInput(raw, false, true));
 }
@@ -4350,7 +4350,8 @@ function validateGhostManifestInput(
   preserveHistoricalTasks: boolean,
   preserveHistoricalParameterSize: boolean,
 ): ManifestValidation {
-  const preparation = prepareGhostManifestForValidation(value, preserveHistoricalTasks);
+  // Wallpaper was formerly an unknown field in both stored releases and installed snapshots.
+  const preparation = prepareGhostManifestForValidation(value, preserveHistoricalParameterSize);
   if (!preparation.ok) return preparation;
   const prepared = preparation.prepared;
   const raw = prepared.raw;

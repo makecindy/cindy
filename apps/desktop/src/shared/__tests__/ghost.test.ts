@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateGhostManifest as validateProtocolManifest } from '@cindy/plugin-protocol';
+import { validateGhostManifest as validateProtocolManifest, validateStoredGhostManifest as validateStoredProtocolManifest } from '@cindy/plugin-protocol';
 
 import {
   GHOST_CARD_ACTION_ID_RE,
@@ -5210,4 +5210,24 @@ describe('ghost · readme 详细介绍声明', () => {
     expect(validateProtocolManifest(raw).ok).toBe(ok);
     if (desktop.ok) expect(desktop.manifest.readme).toEqual(readme);
   });
+});
+
+// Unit regression for #9682: existing cases covered strict new declarations, not
+// stored-release wallpaper values accepted before this capability existed.
+// Production validators must retain false/string legacy data without exposing a
+// permission, while new packages remain strict and unrelated agent validation stays strict.
+it('preserves historical wallpaper values in stored releases without granting permission', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.129', id: 'legacy-wallpaper',
+    name: 'Legacy wallpaper', version: '1.0.0', entry: 'main.js' };
+  for (const wallpaper of [false, 'legacy']) {
+    const input = { ...base, wallpaper };
+    expect(validateGhostManifest(input).ok).toBe(false);
+    expect(validateStoredProtocolManifest(input)).toMatchObject({ ok: true, manifest: { wallpaper } });
+    for (const validate of [validateStoredGhostManifest, validateInstalledGhostManifest]) {
+      const result = validate(input);
+      expect(result).toMatchObject({ ok: true, manifest: { wallpaper } });
+      if (result.ok) expect(ghostPermissionItems(result.manifest).some(item => item.kind === 'wallpaper')).toBe(false);
+    }
+    expect(validateStoredGhostManifest({ ...input, agent: { tasks: 'historical' } }).ok).toBe(false);
+  }
 });
