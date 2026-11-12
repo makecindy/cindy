@@ -8250,7 +8250,91 @@
         "mcpAppOnly": "僅頁面可用",
         "uiPageAccess": "頁面：{{pages}}；網域：{{domains}}；頁面可呼叫的工具：{{tools}}",
         "uiHost": "在 Cindy 中提供介面與主機操作",
-        "uiHostAccess": "{{subject}}：{{access}}"
+        "uiHostAccess": "{{subject}}：{{access}}",
+        "hostUi": {
+          "view": "顯示{{scope}}頁面，使用資源「{{name}}」",
+          "resource": "使用{{kind}}資源「{{name}}」",
+          "contribution": "在{{position}}顯示{{kind}}",
+          "command": "提供插件命令",
+          "namedAccess": "「{{name}}」：{{details}}",
+          "setting": "提供設定項（{{type}}）",
+          "settingTypes": {
+            "boolean": "開關",
+            "string": "文字",
+            "number": "數字"
+          },
+          "minimum": "最小值：{{value}}",
+          "maximum": "最大值：{{value}}",
+          "maxLength": "最多字元數：{{value}}",
+          "extensions": "接受的副檔名：{{value}}",
+          "mimeTypes": "接受的檔案類型：{{value}}",
+          "trigger": "補全觸發字元：{{value}}",
+          "openView": "開啟頁面「{{name}}」",
+          "tool": "呼叫工具「{{name}}」",
+          "arguments": "參數：{{value}}",
+          "listValue": "清單 [{{value}}]",
+          "fieldsValue": "欄位 ({{value}})",
+          "nullValue": "未設定",
+          "shortcut": "快捷鍵：{{value}}",
+          "popover": "在入口旁開啟頁面",
+          "roles": "適用訊息來源：{{value}}",
+          "tools": "適用工具：{{value}}",
+          "plugins": "適用插件：{{value}}",
+          "options": "可選值：{{value}}",
+          "yes": "是",
+          "no": "否",
+          "unavailable": "暫時無法顯示這項權限的詳情",
+          "capabilities": {
+            "context": "讀取目前任務與選取文字",
+            "draft": "讀寫輸入框草稿",
+            "appearance": "修改已宣告的外觀設定",
+            "visibility": "顯示或隱藏視窗與已宣告的介面區域"
+          },
+          "fields": {
+            "uiFont": "修改介面字型",
+            "codeFont": "修改程式碼字型",
+            "bodyFont": "修改正文字型",
+            "wallpaper": "修改桌布",
+            "theme": "修改訊息配色",
+            "reading": "修改閱讀寬度與行距",
+            "contentStyle": "修改訊息間距與氣泡樣式"
+          },
+          "positions": {
+            "composer_toolbar": "輸入框工具列",
+            "session_header": "任務標題列",
+            "statusbar": "狀態列",
+            "message_actions": "訊息操作列",
+            "message_menu": "訊息更多選單",
+            "turn_footer": "回覆底部",
+            "message_body": "訊息正文",
+            "tool_body": "工具結果",
+            "sidebar_navigation": "側邊導覽列",
+            "session_menu": "任務選單",
+            "settings_section": "設定頁面",
+            "composer_completion": "輸入補全入口",
+            "composer_attachment": "附件操作區",
+            "sidebar_section": "側欄內容區",
+            "window_titlebar": "視窗標題列"
+          },
+          "kinds": {
+            "button": "按鈕",
+            "select": "下拉選項",
+            "status": "狀態文字"
+          },
+          "scopes": {
+            "global": "全域",
+            "task": "目前任務"
+          },
+          "resources": {
+            "font": "字型",
+            "image": "圖片",
+            "video": "影片"
+          },
+          "speakers": {
+            "user": "使用者",
+            "assistant": "助手"
+          }
+        }
       },
       "connections": {
         "confirmTitle": "新增連線地址",
@@ -11137,7 +11221,8 @@
         "capability": {
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
-          "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。"
+          "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。",
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，連接你的 Cindy 後才能讓 Cindy 替你工作（你的電腦上現在沒有在線的 Cindy）。"
         }
       },
       "settings": {
@@ -11262,6 +11347,38 @@
           "failed": "失敗了",
           "cancelled": "已取消",
           "timed-out": "已逾時"
+        },
+        "label": "任務",
+        "untitled": "未命名任務",
+        "askedBy": "{{requester}} 交辦的",
+        "pr": "PR #{{number}}",
+        "open": "開啟任務「{{title}}」",
+        "live": {
+          "running": "進行中",
+          "waiting": "等待回覆",
+          "idle": "閒置",
+          "failed": "出錯了"
+        },
+        "othersSaid": "話題裡其他人說的"
+      },
+      "assistant": {
+        "groupRecent": "群裡最近的訊息",
+        "groupNew": "群裡的新訊息",
+        "threadRecent": "話題裡最近的訊息",
+        "threadNew": "話題裡的新訊息",
+        "replyingTo": "回覆「{{name}}」：{{text}}",
+        "earlierOmitted": "（更早的訊息略去）",
+        "actingFor": "{{name}} · 替 {{person}}",
+        "checkout": {
+          "gitMissing": "（Cindy）這個群的專案 {{repo}} 還沒下載到這台電腦：這台電腦還沒有安裝 git。{{guide}}裝好後再 @Cindy，Cindy 會自動下載專案並在裡面工作。",
+          "signInOpened": "（Cindy）這個群的專案 {{repo}} 還沒下載到這台電腦：需要先連接你的 GitHub 帳號。Cindy 已在這台電腦上開啟 GitHub 登入，登入後再 @Cindy，Cindy 會自動下載專案。",
+          "signIn": "（Cindy）這個群的專案 {{repo}} 還沒下載到這台電腦：需要先連接你的 GitHub 帳號。請在這台電腦的 Cindy 裡登入 GitHub，然後再 @Cindy。",
+          "unavailable": "（Cindy）這個群的專案 {{repo}} 沒能下載到這台電腦：你的 GitHub 帳號可能沒有這個儲存庫的權限，或者網路不通。確認能在 GitHub 上開啟這個儲存庫後再 @Cindy。",
+          "installGit": {
+            "darwin": "在「終端機」裡執行 xcode-select --install，依提示安裝即可。",
+            "win32": "從 https://git-scm.com/download/win 下載 Git 安裝，全部使用預設選項即可。",
+            "linux": "用系統的套件管理工具安裝 git（例如 sudo apt install git）。"
+          }
         }
       },
       "files": {
@@ -11465,10 +11582,21 @@
           "accessTools": "可用工具與資料",
           "replies": "夥伴怎麼接話",
           "replyModeMentionedNote": "不 @ 人時，夥伴不會接話。",
+          "assistant": "群裡的 Cindy",
+          "assistantHint": "誰 @ 它，就在誰自己的電腦上做。",
+          "replyModeAssistant": "Cindy 回答",
+          "replyModeAssistantNote": "由群裡的 Cindy 回答。",
           "work": "分工",
           "ownFolder": "群組自己的資料夾",
-          "projectDirHint": "分工時，夥伴們在這裡工作。",
+          "projectDirHint": "只在這台電腦上生效。",
           "projectDirClearHint": "改用群組自己的資料夾",
+          "project": "專案",
+          "projectCaption": "夥伴在群裡回覆和分工都在這個專案裡做。儲存庫全群共用，資料夾只存在這台電腦上。",
+          "githubRepo": "GitHub 儲存庫",
+          "githubRepoHint": "填 owner/name。沒選資料夾的電腦會用本機的這個專案，沒有就自動下載一份。",
+          "githubRepoSaveFailed": "儲存庫沒有儲存，請檢查後再試。",
+          "projectFolder": "這台電腦上的資料夾",
+          "projectDirAutoHint": "依儲存庫自動找到的本機專案。",
           "organizerHint": "安排誰做哪一步；預設是第一位夥伴。",
           "autoContinueHint": "關閉時，每一步都等你點「繼續」。",
           "workCaption": "選了 git 專案時，每次分工都會開新分支，不動你手上的程式碼。專案資料夾和自動交接只在這台電腦上生效。",
@@ -11778,6 +11906,8 @@
       "takeOverConflict": "{{name}} 已經換到「{{device}}」繼續了",
       "takeOverOffline": "連不上伺服器，暫時無法在這台電腦繼續",
       "takeOverFailed": "未能在這台電腦上接手 {{name}}",
+      "profileIdentityTooLong": "雲端人格資料超過 {{limit}} 字元，無法接手。請縮短資料並同步後重試；現有資料已保留。",
+      "profileUserTooLong": "雲端使用者資料超過 {{limit}} 字元，無法接手。請縮短資料並同步後重試；現有資料已保留。",
       "localCindyConflict": "接手的電腦上已有另一位 Cindy。請先在那位 Cindy 的設定中處理，或選擇其他主力電腦",
       "localCindyConflictAction": "查看本機 Cindy 設定",
       "notEnabled": "目前的伺服器不支援更換主力電腦",
@@ -11844,7 +11974,20 @@
       "transferred": "{{name}} 已交給「{{device}}」",
       "transferConflict": "{{name}} 的主力電腦已經變了，這次沒有交出",
       "transferOffline": "連不上伺服器，{{name}} 仍在這台電腦執行",
-      "transferFailed": "未能把 {{name}} 交給「{{device}}」"
+      "transferFailed": "未能把 {{name}} 交給「{{device}}」",
+      "repair": {
+        "action": "修改資料並重試",
+        "title": "更正夥伴資料",
+        "description": "儲存後將在這台電腦恢復夥伴。原始資料會先備份到這台電腦。",
+        "save": "儲存並恢復",
+        "count": "{{count}} / {{limit}} 字",
+        "over": "超出 {{count}} 字，請縮短後儲存。",
+        "changed": "資料或主力電腦已變更，請重新讀取後更正。",
+        "loadFailed": "暫時無法讀取資料，請重試。",
+        "backupFailed": "原始資料備份失敗，尚未套用更正。請檢查可用磁碟空間後重試。",
+        "saveFailed": "夥伴尚未恢復，你填寫的內容仍保留在這裡。請稍後重試。",
+        "reload": "重新讀取"
+      }
     },
     "market": {
       "heading": "發現夥伴",
@@ -14213,6 +14356,8 @@
       "sessionSentNamed": "由任務「{{name}}」傳送",
       "sessionViewSource": "檢視來源任務",
       "botSentNamed": "由夥伴「{{name}}」傳送",
+      "groupThreadSent": "由「{{name}}」在群聊「{{group}}」的話題裡傳送",
+      "groupRequestSent": "來自群「{{group}}」· {{name}}",
       "orcaFromLead": "來自 Lead 的訊息",
       "orcaFromWorker": "來自 Worker 的訊息",
       "orcaFromWorkerBatch": "系統回傳的 {{count}} 條 Worker 結果",
@@ -17634,6 +17779,7 @@
       "dingtalkBotDisconnectFailed": "釘釘機器人解綁失敗"
     },
     "errors": {
+      "piStartupCloudFile": "發現僅在雲端的指令檔案：{{path}}。它可能使 Pi 啟動等待。請在 Finder 中下載該檔案，確認已儲存在本機後重試；逾時也可能另有原因。",
       "openFileFailed": "無法在系統中開啟檔案",
       "emptyResponse": "模型沒有返回內容。請重試。上下文很長時，也可以換一個模型。",
       "turnFailed": "任務執行失敗（模型未返回錯誤詳情），請重試。",

@@ -825,11 +825,16 @@ export default {
         await action();
         assert.ok((await bottomGap()) < 1, `${step} keeps the thread pinned to the bottom`);
       }
-      const before = await scroller.evaluate((el) => {
-        el.scrollTop = 180;
-        el.dispatchEvent(new Event('scroll', { bubbles: true }));
-        return el.scrollTop;
+      // Use the reader's upward wheel gesture. A synthetic scroll after a
+      // banner resize can legitimately remain in automatic-follow mode.
+      const top = await scroller.evaluate((el) => el.scrollTop);
+      await scroller.hover();
+      await page.mouse.wheel(0, 180 - top);
+      await page.waitForFunction(() => {
+        const el = document.querySelector('[data-testid="bot-group-timeline"]');
+        return el && Math.abs(el.scrollTop - 180) < 1;
       });
+      const before = await scroller.evaluate((el) => el.scrollTop);
       for (const [step, action] of [
         ['connection', () => connect()],
         ['collapse', collapse],
