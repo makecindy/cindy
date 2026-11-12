@@ -43,7 +43,7 @@ export function ProviderAccountUsageModule({ provider }: { provider?: ProviderVi
   const [minimaxProbe, setMinimaxProbe] = useState(0);
   const minimaxAgent = minimaxAgents[Math.min(minimaxProbe, minimaxAgents.length - 1)];
   const usage = useProviderAccountUsage(
-    deepSeek || zhipu || kimi || opencodeGo || minimax ? provider : undefined,
+    deepSeek || zhipt || kimi || opencodeGo || minimax ? provider : undefined,
     minimax ? minimaxAgent : undefined,
   );
   useEffect(() => {
