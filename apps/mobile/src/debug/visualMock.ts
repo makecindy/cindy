@@ -29,6 +29,7 @@ import type {
   RemoteTextFilePreviewResult,
 } from '@/device-link/mobileMakerTransport';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import { pluginVisualFixture } from '@/debug/pluginVisualFixture';
 import { prCardVisualFixture } from '@/debug/prCardVisualFixture';
 import { mailDraftCardFixture, mailVisualFixture, VISUAL_MAIL_DRAFT_CALL_ID, VISUAL_MAIL_DRAFT_SESSION_ID } from '@/debug/mailVisualFixture';
@@ -173,6 +174,13 @@ export function visualMockDevices(): DeviceView[] {
       remoteControlEnabled: true,
       isSelf: false,
     },
+    // Opt-in six-computer glance scene; regular mocks and imported data stay unchanged.
+    ...(!realData && !awaitingRealData && process.env.EXPO_PUBLIC_CINDY_GLANCE_MULTI_DEVICE_DEMO === '1'
+      ? ['Studio', 'MacBook Pro', 'Windows PC', 'Mac mini', 'Linux Desktop'].map((name, index) => ({
+        deviceId: `visual-glance-computer-${index}`, name: `Demo ${name}`,
+        platform: 'darwin', appVersion: '0.0.0-visual-mock', lastSeenAt: ISO_NOW,
+        online: true, busy: false, remoteControlEnabled: true, isSelf: false,
+      })) : []),
     {
       deviceId: VISUAL_MOCK_OFFLINE_DEVICE_ID,
       name: 'CINDY Offline Mock Mac',
@@ -194,6 +202,10 @@ export function seedVisualMockStore(): void {
   const seededRealData = seedRealDataStore(realDataSnapshot);
   if (seededRealData) return;
 
+  // The mock auth owner is generation zero. Establish its empty in-memory roster cache
+  // before the six-host scene's ordinary roster replies populate it.
+  if (process.env.EXPO_PUBLIC_CINDY_GLANCE_MULTI_DEVICE_DEMO === '1')
+    readRemoteCollectionCache(`${visualMockUser.id}:0`, 'teammates');
   const sessions = visualMockSessions();
   remoteSessionStore.setDeviceIdentity(visualMockDevices().map((device) => ({
     deviceId: device.deviceId,
@@ -253,7 +265,8 @@ export function createVisualMockDeviceLinkContext(): DeviceLinkContextValue {
       lastSeenAt: NOW,
     },
     getPresenceAvailability: (candidateDeviceId: string) =>
-      candidateDeviceId === deviceId ? true : null,
+      candidateDeviceId === deviceId ? true
+        : visualMockDevices().find(device => device.deviceId === candidateDeviceId)?.online === true ? true : null,
     openLink: async (): Promise<LinkAcceptPayload> => ({
       appVersion: '0.0.0-visual-mock',
       allowlistHash: 'visual-mock',
@@ -276,6 +289,12 @@ async function visualMockInvoke<T = unknown>(
   channel: string,
   args: unknown[] = [],
 ): Promise<T> {
+  // The extra computers have no recent work; sample tasks belong to their original host.
+  if (_deviceId.startsWith('visual-glance-computer-')) {
+    if (channel === 'local-db:sessions:list') return [] as T;
+    if (channel === 'local-db:history:query') return { ok: true, sessions: [], hasMore: false } as T;
+    if (channel === 'maker:bot-delegations:list') return { ok: true, delegations: [] } as T;
+  }
   if (channel === 'local-db:messages:around-client-id' && typeof args[0] === 'string' && args[0].startsWith('qa-process-')) {
     if (args[0] === 'qa-process-unavailable') throw new Error('Process unavailable');
     return [
