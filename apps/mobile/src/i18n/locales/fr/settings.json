@@ -171,7 +171,11 @@
       "auto": "Automatique",
       "on": "Toujours activées",
       "off": "Désactivées"
-    }
+    },
+    "actionReplyPlaceholder": "Saisir une réponse",
+    "actionNotDelivered": "Cela n’est pas parvenu à votre ordinateur. Ouvrez Cindy pour répondre.",
+    "actionReplyNotDelivered": "Votre réponse n’a pas été envoyée. Ouvrez Cindy pour la renvoyer : {{text}}",
+    "actionRequestEnded": "Cette demande a déjà reçu une réponse ou a expiré."
   },
   "about": {
     "sectionTitle": "À propos de ce téléphone",
