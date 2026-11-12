@@ -29,8 +29,7 @@ const openTab = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('@/features/right-sidebar/lib/openPluginTaskTab', () => ({ openPluginTaskTab: openTab }));
 const installed = vi.hoisted(() => ({ ghosts: [] as unknown[] }));
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => installed.ghosts }));
-const setupRoute = vi.hoisted(() => vi.fn(async () => '/plugins?market=cindy-simulator'));
-vi.mock('@/features/cc-agent/pluginSkillSetup', () => ({ pluginSetupRoute: setupRoute }));
+const lookup = vi.hoisted(() => vi.fn());
 const navigate = vi.hoisted(() => vi.fn());
 vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }));
 const notices = vi.hoisted(() => vi.fn());
@@ -91,10 +90,11 @@ beforeEach(async () => {
   openTab.mockClear();
   navigate.mockClear();
   notices.mockClear();
-  setupRoute.mockClear();
+  lookup.mockReset();
+  lookup.mockResolvedValue({ items: [{ pluginId: 'cindy-simulator', ghostId: 'cindy-simulator', namespace: null, installState: 'not-installed' }] });
   installed.ghosts = [plugin()];
   resetAutoOpenedTaskLiveScreens();
-  Object.assign(window, { electronAPI: { deviceLink: { invoke } } });
+  Object.assign(window, { electronAPI: { deviceLink: { invoke }, pluginMarket: { lookup } } });
   vi.spyOn(document, 'hasFocus').mockReturnValue(true);
   await i18n.changeLanguage('en');
 });
@@ -205,7 +205,7 @@ it('asks for the plugin instead of opening anything when this computer cannot sh
   fireEvent.click(screen.getByRole('button', { name: 'Install' }));
   await settle();
   await settle();
-  expect(setupRoute).toHaveBeenLastCalledWith(undefined, 'cindy-simulator');
+  expect(lookup).toHaveBeenLastCalledWith(['cindy-simulator']);
   expect(navigate).toHaveBeenCalledExactlyOnceWith('/plugins?market=cindy-simulator');
 
   // Installed but turned off, or too old to show another computer's device: say which.
@@ -286,4 +286,38 @@ it('matches stamped logical source instead of the physical install name', () => 
       [stamped] as never,
     ),
   ).toEqual([]);
+});
+
+// Review #4540881698: the old helper mock hid cross-source installation links.
+// Unit: exercise the actual shared route through both the notice and manual entry;
+// one same-name listing from another source must never become the destination.
+it.each([
+  { name: 'organization alongside root', identity: '_ns__acme__cindy-simulator', sources: [null, 'acme'], route: '/plugins?market=item-1' },
+  { name: 'local with only root available', identity: '_ns__local__cindy-simulator', sources: [null], route: '/plugins' },
+  { name: 'root with unknown legacy source', identity: 'cindy-simulator', sources: [undefined], route: '/plugins' },
+  { name: 'root with explicit verified source', identity: 'cindy-simulator', sources: [null], route: '/plugins?market=item-0' },
+  { name: 'ambiguous same-source listings', identity: '_ns__acme__cindy-simulator', sources: ['acme', 'acme'], route: '/plugins' },
+  { name: 'no listing', identity: '_ns__acme__cindy-simulator', sources: [], route: '/plugins' },
+])('routes both setup actions by verified identity: $name', async ({ identity, sources, route }) => {
+  installed.ghosts = [];
+  lookup.mockResolvedValue({ items: sources.map((namespace, i) => ({
+    pluginId: `item-${i}`, ghostId: 'cindy-simulator', installState: 'not-installed',
+    ...(namespace === undefined ? {} : { namespace }),
+  })) });
+  invoke.mockImplementation(async (_device: string, _channel: string, [request]: [{ op: string }]) =>
+    request.op === 'capabilities'
+      ? { version: 1, enabled: true, liveScreens: true }
+      : { screens: [{ ...listed('sim-a', 'iPhone Air', ['task-1']), pluginIdentity: identity }] });
+  render(<Entries />);
+  await settle();
+  await settle();
+  await act(async () => notices.mock.calls[0][1].action.onClick());
+  expect(navigate).toHaveBeenLastCalledWith(route);
+  navigate.mockClear();
+  fireEvent.click(screen.getByRole('button', { name: 'Install the “Device Simulator” plugin' }));
+  await settle();
+  fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+  await settle();
+  await settle();
+  expect(navigate).toHaveBeenLastCalledWith(route);
 });

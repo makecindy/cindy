@@ -101,9 +101,10 @@ export function taskLiveScreenEntries(
 
 /** Where the user makes the plugin usable: its own page here, else its market listing. */
 async function setupRoute(entry: TaskLiveScreenEntry): Promise<string> {
-  const pluginId = parsePluginStoragePart(entry.pluginIdentity ?? '')?.ghostId ?? entry.plugin;
+  const identity = parsePluginStoragePart(entry.pluginIdentity ?? '');
+  if (!identity) return '/plugins';
   try {
-    return (await pluginSetupRoute(entry.ghost ?? undefined, pluginId)) ?? '/plugins';
+    return (await pluginSetupRoute(entry.ghost ?? undefined, identity.ghostId, identity)) ?? '/plugins';
   } catch {
     return '/plugins';
   }
