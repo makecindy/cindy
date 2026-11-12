@@ -112,3 +112,5 @@ docs/dev-rules/mobile-development.md 的「冷更边界」。 -->
 - [ ] 未提交凭证、令牌或授权文件
 - [ ] 已核对受影响的文档，行为变化涉及的旧结论已同步修订（不涉及则无需修改文档）
 - [ ] 已确认测试结果或说明未执行原因
+- [ ] 涉及列表/分页/轮询/插件扫描时，已在「自动验证」说明每个用户动作的 list/scan/IPC/写事务
+  次数，以及隐藏/离屏是否为 0（见 `docs/dev-rules/engineering-conventions.md` §8）

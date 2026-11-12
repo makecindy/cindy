@@ -50,7 +50,7 @@
     {
       "id": "surface-hover-hsl",
       "light": "0 0% 90%",
-      "dark": "60 2% 17%"
+      "dark": "60 2% 23%"
     },
     {
       "id": "surface-on-card",
@@ -154,7 +154,7 @@
     },
     {
       "id": "text-primary-hsl",
-      "light": "0 0% 9%",
+      "light": "0 0% 15%",
       "dark": "0 0% 83%"
     },
     {
@@ -190,7 +190,7 @@
     {
       "id": "text-tertiary-hsl",
       "light": "0 0% 45%",
-      "dark": "0 0% 45%"
+      "dark": "0 0% 64%"
     },
     {
       "id": "text-disabled",
@@ -969,8 +969,8 @@
     },
     {
       "id": "chat-input-placeholder-subtle",
-      "light": "color-mix(in srgb, var(--chat-input-placeholder) 40%, transparent)",
-      "dark": "color-mix(in srgb, var(--chat-input-placeholder) 40%, transparent)"
+      "light": "var(--chat-input-placeholder)",
+      "dark": "var(--chat-input-placeholder)"
     },
     {
       "id": "chat-input-text",
@@ -1459,8 +1459,8 @@
     },
     {
       "id": "chat-placeholder-text",
-      "light": "var(--text-tertiary)",
-      "dark": "var(--text-tertiary)"
+      "light": "var(--text-placeholder)",
+      "dark": "var(--text-placeholder)"
     },
     {
       "id": "msg-user-bg",

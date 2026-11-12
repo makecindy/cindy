@@ -28,20 +28,8 @@ describe('Pi binary distribution contract', () => {
     expect(host).not.toContain('安装包自带');
   });
 
-  it('bounds optional Pi preparation so CDN trouble cannot hold the startup page', () => {
-    const bootstrap = fs.readFileSync(
-      path.join(desktopRoot, 'src/main/bootstrap-electron.ts'),
-      'utf8',
-    );
-    const binaries = fs.readFileSync(
-      path.join(desktopRoot, 'src/main/agent-binaries/index.ts'),
-      'utf8',
-    );
-
-    expect(bootstrap).toContain('PI_AGENT_INSTALL_STARTUP_DEADLINE_MS = 60_000');
-    expect(bootstrap).toContain('signal: piInstallSignal');
-    expect(binaries).toContain('signal: opts.signal');
-  });
+  // Offline preparation is now covered behaviorally by factory-startup-update
+  // and startup-policy; startup no longer downloads Pi under a 60-second timer.
 
   it('preserves a locally self-updated Pi when its real version is not below the manifest', () => {
     const binaries = fs.readFileSync(

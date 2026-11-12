@@ -37,7 +37,7 @@ const RETRY_AFTER_SECONDS_KEYS = new Set([
   'retry_after_seconds',
 ]);
 const PLAN_TYPE_KEYS = new Set(['plantype', 'plan_type']);
-const EXPLICIT_ACCOUNT_USAGE_LIMIT_PATTERN = /\busage_limit_reached\b|\busageLimitExceeded\b/;
+const EXPLICIT_ACCOUNT_USAGE_LIMIT_PATTERN = /\busage_limit_reached\b|\busageLimitExceeded\b|\[SUBSCRIPTION_ACCOUNT_LIMITED\]/;
 
 /** Claude may expose only its human-readable limit message, without SDK tags. */
 export function isClaudeUsageLimitMessage(message: string): boolean {

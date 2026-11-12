@@ -12,7 +12,6 @@ const ROOT = resolve(__dirname, '..');
 const LOCAL_ONLY_ENTRIES: Record<string, string[]> = {
   'cindy-brain/OneshotModelPinPicker.tsx': ['one-shot-local-request'],
   'cindy-brain/PluginTaskPrefs.tsx': ['plugin-task-local-route', 'one-shot-local-request'],
-  'components/settings/ModelGroupsSection.tsx': ['model-group-local-source'],
   'components/settings/SubagentModelSection.tsx': ['subagent-in-parent-task'],
   'components/settings/VisionBridgeSection.tsx': ['vision-bridge-local-proxy'],
 };
@@ -35,7 +34,7 @@ describe('模型选择器的来源声明', () => {
     const found: Record<string, string[]> = {};
     for (const { file, text } of sources) {
       if (file === 'components/new-chat/ModelSelector.tsx') continue;
-      const reasons = [...text.matchAll(/['"](subagent-in-parent-task|vision-bridge-local-proxy|one-shot-local-request|plugin-task-local-route|model-group-local-source)['"]/g)]
+      const reasons = [...text.matchAll(/['"](subagent-in-parent-task|vision-bridge-local-proxy|one-shot-local-request|plugin-task-local-route)['"]/g)]
         .map((match) => match[1]);
       if (/localOnlyReason/.test(text)) found[file] = [...new Set(reasons)];
     }
