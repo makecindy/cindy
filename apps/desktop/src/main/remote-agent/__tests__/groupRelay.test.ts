@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { isProviderSharePeer, parseRemoteAgentPollResult, parseRemoteAgentStreamItem, providerShareGuestPeer, REMOTE_AGENT_MAX_RUNS_PER_CONTROLLER } from '@cindy/device-link';
-import { TurnDispatchRejectedError, TurnDispatchUnconfirmedError, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
+import { TurnDispatchRejectedError, TurnDispatchUnconfirmedError, TurnPermissionPolicyUnsupportedError, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createProviderGroupGuestRelay } from '../../provider-group/guestRelay';
@@ -75,6 +75,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
   /** 这台的 Agent 一启动就结束。 */
   endImmediately?: boolean;
   onSend?: (record: Started) => void | Promise<void>;
+    validateSendOptions?: AgentSessionHandle['validateSendOptions'];
   /** 转分享的同意(本机是分享者)。 */
   reshare?: Parameters<typeof createRemoteAgentHost>[0]['reshare'];
   resolveProvider?: NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>['resolve'];
@@ -117,7 +118,9 @@ function fakeAgentHost(name: string, started: Started[], options: {
         id: `sdk-${name}-${input.hostSessionId}`,
         agentKind: input.kind,
         model: input.options.model,
-        async send(message) {
+        validateSendOptions: options.validateSendOptions,
+        async send(message, opts) {
+          if (opts) options.validateSendOptions?.(opts);
           record.sends.push(message);
           await options.onSend?.(record);
         },
@@ -257,10 +260,12 @@ function setup(options: {
   switchWorthy?: (failure: RelayRunFailure) => boolean;
   /** mini 这台的 Agent 表现。 */
   mini?: { failStart?: boolean; endImmediately?: boolean; onSend?: (record: Started) => void | Promise<void>;
+    validateSendOptions?: AgentSessionHandle['validateSendOptions'];
     isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'] };
   memberBinder?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
   /** 组所在电脑本机的 Agent 表现(组选中本机这一台时)。 */
   owner?: { failStart?: boolean; onSend?: (record: Started) => void | Promise<void>;
+    validateSendOptions?: AgentSessionHandle['validateSendOptions'];
     managedSkills?: Parameters<typeof createRemoteAgentHost>[0]['managedSkills'];
     resolveProvider?: NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>['resolve'];
     prepareImageEvent?: Parameters<typeof createRemoteAgentHost>[0]['prepareImageEvent'];
@@ -1787,6 +1792,96 @@ describe('provider group "switch to another computer" for shared users', () => {
       }
     }
   });
+
+  it.each((['local', 'member'] as const).flatMap(placement =>
+    (['permission-policy', 'plain-preflight'] as const).flatMap(mode =>
+      (['eof', 'retry'] as const).flatMap(ending =>
+        [false, true].map(priorLive => ({ placement, mode, ending, priorLive }))))))(
+    'settles a native validation refusal before dispatch on $placement ($mode, $ending, prior=$priorLive)', async ({ placement, mode, ending, priorLive }) => {
+      let reject = !priorLive;
+      const refusal = mode === 'permission-policy'
+        ? new TurnPermissionPolicyUnsupportedError('claude-code', 'bypassPermissions')
+        : new Error('Host text-only turns require a local Claude runtime with execution hooks.');
+      const validateSendOptions = () => { if (reject) throw refusal; };
+      const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+        { kind: 'member', ...MEMBER_STUDIO }], owner: { validateSendOptions }, mini: { validateSendOptions },
+        switchWorthy: failure => failure.reason === 'remote_agent_closed' });
+      const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+      const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+      try {
+        if (priorLive) {
+          await guest.client.call('send', [{ content: 'prior live turn', attachments: [] }, {}]);
+          record.emit({ type: 'text', source: 'claude-code', data: { text: 'prior progress' } } as AgentEvent);
+          await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'text'));
+          record.running = false;
+          reject = true;
+        }
+        const error = await guest.client.call('send', [{ content: 'invalid', attachments: [] }, {}]).catch(error => error);
+        expect(error).toMatchObject({ message: refusal.message });
+        expect(record.sends).toHaveLength(priorLive ? 1 : 0);
+        if (ending === 'retry') {
+          reject = false;
+          await guest.client.call('send', [{ content: 'valid retry', attachments: [] }, {}]);
+          record.emit({ type: 'done', source: 'claude-code', data: {} } as AgentEvent);
+          await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'done'));
+        }
+        record.end();
+        await waitFor(() => guest.isClosed());
+        expect(env.relay.noteRunFailure).toHaveBeenCalledTimes(priorLive ? 1 : 0);
+        expect(switchTokenIn(guest.stream) !== undefined).toBe(priorLive);
+        expect(record.sends).toHaveLength((priorLive ? 1 : 0) + (ending === 'retry' ? 1 : 0));
+        expect(error).toMatchObject({ info: { code: 'TURN_DISPATCH_REJECTED' } });
+      } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+    });
+
+  it.each((['local', 'member'] as const).flatMap(placement =>
+    (['old-done', 'old-done-progress', 'stop', 'new-send'] as const).map(mode => ({ placement, mode }))))(
+    'uses the evolved old owner after a refused $placement send ($mode)', async ({ placement, mode }) => {
+      let entered!: () => void;
+      const enteredSend = new Promise<void>(resolve => { entered = resolve; });
+      let release!: () => void;
+      const released = new Promise<void>(resolve => { release = resolve; });
+      const onSend = async (record: Started) => {
+        if (record.sends.length === 2) {
+          entered();
+          await released;
+          throw new TurnDispatchRejectedError('not dispatched');
+        }
+      };
+      const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+        { kind: 'member', ...MEMBER_STUDIO }], owner: { onSend }, mini: { onSend },
+        switchWorthy: failure => failure.reason === 'remote_agent_closed' });
+      const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+      const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+      try {
+        await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+        record.emit({ type: 'text', source: 'claude-code', data: { text: 'first progress' } } as AgentEvent);
+        await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'text'));
+        const refused = guest.client.call('send', [{ content: 'refused', attachments: [] }, {}]).catch(error => error);
+        await enteredSend;
+        if (mode === 'old-done' || mode === 'old-done-progress') {
+          record.emit({ type: 'done', source: 'claude-code', data: {} } as AgentEvent);
+          await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'done'));
+          if (mode === 'old-done-progress') {
+            record.emit({ type: 'text', source: 'claude-code', data: { text: 'automatic progress' } } as AgentEvent);
+            await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'text'
+              && (item.event.data as { text?: string }).text === 'automatic progress'));
+          }
+        } else {
+          await guest.client.call('abort', []);
+          if (mode === 'new-send') await guest.client.call('send', [{ content: 'new owner', attachments: [] }, {}]);
+        }
+        release();
+        expect(await refused).toBeInstanceOf(Error);
+        record.end();
+        await waitFor(() => guest.isClosed());
+        const unfinished = mode === 'old-done-progress' || mode === 'new-send';
+        expect(env.relay.noteRunFailure).toHaveBeenCalledTimes(unfinished ? 1 : 0);
+        expect(switchTokenIn(guest.stream) !== undefined).toBe(unfinished);
+        expect(record.sends).toHaveLength(mode === 'new-send' ? 3 : 2);
+        expect(env.memberStarted.studio).toHaveLength(0);
+      } finally { release(); await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+    });
 
   it.each((['local', 'member'] as const).flatMap(placement =>
     (['unconfirmed', 'timeout', 'terminal-before-reject', 'stop-before-reject', 'definite-rejected', 'preflight-rejected'] as const)

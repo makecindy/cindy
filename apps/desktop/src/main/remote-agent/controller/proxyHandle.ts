@@ -10,7 +10,7 @@
  * 调用先连回同一个会话；只改设置的调用(换模型、权限档、计划模式、目录等)只记在本机，连回来时带上。
  */
 import fsp from 'node:fs/promises';
-import { markSessionSendTerminal, readSessionSendTerminalStatus, MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
+import { markSessionSendTerminal, readSessionSendTerminalStatus, MAIN_OWNED_SEND_CONTEXT, TurnDispatchRejectedError } from '@cindy/maker-core';
 
 import type { RemoteAgentMethod, RemoteAgentReply, RemoteAgentReverseRequest, RemoteAgentTeardownReason } from '@cindy/device-link';
 import type {
@@ -436,7 +436,8 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     const beforeInterruption = interruption;
     const previousOwnerOptions = sendOwnerOptions;
     if (method === 'send') {
-      terminalOwnership.beginSend(activeTurn || abortRequested, callId);
+      const previousActive = hasActiveProductTurn();
+      terminalOwnership.beginSend(previousActive || abortRequested, callId, previousActive, abortRequested);
       sendOwnerOptions = opts;
       abortRequested = false;
       terminalEventDelivered = false;
@@ -451,8 +452,18 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       // a second send rejection that can replace the host-owned recovery receipt.
       if (method !== 'send' || beforeInterruption === interruption) {
         if (method === 'send') {
-          activeTurn = false;
-          sendOwnerOptions = previousOwnerOptions;
+          if (sendOwnerOptions === opts && terminalOwnership.isDispatchCurrent(callId)
+            && !disposed && !teardownRequested) {
+            const previous = error instanceof RemoteAgentRemoteError && error.info.code === 'TURN_DISPATCH_REJECTED'
+              ? terminalOwnership.rejectSend(callId) : undefined;
+            abortRequested = abortRequested || previous?.aborted === true;
+            activeTurn = !abortRequested && previous?.active === true;
+            terminalEventDelivered = previous?.terminal === true;
+            sendOwnerOptions = previousOwnerOptions;
+          }
+          if (error instanceof RemoteAgentRemoteError && error.info.code === 'TURN_DISPATCH_REJECTED') {
+            throw new TurnDispatchRejectedError(error.message, { cause: error });
+          }
         }
         throw error;
       }
@@ -502,6 +513,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     steer: (message, opts) => sendLikeTracked('steer', message, opts),
     // 已让出名额时对方没有在跑的回合，停止什么也不用做。
     abort: async () => {
+      terminalOwnership.abort();
       abortRequested = true;
       activeTurn = false;
       deps.cancelPendingConfirmations?.();

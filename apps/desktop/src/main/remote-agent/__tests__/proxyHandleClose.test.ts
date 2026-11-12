@@ -48,6 +48,54 @@ function fixture(agentKind: 'codex' | 'claude-code' = 'codex') {
 }
 
 describe('remote stream close settles the product turn', () => {
+  it('reuses Session after an explicit remote preflight refusal without a stale tail fence', async () => {
+    const f = fixture();
+    try {
+      f.invoke.mockImplementationOnce(async (args: unknown[]) => {
+        const request = args[0] as { callId: string };
+        f.deliver({ t: 'result', callId: request.callId, ok: false,
+          error: { code: 'TURN_DISPATCH_REJECTED', name: 'TurnDispatchRejectedError', message: 'unsupported turn options' } });
+        return {};
+      });
+      const refused = await f.session.send('invalid').catch(error => error);
+      expect(refused).toMatchObject({ accepted: false, reason: 'provider-rejected-before-dispatch' });
+      expect(await f.session.send('valid retry')).toMatchObject({ accepted: true });
+      f.deliver({ t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+      await vi.waitFor(() => expect(f.session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done', generation: 1 }));
+      expect(f.controller.isQuiet()).toBe(true);
+      expect(f.seen.filter(e => e.type === 'error')).toEqual([]);
+      f.deliver({ t: 'closed', reason: 'ended' });
+      await f.finish();
+    } finally { await f.session.close(); }
+  });
+
+  it('keeps an unsettled old Session owner across remote preflight refusal and retry', async () => {
+    const f = fixture();
+    try {
+      await f.session.send('first');
+      f.deliver({ t: 'event', event: { type: 'text', source: 'codex', data: { text: 'prior progress' } } });
+      await vi.waitFor(() => expect(f.seen.some(e => e.type === 'text')).toBe(true));
+      f.deliver({ t: 'state', state: { turnRunning: false } });
+      f.invoke.mockImplementationOnce(async (args: unknown[]) => {
+        const request = args[0] as { callId: string };
+        f.deliver({ t: 'result', callId: request.callId, ok: false,
+          error: { code: 'TURN_DISPATCH_REJECTED', name: 'TurnDispatchRejectedError', message: 'unsupported turn options' } });
+        return {};
+      });
+      expect(await f.session.send('refused')).toMatchObject({ accepted: false });
+      expect(await f.session.send('valid retry')).toMatchObject({ accepted: true });
+      f.deliver({ t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(f.session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'none' });
+      expect(f.controller.hasActiveTurn()).toBe(true);
+      f.deliver({ t: 'closed', reason: 'ended' });
+      await f.finish();
+      expect(f.seen.filter(e => e.type === 'error')).toEqual([
+        expect.objectContaining({ sessionTurnGeneration: 2, data: expect.objectContaining({ reason: 'remote_agent_closed' }) }),
+      ]);
+    } finally { await f.session.close(); }
+  });
+
   it('does not let a claimed SDK boundary consume the prior send fence', () => {
     const owner = new RemoteTurnTerminalOwnership();
     owner.beginSend(false, 'first');

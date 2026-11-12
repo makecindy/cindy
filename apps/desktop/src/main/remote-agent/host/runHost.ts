@@ -56,7 +56,7 @@ import {
   type RemoteAgentReverseRequest,
   type RemoteAgentTeardownReason,
 } from '@cindy/device-link';
-import { type AgentEvent, type AgentSessionHandle, type DeviceHostedLinkActivity, type InteractionRequest, type ForkSdkSessionOptions, type ForkSdkSessionResult } from '@cindy/maker-core';
+import { TurnDispatchRejectedError, type AgentEvent, type AgentSessionHandle, type SendOptions, type DeviceHostedLinkActivity, type InteractionRequest, type ForkSdkSessionOptions, type ForkSdkSessionResult } from '@cindy/maker-core';
 
 import { EXEC_SERVER_WS_PATH } from '../controller/execServerRelay';
 import { RemoteAgentRemoteError, RemoteAgentRunClient, type RemoteAgentInvoke, type RemoteAgentPoller } from '../controller/runClient';
@@ -2114,11 +2114,14 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
    */
   function takeGroupNewRound(run: Run, callId: string, method: RemoteAgentMethod, args: unknown[]): unknown[] {
     if (method === 'abort') {
+      run.terminalOwnership?.abort();
       run.abortRequested = true;
       run.activeTurn = false;
     }
     if (method === 'send') {
-      (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).beginSend(run.activeTurn === true || run.abortRequested === true, callId);
+      (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).beginSend(
+        run.activeTurn === true || run.abortRequested === true, callId,
+        run.activeTurn === true, run.abortRequested === true);
       run.abortRequested = false;
       run.activeTurn = true;
       run.quotaFailure = undefined;
@@ -2513,12 +2516,18 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       append(run, { t: 'result', callId, ok: true, ...(value !== undefined ? { value: JSON.parse(JSON.stringify(value)) } : {}) });
     } catch (error) {
       const info = relayErrorInfoFrom(error);
+      const dispatchRejected = error instanceof RemoteAgentRemoteError
+        ? error.info.code === 'TURN_DISPATCH_REJECTED' : info.code === 'TURN_DISPATCH_REJECTED';
+      if (dispatchRejected) info.code = 'TURN_DISPATCH_REJECTED';
       if (method === 'send' && run.lastSendCallId === callId && run.relay === relay) {
-        const dispatchRejected = error instanceof RemoteAgentRemoteError
-          ? error.info.code === 'TURN_DISPATCH_REJECTED' : info.code === 'TURN_DISPATCH_REJECTED';
+        const quota = run.quotaFailure !== undefined || isAccountUsageLimitError(info);
+        const previous = dispatchRejected && !quota && !run.closing ? run.terminalOwnership?.rejectSend(callId) : undefined;
         // A post-invocation timeout can still have accepted work. Preserve any
         // live turn, without rearming one already ended by a terminal or Stop.
-        if (!sendInvoked || dispatchRejected || run.quotaFailure || isAccountUsageLimitError(info)) {
+        if (previous) {
+          run.abortRequested = run.abortRequested === true || previous.aborted;
+          run.activeTurn = !run.abortRequested && previous.active;
+        } else if (!sendInvoked || dispatchRejected || quota) {
           run.activeTurn = false;
         }
         if (run.quotaFailure) await run.quotaFailure.delivery;
@@ -2714,7 +2723,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       if (!delegatedRunAllowed(run)) fail('REMOTE_AGENT_UNAVAILABLE', 'this shared task is no longer authorized');
       if (!handle) fail('REMOTE_AGENT_UNAVAILABLE', 'agent has not started');
       const raw = await resolvePayload(run.controller, payload);
-      const args = takeGroupNewRound(run, callId, method, Array.isArray(raw) ? raw : []);
+      const rawArgs = Array.isArray(raw) ? raw : [];
+      const args = method === 'send' ? rawArgs : takeGroupNewRound(run, callId, method, rawArgs);
       const target = (handle as unknown as Record<string, unknown>)[method];
       if (typeof target !== 'function') fail('REMOTE_AGENT_UNSUPPORTED', `${method} is not supported by this agent`);
       let callArgs: unknown[] = args;
@@ -2794,7 +2804,16 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         if (!delegatedRunAllowed(run)) fail('REMOTE_AGENT_UNAVAILABLE', 'this shared task is no longer authorized');
       }
       try {
-        if (method === 'send') sendInvoked = true;
+        if (method === 'send') {
+          try {
+            handle.validateSendOptions?.(callArgs[1] as SendOptions);
+          } catch (error) {
+            if (error instanceof TurnDispatchRejectedError) throw error;
+            throw new TurnDispatchRejectedError(error instanceof Error ? error.message : String(error), { cause: error });
+          }
+          takeGroupNewRound(run, callId, method, rawArgs);
+          sendInvoked = true;
+        }
         value = await (target as (...a: unknown[]) => unknown).apply(handle, callArgs);
         if (method === 'send') run.terminalOwnership?.acceptSend(callId);
       } catch (error) {
@@ -2807,8 +2826,15 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       append(run, { t: 'result', callId, ok: true, ...(value !== undefined ? { value: JSON.parse(JSON.stringify(value)) } : {}) });
     } catch (error) {
       const info = remoteAgentErrorInfo(error);
+      if (error instanceof TurnDispatchRejectedError) info.code = error.code;
       if (method === 'send' && run.lastSendCallId === callId) {
-        if (!sendInvoked || info.code === 'TURN_DISPATCH_REJECTED' || run.quotaFailure || isAccountUsageLimitError(info)) {
+        const quota = run.quotaFailure !== undefined || isAccountUsageLimitError(info);
+        const previous = info.code === 'TURN_DISPATCH_REJECTED' && !quota && !run.closing
+          ? run.terminalOwnership?.rejectSend(callId) : undefined;
+        if (previous) {
+          run.abortRequested = run.abortRequested === true || previous.aborted;
+          run.activeTurn = !run.abortRequested && previous.active;
+        } else if (!sendInvoked || info.code === 'TURN_DISPATCH_REJECTED' || quota) {
           run.activeTurn = false;
         }
         if (run.quotaFailure) await run.quotaFailure.delivery;
