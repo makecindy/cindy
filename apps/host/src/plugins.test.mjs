@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { PassThrough } from 'node:stream';
 import { serialize } from 'node:v8';
@@ -12,6 +13,51 @@ import { createHostNodeRuntimeBroker } from './plugins/node-process.ts';
 
 import { dataOwnerStorageKey } from '../../desktop/src/main/dataOwnerPath.ts';
 import { listInstalledPlugins } from './plugins.mjs';
+
+// Rebase #9496 onto #9621: execute the real gateway's registered page-tool
+// callback with process/database boundaries injected. A null task must not be
+// restored, while task-bound calls must retain their original source context.
+test('page tools accept a null task without changing task-bound context', async () => {
+  let runPageTool;
+  const contexts = [], restored = [];
+  const session = { id: 'task', instanceId: 'instance', agentKind: 'codex', workDir: '/workspace' };
+  const boundaries = {
+    createMcpAppsRuntime: () => ({ setMcpAppsHost() {} }),
+    getCurrentDbClientSnapshot: () => undefined,
+    createCustomMcpStore: () => ({}), createCustomMcpRegistry: () => ({}),
+    createAppServerProxyFactory: () => () => undefined,
+    createPluginAppRegistry: () => ({ setPluginPageToolRunner(runner) { runPageTool = runner; } }),
+    dataOwnerStorageKey: value => value,
+    createMcpAppRevisionKeyStore: () => ({ get: () => 'revision' }),
+    createMcpAppsService: () => ({ host: {} }),
+    createPluginAppPublisher: () => () => undefined,
+    createGhostAttachmentResolver: () => () => undefined,
+    createImageCacheStore: () => ({}), hostChatAttachments: {},
+    createGhostGateway: () => ({ setPageControlGhostProvider() {}, getCindyGhostsMcpDeps(context) {
+      contexts.push(context);
+      return { callGhostTool: async () => ({ ok: true, result: { content: [{ type: 'text', text: 'delivered' }] } }) };
+    } }),
+    pluginAppResult: value => value,
+  };
+  const built = await build({ entryPoints: [fileURLToPath(new URL('./plugins/gateway.ts', import.meta.url))],
+    bundle: false, write: false, platform: 'node', format: 'cjs', target: 'node22' });
+  const localRequire = createRequire(import.meta.url), gatewayModule = { exports: {} };
+  new Function('require', 'module', 'exports', built.outputFiles[0].text)(
+    name => name.startsWith('node:') ? localRequire(name) : boundaries, gatewayModule, gatewayModule.exports);
+  gatewayModule.exports.createHostPluginGateway({
+    runtime: { current: () => true, assertCurrent() {}, authorization: { i18n: {} } },
+    profileDir: '/unused', ownerId: 'owner', version: 'test', credentials: {}, cards: {},
+    restoreSession: async id => { assert.equal(id, session.id); restored.push(id); return session; },
+  });
+  for (const sessionId of [null, session.id]) {
+    const result = await runPageTool({ sessionId, instance: 'plugin', tool: 'read', assertCurrent: async () => {} },
+      {}, new AbortController().signal);
+    assert.deepEqual(result, { content: [{ type: 'text', text: 'delivered' }] });
+  }
+  assert.deepEqual(restored, [session.id]);
+  assert.deepEqual(contexts, [undefined, { sessionId: session.id, sessionInstanceId: session.instanceId,
+    agentKind: session.agentKind, workingDir: session.workDir }]);
+});
 
 function tempProfile(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-plugins-'));

@@ -54,6 +54,7 @@ export async function prepareSubscriptionAccountForSend(
     // Commit context first. A failed binding write leaves a recoverable handoff on the
     // old account; a retry can switch again. Never rebind old native ids to a new home.
     await lease.bind([`task:${sessionId}`]);
+    lease.reserveForTask(sessionId);
     return true;
   } finally {
     lease.release();

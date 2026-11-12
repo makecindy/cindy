@@ -37,6 +37,7 @@ import {
   resolveSessionRouteDecision,
   resolveFrozenProviderRouteDecision,
   resolveImplicitLocalBridgeRoute,
+  resolveConnectedDefaultProviderIdForModel,
   inferProviderIdForModel,
   isUserProviderSession,
   setCustomProviderKeyReader,
@@ -285,6 +286,22 @@ describe('Pi per-model protocol routing', () => {
 });
 
 describe('implicit local bridge resume routing', () => {
+  // PR #9998 review, unit: catalog uniqueness is not the connected default.
+  // Two connected custom sources sharing one model used to be mistaken for OpenAI.
+  it('uses the same connected default for account selection and an implicit Codex bridge', async () => {
+    setCustomProviders(['account-a', 'account-b'].map(id => buildUserProvider({
+      id, name: id, auth: { method: 'apiKey' }, runtimes: { codex: {
+        baseUrl: `https://${id}.example.test/v1`, wireProtocol: 'openai-chat',
+        models: [{ id: 'shared-custom-model', name: 'Shared Custom Model' }],
+      } },
+    })));
+    setProviderViewsReader(async () => buildRegistry(getActiveCatalog(), { 'account-a': true, 'account-b': true }, {}));
+    try {
+      expect(inferProviderIdForModel('shared-custom-model', 'codex')).toBeNull();
+      await expect(resolveConnectedDefaultProviderIdForModel('shared-custom-model', 'codex')).resolves.toBe('account-a');
+      expect((await resolveImplicitLocalBridgeRoute('shared-custom-model', 'codex'))?.providerId).toBe('account-a');
+    } finally { setCustomProviders([]); }
+  });
   it('never resolves a Codex session to the Claude subscription, even for a retired Claude model', async () => {
     setAnthropicDiscoveredModels([
       {

@@ -285,11 +285,12 @@ export function GroupMemberQuota({
   }, [waitKey]);
   // 先确定账号列表，避免先显示默认账号，随后整块换成多账号布局。沿用原来的等待上限，
   // 旧电脑不支持列表或长时间不回包时，仍可查看已有的默认账号额度。
-  const visibleCard = accountsLoading && !waitedOut ? null : card;
+  const visibleCard = (accountsLoading && !waitedOut) || accounts?.length === 0 ? null : card;
 
   let note: string | null = null;
   if (target.kind === 'share') note = t('providerGroup.member.quota.share');
   else if (quotaOffline) note = t('providerGroup.member.quota.offline');
+  else if (accounts?.length === 0) note = t('providerGroup.member.quota.unavailable');
   else if (!visibleCard && !listedAccounts) {
     if (!accountsLoading && provider && !providerWeeklyQuotaSource({ ...provider, suspended: false })) {
       note = t('providerGroup.member.quota.none');

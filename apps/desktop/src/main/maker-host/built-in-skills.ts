@@ -25,10 +25,9 @@ const VERSIONS_DIRECTORY = '.versions';
 const ACTIVE_BUNDLE_LINK = '.active';
 const BUILT_IN_SKILL_MUTATION_WAIT_MS = 5_000;
 /**
- * Legacy version floor. Never lower it; raise it when merging older branches
- * whose reachable legacy versions would otherwise exceed the computed version.
- * The bundle version adds the records shipped in `<bundled root>/_versions/`,
- * see readBuiltInSkillsBundleVersion.
+ * Compatibility floor for historical hand-incremented bundles; never lower it.
+ * The version is this base plus the number of record files shipped in
+ * `<bundled root>/_versions/`, see readBuiltInSkillsBundleVersion.
  */
 export const BUILT_IN_SKILLS_BUNDLE_VERSION_BASE = 108;
 /** Directory beside the bundled Skills holding one record file per bundle change. */

@@ -862,6 +862,7 @@
       "runningCount_other": "{{count}}개 실행 중",
       "limitAria": "{{name}}의 동시 실행 한도",
       "limitOption_other": "동시 {{count}}개",
+      "limitUnlimited": "제한 없음",
       "weightAria": "{{name}}의 가중치",
       "weightOption": "가중치 {{weight}}",
       "assignAria": "{{name}}에 배정",
@@ -1813,7 +1814,8 @@
       "about": "정보",
       "imBot": "IM 봇",
       "ghosts": "플러그인",
-      "cindyMake": "Cindy Make"
+      "cindyMake": "Cindy Make",
+      "modelGroups": "모델 그룹"
     },
     "sections": {
       "user": "사용자",
@@ -1857,6 +1859,15 @@
     },
     "remote": {
       "title": "원격 머신",
+      "hostKeyError": {
+        "missing": "SSH 호스트 키 검증이 설정되지 않았습니다. 연결을 거부했습니다.",
+        "read": "Cindy가 신뢰하는 호스트 키를 읽을 수 없습니다: {{reason}}. 연결을 거부했습니다.",
+        "write": "Cindy가 신뢰하는 호스트 키를 저장할 수 없습니다: {{reason}}. 연결을 거부했습니다.",
+        "mismatch": "호스트 {{host}}의 키가 변경되어({{fingerprint}}) Cindy가 이전에 신뢰한 지문과 일치하지 않습니다. 서버 재설치 또는 중간자 공격일 수 있습니다. 연결을 거부했습니다.",
+        "file": "신뢰하는 호스트 키 파일:\n{{filePath}}",
+        "repair": "Cindy는 ~/.ssh/known_hosts를 읽지 않습니다. 이전 지문은 다음 파일에 저장되어 있습니다:\n{{filePath}}\n항목 키는 \"{{host}}\"입니다.\n이번 변경을 신뢰할 수 있다고 확인한 경우 Cindy를 종료하고 이 항목만 삭제하세요. 파일과 다른 호스트 항목을 유지한 뒤 다시 연결하세요. 새 지문은 첫 연결 시 저장됩니다. 파일 전체를 삭제하지 마세요.",
+        "verifyChange": "서버 관리자에게 키 변경을 확인한 뒤 신뢰하는 호스트 키 기록을 업데이트하세요."
+      },
       "footnote": "Phase A 는 SSH 연결 관리만 지원합니다. 원격에서 에이전트 실행은 다음 업데이트에서 제공됩니다.",
       "viaAuth": "{{label}} 로 인증",
       "readOnlyFromSshConfig": "연결 정보는 SSH 설정에서 가져옵니다",
@@ -2269,7 +2280,7 @@
         "desktopVisibilityHint": "Cindy 뒤의 바탕 화면과 창이 비칩니다. 텍스트와 컨트롤은 선명하게 유지됩니다.",
         "desktopBlurLabel": "바탕 화면 흐림",
         "desktopBlurHint": "창 뒤의 바탕 화면을 흐리게 합니다. 0이면 꺼지고 값이 클수록 더 흐려집니다. 강도 조절을 지원하지 않는 시스템은 기본 효과를 사용합니다.",
-        "desktopBlurSwitchHint": "Windows 시스템 효과로 창 뒤의 바탕 화면을 흐리게 합니다. Windows 11 버전 22H2 이상이 필요합니다.",
+        "desktopBlurSwitchHint": "Windows 시스템 효과로 창 뒤의 바탕 화면을 흐리게 합니다. Windows 11 버전 22H2 이상이 필요합니다. 끈 후에는 변경 사항을 적용하려면 앱을 다시 시작해야 합니다.",
         "blurLabel": "배경화면 흐림",
         "blurHint": "배경화면만 흐리게 합니다. 0이면 꺼집니다. 움직이는 배경화면을 흐리게 하면 GPU 사용량이 늘어납니다.",
         "motionLabel": "표시 방식",
@@ -8143,7 +8154,9 @@
         "mcpUi": "대화에 인터랙티브 페이지 표시",
         "mcpUiDomains": "페이지 연결 도메인: {{domains}}",
         "mcpAppOnly": "페이지 전용",
-        "uiPageAccess": "페이지: {{pages}}; 도메인: {{domains}}; 페이지에서 호출할 수 있는 도구: {{tools}}"
+        "uiPageAccess": "페이지: {{pages}}; 도메인: {{domains}}; 페이지에서 호출할 수 있는 도구: {{tools}}",
+        "uiHost": "Cindy에 인터페이스 및 호스트 작업 제공",
+        "uiHostAccess": "{{subject}}: {{access}}"
       },
       "connections": {
         "confirmTitle": "연결 주소 추가",
@@ -11671,6 +11684,8 @@
       "takeOverConflict": "{{name}}은(는) 이미 '{{device}}'(으)로 옮겨졌습니다",
       "takeOverOffline": "서버에 연결할 수 없어 지금은 이 컴퓨터에서 계속할 수 없습니다",
       "takeOverFailed": "이 컴퓨터에서 {{name}}을(를) 이어받지 못했습니다",
+      "localCindyConflict": "인계받을 컴퓨터에 이미 다른 Cindy가 있습니다. 해당 Cindy의 설정에서 관리하거나 다른 주 컴퓨터를 선택하세요",
+      "localCindyConflictAction": "이 컴퓨터의 Cindy 설정 열기",
       "notEnabled": "이 서버는 주 컴퓨터 변경을 지원하지 않습니다",
       "readOnlyNote": "클라우드에 저장된 대화로, 보기만 할 수 있습니다",
       "empty": "아직 클라우드 대화가 없습니다",
@@ -14255,6 +14270,8 @@
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "기존 방식의 공유라서 'Agent-Net만 사용'이 켜져 있는 동안에는 사용할 수 없습니다. 이 옵션을 끄면 계속할 수 있고, 다른 모델로 바꿀 수도 있습니다.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "이 모델을 사용할 수 있는 계정의 사용량이 한도에 도달했습니다. 다른 모델로 전환하거나 한도가 초기화된 후 계속하세요.",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "제공자 그룹의 컴퓨터가 지금 이 세션을 실행할 수 없습니다. 모두 오프라인이거나, 배정이 일시 중지되었거나, 대기 중이거나, 이 모델이 없을 수 있습니다. 이 제공자의 원격 및 공유 페이지에서 그룹을 확인하세요.",
+      "REMOTE_AGENT_GROUP_FULL": "이 작업을 실행할 수 있는 계정 또는 컴퓨터가 모두 동시 실행 한도에 도달했습니다. 실행 중인 작업이 끝날 때까지 기다리거나 제공자 설정에서 한도를 올리세요.",
+      "SUBSCRIPTION_ACCOUNTS_FULL": "이 작업을 실행할 수 있는 계정 또는 컴퓨터가 모두 동시 실행 한도에 도달했습니다. 실행 중인 작업이 끝날 때까지 기다리거나 제공자 설정에서 한도를 올리세요.",
       "REMOTE_AGENT_DEVICE_LIMIT": "이 기기의 원격 세션 수가 한도에 도달했습니다. 사용하지 않는 세션을 보관하거나 원격 컴퓨터의 소유자에게 원격 및 공유에서 한도를 높여 달라고 요청하세요.",
       "REMOTE_AGENT_TOTAL_LIMIT": "해당 컴퓨터의 전체 원격 세션 수가 한도에 도달했습니다. 해당 컴퓨터의 소유자에게 불필요한 세션을 해제하거나 원격 및 공유에서 한도를 높여 달라고 요청하세요.",
       "REMOTE_AGENT_RESUME_LOST": "상대 컴퓨터의 이전 대화에 다시 연결하지 못해 Agent가 그 맥락 없이 계속합니다.",
@@ -14443,6 +14460,14 @@
       "replied": "의 회신",
       "toggle": "“{{title}}” 회신 펼치기/접기",
       "openTask": "작업 열기"
+    },
+    "subscriptionAccountError": {
+      "limited": "이 작업에서 사용하는 구독 계정의 사용 한도에 도달했습니다. 한도가 초기화된 후 다시 시도하거나 다른 모델 연결을 선택하세요. 계정은 자동으로 변경되지 않습니다.",
+      "limitedUntil": "이 작업에서 사용하는 구독 계정의 사용 한도에 도달했습니다. 초기화 예정: {{resetAt}}. 초기화 후 다시 시도하거나 다른 모델 연결을 선택하세요. 계정은 자동으로 변경되지 않습니다.",
+      "loginRequired": "이 작업에서 사용하는 구독 계정에 다시 로그인해야 합니다. 작업을 실행하는 컴퓨터에서 해당 계정에 다시 로그인한 후 다시 시도하세요.",
+      "signingIn": "이 작업에서 사용하는 구독 계정에 로그인 중입니다. 로그인이 완료된 후 다시 시도하세요.",
+      "unavailable": "이 작업에 지정된 구독 계정을 이번 요청에 사용할 수 없습니다. 작업을 실행하는 컴퓨터의 모델 제공자 설정에서 계정을 확인하거나 다른 모델 연결을 선택하세요.",
+      "legacy": "이 작업에 지정된 구독 계정을 사용할 수 없습니다. 작업을 실행하는 컴퓨터에서 계정의 로그인 및 사용 상태를 확인하거나 다른 모델 연결을 선택하세요. 계정은 자동으로 변경되지 않습니다."
     }
   },
   "ccAgent": {
@@ -19405,6 +19430,12 @@
       "restore": "기본값 복원"
     }
   },
+  "pluginUi": {
+    "display": "표시 방식",
+    "original": "원본",
+    "menu": "플러그인 보기 및 명령",
+    "actionFailed": "플러그인 작업을 완료하지 못했습니다. 다시 시도해 주세요."
+  },
   "mcpApps": {
     "sharedTaskReadOnly": "이 카드는 세션 소유자만 조작할 수 있습니다.",
     "retry": "다시 불러오기",
@@ -19703,12 +19734,6 @@
       "from": "‘{{name}}’에서 옮김",
       "closeChecklist": "목록 닫기"
     },
-    "suggestion": {
-      "title": "마이그레이션 지원으로 ‘{{name}}’에서 옮길까요?",
-      "description": "그 컴퓨터의 플러그인, 스킬, 설정, 연결을 이 컴퓨터로 옮길 수 있습니다. 이 컴퓨터에서 다시 로그인하거나 권한을 허용해야 하는 항목은 목록으로 정리해 드립니다. 나중에 ‘설정 → 일반 → 마이그레이션 지원’에서 열 수도 있습니다.",
-      "confirm": "마이그레이션 지원 열기",
-      "later": "나중에"
-    },
     "walkthrough": {
       "progress": "마이그레이션 체크리스트 {{current}} / {{total}}",
       "open": "열기",
@@ -19730,6 +19755,103 @@
         "allow": "허용",
         "deny": "거부"
       }
+    }
+  },
+  "firstRunGuide": {
+    "title": {
+      "new": "Cindy에 오신 것을 환영합니다",
+      "returning": "다시 오신 것을 환영합니다"
+    },
+    "stepsLabel": "가이드 단계",
+    "close": "가이드 닫기",
+    "next": "다음",
+    "skip": "건너뛰기",
+    "preparing": "준비 중…",
+    "steps": {
+      "legacy": "이전 버전 데이터",
+      "intro": "Cindy 알아보기",
+      "migration": "마이그레이션",
+      "models": "모델 연결",
+      "import": "기존 내용 가져오기",
+      "finish": "완료"
+    },
+    "legacy": {
+      "title": "이전 버전의 데이터를 가져왔습니다",
+      "body": "이전 세션, 미디어 파일, Agent 브라우저의 로그인 상태를 이 버전으로 옮겼습니다. 그대로 이어서 사용할 수 있습니다.",
+      "note": "승인한 서드파티 키와 자격 증명은 데이터와 함께 옮겨지지 않습니다. 설정에서 다시 승인하거나 입력하세요."
+    },
+    "intro": {
+      "lead": "Cindy는 마음먹은 일을 이루도록 돕는 AI 어시스턴트입니다.",
+      "work": {
+        "title": "일을 맡기세요",
+        "body": "질문에 답하는 데 그치지 않고 사용자의 폴더와 앱에서 직접 작업합니다."
+      },
+      "connect": {
+        "title": "이미 가진 모델과 도구 사용",
+        "body": "자신의 구독이나 API 키를 연결하고, 플러그인과 스킬은 필요할 때 추가하세요."
+      },
+      "continue": {
+        "title": "어디서든 이어서",
+        "body": "휴대폰에서 컴퓨터의 세션을 시작하고, 확인하고, 이어갈 수 있습니다."
+      },
+      "start": "시작",
+      "next": "다음 단계"
+    },
+    "migration": {
+      "title": "다른 컴퓨터의 Cindy를 이 컴퓨터로",
+      "body": "이 계정에 이미 설정을 마친 컴퓨터가 있습니다. 마이그레이션 지원이 그 컴퓨터의 플러그인, 스킬, 설정, 연결을 이 컴퓨터로 복사합니다. 키는 그 컴퓨터에서 허용을 선택한 후에만 복사됩니다.",
+      "manualBody": "다른 컴퓨터에서 Cindy를 사용했다면 마이그레이션 지원으로 그 컴퓨터의 플러그인, 스킬, 설정, 연결을 이 컴퓨터로 복사할 수 있습니다.",
+      "done": "“{{name}}”에서 마이그레이션함",
+      "from": "이전 컴퓨터",
+      "to": "이 컴퓨터"
+    },
+    "models": {
+      "title": "Cindy에 모델 연결",
+      "body": "아래 두 가지 방법은 함께 사용할 수 있습니다.",
+      "cindy": {
+        "badge": "공식 서비스",
+        "body": "Cindy가 공식 제공하는 모델 서비스입니다. 계정에 기본으로 포함되어 있어 따로 켤 필요가 없습니다. 새 계정에는 체험용 무료 잔액이 제공됩니다. 결제하면 거의 모든 모델을 사용할 수 있고, 결제하지 않으면 사용할 수 있는 모델 범위가 제한됩니다.",
+        "active": "계정에 포함되어 있어 바로 사용할 수 있습니다",
+        "freeBalance": "무료로 제공된 금액입니다. 마음껏 체험해 보세요"
+      },
+      "own": {
+        "title": "내 요금제 사용",
+        "badge": "더 경제적",
+        "body": "Claude나 ChatGPT 같은 구독 또는 API 키가 이미 있나요? 연결해서 Cindy AI와 함께 사용하는 것을 적극 권장합니다. 가장 좋은 경험을 얻을 수 있습니다.",
+        "more": "다른 제공자 및 API 키",
+        "connected": "연결됨"
+      }
+    },
+    "import": {
+      "title": "이 컴퓨터에 있는 내용 가져오기",
+      "body": "이 컴퓨터의 다른 AI 도구에서 찾은 내용입니다. 원본 기록은 읽기만 하고 변경하지 않습니다.",
+      "empty": "이 컴퓨터에서 가져올 내용을 찾지 못했습니다.",
+      "tasksHeading": "세션",
+      "tasksHint": "도구를 선택하면 해당 세션을 Cindy로 가져와 이어서 작업할 수 있습니다.",
+      "pick": "하나씩 선택",
+      "started": "백그라운드에서 가져오기를 시작했습니다. 진행 상황은 “설정 → 세션 가져오기”에서 확인할 수 있습니다.",
+      "startFailed": "가져오기를 시작하지 못했습니다. “설정 → 세션 가져오기”에서 다시 가져올 수 있습니다.",
+      "teammatesHeading": "동료",
+      "teammatesHint": "다른 도구의 Agent를 기억, 스킬, 자동화와 함께 동료로 가져옵니다.",
+      "importTeammate": "동료로 가져오기"
+    },
+    "finish": {
+      "title": "준비를 마쳤습니다",
+      "legacy": "이전 버전의 데이터를 이 버전으로 옮겼습니다",
+      "modelReady": "모델이 연결되었습니다",
+      "modelMissing": "아직 모델이 연결되지 않았습니다. 세션을 시작할 때 언제든 연결할 수 있습니다.",
+      "importStarted": "다른 도구의 세션을 백그라운드에서 가져오는 중입니다",
+      "native": "Claude Code와 Codex의 스킬과 MCP는 바로 사용할 수 있으며 가져올 필요가 없습니다.",
+      "start": "첫 세션 시작"
+    },
+    "resume": {
+      "label": "가이드 진행 중 · {{step}}",
+      "back": "가이드로 돌아가기"
+    },
+    "settings": {
+      "title": "시작 가이드",
+      "description": "Cindy 알아보기, 다른 컴퓨터에서 마이그레이션, 모델 연결, 기존 내용 가져오기를 다시 살펴봅니다.",
+      "open": "가이드 열기"
     }
   },
   "forwardedRequest": {
@@ -19942,5 +20064,131 @@
     "detail": "요청 기기: {{device}}\n목적: {{purpose}}\n\n활성화하면 같은 계정의 기기에서 작업 실행 및 파일 접근을 포함하여 이 컴퓨터를 제어할 수 있습니다. 설정에서 끌 때까지 유지됩니다.",
     "decline": "나중에",
     "enable": "원격 제어 활성화"
+  },
+  "modelGroups": {
+    "title": "모델 그룹",
+    "description": "모델 제공자에 이미 연결된 소스 몇 개를 하나의 선택지로 묶습니다. 모델 선택의 '모델 그룹'에서 고르면 이번에 어떤 소스를 쓸지는 Cindy가 정합니다.",
+    "routes": "경로",
+    "routesDescription": "경로 하나에 소스를 여러 개 넣습니다. 새 작업을 시작할 때 선택 방식에 따라 하나를 고릅니다.",
+    "sourceCount_other": "소스 {{count}}개",
+    "strategy": {
+      "expiring": {
+        "title": "곧 만료되는 것 먼저",
+        "hint": "많이 남았고 곧 초기화되는 구독 할당량부터 써서 낭비하지 않습니다. 할당량을 읽을 수 없는 소스는 뒤로 갑니다."
+      },
+      "order": {
+        "title": "순서대로",
+        "hint": "앞의 소스를 쓸 수 없을 때만 다음 소스를 씁니다."
+      },
+      "rotate": {
+        "title": "번갈아",
+        "hint": "새 작업마다 다음 소스로 바꿔 부담을 고르게 나눕니다."
+      },
+      "cheapest": {
+        "title": "가장 저렴하게",
+        "hint": "할당량이 남은 구독을 먼저 써서 추가 비용이 들지 않습니다. 나머지는 표시 가격이 낮은 순서이며, 가격이 없는 소스는 뒤로 갑니다."
+      }
+    },
+    "picker": {
+      "empty": "아직 모델 그룹이 없습니다. 설정에서 소스 몇 개를 경로로 묶으면 여기서 선택할 수 있습니다.",
+      "manage": "모델 그룹 관리"
+    },
+    "why": {
+      "expiringQuota": "할당량이 {{left}}% 남았고 {{reset}}에 초기화되어 먼저 사용",
+      "expiring": "할당량 기준 첫 번째",
+      "order": "사용 가능한 첫 번째 소스",
+      "rotate": "이번에는 이 소스 차례",
+      "only": "지금 쓸 수 있는 유일한 소스",
+      "soonest": "모든 소스의 할당량을 다 썼습니다. 이 소스가 가장 먼저 회복됩니다",
+      "soonestUntil": "모든 소스의 할당량을 다 썼습니다. 이 소스가 가장 먼저 회복됩니다({{reset}})",
+      "standby": "이번 차례가 아님",
+      "standbyQuota": "할당량이 {{left}}% 남았고 {{reset}}에야 초기화되어 남겨 둠",
+      "off": "이 경로에서 꺼짐",
+      "unavailable": "연결되지 않았거나 지금 이 모델을 선택할 수 없음",
+      "limited": "할당량을 다 씀",
+      "limitedUntil": "할당량을 다 씀, {{reset}}에 회복",
+      "tight": "5시간 할당량이 거의 차서 지금은 쓰지 않음",
+      "cheapest": "표시 가격이 가장 낮음",
+      "cheapestFree": "구독 할당량이 남아 추가 비용 없음",
+      "noVision": "메시지에 이미지가 있는데 이 소스는 이미지를 볼 수 없음",
+      "exceptionImage": "메시지에 이미지가 있어 이미지를 볼 수 있는 소스 중에서 선택",
+      "exceptionImageFallback": "메시지에 이미지가 있지만 이미지를 볼 수 있는 소스가 없어 평소대로 선택",
+      "exceptionHours": "이 시간대에는 '{{name}}' 사용",
+      "separator": "; "
+    },
+    "settings": {
+      "newRoute": "경로 만들기",
+      "newRouteName": "새 경로",
+      "routesEmpty": "아직 경로가 없습니다. 하나 만들고 소스를 넣어 보세요.",
+      "scopeNote": "모델 그룹은 이 컴퓨터에서 시작하는 새 작업에 쓰입니다. 시작할 때 소스 하나를 정하며 작업 중에는 바뀌지 않습니다.",
+      "back": "모델 그룹으로 돌아가기",
+      "name": "이름",
+      "nameHint": "모델 선택에 표시되는 이름입니다.",
+      "routeShownAs": "모델 선택의 '모델 그룹'에 표시됩니다.",
+      "pick": "이번에 쓸 소스",
+      "effort": "추론 강도",
+      "effortUnset": "지정 안 함",
+      "effortHint": "선택된 모델이 이 단계를 지원하지 않으면 해당 모델의 기본값으로 실행합니다.",
+      "sources": "쓸 수 있는 소스",
+      "sourcesHint": "서로 다른 모델을 함께 넣을 수 있습니다. 실제로 쓴 모델은 작업에 표시됩니다.",
+      "sourcesEmpty": "아직 소스가 없습니다. 아래에서 연결된 모델을 추가하세요.",
+      "sourcesFull": "경로 하나에 소스를 최대 {{count}}개까지 넣을 수 있습니다.",
+      "addSource": "소스 추가",
+      "chooseModel": "모델 선택",
+      "notConnected": "연결되지 않음",
+      "moveUp": "위로 이동",
+      "moveDown": "아래로 이동",
+      "remove": "이 경로에서 제외",
+      "useSource": "이 경로에서 {{name}} 사용",
+      "try": {
+        "title": "시험해 보기",
+        "hint": "지금 새 작업을 시작하면 어떤 소스를 쓸지 확인합니다. 메시지를 보내지 않고 할당량도 쓰지 않습니다.",
+        "run": "선택 결과 보기",
+        "picked": "이것을 사용",
+        "standby": "대기",
+        "skipped": "건너뜀",
+        "unavailable": "이 경로에 지금 쓸 수 있는 소스가 없습니다. 새 작업은 원래 선택한 모델을 사용합니다."
+      },
+      "deleteRoute": "이 경로 삭제",
+      "deleteRouteConfirmTitle": "'{{name}}'을(를) 삭제할까요?",
+      "deleteRouteConfirmDescription": "다른 경로에서 이 경로로 바꾸는 시간대 예외도 함께 삭제됩니다. 이미 시작한 작업에는 영향이 없습니다.",
+      "delete": "삭제",
+      "cancel": "취소",
+      "saveFailed": "저장하지 못했습니다. 다시 시도해 주세요.",
+      "exceptions": {
+        "title": "예외",
+        "hint": "선택 방식보다 먼저, 위에서부터 차례로 확인합니다.",
+        "empty": "아직 예외가 없습니다. 새 작업은 모두 위의 선택 방식을 따릅니다.",
+        "imageRule": "메시지에 이미지가 있으면 이미지를 볼 수 있는 소스만 사용",
+        "hoursRule": "{{from}}–{{to}}에는 '{{name}}' 사용",
+        "remove": "이 예외 삭제",
+        "add": "예외 추가",
+        "choose": "상황 선택",
+        "kindImage": "메시지에 이미지가 있음",
+        "kindHours": "특정 시간대",
+        "from": "시작",
+        "to": "종료",
+        "useRoute": "대신 사용",
+        "addHours": "추가",
+        "sameHour": "시작과 종료는 같은 시각일 수 없습니다.",
+        "full": "예외는 최대 {{count}}개입니다.",
+        "needOtherRoute": "시간대별로 바꾸려면 경로를 하나 더 만드세요."
+      }
+    },
+    "overview": {
+      "mapTitle": "새 작업이 모델을 정하는 방식",
+      "mapDescription": "왼쪽에서 오른쪽으로: 거치는 경로와 마지막에 도달하는 소스. 경로를 클릭하면 변경할 수 있습니다.",
+      "columnSources": "소스",
+      "columnEmpty": "아직 없음",
+      "openRoute": "경로 '{{name}}' 열기",
+      "recentTitle": "최근 선택",
+      "recentEmpty": "아직 경로를 사용한 작업이 없습니다.",
+      "keptOriginal": "지금 쓸 수 있는 모델이 없어 원래 선택한 모델을 사용했습니다.",
+      "keptOriginalShort": "원래 모델 사용",
+      "latest": "가장 최근 작업이 지나간 경로"
+    },
+    "switchOffer": {
+      "action": "{{model}}(으)로 바꿔 계속"
+    }
   }
 }
