@@ -77,6 +77,7 @@ import { AutomationOriginBadge } from '../AutomationOriginBadge';
 import { MessageSourceLabels } from '../MessageSourceLabels';
 import { SessionHandoffCard } from '../SessionHandoffCard';
 import { SessionLinkChip } from '../SessionLinkChip';
+import { BotStartedTasks, BotStartedTasksFooter, BotTaskLetterOpen } from '../BotStartedTasks';
 
 function embedded(children: ReactNode, sidebarTargetSessionId?: string) {
   return (
@@ -114,6 +115,29 @@ describe('sidebar-embedded session navigation boundary', () => {
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true, value: { writeText: mocks.writeText },
     });
+  });
+
+  // Regression: a device::task receipt used to render inert text. Existing link tests
+  // did not exercise the teammate receipt consumers. Unit tier: click production UI.
+  it.each(['footer', 'chip', 'letter'] as const)('opens a cross-device %s task reference', async (kind) => {
+    const task = { sessionId: 'remote-mac::remote-task', title: 'Remote work', created: true };
+    render(kind === 'footer' ? <BotStartedTasksFooter tasks={[task]} />
+      : kind === 'chip' ? <BotStartedTasks tasks={[task]} />
+      : <BotTaskLetterOpen senderSessionId={task.sessionId} />);
+    fireEvent.click(screen.getByRole('button'));
+    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/remote-task', undefined));
+    expect(mocks.pinSessionOrigin).toHaveBeenCalledWith('remote-mac', 'remote-task');
+    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('remote-task', null, { remote: true });
+  });
+
+  it('keeps same-device qualified receipts local and preserves embedded navigation boundaries', async () => {
+    const task = { sessionId: 'this-mac::local-task', title: 'Local work', created: true };
+    const view = render(<BotStartedTasksFooter tasks={[task]} />);
+    fireEvent.click(screen.getByRole('button'));
+    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/local-task', undefined));
+    expect(mocks.pinSessionOrigin).not.toHaveBeenCalled();
+    view.rerender(embedded(<BotStartedTasksFooter tasks={[task]} />));
+    expect(screen.queryByRole('button')).toBeNull();
   });
 
   it('keeps worker content identity while targeting the visible Lead sidebar bucket', () => {
