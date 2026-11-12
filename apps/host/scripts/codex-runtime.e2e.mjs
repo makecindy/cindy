@@ -233,6 +233,10 @@ try {
     assert.match(attachmentRows.find(row => row.clientId === 'native-attachment').content, /cindy-media:\/\/blobs\//);
   } finally { clearTimeout(timer); unsubscribe?.(); }
   console.log('PASS production Host attachments + native Codex: local image bytes reach upstream, file path is preserved and managed image URL is persisted (synthetic local upstream)');
+  // The Codex product-prompt marker round-trips through the Host task row (Maker lifecycle hooks).
+  await graph.maker.lifecycleHooks.onCodexProductPromptDelivery({ sessionId, threadId: 'fixture-thread', historyHasProductPrompt: true });
+  assert.equal(await graph.maker.lifecycleHooks.getCodexHistoryHasProductPrompt(sessionId), true);
+  console.log('PASS Codex product prompt delivery persists on the Host task row');
   console.log('PASS shared Host HTTP + queue + native Codex: send, persisted UUID/reply, steer, runtime reopen and stop (synthetic local upstream)');
   assert.ok(requests.length >= 3);
   console.log('PASS native Codex + production Host: gateway and custom provider turns; key rotation during a live turn preserves completion and the next gateway task uses the new key');

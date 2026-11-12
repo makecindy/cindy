@@ -34,6 +34,8 @@ import type { createHostCodexRuntime } from './codex-runtime.js';
 import { createHostModelContext } from './model-context.js';
 import { readDisabledSkillPaths } from '../../../desktop/src/main/skillhub/activationPreferences.js';
 import { createHostStartOptions } from './start-options.js';
+import { captureKnownFileBefore, noteOpaqueTurnChange } from '../../../desktop/src/main/turn-change-set/store.js';
+import { readCodexHistoryHasProductPrompt, writeCodexHistoryHasProductPrompt } from '../../../desktop/src/main/maker-host/session-storage.js';
 
 type HostProviderConfig = ReturnType<typeof createHostProviderConfig>;
 
@@ -299,6 +301,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
     capabilityRouting: DESKTOP_CAPABILITY_ROUTING_POLICY,
     capabilityAdditions: availableModels('claude-code'),
+    // The turn change record the desktop keeps for Claude and Pi (turn-change-set/store.ts).
+    turnChangeCapture: { beforeKnownFileWrite: captureKnownFileBefore, noteOpaqueWrite: noteOpaqueTurnChange },
     ...claudeModelResolvers,
     ...(mcpProviders.length > 0 ? { mcpProviders } : {}),
     ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
@@ -339,6 +343,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         ...piModelResolvers,
         getDisabledSkillPaths: readDisabledSkillPaths,
         capabilityAdditions: availableModels('pi'),
+        turnChangeCapture: { beforeKnownFileWrite: captureKnownFileBefore, noteOpaqueWrite: noteOpaqueTurnChange },
         ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
         ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
       })
@@ -361,6 +366,11 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     lifecycleHooks: {
       prepareStartOptions: startOptions.prepareStartOptions,
       onBeforeStart: startOptions.onBeforeStart,
+      // Codex product prompt delivery, persisted on the task row as on the desktop.
+      getCodexHistoryHasProductPrompt: sessionId => readCodexHistoryHasProductPrompt(sessionId),
+      onCodexProductPromptDelivery: async ({ sessionId, historyHasProductPrompt }) => {
+        await writeCodexHistoryHasProductPrompt(sessionId, historyHasProductPrompt);
+      },
       onClose: async id => {
       startOptions.onClose(id);
       try { await options.codexRuntime?.closeSession(id); }

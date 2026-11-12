@@ -137,6 +137,15 @@ test('every engine the Host assembles resolves per-model context the way the des
   assert.equal(typeof Object.getOwnPropertyDescriptor(graph.codex.deps, 'capabilityRouting')?.get, 'function',
     'Codex routing stays a getter, evaluated after the MCP bridge is prepared');
   assert.equal(typeof graph.codex.deps.resolveCapabilityRouting, 'function');
+
+  // Turn change record (Claude and Pi) and the Codex product-prompt marker, as on the desktop.
+  const { captureKnownFileBefore, noteOpaqueTurnChange } = await import('../../../desktop/src/main/turn-change-set/store.ts');
+  for (const [kind, agent] of [['claude-code', graph.agent], ['pi', graph.pi]]) {
+    assert.equal(agent.deps.turnChangeCapture?.beforeKnownFileWrite, captureKnownFileBefore, `${kind} turn changes`);
+    assert.equal(agent.deps.turnChangeCapture?.noteOpaqueWrite, noteOpaqueTurnChange, `${kind} opaque writes`);
+  }
+  assert.equal(typeof graph.maker.lifecycleHooks?.getCodexHistoryHasProductPrompt, 'function');
+  assert.equal(typeof graph.maker.lifecycleHooks?.onCodexProductPromptDelivery, 'function');
 });
 
 /*
