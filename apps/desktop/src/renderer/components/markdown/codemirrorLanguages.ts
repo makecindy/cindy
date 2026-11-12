@@ -58,6 +58,10 @@ import { r as legacyR } from '@codemirror/legacy-modes/mode/r';
 import { dockerFile as legacyDockerfile } from '@codemirror/legacy-modes/mode/dockerfile';
 import { diff as legacyDiff } from '@codemirror/legacy-modes/mode/diff';
 import { protobuf as legacyProtobuf } from '@codemirror/legacy-modes/mode/protobuf';
+import { fSharp as legacyFSharp } from '@codemirror/legacy-modes/mode/mllike';
+import { vb as legacyVb } from '@codemirror/legacy-modes/mode/vb';
+import { http as legacyHttp } from '@codemirror/legacy-modes/mode/http';
+import { graphqlLanguage } from 'cm6-graphql';
 
 // 把每个 legacy stream parser 包成 CM6 Extension。每个 wrap 是个常量,
 // 同一文件多次被打开也复用,不重复 define。
@@ -78,6 +82,9 @@ const r = StreamLanguage.define(legacyR);
 const dockerfile = StreamLanguage.define(legacyDockerfile);
 const diff = StreamLanguage.define(legacyDiff);
 const protobuf = StreamLanguage.define(legacyProtobuf);
+const fsharp = StreamLanguage.define(legacyFSharp);
+const vbnet = StreamLanguage.define(legacyVb);
+const http = StreamLanguage.define(legacyHttp);
 
 export function getCodeMirrorLanguage(alias: string | undefined): Extension | null {
   if (!alias) return null;
@@ -181,6 +188,14 @@ export function getCodeMirrorLanguage(alias: string | undefined): Extension | nu
     case 'protobuf':
     case 'proto':
       return protobuf;
+    case 'fsharp':
+      return fsharp;
+    case 'vbnet':
+      return vbnet;
+    case 'http':
+      return http;
+    case 'graphql':
+      return graphqlLanguage;
 
     default:
       return null;
