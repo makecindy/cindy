@@ -3,7 +3,7 @@
     "title": "Diagnostic des notifications",
     "read": "Lire l’état des notifications",
     "busy": "Lecture…",
-    "failed": "Impossible de lire l’état. Réessayez.",
+    "failed": "Impossible de lire l’état des notifications. Réessayez.",
     "copyFailed": "Impossible de copier le jeton.",
     "copied": "Jeton copié.",
     "bundle": "Identifiant de l’app",
@@ -65,7 +65,7 @@
       "sage": "Étincelle",
       "blue": "Rêverie",
       "lavender": "Chat de nuit",
-      "red": "Col rouge",
+      "red": "Collier rouge",
       "custom": "Couleur personnalisée",
       "hue": "Teinte",
       "preview": "Aperçu du message",
@@ -171,7 +171,11 @@
       "auto": "Automatique",
       "on": "Toujours activées",
       "off": "Désactivées"
-    }
+    },
+    "actionReplyPlaceholder": "Saisir une réponse",
+    "actionNotDelivered": "Cela n’est pas parvenu à votre ordinateur. Ouvrez Cindy pour répondre.",
+    "actionReplyNotDelivered": "Votre réponse n’a pas été envoyée. Ouvrez Cindy pour la renvoyer : {{text}}",
+    "actionRequestEnded": "Cette demande a déjà reçu une réponse ou a expiré."
   },
   "about": {
     "sectionTitle": "À propos de ce téléphone",

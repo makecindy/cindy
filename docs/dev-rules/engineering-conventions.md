@@ -271,24 +271,29 @@ PR 门禁必须在 Windows 上用多个并行分片（当前为 4 个）完整�
   各组内按 id）。
 - **两级状态**：`decided` 违反即阻断 CI；`proposed` 只告警，用于承载「已知不一致但
   尚未拍板」的术语——让清单可见可讨论，而不是靠脚本替产品做裁决。
-- **三类规则**：禁用译法、保留英文术语的大小写形态、zh-CN 半角标点与三语省略号。
+- **四类规则**：禁用译法、保留英文术语的大小写形态、zh-CN 半角标点与三语省略号，
+  以及只查 en 的写法规则（DESIGN.md §11.1 / §11.2：不写 Please、不用 successfully、
+  正文不用直引号、按钮不用无宾的 Confirm / OK / Submit）。
   标点规则的适用范围由现状数据定，不靠直觉——例如日文 UI 惯例本就用半角冒号，
   ja 不套用中文的全角规则。
 - **存量**：`i18n/glossary-baseline.json` 冻结引入时的既有违规，**只减不增**；修好一条
   就从账上删一条，已修复却仍挂账会报错。新增违规一律阻断。
 - **误报处理**：guard 已剥离 `{{插值}}`、URL、文件名，并把连字符视作词边界
   （`ssh-agent` 不会被判成产品 `Agent`）。仍需放行时用 `exempt`——完整路径精确匹配，
-  或以 `.` 结尾的子树前缀；同形异义必须在 `note` 里写明理由。
+  或以 `.` 结尾的子树前缀；同形异义必须在 `note` 里写明理由。英文写法规则另用
+  `englishCopyExempt`：按规则名分组、只收精确 key，唯一用途是必须原样展示的格式字面量
+  （JSON 示例、非法字符清单、终端命令）；文案不再命中时报豁免失效。
 - **门禁**：
   - `pnpm check:i18n` 校验 key 结构——缺 key、孤儿 key、跨 locale 类型冲突报错阻断；
     空值与“与默认语言完全相同”只发警告。跨语言常驻表 `crossLocaleStrings.generated.json`
     与各 locale 不一致时同样阻断，按提示运行 `node scripts/i18n-cross-locale.mjs` 重新生成。
-  - `pnpm check:i18n-glossary` 校验译文术语与标点，并检查 `GLOSSARY.md` 是否与术语表同步。
+  - `pnpm check:i18n-glossary` 校验译文术语、标点与英文写法，并检查 `GLOSSARY.md` 是否与术语表同步。
   - 两者互补：前者管「key 齐不齐」，后者管「词译得一不一致」，谁也替代不了谁。改
     i18n 后两个都要跑（CI 已强制）。
 - **影子 catalog**：有几批不走 i18next 的手写多语 catalog，根脚本只扫 locale JSON、扫不到
   这些 `.ts`。它们由 vitest 直接 import 运行时对象覆盖，复用
-  `scripts/shared/glossary-rules.mjs` 的同一套判定，随 `test:unit` 阻断：
+  `scripts/shared/glossary-rules.mjs` 的同一套判定（含英文写法规则，各自的既有问题按命中次数与文案摘要
+  冻结在测试内的清单里、只减不增），随 `test:unit` 阻断：
   - mobile：`src/auth/loginMessages.ts`、`src/session/newSessionMessages.ts`、
     `src/session/fullAccessConfirmationCopy.ts`（Full access 高风险权限提示）→
     `apps/mobile/src/__tests__/shadowCatalogGlossary.test.ts`
@@ -305,10 +310,14 @@ PR 门禁必须在 Windows 上用多个并行分片（当前为 4 个）完整�
   新增同类手写 catalog 时记得加进对应测试的 `collectEntries()`。**catalog 要单独成模块**：
   原先这两份分别嵌在 `bootstrap-electron.ts` 与 `fullAccessConfirmation.ts` 里，测试一 import
   就会拉起整个 Electron 主进程 / react-native，根本跑不起来——这也是它们长期是盲区的原因。
-- **Slack / IM 侧的文案不在任何 locale 文件里**：`src/main/hook-control/interactions.ts` 的
-  权限卡片按钮是硬编码中文，与应用内 `permissions.alwaysAllowForSession` 是同一个动作。
-  改产品术语时这类「同一动作、两处独立文案」要一起找出来，否则用户在 Slack 和 App 里
-  看到两种说法。
+- **IM 控制文案同样走 locale**（2026-11-12 起）：个人 bot（飞书、Telegram、Discord、微信、企业微信、
+  钉钉、iMessage）、官方 hook（Slack／Telegram／X）和 `packages/lizi-im` 传输层发给 IM 用户的命令回执、
+  状态、卡片按钮与错误说明，放在 `imBot.text.<渠道>.*`，经 `src/main/im/shared/imText.ts` 按主人的
+  Cindy 界面语言现取；lizi-im 经 `setTransportTextResolver` 注入，缺 key 时回退包内中文。Agent 正文
+  仍随来信语言，发给模型的上下文不走这里。新增 IM 文案时 12 种语言一起补，测试里断言中文的用
+  `setMainLocale('zh-CN')` 固定语言。Slack 权限卡片按钮与应用内 `permissions.alwaysAllowForSession`
+  是同一个动作，改产品术语时这类「同一动作、两处文案」要一起改，否则用户在 Slack 和 App 里看到
+  两种说法。
 - **批量改术语时覆盖相关文案断言，完整单测由 CI 兜底**：仓库里有若干测试直接断言中文文案
   （`automationGeneratedSessions.test.ts`、`builtinToolsCollabDescriptionI18n.test.ts`、
   mobile 的 `sessionMenu.test.ts` 等）。它们是有意的文案锁，改词后要同步更新期望值，

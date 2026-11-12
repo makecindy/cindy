@@ -75,6 +75,9 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
 - 修改 IM 工具授权、来源消息、多端确认或暂停期间的确认回执，或新增 IM 渠道前，
   必须先读 `docs/product-rules/im-permission-confirmation.md`；Desktop、Mobile 与共享
   packages 共用同一最终决定，渠道收到回答不代表执行已恢复。
+- 新增或修改手机通知上的按钮（回答提问、回复、允许一次、拒绝）、哪些通知带按钮、按钮点击在后台的执行、没送到时的提示，
+  或登录凭证在钥匙串里的可读时机前，必须先读 `docs/product-rules/notification-actions.md`：按钮是 App 之外的
+  作答入口，看不全、说不清或高风险的操作不能在通知上批准，答复只作用于通知描述的那一条请求。
 - 新增或修改代输入（`request_input_handoff`、宿主步骤读取与执行、代输入卡、截图扫码、终端 askpass、
   单窗口实时画面、设备码识别，或任何经手主人填写值的路径）前，必须先读
   `docs/product-rules/input-handoff.md`：主人填写的值只交给宿主执行，不进模型、记录、日志、IM 与推送。
