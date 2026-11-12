@@ -737,7 +737,7 @@ async function prepareAndStartRemoteAgentSession(
           return;
         }
         linkState = 'closed';
-        if (controller) controller.onClosed(reason, error?.message);
+        if (controller) controller.onClosed(reason, error?.message, client.runId);
         else void disposeLocal();
       },
       // Codex 经执行环境在本机起的进程还在跑(对方看不到)：拉取时告诉对方，免得被当成闲置收回。

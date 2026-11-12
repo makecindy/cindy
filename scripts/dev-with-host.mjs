@@ -11,31 +11,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveHostDataDir } from '../apps/host/src/profile-path.mjs';
+import { ensureBackgroundHost, existingHost } from '../apps/host/src/background.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const userDataDir = resolveHostDataDir();
-const endpointFile = path.join(userDataDir, 'host-endpoint.json');
-
-function runningEndpoint() {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(endpointFile, 'utf-8'));
-    if (typeof parsed?.pid !== 'number' || typeof parsed?.baseUrl !== 'string') return null;
-    process.kill(parsed.pid, 0);
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-async function waitForEndpoint(timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const endpoint = runningEndpoint();
-    if (endpoint) return endpoint;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  return null;
-}
 
 /**
  * The host serves the real renderer bundle, and a desktop build wipes it. Build
@@ -56,41 +35,26 @@ async function ensureRendererBundle() {
   }
 }
 
-let host = null;
 await ensureRendererBundle();
-if (!runningEndpoint()) {
-  console.log(`[dev:host] starting cindy-host for ${userDataDir}`);
-  host = spawn(
-    process.execPath,
-    ['--import', 'tsx', '--import', './apps/host/src/loaders/register-raw.mjs', 'apps/host/src/main.ts'],
-    {
-      cwd: repoRoot,
-      stdio: 'inherit',
-      env: { ...process.env, CINDY_HOST_DATA_DIR: userDataDir },
-    },
-  );
-  const endpoint = await waitForEndpoint(15_000);
-  if (!endpoint) {
-    console.error('[dev:host] cindy-host did not publish an endpoint; stopping');
-    host.kill('SIGTERM');
-    process.exit(1);
-  }
-  console.log(`[dev:host] cindy-host ready at ${endpoint.baseUrl}`);
-}
+const host = await ensureBackgroundHost({ profile: userDataDir, command: process.execPath,
+  args: ['--import', 'tsx', '--import', './apps/host/src/loaders/register-raw.mjs', 'apps/host/src/main.ts', 'serve'],
+  cwd: repoRoot });
+console.log(`[dev:host] ${host.started ? 'started' : 'reusing'} background Host PID ${host.pid}`);
+console.log('[dev:host] Closing this desktop leaves tasks running. Use cindy-host stop to stop the backend explicitly.');
+// Recheck after preparation and never silently choose a replacement backend.
+const attached = await existingHost(userDataDir);
+if (attached?.instanceId !== host.instanceId) throw new Error('Host changed before desktop attachment; retry explicitly');
 
 const desktop = spawn(process.execPath, [process.env.npm_execpath, '--filter', 'desktop', 'dev', ...process.argv.slice(2)], {
   cwd: repoRoot,
   stdio: 'inherit',
-  env: { ...process.env, XDT_USER_DATA_DIR: userDataDir, CINDY_HOST_API: runningEndpoint().baseUrl },
+  env: { ...process.env, XDT_USER_DATA_DIR: userDataDir, CINDY_HOST_API: host.baseUrl, CINDY_HOST_INSTANCE: host.instanceId },
 });
 
-const shutdown = (signal) => {
-  host?.kill(signal);
-};
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => desktop.kill('SIGINT'));
+process.on('SIGTERM', () => desktop.kill('SIGTERM'));
+desktop.on('error', error => { console.error(error.message); process.exitCode = 1; });
 
 desktop.on('exit', (code) => {
-  shutdown('SIGTERM');
-  process.exit(code ?? 0);
+  process.exitCode = code ?? 1;
 });

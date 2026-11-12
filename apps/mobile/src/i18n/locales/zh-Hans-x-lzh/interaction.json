@@ -193,6 +193,7 @@
     "fromLead": "Lead 之讯",
     "fromWorkerNamed": "Worker「{{role}}」之讯",
     "fromWorker": "Worker 之讯",
+    "fromWorkerBatch": "系统所报 Worker 结果凡 {{count}}",
     "emptyMessageBody": "（空讯）"
   },
   "contextSheet": {

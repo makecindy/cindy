@@ -131,10 +131,13 @@ vi.mock('../BotGenerationLabel', () => ({
 vi.mock('@/state/agentIslandActivity', () => ({ useAgentIslandActivity: () => mocks.activity }));
 // Voice lifecycle and native shortcut ownership are exercised with the real
 // shared hook in useBotGroupVoiceInput.test.tsx; this suite covers group sends.
-vi.mock('../useBotGroupVoiceInput', () => ({ useBotGroupVoiceInput: ({ text }: { text: string }) => ({
+vi.mock('../useBotGroupVoiceInput', () => {
+  const ownsDraft = () => false;
+  return { useBotGroupVoiceInput: ({ text }: { text: string }) => ({
+  ownsDraft,
   displayText: text, state: 'idle', isBusy: false, isListening: false, isCaptureReady: false,
   lastError: null, shortcutLabel: '', start: () => false, stop: async () => {}, cancel: async () => {},
-}) }));
+}) }; });
 
 beforeAll(() => {
   // jsdom has no layout; scrolling is a no-op here.

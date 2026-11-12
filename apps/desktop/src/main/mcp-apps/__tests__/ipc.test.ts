@@ -47,7 +47,7 @@ vi.mock('../host.js', () => ({
     }
   },
 }));
-vi.mock('../runtime.js', () => ({ setMcpAppsHost: vi.fn(), readAppServer: vi.fn() }));
+vi.mock('../runtime.js', () => ({ setMcpAppsHost: vi.fn(), readAppServer: vi.fn(), replacePluginAppServers: vi.fn() }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({ getMcpAppRevisionKey: state.revisionKey }));
 vi.mock('../sandboxProtocol.js', () => ({
   supplyMcpAppDocument: vi.fn(),

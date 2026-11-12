@@ -272,6 +272,9 @@ export function BotGroupComposer({
       mention.onChange(value, edit);
     },
   });
+  // The registered outbox handle survives renders; consult current ownership,
+  // including previews that have not yet been committed into textRef.
+  const ownsVoiceDraft = voice.ownsDraft;
   // Same @ picker in the group and in a 话题; the 话题 also resolves the server's aliases.
   const mention = useBotGroupMentionPicker({
     text,
@@ -467,13 +470,13 @@ export function BotGroupComposer({
     () => thread ? undefined :
       registerBotGroupComposer(groupId, {
         prepareRestore: () => {
-          if (textRef.current || attachmentsRef.current.length > 0 || divisionRef.current) return null;
+          if (ownsVoiceDraft() || textRef.current || attachmentsRef.current.length > 0 || divisionRef.current) return null;
           const revision = inputVersion.current.revision;
-          return () => revision === inputVersion.current.revision && !textRef.current
+          return () => !ownsVoiceDraft() && revision === inputVersion.current.revision && !textRef.current
             && attachmentsRef.current.length === 0 && !divisionRef.current;
         },
         restore: (entry) => {
-          if (textRef.current || attachmentsRef.current.length > 0 || divisionRef.current) return false;
+          if (ownsVoiceDraft() || textRef.current || attachmentsRef.current.length > 0 || divisionRef.current) return false;
           groupAttemptRef.current = { clientId: entry.input.clientId, signature: entry.signature,
             ...(entry.editHold ? { editSource: { groupId: entry.input.groupId, clientId: entry.input.clientId,
               revision: entry.editHold.revision } } : {}) };
@@ -494,7 +497,7 @@ export function BotGroupComposer({
         },
         notifyFailed: (errorKey) => toast.error(tRef.current(errorKey)),
       }),
-    [groupId, thread],
+    [groupId, thread, ownsVoiceDraft],
   );
 
   const send = async () => {

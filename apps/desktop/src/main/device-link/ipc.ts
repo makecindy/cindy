@@ -41,7 +41,7 @@ import {
 } from '@cindy/device-link';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import { ServerApiError } from '../serverApiClient.desktop';
-import { deviceLinkApiFetch } from './deviceLinkApi.js';
+import { deviceLinkApiFetch } from './deviceLinkApi.desktop.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';

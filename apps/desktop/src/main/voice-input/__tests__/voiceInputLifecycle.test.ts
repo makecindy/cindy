@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AsrEvent } from '@cindy/voice-input-core';
+import { DictationRefiner } from '@cindy/voice-input-core';
 
 // #6656 / discussion_r4399404049: invoke the handlers registered by real main,
 // with the real controller/queue. Only Electron, account services and providers
@@ -59,7 +60,7 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendere
 vi.mock('../../model-access/gatewayKeyRejection.js', () => ({ reportCindyGatewayKeyRejected: vi.fn() }));
 vi.mock('../FallbackAsrProvider.js', () => ({ FallbackAsrProvider: m.Provider }));
 vi.mock('../CindyVoiceSessionClient.js', () => ({ CINDY_MANAGED_REFINER_PROVIDER: 'auto',
-  CindyVoiceRunContext: class {}, isCindyVoiceServiceReady: () => true }));
+  CindyVoiceRunContext: class { refineRequestBudget() { return 1; } }, isCindyVoiceServiceReady: () => true }));
 vi.mock('../VoiceInputModelSelection.js', () => ({
   getVoiceInputModelSelection: () => ({ asrProvider: 'litellm-volcengine-sauc-asr', refinerProvider: 'codex-gpt-5.4-mini', serviceMode: 'cindy' }),
   voiceInputModelSelectionSignature: () => 'fixed', effectiveVoiceInputServiceMode: () => 'cindy',
@@ -125,6 +126,25 @@ afterEach(async () => {
 });
 
 describe('registered main dictation lifecycle (#6656)', () => {
+  // PRRT_kwDOTgdRUs62LQU0: existing cancellation tests disabled refinement,
+  // so event suppression hid a post-cancel billable dispatch. Real registered
+  // handlers/controller; only the external refiner is replaced. Unit tier.
+  it.each([false, true])('dispatches refinement after delayed flush only when not cancelled (%s)', async cancelled => {
+    const refine = vi.spyOn(DictationRefiner.prototype, 'refine').mockResolvedValue({
+      accepted: false, sourceSegmentIds: [], basedOnText: 'spoken', elapsedMs: 0,
+    });
+    const event = windowEvent(); const provider = plan(); const flush = m.deferred();
+    provider.connect.resolve(); provider.disposed.resolve(); provider.flush = flush.promise;
+    try {
+      const run = await invoke('start', event, { refinementEnabled: true });
+      expect(run.ok).toBe(true);
+      const stopping = invoke('stop', event); await provider.flushing.promise;
+      const cancelling = cancelled ? invoke('cancel', event, { runId: run.runId }) : Promise.resolve();
+      flush.resolve(); await stopping; await cancelling;
+      expect(refine).toHaveBeenCalledTimes(cancelled ? 0 : 1);
+      expect(m.providers.at(-1)!.dispose).toHaveBeenCalledOnce();
+    } finally { flush.resolve(); refine.mockRestore(); }
+  });
   // The recording-scoped lease must survive neither a rejected ASR stop nor
   // window teardown. Existing error coverage only exercised startup failure.
   it('releases the recording lease and provider when cancellation rejects', async () => {

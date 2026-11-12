@@ -3385,7 +3385,9 @@ it('materializes a future GPT generation with inherited parameters in native Pi'
     { ...BUNDLED_CATALOG, providers: [provider] });
   expect(result.providers[0]).toMatchObject({ id: 'future-sub2api', baseUrl: 'https://relay.example/v1', api: 'openai-responses' });
   expect(result.providers[0]?.models[0]).toMatchObject({ id: 'gpt-9-sol',
-    contextWindow: 1050000, maxTokens: 128000, input: ['text', 'image'], reasoning: true,
+    // The newer API predecessor declares a 272K working window; a future ID
+    // must not inherit the Registry's exact-model 1M override.
+    contextWindow: 272000, maxTokens: 128000, input: ['text', 'image'], reasoning: true,
     thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high' } });
   expect(result.providers[0]?.models[0]?.cost).toBeUndefined();
 });

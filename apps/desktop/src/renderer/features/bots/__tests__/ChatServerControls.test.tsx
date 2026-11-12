@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from "@/cindy-brain/PluginUiContributions";
 import { StrictMode, useState, type ReactNode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { act, cleanup, createEvent, fireEvent, render as renderUI, screen, waitFor, within } from '@testing-library/react';
@@ -22,10 +23,13 @@ import { queryShareableMessageIds, stripInteractiveElements } from '@/lib/shareC
 
 // Native dictation is covered in useBotGroupVoiceInput.test.tsx; keep this
 // thread/send suite independent of microphone and account-service setup.
-vi.mock('../useBotGroupVoiceInput', () => ({ useBotGroupVoiceInput: ({ text }: { text: string }) => ({
+vi.mock('../useBotGroupVoiceInput', () => {
+  const ownsDraft = () => false;
+  return { useBotGroupVoiceInput: ({ text }: { text: string }) => ({
+  ownsDraft,
   displayText: text, state: 'idle', isBusy: false, isListening: false, isCaptureReady: false,
   lastError: null, shortcutLabel: '', start: () => false, stop: async () => {}, cancel: async () => {},
-}) }));
+}) }; });
 
 const mocks = vi.hoisted(() => ({
   status: vi.fn(), react: vi.fn(), reactors: vi.fn(), thread: vi.fn(), followThread: vi.fn(), reply: vi.fn(), createInvite: vi.fn(), previewInvite: vi.fn(), acceptInvite: vi.fn(),
@@ -649,7 +653,7 @@ describe('chat interaction controls', () => {
   it('preserves copy and image sharing beside thread replies and reactions in one toolbar', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined), reply = vi.fn();
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
-    render(<ChatMessageActions shareScope="group:room" groupId="room" message={{ ...message, replyCount: 2 }} onReply={reply} onChanged={vi.fn()} />);
+    render(<ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={{ ...message, replyCount: 2 }} onReply={reply} onChanged={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'chat.messageActionBar.copy' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('Root message'));
     fireEvent.click(screen.getByRole('button', { name: k('openTopic') }));
@@ -725,7 +729,7 @@ describe('chat interaction controls', () => {
 
   it('removes only the current actor reaction and refreshes the authoritative message', async () => {
     const changed = vi.fn();
-    render(<ChatMessageActions shareScope="group:room" groupId="room" message={message} onChanged={changed} />);
+    render(<ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={message} onChanged={changed} />);
     const reaction = screen.getByRole('button', { name: k('reactionCount') });
     expect(reaction.getAttribute('aria-pressed')).toBe('true');
     fireEvent.click(reaction);

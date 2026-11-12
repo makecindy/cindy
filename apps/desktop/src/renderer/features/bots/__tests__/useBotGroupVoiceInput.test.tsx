@@ -7,6 +7,7 @@ import { useRef, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { VoiceInputRendererEvent } from '@cindy/voice-input-core';
 import type { VoiceInputShortcut } from '@/voice-input/shortcut';
+import type { BotGroupComposerHandle, BotGroupOutboxEntry } from '../botGroupOutbox';
 
 const mocks = vi.hoisted(() => ({
   t: (key: string) => key,
@@ -15,7 +16,15 @@ const mocks = vi.hoisted(() => ({
   captureEngine: null as { stop: () => Promise<void>; drainBufferedAudio: () => Promise<void> } | null,
   guards: vi.fn(),
   owner: { dataOwnerId: 'test-owner', generation: 1 },
+  composer: null as BotGroupComposerHandle | null,
 }));
+vi.mock('../botGroupOutbox', async importOriginal => {
+  const actual = await importOriginal<typeof import('../botGroupOutbox')>();
+  return { ...actual, registerBotGroupComposer: (groupId: string, handle: BotGroupComposerHandle) => {
+    mocks.composer = handle;
+    return actual.registerBotGroupComposer(groupId, handle);
+  } };
+});
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: mocks.t }) }));
 vi.mock('@/hooks/useCodexSessionExpiredPrompt', () => ({
   useCodexSessionExpiredPrompt: () => mocks.expired, isCodexSessionExpiredError: () => false,
@@ -113,6 +122,35 @@ beforeEach(() => {
 afterEach(() => { cleanup(); clearArmedDetachedVoiceDraft(); events.clear(); shortcuts.clear(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('group textarea dictation ownership (#6650)', () => {
+  // PRRT_kwDOTgdRUs62LQUw: actual composer registration + real dictation hook.
+  // A preview in an empty draft used to accept outbox restoration. Cover both
+  // the initial gate and an edit hold obtained before recording starts (unit).
+  it('rejects failed-message restoration and stale edit holds while dictation owns the draft', async () => {
+    render(<Tooltip.Provider><BotGroupComposer groupId="group" draftKey="voice-outbox-restore"
+      running={false} members={[]} /></Tooltip.Provider>);
+    const handle = mocks.composer!;
+    const canRestore = handle.prepareRestore!()!;
+    expect(canRestore()).toBe(true);
+    const entry: BotGroupOutboxEntry = { input: { groupId: 'group', clientId: 'failed', text: 'old message', mentions: { all: false, botIds: [] } },
+      signature: 'old', draft: 'old message', tracked: [], files: [], attachments: [],
+      attachmentScope: 'group', status: 'failed', createdAt: 0, after: 0 };
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'newChat.chatInput.voiceInput.start' }));
+      // An already pending edit may finish before React renders the busy state.
+      expect(canRestore()).toBe(false);
+      expect(handle.restore(entry)).toBe(false);
+    });
+    act(() => emit({ type: 'draft', runId: 'run', text: 'new speech', source: 'partial', segment }));
+    expect(handle.prepareRestore!()).toBeNull();
+    expect(canRestore()).toBe(false);
+    let restored = true;
+    act(() => { restored = handle.restore(entry); });
+    expect(restored).toBe(false);
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('new speech');
+    expect(api.cancel).not.toHaveBeenCalled();
+    act(() => { submit(); emit({ type: 'state', runId: 'run', state: 'done' }); });
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('spoken');
+  });
   // discussion_r4496889744: a queued cancel must revoke event ownership before
   // main finishes its delayed stop. Real hooks; controlled IPC completion.
   it('rejects stop results immediately after cancel while cancel IPC is pending', async () => {

@@ -2389,7 +2389,10 @@ export function registerVoiceInputIpc(): void {
               // changing the local auxiliary chain must not cancel it. The
               // owner fence still prevents a previous account's text from
               // being sent after an account switch.
-              beforeDispatch: () => assertVoiceInputOwnerScopeCurrent(ownerScopeKey),
+              beforeDispatch: () => {
+                if (admission.cancelled) throw new Error('voice input cancelled');
+                assertVoiceInputOwnerScopeCurrent(ownerScopeKey);
+              },
               timeoutMs: VOICE_INPUT_MANAGED_REFINER_IDLE_TIMEOUT_MS,
               voiceContext,
               onUsage: ({ servedModel, ...usage }) => {
@@ -2426,6 +2429,7 @@ export function registerVoiceInputIpc(): void {
               profile,
               createVoiceInputTextModelClient(profile, {
                 beforeDispatch: () => {
+                  if (admission.cancelled) throw new Error('voice input cancelled');
                   assertVoiceInputOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot);
                   assertRefinerRouteAvailable(profile);
                 },
@@ -2506,6 +2510,9 @@ export function registerVoiceInputIpc(): void {
           if (runId) emit({ type: 'draft', runId, text, segment, source });
         },
         onSubmitted: (text, segment) => {
+          // Cancel is admitted synchronously while provider teardown is queued.
+          // Refusing the range also prevents stop from launching refinement.
+          if (admission.cancelled || event.sender.isDestroyed()) return undefined;
           if (runId) emit({ type: 'submitted', runId, text, segment });
           return makeEditableRange(text, segment);
         },

@@ -200,8 +200,10 @@ export function useBotGroupVoiceInput({
   }, [identity, start, stop, textareaRef, draftKey, disabled]);
 
   const range = voice.draftRange;
+  // Includes the synchronous start claim, before React publishes isBusy.
+  const ownsDraft = useCallback(() => activeComposer === identity, [identity]);
   const displayText = voice.isBusy && range && voice.draftText && canApply()
     ? text.slice(0, range.from) + voice.draftText + text.slice(range.to)
     : text;
-  return { ...voice, start, stop, displayText, shortcutLabel: formatVoiceInputShortcut(settings.shortcut) };
+  return { ...voice, start, stop, ownsDraft, displayText, shortcutLabel: formatVoiceInputShortcut(settings.shortcut) };
 }

@@ -690,6 +690,9 @@ importers:
       '@cindy/auth-client':
         specifier: workspace:*
         version: link:../../packages/auth-client
+      '@cindy/browser-control-runtime':
+        specifier: workspace:*
+        version: link:../../packages/browser-control-runtime
       '@cindy/device-link':
         specifier: workspace:*
         version: link:../../packages/device-link
@@ -1078,6 +1081,9 @@ importers:
       typescript-eslint:
         specifier: ^8.0.0
         version: 8.64.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
+      undici:
+        specifier: ^8.3.0
+        version: 8.7.0
       vitest:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.33.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)

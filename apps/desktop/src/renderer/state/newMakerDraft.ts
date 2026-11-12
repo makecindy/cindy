@@ -18,6 +18,7 @@
  *     不是偏好记忆;静默还原会让旧目录无感知地带进新会话)
  */
 
+import { sanitizeModelGroupSelection, type ModelGroupSelection } from '../../shared/modelGroups';
 import { useSyncExternalStore } from 'react';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 import { sameModelRoute, type AppDefaultModelSelection } from '../../shared/appDefaultModelSelection';
@@ -203,6 +204,11 @@ export interface NewMakerDraft {
    */
   /** 选中的插件模型；底下的模型设置保留，插件没给结果时用它们。 */
   pluginModel: { pluginId: string; modelId: string } | null;
+  /**
+   * 新任务选中的模型组(用户建的路线；旧版的模式读取时丢弃)：第一条消息发出前按它选一个具体模型；记住为新任务默认，
+   * 手动选任何模型或插件模型即清除。底下的模型设置保留，组里没有能用的模型时用它们。
+   */
+  modelGroup: ModelGroupSelection | null;
 }
 
 /**
@@ -280,6 +286,7 @@ function makeDefault(): NewMakerDraft {
     newChatDefaultPermissionMode: null,
     defaultTupleSelectionCustomized: false,
     pluginModel: null,
+    modelGroup: null,
   };
 }
 
@@ -520,6 +527,7 @@ function sanitize(raw: unknown): NewMakerDraft {
     newChatDefaultPermissionMode,
     defaultTupleSelectionCustomized,
     pluginModel: sanitizePluginModel(r.pluginModel),
+    modelGroup: sanitizeModelGroupSelection(r.modelGroup),
   };
 }
 
@@ -1390,6 +1398,17 @@ export function __resetForTest(): void {
     }
   }
   emit();
+}
+
+/**
+ * 测试用 —— 模拟 renderer 重新加载本模块(app 重启):丢弃全部内存态,按模块首次求值的
+ * 方式从 localStorage 恢复,不写盘、不通知。新增模块级状态时要在这里一并复位。
+ */
+export function __reloadForTest(): void {
+  activeDataOwnerId = null;
+  preferenceSyncFallback = null;
+  listeners.clear();
+  currentDraft = loadFromStorage();
 }
 
 export const __STORAGE_KEY = STORAGE_KEY;
