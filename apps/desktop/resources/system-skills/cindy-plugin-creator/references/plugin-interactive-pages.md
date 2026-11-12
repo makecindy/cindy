@@ -151,6 +151,8 @@ await app.connect();
 重发最初的输入和结果。把首屏数据写进 HTML。离屏销毁与重建的触发条件、输入和浏览位置的保留办法，
 见[页面生命周期](examples/interactive-pages/REFERENCE.md#等待取消与页面生命周期)。
 
+小草稿和浏览位置可使用[内置页面状态辅助模块](#92-内置页面状态辅助模块)，不需要额外安装依赖。
+
 ### 6. 页面读 JSON，只更新需要的部分
 
 页面首次显示后由自己的脚本接管，这就是常见的 C/S 写法。下面查询列表并更新
@@ -293,6 +295,84 @@ parent.postMessage({jsonrpc:'2.0', id:'save-draft-1',
 清空、rewind、归档和卸载插件保留状态，仍占任务额度；卸载插件不会删除页面状态，删除任务会删除。
 暂不可用的卡片不交还状态，恢复合法可见性后才可恢复；分叉／复制任务不带页面状态。
 删除是删除数据库记录，不承诺清除数据库旧页或历史备份。
+
+### 9.2 内置页面状态辅助模块
+
+`@cindy/ext-apps` 和 `@cindy/ext-apps/react` 是 Cindy 为页面提供的内置模块，随客户端升级，
+**不要 npm 安装**。使用打包器时将这两个名字标成 external，保留浏览器运行期 import。
+作者已有的精确、前缀、null 和 scopes 映射保持优先；React 由页面传入正在使用的实例，宿主不再加载一份。
+远程预算不足时先省略这两个附加模块，不能挤掉原来能带上的官方 SDK。
+执行端或查看端较旧、附加模块被省略时，动态 import 会失败；catch 后保留本地 UI，不能假报保存成功。
+静态 import 失败会使整个模块脚本不执行，不能靠它后面的 try/catch 退化。
+
+作者负责：选择字段；初始化恢复后结合当前业务数据校正；用户变化时调用 setter；
+默认对象带 `version`、格式改变时递增；模块缺失时做动态 import 退化。
+辅助模块负责无能力时保持本地值、默认 500ms 防抖、在途请求合并和错误处理。
+默认值或恢复值不会自动保存；恢复值不是对象、缺少 version 或版本不同则回默认值，原历史值不会被自动覆盖。
+页码超过现有总页数等业务校正仍由页面做，不要让晚到的工具结果覆盖用户已改的输入。
+
+原生 JS 在 `await app.connect()` 后创建一次：
+
+```js
+const mod = await import('@cindy/ext-apps').catch(() => null);
+const initial = { version: 1, page: 1, draft: '' };
+let local = initial;
+const state = mod ? mod.createViewState(app, initial) : {
+  get: () => local,
+  set: next => { local = typeof next === 'function' ? next(local) : next; },
+  flush: () => Promise.reject(new Error('VIEW_STATE_UNSUPPORTED')),
+  dispose() {}
+};
+render(state.get()); // 在第一次业务渲染前校验恢复值的字段和范围
+input.addEventListener('input', () => state.set(s => ({ ...s, draft: input.value })));
+done.addEventListener('click', async () => {
+  try { await state.flush(); showSaved(); }
+  catch { showSaveError('尚未确认保存'); }
+});
+// 加入页面现有 teardown 清理：state.dispose()；不要覆盖其它清理逻辑。
+```
+
+`set(value | updater)` 返回 void，更新本地状态且失败不回滚屏幕；使用完整不可变对象。
+同值不重发。`-32602` 只提示一次固定错误，不打印状态；暂时错误或断线也不自动重试。
+同一失败值重复 set/flush 不重试，下一次真实变化才再保存。
+`flush()` 取消防抖并等待调用时的值或本页更新值提交，失败则 reject；它不是业务提交。
+默认值也可通过显式 flush 保存；无能力时报 `VIEW_STATE_UNSUPPORTED`。
+`dispose()` 停止未发送的保存，不关闭 App；已发请求的取消不意味着没写入。不要等离屏才保存。
+
+React 在挂载组件前加载模块并固定 hook；传入的 React 必须与页面渲染器是同一份：
+
+```jsx
+const [core, hooks] = await Promise.all([
+  import('@cindy/ext-apps').catch(() => null),
+  import('@cindy/ext-apps/react').catch(() => null)
+]);
+const useViewState = core && hooks ? hooks.createViewStateHooks(React).useViewState
+  : (_app, initial) => React.useState(initial);
+const initial = { version: 1, draft: '' };
+function Editor({ app }) {
+  const [state, setState] = useViewState(app, initial, { debounceMs: 500 });
+  return <>
+    <textarea value={state.draft} onChange={e => setState(s => ({ ...s, draft: e.target.value }))}/>
+    <button onClick={async () => {
+      try {
+        if (!core) throw new Error('VIEW_STATE_UNSUPPORTED');
+        await core.flushViewState(app); showSaved();
+      } catch { showSaveError('尚未确认保存'); }
+    }}>完成</button>
+  </>;
+}
+```
+
+每页只创建一个 controller 或 hook，不与自行发送状态 RPC 混用。
+React 的 `app` 在连接前传 null，已连接后传 App；连接前用户已编辑时以编辑值为准。
+要首屏就是恢复值，先等 connect 完成再挂载业务界面；app 为 null 时不承诺隐藏默认界面。
+正常组件卸载且 App 仍连接时会尽力发送已修改值；页面关闭后不继续请求，未收到成功回执的最后输入不保证保存。
+`flushViewState(app)` 找到同一 App 的 controller，不要为“完成”按钮临时创建另一个。
+
+类型提示唯一来源是 [cindy-ext-apps.d.ts](examples/interactive-pages/cindy-ext-apps.d.ts)。
+把此声明放入作者项目 `types/cindy-ext-apps.d.ts`，TypeScript 的 include 加 `types/**/*.d.ts`；
+JS 可用 `// @ts-check` 和 `/// <reference path="./types/cindy-ext-apps.d.ts" />`（按文件位置调整）。
+它只提供编辑器类型，不是模块实现，也不能让旧宿主获得新能力。React 项目沿用已有的 JSX 类型。
 
 ### 10. 硬性规则与验收
 

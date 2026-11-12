@@ -258,3 +258,47 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       void instance.close().then(() => process.exit(0));
     });
 }
+
+/** E2E: page-authored React instance, actual built-in modules and official SDK. */
+export async function viewStateHelperHtml(kind) {
+  const react = kind === 'react';
+  const bundle = await build({ bundle: true, write: false, format: 'esm', minify: true,
+    external: ['@modelcontextprotocol/ext-apps', '@cindy/ext-apps', '@cindy/ext-apps/react'],
+    stdin: { resolveDir: path.dirname(fileURLToPath(import.meta.url)), contents: `
+      import { App } from '@modelcontextprotocol/ext-apps';
+      ${react ? "import * as React from 'react'; import {createRoot} from 'react-dom/client'; import {flushSync} from 'react-dom';" : ''}
+      const app = new App({name:'State helper fixture',version:'1'}, {}, {autoResize:false});
+      const initial = {version:1,page:1,filter:''};
+      const renders=[];
+      let set, flush, dispose=()=>{};
+      const probe=window.stateProbe={renders};
+      probe.ready=(async()=>{
+        await app.connect();
+        const core=await import('@cindy/ext-apps').catch(()=>null);
+        ${react ? `
+          const module=await import('@cindy/ext-apps/react').catch(()=>null);
+          const useViewState=module ? module.createViewStateHooks(React).useViewState : (_app,initial)=>React.useState(initial);
+          function Editor(){
+            const [value,update]=useViewState(app,initial);
+            renders.push(JSON.stringify(value)); set=next=>flushSync(()=>update(next));
+            return React.createElement('output',null,JSON.stringify(value));
+          }
+          const root=createRoot(document.querySelector('#root'));
+          flushSync(()=>root.render(React.createElement(React.StrictMode,null,React.createElement(Editor))));
+          flush=()=>core ? core.flushViewState(app) : Promise.reject(new Error('VIEW_STATE_UNSUPPORTED'));
+          dispose=()=>root.unmount();
+        ` : `
+          let local=initial;
+          const state=core ? core.createViewState(app,initial) : {get:()=>local,set:next=>{local=next;},flush:()=>Promise.reject(new Error('VIEW_STATE_UNSUPPORTED')),dispose(){}};
+          const render=()=>{const text=JSON.stringify(state.get());document.querySelector('output').textContent=text;renders.push(text);};
+          set=next=>{state.set(next);render();}; flush=()=>state.flush();dispose=()=>state.dispose();render();
+        `}
+        return {context:app.getHostContext(),capabilities:app.getHostCapabilities(),loaded:!!core};
+      })();
+      probe.local=state=>{set(state);};
+      probe.save=async state=>{set(state);await flush();return {};};
+      app.onteardown=async()=>{dispose();return {};};
+    ` } });
+  return '<!doctype html><html><body><div id="root"><output></output></div><script type="module">' +
+    bundle.outputFiles[0].text.replace(/<\/script/gi, '<\\/script') + '</script></body></html>';
+}
