@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { isProviderSharePeer, parseRemoteAgentPollResult, parseRemoteAgentStreamItem, providerShareGuestPeer, REMOTE_AGENT_MAX_RUNS_PER_CONTROLLER } from '@cindy/device-link';
-import type { AgentEvent, AgentSessionHandle } from '@cindy/maker-core';
+import { TurnDispatchRejectedError, TurnDispatchUnconfirmedError, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createProviderGroupGuestRelay } from '../../provider-group/guestRelay';
@@ -1787,6 +1787,55 @@ describe('provider group "switch to another computer" for shared users', () => {
       }
     }
   });
+
+  it.each((['local', 'member'] as const).flatMap(placement =>
+    (['unconfirmed', 'timeout', 'terminal-before-reject', 'stop-before-reject', 'definite-rejected', 'preflight-rejected'] as const)
+      .map(mode => ({ placement, mode }))))(
+    'preserves dispatch uncertainty until a real ending on $placement ($mode)', async ({ placement, mode }) => {
+      let allowed = true;
+      let doneSeen = () => false;
+      let release!: () => void;
+      const released = new Promise<void>(resolve => { release = resolve; });
+      const onSend = async (record: Started) => {
+        if (mode === 'terminal-before-reject') {
+          record.emit({ type: 'done', source: 'codex', data: {} } as AgentEvent);
+          await waitFor(doneSeen);
+        }
+        if (mode === 'stop-before-reject') await released;
+        if (mode === 'definite-rejected') {
+          record.running = false;
+          throw new TurnDispatchRejectedError('not dispatched');
+        }
+        if (mode === 'unconfirmed') throw new TurnDispatchUnconfirmedError('acceptance unknown');
+        throw new Error('post-dispatch timeout');
+      };
+      const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+        { kind: 'member', ...MEMBER_STUDIO }], owner: { onSend, modelAccess: { isAllowed: () => allowed } }, mini: { onSend },
+        switchWorthy: failure => failure.reason === 'remote_agent_closed' });
+      const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+      doneSeen = () => guest.stream.some(item => item.t === 'event' && item.event.type === 'done');
+      const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+      try {
+        if (mode === 'preflight-rejected') allowed = false;
+        const sending = guest.client.call('send', [{ content: 'first', attachments: [] }, {}]).catch(error => error);
+        if (mode === 'stop-before-reject') {
+          await waitFor(() => record.sends.length === 1);
+          await guest.client.call('abort', []);
+          release();
+        }
+        expect(await sending).toBeInstanceOf(Error);
+        expect(switchTokenIn(guest.stream)).toBeUndefined();
+        expect(env.relay.noteRunFailure).not.toHaveBeenCalled();
+        record.end();
+        await waitFor(() => guest.isClosed());
+        const unfinished = mode === 'unconfirmed' || mode === 'timeout';
+        expect(env.relay.noteRunFailure).toHaveBeenCalledTimes(unfinished ? 1 : 0);
+        if (unfinished) expect(env.relay.noteRunFailure.mock.calls[0][2]).toMatchObject({ reason: 'remote_agent_closed' });
+        expect(switchTokenIn(guest.stream) !== undefined).toBe(unfinished);
+        expect(record.sends).toHaveLength(mode === 'preflight-rejected' ? 0 : 1);
+        expect(env.memberStarted.studio).toHaveLength(0);
+      } finally { release(); await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+    });
 
   it('does not turn an uncertain send timeout into a quota event or switch offer', async () => {
     const env = setup({ mini: { onSend: () => { throw new Error('request timed out'); } } });

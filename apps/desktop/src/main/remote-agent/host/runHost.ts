@@ -59,7 +59,7 @@ import {
 import { type AgentEvent, type AgentSessionHandle, type DeviceHostedLinkActivity, type InteractionRequest, type ForkSdkSessionOptions, type ForkSdkSessionResult } from '@cindy/maker-core';
 
 import { EXEC_SERVER_WS_PATH } from '../controller/execServerRelay';
-import { RemoteAgentRunClient, type RemoteAgentInvoke, type RemoteAgentPoller } from '../controller/runClient';
+import { RemoteAgentRemoteError, RemoteAgentRunClient, type RemoteAgentInvoke, type RemoteAgentPoller } from '../controller/runClient';
 import { EventLog, waitForAny } from '../eventLog';
 import { createExecServerShortcut, type ExecServerShortcutLayout } from './execServerShortcut';
 import { createExecServerStartupBatch } from './execServerStartupBatch';
@@ -2479,6 +2479,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
 
   /** 受邀者对中转任务的方法调用：按受邀者复核后用同一个 callId 转给组内电脑；载荷不解码、不落盘。 */
   async function relayCall(run: Run, relay: RelayBackend, callId: string, method: RemoteAgentMethod, payload: RemoteAgentPayload): Promise<void> {
+    let sendInvoked = false;
     try {
       const raw = await resolvePayload(run.controller, payload);
       const args = takeGroupNewRound(run, callId, method, Array.isArray(raw) ? raw : []);
@@ -2504,6 +2505,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         }
         callArgs = [args[0], { ...opts, providerId: relay.member.providerId }, ...args.slice(2)];
       }
+      if (method === 'send') sendInvoked = true;
       const value = await relay.client.callWithId(callId, method, callArgs);
       if (method === 'send') run.terminalOwnership?.acceptSend(callId);
       if (method === 'setModel' && typeof args[0] === 'string') run.authorizedModel = args[0];
@@ -2512,7 +2514,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     } catch (error) {
       const info = relayErrorInfoFrom(error);
       if (method === 'send' && run.lastSendCallId === callId && run.relay === relay) {
-        run.activeTurn = false;
+        const dispatchRejected = error instanceof RemoteAgentRemoteError
+          ? error.info.code === 'TURN_DISPATCH_REJECTED' : info.code === 'TURN_DISPATCH_REJECTED';
+        // A post-invocation timeout can still have accepted work. Preserve any
+        // live turn, without rearming one already ended by a terminal or Stop.
+        if (!sendInvoked || dispatchRejected || run.quotaFailure || isAccountUsageLimitError(info)) {
+          run.activeTurn = false;
+        }
         if (run.quotaFailure) await run.quotaFailure.delivery;
         else if (isAccountUsageLimitError(info)) {
           await deliverQuotaFailure(run, relay.member, info, relay.model ?? run.authorizedModel ?? '');
@@ -2700,6 +2708,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     const handle = run.handle;
     let rollbackProvider: (() => void) | undefined;
     let standbyTurn: Run['standbyTurn'];
+    let sendInvoked = false;
     try {
       if (run.closing) fail('REMOTE_AGENT_EXPIRED', 'task has ended');
       if (!delegatedRunAllowed(run)) fail('REMOTE_AGENT_UNAVAILABLE', 'this shared task is no longer authorized');
@@ -2785,6 +2794,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         if (!delegatedRunAllowed(run)) fail('REMOTE_AGENT_UNAVAILABLE', 'this shared task is no longer authorized');
       }
       try {
+        if (method === 'send') sendInvoked = true;
         value = await (target as (...a: unknown[]) => unknown).apply(handle, callArgs);
         if (method === 'send') run.terminalOwnership?.acceptSend(callId);
       } catch (error) {
@@ -2798,7 +2808,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     } catch (error) {
       const info = remoteAgentErrorInfo(error);
       if (method === 'send' && run.lastSendCallId === callId) {
-        run.activeTurn = false;
+        if (!sendInvoked || info.code === 'TURN_DISPATCH_REJECTED' || run.quotaFailure || isAccountUsageLimitError(info)) {
+          run.activeTurn = false;
+        }
         if (run.quotaFailure) await run.quotaFailure.delivery;
         else if (isAccountUsageLimitError(info)) {
           await deliverQuotaFailure(run, localGroupMember(run.providerId ?? ''), info, handle?.model ?? run.authorizedModel ?? '');
