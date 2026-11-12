@@ -698,6 +698,7 @@ import { companionHomes, isCompanionShadowed } from '../companion-cloud/homes.js
 import { createCompanionCloudHost } from '../companion-cloud/host.js';
 import { activeCompanionCloud } from '../companion-cloud/runtime.js';
 import { companionCloudView } from '../companion-cloud/view.js';
+import { companionProfileUiMock } from '../companion-cloud/uiMock.js';
 import type { CompanionCloudActionResult, CompanionCloudFailureCode, CompanionHomeChoices, CompanionMergeResult, CompanionSwitchOptions } from '../../shared/companionCloud.js';
 import { createBotGroupPlanDecider } from './botGroupPlanDecider.js';
 import { botGroupMembersVisibleRemotely, registerBotGroupRemoteResourceProvider } from './botGroupRemoteResourceProvider.js';
@@ -14123,6 +14124,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const currentCompanionHomes = () => { settleCompanionOwner(); return companionHomes; };
   ipcMain.handle(MAKER_INVOKE.COMPANION_CLOUD_STATE, async (event) => {
     assertTrustedAppRendererEvent(event);
+    const mock = companionProfileUiMock();
+    if (mock) return mock.snapshot();
     return companionCloudView(currentCompanionHomes().snapshot(), listCompanionDevices, companionArrivalNotices);
   });
   ipcMain.handle(MAKER_INVOKE.COMPANION_CLOUD_DISMISS_NOTICES, async (event, botId: unknown) => {
@@ -14139,8 +14142,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ipcMain.handle(MAKER_INVOKE.COMPANION_CLOUD_TAKE_OVER, async (event, botId: unknown) => {
     assertTrustedAppRendererEvent(event);
     const id = companionBotId(botId);
+    const mock = companionProfileUiMock();
+    if (mock?.botId === id) return mock.takeOver();
     currentCompanionHomes();
     return activeCompanionCloud()?.takeOver(id) ?? companionNotEnabled;
+  });
+  ipcMain.handle(MAKER_INVOKE.COMPANION_CLOUD_REPAIR_PROFILE, async (event, botId: unknown, request: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const id = companionBotId(botId);
+    if (!request || typeof request !== 'object' || !('action' in request)
+      || (request.action !== 'read' && request.action !== 'save')) throwIpcError('INVALID_PARAMS', 'profile repair action required');
+    const action = request as import('../../shared/companionCloud.js').CompanionProfileRepairRequest;
+    const mock = companionProfileUiMock();
+    if (mock?.botId === id) return mock.repairProfile(action);
+    currentCompanionHomes();
+    return activeCompanionCloud()?.repairProfile(id, action) ?? companionNotEnabled;
   });
   ipcMain.handle(MAKER_INVOKE.COMPANION_CLOUD_SWITCH_HOME, async (event, botId: unknown, targetDeviceId: unknown, options: unknown) => {
     assertTrustedAppRendererEvent(event);
@@ -14152,6 +14168,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ipcMain.handle(MAKER_INVOKE.COMPANION_CLOUD_TRANSCRIPT, async (event, botId: unknown, before: unknown) => {
     assertTrustedAppRendererEvent(event);
     const id = companionBotId(botId);
+    const mock = companionProfileUiMock();
+    if (mock?.botId === id) return mock.transcript;
     if (before !== undefined && before !== null && (typeof before !== 'string' || !/^[1-9][0-9]{0,18}$/.test(before)))
       throwIpcError('INVALID_PARAMS', 'Invalid cursor');
     const runtime = activeCompanionCloud();
