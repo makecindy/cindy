@@ -1,3 +1,5 @@
+import { retireReadMobileNotifications, retireAnsweredMobileNotifications, retireCancelledMobileQuestions } from '../../device-link/notificationDismissalHost';
+vi.mock('../../device-link/notificationDismissalHost', () => ({ retireReadMobileNotifications: vi.fn(), retireAnsweredMobileNotifications: vi.fn(), retireCancelledMobileQuestions: vi.fn() }));
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -698,6 +700,7 @@ describe('AgentIslandService native publishing', () => {
     handleInteractionRequestForTest(service, { sessionId: 'lane' }, { kind: 'ask_user_question', requestId: 'q', questions: [] });
     expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({ phase: 'needs-interaction', attention: true });
     service.handleInteractionDismissed('lane', 'q');
+    expect(retireAnsweredMobileNotifications).toHaveBeenCalledWith('lane', 'q');
     playSound.mockClear();
     service.handleAgentEvent({ sessionId: 'lane' }, { type: 'done', source: 'codex', data: { result: 'done' } });
     expect(publish.mock.calls.at(-1)?.[0].sessions).toEqual([]);
@@ -1688,6 +1691,7 @@ describe('AgentIslandService native publishing', () => {
     service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, terminalErrorEvent('boom'));
     mocks.tapWindowBroadcast.mockClear();
 
+    vi.mocked(retireReadMobileNotifications).mockClear();
     // 未读 error 对 passive 免疫:不能发收尾包,否则手机列表行的 error 红点会被
     // 导航级被动信号清掉(「已读以真实展示为准」)。
     service.handleSessionAttentionCleared('s1', 'passive');
@@ -1697,8 +1701,10 @@ describe('AgentIslandService native publishing', () => {
       expect.objectContaining({ sessionId: 's1', attention: false }),
     );
 
+    expect(retireReadMobileNotifications).not.toHaveBeenCalled();
     // explicit(报错 UI 真实展示)仍可清:此时必须发收尾包。
     service.handleSessionAttentionCleared('s1', 'explicit');
+    expect(retireReadMobileNotifications).toHaveBeenCalledWith('s1');
     expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
       SESSION_ACTIVITY_CHANNEL,
       expect.objectContaining({
@@ -3554,6 +3560,7 @@ describe('AgentIslandService native publishing', () => {
     playSound.mockClear();
 
     service.handleSessionStopped('codex-stop');
+    expect(retireCancelledMobileQuestions).toHaveBeenCalledWith('codex-stop');
     service.handleAgentEvent(
       { sessionId: 'codex-stop', agentKind: 'codex' },
       cancelledDoneEvent(),

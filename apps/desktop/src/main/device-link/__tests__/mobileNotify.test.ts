@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { NOTIFY_TITLE_MAX_LENGTH, NOTIFY_BODY_MAX_LENGTH, NOTIFY_DEEP_LINK_MAX_LENGTH } from '@cindy/device-link';
-import { MobileNotifyDeduper, buildBotGroupNotifyPayload, buildSessionNotifyPayload } from '../mobileNotify';
+import { mobileNotificationIdentity, MobileNotifyDeduper, buildBotGroupNotifyPayload, buildSessionNotifyPayload } from '../mobileNotify';
 
 describe('buildSessionNotifyPayload', () => {
   it('identifies only teammate replies and isolates the same bot on different hosts', () => {
@@ -186,4 +186,11 @@ describe('buildBotGroupNotifyPayload', () => {
     expect(buildBotGroupNotifyPayload({ groupId: 'g', title: 'x'.repeat(500), body: 'y', selfDeviceId: 'd' }).title)
       .toHaveLength(NOTIFY_TITLE_MAX_LENGTH);
   });
+});
+
+it('shares one exact event identity across mirrored senders but not newer events or another execution host', () => {
+  const id = mobileNotificationIdentity('host', 'task', 'done', 'turn:1:2');
+  expect(mobileNotificationIdentity('host', 'task', 'done', 'turn:1:2')).toBe(id);
+  expect(mobileNotificationIdentity('other-host', 'task', 'done', 'turn:1:2')).not.toBe(id);
+  expect(mobileNotificationIdentity('host', 'task', 'done', 'turn:1:3')).not.toBe(id);
 });

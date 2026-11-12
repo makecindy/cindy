@@ -795,7 +795,8 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
           try {
             const accepted = sendMobileSessionNotify({
               sessionId, title: notificationTitle, kind, generation, ...(detail ? { detail } : {}),
-              ...(fallbackBody ? { fallbackBody } : {}), ...(mobileEventId ? { eventId: mobileEventId } : {}),
+              ...(fallbackBody ? { fallbackBody } : {}), ...((kind === 'done' ? mobileEventId : usableAlertEventId ?? mobileEventId)
+                ? { eventId: kind === 'done' ? mobileEventId : usableAlertEventId ?? mobileEventId } : {}),
               ...(mobileTeammateBotId ? { teammateBotId: mobileTeammateBotId } : {}),
               ...(preview?.teammateAvatar ? { teammateAvatar: preview.teammateAvatar } : {}),
               ...(markAttention ? {} : { muteExempt: true }),
