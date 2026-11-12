@@ -403,6 +403,28 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
   }
 
   /**
+   * Await a close() that needs no poll. Its real I/O gets up to 500 ms of real
+   * time before each clock move, so on the normal path no poll fires inside the
+   * close. The clock moves only when the close itself waits on a timer, such as
+   * the config-home removal retry after a Windows file lock; a plain `await`
+   * would hang there, because nothing else fires fake timers.
+   */
+  async function closeWithoutPolls(promise: Promise<void>): Promise<void> {
+    let settled = false;
+    void promise.then(() => { settled = true; }, () => { settled = true; });
+    const realDeadline = performance.now() + 4_000;
+    for (;;) {
+      const idleUntil = Math.min(performance.now() + 500, realDeadline);
+      while (!settled && performance.now() < idleUntil) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      if (settled) return promise;
+      if (performance.now() >= realDeadline) throw new Error('close() did not settle within 4 s of real time');
+      await vi.advanceTimersToNextTimerAsync();
+    }
+  }
+
+  /**
    * Drive the poll clock until `spy` has `count` more calls for this test's run
    * root. Supervisors left over from earlier cases poll other roots.
    */
@@ -794,7 +816,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     const runId = '123e4567-e89b-42d3-a456-426614174099';
     writeDurableRunStatus(runId, 'running');
 
-    await handle.close({ reason: 'navigation' });
+    await closeWithoutPolls(handle.close({ reason: 'navigation' }));
     await morePolls(supervisorRounds, 2);
     expect(disposed).toBe(1);
     expect(proxyDisposed).toBe(0);
@@ -907,7 +929,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       tasks: [{ childId: `${runId}-1`, sessionId: `${runId}-1`, agent: 'scout', status: 'queued' }],
     })}\n`);
 
-    await handle.close({ reason: 'navigation' });
+    await closeWithoutPolls(handle.close({ reason: 'navigation' }));
     // Not held: no runner pid means nothing to supervise, and the record is
     // already past its heartbeat window.
     await pollUntil(() => expect(proxyDisposed).toBe(2));
@@ -936,7 +958,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       tasks: [{ childId: `${runId}-1`, sessionId: `${runId}-1`, agent: 'scout', status: 'queued' }],
     })}\n`);
 
-    await handle.close({ reason: 'navigation' });
+    await closeWithoutPolls(handle.close({ reason: 'navigation' }));
     await morePolls(supervisorRounds, 3);
     expect(proxyDisposed).toBe(0);
   });
@@ -978,7 +1000,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       expect(diagnostic?.summary).toMatch(/stopped unexpectedly/i);
     });
 
-    await handle.close({ reason: 'navigation' });
+    await closeWithoutPolls(handle.close({ reason: 'navigation' }));
   });
 
   it('holds approval dedupe state through a status that is briefly unreadable', async () => {
@@ -1006,7 +1028,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
 
     // Still exactly one decision for that approval.
     expect(control).toHaveBeenCalledTimes(1);
-    await handle.close({ reason: 'navigation' });
+    await closeWithoutPolls(handle.close({ reason: 'navigation' }));
   });
 
   it('does not release the lease on an empty scan while Pi can still launch', async () => {
@@ -1024,7 +1046,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     // Close with nothing on disk yet: the supervisor's first scan runs while Pi
     // is still alive and sees an empty directory.
     const runId = '123e4567-e89b-42d3-a456-4266141740c1';
-    await handle.close({ reason: 'navigation' });
+    await closeWithoutPolls(handle.close({ reason: 'navigation' }));
     // The launch that was already in flight inside Pi lands now — after that
     // first scan. The old code had already revoked the token by this point.
     writeDurableRunStatus(runId, 'running');
@@ -1051,7 +1073,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     // A resolver stays wired to the handle; only the parent handle is closing.
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' }) as const);
 
-    await handle.close({ reason: 'navigation' });
+    await closeWithoutPolls(handle.close({ reason: 'navigation' }));
     // The approval only appears after close, so nothing could have been
     // consumed by the foreground refresh timer.
     handle.setInteractionResolver(resolver);
@@ -1097,7 +1119,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     const session = wrapInSession(handle);
     // No listener is ever attached: this is the torn-down surface, reached
     // through the real Session resolver rather than by poking the handle.
-    await session.close();
+    await closeWithoutPolls(session.close());
 
     // Give the detached supervisor several poll cycles.
     await morePolls(supervisorRounds, 3);
@@ -1116,7 +1138,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
     const handle = await new PiAgent(buildDeps()).startSession(opts());
     const session = wrapInSession(handle);
-    await session.close();
+    await closeWithoutPolls(session.close());
     await morePolls(supervisorRounds, 2);
     expect(control).not.toHaveBeenCalled();
 
@@ -1158,7 +1180,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       'approval',
       expect.objectContaining({ confirmed: false }),
     ));
-    await session.close();
+    await closeWithoutPolls(session.close());
   });
 
   it('parks an in-flight Subagent card when the session tears the surface down under it', async () => {
@@ -1180,7 +1202,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     }) as never);
 
     await settle(requestShown);
-    await session.close();
+    await closeWithoutPolls(session.close());
     await morePolls(supervisorRounds, 3);
 
     expect(control).not.toHaveBeenCalled();
@@ -1196,7 +1218,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       .spyOn(piSubagentRuns, 'stopPiSubagentRunsForAccountBoundary')
       .mockResolvedValue(true);
 
-    await handle.close({ reason: 'account-boundary' });
+    await closeWithoutPolls(handle.close({ reason: 'account-boundary' }));
 
     expect(stop).toHaveBeenCalledWith(
       path.join(agentHome, 'runtime', 'pi-subagent-runs', 's1'),
@@ -1226,7 +1248,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     const handle = await new PiAgent(buildDeps()).startSession(opts());
     handle.setInteractionResolver(resolver);
 
-    await handle.close({ reason: 'account-boundary' });
+    await closeWithoutPolls(handle.close({ reason: 'account-boundary' }));
     knobs.onExit?.({ code: 0, signal: null });
     // A resurrected supervisor would answer within its first 250 ms rounds.
     await vi.advanceTimersByTimeAsync(1_000);
@@ -1418,7 +1440,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
         expect(review.mock.calls[0]![0].delegatedTask?.pluginId).toBe('eval');
         expect(JSON.stringify(review.mock.calls[0]![0].action)).toContain('schedule_create');
       }
-    } finally { discovery.clear(); await handle.close(); }
+    } finally { discovery.clear(); await closeWithoutPolls(handle.close()); }
   });
 
   it.each((['zero', 'throw'] as const).flatMap((failure) =>
@@ -1462,7 +1484,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
         ? permissionMode === 'auto' ? expect.stringContaining('auto-review-deny:Plugin authorization revoked') : 'user-deny' : 'allow' });
       expect(review).toHaveBeenCalledTimes(permissionMode !== 'auto' || ['unavailable', 'control-plane'].includes(scenario) ? 0 : 1);
       expect(resolver).toHaveBeenCalledTimes(['ask', 'unavailable', 'control-plane'].includes(scenario) || (permissionMode !== 'auto' && scenario === 'allow-revoked') ? 1 : 0);
-    } finally { discovery.clear(); await handle.close(); }
+    } finally { discovery.clear(); await closeWithoutPolls(handle.close()); }
   });
 
   it('refuses to deliver an answer decided before the boundary but ready after it', async () => {
@@ -1519,7 +1541,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       .startSession({ ...opts(), permissionMode: 'auto' });
     handle.setInteractionResolver(resolver);
     await pollUntil(() => expect(review).toHaveBeenCalledOnce());
-    if (boundary === 'navigation') await handle.close({ reason: 'navigation' });
+    if (boundary === 'navigation') await closeWithoutPolls(handle.close({ reason: 'navigation' }));
     else knobs.onExit?.({ code: 1, signal: null });
     releaseReview({ verdict });
     // Several supervisor polls must not consume or repeatedly re-review the parked request.
@@ -1528,7 +1550,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(resolver).not.toHaveBeenCalled();
     expect(review).toHaveBeenCalledOnce();
 
-    if (boundary === 'process-exit') await handle.close({ reason: 'navigation' });
+    if (boundary === 'process-exit') await closeWithoutPolls(handle.close({ reason: 'navigation' }));
     let reopened: Awaited<ReturnType<PiAgent['startSession']>> | undefined;
     if (method === 'confirm') {
       const freshReview = vi.fn(async () => ({ verdict: 'block' as const }));
@@ -1547,7 +1569,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       method === 'input' ? { value: 'auto-review-deny' } : { confirmed: false },
     ));
     list.mockResolvedValue([]);
-    await reopened?.close({ reason: 'navigation' });
+    if (reopened) await closeWithoutPolls(reopened.close({ reason: 'navigation' }));
   });
 
   it('keeps Auto approvals that start after detaching under that lifecycle', async () => {
@@ -1558,7 +1580,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     const review = vi.fn(async () => ({ verdict: 'allow' as const }));
     const handle = await new PiAgent(buildDeps({ reviewAutoPermissionAction: review }))
       .startSession({ ...opts(), permissionMode: 'auto' });
-    await handle.close({ reason: 'navigation' });
+    await closeWithoutPolls(handle.close({ reason: 'navigation' }));
     const run = pendingSubagentRun({ toolName: 'bash', input: { command: 'printf hi > /outside/report.txt' } });
     list.mockResolvedValue([run]);
     await pollUntil(() => expect(control).toHaveBeenCalledWith(expect.any(String), run.taskId, 'approval', expect.objectContaining({ confirmed: true })));
@@ -1670,7 +1692,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       cwd,
     });
 
-    await handle.close();
+    await closeWithoutPolls(handle.close());
   });
 
   // #7494: a child's internal `cindy:harness-hook` shares the extension_ui
@@ -1752,7 +1774,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     ));
     expect(resolver).not.toHaveBeenCalled();
 
-    await handle.close();
+    await closeWithoutPolls(handle.close());
   });
 
   it('keeps durable Subagent hooks out of Auto-review', async () => {
@@ -1779,7 +1801,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(review).not.toHaveBeenCalled();
     expect(resolver).not.toHaveBeenCalled();
 
-    await handle.close();
+    await closeWithoutPolls(handle.close());
   });
 
   it('still forwards a real cindy:permission with its tool and input next to a hook', async () => {
@@ -1825,7 +1847,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       title: 'Subagent: bash',
     }));
 
-    await handle.close();
+    await closeWithoutPolls(handle.close());
   });
 
   /**
@@ -2207,7 +2229,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     release({ verdict: 'allow' });
     await pollUntil(() => expect(control).toHaveBeenCalledWith(expect.any(String), run.taskId, 'approval', expect.objectContaining({ confirmed: true })));
     expect(resolver).not.toHaveBeenCalled();
-    await handle.close();
+    await closeWithoutPolls(handle.close());
   });
 
   it('preserves Auto-review denial for durable Subagent child tools', async () => {
@@ -2234,7 +2256,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     ));
     expect(review).toHaveBeenCalledOnce();
     expect(resolver).not.toHaveBeenCalled();
-    await handle.close();
+    await closeWithoutPolls(handle.close());
   });
 
   it('preserves system denial when a durable Subagent approval resolver fails', async () => {
@@ -2289,7 +2311,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
         throw err;
       }
     } finally {
-      await handle?.close();
+      if (handle) await closeWithoutPolls(handle.close());
       mark('handle-closed');
     }
   });
@@ -2312,7 +2334,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await morePolls(list, 2);
     expect(control).not.toHaveBeenCalled();
     expect(resolver).not.toHaveBeenCalled();
-    await handle.close();
+    await closeWithoutPolls(handle.close());
   });
 
   it('refuses an approval whose run belongs to a different parent task', async () => {
@@ -2334,7 +2356,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await morePolls(list, 2);
     expect(control).not.toHaveBeenCalled();
     expect(resolver).not.toHaveBeenCalled();
-    await handle.close({ reason: 'navigation' });
+    await closeWithoutPolls(handle.close({ reason: 'navigation' }));
   });
 
   it('adopts an approval parked by an earlier handle of the same task', async () => {
@@ -2371,7 +2393,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       toolName: 'write',
       metadata: expect.objectContaining({ subagent: true }),
     }));
-    await handle.close({ reason: 'navigation' });
+    await closeWithoutPolls(handle.close({ reason: 'navigation' }));
   });
 
   it.each(['allow', 'block', 'ask'] as const)('reviews adopted approvals with current evidence: %s', async (verdict) => {
@@ -2433,7 +2455,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     // The user was asked, and neither Full Access nor the Auto reviewer ruled.
     expect(resolver).toHaveBeenCalledOnce();
     expect(review).not.toHaveBeenCalled();
-    await handle.close({ reason: 'navigation' });
+    await closeWithoutPolls(handle.close({ reason: 'navigation' }));
   });
 
   it('reuses Auto-review for a safe durable Subagent workspace write without prompting', async () => {
@@ -2651,7 +2673,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       }
     } finally {
       discovery.clear();
-      await handle.close();
+      await closeWithoutPolls(handle.close());
     }
   });
 
