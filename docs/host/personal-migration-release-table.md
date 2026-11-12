@@ -32,8 +32,8 @@
 | 6b | Claude 按模型的思考档位 | `resolveModelEfforts` | 已对齐（m1-cp2a） | desktop `engineModelResolvers.test.ts` | 无 |
 | 6c | 思考开关写通道 | `register.ts` `SET_THINKING_ENABLED` | 未做（第 10 步） | — | 无 |
 | 6d | Pi 思考开关记忆 | `newMakerDefaultsCache.ts` | 部分：读取已接（m1-cp2b）；镜像由渲染层推送，客户端模式下推给窗口进程，Host 一直为空，要等 M2 的推送通道 | Host `start-options.test.mjs` | 无 |
-| 7 | 回合改动记录 | `turn-change-set/store.ts` | 部分（m1-cp5c 更正）：m1-cp5a 只接了引擎侧的写前捕获（Claude 与 Pi）。桌面在派发时开记录（`beginTurnChangeSetAtDispatch`）、从事件流记 Codex 的原生改动（`noteTurnDiffEvent`）、回合结束时落盘（`finalizeTurnChangeSet`）、未派发或关闭时清掉（`clearPendingTurnChangeSets`），Host 这四处都没接，捕获内容只留在内存里、不落盘。与 7b 同一批回合钩子一起补 | Host `agent-graph.test.mjs`（只覆盖引擎侧） | 无 |
-| 7b | Git 保存点与文件回退 | `git-snapshot-host.ts` | 未做（下一步，切断清单已确认，第 3 处用方案 A）。回退入口 `maker:rewind:preview`、`maker:rewind:commit` 在 Host 上没有注册，随 M2 的界面通道一起接；这一步只接建保存点。保存点标签在桌面是一次辅助模型调用；Host 上先只接停用裁决，标签用确定性的兜底标签，等第 4 步把辅助模型装配做成可共用后再走真实调用 | — | 无 |
+| 7 | 回合改动记录 | `turn-change-set/store.ts` | 已对齐（m1-cp5e）。写入：引擎侧写前捕获（Claude、Pi，m1-cp5a）、派发时开记录并定锚点（`beginTurnChangeSetAtDispatch`，队列钩子）、事件流记 Codex 原生改动（`noteTurnDiffEvent`）。落盘：回合结束与终止性错误时 `finalizeTurnChangeSet`，判定与桌面 `sessionEventPreparation.ts` 相同。清理：未派发、任务关闭时 `clearPendingTurnChangeSets`；删除任务时 `removeTurnChangeSetsForSession`。查看与撤销本回合的界面入口随 M2 | Host `input-queue.test.mjs`（锚点落盘、先后顺序、未派发清理）；`agent-graph.test.mjs`（引擎侧） | 无 |
+| 7b | Git 保存点与文件回退 | `git-snapshot-host.ts` → `gitSnapshotHostCore.ts` | 部分（m1-cp5e）：保存点已接。派发前基线（队列钩子与直发钩子）、回合结束改后快照（`onTurnEnd`）、未派发撤回（`onTurnAbort`）、任务关闭（`onSessionClosed`）、账号库就绪后的已删除任务引用对账（`reconcileSavepointRefsForDeletedSessions`）都与桌面同一份代码。未接：回退入口 `maker:rewind:preview`、`maker:rewind:commit` 随 M2 的界面通道一起接。标签：Host 上辅助模型调用未放开，标签一律用确定性兜底（如「改动 a.txt」），等第 4 步把辅助模型装配做成可共用后再走真实调用；停用裁决的 Host 端口暂按「不可用」处理，因为 Host 的供应商视图与桌面不等价（见第二节） | Host `git-snapshot.test.mjs`（真实临时仓库：基线、改后快照、未派发、引用名、分支与工作区不动、兜底标签）；`input-queue.test.mjs`（钩子顺序） | 无 |
 | 8 | 工作树租约 | `worktree/runtimeLeases.ts` | 未做（第 7 步） | — | 无 |
 | 9 | Codex 产品提示标记 | `maker-host/session-storage.ts` | 已对齐（m1-cp5a） | Host `agent-graph.test.mjs`；`codex-runtime.e2e.mjs` 数据库往返 | 无 |
 | 10 | 读图钩子、电脑操作防护、Bash 并发闸门 | `claudeHooks` | 未做（第 6 步） | — | 无 |
@@ -64,6 +64,8 @@
 | 自动复核（第 4 步之前） | 模型复核 | 退回人工确认 | 打断更多，不会更不安全 |
 | Pi 思考开关记忆（M2 之前） | 读渲染层镜像 | 镜像为空 | 用模型默认值 |
 | 用量记录（2e 之前） | 记录 | 不记录 | Host 期间的用量丢失；Host 侧 e2e 的「三张用量表行数」核对不适用 |
+| 删除任务 | 界面删除把任务标为 `status='deleted'`（软删除），启动后的对账据此删掉它的保存点引用 | Host 的 `deleteSession` 直接删行（硬删除）；行不在了，对账不会删它的保存点引用，引用留在用户仓库 | 待定：Host 删除改为与桌面相同的软删除，或删除时同步删引用；已报审核 |
+| 保存点标签的停用裁决 | 读桌面供应商服务（订阅池、`getDesktopSelectableBaseCatalog`、连接认领、Fast 投影） | Host 的 `publicViews` 用 `getActiveCatalog`、无订阅池与认领，两边视图不等价；Host 端口暂按「不可用」 | 标签走兜底，不发付费请求；第 4 步放开辅助模型调用时一起对齐 |
 | 代输入（sudo、ssh、git 密码提示） | 任务的 shell 带代输入的 askpass 环境变量，提示转给用户 | 同一个 `taskShellEnv`，但 Host 不启动 askpass，返回空 | 这些提示在 Host 任务里照命令行默认行为失败，不会转给用户；随代输入一起补 |
 | 内置 ripgrep 的位置 | 打包版 `resources/tools/ripgrep`；开发时 `apps/ripgrep-bin/<平台>`（`pnpm install:ripgrep` 安装） | `hostRuntimeLayout().harnessRoot/ripgrep-bin/<平台>`：开发时就是同一个 `apps/ripgrep-bin/<平台>`；发布版是 `apps/host/scripts/build.mjs` 从 `apps/ripgrep-bin` 拷进 `resources/harnesses` 的同一个文件 | 同一个 rg 二进制；找不到时与桌面抛同一条错误（Pi 在构造时，Codex 在启动读 PATH 前缀时） |
 
@@ -75,8 +77,9 @@
 |---|---|---|---|
 | 共享项目 Skill 链接 | 任务工作目录（用户仓库） | 每次启动任务前两处 | m1-cp3b |
 | 工作树租约 | 工作树运行时目录 | 任务运行期间 | 第 7 步（未做） |
-| Git 保存点 | 用户仓库的 `refs/cindy/savepoints/<任务 id>` 及其对象，与桌面同名同位置 | 每个用户回合开始前 | 7b（未做） |
-| 空文件夹初始化为 Git 仓库 | 任务工作目录（`git init`），仅在用户开了「自动初始化项目 Git」时 | 每个用户回合开始前 | 7b（未做） |
+| Git 保存点 | 用户仓库的 `refs/cindy/savepoints/<任务 id>` 及其对象，与桌面同名同位置 | 每个用户回合开始前与结束后 | m1-cp5e |
+| 空文件夹初始化为 Git 仓库 | 任务工作目录（`git init`），仅在用户开了「自动初始化项目 Git」时 | 每个用户回合开始前 | m1-cp5e |
+| Git 保存点对账删除 | 当前账号库里标记为已删除的任务在其仓库中的 `refs/cindy/savepoints/<任务 id>` | 账号库就绪后一次 | m1-cp5e |
 
 ## 四、移出 M1
 
