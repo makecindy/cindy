@@ -115,6 +115,17 @@ const RETRY_COPY = {
     archive_unavailable: '업데이트 파일이 없거나 읽을 수 없습니다. 업데이트를 다시 확인해 주세요',
     spawn_failed:
       '업데이트 재시도를 시작할 수 없습니다. 이 창을 닫고 업데이트를 다시 확인해 주세요',
+  },
+  tr: {
+    retry: 'Tekrar dene',
+    processes_running:
+      'Cindy uygulamasını ve yükleme klasöründen çalışan tüm işlemleri kapatın, ardından tekrar deneyin',
+    updater_busy:
+      'Başka bir güncelleme zaten çalışıyor. Bu pencereyi kapatın ve güncellemeleri tekrar kontrol edin',
+    in_progress: 'Güncelleme yeniden denemesi zaten devam ediyor',
+    unavailable: 'Bu güncelleme hatası tekrar denenemez',
+    archive_unavailable: 'Güncelleme dosyası eksik veya okunamıyor. Lütfen güncellemeleri tekrar kontrol edin',
+    spawn_failed: 'Güncelleyici yeniden başlatılamadı. Bu pencereyi kapatın ve güncellemeleri tekrar kontrol edin',
   },
 };
 
@@ -122,6 +133,7 @@ globalThis.updaterLocale = function updaterLocale(language = 'en') {
   const locale = language.replace(/_/g, '-').toLowerCase();
   if (locale === 'zh-hant-x-lzh') return 'zh-Hant-x-lzh';
   if (locale === 'zh-hans-x-lzh') return 'zh-Hans-x-lzh';
+  if (locale === 'tr' || locale.startsWith('tr-')) return 'tr';
   if (/^zh-(tw|hk|mo|hant)(-|$)/.test(locale)) return 'zh-TW';
   if (locale === 'zh' || locale.startsWith('zh-')) return 'zh-CN';
   if (locale.split('-')[0] === 'pt') {

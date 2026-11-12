@@ -35,7 +35,8 @@
       "pt-PT",
       "pt-BR",
       "zh-Hant-x-lzh",
-      "zh-Hans-x-lzh"
+      "zh-Hans-x-lzh",
+      "tr"
     ]
   },
   "states": [
@@ -411,6 +412,16 @@
           "os": "mac",
           "mode": "light",
           "lang": "zh-Hans-x-lzh"
+        }
+      },
+      {
+        "id": "global-light-en-tr",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "light",
+          "lang": "tr"
         }
       }
     ],

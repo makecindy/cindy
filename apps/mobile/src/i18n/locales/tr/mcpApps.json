@@ -1,0 +1,13 @@
+{
+  "sharedTaskReadOnly": "Bu kartla yalnızca görev sahibi etkileşim kurabilir.",
+  "retry": "Yeniden Yükle",
+  "loadFailed": "Uygulama yüklenemedi. Bağlantıyı kontrol edip yeniden yükleyin.",
+  "updateRequired": "Bu bilgisayar henüz MCP Apps desteklemiyor. O bilgisayardaki Cindy'yi güncelleyip tekrar deneyin.",
+  "appName": "MCP Uygulaması",
+  "cardTitle": "{{title}} · $t(mcpApps.appName)",
+  "messageSource": "$t(mcpApps.appName) “{{name}}” tarafından gönderildi",
+  "serverId": "MCP Sunucu Kimliği: {{id}}",
+  "exitFullscreen": "Tam Ekrandan Çık",
+  "mobileUpdateRequired": "Bu kartı açmak için telefonunuzdaki Cindy'yi güncelleyin.",
+  "filesOnExecutionComputer": "Dosya içeriklerini çalıştırılan bilgisayarda görüntüleyin"
+}

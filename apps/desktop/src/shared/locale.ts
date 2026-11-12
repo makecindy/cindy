@@ -1,5 +1,5 @@
 /** UI-supported concrete locales. */
-export const SUPPORTED_LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'pt-PT', 'pt-BR', 'zh-Hant-x-lzh', 'zh-Hans-x-lzh'] as const;
+export const SUPPORTED_LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'pt-PT', 'pt-BR', 'zh-Hant-x-lzh', 'zh-Hans-x-lzh', 'tr'] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 
 /**
@@ -20,6 +20,26 @@ export function isClassicalLocale(locale: string | null | undefined): locale is 
 /** The modern locale behind a classical edition; other locales return themselves. */
 export function modernLocaleOf(locale: SupportedLocale): SupportedLocale {
   return isClassicalLocale(locale) ? CLASSICAL_LOCALE_BASE[locale] : locale;
+}
+
+/** Modern locales supported for SkillHub published content metadata. */
+export const SKILLHUB_CONTENT_LOCALES = [
+  'zh-CN',
+  'zh-TW',
+  'en',
+  'ja',
+  'ko',
+  'es',
+  'fr',
+  'de',
+  'pt-PT',
+  'pt-BR',
+  'tr',
+] as const;
+export type SkillhubContentLocale = (typeof SKILLHUB_CONTENT_LOCALES)[number];
+
+export function isSkillhubContentLocale(locale: string | null | undefined): locale is SkillhubContentLocale {
+  return typeof locale === 'string' && (SKILLHUB_CONTENT_LOCALES as readonly string[]).includes(locale);
 }
 
 /** User-facing locale preference. 'system' is resolved by the host process. */

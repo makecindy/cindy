@@ -10,6 +10,7 @@ import { isAgentOneShotRouteDisabled } from '../maker-host/model-route-guard-liv
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { agentSupportsOneShot, requestUtilityText } from '../utility-model/oneShotCandidates.js';
+import { SUPPORTED_LOCALES } from '../../shared/locale.js';
 import {
   getEffectiveAuxiliaryModelChain,
   getEffectiveAuxiliaryModelChainSnapshot,
@@ -81,6 +82,7 @@ const LOCALE_NAME: Record<HelpLocale, string> = {
   "pt-BR": "Brazilian Portuguese",
   "zh-Hant-x-lzh": "Classical Chinese (文言) in Traditional characters, keeping UI names exactly as shown in the app",
   "zh-Hans-x-lzh": "Classical Chinese (文言) in Simplified characters, keeping UI names exactly as shown in the app",
+  tr: 'Turkish',
 };
 
 type HelpOneShotTarget = {
@@ -117,8 +119,8 @@ async function isHelpSessionAgentDispatchAllowed(
 }
 
 function normalizeLocale(locale: unknown): HelpLocale {
-  return locale === 'zh-CN' || locale === 'zh-TW' || locale === 'en' || locale === 'ja' || locale === 'ko' || locale === 'es' || locale === 'fr' || locale === 'de' || locale === 'pt-PT' || locale === 'pt-BR' || locale === 'zh-Hant-x-lzh' || locale === 'zh-Hans-x-lzh'
-    ? locale
+  return typeof locale === 'string' && (SUPPORTED_LOCALES as readonly string[]).includes(locale)
+    ? (locale as HelpLocale)
     : 'en';
 }
 

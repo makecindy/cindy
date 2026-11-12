@@ -1,0 +1,979 @@
+{
+  "management": {
+    "title": "Cihaz Yönetimi",
+    "openDevice": "{{name}} ayrıntılarını görüntüle",
+    "details": "Cihaz ayrıntıları",
+    "retry": "Yeniden Dene",
+    "unknown": "Kullanılamıyor",
+    "notFound": "Bu cihaz artık hesabınızda değil.",
+    "deleteDevice": "Cihazı sil",
+    "deleteTitle": "{{name}} silinsin mi?",
+    "deleteMessage": "Bu cihazı hesabınızdan kaldırın ve uzaktan erişim bağlantısını kesin. Görevleri ve dosyaları korunur. Yeniden katılmak için o cihazda tekrar giriş yapın.",
+    "deleteFailed": "Cihaz silinemedi.",
+    "deleteOnline": "Bu sunucu henüz çevrimiçi cihazların kaldırılmasını desteklemiyor. Servis yükseltildikten sonra tekrar deneyin.",
+    "deleteRejectedWhileOffline": "Cihaz silinemedi: burada çevrimdışı görünmesine rağmen sunucu hâlâ çevrimiçi olarak listeliyor.",
+    "currentlyOnline": "Şu anda çevrimiçi",
+    "availableSection": "Çevrimiçi",
+    "offlineSection": "Çevrimdışı",
+    "showAllOffline": "Tümünü Göster ({{count}})",
+    "showFewerOffline": "Daha Az Göster",
+    "nameTooLong": "Cihaz adları {{limit}} veya daha az karakter olmalıdır.",
+    "fields": {
+      "name": "Ad",
+      "status": "Durum",
+      "platform": "Platform",
+      "model": "Model",
+      "systemVersion": "Sistem sürümü",
+      "appVersion": "Cindy sürümü",
+      "cpu": "İşlemci",
+      "memory": "Bellek",
+      "lastSeen": "Son çevrimiçi",
+      "deviceId": "Cihaz Kimliği"
+    }
+  },
+  "common": {
+    "cancel": "İptal",
+    "save": "Kaydet",
+    "delete": "Sil",
+    "create": "Yeni"
+  },
+  "resources": {
+    "connectionUnknown": "Bağlantı bilinmiyor",
+    "hostOffline": "Çevrimdışı",
+    "titleFallback": "Kaynaklar",
+    "loading": "Yükleniyor…",
+    "emptyTitle": "Henüz bir şey yok",
+    "emptyCopy": "Bu bilgisayar henüz buraya herhangi bir öğe sağlamadı.",
+    "loadFailed": "Bu öğeler yüklenemedi",
+    "noHosts": "Uyumlu bir bilgisayar mevcut değil.",
+    "noConversation": "Bu öğenin şu anda açılacak bir görevi yok.",
+    "openFailed": "Görev açılamadı",
+    "resolving": "En son görev açılıyor…",
+    "retry": "Tekrar dene",
+    "hostCount": "{{count}} bilgisayar",
+    "stale": "Bu öğeler güncelliğini yitirmiş olabilir. Yenilenemiyor."
+  },
+  "presentation": {
+    "deviceList": {
+      "headerAvailable": "{{count}} kontrol edilebilir bilgisayar",
+      "headerUnavailable": "Şu anda kullanılamayan {{count}} bilgisayar",
+      "waitingForDesktop": "Bir bilgisayarın çevrimiçi olması bekleniyor",
+      "filterAvailable": "Kontrol edilebilir cihazlar",
+      "filterEmpty": "Kontrol edilebilir cihaz yok",
+      "filterMeta": "{{available}} kullanılabilir",
+      "filterMetaWithUnavailable": "{{available}} kullanılabilir · {{unavailable}} ilgi bekliyor",
+      "showUnavailableReason": "Neden kullanılamadığını görmek için bir cihazı genişletin",
+      "emptyCopy": "Bilgisayarınızda aynı hesapla giriş yapın, ardından Ayarlar → Uzaktan Bağlantı altında “Aynı hesaba ait cihazların bu bilgisayarı kontrol etmesine izin ver” seçeneğini etkinleştirin.",
+      "emptyTitle": "Henüz gösterilecek bilgisayar yok",
+      "hideUnavailableA11y": "Kullanılamayan bilgisayarları gizle",
+      "showUnavailableA11y": "Kullanılamayan bilgisayarları göster",
+      "availableOnly": "Yalnızca kullanılabilir olanlar",
+      "unavailableCount": "Kullanılamıyor {{count}}",
+      "status": {
+        "ready": "Kontrol edilebilir",
+        "busy": "Çalışıyor",
+        "offline": "Çevrimdışı",
+        "remoteDisabled": "Uzaktan kontrol kapalı",
+        "accessRevoked": "Erişim iptal edildi",
+        "self": "Bu cihaz"
+      },
+      "detail": {
+        "accessRevoked": "Bu telefonun erişimini bilgisayarda geri yükleyin",
+        "remoteDisabled": "Bilgisayarın ayarlarında uzaktan kontrolü etkinleştirin",
+        "self": "Geçerli telefon",
+        "busy": "Bilgisayar bir görev üzerinde çalışıyor",
+        "ready": "Uzaktan kontrole izin verildi"
+      },
+      "lastSeen": {
+        "never": "Hiç çevrimiçi olmadı",
+        "unknown": "Son çevrimiçi olma zamanı bilinmiyor",
+        "justNow": "Az önce çevrimiçiydi",
+        "minutesAgo": "{{count}} dakika önce çevrimiçiydi",
+        "hoursAgo": "{{count}} saat önce çevrimiçiydi",
+        "daysAgo": "{{count}} gün önce çevrimiçiydi",
+        "onDate": "Son çevrimiçi: {{date}}"
+      }
+    },
+    "sessionList": {
+      "section": {
+        "pinned": "Sabitlenenler",
+        "dialogue": "Sohbet"
+      },
+      "filterWithCount": "{{label}} {{count}}",
+      "controlsSummary": "{{filter}} · {{group}} göre gruplandırıldı",
+      "automation": "Otomasyon",
+      "sessionCount": "{{count}} görev",
+      "messageCount": "{{count}} mesaj",
+      "status": {
+        "archived": "Arşivlendi",
+        "deleted": "Silindi"
+      },
+      "preview": {
+        "permission": "İzin bekleniyor",
+        "planReview": "Plan incelemesi bekleniyor",
+        "answer": "Yanıtınız bekleniyor",
+        "attention": "Sizi bekliyor",
+        "automationRunning": "Otomasyon çalışıyor",
+        "running": "Çalışıyor"
+      },
+      "context": {
+        "matchingTasks": "Eşleşen {{count}} görev",
+        "tasks": "{{count}} görev",
+        "noMatchingTasks": "Eşleşen görev yok",
+        "noResults": "Bu filtre için sonuç yok",
+        "rows": " · {{count}} satır",
+        "detail": "{{result}}{{rows}} · {{filter}} · {{group}} göre gruplandırıldı",
+        "searchResults": "Arama Sonuçları",
+        "title": {
+          "active": "Aktif Görevler",
+          "waiting": "Bekleyen Görevler",
+          "automation": "Otomasyon Görevleri",
+          "archived": "Arşivlenen Görevler",
+          "all": "Tüm Görevler"
+        },
+        "hint": {
+          "search": "Arama başlıkları, proje yollarını, modelleri, otomasyon adlarını ve mesaj önizlemelerini içerir.",
+          "active": "Kontrol etmeye devam etmek için bir görevi açın veya birden çok görevi seçmek için basılı tutun.",
+          "waiting": "Telefonunuzda onay gerektiren izinler, plan incelemeleri ve sorular burada görünür.",
+          "automation": "Otomasyon görevleri göreve göre gruplandırılır; tek bir çalıştırmayı açmak için bir grubu genişletin.",
+          "archived": "Toplu olarak arşivden çıkarmak veya silmek için arşivlenmiş bir göreve dokunup basılı tutun.",
+          "all": "Aktif, arşivlenmiş ve otomasyon görevleri hızlı arama için birlikte gösterilir."
+        }
+      },
+      "empty": {
+        "search": {
+          "title": "Eşleşen görev yok",
+          "copy": "Başka bir başlık, proje yolu, model veya mesaj anahtar kelimesi deneyin."
+        },
+        "waiting": {
+          "title": "Bekleyen istek yok",
+          "copy": "İzin istemleri, plan incelemeleri ve sorular burada görünecektir."
+        },
+        "automation": {
+          "title": "Otomasyon görevi yok",
+          "copy": "Otomasyonlar tarafından oluşturulan görevler bir çalıştırmadan sonra burada gruplandırılacaktır."
+        },
+        "archived": {
+          "title": "Arşivlenmiş görev yok",
+          "copy": "Toplu olarak arşivlemek veya silmek için bir göreve dokunup basılı tutun."
+        },
+        "active": {
+          "title": "Bu bilgisayarda aktif görev yok",
+          "copy": "Bilgisayarınızda bir görev oluşturun veya devam ettirin; burada görünecektir."
+        }
+      },
+      "time": {
+        "unknown": "Son etkinlik zamanı bilinmiyor",
+        "justNow": "Az önce",
+        "minutesAgo_one": "{{count}} dakika önce",
+        "minutesAgo_other": "{{count}} dakika önce",
+        "hoursAgo_one": "{{count}} saat önce",
+        "hoursAgo_other": "{{count}} saat önce",
+        "daysAgo_one": "{{count}} gün önce",
+        "daysAgo_other": "{{count}} gün önce",
+        "minutes": "{{count}} dk",
+        "hours": "{{count}} sa",
+        "days": "{{count}} g",
+        "weeks": "{{count}} hf",
+        "months": "{{count}} ay",
+        "years": "{{count}} yıl"
+      }
+    },
+    "home": {
+      "allDevices": "Tümü",
+      "allComputers": "Tüm cihazlar",
+      "waitingCount": "{{count}} bekliyor",
+      "synced": "Eşitlendi",
+      "unknownComputer": "Bilinmeyen cihaz",
+      "uncategorizedProject": "Kategorize edilmemiş proje",
+      "cindyMake": "Cindy Make",
+      "empty": {
+        "search": {
+          "title": "Eşleşme yok",
+          "copy": "Başka bir proje adı, görev başlığı, bilgisayar adı veya mesaj anahtar kelimesi deneyin."
+        },
+        "waiting": {
+          "title": "Bekleyen istek yok",
+          "copy": "İzin istemleri, plan incelemeleri ve sorular burada görünecektir."
+        },
+        "automation": {
+          "title": "Otomasyon görevi yok",
+          "copy": "Otomasyonlar tarafından oluşturulan görevler burada projeye göre gruplandırılacaktır."
+        },
+        "archived": {
+          "title": "Arşivlenmiş görev yok",
+          "copy": "Mevcut projelerinize ve görevlerinize göz atmaya devam etmek için Tümü veya Aktif seçeneğine geçin."
+        },
+        "noSession": {
+          "title": "Henüz görev yok",
+          "copy": "Bilgisayarınızda bir görev oluşturun veya devam ettirin; projesi burada görünecektir."
+        }
+      },
+      "noDevice": {
+        "accessRevoked": {
+          "title": "Erişim iptal edildi",
+          "copy": "{{names}} bu telefonun uzaktan erişimini iptal etti. Erişimi yeniden deneyin veya otomatik olarak yeniden bağlanmak için bilgisayarda tekrar izin verin."
+        },
+        "remoteDisabled": {
+          "title": "Bilgisayarınızda uzaktan kontrole izin verin",
+          "copy": "{{names}} çevrimiçi. Bir adım kaldı: bilgisayarda telefon kontrolünü etkinleştirin."
+        },
+        "offline": {
+          "title": "Bilgisayarınızda Cindy'yi açın",
+          "copy": "Bağlı bilgisayarlarınız çevrimdışı. Cindy'yi açın ve oturumunuzu açık tutun; telefonunuz otomatik olarak yeniden bağlanacaktır."
+        },
+        "firstRun": {
+          "title": "Bilgisayarınızda Cindy'yi bağlayın",
+          "copy": "Cindy şu anda bilgisayarınızda çalışıyor. Mobil uygulama, o bilgisayardaki Agent'larla çalışabilmeniz için uzaktan erişimi kullanır."
+        }
+      }
+    },
+    "bulk": {
+      "action": {
+        "archive": "Arşivle",
+        "delete": "Sil",
+        "pin": "Sabitle",
+        "restore": "Arşivden Çıkar",
+        "unpin": "Sabitlemeyi Kaldır"
+      },
+      "title": "{{count}} görevi {{action}}",
+      "description": "Seçilen {{count}} göreve {{action}} eylemini uygulayın.",
+      "descriptionWithSkipped": "Seçilen {{count}} göreve {{action}} uygulayın; uygulanamayan {{skippedCount}} görev atlanacaktır."
+    }
+  },
+  "list": {
+    "projectActions": {
+      "newTask": "Yeni görev",
+      "allTasks": "Tüm görevler",
+      "search": "Ara"
+    },
+    "taskSuggestions": {
+      "connected": "Bilgisayar bağlandı",
+      "title": "Bilgisayarınızdan uzakta mısınız?\nYine de başlayabilirsiniz.",
+      "copy": "Cindy'den bilgisayarınızda çalışmasını isteyin ve ilerlemeyi telefonunuzdan kontrol edin.",
+      "footerTitle": "Bilgisayarınız bundan sonra ne konuda yardımcı olabilir?",
+      "footerCopy": "Yeni bir görev başlatın ve ilerlemesini buradan takip edin.",
+      "newTask": "Yeni görev",
+      "tryThese": "Yeni bir görev deneyin",
+      "shuffle": "Daha fazla fikir göster",
+      "syncHint": "Bilgisayarınızda başlatılan görevler burada da görünecektir.",
+      "items": {
+        "findFile": {
+          "label": "Bilgisayarınızda bir dosya bulun",
+          "hint": "Geri dönüp aramanıza gerek yok",
+          "prompt": "Bu bilgisayarda bir dosya bulmama yardım et. Önce adındaki anahtar kelimeleri, türünü veya yaklaşık ne zaman değiştirildiğini sor, ardından olası eşleşmeleri ara ve listele."
+        },
+        "computerStatus": {
+          "label": "Bilgisayarınızın ne kadar meşgul olduğunu görün",
+          "hint": "Etkinliği ve kaynak kullanımını kontrol edin",
+          "prompt": "Bu bilgisayardaki CPU, bellek ve disk kullanımını kontrol et, yoğun kaynak kullanan programları belirle ve sade bir dille özetle."
+        },
+        "projectProgress": {
+          "label": "Bir projeyi yakalayın",
+          "hint": "Son değişiklikleri ve kalan işleri inceleyin",
+          "prompt": "Bu bilgisayardaki bir projede güncel duruma gelmeme yardım et. Önce projeyi seçmeme izin ver, ardından son değişiklikleri ve bekleyen işleri inceleyip bana kısa bir özet ver."
+        },
+        "downloads": {
+          "label": "İndirilenler klasöründe ne olduğunu görün",
+          "hint": "Düzenlemeden önce envanter çıkarın",
+          "prompt": "Bu bilgisayarın İndirilenler klasöründeki dosyaları incele, türe ve tarihe göre özetle ve bunları nasıl düzenleyeceğimi öner. Henüz dosyaları taşıma veya silme."
+        },
+        "summarizeDocument": {
+          "label": "Uzun bir belgeyi özetleyin",
+          "hint": "Önemli noktaları telefonunuza alın",
+          "prompt": "Bu bilgisayardaki bir belgeyi özetle. Önce dosya adını veya konumunu sor, ardından ana noktaları, sonuçları ve eylem maddelerini çıkar."
+        },
+        "storageUsage": {
+          "label": "Disk alanını neyin kullandığını bulun",
+          "hint": "Büyük dosyaları ve klasörleri bulun",
+          "prompt": "Bu bilgisayardaki disk kullanımını analiz et, en büyük klasörleri ve dosyaları listele ve bunları düzenleme yolları öner. Henüz hiçbir şeyi silme."
+        }
+      }
+    },
+    "thisComputer": "Bu cihaz",
+    "allConversations": "Tüm Görevler",
+    "syncFailed": "Eşitleme başarısız",
+    "requestFailed": "İstek başarısız oldu",
+    "loading": "Kullanılabilir cihazlar yükleniyor",
+    "untitled": "Başlıksız görev",
+    "connection": {
+      "connecting": "Bağlanıyor",
+      "disconnected": "Bağlantı kesildi"
+    },
+    "error": {
+      "sessionDeviceNotFound": "Bu görevin ait olduğu cihaz bulunamıyor. Tekrar eşitleyip yeniden deneyin.",
+      "taskDeviceNotFound": "Bu görevin ait olduğu cihaz bulunamıyor. Tekrar eşitleyip yeniden deneyin.",
+      "noDevice": "Kullanılabilir cihaz yok. Masaüstünde uzaktan kontrolü açın, ardından tekrar eşitleyin."
+    },
+    "alert": {
+      "cacheSaveFailed": "Çevrimdışı önbellek kaydedilemedi",
+      "cacheSaveFailedDetail": "Telefonunuzdaki kullanılabilir depolama alanını kontrol edin. Çevrimiçi olarak devam edebilirsiniz ancak bazı içerikler çevrimdışı kullanılamayabilir.",
+      "actionFailed": "Eylem başarısız oldu",
+      "renameFailed": "Yeniden adlandırma başarısız oldu",
+      "deleteTitle": "Görev silinsin mi?",
+      "deleteMessage": "Bu işlem \"{{title}}\" görevini siler ve geri alınamaz."
+    },
+    "a11y": {
+      "selectScope": "Görev kapsamını seç",
+      "openMenu": "Menüyü aç",
+      "closeMenu": "Menüyü kapat",
+      "openDisplaySettings": "Görüntüleme ayarlarını aç",
+      "openDisplaySettingsWithStatus": "Görüntüleme ayarlarını aç (gösterilen: {{status}})",
+      "openSearch": "Ara",
+      "openSettings": "Ayarları aç",
+      "syncing": "Eşitleniyor",
+      "sync": "Tekrar eşitle",
+      "pinnedConversations": "{{count}} sabitlenmiş görev",
+      "newRemoteConversation": "Yeni görev",
+      "renameDevice": "{{label}} yeniden adlandır",
+      "project": "Proje {{title}}",
+      "dialogue": "Sohbet",
+      "openAutomationLatest": "{{title}} otomasyonunun son görevini aç",
+      "automationTask": "Otomasyon {{title}}",
+      "openConversation": "{{title}} görevini aç",
+      "followedBy": ", {{names}} tarafından takip ediliyor",
+      "collapse": "{{title}} daralt",
+      "expand": "{{title}} genişlet",
+      "taskError": "Görev başarısız oldu",
+      "awaitingYou": "Sizi bekliyor",
+      "doneUnread": "Tamamlandı, okunmadı",
+      "running": "Çalışıyor",
+      "close": "Kapat",
+      "cancelRename": "Yeniden adlandırmayı iptal et",
+      "createdBy": "{{name}} tarafından oluşturuldu",
+      "ownedBy": "{{name}} kullanıcısına ait"
+    },
+    "accounts": {
+      "title": "Hesap değiştir",
+      "add": "Başka bir hesapla giriş yap",
+      "syncFailed": "Hesap bilgileri güncellenemedi",
+      "runningTitle": "Hesap değiştirilsin mi?",
+      "runningMessage": "Bazı görevler hâlâ çalışıyor. Bilgisayarınızda çalışmaya devam edecekler ancak bu telefon siz geçiş yaptıktan sonra onları almayı ve kontrol etmeyi durduracaktır.",
+      "switchConfirm": "Devam Et"
+    },
+    "menu": {
+      "groupDialogue": "Sohbet",
+      "dialogueFolder": "Sohbet",
+      "search": "Ara",
+      "settings": "Ayarlar",
+      "remoteSettings": "Uzaktan bağlantı ayarları",
+      "displaySettings": "Görüntüleme ayarları",
+      "groupHeading": "Grup",
+      "sortHeading": "Görev sıralama",
+      "projectOrderHeading": "Proje sıralama",
+      "projectOrderManualTip": "Bir proje satırına dokunup basılı tutun, ardından sırayı değiştirmek için sürükleyin. İçindeki görevler yine de yukarıdaki sıralamayı takip eder.",
+      "statusHeading": "Görev durumu",
+      "showDeviceTasks": "Görevleri göster",
+      "openDevice": "Aç",
+      "renameDevice": "Yeniden Adlandır",
+      "groupProject": "Proje",
+      "sortBy": {
+        "priority": "Öncelik",
+        "recency": "Son Etkinlik",
+        "created": "Oluşturulma Zamanı"
+      },
+      "sortByPriorityTip": "Önce sizi bekleyenler, sonra okunmamışlar, sonra çalışanlar, sonra zamana göre",
+      "projectOrder": {
+        "activity": "Görevleri takip et",
+        "custom": "Manuel"
+      },
+      "status": {
+        "active": "Aktif",
+        "archived": "Arşivlendi",
+        "all": "Tümü"
+      },
+      "filterHeading": "Filtreler",
+      "filterSummaryActive": "{{count}} aktif",
+      "filterReset": "Filtreleri sıfırla",
+      "filterAll": "Tümü",
+      "filterProjectsHeading": "Projeler",
+      "filterAllProjects": "Tüm projeler",
+      "filterSelectedProjects": "{{count}} seçildi",
+      "filterVendorHeading": "Harness",
+      "filterVendor": {
+        "all": "Tümü",
+        "cc": "Claude Code",
+        "codex": "Codex",
+        "pi": "Pi"
+      },
+      "filterLastActivityHeading": "Son etkinlik",
+      "filterLastActivity": {
+        "1d": "1g",
+        "3d": "3g",
+        "7d": "7g",
+        "30d": "30g",
+        "all": "Tümü"
+      },
+      "showCollapsedTeammateAvatars": "Daraltıldığında avatarları göster",
+      "displayHeading": "Görüntüleme",
+      "view": {
+        "text": "Metin",
+        "list": "Liste"
+      },
+      "taskInfoHeading": "Görev bilgisi",
+      "taskInfo": {
+        "time": "Zaman",
+        "pr": "PR durumu",
+        "tokens": "Tokenlar",
+        "cost": "Maliyet"
+      },
+      "summaryNone": "Yok",
+      "summarySeparator": ", ",
+      "filterEmptyCopy": "Görüntüleme ayarlarında Filtreleri ayarlayın veya sıfırlayın.",
+      "filterTeammatesHeading": "Yol Arkadaşları",
+      "filterAnySource": "Tümü",
+      "filterHideAllTeammates": "Tümünü gizle",
+      "filterSelectedTeammates": "{{count}} seçildi"
+    },
+    "search": {
+      "placeholder": "Başlıkları veya içeriği arayın…",
+      "filterA11y": "Arama filtreleri",
+      "filterAria": "Arama filtreleri ve sıralama (Sıralama: {{sort}}, Durum: {{status}}, Agent: {{agent}}, Son etkinlik: {{lastActivity}}, Projeler: {{projects}})",
+      "filter": {
+        "label": "Arama kriterleri",
+        "reset": "Sıfırla",
+        "sortHeading": "Sırala",
+        "statusHeading": "Durum",
+        "projectsHeading": "Projeler",
+        "agentHeading": "Agent",
+        "lastActivityHeading": "Son etkinlik",
+        "allProjects": "Tüm projeler",
+        "selectedProjects": "{{count}} seçildi",
+        "sort": {
+          "relevance": "İlgi Düzeyi",
+          "activityDesc": "Son aktif olanlar",
+          "activityAsc": "En eski aktif olanlar"
+        },
+        "status": {
+          "active": "Aktif",
+          "archived": "Arşivlendi",
+          "all": "Tümü"
+        },
+        "agent": {
+          "all": "Tümü",
+          "cc": "Claude Code",
+          "codex": "Codex",
+          "pi": "Pi"
+        },
+        "lastActivity": {
+          "1d": "1g",
+          "3d": "3g",
+          "7d": "7g",
+          "30d": "30g",
+          "all": "Tümü"
+        }
+      }
+    },
+    "renameDevice": {
+      "title": "Cihazı Yeniden Adlandır",
+      "placeholder": "Cihaz adı",
+      "savingA11y": "Cihaz adı kaydediliyor",
+      "saveA11y": "Cihaz adını kaydet"
+    },
+    "renameSession": {
+      "title": "Görevi Yeniden Adlandır",
+      "placeholder": "Görev başlığı",
+      "savingA11y": "Görev başlığı kaydediliyor",
+      "saveA11y": "Görev başlığını kaydet"
+    },
+    "revoked": {
+      "title": "Erişim iptal edildi",
+      "body": "\"{{deviceName}}\" bu cihazın uzaktan erişimini iptal etti. Bu cihazı o bilgisayardaki {{appName}} ayarlarında yeniden yetkilendirin, ardından \"Erişimi Yeniden Dene\"ye dokunun.",
+      "retry": "Erişimi Yeniden Dene"
+    },
+    "viewAllConversations": "Tüm {{count}} görevi görüntüle",
+    "viewAllRuns": "Tüm {{count}} çalıştırmayı görüntüle",
+    "preview": {
+      "needAttention": "{{count}} ilgi bekliyor",
+      "waiting": "{{count}} bekliyor",
+      "automationRunning": "Otomasyon çalışıyor",
+      "totalRuns": "Toplam {{count}} çalıştırma",
+      "runCount": "{{count}} çalıştırma",
+      "nextRunMinutes": "{{count}} dk içinde çalışır",
+      "nextRunHours": "{{count}} sa içinde çalışır",
+      "nextRunDays": "{{count}} g içinde çalışır",
+      "imminent": "Yakında çalışacak",
+      "stopped": "Durduruldu"
+    }
+  },
+  "detail": {
+    "filter": {
+      "active": "Aktif",
+      "waiting": "Beklemede",
+      "automation": "Otomasyon",
+      "archived": "Arşivlendi",
+      "all": "Tümü",
+      "a11y": "{{label}} görevlerini filtrele"
+    },
+    "group": {
+      "project": "Proje",
+      "date": "Tarih",
+      "label": "Grup",
+      "a11y": "{{label}} ile gruplandır"
+    },
+    "metric": {
+      "active": "Aktif",
+      "waiting": "Beklemede",
+      "automation": "Otomasyon",
+      "activeA11y": "Aktif görevleri filtrele",
+      "waitingA11y": "Bekleyen görevleri filtrele",
+      "automationA11y": "Otomasyon görevlerini filtrele"
+    },
+    "search": {
+      "openA11y": "Uzak görevleri ara",
+      "closeA11y": "Uzak görev aramasını kapat",
+      "label": "Ara",
+      "placeholder": "Başlıkları veya içeriği arayın…",
+      "clearA11y": "Aramayı temizle",
+      "closeInputA11y": "Aramayı kapat",
+      "clear": "Temizle",
+      "close": "Kapat"
+    },
+    "filters": {
+      "collapseA11y": "Görev filtrelerini daralt",
+      "expandA11y": "Görev filtrelerini genişlet",
+      "label": "Filtre"
+    },
+    "selection": {
+      "count": "{{count}} görev seçildi",
+      "canAct": "Eylemler kullanılabilir",
+      "cannotAct": "Kullanılabilir eylem yok",
+      "clearA11y": "Görev seçimini temizle"
+    },
+    "bulk": {
+      "pinning": "Sabitleniyor",
+      "unpinning": "Sabitleme kaldırılıyor",
+      "archiving": "Arşivleniyor",
+      "restoring": "Arşivden çıkarılıyor",
+      "deleting": "Siliniyor",
+      "pinA11y": "Seçilen görevleri sabitle",
+      "unpinA11y": "Seçilen görevlerin sabitlemesini kaldır",
+      "archiveA11y": "Seçilen görevleri arşivle",
+      "restoreA11y": "Seçilen görevleri arşivden çıkar",
+      "deleteA11y": "Seçilen görevleri sil",
+      "cancelA11y": "Toplu eylemi iptal et",
+      "partialFailure": "{{done}} işlendi, {{failed}} başarısız oldu (geri yüklendi, tekrar deneyebilirsiniz).",
+      "noArchivable": "Seçimde arşivlenebilir aktif görev yok.",
+      "noPinnable": "Seçimde sabitlenebilir aktif görev yok.",
+      "noRestorable": "Seçimde arşivden çıkarılacak arşivlenmiş görev yok.",
+      "noUnpinnable": "Seçimde sabitlenmiş görev yok.",
+      "noDeletable": "Seçimde silinebilir görev yok.",
+      "noneModifiable": "Seçilen görevlerin hiçbiri değiştirilemez."
+    },
+    "automationScope": {
+      "eyebrow": "Otomasyon",
+      "title": "Otomasyon",
+      "emptyCopy": "Görev çalıştıktan sonra her çalıştırmanın görevi burada görünür.",
+      "emptyTitle": "Bu görevin henüz çalışma geçmişi yok"
+    },
+    "projectScope": {
+      "eyebrow": "Proje",
+      "emptyCopy": "Bu projede yeni bir görev başlatın.",
+      "emptyTitle": "Bu projenin henüz görevi yok"
+    },
+    "subtitle": {
+      "deviceActive": "{{deviceName}} · {{count}} aktif görev",
+      "activeAndProjects": "{{count}} aktif görev · {{projects}} proje"
+    },
+    "row": {
+      "a11yAutomationGroup": "Otomasyon grubu {{title}}",
+      "a11ySession": "Görev {{title}}",
+      "a11yCollapse": "{{title}} daralt",
+      "a11yExpand": "{{title}} genişlet",
+      "collapse": "Daralt",
+      "expand": "Genişlet"
+    },
+    "badge": {
+      "waiting": "Beklemede {{count}}",
+      "automationPrefix": "Otomasyon",
+      "sessionCount": "{{count}} görev",
+      "aggregate": "Gruplandırıldı",
+      "running": "Çalışıyor",
+      "unread": "Okunmamış {{count}}"
+    },
+    "child": {
+      "openA11y": "Otomasyon görevini aç {{title}}"
+    },
+    "viewAllRuns": "Tüm {{count}} çalıştırmayı görüntüle"
+  },
+  "companions": {
+    "section": {
+      "showAll": "Tümünü göster",
+      "showAllA11y": "Tüm {{count}} tanesini göster",
+      "showLess": "Daha az göster"
+    },
+    "noCreateHosts": "Uyumlu bir bilgisayar mevcut değil. Bir bilgisayarda Cindy'yi açın ve bir yol arkadaşı oluşturmak için aynı hesapla giriş yapın.",
+    "messageSent": "Mesaj arka plan görevine gönderildi",
+    "sentTo": "{{name}} kişisine mesaj gönderildi",
+    "receivedFrom": "{{name}} kişisinden mesaj",
+    "backgroundTask": "Arka plan görevi",
+    "openTask": "Görevi aç",
+    "viewPr": "PR'ı Görüntüle",
+    "stale": "Ayrıntılar güncelliğini yitirmiş olabilir. Yenilenemiyor.",
+    "artifactCount": "{{count}} dosya",
+    "prCount": "{{count}} PR",
+    "artifactCount_one": "{{count}} dosya",
+    "artifactCount_other": "{{count}} dosya",
+    "prCount_one": "{{count}} PR",
+    "prCount_other": "{{count}} PR",
+    "duration": {
+      "seconds": "{{n}}sn",
+      "minutes": "{{n}} dk",
+      "hoursMinutes": "{{h}} sa {{m}} dk"
+    },
+    "actionFailed": "Bu eylem yüklenemiyor veya tamamlanamıyor",
+    "messages": "Mesajlar",
+    "readOnly": "Salt okunur",
+    "directEmpty": "Henüz görüntülenecek mesaj yok.",
+    "directLimitReached": "Bu yol arkadaşı diyaloğu sınırına ulaştı; her iki yol arkadaşı da ana görevlerine döndü",
+    "directUnavailable": "Bu yol arkadaşı diyaloğu artık kullanılamıyor.",
+    "unread": "Yeni yanıt",
+    "status": {
+      "queued": "Başlanıyor",
+      "running": "Çalışıyor",
+      "waiting": "Girdi bekleniyor",
+      "completed": "Tamamlandı",
+      "failed": "Başarısız",
+      "cancelled": "Durduruldu",
+      "timed-out": "Zaman aşımına uğradı",
+      "unknown": "Bilinmeyen durum"
+    },
+    "title": "Yol Arkadaşları",
+    "search": "Yol Arkadaşlarını Ara",
+    "startChat": "Diyaloğu başlat",
+    "automation": {
+      "unsavedTitle": "Değişiklikler Yok Sayılsın mı?",
+      "unsavedBody": "Değişiklikleriniz kaydedilmedi.",
+      "discard": "Değişiklikleri Yok Say"
+    },
+    "openProfile": "{{name}} profilini görüntüle",
+    "switchCompanion": "Yol arkadaşını değiştir",
+    "activity": {
+      "thinking": "Düşünüyor",
+      "typing": "Yazıyor",
+      "helping": "Üzerinde çalışıyor"
+    },
+    "working": {
+      "thinking": "Düşünüyor…",
+      "replying": "Yanıtlıyor…",
+      "processing": "Çalışıyor…",
+      "compacting": "Diyaloğu düzenliyor…",
+      "reading-memory": "Bellek okunuyor…",
+      "saving-memory": "Bellek kaydediliyor…",
+      "deleting-memory": "Bellek siliniyor…",
+      "organizing-memory": "Bellek düzenleniyor…",
+      "reading-file": "Dosyalar okunuyor…",
+      "saving-file": "Dosyalar güncelleniyor…",
+      "searching": "Web taranıyor…",
+      "reading-web": "Web sayfaları okunuyor…",
+      "searching-files": "Dosyalar aranıyor…",
+      "testing": "Testler çalıştırılıyor…",
+      "checking": "Kod kontrol ediliyor…",
+      "reviewing-memory": "Bellek kontrol ediliyor…",
+      "reviewing-files": "Dosyalar inceleniyor…",
+      "reviewing-sources": "Web kaynakları kontrol ediliyor…",
+      "reviewing-checks": "Kontrol sonuçları inceleniyor…"
+    },
+    "invitation": {
+      "title": "Tanışmaya hazırlanıyor",
+      "waiting": "Yakında görüşürüz, {{name}}",
+      "background": "Ayrılabilirsiniz. Hazırlık arka planda devam eder.",
+      "profile": "Kişisel bir hikaye yazılıyor",
+      "skills": "{{name}} için bir bilgisayar hazırlanıyor",
+      "avatar": "{{name}} yeni bir portre seçiyor",
+      "welcome": "İlk karşılama hazırlanıyor",
+      "failed": "Hazırlık duraklatıldı. Şimdiye kadar tamamlanan her şey kaydedildi. Tekrar deneyebilirsiniz.",
+      "retryFailed": "Az önce yeniden denene medi. Lütfen kısa süre sonra tekrar deneyin.",
+      "leave": "Uzaklaş",
+      "avatarSkipped": "Şimdilik varsayılan portre kullanılıyor. İstediğiniz zaman değiştirebilirsiniz."
+    },
+    "viewResult": "Sonucu Görüntüle",
+    "noWrittenResult": "Yazılı bir sonuç yok.",
+    "errorDetails": "Hata ayrıntıları",
+    "createTeammate": "Yeni yol arkadaşı",
+    "createMenu": "Yeni",
+    "awaiting": "Onayınızı bekliyor",
+    "taskResult": "Görev sonucu",
+    "collapseResult": "Sonucu gizle",
+    "avatarStatus": {
+      "awaiting": "Onayınızı bekliyor",
+      "error": "İlgi bekliyor",
+      "running": "Çalışıyor",
+      "done": "Tamamlandı",
+      "unread": "Okunmamış"
+    },
+    "viewMr": "MR'yi Görüntüle",
+    "viewPrMr": "PR'yi Görüntüle",
+    "mrCount": "{{count}} MR",
+    "prMrCount": "{{count}} PR",
+    "mrCount_one": "{{count}} MR",
+    "mrCount_other": "{{count}} MR",
+    "prMrCount_one": "{{count}} PR",
+    "prMrCount_other": "{{count}} PR"
+  },
+  "companionProfile": {
+    "avatar": "Avatar",
+    "emptyEditor": "Henüz burada bir şey yok.",
+    "searchOptions": "Ara",
+    "changed": "Başka bir yerde değiştirildi. Kaydedilmemiş düzenlemeleriniz korundu.",
+    "discardAndReload": "Düzenlemeleri yok say ve yeniden yükle",
+    "memoryEntries": "Kaydedilen Bellekler",
+    "memorySearch": "Bellekleri ara",
+    "memoryEmpty": "Henüz bellek yok",
+    "memoryNoResults": "Eşleşen bellek yok",
+    "memoryDisabled": "Bellek kapalı. Yol arkadaşınız bellekleri okumayacak veya kaydetmeyecek; kaydedilenler yine de görüntülenebilir ve silinebilir.",
+    "memoryLoadFailed": "Bellekler yüklenemedi",
+    "memoryToday": "Bugün",
+    "memoryUpdated": "Güncellendi {{time}}",
+    "memoryEdit": "Düzenle",
+    "memoryDone": "Bitti",
+    "memoryTooLong": "Çok uzun. Kaydetmek için kısaltın.",
+    "memoryRequired": "Bir başlık ve içerik gereklidir.",
+    "memoryChanged": "{{name}} az önce bu belleği güncelledi",
+    "memoryUseLatest": "En son olanı kullan",
+    "memoryKeepMine": "Değişikliklerimi koru",
+    "memorySaved": "Kaydedildi",
+    "memorySaveFailed": "Kaydedilmedi. Düzenlemeleriniz korundu.",
+    "memoryMissing": "Bu bellek artık mevcut değil.",
+    "memoryDeleteFailed": "Bellek silinemedi",
+    "create": "Yeni Yol Arkadaşı",
+    "createFailed": "Oluşturma henüz doğrulanmadı. Kontrol etmek için tekrar deneyin.",
+    "title": "Yol Arkadaşı",
+    "profile": "Profil ve Kişilik",
+    "memory": "Bellek",
+    "skills": "Beceriler ve Bağlantılar",
+    "artifacts": "Yapıtlar",
+    "direct": "Yol Arkadaşı Mesajları",
+    "settings": "Modeller ve İzinler",
+    "search": "Mesajları Ara",
+    "models": "Model Zinciri",
+    "permissions": "İşlem İzinleri",
+    "personalSkills": "Beceriler",
+    "connections": "Başvurulan Beceriler ve Bağlantılar",
+    "save": "Değişiklikleri Kaydet",
+    "offline": "Devam etmek için {{deviceName}} cihazına yeniden bağlanın. Düzenlemeleriniz korundu.",
+    "hostUpgrade": "{{deviceName}} üzerinde Cindy'yi güncelleyip tekrar deneyin veya bu yol arkadaşının ayarlarını orada düzenleyin.",
+    "readFailed": "En son durum doğrulanamadı. Tekrar denemeden önce yenileyin; eylem zaten tamamlanmış olabilir. Düzenlemeleriniz korundu.",
+    "deleteFailed": "Yol arkadaşı silinmedi.",
+    "artifactsEmpty": "Henüz yapıt yok. Yol arkadaşınızdan bir şeyler oluşturmasını isteyin.",
+    "openSourceTask": "Kaynak Görevi Aç",
+    "modelFollowsDefault": "Varsayılan model zincirini takip et",
+    "modelOverride": "Bu yol arkadaşının kendi model zincirini kullanıyor",
+    "modelsUnavailable": "Kullanılabilir model yok. Bilgisayarınızda bu yol arkadaşının model ayarlarını kontrol edin, ardından yenileyin.",
+    "artifactsRecovery": "Mesaj kartlarından dosyaları açın veya {{deviceName}} üzerinde dosyalara göz atın.",
+    "directRecovery": "Yol arkadaşı mesajları yüklenemedi. {{deviceName}} üzerinde Cindy'yi güncelleyin ve tekrar deneyin.",
+    "directEmpty": "Henüz yol arkadaşı mesajı yok.",
+    "skillsEmpty": "Henüz kişisel beceri yok. Yol arkadaşınızdan bir çalışma şeklini hatırlamasını isteyin.",
+    "connectionsEmpty": "Hiçbir beceri veya bağlantı seçilmedi.",
+    "largeProfileRecovery": "Bu profil burada düzenlenemeyecek kadar uzun. Profilin tamamını {{deviceName}} üzerinde düzenleyin.",
+    "addModel": "Yedek model ekle",
+    "removeModel": "Modeli kaldır",
+    "moveModelUp": "Modeli yukarı taşı",
+    "backupModels": "Yedek modeller ({{count}})",
+    "settingsTitle": "Yol arkadaşı ayarları",
+    "name": "Ad",
+    "portraitNumber": "Portre {{number}}",
+    "uploadAvatar": "Avatar Yükle",
+    "avatarFailed": "Bu resim açılamadı. Başka bir tane deneyin.",
+    "nameTaken": "Bu ad zaten kullanımda. Başka bir tane seçin.",
+    "home": "Ana Bilgisayar",
+    "chat": "Sohbet",
+    "showReplyTarget": "Bir yanıtın hangi mesaja cevap verdiğini göster",
+    "showReplyTargetHint": "Bir yol arkadaşının yanıtının üzerinde, mesajlarınızdan hangisine yanıt verdiğini gösterir. Tüm yol arkadaşları için geçerlidir. Daha eski yanıtlar bunu göstermez.",
+    "channels": "Mesajlaşma platformları",
+    "channelsEmpty": "Bağlı mesajlaşma platformu yok",
+    "channelTasksEmpty": "Henüz görev yok",
+    "channelPlatforms": {
+      "telegram": "Telegram",
+      "feishu": "Feishu",
+      "lark": "Lark",
+      "wecom": "WeCom",
+      "dingtalk": "DingTalk",
+      "discord": "Discord"
+    }
+  },
+  "companionImport": {
+    "title": "Bir yol arkadaşını içe aktar",
+    "entry": "Bir Agent İçe Aktar",
+    "description": "Hermes veya OpenClaw üzerinden nelerin getirileceğini seçin.",
+    "empty": "Bu bilgisayarda yüklü bir Agent bulunamadı.",
+    "personality": "Kişilik ve alışkanlıklar",
+    "memory": "Bellekler",
+    "skills": "Beceriler",
+    "connections": "Ortam ve bağlantılar",
+    "automations": "Otomasyonlar",
+    "paused": "Duraklatılmış olarak tut",
+    "itemAttention": "İlgi bekliyor",
+    "takeover": "İçe aktardıktan sonra otomasyonları kontrol edin ve devralın",
+    "takeoverNote": "Kaynak görevler yalnızca veri bağlantıları doğrulandıktan sonra duraklatılır. Seçilmeyen bağımlılıklar kaynak görevin çalışmasını sürdürür.",
+    "submit": "İçe Aktar",
+    "back": "Geri",
+    "open": "Yol arkadaşını aç",
+    "running": "İçe aktarılıyor ve bağlantılar kontrol ediliyor…",
+    "complete": "İçe aktarma kaydedildi",
+    "attention": "Bazı öğeler ilgi bekliyor. Aşağıdaki ayrıntılara bakın.",
+    "error": "İçe aktarma tamamlanamadı. Aynı seçimle tekrar deneyin.",
+    "keptAtSource": "Devralma tamamlanmadı",
+    "retry": "Kontrolleri yeniden dene",
+    "missingSelection": "Gerekli bir öğe seçilmedi.",
+    "authRefresh": "Orijinal yetkilendirme uyumlu bir yenileme bağlantısına ihtiyaç duyuyor.",
+    "toolMapping": "Orijinal araç kısıtlamalarının devralmadan önce eşlenmesi gerekiyor.",
+    "modelMapping": "Orijinal model yapılandırmasının eşlenmesi gerekiyor.",
+    "contextMapping": "Orijinal çalışma bağlamının eşlenmesi gerekiyor.",
+    "deliveryFailed": "Orijinal teslimat hedefi doğrulanmadı.",
+    "sourceChanged": "Kaynak görev değişti. Önizlemesini yeniden yükleyin.",
+    "credentialFailed": "Kimlik bilgileri güvenli bir şekilde kaydedilemedi.",
+    "scriptMissing": "Gerekli bir komut dosyası eksik.",
+    "sourceCommand": "Orijinal Agent komutu kullanılamıyor.",
+    "readFailed": "Gerekli veri sorgusu doğrulanmadı.",
+    "search": "Ara",
+    "selectAll": "Tümünü seç",
+    "previous": "Önceki",
+    "next": "Sonraki",
+    "chatSetup": "İçe aktarılan bilgileriniz kaydedildi. Konuşmaya başlayabiliriz. Bazı öğelerin hâlâ bir girişe veya kontrole ihtiyacı var; hazır olduğunuzda bunları tamamlayabiliriz. Kaynak otomasyonlar devralınana kadar değişmeden kalır.",
+    "chatReady": "Bilgileriniz içe aktarıldı. Konuşmaya başlayabiliriz.",
+    "partial": "Bazı içerikler tam olarak içe aktarılmadı",
+    "details": "İçe aktarma ayrıntılarını görüntüle",
+    "partlySaved": "Kısmen kaydedildi",
+    "savedNeedsSetup": "Kaydedildi; kurulum veya etkinleştirme kaldı",
+    "notSaved": "Kaydedilmedi",
+    "databaseDriver": "Veritabanı sürücüsü yüklenemedi. Cindy'yi güncelleyin veya onarın, ardından tekrar deneyin.",
+    "databaseUnavailable": "Kaynak veritabanı okunamadı. Orijinal veriler değişmedi; onarımdan sonra tekrar deneyin.",
+    "fileTooLarge": "Bir dosya veya bu içe aktarma okuma sınırını aşıyor. İçerik kırpılmadı.",
+    "memoryMetadata": "Bellek özeti veya başlığı depolama gereksinimlerini aşıyor.",
+    "memoryWrite": "Bellek yazma veya bütünlük doğrulaması başarısız oldu. Tekrar deneyebilirsiniz.",
+    "memoryChanged": "Kaydedilen bellek değiştirildi ve üzerine yazılmadı.",
+    "attachmentUnsupported": "Bu ek formatı henüz desteklenmiyor. Orijinal kaynakta kalır.",
+    "diskFull": "Disk alanı yetersiz. Yer açın, ardından tekrar deneyin.",
+    "permissionDenied": "Bu öğeyi okuma veya kaydetme izni eksik. İzinleri düzeltin, ardından tekrar deneyin.",
+    "setupDeferred": "Yol arkadaşı sohbetinde oturum açmaya ve doğrulamaya devam edin.",
+    "automationInvalid": "Otomasyon tanımı dönüştürülemedi; oluşturulmadı.",
+    "itemFailed": "Bu öğe tamamlanmadı. Yeniden deneyin veya içe aktarma ayrıntılarını görüntüleyin.",
+    "chatPartial": "Yol arkadaşınız oluşturuldu ancak bazı içerikler tam olarak kaydedilmedi. Aşağıdaki öğeler hâlâ ilgi bekliyor; diğer içerik ve sohbet kullanılabilir durumdadır.",
+    "imBotOwnerMissing": "Sahip kullanıcı kimliği bulunamadı. Bu botu yol arkadaşının Mesajlaşma platformları sayfasında bağlamayı tamamlayın.",
+    "imBotGatewayRunning": "Orijinal ağ geçidi hâlâ bu botu kullanıyor. Durdurun, ardından botu Mesajlaşma platformlarına bağlayın.",
+    "imBotInUse": "Bu bot bu bilgisayarda zaten bağlı, Ayarlar → IM botları altında veya başka bir yol arkadaşında.",
+    "imBotConnectFailed": "Bu bot bağlanamadı. Yol arkadaşının Mesajlaşma platformları sayfasında tekrar deneyin.",
+    "imBotSourceStopUnconfirmed": "Orijinal bot henüz durdurulmadı, bu nedenle yol arkadaşına devredilmedi. Daha sonra yol arkadaşının Mesajlaşma platformları sayfasından bağlayabilirsiniz.",
+    "imBotSourceChanged": "Orijinal bot önizlemeden sonra değişti, bu yüzden durdurulmadı. Önizlemeyi yeniden yükleyin ve tekrar içe aktarın.",
+    "bots": "Mesajlaşma botları",
+    "botsNote": "İçe aktardıktan sonra bu botlar {{source}} içinde durur ve yol arkadaşı onları devralır.",
+    "sourceDisabled": "Zaten kapalı",
+    "botOwner": "Sahip Kimliği {{id}}"
+  },
+  "glance": {
+    "open": "Bir bakışta {{name}}",
+    "computers": "Bilgisayarlar",
+    "runningHere": "Burada çalışıyor",
+    "online": "Çevrimiçi",
+    "offline": "Çevrimdışı",
+    "current": "Mevcut",
+    "offlineCount_one": "{{count}} çevrimdışı",
+    "offlineCount_other": "{{count}} çevrimdışı",
+    "showMore": "Daha fazla göster",
+    "showLess": "Daha az göster",
+    "doneCount_one": "{{count}} tamamlandı",
+    "doneCount_other": "{{count}} tamamlandı",
+    "checkMeta": "Bağlı e-postalarda ve sohbetlerde yeni yapılacak işleri arayın",
+    "recentTasks": "Son görevler",
+    "unread": "Okunmamış sonuç",
+    "openFailed": "Bu bağlantı açılamadı",
+    "outputs": "Çıktılar",
+    "outputMeta": "{{time}} · {{task}}"
+  },
+  "cloudCompanion": {
+    "homeOffline": "Ana bilgisayar “{{device}}” çevrimdışı",
+    "switchAction": "Başka bir bilgisayarda devam et",
+    "composerHint": "Ana bilgisayar çevrimdışı. Devam etmek için başka bir bilgisayara geçin.",
+    "readOnlyNote": "Bu diyalog bulutta kaydedilir ve salt okunurdur.",
+    "empty": "Henüz bulutta diyalog yok.",
+    "loadFailed": "Bulut diyaloğu şu anda yüklenemiyor.",
+    "loadOlder": "Daha eski mesajları yükle",
+    "noTargets": "Başka bir bilgisayar mevcut değil. Başka bir bilgisayarda Cindy'yi açın, aynı hesapla giriş yapın ve “Aynı hesaba ait cihazların bu bilgisayarı kontrol etmesine izin ver” seçeneğini açın, ardından tekrar deneyin.",
+    "devicesFailed": "Bilgisayarlarınız şu anda yüklenemiyor. Daha sonra tekrar deneyin.",
+    "preparing": "“{{device}}” üzerinde hazırlanıyor…",
+    "preparingHint": "O bilgisayar, yol arkadaşını bulut profilinden devralır ve hazır olduğunda açar.",
+    "timeout": "“{{device}}” henüz hazır değil. Cindy'nin o bilgisayarda açık ve çevrimiçi olduğundan emin olun, ardından tekrar deneyin.",
+    "conflict": "{{name}} zaten “{{device}}” üzerine taşındı.",
+    "switchFailed": "Ana bilgisayar şu anda değiştirilemiyor. Daha sonra tekrar deneyin.",
+    "unknownDevice": "başka bir bilgisayar",
+    "runsOn": "“{{device}}” üzerinde çalışır",
+    "homeTitle": "Ana Bilgisayar",
+    "moveTo": "“{{device}}” üzerine taşı",
+    "moveTitle": "{{name}} “{{device}}” üzerinde çalıştırılsın mı?",
+    "moveDescription": "Bundan sonra {{name}} “{{device}}” üzerinde çalışır ve sohbet geçmişi de birlikte gelir. Çalışma dizinleri, bağlantılar ve yerel dosyalar bulundukları bilgisayarda kalır.",
+    "moveAction": "“{{device}}” üzerine taşı",
+    "moving": "{{name}} “{{device}}” üzerine taşınıyor…",
+    "busyTitle": "{{name}} hâlâ yanıt veriyor",
+    "busyDescription": "Bu yanıt bittiğinde onu “{{device}}” üzerine taşıyın veya yanıtı durdurup şimdi taşıyın.",
+    "busyWait": "Bittiğinde Taşı",
+    "busyStop": "Durdur ve Taşı",
+    "transferBusy": "{{name}} hâlâ bir yanıt üzerinde çalışıyor. Yanıt bittikten sonra taşıyın",
+    "switchConflict": "{{name}} yol arkadaşının ana bilgisayarı zaten değişti, bu yüzden taşınmadı",
+    "homeOutdated": "Ana bilgisayar “{{device}}” daha eski bir Cindy çalıştırıyor. Güncelleyin veya ana bilgisayarı orada değiştirin",
+    "homeUnreachable": "“{{device}}” cihazına ulaşılamıyor. “Aynı hesaba ait cihazların bu makineyi kontrol etmesine izin ver” seçeneği açık ve çevrimiçi olmalıdır",
+    "sendUnreachable": "Mesajınız ana bilgisayar “{{device}}” cihazına ulaşmadı; çevrimdışı olabilir. Başka bir bilgisayarda devam edebilirsiniz.",
+    "olderTarget": "Eski Cindy",
+    "olderTargetNote": "“{{device}}” eski bir Cindy sürümü kullanıyor. Bu nedenle {{name}} orada eski yöntemle çalışır: sohbet geçmişi eşitlenmeye devam eder, ancak proje kuralları ve otomasyonlar orada uygulanmaz."
+  },
+  "sessionImport": {
+    "entry": "Diğer Araçlardan İçe Aktar",
+    "title": "Diğer Araçlardan İçe Aktar",
+    "found_one": "{{device}} üzerinde {{count}} görev bulundu",
+    "found_other": "{{device}} üzerinde {{count}} görev bulundu",
+    "search": "Görevleri veya klasörleri arayın",
+    "scanning": "Bilgisayardaki görevler aranıyor…",
+    "loadFailed": "Bilgisayardaki görevler okunamadı. Tekrar deneyin.",
+    "retry": "Yeniden Dene",
+    "rescan": "Tekrar Tara",
+    "emptyTitle": "Bilgisayarda içe aktarılacak görev yok",
+    "emptyDescription": "Cindy bu araçlardan görevleri içe aktarabilir. Bunlardan birini kullandıktan sonra geri dönüp tekrar tarayın.",
+    "noMatch": "Eşleşen görev yok",
+    "dialogue": "Sohbet",
+    "folderMissing": "Klasör eksik",
+    "groupTasks_one": "{{count}} görev",
+    "groupTasks_other": "{{count}} görev",
+    "archived": "Arşivlendi",
+    "unsupported": "Format henüz desteklenmiyor",
+    "selected_one": "{{count}} seçildi · {{size}}",
+    "selected_other": "{{count}} seçildi · {{size}}",
+    "confirmBody_one": "Bu işlem {{count}} görevi içe aktarır ve {{size}} kadar disk alanı kullanır. Bilgisayarda arka planda çalışır; istediğiniz zaman durdurabilirsiniz. Başlamak için tekrar dokunun.",
+    "confirmBody_other": "Bu işlem {{count}} görevi içe aktarır ve {{size}} kadar disk alanı kullanır. Bilgisayarda arka planda çalışır; istediğiniz zaman durdurabilirsiniz. Başlamak için tekrar dokunun.",
+    "importCount_one": "{{count}} Görevi İçe Aktar",
+    "importCount_other": "{{count}} Görevi İçe Aktar",
+    "import": "İçe Aktar",
+    "progressTitle_one": "{{count}} görev içe aktarılıyor",
+    "progressTitle_other": "{{count}} görev içe aktarılıyor",
+    "background": "Bu paneli kapatabilirsiniz. İçe aktarma bilgisayarda devam eder.",
+    "stop": "Durdur",
+    "done": "Bitti",
+    "queued": "Bekliyor",
+    "copy": "Orijinal geçmiş kopyalanıyor",
+    "messages_one": "{{count}} mesaj kaydediliyor",
+    "messages_other": "{{count}} mesaj kaydediliyor",
+    "verify": "Devam edebileceği kontrol ediliyor",
+    "resultTitle_one": "{{count}} görev içe aktarıldı",
+    "resultTitle_other": "{{count}} görev içe aktarıldı",
+    "sumReady_one": "{{count}} devam etmeye hazır",
+    "sumReady_other": "{{count}} devam etmeye hazır",
+    "sumAction_one": "{{count}} ilgi bekliyor",
+    "sumAction_other": "{{count}} ilgi bekliyor",
+    "sumFailed_one": "{{count}} başarısız oldu",
+    "sumFailed_other": "{{count}} başarısız oldu",
+    "readyNative": "{{harness}} içinde devam etmeye hazır",
+    "readyHandoff": "Hazır — {{harness}} devralır; istediğiniz zaman geçiş yapın",
+    "missingDir": "Orijinal klasör artık mevcut değil. Devam etmek için bilgisayarda bir klasör seçin.",
+    "cancelled": "İçe aktarılmadan önce durduruldu",
+    "failure": {
+      "read-failed": "İçe aktarılamadı: orijinal geçmiş okunamıyor",
+      "unsupported-version": "İçe aktarılamadı: bu sürümün geçmiş formatı henüz desteklenmiyor",
+      "empty": "İçe aktarılamadı: orijinal geçmişte mesaj yok",
+      "not-found": "İçe aktarılamadı: orijinal geçmiş kaybolmuş",
+      "disk-full": "İçe aktarılamadı: yeterli disk alanı yok",
+      "native-unloadable": "İçe aktarılamadı: orijinal geçmiş yüklenemiyor"
+    }
+  },
+  "liveActivity": {
+    "waitingForUpdate": "Güncelleme bekleniyor"
+  }
+}

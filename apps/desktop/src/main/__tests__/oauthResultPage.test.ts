@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { LOGIN_CALLBACK_CHIBI } from '../assets/loginCallbackAssets';
+import {
+  loadLoginCallbackCopy,
+  OAUTH_LANG_TO_APP_LOCALES,
+} from '../../../scripts/lib/loginCallbackCopy.js';
 
 import {
   buildOAuthReturnAction,
@@ -13,7 +17,7 @@ import {
   type OAuthResultPageLang,
 } from '../oauthResultPage';
 
-const ALL_OAUTH_LANGS: OAuthResultPageLang[] = ['zh', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'pt-PT', 'pt-BR'];
+const ALL_OAUTH_LANGS: OAuthResultPageLang[] = ['zh', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'pt-PT', 'pt-BR', 'zh-Hant-x-lzh', 'zh-Hans-x-lzh', 'tr'];
 
 describe('OAuth result page language and copy', () => {
   it('uses the first supported browser language and falls back to English', () => {
@@ -81,6 +85,17 @@ describe('OAuth result page language and copy', () => {
       href: 'cindy://focus/ghost-oauth',
       label: 'Return to Cindy',
     });
+  });
+
+  it('covers Turkish in hosted login callback copy', () => {
+    expect(OAUTH_LANG_TO_APP_LOCALES.tr).toEqual(['tr']);
+    const copy = loadLoginCallbackCopy('tr');
+    expect(copy.successTitle).toBe('Giriş Yapıldı');
+    expect(copy.successBody).toContain('Giriş yaptınız');
+    expect(copy.closeCountdown).toContain('{{count}}');
+    expect(copy.errorTitle).toBe('Giriş tamamlanamadı');
+    expect(copy.errorBody).toContain('Cindy');
+    expect(copy.returnButton).toContain('Cindy');
   });
 });
 

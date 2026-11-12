@@ -66,6 +66,22 @@ describe('selection context menu platform shape', () => {
     expect(template[0]?.label).toBe('拷貝');
   });
 
+  it('uses Turkish labels for tr', () => {
+    const template = buildSelectionContextMenuTemplate('win32', 'tr-TR', params, {
+      addToChat: vi.fn(),
+      lookUp: vi.fn(),
+      searchWeb: vi.fn(),
+    });
+
+    expect(template.map((item) => item.role ?? item.label ?? item.type)).toEqual([
+      'copy',
+      'Sohbete ekle',
+      'separator',
+      'Web\'de “selected words” ara',
+    ]);
+    expect(template[0]?.label).toBe('Kopyala');
+  });
+
   it('truncates long single-line labels', () => {
     const template = buildSelectionContextMenuTemplate(
       'win32',

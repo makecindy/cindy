@@ -1,0 +1,500 @@
+{
+  "permission": {
+    "mode": {
+      "default": "Varsayılan izinler",
+      "acceptEdits": "Düzenlemelere izin ver",
+      "plan": "Plan modu",
+      "auto": "Otomatik onayla",
+      "bypass": "Tam erişim"
+    },
+    "pickerSelect": "{{mode}} izin modunu seçin",
+    "armedRiskWarning": "Karar, yalnızca siz onayladıktan sonra bilgisayarınıza gönderilir.",
+    "armedHighRiskTitle": "Yüksek riskli eylemi onaylayın",
+    "kind": "İzin",
+    "deny": "Reddet",
+    "denyAccessibility": "İzin isteğini reddet",
+    "alwaysAllow": "Bu görev için her zaman izin ver",
+    "alwaysAllowAccessibility": "Bu görevde izin isteklerine her zaman izin ver",
+    "alwaysAllowConfirm": "Bu görev için izin vermeyi onayla",
+    "allowOnce": "Bir kez izin ver",
+    "allowOnceAccessibility": "İzin isteğine bir kez izin ver",
+    "allowOnceConfirm": "Bir kez izin vermeyi onayla",
+    "highRisk": "Yüksek risk",
+    "autoReviewUnavailable": "Otomatik inceleme tamamlanamadı. Bu eyleme izin verilip verilmeyeceğini onaylayın.",
+    "autoReviewReason": "Otomatik inceleme kararınızı gerektiriyor: {{reason}}",
+    "fullAccessConfirm": {
+      "title": "Tam erişim etkinleştirilsin mi?",
+      "description": "Tam erişim, çalışma alanı korumalı alanını (sandbox) devre dışı bırakır ve rutin onayları atlar. {{appName}}, sormadan çalışma alanı dışındaki dosyaları değiştirebilir ve ağ komutları çalıştırabilir; yerleşik yüksek riskli işlemler yine de onay gerektirecektir.",
+      "confirm": "Tam erişimi etkinleştir",
+      "cancel": "Mevcut izinleri koru"
+    },
+    "mcpComplete": "Tamamlandı",
+    "mcpCancel": "İptal",
+    "description": {
+      "default": "Gerektiğinde işlemleri siz onaylarsınız.",
+      "acceptEdits": "Dosya düzenlemelerine doğrudan izin verilir; diğer işlemleri gerektiğinde siz onaylarsınız.",
+      "auto": "İşlemleri bir yapay zekâ modeli onaylar; bu ek zaman alabilir. Gerektiğinde sizden onay istenir.",
+      "bypass": "Çalışma alanı dışındaki dosyalar ve ağ komutları dâhil rutin işlemlere doğrudan izin verilir.",
+      "plan": "Dosyaları değiştirmeden analiz eder ve planlar."
+    }
+  },
+  "planMode": {
+    "label": "Plan modu",
+    "exit": "Plan modundan çık"
+  },
+  "panel": {
+    "questionUnanswered": "Yanıtlanmadı",
+    "questionWithdrawn": "Artık yanıt gerekmiyor",
+    "withdrawnDraft": "Bu soru artık yanıt gerektirmiyor.\n{{reason}}\nTaslağınız korundu; ek bilgi olarak gönderebilirsiniz.",
+    "sendSupplement": "Ek bilgi gönder",
+    "readOnlyKind": "Beklemede",
+    "readOnlyTitle": "Bilgisayarınızda onay bekleniyor",
+    "pendingRequests": "Bekleyen istekler",
+    "queueSwitchTo": "{{position}} bekleyen isteğe geç: {{label}}",
+    "queueSwitchGeneric": "Bekleyen isteği değiştir",
+    "queuePositionCurrent": "geçerli",
+    "queuePositionNext": "sonraki",
+    "queuePositionNth": "{{index}}. sırada",
+    "composerBlockedByPending": "Tekrar yazmadan önce bilgisayarınızdan gelen bekleyen isteği yanıtlayın.",
+    "missingRequestId": "Bu uzak etkileşimin requestId değeri yok, bu nedenle karar geri gönderilemez.",
+    "desktopConfirmUnsupported": "Bu onay yalnızca uzak bilgisayarda gerçekleştirilir. Devam etmek için masaüstü uygulamasına dönün.",
+    "unsupportedType": "Bu uzak etkileşim türü henüz mobilde desteklenmiyor.",
+    "unsupportedKind": "Desteklenmiyor",
+    "desktopOnlyKind": "Bilgisayarda",
+    "cancelRequest": "Bu İsteği İptal Et",
+    "cancelRequestAccessibility": "Bu uzak isteği iptal et",
+    "awaitingAnswer": "Yanıt bekleniyor",
+    "continueAccessibility": "Uzak soruya devam et",
+    "continue": "Devam Et",
+    "askOptionCount": "{{count}} seçenek",
+    "askFreeInput": "Serbest metin",
+    "askModeMulti": "Çoklu seçim",
+    "askModeSingle": "Tekli seçim",
+    "askMetaCaption": "{{options}} · {{mode}} · Diğer yanıtlara izin verilir",
+    "collapse": "Daralt",
+    "collapsePendingCard": "Önce bilgisayarınızın çıktısını okumak için bekleyen isteği daraltın",
+    "expandPendingCard": "Yanıtlamak için bekleyen isteği genişletin: {{title}}",
+    "collapsedHint": "Yanıtlamak için dokunun",
+    "selectAnswer": "{{label}} yanıtını seçin",
+    "submittingHint": "Karar bilgisayarınıza gönderiliyor. Tekrar göndermeyin.",
+    "decisionNotAccepted": "Yanıtınız kabul edilmedi. Lütfen tekrar deneyin.",
+    "customAnswerInputAccessibility": "Özel bir yanıt girin",
+    "customAnswerPlaceholder": "Başka bir yanıt girin",
+    "customAnswerButtonText": "Başka bir yanıt girin…",
+    "answerInput": "Bir yanıt girin",
+    "previous": "Geri",
+    "skipAccessibility": "Soruyu atla",
+    "skip": "Atla",
+    "submitAnswerAccessibility": "Yanıtı gönder",
+    "next": "İleri",
+    "answerRequired": "Devam etmek için bir yanıt seçin veya girin.",
+    "submit": "Gönder",
+    "sendAndContinue": "Gönder ve devam et",
+    "closeAnswer": "Kapat",
+    "planReviewTitle": "Claude'un planını inceleyin",
+    "planExpand": "Planı genişlet",
+    "planEditHint": "Planı ayarlamak için düzenleme modunu kullanın",
+    "planBrowseHint": "Atlamak için bir bölüme dokunun",
+    "planEditToggle": "Planı düzenle",
+    "planEditExit": "Plan düzenlemeden çık",
+    "planCollapse": "Planı daralt",
+    "planExpandArea": "Plan tarayıcısını genişlet",
+    "planHalf": "Yarım ekran plana geç",
+    "planEditorAccessibility": "Plan düzenleyici",
+    "planEditorPlaceholder": "Planı düzenleyin",
+    "planOutline": "Ana hat",
+    "planJumpTo": "{{title}} plan bölümüne atla",
+    "planEmpty": "Plan boş.",
+    "planApproveAccessibility": "Planı onayla ve çalıştır",
+    "planApprove": "Claude'un planını onayla ve kodlamaya başla",
+    "planFeedbackLabel": "Plan geri bildirimi",
+    "planFeedbackPlaceholder": "Claude'a ne yapması gerektiğini söyleyin",
+    "planFeedbackRequired": "Göndermeden önce geri bildirim girin.",
+    "planFeedbackSubmit": "Plan geri bildirimini gönder",
+    "planFeedbackAccessibility": "Planı değiştirmek için geri bildirim verin",
+    "validation": {
+      "required": "Bu zorunlu alanı doldurun.",
+      "choice": "Listelenen seçeneklerden birini belirleyin.",
+      "tooShort": "En az {{count}} karakter girin.",
+      "tooLong": "En fazla {{count}} karakter girin."
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
+  },
+  "kinds": {
+    "permission": {
+      "title": "Bilgisayarınızda İzin Gerekli",
+      "label": "İzin"
+    },
+    "ask_user_question": {
+      "title": "Agent Yanıt Bekliyor",
+      "label": "Soru"
+    },
+    "plan_review": {
+      "title": "Plan İncelemenizi Bekliyor",
+      "label": "Plan"
+    },
+    "issue_confirm": {
+      "title": "Issue Onay Bekliyor",
+      "label": "Issue"
+    },
+    "rename_sessions_confirm": {
+      "title": "Görev Adları Onay Bekliyor",
+      "label": "Yeniden Adlandır"
+    },
+    "ghost_grant_confirm": {
+      "title": "Dosya Erişimi Onay Bekliyor",
+      "label": "Dosya Erişimi"
+    },
+    "plugin_setup": {
+      "title": "Bilgisayarınızda Eklenti Kurulumu Gerekli",
+      "label": "Eklenti"
+    },
+    "fallback": {
+      "title": "Uzak İstek İlgi Bekliyor",
+      "label": "İstek"
+    },
+    "input_handoff": {
+      "title": "Giriş Devri Gerekli",
+      "label": "Giriş Devri"
+    }
+  },
+  "rewind": {
+    "readError": "Geri sarma önizlemesi okunamadı. Tekrar eşitleyip yeniden deneyin.",
+    "noFilesNote": "Bu mesajdan sonra proje dosyasında herhangi bir değişiklik algılanmadı. Devam etmek sonraki sohbeti kaldıracaktır.",
+    "conversationOnlyNote": "Kullanılabilir bir Git kayıt noktası olmadığından proje dosyaları geri yüklenemez. Devam etmek bu mesajdan sonraki sohbeti kaldırır; dosyalar önceki durumlarına dönmez.",
+    "gitSafetyDisabledNote": "Git güvenlik kayıt noktaları devre dışı bırakıldığından proje dosyaları geri yüklenemez. Bunları bilgisayarınızdaki Ayarlar'dan etkinleştirin; devam etmek bu mesajdan sonraki sohbeti kaldıracaktır.",
+    "moreFiles": "{{count}} dosya daha",
+    "stats": "{{count}} dosya · +{{insertions}} / -{{deletions}} satır",
+    "gotIt": "Anladım",
+    "cancel": "İptal",
+    "cancelAccessibility": "Geri sarmayı iptal et",
+    "confirm": "Geri sarmayı onayla",
+    "confirming": "Geri sarılıyor",
+    "titleLoading": "Geri sarma etkisi kontrol ediliyor",
+    "titleDefault": "Bu mesaja geri sarılsın mı?",
+    "titleEmpty": "Yalnızca sohbeti geri sar",
+    "titleError": "Geri sarılamıyor",
+    "detailLoading": "Dosya geri sarma önizlemesi bilgisayarınızdan okunuyor.",
+    "detailDefault": "Bu işlem aşağıdaki dosyaları geri alır ve bu mesajdan sonraki sohbeti keser.",
+    "detailEmpty": "Bu mesajdan sonra proje dosyasında herhangi bir değişiklik algılanmadı.",
+    "detailConversationOnly": "Proje dosyaları önceki durumlarına dönmeyecektir.",
+    "detailError": "Bilgisayarınız bu geri sarmayı reddetti."
+  },
+  "collab": {
+    "dispatchSummaryItem": "{{label}}: {{task}}",
+    "batchTitle": "{{count}} Worker'a sevk edildi",
+    "batchTitleGeneric": "Birden çok Worker'a sevk edildi",
+    "batchBodyFallback": "Worker'ları oluştur",
+    "dispatchTitle": "{{who}} adlı Worker'a sevk edildi",
+    "dispatchRole": "{{meta}} Rolü",
+    "dispatchBodyFallback": "Worker oluştur",
+    "sendTitle": "Worker'a mesaj",
+    "sendBodyFallback": "Mesaj gönder",
+    "fromLead": "Lead'den mesaj",
+    "fromWorkerNamed": "“{{role}}” adlı Worker'dan mesaj",
+    "fromWorker": "Worker'dan mesaj",
+    "emptyMessageBody": "(Boş mesaj)",
+    "fromWorkerBatch": "Sistem raporu: {{count}} Worker sonucu"
+  },
+  "contextSheet": {
+    "backAccessibility": "Bağlam paneline geri dön",
+    "goalStatus": {
+      "active": "Devam ediyor",
+      "paused": "Duraklatıldı",
+      "blocked": "Beklemede",
+      "complete": "Tamamlandı",
+      "budgetLimited": "Sınıra ulaşıldı",
+      "usageLimited": "Kullanım sınırlandı",
+      "capacityLimited": "Model servisi meşgul"
+    },
+    "goalLabel": "Hedef",
+    "goalObjectiveAccessibility": "Hedef içeriği",
+    "goalPlaceholder": "Neye ulaşmak istiyorsunuz? Agent tamamlanana veya bir sınıra ulaşana kadar bu hedef doğrultusunda çalışmaya devam eder.",
+    "advancedSettings": "Gelişmiş ayarlar",
+    "limitsHint": "Değiştirilmediğinde uzak bilgisayarın varsayılan sınırlarını takip eder; herhangi bir sınıra ulaşıldığında hedef otomatik olarak durur ve istenildiği zaman manuel olarak durdurulabilir; \"Sınırsız\", hiçbir sınır ayarlanmadığı anlamına gelir.",
+    "maxTurns": "Maksimum tur",
+    "tokenBudget": "Token bütçesi",
+    "noProgressLimit": "İlerlemesizlik sınırı",
+    "startGoal": "Hedefi başlat",
+    "goalMeta": "{{turns}} tur · {{tokens}} token",
+    "goalCapacityHint": "Yukarı akışta şu anda kapasite yok — otomatik olarak yeniden deneniyor",
+    "pause": "Duraklat",
+    "resume": "Devam Et",
+    "clearGoal": "Hedefi durdur",
+    "unlimited": "Sınırsız",
+    "noScreenshots": "Ekran görüntüsü bulunamadı.",
+    "mediaRemove": "{{name}} fotoğraf ekini kaldır",
+    "mediaDeselect": "{{name}} fotoğrafının seçimini kaldır",
+    "mediaSelect": "{{name}} fotoğrafını seç",
+    "photoPermissionHint": "Fotoğraf erişimi kapalı. Son fotoğrafları hızlıca eklemek için etkinleştirin.",
+    "enablePhotoPermission": "Fotoğraf erişimini etkinleştir",
+    "enable": "Etkinleştir",
+    "icloudTimeout": "Fotoğraf hâlâ iCloud'dan indiriliyor ve zaman aşımına uğradı. Ağınızı kontrol edip tekrar deneyin.",
+    "photoNotReadable": "Bu fotoğraf şu anda okunamıyor (iCloud'dan indirilmesi henüz tamamlanmamış olabilir). Daha sonra tekrar deneyin."
+  },
+  "pluginSetup": {
+    "remoteDesktop": "Masaüstünü Aç",
+    "completeOnDesktop": "Bilgisayarda kurulumu tamamlamak için uzak masaüstünü kullanın. Giriş, yetkilendirme ve kimlik bilgileri o bilgisayarda kalır; bu kart otomatik olarak güncellenir.",
+    "chooseOne": "Bir kurulum yöntemi seçin",
+    "progress": "{{satisfied}}/{{total}} tamamlandı",
+    "desktopActionHint": "Bilgisayarınızda: {{action}}",
+    "a11ySeparator": ", ",
+    "phase": {
+      "pending": "Beklemede",
+      "action_running": "Devam ediyor…",
+      "waiting_external": "Yetkilendirme bekleniyor…",
+      "verifying": "Doğrulanıyor…",
+      "satisfied": "Tamamlandı",
+      "failed": "Başarısız",
+      "cancelled": "İptal Edildi"
+    },
+    "error": {
+      "ACTION_FAILED": "Bu kurulum eylemi tamamlanamadı. Tekrar deneyin.",
+      "ACTION_STALE": "Bu kurulum değişti. Kurulum eylemini tekrar seçin.",
+      "AUTH_CANCELLED": "Yetkilendirme iptal edildi. Hazır olduğunuzda hesabı tekrar yetkilendirin.",
+      "AUTH_FAILED": "Hesap yetkilendirilemedi. Tekrar deneyin.",
+      "AUTH_NETWORK": "Yetkilendirme servisine ulaşılamadı. Ağınızı kontrol edip tekrar deneyin.",
+      "AUTH_SERVICE_UNAVAILABLE": "Yetkilendirme servisi geçici olarak kullanılamıyor. Daha sonra tekrar deneyin.",
+      "INLINE_INVALID": "Bu yapılandırma geçersiz. Kontrol edip tekrar deneyin.",
+      "INLINE_UNAVAILABLE": "Cindy'nin bu sürümü bu yapılandırmayı sohbette kaydedemiyor. Cindy'yi güncelleyip tekrar deneyin.",
+      "SAVE_FAILED": "Bu yapılandırma kaydedilemedi. Tekrar deneyin.",
+      "WINDOW_CLOSED": "Kurulumu başlatan pencere kapatıldı. Göreve dönüp tekrar deneyin.",
+      "TARGET_UNAVAILABLE": "Bu eklenti devre dışı bırakılmış, kaldırılmış veya kullanılamıyor. Eklentiyi kontrol edip tekrar deneyin.",
+      "ASSESSMENT_FAILED": "Kurulum durumu yenilenemedi. Tekrar deneyin.",
+      "TIMEOUT": "Kurulum zaman aşımına uğradı. Tekrar deneyin."
+    },
+    "action": {
+      "oauth_connect": "Yetkilendir",
+      "open_plugin_settings": "Ayarları aç",
+      "manage_connection": "Bağlantıları yönet",
+      "open_client_settings": "Model ayarlarını aç"
+    },
+    "inlineFormAction": "Bilgisayarınızda {{label}} girin",
+    "inlineFormActionGeneric": "Bilgisayarınızda bir ayar girin"
+  },
+  "inputHandoff": {
+    "originWarning": {
+      "insecure": "Bu sayfa güvenli bir bağlantı kullanmıyor. Girdiğiniz bilgiler başkaları tarafından okunabilir.",
+      "ip-address": "Bu sayfa bir etki alanı yerine bir IP adresi kullanıyor. Beklediğiniz site olduğundan emin olun.",
+      "local-host": "Bu sayfa bu bilgisayardaki bir servisten geliyor. Beklediğiniz uygulama olduğundan emin olun.",
+      "local-file": "Bu sayfa yerel bir dosyadır. Beklediğiniz şey olduğundan emin olun.",
+      "punycode": "Bu adres olağandışı karakterler içeriyor ve başka bir siteyi taklit ediyor olabilir. Dikkatlice kontrol edin.",
+      "embedded-frame": "Bu alanlar sayfaya yerleştirilmiş başka bir sitenin içindedir. Kaynağın güvenilir olduğundan emin olun."
+    },
+    "agentControlled": "Bu ekranı Agent açtı. Doldurmadan önce gerçekten oturum açmak istediğiniz yer olduğundan emin olun.",
+    "agentPicture": "Bu kod Agent'ın aldığı bir ekran görüntüsünden alınmıştır, bu nedenle Cindy orijinal ekranı göremez veya ne zaman bitirdiğinizi anlayamaz. Giriş yapmak istediğiniz siteye yönlendirdiğinden emin olun ve taradıktan sonra Agent'a Geri Ver'i seçin.",
+    "error": {
+      "decision": "Bu işlem gerçekleşmedi. Tekrar deneyin.",
+      "stale": "Ekran değişti. En son sürümü kullanın.",
+      "submit": "Girdiniz iletilemedi. Tekrar deneyin."
+    },
+    "terminal": {
+      "succeeded": "Agent'a geri verildi.",
+      "cancelled": "Giriş devri iptal edildi.",
+      "failed": "Giriş devri sona erdi.",
+      "expired": "Giriş devri çok uzun süre bekledikten sonra sona erdi."
+    },
+    "failure": {
+      "permission": "Cindy bu bilgisayarın ekranını okuyamıyor. Sistem Ayarları'nda Erişilebilirlik altında Cindy'ye izin verin.",
+      "target_gone": "Hedef pencere kapatıldı.",
+      "unreadable": "Bu ekran okunamıyor. Bunu ana bilgisayarda tamamlayabilir, ardından Agent'a geri verebilirsiniz.",
+      "action_failed": "Bu eylem geçerli olmadı. Ekranı kontrol edip tekrar deneyin.",
+      "timeout": "Giriş devri çok uzun süre bekledikten sonra sona erdi.",
+      "unsupported": "Bu bilgisayar henüz giriş devrini desteklemiyor.",
+      "origin_changed": "Cindy dolduramadan sayfa değişti, bu nedenle hiçbir şey girilmedi. Geçerli sayfayı kontrol edin ve tekrar deneyin.",
+      "picture_unavailable": "Bu adım resim olarak gösterilemedi. Sistem Ayarları'nda Cindy'nin ekranı kaydetmesine izin verin ve pencerenin simge durumuna küçültülmediğinden emin olun.",
+      "screen_locked": "Bu bilgisayarın ekranı kilitli (ekranın uyku moduna geçmesi de kilitler). Uyandırıp kilidini açın, ardından Agent'tan tekrar denemesini isteyin.",
+      "nothing_to_fill": "Bu ekranda yazılması gereken bir şey yok, bu nedenle Agent kendi başına devam ediyor."
+    },
+    "phase": {
+      "reading": "Ekran okunuyor…",
+      "working": "Dolduruluyor…",
+      "finishing": "Tamamlanmış görünüyor. {{count}} saniye içinde Agent'a geri veriliyor.",
+      "finishingNow": "Tamamlanmış görünüyor. Agent'a geri veriliyor…"
+    },
+    "action": {
+      "stay": "Henüz Bitmedi",
+      "done": "Agent'a Geri Ver",
+      "cancel": "Devri İptal Et",
+      "claim": "Burada Yönet",
+      "picture": "Ekranı göster",
+      "backToForm": "Forma dön",
+      "liveView": "Canlı Görünüm",
+      "openRemoteDesktop": "Uzak masaüstünü aç",
+      "useForm": "Bunun yerine formu kullan",
+      "fill": "Doldur",
+      "skip": "Atla",
+      "continue": "Devam Et",
+      "close": "İptal",
+      "showPassword": "Parolayı Göster",
+      "hidePassword": "Parolayı Gizle",
+      "scan": "Tara"
+    },
+    "directSignIn": {
+      "hint": "Doğrudan pencerede oturum açın. Bitirdiğinizde Cindy kendi başına devam eder."
+    },
+    "remoteUnavailable": "Bu bilgisayar uzaktan girdi alamaz. Bu adımı ana bilgisayarda tamamlayın, ardından Agent'a geri verin.",
+    "unnamedField": "Alan",
+    "passwordField": "Parola",
+    "codeField": "Doğrulama kodu",
+    "filledHint": "Zaten içerik var. Korumak için boş bırakın.",
+    "record": {
+      "doneOn_one": "Sahip, {{device}} üzerinde {{count}} giriş adımını tamamladı",
+      "doneOn_other": "Sahip, {{device}} üzerinde {{count}} giriş adımını tamamladı",
+      "doneHost_one": "Sahip, ana bilgisayarda {{count}} giriş adımını tamamladı",
+      "doneHost_other": "Sahip, ana bilgisayarda {{count}} giriş adımını tamamladı",
+      "donePhone_one": "Sahip, bir telefonda {{count}} giriş adımını tamamladı",
+      "donePhone_other": "Sahip, bir telefonda {{count}} giriş adımını tamamladı",
+      "doneElsewhere_one": "Sahip, başka bir cihazda {{count}} giriş adımını tamamladı",
+      "doneElsewhere_other": "Sahip, başka bir cihazda {{count}} giriş adımını tamamladı",
+      "done": "Giriş devri tamamlandı",
+      "nothingToFill": "Yazılacak bir şey yok; Agent'a geri verildi",
+      "cancelled": "Giriş devri iptal edildi",
+      "expired": "Giriş devri zaman aşımına uğradı",
+      "failed": "Giriş devri tamamlanamadı"
+    },
+    "holder": {
+      "elsewhere": "{{device}} üzerinde işleniyor. Buradan devralabilirsiniz.",
+      "host": "ana bilgisayar",
+      "phone": "bir telefon",
+      "otherDevice": "başka bir cihaz"
+    },
+    "agentNote": "Agent'tan not: {{note}}",
+    "picture": {
+      "hint": "Resimde bir noktaya dokunduğunuzda Cindy ana bilgisayarda aynı noktaya tıklar.",
+      "open": "Bu adımı göster",
+      "openHint": "Bu adım form olarak gösterilemez. Resim yalnızca bu cihaza şifreli olarak gönderilir ve kaydedilmez.",
+      "alt": "Hedef pencerenin resmi",
+      "loading": "Resim alınıyor…",
+      "error": "Resim alınamadı. Tekrar deneyin.",
+      "field": "Odaklanılan alan",
+      "type": "Yaz",
+      "typeEnter": "Yazın ve Enter'a basın"
+    },
+    "liveViewHint": "Yalnızca bu pencereyi buradan canlı görün. Tıklamalar ve yazmalar pencere içinde kalır.",
+    "deviceCode": {
+      "prompt": "Bu kodla giriş yapın",
+      "copy": "Kodu Kopyala",
+      "copied": "Kod kopyalandı",
+      "copyFailed": "Kod kopyalanamadı",
+      "open": "Bu Cihazda Aç",
+      "openFailed": "Bağlantı açılamadı",
+      "then": "Kodu o sayfaya girin ve giriş yapmayı tamamlayın, ardından Agent'a Geri Ver'i seçin."
+    },
+    "sheetNote": "Yalnızca buradaki bilgisayara girilir. Agent ile paylaşılmaz ve kaydedilmez.",
+    "nothingLeft": "Burada yazmanızı gerektiren hiçbir şey kalmadı.",
+    "qr": {
+      "open": "{{site}} Sitesini Burada Aç",
+      "openApp": "{{site}} Bağlantısını Burada Aç",
+      "share": "Resmi Kaydet veya Paylaş",
+      "copyLink": "Bağlantıyı Kopyala",
+      "copyText": "Metni Kopyala",
+      "copied": "Kopyalandı.",
+      "copyFailed": "Kopyalanamadı. Tekrar deneyin.",
+      "openFailed": "Bu cihaz bağlantıyı açamıyor. Resmi kaydedin ve uygulamanın tarayıcısındaki Fotoğraflar'dan seçin.",
+      "shareFailed": "Paylaşım açılamadı. Tekrar deneyin.",
+      "hintLink": "Burada açmak, girişi bağlantıyı işleyen uygulamaya devreder. Veya resmi kaydedip uygulamanın tarayıcısındaki Fotoğraflar'dan seçin. Giriş yaptıktan sonra Cindy devam eder.",
+      "hint": "Resmi kaydedip uygulamanın tarayıcısındaki Fotoğraflar'dan seçin veya bu kodu başka bir cihazdan tarayın. Giriş yaptıktan sonra Cindy devam eder.",
+      "alt": "Bilgisayardaki QR kodu. Dokunulduğunda bilgisayardaki koda dokunulur.",
+      "loading": "QR kodu alınıyor…",
+      "failed": "QR kodu alınamadı. Tekrar denemek için dokunun.",
+      "scanned": "Tarandı. Telefonunuzda onaylayın; siz onayladıktan sonra Cindy devam eder."
+    }
+  },
+  "presentation": {
+    "action": {
+      "submitting": "Gönderiliyor"
+    },
+    "permission": {
+      "highRiskTitle": "Yüksek riskli izin onay gerektiriyor",
+      "highRiskDetail": "Komutu inceleyin, ardından izin vermek için tekrar onaylayın. Emin değilseniz reddedin.",
+      "sessionAllowTitle": "Bir kez izin ver veya bu görev için her zaman izin ver",
+      "allowTitle": "Buna izin verdikten sonra bilgisayar devam edecektir",
+      "tool": "Araç: {{tool}}",
+      "title": "{{tool}} aracına izin verilsin mi?",
+      "risk": "Bu komut sistemi, depoyu veya harici bir servisi değiştirebilir. İzin vermeden önce mevcut göreve ve komuta güvendiğinizi onaylayın.",
+      "titleCommand": "Bu komutun çalıştırılmasına izin verilsin mi?",
+      "titleFileRead": "Dosyaların okunmasına izin verilsin mi?",
+      "titleFileWrite": "Dosyaların değiştirilmesine izin verilsin mi?",
+      "titleBrowser": "Bu tarayıcı adımına izin verilsin mi?",
+      "titlePlugin": "{{plugin}} eklentisine izin verilsin mi?",
+      "titleStdin": "Bu terminale giriş izni verilsin mi?",
+      "titleMcpUrl": "{{server}} üzerinden gelen isteği tamamla"
+    },
+    "ask": {
+      "progress": "Soru {{current}} / {{total}}",
+      "multiSelect": "Birden fazla yanıt seçebilir veya başka bir yanıt girebilirsiniz.",
+      "singleSelect": "Bir yanıt seçin veya başka bir yanıt girin.",
+      "emptyTitle": "Belirli bir soru yok",
+      "emptyDetail": "Bilgisayarın devam edebilmesi için boş bir yanıt gönderebilirsiniz.",
+      "waiting": "Agent onay bekliyor"
+    },
+    "plan": {
+      "outlineCount": "{{count}} bölüm",
+      "noOutline": "Ana hat yok",
+      "hasFile": "Plan dosyası mevcut",
+      "noFile": "Plan dosyası yolu yok",
+      "editedTitle": "Plan düzenlendi; onay mevcut sürümü çalıştırır",
+      "approveTitle": "Onaylandıktan sonra bilgisayar bu planla devam eder"
+    },
+    "queue": {
+      "count": "{{count}} istek",
+      "empty": "Bekleyen istek yok",
+      "hint": {
+        "plan_review": "Planı inceleyin ve gerekirse değişiklik talep edin. Bilgisayar yalnızca onaydan sonra devam eder.",
+        "permission": "Yalnızca bu karar bilgisayardaki geçerli göreve geri gönderilir.",
+        "ask_user_question": "Yanıtlar taslak olarak kaydedilir; bilgisayar gönderimden sonra devam eder.",
+        "issue_confirm": "Göndermeden önce başlığı ve gövdeyi onaylayın.",
+        "plugin_setup": "Kurulum bilgisayarda tamamlanmalıdır; bu isteği buradan iptal edebilirsiniz.",
+        "fallback": "Mobil, uzak istekleri masaüstünün gönderdiği sırayla işler."
+      }
+    }
+  },
+  "companion": {
+    "permissionRequest": "{{name}} onayınızı bekliyor",
+    "operation": "İşlem",
+    "details": "Ayrıntılar",
+    "fields": {
+      "path": "Dosya",
+      "file_path": "Dosya",
+      "url": "Adres",
+      "command": "Komut",
+      "ghost_id": "Eklenti",
+      "tool": "Araç"
+    }
+  },
+  "issueConfirm": {
+    "title": "{{appName}} uygulamasına geri bildirim gönderimini onaylayın",
+    "typeBug": "Hata",
+    "typeFeature": "Özellik",
+    "titleLabel": "Başlık",
+    "bodyLabel": "Gövde (Markdown)",
+    "privacyHint": "Issue başlığı ve gövdesi herkese açık olacak; arama sonuçlarında görünebilir veya önbelleğe alınabilir. Otomatik maskeleme yalnızca bazı yaygın kalıpları kapsar ve tüm hassas bağlamları algılayamaz.",
+    "relatedLogsHint": "Bu gönderim, yukarıda gösterilen ilgili istemci günlüklerini içerir. Yayımlanmadan önce filtrelenir, hassas bilgileri maskelenir ve uzunlukları sınırlanır.",
+    "privacyConfirm": "Yukarıdaki herkese açık içeriği inceledim; gizli kalması gereken kişisel bilgi, sohbet içeriği veya iş bilgisi içermiyor",
+    "submissionMethodLabel": "Gönderim Kimliği",
+    "identityGithubUser": "GitHub hesabım @{{login}}",
+    "identityGithubUserHint": "GitHub'da yazar siz olacaksınız ve bu Issue'yu GitHub üzerinden düzenleyebilecek veya kapatabileceksiniz",
+    "identityPlatform": "Cindy resmî botu @{{login}} (varsayılan)",
+    "identityPlatformHint": "GitHub hesabı kurulumu gerekmez. Issue'yu resmî bot oluşturur ve gövdeye adınızı herkese açık olarak ekleyebilirsiniz",
+    "publicNameLabel": "Herkese açık katkı sahibi bilgisi",
+    "publicNameHint": "Bu katkı sahibi bilgisi, Issue metninde herkese açık olarak görünecek",
+    "anonymous": "Anonim",
+    "useAnonymous": "Anonim katkı sahibi bilgisi kullan",
+    "envLine": "Gönderimi yapan istemcinin ortamı (gönderim sırasında otomatik olarak eklenir): istemci {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · Arayüz dili {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · Model kimliği {{modelId}} (bu görev)",
+    "regionLine": "Derleme bölgesi: {{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "Geri bildirim gönder",
+    "cancel": "İptal",
+    "previewLabel": "GitHub · Herkese açık geri bildirim",
+    "edit": "Düzenle",
+    "doneEditing": "Düzenlemeyi bitir",
+    "publicSubmit": "Herkese açık olarak gönder",
+    "publicationNotice": "Geri bildiriminiz ve katkı sahibi bilginiz GitHub'da herkese açık olacak.",
+    "attribution": "Katkı sahibi: {{name}}",
+    "environment": "Ortam bilgileri dahil",
+    "identitySettings": "Ad ve hesap"
+  }
+}

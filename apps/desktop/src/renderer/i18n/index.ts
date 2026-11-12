@@ -42,6 +42,10 @@ type LazyLocale = Exclude<SupportedLocale, 'en'>;
 
 // 每个路径都写成字面量：Vite 据此拆出独立分包；ui:check 的 esbuild 打包（不拆分）也能解析。
 const LOCALE_LOADERS: Record<LazyLocale, Record<Namespace, () => Promise<JsonModule>>> = {
+  tr: {
+    common: () => import('./locales/tr/common.json'),
+    aiRename: () => import('./locales/tr/aiRename.json'),
+  },
   'zh-CN': {
     common: () => import('./locales/zh-CN/common.json'),
     aiRename: () => import('./locales/zh-CN/aiRename.json'),
@@ -98,6 +102,7 @@ const DEV_WRITE_BLOCKED: Partial<Record<SupportedLocale, string>> = {
   'zh-TW': '開發環境預設以唯讀方式共用本機 ChatGPT 登入，不能發起登入或改寫憑證。測試 OAuth 只能執行：pnpm restart:desktop:remote -- --isolated-auth --isolated。指令碼驗證獨立沙箱後會自動開放寫入，無需手動設定環境變數。',
   ja: '開発環境では、このコンピューターの ChatGPT ログインを既定で読み取り専用として共有するため、OAuth の開始や認証情報の変更はできません。OAuth をテストする場合は、pnpm restart:desktop:remote -- --isolated-auth --isolated を実行してください。スクリプトはサンドボックスを検証した後にのみ書き込みを許可します。環境変数を手動で設定する必要はありません。',
   ko: '개발 환경은 기본적으로 이 컴퓨터의 ChatGPT 로그인을 읽기 전용으로 공유하므로 OAuth를 시작하거나 자격 증명을 변경할 수 없습니다. OAuth를 테스트하려면 pnpm restart:desktop:remote -- --isolated-auth --isolated을 실행하세요. 스크립트가 샌드박스를 검증한 뒤에만 쓰기를 허용하므로 환경 변수를 직접 설정할 필요가 없습니다.',
+  tr: 'Geliştirme derlemeleri bu bilgisayarın ChatGPT oturumunu varsayılan olarak salt okunur paylaşır ve OAuth başlatamaz veya kimlik bilgilerini değiştiremez. OAuth\'u test etmek için şunu çalıştırın: pnpm restart:desktop:remote -- --isolated-auth --isolated. Yeniden başlatma betiği yalnızca korumalı alanı doğruladıktan sonra yazmaya izin verir.',
 };
 
 function withLocaleOverrides(

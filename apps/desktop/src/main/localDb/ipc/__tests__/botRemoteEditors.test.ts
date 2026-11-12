@@ -247,7 +247,7 @@ describe('portable teammate memory pages', () => {
     // a named teammate + titled entry must also carry localized consequences (unit tier).
     const body = detail.actions![1].confirmation!.body!;
     expect(typeof body).toBe('object');
-    for (const locale of ['es', 'fr', 'de', 'pt-PT', 'pt-BR']) {
+    for (const locale of ['es', 'fr', 'de', 'pt-PT', 'pt-BR', 'tr']) {
       const translated = typeof body === 'object' ? body.translations?.[locale] : undefined;
       expect(translated, locale).toEqual(expect.stringContaining('Cindy'));
       expect(translated, locale).toEqual(expect.stringContaining('注明来源'));
@@ -367,4 +367,10 @@ it('lists and switches only the automations of the teammate project', async () =
   expect(schedules.map(item => item.status)).toEqual(['active', 'active', 'active']);
   await expect(f.send(await f.resource('settings:bot-a/automations'), { other: false })).rejects.toThrow();
   expect(schedules[2].status).toBe('active');
+
+  // Pausing an automation with executions in flight presents a confirmation dialog with Turkish copy.
+  f.deps.automations.inflight = vi.fn(async () => 2);
+  const running = await f.get(f.context, 'settings:bot-a/automations', 'tr');
+  const confirmBody = running.actions?.[0]?.confirmation?.body;
+  expect(confirmBody).toBe('Bu otomasyonun şu anda 4 yürütmesi devam ediyor. Duraklatma işlemi bunları hemen durdurur ve devam eden çalışmalar kaybolabilir. Devam edilsin mi?');
 });

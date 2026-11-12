@@ -70,6 +70,7 @@ const COPY = {
   "pt-BR": "Conversas em grupo",
   "zh-Hant-x-lzh": "群議",
   "zh-Hans-x-lzh": "群议",
+  tr: "Grup sohbetleri",
 },
   planning: {
     en: '{name} is splitting the work…',
@@ -85,6 +86,7 @@ const COPY = {
   "pt-BR": "{name} está dividindo o trabalho…",
   "zh-Hant-x-lzh": "{name}方籌劃…",
   "zh-Hans-x-lzh": "{name}方筹划…",
+  tr: "{name} işi paylaştırıyor…",
 },
   proposed: {
     en: '{name}: plan ready, waiting for you',
@@ -100,6 +102,7 @@ const COPY = {
   "pt-BR": "{name}: plano pronto, esperando por você",
   "zh-Hant-x-lzh": "{name}：籌劃已定，待君啟之",
   "zh-Hans-x-lzh": "{name}：筹划已定，待君启之",
+  tr: "{name}: plan hazır, başlamanız bekleniyor",
 },
   running: {
     en: 'Step {step}/{total} · {name} is working',
@@ -115,6 +118,7 @@ const COPY = {
   "pt-BR": "Etapa {step}/{total} · {name} está trabalhando",
   "zh-Hant-x-lzh": "分工 {step}/{total} · {name}方行",
   "zh-Hans-x-lzh": "分工 {step}/{total} · {name}方行",
+  tr: "Adım {step}/{total} · {name} çalışıyor",
 },
   stepDone: {
     en: '{name} is done — continue when ready',
@@ -130,6 +134,7 @@ const COPY = {
   "pt-BR": "{name} terminou — continue quando quiser",
   "zh-Hant-x-lzh": "{name}已畢，待君續之",
   "zh-Hans-x-lzh": "{name}已毕，待君续之",
+  tr: "{name} tamamladı — hazır olduğunuzda devam edin",
 },
   stepFailed: {
     en: "{name} didn't finish",
@@ -145,6 +150,7 @@ const COPY = {
   "pt-BR": "{name} não terminou",
   "zh-Hant-x-lzh": "{name}未竟",
   "zh-Hans-x-lzh": "{name}未竟",
+  tr: "{name} tamamlayamadı",
 },
   lastMessage: {
     en: '{name}: {text}',
@@ -160,6 +166,7 @@ const COPY = {
   "pt-BR": "{name}: {text}",
   "zh-Hant-x-lzh": "{name}：{text}",
   "zh-Hans-x-lzh": "{name}：{text}",
+  tr: "{name}: {text}",
 },
   memberJoined: {
     en: '{name} joined the group',
@@ -175,6 +182,7 @@ const COPY = {
   "pt-BR": "{name} se juntou ao grupo",
   "zh-Hant-x-lzh": "{name}入群議",
   "zh-Hans-x-lzh": "{name}入群议",
+  tr: "{name} gruba katıldı",
 },
   sharedReplyYou: {
     en: 'You shared a thread reply',
@@ -190,6 +198,7 @@ const COPY = {
   "pt-BR": "Você compartilhou uma resposta a um tópico",
   "zh-Hant-x-lzh": "君貼回一則話題之覆",
   "zh-Hans-x-lzh": "君贴回一则话题之覆",
+  tr: "Bir konu yanıtı paylaştınız",
 },
   sharedReply: {
     en: '{name} shared a thread reply',
@@ -205,6 +214,7 @@ const COPY = {
   "pt-BR": "{name} compartilhou uma resposta a um tópico",
   "zh-Hant-x-lzh": "{name} 貼回一則話題之覆",
   "zh-Hans-x-lzh": "{name} 贴回一则话题之覆",
+  tr: "{name} bir konu yanıtı paylaştı",
 },
 } satisfies Record<string, Copy>;
 

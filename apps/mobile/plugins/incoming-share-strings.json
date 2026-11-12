@@ -108,5 +108,16 @@
     "tooManyMessage": "한 번에 최대 20개 항목을 공유할 수 있습니다. 원래 앱으로 돌아가 나누어 공유하세요.",
     "receiving": "공유 내용을 받는 중…",
     "cancel": "취소"
+  },
+  "tr": {
+    "receivedTitle": "İçerik alındı",
+    "receivedMessage": "Devam etmek için Cindy'yi manuel olarak açın.",
+    "failedTitle": "Bu paylaşım alınamadı",
+    "failedMessage": "Özgün uygulamadan tekrar paylaşmayı deneyin.",
+    "done": "Paylaşımı Kapat",
+    "tooManyTitle": "Çok fazla öğe",
+    "tooManyMessage": "Tek seferde en fazla 20 öğe paylaşabilirsiniz. Kaynak uygulamaya dönün ve daha az öğe seçin.",
+    "receiving": "Paylaşılan içerik alınıyor…",
+    "cancel": "İptal"
   }
 }

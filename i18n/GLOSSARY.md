@@ -23,41 +23,41 @@
 
 这些术语的译法已定，**违反会阻断 CI**。
 
-| 英文 | zh-CN | zh-TW | ja | ko | fr | es | de | pt-PT | pt-BR | zh-Hant-x-lzh | zh-Hans-x-lzh | 禁用译法 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **Active** | 活跃 | 活躍 | アクティブ | 활성 | actif | Activo | Aktiv | Ativo | Ativo | 活躍 | 活跃 | zh-CN: 活动（仅当英文含 Active）；zh-TW: 活動（仅当英文含 Active） |
-| **Agent** | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | zh-CN: 智能体；zh-CN: 代理（仅当英文含 Agent）；zh-TW: 智能體；zh-TW: 代理（仅当英文含 Agent）；zh-Hant-x-lzh: 智能體；zh-Hant-x-lzh: 代理（仅当英文含 Agent）；zh-Hans-x-lzh: 智能体；zh-Hans-x-lzh: 代理（仅当英文含 Agent） |
-| **Agent session** | Agent 会话 | Agent 會話 | Agent セッション | Agent 세션 | session Agent | Sesión de Agent | Agent-Sitzung | Sessão do Agent | Sessão do Agent | Agent 會話 | Agent 会话 | zh-CN: 任务（仅当英文含 agent session）；zh-TW: 任務（仅当英文含 agent session） |
-| **Author** | 作者 | 作者 | 作成者 | 작성자 | auteur | Autor | Autor | Autor | Autor | 作者 | 作者 | zh-CN: 提交者（仅当英文含 Author）；zh-CN: 提出者（仅当英文含 Author）；zh-TW: 提交者（仅当英文含 Author）；zh-TW: 提出者（仅当英文含 Author） |
-| **Automation** | 自动化 | 自動化 | 自動化 | 자동화 | automatisation | Automatización | Automatisierung | Automatização | Automação | 自運 | 自运 | ja: オートメーション；ko: 오토메이션 |
-| **Balance** | 余额 | 餘額 | 残高 | 잔액 | solde | Saldo | Guthaben | Saldo | Saldo | 餘資 | 余资 | zh-CN: 额度（仅当英文含 Balance）；zh-TW: 額度（仅当英文含 Balance） |
-| **Chat** | 对话 | 對話 | チャット | 채팅 | conversation | Conversación | `Chat`（保留英文） | Conversa | Conversa | 言談 | 言谈 | zh-CN: 聊天；zh-TW: 聊天；zh-Hant-x-lzh: 聊天；zh-Hans-x-lzh: 聊天 |
-| **Collaboration** | 协同 | 協同 | 協同 | 협업 | collaboration | Colaboración | Zusammenarbeit | Colaboração | Colaboração | 協同 | 协同 | zh-CN: 协作（仅当英文含 Collaboration）；zh-TW: 協作（仅当英文含 Collaboration） |
-| **Collapse** | 收起 | 收起 | 折りたたむ | 접기 | Réduire | Contraer | Einklappen | Recolher | Recolher | 收 | 收 | zh-CN: 折叠（仅当英文含 Collapse）；zh-TW: 折疊（仅当英文含 Collapse） |
-| **Credits** | 点数 | 點數 | クレジット | 크레딧 | crédits | Créditos | `Credits`（保留英文） | Créditos | Créditos | 籌 | 筹 | zh-CN: 额度（仅当英文含 Credit）；zh-TW: 額度（仅当英文含 Credit） |
-| **Directory** | 目录 | 目錄 | ディレクトリ | 디렉터리 | répertoire | Directorio | Verzeichnis | Diretório | Diretório | 目錄 | 目录 | — |
-| **Dismiss** | 关闭 | 關閉 | 閉じる | 닫기 | Fermer | Cerrar | Schließen | Fechar | Fechar | 闔 | 阖 | zh-CN: 忽略（仅当英文含 Dismiss）；zh-CN: 知道了（仅当英文含 Dismiss）；zh-TW: 忽略（仅当英文含 Dismiss）；zh-TW: 知道了（仅当英文含 Dismiss） |
-| **Effort** | 推理强度 | 推理強度 | 推論強度 | 추론 강도 | effort de raisonnement | Intensidad de razonamiento | Denkintensität | Esforço de raciocínio | Esforço de raciocínio | 思之深淺 | 思之深浅 | zh-CN: 思考强度；zh-CN: 思考深度；zh-CN: 推理深度；zh-CN: 努力程度；zh-CN: 推理力度；zh-TW: 思考強度；zh-TW: 思考深度；zh-TW: 推理深度；zh-TW: 努力程度；zh-TW: 推理力度；ja: 推論レベル；ja: 推論の強度 |
-| **Issue** | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | 이슈 | issue | Incidencia | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | zh-CN: 工单；zh-CN: 议题；zh-TW: 工單；zh-TW: 議題；zh-Hant-x-lzh: 工單；zh-Hant-x-lzh: 議題；zh-Hans-x-lzh: 工单；zh-Hans-x-lzh: 议题；ja: 課題（仅当英文含 Issue） |
-| **Message** | 消息 | 訊息 | メッセージ | 메시지 | message | Mensaje | Nachricht | Mensagem | Mensagem | 訊 | 讯 | zh-CN: 条对话（仅当英文含 Message）；zh-TW: 條對話（仅当英文含 Message） |
-| **Plugin** | 插件 | 插件 | プラグイン | 플러그인 | plugin | Complemento | `Plugin`（保留英文） | plugin | plugin | 法器 | 法器 | zh-CN: Plugin；zh-CN: plugin；zh-TW: Plugin；zh-TW: plugin；zh-TW: 外掛；zh-Hant-x-lzh: 外掛；zh-Hans-x-lzh: 插件 |
-| **Privacy Policy** | 隐私政策 | 隱私政策 | プライバシーポリシー | 개인정보 처리방침 | Politique de confidentialité | Política de privacidad | Datenschutzerklärung | Política de Privacidade | Política de Privacidade | 隱私政策 | 隐私政策 | zh-TW: 隱私協議（仅当英文含 Privacy Policy） |
-| **Project** | 项目 | 專案 | プロジェクト | 프로젝트 | projet | Proyecto | Projekt | Projeto | Projeto | 案 | 案 | zh-CN: Project；zh-TW: Project |
-| **Provider** | 供应商 | 供應商 | プロバイダー | 제공자 | fournisseur | Proveedor | Anbieter | Fornecedor | Provedor | 供方 | 供方 | zh-CN: 提供方；zh-CN: 提供商；zh-TW: 提供方；zh-TW: 提供商；ja: 提供元（仅当英文含 Provider）；ja: 事業者（仅当英文含 Provider）；ko: 공급자；ko: 제공업체 |
-| **Proxy** | `Proxy`（保留英文） | `Proxy`（保留英文） | プロキシ | 프록시 | proxy | proxy | `Proxy`（保留英文） | proxy | proxy | `Proxy`（保留英文） | `Proxy`（保留英文） | zh-CN: 代理（仅当英文含 Proxy）；zh-TW: 代理（仅当英文含 Proxy）；zh-Hant-x-lzh: 代理（仅当英文含 Proxy）；zh-Hans-x-lzh: 代理（仅当英文含 Proxy） |
-| **Quota** | 配额 | 配額 | クォータ | 할당량 | quota | Cuota | Kontingent | `Quota`（保留英文） | Cota | 限額 | 限额 | ja: 残量；zh-CN: 额度（仅当英文含 Quota）；zh-TW: 額度（仅当英文含 Quota） |
-| **Running** | 运行中 | 執行中 | 実行中 | 실행 중 | en cours d'exécution | En ejecución | Wird ausgeführt | Em execução | Em execução | 方行 | 方行 | zh-CN: 执行中（仅当英文含 Running）；zh-CN: 进行中（仅当英文含 Running）；zh-TW: 進行中（仅当英文含 Running） |
-| **Session** | 任务 | 任務 | セッション | 세션 | session | Sesión | Sitzung | Sessão | Sessão | 差事 | 差事 | zh-CN: 会话；zh-TW: 會話；zh-Hant-x-lzh: 會話；zh-Hans-x-lzh: 会话 |
-| **Skill** | 技能 | 技能 | スキル | 스킬 | skill | Habilidad | `Skill`（保留英文） | `Skill`（保留英文） | `Skill`（保留英文） | 技藝 | 技艺 | ja: 技能；ko: 기술 |
-| **SkillHub** | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | ja: スキルハブ；ko: 스킬 허브 |
-| **Subagent** | `Subagent`（保留英文） | `Subagent`（保留英文） | サブエージェント | 하위 에이전트 | sous-Agent | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | zh-CN: 代理（仅当英文含 Subagent）；zh-TW: 代理（仅当英文含 Subagent）；zh-Hant-x-lzh: 代理（仅当英文含 Subagent）；zh-Hans-x-lzh: 代理（仅当英文含 Subagent） |
-| **Task** | 任务 | 任務 | タスク | 작업 | tâche | Tarea | Aufgabe | Tarefa | Tarefa | 差事 | 差事 | — |
-| **Thread** | 任务 | 任務 | スレッド | 스레드 | fil | Hilo | `Thread`（保留英文） | Tópico | Tópico | 話題 | 话题 | zh-CN: 线程；zh-TW: 執行緒 |
-| **Turn** | 轮 | 輪 | ターン | 턴 | tour | Turno | Runde | Turno | Turno | 輪 | 轮 | — |
-| **Usage** | 用量 | 用量 | 使用量 | 사용량 | consommation | Uso | Nutzung | Utilização | Uso | 耗用 | 耗用 | zh-CN: 使用情况；zh-CN: 使用表现；zh-TW: 使用情況；zh-TW: 使用表現；ja: 使用状況；ja: 利用状況；ko: 사용 현황 |
-| **Worker** | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | — |
-| **Working directory** | 工作目录 | 工作目錄 | 作業ディレクトリ | 작업 디렉터리 | répertoire de travail | Directorio de trabajo | Arbeitsverzeichnis | Diretório de trabalho | Diretório de trabalho | 工作目錄 | 工作目录 | zh-CN: 任务空间；zh-CN: 工作空间；zh-TW: 任務空間；zh-TW: 工作空間 |
-| **Worktree** | worktree | worktree | worktree | worktree | worktree | worktree | `Worktree`（保留英文） | `Worktree`（保留英文） | `Worktree`（保留英文） | worktree | worktree | zh-CN: 工作树（仅当英文含 Worktree）；zh-CN: 工作区（仅当英文含 Worktree）；zh-TW: 工作樹（仅当英文含 Worktree）；zh-TW: 工作區（仅当英文含 Worktree）；zh-Hant-x-lzh: 工作樹（仅当英文含 Worktree）；zh-Hans-x-lzh: 工作树（仅当英文含 Worktree） |
+| 英文 | zh-CN | zh-TW | ja | ko | fr | es | de | pt-PT | pt-BR | zh-Hant-x-lzh | zh-Hans-x-lzh | tr | 禁用译法 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **Active** | 活跃 | 活躍 | アクティブ | 활성 | actif | Activo | Aktiv | Ativo | Ativo | 活躍 | 活跃 | Aktif | zh-CN: 活动（仅当英文含 Active）；zh-TW: 活動（仅当英文含 Active） |
+| **Agent** | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | zh-CN: 智能体；zh-CN: 代理（仅当英文含 Agent）；zh-TW: 智能體；zh-TW: 代理（仅当英文含 Agent）；zh-Hant-x-lzh: 智能體；zh-Hant-x-lzh: 代理（仅当英文含 Agent）；zh-Hans-x-lzh: 智能体；zh-Hans-x-lzh: 代理（仅当英文含 Agent） |
+| **Agent session** | Agent 会话 | Agent 會話 | Agent セッション | Agent 세션 | session Agent | Sesión de Agent | Agent-Sitzung | Sessão do Agent | Sessão do Agent | Agent 會話 | Agent 会话 | Agent Oturumu | zh-CN: 任务（仅当英文含 agent session）；zh-TW: 任務（仅当英文含 agent session） |
+| **Author** | 作者 | 作者 | 作成者 | 작성자 | auteur | Autor | Autor | Autor | Autor | 作者 | 作者 | Yazar | zh-CN: 提交者（仅当英文含 Author）；zh-CN: 提出者（仅当英文含 Author）；zh-TW: 提交者（仅当英文含 Author）；zh-TW: 提出者（仅当英文含 Author） |
+| **Automation** | 自动化 | 自動化 | 自動化 | 자동화 | automatisation | Automatización | Automatisierung | Automatização | Automação | 自運 | 自运 | Otomasyon | ja: オートメーション；ko: 오토메이션 |
+| **Balance** | 余额 | 餘額 | 残高 | 잔액 | solde | Saldo | Guthaben | Saldo | Saldo | 餘資 | 余资 | Bakiye | zh-CN: 额度（仅当英文含 Balance）；zh-TW: 額度（仅当英文含 Balance） |
+| **Chat** | 对话 | 對話 | チャット | 채팅 | conversation | Conversación | `Chat`（保留英文） | Conversa | Conversa | 言談 | 言谈 | Sohbet | zh-CN: 聊天；zh-TW: 聊天；zh-Hant-x-lzh: 聊天；zh-Hans-x-lzh: 聊天 |
+| **Collaboration** | 协同 | 協同 | 協同 | 협업 | collaboration | Colaboración | Zusammenarbeit | Colaboração | Colaboração | 協同 | 协同 | İş Birliği | zh-CN: 协作（仅当英文含 Collaboration）；zh-TW: 協作（仅当英文含 Collaboration） |
+| **Collapse** | 收起 | 收起 | 折りたたむ | 접기 | Réduire | Contraer | Einklappen | Recolher | Recolher | 收 | 收 | Daralt | zh-CN: 折叠（仅当英文含 Collapse）；zh-TW: 折疊（仅当英文含 Collapse） |
+| **Credits** | 点数 | 點數 | クレジット | 크레딧 | crédits | Créditos | `Credits`（保留英文） | Créditos | Créditos | 籌 | 筹 | Kredi | zh-CN: 额度（仅当英文含 Credit）；zh-TW: 額度（仅当英文含 Credit） |
+| **Directory** | 目录 | 目錄 | ディレクトリ | 디렉터리 | répertoire | Directorio | Verzeichnis | Diretório | Diretório | 目錄 | 目录 | Dizin | — |
+| **Dismiss** | 关闭 | 關閉 | 閉じる | 닫기 | Fermer | Cerrar | Schließen | Fechar | Fechar | 闔 | 阖 | Kapat | zh-CN: 忽略（仅当英文含 Dismiss）；zh-CN: 知道了（仅当英文含 Dismiss）；zh-TW: 忽略（仅当英文含 Dismiss）；zh-TW: 知道了（仅当英文含 Dismiss） |
+| **Effort** | 推理强度 | 推理強度 | 推論強度 | 추론 강도 | effort de raisonnement | Intensidad de razonamiento | Denkintensität | Esforço de raciocínio | Esforço de raciocínio | 思之深淺 | 思之深浅 | Akıl Yürütme Yoğunluğu | zh-CN: 思考强度；zh-CN: 思考深度；zh-CN: 推理深度；zh-CN: 努力程度；zh-CN: 推理力度；zh-TW: 思考強度；zh-TW: 思考深度；zh-TW: 推理深度；zh-TW: 努力程度；zh-TW: 推理力度；ja: 推論レベル；ja: 推論の強度 |
+| **Issue** | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | 이슈 | issue | Incidencia | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | zh-CN: 工单；zh-CN: 议题；zh-TW: 工單；zh-TW: 議題；zh-Hant-x-lzh: 工單；zh-Hant-x-lzh: 議題；zh-Hans-x-lzh: 工单；zh-Hans-x-lzh: 议题；ja: 課題（仅当英文含 Issue） |
+| **Message** | 消息 | 訊息 | メッセージ | 메시지 | message | Mensaje | Nachricht | Mensagem | Mensagem | 訊 | 讯 | Mesaj | zh-CN: 条对话（仅当英文含 Message）；zh-TW: 條對話（仅当英文含 Message） |
+| **Plugin** | 插件 | 插件 | プラグイン | 플러그인 | plugin | Complemento | `Plugin`（保留英文） | plugin | plugin | 法器 | 法器 | Eklenti | zh-CN: Plugin；zh-CN: plugin；zh-TW: Plugin；zh-TW: plugin；zh-TW: 外掛；zh-Hant-x-lzh: 外掛；zh-Hans-x-lzh: 插件 |
+| **Privacy Policy** | 隐私政策 | 隱私政策 | プライバシーポリシー | 개인정보 처리방침 | Politique de confidentialité | Política de privacidad | Datenschutzerklärung | Política de Privacidade | Política de Privacidade | 隱私政策 | 隐私政策 | Gizlilik Politikası | zh-TW: 隱私協議（仅当英文含 Privacy Policy） |
+| **Project** | 项目 | 專案 | プロジェクト | 프로젝트 | projet | Proyecto | Projekt | Projeto | Projeto | 案 | 案 | Proje | zh-CN: Project；zh-TW: Project |
+| **Provider** | 供应商 | 供應商 | プロバイダー | 제공자 | fournisseur | Proveedor | Anbieter | Fornecedor | Provedor | 供方 | 供方 | Sağlayıcı | zh-CN: 提供方；zh-CN: 提供商；zh-TW: 提供方；zh-TW: 提供商；ja: 提供元（仅当英文含 Provider）；ja: 事業者（仅当英文含 Provider）；ko: 공급자；ko: 제공업체 |
+| **Proxy** | `Proxy`（保留英文） | `Proxy`（保留英文） | プロキシ | 프록시 | proxy | proxy | `Proxy`（保留英文） | proxy | proxy | `Proxy`（保留英文） | `Proxy`（保留英文） | `Proxy`（保留英文） | zh-CN: 代理（仅当英文含 Proxy）；zh-TW: 代理（仅当英文含 Proxy）；zh-Hant-x-lzh: 代理（仅当英文含 Proxy）；zh-Hans-x-lzh: 代理（仅当英文含 Proxy） |
+| **Quota** | 配额 | 配額 | クォータ | 할당량 | quota | Cuota | Kontingent | `Quota`（保留英文） | Cota | 限額 | 限额 | Kota | ja: 残量；zh-CN: 额度（仅当英文含 Quota）；zh-TW: 額度（仅当英文含 Quota） |
+| **Running** | 运行中 | 執行中 | 実行中 | 실행 중 | en cours d'exécution | En ejecución | Wird ausgeführt | Em execução | Em execução | 方行 | 方行 | Çalışıyor | zh-CN: 执行中（仅当英文含 Running）；zh-CN: 进行中（仅当英文含 Running）；zh-TW: 進行中（仅当英文含 Running） |
+| **Session** | 任务 | 任務 | セッション | 세션 | session | Sesión | Sitzung | Sessão | Sessão | 差事 | 差事 | Görev | zh-CN: 会话；zh-TW: 會話；zh-Hant-x-lzh: 會話；zh-Hans-x-lzh: 会话 |
+| **Skill** | 技能 | 技能 | スキル | 스킬 | skill | Habilidad | `Skill`（保留英文） | `Skill`（保留英文） | `Skill`（保留英文） | 技藝 | 技艺 | Beceri | ja: 技能；ko: 기술 |
+| **SkillHub** | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | ja: スキルハブ；ko: 스킬 허브 |
+| **Subagent** | `Subagent`（保留英文） | `Subagent`（保留英文） | サブエージェント | 하위 에이전트 | sous-Agent | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | zh-CN: 代理（仅当英文含 Subagent）；zh-TW: 代理（仅当英文含 Subagent）；zh-Hant-x-lzh: 代理（仅当英文含 Subagent）；zh-Hans-x-lzh: 代理（仅当英文含 Subagent） |
+| **Task** | 任务 | 任務 | タスク | 작업 | tâche | Tarea | Aufgabe | Tarefa | Tarefa | 差事 | 差事 | Görev | — |
+| **Thread** | 任务 | 任務 | スレッド | 스레드 | fil | Hilo | `Thread`（保留英文） | Tópico | Tópico | 話題 | 话题 | Görev | zh-CN: 线程；zh-TW: 執行緒 |
+| **Turn** | 轮 | 輪 | ターン | 턴 | tour | Turno | Runde | Turno | Turno | 輪 | 轮 | Tur | — |
+| **Usage** | 用量 | 用量 | 使用量 | 사용량 | consommation | Uso | Nutzung | Utilização | Uso | 耗用 | 耗用 | Kullanım | zh-CN: 使用情况；zh-CN: 使用表现；zh-TW: 使用情況；zh-TW: 使用表現；ja: 使用状況；ja: 利用状況；ko: 사용 현황 |
+| **Worker** | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | — |
+| **Working directory** | 工作目录 | 工作目錄 | 作業ディレクトリ | 작업 디렉터리 | répertoire de travail | Directorio de trabajo | Arbeitsverzeichnis | Diretório de trabalho | Diretório de trabalho | 工作目錄 | 工作目录 | Çalışma Dizini | zh-CN: 任务空间；zh-CN: 工作空间；zh-TW: 任務空間；zh-TW: 工作空間 |
+| **Worktree** | worktree | worktree | worktree | worktree | worktree | worktree | `Worktree`（保留英文） | `Worktree`（保留英文） | `Worktree`（保留英文） | worktree | worktree | worktree | zh-CN: 工作树（仅当英文含 Worktree）；zh-CN: 工作区（仅当英文含 Worktree）；zh-TW: 工作樹（仅当英文含 Worktree）；zh-TW: 工作區（仅当英文含 Worktree）；zh-Hant-x-lzh: 工作樹（仅当英文含 Worktree）；zh-Hans-x-lzh: 工作树（仅当英文含 Worktree） |
 
 ### 分场合译法
 
@@ -75,6 +75,8 @@
 | Active | pt-PT | ativo | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Active** | pt-BR | Ativo | 默认 |
 | Active | pt-BR | ativo | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Active** | tr | Aktif | 默认 |
+| Active | tr | aktif | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Agent session** | es | Sesión de Agent | 默认 |
 | Agent session | es | sesión de Agent | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | Agent session | es | sesiones de Agent | Agent 运行时会话的复数。 |
@@ -90,12 +92,17 @@
 | Agent session | pt-BR | sessões do Agent | Agent 运行时会话的复数。 |
 | Agent session | pt-BR | sessões de Agent | 不带定冠词的 Agent 运行时会话复数。 |
 | Agent session | pt-BR | sessão Pi Agent | 指定 Pi Agent 引擎的运行时会话。 |
+| **Agent session** | tr | Agent Oturumu | 默认 |
+| Agent session | tr | Agent oturumu | Türkçe cümle içinde oturumu küçük harfle, Agent adı özgün biçimiyle yazılır. |
+| Agent session | tr | Agent oturum | Türkçe çekim ekleriyle Agent oturumu, oturumunda ve oturumlarına biçimlerinde kullanılır. |
 | **Author** | es | Autor | 默认 |
 | Author | es | autor | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Author** | pt-PT | Autor | 默认 |
 | Author | pt-PT | autor | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Author** | pt-BR | Autor | 默认 |
 | Author | pt-BR | autor | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Author** | tr | Yazar | 默认 |
+| Author | tr | yazar | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Automation** | zh-CN | 自动化 | 默认 |
 | Automation | zh-CN | 自动操作 | Computer Use 语境——「自动操作电脑 / 浏览器」，指代操控设备而非定时任务 |
 | **Automation** | zh-TW | 自動化 | 默认 |
@@ -106,8 +113,12 @@
 | Automation | pt-PT | automatização | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Automation** | pt-BR | Automação | 默认 |
 | Automation | pt-BR | automação | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Automation** | tr | Otomasyon | 默认 |
+| Automation | tr | otomasyon | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Balance** | es | Saldo | 默认 |
 | Balance | es | saldo | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Balance** | tr | Bakiye | 默认 |
+| Balance | tr | bakiye | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Chat** | es | Conversación | 默认 |
 | Chat | es | conversación | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | Chat | es | chat | 指聊天过程、聊天模型或聊天界面时保留西语常用词 chat；不用于产品任务。 |
@@ -115,14 +126,21 @@
 | Chat | pt-PT | conversa | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Chat** | pt-BR | Conversa | 默认 |
 | Chat | pt-BR | conversa | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Chat** | tr | Sohbet | 默认 |
+| Chat | tr | sohbet | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Collaboration** | es | Colaboración | 默认 |
 | Collaboration | es | colaboración | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Collaboration** | pt-PT | Colaboração | 默认 |
 | Collaboration | pt-PT | colaboração | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Collaboration** | pt-BR | Colaboração | 默认 |
 | Collaboration | pt-BR | colaboração | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Collaboration** | tr | İş Birliği | 默认 |
+| Collaboration | tr | iş birliği | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
+| Collaboration | tr | İş birliği | Cümle başındaki yazım; cümle içinde iş birliği kullanılır. |
 | **Collapse** | de | Einklappen | 默认 |
 | Collapse | de | einklappen | 动词位于句中或按钮的补语中。 |
+| **Collapse** | tr | Daralt | 默认 |
+| Collapse | tr | daralt | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Credits** | zh-CN | 点数 | 默认 |
 | Credits | zh-CN | credits | 指第三方服务自身的 credits（如 Codex / ChatGPT 订阅余量），保留其原生叫法 |
 | Credits | zh-CN | 重置次数 | reset credits——指可用的配额重置次数，与计费点数无关 |
@@ -139,18 +157,26 @@
 | Credits | pt-PT | créditos | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Credits** | pt-BR | Créditos | 默认 |
 | Credits | pt-BR | créditos | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Credits** | tr | Kredi | 默认 |
+| Credits | tr | kredi | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Directory** | es | Directorio | 默认 |
 | Directory | es | directorio | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Directory** | pt-PT | Diretório | 默认 |
 | Directory | pt-PT | diretório | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Directory** | pt-BR | Diretório | 默认 |
 | Directory | pt-BR | diretório | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Directory** | tr | Dizin | 默认 |
+| Directory | tr | dizin | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
+| **Dismiss** | tr | Kapat | 默认 |
+| Dismiss | tr | kapat | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Effort** | es | Intensidad de razonamiento | 默认 |
 | Effort | es | intensidad de razonamiento | 句中模型推理投入档位的名称。 |
 | **Effort** | pt-PT | Esforço de raciocínio | 默认 |
 | Effort | pt-PT | esforço de raciocínio | 句中模型推理投入档位的名称。 |
 | **Effort** | pt-BR | Esforço de raciocínio | 默认 |
 | Effort | pt-BR | esforço de raciocínio | 句中模型推理投入档位的名称。 |
+| **Effort** | tr | Akıl Yürütme Yoğunluğu | 默认 |
+| Effort | tr | akıl yürütme yoğunluğu | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Issue** | es | Incidencia | 默认 |
 | Issue | es | incidencia | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Issue** | pt-PT | Issue | 默认 |
@@ -165,14 +191,22 @@
 | Message | pt-PT | mensagem | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Message** | pt-BR | Mensagem | 默认 |
 | Message | pt-BR | mensagem | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Message** | tr | Mesaj | 默认 |
+| Message | tr | mesaj | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Plugin** | es | Complemento | 默认 |
 | Plugin | es | complemento | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Plugin** | tr | Eklenti | 默认 |
+| Plugin | tr | eklenti | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
+| **Privacy Policy** | tr | Gizlilik Politikası | 默认 |
+| Privacy Policy | tr | gizlilik politikası | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Project** | es | Proyecto | 默认 |
 | Project | es | proyecto | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Project** | pt-PT | Projeto | 默认 |
 | Project | pt-PT | projeto | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Project** | pt-BR | Projeto | 默认 |
 | Project | pt-BR | projeto | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Project** | tr | Proje | 默认 |
+| Project | tr | proje | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Provider** | zh-CN | 供应商 | 默认 |
 | Provider | zh-CN | 模型供应商 | 首次出现或需要消歧时用全称，如设置页标题 |
 | **Provider** | zh-TW | 供應商 | 默认 |
@@ -183,12 +217,16 @@
 | Provider | pt-PT | fornecedor | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Provider** | pt-BR | Provedor | 默认 |
 | Provider | pt-BR | provedor | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Provider** | tr | Sağlayıcı | 默认 |
+| Provider | tr | sağlayıcı | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Quota** | es | Cuota | 默认 |
 | Quota | es | cuota | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Quota** | pt-PT | Quota | 默认 |
 | Quota | pt-PT | quota | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Quota** | pt-BR | Cota | 默认 |
 | Quota | pt-BR | cota | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Quota** | tr | Kota | 默认 |
+| Quota | tr | kota | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Running** | zh-CN | 运行中 | 默认 |
 | Running | zh-CN | 正在运行 | 完整句子里作谓语时（"Agent 正在运行"），不是状态标签 |
 | **Running** | zh-TW | 執行中 | 默认 |
@@ -205,6 +243,8 @@
 | Running | de | laufend | 句中形容正在运行的任务或会话，允许相应屈折变化。 |
 | Running | de | Laufend | 句首形容正在运行的任务或会话。 |
 | Running | de | laufen | 复数主语的运行状态谓语。 |
+| **Running** | tr | Çalışıyor | 默认 |
+| Running | tr | çalışıyor | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Session** | zh-CN | 任务 | 默认 |
 | Session | zh-CN | 对话 | 指任务内人与 AI 交流的过程或其内容（对话区、对话正文、对话记录、继续对话） |
 | **Session** | zh-TW | 任務 | 默认 |
@@ -215,18 +255,24 @@
 | Session | pt-PT | sessão | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Session** | pt-BR | Sessão | 默认 |
 | Session | pt-BR | sessão | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Session** | tr | Görev | 默认 |
+| Session | tr | görev | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Skill** | zh-CN | 技能 | 默认 |
 | Skill | zh-CN | Skill | 技术语境下指代具体的 skill 文件 / 目录结构时，可保留英文 |
 | **Skill** | zh-TW | 技能 | 默认 |
 | Skill | zh-TW | Skill | 技術語境下指代具體的 skill 檔案 / 目錄結構時，可保留英文 |
 | **Skill** | es | Habilidad | 默认 |
 | Skill | es | habilidad | 句中使用小写首字母；复数 habilidades 使用同一词干。 |
+| **Skill** | tr | Beceri | 默认 |
+| Skill | tr | beceri | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Task** | es | Tarea | 默认 |
 | Task | es | tarea | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Task** | pt-PT | Tarefa | 默认 |
 | Task | pt-PT | tarefa | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Task** | pt-BR | Tarefa | 默认 |
 | Task | pt-BR | tarefa | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Task** | tr | Görev | 默认 |
+| Task | tr | görev | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Thread** | zh-CN | 任务 | 默认 |
 | Thread | zh-CN | thread | 指 Codex 的 thread 这一外部系统概念时（导入历史、thread 上下文），保留英文 |
 | Thread | zh-CN | 评论 | 指 GitHub PR 的 review thread 时，用「review 评论」 |
@@ -239,6 +285,8 @@
 | Thread | pt-PT | tópico | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Thread** | pt-BR | Tópico | 默认 |
 | Thread | pt-BR | tópico | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Thread** | tr | Görev | 默认 |
+| Thread | tr | görev | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Turn** | es | Turno | 默认 |
 | Turn | es | turno | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Turn** | pt-PT | Turno | 默认 |
@@ -247,18 +295,24 @@
 | Turn | pt-BR | turno | 确需描述一次完整往返时使用；葡语复数 turnos、德语复数 Runden 仍属本词。 |
 | **Turn** | de | Runde | 默认 |
 | Turn | de | Runde | 确需描述一次完整往返时使用；葡语复数 turnos、德语复数 Runden 仍属本词。 |
+| **Turn** | tr | Tur | 默认 |
+| Turn | tr | tur | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Usage** | es | Uso | 默认 |
 | Usage | es | uso | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Usage** | pt-PT | Utilização | 默认 |
 | Usage | pt-PT | utilização | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Usage** | pt-BR | Uso | 默认 |
 | Usage | pt-BR | uso | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Usage** | tr | Kullanım | 默认 |
+| Usage | tr | kullanım | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Working directory** | es | Directorio de trabajo | 默认 |
 | Working directory | es | directorio de trabajo | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Working directory** | pt-PT | Diretório de trabalho | 默认 |
 | Working directory | pt-PT | diretório de trabalho | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Working directory** | pt-BR | Diretório de trabalho | 默认 |
 | Working directory | pt-BR | diretório de trabalho | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Working directory** | tr | Çalışma Dizini | 默认 |
+| Working directory | tr | çalışma dizini | Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur. |
 | **Worktree** | pt-PT | Worktree | 默认 |
 | Worktree | pt-PT | worktree | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Worktree** | pt-BR | Worktree | 默认 |

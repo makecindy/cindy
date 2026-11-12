@@ -13,7 +13,7 @@
     "pt-PT",
     "pt-BR",
     "zh-Hant-x-lzh",
-    "zh-Hans-x-lzh"
+    "zh-Hans-x-lzh", "tr"
   ],
   "sourceLocale": "en",
   "punctuationExempt": [
@@ -47,11 +47,13 @@
         "pt-PT": "Ativo",
         "pt-BR": "Ativo",
         "zh-Hant-x-lzh": "活躍",
-        "zh-Hans-x-lzh": "活跃"
+        "zh-Hans-x-lzh": "活跃",
+        "tr": "Aktif"
       },
       "minorityByDesign": {
         "zh-Hant-x-lzh": "文言版按语境分译：状态标签用「活躍」，运行中用「方行」，订阅/规则生效用「生效」；三者各有专义，不强求统一。",
-        "zh-Hans-x-lzh": "文言版按语境分译：状态标签用「活躍」，运行中用「方行」，订阅/规则生效用「生效」；三者各有专义，不强求统一。"
+        "zh-Hans-x-lzh": "文言版按语境分译：状态标签用「活躍」，运行中用「方行」，订阅/规则生效用「生效」；三者各有专义，不强求统一。",
+        "tr": "Etkin abonelik ve ayarlarda etkin, yürütülen işlerde devam ediyor, kullanımda olan bağlantılarda aktif kullanılır; bağlamlar farklıdır."
       },
       "checkCase": false,
       "alsoAllowed": {
@@ -83,6 +85,12 @@
           {
             "text": "ativo",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
+          }
+        ],
+        "tr": [
+          {
+            "text": "aktif",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
           }
         ]
       },
@@ -132,7 +140,8 @@
         "pt-PT": "Agent",
         "pt-BR": "Agent",
         "zh-Hant-x-lzh": "Agent",
-        "zh-Hans-x-lzh": "Agent"
+        "zh-Hans-x-lzh": "Agent",
+        "tr": "Agent"
       },
       "forbidden": {
         "zh-CN": [
@@ -237,7 +246,8 @@
         "pt-PT": "Sessão do Agent",
         "pt-BR": "Sessão do Agent",
         "zh-Hant-x-lzh": "Agent 會話",
-        "zh-Hans-x-lzh": "Agent 会话"
+        "zh-Hans-x-lzh": "Agent 会话",
+        "tr": "Agent Oturumu"
       },
       "checkCase": false,
       "forbidden": {
@@ -311,6 +321,16 @@
           {
             "text": "sessão Pi Agent",
             "when": "指定 Pi Agent 引擎的运行时会话。"
+          }
+        ],
+        "tr": [
+          {
+            "text": "Agent oturumu",
+            "when": "Türkçe cümle içinde oturumu küçük harfle, Agent adı özgün biçimiyle yazılır."
+          },
+          {
+            "text": "Agent oturum",
+            "when": "Türkçe çekim ekleriyle Agent oturumu, oturumunda ve oturumlarına biçimlerinde kullanılır."
           }
         ]
       }
@@ -387,7 +407,8 @@
         "pt-PT": "Autor",
         "pt-BR": "Autor",
         "zh-Hant-x-lzh": "作者",
-        "zh-Hans-x-lzh": "作者"
+        "zh-Hans-x-lzh": "作者",
+        "tr": "Yazar"
       },
       "checkCase": false,
       "forbidden": {
@@ -431,6 +452,12 @@
             "text": "autor",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
           }
+        ],
+        "tr": [
+          {
+            "text": "yazar",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
+          }
         ]
       }
     },
@@ -462,7 +489,8 @@
         "pt-PT": "Automatização",
         "pt-BR": "Automação",
         "zh-Hant-x-lzh": "自運",
-        "zh-Hans-x-lzh": "自运"
+        "zh-Hans-x-lzh": "自运",
+        "tr": "Otomasyon"
       },
       "alsoAllowed": {
         "zh-CN": [
@@ -493,6 +521,12 @@
           {
             "text": "automação",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
+          }
+        ],
+        "tr": [
+          {
+            "text": "otomasyon",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
           }
         ]
       },
@@ -537,7 +571,8 @@
         "pt-PT": "Saldo",
         "pt-BR": "Saldo",
         "zh-Hant-x-lzh": "餘資",
-        "zh-Hans-x-lzh": "余资"
+        "zh-Hans-x-lzh": "余资",
+        "tr": "Bakiye"
       },
       "checkCase": false,
       "forbidden": {
@@ -560,6 +595,12 @@
           {
             "text": "saldo",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
+          }
+        ],
+        "tr": [
+          {
+            "text": "bakiye",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
           }
         ]
       }
@@ -628,7 +669,8 @@
         "pt-PT": "Conversa",
         "pt-BR": "Conversa",
         "zh-Hant-x-lzh": "言談",
-        "zh-Hans-x-lzh": "言谈"
+        "zh-Hans-x-lzh": "言谈",
+        "tr": "Sohbet"
       },
       "checkCase": false,
       "forbidden": {
@@ -667,6 +709,12 @@
           {
             "text": "conversa",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
+          }
+        ],
+        "tr": [
+          {
+            "text": "sohbet",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
           }
         ]
       }
@@ -866,7 +914,8 @@
         "pt-PT": "Colaboração",
         "pt-BR": "Colaboração",
         "zh-Hant-x-lzh": "協同",
-        "zh-Hans-x-lzh": "协同"
+        "zh-Hans-x-lzh": "协同",
+        "tr": "İş Birliği"
       },
       "checkCase": false,
       "forbidden": {
@@ -905,6 +954,16 @@
             "text": "colaboração",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
           }
+        ],
+        "tr": [
+          {
+            "text": "iş birliği",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
+          },
+          {
+            "text": "İş birliği",
+            "when": "Cümle başındaki yazım; cümle içinde iş birliği kullanılır."
+          }
         ]
       }
     },
@@ -923,7 +982,8 @@
         "pt-PT": "Recolher",
         "pt-BR": "Recolher",
         "zh-Hant-x-lzh": "收",
-        "zh-Hans-x-lzh": "收"
+        "zh-Hans-x-lzh": "收",
+        "tr": "Daralt"
       },
       "checkCase": false,
       "forbidden": {
@@ -946,6 +1006,12 @@
           {
             "text": "einklappen",
             "when": "动词位于句中或按钮的补语中。"
+          }
+        ],
+        "tr": [
+          {
+            "text": "daralt",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
           }
         ]
       }
@@ -1060,7 +1126,8 @@
         "pt-PT": "Créditos",
         "pt-BR": "Créditos",
         "zh-Hant-x-lzh": "籌",
-        "zh-Hans-x-lzh": "筹"
+        "zh-Hans-x-lzh": "筹",
+        "tr": "Kredi"
       },
       "minorityByDesign": {
         "zh-Hant-x-lzh": "文言版里多数命中是第三方服务自身的 credits（Codex / ChatGPT 等），按 zh-TW 惯例保留原名；Cindy 自家点数用「籌」。",
@@ -1116,6 +1183,12 @@
           {
             "text": "créditos",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
+          }
+        ],
+        "tr": [
+          {
+            "text": "kredi",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
           }
         ]
       },
@@ -1275,7 +1348,8 @@
         "pt-PT": "Diretório",
         "pt-BR": "Diretório",
         "zh-Hant-x-lzh": "目錄",
-        "zh-Hans-x-lzh": "目录"
+        "zh-Hans-x-lzh": "目录",
+        "tr": "Dizin"
       },
       "checkCase": false,
       "forbidden": {},
@@ -1298,6 +1372,12 @@
             "text": "diretório",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
           }
+        ],
+        "tr": [
+          {
+            "text": "dizin",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
+          }
         ]
       }
     },
@@ -1316,7 +1396,8 @@
         "pt-PT": "Fechar",
         "pt-BR": "Fechar",
         "zh-Hant-x-lzh": "闔",
-        "zh-Hans-x-lzh": "阖"
+        "zh-Hans-x-lzh": "阖",
+        "tr": "Kapat"
       },
       "checkCase": false,
       "forbidden": {
@@ -1341,7 +1422,15 @@
           }
         ]
       },
-      "note": "中文用「关闭」（现状 6:4）。同一个 chat 模块里，errorBanner 写「关闭错误提示」、interruptedBanner 写「忽略此中断提示」。条件禁用：「忽略」是 Ignore 的正确译法、「知道了」是 Got it 的正确译法，只在英文源为 Dismiss 时才算违规。"
+      "note": "中文用「关闭」（现状 6:4）。同一个 chat 模块里，errorBanner 写「关闭错误提示」、interruptedBanner 写「忽略此中断提示」。条件禁用：「忽略」是 Ignore 的正确译法、「知道了」是 Got it 的正确译法，只在英文源为 Dismiss 时才算违规。",
+      "alsoAllowed": {
+        "tr": [
+          {
+            "text": "kapat",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
+          }
+        ]
+      }
     },
     {
       "id": "dissolve-group",
@@ -1383,7 +1472,8 @@
         "pt-PT": "Esforço de raciocínio",
         "pt-BR": "Esforço de raciocínio",
         "zh-Hant-x-lzh": "思之深淺",
-        "zh-Hans-x-lzh": "思之深浅"
+        "zh-Hans-x-lzh": "思之深浅",
+        "tr": "Akıl Yürütme Yoğunluğu"
       },
       "forbidden": {
         "zh-CN": [
@@ -1423,6 +1513,12 @@
           {
             "text": "esforço de raciocínio",
             "when": "句中模型推理投入档位的名称。"
+          }
+        ],
+        "tr": [
+          {
+            "text": "akıl yürütme yoğunluğu",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
           }
         ]
       }
@@ -1759,7 +1855,8 @@
         "pt-PT": "Issue",
         "pt-BR": "Issue",
         "zh-Hant-x-lzh": "Issue",
-        "zh-Hans-x-lzh": "Issue"
+        "zh-Hans-x-lzh": "Issue",
+        "tr": "Issue"
       },
       "checkCase": false,
       "forbidden": {
@@ -2012,7 +2109,8 @@
         "pt-PT": "Mensagem",
         "pt-BR": "Mensagem",
         "zh-Hant-x-lzh": "訊",
-        "zh-Hans-x-lzh": "讯"
+        "zh-Hans-x-lzh": "讯",
+        "tr": "Mesaj"
       },
       "checkCase": false,
       "forbidden": {
@@ -2047,6 +2145,12 @@
           {
             "text": "mensagem",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
+          }
+        ],
+        "tr": [
+          {
+            "text": "mesaj",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
           }
         ]
       }
@@ -2418,7 +2522,8 @@
         "pt-PT": "plugin",
         "pt-BR": "plugin",
         "zh-Hant-x-lzh": "法器",
-        "zh-Hans-x-lzh": "法器"
+        "zh-Hans-x-lzh": "法器",
+        "tr": "Eklenti"
       },
       "forbidden": {
         "zh-CN": [
@@ -2447,6 +2552,12 @@
           {
             "text": "complemento",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
+          }
+        ],
+        "tr": [
+          {
+            "text": "eklenti",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
           }
         ]
       }
@@ -2580,7 +2691,8 @@
         "pt-PT": "Política de Privacidade",
         "pt-BR": "Política de Privacidade",
         "zh-Hant-x-lzh": "隱私政策",
-        "zh-Hans-x-lzh": "隐私政策"
+        "zh-Hans-x-lzh": "隐私政策",
+        "tr": "Gizlilik Politikası"
       },
       "checkCase": false,
       "forbidden": {
@@ -2591,7 +2703,15 @@
           }
         ]
       },
-      "note": "Privacy Policy 是同一份法律文件。繁中设置页与日志上传提示已统一使用「隱私政策」，登录文案曾漂移为「隱私協議」，因此在 zh-TW 中统一为「隱私政策」。禁用项按英文源限定，避免误伤真正指 Agreement 的文案；本次只锁定新增繁中 catalog，不借此改写既有简中口径。"
+      "note": "Privacy Policy 是同一份法律文件。繁中设置页与日志上传提示已统一使用「隱私政策」，登录文案曾漂移为「隱私協議」，因此在 zh-TW 中统一为「隱私政策」。禁用项按英文源限定，避免误伤真正指 Agreement 的文案；本次只锁定新增繁中 catalog，不借此改写既有简中口径。",
+      "alsoAllowed": {
+        "tr": [
+          {
+            "text": "gizlilik politikası",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
+          }
+        ]
+      }
     },
     {
       "id": "process",
@@ -2619,7 +2739,8 @@
         "pt-PT": "Projeto",
         "pt-BR": "Projeto",
         "zh-Hant-x-lzh": "案",
-        "zh-Hans-x-lzh": "案"
+        "zh-Hans-x-lzh": "案",
+        "tr": "Proje"
       },
       "forbidden": {
         "zh-CN": [
@@ -2649,6 +2770,12 @@
             "text": "projeto",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
           }
+        ],
+        "tr": [
+          {
+            "text": "proje",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
+          }
         ]
       }
     },
@@ -2667,7 +2794,8 @@
         "pt-PT": "Fornecedor",
         "pt-BR": "Provedor",
         "zh-Hant-x-lzh": "供方",
-        "zh-Hans-x-lzh": "供方"
+        "zh-Hans-x-lzh": "供方",
+        "tr": "Sağlayıcı"
       },
       "alsoAllowed": {
         "zh-CN": [
@@ -2698,6 +2826,12 @@
           {
             "text": "provedor",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
+          }
+        ],
+        "tr": [
+          {
+            "text": "sağlayıcı",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
           }
         ]
       },
@@ -2791,7 +2925,8 @@
         "pt-PT": "proxy",
         "pt-BR": "proxy",
         "zh-Hant-x-lzh": "Proxy",
-        "zh-Hans-x-lzh": "Proxy"
+        "zh-Hans-x-lzh": "Proxy",
+        "tr": "Proxy"
       },
       "forbidden": {
         "zh-CN": [
@@ -2836,7 +2971,8 @@
         "pt-PT": "Quota",
         "pt-BR": "Cota",
         "zh-Hant-x-lzh": "限額",
-        "zh-Hans-x-lzh": "限额"
+        "zh-Hans-x-lzh": "限额",
+        "tr": "Kota"
       },
       "checkCase": false,
       "forbidden": {
@@ -2878,6 +3014,12 @@
           {
             "text": "cota",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
+          }
+        ],
+        "tr": [
+          {
+            "text": "kota",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
           }
         ]
       }
@@ -3252,7 +3394,8 @@
         "pt-PT": "Em execução",
         "pt-BR": "Em execução",
         "zh-Hant-x-lzh": "方行",
-        "zh-Hans-x-lzh": "方行"
+        "zh-Hans-x-lzh": "方行",
+        "tr": "Çalışıyor"
       },
       "checkCase": false,
       "alsoAllowed": {
@@ -3306,6 +3449,12 @@
           {
             "text": "laufen",
             "when": "复数主语的运行状态谓语。"
+          }
+        ],
+        "tr": [
+          {
+            "text": "çalışıyor",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
           }
         ]
       },
@@ -3372,7 +3521,8 @@
         "pt-PT": "Sessão",
         "pt-BR": "Sessão",
         "zh-Hant-x-lzh": "差事",
-        "zh-Hans-x-lzh": "差事"
+        "zh-Hans-x-lzh": "差事",
+        "tr": "Görev"
       },
       "checkCase": false,
       "forbidden": {
@@ -3468,6 +3618,12 @@
           {
             "text": "sessão",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
+          }
+        ],
+        "tr": [
+          {
+            "text": "görev",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
           }
         ]
       }
@@ -3583,7 +3739,8 @@
         "pt-PT": "Skill",
         "pt-BR": "Skill",
         "zh-Hant-x-lzh": "技藝",
-        "zh-Hans-x-lzh": "技艺"
+        "zh-Hans-x-lzh": "技艺",
+        "tr": "Beceri"
       },
       "alsoAllowed": {
         "zh-CN": [
@@ -3602,6 +3759,12 @@
           {
             "text": "habilidad",
             "when": "句中使用小写首字母；复数 habilidades 使用同一词干。"
+          }
+        ],
+        "tr": [
+          {
+            "text": "beceri",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
           }
         ]
       },
@@ -3635,7 +3798,8 @@
         "pt-PT": "SkillHub",
         "pt-BR": "SkillHub",
         "zh-Hant-x-lzh": "SkillHub",
-        "zh-Hans-x-lzh": "SkillHub"
+        "zh-Hans-x-lzh": "SkillHub",
+        "tr": "SkillHub"
       },
       "forbidden": {
         "ja": [
@@ -3698,7 +3862,8 @@
         "pt-PT": "Subagent",
         "pt-BR": "Subagent",
         "zh-Hant-x-lzh": "Subagent",
-        "zh-Hans-x-lzh": "Subagent"
+        "zh-Hans-x-lzh": "Subagent",
+        "tr": "Subagent"
       },
       "forbidden": {
         "zh-CN": [
@@ -3743,7 +3908,8 @@
         "pt-PT": "Tarefa",
         "pt-BR": "Tarefa",
         "zh-Hant-x-lzh": "差事",
-        "zh-Hans-x-lzh": "差事"
+        "zh-Hans-x-lzh": "差事",
+        "tr": "Görev"
       },
       "checkCase": false,
       "note": "指 Agent 正在执行的一件活，与 Session（也叫「任务」）同名。**同一句里同时出现两者时必须消解歧义**：task 一侧优先动词化（\"当前任务正在运行\" / \"执行完成\"），确需名词时用「执行」或「作业」——\"当前任务正在执行任务\" 这类写法一律不可接受。不同句、语境清晰时沿用「任务」（现状 104 处）。定时任务（Schedule）与后台作业各有限定词，不歧义。判定规则见 docs/product-rules/task-and-conversation-naming.md §3。",
@@ -3764,6 +3930,12 @@
           {
             "text": "tarefa",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
+          }
+        ],
+        "tr": [
+          {
+            "text": "görev",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
           }
         ]
       }
@@ -3866,7 +4038,8 @@
         "pt-PT": "Tópico",
         "pt-BR": "Tópico",
         "zh-Hant-x-lzh": "話題",
-        "zh-Hans-x-lzh": "话题"
+        "zh-Hans-x-lzh": "话题",
+        "tr": "Görev"
       },
       "checkCase": false,
       "alsoAllowed": {
@@ -3907,6 +4080,12 @@
             "text": "tópico",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
           }
+        ],
+        "tr": [
+          {
+            "text": "görev",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
+          }
         ]
       },
       "forbidden": {
@@ -3920,7 +4099,8 @@
       "note": "按语境分四类：①指产品内那个条目 → 跟随 session 叫「任务」（2026-07-31 随 session 改名一并更新）；②Codex 外部概念 → 保留 thread；③GitHub PR review thread →「review 评论」；④比喻用法 \"persistent work thread\" → 改写为「持续推进的工作」。「线程」一律禁用。",
       "minorityByDesign": {
         "zh-CN": "英文 thread 还用于伙伴群聊里挂在消息下的子讨论，那是另一个概念，中文叫「话题」（见 group-thread，proposed），不是本条的「任务」。群聊文案增多后，「任务」在全部 thread 文案里的占比自然低于主流线；本条裁决不变。",
-        "zh-TW": "英文 thread 還用於夥伴群聊裡掛在訊息下的子討論，那是另一個概念，中文叫「話題」（見 group-thread，proposed），不是本條的「任務」。群聊文案增多後，「任務」在全部 thread 文案裡的佔比自然低於主流線；本條裁決不變。"
+        "zh-TW": "英文 thread 還用於夥伴群聊裡掛在訊息下的子討論，那是另一個概念，中文叫「話題」（見 group-thread，proposed），不是本條的「任務」。群聊文案增多後，「任務」在全部 thread 文案裡的佔比自然低於主流線；本條裁決不變。",
+        "tr": "Bu terim ürünün görev kaydını anlatır. İngilizce thread ayrıca Discord mesaj dizilerini, GitHub inceleme yorumlarını ve yerel işlem iş parçacıklarını anlatır; bu bağlamlar görev diye çevrilmez."
       }
     },
     {
@@ -3949,7 +4129,8 @@
         "pt-PT": "Turno",
         "pt-BR": "Turno",
         "zh-Hant-x-lzh": "輪",
-        "zh-Hans-x-lzh": "轮"
+        "zh-Hans-x-lzh": "轮",
+        "tr": "Tur"
       },
       "checkCase": false,
       "note": "一次提问到一次回答结束。**内部概念，不作为界面术语**：面向用户一律说「消息」，只在确实要强调一次完整往返时说「一轮」（如「上一轮」）。不要引入「轮次」作为界面用词。",
@@ -3976,6 +4157,12 @@
           {
             "text": "Runde",
             "when": "确需描述一次完整往返时使用；葡语复数 turnos、德语复数 Runden 仍属本词。"
+          }
+        ],
+        "tr": [
+          {
+            "text": "tur",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
           }
         ]
       },
@@ -4037,7 +4224,8 @@
         "pt-PT": "Utilização",
         "pt-BR": "Uso",
         "zh-Hant-x-lzh": "耗用",
-        "zh-Hans-x-lzh": "耗用"
+        "zh-Hans-x-lzh": "耗用",
+        "tr": "Kullanım"
       },
       "forbidden": {
         "zh-CN": [
@@ -4078,6 +4266,12 @@
           {
             "text": "uso",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
+          }
+        ],
+        "tr": [
+          {
+            "text": "kullanım",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
           }
         ]
       }
@@ -4274,7 +4468,8 @@
         "pt-PT": "Worker",
         "pt-BR": "Worker",
         "zh-Hant-x-lzh": "Worker",
-        "zh-Hans-x-lzh": "Worker"
+        "zh-Hans-x-lzh": "Worker",
+        "tr": "Worker"
       },
       "forbidden": {},
       "note": "Orca 协同角色名，五语统一保留英文。这里只钉大小写形态：首字母大写 Worker。小写 worker 由 guard 的大小写规则单独覆盖（desktop 26:13 混用、mobile 一律小写）。"
@@ -4294,7 +4489,8 @@
         "pt-PT": "Diretório de trabalho",
         "pt-BR": "Diretório de trabalho",
         "zh-Hant-x-lzh": "工作目錄",
-        "zh-Hans-x-lzh": "工作目录"
+        "zh-Hans-x-lzh": "工作目录",
+        "tr": "Çalışma Dizini"
       },
       "checkCase": false,
       "forbidden": {
@@ -4326,6 +4522,12 @@
             "text": "diretório de trabalho",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
           }
+        ],
+        "tr": [
+          {
+            "text": "çalışma dizini",
+            "when": "Türkçe cümle içinde küçük harfle kullanılır; başlıklarda standart yazım korunur."
+          }
         ]
       }
     },
@@ -4344,7 +4546,8 @@
         "pt-PT": "Worktree",
         "pt-BR": "Worktree",
         "zh-Hant-x-lzh": "worktree",
-        "zh-Hans-x-lzh": "worktree"
+        "zh-Hans-x-lzh": "worktree",
+        "tr": "worktree"
       },
       "checkCase": false,
       "forbidden": {

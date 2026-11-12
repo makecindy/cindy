@@ -3805,7 +3805,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         summary?: string;
         description?: string;
         tags?: string[];
-        contentLocale?: import('../shared/locale').SupportedLocale;
+        contentLocale?: import('../shared/locale').SkillhubContentLocale;
         visibility?: 'private' | 'shared' | 'public';
         /** 归属统一参数:团队 slug / od- 部门 id;null = 收回到个人 */
         teamSlug?: string | null;

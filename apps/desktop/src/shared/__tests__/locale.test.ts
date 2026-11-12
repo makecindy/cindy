@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolvePreferredSystemLocale, resolveSystemLocale } from '../locale';
+import {
+  isSkillhubContentLocale,
+  resolvePreferredSystemLocale,
+  resolveSystemLocale,
+  SKILLHUB_CONTENT_LOCALES,
+} from '../locale';
 
 describe('desktop locale resolution', () => {
   it('routes simplified and traditional Chinese tags separately', () => {
@@ -39,5 +44,18 @@ describe('desktop locale resolution', () => {
     ['pt-Latn-BR', 'pt-BR'], ['pt-AO', 'pt-PT'], ['pt', 'pt-PT'],
   ])('resolves %s to %s', (tag, expected) => {
     expect(resolveSystemLocale(tag)).toBe(expected);
+  });
+
+  describe('SkillHub content locales', () => {
+    it('includes Turkish in the supported content locales', () => {
+      expect(SKILLHUB_CONTENT_LOCALES).toContain('tr');
+      expect(isSkillhubContentLocale('tr')).toBe(true);
+    });
+
+    it('rejects classical or unknown locales as content locales', () => {
+      expect(isSkillhubContentLocale('zh-Hans-x-lzh')).toBe(false);
+      expect(isSkillhubContentLocale('unknown')).toBe(false);
+      expect(isSkillhubContentLocale(null)).toBe(false);
+    });
   });
 });

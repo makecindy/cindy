@@ -608,6 +608,23 @@ enum WidgetText {
       "durationShort.hours": "{{h}}h",
       "durationShort.minutes": "{{m}}m",
     ],
+    "tr": [
+      "quotaName": "Abonelik kotası", "quotaDescription": "Her abonelikte ne kadar kaldığı ve ne zaman yenileneceği.",
+      "usageName": "Günlük kullanım", "usageDescription": "Bugünkü kullanım ve son günlerin eğilimi.",
+      "emptyTitle": "Henüz kota yok", "emptyBody": "Her abonelikte ne kadar kaldığını görmek için Cindy'yi açın ve bir bilgisayara bağlanın.",
+      "emptyUsageTitle": "Henüz kullanım yok", "emptyUsageBody": "Günlük kullanımınızı görmek için Cindy'yi açın ve bir bilgisayara bağlanın.",
+      "updateTitle": "Bilgisayarınızdaki Cindy'yi güncelleyin", "updateBody": "Güncellemeden sonra kota ve günlük kullanım burada görünecektir.",
+      "noSources": "Henüz kotası olan hesap yok", "valueBasis": "Abonelik değeri", "valueBasisLong": "Tahmini abonelik değeri",
+      "reset": "Sıfırlandı", "todayNone": "Bugün kullanım yok", "resetsIn": "{{duration}} içinde sıfırlanır", "other": "Diğer",
+      "today": "Bugün", "dailyAverage": "Günlük ortalama", "paid": "Ücretli", "tokenUnit": "token",
+      "monthScopeAll": "Son 30 gün · Tüm cihazlar", "monthScopeLocal": "Son 30 gün · Bu bilgisayar",
+      "scopeAll": "Tüm cihazlar", "scopeLocal": "Bu bilgisayar",
+      "harness.claude-code": "Claude Code", "harness.codex": "Codex", "harness.pi": "Pi",
+      "updatedJustNow": "Az önce güncellendi", "updatedMinutes": "{{n}} dk önce güncellendi", "updatedHours": "{{n}} sa önce güncellendi",
+      "updatedDays": "{{n}} gün önce güncellendi",
+      "durationShort.daysHours": "{{d}}g {{h}}sa", "durationShort.days": "{{d}}g", "durationShort.hoursMinutes": "{{h}}sa {{m}}dk",
+      "durationShort.hours": "{{h}}sa", "durationShort.minutes": "{{m}}dk",
+    ],
     "en": [
       "quotaName": "Subscription quota", "quotaDescription": "What each subscription has left and when it refills.",
       "usageName": "Daily usage", "usageDescription": "Today's usage and the trend of recent days.",
@@ -636,6 +653,7 @@ enum WidgetText {
     if id.hasPrefix("es") { return "es" }
     if id.hasPrefix("fr") { return "fr" }
     if id.hasPrefix("pt") { return id.contains("PT") ? "pt-PT" : "pt-BR" }
+    if id.hasPrefix("tr") { return "tr" }
     return "en"
   }
 

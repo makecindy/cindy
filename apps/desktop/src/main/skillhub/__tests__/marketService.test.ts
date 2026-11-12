@@ -270,7 +270,7 @@ describe('SkillhubMarketService', () => {
       assertVisibilityAllowed: vi.fn(),
     });
 
-    await service.updatePublished('demo', { summary: 'new', teamSlug: null });
+    await service.updatePublished('demo', { summary: 'new', teamSlug: null, contentLocale: 'tr' });
     await service.deletePublished('demo');
     await service.unpublishPublished('demo');
     const visibilityResult = await service.setPublishedVisibility({
@@ -288,7 +288,7 @@ describe('SkillhubMarketService', () => {
     expect(calls).toEqual([
       {
         path: '/api/skills-hub/skills/demo',
-        opts: { method: 'PATCH', body: { summary: 'new', teamSlug: null } },
+        opts: { method: 'PATCH', body: { summary: 'new', teamSlug: null, contentLocale: 'tr' } },
       },
       {
         path: '/api/skills-hub/skills/demo',

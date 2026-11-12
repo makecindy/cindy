@@ -270,6 +270,26 @@ export const ENDPOINT_MANIFEST_DIALOG_COPY: Record<
     offlineButton: '用上回之设',
     quitButton: '退 Cindy',
   },
+  tr: {
+    networkTitle: "Cindy Bağlantı Kuramadı",
+    configTitle: "Cindy Başlatılamadı",
+    networkBody:
+      "Başlangıç sırasında Cindy servislerine bağlanılamadı. Cihazınızın çevrim içi olduğunu kontrol edin ve ardından yeniden başlatmayı deneyin. Proxy veya kurumsal ağ kullanıyorsanız ağ değiştirmeyi deneyin.",
+    configBody:
+      "Cindy şu anda başlatma işlemini tamamlayamadı. Lütfen daha sonra tekrar deneyin. Sorun devam ederse destek ekibiyle iletişime geçin.",
+    errorLine: 'Hata: {{error}}',
+    diagnosticsHint: 'Yardıma ihtiyacınız varsa tanılama bilgilerini kopyalayıp destek iletisine yapıştırın.',
+    copyDiagnosticsButton: 'Tanılama Bilgilerini Kopyala',
+    copiedHint: 'Tanılama bilgileri kopyalandı. Lütfen destek iletinize yapıştırın.',
+    copyFailedHint: 'Tanılama bilgileri kopyalanamadı. Lütfen tekrar deneyin.',
+    noSavedConfigurationHint:
+      'Bu cihazda henüz kayıtlı bir yapılandırma yok, bu nedenle Cindy başlamadan önce yeniden bağlanmalıdır.',
+    offlineHint:
+      "Cindy'nin en son aldığı yapılandırmayla ({{savedAt}}) çevrimdışı olarak da başlatabilirsiniz. Ağ bağlantısı gerektiren özellikler kullanılamaz.",
+    retryButton: "Cindy'yi Yeniden Başlatmayı Dene",
+    offlineButton: 'Son Yapılandırmayı Kullan',
+    quitButton: "Cindy'den Çık",
+  },
 };
 
 export interface EndpointManifestDialogInput {

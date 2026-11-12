@@ -133,6 +133,7 @@ function buildPredictionPrompt(
   "pt-BR": "Match the user's language. The user types in Brazilian Portuguese.",
   "zh-Hant-x-lzh": "Match the user's language. The user types in Traditional Chinese.",
   "zh-Hans-x-lzh": "Match the user's language. The user types in Simplified Chinese.",
+  tr: "Match the user's language. The user types in Turkish.",
 };
   const wdLine = workingDir
     ? `Current working directory: ${escapeReferenceData(workingDir)}`

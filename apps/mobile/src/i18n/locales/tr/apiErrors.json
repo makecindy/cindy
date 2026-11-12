@@ -1,0 +1,6 @@
+{
+  "requestTimeout": "İstek zaman aşımına uğradı. Daha sonra tekrar deneyin.",
+  "networkUnavailable": "Ağ bağlantısı kurulamıyor. Bağlantınızı kontrol edip tekrar deneyin.{{webHint}}",
+  "networkUnavailableWebHint": " Web önizlemesi tarayıcının CORS politikası tarafından engellenmiş olabilir; Expo Go veya bir simülatörle test edin.",
+  "requestFailed": "İstek tamamlanamadı. Birazdan tekrar deneyin."
+}
