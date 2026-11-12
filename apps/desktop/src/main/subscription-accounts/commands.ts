@@ -27,11 +27,16 @@ export function parseSubscriptionSessionAccountQuery(
   const nativeSessionId = id('nativeSessionId');
   if (!sessionId && !nativeSessionId)
     throwIpcError('INVALID_PARAMS', 'Invalid subscription session');
+  const model = value.model;
+  if (model !== undefined && model !== null
+    && (typeof model !== 'string' || !model.trim() || model.length > 512))
+    throwIpcError('INVALID_PARAMS', 'Invalid subscription model');
   return {
     action: 'session',
     providerId: value.providerId,
     ...(sessionId ? { sessionId } : {}),
     ...(nativeSessionId ? { nativeSessionId } : {}),
+    ...(typeof model === 'string' ? { model } : {}),
   };
 }
 
@@ -78,6 +83,8 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
       ['limit', 16],
       ['weight', 100],
     ] as const) {
+      // limit: null clears the setting (unlimited concurrency).
+      if (key === 'limit' && value.limit === null) continue;
       if (
         value[key] !== undefined &&
         (!Number.isInteger(value[key]) ||

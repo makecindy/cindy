@@ -43,8 +43,15 @@ import {
   type SubscriptionPoolView,
   type SubscriptionProvider,
 } from '../../../shared/subscriptionAccounts';
-import type { ProviderGroupStrategy } from '../../../shared/providerGroup';
+import {
+  CONCURRENCY_LIMIT_OPTIONS,
+  CONCURRENCY_LIMIT_UNLIMITED,
+  concurrencyLimitFromOption,
+  concurrencyLimitOptionValue,
+  type ProviderGroupStrategy,
+} from '../../../shared/providerGroup';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
+import { isClassicalLocale, modernLocaleOf } from '../../../shared/locale';
 import { providersSettings } from './ProvidersSection.settings-search';
 import { useSettingDefinition } from './useSettingDefinition';
 
@@ -143,7 +150,11 @@ export function SubscriptionAccountsSection({
         toast.error(t(
           code === 'SUBSCRIPTION_CODEX_PROVIDER_AUTH'
             ? 'subscriptionAccounts.providerManagedAuth'
-            : 'subscriptionAccounts.failed',
+            : code === 'SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH'
+              ? 'subscriptionAccounts.loginIdentityMismatch'
+              : code === 'SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN'
+                ? 'subscriptionAccounts.loginIdentityUnknown'
+                : 'subscriptionAccounts.failed',
         ));
       await refresh();
     } finally {
@@ -275,7 +286,9 @@ export function SubscriptionAccountsSection({
                 );
                 // As in provider groups, a usable account reports its load; other states add it.
                 const running = t('providerGroup.member.runningCount', { count: account.running });
-                const state = account.paused
+                const state = account.authIssue === 'claude-account-mismatch'
+                  ? t('subscriptionAccounts.loginIdentityMismatchStatus')
+                  : account.paused
                   ? t('providerGroup.member.status.paused')
                   : account.status === 'ready'
                     ? account.running > 0
@@ -288,6 +301,26 @@ export function SubscriptionAccountsSection({
                   account.running > 0 && (account.paused || account.status !== 'ready')
                     ? `${state} · ${running}`
                     : state;
+                const connected = account.status === 'ready' || account.status === 'limited';
+                const expiresAt = account.loginExpiresAt ? Date.parse(account.loginExpiresAt) : NaN;
+                const remaining = expiresAt - Date.now();
+                const expiryKnown = Number.isFinite(expiresAt);
+                // The CLI supplies an estimate; passing it never changes the auth status.
+                const expiring = expiryKnown && remaining <= 7 * 86_400_000;
+                const expiryText = !expiryKnown
+                  ? t('subscriptionAccounts.loginExpiryUnknown')
+                  : remaining <= 0
+                    ? t('subscriptionAccounts.loginMayHaveExpired')
+                    : remaining <= 86_400_000
+                      ? t('subscriptionAccounts.loginExpiresSoon')
+                      : t('subscriptionAccounts.loginExpiresInDays', { days: Math.ceil(remaining / 86_400_000) });
+                const expiryDetail = expiryKnown ? t('subscriptionAccounts.loginExpiryDetail', {
+                  date: new Intl.DateTimeFormat(isClassicalLocale(locale) ? modernLocaleOf(locale) : locale,
+                    { dateStyle: 'medium', timeStyle: 'short' }).format(expiresAt),
+                }) : expiryText;
+                const signIn = () => void run({
+                  action: 'login', providerId, accountId: account.id, loginKey: crypto.randomUUID(),
+                });
                 const usageNode =
                   account.id === 'default' && defaultUsage ? (
                     defaultUsage
@@ -330,19 +363,39 @@ export function SubscriptionAccountsSection({
                               <AccountTag>{t('subscriptionAccounts.defaultTag')}</AccountTag>
                             )}
                           </div>
-                          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-12 text-[var(--text-secondary)]">
-                            <span
-                              aria-hidden="true"
-                              className="size-1.5 shrink-0 rounded-full"
-                              style={{
-                                background: account.paused
-                                  ? 'var(--remote-status-disconnected)'
-                                  : statusDot[account.status],
-                              }}
-                            />
-                            <span title={status} className="min-w-0 truncate">
-                              {status}
+                          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 text-12 text-[var(--text-secondary)]">
+                            <span className="inline-flex min-w-0 items-center gap-1.5">
+                              <span
+                                aria-hidden="true"
+                                className="size-1.5 shrink-0 rounded-full"
+                                style={{
+                                  background: account.paused
+                                    ? 'var(--remote-status-disconnected)'
+                                    : statusDot[account.status],
+                                }}
+                              />
+                              <span title={status} className="min-w-0 truncate">{status}</span>
                             </span>
+                            {providerId === 'anthropic' && connected && (
+                              <Tip text={expiryDetail}>
+                                <span className={cn('min-w-0', expiring && 'text-[var(--warning-fg)]')}>
+                                  {expiryText}
+                                </span>
+                              </Tip>
+                            )}
+                            {providerId === 'anthropic' && ((connected && expiring) || account.status === 'signed-out') && (
+                              <Button
+                                data-settings-search-action="Sign in again to this Claude account"
+                                variant="secondary"
+                                tone="quiet"
+                                size="sm"
+                                disabled={busy || account.running > 0}
+                                aria-label={t('subscriptionAccounts.loginAccountAria', { name })}
+                                onClick={signIn}
+                              >
+                                {t('subscriptionAccounts.loginAgain')}
+                              </Button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -350,19 +403,23 @@ export function SubscriptionAccountsSection({
                         <Select
                           {...accountSetting.controlProps}
                           label={t('providerGroup.member.limitAria', { name })}
-                          value={String(account.limit)}
+                          value={concurrencyLimitOptionValue(account)}
                           disabled={busy}
-                          className="h-8 w-[104px]"
-                          options={Array.from({ length: 16 }, (_, n) => ({
-                            value: String(n + 1),
-                            label: t('providerGroup.member.limitOption', { count: n + 1 }),
+                          size="compact"
+                          width="xs"
+                          options={CONCURRENCY_LIMIT_OPTIONS.map((value) => ({
+                            value,
+                            label:
+                              value === CONCURRENCY_LIMIT_UNLIMITED
+                                ? t('providerGroup.member.limitUnlimited')
+                                : t('providerGroup.member.limitOption', { count: Number(value) }),
                           }))}
                           onValueChange={(value) =>
                             void run({
                               action: 'configure',
                               providerId,
                               accountId: account.id,
-                              limit: Number(value),
+                              limit: concurrencyLimitFromOption(value),
                             })
                           }
                         />
@@ -372,7 +429,8 @@ export function SubscriptionAccountsSection({
                             label={t('providerGroup.member.weightAria', { name })}
                             value={String(account.weight)}
                             disabled={busy}
-                            className="h-8 w-[120px]"
+                            size="compact"
+                            width="xs"
                             options={[1, 2, 3, 5, 10, 20, 50, 100].map((weight) => ({
                               value: String(weight),
                               label: t('providerGroup.member.weightOption', { weight }),
@@ -424,14 +482,7 @@ export function SubscriptionAccountsSection({
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem
                               disabled={busy || account.running > 0}
-                              onSelect={() =>
-                                void run({
-                                  action: 'login',
-                                  providerId,
-                                  accountId: account.id,
-                                  loginKey: crypto.randomUUID(),
-                                })
-                              }
+                              onSelect={signIn}
                             >
                               <LogIn size={18} className="mr-2.5" />
                               {/* Signing in replaces this folder's own login; say so when it is already connected. */}

@@ -244,6 +244,22 @@ describe('provider group usage reads', () => {
     expect(h.readRemote).toHaveBeenCalledTimes(4);
   });
 
+  // Unit: an account pause invalidates quota while a read may still be in
+  // flight. Existing coverage only cleared completed reads, allowing old quota back.
+  it('discards a late quota reply after account settings invalidate it', async () => {
+    const h = harness();
+    let finish!: (value: ReturnType<typeof snapshot>) => void;
+    h.readRemote.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const pending = h.reader.read(REMOTE);
+    await Promise.resolve();
+    h.reader.invalidate();
+    finish(snapshot());
+    expect(await pending).toBeNull();
+    expect(h.reader.peek(REMOTE)).toBeNull();
+    await h.reader.read(REMOTE);
+    expect(h.readRemote).toHaveBeenCalledTimes(2);
+  });
+
   it('never requests another person’s subscription quota', async () => {
     const h = harness();
     expect(await h.reader.read(member('share', 'share:s1'))).toBeNull();

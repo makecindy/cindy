@@ -5,7 +5,7 @@
 // 背景(2026-07):热更 zip 与 agent 二进制共用 main 侧单槽(maxConcurrent=1)
 // FIFO 下载调度器,物理串行。splash 进度条必须跟随"当前真正在下载的那一段",
 // 段切换无动画归零;终态(update_done / download_failed / manifest_failed / failed)
-// 不被乱序尾包刷掉;热更下载失败要留在 splash 弹重试而不是被 'passed' 冲掉。
+// 不被乱序尾包刷掉；更新失败或超时不再阻断本地功能。
 // 本文件用可控的 electronAPI mock 逐事件重放各时序场景。
 
 import { act, renderHook, waitFor } from '@testing-library/react';
@@ -212,7 +212,7 @@ describe('EnvCheckContext 启动下载进度时序', () => {
     expect(result.current.status).toBe('failed');
   });
 
-  it('热更下载失败:reply error 落地为 download_failed,不被 passed 冲掉', async () => {
+  it('热更下载失败不阻断本地功能', async () => {
     const { result } = await mountAndKick();
 
     await act(async () => {
@@ -222,14 +222,29 @@ describe('EnvCheckContext 启动下载进度时序', () => {
     act(() => updateCb({ progress: 20, received: 20, total: 100 }));
     expect(result.current.status).toBe('updating');
 
-    // failed 事件先到 → download_failed;随后 reply 到达,旧实现在这里无条件
-    // setStatus('passed') 把重试弹窗冲掉(race 回归点)。
+    // Failure events must not briefly show a blocking retry dialog.
     act(() => updateCb({ failed: true, error: 'NETWORK' }));
-    expect(result.current.status).toBe('download_failed');
+    expect(result.current.status).toBe('updating');
 
     appUpdateCalls[0].resolve({ hasUpdate: true, action: 'none', error: 'download_failed' });
     await flush();
-    await waitFor(() => expect(result.current.status).toBe('download_failed'));
+    await waitFor(() => expect(result.current.status).toBe('passed'));
+  });
+
+  // Unit regression: a download that stops responding after progress used to
+  // extend the grace indefinitely. Late replies must not unmount local UI.
+  it('下载开始后断网，在固定预算后进入主界面且不被迟到事件拉回', async () => {
+    const { result } = await mountAndKick();
+    vi.useFakeTimers();
+    try {
+      await act(async () => envCheckCalls[1].resolve({ allPassed: true }));
+      act(() => updateCb({ progress: 20 }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+      expect(result.current.status).toBe('passed');
+      act(() => updateCb({ failed: true }));
+      await act(async () => appUpdateCalls[0].resolve({ hasUpdate: true, action: 'relaunch', version: '9.9.9' }));
+      expect(result.current.status).toBe('passed');
+    } finally { vi.useRealTimers(); }
   });
 
   it('manifest 拉取失败:放行进 app(离线用户不能被锁在 splash)', async () => {

@@ -100,6 +100,24 @@ function paceState(windows: readonly ProviderGroupMemberQuota[] | null, now: num
   return { urgency: pace?.urgency ?? null, quota: pace?.window ?? null };
 }
 
+/**
+ * 任意一组额度窗口的排序事实，供不经原始订阅快照的调用方(模型组)与供应商组用同一把尺子：用完的窗口算撞上限，
+ * 5 小时及更短的窗口只判断快不快满，按更长的窗口(周额度)排；只有短窗口的套餐按它排。已过重置时刻的旧窗口不算。
+ * 没有窗口时全部为未知，不当作没用过。
+ */
+export function quotaWindowsScheduleState(windows: readonly ProviderGroupMemberQuota[], now: number) {
+  const live = windows.filter((w) => w.resetAtMs === null || w.resetAtMs > now);
+  const full = live.filter((w) => w.usedPercent >= 100);
+  const long = live.filter((w) => w.windowMs > FIVE_HOURS_MS);
+  const paced = long.length > 0 ? long : live;
+  return {
+    limited: full.length > 0,
+    resetAtMs: full.length > 0 && full.every((w) => w.resetAtMs !== null) ? Math.max(...full.map((w) => w.resetAtMs!)) : null,
+    fiveHourTight: live.some((w) => w.windowMs <= FIVE_HOURS_MS && fiveHourTight(w.usedPercent, w.resetAtMs, now)),
+    ...paceState(paced.length > 0 ? paced : null, now),
+  };
+}
+
 interface CodexUsageWindow {
   usedPercent?: number;
   windowMinutes: number | null;
@@ -330,6 +348,7 @@ export function createProviderGroupUsageReader<T>(deps: ProviderGroupUsageReader
             : await deps.readRemote(member.agentDeviceId!, member.providerId);
           return deps.isCurrent() ? deps.parseSnapshot(raw, deps.now()) : null;
         }).catch(() => null).then((snapshot) => {
+          if (pending.get(key) !== request) return null;
           pending.delete(key);
           if (deps.isCurrent() && (member.kind !== 'local' || deps.cacheLocal)) {
             if (cached.size >= MAX_CACHED_ACCOUNTS) cached.delete(cached.keys().next().value!);
@@ -342,6 +361,6 @@ export function createProviderGroupUsageReader<T>(deps: ProviderGroupUsageReader
       const snapshot = await bounded(request);
       return deps.isCurrent() ? deps.parseSnapshot(snapshot, deps.now()) : null;
     },
-    invalidate() { cached.clear(); },
+    invalidate() { cached.clear(); pending.clear(); },
   };
 }

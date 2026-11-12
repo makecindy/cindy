@@ -58,6 +58,7 @@ export default {
     'process-history': { about: 'Owned teammate historical process, final reply outside', data: { ...base, sidebar: false, processRecord: true, workRemote: true } },
     'process-empty': { about: 'Final-only reply explains the empty process', data: { ...base, sidebar: false, processRecord: true, processEmpty: true, workRemote: true } },
     'process-unavailable': { about: 'Unavailable process shows a retry action', data: { ...base, sidebar: false, processRecord: true, processUnavailable: true, workRemote: true } },
+    'process-late': { about: 'Thinking persisted after the final seal remains inspectable', data: { ...base, sidebar: false, processRecord: true, processVariant: 'late', workRemote: true } },
     'process-other-owner': { about: 'Other members never receive a private process entry', data: { ...base, sidebar: false, processRecord: true, processOtherOwner: true, workRemote: true } },
     'work-thinking': { about: 'Actual group work status, scenario data: thinking', data: { ...base, messages: 2, workState: 'thinking' } },
     'work-tools': { about: 'Actual group work status, scenario data: command execution', data: { ...base, messages: 2, workState: 'testing' } },
@@ -217,6 +218,23 @@ export default {
       await page.getByText('任务与 PR 的进展已整理，以下是需要跟进的事项。').waitFor();
       if (definition.data.processOtherOwner) { assert.equal(await journal.count(), 0); return; }
       await journal.waitFor();
+      // 2026-11-09: one group-message identity precedes its process and reply.
+      // Use the real group row; private-chat MessageStream is outside this scenario.
+      const assertReplyOwnership = async () => {
+        const row = page.locator('[data-bot-group-message-id="process-answer"]');
+        const portrait = row.locator('article > div').first();
+        const reply = row.getByTestId('bot-group-bubble');
+        const author = row.locator('article > div').nth(1).locator(':scope > span').first();
+        const [recordBox, portraitBox, authorBox, replyBox] = await Promise.all([journal.boundingBox(), portrait.boundingBox(), author.boundingBox(), reply.boundingBox()]);
+        assert.ok(portraitBox.y <= recordBox.y + 0.5, 'The shared avatar precedes the process, never below it');
+        assert.ok(authorBox.y + authorBox.height <= recordBox.y + 0.5, 'The author header precedes the process');
+        assert.ok(recordBox.y + recordBox.height <= replyBox.y + 0.5, 'The process precedes the reply body');
+        assert.ok(Math.abs(recordBox.x - replyBox.x) <= 0.5, 'The group record and reply share the same content column');
+        assert.equal(await row.locator('article [data-teammate-process]').count(), 1, 'Process and reply belong to the same message article');
+        assert.equal(await portrait.locator(':scope > span').count(), 1, 'Only the shared message identity owns an avatar');
+        assert.equal(await row.locator('article').count(), 1, 'The record stays owned by one reply row');
+      };
+      await assertReplyOwnership();
       const heading = journal.locator(':scope > button');
       assert.equal(await heading.getAttribute('aria-expanded'), 'false');
       await heading.click();
@@ -228,8 +246,18 @@ export default {
         assert.equal(await heading.getAttribute('aria-expanded'), 'false');
         await ui.capture('process-collapsed');
         return;
+      } else if (definition.data.processVariant === 'late') {
+        await journal.getByText(await ui.t('chat.teammateProcess.thought'), { exact: true }).waitFor();
+        assert.equal(await journal.getByText('Hidden reasoning').count(), 0);
+        await ui.capture('late-work-expanded');
+        await heading.click();
+        await heading.click();
+        await journal.getByText(await ui.t('chat.teammateProcess.thought'), { exact: true }).waitFor();
+        await ui.capture('late-work-reopened');
+        return;
       }
       await journal.getByText('我先核对任务的最近进展，再看未完成 PR 的阻塞点。').waitFor();
+      await assertReplyOwnership();
       await ui.capture('history-expanded');
       const endError = await journal.evaluate(root => {
         const rail = root.querySelector('[data-process-guide]').getBoundingClientRect();
@@ -238,6 +266,7 @@ export default {
       });
       assert.ok(endError <= 0.5, `Group guide footer alignment error: ${endError}`);
       await heading.click();
+      await assertReplyOwnership();
       await ui.capture('history-collapsed');
       return;
     }
@@ -314,6 +343,14 @@ export default {
         startedAtMs: definition.data.workNoStart ? null : Date.now() - 83_000, lastActivityAtMs: Date.now(), attention: false,
         gracefulStopState: state === 'stopping' ? 'requested' : 'none', source: 'live' }]);
       await page.getByTestId('bot-group-progress').first().waitFor();
+      const avatars = page.locator('[data-testid="bot-group-work"] > div:first-child > span');
+      assert.ok(await avatars.count(), 'running work shows its teammate avatar');
+      for (const avatar of await avatars.all()) {
+        const box = await avatar.boundingBox();
+        assert.ok(box, 'work avatar is visible');
+        assert.equal(box.width, 28, 'work avatar matches the final reply avatar width');
+        assert.equal(box.height, 28, 'work avatar matches the final reply avatar height');
+      }
       if (definition.data.workQueuedStep) {
         const header = await page.getByTestId('bot-group-content-header').innerText();
         const sidebar = await page.getByTestId('bot-group-running').innerText();

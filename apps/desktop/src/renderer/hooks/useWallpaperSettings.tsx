@@ -28,8 +28,11 @@ import { WallpaperVideo } from '@/components/layout/WallpaperVideo';
 import { useWallpaperAsset } from './useWallpaperAsset';
 import { useWallpaperBackground } from './useWallpaperBackground';
 import { useReducedMotion } from './useReducedMotion';
+import { AppearanceMotionContext } from '../appearance/AppearanceMotionContext';
 
 export interface WallpaperSettings {
+  customizedKeys?: readonly string[];
+  motion?: number;
   wallpaperId: WallpaperId;
   wallpaperOverlay: number;
   wallpaperVisibility?: number | null;
@@ -75,6 +78,8 @@ function getInitialWallpaperSettings(): WallpaperSettings {
 
 function pickWallpaperSettings(settings: AppearanceSettings): WallpaperSettings {
   return {
+    ...(settings.customizedKeys ? { customizedKeys: settings.customizedKeys } : {}),
+    ...(settings.motion !== 1 ? { motion: settings.motion } : {}),
     wallpaperId: settings.wallpaperId,
     wallpaperOverlay: settings.wallpaperOverlay,
     wallpaperVisibility: settings.wallpaperVisibility,
@@ -91,9 +96,11 @@ function pickWallpaperSettings(settings: AppearanceSettings): WallpaperSettings 
 export function WallpaperSettingsProvider({
   children,
   desktopBackground = true,
+  onAppearanceChange,
 }: {
   children: ReactNode;
   desktopBackground?: boolean;
+  onAppearanceChange?: (settings: AppearanceSettings) => void;
 }) {
   const [settings, setSettings] = useState<WallpaperSettings>(getInitialWallpaperSettings);
   const [blurPreview, setBlurPreview] = useState<number | null>(null);
@@ -110,7 +117,7 @@ export function WallpaperSettingsProvider({
   const isDarkRef = useRef(isDark);
   isDarkRef.current = isDark;
   const visibility = visibilityPreview ?? getBackgroundVisibility(settings, isDark);
-  const reducedMotion = useReducedMotion();
+  const reducedMotion = useReducedMotion() || settings.motion === 0;
   const imageAsset = useWallpaperAsset(settings.wallpaperId, 'image', visibility > 0);
   const videoAsset = useWallpaperAsset(
     settings.wallpaperId,
@@ -162,7 +169,9 @@ export function WallpaperSettingsProvider({
     let disposed = false;
     let revision = 0;
     const apply = (next: AppearanceSettings) => {
-      const confirmed = pickWallpaperSettings(normalizeAppearanceSettings(next));
+      const normalized = normalizeAppearanceSettings(next);
+      onAppearanceChange?.(normalized);
+      const confirmed = pickWallpaperSettings(normalized);
       confirmedRef.current = confirmed;
       const optimistic = pendingRef.current.reduce(
         (current, pending) => ({ ...current, ...pending.patch }),
@@ -197,9 +206,9 @@ export function WallpaperSettingsProvider({
       disposed = true;
       unsubscribe();
     };
-  }, []);
+  }, [onAppearanceChange]);
 
-  const patch = useCallback((next: Partial<WallpaperSettings>) => {
+  const patch = useCallback((next: Partial<WallpaperSettings>, resetFields?: string[]) => {
     const merged = { ...settingsRef.current, ...next };
     settingsRef.current = merged;
     setSettings(merged);
@@ -212,8 +221,18 @@ export function WallpaperSettingsProvider({
       .catch(() => undefined)
       .then(async () => {
         try {
-          await bridge.setPatch(next);
+          const result = resetFields
+            ? await bridge.resetFields!(resetFields)
+            : await bridge.setPatch(next);
           pendingRef.current = pendingRef.current.filter((pending) => pending.id !== id);
+          if (resetFields && result) {
+            confirmedRef.current = pickWallpaperSettings(normalizeAppearanceSettings(result));
+            const optimistic = pendingRef.current.reduce(
+              (current, pending) => ({ ...current, ...pending.patch }), confirmedRef.current,
+            );
+            settingsRef.current = optimistic;
+            setSettings(optimistic);
+          }
         } catch {
           pendingRef.current = pendingRef.current.filter((pending) => pending.id !== id);
           const optimistic = pendingRef.current.reduce(
@@ -268,14 +287,16 @@ export function WallpaperSettingsProvider({
   const resetWallpaper = useCallback(() => {
     setBlurPreview(null);
     setVisibilityPreview(null);
-    patch({
+    const preview: Partial<WallpaperSettings> = {
       wallpaperId: DEFAULT_APPEARANCE_SETTINGS.wallpaperId,
       wallpaperOverlay: DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay,
       wallpaperVisibility: null,
       desktopVisibility: null,
       wallpaperBlur: null,
       wallpaperMotion: DEFAULT_APPEARANCE_SETTINGS.wallpaperMotion,
-    });
+    };
+    if (getBridge() && settingsRef.current.customizedKeys) patch({}, ['wallpaper', 'desktopVisibility']);
+    else patch(preview);
   }, [patch]);
 
   const value = useMemo<WallpaperSettingsContextValue>(
@@ -318,19 +339,21 @@ export function WallpaperSettingsProvider({
   );
 
   return (
-    <WallpaperSettingsContext.Provider value={value}>
-      {visibility > 0 && (
-        <WallpaperVideo
-          wallpaperId={settings.wallpaperId}
-          motion={settings.wallpaperMotion}
-          customWallpaperUrl={settings.customWallpaperUrl}
-          officialVideoUrl={videoAsset.url}
-          onFailure={onPlaybackFailure}
-          onReady={onPlaybackReady}
-        />
-      )}
-      {children}
-    </WallpaperSettingsContext.Provider>
+    <AppearanceMotionContext.Provider value={reducedMotion}>
+      <WallpaperSettingsContext.Provider value={value}>
+        {visibility > 0 && (
+          <WallpaperVideo
+            wallpaperId={settings.wallpaperId}
+            motion={settings.wallpaperMotion}
+            customWallpaperUrl={settings.customWallpaperUrl}
+            officialVideoUrl={videoAsset.url}
+            onFailure={onPlaybackFailure}
+            onReady={onPlaybackReady}
+          />
+        )}
+        {children}
+      </WallpaperSettingsContext.Provider>
+    </AppearanceMotionContext.Provider>
   );
 }
 
