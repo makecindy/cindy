@@ -11071,7 +11071,8 @@
         "capability": {
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} could not run this tool: group authorization has expired or does not allow this action. The teammate’s owner can make the request again in this group.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "Group authorization for {{name}} could not be verified, so this tool did not run. Try again after the connection recovers.",
-          "ATTACHMENTS_UNAVAILABLE": "Some attachments were not delivered to {{name}} because of a download failure or attachment limit. Resend the attachments needed for this request."
+          "ATTACHMENTS_UNAVAILABLE": "Some attachments were not delivered to {{name}} because of a download failure or attachment limit. Resend the attachments needed for this request.",
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connect your Cindy so Cindy can work for you (none of your computers has Cindy online right now)."
         }
       },
       "settings": {
@@ -11207,7 +11208,8 @@
           "waiting": "Waiting for a reply",
           "idle": "Idle",
           "failed": "Failed"
-        }
+        },
+        "othersSaid": "Others said in the thread"
       },
       "assistant": {
         "groupRecent": "Recent messages in the group",
@@ -11215,7 +11217,19 @@
         "threadRecent": "Recent messages in the thread",
         "threadNew": "New messages in the thread",
         "replyingTo": "Replying to \"{{name}}\": {{text}}",
-        "earlierOmitted": "(Earlier messages omitted)"
+        "earlierOmitted": "(Earlier messages omitted)",
+        "actingFor": "{{name}} · for {{person}}",
+        "checkout": {
+          "gitMissing": "(Cindy) The group's project {{repo}} is not on this computer yet: git is not installed here. {{guide}} Once it is installed, @Cindy again and Cindy will download the project and work in it.",
+          "signInOpened": "(Cindy) The group's project {{repo}} is not on this computer yet: connect your GitHub account first. Cindy opened GitHub sign-in on this computer; once you are signed in, @Cindy again and Cindy will download the project.",
+          "signIn": "(Cindy) The group's project {{repo}} is not on this computer yet: connect your GitHub account first. Sign in to GitHub in Cindy on this computer, then @Cindy again.",
+          "unavailable": "(Cindy) The group's project {{repo}} could not be downloaded to this computer: your GitHub account may not have access to it, or the network is unavailable. Make sure you can open the repository on GitHub, then @Cindy again.",
+          "installGit": {
+            "darwin": "In Terminal, run xcode-select --install and follow the prompts.",
+            "win32": "Download and install Git from https://git-scm.com/download/win with the default options.",
+            "linux": "Install git with your system's package manager (for example, sudo apt install git)."
+          }
+        }
       },
       "files": {
         "openFailed": "Couldn’t open the file. It may have been moved or deleted.",

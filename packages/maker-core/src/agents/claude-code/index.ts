@@ -4504,6 +4504,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(managedPlugins?.roots ?? []),
           ...(controllerManagedSkills?.claudePluginRoots ?? []),
           ...(opts.botRuntimeProfile?.skillPolicy.ownSkillPluginRoots ?? []),
+          // Host Skills of this session (e.g. 群协作 for a group's Cindy task); local runtime only.
+          ...(opts.remoteHostId ? [] : (opts.hostSkills ?? []).map((skill) => skill.pluginRoot)),
         ])];
       // Bind the native request id before the first HTTP request, not after SDK init.
       // A fork keeps its resume source but must publish a new destination id.

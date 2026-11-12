@@ -11026,7 +11026,8 @@
         "capability": {
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
-          "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。"
+          "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。",
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连接你的 Cindy 后才能让 Cindy 替你干活（你的电脑上现在没有在线的 Cindy）。"
         }
       },
       "settings": {
@@ -11162,7 +11163,8 @@
           "waiting": "等待回复",
           "idle": "空闲",
           "failed": "出错了"
-        }
+        },
+        "othersSaid": "话题里其他人说的"
       },
       "assistant": {
         "groupRecent": "群里最近的消息",
@@ -11170,7 +11172,19 @@
         "threadRecent": "话题里最近的消息",
         "threadNew": "话题里的新消息",
         "replyingTo": "回复「{{name}}」：{{text}}",
-        "earlierOmitted": "（更早的消息略去）"
+        "earlierOmitted": "（更早的消息略去）",
+        "actingFor": "{{name}} · 替 {{person}}",
+        "checkout": {
+          "gitMissing": "（Cindy）这个群的项目 {{repo}} 还没下载到这台电脑：这台电脑还没有安装 git。{{guide}}装好后再 @Cindy，Cindy 会自动下载项目并在里面干活。",
+          "signInOpened": "（Cindy）这个群的项目 {{repo}} 还没下载到这台电脑：需要先连接你的 GitHub 账号。Cindy 已在这台电脑上打开 GitHub 登录，登录好后再 @Cindy，Cindy 会自动下载项目。",
+          "signIn": "（Cindy）这个群的项目 {{repo}} 还没下载到这台电脑：需要先连接你的 GitHub 账号。请在这台电脑的 Cindy 里登录 GitHub，然后再 @Cindy。",
+          "unavailable": "（Cindy）这个群的项目 {{repo}} 没能下载到这台电脑：你的 GitHub 账号可能没有这个仓库的权限，或者网络不通。确认能在 GitHub 上打开这个仓库后再 @Cindy。",
+          "installGit": {
+            "darwin": "在「终端」里运行 xcode-select --install，按提示装好即可。",
+            "win32": "从 https://git-scm.com/download/win 下载 Git 安装，一路默认即可。",
+            "linux": "用系统的软件包管理器安装 git（例如 sudo apt install git）。"
+          }
+        }
       },
       "files": {
         "openFailed": "文件没能打开，可能已被移动或删除",

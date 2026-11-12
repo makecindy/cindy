@@ -174,7 +174,8 @@
     "capability": {
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} no pudo ejecutar la herramienta: la autorización del grupo ha caducado o no permite esta acción. La persona propietaria del compañero puede volver a solicitarla en este grupo.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "No se pudo verificar la autorización de grupo de {{name}}, por lo que la herramienta no se ejecutó. Vuelve a intentarlo cuando se restablezca la conexión.",
-      "ATTACHMENTS_UNAVAILABLE": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga o por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud."
+      "ATTACHMENTS_UNAVAILABLE": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga o por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud.",
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecta tu Cindy para que Cindy pueda trabajar por ti (ahora no tienes ningún Cindy conectado)."
     }
   },
   "plan": {

@@ -106,10 +106,10 @@ export function parseBotGroupTaskCardView(value: unknown): BotGroupTaskCardView 
 }
 
 /**
- * Revision 2 (2026-11-11): an ordinary task a teammate opened from the group with `send_to_session`
- * (bot-group-chat.md §10). The teammate's owner's computer posts it as the teammate's message and
- * edits that same message when the task's status changes; nobody else writes it. Clients that only
- * know revision 1 read the `fallback` line.
+ * Revision 2: an ordinary task opened from a group request with `send_to_session`
+ * (bot-group-chat.md §10). The computer that runs the task posts the card as the teammate that
+ * opened it and edits that same message when the task's status changes; nobody else writes it.
+ * Clients that only know revision 1 read the `fallback` line.
  */
 export const BOT_GROUP_LIVE_TASK_SCHEMA_REVISION = 2;
 /**
@@ -201,12 +201,10 @@ export function parseBotGroupLiveTaskView(value: unknown): BotGroupLiveTaskView 
   const data = value as Record<string, unknown>;
   if (typeof data.taskId !== 'string' || !/^[\w-]{1,128}$/.test(data.taskId)) return null;
   if (data.deviceId !== null && (typeof data.deviceId !== 'string' || !/^[\w.:-]{1,128}$/.test(data.deviceId))) return null;
-  // Early builds of this card said `finished` for the same state.
-  const state = data.state === 'finished' ? 'idle' : data.state;
+  const state = data.state;
   if (typeof state !== 'string' || !LIVE_STATES.includes(state as BotGroupLiveTaskState)) return null;
   if (typeof data.title !== 'string' || typeof data.requesterName !== 'string' || typeof data.botName !== 'string') return null;
   if (data.prUrl !== undefined && (typeof data.prUrl !== 'string' || !PR_URL.test(data.prUrl))) return null;
-  // Optional since 2026-11-11; cards posted before then have none.
   if (data.summary !== undefined && typeof data.summary !== 'string') return null;
   const summary = typeof data.summary === 'string' ? clip(data.summary, LINE_MAX) : '';
   return { taskId: data.taskId, deviceId: data.deviceId as string | null, title: clip(data.title, TITLE_MAX),

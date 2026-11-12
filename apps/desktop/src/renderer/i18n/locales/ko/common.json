@@ -11026,7 +11026,8 @@
         "capability": {
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}}의 도구가 실행되지 않았습니다. 그룹 권한이 만료되었거나 이 작업을 허용하지 않습니다. 동료 소유자가 이 그룹에서 다시 요청해 주세요.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}}의 그룹 권한을 확인할 수 없어 도구가 실행되지 않았습니다. 연결이 복구되면 다시 시도해 주세요.",
-          "ATTACHMENTS_UNAVAILABLE": "다운로드 실패 또는 첨부 개수 제한으로 일부 첨부 파일이 {{name}}에게 전달되지 않았습니다. 이번 요청에 필요한 파일을 다시 보내 주세요."
+          "ATTACHMENTS_UNAVAILABLE": "다운로드 실패 또는 첨부 개수 제한으로 일부 첨부 파일이 {{name}}에게 전달되지 않았습니다. 이번 요청에 필요한 파일을 다시 보내 주세요.",
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}님, Cindy가 대신 일하게 하려면 내 Cindy를 연결하세요(지금 온라인인 Cindy가 없습니다)."
         }
       },
       "settings": {
@@ -11162,7 +11163,8 @@
           "waiting": "답장 대기",
           "idle": "대기 중",
           "failed": "오류"
-        }
+        },
+        "othersSaid": "스레드에서 다른 사람이 한 말"
       },
       "assistant": {
         "groupRecent": "그룹의 최근 메시지",
@@ -11170,7 +11172,19 @@
         "threadRecent": "스레드의 최근 메시지",
         "threadNew": "스레드의 새 메시지",
         "replyingTo": "\"{{name}}\" 님에게 답장: {{text}}",
-        "earlierOmitted": "(이전 메시지는 생략)"
+        "earlierOmitted": "(이전 메시지는 생략)",
+        "actingFor": "{{name}} · {{person}} 대신",
+        "checkout": {
+          "gitMissing": "(Cindy) 이 그룹의 프로젝트 {{repo}}가 아직 이 컴퓨터에 없습니다: git이 설치되어 있지 않습니다. {{guide}} 설치한 뒤 다시 @Cindy를 부르면 Cindy가 프로젝트를 내려받아 그 안에서 작업합니다.",
+          "signInOpened": "(Cindy) 이 그룹의 프로젝트 {{repo}}가 아직 이 컴퓨터에 없습니다: 먼저 GitHub 계정을 연결해야 합니다. Cindy가 이 컴퓨터에서 GitHub 로그인을 열었습니다. 로그인한 뒤 다시 @Cindy를 부르면 프로젝트를 자동으로 내려받습니다.",
+          "signIn": "(Cindy) 이 그룹의 프로젝트 {{repo}}가 아직 이 컴퓨터에 없습니다: 먼저 GitHub 계정을 연결해야 합니다. 이 컴퓨터의 Cindy에서 GitHub에 로그인한 뒤 다시 @Cindy를 불러 주세요.",
+          "unavailable": "(Cindy) 이 그룹의 프로젝트 {{repo}}를 이 컴퓨터로 내려받지 못했습니다: GitHub 계정에 이 저장소 권한이 없거나 네트워크에 연결할 수 없습니다. GitHub에서 저장소를 열 수 있는지 확인한 뒤 다시 @Cindy를 불러 주세요.",
+          "installGit": {
+            "darwin": "터미널에서 xcode-select --install을 실행하고 안내에 따라 설치하세요.",
+            "win32": "https://git-scm.com/download/win 에서 Git을 내려받아 기본 설정으로 설치하세요.",
+            "linux": "시스템 패키지 관리자로 git을 설치하세요(예: sudo apt install git)."
+          }
+        }
       },
       "files": {
         "openFailed": "파일을 열지 못했습니다. 이동되었거나 삭제되었을 수 있습니다",

@@ -11026,7 +11026,8 @@
         "capability": {
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
-          "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。"
+          "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。",
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，連接你的 Cindy 後才能讓 Cindy 替你工作（你的電腦上現在沒有在線的 Cindy）。"
         }
       },
       "settings": {
@@ -11162,7 +11163,8 @@
           "waiting": "等待回覆",
           "idle": "閒置",
           "failed": "出錯了"
-        }
+        },
+        "othersSaid": "話題裡其他人說的"
       },
       "assistant": {
         "groupRecent": "群裡最近的訊息",
@@ -11170,7 +11172,19 @@
         "threadRecent": "話題裡最近的訊息",
         "threadNew": "話題裡的新訊息",
         "replyingTo": "回覆「{{name}}」：{{text}}",
-        "earlierOmitted": "（更早的訊息略去）"
+        "earlierOmitted": "（更早的訊息略去）",
+        "actingFor": "{{name}} · 替 {{person}}",
+        "checkout": {
+          "gitMissing": "（Cindy）這個群的專案 {{repo}} 還沒下載到這台電腦：這台電腦還沒有安裝 git。{{guide}}裝好後再 @Cindy，Cindy 會自動下載專案並在裡面工作。",
+          "signInOpened": "（Cindy）這個群的專案 {{repo}} 還沒下載到這台電腦：需要先連接你的 GitHub 帳號。Cindy 已在這台電腦上開啟 GitHub 登入，登入後再 @Cindy，Cindy 會自動下載專案。",
+          "signIn": "（Cindy）這個群的專案 {{repo}} 還沒下載到這台電腦：需要先連接你的 GitHub 帳號。請在這台電腦的 Cindy 裡登入 GitHub，然後再 @Cindy。",
+          "unavailable": "（Cindy）這個群的專案 {{repo}} 沒能下載到這台電腦：你的 GitHub 帳號可能沒有這個儲存庫的權限，或者網路不通。確認能在 GitHub 上開啟這個儲存庫後再 @Cindy。",
+          "installGit": {
+            "darwin": "在「終端機」裡執行 xcode-select --install，依提示安裝即可。",
+            "win32": "從 https://git-scm.com/download/win 下載 Git 安裝，全部使用預設選項即可。",
+            "linux": "用系統的套件管理工具安裝 git（例如 sudo apt install git）。"
+          }
+        }
       },
       "files": {
         "openFailed": "檔案沒能開啟，可能已被移動或刪除",

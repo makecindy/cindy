@@ -11160,7 +11160,8 @@
         "capability": {
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} n’a pas pu exécuter cet outil : l’autorisation du groupe a expiré ou ne permet pas cette action. Le propriétaire du coéquipier peut renouveler la demande dans ce groupe.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "L’autorisation de groupe de {{name}} n’a pas pu être vérifiée ; cet outil n’a donc pas été exécuté. Réessayez une fois la connexion rétablie.",
-          "ATTACHMENTS_UNAVAILABLE": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison d’un échec de téléchargement ou de la limite de pièces jointes. Renvoyez celles nécessaires à cette demande."
+          "ATTACHMENTS_UNAVAILABLE": "Certaines pièces jointes n’ont pas été transmises à {{name}} en raison d’un échec de téléchargement ou de la limite de pièces jointes. Renvoyez celles nécessaires à cette demande.",
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connectez votre Cindy pour que Cindy puisse travailler pour vous (aucun de vos Cindy n'est en ligne pour le moment)."
         }
       },
       "settings": {
@@ -11298,7 +11299,8 @@
           "waiting": "En attente de réponse",
           "idle": "Inactif",
           "failed": "En erreur"
-        }
+        },
+        "othersSaid": "Ce que d'autres ont dit dans le fil"
       },
       "assistant": {
         "groupRecent": "Messages récents du groupe",
@@ -11306,7 +11308,19 @@
         "threadRecent": "Messages récents du fil",
         "threadNew": "Nouveaux messages du fil",
         "replyingTo": "En réponse à « {{name}} » : {{text}}",
-        "earlierOmitted": "(Messages plus anciens omis)"
+        "earlierOmitted": "(Messages plus anciens omis)",
+        "actingFor": "{{name}} · pour {{person}}",
+        "checkout": {
+          "gitMissing": "(Cindy) Le projet {{repo}} du groupe n'est pas encore sur cet ordinateur : git n'est pas installé ici. {{guide}} Une fois installé, mentionnez à nouveau @Cindy et Cindy téléchargera le projet pour y travailler.",
+          "signInOpened": "(Cindy) Le projet {{repo}} du groupe n'est pas encore sur cet ordinateur : connectez d'abord votre compte GitHub. Cindy a ouvert la connexion GitHub sur cet ordinateur ; une fois connecté, mentionnez à nouveau @Cindy et le projet sera téléchargé.",
+          "signIn": "(Cindy) Le projet {{repo}} du groupe n'est pas encore sur cet ordinateur : connectez d'abord votre compte GitHub. Connectez-vous à GitHub dans Cindy sur cet ordinateur, puis mentionnez à nouveau @Cindy.",
+          "unavailable": "(Cindy) Le projet {{repo}} du groupe n'a pas pu être téléchargé sur cet ordinateur : votre compte GitHub n'y a peut-être pas accès, ou le réseau est indisponible. Vérifiez que vous pouvez ouvrir le dépôt sur GitHub, puis mentionnez à nouveau @Cindy.",
+          "installGit": {
+            "darwin": "Dans Terminal, exécutez xcode-select --install et suivez les instructions.",
+            "win32": "Téléchargez Git sur https://git-scm.com/download/win et installez-le avec les options par défaut.",
+            "linux": "Installez git avec le gestionnaire de paquets de votre système (par exemple sudo apt install git)."
+          }
+        }
       },
       "files": {
         "openFailed": "Impossible d'ouvrir le fichier. Il a peut-être été déplacé ou supprimé.",

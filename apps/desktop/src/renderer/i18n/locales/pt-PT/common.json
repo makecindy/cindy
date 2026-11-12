@@ -11160,7 +11160,8 @@
         "capability": {
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do colega pode repetir o pedido neste grupo.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, pelo que a ferramenta não foi executada. Tente novamente quando a ligação for restabelecida.",
-          "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha na transferência ou ao limite de anexos. Reenvie os anexos necessários para este pedido."
+          "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha na transferência ou ao limite de anexos. Reenvie os anexos necessários para este pedido.",
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, ligue o seu Cindy para que o Cindy possa trabalhar por si (nenhum Cindy seu está online neste momento)."
         }
       },
       "settings": {
@@ -11298,7 +11299,8 @@
           "waiting": "À espera de resposta",
           "idle": "Inativo",
           "failed": "Com erro"
-        }
+        },
+        "othersSaid": "O que outros disseram no tópico"
       },
       "assistant": {
         "groupRecent": "Mensagens recentes do grupo",
@@ -11306,7 +11308,19 @@
         "threadRecent": "Mensagens recentes do tópico",
         "threadNew": "Mensagens novas do tópico",
         "replyingTo": "Em resposta a \"{{name}}\": {{text}}",
-        "earlierOmitted": "(Mensagens anteriores omitidas)"
+        "earlierOmitted": "(Mensagens anteriores omitidas)",
+        "actingFor": "{{name}} · por {{person}}",
+        "checkout": {
+          "gitMissing": "(Cindy) O projeto {{repo}} do grupo ainda não está neste computador: o git não está instalado. {{guide}} Depois de instalar, mencione @Cindy outra vez e o Cindy transfere o projeto e trabalha nele.",
+          "signInOpened": "(Cindy) O projeto {{repo}} do grupo ainda não está neste computador: ligue primeiro a sua conta do GitHub. O Cindy abriu o início de sessão do GitHub neste computador; depois de iniciar sessão, mencione @Cindy outra vez e o projeto será transferido.",
+          "signIn": "(Cindy) O projeto {{repo}} do grupo ainda não está neste computador: ligue primeiro a sua conta do GitHub. Inicie sessão no GitHub através do Cindy neste computador e mencione @Cindy outra vez.",
+          "unavailable": "(Cindy) Não foi possível transferir o projeto {{repo}} do grupo para este computador: a sua conta do GitHub pode não ter acesso, ou a rede está indisponível. Confirme que consegue abrir o repositório no GitHub e mencione @Cindy outra vez.",
+          "installGit": {
+            "darwin": "No Terminal, execute xcode-select --install e siga as indicações.",
+            "win32": "Transfira o Git em https://git-scm.com/download/win e instale-o com as opções predefinidas.",
+            "linux": "Instale o git com o gestor de pacotes do seu sistema (por exemplo, sudo apt install git)."
+          }
+        }
       },
       "files": {
         "openFailed": "Não foi possível abrir o ficheiro. Pode ter sido movido ou eliminado.",

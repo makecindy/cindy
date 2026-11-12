@@ -11071,7 +11071,8 @@
         "capability": {
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} konnte dieses Werkzeug nicht ausführen: Die Gruppenberechtigung ist abgelaufen oder erlaubt diese Aktion nicht. Der Besitzer des Teammitglieds kann die Anfrage in dieser Gruppe erneut stellen.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "Die Gruppenberechtigung für {{name}} konnte nicht überprüft werden. Dieses Werkzeug wurde daher nicht ausgeführt. Versuche es erneut, sobald die Verbindung wiederhergestellt ist.",
-          "ATTACHMENTS_UNAVAILABLE": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers oder der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut."
+          "ATTACHMENTS_UNAVAILABLE": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers oder der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut.",
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, verbinde dein Cindy, damit Cindy für dich arbeiten kann (gerade ist kein Cindy von dir online)."
         }
       },
       "settings": {
@@ -11207,7 +11208,8 @@
           "waiting": "Wartet auf Antwort",
           "idle": "Inaktiv",
           "failed": "Fehlgeschlagen"
-        }
+        },
+        "othersSaid": "Andere im Thread schrieben"
       },
       "assistant": {
         "groupRecent": "Neueste Nachrichten in der Gruppe",
@@ -11215,7 +11217,19 @@
         "threadRecent": "Neueste Nachrichten im Thread",
         "threadNew": "Neue Nachrichten im Thread",
         "replyingTo": "Antwort an „{{name}}“: {{text}}",
-        "earlierOmitted": "(Ältere Nachrichten ausgelassen)"
+        "earlierOmitted": "(Ältere Nachrichten ausgelassen)",
+        "actingFor": "{{name}} · für {{person}}",
+        "checkout": {
+          "gitMissing": "(Cindy) Das Projekt {{repo}} der Gruppe ist noch nicht auf diesem Computer: git ist hier nicht installiert. {{guide}} Danach @Cindy erneut, dann lädt Cindy das Projekt herunter und arbeitet darin.",
+          "signInOpened": "(Cindy) Das Projekt {{repo}} der Gruppe ist noch nicht auf diesem Computer: Verbinde zuerst dein GitHub-Konto. Cindy hat die GitHub-Anmeldung auf diesem Computer geöffnet; nach der Anmeldung @Cindy erneut, dann lädt Cindy das Projekt herunter.",
+          "signIn": "(Cindy) Das Projekt {{repo}} der Gruppe ist noch nicht auf diesem Computer: Verbinde zuerst dein GitHub-Konto. Melde dich in Cindy auf diesem Computer bei GitHub an und @Cindy dann erneut.",
+          "unavailable": "(Cindy) Das Projekt {{repo}} der Gruppe konnte nicht auf diesen Computer geladen werden: Dein GitHub-Konto hat eventuell keinen Zugriff darauf, oder das Netzwerk ist nicht erreichbar. Prüfe, ob du das Repository auf GitHub öffnen kannst, und @Cindy dann erneut.",
+          "installGit": {
+            "darwin": "Führe im Terminal xcode-select --install aus und folge den Hinweisen.",
+            "win32": "Lade Git von https://git-scm.com/download/win herunter und installiere es mit den Standardoptionen.",
+            "linux": "Installiere git mit der Paketverwaltung deines Systems (zum Beispiel sudo apt install git)."
+          }
+        }
       },
       "files": {
         "openFailed": "Datei konnte nicht geöffnet werden. Sie wurde möglicherweise verschoben oder gelöscht.",

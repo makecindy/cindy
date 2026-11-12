@@ -46,8 +46,13 @@ export type BotGroupNoticeCode =
   | 'workdir-unavailable';
 export type BotGroupMemberStatus = 'active' | 'paused' | 'error' | 'archived' | 'deleting' | 'missing';
 
-/** Non-terminal host notices: these never settle a turn or change execution status. */
-export const BOT_GROUP_CAPABILITY_NOTICE_CODES = ['GROUP_AUTHORIZATION_REQUIRED', 'GROUP_AUTHORIZATION_UNAVAILABLE', 'ATTACHMENTS_UNAVAILABLE'] as const;
+/**
+ * Non-terminal host notices: these never settle a turn or change execution status.
+ * `GROUP_ASSISTANT_UNAVAILABLE` is the server's notice that a request to the group's Cindy found no
+ * online computer of its requester (card `cindy.group-assistant`, bot-group-chat.md「群里的 Cindy」);
+ * Desktop projects it under this code with the requester's name, it is never posted from a client.
+ */
+export const BOT_GROUP_CAPABILITY_NOTICE_CODES = ['GROUP_AUTHORIZATION_REQUIRED', 'GROUP_AUTHORIZATION_UNAVAILABLE', 'ATTACHMENTS_UNAVAILABLE', 'GROUP_ASSISTANT_UNAVAILABLE'] as const;
 export type BotGroupCapabilityNoticeCode = typeof BOT_GROUP_CAPABILITY_NOTICE_CODES[number];
 export function isBotGroupCapabilityNoticeCode(value: unknown): value is BotGroupCapabilityNoticeCode {
   return BOT_GROUP_CAPABILITY_NOTICE_CODES.some(code => code === value);
@@ -64,6 +69,23 @@ export function readBotGroupCapabilityNotice(message: {
 }
 export function buildBotGroupCapabilityNotice(code: BotGroupCapabilityNoticeCode, fallback: string) {
   return { type: 'card' as const, namespace: 'cindy.capability-notice', schemaRevision: 1, fallback, data: { code } };
+}
+
+/**
+ * The server's notice that a request to the group's Cindy found no online computer of its requester:
+ * a message by the group's Cindy carrying one `cindy.group-assistant` card of type
+ * `executor_unavailable`. Returns whom it is about, or null for anything else (including a look-alike
+ * card from a person).
+ */
+export function readBotGroupAssistantNotice(message: {
+  deleted?: unknown; author?: { kind?: unknown }; origin?: unknown;
+  content: readonly { type?: unknown; namespace?: unknown; schemaRevision?: unknown; data?: unknown }[];
+}): { type: 'executor_unavailable'; requesterId: string | null } | null {
+  if (message.deleted === true || message.author?.kind !== 'bot' || (message.origin !== undefined && message.origin !== 'bot')) return null;
+  const card = message.content.find(block => block.type === 'card' && block.namespace === 'cindy.group-assistant' && block.schemaRevision === 1);
+  const data = card?.data && typeof card.data === 'object' ? card.data as { type?: unknown; requesterId?: unknown } : null;
+  if (data?.type !== 'executor_unavailable') return null;
+  return { type: 'executor_unavailable', requesterId: typeof data.requesterId === 'string' && data.requesterId ? data.requesterId : null };
 }
 
 /** Public failure categories only; never transport raw Agent errors into a group. */
@@ -878,6 +900,15 @@ export const BOT_GROUP_ASSISTANT_AVATAR = 'cindy://avatar/preset/cindy';
  * group task. Deliberately not a `bot-group:` ID: those mark hidden lane turns and private replies.
  */
 export const botGroupAssistantClientId = (executionId: string, epoch: number) => `group-cindy:${executionId}:${epoch}`;
+/**
+ * The owner's words from a task card's Thread, delivered into the card's task (an ordinary visible
+ * task). Not a `bot-group:` ID either: the reply is the task's own and its end notifies as usual.
+ */
+export const botGroupCardTaskClientId = (executionId: string, epoch: number) => `group-task:${executionId}:${epoch}`;
+/** A group execution answered by a turn of an ordinary task (the group's Cindy task or a task card's task). */
+export function isBotGroupInTaskClientId(clientId: string | null | undefined): boolean {
+  return typeof clientId === 'string' && (clientId.startsWith('group-cindy:') || clientId.startsWith('group-task:'));
+}
 
 export function isBotGroupClientId(clientId: string | null | undefined): boolean {
   return typeof clientId === 'string' && clientId.startsWith(BOT_GROUP_CLIENT_ID_PREFIX);

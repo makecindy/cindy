@@ -4127,6 +4127,8 @@ export class PiAgent extends BaseAgent {
       const additionalSkillPaths = [...new Map([
         ...(loadProjectResourcesInPlace || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : botSkillSelection.explicitSkillPaths.filter((skillPath) =>
           !managedSourcePaths.has(path.resolve(skillPath)) && !managedSourceIdentities.has(canonicalSkillPath(skillPath)))),
+        // Host Skills of this session (e.g. 群协作 for a group's Cindy task); local, non-Review runtime only.
+        ...(opts.remoteHostId || reviewMode || hostedGuest || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : (opts.hostSkills ?? []).map((skill) => skill.path)),
       ].map((skillPath) => [canonicalSkillPath(skillPath), skillPath])).values()];
 
       // One explicit directory also works with --no-skills. Keep its lifetime in

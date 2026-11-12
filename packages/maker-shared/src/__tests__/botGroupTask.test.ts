@@ -66,13 +66,6 @@ describe('live group task card (revision 2)', () => {
       expect(botGroupLiveTaskStateOfPhase(phase)).toBe(state);
     });
 
-  it('reads a card an early build posted as finished as idle', () => {
-    const card = buildBotGroupLiveTaskCard({ taskId: 'task-1', deviceId: null, title: 'Fix login', state: 'idle', requesterName: 'Ann', botName: 'Cindy' },
-      { task: 'Task', untitled: 'Untitled task', states: { running: 'In progress', waiting: 'Waiting for a reply', idle: 'Idle', failed: 'Failed' } });
-    expect(card.fallback).toBe('[Task] Fix login · Idle');
-    expect(readBotGroupLiveTaskCard({ ...card, data: { ...card.data, state: 'finished' } })?.state).toBe('idle');
-  });
-
   // 2026-11-11 owner decision: the card says where the task stopped after its state. The line is
   // optional data in revision 2, so cards posted before it and clients that ignore it still read.
   it('carries where the task stopped after the state, and reads cards without it', () => {

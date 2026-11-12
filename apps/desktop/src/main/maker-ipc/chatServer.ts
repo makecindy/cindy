@@ -1,4 +1,4 @@
-import { createChatWorkPolling, createWorkRequestGate, WorkRequestDeferred, type WorkActor } from './chatWorkPolling.js';
+import { createChatWorkPolling, createWorkRequestGate, WorkRequestDeferred } from './chatWorkPolling.js';
 import { teammateChatActivity } from '@cindy/maker-shared/teammate-status';
 import { prepareChatReplyFiles } from './chatServerReplyFiles.js';
 import type { ChatUploadAttachment } from './chatServerMedia.js';
@@ -26,7 +26,10 @@ import { chatInviteShareBase, createChatInviteShare, notifyChatInviteRevoked, re
 import { createChatMedia } from './chatServerMedia.js';
 import { mergeChatReplyAttachments } from './chatServerReplyAttachments.js';
 import { prepareChatReplyImages } from './chatServerReplyImages.js';
-import { chatServerAssistantSessions, chatServerTaskCards, chatServerWorkspaces, type ChatAssistantSessionRecord, type ChatLiveTaskCardRecord } from './chatServerWorkspaces.js';
+import { chatServerAssistantSessions, chatServerTaskCards, chatServerWorkspaces } from './chatServerWorkspaces.js';
+import { createGroupProjectFolders } from './groupProjectFolder.js';
+import { createGroupTaskCards } from './groupTaskCards.js';
+import { createGroupAssistantTasks, formatGroupRequest, type GroupAssistantTask } from './groupAssistantTask.js';
 import { buildPlanStepBrief, draftPlanSteps, type PlanStepDraft } from './botGroupDivision.js';
 import { botGroupMentionAudience, resolveBotGroupMentions, splitBotGroupRelaySteps, type BotGroupMentionMember } from '@cindy/maker-shared/botGroupMentions';
 import { chatMigrationReceipts } from './chatMigrationReceipts.js';
@@ -53,9 +56,9 @@ import {
   type BotGroupThreadShareView, type BotGroupThreadSummary, type BotGroupThreadUnread,
   type BotGroupDetail, type BotGroupMessageReaders, type BotGroupSpeaker, type BotGroupPlanView, type BotGroupFailure, type BotGroupMessageView, type BotGroupAttachment, type ChatServerApi,
   botGroupQuoteAttachmentName, botGroupQuoteExcerpt, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupQuote, readBotGroupQuoteCard, type BotGroupQuoteView,
-  readBotGroupTaskCard, readBotGroupLiveTaskCard, buildBotGroupLiveTaskCard, botGroupLiveTaskReplyLine, type BotGroupLiveTaskView, botGroupMessageSummaryText, botGroupProcessCard, readBotGroupProcessCard,
+  readBotGroupTaskCard, readBotGroupLiveTaskCard, botGroupMessageSummaryText, botGroupProcessCard, readBotGroupProcessCard,
   readBotGroupCapabilityNotice, buildBotGroupCapabilityNotice, type BotGroupCapabilityNoticeCode,
-  BOT_GROUP_ASSISTANT_AVATAR, BOT_GROUP_ASSISTANT_NAME, botGroupAssistantClientId,
+  BOT_GROUP_ASSISTANT_AVATAR, BOT_GROUP_ASSISTANT_NAME, botGroupAssistantClientId, botGroupCardTaskClientId, readBotGroupAssistantNotice,
 } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal, BotGroupPreparedAttachments } from './botGroupChatService.js';
 import { readPersistedReplyText } from './botGroupChatService.js';
@@ -84,6 +87,8 @@ interface Message {
   origin?: string; createdAt: string; deleted: boolean; threadRootId: string | null; revision?: number;
   /** Actor IDs this message names. */
   mentions?: string[]; mentionAudience?: 'humans' | 'bots' | 'everyone';
+  /** On a message by the group's Cindy: the person it spoke for. */
+  actingFor?: { actorId: string; name: string } | null;
 }
 interface Room {
   id: string; name: string; topic: string; description: string; response_mode: 'all' | 'mentioned'; speaking_mode: 'auto' | 'sequential';
@@ -144,16 +149,14 @@ interface Running {
   beforeFiles?: Map<string, string>;
   pauseStarted?: number;
   /**
-   * The turn runs in a task card's task, not a lane (bot-group-chat.md §10): the task is shared with
-   * its owner's own turns, so only this turn's exact input settles it and it is never stopped from here.
+   * The turn runs in an ordinary task, not a lane: a task card's task (bot-group-chat.md §10) or the
+   * task of the group's Cindy (§9). The task also runs its owner's own turns, so only this turn's
+   * exact input settles the execution and the task is never stopped from the group.
    */
   inTask?: boolean;
   /** Other teammates this reply may name with @ (servers with groupTeammateMentions). */
   mentionable?: BotGroupMentionMember[];
-  /**
-   * A request to the group's Cindy, delivered into this computer's ordinary group task (always with
-   * `inTask`: the task is the user's own, so only this input settles it and the group never stops it).
-   */
+  /** A request to the group's Cindy (always `inTask`). */
   assistant?: true;
   releaseToolAuthority?: () => void;
   capabilityNotices?: Map<BotGroupCapabilityNoticeCode, Promise<void>>;
@@ -299,10 +302,8 @@ const MAIN_GROUP_CONTEXT_MESSAGES = 12;
 const MAIN_GROUP_CONTEXT_CHARS = 600;
 /** The answer right before a queue turn, as much as a 分工 step's hand-off note (botGroupDivision). */
 const PREVIOUS_ANSWER_CHARS = 2000;
-/** A request to the group's Cindy carries at most this many of the group's newest messages. */
-const ASSISTANT_CONTEXT_MESSAGES = 20;
-/** Threads whose delivered position the group's task remembers, besides the main group. */
-const ASSISTANT_THREADS_KEPT = 20;
+/** Words delivered into a task carry at most this many of the group's newest messages as background. */
+const TASK_CONTEXT_MESSAGES = 20;
 function mainGroupContext<V extends { text: string }>(messages: Message[], view: (m: Message) => V) {
   const recent = messages.slice(-MAIN_GROUP_CONTEXT_MESSAGES).map(m => {
     const v = view(m);
@@ -488,7 +489,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   };
   let profiles: Array<typeof botProfiles.$inferSelect> = [];
   const workspaces = () => chatServerWorkspaces(config.baseUrl, selfId, current);
-  const taskCards = () => chatServerTaskCards(config.baseUrl, selfId, current);
   const planning = new Map<string, { botId: string; controller: AbortController }>();
   // Invalidate even a send still preparing/uploading its attachments. Its delayed
   // receipt must not start an arrangement after a newer message or control action.
@@ -516,35 +516,15 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     && (m.assistant === true || (!!assistantActorId && m.id === assistantActorId));
   /** A teammate someone owns: anyone but the group's own Cindy. */
   const isCompanion = (m: { id: string; kind: string; assistant?: boolean }) => m.kind === 'bot' && !isAssistant(m);
-  const assistantSessions = () => chatServerAssistantSessions(config.baseUrl, selfId, current);
   /** Group-scoped names: a companion carries its owner's name; the group's own Cindy is just Cindy. */
   const memberName = (m: Member, members: readonly Member[]) => isAssistant(m) ? BOT_GROUP_ASSISTANT_NAME : chatGroupMemberName(m, members);
-  // Registered project folders whose origin is a repository, briefly cached: settings reads and
-  // every group reply resolve the folder, and each lookup reads the git remotes of local projects.
-  // A found folder is kept for minutes; a miss only briefly, counted from when the lookup ends, so
-  // a reply burst shares one lookup while a checkout registered or cloned just now is found soon.
-  const repositoryFolders = new Map<string, { until: number; dir: Promise<string | null> }>();
-  function repositoryFolder(repo: string): Promise<string | null> {
-    const key = repo.toLowerCase();
-    const cached = repositoryFolders.get(key);
-    if (cached && Date.now() < cached.until) return cached.dir;
-    const entry: { until: number; dir: Promise<string | null> } = { until: Date.now() + 5 * 60_000, dir: Promise.resolve(null) };
-    entry.dir = (deps.findProjectDirsForRepo?.(repo) ?? Promise.resolve([]))
-      .then(dirs => dirs.length === 1 ? dirs[0]! : null, () => null)
-      .then(dir => { if (!dir) entry.until = Date.now() + 20_000; return dir; });
-    repositoryFolders.set(key, entry);
-    return entry.dir;
-  }
-  /**
-   * The group's project folder on this computer: the folder chosen here, else the one registered
-   * project whose git origin is the group's repository (bot-group-chat.md §7.5).
-   */
-  async function groupProjectFolder(room: Room): Promise<{ dir: string | null; auto: boolean }> {
-    const chosen = workspaces().read(room.id)?.projectDir ?? null;
-    if (chosen) return { dir: chosen, auto: false };
-    const repo = room.project?.kind === 'github' ? room.project.repo : null;
-    return { dir: repo ? await repositoryFolder(repo) : null, auto: true };
-  }
+  /** Where a group's work happens on this computer (`groupProjectFolder.ts`, bot-group-chat.md §7.5). */
+  const projectFolders = createGroupProjectFolders({
+    chosen: roomId => workspaces().read(roomId)?.projectDir ?? null,
+    get findRegistered() { return deps.findProjectDirsForRepo; },
+    get checkouts() { return deps.groupCheckouts; },
+    get validate() { return deps.validateProjectDir; },
+  });
   const pendingPlanCancels = new Map<string, Map<string, boolean>>();
   async function cancelPlanning(roomId: string, sourceId: string, failed = false) {
     if (!groupDiscussionParity) return;
@@ -1529,8 +1509,20 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       content: displayText(m), threadRootId: m.threadRootId, replyCount: 0, reactions: [], mentions: { all: false, botIds: [] },
       noticeCode, planId: null, files: [], attachments: [], createdAt: Date.parse(m.createdAt),
     };
-    const capabilityNoticeCode = readBotGroupCapabilityNotice(m);
     const member = members.find(member => member.id === m.authorId);
+    // The server's notice that the requester had no computer online for the group's Cindy.
+    const assistantNotice = member && isAssistant(member) ? readBotGroupAssistantNotice(m) : null;
+    const spokeFor = (actorId: string | null | undefined, fallback?: string) => {
+      const person = actorId ? members.find(candidate => candidate.id === actorId) : undefined;
+      return person ? memberName(person, ownerMembers) : fallback?.trim() || '';
+    };
+    if (assistantNotice) return { id: m.id, sequence: Number(m.seq), serverSequence: m.seq, kind: 'notice', capabilityNoticeCode: 'GROUP_ASSISTANT_UNAVAILABLE',
+      authorKind: 'bot', isSelf: false, authorBotId: m.authorId,
+      authorName: spokeFor(assistantNotice.requesterId ?? m.actingFor?.actorId, m.actingFor?.name),
+      content: displayText(m), threadRootId: m.threadRootId, replyCount: m.replyCount ?? 0, reactions: m.reactions ?? [], mentions: { all: false, botIds: [] },
+      noticeCode: null, planId: null, files: [], attachments: [], createdAt: Date.parse(m.createdAt) };
+    const capabilityNoticeCode = readBotGroupCapabilityNotice(m);
+    const actingName = m.actingFor?.actorId ? spokeFor(m.actingFor.actorId, m.actingFor.name) : '';
     const planCard = m.content.find(b => b.namespace === 'cindy.plan');
     const legacy = m.origin === 'import' ? m.content.find(b => b.namespace === 'cindy.local-history')?.data : undefined;
     const runtimeFailureCode = readImportedBotGroupRuntimeFailureCode(m);
@@ -1546,9 +1538,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     return { id: m.id, maskAttribution: m.maskAttribution, sequence: Number(m.seq), serverSequence: m.seq, deleted: m.deleted, kind: capabilityNoticeCode ? 'notice' : planCard ? 'plan' : 'message', ...(capabilityNoticeCode ? { capabilityNoticeCode } : {}), authorKind: legacy?.authorKind === 'system' ? 'system' : m.author.kind === 'human' ? 'user' : 'bot',
       isSelf: m.authorId === selfId, threadRootId: m.threadRootId, replyCount: m.replyCount ?? 0, reactions: m.reactions ?? [], ...(quote ? { quote } : {}), ...(task ? { task } : {}), ...(process ? { process } : {}),
       // The teammate's owner opens the task itself; other members see the card as last posted.
-      ...(liveTask ? { liveTask: { ...liveTask, ...(member?.ownerActorId === selfId ? { openable: true } : {}),
+      // The group's Cindy opens its card for the person it spoke for, whose computer runs the task.
+      ...(liveTask ? { liveTask: { ...liveTask, ...(member?.ownerActorId === selfId || (member && isAssistant(member) && m.actingFor?.actorId === selfId) ? { openable: true } : {}),
         ...(!liveTask.deviceId || liveTask.deviceId === selfDeviceId ? { here: true } : {}) } } : {}),
-      authorBotId: localBot(m.authorId)?.id ?? m.authorId, authorName: legacy?.authorKind === 'system' && typeof legacy.authorName === 'string' ? legacy.authorName : member ? memberName(member, ownerMembers) : m.author.name, content: displayText(m),
+      authorBotId: localBot(m.authorId)?.id ?? m.authorId, authorName: legacy?.authorKind === 'system' && typeof legacy.authorName === 'string' ? legacy.authorName
+        // The group's Cindy always shows whom it spoke for (「Cindy · 替 某人」), so nobody can pass as it.
+        : member && isAssistant(member) && actingName ? t('bots.groupChat.assistant.actingFor')
+          .replaceAll('{{name}}', () => BOT_GROUP_ASSISTANT_NAME).replaceAll('{{person}}', () => actingName)
+        : member ? memberName(member, ownerMembers) : m.author.name, content: displayText(m),
       mentions: { all: m.mentionAudience === 'humans' || m.mentionAudience === 'everyone', ...(m.mentionAudience === 'bots' || m.mentionAudience === 'everyone' ? { allBots: true } : {}), botIds: (m.mentions ?? []).map(actorId => localBot(actorId)?.id ?? actorId) }, noticeCode: null, planId: typeof planCard?.data?.planId === 'string' ? planCard.data.planId : null, files: [], attachments: [], createdAt: Date.parse(m.createdAt) };
   }
   /**
@@ -1918,7 +1915,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const executionFailures = summaryOnly || direct ? undefined : await failureSnapshot(roomId, s.members, [...(o.sourceMessageIds ?? []), ...page.map(m => m.id)], executions);
     const serverPlans = await plansRead;
     const workspace = workspaces().read(roomId);
-    const folder = direct ? { dir: null, auto: false } : await groupProjectFolder(s.room);
+    const folder = direct ? { dir: null, auto: false } : await projectFolders.shown(s.room);
     const plans = serverPlans.map(plan => planView(plan, s.members, workspace, Boolean(s.room.archived || s.room.dissolved_at)));
     const open = plans.find(p => ['proposed', 'running', 'waiting'].includes(p.status));
     // Keep execution identity across computers and concurrent threads. Only the executing
@@ -2225,210 +2222,37 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     notices.set(code, pending);
     return pending;
   }
-  /** Turn ends of tasks whose card is being posted, noted once the card is saved. */
-  const postingTaskCards = new Map<string, Array<[BotGroupLaneTerminal, boolean]>>();
+  /** Task cards this computer posted and keeps in step with their tasks (`groupTaskCards.ts`, bot-group-chat.md §10). */
+  const taskCards = createGroupTaskCards({
+    current, store: () => chatServerTaskCards(config.baseUrl, selfId, current), deviceId: () => selfDeviceId,
+    post: (roomId, actorId, body) => api<{ id?: string; revision?: number }>(`/conversations/${roomId}/messages`, 'POST', body, actorId),
+    edit: (roomId, messageId, actorId, body) => api<{ revision?: number }>(`/conversations/${roomId}/messages/${id.parse(messageId)}`, 'PATCH', body, actorId),
+    refusal: error => error instanceof ChatResponseError
+      ? { final: !retryableResponse(error), retryAt: error.retryAt, gone: [403, 404, 409, 410].includes(error.status) } : { final: false, gone: false },
+    get readTask() { return deps.readGroupTaskStatus; }, get condense() { return deps.condenseTaskReply; }, storedReply: readPersistedReplyText,
+    labels: () => ({ task: t('bots.groupChat.task.label'), untitled: t('bots.groupChat.task.untitled'),
+      states: { running: t('bots.groupChat.task.live.running'), waiting: t('bots.groupChat.task.live.waiting'),
+        idle: t('bots.groupChat.task.live.idle'), failed: t('bots.groupChat.task.live.failed') } }),
+    changed, log: deps.log,
+  });
   /**
-   * A task the teammate opened during this group execution shows in the group as a card, posted as
-   * the teammate where the request was (main group or Thread). This computer keeps the same message
-   * in step with the task afterwards (`syncTaskCards`); progress never adds messages.
+   * A task opened during this group execution shows in the group as a card, posted as the
+   * execution's teammate where the request was (main group or Thread). Its results quote-reply
+   * that request and name who asked.
    */
   async function postTaskCard(run: Running, s: Snapshot, threadRootId: string | undefined, task: { taskId: string; deviceId: string | null; title: string }) {
-    if (!current() || run.execution.mask_owner_id) return;
-    const member = (id?: string) => s.members.find(m => m.id === id);
-    const bot = member(run.execution.bot_id);
-    const view: BotGroupLiveTaskView = { taskId: task.taskId, deviceId: task.deviceId ?? selfDeviceId ?? null, title: task.title, state: 'running',
-      requesterName: (() => { const m = member(run.execution.requester_id); return m ? memberName(m, s.members) : ''; })(),
-      botName: bot ? memberName(bot, s.members) : actors.find(actor => actor.id === run.execution.bot_id)?.name ?? '' };
-    const ended = postingTaskCards.get(task.taskId) ?? [];
-    postingTaskCards.set(task.taskId, ended);
-    try {
-      const posted = await api<{ id: string; revision?: number }>(`/conversations/${run.execution.conversation_id}/messages`, 'POST', {
-        operationId: `task-card:${run.execution.id}:${task.taskId}`.slice(0, 160), content: [liveTaskCard(view)], mentions: [],
-        ...(threadRootId ? { threadRootId } : {}),
-      }, run.execution.bot_id);
-      if (!current() || typeof posted?.id !== 'string') return;
-      const cards = taskCards().read();
-      cards[posted.id] = { roomId: run.execution.conversation_id, botId: run.execution.bot_id, threadRootId: threadRootId ?? null,
-        ...view, ...(view.prUrl ? { prUrl: view.prUrl } : {}), revision: posted.revision ?? 1, createdAt: Date.now() };
-      taskCards().save(cards);
-      changed(run.execution.conversation_id);
-    } catch (error) {
-      deps.log?.warn('Group task card could not be posted', chatErrorDiagnostic(error));
-    } finally {
-      // A fast task can end its first turn before its card is saved: note those ends now, in order
-      // (an end arriving meanwhile still joins this list).
-      for (const [terminal, fromThread] of ended) await noteCardTaskTurn(terminal, fromThread, true)
-        .catch(error => deps.log?.warn('Group task card turn could not be noted', chatErrorDiagnostic(error)));
-      if (postingTaskCards.get(task.taskId) === ended) postingTaskCards.delete(task.taskId);
-    }
-  }
-  function liveTaskCard(view: BotGroupLiveTaskView) {
-    return buildBotGroupLiveTaskCard(view, { task: t('bots.groupChat.task.label'), untitled: t('bots.groupChat.task.untitled'),
-      states: { running: t('bots.groupChat.task.live.running'), waiting: t('bots.groupChat.task.live.waiting'),
-        idle: t('bots.groupChat.task.live.idle'), failed: t('bots.groupChat.task.live.failed') } });
-  }
-  /** Cards follow their task for a week; after that a card keeps what it last said. */
-  const TASK_CARD_FOLLOW_MS = 7 * 24 * 60 * 60_000;
-  /** A task's message that could not reach the group is retried with backoff, then dropped. */
-  const TASK_REPLY_ATTEMPTS = 8;
-  /** A one-paragraph reply this short is its own result in the main group. */
-  const TASK_RESULT_SHORT_CHARS = 140;
-  /** Turn ends a card remembers, so the same end seen again posts nothing again. */
-  const TASK_TURNS_KEPT = 20;
-  /** Results a card waits to write at most; an older one still unwritten is dropped. */
-  const TASK_PENDING_RESULTS_KEPT = 3;
-  /** Read-modify-write of one card record against the current file, never a stale copy. */
-  function updateTaskCard(messageId: string, change: (card: ChatLiveTaskCardRecord) => ChatLiveTaskCardRecord | null) {
-    if (!current()) return;
-    const cards = taskCards().read();
-    const card = cards[messageId];
-    if (!card) return;
-    const next = change(card);
-    if (next) cards[messageId] = next; else delete cards[messageId];
-    taskCards().save(cards);
-  }
-  /**
-   * A card task's turn ended on this computer (bot-group-chat.md §10, 2026-11-11). The card's
-   * Thread is the task's window in the group: the turn's reply goes there as the teammate, and the
-   * main group gets a short result that quotes the card. A turn that came in through the Thread has
-   * already answered there. A card posted inside a Thread cannot root its own, so its reply goes to
-   * that Thread and nothing to the main group. Every turn end gives the card its line.
-   */
-  async function noteCardTaskTurn(terminal: BotGroupLaneTerminal, fromThread: boolean, replay = false) {
-    if (!current() || !terminal.sessionId) return;
-    const waiting = replay ? undefined : postingTaskCards.get(terminal.sessionId);
-    if (waiting) { waiting.push([{ ...terminal }, fromThread]); return; }
-    const mine = Object.entries(taskCards().read()).filter(([, card]) => card.taskId === terminal.sessionId
-      && !(card.deviceId && selfDeviceId && card.deviceId !== selfDeviceId));
-    if (!mine.length) return;
-    let text = terminal.resultText;
-    if (terminal.outcome === 'done' && !text.trim() && terminal.resultMessageClientId)
-      text = (await readPersistedReplyText(terminal.sessionId, terminal.resultMessageClientId).catch(() => null)) ?? '';
-    text = isBotGroupNoReplyText(text) ? '' : text.trim();
-    const line = botGroupLiveTaskReplyLine(text);
-    // The turn's input and reply name its end; the error and the done that close one turn share both.
-    const turn = [terminal.activeInputClientId, terminal.resultMessageClientId].filter(Boolean).join(':');
-    const op = (kind: string, messageId: string) => `${kind}:${messageId}:${createHash('sha256').update(turn).digest('hex').slice(0, 32)}`;
-    const results: string[] = [];
-    for (const [messageId] of mine) updateTaskCard(messageId, card => {
-      if (turn && card.turns?.includes(turn)) return card;
-      const next: ChatLiveTaskCardRecord = { ...card, lastLine: line || undefined };
-      // A turn end that cannot be told apart from another is never posted.
-      if (!turn) return next;
-      next.turns = [...(card.turns ?? []), turn].slice(-TASK_TURNS_KEPT);
-      if (fromThread || !text) return next;
-      next.outbox = [...(card.outbox ?? []), { op: op('task-reply', messageId), text: text.slice(0, 16000), threadRootId: card.threadRootId ?? messageId }];
-      // Written down before the result is: a restart while the helper writes it still leaves it to do.
-      if (!card.threadRootId) {
-        next.pendingResults = [...(card.pendingResults ?? []), { op: op('task-result', messageId), text: text.slice(0, 16000) }].slice(-TASK_PENDING_RESULTS_KEPT);
-        results.push(messageId);
-      }
-      return next;
-    });
-    void syncTaskCards(true);
-    for (const messageId of results) await writeTaskResults(messageId);
-  }
-  /** Results being written on this computer now; a pass meanwhile leaves them to the writer. */
-  const writingTaskResults = new Set<string>();
-  /**
-   * The main-group result of each turn end still pending on a card: a short one-paragraph reply as
-   * it is, else the helper's 1–3 sentences, else the reply's line. It joins the outbox under the
-   * operation recorded with the turn end, so it is posted once even if written again after a restart.
-   */
-  async function writeTaskResults(messageId: string) {
-    for (const pending of taskCards().read()[messageId]?.pendingResults ?? []) {
-      if (!current() || writingTaskResults.has(pending.op)) continue;
-      writingTaskResults.add(pending.op);
-      try {
-        const text = pending.text;
-        const result = text.length <= TASK_RESULT_SHORT_CHARS && !/\n\s*\n/.test(text) ? text
-          : (await deps.condenseTaskReply?.(text).catch(() => null))?.trim() || botGroupLiveTaskReplyLine(text);
-        updateTaskCard(messageId, card => ({ ...card,
-          pendingResults: card.pendingResults?.filter(o => o.op !== pending.op),
-          outbox: !result || card.outbox?.some(o => o.op === pending.op) ? card.outbox
-            : [...(card.outbox ?? []), { op: pending.op, text: result.slice(0, 16000), threadRootId: null, quote: true }] }));
-      } finally { writingTaskResults.delete(pending.op); }
-      void syncTaskCards(true);
-    }
-  }
-  /**
-   * Posts what a card's task left for the group, oldest first, as the teammate and naming nobody;
-   * each message's operation makes a retry the same message. The next waits while one is retried.
-   */
-  async function postTaskOutbox(messageId: string) {
-    for (;;) {
-      const card = taskCards().read()[messageId];
-      const item = card?.outbox?.[0];
-      if (!current() || !card || !item || Date.now() < (item.retryAt ?? 0)) return;
-      const drop = (fresh: ChatLiveTaskCardRecord) => ({ ...fresh, outbox: fresh.outbox?.filter(o => o.op !== item.op) });
-      try {
-        await api(`/conversations/${card.roomId}/messages`, 'POST', {
-          operationId: item.op, mentions: [], ...(item.threadRootId ? { threadRootId: item.threadRootId } : {}),
-          content: [...(item.quote ? [buildBotGroupQuoteCard({ messageId, authorName: card.botName, authorKind: 'bot',
-            excerpt: botGroupQuoteExcerpt(card.title), attachmentCount: 0, attachmentName: null, sequence: null })] : []),
-          { type: 'text', text: item.text }],
-        }, card.botId);
-        updateTaskCard(messageId, drop);
-        changed(card.roomId);
-      } catch (error) {
-        const attempts = (item.attempts ?? 0) + 1;
-        const giveUp = attempts >= TASK_REPLY_ATTEMPTS || error instanceof ChatResponseError && !retryableResponse(error);
-        if (giveUp) deps.log?.warn('Group task message could not be posted', chatErrorDiagnostic(error));
-        updateTaskCard(messageId, fresh => giveUp ? drop(fresh) : { ...fresh, outbox: fresh.outbox?.map(o => o.op !== item.op ? o
-          // A rate limit's own wait wins when it is longer than the backoff.
-          : { ...o, attempts, retryAt: Math.max(Date.now() + 15_000 * 2 ** (attempts - 1), error instanceof ChatResponseError ? error.retryAt ?? 0 : 0) }) });
-        if (!giveUp) return;
-      }
-    }
-  }
-  let syncingTaskCards = false;
-  let syncTaskCardsAgain = false;
-  /** `soon`: a turn just ended; if a pass is under way, run another right after it. */
-  async function syncTaskCards(soon = false) {
-    if (syncingTaskCards) { if (soon) syncTaskCardsAgain = true; return; }
-    if (!current() || !deps.readGroupTaskStatus) return;
-    syncingTaskCards = true;
-    try {
-      for (const [messageId, card] of Object.entries(taskCards().read())) {
-        if (!current()) return;
-        if (Date.now() - card.createdAt > TASK_CARD_FOLLOW_MS) { updateTaskCard(messageId, () => null); continue; }
-        // Only the computer running the task reads it; another of my computers keeps its own cards.
-        if (card.deviceId && selfDeviceId && card.deviceId !== selfDeviceId) continue;
-        // A result left unwritten (the app quit while the helper wrote it) is written now.
-        if (card.pendingResults?.length) void writeTaskResults(messageId)
-          .catch(error => deps.log?.warn('Group task result could not be written', chatErrorDiagnostic(error)));
-        await postTaskOutbox(messageId);
-        const status = await deps.readGroupTaskStatus(card.taskId).catch(() => undefined);
-        if (status === undefined) continue;
-        if (status === null) { updateTaskCard(messageId, () => null); continue; }
-        const latest = taskCards().read()[messageId];
-        if (!latest) continue;
-        // A task with no recorded turn end (e.g. after a restart) is idle once it has had time to start.
-        const state = status.state ?? (latest.state === 'running' && Date.now() - latest.createdAt > 120_000 ? 'idle' : latest.state);
-        const next: BotGroupLiveTaskView = { taskId: latest.taskId, deviceId: latest.deviceId, title: status.title || latest.title, state,
-          requesterName: latest.requesterName, botName: latest.botName, ...(status.prUrl ?? latest.prUrl ? { prUrl: status.prUrl ?? latest.prUrl } : {}),
-          // Where it stopped comes with a turn's end. `running` and `waiting` are inside a turn, which
-          // has no reply yet, so they show no line.
-          ...((state === 'idle' || state === 'failed') && latest.lastLine ? { summary: latest.lastLine } : {}) };
-        if (next.title === latest.title && next.state === latest.state && next.prUrl === latest.prUrl && next.summary === latest.summary) continue;
-        try {
-          const edited = await api<{ revision?: number }>(`/conversations/${latest.roomId}/messages/${id.parse(messageId)}`, 'PATCH', {
-            operationId: `task-card:${messageId}:${latest.revision}`, expectedRevision: latest.revision, content: [liveTaskCard(next)],
-          }, latest.botId);
-          updateTaskCard(messageId, fresh => ({ ...fresh, title: next.title, state: next.state, prUrl: next.prUrl,
-            summary: next.summary, revision: edited?.revision ?? latest.revision + 1 }));
-          changed(latest.roomId);
-        } catch (error) {
-          // A deleted card, a teammate that left or a card edited elsewhere is no longer ours to keep.
-          if (error instanceof ChatResponseError && [403, 404, 409, 410].includes(error.status)) updateTaskCard(messageId, () => null);
-        }
-      }
-    } catch (error) {
-      deps.log?.warn('Group task cards could not be refreshed', chatErrorDiagnostic(error));
-    } finally {
-      syncingTaskCards = false;
-      if (syncTaskCardsAgain) { syncTaskCardsAgain = false; void syncTaskCards(); }
-    }
+    const { execution } = run;
+    if (execution.mask_owner_id) return;
+    const member = (actorId?: string) => s.members.find(m => m.id === actorId);
+    const name = (actorId?: string) => { const m = member(actorId); return m ? memberName(m, s.members) : ''; };
+    const requester = member(execution.requester_id);
+    const source = await readMessage(execution.conversation_id, execution.source_message_id).catch(() => undefined);
+    await taskCards.post({ ...task, executionId: execution.id, roomId: execution.conversation_id, botId: execution.bot_id,
+      threadRootId: threadRootId ?? null, requesterName: name(execution.requester_id),
+      botName: name(execution.bot_id) || actors.find(actor => actor.id === execution.bot_id)?.name || '',
+      requesterId: requester?.kind === 'human' && requester.state === 'joined' ? requester.id : null,
+      ...(source && !source.deleted && source.origin !== 'system' ? { quote: botGroupQuoteFromMessage({
+        ...messageView(source, s.members), content: quotedText(source), attachments: quotedAttachments(source) }) } : {}) });
   }
   async function validateExecutionAuthority(run: Running): Promise<void> {
     const execution = run.execution;
@@ -2519,43 +2343,65 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     return run.sessionId && !run.inTask ? deps.abortLane(run.sessionId).catch(() => undefined) : Promise.resolve();
   }
   /**
-   * The owner's own words in the Thread under a live task card go into the card's task, as one
-   * message marked with who said them, when the task is on this computer (bot-group-chat.md §10).
-   * It is this execution's turn: the task's reply reaches the Thread the way a Thread reply does.
-   * Other members' words keep the Thread lane (returns false): the task runs with the owner's
-   * logins, which other members do not get (2026-11-12). Anything else keeps the lane too.
+   * Group messages as background for a task: one shortened line each, oldest first, at most
+   * `TASK_CONTEXT_MESSAGES` of the newest. Messages without text are left out.
+   */
+  function contextLines(s: Snapshot, messages: readonly Message[]) {
+    const newest = [...messages].sort((a, b) => BigInt(a.seq) < BigInt(b.seq) ? -1 : BigInt(a.seq) > BigInt(b.seq) ? 1 : 0).slice(-TASK_CONTEXT_MESSAGES);
+    const lines = newest.flatMap(m => {
+      const text = bodyText(m).replace(/\s+/g, ' ').trim();
+      const member = s.members.find(candidate => candidate.id === m.authorId);
+      return text ? [`${member ? memberName(member, s.members) : m.author.name}：${text.length > MAIN_GROUP_CONTEXT_CHARS ? `${text.slice(0, MAIN_GROUP_CONTEXT_CHARS)}…` : text}`] : [];
+    });
+    return { lines, omitted: messages.length > newest.length };
+  }
+  /**
+   * The requester's own words in the Thread under a task card go into the card's task as one
+   * ordinary message, when this computer runs that task (bot-group-chat.md §10). It is this
+   * execution's turn: the task's reply to it is the Thread reply. The task runs with its owner's
+   * logins, so nobody else's words drive it: those keep the Thread lane (returns false), and the
+   * owner's next words from the Thread carry them along as background. A task that is gone keeps
+   * the lane too.
    */
   async function runInCardTask(run: Running, s: Snapshot, sourceRead: Promise<Message | undefined> | undefined): Promise<boolean> {
     const { execution } = run;
-    const bot = localBot(execution.bot_id);
-    if (!bot || !sourceRead || run.context?.kind !== 'message' || execution.plan_id || execution.mask_owner_id
+    const bot = run.assistant ? null : localBot(execution.bot_id);
+    if ((!run.assistant && !bot) || !sourceRead || run.context?.kind !== 'message' || execution.plan_id || execution.mask_owner_id
       || execution.mask_kind === 'digest' || execution.access_mode !== 'owner' || execution.requester_id !== selfId
       || !deps.readGroupTaskStatus) return false;
-    // A source that cannot be read fails on the lane path, as before.
+    // A source that cannot be read fails on the lane path.
     const source = await sourceRead.catch(() => undefined);
     if (!source?.threadRootId || source.deleted || source.origin !== 'user' || source.author?.kind !== 'human'
       || source.authorId !== selfId || source.maskAttribution) return false;
-    const card = taskCards().read()[source.threadRootId];
-    if (!card || card.roomId !== s.room.id || card.botId !== execution.bot_id
-      || (card.deviceId && selfDeviceId && card.deviceId !== selfDeviceId)) return false;
+    const rootId = source.threadRootId;
+    const card = taskCards.ofThread(s.room.id, rootId);
+    if (!card || card.botId !== execution.bot_id) return false;
     const words = source.content.filter(block => block.type === 'text').map(block => block.text ?? '').join('\n');
     if (!words.trim() || !await deps.readGroupTaskStatus(card.taskId).catch(() => null)) return false;
-    // The owner's own words speak for the owner exactly as an owner-started group round does.
     await validateExecutionAuthority(run);
     if (!current() || running.get(execution.id) !== run) throw new Error('STALE_EXECUTOR');
+    // What other people said in the Thread since the task last heard from it; teammates' replies are not words.
+    const thread = await api<Message[]>(`/conversations/${s.room.id}/messages?threadRootId=${id.parse(rootId)}&limit=50&before=${BigInt(source.seq)}`)
+      .catch(() => [] as Message[]);
+    const others = contextLines(s, thread.filter(m => m.threadRootId === rootId && m.id !== source.id && !m.deleted && m.origin === 'user'
+      && m.author.kind === 'human' && m.authorId !== selfId && (card.threadSeenSeq === undefined || BigInt(m.seq) > BigInt(card.threadSeenSeq)))).lines;
+    const message = formatGroupRequest({ words, heading: t('bots.groupChat.task.othersSaid'), background: others });
     const speaker = s.members.find(m => m.id === source.authorId);
-    run.sessionId = card.taskId; run.inTask = true;
-    const dispatched = await deps.dispatch({ targetSessionId: card.taskId, clientId: run.clientId, message: words, persistedContent: words,
+    // The turn belongs to the task from here on; a task that went away meanwhile gives it back to the lane.
+    const lane = { sessionId: run.sessionId, inTask: run.inTask, clientId: run.clientId };
+    Object.assign(run, { sessionId: card.taskId, inTask: true, clientId: botGroupCardTaskClientId(execution.id, execution.epoch) });
+    const dispatched = await deps.dispatch({ targetSessionId: card.taskId, clientId: run.clientId, message, persistedContent: message,
+      // The owner's own words speak for the owner, exactly as an owner-started group round does.
       autoReviewUserText: { kind: 'agent-request', request: { sessionId: card.taskId, clientId: run.clientId, plainBody: true, delegatedText: words } },
-      origin: { kind: 'session', senderSessionId: '', displayText: words, senderBotId: bot.id, senderBotName: bot.displayName,
+      origin: { kind: 'session', senderSessionId: '', displayText: message, ...(bot ? { senderBotId: bot.id, senderBotName: bot.displayName } : {}),
         groupThread: { groupId: s.room.id, groupName: s.room.name, speakerId: source.authorId,
           speakerName: speaker ? memberName(speaker, s.members) : source.author.name } },
       onAccepted: async () => {
         if (!current() || running.get(execution.id) !== run) throw new Error('STALE_EXECUTOR');
         run.accepted = true;
       } });
-    // The task went away meanwhile: answer in the Thread as before.
-    if (!dispatched.ok) { run.sessionId = ''; run.inTask = undefined; return false; }
+    if (!dispatched.ok) { Object.assign(run, lane); return false; }
+    taskCards.update(rootId, latest => ({ ...latest, threadSeenSeq: source.seq }));
     changed(s.room.id);
     return true;
   }
@@ -2851,98 +2697,55 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       throw error;
     }
   }
-  /**
-   * The group's Cindy on this computer (bot-group-chat.md「群里的 Cindy」, 2026-11-12): one ordinary
-   * visible task per group, under the group's project folder when this computer has it, else under
-   * 「对话」. A folder found or changed later opens a new task next time; the old one stays.
-   * One lookup per group at a time, so two requests arriving together share the same task.
-   */
-  const assistantSessionLookups = new Map<string, Promise<ChatAssistantSessionRecord>>();
-  function groupAssistantSession(room: Room): Promise<ChatAssistantSessionRecord> {
-    const previous = assistantSessionLookups.get(room.id) ?? Promise.resolve(undefined);
-    const lookup = previous.catch(() => undefined).then(async () => {
-      if (!deps.ensureGroupAssistantSession) throw new Error('MEMBER_UNAVAILABLE');
-      const folder = await groupProjectFolder(room);
-      const checked = folder.dir && deps.validateProjectDir ? await deps.validateProjectDir(folder.dir).catch(() => null) : null;
-      // A found folder that went away is looked up again next time; the task goes under 「对话」 now.
-      if (folder.dir && !checked?.ok && folder.auto && room.project?.kind === 'github') repositoryFolders.delete(room.project.repo.toLowerCase());
-      const projectDir = checked?.ok ? checked.dir : null;
-      const saved = assistantSessions().read()[room.id];
-      const ensured = await deps.ensureGroupAssistantSession({
-        ...(saved && saved.projectDir === projectDir ? { sessionId: saved.sessionId } : {}), title: room.name, projectDir });
-      if (!ensured.ok) throw new Error(botGroupRuntimeFailureCode({ code: ensured.errorCode, message: ensured.message }));
-      if (!current()) throw new Error('OWNER_CHANGED');
-      const all = assistantSessions().read();
-      const record: ChatAssistantSessionRecord = all[room.id]?.sessionId === ensured.sessionId ? all[room.id]! : { sessionId: ensured.sessionId, projectDir };
-      all[room.id] = record;
-      assistantSessions().save(all);
-      return record;
-    });
-    assistantSessionLookups.set(room.id, lookup);
-    void lookup.catch(() => undefined).finally(() => { if (assistantSessionLookups.get(room.id) === lookup) assistantSessionLookups.delete(room.id); });
-    return lookup;
-  }
-  /** Delivered up to `seq` in this conversation of the group's task; the next request carries only newer messages. */
-  function noteAssistantDelivery(roomId: string, sessionId: string, scope: string, seq: string) {
-    if (!current()) return;
-    const all = assistantSessions().read();
-    const record = all[roomId];
-    if (record?.sessionId !== sessionId) return;
-    const delivered = { ...record.deliveredSeq };
-    if (delivered[scope] !== undefined && BigInt(delivered[scope]!) >= BigInt(seq)) return;
-    delete delivered[scope];
-    delivered[scope] = seq;
-    // The main group and the latest Threads; an older Thread starts over with its recent messages.
-    const threads = Object.keys(delivered).filter(key => key !== 'main');
-    for (const key of threads.slice(0, Math.max(0, threads.length - ASSISTANT_THREADS_KEPT))) delete delivered[key];
-    all[roomId] = { ...record, deliveredSeq: delivered };
-    assistantSessions().save(all);
+  /** The group's Cindy on this computer: one ordinary visible task per group (`groupAssistantTask.ts`). */
+  const assistantTasks = createGroupAssistantTasks({
+    current, store: () => chatServerAssistantSessions(config.baseUrl, selfId, current),
+    folders: projectFolders, get ensureSession() { return deps.ensureGroupAssistantSession; },
+  });
+  /** What a request says when the group's repository is not on this computer yet: why, and what to do. */
+  function checkoutNote(repo: string, pending: NonNullable<GroupAssistantTask['pending']>): string {
+    const key = pending.status === 'git-missing' ? 'gitMissing' : pending.status === 'sign-in-required'
+      ? pending.signInOpened ? 'signInOpened' : 'signIn' : 'unavailable';
+    const guide = t(`bots.groupChat.assistant.checkout.installGit.${process.platform === 'darwin' ? 'darwin' : process.platform === 'win32' ? 'win32' : 'linux'}`);
+    return t(`bots.groupChat.assistant.checkout.${key}`).replaceAll('{{repo}}', () => repo).replaceAll('{{guide}}', () => guide);
   }
   /**
-   * What a request to the group's Cindy carries besides the requester's words: the messages of its
+   * The group's messages a request to the group's Cindy carries as background: those of its
    * conversation (main group or its Thread) since the last request delivered into the task — the
-   * recent ones on the first — newest last and bounded, each on one shortened line, plus the message
-   * it replies to. This task's own answers are already in it and are left out.
+   * recent ones on the first — plus the message it replies to. The task's own answers are already
+   * in it and are left out.
    */
-  async function assistantRequestContext(s: Snapshot, source: Message, sessionId: string, delivered: string | undefined) {
+  async function assistantRequestBackground(s: Snapshot, source: Message, sessionId: string, delivered: string | undefined) {
     const threadRootId = source.threadRootId;
     const page = await api<Message[]>(`/conversations/${s.room.id}/messages?${threadRootId ? `threadRootId=${id.parse(threadRootId)}` : 'all=true'}&limit=50&before=${BigInt(source.seq)}`);
     const ownAnswer = (m: Message) => m.content.some(block => {
       const ref = readBotGroupProcessCard(block);
       return ref?.sessionId === sessionId && (!ref.deviceId || ref.deviceId === selfDeviceId);
     });
-    const newer = (m: Message) => delivered === undefined || BigInt(m.seq) > BigInt(delivered);
-    const messages = page.filter(m => (threadRootId ? m.threadRootId === threadRootId : !m.threadRootId)
-      && m.id !== source.id && !m.deleted && m.origin !== 'system' && newer(m) && !ownAnswer(m));
+    const messages = page.filter(m => (threadRootId ? m.threadRootId === threadRootId : !m.threadRootId) && m.id !== source.id
+      && !m.deleted && m.origin !== 'system' && (delivered === undefined || BigInt(m.seq) > BigInt(delivered)) && !ownAnswer(m));
     // A Thread's first request starts from the post the Thread discusses.
     if (threadRootId && delivered === undefined) {
       const root = await readMessage(s.room.id, threadRootId);
       if (root && !root.deleted && !messages.some(m => m.id === root.id)) messages.push(root);
     }
-    messages.sort((a, b) => BigInt(a.seq) < BigInt(b.seq) ? -1 : BigInt(a.seq) > BigInt(b.seq) ? 1 : 0);
-    const name = (m: Message) => { const member = s.members.find(candidate => candidate.id === m.authorId); return member ? memberName(member, s.members) : m.author.name; };
-    const line = (who: string, text: string) => `${who}：${text.length > MAIN_GROUP_CONTEXT_CHARS ? `${text.slice(0, MAIN_GROUP_CONTEXT_CHARS)}…` : text}`;
-    const lines = messages.slice(-ASSISTANT_CONTEXT_MESSAGES).flatMap(m => {
-      const text = bodyText(m).replace(/\s+/g, ' ').trim();
-      return text ? [line(name(m), text)] : [];
-    });
+    const { lines, omitted } = contextLines(s, messages);
     const quote = readBotGroupQuote(source.content);
+    const first = delivered === undefined;
     return {
-      heading: t(threadRootId ? delivered === undefined ? 'bots.groupChat.assistant.threadRecent' : 'bots.groupChat.assistant.threadNew'
-        : delivered === undefined ? 'bots.groupChat.assistant.groupRecent' : 'bots.groupChat.assistant.groupNew'),
-      lines, omitted: messages.length > ASSISTANT_CONTEXT_MESSAGES,
-      ...(quote?.excerpt ? { replyingTo: t('bots.groupChat.assistant.replyingTo')
-        .replaceAll('{{name}}', () => quote.authorName).replaceAll('{{text}}', () => quote.excerpt) } : {}),
+      heading: t(`bots.groupChat.assistant.${threadRootId ? first ? 'threadRecent' : 'threadNew' : first ? 'groupRecent' : 'groupNew'}`),
+      background: [
+        ...(quote?.excerpt ? [t('bots.groupChat.assistant.replyingTo').replaceAll('{{name}}', () => quote.authorName).replaceAll('{{text}}', () => quote.excerpt)] : []),
+        ...(omitted ? [t('bots.groupChat.assistant.earlierOmitted')] : []), ...lines],
     };
   }
   /**
-   * A request to the group's Cindy (bot-group-chat.md「群里的 Cindy」, 2026-11-12). It runs only on
-   * the requester's own computer — the server hands it to no one else — with the requester's own
-   * logins, model and permission: it is one ordinary visible message in this computer's group task,
-   * the owner's own request, like an owner message to their bot in an IM channel. The task's turn for
-   * this exact input is the reply (`inTask`): its end completes the execution, and nothing from the
-   * group ever stops the task. Blockers (permission, login, questions) are handled in the task; the
-   * group shows 「处理中」 under the lease meanwhile. Tasks it opens show as cards, as from a lane.
+   * A request to the group's Cindy (bot-group-chat.md §9). It runs only on the requester's own
+   * computer — the server hands it to no one else — with the requester's own logins, model and
+   * permission: one ordinary visible message in this computer's task for the group, the owner's own
+   * request, like an owner's message to their bot in an IM channel. The task's turn for this exact
+   * input is the reply (`inTask`): its end completes the execution, and nothing from the group ever
+   * stops the task. The group shows 「处理中」 under the lease meanwhile. Tasks it opens show as cards.
    */
   async function runAssistantExecution(execution: Execution, lane?: string) {
     if (running.has(execution.id)) return;
@@ -2950,9 +2753,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       started: Date.now(), lane, inTask: true, assistant: true, context: { kind: 'message' } };
     running.set(execution.id, run);
     resolveLane(run);
+    const live = () => current() && running.get(execution.id) === run;
     try {
       z.object({ access_mode: z.enum(['owner', 'chat', 'tools']), access_revision: z.number().int().positive() }).parse(execution);
-      // Never another member's request: it would run with this computer's logins (2026-11-12).
+      // Never another member's request: it would run with this computer's logins.
       if (execution.requester_id !== selfId) throw new Error('MEMBER_UNAVAILABLE');
       if (!ordinaryExecution(execution) || execution.plan_id || execution.mask_owner_id || execution.mask_kind) throw new Error('INVALID_EXECUTION_TRIGGER');
       const roomId = execution.conversation_id;
@@ -2964,29 +2768,31 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const source = await sourceRead;
       if (!source || source.deleted || source.origin === 'system') throw new Error('INVALID_EXECUTION_TRIGGER');
       await validateExecutionAuthority(run);
-      if (!current() || running.get(execution.id) !== run) throw new Error('STALE_EXECUTOR');
-      const record = await groupAssistantSession(s.room);
-      const sessionId = record.sessionId;
+      if (!live()) throw new Error('STALE_EXECUTOR');
+      // Words in the Thread of a task card it posted go into that task.
+      if (source.threadRootId && await runInCardTask(run, s, Promise.resolve(source))) return;
+      const task = await assistantTasks.forRequest(s.room, () => running.get(execution.id) === run && !run.settlement);
+      if (!live()) throw new Error('STALE_EXECUTOR');
+      const sessionId = task.sessionId;
       const threadRootId = source.threadRootId ?? undefined;
       const scope = threadRootId ?? 'main';
-      const context = await assistantRequestContext(s, source, sessionId, record.deliveredSeq?.[scope]);
+      const { heading, background } = await assistantRequestBackground(s, source, sessionId, task.delivered[scope]);
       // The request's own files go with it, like a task message's.
       const mediaIds = source.content.flatMap(block => block.type === 'media' && block.mediaId ? [block.mediaId] : []).slice(0, BOT_GROUP_ATTACHMENTS_MAX);
       const downloads = await settleBounded(mediaIds, TURN_DOWNLOAD_CONCURRENCY, mediaId => media.download(roomId, id.parse(mediaId)));
       const attachments = downloads.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
       if (attachments.length < mediaIds.length) void postCapabilityNotice(run, 'ATTACHMENTS_UNAVAILABLE', threadRootId);
-      if (!current() || running.get(execution.id) !== run) throw new Error('STALE_EXECUTOR');
+      if (!live()) throw new Error('STALE_EXECUTOR');
       run.sessionId = sessionId;
       run.releaseToolAuthority = registerGroupToolAuthority(sessionId, {
         botId: execution.bot_id, mode: 'owner', sourceGroup: { groupId: s.room.id, name: s.room.name },
-        isCurrent: () => current() && running.get(execution.id) === run && !run.settlement,
+        isCurrent: () => live() && !run.settlement,
         validate: () => validateExecutionAuthority(run),
-        onTaskCreated: task => void postTaskCard(run, s, threadRootId, task),
+        onTaskCreated: created => void postTaskCard(run, s, threadRootId, created),
       });
       const words = bodyText(source).trim();
-      // The context is part of the visible message, under its own heading (no hidden envelope).
-      const background = [...(context.replyingTo ? [context.replyingTo] : []), ...(context.omitted ? [t('bots.groupChat.assistant.earlierOmitted')] : []), ...context.lines];
-      const message = context.lines.length || context.replyingTo ? `${words}\n\n${context.heading}\n${background.join('\n')}` : words;
+      const message = formatGroupRequest({ words, heading, background,
+        ...(task.pending && s.room.project ? { note: checkoutNote(s.room.project.repo, task.pending) } : {}) });
       const self = s.members.find(m => m.id === selfId);
       const dispatched = await deps.dispatch({ targetSessionId: sessionId, clientId: run.clientId, message, persistedContent: message,
         // The requester's own words are the request this turn speaks for; the group's messages are background.
@@ -2996,11 +2802,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         ...(attachments.length ? { attachments } : {}),
         resumeWithStoredPermissionMode: true,
         onAccepted: async () => {
-          if (!current() || running.get(execution.id) !== run) throw new Error('STALE_EXECUTOR');
+          if (!live()) throw new Error('STALE_EXECUTOR');
           run.accepted = true;
         } });
       if (!dispatched.ok) throw new Error(botGroupRuntimeFailureCode({ code: dispatched.errorCode, message: dispatched.message }));
-      noteAssistantDelivery(roomId, sessionId, scope, source.seq);
+      assistantTasks.noteDelivered(roomId, sessionId, scope, source.seq);
       changed(roomId);
     } catch (error) {
       await settleExecution(run, { sessionId: run.sessionId, activeInputClientId: run.clientId,
@@ -3035,6 +2841,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         || run.context.trigger.actorId !== execution.requester_id)) throw new Error('INVALID_EXECUTION_TRIGGER');
       const roomId = execution.conversation_id;
       const contextBefore = BigInt(execution.context_seq) + 1n;
+      let toolsOff = execution.access_mode === 'chat';
       // Reads that depend only on the claim start together. Each is awaited where the serial
       // version read it, so a failure still surfaces at the same step (an unreadable history
       // still follows lane creation and is settled with the lane aborted).
@@ -3063,6 +2870,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // answered as a group and never subscribed: nothing may run without a visible group entry to watch or stop it.
       if (!ownDirectRoom && !isGroupRoom(s.room)) throw new Error('INVALID_EXECUTION_TRIGGER');
       subscribe(execution.conversation_id, s.cursor);
+      // In a group with a repository a teammate does things only for its owner. For anyone else it
+      // only talks, even with a `tools` grant: work on the project is done by the requester's own
+      // Cindy in the group, on their computer with their own logins (bot-group-chat.md §7.5).
+      if (!ownDirectRoom && s.room.project && !execution.mask_owner_id && execution.access_mode === 'tools') toolsOff = true;
       // Claim metadata and the persisted source must agree before creating a lane.
       // Reading this exact ID also covers sources outside the bounded history page.
       let eventSource: Message | undefined;
@@ -3103,10 +2914,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             const key = `${run.plan.id}:${execution.access_mode}:${execution.access_revision}`;
             run.workspace = settings.plans[key] ?? (execution.access_mode === 'owner' ? settings.plans[run.plan.id] : undefined);
             if (!run.workspace) {
-              // The folder found from the group's repository is for the owner's own requests (§7.5,
-              // 2026-11-12); other members' steps keep the folder chosen here, as before.
-              const projectDir = execution.access_mode === 'owner' ? (await groupProjectFolder(s.room)).dir : settings.projectDir;
-              const prepared = await deps.workDir?.prepare({ groupId: s.room.id, projectDir });
+              const prepared = await deps.workDir?.prepare({ groupId: s.room.id, projectDir: (await projectFolders.shown(s.room)).dir });
               if (!prepared?.ok) throw new Error('WORKDIR_UNAVAILABLE');
               run.workspace = prepared;
               if (!current()) throw new Error('OWNER_CHANGED');
@@ -3124,17 +2932,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         // Plan steps belong to the main group; a Thread request gets the Thread's own lane.
         const threadRootId = run.plan || digest ? undefined : source?.threadRootId ?? undefined;
         // A reply to the owner's own request works in the group's project folder when this computer
-        // has one. Other members' requests (`tools`) keep the Home lane: the folder's work runs with
-        // the owner's logins, which other members do not get (2026-11-12, bot-group-chat.md §7.5).
-        const folder = !run.plan && !digest && !execution.mask_owner_id && execution.access_mode === 'owner'
-          ? await groupProjectFolder(s.room) : null;
-        const projectDir = folder?.dir && deps.validateProjectDir ? folder.dir : null;
-        // A folder set for the group but gone or unreadable now fails this round, never Home (§7.5);
-        // a found one is looked up again next round.
-        if (folder && projectDir && !(await deps.validateProjectDir?.(projectDir).catch(() => null))?.ok) {
-          if (folder.auto && s.room.project?.kind === 'github') repositoryFolders.delete(s.room.project.repo.toLowerCase());
-          throw new Error('WORKDIR_UNAVAILABLE');
-        }
+        // has one, like an ordinary task there. Other members' requests never enter it: work in the
+        // folder runs with the owner's logins (bot-group-chat.md §7.5).
+        const projectDir = !run.plan && !digest && !execution.mask_owner_id && execution.access_mode === 'owner'
+          ? (await projectFolders.forWork(s.room, { signIn: false, isCurrent: () => current() && running.get(execution.id) === run })).dir : null;
         const lane = await deps.ensureLane({ botId: bot.id, groupId: s.room.id, title: s.room.name,
           ...(projectDir ? { projectDir } : {}),
           chatAccess: { mode: execution.access_mode, revision: execution.access_revision, maskOwnerId: execution.mask_owner_id },
@@ -3387,9 +3188,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         untrustedJsonBlock({ group: s.room.name, currentGroupBackground: s.room.description ?? '', participants,
           ...request, ...conversation, ...(quotedMessage ? { referencedMessages: [focusMessage(quotedMessage)] } : {}),
           sourceMessageId: execution.source_message_id, unavailableAttachments: missingAttachments }),
-        execution.access_mode === 'chat' ? 'This group has chat-only access: use only public identity and group messages. Private memory, owner files and tools are unavailable. Explain this boundary when asked to use them.' : 'Your owner has authorized this group to use your existing capabilities. Outputs are visible to every group member.',
+        execution.access_mode === 'chat' ? 'This group has chat-only access: use only public identity and group messages. Private memory, owner files and tools are unavailable. Explain this boundary when asked to use them.'
+          : toolsOff ? 'This group works on a project. For members other than your owner you only talk: tools are off for this turn. Work on the project is done by the requester\'s own Cindy in this group, on their computer with their own logins; say so when asked to do it.'
+          : 'Your owner has authorized this group to use your existing capabilities. Outputs are visible to every group member.',
         // 2026-11-10: results reach the group only as a reply to a request here (no host delivery).
-        ...(execution.access_mode === 'chat' ? [] : ['Only your reply to a request here reaches the group; a message sent to this conversation later is not posted. So do not ask a task you start to send its result back here. A task you start here shows in the group as a card that follows its status. When someone asks how it is going, read that task with `get_task_digest` and answer then.']),
+        ...(toolsOff ? [] : ['Only your reply to a request here reaches the group; a message sent to this conversation later is not posted. A task you start here shows in the group as a card, and the host posts its result to the group when it stops, so do not ask the task to send its result back here. When someone asks how it is going, read that task with `get_task_digest` and answer then.']),
         ...(talk ? discussionTurnBrief(talk, execution.plan_step!, briefHistory) : run.plan ? [run.workspace ? buildPlanStepBrief({ groupName: s.room.name, botName: bot.displayName, request: run.plan.request_text,
           attachments: attachments.map(a => a.name), attachmentsIncluded: true, steps: run.plan.steps, position: execution.plan_step!, workDir: run.workspace.workDir, branch: run.workspace.branch,
           recent: [], userNotes: run.plan.note_message_ids?.length ? { kind: 'more', texts: history.filter(m => run.plan!.note_message_ids!.includes(m.id)).map(bodyText) } : undefined, handoffs: run.plan.steps.filter(step => step.position < execution.plan_step!).flatMap(step => { const result = history.find(m => m.id === step.resultMessageId);
@@ -3421,7 +3224,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const stillContinuous = previous && laneContext(lane.sessionId)?.key === runtime?.key;
       const dispatched = await deps.dispatch({ targetSessionId: lane.sessionId, clientId: run.clientId, message: stillContinuous ? prompt : fullPrompt,
         persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${fullPrompt}`, autoReviewUserText,
-        attachments, toolsDisabled: execution.access_mode === 'chat',
+        attachments, toolsDisabled: toolsOff,
         onQueued: async clientId => { run.clientId = clientId; }, onAccepted: async () => {
           if (!current() || running.get(execution.id) !== run) { await deps.abortLane(lane.sessionId); throw new Error('STALE_EXECUTOR'); }
           run.accepted = true;
@@ -3615,21 +3418,16 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const availabilityResponse = z.object({ items: z.array(z.object({ botId: id, pending: z.boolean(), enabled: z.boolean() })).max(128) });
   const workPolling = createChatWorkPolling<Execution>({
     current, gate: workGate, errorInfo: workError,
-    actors: () => {
-      const work: WorkActor[] = (localProfilesRead === localProfilesRevision
-        ? actors.filter(actor => claimable(actor) && !disabledUntilRead.has(actor.id)) : []).map(actor => {
-        const runs = runsOf(actor.id);
-        for (const run of runs) resolveLane(run);
-        return { id: actor.id, busy: runs.length > 0, ready: runs.every(run => run.lane) };
-      });
-      // The group's Cindy: the server hands this computer only its own account's requests to it.
-      if (assistantActorId && selfId) {
-        const runs = runsOf(assistantActorId);
-        for (const run of runs) resolveLane(run);
-        work.push({ id: assistantActorId, busy: runs.length > 0, ready: runs.every(run => run.lane), unprobed: true });
-      }
-      return work;
-    },
+    actors: () => [
+      ...(localProfilesRead === localProfilesRevision ? actors.filter(actor => claimable(actor) && !disabledUntilRead.has(actor.id)).map(actor => actor.id) : []),
+      // The group's Cindy: the server hands this computer only its own account's requests to it, and
+      // naming it in the availability probe is how this computer says it can take them.
+      ...(assistantActorId && selfId ? [assistantActorId] : []),
+    ].map(actorId => {
+      const runs = runsOf(actorId);
+      for (const run of runs) resolveLane(run);
+      return { id: actorId, busy: runs.length > 0, ready: runs.every(run => run.lane) };
+    }),
     canProbe: () => workAvailability,
     longIdle: () => workNotifications && connected,
     probe: async ids => {
@@ -3736,7 +3534,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (recheck.delete(run) && running.get(run.execution.id) === run) void checkLease(run);
     }
   }
-  const heartbeat = setInterval(() => { for (const run of running.values()) void checkLease(run); void syncTaskCards(); }, 15000);
+  const heartbeat = setInterval(() => { for (const run of running.values()) void checkLease(run); void taskCards.sync(); }, 15000);
   timer.unref(); heartbeat.unref();
   const safe = <T>(fn: () => Promise<T>): Promise<T | BotGroupFailure> => fn().catch(error => {
     deps.log?.warn('Chat group action failed', chatErrorDiagnostic(error));
@@ -4368,8 +4166,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (result.ok && current()) {
           sendReceipts.set(key, result);
           if (sendReceipts.size > 128) sendReceipts.delete(sendReceipts.keys().next().value!);
-          // A request to the group's Cindy runs here, on the requester's computer: look for it now.
-          if (assistantActorId && !identity.data.conversationKind) triggerClaim([assistantActorId]);
         }
         return result;
       }).finally(() => pendingSends.delete(key));
@@ -4488,7 +4284,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // A task card's task also runs its owner's own turns: only this turn's input ends it.
       const run = [...running.values()].find(r => r.sessionId === terminal.sessionId
         && (!r.inTask || r.clientId === terminal.activeInputClientId));
-      void noteCardTaskTurn(terminal, run?.inTask === true)
+      void taskCards.noteTurn(terminal, run?.inTask === true)
         .catch(error => deps.log?.warn('Group task card turn could not be noted', chatErrorDiagnostic(error)));
       if (!run) return local.settleLaneTurn(terminal);
       if (terminal.activeInputClientId ? terminal.activeInputClientId !== run.clientId : !run.accepted) return false;

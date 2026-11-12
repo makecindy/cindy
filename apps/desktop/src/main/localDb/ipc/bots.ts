@@ -330,9 +330,9 @@ export type EnsureBotGroupLaneResult =
  * lane, it talks in the group lane's place with its own context; no project folder.
  *
  * With `projectDir` (the group's project folder on this computer), a V2 teammate's group and
- * Thread lanes answering its owner work in that folder instead of the Home workspace, like an
- * ordinary task there (bot-group-chat.md §7.5). A lane created for another folder is archived and
- * replaced.
+ * Thread lanes that answer its owner work in that folder instead of the Home workspace, like an
+ * ordinary task there (bot-group-chat.md §7.5). The lane follows the folder: one created
+ * elsewhere is archived and replaced.
  */
 export async function ensureBotGroupLaneSession(input: {
   botId: string;
@@ -368,17 +368,14 @@ export async function ensureBotGroupLaneSession(input: {
       eq(sessions.status, 'active'),
     ))
     .limit(1);
-  // A group or Thread lane with real access is one that may work in the group's project folder.
-  const replyLane = !input.plan && !input.talkPlanId && !input.personalDigest
-    && !!input.chatAccess && input.chatAccess.mode !== 'chat' && !input.chatAccess.maskOwnerId;
-  // Only the owner's own requests follow the folder: its work runs with the owner's logins, which
-  // other members (`tools`) do not get (2026-11-12). A `tools` lane left there moves back to Home.
-  const followsProject = replyLane && input.chatAccess?.mode === 'owner';
-  const projectLane = (row: { workingDir: string | null; projectDir: string | null }) =>
-    !!row.projectDir && row.workingDir === row.projectDir && isGroupProjectLaneDir(owner.userDataDir, input.botId, row.workingDir);
-  const wantedProject = followsProject && input.projectDir && await readTeammateProjectMode(input.botId) ? input.projectDir : null;
-  const moves = !!existing && replyLane
-    && (wantedProject ? existing.workingDir !== wantedProject : projectLane(existing));
+  // An owner's group or Thread lane follows the group's project folder: it works there when the
+  // caller passes one, in the Home workspace otherwise.
+  const ownerReplyLane = !input.plan && !input.talkPlanId && !input.personalDigest
+    && input.chatAccess?.mode === 'owner' && !input.chatAccess.maskOwnerId;
+  const wantedProject = ownerReplyLane && input.projectDir && await readTeammateProjectMode(input.botId) ? input.projectDir : null;
+  const inProject = !!existing?.projectDir && existing.workingDir === existing.projectDir
+    && isGroupProjectLaneDir(owner.userDataDir, input.botId, existing.workingDir);
+  const moves = !!existing && ownerReplyLane && (wantedProject ? existing.workingDir !== wantedProject : inProject);
   if (existing && !moves) {
     await syncBotLanePermission(existing.sessionId);
     owner.assertCurrent();

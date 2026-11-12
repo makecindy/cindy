@@ -616,7 +616,7 @@ export async function hydrateBotProfileRuntime(
   // personal instructions, settings, Skills or native memories, only the teammate's project memory.
   // A V2 teammate answering its owner in a group whose project folder is on this computer works
   // there like an ordinary task in that folder (bot-group-chat.md §7.5). Other members' requests
-  // (`tools`) keep the isolated lane in Home, never in the project folder (2026-11-12).
+  // keep the isolated lane in Home.
   const ownerGroupProjectLane = row.role === 'group' && OWNER_GROUP_LANE.test(row.routeKey ?? '')
     && !!workspaceDir && path.resolve(opts.workingDir) !== workspaceDir
     && !path.resolve(opts.workingDir).startsWith(path.dirname(workspaceDir) + path.sep);

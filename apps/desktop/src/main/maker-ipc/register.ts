@@ -712,9 +712,11 @@ import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
 import { getEffectiveAuxiliaryModelChainSnapshot, getEffectiveAuxiliaryModelRefs } from '../utility-model/resolveAuxiliaryModelChain.js';
 import { auxiliaryChainSessionCandidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen } from './pluginTaskDefaultRoute.js';
 import { validateExistingLocalProjectDirectory } from '../mcp-integrations/createProject.js';
-import { findRepositoryFolders } from './chatServerWorkspaces.js';
+import { findRepositoryFolders } from './groupProjectFolder.js';
 import { listRecentWorkdirs } from '../localDb/ipc/recentWorkdirsCore.js';
 import { runGit } from '../git-review/gitRunner.js';
+import { createDesktopGroupProjectCheckouts } from './groupProjectCheckout.desktop.js';
+import { markGroupCindyTask } from './groupCollaborationSkill.js';
 import { listPrRefs } from '../git-context/prRefsStore.js';
 import { gitExec } from '../worktree/gitExec.js';
 import { BOT_GROUP_CLIENT_ID_PREFIX, botGroupLiveTaskStateOfPhase } from '../../shared/botGroupChat.js';
@@ -13740,7 +13742,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { ok: false as const, message: '项目文件夹不存在' };
       }
     },
-    // The group's Cindy (bot-group-chat.md「群里的 Cindy」): one ordinary visible task per group, opened
+    // The group's Cindy (bot-group-chat.md §9): one ordinary visible task per group, opened
     // like a new task of this user's (new-task model and permission), titled with the group's name.
     ensureGroupAssistantSession: async ({ sessionId, title, projectDir }) => {
       try {
@@ -13757,6 +13759,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             providerId: route.providerId, effort: route.effort || '', fastMode: route.fastMode } : {}),
           permissionMode: permissionModeOrAsk(agentKind ? getRemoteNewMakerDefaults(agentKind).permissionMode : undefined),
         } });
+        // Before its first turn starts, so the task starts with the 群协作 Skill.
+        markGroupCindyTask(row.id);
         broadcastSessionCreated(row.id);
         return { ok: true as const, sessionId: row.id, created: true };
       } catch (error) {
@@ -13776,6 +13780,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     // A card task's short result in the main group (bot-group-chat.md §10).
     condenseTaskReply: createBotGroupTaskResultCondenser((prompt, opts) => requestUtilityText(maker, prompt, opts)),
+    // A group's GitHub repository without a registered checkout gets Cindy's own.
+    groupCheckouts: createDesktopGroupProjectCheckouts(log),
     // A group's GitHub repository picks this computer's checkout among the registered projects.
     findProjectDirsForRepo: async (repo) => findRepositoryFolders(
       (await listRecentWorkdirs()).filter(row => row.exists).map(row => row.path), repo, {

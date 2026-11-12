@@ -1,4 +1,7 @@
-/** Device-local project choices and prepared workspaces; never shared chat state. */
+/**
+ * What this computer keeps for a chat server's groups: project choices and prepared workspaces, the
+ * task cards it posted, and each group's Cindy task. Device-local; never shared chat state.
+ */
 import { mkdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
@@ -28,35 +31,47 @@ export function chatServerWorkspaces(endpoint: string, actorId: string, current:
   };
 }
 
+const quote = z.object({ messageId: z.string().uuid(), authorName: z.string(), authorKind: z.enum(['user', 'bot']), excerpt: z.string(),
+  attachmentCount: z.number().int().nonnegative(), attachmentName: z.string().nullable(), sequence: z.number().int().positive().nullable() });
 const liveTaskCard = z.object({
+  /** Where the card is: the group, the teammate it was posted as, and the Thread it was posted in (null: the main group). */
   roomId: z.string().uuid(), botId: z.string().uuid(), threadRootId: z.string().uuid().nullable(),
+  /** The card as last posted. `summary` is the line after its state. */
   taskId: z.string(), deviceId: z.string().nullable(), title: z.string(), requesterName: z.string(), botName: z.string(),
-  // Early builds of this card recorded `finished` for the same state.
-  state: z.preprocess(value => value === 'finished' ? 'idle' : value, z.enum(['running', 'waiting', 'idle', 'failed'])), prUrl: z.string().optional(),
-  /** The line the card shows after its state, and the one it shows once the task is not running. */
-  summary: z.string().optional(), lastLine: z.string().optional(),
+  state: z.enum(['running', 'waiting', 'idle', 'failed']), prUrl: z.string().optional(), summary: z.string().optional(),
+  /** The posted message's server revision; the next edit expects it. */
+  revision: z.number().int().positive(), createdAt: z.number(),
+  /** The request the task came from, quoted by its main-group results; absent when it could not be read. */
+  quote: quote.optional(),
+  /** Who asked, named by the results; null when they are no longer in the group. */
+  requesterId: z.string().uuid().nullable(),
+  /** The first line of the latest turn's reply: the card's `summary` once the task is not running. */
+  lastLine: z.string().optional(),
   /** The task's latest turn ends, newest last: a turn end seen again posts nothing again. */
   turns: z.array(z.string()).optional(),
   /**
-   * Messages a turn end left for the group, oldest first, until the group has them: the reply in
-   * the card's Thread, the short result in the main group (`quote`: it quotes this card). Each
-   * keeps its own operation, so a retry is the same message.
+   * Messages a turn end left for the group, oldest first, until the group has them: the `reply` in
+   * the card's Thread and the short `result` in the main group. Each keeps its own operation, so a
+   * retry is the same message.
    */
-  outbox: z.array(z.object({ op: z.string(), text: z.string(), threadRootId: z.string().uuid().nullable(),
-    quote: z.boolean().optional(), attempts: z.number().int().nonnegative().optional(), retryAt: z.number().optional() })).optional(),
+  outbox: z.array(z.object({ op: z.string(), kind: z.enum(['reply', 'result']), text: z.string(),
+    attempts: z.number().int().nonnegative().optional(), retryAt: z.number().optional() })).optional(),
   /**
-   * Turn ends whose main-group result is still being written (the reply, bounded like the outbox):
+   * Turn ends whose main-group result is still being written, with the reply it is written from:
    * kept until the result joins the outbox, so a restart meanwhile still writes it, once, under
    * the same operation.
    */
   pendingResults: z.array(z.object({ op: z.string(), text: z.string() })).optional(),
-  /** The posted message's server revision; the next edit expects it. */
-  revision: z.number().int().positive(), createdAt: z.number(),
+  /**
+   * The newest message of the card's Thread the task has been told about: other members' words are
+   * not delivered to the task, its owner's next words from the Thread carry what came after this.
+   */
+  threadSeenSeq: z.string().regex(/^\d+$/).optional(),
 });
 export type ChatLiveTaskCardRecord = z.infer<typeof liveTaskCard>;
 /**
- * Task cards this computer posted for its teammates (bot-group-chat.md §10), by message ID: this
- * computer keeps each card in step with its task. Local only; the card itself is in the group.
+ * Task cards this computer posted (bot-group-chat.md §10), by message ID: it keeps each card and the
+ * group in step with the card's task (`groupTaskCards.ts`). Local only; the card itself is in the group.
  */
 export function chatServerTaskCards(endpoint: string, actorId: string, current: () => boolean) {
   const file = ownerScopedUserDataPath('chat-workspace-settings', createHash('sha256').update(`${endpoint}\n${actorId}`).digest('hex'), 'task-cards.json');
@@ -76,7 +91,7 @@ export function chatServerTaskCards(endpoint: string, actorId: string, current: 
 }
 
 const assistantSession = z.object({
-  /** The group's ordinary task on this computer, and the project folder it was opened in (null: 「对话」). */
+  /** The group's ordinary task on this computer, and the project folder it was opened in (null: under 「对话」). */
   sessionId: z.string().min(1), projectDir: z.string().nullable(),
   /**
    * The group's newest message already delivered into the task, per conversation (`main` or a
@@ -104,33 +119,4 @@ export function chatServerAssistantSessions(endpoint: string, actorId: string, c
       atomicWriteFileSync(file, JSON.stringify(value));
     },
   };
-}
-
-/** `owner/name` of a GitHub remote URL (HTTPS, SSH or scp form), or null for any other remote. */
-export function githubRepositoryOfRemote(url: string): string | null {
-  const match = /^(?:https?:\/\/(?:[^@/\s]+@)?github\.com\/|ssh:\/\/git@github\.com(?::\d+)?\/|git@github\.com:)([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/i
-    .exec(url.trim());
-  return match ? match[1]! : null;
-}
-
-/**
- * Registered project folders that are checkouts of `repo` (their `origin`), main checkouts only:
- * a linked worktree (`.git` is a file) or a folder inside another match is the same project.
- */
-export async function findRepositoryFolders(dirs: readonly string[], repo: string, read: {
-  origin(dir: string): Promise<string | null>;
-  isMainCheckout(dir: string): Promise<boolean>;
-}): Promise<string[]> {
-  const wanted = repo.toLowerCase();
-  const matches: string[] = [];
-  for (let start = 0; start < dirs.length; start += 8) {
-    const batch = dirs.slice(start, start + 8);
-    const found = await Promise.all(batch.map(async dir => {
-      const origin = await read.origin(dir).catch(() => null);
-      return origin && githubRepositoryOfRemote(origin)?.toLowerCase() === wanted && await read.isMainCheckout(dir).catch(() => false) ? dir : null;
-    }));
-    for (const dir of found) if (dir) matches.push(path.resolve(dir));
-  }
-  const unique = [...new Set(matches)];
-  return unique.filter(dir => !unique.some(other => other !== dir && dir.startsWith(other + path.sep)));
 }

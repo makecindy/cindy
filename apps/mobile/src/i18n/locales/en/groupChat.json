@@ -171,7 +171,8 @@
     "capability": {
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} could not run this tool: group authorization has expired or does not allow this action. The teammate’s owner can make the request again in this group.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "Group authorization for {{name}} could not be verified, so this tool did not run. Try again after the connection recovers.",
-      "ATTACHMENTS_UNAVAILABLE": "Some attachments were not delivered to {{name}} because of a download failure or attachment limit. Resend the attachments needed for this request."
+      "ATTACHMENTS_UNAVAILABLE": "Some attachments were not delivered to {{name}} because of a download failure or attachment limit. Resend the attachments needed for this request.",
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connect your Cindy so Cindy can work for you (none of your computers has Cindy online right now)."
     }
   },
   "plan": {
