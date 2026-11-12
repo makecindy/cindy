@@ -600,6 +600,43 @@ async function addBotImConnectionNow(
   return { ...list, connection: view };
 }
 
+/** Same transport and connection ID: no lane archive, rebinding or receipt deletion. */
+export function getBotIMessageConfig(id: string) {
+  const record = readBotImConnection(id);
+  if (!record || record.channel !== 'imessage') throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
+  try {
+    const raw = ownerScopedImSecrets.read(`${secretKeyPrefixFor(id)}bluebubbles-config`);
+    return parseBlueBubblesConfig(JSON.parse(raw ?? 'null'));
+  } catch { throwIpcError('PRECONDITION_FAILED', 'BLUEBUBBLES_CONFIG_MISSING'); }
+}
+
+export function updateBotIMessageConfig(id: string, input: unknown): Promise<BotImConnectionListPayload> {
+  const run = addQueue.then(async () => {
+    const record = readBotImConnection(id);
+    if (!record || record.channel !== 'imessage') throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
+    return withBotProfileLocks([record.botId], async () => {
+      if (await readBotProfileStatus(record.botId) !== 'active') throwIpcError('PRECONDITION_FAILED', 'BOT_INACTIVE');
+      const previous = getBotIMessageConfig(id);
+      const p = (input ?? {}) as Record<string, unknown>;
+      let config;
+      try {
+        config = parseBlueBubblesConfig({ ...p, groupAliases: previous.groupAliases });
+        if (p.password !== undefined && (typeof p.password !== 'string' || p.password.length > 4096)) throw new Error();
+      } catch { throwIpcError('INVALID_PARAMS', 'BLUEBUBBLES_INVALID_CONFIG'); }
+      const duplicate = findBotImConnectionByIdentity('imessage', config.serverUrl);
+      if (duplicate && duplicate.id !== id) throwIpcError('PRECONDITION_FAILED', IDENTITY_IN_USE_CODE.imessage);
+      const live = instances.get(id) ?? instantiate(record);
+      if (live.transport.kind !== 'imessage') throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
+      try { await live.transport.im.updateCredentials({ ...config, password: p.password as string | undefined }); }
+      catch { throwIpcError('PRECONDITION_FAILED', 'BLUEBUBBLES_UPDATE_FAILED'); }
+      finally { broadcastChanged(); }
+      return buildBotImConnectionListPayload();
+    });
+  });
+  addQueue = run.catch(() => undefined);
+  return run;
+}
+
 /** 伙伴页「群聊」小节: 已知群 + 每群参与模式(仅 @ / 全响应)。 */
 export async function listBotImConnectionGroups(id: string): Promise<BotImConnectionGroupsPayload> {
   const record = readBotImConnection(id);
@@ -809,6 +846,16 @@ export function registerBotImConnectionIpc(): void {
   ipcMain.handle('botImConnection:add', (e, payload) => {
     assertTrustedAppRendererEvent(e);
     return addBotImConnection(parseBotImConnectionAddInput(payload));
+  });
+  ipcMain.handle('botImConnection:get-imessage-config', (e, payload) => {
+    assertTrustedAppRendererEvent(e);
+    if (!isBotImConnectionId(payload?.id)) throwIpcError('INVALID_PARAMS', 'id is invalid');
+    return getBotIMessageConfig(payload.id);
+  });
+  ipcMain.handle('botImConnection:update-imessage-config', (e, payload) => {
+    assertTrustedAppRendererEvent(e);
+    if (!isBotImConnectionId(payload?.id)) throwIpcError('INVALID_PARAMS', 'id is invalid');
+    return updateBotIMessageConfig(payload.id, payload.config);
   });
   ipcMain.handle('botImConnection:remove', (e, payload) => {
     assertTrustedAppRendererEvent(e);

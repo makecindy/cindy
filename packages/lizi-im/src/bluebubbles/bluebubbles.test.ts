@@ -28,6 +28,7 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
   vi.spyOn(api, 'message').mockImplementation(async guid => {
     const message = messages.get(guid); if (!message) throw new Error('missing'); return message;
   });
+  vi.spyOn(api, 'unregisterWebhook').mockResolvedValue(undefined);
   vi.spyOn(api, 'registerWebhook').mockImplementation(async url => { callbackUrl = url; });
   const send = vi.spyOn(api, 'sendText').mockResolvedValue({ guid: 'outbound' });
   const host: IMHost = {
@@ -54,10 +55,49 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
   };
   const webhook = (guid: string, url = callbackUrl) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ type: 'new-message', data: { guid, text: 'forged payload', handle: { address: 'attacker' } } }) });
-  return { im, api, received, message, webhook, send, chat, otherChat, advance: (ms: number) => { now += ms; }, state: () => saved!, url: () => callbackUrl };
+  return { im, api, secrets, received, message, webhook, send, chat, otherChat, advance: (ms: number) => { now += ms; }, state: () => saved!, url: () => callbackUrl };
 }
 
 describe('BlueBubbles local ingress', () => {
+  // Tier 1: editing an existing connection must retain secrets/receipts and recover a failed reconnect.
+  it('updates settings without resetting credentials or receipts, and restores settings on failure', async () => {
+    const f = await fixture();
+    const original = f.im.getEditableConfig();
+    const receipt = structuredClone(f.state());
+    await f.im.updateCredentials({ ...original, listenPort: 18748 });
+    expect(f.im.getEditableConfig().listenPort).toBe(18748);
+    expect(f.secrets.get('test-bluebubbles-password')).toBe('test-only');
+    expect(f.state()).toEqual(receipt);
+    expect(f.api.unregisterWebhook).toHaveBeenCalledTimes(1);
+    vi.mocked(f.api.info).mockRejectedValueOnce(new Error('unreachable'));
+    await expect(f.im.updateCredentials({ ...original, password: 'replacement-test-only' })).rejects.toThrow('BLUEBUBBLES_UPDATE_FAILED');
+    expect(f.im.getEditableConfig().listenPort).toBe(18748);
+    expect(f.secrets.get('test-bluebubbles-password')).toBe('test-only');
+    expect(f.im.getStatus().kind).toBe('connected');
+    expect(f.state()).toEqual(receipt);
+    await f.im.updateCredentials({ ...original, password: 'replacement-test-only' });
+    expect(f.secrets.get('test-bluebubbles-password')).toBe('replacement-test-only');
+  });
+
+  it('does not restore removed credentials when an edit is interrupted by disconnect', async () => {
+    const f = await fixture();
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    vi.mocked(f.api.info).mockImplementationOnce(async () => {
+      entered();
+      await new Promise<void>(resolve => { release = resolve; });
+      return { server_version: '1.9.9' };
+    });
+    const updating = f.im.updateCredentials({ ...f.im.getEditableConfig(), listenPort: 18748 });
+    const rejected = expect(updating).rejects.toThrow('BLUEBUBBLES_CONNECTION_CHANGED');
+    await started;
+    await f.im.clearCredentials();
+    release();
+    await rejected;
+    expect(f.secrets.size).toBe(0);
+  });
+
   // Tier 1, #9250/r4506476913: two waiting attachments used to refetch one
   // another indefinitely. The guard only bounds the old-code failure path.
   it('retains verified metadata for multiple attachments waiting behind a slow preparation', async () => {

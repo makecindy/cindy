@@ -7,6 +7,8 @@ export default {
   real: 'BotChannelsPage add-platform dialog, shared Input, Button, SegmentedControl, Collapse and five-locale translations',
   notCovered: 'Live Feishu/Lark login, application provisioning, external browser navigation, credential persistence and connection handshake; host writes are forbidden',
   cases: {
+    'imessage-edit': { about: 'Populated iMessage editor keeps its password write-only', data: { imessage: true } },
+    'imessage-narrow': { about: 'iMessage editor remains usable at 320px', data: { imessage: true }, viewport: { width: 320, height: 700 } },
     default: { about: 'Feishu creation prompt and link share one row', data: {} },
     'feishu-onboarding': { about: 'Feishu creation prompt and link share one row', data: {} },
     'feishu-lark': { about: 'Lark updates the link, description and submit label', data: { lark: true } },
@@ -14,6 +16,14 @@ export default {
     'feishu-narrow': { about: '320px viewport wraps guidance and keeps the form scrollable', data: { expanded: true }, viewport: { width: 320, height: 700 } },
   },
   async check(page, ui) {
+    if (ui.data.imessage) {
+      await page.getByRole('button', { name: await ui.t('bots.channels.edit.button'), exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      assert.equal(await dialog.getByLabel(await ui.t('bots.channels.add.imessage.passwordLabel'), { exact: true }).inputValue(), '');
+      assert.equal(await dialog.getByRole('button', { name: await ui.t('bots.channels.edit.save'), exact: true }).isEnabled(), true);
+      await ui.capture('imessage-edit');
+      return;
+    }
     await page.getByRole('button', { name: await ui.t('bots.channels.add.button'), exact: true }).click();
     const dialog = page.getByRole('dialog');
     await dialog.getByRole('radio', { name: await ui.t('bots.channels.platform.feishu'), exact: true }).click();

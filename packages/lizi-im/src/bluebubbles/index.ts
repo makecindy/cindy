@@ -38,6 +38,8 @@ export function parseBlueBubblesConfig(raw: unknown): BlueBubblesConfig {
 
 export interface BlueBubblesOptions {
   secretPrefix: string;
+  /** Host-persisted route identity survives a server address edit. */
+  contextId?(): string | null;
   storage: BlueBubblesStateStorage;
   receiver(host: string, port: number): LocalWebhookReceiver;
   api?(origin: string, password: string): BlueBubblesApi;
@@ -111,7 +113,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       this.retryAt.delete(guid);
     }
   }
-  get botContextId(): string { return this.config ? createHash('sha256').update(this.config.serverUrl).digest('hex').slice(0, 24) : ''; }
+  get botContextId(): string { return this.options.contextId?.() || (this.config ? createHash('sha256').update(this.config.serverUrl).digest('hex').slice(0, 24) : ''); }
   getOwnerUserId(): string | null {
     return [...this.chats.values()].find(chat => /^(?:iMessage|any);-;/.test(chat.guid) && (chat.participants?.length ?? 0) === 1
       && chat.participants![0]!.address.toLowerCase() === this.config?.ownerAddress)?.guid ?? null;
@@ -146,6 +148,54 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     // delete this connection, its credentials and its already-durable inbox.
     if (this.status.kind !== 'connected'
       && !(this.listener && this.api && this.config && this.receiveFailure === 'input')) throw new Error('BLUEBUBBLES_CONNECT_FAILED');
+  }
+
+  /** Public settings omit secrets; edits never reset the durable receipt journal. */
+  getEditableConfig(): BlueBubblesConfig {
+    const raw = this.host.secrets.read(this.key('bluebubbles-config'));
+    if (!raw) throw new Error('BLUEBUBBLES_CONFIG_MISSING');
+    return parseBlueBubblesConfig(JSON.parse(raw));
+  }
+
+  async updateCredentials(input: BlueBubblesConfig & { password?: string }): Promise<void> {
+    const config = parseBlueBubblesConfig(input);
+    const previous = BLUEBUBBLES_SECRET_KEYS.map(key => [key, this.host.secrets.read(this.key(key))] as const);
+    const password = input.password || this.host.secrets.read(this.key('bluebubbles-password'));
+    if (!password || password.length > 4096 || !this.host.secrets.isAvailable()) throw new Error('BLUEBUBBLES_SECRET_UNAVAILABLE');
+    const account = this.host.accountScope?.capture();
+    let expectedGeneration = this.generation;
+    const current = () => this.generation === expectedGeneration
+      && (!this.host.accountScope || this.host.accountScope.isCurrent(account));
+    const cleanup = async () => {
+      const api = this.api, url = this.webhookUrl;
+      const disposedGeneration = this.generation + 1;
+      await this.dispose();
+      if (api && url) await api.unregisterWebhook(url).catch(() => this.log.warn('iMessage callback cleanup failed; local receiver is stopped'));
+      this.webhookUrl = null;
+      return disposedGeneration;
+    };
+    expectedGeneration = await cleanup();
+    if (!current()) throw new Error('BLUEBUBBLES_CONNECTION_CHANGED');
+    try {
+      // init disposes the previous generation, then starts a new one.
+      const beforeSave = this.generation;
+      try { await this.saveCredentials({ ...config, password }); }
+      finally {
+        // A synchronous storage failure has not entered init yet.
+        expectedGeneration = beforeSave + (this.generation === beforeSave ? 0 : 2);
+      }
+    } catch {
+      if (!current()) throw new Error('BLUEBUBBLES_CONNECTION_CHANGED');
+      expectedGeneration = await cleanup();
+      if (current()) {
+        for (const [key, value] of previous) {
+          if (value === null) this.host.secrets.remove(this.key(key));
+          else if (!this.host.secrets.write(this.key(key), value)) throw new Error('BLUEBUBBLES_SECRET_UNAVAILABLE');
+        }
+        await this.init();
+      }
+      throw new Error('BLUEBUBBLES_UPDATE_FAILED');
+    }
   }
 
   async clearCredentials(): Promise<void> {

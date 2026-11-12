@@ -714,3 +714,24 @@ describe('BotChannelsPage for a teammate on another computer', () => {
     expect(screen.queryByRole('button', { name: 'bots.channels.officialX.bind' })).toBeNull();
   });
 });
+
+// Tier 1: the existing connection must open a populated editor, never add/remove to change a port.
+it('edits iMessage settings with a blank write-only password', async () => {
+  const payload = { connections: [connection({ channel: 'imessage' })] };
+  const api = installApi(payload);
+  const getIMessageConfig = vi.fn(async () => ({ serverUrl: 'http://127.0.0.1:1234', ownerAddress: 'owner@example.test',
+    chatGuids: ['any;-;owner@example.test'], listenHost: '127.0.0.1', listenPort: 18747 }));
+  const updateIMessageConfig = vi.fn(async () => payload);
+  Object.assign(api, { getIMessageConfig, updateIMessageConfig });
+  render(<BotChannelsPage bot={mia} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'bots.channels.edit.button' }));
+  const dialog = await screen.findByRole('dialog');
+  expect((within(dialog).getByLabelText('bots.channels.add.imessage.passwordLabel') as HTMLInputElement).value).toBe('');
+  fireEvent.change(within(dialog).getByLabelText('bots.channels.add.imessage.listenPortLabel'), { target: { value: '18748' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'bots.channels.edit.save' }));
+  await waitFor(() => expect(updateIMessageConfig).toHaveBeenCalledWith({ id: payload.connections[0].id,
+    config: expect.objectContaining({ listenPort: 18748, password: '', serverUrl: 'http://127.0.0.1:1234' }) }));
+  expect(api.add).not.toHaveBeenCalled();
+  expect(api.remove).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+});

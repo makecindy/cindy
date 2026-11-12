@@ -12106,6 +12106,15 @@
         "unbound": "Let {{name}} handle your questions to the official @askmycindy bot.",
         "managed": "A buddy handles X questions. Change the assignment in that buddy’s message platform settings.",
         "riskBody": "X questions use the buddy’s shared memory, tools and workspace, and replies are public. Do not use X for private information. The X thread does not directly use your private chat history."
+      },
+      "edit": {
+        "button": "Edit",
+        "title": "Edit iMessage connection",
+        "description": "Save to reconnect. The model follows your buddy’s settings.",
+        "keepPassword": "Leave blank to keep the saved password",
+        "save": "Save and reconnect",
+        "loadFailed": "Couldn’t load the connection settings. Try again.",
+        "failed": "Couldn’t save the connection. Check the settings and try again."
       }
     },
     "voiceMode": {

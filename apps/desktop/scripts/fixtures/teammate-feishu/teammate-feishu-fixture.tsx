@@ -4,9 +4,13 @@ import { forbid, mountPage, subscription } from '../../ui-page/harness';
 
 mountPage({
   route: '/bots/fixture-cindy?settings=1&settingsPage=channels',
-  host: {
+  host: (ctx) => ({
     botImConnection: {
-      list: async () => ({ connections: [] }),
+      list: async () => ({ connections: ctx.data.imessage ? [{ id: 'aabbccddeeff', botId: 'fixture-cindy', channel: 'imessage',
+        createdAt: 1, status: { kind: 'connected', appId: 'fixture' }, identity: { username: null, ownerUserId: null } }] : [] }),
+      getIMessageConfig: async () => ({ serverUrl: 'http://192.168.1.20:1234', ownerAddress: 'owner@example.test',
+        chatGuids: ['any;-;owner@example.test'], listenHost: '192.168.1.10', listenPort: 18747 }),
+      updateIMessageConfig: forbid('botImConnection.updateIMessageConfig'),
       listAdoptable: async () => ({ bots: [] }),
       onChanged: subscription('connections'),
       add: forbid('botImConnection.add'),
@@ -23,7 +27,7 @@ mountPage({
       onStateChange: subscription('wechatState'),
       onChannelSettingsChange: subscription('wechatSettings'),
     },
-  },
+  }),
   render: () => <div className="mx-auto max-w-xl p-4">
     <BotChannelsPage bot={{ id: 'fixture-cindy', name: 'Cindy', status: 'active' } as BotProfile} />
   </div>,

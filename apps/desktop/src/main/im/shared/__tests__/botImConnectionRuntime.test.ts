@@ -86,6 +86,8 @@ vi.mock('../../../security/trustedAppRenderer', () => ({ assertTrustedAppRendere
 
 import {
   addBotImConnection,
+  getBotIMessageConfig,
+  updateBotIMessageConfig,
   buildBotImConnectionListPayload,
   configureBotImConnectionRuntime,
   registerBotImConnectionIpc,
@@ -623,6 +625,18 @@ describe('bot im connection runtime', () => {
         expect(storage.read()!.inbox['first-add-message'].state).toBe('accepted');
         expect(transport.getStatus().kind).toBe('connected');
         expect(listBotImConnections()[0]?.id).toBe(result.connection.id);
+        const config = getBotIMessageConfig(result.connection.id);
+        expect(config).not.toHaveProperty('password');
+        const updated = await updateBotIMessageConfig(result.connection.id, { ...config, password: '', listenPort: 18748 });
+        expect(updated.connections[0]?.id).toBe(result.connection.id);
+        expect(updated.connections[0]?.botId).toBe('bot-mia');
+        expect(getBotIMessageConfig(result.connection.id).listenPort).toBe(18748);
+        expect(h.secrets.get(`${secretKeyPrefixFor(result.connection.id)}bluebubbles-password`)).toBe('test-only');
+        expect(storage.read()!.inbox['first-add-message'].state).toBe('accepted');
+        await expect(updateBotIMessageConfig(result.connection.id, { ...config, listenPort: 1 })).rejects.toThrow(/INVALID_PARAMS/);
+        expect(getBotIMessageConfig(result.connection.id).listenPort).toBe(18748);
+        expect(h.archiveCalls).toEqual([]);
+
       }
     } finally {
       await stopBotImConnections();
