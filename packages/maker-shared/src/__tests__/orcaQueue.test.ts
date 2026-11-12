@@ -18,7 +18,8 @@ describe('Orca queue previews and notes', () => {
   it('never cuts a preview in the middle of a surrogate pair', () => {
     const preview = orcaQueuePreview(`${'x'.repeat(118)}🚀 launched`);
     expect(preview).toBe(`${'x'.repeat(118)}…`);
-    expect(preview.isWellFormed()).toBe(true);
+    // In Unicode mode, valid surrogate pairs form one code point; only lone halves match.
+    expect(preview).not.toMatch(/\p{Surrogate}/u);
   });
 
   it('keeps message text and sender names from forging the note structure', () => {

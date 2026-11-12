@@ -25,6 +25,7 @@ import { PI_SUBAGENT_TOOL_NAME, subagentSpawnResultIndicatesRunning } from '@cin
 import {
   extractNonSecretErrorSignals,
   redactSensitiveText,
+  type NonSecretErrorSignals,
 } from '@cindy/maker-shared/error-redaction';
 import {
   holdStandaloneStopTokenDelta,
@@ -97,7 +98,7 @@ interface PiPendingAssistantError {
   message: string;
   sdkError: string;
   piCacheCompatibility?: import('./cache-compatibility.js').PiCacheCompatibility;
-  errorStatus?: 401 | 429 | 529;
+  errorStatus?: NonSecretErrorSignals['errorStatus'];
   usageLimit?: true;
   reason?: typeof CONTEXT_OVERFLOW_REASON | typeof UPSTREAM_STREAM_INTERRUPTED_REASON | typeof PI_GATEWAY_DROP_REASON | typeof UNSUPPORTED_REQUEST_OPTION_REASON;
 }

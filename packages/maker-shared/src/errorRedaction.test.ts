@@ -124,6 +124,19 @@ describe('redactSensitiveText', () => {
     expect(output).not.toContain('dXNlcjpwYXNz');
   });
 
+  // #9836: provider 403 must survive redaction; opaque credential digits must not become routing signals.
+  it.each([
+    ['HTTP 403: The caller does not have permission', 403],
+    ['{"status":403,"message":"Forbidden"}', 403],
+    ['Request rejected (403): Forbidden', 403],
+    ['Authorization: Bearer tok-403-x', undefined],
+    ['HTTP 4030: unrelated code', undefined],
+  ])('preserves an explicit provider access status in %s', (input, errorStatus) => {
+    expect(extractNonSecretErrorSignals(input)).toEqual({
+      ...(errorStatus === undefined ? {} : { errorStatus }), usageLimit: false,
+    });
+  });
+
   it('preserves only explicit status and quota signals', () => {
     expect(extractNonSecretErrorSignals('Authorization: Bearer tok-401-x; upstream 500')).toEqual({
       usageLimit: false,

@@ -471,6 +471,25 @@ describe('pi translator', () => {
     expect(events.filter((event) => event.type === 'text')).toEqual([]);
   });
 
+  // #9836: exercise the native assistant envelope and settlement, not a fabricated terminal event.
+  it('preserves provider 403 on the settled terminal error without leaking credentials', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: {
+      role: 'assistant', content: [], stopReason: 'error',
+      errorMessage: 'HTTP 403: The caller does not have permission; Authorization: Bearer secret-token',
+      usage: { input: 0, output: 0 },
+    } }), queue, ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    const errors = events.filter(event => event.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.data).toMatchObject({ errorStatus: 403, isTerminal: true });
+    expect(JSON.stringify(errors)).not.toContain('secret-token');
+    expect(events.find(event => event.type === 'done')?.data).toMatchObject({ status: 'failed' });
+    disposePiTranslateContext(ctx);
+  });
+
   it('surfaces a terminal provider error after Pi settles instead of staying in Working', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
