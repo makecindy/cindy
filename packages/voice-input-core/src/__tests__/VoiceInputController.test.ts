@@ -169,6 +169,49 @@ describe('VoiceInputController', () => {
     await controller.cancel();
   });
 
+  // The new wait must preserve host edits both when refinement wins the race
+  // and when its idle budget expires. No existing case edits the accepted range.
+  it.each([false, true])('keeps edits made during pending refinement (timeout: %s)', async (timeout) => {
+    vi.useFakeTimers();
+    const asr = new FakeAsrProvider();
+    let editorText = '';
+    let userEdited = false;
+    let finish!: (result: RefinementResult) => void;
+    let partial!: (text: string) => void;
+    const submitted = vi.fn((text: string, segment: SpeechSegment) => {
+      editorText = text;
+      return acceptSubmission(text, segment);
+    });
+    const preview = vi.fn((text: string) => { editorText = text; });
+    const applied = vi.fn((_range: EditableRange, text: string) => { editorText = text; return true; });
+    const controller = new VoiceInputController({
+      asr, logger: new VoiceTimelineLogger(),
+      refiner: { refine: (input) => {
+        partial = input.onPartial!;
+        return new Promise((resolve) => { finish = resolve; });
+      } },
+      callbacks: {
+        onDraftChanged: () => {}, onSubmitted: submitted,
+        isRangeUserTouched: () => userEdited, onRefinementPreview: preview, applyRefinement: applied,
+      },
+    });
+    await controller.start();
+    asr.emit({ type: 'stable', text: 'Original words', at: Date.now() });
+    await controller.stop();
+    editorText = 'The user edited these words';
+    userEdited = true;
+    partial('Unwanted model preview');
+    await vi.advanceTimersByTimeAsync(timeout ? 8_000 : 1_000);
+    finish({ accepted: true, basedOnText: 'Original words', refinedText: 'Unwanted model result', sourceSegmentIds: [], elapsedMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(editorText).toBe('The user edited these words');
+    expect(submitted).toHaveBeenCalledTimes(1);
+    expect(preview).not.toHaveBeenCalled();
+    expect(applied).not.toHaveBeenCalled();
+    expect(controller.currentState).toBe('done');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it.each(['silent', 'partial', 'opted_out', 'provider_error'] as const)('does not replay a recording when %s', async (scenario) => {
     const asr = new FakeAsrProvider();
     asr.recover = vi.fn(async () => {});
