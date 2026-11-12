@@ -113,7 +113,7 @@ function commandContainsPath(command, candidatePath) {
     const before = normalizedCommand[index - 1];
     const after = normalizedCommand[index + normalizedPath.length];
     const start = before === undefined || /\s|["'=]/.test(before);
-    const end = after === undefined || after === '/' || after === '"' || after === "'";
+    const end = after === undefined || /\s/.test(after) || after === '/' || after === '"' || after === "'";
     if (start && end) return true;
     index = normalizedCommand.indexOf(normalizedPath, index + 1);
   }
