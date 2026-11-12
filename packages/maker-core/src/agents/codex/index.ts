@@ -1977,10 +1977,34 @@ export class CodexAgent extends BaseAgent {
     forceReload: boolean,
     remoteHostId?: string,
   ): Promise<{ skills: SkillMetadata[]; errors: Array<{ path?: string; message: string }> }> {
-    return this.withHostOperation(async () => remoteHostId
-      ? { key: hostKey(remoteHostId), host: await this.getHost(remoteHostId) }
-      : this.getUtilityHost(),
-    host => this.listSkillsForHost(host, workingDir, forceReload));
+    try {
+      return await this.withHostOperation(async () => remoteHostId
+        ? { key: hostKey(remoteHostId), host: await this.getHost(remoteHostId) }
+        : this.getUtilityHost(),
+      host => this.listSkillsForHost(host, workingDir, forceReload));
+    } catch (error) {
+      if (remoteHostId || !(error instanceof AgentNotAuthenticatedError)) throw error;
+      const env = await buildCodexEnv(this.deps.auth, this.deps.runtimeConfig);
+      const host = new AppServerHost({
+        createTransport: () => createStdioTransport({
+          binaryPath: this.deps.binaryPath,
+          env: useCodexHistoryHome(env, env.CODEX_HOME ?? path.join(os.homedir(), '.codex')),
+          extraArgs: [
+            ...(this.deps.disableCodexPluginRuntime ? ['--disable', 'plugins', '--disable', 'remote_plugin'] : []),
+            '-c', 'cli_auth_credentials_store="ephemeral"',
+          ],
+          onProcessSpawned: (pid) => this.deps.registerLocalCodexAppServerProcess?.({ pid, role: 'control-plane-service' }),
+        }),
+        requireEphemeralAuth: true,
+        logger: this.deps.logger,
+        clientInfo: { name: 'cindy', version: '0.0.0' },
+      });
+      try {
+        return await this.listSkillsForHost(host, workingDir, forceReload);
+      } finally {
+        await host.retire('Codex skill discovery complete', { throwOnTransportError: true });
+      }
+    }
   }
 
   /**
