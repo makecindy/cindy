@@ -36,11 +36,12 @@ export const UI_MOCK_BIDI_MARKDOWN = [
 const richSource = [
   { id: 'heading', kind: 'heading', props: { text: 'سلام، گزارش API 123' } },
   { id: 'text', kind: 'text', props: { text: UI_MOCK_BIDI_TEXT } },
-  { id: 'centered-markdown', kind: 'markdown', props: { text: '# Centered\n\nEnglish paragraph', style: { textAlign: 'center' } } },
+  { id: 'captioned-markdown', kind: 'markdown', props: { text: 'Captioned content.', caption: 'سلام، توضیح API 123.' } },
+  { id: 'centered-markdown', kind: 'markdown', props: { text: '# Centered\n\nEnglish paragraph', caption: 'مرحبا، وصف API 123.', style: { textAlign: 'center' } } },
   { id: 'aligned-group', kind: 'stack', props: { style: { textAlign: 'right' } } },
   { id: 'inherited-heading', parent: 'aligned-group', kind: 'heading', props: { text: 'Container-aligned heading' } },
   { id: 'inherited-text', parent: 'aligned-group', kind: 'text', props: { text: 'Container-aligned English text.' } },
-  { id: 'inherited-markdown', parent: 'aligned-group', kind: 'markdown', props: { text: 'Container-aligned Markdown.' } },
+  { id: 'inherited-markdown', parent: 'aligned-group', kind: 'markdown', props: { text: 'Container-aligned Markdown.', caption: 'Container-aligned caption.' } },
 ].map((node, i) => JSON.stringify({ version: 1, seq: i + 1, op: 'create', ...node })).join('\n');
 
 export const UI_MOCK_BIDI_TASK: UiMockTask = {

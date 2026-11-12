@@ -56,6 +56,11 @@ export default {
     const rich = page.locator('[data-testid="rich"] .rich-answer-text').filter({ hasText: rtl });
     await aligned(rich, rtl, 'right');
     await aligned(rich, english, 'left');
+    // PR #10188: caption leaves were omitted from paragraph-direction handling.
+    // A Persian caption must align right without overriding explicit alignment.
+    await aligned(page.locator('[data-rich-node="captioned-markdown"] .rich-answer-caption'), 'سلام، توضیح API 123.', 'right');
+    await aligned(page.locator('[data-rich-node="centered-markdown"] .rich-answer-caption'), 'مرحبا، وصف API 123.', 'center');
+    await aligned(page.locator('[data-rich-node="inherited-markdown"] .rich-answer-caption'), 'Container-aligned caption.', 'right');
     // Defaults must not override explicit Markdown or inherited container alignment.
     await aligned(page.locator('[data-rich-node="centered-markdown"] h1'), 'Centered', 'center');
     await aligned(page.locator('[data-rich-node="centered-markdown"] p'), 'English paragraph', 'center');

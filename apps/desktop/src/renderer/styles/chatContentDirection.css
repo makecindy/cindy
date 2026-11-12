@@ -4,7 +4,7 @@
    Keep this on content leaves so application controls retain their layout. */
 .chat-content-text,
 .msg-markdown :is(p, li, th, td, blockquote, h1, h2, h3, h4, h5, h6),
-.rich-answer :is(.rich-answer-text, .rich-answer-heading),
+.rich-answer :is(.rich-answer-text, .rich-answer-heading, .rich-answer-caption),
 [data-chat-input-root] .ProseMirror p {
   unicode-bidi: plaintext;
   /* RichAnswer exposes explicit node/container alignment as an inherited token. */
