@@ -76,3 +76,25 @@ it('sends autonomous network requests through the private Host channel', async (
   client.reply({ reqId: 'host1', ok: true, result: { ok: true, connectionId: 'opaque' } });
   await expect(call).resolves.toEqual({ ok: true, connectionId: 'opaque' });
 });
+
+// Unit, #9825 / networkSlot's media timeout contract: the new private bridge
+// capped every request at 60s even though Host media requests allow 120–300s.
+// Existing immediate network replies missed a valid receipt arriving at 90s.
+it('allows the Host media deadline to finish while retaining a bounded bridge timeout', async () => {
+  vi.useFakeTimers();
+  try {
+    const sent: any[] = [];
+    const client = new NodeHostServicesClient(new NodeRequestScopes(), value => sent.push(value));
+    let settled = false;
+    const pending = client.network({ op: 'fetch', url: 'https://example.test/video', as: 'media' });
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(settled).toBe(false);
+    const result = { ok: true, media: { url: 'cindy-media:fixture' } };
+    client.reply({ reqId: sent[0].reqId, ok: true, result });
+    await expect(pending).resolves.toEqual(result);
+    const missing = client.network({ op: 'fetch', url: 'https://example.test/video', as: 'media' }).catch(error => error.message);
+    await vi.advanceTimersByTimeAsync(360_000);
+    expect(await missing).toBe('NODE_HOST_OPERATION_FAILED');
+  } finally { vi.useRealTimers(); }
+});

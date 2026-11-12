@@ -31,6 +31,13 @@ receipt 同步段去重已撤回，存储、终端、亲选目录与流式分片
 | Device Link / 多客户端 | 没有新跨设备定时调用；`packages/device-link` 与协议包相对本 PR 基线无 diff。 | 沿用每帧 2 MiB、InvokeScheduler 每设备常规并发 12 / 后台 4、交互额外 2、等待队列 128。新 Node 确认复用已协商 SSE，心跳沿用既有 15 秒，不另开流。确认发送积压超过 1 MiB 或 `write=false` 且未排空时拒绝，不排队。 | `device-link-protocol/src/protocol.ts:26`、`device-link/src/invokeScheduler.ts:12–24`；Node `host-tools.test.mjs` 的 negotiated event-stream 回归。 | 并发上限不是每秒限流；本 PR 不增加自主请求频率。慢端确认按无法送达取消，迟到肯定回答不能启动作业；原任务事件 writer 的积压行为是基线已有，未修改。 |
 | renderer bundle | 账号复用界面仍在 `GhostPluginPage` 懒加载 chunk，不进初始静态依赖闭包。 | 同依赖、同配置生产构建比较全部 JS 与初始闭包的 raw / gzip。 | 见下文 A/B 数字与构建脚本。 | 体积确有小幅增长；不以构建时间推断运行性能。 |
 
+Node 私有桥最多保留 8 个待决请求。`fetch` 的传输兜底为宿主已有媒体上限 300 秒加
+原 60 秒桥预算，共 360 秒；实际网络超时仍由原 `networkSlot` 按请求模式裁决，
+不会把普通请求的超时扩大到 360 秒。其它网络操作仍为 60 秒。等待中的网络请求与
+宿主工具调用一样计入 Worker 活跃工作；成功或失败后才恢复空闲回收。
+回归为 `nodeHostServicesClient.test.ts` 的 90 秒媒体回执与 360 秒兜底，
+以及 `nodeRuntimeBroker.test.ts` 的并发 network 成功/失败后回收矩阵，均用假时钟。
+
 ## 已修复的回退
 
 下列修正已随本 PR 推送，新增的生产入口回归与原有点名测试通过。
