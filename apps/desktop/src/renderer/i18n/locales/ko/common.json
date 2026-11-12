@@ -10769,6 +10769,7 @@
       "needsAttention": "확인 필요",
       "duplicate": "동반자 복제",
       "moreActions": "{{name}} 추가 작업",
+      "viewIcons": "아이콘",
       "sectionExpand": "동반자 펼치기",
       "showLess": "접기",
       "sectionCollapse": "동반자 접기",

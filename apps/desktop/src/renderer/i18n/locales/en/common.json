@@ -10814,6 +10814,7 @@
       "needsAttention": "Needs attention",
       "duplicate": "Duplicate buddy",
       "moreActions": "More actions for {{name}}",
+      "viewIcons": "Icons",
       "sectionExpand": "Expand buddies",
       "showLess": "Show less",
       "sectionCollapse": "Collapse buddies",

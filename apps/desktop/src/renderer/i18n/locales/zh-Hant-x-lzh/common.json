@@ -10769,6 +10769,7 @@
       "needsAttention": "待處置",
       "duplicate": "複製同伴",
       "moreActions": "{{name}} 之餘事",
+      "viewIcons": "圖標",
       "sectionExpand": "展同伴",
       "showLess": "收",
       "sectionCollapse": "收同伴",

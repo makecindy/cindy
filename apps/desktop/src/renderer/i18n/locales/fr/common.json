@@ -10898,6 +10898,7 @@
       "needsAttention": "Action requise",
       "duplicate": "Dupliquer l’ami",
       "moreActions": "Plus d'actions pour {{name}}",
+      "viewIcons": "Icônes",
       "sectionExpand": "Développer les amis",
       "showLess": "Afficher moins",
       "sectionCollapse": "Réduire les amis",
