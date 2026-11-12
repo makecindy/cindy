@@ -239,6 +239,10 @@ try {
   console.log('PASS Codex product prompt delivery persists on the Host task row');
   console.log('PASS shared Host HTTP + queue + native Codex: send, persisted UUID/reply, steer, runtime reopen and stop (synthetic local upstream)');
   assert.ok(requests.length >= 3);
+  // The desktop product system prompt reaches the real Codex request (runtimeConfigsCore.ts).
+  assert.ok(requests.some(request => JSON.stringify(request.body).includes('You are Cindy, an open-source AI assistant.')),
+    'Codex upstream request carries the Cindy product prompt');
+  console.log('PASS the Codex upstream request carries the Cindy product system prompt');
   console.log('PASS native Codex + production Host: gateway and custom provider turns; key rotation during a live turn preserves completion and the next gateway task uses the new key');
 } catch (error) {
   // The application logger owns uncaughtException handling. Preserve a failed
