@@ -37,6 +37,7 @@ export function createPluginManagementController(client: PluginManagementClient,
   let disposed = false, epoch = 0, refreshSequence = 0, snapshotSequence = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let receiver: ManagedPlugin | undefined;
+  let uiConsentOperation = false;
   let installDetail: ManagedMarketDetail | undefined;
   const listeners = new Set<() => void>();
   const current = (token: number) => !disposed && epoch === token && client.isCurrent();
@@ -52,12 +53,13 @@ export function createPluginManagementController(client: PluginManagementClient,
     if (state.online && state.operationId && state.outcome === 'running' && !state.busy && !disposed)
       timer = setTimeout(() => { timer = undefined; void reconcile(); }, Math.max(250, options.pollIntervalMs ?? 1000));
   }
+  function matchesReceiver(live: ManagedPlugin): boolean {
+    return !!receiver && live.instanceKey === receiver.instanceKey
+      && live.manifest.id === receiver.manifest.id && live.namespace === receiver.namespace
+      && pluginApprovalToken(live) === pluginApprovalToken(receiver);
+  }
   function receiverCurrent(snapshot: PluginManagementSnapshot): boolean {
-    if (receiver) {
-      const live = snapshot.ghosts.find((g) => g.instanceKey === receiver!.instanceKey);
-      return !!live && live.manifest.id === receiver.manifest.id && live.namespace === receiver.namespace
-        && pluginApprovalToken(live) === pluginApprovalToken(receiver);
-    }
+    if (receiver) return snapshot.ghosts.some(matchesReceiver);
     return !installDetail || !snapshot.ghosts.some((g) => marketItemMatchesPlugin(installDetail!, g));
   }
   async function readSnapshot(token: number) {
@@ -70,7 +72,20 @@ export function createPluginManagementController(client: PluginManagementClient,
   }
   async function acceptReceipt(receipt: PluginManagementReceipt, token: number) {
     if (!current(token) || receipt.operationId !== state.operationId) return;
-    publish({ receipt, outcome: receipt.phase, busy: false, errorCode: receipt.errorCode ?? null });
+    const prompt: Partial<PluginManagementState> = {};
+    if (receipt.phase === 'succeeded' && uiConsentOperation && receiver) {
+      // The committed decision consumes this revision, even if readback fails.
+      // Fence older display reads before publishing; later reads remain authoritative.
+      ++snapshotSequence;
+      const item = state.uiConsent?.item;
+      // The compact contract carries the physical instance key (including namespace).
+      if (item?.instanceKey === receiver.instanceKey && item.approvalToken === pluginApprovalToken(receiver)) prompt.uiConsent = null;
+      // The pre-operation snapshot may now supply the chat hint instead of uiConsent.
+      // This display-only suppression follows the receipt, never grants a capability.
+      if (options.readDisplay && state.snapshot) prompt.snapshot = { ...state.snapshot,
+        ghosts: state.snapshot.ghosts.map(ghost => matchesReceiver(ghost) ? { ...ghost, uiPromptSuppressed: true } : ghost) };
+    }
+    publish({ ...prompt, receipt, outcome: receipt.phase, busy: false, errorCode: receipt.errorCode ?? null });
     if (terminal(receipt)) {
       // A cancel racing commit must still show succeeded. Refresh facts, without changing the receipt on read failure.
       stopPolling();
@@ -110,6 +125,7 @@ export function createPluginManagementController(client: PluginManagementClient,
     const installed = intent.installed;
     if (!installed && intent.kind !== 'install') { publish({ busy: false, outcome: 'failed', errorCode: 'PLUGIN_INSTALL_CHANGED' }); return; }
     receiver = installed && 'manifest' in installed ? installed : undefined;
+    uiConsentOperation = intent.kind === 'approve-ui' || intent.kind === 'defer-ui';
     installDetail = intent.kind === 'install' ? intent.detail : undefined;
     try {
       let request: BeginIntent = intent as BeginIntent;
