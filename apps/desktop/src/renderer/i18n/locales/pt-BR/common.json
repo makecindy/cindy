@@ -14501,6 +14501,7 @@
       "REMOTE_AGENT_BUSY": "Há sessões demais em execução no outro computador. Encerre algumas e tente novamente.",
       "REMOTE_AGENT_UNSUPPORTED": "Este Agent não está disponível no outro computador. Instale-o ou entre na conta dele lá, ou escolha outro Agent.",
       "REMOTE_AGENT_INVALID": "Ocorreu um erro na comunicação com o computador que executa o Agent. Tente novamente; se o problema persistir, atualize o Cindy nos dois computadores.",
+      "REMOTE_AGENT_RESUME_REJECTED": "O computador que executa o modelo não consegue retomar esta sessão. Crie uma nova sessão pela lista de sessões e copie o conteúdo necessário para continuar. A sessão original e as mensagens na fila são mantidas.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo atingiu o limite de compartilhamento definido pelo proprietário. Escolha outro modelo disponível para continuar.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esse computador não concedeu a você acesso remoto a este provedor ou ao modelo selecionado. Peça ao proprietário para ajustar o acesso em Acesso remoto e compartilhamento ou escolha outro modelo.",
       "REMOTE_AGENT_FORK_FAILED": "O computador que executa o Agent não conseguiu iniciar uma nova sessão a partir daqui. Tente novamente ou tente outra mensagem.",

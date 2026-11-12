@@ -14347,6 +14347,7 @@
       "REMOTE_AGENT_BUSY": "彼機同時方行之差事過多。請先終其若干，再試。",
       "REMOTE_AGENT_UNSUPPORTED": "此 Agent 於彼機不可用。請於彼機安裝或登門後再試，或易一 Agent。",
       "REMOTE_AGENT_INVALID": "與行 Agent 之機通訊有謬。請再試；若屢現，請將兩機之 Cindy 皆更新至最新版。",
+      "REMOTE_AGENT_RESUME_REJECTED": "運行模型之電腦無法續此差事。請由差事列表新建差事，複製所需內容以續。原差事及待發之訊皆保留。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已達分享者所設之模型占比上限。請擇他可用之模型續之。",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "彼機未向君開放此供方或所擇模型。請令機主於「遠端與分享」中調其開放之範圍，或易一模型。",
       "REMOTE_AGENT_FORK_FAILED": "行 Agent 之機未能自此開新差事。請再試，或易一訊再試。",

@@ -714,6 +714,7 @@
     "REMOTE_AGENT_RESUME_LOST": "Não foi possível restabelecer a ligação à conversa anterior no outro computador, pelo que o Agent continua sem esse contexto.",
     "REMOTE_AGENT_UNSUPPORTED": "Este Agent não está disponível no outro computador. Instala-o ou inicia sessão nele nesse computador, ou escolhe outro Agent.",
     "REMOTE_AGENT_INVALID": "Ocorreu um erro na comunicação com o computador que executa o Agent. Tenta novamente; se o problema persistir, atualiza o Cindy em ambos os computadores.",
+    "REMOTE_AGENT_RESUME_REJECTED": "O computador que executa o modelo não consegue retomar esta sessão. Cria uma nova sessão a partir da lista de sessões e copia o conteúdo necessário para continuar. A sessão original e as mensagens em fila são mantidas.",
     "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo atingiu o limite de partilha definido pelo proprietário. Escolhe outro modelo disponível para continuar.",
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esse computador não permitiu a utilização remota deste fornecedor. Nesse computador, ativa «Permitir utilização remota» em Definições → Fornecedores ou escolhe outro modelo.",
     "REMOTE_AGENT_FORK_FAILED": "O computador que executa o Agent não conseguiu iniciar uma nova sessão a partir daqui. Tenta novamente ou tenta uma mensagem diferente.",

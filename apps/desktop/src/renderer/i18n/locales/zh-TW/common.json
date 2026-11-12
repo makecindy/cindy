@@ -14355,6 +14355,7 @@
       "REMOTE_AGENT_BUSY": "那臺電腦上同時執行的任務太多。先結束一些任務後再試。",
       "REMOTE_AGENT_UNSUPPORTED": "那臺電腦上這個 Agent 無法使用。在那臺電腦上安裝或登入後再試，或換一個 Agent。",
       "REMOTE_AGENT_INVALID": "與執行 Agent 的電腦通訊時出錯。請重試；如果持續出現，請把兩臺電腦上的 Cindy 都更新到最新版。",
+      "REMOTE_AGENT_RESUME_REJECTED": "執行模型的電腦無法恢復這個任務。請從任務列表建立新任務，將需要繼續的內容複製過去。原任務和排隊訊息會保留。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已達到分享者設定的模型占比上限。請選擇其他可用模型繼續。",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那臺電腦未向你開放這個供應商或所選模型。請讓電腦主人在「遠端與分享」中調整開放範圍，或換一個模型。",
       "REMOTE_AGENT_FORK_FAILED": "執行 Agent 的電腦沒能從這裡開啟新任務。請重試，或換一則訊息再試。",

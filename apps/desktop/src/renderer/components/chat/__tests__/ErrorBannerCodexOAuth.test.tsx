@@ -76,7 +76,12 @@ function deferred<T>() {
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => key,
-    i18n: { language: 'en', exists: (key: string) => key === 'chat.remoteError.REMOTE_AGENT_GROUP_USAGE_LIMIT' },
+    i18n: { language: 'en', exists: (key: string) => [
+      'chat.remoteError.REMOTE_AGENT_GROUP_USAGE_LIMIT',
+      'chat.remoteError.REMOTE_AGENT_RESUME_REJECTED',
+      'chat.remoteError.REMOTE_AGENT_INVALID',
+      'chat.remoteError.REMOTE_AGENT_OFFLINE',
+    ].includes(key) },
   }),
 }));
 
@@ -95,6 +100,29 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 describe('ErrorBanner OpenAI connection recovery', () => {
+  // #10187, unit: the real banner must replace communication/update guidance
+  // and suppress both original-input retry and hidden continuation for this refusal.
+  it.each(['original input', null])('explains rejected guest resume with retry text %s', retryText => {
+    const retry = vi.fn();
+    const continueAfterError = vi.fn();
+    const error = 'LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer';
+    render(<ErrorBanner error={error} retryText={retryText} onRetry={retry}
+      onContinueAfterError={continueAfterError} agentKind="codex" agentDeviceId="shared-computer" />);
+    expect(screen.getByText('chat.remoteError.REMOTE_AGENT_RESUME_REJECTED')).toBeTruthy();
+    expect(screen.queryByText('chat.remoteError.REMOTE_AGENT_INVALID')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
+    expect(retry).not.toHaveBeenCalled();
+    expect(continueAfterError).not.toHaveBeenCalled();
+  });
+  it.each([
+    '[REMOTE_AGENT_INVALID] invalid request',
+    '[REMOTE_AGENT_INVALID] This conversation cannot be resumed on this computer.',
+    '[REMOTE_AGENT_OFFLINE] connection timed out',
+  ])('keeps existing guidance and retry for %s', error => {
+    render(<ErrorBanner error={error} retryText="original input" onRetry={vi.fn()} />);
+    expect(screen.queryByText('chat.remoteError.REMOTE_AGENT_RESUME_REJECTED')).toBeNull();
+    expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
+  });
   // PR #10049: ordinary OpenAI 401 recovery must unlock the original input only
   // after the existing account probe verifies it, including after remounting.
   it.each([false, true])('restores generic authentication retry after verification (remount=%s)', async remount => {
