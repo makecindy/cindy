@@ -48,6 +48,8 @@ export interface AgentNetPendingSwitch {
 }
 
 export interface AgentNetRemoteSwitchPorts {
+  /** 捕获发起时的账号代次；排队、等待落盘或延迟切换后不能借用后来登录的账号执行。 */
+  captureScope(): () => void;
   readSettings(): {
     agentNetEnabled?: boolean;
     agentNetOnlyEncrypted?: boolean;
@@ -160,7 +162,7 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
     deadlineTimer = later(() => void revert(pending.switchId, 'deadline'), Math.max(0, pending.deadlineAt - ports.now()));
   }
 
-  async function set(enabled: boolean, switchId: string, controllerId: string, controllerName: string): Promise<AgentNetSwitchAccepted> {
+  async function set(enabled: boolean, switchId: string, controllerId: string, controllerName: string, assertScope: () => void): Promise<AgentNetSwitchAccepted> {
     const epoch = localChangeEpoch;
     const offBlock = !enabled ? disableBlock() : null;
     if (offBlock) {
@@ -177,14 +179,20 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
       // 取消打开，但恢复记录必须留到关闭真正完成，避免退出窗口和关闭失败丢掉兜底。
       pending = { ...pending, restoring: true };
       await ports.writePending(pending);
-      clearDeadline();
+      // 后续归因落盘或关闭回调创建仍可能失败；原期限必须继续兜底。
+      armDeadline(pending);
+      assertScope();
     }
     const delayedEpoch = ++delayedChangeEpoch;
     const settings = ports.readSettings();
     if (enabled === (settings.agentNetEnabled === true)) {
       // 取消的是还没执行的打开：开关没变过，「由谁打开」也一并撤掉。
-      if (pending) await ports.writePending(null);
-      if (pending && settings.agentNetChangedBy) await ports.writeChangedBy(null);
+      if (pending) {
+        await ports.writePending(null);
+        assertScope();
+        clearDeadline();
+      }
+      if (pending && settings.agentNetChangedBy) { await ports.writeChangedBy(null); assertScope(); }
       return { version: AGENT_NET_SWITCH_VERSION, switchId, enabled, confirmWithinMs: null };
     }
     if (enabled) {
@@ -204,10 +212,13 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
       confirmBy = next.deadlineAt;
       await ports.writePending(next);
       armDeadline(next);
+      assertScope();
     }
     await ports.writeChangedBy({ deviceId: controllerId, deviceName: controllerName, at: now, enabled });
+    assertScope();
     log.info('remote agent-net switch accepted', { enabled });
     later(() => void serially(async () => {
+      assertScope();
       // 回答发出后、真正切换前，这台电脑上的人可能已经自己改了开关：以人为准。
       if (epoch !== localChangeEpoch) return;
       if (delayedEpoch !== delayedChangeEpoch) return;
@@ -215,35 +226,41 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
       const current = ports.readSettings();
       if (!enabled && disableBlock()) {
         // 回答离开后的延迟窗口中，本机(含另一实例)也可能刚刚选了仅使用 Agent-Net。
-        clearDeadline();
-        if (pending && current.agentNetPendingSwitch?.switchId === pending.switchId) await ports.writePending(null);
         await ports.writeChangedBy(null);
+        assertScope();
+        if (pending && current.agentNetPendingSwitch?.switchId === pending.switchId) { await ports.writePending(null); assertScope(); }
+        clearDeadline();
         log.info('remote agent-net disable stopped by the target encryption choice');
         return;
       }
       const error = await ports.apply(enabled);
+      assertScope();
       if (!error) {
         if (!enabled && pending && ports.readSettings().agentNetPendingSwitch?.switchId === pending.switchId) {
           await ports.writePending(null);
+          assertScope();
+          clearDeadline();
         }
         return;
       }
       log.warn('remote agent-net switch could not be applied', { error, enabled });
       // 打开失败时 apply 已恢复原值，发起端会核实实际状态后报告结果。
       if (enabled) {
-        clearDeadline();
         await ports.writePending(null);
+        assertScope();
+        clearDeadline();
       } else if (pending && ports.readSettings().agentNetPendingSwitch?.switchId === pending.switchId) {
         // 没关成仍由原期限兜底；恢复中的旧打开不能因迟到的确认重新生效。
         armDeadline(pending);
       }
       await ports.writeChangedBy(null);
+      assertScope();
     }), APPLY_DELAY_MS);
     // 与重发回答相同，返回实际剩余期限；发起端才不会在目标的 400ms 延迟窗口之前判定恢复失败。
     return { version: AGENT_NET_SWITCH_VERSION, switchId, enabled, confirmWithinMs: confirmBy === null ? null : Math.max(0, confirmBy - ports.now()) };
   }
 
-  async function confirm(switchId: string, controllerId: string): Promise<AgentNetSwitchConfirmed> {
+  async function confirm(switchId: string, controllerId: string, assertScope: () => void): Promise<AgentNetSwitchConfirmed> {
     const pending = ports.readSettings().agentNetPendingSwitch;
     if (!pending || pending.restoring || ports.now() >= pending.deadlineAt || pending.switchId !== switchId || pending.controllerId !== controllerId) {
       throw new AgentNetSwitchError('AGENT_NET_SWITCH_STALE', 'no matching remote switch is waiting');
@@ -253,6 +270,7 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
       throw new AgentNetSwitchError('AGENT_NET_SWITCH_NOT_ON_AGENT_NET', 'confirmation must arrive over Agent-Net');
     }
     await ports.writePending(null);
+    assertScope();
     clearDeadline();
     log.info('remote agent-net switch confirmed');
     return { version: AGENT_NET_SWITCH_VERSION, switchId, confirmed: true };
@@ -265,14 +283,16 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
       const request = parseAgentNetSwitchRequest(raw);
       if (!request) throw new AgentNetSwitchError('AGENT_NET_SWITCH_INVALID', 'invalid request');
       if (request.action === 'status') return status(controllerId);
+      const assertScope = ports.captureScope();
       if (request.action === 'set') {
         const epoch = localChangeEpoch;
         return enqueue(() => {
+          assertScope();
           if (epoch !== localChangeEpoch) throw new AgentNetSwitchError('AGENT_NET_SWITCH_STALE', 'a local change took precedence');
-          return set(request.enabled, request.switchId, controllerId, controllerName);
+          return set(request.enabled, request.switchId, controllerId, controllerName, assertScope);
         });
       }
-      return enqueue(() => confirm(request.switchId, controllerId));
+      return enqueue(() => { assertScope(); return confirm(request.switchId, controllerId, assertScope); });
     },
     /**
      * 启动时调用：记录切换的进程已经不在，就没人能确认了，直接退回；仍在运行的另一个实例留给它；
@@ -290,12 +310,20 @@ export function createAgentNetRemoteSwitch(ports: AgentNetRemoteSwitchPorts) {
     },
     /** 这台电脑上的人自己改了开关：丢掉待确认的远程切换与「由谁打开」的说明。 */
     async onLocalChange(): Promise<void> {
+      const assertScope = ports.captureScope();
       localChangeEpoch++;
-      clearDeadline();
-      await serially(async () => {
+      await enqueue(async () => {
+        assertScope();
         const settings = ports.readSettings();
-        if (settings.agentNetPendingSwitch) await ports.writePending(null);
-        if (settings.agentNetChangedBy) await ports.writeChangedBy(null);
+        // 取消成功后才撤计时；写失败向本机操作传播，不能带着旧恢复记录继续保存新选择。
+        if (settings.agentNetChangedBy) { await ports.writeChangedBy(null); assertScope(); }
+        if (settings.agentNetPendingSwitch) { await ports.writePending(null); assertScope(); }
+        clearDeadline();
+      }).catch((error: unknown) => {
+        // 正在恢复的操作可能已因本机代次变化停掉重试；取消没落盘时重新接回设备兜底。
+        const pending = ports.readSettings().agentNetPendingSwitch;
+        if (pending) armDeadline(pending);
+        throw error;
       });
     },
   };

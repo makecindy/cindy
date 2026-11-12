@@ -30,9 +30,11 @@ function setup(initial: { enabled?: boolean; onlyEncrypted?: boolean; relayOnly?
   let block: 'NOT_SIGNED_IN' | null = null;
   const apply = vi.fn(async (enabled: boolean): Promise<string | null> => { settings.agentNetEnabled = enabled; return null; });
   const writePending = vi.fn(async (value: AgentNetPendingSwitch | null) => { settings.agentNetPendingSwitch = value; });
+  const writeChangedBy = vi.fn(async (value: AgentNetRemoteChange | null) => { settings.agentNetChangedBy = value; });
   const service = createAgentNetRemoteSwitch({
+    captureScope: () => () => {},
     readSettings: () => settings,
-    writeChangedBy: async (value) => { settings.agentNetChangedBy = value; },
+    writeChangedBy,
     writePending,
     readiness: () => block,
     disableBlock: () => initial.relayOnly ? 'V2_ONLY_RELAY' : null,
@@ -44,7 +46,7 @@ function setup(initial: { enabled?: boolean; onlyEncrypted?: boolean; relayOnly?
     log: { info: () => undefined, warn: () => undefined },
   });
   const turnOn = () => service.handle({ action: 'set', enabled: true, switchId: SWITCH }, CONTROLLER, 'Studio Mac');
-  return { service, settings, agentNetLinks, alive, apply, writePending, blockWith: (value: 'NOT_SIGNED_IN') => { block = value; }, turnOn };
+  return { service, settings, agentNetLinks, alive, apply, writePending, writeChangedBy, blockWith: (value: 'NOT_SIGNED_IN') => { block = value; }, turnOn };
 }
 
 beforeEach(() => { vi.useFakeTimers(); });
@@ -181,6 +183,43 @@ describe('remote Agent-Net switch on the switched computer', () => {
     await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS);
     expect(settings).toMatchObject({ agentNetEnabled: true, agentNetPendingSwitch: { switchId: SWITCH, restoring: true } });
     await vi.advanceTimersByTimeAsync(AGENT_NET_SWITCH_CONFIRM_MS);
+    expect(settings).toMatchObject({ agentNetEnabled: false, agentNetPendingSwitch: null });
+  });
+
+  // 独立重审 REPRO C：归因落盘失败发生在关闭回调创建之前，不能丢掉原期限。
+  it('retains automatic recovery when recording a pending disable fails', async () => {
+    const { service, settings, turnOn, writeChangedBy } = setup();
+    await turnOn();
+    await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS);
+    writeChangedBy.mockRejectedValueOnce(new Error('temporary attribution write failure'));
+    await expect(service.handle({ action: 'set', enabled: false, switchId: 'switch-disable-write' }, CONTROLLER, 'Studio Mac')).rejects.toThrow('temporary attribution write failure');
+    await vi.advanceTimersByTimeAsync(AGENT_NET_SWITCH_CONFIRM_MS + 15_000);
+    expect(settings).toMatchObject({ agentNetEnabled: false, agentNetPendingSwitch: null });
+  });
+
+  it('preserves recovery and reports failure when cancelling the pending record for a local change fails', async () => {
+    const { service, settings, turnOn, writePending } = setup();
+    await turnOn();
+    await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS);
+    writePending.mockRejectedValueOnce(new Error('temporary cancellation write failure'));
+    await expect(service.onLocalChange()).rejects.toThrow('temporary cancellation write failure');
+    await vi.advanceTimersByTimeAsync(AGENT_NET_SWITCH_CONFIRM_MS + 15_000);
+    expect(settings).toMatchObject({ agentNetEnabled: false, agentNetPendingSwitch: null });
+  });
+
+  // 本机请求在恢复执行中排队，恢复和取消均失败时仍须兜底；已有用例没有这次队列交错。
+  it('rearms recovery when both an in-flight restore and its queued local cancellation fail', async () => {
+    const { service, settings, turnOn, apply, writePending } = setup();
+    await turnOn();
+    await vi.advanceTimersByTimeAsync(APPLY_DELAY_MS);
+    let finish!: (error: string | null) => void;
+    apply.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    await vi.advanceTimersByTimeAsync(AGENT_NET_SWITCH_CONFIRM_MS);
+    writePending.mockRejectedValueOnce(new Error('temporary cancellation write failure'));
+    const local = service.onLocalChange().catch((error: unknown) => error);
+    finish('START_FAILED');
+    expect(await local).toMatchObject({ message: 'temporary cancellation write failure' });
+    await vi.advanceTimersByTimeAsync(15_000);
     expect(settings).toMatchObject({ agentNetEnabled: false, agentNetPendingSwitch: null });
   });
 

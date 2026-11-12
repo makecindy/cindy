@@ -12,7 +12,7 @@
  * - 最小失败输入：挂起一次部署或退出请求，换账号，再让原请求完成；同一设备另起一把公钥来申请；
  *   同一邀请码下一真一假两条其他账号的申请；对方先拒绝再同意；主人电脑不回话 / 回过「收到」的两次同账号加入。
  * - tier：unit；SSH、存储、账号记录、中转 V2 接口和 Electron 为进程内 fake，无网络、磁盘或真实等待。
- * - 单文件实测：2.95 秒（25 例，测试体 61ms，Windows，含命令启动与转译）。
+ * - 单文件实测：3.23 秒（26 例，测试体 70ms，Windows，含命令启动与转译）。
  */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { RelayConfig } from '../selfHostedRelayConfig';
@@ -39,6 +39,9 @@ const h = vi.hoisted(() => ({
   onlyEncrypted: false,
   agentNetEnabled: false,
   invoke: vi.fn(),
+  /** device-link-settings.json 是电脑本地设置；各账号共用同一份恢复记录。 */
+  switchSettings: {} as Record<string, unknown>,
+  switchMetadataWrite: vi.fn(),
   /** 账号私有记录(Chat Server preferences)的进程内替身。 */
   prefs: new Map<string, unknown>(),
   /** 某个中转上的秘密(带 V2 身份或只走 V2 时);没有登记的按旧版凭证处理。 */
@@ -74,8 +77,15 @@ vi.mock('../../utils/ipcValidate.js', () => ({ throwIpcError: (code: string) => 
 vi.mock('../invoke-context.js', () => ({ getDeviceLinkInvokeContext: () => null }));
 vi.mock('../deviceName.js', () => ({ deviceName: () => 'Test computer' }));
 vi.mock('../providerShareApi.js', () => ({ providerShareLinkApp: () => 'cindy' }));
-vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ keepAwake: true, agentNetEnabled: h.agentNetEnabled, agentNetOnlyEncrypted: h.onlyEncrypted }),
-  writeDeviceLinkSetting: async (key: string, value: boolean) => { if (key === 'agentNetOnlyEncrypted') h.onlyEncrypted = value; },
+vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ keepAwake: true, agentNetEnabled: h.agentNetEnabled, agentNetOnlyEncrypted: h.onlyEncrypted, ...h.switchSettings }),
+  writeDeviceLinkSetting: async (key: string, value: unknown) => {
+    if (key === 'agentNetChangedBy') await h.switchMetadataWrite(value);
+    if (key === 'agentNetOnlyEncrypted') h.onlyEncrypted = value === true;
+    if (key === 'agentNetEnabled') h.agentNetEnabled = value === true;
+    if (key === 'agentNetPendingSwitch' || key === 'agentNetChangedBy') {
+      h.switchSettings[key] = value;
+    }
+  },
 }));
 vi.mock('../selfHostedRelayFrameAuth.js', () => ({ refreshRelayCertificatesSoon: vi.fn() }));
 vi.mock('../relayAccountPreferences.js', () => ({
@@ -173,6 +183,9 @@ beforeEach(async () => {
   resetClientEndpointsForTest(TEST_CLIENT_ENDPOINTS);
   h.onlyEncrypted = false;
   h.agentNetEnabled = false;
+  h.switchSettings = {};
+  h.switchMetadataWrite.mockReset();
+  h.switchMetadataWrite.mockResolvedValue(undefined);
   h.invoke.mockResolvedValue({ ok: true, result: { enabled: false, confirmWithinMs: null } });
   h.prefs = new Map();
   h.secrets = new Map();
@@ -224,6 +237,30 @@ it('exposes and enforces the V2-only relay restriction on both ends of a switch-
   expect(result.peer).toMatchObject({ ok: false, message: expect.stringContaining('[AGENT_NET_SWITCH_V2_ONLY_RELAY]') });
   expect(h.invoke).not.toHaveBeenCalled();
   expect(h.agentNetEnabled).toBe(true);
+});
+
+// 账号代次：开关按电脑保存，旧账号排队的 IPC 不能在新账号下取消恢复并启用/重连。真实装配 IPC，unit。
+// 缺口：部署边界测试没经过远程切换队列。最小输入：挂起归因写入，排队本机打开，换账号后才放行写入。
+it('rejects an old account local switch queued behind a remote write without enabling under the new account', async () => {
+  const metadata = deferred<void>();
+  h.switchMetadataWrite.mockImplementationOnce(() => metadata.promise);
+  const remote = agentNetSwitchRemoteHandler()!.handle({ action: 'set', enabled: true, switchId: 'switch-owner-a' }, 'controller', 'Other computer')
+    .then(() => null, (error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.switchMetadataWrite).toHaveBeenCalledTimes(1);
+  const pending = structuredClone(h.switchSettings.agentNetPendingSwitch);
+  const local = command({ type: 'set-agent-net', enabled: true });
+  await vi.advanceTimersByTimeAsync(0);
+  h.invalidated();
+  h.owner = 'account-b'; h.generation += 1;
+  h.authChanged();
+  metadata.resolve();
+  await remote;
+  const result = await local;
+  expect.soft(result.error).toBe('NOT_SIGNED_IN');
+  expect.soft(h.switchSettings.agentNetPendingSwitch).toEqual(pending);
+  expect.soft(h.agentNetEnabled).toBe(false);
+  expect.soft(h.restart).not.toHaveBeenCalled();
 });
 
 // #10095 discussion_r4546067871：旧链接加入的中转没有 V2 身份，不能宣称已具备切换前提。

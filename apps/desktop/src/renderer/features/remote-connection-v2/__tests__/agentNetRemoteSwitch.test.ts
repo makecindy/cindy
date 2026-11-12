@@ -19,6 +19,7 @@ describe('remote Agent-Net switch result on the requesting computer', () => {
   it('waits for the target recovery deadline before reporting a failed encrypted reconnection', async () => {
     const settings = { agentNetEnabled: false, agentNetPendingSwitch: null as AgentNetPendingSwitch | null };
     const service = createAgentNetRemoteSwitch({ readSettings: () => settings,
+      captureScope: () => () => {},
       writeChangedBy: async () => {}, writePending: async (p) => { settings.agentNetPendingSwitch = p; },
       readiness: () => null, apply: async (enabled) => { settings.agentNetEnabled = enabled; return null; },
       linkIsAgentNet: () => false, now: () => Date.now(), pid: 100, isProcessAlive: () => false,

@@ -1859,6 +1859,7 @@ function installAgentNetRemoteSwitch(): void {
   if (remoteSwitch) return;
   const switchLog = createLogger('agent-net:remote-switch');
   remoteSwitch = createAgentNetRemoteSwitch({
+    captureScope: captureOwner,
     readSettings: readDeviceLinkSettings,
     disableBlock: agentNetSwitchDisableBlock,
     // 「由谁打开」写好就推给本机窗口，开关下面立刻显示。
@@ -1936,8 +1937,9 @@ async function execute(command: SelfHostedRelayCommand): Promise<CommandResult> 
       return { state: getState() };
     }
     case 'set-agent-net': {
+      const assertOwner = captureOwner();
       // 这台电脑上的人自己改了开关：以人为准，丢掉待确认的远程切换与「由谁打开」的说明。
-      await remoteSwitch?.onLocalChange();
+      await remoteSwitch?.onLocalChange(); assertOwner();
       const result = await applyAgentNet(command.enabled);
       return { ...result, state: getState() };
     }
