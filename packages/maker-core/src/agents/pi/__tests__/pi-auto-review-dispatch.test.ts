@@ -3200,6 +3200,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(captured.args[toolsIndex + 1]).toBe('read,grep,find,ls');
       expect(captured.args).toContain('--no-approve');
       expect(captured.args).toContain('--no-extensions');
+      // codemode 是内置扩展，--no-extensions 会关掉它；缺了这一项功能会静默失效。
+      expect(captured.args).toContain('builtin:codemode');
       expect(captured.args).not.toContain('--skill');
       expect(captured.env.CINDY_PI_PACKAGE_MANAGEMENT).toBeUndefined();
       expect(captured.mcpVendorOptions).toBeUndefined();
