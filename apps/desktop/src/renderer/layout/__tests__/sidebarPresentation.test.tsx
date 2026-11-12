@@ -124,3 +124,23 @@ it('re-expands when returning to a sidebar route after it was retracted', async 
   expect(resize).toHaveBeenLastCalledWith(400);
   expect(resize.mock.calls.some((call) => call[2] === true)).toBe(false);
 });
+
+// Bug: 程序展开（agent / 插件动作，userToggle=false）本来就不拉宽窗口；进设置页再回来
+// 曾因基线丢失被当成启动恢复，一次往返就把自动展示变成手点开标。
+it('keeps a programmatic reveal unexpanded across a route gap', async () => {
+  const resize = vi.fn(async (requested: number) => (requested > 0 ? 401 : 0));
+  window.electronAPI = { windowSidebarExpansion: resize } as never;
+  const { result, rerender } = renderHook(
+    ({ ready, collapsed }) => useSidebarPresentation(root, collapsed, ready, () => 400, false),
+    { initialProps: { ready: true, collapsed: true } },
+  );
+  await act(async () => { rerender({ ready: true, collapsed: false }); });
+  expect(resize).not.toHaveBeenCalled();
+  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 800 });
+  await act(async () => { rerender({ ready: false, collapsed: false }); });
+  expect(resize).toHaveBeenLastCalledWith(0);
+  resize.mockClear();
+  await act(async () => { rerender({ ready: true, collapsed: false }); });
+  expect(resize).not.toHaveBeenCalled();
+  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 800 });
+});

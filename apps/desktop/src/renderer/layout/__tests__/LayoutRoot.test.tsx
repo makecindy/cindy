@@ -666,6 +666,9 @@ it('expands the saved standalone window when the initial session restores an ope
 it('retracts on a Settings takeover and expands again on return', () => {
   const expand = vi.fn(async (_width: number) => undefined);
   window.electronAPI.windowSidebarExpansion = expand;
+  // 启动恢复的展开确实占用过窗口宽度；退回时才有东西可以收回、再展开。
+  const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+    .mockReturnValue({ width: 800 } as DOMRect);
   const view = (suppress: boolean, ready: boolean) => (
     <BuiltinPanelBridgeProvider value={bridge}>
       <LayoutRoot rightTabsCollapsed={false} rightTabsUserToggle={false}
@@ -673,12 +676,12 @@ it('retracts on a Settings takeover and expands again on return', () => {
     </BuiltinPanelBridgeProvider>
   );
   const rendered = render(view(false, true));
-  vi.spyOn(screen.getByTestId('layout-root-content'), 'getBoundingClientRect')
-    .mockReturnValue({ width: 800 } as DOMRect);
-  rendered.rerender(view(true, true));
-  expect(expand).toHaveBeenCalledExactlyOnceWith(0);
-  rendered.rerender(view(true, false));
   expect(expand).toHaveBeenCalledTimes(1);
+  rendered.rerender(view(true, true));
+  expect(expand).toHaveBeenLastCalledWith(0);
+  rendered.rerender(view(true, false));
+  expect(expand).toHaveBeenCalledTimes(2);
   rendered.rerender(view(false, true));
   expect(expand.mock.lastCall![0]).toBeGreaterThan(0);
+  rect.mockRestore();
 });
