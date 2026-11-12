@@ -100,15 +100,6 @@ export const additionalSettings = defineSettings({
     sectionKey: 'settings.tabs.storage',
     aliases: ['工作目录', 'working directory'],
   },
-  botModel: {
-    id: 'general.botModel',
-    tab: 'general',
-    targetId: 'settings-bot-model',
-    titleKey: 'bots.globalSettings.defaultModel',
-    descriptionKey: 'bots.globalSettings.defaultModelHint',
-    sectionKey: 'settings.sections.bots',
-    aliases: ['伙伴默认模型', 'teammate default model'],
-  },
   botReplyTarget: {
     id: 'general.botReplyTarget',
     tab: 'general',

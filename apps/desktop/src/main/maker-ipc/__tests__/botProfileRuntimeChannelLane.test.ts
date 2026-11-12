@@ -33,6 +33,18 @@ function prompt(opts: MakerSessionCreateOpts): string {
 }
 
 describe('IM channel lanes hydrate the full Bot profile', () => {
+  // Unit: account names reach private chats without relabeling visitors or changing stored profiles.
+  it.each(['canonical', 'thread', 'routine', 'channel'])('supplies the account name only to its own chat (%s)', async role => {
+    seed(role, role === 'channel' ? 'im:telegram:777:dm:555' : null);
+    const opts = { id: 'chat', agentKind: 'codex', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    await hydrateBotProfileRuntime(opts, { getUserName: () => '  Alex  ' }, { persistSnapshot: false });
+    expect(opts.botUserProfilePrompt).toBe(role === 'channel' ? '' : 'User: "Alex"');
+    expect(opts.botProfilePrompt).toBe(SOUL.trim());
+    seed(role, null);
+    await hydrateBotProfileRuntime(opts, { getUserName: () => '' }, { persistSnapshot: false });
+    expect(opts.botUserProfilePrompt).toBe('');
+  });
+
   it.each(['claude-code', 'codex', 'pi'] as const)('inherits only enabled official skills on %s', async agentKind => {
     seed('channel', 'im:telegram:777:dm:555', { skillMode: 'allowlist', skills: ['personal'] });
     const opts = { id: 'lane', agentKind, workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;

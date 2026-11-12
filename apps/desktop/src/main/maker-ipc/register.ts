@@ -2,7 +2,7 @@ import { needsSubscriptionAccountHandoff } from '../subscription-accounts/runtim
 import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
 import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
-import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, type AccountFailoverDeps } from '../subscription-accounts/failover.js';
+import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch, type AccountFailoverDeps } from '../subscription-accounts/failover.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
 import { createTaskRuntimePlugins } from './runtimePlugins.js';
 import { RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
@@ -1912,7 +1912,9 @@ const usageLimitAutoResume = new UsageLimitAutoResume({
   clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
   isEligible: isUsageLimitAutoResumeEligible,
   resolveResetAt: resolveSessionUsageResetAt,
-  canSwitchAccount: (sessionId) => canSwitchSubscriptionAccount(sessionId, getSessionRowSnapshotStrict),
+  // Same-account remote Agent tasks ask their executing computer (subscription-account-pools.md 账号间自动换号).
+  canSwitchAccount: (sessionId) =>
+    canSwitchSubscriptionAccount(sessionId, getSessionRowSnapshotStrict, remoteBackgroundInvoke),
   arm: (sessionId, token, resumeAt) =>
     agentInputCoordinatorHolder?.armUsageLimitWait(sessionId, token, resumeAt) ?? false,
   isCurrent: (sessionId, token) =>
@@ -11850,7 +11852,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ? coordinator.continueAfterProviderGroupRecovery(sessionId, token, info)
         : 'superseded';
     },
-    fallback: (sessionId, signals, token) => usageLimitAutoResume.onTurnError(sessionId, signals, token),
+    // 撞限／登录失效的只是那台电脑上的一个账号：账号池里另一个账号能接时可原地换号(由执行电脑判断)。
+    readAccountSwitch: (sessionId) =>
+      readSubscriptionAccountSwitch(sessionId, getSessionRowSnapshotStrict, remoteBackgroundInvoke),
+    fallback: (sessionId, signals, token, recovery) => usageLimitAutoResume.onTurnError(sessionId, signals, token, recovery),
     // 组内电脑的报错用那台机器的本地时间：不带时区的钟点不按本机时区理解。
     readResetAt: (signals) => readTurnUsageResetAt(signals, Date.now(), { localTimeZoneTrusted: false }),
     // 任务里选过「以后自动换」的换号(provider-groups.md §6.2「任务进行中换号」)。
@@ -13864,7 +13869,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           const { teammateWorkspaceDir } = await import('./botProjectMemory.js');
           await getProjectAutomationLoader().deleteProjectSchedules(teammateWorkspaceDir(ownerRoot, botId));
         })
-        .catch((error: unknown) => log.warn('teammate project automations not removed', { error: error instanceof Error ? error.message.slice(0, 80) : 'UNKNOWN' }));
+        .catch((error: unknown) => log.warn('buddy project automations not removed', { error: error instanceof Error ? error.message.slice(0, 80) : 'UNKNOWN' }));
       assertOwner();
       await finishCompanionEnvironmentRemoval(ownerRoot, botId, assertOwner);
     },
@@ -14168,7 +14173,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // Older controllers still offer a stop chip on old task cards; nothing runs through them any more.
   ipcMain.handle(MAKER_INVOKE.BOT_DELEGATION_CANCEL, async (event) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
-    return { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Teammate background tasks were retired' };
+    return { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Buddy background tasks were retired' };
   });
   const captureSessionOwner = () => {
     const owner = getCurrentDbClientSnapshot();
@@ -18652,12 +18657,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const createdAt = Date.now();
       void enqueueDurableWrite(`turn-model:${sessionId}:${clientId}`, async () => {
         if (!isDataOwnerBroadcastScopeCurrent(owner)) return;
-        const [input] = await db.select({ content: messages.content }).from(messages)
+        const [input] = await db.select({ content: messages.content, meta: messages.agentMeta }).from(messages)
           .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId),
             eq(messages.role, 'user'), isNull(messages.rewindAt))).limit(1);
-        // Hidden coordination/routine inputs must not leak a visible model boundary.
-        if (!input || input.content.startsWith(UI_ACTION_TRIGGER_PREFIX)) return;
+        if (!input) return;
         await recordTurnModelChange(current, {
+          input: { content: input.content, autoResume: isAutoResumeUserMessage(input.meta ? JSON.parse(input.meta) : null) },
           readPrevious: async () => {
             const [previous] = await db.select({ meta: messages.agentMeta }).from(messages)
               .innerJoin(sessions, eq(sessions.id, messages.sessionId))
@@ -19304,7 +19309,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (grant.sessionId === null) {
       // Explicitly taskless: never inherit an Agent's ambient authority or focused task.
       const deps = getCindyGhostsMcpDeps(undefined, {}, grant);
-      const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal });
+      const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal,
+        ...(grant.attachments ? { attachments: grant.attachments } : {}) });
       await grant.assertCurrent();
       assertOwner();
       return result.ok ? pluginAppResult(result.result) : { isError: true,
@@ -19329,7 +19335,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { ...snapshot, permissionMode: permissionModeOrAsk(snapshot.permissionMode), isCurrent: () => !snapshot.planModeEnabled && snapshot.permissionMode !== 'plan' && snapshot.isCurrent?.() === true };
       },
     }, grant);
-    const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal });
+    const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal,
+      ...(grant.attachments ? { attachments: grant.attachments } : {}) });
     await grant.assertCurrent();
     return result.ok ? pluginAppResult(result.result) : { isError: true,
       content: [{ type: 'text', text: JSON.stringify(result) }] };
@@ -20426,12 +20433,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       // Teammate-to-teammate messages left in a queue from before V2 have no sender to answer.
       if (restoredFromSnapshot && item.clientId.startsWith('bot-dm:')) {
-        throw new AcceptedCallbackDispatchCancelled('Teammate direct messages were retired');
+        throw new AcceptedCallbackDispatchCancelled('Buddy direct messages were retired');
       }
       // Likewise a V1 background task's queued start / follow-up: nothing would deliver its result,
       // and a task its teammate had paused must not start by itself.
       if (restoredFromSnapshot && /^bot-delegation-(?:start|resume|unpause|interject):/.test(item.clientId)) {
-        throw new AcceptedCallbackDispatchCancelled('Teammate background tasks were retired');
+        throw new AcceptedCallbackDispatchCancelled('Buddy background tasks were retired');
       }
       // 已派发 → 该项不会再走 discard,释放 scheduler 的 discard 监听防泄漏。
       schedulerQueuedPromptDiscardWatchers.delete(item.clientId);

@@ -27,11 +27,16 @@ export function parseSubscriptionSessionAccountQuery(
   const nativeSessionId = id('nativeSessionId');
   if (!sessionId && !nativeSessionId)
     throwIpcError('INVALID_PARAMS', 'Invalid subscription session');
+  const model = value.model;
+  if (model !== undefined && model !== null
+    && (typeof model !== 'string' || !model.trim() || model.length > 512))
+    throwIpcError('INVALID_PARAMS', 'Invalid subscription model');
   return {
     action: 'session',
     providerId: value.providerId,
     ...(sessionId ? { sessionId } : {}),
     ...(nativeSessionId ? { nativeSessionId } : {}),
+    ...(typeof model === 'string' ? { model } : {}),
   };
 }
 

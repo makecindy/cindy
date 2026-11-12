@@ -1,3 +1,4 @@
+import '@/styles/chatContentDirection.css';
 import { deviceDisplayName } from '@/lib/deviceName';
 import {
   useCallback,
@@ -130,7 +131,8 @@ import {
   takeComposerSubmitRequest,
 } from '@/lib/composerActionsBus';
 import { resolveComposerModelSelection } from './composerModelSelection';
-import { PluginUiSlot, usePluginUiHas } from '@/cindy-brain/PluginUiContributions';
+import { PluginUiSlot, usePluginUiComposerCandidates } from '@/cindy-brain/PluginUiContributions';
+import { PluginUiCompletionBridge, type PluginUiCompletionResult, type PluginUiCompletionRequest } from '@/cindy-brain/PluginUiCompletionBridge';
 import { registerPluginUiDraftEditor } from '@/cindy-brain/pluginUiContext';
 import type { SessionRuntimeProfileProjection, SessionRuntimePendingProjection } from '@/lib/ccAgent.types';
 import {
@@ -1512,7 +1514,11 @@ export function ChatInput({
   // call sites keep working unchanged; NewMakerDraftRoute passes an explicit
   // sentinel to keep the transient draft alive across sidebar switches.
   const storageKey = draftKey ?? sessionId;
-  const hasPluginToolbar = usePluginUiHas('composer.toolbar');
+  const pluginUiCandidates = usePluginUiComposerCandidates();
+  const hasPluginToolbar = pluginUiCandidates.toolbar;
+  const [pluginCompletionResult, setPluginCompletionResult] = useState<PluginUiCompletionResult | null>(null);
+  const pluginCompletionKeyRef = useRef('');
+  const pluginCompletionAuthority = useMemo(() => pluginUiCandidates.completion.length ? crypto.randomUUID() : '', [pluginUiCandidates.completion]);
   // perf/session-switch 探针(见文件头 perfLog 注释):按 storageKey 换代计一次
   // render 起点,layout effect 里量到 commit 完成;覆盖"remount"与"复用组件仅换
   // key"两种切换形态。纯诊断:所有测量走 import.meta.env.DEV,生产构建里 body
@@ -2437,7 +2443,7 @@ export function ChatInput({
     editable: !composerEditorLocked,
     extensions: [
       Document,
-      Paragraph,
+      Paragraph.configure({ HTMLAttributes: { dir: 'auto' } }),
       Text,
       ComposerListItem,
       ComposerBulletList,
@@ -3301,6 +3307,16 @@ export function ChatInput({
   const installedGhostsRef = useRef(installedGhosts);
   installedGhostsRef.current = installedGhosts;
   const trigger: TriggerState = editor ? detectTrigger(editor) : { kind: 'none' };
+  const pluginCompletionKey = pluginUiCandidates.completion.length && trigger.kind !== 'none' &&
+    (trigger.kind === 'at' || trigger.sigil === '/') && !remoteHostId && !deviceLinkDeviceId
+    ? JSON.stringify([storageKey, pluginCompletionAuthority, trigger.kind, trigger.from, trigger.query]) : '';
+  pluginCompletionKeyRef.current = pluginCompletionKey;
+  const pluginCompletionItems = pluginCompletionKey && pluginCompletionResult?.key === pluginCompletionKey
+    ? pluginCompletionResult.items : undefined;
+  const canInsertPluginCompletion = (from: number, query: string, sigil: '/' | '@', key: string) => !!editor &&
+    !editor.isDestroyed && !editor.view.composing && !composerMutationLockedRef.current &&
+    pluginCompletionKeyRef.current === key && editor.state.selection.empty &&
+    editor.state.doc.textBetween(from, editor.state.selection.from, '\n', '\uFFFC') === `${sigil}${query}`;
   const remoteComposerGhosts = useRemoteComposerGhosts(
     deviceLinkDeviceId,
     workingDir,
@@ -4813,9 +4829,14 @@ export function ChatInput({
   );
   // 面板显示与键盘导航共用同一份命令源:$ 只列意识,/ 只列技能/命令。
   const paletteCommands = isGhostSigil ? ghostCommandItems : slashPaletteCommands;
+  const pluginSlashChoices = useMemo(() => trigger.kind === 'slash' && trigger.sigil === '/' && pluginCompletionItems
+    ? pluginCompletionItems.map(item => ({ item, command: { kind: 'desktop' as const,
+      name: `plugin-completion:${item.instanceId}:${item.providerId}:${item.id}`, label: item.label,
+      description: item.description ?? '', meta: item.source } })) : [], [pluginCompletionItems, trigger.kind, isGhostSigil]);
+  const pluginSlashCommands = useMemo(() => pluginSlashChoices.map(choice => choice.command), [pluginSlashChoices]);
   const filteredCommands = useMemo(
-    () => (trigger.kind === 'slash' ? filterSlashCommands(paletteCommands, trigger.query) : []),
-    [paletteCommands, trigger],
+    () => (trigger.kind === 'slash' ? [...filterSlashCommands(paletteCommands, trigger.query), ...pluginSlashCommands] : []),
+    [paletteCommands, trigger, pluginSlashCommands],
   );
 
   // At-panel scan state
@@ -5056,6 +5077,14 @@ export function ChatInput({
     writableDirs,
     writableGrantScope,
   ]);
+  const pluginAtActions = useMemo<ComposerSuggestionAction[]>(() => trigger.kind === 'at' && pluginCompletionItems
+    ? pluginCompletionItems.map(item => ({ id: `plugin-completion:${item.instanceId}:${item.providerId}:${item.id}`,
+      label: `${item.label} · ${item.source}`, searchText: trigger.query,
+      canRun: () => canInsertPluginCompletion(trigger.from, trigger.query, '@', pluginCompletionKey),
+      run: () => { editor?.chain().focus().command(({ tr }) => {
+        tr.insertText(item.insertText, trigger.from, tr.selection.from); return true;
+      }).run(); },
+    })) : [], [pluginCompletionItems, pluginCompletionKey, trigger.kind, editor]);
 
   const atResources = useMemo(
     () => {
@@ -5078,12 +5107,12 @@ export function ChatInput({
       effectiveAt
         ? buildComposerSuggestionEntries({
             query: atQuery,
-            actions: composerSuggestionActions,
+            actions: pluginAtActions.length ? [...composerSuggestionActions, ...pluginAtActions] : composerSuggestionActions,
             resources: atResources,
             plugins: pluginSuggestions,
           })
         : [],
-    [atQuery, atResources, composerSuggestionActions, effectiveAt, pluginSuggestions],
+    [atQuery, atResources, composerSuggestionActions, effectiveAt, pluginSuggestions, pluginAtActions],
   );
 
   // When `@` panel opens, rescan so newly created files/agents show immediately.
@@ -5307,6 +5336,15 @@ export function ChatInput({
         return;
       }
       const { from } = trigger;
+      if (cmd.name.startsWith('plugin-completion:')) {
+        const choice = pluginSlashChoices.find(choice => choice.command === cmd);
+        if (!choice || !canInsertPluginCompletion(from, trigger.query, '/', pluginCompletionKey)) return;
+        editor.chain().focus().command(({ tr }) => {
+          tr.insertText(choice.item.insertText, from, editor.state.selection.from); return true;
+        }).run();
+        setSuppressedSlashAt(from);
+        return;
+      }
       // Preserve any draft after the caret. Only consume a suffix when it
       // completes this exact command (e.g. `/compa|ct`) at a real boundary.
       const runEnd = resolveSlashCommandRunEnd(
@@ -5356,7 +5394,7 @@ export function ChatInput({
         planModeEntry?.onToggle(!planModeEntry.enabled);
       }
     },
-    [editor, planModeCommandAvailable, planModeEntry, pluginSkillSetup, trigger],
+    [editor, planModeCommandAvailable, planModeEntry, pluginSkillSetup, trigger, pluginSlashChoices, pluginCompletionKey],
   );
 
   const resolveEffectiveAtRange = useCallback((): { from: number; to: number } | null => {
@@ -5507,11 +5545,17 @@ export function ChatInput({
   const handleComposerSuggestionSelect = useCallback(
     (entry: ComposerSuggestionEntry) => {
       if (isComposerSuggestionEntryDisabled(entry)) return;
+      if (entry.kind === 'action' && entry.action.canRun && !entry.action.canRun()) return;
       if (entry.kind === 'resource') {
         void insertAtResource(entry.item);
         return;
       }
       if (!editor) return;
+      if (entry.action.id.startsWith('plugin-completion:')) {
+        entry.action.run();
+        closeAtPanel();
+        return;
+      }
       const range = resolveEffectiveAtRange();
       if (!range) return;
       // 打开面板下一级页面的动作不把焦点还给编辑器：TipTap 的 focus 延后执行，焦点落回
@@ -9438,6 +9482,11 @@ export function ChatInput({
 
   return (
     <div className="relative flex w-full flex-col items-center gap-4" data-chat-input-root>
+      {pluginUiCandidates.completion.length > 0 && <PluginUiCompletionBridge
+        entries={pluginUiCandidates.completion} sessionId={sessionId ?? null} onResult={setPluginCompletionResult}
+        request={pluginCompletionKey && !composerMutationLocked && (slashOpen || typedAtOpen) && trigger.kind !== 'none'
+          ? { key: pluginCompletionKey, trigger: trigger.kind === 'at' ? '@' : '/', query: trigger.query, from: trigger.from } satisfies PluginUiCompletionRequest
+          : null} />}
       {makePreflight && makePreflight.sessionId === sessionId && (
         <CindyMakePreflightDialog
           {...makePreflight}
@@ -10423,6 +10472,7 @@ export function ChatInput({
             <SlashCommandPalette
               query={trigger.query}
               commands={paletteCommands}
+              additionalCommands={pluginSlashCommands}
               focusedIndex={slashFocus}
               onFocusedIndexChange={setSlashFocus}
               onSelect={(cmd) => insertSlashCommand(cmd)}
@@ -10763,7 +10813,7 @@ function VoiceInputButton({
           // (2026-07-22 用户定稿:裸态只用于 +/权限/模型;语音/发送常驻框,create-agent 不再分叉)。
           // 宽度由 inline style 驱动,标签溢出裁剪。
           'h-[30px] justify-start overflow-hidden p-0',
-          'bg-[var(--composer-pill-bg,#FCFCFC)] dark:bg-[var(--composer-pill-bg,#393838)] border border-[var(--border-default)] text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]' /* spec 2026-07-17, token by 一哥 */,
+          'bg-[var(--composer-pill-bg)] border border-[var(--border-default)] text-[var(--composer-pill-icon)]' /* spec 2026-07-17, token by 一哥 */,
           'hover:bg-[var(--model-trigger-hover)]',
           // 录音态:与主题同极性的 chip 填充(light 亮灰 / dark 深灰),红点 + 计时承担状态信号
           (activeRecording || stopping) &&

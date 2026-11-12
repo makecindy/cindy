@@ -1,3 +1,5 @@
+import { z } from 'zod';
+import { VIEW_STATE_KEY, VIEW_STATE_METHOD, VIEW_STATE_CAPABILITY, ViewStateWriter, viewStateError, type ViewStateStorage } from './viewState.js';
 import { createLogger } from '../logger.js';
 import { hostAppSdkAsset } from './hostSdk.js';
 import { GHOST_PIPE_CALL_MAX_TOTAL_MS } from '../../shared/ghost.js';
@@ -46,6 +48,7 @@ export interface McpAppsHostDeps {
   config(id: string): AppServerConfig | undefined;
   /** Desktop injects an owner-scoped vault key so revisions survive restarts. */
   revisionKey?(): string;
+  viewState?(owner: object, sessionId: string, clientId: string, record: McpAppRecord): ViewStateStorage;
   readCard(sessionId: string, clientId: string): Promise<McpAppRecord>;
   writeCard(sessionId: string, clientId: string, record: McpAppRecord): Promise<void>;
   authorizeTool(
@@ -196,6 +199,7 @@ interface View {
   documentTransport: Transport;
   documentReady: Promise<void>;
   restartDocument(): Promise<void>;
+  initializeState(id: string | number): Promise<void>;
   inputSent: boolean;
   resultSent: boolean;
   context: McpUiHostContext;
@@ -239,6 +243,9 @@ export class McpAppsHost {
       assertSource?: () => Promise<void>;
     }
   >();
+  private readonly stateWriters = new Set<{
+    owner: object; sessionId: string; clientId: string; writer: ViewStateWriter;
+  }>();
   private readonly connectionIds = new WeakMap<AppConnection, string>();
   private sweepTimer?: ReturnType<typeof setInterval>;
   constructor(private readonly deps: McpAppsHostDeps) {}
@@ -255,7 +262,7 @@ export class McpAppsHost {
 
   /** Native entries use the same policy, one-use ticket and original main.js runner. */
   async callPluginAction(caller: string, sessionId: string | null, source: {
-    serverId: string; id: string; title: string; assertCurrent(): void | Promise<void>;
+    serverId: string; id: string; title: string; attachments?: string[]; assertCurrent(): void | Promise<void>;
   }, name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<CallToolResult> {
     const owner = this.captureOwner();
     const assertCurrent = async () => {
@@ -274,7 +281,8 @@ export class McpAppsHost {
     await assertCurrent();
     const client = await connection.getClient(signal);
     return withPluginPageTicket({ instance: config.plugin.instance, revision: config.plugin.revision,
-      sessionId, clientId: source.id, tool: name, assertCurrent }, async ticket => {
+      sessionId, clientId: source.id, tool: name, assertCurrent,
+      ...(source.attachments ? { attachments: source.attachments } : {}) }, async ticket => {
       const result = await client.callTool({ name, arguments: args, _meta: { [PLUGIN_PAGE_TICKET]: ticket } },
         CallToolResultSchema, { signal, timeout: GHOST_PIPE_CALL_MAX_TOTAL_MS });
       await assertCurrent();
@@ -512,6 +520,12 @@ export class McpAppsHost {
         availableDisplayModes:
           hostContext.platform === 'mobile' ? ['inline'] : ['inline', 'fullscreen'],
       };
+      // Private restoration data is execution-host owned, including on the first open.
+      delete context[VIEW_STATE_KEY];
+      delete context.viewState;
+      // Independently opened resources have no persisted card to own a snapshot.
+      const stateStorage = sessionId !== null && record
+        ? this.deps.viewState?.(owner, sessionId, clientId, record) : undefined;
       const capabilities = client.getServerCapabilities();
       const createBridge = (currentContext = context) => new AppBridge(
         null,
@@ -551,6 +565,7 @@ export class McpAppsHost {
         generation: 0,
         documentTransport: transport,
         documentReady: Promise.resolve(),
+        initializeState: async () => {},
         restartDocument: async () => {
           // Revoke before closing the old SDK Protocol, including its error replies.
           view.generation++;
@@ -594,10 +609,68 @@ export class McpAppsHost {
           await resourceBinding?.assertOperation?.();
           if (view.generation !== generation) throw new Error('MCP_APP_DOCUMENT_CHANGED');
         };
+        let initializeId: string | number | undefined;
+        let restored: { value: unknown } | undefined;
+        let stateAllowed = false;
+        const writer = stateStorage ? new ViewStateWriter(snapshot => stateStorage.save(snapshot)) : undefined;
+        const pendingWriter = writer && sessionId !== null ? { owner, sessionId, clientId, writer } : undefined;
+        view.initializeState = async id => {
+          initializeId = id;
+          restored = undefined;
+          stateAllowed = false;
+          if (!stateStorage) return;
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            // Capture only already accepted batches. Reads never flush or create rows.
+            const barriers = [...this.stateWriters].filter(item => item.owner === owner &&
+              item.sessionId === sessionId && item.clientId === clientId).map(item => item.writer.barrier());
+            const value = await Promise.race([
+              Promise.all(barriers).then(() => stateStorage.read()),
+              new Promise<never>((_, reject) => {
+                timer = setTimeout(() => reject(viewStateError('CINDY_VIEW_STATE_STORAGE_UNAVAILABLE')), 2_000);
+              }),
+            ]);
+            if (view.generation === generation && initializeId === id && this.views.get(viewId) === view) {
+              this.view(caller, sessionId, viewId);
+              restored = { value };
+            }
+          } catch { /* Missing capability prevents overwriting a snapshot the page did not receive. */ }
+          finally { clearTimeout(timer); }
+        };
+        if (writer && pendingWriter) bridge.setRequestHandler(
+          z.object({ method: z.literal(VIEW_STATE_METHOD), params: z.unknown().optional() }),
+          async request => {
+            if (!stateAllowed) throw viewStateError('CINDY_VIEW_STATE_STORAGE_UNAVAILABLE');
+            if (view.generation !== generation) throw viewStateError('MCP_APP_CARD_UNAVAILABLE');
+            this.view(caller, sessionId, viewId);
+            const params = request.params;
+            if (!params || typeof params !== 'object' || Array.isArray(params) ||
+                !Object.hasOwn(params, 'state') || Object.keys(params).length !== 1)
+              throw viewStateError('CINDY_VIEW_STATE_INVALID');
+            this.stateWriters.add(pendingWriter);
+            try { await writer.set((params as { state: unknown }).state); return {}; }
+            finally { if (!writer.hasRequests) this.stateWriters.delete(pendingWriter); }
+          },
+        );
         const scopedTransport: Transport = {
           async start() {},
           send: async (message) => {
-            if (this.views.get(viewId) === view && view.generation === generation) await transport.send(message);
+            if (this.views.get(viewId) !== view || view.generation !== generation) return;
+            if ('id' in message && message.id === initializeId && 'result' in message && restored) {
+              const result = message.result as Record<string, unknown>;
+              const capabilities = result.hostCapabilities as Record<string, unknown>;
+              message = { ...message, result: {
+                ...result,
+                hostCapabilities: { ...capabilities, experimental: {
+                  ...(capabilities.experimental as Record<string, unknown> | undefined),
+                  [VIEW_STATE_KEY]: VIEW_STATE_CAPABILITY,
+                } },
+                hostContext: { ...(result.hostContext as Record<string, unknown>), [VIEW_STATE_KEY]: restored.value },
+              } };
+              stateAllowed = true;
+              restored = undefined;
+            }
+            await transport.send(message);
           },
           async close() { scopedTransport.onclose?.(); },
         };
@@ -1102,6 +1175,11 @@ export class McpAppsHost {
         });
       return;
     }
+    if ('method' in message && message.method === 'ui/initialize' && 'id' in message) {
+      await view.initializeState(message.id);
+      if (view.generation !== generation) return;
+      this.view(caller, sessionId, id);
+    }
     // Sandbox messages are reserved for the trusted outer proxy, never for an App.
     if ('method' in message && message.method.startsWith('ui/notifications/sandbox-')) return;
     if ('method' in message && 'id' in message) {
@@ -1109,7 +1187,7 @@ export class McpAppsHost {
         /^(ui\/(initialize|message|update-model-context|open-link|request-display-mode)|tools\/(list|call)|resources\/(read|list|templates\/list)|prompts\/list|ping)$/.test(
           message.method,
         );
-      this.deps.audit?.(known ? message.method : 'unknown');
+      this.deps.audit?.(known || message.method === VIEW_STATE_METHOD ? message.method : 'unknown');
     }
     view.documentTransport.onmessage?.(message);
   }
