@@ -368,7 +368,7 @@ export class AgentNetUplink extends EventEmitter {
   }
   presence(remoteControlEnabled: boolean, capabilities: string[], metadata: import('@cindy/agent-net-protocol').DeviceMetadata = {}): void {
     if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'presence', remoteControlEnabled, capabilities,
-      platform: metadata.platform, appVersion: metadata.appVersion, busy: metadata.busy, deviceName: metadata.deviceName }));
+      platform: metadata.platform, app: metadata.app, appVersion: metadata.appVersion, busy: metadata.busy, deviceName: metadata.deviceName }));
   }
   close(): void { this.pending = []; this.queues.clear(); this.ws.terminate(); }
 }

@@ -42,6 +42,12 @@ function presence(over: Partial<DeviceLinkPresenceSnapshot> = {}): DeviceLinkPre
 }
 
 describe('shouldRefreshForPresence · 必须重拉', () => {
+  // App routing: late metadata must remove Friend from computer targets. Unit:
+  // prior platform/busy cases did not distinguish otherwise identical App rows.
+  it('refreshes changed App identity while treating missing app as legacy Cindy', () => {
+    expect(shouldRefreshForPresence([view()], presence({ app: 'cindy-friend' }), 'ready')).toBe(true);
+    expect(shouldRefreshForPresence([view()], presence({ app: 'cindy' }), 'ready')).toBe(false);
+  });
   it('尚无首份目录(devices === null)', () => {
     expect(shouldRefreshForPresence(null, presence(), 'ready')).toBe(true);
   });

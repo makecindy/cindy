@@ -66,6 +66,16 @@ const base = {
   showOffline: false,
 };
 
+// App routing: platform-only nodes incorrectly painted Friend as control-off.
+// Unit, real topology builder: one online Mac, no remote control and no link.
+it.each([undefined, 'cindy', 'cindy-friend', 'other-app'])('classifies app=%s without assigning Cindy-only attention to other Apps', app => {
+  const model = buildTopology({ ...base, devices: [device({ deviceId: 'peer', app, remoteControlEnabled: false })], links: [] });
+  const peer = model.nodes[0];
+  expect(peer.app).toBe(app);
+  expect(peer.status).toBe(app === undefined || app === 'cindy' ? 'attention' : 'unlinked');
+  expect(peer.isMobile).toBe(false);
+});
+
 describe('buildTopology:状态五档', () => {
   it('直连 / 经中转 / 未建链 / 要处理 / 离线各归一档,本机不在节点里', () => {
     const model = buildTopology({

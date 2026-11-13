@@ -6960,7 +6960,11 @@
         "remoteSessionEnded": "远程设备已结此远程差事"
       },
       "control": "控",
-      "standbyHint": "此机另一 Cindy 实例方用远程连接。阖之后，此实例将自行接管。"
+      "standbyHint": "此机另一 Cindy 实例方用远程连接。阖之后，此实例将自行接管。",
+      "apps": {
+        "cindy": "Cindy",
+        "cindyFriend": "Cindy Friend"
+      }
     },
     "imBot": {
       "beta": "Beta",
