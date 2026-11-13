@@ -303,8 +303,9 @@ export async function ensureTeammateTemplate(input: { botId: string; displayName
 }
 
 /** A repository whose root is the workspace itself; an enclosing repo does not count. */
-async function inspectWorkspaceRepository(workspace: string): Promise<'ready' | 'unborn' | 'missing' | 'unavailable'> {
-  const before = await detectCwd(workspace);
+async function inspectWorkspaceRepository(workspace: string, repairSafeDirectory = true): Promise<'ready' | 'unborn' | 'missing' | 'unavailable'> {
+  const before = await detectCwd(workspace, { repairSafeDirectory });
+  const probeOptions = { timeoutMs: 10_000, repairSafeDirectory };
   if (!before.gitInstalled) return 'unavailable';
   const [ownRoot, repoRoot] = await Promise.all([
     fs.realpath(workspace),
@@ -312,18 +313,18 @@ async function inspectWorkspaceRepository(workspace: string): Promise<'ready' | 
   ]);
   if (before.isGitRepo && repoRoot === ownRoot) {
     try {
-      await gitExec(['rev-parse', '--verify', 'HEAD^{commit}'], workspace, { timeoutMs: 10_000 });
+      await gitExec(['rev-parse', '--verify', 'HEAD^{commit}'], workspace, probeOptions);
       return 'ready';
     } catch (error) {
       if (!(error instanceof GitExecError) || error.exitCode !== 128
         || error.timedOut || error.aborted || error.cleanupUnconfirmed) throw error;
       // A failed HEAD lookup alone does not mean an unborn branch: a detached HEAD,
       // unreadable ref or missing commit object must not be repaired by a new commit.
-      const { stdout } = await gitExec(['symbolic-ref', '--quiet', 'HEAD'], workspace, { timeoutMs: 10_000 });
+      const { stdout } = await gitExec(['symbolic-ref', '--quiet', 'HEAD'], workspace, probeOptions);
       const branch = stdout.trim();
       if (!branch.startsWith('refs/heads/')) throw error;
       try {
-        await gitExec(['show-ref', '--verify', '--quiet', branch], workspace, { timeoutMs: 10_000 });
+        await gitExec(['show-ref', '--verify', '--quiet', branch], workspace, probeOptions);
       } catch (refError) {
         if (!(refError instanceof GitExecError) || refError.exitCode !== 1
           || refError.stderr.trim() || refError.timedOut || refError.aborted || refError.cleanupUnconfirmed) throw refError;
@@ -345,11 +346,11 @@ async function inspectWorkspaceRepository(workspace: string): Promise<'ready' | 
 /** Read-only: opening settings must never create a commit or change Git configuration. */
 export async function readWorkspaceRepositoryStatus(workspace: string): Promise<BotProjectRepositoryStatus> {
   try {
-    const state = await inspectWorkspaceRepository(workspace);
+    const state = await inspectWorkspaceRepository(workspace, false);
     if (state === 'ready' || state === 'unavailable') return state;
     if (state === 'missing') return 'not-ready';
     for (const identity of ['GIT_AUTHOR_IDENT', 'GIT_COMMITTER_IDENT']) {
-      await gitExec(['var', identity], workspace, { timeoutMs: 10_000, extraEnv: { LC_ALL: 'C' } });
+      await gitExec(['var', identity], workspace, { timeoutMs: 10_000, repairSafeDirectory: false, extraEnv: { LC_ALL: 'C' } });
     }
     return 'not-ready';
   } catch (error) {

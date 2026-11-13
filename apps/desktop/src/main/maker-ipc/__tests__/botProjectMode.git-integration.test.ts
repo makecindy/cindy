@@ -92,6 +92,29 @@ describe('buddy repository initialization (#10216)', () => {
     expect(await fs.readFile(path.join(workspace, '.git'), 'utf8')).toBe('broken metadata\n');
   });
 
+  // PR #10251: opening settings must not trust a foreign-owned repository globally.
+  // Existing status cases use owned repositories and miss gitExec's automatic repair.
+  // Real Git ownership rejection plus isolated global config require git-integration.
+  it('reports foreign ownership without changing Git trust or repository files', async () => {
+    const workspace = teammateWorkspaceDir(root, 'foreign_owner');
+    await fs.mkdir(workspace, { recursive: true });
+    await gitExec(['init'], workspace);
+    const configPath = path.join(root, 'isolated.gitconfig');
+    const globalConfig = await fs.readFile(configPath, 'utf8');
+    const localConfig = await fs.readFile(path.join(workspace, '.git', 'config'), 'utf8');
+    const head = await fs.readFile(path.join(workspace, '.git', 'HEAD'), 'utf8');
+    const previousOwnerOverride = process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
+    vi.stubEnv('GIT_TEST_ASSUME_DIFFERENT_OWNER', '1');
+    try {
+      expect.soft(await readWorkspaceRepositoryStatus(workspace)).toBe('failed');
+      expect.soft(await fs.readFile(configPath, 'utf8')).toBe(globalConfig);
+      expect(await fs.readFile(path.join(workspace, '.git', 'config'), 'utf8')).toBe(localConfig);
+      expect(await fs.readFile(path.join(workspace, '.git', 'HEAD'), 'utf8')).toBe(head);
+    } finally {
+      vi.stubEnv('GIT_TEST_ASSUME_DIFFERENT_OWNER', previousOwnerOverride);
+    }
+  });
+
   it('does not treat a branch referencing a missing commit as unborn', async () => {
     const result = await prepare('missing_object');
     const branch = (await gitExec(['symbolic-ref', 'HEAD'], result.workingDir)).stdout.trim();
