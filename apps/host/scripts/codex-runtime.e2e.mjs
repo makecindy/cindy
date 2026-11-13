@@ -34,6 +34,12 @@ const upstream = createServer(async (req, res) => {
     res.writeHead(400, { 'content-type': 'application/json' }).end('{"error":"invalid_grant"}');
     return;
   }
+  if (memoryScenario && req.url?.endsWith('/chat/completions')) {
+    memoryScenario.reviews.push(JSON.parse(raw).model);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: '{"verdict":"allow","reason":"fixture reviewer"}' } }] }));
+    return;
+  }
   if (memoryScenario && req.url?.endsWith('/responses')) {
     const body = JSON.parse(raw);
     requests.push({ url: req.url, authorization: req.headers.authorization, body });
@@ -43,7 +49,7 @@ const upstream = createServer(async (req, res) => {
     const item = output
       ? { type: 'message', role: 'assistant', id: `msg-${id}`, content: [{ type: 'output_text', text: 'synthetic complete' }] }
       : { type: 'function_call', id: `fc-${id}`, call_id: 'call-memory', name: 'exec',
-          arguments: JSON.stringify({ input: "const r = await tools.mcp__cindy_memory__call_tool({ name: 'memory_write', args: { type: 'project', name: 'host-e2e-memory', title: 'Host e2e memory', description: 'written by a Codex task through the Host MCP bridge', body: 'synthetic memory body' } });\ntext(typeof r === 'string' ? r : JSON.stringify(r));" }) };
+          arguments: JSON.stringify({ input: `const r = await tools.mcp__cindy_memory__call_tool({ name: 'memory_write', args: { type: 'project', name: '${memoryScenario.name}', title: 'Host e2e memory', description: 'written by a Codex task through the Host MCP bridge', body: 'synthetic memory body' } });\ntext(typeof r === 'string' ? r : JSON.stringify(r));` }) };
     if (output) memoryScenario.output = typeof output.output === 'string' ? output.output : JSON.stringify(output.output);
     res.writeHead(200, { 'content-type': 'text/event-stream', connection: 'close' });
     res.end(responsesStream([{ type: 'response.created', response: { id } }, { type: 'response.output_item.done', item },
@@ -123,6 +129,7 @@ const { createEventHub } = await import('../src/events.mjs');
 const { createHostMessageStore } = await import('../src/message-store.ts');
 const { createChatHandler } = await import('../src/chat.mjs');
 const { attachAgentsToMakerMemory, createHostMemoryManager, createHostMemoryMcpProviders } = await import('../src/agent/memory.mjs');
+const { createHostReviewContextResolver } = await import('../src/agent/review-context.ts');
 initLogger({ logDir: path.join(root, 'logs'), isDev: true, level: 'debug' });
 const profile = path.join(root, 'profile');
 const ownerId = 'native-runtime-fixture';
@@ -366,7 +373,7 @@ try {
 
   // Maker Memory reaches a Codex task through the Host's MCP bridge (release table row 11).
   //    Full access, so the call needs no approval; this checks the bridge, not the approval path.
-  memoryScenario = { output: null, requests: [] };
+  memoryScenario = { output: null, requests: [], reviews: [], name: 'host-e2e-memory' };
   const memoryTurn = await startNative('native-memory-tool', 'xd', 'fixture-model',
     { makerMemoryEnabled: true, permissionMode: 'bypassPermissions' });
   const memoryEnd = await bounded(memoryTurn.ended, 60_000);
@@ -375,17 +382,37 @@ try {
   const memoryTools = JSON.stringify(memoryScenario.requests[0]?.tools ?? []);
   assert.ok(memoryTools.includes('mcp__cindy_memory__call_tool') && memoryTools.includes('mcp__cindy_memory__list_tools'),
     'the Codex request lists the cindy_memory tools');
-  assert.match(memoryScenario.output ?? '', /project_host-e2e-memory\.md/, 'the memory tool answered with the written shard');
   const memoryRoot = path.join(profile, 'owners', dataOwnerStorageKey(ownerId), 'maker-memory');
-  const shards = [];
-  for (const scope of await fs.readdir(memoryRoot)) {
-    const file = path.join(memoryRoot, scope, 'project_host-e2e-memory.md');
-    if (await fs.stat(file).then(() => true, () => false)) shards.push(await fs.readFile(file, 'utf8'));
-  }
-  assert.equal(shards.length, 1, 'the shard is in the Host profile\'s owner memory store');
-  assert.match(shards[0], /synthetic memory body/);
+  const assertShard = async (name) => {
+    assert.match(memoryScenario.output ?? '', new RegExp(`project_${name}\\.md`), 'the memory tool answered with the written shard');
+    const shards = [];
+    for (const scope of await fs.readdir(memoryRoot)) {
+      const file = path.join(memoryRoot, scope, `project_${name}.md`);
+      if (await fs.stat(file).then(() => true, () => false)) shards.push(await fs.readFile(file, 'utf8'));
+    }
+    assert.equal(shards.length, 1, 'the shard is in the Host profile\'s owner memory store');
+    assert.match(shards[0], /synthetic memory body/);
+  };
+  await assertShard('host-e2e-memory');
   memoryScenario = null;
   console.log('PASS a Codex task reaches the Host memory manager through the MCP bridge: its request lists cindy_memory, and a memory_write stored the shard in the Host profile');
+
+  //    The same call in auto mode on the gateway route. Codex's own reviewer is only enabled for
+  //    oauth-bearer routes; here the approval goes to the Host's review path, with the context
+  //    resolver main.ts installs right after building the graph (set here so the earlier steps keep
+  //    their setup). cindy_memory is a trusted first-party server: approved without a review model
+  //    call. The fixture would answer a review request with allow, and counts any.
+  graph.autoReview.setContextResolver(createHostReviewContextResolver({ acceptedInput: () => null }));
+  memoryScenario = { output: null, requests: [], reviews: [], name: 'host-e2e-memory-auto' };
+  const autoMemoryTurn = await startNative('native-memory-auto', 'xd', 'fixture-model',
+    { makerMemoryEnabled: true, permissionMode: 'auto' });
+  const autoMemoryEnd = await bounded(autoMemoryTurn.ended, 60_000);
+  await autoMemoryTurn.close();
+  assert.equal(autoMemoryEnd?.type, 'done', JSON.stringify(autoMemoryEnd ?? autoMemoryTurn.events.at(-1)));
+  await assertShard('host-e2e-memory-auto');
+  const autoReviews = memoryScenario.reviews.length;
+  memoryScenario = null;
+  console.log(`PASS in auto mode on the gateway route the same memory call is approved through the Host review path and stores its shard (${autoReviews} review model request(s))`);
 
   // 2. A review through a Codex profile in the customized auxiliary chain (release table row 4):
   //    maker.oneShot('codex') reuses the local Codex host, so the request crosses this runtime's
