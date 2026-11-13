@@ -35,6 +35,41 @@ function harness(rows: RemoteMessage[], streaming = false, lazyDetails = false) 
 }
 
 describe('remote history preserves original folding', () => {
+  // Unit: ready history previously normalized old message bodies on every delta.
+  // Exercise the screen entry; stale/changed history must still invalidate reuse.
+  it('reuses ready-history bodies across deltas and rebuilds edited or localized history', async () => {
+    let reads = 0;
+    const old = row(0, 'user', 'Earlier question');
+    Object.defineProperty(old, 'content', { get: () => { reads++; return 'Earlier question'; }, enumerable: true });
+    const rows = [old, row(1, 'assistant', 'Earlier answer'), row(2, 'user', 'Next question')];
+    const { view } = harness(rows, true);
+    await view.refresh();
+    const live = { ...row(3, 'assistant', 'First token'), agentMeta: { isStreaming: true } };
+    const prefixCache = { current: null };
+    let previous: ReturnType<typeof buildMobileSessionRenderWindow> | null = null;
+    const render = (message: RemoteMessage, locale = 'en') => {
+      const result = buildMobileSessionRenderWindow({
+        history: { view, snapshot: view.getSnapshot(), messages: [message], streaming: true, sessionId: 'session' },
+        raw: { cacheKey: locale, messages: [message], options: { isSessionStreaming: true, sessionId: 'session' }, prefixCache },
+        previousRenderState: previous && { ...previous, sessionId: 'session' },
+      });
+      previous = result;
+      return result;
+    };
+    const first = render(live);
+    reads = 0;
+    const next = render({ ...live, content: 'First token and second token' });
+    expect(reads).toBe(0);
+    expect(next.items[0]).toBe(first.items[0]);
+    expect(next.items.at(-1)).toMatchObject({ type: 'message', message: { body: 'First token and second token' } });
+    render(live, 'zh-CN');
+    expect(reads).toBeGreaterThan(0);
+    rows[0] = row(0, 'user', 'Edited earlier question');
+    await view.refresh();
+    expect(render(live).items[0]).toMatchObject({ type: 'message', message: { body: 'Edited earlier question' } });
+    expect(prefixCache.current).toBeNull();
+    view.setActive(false);
+  });
   // #7081: the host outline must agree with raw grouping when progress directly precedes the final.
   it.each([false, true])('folds adjacent companion commentary after history takeover (lazy=%s)', async (lazy) => {
     const rows = [row(0, 'user', 'Work'),
