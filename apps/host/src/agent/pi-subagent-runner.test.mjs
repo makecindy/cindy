@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnHostPiSubagentRunner } from './pi-subagent-runner.ts';
-import { startParentWatchdog } from './pi-subagent-parent-watchdog.cts';
+import { probeProcessStartTimeSec, startParentWatchdog } from './pi-subagent-parent-watchdog.cts';
 import { createHostAgentGraph } from './runtime.ts';
 import { createHostMcpRuntime } from './mcp-runtime.ts';
 import { configureHostOwner } from './claude-auth.mjs';
@@ -168,8 +168,14 @@ function hostPiGraph(root) {
 // terminate path (terminateSubagentRunner) and through Host shutdown (Maker.shutdown -> PiAgent.dispose)
 // leaves neither the runner nor its Pi child. A runner that ignores SIGTERM is killed by the fallback.
 // The launch and terminate methods are private in PiAgent; the test calls them as the Subagent tool does.
+// The fake Pi below is a script the runner starts without a shell, and Windows ends a process on
+// SIGTERM instead of delivering it; the tests that need either are POSIX only. The watchdog's
+// Windows probe is covered without a script by 'the start-time probe reads this process'.
+const posixOnly = process.platform === 'win32'
+  && 'the fake Pi is a script started without a shell, and Windows cannot deliver an ignorable SIGTERM';
+
 for (const ending of ['terminate (account boundary, terminate action)', 'Host shutdown (Maker.shutdown)']) {
-  test(`a real runner and its Pi child end through ${ending}`, { timeout: 60_000 }, async () => {
+  test(`a real runner and its Pi child end through ${ending}`, { timeout: 60_000, skip: posixOnly }, async () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-pi-runner-')));
     fs.mkdirSync(path.join(root, 'home'));
     const { graph, mcp } = hostPiGraph(root);
@@ -198,7 +204,7 @@ for (const ending of ['terminate (account boundary, terminate action)', 'Host sh
   });
 }
 
-test('a runner that ignores SIGTERM is killed after the grace period; its detached child is not reaped', { timeout: 60_000 }, async () => {
+test('a runner that ignores SIGTERM is killed after the grace period; its detached child is not reaped', { timeout: 60_000, skip: posixOnly }, async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-pi-runner-')));
   fs.mkdirSync(path.join(root, 'home'));
   const { graph, mcp } = hostPiGraph(root);
@@ -287,5 +293,14 @@ setInterval(() => {}, 1000);
   }
 }
 
-test('a real runner and its Pi child end after the Host is killed', { timeout: 60_000 }, () => killHostThenWait(false));
-test('a runner whose SIGTERM cleanup hangs still ends after the Host is killed', { timeout: 60_000 }, () => killHostThenWait(true));
+test('a real runner and its Pi child end after the Host is killed', { timeout: 60_000, skip: posixOnly }, () => killHostThenWait(false));
+test('a runner whose SIGTERM cleanup hangs still ends after the Host is killed', { timeout: 60_000, skip: posixOnly }, () => killHostThenWait(true));
+
+// The real start-time probe on this platform (ps on POSIX, PowerShell on Windows), against this
+// process: its answer is the moment this process started, to the second the probe reports.
+test('the start-time probe reads this process', { timeout: 60_000 }, () => {
+  const started = (Date.now() - process.uptime() * 1000) / 1000;
+  const probed = probeProcessStartTimeSec(process.pid);
+  assert.equal(typeof probed, 'number');
+  assert.ok(Math.abs(probed - started) <= 3, `probed ${probed}, started ${started}`);
+});
