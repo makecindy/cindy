@@ -903,7 +903,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
         quoteMessageId={replyTo?.messageId} focusRequest={replyFocusRequest}
         placeholder={threadRootId ? t('groupChat.thread.placeholder') : undefined}
         stopPending={stopping || group.round.status === 'running' && group.round.speakers.length > 0 && group.round.speakers.every(speaker => speaker.stopping || speaker.executionStatus === 'stopping')}
-        canStop={group.round.canStop} running={!threadRootId && group.round.status === 'running'} planState={threadRootId || chat.server ? null : botGroupComposerPlanState(openBotGroupPlan(group), group.replyMode)}
+        canStop={group.round.canStop !== false && (!group.serverBacked || group.round.speakers.some(speaker => speaker.isSelfRequested === true))} running={!threadRootId && group.round.status === 'running'} planState={threadRootId || chat.server ? null : botGroupComposerPlanState(openBotGroupPlan(group), group.replyMode)}
         divisionSupported={!threadRootId && !chat.server && (!group.singleSpeaker || group.supportsDivision === true)} attachmentsSupported={group.supportsAttachments === true} uploadAttachment={chat.uploadAttachment} onSend={send} onStop={stop} />
       </View>
       {Platform.OS === 'ios' ? <DockKeyboardBottomSpacer restingBottom={insets.bottom}
@@ -1056,7 +1056,10 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
     {!threadRootId && group.hasMoreBefore && loadOlder ? <MainWindowActionButton action={{ label: t('groupChat.server.loadOlder'), busy: loadingOlder, onPress: loadOlder, testID: 'botGroup.loadOlder' }} /> : !threadRootId && group.hasMoreBefore ? <Text style={styles.olderNote} testID="botGroup.olderOnComputer">{t('groupChat.timeline.olderOnComputer')}</Text> : null}
     {!threadRootId && messages.length === 0 && !running ? <MainWindowEmptyState centered testID="botGroup.empty"
       title={t('groupChat.timeline.emptyTitle')} copy={t('groupChat.timeline.emptyDescription')} /> : null}
-    {interleaveBotGroupWork(messages, workRows).map((entry, timelineIndex, timeline) => {
+    {interleaveBotGroupWork(messages.map(message => {
+      const receipt = pendingById.get(message.id)?.chat?.messageId;
+      return receipt ? { ...message, serverMessageId: receipt } : message;
+    }), workRows).map((entry, timelineIndex, timeline) => {
       if (entry.kind === 'work') return <View key={`work:${entry.value.key}`} testID="botGroup.work">{entry.value.node}</View>;
       const message = entry.value;
       const index = entry.index;

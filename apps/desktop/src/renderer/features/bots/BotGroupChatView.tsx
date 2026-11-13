@@ -1238,10 +1238,16 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     ? group.round.speakers.flatMap((speaker) => {
         const member = memberById.get(speaker.botId);
         const target = speaker.executionId ? workTargets.get(speaker.executionId) : undefined;
-        return member ? [{ ...speaker, member, displayName: botGroupMemberDisplayName(member), sessionId: speaker.sessionId || target?.sessionId || null, target }] : [];
+        const name = member ? botGroupMemberDisplayName(member) : '';
+        const displayName = speaker.requesterName ? t('bots.groupChat.assistant.actingFor', { name, person: speaker.requesterName }) : name;
+        return member ? [{ ...speaker, isSelfRequested: speaker.isSelfRequested ?? (!group.serverBacked && !speaker.executionId), member, displayName, sessionId: speaker.sessionId || target?.sessionId || null, target }] : [];
       })
-    : []), [running, group, memberById, workTargets]);
-  const stopSpeaker = interleaveBotGroupWork([], speakers.filter(speaker => speaker.activity !== 'planning')).at(-1)?.value;
+    : []), [running, group, memberById, workTargets, t]);
+  const liveEntries = interleaveBotGroupWork(rows.map(row => row.outbox?.messageId
+    ? { ...row, serverMessageId: row.outbox.messageId } : row), !sharing && !group?.archived && !group?.dissolvedAt ? speakers : []);
+  const orderedSpeakers = liveEntries.flatMap(entry => entry.kind === 'work' && entry.value.activity !== 'planning' ? [entry.value] : []);
+  const stopSpeaker = [...orderedSpeakers].reverse().find(speaker => speaker.isSelfRequested)
+    ?? (group?.canStopAll ? orderedSpeakers.at(-1) : undefined);
   const stepSpeaker = runningStep
     ? speakers.find((speaker) => speaker.activity === 'step' && speaker.member.botId === runningStep.step.botId)
     : undefined;
@@ -1419,7 +1425,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
               </p>
             </div>
           ) : null}
-          {interleaveBotGroupWork(rows, !sharing && !group.archived ? speakers : []).map((entry, timelineIndex, timeline) => {
+          {liveEntries.map((entry, timelineIndex, timeline) => {
             if (entry.kind === 'work') {
               const speaker = entry.value;
               const step = runningStep && speaker === stepSpeaker ? {
@@ -1428,9 +1434,9 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
               return <Fragment key={`work:${speaker.executionId ?? `${speaker.member.botId}:${speaker.activity}`}`}>
                 {speaker.activity === 'planning' ? <BotGroupSpeakingLine speaker={speaker} /> : <>
                   <BotGroupProgressStrip step={step} speakers={[speaker]} onStop={scope => void stopRound(scope)}
-                    canStop={group.round.canStop} canStopAll={!!group.canStopAll && !!group.round.othersActive} stopping={stopping}
+                    canStop={group.round.canStop !== false && speakers.some(speaker => speaker.isSelfRequested)} canStopAll={!!group.canStopAll && !!group.round.othersActive} stopping={stopping}
                     showStop={speaker === stopSpeaker}
-                    stopPending={stopping || speakers.filter(item => item.activity !== 'planning').every(item => item.stopping || item.executionStatus === 'stopping')} />
+                    stopPending={stopping || speakers.filter(item => item.activity !== 'planning' && (item.isSelfRequested || group.canStopAll)).every(item => item.stopping || item.executionStatus === 'stopping')} />
                   <BotGroupSpeakerInteraction speaker={speaker} />
                 </>}
               </Fragment>;
@@ -1553,7 +1559,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             conversationKind={direct ? 'direct' : undefined}
             draftKey={attachmentScope}
             members={group.members}
-            running={running} canStop={group.round.canStop}
+            running={running} canStop={group.round.canStop !== false && (!group.serverBacked || speakers.some(speaker => speaker.isSelfRequested))}
             planState={botGroupComposerPlanState(openPlan, group.replyMode)}
             divisionSteps={!!group.singleSpeaker}
             attachments={attachmentState}

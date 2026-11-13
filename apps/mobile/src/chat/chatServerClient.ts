@@ -56,6 +56,7 @@ export interface ChatRoom {
   response_mode: 'all' | 'mentioned'; speaking_mode: 'auto' | 'sequential'; organizer_id?: string | null;
 }
 export interface ChatMember {
+  assistant?: boolean;
   id: string; kind: 'human' | 'bot' | 'integration'; name: string; state: string;
   ownerActorId: string; ownerName: string; avatar: string | null;
   role: 'owner' | 'admin' | 'member' | 'guest';
@@ -438,11 +439,18 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     return [{ ...failure, botName: member ? memberName(member, ownerMembers) : '' }];
   });
   const executions = (page.executions ?? []).filter(row => ['queued', 'running', 'needs_input', 'stopping'].includes(row.status));
-  // Enqueue time anchors history, but must never be presented as elapsed work.
-  const speakers = executions.map(row => ({ botId: row.bot_id, sessionId: null, executionId: row.id,
-    timelineAt: row.created_at && Number.isFinite(Date.parse(row.created_at)) ? Date.parse(row.created_at) : undefined,
+  // No server-provided start time here: created_at is the enqueue time, so omit startedAt
+  // rather than presenting queued time as elapsed work.
+  const speakers = executions.map(row => {
+    const bot = page.snapshot.members.find(member => member.id === row.bot_id);
+    const requester = page.snapshot.members.find(member => member.id === row.requester_id);
+    return { botId: row.bot_id, sessionId: null, executionId: row.id,
+    sourceMessageId: row.source_message_id, isSelfRequested: row.requester_id === selfId,
+    ...(bot?.kind === 'bot' && bot.assistant === true && requester ? { requesterName: memberName(requester, ownerMembers) } : {}),
+    ...(row.created_at && Number.isFinite(Date.parse(row.created_at)) ? { timelineAt: Date.parse(row.created_at) } : {}),
     executionStatus: row.status as 'queued' | 'running' | 'needs_input' | 'stopping', stopping: row.status === 'stopping',
-    activity: row.plan_id ? 'step' as const : 'reply' as const }));
+    activity: row.plan_id ? 'step' as const : 'reply' as const };
+  });
   const plans = (page.plans ?? []).map(plan => chatPlanView(plan, page.snapshot, selfId));
   const open = plans.find(plan => ['proposed', 'running', 'waiting'].includes(plan.status));
   const currentStep = open?.steps.find(step => step.position === open.currentStep);
@@ -464,10 +472,9 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
       currentBotName: currentStep?.botName ?? null, currentStepStatus: currentStep?.status ?? null, ...(open.kind ? { kind: open.kind } : {}) } : null,
     plans, messages: projectBotGroupExecutionFailures(messages, failures),
     hasMoreBefore: page.before !== null, round: { canStop: (page.plans ?? []).some(p => p.creator_id === selfId && ['proposed', 'running', 'waiting'].includes(p.status)) || executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status)
-        && ((!e.requester_id && !members.some(m => m.id === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role))) || e.requester_id === selfId
-        || active.some(m => m.id === e.bot_id && m.kind === 'bot' && m.ownerActorId === selfId))), status: speakers.length ? 'running' : 'idle', speakers, canContinue: false,
+        && ((!e.requester_id && !members.some(m => m.id === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role))) || e.requester_id === selfId)), status: speakers.length ? 'running' : 'idle', speakers, canContinue: false,
       othersActive: executions.some(execution => ['queued', 'running', 'needs_input'].includes(execution.status)
-        && execution.requester_id !== selfId && !members.some(member => member.id === execution.bot_id && member.ownerActorId === selfId)) }, supportsAttachments: true };
+        && execution.requester_id !== selfId) }, supportsAttachments: true };
 }
 
 export function createChatServerClient(request: ChatRequest, personalList = createConversationListState(),
@@ -908,7 +915,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       const everything = scope === 'all';
       const asManager = manager?.id === self ? undefined : manager?.id;
       const humanIsManager = snapshot.members.some(member => member.id === self && member.state === 'joined' && ['owner', 'admin'].includes(member.role));
-      const ownBots = new Set(snapshot.members.filter(member => member.state === 'joined' && member.kind === 'bot' && member.ownerActorId === self).map(member => member.id));
+
       const plans = await call<ChatPlan[]>(`/conversations/${room}/plans`);
       const stoppedPlans = new Set<string>();
       const refusedPlans = new Map<string, unknown>();
@@ -930,15 +937,15 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       }
       const executions = await call<ChatExecution[]>(`/conversations/${room}/executions`);
       for (const execution of executions.filter(execution => ['queued', 'running', 'needs_input'].includes(execution.status) && !(execution.plan_id && stoppedPlans.has(execution.plan_id)))) {
-        const asBot = !everything && execution.requester_id !== self && ownBots.has(execution.bot_id);
-        if (!everything && execution.requester_id !== self && !asBot) {
+
+        if (!everything && execution.requester_id !== self) {
           if (execution.requester_id) continue;
           if (humanIsManager) { unknownRequester = true; continue; }
         }
         try {
           await call(`/conversations/${room}/executions/${chatId(execution.id)}/control`, 'POST',
             { operationId: `${operationId}:execution:${execution.id}`, action: 'stop' },
-            asBot ? execution.bot_id : everything && execution.requester_id !== self ? asManager : undefined);
+            everything && execution.requester_id !== self ? asManager : undefined);
           stopped = true;
         } catch (error) { if (!refused(error)) throw error; refusedExecutions.set(execution.id, error); }
       }

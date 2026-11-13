@@ -1,4 +1,7 @@
 {
+  "assistant": {
+    "actingFor": "{{name}} · {{person}} の代わり"
+  },
   "progress": {
     "stop": "停止",
     "stopMine": "自分の依頼を停止",

@@ -16,6 +16,9 @@ const h = vi.hoisted(() => ({
   processRead: vi.fn(),
   processSubscribe: vi.fn(async () => {}),
   processUnsubscribe: vi.fn(async () => {}),
+  openLink: vi.fn(async () => {}),
+  resourceChanged: vi.fn((_listener: (host: string, payload: any) => void) => () => {}),
+  availability: () => true,
   textRender: vi.fn(),
   translate: null as null | ((key: string, options?: Record<string, unknown>) => string),
   chat: null as any, pngExport: vi.fn(async () => 'encoded'), sharedImage: vi.fn(async () => {}), exported: [] as any[],
@@ -168,7 +171,8 @@ vi.mock('@/theme', async () => {
   return { ...tokens, useThemedStyles: (makeStyles: any) => makeStyles(useColors()),
     useTheme: () => ({ mode: useContext(testThemeContext), colors: useColors() }), monoFont: 'mono' };
 });
-vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.processRead, subscribe: h.processSubscribe, unsubscribe: h.processUnsubscribe, getPresenceAvailability: () => true }) }));
+vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.processRead, subscribe: h.processSubscribe, unsubscribe: h.processUnsubscribe,
+  openLink: h.openLink, onRemoteResourceChanged: h.resourceChanged, getPresenceAvailability: h.availability }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({
   user: { id: 'owner' }, accountGeneration: 1, getAccessToken: async () => 'token', apiFetch: async () => ({}),
 }) }));
@@ -3532,4 +3536,65 @@ it('shows the real step start and handoff time and keeps missing timing absent',
   expect(card.textContent).not.toContain('6 秒');
   expect(card.textContent).not.toContain('groupChat.plan.stepRunning');
   vi.useRealTimers();
+});
+
+// Request time orders live work; owning the bot does not grant control of a foreign request.
+it.each([20, 40])('interleaves concurrent work and keeps another requester read-only (request at %s)', async timelineAt => {
+  await render(group({ serverBacked: true, messages: [
+    message('early', 1, { createdAt: 10 }), message('later', 2, { createdAt: 30 }),
+  ], round: { status: 'running', canContinue: false, speakers: [
+    { botId: 'mimi', sessionId: null, executionId: 'my-work', activity: 'reply', timelineAt: 20, isSelfRequested: true },
+    { botId: 'abu', sessionId: null, executionId: 'their-work', activity: 'reply', timelineAt, isSelfRequested: false },
+  ] } }));
+  const work = [byId('speaker.mimi.reply')!, byId('speaker.abu.reply')!];
+  const later = byId('botGroup.row.later')!;
+  expect(work).toHaveLength(2);
+  expect(work[0]!.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect((timelineAt > 30 ? later.compareDocumentPosition(work[1]!) : work[1]!.compareDocumentPosition(later)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(work[0]!.querySelector('[data-testid="botGroup.work.stop"]')).not.toBeNull();
+  expect(work[1]!.querySelector('[data-testid="botGroup.work.stop"]')).toBeNull();
+});
+
+// Receipt precedes canonical history; work must stay after its first local request.
+it('anchors receipt-backed work before the next pending send', async () => {
+  h.chat.pending = [10, 30].map(at => ({
+    item: { clientId: `send-${at}` }, createdAt: at, state: 'sent',
+    chat: { after: at, messageId: `server-${at}`, input: { text: `request-${at}`, mentions: { all: false, botIds: [] } } },
+  }));
+  await render(group({ serverBacked: true, messages: [], round: { status: 'running', canContinue: false, speakers: [
+    { botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'own', sourceMessageId: 'server-10', isSelfRequested: true },
+  ] } }));
+  const work = byId('speaker.mimi.reply')!;
+  expect(work.compareDocumentPosition(byId('botGroup.row.local:send-30')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+// Separate visual anchors must share one group-resource read per home computer.
+it('resolves separated work anchors once per host on mount and notification', async () => {
+  const data = group({ serverBacked: true, messages: [message('a', 1, {}), message('b', 2, {})], round: {
+    status: 'running', canContinue: false, speakers: [
+      { botId: 'mimi', sessionId: null, executionId: 'a-work', activity: 'reply', sourceMessageId: 'a', isSelfRequested: true },
+      { botId: 'abu', sessionId: null, executionId: 'b-work', activity: 'reply', sourceMessageId: 'b', isSelfRequested: true },
+    ],
+  } });
+  data.members = data.members.map(member => ({ ...member, isOwned: true, homeDeviceId: 'studio' }));
+  h.processRead.mockResolvedValue(null);
+  await render(data);
+  const reads = () => h.processRead.mock.calls.filter(call => call[1] === 'maker:remote-resources:get').length;
+  expect(reads()).toBe(1);
+  const changed = h.resourceChanged.mock.calls.at(-1)![0] as (host: string, payload: any) => void;
+  await act(async () => changed('studio', { collectionId: 'bot-groups', resourceRefs: [{ id: 'g1' }] }));
+  expect(reads()).toBe(2);
+  h.focused = false;
+  await render(data);
+  expect(h.processUnsubscribe).toHaveBeenCalledWith(expect.stringMatching(/^group-work:g1:focus:/), 'studio', ['sessions']);
+});
+
+// An older host's aggregate capability must not bypass missing requester identity.
+it('keeps legacy server work read-only even when the host reports aggregate stop permission', async () => {
+  await render(group({ serverBacked: true, round: { status: 'running', canStop: true, canContinue: false, speakers: [
+    { botId: 'mimi', sessionId: null, executionId: 'legacy', activity: 'reply' },
+  ] } }));
+  expect(byId('speaker.mimi.reply')).not.toBeNull();
+  expect(byId('botGroup.work.stop')).toBeNull();
+  expect(byId('botGroup.composer.stop')).toBeNull();
 });

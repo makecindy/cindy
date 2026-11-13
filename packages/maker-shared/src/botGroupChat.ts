@@ -534,6 +534,11 @@ export interface BotGroupSpeaker {
   executionId?: string;
   /** Stable history position (e.g. server enqueue time), independent of elapsed work. */
   timelineAt?: number;
+  sourceMessageId?: string;
+  /** Authenticated projection of requester identity; absence on old hosts grants no control. */
+  isSelfRequested?: boolean;
+  /** Public requester name for this execution of the group's Cindy. */
+  requesterName?: string;
   startedAt?: number;
   stopping?: boolean;
   executionStatus?: 'queued' | 'running' | 'needs_input' | 'stopping';
@@ -548,7 +553,7 @@ export interface BotGroupRoundView {
   speakers: BotGroupSpeaker[];
   /** True when the latest round ended naturally and may be continued. */
   canContinue: boolean;
-  /** Server groups: someone else's request or teammate is also working, so stopping only yours leaves it running. */
+  /** Server groups: someone else's request is also working, so stopping only yours leaves it running. */
   othersActive?: boolean;
   /** This account has work it can stop with the default scope; canStopAll is separate. Absent on older hosts. */
   canStop?: boolean;
