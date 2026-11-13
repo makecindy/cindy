@@ -64,7 +64,8 @@
       "discord": "Discord",
       "wechat": "微信",
       "wecom": "企业微信",
-      "dingtalk": "钉钉"
+      "dingtalk": "钉钉",
+      "imessage": "iMessage"
     },
     "modelMismatch": "本轮由 {{actual}} 响应，而非所选的 {{selected}}（服务端临时降级）",
     "copyStateCopying": "复制中",
@@ -73,7 +74,7 @@
     "copyStateCopy": "复制",
     "copyCode": "复制代码",
     "thinkingHidden": "思考内容已隐藏",
-    "thinkingDone": "思考 {{duration}}",
+    "thinkingDone": "已思考 {{duration}}",
     "thinkingActive": "思考中 {{elapsed}}",
     "thinkingProcess": "思考过程",
     "thinkingEmpty": "模型没有返回可展示的思考内容。",
@@ -162,6 +163,7 @@
     "mediaErrorLine": "错误：{{message}}",
     "mediaDeviceLinkHint": "打开前，手机会先请远程设备上传这个媒体。",
     "controlDelete": "删除消息",
+    "controlEdit": "编辑",
     "controlRewind": "回到此处",
     "controlFork": "从这里开启新任务",
     "markdownDocAriaLabel": "消息正文",
@@ -223,8 +225,8 @@
     "usageLimitAutoContinueAt": "将于 {{time}} 自动继续",
     "usageLimitAutoContinueCancel": "取消自动继续",
     "noRetryContent": "没有可重发的内容，请清除错误后重新输入。",
-    "piImageInputUnsupported": "当前 Pi 模型未启用图片输入。请切换到支持图片的模型；如果这是自定义模型，请在供应商设置中开启“支持图片输入”，然后新建 Pi 任务。",
-    "codexResumeNotReady": "Codex 暂时无法恢复这个任务，请稍后重试",
+    "piImageInputUnsupported": "当前 Pi 模型未启用图片输入。请切换到支持图片的模型；如果这是自定义模型，请在供应商设置中开启「支持图片输入」，然后新建 Pi 任务。",
+    "codexResumeNotReady": "Codex 暂时无法恢复这个任务，请稍后重试。",
     "credentialSwitchWait": "正在等待其它 Codex 任务结束，结束后自动发送",
     "aborting": "正在停止，排队消息会保留在这里",
     "paused": "队列已暂停，排队消息不会自动发送",
@@ -261,9 +263,17 @@
     "waitingMessage": "等待发送的消息：{{text}}"
   },
   "systemCard": {
+    "pluginModelRoute": {
+      "routed": "{{plugin}} 为这个任务选了 {{model}}",
+      "kept": {
+        "no-opinion": "{{plugin}} 这次没有改模型，这个任务用 {{model}}",
+        "failed": "{{plugin}} 没有及时回应，这个任务用 {{model}}",
+        "unavailable-route": "{{plugin}} 选的模型现在用不了，这个任务用 {{model}}"
+      }
+    },
     "contextRebuild": {
       "labelOverflow": "已整理上下文并继续",
-      "labelTimeout": "上一轮没有响应，已整理后继续",
+      "labelTimeout": "上一轮没有响应，已整理上下文后继续",
       "labelStrip": "已去掉过大图片并继续",
       "handoffTitle": "交接内容——整理后发送给后续对话的上下文摘要（不计入对话记录，仅在此展示）",
       "handoffTitleEnglishSource": "交接内容——整理后发送给后续对话的上下文摘要，原文为英文（不计入对话记录，仅在此展示）"
@@ -351,7 +361,7 @@
       "editLocked": "这条队列消息正在编辑中，完成后再操作。",
       "interactionLocked": "队列正在被其它操作锁定，完成后再操作。",
       "syntheticHint": "这是系统自动生成的指令，可以取消，但不能编辑或插话发送。",
-      "steeringHint": "插话正在发送到当前 turn，暂时不能编辑或移动。",
+      "steeringHint": "插话正在发送到当前这一轮，暂时不能编辑或移动。",
       "editHint": "这条消息正在编辑中，电脑端会暂停自动发送。",
       "interactionHint": "队列正在被排序或其它交互锁定，暂时不能编辑。"
     }
@@ -367,7 +377,7 @@
     "chartSource": "图表源码",
     "noDiffContent": "没有 diff 内容。",
     "noMediaAddress": "没有媒体地址。",
-    "remoteMediaPreparing": "正在准备取回远程媒体",
+    "remoteMediaPreparing": "正在准备取回远程媒体…",
     "mediaAddressOnlySentence": "当前媒体类型暂以地址形式展示。",
     "mediaCannotPreviewSentence": "当前媒体暂不能直接预览。",
     "emptyMermaid": "空 Mermaid 图表。",
@@ -441,5 +451,29 @@
       "provider": "API 供应商",
       "unknown": "未记录渠道"
     }
+  },
+  "attachmentPreview": {
+    "more": "更多操作",
+    "retry": "重试",
+    "image": "图片",
+    "video": "视频",
+    "file": "文件",
+    "close": "关闭",
+    "reset": "重置视角",
+    "open": "打开预览",
+    "actualSize": "原始尺寸（1:1）",
+    "save": "保存原件",
+    "share": "分享",
+    "previous": "上一个附件",
+    "next": "下一个附件",
+    "password": "输入 PDF 密码",
+    "find": "在文档中查找",
+    "matches": "{{count}} 页匹配",
+    "previousPage": "上一页",
+    "nextPage": "下一页",
+    "redo": "重做",
+    "wrap": "自动换行",
+    "lineNumbers": "行号",
+    "rendered": "查看文稿"
   }
 }

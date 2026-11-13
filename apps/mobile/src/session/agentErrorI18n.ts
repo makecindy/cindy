@@ -1,4 +1,5 @@
-import { isResponsesLiteParallelToolCallsError, parseAgentErrorCode, isRemoteCompactEncryptedContentError } from '@cindy/maker-shared/error-redaction';
+import { parseOutputLimitDetails, isReasoningDominatedOutputLimit } from '@cindy/maker-shared';
+import { isRemoteAgentResumeRejectedError, isResponsesLiteParallelToolCallsError, localizeSubscriptionAccountError, parseAgentErrorCode, isRemoteCompactEncryptedContentError } from '@cindy/maker-shared/error-redaction';
 import { requiresAgentErrorConfigurationChange as requiresConfigurationChange } from '@cindy/maker-shared/error-redaction';
 import { i18n } from '@/i18n';
 import { describeAgentAuthError } from '@/device-link/remoteStatus';
@@ -72,10 +73,21 @@ export function localizeAgentError(
   reason: unknown,
   toolLoop: MobileToolLoopErrorDetails | null,
   message = '',
+  outputLimit?: unknown,
 ): string | null {
+  const subscriptionGuidance = localizeSubscriptionAccountError(message, i18n.t, i18n.resolvedLanguage ?? i18n.language);
+  if (subscriptionGuidance) return subscriptionGuidance;
   if (isRemoteCompactEncryptedContentError(message, reason)) return i18n.t('session.tail.remoteCompactEncryptedContent');
   if (reason === 'yield-continuation-incomplete') return i18n.t('session.tail.executionResultUnavailable');
-  if (reason === 'output-limit') return i18n.t('session.tail.outputLimit');
+  if (reason === 'output-limit') {
+    const details = parseOutputLimitDetails(outputLimit);
+    const guidance = i18n.t(details && isReasoningDominatedOutputLimit(details)
+      ? 'session.tail.outputLimitReasoning' : 'session.tail.outputLimit');
+    if (!details) return guidance;
+    const usage = i18n.t(details.reasoningTokens === undefined
+      ? 'session.tail.outputLimitOutputUsage' : 'session.tail.outputLimitUsage', { ...details });
+    return `${usage} ${guidance}`;
+  }
   if (reason !== 'tool_use_loop_detected') return null;
   if (!toolLoop) return i18n.t('session.tail.toolUseLoopDetected');
   return i18n.t(TOOL_LOOP_I18N_KEYS[toolLoop.kind], { count: toolLoop.count });
@@ -93,6 +105,7 @@ export function autoReviewUnavailableGuidanceCode(sessionSource: unknown): strin
 
 /** Unknown provider messages stay in diagnostic details, never in the localized summary. */
 export function unclassifiedAgentErrorI18nKey(message: string, sessionSource?: unknown): string {
+  if (isRemoteAgentResumeRejectedError(message)) return 'session.remoteError.REMOTE_AGENT_RESUME_REJECTED';
   if (message.includes('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED]')) return 'session.remoteError.REMOTE_AGENT_MEMBER_BUDGET_PAUSED';
   const limitReason = /\[REMOTE_AGENT_BUSY\] \[(DEVICE_LIMIT|TOTAL_LIMIT)\]/.exec(message)?.[1];
   if (limitReason) return `session.remoteError.REMOTE_AGENT_${limitReason}`;
@@ -112,6 +125,7 @@ export function unclassifiedAgentErrorI18nKey(message: string, sessionSource?: u
  * Unknown codes return null so the caller keeps its own fallback instead of "reply failed".
  */
 export function remoteActionErrorI18nKey(message: string): string | null {
+  if (isRemoteAgentResumeRejectedError(message)) return 'session.remoteError.REMOTE_AGENT_RESUME_REJECTED';
   if (message.includes('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED]')) return 'session.remoteError.REMOTE_AGENT_MEMBER_BUDGET_PAUSED';
   const code = parseAgentErrorCode(message)?.code;
   const key = code ? `session.remoteError.${code}` : null;
@@ -119,5 +133,6 @@ export function remoteActionErrorI18nKey(message: string): string | null {
 }
 
 export function localizeUnclassifiedAgentError(message: string, sessionSource?: unknown): string {
-  return i18n.t(unclassifiedAgentErrorI18nKey(message, sessionSource));
+  return localizeSubscriptionAccountError(message, i18n.t, i18n.resolvedLanguage ?? i18n.language)
+    ?? i18n.t(unclassifiedAgentErrorI18nKey(message, sessionSource));
 }

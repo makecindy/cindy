@@ -36,6 +36,10 @@ const makerSendSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/makerSendTransaction.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
+const queuedInputOriginSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/queuedInputOrigin.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 
 function handlerBody(source: string, channel: string, nextChannel: string): string {
   const start = source.indexOf(channel);
@@ -279,7 +283,7 @@ describe('session runtime control wiring', () => {
     const body = handlerBody(
       bootstrapSource,
       "mainWindow.once('ready-to-show'",
-      'void runComputerUseSmokeIfRequested();',
+      'void runComputerUseSmokeIfRequested(',
     );
     const shown = body.indexOf('showMainWindowAndRestoreFullscreen(');
     const badge = body.indexOf('refreshWindowsAppBadge();');
@@ -290,13 +294,17 @@ describe('session runtime control wiring', () => {
       /if \(!app.isPackaged \|\| isCindyVersionLaunchPending\(\)\)\s+markDesktopDevWindowReady\(mainWindow.webContents.getOSProcessId\(\)\);/,
     );
   });
-  it('advertises host-side model-window protection to remote controllers', () => {
+  it('advertises host-side model-window protection and Orca relocation to remote controllers', () => {
     const capabilities = handlerBody(
       registerSource,
       'ipcMain.handle(MAKER_INVOKE.GET_CAPABILITIES',
       'ipcMain.handle(MAKER_INVOKE.GET_NEW_MAKER_DEFAULTS',
     );
     expect(capabilities).toContain('supportsModelWindowSwitchGuard: true');
+    // Controllers only offer moving a controlled Orca Lead / local Worker's Agent when this is declared.
+    expect(capabilities).toContain('supportsOrcaAgentRelocation: true');
+    // Same for an execution-device Worker whose Lead is on another computer.
+    expect(capabilities).toContain('supportsOrcaRemoteWorkerAgentRelocation: true');
   });
 
   it('authenticates Desktop package-command entry points before minting Main context', () => {
@@ -311,11 +319,8 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain('persisted?.autoResume === true');
     expect(registerSource).toContain('persisted?.origin !== undefined');
 
-    const steerDispatch = handlerBody(
-      registerSource,
-      'const steerToAgentAccepted = async (',
-      'registerMakerSessionSendHandler(',
-    );
+    const steerDispatch = readFileSync(resolve(mainRoot, 'maker-ipc/makerSteerTransaction.ts'), 'utf8');
+    expect(registerSource).toContain('const steerToAgentAccepted = createMakerSteerTransaction(');
     expect(steerDispatch).toContain('[MAIN_OWNED_SEND_CONTEXT]: so[MAIN_OWNED_SEND_CONTEXT]');
     expect(registerSource).toContain('trustedDesktopSteerText.run(queued.text, runSteer)');
     expect(registerSource).toContain(
@@ -330,9 +335,9 @@ describe('session runtime control wiring', () => {
       expect(body).toContain('if (!deviceLinkInvoke) assertTrustedAppRendererEvent(event);');
       expect(body).toContain('stampTrustedDesktopQueuedOrigin(');
     }
-    expect(makerSendSource).toContain('clientId: explicitUserItem.clientId');
-    expect(makerSendSource).toContain('persistedContent: explicitUserItem.persistedContent');
-    expect(makerSendSource).toContain(
+    expect(queuedInputOriginSource).toContain('clientId: explicitUserItem.clientId');
+    expect(queuedInputOriginSource).toContain('persistedContent: explicitUserItem.persistedContent');
+    expect(queuedInputOriginSource).toContain(
       'if (deviceLinkInvoke || !canTrustDesktopPiCommand(item)) return explicitUserItem',
     );
     expect(makerSendSource).toContain('TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT');
@@ -747,6 +752,19 @@ describe('session runtime control wiring', () => {
     expect(persistSelection).toBeGreaterThan(patchFast);
     expect(normalWakeGuard).toBeGreaterThan(persistSelection);
     expect(wakeQueue).toBeGreaterThan(normalWakeGuard);
+  });
+
+  it('persists a send-time renamed model inside the shared route transaction', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    expect(setModel).toContain('persistRenamedSessionModel: true');
+    const persistGate = setModel.indexOf('internalOptions.persistRenamedSessionModel === true');
+    const persist = setModel.indexOf('await persistSessionFields(sessionId, patch);', persistGate);
+    expect(persistGate).toBeGreaterThan(-1);
+    expect(persist).toBeGreaterThan(persistGate);
   });
 
   it('uses current runtime window facts but still requires a verified target before rebuilding', () => {
@@ -1779,5 +1797,45 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain(
       'if (!internalOptions.applyingPiCredentialPending && (rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection ||',
     );
+  });
+});
+
+// Guard tier: the scheduled startup owner assertion protects an asynchronous account switch.
+// Start before the automation preference holder: the buggy snapshot lived just
+// above the bootstrap holder assignment, so a block anchored on that assignment
+// would have skipped the exact line the guard is meant to catch.
+const WIRING_START = 'prepareScheduledModelPreferencesHolder = async';
+const WIRING_ANCHOR = 'scheduledSessionBootstrapHolder = createScheduledSessionBootstrap(';
+const WIRING_END = 'let recoverRenamedSessionModelOnSend';
+
+describe('scheduled session bootstrap wiring', () => {
+  function wiringBlock(): string {
+    const start = registerSource.indexOf(WIRING_START);
+    expect(start).toBeGreaterThan(-1);
+    const end = registerSource.indexOf(WIRING_END, start);
+    expect(end).toBeGreaterThan(start);
+    return registerSource.slice(start, end);
+  }
+
+  it('builds the automation bootstrap holder from the per-fire factory', () => {
+    expect(wiringBlock()).toContain(WIRING_ANCHOR);
+  });
+
+  it('forwards the owner assertion into the startup funnel', () => {
+    // Losing this forwarder would silently downgrade the guard to the single
+    // entry check, so an account switch inside the funnel could create the task
+    // under the new owner instead of aborting.
+    expect(wiringBlock()).toContain(
+      'bootstrapSession(options as MakerSessionCreateOpts, assertAccess)',
+    );
+  });
+
+  it('never snapshots the data owner for automations at registration time', () => {
+    // A snapshot evaluated once while the handlers register is the bug: the app
+    // session commit that restores the account can land later, so it stays stale
+    // and every automation fails until the app restarts. Assert on the wiring
+    // block, not on a variable name: any `const`/`let` shape that captures the
+    // scope here reintroduces the same failure.
+    expect(wiringBlock()).not.toContain('captureDataOwnerBroadcastScope');
   });
 });

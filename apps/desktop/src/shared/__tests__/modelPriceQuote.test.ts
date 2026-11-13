@@ -141,6 +141,21 @@ describe('registryPricingCatalog', () => {
     expect(gateway.xd['openai/gpt-5.6-luna'].cacheCreatePerMtok).toBeUndefined();
   });
 
+  // Regression (2026-11-12): turns recorded as claude-fable-5-2 found no reference price in the bundled
+  // registry, so their subscription value could not be estimated. The tariff is dated from the vendor's
+  // launch day and must stay unknown before it instead of borrowing a later price.
+  it('prices Fable 5.2 turns from its launch day, including the Fast tariff', () => {
+    const quote = (at: string) => providerReferencePriceQuote(
+      'anthropic', 'claude-fable-5-2', BUNDLED_CATALOG.modelRegistry!, { agent: 'claude-code', at, officialOnly: true },
+    );
+    expect(quote('2026-11-09')).toMatchObject({
+      currency: 'USD', inputPerMtok: 8, outputPerMtok: 40,
+      cacheReadPerMtok: 0.2, cacheCreatePerMtok: 10, cacheCreate1hPerMtok: 16,
+      priority: { inputPerMtok: 16, outputPerMtok: 80, cacheReadPerMtok: 0.4, cacheCreatePerMtok: 20 },
+    });
+    expect(quote('2026-11-08')).toBeUndefined();
+  });
+
   it.each(['fast', 'priority'] as const)('projects declared %s prices without inventing unavailable tariffs', (variant) => {
     const entry = structuredClone(BUNDLED_CATALOG.modelRegistry!.models.find((model) => model.id === 'openai/gpt-6-astra')!);
     const prices = structuredClone(BUNDLED_CATALOG.modelRegistry!.baseModels!.find(model => model.id === entry.modelRef)!.referencePriceGroups![0].prices);
@@ -281,4 +296,30 @@ describe('registryPricingCatalog', () => {
       outputPerMtok: 21,
     });
   });
+});
+
+// Unit: real Desktop quotes must carry PDF Batch caches and retain unknown legacy
+// cache prices without borrowing standard. The prior snapshot had neither behavior.
+it('quotes explicit Anthropic Batch caches and preserves the standard tariff', () => {
+  const registry = BUNDLED_CATALOG.modelRegistry!;
+  const batch = providerReferencePriceQuote('anthropic', 'claude-opus-5-5', registry, {
+    at: '2026-11-06', variant: 'batch',
+  });
+  expect(batch).toMatchObject({ currency: 'USD', inputPerMtok: 2, outputPerMtok: 10,
+    cacheReadPerMtok: 0.1, cacheCreatePerMtok: 2.5, cacheCreate1hPerMtok: 4 });
+  expect(batch?.priority).toBeUndefined();
+  const legacy = providerReferencePriceQuote('anthropic', 'claude-sonnet-4-5', registry, {
+    at: '2026-11-06', variant: 'batch', inputTokens: 200000,
+  });
+  expect(legacy).toMatchObject({ currency: 'USD', inputPerMtok: 1.5, outputPerMtok: 7.5 });
+  expect(legacy?.cacheReadPerMtok).toBeUndefined();
+  expect(legacy?.cacheCreatePerMtok).toBeUndefined();
+  expect(legacy?.cacheCreate1hPerMtok).toBeUndefined();
+  expect(providerReferencePriceQuote('anthropic', 'claude-opus-5-5', registry, { at: '2026-11-06' }))
+    .toMatchObject({ inputPerMtok: 4, outputPerMtok: 20, cacheReadPerMtok: 0.2,
+      priority: { inputPerMtok: 8, outputPerMtok: 40 } });
+  expect(providerReferencePriceQuote('anthropic', 'claude-opus-5-5', registry, { at: '2026-10-21', variant: 'batch' }))
+    .toBeUndefined();
+  expect(providerReferencePriceQuote('anthropic', 'claude-opus-5-5', registry, { at: '2026-10-22', variant: 'batch' }))
+    .toMatchObject({ currency: 'USD', inputPerMtok: 2, outputPerMtok: 10 });
 });

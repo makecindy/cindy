@@ -69,10 +69,14 @@
     "titleHost": "改歸「{{host}}」行 Agent 乎？",
     "titleHostUnnamed": "改歸差事所在之機行 Agent 乎？",
     "message": "原機之言談錄不可攜來，將整為交接摘要以續，所思之類不保盡承。次訊遣出時生效。",
+    "messageNativeHistory": "全本言談錄將抄錄而往以續；若不能復原，則改整為交接摘要以續，所思之類不保盡承。次訊遣出時生效。",
     "confirm": "易機行之",
     "cancel": "仍舊"
   },
   "unified": {
+    "accountUnassigned": "名籍待定",
+    "accountCount_other": "{{count}} 個名籍",
+    "accountFallback": "名籍 {{index}}",
     "favoriteConfiguration": "藏此設定",
     "savedConfiguration": "已藏 · 點之則去",
     "currentConfiguration": "今之設定",
@@ -112,6 +116,12 @@
       "hour": "時",
       "minute": "分",
       "second": "秒"
-    }
+    },
+    "quotaAverage": "平均餘量 {{percent}}%",
+    "quotaUpdating": "餘量待新",
+    "quotaResetSoon": "將重置",
+    "quotaResetIn": "{{duration}}後復初",
+    "quotaAverageHint": "週限額 · 諸名籍等權均值",
+    "quotaResetHint": "依今耗速，重置或尚有餘：距 24 小時以內示黃，6 小時以內示紅。"
   }
 }

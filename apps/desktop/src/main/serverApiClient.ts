@@ -1,34 +1,13 @@
-/**
- * main 进程统一的服务端 API 客户端。
- *
- * - 复用 `authManager.getAccessToken()` 自动注入 Bearer Authorization
- * - 可恢复的 401 自动 refresh 一次再重试
- * - `ACCOUNT_UNAVAILABLE` 或刷新后仍被 401 拒绝时执行完整本地退登
- * - `baseUrl` **必传**:老主 server(apiBaseUrl)2026-07-18 退役后没有"默认
- *   业务 server"了,每个调用方显式指向自己的独立服务(device-link relay /
- *   model-access / oauth-broker / github-server / skillhub-server ...)。
- */
-
-import { net } from 'electron';
-import * as authManager from './authManager';
-import { getResolvedMainLocale } from './i18n.js';
-
-import { createLogger } from './logger';
-import { requestErrorMessage } from './requestErrorMessage';
-
-const log = createLogger('serverApiClient');
-
-function redactedLogPath(apiPath: string): string {
-  const pathname = apiPath.split(/[?#]/, 1)[0];
-  const segments = pathname.split('/').filter(Boolean).slice(0, 3);
-  return segments.length > 0 ? `/${segments.join('/')}` : '/';
-}
+import { retryAfterDeadline } from '@cindy/auth-client';
+import { requestErrorMessage } from './requestErrorMessage.js';
+import type { createLogger } from './logger.js';
 
 export class ServerApiError extends Error {
   constructor(
     public readonly code: string,
     public readonly statusCode: number,
     message: string,
+    public readonly retryAt?: number,
   ) {
     super(message);
     this.name = 'ServerApiError';
@@ -62,6 +41,8 @@ export interface ApiFetchOptions {
   baseUrl: string | (() => string);
   /** Abort the request after this many milliseconds; 0 disables the deadline. */
   timeoutMs?: number;
+  /** Caller lifetime/deadline, including waiting for shared login refresh and retry. */
+  signal?: AbortSignal;
   /** Keep upstream response/network details out of local logs for sensitive flows. */
   redactErrorDetails?: boolean;
   /**
@@ -81,35 +62,55 @@ export interface ApiFetchOptions {
   expectedErrors?: readonly { status: number; code?: string }[];
 }
 
+export interface ServerApiClientPorts {
+  fetch: typeof globalThis.fetch;
+  locale(): string;
+  auth: Pick<typeof import('./authManager.js'), 'getAccessToken' | 'refresh' | 'invalidateSession'>;
+  log: Pick<ReturnType<typeof createLogger>, 'debug' | 'warn' | 'error'>;
+}
+
+/** Common request, refresh, redaction and error contract for both launchers. */
+export function createServerApiClient(ports: ServerApiClientPorts) {
+const { log } = ports;
+function redactedLogPath(apiPath: string): string {
+  const pathname = apiPath.split(/[?#]/, 1)[0];
+  const segments = pathname.split('/').filter(Boolean).slice(0, 3);
+  return segments.length > 0 ? `/${segments.join('/')}` : '/';
+}
+
 interface RawResponse<T> {
   ok: boolean;
   status: number;
   data: T | null;
+  retryAt?: number;
 }
 
 async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawResponse<T>> {
+  opts.signal?.throwIfAborted();
   const baseUrl = typeof opts.baseUrl === 'function' ? opts.baseUrl() : opts.baseUrl;
   const url = baseUrl + apiPath;
   const method = opts.method ?? 'GET';
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'Accept-Language': getResolvedMainLocale(),
+    'Accept-Language': ports.locale(),
     ...(opts.headers ?? {}),
   };
   if (opts.authorization !== undefined) {
     headers['Authorization'] = opts.authorization;
   } else {
-    const token = opts.token !== undefined ? opts.token : authManager.getAccessToken();
+    const token = opts.token !== undefined ? opts.token : ports.auth.getAccessToken();
     if (token) {
       headers['Authorization'] = 'Bearer ' + token;
     }
   }
   const timeoutMs = opts.timeoutMs ?? 0;
-  const controller = timeoutMs > 0 ? new AbortController() : null;
-  const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  const controller = timeoutMs > 0 || opts.signal ? new AbortController() : null;
+  const abort = () => controller?.abort(opts.signal?.reason);
+  opts.signal?.addEventListener('abort', abort, { once: true });
+  const timeoutId = controller && timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
   try {
     const body = opts.bodyFactory ? opts.bodyFactory() : opts.body;
-    const response = await net.fetch(url, {
+    const response = await ports.fetch(url, {
       method,
       headers,
       cache: opts.cache,
@@ -120,13 +121,16 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
     try {
       data = (await response.json()) as T;
     } catch (error) {
+      opts.signal?.throwIfAborted();
       log.warn('response read failed', opts.logLabel ?? redactedLogPath(apiPath),
         { status: response.status },
         opts.redactErrorDetails || opts.logLabel ? '[response details hidden]' : requestErrorMessage(error));
       data = null;
     }
-    return { ok: response.ok, status: response.status, data };
+    return { ok: response.ok, status: response.status, data,
+      retryAt: response.status === 429 ? retryAfterDeadline(response) : undefined };
   } catch (err) {
+    opts.signal?.throwIfAborted();
     if (opts.redactErrorDetails) {
       log.error(
         'serverApiFetch.redacted_network_error',
@@ -139,15 +143,35 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
     return { ok: false, status: 0, data: null };
   } finally {
     if (timeoutId !== null) clearTimeout(timeoutId);
+    opts.signal?.removeEventListener('abort', abort);
   }
+}
+
+/** Cancel only this waiter; another request may still need the shared refresh. */
+function waitForRefresh(refresh: Promise<boolean>, signal?: AbortSignal): Promise<boolean> {
+  if (!signal) return refresh;
+  return new Promise((resolve, reject) => {
+    const abort = () => { signal.removeEventListener('abort', abort); reject(signal.reason); };
+    signal.addEventListener('abort', abort, { once: true });
+    refresh.then(value => {
+      signal.removeEventListener('abort', abort);
+      if (signal.aborted) reject(signal.reason);
+      else resolve(value);
+    }, error => {
+      signal.removeEventListener('abort', abort);
+      reject(signal.aborted ? signal.reason : error);
+    });
+    if (signal.aborted) abort();
+  });
 }
 
 /**
  * 高层 API：成功 → 返回 data；失败 → throw ServerApiError。
  * 可恢复的 401 自动 refresh 一次再重试（除非 `skipAutoRefresh`）。
  */
-export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<T> {
+async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<T> {
   let result = await rawFetch<T>(apiPath, opts);
+  opts.signal?.throwIfAborted();
   let refreshedAndRetried = false;
   const firstCode = readErrorCode(result.data) ?? statusToCode(result.status);
 
@@ -157,10 +181,13 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
     firstCode !== 'ACCOUNT_UNAVAILABLE' &&
     isRefreshableUnauthorizedCode(firstCode)
   ) {
-    const refreshed = await authManager.refresh();
+    opts.signal?.throwIfAborted();
+    const refreshed = await waitForRefresh(ports.auth.refresh({ serverRejectedToken: true }), opts.signal);
+    opts.signal?.throwIfAborted();
     if (refreshed) {
       refreshedAndRetried = true;
       result = await rawFetch<T>(apiPath, opts);
+      opts.signal?.throwIfAborted();
     }
   }
 
@@ -176,7 +203,7 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
       (errCode === 'ACCOUNT_UNAVAILABLE' ||
         (refreshedAndRetried && isRefreshableUnauthorizedCode(errCode)))
     ) {
-      void authManager.invalidateSession(
+      void ports.auth.invalidateSession(
         errCode === 'ACCOUNT_UNAVAILABLE'
           ? 'account-unavailable'
           : 'resource-unauthorized-after-refresh',
@@ -213,6 +240,7 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
       publicCode,
       result.status,
       opts.redactErrorDetails ? `请求失败 (${result.status})` : errMsg,
+      result.retryAt,
     );
   }
   if (result.data === null) {
@@ -247,4 +275,7 @@ function statusToCode(status: number): string {
   if (status === 429) return 'RATE_LIMITED';
   if (status >= 500) return 'INTERNAL_ERROR';
   return `HTTP_${status}`;
+}
+
+return serverApiFetch;
 }

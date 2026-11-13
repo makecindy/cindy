@@ -1,8 +1,8 @@
 /**
- * useReducedMotion — 监听系统"减少动效"偏好
+ * useReducedMotion — 监听系统和宿主外观的"减少动效"偏好
  * ---------------------------------------------------------------------------
  * 包装 `window.matchMedia('(prefers-reduced-motion: reduce)')`。系统设置开启
- * "减少动效" / "Reduce motion" 时返回 true，调用方应据此把动画时长改成 0 或
+ * "减少动效" / "Reduce motion" 或宿主 motion=0 时返回 true，调用方应据此把动画时长改成 0 或
  * 直接跳过过渡。
  *
  * SSR-safe: window / matchMedia 不存在时返回 false（Electron renderer 始终有
@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { useAppearanceReducedMotion } from '../appearance/AppearanceMotionContext';
 
 const MEDIA_QUERY = '(prefers-reduced-motion: reduce)';
 
@@ -26,6 +27,7 @@ function readInitial(): boolean {
 
 export function useReducedMotion(): boolean {
   const [reduced, setReduced] = useState<boolean>(readInitial);
+  const appearanceReduced = useAppearanceReducedMotion();
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
@@ -41,5 +43,5 @@ export function useReducedMotion(): boolean {
     };
   }, []);
 
-  return reduced;
+  return reduced || appearanceReduced;
 }

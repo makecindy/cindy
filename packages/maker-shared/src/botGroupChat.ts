@@ -5,7 +5,7 @@ export * from './botGroupProcess.js';
  * Product rules: docs/product-rules/bot-group-chat.md.
  */
 import type { BotGroupQuoteInput, BotGroupQuoteView } from './botGroupQuote';
-import type { BotGroupTaskCardView } from './botGroupTask';
+import type { BotGroupLiveTaskView, BotGroupTaskCardView } from './botGroupTask';
 
 export * from './botGroupQuote';
 export * from './botGroupTask';
@@ -46,6 +46,48 @@ export type BotGroupNoticeCode =
   | 'workdir-unavailable';
 export type BotGroupMemberStatus = 'active' | 'paused' | 'error' | 'archived' | 'deleting' | 'missing';
 
+/**
+ * Non-terminal host notices: these never settle a turn or change execution status.
+ * `GROUP_ASSISTANT_UNAVAILABLE` is the server's notice that a request to the group's Cindy found no
+ * online computer of its requester (card `cindy.group-assistant`, bot-group-chat.md「群里的 Cindy」);
+ * Desktop projects it under this code with the requester's name, it is never posted from a client.
+ */
+export const BOT_GROUP_CAPABILITY_NOTICE_CODES = ['GROUP_AUTHORIZATION_REQUIRED', 'GROUP_AUTHORIZATION_UNAVAILABLE', 'ATTACHMENTS_UNAVAILABLE', 'GROUP_ASSISTANT_UNAVAILABLE'] as const;
+export type BotGroupCapabilityNoticeCode = typeof BOT_GROUP_CAPABILITY_NOTICE_CODES[number];
+export function isBotGroupCapabilityNoticeCode(value: unknown): value is BotGroupCapabilityNoticeCode {
+  return BOT_GROUP_CAPABILITY_NOTICE_CODES.some(code => code === value);
+}
+export function readBotGroupCapabilityNotice(message: {
+  deleted?: unknown; author?: { kind?: unknown };
+  content: readonly { type?: unknown; namespace?: unknown; schemaRevision?: unknown; data?: unknown }[];
+}): BotGroupCapabilityNoticeCode | undefined {
+  if (message.deleted === true || message.author?.kind !== 'bot' || message.content.length !== 1) return undefined;
+  const card = message.content[0];
+  if (card?.type !== 'card' || card.namespace !== 'cindy.capability-notice' || card.schemaRevision !== 1) return undefined;
+  const code = card.data && typeof card.data === 'object' ? (card.data as { code?: unknown }).code : undefined;
+  return isBotGroupCapabilityNoticeCode(code) ? code : undefined;
+}
+export function buildBotGroupCapabilityNotice(code: BotGroupCapabilityNoticeCode, fallback: string) {
+  return { type: 'card' as const, namespace: 'cindy.capability-notice', schemaRevision: 1, fallback, data: { code } };
+}
+
+/**
+ * The server's notice that a request to the group's Cindy found no online computer of its requester:
+ * a message by the group's Cindy carrying one `cindy.group-assistant` card of type
+ * `executor_unavailable`. Returns whom it is about, or null for anything else (including a look-alike
+ * card from a person).
+ */
+export function readBotGroupAssistantNotice(message: {
+  deleted?: unknown; author?: { kind?: unknown }; origin?: unknown;
+  content: readonly { type?: unknown; namespace?: unknown; schemaRevision?: unknown; data?: unknown }[];
+}): { type: 'executor_unavailable'; requesterId: string | null } | null {
+  if (message.deleted === true || message.author?.kind !== 'bot' || (message.origin !== undefined && message.origin !== 'bot')) return null;
+  const card = message.content.find(block => block.type === 'card' && block.namespace === 'cindy.group-assistant' && block.schemaRevision === 1);
+  const data = card?.data && typeof card.data === 'object' ? card.data as { type?: unknown; requesterId?: unknown } : null;
+  if (data?.type !== 'executor_unavailable') return null;
+  return { type: 'executor_unavailable', requesterId: typeof data.requesterId === 'string' && data.requesterId ? data.requesterId : null };
+}
+
 /** Public failure categories only; never transport raw Agent errors into a group. */
 export const BOT_GROUP_RUNTIME_FAILURE_CODES = [
   'IMAGE_INPUT_UNSUPPORTED', 'MODEL_UNAVAILABLE', 'AUTH_REQUIRED', 'RATE_LIMITED', 'UPSTREAM_OVERLOADED',
@@ -57,6 +99,11 @@ export function isBotGroupRuntimeFailureCode(value: unknown): value is BotGroupR
   return typeof value === 'string' && BOT_GROUP_RUNTIME_FAILURE_CODES.some(code => code === value);
 }
 
+export type BotGroupRuntimeFailureReason = 'unclaimed_timeout';
+export function readBotGroupRuntimeFailureReason(code: unknown, value: unknown): BotGroupRuntimeFailureReason | undefined {
+  return code === 'RUNTIME_TIMEOUT' && value === 'unclaimed_timeout' ? value : undefined;
+}
+
 /** Current execution state, separate from persisted/paginated chat messages. */
 export interface BotGroupExecutionFailureView {
   executionId: string;
@@ -65,6 +112,7 @@ export interface BotGroupExecutionFailureView {
   botId: string;
   botName: string;
   code: BotGroupRuntimeFailureCode;
+  reason?: BotGroupRuntimeFailureReason;
   planId: string | null;
   updatedAt?: number;
 }
@@ -79,8 +127,10 @@ export function readBotGroupExecutionFailure(value: unknown, roomId: string): Bo
     || typeof row.bot_id !== 'string' || !row.bot_id
     || typeof row.epoch !== 'number' || !Number.isSafeInteger(row.epoch) || row.epoch < 0) return null;
   const updatedAt = typeof row.updated_at === 'string' ? Date.parse(row.updated_at) : NaN;
+  const reason = readBotGroupRuntimeFailureReason(row.failure_code, row.failure_reason);
   return { executionId: row.id, epoch: row.epoch, sourceMessageId: row.source_message_id,
     botId: row.bot_id, botName: '', code: isBotGroupRuntimeFailureCode(row.failure_code) ? row.failure_code : 'RUNTIME_ERROR',
+    ...(reason ? { reason } : {}),
     planId: typeof row.plan_id === 'string' ? row.plan_id : null,
     ...(Number.isFinite(updatedAt) ? { updatedAt } : {}) };
 }
@@ -141,6 +191,11 @@ export interface BotGroupMemberView {
   guestAccess?: 'none' | 'chat' | 'tools';
   accessRevision?: number;
   actorKind?: 'human' | 'bot' | 'integration';
+  /**
+   * The group's own Cindy (servers with `groupAssistant`): one per group, nobody's companion. It
+   * answers on the computer of whoever asks it (bot-group-chat.md「群里的 Cindy」).
+   */
+  assistant?: boolean;
   isSelf?: boolean;
   botId: string;
   name: string;
@@ -163,6 +218,12 @@ export interface BotGroupMessageView {
   quote?: BotGroupQuoteView;
   /** An independent task this teammate started from the group (bot-group-chat.md §10). */
   task?: BotGroupTaskCardView;
+  /**
+   * An ordinary task this teammate opened from the group, as its card last said (revision 2).
+   * `openable`: this account owns the teammate, so it may open the task itself; `here`: the task
+   * runs on this computer (otherwise it opens through the same-account remote path).
+   */
+  liveTask?: BotGroupLiveTaskView & { openable?: boolean; here?: boolean };
   reactions?: Array<{ emoji: string; count: number; me: boolean }>;
   id: string;
   sequence: number;
@@ -178,6 +239,8 @@ export interface BotGroupMessageView {
   noticeCode: BotGroupNoticeCode | null;
   /** Localized cause and remedy for a failed execution; raw diagnostics stay on the executor. */
   runtimeFailureCode?: BotGroupRuntimeFailureCode;
+  runtimeFailureReason?: BotGroupRuntimeFailureReason;
+  capabilityNoticeCode?: BotGroupCapabilityNoticeCode;
   /** The plan this message belongs to: the 安排卡, a step hand-off or the plan's end. */
   planId: string | null;
   /** Step hand-off files, relative to the plan's work directory (POSIX separators). */
@@ -194,6 +257,11 @@ export interface BotGroupMessageView {
   threadUnread?: BotGroupThreadUnread;
   /** A main-chat message that re-posts an existing thread reply by reference. */
   threadShare?: BotGroupThreadShareView;
+  /**
+   * Your own message in a group whose server reports read receipts: another member (a person, or a teammate whose computer took the execution up) has
+   * read it (the double check). Omitted otherwise; never set on other people's messages.
+   */
+  readByOthers?: boolean;
 }
 
 /** Unread replies of one Thread; `mentioned` when one of them names this reader. */
@@ -241,7 +309,14 @@ export function botGroupThreadShareOperationId(messageId: string): string {
 
 export function buildBotGroupThreadShareCard(input: { messageId: string; threadRootId: string; authorName: string; text: string }) {
   const text = input.text.replace(/\s+/g, ' ').trim();
-  const clipped = text.length > THREAD_SHARE_FALLBACK_TEXT_MAX ? `${text.slice(0, THREAD_SHARE_FALLBACK_TEXT_MAX)}…` : text;
+  let clipped = text;
+  if (text.length > THREAD_SHARE_FALLBACK_TEXT_MAX) {
+    let end = THREAD_SHARE_FALLBACK_TEXT_MAX;
+    // Never split a surrogate pair (emoji and other astral characters are two UTF-16 units).
+    const high = text.charCodeAt(end - 1);
+    if (high >= 0xd800 && high <= 0xdbff) end -= 1;
+    clipped = `${text.slice(0, end)}…`;
+  }
   const author = input.authorName.trim() || '…';
   return {
     type: 'card' as const, namespace: BOT_GROUP_THREAD_SHARE_NAMESPACE, schemaRevision: THREAD_SHARE_REVISION,
@@ -306,6 +381,8 @@ export interface BotGroupThreadShareView {
   authorName: string;
   /** The sharer wrote the reply themselves (sent to the thread and the main chat). */
   sharedByAuthor: boolean;
+  /** Original reply's targets, paired with its content. Older projections omit this. */
+  mentions?: BotGroupMention;
   content: string;
   attachments: BotGroupAttachment[];
   createdAt: number | null;
@@ -372,7 +449,7 @@ export type BotGroupPlanStatus =
   | 'stopped'
   | 'dismissed'
   | 'superseded';
-export type BotGroupPlanStepStatus = 'pending' | 'running' | 'done' | 'failed';
+export type BotGroupPlanStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
 
 export interface BotGroupPlanStepView {
   position: number;
@@ -383,10 +460,15 @@ export interface BotGroupPlanStepView {
   status: BotGroupPlanStepStatus;
   /** The step's latest hand-off message (a redo replaces it); absent where the host does not report it. */
   resultMessageId?: string | null;
+  /** Current server attempt, absent on older servers and completed turns. */
+  executionId?: string;
+  executionStatus?: string;
 }
 
 export interface BotGroupPlanView {
   id: string;
+  /** Direct Chat Server snapshot revision; absent on legacy computer projections. */
+  revision?: number;
   status: BotGroupPlanStatus;
   organizerBotId: string;
   organizerName: string;
@@ -400,6 +482,8 @@ export interface BotGroupPlanView {
   kind?: 'talk' | 'work';
   /** Server groups: the viewer may continue or stop it (creator, owner or admin). */
   canManage?: boolean;
+  /** Server supports marking future talk turns skipped; absent on older hosts. */
+  supportsPendingSkip?: boolean;
   /** Server groups: what the viewer sends without naming anyone goes to the step under way (creator, or a human owner/admin). */
   canAdd?: boolean;
   /**
@@ -407,6 +491,8 @@ export interface BotGroupPlanView {
    * A choice of the computer that made it, not shared chat state; absent where unsupported.
    */
   autoContinue?: boolean;
+  /** Remote host can change its local handoff setting for this open work plan. Absent on older hosts. */
+  canSetAutoContinue?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -464,6 +550,8 @@ export interface BotGroupRoundView {
   othersActive?: boolean;
 }
 
+export type ChatGroupNotificationMode = 'all' | 'mentions' | 'none';
+
 export interface BotGroupSummary {
   /** Execution snapshot already included by server-backed group summaries; absent on older hosts. */
   round?: BotGroupRoundView;
@@ -483,12 +571,16 @@ export interface BotGroupSummary {
   supportsGroupLeave?: boolean;
   supportsListRemoval?: boolean;
   supportsMemberAvatar?: boolean;
+  supportsNotificationSettings?: boolean;
+  notificationMode?: ChatGroupNotificationMode;
   dissolvedAt?: string | null;
   archived?: boolean;
   migrationPending?: boolean;
   canInvite?: boolean;
   /** Server groups: an owner or admin may also stop everyone's work, not only their own. */
   canStopAll?: boolean;
+  /** Explicit host/client support for stop scope; older hosts ignore scope and must not offer all. */
+  supportsScopedStop?: boolean;
   /**
    * Server groups whose server gives each request one teammate (the lead when nobody is named)
    * and arranges turns itself; no speaking modes (bot-group-chat.md §4).
@@ -509,6 +601,16 @@ export interface BotGroupSummary {
   organizerBotId: string | null;
   /** 项目文件夹; null means the group's own folder. */
   projectDir: string | null;
+  /** `projectDir` was found from the group's repository, not chosen on this computer. */
+  projectDirAuto?: boolean;
+  /** The server keeps the group's shared project; absent on older servers/hosts. */
+  supportsGroupProject?: boolean;
+  /** The group's shared project (a GitHub repository); null when none is set. */
+  project?: { kind: 'github'; repo: string } | null;
+  /** The server gives each group its own Cindy (`groupAssistant`); absent on older servers/hosts. */
+  supportsGroupAssistant?: boolean;
+  /** The group's Cindy is on (group management 「群里的 Cindy」); only with `supportsGroupAssistant`. */
+  assistantEnabled?: boolean;
   /**
    * Server groups: 分工 you start here go on to the next step by themselves instead of waiting
    * for 继续 (§7.4). Kept on this computer like the project folder; absent where unsupported.
@@ -543,6 +645,12 @@ export interface BotGroupDetail extends BotGroupSummary {
   reactionRevisions?: Record<string, number>;
   /** Oldest first. */
   messages: BotGroupMessageView[];
+  /**
+   * The server reports who has read a message (bot-group-chat.md「消息已读」): own messages show
+   * a single or double check, and the read list can be opened. Not `supportsReadReceipts`, which is
+   * about a phone reporting its own reading through this computer.
+   */
+  supportsMessageReaders?: boolean;
   /** Authorized current failures, independent of message pagination. Local/older hosts omit this. */
   executionFailures?: BotGroupExecutionFailureView[];
   /** Current state of shares the reader listed in `shownShares`, keyed by the share's message ID. */
@@ -589,6 +697,7 @@ export type BotGroupErrorCode =
   | 'PLAN_OPEN'
   /** The plan already ended, was replaced, or is in a state that does not allow the action. */
   | 'PLAN_CLOSED'
+  | 'TURN_ALREADY_STARTED'
   /** The quoted message was deleted, moved out of reach or never belonged to this timeline. */
   | 'QUOTE_UNAVAILABLE'
   | 'INTERNAL';
@@ -622,6 +731,8 @@ export interface BotGroupUpdateInput {
   organizerBotId?: string | null;
   /** Absolute existing local directory; null uses the group's own folder. */
   projectDir?: string | null;
+  /** Server groups: the shared GitHub repository (`owner/name`); null clears it. */
+  githubRepo?: string | null;
   /** Server groups: whether 分工 you start go on by themselves (kept on this computer). */
   autoContinue?: boolean;
 }
@@ -658,9 +769,10 @@ export type BotGroupPlanAction = 'start' | 'dismiss' | 'continue' | 'retry';
 
 export interface BotGroupPlanEditInput extends BotGroupPlanActionInput {
   position: number;
-  /** `reassign` needs `botId`; `remove` keeps at least one step. Proposed plans only. */
-  action: 'reassign' | 'remove';
+  /** `skip` targets an exact unclaimed execution or a future pending position in a server discussion. */
+  action: 'reassign' | 'remove' | 'skip';
   botId?: string;
+  executionId?: string;
 }
 
 export interface BotGroupGetOptions {
@@ -724,8 +836,10 @@ export const BOT_GROUP_MEMBER_LINK_REL = 'member';
 export type BotGroupRemoteActionId =
   | 'create'
   | 'read'
+  | 'notifications'
   | 'mask'
   | 'mask-mentions'
+  | 'readers'
   | 'send'
   | 'continue'
   | 'stop'
@@ -741,6 +855,7 @@ export type BotGroupRemoteActionId =
   | 'plan-dismiss'
   | 'plan-continue'
   | 'plan-retry'
+  | 'plan-auto-continue'
   | 'plan-edit';
 
 /**
@@ -751,6 +866,11 @@ export interface BotGroupRemoteChatData extends BotGroupDetail {
   projectDirName: string | null;
   /** Host forwards a measured main-timeline read to the chat server. Older hosts omit it. */
   supportsReadReceipts?: boolean;
+  /**
+   * Early local group: the host keeps its read position and accepts `read` with `{ at }`
+   * (host time of the newest message shown), so reading on the phone clears the computer's badge.
+   */
+  supportsLocalReadSync?: boolean;
   supportsPersonalMask?: boolean;
   /**
    * The computer accepts attachments on `send` (absent on older computers, which would
@@ -771,6 +891,24 @@ export const BOT_GROUP_CLIENT_ID = {
   planStep: (groupId: string, planId: string, position: number, turnId: string) =>
     `${BOT_GROUP_CLIENT_ID_PREFIX}${groupId}:plan:${planId}:${position}:${turnId}`,
 } as const;
+
+/** The group's own Cindy is called Cindy in every language, with Cindy's own artwork. */
+export const BOT_GROUP_ASSISTANT_NAME = 'Cindy';
+export const BOT_GROUP_ASSISTANT_AVATAR = 'cindy://avatar/preset/cindy';
+/**
+ * A request to the group's Cindy, delivered as an ordinary visible message into this computer's
+ * group task. Deliberately not a `bot-group:` ID: those mark hidden lane turns and private replies.
+ */
+export const botGroupAssistantClientId = (executionId: string, epoch: number) => `group-cindy:${executionId}:${epoch}`;
+/**
+ * The owner's words from a task card's Thread, delivered into the card's task (an ordinary visible
+ * task). Not a `bot-group:` ID either: the reply is the task's own and its end notifies as usual.
+ */
+export const botGroupCardTaskClientId = (executionId: string, epoch: number) => `group-task:${executionId}:${epoch}`;
+/** A group execution answered by a turn of an ordinary task (the group's Cindy task or a task card's task). */
+export function isBotGroupInTaskClientId(clientId: string | null | undefined): boolean {
+  return typeof clientId === 'string' && (clientId.startsWith('group-cindy:') || clientId.startsWith('group-task:'));
+}
 
 export function isBotGroupClientId(clientId: string | null | undefined): boolean {
   return typeof clientId === 'string' && clientId.startsWith(BOT_GROUP_CLIENT_ID_PREFIX);
@@ -862,6 +1000,20 @@ export interface ChatMaskMention {
 }
 /** One reacting actor. `name` is null when the group has no member record for it. */
 export interface ChatReactor { actorId: string; name: string | null; isSelf: boolean; formerMember: boolean }
+/** One member on a message's read list; `readAt` is null when the server knows the read but not its time. */
+export interface BotGroupMessageReader { actorId: string; name: string | null; readAt: number | null; formerMember: boolean }
+/** Who has read one message of a group (bot-group-chat.md「消息已读」). Only the readers are listed, never who has not. */
+export interface BotGroupMessageReaders {
+  messageId: string;
+  /** Members other than the author who can see the message: people and teammates. */
+  eligibleCount: number;
+  /** How many of them have read it; matches `readers` when the list is given. */
+  readCount: number;
+  /** False in a very large group: only the two counts are given and `readers` is empty. */
+  listed: boolean;
+  /** In the order the server gives (who read first); a read without a time comes last. */
+  readers: BotGroupMessageReader[];
+}
 export interface ChatInvitePreview {
   groupId: string; name: string; inviterName: string; expiresAt: string | null; joined: boolean;
   /** Omitted by old servers, whose links remain dated and single-use. */
@@ -869,7 +1021,8 @@ export interface ChatInvitePreview {
 }
 export type ChatGroupAction =
   | { type: 'read'; messageId: string; conversationKind?: 'direct' }
-  | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean }
+  | { type: 'notifications'; mode: ChatGroupNotificationMode }
+  | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean; assistant?: boolean }
   | { type: 'nickname'; actorId: string; nickname: string | null }
   | { type: 'avatar'; actorId: string; avatar: { type: 'keep' | 'reset' } | { type: 'set'; data: Uint8Array; mimeType: string } }
   | { type: 'member'; actorId: string; action: 'invite' | 'leave' | 'remove' | 'ban' | 'unban' | 'role'; role?: 'admin' | 'member' }
@@ -914,6 +1067,11 @@ export interface ChatServerApi {
    */
   shareToMain(input: { groupId: string; messageId: string }): Promise<ChatServerResult<{ messageId: string | null; alreadyShared: boolean }>>;
   react(input: { groupId: string; messageId: string; emoji: string; present: boolean }): Promise<ChatServerResult<Record<never, never>>>;
+  /**
+   * Read-only: who has read a message. Answers `GROUP_TOO_LARGE` when the group has too many
+   * members to list. Only servers that report `messageReaders` answer.
+   */
+  readers(input: { groupId: string; messageId: string }): Promise<ChatServerResult<{ readers: BotGroupMessageReaders }>>;
   /** Read-only: who added one emoji to a message. Names use the group member projection. */
   reactors(input: { groupId: string; messageId: string; emoji: string }): Promise<ChatServerResult<{ reactors: ChatReactor[] }>>;
   createInvite(input: { groupId: string; clientId: string }): Promise<ChatServerResult<{ link: string; expiresAt: string | null; reusable?: boolean }>>;

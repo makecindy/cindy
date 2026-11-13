@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ChatGroupSettings } from '../ChatGroupSettings';
 import { BotSettingsDrawer } from '../BotSettingsDrawer';
 import type { BotGroupSummary } from '../../../../shared/botGroupChat';
-const mocks = vi.hoisted(() => ({ manage: vi.fn(), ownedBots: vi.fn(), refresh: vi.fn(), confirm: vi.fn(), toastSuccess: vi.fn(), toastError: vi.fn() }));
+const mocks = vi.hoisted(() => ({ manage: vi.fn(), updateBotGroup: vi.fn(async () => ({ ok: true })), ownedBots: vi.fn(), refresh: vi.fn(), confirm: vi.fn(), toastSuccess: vi.fn(), toastError: vi.fn() }));
 const profiles = vi.hoisted(() => ({
   list: [{ id: 'bot', name: 'Partner', status: 'active', sessions: [] as Array<{ id: string }>, capabilities: {}, skills: [] as string[] }],
 }));
@@ -139,6 +139,47 @@ function group(owned = false): BotGroupSummary {
 function activeProfile(id: string, name: string, status = 'active') {
   return { id, name, status, sessions: [] as Array<{ id: string }>, capabilities: {}, skills: [] as string[] };
 }
+// Component: a human member edits a personal preference, independently of the
+// manager form. Confirmed props win; failed/in-flight writes never pretend to save.
+it('lets an ordinary member choose notifications and follows the confirmed cross-device value', async () => {
+  const initial = { ...group(), supportsNotificationSettings: true, notificationMode: 'all' as const };
+  const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
+  const label = key('notifications.title');
+  fireEvent.click(screen.getByRole('combobox', { name: label }));
+  fireEvent.click(screen.getByRole('option', { name: key('notifications.mentions') }));
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'notifications', mode: 'mentions' } }));
+  expect(mocks.refresh).toHaveBeenCalledOnce();
+  rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, notificationMode: 'mentions' }} /></MemoryRouter>);
+  expect(screen.getByRole('combobox', { name: label }).textContent).toContain(key('notifications.mentions'));
+});
+it('keeps the confirmed notification value during saving and after rejection', async () => {
+  let finish!: (value: { ok: false; errorCode: string }) => void;
+  mocks.manage.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  render(<MemoryRouter><ChatGroupSettings group={{ ...group(), supportsNotificationSettings: true, notificationMode: 'all' }} /></MemoryRouter>);
+  const control = screen.getByRole('combobox', { name: key('notifications.title') }) as HTMLButtonElement;
+  fireEvent.click(control);
+  fireEvent.click(screen.getByRole('option', { name: key('notifications.none') }));
+  expect(control.disabled).toBe(true);
+  expect(control.textContent).toContain(key('notifications.all'));
+  await act(async () => finish({ ok: false, errorCode: 'REQUEST_FAILED' }));
+  expect(control.disabled).toBe(false);
+  expect(control.textContent).toContain(key('notifications.all'));
+  expect(screen.getByRole('alert').textContent).toBe(key('notifications.saveFailed'));
+});
+it('hides the notification control on older servers', async () => {
+  await act(async () => { render(<MemoryRouter><ChatGroupSettings group={group()} /></MemoryRouter>); });
+  expect(screen.queryByRole('combobox', { name: key('notifications.title') })).toBeNull();
+});
+it('clears an uncertain save error when server readback confirms the choice', async () => {
+  mocks.manage.mockRejectedValueOnce(new Error('Lost acknowledgement'));
+  const initial = { ...group(), supportsNotificationSettings: true, notificationMode: 'all' as const };
+  const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
+  fireEvent.click(screen.getByRole('combobox', { name: key('notifications.title') }));
+  fireEvent.click(screen.getByRole('option', { name: key('notifications.mentions') }));
+  await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+  rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, notificationMode: 'mentions' }} /></MemoryRouter>);
+  expect(screen.queryByRole('alert')).toBeNull();
+});
 beforeEach(() => {
   const nativeAbortController = transferableAbortController();
   vi.stubGlobal('AbortController', nativeAbortController.constructor);
@@ -146,7 +187,7 @@ beforeEach(() => {
   profiles.list = [activeProfile('bot', 'Partner')];
   vi.clearAllMocks(); mocks.manage.mockResolvedValue({ ok: true }); mocks.ownedBots.mockResolvedValue({ ok: true, bots: [] });
   mocks.confirm.mockResolvedValue(true);
-  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { chatServer: mocks } } });
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { chatServer: mocks, updateBotGroup: mocks.updateBotGroup } } });
 });
 function LocationProbe() {
   const location = useLocation();
@@ -269,7 +310,7 @@ it('keeps reply mode and 分工 settings for single-speaker groups and saves men
   renderAt({ ...group(true), singleSpeaker: true, replyMode: 'all', speakingMode: 'auto', topic: 'Topic' }, 'manage');
   expect(screen.queryByRole('combobox', { name: 'bots.groupChat.settings.speakingMode' })).toBeNull();
   expect(screen.getByRole('combobox', { name: 'bots.groupChat.organizer' })).toBeTruthy();
-  expect(screen.getByText('bots.groupChat.settings.projectDir')).toBeTruthy();
+  expect(screen.getByText(key('projectFolder'))).toBeTruthy();
   fireEvent.click(screen.getByRole('combobox', { name: 'bots.groupChat.settings.replyMode' }));
   fireEvent.click(screen.getByRole('option', { name: 'bots.groupChat.settings.replyModeMentioned' }));
   await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: {
@@ -277,6 +318,51 @@ it('keeps reply mode and 分工 settings for single-speaker groups and saves men
   } }));
   expect(mocks.refresh).toHaveBeenCalledOnce();
   expect(screen.getByRole('combobox', { name: 'bots.groupChat.settings.replyMode' }).textContent).toContain('bots.groupChat.settings.replyModeMentioned');
+});
+
+// bot-group-chat.md §7.5: the group's repository is saved with the group; a pasted URL is reduced to owner/name.
+it('saves the group repository from the project section', async () => {
+  renderAt({ ...group(true), supportsGroupProject: true, project: null }, 'manage');
+  const input = screen.getByRole('textbox', { name: key('githubRepo') });
+  fireEvent.focus(input);
+  fireEvent.change(input, { target: { value: 'https://github.com/makecindy/cindy.git' } });
+  fireEvent.blur(input);
+  await waitFor(() => expect(mocks.updateBotGroup).toHaveBeenCalledWith({ groupId: 'room', githubRepo: 'makecindy/cindy' }));
+  fireEvent.focus(input);
+  fireEvent.change(input, { target: { value: 'not a repo' } });
+  fireEvent.blur(input);
+  expect(mocks.updateBotGroup).toHaveBeenCalledOnce();
+});
+
+// bot-group-chat.md「群里的 Cindy」(2026-11-12, replaces the 2026-11-11 「负责人回答」 layout): a server
+// with the group's own Cindy has its switch in group management, saved with the group; while it is on,
+// 「大家都可以接话」 means Cindy answers and says so. Switched off, or on an older server, the rows read as
+// before. The organizer stays under 分工 either way and never offers the group's Cindy.
+const SHARED = 'bots.groupChat.settings.';
+const sectionOf = (element: HTMLElement) => element.closest('section')!.querySelector('h2, h3')!.textContent;
+it.each([
+  ['an older server', undefined, `${SHARED}replyModeAll`, `${SHARED}replyModeNote`],
+  ['the group Cindy on', true, key('replyModeAssistant'), key('replyModeAssistantNote')],
+  ['the group Cindy off', false, `${SHARED}replyModeAll`, `${SHARED}replyModeNote`],
+] as const)('describes who answers unaddressed messages on %s', async (_case, enabled, allLabel, replyHint) => {
+  const cindy = { actorId: 'cindy', botId: 'cindy', actorKind: 'bot' as const, assistant: true, name: 'Cindy', avatar: '', avatarColor: 'violet', status: 'active' as const, role: 'member' as const };
+  const members = group(true).members.map(member => ({ ...member, status: 'active' as const }));
+  renderAt({ ...group(true), singleSpeaker: true, supportsGroupProject: true, project: { kind: 'github', repo: 'makecindy/cindy' },
+    replyMode: 'all', autoContinue: false, organizerBotId: 'bot',
+    members: enabled === undefined ? members : [...members, cindy], ...(enabled === undefined ? {} : { supportsGroupAssistant: true, assistantEnabled: enabled }) }, 'manage');
+  expect(screen.getByText(replyHint)).toBeTruthy();
+  const organizer = screen.getByRole('combobox', { name: 'bots.groupChat.organizer' });
+  expect(sectionOf(organizer)).toBe(key('work'));
+  fireEvent.click(organizer);
+  expect(screen.getAllByRole('option').map(option => option.textContent)).toEqual(['Partner']);
+  fireEvent.keyDown(screen.getAllByRole('option')[0]!, { key: 'Escape' });
+  fireEvent.click(screen.getByRole('combobox', { name: `${SHARED}replyMode` }));
+  expect(screen.getByRole('option', { name: allLabel })).toBeTruthy();
+  const toggle = screen.queryByTestId('bot-group-assistant');
+  if (enabled === undefined) { expect(toggle).toBeNull(); return; }
+  fireEvent.keyDown(screen.getAllByRole('option')[0]!, { key: 'Escape' });
+  fireEvent.click(toggle!);
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: expect.objectContaining({ type: 'update', assistant: !enabled, expectedRevision: 1 }) }));
 });
 
 it('does not offer leaving when this account owns every group owner, including its companion', () => {

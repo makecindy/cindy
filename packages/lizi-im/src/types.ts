@@ -114,7 +114,7 @@ export interface IMHost {
  */
 export interface IMHostFileStaging {
   stage(params: {
-    integration: 'feishu' | 'discord' | 'telegram' | 'wecom';
+    integration: 'imessage' | 'feishu' | 'discord' | 'telegram' | 'wecom';
     buffer: Uint8Array;
     /** 平台给的原始文件名(不可信, host 负责消毒)。 */
     fileName: string;
@@ -125,7 +125,7 @@ export interface IMHostFileStaging {
 export interface IMHostMediaCache {
   /** 图片字节入 host 总仓;返回仓内绝对路径(喂 agent)+ 渲染 URL(cindy-media://)。 */
   cacheImage(params: {
-    integration: 'feishu' | 'discord' | 'telegram' | 'dingtalk' | 'wecom';
+    integration: 'imessage' | 'feishu' | 'discord' | 'telegram' | 'dingtalk' | 'wecom';
     /** 平台侧稳定 token(feishu image_key / discord attachment id / telegram file_id),host 据此免重下。 */
     token: string;
     buffer: Uint8Array;
@@ -144,7 +144,7 @@ export interface IMHostMediaCache {
    * 不得新增写入冻结的 `cc-agent/*-media` 历史目录。
    */
   cacheMedia?(params: {
-    integration: 'feishu' | 'discord' | 'telegram' | 'wecom';
+    integration: 'imessage' | 'feishu' | 'discord' | 'telegram' | 'wecom';
     token: string;
     buffer: Uint8Array;
     mimeType: string;
@@ -157,7 +157,7 @@ export interface IMHostMediaCache {
   }>;
   /** 按 token 查已缓存图片;未缓存返回 null(调用方去真下载)。 */
   getCachedImage(
-    integration: 'feishu' | 'discord' | 'telegram' | 'dingtalk' | 'wecom',
+    integration: 'imessage' | 'feishu' | 'discord' | 'telegram' | 'dingtalk' | 'wecom',
     token: string,
     options?: {
       /** Re-check transport/account ownership after the async lookup, before host-side pinning. */
@@ -197,6 +197,19 @@ export interface IMUnsupportedEntry {
 }
 
 export interface IMMessageEvent {
+  /** In-process durable transport handoff; never serialized to the model or remote clients. */
+  delivery?: {
+    /** A queued retry was withdrawn by a later owner stop command. */
+    isCancelled?(): boolean;
+    /** Persistently withdraw this chat's queued inputs; leave other chats and the stop itself intact. */
+    cancelPending?(): number;
+    /** Agent dispatch must be acknowledged only by the persisted-user-message callback. */
+    awaitPersistence(): void;
+    /** External runner rejected dispatch as busy; retain the durable queue item for retry. */
+    defer(): void;
+    /** A terminal pre-dispatch rejection was handled without model execution. */
+    accept(): void;
+  };
   /** Optional transport-owned display context for shared permission prompts. */
   interactionSource?: {
     chatName?: string;
@@ -266,6 +279,8 @@ export interface IMMessageEvent {
    * 不支持引用语义的渠道恒 undefined。
    */
   replyContext?: {
+    /** Original send time, in epoch milliseconds when the platform supplies it. */
+    sentAt?: number;
     /** Original message ID, distinct from the current trigger message. */
     messageId?: string;
     author: string;
@@ -276,7 +291,7 @@ export interface IMMessageEvent {
     /** Referenced media that was not supplied to this turn. */
     unavailableAttachments?: string[];
   };
-  /** Feishu quote resources; host downloads only after screening the quote. */
+  /** Feishu quote resources; host downloads after accepting the inbound turn. */
   feishuReplyAttachments?: AttachmentRef[];
   /** Native private topic metadata. Root message id and thread id are distinct. */
   replyThread?: { rootMessageId: string; threadId: string };
@@ -359,6 +374,22 @@ export interface InteractiveCardSpec {
   buttons: InteractiveCardButton[];
 }
 
+/**
+ * 一轮工作的过程记录(用了哪些工具、想了什么), 收口时随终稿交给渠道。
+ * 支持折叠的渠道把它收成一行、点开可回看; 不支持的渠道忽略, 终稿只留正文。
+ */
+export interface StreamingProcessRecord {
+  /** 折叠后露出的那一行, 如「过程记录 · 12 项 · 1m20s」。 */
+  title: string;
+  /** 逐项记录, 一项一行(纯展示文本)。 */
+  lines: readonly string[];
+}
+
+export interface StreamingFinalizeOptions {
+  /** 本轮的过程记录; 没有工作项的快答不带。 */
+  process?: StreamingProcessRecord;
+}
+
 /** Handle returned by `startStreamingText`; allows throttled append + finalise. */
 export interface StreamingTextHandle {
   readonly messageId: string;
@@ -372,8 +403,9 @@ export interface StreamingTextHandle {
   replace(fullText: string): void;
   /**
    * Replace the card with `finalText` and stop throttling.
+   * `options.process` 是可选的过程记录, 由支持折叠的渠道与正文一起呈现。
    */
-  finalize(finalText: string): Promise<void>;
+  finalize(finalText: string, options?: StreamingFinalizeOptions): Promise<void>;
   /** Cancel without finalising (still leaves the last rendered text on screen). */
   close(): void;
   /**

@@ -3,9 +3,14 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useState, type ComponentProps, type ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
+import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../../shared/ghost';
+import { PluginUiProvider } from '@/cindy-brain/PluginUiContributions';
+import type { ComposerSuggestionEntry } from '@/lib/composerSuggestion';
+import type { UnifiedCommand } from '@/lib/slashCommands';
 import type { ProviderView } from '@cindy/model-providers';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { sshNativeCodexProvider, sshModel } from '@/features/cc-agent/__tests__/sshModelFixtures';
+import { useSshCodexDraftSelection } from '@/features/cc-agent/useSshCodexDraftSelection';
 import { ChatInput } from '../ChatInput';
 import * as providerMemory from '@/state/providerModelMemory';
 import * as draftMemory from '@/state/newMakerDraft';
@@ -25,9 +30,15 @@ const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor:
   setModel: vi.fn(), selectModel: undefined as undefined | ((id: string) => Promise<void | boolean>), selectEffort: undefined as string | null | undefined, remoteProviders: [] as ProviderView[],
   localProviders: [] as ProviderView[],
   remoteStatus: 'ready' as 'ready' | 'loading' | 'error',
+  sshCatalogHosts: [] as (string | null)[],
+  sshCodex: undefined as undefined | { status: string; refresh: () => void },
   platform: 'darwin',
   processing: null as 'submitting' | 'refining' | null,
+  ghosts: [] as InstalledGhost[],
+  showPluginChoices: false,
+  providerCall: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ updates: [] })),
 }));
+vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => h.ghosts, readInstalledGhostsSnapshot: () => h.ghosts }));
 vi.mock('react-i18next', async (original) => ({ ...await original<typeof import('react-i18next')>(), useTranslation: () => ({ t: h.t }) }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: h.confirm }) }));
@@ -52,18 +63,25 @@ vi.mock('@/components/sidebar/SortableList', () => ({
     </div>
   ),
 }));
-vi.mock('../ModelSelector', async (original) => ({ ...await original<typeof import('../ModelSelector')>(), ModelSelector: ({ modelId, onModelChange, disabled, effort }: { modelId: string; onModelChange: typeof h.selectModel; disabled?: boolean; effort?: string | null }) => {
+vi.mock('../ModelSelector', async (original) => ({ ...await original<typeof import('../ModelSelector')>(), ModelSelector: ({ modelId, onModelChange, disabled, effort, sshCodex }: { modelId: string; onModelChange: typeof h.selectModel; disabled?: boolean; effort?: string | null; sshCodex?: typeof h.sshCodex }) => {
+  h.sshCodex = sshCodex;
   h.selectModel = onModelChange;
   h.selectEffort = effort;
   return <button data-testid="model-selector" disabled={disabled}>{modelId}</button>;
 } }));
-vi.mock('@/hooks/useSshCodexProviders', () => ({ useSshCodexProviders: () => ({ providers: h.remoteProviders, status: h.remoteStatus, refresh: () => {} }) }));
+vi.mock('@/hooks/useSshCodexProviders', () => ({ useSshCodexProviders: (hostId?: string | null) => {
+  h.sshCatalogHosts.push(hostId ?? null);
+  return { providers: hostId ? h.remoteProviders : [], status: hostId ? h.remoteStatus : 'loading', refresh: () => {} };
+} }));
 vi.mock('../ExtraDirsButton', () => ({ ExtraDirsButton: () => null }));
 vi.mock('../PermissionSelector', () => ({ PermissionSelector: () => <span data-testid="permission-selector" /> }));
 vi.mock('../NewGoalDialog', () => ({ NewGoalDialog: () => null }));
 vi.mock('../FolderPickerPopover', () => ({ FolderPickerPopover: () => null, addRecentFolder: vi.fn() }));
-vi.mock('../AtMentionPanel', () => ({ AtMentionPanel: () => null }));
-vi.mock('../SlashCommandPalette', () => ({ SlashCommandPalette: () => null }));
+vi.mock('../AtMentionPanel', () => ({ AtMentionPanel: ({ entries, onSelect }: { entries: ComposerSuggestionEntry[]; onSelect(entry: ComposerSuggestionEntry): void }) => h.showPluginChoices
+  ? <>{entries.filter(entry => entry.kind === 'action' && entry.action.id.startsWith('plugin-completion:')).map(entry =>
+    <button key={entry.kind === 'action' ? entry.action.id : ''} onClick={() => onSelect(entry)}>Reference</button>)}</> : null }));
+vi.mock('../SlashCommandPalette', () => ({ SlashCommandPalette: ({ additionalCommands, onSelect }: { additionalCommands?: UnifiedCommand[]; onSelect(command: UnifiedCommand): void }) => h.showPluginChoices
+  ? <>{additionalCommands?.map(command => <button key={command.name} onClick={() => onSelect(command)}>Reference</button>)}</> : null }));
 vi.mock('@/voice-input/VoiceInputPointerHintLayer', () => ({ VoiceInputPointerHintLayer: ({ children }: { children: import('react').ReactNode }) => <>{children}</> }));
 vi.mock('@/voice-input/VoiceInputStatusNotice', () => ({ VoiceInputStatusNotice: () => null }));
 vi.mock('@/voice-input/useVoiceInput', () => ({ useVoiceInput: (editor: Editor | null) => {
@@ -88,6 +106,7 @@ const noOp = () => {};
 // External host services are inert; the editor, composer state, and send dispatch run unchanged.
 const api: typeof window.electronAPI = new Proxy({} as typeof window.electronAPI, { get: (_obj, key) => {
   if (key === 'setModel') return h.setModel;
+  if (key === 'mcpApps') return h.providerCall;
   if (key === 'listSync') return () => ({ ghosts: [] });
   if (key === 'getDataSnapshot') return () => { throw new Error('test bridge unavailable'); };
   if (key === 'setGlobalShortcut') return () => Promise.resolve({ ok: true });
@@ -104,7 +123,7 @@ const attachments: ComponentProps<typeof ChatInput>['attachmentState'] = {
   removeFile: noOp, updateFile: noOp, discardFiles: noOp, clearFiles: noOp, restoreFiles: (files) => [...files],
 };
 beforeEach(() => { h.platform = 'darwin'; h.listening = false; h.processing = null; h.stop.mockClear(); h.cancel.mockClear(); h.selectEffort = undefined; window.electronAPI = api; vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }); });
-afterEach(() => { cleanup(); clearDraft('queue-shortcut'); clearPromptRecommendationSession('queue-shortcut'); h.remoteProviders = []; h.localProviders = []; h.remoteStatus = 'ready'; h.setModel.mockReset(); h.confirm.mockReset(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); clearDraft('queue-shortcut'); clearPromptRecommendationSession('queue-shortcut'); h.remoteProviders = []; h.localProviders = []; h.remoteStatus = 'ready'; h.sshCatalogHosts = []; h.sshCodex = undefined; h.setModel.mockReset(); h.confirm.mockReset(); h.ghosts = []; h.showPluginChoices = false; h.providerCall.mockReset(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const props = {
   sessionId: 'loading-test', initialWorkingDir: '/workspace', runtimeAgentKind: 'codex' as const,
@@ -112,19 +131,51 @@ const props = {
   hideRuntimeControls: true, showFolderPicker: false, disableAutofocus: true,
 };
 
+// New completion contract through the real editor/selection entry. The panel is
+// replaced only to select a returned candidate. Existing parser/bridge tests do
+// not prove text insertion or that receiving a result leaves the draft untouched.
+// #9987, unit: a caret inside @ab|suffix must preserve suffix after completion;
+// the end-of-query cases did not exercise the built-in whole-word deletion path.
+it.each([['@', ''], ['/', ''], ['@', 'suffix'], ['/', 'suffix']] as const)('inserts %s provider text only after choosing it, preserving suffix "%s"', async (trigger, suffix) => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  h.showPluginChoices = true;
+  const ghost: InstalledGhost = { enabled: true, uiCapabilityApproved: true, dir: '/fixture',
+    approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'complete', name: 'Complete', kind: 'chip',
+      version: '1', entry: 'main.js', tools: [{ name: 'lookup', description: 'Lookup' }], mcpApps: {
+        ui: { resources: [], tools: { lookup: { visibility: ['app'] } } },
+        host: { contributions: [{ id: 'lookup', title: 'Reference', position: 'composer.completion', tool: 'lookup', trigger }] },
+      } } };
+  ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); h.ghosts = [ghost];
+  h.providerCall.mockResolvedValue({ structuredContent: { items: [{ id: 'one', label: 'Reference', insertText: '<b>plain</b>' }] } });
+  render(<PluginUiProvider><ChatInput {...props} sessionId={`completion-${trigger}`} deviceLinkDeviceId={null} onSend={vi.fn()} /></PluginUiProvider>);
+  await act(async () => { h.editor!.commands.setContent(`<p>${trigger}ab${suffix}</p>`); h.editor!.commands.setTextSelection(4); });
+  await act(() => vi.advanceTimersByTimeAsync(201));
+  expect(h.providerCall).toHaveBeenCalledWith(`completion-${trigger}`, expect.objectContaining({ op: 'plugin-action', input: { trigger, query: 'ab' } }));
+  expect(h.editor!.getText()).toBe(`${trigger}ab${suffix}`);
+  fireEvent.click(screen.getByRole('button', { name: 'Reference' }));
+  expect(h.editor!.getText()).toBe(`<b>plain</b>${suffix}`);
+  expect(h.editor!.getHTML()).not.toContain('<b>plain</b>');
+});
+
 // #8232, unit: the real composer Escape listener must not cancel a covered
 // voice draft. Existing voice cases cover sending, not foreground previews.
+// #9056: keep the card mounted when switching from rendered Markdown to source;
+// both modes must preserve the voice draft even without a Markdown search host.
 it.each(['listening', 'submitting', 'refining'] as const)('preserves %s voice input while a Markdown preview owns Escape', async state => {
   h.listening = state === 'listening';
   h.processing = state === 'listening' ? null : state;
   render(<ChatInput {...props} onSend={vi.fn()} />);
   const preview = document.createElement('section');
+  preview.dataset.textLightboxCard = '';
   preview.dataset.textLightboxSearchHost = '';
   const paragraph = document.createElement('p');
   paragraph.textContent = 'Foreground document';
   preview.append(paragraph);
   document.body.append(preview);
   try {
+    fireEvent.keyDown(paragraph, { key: 'Escape' });
+    expect(h.cancel).not.toHaveBeenCalled();
+    delete preview.dataset.textLightboxSearchHost;
     fireEvent.keyDown(paragraph, { key: 'Escape' });
     expect(h.cancel).not.toHaveBeenCalled();
     preview.remove();
@@ -355,11 +406,7 @@ function QueueEditHarness({
       onSend={() => undefined}
       onStartVoiceConversation={onStartVoiceConversation}
       pendingQueue={[queuedMessage]}
-      queueExpanded={false}
-      onQueueExpandedChange={vi.fn()}
-      onQueueRemove={onRemove}
       queueEditingClientId={editingClientId}
-      onQueueEditBegin={vi.fn()}
       onQueueEditSubmit={onSubmit}
       onQueueEditCancel={() => {
         onCancel();
@@ -395,8 +442,11 @@ it('sends a remote-only Codex model when the controller has no connected provide
   h.remoteProviders = [sshNativeCodexProvider([sshModel('remote-only')])];
   const onSend = vi.fn().mockResolvedValue(true);
   const view = render(<ChatInput {...props} sessionId="ssh-send" deviceLinkDeviceId={null} remoteHostId="builder"
-    initialModel="remote-only" initialProviderId="openai" initialEffort="low" onSend={onSend} />);
-  await waitFor(() => expect(view.container.querySelector('[contenteditable]')).not.toBeNull());
+    initialModel="remote-only" initialProviderId="openai" initialEffort="low" placeholder="Message" onSend={onSend} />);
+  // Unit, Windows real-device regression: the composer was a nameless Group,
+  // so UIA could not write it. Use the real editable's accessible role/name in
+  // this existing send test; native ValuePattern is verified on the device.
+  await waitFor(() => expect(screen.getByRole('textbox', { name: 'Message' })).toBeTruthy());
   await act(async () => { h.editor!.commands.setContent('<p>Hello remote</p>'); });
   const send = screen.getByRole('button', { name: 'newChat.sendButton.send' }) as HTMLButtonElement;
   expect(send.disabled).toBe(false);
@@ -468,6 +518,77 @@ it.each(['draft', 'other-provider'] as const)('does not exempt a hidden SSH mode
     fireEvent.keyDown(view.container.querySelector('[contenteditable]')!, { key: 'Enter', code: 'Enter' });
   });
   expect(onSend).not.toHaveBeenCalled();
+});
+
+// #8413: main rejects any non-native SSH Codex source with LAZY_CREATE_FAILED, even
+// when the host lists the same model id as a controller gateway does.
+it.each([
+  ['xd', false], ['openai', true],
+] as const)('SSH Codex draft with source %s can send: %s', async (providerId, sends) => {
+  h.remoteProviders = [sshNativeCodexProvider([sshModel('shared')])];
+  const onSend = vi.fn().mockResolvedValue(true);
+  const view = render(<ChatInput {...props} sessionId={undefined} deviceLinkDeviceId={null} remoteHostId="builder"
+    initialModel="shared" initialProviderId={providerId} initialEffort="low" onSend={onSend} />);
+  await waitFor(() => expect(view.container.querySelector('[contenteditable]')).not.toBeNull());
+  await act(async () => { h.editor!.commands.setContent('<p>Start remote work</p>'); });
+  const send = screen.getByRole('button', { name: 'newChat.sendButton.send' }) as HTMLButtonElement;
+  expect(send.disabled).toBe(!sends);
+  await act(async () => {
+    fireEvent.keyDown(view.container.querySelector('[contenteditable]')!, { key: 'Enter', code: 'Enter' });
+  });
+  if (!sends) return expect(onSend).not.toHaveBeenCalled();
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  expect(onSend.mock.calls[0][6]).toEqual(expect.objectContaining({ providerId: 'openai' }));
+});
+
+// Reading the host Codex catalog installs Codex there first, so a Claude Code / Pi draft
+// must not trigger it until the picker asks; once read it stays for engine switches.
+it('reads the SSH Codex catalog only after the picker asks when another engine is current', async () => {
+  h.remoteProviders = [sshNativeCodexProvider([sshModel('remote-codex')])];
+  const view = render(<ChatInput {...props} sessionId={undefined} runtimeAgentKind="claude-code" vendorKey="cc"
+    deviceLinkDeviceId={null} remoteHostId="builder" hideRuntimeControls={false}
+    initialModel="claude-opus-5" initialEffort="low" onSend={vi.fn()} />);
+  await waitFor(() => expect(h.sshCodex?.status).toBe('idle'));
+  expect(h.sshCatalogHosts.every((host) => host === null)).toBe(true);
+  await act(async () => { h.sshCodex!.refresh(); });
+  await waitFor(() => expect(h.sshCodex?.status).toBe('ready'));
+  expect(h.sshCatalogHosts.at(-1)).toBe('builder');
+  await act(async () => {
+    view.rerender(<ChatInput {...props} sessionId={undefined} runtimeAgentKind="pi" vendorKey="pi"
+      deviceLinkDeviceId={null} remoteHostId="builder" hideRuntimeControls={false}
+      initialModel="deepseek-v4" initialEffort="low" onSend={vi.fn()} />);
+  });
+  expect(h.sshCodex?.status).toBe('ready');
+});
+
+// #8413 review regression, unit: the picker used to retry only the composer's
+// independent catalog, leaving the parent draft unable to resolve the selected model.
+it('shares picker retry with the draft selection and sends the recovered host model', async () => {
+  h.remoteStatus = 'error'; // An independent composer read must not participate.
+  const onSend = vi.fn().mockResolvedValue(true);
+  const remote = [sshNativeCodexProvider([sshModel('recovered-model')])];
+  function Draft() {
+    const [ready, setReady] = useState(false);
+    const catalog = ready ? remote : [];
+    const { selection } = useSshCodexDraftSelection('builder', catalog);
+    return <ChatInput {...props} sessionId={undefined} deviceLinkDeviceId={null} remoteHostId="builder"
+      hideRuntimeControls={false} initialModel={selection?.model ?? ''}
+      initialProviderId="openai" initialEffort={selection?.effort ?? null} onSend={onSend}
+      sshCodexCatalogOverride={{ providers: catalog, status: ready ? 'ready' : 'error', refresh: () => setReady(true) }} />;
+  }
+  const view = render(<Draft />);
+  await waitFor(() => expect(h.sshCodex?.status).toBe('error'));
+  await act(async () => { h.editor!.commands.setContent('<p>Retry remote work</p>'); });
+  expect((screen.getByRole('button', { name: 'newChat.sendButton.send' }) as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => { h.sshCodex!.refresh(); });
+  await waitFor(() => expect(h.sshCodex?.status).toBe('ready'));
+  expect(h.sshCatalogHosts.every((host) => host === null)).toBe(true);
+  await act(async () => {
+    fireEvent.keyDown(view.container.querySelector('[contenteditable]')!, { key: 'Enter', code: 'Enter' });
+  });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  expect(onSend.mock.calls[0][1]).toBe('recovered-model');
+  expect(onSend.mock.calls[0][6]).toEqual(expect.objectContaining({ providerId: 'openai' }));
 });
 
 it.each(['button', 'Enter', 'voice'] as const)(
@@ -562,7 +683,7 @@ it('hides a missing existing model, recovers from the effective runtime, and pre
   expect(onSend).not.toHaveBeenCalled();
 });
 
-it('hides queue removal while editing and exits editing from the composer cancel button', async () => {
+it('keeps the queue out of the composer and exits editing from its cancel button', async () => {
   const onCancel = vi.fn();
   const onRemove = vi.fn();
   render(<QueueEditHarness onCancel={onCancel} onRemove={onRemove} />);
@@ -570,7 +691,7 @@ it('hides queue removal while editing and exits editing from the composer cancel
   const cancel = await screen.findByRole('button', {
     name: 'newChat.pendingQueue.editCancelAria',
   });
-  expect(screen.getByRole('listitem')).toBeTruthy();
+  expect(screen.queryByRole('listitem')).toBeNull();
   expect(
     screen.queryByRole('button', { name: 'newChat.pendingQueue.removeAria' }),
   ).toBeNull();
@@ -583,8 +704,7 @@ it('hides queue removal while editing and exits editing from the composer cancel
       screen.queryByRole('button', { name: 'newChat.pendingQueue.editCancelAria' }),
     ).toBeNull();
   });
-  fireEvent.mouseEnter(screen.getByRole('listitem'));
-  expect(screen.getByRole('button', { name: 'newChat.pendingQueue.removeAria' })).toBeTruthy();
+  expect(screen.queryByRole('listitem')).toBeNull();
   expect(onRemove).not.toHaveBeenCalled();
 });
 

@@ -17,6 +17,7 @@ import path from 'node:path';
 import { desktopMakerLogger } from './maker-host/logger-adapter.js';
 import {
   createOverrideSettingsFile,
+  portableOverrideSettings,
   type OverrideSettingsState,
 } from './maker-host/override-settings-file.js';
 
@@ -71,3 +72,6 @@ export function resetAutoUpdateSettings(): AutoUpdateSettings {
 }
 
 export const __testing = { normalize };
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const autoUpdatePortableSettings = portableOverrideSettings(store);

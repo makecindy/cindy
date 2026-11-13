@@ -25,7 +25,7 @@
     },
     {
       "name": "show_page",
-      "description": "显示 AI 生成的完整 MCP Apps HTML 页面。html 必须是以 <!doctype html> 开头的完整文档，直接 import '@modelcontextprotocol/ext-apps'，不写 importmap、不用 CDN。用户在对话里发的图片，用 ghost_call 的 attachments 交给 show_page，页面从 hostContext 读取。写页面前先用 ghost_manual({ ghost_id: \"interactive-loader\", path: \"pages\" }) 读《Cindy MCP Apps 页面生成手册》，完整规则以手册为准。",
+      "description": "显示 AI 生成的完整 MCP Apps HTML 页面。html 必须是以 <!doctype html> 开头的完整文档，直接 import '@modelcontextprotocol/ext-apps'，不写 importmap、不用 CDN。用户在对话里发的图片，用 ghost_call 的 attachments 交给 show_page，页面从 hostContext 读取。写页面前先调用 ghost_forge_guide({ section: \"pages\" }) 读《Cindy MCP Apps 页面生成手册》，完整规则以手册为准。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -185,15 +185,6 @@
       }
     }
   ],
-  "manual": {
-    "items": [
-      {
-        "dir": "manual/pages",
-        "name": "pages",
-        "description": "Cindy MCP Apps 页面生成手册：写页面前先读，含页面写法、SDK 方法、标准工具与规则"
-      }
-    ]
-  },
   "mcpApps": {
     "ui": {
       "resources": [

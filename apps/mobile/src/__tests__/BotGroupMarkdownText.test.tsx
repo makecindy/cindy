@@ -1,54 +1,153 @@
 // @vitest-environment jsdom
-import { act, createElement } from 'react';
+import { act, createElement, useMemo } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { palettes, type ThemeMode } from '@/theme/tokens';
+
+const viewport = vi.hoisted(() => ({ size: { width: 360, height: 800, fontScale: 1, scale: 3 }, listeners: new Set<() => void>() }));
+
+const theme = vi.hoisted(() => ({ mode: 'light' as 'light' | 'dark' }));
+
+const actions = vi.hoisted(() => ({ textRenders: 0, open: vi.fn(async (_url: string) => undefined), copy: vi.fn(async (_text: string) => undefined) }));
 
 // 把 style 展平进 data-style,断言每个 Text 实际叠了哪些样式。
 vi.mock('react-native', async () => {
   const React = await import('react');
   const flat = (style: unknown): Record<string, unknown> =>
     Object.assign({}, ...[style].flat(Infinity).filter(Boolean));
-  const host = (tag: string) => ({ children, style, horizontal, onLayout, testID, selectable }: any) => {
+  const host = (tag: string) => ({ children, style, horizontal, onLayout, testID, selectable, onPress, onTouchStart, accessibilityRole }: any) => {
     React.useEffect(() => { onLayout?.({ nativeEvent: { layout: { width: 280 } } }); }, [onLayout]);
     return React.createElement(tag, { 'data-style': JSON.stringify(flat(style)),
-      'data-horizontal': horizontal, 'data-testid': testID, 'data-selectable': selectable }, children);
+      'data-horizontal': horizontal, 'data-testid': testID, 'data-selectable': selectable, 'data-role': accessibilityRole, onClick: onPress, onTouchStart }, children);
   };
   return {
     View: host('div'),
     ScrollView: host('section'),
     Text: host('span'),
-    useWindowDimensions: () => ({ width: 360, height: 800, fontScale: 1, scale: 3 }),
+    Pressable: ({ children, onPress, disabled, testID }: any) => React.createElement('button', { onClick: onPress, disabled, 'data-testid': testID }, children),
+    Switch: () => null,
+    AppState: { addEventListener: () => ({ remove() {} }) },
+    ActivityIndicator: () => null,
+    Linking: { openURL: actions.open },
+    Dimensions: { get: () => viewport.size, addEventListener: (_: string, listener: () => void) => { viewport.listeners.add(listener); return { remove: () => viewport.listeners.delete(listener) }; } },
+    useWindowDimensions: () => React.useSyncExternalStore(listener => { viewport.listeners.add(listener); return () => viewport.listeners.delete(listener); }, () => viewport.size),
     StyleSheet: { create: (s: any) => s, flatten: flat, hairlineWidth: 1 },
     Platform: { OS: 'ios', select: (s: any) => s.ios ?? s.default },
   };
 });
-vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).Text, MAX_FONT_SIZE_MULTIPLIER: 1.5 }));
+vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).Text, MAX_FONT_SIZE_MULTIPLIER: 1.5, TextInput: ({ value, onChangeText, accessibilityLabel }: any) => createElement('input', { value, 'aria-label': accessibilityLabel, onChange: (event: any) => onChangeText(event.target.value) }) }));
 vi.mock('react-native-uitextview', async () => {
   const React = await import('react');
   const { StyleSheet } = await import('react-native');
-  return { UITextView: ({ children, uiTextView, selectable, style }: any) => React.createElement('span', {
+  return { UITextView: ({ children, uiTextView, selectable, style, onPress, onTouchStart, accessibilityRole }: any) => { actions.textRenders++; return React.createElement('span', {
     'data-uitextview': uiTextView ? 'root' : 'span', 'data-selectable': selectable,
-    'data-style': JSON.stringify(StyleSheet.flatten(style) ?? {}),
-  }, children) };
+    'data-style': JSON.stringify(StyleSheet.flatten(style) ?? {}), 'data-role': accessibilityRole, onClick: onPress, onTouchStart,
+  }, children); } };
 });
 vi.mock('@/session/SelectionMenuText', async () => ({ SelectionMenuText: (await import('react-native')).Text }));
 vi.mock('@/session/ShareMessageCheckbox', () => ({ useCancelShareSelectionRowTap: () => null }));
 vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
-vi.mock('@/theme', () => ({
-  fontWeight: { regular: '400', medium: '500', semibold: '600', bold: '700' },
-  monoFont: 'Menlo',
-  useThemedStyles: (make: (colors: any) => any) => make(new Proxy({}, { get: () => '#000' })),
+vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: async () => null, setItem: async () => undefined } }));
+vi.mock('lucide-react-native', () => Object.fromEntries(['Copy', 'CircleAlert', 'Mail', 'CalendarDays', 'Folder', 'ChartColumn', 'Check', 'Info', 'Clock', 'MapPin', 'Coffee', 'Image', 'Users', 'Star'].map(name => [name, () => null])));
+vi.mock('react-native-svg', () => Object.fromEntries(['default', 'Path', 'Rect', 'Ellipse', 'Polygon', 'Polyline', 'Line', 'Circle', 'Text'].map(name => [name, () => null])));
+vi.mock('@/session/ImageLightbox', () => ({ ImageLightbox: () => null }));
+vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'group-rich-test' } }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+// Keep native media/WebViews out of jsdom; use real controls and the production protocol.
+vi.mock('@/session/MessageRenderer', async () => {
+  const { RichAnswer } = await import('@/session/RichAnswer');
+  const { splitRichAnswer } = await import('@cindy/maker-shared/rich-answer');
+  const { createContext } = await import('react');
+  return { MessageHeavyContentVisibilityContext: createContext(true), MarkdownBody: ({ text, richStateKey, publicMediaOnly }: any) => createElement('div', { 'data-public-media-only': publicMediaOnly },
+    splitRichAnswer(text).map(part => part.kind === 'rich'
+      ? createElement(RichAnswer, { key: part.key, source: part.source, complete: true, stateKey: `${richStateKey}:${part.key}`,
+        renderMedia: (node: any) => createElement('span', {}, /^https?:/.test(node.props.src) ? node.props.src : node.props.alt),
+        renderMarkdown: (source: string) => createElement(BotGroupMarkdownText, { content: source }) }) : part.source)) };
+});
+vi.mock('@/theme', async () => ({
+  ...await import('@/theme/tokens'), monoFont: 'Menlo',
+  useThemedStyles: (make: (colors: any) => any) => useMemo(() => make(palettes[theme.mode]), [make, theme.mode]),
+  useTheme: () => ({ colors: palettes[theme.mode], mode: theme.mode }),
 }));
+
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+
+vi.mock('@/session/messageActions', () => ({ writeClipboardText: actions.copy }));
+vi.mock('expo-file-system', () => ({ Directory: class {}, File: class {}, Paths: { cache: 'mock-cache' } }));
+vi.mock('react-native-webview', async () => {
+  const React = await import('react');
+  return { WebView: React.forwardRef(({ source, ...props }: any, ref) => {
+    React.useImperativeHandle(ref, () => ({ injectJavaScript() {} }));
+    return React.createElement('div', { 'data-webview': source?.html?.includes('katex') ? 'math' : 'mermaid', 'data-testid': props.testID });
+  }) };
+});
 
 import { BotGroupMarkdownText, BotGroupUserText } from '@/session/BotGroupMessageText';
 
 let root: Root;
 let node: HTMLDivElement;
 beforeEach(() => {
+  viewport.size = { width: 360, height: 800, fontScale: 1, scale: 3 };
+  actions.textRenders = 0;
+  theme.mode = 'light';
+  actions.open.mockClear();
+  actions.copy.mockClear();
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   node = document.createElement('div');
   document.body.append(node);
   root = createRoot(node);
+});
+
+// Unit / A04：补齐完整群正文的链接覆盖；HTTP(S) 可打开，本机及任务链接保持不可操作。
+it('opens HTTP(S) links in rich group bodies while local and task links stay inert', async () => {
+  await act(async () => root.render(createElement(BotGroupMarkdownText, {
+    richContent: true,
+    content: '[网页](https://example.com/a) http://example.com/b [文件](/private/report.md) [任务](cindy://session/private)',
+  })));
+  for (const label of ['网页', 'http://example.com/b']) {
+    const span = [...node.querySelectorAll('span')].filter(el => el.textContent === label).at(-1)!;
+    await act(async () => span.click());
+    expect(styleOf(label).textDecorationLine).toBe('underline');
+  }
+  expect(actions.open.mock.calls.map(call => call[0])).toEqual(['https://example.com/a', 'http://example.com/b']);
+  for (const label of ['文件', '任务']) {
+    const span = [...node.querySelectorAll('span')].filter(el => el.textContent === label).at(-1)!;
+    await act(async () => span.click());
+    expect(styleOf(label).textDecorationLine).toBeUndefined();
+  }
+  expect(actions.open).toHaveBeenCalledTimes(2);
+});
+
+// Unit / A04：复制不含围栏、图表传递原文、公式挂载现有 WebView；原生宿主用 fake 替代。
+it('reuses code coloring and block copy, diagram opening and formula rendering in complete group bodies', async () => {
+  const openDiagram = vi.fn();
+  const code = 'const answer = 42;';
+  const diagram = 'flowchart LR\nA --> B';
+  await act(async () => root.render(createElement(BotGroupMarkdownText, {
+    richContent: true, onOpenDiagram: openDiagram,
+    content: '```typescript\n' + code + '\n```\n\n```mermaid\n' + diagram + '\n```\n\n$$\n\\frac{1}{2}\n$$\n\n$x^2$',
+  })));
+  expect(styleOf('const').color).toBe(palettes.light.syntaxKeyword);
+  await act(async () => node.querySelector<HTMLButtonElement>('[data-testid="message.markdownCodeCopyButton"]')!.click());
+  expect(actions.copy).toHaveBeenCalledWith(code);
+  expect(node.querySelector('[data-testid="botGroup.mermaidDiagram"]')).not.toBeNull();
+  await act(async () => node.querySelector<HTMLButtonElement>('[data-testid="botGroup.openDiagram"]')!.click());
+  expect(openDiagram).toHaveBeenCalledWith(diagram);
+  expect(node.querySelector('[data-testid="botGroup.mathFormula"]')).not.toBeNull();
+  expect(node.textContent).toContain('x²');
+});
+
+it('keeps group image selection free of link, code-copy and diagram actions', async () => {
+  const openDiagram = vi.fn();
+  await act(async () => root.render(createElement(BotGroupMarkdownText, {
+    richContent: true, interactive: false, onOpenDiagram: openDiagram,
+    content: '[网页](https://example.com)\n\n```js\nconst a = 1;\n```\n\n```mermaid\ngraph LR\nA --> B\n```',
+  })));
+  await act(async () => [...node.querySelectorAll('span')].filter(el => el.textContent === '网页').at(-1)!.click());
+  expect(actions.open).not.toHaveBeenCalled();
+  expect(node.querySelector('[data-testid="message.markdownCodeCopyButton"]')).toBeNull();
+  expect(node.querySelector('[data-testid="botGroup.openDiagram"]')).toBeNull();
+  expect(styleOf('const').color).toBe(palettes.light.syntaxKeyword);
 });
 
 // #6713: real group body previously flattened tables into one Text. DOM hosts do not
@@ -83,6 +182,7 @@ it('expands a short table to the measured message width without changing code bl
 afterEach(() => {
   act(() => root.unmount());
   node.remove();
+  expect(viewport.listeners.size).toBe(0);
 });
 
 const styleOf = (text: string): Record<string, unknown> => {
@@ -177,5 +277,175 @@ it.each(['ios', 'android'])('uses system partial-selection text for formatted gr
     expect(styleOf('part').fontWeight).toBe('600');
   } finally {
     Platform.OS = 'ios';
+  }
+});
+
+// A01 / unit: production sent body must resolve ids before exposing a touch action.
+// Existing selection tests cover carriers only. Minimal failure: @Ann with one
+// explicit id; namesakes, broadcasts and email/code must never open the wrong person.
+it.each([['ios', 'light'], ['ios', 'dark'], ['android', 'light'], ['android', 'dark']])('keeps PC mention styling, identity and text boundaries on %s / %s', async (platform, mode) => {
+  theme.mode = mode as ThemeMode;
+  const { Platform } = await import('react-native');
+  Platform.OS = platform as typeof Platform.OS;
+  const member = (botId: string, name: string) => ({ botId, name, avatar: '', avatarColor: '', status: 'active' as const });
+  const ann = member('ann-1', 'Ann');
+  const other = member('ann-2', 'Ann');
+  const reserved = member('all', '所有人');
+  const onPress = vi.fn();
+  const context = { members: [ann, other, reserved], mentions: { all: false, botIds: ['ann-1'] },
+    serverBacked: false, allLabels: ['所有人'], allBotsLabels: ['所有伙伴'], labels: ['Ann', '所有人', '所有伙伴'], onPress };
+  const renderBody = async (content: string, changes = {}) => {
+    const nextContext = { ...context, ...changes };
+    await act(async () => root.render(createElement(BotGroupUserText, {
+      content, mentionLabels: nextContext.labels, mentionContext: nextContext,
+    })));
+  };
+  const links = () => [...node.querySelectorAll('span')].filter(span => span.getAttribute('data-role') === 'link');
+  try {
+    await renderBody('@Ann mail@Ann.test @Anna @Unknown 正文');
+    expect(links().map(span => span.textContent)).toEqual(['@Ann']);
+    const mentionStyle = JSON.parse(links()[0]!.getAttribute('data-style')!);
+    expect(mentionStyle).toMatchObject({ color: palettes[theme.mode].groupMentionText });
+    expect(mentionStyle.textDecorationLine).toBeUndefined();
+    expect(mentionStyle.fontWeight).toBeUndefined();
+    expect(mentionStyle.backgroundColor).toBeUndefined();
+    const touch = new Event('touchstart', { bubbles: true });
+    Object.defineProperties(touch, { pageX: { value: 108 }, pageY: { value: 246 } });
+    await act(async () => { links()[0]!.dispatchEvent(touch); links()[0]!.click(); });
+    expect(onPress).toHaveBeenLastCalledWith(ann, { x: 108, y: 246 });
+    expect(node.textContent).toBe('@Ann mail@Ann.test @Anna @Unknown 正文');
+    await renderBody('@Ann', { mentions: { all: false, botIds: ['ann-1', 'ann-2'] } });
+    expect(links()).toHaveLength(0);
+    await renderBody('@Ann', { serverBacked: true, mentions: { all: false, botIds: [] } });
+    expect(links()).toHaveLength(0); // Server fallback still refuses namesakes.
+    await renderBody('@Ann', { members: [ann], serverBacked: true, mentions: { all: false, botIds: [] } });
+    expect(links()).toHaveLength(1);
+    await renderBody('@Ann', { members: [] });
+    expect(links()).toHaveLength(0); // Departed/unknown target.
+    await renderBody('@所有人 @所有伙伴', { mentions: { all: true, allBots: true, botIds: [] } });
+    expect(links()).toHaveLength(0);
+    const broadcasts = [...node.querySelectorAll('span')].filter(span => ['@所有人', '@所有伙伴'].includes(span.textContent ?? ''));
+    expect(broadcasts).toHaveLength(2);
+    for (const span of broadcasts) expect(JSON.parse(span.getAttribute('data-style')!)).toMatchObject({ color: palettes[theme.mode].groupMentionText });
+    await renderBody('@所有人', { mentions: { all: false, botIds: ['all'] } });
+    expect(links()).toHaveLength(1); // Explicitly picked namesake is a person, as on PC.
+    // Localized teammate broadcast with a colliding member name (PR #8818).
+    const spanish = { members: [member('todos', 'Todos los compañeros')], allBotsLabels: ['Todos los compañeros'],
+      labels: ['Todos los compañeros'], mentions: { all: false, allBots: true, botIds: ['todos'] } };
+    await renderBody('@Todos los compañeros', spanish);
+    expect(links()).toHaveLength(0);
+    await renderBody('@Todos los compañeros', { ...spanish, mentions: { all: false, botIds: ['todos'] } });
+    expect(links()).toHaveLength(1); // Without broadcast intent the explicit person remains clickable.
+    await act(async () => root.render(createElement(BotGroupMarkdownText, {
+      content: '**@Ann** `@Ann` [website](https://example.test)\n\n~~~text\n@Ann\n~~~', mentionContext: context,
+    })));
+    expect(links().map(span => span.textContent)).toEqual(['@Ann']);
+    expect(JSON.parse(links()[0]!.getAttribute('data-style')!)).toMatchObject({ fontWeight: '600', color: palettes[theme.mode].groupMentionText });
+    expect(styleOf('website').textDecorationLine).toBeUndefined();
+  } finally { Platform.OS = 'ios'; }
+});
+
+// PR #8818 / component: per-inline matching mistook **@Ann**a for Ann.
+// Existing carrier/identity tests do not cross formatting boundaries. Check the
+// rendered word through the production body, including a valid split mention.
+it.each(['ios', 'android'])('matches complete rendered words across formatting on %s', async platform => {
+  const { Platform } = await import('react-native');
+  Platform.OS = platform as typeof Platform.OS;
+  const ann = { botId: 'ann', name: 'Ann', avatar: '', avatarColor: '', status: 'active' as const };
+  const context = { members: [ann], mentions: { all: false, botIds: [] }, serverBacked: true,
+    allLabels: ['所有人'], allBotsLabels: ['所有伙伴'], labels: ['Ann'], onPress: vi.fn() };
+  try {
+    await act(async () => root.render(createElement(BotGroupMarkdownText, {
+      richContent: true,
+      content: '**@Ann**a mail**@Ann**.test @**Ann** [网页](https://example.com)', mentionContext: context,
+    })));
+    expect(node.textContent).toBe('@Anna mail@Ann.test @Ann 网页');
+    const links = [...node.querySelectorAll('[data-role="link"]')];
+    expect(links.map(span => span.textContent)).toEqual(['@', 'Ann']);
+    const highlighted = [...node.querySelectorAll('[data-style]')].filter(span =>
+      JSON.parse(span.getAttribute('data-style')!).color === palettes.light.groupMentionText);
+    expect(highlighted.map(span => span.textContent)).toEqual(['@', 'Ann']);
+    expect(styleOf('网页').textDecorationLine).toBe('underline');
+    await act(async () => [...node.querySelectorAll('span')].find(span => span.textContent === '网页')!.click());
+    expect(actions.open).toHaveBeenCalledWith('https://example.com');
+  } finally { Platform.OS = 'ios'; }
+});
+
+// Unit: real group body + native rich controls. Text projection did not exercise local values,
+// explicit send or remount isolation; minimal input is one field and one send button.
+it('retains a group control value after remount and sends only on explicit click', async () => {
+  const { SessionQuickSendProvider } = await import('@/session/SessionQuickSendContext');
+  const send = vi.fn().mockResolvedValue(true);
+  const content = '```cindy-ui\n' + [
+    { seq: 1, version: 1, op: 'create', id: 'destination', kind: 'input', props: { label: 'Destination', default: 'Hangzhou' } },
+    { seq: 2, op: 'create', id: 'submit', kind: 'button', props: { label: 'Submit', send: { ref: 'destination' } } },
+  ].map(op => JSON.stringify(op)).join('\n') + '\n```';
+  const show = () => root.render(createElement(SessionQuickSendProvider, { value: send },
+    createElement(BotGroupMarkdownText, { content, authorKind: 'bot', messageKey: 'group:one:message-one' })));
+  await act(async () => show());
+  const input = node.querySelector('input')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Shanghai');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  expect(send).not.toHaveBeenCalled();
+  await act(async () => root.render(null));
+  await act(async () => show());
+  expect(node.querySelector('input')!.value).toBe('Shanghai');
+  expect(node.querySelector('[data-public-media-only="true"]')).not.toBeNull();
+  await act(async () => node.querySelector('button')!.click());
+  expect(send).toHaveBeenCalledWith('Shanghai');
+});
+
+// Unit regression: switching focus rebuilt unchanged native selectable text.
+// Keep the body stable on focus changes, while edits still replace its content.
+it('retains static native text through focus changes and invalidates it on edits', async () => {
+  const render = (active: boolean, content = 'A **stable** message\n\n~~~js\nconst a = 1;\n~~~') =>
+    act(async () => root.render(createElement(BotGroupMarkdownText, {
+      content, richContent: true, active, onOpenDiagram: () => undefined,
+    })));
+  await render(true);
+  const count = actions.textRenders;
+  await render(false);
+  await render(true);
+  expect(actions.textRenders).toBe(count);
+  await render(true, 'Edited **message**');
+  expect(node.textContent).toContain('Edited message');
+  expect(actions.textRenders).toBeGreaterThan(count);
+});
+
+// Regression: a keyboard height change used to re-render every selectable block,
+// even when neither its width nor font scale changed. Exercise real group text,
+// preserving native text sizing and links while removing unrelated layout work.
+it('keeps rendered group text untouched for height-only changes and follows live font scaling', async () => {
+  await act(async () => root.render(createElement(BotGroupMarkdownText, {
+    richContent: true, authorKind: 'bot', content: '## Title\n\nText with **bold** and [link](https://example.com).\n\n- List item\n\n| One | Two |\n|---|---|\n| cell | value |',
+  })));
+  const before = actions.textRenders;
+  const text = node.textContent;
+  const resize = (next: Partial<typeof viewport.size>) => act(() => {
+    viewport.size = { ...viewport.size, ...next };
+    viewport.listeners.forEach(listener => listener());
+  });
+  resize({ height: 480 });
+  expect(node.textContent).toBe(text);
+  expect(actions.textRenders - before).toBe(0);
+  const originalStyle = node.querySelector('[data-uitextview="root"]')?.getAttribute('data-style');
+  resize({ fontScale: 1.15 });
+  expect(node.querySelector('[data-uitextview="root"]')?.getAttribute('data-style')).not.toBe(originalStyle);
+  expect(node.textContent).toBe(text);
+  resize({ width: 640 });
+  expect(node.textContent).toBe(text);
+});
+
+// #8603: the lightweight group-body consumer also uses the production AST.
+it('keeps nested plain group lists indented in both themes', async () => {
+  for (const mode of ['light', 'dark'] as const) {
+    theme.mode = mode;
+    await act(async () => root.render(createElement(BotGroupMarkdownText, { content: '- A\n  - B\n    - C' })));
+    const markers = [...node.querySelectorAll('span')].filter(e => ['•', '◦', '▪'].includes(e.textContent ?? ''));
+    expect(markers.map(e => e.textContent)).toEqual(['•', '◦', '▪']);
+    expect(markers.map(e => JSON.parse(e.parentElement!.dataset.style!).paddingLeft)).toEqual([0, 17, 34]);
   }
 });

@@ -1,8 +1,10 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
+import { sliceRenderedSelection } from '@/session/selectionQuote';
 import { PR_WATCH_EXPANDED_BLANK_FIXTURE } from '@/__tests__/fixtures/prWatchExpandedBlank';
 import {
   collectMobileMarkdownImages,
+  mobileMarkdownListMarkerText,
   isMobileMarkdownImageDirectUrl,
   mobileMarkdownImageTitle,
   mobileMarkdownImageUrlForWorkdir,
@@ -23,6 +25,53 @@ beforeAll(async () => {
 });
 
 describe('incremental mobile Markdown parsing', () => {
+  // Performance regression through the production stream parser: completed
+  // inline prefixes must be reused, while a new delimiter can still change the tail.
+  it('reuses a completed formatted paragraph prefix without freezing an unfinished tail', () => {
+    const prefix = '**字段** 和 `value` '.repeat(80);
+    let previous = parseMobileMarkdownIncremental(prefix + '**未完成');
+    const next = parseMobileMarkdownIncremental(prefix + '**未完成内容** tail', previous);
+    expect(next.blocks).toEqual(parseMobileMarkdownDocument(next.source).blocks);
+    expect(next.blocks[0]).toMatchObject({ inlines: parseMobileMarkdownInlines(next.source) });
+    expect(next.reusedInlineUtf16Length).toBeGreaterThan(1000);
+    const first = previous.blocks[0];
+    const last = next.blocks[0];
+    if (first.type !== 'paragraph' || last.type !== 'paragraph') throw new Error('paragraph expected');
+    expect(last.inlines[0]).toBe(first.inlines[0]);
+    for (const tail of [' [link](https://example.com)', ' ![图](https://example.com/a.png)', ' <div>x</div>', ' $x$', '\\(x\\)']) {
+      previous = parseMobileMarkdownIncremental(prefix);
+      for (let n = 1; n <= tail.length; n++) {
+        const value = prefix + tail.slice(0, n);
+        previous = parseMobileMarkdownIncremental(value, previous);
+        expect(previous.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+      }
+    }
+  });
+  it('keeps paragraph cache boundaries equivalent to the unsplit inline parser', () => {
+    const prefix = '**字段** 和 `value` '.repeat(80);
+    for (const tail of ['**pending', '**done** more', '`pending', '`done` more',
+      'src/a.ts ', 'https://example.com ', '<!-- hidden --> visible ',
+      '**https://example.com** ', '😀文字 ', 'a_b_c ', '\\*escaped* ',
+      '[file](src/a.ts:17) ', '$x$ ', '~~strike~~ ']) {
+      let result = parseMobileMarkdownIncremental(prefix + tail);
+      const snapshot = JSON.stringify(result.blocks);
+      const initial = result;
+      for (const part of ['x', ' **y** ', '`z`']) {
+        result = parseMobileMarkdownIncremental(result.source + part, result);
+        expect(result.blocks[0]).toMatchObject({ inlines: parseMobileMarkdownInlines(result.source.trim()) });
+      }
+      expect(JSON.stringify(initial.blocks)).toBe(snapshot);
+      const edited = parseMobileMarkdownIncremental('changed ' + result.source.slice(8), result);
+      expect(edited.reusedInlineUtf16Length).toBe(0);
+      expect(edited.blocks[0]).toMatchObject({ inlines: parseMobileMarkdownInlines(edited.source.trim()) });
+    }
+    let result = parseMobileMarkdownIncremental('first\n\n' + prefix);
+    for (const tail of [' **tail**', '\n\nnext', '\n---', '\n\n<!-- hidden\n\nmore', '\n--> end']) {
+      result = parseMobileMarkdownIncremental(result.source + tail, result);
+      expect(result.blocks).toEqual(parseMobileMarkdownDocument(result.source).blocks);
+    }
+  });
+
   it('reuses completed blocks after a safe blank-line checkpoint', () => {
     const first = parseMobileMarkdownDocument('# title\n\nfirst paragraph');
     const next = parseMobileMarkdownIncremental(
@@ -2104,4 +2153,94 @@ it.each([
   ]],
 ])('keeps overlapping and consumed-prefix rendering for %s', (source, expected) => {
   expect(parseMobileMarkdownInlines(source as string)).toEqual(expected);
+});
+
+// A pending image used to be validated/normalized for every earlier inline even
+// after its regex match was cached. Measure actual normalization work, not time.
+it('validates a distant image once per paragraph without losing following images', () => {
+  const url = 'https://example.invalid/pending.png';
+  const source = '**one** `two` '.repeat(30) + `![photo](${url}) ![next](src/next.png)`;
+  const replace = String.prototype.replace;
+  let normalizations = 0;
+  const spy = vi.spyOn(String.prototype, 'replace').mockImplementation(function (this: string, ...args: Parameters<typeof replace>) {
+    if (String(this) === url) normalizations += 1;
+    return Reflect.apply(replace, this, args);
+  });
+  try {
+    const parsed = parseMobileMarkdownInlines(source);
+    expect(parsed.filter(token => token.type === 'strong')).toHaveLength(30);
+    expect(parsed.filter(token => token.type === 'code')).toHaveLength(30);
+    expect(parsed.slice(-3)).toEqual([
+      { type: 'image', alt: 'photo', url },
+      { type: 'text', text: ' ' },
+      { type: 'image', alt: 'next', url: 'src/next.png' },
+    ]);
+    expect(normalizations).toBeLessThanOrEqual(2);
+  } finally { spy.mockRestore(); }
+});
+
+// #8603 / unit: production parsing used by iOS and Android must distinguish
+// nested input from the flat control; earlier coverage only checked item text.
+describe('nested mobile lists (#8603)', () => {
+  const depths = (source: string) => parseMobileMarkdown(source).filter(b => b.type === 'list_item')
+    .map(b => ('depth' in b ? b.depth : 0));
+  it.each(['  ', '    ', '\t'])('preserves sibling and parent levels with %j indentation', indent => {
+    const nested = `- A\n${indent}- B\n${indent}${indent}- C\n${indent}${indent}- D\n${indent}- E\n- F`;
+    expect(depths(nested)).toEqual([0, 1, 2, 2, 1, 0]);
+    expect(depths(nested.replace(/^[ \t]+/gm, ''))).toEqual([0, 0, 0, 0, 0, 0]);
+  });
+  it('retains mixed ordered/task nesting across blank-line incremental checkpoints', () => {
+    const source = 'intro\n\n1. A\n\n    - [x] B\n\n        2) C\n    - D\n2. E\n\nafter\n\n- F';
+    let result = parseMobileMarkdownIncremental('');
+    for (let n = 1; n <= source.length; n++) {
+      result = parseMobileMarkdownIncremental(source.slice(0, n), result);
+      expect(result.blocks).toEqual(parseMobileMarkdownDocument(source.slice(0, n)).blocks);
+    }
+    expect(depths(source)).toEqual([0, 1, 2, 1, 0, 0]);
+    expect(result.blocks.filter(b => b.type === 'list_item')[1]).toMatchObject({ checked: true });
+  });
+  // PR #10103: unit / real parser. Previous nesting tests skipped all child
+  // content blocks, so flushing a continuation silently flattened later items.
+  it.each([
+    ['continuation', '- A\n  - B\n    explanation\n  - C', [0, 1, 1]],
+    ['loose paragraph', '- A\n\n  explanation\n\n  - B', [0, 1]],
+    ['fence', '- A\n\n  ```text\nnot indented inside fence\n  ```\n\n  - B', [0, 1]],
+    ['mermaid fence', '- A\n\n  ```mermaid\nflowchart LR\nA-->B\n  ```\n\n  - B', [0, 1]],
+    ['quote', '- A\n\n  > explanation\n\n  - B', [0, 1]],
+    ['ancestor continuation', '- A\n  - B\n    - C\n  explanation for A\n  - D', [0, 1, 2, 1]],
+    ['exit through paragraph', '- A\n  - B\n\noutside\n\n  - new list', [0, 1, 0]],
+    ['paragraph dedent', '- A\n\n  explanation\noutside\n\n  - new list', [0, 0]],
+  ] as const)('retains only enclosing list context through %s', (_name, source, expected) => {
+    expect(depths(source)).toEqual(expected);
+    let result = parseMobileMarkdownIncremental('');
+    for (let n = 1; n <= source.length; n++) {
+      result = parseMobileMarkdownIncremental(source.slice(0, n), result);
+      expect(result.blocks).toEqual(parseMobileMarkdownDocument(source.slice(0, n)).blocks);
+    }
+  });
+});
+
+// #8603: run limits must count the exact prefix used by native selection, and
+// continuation chunks must not duplicate either the indentation or the marker.
+it('includes nested prefixes in bounded native text runs without duplicating continuation markers', () => {
+  const blocks = parseMobileMarkdown('- parent\n  12. child😀text');
+  const groups = groupMobileMarkdownSelectableBlocks(blocks, { maxTextRunUtf16Length: 9 });
+  const chunks = groups.flatMap(g => g.type === 'text_run' ? g.blocks : []);
+  const rendered = chunks.map(b => {
+    const prefix = b.type === 'list_item' && !b.textRunContinuation ? mobileMarkdownListMarkerText(b) : '';
+    return { prefix, text: prefix + b.inlines.map(i => i.type === 'image' ? i.alt : i.text).join('') };
+  });
+  expect(rendered.map(r => r.text).join('')).toBe('• parent\u200312. child😀text');
+  expect(rendered.every(r => r.text.length <= 9)).toBe(true);
+  expect(rendered.filter(r => r.prefix.startsWith('\u2003'))).toHaveLength(1);
+});
+
+it('uses rendered nested-prefix offsets when quoting text with an emoji', () => {
+  const blocks = parseMobileMarkdown('- A\n  - B😀C');
+  const item = blocks[1];
+  if (item.type !== 'list_item') throw new Error('list item expected');
+  const prefix = mobileMarkdownListMarkerText(item);
+  const rendered = prefix + item.inlines.map(i => i.type === 'image' ? i.alt : i.text).join('');
+  expect(sliceRenderedSelection([rendered], prefix.length, rendered.length)).toBe('B😀C');
+  expect(sliceRenderedSelection([rendered], 0, rendered.length)).toBe('\u2003◦ B😀C');
 });

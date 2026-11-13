@@ -9,11 +9,12 @@
  *      在遮罩下查不出来。向导曾漏掉这个切换,只有编辑弹窗有(见 SettingsTextInput)。
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buildUserProvider, BUNDLED_CATALOG, parseModelsListResponse, modelProtocolComparison, type ProviderView } from '@cindy/model-providers';
+import { buildUserProvider, BUNDLED_CATALOG, loadCatalogWithSource, parseCatalog, parseModelRegistry, parseModelsListResponse, modelProtocolComparison, unifiedModelEntries, type AgentKind, type CustomProviderConfig, type ProviderView } from '@cindy/model-providers';
+
 
 const testI18n = vi.hoisted(() => ({ language: 'zh-CN' }));
 vi.mock('react-i18next', () => ({
@@ -55,7 +56,10 @@ vi.mock('@/components/icons/ProviderLogoMark', () => ({
   ProviderLogoMark: () => null,
 }));
 
+import retainedDeepSeek from './fixtures/deepseek-retained-catalog.json';
+import { toast } from '@/lib/toast';
 import { AddProviderWizard, OFFICIAL_API_PRESETS } from '@/components/settings/AddProviderWizard';
+import { openFirstRunGuide, closeFirstRunGuide, parkFirstRunGuideForConnection, updateFirstRunGuideConnections, getFirstRunGuideState } from '@/features/first-run-guide/firstRunGuideStore';
 import { AddSpeechModelsDialog } from '@/components/settings/AddSpeechModelsDialog';
 import { UnifiedModelList } from '@/components/settings/UnifiedModelList';
 import { speechModels } from '../../main/voice-conversation/models';
@@ -240,6 +244,15 @@ const claudeOnlyPreset = {
   },
 };
 
+// Identified handoffs and the "use API key" path show the preset form before the preset
+// catalog loads; Next stays disabled until then, and React drops a click on a disabled
+// button. Wait for the enabled button, as a user would, instead of racing the catalog.
+async function clickNext() {
+  const next = await screen.findByRole('button', { name: 'settings.providers.wizard.next' });
+  await waitFor(() => expect(next.hasAttribute('disabled')).toBe(false));
+  fireEvent.click(next);
+}
+
 function renderWizard(presetId: string) {
   return render(
     React.createElement(AddProviderWizard, {
@@ -305,6 +318,12 @@ it.each(['openrouter', 'minimax-cn', 'minimax-global', 'moonshot-kimi-code', 'gi
 beforeEach(() => {
   testI18n.language = 'zh-CN';
   (window as unknown as { electronAPI: unknown }).electronAPI = {
+    subscriptionAccounts: { command: vi.fn(async () => ({
+      providerId: 'anthropic', configured: false, strategy: 'least', accounts: [{
+        id: 'default', status: 'signed-out', directory: '/default',
+        running: 0, paused: false, limit: 4, weight: 1,
+      }],
+    })) },
     maker: {
       llamaCppEnsure: vi.fn(async () => undefined),
       llamaCppStatus: vi.fn(async () => ({ installed: false, supported: true, running: false, models: [] })),
@@ -339,8 +358,397 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  closeFirstRunGuide();
   cleanup();
   vi.clearAllMocks();
+});
+
+// #8485 unit: the editable vLLM preset can discover Magpie, too. Existing form
+// tests skipped Wizard's per-engine picks and its two final config projections.
+// Minimal failure: a successful source response (or removal) was lost at save.
+describe('Magpie sources through preset discovery', () => {
+  const baseUrl = 'http://127.0.0.1:3425/v1';
+  const source = (agent: AgentKind) => ({ kind: 'magpie' as const, providerId: `supplier-${agent}`, snapshotId: `receipt-${agent}` });
+
+  // New preset entry: existing vLLM coverage cannot catch missing Magpie selection,
+  // its API-key form or the differing Messages/Responses/Chat runtime addresses.
+  it('saves the shipped Magpie preset with edited addresses and distinct complete route IDs', async () => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'magpie')!;
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
+    const ids = ['channel-a/foo', 'channel-b/foo'];
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(async ({ agent }) => ({
+      ok: true, models: ids.map(id => ({ id, name: 'Foo', discoveredSource: source(agent),
+        discoverySnapshotId: `receipt-${agent}`, opaqueModelId: true })),
+    }));
+    renderWizard('magpie');
+    fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'fake-magpie-key' } });
+    const endpoints = document.querySelectorAll('input[type="url"]');
+    expect(endpoints).toHaveLength(3);
+    ['http://127.0.0.1:4425', 'http://127.0.0.1:4425/v1', 'http://127.0.0.1:4425/v1'].forEach((value, index) =>
+      fireEvent.change(endpoints[index], { target: { value } }));
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    const rows = await screen.findAllByText('Foo');
+    expect(rows).toHaveLength(2);
+    rows.forEach(row => fireEvent.click(row));
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    const [saved, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      expect(saved.runtimes[agent]).toMatchObject({ catalogPresetId: 'magpie',
+        baseUrl: 'http://127.0.0.1:4425' + (agent === 'claude-code' ? '' : '/v1'),
+        wireProtocol: preset.runtimes[agent]!.wireProtocol });
+      expect(saved.runtimes[agent]!.models.map(model => model.id)).toEqual(ids);
+      expect(keys![agent]).toBe('fake-magpie-key');
+    }
+    const entries = unifiedModelEntries({ providers: [{ ...buildUserProvider(saved), connected: true }] });
+    expect(entries.map(entry => entry.modelId)).toEqual(ids);
+    for (const entry of entries) for (const agent of entry.candidates) {
+      expect(entry.capabilities[agent]!.wireModelId).toBe(entry.modelId);
+    }
+  });
+
+  it('retains full IDs and engine-owned receipts through the editable vLLM entry', async () => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'vllm')!;
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
+    const ids = ['chatgpt/foo', 'foo', 'xai/foo'];
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(async ({ agent }) => ({ ok: true, models:
+      ids.map(id => ({ id, name: id, discoveredSource: source(agent), discoverySnapshotId: `receipt-${agent}`, opaqueModelId: true })) }));
+    renderWizard('vllm');
+    const endpoint = (await screen.findAllByDisplayValue('http://127.0.0.1:8000/v1'))[0];
+    fireEvent.change(endpoint, { target: { value: baseUrl } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    for (const id of ids) fireEvent.click(await screen.findByText(id));
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    const saved = vi.mocked(createCustomProvider).mock.calls[0][0];
+    for (const agent of ['codex', 'pi'] as const) {
+      expect(saved.runtimes[agent]!.baseUrl).toBe(baseUrl);
+      expect(saved.runtimes[agent]!.models).toEqual(ids.map(id => expect.objectContaining({ id,
+        discoveredSource: source(agent), discoverySnapshotId: `receipt-${agent}`, opaqueModelId: true })));
+    }
+    const provider = { ...buildUserProvider(saved), connected: true };
+    const entries = unifiedModelEntries({ providers: [provider] });
+    expect(entries.map(entry => entry.modelId)).toEqual(ids);
+    for (const entry of entries) for (const agent of entry.candidates) {
+      expect(entry.capabilities[agent]!.wireModelId).toBe(entry.modelId);
+      expect(entry.capabilities[agent]!.discoveredSource).toEqual(source(agent));
+    }
+  });
+
+  it.each(['finish', 'return'] as const)('lets refreshed sources replace old draft fields on %s, including successful removal', async action => {
+    const agents = ['codex', 'pi'] as const;
+    const oldSource = { kind: 'magpie' as const, providerId: 'Old source', snapshotId: 'old-receipt' };
+    const config: CustomProviderConfig = { id: 'draft', name: 'Gateway', auth: { method: 'none' }, runtimes: Object.fromEntries(
+      agents.map(agent => [agent, { baseUrl, wireProtocol: 'openai-chat', models: [
+        { id: 'foo', name: 'Foo', opaqueModelId: true, discoveredSource: oldSource, discoverySnapshotId: 'old-receipt' },
+      ] }]),
+    ) };
+    const preset = { id: 'vllm', name: 'vLLM', authMethod: 'none' as const, runtimes: Object.fromEntries(
+      agents.map(agent => [agent, { baseUrl, wireProtocol: 'openai-chat' as const, baseUrlEditable: true, models: [] }]),
+    ) };
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(async ({ agent }) => ({ ok: true, models: [
+      { id: 'foo', name: 'Foo', discoverySnapshotId: `receipt-${agent}`, ...(agent === 'pi' ? { discoveredSource: source(agent) } : {}) },
+    ] }));
+    const onReturnCustom = vi.fn();
+    render(<AddProviderWizard providers={[]} detected={{ agent: 'pi', apiKey: '', keys: {}, config, preset }}
+      onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    await clickNext();
+    const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+    await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
+    if (action === 'finish') {
+      fireEvent.click(finish);
+      await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    } else {
+      fireEvent.click(screen.getByText('settings.providers.wizard.back'));
+      fireEvent.click(screen.getByText('settings.providers.wizard.back'));
+      expect(onReturnCustom).toHaveBeenCalledOnce();
+    }
+    const saved = action === 'finish' ? vi.mocked(createCustomProvider).mock.calls[0][0] : onReturnCustom.mock.calls[0][0].config as CustomProviderConfig;
+    for (const agent of agents) {
+      const model = saved.runtimes[agent]!.models[0];
+      expect(model.id).toBe('foo');
+      expect(model.opaqueModelId).toBe(true);
+      expect(model.discoverySnapshotId).toBe(`receipt-${agent}`);
+      expect(model.discoveredSource).toEqual(agent === 'pi' ? source(agent) : undefined);
+    }
+  });
+});
+
+// Unit reproduction of #8204: use the unchanged bundled DeepSeek preset and
+// original reported model. Keep the current bundled preset as a control; the
+// historical compact preset is a separate fixture, not a claim about live data.
+it.each([
+  ['bundled', 'offline'], ['bundled', 'shared-discovery'],
+  ['historical-compact', 'offline'], ['historical-compact', 'shared-discovery'],
+  ['split-compact-fixture', 'shared-discovery'],
+] as const)(
+  'reproduction: retains declared CC membership for DeepSeek Vision Exp (%s, %s)',
+  async (catalogKind, discovery) => {
+    const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'deepseek')!);
+    const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+    const id = 'deepseek-v4-flash-vision-exp';
+    if (catalogKind !== 'bundled') {
+      for (const runtime of Object.values(preset.runtimes)) {
+        runtime!.models = runtime!.models.filter(m => ['deepseek-flash', 'deepseek-v4-pro'].includes(m.id));
+      }
+    }
+    if (catalogKind === 'split-compact-fixture') {
+      // Separate constructed boundary: different per-engine inventories sharing
+      // one modelsUrl activate preservePresetOwnership. This is not live data.
+      preset.runtimes['claude-code']!.models = preset.runtimes['claude-code']!.models.slice(0, 1);
+    }
+    expect(preset.runtimes['claude-code']!.models.some(m => m.id === id)).toBe(catalogKind === 'bundled');
+    // Control: the production runtime resolver already accepts this exact model
+    // through the product's active declaration when CC membership is present.
+    const projected = buildUserProvider({ id: 'reproduction', name: 'Reproduction', runtimes: {
+      'claude-code': { catalogPresetId: preset.id, baseUrl: preset.runtimes['claude-code']!.baseUrl,
+        models: [{ id, name: id }] },
+    } }, { presets: [preset], modelRegistry: registry });
+    expect(projected.models['claude-code']![0]).toMatchObject({
+      id, api: 'anthropic-messages', route: { baseUrl: 'https://api.deepseek.com/anthropic' },
+    });
+    const response = { presets: [preset], modelRegistry: registry };
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue(response);
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue(discovery === 'offline'
+      ? { ok: false }
+      : { ok: true, models: [{ id, name: 'DeepSeek V4 Flash Vision Exp' }] });
+    renderWizard(preset.id);
+    await screen.findByDisplayValue('DeepSeek');
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-reproduction-fake' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    const name = await screen.findByText('DeepSeek V4 Flash Vision Exp');
+    await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
+    const row = name.closest('button')!;
+    expect.soft(within(row).queryByText('settings.providers.models.capabilityNote')).toBeNull();
+    fireEvent.click(row);
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    const saved = JSON.parse(JSON.stringify(vi.mocked(createCustomProvider).mock.calls[0][0]));
+    expect(saved.runtimes['claude-code']?.models.map((m: { id: string }) => m.id)).toContain(id);
+    const reloaded = buildUserProvider(saved, { presets: [preset], modelRegistry: registry });
+    expect(reloaded.models['claude-code']?.find(m => m.id === id)).toMatchObject({
+      api: 'anthropic-messages', route: { baseUrl: 'https://api.deepseek.com/anthropic' },
+    });
+  },
+);
+
+// Unit: a shared /models response cannot borrow a compatible interface to
+// override the Registry's CC/Codex membership. Verify the actual saved config.
+it('keeps Registry engine exclusions through shared discovery and saving', async () => {
+  const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'deepseek')!);
+  const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+  const id = 'deepseek-v4-flash-vision-exp';
+  for (const runtime of Object.values(preset.runtimes)) runtime!.models = runtime!.models.filter(m => m.id !== id);
+  registry.models.push({ id: 'test/codex-only', name: 'Codex only', routes: [{
+    providerId: preset.id, modelId: id, agents: ['codex'],
+  }] });
+  registry.models.push({ id: 'test/media', name: 'Media only', mode: 'image_generation', routes: [{
+    providerId: preset.id, modelId: 'media-only', agents: [],
+  }] });
+  expect(parseModelRegistry(registry).ok).toBe(true);
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset], modelRegistry: registry });
+  vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: true, models: [
+    { id, name: 'Codex only' }, { id: 'media-only', name: 'Media only' },
+  ] });
+  renderWizard(preset.id);
+  await screen.findByDisplayValue('DeepSeek');
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'registry-membership-test-value' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  const row = (await screen.findByText('Codex only')).closest('button')!;
+  await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
+  fireEvent.click(row);
+  fireEvent.click((await screen.findByText('Media only')).closest('button')!);
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const saved = JSON.parse(JSON.stringify(vi.mocked(createCustomProvider).mock.calls[0][0]));
+  const idsFor = (agent: string) => saved.runtimes[agent]?.models.map((m: { id: string }) => m.id) ?? [];
+  expect(idsFor('claude-code')).not.toContain(id);
+  expect(idsFor('codex')).toContain(id);
+  expect(idsFor('claude-code')).not.toContain('media-only');
+  expect(idsFor('codex')).not.toContain('media-only');
+  expect(idsFor('pi')).toEqual(expect.arrayContaining([id, 'media-only']));
+});
+
+// Unit: replay the public declaration retained by the actual instance, including
+// its Pi Messages base (the earlier compact fixture used a different Pi base).
+it('retained remote catalog keeps Vision Exp CC membership after merging', async () => {
+  const snapshot = JSON.stringify({ version: '2', providers: BUNDLED_CATALOG.providers,
+    presets: [retainedDeepSeek.preset], modelRegistry: retainedDeepSeek.registry });
+  parseCatalog(snapshot);
+  const loaded = await loadCatalogWithSource({ url: 'https://retained-catalog.example/catalog' }, {
+    fetchText: async () => snapshot,
+  });
+  expect(loaded.source).toBe('remote');
+  expect(loaded.catalog.modelRegistry?.updatedAt).toBe(BUNDLED_CATALOG.modelRegistry?.updatedAt);
+  const preset = loaded.catalog.presets!.find(p => p.id === 'deepseek')!;
+  const id = 'deepseek-v4-flash-vision-exp';
+  expect(BUNDLED_CATALOG.presets!.find(p => p.id === 'deepseek')!.runtimes['claude-code']!.models.some(m => m.id === id)).toBe(true);
+  expect(preset.runtimes['claude-code']!.models.map(m => m.id)).toEqual(['deepseek-flash', 'deepseek-v4-pro']);
+  expect(preset.runtimes.pi!.baseUrl).toBe('https://api.deepseek.com/anthropic');
+  const response = { presets: [preset], modelRegistry: loaded.catalog.modelRegistry };
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue(response);
+  vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: false });
+  renderWizard('deepseek');
+  await screen.findByDisplayValue('DeepSeek');
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-reproduction-fake' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  const row = (await screen.findByText('DeepSeek V4 Flash Vision Exp')).closest('button')!;
+  // The unchanged hint must disappear because the actual membership is fixed.
+  expect(within(row).queryByText('settings.providers.models.capabilityNote')).toBeNull();
+  fireEvent.click(row);
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const saved = vi.mocked(createCustomProvider).mock.calls[0][0];
+  expect(saved.runtimes.codex!.models.some(m => m.id === id)).toBe(true);
+  expect(saved.runtimes.pi?.models.some(m => m.id === id) ?? false).toBe(true);
+  expect(saved.runtimes['claude-code']!.models.some(m => m.id === id)).toBe(true);
+});
+
+// Unit: legacy shared discovery must still offer and save genuinely new IDs.
+// The original regression fixtures only discover a model known to the V6 registry.
+it.each(['missing', 'v5'] as const)('keeps new shared-discovery models with %s Registry', async kind => {
+  const preset = parseCatalog({ version: '2', providers: BUNDLED_CATALOG.providers,
+    presets: [retainedDeepSeek.preset] }).presets![0];
+  const modelRegistry = kind === 'missing' ? undefined : { schemaVersion: 5 as const,
+    updatedAt: '2026-10-30T08:00:00.000Z', models: [] };
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset], modelRegistry });
+  vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: true,
+    models: [{ id: 'deepseek-new-upstream', name: 'New upstream model' }] });
+  renderWizard('deepseek');
+  await screen.findByDisplayValue('DeepSeek');
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test-legacy' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  fireEvent.click(await screen.findByText('New upstream model'));
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const saved = vi.mocked(createCustomProvider).mock.calls[0][0];
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    expect(saved.runtimes[agent]?.models.map(model => model.id)).toContain('deepseek-new-upstream');
+  }
+});
+
+// PR #8427 review regressions: use real catalog entries and the production save
+// projection. Previous shared-discovery tests only used fully migrated DeepSeek.
+it('keeps LongCat discovery in its uncovered legacy Messages runtime', async () => {
+  const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'longcat')!;
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({
+    presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry });
+  vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: true,
+    models: [{ id: 'longcat-new-upstream', name: 'New LongCat model' }] });
+  renderWizard(preset.id);
+  await screen.findByDisplayValue('LongCat');
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test-longcat' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  fireEvent.click(await screen.findByText('New LongCat model'));
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+  const provider = buildUserProvider(config, { presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry });
+  const discovered = provider.models['claude-code']?.find(m => m.id === 'longcat-new-upstream');
+  expect(discovered).toBeDefined();
+  expect(discovered).not.toHaveProperty('interfaceId');
+  expect(discovered).not.toHaveProperty('route');
+  expect(provider.routing['claude-code']?.upstream).toBe('https://api.longcat.chat/anthropic');
+});
+
+it('keeps a supplemental interface pin when returning an identified draft to the custom form', async () => {
+  const baseUrl = 'https://handoff.example/v1';
+  const preset = { id: 'pin-handoff', name: 'Pin handoff', runtimes: {
+    'claude-code': { baseUrl, models: [{ id: 'seed', name: 'Seed' }] },
+  } };
+  const registry = { schemaVersion: 6 as const, updatedAt: '2026-11-02T00:00:00Z',
+    interfaceProfiles: [
+      { id: 'handoff-messages', providerId: preset.id, api: 'anthropic-messages' as const,
+        baseUrl, inputBaseUrls: [baseUrl], defaultFor: ['claude-code' as const] },
+      { id: 'handoff-chat', providerId: preset.id, api: 'openai-completions' as const,
+        baseUrl, inputBaseUrls: [baseUrl] },
+    ], models: [{ id: 'test/supplemental', name: 'Supplemental', routes: [{
+      providerId: preset.id, modelId: 'supplemental', agents: ['claude-code' as const],
+      interfaces: [{ profileId: 'handoff-chat' }],
+    }] }] };
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset], modelRegistry: registry });
+  const onReturnCustom = vi.fn();
+  render(<AddProviderWizard providers={[]} detected={{ preset, agent: 'claude-code', apiKey: 'fake-key',
+    config: { id: 'draft', name: 'Pin handoff', runtimes: { 'claude-code': { baseUrl, models: preset.runtimes['claude-code'].models } } },
+    catalog: { ok: true, models: [{ id: 'supplemental', name: 'Supplemental' }] },
+  }} onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+  await clickNext();
+  fireEvent.click(await screen.findByText('Supplemental'));
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+  const returned = JSON.parse(JSON.stringify(onReturnCustom.mock.calls[0][0].config));
+  expect(returned.runtimes['claude-code']).toMatchObject({ catalogPresetId: preset.id,
+    models: expect.arrayContaining([expect.objectContaining({ id: 'supplemental', interfaceId: 'handoff-chat' })]) });
+  expect(buildUserProvider(returned, { presets: [preset], modelRegistry: registry }).models['claude-code']!
+    .find(m => m.id === 'supplemental')).toMatchObject({ api: 'openai-completions', route: { wireProtocol: 'openai-chat' } });
+});
+
+it.each([
+  ['finish', 'api'], ['return', 'api'], ['finish', 'piApi'], ['return', 'piApi'],
+] as const)('preserves explicit %s handoff protocol selected with %s', async (path, field) => {
+  const preset = parseCatalog({ version: '2', providers: BUNDLED_CATALOG.providers,
+    presets: [retainedDeepSeek.preset] }).presets![0];
+  const id = 'deepseek-v4-flash-vision-exp';
+  const onReturnCustom = vi.fn();
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({
+    presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry });
+  const original = { id: 'explicit', name: 'Explicit API', runtimes: { pi: {
+    baseUrl: preset.runtimes.pi!.baseUrl, catalogPresetId: preset.id,
+    models: [{ id, name: 'Explicit vision', [field]: 'anthropic-messages' as const }],
+  } } };
+  render(<AddProviderWizard providers={[]} detected={{ preset, agent: 'pi', apiKey: 'fake-key',
+    config: original, catalog: { ok: true, models: [{ id, name: 'Explicit vision' }] },
+  }} onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+  await clickNext();
+  const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+  await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
+  let config;
+  if (path === 'finish') {
+    fireEvent.click(finish);
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    config = vi.mocked(createCustomProvider).mock.calls[0][0];
+  } else {
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    config = onReturnCustom.mock.calls[0][0].config;
+  }
+  const registry = { presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry };
+  const expected = buildUserProvider(original, registry).models.pi!.find(m => m.id === id)!;
+  const actual = buildUserProvider(config, registry).models.pi!.find(m => m.id === id)!;
+  expect(expected.api).toBe('anthropic-messages');
+  expect(actual).toMatchObject({ api: expected.api, route: expected.route });
+});
+
+it.each(['delayed', 'failed'] as const)('waits for a %s catalog before building an identified draft model list', async catalogState => {
+  const preset = parseCatalog({ version: '2', providers: BUNDLED_CATALOG.providers,
+    presets: [retainedDeepSeek.preset] }).presets![0];
+  let completeCatalog!: (value: { presets: typeof preset[]; modelRegistry: typeof BUNDLED_CATALOG.modelRegistry }) => void;
+  if (catalogState === 'delayed') {
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockReturnValue(new Promise(resolve => { completeCatalog = resolve; }));
+  } else vi.mocked(window.electronAPI.maker.listProviderPresets).mockRejectedValue(new Error('Catalog unavailable'));
+  vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: false });
+  render(<AddProviderWizard providers={[]} detected={{ preset, agent: 'claude-code', apiKey: 'fake-key',
+    config: { id: 'delayed', name: 'Delayed catalog', runtimes: {
+      'claude-code': { baseUrl: preset.runtimes['claude-code']!.baseUrl, models: [] },
+    } },
+  }} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+  const next = screen.getByRole('button', { name: 'settings.providers.wizard.next' });
+  expect(next.hasAttribute('disabled')).toBe(true);
+  fireEvent.click(next);
+  expect(window.electronAPI.maker.fetchProviderModels).not.toHaveBeenCalled();
+  if (catalogState === 'delayed') completeCatalog({ presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry });
+  await waitFor(() => expect(next.hasAttribute('disabled')).toBe(false));
+  fireEvent.click(next);
+  const row = (await screen.findByText('DeepSeek V4 Flash Vision Exp')).closest('button')!;
+  expect(within(row).queryByText('settings.providers.models.capabilityNote')).toBeNull();
+  fireEvent.click(row);
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const saved = vi.mocked(createCustomProvider).mock.calls[0][0];
+  for (const agent of ['claude-code', 'pi'] as const) {
+    expect(saved.runtimes[agent]?.models.map(m => m.id)).toContain('deepseek-v4-flash-vision-exp');
+  }
+
 });
 
 describe('AddProviderWizard — preset 直达', () => {
@@ -542,7 +950,7 @@ describe('AddProviderWizard — preset 直达', () => {
     );
     // 填 key 后进入第三步(拉取被 mock 为失败)。
     fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
-    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    await clickNext();
     await waitFor(() =>
       expect(screen.getByText('settings.providers.wizard.fetchFailed')).not.toBeNull(),
     );
@@ -572,7 +980,7 @@ describe('AddProviderWizard — preset 直达', () => {
       expect(screen.getByText('settings.providers.wizard.nameLabel')).not.toBeNull(),
     );
     fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
-    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    await clickNext();
     await waitFor(() => expect(screen.getByText('Claude Opus 5')).not.toBeNull());
     fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
 
@@ -1206,6 +1614,41 @@ it.each(['audioModels', 'embeddingModels'] as const)('opens key setup for a disc
 });
 
 
+// #8065 r4435924110: unit/jsdom, real wizard with a deferred secret-store IPC.
+// Existing builtin coverage only saved immediately; the OAuth guard test uses
+// a different handler. Save + Escape must retain this dialog while pending;
+// success completes once, failure restores editing and cancellation.
+it.each(['success', 'failure'] as const)('guards builtin key saving until %s', async outcome => {
+  const provider = { ...anthropicProvider, id: 'gemini', name: 'Gemini', auth: { method: 'apiKey' } } as ProviderView;
+  let succeed!: () => void;
+  let fail!: (error: Error) => void;
+  const store = vi.fn(() => new Promise<void>((resolve, reject) => { succeed = resolve; fail = reject; }));
+  window.electronAPI.builtinApiKeyStore = store;
+  const onClose = vi.fn();
+  const onDone = vi.fn();
+  render(<AddProviderWizard providers={[provider]} entry={{ kind: 'builtin', providerId: 'gemini' }} onOpenCustomForm={vi.fn()} onClose={onClose} onDone={onDone} />);
+  await screen.findByText('settings.providers.wizard.builtinApiKey.subtitle');
+  const input = screen.getByRole('dialog').querySelector('input[type="password"]')!;
+  fireEvent.change(input, { target: { value: 'fixture-key' } });
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.finish' }));
+  fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.cancel' }));
+  expect(onClose).not.toHaveBeenCalled();
+  expect(screen.getByRole('dialog').contains(input)).toBe(true);
+  expect(store).toHaveBeenCalledExactlyOnceWith('gemini', 'fixture-key');
+  if (outcome === 'success') {
+    await act(async () => { succeed(); });
+    await waitFor(() => expect(onDone).toHaveBeenCalledExactlyOnceWith('gemini'));
+    expect(onClose).not.toHaveBeenCalled();
+  } else {
+    await act(async () => { fail(new Error('Fixture save failure')); });
+    expect(onDone).not.toHaveBeenCalled();
+    expect((input as HTMLInputElement).value).toBe('fixture-key');
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.cancel' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+  }
+});
+
 it('preserves each runtime preset media type when discovery is unavailable', async () => {
   const image = { id: 'shared-media', name: 'Media', mode: 'image_generation' as const,
     modalities: { input: ['text'], output: ['image'] }, officialDocs: 'https://example.test/image' };
@@ -1227,6 +1670,79 @@ it('preserves each runtime preset media type when discovery is unavailable', asy
   const config = vi.mocked(createCustomProvider).mock.calls[0][0];
   expect(config.runtimes['claude-code']?.models[0]).toMatchObject(image);
   expect(config.runtimes.codex?.models[0]).toMatchObject(video);
+});
+
+describe('OpenHubs complete account inventory', () => {
+  const ids = ['deepseek-v4-flash', 'kimi-k3.1-pro', 'glm-5.3'];
+  it.each(['empty', 'partial', 'full', 'failed', 'filtered', 'other-origin'] as const)
+  ('reconciles %s discovery using the account inventory rather than a model whitelist', async kind => {
+    const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'openhubs')!);
+    if (kind === 'filtered') for (const runtime of Object.values(preset.runtimes)) runtime!.modelsUrl += '?type=chat';
+    if (kind === 'other-origin') {
+      for (const runtime of Object.values(preset.runtimes)) {
+        runtime!.baseUrl = 'https://relay.example/v1';
+        runtime!.modelsUrl = 'https://relay.example/v1/models';
+      }
+    }
+    window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry }));
+    const discovered = kind === 'full'
+      ? Array.from({ length: 104 }, (_, i) => ({ id: `account-model-${i}`, name: `Account Model ${i}` }))
+      : kind === 'partial' ? [{ id: ids[0], name: 'DeepSeek V4 Flash' }, { id: 'new-model', name: 'New Account Model' }] : [];
+    window.electronAPI.maker.fetchProviderModels = vi.fn(async () => kind === 'failed'
+      ? { ok: false, code: 'UPSTREAM_UNREACHABLE' as const }
+      : { ok: true, models: discovered });
+    renderWizard('openhubs');
+    await screen.findByDisplayValue('OpenHubs');
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'fake-key' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+    await waitFor(() => expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledTimes(3));
+    const expected = ['empty', 'partial', 'full'].includes(kind) ? discovered.map(model => model.id) : ids;
+    await waitFor(() => {
+      for (const model of preset.runtimes.pi!.models) {
+        expect(!!screen.queryByText(model.name!)).toBe(expected.includes(model.id));
+      }
+      for (const model of discovered) expect(screen.queryByText(model.name)).toBeTruthy();
+      expect(finish.hasAttribute('disabled')).toBe(kind === 'empty' || kind === 'full');
+    });
+    if (kind === 'partial' || kind === 'full') fireEvent.click(screen.getByText(discovered.at(-1)!.name));
+    const request = vi.mocked(window.electronAPI.maker.fetchProviderModels).mock.calls[0][0];
+    expect(request.allowEmpty === true).toBe(!['filtered', 'other-origin'].includes(kind));
+    if (expected.length) {
+      fireEvent.click(finish);
+      await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+      const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+      expect(Object.keys(config.runtimes)).toEqual(['claude-code', 'codex', 'pi']);
+      for (const runtime of Object.values(config.runtimes)) expect(runtime!.models.map(model => model.id)).toEqual(expected);
+      expect(config.runtimes.pi!.models.map(model => model.id)).toEqual(expected);
+      expect(config.runtimes.pi).toMatchObject({ catalogPresetId: 'openhubs', wireProtocol: 'openai-chat' });
+      if (kind === 'partial' || kind === 'full') {
+        const provider = buildUserProvider(config, { presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry });
+        for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+          expect(provider.models[agent]!.find(model => model.id === discovered.at(-1)!.id))
+            .toMatchObject({ api: agent === 'claude-code' ? 'anthropic-messages' : agent === 'codex' ? 'openai-responses' : 'openai-completions', defaultEnabled: true });
+        }
+      }
+    }
+  });
+  it('preserves a hand-entered OpenHubs model when the complete inventory is empty', async () => {
+    const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'openhubs')!);
+    const model = { id: 'private-alias', name: 'My OpenHubs model', contextWindow: 4096 };
+    const runtime = { ...preset.runtimes.pi!, models: [model] };
+    window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: true, models: [] }));
+    render(<AddProviderWizard providers={[]} detected={{
+      agent: 'pi', apiKey: 'fake-key', keys: { pi: 'fake-key' }, preset,
+      config: { id: 'draft', name: 'OpenHubs', runtimes: { pi: runtime } }, catalog: { ok: true, models: [] },
+    }} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    await clickNext();
+    const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+    await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
+    expect(screen.getByText(model.name)).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText('DeepSeek V4 Flash')).toBeNull());
+    fireEvent.click(finish);
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi!.models).toEqual([expect.objectContaining(model)]);
+  });
 });
 
 it('imports the same discovered OpenRouter identity, capabilities and prices into all three engines', async () => {
@@ -1354,20 +1870,29 @@ it.each(['finish', 'back', 'close'] as const)('logs in without a key and handles
     onProviderOAuthProgress: vi.fn(() => () => undefined),
     listProviders: vi.fn(async () => ({ providers: [{ ...buildUserProvider(created), connected: true }] })),
   });
+  // #9997: auth success precedes model selection; only the real dialog completion returns.
+  openFirstRunGuide({ manual: false, migration: false, legacyMigrated: false });
+  parkFirstRunGuideForConnection([]);
   const view = renderWizard('openrouter');
   fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.button.authorize' }));
   await screen.findByText('Test model');
   expect(screen.getByText('settings.providers.wizard.recommended')).toBeTruthy();
+  act(() => updateFirstRunGuideConnections([created.id]));
+  expect(getFirstRunGuideState().parked).toBe(true);
   expect(created.auth).toMatchObject({ method: 'oauth', oauth: { tokenUrl: 'https://openrouter.ai/api/v1/auth/keys' } });
   if (action !== 'finish') {
     if (action === 'back') fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
     else view.unmount();
     await waitFor(() => expect(deleteCustomProvider).toHaveBeenCalledWith(created.id));
     expect(updateCustomProvider).not.toHaveBeenCalled();
+    expect(getFirstRunGuideState().parked).toBe(true);
+    closeFirstRunGuide();
     return;
   }
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.finish' }));
   await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledWith(expect.objectContaining({ id: created.id, auth: created.auth }), {}));
+  await waitFor(() => expect(getFirstRunGuideState().parked).toBe(false));
+  closeFirstRunGuide();
   const deletedBefore = vi.mocked(deleteCustomProvider).mock.calls.length;
   view.unmount();
   expect(vi.mocked(deleteCustomProvider).mock.calls.length).toBe(deletedBefore);
@@ -1557,7 +2082,7 @@ describe('identified provider handoff', () => {
     const baseUrl = edited ? 'https://new-relay.example/team/v1' : detected.config.runtimes.pi.baseUrl;
     if (edited) vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue(detected.catalog);
     if (edited) fireEvent.change(await screen.findByDisplayValue(detected.config.runtimes.pi.baseUrl), { target: { value: baseUrl } });
-    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    await clickNext();
     const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
     await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
     if (!edited) expect(window.electronAPI.maker.fetchProviderModels).not.toHaveBeenCalled();
@@ -1575,7 +2100,7 @@ describe('identified provider handoff', () => {
       ...detected.config.runtimes.pi, models: [{ ...model, defaultEnabled: false }, { id: 'keep', name: 'Keep' }],
     } } } };
     render(<AddProviderWizard providers={[]} detected={handoff} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    await clickNext();
     const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
     await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
     if (!checked) fireEvent.click(screen.getByText('Upstream name'));
@@ -1591,7 +2116,7 @@ describe('identified provider handoff', () => {
     } } } };
     const onReturnCustom = vi.fn();
     render(<AddProviderWizard providers={[]} detected={handoff} onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    await clickNext();
     const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
     await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
     if (!checked) fireEvent.click(screen.getByText('Upstream name'));
@@ -1613,7 +2138,7 @@ describe('identified provider handoff', () => {
       config: { ...detected.config, runtimes: { codex: { ...runtime, models: [{ id: 'private-alias', name: 'Model' }] } } },
     };
     render(<AddProviderWizard providers={[]} detected={handoff} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    await clickNext();
     const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
     await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
     fireEvent.click(finish);
@@ -1628,7 +2153,7 @@ describe('identified provider handoff', () => {
       catalog: { ok: true, models: [{ id: 'public-only', name: 'Public' }] },
     };
     render(<AddProviderWizard providers={[]} detected={handoff} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    await clickNext();
     const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
     await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
     expect(screen.getByText('My model')).toBeTruthy();
@@ -1646,7 +2171,7 @@ describe('identified provider handoff', () => {
     };
     vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: true, models: [{ id: 'directory-only', name: 'Directory' }] });
     render(<AddProviderWizard providers={[]} detected={handoff} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    await clickNext();
     const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
     await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
     fireEvent.click(finish);
@@ -1667,7 +2192,7 @@ describe('identified provider handoff', () => {
       { id: 'codex-exclusive', name: 'Only Codex', discoveredMetadata: { contextWindow: 50000 } },
     ] });
     render(<AddProviderWizard providers={[]} detected={handoff} onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    await clickNext();
     fireEvent.click(await screen.findByText('Only Codex'));
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
@@ -2044,4 +2569,173 @@ describe('general manual fallback beside speech suggestions', () => {
     await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
     expect(screen.queryByPlaceholderText('settings.providers.wizard.manualModelPlaceholder')).toBeNull();
   });
+});
+
+
+it('focuses a search target and reports a missing or empty-directory target to its caller', async () => {
+  const onUnavailable = vi.fn();
+  const { unmount } = render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId: 'deepseek' }} onEntryUnavailable={onUnavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+  await waitFor(() => expect((document.activeElement as HTMLInputElement)?.value).toBe('DeepSeek'));
+  expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+  unmount();
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [] });
+  render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId: 'gone' }} onEntryUnavailable={onUnavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+  await waitFor(() => expect(onUnavailable).toHaveBeenCalledTimes(1));
+});
+
+// #8065 r4430831420: unit/jsdom, real connector entry and mocked IPC.
+// Existing coverage checked only callback count, not its failure reason or toast.
+// A non-ready result or rejected ensure must keep its specific error, not claim
+// that the still-valid provider disappeared from the catalog.
+it.each([
+  ['port-conflict', 'settings.providers.local.conflict'],
+  ['stopped', 'settings.providers.local.status.stopped'],
+  ['ollama-error', 'settings.providers.local.connectFailed'],
+  ['llamacpp-error', 'settings.providers.llamacpp.failed'],
+] as const)('returns a connection-failed reason for %s', async (failure, message) => {
+  const onUnavailable = vi.fn();
+  const onDone = vi.fn();
+  const connector = vi.fn(async () => {
+    if (failure.endsWith('-error')) throw new Error('connector failed');
+    return { runtime: 'ollama' as const, kind: failure, appInstalled: false };
+  });
+  Object.assign(window.electronAPI.maker, failure === 'llamacpp-error'
+    ? { llamaCppEnsure: connector } : { localModelStatus: connector });
+  render(<AddProviderWizard providers={[]} entry={{ kind: failure === 'llamacpp-error' ? 'llamacpp' : 'ollama' }}
+    onEntryUnavailable={onUnavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
+  await waitFor(() => expect(onUnavailable).toHaveBeenCalledWith('connection-failed'));
+  expect(onUnavailable).toHaveBeenCalledOnce();
+  expect(connector).toHaveBeenCalledOnce();
+  expect(toast.error).toHaveBeenCalledExactlyOnceWith(message);
+  expect(onDone).not.toHaveBeenCalled();
+});
+
+
+it('keeps the Ollama search handoff open while connecting so Escape cannot restore a soon-to-be-discarded draft', async () => {
+  let ready!: (value: { kind: 'ready' }) => void;
+  const localModelStatus = vi.fn(() => new Promise(resolve => { ready = resolve; }));
+  const localModelEnsure = vi.fn(async () => ({ ok: true }));
+  Object.assign(window.electronAPI.maker, { localModelStatus, localModelEnsure });
+  const onClose = vi.fn();
+  const onDone = vi.fn();
+  render(<AddProviderWizard providers={[]} entry={{ kind: 'ollama' }} onOpenCustomForm={vi.fn()} onClose={onClose} onDone={onDone} />);
+  await waitFor(() => expect(localModelStatus).toHaveBeenCalledOnce());
+  fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+  expect(screen.getByRole('dialog')).toBeTruthy();
+  expect(onClose).not.toHaveBeenCalled();
+  ready({ kind: 'ready' });
+  await waitFor(() => expect(onDone).toHaveBeenCalledWith('cindy-local-ollama'));
+  expect(localModelEnsure).toHaveBeenCalledOnce();
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+it('blocks supplier switches and custom-form navigation until the Ollama search connection settles', async () => {
+  let ready!: (value: { kind: 'ready' }) => void;
+  const status = vi.fn(() => new Promise(resolve => { ready = resolve; }));
+  Object.assign(window.electronAPI.maker, { localModelStatus: status, localModelEnsure: vi.fn(async () => ({ ok: true })) });
+  const onOpenCustomForm = vi.fn();
+  const onDone = vi.fn();
+  render(<AddProviderWizard providers={[anthropicProvider]} entry={{ kind: 'ollama' }} onOpenCustomForm={onOpenCustomForm} onClose={vi.fn()} onDone={onDone} />);
+  await screen.findByRole('button', { name: /DeepSeek/ });
+  fireEvent.click(screen.getByRole('button', { name: /DeepSeek/ }));
+  expect(screen.queryByPlaceholderText('sk-…')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /Anthropic/ }));
+  expect(screen.getByRole('button', { name: /settings.providers.wizard.customAction/ })).toBeTruthy();
+  expect(screen.queryByText('settings.providers.localAccount.useClaude')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /settings.providers.wizard.customAction/ }));
+  expect(onOpenCustomForm).not.toHaveBeenCalled();
+  ready({ kind: 'ready' });
+  await waitFor(() => expect(onDone).toHaveBeenCalledWith('cindy-local-ollama'));
+});
+
+// #8065 r4430752290: existing entry tests resolve the directory before switching.
+// Renderer unit, deferred IPC: each public choice must keep its own setup/input
+// when the original search entry's directory subsequently resolves or rejects.
+it.each(['oauth', 'oauth-api', 'builtin-key', 'ollama', 'failed-directory'] as const)(
+  'keeps the newer %s choice after the search directory settles', async choice => {
+    let resolve!: (value: { presets: typeof deepseekPreset[] }) => void;
+    let reject!: (error: Error) => void;
+    window.electronAPI.maker.listProviderPresets = vi.fn(() => new Promise<{ presets: typeof deepseekPreset[] }>((ok, fail) => { resolve = ok; reject = fail; }));
+    window.electronAPI.maker.localModelStatus = vi.fn(async () => ({ runtime: 'ollama' as const, kind: 'absent' as const, appInstalled: false, canInstallRuntime: false }));
+    if (choice === 'ollama') Object.assign(window.electronAPI.maker, {
+      onLocalModelInstallProgress: vi.fn(() => () => undefined),
+      onLocalModelStatus: vi.fn(() => () => undefined),
+    });
+    const mediaProvider = { ...anthropicProvider, id: 'gemini', name: 'Media Only', agents: [], models: {},
+      auth: { method: 'apiKey' }, embeddingModels: [{ id: 'embedding', name: 'Embedding' }] } as ProviderView;
+    const onUnavailable = vi.fn();
+    render(<AddProviderWizard providers={[anthropicProvider, mediaProvider]} entry={{ kind: 'preset', presetId: 'deepseek' }}
+      onEntryUnavailable={onUnavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+    await screen.findByRole('button', { name: /Anthropic/ });
+    if (choice === 'ollama') {
+      fireEvent.change(screen.getByPlaceholderText('settings.providers.wizard.searchPlaceholder'), { target: { value: 'ollama' } });
+      fireEvent.click(await screen.findByRole('button', { name: /settings.providers.local.title/ }));
+      await screen.findByText('settings.providers.local.onboardingTitle');
+    } else if (choice === 'builtin-key') {
+      fireEvent.click(screen.getByRole('button', { name: /Media Only/ }));
+      fireEvent.change(screen.getByRole('dialog').querySelector('input[type="password"]')!, { target: { value: 'unsaved-key' } });
+    } else {
+      fireEvent.click(screen.getByRole('button', { name: /Anthropic/ }));
+      if (choice === 'oauth-api') {
+        fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.useApiKey' }));
+        fireEvent.change(screen.getByDisplayValue('Anthropic API'), { target: { value: 'My latest provider' } });
+      }
+    }
+    await act(async () => {
+      if (choice === 'failed-directory') reject(new Error('directory unavailable'));
+      else resolve({ presets: [deepseekPreset] });
+    });
+    if (choice === 'ollama') expect(screen.getByText('settings.providers.local.onboardingTitle')).toBeTruthy();
+    else if (choice === 'builtin-key') expect(screen.getByDisplayValue('unsaved-key')).toBeTruthy();
+    else if (choice === 'oauth-api') expect(screen.getByDisplayValue('My latest provider')).toBeTruthy();
+    else expect(screen.getByRole('button', { name: 'settings.providers.localAccount.useClaude' })).toBeTruthy();
+    expect(onUnavailable).not.toHaveBeenCalled();
+  },
+);
+
+it('returns the untouched search draft once when its directory fails', async () => {
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockRejectedValueOnce(new Error('directory unavailable'));
+  const onUnavailable = vi.fn();
+  render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId: 'missing-remote-only' }}
+    onEntryUnavailable={onUnavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+  await waitFor(() => expect(onUnavailable).toHaveBeenCalledOnce());
+});
+
+// #8065 r4431018996: renderer unit; prior failed-directory coverage only used
+// a missing remote preset. A rejected catalog must retain static speech/official
+// setup for search callers and direct deep links rather than strand step 1.
+it.each([
+  { presetId: 'elevenlabs-api', name: 'ElevenLabs', search: true },
+  { presetId: 'elevenlabs-api', name: 'ElevenLabs', search: false },
+  { presetId: 'anthropic-api', name: 'Anthropic API', search: true },
+  { presetId: 'anthropic-api', name: 'Anthropic API', search: false },
+])('opens fallback $presetId after catalog failure (search=$search)', async ({ presetId, name, search }) => {
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockRejectedValueOnce(new Error('directory unavailable'));
+  const unavailable = vi.fn();
+  render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId }}
+    onEntryUnavailable={search ? unavailable : undefined} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+  expect(await screen.findByDisplayValue(name)).toBeTruthy();
+  expect(screen.getByPlaceholderText('sk-…')).toBeTruthy();
+  expect(unavailable).not.toHaveBeenCalled();
+});
+
+// #8065 r4431297879: name search retains bundled targets when IPC fails.
+// Cover both search and ordinary deep links, plus an explicit ready-empty result
+// so an actual target removal is not silently resurrected by the offline copy.
+it.each([true, false])('opens bundled DeepSeek when directory IPC fails (search=%s)', async search => {
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockRejectedValueOnce(new Error('directory unavailable'));
+  const unavailable = vi.fn();
+  render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId: 'deepseek' }}
+    onEntryUnavailable={search ? unavailable : undefined} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+  expect(await screen.findByDisplayValue('DeepSeek')).toBeTruthy();
+  expect(screen.getByPlaceholderText('sk-…')).toBeTruthy();
+  expect(unavailable).not.toHaveBeenCalled();
+});
+it('respects an explicitly empty live directory for a bundled search target', async () => {
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValueOnce({ presets: [] });
+  const unavailable = vi.fn();
+  render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId: 'deepseek' }}
+    onEntryUnavailable={unavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+  await waitFor(() => expect(unavailable).toHaveBeenCalledOnce());
+  expect(screen.queryByDisplayValue('DeepSeek')).toBeNull();
 });

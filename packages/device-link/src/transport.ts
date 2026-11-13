@@ -33,6 +33,8 @@ export const DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1 = 'compact-messag
 
 /** Desktop declares support for the structured history projection channels. */
 export const DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1 = 'history-view-v1';
+/** Same-account host GitHub reads and explicit PR associations. Not a shared-task grant. */
+export const DEVICE_LINK_CAPABILITY_GITHUB_READ_V1 = 'github-read-v1';
 
 /** transport ACK 使用普通 push 承载，且 ACK 本身永不再包 transport。 */
 export const DEVICE_LINK_TRANSPORT_ACK_CHANNEL = '__cindy/device-link/transport-ack';

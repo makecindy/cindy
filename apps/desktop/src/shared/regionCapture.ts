@@ -41,6 +41,9 @@ export const REGION_CAPTURE_CHANNEL = {
   AUTO_SCROLL: 'region-screenshot:auto-scroll',
   CONTROLS: 'region-screenshot:recording-controls',
   PREVIEW: 'region-screenshot:recording-preview',
+  AUDIO_START: 'region-screenshot:audio-start',
+  AUDIO_READ: 'region-screenshot:audio-read',
+  AUDIO_STOP: 'region-screenshot:audio-stop',
 } as const;
 export const MAX_RECORDING_BYTES = 100 * 1024 * 1024;
 export const MAX_RECORDING_MS = 5 * 60_000;
@@ -56,6 +59,16 @@ const wholeDisplay = (viewport: Viewport): RegionRect => ({ x: 0, y: 0, width: v
  */
 export function recordingControlsBounds(selection: RegionRect, viewport: Viewport, expanded: boolean, point?: RegionPoint, area: RegionRect = wholeDisplay(viewport)): RegionRect | null {
   return controlsWithin(selection, area, expanded, point) ?? controlsWithin(selection, wholeDisplay(viewport), expanded, point);
+}
+
+/**
+ * Which way the recording controls' tooltips open: always away from the selection, so a hover
+ * label never lands inside the pixels being recorded (the controls sit only 8px outside it).
+ */
+export function recordingControlsTipSide(controls: RegionRect, selection: RegionRect): 'top' | 'bottom' | 'left' | 'right' {
+  if (controls.y >= selection.y + selection.height) return 'bottom';
+  if (controls.y + controls.height <= selection.y) return 'top';
+  return controls.x >= selection.x + selection.width ? 'right' : 'left';
 }
 
 function controlsWithin(selection: RegionRect, area: RegionRect, expanded: boolean, point?: RegionPoint): RegionRect | null {

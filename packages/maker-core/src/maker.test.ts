@@ -85,6 +85,28 @@ function createLogger() {
   return logger;
 }
 
+describe('Maker atomic idle close', () => {
+  it('records runtime refresh only after an idle close is accepted', async () => {
+    let busy = true;
+    const handle = createHandle({ id: 'idle-thread' });
+    handle.hasPendingHostOperation = () => busy;
+    const close = vi.spyOn(handle, 'close');
+    const maker = new Maker({ agents: { codex: createAgent(async () => handle) },
+      storage: createStorage(), logger: createLogger() });
+    const session = await maker.createSession({ id: 'idle-task', agentKind: 'codex', workingDir: '/repo', model: 'm' });
+    const closed = vi.fn();
+    maker.on(event => { if (event.type === 'session:closed') closed(event); });
+    try {
+      expect(await maker.closeSessionIfCurrent(session, 'runtime-refresh', { onlyIfIdle: true })).toBeUndefined();
+      expect(close).not.toHaveBeenCalled();
+      expect(maker.getSessionCloseReason(session)).toBe('unexpected');
+      busy = false;
+      expect(await maker.closeSessionIfCurrent(session, 'runtime-refresh', { onlyIfIdle: true })).toBe('closed');
+      expect(closed).toHaveBeenCalledWith(expect.objectContaining({ session, reason: 'runtime-refresh' }));
+    } finally { await maker.shutdown(); }
+  });
+});
+
 describe('Maker agent status', () => {
   it('represents an optional unregistered runtime as binary-missing', async () => {
     const maker = new Maker({
@@ -96,6 +118,23 @@ describe('Maker agent status', () => {
       binaryReady: false,
       binaryPath: null,
       authReady: false,
+    });
+  });
+
+  // Unit regression: offline startup registers agents with a lazy runtime getter.
+  // Status must report the missing install instead of rejecting the IPC.
+  it('reports a registered agent whose lazy runtime is not installed as binary-missing', async () => {
+    const agent = createAgent(async () => undefined, 'claude-code');
+    Object.assign(agent, {
+      getBinaryPath: () => { throw new Error('Claude Code is not installed'); },
+      getAuthState: async () => ({ authenticated: true }),
+    });
+    const maker = new Maker({ agents: { 'claude-code': agent }, storage: createStorage(), logger: createLogger() });
+    await expect(maker.getAgentStatus('claude-code')).resolves.toEqual({
+      binaryReady: false,
+      binaryPath: null,
+      authReady: true,
+      identity: undefined,
     });
   });
 
@@ -139,6 +178,29 @@ function createAgent(
 }
 
 describe('Maker Pi managed-package skill boundary', () => {
+  // PB97, unit: preview listings must consume the Host's async verified paths
+  // without calling the synchronous fallback; active tasks retain their snapshot.
+  it('uses async activation facts for previews, but preserves live and SSH filtering', async () => {
+    const source = '/fixture/disabled-skill';
+    const fallback = vi.fn(() => { throw new Error('blocking fallback'); });
+    const readDisabled = vi.fn(async () => [source]);
+    const agent = createAgent(async (opts) => ({ ...createHandle({ id: opts.sessionId! }), disabledSkillPaths: [] }));
+    agent.listAgentSkills = vi.fn(async () => ({ skills: [{ kind: 'agent-skill' as const,
+      name: 'demo', source: 'skill' as const, path: source }] }));
+    agent.filterActiveSkillCommands = (result, remote, snapshot, current) => BaseAgent.prototype.filterActiveSkillCommands.call(
+      { deps: { getDisabledSkillPaths: fallback } } as unknown as BaseAgent, result, remote, snapshot, current,
+    );
+    const maker = new Maker({ agents: { codex: agent }, storage: createStorage(), logger: createLogger() });
+    try {
+      expect((await maker.listAgentSkills('codex', { workingDir: '/repo' }, readDisabled)).skills).toEqual([]);
+      expect(readDisabled).toHaveBeenCalledTimes(1);
+      await maker.createSession({ id: 'live', agentKind: 'codex', workingDir: '/repo', model: 'm' });
+      expect((await maker.listAgentSkills('codex', { workingDir: '/repo', sessionId: 'live' }, readDisabled)).skills).toHaveLength(1);
+      expect((await maker.listAgentSkills('codex', { workingDir: '/repo', remoteHostId: 'ssh' }, readDisabled)).skills).toHaveLength(1);
+      expect(readDisabled).toHaveBeenCalledTimes(1);
+      expect(fallback).not.toHaveBeenCalled();
+    } finally { await maker.shutdown(); }
+  });
   it('uses the runtime Skill view for host authorization checks', async () => {
     const agent = createAgent(async () => {
       throw new Error('not used');
@@ -1392,6 +1454,31 @@ describe('Maker session close events', () => {
     queue.end();
   });
 
+  it('recycles drifted pi runtimes with the runtime-refresh reason for direct senders', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const handle = createHandle({ id: 'drifted', agentKind: 'pi' });
+    handle.hasProjectResourceDrift = () => true;
+    handle.events = () => queue;
+    const start = vi.fn().mockResolvedValue(handle);
+    const maker = new Maker({ agents: { pi: createAgent(start, 'pi') }, storage: createStorage(), logger: createLogger() });
+    const session = await maker.createSession({ id: 'drifted', agentKind: 'pi' as const, workingDir: '/repo', model: 'm' });
+    expect(await maker.recyclePiRuntimeIfResourcesDrifted(session)).toBe(true);
+    expect(maker.getSessionCloseReason(session)).toBe('runtime-refresh');
+    expect(maker.getSession(session.id)).toBeUndefined();
+    queue.end();
+  });
+
+  it('recycle is a no-op when project resources have not drifted', async () => {
+    const handle = createHandle({ id: 'fresh', agentKind: 'pi' });
+    handle.hasProjectResourceDrift = () => false;
+    const start = vi.fn().mockResolvedValue(handle);
+    const maker = new Maker({ agents: { pi: createAgent(start, 'pi') }, storage: createStorage(), logger: createLogger() });
+    const session = await maker.createSession({ id: 'fresh', agentKind: 'pi' as const, workingDir: '/repo', model: 'm' });
+    expect(await maker.recyclePiRuntimeIfResourcesDrifted(session)).toBe(false);
+    expect(maker.getSession(session.id)).toBe(session);
+    await session.close();
+  });
+
   it.each([
     { initial: 'runtime-refresh', begun: false, next: 'agent-switch', expected: 'agent-switch' },
     { initial: 'runtime-refresh', begun: false, next: 'requested', expected: 'requested' },
@@ -1465,6 +1552,35 @@ describe('Maker session close events', () => {
       sessionId: 'session-1',
       session,
       reason: 'agent-switch',
+    });
+  });
+
+  it('hands the close facts sampled at close request to onClose, not a post-close query', async () => {
+    const hookGate = createDeferred();
+    const onClose = vi.fn(async () => { await hookGate.promise; });
+    const transientSamples: boolean[] = [];
+    let transient = true;
+    const maker = new Maker({
+      agents: { pi: createAgent(async () => createHandle({ id: 'transient-thread', agentKind: 'pi' }), 'pi') },
+      storage: createStorage(),
+      logger: createLogger(),
+      lifecycleHooks: {
+        isTransientCloseRequest: () => { transientSamples.push(transient); return transient; },
+        onClose,
+      },
+    });
+    const session = await maker.createSession({ id: 'transient-thread', agentKind: 'pi', workingDir: '/repo', model: 'm' });
+
+    await maker.closeSession(session.id, 'runtime-refresh');
+    // 请求入口只问一次：调用方的抑制窗口在 close 返回后即释放，到钩子里再问必然错过。
+    expect(transientSamples).toEqual([true]);
+    transient = false;
+    hookGate.resolve();
+
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(onClose).toHaveBeenCalledWith(session.id, expect.anything(), {
+      reason: 'runtime-refresh',
+      transient: true,
     });
   });
 
@@ -1903,17 +2019,24 @@ describe('Maker start-option lifecycle hooks', () => {
     expect(onStartCleanupSucceeded).not.toHaveBeenCalled();
   });
 
-  it.each((['codex', 'claude-code', 'pi'] as const).flatMap((kind) =>
-    [new TypeError('startup RPC failed'), 'non-Error startup failure'].map((error) => ({ kind, error }))))(
-    'releases only the confirmed-stopped $kind startup and permits a fresh task: $error', async ({ kind, error: startupError }) => {
+  // Unit #10271: the scheduler needs actual exit evidence for one admitted-account retry.
+  // Existing cases only checked cause unwrapping; opt-in must retain the real wrapper
+  // without forwarding the host setting to adapters or changing ordinary callers.
+  it.each([
+    ...(['codex', 'claude-code', 'pi'] as const).flatMap((kind) =>
+      [new TypeError('startup RPC failed'), 'non-Error startup failure'].map((error) => ({ kind, error, preserve: false }))),
+    ...[new TypeError('startup RPC failed'), 'non-Error startup failure'].map(error => ({ kind: 'codex' as const, error, preserve: true })),
+  ])(
+    'releases only the confirmed-stopped $kind startup and permits a fresh task (preserve: $preserve): $error', async ({ kind, error: startupError, preserve }) => {
       const otherStartup = {} as CreateSessionOptions;
       const leased = new Set<CreateSessionOptions>([otherStartup]);
       const onStartFailed = vi.fn(({ options, runtimeMayBeAlive }: SessionStartFailureContext) => {
         if (!runtimeMayBeAlive) leased.delete(options);
       });
       const onStartCleanupSucceeded = vi.fn();
+      const stoppedError = new AgentStartupStoppedError(startupError);
       const startSession = vi.fn()
-        .mockRejectedValueOnce(new AgentStartupStoppedError(startupError))
+        .mockRejectedValueOnce(stoppedError)
         .mockResolvedValueOnce(createHandle({ id: 'fresh-sdk-session' }));
       const maker = new Maker({
         agents: { [kind]: createAgent(startSession, kind) },
@@ -1925,7 +2048,9 @@ describe('Maker start-option lifecycle hooks', () => {
       });
       await expect(maker.createSession({
         id: 'confirmed-exit', agentKind: kind, workingDir: '/repo', model: 'test-model',
-      })).rejects.toBe(startupError);
+        preserveStartupStoppedError: preserve,
+      })).rejects.toBe(preserve ? stoppedError : startupError);
+      expect(startSession.mock.calls[0]![0]).not.toHaveProperty('preserveStartupStoppedError');
       expect(onStartFailed).toHaveBeenCalledOnce();
       expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({
         stage: 'agent-start', error: startupError, runtimeMayBeAlive: false,

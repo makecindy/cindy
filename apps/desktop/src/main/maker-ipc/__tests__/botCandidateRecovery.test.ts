@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { canResumeAfterRuntimeFallback, isBotCandidateUnavailable } from '../botCandidateRecovery';
-import { isInterruptedTurnError, isAcceptedTurnContinuationOnlyReason } from '../interruptedTurnAutoResume';
+import { isInterruptedTurnError, isContinuationOnlyAutoResumeReason } from '../interruptedTurnAutoResume';
 
 const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
 
@@ -18,9 +18,13 @@ function harness(bot = true) {
   const finalize = vi.fn();
   const guard = vi.fn(() => ({ action: 'resume', attempt: 1, maxAttempts: 5,
     episodeAttempt: 1, maxEpisodeAttempts: 10, sessionTotal: 1, attemptToken: 1, delayMs: 1000 }));
+  const groupMayHandle = vi.fn((_sessionId: string, _signals: unknown) => false);
+  const liveSession = {};
+  const rebuildLeases = new WeakMap<object, number>();
   const deps = {
     isInterruptedTurnError, isBotCandidateUnavailable, canResumeAfterRuntimeFallback,
-    isAcceptedTurnContinuationOnlyReason,
+    isContinuationOnlyAutoResumeReason,
+    providerGroupService: { mayHandleTurnError: groupMayHandle },
     inputCoordinator: { isExecutionPaused: () => false, autoRetryLastError: resume },
     interruptedTurnAutoResumeGuard: { onInterruptedTurn: guard, noteResumeSendFailed: vi.fn() },
     maybeApplySessionRuntimeFallback: fallback,
@@ -32,6 +36,8 @@ function harness(bot = true) {
     },
     saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(),
     pendingSessionRuntimeFallbackRebuilds: new WeakMap(),
+    getStableSessionForTurnBoundary: () => liveSession,
+    pendingContinuationOnlyAutoResumeRebuilds: rebuildLeases,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
   };
   const js = transpileModule(`${hints}\nreturn { callbacks: { ${callbacks} }, botFallbackInputs };`, {
@@ -39,7 +45,7 @@ function harness(bot = true) {
   }).outputText;
   const runtime = new Function(...Object.keys(deps), js)(...Object.values(deps));
   if (bot) runtime.botFallbackInputs.add(item.createOpts);
-  return { item, ...runtime.callbacks, resume, fallback, finalize, guard,
+  return { item, ...runtime.callbacks, resume, fallback, finalize, guard, groupMayHandle, liveSession, rebuildLeases,
     run: () => scheduled!(), cancel: () => { current = false; } };
 }
 
@@ -73,7 +79,6 @@ describe('Bot candidate recovery', () => {
   it.each([
     { reason: 'user_denied' }, { reason: 'context_overflow' },
     { sdkError: 'invalid_request' },
-    { message: "You've hit your session limit: budget_exceeded" },
   ])('preserves explicit failures despite session-limit text %j', (override) => {
     expect(isBotCandidateUnavailable({ message: "You've hit your session limit", ...override })).toBe(false);
   });
@@ -113,13 +118,15 @@ describe('Bot candidate recovery', () => {
     { message: 'Approval required', errorStatus: 403 },
     { message: 'User rejected permission' }, { message: 'Tool business failure' },
     { sdkError: 'invalid_request', message: 'prompt too long' },
+    { reason: 'user_denied', usageLimit: true },
+    { codexErrorInfo: 'sessionBudgetExceeded', usageLimit: true, message: 'budget_exceeded' },
     { message: 'invalid encrypted content' }, { message: 'thread not found' },
   ])('does not reinterpret control or input failures %j', (signals) => {
     expect(isBotCandidateUnavailable(signals)).toBe(false);
   });
 
-  // Gateway budget exhaustion is account-level: no candidate on the same account can
-  // recover it, so the shared deterministic-exhaustion signal wins over the 429 (#5266).
+  // Regression: a primary account can be exhausted while a configured backup has quota.
+  // Unit tier: exercise production recovery callbacks; the old test prohibited any switch.
   const budgetExceeded = '429: {"message":"ExceededBudget: User=[REDACTED] over budget. Spend=0.0, Budget=0.0","type":"budget_exceeded","code":"429"}';
   it.each([
     { errorStatus: 429, message: budgetExceeded },
@@ -127,8 +134,10 @@ describe('Bot candidate recovery', () => {
     { sdkError: 'rate_limit', message: 'Request failed: budget_exceeded' },
     { errorStatus: 429, message: 'You exceeded your current quota, please check your plan and billing details.' },
     { message: 'insufficient_quota' },
-  ])('keeps the account budget exhaustion with the user instead of switching candidates %j', (signals) => {
-    expect(isBotCandidateUnavailable(signals)).toBe(false);
+    { usageLimit: true, message: 'Usage limit reached' },
+    { codexErrorInfo: 'usageLimitExceeded', message: 'Limit reached' },
+  ])('allows configured backups after primary account exhaustion %j', (signals) => {
+    expect(isBotCandidateUnavailable(signals)).toBe(true);
   });
 
   it.each([
@@ -139,13 +148,18 @@ describe('Bot candidate recovery', () => {
     expect(isBotCandidateUnavailable(signals)).toBe(true);
   });
 
-  it('does not schedule Bot fallback or auto-resume for a gateway budget exhaustion', () => {
-    const h = harness();
+  it.each(['switched', 'exhausted', 'unchanged', 'failed'])('requires a different route after quota exhaustion: %s', async (outcome) => {
     const signals = { errorStatus: 429, message: budgetExceeded };
-    expect(h.isResumableTurnErrorCandidate(signals, h.item)).toBe(false);
-    expect(h.onResumableTurnError('s', signals, h.item)).toBeNull();
-    expect(h.guard).not.toHaveBeenCalled();
-    expect(h.fallback).not.toHaveBeenCalled();
+    const ordinary = harness(false);
+    expect(ordinary.isResumableTurnErrorCandidate(signals, ordinary.item)).toBe(false);
+    const h = harness();
+    h.fallback.mockResolvedValue({ session: null, outcome });
+    expect(h.isResumableTurnErrorCandidate(signals, h.item)).toBe(true);
+    expect(h.onResumableTurnError('s', signals, h.item)).not.toBeNull();
+    await h.run();
+    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function));
+    expect(h.resume).toHaveBeenCalledTimes(outcome === 'switched' ? 1 : 0);
+    if (outcome !== 'switched') expect(h.finalize).toHaveBeenCalledWith('s', 1, { surfaceBanner: true });
   });
 
   const drop = { reason: 'pi-gateway-drop', message: 'Connection error.' };
@@ -195,5 +209,83 @@ describe('Bot candidate recovery', () => {
     h.guard.mockReturnValue({ action: 'stop' } as ReturnType<typeof h.guard>);
     expect(h.onResumableTurnError('s', drop, h.item)).toBeNull();
     expect(h.fallback).not.toHaveBeenCalled();
+  });
+
+  // A shared route's computer going away is the most common primary failure; it is
+  // a property of that route, so another candidate can take over.
+  const remoteClosed = { reason: 'remote_agent_closed', message: '[REMOTE_AGENT_EXPIRED] The task is no longer running on the other computer.' };
+  it.each([
+    remoteClosed,
+    { reason: 'remote_agent_closed', message: '[REMOTE_AGENT_UNAVAILABLE] The agent on the other computer stopped (controller-gone).' },
+    { reason: 'remote_agent_lost', message: '[REMOTE_AGENT_UNAVAILABLE] The agent on the other computer stopped (unreachable).' },
+  ])('allows a different candidate when the remote agent of the route is gone %j', (signals) => {
+    expect(isBotCandidateUnavailable(signals)).toBe(true);
+  });
+
+  it.each([
+    { reason: 'user-revoked', message: '[REMOTE_AGENT_UNAVAILABLE] The agent on the other computer stopped (controller-disconnected).' },
+    { reason: 'remote_agent_restarted', message: '[REMOTE_AGENT_UNAVAILABLE] The provider process stopped; reconnecting to the original conversation.' },
+  ])('keeps an owner disconnect or same-computer reconnect out of the model chain %j', (signals) => {
+    expect(isBotCandidateUnavailable(signals)).toBe(false);
+  });
+
+  it('moves a Bot to its next route after the remote agent closed', async () => {
+    const ordinary = harness(false);
+    expect(ordinary.isResumableTurnErrorCandidate(remoteClosed, ordinary.item)).toBe(false);
+    expect(ordinary.onResumableTurnError('s', remoteClosed, ordinary.item)).toBeNull();
+    const h = harness();
+    expect(h.isResumableTurnErrorCandidate(remoteClosed, h.item)).toBe(true);
+    expect(h.onResumableTurnError('s', remoteClosed, h.item)).not.toBeNull();
+    // The dead remote Session closes right after this error; its scheduled resume must outlive that close.
+    expect(h.rebuildLeases.get(h.liveSession)).toBe(1);
+    await h.run();
+    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function));
+    expect(h.resume).toHaveBeenCalledOnce();
+  });
+
+  it('never retries the closed remote route itself when no other route exists', async () => {
+    const h = harness();
+    h.fallback.mockResolvedValue({ session: null, outcome: 'unchanged' });
+    h.onResumableTurnError('s', remoteClosed, h.item);
+    await h.run();
+    expect(h.resume).not.toHaveBeenCalled();
+    expect(h.finalize).toHaveBeenCalledWith('s', 1, { surfaceBanner: true });
+  });
+
+  // A synchronous group candidate is not proof of ownership. This candidate-recovery
+  // callback must also work after async group eligibility declined the same failure.
+  it('moves a Bot on even when its route belongs to a provider group', async () => {
+    const h = harness();
+    h.groupMayHandle.mockReturnValue(true);
+    expect(h.onResumableTurnError('s', remoteClosed, h.item)).not.toBeNull();
+    await h.run();
+    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function));
+    expect(h.resume).toHaveBeenCalledOnce();
+  });
+
+  const overload = { reason: 'upstream-overload', message: 'Selected model is at capacity. Please try a different model.' };
+  it('keeps the ordinary same-route retry for a Bot that has no other route', async () => {
+    const h = harness();
+    h.fallback.mockResolvedValue({ session: null, outcome: 'unchanged' });
+    expect(h.onResumableTurnError('s', overload, h.item)).not.toBeNull();
+    await h.run();
+    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function));
+    expect(h.resume).toHaveBeenCalledOnce();
+  });
+
+  it('does not retry the failed route after other configured routes were exhausted', async () => {
+    const h = harness();
+    h.fallback.mockResolvedValue({ session: null, outcome: 'exhausted' });
+    h.onResumableTurnError('s', overload, h.item);
+    await h.run();
+    expect(h.resume).not.toHaveBeenCalled();
+    expect(h.finalize).toHaveBeenCalledWith('s', 1, { surfaceBanner: true });
+  });
+
+  it.each([
+    ['switched', false, true], ['unchanged', false, false], ['exhausted', false, false],
+    ['unchanged', true, true], ['exhausted', true, false], ['failed', true, false], ['superseded', true, false],
+  ] as const)('resumes a required route change after %s (same route retryable: %s) = %s', (outcome, retryable, expected) => {
+    expect(canResumeAfterRuntimeFallback(true, { session: null, outcome }, retryable)).toBe(expected);
   });
 });

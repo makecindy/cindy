@@ -1,3 +1,8 @@
+import {
+  AttachmentCollectionContext,
+  type AttachmentCollectionItem,
+} from '@/components/chat/AttachmentCollection';
+import { attachmentPreviewKind } from '@cindy/maker-shared/attachment-preview';
 /**
  * ComposerAttachments — the attachment tray shared by the chat composers.
  * ---------------------------------------------------------------------------
@@ -14,7 +19,8 @@ import { useStableTranslation as useTranslation } from '@/hooks/useStableTransla
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import { AnnotationStrokesSvg } from '@/components/chat/AnnotationStrokesSvg';
 import { ImageHoverPreview } from '@/components/chat/ImageHoverPreview';
-import { formatBytes, TextLightbox } from '@/components/chat/TextLightbox';
+import { formatBytes } from '@/components/chat/formatBytes';
+import { TextLightbox } from '@/components/chat/lazyPreviewLightboxes';
 import { AttachmentTypeThumb } from './AttachmentTypeThumb';
 import { cn } from '@/lib/utils';
 import type { AttachedFile, ImageAnnotationStroke } from '@/lib/fileTypes';
@@ -47,7 +53,7 @@ export function AttachmentRejectionStrip({
             'pointer-events-auto inline-flex max-w-[640px] items-center gap-2',
             'rounded-full border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
             'px-4 py-[10px] text-13 font-medium leading-snug text-[var(--cmd-palette-item-text)]',
-            'shadow-[var(--shadow-menu)]',
+            'shadow-[shadow:var(--shadow-menu)]',
           )}
         >
           <TriangleAlert
@@ -99,12 +105,38 @@ export function ThumbnailStrip({
   /** 标注编辑保存后就地替换附件(useAttachments.updateFile)。 */
   onUpdate: (id: string, patch: Partial<AttachedFile>) => void;
 }) {
+  const collection: AttachmentCollectionItem[] = attachments.flatMap((file) => {
+    const media = file.category === 'image' && Boolean(file.url || file.base64);
+    const source = media ? (file.url ?? `data:${file.mimeType};base64,${file.base64}`) : file.path;
+    return source
+      ? [
+          {
+            id: file.id,
+            name: file.name,
+            source,
+            kind: attachmentPreviewKind(file.name, file.mimeType),
+            media,
+            image: media
+              ? {
+                  annotationEdit: {
+                    initialStrokes: file.annotationStrokes,
+                    onSave: (result: { strokes: ImageAnnotationStroke[] }) =>
+                      applyAnnotationEdit(file, result, onUpdate),
+                  },
+                }
+              : undefined,
+          },
+        ]
+      : [];
+  });
   return (
-    <div className="scrollbar-hide flex items-center gap-2 overflow-x-auto pb-2 pl-0 pr-2 pt-2">
+    <AttachmentCollectionContext.Provider value={collection}>
+      <div className="scrollbar-hide flex items-center gap-2 overflow-x-auto pb-2 pl-0 pr-2 pt-2">
       {attachments.map((file) => (
         <ThumbnailItem key={file.id} file={file} onRemove={onRemove} onUpdate={onUpdate} />
       ))}
     </div>
+    </AttachmentCollectionContext.Provider>
   );
 }
 

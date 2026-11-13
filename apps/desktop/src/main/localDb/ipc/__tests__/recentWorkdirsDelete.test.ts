@@ -6,6 +6,7 @@
  *  - delete 幂等:不存在的 path 返回 deleted:false,不抛错
  *  - delete 入参非法(非字符串 / 空白)→ INVALID_PARAMS / no-op
  *  - list 返回 exists 字段:磁盘上真实存在的目录 true,已迁移的死路径 false
+ *  - hasRecentWorkdir 只认存储形态的精确路径(给「添加目录」发可写授权用)
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -41,7 +42,7 @@ vi.mock('../../client/current', () => ({
 }));
 
 import { tx as runDbTx } from '../../worker/opHandlers/tx';
-import { registerRecentWorkdirsIpc, removeRecentWorkdir } from '../recentWorkdirs';
+import { hasRecentWorkdir, registerRecentWorkdirsIpc, removeRecentWorkdir } from '../recentWorkdirs';
 
 function createDb(): void {
   h.sqlite?.close();
@@ -55,6 +56,7 @@ function createDb(): void {
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY NOT NULL,
       working_dir TEXT,
+      project_dir TEXT,
       status TEXT NOT NULL DEFAULT 'active',
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       remote_host_id TEXT,
@@ -264,5 +266,23 @@ describe('local-db:recent-workdirs:list exists probe', () => {
         knownAgentKinds: ['codex'],
       }),
     ]);
+  });
+});
+
+// 「添加目录」最近列表的授权依据：变体写法、托管 worktree 与列表外路径都不能借最近项目拿到可写授权。
+describe('hasRecentWorkdir writable-grant membership', () => {
+  beforeEach(() => {
+    createDb();
+    seed('/u/proj', 1);
+  });
+
+  it.each([
+    ['/u/proj', true],
+    ['/u/proj/', false],
+    ['/u/PROJ', false],
+    ['/u/proj/sub', false],
+    ['/u/proj/.cindy-worktrees/feature', false],
+  ])('%s → %s', async (path, expected) => {
+    await expect(hasRecentWorkdir(path)).resolves.toBe(expected);
   });
 });

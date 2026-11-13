@@ -21,6 +21,10 @@ import { controlledComputerSupportsRemoteAgent, selectControlledTaskAgentDevices
 import { modelCatalogKey } from '../../../../shared/controlledModelCatalog';
 import { DraftDirectoryRecovery, type DraftDirectoryRecoveryContext } from '../draftDirectoryRecovery';
 import { createIpcError } from '../../../../shared/ipc-errors';
+import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion';
+import { askPluginModelRoute, writePluginModelRouteNote } from '../pluginModelRoute';
+import type { GhostStartTaskRouteResult } from '../../../../shared/ghost';
+import type { ModelGroupResolveResult } from '../../../../shared/modelGroups';
 
 vi.mock('@/lib/makerTransport', () => ({ makerApiFor: vi.fn() }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({ getSessionDeviceId: vi.fn() }));
@@ -104,6 +108,11 @@ function provider(id = providerId, efforts: PiReasoningEffort[] = []): ProviderV
 
 async function submit(options: {
   entry?: 'send' | 'goal';
+  pluginRoute?: () => Promise<GhostStartTaskRouteResult>;
+  /** 选了模型组：发送时解析出的结果。 */
+  modelGroupRoute?: ModelGroupResolveResult;
+  /** 草稿那台电脑的模型目录读到哪一步；默认 ready。 */
+  remoteModelListStatus?: 'ready' | 'loading' | 'error';
   effort?: Effort;
   submittedEffort?: Effort;
   model?: string;
@@ -113,6 +122,8 @@ async function submit(options: {
   agentKind?: 'pi' | 'codex' | 'claude-code';
   remoteHostId?: string;
   agentDeviceId?: string;
+  catalogHostDeviceId?: string;
+  authCatalogKey?: string;
   message?: string;
   builtInSkillIntent?: BuiltInSkillDraftIntent;
   skills?: AgentSkillCommand[];
@@ -163,12 +174,13 @@ async function submit(options: {
   const listAgentSkills = vi.fn(async (_agent, params) => ({ success: true,
     skills: params?.workingDir === worktreePath ? worktreeSkills : options.skills ?? [],
   }));
+  const createNote = vi.fn(async () => ({}));
   const invokeRemote = vi.fn(async (_deviceId, channel, args) => {
     if (channel === 'maker:list-agent-skills') return listAgentSkills(args[0], args[1]);
     if (channel === 'maker:list-agent-commands') return { success: true, commands: [] };
     if (channel === 'worktree:create') return { ok: true,
       meta: { ...args[0], path: worktreePath, branch: 'cindy/creator', createdAt: new Date().toISOString() } };
-    if (channel === 'maker:create-session') return { sessionId: args[0].id, workDir: args[0].workingDir };
+    if (channel === 'maker:create-session') return { sessionId: args[0].id ?? 'remote-created', workDir: args[0].workingDir };
     throw new Error(`Unexpected remote invoke: ${channel}`);
   });
   const enableOrca = vi.fn(async () => {
@@ -178,7 +190,8 @@ async function submit(options: {
   vi.stubGlobal('window', { electronAPI: {
     deviceLink: { invoke: invokeRemote },
     worktreeCreate: vi.fn(async () => ({ ok: true, meta: { path: worktreePath, branch: 'cindy/creator' } })),
-    localDb: { sessions: { create: ipcCreate } }, maker: {
+    ghosts: { routeNewTask: options.pluginRoute },
+    localDb: { sessions: { create: ipcCreate }, messages: { list: async () => [{ role: 'user', createdAt: '2026-10-31T00:00:00.000Z' }], create: createNote } }, maker: {
     enableOrca,
     setGoal, listAgentSkills,
     listDesktopCommands: async () => ({ success: true, commands: [] }),
@@ -189,7 +202,8 @@ async function submit(options: {
     catch (error) { errors.push(error); return null; }
   });
   const sendMessage = vi.fn(async (_id, _text, model, effort) => {
-    admit({ model, effort, agentKind, providerId: selectedProviderId });
+    // The session sends on the provider it was created with, as setSessionRuntime records it.
+    admit({ model, effort, agentKind, providerId: createSession.mock.calls.at(-1)?.[0]?.providerId ?? selectedProviderId });
     return true;
   });
   let done!: () => void;
@@ -198,11 +212,23 @@ async function submit(options: {
   const worktreeFinished = new Promise<void>(resolve => { finishWorktree = resolve; });
   const noop = () => {};
   const setPending = vi.fn();
+  const setPendingGoal = vi.fn();
   const toastError = vi.fn();
+  const checkAndConfirm = vi.fn(async (_vendor, params) => ({
+    proceed: options.authCatalogKey === undefined || params.deviceId === options.authCatalogKey,
+  }));
   const environment = {
-    deviceDisplayName,
+    deviceDisplayName, dbToMakerAgentKind, askPluginModelRoute, writePluginModelRouteNote, modelCatalogKey,
+    controlledModelRoute: { catalogHostDeviceId: options.catalogHostDeviceId },
+    // 没选模型组的用例：发送路径不解析、不写说明、不记绑定。
+    activeModelGroup: options.modelGroupRoute ? { type: 'route', id: 'r1' } : null,
+    resolveModelGroup: async () => options.modelGroupRoute ?? null, writeModelGroupRouteNote: noop,
+    bindModelGroupSession: vi.fn(), modelGroupLocationName: () => '', keptModelNameForGroupNote: () => '', i18n: { language: 'en' },
+    activePluginModel: options.pluginRoute ? { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' } : null,
     ...draftEffort, getModel, window,
-    localProviders: providers, localProvidersLoading: false, providers,
+    localProviders: providers, draftLocalProviders: providers, localProvidersLoading: false, providers,
+    sshCodexDraftHostId: agentKind === 'codex' ? options.remoteHostId : null,
+    sshDraftSelection: { model: selectedModel, effort: options.effort ?? 'medium', fastMode: false },
     capabilityAgentKind: agentKind, persistedAgentKind: agentKind,
     calibratedDraftModel: selectedModel, chatPrefs, getProviderModelEffort: () => undefined,
     chatInitialProviderId: selectedProviderId, chatInitialPermissionMode: 'default',
@@ -213,11 +239,12 @@ async function submit(options: {
     collabPolicy: { enabled: true }, collabPolicyEligible: true,
     usesDeviceCatalog: !!options.agentDeviceId || !!options.deviceId, deviceLinkInitial: null,
     isDeviceLinkDraft: !!options.deviceId, isRemoteProjectDraft: !!options.remoteHostId,
-    isAgentDeviceDraft: !!options.agentDeviceId, remoteModelListStatus: 'ready', remoteDraftState: { status: 'ready' },
+    isAgentDeviceDraft: !!options.agentDeviceId, remoteModelListStatus: options.remoteModelListStatus ?? 'ready', remoteDraftState: { status: 'ready' },
     effectiveRemoteHostId: options.remoteHostId, effectiveAgentDeviceId: options.agentDeviceId,
     effectiveWorkingDir: hasWorktree ? baseRepo : options.remoteHostId ? '/remote/project' : null,
     effectiveExtraDirs: [], effectiveWritableDirs: [], effectiveFastMode: false, effectivePlanMode: false,
-    effectiveDeviceLinkDeviceId: options.deviceId, effectiveDeviceLinkDeviceName: options.deviceId, catalogDeviceId: options.deviceId,
+    effectiveDeviceLinkDeviceId: options.deviceId, effectiveDeviceLinkDeviceName: options.deviceId,
+    catalogDeviceId: modelCatalogKey(options.agentDeviceId ?? options.deviceId, options.catalogHostDeviceId),
     agentCatalogProviders: providers, deviceProvidersLoading: false,
     matchNavigationCommandName: () => null,
     wtRef: { current: hasWorktree
@@ -229,7 +256,7 @@ async function submit(options: {
     isDataOwnerGenerationCurrent: () => true,
     markSendInFlight: (value: boolean) => { if (!value) done(); },
     t: (key: string) => key, authVendor: agentKind,
-    vendorAuthGate: { checkAndConfirm: async () => ({ proceed: true }) },
+    vendorAuthGate: { checkAndConfirm },
     localDraftSessionIdRef: { current: 'draft-id' }, optimisticFirstMessageTitle: () => null,
     createSession, toastCreateSessionFailed: noop, carryDraftFavoriteAnchorToSession: noop,
     makerChatStore: { setSessionRuntime: noop, sendMessage, autoNameSession: noop }, sessionsStore: { patchLocal: noop },
@@ -237,7 +264,7 @@ async function submit(options: {
     rehomeDraftAttachments: async () => [], getComposerDraft: () => options.builtInSkillIntent
       ? { builtInSkillIntent: options.builtInSkillIntent } : null,
     NEW_MAKER_DRAFT_KEY: 'fixture', rewriteBrowserCommentsFromRehomedFiles: () => [],
-    leadingSlashInvocation, rebaseInlineRangesAfterSlashCommandRewrite, rewriteBuiltInSkillDraftForSend, setPending,
+    leadingSlashInvocation, rebaseInlineRangesAfterSlashCommandRewrite, rewriteBuiltInSkillDraftForSend, setPending, setPendingGoal,
     rewritePiSkillMessageForSend: async ({ message }: { message: string }) => message,
     clearComposerDraftAndNotify: noop, attachmentState: { clearFiles: noop },
     resetDraftWorkspaceAfterSend: noop, navigate: vi.fn(), setWtCreating: noop,
@@ -288,7 +315,7 @@ async function submit(options: {
     }
     await finished;
     if (hasWorktree && createSession.mock.calls.length) await worktreeFinished;
-    return { createSession, ipcCreate, sendMessage, setGoal, errors, environment, setPending, toastError, listAgentSkills, invokeRemote, enableOrca };
+    return { createSession, ipcCreate, sendMessage, setGoal, errors, environment, setPending, setPendingGoal, toastError, listAgentSkills, invokeRemote, enableOrca, createNote, checkAndConfirm };
   } finally { vi.unstubAllGlobals(); }
 }
 
@@ -450,6 +477,127 @@ describe('homepage submission to Main admission and first-message handoff', () =
     const result = await submit({ providers: [provider(providerId, ['high'])], submittedEffort: 'medium' });
     expect(String(result.errors[0])).toContain('not supported');
     expect(result.sendMessage).not.toHaveBeenCalled();
+  });
+  // 「让插件选」: the choice replaces the route for this one create, and a failed plugin
+  // must not stop the send. Same callback harness; only the plugin answer differs.
+  it('creates and sends with the route the plugin chose, without changing the draft default', async () => {
+    const result = await submit({
+      providers: [provider(), provider('other', ['high'])], effort: 'medium',
+      pluginRoute: async () => ({
+        outcome: 'routed', pluginName: 'Router', modelName: modelId,
+        reason: 'fixture', route: { agentKind: 'pi', model: modelId, providerId: 'other', effort: 'high' },
+      }),
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.createSession.mock.calls[0][0]).toMatchObject({ providerId: 'other', effort: 'high' });
+    expect(result.sendMessage.mock.calls[0][3]).toBe('high');
+    expect(result.environment.chatPrefs.effort).toBe('medium');
+    await vi.waitFor(() => expect(result.createNote).toHaveBeenCalledOnce());
+  });
+  // Review of #8245: a first message starting with a slash command is handed to the session view,
+  // and that early return used to skip the note.
+  it('writes the plugin note when the first message is handed off as a slash command', async () => {
+    const result = await submit({
+      message: '/status', providers: [provider(), provider('other', ['high'])],
+      pluginRoute: async () => ({
+        outcome: 'routed', pluginName: 'Router', modelName: modelId, reason: 'fixture',
+        route: { agentKind: 'pi', model: modelId, providerId: 'other', effort: 'high' },
+      }),
+    });
+    expect(result.setPending).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(result.createNote).toHaveBeenCalledOnce());
+  });
+  // /goal also starts a new task, so the picker's "Let a plugin choose" must apply to it too.
+  it('creates a goal task with the route the plugin chose', async () => {
+    const result = await submit({
+      entry: 'goal', providers: [provider(), provider('other', ['high'])],
+      pluginRoute: async () => ({
+        outcome: 'routed', pluginName: 'Router', modelName: modelId, reason: 'fixture',
+        route: { agentKind: 'pi', model: modelId, providerId: 'other', effort: 'high' },
+      }),
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ providerId: 'other', effort: 'high' });
+    expect(result.setGoal).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(result.createNote).toHaveBeenCalledOnce());
+  });
+  // Bug: a routed share's model was saved on a local session. Both creation paths must
+  // persist the exact Agent location; local-only route cases did not observe this. Tier: unit.
+  it.each(['send', 'goal'] as const)('creates %s on the share selected by the plugin', async (entry) => {
+    const result = await submit({ entry, pluginRoute: async () => ({
+      outcome: 'routed', pluginName: 'Router', modelName: modelId, reason: 'fixture',
+      route: { agentKind: 'pi', model: modelId, providerId, agentDeviceId: 'share:fixture' },
+    }) });
+    expect(result.errors).toEqual([]);
+    expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'share:fixture', providerId });
+  });
+  // 模型组选到另一台电脑上的来源：两条新建路径都要把运行位置带进任务，登录检查读那台的目录，
+  // 撞配额用的记录也带上位置。之前只有插件选路覆盖了这条路径。Tier: unit。
+  it.each(['send', 'goal'] as const)('creates %s on the computer a model group picked', async (entry) => {
+    const modelGroupRoute: ModelGroupResolveResult = {
+      outcome: 'routed', groupName: '两台电脑', modelName: modelId, sourceName: 'Studio',
+      route: { agentKind: 'pi', model: modelId, providerId, agentDeviceId: 'dev-2' },
+      why: 'order', quota: null, trace: [],
+    };
+    const result = await submit({ entry, modelGroupRoute, authCatalogKey: 'dev-2' });
+    expect(result.errors).toEqual([]);
+    expect(result.checkAndConfirm).toHaveBeenCalledWith('pi', { deviceId: 'dev-2' });
+    expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'dev-2', providerId, model: modelId });
+    expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'r1' }, modelGroupRoute);
+  });
+  // PR #10067 review：草稿选着另一台电脑的模型、那台目录读失败时，模型组仍要先选路；选到本机就照常建任务，
+  // 只有沿用原模型时才因那台目录没就绪而拦下。之前目录检查在选路之前，整笔发送被挡住。Tier: unit。
+  it.each(['send', 'goal'] as const)('lets a model group route %s away from a computer whose catalog failed to load', async (entry) => {
+    const local: ModelGroupResolveResult = {
+      outcome: 'routed', groupName: '两台电脑', modelName: modelId, sourceName: 'Local',
+      route: { agentKind: 'pi', model: modelId, providerId }, why: 'order', quota: null, trace: [],
+    };
+    const routed = await submit({ entry, agentDeviceId: 'old-pc', remoteModelListStatus: 'error', modelGroupRoute: local });
+    expect(routed.errors).toEqual([]);
+    expect(routed.ipcCreate.mock.calls[0][0].agentDeviceId).toBeUndefined();
+
+    const kept = await submit({
+      entry, agentDeviceId: 'old-pc', remoteModelListStatus: 'error',
+      modelGroupRoute: { outcome: 'unavailable', groupName: '两台电脑', trace: [] },
+    });
+    expect(kept.ipcCreate).not.toHaveBeenCalled();
+    if (entry === 'send') expect(kept.toastError).toHaveBeenCalledWith('newChat.modelSelector.remoteLoadFailed');
+    else expect(String(kept.errors.at(-1))).toContain('newChat.modelSelector.remoteLoadFailed');
+  });
+  // PR #8460 / unit: a source reachable only through task computer B must keep B in
+  // the readiness catalog key. Existing fixtures always allowed readiness regardless
+  // of its location. Exercise both production submit callbacks with a gate that
+  // rejects a direct lookup; also cover changed and local plugin selections.
+  describe.each(['send', 'goal'] as const)('%s via a controlled task computer', (entry) => {
+    it.each(['absent', 'kept', 'changed', 'local'] as const)('preserves the catalog relay when the plugin is %s', async (verdict) => {
+      const taskDeviceId = 'task-b';
+      const agentDeviceId = verdict === 'local' ? undefined : verdict === 'changed' ? 'share:new' : 'share:original';
+      const catalogKey = modelCatalogKey(agentDeviceId ?? taskDeviceId, taskDeviceId);
+      const result = await submit({
+        entry, deviceId: taskDeviceId, agentDeviceId: 'share:original',
+        catalogHostDeviceId: taskDeviceId, authCatalogKey: catalogKey,
+        ...(verdict === 'absent' ? {} : { pluginRoute: async (): Promise<GhostStartTaskRouteResult> => verdict === 'kept'
+          ? { outcome: 'kept', pluginName: 'Router', modelName: modelId, why: 'no-opinion' }
+          : { outcome: 'routed', pluginName: 'Router', modelName: modelId, reason: 'fixture',
+              route: { agentKind: 'pi', model: modelId, providerId, ...(agentDeviceId ? { agentDeviceId } : {}) } } }),
+      });
+      expect(result.errors).toEqual([]);
+      expect(result.checkAndConfirm).toHaveBeenCalledWith('pi', { deviceId: catalogKey });
+      const created = result.invokeRemote.mock.calls.find(([, channel]) => channel === 'maker:create-session');
+      expect(created?.[0]).toBe(taskDeviceId);
+      expect(created?.[2]?.[0]?.agentDeviceId).toBe(agentDeviceId);
+      if (entry === 'goal') expect(result.setPendingGoal).toHaveBeenCalledWith('remote-created', expect.objectContaining({ objective: 'hello goal' }));
+      else expect(result.setPending).toHaveBeenCalledWith('remote-created', expect.objectContaining({ text: 'hello' }));
+    });
+  });
+  it('keeps the selected route and still sends when the plugin call fails', async () => {
+    const result = await submit({
+      providers: [provider(), provider('other', ['high'])],
+      pluginRoute: async () => { throw new Error('plugin down'); },
+    });
+    expect(result.createSession.mock.calls[0][0]).toMatchObject({ providerId });
+    expect(result.sendMessage).toHaveBeenCalledOnce();
+    expect(result.createNote).not.toHaveBeenCalled();
   });
   it('does not use a different provider when the submitted identity is absent', async () => {
     const result = await submit({ providerId: 'absent' });

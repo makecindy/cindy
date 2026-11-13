@@ -23,7 +23,6 @@ function shareIdentity(share: ProviderShareReceived | undefined): string {
         share.shareId,
         share.memberId,
         share.status,
-        share.hostOnline,
         share.hostCapable,
       ])
     : '';
@@ -118,7 +117,7 @@ export function useProviderShareWeeklyQuota(deviceId: string): ProviderWeeklyQuo
   const shareId = providerShareIdOfAgentDeviceId(deviceId);
   const share = received.find((item) => item.shareId === shareId);
   const identity = shareIdentity(share);
-  const available = share?.status === 'active' && share.hostOnline && share.hostCapable;
+  const available = share?.status === 'active' && share.hostCapable;
   const entry = shareId ? entryFor(shareId, identity) : null;
   const [, rerender] = useState(0);
 

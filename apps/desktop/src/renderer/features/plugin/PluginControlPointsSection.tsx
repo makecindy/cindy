@@ -1,5 +1,5 @@
 /**
- * PluginControlPointsSection — 插件详情页「运行前检查」(控制节点，2026-10-31)。
+ * PluginControlPointsSection — 插件详情页「运行前检查 / 开新任务时选模型」(控制节点，2026-10-31)。
  * ---------------------------------------------------------------------------
  * 只读列出本插件能做的运行前检查(自动化运行前、例行任务运行前 …)。插件不会自动管所有
  * 任务：用户在具体任务的「前置检查」里选它，出错处理也在那里按任务设置。声明了但用户
@@ -12,7 +12,8 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
-import type { GhostControlPointInfo } from '../../../shared/ghost';
+import { GHOST_CONTROL_POINTS, type GhostControlPointInfo } from '../../../shared/ghost';
+import { isRuntimePluginPoint } from '../../../shared/pluginRuntime';
 
 const SECTION_CLASS = 'mt-10';
 const HEADING_CLASS = 'text-18 font-medium leading-[1.444] text-[var(--text-primary)]';
@@ -40,23 +41,36 @@ function PluginControlPointsSectionInner({ ghostId }: { ghostId: string }) {
   }, [ghostId]);
 
   if (points.length === 0) return null;
+  // 能为新任务选模型的插件不只是「运行前检查」，标题与说明随之说清两种介入。
+  const withStartTask = points.some((point) => point.id === 'will-start-task');
 
   return (
     <section className={SECTION_CLASS} aria-labelledby="ghost-control-points-title">
       <h2 id="ghost-control-points-title" className={HEADING_CLASS}>
-        {t('settings.ghosts.controlPoints.title')}
+        {t(points.some(point => isRuntimePluginPoint(point.id)) ? 'runtimePlugins.title' : withStartTask ? 'settings.ghosts.controlPoints.titleWithStartTask' : 'settings.ghosts.controlPoints.title')}
       </h2>
       <p className="mt-2 max-w-[760px] text-13 leading-5 text-[var(--text-secondary)]">
-        {t('settings.ghosts.controlPoints.description')}
+        {t(
+          points.some(point => isRuntimePluginPoint(point.id)) ? 'runtimePlugins.description' : withStartTask
+            ? 'settings.ghosts.controlPoints.descriptionWithStartTask'
+            : 'settings.ghosts.controlPoints.description',
+        )}
       </p>
       <ul className={cn(SURFACE_CLASS, 'mt-5 max-w-[760px] divide-y divide-[var(--border-default)] rounded-xl')}>
         {points.map((point) => (
           <li key={point.id} className="px-5 py-3.5">
             <p className="text-14 font-medium leading-[1.571] text-[var(--text-primary)]">
-              {t(`settings.ghosts.controlPoints.points.${point.id}`)}
+              {t(isRuntimePluginPoint(point.id) ? `settings.ghosts.perm.${GHOST_CONTROL_POINTS[point.id].labelKey}` : `settings.ghosts.controlPoints.points.${point.id}`)}
             </p>
             <p className="mt-0.5 text-13 leading-5 text-[var(--text-secondary)]">
-              {t(point.active ? 'settings.ghosts.controlPoints.usage' : 'settings.ghosts.controlPoints.inactive')}
+              {t(
+                !point.active
+                  ? 'settings.ghosts.controlPoints.inactive'
+                  : isRuntimePluginPoint(point.id) ? 'runtimePlugins.description'
+                  : point.id === 'will-start-task'
+                    ? 'settings.ghosts.controlPoints.usageStartTask'
+                    : 'settings.ghosts.controlPoints.usage',
+              )}
             </p>
           </li>
         ))}

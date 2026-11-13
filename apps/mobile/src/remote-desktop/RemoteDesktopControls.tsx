@@ -6,7 +6,7 @@ import {
   ChevronDown,
   ChevronRight,
   Eye,
-  RotateCw,
+  Fullscreen,
   Volume2,
   PictureInPicture2,
   LogOut,
@@ -28,6 +28,7 @@ import {
 import { Text } from "@/components/AppText";
 import { MainWindowOptionButton } from "@/components/MobilePrimitives";
 import { RemoteDesktopActionButton } from "./RemoteDesktopActionButton";
+import type { RemoteDesktopDeviceButton } from "./RemoteDesktopChrome";
 import {
   NativePullDownMenu,
   usesNativePullDownMenu,
@@ -64,7 +65,13 @@ export function RemoteDesktopControls({
   security,
   page,
   onPage,
+  device,
 }: {
+  /**
+   * A plugin live screen: fingers are always device touches, so there is no
+   * input mode; device buttons that do not fit the toolbar are listed here.
+   */
+  device?: { buttons: RemoteDesktopDeviceButton[] };
   page: "controls" | "display" | "security";
   onPage(page: "controls" | "display" | "security"): void;
   connected: boolean;
@@ -81,11 +88,9 @@ export function RemoteDesktopControls({
   onShowMouseButtons(value: boolean): void;
   onDisplay(id: string): void;
   presentation: {
-    canRotate: boolean;
     canPip: boolean;
     canAudio: boolean;
     enabled?: boolean;
-    onRotate(): void;
     onPip(): void;
   };
   video: {
@@ -95,7 +100,7 @@ export function RemoteDesktopControls({
     modesSupported: boolean;
     displayGeometry?: string;
     viewerDisplaySupported?: boolean;
-    viewerDisplayMatched?: boolean;
+    autoFitEnabled?: boolean;
     onFitDisplay?(): void;
     notice: string | null;
     onChange(settings: Partial<RemoteDesktopVideoSettings>): void;
@@ -126,12 +131,25 @@ export function RemoteDesktopControls({
     onPress(): void;
     disabled?: boolean;
     selected?: boolean;
+    label?: string;
   }> = [
+    ...(device?.buttons ?? []).map((button) => ({
+      key: button.key,
+      icon: button.icon,
+      onPress: button.press,
+      disabled: !controlling || viewOnly,
+      label: button.label,
+    })),
     {
-      key: "rotate",
-      icon: RotateCw,
-      onPress: presentation.onRotate,
-      disabled: !presentation.canRotate,
+      key: "fitViewerDisplay",
+      icon: Fullscreen,
+      onPress: () => video.onFitDisplay?.(),
+      disabled:
+        !video.viewerDisplaySupported ||
+        !connected ||
+        !controlling ||
+        video.busy,
+      selected: video.autoFitEnabled,
     },
     {
       key: "sound",
@@ -164,12 +182,12 @@ export function RemoteDesktopControls({
       {!displaySettings && (
         <View style={styles.quickActions}>
           {quickActions.map(
-            ({ key, icon: Icon, onPress, disabled, selected }) => (
+            ({ key, icon: Icon, onPress, disabled, selected, label }) => (
               <RemoteDesktopActionButton
                 key={key}
                 testID={`remoteDesktop.${key}`}
                 accessibilityRole="button"
-                accessibilityLabel={t(`remoteDesktop.${key}`)}
+                accessibilityLabel={label ?? t(`remoteDesktop.${key}`)}
                 accessibilityHint={
                   key === "smallWindow"
                     ? t("remoteDesktop.backgroundRunningHint")
@@ -196,7 +214,7 @@ export function RemoteDesktopControls({
                     selected && styles.quickSelectedLabel,
                   ]}
                 >
-                  {t(`remoteDesktop.${key}`)}
+                  {label ?? t(`remoteDesktop.${key}`)}
                 </Text>
               </RemoteDesktopActionButton>
             ),
@@ -210,7 +228,7 @@ export function RemoteDesktopControls({
         </Text>
       )}
 
-      {!displaySettings && (
+      {!displaySettings && !device && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>
             {t("remoteDesktop.inputMode")}
@@ -331,7 +349,11 @@ export function RemoteDesktopControls({
                 </Text>
               )}
             </View>
-            <ChevronRight size={iconSize.lg} strokeWidth={iconStroke.regular} color={colors.textTertiary} />
+            <ChevronRight
+              size={iconSize.lg}
+              strokeWidth={iconStroke.regular}
+              color={colors.textTertiary}
+            />
           </Pressable>
           {security && (
             <>
@@ -351,7 +373,11 @@ export function RemoteDesktopControls({
                 <Text style={[styles.rowTitle, styles.expand]}>
                   {t("remoteDesktop.security")}
                 </Text>
-                <ChevronRight size={iconSize.lg} strokeWidth={iconStroke.regular} color={colors.textTertiary} />
+                <ChevronRight
+                  size={iconSize.lg}
+                  strokeWidth={iconStroke.regular}
+                  color={colors.textTertiary}
+                />
               </Pressable>
             </>
           )}
@@ -556,7 +582,11 @@ const makeStyles = (colors: ThemeColors) =>
       borderRadius: radius.pill,
     },
     segment: { flex: 1, minHeight: 44, borderRadius: radius.pill },
-    hint: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+    hint: {
+      color: colors.textSecondary,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+    },
     group: {
       backgroundColor: colors.surfaceTranslucent,
       borderRadius: radius.container,
@@ -572,7 +602,11 @@ const makeStyles = (colors: ThemeColors) =>
       alignItems: "center",
       gap: spacing.sm,
     },
-    rowTitle: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body },
+    rowTitle: {
+      color: colors.textPrimary,
+      fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
+    },
     expand: { flex: 1 },
     divider: {
       height: StyleSheet.hairlineWidth,
@@ -597,7 +631,11 @@ const makeStyles = (colors: ThemeColors) =>
       gap: spacing.sm,
       borderRadius: radius.control,
     },
-    disconnectLabel: { color: colors.destructive, fontSize: typeScale.body, lineHeight: lineHeight.body },
+    disconnectLabel: {
+      color: colors.destructive,
+      fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
+    },
     disabled: { opacity: 0.4 },
     pressed: { opacity: 0.72 },
   });

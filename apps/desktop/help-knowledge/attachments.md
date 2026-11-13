@@ -21,14 +21,15 @@ You can give the agent more than plain text.
   - **Files and folders** in the task's **working directory** (extra directories aren't scanned by the picker).
   - Agents defined in the project.
   - **Tasks** — type a keyword to find past tasks and reference them.
-  - **Teammates** — "Message or delegate" to one of your teammates.
+  - **Buddies** — "Message or delegate" to one of your buddies.
   - The current task's built-in **browser tabs** and open **app windows** on this computer (local tasks only).
   - **Plugin** commands and plugin resources.
 - Matching favors names that start with what you typed, then falls back to in-order fuzzy matching on names and paths.
 
 **Extra directories:**
 
-- Choose **Add directory…** in the **+** menu to pick a folder from the OS dialog. The agent can **read and write** in it, in addition to the working directory. Added directories are listed under **Directories** in the same panel; hover one to remove it.
+- Choose **Add directory…** in the **+** menu to open the **Add directory** page. It lists your recent project directories (the same list as the project picker; search appears when there are 5 or more) — click one to add it. **Choose a different folder** at the bottom opens the OS dialog. The agent can **read and write** in added directories, in addition to the working directory. Added directories are listed under **Directories** in the same panel; hover one to remove it.
+- The recent list leaves out directories that are already added, no longer exist on disk, or are the working directory, one of its subdirectories, or one of its parents. To add a parent directory, use **Choose a different folder**. Press **Backspace** in the empty search box, or the back arrow, to return to the main panel.
 - Per task; up to **10** extra directories (**Limit reached (10)** when full). Available for local Claude Code, Codex, and Pi tasks; not available for SSH remote or linked-device tasks.
 - Choosing a subdirectory of the working directory is silently skipped (already covered). Choosing a parent / ancestor directory asks you to confirm first, because the agent could then modify everything inside it.
 

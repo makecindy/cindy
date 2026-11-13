@@ -532,7 +532,7 @@ describe('ComputerUseSection browser backend health loading', () => {
       installState: 'not-installed',
     };
     // Market ids are opaque: the plugin has to be found by the ghost id it installs as.
-    const snapshot = vi.fn().mockResolvedValue({
+    const lookup = vi.fn().mockResolvedValue({
       items: [
         { pluginId: 'other-id', ghostId: 'other-plugin' },
         { pluginId: 'market-opaque-id', ghostId: 'my-browser' },
@@ -540,7 +540,7 @@ describe('ComputerUseSection browser backend health loading', () => {
     });
     const marketDetail = vi.fn().mockResolvedValue(detail);
     const install = vi.fn().mockResolvedValue({ ghost: { manifest: { name: 'Cindy Chrome' } } });
-    Object.assign(window.electronAPI, { pluginMarket: { snapshot, detail: marketDetail, install } });
+    Object.assign(window.electronAPI, { pluginMarket: { lookup, detail: marketDetail, install } });
     api.getBackendState.mockResolvedValue({ active: 'user-browser' });
     api.getBackendHealth
       .mockResolvedValueOnce({ active: 'user-browser', status: 'error', reason: 'plugin-missing', canRecover: false })
@@ -559,7 +559,7 @@ describe('ComputerUseSection browser backend health loading', () => {
     );
 
     expect(
-      await screen.findByText('settings.computerUse.browserBackend.userBrowserSetup.installExtensionTitle'),
+      await screen.findByText('settings.computerUse.browserBackend.userBrowserSetup.connectExtensionTitle'),
     ).toBeTruthy();
     expect(install).toHaveBeenCalledWith('market-opaque-id', {
       expectedReleaseId: 'release-1',
@@ -569,17 +569,25 @@ describe('ComputerUseSection browser backend health loading', () => {
     expect(api.successToast).toHaveBeenCalledWith('settings.ghosts.toast.installed');
   });
 
-  // Copying Chrome logins only serves the standalone browser, so the switch is hidden elsewhere,
-  // but a switch that is still on must stay reachable so the copied logins can be deleted.
-  it('shows the login copy switch on other browsers only while it is still on', async () => {
+  // Copying Chrome logins only serves the standalone browser, so the switch never shows elsewhere,
+  // even when it is on. Turning it off (and deleting the copy) happens after switching back.
+  it('shows the login copy switch only on the standalone browser', async () => {
     api.getBackendHealth.mockResolvedValue({ active: 'user-browser', status: 'ready', canRecover: false });
-    api.getBackendState.mockResolvedValue({ active: 'user-browser', useRealProfile: false });
+    api.getBackendState.mockResolvedValue({ active: 'user-browser', useRealProfile: true });
     const first = render(<ComputerUseSection workingDir="/tmp/project" />);
     await screen.findByRole('radio', { name: 'settings.computerUse.browserBackend.userBrowser.title' });
     expect(screen.queryByRole('switch', { name: 'settings.computerUse.realProfile.toggleAria' })).toBeNull();
     first.unmount();
 
-    api.getBackendState.mockResolvedValue({ active: 'user-browser', useRealProfile: true });
+    api.getBackendHealth.mockResolvedValue({ active: 'rsb-webview', status: 'ready', canRecover: false });
+    api.getBackendState.mockResolvedValue({ active: 'rsb-webview', useRealProfile: true });
+    const second = render(<ComputerUseSection workingDir="/tmp/project" />);
+    await screen.findByRole('radio', { name: 'settings.computerUse.browserBackend.userBrowser.title' });
+    expect(screen.queryByRole('switch', { name: 'settings.computerUse.realProfile.toggleAria' })).toBeNull();
+    second.unmount();
+
+    api.getBackendHealth.mockResolvedValue({ active: 'external', status: 'ready', canRecover: false });
+    api.getBackendState.mockResolvedValue({ active: 'external', useRealProfile: true });
     render(<ComputerUseSection workingDir="/tmp/project" />);
     expect(
       await screen.findByRole('switch', { name: 'settings.computerUse.realProfile.toggleAria' }),
@@ -588,7 +596,7 @@ describe('ComputerUseSection browser backend health loading', () => {
 
   // The extension step finishes in Settings: the store page opens in the user's browser rather
   // than routing through the plugin page.
-  it('opens the extension store from Settings when only the extension is missing', async () => {
+  it('offers the store as an optional action when the extension is disconnected', async () => {
     const openExtensionStore = vi.fn().mockResolvedValue({ ok: true });
     Object.assign(window.electronAPI.browserBackend, { openExtensionStore });
     api.getBackendState.mockResolvedValue({ active: 'user-browser' });
@@ -602,7 +610,7 @@ describe('ComputerUseSection browser backend health loading', () => {
     render(<ComputerUseSection workingDir="/tmp/project" />);
     fireEvent.click(
       await screen.findByRole('button', {
-        name: 'settings.computerUse.browserBackend.userBrowserSetup.installExtension',
+        name: 'settings.computerUse.browserBackend.userBrowserSetup.openExtensionStore',
       }),
     );
 
@@ -610,5 +618,7 @@ describe('ComputerUseSection browser backend health loading', () => {
     expect(api.successToast).toHaveBeenCalledWith(
       'settings.computerUse.browserBackend.userBrowserSetup.storeOpened',
     );
+    expect(screen.getByText('settings.computerUse.browserBackend.userBrowserSetup.connectExtensionTitle')).toBeTruthy();
+    expect(screen.queryByText('settings.computerUse.browserBackend.userBrowserSetup.installExtensionTitle')).toBeNull();
   });
 });

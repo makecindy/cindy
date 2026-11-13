@@ -3,20 +3,22 @@
  * 的第三个控制目标。
  *
  * 与另外两个后端的差别:
- * - 页面活在用户自己的 Chrome / Edge 里,带着用户本人的登录态;Cindy 不启停它;
+ * - 页面活在用户自己的 Chrome / Edge 里,带着用户本人的登录态;Cindy 按需启动但不关闭它;
  * - 用哪个浏览器是用户的选择,所以能力与专用浏览器对齐(扩展 0.4.42 起):截图、
  *   上传、页面脚本、控制台、网络、弹窗、坐标与拖拽都可用。底线是不打扰用户自己的
  *   使用:新页面开在 Cindy 自己的后台窗口,不抢焦点,不切换用户正在看的标签页;
- * - 只有 debugger 才能做的(导出 PDF、整页/元素/后台标签截图、配方适配器的原始协议命令)
- *   按需使用:用户在扩展里授权一次后,扩展只在这些动作期间临时接上调试(Chrome 会显示
- *   提示条),做完即断开;未授权时明确告诉模型请用户开启,绝不悄悄换目标。旧版扩展只有
- *   基础读取与交互,同样明确拒绝并提示更新;
+ * - 只有 debugger 才能做的(导出 PDF、整页/元素/后台标签截图、配方适配器的原始协议命令)做不了:
+ *   Chrome 不允许把它声明成可选权限,发布版扩展没有它。能力表如实报告,截图退回可视区域,
+ *   其余明确告诉模型改用专用浏览器需由用户决定,绝不悄悄换目标。旧版扩展只有基础读取与交互,
+ *   同样明确拒绝并提示更新;
  * - 每个作业都经桥接校验地址,结果脱敏后才回到这里;不设站点名单(2026-10-30 决定)。
  *
  * 寻址:这里维护 targetId ↔ {连接, tabId, url} 的映射。新版扩展按 tabId 寻址;
  * 旧版扩展按精确 URL 寻址,页面在两次调用之间跳转时报 PAGE_CHANGED,不猜新页。
  */
 
+import { randomUUID } from 'node:crypto';
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { RecipeBrowserSessions } from '@cindy/browser-control-runtime';
@@ -26,7 +28,7 @@ import type {
   BrowserExtensionClientInfo,
   BrowserExtensionJobResult,
 } from '../../browser-extension/bridge.js';
-import { readRecipeInputFileSync, resolveUploadFiles } from './rsb-webview-upload-policy.js';
+import { openRecipeInputFileSync, readRecipeInputFileSync, resolveUploadFiles } from './rsb-webview-upload-policy.js';
 import type { BackendRequest, BackendResult, BrowserBackend } from './types.js';
 
 export interface UserBrowserPageControl {
@@ -40,6 +42,7 @@ export interface UserBrowserPageControl {
 export interface UserBrowserBackendOptions {
   /** 声明 browserExtension.pageControl 的插件桥接;null = 没有这样的插件(或未启用)。 */
   getPageControl(): UserBrowserPageControl | null;
+  getUnavailableReason?(): 'plugin-missing' | 'plugin-updating' | 'plugin-selection-required';
   /** 上传可读取的本地目录(按会话);没有则上传不可用。 */
   resolveUploadRoots?(sessionId: string): Promise<string[]>;
   logger: {
@@ -49,6 +52,9 @@ export interface UserBrowserBackendOptions {
   now?(): number;
   /** status 时扩展未连接,先等它重连这么久(扩展刷新或更新后会断开几秒);默认 8 秒。 */
   reconnectWaitMs?: number;
+  /** Only called for actual browser use, never passive status/doctor/settings reads. */
+  startBrowser?(): Promise<void>;
+  startupWaitMs?: number;
 }
 
 interface TargetRecord {
@@ -80,7 +86,10 @@ export const USER_BROWSER_CAPABILITIES = Object.freeze({
   rawProtocol: false,
 });
 
-/** 扩展从这个版本起与专用浏览器对齐;pdf 与原始协议按需借用 debugger(需用户授权一次)。 */
+/**
+ * 扩展从这个版本起与专用浏览器对齐。pdf 与原始协议除外:它们要 Chrome 的 debugger,而 Chrome 不允许
+ * 把它声明成可选权限,发布版扩展没有这项能力(2026-11-01 实测 permissions.request 直接拒绝)。
+ */
 export const USER_BROWSER_PARITY_VERSION = '0.4.43';
 export const USER_BROWSER_PARITY_CAPABILITIES = Object.freeze({
   evaluate: true,
@@ -89,20 +98,22 @@ export const USER_BROWSER_PARITY_CAPABILITIES = Object.freeze({
   upload: true,
   dialog: true,
   console: true,
-  pdf: true,
+  pdf: false,
   focus: true,
   close: true,
   trustedInput: false,
   pointer: true,
-  rawProtocol: true,
+  rawProtocol: false,
 });
 
 export function extensionSupportsParity(version: string | null | undefined): boolean {
   return extensionAtLeast(version, USER_BROWSER_PARITY_VERSION);
 }
 
-/** Extensions from this version upload by path through Chrome's debugger, without the ~30 MB transfer bound. */
-export const USER_BROWSER_PATH_UPLOAD_VERSION = '0.4.56';
+/** Extensions from this version take files too large for one job in pieces, without the ~30 MB transfer bound. */
+export const USER_BROWSER_CHUNKED_UPLOAD_VERSION = '0.4.61';
+/** Extensions from this version list every iframe in a snapshot and route refs to the frame that holds them. */
+const USER_BROWSER_FRAMES_VERSION = '0.4.61';
 /** Extensions from this version read and fill password, payment and one-time-code fields like any field. */
 export const USER_BROWSER_SENSITIVE_FIELDS_VERSION = '0.4.57';
 
@@ -166,16 +177,17 @@ function outdated(action: BackendRequest['action'], what: string): BackendResult
   );
 }
 
-/**
- * Bytes per upload the extension can take as data (its job validation caps base64 at 40 million
- * characters). Newer extensions also get the paths and let Chrome read the files through the debugger,
- * so larger batches work there once the user has allowed the debugger.
- */
+/** Bytes per upload that fit one job (the extension's job validation caps base64 at 40 million characters). */
 const UPLOAD_BATCH_BYTES_MAX = 30_000_000;
-function uploadTooLarge(action: BackendRequest['action']): BackendResult {
+/** One piece of a larger upload. All pieces wait in the page's memory, which bounds the whole batch. */
+const UPLOAD_CHUNK_BYTES = 4_000_000;
+const UPLOAD_CHUNKED_BYTES_MAX = 1024 * 1024 * 1024;
+function uploadTooLarge(action: BackendRequest['action'], chunked: boolean): BackendResult {
   return actionFailed(
     action,
-    `上传文件总大小超过约 30 MB:这个版本的 Cindy 浏览器扩展只能直接传这么多。请告知用户把扩展更新到 ${USER_BROWSER_PATH_UPLOAD_VERSION} 或更新版本(之后经 Chrome 调试接口按文件位置上传,不受此限),或分批上传`,
+    chunked
+      ? '上传文件总大小超过 1 GB,文件要先放进页面内存,扩展处理不了这么大。请告知用户在页面上手动选择文件,或分批上传'
+      : `上传文件总大小超过约 30 MB:这个版本的 Cindy 浏览器扩展只能直接传这么多。请告知用户把扩展更新到 ${USER_BROWSER_CHUNKED_UPLOAD_VERSION} 或更新版本(之后分块传输,最大 1 GB),或分批上传`,
     'BROWSER_RUNTIME_INVALID_REQUEST',
   );
 }
@@ -216,7 +228,7 @@ const TAB_ACTION_LABEL: Partial<Record<BackendRequest['action'], string>> = {
 const NOT_CONFIGURED_MESSAGE =
   '没有已启用的浏览器扩展插件提供页面控制(安装并启用 Cindy Chrome 插件后再选择「我的浏览器」)。';
 const DISCONNECTED_MESSAGE =
-  '浏览器扩展未连接:请在用户的 Chrome / Edge 中安装并启用 Cindy 扩展,保持 Cindy 运行;连接后重新查询 status。';
+  '浏览器扩展尚未连接；start 会尝试启动浏览器并等待连接。自动启动后仍未连接时检查扩展是否启用或需要配对；未连接不代表未安装。';
 
 const UNPAIRED_MESSAGE =
   '浏览器扩展已连到 Cindy,但还没完成配对或授权:请让用户在 Cindy Chrome 插件页确认这个浏览器,或重新启用插件后再查询 status。';
@@ -236,6 +248,7 @@ export class UserBrowserBackend implements BrowserBackend {
   private readonly recipePumps = new Map<string, () => Promise<void>>();
   private nextAlias = 1;
   private disposed = false;
+  private preparing: { wantsLaunch: boolean; promise: Promise<void> } | null = null;
 
   constructor(private readonly opts: UserBrowserBackendOptions) {}
 
@@ -247,6 +260,11 @@ export class UserBrowserBackend implements BrowserBackend {
         'BROWSER_RUNTIME_UNAVAILABLE',
       );
     try {
+      if (!['status', 'doctor', 'profiles', 'stop'].includes(request.action) &&
+          request.proxyServer === undefined && request.proxyAllowedHostnames === undefined) {
+        await this.ensureConnected(request);
+      }
+      if (this.disposed) return actionFailed(request.action, 'user browser backend disposed', 'BROWSER_RUNTIME_UNAVAILABLE');
       const result = await this.dispatch(request);
       this.noteSessionTab(request, result);
       return result;
@@ -257,6 +275,45 @@ export class UserBrowserBackend implements BrowserBackend {
       });
       return actionFailed(request.action, err instanceof Error ? err.message : String(err));
     }
+  }
+
+  private async ensureConnected(req: BackendRequest): Promise<void> {
+    const control = this.opts.getPageControl();
+    if (!control || !this.opts.startBrowser || this.connectedClients(control).length > 0) return;
+    // A named connection may belong to a different browser/profile. Never substitute the OS
+    // default for it. Requests without a profile may still join a wait that began earlier and
+    // ask it to launch the default browser, so the first caller's profile does not decide for all.
+    if (!req.profile && this.preparing) this.preparing.wantsLaunch = true;
+    if (!this.preparing) {
+      const state: { wantsLaunch: boolean; promise: Promise<void> } = {
+        wantsLaunch: !req.profile,
+        promise: Promise.resolve(),
+      };
+      const stillCurrent = () => !this.disposed && this.opts.getPageControl()?.bridge === control.bridge;
+      const prepare = async () => {
+        let status = await control.bridge.status();
+        // Pairing is a separate boundary; opening more browsers cannot resolve it.
+        if (!stillCurrent() || !status.ok || status.clients.some(c => c.connected || c.trusted === false)) return;
+        let launched = false;
+        const launchIfWanted = async () => {
+          if (!state.wantsLaunch || launched) return;
+          launched = true;
+          await this.opts.startBrowser!();
+        };
+        await launchIfWanted();
+        const deadline = (this.opts.now ?? Date.now)() + (this.opts.startupWaitMs ?? 35_000);
+        while (stillCurrent() && this.connectedClients(control).length === 0 && (this.opts.now ?? Date.now)() < deadline) {
+          await sleep(500);
+          await launchIfWanted();
+          status = await control.bridge.status();
+          // The extension came online but still needs the user's approval: waiting cannot fix that.
+          if (status.ok && status.clients.some(c => c.trusted === false)) return;
+        }
+      };
+      state.promise = prepare().finally(() => { this.preparing = null; });
+      this.preparing = state;
+    }
+    await this.preparing.promise;
   }
 
   async dispose(): Promise<void> {
@@ -302,7 +359,7 @@ export class UserBrowserBackend implements BrowserBackend {
         return actionOk(req.action, {
           ready: true,
           backend: this.kind,
-          note: '用户浏览器由用户自己启停,Cindy 不关闭它。',
+          note: 'Cindy 会按需启动用户浏览器，不会关闭它。',
         });
       case 'profiles':
         return this.handleProfiles(req);
@@ -339,6 +396,18 @@ export class UserBrowserBackend implements BrowserBackend {
 
   // ── 连接解析 ────────────────────────────────────────────────────────────
 
+  private unavailable() {
+    const reason = this.opts.getUnavailableReason?.() ?? 'plugin-missing';
+    return {
+      reason,
+      message: reason === 'plugin-updating'
+        ? '浏览器连接正在更新，完成后会自动恢复。'
+        : reason === 'plugin-selection-required'
+          ? '请在插件详情中选择「使用此浏览器扩展」。'
+          : NOT_CONFIGURED_MESSAGE,
+    };
+  }
+
   private control(
     action: BackendRequest['action'],
   ): { ok: true; control: UserBrowserPageControl } | { ok: false; result: BackendResult } {
@@ -346,7 +415,7 @@ export class UserBrowserBackend implements BrowserBackend {
     if (!control)
       return {
         ok: false,
-        result: actionFailed(action, NOT_CONFIGURED_MESSAGE, 'BROWSER_RUNTIME_NOT_CONFIGURED'),
+        result: actionFailed(action, this.unavailable().message, 'BROWSER_RUNTIME_NOT_CONFIGURED'),
       };
     return { ok: true, control };
   }
@@ -403,6 +472,42 @@ export class UserBrowserBackend implements BrowserBackend {
       this.targets.delete(record.targetId);
     }
     return job;
+  }
+
+  /**
+   * 页面文字读取的作业:最多等 `budgetMs`(调用方给的剩余时间),到点按失败返回。桥接对一个作业的默认期限是
+   * 45 秒,不理会 payload 里的 timeoutMs;页面无响应时,调用方的 5 秒探测循环不能被它拖长。作业本身仍可能
+   * 在扩展里跑完,它的结果会被丢弃(只读,没有副作用)。
+   */
+  private async pageJobWithin(
+    budgetMs: number | undefined,
+    control: UserBrowserPageControl,
+    record: TargetRecord,
+    kind: string,
+    extra: Record<string, unknown> = {},
+  ): Promise<BrowserExtensionJobResult> {
+    const job = this.pageJob(control, record, kind, extra);
+    if (budgetMs === undefined) return job;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<BrowserExtensionJobResult>((resolve) => {
+      timer = setTimeout(
+        () =>
+          resolve({
+            ok: false,
+            error: 'BROWSER_TIMEOUT',
+            message: `页面在 ${budgetMs}ms 内没有响应`,
+            execution: 'unknown',
+          }),
+        budgetMs,
+      );
+    });
+    try {
+      return await Promise.race([job, expired]);
+    } finally {
+      clearTimeout(timer);
+      // The abandoned job may still reject later; nobody is waiting for it.
+      job.catch(() => undefined);
+    }
   }
 
   /** 选连接:显式 profile(连接 id)优先;只有一条连接时直接用;多条且未指定时拒绝,不猜账号。 */
@@ -468,12 +573,8 @@ export class UserBrowserBackend implements BrowserBackend {
           ? 'BROWSER_RUNTIME_UNAVAILABLE'
           : 'BROWSER_RUNTIME_ACTION_FAILED',
       message:
-        error === 'DEBUGGER_NOT_ALLOWED'
-          ? `${error}:这一步需要 Chrome 的调试功能,用户还没有允许。${
-              job.grantPageOpened === true
-                ? '扩展已在用户的 Chrome 里打开说明页'
-                : '说明页刚才已经打开过'
-            },请告诉用户在那里点「开启」(Chrome 会请用户确认一次;使用时 Chrome 顶部会短暂显示调试提示),确认后再重试。用户拒绝就不要重试,也不要自行改用其他浏览器。`
+        error === 'DEBUGGER_NOT_ALLOWED' || error === 'DEBUGGER_UNAVAILABLE'
+          ? `${error}:这一步需要 Chrome 的调试接口,Cindy 扩展没有这项能力(Chrome 不允许扩展按需申请)。不要重试,也不要让用户去找开启入口;请告知用户这一步可以改用 Cindy 专用浏览器(external),由用户决定,不要自行切换。`
           : `${error}:${message}`,
       data: {
         error,
@@ -647,7 +748,7 @@ export class UserBrowserBackend implements BrowserBackend {
         backend: this.kind,
         running: false,
         configured: false,
-        message: NOT_CONFIGURED_MESSAGE,
+        ...this.unavailable(),
         capabilities: userBrowserCapabilities(null),
       });
     }
@@ -655,13 +756,14 @@ export class UserBrowserBackend implements BrowserBackend {
     // Right after an extension reload or update it reconnects within seconds: wait briefly before
     // reporting "not connected", so the agent does not give up on a browser that is coming back.
     const deadline = (this.opts.now ?? Date.now)() + (this.opts.reconnectWaitMs ?? 8000);
-    // Only an extension that was connected before (now dropped) is worth waiting for. One that never
-    // finished connecting, such as an unpaired install, is reported at once with its own reason.
+    // Expired clients are omitted from status.clients. Remember a successful connection independently
+    // so the reconnect grace still applies, including on the first status read after expiry.
+    // An install that has never connected (including an unpaired install) does not wait.
     if (status.ok) for (const c of status.clients) if (c.connected) this.everReady.add(c.id);
     while (
       status.ok &&
-      status.clients.some((c) => this.everReady.has(c.id)) &&
-      !status.clients.some((c) => c.connected) &&
+      (status.hadConnectedClient === true || this.everReady.size > 0) &&
+      !status.clients.some((c) => c.connected || c.trusted === false) &&
       (this.opts.now ?? Date.now)() < deadline
     ) {
       await sleep(500);
@@ -708,7 +810,7 @@ export class UserBrowserBackend implements BrowserBackend {
           }
         : {}),
       capabilities: userBrowserCapabilities(control),
-      note: '用户自己的浏览器:新页面开在 Cindy 的后台窗口里,不抢焦点;不要关闭、重排或切换用户自己的标签页,除非任务需要。',
+      note: '用户自己的浏览器:用 open 在 Cindy 的后台窗口里开自己的页面,和用户共用登录态,不抢焦点;不要在用户自己的标签页上操作,也不要关闭、重排或切换它们。',
       ...(doctor
         ? {
             port: status.port,
@@ -779,6 +881,8 @@ export class UserBrowserBackend implements BrowserBackend {
     // budget) would otherwise turn a tab the agent just opened into an unknown targetId.
     const complete = new Set<string>();
     for (const client of clients) {
+      // 新版扩展标出 Cindy 自己窗口里的页签,其余都是用户的;旧版不标,就不猜归属。
+      const knowsOwner = this.parity(gate.control, client.id);
       const listed = await gate.control.bridge.act('tabs', {
         browser: client.id,
         limit: Math.min(100, Math.max(1, req.limit ?? 50)),
@@ -809,6 +913,7 @@ export class UserBrowserBackend implements BrowserBackend {
         seen.add(record.targetId);
         tabs.push({
           ...this.describe(record),
+          ...(knowsOwner ? { owner: tab.cindyWindow === true ? 'cindy' : 'user' } : {}),
           active: tab.active === true,
           ...(tab.status ? { status: tab.status } : {}),
         });
@@ -821,7 +926,7 @@ export class UserBrowserBackend implements BrowserBackend {
     return actionOk(req.action, {
       backend: this.kind,
       tabs,
-      note: '这些是用户浏览器里当前打开的标签页;只在需要时操作,不要关闭或重排它们。',
+      note: '这些是用户浏览器里当前打开的标签页。owner:"user" 是用户自己的页签:不要在上面点击、输入或跳转,也不要关闭或重排;要用同一网站就 open 一个新页面(和用户共用登录态),需要它的账号或位置时把它的 url 传给 open。只有用户明确让你看这一页时才读取它。owner:"cindy" 是 Cindy 窗口里的页面,可以直接复用。',
     });
   }
 
@@ -925,10 +1030,16 @@ export class UserBrowserBackend implements BrowserBackend {
     if (!gate.ok) return gate.result;
     const located = await this.locate(req.action, gate.control, req.targetId, req.profile);
     if (!located.ok) return located.result;
-    if (req.frame) return unsupported(req.action, '按 frame 快照');
+    // From this version a snapshot already includes what every iframe shows, and refs work across them.
+    const framesIncluded = extensionAtLeast(
+      this.connectedClients(gate.control).find((c) => c.id === located.record.clientId)?.version,
+      USER_BROWSER_FRAMES_VERSION,
+    );
+    if (req.frame && !framesIncluded) return unsupported(req.action, '按 frame 快照');
     const maxChars = Math.min(30000, Math.max(256, req.maxChars ?? 6000));
     const job = await this.pageJob(gate.control, located.record, 'snapshot', {
       maxChars,
+      ...(framesIncluded && typeof req.limit === 'number' ? { limit: Math.min(req.limit, 500) } : {}),
       ...(typeof req.selector === 'string' ? { selector: req.selector } : {}),
     });
     if (!job.ok) return this.failureResult(req.action, job);
@@ -968,6 +1079,10 @@ export class UserBrowserBackend implements BrowserBackend {
       snapshot,
       stats: { lines: lines.length, chars: snapshot.length, refs: refCount, interactive: refCount },
       truncated: cut,
+      ...(cut
+        ? { note: '快照被截断,后面还有内容:加大 maxChars / limit,或用 selector 限定区域(例如 [role=main])后再读。没读到不代表页面上没有。' }
+        : {}),
+      ...(req.frame ? { frameNote: '这里的快照已包含所有 iframe 的内容,不需要 frame 参数;ref 可直接用于操作。' } : {}),
       untrusted_content: true,
     });
   }
@@ -1083,9 +1198,11 @@ export class UserBrowserBackend implements BrowserBackend {
       }
       case 'clickCoords': {
         if (!parity) return outdated(req.action, '坐标点击');
+        // ref / selector 点元素中心,比按截图估算的坐标可靠(截图像素不等于 CSS 像素)。
         const job = await this.pageJob(control, record, 'clickCoords', {
-          x: request.x,
-          y: request.y,
+          ...(request.ref ? { ref: request.ref } : {}),
+          ...(request.selector ? { selector: request.selector } : {}),
+          ...(request.x !== undefined ? { x: request.x, y: request.y } : {}),
           ...pointerExtra,
         });
         return done(job);
@@ -1355,45 +1472,97 @@ export class UserBrowserBackend implements BrowserBackend {
       typeof sessionId === 'string' && sessionId && this.opts.resolveUploadRoots
         ? await this.opts.resolveUploadRoots(sessionId)
         : [];
-    const paths = await resolveUploadFiles(req.paths, roots);
+    const paths = await resolveUploadFiles(req.paths, roots, UPLOAD_CHUNKED_BYTES_MAX, UPLOAD_CHUNKED_BYTES_MAX);
     let total = 0;
     for (const file of paths) total += (await fs.stat(file)).size;
-    // Newer extensions get the checked paths and have Chrome read the files through the debugger, with
-    // no transfer bound; the bytes go along only when they fit, as the fallback without the debugger.
-    const byPath = extensionAtLeast(
+    const chunked = extensionAtLeast(
       this.connectedClients(gate.control).find((c) => c.id === record.clientId)?.version,
-      USER_BROWSER_PATH_UPLOAD_VERSION,
+      USER_BROWSER_CHUNKED_UPLOAD_VERSION,
     );
-    const withBytes = total <= UPLOAD_BATCH_BYTES_MAX;
-    if (!byPath && !withBytes) return uploadTooLarge(req.action);
+    const ref = req.inputRef ?? req.ref;
+    const inputTarget = ref ? { ref } : req.selector ? { selector: req.selector } : { selector: 'input[type=file]' };
+    if (total > UPLOAD_BATCH_BYTES_MAX) {
+      if (!chunked || total > UPLOAD_CHUNKED_BYTES_MAX) return uploadTooLarge(req.action, chunked);
+      return this.uploadInChunks(req, gate.control, record, inputTarget, paths, roots);
+    }
     const files: Array<{ name: string; data: string; mimeType: string }> = [];
     let read = 0;
-    for (const file of withBytes ? paths : []) {
+    for (const file of paths) {
       // Read from the descriptor that was checked, so a file swapped for a link after the check
       // cannot pull bytes from outside the allowed roots. One file at a time bounds memory.
       const bytes = readRecipeInputFileSync(file, roots);
       read += bytes.length;
-      if (read > UPLOAD_BATCH_BYTES_MAX) return uploadTooLarge(req.action);
+      if (read > UPLOAD_BATCH_BYTES_MAX) return uploadTooLarge(req.action, chunked);
       files.push({
         name: path.basename(file),
         data: bytes.toString('base64'),
         mimeType: UPLOAD_MIME[path.extname(file).toLowerCase()] ?? '',
       });
     }
-    if (byPath) {
-      // Chrome opens the files by path itself (no transfer bound), so this is the one place the check
-      // and the read are apart. Check again just before handing the paths over to keep that gap small;
-      // accepted trade-off (2026-10-30): the debugger route is weaker than reading the bytes here.
-      const again = await resolveUploadFiles(paths, roots);
-      if (again.some((file, i) => file !== paths[i]))
-        return actionFailed(req.action, '上传文件在检查后发生了变化,请重试', 'BROWSER_RUNTIME_INVALID_REQUEST');
-    }
-    const ref = req.inputRef ?? req.ref;
-    const job = await this.pageJob(gate.control, record, 'upload', {
-      ...(ref ? { ref } : req.selector ? { selector: req.selector } : { selector: 'input[type=file]' }),
-      ...(withBytes ? { files } : {}),
-      ...(byPath ? { paths } : {}),
+    const job = await this.pageJob(gate.control, record, 'upload', { ...inputTarget, files });
+    if (!job.ok) return this.failureResult(req.action, job);
+    return actionOk(req.action, {
+      backend: this.kind,
+      targetId: record.targetId,
+      files: job.files,
     });
+  }
+
+  /** 超过一个作业放得下的文件分块交给扩展,全部到齐后才放进页面的文件输入框。 */
+  private async uploadInChunks(
+    req: BackendRequest,
+    control: UserBrowserPageControl,
+    record: TargetRecord,
+    inputTarget: { ref?: string; selector?: string },
+    paths: string[],
+    roots: string[],
+  ): Promise<BackendResult> {
+    const transfer = randomUUID();
+    const step = (extra: Record<string, unknown>) =>
+      this.pageJob(control, record, 'upload', { ...inputTarget, transfer, ...extra });
+    const begun = await step({
+      op: 'begin',
+      chunkFiles: paths.map((file) => ({
+        name: path.basename(file),
+        mimeType: UPLOAD_MIME[path.extname(file).toLowerCase()] ?? '',
+      })),
+    });
+    if (!begun.ok) return this.failureResult(req.action, begun);
+    const buffer = Buffer.alloc(UPLOAD_CHUNK_BYTES);
+    let total = 0;
+    try {
+      for (const [index, file] of paths.entries()) {
+        // Every piece comes from the descriptor that was checked, as with the whole-file route.
+        const descriptor = openRecipeInputFileSync(file, roots, UPLOAD_CHUNKED_BYTES_MAX);
+        try {
+          for (let offset = 0; ; ) {
+            const count = fsSync.readSync(descriptor, buffer, 0, buffer.length, offset);
+            if (!count) break;
+            offset += count;
+            total += count;
+            if (total > UPLOAD_CHUNKED_BYTES_MAX) {
+              void step({ op: 'abort' }).catch(() => {});
+              return uploadTooLarge(req.action, true);
+            }
+            const sent = await step({
+              op: 'chunk',
+              file: index,
+              data: buffer.subarray(0, count).toString('base64'),
+            });
+            if (!sent.ok) {
+              void step({ op: 'abort' }).catch(() => {});
+              return this.failureResult(req.action, sent);
+            }
+          }
+        } finally {
+          fsSync.closeSync(descriptor);
+        }
+      }
+    } catch (error) {
+      void step({ op: 'abort' }).catch(() => {});
+      throw error;
+    }
+    const job = await step({ op: 'finish' });
     if (!job.ok) return this.failureResult(req.action, job);
     return actionOk(req.action, {
       backend: this.kind,
@@ -1515,6 +1684,62 @@ export class UserBrowserBackend implements BrowserBackend {
       req.request as { domRead?: { kind?: string; extract?: Record<string, unknown> } }
     ).domRead;
     if (!domRead) return outdated(req.action, '任意页面脚本(evaluate.fn)');
+    if (domRead.kind === 'text') {
+      // The rendered text of the page, as `{ok, url, title, readyState, found, length, text}`.
+      const spec = (domRead as { text?: { selector?: string; offset?: number; maxChars?: number } }).text ?? {};
+      // The caller's time budget covers both paths below: the page script and, after it is refused, the extract.
+      const now = this.opts.now ?? Date.now;
+      const timeoutMs = (req.request as { timeoutMs?: unknown }).timeoutMs;
+      const deadline = typeof timeoutMs === 'number' && timeoutMs > 0 ? now() + timeoutMs : undefined;
+      const remaining = (): number | undefined => (deadline === undefined ? undefined : Math.max(100, deadline - now()));
+      if (this.parity(control, record.clientId)) {
+        const job = await this.pageJobWithin(remaining(), control, record, 'evaluate', { fn: buildDomReadSource(domRead) });
+        if (job.ok)
+          return actionOk(req.action, {
+            backend: this.kind,
+            targetId: record.targetId,
+            url: record.url,
+            result: job.result,
+            untrusted_content: true,
+          });
+        if (job.error !== 'EVAL_BLOCKED_BY_PAGE') return this.failureResult(req.action, job);
+      }
+      // No page script here: an older extension, or a page whose Content Security Policy refuses them
+      // (seen on github.com). The extension's own extract reads the same rendered text, but the bridge
+      // hands the model at most 4,000 characters of one field (`FIELD_VALUE_MAX`, whatever `maxChars` says) and
+      // flags the cut with `truncated`. Nothing past that prefix can be fetched, so the result says so
+      // (`capped`) instead of presenting the prefix as the whole page; a `selector` reads a narrower part.
+      // The load state is not reported, and `open` has already waited for it.
+      const job = await this.pageJobWithin(remaining(), control, record, 'extract', {
+        fields: { text: { selector: ':self' } },
+        ...(spec.selector ? { selector: spec.selector } : {}),
+        maxChars: 30000,
+      });
+      if (!job.ok && String(job.error ?? '') !== 'INVALID_ARGS') return this.failureResult(req.action, job);
+      const raw = job.ok ? (job.record as { text?: unknown } | undefined)?.text : undefined;
+      const text =
+        typeof raw === 'string'
+          ? raw.replace(/[ \t\u00a0]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+          : '';
+      const offset = spec.offset ?? 0;
+      return actionOk(req.action, {
+        backend: this.kind,
+        targetId: record.targetId,
+        url: record.url,
+        result: {
+          ok: job.ok,
+          ...(job.ok ? {} : { error: String(job.message ?? `invalid CSS selector: ${spec.selector ?? ''}`) }),
+          url: record.url,
+          title: record.title ?? '',
+          readyState: 'complete',
+          found: typeof raw === 'string',
+          length: text.length,
+          ...(job.truncated === true ? { capped: true } : {}),
+          text: text.slice(offset, offset + (spec.maxChars ?? 8000)),
+        },
+        untrusted_content: true,
+      });
+    }
     const html =
       domRead.kind === 'extract' &&
       Object.values(

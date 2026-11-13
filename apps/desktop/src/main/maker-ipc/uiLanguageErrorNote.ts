@@ -1,8 +1,8 @@
 import {
-  classicalFamilyOf,
   classicalStylePrompt,
-  DEFAULT_CLASSICAL_REPLY_STYLE,
+  defaultClassicalReplyStyleFor,
   isClassicalReplyStyle,
+  replyStyleFamilyOf,
   type ClassicalReplyStyleId,
 } from '@cindy/maker-shared/classical-reply';
 import { SUPPORTED_LOCALES, type SupportedLocale } from '../../shared/locale.js';
@@ -58,12 +58,13 @@ export interface TurnLanguageStampInput {
 
 /**
  * The output style travels with the language it belongs to: a remote client that
- * named its own language also brings its own style (or the default); otherwise this
- * computer's choice applies.
+ * named its own language also brings its own style (or that language's default);
+ * otherwise this computer's choice applies.
  */
 export function resolveTurnClassicalStyle(input: TurnLanguageStampInput): ClassicalReplyStyleId {
-  if (input.remote && input.claimed) return input.claimedClassicalStyle ?? DEFAULT_CLASSICAL_REPLY_STYLE;
-  return input.fallbackClassicalStyle ?? DEFAULT_CLASSICAL_REPLY_STYLE;
+  const locale = resolveTurnUiLanguage(input);
+  const claimed = input.remote && input.claimed ? input.claimedClassicalStyle : input.fallbackClassicalStyle;
+  return claimed ?? defaultClassicalReplyStyleFor(locale);
 }
 
 export function stampTurnUiLanguage<T extends { uiLanguage?: string; classicalStyle?: string }>(
@@ -80,10 +81,10 @@ export function readClaimedClassicalStyle(value: unknown): ClassicalReplyStyleId
   return isClassicalReplyStyle(claimed) ? claimed : null;
 }
 
-export function turnUiLanguageFromSendOpts(
+export function turnUiLanguageFromSendOpts<T extends SupportedLocale | null>(
   sendOpts: { uiLanguage?: unknown } | null | undefined,
-  fallback: SupportedLocale,
-): SupportedLocale {
+  fallback: T,
+): SupportedLocale | T {
   // Present only after main stamps a supported locale. Wire values are stripped first.
   return isSupportedUiLanguage(sendOpts?.uiLanguage) ? sendOpts.uiLanguage : fallback;
 }
@@ -106,14 +107,30 @@ export function buildUiLanguageErrorNote(
   locale: SupportedLocale,
   opts: { readonly replyStyle?: boolean; readonly classicalStyle?: ClassicalReplyStyleId } = {},
 ): string {
-  const family = classicalFamilyOf(locale);
+  const family = replyStyleFamilyOf(locale);
   // IM channels answer other people and may post publicly; there a classical
   // interface only sets the error-report language, not the reply style.
   const stylePrompt = family && opts.replyStyle !== false
-    ? classicalStylePrompt(family, opts.classicalStyle ?? DEFAULT_CLASSICAL_REPLY_STYLE)
+    ? classicalStylePrompt(family, opts.classicalStyle ?? defaultClassicalReplyStyleFor(locale))
     : null;
   if (stylePrompt) return buildClassicalNote(locale, stylePrompt);
   const name = INTERFACE_LANGUAGE_NAME[locale];
+  // Interfaces that offer a literary style say explicitly that none is active: a
+  // silent ordinary note would otherwise leave an earlier style note in effect,
+  // because that note stays binding until a later note names another style. IM
+  // turns never manage the style, so their note must not cancel it either: IM's
+  // session.send bypasses wireNoteMemory, and a cancellation there would leave the
+  // desktop's unchanged style note deduplicated away after the channel hands back.
+  const styleInactive = family && opts.replyStyle !== false
+    ? ' The literary reply style is not active in this note: if an earlier turn applied one, treat it as superseded, and write ordinary replies in the user\'s message language unless the user explicitly requests a literary form.'
+    : '';
+  // IM turns instead pause the style for that one turn: the hook path appends this
+  // note inline on every send (bypassing wireNoteMemory), so a self-limiting pause
+  // keeps the IM reply in the user's language without cancelling the desktop's
+  // style or needing a memory invalidation for the next desktop turn.
+  const stylePaused = family && opts.replyStyle === false
+    ? ' This turn arrives through an IM channel: answer in the user\'s message language without the literary mode named by an earlier note; the pause applies only to turns carrying this note, and a later turn without it follows the earlier style note again.'
+    : '';
   return (
     '[UI language] System note appended each turn. This is not a user message. ' +
     'Do not answer it, quote it, or infer intent from it. ' +
@@ -122,32 +139,52 @@ export function buildUiLanguageErrorNote(
     'Do not default that report to English unless the interface language is English. ' +
     'Say what happened and the next step. Keep commands, paths, identifiers, and error codes unchanged. ' +
     'Ordinary replies still follow the user message and any explicit language request. ' +
-    'Only user-facing error reports must use the interface language.'
+    'Only user-facing error reports must use the interface language.' + styleInactive + stylePaused
   );
 }
 
 /**
- * A classical interface is a deliberate style choice, so its note also sets the
- * reply style. It travels in the same per-turn slot as the other locale notes:
- * switching the interface language or the output style replaces it, and the cached
- * system prompt stays identical for every locale.
+ * A literary reply style is a deliberate style choice, so its note also sets the
+ * register. It travels in the same per-turn slot as the other locale notes: switching
+ * the interface language or the output style replaces it, and the cached system prompt
+ * stays identical for every locale.
  */
 function buildClassicalNote(locale: SupportedLocale, stylePrompt: string): string {
-  const script = locale === 'zh-Hans-x-lzh' ? 'Simplified' : 'Traditional';
+  // Only Chinese editions reach this note today; a modern edition keeps its own script.
+  const script = locale === 'zh-Hans-x-lzh' || locale === 'zh-CN' ? 'Simplified' : 'Traditional';
   return (
     '[UI language] System note appended each turn. This is not a user message. ' +
     'Do not answer it, quote it, or infer intent from it. ' +
     'The user interface language is ' + INTERFACE_LANGUAGE_NAME[locale] + ' (' + locale + '). ' +
     'While this note is in effect, write replies to the user in Classical Chinese (文言) with ' + script + ' characters, ' +
     'in ' + stylePrompt + ', with a light, playful, slightly proud voice. ' +
-    'Let the style shape greetings, summaries and closing lines; keep explanations, steps and lists in clear classical prose, ' +
-    'and do not force verse into every reply. ' +
-    'Clarity comes first: state facts, numbers, steps, risks and next actions completely. ' +
-    'Warnings about deletion, permissions, credentials, payment or security use plain, unambiguous wording without jokes. ' +
-    'Reports that something failed, was blocked, could not continue, or needs a retry follow the same rules. ' +
+    'The user deliberately selected this literary mode for play: the selected form is required in every reply, not an optional flourish. ' +
+    'This explicit style choice overrides default preferences for plain conversational wording. ' +
+    'Use the selected form for ALL your user-visible language from first word to last: ' +
+    'commentary before and between tools, progress updates, plans, questions, explanations, headings, lists, ' +
+    'table prose, captions, summaries, final answers and follow-up messages. ' +
+    'Any brief reasoning summary you author for display must follow it too; this does not request private reasoning. ' +
+    'Keep the same register when moving between commentary and the final answer, and across paragraphs and turns. ' +
+    'Do not write a literary opening followed by a modern-Chinese explanation, translation or factual appendix. ' +
+    'Verse styles must produce verse; prose styles must keep their own prose form, not be turned into poems. ' +
+    'In Markdown verse, end each verse line with two trailing spaces before its newline so the rendered lines stay separate; ' +
+    'separate stanzas with blank lines. Do not put poems in code blocks. ' +
+    'For a long answer, continue in further poems or stanzas, or further classical paragraphs for prose; ' +
+    'do not stop using the form after the first stanza. Short replies still need the selected form. ' +
+    'Practical or technical topics, exact details, tool use and ordinary failures are not exceptions. ' +
+    'Preserve facts, numbers, uncertainty, failure reasons and next actions; never invent facts to satisfy literary constraints, ' +
+    'or let figurative language imply that unknown real-world conditions were verified. ' +
+    'Keep exact values and units intact, even when they interrupt meter. ' +
+    'If a literal detail needs a separate line, put only that literal there; its surrounding explanation and any notes ' +
+    'must still use the selected literary form. Do not add a plain-language paraphrase unless the user asks for one. ' +
+    'Warnings about deletion, permissions, credentials, payment or security must use plain, unambiguous wording without verse or jokes; ' +
+    'only the concrete warning is exempt, then immediately resume the selected form. ' +
+    'An ordinary failure, blocked operation or retry report stays in the selected form and states the actual cause and next step. ' +
     'Keep code, commands, paths, identifiers, error codes and quoted text unchanged. ' +
     'Files, code comments, commit messages and other work products keep their usual language unless the user asks otherwise. ' +
-    'If the user explicitly asks for another language or for modern Chinese, follow the user. ' +
+    'Before emitting each user-visible message, check every paragraph, especially after the opening, and rewrite any ' +
+    'modern-Chinese or English connective prose into the selected form; a few archaic particles do not suffice. ' +
+    'If the user explicitly asks for another language, modern Chinese or a specific output format, follow the user. ' +
     'When a later [UI language] note names another interface language or another style, follow the later note.'
   );
 }

@@ -8,12 +8,25 @@ export default {
   real: 'BotGroupChatView, BotGroupComposer, ChatThreadPanel, BotGroupSettingsDrawer, ChatGroupSettings, GroupMaskControls and GroupMaskSettings',
   notCovered: 'Server identity, real agent replies, persistence, private digest delivery and cross-device presence. All events are isolated fixture data.',
   stubs: { 'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => { throw new Error("Voice is outside this fixture"); };' },
-  cases: Object.fromEntries(['default', 'paused', 'scheduled', 'manual', 'off', 'offline', 'unbound', 'error', 'loading'].map(name => [name, { about: `Personal stand-in: ${name}`, data: { selfAvatar } }])),
+  cases: Object.fromEntries(['default', 'thread', 'paused', 'scheduled', 'manual', 'off', 'offline', 'unbound', 'error', 'loading'].map(name => [name, { about: `Personal stand-in: ${name}`, data: { selfAvatar } }])),
   async ready(page) { await page.getByTestId('group-mask-status').waitFor(); },
   async check(page, ui) {
     const indicator = page.getByTestId('group-mask-status');
-    const expected = { default: 'enabled', paused: 'paused', scheduled: 'waiting', manual: 'waiting', off: 'off', offline: 'offline', unbound: 'unbound', error: 'enabled', loading: 'enabled' }[ui.case];
+    const expected = { default: 'enabled', thread: 'enabled', paused: 'paused', scheduled: 'waiting', manual: 'waiting', off: 'off', offline: 'offline', unbound: 'unbound', error: 'enabled', loading: 'enabled' }[ui.case];
     assert.equal(await indicator.getAttribute('data-status'), expected);
+    if (ui.case === 'thread') {
+      // UI regression: the real topic composer used to duplicate the group stand-in control.
+      await page.locator('[data-thread-preview=question]').click();
+      const panel = page.locator('aside');
+      const input = panel.getByRole('textbox', { name: await ui.t('bots.groupChat.server.replyPlaceholder'), exact: true });
+      await input.waitFor();
+      assert.equal(await panel.getByTestId('group-mask-status').count(), 0, 'topic composer hides the stand-in control');
+      assert.equal(await indicator.count(), 1, 'main group composer retains the stand-in control');
+      await input.fill('话题回复仍然可以编辑。');
+      assert.equal(await input.inputValue(), '话题回复仍然可以编辑。');
+      await ui.capture('thread-composer');
+      return;
+    }
     assert.equal(await indicator.evaluate(e => { const r = e.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; }), true);
     if (ui.case !== 'unbound') {
       assert.equal(await indicator.locator('span[aria-hidden]').first().evaluate(stack => {
@@ -106,7 +119,8 @@ export default {
       const reply = page.getByRole('textbox', { name: await ui.t('bots.groupChat.server.replyPlaceholder'), exact: true });
       await reply.fill('话题里由我接着回复。');
       await page.locator('[data-testid=group-mask-status][data-status=paused]').first().waitFor();
-      assert.equal(await page.locator('[data-testid=group-mask-status][data-status=paused]').count(), 2);
+      assert.equal(await page.locator('aside [data-testid=group-mask-status]').count(), 0, 'topic composer hides the group stand-in control');
+      assert.equal(await page.locator('[data-testid=group-mask-status][data-status=paused]').count(), 1, 'main group composer retains its stand-in control');
       await ui.capture('topic-takeover');
       assert.equal(await inbox.getAttribute('data-count'), '4', 'AI replies and thread loading preserve human unread mentions');
       await inbox.click();

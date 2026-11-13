@@ -36,7 +36,7 @@
     "automationOriginNamed": "自運「{{name}}」所遣",
     "automationOrigin": "自運所遣",
     "sessionOriginNamed": "差事「{{name}}」所遣",
-    "botOriginNamed": "同僚「{{name}}」所遣",
+    "botOriginNamed": "同伴「{{name}}」所遣",
     "sessionOrigin": "他差事所遣",
     "openSessionOrigin": "啟所出之差事",
     "sourceDeviceMobileNamed": "遣自手機「{{name}}」",
@@ -45,7 +45,7 @@
     "sourceDeviceDesktop": "遣自機",
     "sourceDeviceId": "裝置 ID：{{id}}",
     "sourceSessionId": "差事 ID：{{id}}",
-    "sourceTeammateId": "同僚 ID：{{id}}",
+    "sourceTeammateId": "同伴 ID：{{id}}",
     "sourceAutomationId": "自運 ID：{{id}}",
     "sourcePluginId": "法器 ID：{{id}}",
     "sourceMemberId": "成員 ID：{{id}}",
@@ -64,7 +64,8 @@
       "discord": "Discord",
       "wechat": "微信",
       "wecom": "企業微信",
-      "dingtalk": "釘釘"
+      "dingtalk": "釘釘",
+      "imessage": "iMessage"
     },
     "modelMismatch": "本輪由 {{actual}} 作答，非所選之 {{selected}}（服務端暫降其級）",
     "copyStateCopying": "方錄",
@@ -162,6 +163,7 @@
     "mediaErrorLine": "謬誤：{{message}}",
     "mediaDeviceLinkHint": "啟之前，手機將先請遠端裝置上呈此媒體。",
     "controlDelete": "刪訊",
+    "controlEdit": "修",
     "controlRewind": "歸於此",
     "controlFork": "自此新開差事",
     "markdownDocAriaLabel": "訊之正文",
@@ -200,7 +202,7 @@
     "done": "畢",
     "shareImage": "分享此圖",
     "annotateImage": "標註此圖",
-    "annotate": "批註",
+    "annotate": "標註",
     "exportShare": "輸 / 分享",
     "sendToChat": "遣入言談",
     "loadFailed": "圖載入未成",
@@ -223,7 +225,7 @@
     "usageLimitAutoContinueAt": "將於 {{time}} 自續",
     "usageLimitAutoContinueCancel": "罷自續",
     "noRetryContent": "無可重遣之內容，請清謬誤後重書。",
-    "piImageInputUnsupported": "今 Pi 模型未啟圖之輸入。請轉至支圖之模型；若為自定模型，請於供方規制中啟“支援圖片輸入”，然後新開 Pi 差事。",
+    "piImageInputUnsupported": "今 Pi 模型未啟圖之輸入。請轉至支圖之模型；若為自定模型，請於供方規制中啟“支援圖輸入”，然後新開 Pi 差事。",
     "codexResumeNotReady": "Codex 暫不能復此差事，請稍後再試",
     "credentialSwitchWait": "方候他 Codex 差事終了，終則自遣",
     "aborting": "方止，排隊之訊仍留於此",
@@ -318,7 +320,15 @@
     "learnFailed": "技藝修習未能啟",
     "learnBusyBody": "已有一修習差事方行，候其畢再試。",
     "learnFailedBody": "啟之未成：{{detail}}",
-    "unknownError": "不明之謬"
+    "unknownError": "不明之謬",
+    "pluginModelRoute": {
+      "routed": "{{plugin}} 為此差事擇用 {{model}}",
+      "kept": {
+        "no-opinion": "{{plugin}} 此番未改模型，此差事用 {{model}}",
+        "failed": "{{plugin}} 未及回應，此差事用 {{model}}",
+        "unavailable-route": "{{plugin}} 所擇之模型今不可用，此差事用 {{model}}"
+      }
+    }
   },
   "queuePresentation": {
     "panel": {
@@ -331,7 +341,7 @@
       "abortHint": "止未竟前勿重遣，所留之訊仍示於此。",
       "abortTitle": "方止",
       "pausedDetail": "{{count}} 條訊待復",
-      "pausedHint": "點「繼續」，則依今序續遣至機上。",
+      "pausedHint": "點「續」，則依今序續遣至機上。",
       "pausedTitle": "佇列已暫止",
       "defaultDetail": "{{count}} 條訊 · 依機上之序遣之",
       "defaultHint": "可調其序、插言、修或刪尋常佇列之訊。",
@@ -344,14 +354,14 @@
       "last": "已居佇列之末。",
       "steering": "方插言",
       "orcaTitle": "協同之列 {{index}}",
-      "title": "候列 {{index}}",
+      "title": "佇列 {{index}}",
       "orcaEditDisabled": "協同之訊不可修。",
       "busy": "佇列之舉方同步，畢而後續。",
       "steeringDisabled": "插言方遣入今輪，候機上回應再為之。",
       "editLocked": "此佇列之訊方修，畢而後為之。",
       "interactionLocked": "佇列為他舉所鎖，畢而後為之。",
       "syntheticHint": "此乃系統自生之指令，可罷之，然不可修或插言遣之。",
-      "steeringHint": "插言方遣入今 turn，暫不可修或移。",
+      "steeringHint": "插言方遣入今輪，暫不可修或移。",
       "editHint": "此訊方修，機上暫止自遣。",
       "interactionHint": "佇列方排序或為他互動所鎖，暫不可修。"
     }
@@ -441,5 +451,29 @@
       "provider": "API 供方",
       "unknown": "未錄渠道"
     }
+  },
+  "attachmentPreview": {
+    "more": "更多操作",
+    "retry": "再試",
+    "image": "圖",
+    "video": "影",
+    "file": "卷",
+    "close": "闔",
+    "reset": "復原視角",
+    "open": "啟先覽",
+    "actualSize": "原始尺寸（1:1）",
+    "save": "存原件",
+    "share": "分享",
+    "previous": "上一附件",
+    "next": "下一附件",
+    "password": "請輸入 PDF 密碼",
+    "find": "查此文",
+    "matches": "合者 {{count}} 頁",
+    "previousPage": "前頁",
+    "nextPage": "後頁",
+    "redo": "復為",
+    "wrap": "折行",
+    "lineNumbers": "行號",
+    "rendered": "觀文"
   }
 }

@@ -21,8 +21,11 @@ export const BOT_SETTINGS_OPS = [
   'caps',
   'profile.get',
   'profile.update',
+  'profile.acceptModelSelection',
   'profile.chooseAvatar',
   'profile.retryInvitation',
+  'project.repository',
+  'project.retryRepository',
   'lifecycle.run',
   'models.default',
   'memory.list',
@@ -30,6 +33,11 @@ export const BOT_SETTINGS_OPS = [
   'memory.update',
   'memory.delete',
   'capabilities.catalog',
+  'skills.core',
+  'skills.read',
+  'skills.save',
+  'skills.setEnabled',
+  'skills.delete',
   'autonomy.get',
   'autonomy.set',
   'autonomy.reset',
@@ -52,6 +60,8 @@ export const BOT_SETTINGS_OPS = [
   'channels.im.remove',
   'channels.im.listGroups',
   'channels.im.setGroupActivation',
+  'channels.im.listDiscordChannels',
+  'channels.im.setDiscordChannelAccess',
   'channels.im.listLanes',
   'channels.im.resetLane',
   'channels.im.listAdoptable',
@@ -105,7 +115,6 @@ export type BotSettingsPageId =
   | 'voice'
   | 'capabilities'
   | 'channels'
-  | 'routines'
   | 'history'
   | 'advanced';
 
@@ -122,10 +131,28 @@ export const BOT_SETTINGS_CORE_OPS: readonly BotSettingsOp[] = [
   'memory.update',
   'memory.delete',
   'capabilities.catalog',
+  'history.search',
+];
+
+/**
+ * Operations a host still answers for older controllers but no longer advertises in `caps`:
+ * the V1 follow-up setting (`autonomy.*`) answers "off" and refuses writes; the V1 routines
+ * (`routines.*`) refuse every call with UNSUPPORTED_CAPABILITY.
+ */
+export const BOT_SETTINGS_RETIRED_OPS: readonly BotSettingsOp[] = [
   'autonomy.get',
   'autonomy.set',
   'autonomy.reset',
-  'history.search',
+  'routines.list',
+  'routines.sources',
+  'routines.history',
+  'routines.save',
+  'routines.saveWithModel',
+  'routines.saveWithSessionMode',
+  'routines.saveWithDelivery',
+  'routines.deliveryTargets',
+  'routines.runNow',
+  'routines.remove',
 ];
 
 /** Profile fields a remote autosave may write; anything else is rejected by the host. */
@@ -143,6 +170,12 @@ export const BOT_SETTINGS_PATCH_FIELDS = [
 ] as const;
 
 /**
+ * Capability keys an older controller may still send but this host no longer writes: the teammate
+ * task model (`taskModelOverride`, retired 2026-11-09). The host drops them from a patch.
+ */
+export const BOT_SETTINGS_RETIRED_CAPABILITY_FIELDS = ['taskModelOverride'] as const;
+
+/**
  * Capability keys writable through the settings pages. `permissions` is deliberately absent:
  * raising the permission level keeps its confirmation in the generic remote form.
  */
@@ -150,12 +183,12 @@ export const BOT_SETTINGS_CAPABILITY_FIELDS = [
   'model',
   'modelOverride',
   'providerId',
+  'agentDeviceId',
   'effort',
   'fastMode',
   'harness',
   'modelChain',
   'modelChainOverride',
-  'taskModelOverride',
   'skillMode',
   'toolsetMode',
   'toolsets',
@@ -164,4 +197,5 @@ export const BOT_SETTINGS_CAPABILITY_FIELDS = [
   'memory',
   'inputHandoff',
   'allowSchedulerFollow',
+  'systemSkillsOff',
 ] as const;

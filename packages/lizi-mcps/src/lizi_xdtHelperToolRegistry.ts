@@ -49,7 +49,9 @@ export type XdtHelperToolCategory =
   | 'handoff'
   | 'skills'
   | 'app_update'
-  | 'bots';
+  | 'bots'
+  | 'github'
+  | 'settings';
 
 export type XdtHelperToolContentBlock =
   | { type: 'text'; text: string }
@@ -63,6 +65,7 @@ export interface XdtHelperToolResult {
 
 export type XdtHelperToolHandler<T = Record<string, unknown>> = (
   args: T,
+  signal?: AbortSignal,
 ) => Promise<XdtHelperToolResult>;
 
 export interface XdtHelperToolDef {
@@ -138,7 +141,7 @@ export class XdtHelperToolRegistry {
     return Array.from(set);
   }
 
-  async call(name: string, rawArgs: unknown): Promise<XdtHelperToolResult> {
+  async call(name: string, rawArgs: unknown, signal?: AbortSignal): Promise<XdtHelperToolResult> {
     const def = this.get(name);
     if (!def) {
       return {
@@ -181,6 +184,11 @@ export class XdtHelperToolRegistry {
               errorCode: 'INVALID_ARGS',
               data: {
                 tool: name,
+                // received: 回显收到的顶层 keys — 只回 schema 时模型看不出自己是多包了一层信封
+                // (keys=["args"]) 还是拍平了 (keys=参数字段), 实测 2026-10-31 三个会话因此连续盲试。
+                received: rawArgs && typeof rawArgs === 'object'
+                  ? Object.keys(rawArgs as Record<string, unknown>)
+                  : [],
                 validation_errors: parsed.error.issues,
                 schema: jsonSchema,
                 hint: '请按 schema 修正参数后重试',
@@ -192,6 +200,6 @@ export class XdtHelperToolRegistry {
       };
     }
 
-    return def.handler(parsed.data as Record<string, unknown>);
+    return def.handler(parsed.data as Record<string, unknown>, signal);
   }
 }

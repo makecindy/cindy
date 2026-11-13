@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import {
   REMOTE_RESOURCE_CHANGED_CHANNEL,
@@ -156,17 +156,20 @@ async function open() {
   await waitFor(() => expect(screen.getAllByText('Choose account').length).toBeGreaterThan(0));
   return view;
 }
-it('saves an independent task route to the owning host without changing the primary', async () => {
+// 2026-11-09: the teammate task model setting is retired. An older host still lists its fields:
+// they are not shown, and a primary model save leaves the host's task choice untouched.
+it('hides an older host\'s retired task model fields and never sends them back', async () => {
   const remote = resource();
   remote.actions[0].fields.push({ id: 'taskModel', label: 'Task model', kind: 'multiline' }, { id: 'taskFollowsPrimary', label: 'Inherit primary', kind: 'toggle' });
   Object.assign(remote.blocks[0].data.values, { taskModel: JSON.stringify(chain), taskFollowsPrimary: true });
   h.invoke.mockImplementation(async (_: string, channel: string) => channel === REMOTE_RESOURCE_GET_CHANNEL ? remote : { effects: [] });
   await open();
-  expect(h.model.deviceId).toBe('host');
-  fireEvent.click(within(screen.getByTestId('bot-task-model-controls')).getByText('Choose account'));
+  expect(screen.queryByText('Task model')).toBeNull();
+  expect(screen.queryByText('Inherit primary')).toBeNull();
+  fireEvent.click(screen.getByText('Choose account'));
   fireEvent.click(screen.getByText('bots.save'));
   await waitFor(() => expect(h.invoke).toHaveBeenCalledWith('host', REMOTE_RESOURCE_INVOKE_CHANNEL, [expect.objectContaining({
-    input: { taskFollowsPrimary: false, taskModel: JSON.stringify([{ harness: 'codex', model: 'gpt-6', providerId: 'openai:remote-account', effort: 'high', fastMode: true }]) },
+    input: { modelChain: JSON.stringify([{ harness: 'codex', model: 'gpt-6', providerId: 'openai:remote-account', effort: 'high', fastMode: true }]) },
   })]));
 });
 it('saves the complete model route on the selected host using a renewed opaque action', async () => {

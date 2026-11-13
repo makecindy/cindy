@@ -288,6 +288,12 @@ function writeOfficialDeviceLinkApiBaseUrl(value: string): void {
 export function getOfficialDeviceLinkApiBaseUrl(): string {
   return officialDeviceLinkApiBaseUrl;
 }
+/** Optional authoritative service origin. Absence keeps official V2 unavailable. */
+export function getOfficialAgentNetApiBaseUrl(): string {
+  const endpoints = realmEndpointCache.get(activeSessionRealm)
+    ?? ((endpointManifestRegion ?? BUILD_AUTH_REGION) === activeSessionRealm ? buildEndpointMap : null);
+  return endpoints?.agentNetApiBaseUrl?.replace(/\/+$/, '') ?? '';
+}
 
 /**
  * 自建中转的地址覆盖:非空时所有 device-link 消费者(REST、WebSocket)改连这个地址;

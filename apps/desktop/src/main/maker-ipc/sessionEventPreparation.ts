@@ -1,3 +1,5 @@
+import { parseOutputLimitDetails } from '@cindy/maker-shared';
+import { NATIVE_SUBSCRIPTION_ACCOUNT } from '@cindy/maker-core';
 import { taskResultClientIdForInput } from '../../shared/botCollaboration.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
 import { isQuietScheduledOutput, revealScheduledOutput } from '../scheduler-host/silent-output.js';
@@ -18,7 +20,7 @@ import { parseAgentInputToolLoopDetails } from '../../shared/agentInputQueue.js'
 import { noteSubagentObservationTurnStarted } from '../subagentObservationRewindFence.js';
 
 import { createLogger } from '../logger.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import type { GitSnapshotCoordinator } from '../git-snapshot/gitSnapshotCoordinator.js';
 import { markSessionTurnStarted } from '../localDb/sessionActiveTurn.js';
 import {
@@ -26,9 +28,9 @@ import {
   noteAgentMeta,
   noteTurnStarted,
   onStandaloneTextEvent,
-} from '../messagePersistBroadcaster.js';
+} from '../messagePersistBroadcaster.desktop.js';
 import { isCcMgrUpgradeInFlight } from '../remote-ssh/index.js';
-import { AgentInputCoordinator } from './agent-input-coordinator.js';
+import { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
 import { clearPromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
 import { MAKER_PUSH } from './channels.js';
 import { finalizeTurnChangeSet } from '../turn-change-set/store.js';
@@ -51,11 +53,6 @@ import {
 } from './interruptedTurnAutoResume.js';
 import type { UsageLimitAutoResume } from './usageLimitAutoResume.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
-
-/** Group-lane output belongs in its group. A DM input is hidden, but its answer belongs to the owner. */
-function isBotPrivateInput(clientId: string): boolean {
-  return isBotGroupClientId(clientId);
-}
 
 interface DismissedInteraction {
   kind: InteractionRequest['kind'];
@@ -90,7 +87,8 @@ export interface PrepareSessionEventDeps {
     decision: InteractionDecision | Record<string, unknown>,
   ) => void;
   readonly broadcastToAllWindows: (channel: string, payload: unknown) => void;
-  readonly broadcastCodexImageAsToolResult: (sessionId: string, event: AgentEvent) => Promise<void>;
+  /** Starts live delivery; resolves with the tool events it published (never rejects). */
+  readonly deliverCodexGeneratedImage: (sessionId: string, event: AgentEvent) => Promise<readonly AgentEvent[]>;
   readonly autoResumeBookkeeping: Pick<
     AutoResumeBookkeeping,
     'discardReplacementProvenByProviderEvent' | 'clearFailedTurnCompletionTail' | 'settleOutcome'
@@ -133,11 +131,6 @@ export interface PrepareSessionEventDeps {
   ) => boolean;
   readonly isGatewayProxyTokenRecoveryErrorEvent: (sessionId: string, event: AgentEvent) => boolean;
   /**
-   * 伙伴工作记忆刷新登记(botWorkingMemory):原生自动压缩后,下一次发送前置一次账本。
-   * 对所有会话登记,发送时再按伙伴主对话 / 有无账本决定是否真的注入。
-   */
-  readonly workingMemoryRefresh?: { markCompacted(sessionId: string): void };
-  /**
    * 逐轮环境说明的去重记忆(wireNoteMemory.ts)。原生自动压缩后摘要可能已丢掉旧说明,
    * 下一轮要整体重发一次;缺省(未注入)不去重,行为同旧版。
    */
@@ -149,13 +142,13 @@ export function prepareSessionEvent(
   session: Session,
   event: AgentEvent,
 ) {
+  // Host projections (Session.holdEventStream follow-ups) were already persisted
+  // and published to renderers by the host that requested the hold.
+  if (event.hostProjection) return;
   // Exact patches are main-owned durable data. They have a dedicated summary push and
   // on-demand detail IPC; forwarding the raw diff through maker:event would duplicate a
   // potentially multi-megabyte payload to every renderer and device-link controller.
   if (event.type === 'turn_diff') return;
-  // Native compaction keeps its current runtime. Only explicit resource/configuration
-  // changes register a companion refresh; compaction itself is not such a change.
-  if (event.type === 'compact_boundary') deps.workingMemoryRefresh?.markCompacted(session.id);
   if (event.type === 'compact_boundary') deps.wireNoteMemory?.reset(session.id);
   if (
     event.turnScope === 'background' &&
@@ -200,7 +193,12 @@ export function prepareSessionEvent(
     const inputId = deps.agentInputCoordinatorHolder?.getActiveInputClientId(session.id, event.sessionTurnGeneration);
     // Private-message visibility is still owned by the accepted input, even
     // though the notice is independent of the model's reply/usage state.
-    const privateReply = inputId ? isBotPrivateInput(inputId) : event.agentMeta?.botPrivateReply;
+    const inputProvenance = deps.agentInputCoordinatorHolder?.getAcceptedInputProvenance(session.id);
+    const replyInputId = inputId && inputProvenance?.clientId === inputId && inputProvenance.autoResume
+      ? inputProvenance.retrySourceClientId ?? inputId : inputId;
+    const privateReply = inputId
+      ? isBotGroupClientId(inputId) || (!!replyInputId?.startsWith('bot-dm:') && !event.runtimeRecovery)
+      : event.agentMeta?.botPrivateReply;
     if (typeof text === 'string') {
       onStandaloneTextEvent(session.id, text,
         typeof privateReply === 'boolean' ? { botPrivateReply: privateReply } : null);
@@ -234,8 +232,11 @@ export function prepareSessionEvent(
         ...event,
         agentMeta: {
           ...event.agentMeta,
-          // Coordination hides the incoming report, not the teammate's reply.
-          botPrivateReply: isBotPrivateInput(activeInputId),
+          // B2B is internal even when it carries a verified owner request: visibility
+          // must not change that request's authority. Errors/recovery still reach the owner.
+          // Task coordination retains its separate, visible reply contract.
+          botPrivateReply: isBotGroupClientId(activeInputId)
+            || (!!groupLaneInputClientId?.startsWith('bot-dm:') && event.type !== 'error' && !event.runtimeRecovery),
           // Retain provenance for the existing quiet completion notification policy.
           botTaskCoordination: taskCoordination && !event.runtimeRecovery,
           // The user input this turn answers; companion chats can show it above the reply
@@ -275,7 +276,7 @@ export function prepareSessionEvent(
   }
   const broadcastEvent = deps.redactEventForRenderer(attributedEvent);
   if (event.type === 'interaction_dismissed') {
-    const data = event.data as { requestId?: unknown; reason?: unknown };
+    const data = event.data as { requestId?: unknown; reason?: unknown; withdrawalReason?: unknown };
     if (typeof data.requestId === 'string') {
       deps.handleAgentIslandInteractionDismissed(session.id, data.requestId);
       const entry = deps.clearPendingInteraction(data.requestId);
@@ -284,13 +285,16 @@ export function prepareSessionEvent(
           entry.kind,
           typeof data.reason === 'string' ? data.reason : 'dismissed',
         );
+        const persistedDecision = data.reason === 'question_withdrawn' && entry.kind === 'ask_user_question'
+          && typeof data.withdrawalReason === 'string'
+          ? { ...decision, withdrawalReason: data.withdrawalReason } : decision;
         entry.resolve(decision);
         deps.persistInteractionDecision(
           session.id,
           entry.persistId,
           entry.kind,
           entry.request,
-          decision,
+          persistedDecision,
         );
       }
     }
@@ -301,15 +305,20 @@ export function prepareSessionEvent(
     return;
   }
   if (event.type === 'image' && event.source === 'codex') {
-    if (!isQuietScheduledOutput(event)) void deps.broadcastCodexImageAsToolResult(session.id, event);
+    if (!isQuietScheduledOutput(event)) {
+      // Hold the stream until the stored result is published so IM / hook
+      // listeners receive it before this turn's done. A refused hold (not the
+      // loop's current event) leaves delivery running in the background as before.
+      session.holdEventStream(deps.deliverCodexGeneratedImage(session.id, event));
+    }
     return;
   }
-  // turn 结束的 status event (isRunning=false + status='Done') 携带 endSnapshot。
+  // Terminal status and confirmed Pi compaction status carry their own snapshot.
   // contextTokens / contextWindow 的持久化统一在 main 端做，避免多 window 竞写；
   // 但不能挡在 EVENT broadcast 前面，否则 final/done 已到 main 后还会被同步 SQLite
   // 和 usage 广播拖住。这里先记录待写快照，广播后再执行。
   // Claude / Codex 同形 (usageTracker.snapshot() 两边都给 contextTokens / contextWindow),
-  // 不按 source 分支 —— 之前漏接 codex 导致重启后圆环归零。
+  // 终态不按 source 分支 —— 之前漏接 codex 导致重启后圆环归零。
   let pendingContextSnapshot: { contextTokens: number; contextWindow: number } | null = null;
   let pendingCodexAccountUsageSnapshot: unknown | null = null;
   let shouldMarkTurnStatusIdleAfterBroadcast = false;
@@ -325,7 +334,8 @@ export function prepareSessionEvent(
       turnContinuationId: event.turnContinuationId,
     });
   }
-  if (event.type === 'account_usage' && event.source === 'codex' && !session.remoteHostId) {
+  if (event.type === 'account_usage' && event.source === 'codex' && !session.remoteHostId
+      && !(event.data as { [NATIVE_SUBSCRIPTION_ACCOUNT]?: boolean })?.[NATIVE_SUBSCRIPTION_ACCOUNT]) {
     pendingCodexAccountUsageSnapshot = event.data;
   }
   if (event.type === 'status') {
@@ -334,7 +344,17 @@ export function prepareSessionEvent(
       status?: string;
       contextTokens?: number;
       contextWindow?: number;
+      contextSnapshotAuthoritative?: boolean;
     };
+    // Remote event and state records can arrive in different poll chunks. Use
+    // the confirmed status payload, never the proxy cache at compact_boundary.
+    // A replayed boundary alone therefore cannot write an older watermark.
+    const isCompactionSnapshot = event.source === 'pi' && data.isRunning === true
+      && data.contextSnapshotAuthoritative === true && event.turnScope !== 'background'
+      && (event.sessionInstanceId === undefined || event.sessionInstanceId === session.instanceId)
+      && (event.sessionTurnGeneration === undefined || event.sessionTurnGeneration === session.getTurnGeneration())
+      && typeof data.contextTokens === 'number' && Number.isFinite(data.contextTokens) && data.contextTokens >= 0
+      && typeof data.contextWindow === 'number' && Number.isFinite(data.contextWindow) && data.contextWindow > 0;
     // Idle compact / late background work may still send isRunning for UI
     // copy. It must not latch the product turn tracker or idle bookkeeping.
     if (data.isRunning === true && event.turnScope !== 'background') {
@@ -404,8 +424,7 @@ export function prepareSessionEvent(
       shouldMarkTurnStatusIdleAfterBroadcast = true;
     }
     if (
-      data.isRunning === false &&
-      data.status === 'Done' &&
+      (isCompactionSnapshot || (data.isRunning === false && data.status === 'Done')) &&
       typeof data.contextTokens === 'number'
     ) {
       pendingContextSnapshot = {
@@ -520,6 +539,7 @@ export function prepareSessionEvent(
                 sdkError?: unknown;
                 errorStatus?: unknown;
                 toolLoop?: unknown;
+                outputLimit?: unknown;
                 usageLimit?: unknown;
                 usageResetAt?: unknown;
                 codexErrorInfo?: unknown;
@@ -530,6 +550,7 @@ export function prepareSessionEvent(
     // Keep only the bounded tool-loop shape; never let a provider-controlled object become
     // live projection state or renderer interpolation.
     const toolLoop = parseAgentInputToolLoopDetails(errData?.toolLoop);
+    const outputLimit = parseOutputLimitDetails(errData?.outputLimit);
     // 计划内 cc-mgr 升级窗口的 daemon 关闭(reason='remote_daemon_closed')是
     // 预期噪音: renderer 事件路径按同语义静默 banner, 这里同样不给 coordinator
     // 记 error —— 否则 paired-done 保留会让升级后的 projection 复现
@@ -566,6 +587,7 @@ export function prepareSessionEvent(
           ...(typeof errData?.reason === 'string' ? { reason: errData.reason } : {}),
           ...(typeof errData?.errorStatus === 'number' ? { errorStatus: errData.errorStatus } : {}),
           ...(toolLoop ? { toolLoop } : {}),
+          ...(outputLimit ? { outputLimit } : {}),
           // 账号限额信号:普通任务据此等额度重置后自动继续(见 usageLimitAutoResume.ts)。
           ...(errData?.usageLimit === true ? { usageLimit: true } : {}),
           ...(typeof errData?.usageResetAt === 'number' && Number.isFinite(errData.usageResetAt)

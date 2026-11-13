@@ -1,6 +1,6 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
-  "count": 570,
+  "count": 584,
   "colors": [
     {
       "id": "surface",
@@ -50,7 +50,7 @@
     {
       "id": "surface-hover-hsl",
       "light": "0 0% 90%",
-      "dark": "60 2% 17%"
+      "dark": "60 2% 23%"
     },
     {
       "id": "surface-on-card",
@@ -154,7 +154,7 @@
     },
     {
       "id": "text-primary-hsl",
-      "light": "0 0% 9%",
+      "light": "0 0% 15%",
       "dark": "0 0% 83%"
     },
     {
@@ -190,7 +190,7 @@
     {
       "id": "text-tertiary-hsl",
       "light": "0 0% 45%",
-      "dark": "0 0% 45%"
+      "dark": "0 0% 64%"
     },
     {
       "id": "text-disabled",
@@ -514,8 +514,13 @@
     },
     {
       "id": "confirm-btn-primary-hover",
-      "light": "var(--accent-hover)",
-      "dark": "var(--accent-hover)"
+      "light": "oklch(from var(--confirm-btn-primary-bg) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)",
+      "dark": "oklch(from var(--confirm-btn-primary-bg) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)"
+    },
+    {
+      "id": "confirm-btn-primary-pressed",
+      "light": "oklch(from var(--confirm-btn-primary-bg) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)",
+      "dark": "oklch(from var(--confirm-btn-primary-bg) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)"
     },
     {
       "id": "confirm-btn-secondary-text",
@@ -616,6 +621,11 @@
       "id": "update-btn-bg",
       "light": "transparent",
       "dark": "transparent"
+    },
+    {
+      "id": "update-btn-pressed",
+      "light": "var(--update-btn-hover)",
+      "dark": "var(--update-btn-hover)"
     },
     {
       "id": "content-area",
@@ -959,8 +969,8 @@
     },
     {
       "id": "chat-input-placeholder-subtle",
-      "light": "color-mix(in srgb, var(--chat-input-placeholder) 40%, transparent)",
-      "dark": "color-mix(in srgb, var(--chat-input-placeholder) 40%, transparent)"
+      "light": "var(--chat-input-placeholder)",
+      "dark": "var(--chat-input-placeholder)"
     },
     {
       "id": "chat-input-text",
@@ -1174,13 +1184,13 @@
     },
     {
       "id": "send-btn-hover-bg",
-      "light": "var(--send-btn-bg)",
-      "dark": "var(--send-btn-bg)"
+      "light": "oklch(from var(--send-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)",
+      "dark": "oklch(from var(--send-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)"
     },
     {
       "id": "send-btn-pressed-bg",
-      "light": "var(--send-btn-bg)",
-      "dark": "var(--send-btn-bg)"
+      "light": "oklch(from var(--send-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)",
+      "dark": "oklch(from var(--send-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)"
     },
     {
       "id": "perm-code-bg",
@@ -1201,6 +1211,16 @@
       "id": "perm-allow-btn-text",
       "light": "#262626",
       "dark": "#262626"
+    },
+    {
+      "id": "perm-allow-btn-hover",
+      "light": "oklch(from var(--perm-allow-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)",
+      "dark": "oklch(from var(--perm-allow-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)"
+    },
+    {
+      "id": "perm-allow-btn-pressed",
+      "light": "oklch(from var(--perm-allow-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)",
+      "dark": "oklch(from var(--perm-allow-btn-bg) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)"
     },
     {
       "id": "perm-allow-kbd-bg",
@@ -1439,8 +1459,8 @@
     },
     {
       "id": "chat-placeholder-text",
-      "light": "var(--text-tertiary)",
-      "dark": "var(--text-tertiary)"
+      "light": "var(--text-placeholder)",
+      "dark": "var(--text-placeholder)"
     },
     {
       "id": "msg-user-bg",
@@ -2724,13 +2744,23 @@
     },
     {
       "id": "button-cta-hover",
-      "light": "var(--accent-hover)",
-      "dark": "var(--accent-hover)"
+      "light": "oklch(from var(--accent-cta-bg-pure) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)",
+      "dark": "oklch(from var(--accent-cta-bg-pure) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)"
     },
     {
       "id": "button-cta-pressed",
-      "light": "color-mix(in srgb, var(--button-cta-hover) 90%, var(--accent-pure-cta-fg))",
-      "dark": "color-mix(in srgb, var(--button-cta-hover) 90%, var(--accent-pure-cta-fg))"
+      "light": "oklch(from var(--accent-cta-bg-pure) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)",
+      "dark": "oklch(from var(--accent-cta-bg-pure) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)"
+    },
+    {
+      "id": "button-danger-solid-hover",
+      "light": "oklch(from hsl(var(--destructive)) calc(sign(max(0, l - 0.25)) * (l - 0.045) + (1 - sign(max(0, l - 0.25))) * 0.27) c h)",
+      "dark": "color-mix(in srgb, hsl(var(--destructive)) 90%, var(--text-primary))"
+    },
+    {
+      "id": "button-danger-solid-pressed",
+      "light": "oklch(from hsl(var(--destructive)) calc(sign(max(0, l - 0.25)) * (l - 0.085) + (1 - sign(max(0, l - 0.25))) * 0.355) c h)",
+      "dark": "color-mix(in srgb, hsl(var(--destructive)) 80%, var(--text-primary))"
     },
     {
       "id": "form-field-hint",
@@ -2851,6 +2881,46 @@
       "id": "task-tag-white-check",
       "light": "#525252",
       "dark": "#525252"
+    },
+    {
+      "id": "plugin-identity-official-text",
+      "light": "#2868c8",
+      "dark": "#83b5ff"
+    },
+    {
+      "id": "plugin-identity-official-bg",
+      "light": "rgba(65, 124, 221, 0.11)",
+      "dark": "rgba(65, 124, 221, 0.18)"
+    },
+    {
+      "id": "plugin-identity-community-text",
+      "light": "#8050bb",
+      "dark": "#c4a1ef"
+    },
+    {
+      "id": "plugin-identity-community-bg",
+      "light": "rgba(128, 80, 187, 0.10)",
+      "dark": "rgba(155, 105, 215, 0.16)"
+    },
+    {
+      "id": "plugin-identity-team-text",
+      "light": "#097c78",
+      "dark": "#6dd7cd"
+    },
+    {
+      "id": "plugin-identity-team-bg",
+      "light": "rgba(22, 145, 132, 0.10)",
+      "dark": "rgba(22, 145, 132, 0.16)"
+    },
+    {
+      "id": "plugin-identity-custom-text",
+      "light": "#b36518",
+      "dark": "#eeba70"
+    },
+    {
+      "id": "plugin-identity-custom-bg",
+      "light": "rgba(190, 113, 29, 0.10)",
+      "dark": "rgba(190, 113, 29, 0.16)"
     }
   ]
 }

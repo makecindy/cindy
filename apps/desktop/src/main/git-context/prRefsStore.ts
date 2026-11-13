@@ -15,9 +15,11 @@ import { and, asc, desc, eq, gt, inArray, isNull, like, or, sql } from 'drizzle-
 import { getDbClient, getCurrentDbClientUserId } from '../localDb/client/current';
 import type { DbClient } from '../localDb/client/DbClient';
 import { messages, migrationMeta, sessionPrRefs, sessions } from '../localDb/schema';
+import { messageToCamel } from '../localDb/mapper';
+import { isSyntheticTriggerText } from '../../shared/interruptedTurn';
 import { createLogger } from '../logger.js';
 import { extractPrRefs, messageContentToText, type PrRef } from './prRefExtractor.js';
-import type { SessionPrRefAction } from '@cindy/maker-shared';
+import { prStatusKey, type SessionPrRefAction } from '@cindy/maker-shared';
 import { throwIpcError } from '../utils/ipcValidate';
 
 const log = createLogger('git-context/pr-refs');
@@ -32,6 +34,8 @@ export interface SessionPrRef extends PrRef {
   priority?: number;
   manuallyAdded?: boolean;
   removedAt?: number | null;
+  associationSource?: string;
+  associationOrigin?: string | null;
 }
 
 /** 只有这两类角色的文本参与提取——tool_result 里的 PR 列表是噪音(详见 prRefExtractor)。 */
@@ -44,86 +48,39 @@ export function setPrRefsChangedListener(cb: (sessionId: string) => void): void 
   onRefsChanged = cb;
 }
 
-/**
- * 消息落库后的提取钩子。永不抛错(调用方 fire-and-forget);无 PR 引用时零写入。
- */
+/** Publish only the current persisted public message, under the task's PR write queue. */
 export async function recordPrRefsForMessage(msg: {
+  id: string;
   sessionId: string;
   role: string;
   content: unknown;
-  /** mapper 出口是 ISO 字符串;clearedAt 竞态守卫用。 */
   createdAt: string | number;
 }): Promise<void> {
-  if (!SCANNED_ROLES.has(msg.role)) return;
-  const text = messageContentToText(msg.content);
-  // 快筛用 '/pull/' 路径片段:绝大多数消息直接短路,不跑正则。host 校验完全由
-  // extractPrRefs 的锚定正则负责——这里刻意不用 'github.com' 子串(那种写法会被
-  // CodeQL 判为"不完整的 URL 子串校验",路径片段则不带 host 语义)。
-  if (!text.includes('/pull/')) return;
-  const refs = extractPrRefs(text);
-  if (refs.length === 0) return;
+  if (
+    !SCANNED_ROLES.has(msg.role) ||
+    !/(?:\/pull\/|\/-\/merge_requests\/)/.test(messageContentToText(msg.content))
+  )
+    return;
   try {
-    // /clear 竞态守卫:main 侧补写的旧行(createdAt 已落在 clearedAt 边界之前,
-    // createMessage 经 shouldBroadcast 抑制广播的那类)对用户不可见,
-    // 不该把被 clear 掉的对话里的 PR 复活到徽标上(Codex review P2)。
-    const createdAtMs =
-      typeof msg.createdAt === 'number' ? msg.createdAt : Date.parse(msg.createdAt);
-    const db = getDbClient().drizzle;
-    const [sessionRow] = await db
-      .select({ clearedAt: sessions.clearedAt })
-      .from(sessions)
-      .where(eq(sessions.id, msg.sessionId))
-      .limit(1);
-    const clearedAt = sessionRow?.clearedAt ?? null;
-    if (clearedAt !== null && Number.isFinite(createdAtMs) && createdAtMs <= clearedAt) return;
-
-    await upsertPrRefs(msg.sessionId, refs);
-    onRefsChanged?.(msg.sessionId);
+    const dbClient = getDbClient();
+    await reconcilePrRefsForSession(msg.sessionId,
+      { dbClient, isCurrent: () => getDbClient() === dbClient }, false, msg.id);
   } catch (err) {
     log.warn('record pr refs failed', {
-      sessionId: msg.sessionId,
-      err: err instanceof Error ? err.message : String(err),
+      sessionId: msg.sessionId, err: err instanceof Error ? err.message : String(err),
     });
   }
 }
 
-/**
- * 任务导入的批量提取钩子(session-import 在导入消息
- * 落库后 fire-and-forget 调用)。导入消息不经 createMessage(它们走专用 tx
- * 批量 upsert),没有这个钩子的话导入会话的 PR 永远不会被绑定,且全局回填
- * 可能在懒导入发生前就已写完成标记(review 反馈)。永不抛错。
- */
-export async function recordPrRefsForImportedMessages(
-  sessionId: string,
-  rows: Array<{ role: string; content: unknown; createdAt: number }>,
-): Promise<void> {
+/** Import transactions may skip tombstones/rewound rows; never publish adapter candidates. */
+export async function recordPrRefsForImportedMessages(sessionId: string): Promise<void> {
   try {
-    // clearedAt 可见性守卫:导入会话被 /clear 后,外部 transcript 增量导入会
-    // 重放全量行——边界之前的行对用户不可见,不得复活 pre-clear 的 PR
-    // (与 recordPrRefsForMessage / recompute / 回填同一套语义;Codex review P2)。
-    const db = getDbClient().drizzle;
-    const [sessionRow] = await db
-      .select({ clearedAt: sessions.clearedAt })
-      .from(sessions)
-      .where(eq(sessions.id, sessionId))
-      .limit(1);
-    const clearedAt = sessionRow?.clearedAt ?? null;
-
-    let touched = false;
-    for (const row of rows) {
-      if (!SCANNED_ROLES.has(row.role)) continue;
-      if (clearedAt !== null && row.createdAt <= clearedAt) continue;
-      const refs = extractPrRefs(messageContentToText(row.content));
-      if (refs.length === 0) continue;
-      // 时间戳用导入消息的原始 createdAt,保持"最近提到的排前面"语义。
-      await upsertPrRefs(sessionId, refs, row.createdAt);
-      touched = true;
-    }
-    if (touched) onRefsChanged?.(sessionId);
+    const dbClient = getDbClient();
+    await reconcilePrRefsForSession(sessionId,
+      { dbClient, isCurrent: () => getDbClient() === dbClient }, false);
   } catch (err) {
     log.warn('record imported pr refs failed', {
-      sessionId,
-      err: err instanceof Error ? err.message : String(err),
+      sessionId, err: err instanceof Error ? err.message : String(err),
     });
   }
 }
@@ -167,21 +124,6 @@ async function acquirePrWrite(dbClient: DbClient, sessionId: string): Promise<()
   return release;
 }
 
-async function upsertPrRefs(
-  sessionId: string,
-  refs: PrRef[],
-  atMs?: number,
-  opts?: { authoritative?: boolean; scope?: PrRefsRecomputeScope },
-): Promise<void> {
-  const dbClient = opts?.scope?.dbClient ?? getDbClient();
-  const release = await acquirePrWrite(dbClient, sessionId);
-  try {
-    await upsertPrRefsWithinWrite(dbClient, sessionId, refs, atMs, opts);
-  } finally {
-    release();
-  }
-}
-
 /** Caller holds the session's PR write queue, including during recomputation. */
 async function upsertPrRefsWithinWrite(
   dbClient: DbClient,
@@ -199,16 +141,22 @@ async function upsertPrRefsWithinWrite(
       .values({
         id: createId(),
         sessionId,
+        provider: ref.provider ?? 'github',
+        host: ref.host ?? 'github.com',
         owner: ref.owner,
         repo: ref.repo,
         prNumber: ref.prNumber,
         url: ref.url,
         firstSeenAt: ts,
         lastSeenAt: ts,
+        associationSource: 'explicit',
+        associationOrigin: 'message',
       })
       .onConflictDoUpdate({
         target: [
           sessionPrRefs.sessionId,
+          sessionPrRefs.provider,
+          sessionPrRefs.host,
           sessionPrRefs.owner,
           sessionPrRefs.repo,
           sessionPrRefs.prNumber,
@@ -216,20 +164,23 @@ async function upsertPrRefsWithinWrite(
         set: {
           lastSeenAt: opts?.authoritative ? ts : sql`max(${sessionPrRefs.lastSeenAt}, ${ts})`,
           firstSeenAt: sql`min(${sessionPrRefs.firstSeenAt}, ${ts})`,
+          // Preserve removal tombstones and manual provenance during historical repair.
+          associationSource: sql`case when ${sessionPrRefs.removedAt} is null then 'explicit' else ${sessionPrRefs.associationSource} end`,
+          associationOrigin: sql`coalesce(${sessionPrRefs.associationOrigin}, 'message')`,
         },
       });
   }
 }
 
 /** 回填完成标记(migrationMeta kv,先例:codex_history_has_product_prompt_initialized_v1)。 */
-const BACKFILL_META_KEY = 'git_context_pr_refs_backfill_v1';
+const BACKFILL_META_KEY = 'git_context_pr_refs_backfill_v3';
 
 /**
- * 进程内防重入,**按当前 db 的 userId 记账**:同进程登出再登入另一账号时
+ * 进程内防重入,按 DbClient 实例记账:同进程登出再登入另一账号时
  * db 是另一份,模块级布尔 flag 会把新账号的回填短路掉(Codex review P1)。
  * 失败时复位让下次调用重试。
  */
-let backfillUserId: string | null = null;
+const backfilledClients = new WeakSet<DbClient>();
 
 /**
  * 一次性历史回填:把存量 user/assistant 消息里的 PR 链接补进 session_pr_refs。
@@ -245,10 +196,12 @@ let backfillUserId: string | null = null;
 export async function ensurePrRefsBackfill(): Promise<void> {
   const uid = getCurrentDbClientUserId();
   if (uid === null) return; // db 未就绪:下次触发再试
-  if (backfillUserId === uid) return;
-  backfillUserId = uid;
+  const dbClient = getDbClient();
+  if (backfilledClients.has(dbClient)) return;
+  backfilledClients.add(dbClient);
+  const scope = { dbClient, isCurrent: () => getDbClient() === dbClient };
   try {
-    const db = getDbClient().drizzle;
+    const db = dbClient.drizzle;
     const done = await db
       .select()
       .from(migrationMeta)
@@ -261,8 +214,6 @@ export async function ensurePrRefsBackfill(): Promise<void> {
     const rows = await db
       .select({
         sessionId: messages.sessionId,
-        content: messages.content,
-        createdAt: messages.createdAt,
       })
       .from(messages)
       .innerJoin(sessions, eq(sessions.id, messages.sessionId))
@@ -271,29 +222,31 @@ export async function ensurePrRefsBackfill(): Promise<void> {
           inArray(messages.role, ['user', 'assistant']),
           isNull(messages.rewindAt),
           or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt)),
-          like(messages.content, '%github.com%/pull/%'),
+          or(
+            like(messages.content, '%github.com%/pull/%'),
+            like(messages.content, '%/-/merge_requests/%'),
+          ),
         ),
       )
       .orderBy(asc(messages.createdAt));
 
-    const touched = new Set<string>();
-    for (const row of rows) {
-      // content 列本身就是 JSON.stringify 后的 TEXT,直接扫原文即可。
-      const refs = extractPrRefs(row.content);
-      if (refs.length === 0) continue;
-      await upsertPrRefs(row.sessionId, refs, row.createdAt);
-      touched.add(row.sessionId);
+    const touched = new Set(rows.map(row => row.sessionId));
+    for (const sessionId of touched) {
+      if (!scope.isCurrent()) { backfilledClients.delete(dbClient); return; }
+      // Discovery is only a task hint. Re-read persisted visibility and public
+      // content after acquiring its queue, rather than publishing an old snapshot.
+      await reconcilePrRefsForSession(sessionId, scope, false);
     }
 
+    if (!scope.isCurrent()) { backfilledClients.delete(dbClient); return; }
     await db
       .insert(migrationMeta)
       .values({ key: BACKFILL_META_KEY, value: 'done' })
       .onConflictDoUpdate({ target: migrationMeta.key, set: { value: 'done' } });
 
-    for (const sid of touched) onRefsChanged?.(sid);
     log.info('pr refs backfill complete', { candidates: rows.length, sessions: touched.size });
   } catch (err) {
-    backfillUserId = null; // 失败复位,下次触发时重试
+    backfilledClients.delete(dbClient); // 失败复位,下次触发时重试
     log.warn('pr refs backfill failed', {
       err: err instanceof Error ? err.message : String(err),
     });
@@ -311,6 +264,21 @@ export async function recomputePrRefsForSession(
   sessionId: string,
   scope?: PrRefsRecomputeScope,
 ): Promise<void> {
+  try {
+    await reconcilePrRefsForSession(sessionId, scope, true);
+  } catch (err) {
+    log.warn('recompute pr refs failed', {
+      sessionId, err: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+async function reconcilePrRefsForSession(
+  sessionId: string,
+  scope: PrRefsRecomputeScope | undefined,
+  prune: boolean,
+  messageId?: string,
+): Promise<void> {
   let release: (() => void) | undefined;
   try {
     if (scope && !scope.isCurrent()) return;
@@ -324,18 +292,20 @@ export async function recomputePrRefsForSession(
       .where(eq(sessions.id, sessionId))
       .limit(1);
     if (scope && !scope.isCurrent()) return;
-    const clearedAt = sessionRow?.clearedAt ?? null;
+    if (!sessionRow) return;
+    const clearedAt = sessionRow.clearedAt;
 
     const conds = [
       eq(messages.sessionId, sessionId),
       isNull(messages.rewindAt),
       inArray(messages.role, ['user', 'assistant']),
-      like(messages.content, '%/pull/%'),
+      or(like(messages.content, '%/pull/%'), like(messages.content, '%/-/merge_requests/%')),
     ];
     if (clearedAt !== null) conds.push(gt(messages.createdAt, clearedAt));
+    if (messageId !== undefined) conds.push(eq(messages.id, messageId));
 
     const rows = await db
-      .select({ content: messages.content, createdAt: messages.createdAt })
+      .select()
       .from(messages)
       .where(and(...conds))
       .orderBy(asc(messages.createdAt));
@@ -348,19 +318,34 @@ export async function recomputePrRefsForSession(
     const keep = new Set<string>();
     for (const row of rows) {
       if (scope && !scope.isCurrent()) return;
-      const refs = extractPrRefs(row.content);
+      const message = messageToCamel(row);
+      // Recovery checkpoint summaries are hidden user instructions, not visible
+      // mentions. Match the renderer for plain text and { text } envelopes.
+      if (message.role === 'user') {
+        const text = typeof message.content === 'string' ? message.content
+          : (message.content as { text?: unknown } | null)?.text;
+        if (message.agentMeta?.autoResume === true ||
+            (typeof text === 'string' && isSyntheticTriggerText(text))) continue;
+      }
+      const refs = extractPrRefs(messageContentToText(message.content));
       if (refs.length === 0) continue;
-      for (const ref of refs) keep.add(`${ref.owner}/${ref.repo}#${ref.prNumber}`);
+      for (const ref of refs) keep.add(prStatusKey(ref));
       await upsertPrRefsWithinWrite(dbClient, sessionId, refs, row.createdAt, {
-        authoritative: true,
+        authoritative: prune,
         scope,
       });
     }
 
     if (scope && !scope.isCurrent()) return;
+    if (!prune) {
+      if (!scope || scope.isCurrent()) onRefsChanged?.(sessionId);
+      return;
+    }
     const existing = await db
       .select({
         id: sessionPrRefs.id,
+        provider: sessionPrRefs.provider,
+        host: sessionPrRefs.host,
         owner: sessionPrRefs.owner,
         repo: sessionPrRefs.repo,
         prNumber: sessionPrRefs.prNumber,
@@ -371,22 +356,12 @@ export async function recomputePrRefsForSession(
       .where(eq(sessionPrRefs.sessionId, sessionId));
     if (scope && !scope.isCurrent()) return;
     const staleIds = existing
-      .filter(
-        (r) =>
-          !r.manuallyAdded &&
-          r.removedAt === null &&
-          !keep.has(`${r.owner}/${r.repo}#${r.prNumber}`),
-      )
+      .filter((r) => !r.manuallyAdded && r.removedAt === null && !keep.has(prStatusKey(r)))
       .map((r) => r.id);
     if (staleIds.length > 0) {
       await db.delete(sessionPrRefs).where(inArray(sessionPrRefs.id, staleIds));
     }
     if (!scope || scope.isCurrent()) onRefsChanged?.(sessionId);
-  } catch (err) {
-    log.warn('recompute pr refs failed', {
-      sessionId,
-      err: err instanceof Error ? err.message : String(err),
-    });
   } finally {
     release?.();
   }
@@ -395,7 +370,7 @@ export async function recomputePrRefsForSession(
 /**
  * 全量 PR 引用(sidebar hover tips 用):renderer 启动期一次拉全表建
  * sessionId → refs 缓存,之后靠 pr-refs-changed 推送增量刷新,避免 N 个
- * 列表项各发一次 IPC。表里只有出现过 PR 链接的会话才有行,体量天然很小;
+ * 列表项各发一次 IPC。返回有效关联，包含消息提取及手动管理记录;
  * cap 2000 行纯防御(单行 ~100B)。
  */
 export async function listAllPrRefs(): Promise<SessionPrRef[]> {
@@ -403,7 +378,7 @@ export async function listAllPrRefs(): Promise<SessionPrRef[]> {
   const rows = await db
     .select()
     .from(sessionPrRefs)
-    .where(isNull(sessionPrRefs.removedAt))
+    .where(and(isNull(sessionPrRefs.removedAt), eq(sessionPrRefs.associationSource, 'explicit')))
     .orderBy(
       desc(sessionPrRefs.pinned),
       desc(sessionPrRefs.priority),
@@ -419,7 +394,13 @@ export async function listPrRefs(sessionId: string): Promise<SessionPrRef[]> {
   const rows = await db
     .select()
     .from(sessionPrRefs)
-    .where(and(eq(sessionPrRefs.sessionId, sessionId), isNull(sessionPrRefs.removedAt)))
+    .where(
+      and(
+        eq(sessionPrRefs.sessionId, sessionId),
+        isNull(sessionPrRefs.removedAt),
+        eq(sessionPrRefs.associationSource, 'explicit'),
+      ),
+    )
     .orderBy(
       desc(sessionPrRefs.pinned),
       desc(sessionPrRefs.priority),
@@ -433,6 +414,8 @@ function rowToSessionPrRef(r: typeof sessionPrRefs.$inferSelect): SessionPrRef {
   return {
     id: r.id,
     sessionId: r.sessionId,
+    provider: r.provider,
+    host: r.host,
     owner: r.owner,
     repo: r.repo,
     prNumber: r.prNumber,
@@ -443,132 +426,192 @@ function rowToSessionPrRef(r: typeof sessionPrRefs.$inferSelect): SessionPrRef {
     priority: r.priority,
     manuallyAdded: r.manuallyAdded,
     removedAt: r.removedAt,
+    associationSource: r.associationSource,
+    associationOrigin: r.associationOrigin,
   };
 }
 
-/** User edits share the same per-task queue as extraction and history recomputation. */
+/** UI, agents and remote callers share commit validation, without locking on network I/O. */
 export async function managePrRefs(
   sessionId: string,
   action: SessionPrRefAction | { action: 'list' },
   verifyPr: (ref: PrRef) => Promise<void>,
+  origin = 'ui',
 ): Promise<SessionPrRef[]> {
   const dbClient = getDbClient();
-  const release = await acquirePrWrite(dbClient, sessionId);
-  try {
-    const db = dbClient.drizzle;
-    const [session] = await db
-      .select({ source: sessions.source })
-      .from(sessions)
-      .where(eq(sessions.id, sessionId))
-      .limit(1);
-    if (!session) throwIpcError('NOT_FOUND', 'Session not found');
-    if (session.source === 'review' && action.action !== 'list')
-      throwIpcError('PERMISSION_DENIED', 'Review is read-only');
-    const rows = await db
-      .select()
-      .from(sessionPrRefs)
-      .where(eq(sessionPrRefs.sessionId, sessionId));
-    const nextPriority = rows.reduce((value, row) => Math.max(value, row.priority + 1), Date.now());
-    if (action.action === 'add') {
-      if (action.url.length > 2048) throwIpcError('INVALID_PARAMS', 'PR URL too long');
-      let url: URL;
-      try {
-        url = new URL(action.url);
-      } catch {
-        throwIpcError('INVALID_PARAMS', 'Invalid GitHub PR URL');
-      }
-      if (
-        url.protocol !== 'https:' ||
-        url.hostname !== 'github.com' ||
-        url.username ||
-        url.password ||
-        url.port ||
-        !/^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9]\d*(?:\/(?:files|commits|checks))?\/?$/.test(
-          url.pathname,
-        )
-      ) {
-        throwIpcError('INVALID_PARAMS', 'Invalid GitHub PR URL');
-      }
-      const ref = extractPrRefs(url.href)[0];
-      if (!ref) throwIpcError('INVALID_PARAMS', 'Invalid GitHub PR number');
-      if (
-        rows.some(
-          (r) => r.owner === ref.owner && r.repo === ref.repo && r.prNumber === ref.prNumber,
-        )
-      ) {
-        throwIpcError('ALREADY_EXISTS', 'PR already associated; restore it if removed');
-      }
-      await verifyPr(ref);
+  let verified: PrRef | undefined;
+  for (;;) {
+    const release = await acquirePrWrite(dbClient, sessionId);
+    let result: SessionPrRef[] | { verify: PrRef };
+    try {
+      if (getDbClient() !== dbClient) throwIpcError('PERMISSION_DENIED', 'Account changed');
+      // Re-read every row and validate the action on each pass. A concurrent
+      // removal or publication during verification must not be overwritten.
+      result = await managePrRefsWithinWrite(dbClient, sessionId, action, origin, verified);
+    } finally {
+      release();
+    }
+    if (Array.isArray(result)) return result;
+    // GitHub can take seconds. The shared PR lock must stay available to
+    // message reconciliation running inside the global persistence FIFO.
+    if (getDbClient() !== dbClient) throwIpcError('PERMISSION_DENIED', 'Account changed');
+    await verifyPr(result.verify);
+    if (getDbClient() !== dbClient) throwIpcError('PERMISSION_DENIED', 'Account changed');
+    verified = result.verify;
+  }
+}
+
+/** Caller holds the task PR write queue; only local reads and writes belong here. */
+async function managePrRefsWithinWrite(
+  dbClient: DbClient,
+  sessionId: string,
+  action: SessionPrRefAction | { action: 'list' },
+  origin: string,
+  verified: PrRef | undefined,
+): Promise<SessionPrRef[] | { verify: PrRef }> {
+  const isVerified = (ref: PrRef) =>
+    verified !== undefined && prStatusKey(verified) === prStatusKey(ref);
+  const db = dbClient.drizzle;
+  const [session] = await db
+    .select({ source: sessions.source })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  if (!session) throwIpcError('NOT_FOUND', 'Session not found');
+  if (session.source === 'review' && action.action !== 'list')
+    throwIpcError('PERMISSION_DENIED', 'Review is read-only');
+  const rows = await db
+    .select()
+    .from(sessionPrRefs)
+    .where(eq(sessionPrRefs.sessionId, sessionId));
+  const nextPriority = rows.reduce((value, row) => Math.max(value, row.priority + 1), Date.now());
+  if (action.action === 'add') {
+    if (action.url.length > 2048) throwIpcError('INVALID_PARAMS', 'PR URL too long');
+    let url: URL;
+    try {
+      url = new URL(action.url);
+    } catch {
+      throwIpcError('INVALID_PARAMS', 'Invalid GitHub PR URL');
+    }
+    if (
+      url.protocol !== 'https:' ||
+      url.username ||
+      url.password ||
+      url.port ||
+      !(
+        (url.hostname === 'github.com' &&
+          /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9]\d*(?:\/(?:files|commits|checks))?\/?$/.test(
+            url.pathname,
+          )) ||
+        /^(?:\/[A-Za-z0-9_.-]+){2,}\/-\/merge_requests\/[1-9]\d*\/?$/.test(url.pathname)
+      )
+    ) {
+      throwIpcError('INVALID_PARAMS', 'Invalid GitHub PR URL');
+    }
+    const ref = extractPrRefs(url.href)[0];
+    if (!ref) throwIpcError('INVALID_PARAMS', 'Invalid GitHub PR number');
+    const existing = rows.find((r) => prStatusKey(r) === prStatusKey(ref));
+    if (existing?.removedAt != null)
+      throwIpcError('ALREADY_EXISTS', 'Restore the removed PR first');
+    if (!existing || existing.associationSource === 'legacy' || !existing.manuallyAdded) {
+      if (!isVerified(ref)) return { verify: ref };
       if (getDbClient() !== dbClient) throwIpcError('PERMISSION_DENIED', 'Account changed');
       const now = Date.now();
-      await db.insert(sessionPrRefs).values({
-        id: createId(),
-        sessionId,
-        ...ref,
-        firstSeenAt: now,
-        lastSeenAt: now,
-        manuallyAdded: true,
-        priority: nextPriority,
-      });
-    } else if (action.action === 'reorder') {
-      const ids = action.ids;
-      const first = rows.find((row) => row.id === ids[0] && row.removedAt === null);
-      const group = first
-        ? rows.filter((row) => row.removedAt === null && row.pinned === first.pinned)
-        : [];
-      if (
-        !first ||
-        new Set(ids).size !== ids.length ||
-        ids.length !== group.length ||
-        !group.every((row) => ids.includes(row.id))
-      ) {
-        throwIpcError('INVALID_PARAMS', 'Reorder requires every active PR in one pin group');
-      }
-      if (getDbClient() !== dbClient) throwIpcError('PERMISSION_DENIED', 'Account changed');
-      // One statement is atomic for both local SQLite and the async DB client.
-      await db
-        .update(sessionPrRefs)
-        .set({
-          priority: sql`case ${sessionPrRefs.id} ${sql.join(
-            ids.map((id, index) => sql`when ${id} then ${ids.length - index}`),
-            sql` `,
-          )} end`,
+      if (existing) {
+        await db
+          .update(sessionPrRefs)
+          .set({ associationSource: 'explicit', associationOrigin: origin, manuallyAdded: true })
+          .where(eq(sessionPrRefs.id, existing.id));
+      } else
+        await db.insert(sessionPrRefs).values({
+          id: createId(),
+          sessionId,
+          ...ref,
+          firstSeenAt: now,
+          lastSeenAt: now,
           manuallyAdded: true,
-        })
-        .where(and(eq(sessionPrRefs.sessionId, sessionId), inArray(sessionPrRefs.id, ids)));
-    } else if (action.action !== 'list') {
-      const row = rows.find((r) => r.id === action.id);
-      if (!row) throwIpcError('NOT_FOUND', 'PR association not found');
-      if (
-        action.action === 'pin' &&
-        !row.pinned &&
-        rows.filter((r) => r.pinned && r.removedAt === null).length >= 3
-      ) {
-        throwIpcError('INVALID_PARAMS', 'At most three pinned PRs');
-      }
-      if (row.removedAt !== null && action.action !== 'restore')
-        throwIpcError('INVALID_PARAMS', 'Restore the PR first');
-      const patch =
-        action.action === 'remove'
-          ? { removedAt: Date.now(), pinned: false }
-          : action.action === 'restore'
-            ? { removedAt: null, manuallyAdded: true }
-            : { pinned: action.action === 'pin', manuallyAdded: true };
-      if (getDbClient() !== dbClient) throwIpcError('PERMISSION_DENIED', 'Account changed');
-      await db.update(sessionPrRefs).set(patch).where(eq(sessionPrRefs.id, row.id));
+          associationSource: 'explicit',
+          associationOrigin: origin,
+          priority: nextPriority,
+        });
     }
-    const result = await db
-      .select()
-      .from(sessionPrRefs)
-      .where(eq(sessionPrRefs.sessionId, sessionId))
-      .orderBy(
-        desc(sessionPrRefs.pinned),
-        desc(sessionPrRefs.priority),
-        desc(sessionPrRefs.lastSeenAt),
-      );
-    if (action.action !== 'list') onRefsChanged?.(sessionId);
-    return result.map(rowToSessionPrRef);
-  } finally {
-    release();
+  } else if (action.action === 'reorder') {
+    const ids = action.ids;
+    const first = rows.find((row) => row.id === ids[0] && row.removedAt === null);
+    const group = first
+      ? rows.filter(
+          (row) =>
+            row.removedAt === null &&
+            row.associationSource === 'explicit' &&
+            row.pinned === first.pinned,
+        )
+      : [];
+    if (
+      !first ||
+      new Set(ids).size !== ids.length ||
+      ids.length !== group.length ||
+      !group.every((row) => ids.includes(row.id))
+    ) {
+      throwIpcError('INVALID_PARAMS', 'Reorder requires every active PR in one pin group');
+    }
+    if (getDbClient() !== dbClient) throwIpcError('PERMISSION_DENIED', 'Account changed');
+    // One statement is atomic for both local SQLite and the async DB client.
+    await db
+      .update(sessionPrRefs)
+      .set({
+        priority: sql`case ${sessionPrRefs.id} ${sql.join(
+          ids.map((id, index) => sql`when ${id} then ${ids.length - index}`),
+          sql` `,
+        )} end`,
+        manuallyAdded: true,
+        associationSource: 'explicit',
+        associationOrigin: origin,
+      })
+      .where(and(eq(sessionPrRefs.sessionId, sessionId), inArray(sessionPrRefs.id, ids)));
+  } else if (action.action !== 'list') {
+    const row = rows.find((r) => r.id === action.id);
+    if (!row) throwIpcError('NOT_FOUND', 'PR association not found');
+    if (
+      action.action === 'pin' &&
+      !row.pinned &&
+      rows.filter((r) => r.pinned && r.removedAt === null && r.associationSource === 'explicit')
+        .length >= 3
+    ) {
+      throwIpcError('INVALID_PARAMS', 'At most three pinned PRs');
+    }
+    if (row.removedAt !== null && !['restore', 'remove'].includes(action.action))
+      throwIpcError('INVALID_PARAMS', 'Restore the PR first');
+    if (['restore', 'pin', 'unpin'].includes(action.action) && row.associationSource === 'legacy' && !isVerified(row))
+      return { verify: row };
+    const patch =
+      action.action === 'remove'
+        ? { removedAt: row.removedAt ?? Date.now(), pinned: false }
+        : action.action === 'restore'
+          ? {
+              removedAt: null,
+              manuallyAdded: true,
+              associationSource: 'explicit',
+              associationOrigin: origin,
+            }
+          : {
+              pinned: action.action === 'pin',
+              manuallyAdded: true,
+              associationSource: 'explicit',
+              associationOrigin: origin,
+            };
+    if (getDbClient() !== dbClient) throwIpcError('PERMISSION_DENIED', 'Account changed');
+    await db.update(sessionPrRefs).set(patch).where(eq(sessionPrRefs.id, row.id));
   }
+  const result = await db
+    .select()
+    .from(sessionPrRefs)
+    .where(eq(sessionPrRefs.sessionId, sessionId))
+    .orderBy(
+      desc(sessionPrRefs.pinned),
+      desc(sessionPrRefs.priority),
+      desc(sessionPrRefs.lastSeenAt),
+    );
+  if (getDbClient() !== dbClient) throwIpcError('PERMISSION_DENIED', 'Account changed');
+  if (action.action !== 'list') onRefsChanged?.(sessionId);
+  return result.map(rowToSessionPrRef);
 }

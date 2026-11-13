@@ -11,6 +11,7 @@ import {
   getMobileAuthOwner,
   isMobileAuthOwnerCurrent,
 } from "@/auth/authOwnerGeneration";
+import { useRemoteAgentCatalogs } from '@/session/useRemoteAgentCatalogs';
 import { ModelPickerSheet } from "@/session/ModelPickerSheet";
 import type { MobileModelMemoryAccessors } from "@/session/draftModelMemory";
 import type { MobileModelConfiguration } from "@/session/unifiedMobileModels";
@@ -46,6 +47,12 @@ export function PluginModelPicker({
       fast: request.initial.fastMode,
     } : null,
   );
+  const [agentDeviceId, setAgentDeviceId] = useState<string | null>(request.initial?.agentDeviceId ?? null);
+  const remoteCatalogs = useRemoteAgentCatalogs({ enabled: request.allowRemote === true, controlledDeviceId: deviceId,
+    keepDeviceIds: agentDeviceId ? [agentDeviceId] : [] });
+  const remoteSupported = request.allowRemote
+    ? { catalogs: remoteCatalogs, selectedDeviceId: agentDeviceId, hostDeviceId: deviceId }
+    : undefined;
   const modelMemory = useRequestModelMemory();
   const owner = useRef(getMobileAuthOwner()).current,
     alive = useRef(true),
@@ -126,12 +133,15 @@ export function PluginModelPicker({
             throw new Error("CAPABILITIES_UNAVAILABLE");
           return result;
         },
-        onConfigure: async (value) => {
+        remote: remoteSupported,
+        onConfigure: async (value, source) => {
+          setAgentDeviceId(source?.deviceId ?? null);
           setSelection(value);
           return true;
         },
-        onSelect: (value) =>
+        onSelect: (value, source) =>
           answer({
+            ...(source?.deviceId ? { agentDeviceId: source.deviceId } : {}),
             agentKind: value.agent === "claude-code" ? "cc" : value.agent,
             providerId: value.providerId,
             model: value.modelId,

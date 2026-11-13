@@ -1,14 +1,12 @@
 import { isNetworkishErrorMessage, isOverloadErrorMessage } from '@cindy/maker-core';
 import { matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
-import type { InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
+import { isRemoteAgentRouteLostReason, type InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
 
 /** A failed provider may be replaced, even when retrying that provider is forbidden. */
 export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals): boolean {
-  // Account/budget exhaustion is not a property of the failed candidate: every
-  // candidate on the same account fails the same way, so switching or resuming
-  // only hides the real cause. Reuse the shared deterministic signal that the
-  // Codex terminal retry, Cindy AI search and the error banner already honour.
-  if (matchesDeterministicUsageExhaustionText(signals.message ?? '')) return false;
+  // The agent serving this route on another computer is gone; another candidate route can still run the
+  // turn. An owner disconnect is `user-revoked`, not this.
+  if (isRemoteAgentRouteLostReason(signals.reason)) return true;
   const reason = signals.reason ?? '';
   // Explicit product/control failures must never be reinterpreted from their text.
   if (reason && ![
@@ -16,6 +14,11 @@ export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals):
     'provider_auth_or_access', 'provider_quota_limit', 'provider_rate_limit',
     'provider_server_error', 'model_unavailable', 'user_model_access_denied', 'agent-start-failed',
   ].includes(reason)) return false;
+  // Exhaustion forbids retrying this account, not trying the user's configured
+  // backups. The caller requires a successful route change before resuming.
+  if (signals.codexErrorInfo === 'sessionBudgetExceeded') return false;
+  if (signals.usageLimit === true || signals.codexErrorInfo === 'usageLimitExceeded'
+      || matchesDeterministicUsageExhaustionText(signals.message ?? '')) return true;
   if (reason && reason !== 'turn-failed') return true;
   const tag = signals.sdkError ?? '';
   if (['authentication_failed', 'authentication_error', 'rate_limit', 'server_error', 'billing_error',
@@ -37,9 +40,17 @@ export interface RuntimeFallbackResult<T> {
   outcome: 'unchanged' | 'switched' | 'exhausted' | 'failed' | 'superseded';
 }
 
+/**
+ * `unchanged` under a required route change means no other route exists at all
+ * (single-route chain or explicit routine model): an ordinarily retryable failure
+ * then keeps the same-route resume an ordinary task would get. `exhausted` means
+ * other routes were configured and tried, so the failed route is not retried.
+ */
 export function canResumeAfterRuntimeFallback(
   requireRouteChange: boolean,
   result: RuntimeFallbackResult<unknown>,
+  sameRouteRetryable = false,
 ): boolean {
-  return result.outcome !== 'superseded' && (!requireRouteChange || result.outcome === 'switched');
+  return result.outcome !== 'superseded' && (!requireRouteChange || result.outcome === 'switched'
+    || (sameRouteRetryable && result.outcome === 'unchanged'));
 }

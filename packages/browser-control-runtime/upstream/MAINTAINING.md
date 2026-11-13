@@ -9,6 +9,20 @@
 
 默认行为:启动**一个专属、持久、headed 的自动化浏览器**(profile 名 "Cindy"),登录态长期保留,与用户日常 Chrome 互不影响。
 
+headed 启动不显示空窗口：macOS 用 `--silent-launch` 并显式选择同一个 Chrome 配置目录，
+Windows / Linux 保留 `--no-startup-window`；headless 不加这两种参数。macOS 本身允许无窗口应用继续待命，
+但 `--no-startup-window` 与远程调试同时使用会额外注册 `REMOTE_DEBUGGING` 保活，
+导致系统正常退出请求已接受、进程却不结束。`--silent-launch` 同样抑制启动窗口，
+并保留正常退出；不要把它改回 `--no-startup-window`。只换参数仍不够：有上次打开窗口的记录时，
+Chrome 会延迟激活首次通过 CDP 打开的后台标签。必须同时传 `--profile-directory`，值沿用
+受管目录 `Local State` 的 `profile.last_used`（缺失或损坏时为 `Default`），避免进入多配置
+恢复后的激活路径；宿主只读该选择，不删除登录数据。依据
+[Chromium 156 的启动判据](https://github.com/chromium/chromium/blob/156.0.8078.80/chrome/browser/ui/startup/startup_browser_creator.cc)
+与[调试保活](https://github.com/chromium/chromium/blob/156.0.8078.80/chrome/browser/devtools/chrome_devtools_manager_delegate.cc)，
+配置指定后的行为见 [CreateInitialProfile](https://github.com/chromium/chromium/blob/156.0.8078.80/chrome/browser/chrome_browser_main.cc)。
+修改入口为 `sync.mjs` 的 LOCAL_PATCH，参数合同回归在
+`src/__tests__/chrome-launch-proxy.test.ts`；实际退出与焦点需用独立空白 profile 验证。
+
 登录持久性还依赖两点：host 的 `buildManagedConfig` 在两种 profile、直连及代理路径都传
 `--restore-last-session`，否则 Chrome 正常退出后不会恢复会话 Cookie（仅有固定目录不够）；
 退出必须等待子进程的 `exitCode` / `signalCode`，不能把 `ChildProcess.killed`（已发信号）
@@ -87,7 +101,7 @@ host 在 `browser-managed-config.ts` 用 `buildManagedConfig({proxyServer?})` �
 | 2 | 数据目录落到 `~/.xdt-maker` 而非 Electron `userData` | Vite 把 `@cindy/browser-control-runtime` `require()` 进 main 入口 chunk 顶部,`CONFIG_DIR` 在 `index.ts` 设置 `XDT_BROWSER_RUNTIME_DIR` **之前**就求值成 `~/.xdt-maker`。从包入口 barrel 引入刷新函数还会提前求值 `paths.ts`,`DEFAULT_INBOUND_MEDIA_DIR` 冻在旧根,随后 `saveMediaBuffer` 写到刷新后的目录、上传校验按旧 inbound root 拒绝 | `index.ts` 在最后一次 `app.setPath('userData')` 之后 pin env,并从 **`@cindy/browser-control-runtime/config-dir`** 调用 `refreshBrowserRuntimeConfigDir()`(不要从包入口 barrel 引入,那会把 generated `paths.ts` 拉进入口 chunk)。单测 `browserRuntimeDirStartup.test.ts` 锁顺序与 import 路径。`browser.ts` 顶部 `import './browser-runtime-env.js'` 仍是 vitest/非打包路径的兜底,别重排 |
 | 3 | `profile must define cdpPort or cdpUrl` | vendored 只给"名叫上游默认名"的 profile 自动分配 CDP 端口;自定义名的托管 profile 不会 | 自定义托管 profile 必须显式给 `cdpPort`(现用 18800,vendored 端口段起点) |
 | 4 | 明明给了中性/白色,Chrome 工具栏却是浑浊蓝绿 | Chrome 把 profile `color` 当 **Material-You 种子色**生成色板,不是字面色;中性/近黑种子被它和成灰蓝 | 用**高饱和**色做种子(现 `#00D9C5` TapTap teal);想要纯灰度做不到(灰度开关在不可改的 vendored decorate 里) |
-| 5 | 「打开 Agent 专用浏览器」没有窗口或每次开两个标签页 | headed Chrome 为避免 AI 自动读取抢焦点,以 `--no-startup-window` 启动;冷启动 `GET /tabs` 在 CDP 未就绪时也会返回 empty | `openBrowserForLogin` 先等 `running:true`:已有 tab 就 `focus`,没有 tab 才 `open about:blank` 且设 `background:false`,随后 `focus`。`running:false` 时绝不 `open`,避免冷启动竞态 |
+| 5 | 「打开 Agent 专用浏览器」没有窗口或每次开两个标签页 | headed Chrome 为避免 AI 自动读取抢焦点,以静默无窗口方式启动(平台参数见 §1);冷启动 `GET /tabs` 在 CDP 未就绪时也会返回 empty | `openBrowserForLogin` 先等 `running:true`:已有 tab 就 `focus`,没有 tab 才 `open about:blank` 且设 `background:false`,随后 `focus`。`running:false` 时绝不 `open`,避免冷启动竞态 |
 | 6 | profile 没有自定义头像 | Chrome 只认内置头像 / Google 账号头像,不能塞本地图 | 已知限制,接受;别为它改 vendored decorate |
 | 7 | 改了 `browser-workflow.md` 但 agent 还按旧文案 | 这份 md 经 `?raw` 静态打进**进程内** MCP server;且 agent 只在调 `list_tools` 时读 rules | 改完要 **(a) 重启桌面端**(main/package 改动不热更)+ **(b) 开新 agent 会话**(老会话 context 里是旧 rules) |
 | 8 | 远端 Codex 会话里浏览器不可用 | lizi MCP 桥接只对**本地** Codex 生效(见 §7) | 不是 bug;所有 `lizi_*` 工具对远端 Codex 都一样 |
@@ -97,6 +111,7 @@ host 在 `browser-managed-config.ts` 用 `buildManagedConfig({proxyServer?})` �
 | 12 | Chrome 右上角 chip 显示 `Cindy-real` / 源 profile 名 | 磁盘 key 必须是 `Cindy-real`;vendored decorate 默认用 `profile.name`(map key)。host 只改 Local State 不够,下次 launch 会盖回去 | `profiles[Cindy-real].displayName = "Cindy"`;`launchOpenClawChrome` 用 `displayName ?? name` decorate。快照写入时也把 `info_cache.Default.name` 写成 `Cindy` |
 | 13 | 已有完全磁盘访问仍弹「需要完全磁盘访问权限」 | 第一次 enable 在 macOS 无条件跑 `guideFullDiskAccessAfterReadDenied` | 同意拷贝之后先 `probeSourceRead`(只 open 源 Local State / Cookies,不拷贝、不回路径);`readable: true` 就跳过。真正快照 `REAL_PROFILE_READ_DENIED` 仍弹。不自动打开系统设置 |
 | 14 | macOS 上用户在别的 App 点链接，打开的是 Agent 浏览器而不是自己的浏览器 | Agent 浏览器优先选用系统默认浏览器的同一个 App，只换 `--user-data-dir`；LaunchServices 按 bundle id 投递打开链接事件，会落到任意一个同 App 实例 | host 的 `ExternalLinkHandoff`（`browser-backend/external-link-handoff.ts`，仅 macOS）在浏览器级 `Fetch.enable` 只暂停 Document 请求：新标签无 opener、创建时即带 http(s) URL、首个请求无 Referer，且当时没有 Agent `open` 在途（含 1 秒余量），即判为外部链接——先 `open -n -a <App> --args <url>`（新进程经 Chrome 单例转交给用户的默认 profile 实例，未运行则启动它），成功后 `failRequest` + `closeTarget`，请求从未发出，一次性登录链接不会被用掉；转交失败则放行。⌘ 点击靠 Referer、网页弹窗靠 opener 排除。新增建标签的 action 必须同样计入 `trackTabOpen`，否则 Agent 标签会被当成外部链接转走 |
+| 15 | `navigate` 永远不返回,20 秒导航超时不起作用(Tailscale 文档、react.dev 上点过一次站内链接后必现) | 页面里跨站 iframe 中的 worker(如 reCAPTCHA)随 iframe 销毁后,`playwright-core` < 1.63 仍把它的会话留在网络管理器里;导航守卫每次 `page.route` / `page.unroute` 都会给这个已不存在的会话发 `Network.setCacheDisabled`,浏览器回的错误不带会话编号,Playwright 对不上挂起的命令,等待永不结束 | `playwright-core` 保持 ≥ 1.63.0(三处 `package.json` 同步)。**不要**给 `route` / `unroute` 加超时绕过:卸载等待被放弃后,Playwright 分发层仍认为拦截在位,下一次 `route` 不再真正装上,导航守卫会隔一次失效一次。回归:`node --import tsx scripts/eval-browser-tasks.mjs --check` |
 
 ### 4.1 per-start 代理不变量
 
@@ -250,7 +265,7 @@ pnpm --filter @cindy/browser-control-runtime test    # 契约 + SSRF guard
 - 第三个 `BackendKind` `user-browser`:`apps/desktop/src/main/mcp-integrations/browser-backend/user-browser-backend.ts` 把 `BrowserControlRequest` 翻译成随包浏览器扩展的页面作业,经 `cindy-brain/browserExtensionSlot.ts` 持有的桥接(`main/browser-extension/bridge.ts`,从 Cindy Chrome 插件的接线进程原样迁入,线协议 `cindy-browser-extension/3` 不变,已装扩展无需更新)投递到用户正在使用的 Chrome / Edge。
 - 设置 →「自动操作」三选一:专用浏览器(默认)/ 侧边栏 / 我的浏览器;选哪一个是**默认**目标,Agent 的 `setBackend` 仍是同一个全局持久选择。没有声明 `browserExtension.pageControl` 的插件时该目标 `status.ready === false`,健康面板报 `extension-disconnected`,不提供恢复按钮。
 - 能力边界由扩展版本决定(`USER_BROWSER_PARITY_VERSION`,当前 0.4.43):
-  - 0.4.43 起与专用浏览器对齐:截图(含整页、元素、后台标签页)、evaluate、requests、上传、对话框、console、PDF、focus、关闭、坐标与拖拽、站点配方的协议会话都可用;调试接口(`chrome.debugger`)是可选权限,只在需要的动作里临时接上、用完断开,第一次用到时由扩展弹出授权页。
+  - 0.4.43 起与专用浏览器对齐:截图(只限可视区域)、evaluate、requests、上传(超过约 30 MB 由 0.4.61 起分块,最大 1 GB)、对话框、console、focus、关闭、坐标与拖拽可用;PDF、整页/元素/后台标签页截图和站点配方的协议会话需要 Chrome 调试接口(`chrome.debugger`),而 Chrome 不允许把它声明为可选权限(`chrome.permissions.request` 直接拒绝,2026-11-01 实测),发布版扩展没有它,能力表如实报 `pdf: false`、`rawProtocol: false`。不要恢复「首次用到时弹授权页」的流程。
   - 更旧的扩展只有基础能力(tabs / open / navigate / snapshot / extract / act),由 `deps.backendCapabilities()`(`userBrowserCapabilities`)让 MCP 层在派发前拒绝其余动作,错误文案要求模型告知用户而不是自行切换。没有任何连接时按完整能力报,具体断开由后端按作业报告。
   - extract 与登录墙检测走 PR #7432 的声明式 `domRead`,不需要任意脚本。
 - 寻址:新版扩展(≥ 0.4.43)按 tabId 寻址,后端维护 targetId ↔ {连接, 浏览器启动标识, tabId, url};targetId 带启动标识,浏览器重启后旧句柄不再解析。旧版扩展仍按精确 URL 寻址:作业前用 `tabs` 核对,URL 变化报 `PAGE_CHANGED` 并刷新记录,不猜新页。

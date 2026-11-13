@@ -67,6 +67,7 @@ import {
 } from '../../../shared/sessionImport';
 import { normalizeWorkingDirForGrouping } from '../../../shared/workingDir';
 import { SessionShareImportWizard } from './SessionShareImportWizard';
+import { SettingsPageHeader } from '@/components/ui/settings-rows';
 
 const MB = 1024 * 1024;
 /** 结果里「可以继续」超过这么多条时折叠成一行。 */
@@ -98,7 +99,7 @@ function isoOf(ms: number): string | undefined {
   return ms > 0 ? new Date(ms).toISOString() : undefined;
 }
 
-function useFormatSize(): (bytes: number) => string {
+export function useFormatSize(): (bytes: number) => string {
   const { i18n } = useTranslation();
   return useCallback(
     (bytes: number) => {
@@ -111,7 +112,7 @@ function useFormatSize(): (bytes: number) => string {
 }
 
 /** 大致时间：按约 12 MB/s 的读写速度加每条任务的固定开销估算，至少 1 分钟。 */
-function estimateMinutes(count: number, bytes: number): number {
+export function estimateMinutes(count: number, bytes: number): number {
   return Math.max(1, Math.ceil((bytes / (12 * MB) + count * 0.6) / 60));
 }
 
@@ -238,14 +239,6 @@ export function SessionImportSection() {
     };
   }, []);
 
-  // 导入结束：侧栏刷新出新任务。
-  const finishedRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!job || job.status === 'running' || finishedRef.current === job.requestId) return;
-    finishedRef.current = job.requestId;
-    emitRefresh();
-  }, [job]);
-
   const projectKey = useMemo(() => (projectParam ? platformKey(projectParam) : null), [projectParam]);
   const projectName = useMemo(() => {
     if (!projectParam) return '';
@@ -317,7 +310,6 @@ export function SessionImportSection() {
     try {
       const view = await window.electronAPI.localDb.sessionImport.start(keys);
       jobIdRef.current = view.requestId;
-      finishedRef.current = null;
       setJob(view);
       setSelected(new Set());
     } catch (err) {
@@ -476,36 +468,34 @@ export function SessionImportSection() {
   }
 
   return (
-    <div className="flex h-full min-h-0 w-full min-w-0 flex-col gap-4">
-      <header className="flex shrink-0 items-end justify-between gap-6">
-        <div className="flex min-w-0 max-w-[560px] flex-col gap-1">
-          <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-            {t('settings.sessionImport.title')}
-          </h2>
-          <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-            {t('settings.sessionImport.description')}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2 select-none">
-          <Button variant="secondary" size="lg" type="button" onClick={() => setShareWizardOpen(true)}>
-            <FileUp size={15} />
-            {t('sessionShare.import.entryButton')}
-          </Button>
-          <Tip text={t('settings.sessionImport.rescan')}>
-            <Button
-              variant="secondary"
-              size="lg"
-              type="button"
-              compact
-              aria-label={t('settings.sessionImport.rescan')}
-              disabled={scanning || !!job}
-              onClick={() => void runScan(true)}
-              className="w-9 px-0"
-            >
-              <RefreshCw size={15} className={cn(scanning && 'animate-spin')} />
-            </Button>
-          </Tip>
-        </div>
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-col gap-6">
+      <header className="shrink-0">
+        <SettingsPageHeader
+          title={t('settings.sessionImport.title')}
+          description={t('settings.sessionImport.description')}
+          action={
+            <div className="flex shrink-0 items-center gap-2 select-none">
+              <Button variant="secondary" size="lg" type="button" onClick={() => setShareWizardOpen(true)}>
+                <FileUp size={15} />
+                {t('sessionShare.import.entryButton')}
+              </Button>
+              <Tip text={t('settings.sessionImport.rescan')}>
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  type="button"
+                  compact
+                  aria-label={t('settings.sessionImport.rescan')}
+                  disabled={scanning || !!job}
+                  onClick={() => void runScan(true)}
+                  className="w-9 px-0"
+                >
+                  <RefreshCw size={15} className={cn(scanning && 'animate-spin')} />
+                </Button>
+              </Tip>
+            </div>
+          }
+        />
       </header>
 
       {shareWizardOpen && <SessionShareImportWizard open={shareWizardOpen} onOpenChange={setShareWizardOpen} />}

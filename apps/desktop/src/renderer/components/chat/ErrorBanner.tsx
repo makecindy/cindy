@@ -1,5 +1,8 @@
+import { localizeOutputLimit } from './outputLimitI18n';
+import { type OutputLimitDetails } from '@cindy/maker-shared';
 import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
 import { remoteAgentLimitErrorKey } from '../../../shared/remoteAgentLimits';
+import { sharedTaskRecoveryFor } from '../../../shared/sharedTaskRecovery';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
 import { Button } from '@/components/ui/button';
@@ -22,6 +25,8 @@ import { useProviders } from '@/hooks/useProviders';
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { providerDisplayNameById } from '@/lib/providerDisplayName';
 import { isCodexResumeNotReadyProjectionError } from '@cindy/maker-shared/agent-input-projection';
 import {
   canOfferCodexHistoryRecovery,
@@ -29,10 +34,12 @@ import {
   isResponsesLiteParallelToolCallsError,
   isRemoteCompactEncryptedContentError,
   parseAgentErrorCode,
+  localizeSubscriptionAccountError,
   requiresAgentErrorConfigurationChange,
+  isRemoteAgentResumeRejectedError,
 } from '@cindy/maker-shared/error-redaction';
 import { chatRemoteErrorGuidanceKey } from '@/lib/autoReviewUnavailableGuidance';
-import { AlertCircle, Check, Split, Play, RotateCcw, RefreshCw, Timer, Wallet } from 'lucide-react';
+import { AlertCircle, ArrowRightLeft, Check, Split, Play, RotateCcw, RefreshCw, Timer, Wallet } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
@@ -68,12 +75,14 @@ import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 
 interface ErrorBannerProps {
+  onChooseComputer?: () => void;
   error: string;
   /** terminal error 的稳定 reason key。'silent-stop-exhausted'(silent-stop 自动
    *  续跑额度耗尽)时隐藏 Retry、改显「继续」按钮(onSilentStopContinue)。 */
   errorReason?: string | null;
   /** Structured details for a tool-loop terminal error (optional for legacy rows). */
   toolLoop?: ToolLoopErrorDetails | null;
+  outputLimit?: OutputLimitDetails | null;
   retryText?: string | null;
   onRetry: (text: string) => void;
   /** 已停止且有任务上下文，但无原始恢复记录：发送现有隐藏续跑指令。 */
@@ -87,6 +96,11 @@ interface ErrorBannerProps {
   usageLimitWait?: { resumeAt: number } | null;
   /** 取消自动继续(错误与重试保留)。 */
   onCancelUsageLimitWait?: () => void;
+  /**
+   * 撞配额时模型组提议换到同一条路线里的下一个来源(model-groups.md §6.1)。onSwitch 走选择器同一条换模型
+   * 路径，返回是否真的换成了；换成了再走本横幅原有的重试 / 继续。没有重试入口时不显示。
+   */
+  modelGroupSwitch?: { label: string; onSwitch: () => Promise<boolean> } | null;
   /** 已识别的账号用量限制及恢复时间；用于替换上游 429 JSON 为可读提示。 */
   usageLimitRecovery?: UsageLimitRecoveryHint | null;
   /** 当前 session 的 agent kind。codex 的 401 / Missing bearer 必须 hide Retry,
@@ -94,7 +108,7 @@ interface ErrorBannerProps {
   agentKind?: 'cc' | 'codex' | 'pi';
   agentDeviceId?: string | null;
   /** 当前 session 的远端 host id;非空 + agentKind='codex' 时显「同步登录态」按钮。
-   *  本地 codex 401 仍 hide Retry, 但只能提示用户去自己 fix login (没有 sync 入口)。 */
+   *  本机认证失败通过对应连接的设置恢复，不提供远端同步入口。 */
   remoteHostId?: string;
   /** device-link 被控端设备 id。非空表示 turn 不在本机执行，本机认证恢复入口必须禁用。 */
   deviceLinkDeviceId?: string | null;
@@ -136,10 +150,23 @@ interface ErrorBannerProps {
   className?: string;
 }
 
+function OpenAiConnectionSettingsAction({ providerId }: { providerId: string }) {
+  const navigate = useNavigate();
+  const { t } = useTranslation();
+  return (
+    <Button size="sm" compact type="button" data-split-pane-route-action=""
+      onClick={() => navigate(`/settings?tab=providers&connect=${encodeURIComponent(providerId)}`)}>
+      {t('logic.confirm.goToSettings')}
+    </Button>
+  );
+}
+
 export function ErrorBanner({
+  onChooseComputer,
   error,
   errorReason,
   toolLoop,
+  outputLimit,
   retryText,
   onRetry,
   onContinueAfterError,
@@ -149,6 +176,7 @@ export function ErrorBanner({
   usageLimitWait,
   onCancelUsageLimitWait,
   usageLimitRecovery,
+  modelGroupSwitch,
   agentKind,
   remoteHostId,
   agentDeviceId,
@@ -213,10 +241,11 @@ export function ErrorBanner({
   // SSH 与 device-link 是两种互斥的远端来源，但都不能读取或修复控制端本机认证。
   // 保留具体 id 而不是只传 boolean，SSH Codex 仍可使用既有的定向凭证同步入口。
   const isAnyRemoteSession = Boolean(remoteHostId) || Boolean(deviceLinkDeviceId);
+  const isLocalAuthSession = !isAnyRemoteSession && !agentDeviceId;
   // 本会话 codex app-server 的 spawn 鉴权注入(oauth-bearer = 走订阅 / env-key = 走网关 / provider-oauth = proxy 注入供应商 OAuth)。
   // 默认 'env-key'(保守):真值未回来前不会误命中 OAuth 引导分支而短暂 hide Retry。
   const { authInjection: codexAuthInjection } = useCodexRuntimeRoute({
-    enabled: agentKind === 'codex' && !isAnyRemoteSession,
+    enabled: agentKind === 'codex' && isLocalAuthSession,
   });
   const [syncing, setSyncing] = useState(false);
   // 已同步标志:点击同步成功后置 true, 让 displayError 切换成"已同步,请重试"提示,
@@ -267,32 +296,34 @@ export function ErrorBanner({
   // Codex 401 auth-missing detection 分三层:
   //  - isCodexAuthMissing: codex session + 401/Missing bearer pattern。
   //  - isCodexRemoteAuthMissing: 远端 codex + 上面命中 → 显「同步登录态」按钮。
-  //  - isCodexLocalOAuthAuthMissing: 本地 codex + oauth-bearer spawn(走订阅) + 401 → hide
-  //    Retry + 引导 user codex login。**env-key spawn(走网关)不命中**: LiteLLM 网关 token
-  //    失效由 makerChatStore 重新拉取 model-access 凭据后自动重试; 强行 hide Retry +
-  //    显 "codex login" 反而误导。
+  //  - isCodexLocalOAuthAuthMissing: 本机 OpenAI 来源的 401 → 隐藏 Retry，打开该连接设置。
+  //    显式来源优先于 runtime fallback；没有来源记录时只对 oauth-bearer 引导登录，
+  //    避免把 env-key 网关错误误判为订阅问题。
   // 父组件 (CCAgentSessionView) 必须只对 codex session 传 agentKind='codex' +
   // remoteHostId; Claude session 的 401 走默认 retry 流程不应被吞。
   // xAI / 自定义来源的真实凭证由 provider-oauth proxy 注入；显式 providerId 是权威来源，
   // 不能因为错误文案碰巧含 token_revoked 就引导用户去修 ChatGPT 登录态。历史无来源
   // 会话仍允许从非 provider-oauth runtime + 非 XD/xAI 前缀推断 OpenAI，守住旧数据兼容。
   const normalizedProviderId = providerId?.trim() || null;
+  // Recovery belongs to the source that failed, even after the user switches models.
+  const authProviderId = errorSourceProviderId?.trim() || normalizedProviderId;
   // Cindy AI 网关的余额耗尽:钱花完那一刻是用户最需要计费页的时刻,给一条能就地
   // 跳过去的出口。判定绑定**错误来源** provider(errorSourceProviderId,错误发生
   // 时刻的快照),不用会话当前的 providerId —— 报错后切换 provider / 恢复历史错误
-  // 时两者会分叉,用当前值会误判来源。来源不明确(null)或非 xd 的错误一个字都不改
-  // (保持原始上游文案与既有交互):没有可跳的余额页时,给按钮点不出结果比不给更糟。
+  // 时两者会分叉,用当前值会误判来源。来源不明确(null)或非 xd 时不提供 Cindy
+  // 充值入口；余额摘要仍可使用供应商通用提示。
+  const isQuotaExhausted = isQuotaExhaustedErrorMessage(error);
   const isGatewayQuotaExhausted =
     (errorSourceProviderId?.trim() || null) === 'xd' &&
     Boolean(onViewBalance) &&
-    isQuotaExhaustedErrorMessage(error);
+    isQuotaExhausted;
   const { providers: errorProviders, refetch: refreshErrorProviders } = useProviders();
-  const selectedOpenAiAccount = errorProviders.find((provider) => provider.id === normalizedProviderId);
+  const selectedOpenAiAccount = errorProviders.find((provider) => provider.id === authProviderId);
   const independentOpenAiAccount = selectedOpenAiAccount?.auth.native === 'codex';
   const [accountReconnecting, setAccountReconnecting] = useState(false);
-  const hasExplicitOpenAiProvider = normalizedProviderId === 'openai' || isOpenAiSubscriptionProvider(selectedOpenAiAccount);
+  const hasExplicitOpenAiProvider = authProviderId === 'openai' || isOpenAiSubscriptionProvider(selectedOpenAiAccount);
   const hasImplicitOpenAiProvider =
-    normalizedProviderId === null &&
+    authProviderId === null &&
     codexAuthInjection !== 'provider-oauth' &&
     !isCodexGatewayWireModel(modelId) &&
     !modelId?.startsWith('xai/');
@@ -304,20 +335,22 @@ export function ErrorBanner({
     agentKind === 'codex' && isCodexOpenAiSource && /\b401\b|Missing bearer/i.test(error);
   const isCodexRemoteAuthMissing = isCodexAuthMissing && !!remoteHostId;
   const isCodexLocalOAuthAuthMissing =
-    isCodexAuthMissing && !isAnyRemoteSession && codexAuthInjection === 'oauth-bearer';
+    isCodexAuthMissing && isLocalAuthSession &&
+    (hasExplicitOpenAiProvider || codexAuthInjection === 'oauth-bearer');
   // 明确的 OpenAI token/session invalidation 不可直接 Retry。Codex 路径不再要求当前
   // runtime route 仍是 oauth-bearer：invalidate 会先收割旧 host 并把 route 广播成
   // env-key，再把错误渲染到会话；继续依赖 route 会把真实失效原因漏成原始英文报错。
   // Claude 的 chatgpt/* 模型复用同一份连接，bridge 鉴权不可用时也走同一恢复入口。
   const isClaudeChatgptBridgeModel =
     (agentKind === 'cc' || agentKind === 'pi') &&
-    (hasExplicitOpenAiProvider || normalizedProviderId === null) &&
+    (hasExplicitOpenAiProvider || authProviderId === null) &&
     !!modelId &&
     modelId.startsWith('chatgpt/');
   const isOpenAiConnectionExpired =
-    !isAnyRemoteSession &&
+    isLocalAuthSession &&
     ((isCodexOpenAiSource && isCodexSessionExpiredError(error)) ||
       (isClaudeChatgptBridgeModel && isCodexSessionExpiredError(error)));
+  const isOpenAiAuthFailure = isOpenAiConnectionExpired || isCodexLocalOAuthAuthMissing;
   // 以共享的 Codex OAuth 状态机为唯一真相源：设置页、横幅或其它入口完成重连时，
   // AUTH_STATE_CHANGED 都会让现存横幅同步恢复 Retry；后续失效 / 登出广播也会撤销恢复态。
   // 非连接错误期间暂停订阅时 hook 会同时清掉旧快照；下次失效先保持“需重连”，直到
@@ -328,11 +361,15 @@ export function ErrorBanner({
     recoveryCheck: openAiRecoveryCheck,
     refresh: refreshOpenAiAuth,
   } = useCodexAuth({
-    enabled: isOpenAiConnectionExpired && !independentOpenAiAccount,
-    recoveryHint: isOpenAiConnectionExpired ? { reason: error } : undefined,
+    enabled: isOpenAiAuthFailure && !independentOpenAiAccount,
+    recoveryHint: isOpenAiAuthFailure ? { reason: error } : undefined,
   });
   const openAiConnectionRecoveredSinceError =
-    isOpenAiConnectionExpired && (independentOpenAiAccount ? selectedOpenAiAccount?.connected === true : isChatGptConnectionConnected(openAiAuthState, false));
+    isOpenAiAuthFailure && (independentOpenAiAccount
+      // A generic 401 need not invalidate the account's local connected snapshot.
+      // Only the existing explicit-invalidation flow can use that marker clearing.
+      ? isOpenAiConnectionExpired && selectedOpenAiAccount?.connected === true
+      : isChatGptConnectionConnected(openAiAuthState, false));
   const openAiReconnectRequired = isOpenAiConnectionExpired && !openAiConnectionRecoveredSinceError;
   const openAiAuthLoading = openAiAuthState.kind === 'loading';
   const openAiLoginPending = openAiAuthState.kind === 'login-pending';
@@ -360,14 +397,18 @@ export function ErrorBanner({
   const toolLoopI18nKey =
     errorReason === 'tool_use_loop_detected' ? getToolLoopI18nKey(toolLoop) : undefined;
   const localizedReasonError =
-    toolLoopI18nKey && toolLoop
-      ? t(toolLoopI18nKey, { count: toolLoop.count })
-      : errorReasonI18nKey
-        ? t(errorReasonI18nKey)
-        : undefined;
+    errorReason === 'output-limit'
+      ? localizeOutputLimit(t, outputLimit)
+      : toolLoopI18nKey && toolLoop
+        ? t(toolLoopI18nKey, { count: toolLoop.count })
+        : errorReasonI18nKey
+          ? t(errorReasonI18nKey)
+          : undefined;
   const remoteErrorCode = parseAgentErrorCode(error)?.code;
+  const isRemoteResumeRejected = isRemoteAgentResumeRejectedError(error);
   const isAttachmentAccessDenied = remoteErrorCode === 'DEVICE_LINK_MEDIA_ACCESS_DENIED';
-  const remoteErrorKey = (isMemberBudgetPaused(error) ? 'providerShare.memberBudget.paused' : null) ?? remoteAgentLimitErrorKey(error) ?? chatRemoteErrorGuidanceKey(remoteErrorCode, sessionSource);
+  const remoteErrorKey = (isRemoteResumeRejected ? 'chat.remoteError.REMOTE_AGENT_RESUME_REJECTED' : null)
+    ?? (isMemberBudgetPaused(error) ? 'providerShare.memberBudget.paused' : null) ?? remoteAgentLimitErrorKey(error) ?? chatRemoteErrorGuidanceKey(remoteErrorCode, sessionSource);
   const remoteGuidance = remoteErrorKey && i18n.exists(remoteErrorKey) ? t(remoteErrorKey) : undefined;
   const terminalRateLimitRetryProgress = parseTerminalRateLimitRetryProgress(error, errorReason);
   const isCodexUsageLimitError =
@@ -416,6 +457,7 @@ export function ErrorBanner({
   // 订阅套餐错误保留 Retry：用户重新连接 Anthropic 后可从当前错误卡片重试；
   // Gateway 错误则隐藏 Retry，改走切换到 Claude.ai 的明确恢复动作。
   const hideRetry = isMemberBudgetPaused(error) ||
+    isRemoteResumeRejected ||
     isSilentStopExhausted ||
     isClaudeGatewayOpusPlanMismatch ||
     isGatewayProxyTokenInvalid ||
@@ -424,7 +466,9 @@ export function ErrorBanner({
     isOversizedHistoryError ||
     (isCodexRemoteAuthMissing && !syncedSinceError) ||
     openAiReconnectRequired ||
-    isCodexLocalOAuthAuthMissing;
+    // Independent generic failures have no verified recovery signal. Keep a manual
+    // retry alongside settings, without claiming that cached credentials recovered.
+    (isCodexLocalOAuthAuthMissing && !independentOpenAiAccount && !openAiConnectionRecoveredSinceError);
   const safeRetryText = !hideRetry && retryText ? retryText : null;
   const retryAction = safeRetryText
     ? () => onRetry(safeRetryText)
@@ -449,6 +493,21 @@ export function ErrorBanner({
       setRetrying(false);
     }
   };
+  const [switchingModelGroupSource, setSwitchingModelGroupSource] = useState(false);
+  const handleModelGroupSwitch = async () => {
+    if (!modelGroupSwitch || switchingModelGroupSource || retryInFlight.current) return;
+    setSwitchingModelGroupSource(true);
+    let switched = false;
+    try {
+      switched = await modelGroupSwitch.onSwitch();
+    } catch {
+      // 换模型的路径自己会提示失败原因。
+    } finally {
+      setSwitchingModelGroupSource(false);
+    }
+    // 取消了确认或没换成：什么都不动，错误、等待与重试照旧。
+    if (switched) await handleRetry();
+  };
   const [switchingClaudeSubscription, setSwitchingClaudeSubscription] = useState(false);
   useEffect(() => {
     setSwitchingClaudeSubscription(false);
@@ -456,9 +515,23 @@ export function ErrorBanner({
 
   // hasSpecialGuidance: 是否命中下面任一「有专属可操作指引」的特殊分支。用一个在
   // else 兜底里翻转的标志, 而不是另写一遍条件取反，保证原始错误只在通用回退时展开。
+  const sharedRecoveryReason = isCodexUsageLimitError ? undefined : sharedTaskRecoveryFor(error, agentDeviceId);
+  const subscriptionGuidance = localizeSubscriptionAccountError(error, t, i18n.resolvedLanguage ?? i18n.language);
   let displayError: string;
   let hasSpecialGuidance = true;
-  if (isResponsesLiteParallelToolCallsError(error)) {
+  // #9855: an unknown legacy error code intentionally survives the generic
+  // decoder. Surface the host's localized metadata-based recovery hint while
+  // keeping the original RPC timeout in expandable details. Never infer this
+  // cause from an ordinary timeout or a filename mentioned in arbitrary prose.
+  const piCloudContextRecovery = agentKind === 'pi'
+    ? /(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?(?:LAZY_CREATE_FAILED:\s*)?\[PI_STARTUP_CLOUD_CONTEXT_FILE\] ([^\r\n]+)\npi rpc timeout after \d+ms: [^\r\n]+$/.exec(error)?.[1]
+    : undefined;
+  if (piCloudContextRecovery) {
+    displayError = piCloudContextRecovery;
+  } else if (subscriptionGuidance) {
+    displayError = subscriptionGuidance;
+    hasSpecialGuidance = false;
+  } else if (isResponsesLiteParallelToolCallsError(error)) {
     displayError = t('chat.errorBanner.requestFormatError');
   } else if (remoteGuidance && !localizedReasonError) {
     // The bracketed code is more specific than status words in its upstream
@@ -494,7 +567,11 @@ export function ErrorBanner({
       ? t('chatgptAuthRecovery.recovered')
       : t(codexRecoveryDescriptionKey(openAiCredentialScope));
   } else if (isCodexLocalOAuthAuthMissing) {
-    displayError = t('chat.errorBanner.codexAuthMissingLocal');
+    displayError = openAiConnectionRecoveredSinceError
+      ? t('chatgptAuthRecovery.recovered')
+      : t('chat.errorBanner.codexAuthMissingLocal', {
+          provider: providerDisplayNameById(authProviderId ?? 'openai', errorProviders, t),
+        });
   } else if (isClaudeGatewayOpusPlanMismatch) {
     displayError = t('chat.errorBanner.claudeGatewayOpusPlanMismatch');
   } else if (isClaudeSubscriptionOpusPlanMismatch) {
@@ -522,6 +599,8 @@ export function ErrorBanner({
           : 'chat.errorBanner.codexUsageLimit',
       );
     }
+  } else if (isQuotaExhausted) {
+    displayError = t('providerError.QUOTA_EXCEEDED');
   } else if (terminalRateLimitRetryProgress) {
     // daemon 已耗尽内部 retry budget 的终态 429，由 maker-core 做受限外层重投。
     // 它不是模型容量过载，也不是用户网络异常；独立文案避免误导用户切模型或查网络。
@@ -587,7 +666,9 @@ export function ErrorBanner({
     hasSpecialGuidance = false;
   }
   const showUnwrappedRaw = !hasSpecialGuidance || isResponsesLiteParallelToolCallsError(error);
+  if (sharedRecoveryReason) displayError = t(`sharedTaskRecovery.reason.${sharedRecoveryReason}`);
   const canShowErrorDetails =
+    piCloudContextRecovery ||
     isNetworkishError ||
     isOverloadError ||
     isStreamInterrupted ||
@@ -605,7 +686,7 @@ export function ErrorBanner({
     isCodexRemoteAuthMissing ||
     isOpenAiConnectionExpired ||
     isCodexLocalOAuthAuthMissing ||
-    isGatewayQuotaExhausted;
+    isQuotaExhausted;
 
   const handleSwitchToClaudeSubscription = async (): Promise<void> => {
     if (!onSwitchToClaudeSubscription || switchingClaudeSubscription) return;
@@ -623,10 +704,10 @@ export function ErrorBanner({
 
   const handleOpenAiRecovery = async (): Promise<void> => {
     if (openAiRecoveryBusy) return;
-    if (independentOpenAiAccount && normalizedProviderId) {
+    if (independentOpenAiAccount && authProviderId) {
       setAccountReconnecting(true);
       try {
-        const result = await window.electronAPI.maker.providerOAuthLogin(normalizedProviderId);
+        const result = await window.electronAPI.maker.providerOAuthLogin(authProviderId);
         if (result.ok) refreshErrorProviders();
         else if (result.reason !== 'login_cancelled') {
           toast.error(t('settings.providers.wizard.authorizeFailed', { name: 'OpenAI' }));
@@ -744,6 +825,11 @@ export function ErrorBanner({
       }
       actions={
         <>
+          {sharedRecoveryReason && onChooseComputer && !isRecoverable && (
+            <Button size="sm" compact type="button" onClick={onChooseComputer}>
+              {t('sharedTaskRecovery.choose')}
+            </Button>
+          )}
           {openAiReconnectRequired && (
             // 共享凭证直接唤起 ChatGPT App；返回 Cindy 后由 useCodexAuth 自动复检。
             <Button
@@ -767,6 +853,9 @@ export function ErrorBanner({
                 ),
               )}
             </Button>
+          )}
+          {isCodexLocalOAuthAuthMissing && !isOpenAiConnectionExpired && !openAiConnectionRecoveredSinceError && (
+            <OpenAiConnectionSettingsAction providerId={authProviderId ?? 'openai'} />
           )}
           {isClaudeGatewayOpusPlanMismatch && onSwitchToClaudeSubscription && (
             <Button
@@ -855,6 +944,21 @@ export function ErrorBanner({
               title={t('chat.errorBanner.usageLimitAutoContinueCancelTitle')}
             >
               {t('chat.errorBanner.usageLimitAutoContinueCancel')}
+            </Button>
+          )}
+          {modelGroupSwitch && retryAction && (
+            <Button
+              size="sm"
+              compact
+              type="button"
+              className="min-w-0 max-w-full shrink"
+              disabled={forkStripEncryptedRunning || retrying}
+              loading={switchingModelGroupSource}
+              onClick={() => void handleModelGroupSwitch()}
+              title={modelGroupSwitch.label}
+            >
+              <ArrowRightLeft size={12} className="shrink-0" />
+              <span className="min-w-0 truncate">{modelGroupSwitch.label}</span>
             </Button>
           )}
           {retryAction && (

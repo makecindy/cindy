@@ -21,13 +21,18 @@ let group = {
 
 export function groupSettingsVisualFixture(channel: string, raw: unknown): unknown {
   const request = raw as { ref?: { id?: string }; resourceRef?: { id?: string }; actionId?: string; input?: Record<string, unknown> };
-  if ((request?.ref?.id ?? request?.resourceRef?.id) !== 'settings-qa') return undefined;
+  const id = request?.ref?.id ?? request?.resourceRef?.id;
+  if (id !== 'settings-qa' && id !== 'process-qa') return undefined;
   if (channel === 'maker:remote-resources:get') return {
-    ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: 'settings-qa' }, revision: String(group.revision),
+    ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id }, revision: String(group.revision),
     display: { title: group.name }, actions: [], links: [],
     blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: group.description, data: {
-      ...group, plans: [], createdAt: NOW, updatedAt: NOW,
-      messages: [{ id: 'qa-1', sequence: 1, kind: 'message', authorKind: 'user', authorBotId: 'qa-wang', authorName: '王悦', isSelf: false,
+      ...group, id, plans: [], createdAt: NOW, updatedAt: NOW,
+      messages: id === 'process-qa' ? ['empty', 'unavailable', 'tools'].map((kind, index) => ({
+        id: `process-${kind}`, sequence: index + 1, kind: 'message', authorKind: 'bot', authorBotId: 'qa-cindy', authorName: 'Cindy',
+        content: kind === 'tools' ? '已经查到天气信息。' : '想看哪个城市的天气？', createdAt: NOW + index,
+        process: { groupId: id, executionId: `qa-${kind}`, sessionId: `qa-process-${kind}`, clientId: 'qa-source', durationMs: 250137 },
+      })) : [{ id: 'qa-1', sequence: 1, kind: 'message', authorKind: 'user', authorBotId: 'qa-wang', authorName: '王悦', isSelf: false,
         content: '@Cindy 群设置这版看一下手机上的效果。', createdAt: NOW }],
     } }],
   };

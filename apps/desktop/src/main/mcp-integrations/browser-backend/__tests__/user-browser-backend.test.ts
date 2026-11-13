@@ -25,7 +25,14 @@ import {
   type UserBrowserPageControl,
 } from '../user-browser-backend';
 
-type Tab = { id: number; url: string; title?: string; active?: boolean; redacted?: boolean };
+type Tab = {
+  id: number;
+  url: string;
+  title?: string;
+  active?: boolean;
+  redacted?: boolean;
+  cindyWindow?: boolean;
+};
 
 function fakeControl(
   options: { clients?: string[]; tabs?: Record<string, Tab[]>; version?: string } = {},
@@ -95,6 +102,13 @@ const call = (b: UserBrowserBackend, req: Record<string, unknown>) =>
   b.call(req as unknown as BrowserControlRequest);
 
 describe('UserBrowserBackend · 就绪与连接', () => {
+  // Actual absence and temporarily unavailable selection must not share the old-plugin advice.
+  it.each(['plugin-updating', 'plugin-selection-required'] as const)('status preserves %s from the plugin slot', async reason => {
+    const b = new UserBrowserBackend({ getPageControl: () => null, getUnavailableReason: () => reason,
+      logger: { info: vi.fn(), warn: vi.fn() } });
+    expect(await call(b, { action: 'status' })).toMatchObject({ data: { configured: false, reason } });
+  });
+
   it('没有页面控制插件时 status 如实报告,动作按未配置拒绝', async () => {
     const b = backend(null);
     expect(await call(b, { action: 'status' })).toMatchObject({
@@ -160,6 +174,26 @@ describe('UserBrowserBackend · 就绪与连接', () => {
 });
 
 describe('UserBrowserBackend · 标签页与寻址', () => {
+  // 2026-11-06: the agent kept working in the user's own ChatGPT tab (snapshot, clicks, two
+  // navigations) because tabs listed it like any page Cindy had opened.
+  it('tabs 标出页签归属:Cindy 窗口里的是 cindy,其余是用户自己的', async () => {
+    const fake = fakeControl({
+      version: '0.4.43',
+      tabs: {
+        'client-aaaaaaaa': [
+          { id: 7, url: 'https://chat.example.test/', title: 'Chat', active: true },
+          { id: 8, url: 'https://chat.example.test/billing', title: 'Billing', cindyWindow: true },
+        ],
+      },
+    });
+    const listed = await call(backend(fake.control), { action: 'tabs' });
+    expect((listed.data as { tabs: Array<Record<string, unknown>> }).tabs).toMatchObject([
+      { url: 'https://chat.example.test/', owner: 'user' },
+      { url: 'https://chat.example.test/billing', owner: 'cindy' },
+    ]);
+    expect((listed.data as { note: string }).note).toContain('owner:"user"');
+  });
+
   it('tabs 映射稳定 targetId 与别名,保留被打码行;open 返回可用 targetId 并记住 label', async () => {
     const fake = fakeControl({
       tabs: {
@@ -182,6 +216,8 @@ describe('UserBrowserBackend · 标签页与寻址', () => {
       active: true,
     });
     expect(tabs[1]).toMatchObject({ targetId: 'client-a:9', redacted: true });
+    // An extension that does not mark Cindy's window gets no guessed owner.
+    expect(tabs[0]).not.toHaveProperty('owner');
     fake.tabs['client-aaaaaaaa'].push({ id: 11, url: 'https://example.test/b', title: 'B' });
     const opened = await call(b, {
       action: 'open',
@@ -484,6 +520,22 @@ describe('UserBrowserBackend · 读取与动作', () => {
       ok: true,
       data: { result: { password: false, code: false, unavailable: true } },
     });
+    // 旧版扩展不能跑页面脚本:页面可见文字改用扩展自己的声明式读取,结果形状与页面脚本相同。
+    const before = fake.jobs.length;
+    fake.responses.set('extract', () => ({ ok: true, record: { text: 'Shown   \n\n\n\ntext on the page' } }));
+    expect(
+      await call(b, {
+        action: 'act',
+        targetId: 't1',
+        request: { kind: 'evaluate', fn: 'x', domRead: { kind: 'text', text: { selector: 'main', offset: 7, maxChars: 4 } } },
+      }),
+    ).toMatchObject({
+      ok: true,
+      data: { result: { ok: true, readyState: 'complete', found: true, length: 23, text: 'text' } },
+    });
+    expect(fake.jobs.slice(before).map(([action]) => action)).not.toContain('evaluate');
+    expect(fake.jobs.at(-1)).toMatchObject(['extract', { selector: 'main', fields: { text: { selector: ':self' } }, maxChars: 30000 }]);
+    fake.responses.delete('extract');
     expect(
       fake.jobs.filter(
         ([action, payload]) =>
@@ -602,6 +654,11 @@ describe('UserBrowserBackend · 读取与动作', () => {
     });
     await act({ kind: 'clickCoords', x: 10, y: 20, button: 'right' });
     expect(fake.jobs.at(-1)).toEqual(['clickCoords', { ...base, x: 10, y: 20, button: 'right' }]);
+    // 元素定位的坐标点击把 ref / selector 交给扩展,由它点元素中心。
+    await act({ kind: 'clickCoords', ref: 'r2' });
+    expect(fake.jobs.at(-1)).toEqual(['clickCoords', { ...base, ref: 'r2' }]);
+    await act({ kind: 'clickCoords', selector: '#menu' });
+    expect(fake.jobs.at(-1)).toEqual(['clickCoords', { ...base, selector: '#menu' }]);
     await act({ kind: 'click', ref: 'r1', doubleClick: true, modifiers: ['Shift'] });
     expect(fake.jobs.at(-1)).toEqual([
       'clickCoords',
@@ -625,6 +682,54 @@ describe('UserBrowserBackend · 读取与动作', () => {
       ok: true,
     });
     expect(fake.jobs.at(-1)?.[0]).toBe('evaluate');
+    // 页面可见文字(read 动作、打开后的等待)走页面脚本:脚本读 innerText,不是扩展声明式读取的 textContent。
+    expect(
+      await act({ kind: 'evaluate', fn: 'ignored', domRead: { kind: 'text', text: { maxChars: 50 } } }),
+    ).toMatchObject({ ok: true });
+    expect(fake.jobs.at(-1)?.[0]).toBe('evaluate');
+    expect(String(fake.jobs.at(-1)?.[1].fn)).toContain('innerText');
+    expect(String(fake.jobs.at(-1)?.[1].fn)).not.toContain('ignored');
+    // 页面的安全策略拦了脚本(实测 github.com):同一次读取退回扩展的声明式读取,不报错。
+    fake.responses.set('evaluate', () => ({ ok: false, error: 'EVAL_BLOCKED_BY_PAGE', execution: 'not_executed' }));
+    fake.responses.set('extract', () => ({ ok: true, record: { text: 'Visible text' } }));
+    expect(
+      await act({ kind: 'evaluate', fn: 'ignored', domRead: { kind: 'text', text: { maxChars: 7 } } }),
+    ).toMatchObject({ ok: true, data: { result: { ok: true, found: true, length: 12, text: 'Visible' } } });
+    expect(fake.jobs.slice(-2).map(([action]) => action)).toEqual(['evaluate', 'extract']);
+    fake.responses.delete('evaluate');
+    fake.responses.delete('extract');
+    // 声明式读取被桥接按字段截断到 4000 字符时,结果标出 capped:后面没有可续读的,不能当成整页。
+    fake.responses.set('evaluate', () => ({ ok: false, error: 'EVAL_BLOCKED_BY_PAGE', execution: 'not_executed' }));
+    fake.responses.set('extract', () => ({ ok: true, truncated: true, record: { text: 'y'.repeat(4000) } }));
+    expect(
+      await act({ kind: 'evaluate', fn: 'ignored', domRead: { kind: 'text', text: { maxChars: 20000 } } }),
+    ).toMatchObject({ ok: true, data: { result: { ok: true, length: 4000, capped: true } } });
+    fake.responses.delete('evaluate');
+    fake.responses.delete('extract');
+  });
+
+  // 规则:调用方给的 timeoutMs 管住文字读取。桥接对作业的默认期限是 45 秒,页面无响应时,
+  // 打开后 5 秒的内容探测不能被拖到 45 秒;页面脚本被拦后的声明式读取用的是剩下的时间,不是重新计时。
+  it('「我的浏览器」文字读取遵守 timeoutMs:页面无响应时按失败返回,两条路径共用剩余时间', async () => {
+    const fake = fakeControl({ version: '0.4.43' });
+    const b = backend(fake.control);
+    await call(b, { action: 'tabs' });
+    const act = (request: Record<string, unknown>) => call(b, { action: 'act', targetId: 't1', request });
+    const hang = () => new Promise(() => {}) as never;
+    fake.responses.set('evaluate', hang);
+    const started = Date.now();
+    expect(
+      await act({ kind: 'evaluate', fn: 'x', timeoutMs: 150, domRead: { kind: 'text', text: {} } }),
+    ).toMatchObject({ ok: false, message: expect.stringContaining('BROWSER_TIMEOUT') });
+    expect(Date.now() - started).toBeLessThan(3000);
+    // 脚本先被拦(很快),随后的声明式读取无响应:同样在预算内失败。
+    fake.responses.set('evaluate', () => ({ ok: false, error: 'EVAL_BLOCKED_BY_PAGE', execution: 'not_executed' }));
+    fake.responses.set('extract', hang);
+    const second = Date.now();
+    expect(
+      await act({ kind: 'evaluate', fn: 'x', timeoutMs: 150, domRead: { kind: 'text', text: {} } }),
+    ).toMatchObject({ ok: false, message: expect.stringContaining('BROWSER_TIMEOUT') });
+    expect(Date.now() - second).toBeLessThan(3000);
   });
 
   it('新版扩展:上传只读会话允许目录里的文件,并以字节交给扩展', async () => {
@@ -655,6 +760,7 @@ describe('UserBrowserBackend · 读取与动作', () => {
       });
       // Review 2026-10-29: a batch over the extension's ~30 MB limit is refused before any file is read.
       const big = pathMod.join(root, 'big.bin');
+      const bigBytes = Buffer.alloc(9_000_000, 7);
       await fsp.writeFile(big, '');
       await fsp.truncate(big, 31_000_000);
       const jobsBefore = fake.jobs.length;
@@ -662,18 +768,51 @@ describe('UserBrowserBackend · 读取与动作', () => {
         await call(b, { action: 'upload', targetId: 't1', paths: [big], __mcpSessionId: 's1' }),
       ).toMatchObject({ ok: false, message: expect.stringContaining('30 MB') });
       expect(fake.jobs.length).toBe(jobsBefore);
-      // 2026-10-30: newer extensions also get the checked paths, so Chrome reads the files through the
-      // debugger; the bytes go along only when they fit the transfer.
-      const newer = fakeControl({ version: '0.4.56' });
-      newer.responses.set('upload', () => ({ ok: true, files: [{ name: 'big.bin', size: 31_000_000 }] }));
+      // 2026-11-01: from 0.4.61 larger files go in pieces; Chrome's debugger is never needed.
+      await fsp.writeFile(big, bigBytes);
+      await fsp.appendFile(big, Buffer.alloc(22_000_000, 8));
+      const newer = fakeControl({ version: '0.4.61' });
+      newer.responses.set('upload', (payload) =>
+        payload.op === 'finish' ? { ok: true, files: [{ name: 'big.bin', size: 31_000_000 }] } : { ok: true });
       const nb = backend(newer.control, async () => [root]);
       await call(nb, { action: 'tabs' });
-      expect(await call(nb, { action: 'upload', targetId: 't1', paths: [big], __mcpSessionId: 's1' })).toMatchObject({ ok: true });
-      const bigJob = newer.jobs.at(-1)?.[1] as { paths?: string[]; files?: unknown };
-      expect(bigJob.files).toBeUndefined();
-      expect(bigJob.paths?.[0]).toMatch(/big\.bin$/);
+      expect(await call(nb, { action: 'upload', targetId: 't1', paths: [big], inputRef: 'r9', __mcpSessionId: 's1' })).toMatchObject({
+        ok: true,
+        data: { files: [{ name: 'big.bin', size: 31_000_000 }] },
+      });
+      const steps = newer.jobs.filter(([kind]) => kind === 'upload').map(([, payload]) => payload);
+      expect(steps[0]).toMatchObject({ op: 'begin', ref: 'r9', chunkFiles: [{ name: 'big.bin' }] });
+      expect(steps.at(-1)).toMatchObject({ op: 'finish' });
+      const pieces = steps.filter((step) => step.op === 'chunk');
+      expect(pieces.length).toBe(8);
+      expect(new Set(steps.map((step) => step.transfer)).size).toBe(1);
+      expect(steps.some((step) => 'paths' in step)).toBe(false);
+      const rebuilt = Buffer.concat(pieces.map((step) => Buffer.from(step.data as string, 'base64')));
+      expect(rebuilt.length).toBe(31_000_000);
+      expect(rebuilt.equals(await fsp.readFile(big))).toBe(true);
+      // Small files still fit one job, without any path.
       await call(nb, { action: 'upload', targetId: 't1', paths: [file], __mcpSessionId: 's1' });
-      expect(newer.jobs.at(-1)?.[1]).toMatchObject({ files: [{ name: 'a.png', data: 'AQID' }], paths: [expect.stringMatching(/a\.png$/)] });
+      expect(newer.jobs.at(-1)?.[1]).toMatchObject({ files: [{ name: 'a.png', data: 'AQID' }] });
+      expect(newer.jobs.at(-1)?.[1]).not.toHaveProperty('paths');
+      // A piece the page refuses ends the transfer: the input stays as it was and memory is released.
+      const failing = fakeControl({ version: '0.4.61' });
+      failing.responses.set('upload', (payload) =>
+        payload.op === 'chunk' ? { ok: false, error: 'UPLOAD_EXPIRED', message: 'page changed' } : { ok: true });
+      const fb = backend(failing.control, async () => [root]);
+      await call(fb, { action: 'tabs' });
+      expect(await call(fb, { action: 'upload', targetId: 't1', paths: [big], __mcpSessionId: 's1' })).toMatchObject({
+        ok: false,
+        message: expect.stringContaining('UPLOAD_EXPIRED'),
+      });
+      await vi.waitFor(() => expect(failing.jobs.at(-1)?.[1]).toMatchObject({ op: 'abort' }));
+      expect(failing.jobs.some(([, payload]) => payload.op === 'finish')).toBe(false);
+      // A file over the 1 GB bound is refused before any file is read.
+      const huge = pathMod.join(root, 'huge.bin');
+      await fsp.writeFile(huge, '');
+      await fsp.truncate(huge, 1024 * 1024 * 1024 + 1);
+      const beforeHuge = newer.jobs.length;
+      expect(await call(nb, { action: 'upload', targetId: 't1', paths: [huge], __mcpSessionId: 's1' })).toMatchObject({ ok: false });
+      expect(newer.jobs.length).toBe(beforeHuge);
       expect(
         await call(b, {
           action: 'upload',
@@ -810,29 +949,60 @@ describe('UserBrowserBackend · 读取与动作', () => {
     });
   });
 
-  it('按需调试:PDF 交给扩展;未授权时告诉模型请用户在已打开的说明页里确认', async () => {
-    const fake = fakeControl({ version: '0.4.43' });
-    let granted = false;
-    fake.responses.set('pdf', () =>
-      granted
-        ? { ok: true, mimeType: 'application/pdf', data: 'JVBERg==', bytes: 4 }
-        : { ok: false, error: 'DEBUGGER_NOT_ALLOWED', message: 'needs debugger', grantPageOpened: true },
-    );
+  it('快照:limit 传给扩展,新版扩展接受 frame,截断时说明后面还有内容', async () => {
+    const fake = fakeControl({ version: '0.4.61' });
+    fake.responses.set('snapshot', () => ({ ok: true, title: 'T', text: 'x', elements: '', truncated: true }));
     const b = backend(fake.control);
     await call(b, { action: 'tabs' });
-    expect(await call(b, { action: 'pdf', targetId: 't1' })).toMatchObject({
-      ok: false,
-      message: expect.stringContaining('已在用户的 Chrome 里打开说明页'),
-    });
-    expect(fake.jobs.at(-1)).toEqual([
-      'pdf',
-      { url: 'https://example.test/a', browser: 'client-aaaaaaaa', tabId: 7 },
-    ]);
-    granted = true;
-    expect(await call(b, { action: 'pdf', targetId: 't1' })).toMatchObject({
-      ok: true,
-      data: { mimeType: 'application/pdf', data: 'JVBERg==' },
-    });
+    const result = await call(b, { action: 'snapshot', targetId: 't1', limit: 200, frame: 'iframe' });
+    expect(fake.jobs.at(-1)?.[1]).toMatchObject({ limit: 200 });
+    expect(result).toMatchObject({ ok: true, data: { truncated: true } });
+    const data = result.data as { note?: string; frameNote?: string };
+    expect(data.note).toContain('selector');
+    expect(data.frameNote).toContain('iframe');
+    const older = fakeControl({ version: '0.4.60' });
+    const ob = backend(older.control);
+    await call(ob, { action: 'tabs' });
+    expect(await call(ob, { action: 'snapshot', targetId: 't1', frame: 'iframe' })).toMatchObject({ ok: false });
+  });
+
+  it('分块上传的批次上限:超过 500 MiB 但不超过 1 GiB 的文件能通过校验,其他调用方仍是原限制', async () => {
+    const os = await import('node:os');
+    const fsp = await import('node:fs/promises');
+    const pathMod = await import('node:path');
+    const { resolveUploadFiles } = await import('../rsb-webview-upload-policy');
+    const root = await fsp.mkdtemp(pathMod.join(os.tmpdir(), 'cindy-upload-limit-'));
+    try {
+      const gib = 1024 * 1024 * 1024;
+      const big = pathMod.join(root, 'big.bin');
+      await fsp.writeFile(big, '');
+      await fsp.truncate(big, 600 * 1024 * 1024);
+      const other = pathMod.join(root, 'other.bin');
+      await fsp.writeFile(other, '');
+      await fsp.truncate(other, 400 * 1024 * 1024);
+      // Windows may spell the same folder with its 8.3 short name, so compare names, not whole paths.
+      const resolved = await resolveUploadFiles([big], [root], gib, gib);
+      expect(resolved.map((file) => pathMod.basename(file))).toEqual(['big.bin']);
+      expect(await resolveUploadFiles([big, other], [root], gib, gib)).toHaveLength(2);
+      await expect(resolveUploadFiles([big], [root])).rejects.toThrow(/exceeds/);
+      await expect(resolveUploadFiles([big], [root], gib)).rejects.toThrow(/batch exceeds/);
+      await expect(resolveUploadFiles([big, big], [root], gib, 1024 * 1024 * 1024)).rejects.toThrow(/batch exceeds/);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('调试接口:Chrome 不允许按需申请,能力表如实报告,扩展拒绝时不让用户去找开启入口', async () => {
+    const fake = fakeControl({ version: '0.4.61' });
+    expect(userBrowserCapabilities(fake.control)).toMatchObject({ pdf: false, rawProtocol: false, upload: true });
+    for (const error of ['DEBUGGER_NOT_ALLOWED', 'DEBUGGER_UNAVAILABLE']) {
+      fake.responses.set('pdf', () => ({ ok: false, error, message: 'needs debugger', grantPageOpened: true }));
+      const b = backend(fake.control);
+      await call(b, { action: 'tabs' });
+      const refused = await call(b, { action: 'pdf', targetId: 't1' });
+      expect(refused).toMatchObject({ ok: false, message: expect.stringContaining('Cindy 专用浏览器') });
+      expect(refused.message).not.toContain('开启」');
+    }
   });
 
   it('配方协议会话:按需接上调试,事件随结果回传,结束即断开', async () => {
@@ -903,20 +1073,48 @@ describe('UserBrowserBackend · 读取与动作', () => {
     });
   });
 
-  it('status 先等扩展重连几秒,不在刷新后的空档里报未连接', async () => {
-    const fake = fakeControl({ version: '0.4.46' });
-    let calls = 0;
-    const realStatus = (fake.control.bridge as unknown as { status: () => Promise<{ ok: boolean; clients: Array<{ connected: boolean }> }> }).status;
-    (fake.control.bridge as unknown as { status: () => Promise<unknown> }).status = async () => {
-      const s = await realStatus();
-      // Connected first, then dropped for two reads (an extension reload), then back.
-      ++calls;
-      return calls === 2 || calls === 3 ? { ...s, clients: s.clients.map((c) => ({ ...c, connected: false })) } : s;
-    };
-    const b = new UserBrowserBackend({ getPageControl: () => fake.control, reconnectWaitMs: 5000, logger: { info: vi.fn(), warn: vi.fn() } });
-    expect(await call(b, { action: 'status' })).toMatchObject({ ok: true, data: { connected: true } });
-    expect(await call(b, { action: 'status' })).toMatchObject({ ok: true, data: { connected: true } });
-    expect(calls).toBe(4);
+  // Regression: live-client filtering removed the expired client, skipping reconnect grace.
+  // Unit tier: production call(), empty status list then reconnect, fake clock (no real sleep).
+  it.each([false, true])('waits for an expired client omitted from status (first read: %s)', async (firstRead) => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeControl();
+      const connected = await fake.control.bridge.status();
+      vi.spyOn(fake.control.bridge, 'status')
+        .mockResolvedValueOnce(firstRead ? { ...connected, clients: [], hadConnectedClient: true } : connected)
+        .mockResolvedValueOnce({ ...connected, clients: [], hadConnectedClient: true })
+        .mockResolvedValue(connected);
+      const b = new UserBrowserBackend({ getPageControl: () => fake.control, reconnectWaitMs: 5000, logger: { info: vi.fn(), warn: vi.fn() } });
+      if (!firstRead) await call(b, { action: 'status' });
+      const pending = call(b, { action: 'status' });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await pending).toMatchObject({ ok: true, data: { connected: true } });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('does not wait for an unpaired install even after another browser connected', async () => {
+    const fake = fakeControl();
+    const status = await fake.control.bridge.status();
+    const statusRead = vi.spyOn(fake.control.bridge, 'status').mockResolvedValue({
+      ...status, hadConnectedClient: true,
+      clients: status.ok ? status.clients.map((c) => ({ ...c, connected: false, trusted: false })) : [],
+    });
+    const b = new UserBrowserBackend({ getPageControl: () => fake.control, logger: { info: vi.fn(), warn: vi.fn() } });
+    expect(await call(b, { action: 'status' })).toMatchObject({ data: { connected: false, reason: 'pairing-required' } });
+    expect(statusRead).toHaveBeenCalledTimes(1);
+  });
+
+  it('ends reconnect grace when the browser remains closed', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeControl({ clients: [] });
+      const disconnected = await fake.control.bridge.status();
+      vi.spyOn(fake.control.bridge, 'status').mockResolvedValue({ ...disconnected, hadConnectedClient: true });
+      const b = new UserBrowserBackend({ getPageControl: () => fake.control, reconnectWaitMs: 1000, logger: { info: vi.fn(), warn: vi.fn() } });
+      const pending = call(b, { action: 'status' });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await pending).toMatchObject({ ok: true, data: { connected: false } });
+    } finally { vi.useRealTimers(); }
   });
 
   // Review 2026-10-29: an installed but unpaired extension waited 8 s and was then told to install
@@ -1000,5 +1198,116 @@ describe('UserBrowserBackend · 读取与动作', () => {
     const started = Date.now();
     expect(await call(b, { action: 'status' })).toMatchObject({ ok: true, data: { connected: false } });
     expect(Date.now() - started).toBeLessThan(1000);
+  });
+});
+
+
+// Regression: a closed browser previously failed every action without trying to start it.
+// Unit tier: real backend entry, fake launcher/bridge and clock; no user browser is touched.
+describe('automatic browser startup', () => {
+  it('shares one launch and waits for connection before dispatching simultaneous operations', async () => {
+    vi.useFakeTimers();
+    try {
+      const clients: string[] = [];
+      const fake = fakeControl({ clients, version: '0.4.68' });
+      fake.responses.set('open', payload => ({ ok: true, tabId: 8, url: payload.url }));
+      const startBrowser = vi.fn(async () => { setTimeout(() => clients.push('chrome'), 1000); });
+      const b = new UserBrowserBackend({ getPageControl: () => fake.control, startBrowser, logger: { info: vi.fn(), warn: vi.fn() } });
+      const first = b.call({ action: 'tabs' }), second = b.call({ action: 'open', url: 'https://example.test/' });
+      await vi.advanceTimersByTimeAsync(500);
+      expect(startBrowser).toHaveBeenCalledTimes(1);
+      expect(fake.jobs).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(500);
+      expect((await first).ok).toBe(true); expect((await second).ok).toBe(true);
+      expect(fake.jobs.filter(([action]) => action === 'open')).toHaveLength(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['status', 'doctor', 'profiles', 'stop'] as const)('%s never starts Chrome', async action => {
+    const fake = fakeControl({ clients: [] }), startBrowser = vi.fn();
+    const b = new UserBrowserBackend({ getPageControl: () => fake.control, startBrowser, logger: { info: vi.fn(), warn: vi.fn() } });
+    await b.call({ action }); expect(startBrowser).not.toHaveBeenCalled();
+  });
+
+  it('does not launch for a missing plugin, a named profile, or an unsupported proxy', async () => {
+    const startBrowser = vi.fn();
+    const fake = fakeControl({ clients: [] });
+    for (const [control, req] of [
+      [null, { action: 'start' }],
+      [fake.control, { action: 'start', profile: 'specific-account' }],
+      [fake.control, { action: 'start', proxyServer: 'http://proxy.test' }],
+    ] as const) {
+      const b = new UserBrowserBackend({ getPageControl: () => control, startBrowser, startupWaitMs: 0, logger: { info: vi.fn(), warn: vi.fn() } });
+      await b.call(req);
+    }
+    expect(startBrowser).not.toHaveBeenCalled();
+  });
+
+  it('does not launch an alternative browser while pairing is pending', async () => {
+    const fake = fakeControl({ clients: [] }), startBrowser = vi.fn();
+    const status = await fake.control.bridge.status();
+    if (!status.ok) throw new Error('fixture status failed');
+    fake.control.bridge.status = vi.fn(async () => ({ ...status, clients: [{
+      id: 'pending', browser: 'chrome' as const, version: '0.4.68', protocolVersion: '0.4.13',
+      connected: false, trusted: false, identitySupported: true, nativeBindingRequired: true,
+      origin: 'chrome-extension://fixture', extensionId: 'fixture',
+    }] }));
+    const b = new UserBrowserBackend({ getPageControl: () => fake.control, startBrowser, logger: { info: vi.fn(), warn: vi.fn() } });
+    expect((await b.call({ action: 'start' })).ok).toBe(false);
+    expect(startBrowser).not.toHaveBeenCalled(); expect(fake.jobs).toHaveLength(0);
+  });
+
+  it('launches the default browser for a profile-less request that joins a profile request already waiting', async () => {
+    vi.useFakeTimers();
+    try {
+      const clients: string[] = [];
+      const fake = fakeControl({ clients, version: '0.4.68' });
+      fake.responses.set('open', payload => ({ ok: true, tabId: 8, url: payload.url }));
+      const startBrowser = vi.fn(async () => { setTimeout(() => clients.push('chrome'), 1000); });
+      const b = new UserBrowserBackend({ getPageControl: () => fake.control, startBrowser, logger: { info: vi.fn(), warn: vi.fn() } });
+      const named = b.call({ action: 'tabs', profile: 'specific-account' });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(startBrowser).not.toHaveBeenCalled();
+      const unnamed = b.call({ action: 'open', url: 'https://example.test/' });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(startBrowser).toHaveBeenCalledTimes(1);
+      expect((await unnamed).ok).toBe(true);
+      await named;
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('stops waiting as soon as the launched browser reports an extension that still needs pairing', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeControl({ clients: [] }), startBrowser = vi.fn(async () => {});
+      const empty = await fake.control.bridge.status();
+      if (!empty.ok) throw new Error('fixture status failed');
+      let pairing = false;
+      fake.control.bridge.status = vi.fn(async () => ({ ...empty, clients: pairing ? [{
+        id: 'pending', browser: 'chrome' as const, version: '0.4.68', protocolVersion: '0.4.13',
+        connected: false, trusted: false, identitySupported: true, nativeBindingRequired: true,
+        origin: 'chrome-extension://fixture', extensionId: 'fixture',
+      }] : [] }));
+      const b = new UserBrowserBackend({ getPageControl: () => fake.control, startBrowser, logger: { info: vi.fn(), warn: vi.fn() } });
+      const call = b.call({ action: 'start' });
+      await vi.advanceTimersByTimeAsync(600);
+      pairing = true;
+      await vi.advanceTimersByTimeAsync(1000); // far below the 35 s startup wait
+      const result = await call;
+      expect(startBrowser).toHaveBeenCalledTimes(1);
+      expect(result.ok).toBe(false);
+      expect(JSON.stringify(result)).toContain('配对');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('reports disconnected when startup completes but no extension arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeControl({ clients: [] }), startBrowser = vi.fn(async () => {});
+      const b = new UserBrowserBackend({ getPageControl: () => fake.control, startBrowser, startupWaitMs: 1000, logger: { info: vi.fn(), warn: vi.fn() } });
+      const call = b.call({ action: 'start' });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect((await call).ok).toBe(false); expect(fake.jobs).toHaveLength(0);
+    } finally { vi.useRealTimers(); }
   });
 });

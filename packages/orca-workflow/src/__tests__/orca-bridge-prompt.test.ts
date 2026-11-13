@@ -100,6 +100,15 @@ describe('renderOrcaLeadSystemPrompt', () => {
     );
   });
 
+  // 规则：orca-team-architecture.md「消息派发与 auto-bridge」1d；用户已批准的最小 system prompt 调整。
+  // 合批必须由宿主批次头触发，避免把单个 Worker 正文里偶然出现的 --- / 多个前缀误判成批次。
+  it('processes host-marked auto-bridge batches in one turn', () => {
+    const prompt = renderOrcaLeadSystemPrompt(null);
+    expect(prompt).toContain('When a worker message starts with [Auto-bridged batch: <n> worker reports]');
+    expect(prompt).toContain('Review every report in this turn and issue only necessary follow-ups');
+    expect(prompt).toContain('do not wait for those reports to arrive separately');
+  });
+
   it('declares create_workers while preserving batch result reporting boundaries', () => {
     const prompt = renderOrcaLeadSystemPrompt(null);
 
@@ -151,14 +160,20 @@ describe('renderOrcaLeadSystemPrompt', () => {
     expect(prompt).toContain(multiRoleReadinessBoundary);
   });
 
-  it('states the queue inspection, atomic interrupt, and atomic merge rules verbatim', () => {
+  it('states the queue inspection, atomic interrupt, atomic merge, steer, and supersession rules verbatim', () => {
     const prompt = renderOrcaLeadSystemPrompt(null);
 
     expect(prompt).toContain(
-      'Use interrupt_worker only when the active task must not continue and the new instruction must replace it; for additional context or later work, use send_to_worker.',
+      'Use interrupt_worker only when the active task must not continue and the new instruction must replace it. To correct or add to a running order, use send_to_worker with delivery=steer plus an explicit "supersedes <what>" note; a steered message cannot be recalled — make it complete. For later work on an idle worker, plain send_to_worker.',
     );
     expect(prompt).toContain(
       'If get_workspace_info shows queued_count > 0 or queue_paused=true, call get_worker_queue_status first, then revise or withdraw one pending message, merge related messages, or send a separate task.',
+    );
+    expect(prompt).toContain(
+      'Orders are self-contained: state, premises, acceptance, and a "supersedes earlier orders" header when replacing one — never assume the worker just read your previous message. A message that queues is consumed only after every earlier one, so never describe the queue or pending work inside it ("one order left") — that snapshot is stale on arrival; give status to the user, not to the worker.',
+    );
+    expect(prompt).toContain(
+      'When you invalidate your own premise (history rewrite, retracted decision, overturned finding), sweep the team before your own work: in one parallel tool-call batch, steer-correct or interrupt every running order built on that premise and revise or withdraw queued ones (update_queued_message / cancel_queued_message), then continue your own work; rule 5\'s parallel-batch semantics apply.',
     );
     expect(prompt).toContain(
       'Never simulate an interrupt or merge with multiple stop, update, cancel, or send calls because the queue may advance between calls.',

@@ -60,6 +60,20 @@ export interface DeviceLinkDirectPathHandle {
 
 export type DeviceLinkPeerPath = 'direct' | 'relay';
 
+/** 一条已协商的可靠链路在本机视角的快照（远程连接拓扑页用；只读，不进 wire）。 */
+export interface DeviceLinkPeerLinkSnapshot {
+  deviceId: string;
+  path: DeviceLinkPeerPath;
+  /** 可靠帧 ACK 的平滑往返；首个 ACK 之前为 null，闲置时是最近测得的值。 */
+  rttMs: number | null;
+  /** link-open / link-accept 双向都已就绪（与 isLinkReady 同一判据）。 */
+  open: boolean;
+  /** 距本机最近一次发出业务消息（invoke / invoke-result / push）多少毫秒；这条链路上还没发过为 null。 */
+  sentAgoMs: number | null;
+  /** 距最近一次从对端收到业务消息多少毫秒；还没收到过为 null。 */
+  receivedAgoMs: number | null;
+}
+
 export interface DeviceLinkPeerPathChanged {
   deviceId: string;
   path: DeviceLinkPeerPath;
@@ -73,3 +87,6 @@ export interface DeviceLinkPeerPathChanged {
 export const DIRECT_PATH_HIGH_WATER_BYTES = 1024 * 1024;
 /** An established provider-share direct path may outlive the relay only for this long. */
 export const PROVIDER_SHARE_DIRECT_LEASE_MS = 30 * 60_000;
+
+/** Maximum retention of an authenticated same-account data path after signaling loss. */
+export const DIRECT_PATH_SIGNALING_GRACE_MS = 30 * 60_000;

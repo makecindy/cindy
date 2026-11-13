@@ -105,8 +105,7 @@ validPath:"status",validValue:"active",expiresAtPath:"expiresAtMs",expiresAtForm
 照"请重新登录"画)——详情页已如实披露,除展示外别拿它做别的;对该 key 的
 PUT/DELETE 一律 405(派生身份不可配置)。
 
-**GitHub CLI 优先凭证(source:"gh-cli",保留能力)**:仅官方 `cindy-github`
-插件可声明。主机每次 GitHub API 请求时优先复用本机 `gh auth token` 的登录态；
+**GitHub CLI 优先凭证(source:"gh-cli")**:任何已批准且身份已确认的插件实例均可声明。主机每次 GitHub API 请求时优先复用本机 `gh auth token` 的登录态；
 本机没装 gh、未登录或读取超时时,再回落到同一 key 经 `/secrets` 保存的备用 PAT。
 两种 token 都只在 Main 的 networkSlot 内存中进入请求头,插件沙箱、settings 页面、
 Renderer、Agent、KV 和日志都拿不到。设置页 GET `/secrets` 对这条 key 额外返回
@@ -128,7 +127,7 @@ audience 与组织身份由主机推导,插件清单和运行时代码都不能�
 audience/token；audience 固定为 `${orgSlug}:${ghostId}`,总长不得超过 64 字符。
 个人身份与手动导入不签发。临时例外，只对 root 实例生效：`ghostId` 精确等于 `mivo-canvas`、namespace 为 null 或尚未确认的旧 root 安装，且已装清单声明的精确 oidc-token host 仅为 `mivo-canvas.dsworks.cn` 时可解析 audience；企业 namespace 下的同名插件、其它本地插件、其它精确 host 仍不签发。已有市场
 organization 记录（含 installed:false）时必须仍走 digest，不得借例外跳过。市场账本损坏、schema 不认或该 ghostId 记录校验失败时 fail-closed，不得当成无记录。企业身份的 Forge 安装前会展示插件名、id 与精确域名，并要求手输相同 id
-确认。市场与 Forge 两条组织基座都只给 Broker 与 oidc-token、不给宿主原语。
+确认。市场与 Forge 两条组织基座提供 Broker 与 oidc-token 的资格，通用能力仍按各自声明和实例批准处理。
 该凭证必须固定声明
 `"inject": { "header": "Authorization", "format": "Bearer {value}", "hosts": [...] }`,
 且 `hosts` 必须是非空的显式子集,只允许把断言发给列出的企业服务域名。
@@ -212,16 +211,16 @@ identity.displayTemplate 时,`/oauth` 回查与连接结果里 account.label 给
 - `redirectPort`:回调固定端口。服务商要求回调 URI 与其后台注册值**精确匹配**
   (含端口,如 Atlassian)时声明,主机回调恒为 `http://127.0.0.1:<端口>/callback`;
   端口被占用时连接返回 LISTEN_FAILED(detail 带人话提示,settingsHtml 原样展示
-  即可;第一方官方内置插件会先自动结束占用进程并重试,第三方插件不享受此回收
-  ——请选一个不易撞车的端口)。声明 `tokenBroker` 时必须提供；非 broker 模式下，
+  即可；所有插件统一在主窗口展示占用程序，用户确认且进程身份复核通过后才结束它并重试)。声明 `tokenBroker` 时必须提供；非 broker 模式下，
   Google 这类允许任意 loopback 端口的服务商不用声明。
-- `tokenBroker`:资格有三路:①随包官方种子或受信任公开市场的官方插件,名称本身不构成资格；②当前组织的服务端
-  organization market 包已安装、source 为 `market`、organizationId 与当前组织一致,
+- `tokenBroker`:只发给企业绑定的安装，资格有两路：①当前组织的服务端
+  organization market 包已安装、source 为 `market`、organizationId 与当前组织一致，
   namespace 与当前组织的可信身份一致，且 release sha256 与批准 receipt 的 packageSha256 相等。
-  ③企业作者通过 `ghost_forge_install` 明确安装，Host 绑定当前组织 namespace；只有真实
-  存量待迁移安装仍使用本组织已登记前缀核对。是否已有同 id 市场记录不影响这条自测路径。
-  后两路不接受个人身份或别的组织身份；Forge 只给 Broker 与 oidc-token，不给宿主原语，
-  可信 XD 企业市场安装的宿主能力另按可信组织身份核验，不依赖名称前缀。手动导入不属于 Forge 路径。
+  ②企业作者通过 `ghost_forge_install` 明确安装到当前组织 namespace，批准 receipt
+  绑定本次包摘要；真实存量待迁移安装仍沿用本组织已登记前缀核对。
+  两路都不接受个人身份或别的组织身份；手动导入不属于 Forge 路径。
+  官方公共来源、随包来源、名称和 local 副本均不构成资格。普通插件使用自填
+  OAuth 客户端。企业 OIDC 的规则不变；通用能力仍按各自声明和实例批准处理。
   code/refresh 交换改经 Cindy 服务端 broker 完成,client secret 由服务端持有、不随包
   分发,且要求用户已登录 Cindy。声明它时必须同时声明 redirectPort,并与 clientSecret
   互斥;PKCE 缺省开(verifier

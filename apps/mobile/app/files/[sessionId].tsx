@@ -41,6 +41,7 @@ import {
   FlatList,
   Image,
   Modal,
+  Platform,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -117,6 +118,7 @@ import { downloadRemoteMediaShareTemp } from '@/session/remoteMediaDiskCacheExpo
 import type { FileBrowserSearchMatch, MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { remoteSessionStore, useRemoteSessions } from '@/session/remoteSessionStore';
 import { CindyMakeSessionGate } from '@/session/CindyMakeSessionGate';
+import { lacksInlinePreview } from '@/session/pdfSystemOpen';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import type { RemoteSession } from '@/session/types';
 import { fontWeight, lineHeight, monoFont, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
@@ -959,9 +961,9 @@ function RemoteFileBrowserContent() {
             </Text>
           }
           ListFooterComponent={
-            contentMatches.length > 0 && contentSummary ? (
+            (contentMatches.length > 0 && contentSummary ? (
               <Text style={styles.footerText}>{contentSummary}</Text>
-            ) : null
+            ) : null) ?? undefined
           }
           renderItem={({ item }) => (
             <ContentMatchRow
@@ -987,9 +989,9 @@ function RemoteFileBrowserContent() {
             </Text>
           }
           ListFooterComponent={
-            searchMatches.length > 0 ? (
+            (searchMatches.length > 0 ? (
               <Text style={styles.footerText}>{t('files.browser.nameResultSummary', { n: searchMatches.length })}</Text>
-            ) : null
+            ) : null) ?? undefined
           }
           renderItem={({ item }) => (
             <SearchResultRow match={item} onPress={() => openSearchResult(item)} />
@@ -1007,7 +1009,7 @@ function RemoteFileBrowserContent() {
           data={items}
           key={`grid-${gridColumns}`}
           keyExtractor={(item) => item.key}
-          ListEmptyComponent={!loading ? <Text style={styles.searchHint}>{t('files.browser.folderEmpty')}</Text> : null}
+          ListEmptyComponent={(!loading ? <Text style={styles.searchHint}>{t('files.browser.folderEmpty')}</Text> : null) ?? undefined}
           numColumns={gridColumns}
           refreshControl={
             <RefreshControl
@@ -1025,7 +1027,7 @@ function RemoteFileBrowserContent() {
           ItemSeparatorComponent={ListSeparator}
           key="list"
           keyExtractor={(item) => item.key}
-          ListEmptyComponent={!loading ? <Text style={styles.searchHint}>{t('files.browser.folderEmpty')}</Text> : null}
+          ListEmptyComponent={(!loading ? <Text style={styles.searchHint}>{t('files.browser.folderEmpty')}</Text> : null) ?? undefined}
           refreshControl={
             <RefreshControl
               onRefresh={() => void loadDirectory({ refreshing: true })}
@@ -1537,7 +1539,10 @@ function ContextMenu({
   const isFile = item.kind === 'file';
 
   const actions = [
-    ...(isFile ? [{ key: 'preview', label: t('files.browser.preview'), Icon: Eye, onPress: () => onPreview(item) }] : []),
+    // 安卓 WebView 不渲染 PDF,「快速预览」只会进占位页:直接隐藏,用下方「导出 / 分享」。
+    ...(isFile && !lacksInlinePreview(item.name, Platform.OS)
+      ? [{ key: 'preview', label: t('files.browser.preview'), Icon: Eye, onPress: () => onPreview(item) }]
+      : []),
     { key: 'send', label: t('files.browser.sendToSession'), Icon: MessageSquarePlus, onPress: () => onSend(item) },
     { key: 'copy', label: t('files.browser.copyPath'), Icon: Copy, onPress: () => onCopyPath(item) },
     ...(isFile ? [{ key: 'share', label: t('files.browser.exportShare'), Icon: ShareIcon, onPress: () => onShare(item) }] : []),

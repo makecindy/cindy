@@ -60,7 +60,7 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner';
+import { MakerScheduleRunner } from '../runner.desktop';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SendImpl = (
@@ -197,6 +197,7 @@ function createRunnerHarness(session: Session, overrides: Partial<ConstructorPar
     getSessionMeta: vi.fn(async () => null),
     isSessionAlive: vi.fn(() => false),
     closeSession: vi.fn(async () => undefined),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
     maker,
@@ -400,6 +401,7 @@ describe('MakerScheduleRunner background subagent task tracking', () => {
       expect(mocks.createMessage).toHaveBeenCalledOnce();
       expect(mocks.rewindPersistedUserMessageAfterClear).toHaveBeenCalledExactlyOnceWith(
         h.session.id, mocks.createMessage.mock.calls[0][1].clientId,
+        { discard: true },
       );
       expect(notifier.notify).not.toHaveBeenCalled();
     },
@@ -454,6 +456,7 @@ describe('MakerScheduleRunner background subagent task tracking', () => {
       } else {
         expect(mocks.rewindPersistedUserMessageAfterClear).toHaveBeenCalledExactlyOnceWith(
           h.session.id, mocks.createMessage.mock.calls[0][1].clientId,
+        { discard: true },
         );
         expect(vendor).not.toHaveBeenCalled();
         expect(notifier.notify).not.toHaveBeenCalled();

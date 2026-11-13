@@ -95,6 +95,8 @@ export interface GatewayImageGenerateParams {
   size?: string;
   quality?: string;
   n?: number;
+  /** Additional native body fields; connection and credentials remain host-owned. */
+  nativeParameters?: Record<string, unknown>;
 }
 
 export interface GatewayImageEditParams {
@@ -105,6 +107,7 @@ export interface GatewayImageEditParams {
   size?: string;
   quality?: string;
   n?: number;
+  nativeParameters?: Record<string, unknown>;
 }
 
 export interface GatewayImageItem {

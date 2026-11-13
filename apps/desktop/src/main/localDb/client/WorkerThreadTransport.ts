@@ -1,9 +1,11 @@
+import { deleteDeletedSessionViewStates, saveMcpAppViewState, viewStateCardSql, assertViewStateCard } from '../worker/opHandlers/mcpAppViewState.js';
 import { fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics, sanitizeToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
 import { runPluginUsageTransaction } from '../worker/opHandlers/pluginUsageTx.js';
 import { runSessionImportTransaction } from '../worker/opHandlers/sessionImportTx.js';
 import { runTaskTagsTransaction } from '../worker/opHandlers/taskTagsTx.js';
 import { recordMediaSpend } from '../worker/opHandlers/mediaSpendTx.js';
+import { recordPiUsage } from '../worker/opHandlers/piUsageTx.js';
 import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
 import { batchAutoReviewProjection, readAutoReviewProjection } from '../autoReviewProjection.js';
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../sharedTaskClosureSql.js';
@@ -26,6 +28,10 @@ import {
 import { isBackgroundDbRpc } from './rpcAdmission.js';
 
 const WORKER_CODE = `
+const viewStateCardSql = ${viewStateCardSql.toString()};
+const assertViewStateCard = ${assertViewStateCard.toString()};
+const saveMcpAppViewState = ${saveMcpAppViewState.toString()};
+const deleteDeletedSessionViewStates = ${deleteDeletedSessionViewStates.toString()};
 const sanitizeToolResultDiagnostics = ${sanitizeToolResultDiagnostics.toString()};
 const extractToolResultDiagnostics = ${extractToolResultDiagnostics.toString()};
 const compactToolCardResult = ${compactToolCardResult.toString()};
@@ -37,6 +43,7 @@ const runPluginUsageTransaction = ${runPluginUsageTransaction.toString()};
 const runSessionImportTransaction = ${runSessionImportTransaction.toString()};
 const runTaskTagsTransaction = ${runTaskTagsTransaction.toString()};
 const recordMediaSpend = ${recordMediaSpend.toString()};
+const recordPiUsage = ${recordPiUsage.toString()};
 const fastModeToStorage = ${fastModeToStorage.toString()};
 // 旧版 inline worker fallback。默认运行时走 .vite/build/dbWorker.js；
 // 这段只作为打包路径回滚口保留，后续验证 macOS / Windows packaged 后删除。
@@ -436,6 +443,8 @@ function dispatchTransaction(readyDb, payload) {
   switch (name) {
     case 'usage.recordMediaSpend':
       return recordMediaSpend(readyDb, request.args);
+    case 'usage.recordPiUsage':
+      return recordPiUsage(readyDb, request.args);
     case 'authorization.readProjection':
       return readAutoReviewProjection(readyDb, request.args, createAutoReviewIntentProjection);
     case 'rewind.commit':
@@ -491,6 +500,8 @@ function dispatchTransaction(readyDb, payload) {
       return sessionAgentSwitchFallback(readyDb, request.args);
     case 'context.rebuild':
       return contextRebuild(readyDb, request.args);
+    case 'mcpApps.viewState.save':
+      return saveMcpAppViewState(readyDb, request.args);
     case 'message.insert':
       return messageInsert(readyDb, request.args);
     case 'message.updateContent':
@@ -499,6 +510,8 @@ function dispatchTransaction(readyDb, payload) {
       return messageLeaseMutate(readyDb, request.args);
     case 'message.rewindUserAfterClear':
       return messageRewindUserAfterClear(readyDb, request.args);
+    case 'message.purgeRewoundSchedulerPrompts':
+      return messagePurgeRewoundSchedulerPrompts(readyDb, request.args);
     case 'message.delete':
       return messageDelete(readyDb, request.args);
     case 'im.deleteBindings':
@@ -899,11 +912,19 @@ function messageRewindUserAfterClear(readyDb, args) {
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const clientId = expectString(payload.clientId, 'clientId');
   const rewoundAt = expectNumber(payload.rewoundAt, 'rewoundAt');
+  const discard = payload.discard === true;
   return readyDb.transaction(() => {
     const changes = readyDb.prepare(
       "UPDATE messages SET rewind_at = ? WHERE session_id = ? AND client_id = ? AND role = 'user' AND rewind_at IS NULL",
     ).run(rewoundAt, sessionId, clientId).changes;
-    if (changes > 0) {
+    if (changes > 0 && discard) {
+      readyDb.prepare(
+        "DELETE FROM messages WHERE session_id = ? AND client_id = ? AND role = 'user' AND rewind_at = ?",
+      ).run(sessionId, clientId, rewoundAt);
+      readyDb.prepare(
+        'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
+      ).run(sessionId);
+    } else if (changes > 0) {
       readyDb.prepare(
         'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL WHERE id = ?',
       ).run(sessionId);
@@ -912,7 +933,47 @@ function messageRewindUserAfterClear(readyDb, args) {
   })();
 }
 
-// ⚠️ 与 worker/opHandlers/tx.ts 的同名事务保持一致。
+// Mirrors opHandlers/tx.ts: only provably undelivered scheduler prompts (no executionModel,
+// lone rewind_at in the session) are deleted, scanning idx_messages_rewind_at in bounded windows.
+const PURGE_REWOUND_SCAN_WINDOW = 500;
+
+function messagePurgeRewoundSchedulerPrompts(readyDb, args) {
+  const payload = asRecord(args, 'message.purgeRewoundSchedulerPrompts args');
+  const limit = expectNumber(payload.limit, 'limit');
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) {
+    throw Object.assign(new Error('limit must be an integer from 1 to 200'), { code: 'INVALID_ARGS' });
+  }
+  const cursor = payload.cursor === undefined ? 0 : expectNumber(payload.cursor, 'cursor');
+  const windowSql = 'SELECT rewind_at AS rewindAt FROM messages WHERE rewind_at > ? ORDER BY rewind_at LIMIT ?';
+  const selectSql = (
+    "SELECT m.id, m.session_id AS sessionId FROM messages m "
+    + "WHERE m.rewind_at > ? AND m.rewind_at <= ? AND m.role = 'user' AND json_valid(m.agent_meta) "
+    + "AND json_extract(m.agent_meta, '$.origin.kind') = 'scheduler' "
+    + "AND json_extract(m.agent_meta, '$.executionModel') IS NULL "
+    + 'AND NOT EXISTS (SELECT 1 FROM messages o WHERE o.rewind_at = m.rewind_at AND o.session_id = m.session_id AND o.id <> m.id) '
+    + 'ORDER BY m.rewind_at LIMIT ?'
+  );
+  return readyDb.transaction(() => {
+    const window = readyDb.prepare(windowSql).all(cursor, PURGE_REWOUND_SCAN_WINDOW);
+    if (window.length === 0) return { deleted: 0, sessionIds: [], cursor: null };
+    const windowEnd = window[window.length - 1].rewindAt;
+    const exhausted = window.length < PURGE_REWOUND_SCAN_WINDOW;
+    const rows = readyDb.prepare(selectSql).all(cursor, windowEnd, limit);
+    const nextCursor = rows.length === limit ? cursor : exhausted ? null : windowEnd;
+    if (rows.length === 0) return { deleted: 0, sessionIds: [], cursor: nextCursor };
+    const remove = readyDb.prepare(
+      "DELETE FROM messages WHERE id = ? AND role = 'user' AND rewind_at IS NOT NULL",
+    );
+    for (const row of rows) remove.run(row.id);
+    const sessionIds = [...new Set(rows.map((row) => row.sessionId))];
+    const clearPreview = readyDb.prepare(
+      'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
+    );
+    for (const sessionId of sessionIds) clearPreview.run(sessionId);
+    return { deleted: rows.length, sessionIds, cursor: nextCursor };
+  })();
+}
+
 function messageDelete(readyDb, args) {
   const payload = asRecord(args, 'message.delete args');
   const sessionId = expectString(payload.sessionId, 'sessionId');
@@ -1030,11 +1091,13 @@ function messageDelete(readyDb, args) {
     // 保留不含正文/元数据的最小 tombstone，阻止外部 Claude/Codex transcript
     // importer 下次 messages:list 时把同一 clientId 重新导入；本地有效记录中
     // 消息内容已物理清空，普通历史读取因 rewind_at 非空完全不可见。
+    const deleteState = readyDb.prepare('DELETE FROM mcp_app_view_states WHERE message_id = ?');
     const scrubTarget = readyDb.prepare(
       "UPDATE messages SET role = 'message_tombstone', content = 'null', tool_use_id = NULL, agent_meta = NULL, agent_kind = NULL, rewind_at = ? WHERE id = ? AND session_id = ? AND client_id = ? AND role IN ('user', 'assistant', 'tool_use', 'tool_result', 'ask_user', 'plan_review', 'thinking', 'error') AND rewind_at IS NULL",
     );
     for (const target of targets) {
       const scrubbed = scrubTarget.run(updatedAt, target.id, sessionId, target.clientId);
+      deleteState.run(target.id);
       if (scrubbed.changes !== 1) {
         throw Object.assign(new Error('Message 删除竞态: ' + target.clientId), {
           code: 'PRECONDITION_FAILED',
@@ -1115,6 +1178,8 @@ function sessionsRenameTitles(readyDb, args) {
   })();
 }
 
+const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel') LIMIT 1";
+
 // ⚠️ 与 worker/opHandlers/tx.ts 的 sessionsSetStatus 必须逐字保持一致。
 function sessionsSetStatus(readyDb, args) {
   const payload = asRecord(args, 'sessions.setStatus args');
@@ -1143,7 +1208,8 @@ function sessionsSetStatus(readyDb, args) {
           code: 'PRECONDITION_FAILED',
         });
       }
-      if (existing.source === 'bot') {
+      // Routine/channel lanes follow ordinary task lifecycle; keep in sync with worker/opHandlers/tx.ts.
+      if (existing.source === 'bot' && !readyDb.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) {
         throw Object.assign(new Error('Bot 任务必须通过 Bot 生命周期管理: ' + sessionId), {
           code: 'PRECONDITION_FAILED',
         });
@@ -1166,8 +1232,6 @@ function sessionsSetStatus(readyDb, args) {
     return applied;
   })();
 }
-
-const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel') LIMIT 1";
 
 // Keep this in sync with worker/opHandlers/tx.ts.
 function sessionsSetTerminalStatus(readyDb, args) {
@@ -1195,6 +1259,9 @@ function sessionsSetTerminalStatus(readyDb, args) {
           'RETURNING id AS sessionId, title, working_dir AS workingDir, workspace_kind AS workspaceKind, ' +
           'remote_host_id AS remoteHostId, source').all(now, sessionId)
       : [];
+    if (status === 'deleted') {
+      deleteDeletedSessionViewStates(readyDb, [sessionId, ...deletedSideChats.map(child => child.sessionId)]);
+    }
     for (const child of deletedSideChats) {
       readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, child.sessionId);
     }
@@ -1340,6 +1407,7 @@ function sessionImportShare(readyDb, args) {
       deleteReplacedSession.run(replacementUpdatedAt, replacedSession.id);
       readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(replacementUpdatedAt, replacedSession.id);
     }
+    deleteDeletedSessionViewStates(readyDb, replaceSessions.map(session => session.id));
     let count = insertSessionWithMessages(session, messages);
     if (orca) {
       const team = asRecord(orca.team, 'orca.team');
@@ -1569,6 +1637,10 @@ function orcaReserveWorkerCreation(readyDb, args) {
   const expiresAt = expectNumber(payload.expiresAt, 'expiresAt');
   return readyDb.transaction(() => {
     readyDb.prepare('DELETE FROM orca_worker_creation_reservations WHERE expires_at <= ?').run(now);
+    // 与 worker/opHandlers/tx.ts 的 orcaReserveWorkerCreation 保持一致：已归档／已删除任务的 Worker 让出名字。
+    readyDb.prepare(\`UPDATE orca_workers SET label = label || '~' || id, updated_at = ?
+      WHERE team_id = ? AND label = ? COLLATE NOCASE
+        AND session_id IN (SELECT id FROM sessions WHERE status != 'active')\`).run(now, teamId, label);
     const duplicateWorker = readyDb.prepare(
       'SELECT 1 FROM orca_workers WHERE team_id = ? AND label = ? COLLATE NOCASE LIMIT 1',
     ).get(teamId, label);
@@ -1664,6 +1736,7 @@ function rewindCommit(readyDb, args) {
     targetMessageUuid,
     preserveMessageUuid,
   });
+  const rewoundIds = new Set(idsToRewind);
   const updateMessage = readyDb.prepare('UPDATE messages SET rewind_at = ? WHERE id = ?');
   const hasSubagentRuns = Boolean(
     readyDb.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'subagent_runs'").get(),
@@ -1697,7 +1770,6 @@ function rewindCommit(readyDb, args) {
     // Mirror worker/opHandlers/tx.ts: surviving rows that still anchor the old
     // Codex thread are remapped to the replacement thread in the same transaction.
     if (nativeForkAnchorSessionMap.size > 0) {
-      const rewoundIds = new Set(idsToRewind);
       for (const row of rows) {
         if (rewoundIds.has(row.id) || !row.agent_meta) continue;
         const remapped = remapNativeForkAnchorSession(row.agent_meta, nativeForkAnchorSessionMap);
@@ -1705,7 +1777,6 @@ function rewindCommit(readyDb, args) {
       }
     }
     if (rewindSubagentByParent && rewindParentlessSubagentTail) {
-      const rewoundIds = new Set(idsToRewind);
       const parentToolUseIds = new Set(
         rows.flatMap((row) => rewoundIds.has(row.id) && row.tool_use_id ? [row.tool_use_id] : []),
       );
@@ -1732,6 +1803,7 @@ function rewindCommit(readyDb, args) {
       readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, codex_plan_json = NULL, list_preview = NULL, list_preview_role = NULL WHERE id = ?').run(now, now, sessionId);
     }
   })();
+  return rows.filter((row) => rewoundIds.has(row.id)).map((row) => row.client_id);
 }
 
 function parsedTreeObjectJson(value) {

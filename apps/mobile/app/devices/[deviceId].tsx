@@ -829,7 +829,7 @@ function DeviceDetailScreenContent() {
               testID={`deviceDetail.automationRunRow.${item.session.id}`}
             />
           )}
-          ListEmptyComponent={suppressListEmptyState ? (
+          ListEmptyComponent={(suppressListEmptyState ? (
             effectiveError ? null : <RemoteListSyncingPlaceholder testID="deviceDetail.automationSyncing" />
           ) : (
             <MainWindowEmptyState
@@ -843,7 +843,7 @@ function DeviceDetailScreenContent() {
               testID="deviceDetail.automationEmpty"
               title={t('devices.detail.automationScope.emptyTitle')}
             />
-          )}
+          )) ?? undefined}
         />
         {actionOverlays}
       </SafeAreaView>
@@ -919,6 +919,7 @@ function DeviceDetailScreenContent() {
                   filterA11y={searchFilterA11y}
                   filterActions={searchFilterMenu.filterActions}
                   filterActive={indexedSearch.activeFilterCount > 0}
+                  searching={indexedSearch.status === 'searching'}
                   onChangeQuery={setSearchQuery}
                   onDismiss={() => setSearchOpen(false)}
                   onFilterAction={searchFilterMenu.onFilterAction}
@@ -967,7 +968,7 @@ function DeviceDetailScreenContent() {
                 testID={`deviceDetail.projectSessionRow.${item.session.id}`}
               />
             )}
-            ListEmptyComponent={suppressListEmptyState ? (
+            ListEmptyComponent={(suppressListEmptyState ? (
               effectiveError ? null : <RemoteListSyncingPlaceholder testID="deviceDetail.projectSyncing" />
             ) : (
               <MainWindowEmptyState
@@ -981,7 +982,7 @@ function DeviceDetailScreenContent() {
                 testID="deviceDetail.projectEmpty"
                 title={searchQuery.trim() ? deviceSessionEmptyState(statusFilter, searchQuery).title : t('devices.detail.projectScope.emptyTitle')}
               />
-            )}
+            )) ?? undefined}
           />
         </ListDisclosureScope>
         {actionOverlays}
@@ -1137,6 +1138,7 @@ function DeviceDetailScreenContent() {
             filterA11y={searchFilterA11y}
             filterActions={searchFilterMenu.filterActions}
             filterActive={indexedSearch.activeFilterCount > 0}
+            searching={indexedSearch.status === 'searching'}
             onChangeQuery={setSearchQuery}
             onFilterAction={searchFilterMenu.onFilterAction}
             onOpenFilter={() => setSearchFilterOpen(true)}
@@ -1313,7 +1315,7 @@ function DeviceDetailScreenContent() {
           renderSectionHeader={({ section }) => (
             section.title ? <Text style={styles.sectionTitle}>{section.title}</Text> : null
           )}
-          ListEmptyComponent={suppressListEmptyState ? (
+          ListEmptyComponent={(suppressListEmptyState ? (
             effectiveError ? null : <RemoteListSyncingPlaceholder testID="deviceDetail.syncing" />
           ) : (
             <MainWindowEmptyState
@@ -1327,7 +1329,7 @@ function DeviceDetailScreenContent() {
               testID="deviceDetail.empty"
               title={emptyState.title}
             />
-          )}
+          )) ?? undefined}
           renderItem={({ item }) => (
             <DeviceDetailSessionRow
               expandedAutomationGroups={expandedAutomationGroups}

@@ -49,6 +49,16 @@ it('saves through the existing Settings helper and resolves with only the server
   expect(JSON.stringify(api.resolveInteraction.mock.calls)).not.toContain('test-invalid-token');
 });
 
+// Teammates get the tools in this chat on the next message, so they must not see "start a new session".
+it.each([
+  [true, 'settings.mcp.dialog.teammateDesc', 'settings.mcp.dialog.desc'],
+  [false, 'settings.mcp.dialog.desc', 'settings.mcp.dialog.teammateDesc'],
+] as const)('teammate=%s shows only its own form hint', async (teammate, shown, hidden) => {
+  render(<McpSetupPrompt request={request} teammate={teammate} />);
+  expect(await screen.findByText(shown)).toBeTruthy();
+  expect(screen.queryByText(hidden)).toBeNull();
+});
+
 function Probe({ sessionId = 'task', enabled = true }: { sessionId?: string; enabled?: boolean }) {
   const pending = useMcpSetupRequest(sessionId, enabled);
   return pending ? <McpSetupPrompt key={pending.requestId} request={pending} /> : null;

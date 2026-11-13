@@ -1,4 +1,4 @@
-import { AppWindow, Bot, Cpu, FileCode2, FilePen, FolderOpen, FolderPlus, Globe, GraduationCap, KeyRound, LayoutTemplate, Library, MapPin, Megaphone, MessageCircleQuestion, PanelLeft, PanelRight, Puzzle, Radio, Sparkles, Terminal, Wrench, type LucideIcon } from 'lucide-react';
+import { AppWindow, Bot, Cpu, FileCode2, FilePen, FolderOpen, FolderPlus, Globe, GraduationCap, KeyRound, LayoutTemplate, Library, MapPin, Megaphone, MessageCircleQuestion, PanelLeft, PanelRight, Puzzle, Radio, Smartphone, Sparkles, Terminal, Wrench, type LucideIcon } from 'lucide-react';
 
 import type { GhostPermissionItem } from '../../../../shared/ghost';
 
@@ -26,6 +26,7 @@ const PERMISSION_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   'browser-extension': Puzzle,
   skill: GraduationCap,
   workspace: FolderPlus,
+  'live-screen': Smartphone,
 };
 
 /**

@@ -2,10 +2,40 @@ import { groupTeammateProcess } from '@cindy/maker-shared/message-render';
 import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
 import { botTaskResultKey, readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import { HISTORY_GAP_SPLIT_MS } from '@cindy/maker-shared/history-gap';
+import { collectBotTurnContinuations } from '@cindy/maker-shared/botTimeline';
 import type { MobileMessageRenderItem, MobileWorkGroupItem, MobileWorkChildItem } from './messageRenderModel';
+
+export function companionTurnContinuations(items: readonly MobileMessageRenderItem[]): ReadonlySet<string> {
+  return collectBotTurnContinuations(items, item => {
+    const start = item.type === 'work_group' ? item.startedAtMs
+      : 'message' in item ? Date.parse(item.message.createdAt) : undefined;
+    return {
+      kind: item.type === 'work_group' ? 'process'
+        : item.type === 'message' && item.message.kind === 'assistant' && !item.message.systemCardType
+          && !item.message.companion ? 'reply'
+        : item.type === 'message' && item.message.companion ? 'artifact'
+        : item.type === 'message' || item.type === 'pending_send' || item.type === 'fork_origin' ? 'boundary' : 'artifact',
+      completed: item.type === 'message' && item.message.turnCompleted === true,
+      start,
+      end: item.type === 'work_group' && start !== undefined ? start + (item.durationMs ?? 0) : start,
+    };
+  });
+}
 
 const expandWorkGroups = (items: readonly MobileMessageRenderItem[]): MobileMessageRenderItem[] =>
   items.flatMap(item => item.type === 'work_group' ? expandWorkGroups(item.children) : [item]);
+
+/** Match Desktop: keep internal model prose in storage, with traces and work still accessible. */
+function withoutPrivateProse<T extends MobileMessageRenderItem>(items: readonly T[]): T[] {
+  return items.filter(item => !(item.type === 'message' && item.message.kind === 'assistant'
+    && !item.message.systemCardType && !item.message.companion
+    && item.message.source.agentMeta?.botPrivateReply === true)).map(item => {
+    if (item.type !== 'work_group') return item;
+    const children = withoutPrivateProse(item.children);
+    return children.length === item.children.length && children.every((child, index) => child === item.children[index])
+      ? item : { ...item, children };
+  });
+}
 
 /** Lift addressed replies without destroying the process tree or its lazy loader. */
 function liftReplies(group: MobileWorkGroupItem, isReply: (item: MobileMessageRenderItem) => boolean): MobileMessageRenderItem[] {
@@ -42,6 +72,7 @@ function liftReplies(group: MobileWorkGroupItem, isReply: (item: MobileMessageRe
 
 /** Presentation only. The host's persisted messages and lazy history remain intact. */
 export function companionConversationItems(items: readonly MobileMessageRenderItem[]): MobileMessageRenderItem[] {
+  items = withoutPrivateProse(items);
   // The main timeline folds earlier background-wake seals into work groups; teammate chats
   // still show every sealed reply, so find sealed runs with tools/thinking as boundaries.
   const sealed = new Set<string>();
@@ -122,7 +153,7 @@ export function companionProcessItems(items: readonly MobileMessageRenderItem[],
     isProgress: item => item.type === 'message' && item.message.kind === 'assistant' && !item.message.systemCardType
       && !addressed.has(item) && (item.message.source.agentMeta?.assistantPhase === 'commentary'
         || (liveItems.has(item))),
-    isRecovery: item => item.type === 'message' && ['agent-switch', 'auto-resume', 'context-rebuild'].includes(item.message.systemCardType ?? ''),
+    isRecovery: item => item.type === 'message' && ['auto-resume', 'context-rebuild'].includes(item.message.systemCardType ?? ''),
     start: time,
     end: item => item.type === 'work_group' && item.startedAtMs !== undefined
       ? item.startedAtMs + (item.durationMs ?? 0) : time(item),

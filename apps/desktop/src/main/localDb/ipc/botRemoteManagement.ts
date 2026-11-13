@@ -1,25 +1,29 @@
-import { getBotAutonomySettingsView, resetBotAutonomySchedulerSettings, setBotAutonomySchedulerBotId } from '../../bot-autonomy/hub.js';
 import { readEffectiveBotModelChain } from '../../maker-host/bot-model-chain-settings-store.js';
 import type { RemoteResourceHostContext } from '../../device-link/remoteResourceRegistry.js';
 import { botRemoteResourceFromSource } from './botRemoteResourceProjection.js';
 import { resolveAvailableTaskModels } from '../../maker-ipc/appDefaultModelControl.js';
 import type { BotModelRoute } from '../../../shared/botModelChain.js';
 import { createBotRemoteSettingsResource } from './botRemoteSettingsResource.js';
-import { createBotProfile, createBotCanonicalSession, getBotMemoryService, getBotRemoteResourceSource, getBotRemoteSettingsSource, readBotSettingsProfile, searchBotHistory, setBotProfileAvatar, updateBotProfile } from './bots.js';
-import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
+import { botProjectRepository, createBotProfile, createBotCanonicalSession, getBotMemoryService, getBotRemoteResourceSource, getBotRemoteSettingsSource, readBotSettingsProfile, searchBotHistory, setBotProfileAvatar, updateBotProfile } from './bots.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../../appSessionState.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
-import { listBotSkillsForBot, readBotSkillForBot, saveBotSkillForSession, deleteBotSkillForBot } from '../../maker-ipc/botSkillService.js';
+import { listBotSkillsForBot, readBotSkillForBot, deleteBotSkillForBot } from '../../maker-ipc/botSkillService.js';
+import {
+  deleteBotSkillForSettings, readBotCoreSkill, readBotSkillForSettings, saveBotSkillForSettings, setBotSkillEnabledForSettings,
+} from './botSkillSettingsIpc.js';
 import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
+import { buildTeammateGuide } from '../../maker-ipc/teammateGuide.js';
 import { createBotRemoteEditors } from './botRemoteEditors.js';
 import { decodeBotAvatarImage } from './botAvatarSelection.js';
 import { runRegisteredBotLifecycleAction } from '../../maker-ipc/botLifecycleService.js';
 import { listBotSettingsCapabilities, validateBotCapabilityAdditions } from '../../maker-host/index.js';
 import { isProviderSharePeer, isSharedTaskPeer } from '@cindy/device-link';
-import { readDeviceLinkSettings } from '../../device-link/settings-store.js';
+import { readDeviceLinkSettings } from '../../device-link/settings-store.desktop.js';
 import { readRemoteBotSessionAccess } from './botRemoteSessionAccess.js';
 import { createBotRemoteSettingsHost } from './botRemoteSettingsHost.js';
 import { createBotRemoteSettingsOps } from './botRemoteSettingsOps.js';
 import { botLinkedProjectAccess } from '../../maker-ipc/botLinkedProjects.js';
+import { teammateWorkspaceDir } from '../../maker-ipc/botProjectMemory.js';
 
 async function validateModelChain(chain: BotModelRoute[]) {
   const scope = activeOwnerScopeKey();
@@ -27,6 +31,9 @@ async function validateModelChain(chain: BotModelRoute[]) {
   if (isAppSessionBoundaryPending() || scope !== activeOwnerScopeKey()) throwIpcError('PRECONDITION_FAILED', 'Account changed');
   if (resolved.some(route => !route)) throwIpcError('INVALID_PARAMS', 'Model route unavailable');
 }
+
+/** Loaded on use, like the other page-only services below. */
+const scheduleIpc = () => import('../../maker-ipc/schedule.js');
 
 /** Composition only: profile transactions, skill reads and lifecycle stay with their existing owners. */
 const deps = {
@@ -54,7 +61,14 @@ const getEditor = createBotRemoteEditors({ ...deps,
     list: async botId => (await botLinkedProjectAccess(botId)).read(),
     set: async (botId, id, linked) => (await botLinkedProjectAccess(botId)).set(id, linked),
   },
-  followUp: { get: getBotAutonomySettingsView, set: setBotAutonomySchedulerBotId },
+  // The teammate project's automations, through the same scheduler calls as the Automations page.
+  automations: {
+    workspace: botId => teammateWorkspaceDir(ownerScopedUserDataPath(), botId),
+    list: async () => (await scheduleIpc()).scheduleHostAccess.list(),
+    inflight: async id => (await scheduleIpc()).scheduleHostAccess.inflight(id),
+    pause: async id => (await scheduleIpc()).pauseScheduleClearingUnread(id),
+    resume: async id => (await scheduleIpc()).scheduleHostAccess.resume(id),
+  },
   async modelDefaults() {
     const owner = deps.owner();
     const chain = await readEffectiveBotModelChain({});
@@ -91,7 +105,7 @@ const getEditor = createBotRemoteEditors({ ...deps,
       source = await getBotRemoteResourceSource(input.id);
     }
     deps.assertOwner(owner);
-    if (source.status !== 'active') throwIpcError('PRECONDITION_FAILED', 'Teammate unavailable');
+    if (source.status !== 'active') throwIpcError('PRECONDITION_FAILED', 'Buddy unavailable');
     if (!source.canonicalSessionId && (!source.invitation || source.invitation.stage === 'ready')) await createBotCanonicalSession({ botId: source.id, expectedCanonicalSessionId: null, expectedProfileVersion: source.currentVersion });
     deps.assertOwner(owner);
   },
@@ -101,19 +115,20 @@ const getEditor = createBotRemoteEditors({ ...deps,
     await setBotProfileAvatar(botId, image, version, expectedAvatar);
   },
   skill: readBotSkillForBot,
+  // Same save as the local settings page, so an imported skill keeps its own frontmatter.
   async saveSkill(botId, skill) {
     const owner = deps.owner();
-    const { source } = await deps.read(botId);
+    await saveBotSkillForSettings(botId, { slug: skill.slug, name: skill.name, description: skill.description, body: skill.body }, { remote: true });
     deps.assertOwner(owner);
-    if (!source.canonicalSessionId) throwIpcError('PRECONDITION_FAILED', 'Teammate unavailable');
-    const result = await saveBotSkillForSession({ callerSessionId: source.canonicalSessionId, ...skill });
-    if (!result.ok) throwIpcError('PRECONDITION_FAILED', 'Skill could not be saved; refresh before retrying');
   },
   async removeSkill(botId, slug) {
     const owner = deps.owner(); const { source } = await deps.read(botId); deps.assertOwner(owner);
     await deleteBotSkillForBot(botId, slug); deps.assertOwner(owner);
     if (source.canonicalSessionId) await requestBotRuntimeEpochRefresh(source.canonicalSessionId, 'resource');
   },
+  // Same move-and-refresh as the local settings page.
+  setSkillEnabled: (botId, slug, enabled) => setBotSkillEnabledForSettings(botId, slug, enabled, { remote: true }),
+  coreGuide: () => buildTeammateGuide(),
   async capabilities(callerSessionId, kind) {
     return listBotSettingsCapabilities({ callerSessionId, kind });
   },
@@ -141,9 +156,6 @@ async function getInvitation(context: RemoteResourceHostContext, botId: string) 
     return { effects: [{ kind: 'refresh-collection', collectionId: 'teammates' }] };
   });
 }
-/** The routine service is shared with the local routines IPC; load it when a routines page asks. */
-const routineTools = async () => (await import('../../routines/service.js')).routineTools;
-
 /** The messaging stack is only needed by a remote Desktop's channels page. */
 const imRuntime = () => import('../../im/shared/botImConnectionRuntime.js');
 
@@ -168,6 +180,7 @@ const settingsHost = createBotRemoteSettingsHost({
   },
   botVisible: async botId => (await readRemoteBotSessionAccess(botId, 'bot')) === 'visible',
   ops: createBotRemoteSettingsOps({
+    projectRepository: botProjectRepository,
     readProfile: readBotSettingsProfile,
     updateProfile: input => updateBotProfile(input, undefined, validateBotCapabilityAdditions),
     async setAvatar(botId, avatarImageBase64) {
@@ -187,23 +200,22 @@ const settingsHost = createBotRemoteSettingsHost({
     canonicalSessionId: async botId => (await getBotRemoteSettingsSource(botId)).source.canonicalSessionId ?? null,
     capabilities: (callerSessionId, kind) => listBotSettingsCapabilities({ callerSessionId, kind }),
     personalSkills: listBotSkillsForBot,
-    autonomy: { get: getBotAutonomySettingsView, set: setBotAutonomySchedulerBotId, reset: resetBotAutonomySchedulerSettings },
-    searchHistory: searchBotHistory,
-    routines: {
-      list: async (botId) => (await routineTools()).list(botId),
-      sources: async () => (await routineTools()).sources(),
-      deliveryTargets: async (botId) => (await routineTools()).deliveryTargets(botId),
-      history: async (botId, id) => (await routineTools()).history(botId, id),
-      save: async (botId, input, id) => (await routineTools()).save(botId, input, id),
-      runNow: async (botId, id) => (await routineTools()).runNow(botId, id),
-      remove: async (botId, id) => (await routineTools()).remove(botId, id),
+    skills: {
+      core: readBotCoreSkill,
+      read: (botId, slug) => readBotSkillForSettings(botId, slug, { remote: true }),
+      save: (botId, input) => saveBotSkillForSettings(botId, input, { remote: true }),
+      setEnabled: (botId, slug, enabled) => setBotSkillEnabledForSettings(botId, slug, enabled, { remote: true }),
+      delete: (botId, slug) => deleteBotSkillForSettings(botId, slug, { remote: true }),
     },
+    searchHistory: searchBotHistory,
     channels: {
       im: {
         list: async () => (await imRuntime()).buildBotImConnectionListPayload(),
         remove: async (id) => (await imRuntime()).removeBotImConnection(id),
         listGroups: async (id) => (await imRuntime()).listBotImConnectionGroups(id),
         setGroupActivation: async (id, chatId, mode) => (await imRuntime()).setBotImConnectionGroupMode(id, chatId, mode),
+        listDiscordChannels: async (id) => (await imRuntime()).listBotImDiscordChannels(id),
+        setDiscordChannelAccess: async (id, access) => (await imRuntime()).setBotImDiscordChannelAccess(id, access),
         listLanes: async (id) => (await imRuntime()).listBotImConnectionLanesForSettings(id),
         resetLane: async (id, sessionId) => (await imRuntime()).resetBotImConnectionLaneForSettings(id, sessionId),
         listAdoptable: async () => (await import('../../im/shared/botImPersonalAdoption.js')).listAdoptablePersonalBots(),

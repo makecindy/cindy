@@ -11,7 +11,7 @@ import { canManageBotGroup } from './botGroupRemote';
  * own teammate are written as yourself, every other write as the owner or admin you control.
  */
 export type GroupSettingsActionId = BotGroupRemoteActionId | 'set-member-role' | 'archive' | 'transfer' | 'nickname' | 'avatar' | 'bot-access';
-const SELF_ACTIONS = new Set<GroupSettingsActionId>(['nickname', 'avatar', 'bot-access', 'add-member']);
+const SELF_ACTIONS = new Set<GroupSettingsActionId>(['nickname', 'avatar', 'bot-access', 'add-member', 'notifications']);
 type Settings = { group: BotGroupRemoteChatData; managerId?: string };
 
 /** Cloud settings use the account's chat service, never device discovery or a host link. */
@@ -26,6 +26,7 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
   const writing = useRef<symbol | null>(null);
   const [state, setState] = useState<{ binding: typeof binding; settings?: Settings; loading: boolean; failed: boolean }>();
   const pending = useRef<{ binding: typeof binding; key: string; operationId: string; managerId: string | undefined; action: ChatGroupSettingsAction } | null>(null);
+  const pendingInvite = useRef<{ binding: typeof binding; managerId: string; operationId: string } | null>(null);
   const valid = useCallback(() => enabled && api.enabled && api.current() && active.current === binding, [api, enabled, binding]);
   const refresh = useCallback(async () => {
     if (!valid()) return;
@@ -43,7 +44,7 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
     }
   }, [api, binding, groupId, valid]);
   // The parent already subscribes to server changes. Recheck only settings/membership changes.
-  const sourceVersion = JSON.stringify([source.revision, source.archived, source.dissolvedAt,
+  const sourceVersion = JSON.stringify([source.revision, source.archived, source.dissolvedAt, source.notificationMode,
     source.members.map(member => [member.actorId, member.role, member.status])]);
   useEffect(() => { void refresh(); }, [refresh, sourceVersion]);
 
@@ -51,7 +52,7 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
     const current = verified.current?.binding === binding ? verified.current.settings : undefined;
     const asSelf = SELF_ACTIONS.has(actionId);
     // An archived group only takes 取消归档 from its managers.
-    const allowed = asSelf ? !current?.group.archived : actionId === 'archive'
+    const allowed = asSelf ? !current?.group.archived && (actionId !== 'notifications' || current?.group.supportsNotificationSettings === true) : actionId === 'archive'
       ? !!current?.managerId && chatGroupMembership(current.group).manager : !!current?.managerId && canManageBotGroup(current.group);
     if (!valid() || !current || !allowed || current.group.dissolvedAt || writing.current) throw new Error('PERMISSION_DENIED');
     const revision = (value: unknown) => {
@@ -61,7 +62,10 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
     };
     const actor = () => { const id = String(input.actorId ?? ''); if (!id) throw new Error('INVALID_PARAMS'); return id; };
     let action: ChatGroupSettingsAction;
-    if (actionId === 'nickname') {
+    if (actionId === 'notifications') {
+      if (input.mode !== 'all' && input.mode !== 'mentions' && input.mode !== 'none') throw new Error('INVALID_PARAMS');
+      action = { type: 'notifications', mode: input.mode };
+    } else if (actionId === 'nickname') {
       action = { type: 'nickname', actorId: actor(), nickname: typeof input.nickname === 'string' && input.nickname.trim() ? input.nickname.trim() : null };
     } else if (actionId === 'avatar') {
       if (!current.group.supportsMemberAvatar) throw new Error('CHAT_UNAVAILABLE');
@@ -120,10 +124,16 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
   const invite = useCallback(async (revoke?: string) => {
     const current = verified.current?.binding === binding ? verified.current.settings : undefined;
     if (!valid() || !current?.managerId || current.group.dissolvedAt || current.group.archived) throw new Error('PERMISSION_DENIED');
-    const operationId = randomUUID();
-    if (revoke) { await api.client.revokeInvite(groupId, current.managerId, revoke, operationId); return null; }
-    const link = await api.client.createInvite(groupId, current.managerId, operationId);
+    if (revoke) { await api.client.revokeInvite(groupId, current.managerId, revoke, randomUUID()); return null; }
+    // Share publication may fail after the invite was created. Retry its original
+    // receipt so the Chat Server returns the same token instead of another invite.
+    const prior = pendingInvite.current;
+    const operation = prior?.binding === binding && prior.managerId === current.managerId ? prior
+      : { binding, managerId: current.managerId, operationId: randomUUID() };
+    pendingInvite.current = operation;
+    const link = await api.client.createInvite(groupId, operation.managerId, operation.operationId);
     if (!valid()) throw new Error('OWNER_CHANGED');
+    if (pendingInvite.current === operation) pendingInvite.current = null;
     return link;
   }, [api, binding, groupId, valid]);
   const own = state?.binding === binding;

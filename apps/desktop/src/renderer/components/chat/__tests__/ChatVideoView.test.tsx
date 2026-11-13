@@ -253,3 +253,28 @@ it('coordinates inline videos and audio through playback and retry', () => {
   expect(pause.mock.contexts).not.toContain(second);
   unregister();
 });
+// Regression #8735: a local audio preview looped and kept playing after the
+// preview closed. Collection previews close by unmounting the player without its
+// own close handler; the cases above only cover video menus and inline players.
+// Tier 1, minimum input: open one audio preview, then unmount it.
+it('audio previews play once and stop when the preview unmounts', () => {
+  const view = render(
+    <VideoLightbox src="xdt-audio://local/?path=%2Fsong.mp3" kind="audio" onClose={vi.fn()} />,
+    { wrapper: Tooltip.Provider },
+  );
+  const audio = document.querySelector('audio')!;
+  expect(audio.loop).toBe(false);
+  view.unmount();
+  expect(pause.mock.contexts).toContain(audio);
+});
+
+// Tier 1: Chromium's native download cannot save custom media URLs. The inline
+// action must use the same host save operation as the viewer, without opening it.
+it('saves the inline media through the host without opening the viewer', async () => {
+  const saveMediaAs = vi.fn().mockResolvedValue({ canceled: false, savedPath: '/clip.mp4' });
+  vi.stubGlobal('electronAPI', { saveMediaAs });
+  const view = render(<ChatVideoView {...props} />, { wrapper: Tooltip.Provider });
+  fireEvent.click(view.getByRole('button', { name: 'chat.media.saveAs' }));
+  await vi.waitFor(() => expect(saveMediaAs).toHaveBeenCalledWith({ url: props.src }));
+  expect(view.container.querySelectorAll('video')).toHaveLength(1);
+});

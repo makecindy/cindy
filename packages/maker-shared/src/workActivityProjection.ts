@@ -1,4 +1,4 @@
-import { isToolResultFailureLike } from './messagePresentation';
+import { formatToolRowText, isToolResultFailureLike, type ToolRowWording } from './messagePresentation';
 /**
  * Shared work activity projection for desktop and mobile.
  *
@@ -14,6 +14,7 @@ import {
 } from './commandIntent';
 import {
   describeToolUse,
+  humanizeToolToken,
   type ToolUseDescriptor,
 } from './toolUseDescriptor';
 
@@ -339,6 +340,8 @@ export interface TeammateWorkSummary {
   failedCount: number;
   running: boolean;
   thinking: boolean;
+  latestTool?: ToolUseDescriptor;
+  runningTool?: ToolUseDescriptor;
 }
 
 export function summarizeTeammateWork<T extends WorkActivityMessageLike>(
@@ -349,12 +352,24 @@ export function summarizeTeammateWork<T extends WorkActivityMessageLike>(
   const failed = new Set<string>();
   let running = false;
   let thinking = false;
+  let latestTool: ToolUseDescriptor | undefined;
+  let runningTool: ToolUseDescriptor | undefined;
   for (const activity of activities) {
     if (activity.kind === 'thinking') { thinking = true; continue; }
     const message = activity.message;
     calls.add(message.clientId);
     running ||= activity.status === 'running';
     const descriptor = describeToolUse(message.toolName ?? '', message.toolInput);
+    latestTool = descriptor.kind === 'command' && activity.intentOverride
+      ? { ...descriptor, intent: activity.intentOverride } : descriptor;
+    // Dispatch wrappers should identify the requested operation, not just
+    // repeat "call tool". Do not project arbitrary arguments or result text.
+    const input = message.toolInput;
+    if ((latestTool.kind === 'mcp' || latestTool.kind === 'dynamic') && latestTool.tool === 'call_tool'
+      && input && typeof input === 'object' && 'name' in input && typeof input.name === 'string' && input.name.trim()) {
+      latestTool = { ...latestTool, toolLabel: humanizeToolToken(input.name.trim()) };
+    }
+    if (activity.status === 'running') runningTool = latestTool;
     if (activity.toolResult && isToolResultFailureLike(descriptor, activity.toolResult)) failed.add(message.clientId);
     if (activity.exploration) kinds.add(activity.exploration.kind === 'search' ? 'search' : 'read');
     else switch (descriptor.kind) {
@@ -368,7 +383,7 @@ export function summarizeTeammateWork<T extends WorkActivityMessageLike>(
       default: kinds.add('tools');
     }
   }
-  return { kinds: [...kinds], toolCount: calls.size, failedCount: failed.size, running, thinking };
+  return { kinds: [...kinds], toolCount: calls.size, failedCount: failed.size, running, thinking, latestTool, runningTool };
 }
 
 /** Prose and recovery cards are boundaries, never extracted to a separate list.
@@ -395,11 +410,16 @@ export function teammateWorkSummaryText(
   summary: TeammateWorkSummary,
   active: boolean,
   t: (key: string, options?: { count?: number }) => string,
+  wording?: ToolRowWording,
 ): string {
   const prefix = 'chat.teammateProcess.';
+  // A failed attempt is not a failed turn. Keep errors in the original records;
+  // the summary describes the current action, not an accumulating error counter.
+  const tool = active ? summary.runningTool ?? summary.latestTool : summary.latestTool;
+  if (tool) return formatToolRowText(tool, wording).label;
   const state = active && summary.running ? 'running' : 'done';
   const actions = summary.kinds.map(kind => t(`${prefix}actions.${state}.${kind}`));
   const text = actions.length ? actions.join(t(`${prefix}separator`))
     : t(`${prefix}${active ? 'thinking' : summary.thinking ? 'thought' : 'worked'}`);
-  return summary.failedCount ? `${text} · ${t(`${prefix}failed`, { count: summary.failedCount })}` : text;
+  return text;
 }

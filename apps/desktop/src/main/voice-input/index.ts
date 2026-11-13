@@ -37,6 +37,7 @@ import { getEffectiveAuxiliaryModelChainSnapshot } from '../utility-model/resolv
 import { getAppCapabilities } from '../appCapabilities.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { publishMicrophonePermissionSnapshot, registerMicrophonePermissionIpc } from './microphonePermissionIpc.js';
 import {
   desktopCodexAuthAdapter,
   readOwnerScopedXdGatewayKey,
@@ -45,6 +46,7 @@ import { reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejecti
 import {
   activeOwnerScopeKey,
   getActiveAppSession,
+  getPersistedAppSessionMode,
   isAppSessionBoundaryPending,
 } from '../appSessionState.js';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs.js';
@@ -303,6 +305,7 @@ let cachedMicrophonePermission: VoiceInputMicrophonePermissionCache | null = nul
 let rendererVerifiedMicrophonePermission = false;
 let cachedVoiceInputReadiness: VoiceInputReadiness | null = null;
 let readinessRefreshPromise: Promise<VoiceInputReadiness> | null = null;
+const voiceInputReadyListeners = new Set<() => void>();
 let lastModelSelectionSignature = '';
 let modelSelectionGeneration = 0;
 const MAX_REFINEMENT_SIDE_CONTEXT_CHARS = 1_200;
@@ -1488,6 +1491,7 @@ function readMicrophonePermissionSnapshot(): VoiceInputMicrophonePermissionCache
 
 function refreshMicrophonePermissionCache(): VoiceInputMicrophonePermissionCache {
   cachedMicrophonePermission = readMicrophonePermissionSnapshot();
+  publishMicrophonePermissionSnapshot(cachedMicrophonePermission);
   return cachedMicrophonePermission;
 }
 
@@ -1528,12 +1532,50 @@ async function refreshVoiceInputReadinessCache(reason: string): Promise<VoiceInp
         provider: readiness.provider,
         auth: readiness.auth,
       });
+      if (readiness.ok && generation === modelSelectionGeneration) {
+        for (const listener of voiceInputReadyListeners) {
+          try {
+            listener();
+          } catch (error) {
+            log.warn('voice input ready listener failed', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      }
       return readiness;
     })
     .finally(() => {
       readinessRefreshPromise = null;
     });
   return readinessRefreshPromise;
+}
+
+/** Notified whenever a readiness refresh finds a startable dictation path. */
+export function onVoiceInputReady(listener: () => void): () => void {
+  voiceInputReadyListeners.add(listener);
+  return () => { voiceInputReadyListeners.delete(listener); };
+}
+
+/**
+ * Whether the global overlay is worth keeping warm for this profile. Cloud
+ * profiles — including a persisted cloud intent while auth is still verifying
+ * at startup — keep the unconditional prewarm. Local and signed-out profiles
+ * can only dictate through explicitly configured user credentials; without
+ * them the shortcut can only surface a setup error, so the hidden renderer
+ * would stay resident for nothing.
+ */
+export async function canGlobalVoiceInputOverlayStartDictation(): Promise<boolean> {
+  if (getAppCapabilities().canUseCindyAccountServices) return true;
+  if (getPersistedAppSessionMode() === 'cloud') return true;
+  try {
+    return (await refreshVoiceInputReadinessCache('global-overlay-prewarm')).ok;
+  } catch (error) {
+    log.debug('global overlay readiness check failed; keeping prewarm', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return true;
+  }
 }
 
 function resetVoiceInputModelSelectionCaches(
@@ -1894,7 +1936,7 @@ export function registerVoiceInputIpc(): void {
     // Reuse dictation's opt-in setting, local enrollment and strictness. A new
     // microphone run (including unmute) reads current settings; ASR rotation
     // keeps the same gate. No separate companion voiceprint or audio storage.
-    createAudioGate: () => getSpeakerFilterService().createGate(voiceInputDataStore.getSettings()),
+    createAudioGate: (onFiltered) => getSpeakerFilterService().createGate(voiceInputDataStore.getSettings(), onFiltered),
     updateSettings: patch => voiceInputDataStore.updateSettings(patch),
     hasDictation: () => activeByWebContentsId.size > 0 || pendingDictationStarts > 0 || systemAudioMuteGuard.hasPendingOrActiveMute,
     createProvider: async () => {
@@ -1954,9 +1996,7 @@ export function registerVoiceInputIpc(): void {
     },
   );
 
-  ipcMain.on('voice-input:get-microphone-permission-cached', (event) => {
-    event.returnValue = getCachedMicrophonePermission();
-  });
+  registerMicrophonePermissionIpc(getCachedMicrophonePermission);
 
   ipcMain.handle('voice-input:set-renderer-microphone-permission-verified', async (_event, verified: boolean) => {
     rendererVerifiedMicrophonePermission = verified;
@@ -2378,6 +2418,8 @@ export function registerVoiceInputIpc(): void {
           timelineEvent,
           provider.activeProviderKind,
         ));
+      } else if (timelineEvent.type === 'speculative_refine_skipped') {
+        log.info('speculative refinement skipped', summarizeTimelineEventForLog(timelineEvent));
       } else if (timelineEvent.type === 'refine_accepted' || timelineEvent.type === 'refine_rejected') {
         const start = timelineEvents.get(`${timelineEvent.runId}:start_clicked`);
         log.info('refinement latency summary', {
@@ -2392,12 +2434,17 @@ export function registerVoiceInputIpc(): void {
     });
 
     // "Recognize my voice": undefined unless enabled, enrolled and the models are on disk.
-    const audioGate = getSpeakerFilterService().createGate(voiceInputDataStore.getSettings());
+    const audioGate = getSpeakerFilterService().createGate(voiceInputDataStore.getSettings(), () => {
+      if (runId) emit({ type: 'speaker-filtered', runId });
+    });
     const controller = new VoiceInputController({
       asr: provider,
       refiner,
       audioGate,
       pauseRefinementEnabled: true,
+      // Managed refinement is capped per voice-server session; keep one request
+      // for the final text. BYOK refiners have no such cap.
+      refineRequestBudget: voiceContext ? () => voiceContext.refineRequestBudget() : undefined,
       recoveryErrorMessage: voiceContext ? getVoiceInputRateLimitMessage : undefined,
       logger,
       callbacks: {

@@ -31,10 +31,10 @@ export function cloudCompanionAt(cloud: CompanionCloudSnapshot, deviceId: string
   return cloud.actors.find((actor) => actor.externalId === botId && actor.homeDeviceId === deviceId) ?? null;
 }
 
-/** A remote companion homed on that computer: its connection is not announced (cloud-companions.md §3.1). */
+/** Read-only cloud rows do not announce a connection, including a rejected local restore. */
 export function isCloudCompanionRemote(cloud: CompanionCloudSnapshot, bot: Pick<RemoteBot, 'id' | 'deviceId'>): boolean {
   const actor = cloudCompanionAt(cloud, bot.deviceId, bot.id);
-  return !!actor && actor.homeDeviceId !== cloud.selfDeviceId;
+  return !!actor && (actor.homeDeviceId !== cloud.selfDeviceId || !!actor.profileFailure);
 }
 
 /**
@@ -45,7 +45,8 @@ export function cloudOnlyRemoteBots(cloud: CompanionCloudSnapshot, remoteBots: r
   if (!cloud.enabled) return [];
   return cloud.actors.flatMap((actor) => {
     const home = actor.homeDeviceId;
-    if (!home || home === cloud.selfDeviceId) return [];
+    // A rejected local restore still needs a read-only entry with its recovery action.
+    if (!home || (home === cloud.selfDeviceId && !actor.profileFailure)) return [];
     if (remoteBots.some((bot) => bot.deviceId === home && bot.id === actor.externalId)) return [];
     return [{
       id: actor.externalId,

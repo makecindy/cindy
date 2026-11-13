@@ -8,10 +8,14 @@ import {
   type InstalledGhost,
 } from '../../shared/ghost.js';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
+import { projectPluginUiConsent } from '../../shared/pluginUiConsent.js';
 import type {
   PluginMarketDetail,
   PluginMarketInstallOptions,
   PluginMarketSnapshot,
+  PluginMarketQuery,
+  PluginMarketPage,
+  PluginMarketItem,
 } from '../../shared/pluginMarket.js';
 import type {
   PluginManagementProject,
@@ -56,7 +60,9 @@ export interface RemotePluginManagementDeps {
   capture(peer: string): () => boolean;
   captureReceipt(peer: string): () => boolean;
   market: {
-    snapshot(): Promise<PluginMarketSnapshot>;
+    snapshot(legacyCatalog?: boolean): Promise<PluginMarketSnapshot>;
+    query?(input: PluginMarketQuery): Promise<PluginMarketPage>;
+    recommendations?(): Promise<PluginMarketItem[]>;
     detail(id: string): Promise<PluginMarketDetail>;
     install(
       id: string,
@@ -121,6 +127,7 @@ export function projectManagedGhost(g: InstalledGhost): InstalledGhost {
     targetCapabilityApproved: g.targetCapabilityApproved,
     delegationCapabilityApproved: g.delegationCapabilityApproved,
     observeCapabilityApproved: g.observeCapabilityApproved,
+    companionsCapabilityApproved: g.companionsCapabilityApproved,
     oauthScopeStale: g.oauthScopeStale,
     oauthAuthorizationExpired: g.oauthAuthorizationExpired,
   };
@@ -192,12 +199,32 @@ export class RemotePluginManagement {
     this.prune();
     const input = request.input ?? {};
     const result = (value: unknown): RemoteActionInvokeResponse => ({ effects: [], result: value });
-    if (request.actionId === 'management:snapshot') {
+    if (request.actionId === 'management:ui-consent') {
       if (Object.keys(input).length) return invalid();
       const current = this.deps.capture(peer);
       if (!current()) return unavailable();
+      const snapshot = projectPluginUiConsent(this.deps.list(), !!this.deps.ui,
+        ghost => this.deps.ui?.suppressed(ghost) === true);
+      if (!current()) return unavailable();
+      return result(snapshot);
+    }
+    if (request.actionId === 'management:snapshot') {
+      const read = input.read;
+      if (Object.keys(input).some(key => key !== 'read' && key !== 'query')) return invalid();
+      if (read !== undefined && !['capabilities', 'installed', 'catalog', 'recommendations'].includes(String(read))) return invalid();
+      const current = this.deps.capture(peer);
+      if (!current()) return unavailable();
+      if (read === 'capabilities') return result({ catalogPaging: !!this.deps.market.query && !!this.deps.market.recommendations });
+      if (read === 'catalog' || read === 'recommendations') {
+        const value = read === 'catalog' && this.deps.market.query
+          ? await this.deps.market.query(input.query as PluginMarketQuery ?? {})
+          : read === 'recommendations' && this.deps.market.recommendations
+            ? await this.deps.market.recommendations() : null;
+        if (!current()) return unavailable();
+        return result(value);
+      }
       const [market, projects] = await Promise.all([
-        this.deps.market.snapshot(),
+        this.deps.market.snapshot(read === undefined),
         this.deps.projects?.list(),
       ]);
       if (!current()) return unavailable();

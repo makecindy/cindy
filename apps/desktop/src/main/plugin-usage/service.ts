@@ -27,6 +27,7 @@ export class PluginUsageService {
   private tail: Promise<unknown> = Promise.resolve();
   private stopped = false;
   private readonly handles = new Map<string, PluginUsageHandle>();
+  private readonly bindingFlights = new Map<string, Promise<PluginUsageHandle | null>>();
   private readonly paused = new Set<string>();
   private readonly now: () => number;
   private readonly reporter?: PluginUsageReporter;
@@ -128,6 +129,37 @@ export class PluginUsageService {
       this.assertCurrent();
       if (handle) this.handles.set(identity.ghostId, handle);
     });
+  }
+
+  /** Bind once per installed revision; concurrent first calls share one write. */
+  ensure(identity: PluginUsageIdentity): Promise<PluginUsageHandle | null> {
+    if (this.stopped || !this.deps.isCurrent() || this.paused.has(identity.ghostId))
+      return Promise.resolve(null);
+    const existing = this.handles.get(identity.ghostId);
+    if (
+      existing &&
+      existing.identity.revision === identity.revision &&
+      existing.identity.stableKey === identity.stableKey
+    )
+      return Promise.resolve(this.freeze(existing, identity));
+    const key = JSON.stringify([identity.ghostId, identity.revision, identity.stableKey]);
+    const pending = this.bindingFlights.get(key);
+    if (pending) return pending;
+    const flight = this.bind(identity)
+      .then(() => {
+        const handle = this.handles.get(identity.ghostId);
+        return handle &&
+          handle.identity.revision === identity.revision &&
+          handle.identity.stableKey === identity.stableKey
+          ? this.freeze(handle, identity)
+          : null;
+      })
+      .catch(() => null)
+      .finally(() => {
+        if (this.bindingFlights.get(key) === flight) this.bindingFlights.delete(key);
+      });
+    this.bindingFlights.set(key, flight);
+    return flight;
   }
 
   /** Freeze the generation/version before dispatch. An unready binding is never replayed. */

@@ -12,6 +12,7 @@ import {
   clampAppearanceTerminalSize,
   clampAppearanceUiSize,
   clampAppearanceWindowZoom,
+  isAppIcon,
   type AppearanceOverrides,
   type AppearanceSettings,
   type WallpaperId,
@@ -23,13 +24,21 @@ import {
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 import { isAppContentWindow } from './windowFocusClassifier.js';
+import { refreshMacSidebarGeometry } from './macosDesktopBlur.js';
 import {
   readAppearanceSettings,
   readAppearanceSettingsState,
   resetAppearanceSettings,
   updateAppearanceSettingsAtomic,
   writeAppearanceSettingsPatch,
+  appearanceService,
+  readSelectedThemeFont,
 } from './appearance-settings-store.js';
+import { parseThemeSelection } from '../shared/appearanceDefinition.js';
+import { APPEARANCE_RESET_FIELDS, appearanceResetPatch } from './appearance/definition.js';
+import { applyDockIcon } from './app-icon.js';
+import { pluginAppearanceRevision } from './cindy-brain/pluginAppearanceRevision.js';
+import { LOCAL_THEME_SUFFIX } from '../shared/local-themes.js';
 
 export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
 
@@ -45,11 +54,7 @@ export function registerAppearanceSettingsIpc(): void {
   // repeatedly applying an already matching scale. Only app-content windows
   // participate; embedded webpages and utility windows keep their own zoom.
   app.on('browser-window-focus', function restoreFocusedWindowZoom(_event, win) {
-    if (!isAppContentWindow(win) || win.webContents.isDestroyed()) return;
-    const settings = readAppearanceSettings();
-    if (Math.abs(win.webContents.getZoomFactor() - settings.windowZoom) > 0.000001) {
-      applyAppearanceToWindow(win, settings);
-    }
+    restoreWindowZoom(win);
   });
 
   // Must be registered before BrowserWindow creation: preload reads this on
@@ -65,6 +70,14 @@ export function registerAppearanceSettingsIpc(): void {
     const state = readAppearanceSettingsState();
     broadcast(state.value);
     return state;
+  });
+
+  ipcMain.handle('appearance-settings:plugin-font', async (event, role: unknown) => {
+    if (!isTrustedAppearanceSettingsReadEvent(event) || typeof role !== 'string') throwIpcError('INVALID_PARAMS', 'Appearance font reader required');
+    const themeFont = await readSelectedThemeFont(role);
+    if (themeFont) return themeFont;
+    const { readSelectedPluginFont } = await import('./mcp-apps/appearance.js');
+    return readSelectedPluginFont(role);
   });
 
   // Local Desktop appearance only: no remote allowlist and no renderer-supplied path.
@@ -118,18 +131,31 @@ export function registerAppearanceSettingsIpc(): void {
 
   ipcMain.handle('appearance-settings:set-patch', async (event, rawPatch: unknown) => {
     assertTrustedAppRendererEvent(event);
-    const patch = parsePatch(rawPatch);
-    const settings = await writeAppearanceSettingsPatch(patch);
-    applyAppearanceToWindows(settings);
-    broadcast(settings);
-    return settings;
+    return updateAppearanceFromSettings(rawPatch);
   });
 
   ipcMain.handle('appearance-settings:reset', async (event) => {
     assertTrustedAppRendererEvent(event);
-    const settings = await resetAppearanceSettings();
-    applyAppearanceToWindows(settings);
-    broadcast(settings);
+    return resetAppearanceFromSettings();
+  });
+
+  ipcMain.handle('appearance-settings:select-theme', async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const selection = raw === null ? null : parseThemeSelection(raw);
+    if (raw !== null && (!selection || !selection.familyId.endsWith(LOCAL_THEME_SUFFIX)))
+      throwIpcError('INVALID_PARAMS', 'Invalid theme package selection');
+    try {
+      const settings = await appearanceService.select(selection);
+      publishAppearanceFromOwner(settings);
+      return settings;
+    } catch { throwIpcError('INTERNAL', 'Unable to prepare theme package'); }
+  });
+  ipcMain.handle('appearance-settings:reset-fields', async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (!Array.isArray(raw) || !raw.length || raw.length > APPEARANCE_RESET_FIELDS.length ||
+        raw.some(field => !APPEARANCE_RESET_FIELDS.includes(field))) throwIpcError('INVALID_PARAMS', 'Invalid appearance reset');
+    const settings = await writeAppearanceSettingsPatch(appearanceResetPatch(raw));
+    publishAppearanceFromOwner(settings);
     return settings;
   });
 }
@@ -140,12 +166,44 @@ export function applyAppearanceToWindow(
 ): void {
   if (win.isDestroyed() || win.webContents.isDestroyed() || !isAppContentWindow(win)) return;
   win.webContents.setZoomFactor(settings.windowZoom);
+  if (process.platform === 'darwin') refreshMacSidebarGeometry(win);
 }
 
 export function applyAppearanceToWindows(settings = readAppearanceSettings()): void {
   for (const win of BrowserWindow.getAllWindows()) {
     applyAppearanceToWindow(win, settings);
   }
+}
+
+/**
+ * Re-asserts the persisted window zoom only when the live zoom has drifted.
+ *
+ * Chromium persists a zoom level per URL. A window that navigates to a URL with
+ * a stale record silently keeps that record instead of the saved preference
+ * (#7486). Callers invoke this at points where Chromium can override the zoom.
+ */
+export function restoreWindowZoom(win: BrowserWindow): void {
+  if (!isAppContentWindow(win) || win.webContents.isDestroyed()) return;
+  const settings = readAppearanceSettings();
+  if (Math.abs(win.webContents.getZoomFactor() - settings.windowZoom) > 0.000001) {
+    applyAppearanceToWindow(win, settings);
+  }
+}
+
+/**
+ * Keeps the persisted zoom across in-page navigations.
+ *
+ * The renderer routes conversations through the URL hash, so `did-finish-load`
+ * never fires when the user switches pages. Chromium then restores whatever
+ * zoom level it recorded for the new URL, which makes the window shrink or grow
+ * until the next full load. Re-assert the preference on every in-page
+ * navigation so the saved scale wins.
+ */
+export function installWindowZoomRestoration(win: BrowserWindow): void {
+  win.webContents.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
+    if (!isMainFrame || win.isDestroyed() || win.webContents.isDestroyed()) return;
+    restoreWindowZoom(win);
+  });
 }
 
 export function getPersistedWindowZoom(): number {
@@ -167,8 +225,8 @@ function appearanceForWindow(
   win: BrowserWindow | null,
 ): AppearanceSettings {
   if (isAppContentWindow(win)) return settings;
-  const { customWallpaperUrl: _privateUrl, ...publicSettings } = settings;
-  void _privateUrl;
+  const { customWallpaperUrl: _privateUrl, customWallpaperFallbackUrl: _fallback, ...publicSettings } = settings;
+  void _privateUrl; void _fallback;
   return {
     ...publicSettings,
     wallpaperId: settings.wallpaperId === 'custom' ? 'none' : settings.wallpaperId,
@@ -202,17 +260,26 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
     'wallpaperId',
     'wallpaperOverlay',
     'wallpaperVisibility',
+    'desktopVisibility',
     'wallpaperBlur',
     'wallpaperMotion',
+    'appIcon',
+    'density',
+    'motion',
   ]);
   for (const key of Object.keys(raw)) {
     if (!allowed.has(key)) throwIpcError('INVALID_PARAMS', `unknown appearance field: ${key}`);
   }
   const patch: AppearanceOverrides = {};
-  if ('uiFamily' in raw) patch.uiFamily = parseFamily(raw.uiFamily, 'uiFamily');
-  if ('codeFamily' in raw) patch.codeFamily = parseFamily(raw.codeFamily, 'codeFamily');
-  if ('terminalFamily' in raw)
+  if ('uiFamily' in raw) { patch.uiFamily = parseFamily(raw.uiFamily, 'uiFamily'); patch.uiFontResource = undefined; }
+  if ('codeFamily' in raw) { patch.codeFamily = parseFamily(raw.codeFamily, 'codeFamily'); patch.codeFontResource = undefined; }
+  if ('terminalFamily' in raw) {
     patch.terminalFamily = parseFamily(raw.terminalFamily, 'terminalFamily');
+    patch.terminalFontResource = undefined;
+  }
+  for (const [key, min, max] of [['density', 0.75, 1.25], ['motion', 0, 2]] as const) {
+    if (key in raw) patch[key] = parseNumber(raw[key], key, value => Math.min(max, Math.max(min, value)), { min, max });
+  }
   if ('uiSize' in raw)
     patch.uiSize = parseNumber(
       raw.uiSize,
@@ -276,6 +343,17 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
             APPEARANCE_LIMITS.wallpaperVisibility,
           );
   }
+  if ('desktopVisibility' in raw) {
+    patch.desktopVisibility =
+      raw.desktopVisibility === null
+        ? null
+        : parseNumber(
+            raw.desktopVisibility,
+            'desktopVisibility',
+            clampAppearanceWallpaperVisibility,
+            APPEARANCE_LIMITS.wallpaperVisibility,
+          );
+  }
   if ('wallpaperBlur' in raw) {
     patch.wallpaperBlur =
       raw.wallpaperBlur === null
@@ -286,6 +364,10 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
             clampAppearanceWallpaperBlur,
             APPEARANCE_LIMITS.wallpaperBlur,
           );
+  }
+  if ('appIcon' in raw) {
+    if (!isAppIcon(raw.appIcon)) throwIpcError('INVALID_PARAMS', 'appIcon is not supported');
+    patch.appIcon = raw.appIcon;
   }
   return patch;
 }
@@ -315,3 +397,41 @@ function parseNumber(
 }
 
 export const __testing = { parsePatch };
+
+/** Plugin settings use the same profile owner and existing window broadcast. */
+export function publishAppearanceFromOwner(settings: AppearanceSettings): void {
+  applyAppearanceToWindows(settings);
+  applyDockIcon(settings);
+  broadcast(settings);
+}
+
+/** Refresh only a package projection already requested by the renderer. */
+export function refreshAppearanceTheme(): Promise<AppearanceSettings> | undefined {
+  const preparation = appearanceService.refresh();
+  if (!preparation) return undefined;
+  const previous = pluginAppearanceRevision(readAppearanceSettings());
+  return preparation.then(settings => {
+    if (pluginAppearanceRevision(settings) !== previous) publishAppearanceFromOwner(settings);
+    return settings;
+  });
+}
+
+/** UI and Agent edits share validation, persistence, live windows and broadcasts. */
+export async function updateAppearanceFromSettings(rawPatch: unknown, options?: { ifRevision?: unknown; assertCurrent?(): void }) {
+  const patch = parsePatch(rawPatch);
+  const settings = options ? await updateAppearanceSettingsAtomic(() => {
+    options.assertCurrent?.();
+    if (options.ifRevision !== undefined) {
+      if (typeof options.ifRevision !== 'string' || !/^[a-f0-9]{64}$/.test(options.ifRevision)) throw new Error('MCP_APP_INVALID_REQUEST');
+      if (options.ifRevision !== pluginAppearanceRevision(readAppearanceSettings())) throw new Error('MCP_APP_APPEARANCE_CHANGED');
+    }
+    return patch;
+  }) : await writeAppearanceSettingsPatch(patch);
+  publishAppearanceFromOwner(settings);
+  return settings;
+}
+export async function resetAppearanceFromSettings() {
+  const settings = await resetAppearanceSettings();
+  publishAppearanceFromOwner(settings);
+  return settings;
+}

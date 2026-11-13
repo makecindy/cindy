@@ -34,6 +34,56 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; });
 
+// Unit: the production hook must keep permanent delegation on while typing,
+// while its existing explicit switch still persists off. Prior tests cover reads/retries only.
+it.each(['always', 'scheduled', 'manual'] as const)('preserves the %s participation policy and explicit disable', async trigger => {
+  server.settings.trigger = trigger;
+  h.client.mask.mockImplementation(async (_room, action) => {
+    if (action?.type === 'participate') server = { ...server, status: 'paused' };
+    if (action?.type === 'save') server = { ...server, settings: action.settings, status: action.settings.enabled ? 'enabled' : 'off' };
+    return server;
+  });
+  await render();
+  await act(async () => result.participate());
+  expect(h.client.mask.mock.calls.filter(call => call[1]?.type === 'participate')).toHaveLength(trigger === 'always' ? 0 : 1);
+  expect(result.state?.status).toBe(trigger === 'always' ? 'enabled' : 'paused');
+  await act(async () => result.update({ enabled: false }));
+  expect(result.state?.settings.enabled).toBe(false);
+  expect(result.state?.status).toBe('off');
+});
+
+// Unit timing regression at the production hook: fixed-trigger tests miss stale
+// queued/retried participation after a mode switch. A separate failed read must
+// stay retryable when that obsolete presence action is discarded.
+it.each(['queued', 'failed'] as const)('drops %s participation after switching to permanent and retains another retry', async mode => {
+  server.settings.trigger = 'scheduled';
+  let failRead = true;
+  h.client.maskMentions.mockImplementation(async (_room, _before, readIds) => {
+    if (readIds && failRead) throw new Error('NETWORK_ERROR');
+    return { mentions: [{ messageId: 'question', sequence: '1' }], hasMore: false };
+  });
+  h.client.mask.mockImplementation(async (_room, action) => {
+    if (action?.type === 'participate') throw new Error('NETWORK_ERROR');
+    if (action?.type === 'save') server = { ...server, revision: 2, settings: action.settings };
+    return server;
+  });
+  await render();
+  await act(async () => result.markRead(['question']));
+  if (mode === 'failed') await act(async () => result.participate());
+  await act(async () => {
+    result.update({ trigger: 'always' });
+    if (mode === 'queued') result.participate();
+  });
+  await act(async () => result.retry());
+  expect(result.state?.settings.trigger).toBe('always');
+  expect(h.client.mask.mock.calls.filter(call => call[1]?.type === 'participate')).toHaveLength(mode === 'queued' ? 0 : 1);
+  expect(result.error).toBe(true);
+  failRead = false;
+  await act(async () => result.retry());
+  expect(result.error).toBe(false);
+  expect(h.client.maskMentions.mock.calls.filter(call => call[2])).toHaveLength(3);
+});
+
 it('reads without acknowledging, acknowledges the selected original, and reflects offline home presence', async () => {
   await render();
   expect(result.mentions).toHaveLength(1);
@@ -64,6 +114,7 @@ it('discards late receipts and queued grants after access disappears, even when 
 // Independent mutations used to clear the shared failure ref. Exercise the real
 // hook with a failed save followed by successful presence/read, then retry it.
 it.each(['participate', 'read'] as const)('retains a failed save after %s succeeds', async operation => {
+  server.settings.trigger = 'scheduled';
   let fail = true;
   h.client.mask.mockImplementation(async (_room, action) => {
     if (action?.type === 'save') {

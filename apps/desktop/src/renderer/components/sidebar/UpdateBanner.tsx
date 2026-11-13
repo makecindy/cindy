@@ -74,12 +74,22 @@ interface UpdateBannerProps {
    * 提供;未传时文字链整体不渲染。
    */
   onOpenVersionNotice?: (version: string) => void;
+  /**
+   * 状态进入安装前置条件错误时是否自动弹出提示。侧栏实例负责自动弹出；
+   * 浮窗副本关闭它，避免同一个提示叠开两次（点击操作触发的弹窗不受影响）。
+   */
+  autoOpenPrerequisiteDialogs?: boolean;
 }
 
-const UPDATE_BUTTON_TREATMENT =
-  '[--button-face-bg:var(--update-btn-bg)] [--button-face-border:var(--update-btn-border)] text-[var(--update-btn-text)] enabled:hover:[--button-face-bg:var(--update-btn-hover)] enabled:hover:[--button-face-border:var(--update-btn-border)] enabled:active:[--button-face-bg:var(--update-btn-hover)] enabled:active:[--button-face-border:var(--update-btn-border)]';
+// 状态写法与 Button 的 variant 相同的修饰符才能替换它；只写 enabled:hover 优先级更低，不生效。
+export const UPDATE_BUTTON_TREATMENT =
+  '[--button-face-bg:var(--update-btn-bg)] [--button-face-border:var(--update-btn-border)] text-[var(--update-btn-text)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--update-btn-hover)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-border:var(--update-btn-border)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--update-btn-pressed)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-border:var(--update-btn-border)]';
 
-export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerProps) {
+export function UpdateBanner({
+  isCollapsed,
+  onOpenVersionNotice,
+  autoOpenPrerequisiteDialogs = true,
+}: UpdateBannerProps) {
   const { status, version, errorCode } = useUpdateStatus();
   const { effectiveLocale } = useLocale();
   // 用户主动关闭态(仅本次进程内存,由 UserInfoSection 的火焰按钮唤回)。
@@ -137,20 +147,20 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   const isPreparing = status === 'superseding';
 
   useEffect(() => {
-    if (isLinuxInstallationUnsupported) setShowLinuxInstallationDialog(true);
-  }, [isLinuxInstallationUnsupported]);
+    if (autoOpenPrerequisiteDialogs && isLinuxInstallationUnsupported) setShowLinuxInstallationDialog(true);
+  }, [autoOpenPrerequisiteDialogs, isLinuxInstallationUnsupported]);
 
   useEffect(() => {
-    if (isWindowsRuntimeMissing) setShowWindowsRuntimeDialog(true);
-  }, [isWindowsRuntimeMissing]);
+    if (autoOpenPrerequisiteDialogs && isWindowsRuntimeMissing) setShowWindowsRuntimeDialog(true);
+  }, [autoOpenPrerequisiteDialogs, isWindowsRuntimeMissing]);
 
   useEffect(() => {
-    if (isSpawnFailed) setShowSpawnFailedDialog(true);
-  }, [isSpawnFailed]);
+    if (autoOpenPrerequisiteDialogs && isSpawnFailed) setShowSpawnFailedDialog(true);
+  }, [autoOpenPrerequisiteDialogs, isSpawnFailed]);
 
   useEffect(() => {
-    if (isTranslocated) setShowTranslocatedDialog(true);
-  }, [isTranslocated]);
+    if (autoOpenPrerequisiteDialogs && isTranslocated) setShowTranslocatedDialog(true);
+  }, [autoOpenPrerequisiteDialogs, isTranslocated]);
 
   // 一旦不再是 ready(如被 superseding 顶掉 / 出错),复位确认态,避免残留一个
   // 指向旧补丁的「仍要重启」;同时作废在飞的探针 —— 它的结论建立在「当前补丁可装」之上。
@@ -190,7 +200,9 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   //     让探测跟着弹窗开关反复重跑。
   const canOpenNotice = Boolean(onOpenVersionNotice);
   useEffect(() => {
-    if (status !== 'ready' || !version || !canOpenNotice || isCollapsed) {
+    // 同版本就绪 = 换装 Apple 芯片包，不展示公告链接，也就不必探测。
+    const nativeBuildSwitch = version === window.electronAPI?.appVersion;
+    if (status !== 'ready' || !version || !canOpenNotice || isCollapsed || nativeBuildSwitch) {
       setHasNotes(false);
       return;
     }
@@ -350,8 +362,14 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // 文字链要显示的版本 —— undefined 即不显示。ready 态之外(superseding / error)没有
   // 可信版本号,confirming 态则刻意让位给两步确认。hasNotes 已经蕴含「ready + 该版本
   // 公告可渲染」,这里再显式列出条件,读代码时不必回溯 effect。
+  // 版本号不变却已就绪 = Rosetta 下的 Intel 包换装 Apple 芯片原生包（主进程只在这种情况
+  // 放行同版本补丁）。「已更新到 当前版本」会让人困惑，改说换装；也没有新的更新公告可看。
+  const isNativeBuildSwitch = status === 'ready' && !!version
+    && version === window.electronAPI?.appVersion;
   const notesVersion =
-    status === 'ready' && !confirming && hasNotes && version ? version : undefined;
+    status === 'ready' && !confirming && hasNotes && version && !isNativeBuildSwitch
+      ? version
+      : undefined;
 
   const versionSuffix = version ? ` (v${version})` : '';
   const versionForAria = version ?? 'latest';
@@ -554,7 +572,9 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
             ? t('update.banner.preparingTitle')
             : confirming
               ? t('update.banner.confirmTitle')
-              : t('update.banner.title', { version: version ?? '…' })}
+              : isNativeBuildSwitch
+                ? t('update.banner.nativeBuildTitle')
+                : t('update.banner.title', { version: version ?? '…' })}
         </p>
 
         {/* Subtitle + 「查看更新公告」文字链 —— 同一视觉组(gap-1),所以链接读作副标题的
@@ -574,7 +594,9 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
               ? t('update.banner.preparingSubtitle')
               : confirming
                 ? (formatRelaunchActivityHint((key, vars) => t(key, vars), activitySummary) ?? t('update.banner.confirmBusyHint'))
-                : t('update.banner.subtitle')}
+                : isNativeBuildSwitch
+                  ? t('update.banner.nativeBuildSubtitle')
+                  : t('update.banner.subtitle')}
           </p>
           {notesVersion && (
             <button
@@ -644,5 +666,28 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
         )}
       </div>
     </div>,
+  );
+}
+
+/** 原侧栏不可见时，显式请求的更新提醒仍在窗口左下角显示。 */
+export function FloatingUpdateBanner({
+  enabled,
+  ownsPrerequisiteDialogs = false,
+  onOpenVersionNotice,
+}: {
+  enabled: boolean;
+  /** 没有侧栏实例（设置页）时由浮窗负责自动弹出安装提示；否则交给侧栏，避免叠开两次。 */
+  ownsPrerequisiteDialogs?: boolean;
+} & Pick<UpdateBannerProps, 'onOpenVersionNotice'>) {
+  const { revealRequested, pinnedByUser, dismissed } = useUpdateBannerDismiss();
+  if (!enabled || (!revealRequested && (!pinnedByUser || dismissed))) return null;
+  return (
+    <div className="fixed bottom-4 left-4 z-50 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-sidebar-border bg-sidebar empty:hidden">
+      <UpdateBanner
+        isCollapsed={false}
+        onOpenVersionNotice={onOpenVersionNotice}
+        autoOpenPrerequisiteDialogs={ownsPrerequisiteDialogs}
+      />
+    </div>
   );
 }

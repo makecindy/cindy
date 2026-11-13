@@ -2,13 +2,14 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { useTranslation } from 'react-i18next';
 import { Minus, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Tip } from '@/components/ui/tooltip';
 import type { RegionSize } from '../../../shared/regionScreenshot';
 import { isPreciseWheel, pinchZoomFactor } from './trackpad';
 
 /** Image coordinates stay unchanged: zoom/scroll only transform the editing viewport. */
-export function ScreenshotEditorViewport({ image, tools, children, onAction, onMinimize, onClose }: {
+export function ScreenshotEditorViewport({ image, tools, children, aiMenu, onMinimize, onClose }: {
   image: RegionSize | null; tools: ReactNode; children: ReactNode;
-  onAction: (action: 'ask' | 'translate' | 'explain' | 'extract') => void;
+  aiMenu: ReactNode;
   onMinimize: () => void;
   onClose: () => void;
 }) {
@@ -71,16 +72,12 @@ export function ScreenshotEditorViewport({ image, tools, children, onAction, onM
         <Button size="xs" variant="secondary" tone="quiet" onClick={() => setZoom('width')}>{t('regionScreenshot.editor.fitWidth')}</Button>
         <Button size="xs" variant="secondary" tone="quiet" onClick={() => setZoom('fit')}>{t('remoteDesktop.fit')}</Button>
         <Button size="xs" variant="secondary" tone="quiet" onClick={() => changeZoom(1)}>{t('remoteDesktop.actualSize')}</Button>
-        <span className="min-w-8 flex-1" />
+        <div className="ml-auto flex shrink-0 items-center gap-1">
         <span className="text-12 tabular-nums text-[var(--text-secondary)]">{image && `${image.width} × ${image.height}`}</span>
-        <details className="relative text-12 [-webkit-app-region:no-drag]">
-          <summary className="cursor-pointer rounded-full px-3 py-1.5">Cindy</summary>
-          <div className="absolute right-0 top-full z-20 flex min-w-40 flex-col rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1">
-            {(['ask', 'translate', 'explain', 'extract'] as const).map((action) => <Button key={action} size="xs" variant="secondary" tone="quiet" onClick={() => onAction(action)}>{t('regionScreenshot.ai.' + action)}</Button>)}
-          </div>
-        </details>
-        <Button size="xs" variant="secondary" tone="quiet" className="w-7 px-0" aria-label={t('titleBar.minimize')} onClick={onMinimize}><Minus size={14} /></Button>
-        <Button size="xs" variant="secondary" tone="quiet" className="w-7 px-0" aria-label={t('titleBar.close')} onClick={onClose}><X size={14} /></Button>
+        {aiMenu}
+        <Tip text={t('titleBar.minimize')} side="bottom"><Button size="sm" variant="secondary" tone="quiet" className="w-7 px-0" aria-label={t('titleBar.minimize')} onClick={onMinimize}><Minus size={14} /></Button></Tip>
+        <Tip text={t('titleBar.close')} side="bottom"><Button size="sm" variant="secondary" tone="quiet" className="w-7 px-0" aria-label={t('titleBar.close')} onClick={onClose}><X size={14} /></Button></Tip>
+        </div>
       </div>
       {image && tools}
     </div>

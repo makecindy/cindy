@@ -1,5 +1,10 @@
-import type { ComponentProps } from 'react';
-import { ModelSelector, ModelSelectorContent, type ModelMemoryAccessors } from './ModelSelector';
+import {
+  ModelSelector,
+  ModelSelectorContent,
+  type ModelMemoryAccessors,
+  type ModelSelectorBaseProps,
+  type ModelSelectorContentBaseProps,
+} from './ModelSelector';
 import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
 import { agentDeviceModelMemoryAccessors } from '@/state/agentDeviceModelMemory';
 import { modelCatalogKey } from '../../../shared/controlledModelCatalog';
@@ -41,14 +46,14 @@ function useModelRouteOptions(
 
 /** Full control using the common task/worker location catalog. */
 export function ModelRouteSelector({ agentDeviceId, sshRemote, deviceId, ...props }:
-  Omit<ComponentProps<typeof ModelSelector>, 'remoteAgent'> & ModelRouteContext) {
+  Omit<ModelSelectorBaseProps, 'deviceId'> & ModelRouteContext) {
   const options = useModelRouteOptions({ deviceId, agentDeviceId, sshRemote }, props.modelMemory);
   return <ModelSelector {...props} {...options} />;
 }
 
 /** The same selector inside an existing popover; callbacks retain the full selection. */
 export function ModelRouteSelectorContent({ agentDeviceId, sshRemote, deviceId, ...props }:
-  Omit<ComponentProps<typeof ModelSelectorContent>, 'remoteAgent'> & ModelRouteContext) {
+  Omit<ModelSelectorContentBaseProps, 'deviceId'> & ModelRouteContext) {
   const options = useModelRouteOptions({ deviceId, agentDeviceId, sshRemote }, props.modelMemory);
   return <ModelSelectorContent {...props} {...options} />;
 }

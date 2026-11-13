@@ -1,5 +1,5 @@
 import type { MessageSourceGroup } from '@cindy/maker-shared/message-source';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 
 /** A group link identifies a lane, not an authorization. Only its live Chat Server
  * execution may supply authority; persisted route keys cannot recreate a grant. */
@@ -10,7 +10,12 @@ export interface GroupToolAuthority {
   mode: 'owner' | 'chat' | 'tools';
   validate(): Promise<void>;
   isCurrent(): boolean;
+  onDenied?(error: GroupToolAuthorizationError): Promise<void>;
+  /** This execution opened an ordinary task (`send_to_session` create); the group shows its card. */
+  onTaskCreated?(task: GroupTaskCreated): void;
 }
+/** `deviceId` is the computer running the task; null for this computer. */
+export interface GroupTaskCreated { taskId: string; deviceId: string | null; title: string }
 const authorities = new Map<string, GroupToolAuthority>();
 
 export class GroupToolAuthorizationError extends Error {
@@ -28,6 +33,14 @@ export function registerGroupToolAuthority(sessionId: string, authority: GroupTo
 
 export async function authorizeGroupTool(sessionId: string, botId: string, operation: GroupToolOperation) {
   const authority = authorities.get(sessionId);
+  const denied = (temporary = false) => {
+    const error = new GroupToolAuthorizationError(temporary);
+    if (authority && authorities.get(sessionId) === authority && authority.botId === botId && authority.isCurrent()) {
+      // Reporting must not grant the operation or replace its original denial.
+      void Promise.resolve().then(() => authority.onDenied?.(error)).catch(() => undefined);
+    }
+    return error;
+  };
   const assertCurrent = () => {
     if (!authority || authorities.get(sessionId) !== authority || authority.botId !== botId
       || !authority.isCurrent() || authority.mode === 'chat'
@@ -36,10 +49,10 @@ export async function authorizeGroupTool(sessionId: string, botId: string, opera
   assertCurrent();
   try { await authority!.validate(); } catch (error) {
     const revoked = error instanceof GroupToolAuthorizationError && !error.temporary;
-    if (revoked && authorities.get(sessionId) === authority) authorities.delete(sessionId);
+    if (revoked && authorities.get(sessionId) === authority) { denied(); authorities.delete(sessionId); }
     // A transport failure denies this attempt, without permanently revoking a live lease.
     assertCurrent();
-    throw new GroupToolAuthorizationError(!revoked);
+    throw denied(!revoked);
   }
   assertCurrent();
   return { assertCurrent, mode: authority!.mode, sourceGroup: authority!.sourceGroup, refresh: async (): Promise<void> => {
@@ -47,4 +60,10 @@ export async function authorizeGroupTool(sessionId: string, botId: string, opera
     await authorizeGroupTool(sessionId, botId, operation);
     assertCurrent();
   } };
+}
+
+/** A group lane opened a task while its execution is live: hand it to that execution's card. */
+export function reportGroupTaskCreated(sessionId: string, task: GroupTaskCreated): void {
+  const authority = authorities.get(sessionId);
+  if (authority?.isCurrent() && authority.mode !== 'chat') authority.onTaskCreated?.(task);
 }

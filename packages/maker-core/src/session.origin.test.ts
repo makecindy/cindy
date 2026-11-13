@@ -8,7 +8,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 
-import { Session } from './session.js';
+import { Session, markSessionSendTerminal } from './session.js';
 import {
   MAIN_OWNED_SEND_CONTEXT,
   AUTO_REVIEW_SOURCE_CONTENT,
@@ -751,6 +751,24 @@ describe('Session per-turn origin 打标', () => {
     releaseDispatch();
     await second;
     await session.close();
+  });
+
+  it.each(['current', 'prior', 'copied'] as const)('owns synthetic transport terminals only through the %s send context', async owner => {
+    const h = createControllableHandle();
+    const session = makeSession(h.handle);
+    try {
+      await session.send('first');
+      const prior = h.lastSendOptions();
+      await h.emit({ type: 'text', data: { text: 'first progress' } });
+      h.setTurnRunning(false);
+      await session.send('second');
+      const current = h.lastSendOptions();
+      const options = owner === 'current' ? current : owner === 'prior' ? prior : { ...current };
+      await h.emit(markSessionSendTerminal(options, { type: 'error', source: 'codex',
+        data: { message: 'transport closed', reason: 'remote_agent_closed', isTerminal: true } }));
+      expect(session.getObservedCurrentTurnTerminal()).toMatchObject(owner === 'current'
+        ? { kind: 'error', generation: 2 } : { kind: 'none' });
+    } finally { await session.close(); }
   });
 
   it('keeps a leftover terminal on queued generation after handle.send yields', async () => {
@@ -1874,7 +1892,7 @@ describe('Session provider-initiated turns (harness wake-ups)', () => {
     await session.close();
   });
 
-  it('settles a provider-initiated turn that ends in an error as a failure, not as the earlier success', async () => {
+  it.each(['text', 'status'] as const)('settles a provider-initiated %s turn failure instead of the earlier success', async (start) => {
     const h = createControllableHandle({ agentKind: 'claude-code' });
     const session = makeSession(h.handle, 'claude-code');
     const terminals: string[] = [];
@@ -1894,7 +1912,10 @@ describe('Session provider-initiated turns (harness wake-ups)', () => {
     expect(terminals).toEqual(['done']);
 
     h.setTurnRunning(true);
-    await h.emit({ type: 'text', data: { text: 'woke up' } }, { keepRunning: true });
+    await h.emit(start === 'text'
+      ? { type: 'text', data: { text: 'woke up' } }
+      : { type: 'status', source: 'claude-code', data: { isRunning: true, providerInitiatedTurn: true } },
+      { keepRunning: true });
     await h.emit({ type: 'error', data: { message: 'wake failed' } });
     await h.emit({ type: 'done', data: {} });
     expect(terminals.slice(1, 2)).toEqual(['error']);
@@ -1919,6 +1940,8 @@ describe('Session provider-initiated turns (harness wake-ups)', () => {
     // Background subagent output while the parent is idle is not a wake-up.
     await h.emit({ type: 'text', data: { text: 'subagent' }, agentMeta: { parentUuid: 'toolu_1' } });
     await h.emit({ type: 'status', data: { status: 'idle', isRunning: false } });
+    await h.emit({ type: 'status', source: 'claude-code', data: { isRunning: true } });
+    await h.emit({ type: 'status', source: 'claude-code', data: { isRunning: true, providerInitiatedTurn: true }, turnScope: 'background' });
     await h.emit({ type: 'text', data: { text: 'late child' }, turnScope: 'background' });
     expect(wakes).toEqual([]);
 
@@ -1947,6 +1970,177 @@ describe('Session provider-initiated turns (harness wake-ups)', () => {
     await h.emit({ type: 'text', data: { text: 'background agent done' } }, { keepRunning: true });
     await h.emit({ type: 'done', data: {} });
     expect(wakes).toEqual([1]);
+    await session.close();
+  });
+});
+
+describe('Session host event-stream hold', () => {
+  // Codex native image generation is persisted by the host after its `image`
+  // event. IM / hook listeners must see the stored result before the turn's
+  // `done`, which the provider usually enqueues right behind the image.
+  const imageEvent: AgentEvent = { type: 'image', source: 'codex', data: { kind: 'generation', blockId: 'ig-1' } };
+  const followUps: AgentEvent[] = [
+    { type: 'tool_use', source: 'codex', data: { toolUseId: 'img', toolName: 'imagegen', input: {} } },
+    { type: 'tool_result_full', source: 'codex', data: { toolUseId: 'img', fullText: '{"xdt_image_url":"cindy-media://blobs/a.png"}', isError: false } },
+    { type: 'tool_result', source: 'codex', data: { toolUseIds: ['img'], summary: 'stored' } },
+  ];
+
+  function makeHoldSession(handle: AgentSessionHandle, eventStreamHoldMs?: number): Session {
+    return new Session({
+      id: 'session-1',
+      agentKind: 'codex',
+      workDir: path.join('workspace', 'repo'),
+      handle,
+      capabilities: {} as never,
+      logger: createLogger() as never,
+      ...(eventStreamHoldMs !== undefined ? { eventStreamHoldMs } : {}),
+    });
+  }
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((r) => { resolve = r; });
+    return { promise, resolve };
+  }
+
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it('delivers host follow-ups to every listener before the queued done', async () => {
+    const h = createControllableHandle();
+    const session = makeHoldSession(h.handle);
+    const pending = deferred<readonly AgentEvent[]>();
+    const holder: AgentEvent[] = [];
+    const observer: AgentEvent[] = [];
+    const accepted: boolean[] = [];
+    session.onEvent((event) => {
+      holder.push(event);
+      if (event.type === 'image') accepted.push(session.holdEventStream(pending.promise));
+    });
+    session.onEvent((event) => observer.push(event));
+
+    await session.send('draw it', { origin: SCHED_ORIGIN });
+    h.queue(imageEvent);
+    h.queue({ type: 'done', data: {} });
+    await flush();
+    expect(observer.map((event) => event.type)).toEqual(['image']);
+
+    pending.resolve(followUps);
+    await flush();
+    await flush();
+
+    expect(accepted).toEqual([true]);
+    for (const seen of [holder, observer]) {
+      expect(seen.map((event) => event.type)).toEqual(['image', 'tool_use', 'tool_result_full', 'tool_result', 'done']);
+    }
+    const [image, ...projected] = observer.slice(0, 4);
+    for (const event of projected) {
+      expect(event).toMatchObject({
+        hostProjection: true,
+        turnOrigin: SCHED_ORIGIN,
+        sessionTurnGeneration: image.sessionTurnGeneration,
+        sessionInstanceId: image.sessionInstanceId,
+      });
+    }
+    expect(observer[4].hostProjection).toBeUndefined();
+    await session.close();
+  });
+
+  it.each([
+    ['abort', (session: Session) => session.abort()],
+    ['close', (session: Session) => session.close()],
+  ] as const)('%s releases a hold that never settles and drops its follow-ups', async (name, stop) => {
+    const h = createControllableHandle();
+    const session = makeHoldSession(h.handle);
+    const pending = deferred<readonly AgentEvent[]>();
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => {
+      seen.push(event);
+      if (event.type === 'image') session.holdEventStream(pending.promise);
+    });
+
+    await session.send('draw it');
+    h.queue(imageEvent);
+    h.queue({ type: 'done', data: {} });
+    await flush();
+    void stop(session);
+    await flush();
+    await flush();
+    pending.resolve(followUps);
+    await flush();
+
+    expect(seen.some((event) => event.hostProjection)).toBe(false);
+    if (name === 'abort') expect(seen.map((event) => event.type)).toEqual(['image', 'done']);
+    await session.close();
+  });
+
+  it('stops waiting after the hold limit and still delivers the provider done', async () => {
+    const h = createControllableHandle();
+    const session = makeHoldSession(h.handle, 1);
+    const pending = deferred<readonly AgentEvent[]>();
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => {
+      seen.push(event);
+      if (event.type === 'image') session.holdEventStream(pending.promise);
+    });
+
+    await session.send('draw it');
+    h.queue(imageEvent);
+    h.queue({ type: 'done', data: {} });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    pending.resolve(followUps);
+    await flush();
+
+    expect(seen.map((event) => event.type)).toEqual(['image', 'done']);
+    await session.close();
+  });
+
+  it('keeps send admission fenced until the held turn done is consumed', async () => {
+    const h = createControllableHandle();
+    const session = makeHoldSession(h.handle);
+    const pending = deferred<readonly AgentEvent[]>();
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => {
+      seen.push(event);
+      if (event.type === 'image') session.holdEventStream(pending.promise);
+    });
+
+    await session.send('draw it');
+    // The provider already finished: its handle is idle with done queued behind the image.
+    h.queue(imageEvent);
+    h.queue({ type: 'done', data: {} });
+    h.setTurnRunning(false);
+    await flush();
+    expect(seen.map((event) => event.type)).toEqual(['image']);
+
+    expect(session.isTurnRunning()).toBe(true);
+    await expect(session.send('too early')).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
+
+    pending.resolve(followUps);
+    await flush();
+    await flush();
+    expect(seen.map((event) => event.type)).toEqual(['image', 'tool_use', 'tool_result_full', 'tool_result', 'done']);
+    expect(session.isTurnRunning()).toBe(false);
+    await expect(session.send('next turn')).resolves.toEqual({ accepted: true });
+    await session.close();
+  });
+
+  it('refuses holds outside a current non-terminal provider event', async () => {
+    const h = createControllableHandle();
+    const session = makeHoldSession(h.handle);
+    const answers: Array<[string, boolean]> = [];
+    session.onEvent((event) => {
+      if (event.type === 'done' || event.turnScope === 'background') {
+        answers.push([event.turnScope ?? event.type, session.holdEventStream(Promise.resolve(followUps))]);
+      }
+    });
+
+    expect(session.holdEventStream(Promise.resolve(followUps))).toBe(false);
+    await session.send('draw it');
+    await h.emit({ type: 'text', turnScope: 'background', data: { text: 'late child' } });
+    await h.emit({ type: 'done', data: {} });
+    await flush();
+
+    expect(answers).toEqual([['background', false], ['done', false]]);
     await session.close();
   });
 });

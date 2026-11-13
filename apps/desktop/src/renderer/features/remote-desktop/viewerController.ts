@@ -18,6 +18,7 @@ import {
   type RemoteDesktopDisplayMode,
   type RemoteDesktopVideoSettings,
   type RemoteDesktopRequest,
+  type RemoteDesktopLeaseScreen,
   type DesktopInput,
 } from '@cindy/device-link';
 import { mountRemoteDesktopViewer } from '@cindy/maker-shared/remote-desktop-viewer';
@@ -71,6 +72,22 @@ export interface ViewerSnapshot {
   fittedDisplay: Size | null;
   /** 代输入 window view: the one window shown (only it can be clicked or typed into). */
   window?: { app: string; title?: string } | null;
+  /** Device screen view: the plugin screen shown; clicks are touches on that device. */
+  screen?: RemoteDesktopLeaseScreen | null;
+  /** Device screen view: the picture's upright size now (it changes as the device turns). */
+  screenSize?: Size | null;
+}
+
+/** A device picture's upright size as a host reports it; anything else is ignored. */
+function liveScreenShape(value: unknown): Size | null {
+  const shape = value as { width?: unknown; height?: unknown } | null;
+  return shape &&
+    typeof shape === 'object' &&
+    [shape.width, shape.height].every(
+      (size) => Number.isInteger(size) && (size as number) >= 320 && (size as number) <= 16384,
+    )
+    ? { width: shape.width as number, height: shape.height as number }
+    : null;
 }
 
 const sameAspect = (display: Size, width: number, height: number) =>
@@ -88,7 +105,11 @@ function connectionBudget(caps: RemoteDesktopCapabilities | null): number {
   // Match Mobile: system consent has its own two-minute host deadline.
   return (
     REMOTE_DESKTOP_CONNECTION_TIMEOUT_MS +
-    (caps?.displays.some((display) => display.id === 'wayland-portal') ? 120_000 : 0)
+    (caps?.displays.some((display) => display.id === 'wayland-portal') ? 120_000 : 0) +
+    // A device screen (its caps list no display) that is standing still: older
+    // computers send its first picture only when something on it changes, which
+    // a clock does within a minute. Waiting is right; the connection is fine.
+    (caps?.liveScreens && caps.displays.length === 0 ? 60_000 : 0)
   );
 }
 
@@ -370,6 +391,9 @@ export class DesktopViewerController {
       credentialBusy: false,
       credentialNotice: null,
       preferences: { ...DEFAULT_VIEWER_PREFERENCES },
+      window: null,
+      screen: null,
+      screenSize: null,
     });
     this.unlockAttempted = false;
     this.credentialRetry = null;
@@ -443,6 +467,15 @@ export class DesktopViewerController {
         resume,
         takeover,
         ...(this.scope.target?.handoff ? { handoff: this.scope.target.handoff } : {}),
+        ...(this.scope.target?.screen
+          ? {
+              screen: {
+                plugin: this.scope.target.screen.plugin,
+                ...(this.scope.target.screen.pluginIdentity === undefined ? {} : {pluginIdentity:this.scope.target.screen.pluginIdentity}),
+                id: this.scope.target.screen.id,
+              },
+            }
+          : {}),
         // Desktop always operates; a host with `autoControl` grants it with the lease.
         control: true,
         isCurrent: () => this.epoch === epoch && !this.disposed && this.scope.active,
@@ -457,6 +490,10 @@ export class DesktopViewerController {
         displayId: lease.display.id,
         status: 'connecting',
         window: lease.window ?? null,
+        screen: lease.screen ?? null,
+        screenSize: lease.screen
+          ? { width: lease.display.width, height: lease.display.height }
+          : null,
       });
       this.runtime.receive({
         type: 'init',
@@ -471,6 +508,19 @@ export class DesktopViewerController {
         clipboardModifier: caps.platform === 'darwin' ? 'meta' : 'control',
       });
       this.runtime.receive({ type: 'mode', mode: 'pointer' });
+      // On a device screen the mouse is a finger and typing goes to the device;
+      // a window reused for a computer afterwards gets its pointer back.
+      this.runtime.receive(
+        lease.screen
+          ? {
+              type: 'deviceTouch',
+              enabled: true,
+              maxTouches: lease.screen.maxTouches,
+              keyboard: lease.screen.keyboard,
+            }
+          : { type: 'deviceTouch', enabled: false },
+      );
+      if (lease.screen) void this.followScreenShape(lease);
       if (!caps.canControl) throw new Error('DESKTOP_INPUT_UNSUPPORTED');
       if (lease.controlling) {
         this.publish({ error: null });
@@ -566,6 +616,64 @@ export class DesktopViewerController {
     this.publish({ controlling });
     this.runtime.receive({ type: 'control', enabled: controlling });
     if (controlling) void this.applyRememberedResolution();
+  }
+  /**
+   * Input for the shown device from the page that draws it (the plugin's own
+   * page): touches, the device's listed buttons and typing, already checked
+   * and in the picture's own terms. Returns whether it was taken.
+   */
+  deviceInput(events: DesktopInput[]): boolean {
+    if (!this.state.controlling || !this.session.lease?.screen) return false;
+    this.runtime.receive({ type: 'events', events });
+    return true;
+  }
+  /** The picture being received, for a relay that hands it on undrawn. */
+  videoTrack(): MediaStreamTrack | null {
+    const stream = this.root.querySelector('video')?.srcObject;
+    return stream instanceof MediaStream ? (stream.getVideoTracks()[0] ?? null) : null;
+  }
+  /**
+   * Lays the picture out at the shape the device shows as it turns. The host
+   * answers once the shape differs from the one known here (or after a few
+   * seconds), so one request is always waiting. A host that cannot answer
+   * leaves the shape the lease started with.
+   */
+  private async followScreenShape(lease: import('@cindy/device-link').RemoteDesktopLease) {
+    let known: Size | null = null;
+    const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    while (this.session.lease === lease && !this.disposed) {
+      if (!this.state.ready || this.hiddenSettled()) {
+        await wait(1000);
+        continue;
+      }
+      try {
+        const result = await this.request<{ shape?: unknown }>({
+          op: 'screenShape',
+          lease: lease.lease,
+          ...(known ? { known } : {}),
+        });
+        const shape = liveScreenShape(result?.shape);
+        if (this.session.lease !== lease || this.disposed) return;
+        if (shape && (shape.width !== known?.width || shape.height !== known?.height)) {
+          known = shape;
+          this.applyScreenShape(lease, shape);
+        } else await wait(1000);
+      } catch (error) {
+        const code = error instanceof Error ? error.message : '';
+        if (/INVALID_REQUEST|DESKTOP_SCREEN_ONLY|DESKTOP_STOPPED|DESKTOP_LEASE_EXPIRED/.test(code))
+          return;
+        await wait(2000);
+      }
+    }
+  }
+  private applyScreenShape(
+    lease: import('@cindy/device-link').RemoteDesktopLease,
+    shape: Size,
+  ): void {
+    if (shape.width === lease.display.width && shape.height === lease.display.height) return;
+    lease.display = { ...lease.display, ...shape };
+    this.runtime.receive({ type: 'displayGeometry', ...shape, restore: true });
+    this.publish({ screenSize: shape });
   }
   selectDisplay(displayId: string): void {
     if (
@@ -1042,7 +1150,8 @@ export class DesktopViewerController {
       if (!this.state.error && Date.now() >= this.retryAt) void this.connect();
       return;
     }
-    const leaseId = this.session.lease.lease;
+    const lease = this.session.lease;
+    const leaseId = lease.lease;
     if (this.heartbeatBusy === leaseId) return;
     this.heartbeatBusy = leaseId;
     const sample = this.heartbeats.add({ requestedAt: Date.now() });
@@ -1052,6 +1161,9 @@ export class DesktopViewerController {
       sample.settledAt = Date.now();
       sample.result = result.controlling ? 'controlling' : 'view-only';
       if (epoch === this.epoch) {
+        // Hosts that cannot answer a shape request still report a turn here.
+        const shape = lease.screen ? liveScreenShape(result.shape) : null;
+        if (shape && this.session.lease === lease) this.applyScreenShape(lease, shape);
         if (!result.controlling && !this.opening && !this.state.controlPending)
           this.fail(new Error('DESKTOP_VIEW_ONLY'), 'heartbeat');
         else this.syncControl();
@@ -1073,6 +1185,8 @@ export class DesktopViewerController {
       this.streaming ||
       this.frameBusy === lease.lease ||
       !this.scope.active ||
+      // A device screen has no still picture: its video is the only source.
+      lease.screen ||
       // Screenshot fallback stops polling while hidden, once it has shown a frame.
       (this.hiddenSettled() && this.state.ready)
     )
@@ -1290,7 +1404,12 @@ export class DesktopViewerController {
     this.publish({ ready: true, status });
     // Start auto-unlock before control can trigger the remembered display
     // change, which waits for it: a locked computer refuses display changes.
-    if (!this.unlockAttempted && this.state.caps?.platform === 'darwin') {
+    // A device screen is not the computer: nothing there to unlock.
+    if (
+      !this.unlockAttempted &&
+      this.state.caps?.platform === 'darwin' &&
+      !this.session.lease?.screen
+    ) {
       this.unlockAttempted = true;
       this.unlockAttempt = this.credential('unlock').catch(() => {});
     }

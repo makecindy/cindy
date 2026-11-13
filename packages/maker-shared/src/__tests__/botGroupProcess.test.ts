@@ -1,8 +1,35 @@
 import { describe, expect, it } from 'vitest';
+import { projectWorkActivities, summarizeTeammateWork, teammateWorkSummaryText } from '../workActivityProjection.js';
 import { botGroupProcessCard, readBotGroupProcessCard, readBotGroupProcessNotes, type BotGroupProcessMessage } from '../botGroupChat.js';
 const ref = { groupId: 'group', executionId: 'execution', sessionId: 'lane', clientId: 'bot-group:group:execution:bot' };
 const row = (clientId: string, role: string, content: unknown, agentMeta?: BotGroupProcessMessage['agentMeta']): BotGroupProcessMessage => ({ clientId, role, content, agentMeta });
 const progress = (id: string, text: unknown) => row(id, 'assistant', text, { assistantPhase: 'commentary' });
+// Unit regression for the 2026-11-01 report: a failed attempt dominated the
+// collapsed summary even while useful work continued. Existing tests only
+// checked retained error counts, not the text users actually saw.
+it('shows the active action, then the latest action, without amplifying earlier failures', () => {
+  const tool = (clientId: string, file: string) => ({ clientId, content: '', toolName: 'Read', toolInput: { file_path: `/repo/${file}` } });
+  const children = [{ kind: 'tools', key: 'tools', toolCalls: [tool('failed', 'missing.md'), tool('active', 'skills.md'), tool('done', 'notes.md')],
+    resultMap: new Map([['failed', 'Error: file not found'], ['done', 'notes']]) }];
+  const activities = projectWorkActivities(children, true, true).activities;
+  const summary = summarizeTeammateWork(activities);
+  expect(summary.failedCount).toBe(1);
+  expect(teammateWorkSummaryText(summary, true, key => key)).toBe('读取 skills.md');
+  expect(teammateWorkSummaryText(summary, false, key => key)).toBe('读取 notes.md');
+  expect(activities[0]).toMatchObject({ toolResult: 'Error: file not found' });
+});
+
+it.each([
+  ['mcp__calendar__list_events', {}, 'Use calendar · list events'],
+  ['mcp__helper__call_tool', { name: 'list_skills' }, 'Use helper · list skills'],
+])('keeps the concrete MCP operation %s visible with localized wording', (toolName, toolInput, expected) => {
+  const summary = summarizeTeammateWork(projectWorkActivities([{ kind: 'tools', key: 'tools', toolCalls: [
+    { clientId: 'call', content: '', toolName, toolInput },
+  ] }], true).activities);
+  expect(teammateWorkSummaryText(summary, true, key => key, {
+    verb: () => 'Use', intentVerb: () => 'Run', updateFilesLabel: () => 'Update files',
+  })).toBe(expected);
+});
 // Unit: new optional locator contract and the same bounded history reader used by
 // Desktop and Mobile group/Thread disclosures. Verify observable content boundaries.
 describe('group process record', () => {
@@ -31,7 +58,7 @@ describe('group process record', () => {
     expect(cursors).toEqual([ref.clientId, 'note1', 'note2']);
   });
   it('never falls back to another turn when its anchor is absent', async () => {
-    expect(await readBotGroupProcessNotes(ref, async () => [progress('other', 'Other turn')], () => false)).toEqual([]);
+    await expect(readBotGroupProcessNotes(ref, async () => [progress('other', 'Other turn')], () => false)).rejects.toThrow('anchor unavailable');
   });
   it('stops at the next user even without a final seal and ignores a cancelled read', async () => {
     const rows = [row(ref.clientId, 'user', 'Request'), progress('note', 'Partial result'), row('next', 'user', 'Next turn'), progress('other', 'Other result')];
@@ -101,4 +128,81 @@ it('preserves unlabelled Pi stage text while excluding sealed and legacy final a
     expect(texts(await readBotGroupProcessMessages(ref, async () => completed, () => false), false))
       .toEqual(['Checking feedback', 'Found the cause']);
   }
+});
+
+// 2026-11-05 group/private-chat parity regression (unit): the group reader stopped
+// on the final seal and dropped a thinking block persisted afterwards. Existing
+// coverage placed every activity before the answer. Only the original turn may
+// be read; raw reasoning and the next request must remain outside the projection.
+it('retains late work records after the final answer without reading another turn', async () => {
+  const { readBotGroupProcessMessages, projectBotGroupProcess } = await import('../botGroupProcess.js');
+  const rows = [row(ref.clientId, 'user', 'Request'),
+    row('final', 'assistant', 'Answer', { turnCompleted: true }),
+    row('late-thinking', 'thinking', { text: 'Private reasoning', durationMs: 2000 }),
+    row('next', 'user', 'Next request'), row('other-thinking', 'thinking', 'Other turn')];
+  // Put the late block in the next page as well as in the same page: history
+  // pagination must not change which activity can be expanded.
+  for (const paged of [false, true]) {
+    const messages = await readBotGroupProcessMessages(ref, async cursor =>
+      paged && cursor === ref.clientId ? rows.slice(0, 2) : rows, () => false);
+    const projection = projectBotGroupProcess(messages, false);
+    expect(projection.segments.flatMap(segment => segment.kind === 'work' ? segment.items.map(item => item.key) : []))
+      .toEqual(['late-thinking']);
+    expect(JSON.stringify(messages)).not.toContain('Private reasoning');
+    expect(messages.map(message => message.clientId)).not.toContain('other-thinking');
+  }
+});
+
+// Real group-lane metadata marks all events private to keep them out of the Bot
+// private conversation. That routing flag must not erase this group's own work.
+it('retains group-lane work while excluding unrelated private replies and raw reasoning', async () => {
+  const { readBotGroupProcessMessages, projectBotGroupProcess } = await import('../botGroupProcess.js');
+  const meta = { botPrivateReply: true, botGroupLane: true, replyToClientId: ref.clientId };
+  const rows = [row(ref.clientId, 'user', 'Request'),
+    row('note', 'assistant', 'Checking', { ...meta, assistantPhase: 'commentary' }),
+    row('tool', 'tool_use', { toolName: 'Read', input: { file_path: '/repo/notes.md' } }, meta),
+    { ...row('result', 'tool_result', 'Notes', meta), toolUseId: 'tool' },
+    row('private', 'assistant', 'Unrelated private reply', { botPrivateReply: true }),
+    row('final', 'assistant', 'Answer', { ...meta, turnCompleted: true, assistantPhase: 'final_answer' }),
+    row('thinking', 'thinking', 'Raw reasoning', meta)];
+  const messages = await readBotGroupProcessMessages(ref, async () => rows, () => false);
+  const projection = projectBotGroupProcess(messages, false);
+  expect(projection.segments.flatMap(segment => segment.kind === 'content' ? [segment.item.key] : segment.items.map(item => item.key)))
+    .toEqual(['note', 'tool', 'thinking']);
+  expect(JSON.stringify(messages)).not.toMatch(/Unrelated private reply|Raw reasoning|Answer/);
+});
+
+// Extended acceptance: exact tool IDs must survive late persistence without
+// borrowing a result from the next user turn.
+it.each([false, true])('pairs a tool result persisted after the answer (error: %s)', async failed => {
+  const { readBotGroupProcessMessages, projectBotGroupProcess } = await import('../botGroupProcess.js');
+  const resultText = failed ? 'Error: test file is unavailable' : 'Late successful result';
+  const meta = { botPrivateReply: true, botGroupLane: true };
+  const rows = [row(ref.clientId, 'user', 'Request'),
+    { ...row('tool', 'tool_use', { toolName: 'Read', input: { file_path: '/test/notes.md' } }, meta), toolUseId: 'call-1' },
+    row('final', 'assistant', 'Answer', { ...meta, turnCompleted: true }),
+    { ...row('result', 'tool_result', resultText, meta), toolUseId: 'call-1' },
+    row('next', 'user', 'Next request'),
+    { ...row('other-result', 'tool_result', 'Other turn result', meta), toolUseId: 'call-1' }];
+  const messages = await readBotGroupProcessMessages(ref, async () => rows, () => false);
+  const projection = projectBotGroupProcess(messages, false);
+  const items = projection.segments.flatMap(segment => segment.kind === 'work' ? segment.items : []);
+  const activities = projectWorkActivities(items, false, true).activities;
+  expect(activities).toContainEqual(expect.objectContaining({ kind: 'tool', toolResult: resultText }));
+  expect(JSON.stringify(messages)).not.toContain('Other turn result');
+});
+
+
+it('reports a confirmed next-turn boundary but keeps a final seal open for late work', async () => {
+  const { readBotGroupProcessMessages } = await import('../botGroupProcess.js');
+  const source = row(ref.clientId, 'user', 'Request');
+  const final = row('final', 'assistant', 'Answer', { turnCompleted: true });
+  const boundary: string[] = [];
+  const tail = [source, final, row('late', 'tool_result', 'Late tool output')];
+  await readBotGroupProcessMessages(ref, async () => tail, () => false, () => boundary.push('closed'));
+  expect(boundary).toEqual([]);
+  const records = await readBotGroupProcessMessages(ref, async () => [...tail, row('next', 'user', 'Next request')], () => false, () => boundary.push('closed'));
+  expect(records.map(message => message.clientId)).toContain('late');
+  expect(records.map(message => message.clientId)).not.toContain('next');
+  expect(boundary).toEqual(['closed']);
 });

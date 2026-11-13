@@ -77,6 +77,9 @@ class FakeBridge {
     this.started = true;
     this.listeningPort = 18810;
   }
+  pauseForUpdate() {
+    return { settled: Promise.resolve(), release: () => undefined };
+  }
   async close() {
     this.closed = true;
   }
@@ -251,15 +254,15 @@ describe('browserExtensionSlot · 桥接随花名册启停', () => {
 
   // Native hosts run outside the sandbox and share one registration per account, so a plugin that
   // is not the official Cindy Chrome must not get one, even under the official name.
-  it('只有官方 Cindy Chrome 能装 native host;其它插件声明了也只开桥接', async () => {
+  it('声明 node 的普通插件也可安装自己的 native host', async () => {
     const ghosts = [extGhost({ id: 'impostor' })];
     const { slot, bridges, natives, settle } = await makeSlot({}, ghosts);
     slot.reconcile(ghosts);
     await settle();
     expect(bridges).toHaveLength(1);
     expect(bridges[0].started).toBe(true);
-    expect(bridges[0].options.nativeToken).toBeUndefined();
-    expect(natives).toHaveLength(0);
+    expect(bridges[0].options.nativeToken).toBe('f'.repeat(64));
+    expect(natives).toHaveLength(1);
   });
 
   it('没有 pageControl 的声明只做通道,不成为 Browser Use 执行端', async () => {
@@ -274,17 +277,95 @@ describe('browserExtensionSlot · 桥接随花名册启停', () => {
   });
 
   // 2026-10-30: only the official Cindy Chrome takes over My browser; another plugin's declaration is ignored.
-  it('其它插件声明 pageControl 也不会成为「我的浏览器」', async () => {
+  it('普通插件声明 pageControl 后可成为「我的浏览器」', async () => {
     const ghosts = [extGhost({ id: 'other-browser', nativeHost: false })];
     const { slot, bridges, settle } = await makeSlot({}, ghosts);
     slot.reconcile(ghosts);
     await settle();
     expect(bridges).toHaveLength(1);
-    expect(slot.getPageControl()).toBeNull();
+    expect(slot.getPageControl()?.ghostId).toBe('other-browser');
+  });
+});
+
+// Regression 2026-11-07: receipt commits before market provenance. The transient source
+// must not overwrite pairings; completion must restore the selected provider (unit).
+describe('browserExtensionSlot · 更新来源收敛', () => {
+  it('preserves pairings across unavailable provenance and restores control on completion', async () => {
+    const ghosts = [extGhost({ nativeHost: false })];
+    ghosts[0].publishingSource = { kind: 'public-market', pluginId: 'market-browser' };
+    const h = await makeSlot({}, ghosts);
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    await h.slot.activate('_root__my-browser');
+    const clients = [{ id: 'paired-browser', origin: 'chrome-extension://' + CHROME_ID, extensionId: CHROME_ID, publicKey: 'saved-key' }];
+    await h.slot.handleRequest('_root__my-browser', { kind: 'setTrustedClients', clients });
+    const cache = path.join(h.dir, '_root__my-browser.json');
+    const before = await fs.readFile(cache, 'utf8');
+    const complete = await h.slot.prepareUpdate('_root__my-browser');
+    ghosts[0] = { ...ghosts[0], manifest: { ...ghosts[0].manifest, version: '2.0.0' },
+      publishingSource: { kind: 'unavailable' } };
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    expect(h.bridges).toHaveLength(1);
+    expect(h.slot.getPageControlUnavailableReason()).toBe('plugin-updating');
+    expect(h.slot.getPageControl()).toBeNull();
+    expect(await h.slot.activate('_root__my-browser')).toBe(false);
+    expect(await fs.readFile(cache, 'utf8')).toBe(before);
+    ghosts[0] = { ...ghosts[0], publishingSource: { kind: 'public-market', pluginId: 'market-browser' } };
+    complete();
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    expect(h.slot.getPageControl()?.instanceId).toBe('_root__my-browser');
+    expect(h.bridges.at(-1)?.calls).toContainEqual(['setTrustedClients', [clients]]);
+    await h.slot.dispose();
+  });
+
+  it('keeps the legacy official control end paused during its update instead of falling back to another plugin', async () => {
+    const ghosts = [extGhost({ nativeHost: false }), extGhost({ id: 'other-browser', nativeHost: false })];
+    const h = await makeSlot({}, ghosts);
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    expect(h.slot.getPageControl()?.ghostId).toBe('my-browser');
+    const complete = await h.slot.prepareUpdate('_root__my-browser');
+    expect(h.slot.getPageControl()).toBeNull();
+    complete();
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    expect(h.slot.getPageControl()?.ghostId).toBe('my-browser');
+    await h.slot.dispose();
+  });
+
+  it('does not reuse control or pairings when only the source changes', async () => {
+    const ghosts = [extGhost({ nativeHost: false })];
+    ghosts[0].publishingSource = { kind: 'public-market', pluginId: 'market-browser' };
+    const h = await makeSlot({}, ghosts);
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    await h.slot.activate('_root__my-browser');
+    ghosts[0] = { ...ghosts[0], publishingSource: { kind: 'local', source: 'manual' } };
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    expect(h.slot.getPageControl()).toBeNull();
+    expect(h.bridges[0].closed).toBe(true);
+    expect(await h.slot.activate('_root__my-browser')).toBe(true);
+    expect(h.slot.getPageControl()?.instanceId).toBe('_root__my-browser');
+    await h.slot.dispose();
   });
 });
 
 describe('browserExtensionSlot · 管子上行', () => {
+  it('selects a page-control instance explicitly without borrowing another instance pairing', async () => {
+    const ghosts = [extGhost({ id: 'first', nativeHost: false }), extGhost({ id: 'second', nativeHost: false })];
+    const h = await makeSlot({}, ghosts);
+    h.slot.reconcile(ghosts);
+    await h.settle();
+    expect(h.slot.getPageControl()).toBeNull();
+    expect(await h.slot.activate('_root__second')).toBe(true);
+    expect(h.slot.getPageControl()?.instanceId).toBe('_root__second');
+    ghosts[1].enabled = false;
+    h.slot.reconcile(ghosts);
+    expect(h.slot.getPageControl()).toBeNull();
+  });
   it('未声明能力 / 未启用的插件一律 PERMISSION_DENIED;桥接未就绪 HOST_NOT_READY', async () => {
     const ghosts = [
       extGhost(),
@@ -387,7 +468,7 @@ describe('browserExtensionSlot · 管子上行', () => {
     let now = 1_000_000;
     let installs = 0;
     let state: 'ready' | 'unavailable' = 'unavailable';
-    const { slot, bridges, settle, ghosts } = await makeSlot({
+    const { slot, bridges, ghosts } = await makeSlot({
       now: () => now,
       createNativeBinding: () => ({
         token: 'f'.repeat(64),
@@ -403,8 +484,11 @@ describe('browserExtensionSlot · 管子上行', () => {
       }),
     });
     slot.reconcile(ghosts);
-    await settle();
-    expect(installs).toBe(1);
+    // CI run 41580150352: policy I/O can outlast settle's 25 ms on Windows.
+    // Wait for the initial installation before testing status-driven retries.
+    await vi.waitFor(() => expect(installs).toBe(1));
+    // A manually paired bridge remains usable while optional native registration is unavailable.
+    expect(slot.getPageControl()).toMatchObject({ bridge: bridges[0], instanceId: '_root__my-browser' });
     await slot.handleRequest('_root__my-browser', { kind: 'status' });
     expect(installs).toBe(2);
     expect(bridges).toHaveLength(1);
@@ -492,7 +576,7 @@ describe('browserExtensionSlot · 管子上行', () => {
   });
 
   // Review 2026-10-30 (Codex P1): a package that only claims the official id cannot pair browsers.
-  it('只自称官方 id 的未核验包不能保存配对', async () => {
+  it('任何批准实例都能保存自己的配对', async () => {
     const clients = [
       {
         id: 'c1',
@@ -507,10 +591,9 @@ describe('browserExtensionSlot · 管子上行', () => {
     expect(
       await slot.handleRequest('_root__my-browser', { kind: 'setTrustedClients', clients }),
     ).toMatchObject({
-      ok: false,
-      errorCode: 'PERMISSION_DENIED',
+      ok: true,
     });
-    expect(bridges[0].calls.some(([name]) => name === 'setTrustedClients')).toBe(false);
+    expect(bridges[0].calls.some(([name]) => name === 'setTrustedClients')).toBe(true);
     // Another plugin id is not an official claimant: its pairings work as before.
     const other = [extGhost({ id: 'other-browser', nativeHost: false })];
     const b = await makeSlot({ isVerifiedOfficial: () => false }, other);
@@ -525,7 +608,7 @@ describe('browserExtensionSlot · 管子上行', () => {
   });
 
   // Review 2026-10-30 (Codex P1): raw DevTools commands from a plugin that is not the verified official one.
-  it('非官方插件不能经管子发原始 DevTools 命令', async () => {
+  it('没有 node 的沙箱插件不能经管子发原始 DevTools 命令', async () => {
     const payload = {
       kind: 'act',
       action: 'cdp',
@@ -538,6 +621,7 @@ describe('browserExtensionSlot · 管子上行', () => {
       },
     };
     const other = [extGhost({ id: 'other-browser', nativeHost: false })];
+    delete other[0].manifest.node;
     const a = await makeSlot({}, other);
     a.slot.reconcile(other);
     await a.settle();
@@ -569,7 +653,7 @@ describe('browserExtensionSlot · 管子上行', () => {
 
   // Review 2026-10-30 (Codex P1): a manifest that merely claims the official id must not get the native
   // host, My browser or saved pairings.
-  it('未核验来源的包不装 native host、不接管「我的浏览器」、不继承配对', async () => {
+  it('普通插件可提供浏览器能力，但不继承其它来源的配对', async () => {
     const clients = [
       {
         id: 'c1',
@@ -581,12 +665,12 @@ describe('browserExtensionSlot · 管子上行', () => {
     const { slot, bridges, natives, dir } = await makeSlot({ isVerifiedOfficial: () => false });
     await fs.writeFile(
       path.join(dir, encodeURIComponent('_root__my-browser') + '.json'),
-      JSON.stringify({ version: 1, source: '[null,null]', trustedClients: clients }),
+      JSON.stringify({ version: 1, source: 'different-package-source', trustedClients: clients }),
     );
     slot.reconcile([extGhost()]);
     await vi.waitFor(() => expect(bridges[0]?.started).toBe(true));
-    expect(natives).toHaveLength(0);
-    expect(slot.getPageControl()).toBeNull();
+    expect(natives).toHaveLength(1);
+    expect(slot.getPageControl()?.instanceId).toBe('_root__my-browser');
     expect(bridges[0].calls.some(([name]) => name === 'setTrustedClients')).toBe(false);
   });
 
@@ -765,4 +849,109 @@ describe('browserExtensionSlot · 转交扩展请求', () => {
     ]);
     expect(deps.sendToGhost).toHaveBeenCalled();
   });
+});
+
+// Host delivery is asynchronous. An old owner or uncertain transport result must
+// not turn the shared slot's offline wake into a duplicate/cross-account request.
+describe('browserExtensionSlot · asynchronous host delivery', () => {
+  it('waits for a known offline result before waking and delivering once', async () => {
+    let answer!: (online: boolean) => void;
+    const wake = vi.fn(async () => true);
+    let calls = 0;
+    const sendToGhost = vi.fn(async (_id: string, payload: unknown) => {
+      if ((payload as { name: string }).name !== 'browser-extension-relay') return true;
+      if (++calls === 1) return new Promise<boolean>(resolve => { answer = resolve; });
+      return true;
+    });
+    const { slot, ghosts, bridges } = await makeSlot({ sendToGhost, wake });
+    try {
+      slot.reconcile(ghosts);
+      await slot.handleRequest('_root__my-browser', { kind: 'status' });
+      bridges[0].emitRelay({ id: 'async-1', clientId: 'browser', request: {} } as BrowserExtensionRelayNotice);
+      expect(wake).not.toHaveBeenCalled();
+      answer(false);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(wake).toHaveBeenCalledTimes(1);
+      expect(calls).toBe(2);
+      expect(bridges[0].calls.filter(([name]) => name === 'relayResult')).toEqual([]);
+    } finally { await slot.dispose(); }
+  });
+
+  it('does not wake or replay a delivery after its owner changes', async () => {
+    let owner = 'owner-a';
+    let answer!: (online: boolean) => void;
+    const wake = vi.fn(async () => true);
+    const sendToGhost = vi.fn(async (_id: string, payload: unknown) =>
+      (payload as { name: string }).name === 'browser-extension-relay'
+        ? new Promise<boolean>(resolve => { answer = resolve; }) : true);
+    const { slot, ghosts, bridges } = await makeSlot({ ownerScopeKey: () => owner, sendToGhost, wake });
+    try {
+      slot.reconcile(ghosts);
+      await slot.handleRequest('_root__my-browser', { kind: 'status' });
+      bridges[0].emitRelay({ id: 'old-owner', clientId: 'browser', request: {} } as BrowserExtensionRelayNotice);
+      owner = 'owner-b';
+      answer(false);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(wake).not.toHaveBeenCalled();
+      expect(bridges[0].calls).toContainEqual(['relayResult', ['old-owner', { ok: false, error: 'BRIDGE_STOPPED' }]]);
+    } finally { await slot.dispose(); }
+  });
+
+  it('keeps a failed wake unavailable and logged without a second delivery', async () => {
+    const warn = vi.fn();
+    const wake = vi.fn(async () => { throw Error('wake failed'); });
+    const sendToGhost = vi.fn(async (_id, payload) => (payload as { name: string }).name !== 'browser-extension-relay');
+    const { slot, ghosts, bridges } = await makeSlot({ wake, sendToGhost, log: { info: vi.fn(), warn } });
+    try {
+      slot.reconcile(ghosts);
+      await slot.handleRequest('_root__my-browser', { kind: 'status' });
+      bridges[0].emitRelay({ id: 'wake-failed', clientId: 'browser', request: {} } as BrowserExtensionRelayNotice);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(wake).toHaveBeenCalledTimes(1);
+      expect(sendToGhost.mock.calls.filter(([, p]) => (p as { name: string }).name === 'browser-extension-relay')).toHaveLength(1);
+      expect(warn).toHaveBeenCalledWith('browser extension relay wake failed', expect.objectContaining({ error: 'wake failed' }));
+      expect(bridges[0].calls).toContainEqual(['relayResult', ['wake-failed', { ok: false, error: 'PLUGIN_UNAVAILABLE' }]]);
+    } finally { await slot.dispose(); }
+  });
+
+  it.each([1, 2])('reports uncertain delivery on send %s without replaying a possible side effect', async failAt => {
+    const wake = vi.fn(async () => true);
+    let sends = 0;
+    const { slot, ghosts, bridges } = await makeSlot({ wake, sendToGhost: async (_id, payload) => {
+      if ((payload as { name: string }).name === 'browser-extension-relay') {
+        if (++sends === failAt) throw new Error('transport closed after send');
+        return false;
+      }
+      return true;
+    } });
+    try {
+      slot.reconcile(ghosts);
+      await slot.handleRequest('_root__my-browser', { kind: 'status' });
+      bridges[0].emitRelay({ id: 'uncertain', clientId: 'browser', request: {} } as BrowserExtensionRelayNotice);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(wake).toHaveBeenCalledTimes(failAt - 1);
+      expect(sends).toBe(failAt);
+      expect(bridges[0].calls).toContainEqual(['relayResult', ['uncertain', { ok: false, error: 'PLUGIN_DELIVERY_UNKNOWN' }]]);
+    } finally { await slot.dispose(); }
+  });
+});
+
+// Regression: reconcile removes the entry before its asynchronous transport
+// close completes. Host shutdown must still drain that retired entry.
+it('dispose waits for a transport already being retired by reconcile', async () => {
+  const f = await makeSlot();
+  f.slot.reconcile(f.ghosts);
+  await f.slot.handleRequest('_root__my-browser', { type: 'browser-extension-request', action: 'status' });
+  let release!: () => void;
+  const closed = new Promise<void>(resolve => { release = resolve; });
+  f.bridges[0].close = async () => { await closed; f.bridges[0].closed = true; };
+  f.slot.reconcile([]);
+  let disposed = false;
+  const disposing = f.slot.dispose().then(() => { disposed = true; });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  expect(disposed).toBe(false);
+  release();
+  await disposing;
+  expect(f.bridges[0].closed).toBe(true);
+  expect(f.natives[0].close).toHaveBeenCalledOnce();
 });

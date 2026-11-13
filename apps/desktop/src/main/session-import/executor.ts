@@ -18,6 +18,7 @@ import { BrowserWindow } from 'electron';
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, ownerScopedUserDataPath } from '../appSessionState.js';
 import { recordPrRefsForImportedMessages } from '../git-context/prRefsStore.js';
 import { getCurrentDbClientSnapshot, getDbClient } from '../localDb/client/current.js';
+import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { createLogger } from '../logger.js';
 import { resolveDefaultScheduleRoute, resolveNewTaskDefaultModelRoute } from '../maker-host/model-route-guard-live.js';
 import { getNewMakerModelTuning, getRemoteNewMakerDefaults, getSelectedNewMakerRoute } from '../maker-host/newMakerDefaultsCache.js';
@@ -299,7 +300,7 @@ async function importOne(job: Job, key: string, source: SourceSession): Promise<
     item.messagesWritten = sink.written;
     // 一条都没读到：要么来源格式变了，要么原记录本来是空的。不留一个点开什么都没有的任务。
     if (sink.written === 0) throw new ImportEmptyError();
-    void recordPrRefsForImportedMessages(sessionId, sink.prCandidates).catch(() => undefined);
+    void recordPrRefsForImportedMessages(sessionId).catch(() => undefined);
 
     item.step = 'verify';
     emit(job);
@@ -415,6 +416,10 @@ async function runJob(job: Job): Promise<void> {
   job.view.finishedAt = Date.now();
   invalidateImportScan();
   persist(job);
+  // 页面可以已经关闭；由执行器在批次写完后通知所有已加载的任务列表。
+  // 部分失败／取消也可能留下可见任务；整批只需一次重拉，避免逐项广播放大读取。
+  const visible = job.view.items.find((item) => item.sessionId && (item.status === 'ready' || item.status === 'action'));
+  if (visible?.sessionId) emitSessionCreated(visible.sessionId);
   emit(job, true);
   log.info('session import job finished', {
     requestId: job.view.requestId,

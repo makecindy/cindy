@@ -21,7 +21,7 @@ import { quotaWindowLabel } from '@/components/status/usageCardModel';
 import { ProviderUsageSection } from './ProviderUsageSection';
 import { useShareTimeFormat } from './useShareTimeFormat';
 
-/** 可见页面每五秒复核权限；不持久化数据，身份变化、失败与隐藏都丢弃旧结果。 */
+/** 可见页面每十五秒复核权限；不持久化数据，身份变化、失败与隐藏都丢弃旧结果。 */
 export function ProviderShareInsightsSection({ share }: { share: ProviderShareReceived }) {
   useOptionalAuthUser();
   const owner = getDataOwnerGeneration();
@@ -32,7 +32,6 @@ export function ProviderShareInsightsSection({ share }: { share: ProviderShareRe
         share.shareId,
         share.memberId,
         share.status,
-        share.hostOnline,
         share.hostCapable,
       ])}
       share={share}
@@ -47,7 +46,6 @@ function InsightsView({ share }: { share: ProviderShareReceived }) {
     share.shareId,
     share.memberId,
     share.status,
-    share.hostOnline,
     share.hostCapable,
   ]);
   const [result, setResult] = useState<{
@@ -58,7 +56,7 @@ function InsightsView({ share }: { share: ProviderShareReceived }) {
   } | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [usageFailed, setUsageFailed] = useState(false);
-  const available = share.status === 'active' && share.hostOnline && share.hostCapable;
+  const available = share.status === 'active' && share.hostCapable;
   const valid = useRef(available);
   const expandedRef = useRef(false);
   const generation = useRef(0);
@@ -124,7 +122,6 @@ function InsightsView({ share }: { share: ProviderShareReceived }) {
           latest.shareId,
           latest.memberId,
           latest.status,
-          latest.hostOnline,
           latest.hostCapable,
         ]);
       if (next !== identity) {
@@ -142,9 +139,10 @@ function InsightsView({ share }: { share: ProviderShareReceived }) {
       if (document.visibilityState !== 'hidden') void load();
     };
     document.addEventListener('visibilitychange', visibility);
+    // 保守优化：只降低轮询频率，查询、缓存、可见性和迟到回包语义不变。
     const timer = window.setInterval(() => {
       void load();
-    }, 5_000);
+    }, 15_000);
     return () => {
       alive = false;
       generation.current++;
@@ -157,9 +155,7 @@ function InsightsView({ share }: { share: ProviderShareReceived }) {
     result?.identity === identity && isDataOwnerGenerationCurrent(result.owner) ? result : null;
   const view = available ? current?.view : null;
   const error = !available
-    ? !share.hostOnline
-      ? 'offline'
-      : !share.hostCapable
+    ? !share.hostCapable
         ? 'needs-update'
         : 'denied'
     : current?.error;

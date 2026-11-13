@@ -69,10 +69,15 @@
     "titleHost": "Den Agent wieder auf „{{host}}“ ausführen?",
     "titleHostUnnamed": "Den Agent wieder auf dem Computer der Sitzung ausführen?",
     "message": "Der Unterhaltungsverlauf auf dem anderen Computer kann nicht übertragen werden. Die Fortsetzung erfolgt daher anhand einer Übergabezusammenfassung. Denkprozesse und ähnliche Details werden möglicherweise nicht vollständig übernommen. Wird beim Senden der nächsten Nachricht wirksam.",
+    "messageNativeHistory": "Der vollständige Unterhaltungsverlauf wird mitkopiert und nahtlos fortgesetzt. Kann er nicht wiederhergestellt werden, erfolgt die Fortsetzung anhand einer Übergabezusammenfassung; Denkprozesse und ähnliche Details werden dann möglicherweise nicht vollständig übernommen. Wird beim Senden der nächsten Nachricht wirksam.",
     "confirm": "Computer wechseln",
     "cancel": "So beibehalten"
   },
   "unified": {
+    "accountUnassigned": "Konto nicht zugewiesen",
+    "accountCount_one": "{{count}} Konto",
+    "accountCount_other": "{{count}} Konten",
+    "accountFallback": "Konto {{index}}",
     "favoriteConfiguration": "Diese Konfiguration als Favorit speichern",
     "savedConfiguration": "Als Favorit gespeichert · Zum Entfernen tippen",
     "currentConfiguration": "Aktuelle Konfiguration",
@@ -112,6 +117,12 @@
       "hour": "Std.",
       "minute": "Min.",
       "second": "Sek."
-    }
+    },
+    "quotaAverage": "Ø verbleibend {{percent}} %",
+    "quotaUpdating": "Kontingent wird aktualisiert",
+    "quotaResetSoon": "Bald zurückgesetzt",
+    "quotaResetIn": "Zurücksetzung in {{duration}}",
+    "quotaAverageHint": "Wochenkontingent · Konten gleich gewichtet",
+    "quotaResetHint": "Beim aktuellen Verbrauch bleibt beim Zurücksetzen voraussichtlich Kontingent übrig: gelb innerhalb von 24 Stunden, rot innerhalb von 6 Stunden."
   }
 }

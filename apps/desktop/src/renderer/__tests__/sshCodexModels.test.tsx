@@ -3,8 +3,12 @@ import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useSshCodexProviders } from '@/hooks/useSshCodexProviders';
 import { loadSshSessionModelSelection } from '@/features/cc-agent/sshSessionModelSelection';
+import { useSshCodexDraftSelection } from '@/features/cc-agent/useSshCodexDraftSelection';
 import { sshNativeCodexProvider, sshModel } from '@/features/cc-agent/__tests__/sshModelFixtures';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { connectedProvidersForAgent } from '@cindy/model-providers';
+import { mergeSshCodexCatalog } from '@/lib/sshCodexCatalog';
+import { sshProvider } from '@/features/cc-agent/__tests__/sshModelFixtures';
 
 const list = vi.fn();
 let statusChanged: (snapshot: RemoteHostSnapshot) => void;
@@ -18,6 +22,62 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 const providers = (model: string) => [sshNativeCodexProvider([sshModel(model)])];
+
+// PR #8444, unit: the mixed catalog's real route resolver must keep a local
+// suspension effective without suspending remote Codex. Discovery tests lacked
+// a same-ID local/remote provider with different suspension states.
+it.each(['claude-code', 'pi'] as const)('does not re-enable suspended local %s routes when merging remote Codex', (agent) => {
+  const local = { ...sshProvider('openai', [sshModel('local-model')], agent), suspended: true };
+  const merged = mergeSshCodexCatalog([local], providers('remote-model'));
+  expect(connectedProvidersForAgent(merged, agent)).toEqual([]);
+  expect(connectedProvidersForAgent(merged, 'codex')[0].models.codex?.[0].id).toBe('remote-model');
+});
+
+// #8413 review regression, unit: discovery tests did not exercise editable draft preferences.
+// The production draft hook feeds both the composer and submission. A same-name local
+// preset must not override remote defaults/edits, and selecting a Fast favorite must retain Fast.
+describe('SSH Codex draft selection', () => {
+  const catalog = [sshNativeCodexProvider([
+    sshModel('remote-default', { supportsFastMode: true }),
+    sshModel('other-model', { defaultEffort: 'low', supportsFastMode: true }),
+  ])];
+
+  it('uses remote defaults and retains explicit effort/Fast without persisting local preferences', () => {
+    const write = vi.spyOn(Storage.prototype, 'setItem');
+    const view = renderHook(() => useSshCodexDraftSelection('a', catalog));
+    expect(view.result.current.selection).toMatchObject({
+      model: 'remote-default', effort: 'high', fastMode: false,
+    });
+    act(() => view.result.current.patch({ effort: 'low' }));
+    view.rerender();
+    expect(view.result.current.selection?.effort).toBe('low');
+    act(() => view.result.current.patch({ fastMode: true }));
+    expect(view.result.current.selection?.fastMode).toBe(true);
+    // Full unified selection, including the favorite's Fast setting.
+    act(() => view.result.current.patch({ model: 'other-model', effort: 'high', fastMode: 'ultrafast' }));
+    expect(view.result.current.selection).toMatchObject({
+      model: 'other-model', effort: 'high', fastMode: 'ultrafast',
+    });
+    expect(write).not.toHaveBeenCalled();
+    write.mockRestore();
+  });
+
+  it('keeps a picker choice while its catalog loads, but does not reuse another host or account choice', () => {
+    const view = renderHook(({ hostId, models }) => useSshCodexDraftSelection(hostId, models), {
+      initialProps: { hostId: 'a', models: [] as typeof catalog },
+    });
+    act(() => view.result.current.patch({ model: 'other-model', effort: 'low', fastMode: true }));
+    expect(view.result.current.selection).toBeNull();
+    view.rerender({ hostId: 'a', models: catalog });
+    expect(view.result.current.selection).toMatchObject({ model: 'other-model', effort: 'low', fastMode: true });
+    view.rerender({ hostId: 'b', models: catalog });
+    expect(view.result.current.selection).toMatchObject({ model: 'remote-default', effort: 'high', fastMode: false });
+    act(() => view.result.current.patch({ effort: 'low', fastMode: true }));
+    setDataOwnerGeneration('other', 2);
+    view.rerender({ hostId: 'b', models: catalog });
+    expect(view.result.current.selection).toMatchObject({ model: 'remote-default', effort: 'high', fastMode: false });
+  });
+});
 
 describe('SSH Codex model discovery', () => {
   it.each([false, true])('retries initial discovery on first ready even when rejection is late (%s)', async (late) => {

@@ -3,15 +3,19 @@
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { syncBuiltinESMExports } from 'node:module';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { setImmediate as nextTurn } from 'node:timers/promises';
+import { _electron } from 'playwright-core';
 import { runPlan } from './run.mjs';
 import { adhocPage } from './registry.mjs';
 import { parseOptions, variantsFor } from './options.mjs';
-import { scanPage, buildPage } from './build.mjs';
+import { scanPage, buildPage, inputsChanged } from './build.mjs';
+import { prShots } from './pr.mjs';
 
 const cli = fileURLToPath(new URL('./cli.mjs', import.meta.url));
 const harness = fileURLToPath(new URL('./harness/index.tsx', import.meta.url));
@@ -98,6 +102,122 @@ mountPage({ render: () => <div>Worker finished</div> });`);
   assert.equal((await run(['--entry', file, '--theme', 'light', '--json'])).code, 0);
 });
 
+// PDF preview blocked every changed-page scan: ?url parsed the worker as JS,
+// with no default export. Existing ?worker coverage bundles source, not URL assets.
+// Exercise scan/build/watch/compare, a real PDF module worker and a relative URL
+// worker's message round trip through the CLI.
+// Minimal input: pdfjs-dist's ?url import. Explicit Electron integration tier.
+test('loads PDF URL assets as real workers and tracks URL asset changes', async () => {
+  // Regression: GhostToolCard uses CSS ?inline for its sandbox. Scan/build must
+  // track the real file, and the imported value must remain a string.
+  const inlineCss = path.join(dir, 'card.css');
+  await writeFile(inlineCss, '.card { display: flex; }');
+  const asset = path.join(dir, 'url-asset.mjs');
+  const original = 'export const value = 17; self.onmessage = () => self.postMessage(value);';
+  const changed = 'export const value = 18; self.onmessage = () => self.postMessage(value);';
+  await writeFile(asset, original);
+  // A self-contained blank page with a valid xref; no font or network dependencies.
+  let pdf = '%PDF-1.4\n';
+  const offsets = [0];
+  for (const body of [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << >> >>',
+  ]) {
+    offsets.push(pdf.length);
+    pdf += `${offsets.length - 1} 0 obj\n${body}\nendobj\n`;
+  }
+  const xref = pdf.length;
+  pdf += `xref\n0 4\n0000000000 65535 f \n${offsets.slice(1).map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  const file = await entry('pdf-url', `import css from './card.css?inline';
+if (css !== '.card { display: flex; }') throw new Error('Inline CSS was not preserved');
+import * as pdfjs from 'pdfjs-dist';
+import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import assetUrl from './url-asset.mjs?url';
+if ((await import(assetUrl)).value !== 17) throw new Error('URL asset failed to load');
+const relativeWorker = new Worker(assetUrl, { type: 'module' });
+try {
+  await new Promise<void>((resolve, reject) => {
+    relativeWorker.onerror = reject;
+    relativeWorker.onmessage = ({ data }) => data === 17 ? resolve() : reject(new Error('Wrong URL worker result'));
+    relativeWorker.postMessage(null);
+  });
+} finally {
+  relativeWorker.terminate();
+}
+pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+const worker = new pdfjs.PDFWorker();
+await worker.promise;
+if (!(worker.port instanceof Worker)) throw new Error('PDF fell back to the main thread');
+const task = pdfjs.getDocument({ data: new TextEncoder().encode(${JSON.stringify(pdf)}), worker });
+try {
+  const document = await task.promise;
+  const page = await document.getPage(1);
+  const viewport = page.getViewport({ scale: 1 });
+  if (document.numPages !== 1 || viewport.width !== 200 || viewport.height !== 100) throw new Error('PDF parsing failed');
+} finally {
+  await task.destroy();
+  worker.destroy();
+}
+mountPage({ render: () => <div>PDF worker finished</div> });`);
+  const definition = adhocPage(file);
+  const scanned = await scanPage(definition);
+  assert.ok(scanned.inputs.includes(asset));
+  assert.ok(scanned.inputs.includes(inlineCss));
+  assert.ok(scanned.inputs.some(input => input.endsWith('pdf.worker.min.mjs')));
+  const bundle = await buildPage(definition);
+  const emitted = [...bundle.files].filter(([url]) => url.endsWith('.mjs'));
+  assert.equal(emitted.length, 2);
+  assert.ok(emitted.every(([, file]) => file.contentType === 'text/javascript'));
+  assert.ok(emitted.some(([, file]) => file.body.toString() === original));
+  const alternate = await buildPage(definition, {
+    has: file => file === asset,
+    get: file => file === asset ? changed : undefined,
+    resolve: () => undefined,
+  });
+  assert.notEqual(bundle.fingerprints.get(asset), alternate.fingerprints.get(asset));
+  assert.notEqual(bundle.bundleDigest, alternate.bundleDigest);
+  assert.ok([...alternate.files.values()].some(file => file.body.toString() === changed));
+  assert.equal(await inputsChanged(bundle.fingerprints), false);
+  const result = await run(['--entry', file, '--theme', 'light', '--json']);
+  assert.equal(result.code, 0, result.stderr + result.stdout);
+  await writeFile(asset, changed);
+  assert.equal(await inputsChanged(bundle.fingerprints), true);
+});
+
+// E2E: the real settings route previously crashed on import.meta.glob. Verify
+// executed catalog imports, input discovery, and the older revision's membership.
+test('loads eager default globs and preserves compare membership', async () => {
+  const first = path.join(dir, 'one.settings-search.ts');
+  const added = path.join(dir, 'two.settings-search.ts');
+  // A historical module may already be deleted from the worktree; resolving it
+  // must reach the revision overlay before esbuild checks the current filesystem.
+  const deleted = path.join(dir, 'deleted.settings-search.ts');
+  await writeFile(first, 'export default { title: "First" };');
+  await writeFile(added, 'export default { title: "Second" };');
+  const file = await entry('eager-glob', `
+type Entry = { title: string };
+const modules = import.meta.glob<Entry>('./**/*.settings-search.ts', { eager: true, import: 'default' });
+if (Object.values(modules).map(item => item.title).join(',') !== 'First,Second') throw new Error('Glob catalog mismatch');
+mountPage({ render: () => <div>{Object.values(modules).map(item => item.title).join(',')}</div> });`);
+  const definition = adhocPage(file);
+  const scanned = await scanPage(definition);
+  assert.ok(scanned.inputs.includes(first));
+  assert.ok(scanned.inputs.includes(added));
+  const before = await buildPage(definition, {
+    atRef: new Set([file, first, deleted]),
+    has: candidate => candidate === first || candidate === deleted,
+    get: candidate => candidate === first ? 'export default { title: "Original" };'
+      : candidate === deleted ? 'export default { title: "Deleted" };' : undefined,
+    resolve: candidate => candidate === deleted ? deleted : undefined,
+  });
+  assert.ok(before.fingerprints.has(first));
+  assert.ok(before.fingerprints.has(deleted));
+  assert.equal(before.fingerprints.has(added), false);
+  const result = await run(['--entry', file, '--theme', 'light', '--json']);
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+});
+
 test('one run reports each failure kind on its own variant', async () => {
   const file = await entry(
     'matrix',
@@ -163,7 +283,21 @@ mountPage({
 // CSS pixel, and hidden windows could not capture a frame. Drive the real CLI
 // across sizes/themes and inspect PNG dimensions; existing failure tests do not
 // verify resizing. Dedicated Electron integration tier, not default unit tests.
-test('captures exact viewports and overviews in a hidden Electron window', async () => {
+test('captures exact viewports and overviews in a hidden Electron window', async (t) => {
+  // #10254: closeMs must include every process, not just the final cleanup.
+  // Measure real shutdowns at the process boundary; no artificial timing delay.
+  const shutdowns = [];
+  const launch = _electron.launch.bind(_electron);
+  t.mock.method(_electron, 'launch', async (options) => {
+    const runtime = await launch(options);
+    const close = runtime.close.bind(runtime);
+    t.mock.method(runtime, 'close', async () => {
+      const started = performance.now();
+      try { return await close(); }
+      finally { shutdowns.push(performance.now() - started); }
+    });
+    return runtime;
+  });
   const file = await entry('viewport', 'mountPage({ render: () => <div>Viewport ready</div> });');
   const options = parseOptions([
     '--entry',
@@ -179,11 +313,27 @@ test('captures exact viewports and overviews in a hidden Electron window', async
   const definition = adhocPage(file);
   // Integration regression: region capture changes CDP viewport size. It must not
   // leak into the next variant, even when a scenario fails after changing it.
+  // #10177's broad UI run also exposed context-wide clock/init-script leakage:
+  // a new Electron window alone cannot isolate later sandboxed mail/PR frames.
   definition.check = async (page, ui) => {
     if (ui.theme === 'light' && ui.viewport.width === 560) {
       await page.setViewportSize({ width: 700, height: 500 });
+      await page.clock.install({ time: 0 });
+      await page.context().addInitScript(() => { window.contextLeak = true; });
+      await page.evaluate(() => localStorage.setItem('context-leak', 'present'));
       throw new Error('intentional scenario failure after resizing');
     }
+    assert.equal(await page.evaluate(() => window.contextLeak), undefined);
+    assert.equal(await page.evaluate(() => localStorage.getItem('context-leak')), null);
+    assert.ok(Math.abs(await page.evaluate(() => Date.now()) - Date.now()) < 10000,
+      'the next variant uses the real clock');
+    await page.evaluate(() => {
+      const frame = document.createElement('iframe');
+      frame.setAttribute('sandbox', 'allow-same-origin');
+      frame.srcdoc = '<p>Sandbox ready</p>';
+      document.body.append(frame);
+    });
+    await page.frameLocator('iframe').getByText('Sandbox ready').waitFor();
     // Real HTML fullscreen must resolve on the isolated test origin. Media
     // permission remains denied; enabling fullscreen is not a general grant.
     await page.locator('#root').evaluate((el) => el.requestFullscreen());
@@ -217,6 +367,189 @@ test('captures exact viewports and overviews in a hidden Electron window', async
   assert.ok(summary.overviews.length);
   for (const overview of summary.overviews) assert.ok(existsSync(overview));
   assert.equal(summary.cleanup.scratchRemoved, true);
+  assert.ok(shutdowns.length > 1);
+  assert.ok(summary.timings.closeMs >= Math.floor(shutdowns.reduce((a, b) => a + b, 0)) - shutdowns.length,
+    'closeMs includes all real Electron shutdowns, allowing per-measurement rounding');
+});
+
+// #10254: previous interrupt tests only stopped an already-published runtime.
+// Hold the second real launch's result at the asynchronous process boundary;
+// runPlan must not finish/delete its profile while that owned process is pending.
+// Dedicated Electron E2E tier: a controlled Node clock advances timeout/settling
+// deadlines while process launch, IPC and filesystem cleanup remain real.
+test('timeout and interrupt wait for an in-flight Electron relaunch', async (t) => {
+  for (const mode of ['interrupt', 'timeout']) {
+    const file = await entry(`relaunch-${mode}`, 'mountPage({ render: () => <div>Ready</div> });');
+    const options = parseOptions(['--entry', file, '--theme', 'all', '--json']);
+    const definition = adhocPage(file);
+    const controller = new AbortController();
+    const held = Promise.withResolvers();
+    const gate = Promise.withResolvers();
+    const runtimes = [];
+    const children = [];
+    let clockActive = false;
+    const resetClock = () => {
+      if (!clockActive) return;
+      t.mock.timers.reset();
+      syncBuiltinESMExports();
+      clockActive = false;
+    };
+    let checks = 0;
+    definition.check = async () => {
+      checks++;
+      if (checks !== 1) return;
+      // The first variant already has a native deadline. Keep its cancellation
+      // working when the next variant switches to controlled numeric timer IDs.
+      const clearNative = globalThis.clearTimeout;
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+      clockActive = true;
+      syncBuiltinESMExports();
+      const clearControlled = globalThis.clearTimeout;
+      globalThis.clearTimeout = timer => typeof timer === 'object'
+        ? clearNative(timer) : clearControlled(timer);
+    };
+    const launch = _electron.launch.bind(_electron);
+    const mocked = t.mock.method(_electron, 'launch', async (launchOptions) => {
+      const runtime = await launch(launchOptions);
+      runtimes.push(runtime);
+      children.push(runtime.process());
+      if (runtimes.length === 2) {
+        held.resolve(launchOptions.env.CINDY_UI_PROFILE);
+        await gate.promise;
+      }
+      return runtime;
+    });
+    const running = runPlan(
+      { pages: [{ definition, variants: variantsFor(definition, options) }] }, options, controller.signal,
+    );
+    let finished = false;
+    void running.then(() => { finished = true; });
+    try {
+      const profile = await Promise.race([
+        held.promise,
+        running.then(() => { throw new Error('run ended before the second launch'); }),
+      ]);
+      if (mode === 'interrupt') controller.abort(new Error('selftest interrupt during relaunch'));
+      else t.mock.timers.tick(options.timeout);
+      await nextTurn();
+      t.mock.timers.tick(Math.min(options.timeout, 10000) + 2000);
+      await nextTurn();
+      assert.equal(finished, false, 'cleanup waits for the owned in-flight launch');
+      assert.ok(existsSync(profile), 'the live process keeps its profile until shutdown');
+      resetClock();
+      gate.resolve();
+      const summary = await running;
+      assert.equal(summary.status, 'failed');
+      assert.equal(summary.variants.length, 2, 'no later variant or overview starts');
+      assert.equal(checks, 1, 'the abandoned launch cannot execute its scenario');
+      assert.equal(summary.cleanup.runtimeClosed, true);
+      assert.equal(summary.cleanup.scratchRemoved, true);
+      assert.equal(existsSync(profile), false);
+      for (const child of children) {
+        assert.ok(child.exitCode !== null || child.signalCode !== null, `Electron ${child.pid} exited`);
+      }
+      t.diagnostic(JSON.stringify({ mode, pids: children.map(child => child.pid), cleanup: summary.cleanup }));
+    } finally {
+      // The red regression must also close the real process it deliberately withheld.
+      resetClock();
+      controller.abort();
+      gate.resolve();
+      await running;
+      await Promise.all(runtimes.map(runtime => runtime.close().catch(() => {})));
+      mocked.mock.restore();
+    }
+  }
+});
+
+// Scenario-only controls (e.g. "Finish fixture") showed up in PR screenshots. Captures hide
+// `data-ui-page-control` elements while the check can still click them. Electron tier.
+test('captures leave out scenario controls that the check still uses', async () => {
+  const file = await entry(
+    'controls',
+    `mountPage({ cases: ['plain', 'control'], render: (ctx) => <div>Ready{ctx.case === 'control' &&
+      <button data-ui-page-control style={{ position: 'absolute', top: 0, left: 0 }}
+        onClick={(event) => { event.currentTarget.dataset.clicked = '1'; }}>Finish</button>}</div> });`,
+  );
+  const options = parseOptions(['--entry', file, '--case', 'all', '--json']);
+  const definition = adhocPage(file);
+  definition.check = async (page, ui) => {
+    if (ui.case !== 'control') return;
+    await page.getByRole('button', { name: 'Finish' }).click();
+    assert.equal(await page.locator('[data-clicked]').count(), 1);
+  };
+  const summary = await runPlan(
+    { pages: [{ definition, variants: variantsFor(definition, options) }] },
+    options,
+  );
+  assert.equal(summary.status, 'passed', JSON.stringify(summary.variants.map((v) => v.errors)));
+  const [plain, control] = await Promise.all(
+    summary.variants.map((variant) =>
+      readFile(path.join(summary.evidence, variant.screenshots[0])),
+    ),
+  );
+  assert.ok(plain.equals(control));
+});
+
+// The PR body used to embed every overview. It now carries only captures whose before and
+// after differ, as before | after pairs.
+test('PR screenshots keep only changed captures as before/after pairs', async () => {
+  const evidence = await mkdtemp(path.join(dir, 'pr-shots-'));
+  const variants = [];
+  for (const theme of ['light', 'dark'])
+    for (const name of ['a', 'b', 'c']) {
+      const id = `p.${name}.${theme}.zh-CN.720x600`;
+      for (const role of ['before', 'after']) {
+        const shots = [];
+        for (const capture of ['initial', 'final']) {
+          const rel = `${id}/${role === 'before' ? 'before/' : ''}${capture}.png`;
+          await mkdir(path.dirname(path.join(evidence, rel)), { recursive: true });
+          // Case a is unchanged; b and c differ at both captures.
+          await writeFile(path.join(evidence, rel), name === 'a' ? capture : `${role}-${capture}`);
+          shots.push(rel);
+        }
+        variants.push({
+          id,
+          role,
+          page: 'p',
+          case: name,
+          theme,
+          locale: 'zh-CN',
+          viewport: { width: 720, height: 600 },
+          screenshots: shots,
+          focus: [],
+        });
+      }
+    }
+  const summary = { compare: { ref: 'main' }, variants };
+  const rows = await prShots(summary, evidence);
+  // Case a is identical on both sides and drops out; nothing is capped.
+  assert.deepEqual(
+    rows.map((row) => `${row.title} ${row.subtitle.split(' · ')[0]}`),
+    ['light', 'dark'].flatMap((theme) =>
+      ['b', 'c'].flatMap((name) => [`${name} · initial ${theme}`, `${name} · final ${theme}`]),
+    ),
+  );
+  assert.deepEqual(
+    rows[1].columns.map((column) => column.file),
+    ['p.b.light.zh-CN.720x600/before/final.png', 'p.b.light.zh-CN.720x600/final.png'],
+  );
+  // A crop that exists on one side only must not be paired with the other side's full page.
+  const mixed = structuredClone(variants);
+  const lone = mixed.find((v) => v.role === 'after' && v.case === 'b' && v.theme === 'light');
+  lone.focus = [{ capture: 'final', file: 'p.b.light.zh-CN.720x600/final.focus.png' }];
+  await writeFile(path.join(evidence, lone.focus[0].file), 'crop');
+  const final = (await prShots({ ...summary, variants: mixed }, evidence)).find(
+    (row) => row.title === 'b · final' && row.subtitle.startsWith('light'),
+  );
+  assert.deepEqual(
+    final.columns.map((column) => column.file),
+    ['p.b.light.zh-CN.720x600/before/final.png', 'p.b.light.zh-CN.720x600/final.png'],
+  );
+  const plain = await prShots({ variants }, evidence, { cases: ['a'] });
+  assert.deepEqual(
+    plain.map((row) => row.columns.map((column) => column.label)),
+    [['Light', 'Dark']],
+  );
 });
 
 // #7395 extended UI regression: the idle editor installs a 900x400 CDP

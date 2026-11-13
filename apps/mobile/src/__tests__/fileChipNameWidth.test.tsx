@@ -11,6 +11,8 @@ vi.mock('@/platform/gestureHandler', () => {
   return { GestureDetector: ({ children }: { children: unknown }) => children, Gesture: { LongPress: chain } };
 });
 vi.mock('@/session/McpAppCard', () => ({ McpAppCard: () => null }));
+// Card previews are covered separately; file-chip layout does not use Expo's native viewer.
+vi.mock('@/plugins/PluginNativeIntent', () => ({ PluginNativeIntent: () => null }));
 vi.mock('react-native-webview', () => ({ WebView: () => null }));
 vi.mock('expo-modules-core', () => ({
   requireOptionalNativeModule: () => null,
@@ -51,7 +53,7 @@ vi.mock('lucide-react-native', () => Object.fromEntries([
   'Mail', 'CalendarDays', 'Folder', 'ChartColumn', 'Info', 'Clock', 'MapPin', 'Coffee', 'Image', 'Users', 'Star',
   'Database', 'FileArchive', 'FileAudio', 'FileChartColumn', 'FileCode', 'FileImage', 'FileSpreadsheet', 'FileText', 'FileVideo',
   'ArrowLeftRight', 'ArrowUp', 'Bot', 'Check', 'ChevronDown', 'ChevronRight', 'ChevronUp', 'Circle', 'CircleAlert', 'CircleCheck',
-  'CircleDashed', 'CircleStop', 'Copy', 'Ellipsis', 'ExternalLink', 'File', 'Ghost', 'Layers', 'ListTodo', 'LoaderCircle',
+  'CircleDashed', 'CircleMinus', 'CircleStop', 'CircleX', 'Copy', 'Ellipsis', 'ExternalLink', 'File', 'Ghost', 'Layers', 'ListTodo', 'LoaderCircle',
   'PencilLine', 'RefreshCw', 'Send', 'Share', 'Sparkles', 'Split', 'Timer', 'Trash2', 'TriangleAlert', 'Undo2', 'X',
 ].map(name => [name, () => null])));
 vi.mock('react-native-svg', () => ({ default: () => null, Circle: () => null, Path: () => null }));
@@ -171,3 +173,8 @@ describe('file chip names keep their width when the chip is content-sized (#5875
     }
   });
 });
+
+vi.mock('@/session/RemoteAttachmentPreview', () => ({ RemoteAttachmentPreview: () => null }));
+
+// Native blur rendering is outside the attachment layout contract.
+vi.mock('expo-blur', () => ({ BlurView: () => null }));

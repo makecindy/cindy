@@ -1,10 +1,16 @@
 /**
- * 组策略(provider-groups.md §5)：只分给可用、未暂停、没试过的电脑；优先未满载；最急着用的额度先用。
+ * 组策略(provider-groups.md §5)：只分给可用、未暂停、没试过、未满载的电脑；最急着用的额度先用。
  */
 import { describe, expect, it } from 'vitest';
 
-import { PROVIDER_GROUP_STRATEGIES } from '../../../shared/providerGroup';
-import { pickProviderGroupMember, type SchedulableMember } from '../scheduler';
+import {
+  concurrencyLimitOptionValue,
+  concurrencyLimitPatch,
+  effectiveConcurrencyLimit,
+  normalizeProviderGroupConfig,
+  PROVIDER_GROUP_STRATEGIES,
+} from '../../../shared/providerGroup';
+import { pickProviderGroupMember, providerGroupMembersFull, type SchedulableMember } from '../scheduler';
 
 const m = (key: string, patch: Partial<SchedulableMember> = {}): SchedulableMember => ({
   key,
@@ -28,10 +34,22 @@ describe('pickProviderGroupMember', () => {
     expect(pickProviderGroupMember([m('a', { running: 2 }), m('b', { running: 1 }), m('c', { running: 1 })], 'least')).toBe('b');
   });
 
-  it('prefers computers under their limit and falls back to the least busy when all are full', () => {
+  // 2026-11-11 用户裁决：达到并发上限就不再分新任务(取代「都满了时分给最空的」)。
+  it('assigns only computers under their limit and reports when every candidate is full', () => {
     const members = [m('a', { running: 4 }), m('b', { running: 3 })];
     expect(pickProviderGroupMember(members, 'order')).toBe('b');
-    expect(pickProviderGroupMember([m('a', { running: 5 }), m('b', { running: 4 })], 'order')).toBe('b');
+    const full = [m('a', { running: 5 }), m('b', { running: 4 }), m('off', { usable: false })];
+    expect(pickProviderGroupMember(full, 'order')).toBeNull();
+    expect(providerGroupMembersFull(full)).toBe(true);
+    // 没有能接的电脑不是满载；排除掉唯一未满的那台后才算满载。
+    expect(providerGroupMembersFull([m('off', { usable: false })])).toBe(false);
+    expect(providerGroupMembersFull([m('a', { running: 4 }), m('b')], { exclude: new Set(['b']) })).toBe(true);
+  });
+
+  it('never fills a computer whose limit is unlimited', () => {
+    const members = [m('a', { running: 100, limit: Number.POSITIVE_INFINITY }), m('b', { running: 4 })];
+    expect(pickProviderGroupMember(members, 'order')).toBe('a');
+    expect(providerGroupMembersFull(members)).toBe(false);
   });
 
   it('round robin continues after the last picked computer and wraps around', () => {
@@ -47,11 +65,34 @@ describe('pickProviderGroupMember', () => {
     expect(pickProviderGroupMember(members, 'weight', { random: () => 0.5 })).toBe('b');
   });
 
-  it('keeps concurrency limits ahead of quota urgency, including the all-full fallback', () => {
+  it('keeps concurrency limits ahead of quota urgency', () => {
     const urgent = m('urgent', { urgency: 5, running: 4 });
     expect(pickProviderGroupMember([urgent, m('calm', { urgency: 0.5 })], 'least')).toBe('calm');
-    // 都满了时仍然先用最急的，而不是单看谁更空。
-    expect(pickProviderGroupMember([m('emptier', { urgency: 0.5, running: 4 }), { ...urgent, running: 6 }], 'least')).toBe('urgent');
+    expect(pickProviderGroupMember([m('emptier', { urgency: 0.5, running: 4 }), { ...urgent, running: 6 }], 'least')).toBeNull();
+  });
+});
+
+// 2026-11-11 用户裁决：没设置过并发上限的不限制；旧版存下的默认 4 视为没设置过，设置过的值照旧生效。
+describe('effective concurrency limit', () => {
+  it('treats unset and legacy-default limits as unlimited and keeps chosen limits', () => {
+    expect(effectiveConcurrencyLimit({ limit: 4 })).toBe(Number.POSITIVE_INFINITY);
+    expect(effectiveConcurrencyLimit({ limit: 4, limitSet: true })).toBe(4);
+    expect(effectiveConcurrencyLimit({ limit: 8 })).toBe(8);
+    expect(concurrencyLimitOptionValue({ limit: 4 })).toBe('unlimited');
+    expect(concurrencyLimitOptionValue({ limit: 4, limitSet: true })).toBe('4');
+  });
+
+  it('round-trips the unlimited choice through stored group settings for old and new clients', () => {
+    const member = { kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 6, limitSet: true, weight: 1, paused: false };
+    const chosen = normalizeProviderGroupConfig({ strategy: 'least', autoSwitch: true,
+      members: [{ ...member, ...concurrencyLimitPatch(4) }] }, 'anthropic')!;
+    expect(effectiveConcurrencyLimit(chosen.members[0])).toBe(4);
+    const cleared = normalizeProviderGroupConfig(JSON.parse(JSON.stringify({ ...chosen,
+      members: [{ ...chosen.members[0], ...concurrencyLimitPatch(null) }] })), 'anthropic')!;
+    // Old clients read the legacy default and keep their former behavior.
+    expect(cleared.members[0]).toMatchObject({ limit: 4 });
+    expect(cleared.members[0]).not.toHaveProperty('limitSet');
+    expect(effectiveConcurrencyLimit(cleared.members[0])).toBe(Number.POSITIVE_INFINITY);
   });
 });
 

@@ -121,3 +121,57 @@ it('rechecks read state when the room changes during notification presentation',
   expect(present).toHaveBeenCalledOnce();
   service.dispose();
 });
+
+// Unit: two flushes of one consumer can both pass the pre-await handled check.
+// The second must see the claim before notify, or one message produces two toasts.
+it('notifies once when a second flush overlaps presentation of the same message', async () => {
+  vi.useFakeTimers();
+  const snapshot = { room: { name: 'Team' }, messages: [message('peer')],
+    reads: [{ thread_key: 'main', read_seq: '0' }] };
+  let releaseFirst!: () => void;
+  let releaseSecond!: () => void;
+  let presentations = 0;
+  const present = vi.fn(() => new Promise<{ senderName: string; avatar: string; preview: string }>(resolve => {
+    const finish = () => resolve({ senderName: 'Peer', avatar: '', preview: 'Hello' });
+    if (presentations++ === 0) releaseFirst = finish;
+    else releaseSecond = finish;
+  }));
+  const notify = vi.fn();
+  const service = createChatMessageNotifications({ current: () => true, selfId: () => 'me',
+    revision: () => 1, snapshot: async () => snapshot, present, notify });
+  service.enqueue('room', 'peer');
+  const firstFlush = vi.advanceTimersByTimeAsync(1200);
+  await vi.waitFor(() => expect(present).toHaveBeenCalledOnce());
+  const first = present.mock.results[0]!.value as Promise<unknown>;
+  service.enqueue('room', 'peer');
+  const secondFlush = vi.advanceTimersByTimeAsync(1200);
+  await vi.waitFor(() => expect(present).toHaveBeenCalledTimes(2));
+  releaseFirst();
+  await first;
+  releaseSecond();
+  await Promise.all([firstFlush, secondFlush]);
+  expect(notify).toHaveBeenCalledOnce();
+  service.dispose();
+});
+
+// Unit: the new personal range must affect native alerts only. A merged burst
+// uses one snapshot, filters before sender/media preparation, and never replays.
+it('filters a mentions-only burst without changing the island projection or adding per-message reads', async () => {
+  vi.useFakeTimers();
+  const ordinary = message('ordinary', { seq: '9007199254740994' });
+  const snapshot = { room: { name: 'Team', kind: 'group' }, messages: [ordinary, message('mention', { mentions: ['me'] }), message('my-bot', { mentions: ['bot-owned-by-me'] })],
+    reads: [{ thread_key: 'main', read_seq: '0', notification_scope: 'mentions' as const }] };
+  const read = vi.fn(async () => snapshot), notify = vi.fn();
+  const present = vi.fn(async () => ({ senderName: 'Peer', avatar: '', preview: 'Hello' }));
+  const service = createChatMessageNotifications({ current: () => true, selfId: () => 'me', snapshot: read, present, notify });
+  for (const m of snapshot.messages) service.enqueue('room', m.id);
+  await vi.advanceTimersByTimeAsync(1200);
+  expect(read).toHaveBeenCalledOnce();
+  expect(present).toHaveBeenCalledOnce();
+  expect(notify.mock.calls.map(([event]) => event.messageId)).toEqual(['mention']);
+  expect(selectChatAttentionMessage({ ...snapshot, messages: [ordinary] }, 'me')).toBe(ordinary);
+  service.enqueue('room', ordinary.id);
+  await vi.advanceTimersByTimeAsync(1200);
+  expect(read).toHaveBeenCalledOnce();
+  service.dispose();
+});
