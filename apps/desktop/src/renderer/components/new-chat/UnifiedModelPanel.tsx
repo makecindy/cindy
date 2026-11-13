@@ -128,8 +128,12 @@ export interface UnifiedModelPanelProps {
   pinnedTop?: ReactNode;
   /** pinnedTop 当前有内容：搜索只命中它时不显示空结果。 */
   pinnedTopHasRows?: boolean;
-  /** 左侧栏「模型组」一格及其内容(新任务草稿才传)；不传就没有这一格。 */
+  /** 左侧栏「模型组」一格及其内容；不传就没有这一格。 */
   modelGroupsView?: ReactNode;
+  /** 「收藏」视图且没有搜索词时，列表最上方额外渲染的内容(收藏的模式)。 */
+  favoritesPinned?: ReactNode;
+  /** favoritesPinned 当前有内容：只有它时「收藏」不显示空态引导。 */
+  favoritesPinnedHasRows?: boolean;
   providers: readonly ProviderView[];
   /**
    * 供应商分组的显示顺序(设置 → 模型供应商的拖动序);缺省 = 目录首见序。
@@ -392,6 +396,8 @@ export function UnifiedModelPanel({
   pinnedTop,
   pinnedTopHasRows = false,
   modelGroupsView,
+  favoritesPinned,
+  favoritesPinnedHasRows = false,
   providers,
   providerOrder,
   agents,
@@ -1508,6 +1514,7 @@ export function UnifiedModelPanel({
           )}
           {favoritesListDeviceId && remoteFavorites.error ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t(favoritesSyncFailureI18nKey(remoteFavorites.errorCode))}</div> : null}
           {pinnedTop && effectiveRail.kind === 'all' ? pinnedTop : null}
+          {favoritesPinned && effectiveRail.kind === 'favorites' && !query.trim() ? favoritesPinned : null}
           {effectiveRail.kind === 'model-groups' ? (
             modelGroupsView ?? null
           ) : remoteListPending ? (
@@ -1522,7 +1529,8 @@ export function UnifiedModelPanel({
             )
           ) : catalogNotice ? (
             catalogNotice
-          ) : !hasRows && !(pinnedTopHasRows && effectiveRail.kind === 'all') ? (
+          ) : !hasRows && !(pinnedTopHasRows && effectiveRail.kind === 'all')
+            && !(favoritesPinnedHasRows && effectiveRail.kind === 'favorites' && !query.trim()) ? (
             emptyCatalogNotice ?? (
               // 与跨 Harness 提示一样,空态文案在已定宽的面板内换行,不参与 max-content 撑宽。
               <div className="w-0 min-w-full px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">

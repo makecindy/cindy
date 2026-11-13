@@ -17,6 +17,8 @@ import path from 'node:path';
 import { BrowserWindow } from 'electron';
 
 import { getActiveDataOwnerPushStamp } from '../appSessionState.js';
+import { getDbPathForUser } from '../localDb/index.js';
+import { getCurrentDbClientUserId } from '../localDb/client/current.js';
 import { MEMORY_STORAGE_MIGRATION_RECEIPT, parseFilename } from '@cindy/maker-core';
 import { createSnapshotDetailed } from '../git-snapshot/gitSnapshotService.js';
 import { listProjectAliases, upsertProjectAlias } from '../localDb/ipc/projectAliases.js';
@@ -24,7 +26,7 @@ import { normalizeRecentWorkdirPath, upsertRecentWorkdir } from '../localDb/ipc/
 import { createLogger } from '../logger.js';
 import { isTrustedAppRendererWindow } from '../security/trustedAppRenderer.js';
 import { restoreLocalProjectVisibility } from '../sidebarSettingsStore.js';
-import { gitExec } from '../worktree/gitExec.js';
+import { gitExec, GitExecError } from '../worktree/gitExec.js';
 import { detectCwd } from '../worktree/WorktreeManager.js';
 import { botProfileDir, botProfileMemoryDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
 import {
@@ -37,8 +39,10 @@ import {
 import { setBotProjectSkillsDir } from './botSkillStore.js';
 import { TEAMMATE_TEMPLATE_VERSION, applyTeammateTemplate } from './botProjectTemplate.js';
 import { routeModelFields } from './botV2Carryover.js';
+import { ensureMemoryReviewHook, MEMORY_REVIEW_HOOK_COMMAND, LEGACY_MEMORY_REVIEW_HOOK_COMMAND } from './botProjectMemoryReview.js';
 import type { ProjectScheduleConfig } from '../scheduler-host/project-automation-loader.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
+import type { BotProjectRepositoryStatus } from '../../shared/botProjectMode.js';
 
 const log = createLogger('maker-ipc:bot-project-mode');
 
@@ -302,24 +306,98 @@ export async function ensureTeammateTemplate(input: { botId: string; displayName
 }
 
 /** A repository whose root is the workspace itself; an enclosing repo does not count. */
-async function ensureWorkspaceRepository(workspace: string): Promise<'initialized' | 'already-git' | 'unavailable'> {
-  const before = await detectCwd(workspace);
+async function inspectWorkspaceRepository(workspace: string, repairSafeDirectory = true): Promise<'ready' | 'unborn' | 'missing' | 'unavailable'> {
+  const before = await detectCwd(workspace, { repairSafeDirectory });
+  const probeOptions = { timeoutMs: 10_000, repairSafeDirectory };
   if (!before.gitInstalled) return 'unavailable';
   const [ownRoot, repoRoot] = await Promise.all([
     fs.realpath(workspace),
     before.repoRoot ? fs.realpath(before.repoRoot).catch(() => before.repoRoot) : Promise.resolve(null),
   ]);
-  if (before.isGitRepo && repoRoot === ownRoot) return 'already-git';
+  if (before.isGitRepo && repoRoot === ownRoot) {
+    try {
+      await gitExec(['rev-parse', '--verify', 'HEAD^{commit}'], workspace, probeOptions);
+      return 'ready';
+    } catch (error) {
+      if (!(error instanceof GitExecError) || error.exitCode !== 128
+        || error.timedOut || error.aborted || error.cleanupUnconfirmed) throw error;
+      // A failed HEAD lookup alone does not mean an unborn branch: a detached HEAD,
+      // unreadable ref or missing commit object must not be repaired by a new commit.
+      const { stdout } = await gitExec(['symbolic-ref', '--quiet', 'HEAD'], workspace, probeOptions);
+      const branch = stdout.trim();
+      if (!branch.startsWith('refs/heads/')) throw error;
+      try {
+        await gitExec(['show-ref', '--verify', '--quiet', branch], workspace, probeOptions);
+      } catch (refError) {
+        if (!(refError instanceof GitExecError) || refError.exitCode !== 1
+          || refError.stderr.trim() || refError.timedOut || refError.aborted || refError.cleanupUnconfirmed) throw refError;
+        return 'unborn';
+      }
+      throw error;
+    }
+  }
+  // Discovery can report non-Git for damaged metadata. Never re-init over an existing
+  // .git entry (including a dangling link), or mistake an access failure for absence.
+  const gitEntry = await fs.lstat(path.join(workspace, '.git')).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (gitEntry) throw new Error('Existing buddy repository could not be read');
+  return 'missing';
+}
+
+/** Read-only: opening settings must never create a commit or change Git configuration. */
+export async function readWorkspaceRepositoryStatus(workspace: string): Promise<BotProjectRepositoryStatus> {
+  try {
+    const state = await inspectWorkspaceRepository(workspace, false);
+    if (state === 'ready' || state === 'unavailable') return state;
+    if (state === 'missing') return 'not-ready';
+    for (const identity of ['GIT_AUTHOR_IDENT', 'GIT_COMMITTER_IDENT']) {
+      await gitExec(['var', identity], workspace, { timeoutMs: 10_000, repairSafeDirectory: false, extraEnv: { LC_ALL: 'C' } });
+    }
+    return 'not-ready';
+  } catch (error) {
+    if (error instanceof GitExecError && error.exitCode === 128
+      && /identity unknown|unable to auto-detect|empty ident|no (?:name|email) was given/i.test(error.stderr)) return 'needs-identity';
+    return 'failed';
+  }
+}
+
+const repositoryPreparations = new Map<string, Promise<'initialized' | 'already-git' | 'unavailable'>>();
+
+/** Startup and explicit retries share one in-flight attempt for this workspace. */
+export function ensureWorkspaceRepository(workspace: string): Promise<'initialized' | 'already-git' | 'unavailable'> {
+  const key = path.resolve(workspace);
+  const pending = repositoryPreparations.get(key);
+  if (pending) return pending;
+  const attempt = initializeWorkspaceRepository(workspace).finally(() => {
+    if (repositoryPreparations.get(key) === attempt) repositoryPreparations.delete(key);
+  });
+  repositoryPreparations.set(key, attempt);
+  return attempt;
+}
+
+async function initializeWorkspaceRepository(workspace: string): Promise<'initialized' | 'already-git' | 'unavailable'> {
+  const state = await inspectWorkspaceRepository(workspace);
+  if (state === 'unavailable') return state;
+  if (state === 'ready') return 'already-git';
   // A long-lived teammate folder collects archives, databases and logs; versions are for its
   // own work, so those stay out of the history from the first snapshot on.
-  await writeIfMissing(path.join(workspace, '.gitignore'), BOT_PROJECT_GITIGNORE);
-  await gitExec(['init'], workspace);
-  await createSnapshotDetailed(workspace, {
+  if (state === 'missing') {
+    await writeIfMissing(path.join(workspace, '.gitignore'), BOT_PROJECT_GITIGNORE);
+    await gitExec(['init'], workspace, { timeoutMs: 10_000 });
+  }
+  await createInitialWorkspaceSnapshot(workspace);
+  return 'initialized';
+}
+
+async function createInitialWorkspaceSnapshot(workspace: string): Promise<void> {
+  const snapshot = await createSnapshotDetailed(workspace, {
     label: 'Start teammate project',
     meta: { sessionId: 'bot-project', kind: 'manual' },
     allowEmpty: true,
   });
-  return 'initialized';
+  if (!snapshot.commit) throw new Error('Buddy initial version was not created');
 }
 
 function broadcastProjectRegistered(workingDir: string): void {
@@ -351,8 +429,7 @@ export function botProjectMemoryReview(input: {
   return {
     id: BOT_PROJECT_MEMORY_REVIEW_ID,
     name: input.title.replace('{{name}}', name),
-    // A goal, not a procedure: the task picks its own tools and material.
-    prompt: `Look back at ${name}'s conversations from the last day (teammate id ${input.botId}) and keep what is worth remembering in this project's memory and skills. If nothing new is worth keeping, finish quietly.`,
+    prompt: `Review ${name}'s conversations from the last day (teammate id ${input.botId}). Keep only durable, useful knowledge in this project's memory and reusable, proven procedures in its skills. Search existing files first: update a related record or skill instead of adding a duplicate. Review related existing material for duplication, contradictions, obsolete status and unnecessary detail; keep concise facts and actionable steps, not conversation logs or one-off task progress. Preserve the owner's rules and intent. Before merging or removing content, verify the evidence and keep a recoverable copy or a targeted Git commit; leave uncertain items intact. Read .cindy/memory/README.md before memory maintenance. Skills live in .agents/skills; keep SKILL.md focused and move detailed examples to on-demand references when useful. Do not invent a skill just because a review ran. If no meaningful improvement is justified, finish quietly.`,
     cronExpr: '30 3 * * *',
     timezone: input.timezone,
     recurring: true,
@@ -362,12 +439,14 @@ export function botProjectMemoryReview(input: {
   };
 }
 
-/** Adds the review once; an owner's later edit or removal of it in the project is kept. */
+/** Upgrade only the supplied old prompt; preserve edits, schedule/model choices and removal. */
 export async function ensureBotProjectAutomations(input: {
   botId: string;
   displayName: string;
   workingDir: string;
   route?: BotModelRoute | null;
+  /** Receipt path: do not resurrect a review removed after the initial V2 upgrade. */
+  addMissing?: boolean;
 }): Promise<boolean> {
   // Loaded on use: the scheduler host is not part of the teammate profile store's import graph.
   const [{ getProjectAutomationLoader }, { t }] = await Promise.all([
@@ -375,13 +454,27 @@ export async function ensureBotProjectAutomations(input: {
   ]);
   const loader = getProjectAutomationLoader();
   const existing = await loader.loadProjectSchedules(input.workingDir);
-  if (existing?.some((config) => config.id === BOT_PROJECT_MEMORY_REVIEW_ID)) return false;
+  const current = existing?.find((config) => config.id === BOT_PROJECT_MEMORY_REVIEW_ID);
+  if (!current && input.addMissing === false) return false;
+  const suppliedHook = current?.preRunHook?.command === MEMORY_REVIEW_HOOK_COMMAND;
+  const legacyHook = current?.preRunHook?.command === LEGACY_MEMORY_REVIEW_HOOK_COMMAND;
+  if (current && !suppliedHook && !legacyHook && (current.preRunHook || !current.prompt?.startsWith('Look back at ')
+    || !current.prompt.endsWith(`'s conversations from the last day (teammate id ${input.botId}) and keep what is worth remembering in this project's memory and skills. If nothing new is worth keeping, finish quietly.`))) return false;
+  const userId = getCurrentDbClientUserId();
+  if (!userId) throw new Error('Memory review requires the active account database');
+  const databasePath = getDbPathForUser(userId);
+  const preRunHook = await ensureMemoryReviewHook({ ...input, databasePath, previousCommand: current?.preRunHook?.command });
+  if (suppliedHook || (legacyHook && preRunHook.command === current?.preRunHook?.command)) return false;
   // An existing file that cannot be read whole is kept: the upgrade fails and retries next start.
-  await loader.upsertSchedule(input.workingDir, botProjectMemoryReview({
+  const defaults = botProjectMemoryReview({
     ...input,
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
     title: t('bots.homeFolder.projectMode.memoryReviewName'),
-  }), { keepUnreadable: true });
+  });
+  await loader.upsertSchedule(input.workingDir, {
+    ...defaults, ...current, prompt: legacyHook ? current!.prompt : defaults.prompt,
+    preRunHook: { ...preRunHook, ...current?.preRunHook, command: preRunHook.command },
+  }, { keepUnreadable: true });
   return true;
 }
 

@@ -438,9 +438,9 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     return [{ ...failure, botName: member ? memberName(member, ownerMembers) : '' }];
   });
   const executions = (page.executions ?? []).filter(row => ['queued', 'running', 'needs_input', 'stopping'].includes(row.status));
-  // No server-provided start time here: created_at is the enqueue time, so omit startedAt
-  // rather than presenting queued time as elapsed work.
+  // Enqueue time anchors history, but must never be presented as elapsed work.
   const speakers = executions.map(row => ({ botId: row.bot_id, sessionId: null, executionId: row.id,
+    timelineAt: row.created_at && Number.isFinite(Date.parse(row.created_at)) ? Date.parse(row.created_at) : undefined,
     executionStatus: row.status as 'queued' | 'running' | 'needs_input' | 'stopping', stopping: row.status === 'stopping',
     activity: row.plan_id ? 'step' as const : 'reply' as const }));
   const plans = (page.plans ?? []).map(plan => chatPlanView(plan, page.snapshot, selfId));
@@ -463,7 +463,9 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     openPlan: open ? { id: open.id, status: open.status, currentStep: open.currentStep, stepCount: open.steps.length,
       currentBotName: currentStep?.botName ?? null, currentStepStatus: currentStep?.status ?? null, ...(open.kind ? { kind: open.kind } : {}) } : null,
     plans, messages: projectBotGroupExecutionFailures(messages, failures),
-    hasMoreBefore: page.before !== null, round: { status: speakers.length ? 'running' : 'idle', speakers, canContinue: false,
+    hasMoreBefore: page.before !== null, round: { canStop: (page.plans ?? []).some(p => p.creator_id === selfId && ['proposed', 'running', 'waiting'].includes(p.status)) || executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status)
+        && ((!e.requester_id && !members.some(m => m.id === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role))) || e.requester_id === selfId
+        || active.some(m => m.id === e.bot_id && m.kind === 'bot' && m.ownerActorId === selfId))), status: speakers.length ? 'running' : 'idle', speakers, canContinue: false,
       othersActive: executions.some(execution => ['queued', 'running', 'needs_input'].includes(execution.status)
         && execution.requester_id !== selfId && !members.some(member => member.id === execution.bot_id && member.ownerActorId === selfId)) }, supportsAttachments: true };
 }

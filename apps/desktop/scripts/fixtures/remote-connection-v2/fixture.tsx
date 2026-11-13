@@ -126,11 +126,11 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
     ],
     links: [
       // 正在操作 Work PC:双向都有消息;Home server 只收到它发来的。
-      link('win', 'direct', 3, 200, 400),
+      link('win', 'direct', 3.252, 200, 400),
       link('mini', 'direct', 1),
-      link('nas', 'relay', 96, null, 600),
+      link('nas', 'relay', 96.752, null, 600),
     ],
-    relayRttMs: 24,
+    relayRttMs: 24.752,
   };
 }
 
@@ -250,6 +250,10 @@ void mountPage({
       onHostsChanged: subscription('sshHosts'),
     },
     openRemoteDesktop: forbid('openRemoteDesktop'),
+    maker: {
+      getOwnComputerModelUse: async () => ({ enabled: ctx.case === 'model-access-on' }),
+      setOwnComputerModelUse: async ({ enabled }: { enabled: boolean }) => ({ ok: true, enabled }),
+    },
   },
   render: () => (
     <AppFrame>

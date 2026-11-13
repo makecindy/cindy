@@ -105,8 +105,8 @@
       "sessionCount": "{{count}} sessões",
       "messageCount": "{{count}} mensagens",
       "status": {
-        "archived": "Arquivadas",
-        "deleted": "Eliminado"
+        "archived": "Arquivada",
+        "deleted": "Eliminada"
       },
       "preview": {
         "permission": "À espera de permissão",
@@ -375,23 +375,23 @@
         "recency": "Atividade recente",
         "created": "Hora de criação"
       },
-      "sortByPriorityTip": "Primeiro as que aguardam a sua intervenção, depois as não lidas, depois as em execução e, por fim, por hora",
+      "sortByPriorityTip": "Primeiro as que aguardam a sua intervenção, depois as não lidas, depois as em execução e, por fim, por data",
       "projectOrder": {
         "activity": "Seguir tarefas",
         "custom": "Manual"
       },
       "status": {
-        "active": "Ativo",
+        "active": "Ativas",
         "archived": "Arquivadas",
         "all": "Todas"
       },
       "filterHeading": "Filtros",
-      "filterSummaryActive": "{{count}} ativas",
+      "filterSummaryActive": "{{count}} ativos",
       "filterReset": "Repor filtros",
       "filterAll": "Todas",
       "filterProjectsHeading": "Projetos",
       "filterAllProjects": "Todos os projetos",
-      "filterSelectedProjects": "{{count}} selecionadas",
+      "filterSelectedProjects": "{{count}} selecionados",
       "filterVendorHeading": "Harness",
       "filterVendor": {
         "all": "Todas",
@@ -422,11 +422,11 @@
       },
       "summaryNone": "Nenhum",
       "summarySeparator": ", ",
-      "filterEmptyCopy": "Ajuste ou reponha os filtros nas definições de apresentação.",
+      "filterEmptyCopy": "Ajuste ou reponha os filtros nas definições de visualização.",
       "filterTeammatesHeading": "Amigos",
       "filterAnySource": "Todas",
       "filterHideAllTeammates": "Ocultar tudo",
-      "filterSelectedTeammates": "{{count}} selecionadas"
+      "filterSelectedTeammates": "{{count}} selecionados"
     },
     "search": {
       "placeholder": "Pesquisar títulos ou conteúdo…",
@@ -441,14 +441,14 @@
         "agentHeading": "Agent",
         "lastActivityHeading": "Última atividade",
         "allProjects": "Todos os projetos",
-        "selectedProjects": "{{count}} selecionadas",
+        "selectedProjects": "{{count}} selecionados",
         "sort": {
           "relevance": "Relevância",
           "activityDesc": "Ativas mais recentemente",
           "activityAsc": "Ativas há mais tempo"
         },
         "status": {
-          "active": "Ativo",
+          "active": "Ativas",
           "archived": "Arquivadas",
           "all": "Todas"
         },
@@ -495,7 +495,7 @@
       "nextRunMinutes": "Executa dentro de {{count}} min",
       "nextRunHours": "Executa dentro de {{count}} h",
       "nextRunDays": "Executa dentro de {{count}} d",
-      "imminent": "Em execução em breve",
+      "imminent": "Executa em breve",
       "stopped": "Parada"
     }
   },
@@ -549,7 +549,7 @@
       "archiving": "A arquivar",
       "restoring": "A desarquivar",
       "deleting": "A eliminar",
-      "pinA11y": "Afixar sessões selecionadas",
+      "pinA11y": "Fixar sessões selecionadas",
       "unpinA11y": "Desafixar sessões selecionadas",
       "archiveA11y": "Arquivar sessões selecionadas",
       "restoreA11y": "Desarquivar sessões selecionadas",
@@ -557,9 +557,9 @@
       "cancelA11y": "Cancelar ação em massa",
       "partialFailure": "{{done}} processadas, {{failed}} falharam (restauradas, pode tentar novamente).",
       "noArchivable": "Não há sessões ativas que possam ser arquivadas na seleção.",
-      "noPinnable": "Não há sessões ativas que possam ser afixadas na seleção.",
+      "noPinnable": "Não há sessões ativas que possam ser fixadas na seleção.",
       "noRestorable": "Não há sessões arquivadas na seleção.",
-      "noUnpinnable": "Não há sessões afixadas na seleção.",
+      "noUnpinnable": "Não há sessões fixadas na seleção.",
       "noDeletable": "Não há sessões que possam ser eliminadas na seleção.",
       "noneModifiable": "Nenhuma das sessões selecionadas pode ser alterada."
     },
@@ -602,7 +602,7 @@
   "companions": {
     "section": {
       "showAll": "Mostrar tudo",
-      "showAllA11y": "Mostrar todas as {{count}}",
+      "showAllA11y": "Mostrar todos os {{count}}",
       "showLess": "Mostrar menos"
     },
     "noCreateHosts": "Não há nenhum computador compatível disponível. Abra Cindy num computador e inicie sessão com a mesma conta para criar um amigo.",
@@ -637,7 +637,7 @@
       "waiting": "A aguardar informações",
       "completed": "Concluído",
       "failed": "Falhou",
-      "cancelled": "Parada",
+      "cancelled": "Parado",
       "timed-out": "Tempo esgotado",
       "unknown": "Estado desconhecido"
     },
@@ -687,7 +687,7 @@
       "welcome": "A preparar a primeira saudação",
       "failed": "Preparação em pausa. Tudo o que foi concluído até agora está guardado. Pode tentar novamente.",
       "retryFailed": "Não foi possível tentar novamente agora. Volte a tentar dentro de instantes.",
-      "leave": "Ausentar-me",
+      "leave": "Sair por agora",
       "avatarSkipped": "A usar o retrato predefinido por agora. Pode alterá-lo a qualquer momento."
     },
     "viewResult": "Ver resultado",
@@ -758,7 +758,7 @@
     "personalSkills": "Skills",
     "connections": "Skills e ligações referenciadas",
     "save": "Guardar alterações",
-    "offline": "Volte a ligar a {{deviceName}} para continuar. As suas alterações foram mantidas.",
+    "offline": "Volte a ligar-se a {{deviceName}} para continuar. As suas edições foram mantidas.",
     "hostUpgrade": "Atualize o Cindy em {{deviceName}} e tente novamente, ou edite as definições deste amigo nesse dispositivo.",
     "readFailed": "Não foi possível confirmar o estado mais recente. Atualize antes de tentar novamente; a ação pode já ter sido concluída. As suas alterações foram mantidas.",
     "deleteFailed": "O amigo não foi eliminado.",
@@ -773,7 +773,7 @@
     "skillsEmpty": "Ainda não há Skills pessoais. Peça ao seu amigo para memorizar uma forma de trabalhar.",
     "connectionsEmpty": "Nenhuma Skill ou ligação selecionada.",
     "largeProfileRecovery": "Este perfil é demasiado longo para editar aqui. Edite o perfil completo em {{deviceName}}.",
-    "addModel": "Adicionar modelo de recurso",
+    "addModel": "Adicionar modelo de reserva",
     "removeModel": "Remover modelo",
     "moveModelUp": "Mover modelo para cima",
     "backupModels": "Modelos de reserva ({{count}})",
@@ -879,7 +879,7 @@
     "offlineCount_other": "{{count}} offline",
     "showMore": "Mostrar mais",
     "showLess": "Mostrar menos",
-    "doneCount_one": "{{count}} concluídos",
+    "doneCount_one": "{{count}} concluído",
     "doneCount_other": "{{count}} concluídos",
     "checkMeta": "Procurar novos afazeres no correio e nas conversas ligados",
     "recentTasks": "Tarefas recentes",
@@ -910,7 +910,7 @@
     "homeTitle": "Computador principal",
     "moveTo": "Mover para «{{device}}»",
     "moveTitle": "Executar {{name}} em «{{device}}»?",
-    "moveDescription": "A partir de agora, {{name}} é executado em «{{device}}», juntamente com o histórico da conversa. As pastas de trabalho, as ligações e os ficheiros locais permanecem no computador onde estão.",
+    "moveDescription": "A partir de agora, {{name}} é executado em «{{device}}» e o histórico da conversa vai junto. Os diretórios de trabalho, as ligações e os ficheiros locais permanecem no computador onde estão.",
     "olderTarget": "Cindy antigo",
     "olderTargetNote": "«{{device}}» tem uma versão antiga do Cindy, por isso {{name}} funcionará aí como antes: o histórico da conversa continua sincronizado, mas as regras e automatizações do projeto não se aplicam aí.",
     "moveAction": "Mover para «{{device}}»",

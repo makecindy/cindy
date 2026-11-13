@@ -26,6 +26,7 @@ import { PluginModelPickerDialog } from '@/cindy-brain/PluginModelPickerHost';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
 import type { ProviderView } from '@cindy/model-providers';
 import type { LocalCatalogFailure } from '@/lib/localCatalogLoadState';
+import { toggleModelGroupFavorite } from '@/features/model-groups/modelGroupFavorites';
 
 /** 统一面板发起的深度写入带上「面板已串行」标记(见 ModelSelector 的 onEffortChangeLive)。 */
 const FROM_PANEL = { serializedByPanel: true };
@@ -371,6 +372,37 @@ beforeEach(() => {
   resetRecentModels();
 });
 
+// #10207 / #10235 merge regression: local loading must not label a populated
+// mode section empty. Existing cases cover model favorites, not pinned modes.
+// Minimal input: pending local catalog + one mode; tier: unit, real picker.
+it('keeps a mode selectable in all and favorites while the local catalog is pending', async () => {
+  const readyProviders = providersRef.providers;
+  const modeId = 'pending-catalog-mode';
+  let favorited = false;
+  providersRef.providers = [];
+  providersRef.loading = true;
+  onTestFinished(() => {
+    providersRef.providers = readyProviders;
+    providersRef.loading = false;
+    if (favorited) act(() => toggleModelGroupFavorite(modeId));
+  });
+  const onSelect = vi.fn();
+  renderPanel({ modelGroups: {
+    config: { routes: [{ id: modeId, name: 'Ready mode', strategy: 'order', candidates: [] }] },
+    active: null, onSelect, onManage: vi.fn(),
+  } });
+  await act(async () => fireEvent.click(document.querySelector(`[data-model-group-favorite="${modeId}"]`)!));
+  favorited = true;
+  for (const rail of ['all', 'favorites']) {
+    await act(async () => fireEvent.click(document.querySelector(`[data-rail-item="${rail}"]`)!));
+    expect(screen.queryByText('newChat.modelSelector.trigger.loading')).toBeNull();
+    expect(screen.queryByText('无匹配模型')).toBeNull();
+    await act(async () => fireEvent.click(screen.getByText('Ready mode')));
+    expect(onSelect).toHaveBeenLastCalledWith({ type: 'route', id: modeId });
+  }
+  expect(onSelect).toHaveBeenCalledTimes(2);
+});
+
 describe('分享模型收藏', () => {
   const received = {
     shareId: 's1', memberId: 'm1', providerId: 'anthropic', providerLabel: 'Anthropic',
@@ -635,6 +667,42 @@ describe('统一面板 · 配置应用与收尾一致', () => {
 });
 
 describe('统一模型选择器面板', () => {
+  // #10253: the real selector must expose distinct IDs before selection. Existing
+  // routing tests use unique names and cannot detect indistinguishable options.
+  // Minimal input: two custom models with near-identical names; unit (jsdom).
+  it.each([true, false])('shows custom model IDs and selects the exact ID (unified=%s)', async (unifiedPanel) => {
+    const models = [
+      { id: 'deepseek-current', name: 'DeepSeek-V4.1-Flash' },
+      { id: 'deepseek-compat', name: 'DeepSeek V4.1 Flash' },
+    ];
+    const provider = {
+      id: 'custom-identity', name: 'Custom API', source: 'user',
+      agents: ['codex'], auth: { method: 'apiKey' }, routing: { codex: {} },
+      connected: true,
+      models: { codex: models.map((model) => ({ ...model, contextWindow: 200000, efforts: ['high'], defaultEffort: 'high' })) },
+    } as ProviderView;
+    renderPanel({ providersOverride: [provider], vendorKey: 'codex', unifiedPanel,
+      currentProviderId: provider.id, modelId: '', effort: 'high' });
+    const findRow = (id: string) => screen.getByRole('option', { name: new RegExp(id) });
+    for (const model of models) expect(within(findRow(model.id)).getByText(model.id)).toBeTruthy();
+    await act(async () => fireEvent.click(findRow(models[1].id)));
+    expect(onProviderChange.mock.lastCall?.slice(0, 3)).toEqual([provider.id, models[1].id, 'high']);
+    if (unifiedPanel) {
+      await act(async () => fireEvent.click(within(findRow(models[0].id)).getByRole('button', { name: '存为收藏' })));
+      await act(async () => fireEvent.click(document.querySelector('[data-rail-item="favorites"]')!));
+      expect(within(findRow(models[0].id)).getByText(models[0].id)).toBeTruthy();
+      await act(async () => fireEvent.keyDown(findRow(models[0].id), { key: 'Enter' }));
+      expect(onProviderChange.mock.lastCall?.slice(0, 3)).toEqual([provider.id, models[0].id, 'high']);
+      await act(async () => fireEvent.click(document.querySelector('[data-rail-item="provider:custom-identity"]')!));
+      expect(within(findRow(models[1].id)).getByText(models[1].id)).toBeTruthy();
+    }
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: models[1].id } });
+    expect(findRow(models[1].id)).toBeTruthy();
+    expect(screen.queryByRole('option', { name: /deepseek-current/ })).toBeNull();
+    await act(async () => fireEvent.keyDown(findRow(models[1].id), { key: ' ' }));
+    expect(onProviderChange.mock.lastCall?.slice(0, 3)).toEqual([provider.id, models[1].id, 'high']);
+  });
+
   it('按分组陈列跨引擎联合列表,每行右侧常驻三元组', () => {
     renderPanel();
     const list = screen.getByRole('listbox');

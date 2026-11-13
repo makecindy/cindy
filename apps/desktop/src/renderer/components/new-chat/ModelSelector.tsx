@@ -37,7 +37,6 @@ import {
   CircleAlert,
   Clock3,
   Loader2,
-  Plug,
   PlugZap,
   Plus,
   RefreshCw,
@@ -78,7 +77,7 @@ import {
 } from './UnifiedModelPanel';
 import { matchPluginModels, PluginModelIcon, PluginModelsSection, type PluginModelsPickerProps } from './PluginModelsSection';
 import { MODEL_GROUPS_DEFAULTS } from '../../../shared/modelGroups';
-import { matchModelGroupRows, ModelGroupIcon, ModelGroupsPickerSection, useModelGroupPickerRows, type ModelGroupsPickerProps } from './ModelGroupsPickerSection';
+import { matchModelGroupRows, ModelGroupIcon, ModelGroupsPickerSection, useFavoriteModelGroupCount, useModelGroupPickerRows, type ModelGroupsPickerProps } from './ModelGroupsPickerSection';
 import { stopWheelPropagation } from '@/lib/stopWheelPropagation';
 import type { ProviderGroupUsageOf, ProviderUsageScope } from './useProviderWeeklyQuota';
 import { ThinkingToggle } from './ThinkingToggle';
@@ -858,10 +857,12 @@ export interface ModelSelectorBaseProps {
   disabled?: boolean;
   /** 窄容器下把 trigger 字号/高度各压一档,默认 false。 */
   dense?: boolean;
-  /** 窄 composer 的简略触发器:隐藏 effort / Fast 次要信息并限制模型名宽度。 */
+  /** 窄 composer 的简略触发器；模型名按剩余空间收缩。 */
   compactToolbar?: boolean;
-  /** 极窄 composer 进一步隐藏模型文字，只保留模型图标和下拉箭头。 */
+  /** 极窄 composer 收起尾部的次要身份信息。 */
   ultraCompactToolbar?: boolean;
+  /** 输入区宽度变化时关闭浮层，避免分栏拖动后与触发器脱离。 */
+  composerRef?: { readonly current: HTMLElement | null };
   /** Toolbar/field stay compact; settings allows the complete model name to wrap. */
   triggerVariant?: 'toolbar' | 'field' | 'settings';
   /** CREATE AGENT 首页按 Figma 185:2724 使用独立私有 token。 */
@@ -1313,6 +1314,7 @@ function ModelSelectorContentView({
   const resolveCurrentSourceId = actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel;
   const { t, i18n } = useTranslation();
   const modelGroupRows = useModelGroupPickerRows(modelGroups?.config ?? MODEL_GROUPS_DEFAULTS);
+  const favoriteModelGroupCount = useFavoriteModelGroupCount(modelGroups?.config ?? MODEL_GROUPS_DEFAULTS);
   // ── 远程 Agent:面板在本机目录与其他电脑的目录之间切换浏览 ─────────────────────
   // 打开时停在草稿当前的落点(Agent 在哪台电脑就先列哪台);左侧栏点到另一台电脑的供应商时,
   // 下面整套目录(能力 / 供应商 / 可见性 / 用量 / 收藏)都随 deviceId 换成那台电脑的。
@@ -3038,6 +3040,8 @@ function ModelSelectorContentView({
     // flat 行仍保持 providerId=null 的选择语义，但当前行的状态展示要读取会话实际来源：
     // 否则拍平后既看不到 Subscription，也无法判断该 (agent,provider,model) 是否已隐藏。
     const statusProvider = provider ?? (isSelected ? currentModelProvider : undefined);
+    const displayName = localizedModelName(model.displayName, t);
+    const showModelId = isCustomRoutedProvider(statusProvider) && model.id !== displayName;
     const isSubscriptionModel = statusProvider?.access?.kind === 'subscription';
     const selectedCatalogModel =
       statusProvider && currentAgentKind
@@ -3140,7 +3144,7 @@ function ModelSelectorContentView({
             aria-disabled={disabled ? true : undefined}
             aria-label={
               paymentRequired
-                ? `${localizedModelName(model.displayName, t)} · ${t('newChat.modelSelector.paymentRequired.unlock')}`
+                ? [displayName, showModelId ? model.id : null, t('newChat.modelSelector.paymentRequired.unlock')].filter(Boolean).join(' · ')
                 : undefined
             }
             title={disabledReason ?? undefined}
@@ -3190,100 +3194,107 @@ function ModelSelectorContentView({
             data-state={isEditingThis ? 'open' : isSelected ? 'checked' : undefined}
             className={cn(
               COMPOSER_MENU_ROW,
-              'group/row flex w-full cursor-pointer items-center justify-between px-3 py-2',
+              'group/row flex w-full cursor-pointer flex-col px-3 py-2',
               // Model menu exception (DESIGN §4): the chosen row keeps its whole-row fill.
               isSelected && 'bg-sidebar-item-hover data-[menu-active]:bg-transparent',
               constrainedListMaxHeight !== undefined && 'min-h-9',
               (disabled || paymentRequired) && 'opacity-50',
             )}
           >
-            <span className="flex min-w-0 flex-1 items-center gap-2.5">
-              {provider && (
-                <ModelIconMark
-                  icon={model.icon}
-                  providerId={provider.id}
-                  name={provider.name}
-                  routing={provider.routing}
-                  logoKind={provider.logoKind}
-                  colorClass="text-[var(--text-secondary)]"
-                  withMargin={false}
-                  dense
-                />
-              )}
-              <span className="flex min-w-0 flex-1 items-center gap-1.5">
+            <div className="flex w-full items-center justify-between">
+              <span className="flex min-w-0 flex-1 items-center gap-2.5">
+                {provider && (
+                  <ModelIconMark
+                    icon={model.icon}
+                    providerId={provider.id}
+                    name={provider.name}
+                    routing={provider.routing}
+                    logoKind={provider.logoKind}
+                    colorClass="text-[var(--text-secondary)]"
+                    withMargin={false}
+                    dense
+                  />
+                )}
                 <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                  <span className="truncate font-medium leading-5">
-                    {localizedModelName(model.displayName, t)}
+                  <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                    <span className="truncate font-medium leading-5">
+                      {displayName}
+                    </span>
+                    {rowEffort && (
+                      <span
+                        aria-label={effortLabelFor(model, rowEffort)}
+                        title={effortLabelFor(model, rowEffort)}
+                        className="shrink-0 text-13 font-normal text-[var(--text-tertiary)]"
+                      >
+                        {compactEffortLabelFor(model, rowEffort)}
+                      </span>
+                    )}
+                    {rowFastOn && (
+                      <Zap
+                        size={13}
+                        className="shrink-0 text-[var(--text-tertiary)]"
+                        aria-label={t('newChat.modelSelector.meta.fastBadge')}
+                      />
+                    )}
                   </span>
-                  {rowEffort && (
-                    <span
-                      aria-label={effortLabelFor(model, rowEffort)}
-                      title={effortLabelFor(model, rowEffort)}
-                      className="shrink-0 text-13 font-normal text-[var(--text-tertiary)]"
-                    >
-                      {compactEffortLabelFor(model, rowEffort)}
+                  {(paymentRequired ||
+                    isHiddenSelectedModel ||
+                    showSubscriptionTag ||
+                    showPromotionTag) && (
+                    <span data-model-tags className="ml-auto flex shrink-0 items-center gap-1.5">
+                      {paymentRequired && (
+                        <span
+                          data-payment-required-unlock
+                          className="invisible shrink-0 select-none text-11 font-medium text-[var(--text-secondary)] group-hover/row:visible group-focus-within/row:visible"
+                        >
+                          {t('newChat.modelSelector.paymentRequired.unlock')}
+                        </span>
+                      )}
+                      {paymentRequired && (
+                        <span
+                          data-payment-required-badge
+                          className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 text-[var(--text-secondary)]"
+                        >
+                          <Lock size={11} />
+                          {t('newChat.modelSelector.paymentRequired.badge')}
+                        </span>
+                      )}
+                      {isHiddenSelectedModel && (
+                        <span
+                          data-model-hidden-label
+                          className="shrink-0 select-none text-11 font-normal text-[var(--text-tertiary)]"
+                        >
+                          {t('newChat.modelSelector.hidden')}
+                        </span>
+                      )}
+                      {showSubscriptionTag && (
+                        <span
+                          aria-label={t('settings.providers.models.subscription')}
+                          title={t('settings.providers.models.subscription')}
+                          className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-11 font-medium text-[var(--text-secondary)]"
+                        >
+                          {t('newChat.modelSelector.meta.subscriptionBadgeCompact', {
+                            defaultValue: t('settings.providers.models.subscription'),
+                          })}
+                        </span>
+                      )}
+                      {showPromotionTag && rowPromotionLabel && (
+                        <ModelPromotionBadge>{rowPromotionLabel}</ModelPromotionBadge>
+                      )}
                     </span>
                   )}
-                  {rowFastOn && (
-                    <Zap
-                      size={13}
-                      className="shrink-0 text-[var(--text-tertiary)]"
-                      aria-label={t('newChat.modelSelector.meta.fastBadge')}
-                    />
-                  )}
                 </span>
-                {(paymentRequired ||
-                  isHiddenSelectedModel ||
-                  showSubscriptionTag ||
-                  showPromotionTag) && (
-                  <span data-model-tags className="ml-auto flex shrink-0 items-center gap-1.5">
-                    {paymentRequired && (
-                      <span
-                        data-payment-required-unlock
-                        className="invisible shrink-0 select-none text-11 font-medium text-[var(--text-secondary)] group-hover/row:visible group-focus-within/row:visible"
-                      >
-                        {t('newChat.modelSelector.paymentRequired.unlock')}
-                      </span>
-                    )}
-                    {paymentRequired && (
-                      <span
-                        data-payment-required-badge
-                        className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 text-[var(--text-secondary)]"
-                      >
-                        <Lock size={11} />
-                        {t('newChat.modelSelector.paymentRequired.badge')}
-                      </span>
-                    )}
-                    {isHiddenSelectedModel && (
-                      <span
-                        data-model-hidden-label
-                        className="shrink-0 select-none text-11 font-normal text-[var(--text-tertiary)]"
-                      >
-                        {t('newChat.modelSelector.hidden')}
-                      </span>
-                    )}
-                    {showSubscriptionTag && (
-                      <span
-                        aria-label={t('settings.providers.models.subscription')}
-                        title={t('settings.providers.models.subscription')}
-                        className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-11 font-medium text-[var(--text-secondary)]"
-                      >
-                        {t('newChat.modelSelector.meta.subscriptionBadgeCompact', {
-                          defaultValue: t('settings.providers.models.subscription'),
-                        })}
-                      </span>
-                    )}
-                    {showPromotionTag && rowPromotionLabel && (
-                      <ModelPromotionBadge>{rowPromotionLabel}</ModelPromotionBadge>
-                    )}
-                  </span>
-                )}
               </span>
-            </span>
-            {isSelected && (
-              <span className="ml-2 flex shrink-0 items-center">
-                <Check size={15} className="shrink-0 text-[var(--model-item-check)]" />
-              </span>
+              {isSelected && (
+                <span className="ml-2 flex shrink-0 items-center">
+                  <Check size={15} className="shrink-0 text-[var(--model-item-check)]" />
+                </span>
+              )}
+            </div>
+            {showModelId && (
+              <div className="w-0 min-w-full break-words pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)] [overflow-wrap:anywhere]">
+                {model.id}
+              </div>
             )}
           </div>
         </PopoverAnchor>
@@ -3687,19 +3698,24 @@ function ModelSelectorContentView({
                   ),
                 }
               : {})}
-            {...(pluginModels || (modelGroups && query.trim()) ? {
-              // 搜索时模型组里命中的行也列在最上方；不搜索时它们只在「模型组」一格里。
+            {...(pluginModels || modelGroups ? {
+              // 模型组在「全部」最上方：不搜索时整段列出(用户建好就天天要用)，搜索时只列命中的。
               pinnedTop: (
                 <>
                   {pluginModels && <PluginModelsSection picker={pluginModels} query={query} onPicked={() => onDismiss?.()} />}
-                  {modelGroups && query.trim() && <ModelGroupsPickerSection picker={modelGroups} query={query} onPicked={() => onDismiss?.()} searchOnly />}
+                  {modelGroups && (
+                    <ModelGroupsPickerSection picker={modelGroups} query={query} onPicked={() => onDismiss?.()}
+                      variant={query.trim() ? 'search' : 'all'} />
+                  )}
                 </>
               ),
               pinnedTopHasRows: (pluginModels ? matchPluginModels(pluginModels.models, query).length > 0 : false)
-                || (!!modelGroups && !!query.trim() && matchModelGroupRows(modelGroupRows, query) > 0),
+                || (!!modelGroups && matchModelGroupRows(modelGroupRows, query) > 0),
             } : {})}
             {...(modelGroups ? {
               modelGroupsView: <ModelGroupsPickerSection picker={modelGroups} query="" onPicked={() => onDismiss?.()} />,
+              favoritesPinned: <ModelGroupsPickerSection picker={modelGroups} query="" onPicked={() => onDismiss?.()} variant="favorites" />,
+              favoritesPinnedHasRows: favoriteModelGroupCount > 0,
             } : {})}
             {...(!remoteAgent && deviceId && (remoteModelListStatus === 'loading' || remoteModelListStatus === 'error')
               ? {
@@ -4198,6 +4214,7 @@ export function ModelSelector({
   dense = false,
   compactToolbar = false,
   ultraCompactToolbar = false,
+  composerRef,
   triggerVariant = 'toolbar',
   visualVariant = 'default',
   useMorphPopover = false,
@@ -4236,6 +4253,7 @@ export function ModelSelector({
   const openRef = useRef(false);
   const sshCodexRefresh = sshCodex?.refresh;
   const [keepOpenForAgentConfirmation, setKeepOpenForAgentConfirmation] = useState(false);
+  const composerResizeGenerationRef = useRef(0);
   useProviderShareQuotaViewing(open || keepOpenForAgentConfirmation);
   // 打开触发的那次模型发现是否仍在途(并发语义与理由见 useModelDiscoveryPending)。
   const discovery = useModelDiscoveryPending();
@@ -4309,6 +4327,22 @@ export function ModelSelector({
     onOpenRequestConsumed?.(openRequest);
   }, [openRequest, disabled, handleOpenChange, onOpenRequestConsumed]);
 
+  useEffect(() => {
+    const composer = composerRef?.current;
+    if (!composer || !(open || keepOpenForAgentConfirmation) || typeof ResizeObserver === 'undefined') return;
+    let width = composer.clientWidth;
+    const observer = new ResizeObserver(() => {
+      const nextWidth = composer.clientWidth;
+      if (nextWidth === width) return;
+      width = nextWidth;
+      composerResizeGenerationRef.current += 1;
+      setKeepOpenForAgentConfirmation(false);
+      handleOpenChange(false);
+    });
+    observer.observe(composer);
+    return () => observer.disconnect();
+  }, [composerRef, open, keepOpenForAgentConfirmation, handleOpenChange]);
+
   // AlertDialog 打开时会被 Popover 视作外部交互并请求关闭。Agent 分段确认期间
   // 强制保留已展开的模型面板；确认结束后把底层 open 恢复为 true，避免弹窗关闭
   // 时的焦点回落再次把面板收掉。模型行确认及其它消费者不经过这层包装。
@@ -4318,11 +4352,12 @@ export function ModelSelector({
     return {
       ...agentSwitch,
       confirmBrowseSwitch: async (targetVendor: 'cc' | 'codex' | 'pi') => {
+        const resizeGeneration = composerResizeGenerationRef.current;
         setKeepOpenForAgentConfirmation(true);
         try {
           return await confirmBrowseSwitch(targetVendor);
         } finally {
-          setOpenWithoutAutoRefresh(true);
+          if (composerResizeGenerationRef.current === resizeGeneration) setOpenWithoutAutoRefresh(true);
           setKeepOpenForAgentConfirmation(false);
         }
       },
@@ -4353,14 +4388,17 @@ export function ModelSelector({
       args: Parameters<typeof onCrossEngineSelect>[0],
       configuring: boolean,
     ): Promise<boolean> => {
+      const resizeGeneration = composerResizeGenerationRef.current;
       setKeepOpenForAgentConfirmation(true);
       try {
         const applied = await onCrossEngineSelect(args);
         // 配置浮层里的切换保持展开；选中模型行成功后才收起。
-        setOpenWithoutAutoRefresh(configuring || applied === false);
+        if (composerResizeGenerationRef.current === resizeGeneration) {
+          setOpenWithoutAutoRefresh(configuring || applied === false);
+        }
         return applied !== false;
       } catch {
-        setOpenWithoutAutoRefresh(true);
+        if (composerResizeGenerationRef.current === resizeGeneration) setOpenWithoutAutoRefresh(true);
         return false;
       } finally {
         setKeepOpenForAgentConfirmation(false);
@@ -4698,8 +4736,7 @@ export function ModelSelector({
   // 传了 engineMarkVendor 就走新形态:harness 名字文本让位给尾部的一枚 mark,和深度档字
   // 紧挨着收尾(与面板行右侧三元组同构)。没传的入口一个像素都不变。
   const engineMarkOption = engineMarkVendor ? agentOptionOf(engineMarkVendor) : null;
-  // 引擎小标 + 深度是 pill 的**定宽身份位**:窄工具条下也要留着,先让模型名截断
-  // (Chris 2026-08-12 裁决)。只有 ultra-compact(整段文字都收起、只剩图标)才一并隐藏。
+  // 引擎小标 + 深度在窄工具条下保留；极窄时让位给模型名。
   const showTriggerTail = engineMarkOption ? !isUltraCompactToolbar : !isCompactToolbar;
   const engineMarkNode = engineMarkOption ? (
     // aria-hidden:引擎名已经在 button 的 aria-label / title 里(displayIdentityLabel 仍带
@@ -4715,7 +4752,7 @@ export function ModelSelector({
           'ml-1 shrink-0',
           isCreateAgentVariant
             ? 'text-[var(--create-agent-control-icon)]'
-            : 'text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]',
+            : 'text-[var(--composer-pill-icon)]',
         )}
       />
     </span>
@@ -4783,16 +4820,10 @@ export function ModelSelector({
               // create-agent(新建对话框)与会话内共用同一套裸态,不再分叉 —— 静息/hover 逐字一致。
               'max-w-full shrink px-2.5',
               isSettingsTrigger ? 'min-h-[30px] items-baseline py-1 text-left leading-5' : 'h-[30px] overflow-hidden',
-              // 窄态工具条:钳制唯一可收缩的模型入口，给语音 / 发送固定动作留足空间。
-              isSettingsTrigger
-                ? 'min-w-0'
-                : isUltraCompactToolbar
-                ? 'w-[64px] min-w-[64px]'
-                : isCompactToolbar
-                  ? 'w-[148px] min-w-[72px]'
-                  : 'min-w-[72px] max-w-[min(320px,100%)]',
+              // 模型名按内容取宽，由工具行的剩余空间决定截断位置。
+              isSettingsTrigger ? 'min-w-0' : 'min-w-[72px]',
               'border border-transparent bg-transparent',
-              'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg,#FCFCFC)] dark:hover:bg-[var(--composer-pill-bg,#393838)]',
+              'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg)]',
             ),
         // device-link 远程切换 in-flight:置灰 + 禁用点击(复用本文件 disabled 行的 opacity-50 习惯)。
         (switching || disabled) && 'pointer-events-none opacity-50',
@@ -4805,14 +4836,14 @@ export function ModelSelector({
       {activePluginModel ? (
         <>
           <PluginModelIcon model={activePluginModel} size={14} />
-          <span className={cn('min-w-0 truncate font-medium text-[var(--text-primary)]', dense ? 'text-12' : 'text-13', isUltraCompactToolbar && 'hidden')}>
+          <span className={cn('min-w-0 truncate font-medium text-[var(--text-primary)]', dense ? 'text-12' : 'text-13')}>
             {activePluginModel.name}
           </span>
         </>
       ) : activeModelGroupRow ? (
         <>
           <ModelGroupIcon size={14} />
-          <span className={cn('min-w-0 truncate font-medium text-[var(--text-primary)]', dense ? 'text-12' : 'text-13', isUltraCompactToolbar && 'hidden')}>
+          <span className={cn('min-w-0 truncate font-medium text-[var(--text-primary)]', dense ? 'text-12' : 'text-13')}>
             {activeModelGroupRow.name}
           </span>
         </>
@@ -4835,13 +4866,9 @@ export function ModelSelector({
                 : 'text-[var(--text-primary)]',
               isSettingsTrigger
                 ? 'whitespace-normal [overflow-wrap:anywhere]'
-                : isUltraCompactToolbar
-                ? 'hidden'
-                : isCompactToolbar
-                  ? 'max-w-[108px] truncate'
-                  : isCreateAgentVariant
-                    ? 'truncate'
-                    : cn('truncate', isFieldTrigger ? 'max-w-[260px]' : ''),
+                : isCreateAgentVariant
+                  ? 'truncate'
+                  : cn('truncate', isFieldTrigger ? 'max-w-[260px]' : ''),
               isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
             )}
           >
@@ -4867,15 +4894,11 @@ export function ModelSelector({
               'min-w-0 font-normal text-[var(--text-primary)]',
               isSettingsTrigger
                 ? 'whitespace-normal [overflow-wrap:anywhere]'
-                : isUltraCompactToolbar
-                ? 'hidden'
-                : isCompactToolbar
-                  ? 'max-w-[108px] truncate'
-                  : isCreateAgentVariant
-                    ? 'truncate'
-                    : isFieldTrigger
-                      ? 'max-w-[260px] truncate'
-                      : 'truncate',
+                : isCreateAgentVariant
+                  ? 'truncate'
+                  : isFieldTrigger
+                    ? 'max-w-[260px] truncate'
+                    : 'truncate',
               isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
             )}
           >
@@ -4950,15 +4973,11 @@ export function ModelSelector({
               'min-w-0 font-normal',
               isSettingsTrigger
                 ? 'whitespace-normal [overflow-wrap:anywhere]'
-                : isUltraCompactToolbar
-                ? 'hidden'
-                : isCompactToolbar
-                  ? 'max-w-[108px] truncate'
-                  : isCreateAgentVariant
-                    ? 'truncate'
-                    : isFieldTrigger
-                      ? 'max-w-[260px] truncate'
-                      : 'truncate',
+                : isCreateAgentVariant
+                  ? 'truncate'
+                  : isFieldTrigger
+                    ? 'max-w-[260px] truncate'
+                    : 'truncate',
               !isBudget &&
                 (isCreateAgentVariant
                   ? 'text-[var(--create-agent-control-text)]'
@@ -5030,7 +5049,7 @@ export function ModelSelector({
                 'ml-0.5 shrink-0',
                 isCreateAgentVariant
                   ? 'text-[var(--create-agent-control-icon)]'
-                  : 'text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]',
+                  : 'text-[var(--composer-pill-icon)]',
               )}
             />
           )}
@@ -5053,7 +5072,7 @@ export function ModelSelector({
           'shrink-0',
           isCreateAgentVariant
             ? 'text-[var(--create-agent-control-icon)]'
-            : 'text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]' /* spec 2026-07-17, token by 一哥 */,
+            : 'text-[var(--composer-pill-icon)]' /* spec 2026-07-17, token by 一哥 */,
           isFieldTrigger && 'ml-auto',
         )}
       />

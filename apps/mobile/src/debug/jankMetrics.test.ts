@@ -5,6 +5,7 @@ import {
   recordInvokeSent,
   recordInvokeTransfer,
   recordLoopLag,
+  recordPresenceUpdate,
   recordPushHandled,
   recordUiThreadLag,
   setJankMetricsEnabled,
@@ -104,6 +105,8 @@ describe("jank metrics", () => {
     recordLoopLag(1500);
     recordUiThreadLag(20);
     recordUiThreadLag(700);
+    recordPresenceUpdate();
+    recordPresenceUpdate();
 
     const line = serializeMobileDebugRecord('debug', 'performance', ['sync work metrics', takeSyncWorkMetrics()]);
     expect(line).not.toContain('[truncated]');
@@ -117,12 +120,14 @@ describe("jank metrics", () => {
       gunzip: { offThread: 1, onThread: 1, onThreadMs: 40, fallbacks: 1 },
       loopLag: { maxMs: 1500, over250: 1, over1000: 1 },
       uiThread: { pings: 2, maxLagMs: 700, over250: 1 },
+      presenceUpdates: 2,
     });
     expect(takeSyncWorkMetrics()).toEqual({
       decodes: [],
       gunzip: { offThread: 0, onThread: 0, onThreadMs: 0, fallbacks: 0 },
       loopLag: { maxMs: 0, over250: 0, over1000: 0 },
       uiThread: { pings: 0, maxLagMs: 0, over250: 0 },
+      presenceUpdates: 0,
     });
   });
 
@@ -153,6 +158,7 @@ describe("jank metrics", () => {
     recordInvokeSent("local-db:messages:view");
     recordInvokeTransfer({ channel: 'local-db:messages:view', phase: 'sent' });
     recordInvokeTransfer({ channel: 'local-db:messages:view', phase: 'result', payloadBytes: 95, notModified: true });
+    recordInvokeTransfer({ channel: 'local-db:sessions:list', phase: 'result', payloadBytes: 40, delta: true });
     const line = serializeMobileDebugRecord("debug", "performance", [
       "jank metrics",
       takeJankMetrics(),
@@ -163,8 +169,13 @@ describe("jank metrics", () => {
       store,
       pushes: [{ count: 1, totalMs: 3 }],
       invokes: [{ channel: "local-db:messages:view", count: 1 }],
-      relayTransfers: [{ channel: 'local-db:messages:view', sent: 1, results: 1, payloadBytes: 95, notModified: 1, gzip: 0 }],
+      relayTransfers: [
+        { channel: 'local-db:messages:view', sent: 1, results: 1, payloadBytes: 95, notModified: 1, gzip: 0 },
+        { channel: 'local-db:sessions:list', results: 1, payloadBytes: 40, delta: 1 },
+      ],
     });
+    // Rows without a delta response keep their old shape inside the log's value budget.
+    expect(JSON.parse(line).args[1].relayTransfers[0]).not.toHaveProperty('delta');
     expect(takeJankMetrics().relayTransfers).toEqual([]);
   });
 });
