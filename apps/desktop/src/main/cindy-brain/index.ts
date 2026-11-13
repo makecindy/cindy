@@ -5779,8 +5779,9 @@ function listLocalProviderMediaModels(respectDisplaySwitch = false) {
           name: model.name,
           providerId: provider.id,
           mode: 'image_generation' as const,
-          ...(guideDriven ? { guideDriven, sourceAgent: model.sourceAgent && sourceAgents.includes(model.sourceAgent) ? model.sourceAgent : sourceAgents.length === 1 ? sourceAgents[0] : undefined, sourceAgents }
-            : { imageProtocol: getImageChannelRegistry().resolve(provider.id).imageProtocol }),
+          ...(guideDriven ? { guideDriven, sourceAgent: model.sourceAgent && sourceAgents.includes(model.sourceAgent) ? model.sourceAgent : sourceAgents.length === 1 ? sourceAgents[0] : undefined, sourceAgents } : {}),
+          imageProtocol: getImageChannelRegistry().isProviderReady(provider.id, model.id)
+            ? getImageChannelRegistry().resolve(provider.id, model.id).imageProtocol : undefined,
           modalities: { input, output: [...modalities.output] },
           ...(model.officialDocs ? { officialDocs: model.officialDocs } : {}),
         },
