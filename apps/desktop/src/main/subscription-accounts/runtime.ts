@@ -595,23 +595,34 @@ function poolFor(providerId: string) {
   const pool = readPool(ref.kind);
   return pool ? { ref, kind: ref.kind, pool, off: pool.disconnected === true && ref.providerId === ref.kind } : null;
 }
+/**
+ * The accounts a provider serves its tasks with: its own, or — once merged into another provider
+ * with none left — the account it pins for its old tasks (placement.ts pinnedOwnAccount). Without
+ * this a merged created provider read as disconnected and its old tasks could not send
+ * (found in an isolated sandbox with two real Codex accounts, 2026-11-13).
+ */
+function servingAccounts(found: NonNullable<ReturnType<typeof poolFor>>) {
+  const { kind, pool, ref } = found;
+  const pinned = pinnedOwnAccount(ref);
+  return pinned
+    ? pool.accounts.filter((account) => account.id === pinned && !disconnectedFor(pool, kind, account.id))
+    : providerAccounts(kind, pool.accounts, ref.providerId);
+}
 /** Read-only cached aggregate for provider catalog/auth gates; no account identity leaves it. */
 export function hasConnectedSubscriptionPool(providerId: string): boolean {
   const found = poolFor(providerId);
   if (!found || found.off) return false;
-  const { kind, pool, ref } = found;
   const state = currentRuntime();
-  return providerAccounts(kind, pool.accounts, ref.providerId)
-    .some((a) => state.cache.get(keyOf(kind, a.id))?.auth.authenticated);
+  return servingAccounts(found)
+    .some((a) => state.cache.get(keyOf(found.kind, a.id))?.auth.authenticated);
 }
 /** Cached read evidence only; disconnected/unconfigured/paused pools never request UI recovery. */
 export function hasUnavailableSubscriptionPoolAccount(providerId: string): boolean {
   const found = poolFor(providerId);
   if (!found || found.off) return false;
-  const { kind, pool, ref } = found;
   const state = currentRuntime();
-  return providerAccounts(kind, pool.accounts, ref.providerId).some(account => !account.paused
-    && state.cache.get(keyOf(kind, account.id))?.unavailable === true);
+  return servingAccounts(found).some(account => !account.paused
+    && state.cache.get(keyOf(found.kind, account.id))?.unavailable === true);
 }
 export async function disconnectSubscriptionPool(provider: SubscriptionProvider): Promise<void> {
   const pool = readPool(provider);

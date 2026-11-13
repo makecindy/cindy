@@ -186,6 +186,7 @@ import {
   readSubscriptionSessionAccount,
   readSubscriptionPoolAccountUsages,
   runSubscriptionAccountCommand,
+  hasConnectedSubscriptionPool,
   observeSubscriptionAccountUsage,
   readSubscriptionAccountBlocked,
   pooledCodexResetTarget,
@@ -2202,6 +2203,8 @@ describe('native account assignment on the executing computer', () => {
     await runSubscriptionAccountCommand({ action: 'merge', providerId: created!, target: kind });
     expect(await ids(kind)).toEqual(['default', 'second', 'third']);
     expect(await ids(created!)).toEqual([]);
+    // Sandbox regression: the merged provider read as disconnected, so its old tasks could not send.
+    expect(hasConnectedSubscriptionPool(created!)).toBe(true);
     // Deleting a created provider stops using only its own accounts.
     await runSubscriptionAccountCommand({ action: 'place', providerId: kind, accountId: 'third', target: null });
     await runSubscriptionAccountCommand({ action: 'remove-provider', providerId: created! });
