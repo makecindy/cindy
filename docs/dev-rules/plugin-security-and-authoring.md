@@ -213,14 +213,14 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   批准后，插件创建的任务及 Worker 中的 Agent 按普通任务的权限使用已连接工具；
   创建回执仅约束插件直接管理该任务，不参与任务内 Agent 的工具权限判定。
   插件直接调用 `cindy.tasks` 仍只管理本插件的任务。
-- `agent.hostTools: string[]` 直接声明 `history` / `control` / `handoff` / `settings` / `scheduler` / `terminal` / `files` / `storage` / `browser` / `computer` / `ssh` / `docs` / `discovery` 工具组，每组独立展示和批准。
-  receipt 的可选 `approvedHostToolGroups` 仅记录显式批准；旧记录缺失时首次调用复用现有确认，拒绝后由详情页手动重试。
-  新增组算扩权，同来源更新只保留仍声明的已批准组，移除或卸载即失效，不改变旧插件其它能力。
+- `agent.hostTools: string[]` 直接声明 `history` / `control` / `handoff` / `settings` / `scheduler` / `terminal` / `files` / `storage` / `browser` / `computer` / `ssh` / `docs` / `discovery` 工具组，在安装/更新确认中逐项展示，批准仍为整包接受或拒绝。
+  整体安装批准有效、已启用且当前 manifest 已声明即可调用，不设分组批准账目、首次补批、逐次确认或详情重试入口。
+  旧 receipt 中的 `approvedHostToolGroups` 等分项字段读到即忽略，不迁移或删数据；移除声明、撤销整体安装批准或卸载仍使对应调用失效。
   `cindy.host.call(server, tool, args)` 的 UI 与 Node 请求共用 `hostToolSlot`，通过同一 provider / registry 调用 Agent 工具处理器，禁止另写插件业务实现。
   插件没有已批准的 `node` 能力时，不支持提交或修改脚本、前置命令，也不支持运行或恢复实际配置中带有脚本或前置命令的调度，返回 `UNSUPPORTED_CAPABILITY`。
   更新时读取实际配置，不能只凭入参判断；普通调度更新、运行和恢复经既有 `callerScope` / `getApprovedScheduleGuard` 传入主干 `expectedSchedule`，在执行点拒绝期间的配置改动。不新增确认层、锁或授权缓存。
   普通定时任务读改、已有 `node` 的插件与 Agent 的原共享策略分类保持，不能用 `scheduler` 组批准替代本机命令执行批准。
-  调用方显式为插件实例与请求时 owner 快照，不绑定任务；组批准与共享风险规则的原生逐次确认替代任务权限档，执行前及返回前复核账号和安装版本，现有写入钩子同样复核。
+  调用方显式为插件实例与请求时 owner 快照，不绑定任务；插件不套用 Agent 的 Full/Auto/Ask 或 MCP 审批策略，执行前及返回前复核账号和安装版本，现有写入钩子同样复核。Agent 运行时自身权限流程不变。
   每次批准查询均重新读取和验证 receipt，不使用授权缓存或同步段去重。
   依赖当前任务的工具必须显式指定目标，缺省保留 `NO_SESSION_CONTEXT`；插件管理、主人代输入、应用更新、反馈不经此入口开放。
   浏览器插件调用没有任务归属：选中 `rsb-webview` 时返回现有结构化错误 `BROWSER_RUNTIME_ACTION_FAILED`，
@@ -237,32 +237,32 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   服务提供者沿用已有 browserExtension.pageControl 的普通插件准入、详情页激活、配对和生命周期，不另造注册中心。
   当前媒体生成没有独立 MCP server，继续用已有 cindy.media 接口，不虚设 media 组。
   discovery 的 host_services 查询同一 provider 目录：只检视已注册的 registry 定义，描述实例无任务/插件身份，
-  不执行工具且立即关闭；不关闭插件正在用的电脑连接。服务开关与本实例声明/批准现查，Node 未供应的服务明确不可用。
+  不执行工具且立即关闭；不关闭插件正在用的电脑连接。服务开关与本实例声明/整体安装批准现查，不投影独立 approved 状态，Node 未供应的服务明确不可用。
   该目录是投影，不持有服务实现、凭证、批准或插件管理权；不开放 ghost_* 写入口。
   服务依赖沿用 agent.hostTools，执行时查找当前 provider，不新增强依赖启动状态机或 setup 字段。
   逻辑页和 Node Worker 显式退出共用各宿主已有资源清理入口；文件监听、终端和电脑连接由原服务释放。
   UI 的 stop/crash/update 同样销毁电脑连接与观察引用，不只覆盖 Node 停止。持久存储及浏览器 provider 继续由原所有者处理。
   `terminal` 复用 `main/terminal/PtyManager`，界面与 MCP 共用 `HostTerminalService` 的同一注册表；
   不另写插件进程实现。Host 核准的插件实例/安装代次或真实 Session 绑定作业 owner，id 不授予归属。
-  启动及输入等变更走原风险规则；命令具有用户级本机能力，确认中必须明确说明，不能宣称文件沙箱。
+  插件启动及输入等变更不追加审批；命令具有用户级本机能力，安装确认中的能力说明必须明确，不能宣称文件沙箱。Agent 自身风险流程不变。
   精确环境沿用 Node 插件的系统路径/语言/用户配置目录筛选，不继承宿主秘密或 Node 注入变量。
   输出按独立游标保留且有界；读取断开不杀进程，显式停用/更新/卸载、账号切换清理对应资源。
   任务托管作业订阅当次真实 Session 的关闭状态，关闭经 ProcessOwner destroyed 释放 PTY；
   订阅随作用域销毁移除，旧实例不能回收新实例，普通轮次结束不触发回收。插件自主作业与 UI PTY 不变。
   Node Host 通过同一 `createLiziMcpProviders` / `HostTerminalService` 装配终端，逻辑页与 Node
-  私有通道均进入公共 `hostToolSlot`。首次组批准继续使用 `ensurePluginTaskApproval` 和原 receipt。
+  私有通道均进入公共 `hostToolSlot`，只校验整体安装批准与声明，不接入分组补批或 Agent MCP 策略。
   `history` 组的本机查询通过共享 `historyToolCallbacks` 读取同一 owner 数据库，不建插件任务副本。
   两种执行宿主共用输入归属快照与任务动作授权器；群执行授权由各宿主的真实群运行时注入，缺失时拒绝。
-  无任务的确认复用 `WindowConfirmationBridge`，只接受被选中、已认证控制端的回答；Cindy 桌面
+  宿主已有安装确认与显式交互的确认复用 `WindowConfirmationBridge`，只接受被选中、已认证控制端的回答；插件 host.call 不产生批准请求。Cindy 桌面
   控制端再绑定真实顶层应用窗口，插件页面和其它窗口不能代答。无可用客户端、断线和超时均拒绝。
   确认载荷不进任务事件回放，不借用或伪造 Session；Node 仍按实际已装配 provider 报告能力。
   Node Host 当前不装配生产调度器；`cindy_scheduler` 返回 `UNSUPPORTED_CAPABILITY` 和执行环境不支持说明，
   不把未提供服务描述成暂未就绪，不另建插件调度实现。此入口不承担 Node Host 自身功能补齐。
   Node Host 的 browser 平台 provider 同时供 Agent 与插件使用；原客户端与后端门禁继续生效。
-  Node Host 插件 computer 在创建 runtime、弹确认和驱动执行前返回 `UNSUPPORTED_CAPABILITY`，
-  能力发现也报告不可用；不信任跨进程 caller 元数据，不新增逐次授权证明。
+  Node Host 的插件 computer 安装归属与调用生命周期尚未接入平台桥，在创建 runtime 和驱动执行前返回 `UNSUPPORTED_CAPABILITY`，
+  能力发现也报告不可用；不因删除审批而略过现有身份 guard，不新增票据或证明机制。
   Node Agent 与 Desktop 插件的电脑调用、快照生命周期及原 guard 不变。
-  `files` 组复用上述批准与详情重试。`pick({mode:'directory',access:'files'})` 的原生选择框列明
+  `files` 组复用整体安装批准与 manifest 声明，不追加分组批准。`pick({mode:'directory',access:'files'})` 的原生选择框选择实际资源，列明
   读写、列举、删除与监听范围，成功后在原亲选目录存储中记录随机引用及目录 dev/ino；旧路径不补引用。
   `fs root:'picked'` 和 helper `file_request` 使用同一 FsSlot/file-browser-core，不借用任务身份；
   Agent 调用后者使用真实 Session 工作目录，写/删走原风险规则，Plan 仍只读。引用仅限原实例、账号与执行电脑。

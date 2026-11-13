@@ -73,24 +73,27 @@ describe('Host service discovery', () => {
     expect(catalog.list(context).every(service => !service.available)).toBe(true);
   });
 
-  it('projects only the attested plugin’s declarations and current approvals', async () => {
+  it('projects attested declarations without a second per-group approval state', async () => {
     const catalog = new HostServiceCatalog();
     catalog.replace([provider('cindy_browser', [{ name: 'browser', category: 'browser' }]).value]);
     const caller = { kind: 'plugin' as const, pluginId: 'discovery', dataOwnerId: 'owner', ownerGeneration: 1 };
     const ghost = { enabled: true, approval: { state: 'approved', revision: 'r1' },
-      manifest: { agent: { hostTools: ['discovery', 'browser', 'ssh'] } }, approvedHostToolGroups: ['discovery', 'browser'] } as InstalledGhost;
+      manifest: { agent: { hostTools: ['discovery', 'browser', 'ssh'] } } } as InstalledGhost;
     let active = true;
     const execute = createHostServiceToolExecutor(catalog, { getGhost: () => ghost,
       pluginCall: () => active ? { caller, server: 'cindy_helper', tool: 'host_services', argsJson: '{}', assertCurrent() {} } : undefined });
     const result = await execute.list({ ...context, hostCaller: caller });
     expect(result).toMatchObject({ scope: 'local', services: expect.arrayContaining([
-      expect.objectContaining({ group: 'browser', available: true, declared: true, approved: true }),
-      expect.objectContaining({ group: 'ssh', available: false, declared: true, approved: false }),
-      expect.objectContaining({ group: 'computer', declared: false, approved: false }),
+      expect.objectContaining({ group: 'browser', available: true, declared: true }),
+      expect.objectContaining({ group: 'ssh', available: false, declared: true }),
+      expect.objectContaining({ group: 'computer', declared: false }),
     ]) });
-    ghost.approvedHostToolGroups = ['discovery'];
+    expect(JSON.stringify(result)).not.toContain('approved');
+    ghost.approvedHostToolGroups = [];
+    expect(await execute.list({ ...context, hostCaller: caller })).toEqual(result);
+    ghost.manifest.agent!.hostTools = ['discovery'];
     expect(await execute.list({ ...context, hostCaller: caller })).toMatchObject({ services: expect.arrayContaining([
-      expect.objectContaining({ group: 'browser', approved: false }),
+      expect.objectContaining({ group: 'browser', declared: false }),
     ]) });
     active = false;
     expect(() => execute.list({ ...context, hostCaller: caller })).toThrow('PERMISSION_DENIED');

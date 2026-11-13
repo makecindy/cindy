@@ -140,8 +140,8 @@ test('plugin confirmation replies use the authenticated controller, never a call
   assert.equal((await request('/api/ghosts/confirm/resolve', { method: 'POST', headers,
     body: JSON.stringify({ requestId: 'pending', confirmed: 'yes' }) })).status, 400);
   assert.equal(replies.length, 1);
-  assert.deepEqual((await request('/api/ghosts/request-task-approval', { method: 'POST', headers,
-    body: JSON.stringify({ id: 'demo', capability: 'host-tools:terminal' }) })).body, { granted: true });
+  assert.equal((await request('/api/ghosts/request-task-approval', { method: 'POST', headers,
+    body: JSON.stringify({ id: 'demo', capability: 'host-tools:terminal' }) })).status, 404);
 });
 
 test('managed stop requires the profile bearer and the current instance, never a browser cookie', async (t) => {

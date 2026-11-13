@@ -10,7 +10,7 @@ function fixture() {
   let generation = 0;
   const ghost = (id: string): InstalledGhost => ({ enabled: true, dir: `/fixture/${id}`,
     approval: { state: 'approved', revision: id }, namespace: null, namespaceState: 'confirmed',
-    approvedHostToolGroups: ['storage'], manifest: { schemaVersion: 3, id, name: `Plugin ${id}`,
+    manifest: { schemaVersion: 3, id, name: `Plugin ${id}`,
       version: '1.0.0', kind: 'chip', entry: 'main.js', agent: { hostTools: ['storage'] } } });
   const source = ghost('source'), target = ghost('target');
   const copies = new Map<string, unknown[]>();

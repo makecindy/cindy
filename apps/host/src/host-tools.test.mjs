@@ -63,56 +63,42 @@ test('disconnect, plugin stop and owner change cancel only their own pending con
   } finally { disconnect(); confirmations.close(); }
 });
 
-// Existing gateway tests exercise Desktop ports; this enters Node's production
-// provider assembly, receipt writer and the same helper registry. Minimal input:
-// one declared terminal group with no first-use approval. No PTY is spawned.
-test('Node provider assembly preserves first-use approval, explicit retry and per-call refusal', async () => {
+// Unit: the production Node assembly must accept an approved installation's
+// declared tools without extra receipt fields, prompts or approval writes.
+test('Node provider assembly uses installation approval without prompting or recording group approvals', async () => {
   const database = { drizzle: {} };
   setCurrentDbClient(database, 'owner');
-  const ghost = { enabled: true, dir: '/fixture/demo', approvedHostToolGroups: [],
+  const ghost = { enabled: true, dir: '/fixture/demo',
     approval: { state: 'approved', revision: 'r1' },
     manifest: { schemaVersion: 3, id: 'demo', name: 'Demo', version: '1.0.0', kind: 'chip', entry: 'main.js',
       agent: { hostTools: ['terminal'] } } };
   const confirmations = createHostConfirmations({ current: () => true });
-  let deliver;
-  const nextEvent = () => new Promise(resolve => { deliver = resolve; });
-  const disconnect = confirmations.connect('web:owner', event => { if (event.channel.endsWith('request')) deliver?.(event); return true; });
-  let writes = 0;
-  const service = createHostToolService({ profileDir: '/fixture', ownerId: 'owner', current: () => true,
+  let prompts = 0, writes = 0, ownerCurrent = true;
+  const disconnect = confirmations.connect('web:owner', () => { prompts++; return false; });
+  const service = createHostToolService({ profileDir: '/fixture', ownerId: 'owner', current: () => ownerCurrent,
     owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), getGhost: () => ghost,
     getSession: () => undefined, confirmations, t: key => key,
-    manager: { approveTaskCapability: async (id, revision, current, capability) => {
-      assert.equal(id, 'demo'); assert.equal(revision, 'r1'); assert.equal(current(), true);
-      assert.equal(capability, 'host-tools:terminal'); writes++;
-      ghost.approvedHostToolGroups.push('terminal'); return true;
-    } },
+    manager: { approveTaskCapability: async () => { writes++; throw Error('Group approval must not be written'); } },
   });
   const call = (tool, args = {}) => service.request('demo', { type: 'host-tool-request', server: 'cindy_helper', tool, args }, () => true);
   const body = result => JSON.parse(result.content.find(item => item.type === 'text').text);
   try {
-    let event = nextEvent();
-    const refused = call('terminal_list');
-    const first = await event;
-    assert.equal(first.channel, 'ghosts:install-consent:request');
-    assert.equal(first.payload.facts.added[0].key, 'agent:host-tools:terminal');
-    assert.equal(confirmations.resolve('web:owner', 'install', first.payload.requestId, false), true);
-    assert.equal(body(await refused).errorCode, 'PERMISSION_DENIED');
+    assert.deepEqual(body(await call('terminal_list')).jobs, []);
+    ghost.approvedHostToolGroups = [];
+    assert.deepEqual(body(await call('terminal_list')).jobs, []);
+    assert.equal(prompts, 0); assert.equal(writes, 0);
+    ghost.manifest.agent.hostTools = [];
+    ghost.approvedHostToolGroups = ['terminal'];
     assert.equal(body(await call('terminal_list')).errorCode, 'PERMISSION_DENIED');
-    assert.equal(writes, 0);
-    event = nextEvent();
-    const retry = service.approveGroup('demo', 'terminal', () => true, true);
-    const requested = await event;
-    confirmations.resolve('web:owner', 'install', requested.payload.requestId, true);
-    assert.equal(await retry, true); assert.equal(writes, 1);
-    assert.deepEqual(body(await call('terminal_list')).jobs, []);
-    event = nextEvent();
-    const command = call('terminal_start', { program: { command: 'fixture-command', args: ['value'] } });
-    const prompt = await event;
-    assert.equal(prompt.channel, 'ghosts:confirm-request');
-    assert.match(prompt.payload.body, /fixture-command/);
-    confirmations.resolve('web:owner', 'confirm', prompt.payload.requestId, false);
-    assert.equal(body(await command).errorCode, 'PERMISSION_DENIED');
-    assert.deepEqual(body(await call('terminal_list')).jobs, []);
+    ghost.manifest.agent.hostTools = ['terminal'];
+    ghost.enabled = false;
+    assert.equal(body(await call('terminal_list')).errorCode, 'PERMISSION_DENIED');
+    ghost.enabled = true;
+    ghost.approval = { state: 'invalid' };
+    assert.equal(body(await call('terminal_list')).errorCode, 'PERMISSION_DENIED');
+    ghost.approval = { state: 'approved', revision: 'r1' };
+    ownerCurrent = false;
+    assert.equal(body(await call('terminal_list')).errorCode, 'PERMISSION_DENIED');
   } finally { disconnect(); confirmations.close(); service.close(); clearCurrentDbClient(database); }
 });
 
