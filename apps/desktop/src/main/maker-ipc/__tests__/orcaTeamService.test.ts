@@ -1881,6 +1881,29 @@ describe('OrcaTeamService', () => {
     expect(getWorker().latestReport).toMatchObject({ state: 'blocked', question: '另一个问题' });
   });
 
+  // 直发/插话回报（无 queued id）写入后，上一轮排队来源作废；改写旧排队消息不再误清新回报。
+  it('ignores rewrite of a stale queued report once a direct report replaced it', async () => {
+    const { deps, getWorker, service } = createDeps();
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '第一轮' });
+    // 第一轮回报 A 进队列。
+    await service.captureLocalWorkerReport('worker-session-1')(true, {
+      delivered: false,
+      queuedMessageId: 'queued-1',
+      report: { state: 'blocked', question: '旧问题' },
+    });
+
+    // 第二轮回报 B 直发送达（无 queuedMessageId），取代第一轮成为当前投影。
+    await service.captureLocalWorkerReport('worker-session-1')(true, {
+      delivered: true,
+      report: { state: 'blocked', question: '当前问题' },
+    });
+    expect(getWorker().latestReport).toMatchObject({ question: '当前问题' });
+
+    // 改写第一轮的排队消息 A：不得误清第二轮的当前回报。
+    await service.workerReportQueuedContentMutated('worker-session-1', ['queued-1']);
+    expect(getWorker().latestReport).toMatchObject({ question: '当前问题' });
+  });
+
   // 终态已清 autoBridge 条目后，改写排队回报仍须把面板上挂着的旧问题清掉。
   it('invalidates the projected report via source tracking after runtime state was cleared', async () => {
     const { deps, getWorker, service } = createDeps();

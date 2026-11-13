@@ -1403,6 +1403,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             provisionalDispatches.set(target.sessionId, currentProvisional);
             await deps.updateWorkerStatus(target.id, 'running');
             await deps.setWorkerLatestReport(target.id, null);
+            // 新轮接管面板：上一轮排队回报的来源作废，改写旧消息不再误清新轮投影。
+            pendingReportSourceBySession.delete(target.sessionId);
             deps.broadcastOrcaWorkerChanged(link.leadSessionId);
           });
           if (currentPending) await markPendingReady(target.sessionId, currentPending);
@@ -2322,6 +2324,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           current.latestReportQueuedId = undefined;
         }
         // 只记最新进度：不结算欠回报、不改 worker 状态，面板与通知读得到即可。
+        // 新进度覆盖 latest_report 后，残留的旧排队来源会让改写误清这份进度。
+        pendingReportSourceBySession.delete(sessionId);
         await deps.setWorkerLatestReport(link.workerId, report);
       });
       deps.broadcastOrcaWorkerChanged(link.leadSessionId);
@@ -2374,8 +2378,13 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
               } else if (!state.terminalObserved) {
                 // 终态还没到：至少把最新回报落盘，面板与通知不读旧问题。
                 await deps.setWorkerLatestReport(state.workerId, report);
-                // 记录来源以便终态后改写仍能命中（直发回报无 queued id，不入表）。
-                if (receipt?.queuedMessageId) pendingReportSourceBySession.set(sessionId, receipt.queuedMessageId);
+                // 记录来源以便终态后改写仍能命中；直发/插话回报无 queued id，
+                // 同时清掉上一轮残留来源，避免改写旧消息误清这份新回报。
+                if (receipt?.queuedMessageId) {
+                  pendingReportSourceBySession.set(sessionId, receipt.queuedMessageId);
+                } else {
+                  pendingReportSourceBySession.delete(sessionId);
+                }
               }
             }
             if (accepted && settlesReport && ownsState) settlePendingReport(state);
