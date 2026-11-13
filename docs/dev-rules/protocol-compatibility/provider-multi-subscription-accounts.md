@@ -59,7 +59,7 @@ Codex 原生桶不冒充 WHAM：旧 bridge 无法表达按模型的账号池额�
 官方及自建中转仅透传原 invoke，无帧、allowlist 或服务器变更。
 
 任务的账号显示（2026-11-11）：`maker:subscription-accounts` 追加只读 action `session`
-（`providerId`、`sessionId?`、`nativeSessionId?`，至少一个 id，各 ≤256 字符），沿用同一 owner 校验，共享任务访客不可用，
+（`providerId`、`sessionId?`、`nativeSessionId?`，通常至少一个 id，各 ≤256 字符；旧来源的无原生会话查询见下文），沿用同一 owner 校验，共享任务访客不可用，
 不进入管理命令执行器，Helper 不暴露。执行端按「任务 → 原生会话」顺序读持久绑定，回 `{ providerId, state }`：
 `legacy`（无账号池、只有默认账号或池前旧任务，调用方沿用原 reader）、`unassigned`（下一轮才选账号）、
 `unavailable`（绑定的账号已移出或供应商已断开）、`bound`（附 `account`：`isDefault`、池内序号、身份、套餐、状态与该账号
@@ -95,6 +95,17 @@ owner 变化仍拒绝。可选准入从查询开始共用 2 秒预算，原账�
 沿用原 channel、owner 校验与在途 owner 栅栏，
 无新 channel、allowlist、能力位、帧或服务端字段，官方与自建中转按原 invoke 透传，无需升级。
 回归入口：`subscription-accounts/__tests__/runtime.test.ts`（执行端回报、控制端新旧回包、真实组服务 → 路由 → 账号池）。
+
+2026-11-13 补齐仍保存旧连接 ID 的同账号远程任务：`session` 查询可选追加 `legacyProviderId`（仅 OpenAI、非空且不超过 256 字符），
+尚未建立原生会话时可只传该旧来源与模型，不必伪造任务或原生 ID；旧执行端会拒绝这种新查询，控制端保留原路径。
+执行电脑按自己的归并映射与已有原生绑定核对，不能用控制电脑的映射猜。仅宿主派生的同账号远程上下文，且原来源和归并后 OpenAI 的远程／
+模型权限及另一个账号的实际准入均通过时，在原回包顶层追加可选 `replacementProviderId: openai`；暂停与移出账号也可回报，后者仍为
+`state: unavailable`。该字段只表示可带上下文交接到归并来源，不带账号标识、目录或凭证，不预约或修改绑定。
+新控制端仅在明确收到该字段时交接、把保存来源改为 OpenAI，再由同一执行电脑的新启动按池选号；普通 `blocked` / `switchAvailable`
+不足以改变旧连接来源。旧执行端忽略请求的新字段且不回报替代来源，新控制端保留原路径；旧控制端忽略新回包字段。
+标准 OpenAI／Anthropic 路线沿用既有查询。候选旧来源每次发送只读一次执行端账号查询，未归并 ID 在映射检查即返回；无新轮询或重试。
+沿用原 channel、owner 和在途 owner 栅栏，无新增 allowlist、能力位、relay 帧或端点；官方与自建中转均为原 invoke 载荷透传，无需升级。
+回归入口为 `runtime.test.ts` 的执行端准入 → 回包解析 → 控制端交接 → 新 Agent 启动，以及 `ipc.test.ts` 的字段校验和目标来源权限。
 
 ## 已绑定任务启动失败的提示
 

@@ -5138,6 +5138,7 @@ export async function acquirePendingAgentSwitchForDirectSend(
  */
 const subscriptionAccountRecoveryDeps = {
   readSession: getSessionRowSnapshotStrict,
+  invokeRemote: remoteBackgroundInvoke,
   isRunning: (id: string) => {
     const live = getMaker().getSession(id);
     return isSessionInTurn(id) || !!live?.isTurnRunning() || (live?.listBackgroundTasks().length ?? 0) > 0;
@@ -12946,10 +12947,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // reading metadata or dispatching; busy inputs defer to the queued path.
       await scheduledModelScope.restore(targetSessionId);
       await reconcileBotModelRoute(targetSessionId, true);
-      const [meta, dbRow] = await Promise.all([
+      const [meta, initialDbRow] = await Promise.all([
         maker.getSessionMeta(targetSessionId).catch(() => null),
         getSessionRowSnapshot(targetSessionId),
       ]);
+      let dbRow = initialDbRow;
 
       if (!meta || !dbRow) {
         return {
@@ -13063,6 +13065,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // Pre-send account/context recovery retired the native thread. Do not pass
         // the metadata captured before recovery back to lazy bootstrap.
         meta.sdkSessionId = undefined;
+        const recoveredRow = await getSessionRowSnapshotStrict(targetSessionId);
+        if (!recoveredRow || recoveredRow.status === 'deleted')
+          throw new Error('The task is unavailable after subscription account recovery');
+        dbRow = recoveredRow;
       }
       let live = maker.getSession(targetSessionId);
       if (live?.agentKind === 'pi' && live.getStatus() === 'error') {

@@ -53,6 +53,8 @@ export interface AccountFailoverDeps {
    * `assertCurrent` before writing. Without it such tasks stay on their account.
    */
   moveRoute?(id: string, providerId: SubscriptionProvider, assertCurrent: () => void): Promise<void>;
+  /** Owner-only session-account read on the task's executing computer. */
+  invokeRemote?: RemoteSubscriptionInvoke;
   log?(message: string, fields: Record<string, unknown>): void;
 }
 
@@ -134,12 +136,46 @@ export async function prepareSubscriptionAccountFailover(
     if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
       throw new Error('Subscription account owner changed');
   };
-  // Most sends have no multi-account pool: skip the session read entirely.
-  if (!hasMultiAccountPool()) return false;
+  // Remote legacy aliases belong to their executor, even when this computer has no account pool.
+  const local = hasMultiAccountPool();
+  if (!local && !deps.invokeRemote) return false;
   const read = await deps.readSession(sessionId);
   assertOwner();
   // Later checks compare against what this send saw, even if the caller reuses its row object.
   const row = read && { ...read };
+  if (row?.agentDeviceId && row.providerId && row.providerId !== 'openai' && row.providerId !== 'anthropic') {
+    if (!deps.invokeRemote || !deps.moveRoute || deps.isRunning(sessionId)) return false;
+    let available: string | null;
+    try {
+      available = await readRemoteSubscriptionAccountSwitch({ ...row, agentKind: row.agentKind ?? '' }, deps.invokeRemote);
+    } catch {
+      assertOwner();
+      return false;
+    }
+    assertOwner();
+    if (!available) return false;
+    const assertCurrent = () => {
+      assertOwner();
+      if (deps.isRunning(sessionId)) throw new Error('Cannot switch a running task subscription account');
+    };
+    const assertSource = async (afterRebuild: boolean) => {
+      const current = await deps.readSession(sessionId);
+      assertCurrent();
+      if (!current || current.status === 'deleted' || current.providerId !== row.providerId
+        || current.agentDeviceId !== row.agentDeviceId || current.remoteHostId !== row.remoteHostId
+        || current.model !== row.model
+        || (afterRebuild ? !!current.sdkSessionId : current.sdkSessionId !== row.sdkSessionId))
+        throw new Error('The task route changed');
+    };
+    await assertSource(false);
+    if (row.sdkSessionId) await deps.rebuild(sessionId, assertCurrent);
+    await assertSource(true);
+    // The executing host admitted the merged destination; a fresh start there chooses the account.
+    await deps.moveRoute(sessionId, 'openai', assertCurrent);
+    deps.log?.('subscription account failover: moved remote legacy task before send', { sessionId });
+    return true;
+  }
+  if (!local) return false;
   const bound = row && boundAccount(sessionId, row);
   if (!bound || deps.isRunning(sessionId)) return false;
   if (!readSubscriptionAccountBlocked(bound.provider, bound.accountId, bound.model)) return false;

@@ -794,6 +794,88 @@ describe('tasks using imported Codex connections', () => {
     expect(h.bindings.get('native:old')?.accountId).toBe('imported');
     await handle.close();
   });
+
+  // PR #10271 independent review (unit): local-only recovery left remote tasks on their old
+  // connection id. Exercise executor admission, the wire parser, controller handoff and a fresh
+  // Agent start together; two accounts and one unavailable legacy account are the minimal input.
+  it.each(['exhausted', 'paused', 'removed', 'fresh'] as const)('hands a remote legacy task off a %s account on its executor', async cause => {
+    h.pools.openai = { strategy: 'order', accounts: [account('imported'), account('second')],
+      legacyCodexAccounts: { 'openai-old': 'imported' } };
+    const old = await acquireSubscriptionAccount('openai', model, [], false, { accountId: 'imported' });
+    await old!.bind(['task:remote', 'native:remote-old']);
+    if (cause === 'exhausted' || cause === 'fresh') old!.observeFailure(Object.assign(new Error('usage limit'), { codexErrorInfo: 'usageLimitExceeded' }), model, 'run');
+    old!.release();
+    if (cause === 'paused') h.pools.openai.accounts[0].paused = true;
+    if (cause === 'removed') h.pools.openai.accounts.shift();
+    h.remote.mockImplementation(async (_device, _channel, args) => ({ ok: true,
+      result: await readSubscriptionSessionAccount('openai', args[0], { remote: true, ownComputer: true }) }));
+    const row = { status: 'active', providerId: 'openai-old', agentKind: 'codex', model,
+      sdkSessionId: cause === 'fresh' ? null : 'remote-old' as string | null, agentDeviceId: 'executor' };
+    expect(await canSwitchSubscriptionAccount('remote', async () => row, h.remote)).toBe(true);
+    h.remote.mockClear();
+    const rebuild = vi.fn(async (_id: string, assertCurrent: () => void) => { assertCurrent(); row.sdkSessionId = null; });
+    const moveRoute = vi.fn(async (_id: string, providerId: string, assertCurrent: () => void) => { assertCurrent(); row.providerId = providerId; });
+    expect(await prepareSubscriptionAccountFailover('remote', {
+      readSession: async () => row, isRunning: () => false, rebuild, moveRoute, invokeRemote: h.remote,
+    })).toBe(true);
+    expect(h.remote).toHaveBeenCalledTimes(1);
+    expect(h.remote.mock.calls[0][2]).toEqual([{ action: 'session', providerId: 'openai',
+      ...(cause === 'fresh' ? {} : { nativeSessionId: 'remote-old' }), model, legacyProviderId: 'openai-old' }]);
+    expect(rebuild).toHaveBeenCalledTimes(cause === 'fresh' ? 0 : 1);
+    expect(row).toMatchObject({ providerId: 'openai', agentDeviceId: 'executor', sdkSessionId: null });
+    const start = vi.fn(async () => ({ id: 'remote-new', close: async () => {} }) as unknown as AgentSessionHandle);
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: start } as unknown as BaseAgent);
+    const handle = await agent.startSession({ providerId: row.providerId, sessionId: 'remote', model,
+      deviceHosted: { guest: false } } as unknown as StartSessionOptions);
+    expect((start.mock.calls[0] as unknown as [StartSessionOptions])[0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/second');
+    expect(h.bindings.get('task:remote')?.accountId).toBe('second');
+    expect(h.bindings.get('native:remote-old')?.accountId).toBe('imported');
+    await handle.close();
+  });
+
+  it('requires explicit executor admission for a remote legacy route and rejects stale responses', async () => {
+    h.pools.openai = { strategy: 'order', accounts: [account('imported'), account('second')],
+      legacyCodexAccounts: { 'openai-old': 'imported' } };
+    const old = await acquireSubscriptionAccount('openai', model, [], false, { accountId: 'imported' });
+    await old!.bind(['native:remote-old']);
+    old!.observeFailure(Object.assign(new Error('usage limit'), { codexErrorInfo: 'usageLimitExceeded' }), model, 'run');
+    old!.release();
+    const query = { nativeSessionId: 'remote-old', model, legacyProviderId: 'openai-old' };
+    for (const options of [{}, { remote: true }, { remote: true, ownComputer: false }])
+      expect(await readSubscriptionSessionAccount('openai', query, options)).not.toHaveProperty('replacementProviderId');
+    h.routeAllowed.mockReturnValue(false);
+    expect(await readSubscriptionSessionAccount('openai', query, { remote: true, ownComputer: true })).not.toHaveProperty('replacementProviderId');
+    h.routeAllowed.mockReturnValue(true);
+    h.accountAllowed.mockReturnValue(false);
+    expect(await readSubscriptionSessionAccount('openai', query, { remote: true, ownComputer: true })).not.toHaveProperty('replacementProviderId');
+    h.accountAllowed.mockReturnValue(true);
+    expect(await readSubscriptionSessionAccount('openai', { ...query, legacyProviderId: 'unknown' }, { remote: true, ownComputer: true })).not.toHaveProperty('replacementProviderId');
+    h.bindings.set('native:remote-old', { providerId: 'openai', accountId: 'second' });
+    expect(await readSubscriptionSessionAccount('openai', query, { remote: true, ownComputer: true })).not.toHaveProperty('replacementProviderId');
+    h.bindings.set('native:remote-old', { providerId: 'openai', accountId: 'imported' });
+    // An old host ignores legacyProviderId and returns ordinary blocked/switchAvailable. Keep history.
+    h.remote.mockImplementation(async () => ({ ok: true,
+      result: await readSubscriptionSessionAccount('openai', { nativeSessionId: 'remote-old', model }) }));
+    const row = { status: 'active', providerId: 'openai-old', agentKind: 'codex', model,
+      sdkSessionId: 'remote-old', agentDeviceId: 'executor' };
+    const rebuild = vi.fn();
+    const moveRoute = vi.fn();
+    const deps = { readSession: async () => row, isRunning: () => false, rebuild, moveRoute, invokeRemote: h.remote };
+    expect(await prepareSubscriptionAccountFailover('remote', deps)).toBe(false);
+    expect(rebuild).not.toHaveBeenCalled();
+    h.remote.mockImplementation(async () => {
+      const result = await readSubscriptionSessionAccount('openai', query, { remote: true, ownComputer: true });
+      row.sdkSessionId = 'newer-native';
+      return { ok: true, result };
+    });
+    await expect(prepareSubscriptionAccountFailover('remote', deps)).rejects.toThrow('route changed');
+    expect(rebuild).not.toHaveBeenCalled();
+    expect(moveRoute).not.toHaveBeenCalled();
+    h.remote.mockClear();
+    expect(await prepareSubscriptionAccountFailover('remote', { ...deps,
+      readSession: async () => ({ ...row, agentDeviceId: 'share:someone' }) })).toBe(false);
+    expect(h.remote).not.toHaveBeenCalled();
+  });
 });
 
 describe('native account assignment on the executing computer', () => {
