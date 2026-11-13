@@ -186,6 +186,50 @@ function page(entry: string, withRetirementNavigation = false) {
   );
 }
 
+// #10358: hold the real page's detail request open; existing card tests only
+// supplied pending props and missed the page confusing navigation with install.
+// Unit tier: deferred host promise, no network or timed sleep.
+it.each(['resolve', 'reject'] as const)('keeps installation idle while details load and %s', async outcome => {
+  let resolve!: (value: PluginMarketDetail) => void;
+  let reject!: (reason: Error) => void;
+  loadDetail.mockReturnValueOnce(new Promise((yes, no) => { resolve = yes; reject = no; }));
+  const install = vi.fn();
+  window.electronAPI.pluginMarket.install = install;
+  vi.spyOn(toast, 'error').mockReturnValue('detail-error');
+  render(page('/plugins'));
+  fireEvent.click(await screen.findByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+  fireEvent.click(await screen.findByRole('button', { name: detail.name }));
+  const installButton = screen.getByRole('button', { name: 'settings.ghosts.page.installAria' });
+  expect(installButton.getAttribute('aria-busy')).not.toBe('true');
+  expect(installButton.querySelector('.animate-spinner')).toBeNull();
+  expect(screen.getByRole('button', { name: 'settings.ghosts.market.detailsAria' }).getAttribute('aria-busy')).toBe('true');
+  expect(install).not.toHaveBeenCalled();
+  await act(async () => outcome === 'resolve' ? resolve(detail) : reject(new Error('unavailable')));
+  if (outcome === 'resolve') {
+    expect(await screen.findByRole('heading', { name: detail.name })).toBeTruthy();
+  } else {
+    expect((screen.getByRole('button', { name: detail.name }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByRole('button', { name: 'settings.ghosts.market.detailsAria' }).getAttribute('aria-busy')).not.toBe('true');
+  }
+  expect(install).not.toHaveBeenCalled();
+});
+
+it('keeps explicit install feedback while fetching its package details', async () => {
+  let reject!: (reason: Error) => void;
+  loadDetail.mockReturnValueOnce(new Promise((_, no) => { reject = no; }));
+  vi.spyOn(toast, 'error').mockReturnValue('detail-error');
+  render(page('/plugins'));
+  fireEvent.click(await screen.findByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+  const install = await screen.findByRole('button', { name: 'settings.ghosts.page.installAria' });
+  fireEvent.click(install);
+  expect(install.getAttribute('aria-busy')).toBe('true');
+  expect(install.querySelector('.animate-spinner')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'settings.ghosts.market.detailsAria' }).getAttribute('aria-busy')).not.toBe('true');
+  await act(async () => reject(new Error('unavailable')));
+  expect((install as HTMLButtonElement).disabled).toBe(false);
+  expect(install.getAttribute('aria-busy')).not.toBe('true');
+});
+
 // Unit: the new recommendation pool must survive tab/search/detail navigation;
 // existing tests covered installs but did not exercise a fixed three-card pool.
 it.each(['few', 'failed'] as const)('hides today recommendations on %s while keeping the market reachable', async state => {
