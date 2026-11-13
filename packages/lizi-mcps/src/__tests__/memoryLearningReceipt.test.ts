@@ -44,3 +44,21 @@ it('captures ownership before storage, emits only successful write and consolida
   expect((await registry.call('memory_write', { ...args, mode: 'update' })).isError).toBe(true);
   expect(receipt).not.toHaveBeenCalled();
 });
+
+it('rejects shard names beyond the storage limit at the tool boundary', async () => {
+  const write = vi.fn(async () => ({ ok: true, filename: 'project_ok.md' }));
+  const deps = {
+    workdir: '/unused',
+    getSessionContext: () => ({ sessionId: 'origin', memoryScopeKey: 'bot:test', workingDir: '/unused' }),
+    getManager: () => ({ isEnabled: () => true, getStore: async () => ({ write }) }),
+  } as unknown as MemoryMcpDeps;
+  const registry = new MemoryToolRegistry();
+  registerMemoryWriteTool(registry, deps);
+  const call = (name: string) =>
+    registry.call('memory_write', { type: 'project', name, title: 'T', description: 'D', body: 'B' });
+
+  expect((await call('a'.repeat(64))).isError).not.toBe(true);
+  expect((await call('a'.repeat(65))).isError).toBe(true);
+  expect((await call(`project_${'a'.repeat(64)}.md`)).isError).not.toBe(true);
+  expect((await call(`project_${'a'.repeat(65)}`)).isError).toBe(true);
+});
