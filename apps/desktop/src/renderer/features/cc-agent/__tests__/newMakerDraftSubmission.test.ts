@@ -109,6 +109,7 @@ function provider(id = providerId, efforts: PiReasoningEffort[] = []): ProviderV
 
 async function submit(options: {
   entry?: 'send' | 'goal';
+  createFailure?: boolean;
   pluginRoute?: () => Promise<GhostStartTaskRouteResult>;
   /** 选了模型组：发送时解析出的结果。 */
   modelGroupRoute?: ModelGroupResolveResult;
@@ -157,9 +158,10 @@ async function submit(options: {
     resolveSessionExecutionSelection({ selection, availableAgents: [agentKind],
       availableModels: backend.flatMap(p => p.models[agentKind] ?? []),
       providerRouting: routing, hasCindyAiApiKey: false });
-  const ipcCreate = vi.fn(async (body) => ({
-    ...body, ...admit(body), id: 'created', workingDir: '/isolated/dialogue',
-  }));
+  const ipcCreate = vi.fn(async (body) => {
+    if (options.createFailure) throw new Error('fixture create failed');
+    return { ...body, ...admit(body), id: 'created', workingDir: '/isolated/dialogue' };
+  });
   const setGoal = vi.fn(async () => {
     // Goal starts from the newly persisted selection rather than receiving an
     // independent effort argument. Exercise admission on that creation result.
@@ -566,6 +568,18 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.checkAndConfirm).toHaveBeenCalledWith('pi', { deviceId: 'dev-2' });
     expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'dev-2', providerId, model: modelId });
     expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'r1' }, modelGroupRoute);
+  });
+  // #10240 / unit: real creation callbacks must not commit a model-group choice
+  // after a cancelled auth gate or a rejected create. Success-only coverage missed both.
+  it.each(['send', 'goal'] as const)('does not commit %s routing when cancelled or creation fails', async (entry) => {
+    const modelGroupRoute: ModelGroupResolveResult = {
+      outcome: 'routed', groupName: 'Fixture', modelName: modelId, sourceName: 'Local',
+      route: { agentKind: 'pi', model: modelId, providerId }, why: 'order', quota: null, trace: [], decisionId: 'receipt',
+    };
+    for (const failure of [{ authCatalogKey: 'not-the-chosen-device' }, { createFailure: true }]) {
+      const result = await submit({ entry, modelGroupRoute, ...failure });
+      expect(result.environment.bindModelGroupSession).not.toHaveBeenCalled();
+    }
   });
   // PR #10067 review：草稿选着另一台电脑的模型、那台目录读失败时，模型组仍要先选路；选到本机就照常建任务，
   // 只有沿用原模型时才因那台目录没就绪而拦下。之前目录检查在选路之前，整笔发送被挡住。Tier: unit。
