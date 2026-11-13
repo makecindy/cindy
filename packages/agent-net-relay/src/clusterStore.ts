@@ -78,6 +78,14 @@ export class ClusterStore implements RelayStore {
     return operation;
   }
   async settled(): Promise<void> { await this.queue; }
+  /** Refresh under the shared attachment lock, before checking offsets or touching its bytes. */
+  mediaOperation<T>(networkId: string, mediaId: string, work: () => Promise<T>): Promise<T> {
+    return this.backend.withMediaLock(NETWORK + networkId, mediaId, async (latest) => {
+      if (latest.key !== NETWORK + networkId || latest.value !== undefined && !valid(latest.key, latest.value)) throw new Error('INVALID_AGENT_NET_STATE');
+      this.apply([latest], true);
+      return work();
+    });
+  }
   close(): void { this.unsubscribe(); this.listeners.clear(); }
 
   private read(key: string): unknown {

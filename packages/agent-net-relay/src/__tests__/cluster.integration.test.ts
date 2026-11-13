@@ -8,12 +8,17 @@
  *   副本加入／离开时的交接，以及在另一个副本上做出的撤销。
  * - 最小失败输入：同账号两台设备分别连两个副本后发一个包；负责副本离开后用已用过的签名请求重放；
  *   在非负责副本上暂停一个分享成员。
+ * - 本次回归：暂停鉴权后扩容／下线；暂停附件提交后换负责副本并重试同一偏移，且延迟状态通知；
+ *   负责副本接住 HTTP／升级却不响应，验证等待有界、已建立的 WebSocket 不被握手超时误关。
  * - tier：integration；需要真实 socket 和多个副本，单进程 fixture 与 handler mock 都替代不了。
  *   单独成文件是因为每个用例的副本组生命周期与 relay.integration 的单进程 fixture 不同。
- * - 实测耗时：2026-11-13 本机单独运行 `pnpm exec vitest run src/__tests__/cluster.integration.test.ts` 约 0.9 秒。
+ * - 实测耗时：2026-11-13 本机单独运行 `pnpm exec vitest run src/__tests__/cluster.integration.test.ts` 约 4.2 秒。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import type { Duplex } from 'node:stream';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { generateKeyPairSync, randomBytes, createHash } from 'node:crypto';
@@ -30,6 +35,8 @@ import { uploadEncryptedMedia, openEncryptedMedia } from '../media.js';
 const cleanups: Array<() => Promise<unknown> | void> = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 const NETWORK = 'account:owner-account';
 
@@ -83,6 +90,11 @@ async function replicaSet(extra: Partial<RelayOptions> = {}) {
 function nextPacket(uplink: AgentNetUplink): Promise<[string, Uint8Array]> {
   return new Promise((resolve) => uplink.onDatagram((source, packet) => resolve([source, packet])));
 }
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
 async function exchange(a: AgentNetUplink, b: AgentNetUplink): Promise<void> {
   const packet = randomBytes(600);
   const received = nextPacket(b); a.send('member', packet);
@@ -92,6 +104,114 @@ async function exchange(a: AgentNetUplink, b: AgentNetUplink): Promise<void> {
 }
 
 describe('replicated official relay', () => {
+  it.each(['join', 'drain'] as const)('rejects an upgrade whose authentication finishes after ownership changes (%s)', async (change) => {
+    const set = await replicaSet();
+    const a = await set.start('replica-a'); await set.start('replica-b');
+    await set.enroll(a, 'owner'); await set.enroll(a, 'member');
+    const { home, entry } = set.roles();
+    const authenticating = deferred(), authenticated = deferred(), leaving = deferred(), left = deferred();
+    const claim = set.backend.claimNonce;
+    const nonce = vi.spyOn(set.backend, 'claimNonce').mockImplementationOnce(async (id, expiresAt) => {
+      const accepted = await claim(id, expiresAt);
+      authenticating.resolve(); await authenticated.promise; return accepted;
+    });
+    const leave = set.backend.leave;
+    if (change === 'drain') vi.spyOn(set.backend, 'leave').mockImplementationOnce(async (id) => {
+      await leave(id); leaving.resolve(); await left.promise;
+    });
+    const rejected = expect(set.client(home, 'owner').connect()).rejects.toThrow();
+    let stopped: Promise<void> | undefined;
+    try {
+      await authenticating.promise;
+      if (change === 'join') {
+        await set.start(set.joinerTakingOver('pending-upgrade-'));
+        await new Promise<void>(resolve => setImmediate(resolve));
+      } else {
+        stopped = home.close(); await leaving.promise;
+      }
+      authenticated.resolve();
+      await rejected;
+    } finally { authenticated.resolve(); left.resolve(); await stopped; nonce.mockRestore(); }
+    const x = await set.client(entry, 'owner').connect(), y = await set.client(entry, 'member').connect();
+    set.uplinks.push(x, y); await exchange(x, y);
+  });
+
+  it('serializes attachment writes across a handoff and reads fresh offsets even when notifications lag', async () => {
+    const set = await replicaSet();
+    const a = await set.start('replica-a'); await set.start('replica-b');
+    await set.enroll(a, 'owner'); await set.enroll(a, 'member');
+    const { home, entry } = set.roles();
+    const client = set.client(home, 'owner');
+    const upload = await client.request('POST', '/media', { recipient: 'member', size: 4 }) as { id: string };
+    const written = deferred(), release = deferred(), contender = deferred();
+    const commit = set.backend.commit;
+    vi.spyOn(set.backend, 'commit').mockImplementation(async input => {
+      if (input.writes.some(write => (write.value as any)?.media?.[upload.id]?.received === 2)) {
+        written.resolve(); await release.promise;
+      }
+      return commit(input);
+    });
+    const subscribe = set.backend.onChange;
+    vi.spyOn(set.backend, 'onChange').mockImplementation(listener => subscribe(entries => {
+      // The new owner's replica must not rely on receiving this event before granting its lock.
+      if (!entries.some(item => (item.value as any)?.media?.[upload.id]?.received === 2)) listener(entries);
+    }));
+    const lock = set.backend.withMediaLock;
+    let attempts = 0;
+    vi.spyOn(set.backend, 'withMediaLock').mockImplementation((network, id, work) => {
+      if (id === upload.id && ++attempts === 2) contender.resolve();
+      return lock(network, id, work);
+    });
+    const first = client.request('PUT', '/media/' + upload.id, { offset: 0, data: Buffer.from('AB').toString('base64url') });
+    try {
+      await written.promise;
+      await set.start(set.joinerTakingOver('media-handoff-'));
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const conflict = expect(set.client(entry, 'owner').request('PUT', '/media/' + upload.id,
+        { offset: 0, data: Buffer.from('XY').toString('base64url') })).rejects.toMatchObject({ code: 'MEDIA_OFFSET_MISMATCH' });
+      await contender.promise;
+      release.resolve();
+      await expect(first).resolves.toMatchObject({ received: 2 }); await conflict;
+      expect(await readFile(path.join(set.mediaDir, upload.id), 'utf8')).toBe('AB');
+      await set.client(entry, 'owner').request('PUT', '/media/' + upload.id, { offset: 2, data: Buffer.from('CD').toString('base64url') });
+      const recipient = set.client(entry, 'member'), target = API + '/media/' + upload.id;
+      const downloaded = await fetch(entry.url + target, { headers: { authorization: recipient.header('GET', target) } });
+      expect(downloaded.status).toBe(200); expect(await downloaded.text()).toBe('ABCD');
+    } finally { release.resolve(); await first; }
+  });
+
+  it('bounds HTTP and WebSocket handshake waits when the owning replica stops answering', async () => {
+    const set = await replicaSet();
+    const a = await set.start('replica-a'); await set.start('replica-b');
+    await set.enroll(a, 'owner'); await set.enroll(a, 'member');
+    const { entry } = set.roles();
+    const httpEntered = deferred(), upgradeEntered = deferred();
+    const sockets = new Set<Duplex>();
+    const stalled = createServer(() => httpEntered.resolve());
+    stalled.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
+    stalled.on('upgrade', () => upgradeEntered.resolve());
+    await new Promise<void>(resolve => stalled.listen(0, '127.0.0.1', resolve));
+    cleanups.push(async () => { for (const socket of sockets) socket.destroy(); await new Promise<void>(resolve => stalled.close(() => resolve())); });
+    const stalledId = set.joinerTakingOver('stalled-owner-');
+    await set.backend.join({ id: stalledId, url: 'http://127.0.0.1:' + (stalled.address() as AddressInfo).port });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const client = set.client(entry, 'owner'), target = API + '/directory';
+      const response = fetch(entry.url + target, { headers: { authorization: client.header('GET', target) } });
+      await httpEntered.promise; await vi.advanceTimersByTimeAsync(10_001);
+      expect((await response).status).toBe(503);
+      const rejected = expect(client.connect()).rejects.toThrow();
+      await upgradeEntered.promise; await vi.advanceTimersByTimeAsync(10_001); await rejected;
+      await set.backend.leave(stalledId);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const x = await client.connect(), y = await set.client(entry, 'member').connect();
+      set.uplinks.push(x, y);
+      await vi.advanceTimersByTimeAsync(10_001);
+      await exchange(x, y);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('serves one account on one replica whichever replica each device reaches, and shares state', async () => {
     const set = await replicaSet();
     const a = await set.start('replica-a'), b = await set.start('replica-b');

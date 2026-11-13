@@ -26,7 +26,7 @@ export type RelayStateCommit = { ok: true; versions: Record<string, number> } | 
  * a deployment supplies the same contract over its own database.
  */
 export interface RelayClusterBackend {
-  /** Every existing key at its latest committed version. */
+  /** Every key at its latest committed version, including deletion tombstones. */
   snapshot(): Promise<RelayStateEntry[]>;
   /** Atomic: only when every `expected` key is still at that version, apply all writes. Otherwise
    * return the latest entries of the keys that moved. */
@@ -35,6 +35,11 @@ export interface RelayClusterBackend {
   onChange(listener: (entries: RelayStateEntry[]) => void): () => void;
   /** Request-proof replay protection across replicas: false when the nonce is already claimed. */
   claimNonce(id: string, expiresAt: number): Promise<boolean>;
+  /** Serialize one attachment's file I/O AND state commit across all replicas, including during
+   * ownership changes. Supply the latest network entry after acquiring the lock (notifications may
+   * lag). Keep exclusivity until work settles; never expire/reassign a lock while its file I/O can
+   * still run. A backend using expiring leases must fence/quiesce the previous writer first. */
+  withMediaLock<T>(networkKey: string, mediaId: string, work: (network: RelayStateEntry) => Promise<T>): Promise<T>;
   join(member: RelayClusterMember): Promise<void>;
   leave(id: string): Promise<void>;
   /** Live replicas. A replica that stops without leaving must drop out after a short liveness timeout. */
@@ -56,6 +61,7 @@ export interface RelayClusterOptions {
 export const CLUSTER_PATH = '/_agent-net-cluster';
 const HOP_HEADER = 'x-agent-net-cluster-hop';
 const CLIENT_HEADER = 'x-agent-net-cluster-client';
+const FORWARD_TIMEOUT_MS = 10_000;
 
 export function checkClusterOptions(options: RelayClusterOptions): RelayClusterOptions {
   if (typeof options.replicaId !== 'string' || !ID_PATTERN.test(options.replicaId)) throw new Error('INVALID_CLUSTER_REPLICA_ID');
@@ -122,6 +128,15 @@ export function createClusterRouter(options: { secret: string }) {
     const outgoing = (url.protocol === 'https:' ? httpsRequest : httpRequest)({ hostname: url.hostname.replace(/^\[|\]$/g, ''),
       port: url.port || undefined, path, method, headers });
     requests.add(outgoing); outgoing.once('close', () => requests.delete(outgoing));
+    // Cover connection establishment as well as an owner that accepts but never answers. Once
+    // upgraded, this is a long-lived device connection and must have no forwarding deadline.
+    const deadline = setTimeout(() => outgoing.destroy(new Error('CLUSTER_TIMEOUT')), FORWARD_TIMEOUT_MS);
+    deadline.unref();
+    const answered = () => clearTimeout(deadline);
+    outgoing.once('response', answered);
+    outgoing.once('close', answered);
+    outgoing.setTimeout(FORWARD_TIMEOUT_MS, () => outgoing.destroy(new Error('CLUSTER_TIMEOUT')));
+    outgoing.once('upgrade', () => { answered(); outgoing.setTimeout(0); });
     return outgoing;
   };
   const forward = (req: IncomingMessage, target: RelayClusterMember) => send(target, req.url ?? '/', req.method ?? 'GET',

@@ -10,6 +10,7 @@ export function createMemoryRelayCluster(): RelayClusterBackend {
   const changeListeners = new Set<(entries: RelayStateEntry[]) => void>();
   const memberListeners = new Set<(members: readonly RelayClusterMember[]) => void>();
   const nonces = new Map<string, number>();
+  const mediaLocks = new Map<string, Promise<unknown>>();
   let members: RelayClusterMember[] = [];
   const entry = (key: string): RelayStateEntry => {
     const current = entries.get(key);
@@ -24,7 +25,7 @@ export function createMemoryRelayCluster(): RelayClusterBackend {
   };
   return {
     async snapshot() {
-      return [...entries.keys()].map(entry).filter(item => item.value !== undefined);
+      return [...entries.keys()].map(entry);
     },
     async commit({ expected, writes }) {
       const moved = Object.entries(expected).filter(([key, version]) => (entries.get(key)?.version ?? 0) !== version);
@@ -42,6 +43,13 @@ export function createMemoryRelayCluster(): RelayClusterBackend {
       for (const [nonce, until] of nonces) if (until <= at) nonces.delete(nonce);
       if (nonces.has(id)) return false;
       nonces.set(id, expiresAt); return true;
+    },
+    async withMediaLock(networkKey, mediaId, work) {
+      const key = networkKey + '\0' + mediaId;
+      const operation = (mediaLocks.get(key) ?? Promise.resolve()).catch(() => undefined)
+        .then(() => work(entry(networkKey)));
+      mediaLocks.set(key, operation);
+      try { return await operation; } finally { if (mediaLocks.get(key) === operation) mediaLocks.delete(key); }
     },
     async join(member) {
       members = [...members.filter(item => item.id !== member.id), { ...member }];

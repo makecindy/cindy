@@ -184,8 +184,9 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
   const nonces = new Map<string, number>();
   const rate = new Map<string, { at: number; count: number }>();
   const mediaQueues = new Map<string, Promise<unknown>>();
-  async function mediaOperation<T>(id: string, action: () => Promise<T>): Promise<T> {
-    const operation = (mediaQueues.get(id) ?? Promise.resolve()).catch(() => undefined).then(action);
+  async function mediaOperation<T>(networkId: string, id: string, action: () => Promise<T>): Promise<T> {
+    const operation = (mediaQueues.get(id) ?? Promise.resolve()).catch(() => undefined)
+      .then(() => store instanceof ClusterStore ? store.mediaOperation(networkId, id, action) : action());
     mediaQueues.set(id, operation);
     try { return await operation; } finally { if (mediaQueues.get(id) === operation) mediaQueues.delete(id); }
   }
@@ -655,7 +656,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
         return Object.keys(removed.media);
       });
       for (const [id, session] of sessions) if (session.principal.networkId === target) { sessions.delete(id); session.ws.close(4410, 'access revoked'); }
-      for (const id of media) void mediaOperation(id, () => rm(path.join(mediaDir, id), { force: true }))
+      for (const id of media) void mediaOperation(target, id, () => rm(path.join(mediaDir, id), { force: true }))
         .catch(() => logger.error({}, 'agent-net tenant media cleanup failed'));
       return writeJson(res, 200, { ok: true });
     }
@@ -807,7 +808,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     }
     const media = url.pathname.match(/^\/api\/agent-net\/media\/([A-Za-z0-9-]+)$/);
     if (media) {
-      return mediaOperation(media[1], async () => {
+      return mediaOperation(n.id, media[1], async () => {
         const item = own(network(n.id).media, media[1]);
         if (!item || item.expiresAt <= now()) return fail(404, 'NOT_FOUND');
         if (principal.deviceId !== item.owner && principal.deviceId !== item.recipient) return fail(403, 'FORBIDDEN');
@@ -892,8 +893,9 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     const guest = pathname === API + '/guest/ws';
     if (pathname !== API + '/ws' && !guest) { socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n'); return; }
     void authenticate(req, Buffer.alloc(0), guest).then((principal) => {
-      if (closing || socket.destroyed || !active(principal)) { socket.destroy(); return; }
+      if (closing || draining || socket.destroyed || !owns(principal.networkId) || !active(principal)) { socket.destroy(); return; }
       wss.handleUpgrade(req, socket, head, (ws) => {
+        if (closing || draining || !owns(principal.networkId) || !active(principal)) { ws.close(1012, 'network moved'); return; }
         const id = key(principal.networkId, principal.deviceId);
         sessions.get(id)?.ws.close(4409, 'replaced');
         const session: Session = { principal, ws, lastPong: now(), remoteControlEnabled: false, capabilities: [],
@@ -1014,9 +1016,11 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     const ownedIds = store instanceof ClusterStore ? store.networkIds().filter(owns) : undefined;
     const swept = ownedIds ? ownedIds.flatMap(id => store.network(id) ?? []) : store.networks();
     for (const n of swept) for (const [id, upload] of Object.entries(n.media)) if (upload.expiresAt <= at) {
-      void mediaOperation(id, async () => {
+      void mediaOperation(n.id, id, async () => {
+        const current = store.network(n.id)?.media[id];
+        if (!current || current.expiresAt > now()) return;
         await rm(path.join(mediaDir, id), { force: true });
-        await store.transaction((state) => { delete state.networks[n.id].media[id]; });
+        await store.transaction((state) => { if (state.networks[n.id]) delete state.networks[n.id].media[id]; });
       }).catch(() => logger.error({}, 'agent-net media cleanup failed'));
     }
     if (!sweeping) {
