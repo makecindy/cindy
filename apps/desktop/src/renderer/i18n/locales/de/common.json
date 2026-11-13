@@ -6737,7 +6737,7 @@
         "sectionTitle": "Experimentelles Agent-Netzwerk",
         "switch": {
           "title": "Agent-Net (Beta)",
-          "hint": "Zeigt die Verbindungstopologie und die letzte Aktivität. Verbindungen sind verschlüsselt, wenn Agent-Net auf beiden Geräten aktiviert ist und die Geräte über Agent-Net gekoppelt wurden. Andere Geräte verwenden die bisherige Verbindung. Gilt nur für diesen Computer."
+          "hint": "Experimentelle Funktion. Die Nutzung wird derzeit nicht empfohlen. Zeigt die Verbindungstopologie und die letzte Aktivität. Verbindungen sind verschlüsselt, wenn Agent-Net auf beiden Geräten aktiviert ist und die Geräte über Agent-Net gekoppelt wurden. Andere Geräte verwenden die bisherige Verbindung. Gilt nur für diesen Computer."
         },
         "empty": "Noch keine anderen Geräte. Melde dich auf einem anderen Computer oder Telefon mit demselben Konto an, dann erscheint es hier.",
         "stats": {
@@ -7003,7 +7003,11 @@
         "remoteSessionEnded": "Das entfernte Gerät hat diese Sitzung beendet"
       },
       "control": "Steuern",
-      "standbyHint": "Eine andere Cindy-Instanz auf diesem Computer verwendet die Remote-Verbindung. Schließe sie, damit diese Instanz automatisch übernimmt."
+      "standbyHint": "Eine andere Cindy-Instanz auf diesem Computer verwendet die Remote-Verbindung. Schließe sie, damit diese Instanz automatisch übernimmt.",
+      "apps": {
+        "cindy": "Cindy",
+        "cindyFriend": "Cindy Friend"
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -7906,6 +7910,7 @@
         "install": "Installieren",
         "details": "Details",
         "detailsAria": "Details zu {{name}} anzeigen",
+        "loadingDetails": "Details werden geladen…",
         "update": "Aus Marktplatz aktualisieren",
         "updateTo": "Auf v{{version}} aktualisieren",
         "installed": "Installiert",
@@ -11388,6 +11393,7 @@
         "memberLimit": "Ein Gruppenchat braucht 2–6 Freunde",
         "memberUnavailable": "Einer dieser Freunde ist nicht verfügbar. Wähle einen anderen und versuch es erneut.",
         "mentionUnavailable": "Ein erwähntes Mitglied ist nicht mehr verfügbar. Wähle vor dem erneuten Senden, wen du erwähnen möchtest.",
+        "mentionAmbiguous": "Mehrere Mitglieder heißen „{{name}}“. Wähle die gemeinte Person aus der @-Liste.",
         "notFound": "Dieser Gruppenchat existiert nicht mehr",
         "hostNotReady": "Cindy wird noch vorbereitet. Versuch es gleich noch einmal.",
         "planOpen": "Eine Arbeitsaufteilung läuft bereits. Beende oder stoppe sie, bevor du eine weitere startest.",
@@ -21449,8 +21455,8 @@
   "modelGroups": {
     "title": "Modellgruppen",
     "description": "Fasse mehrere Quellen, die du unter Anbieter bereits hast, zu einer Auswahl zusammen. Wähle sie in der Modellauswahl unter „Modellgruppen“, und Cindy entscheidet, welche Quelle verwendet wird.",
-    "routes": "Routen",
-    "routesDescription": "Eine Route enthält mehrere Quellen. Jede neue Aufgabe wählt eine nach der Regel der Route.",
+    "routes": "Modi",
+    "routesDescription": "Ein Modus enthält mehrere Quellen. Jede neue Aufgabe wählt eine nach der Regel des Modus.",
     "sourceCount_one": "{{count}} Quelle",
     "sourceCount_other": "{{count}} Quellen",
     "strategy": {
@@ -21472,8 +21478,10 @@
       }
     },
     "picker": {
-      "empty": "Noch keine Modellgruppen. Fasse in den Einstellungen mehrere Quellen zu einer Route zusammen, um sie hier auszuwählen.",
-      "manage": "Modellgruppen verwalten"
+      "empty": "Noch keine Modellgruppen. Fasse in den Einstellungen mehrere Quellen zu einem Modus zusammen, um ihn hier auszuwählen.",
+      "manage": "Modellgruppen verwalten",
+      "switched": "„{{name}}“ hat diese Aufgabe auf {{model}} umgestellt",
+      "switchUnavailable": "„{{name}}“ hat gerade keine Quelle, die diese Aufgabe nutzen kann. Das Modell wurde nicht geändert."
     },
     "why": {
       "expiringQuota": "Noch {{left}} % Kontingent, Zurücksetzung am {{reset}} – daher zuerst",
@@ -21485,7 +21493,7 @@
       "soonestUntil": "Alle Quellen haben ihr Kontingent aufgebraucht; diese erholt sich zuerst ({{reset}})",
       "standby": "Diesmal nicht an der Reihe",
       "standbyQuota": "Noch {{left}} % Kontingent, Zurücksetzung erst am {{reset}} – wird aufgespart",
-      "off": "In dieser Route deaktiviert",
+      "off": "In diesem Modus deaktiviert",
       "unavailable": "Nicht verbunden, oder dieses Modell ist gerade nicht wählbar",
       "limited": "Kontingent aufgebraucht",
       "limitedUntil": "Kontingent aufgebraucht bis {{reset}}",
@@ -21499,10 +21507,10 @@
       "separator": "; "
     },
     "settings": {
-      "newRoute": "Neue Route",
-      "newRouteName": "Neue Route",
-      "routesEmpty": "Noch keine Routen. Erstelle eine und füge mehrere Quellen hinzu.",
-      "scopeNote": "Modellgruppen gelten für neue Aufgaben, die auf diesem Computer gestartet werden. Die Quelle wird beim Start gewählt und ändert sich während der Aufgabe nicht.",
+      "newRoute": "Neuer Modus",
+      "newRouteName": "Neuer Modus",
+      "routesEmpty": "Noch keine Modi. Erstelle einen und füge mehrere Quellen hinzu.",
+      "scopeNote": "Modellgruppen gelten für Aufgaben auf diesem Computer. Eine neue Aufgabe wählt beim Start eine Quelle. Wählst du eine in einer laufenden Aufgabe, wird sofort einmal gewechselt; danach wechselt sie nicht von selbst.",
       "back": "Zurück zu Modellgruppen",
       "name": "Name",
       "nameHint": "Wird in der Modellauswahl angezeigt.",
@@ -21514,14 +21522,14 @@
       "sources": "Nutzbare Quellen",
       "sourcesHint": "Verschiedene Modelle können nebeneinander stehen. Die Aufgabe zeigt, welches verwendet wurde.",
       "sourcesEmpty": "Noch keine Quellen. Füge unten ein verbundenes Modell hinzu.",
-      "sourcesFull": "Eine Route fasst bis zu {{count}} Quellen.",
+      "sourcesFull": "Ein Modus fasst bis zu {{count}} Quellen.",
       "addSource": "Quelle hinzufügen",
       "chooseModel": "Modell auswählen",
       "notConnected": "Nicht verbunden",
       "moveUp": "Nach oben",
       "moveDown": "Nach unten",
-      "remove": "Aus dieser Route entfernen",
-      "useSource": "{{name}} in dieser Route verwenden",
+      "remove": "Aus diesem Modus entfernen",
+      "useSource": "{{name}} in diesem Modus verwenden",
       "try": {
         "title": "Ausprobieren",
         "hint": "Sieh nach, welche Quelle eine neue Aufgabe jetzt verwenden würde. Es wird nichts gesendet und kein Kontingent verbraucht.",
@@ -21529,11 +21537,11 @@
         "picked": "Diese verwenden",
         "standby": "Reserve",
         "skipped": "Übersprungen",
-        "unavailable": "Keine Quelle dieser Route ist gerade nutzbar. Eine neue Aufgabe verwendet das Modell, das du ausgewählt hattest."
+        "unavailable": "Keine Quelle dieses Modus ist gerade nutzbar. Eine neue Aufgabe verwendet das Modell, das du ausgewählt hattest."
       },
-      "deleteRoute": "Diese Route löschen",
+      "deleteRoute": "Diesen Modus löschen",
       "deleteRouteConfirmTitle": "„{{name}}“ löschen?",
-      "deleteRouteConfirmDescription": "Tageszeit-Ausnahmen anderer Routen, die zu ihr wechseln, werden ebenfalls gelöscht. Bereits gestartete Aufgaben sind nicht betroffen.",
+      "deleteRouteConfirmDescription": "Tageszeit-Ausnahmen anderer Modi, die zu ihm wechseln, werden ebenfalls gelöscht. Bereits gestartete Aufgaben sind nicht betroffen.",
       "delete": "Löschen",
       "cancel": "Abbrechen",
       "saveFailed": "Speichern fehlgeschlagen. Versuche es erneut.",
@@ -21554,17 +21562,17 @@
         "addHours": "Hinzufügen",
         "sameHour": "Beginn und Ende dürfen nicht gleich sein.",
         "full": "Bis zu {{count}} Ausnahmen.",
-        "needOtherRoute": "Erstelle eine weitere Route, um nach Tageszeit dorthin zu wechseln."
+        "needOtherRoute": "Erstelle einen weiteren Modus, um nach Tageszeit dorthin zu wechseln."
       }
     },
     "overview": {
       "mapTitle": "So wählen neue Aufgaben ein Modell",
-      "mapDescription": "Von links nach rechts: die Route und die Quelle, bei der es landet. Klicke auf eine Route, um sie zu ändern.",
+      "mapDescription": "Von links nach rechts: der Modus und die Quelle, bei der es landet. Klicke auf einen Modus, um ihn zu ändern.",
       "columnSources": "Quellen",
       "columnEmpty": "Noch keine",
-      "openRoute": "Route „{{name}}“ öffnen",
+      "openRoute": "Modus „{{name}}“ öffnen",
       "recentTitle": "Letzte Auswahl",
-      "recentEmpty": "Noch keine Aufgabe hat eine Route verwendet.",
+      "recentEmpty": "Noch keine Aufgabe hat einen Modus verwendet.",
       "keptOriginal": "Darin war kein Modell verfügbar, daher blieb die Aufgabe beim Modell, das du gewählt hattest.",
       "keptOriginalShort": "Dein Modell wurde beibehalten",
       "latest": "Der Weg der letzten Aufgabe"

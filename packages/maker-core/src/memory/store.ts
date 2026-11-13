@@ -18,6 +18,7 @@
  */
 
 import type Database from 'better-sqlite3';
+import { createHash } from 'node:crypto';
 
 import { MemoryFts } from './fts.js';
 import { MemoryStorage, sanitizeWorkdir, buildFilename, parseFilename } from './storage.js';
@@ -44,6 +45,8 @@ export interface MakerMemoryStoreDeps {
   logger: Logger;
   /** 配置覆盖, 缺省走 DEFAULT_MEMORY_CONFIG */
   config?: Partial<MemoryConfig>;
+  /** The Markdown files are also edited through native file tools. */
+  nativeFileEdits?: boolean;
   /**
    * 每次 mutation (write/delete/consolidate/resetType/resetAll) 执行前的 owner
    * scope 守卫 (review #2388 Codex 5th P1): 裸 store 经 getStore 返回后可能被
@@ -78,6 +81,7 @@ export class MakerMemoryStore {
   private readonly fts: MemoryFts;
   private readonly logger: Logger;
   private initialized = false;
+  private searchFingerprint = '';
 
   constructor(private readonly deps: MakerMemoryStoreDeps) {
     const config = { ...DEFAULT_MEMORY_CONFIG, ...(deps.config ?? {}) };
@@ -174,6 +178,7 @@ export class MakerMemoryStore {
   async write(opts: WriteOptions): Promise<WriteResult> {
     this.assertScopeOk();
     await this.init();
+    this.searchFingerprint = '';
     return this.syncWrite(await this.storage.write(opts));
   }
 
@@ -185,6 +190,7 @@ export class MakerMemoryStore {
   ): Promise<MemoryRecord> {
     this.assertScopeOk();
     await this.init();
+    this.searchFingerprint = '';
     const saved = await this.storage.update(filename, expectedUpdatedAt, changes);
     await this.syncWrite({ ok: true, filename });
     return saved;
@@ -200,6 +206,9 @@ export class MakerMemoryStore {
       // reread await 后、upsert 前复核 (review #2388 Codex 16th P1): 边界
       // 不得让 FTS 写入旧 owner 的 fts.db; not-ready 透传 (fail-closed)。
       this.assertScopeOk();
+      // The fingerprint witnesses a search-time rebuild, not later store mutations. A native
+      // restore may return files to those exact bytes while FTS now holds different contents.
+      this.searchFingerprint = '';
       this.fts.upsert(rec);
     } catch (e) {
       if (e instanceof MemoryError && e.code === 'not-ready') throw e;
@@ -214,9 +223,11 @@ export class MakerMemoryStore {
   async delete(filename: string, expectedUpdatedAt?: string): Promise<void> {
     this.assertScopeOk();
     await this.init();
+    this.searchFingerprint = '';
     await this.storage.delete(filename, expectedUpdatedAt);
     // storage await 后、FTS 同步前复核 (review #2388 Codex 15th P1)
     this.assertScopeOk();
+    this.searchFingerprint = '';
     try {
       this.fts.delete(filename);
     } catch (e) {
@@ -245,6 +256,17 @@ export class MakerMemoryStore {
     // 边界不得把旧 owner 的 FTS 检索结果返回给新会话。
     this.assertScopeOk();
     await this.init();
+    if (this.deps.nativeFileEdits) {
+      // On-demand only, never a background scan. Files are authoritative: include same-name
+      // edits and deletions, which a record-count check would miss. No model/embedding call.
+      const records = await this.storage.list();
+      this.assertScopeOk();
+      const fingerprint = createHash('sha256').update(JSON.stringify(records)).digest('hex');
+      if (fingerprint !== this.searchFingerprint) {
+        this.fts.rebuild(records);
+        this.searchFingerprint = fingerprint;
+      }
+    }
     const hits = await this.fts.search(query, opts);
     this.assertScopeOk();
     return hits;
@@ -260,6 +282,7 @@ export class MakerMemoryStore {
   async consolidate(opts: ConsolidateOptions): Promise<ConsolidateResult> {
     this.assertScopeOk();
     await this.init();
+    this.searchFingerprint = '';
     // 防呆: 不允许把 target 写到正要被删的 source 里 (否则会自删)
     const targetFilename = buildFilename(opts.target.type, opts.target.name);
     const sourcesToDelete = opts.sources.filter((s) => s !== targetFilename);
@@ -307,6 +330,7 @@ export class MakerMemoryStore {
       // list await 后、rebuild 前复核 (review #2388 Codex 17th P1): list 在途时
       // 边界可能发生; not-ready 透传, FTS 不得写入旧 owner fts.db。
       this.assertScopeOk();
+      this.searchFingerprint = '';
       this.fts.rebuild(all);
     } catch (e) {
       if (e instanceof MemoryError && e.code === 'not-ready') throw e;
@@ -336,6 +360,7 @@ export class MakerMemoryStore {
   async resetAll(): Promise<{ removedCount: number }> {
     this.assertScopeOk();
     await this.init();
+    this.searchFingerprint = '';
     const all = await this.storage.list();
     // list 是 await 窗口 — 逐项删除前必须逐次复核 (review #2388 Greptile 8th P1):
     // 边界在 list 期间发生则删除不得继续作用于旧 owner 文件。
@@ -355,6 +380,7 @@ export class MakerMemoryStore {
     // 最终 FTS 重建前复核 (review #2388 Codex 19th P1): 删除循环后仍可能跨
     // 边界, 不得在旧 owner 的 fts.db 上 rebuild; not-ready 透传 fail-closed。
     this.assertScopeOk();
+    this.searchFingerprint = '';
     try { this.fts.rebuild([]); } catch { /* swallow */ }
     return { removedCount: all.length };
   }

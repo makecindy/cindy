@@ -6694,7 +6694,7 @@
         "sectionTitle": "實驗性 Agent 網路",
         "switch": {
           "title": "Agent-Net (Beta)",
-          "hint": "顯示連線拓撲與最近活動。雙方都開啟並完成 Agent-Net 配對時使用加密連線，其他裝置沿用原有連線。只影響這臺電腦。"
+          "hint": "實驗功能，暫時不建議使用。顯示連線拓撲與最近活動。雙方都開啟並完成 Agent-Net 配對時使用加密連線，其他裝置沿用原有連線。只影響這臺電腦。"
         },
         "empty": "還沒有其它裝置。在另一台電腦或手機登入同一帳號，它就會出現在這裡。",
         "stats": {
@@ -6960,7 +6960,11 @@
         "remoteSessionEnded": "遠端裝置已結束該遠端任務"
       },
       "control": "控制",
-      "standbyHint": "本機另一個 Cindy 執行個體正在使用遠端連線。關閉它後，此執行個體會自動接管。"
+      "standbyHint": "本機另一個 Cindy 執行個體正在使用遠端連線。關閉它後，此執行個體會自動接管。",
+      "apps": {
+        "cindy": "Cindy",
+        "cindyFriend": "Cindy Friend"
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -7863,6 +7867,7 @@
         "install": "安裝",
         "details": "詳情",
         "detailsAria": "檢視 {{name}} 的詳情",
+        "loadingDetails": "正在載入詳情…",
         "update": "從市場更新",
         "updateTo": "更新到 v{{version}}",
         "installed": "已安裝",
@@ -11343,6 +11348,7 @@
         "memberLimit": "一個群聊需要 2–6 位夥伴",
         "memberUnavailable": "有夥伴現在無法使用，換一位再試",
         "mentionUnavailable": "點名的成員已無法使用，請重新選擇後傳送",
+        "mentionAmbiguous": "有多位成員叫「{{name}}」，請從 @ 清單選擇要找的那位",
         "notFound": "這個群聊已不存在",
         "hostNotReady": "Cindy 還在準備中，請稍後重試",
         "planOpen": "正在分工，做完或停止後才能安排新的",
@@ -21368,8 +21374,8 @@
   "modelGroups": {
     "title": "模型組",
     "description": "把模型供應商裡已有的幾個來源合成一個可選項。選模型時在「模型組」裡選它，由 Cindy 決定這次用哪個來源。",
-    "routes": "路線",
-    "routesDescription": "一條路線裡放幾個來源，開新任務時按選法挑一個。",
+    "routes": "模式",
+    "routesDescription": "一個模式裡放幾個來源，開新任務時按選法挑一個。",
     "sourceCount_other": "{{count}} 個來源",
     "strategy": {
       "expiring": {
@@ -21390,8 +21396,10 @@
       }
     },
     "picker": {
-      "empty": "還沒有模型組。在設定裡把幾個來源合成一條路線，就能在這裡選它。",
-      "manage": "管理模型組"
+      "empty": "還沒有模型組。在設定裡把幾個來源合成一個模式，就能在這裡選它。",
+      "manage": "管理模型組",
+      "switched": "「{{name}}」把這個任務換成了 {{model}}",
+      "switchUnavailable": "「{{name}}」裡現在沒有能給這個任務用的來源，模型沒換。"
     },
     "why": {
       "expiringQuota": "還剩 {{left}}% 配額，{{reset}} 重設，先用它",
@@ -21403,7 +21411,7 @@
       "soonestUntil": "所有來源的配額都用完了，它最早恢復（{{reset}}）",
       "standby": "這次沒輪到",
       "standbyQuota": "還剩 {{left}}% 配額，{{reset}} 才重設，先留著",
-      "off": "已在這條路線裡停用",
+      "off": "已在這個模式裡停用",
       "unavailable": "沒有連線，或這個模型現在不可選",
       "limited": "配額用完了",
       "limitedUntil": "配額用完了，{{reset}} 恢復",
@@ -21417,10 +21425,10 @@
       "separator": "；"
     },
     "settings": {
-      "newRoute": "新增路線",
-      "newRouteName": "新路線",
-      "routesEmpty": "還沒有路線。新增一條，把幾個來源放進去。",
-      "scopeNote": "模型組用於在這台電腦上開的新任務：開始時選定一個來源，任務進行中不會換。",
+      "newRoute": "新增模式",
+      "newRouteName": "新模式",
+      "routesEmpty": "還沒有模式。新增一個，把幾個來源放進去。",
+      "scopeNote": "模型組用於這台電腦上的任務：開新任務時選定一個來源；在進行中的任務裡選它，會當場換一次，之後不會自己換。",
       "back": "返回模型組",
       "name": "名字",
       "nameHint": "選模型時顯示這個名字。",
@@ -21432,14 +21440,14 @@
       "sources": "可以用的來源",
       "sourcesHint": "可以放不同的模型；實際用了哪個會寫在任務裡。",
       "sourcesEmpty": "還沒有來源。從下面加入已經連線的模型。",
-      "sourcesFull": "一條路線最多 {{count}} 個來源。",
+      "sourcesFull": "一個模式最多 {{count}} 個來源。",
       "addSource": "新增來源",
       "chooseModel": "選一個模型",
       "notConnected": "沒有連線",
       "moveUp": "上移",
       "moveDown": "下移",
-      "remove": "移出這條路線",
-      "useSource": "讓這條路線使用 {{name}}",
+      "remove": "移出這個模式",
+      "useSource": "讓這個模式使用 {{name}}",
       "try": {
         "title": "試一下",
         "hint": "看看現在開新任務會用誰。不傳訊息，不花配額。",
@@ -21447,11 +21455,11 @@
         "picked": "用它",
         "standby": "備用",
         "skipped": "跳過",
-        "unavailable": "這條路線裡現在沒有能用的來源，新任務會用你原來選的模型。"
+        "unavailable": "這個模式裡現在沒有能用的來源，新任務會用你原來選的模型。"
       },
-      "deleteRoute": "刪除這條路線",
+      "deleteRoute": "刪除這個模式",
       "deleteRouteConfirmTitle": "刪除「{{name}}」？",
-      "deleteRouteConfirmDescription": "別的路線裡改走它的時段例外會一起刪除。已經開始的任務不受影響。",
+      "deleteRouteConfirmDescription": "別的模式裡改走它的時段例外會一起刪除。已經開始的任務不受影響。",
       "delete": "刪除",
       "cancel": "取消",
       "saveFailed": "沒有儲存成功，請重試。",
@@ -21472,17 +21480,17 @@
         "addHours": "新增",
         "sameHour": "開始和結束不能是同一個時刻。",
         "full": "最多 {{count}} 條例外。",
-        "needOtherRoute": "再建一條路線，才能按時段改走它。"
+        "needOtherRoute": "再建一個模式，才能按時段改走它。"
       }
     },
     "overview": {
       "mapTitle": "現在怎麼走",
-      "mapDescription": "從左到右：走哪條路線，最後落到哪個來源。點路線可以修改。",
+      "mapDescription": "從左到右：走哪個模式，最後落到哪個來源。點模式可以修改。",
       "columnSources": "來源",
       "columnEmpty": "還沒有",
-      "openRoute": "開啟路線「{{name}}」",
+      "openRoute": "開啟模式「{{name}}」",
       "recentTitle": "最近的選擇",
-      "recentEmpty": "還沒有任務用過路線。",
+      "recentEmpty": "還沒有任務用過模式。",
       "keptOriginal": "裡面沒有現在能用的模型，沿用了原來選的模型。",
       "keptOriginalShort": "沿用原來的模型",
       "latest": "最近一次任務走的路"

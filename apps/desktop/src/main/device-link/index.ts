@@ -18,6 +18,7 @@ import { PluginSyncAccess } from './pluginSyncAccess.js';
  */
 
 import os from 'node:os';
+import { isCindyApp } from '@cindy/maker-shared/device-list';
 import type { AgentIslandSessionSnapshot } from '../../shared/agentIsland.js';
 import { createTaskActivityPublisher, projectHostTaskActivity } from './taskActivity.js';
 import { serverApiFetch, ServerApiError } from '../serverApiClient.desktop.js';
@@ -49,6 +50,9 @@ import {
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+  CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
+  CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
+  CONTROLLER_CAPABILITY_TOOL_RESULT_LIVE_LIMIT_V1,
   MAKER_EVENT_BATCH_CHANNEL,
   expandMakerEventBatchPayload,
   RETIRED_CONTACTS_SYNC_CHANNEL,
@@ -129,6 +133,7 @@ import {
 import {
   clearControllerPlatforms,
   getControllerPlatform,
+  getControllerApp,
   isMobilePlatform,
   setControllerPlatform,
 } from './controllerPlatform';
@@ -337,15 +342,19 @@ export function applyControllerPresenceListSnapshot(
     forgetOnline: (deviceId) => { if (!hasOfflineDirectPath(deviceId)) presenceOnlineByDevice.delete(deviceId); },
     setPlatform: setControllerPlatform,
     setName: (deviceId, name) => presenceNameByDevice.set(deviceId, name),
-    shouldNotifyPeerOnline: ({ deviceId, online, platform }) =>
-      online &&
-      !isDeviceRevoked(deviceId) &&
-      (isMobilePlatform(platform) ||
-        shouldExchangeDictionaryWith({
-          online,
-          platform,
-          revoked: false,
-        })),
+    shouldNotifyPeerOnline: ({ deviceId, online, platform, app }) => {
+      const controllerApp = app ?? getControllerApp(deviceId);
+      return online &&
+        isCindyApp(controllerApp) &&
+        !isDeviceRevoked(deviceId) &&
+        (isMobilePlatform(platform) ||
+          shouldExchangeDictionaryWith({
+            online,
+            platform,
+            app: controllerApp,
+            revoked: false,
+          }));
+    },
     onPeerControlEnabled: (deviceId) => {
       client?.noteRemoteControlEnabled(deviceId);
       presenceOnlineByDevice.set(deviceId, true);
@@ -632,6 +641,15 @@ const CONTROLLER_CAPABILITIES = [
   // 手机(review P1)。拆包在 main 完成(见 onFrame 的批分支),renderer 的既有
   // maker:event 订阅者零改动。
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+  // renderer 只用 resolvedContent 显示工具结果(makerChatStore tool_result / tool_result_full),
+  // 事件里的 data.fullText / summary 是同一正文的重复副本,被控端对声明者省掉。
+  CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
+  // 订阅重放后重读仍在显示的远程任务的最新页(useRemoteSessionSync);被控端因此把重连前
+  // 已读且折叠的任务保持折叠到重读完成,离线积压不留历史详情。
+  CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
+  // 展开运行中的组时，超过 256 KB 的普通工具结果只收开头加截断标记(用户能看出的变化，
+  // 结束后本来也只剩落库的 8 KB)。卡片、媒体、过程媒体、MCP App 与非详情工具照旧收全文。
+  CONTROLLER_CAPABILITY_TOOL_RESULT_LIVE_LIMIT_V1,
   // 供应商分享：受邀者连分享者电脑时声明，分享者只接受声明了它的控制端。
   PROVIDER_SHARE_RELAY_CAPABILITY,
 ] as const;
@@ -715,6 +733,7 @@ function isDeviceRevoked(deviceId: string): boolean {
 
 const remoteControlConsent = new RemoteControlConsent({
   scope: activeOwnerScopeKey,
+  app: getControllerApp,
   eligible: peer => !!client && client.getStatus() === 'online' && !isAppSessionBoundaryPending() &&
     !isScopedPeer(peer) && peer !== client.getSelfDeviceId() && !isDeviceRevoked(peer) && !revokedByRemote.has(peer) &&
     presenceOnlineByDevice.get(peer) === true && !isMobilePlatform(getControllerPlatform(peer)),
@@ -937,6 +956,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     capabilities: [SHARED_TASK_CAPABILITY, PROVIDER_SHARE_RELAY_CAPABILITY, PROVIDER_SHARE_AVAILABILITY_CAPABILITY],
     deviceName: deviceName(),
     platform: process.platform,
+    app: 'cindy',
     appVersion: app.getVersion(),
     remoteControlEnabled: readDeviceLinkSettings().remoteControlEnabled,
     deviceInfo: buildDeviceInfo(),
@@ -1257,7 +1277,8 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     transportTimeoutReopen.trigger(deviceId);
     return true;
   });
-  client.onPresenceChanged((snap: PresenceSnapshot) => {
+  client.onPresenceChanged((received: PresenceSnapshot) => {
+    const snap = { ...received, app: received.app ?? getControllerApp(received.deviceId) };
     markControllerPresenceFresh(controllerPresenceFreshness, snap.deviceId);
     if (snap.online === true && snap.remoteControlEnabled === false) {
       presenceControlDisabledByDevice.add(snap.deviceId);
@@ -1279,7 +1300,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // presence 不可用又让探测永久不合格,「无响应」会一直遮蔽真实离线/禁用态
     // (review P2)。翻转判据统一为「观察到进入某状态(含从未知)即触发一次」。
     if (!available && wasAvailable !== false) responsivenessTracker?.clearDevice(snap.deviceId);
-    setControllerPlatform(snap.deviceId, snap.platform);
+    setControllerPlatform(snap.deviceId, snap.platform, snap.app);
     applyControllerDisplayNamePresence({
       deviceId: snap.deviceId,
       name: snap.deviceName,
@@ -1317,6 +1338,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       shouldExchangeDictionaryWith({
         online: snap.online,
         platform: snap.platform,
+        app: snap.app,
         revoked: isDeviceRevoked(snap.deviceId),
       })
     ) {
@@ -1327,6 +1349,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     if (
       wasOnline !== true &&
       snap.online &&
+      isCindyApp(snap.app) &&
       isMobilePlatform(snap.platform) &&
       !isDeviceRevoked(snap.deviceId)
     ) {
@@ -1437,6 +1460,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
         shouldExchangeDictionaryWith({
           online: true,
           platform: getControllerPlatform(env.src),
+          app: getControllerApp(env.src),
           revoked: isDeviceRevoked(env.src),
         })
       ) {
@@ -1487,6 +1511,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
           shouldExchangeDictionaryWith({
             online,
             platform: getControllerPlatform(deviceId),
+            app: getControllerApp(deviceId),
             revoked: isDeviceRevoked(deviceId),
           }),
         )
@@ -1499,6 +1524,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
         .filter(
           ([deviceId, online]) =>
             online &&
+            isCindyApp(getControllerApp(deviceId)) &&
             isMobilePlatform(getControllerPlatform(deviceId)) &&
             !isDeviceRevoked(deviceId),
         )

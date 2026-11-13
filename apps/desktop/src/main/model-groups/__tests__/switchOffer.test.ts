@@ -80,7 +80,6 @@ function deps(overrides: {
   const pickedKey = overrides.pickedKey === undefined ? CURRENT : overrides.pickedKey;
   return {
     readBinding: vi.fn(() => (pickedKey ? { selection: { type: 'route' as const, id: 'r1' }, pickedKey, at: 1 } : null)),
-    clearBinding: vi.fn(),
     readSession: vi.fn(async () => ({ ...ROW, ...overrides.row })),
     isShared: () => overrides.shared === true,
     hasGoal: async () => overrides.goal === true,
@@ -134,10 +133,9 @@ describe('computeModelGroupSwitchOffer', () => {
     ['an SSH task', { row: { remoteHostId: 'host-1' } }],
     ['an Agent running on another computer', { row: { agentDeviceId: 'dev-2' } }],
     ['a collaboration lead', { row: { orcaRole: 'lead' } }],
-  ] as const)('offers nothing for %s and keeps the record', async (_name, input) => {
+  ] as const)('offers nothing for %s', async (_name, input) => {
     const d = deps(input as Parameters<typeof deps>[0]);
     expect(await computeModelGroupSwitchOffer(d, 's1')).toBeNull();
-    expect(d.clearBinding).not.toHaveBeenCalled();
   });
 
   it('offers nothing without a record and does not read the task', async () => {
@@ -146,11 +144,12 @@ describe('computeModelGroupSwitchOffer', () => {
     expect(d.readSession).not.toHaveBeenCalled();
   });
 
-  it('drops the record once the task model was changed some other way', async () => {
-    const d = deps({ row: { providerId: 'acct-b' } });
-    expect(await computeModelGroupSwitchOffer(d, 's1')).toBeNull();
-    expect(d.clearBinding).toHaveBeenCalledWith('s1');
-    expect(d.candidateFacts).not.toHaveBeenCalled();
+  it('offers nothing while the task is on another model, and offers again once it is on the recorded one', async () => {
+    // 跨引擎的换模型只登记了「下一条消息再换」时，任务行还是旧模型；记录不能因此丢掉。
+    const elsewhere = deps({ row: { providerId: 'acct-b' } });
+    expect(await computeModelGroupSwitchOffer(elsewhere, 's1')).toBeNull();
+    expect(elsewhere.candidateFacts).not.toHaveBeenCalled();
+    expect(await computeModelGroupSwitchOffer(deps(), 's1')).not.toBeNull();
   });
 });
 

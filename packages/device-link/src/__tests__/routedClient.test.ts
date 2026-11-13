@@ -83,6 +83,40 @@ async function onlineSelfHosted() {
 describe('RoutedDeviceLinkClient', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
+  // PR #9937: Host history bases subscribe to the routed facade, not its inner
+  // clients. Existing routing tests did not observe inbound release events.
+  // Minimal regression: kick an old controller on the compatibility connection.
+  // Unit, fake sockets; also cover primary, cross-account, late resource pins,
+  // timeout retention and observer disposal without touching another peer.
+  it('forwards inbound releases from every connection and disposes late subscriptions', async () => {
+    const sockets: FakeWs[] = [];
+    const options = (url: string): DeviceLinkClientOptions => ({
+      getWsUrl: () => url, getToken: async () => 'unit-token',
+      getHello: () => ({ deviceName: 'unit', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false }),
+      createWebSocket: (address, headers) => { const socket = new FakeWs(address, headers); sockets.push(socket); return socket; },
+    });
+    const client = new RoutedDeviceLinkClient(options(RELAY), { active: () => true, options: options(OFFICIAL) },
+      { active: () => true, useForPeer: peer => peer === 'old-device', options: options('ws://legacy') });
+    const released: string[] = [];
+    const off = client.onInboundPeerReleased(peer => released.push(peer));
+    const retire = client.registerScopedConnection({ kind: 'shared-task', resourceId: 'pinned' }, options('ws://pinned'));
+    const pinned = sharedTaskHostPeer('pinned', 'host-device');
+    client.start(); await vi.advanceTimersByTimeAsync(1);
+    for (const socket of sockets) socket.ack([SHARED_TASK_RELAY_CAPABILITY]);
+    await vi.advanceTimersByTimeAsync(1);
+    const peers = ['primary-device', 'old-device', SHARED_PEER, pinned];
+    for (const peer of peers) {
+      client.closeLink(peer, 'transport-timeout', 'inbound');
+      client.closeLink(peer, 'user');
+    }
+    expect(released).toEqual([]);
+    for (const peer of peers) client.closeLink(peer, 'revoked', 'inbound');
+    expect(released).toEqual(peers);
+    off();
+    for (const peer of peers) client.closeLink(peer, 'revoked', 'inbound');
+    expect(released).toEqual(peers);
+    retire(); client.stop();
+  });
   // Official V2 must not open two V1 sockets with the same physical identity:
   // they would continuously evict each other. Existing tests use distinct origins.
   // Unit, fake socket; observable routing includes old and new scoped resources.

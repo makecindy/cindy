@@ -635,6 +635,451 @@ describe('translateResponsesRequest', () => {
     ]);
   });
 
+  it('promotes an additional_tools input item into the catalog instead of failing (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [
+            {
+              type: 'namespace',
+              name: 'clock',
+              tools: [{ type: 'function', name: 'now', parameters: { type: 'object', properties: {} } }],
+            },
+          ],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+    }));
+
+    expect(out.messages).toEqual([{ role: 'user', content: 'hello' }]);
+    expect(out.tools?.map(tool => (tool as { function: { name: string } }).function.name)).toEqual(['clock__now']);
+  });
+
+  it('ignores an additional_tools item in the middle of replayed history (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'message', role: 'user', content: 'start' },
+        { type: 'additional_tools', role: 'developer', tools: [] },
+        { type: 'message', role: 'user', content: 'again' },
+      ],
+    }));
+
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'start' },
+      { role: 'user', content: 'again' },
+    ]);
+  });
+
+  it('catalogs only the newest inline additional_tools group (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{ type: 'function', name: 'stale_tool', parameters: { type: 'object' } }],
+        },
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{ type: 'function', name: 'fresh_tool', parameters: { type: 'object' } }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+    }));
+
+    expect(out.tools?.map(tool => (tool as { function: { name: string } }).function.name))
+      .toEqual(['fresh_tool']);
+  });
+
+  it('resolves a bare tool_choice selector against an inline namespace group (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{
+            type: 'namespace',
+            name: 'clock',
+            tools: [{ type: 'function', name: 'now', parameters: { type: 'object' } }],
+          }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'function', name: 'now' },
+    }));
+
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'clock__now' } });
+  });
+
+  it('leaves an ambiguous bare tool_choice selector unqualified (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [
+            { type: 'namespace', name: 'clock', tools: [{ type: 'function', name: 'now', parameters: { type: 'object' } }] },
+            { type: 'namespace', name: 'timer', tools: [{ type: 'function', name: 'now', parameters: { type: 'object' } }] },
+          ],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'function', name: 'now' },
+    }));
+
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'now' } });
+  });
+
+  it('keeps an inline web_search fail-closed when the choice requires search (#9715)', () => {
+    expect(() => translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{ type: 'web_search' }],
+        },
+        { type: 'message', role: 'user', content: 'search the web' },
+      ],
+      tool_choice: 'required',
+    }))).toThrow('tool_choice.web_search');
+  });
+
+  it('rejects a malformed additional_tools wrapper instead of dropping it (#9715)', () => {
+    expect(() => translateResponsesRequest(base({
+      input: [
+        { type: 'additional_tools', role: 'developer' },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: 'required',
+    }))).toThrow('input[0].tools');
+  });
+
+  it('catalogues the reserved functions group as bare tools (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{
+            type: 'namespace',
+            name: 'functions',
+            tools: [{ type: 'function', name: 'read', parameters: { type: 'object' } }],
+          }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'function', name: 'read' },
+    }));
+
+    expect(out.tools?.map(tool => (tool as { function: { name: string } }).function.name)).toEqual(['read']);
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'read' } });
+  });
+
+  it('rejects a tool_choice with a non-string namespace (#9715)', () => {
+    expect(() => translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{
+            type: 'namespace',
+            name: 'clock',
+            tools: [{ type: 'function', name: 'now', parameters: { type: 'object' } }],
+          }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'function', name: 'now', namespace: 1 },
+    }))).toThrow('tool_choice.namespace');
+  });
+
+  it('does not resolve a bare tool_choice against replayed-only history (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'custom_tool_call', call_id: 'call_1', name: 'run', namespace: 'old', input: '{}' },
+        { type: 'custom_tool_call_output', call_id: 'call_1', output: 'done' },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'custom', name: 'run' },
+    }));
+
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'run' } });
+  });
+
+  it('resolves a fully qualified reserved functions selector to the bare Chat tool (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{
+            type: 'namespace',
+            name: 'functions',
+            tools: [{ type: 'function', name: 'read', parameters: { type: 'object' } }],
+          }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'function', name: 'read', namespace: 'functions' },
+    }));
+
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'read' } });
+  });
+
+  it('skips malformed inline declarations instead of throwing (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [
+            { type: 'function', name: 1 },
+            { type: 'namespace', name: 'clock', tools: [{ type: 'function', name: 'now' }] },
+          ],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+    }));
+
+    expect(out.tools?.map(tool => (tool as { function: { name: string } }).function.name)).toEqual(['clock__now']);
+  });
+
+  it('resolves a dotted namespace selector for a non-bare child (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{
+            type: 'namespace',
+            name: 'clock',
+            tools: [{ type: 'function', name: 'exec', parameters: { type: 'object' } }],
+          }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'function', name: 'clock.exec' },
+    }));
+
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'clock__exec' } });
+  });
+
+  it('drops a non-string inline function description (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{ type: 'function', name: 'lookup', description: 1, parameters: { type: 'object' } }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+    }));
+
+    expect(out.tools?.map(tool => (tool as { function: { name: string } }).function.name)).toEqual(['lookup']);
+  });
+
+  it('keeps an undeclared qualified selector qualified (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      tools: [{ type: 'function', name: 'read', parameters: { type: 'object' } }],
+      input: [{ type: 'message', role: 'user', content: 'hello' }],
+      tool_choice: { type: 'function', name: 'read', namespace: 'missing' },
+    }));
+
+    // Dropping to the bare name would force a tool the selector never named.
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'missing__read' } });
+  });
+
+  it('resolves a qualified selector for a tool loaded by tool_search_output (#9715)', () => {
+    const { request } = translateResponsesRequestWithContext(base({
+      input: [
+        {
+          type: 'tool_search_output',
+          tools: [{ type: 'namespace', name: 'clock', tools: [{ type: 'function', name: 'now', parameters: { type: 'object' } }] }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'function', name: 'now', namespace: 'clock' },
+    }));
+
+    expect(request.tool_choice).toEqual({ type: 'function', function: { name: 'clock__now' } });
+  });
+
+  it('does not let a functions selector borrow another namespace child (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{ type: 'namespace', name: 'clock', tools: [{ type: 'function', name: 'read', parameters: { type: 'object' } }] }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'function', name: 'read', namespace: 'functions' },
+    }));
+
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'read' } });
+  });
+
+  it('does not honour a bare selector whose kind contradicts the declaration (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{ type: 'function', name: 'read', parameters: { type: 'object' } }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'custom', name: 'read' },
+    }));
+
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'read' } });
+  });
+
+  it('keeps the namespace when a qualified selector has the wrong kind (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{ type: 'namespace', name: 'clock', tools: [{ type: 'function', name: 'now', parameters: { type: 'object' } }] }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'custom', name: 'now', namespace: 'clock' },
+    }));
+
+    // The declared kind is function; a custom selector must not be flattened onto it, and a
+    // qualified miss keeps the namespace so the provider rejects the undeclared selector.
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'clock__now' } });
+  });
+
+  it('leaves a selector ambiguous when a bare and a namespaced tool share the name (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [
+            { type: 'function', name: 'now', parameters: { type: 'object' } },
+            { type: 'namespace', name: 'clock', tools: [{ type: 'function', name: 'now', parameters: { type: 'object' } }] },
+          ],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'function', name: 'now' },
+    }));
+
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'now' } });
+  });
+
+  it('tolerates a non-string custom description instead of throwing (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{ type: 'custom', name: 'writer', description: 1 }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+    }));
+
+    expect(out.tools?.map(tool => (tool as { function: { name: string } }).function.name)).toEqual(['writer']);
+  });
+
+  it('sanitizes dotted inline tool names for the Chat wire (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{ type: 'namespace', name: 'mcp.server', tools: [{ type: 'function', name: 'read.file', parameters: { type: 'object' } }] }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+    }));
+
+    const names = (out.tools ?? []).map((tool) => (tool as { function: { name: string } }).function.name);
+    expect(names).toHaveLength(1);
+    // Dots are legal in Responses identities but not in a Chat function name.
+    expect(names[0]).not.toContain('.');
+    expect(names[0]).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+
+  it('keeps a qualified loaded web_search function when the built-in is dropped (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      tools: [{ type: 'web_search' }],
+      input: [
+        {
+          type: 'tool_search_output',
+          tools: [{ type: 'namespace', name: 'search', tools: [{ type: 'function', name: 'web_search', parameters: { type: 'object' } }] }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'function', name: 'web_search', namespace: 'search' },
+    }));
+
+    // The qualified loaded tool is advertised as search__web_search and must count as retained.
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'search__web_search' } });
+  });
+
+  it('keeps a tool_search-loaded web_search function when the built-in is dropped (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      tools: [{ type: 'web_search' }],
+      input: [
+        {
+          type: 'tool_search_output',
+          tools: [{ type: 'function', name: 'web_search', parameters: { type: 'object' } }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'function', name: 'web_search' },
+    }));
+
+    // The loaded function keeps the bare name, so it must still count as retained.
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'web_search' } });
+  });
+
+  it('keeps a namespaced web_search function when search itself is dropped (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      tools: [{ type: 'web_search' }],
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{ type: 'namespace', name: 'search', tools: [{ type: 'function', name: 'web_search' }] }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'function', name: 'web_search' },
+    }));
+
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'search__web_search' } });
+  });
+
+  it('keeps current inline metadata when history replays the same custom tool (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'custom_tool_call', call_id: 'call_1', name: 'patch', input: '{}' },
+        { type: 'custom_tool_call_output', call_id: 'call_1', output: 'done' },
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{ type: 'custom', name: 'patch', description: 'Apply a unified diff.' }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+    }));
+
+    const tools = (out.tools ?? []) as Array<{ function?: { name?: string; description?: string } }>;
+    const patched = tools.find(tool => tool.function?.name === 'patch');
+    expect(patched?.function?.description).toContain('Apply a unified diff.');
+  });
+
   it('keeps agent messages after the preceding tool result', () => {
     const out = translateResponsesRequest(base({
       input: [
@@ -1583,3 +2028,4 @@ describe('translateResponsesRequest', () => {
     });
   });
 });
+

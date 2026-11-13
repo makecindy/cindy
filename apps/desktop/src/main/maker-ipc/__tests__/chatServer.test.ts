@@ -1669,9 +1669,14 @@ describe('Chat Server result delivery and refresh', () => {
   // (owner and, where known, description); the reply's @ names go out as the completion's mentions.
   it.each([true, false])('sends the teammates a reply names with @ (server support: %s)', async supported => {
     const luna = '20000000-0000-4000-8000-000000000002';
+    // Incident 2026-11-13 (integration): a companion that shares only the short name of the
+    // group's own Cindy must not be woken by 「@Cindy」; one @ names one identity.
+    const ownerCindy = '20000000-0000-4000-8000-000000000003', groupCindy = '20000000-0000-4000-8000-000000000004';
     const members = [
       { id: botId, kind: 'bot', name: 'Bot', displayName: 'Bot', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'chat', accessRevision: 1, avatar: null },
       { id: luna, kind: 'bot', name: 'Luna', displayName: 'Luna', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'chat', accessRevision: 1, avatar: null },
+      { id: ownerCindy, kind: 'bot', name: 'Cindy', displayName: 'Cindy', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'chat', accessRevision: 1, avatar: null },
+      { id: groupCindy, kind: 'bot', assistant: true, name: 'Cindy', displayName: 'Cindy', nickname: null, state: 'joined', role: 'member', guestAccess: 'none', accessRevision: 1, avatar: null },
       { id: selfId, kind: 'human', name: 'Owner', displayName: 'Owner', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'owner', guestAccess: 'none', accessRevision: 1, avatar: null },
     ];
     fixture.handle.mockImplementation(route => {
@@ -1687,8 +1692,8 @@ describe('Chat Server result delivery and refresh', () => {
     const data = [...prompt.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)].map(match => JSON.parse(match[1])).find(block => block.participants);
     expect(data.participants).toContainEqual({ name: 'Bot (Owner)', kind: 'bot', you: true, owner: 'Owner', description: 'Writes the code' });
     expect(data.participants).toContainEqual({ name: 'Luna (Owner)', kind: 'bot', owner: 'Owner' });
-    await service.settleLaneTurn({ ...terminal, resultText: '@Luna can you review this? @Bot is done.' });
-    if (supported) expect(deliveries()[0][2].mentions).toEqual([luna]);
+    await service.settleLaneTurn({ ...terminal, resultText: '@Luna can you review this? @Bot is done. @Cindy, anything to add?' });
+    if (supported) expect(deliveries()[0][2].mentions).toEqual([luna, groupCindy]);
     else expect(deliveries()[0][2]).not.toHaveProperty('mentions');
   });
 
@@ -2770,17 +2775,50 @@ describe('Chat Server result delivery and refresh', () => {
   // bot-group-chat.md §3: a companion may answer in several Threads at once;
   // each execution keeps its identity so the UI can stop/open the exact task.
   it('shows a companion running in two Threads as two execution speakers', async () => {
+    const otherSource = '70000000-0000-4000-8000-000000000099';
+    const root = '70000000-0000-4000-8000-000000000098';
     fixture.handle.mockImplementation(route => {
+      if (route.endsWith(`/messages/${execution.source_message_id}`)) return { body: { id: execution.source_message_id, content: [], threadRootId: null } };
+      if (route.endsWith(`/messages/${otherSource}`)) return { body: { id: otherSource, content: [], threadRootId: root } };
       if (route.endsWith('/executions')) return { body: [{ ...execution, status: 'running' },
-        { ...execution, id: '50000000-0000-4000-8000-000000000099', status: 'running' }] };
+        { ...execution, id: '50000000-0000-4000-8000-000000000099', source_message_id: otherSource, status: 'running' }] };
       return response(route);
     });
     const result = await service.getGroup(roomId);
     expect(result).toMatchObject({ ok: true, group: { round: { status: 'running', speakers: [
-      { activity: 'reply', executionId: execution.id, executionStatus: 'running' },
-      { activity: 'reply', executionId: '50000000-0000-4000-8000-000000000099', executionStatus: 'running' },
+      { activity: 'reply', executionId: execution.id, executionStatus: 'running', sourceMessageId: execution.source_message_id, threadRootId: null },
+      { activity: 'reply', executionId: '50000000-0000-4000-8000-000000000099', executionStatus: 'running', sourceMessageId: otherSource, threadRootId: root },
     ] } } });
     expect(result.ok && result.group.round.speakers).toHaveLength(2);
+  });
+
+  // Unit: missing source messages must be read once per detail, even with concurrent executions.
+  it('deduplicates missing execution sources without hiding their execution identities', async () => {
+    fixture.handle.mockImplementation(route => {
+      if (route.endsWith(`/messages/${execution.source_message_id}`)) return { status: 404, body: { error: { code: 'MESSAGE_NOT_FOUND' } } };
+      if (route.endsWith('/executions')) return { body: [{ ...execution, status: 'running' },
+        { ...execution, id: '50000000-0000-4000-8000-000000000099', status: 'needs_input' }] };
+      return response(route);
+    });
+    const result = await service.getGroup(roomId);
+    expect(result.ok && result.group.round.speakers).toHaveLength(2);
+    expect(result.ok && result.group.round.speakers.every(speaker => speaker.threadRootId === undefined)).toBe(true);
+    expect(fixture.handle.mock.calls.filter(([route]) => route.endsWith(`/messages/${execution.source_message_id}`))).toHaveLength(1);
+  });
+
+  // Unit / #10345: remote and queued executions need history anchors without local elapsed starts.
+  it('retains execution enqueue time across queued and remote work status updates', async () => {
+    let status = 'queued';
+    const created_at = '2026-10-02T23:59:00Z';
+    fixture.handle.mockImplementation(route => route.endsWith('/executions')
+      ? { body: [{ ...execution, status, created_at, updated_at: '2026-10-03T01:00:00Z' }] } : response(route));
+    for (status of ['queued', 'running', 'needs_input', 'stopping']) {
+      const result = await service.getGroup(roomId);
+      if (!result.ok) throw new Error(result.errorCode);
+      expect(result.group.round.speakers).toMatchObject([{ executionId: execution.id,
+        timelineAt: Date.parse(created_at), executionStatus: status, sessionId: null }]);
+      expect(result.group.round.speakers[0]?.startedAt).toBeUndefined();
+    }
   });
 
   it.each(['IMAGE_INPUT_UNSUPPORTED', 'RUNTIME_TIMEOUT', 'private token and path'])('projects a failed execution from its visible source with a safe code %s', async code => {
@@ -4672,9 +4710,14 @@ describe('Chat Server result delivery and refresh', () => {
       deps.decidePlan = vi.fn(() => new Promise(resolve => { decide = resolve; })) as typeof deps.decidePlan;
       expect(await send('latency-plan-c')).toMatchObject({ ok: true });
       await vi.advanceTimersByTimeAsync(0);
+      const planningAt = Date.now();
       const deciding = await service.getGroup(roomId);
       expect(deciding).toMatchObject({ ok: true, group: { planningBotId: botId, speakingBotIds: [botId],
-        round: { status: 'running', speakers: [{ botId, sessionId: null, activity: 'planning' }] } } });
+        round: { status: 'running', speakers: [{ botId, sessionId: null, activity: 'planning', timelineAt: planningAt }] } } });
+      // Unit / #10345: refreshing a slow arrangement must not move its timeline position.
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await service.getGroup(roomId)).toMatchObject({ ok: true, group: {
+        round: { speakers: [{ timelineAt: planningAt }] } } });
       decide(null);
       await vi.advanceTimersByTimeAsync(0);
       const decided = await service.getGroup(roomId);
