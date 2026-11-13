@@ -1523,7 +1523,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       content: displayText(m), threadRootId: m.threadRootId, replyCount: m.replyCount ?? 0, reactions: m.reactions ?? [], mentions: { all: false, botIds: [] },
       noticeCode: null, planId: null, files: [], attachments: [], createdAt: Date.parse(m.createdAt) };
     const capabilityNoticeCode = readBotGroupCapabilityNotice(m);
-    const actingName = m.actingFor?.actorId ? spokeFor(m.actingFor.actorId, m.actingFor.name) : '';
     const planCard = m.content.find(b => b.namespace === 'cindy.plan');
     const legacy = m.origin === 'import' ? m.content.find(b => b.namespace === 'cindy.local-history')?.data : undefined;
     const runtimeFailureCode = readImportedBotGroupRuntimeFailureCode(m);
@@ -1539,13 +1538,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     return { id: m.id, maskAttribution: m.maskAttribution, sequence: Number(m.seq), serverSequence: m.seq, deleted: m.deleted, kind: capabilityNoticeCode ? 'notice' : planCard ? 'plan' : 'message', ...(capabilityNoticeCode ? { capabilityNoticeCode } : {}), authorKind: legacy?.authorKind === 'system' ? 'system' : m.author.kind === 'human' ? 'user' : 'bot',
       isSelf: m.authorId === selfId, threadRootId: m.threadRootId, replyCount: m.replyCount ?? 0, reactions: m.reactions ?? [], ...(quote ? { quote } : {}), ...(task ? { task } : {}), ...(process ? { process } : {}),
       // The teammate's owner opens the task itself; other members see the card as last posted.
-      // The group's Cindy opens its card for the person it spoke for, whose computer runs the task.
+      // actingFor identifies the requester for task access, not a personal-mask author.
       ...(liveTask ? { liveTask: { ...liveTask, ...(member?.ownerActorId === selfId || (member && isAssistant(member) && m.actingFor?.actorId === selfId) ? { openable: true } : {}),
         ...(!liveTask.deviceId || liveTask.deviceId === selfDeviceId ? { here: true } : {}) } } : {}),
       authorBotId: localBot(m.authorId)?.id ?? m.authorId, authorName: legacy?.authorKind === 'system' && typeof legacy.authorName === 'string' ? legacy.authorName
-        // The group's Cindy always shows whom it spoke for (「Cindy · 替 某人」), so nobody can pass as it.
-        : member && isAssistant(member) && actingName ? t('bots.groupChat.assistant.actingFor')
-          .replaceAll('{{name}}', () => BOT_GROUP_ASSISTANT_NAME).replaceAll('{{person}}', () => actingName)
         : member ? memberName(member, ownerMembers) : m.author.name, content: displayText(m),
       mentions: { all: m.mentionAudience === 'humans' || m.mentionAudience === 'everyone', ...(m.mentionAudience === 'bots' || m.mentionAudience === 'everyone' ? { allBots: true } : {}), botIds: (m.mentions ?? []).map(actorId => localBot(actorId)?.id ?? actorId) }, noticeCode: null, planId: typeof planCard?.data?.planId === 'string' ? planCard.data.planId : null, files: [], attachments: [], createdAt: Date.parse(m.createdAt) };
   }
@@ -1996,7 +1992,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       createdAt: Date.parse(s.room.created_at), updatedAt: Date.parse(s.room.updated_at ?? s.room.created_at),
       messages, ...(projection ? { historyRevision: projection.generation, messageUpdates } : {}), executionFailures, ...(threadShareUpdates && Object.keys(threadShareUpdates).length ? { threadShareUpdates } : {}),
       ...(shares ? { threadShareVersion: shares.version } : {}), ...(threadList ? { threads: threadList } : {}), hasMoreBefore: page.length === (o.limit ?? 100), plans,
-      round: { status: deciding || executions.some(e => ['queued', 'running', 'needs_input', 'stopping'].includes(e.status)) ? 'running' : 'idle', speakers,
+      round: { canStop: !singleSpeaker || !!deciding || serverPlans.some(p => p.creator_id === selfId && ['proposed', 'running', 'waiting'].includes(p.status)) || executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status)
+          && ((!e.requester_id && !s.members.some(m => m.id === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role))) || e.requester_id === selfId || !!localBot(e.bot_id) || s.members.some(m => m.id === e.bot_id && m.ownerActorId === selfId))),
+        status: deciding || executions.some(e => ['queued', 'running', 'needs_input', 'stopping'].includes(e.status)) ? 'running' : 'idle', speakers,
         othersActive: executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status) && e.requester_id !== selfId
           && !localBot(e.bot_id) && !s.members.some(m => m.id === e.bot_id && m.ownerActorId === selfId)), canContinue: !open && !planning.has(roomId) && (executions.some(e => !e.plan_id && ordinaryExecution(e)) || s.messages.some(discussionSource)) && !executions.some(e => ['queued','running','stopping'].includes(e.status)) } };
   }
