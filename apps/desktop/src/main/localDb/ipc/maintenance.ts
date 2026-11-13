@@ -1,3 +1,4 @@
+import { EMPTY_SESSION_PURGE_CUTOFF, type DbEmptySessionPurge } from '../../../shared/localDbMaintenance';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 
@@ -10,9 +11,7 @@ import type {
   DbSlimmingScheduleInput,
   DbSlimmingScheduleResult,
 } from '../../../shared/localDbMaintenance';
-import {
-  DB_SLIMMING_ARCHIVE_AGE_OPTIONS,
-} from '../../../shared/localDbMaintenance';
+import { DB_SLIMMING_ARCHIVE_AGE_OPTIONS } from '../../../shared/localDbMaintenance';
 import { throwIpcError } from '../../utils/ipcValidate';
 import type { DbClient } from '../client/DbClient';
 import {
@@ -37,6 +36,7 @@ interface OwnerSnapshot {
 }
 
 interface ScanGrant extends DbSlimmingScanResult {
+  emptySessionPurge?: DbEmptySessionPurge;
   ownerId: string;
   scopeKey: string;
   expiresAt: number;
@@ -119,9 +119,27 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
       const includeActiveTasks = validateIncludeActiveTasks(input?.includeActiveTasks);
       const owner = captureReadyOwner();
       const scannedAt = Date.now();
-      const archivedBeforeMs = archiveCutoffForAge(scannedAt, archiveAgeMonths);
-      const row = await deps.getDbClient().queryOne<ScanAggregateRow>(
-        `WITH target_sessions AS (
+      const archivedBeforeMs = input.emptySessionIds !== undefined ? EMPTY_SESSION_PURGE_CUTOFF : archiveCutoffForAge(scannedAt, archiveAgeMonths);
+      let emptySessionPurge: DbEmptySessionPurge | undefined;
+      if (input.emptySessionIds !== undefined) {
+        if (includeActiveTasks || !Array.isArray(input.emptySessionIds))
+          throwIpcError('INVALID_PARAMS', 'invalid empty-session scan');
+        try {
+          emptySessionPurge = await deps
+            .getDbClient()
+            .tx('maintenance.scanEmptySessions', { ids: input.emptySessionIds });
+        } catch {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'empty-session evidence changed; review and scan again',
+          );
+        }
+        assertOwnerCurrent(owner);
+      }
+      const row = emptySessionPurge
+        ? null
+        : await deps.getDbClient().queryOne<ScanAggregateRow>(
+            `WITH target_sessions AS (
            SELECT id, status
              FROM sessions
             WHERE ((status = 'deleted' AND updated_at <= ?)
@@ -147,8 +165,8 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
                    ), 0)
               FROM messages message
               JOIN target_sessions target ON target.id = message.session_id) AS estimatedMessageBytes`,
-        [archivedBeforeMs, archivedBeforeMs, includeActiveTasks ? 1 : 0, archivedBeforeMs],
-      );
+            [archivedBeforeMs, archivedBeforeMs, includeActiveTasks ? 1 : 0, archivedBeforeMs],
+          );
       assertOwnerCurrent(owner);
       const dbFilePath = deps.getCurrentDbPath();
       if (!dbFilePath || !fs.existsSync(dbFilePath)) {
@@ -157,6 +175,7 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
       const databaseBytes = estimateDbFilesBytes(dbFilePath);
       const scanId = randomUUID();
       const result: DbSlimmingScanResult = {
+        ...(emptySessionPurge ? { cleanupMode: 'empty-sessions' as const, emptySessionCount: emptySessionPurge.targets.length } : {}),
         scanId,
         archiveAgeMonths,
         includeActiveTasks,
@@ -174,6 +193,7 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
       pruneExpiredGrants();
       scanGrants.set(scanId, {
         ...result,
+        ...(emptySessionPurge ? { emptySessionPurge } : {}),
         ownerId: owner.ownerId,
         scopeKey: owner.scopeKey,
         expiresAt: Date.now() + GRANT_TTL_MS,
@@ -221,7 +241,9 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
       ) {
         throwIpcError('PRECONDITION_FAILED', 'database maintenance scan expired; scan again');
       }
-      if (scan.messageCount === 0) return { scheduled: false };
+      if (scan.messageCount === 0 && !scan.emptySessionPurge) return { scheduled: false };
+      if (scan.emptySessionPurge && !input.backupEnabled)
+        throwIpcError('INVALID_PARAMS', 'empty-session purge requires backup');
       if (pendingScheduleIds.has(scan.scanId)) {
         throwIpcError('PRECONDITION_FAILED', 'database maintenance confirmation is already open');
       }
@@ -294,15 +316,13 @@ export function createLocalDbMaintenanceIpcHandlers(deps: LocalDbMaintenanceIpcD
           );
         }
         if (existingRequest) {
-          throwIpcError(
-            'PRECONDITION_FAILED',
-            'database maintenance recovery is already pending',
-          );
+          throwIpcError('PRECONDITION_FAILED', 'database maintenance recovery is already pending');
         }
         clearDbSlimmingResult(userDataDir);
         resultCache.delete(owner.ownerId);
         writeDbSlimmingRequest(userDataDir, {
           version: 1,
+          ...(scan.emptySessionPurge ? { emptySessionPurge: scan.emptySessionPurge } : {}),
           id: scan.scanId,
           ownerId: owner.ownerId,
           createdAt: Date.now(),
@@ -365,10 +385,7 @@ function validateIncludeActiveTasks(value: unknown): boolean {
 }
 
 /** Uses an exact seven-day duration or calendar months with month-end clamping. */
-export function archiveCutoffForAge(
-  scannedAt: number,
-  archiveAge: DbSlimmingArchiveAge,
-): number {
+export function archiveCutoffForAge(scannedAt: number, archiveAge: DbSlimmingArchiveAge): number {
   if (archiveAge === '7-days') {
     return scannedAt - 7 * 24 * 60 * 60 * 1000;
   }

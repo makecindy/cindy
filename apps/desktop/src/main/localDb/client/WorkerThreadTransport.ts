@@ -1,3 +1,5 @@
+import { createEmptySessionPurgeScanner } from '../emptySessionPurge.js';
+import { isDbEmptySessionPurge } from '../../../shared/localDbMaintenance.js';
 import { deleteDeletedSessionViewStates, saveMcpAppViewState, viewStateCardSql, assertViewStateCard } from '../worker/opHandlers/mcpAppViewState.js';
 import { fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics, sanitizeToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
@@ -28,6 +30,13 @@ import {
 import { isBackgroundDbRpc } from './rpcAdmission.js';
 
 const WORKER_CODE = `
+const createEmptySessionPurgeScanner = ${createEmptySessionPurgeScanner.toString()};
+const isDbEmptySessionPurge = ${isDbEmptySessionPurge.toString()};
+const scanEmptySessionPurge = createEmptySessionPurgeScanner(
+  text => require('node:crypto').createHash('sha256').update(text).digest('hex'),
+  isDbEmptySessionPurge,
+);
+
 const viewStateCardSql = ${viewStateCardSql.toString()};
 const assertViewStateCard = ${assertViewStateCard.toString()};
 const saveMcpAppViewState = ${saveMcpAppViewState.toString()};
@@ -441,6 +450,8 @@ function dispatchTransaction(readyDb, payload) {
   const request = asRecord(payload, 'tx args');
   const name = expectString(request.name, 'name');
   switch (name) {
+    case 'maintenance.scanEmptySessions':
+      return readyDb.transaction(() => scanEmptySessionPurge(readyDb, asRecord(request.args, 'scan args').ids))();
     case 'usage.recordMediaSpend':
       return recordMediaSpend(readyDb, request.args);
     case 'usage.recordPiUsage':

@@ -1239,23 +1239,24 @@ async function readProfile(
   }
   const canonicalResolution = await reconcileCanonicalLink(botId, client);
   const canonicalSessionId = canonicalResolution.canonicalSessionId;
-  const links = await db
+  const allLinks = await db
     .select()
     .from(botSessionLinks)
     .where(eq(botSessionLinks.botId, botId))
     .orderBy(desc(botSessionLinks.createdAt));
-  const sessionRows = links.length
+  const sessionRows = allLinks.length
     ? await db
         .select()
         .from(sessions)
         .where(
-          inArray(
-            sessions.id,
-            links.map((link) => link.sessionId),
+          and(
+            inArray(sessions.id, allLinks.map((link) => link.sessionId)),
+            ne(sessions.status, 'deleted'),
           ),
         )
     : [];
   const byId = new Map(sessionRows.map((row) => [row.id, row]));
+  const links = allLinks.filter((link) => byId.has(link.sessionId));
   // Runtime snapshots are durable history. The list needs only the latest per
   // task; fetching every frozen capability JSON grows with months of restarts.
   const runtimeRows: (typeof botRuntimeSnapshots.$inferSelect)[] = [];
