@@ -22,6 +22,12 @@
 回归入口为 `subscription-accounts/__tests__/runtime.test.ts`、`SubscriptionAccountsSection.test.tsx`
 和 `useCodexRateLimits.test.ts`；没有进行真实双设备互通或上游扣卡验收。
 
+`openai` 目标代表默认账号。Windows 没有建链接权限时内置连接改走独立登录，Cindy 的 `codex-home`
+可能没有任何登录文件，而默认账号仍在 `~/.codex` 正常运行（2026-11-13 设置页一直显示配额更新失败）。
+只有「内置连接没有自己的登录文件、默认账号不是旧版私有目录且其目录有 `auth.json`」时，`openai` 的读取、
+兑换与自动规则身份才改按默认账号目录处理，读法和凭证门禁与其它池内账号相同，不写入内置连接的用量缓存；
+内置连接有任何登录条目时保持原读取与恢复确认。参数、回包与 channel 不变。回归见 `usage/__tests__/codexDefaultAccountHome.test.ts`。
+
 `subscription-accounts:changed` 可选追加 `resetAccountId`：只标记该账号的重置数据已刷新，
 额外账号的重置读取仅响应自身 ID。普通任务运行数通知继续只带供应商 ID，不触发整池 CLI 重读。
 旧控制端忽略此可选字段；新端面对旧通知仍保留挂载与手动刷新，不借用其它账号的数据。
