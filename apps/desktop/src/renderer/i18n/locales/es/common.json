@@ -6804,7 +6804,7 @@
         "sectionTitle": "Red experimental de Agent",
         "switch": {
           "title": "Agent-Net (Beta)",
-          "hint": "Muestra la topología de conexiones y la actividad reciente. La conexión se cifra cuando ambos dispositivos activan Agent-Net y se han vinculado mediante Agent-Net. Los demás dispositivos usan la conexión habitual. Solo afecta a esta computadora."
+          "hint": "Función experimental. Por ahora no se recomienda su uso. Muestra la topología de conexiones y la actividad reciente. La conexión se cifra cuando ambos dispositivos activan Agent-Net y se han vinculado mediante Agent-Net. Los demás dispositivos usan la conexión habitual. Solo afecta a esta computadora."
         },
         "empty": "Aún no hay otros dispositivos. Inicia sesión con la misma cuenta en otra computadora o teléfono y aparecerá aquí.",
         "stats": {
@@ -7070,7 +7070,11 @@
         "remoteSessionEnded": "El dispositivo remoto finalizó esta sesión"
       },
       "control": "Control",
-      "standbyHint": "Otra instancia de Cindy en esta computadora está usando la conexión remota. Ciérrala y esta instancia tomará el control automáticamente."
+      "standbyHint": "Otra instancia de Cindy en esta computadora está usando la conexión remota. Ciérrala y esta instancia tomará el control automáticamente.",
+      "apps": {
+        "cindy": "Cindy",
+        "cindyFriend": "Cindy Friend"
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -21656,8 +21660,8 @@
   "modelGroups": {
     "title": "Grupos de modelos",
     "description": "Combina varias fuentes que ya tienes en Proveedores en una sola opción. Elígela en «Grupos de modelos» del selector de modelos y Cindy decide qué fuente usar cada vez.",
-    "routes": "Rutas",
-    "routesDescription": "Una ruta contiene varias fuentes. Cada tarea nueva elige una según la regla de la ruta.",
+    "routes": "Modos",
+    "routesDescription": "Un modo contiene varias fuentes. Cada tarea nueva elige una según la regla del modo.",
     "sourceCount_one": "{{count}} fuente",
     "sourceCount_many": "{{count}} fuentes",
     "sourceCount_other": "{{count}} fuentes",
@@ -21680,8 +21684,10 @@
       }
     },
     "picker": {
-      "empty": "Aún no hay grupos de modelos. Combina varias fuentes en una ruta en Ajustes para elegirla aquí.",
-      "manage": "Gestionar grupos de modelos"
+      "empty": "Aún no hay grupos de modelos. Combina varias fuentes en un modo en Ajustes para elegirlo aquí.",
+      "manage": "Gestionar grupos de modelos",
+      "switched": "«{{name}}» cambió esta tarea a {{model}}",
+      "switchUnavailable": "«{{name}}» no tiene ahora ninguna fuente que esta tarea pueda usar. No se cambió el modelo."
     },
     "why": {
       "expiringQuota": "Le queda un {{left}}% de cuota y se restablece el {{reset}}, así que va primero",
@@ -21693,7 +21699,7 @@
       "soonestUntil": "Todas las fuentes agotaron su cuota; esta se recupera antes ({{reset}})",
       "standby": "Esta vez no le toca",
       "standbyQuota": "Le queda un {{left}}% de cuota y no se restablece hasta el {{reset}}, así que se reserva",
-      "off": "Desactivada en esta ruta",
+      "off": "Desactivada en este modo",
       "unavailable": "Sin conexión, o este modelo no se puede elegir ahora",
       "limited": "Cuota agotada",
       "limitedUntil": "Cuota agotada hasta el {{reset}}",
@@ -21707,10 +21713,10 @@
       "separator": "; "
     },
     "settings": {
-      "newRoute": "Nueva ruta",
-      "newRouteName": "Nueva ruta",
-      "routesEmpty": "Aún no hay rutas. Crea una y añade varias fuentes.",
-      "scopeNote": "Los grupos de modelos se aplican a las tareas nuevas iniciadas en este ordenador. La fuente se elige al empezar y no cambia durante la tarea.",
+      "newRoute": "Nuevo modo",
+      "newRouteName": "Nuevo modo",
+      "routesEmpty": "Aún no hay modos. Crea uno y añade varias fuentes.",
+      "scopeNote": "Los grupos de modelos se aplican a las tareas de este ordenador. Una tarea nueva elige una fuente al empezar. Si eliges uno en una tarea en curso, cambia una vez en ese momento y después no cambia por sí sola.",
       "back": "Volver a grupos de modelos",
       "name": "Nombre",
       "nameHint": "Se muestra en el selector de modelos.",
@@ -21722,14 +21728,14 @@
       "sources": "Fuentes que puede usar",
       "sourcesHint": "Puede haber modelos distintos. La tarea indica cuál se usó.",
       "sourcesEmpty": "Aún no hay fuentes. Añade abajo un modelo conectado.",
-      "sourcesFull": "Una ruta admite hasta {{count}} fuentes.",
+      "sourcesFull": "Un modo admite hasta {{count}} fuentes.",
       "addSource": "Añadir fuente",
       "chooseModel": "Elegir un modelo",
       "notConnected": "Sin conexión",
       "moveUp": "Subir",
       "moveDown": "Bajar",
-      "remove": "Quitar de esta ruta",
-      "useSource": "Permitir que esta ruta use {{name}}",
+      "remove": "Quitar de este modo",
+      "useSource": "Permitir que este modo use {{name}}",
       "try": {
         "title": "Probar",
         "hint": "Mira qué fuente usaría ahora una tarea nueva. No se envía nada ni se gasta cuota.",
@@ -21737,11 +21743,11 @@
         "picked": "Usar esta",
         "standby": "En reserva",
         "skipped": "Omitida",
-        "unavailable": "Ninguna fuente de esta ruta se puede usar ahora. Una tarea nueva usará el modelo que tenías seleccionado."
+        "unavailable": "Ninguna fuente de este modo se puede usar ahora. Una tarea nueva usará el modelo que tenías seleccionado."
       },
-      "deleteRoute": "Eliminar esta ruta",
+      "deleteRoute": "Eliminar este modo",
       "deleteRouteConfirmTitle": "¿Eliminar «{{name}}»?",
-      "deleteRouteConfirmDescription": "Las excepciones por horario de otras rutas que cambian a ella también se eliminan. Las tareas ya iniciadas no se ven afectadas.",
+      "deleteRouteConfirmDescription": "Las excepciones por horario de otros modos que cambian a él también se eliminan. Las tareas ya iniciadas no se ven afectadas.",
       "delete": "Eliminar",
       "cancel": "Cancelar",
       "saveFailed": "No se pudo guardar. Inténtalo de nuevo.",
@@ -21762,17 +21768,17 @@
         "addHours": "Añadir",
         "sameHour": "El inicio y el fin no pueden ser la misma hora.",
         "full": "Hasta {{count}} excepciones.",
-        "needOtherRoute": "Crea otra ruta para poder cambiar a ella por horario."
+        "needOtherRoute": "Crea otro modo para poder cambiar a él por horario."
       }
     },
     "overview": {
       "mapTitle": "Cómo eligen modelo las tareas nuevas",
-      "mapDescription": "De izquierda a derecha: la ruta que sigue y la fuente a la que llega. Haz clic en una ruta para cambiarla.",
+      "mapDescription": "De izquierda a derecha: el modo que sigue y la fuente a la que llega. Haz clic en un modo para cambiarlo.",
       "columnSources": "Fuentes",
       "columnEmpty": "Aún no hay",
-      "openRoute": "Abrir la ruta «{{name}}»",
+      "openRoute": "Abrir el modo «{{name}}»",
       "recentTitle": "Elecciones recientes",
-      "recentEmpty": "Ninguna tarea ha usado aún una ruta.",
+      "recentEmpty": "Ninguna tarea ha usado aún un modo.",
       "keptOriginal": "No había ningún modelo disponible, así que la tarea usó el modelo que habías elegido.",
       "keptOriginalShort": "Se mantuvo tu modelo",
       "latest": "El camino que siguió la última tarea"

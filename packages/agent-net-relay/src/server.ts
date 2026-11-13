@@ -821,12 +821,14 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
               session.remoteControlEnabled = control.remoteControlEnabled;
               session.capabilities = control.capabilities as string[];
               if ((control.platform !== undefined && (typeof control.platform !== 'string' || control.platform.length > 64))
+                || (control.app !== undefined && (typeof control.app !== 'string' || control.app.length > 64 || !ID_PATTERN.test(control.app)))
                 || (control.appVersion !== undefined && (typeof control.appVersion !== 'string' || control.appVersion.length > 64))
                 || (control.deviceName !== undefined && (typeof control.deviceName !== 'string' || !control.deviceName.trim() || control.deviceName.length > 64))
                 || (control.busy !== undefined && typeof control.busy !== 'boolean')) throw new Error('invalid');
               // Additive V2 metadata preserves offline device management. An old
               // client can omit it without erasing the last known platform.
               const metadata = { ...(typeof control.platform === 'string' ? { platform: control.platform } : {}),
+                ...(typeof control.app === 'string' ? { app: control.app } : {}),
                 ...(typeof control.deviceName === 'string' ? { deviceName: control.deviceName.trim() } : {}),
                 ...(typeof control.appVersion === 'string' ? { appVersion: control.appVersion } : {}),
                 ...(typeof control.busy === 'boolean' ? { busy: control.busy } : {}) };
@@ -836,7 +838,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
               if (!session.metadataWritten) { session.metadataWritten = true; void store.transaction(state => {
                 const device = state.networks[principal.networkId]?.devices[principal.deviceId];
                 if (device && device.revokedAt === null) { device.metadata = { ...device.metadata,
-                  platform: metadata.platform ?? device.metadata?.platform, appVersion: metadata.appVersion ?? device.metadata?.appVersion };
+                  platform: metadata.platform ?? device.metadata?.platform, app: metadata.app ?? device.metadata?.app,
+                  appVersion: metadata.appVersion ?? device.metadata?.appVersion };
                   if (metadata.deviceName) device.reportedName = metadata.deviceName;
                   device.lastSeenAt = now(); }
               }).catch(() => ws.close(1011, 'storage unavailable')); }
