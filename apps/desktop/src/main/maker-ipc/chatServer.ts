@@ -154,7 +154,7 @@ interface Running {
    * exact input settles the execution and the task is never stopped from the group.
    */
   inTask?: boolean;
-  /** Other teammates this reply may name with @ (servers with groupTeammateMentions). */
+  /** The group's teammates, set when this reply may name another with @ (servers with groupTeammateMentions). */
   mentionable?: BotGroupMentionMember[];
   /** A request to the group's Cindy (always `inTask`). */
   assistant?: true;
@@ -2149,8 +2149,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   /** Steps a 分工 request wrote out (§7.0), as teammates this account may give work to. */
   function writtenPlanSteps(s: Snapshot, text: string, picked: string[]): PlanStepDraft[] | null {
     const bots = s.members.filter(m => isCompanion(m) && m.state === 'joined');
+    // Names are read against every teammate, the group's Cindy included, so 「@Cindy」 is not
+    // taken for a companion that only shares the short name; it is simply not assignable below.
     const written = splitBotGroupRelaySteps(text, { allLabels: [],
-      members: bots.map(m => ({ botId: m.id, name: memberName(m, s.members), displayName: m.name, nickname: m.nickname })) });
+      members: s.members.filter(m => m.kind === 'bot' && m.state === 'joined')
+        .map(m => ({ botId: m.id, name: memberName(m, s.members), displayName: m.name, nickname: m.nickname })) });
     // A picked teammate whose name no longer reads in the text (renamed meanwhile) would silently
     // drop its step: let the organizer arrange it instead.
     if (written && !picked.every(target => written.some(step => step.botId === target || localBot(step.botId)?.id === target))) return null;
@@ -2599,7 +2602,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           pending.payload = terminal.outcome === 'error' ? { detail: botGroupRuntimeFailureDetail(terminal.failureCode ?? 'RUNTIME_ERROR') }
             : { ...(isBotGroupNoReplyText(text) && !files.length ? {} : {
               ...(() => {
-                const named = run.mentionable?.length ? resolveBotGroupMentions(contentText, { members: run.mentionable, allLabels: [] }).botIds : [];
+                const named = run.mentionable?.length ? resolveBotGroupMentions(contentText, { members: run.mentionable, allLabels: [] }).botIds.filter(target => target !== run.execution.bot_id) : [];
                 return named.length ? { mentions: named } : {};
               })(),
               content: [{ type: 'text', text: contentText.slice(0, 16000) || '已完成' }, ...files, botGroupProcessCard({ groupId: run.execution.conversation_id, executionId: run.execution.id, sessionId: run.sessionId, clientId: run.clientId, durationMs: run.durationMs, ...(selfDeviceId ? { deviceId: selfDeviceId } : {}) })] }),
@@ -3124,8 +3127,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       } : fullConversation;
       const talk = run.plan?.kind === 'talk' ? run.plan : undefined;
       // Teammates ask each other with @ (bot-group-chat.md §4.0): the reply's @ wakes whom it names.
-      if (supportsTeammateMentions && !digest && !execution.mask_owner_id) run.mentionable = s.members
-        .filter(m => m.kind === 'bot' && m.state === 'joined' && m.id !== execution.bot_id)
+      // The speaker stays in the name table (its own name must not resolve to a namesake) and is
+      // dropped from the result; alone, it has nobody to name.
+      const joinedBots = s.members.filter(m => m.kind === 'bot' && m.state === 'joined');
+      if (supportsTeammateMentions && !digest && !execution.mask_owner_id
+        && joinedBots.some(m => m.id !== execution.bot_id)) run.mentionable = joinedBots
         .map(m => ({ botId: m.id, name: memberName(m, s.members), displayName: m.displayName, nickname: m.nickname }));
       const participants = s.members.filter(m => m.state === 'joined').map(m => {
         const local = m.kind === 'bot' ? localBot(m.id) : undefined;
