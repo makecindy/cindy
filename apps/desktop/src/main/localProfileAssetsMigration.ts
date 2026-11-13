@@ -259,10 +259,18 @@ async function pluginSecretKeys(localRoot: string): Promise<Set<string>> {
     if (!installed) continue;
     const instanceKey = pluginInstallStoragePart(relId);
     keys.add(`ghost_alias_migration_${instanceKey}`);
-    for (const secret of approval.receipt.manifest.network?.secrets ?? []) {
-      if (secret.source !== undefined && secret.source !== 'user') continue;
-      keys.add(ghostSecretStorageKey(instanceKey, secret.key));
-      keys.add(ghostSecretHintStorageKey(instanceKey, secret.key));
+    const manifest = approval.receipt.manifest;
+    const userSecretKeys = [
+      ...(manifest.network?.secrets ?? [])
+        .filter((secret) => secret.source === undefined || secret.source === 'user')
+        .map((secret) => secret.key),
+      ...(manifest.node?.secretBindings ?? [])
+        .filter((binding) => !binding.oauthSecret)
+        .map((binding) => binding.key),
+    ];
+    for (const key of userSecretKeys) {
+      keys.add(ghostSecretStorageKey(instanceKey, key));
+      keys.add(ghostSecretHintStorageKey(instanceKey, key));
     }
   }
   return keys;
