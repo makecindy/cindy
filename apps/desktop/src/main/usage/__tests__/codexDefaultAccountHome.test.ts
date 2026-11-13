@@ -22,12 +22,13 @@ const h = vi.hoisted(() => ({
   rpc: vi.fn(),
   readNativeAccount: vi.fn(),
   readNativeCodexTokens: vi.fn(),
+  readPool: vi.fn(),
   credentialCurrent: true,
 }));
 
 vi.mock('../../maker-host/codex-home-path.js', () => ({ getCodexHome: () => h.nativeHome }));
 vi.mock('../../subscription-accounts/store.js', () => ({
-  readPool: () => h.pool,
+  readPool: h.readPool,
   accountDirectory: () => h.defaultHome,
 }));
 vi.mock('../../subscription-accounts/nativeCli.js', () => ({
@@ -38,7 +39,7 @@ vi.mock('../../subscription-accounts/nativeCli.js', () => ({
 }));
 
 import { createCodexRateLimitResetService } from '../codexRateLimitReset.js';
-import { withDetachedDefaultCodexHome } from '../codexDefaultAccountHome.js';
+import { detachedDefaultCodexHome, withDetachedDefaultCodexHome } from '../codexDefaultAccountHome.js';
 
 const DEFAULT_LIMITS = {
   rateLimits: { planType: 'pro', primary: { usedPercent: 42, windowDurationMins: 10_080 } },
@@ -66,6 +67,7 @@ beforeEach(() => {
   mkdirSync(h.defaultHome);
   writeFileSync(path.join(h.defaultHome, 'auth.json'), '{"tokens":"fake"}');
   h.pool = { accounts: [{ id: 'default', paused: false }, { id: 'cindy-abc-1', paused: false }] };
+  h.readPool.mockReset().mockImplementation(() => h.pool);
   h.credentialCurrent = true;
   h.readNativeCodexTokens.mockReset().mockImplementation(async () => ({
     accessToken: 'fake-token', chatgptAccountId: 'workspace-default', canDispatch: () => h.credentialCurrent,
@@ -122,7 +124,8 @@ describe('built-in Codex quota target of the account pool default account', () =
     expect(builtIn.recordRateLimitSnapshot).not.toHaveBeenCalled();
   });
 
-  it.each(['credential', 'owner'])('rejects redemption when the %s changes during CLI startup', async (changed) => {
+  it.each(['credential', 'owner', 'pool disconnect', 'default removal', 'built-in login'])
+    ('rejects redemption when the %s changes during CLI startup', async (changed) => {
     let ownerCurrent = true;
     const builtIn = native();
     const service = createCodexRateLimitResetService(withDetachedDefaultCodexHome(builtIn, () => {
@@ -130,10 +133,13 @@ describe('built-in Codex quota target of the account pool default account', () =
     }));
     const snapshot = await service.read();
     const dispatch = vi.fn();
-    h.rpc.mockImplementationOnce(async (_home, _method, _params, canDispatch: () => boolean) => {
+    h.rpc.mockImplementationOnce(async (_home, _method, _params, canDispatch: () => Promise<boolean>) => {
       if (changed === 'credential') h.credentialCurrent = false;
-      else ownerCurrent = false;
-      if (!canDispatch()) throw new Error('Codex account changed before dispatch');
+      else if (changed === 'owner') ownerCurrent = false;
+      else if (changed === 'pool disconnect') h.pool = { ...h.pool!, disconnected: true };
+      else if (changed === 'default removal') h.pool = { ...h.pool!, accounts: [] };
+      else writeFileSync(path.join(h.nativeHome, 'auth.json'), '{}');
+      if (!await canDispatch()) throw new Error('Codex account changed before dispatch');
       dispatch();
       return { outcome: 'reset' };
     });
@@ -141,6 +147,15 @@ describe('built-in Codex quota target of the account pool default account', () =
     await expect(service.consume(snapshot.resetOffer!.idempotencyKey)).rejects.toThrow('changed before dispatch');
     expect(dispatch).not.toHaveBeenCalled();
     expect(builtIn.consumeResetCredit).not.toHaveBeenCalled();
+  });
+
+  it('rejects a pool revocation that happens while filesystem checks are pending', async () => {
+    h.readPool.mockImplementationOnce(() => {
+      const pool = h.pool;
+      queueMicrotask(() => { h.pool = { ...h.pool!, disconnected: true }; });
+      return pool;
+    });
+    await expect(detachedDefaultCodexHome()).resolves.toBeNull();
   });
 
   it.each([true, false])('rejects redemption after its verified source changes (default home: %s)', async (defaultHome) => {

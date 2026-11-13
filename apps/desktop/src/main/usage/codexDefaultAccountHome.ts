@@ -38,11 +38,15 @@ async function entryMissing(file: string): Promise<boolean> {
   }
 }
 
+function defaultAccountAvailable(): boolean {
+  const pool = readPool('openai');
+  return Boolean(pool && !pool.disconnected && pool.legacyCodexDefault !== true
+    && pool.accounts.some((account) => account.id === 'default'));
+}
+
 /** The default account's CLI home when the built-in connection has no login entry of its own. */
 export async function detachedDefaultCodexHome(): Promise<string | null> {
-  const pool = readPool('openai');
-  if (!pool || pool.disconnected || pool.legacyCodexDefault === true
-    || !pool.accounts.some((account) => account.id === 'default')) return null;
+  if (!defaultAccountAvailable()) return null;
   let home: string;
   try {
     home = accountDirectory('openai', 'default');
@@ -51,14 +55,15 @@ export async function detachedDefaultCodexHome(): Promise<string | null> {
   }
   const nativeHome = getCodexHome();
   if (path.resolve(home) === path.resolve(nativeHome)) return null;
-  if (!await entryMissing(path.join(nativeHome, 'auth.json'))) return null;
   try {
     // Keyring-only logins keep the original reader: the account bridge needs this file.
     if (!(await stat(path.join(home, 'auth.json'))).isFile()) return null;
   } catch {
     return null;
   }
-  return home;
+  if (!await entryMissing(path.join(nativeHome, 'auth.json'))) return null;
+  // Pool authorization can change while the filesystem checks yield.
+  return defaultAccountAvailable() && accountDirectory('openai', 'default') === home ? home : null;
 }
 
 /** Identity of that home, with the credential guard used before a redemption. */
@@ -119,16 +124,16 @@ export function withDetachedDefaultCodexHome(
       if (!bound || bound.home !== home) throw new Error('PRECONDITION_FAILED: ChatGPT account changed');
       if (!home) return native.consumeResetCredit(params, identity);
       await assertHome(home);
-      const canDispatch = () => {
+      const canDispatch = async () => {
         try {
-          // The admitted request stays bound to this home's exact credential while the CLI starts.
-          assertScope();
+          // The CLI may await startup after this request was admitted; recheck revocation before send.
+          await assertHome(home);
           return bound.current();
         } catch {
           return false;
         }
       };
-      if (!canDispatch()) throw new Error('PRECONDITION_FAILED: ChatGPT account changed');
+      if (!await canDispatch()) throw new Error('PRECONDITION_FAILED: ChatGPT account changed');
       const result = await codexAccountRpc(home, 'account/rateLimitResetCredit/consume', params, canDispatch);
       await assertHome(home);
       return result as Awaited<ReturnType<ResetTarget['consumeResetCredit']>>;
