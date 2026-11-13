@@ -10,14 +10,18 @@
  * Claude 订阅凭证只在内置 Claude Code CLI 里,Cindy 不再直连 Anthropic `/v1/models`,
  * 因此这里没有 HTTP 通道:SDK 捕获路径也不得发出任何网络请求。
  */
-import os from 'node:os';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, type Catalog } from '@cindy/model-providers';
 
 // 规则 23:测试涉及路径一律用 os.tmpdir() 下的临时目录,收尾清理。
-const TEST_USER_DATA = path.join(os.tmpdir(), `cindy-anthropic-discovery-test-${process.pid}`);
+const { TEST_USER_DATA } = await vi.hoisted(async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  return { TEST_USER_DATA: mkdtempSync(join(tmpdir(), 'cindy-anthropic-discovery-test-')) };
+});
 
 vi.mock('electron', () => ({
   app: {

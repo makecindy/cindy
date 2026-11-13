@@ -1,8 +1,10 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
+import { sliceRenderedSelection } from '@/session/selectionQuote';
 import { PR_WATCH_EXPANDED_BLANK_FIXTURE } from '@/__tests__/fixtures/prWatchExpandedBlank';
 import {
   collectMobileMarkdownImages,
+  mobileMarkdownListMarkerText,
   isMobileMarkdownImageDirectUrl,
   mobileMarkdownImageTitle,
   mobileMarkdownImageUrlForWorkdir,
@@ -2175,4 +2177,70 @@ it('validates a distant image once per paragraph without losing following images
     ]);
     expect(normalizations).toBeLessThanOrEqual(2);
   } finally { spy.mockRestore(); }
+});
+
+// #8603 / unit: production parsing used by iOS and Android must distinguish
+// nested input from the flat control; earlier coverage only checked item text.
+describe('nested mobile lists (#8603)', () => {
+  const depths = (source: string) => parseMobileMarkdown(source).filter(b => b.type === 'list_item')
+    .map(b => ('depth' in b ? b.depth : 0));
+  it.each(['  ', '    ', '\t'])('preserves sibling and parent levels with %j indentation', indent => {
+    const nested = `- A\n${indent}- B\n${indent}${indent}- C\n${indent}${indent}- D\n${indent}- E\n- F`;
+    expect(depths(nested)).toEqual([0, 1, 2, 2, 1, 0]);
+    expect(depths(nested.replace(/^[ \t]+/gm, ''))).toEqual([0, 0, 0, 0, 0, 0]);
+  });
+  it('retains mixed ordered/task nesting across blank-line incremental checkpoints', () => {
+    const source = 'intro\n\n1. A\n\n    - [x] B\n\n        2) C\n    - D\n2. E\n\nafter\n\n- F';
+    let result = parseMobileMarkdownIncremental('');
+    for (let n = 1; n <= source.length; n++) {
+      result = parseMobileMarkdownIncremental(source.slice(0, n), result);
+      expect(result.blocks).toEqual(parseMobileMarkdownDocument(source.slice(0, n)).blocks);
+    }
+    expect(depths(source)).toEqual([0, 1, 2, 1, 0, 0]);
+    expect(result.blocks.filter(b => b.type === 'list_item')[1]).toMatchObject({ checked: true });
+  });
+  // PR #10103: unit / real parser. Previous nesting tests skipped all child
+  // content blocks, so flushing a continuation silently flattened later items.
+  it.each([
+    ['continuation', '- A\n  - B\n    explanation\n  - C', [0, 1, 1]],
+    ['loose paragraph', '- A\n\n  explanation\n\n  - B', [0, 1]],
+    ['fence', '- A\n\n  ```text\nnot indented inside fence\n  ```\n\n  - B', [0, 1]],
+    ['mermaid fence', '- A\n\n  ```mermaid\nflowchart LR\nA-->B\n  ```\n\n  - B', [0, 1]],
+    ['quote', '- A\n\n  > explanation\n\n  - B', [0, 1]],
+    ['ancestor continuation', '- A\n  - B\n    - C\n  explanation for A\n  - D', [0, 1, 2, 1]],
+    ['exit through paragraph', '- A\n  - B\n\noutside\n\n  - new list', [0, 1, 0]],
+    ['paragraph dedent', '- A\n\n  explanation\noutside\n\n  - new list', [0, 0]],
+  ] as const)('retains only enclosing list context through %s', (_name, source, expected) => {
+    expect(depths(source)).toEqual(expected);
+    let result = parseMobileMarkdownIncremental('');
+    for (let n = 1; n <= source.length; n++) {
+      result = parseMobileMarkdownIncremental(source.slice(0, n), result);
+      expect(result.blocks).toEqual(parseMobileMarkdownDocument(source.slice(0, n)).blocks);
+    }
+  });
+});
+
+// #8603: run limits must count the exact prefix used by native selection, and
+// continuation chunks must not duplicate either the indentation or the marker.
+it('includes nested prefixes in bounded native text runs without duplicating continuation markers', () => {
+  const blocks = parseMobileMarkdown('- parent\n  12. child😀text');
+  const groups = groupMobileMarkdownSelectableBlocks(blocks, { maxTextRunUtf16Length: 9 });
+  const chunks = groups.flatMap(g => g.type === 'text_run' ? g.blocks : []);
+  const rendered = chunks.map(b => {
+    const prefix = b.type === 'list_item' && !b.textRunContinuation ? mobileMarkdownListMarkerText(b) : '';
+    return { prefix, text: prefix + b.inlines.map(i => i.type === 'image' ? i.alt : i.text).join('') };
+  });
+  expect(rendered.map(r => r.text).join('')).toBe('• parent\u200312. child😀text');
+  expect(rendered.every(r => r.text.length <= 9)).toBe(true);
+  expect(rendered.filter(r => r.prefix.startsWith('\u2003'))).toHaveLength(1);
+});
+
+it('uses rendered nested-prefix offsets when quoting text with an emoji', () => {
+  const blocks = parseMobileMarkdown('- A\n  - B😀C');
+  const item = blocks[1];
+  if (item.type !== 'list_item') throw new Error('list item expected');
+  const prefix = mobileMarkdownListMarkerText(item);
+  const rendered = prefix + item.inlines.map(i => i.type === 'image' ? i.alt : i.text).join('');
+  expect(sliceRenderedSelection([rendered], prefix.length, rendered.length)).toBe('B😀C');
+  expect(sliceRenderedSelection([rendered], 0, rendered.length)).toBe('\u2003◦ B😀C');
 });

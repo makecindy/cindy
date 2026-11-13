@@ -40,6 +40,13 @@ import { GlobalDropImportListener } from '@/components/layout/GlobalDropImportLi
 import { SessionShareImportWizard } from '@/components/settings/SessionShareImportWizard';
 import { ControlledBanner } from '@/features/remote-device/ControlledBanner';
 import { TaskRemoteDesktopButton } from '@/features/remote-desktop/TaskRemoteDesktopButton';
+import {
+  TASK_LIVE_SCREEN_LIMIT,
+  TaskLiveScreenButtons,
+  useAutoOpenTaskLiveScreens,
+} from '@/features/remote-desktop/TaskLiveScreenButtons';
+import { useTaskLiveScreens } from '@/features/remote-desktop/useTaskLiveScreens';
+import { installLiveScreenRelay } from '@/features/remote-desktop/liveScreenRelay';
 import { CredentialStoreBanner } from '@/components/layout/CredentialStoreBanner';
 import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects';
 import { useAgentIslandRemoteSessionsSync } from '@/features/device-link/agentIslandRemoteSessions';
@@ -407,6 +414,22 @@ export function MainLayout() {
     !isSharedTaskPeer(rightSidebarWorkdirInfo.deviceLinkDeviceId)
       ? rightSidebarWorkdirInfo.deviceLinkDeviceId
       : null;
+  // 那台电脑的插件为当前任务开着的设备（例如模拟器）：画面和操作都在该插件自己的任务页里，
+  // 所以本机装着同一个插件时，设备出现就在右侧栏自动打开它的任务页（与任务在本机时同一个
+  // 页面）；没装时提示去安装。远程桌面入口旁另给一个找回入口。旧版电脑或读不到时都没有。
+  // 主窗口替插件页面持有到那台电脑的画面连接并转交画面；自己不画任何东西。
+  useEffect(() => installLiveScreenRelay(), []);
+  const taskLiveScreens = useTaskLiveScreens(remoteDesktopDeviceId, rightSidebarSessionId);
+  const liveScreenEntries = useAutoOpenTaskLiveScreens(
+    remoteDesktopDeviceId ? rightSidebarSessionId : null,
+    taskLiveScreens,
+  );
+  const taskLiveScreenEntries =
+    remoteDesktopDeviceId && rightSidebarSessionId ? liveScreenEntries : [];
+  // Windows chip 栈按入口个数让位：远程桌面 1 个 + 设备画面若干，每个 28px + 4px 间距。
+  const remoteTaskEntriesWidth = remoteDesktopDeviceId
+    ? (1 + Math.min(taskLiveScreenEntries.length, TASK_LIVE_SCREEN_LIMIT)) * 32
+    : 0;
   // Windows 内容区右上的显示入口始终跟随聊天区，展开时也不移入侧栏。
   const showWindowsRightSidebarTrigger =
     rightSidebarAvailable && rsbWindow.loaded;
@@ -1812,11 +1835,11 @@ export function MainLayout() {
                 style={{
                   ['--content-top-left-actions-inset' as string]:
                     !isMac && rightSidebarSide === 'left'
-                      ? `${(showWindowsRightSidebarTrigger ? 32 : 0) + (remoteDesktopDeviceId ? 32 : 0)}px`
+                      ? `${(showWindowsRightSidebarTrigger ? 32 : 0) + remoteTaskEntriesWidth}px`
                       : '0px',
                   ['--content-top-right-actions-inset' as string]:
                     !isMac && rightSidebarSide === 'right'
-                      ? `${(showWindowsRightSidebarTrigger ? 32 : 0) + (remoteDesktopDeviceId ? 32 : 0)}px`
+                      ? `${(showWindowsRightSidebarTrigger ? 32 : 0) + remoteTaskEntriesWidth}px`
                       : '0px',
                 }}
               >
@@ -1840,16 +1863,32 @@ export function MainLayout() {
                   // mac:远程桌面入口落在顶栏右端,紧挨窗口右上角的右栏开关(右栏展开时
                   // 仍在聊天区顶栏右端)。Windows 走下方内容区 chip 栈。
                   trailing={
-                    pluginTitlebarEntries.length > 0 ? <>
-                      <PluginUiSlotControls entries={pluginTitlebarEntries} sessionId={rightSidebarSessionId} appearance="titlebar" />
-                      {isMac && remoteDesktopDeviceId && <TaskRemoteDesktopButton key={remoteDesktopDeviceId}
-                        deviceId={remoteDesktopDeviceId} className={rightSidebarAvailable ? 'mr-1' : 'mr-2'} />}
-                    </> : isMac && remoteDesktopDeviceId ? (
-                      <TaskRemoteDesktopButton
-                        key={remoteDesktopDeviceId}
-                        deviceId={remoteDesktopDeviceId}
-                        className={rightSidebarAvailable ? 'mr-1' : 'mr-2'}
-                      />
+                    pluginTitlebarEntries.length > 0 || (isMac && remoteDesktopDeviceId) ? (
+                      <>
+                        {pluginTitlebarEntries.length > 0 && (
+                          <PluginUiSlotControls
+                            entries={pluginTitlebarEntries}
+                            sessionId={rightSidebarSessionId}
+                            appearance="titlebar"
+                          />
+                        )}
+                        {isMac && remoteDesktopDeviceId && (
+                          <>
+                            {rightSidebarSessionId && (
+                              <TaskLiveScreenButtons
+                                sessionId={rightSidebarSessionId}
+                                entries={taskLiveScreenEntries}
+                                className="mr-1"
+                              />
+                            )}
+                            <TaskRemoteDesktopButton
+                              key={remoteDesktopDeviceId}
+                              deviceId={remoteDesktopDeviceId}
+                              className={rightSidebarAvailable ? 'mr-1' : 'mr-2'}
+                            />
+                          </>
+                        )}
+                      </>
                     ) : undefined
                   }
                 >
@@ -1881,10 +1920,18 @@ export function MainLayout() {
                       }
                     >
                       {remoteDesktopDeviceId && (
-                        <TaskRemoteDesktopButton
-                          key={remoteDesktopDeviceId}
-                          deviceId={remoteDesktopDeviceId}
-                        />
+                        <>
+                          {rightSidebarSessionId && (
+                            <TaskLiveScreenButtons
+                              sessionId={rightSidebarSessionId}
+                              entries={taskLiveScreenEntries}
+                            />
+                          )}
+                          <TaskRemoteDesktopButton
+                            key={remoteDesktopDeviceId}
+                            deviceId={remoteDesktopDeviceId}
+                          />
+                        </>
                       )}
                       {showWindowsRightSidebarTrigger && (
                         <RightSidebarToggle

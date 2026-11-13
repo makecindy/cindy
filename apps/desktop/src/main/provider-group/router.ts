@@ -49,7 +49,8 @@ export interface ProviderGroupRouterDeps {
   /** 仅详情页按需读取；分配与普通状态查询不探测远端能力。 */
   readCaps?(member: ProviderGroupMember): Promise<RemoteAgentCaps>;
   /** Owner-only, model-specific confirmation from a configured multi-account pool. */
-  readPoolModelAvailability?(member: ProviderGroupMember, model: string, options: { remote: boolean }): Promise<boolean | null>;
+  /** ownComputer：选电脑请求来自自己的其他电脑，本机账号池里的旧 Codex 连接按同账号授权核对(与实际启动一致)。 */
+  readPoolModelAvailability?(member: ProviderGroupMember, model: string, options: { remote: boolean; ownComputer?: boolean }): Promise<boolean | null>;
   readGroup(providerId: string): ProviderGroupConfig | null;
   listBindings(): Record<string, ProviderGroupBinding>;
   /** 这个任务现在是否正在运行一轮。 */
@@ -77,6 +78,11 @@ export interface ProviderGroupPickInput {
    * 不拦本机自己的任务。远程请求与分享中转不传，也不从请求载荷读取，不能借它绕过暂停。
    */
   localTask?: true;
+  /**
+   * 仅同账号电脑的选电脑入口(remoteHandler 的 pick)设置：本机账号池的冷却恢复探测按同账号授权核对旧 Codex 连接，
+   * 与实际启动时一致。受邀者中转不传，仍按严格授权。
+   */
+  ownComputer?: true;
   exclude?: ReadonlySet<string>;
   /** 现读组内电脑的最新状态，不用短时缓存(试过不行、带着这一轮试过的来选时)。 */
   fresh?: boolean;
@@ -170,17 +176,19 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
   const provisional = new Map<string, { providerId: string; memberKey: string; until: number }>();
   const poolReads = new Map<string, { cooling: Record<string, number>; result: Promise<boolean | null> }>();
 
-  async function recoverPoolCooling(providerId: string, member: ProviderGroupMember, model: string, remote: boolean): Promise<void> {
+  async function recoverPoolCooling(providerId: string, member: ProviderGroupMember, model: string, remote: boolean,
+    ownComputer: boolean): Promise<void> {
     if (!deps.readPoolModelAvailability || member.kind === 'share') return;
     const key = coolKey(providerId, member.key);
     const remembered = cooling.get(key);
     const scope = coolingScope(model);
     if (!scope || !remembered || !(remembered[scope] > deps.now())) return;
     // Local-only account grants cannot serve as proof for a remote route.
-    const readKey = `${key}\u0000${model}\u0000${remote}`;
+    const readKey = `${key}\u0000${model}\u0000${remote}\u0000${ownComputer}`;
     let read = poolReads.get(readKey);
     if (!read) {
-      read = { cooling: remembered, result: deps.readPoolModelAvailability(member, model, { remote }).catch(() => null) };
+      read = { cooling: remembered, result: deps.readPoolModelAvailability(member, model,
+        { remote, ...(remote && ownComputer ? { ownComputer: true } : {}) }).catch(() => null) };
       poolReads.set(readKey, read);
       void read.result.finally(() => { if (poolReads.get(readKey) === read) poolReads.delete(readKey); });
     }
@@ -291,7 +299,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       await Promise.all(resolved.filter((r) => !r.pending && !r.providerContinuity?.stale
         && offersModel(r, input.agentKind, input.model) && !paused(r) && !input.exclude?.has(r.member.key))
         .map((r) => recoverPoolCooling(input.providerId, r.member, input.model,
-          r.member.kind !== 'local' || input.localTask !== true)));
+          r.member.kind !== 'local' || input.localTask !== true, input.ownComputer === true)));
       const now = deps.now();
       const schedulable: SchedulableMember[] = resolved.map((r) => {
         const quota = providerGroupMemberUsageState(r, input.model, now, input.agentKind);

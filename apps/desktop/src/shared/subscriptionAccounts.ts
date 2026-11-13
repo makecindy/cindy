@@ -6,6 +6,11 @@ export const SUBSCRIPTION_ACCOUNTS_CHANGED = 'subscription-accounts:changed';
 /** Appended to legacy remote quota queries when the caller needs the CLI default account itself. */
 export const DEFAULT_ACCOUNT_USAGE_SCOPE = 'default-subscription-account';
 export type SubscriptionProvider = 'anthropic' | 'openai';
+/** Account-scoped target for the existing Codex reset control plane; never a model route. */
+export const CODEX_POOL_RESET_PREFIX = 'openai-account:';
+export function codexResetScope(accountId: string): string {
+  return accountId === 'default' ? 'openai' : `${CODEX_POOL_RESET_PREFIX}${accountId}`;
+}
 export interface SubscriptionAccountConfig {
   id: string;
   /** Last identity confirmed by the official CLI, retained across logout/restart. No credentials. */
@@ -56,6 +61,8 @@ export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig,
   plan?: string;
   /** Advisory ISO date reported by this account's official CLI; older hosts omit it. */
   loginExpiresAt?: string;
+  /** Host-selected reset target. Imported accounts retain their original connection and settings. */
+  codexResetProviderId?: string;
   directory: string;
   status: 'ready' | 'signed-out' | 'unavailable' | 'limited';
   /** Advisory diagnosis only; absent on older hosts. Never includes CLI output. */
@@ -113,6 +120,8 @@ export interface SubscriptionSessionAccountQuery {
    * take it right now (`blocked`); older hosts ignore it.
    */
   model?: string;
+  /** Optional: the executor's old Codex connection id; can stand alone before a native session exists. */
+  legacyProviderId?: string;
 }
 export interface SubscriptionSessionAccount {
   isDefault: boolean;
@@ -132,14 +141,18 @@ export interface SubscriptionSessionAccount {
   /** For a blocked account, whether the executor can actually select another account, including concurrency and route grants. */
   switchAvailable?: boolean;
 }
-export type SubscriptionSessionAccountView =
+export type SubscriptionSessionAccountView = (
   /** No pool, only the CLI default, or a pre-pool task: the provider's original readers apply. */
   | { providerId: SubscriptionProvider; state: 'legacy' }
   /** The pool picks an account on the task's next turn. */
   | { providerId: SubscriptionProvider; state: 'unassigned' }
   /** The bound account was removed or the provider disconnected; nothing else stands in. */
   | { providerId: SubscriptionProvider; state: 'unavailable' }
-  | { providerId: SubscriptionProvider; state: 'bound'; account: SubscriptionSessionAccount };
+  | { providerId: SubscriptionProvider; state: 'bound'; account: SubscriptionSessionAccount }
+) & {
+  /** Explicit executor admission for handing an own-computer legacy task to the merged route. */
+  replacementProviderId?: 'openai';
+};
 
 const SESSION_ACCOUNT_STATUSES: ReadonlySet<unknown> = new Set([
   'ready',
@@ -155,8 +168,10 @@ export function parseSubscriptionSessionAccountView(
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const view = raw as Record<string, unknown>;
   if (view.providerId !== providerId) return null;
+  const replacement = providerId === 'openai' && view.replacementProviderId === 'openai'
+    ? { replacementProviderId: 'openai' as const } : {};
   if (view.state === 'legacy' || view.state === 'unassigned' || view.state === 'unavailable')
-    return { providerId, state: view.state };
+    return { providerId, state: view.state, ...replacement };
   if (view.state !== 'bound') return null;
   const account = view.account as Record<string, unknown> | null | undefined;
   if (!account || typeof account !== 'object' || Array.isArray(account)) return null;
@@ -168,6 +183,7 @@ export function parseSubscriptionSessionAccountView(
   return {
     providerId,
     state: 'bound',
+    ...replacement,
     account: {
       isDefault: account.isDefault,
       number: account.number as number,

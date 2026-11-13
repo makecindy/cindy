@@ -6,6 +6,8 @@ export default {
   notCovered: 'Account entitlement, live model calls, database persistence and native mobile controls',
   cases: {
     default: { about: '「全部」视图:联合列表 + 侧栏 rail 全格' },
+    'custom-ids': { about: '#10253: custom models with near-identical names and long IDs differing only at the end' },
+    'custom-ids-legacy': { about: '#10253: the same custom IDs in the single-engine provider list' },
     recent: { about: '「最近」视图:三态 Fast 载体(`ultrafast`/`true`)的条目后缀原样保留' },
     'cindy-personal': { about: 'Personal Cindy AI source identity in the real model selector' },
     'cindy-xd': { about: 'XD Cindy AI source identity beside the unchanged Auto model' },
@@ -13,6 +15,13 @@ export default {
   },
   async check(page, ui) {
     await page.getByRole('listbox', { name: await ui.t('newChat.modelSelector.modelListAria') }).waitFor();
+    if (ui.case.startsWith('custom-ids')) {
+      // Wait for the same rows on both sides of --compare; the old version has no ID text.
+      await page.getByText('DeepSeek-V4.1-Flash', { exact: true }).waitFor();
+      await page.getByText('DeepSeek V4.1 Flash', { exact: true }).waitFor();
+      await ui.capture('custom-model-identities');
+      return;
+    }
     if (ui.case.startsWith('cindy-')) {
       const suffix = ui.case === 'cindy-personal' ? await ui.t('settings.providers.xd.personal')
         : ui.case === 'cindy-xd' ? await ui.t('settings.providers.xd.xdOrganization') : 'Example International Game Studio';

@@ -43,6 +43,48 @@ const oldHostCatalog = () => Promise.resolve({ ok: true as const, result: { prov
 const emptyCatalog = () => Promise.resolve({ ok: true as const, result: { providers: [], providerContinuity: { stale: false, remainingMs: 30 * 60_000 } } });
 const hexTarget = (label: string): string => createHash('sha256').update(label).digest('hex');
 
+// Unit regression: successful replies invalidated by a source push must recover
+// without a renderer subscription. Existing tests only covered rejecting the old reply.
+describe('source refresh during metadata admission', () => {
+  const push = (): Envelope => ({ v: 1, kind: 'push', src: 'A', payload: { channel: 'maker:provider:changed' } });
+  it.each(['maker:provider:list', 'maker:get-capabilities'])('rereads %s once after a source change', async (channel) => {
+    let finish!: (value: InvokeResultPayload) => void;
+    const request = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+      .mockImplementationOnce(emptyCatalog);
+    const pending = read('A', channel, [], request);
+    handleProviderMetadataSourcePush(push());
+    finish(await catalog());
+    await expect(pending).resolves.toMatchObject({ ok: true, result: { providers: [] } });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['owner', 'permission', 'denial', 'endpoint', 'retirement'])('does not retry a source refresh across %s changes', async (boundary) => {
+    let finish!: (value: InvokeResultPayload) => void;
+    const request = vi.fn(() => new Promise<InvokeResultPayload>(resolve => { finish = resolve; }));
+    let allowed = true;
+    const pending = read('A', 'maker:provider:list', [], request, () => allowed);
+    handleProviderMetadataSourcePush(push());
+    if (boundary === 'owner') identity.owner = 'owner-b:1';
+    if (boundary === 'endpoint') identity.endpoint = 'https://b.invalid';
+    if (boundary === 'permission') allowed = false;
+    if (boundary === 'denial') invalidate('A');
+    if (boundary === 'retirement') handleProviderMetadataSourcePush({ ...push(),
+      payload: { channel: 'maker:provider:changed', payload: { providerContinuity: { stale: true, remainingMs: 0 } } } });
+    finish(await catalog());
+    await expect(pending).rejects.toThrow('Metadata scope changed');
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds repeated source changes to one replacement read', async () => {
+    const request = vi.fn(async () => {
+      handleProviderMetadataSourcePush(push());
+      return catalog();
+    });
+    await expect(read('A', 'maker:provider:list', [], request)).rejects.toThrow('Metadata scope changed');
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('Main provider metadata continuity', () => {
   it('retains a catalog for a short outage and bounds both forwarding and a hung refresh', async () => {
     await read('M', 'maker:provider:list', [], catalog);
@@ -786,12 +828,15 @@ describe('Main provider metadata continuity', () => {
     expect(bBefore).toMatchObject({ ok: true, result: { binaryReady: true, providerContinuity: { stale: true } } });
 
     let resolveLate!: (value: InvokeResultPayload) => void;
-    const late = read('A', 'maker:agent:status', ['codex'], () => new Promise<InvokeResultPayload>(resolve => { resolveLate = resolve; }));
+    const lateRequest = vi.fn().mockImplementationOnce(() => new Promise<InvokeResultPayload>(resolve => { resolveLate = resolve; }))
+      .mockRejectedValue(failure());
+    const late = read('A', 'maker:agent:status', ['codex'], lateRequest);
     await vi.advanceTimersByTimeAsync(0);
     expect(deliver(push('A', 'maker:agents:changed'))).toBe(true);
     expect(aScope()).toBe(false);
     resolveLate(agentStatus(false, 20 * 60_000));
-    await expect(late).rejects.toThrow(/scope changed|NOT_CONNECTED/);
+    await expect(late).rejects.toThrow('NOT_CONNECTED');
+    expect(lateRequest).toHaveBeenCalledTimes(2);
 
     await expect(read('A', 'maker:agent:status', ['codex'], async () => { throw failure(); }))
       .rejects.toThrow('NOT_CONNECTED');

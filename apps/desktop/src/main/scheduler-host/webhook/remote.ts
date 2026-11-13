@@ -56,7 +56,7 @@ export interface RemoteWebhookBatch {
   omitted: number;
 }
 
-export type RemoteEndpointProblem = 'limit' | 'failed' | 'released';
+export type RemoteEndpointProblem = 'limit' | 'failed' | 'unsupported' | 'released';
 
 /** 账号今天的 Webhook 接收次数已用完。 */
 export interface RemoteWebhookQuota {
@@ -596,7 +596,7 @@ export class ScheduleWebhookRemote {
     // 本机认不出发送方时沿用服务器上的格式；新建时没有可沿用的，只能报错。
     const effective = format ?? this.views.get(scheduleId)?.format ?? null;
     if (!effective) {
-      this.problems.set(scheduleId, 'failed');
+      this.problems.set(scheduleId, 'unsupported');
       return;
     }
     try {
@@ -612,7 +612,9 @@ export class ScheduleWebhookRemote {
       if (!(error instanceof RemoteRequestError) || error.status >= 500 || error.status === 403) throw error;
       // 这一个任务的问题，不挡住其他任务。
       this.problems.set(scheduleId, error.code === 'WEBHOOK_ENDPOINT_LIMIT' ? 'limit'
-        : error.code === 'WEBHOOK_ENDPOINT_RELEASED' ? 'released' : 'failed');
+        : error.code === 'WEBHOOK_ENDPOINT_RELEASED' ? 'released'
+          // 400／422 是服务器不认这份端点定义，实际只有格式版本不一致这一种；重试不会变。
+          : error.status === 400 || error.status === 422 ? 'unsupported' : 'failed');
     }
   }
 

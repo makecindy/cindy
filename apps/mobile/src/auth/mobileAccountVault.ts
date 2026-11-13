@@ -15,6 +15,12 @@ import {
 import { deleteSecureItem, getSecureItem, setSecureItem } from './secureStorage';
 
 export const MOBILE_ACCOUNT_VAULT_KEY = 'cindy.mobile.auth.accounts.v1';
+/**
+ * Refreshing a login reads and rewrites the vault and the active session together.
+ * Both stay readable on a locked phone so an answer given from a notification can
+ * renew the login in the background; one without the other fails the refresh early.
+ */
+export const LOGIN_CREDENTIAL_STORAGE = { whileLocked: true } as const;
 
 export interface MobileStoredResourceSession {
   realm: AuthRegion;
@@ -153,7 +159,7 @@ export async function readMobileAccountVault(): Promise<MobileAccountVault> {
 }
 
 async function writeMobileAccountVault(vault: MobileAccountVault): Promise<void> {
-  await setSecureItem(MOBILE_ACCOUNT_VAULT_KEY, JSON.stringify(vault));
+  await setSecureItem(MOBILE_ACCOUNT_VAULT_KEY, JSON.stringify(vault), LOGIN_CREDENTIAL_STORAGE);
 }
 
 export function transactMobileAccountVault<T>(
@@ -185,7 +191,7 @@ export function transactMobileAccountVault<T>(
       await afterPersist(result);
     } catch (error) {
       if (raw === null) await deleteSecureItem(MOBILE_ACCOUNT_VAULT_KEY);
-      else await setSecureItem(MOBILE_ACCOUNT_VAULT_KEY, raw);
+      else await setSecureItem(MOBILE_ACCOUNT_VAULT_KEY, raw, LOGIN_CREDENTIAL_STORAGE);
       throw error;
     }
     return result;
@@ -276,7 +282,7 @@ export async function clearMobileAccountVault(
       await afterPersist();
     } catch (error) {
       if (raw === null) await deleteSecureItem(MOBILE_ACCOUNT_VAULT_KEY);
-      else await setSecureItem(MOBILE_ACCOUNT_VAULT_KEY, raw);
+      else await setSecureItem(MOBILE_ACCOUNT_VAULT_KEY, raw, LOGIN_CREDENTIAL_STORAGE);
       throw error;
     }
   });

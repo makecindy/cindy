@@ -50,6 +50,18 @@ export const remoteControlSettings = defineSettings({
     sectionKey: 'settings.remoteControl.v2.sectionTitle',
     aliases: ['Agent-Net only', 'encrypted connections', '仅使用 Agent-Net', '加密连接'],
   },
+  ownModelAccess: {
+    id: 'remoteControl.ownModelAccess',
+    isVisible: ({ mode }) => mode === 'cloud',
+    tab: 'remote-control',
+    targetId: 'settings-search-target-remote-own-model-access',
+    // 只在允许同账号设备控制本机后出现；没出现时落到「我的设备」。
+    fallbackTargetId: 'settings-search-target-remote-devices',
+    titleKey: 'settings.devices.ownModelAccess.title',
+    descriptionKey: 'settings.devices.ownModelAccess.hint',
+    sectionKey: 'settings.sections.remoteControl',
+    aliases: ['use models from my other computers', 'borrow models', 'other computers', '本机模型', '借用模型', '其他电脑用模型', '用本机模型'],
+  },
   ssh: {
     id: 'remoteControl.ssh',
     tab: 'remote-control',

@@ -66,7 +66,7 @@ export interface ScheduleWebhookStatus {
   ignored: number;
   /** 这台电脑到服务器的长连接是否在线。 */
   connected?: boolean;
-  problem?: 'limit' | 'failed' | 'suspended' | 'quota' | 'released';
+  problem?: 'limit' | 'failed' | 'unsupported' | 'suspended' | 'quota' | 'released';
   /** 今天的 Webhook 接收次数已用完时才有。 */
   quotaLimit?: number;
   quotaResetAt?: number;

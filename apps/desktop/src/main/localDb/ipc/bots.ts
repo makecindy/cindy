@@ -1,4 +1,5 @@
 import { emitSessionCreated } from './sessionCreatedBroadcast.js';
+import { readBotProfileSource } from '../../../shared/botProfileSources.js';
 import { isSubagentParentToolUseId } from '@cindy/maker-shared/message-render';
 import { loadBotReadState, loadAcknowledgedBotReadState, readBotReadPosition } from '../../maker-ipc/botReadStateStore.js';
 import { registerBotReadStateIpc } from '../../maker-ipc/botReadStateIpc.js';
@@ -74,7 +75,7 @@ import { syncBotProfileFromFolder } from '../../maker-ipc/botProfileFolderSync.j
 import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
 import { createLogger } from '../../logger.js';
 import { collectTaskResponsibilityScopes } from '../../maker-ipc/botTaskResponsibility.js';
-import { ensureBotProjectAutomations, nameBotProject, prepareBotProjectWorkspace } from '../../maker-ipc/botProjectMode.js';
+import { ensureBotProjectAutomations, ensureWorkspaceRepository, readWorkspaceRepositoryStatus, nameBotProject, prepareBotProjectWorkspace } from '../../maker-ipc/botProjectMode.js';
 import { normalizeRecentWorkdirPath } from './recentWorkdirs.js';
 import { setBotProjectSkillsDir } from '../../maker-ipc/botSkillStore.js';
 import { readBotProjectMode } from '../../../shared/botProjectMode.js';
@@ -1452,6 +1453,28 @@ export async function readBotSettingsProfile(botId: string) {
   return readProfile(getDbClient(), botId);
 }
 
+/** Same service for local settings and authorized same-account remote settings. */
+export async function botProjectRepository(botId: string, retry: boolean, assertExternal: () => void = () => {}) {
+  const owner = captureBotOperationOwner();
+  const [profile] = await getDbClient().drizzle.select({ id: botProfiles.id })
+    .from(botProfiles).where(eq(botProfiles.id, botId)).limit(1);
+  owner.assertCurrent();
+  assertExternal();
+  if (!profile) throwIpcError('NOT_FOUND', 'Bot does not exist');
+  const workspace = path.join(botProfileDir(owner.userDataDir, botId), 'workspace');
+  if (retry) {
+    await ensureWorkspaceRepository(workspace).catch((error) => {
+      log.warn('buddy project repository retry failed', { botId, error: String(error) });
+    });
+    owner.assertCurrent();
+    assertExternal();
+  }
+  const status = await readWorkspaceRepositoryStatus(workspace);
+  owner.assertCurrent();
+  assertExternal();
+  return status;
+}
+
 /**
  * Device-link only needs enough Bot metadata to render the Mobile directory and
  * open the canonical task. Keep this projection main-side so profile prompts,
@@ -1928,7 +1951,7 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
   const avatarImage = decodeBotAvatarImage(body.avatarImageBase64);
   const avatarColor = readText(body.avatarColor, 'avatarColor', 32) || 'violet';
   const identitySource =
-    (draftEntry ? `${draftEntry.draft.background}\n\n${draftEntry.draft.conversationStyle}\n\nCurrent profile:\n${name}\n${description}` : readText(body.identitySource, 'identitySource', 12000)) || buildDefaultBotIdentity(name, description);
+    (draftEntry ? `${draftEntry.draft.background}\n\n${draftEntry.draft.conversationStyle}\n\nCurrent profile:\n${name}\n${description}` : readBotProfileSource(body.identitySource, 'identitySource')) || buildDefaultBotIdentity(name, description);
   const skills = draftEntry ? draftEntry.draft.skillRefs : Array.isArray(body.skills)
     ? body.skills.filter((item): item is string => typeof item === 'string').slice(0, 100)
     : [];
@@ -1939,7 +1962,7 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
   const requestedCapabilities = hasRequestedCapabilities
     ? (body.capabilities as Record<string, unknown>)
     : {};
-  const userContextSource = readText(body.userContextSource, 'userContextSource', 12000);
+  const userContextSource = readBotProfileSource(body.userContextSource, 'userContextSource');
   const gender = readBotGender(body.gender);
   // Old clients may still submit retired template ids with a complete profile.
   // Accept those as ordinary teammates, without installing or reconstructing a template.
@@ -2217,7 +2240,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   if (restored?.avatarFallback ?? (previous.cloudAvatarFallback === true)) nextConfig.cloudAvatarFallback = true;
   else delete nextConfig.cloudAvatarFallback;
   if (Object.prototype.hasOwnProperty.call(body, 'userContextSource')) {
-    nextConfig.userContextSource = readText(body.userContextSource, 'userContextSource', 12000);
+    nextConfig.userContextSource = readBotProfileSource(body.userContextSource, 'userContextSource');
   }
   // 没显式传就保持原值(mergeBotProfileCapabilities 已经把 previous 整份带过来了),
   // 显式传脏值则清掉 —— 与 readBotGender 的口径一致。
@@ -2243,7 +2266,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   }
   const nextIdentitySource =
     body.identitySource !== undefined
-      ? readText(body.identitySource, 'identitySource', 12000) ||
+      ? readBotProfileSource(body.identitySource, 'identitySource') ||
         buildDefaultBotIdentity(patch.displayName ?? current.displayName, patch.description ?? current.description)
       : (version?.identitySource ?? '');
   const profileContentChanged = botProfileContentChanged({
@@ -2531,6 +2554,12 @@ export function registerBotIpc(): void {
     const profile = await readRemoteBotProfile(client, botId);
     if (!profile) throwIpcError('NOT_FOUND', 'Bot 不存在');
     return profile;
+  });
+
+  ipcMain.handle('local-db:bots:project-repository', async (event, rawId: unknown, retry: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof retry !== 'boolean') throwIpcError('INVALID_PARAMS', 'Retry must be a boolean');
+    return botProjectRepository(requireString(rawId, 'botId'), retry);
   });
 
   // Source preparation is local-only and account-independent, including for a
