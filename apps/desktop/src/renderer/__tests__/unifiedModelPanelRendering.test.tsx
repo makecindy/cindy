@@ -429,6 +429,31 @@ describe('MiMo thinking switch in the actual unified picker', () => {
     expect(onThinkingChange).not.toHaveBeenCalled();
     expect(onProviderChange).not.toHaveBeenCalled();
   });
+
+  it.each(['favorite', 'recent'])('does not expose a global thinking edit in an unselected %s copy', async kind => {
+    const copy = { providerId: 'mimo-fixture', modelId: 'mimo-v2.6-pro', agent: 'pi' as const };
+    const uid = kind === 'favorite' ? addModelFavorite(copy) : recordRecentModel(copy, 1000);
+    const onThinkingChange = vi.fn();
+    const setThinking = vi.fn();
+    renderPanel({ vendorKey: 'pi', unifiedAgents: ['pi'], modelId: 'mimo-v2.6-pro',
+      currentProviderId: 'mimo-fixture', onThinkingChange,
+      modelMemory: { getEffort: () => undefined, getFast: () => undefined,
+        setEffort: vi.fn(), setFast: vi.fn(), getThinking: () => true, setThinking } });
+    if (kind === 'recent') await act(async () => {
+      fireEvent.click(document.querySelector('[data-rail-item="recent"]') as HTMLElement);
+    });
+    const row = document.querySelector(kind === 'favorite'
+      ? `[data-unified-anchor="fav::${uid}"]` : '[data-unified-anchor^="recent::"]') as HTMLElement;
+    if (kind === 'recent') {
+      // Recent snapshots already have no edit affordance; keep that boundary.
+      expect(within(row).queryByRole('button', { name: '自定义' })).toBeNull();
+    } else {
+      const flyout = await openFlyoutForRow(row);
+      expect(within(flyout).queryByRole('switch', { name: 'newChat.modelSelector.thinking' })).toBeNull();
+    }
+    expect(onThinkingChange).not.toHaveBeenCalled();
+    expect(setThinking).not.toHaveBeenCalled();
+  });
 });
 
 // #10207 / #10235 merge regression: local loading must not label a populated

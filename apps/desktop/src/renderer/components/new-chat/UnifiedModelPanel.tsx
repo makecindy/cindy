@@ -1790,7 +1790,10 @@ export function UnifiedModelPanel({
                   applyEffort(target.anchor, target.entry, config, effort)
                 }
                 onFastChange={(enabled) => applyFast(target.anchor, target.entry, config, enabled)}
-                thinking={{
+                // Favorites/recents are configuration copies whose existing
+                // schema does not contain thinking. Do not edit live state or
+                // global model memory while inspecting one of those copies.
+                thinking={target.favorite || target.recent ? undefined : {
                   enabled: isLiveRow(target.entry, config) ? thinkingEnabled
                     : modelMemory?.getThinking?.(config.agent, target.entry.providerId,
                         config.wireModelId ?? target.entry.modelId) ?? true,
