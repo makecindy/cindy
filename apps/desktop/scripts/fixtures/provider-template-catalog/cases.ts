@@ -17,7 +17,8 @@ export const cases = presets.flatMap(p => {
     { id: `wizard-${p.id}`, kind: 'wizard', providerId: p.id, address: '', expectedIds: [p.id] },
     ...urls.map((address, i) => ({ id: `address-${p.id}-${i}`, kind: 'address', providerId: p.id, address,
       // Expected ambiguity comes from declared catalog addresses, not the matcher under test.
-      expectedIds: sharedInterfaceInputs[address] ?? (deployments.includes(p.id) ? [p.id] : presets.filter(other => !deployments.includes(other.id)
+      // A loopback port alone cannot identify Magpie; its direct wizard is covered separately.
+      expectedIds: p.id === 'magpie' ? [] : sharedInterfaceInputs[address] ?? (deployments.includes(p.id) ? [p.id] : presets.filter(other => !deployments.includes(other.id)
         && Object.values(other.runtimes).some(rt => rt && bindInput(rt.baseUrl) === address)).map(other => other.id)),
     })),
   ];
