@@ -17,11 +17,11 @@ function setup(outcome: InvokeResultPayload | Error) {
 describe('remote session archive status', () => {
   // #6399, unit: invocation admission precedes transport queue/connection waits.
   // Exercise its actual preSend callback, preserving earlier receipts on rejection.
-  it.each(['active', 'archived'] as const)('rechecks %s action at the final transport send', async status => {
+  it.each(['active', 'archived', 'deleted'] as const)('rechecks %s action at the final transport send', async status => {
     let current = true;
     const check = () => { if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); };
     const decision = await admitTaskAction(
-      { server: 'cindy_helper', tool: status === 'active' ? 'unarchive_sessions' : 'archive_sessions', sessionId: 'caller', args: {} },
+      { server: 'cindy_helper', tool: status === 'active' ? 'unarchive_sessions' : status === 'deleted' ? 'delete_session' : 'archive_sessions', sessionId: 'caller', args: {} },
       { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => check(), assertCurrentSync: check },
     );
     if (!decision.ok || !decision.run) throw new Error('Expected admission');
@@ -83,7 +83,7 @@ describe('remote session archive status', () => {
     ['IPC_ERROR', '[BACKPRESSURE] db worker RPC queue overloaded', 'REMOTE_RESULT_UNKNOWN'],
     ['IPC_ERROR', '[DEVICE_LINK_CONTROL_DISABLED] off', 'REMOTE_DISABLED'],
     ['IPC_ERROR', '[PRECONDITION_FAILED] 已删除的任务不能恢复或归档', 'PRECONDITION_FAILED'],
-    ['IPC_ERROR', '[PRECONDITION_FAILED] Bot task lifecycle is managed by teammate recovery and history controls', 'PRECONDITION_FAILED'],
+    ['IPC_ERROR', "[PRECONDITION_FAILED] Bot task lifecycle is managed by teammate recovery and history controls", 'PRECONDITION_FAILED'],
     ['IPC_ERROR', '[PRECONDITION_FAILED] Worktree is busy or its recovery record could not be saved', 'REMOTE_RESULT_UNKNOWN'],
     ['IPC_ERROR', '[NOT_FOUND] Session 不存在', 'NOT_FOUND'],
     ['IPC_ERROR', '[NOT_FOUND] Session does not exist', 'REMOTE_RESULT_UNKNOWN'],

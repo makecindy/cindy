@@ -1,6 +1,33 @@
 ## 4.6 订阅:旁听事件 + 钩子处理消息(subscribe 能力)
 
-一种事件模型,两个类型:
+新增内容与状态订阅：`subscribe.topics` 可单独声明 `message` / `task-state`，各列一行权限并要求显式批准。
+旧宿主保留过的未知声明不会自动获得内容；安装或更新时确认，缺批准可在插件详情页手动确认，未批准不投递。
+
+```json
+"subscribe": { "topics": ["message", "task-state"] }
+```
+
+`did-message-created` 的 `data` 包含 `{sessionId,messageId,role,content,createdAt,historyCursor}`。
+覆盖宿主已经保存的用户消息和 AI 回复，更新同一行时按 `messageId` 合并，不是逐 token 流。
+结构化内容只包含正文与附件位置 `{attachment_index,name,mimeType?}`；已有宿主授权的本机媒体与交接引用可用
+`cindy.host.call('cindy_helper','read_session_attachment',...)` 读取，另需 `history` 组批准；历史文件路径和跨电脑附件返回 `UNSUPPORTED_CAPABILITY`。
+`did-task-state-changed` 的 `data` 为 `{sessionId,state}`，只在生命周期变化时发布：一轮开始、结束、出错、等待权限、等待回答、排队或取消，
+以及归档、恢复和删除。归档等变化提供相应状态字段，运行变化提供宿主规范投影的 `activity` 状态字段（或退出活动投影时的 null）及 `changedAtMs`。
+活动摘要、进度、流式输出和仅隐藏状态的变化不触发此主题。
+仅含阶段、时间、运行/等待/注意状态与代次，不含活动摘要、标题派生标签、工具参数或消息内容。
+两种新 topic 包含宿主实际保存的各类任务，不套用下文旧 topic 的主任务/轮次过滤。
+消息事件不主动订阅其它电脑；跨电脑历史读取仍使用原工具的设备参数。
+
+它们复用既有 `onHostMessage`、`seq`、100 条缓冲、唤醒与 `dropped` 语义，没有持久事件日志。
+使用原有逐事件投递，不增加合批、进度折叠或 timer；`running → completed → running` 按顺序完整送达。
+每条保留单调 `seq`，熄灯队列最多 100 条，溢出沿用 `dropped` 标记。
+没有已批准订阅者时不投影内容、不取游标、不发事件或唤醒插件。
+断线、重启或 `dropped` 后，用最后保存的 `historyCursor` 调用 `get_chat_history({session_ids:[sessionId],cursor,order:'asc'})`
+补拉（另需 `history` 组），并按消息 ID 合并；任务当前状态用 `get_session_runtime` 重读（另需 `control` 组）。
+首次连接先分页读取所需历史；事件顺序号只属于当次宿主运行，不能用作跨重启游标。
+停用、卸载、移除声明、更新安装或账号切换后，旧缓冲不会继续投递给新安装或新账号。
+
+以下为原有元数据旁听与消息钩子，行为保持：一种事件模型,两个类型:
 - **监听(`did-`)** = 纯数据通知,事后告诉你发生了什么,你改变不了流程——适合做
   统计面板、成本记账、工作流水、"跟随用户正在看的会话"联动等纯观察型能力;
 - **钩子(`will-`)** = 主机在对话流的关键点**停下来把数据交给你,做完再继续**。

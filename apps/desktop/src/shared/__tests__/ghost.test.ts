@@ -1,6 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { validateGhostManifest as validateProtocolManifest, type GhostHostUi } from '@cindy/plugin-protocol';
 
+// Host groups are separate install permissions; unknown groups never become permissions.
+it('validates and projects each host tool group independently in both manifest readers', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'host-tools', name: 'Host tools', version: '1.0.0', entry: 'main.js' };
+  const agent = { hostTools: ['history', 'scheduler', 'future-group'] };
+  for (const validate of [validateGhostManifest, validateProtocolManifest]) {
+    const result = validate({ ...base, agent });
+    expect(result).toMatchObject({ ok: true, manifest: { agent } });
+    for (const hostTools of ['history', [3], [null], {}]) expect(validate({ ...base, agent: { hostTools } }).ok).toBe(false);
+  }
+  const before = validateGhostManifest({ ...base, agent: { hostTools: ['history'] } });
+  const after = validateGhostManifest({ ...base, agent });
+  if (!before.ok || !after.ok) throw new Error('invalid fixture');
+  expect(ghostPermissionItems(after.manifest).filter(item => item.key.startsWith('agent:host-tools:')).map(item => item.key))
+    .toEqual(['agent:host-tools:history', 'agent:host-tools:scheduler']);
+  expect(diffGhostPermissionItems(before.manifest, after.manifest).added.map(item => item.key)).toEqual(['agent:host-tools:scheduler']);
+});
+
 import {
   GHOST_CARD_ACTION_ID_RE,
   GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
@@ -57,6 +74,24 @@ import {
 
 // Real receipt projection: new resources/fields never inherit an older capability grant.
 describe('host appearance approval', () => {
+  // Unit, #9987 compatibility: exercise the real installed-reader and receipt,
+  // which the protocol-only tests cannot cover. Invalid new fields stay inert.
+  it('retains approved legacy entries and tokens beside invalid historical extensions', () => {
+    const host: GhostHostUi = { contributions: [{ id: 'old', title: 'Toolbar', position: 'composer.toolbar', tool: 'help' }],
+      commands: [{ id: 'open', title: 'Command', tool: 'help', shortcut: 'Mod+Shift+H' }] };
+    const manifest: GhostManifest = { schemaVersion: 3, minCindyVersion: '0.1.61', id: 'example', name: 'Example',
+      version: '1', kind: 'chip', entry: 'main.js', tools: [{ name: 'help', description: 'Help' }], mcpApps: { host } };
+    const approvedHostUi = ghostHostUiApprovalTokens(manifest);
+    const stored = validateInstalledGhostManifest({ ...manifest, mcpApps: { host: { ...host, settings: { vendor: true },
+      contributions: [...host.contributions!, { id: 'future', title: 'Future', position: 'composer.completion', tool: 'help' }] } } });
+    if (!stored.ok) throw new Error(stored.reason);
+    const ghost = { manifest: stored.manifest, approvedHostUi, approval: { state: 'approved', revision: 'one' } } as InstalledGhost;
+    expect(getApprovedGhostHostUi(ghost)).toMatchObject(host);
+    expect(getApprovedGhostHostUi(ghost)?.contributions).toHaveLength(1);
+    expect(getApprovedGhostHostUi(ghost)?.settings).toBeUndefined();
+    expect(ghostHostUiApprovalTokens(stored.manifest)).toEqual(approvedHostUi);
+    expect(ghostHostUiNeedsApproval(ghost)).toBe(false);
+  });
   it('requires approval for each new field and resource while preserving existing views', () => {
     const host: GhostHostUi = { capabilities: ['appearance'], appearance: { fields: ['uiFont'] },
       views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board' }] };
@@ -5231,6 +5266,18 @@ describe('liveScreen declaration', () => {
     );
     const alone = validateGhostManifest({ ...base, liveScreen: true });
     expect(alone.ok).toBe(false);
+  });
+  // 任务在另一台电脑上时也显示任务页：只有提供设备画面的插件能声明，且只接受字面量 true。
+  it('lets a task page opt into tasks on another computer only together with liveScreen', () => {
+    const taskView = { html: 'task.html', remote: true };
+    const declared = validateGhostManifest({ ...base, node, liveScreen: true, taskView });
+    expect(declared.ok && declared.manifest.taskView).toEqual({ html: 'task.html', remote: true });
+    expect(validateGhostManifest({ ...base, taskView }).ok).toBe(false);
+    expect(
+      validateGhostManifest({ ...base, node, liveScreen: true, taskView: { ...taskView, remote: 'yes' } }).ok,
+    ).toBe(false);
+    const local = validateGhostManifest({ ...base, node, liveScreen: true, taskView: { html: 'task.html' } });
+    expect(local.ok && local.manifest.taskView?.remote).toBeUndefined();
   });
 });
 

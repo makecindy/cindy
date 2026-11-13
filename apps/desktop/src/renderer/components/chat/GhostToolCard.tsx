@@ -918,7 +918,7 @@ function GhostCardCanvas({
             `mail:${inline ? 'image' : 'attach'}:${mail.key}`, undefined, formState.current.values).then(r => r.ok).catch(() => false));
           formDelivery.current = delivery;
           if (sessionId) trackGhostCardFormDelivery(sessionId, `${callId}:${editorId}`, delivery);
-          void delivery.then(ok => { if (!ok) toast.error('附件未添加，请重新选择文件。'); }).finally(() => setFormBusy(false));
+          void delivery.then(ok => { if (!ok) toast.error(t('chat.ghostCall.attachmentNotAdded')); }).finally(() => setFormBusy(false));
         } : undefined}
         onChange={values => {
           formState.current.values = values;

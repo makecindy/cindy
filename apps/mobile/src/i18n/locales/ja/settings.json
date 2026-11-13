@@ -23,7 +23,7 @@
       "granted": "許可済み",
       "denied": "拒否",
       "undetermined": "未要求",
-      "provisional": "静かに配信"
+      "provisional": "目立たない形で配信"
     }
   },
   "localLogs": {
@@ -47,6 +47,12 @@
     "footer": "ログはスマホに最大 7 日間・8 MB まで保存され、自動ではアップロードされません。書き出したログに会話本文や認証情報は含まれず、アップロードではフィルタ済みの実行記録とバージョン情報のみを送信します。"
   },
   "title": "設定",
+  "promptRecommendation": {
+    "label": "次の入力候補",
+    "description": "返信後に次の入力候補を表示します。このスマートフォンにのみ適用されます。",
+    "saveFailed": "設定は今回の利用中は有効ですが、保存できませんでした。",
+    "reset": "初期設定に戻す"
+  },
   "appearance": {
     "title": "外観",
     "modeLabel": "表示モード",
@@ -108,7 +114,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "文言文（既定）",
+        "prose": "文言文",
         "tang-poetry": "唐詩",
         "song-ci": "宋詞",
         "yuan-qu": "元曲",
@@ -171,7 +177,11 @@
       "auto": "自動",
       "on": "常にオン",
       "off": "オフ"
-    }
+    },
+    "actionReplyPlaceholder": "返信を入力",
+    "actionNotDelivered": "コンピューターに届きませんでした。Cindy を開いて対応してください。",
+    "actionReplyNotDelivered": "返信を送信できませんでした。Cindy を開いて再送してください：{{text}}",
+    "actionRequestEnded": "このリクエストはすでに処理済みか、期限切れです。"
   },
   "about": {
     "sectionTitle": "このスマートフォンについて",
@@ -204,14 +214,14 @@
   },
   "devServerEnvironment": {
     "title": "サーバー環境",
-    "description": "CindyDev が接続する業務サーバーにのみ影響します",
+    "description": "CindyDev が接続するバックエンドにのみ影響します",
     "accessibility": "サーバー環境を切り替える",
     "options": {
       "dev": "Dev",
       "release": "Release"
     },
     "confirmTitle": "{{environment}} に切り替えますか？",
-    "confirmBody": "切り替えると現在のアカウントからログアウトし、App を再起動します。",
+    "confirmBody": "切り替えると現在のアカウントからログアウトし、アプリを再起動します。",
     "cancel": "キャンセル",
     "switchAction": "切り替える",
     "switching": "切り替え中",
@@ -330,7 +340,7 @@
     },
     "enroll": {
       "description": "以下の {{clips}} つの文章を普段の声で読み上げてください。各録音は最大 {{seconds}} 秒です。読み終えたら録音を終了してください。普段音声入力を使う場所で、ほかの人が同時に話さないように録音してください。",
-      "step": "{{current}} / {{total}} つ目",
+      "step": "文章 {{current}} / {{total}}",
       "record": "読み上げを開始",
       "stop": "録音を終了",
       "rerecord": "この文章を録り直す",

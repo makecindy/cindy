@@ -74,7 +74,8 @@ import {
 } from '@/lib/composerDraftStore';
 import { getDraft as getWorkspaceDraft, resetDraftWorkspaceTargets } from '@/state/newMakerDraft';
 import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
-import { installGhostFromFile, pickAndUpdateGhost } from '@/cindy-brain/installFlow';
+import { pickAndUpdateGhost } from '@/cindy-brain/installFlow';
+import { importCindyFile } from '@/cindy-brain/importCindyFile';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn, basename } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
@@ -1241,15 +1242,16 @@ function LocalGhostPluginPage({
   const handleInstall = useCallback(async () => {
     const picked = await window.electronAPI.ghosts.pickFile().catch(() => null);
     if (!picked || 'canceled' in picked) return;
-    await installGhostFromFile(picked.filePath, {
+    await importCindyFile(picked.filePath, {
       t,
+      openThemes: () => navigate('/settings?tab=appearance'),
       // 已在插件页:tab 型插件安装后原地打开面板。
       openPluginPanel: (instanceId) => {
         setSelectedId(null);
         setOpenPanelId(instanceId);
       },
     });
-  }, [t]);
+  }, [navigate, t]);
 
   const handleRetryLegacyRecovery = useCallback(async () => {
     legacyRecoveryStatusRequestRef.current += 1;
@@ -2314,24 +2316,26 @@ export function MarketPluginCard({
   if (compact) return <article className="relative min-w-0 rounded-xl border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] px-3.5 py-3">
     <button type="button" className="absolute inset-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
       disabled={unavailable} onClick={onSelect} aria-label={item.name} aria-describedby={metadataId} />
-    <div className="pointer-events-none flex min-w-0 items-center gap-2.5">
+    <div className="pointer-events-none flex min-w-0 items-start gap-3">
       <GhostPluginIcon size="sm" iconContainerRef={marketIcon.containerRef} iconDataUrl={marketIcon.iconDataUrl}
         iconId={item.ghostId} iconName={item.name} onIconLoad={marketIcon.onIconLoad}
         onIconLoadError={() => marketIcon.onIconLoadError(onIconLoadError)} />
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5">
-          <p className="truncate text-14 font-medium text-[var(--text-primary)]" title={item.name}>{item.name}</p>
+          <p className="truncate text-15 font-medium text-[var(--text-primary)]" title={item.name}>{item.name}</p>
           <PluginPublisherBadge origin={origin} kind={item.publisherKind} />
         </div>
-        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-11 text-[var(--text-tertiary)]">
-          <span>{t(`settings.ghosts.page.origin.${origin}`)}</span>
-          {author ? <><span aria-hidden="true">·</span><span className="min-w-0 max-w-[120px] truncate">{author}</span></> : null}
-          <PluginSharedUsage detail={item} variant="list" />
+        <div className="mt-1 flex min-w-0 items-center gap-3">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1 text-11 text-[var(--text-tertiary)]">
+            <span>{t(`settings.ghosts.page.origin.${origin}`)}</span>
+            {author ? <><span aria-hidden="true">·</span><span className="min-w-0 max-w-[120px] truncate">{author}</span></> : null}
+            <PluginSharedUsage detail={item} variant="list" onClick={unavailable ? undefined : onSelect} />
+          </div>
+          {onInstall ? <Button className="pointer-events-auto relative z-[1] shrink-0" variant="secondary" size="sm" compact
+            loading={pending} disabled={unavailable} onClick={onInstall}
+            aria-label={t('settings.ghosts.page.installAria', { name: item.name })}>{t('settings.ghosts.market.install')}</Button> : null}
         </div>
       </div>
-      {onInstall ? <Button className="pointer-events-auto relative z-[1] shrink-0" size="sm" compact
-        loading={pending} disabled={unavailable} onClick={onInstall}
-        aria-label={t('settings.ghosts.page.installAria', { name: item.name })}>{t('settings.ghosts.market.install')}</Button> : null}
     </div>
     <p id={metadataId} className="pointer-events-none mt-2 line-clamp-2 text-13 leading-5 text-[var(--text-secondary)]">{item.description || item.ghostId}</p>
   </article>;
@@ -2582,7 +2586,7 @@ export function GhostPluginCard({
           {item.retirement?.unread ? (
             <AttentionDot tone="awaiting" size={6} className="mt-px" />
           ) : unread ? (
-            <AttentionDot breathing size={6} className="mt-px" />
+            <AttentionDot size={6} className="mt-px" />
           ) : null}
         </span>
         <span

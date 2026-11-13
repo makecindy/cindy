@@ -11,6 +11,7 @@ import { captureProviderMetadataContinuityScope, isTemporaryProviderMetadataFail
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { isRemoteProviderInvocationAllowed, remoteProviderAccessEpoch, onRemoteProviderAccessChanged } from '../maker-host/remote-provider-access-store.js';
+import { ownComputersMayUseProvider } from '../maker-host/own-computer-provider-access.js';
 import { GROUP_CONTINUITY_MS, parseGroupContinuityAck, type GroupContinuityGrant } from '../../shared/providerGroupContinuity.js';
 import type { ProviderGroupMember } from '../../shared/providerGroup.js';
 import type { ProviderGroupRemoteHandlerDeps } from './remoteHandler.js';
@@ -66,7 +67,8 @@ export function createGroupContinuityRuntime(readRunning: () => Promise<Readonly
       assertOwner();
       const provider = providers.find(candidate => candidate.id === grant.providerId);
       const found = provider ? findCatalogModel(provider, grant.model, grant.agentKind) : null;
-      if (!provider?.connected || provider.suspended || !isRemoteProviderInvocationAllowed(grant.providerId)
+      // 续用只发给同账号控制端(grant 不收受邀者)，与直接启动任务用同一条判断。
+      if (!provider?.connected || provider.suspended || !ownComputersMayUseProvider(grant.providerId)
         || !found || !isModelSelectableForNewRoute(found, { userProvider: provider.source === 'user' })) {
         throw new Error('[ACCESS_REVOKED] The executor no longer offers this provider/model');
       }

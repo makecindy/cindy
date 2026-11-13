@@ -1,3 +1,6 @@
+import { createNotificationDismissalLedger } from '../../device-link/notificationDismissal';
+import { retireReadMobileNotifications, retireAnsweredMobileNotifications } from '../../device-link/notificationDismissalHost';
+vi.mock('../../device-link/notificationDismissalHost', () => ({ retireReadMobileNotifications: vi.fn(), retireAnsweredMobileNotifications: vi.fn() }));
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -37,6 +40,8 @@ import type { AgentIslandService } from '../service.js';
 import type { AgentIslandCompanionIdentity } from '../companionIdentity.js';
 import { setDeepLinkMainWindow, takePendingDeepLink } from '../../deepLink.js';
 import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
+import { setTaskChangeListener, type TaskChangeEvent } from '../../localDb/taskEvents.js';
+import { getSafeDataOwnerPushStamp } from '../../device-link/broadcast-tap.js';
 
 // Keep the real implementation; record each instance so its scheduled publishing
 // cannot outlive a test and run against reset Electron mocks in the next test.
@@ -698,6 +703,7 @@ describe('AgentIslandService native publishing', () => {
     handleInteractionRequestForTest(service, { sessionId: 'lane' }, { kind: 'ask_user_question', requestId: 'q', questions: [] });
     expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({ phase: 'needs-interaction', attention: true });
     service.handleInteractionDismissed('lane', 'q');
+    expect(retireAnsweredMobileNotifications).toHaveBeenCalledWith('lane', 'q');
     playSound.mockClear();
     service.handleAgentEvent({ sessionId: 'lane' }, { type: 'done', source: 'codex', data: { result: 'done' } });
     expect(publish.mock.calls.at(-1)?.[0].sessions).toEqual([]);
@@ -1114,6 +1120,38 @@ describe('AgentIslandService native publishing', () => {
     service.handleNotificationMuteChanged();
     expect(playSound).not.toHaveBeenCalled();
   }, 20_000);
+
+  // Unit, #9801: the plugin topic must omit stream/activity updates at the
+  // production source while retaining rapid turn boundaries without a timer.
+  it('publishes task-state only for lifecycle changes, keeping rapid turn transitions', async () => {
+    vi.useFakeTimers();
+    const events: TaskChangeEvent[] = [];
+    const { AgentIslandService } = await import('../service.js');
+    const service = new AgentIslandService({ getMainWindow: () => null,
+      nativeHost: { failed: false, headless: true, publish: () => true, suspend() {} } });
+    service.setEnabled(false);
+    vi.mocked(getSafeDataOwnerPushStamp).mockReturnValue({ dataOwnerId: 'test-owner', ownerGeneration: 1 });
+    setTaskChangeListener(event => events.push(event), ['state']);
+    try {
+      const meta = { sessionId: 'lifecycle-only', agentKind: 'codex' as const };
+      vi.setSystemTime(1_000);
+      service.handleUserPrompt(meta, 'start');
+      vi.setSystemTime(1_001);
+      service.handleAgentEvent(meta, { type: 'status', source: 'codex', data: { isRunning: true, status: 'Thinking...' } });
+      service.handleAgentEvent(meta, { type: 'text', source: 'codex', data: { text: 'streaming reply' } });
+      service.replaySessionActivity();
+      expect(events).toHaveLength(1);
+      service.handleAgentEvent(meta, doneEvent());
+      vi.setSystemTime(1_002);
+      service.handleUserPrompt(meta, 'next');
+      expect(events.map(event => event.kind === 'state' ? (event.state.activity as { phase: string } | null)?.phase : null))
+        .toEqual(['running', 'completed', 'running']);
+    } finally {
+      setTaskChangeListener(undefined);
+      vi.mocked(getSafeDataOwnerPushStamp).mockReturnValue(undefined);
+      vi.useRealTimers();
+    }
+  });
 
   it('exposes the canonical snapshot and emits per-session transition edges', async () => {
     const { AgentIslandService } = await import('../service.js');
@@ -1688,6 +1726,7 @@ describe('AgentIslandService native publishing', () => {
     service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, terminalErrorEvent('boom'));
     mocks.tapWindowBroadcast.mockClear();
 
+    vi.mocked(retireReadMobileNotifications).mockClear();
     // 未读 error 对 passive 免疫:不能发收尾包,否则手机列表行的 error 红点会被
     // 导航级被动信号清掉(「已读以真实展示为准」)。
     service.handleSessionAttentionCleared('s1', 'passive');
@@ -1697,8 +1736,10 @@ describe('AgentIslandService native publishing', () => {
       expect.objectContaining({ sessionId: 's1', attention: false }),
     );
 
+    expect(retireReadMobileNotifications).not.toHaveBeenCalled();
     // explicit(报错 UI 真实展示)仍可清:此时必须发收尾包。
     service.handleSessionAttentionCleared('s1', 'explicit');
+    expect(retireReadMobileNotifications).toHaveBeenCalledWith('s1');
     expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
       SESSION_ACTIVITY_CHANNEL,
       expect.objectContaining({
@@ -7628,4 +7669,27 @@ it.each([{ botTaskCoordination: true, botPrivateReply: false }, { botPrivateRepl
   expect(service.getSessionActivitySnapshot(meta.sessionId)?.attention).not.toBe(true);
   service.handleAgentEvent(meta, terminalErrorEvent('User action required'));
   expect(playSound).toHaveBeenCalledWith(customSound('error.wav'));
+});
+
+// Stop can preserve async questions. Exercise real retirement state through the
+// service hooks, retaining an async question after cancelling a synchronous one.
+it('preserves async pushes across Stop until their own settlement', async () => {
+  const { AgentIslandService } = await import('../service.js');
+  const ledger = createNotificationDismissalLedger({ pending: [], retired: [] }, () => {});
+  ledger.record({ id: 'sync', sessionId: 'stopped', kind: 'needs-reply', requestIds: ['sync-request'] });
+  ledger.record({ id: 'async', sessionId: 'stopped', kind: 'needs-reply', requestIds: ['async-request'] });
+  vi.mocked(retireAnsweredMobileNotifications).mockImplementation((session, request) => ledger.resolve(session, request));
+  vi.mocked(retireReadMobileNotifications).mockImplementation(session => ledger.read(session));
+  try {
+    const service = new AgentIslandService({ getMainWindow: () => null });
+    service.handleUserPrompt({ sessionId: 'stopped', agentKind: 'codex' }, 'work');
+    service.handleInteractionDismissed('stopped', 'sync-request');
+    service.handleSessionStopped('stopped');
+    expect(ledger.batch()).toEqual(['sync']);
+    service.handleInteractionDismissed('stopped', 'async-request');
+    expect(ledger.batch()).toEqual(['sync', 'async']);
+  } finally {
+    vi.mocked(retireAnsweredMobileNotifications).mockReset();
+    vi.mocked(retireReadMobileNotifications).mockReset();
+  }
 });

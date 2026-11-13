@@ -80,7 +80,7 @@ export function redactSensitiveTextDeep(input: unknown): unknown {
 }
 
 export interface NonSecretErrorSignals {
-  errorStatus?: 401 | 429 | 529;
+  errorStatus?: 401 | 403 | 429 | 529;
   usageLimit: boolean;
 }
 
@@ -118,16 +118,22 @@ export function matchesDeterministicUsageExhaustionText(input: string): boolean 
  */
 export function extractNonSecretErrorSignals(input: string): NonSecretErrorSignals {
   const statusMatch =
-    /(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?|code)["']?\s*(?:[:=]\s*)?["']?(401|429|529)["']?(?=$|[\s,;:}\]])/i.exec(
+    /(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?|code)["']?\s*(?:[:=]\s*)?["']?(401|403|429|529)["']?(?=$|[\s,;:}\]])/i.exec(
       input,
-    ) ?? /\brequest\s+rejected\s*\(\s*(401|429|529)\s*\)/i.exec(input);
+    ) ?? /\brequest\s+rejected\s*\(\s*(401|403|429|529)\s*\)/i.exec(input);
   const usageLimit =
     /(?:^|[\s,{;])(?:rate\s+limit(?:ed|s|ing)?|usage\s+limit(?:ed|s|ing)?|too\s+many\s+requests|quota(?:["']?\s*[:=]\s*["']?|\s+)(?:exhausted|exceeded)|(?:["']?(?:code|type|error|message)["']?\s*[:=]\s*["']?)?(?:rate_limit_exceeded|insufficient_quota|exceeded[-_ ]?budget|budget[-_ ]?exceeded))\b/i.test(
       input,
     );
 
+  // Do not promote an unstructured permission denial into the newly supported
+  // provider 403 signal. Callers still preserve an explicit SDK errorStatus.
+  const errorStatus = statusMatch
+    && !(statusMatch[1] === '403' && /permission denied/i.test(input))
+    ? Number(statusMatch[1]) as NonSecretErrorSignals['errorStatus']
+    : undefined;
   return {
-    ...(statusMatch ? { errorStatus: Number(statusMatch[1]) as 401 | 429 | 529 } : {}),
+    ...(errorStatus !== undefined ? { errorStatus } : {}),
     usageLimit,
   };
 }
@@ -296,10 +302,23 @@ export function parseAgentErrorCode(message: string): { code: string; fallback: 
   return { code: match[1], fallback: match[2] || message };
 }
 
-/** Resending unchanged content cannot fix these explicit configuration failures. */
+/**
+ * Presentation-only recognition of runHost's guest ownership refusal (#10187).
+ * Keep the exact message: other INVALID errors, including Pi's differently
+ * capitalized/punctuated refusal, have not established this recovery condition.
+ * This never authorizes clearing native ids, moving a task or consuming input.
+ */
+export function isRemoteAgentResumeRejectedError(message: string): boolean {
+  const parsed = parseAgentErrorCode(message);
+  return parsed?.code === 'REMOTE_AGENT_INVALID'
+    && parsed.fallback.trim() === 'this conversation cannot be resumed on this computer';
+}
+
+/** Resending unchanged content cannot fix these explicit configuration/startup failures. */
 export function requiresAgentErrorConfigurationChange(message: string): boolean {
   const code = parseAgentErrorCode(message)?.code;
-  return code === 'REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED'
+  return isRemoteAgentResumeRejectedError(message)
+    || code === 'REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED'
     || code === 'REMOTE_COMPAT_MODE_UNSUPPORTED'
     || code === 'REMOTE_LOCAL_ONLY_PROVIDER'
     || code === 'DEVICE_LINK_CONTROL_DISABLED';
