@@ -350,7 +350,7 @@ describe('provider catalog realm reload', () => {
     // only the canonical OAuth provider applies the legacy-profile filter. This
     // input exposes a filter-before-projection implementation leaking the alias.
     input.providers.push({ ...openai, id: 'legacy-order-fixture',
-      auth: { method: 'api-key', native: 'codex' },
+      auth: { method: 'apiKey', native: 'codex' },
       models: { codex: [model('gpt-order[1m]'), model('imported-order-fixture')] },
     });
     h.pool = { strategy: 'least', accounts: [{ id: 'imported', paused: false, limit: 4, weight: 1 }],
