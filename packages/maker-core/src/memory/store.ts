@@ -112,11 +112,17 @@ export class MakerMemoryStore {
   /** mkdir + meta.json + FTS 表创建 + sanity check (count 不一致 → rebuild). 幂等. */
   async init(): Promise<void> {
     if (this.initialized) return;
-    await this.storage.init(this.deps.absWorkdir);
+    await this.storage.serializeInitialization((initializeStorage) => this.initUnqueued(initializeStorage));
+  }
+
+  private async initUnqueued(initializeStorage: (absWorkdir: string) => Promise<void>): Promise<void> {
+    if (this.initialized) return;
+    // The owner may have changed while another store held the directory queue.
+    this.assertScopeOk();
     // 派生索引 (MEMORY.md) 无条件重建 (review #2388 Codex 24th P1): dirty 标记
     // 是实例内存态 — 写/删被边界中止后 store 会被 close/重建, 标记丢失;
     // 安全打开时直接重建, 不依赖实例状态, 同 owner 后续 session 不再读 stale 索引。
-    await this.storage.rebuildIndex();
+    await initializeStorage(this.deps.absWorkdir);
     // storage.init await 后、FTS 副作用前复核 (review #2388 Codex 18th P1):
     // 首次打开的 getStore 无 withStore 后置检查, 边界不得在此创建旧 owner 的 fts.db。
     this.assertScopeOk();
@@ -284,7 +290,10 @@ export class MakerMemoryStore {
     await this.init();
     this.searchFingerprint = '';
     // 防呆: 不允许把 target 写到正要被删的 source 里 (否则会自删)
-    const targetFilename = buildFilename(opts.target.type, opts.target.name);
+    const targetFilename = await this.storage.resolveFilename(
+      opts.target.type,
+      opts.target.name,
+    );
     const sourcesToDelete = opts.sources.filter((s) => s !== targetFilename);
 
     // 写新的 (撞名时走 update)
@@ -305,6 +314,9 @@ export class MakerMemoryStore {
     // 文件; 后置复核无法撤销, 必须在每个删除动作前拦截。
     const deleted: string[] = [];
     for (const src of sourcesToDelete) {
+      // write 内部会重新解析地址, 并发下可能与上面的预解析不同 (Greptile P1);
+      // 用实际落盘名排除, 否则合并结果可能被当成源删掉。
+      if (src === writeRes.filename) continue;
       try {
         this.assertScopeOk();
         await this.storage.delete(src);
