@@ -27,7 +27,9 @@ export async function backfillPersonalFeishuSessions(db: Db, log: Log): Promise<
   // 补写会在每次启动把它挪回「对话」分组, 而工作目录还指着那个项目。
   const inManagedDir = or(
     isNull(sessions.workingDir),
-    sql`replace(${sessions.workingDir}, char(92), '/') like '%/im-working-dir/' || ${sessions.feishuBotAppId}`,
+    // 按字面比较尾段, 不用 LIKE: 机器人 ID 里常带下划线(cli_xxx), 在 LIKE 里是通配符,
+    // 会把目录尾段只差一个字符的项目会话误判成托管目录。
+    sql`substr(replace(${sessions.workingDir}, char(92), '/'), -length('/im-working-dir/' || ${sessions.feishuBotAppId})) = '/im-working-dir/' || ${sessions.feishuBotAppId}`,
   );
   try {
     await db

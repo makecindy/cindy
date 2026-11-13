@@ -59,6 +59,8 @@ describe('backfillPersonalFeishuSessions', () => {
       row('personal', '飞书 · 567890', 'cli_personal_bot', managedDir),
       // 用 /project 切进项目的个人会话: 'project' 是用户的选择, 不是旧默认值。
       row('personal-in-project', '[飞书·DM] 123456', 'cli_personal_bot', '/code/my-project'),
+      // 尾段只与托管目录差一个字符(ID 里的下划线在 LIKE 里是通配符): 仍是用户选的项目。
+      row('personal-lookalike', '[飞书·DM] 222222', 'cli_personal_bot', '/code/im-working-dir/cliXpersonal_bot'),
       row('official', '飞书 · 周报整理', null, '/code/my-project'),
     ]);
 
@@ -70,6 +72,7 @@ describe('backfillPersonalFeishuSessions', () => {
     );
     expect(rows.personal).toMatchObject({ workspaceKind: 'dialogue', title: '[飞书·DM] 567890', updatedAt: 1 });
     expect(rows['personal-in-project']).toMatchObject({ workspaceKind: 'project', updatedAt: 1 });
+    expect(rows['personal-lookalike']).toMatchObject({ workspaceKind: 'project', updatedAt: 1 });
     expect(rows.official).toMatchObject({ workspaceKind: 'project', title: '飞书 · 周报整理', updatedAt: 1 });
     expect(warn).not.toHaveBeenCalled();
   });
