@@ -11807,6 +11807,8 @@
           "githubRepo": "Dépôt GitHub",
           "githubRepoHint": "Saisissez owner/name. Les ordinateurs sans dossier choisi utilisent leur propre copie de ce projet ou en téléchargent une.",
           "githubRepoSaveFailed": "Le dépôt n’a pas été enregistré. Vérifiez-le et réessayez.",
+          "folderRepoFilled": "Le dépôt {{repo}} a été renseigné à partir de ce dossier. Les ordinateurs des autres membres l’utiliseront aussi.",
+          "folderRepoDiffers": "Ce dossier est un projet de {{repo}}, différent du dépôt du groupe. Cet ordinateur continue de travailler dans ce dossier.",
           "projectFolder": "Dossier sur cet ordinateur",
           "projectDirAutoHint": "Trouvé parmi vos projets à partir du dépôt.",
           "organizerHint": "Décide qui effectue chaque étape. Par défaut, le premier ami.",

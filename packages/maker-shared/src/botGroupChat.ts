@@ -720,7 +720,14 @@ export interface BotGroupFailure {
 export type BotGroupListResult = { ok: true; groups: BotGroupSummary[] } | BotGroupFailure;
 export type BotGroupGetResult = { ok: true; group: BotGroupDetail } | BotGroupFailure;
 export type BotGroupCreateResult = { ok: true; groupId: string } | BotGroupFailure;
-export type BotGroupMutationResult = { ok: true } | BotGroupFailure;
+export type BotGroupMutationResult = {
+  ok: true;
+  /**
+   * After choosing this computer's folder (bot-group-chat.md §7.5): the GitHub repository it is a
+   * checkout of. `filled`: the group had none and now uses it; otherwise the group's differs.
+   */
+  folderRepository?: { repo: string; filled: boolean };
+} | BotGroupFailure;
 export type BotGroupSendResult = { ok: true; messageId: string } | BotGroupFailure;
 
 export interface BotGroupCreateInput {

@@ -4235,10 +4235,29 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (i.allowMentionAllBots !== undefined || i.name !== undefined || i.replyMode !== undefined || i.speakingMode !== undefined || organizerId !== undefined || project !== undefined) await api(`/conversations/${i.groupId}`, 'PATCH', { operationId: randomUUID(), expectedRevision: i.expectedRevision ?? s.room.revision,
         name: i.name, responseMode: i.replyMode, speakingMode: i.speakingMode, organizerId, allowMentionAllBots: i.allowMentionAllBots, project }, managementActor(s));
       if (projectDir !== undefined) workspaces().save(i.groupId, { ...workspaces().read(i.groupId) ?? { plans: {} }, projectDir });
+      // A folder chosen here that is a GitHub checkout names the group's repository when it has none
+      // (owners and admins only: it is shared with the whole group). A different one is only pointed
+      // out. The folder is saved either way; filling in is best effort.
+      let folderRepository: { repo: string; filled: boolean } | undefined;
+      if (projectDir && project === undefined && supportsGroupProject) {
+        const repos = (await deps.repositoriesOfFolder?.(projectDir).catch(() => []) ?? []).filter(isGithubRepository);
+        const current = s.room.project?.kind === 'github' ? s.room.project.repo : null;
+        const manager = managementActor(s);
+        if (repos[0] && !current && manager) {
+          const filled = await api(`/conversations/${i.groupId}`, 'PATCH', { operationId: randomUUID(), expectedRevision: s.room.revision,
+            project: { kind: 'github', repo: repos[0] } }, manager).then(() => true, error => {
+            deps.log?.warn('Group repository was not filled in from the chosen folder', { groupId: i.groupId, ...chatErrorDiagnostic(error) });
+            return false;
+          });
+          if (filled) folderRepository = { repo: repos[0], filled: true };
+        } else if (repos[0] && current && !repos.some(repo => repo.toLowerCase() === current.toLowerCase())) {
+          folderRepository = { repo: repos[0], filled: false };
+        }
+      }
       changed(i.groupId);
       // Turned on while a step waits for 继续: go on now rather than at the next change.
       if (i.autoContinue) autoContinuePlans(i.groupId);
-      return { ok: true as const };
+      return { ok: true as const, ...(folderRepository ? { folderRepository } : {}) };
     }),
     // Stop stops what is yours: your requests and arrangements, and your teammates' work for
     // others. An owner or admin may stop everything (`all`). Work you may not stop is left running.

@@ -1411,6 +1411,32 @@ describe('Chat Server result delivery and refresh', () => {
     expect(await shownDir()).toBe('/projects/cindy');
     expect(deps.findProjectDirsForRepo).toHaveBeenCalledTimes(2);
   });
+  // bot-group-chat.md §7.5 (2026-11-14 request): choosing this computer's folder first left the
+  // group's repository empty, so other members' computers did not know the project. A folder that is
+  // a GitHub checkout now names it (a fork's upstream first) when the group has none and you manage
+  // the group; a different repository already set is only pointed out, never replaced.
+  it('names the group\'s repository from a folder chosen here and only points out a different one', async () => {
+    let project: { kind: 'github'; repo: string } | null = null;
+    let role = 'owner';
+    deps.repositoriesOfFolder = vi.fn(async () => ['makecindy/cindy', 'me/cindy']);
+    fixture.handle.mockImplementation((route: string) => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupProject: 1 } } };
+      if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), project },
+        members: [{ id: selfId, kind: 'human', name: 'Me', ownerActorId: selfId, state: 'joined', role }], messages: [], cursor: '1' } };
+      return response(route);
+    });
+    const patches = () => fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}` && method === 'PATCH').map(call => call[2]);
+    expect(await service.updateGroup({ groupId: roomId, projectDir: '/work/fork' })).toEqual({ ok: true, folderRepository: { repo: 'makecindy/cindy', filled: true } });
+    expect(patches()).toEqual([expect.objectContaining({ project: { kind: 'github', repo: 'makecindy/cindy' } })]);
+    expect(workspaceSettings.get(roomId)).toMatchObject({ projectDir: '/work/fork' });
+    role = 'member';
+    expect(await service.updateGroup({ groupId: roomId, projectDir: '/work/fork' })).toEqual({ ok: true });
+    role = 'owner'; project = { kind: 'github', repo: 'other/repo' };
+    expect(await service.updateGroup({ groupId: roomId, projectDir: '/work/fork' })).toEqual({ ok: true, folderRepository: { repo: 'makecindy/cindy', filled: false } });
+    project = { kind: 'github', repo: 'ME/cindy' };
+    expect(await service.updateGroup({ groupId: roomId, projectDir: '/work/fork' })).toEqual({ ok: true });
+    expect(patches()).toHaveLength(1);
+  });
   // bot-group-chat.md §7.5 (#10009 review): a folder chosen here but gone now made the reply run in
   // Home. The choice is binding, so the round fails instead. A folder found from the repository was
   // found for the user: gone, it is looked up again and this round answers without it.

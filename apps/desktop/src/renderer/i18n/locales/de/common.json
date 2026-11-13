@@ -11712,6 +11712,8 @@
           "githubRepo": "GitHub-Repository",
           "githubRepoHint": "owner/name eingeben. Computer ohne gewählten Ordner verwenden ihre eigene Kopie dieses Projekts oder laden eine herunter.",
           "githubRepoSaveFailed": "Das Repository wurde nicht gespeichert. Bitte prüfen und erneut versuchen.",
+          "folderRepoFilled": "Das Repository {{repo}} wurde aus diesem Ordner übernommen. Die Computer der anderen Mitglieder verwenden es ebenfalls.",
+          "folderRepoDiffers": "Dieser Ordner ist ein Projekt von {{repo}} und nicht das Repository der Gruppe. Dieser Computer arbeitet weiterhin in diesem Ordner.",
           "projectFolder": "Ordner auf diesem Computer",
           "projectDirAutoHint": "Anhand des Repositorys unter deinen Projekten gefunden.",
           "organizerHint": "Legt fest, wer die einzelnen Schritte übernimmt. Standardmäßig der erste Freund.",

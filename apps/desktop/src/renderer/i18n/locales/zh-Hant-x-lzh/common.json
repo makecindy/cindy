@@ -11667,6 +11667,8 @@
           "githubRepo": "GitHub 庫",
           "githubRepoHint": "書 owner/name。未擇資料夾之機，用本機此案；無之，則自取一份。",
           "githubRepoSaveFailed": "庫未存，請察而再試。",
+          "folderRepoFilled": "已依此夾填庫 {{repo}}，群中他人之機亦用之。",
+          "folderRepoDiffers": "此夾乃 {{repo}} 之項目，與群所填之庫不同。此機仍於此夾作業。",
           "projectFolder": "此機之資料夾",
           "projectDirAutoHint": "依庫自尋之本機案。",
           "organizerHint": "排定誰行何步；預設為首位同伴。",

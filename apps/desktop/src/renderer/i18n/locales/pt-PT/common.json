@@ -11807,6 +11807,8 @@
           "githubRepo": "Repositório do GitHub",
           "githubRepoHint": "Introduza owner/name. Os computadores sem pasta escolhida usam a sua própria cópia deste projeto ou transferem uma.",
           "githubRepoSaveFailed": "O repositório não foi guardado. Verifique e tente novamente.",
+          "folderRepoFilled": "O repositório {{repo}} foi preenchido a partir desta pasta. Os computadores dos outros membros também o vão usar.",
+          "folderRepoDiffers": "Esta pasta é um projeto de {{repo}}, diferente do repositório do grupo. Este computador continua a trabalhar nesta pasta.",
           "projectFolder": "Pasta neste computador",
           "projectDirAutoHint": "Encontrada entre os seus projetos a partir do repositório.",
           "organizerHint": "Decide quem executa cada passo. Por predefinição, esta função cabe ao primeiro amigo.",

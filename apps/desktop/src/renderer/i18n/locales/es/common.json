@@ -11807,6 +11807,8 @@
           "githubRepo": "Repositorio de GitHub",
           "githubRepoHint": "Escribe owner/name. Los ordenadores sin carpeta elegida usan su propia copia de este proyecto o descargan una.",
           "githubRepoSaveFailed": "No se guardó el repositorio. Revísalo e inténtalo de nuevo.",
+          "folderRepoFilled": "Se completó el repositorio {{repo}} a partir de esta carpeta. Los ordenadores de los demás miembros también lo usarán.",
+          "folderRepoDiffers": "Esta carpeta es un proyecto de {{repo}}, distinto del repositorio del grupo. Este ordenador seguirá trabajando en esta carpeta.",
           "projectFolder": "Carpeta en este ordenador",
           "projectDirAutoHint": "Encontrada entre tus proyectos a partir del repositorio.",
           "organizerHint": "Decide quién realiza cada paso. De forma predeterminada, es el primer amigo.",

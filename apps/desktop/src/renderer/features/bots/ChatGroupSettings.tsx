@@ -123,6 +123,8 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState('');
+  // What choosing a folder did to the group's repository (§7.5), shown under the project.
+  const [projectNotice, setProjectNotice] = useState('');
   const nicknameDirty = useRef(false);
   useEffect(() => { if (!nicknameDirty.current) setNickname(me?.nickname ?? ''); }, [me?.nickname]);
 
@@ -143,7 +145,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
 
   async function mutate(action: ChatGroupAction, exit = false) {
     if (busyRef.current) return false;
-    busyRef.current = true; setBusy(true); setError('');
+    busyRef.current = true; setBusy(true); setError(''); setProjectNotice('');
     const owner = getDataOwnerGeneration();
     try {
       const result = await api().manage({ groupId: group.id, action });
@@ -184,13 +186,16 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
   }), [group.id, me?.actorId, me?.name, me?.groupAvatar, me?.defaultAvatarUrl, t]);
   async function updateWorkSettings(input: { organizerBotId?: string; projectDir?: string | null; githubRepo?: string | null; autoContinue?: boolean }) {
     if (busyRef.current) return;
-    busyRef.current = true; setBusy(true); setError('');
+    busyRef.current = true; setBusy(true); setError(''); setProjectNotice('');
     const generation = getDataOwnerGeneration();
     try {
       const result = await window.electronAPI.maker.updateBotGroup({ groupId: group.id, ...input });
       if (!isDataOwnerGenerationCurrent(generation)) return;
       if (!result.ok) setError(t('autoContinue' in input ? 'bots.groupChat.settings.autoContinueSaveFailed' : 'githubRepo' in input ? key('githubRepoSaveFailed') : 'bots.groupChat.settings.projectDirSaveFailed'));
-      else refreshBotGroups();
+      else {
+        if (result.folderRepository) setProjectNotice(t(key(result.folderRepository.filled ? 'folderRepoFilled' : 'folderRepoDiffers'), { repo: result.folderRepository.repo }));
+        refreshBotGroups();
+      }
     } catch { if (isDataOwnerGenerationCurrent(generation)) setError(t(chatErrorKey('REQUEST_FAILED'))); }
     finally { busyRef.current = false; if (mounted.current) setBusy(false); }
   }
@@ -281,6 +286,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
           <SettingsRow wrap title={t(key('projectFolder'))} hint={t(key(group.projectDirAuto ? 'projectDirAutoHint' : 'projectDirHint'))}
             trailing={<ProjectFolder dir={group.projectDir} auto={group.projectDirAuto === true} busy={busy} onChoose={() => void chooseProjectDir()} onClear={() => void updateWorkSettings({ projectDir: null })} />} />
         </SettingsCard>
+        {projectNotice && <div className="mt-2"><SettingsNotice>{projectNotice}</SettingsNotice></div>}
       </SettingsSection>
       {/* The organizer arranges a 分工 whose steps are not written out (§7.1). */}
       <SettingsSection title={t(key('work'))} caption={t(key('workCaption'))}>

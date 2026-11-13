@@ -208,6 +208,8 @@ export interface BotGroupChatServiceDeps {
   readInputSenderTask?: (sessionId: string, inputClientId: string) => Promise<string | null>;
   /** Registered project folders on this computer whose git `origin` is this GitHub repository. */
   findProjectDirsForRepo?: (repo: string) => Promise<string[]>;
+  /** GitHub repositories a folder's git remotes point at, best guess first (`folderRepositories`). */
+  repositoriesOfFolder?: (dir: string) => Promise<string[]>;
   /**
    * Cindy's own checkouts of a group's GitHub repository (`groupProjectCheckout.ts`): cloned on
    * first need when no registered project is that repository, fast-forwarded when clean.

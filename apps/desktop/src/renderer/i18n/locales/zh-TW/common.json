@@ -11678,6 +11678,8 @@
           "githubRepo": "GitHub 儲存庫",
           "githubRepoHint": "填 owner/name。沒選資料夾的電腦會用本機的這個專案，沒有就自動下載一份。",
           "githubRepoSaveFailed": "儲存庫沒有儲存，請檢查後再試。",
+          "folderRepoFilled": "已依這個資料夾填好儲存庫 {{repo}}，群裡其他人的電腦也會使用它。",
+          "folderRepoDiffers": "這個資料夾是 {{repo}} 的專案，和群裡填的儲存庫不同。這台電腦仍在這個資料夾裡工作。",
           "projectFolder": "這台電腦上的資料夾",
           "projectDirAutoHint": "依儲存庫自動找到的本機專案。",
           "organizerHint": "安排誰做哪一步；預設是第一位夥伴。",

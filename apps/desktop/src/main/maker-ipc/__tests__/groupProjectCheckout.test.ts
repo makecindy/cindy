@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { mkdtemp, mkdir, stat, rm } from 'node:fs/promises';
 import os from 'node:os';
-import { createGroupProjectFolders, findRepositoryFolders } from '../groupProjectFolder.js';
+import { createGroupProjectFolders, findRepositoryFolders, folderRepositories } from '../groupProjectFolder.js';
 import { describe, expect, it, vi } from 'vitest';
 import { createGroupProjectCheckouts, type GitResult, type GroupCheckoutDeps } from '../groupProjectCheckout.js';
 
@@ -134,6 +134,15 @@ describe('group project checkout', () => {
 describe('group work folder', () => {
   const repoRoom = { id: 'group-repo', name: 'Cindy', project: { kind: 'github' as const, repo: 'makecindy/cindy' } };
   const options = { signIn: true, isCurrent: () => true };
+
+  // A fork's `upstream` is the repository the group shares; remotes elsewhere than GitHub are not one.
+  it('names a folder\'s repositories with a fork\'s upstream first', () => {
+    expect(folderRepositories([
+      { name: 'origin', url: 'git@github.com:me/cindy.git' }, { name: 'mirror', url: 'https://gitlab.com/me/cindy.git' },
+      { name: 'upstream', url: 'https://github.com/makecindy/cindy' }, { name: 'backup', url: 'https://github.com/MakeCindy/Cindy.git' },
+    ])).toEqual(['makecindy/cindy', 'me/cindy']);
+    expect(folderRepositories([{ name: 'origin', url: 'https://gitlab.com/me/cindy.git' }])).toEqual([]);
+  });
 
   it('uses the most recently used registered checkout, a fork included', async () => {
     const read = { isMainCheckout: async () => true,

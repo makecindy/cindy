@@ -11678,6 +11678,8 @@
           "githubRepo": "GitHub 仓库",
           "githubRepoHint": "填 owner/name。没选文件夹的电脑会用本机的这个项目，没有就自动下载一份。",
           "githubRepoSaveFailed": "仓库没有保存，请检查后再试。",
+          "folderRepoFilled": "已按这个文件夹填好仓库 {{repo}}，群里其他人的电脑也会用它。",
+          "folderRepoDiffers": "这个文件夹是 {{repo}} 的项目，和群里填的仓库不同。这台电脑仍在这个文件夹里干活。",
           "projectFolder": "这台电脑上的文件夹",
           "projectDirAutoHint": "按仓库自动找到的本机项目。",
           "organizerHint": "安排谁做哪一步；默认是第一位伙伴。",

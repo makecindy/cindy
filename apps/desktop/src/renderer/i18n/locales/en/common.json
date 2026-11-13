@@ -11723,6 +11723,8 @@
           "githubRepo": "GitHub repository",
           "githubRepoHint": "Enter owner/name. Computers without a chosen folder use their own copy of this project, or download one.",
           "githubRepoSaveFailed": "The repository wasn’t saved. Check it and try again.",
+          "folderRepoFilled": "Filled in the repository {{repo}} from this folder. Other members’ computers will use it too.",
+          "folderRepoDiffers": "This folder is a checkout of {{repo}}, not the group’s repository. This computer still works in this folder.",
           "projectFolder": "Folder on this computer",
           "projectDirAutoHint": "Found from the repository among your projects.",
           "organizerHint": "Decides who does each step. Defaults to the first buddy.",

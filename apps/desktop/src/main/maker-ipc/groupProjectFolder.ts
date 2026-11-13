@@ -171,3 +171,22 @@ export async function findRepositoryFolders(dirs: readonly string[], repo: strin
   const unique = [...new Set(matches)];
   return unique.filter(dir => !unique.some(other => other !== dir && dir.startsWith(other + path.sep)));
 }
+
+/**
+ * The GitHub repositories a folder's git remotes point at, the group's best guess first: `upstream`
+ * (a fork's source, the repository the group shares), then `origin`, then the rest by name. Remotes
+ * that are not GitHub are left out; duplicates (any case) are listed once.
+ */
+export function folderRepositories(remotes: readonly { name: string; url: string }[]): string[] {
+  const rank = (name: string) => name === 'upstream' ? 0 : name === 'origin' ? 1 : 2;
+  const ordered = [...remotes].sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
+  const seen = new Set<string>();
+  const repos: string[] = [];
+  for (const remote of ordered) {
+    const repo = githubRepositoryOfRemote(remote.url);
+    if (!repo || seen.has(repo.toLowerCase())) continue;
+    seen.add(repo.toLowerCase());
+    repos.push(repo);
+  }
+  return repos;
+}
