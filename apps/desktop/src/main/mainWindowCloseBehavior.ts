@@ -27,7 +27,7 @@ export interface ActiveTurnQuitGuardDependencies<TOwner> {
   quit(): void;
   /**
    * Whether the user can be looking at the in-app confirmation drawn by `owner` (the main
-   * window's renderer): its window is shown and not minimized, and the renderer is alive.
+   * window's renderer): its window is shown and not minimized, and the renderer is alive and responsive.
    */
   canShowInAppConfirmation(owner: TOwner): boolean;
   /** Bring `owner`'s window to the front so the user finds the confirmation already open. */
@@ -69,8 +69,8 @@ export interface ActiveTurnQuitGuard<TOwner> {
  *   dialog nor quit underneath the one the user is still answering.
  * - While an in-app confirmation is pending and visible, the other routes only bring it to the
  *   front. If the user cannot be looking at it (window hidden, minimized or gone, renderer
- *   dead), the record is dropped and the route falls back to the native confirmation, so a
- *   pending record can never make the app unquittable.
+ *   dead or hung), the record is dropped and the route falls back to the native
+ *   confirmation, so a pending record can never make the app unquittable.
  */
 export function createActiveTurnQuitGuard<TOwner>(
   deps: ActiveTurnQuitGuardDependencies<TOwner>,
@@ -283,16 +283,24 @@ export interface MainWindowClosePromptWindow {
   };
 }
 
+/**
+ * Bring the main window to the front so the user sees a dialog it shows: drop a pending
+ * fullscreen hide, restore it if minimized, show it if hidden, then focus it.
+ */
+export function revealMainWindow(window: Omit<MainWindowClosePromptWindow, 'webContents'>): void {
+  cancelPendingWindowHide(window);
+  if (window.isMinimized()) window.restore();
+  if (!window.isVisible()) window.show();
+  window.focus();
+}
+
 /** Keep the main window visible and ask its renderer to show the platform chooser. */
 export function requestMainWindowCloseBehavior(
   window: MainWindowClosePromptWindow,
   channel: string,
 ): void {
   if (window.isDestroyed() || window.webContents.isDestroyed()) return;
-  cancelPendingWindowHide(window);
-  if (window.isMinimized()) window.restore();
-  if (!window.isVisible()) window.show();
-  window.focus();
+  revealMainWindow(window);
   window.webContents.send(channel);
 }
 

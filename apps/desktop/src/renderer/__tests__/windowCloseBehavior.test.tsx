@@ -288,6 +288,23 @@ describe('Windows close behavior', () => {
     },
   );
 
+  // Review follow-up: the X instance can unmount (login / main route switch) while main is
+  // still answering. A 'confirm' answer then has no dialog to show, so the record main just
+  // made must be cancelled, or Alt+F4 / tray Quit keep deferring to a dialog nobody sees.
+  it('cancels a confirmation main records after the X instance unmounted', async () => {
+    const api = installWindowsApi('quit');
+    let answer!: (outcome: QuitOutcome) => void;
+    api.requestQuit.mockReturnValue(new Promise<QuitOutcome>((resolve) => { answer = resolve; }));
+    const view = render(<WindowControls />);
+    fireEvent.click(screen.getByRole('button', { name: 'titleBar.close' }));
+    await waitFor(() => expect(api.requestQuit).toHaveBeenCalledTimes(1));
+
+    view.unmount();
+    await act(async () => answer('confirm'));
+
+    expect(api.resolveQuitConfirmation).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
   // If the quit request itself fails, main's 'window-close' route still runs the guarded close
   // (native confirmation when busy); the renderer stays usable in case the user cancels there.
   it('hands a failed quit request to the main-side guarded close', async () => {

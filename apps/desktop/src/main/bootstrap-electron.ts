@@ -1141,6 +1141,7 @@ import {
   handleMainWindowCloseRequest,
   minimizeDesktopWindow,
   requestMainWindowCloseBehavior,
+  revealMainWindow,
 } from './mainWindowCloseBehavior.js';
 import {
   isLinuxCloseBehavior,
@@ -3861,6 +3862,12 @@ function openWindowsTrayMenu(): void {
   });
 }
 
+/**
+ * Main windows whose renderer is hung ('unresponsive' until 'responsive'). Its in-app quit
+ * confirmation cannot be answered meanwhile, so competing quit routes ask natively.
+ */
+const unresponsiveMainWindows = new WeakSet<BrowserWindow>();
+
 /** The main window is on screen, so a dialog it owns (native or drawn by its renderer) is too. */
 function isMainWindowOnScreen(mainWindow: BrowserWindow | null): mainWindow is BrowserWindow {
   return (
@@ -3884,8 +3891,10 @@ function isMainWindowOnScreen(mainWindow: BrowserWindow | null): mainWindow is B
 // parentless there.
 //
 // Host client mode (CINDY_HOST_API) has no local Maker, so every route reads idle and quits
-// without asking. Quitting does not stop a turn there: the Host owns it and keeps running
-// after this window process exits (docs/host/electron-client-mode.md).
+// without asking (tray Quit included, which used to always ask there because getMakerCore()
+// throws). The Host keeps running the turn after this window exits, but calls this window
+// executes for it (computer control, embedded browser) are cut off with an uncertain result
+// (docs/host/client-handoff-foundation.md).
 const activeTurnQuitGuard = createActiveTurnQuitGuard<Electron.WebContents>({
   hasActiveTurn: () => anySessionInTurn(getMakerIfReady()),
   confirmQuit: () => {
@@ -3910,12 +3919,16 @@ const activeTurnQuitGuard = createActiveTurnQuitGuard<Electron.WebContents>({
     const mainWindow = mainWindowRef;
     return (
       isMainWindowOnScreen(mainWindow) &&
+      !unresponsiveMainWindows.has(mainWindow) &&
       mainWindow.webContents === contents &&
       !contents.isDestroyed() &&
       !contents.isCrashed()
     );
   },
-  revealInAppConfirmation: () => mainWindowRef?.focus(),
+  revealInAppConfirmation: () => {
+    const mainWindow = mainWindowRef;
+    if (mainWindow && !mainWindow.isDestroyed()) revealMainWindow(mainWindow);
+  },
 });
 
 function quitAppWithActiveTurnGuard(): void {
@@ -4717,18 +4730,20 @@ const createWindow = () => {
   installSelectionContextMenu(mainWindow);
   installWindowResponsivenessDiagnostics(mainWindow, { label: 'main' });
   mainWindowRef = mainWindow;
-  // A pending title-bar quit confirmation lives in this renderer. Drop it as soon as the
-  // renderer can no longer be showing it, so tray Quit / Alt+F4 fall back to the native
-  // confirmation instead of waiting on a dialog that is gone. In-page (hash) navigations keep it.
+  // A pending title-bar quit confirmation lives in this renderer. Drop it once the document
+  // showing it is gone, so tray Quit / Alt+F4 fall back to the native confirmation instead of
+  // waiting on a dialog that no longer exists. 'did-navigate' fires only for committed
+  // main-frame cross-document navigations: in-page (hash) navigations and navigations that
+  // will-navigate cancels (external links) keep it. A hang only hides it while it lasts
+  // (canShowInAppConfirmation), so the dialog is still answerable once the renderer recovers.
   const mainContents = mainWindow.webContents;
   const dropTitleBarQuitConfirmation = (): void =>
     activeTurnQuitGuard.dropInAppConfirmation(mainContents);
-  mainContents.on('did-start-navigation', (_event, _url, isSameDocument, isMainFrame) => {
-    if (isMainFrame && !isSameDocument) dropTitleBarQuitConfirmation();
-  });
+  mainContents.on('did-navigate', dropTitleBarQuitConfirmation);
   mainContents.on('render-process-gone', dropTitleBarQuitConfirmation);
   mainContents.once('destroyed', dropTitleBarQuitConfirmation);
-  mainWindow.on('unresponsive', dropTitleBarQuitConfirmation);
+  mainWindow.on('unresponsive', () => unresponsiveMainWindows.add(mainWindow));
+  mainWindow.on('responsive', () => unresponsiveMainWindows.delete(mainWindow));
   applyMainWindowBackgroundThrottling();
   applyPageZoomLevel(mainWindow, getPersistedWindowZoom());
   mainWindow.webContents.on('did-finish-load', () => {

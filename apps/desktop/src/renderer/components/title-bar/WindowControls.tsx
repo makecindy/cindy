@@ -81,9 +81,17 @@ export function WindowControls({
   const quitConfirmationPendingRef = useRef(false);
   const { t } = useTranslation();
 
+  // requestQuit 的答复可能在本实例卸载后才到(如登录页 / 主界面切换)。
+  const mountedRef = useRef(false);
   const cancelQuitConfirmation = (): void =>
     cancelPendingQuitConfirmation(quitConfirmationPendingRef);
-  useEffect(() => () => cancelPendingQuitConfirmation(quitConfirmationPendingRef), []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      cancelPendingQuitConfirmation(quitConfirmationPendingRef);
+    };
+  }, []);
 
   useEffect(() => {
     if (
@@ -182,6 +190,13 @@ export function WindowControls({
       // 请求没送达:交给 window-close,由 main 按关闭行为处理并在需要时弹原生确认。
       // 不进 closing 态 —— 用户在原生确认里取消时窗口要照常可用。
       window.electronAPI.windowClose();
+      return;
+    }
+    if (!mountedRef.current) {
+      // 本实例已卸载,没人会画 main 刚记下的确认:立即取消,别让它挡住 Alt+F4 / 托盘退出。
+      if (outcome === 'confirm') {
+        void window.electronAPI.windowBehavior.resolveQuitConfirmation(false).catch(() => {});
+      }
       return;
     }
     if (outcome === 'quitting') {
